@@ -1,0 +1,11 @@
+# Godot 4+
+.godot/
+*.translation
+export.cfg
+export_presets.cfg
+*.tmp
+.mono/
+data_*/
+build/
+runlog.txt
+runout.txt

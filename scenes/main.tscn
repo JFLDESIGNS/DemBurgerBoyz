@@ -1,0 +1,290 @@
+[gd_scene load_steps=4 format=3 uid="uid://foodtruckflip3d01"]
+
+[ext_resource type="Script" path="res://scripts/game.gd" id="1_game"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ticket"]
+bg_color = Color(0.12, 0.14, 0.18, 0.88)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(1, 0.75, 0.3, 0.85)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_assembly"]
+bg_color = Color(0.12, 0.14, 0.18, 0.88)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.5, 0.85, 0.55, 0.85)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_game")
+
+[node name="World" type="Node3D" parent="."]
+unique_name_in_owner = true
+
+[node name="Grill" type="Node3D" parent="."]
+unique_name_in_owner = true
+
+[node name="Patties" type="Node3D" parent="."]
+unique_name_in_owner = true
+
+[node name="Customers" type="Node3D" parent="."]
+unique_name_in_owner = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+unique_name_in_owner = true
+transform = Transform3D(-1, 0, 0, 0, 0.96, 0.28, 0, 0.28, -0.96, 0, 1.9, -1.65)
+current = true
+fov = 68.0
+near = 0.05
+far = 80.0
+
+[node name="UI" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="Root" type="Control" parent="UI"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="TopBar" type="HBoxContainer" parent="UI/Root"]
+layout_mode = 0
+offset_left = 980.0
+offset_top = 8.0
+offset_right = 1160.0
+offset_bottom = 48.0
+theme_override_constants/separation = 14
+alignment = 2
+
+[node name="MoneyLabel" type="Label" parent="UI/Root/TopBar"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.9, 0.45, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 28
+text = "$0"
+
+[node name="ComboLabel" type="Label" parent="UI/Root/TopBar"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.92, 0.4, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 22
+text = "Combo -"
+
+[node name="DayLabel" type="Label" parent="UI/Root/TopBar"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.97, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 22
+text = "Day 1  -  120s"
+
+[node name="HintLabel" type="Label" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 24.0
+offset_top = 8.0
+offset_right = 960.0
+offset_bottom = 36.0
+theme_override_colors/font_color = Color(1, 1, 1, 0.9)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 13
+text = "Press Open the Truck to start"
+
+[node name="FlashLabel" type="Label" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 320.0
+offset_top = 140.0
+offset_right = 960.0
+offset_bottom = 190.0
+theme_override_colors/font_color = Color(1, 0.92, 0.23, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 28
+horizontal_alignment = 1
+
+[node name="WindowTicketRail" type="HBoxContainer" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 280.0
+offset_top = 52.0
+offset_right = 1000.0
+offset_bottom = 118.0
+mouse_filter = 0
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="TicketBox" type="HBoxContainer" parent="UI/Root/WindowTicketRail"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+alignment = 1
+mouse_filter = 0
+
+[node name="IngredientLegend" type="VBoxContainer" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 0
+offset_left = 8.0
+offset_top = 130.0
+offset_right = 150.0
+offset_bottom = 420.0
+mouse_filter = 0
+theme_override_constants/separation = 3
+
+[node name="BottomUI" type="VBoxContainer" parent="UI/Root"]
+layout_mode = 0
+offset_left = 160.0
+offset_top = 390.0
+offset_right = 1260.0
+offset_bottom = 718.0
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="HeldRow" type="HBoxContainer" parent="UI/Root/BottomUI"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="GrillPowerRow" type="HBoxContainer" parent="UI/Root/BottomUI"]
+unique_name_in_owner = true
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 10
+
+[node name="StationsRow" type="HBoxContainer" parent="UI/Root/BottomUI"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="IngLabel" type="Label" parent="UI/Root/BottomUI"]
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 12
+text = "TOPPINGS are on the right of each station - keys 1-0, drag to assemble, Enter serves"
+
+[node name="IngredientBar" type="HBoxContainer" parent="UI/Root/BottomUI"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 4
+
+[node name="StartOverlay" type="ColorRect" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.04, 0.05, 0.08, 0.82)
+
+[node name="StartCenter" type="VBoxContainer" parent="UI/Root/StartOverlay"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -320.0
+offset_top = -180.0
+offset_right = 320.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="Title" type="Label" parent="UI/Root/StartOverlay/StartCenter"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.8, 0.4, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 46
+text = "FOOD TRUCK FLIP"
+horizontal_alignment = 1
+
+[node name="Blurb" type="Label" parent="UI/Root/StartOverlay/StartCenter"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.94, 0.98, 1)
+theme_override_font_sizes/font_size = 15
+text = "Inside the truck: cook on 4 grills, scoop with the spatula,
+drop onto image plates, stack toppings, serve customers."
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="StartButton" type="Button" parent="UI/Root/StartOverlay/StartCenter"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 56)
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_font_sizes/font_size = 22
+text = "OPEN THE TRUCK"
+
+[node name="GameOverPanel" type="PanelContainer" parent="UI/Root"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -160.0
+offset_right = 220.0
+offset_bottom = 160.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="GOMargin" type="MarginContainer" parent="UI/Root/GameOverPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="GOVBox" type="VBoxContainer" parent="UI/Root/GameOverPanel/GOMargin"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="GameOverLabel" type="Label" parent="UI/Root/GameOverPanel/GOMargin/GOVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Day over!"
+horizontal_alignment = 1
+
+[node name="RestartButton" type="Button" parent="UI/Root/GameOverPanel/GOMargin/GOVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(180, 48)
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Next Day"
