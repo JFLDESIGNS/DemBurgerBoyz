@@ -2,9 +2,11 @@ shader_type spatial;
 render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, fog_disabled;
 
 uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
-uniform float warp_strength : hint_range(0.0, 0.08) = 0.0032;
+uniform float warp_strength : hint_range(0.0, 0.08) = 0.0045;
 uniform float heat : hint_range(0.0, 1.0) = 0.0;
-uniform float time_scale : hint_range(0.2, 6.0) = 1.1;
+uniform float time_scale : hint_range(0.2, 14.0) = 3.6;
+/* Higher = smaller oval footprint on the plane. */
+uniform float mask_tight : hint_range(0.5, 2.2) = 1.35;
 
 void fragment() {
 	float h = clamp(heat, 0.0, 1.0);
@@ -12,16 +14,20 @@ void fragment() {
 		discard;
 	}
 	vec2 centered = UV * 2.0 - 1.0;
-	float edge = 1.0 - smoothstep(0.45, 1.05, length(centered * vec2(1.0, 1.2)));
+	float edge = 1.0 - smoothstep(0.28 / mask_tight, 0.72 / mask_tight, length(centered * vec2(1.05, 1.35)));
 	if (edge < 0.01) {
 		discard;
 	}
-	float wobble = sin(UV.y * 16.0 + TIME * time_scale) * 0.55
-		+ sin(UV.x * 11.0 + TIME * time_scale * 0.75 + 1.2) * 0.3;
-	float wobble_y = cos(UV.x * 13.0 + TIME * time_scale * 0.9) * 0.45
-		+ sin(UV.y * 9.0 + TIME * time_scale * 0.65 + 0.5) * 0.35;
+	float ts = time_scale;
+	/* Faster, finer shimmer — rising heat, not a slow blob. */
+	float wobble = sin(UV.y * 28.0 + TIME * ts * 1.85) * 0.5
+		+ sin(UV.x * 22.0 + TIME * ts * 1.35 + 1.2) * 0.28
+		+ sin((UV.x + UV.y) * 17.0 + TIME * ts * 2.4) * 0.18;
+	float wobble_y = cos(UV.x * 24.0 + TIME * ts * 1.6) * 0.4
+		+ sin(UV.y * 19.0 + TIME * ts * 1.15 + 0.5) * 0.3
+		+ cos(UV.y * 31.0 - TIME * ts * 2.1) * 0.16;
 	vec2 offset = vec2(wobble, wobble_y) * warp_strength * h * edge;
 	vec3 col = texture(screen_texture, SCREEN_UV + offset).rgb;
 	ALBEDO = col;
-	ALPHA = edge * (0.24 + 0.22 * h);
+	ALPHA = edge * (0.2 + 0.2 * h);
 }

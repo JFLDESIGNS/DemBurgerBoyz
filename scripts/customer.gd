@@ -1,8 +1,20 @@
-## Bigger cube customer with 2D mood faces, bobble, and shake reactions.
+## Stylized Kenney toon customers (CC0) with mood reactions + patience bar.
 extends Node3D
 
 const GameDataScript := preload("res://scripts/game_data.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
+
+const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
+const CHAR_SKINS: Array[String] = [
+	"res://assets/characters/Skins/skaterMaleA.png",
+	"res://assets/characters/Skins/skaterFemaleA.png",
+	"res://assets/characters/Skins/humanMaleA.png",
+	"res://assets/characters/Skins/humanFemaleA.png",
+	"res://assets/characters/Skins/criminalMaleA.png",
+	"res://assets/characters/Skins/cyborgFemaleA.png",
+]
+## Kenney medium characters are ~1.8m; shrink to fit the service window.
+const CHAR_SCALE := 0.72
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -30,9 +42,10 @@ var complaint_active: bool = false
 var pending_missing: Array = []
 var dialogue_mode: String = "chat" ## chat | complaint
 
-var _body: MeshInstance3D
-var _face: MeshInstance3D
+var _body: Node3D
+var _face: MeshInstance3D ## unused with 3D toon models (kept for old helpers)
 var _face_mat: StandardMaterial3D
+var _char_meshes: Array = [] ## MeshInstance3D skins we tint by mood
 var _bubble: Label3D
 var _bubble_bg: MeshInstance3D
 var _bar_bg: MeshInstance3D
@@ -45,10 +58,13 @@ var _shake_time: float = 0.0
 var _shake_amp: float = 0.0
 var _expr_t: float = 0.0
 var _leave_spin: float = 0.0
-var _base_body_y: float = 0.55
+var _base_body_y: float = 0.0
 var _home_x: float = 0.0
 var _face_style: int = 0 ## slight variety per customer
-static var _face_cache: Dictionary = {} ## "mood_style" -> ImageTexture
+var _skin_path: String = ""
+static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
+static var _char_scene: PackedScene = null
+static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
 
 
 func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int) -> void:
@@ -61,6 +77,7 @@ func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int)
 	_roll_personality()
 	speech = _make_speech()
 	_face_style = randi() % 3
+	_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
 
 
 func _roll_personality() -> void:
@@ -285,37 +302,21 @@ func _ready() -> void:
 
 
 func _build() -> void:
-	_body = MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(0.95, 1.05, 0.95)
-	_body.mesh = box
+	_body = Node3D.new()
+	_body.name = "CharacterVisual"
 	_body.position = Vector3(0, _base_body_y, 0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = body_color
-	mat.roughness = 0.55
-	_body.material_override = mat
+	_body.scale = Vector3(CHAR_SCALE, CHAR_SCALE, CHAR_SCALE)
 	add_child(_body)
 
-	## Flat cartoon face stuck on the front of the cube — swaps by mood.
-	_face = MeshInstance3D.new()
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.82, 0.82)
-	_face.mesh = quad
-	_face.position = Vector3(0, 0.04, 0.485)
-	_face_mat = StandardMaterial3D.new()
-	_face_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_face_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_face_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	_face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_face_mat.albedo_texture = _get_face_tex("happy")
-	_face.material_override = _face_mat
-	_body.add_child(_face)
+	if not _try_attach_toon_character():
+		## Fallback: old colored cube if the Kenney pack failed to import.
+		_build_fallback_box()
 
 	_bubble_bg = MeshInstance3D.new()
 	var bg_mesh := BoxMesh.new()
 	bg_mesh.size = Vector3(1.6, 0.55, 0.05)
 	_bubble_bg.mesh = bg_mesh
-	_bubble_bg.position = Vector3(0, 1.85, 0)
+	_bubble_bg.position = Vector3(0, 2.05, 0)
 	var bgm := StandardMaterial3D.new()
 	bgm.albedo_color = Color(1, 1, 1, 0.95)
 	bgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -325,7 +326,7 @@ func _build() -> void:
 
 	_bubble = Label3D.new()
 	_bubble.text = speech
-	_bubble.position = Vector3(0, 1.85, 0.04)
+	_bubble.position = Vector3(0, 2.05, 0.04)
 	_bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_bubble.modulate = Color(0.12, 0.12, 0.14)
 	_bubble.visible = false
@@ -338,7 +339,7 @@ func _build() -> void:
 	var bg := BoxMesh.new()
 	bg.size = Vector3(0.9, 0.08, 0.05)
 	_bar_bg.mesh = bg
-	_bar_bg.position = Vector3(0, 1.35, 0)
+	_bar_bg.position = Vector3(0, 1.72, 0)
 	var bar_mat := StandardMaterial3D.new()
 	bar_mat.albedo_color = Color(0.15, 0.15, 0.15)
 	_bar_bg.material_override = bar_mat
@@ -348,24 +349,145 @@ func _build() -> void:
 	var fill := BoxMesh.new()
 	fill.size = Vector3(0.84, 0.06, 0.055)
 	_bar_fill.mesh = fill
-	_bar_fill.position = Vector3(0, 1.35, 0.01)
+	_bar_fill.position = Vector3(0, 1.72, 0.01)
 	var fm := StandardMaterial3D.new()
 	fm.albedo_color = Color("66BB6A")
 	_bar_fill.material_override = fm
 	add_child(_bar_fill)
 
 
+func _try_attach_toon_character() -> bool:
+	if _char_scene == null:
+		if not ResourceLoader.exists(CHAR_SCENE_PATH):
+			return false
+		_char_scene = load(CHAR_SCENE_PATH) as PackedScene
+	if _char_scene == null:
+		return false
+	var model: Node = _char_scene.instantiate()
+	if model == null:
+		return false
+	model.name = "ToonCustomer"
+	_body.add_child(model)
+	_char_meshes.clear()
+	_collect_char_meshes(model)
+	if _skin_path == "":
+		_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
+	_apply_skin_texture(_skin_path)
+	_apply_mood_tint("happy")
+	return not _char_meshes.is_empty()
+
+
+func _collect_char_meshes(n: Node) -> void:
+	if n is MeshInstance3D:
+		_char_meshes.append(n)
+	for c in n.get_children():
+		_collect_char_meshes(c)
+
+
+func _get_skin_tex(path: String) -> Texture2D:
+	if path == "" or not ResourceLoader.exists(path):
+		return null
+	if _skin_tex_cache.has(path):
+		return _skin_tex_cache[path]
+	var tex := load(path) as Texture2D
+	if tex != null:
+		_skin_tex_cache[path] = tex
+	return tex
+
+
+func _apply_skin_texture(path: String) -> void:
+	var tex := _get_skin_tex(path)
+	if tex == null:
+		return
+	for mi in _char_meshes:
+		if mi == null or not is_instance_valid(mi):
+			continue
+		var mesh_i := mi as MeshInstance3D
+		var base: Material = mesh_i.get_active_material(0)
+		if base == null:
+			base = mesh_i.material_override
+		var sm: StandardMaterial3D
+		if base is StandardMaterial3D:
+			sm = (base as StandardMaterial3D).duplicate() as StandardMaterial3D
+		else:
+			sm = StandardMaterial3D.new()
+		sm.albedo_texture = tex
+		sm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		sm.roughness = 0.62
+		sm.metallic = 0.0
+		## Soft toon-ish shading so faces read clean with MSAA.
+		sm.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+		sm.specular_mode = BaseMaterial3D.SPECULAR_TOON
+		mesh_i.material_override = sm
+
+
+func _build_fallback_box() -> void:
+	var box_mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.95, 1.05, 0.95)
+	box_mi.mesh = box
+	box_mi.position = Vector3(0, 0.55 / CHAR_SCALE, 0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = body_color
+	mat.roughness = 0.55
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	box_mi.material_override = mat
+	_body.add_child(box_mi)
+	_char_meshes.append(box_mi)
+
+	_face = MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.82, 0.82)
+	_face.mesh = quad
+	_face.position = Vector3(0, 0.04 / CHAR_SCALE, 0.485 / CHAR_SCALE)
+	_face_mat = StandardMaterial3D.new()
+	_face_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_face_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_face_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	_face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_face_mat.albedo_texture = _get_face_tex("happy")
+	_face.material_override = _face_mat
+	box_mi.add_child(_face)
+
+
 func _set_mood(mood: String) -> void:
-	if mood == _mood and _face_mat != null and _face_mat.albedo_texture != null:
+	if mood == _mood:
 		return
 	_mood = mood
 	_apply_face(mood)
+	_apply_mood_tint(mood)
 
 
 func _apply_face(mood: String) -> void:
 	if _face_mat == null:
 		return
 	_face_mat.albedo_texture = _get_face_tex(mood)
+
+
+func _apply_mood_tint(mood: String) -> void:
+	## Soft color wash over the toon skin so patience mood still reads.
+	var tint := Color(1, 1, 1, 1)
+	match mood:
+		"happy", "cheer":
+			tint = Color(1.05, 1.02, 0.98)
+		"ok":
+			tint = Color(1.0, 0.98, 0.92)
+		"mad":
+			tint = Color(1.08, 0.82, 0.78)
+		"dead":
+			tint = Color(0.72, 0.72, 0.78)
+		_:
+			tint = Color(1, 1, 1)
+	## Blend a hint of the assigned body_color so customers stay distinct.
+	tint = tint.lerp(body_color.lightened(0.35), 0.12)
+	for mi in _char_meshes:
+		if mi == null or not is_instance_valid(mi):
+			continue
+		var mesh_i := mi as MeshInstance3D
+		var sm := mesh_i.material_override as StandardMaterial3D
+		if sm == null:
+			continue
+		sm.albedo_color = tint
 
 
 func _get_face_tex(mood: String) -> ImageTexture:
@@ -592,15 +714,17 @@ func _apply_bobble(walking: bool) -> void:
 
 
 func _animate_expression(_delta: float) -> void:
-	if _face == null or is_leaving:
+	if is_leaving or _body == null:
 		return
-	## Subtle face bounce — expression itself comes from the 2D texture swap.
-	var pulse := 1.0 + sin(_expr_t * 4.5) * 0.02
+	## Subtle breath / mood pulse on the whole character.
+	var pulse := 1.0 + sin(_expr_t * 4.5) * 0.012
 	if _mood == "mad":
-		pulse = 1.0 + sin(_expr_t * 10.0) * 0.035
+		pulse = 1.0 + sin(_expr_t * 10.0) * 0.02
 	elif _mood == "cheer":
-		pulse = 1.0 + absf(sin(_expr_t * 7.0)) * 0.05
-	_face.scale = Vector3(pulse, pulse, 1.0)
+		pulse = 1.0 + absf(sin(_expr_t * 7.0)) * 0.03
+	_body.scale = Vector3(CHAR_SCALE * pulse, CHAR_SCALE * pulse, CHAR_SCALE * pulse)
+	if _face != null:
+		_face.scale = Vector3(pulse, pulse, 1.0)
 
 
 func shake_angry(duration: float = 0.7, amp: float = 0.12) -> void:

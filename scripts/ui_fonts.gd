@@ -37,11 +37,11 @@ static func _load_clean(path: String) -> Font:
 	if f is FontFile:
 		var ff := f as FontFile
 		ff.multichannel_signed_distance_field = false
-		ff.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
-		ff.hinting = TextServer.HINTING_NONE
-		ff.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
-		ff.oversampling = 2.0
-		ff.generate_mipmaps = false
+		ff.antialiasing = TextServer.FONT_ANTIALIASING_LCD
+		ff.hinting = TextServer.HINTING_LIGHT
+		ff.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_ONE_HALF
+		ff.oversampling = 3.0
+		ff.generate_mipmaps = true
 		return ff
 	return f as Font
 
@@ -101,7 +101,7 @@ static func apply_label3d(lab: Label3D, use_title: bool = true, font_size: int =
 	lab.outline_modulate = Color(0, 0, 0, 1)
 	lab.shaded = false
 	lab.double_sided = true
-	lab.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	lab.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 
 
 static func make_theme() -> Theme:

@@ -44,7 +44,7 @@ const PATTY_SMASH_MIN_PX := 26.0
 const PATTY_SMASH_PAD_PX := 4.0
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
-const OIL_SIT_Y := 0.034
+const OIL_SIT_Y := 0.038
 ## Held bottle tip-down height above steel (~was 0.14; +12" so it clears the plate).
 const OIL_POUR_HEIGHT := 0.445
 const PattyScript := preload("res://scripts/patty.gd")
@@ -124,10 +124,19 @@ var grill_trash_btn: Button = null
 var grill_surface_area: Area3D = null
 var grill_surface_mat: StandardMaterial3D = null
 var grill_glow_root: MeshInstance3D = null
+const GRILL_GLOW_DELAY_SEC := 0.2
+const GRILL_GLOW_FADE_SEC := 0.28
+const GRILL_GLOW_BRIGHT_MULT := 1.18
+var _grill_glow_tween: Tween = null
+var _grill_glow_gen: int = 0
 var heat_warp_mesh: MeshInstance3D = null
 var heat_warp_mat: ShaderMaterial = null
+var heat_warp_base_size := Vector2(1.0, 0.6)
+var heat_warp_enabled: bool = true
 var grill_drop_zone: Control = null
+var build_drop_zone: Control = null ## Tall left catcher while holding a scooped patty
 var _pending_station_patty_drag = null ## Dictionary while dragging a Build patty
+var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill burger
 var service_window_closed: bool = false
 var service_break_left: float = 0.0
 var window_pause_btn: Button = null
@@ -147,10 +156,9 @@ var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
 var brush_held: bool = false
 var brush_root: Node3D = null
 var brush_area: Area3D = null
-var brush_home: Vector3 = Vector3(-2.58, 1.52, 1.15)
-var brush_home_rot := Vector3(-172.0, -110.0, 8.0)
-## Held pose — blade flat on steel, handle tipped back toward the cook (camera / −Z).
-## Z must stay ~0: Z=180 flips the handle toward the window.
+var brush_home: Vector3 = Vector3(2.42, 1.18, 1.18)
+var brush_home_rot := Vector3(-172.0, 70.0, -8.0)
+## Held pose — blade tipped on steel, handle toward the cook.
 var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
@@ -166,14 +174,14 @@ var shaker_root: Node3D = null
 var shaker_area: Area3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(-2.15, 1.32, 1.08)
+var shaker_home: Vector3 = Vector3(2.28, 1.36, 1.12)
 var shaker_season_cool: float = 0.0
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
 var oil_root: Node3D = null
 var oil_area: Area3D = null
 var oil_particles: GPUParticles3D = null
-var oil_home: Vector3 = Vector3(-1.72, 1.22, 0.88)
+var oil_home: Vector3 = Vector3(2.28, 1.55, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
@@ -195,15 +203,22 @@ var flicking_patty = null ## mid air toward Build
 var spatula_last_mouse := Vector2.ZERO
 var spatula_vel_screen := Vector2.ZERO ## px/sec while carrying (flick throw)
 var spatula_carry_travel := 0.0
+## Build-station pickup: hold LMB to carry, release to drop (grill / Build / flick).
+var spatula_from_build: bool = false
+var spatula_lmb_held: bool = false
 const DRAG_MOVE_THRESH_PX := 8.0
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
 ## Screen-left flick (negative X) throws a finished patty to Build.
 const FLICK_TO_BUILD_VX := -520.0
+## Screen-right flick throws a held patty onto the grill.
+const FLICK_TO_GRILL_VX := 520.0
 const FLICK_MIN_SPEED := 620.0
 const FLICK_MIN_TRAVEL_PX := 36.0
-## Left side of the screen counts as Build drop while carrying a scooped patty.
-const BUILD_DROP_SCREEN_FRAC := 0.34
-const BUILD_DROP_MIN_PX := 300.0
+## Left side of the screen / left of the grill counts as Build drop while carrying.
+const BUILD_DROP_SCREEN_FRAC := 0.48
+const BUILD_DROP_MIN_PX := 460.0
+## Extra screen pixels past the grill's left edge that still count as Build.
+const BUILD_DROP_GRILL_PAD_PX := 110.0
 ## Scooped patty floats under the cursor above the steel.
 const SPATULA_HOVER_Y := 0.12
 const SPATULA_HOVER_BOB := 0.012
@@ -246,6 +261,11 @@ const GFX_DEFAULTS := {
 	"ssao": true,
 	"ssil": true,
 	"sky_energy": 0.42,
+	"heat_warp_on": true,
+	"heat_warp_size": 0.62,
+	"heat_warp_speed": 3.8,
+	"heat_warp_strength": 0.0048,
+	"heat_warp_tight": 1.4,
 }
 ## Ingredient strip notes — tracks unique presses toward a full-scale jingle.
 var _melody_pressed: Dictionary = {} ## id -> true
@@ -262,6 +282,11 @@ var _was_gui_dragging: bool = false
 
 func _ready() -> void:
 	randomize()
+	## Soft edges on 3D characters / steel; FXAA helps Label3D + UI text a bit too.
+	var vp := get_viewport()
+	if vp:
+		vp.msaa_3d = Viewport.MSAA_4X
+		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 	UiFontsScript.ensure_loaded()
 	var ui_root: Control = get_node("UI/Root")
 	ui_root.theme = UiFontsScript.make_theme()
@@ -286,6 +311,7 @@ func _ready() -> void:
 	_build_grill_burner_ui()
 	_build_station_ui()
 	_build_grill_drop_zone()
+	_build_build_drop_zone()
 	_build_window_pause_ui()
 	_build_ingredient_legend()
 	_build_ingredient_buttons()
@@ -418,7 +444,7 @@ func _start_game() -> void:
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
-	_flash("Turn the burner ON, then right-click the grill to add patties!", Color("FFEB3B"))
+	_flash("Press G to light the burner, then right-click the grill for patties!", Color("FFEB3B"))
 
 
 func _restart() -> void:
@@ -632,8 +658,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if not playing:
 		return
-	if event.is_action_pressed("new_patty"):
-		_spawn_patty_on_grill()
+	if event.is_action_pressed("toggle_burner"):
+		_toggle_grill_power(0)
+		return
 	elif event.is_action_pressed("serve") or _is_enter_pressed(event):
 		_on_serve()
 	elif event.is_action_pressed("trash"):
@@ -660,6 +687,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if spatula_patty != null:
+				## Still dragging from Build — drop happens on release.
+				if spatula_lmb_held and spatula_from_build:
+					return
 				_handle_spatula_click(event.position)
 				return
 			if _try_warmer_click(event.position):
@@ -687,6 +717,11 @@ func _input(event: InputEvent) -> void:
 			return
 	## Sliding a patty / oil / shaker: release ends hold and returns tools home.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		if spatula_patty != null and spatula_lmb_held:
+			spatula_lmb_held = false
+			_handle_spatula_release(event.position)
+			get_viewport().set_input_as_handled()
+			return
 		if dragging_patty != null:
 			_end_patty_drag()
 			get_viewport().set_input_as_handled()
@@ -749,7 +784,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	## Mouse drop while holding a patty (also works over some UI).
+	## Skip while still holding LMB from a Build pickup — release handles the drop.
 	if spatula_patty == null:
+		return
+	if spatula_lmb_held and spatula_from_build:
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if _handle_spatula_click(event.position):
@@ -821,9 +859,10 @@ func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
 func _station_index_at(screen_pos: Vector2) -> int:
 	## Whole Build column counts — click / drag / flick land anywhere in the zone.
 	if stations_row != null and is_instance_valid(stations_row):
-		if stations_row.get_global_rect().grow(24).has_point(screen_pos):
+		## Tall forgiving pad — covers empty counter / window above the board.
+		if stations_row.get_global_rect().grow_individual(48, 220, 48, 28).has_point(screen_pos):
 			return STATION_CRAFT
-	const PAD := 12.0
+	const PAD := 48.0
 	for i in STATION_COUNT:
 		var plate: Control = stations[i].get("plate", null)
 		if plate != null and is_instance_valid(plate) and plate.get_global_rect().grow(PAD).has_point(screen_pos):
@@ -838,13 +877,27 @@ func _station_index_at(screen_pos: Vector2) -> int:
 	return -1
 
 
+func _grill_left_screen_x() -> float:
+	## Screen X of the cook-surface's left edge (toward the cutting board).
+	if camera == null:
+		return BUILD_DROP_MIN_PX
+	var y := GRILL_SURFACE_Y + 0.04
+	var z := GRILL_SURFACE_Z
+	var a := camera.unproject_position(Vector3(GRILL_CENTER_X - GRILL_WIDTH * 0.5, y, z))
+	var b := camera.unproject_position(Vector3(GRILL_CENTER_X + GRILL_WIDTH * 0.5, y, z))
+	return minf(a.x, b.x)
+
+
 func _is_build_drop_at(screen_pos: Vector2) -> bool:
-	## Anywhere on the left side of the screen drops a carried patty onto Build.
+	## Anywhere left of the grill (and the Build UI) drops a carried patty onto Build.
 	if _station_index_at(screen_pos) >= 0:
 		return true
 	var vr := get_viewport().get_visible_rect()
-	var left_w := maxf(BUILD_DROP_MIN_PX, vr.size.x * BUILD_DROP_SCREEN_FRAC)
-	return screen_pos.x <= vr.position.x + left_w
+	var frac_limit := vr.position.x + maxf(BUILD_DROP_MIN_PX, vr.size.x * BUILD_DROP_SCREEN_FRAC)
+	## Prefer the real grill edge so the empty counter / window above the board always counts.
+	var grill_limit := _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX
+	var limit := maxf(frac_limit, grill_limit)
+	return screen_pos.x <= limit
 
 
 func _blocks_grill_pick(screen_pos: Vector2) -> bool:
@@ -1155,12 +1208,12 @@ func _build_flat_top_grill() -> void:
 	surface.add_child(heat)
 	grill_heat_lights.append(heat)
 
-	## Heat shimmer / warp over the three cook bands (not HOLD).
+	## Heat shimmer / warp over the three cook bands (not HOLD) — compact by default.
 	_build_heat_warp_plane(
 		surface,
 		Vector3(cook_cx_world - GRILL_CENTER_X, 0.18, 0),
-		cook_w * 0.92,
-		GRILL_DEPTH * 0.82
+		cook_w * 0.58,
+		GRILL_DEPTH * 0.48
 	)
 	grill_glow_root = grill_glow_meshes[0] if not grill_glow_meshes.is_empty() else null
 
@@ -1428,7 +1481,6 @@ func _build_grill_burner_ui() -> void:
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_color_override("font_color", Color(1, 0.85, 0.75))
 	btn.pressed.connect(func():
-		_sfx_click()
 		_toggle_grill_power(0)
 	)
 	grill_power_row.add_child(btn)
@@ -1518,6 +1570,8 @@ func _trash_spatula_patty() -> void:
 	if is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
@@ -1600,8 +1654,10 @@ func _toggle_grill_power(_index: int) -> void:
 	if not playing:
 		return
 	grill_ignore_pad_until = Time.get_ticks_msec() / 1000.0 + 0.35
-	_sfx_click()
-	_set_grill_on(not grill_on)
+	var turning_on := not grill_on
+	if not turning_on:
+		_sfx_click()
+	_set_grill_on(turning_on)
 	if grill_on:
 		_flash("Burner ON — right-click the grill where you want each patty", Color("FFCC80"))
 	else:
@@ -1609,14 +1665,81 @@ func _toggle_grill_power(_index: int) -> void:
 
 
 func _set_grill_on(on: bool) -> void:
+	var turning_on := on and not grill_on
 	grill_on = on
 	for i in GRILL_SLOTS:
 		grill_powered[i] = on
-	if grill_glow_root != null and is_instance_valid(grill_glow_root):
-		grill_glow_root.visible = on
-	for glow in grill_glow_meshes:
-		if is_instance_valid(glow):
-			glow.visible = on
+
+	# Visual ignition cue: delay+fade radial glows when the burner turns ON.
+	_grill_glow_gen += 1
+	var glow_gen := _grill_glow_gen
+	if _grill_glow_tween != null:
+		_grill_glow_tween.kill()
+		_grill_glow_tween = null
+
+	if turning_on:
+		for glow in grill_glow_meshes:
+			if not is_instance_valid(glow):
+				continue
+			glow.visible = false
+			var gm := glow.material_override as StandardMaterial3D
+			if gm == null:
+				continue
+			# Start fully transparent/quiet; tween both alpha and emission after ignition.
+			var rgb := gm.albedo_color
+			rgb.a = 1.0
+			gm.albedo_color = Color(rgb.r, rgb.g, rgb.b, 0.0)
+			gm.emission_energy_multiplier = 0.0
+
+		_grill_glow_tween = create_tween()
+		_grill_glow_tween.tween_interval(GRILL_GLOW_DELAY_SEC)
+		_grill_glow_tween.tween_callback(func() -> void:
+			if glow_gen != _grill_glow_gen:
+				return
+			for glow in grill_glow_meshes:
+				if is_instance_valid(glow):
+					glow.visible = true
+		)
+		_grill_glow_tween.set_parallel(true)
+		for glow in grill_glow_meshes:
+			if not is_instance_valid(glow):
+				continue
+			var gm := glow.material_override as StandardMaterial3D
+			if gm == null:
+				continue
+			var base_alpha := float(glow.get_meta("base_alpha", gm.albedo_color.a))
+			var base_em := float(glow.get_meta("base_emission_energy_multiplier", gm.emission_energy_multiplier))
+			var target_alpha := minf(1.0, base_alpha * GRILL_GLOW_BRIGHT_MULT)
+			var target_em := base_em * GRILL_GLOW_BRIGHT_MULT
+			var rgb := gm.albedo_color
+			rgb.a = 1.0
+			var target_col := Color(rgb.r, rgb.g, rgb.b, target_alpha)
+			_grill_glow_tween.tween_property(
+				gm,
+				"albedo_color",
+				target_col,
+				GRILL_GLOW_FADE_SEC
+			).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+			_grill_glow_tween.tween_property(
+				gm,
+				"emission_energy_multiplier",
+				target_em,
+				GRILL_GLOW_FADE_SEC
+			).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		_grill_glow_tween.set_parallel(false)
+	else:
+		for glow in grill_glow_meshes:
+			if not is_instance_valid(glow):
+				continue
+			glow.visible = false
+			var gm := glow.material_override as StandardMaterial3D
+			if gm == null:
+				continue
+			var c := gm.albedo_color
+			c.a = 0.0
+			gm.albedo_color = c
+			gm.emission_energy_multiplier = 0.0
+
 	for heat in grill_heat_lights:
 		if is_instance_valid(heat):
 			heat.light_energy = 0.0
@@ -1626,6 +1749,8 @@ func _set_grill_on(on: bool) -> void:
 		if mat is StandardMaterial3D:
 			var sm := mat as StandardMaterial3D
 			sm.emission_enabled = on and sm.emission_energy_multiplier > 0.01
+	if turning_on and game_audio and game_audio.has_method("play_stove_light"):
+		game_audio.play_stove_light()
 	_update_kitchen_sizzle()
 	_refresh_grill_ui_button(0)
 
@@ -2040,6 +2165,15 @@ func _is_flick_to_build(vel: Vector2, travel_px: float) -> bool:
 	return vel.x <= FLICK_TO_BUILD_VX and absf(vel.x) >= absf(vel.y) * 0.55
 
 
+func _is_flick_to_grill(vel: Vector2, travel_px: float) -> bool:
+	if travel_px < FLICK_MIN_TRAVEL_PX:
+		return false
+	if vel.length() < FLICK_MIN_SPEED:
+		return false
+	## Screen-right toss onto the cook surface.
+	return vel.x >= FLICK_TO_GRILL_VX and absf(vel.x) >= absf(vel.y) * 0.55
+
+
 func _reject_second_scoop(msg: String = "Already holding a patty — drop on Build or the Warmer") -> void:
 	_flash(msg, Color("EF5350"))
 	if game_audio and game_audio.has_method("play_error"):
@@ -2199,6 +2333,10 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 	if _is_over_garbage(screen_pos):
 		_trash_spatula_patty()
 		return true
+	## Flick right while carrying → throw onto the grill.
+	if _is_flick_to_grill(spatula_vel_screen, spatula_carry_travel):
+		_throw_held_patty_to_grill()
+		return true
 	## Left side of the screen (or Build UI) → place on Build — not only the Drop button.
 	if _is_build_drop_at(screen_pos):
 		## Still allow pause / GFX / top bar to win over the left drop strip.
@@ -2232,6 +2370,43 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 		return true
 	_flash("Drop on the grill, HOLD, or click left for Build", Color("FFCC80"))
 	return true
+
+
+func _handle_spatula_release(screen_pos: Vector2) -> void:
+	## Build pickup: release LMB to drop — flick / Build area / grill.
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		spatula_from_build = false
+		return
+	if _is_over_garbage(screen_pos):
+		_trash_spatula_patty()
+		return
+	if _is_flick_to_grill(spatula_vel_screen, spatula_carry_travel):
+		_throw_held_patty_to_grill()
+		return
+	if _is_flick_to_build(spatula_vel_screen, spatula_carry_travel):
+		_throw_held_patty_to_build()
+		return
+	if _is_build_drop_at(screen_pos) or _station_index_at(screen_pos) >= 0:
+		_drop_spatula_on_station(STATION_CRAFT)
+		return
+	if _try_warmer_click(screen_pos):
+		return
+	if _try_place_spatula_on_grill(screen_pos):
+		return
+	## Soft grill aim — release near the steel still counts.
+	var hit := _grill_plane_from_screen(screen_pos)
+	if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
+		if _is_in_warmer_zone(hit):
+			_place_spatula_on_warmer(hit)
+		else:
+			_place_spatula_on_grill(hit)
+		return
+	## Missed both — if this came from Build, put it back there.
+	if spatula_from_build:
+		_drop_spatula_on_station(STATION_CRAFT)
+		_flash("Back on Build", Color("B0BEC5"))
+		return
+	_flash("Drop on the grill, HOLD, or Build", Color("FFCC80"))
 
 
 func _try_place_spatula_on_grill(screen_pos: Vector2) -> bool:
@@ -2268,6 +2443,8 @@ func _place_spatula_on_grill(hit_pos: Vector3) -> void:
 			return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	patty.is_held = false
@@ -2298,6 +2475,8 @@ func _throw_held_patty_to_build() -> void:
 		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
@@ -2330,6 +2509,65 @@ func _throw_held_patty_to_build() -> void:
 			return
 		## Commit directly — never re-hold on the spatula (that left throws stuck in-hand).
 		_commit_patty_to_build(patty)
+	)
+
+
+func _throw_held_patty_to_grill() -> void:
+	## Arc from the hand onto the grill (screen-right flick).
+	if spatula_patty == null or not is_instance_valid(spatula_patty) or flicking_patty != null:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var aim := _grill_plane_from_screen(mouse)
+	if aim == Vector3.ZERO or not _is_near_grill_for_place(aim):
+		aim = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+	if _is_in_warmer_zone(aim):
+		_place_spatula_on_warmer(aim)
+		return
+	var place := _find_closest_patty_place(aim)
+	if place == Vector3.ZERO:
+		_flash("No open spot — clear some space", Color("EF5350"))
+		return
+	var idx := _first_empty_slot()
+	if idx < 0:
+		_flash("Grill full — clear a spot first", Color("EF5350"))
+		return
+	var patty = spatula_patty
+	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	patty.is_held = true
+	patty.visible = true
+	flicking_patty = patty
+	var start: Vector3 = patty.global_position
+	var end := Vector3(place.x, GRILL_SURFACE_Y + PATTY_SIT_Y, place.z)
+	var peak_y := maxf(start.y, end.y) + 0.38
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Thrown on the grill!", Color("A5D6A7"))
+	var tw := create_tween()
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_method(func(t: float):
+		if patty == null or not is_instance_valid(patty):
+			return
+		var xz: Vector3 = start.lerp(end, t)
+		var y := lerpf(start.y, end.y, t) + 4.0 * t * (1.0 - t) * (peak_y - lerpf(start.y, end.y, 0.5))
+		patty.global_position = Vector3(xz.x, y, xz.z)
+		patty.rotation_degrees.z = lerpf(patty.rotation_degrees.z, 22.0, t)
+	, 0.0, 1.0, 0.32)
+	tw.tween_callback(func():
+		flicking_patty = null
+		if patty == null or not is_instance_valid(patty):
+			return
+		## Slot may have filled during the toss — re-check.
+		var land_idx := _first_empty_slot()
+		if land_idx < 0 or _patty_blocked_at(place):
+			_commit_patty_to_build(patty)
+			_flash("No open spot — back on Build", Color("FFA726"))
+			return
+		_place_extracted_patty_on_grill(patty, land_idx, place)
 	)
 
 
@@ -2420,23 +2658,30 @@ func _build_heat_warp_plane(parent: Node3D, local_pos: Vector3, width: float, de
 	heat_warp_mesh = MeshInstance3D.new()
 	heat_warp_mesh.name = "HeatWarp"
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(maxf(0.3, width), maxf(0.25, depth))
+	heat_warp_base_size = Vector2(maxf(0.2, width), maxf(0.18, depth))
+	plane.size = heat_warp_base_size * float(GFX_DEFAULTS["heat_warp_size"])
 	heat_warp_mesh.mesh = plane
 	heat_warp_mesh.position = local_pos
 	heat_warp_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var shader := load("res://shaders/heat_warp.gdshader") as Shader
 	heat_warp_mat = ShaderMaterial.new()
 	heat_warp_mat.shader = shader
-	heat_warp_mat.set_shader_parameter("warp_strength", 0.0058)
+	heat_warp_mat.set_shader_parameter("warp_strength", float(GFX_DEFAULTS["heat_warp_strength"]))
 	heat_warp_mat.set_shader_parameter("heat", 0.0)
-	heat_warp_mat.set_shader_parameter("time_scale", 1.35)
+	heat_warp_mat.set_shader_parameter("time_scale", float(GFX_DEFAULTS["heat_warp_speed"]))
+	heat_warp_mat.set_shader_parameter("mask_tight", float(GFX_DEFAULTS["heat_warp_tight"]))
 	heat_warp_mesh.material_override = heat_warp_mat
 	heat_warp_mesh.visible = false
+	heat_warp_enabled = true
 	parent.add_child(heat_warp_mesh)
 
 
 func _update_heat_warp(_delta: float) -> void:
 	if heat_warp_mat == null or heat_warp_mesh == null or not is_instance_valid(heat_warp_mesh):
+		return
+	if not heat_warp_enabled:
+		heat_warp_mesh.visible = false
+		heat_warp_mat.set_shader_parameter("heat", 0.0)
 		return
 	var heat := 0.0
 	if grill_on:
@@ -2452,6 +2697,22 @@ func _update_heat_warp(_delta: float) -> void:
 			heat = maxf(heat, 0.42 + cook_t * 0.28 * clampf(float(p.heat_mul), 0.2, 1.0))
 	heat_warp_mat.set_shader_parameter("heat", heat)
 	heat_warp_mesh.visible = heat > 0.05
+
+
+func _apply_heat_warp_settings(s: Dictionary) -> void:
+	heat_warp_enabled = bool(s.get("heat_warp_on", true))
+	if heat_warp_mat == null or heat_warp_mesh == null or not is_instance_valid(heat_warp_mesh):
+		return
+	var size_mul := clampf(float(s.get("heat_warp_size", 0.62)), 0.25, 1.6)
+	var plane := heat_warp_mesh.mesh as PlaneMesh
+	if plane != null:
+		plane.size = heat_warp_base_size * size_mul
+	heat_warp_mat.set_shader_parameter("time_scale", float(s.get("heat_warp_speed", 3.8)))
+	heat_warp_mat.set_shader_parameter("warp_strength", float(s.get("heat_warp_strength", 0.0048)))
+	heat_warp_mat.set_shader_parameter("mask_tight", float(s.get("heat_warp_tight", 1.4)))
+	if not heat_warp_enabled:
+		heat_warp_mesh.visible = false
+		heat_warp_mat.set_shader_parameter("heat", 0.0)
 
 
 func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: float, intensity: float, tex: Texture2D) -> MeshInstance3D:
@@ -2476,6 +2737,8 @@ func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: flo
 	gm.render_priority = 6
 	glow.material_override = gm
 	glow.visible = false
+	glow.set_meta("base_alpha", gm.albedo_color.a)
+	glow.set_meta("base_emission_energy_multiplier", gm.emission_energy_multiplier)
 	parent.add_child(glow)
 	grill_glow_meshes.append(glow)
 	return glow
@@ -2575,12 +2838,13 @@ func _make_residue_texture(seed_i: int) -> ImageTexture:
 
 
 func _build_wire_brush() -> void:
-	## Paint scraper further screen-right (world −X) — easier to grab clear of oil/shaker.
-	brush_home = Vector3(-2.58, 1.52, 1.15)
+	## Paint scraper on screen-left window ledge (world +X) — clear of tickets.
+	brush_home = Vector3(2.42, 1.18, 1.18)
 	brush_root = Node3D.new()
 	brush_root.name = "PaintScraper"
 	brush_root.position = brush_home
 	## Blade faces the grill (not edge-up). Flipped from the old parked pose.
+	brush_home_rot = Vector3(-172.0, 70.0, -8.0)
 	brush_root.rotation_degrees = brush_home_rot
 	brush_root.scale = Vector3(1.28, 1.28, 1.28)
 	world.add_child(brush_root)
@@ -2635,12 +2899,13 @@ func _build_wire_brush() -> void:
 	brush_root.add_child(neck)
 
 	## Wide flat scraper blade — thin axis = up so the face lays on the steel when tipped.
+	## Rotated 180° around the handle (local Y) so the scrape edge faces the cook surface.
 	var blade := MeshInstance3D.new()
 	var blade_mesh := BoxMesh.new()
 	blade_mesh.size = Vector3(0.12, 0.0028, 0.09)
 	blade.mesh = blade_mesh
-	blade.position = Vector3(0, -0.048, 0.012)
-	blade.rotation_degrees.x = 6.0
+	blade.position = Vector3(0, -0.048, -0.012)
+	blade.rotation_degrees = Vector3(6.0, 180.0, 0.0)
 	var blade_mat := StandardMaterial3D.new()
 	blade_mat.albedo_color = Color(0.78, 0.8, 0.84)
 	blade_mat.metallic = 1.0
@@ -2648,13 +2913,13 @@ func _build_wire_brush() -> void:
 	blade.material_override = blade_mat
 	brush_root.add_child(blade)
 
-	## Beveled leading edge (toward +Z when scraping).
+	## Beveled leading edge — toward cook space after the 180° flip.
 	var tip := MeshInstance3D.new()
 	var tip_mesh := BoxMesh.new()
 	tip_mesh.size = Vector3(0.118, 0.0016, 0.02)
 	tip.mesh = tip_mesh
-	tip.position = Vector3(0, -0.051, 0.058)
-	tip.rotation_degrees.x = 14.0
+	tip.position = Vector3(0, -0.051, -0.058)
+	tip.rotation_degrees = Vector3(14.0, 180.0, 0.0)
 	tip.material_override = blade_mat
 	brush_root.add_child(tip)
 
@@ -2663,18 +2928,19 @@ func _build_wire_brush() -> void:
 	var smesh := BoxMesh.new()
 	smesh.size = Vector3(0.055, 0.008, 0.03)
 	shoulder.mesh = smesh
-	shoulder.position = Vector3(0, -0.01, -0.012)
+	shoulder.position = Vector3(0, -0.01, 0.012)
+	shoulder.rotation_degrees.y = 180.0
 	shoulder.material_override = metal
 	brush_root.add_child(shoulder)
 
 
 func _build_season_shaker() -> void:
-	## Seasoning by the scraper on screen-right — clear of bottom UI.
-	shaker_home = Vector3(-2.15, 1.32, 1.08)
+	## Seasoning with oil + scraper on the screen-left window ledge.
+	shaker_home = Vector3(2.28, 1.36, 1.12)
 	shaker_root = Node3D.new()
 	shaker_root.name = "SeasonShaker"
 	shaker_root.position = shaker_home
-	shaker_root.rotation_degrees = Vector3(6.0, 25.0, -4.0)
+	shaker_root.rotation_degrees = Vector3(6.0, -25.0, 4.0)
 	shaker_root.scale = Vector3(1.85, 1.85, 1.85)
 	grill_root.add_child(shaker_root)
 
@@ -2734,7 +3000,8 @@ func _build_season_shaker() -> void:
 	pmat.spread = 22.0
 	pmat.initial_velocity_min = 0.35
 	pmat.initial_velocity_max = 0.75
-	pmat.gravity = Vector3(0, 3.5, 0)
+	## World-space gravity — pull seasoning down onto the patty.
+	pmat.gravity = Vector3(0, -6.5, 0)
 	pmat.damping_min = 0.5
 	pmat.damping_max = 1.2
 	pmat.scale_min = 0.3
@@ -2959,11 +3226,12 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 	## Round soft puddle — never a stretched rectangle.
 	plane.size = Vector2(rad * 2.15, rad * 2.15)
 	slick.mesh = plane
-	## Sit on the steel, under patties — high enough to avoid grill z-fight.
+	## Sit on the steel above the shine band — high enough to avoid grill z-fight.
 	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + OIL_SIT_Y, pos.z)
 	slick.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
 	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	slick.sorting_offset = -2.0
+	## Draw above grill shine (prio 2); smoke still sits higher (12).
+	slick.sorting_offset = 3.0
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -2977,12 +3245,10 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 	mat.clearcoat_roughness = 0.06
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	## Below patty transparent layers (sear/frost use 1–3).
-	mat.render_priority = -2
+	## Above shine (2), under heat glow (6) / oil smoke (12).
+	mat.render_priority = 4
 	slick.material_override = mat
 	grill_root.add_child(slick)
-	## Keep puddles under tools/patties in the scene tree draw order.
-	grill_root.move_child(slick, 0)
 	var smoke := _make_oil_burn_smoke(rad)
 	slick.add_child(smoke)
 	oil_slicks.append({
@@ -2998,17 +3264,17 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
 			m.queue_free()
-	## Hot steel + fresh oil → loud hiss/pop burst for ~1s.
+	## Hot steel + fresh oil → loud fry, then a soft fade-out.
 	if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
-		game_audio.trigger_hot_oil(1.0)
+		game_audio.trigger_hot_oil(3.0)
 
 
 func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
-	## Greasy smoke that ramps up as the puddle cooks off.
+	## Light steam — mostly white with a few brown flecks, soft alpha.
 	var smoke := GPUParticles3D.new()
 	smoke.name = "OilBurnSmoke"
 	smoke.amount = 22
-	smoke.lifetime = 1.35
+	smoke.lifetime = 1.45
 	smoke.explosiveness = 0.0
 	smoke.randomness = 0.65
 	smoke.emitting = false
@@ -3031,12 +3297,13 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 	pmat.damping_max = 0.85
 	pmat.scale_min = 0.8
 	pmat.scale_max = 1.9
-	pmat.color = Color(0.55, 0.5, 0.45, 0.4)
+	pmat.color = Color(0.96, 0.97, 0.99, 0.22)
 	var fade := Gradient.new()
 	fade.add_point(0.0, Color(1, 1, 1, 0.0))
-	fade.add_point(0.15, Color(1, 1, 1, 0.55))
-	fade.add_point(0.55, Color(0.85, 0.8, 0.75, 0.28))
-	fade.add_point(1.0, Color(0.6, 0.55, 0.5, 0.0))
+	fade.add_point(0.12, Color(0.98, 0.98, 1.0, 0.32))
+	fade.add_point(0.4, Color(0.95, 0.96, 0.98, 0.16))
+	fade.add_point(0.72, Color(0.82, 0.72, 0.58, 0.07)) ## faint brown fleck tint late
+	fade.add_point(1.0, Color(0.9, 0.9, 0.92, 0.0))
 	var fade_tex := GradientTexture1D.new()
 	fade_tex.gradient = fade
 	pmat.color_ramp = fade_tex
@@ -3048,7 +3315,7 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
 	draw.albedo_texture = _get_oil_smoke_texture()
-	draw.albedo_color = Color(0.75, 0.7, 0.65, 0.7)
+	draw.albedo_color = Color(0.97, 0.97, 0.99, 0.38)
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.vertex_color_use_as_albedo = true
@@ -3061,24 +3328,30 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 
 
 func _get_oil_smoke_texture() -> ImageTexture:
-	## Soft grey puff — reused for every oil slick.
+	## Soft white puff with sparse brown flecks — reused for every oil slick.
 	if _oil_smoke_tex != null:
 		return _oil_smoke_tex
 	var w := 64
 	var h := 64
 	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
 	var mid := float(w - 1) * 0.5
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 41753011
 	for y in h:
 		for x in w:
 			var dx := (float(x) - mid) / mid
 			var dy := (float(y) - mid) / mid
 			var r := sqrt(dx * dx + dy * dy)
 			var a := clampf(1.0 - r, 0.0, 1.0)
-			a = pow(a, 1.65) * 0.85
-			if a < 0.02:
+			a = pow(a, 1.75) * 0.42
+			if a < 0.015:
 				img.set_pixel(x, y, Color(0, 0, 0, 0))
 			else:
-				img.set_pixel(x, y, Color(0.7, 0.68, 0.64, a))
+				## Mostly white steam; rare brown grease bits.
+				if rng.randf() < 0.055 and a > 0.08:
+					img.set_pixel(x, y, Color(0.62, 0.48, 0.34, a * 0.55))
+				else:
+					img.set_pixel(x, y, Color(0.97, 0.98, 1.0, a))
 	_oil_smoke_tex = ImageTexture.create_from_image(img)
 	return _oil_smoke_tex
 
@@ -3158,12 +3431,12 @@ func _clear_oil_slicks() -> void:
 
 
 func _build_oil_bottle() -> void:
-	## Next to scraper/shaker on screen-right — tip down to draw oil lines.
-	oil_home = Vector3(-1.72, 1.22, 0.88)
+	## Oil bottle stacked above the shaker on the screen-left window ledge.
+	oil_home = Vector3(2.28, 1.55, 1.12)
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
-	oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
+	oil_root.rotation_degrees = Vector3(8.0, -40.0, 5.0)
 	oil_root.scale = Vector3(1.75, 1.75, 1.75)
 	grill_root.add_child(oil_root)
 
@@ -3231,15 +3504,18 @@ func _build_oil_bottle() -> void:
 	oil_particles.explosiveness = 0.05
 	oil_particles.randomness = 0.45
 	oil_particles.emitting = false
+	## Tip sits at local +Y; bottle flips 180 when pouring so that becomes world −Y.
 	oil_particles.position = Vector3(0, 0.13, 0)
 	var op := ParticleProcessMaterial.new()
 	op.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
 	op.emission_sphere_radius = 0.006
+	## Local +Y out the nozzle — with the held 180° flip that shoots toward the steel.
 	op.direction = Vector3(0, 1, 0)
 	op.spread = 12.0
 	op.initial_velocity_min = 0.75
 	op.initial_velocity_max = 1.35
-	op.gravity = Vector3(0, 5.5, 0)
+	## World-space gravity must pull down (negative Y), not up into the bottle.
+	op.gravity = Vector3(0, -9.8, 0)
 	op.scale_min = 0.35
 	op.scale_max = 0.9
 	op.color = Color(1.0, 0.88, 0.35, 0.8)
@@ -3623,6 +3899,8 @@ func _place_spatula_on_warmer(hit_pos: Vector3) -> void:
 			return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	patty.is_held = false
@@ -4327,6 +4605,13 @@ func _build_graphics_ui() -> void:
 	_gfx_add_check(list, "ssao", "Ambient Occlusion (SSAO)")
 	_gfx_add_check(list, "ssil", "Indirect Light (SSIL)")
 
+	_gfx_add_section(list, "HEAT WARP")
+	_gfx_add_check(list, "heat_warp_on", "Heat Shimmer")
+	_gfx_add_slider(list, "heat_warp_size", "Warp Size", 0.3, 1.5, 0.01)
+	_gfx_add_slider(list, "heat_warp_speed", "Warp Speed", 0.5, 10.0, 0.05)
+	_gfx_add_slider(list, "heat_warp_strength", "Warp Strength", 0.0, 0.02, 0.0005)
+	_gfx_add_slider(list, "heat_warp_tight", "Warp Tightness", 0.6, 2.2, 0.05)
+
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 8)
 	root_v.add_child(footer)
@@ -4473,6 +4758,32 @@ func _sync_graphics_ui_from_world() -> void:
 		gfx_checks["ssao"].set_pressed_no_signal(gfx_env.ssao_enabled)
 	if gfx_checks.has("ssil"):
 		gfx_checks["ssil"].set_pressed_no_signal(gfx_env.ssil_enabled)
+	## Heat warp lives on the grill shader, not the Environment.
+	var hw_map := {
+		"heat_warp_size": float(GFX_DEFAULTS["heat_warp_size"]),
+		"heat_warp_speed": float(GFX_DEFAULTS["heat_warp_speed"]),
+		"heat_warp_strength": float(GFX_DEFAULTS["heat_warp_strength"]),
+		"heat_warp_tight": float(GFX_DEFAULTS["heat_warp_tight"]),
+	}
+	if heat_warp_mat != null:
+		hw_map["heat_warp_speed"] = float(heat_warp_mat.get_shader_parameter("time_scale"))
+		hw_map["heat_warp_strength"] = float(heat_warp_mat.get_shader_parameter("warp_strength"))
+		hw_map["heat_warp_tight"] = float(heat_warp_mat.get_shader_parameter("mask_tight"))
+	if heat_warp_mesh != null and is_instance_valid(heat_warp_mesh):
+		var plane := heat_warp_mesh.mesh as PlaneMesh
+		if plane != null and heat_warp_base_size.x > 0.001:
+			hw_map["heat_warp_size"] = plane.size.x / heat_warp_base_size.x
+	for key in hw_map:
+		if gfx_sliders.has(key) and gfx_sliders[key] != null:
+			gfx_sliders[key].set_value_no_signal(float(hw_map[key]))
+			var row2: Node = gfx_sliders[key].get_parent()
+			if row2 and row2.get_child_count() > 0:
+				var top2 = row2.get_child(0)
+				var val_lab2 = top2.get_node_or_null("Val") if top2 else null
+				if val_lab2:
+					val_lab2.text = "%.2f" % float(hw_map[key])
+	if gfx_checks.has("heat_warp_on"):
+		gfx_checks["heat_warp_on"].set_pressed_no_signal(heat_warp_enabled)
 
 
 func _apply_graphics_settings(s: Dictionary) -> void:
@@ -4499,6 +4810,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 		gfx_window_wash.light_energy = float(s.get("window_wash", 1.1))
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
+	_apply_heat_warp_settings(s)
 
 
 func _reset_graphics_defaults() -> void:
@@ -4676,6 +4988,8 @@ func _clear_spatula() -> void:
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
@@ -4698,10 +5012,10 @@ func _spawn_customer() -> void:
 	var lane := customers.size()
 	c.setup(order, color, patience, lane)
 	## Higher in the window and spread across the opening.
-	c.position = Vector3(-6.5, 0.85, 2.25)
+	c.position = Vector3(-6.5, 0.72, 2.25)
 	c.target_x = -2.6 + lane * 1.75
 	c.rotation_degrees = Vector3(0, 180, 0)
-	c.scale = Vector3(1.2, 1.2, 1.2)
+	c.scale = Vector3(1.0, 1.0, 1.0)
 	c.arrived.connect(_on_customer_arrived)
 	c.patience_expired.connect(_on_customer_left.bind(true))
 	c.served.connect(func(cust, _pay): _on_customer_left(cust, false))
@@ -5121,7 +5435,12 @@ func _build_ingredient_legend() -> void:
 			func(_pos):
 				_strip_did_drag = true
 				if capture == "cheese":
-					_cancel_cheese_hold_silent()
+					## Same ghost hold as a click — drop on a grill burger or Build.
+					_begin_cheese_hold(true)
+					_pending_cheese_drag = true
+					_arm_grill_drop_zone()
+				else:
+					_pending_cheese_drag = false
 				var drag_preview := TextureRect.new()
 				drag_preview.texture = FoodSpritesScript.get_tex(capture)
 				drag_preview.custom_minimum_size = Vector2(120, 48)
@@ -5413,6 +5732,45 @@ func _make_station_patty_drag(station_index: int, from_index: int, patty_index: 
 	}
 
 
+func _build_build_drop_zone() -> void:
+	## Full-height left column — click anywhere left of the grill to land on Build.
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+	build_drop_zone = Control.new()
+	build_drop_zone.name = "BuildDropZone"
+	build_drop_zone.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	build_drop_zone.anchor_right = 0.0
+	build_drop_zone.offset_left = 0.0
+	build_drop_zone.offset_right = BUILD_DROP_MIN_PX
+	build_drop_zone.offset_top = 48.0
+	build_drop_zone.offset_bottom = -110.0
+	build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	build_drop_zone.z_index = 9
+	ui_root.add_child(build_drop_zone)
+	build_drop_zone.gui_input.connect(func(ev: InputEvent):
+		if not (ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT):
+			return
+		if spatula_patty == null:
+			return
+		_drop_spatula_on_station(STATION_CRAFT)
+		build_drop_zone.accept_event()
+	)
+
+
+func _arm_build_drop_zone(armed: bool) -> void:
+	if build_drop_zone == null or not is_instance_valid(build_drop_zone):
+		return
+	if armed:
+		var limit := maxf(BUILD_DROP_MIN_PX, _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX)
+		var vr := get_viewport().get_visible_rect()
+		limit = maxf(limit, vr.size.x * BUILD_DROP_SCREEN_FRAC)
+		build_drop_zone.offset_right = limit
+		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
+	else:
+		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
 func _build_grill_drop_zone() -> void:
 	## Drop target over the 3D grill (skips the far-left Build chrome).
 	var ui_root: Control = get_node_or_null("UI/Root")
@@ -5428,9 +5786,49 @@ func _build_grill_drop_zone() -> void:
 	ui_root.add_child(grill_drop_zone)
 	grill_drop_zone.set_drag_forwarding(
 		Callable(),
-		func(_pos, data): return _can_drop_station_patty_on_grill(data),
-		func(_pos, data): _drop_station_patty_on_grill(data)
+		func(_pos, data): return _can_drop_on_grill_zone(data),
+		func(_pos, data): _drop_on_grill_zone(data)
 	)
+
+
+func _can_drop_on_grill_zone(data: Variant) -> bool:
+	if _can_drop_station_patty_on_grill(data):
+		return true
+	return _can_drop_cheese_on_grill(data)
+
+
+func _drop_on_grill_zone(data: Variant) -> void:
+	if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "station_patty":
+		_drop_station_patty_on_grill(data)
+		return
+	if _can_drop_cheese_on_grill(data):
+		_drop_cheese_on_grill(data)
+
+
+func _can_drop_cheese_on_grill(data: Variant) -> bool:
+	if typeof(data) != TYPE_DICTIONARY:
+		return false
+	if str(data.get("kind", "")) != "ingredient":
+		return false
+	if str(data.get("id", "")) != "cheese":
+		return false
+	## Don't steal drops meant for the Build board.
+	if _station_index_at(get_viewport().get_mouse_position()) >= 0:
+		return false
+	return true
+
+
+func _drop_cheese_on_grill(data: Variant) -> void:
+	_pending_cheese_drag = false
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	if not cheese_held:
+		_begin_cheese_hold(true)
+	_try_place_held_cheese(get_viewport().get_mouse_position())
+	## Drag-miss (no burger under cursor) returns cheese to the strip.
+	if cheese_held:
+		_cancel_cheese_hold_silent()
+		_flash("Drop cheese on a burger", Color("FFCC80"))
 
 
 func _on_gui_drag_ended(was_accepted: bool) -> void:
@@ -5440,6 +5838,7 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 	if not was_accepted and _pending_station_patty_drag != null:
 		var data = _pending_station_patty_drag
 		_pending_station_patty_drag = null
+		_pending_cheese_drag = false
 		if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "station_patty":
 			var mouse := get_viewport().get_mouse_position()
 			## Don't yank it if they dropped back on Build.
@@ -5448,7 +5847,23 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 				if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
 					_return_station_patty_to_grill(int(data.get("station", -1)), int(data.get("from", -1)), hit)
 		return
+	if not was_accepted and _pending_cheese_drag:
+		_pending_cheese_drag = false
+		var mouse2 := get_viewport().get_mouse_position()
+		if _station_index_at(mouse2) >= 0:
+			## Dropped on Build chrome without a Control accept — add as topping.
+			if cheese_held:
+				_cancel_cheese_hold_silent()
+			_add_ingredient_to_station(_station_index_at(mouse2), "cheese", true)
+			return
+		if cheese_held:
+			_try_place_held_cheese(mouse2)
+			if cheese_held:
+				_cancel_cheese_hold_silent()
+				_flash("Drop cheese on a burger", Color("FFCC80"))
+		return
 	_pending_station_patty_drag = null
+	_pending_cheese_drag = false
 
 
 func _arm_grill_drop_zone() -> void:
@@ -5602,6 +6017,36 @@ func _extract_station_patty(station_index: int, item_index: int):
 	return patty
 
 
+func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
+	## Click a Build patty → turn it back into a held 3D patty (same as scoop).
+	if not playing:
+		return
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("EF5350"))
+		return
+	var patty = _extract_station_patty(station_index, item_index)
+	if patty == null:
+		_flash("Couldn't grab that patty", Color("EF5350"))
+		return
+	patty.is_held = true
+	patty.heating = false
+	patty.visible = true
+	patty.rotation_degrees = Vector3.ZERO
+	if patty.get_parent() == null:
+		patties_root.add_child(patty)
+	spatula_patty = patty
+	spatula_from_build = true
+	spatula_lmb_held = true
+	spatula_last_mouse = get_viewport().get_mouse_position()
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	_update_held_spatula_patty(0.016)
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Drag to grill & release · flick right to throw · Build to put back", Color("90CAF9"))
+
+
 func _return_station_patty_to_grill(station_index: int, item_index: int, world_pos: Vector3) -> bool:
 	if not playing:
 		return false
@@ -5716,6 +6161,7 @@ func _drop_on_assembly(station_index: int, at_pos: Vector2, data: Variant) -> vo
 	var kind: String = data.get("kind", "")
 	if kind == "ingredient":
 		var id := str(data.get("id", ""))
+		_pending_cheese_drag = false
 		if id == "cheese":
 			_cancel_cheese_hold_silent()
 		_add_ingredient_to_station(station_index, id)
@@ -5825,6 +6271,8 @@ func _drop_spatula_on_station(index: int) -> void:
 		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
 	_commit_patty_to_build(patty)
 	if index != STATION_CRAFT:
 		## Only one craft station today — keep API for future multi-station.
@@ -5881,10 +6329,15 @@ func _add_ingredient(id: String) -> void:
 	_add_ingredient_to_station(active_station, id, false)
 
 
-func _begin_cheese_hold() -> void:
+func _begin_cheese_hold(from_drag: bool = false) -> void:
 	if not playing or brush_held or oil_held or shaker_held or spatula_patty != null:
 		return
 	if cheese_held:
+		## Drag re-arms an existing hold; click toggles it off.
+		if from_drag:
+			if cheese_ghost and is_instance_valid(cheese_ghost):
+				cheese_ghost.visible = true
+			return
 		_cancel_cheese_hold()
 		return
 	cheese_held = true
@@ -5893,10 +6346,14 @@ func _begin_cheese_hold() -> void:
 		cheese_ghost.visible = true
 	if game_audio:
 		game_audio.play_ingredient("cheese")
-	_flash("Cheese ready — left-click to place · right-click returns to stack", Color("FFE082"))
+	if from_drag:
+		_flash("Drop cheese on a grill burger (or Build)", Color("FFE082"))
+	else:
+		_flash("Cheese ready — left-click to place · right-click returns to stack", Color("FFE082"))
 
 
 func _cancel_cheese_hold() -> void:
+	_pending_cheese_drag = false
 	cheese_held = false
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
@@ -5904,6 +6361,7 @@ func _cancel_cheese_hold() -> void:
 
 
 func _cancel_cheese_hold_silent() -> void:
+	_pending_cheese_drag = false
 	cheese_held = false
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
@@ -6291,26 +6749,18 @@ func _refresh_station(index: int) -> void:
 		var item_id := item
 		row.gui_input.connect(func(ev: InputEvent):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				_select_station_layer(index, from_i)
-				## Don't eat the event on patties — Godot needs it to start a drag.
-				if item_id != "patty":
-					row.accept_event()
+				if item_id == "patty":
+					## Click → held 3D patty so you can place it back on the grill.
+					_pickup_station_patty_to_hand(index, from_i)
+				else:
+					_select_station_layer(index, from_i)
+				row.accept_event()
 		)
 		row.set_drag_forwarding(
 			func(_pos):
 				if item_id == "patty":
-					var drag_preview := TextureRect.new()
-					drag_preview.texture = tr.texture
-					drag_preview.custom_minimum_size = Vector2(160, 56)
-					drag_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-					drag_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-					row.set_drag_preview(drag_preview)
-					var pidx2 := _patty_index_for_item_slot(index, from_i)
-					var drag_data := _make_station_patty_drag(index, from_i, pidx2)
-					_pending_station_patty_drag = drag_data
-					_arm_grill_drop_zone()
-					_flash("Drop on the grill (or HOLD) to put it back", Color("90CAF9"))
-					return drag_data
+					## Patties use click-to-hand; keep Control drag for toppings only.
+					return null
 				var color_preview := ColorRect.new()
 				color_preview.custom_minimum_size = Vector2(100, 16)
 				color_preview.color = GameDataScript.INGREDIENT_COLORS.get(item_id, Color.GRAY)
@@ -6388,7 +6838,8 @@ func _refresh_spatula_ui() -> void:
 		held_row.visible = false
 		for child in held_row.get_children():
 			child.queue_free()
-	## Arm whole Build column to catch drops while holding a scooped patty.
+	## Arm whole Build column + tall left catcher while holding a scooped patty.
+	_arm_build_drop_zone(spatula_patty != null)
 	if stations_row != null and is_instance_valid(stations_row):
 		stations_row.mouse_filter = Control.MOUSE_FILTER_STOP if spatula_patty != null \
 			else Control.MOUSE_FILTER_IGNORE

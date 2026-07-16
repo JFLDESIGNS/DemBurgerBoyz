@@ -47,8 +47,10 @@ var _sz_sample_i := 0
 var _slide_player: AudioStreamPlayer
 var _slide_gain: float = 0.0
 var _slide_target: float = 0.0
-## Hot oil on a lit grill — loud 1s fry burst + dense pops.
-var _hot_oil_left: float = 0.0
+## Hot oil on a lit grill — loud fry burst, then a soft 2s die-out.
+var _hot_oil_full_left: float = 0.0
+var _hot_oil_fade_left: float = 0.0
+const HOT_OIL_FADE_SEC := 2.0
 var _hot_oil_pop_cd: float = 0.0
 var _hot_oil_was_active: bool = false
 
@@ -102,14 +104,18 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
-	## Hot oil on lit steel — loud fry + dense pops for ~1s.
-	if _hot_oil_left > 0.0:
-		_hot_oil_left = maxf(0.0, _hot_oil_left - delta)
+	## Hot oil on lit steel — loud fry for the full window, then a 2s die-out.
+	var oil_active := _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0
+	var oil_fade_t := 1.0 ## 1 = full blast, 0 = silent
+	if _hot_oil_full_left > 0.0:
+		_hot_oil_full_left = maxf(0.0, _hot_oil_full_left - delta)
 		_hot_oil_was_active = true
 		_sizzle_on = true
+		oil_fade_t = 1.0
+		if _hot_oil_full_left <= 0.0:
+			_hot_oil_fade_left = HOT_OIL_FADE_SEC
 		if _sizzle_player != null:
-			var burst_t := clampf(_hot_oil_left, 0.0, 1.0)
-			_sizzle_player.volume_db = lerpf(-14.0, -3.5, burst_t)
+			_sizzle_player.volume_db = -3.5
 			if not _sizzle_player.playing:
 				_sizzle_player.play()
 		_hot_oil_pop_cd -= delta
@@ -118,6 +124,21 @@ func _process(delta: float) -> void:
 			if randf() < 0.55:
 				play_grease_pop(true)
 			_hot_oil_pop_cd = 0.028 + randf() * 0.045
+	elif _hot_oil_fade_left > 0.0:
+		_hot_oil_fade_left = maxf(0.0, _hot_oil_fade_left - delta)
+		_hot_oil_was_active = true
+		_sizzle_on = true
+		oil_fade_t = clampf(_hot_oil_fade_left / HOT_OIL_FADE_SEC, 0.0, 1.0)
+		if _sizzle_player != null:
+			## Soft linear die-out over the fade window.
+			_sizzle_player.volume_db = lerpf(-42.0, -6.0, oil_fade_t)
+			if not _sizzle_player.playing:
+				_sizzle_player.play()
+		_hot_oil_pop_cd -= delta
+		if _hot_oil_pop_cd <= 0.0 and oil_fade_t > 0.08:
+			if randf() < oil_fade_t:
+				play_grease_pop(true)
+			_hot_oil_pop_cd = lerpf(0.14, 0.04, oil_fade_t) + randf() * 0.05
 	elif _hot_oil_was_active:
 		_hot_oil_was_active = false
 		if _sizzle_on and _sizzle_player != null:
@@ -127,16 +148,16 @@ func _process(delta: float) -> void:
 		if playback != null:
 			var t := clampf(_sizzle_intensity, 0.0, 1.0)
 			var oil_mul := 1.0
-			if _hot_oil_left > 0.0:
-				oil_mul = 2.4
-				t = 1.0
+			if oil_active:
+				oil_mul = lerpf(1.0, 2.4, oil_fade_t)
+				t = maxf(t, oil_fade_t)
 			## Quieter static bed (50%); crackles stay full strength.
 			var bed_gain := lerpf(0.06, 0.1, t) * oil_mul
-			var pop_chance_boost := lerpf(1.0, 1.6, t) * (3.2 if _hot_oil_left > 0.0 else 1.0)
+			var pop_chance_boost := lerpf(1.0, 1.6, t) * lerpf(1.0, 3.2, oil_fade_t if oil_active else 0.0)
 			while playback.get_frames_available() > 0:
 				var sample := _next_sizzle_sample(bed_gain, pop_chance_boost)
-				if _hot_oil_left > 0.0:
-					sample = clampf(sample * 1.55, -1.0, 1.0)
+				if oil_active:
+					sample = clampf(sample * lerpf(1.0, 1.55, oil_fade_t), -1.0, 1.0)
 				playback.push_frame(Vector2(sample, sample))
 	if _hiss_on and _hiss_player != null and _hiss_player.playing:
 		var hp := _hiss_player.get_stream_playback() as AudioStreamGeneratorPlayback
@@ -150,12 +171,12 @@ func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
 	if _sizzle_player == null:
 		return
 	_sizzle_intensity = clampf(intensity, 0.0, 1.0)
-	if _hot_oil_left > 0.0:
+	if _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0:
 		active = true
 		_sizzle_intensity = maxf(_sizzle_intensity, 0.95)
 	if active:
 		_sizzle_on = true
-		if _hot_oil_left <= 0.0:
+		if _hot_oil_full_left <= 0.0 and _hot_oil_fade_left <= 0.0:
 			_sizzle_player.volume_db = lerpf(-18.0, -12.0, _sizzle_intensity)
 		if not _sizzle_player.playing:
 			_sizzle_player.play()
@@ -166,13 +187,14 @@ func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
 
 
 func is_hot_oil_bursting() -> bool:
-	return _hot_oil_left > 0.0
+	return _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0
 
 
-func trigger_hot_oil(duration: float = 1.0) -> void:
-	## Oil hits a hot grill — loud fry for ~1s with a ton of pops.
-	var starting := _hot_oil_left <= 0.05
-	_hot_oil_left = maxf(_hot_oil_left, duration)
+func trigger_hot_oil(duration: float = 3.0) -> void:
+	## Oil hits a hot grill — loud fry for `duration`, then a 2s soft die-out.
+	var starting := _hot_oil_full_left <= 0.05 and _hot_oil_fade_left <= 0.05
+	_hot_oil_full_left = maxf(_hot_oil_full_left, duration)
+	_hot_oil_fade_left = 0.0 ## re-hit cancels an in-progress fade
 	_sizzle_on = true
 	_sizzle_intensity = maxf(_sizzle_intensity, 0.95)
 	if _sizzle_player != null:
@@ -202,7 +224,8 @@ func set_burner_hiss(active: bool) -> void:
 		return
 	if active:
 		_hiss_on = true
-		_hiss_player.volume_db = -40.0
+		# Boost idle hiss so "burner on" reads immediately even before patties heat up.
+		_hiss_player.volume_db = -30.0
 		if not _hiss_player.playing:
 			_hiss_player.play()
 	else:
@@ -216,7 +239,8 @@ func _next_burner_hiss_sample() -> float:
 	var white := randf() * 2.0 - 1.0
 	_hiss_lp = _hiss_lp * 0.82 + white * 0.18
 	_hiss_hp = white - _hiss_lp
-	return clampf(_hiss_hp * 0.07 + _hiss_lp * 0.015, -1.0, 1.0)
+	# Extra gain for a more obvious idle static cue.
+	return clampf((_hiss_hp * 0.07 + _hiss_lp * 0.015) * 1.35, -1.0, 1.0)
 
 
 func _next_sizzle_sample(bed_gain: float, pop_boost: float) -> float:
@@ -267,6 +291,23 @@ func play_scale_jingle() -> void:
 
 func play_click() -> void:
 	_play_cached("ui_click", _make_click, 1.0, 0.85)
+
+
+func play_stove_light() -> void:
+	## Gas-stove ignite when the burner comes on.
+	if not _cache.has("stove_light"):
+		var stream: AudioStream = null
+		if ResourceLoader.exists("res://sounds/stovelight.ogg"):
+			stream = load("res://sounds/stovelight.ogg") as AudioStream
+		if stream == null:
+			return
+		_cache["stove_light"] = stream
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache["stove_light"]
+	p.pitch_scale = 1.0
+	p.volume_db = linear_to_db(0.475)
+	p.play()
 
 
 func play_flip() -> void:
