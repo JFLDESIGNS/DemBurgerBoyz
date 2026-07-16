@@ -188,9 +188,12 @@ var spatula_carry_travel := 0.0
 const DRAG_MOVE_THRESH_PX := 8.0
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
 ## Screen-left flick (negative X) throws a finished patty to Build.
-const FLICK_TO_BUILD_VX := -780.0
-const FLICK_MIN_SPEED := 900.0
-const FLICK_MIN_TRAVEL_PX := 48.0
+const FLICK_TO_BUILD_VX := -520.0
+const FLICK_MIN_SPEED := 620.0
+const FLICK_MIN_TRAVEL_PX := 36.0
+## Left side of the screen counts as Build drop while carrying a scooped patty.
+const BUILD_DROP_SCREEN_FRAC := 0.34
+const BUILD_DROP_MIN_PX := 300.0
 ## Scooped patty floats under the cursor above the steel.
 const SPATULA_HOVER_Y := 0.12
 const SPATULA_HOVER_BOB := 0.012
@@ -822,6 +825,15 @@ func _station_index_at(screen_pos: Vector2) -> int:
 		if panel != null and is_instance_valid(panel) and panel.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
 	return -1
+
+
+func _is_build_drop_at(screen_pos: Vector2) -> bool:
+	## Anywhere on the left side of the screen drops a carried patty onto Build.
+	if _station_index_at(screen_pos) >= 0:
+		return true
+	var vr := get_viewport().get_visible_rect()
+	var left_w := maxf(BUILD_DROP_MIN_PX, vr.size.x * BUILD_DROP_SCREEN_FRAC)
+	return screen_pos.x <= vr.position.x + left_w
 
 
 func _blocks_grill_pick(screen_pos: Vector2) -> bool:
@@ -1915,10 +1927,9 @@ func _end_patty_drag() -> void:
 	if _is_flick_to_build(vel, travel) and patty.can_scoop():
 		_flick_patty_to_build(patty)
 		return
-	## Drag onto Build UI → scoop + drop in one motion (if ready).
-	var station_idx := _station_index_at(mouse)
-	if station_idx >= 0:
-		_try_drag_patty_to_station(patty, station_idx)
+	## Drag onto Build UI / left side of screen → scoop + drop in one motion (if ready).
+	if _is_build_drop_at(mouse):
+		_try_drag_patty_to_station(patty, STATION_CRAFT)
 		return
 	if _is_in_warmer_zone(patty.position):
 		var left := maxi(0, int(ceil(WARM_HOLD_MAX - float(patty.warm_hold_time))))
@@ -1960,7 +1971,7 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 	patty.is_held = true
 	_leave_grill_residue(idx, patty, false)
 	flicking_patty = patty
-	var start := patty.global_position
+	var start: Vector3 = patty.global_position
 	## Screen-left = world +X (camera is mirrored).
 	var end := Vector3(
 		GRILL_CENTER_X + GRILL_WIDTH * 0.62,
@@ -1976,7 +1987,7 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 	tw.tween_method(func(t: float):
 		if patty == null or not is_instance_valid(patty):
 			return
-		var xz := start.lerp(end, t)
+		var xz: Vector3 = start.lerp(end, t)
 		## Parabolic jump.
 		var y := lerpf(start.y, end.y, t) + 4.0 * t * (1.0 - t) * (peak_y - lerpf(start.y, end.y, 0.5))
 		patty.global_position = Vector3(xz.x, y, xz.z)
@@ -1986,11 +1997,7 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 		flicking_patty = null
 		if patty == null or not is_instance_valid(patty):
 			return
-		patty.visible = false
-		patty.rotation_degrees.z = 0.0
-		spatula_patty = patty
-		_refresh_spatula_ui()
-		_drop_spatula_on_station(STATION_CRAFT)
+		_commit_patty_to_build(patty)
 	)
 
 
@@ -2098,16 +2105,26 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 	## Returns true if the click was consumed (place / trash / throw / flip).
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		return false
-	if _ui_blocks_world_click(screen_pos) and _station_index_at(screen_pos) < 0 and not _is_over_garbage(screen_pos):
-		## Let real UI buttons work; Build column still accepts drops.
-		return false
 	if _is_over_garbage(screen_pos):
 		_trash_spatula_patty()
 		return true
-	var station_idx := _station_index_at(screen_pos)
-	if station_idx >= 0:
-		_drop_spatula_on_station(station_idx)
+	## Left side of the screen (or Build UI) → place on Build — not only the Drop button.
+	if _is_build_drop_at(screen_pos):
+		## Still allow pause / GFX / top bar to win over the left drop strip.
+		if _ui_blocks_world_click(screen_pos) and _station_index_at(screen_pos) < 0:
+			var top_bar: Control = get_node_or_null("UI/Root/TopBar")
+			var over_chrome := false
+			for ctrl in [window_pause_btn, gfx_btn, gfx_panel, radio_column, top_bar]:
+				if ctrl != null and is_instance_valid(ctrl) and ctrl.visible \
+						and ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
+					over_chrome = true
+					break
+			if over_chrome:
+				return false
+		_drop_spatula_on_station(STATION_CRAFT)
 		return true
+	if _ui_blocks_world_click(screen_pos):
+		return false
 	## Flick left while carrying → throw into Build.
 	if _is_flick_to_build(spatula_vel_screen, spatula_carry_travel):
 		_throw_held_patty_to_build()
@@ -2122,7 +2139,7 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 	## Click the steel → place / throw it down.
 	if _try_place_spatula_on_grill(screen_pos):
 		return true
-	_flash("Drop on the grill, HOLD, Build — or flick left to throw", Color("FFCC80"))
+	_flash("Drop on the grill, HOLD, or click left for Build", Color("FFCC80"))
 	return true
 
 
@@ -2220,12 +2237,44 @@ func _throw_held_patty_to_build() -> void:
 		flicking_patty = null
 		if patty == null or not is_instance_valid(patty):
 			return
-		patty.visible = false
-		patty.rotation_degrees = Vector3.ZERO
-		spatula_patty = patty
-		_refresh_spatula_ui()
-		_drop_spatula_on_station(STATION_CRAFT)
+		## Commit directly — never re-hold on the spatula (that left throws stuck in-hand).
+		_commit_patty_to_build(patty)
 	)
+
+
+func _commit_patty_to_build(patty: Area3D) -> void:
+	## Land a scooped / thrown patty on Build without requiring spatula_patty.
+	if not playing or patty == null or not is_instance_valid(patty):
+		return
+	if spatula_patty == patty:
+		spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	var st: Dictionary = stations[STATION_CRAFT]
+	var items: Array = st["items"]
+	patty.is_held = true
+	patty.heating = false
+	patty.visible = false
+	patty.rotation_degrees = Vector3.ZERO
+	if not st["patties"].has(patty):
+		st["patties"].append(patty)
+	if not items.has("bun_bottom"):
+		items.append("bun_bottom")
+	_insert_patty_into_stack(items)
+	if patty.has_cheese and patty.cheese_ready():
+		items.append("cheese")
+	st["items"] = _normalize_burger_stack(items)
+	_refresh_spatula_ui()
+	_start_station_freshness(STATION_CRAFT)
+	_refresh_station(STATION_CRAFT)
+	_select_station(STATION_CRAFT)
+	if game_audio:
+		game_audio.play_ingredient("patty")
+	var n: int = st["patties"].size()
+	if patty.has_cheese and not patty.cheese_ready():
+		_flash("Patty on Build — cheese still melting (%ds)" % maxi(1, int(ceil(5.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
+	else:
+		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
 
 
 func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> void:
@@ -2870,9 +2919,12 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 	smoke.randomness = 0.65
 	smoke.emitting = false
 	smoke.amount_ratio = 0.0
-	smoke.position = Vector3(0, 0.02, 0)
+	## Sit above the steel / shine band so wisps aren't buried in the highlight.
+	smoke.position = Vector3(0, 0.05, 0)
 	smoke.visibility_aabb = AABB(Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 1.2, 0.8))
 	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	## Draw after grill shine (prio 2) and heat glow (prio 6).
+	smoke.sorting_offset = 5.0
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
 	pmat.emission_sphere_radius = maxf(0.02, radius * 0.85)
@@ -2906,6 +2958,9 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.vertex_color_use_as_albedo = true
+	## Above shine (2) and burner glow (6) so smoke isn't washed under the glare.
+	draw.render_priority = 12
+	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	smoke.draw_pass_1 = quad
 	smoke.material_override = draw
 	return smoke
@@ -5652,35 +5707,12 @@ func _drop_spatula_on_station(index: int) -> void:
 		return
 	if index < 0 or index >= STATION_COUNT:
 		return
-	var st: Dictionary = stations[index]
-	var items: Array = st["items"]
 	var patty = spatula_patty
 	spatula_patty = null
-	spatula_vel_screen = Vector2.ZERO
-	spatula_carry_travel = 0.0
-	patty.is_held = true
-	patty.visible = false
-	patty.rotation_degrees = Vector3.ZERO
-	st["patties"].append(patty)
-	## Bottom bun is always under the meat — no need to place it from the strip.
-	if not items.has("bun_bottom"):
-		items.append("bun_bottom")
-	_insert_patty_into_stack(items)
-	## Melted grill cheese comes with the scoop only once fully melted.
-	if patty.has_cheese and patty.cheese_ready():
-		items.append("cheese")
-	st["items"] = _normalize_burger_stack(items)
-	_refresh_spatula_ui()
-	_start_station_freshness(index)
-	_refresh_station(index)
-	_select_station(index)
-	if game_audio:
-		game_audio.play_ingredient("patty")
-	var n: int = st["patties"].size()
-	if patty.has_cheese and not patty.cheese_ready():
-		_flash("Patty on Build — cheese still melting (%ds)" % maxi(1, int(ceil(5.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
-	else:
-		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
+	_commit_patty_to_build(patty)
+	if index != STATION_CRAFT:
+		## Only one craft station today — keep API for future multi-station.
+		_select_station(index)
 
 
 func _insert_patty_into_stack(items: Array) -> void:
