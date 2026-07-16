@@ -26,7 +26,6 @@ window/stretch/aspect="expand"
 [gui]
 
 theme/default_font_multichannel_signed_distance_field=true
-theme/default_font_generate_mipmaps=false
 
 [input]
 
@@ -55,4 +54,4 @@ new_patty={
 [rendering]
 
 textures/canvas_textures/default_texture_filter=0
-environment/defaults/default_clear_color=Color(0.35, 0.55, 0.78, 1)
+environment/defaults/default_clear_color=Color(0.08, 0.08, 0.09, 1)

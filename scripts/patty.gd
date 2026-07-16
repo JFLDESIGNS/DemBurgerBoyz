@@ -709,6 +709,19 @@ func _make_ice_chunk_mesh(chunk_seed: int) -> ArrayMesh:
 	arrays[Mesh.ARRAY_NORMAL] = out_n
 	arrays[Mesh.ARRAY_INDEX] = out_i
 	var mesh := ArrayMesh.new()
+	if out_v.is_empty():
+		## Degenerate RNG shard — tiny wedge so the renderer never gets empty arrays.
+		var fallback: Array = []
+		fallback.resize(Mesh.ARRAY_MAX)
+		fallback[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+			Vector3(0, 0.006, 0),
+			Vector3(0.005, 0, 0.004),
+			Vector3(-0.005, 0, 0.004),
+			Vector3(0, 0, -0.005),
+		])
+		fallback[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2])
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, fallback)
+		return mesh
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
@@ -1416,9 +1429,3 @@ func cook_rating_text() -> String:
 	while star_s.length() < 5:
 		star_s += "☆"
 	return "%s  %s  %s (%d)" % [r["grade"], star_s, r["label"], r["score"]]
-
-
-func _input_event(_camera: Camera3D, event: InputEvent, _pos: Vector3, _normal: Vector3, _shape_idx: int) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_RIGHT:
-			smash()

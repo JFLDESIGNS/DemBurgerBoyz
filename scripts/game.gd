@@ -38,6 +38,10 @@ const PATTY_PICK_WORLD := 0.42
 const PATTY_PICK_MIN_PX := 62.0
 const PATTY_PICK_WORLD_EDGE := 0.17
 const PATTY_PICK_PAD_PX := 22.0
+## Smash must hit the meat itself — near-miss right-clicks place a new patty.
+const PATTY_SMASH_WORLD := 0.115
+const PATTY_SMASH_MIN_PX := 26.0
+const PATTY_SMASH_PAD_PX := 4.0
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.034
@@ -123,6 +127,7 @@ var grill_glow_root: MeshInstance3D = null
 var heat_warp_mesh: MeshInstance3D = null
 var heat_warp_mat: ShaderMaterial = null
 var grill_drop_zone: Control = null
+var _pending_station_patty_drag = null ## Dictionary while dragging a Build patty
 var service_window_closed: bool = false
 var service_break_left: float = 0.0
 var window_pause_btn: Button = null
@@ -144,6 +149,8 @@ var brush_root: Node3D = null
 var brush_area: Area3D = null
 var brush_home: Vector3 = Vector3(-2.58, 1.52, 1.15)
 var brush_home_rot := Vector3(-172.0, -110.0, 8.0)
+## Held pose — blade flat on steel, handle tipped back toward the cook (no swipe spin).
+var brush_held_rot := Vector3(-84.0, 0.0, 180.0)
 var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel
@@ -659,7 +666,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			## Left click: flip / scoop / start drag — never spawn a patty.
 			_try_grill_raycast(event.position, false)
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			var smash_target = _pick_patty_at_screen(event.position)
+			## Squish only on a direct hit; nearby empty steel still adds a patty.
+			var smash_target = _pick_patty_at_screen(event.position, PATTY_SMASH_WORLD)
 			if smash_target != null:
 				smash_target.smash()
 			else:
@@ -1373,7 +1381,7 @@ func _scrape_finish_clean(slot: int) -> void:
 	for ch in chunks:
 		if ch == null or not is_instance_valid(ch):
 			continue
-		var fly := ch.position + Vector3(randf_range(-0.1, 0.1), 0.06, randf_range(-0.1, 0.1))
+		var fly: Vector3 = ch.position + Vector3(randf_range(-0.1, 0.1), 0.06, randf_range(-0.1, 0.1))
 		var tw := create_tween()
 		tw.set_parallel(true)
 		tw.tween_property(ch, "position", fly, 0.16)
@@ -1649,12 +1657,17 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 	_try_place_patty_at(hit_pos)
 
 
-func _pick_patty_at_screen(screen_pos: Vector2):
+func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 	## Aim at the grill plane, then pick the patty under the cursor — not just the front ray hit.
+	## max_world < 0 → generous scoop/drag pick; set tighter (e.g. smash) to require a real hit.
 	if _blocks_grill_pick(screen_pos):
 		return null
 	if camera == null:
 		return null
+	var world_lim := PATTY_PICK_WORLD if max_world < 0.0 else max_world
+	var min_px := PATTY_PICK_MIN_PX if max_world < 0.0 else PATTY_SMASH_MIN_PX
+	var pad_px := PATTY_PICK_PAD_PX if max_world < 0.0 else PATTY_SMASH_PAD_PX
+	var edge_r := PATTY_PICK_WORLD_EDGE if max_world < 0.0 else max_world
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	var cam_pos := camera.global_position
 	var candidates: Array = []
@@ -1665,11 +1678,11 @@ func _pick_patty_at_screen(screen_pos: Vector2):
 		if camera.is_position_behind(lift):
 			continue
 		var screen_pt := camera.unproject_position(lift)
-		var pick_px := maxf(PATTY_PICK_MIN_PX, _patty_screen_pick_radius_px(lift))
-		## Also accept near-misses via world distance on the grill plane.
+		var pick_px := maxf(min_px, _patty_screen_pick_radius_px(lift, edge_r, pad_px))
+		## World distance on the grill plane (tight for smash, forgiving for scoop).
 		var near_plane := false
 		if plane_hit != Vector3.ZERO:
-			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= PATTY_PICK_WORLD
+			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= world_lim
 		if screen_pos.distance_to(screen_pt) > pick_px and not near_plane:
 			continue
 		candidates.append(p)
@@ -1691,11 +1704,13 @@ func _pick_patty_at_screen(screen_pos: Vector2):
 	return candidates[0]
 
 
-func _patty_screen_pick_radius_px(world_pt: Vector3) -> float:
-	var edge := world_pt + Vector3(PATTY_PICK_WORLD_EDGE, 0, 0)
+func _patty_screen_pick_radius_px(world_pt: Vector3, edge_r: float = -1.0, pad_px: float = -1.0) -> float:
+	var er := PATTY_PICK_WORLD_EDGE if edge_r < 0.0 else edge_r
+	var pad := PATTY_PICK_PAD_PX if pad_px < 0.0 else pad_px
+	var edge := world_pt + Vector3(er, 0, 0)
 	var c2 := camera.unproject_position(world_pt)
 	var e2 := camera.unproject_position(edge)
-	return c2.distance_to(e2) + PATTY_PICK_PAD_PX
+	return c2.distance_to(e2) + pad
 
 
 func _nudge_to_open_grill_spot(desired: Vector3) -> Vector3:
@@ -3691,7 +3706,7 @@ func _snap_brush_toward_cursor(screen_pos: Vector2, amount: float = 1.0) -> void
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.7, GRILL_SURFACE_Z + GRILL_DEPTH * 0.55)
 	hit.y = plane_y + 0.02
 	brush_root.global_position = brush_root.global_position.lerp(hit, clampf(amount, 0.0, 1.0))
-	brush_root.rotation_degrees = Vector3(-84.0, 18.0, 180.0)
+	brush_root.rotation_degrees = brush_held_rot
 
 
 func _update_held_brush(delta: float) -> void:
@@ -3720,17 +3735,9 @@ func _update_held_brush(delta: float) -> void:
 		brush_root.global_position.z - prev.z
 	)
 	var moved := move_xz.length()
-	## Blade face-down on the steel, handle tipped back toward the cook.
-	var yaw := 18.0
-	if move_xz.length_squared() > 0.00001:
-		## Nudge yaw toward swipe direction so the blade leads the stroke.
-		yaw = rad_to_deg(atan2(move_xz.x, move_xz.y)) * 0.25 + 18.0
-	var target_rot := Vector3(
-		-84.0 + sin(Time.get_ticks_msec() * 0.02) * 2.0,
-		yaw + sin(Time.get_ticks_msec() * 0.012) * 2.5,
-		180.0 + sin(Time.get_ticks_msec() * 0.016) * 2.0
-	)
-	brush_root.rotation_degrees = brush_root.rotation_degrees.lerp(target_rot, clampf(delta * 14.0, 0.0, 1.0))
+	## Handle always toward the cook — never yaw with swipe (that spun the blade).
+	var tip := sin(Time.get_ticks_msec() * 0.018) * 1.5
+	brush_root.rotation_degrees = Vector3(brush_held_rot.x + tip, brush_held_rot.y, brush_held_rot.z)
 	## Nudge burgers when the blade shoves into them.
 	if moved > 0.0008:
 		_brush_nudge_patties(brush_root.global_position, move_xz, moved)
@@ -5406,17 +5413,17 @@ func _make_station_patty_drag(station_index: int, from_index: int, patty_index: 
 
 
 func _build_grill_drop_zone() -> void:
-	## Drop target over the 3D grill (skips the left station column).
+	## Drop target over the 3D grill (skips the far-left Build chrome).
 	var ui_root: Control = get_node_or_null("UI/Root")
 	if ui_root == null:
 		return
 	grill_drop_zone = Control.new()
 	grill_drop_zone.name = "GrillDropZone"
 	grill_drop_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
-	## Leave the left Build column free for station drops.
-	grill_drop_zone.offset_left = 260.0
+	## Leave a slim strip for the Build board; cover the rest of the cook surface.
+	grill_drop_zone.offset_left = 200.0
 	grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	grill_drop_zone.z_index = 8
+	grill_drop_zone.z_index = 12
 	ui_root.add_child(grill_drop_zone)
 	grill_drop_zone.set_drag_forwarding(
 		Callable(),
@@ -5425,15 +5432,28 @@ func _build_grill_drop_zone() -> void:
 	)
 
 
-func _on_gui_drag_ended(_was_accepted: bool) -> void:
+func _on_gui_drag_ended(was_accepted: bool) -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	## If the drop missed a Control target, still try to land on the grill under the cursor.
+	if not was_accepted and _pending_station_patty_drag != null:
+		var data = _pending_station_patty_drag
+		_pending_station_patty_drag = null
+		if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "station_patty":
+			var mouse := get_viewport().get_mouse_position()
+			## Don't yank it if they dropped back on Build.
+			if _station_index_at(mouse) < 0:
+				var hit := _grill_plane_from_screen(mouse)
+				if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
+					_return_station_patty_to_grill(int(data.get("station", -1)), int(data.get("from", -1)), hit)
+		return
+	_pending_station_patty_drag = null
 
 
 func _arm_grill_drop_zone() -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
-		grill_drop_zone.z_index = 8
+		grill_drop_zone.z_index = 12
 
 
 func _build_window_pause_ui() -> void:
@@ -5513,16 +5533,17 @@ func _can_drop_station_patty_on_grill(data: Variant) -> bool:
 	if str(data.get("kind", "")) != "station_patty":
 		return false
 	var mouse := get_viewport().get_mouse_position()
-	## Don't steal drops meant for station panels.
+	## Don't steal drops meant for station panels / Build board.
 	if _station_index_at(mouse) >= 0:
 		return false
 	var hit := _grill_plane_from_screen(mouse)
-	return hit != Vector3.ZERO and _is_on_grill_surface(hit)
+	return hit != Vector3.ZERO and _is_near_grill_for_place(hit)
 
 
 func _drop_station_patty_on_grill(data: Variant) -> void:
 	if typeof(data) != TYPE_DICTIONARY:
 		return
+	_pending_station_patty_drag = null
 	var station_index := int(data.get("station", -1))
 	var from_index := int(data.get("from", -1))
 	var mouse := get_viewport().get_mouse_position()
@@ -5530,8 +5551,7 @@ func _drop_station_patty_on_grill(data: Variant) -> void:
 	if hit == Vector3.ZERO:
 		_flash("Drop on the grill surface", Color("FFCC80"))
 		return
-	if not _return_station_patty_to_grill(station_index, from_index, hit):
-		pass
+	_return_station_patty_to_grill(station_index, from_index, hit)
 
 
 func _patty_index_for_item_slot(station_index: int, item_index: int) -> int:
@@ -5591,33 +5611,51 @@ func _return_station_patty_to_grill(station_index: int, item_index: int, world_p
 	if idx < 0:
 		_flash("Grill is full (%d patties)!" % GRILL_SLOTS, Color("EF5350"))
 		return false
-	if not _is_on_grill_surface(world_pos):
+	if world_pos == Vector3.ZERO or not _is_near_grill_for_place(world_pos):
 		_flash("Drop on the grill surface", Color("FFCC80"))
 		return false
-	var pos := Vector3(world_pos.x, GRILL_SURFACE_Y, world_pos.z)
-	if not _can_fit_patty_at(pos):
-		_flash("Too close to the edge — keep the patty on the grill", Color("FFA726"))
-		return false
-	if _patty_blocked_at(pos):
-		## Nudge toward an open spot near the drop.
-		var placed := false
-		var bounds := _grill_place_bounds()
-		for _try in 12:
-			pos.x = lerpf(bounds.position.x, bounds.end.x, randf())
-			pos.z = lerpf(bounds.position.y, bounds.end.y, randf())
-			if _can_fit_patty_at(pos) and not _patty_blocked_at(pos):
-				placed = true
-				break
-		if not placed:
-			_flash("Too crowded — clear a spot first", Color("EF5350"))
+	## HOLD strip is fine for cooked meat pulled off Build.
+	if _is_in_warmer_zone(world_pos):
+		var patty_w = _extract_station_patty(station_index, item_index)
+		if patty_w == null:
+			_flash("Couldn't grab that patty", Color("EF5350"))
 			return false
+		spatula_patty = patty_w
+		_place_spatula_on_warmer(world_pos)
+		if spatula_patty == null:
+			return true
+		## Warmer was crowded — snap onto cook steel instead.
+		var fallback := _find_closest_patty_place(world_pos)
+		var held = spatula_patty
+		spatula_patty = null
+		if fallback == Vector3.ZERO:
+			_commit_patty_to_build(held)
+			_flash("No open spot — back on Build", Color("FFA726"))
+			return false
+		idx = _first_empty_slot()
+		if idx < 0:
+			_commit_patty_to_build(held)
+			_flash("Grill is full — back on Build", Color("EF5350"))
+			return false
+		_place_extracted_patty_on_grill(held, idx, fallback)
+		return true
+	var place_pos := _find_closest_patty_place(world_pos)
+	if place_pos == Vector3.ZERO:
+		_flash("No open spot — clear some space", Color("EF5350"))
+		return false
 	var patty = _extract_station_patty(station_index, item_index)
 	if patty == null:
 		_flash("Couldn't grab that patty", Color("EF5350"))
 		return false
+	_place_extracted_patty_on_grill(patty, idx, place_pos)
+	return true
+
+
+func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> void:
 	## Same cooked patty returns to the grill — keep cook_time / flip / cheese.
 	patty.is_held = false
 	patty.visible = true
+	patty.rotation_degrees = Vector3.ZERO
 	patty.slot_index = idx
 	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
 	patty.heating = grill_on
@@ -5638,7 +5676,6 @@ func _return_station_patty_to_grill(station_index: int, item_index: int, world_p
 		_flash("Back on grill (%s) — cheese melting" % cook_note, Color("FFE082"))
 	else:
 		_flash("Back on grill (%s) — same cook level" % cook_note, Color("A5D6A7"))
-	return true
 
 
 func _move_station_patty(from_station: int, from_index: int, to_station: int, at_pos: Vector2) -> void:
@@ -6254,27 +6291,35 @@ func _refresh_station(index: int) -> void:
 		row.gui_input.connect(func(ev: InputEvent):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 				_select_station_layer(index, from_i)
-				row.accept_event()
+				## Don't eat the event on patties — Godot needs it to start a drag.
+				if item_id != "patty":
+					row.accept_event()
 		)
 		row.set_drag_forwarding(
 			func(_pos):
 				if item_id == "patty":
 					var drag_preview := TextureRect.new()
 					drag_preview.texture = tr.texture
-					drag_preview.custom_minimum_size = Vector2(140, 48)
+					drag_preview.custom_minimum_size = Vector2(160, 56)
 					drag_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 					drag_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 					row.set_drag_preview(drag_preview)
 					var pidx2 := _patty_index_for_item_slot(index, from_i)
+					var drag_data := _make_station_patty_drag(index, from_i, pidx2)
+					_pending_station_patty_drag = drag_data
 					_arm_grill_drop_zone()
-					return _make_station_patty_drag(index, from_i, pidx2)
+					_flash("Drop on the grill (or HOLD) to put it back", Color("90CAF9"))
+					return drag_data
 				var color_preview := ColorRect.new()
 				color_preview.custom_minimum_size = Vector2(100, 16)
 				color_preview.color = GameDataScript.INGREDIENT_COLORS.get(item_id, Color.GRAY)
 				row.set_drag_preview(color_preview)
+				_pending_station_patty_drag = null
 				return _make_reorder_drag(index, from_i, item_id),
 			func(_pos, data): return _can_drop_on_assembly(index, data),
-			func(pos, data): _drop_on_assembly(index, pos, data)
+			func(pos, data):
+				_pending_station_patty_drag = null
+				_drop_on_assembly(index, pos, data)
 		)
 		preview.add_child(row)
 

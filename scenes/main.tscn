@@ -230,7 +230,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.04, 0.06, 0.1, 0.55)
+color = Color(0.02, 0.02, 0.03, 0.32)
 
 [node name="StartCenter" type="VBoxContainer" parent="UI/Root/StartOverlay"]
 layout_mode = 1
