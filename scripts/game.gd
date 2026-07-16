@@ -156,8 +156,8 @@ var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
 var brush_held: bool = false
 var brush_root: Node3D = null
 var brush_area: Area3D = null
-var brush_home: Vector3 = Vector3(2.42, 1.18, 1.18)
-var brush_home_rot := Vector3(-172.0, 70.0, -8.0)
+var brush_home: Vector3 = Vector3(-1.55, 2.28, 1.36)
+var brush_home_rot := Vector3(-12.0, 15.0, 8.0)
 ## Held pose — blade tipped on steel, handle toward the cook.
 var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
@@ -174,14 +174,14 @@ var shaker_root: Node3D = null
 var shaker_area: Area3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(2.28, 1.36, 1.12)
+var shaker_home: Vector3 = Vector3(0.05, 2.26, 1.34)
 var shaker_season_cool: float = 0.0
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
 var oil_root: Node3D = null
 var oil_area: Area3D = null
 var oil_particles: GPUParticles3D = null
-var oil_home: Vector3 = Vector3(2.28, 1.55, 1.12)
+var oil_home: Vector3 = Vector3(1.65, 2.26, 1.34)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
@@ -2838,13 +2838,13 @@ func _make_residue_texture(seed_i: int) -> ImageTexture:
 
 
 func _build_wire_brush() -> void:
-	## Paint scraper on screen-left window ledge (world +X) — clear of tickets.
-	brush_home = Vector3(2.42, 1.18, 1.18)
+	## Paint scraper on the top window beam (screen-right checkmark).
+	brush_home = Vector3(-1.55, 2.28, 1.36)
 	brush_root = Node3D.new()
 	brush_root.name = "PaintScraper"
 	brush_root.position = brush_home
-	## Blade faces the grill (not edge-up). Flipped from the old parked pose.
-	brush_home_rot = Vector3(-172.0, 70.0, -8.0)
+	## Parked on the lintel — handle tipped slightly toward the cook.
+	brush_home_rot = Vector3(-12.0, 15.0, 8.0)
 	brush_root.rotation_degrees = brush_home_rot
 	brush_root.scale = Vector3(1.28, 1.28, 1.28)
 	world.add_child(brush_root)
@@ -2935,12 +2935,12 @@ func _build_wire_brush() -> void:
 
 
 func _build_season_shaker() -> void:
-	## Seasoning with oil + scraper on the screen-left window ledge.
-	shaker_home = Vector3(2.28, 1.36, 1.12)
+	## Seasoning on the top window beam (center checkmark).
+	shaker_home = Vector3(0.05, 2.26, 1.34)
 	shaker_root = Node3D.new()
 	shaker_root.name = "SeasonShaker"
 	shaker_root.position = shaker_home
-	shaker_root.rotation_degrees = Vector3(6.0, -25.0, 4.0)
+	shaker_root.rotation_degrees = Vector3(4.0, -10.0, 2.0)
 	shaker_root.scale = Vector3(1.85, 1.85, 1.85)
 	grill_root.add_child(shaker_root)
 
@@ -3431,12 +3431,12 @@ func _clear_oil_slicks() -> void:
 
 
 func _build_oil_bottle() -> void:
-	## Oil bottle stacked above the shaker on the screen-left window ledge.
-	oil_home = Vector3(2.28, 1.55, 1.12)
+	## Oil bottle on the top window beam (screen-left checkmark).
+	oil_home = Vector3(1.65, 2.26, 1.34)
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
-	oil_root.rotation_degrees = Vector3(8.0, -40.0, 5.0)
+	oil_root.rotation_degrees = Vector3(6.0, -18.0, 3.0)
 	oil_root.scale = Vector3(1.75, 1.75, 1.75)
 	grill_root.add_child(oil_root)
 
@@ -3791,7 +3791,9 @@ func _make_warmer_speed_label(text: String, local_pos: Vector3, col: Color) -> L
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.modulate = col
 	UiFontsScript.apply_label3d(lab, true, 64, 0.042)
-	lab.outline_modulate = Color(0, 0, 0, 0.7)
+	## No fat outline — it read as a jagged black halo on FULL / 1/4 / HOLD.
+	lab.outline_size = 0
+	lab.outline_modulate = Color(0, 0, 0, 0)
 	warmer_root.add_child(lab)
 	return lab
 
@@ -5011,8 +5013,8 @@ func _spawn_customer() -> void:
 		patience += 10.0
 	var lane := customers.size()
 	c.setup(order, color, patience, lane)
-	## Higher in the window and spread across the opening.
-	c.position = Vector3(-6.5, 0.72, 2.25)
+	## Stand on the outside walk so heads sit in the service window (not floating high).
+	c.position = Vector3(-6.5, 0.38, 2.25)
 	c.target_x = -2.6 + lane * 1.75
 	c.rotation_degrees = Vector3(0, 180, 0)
 	c.scale = Vector3(1.0, 1.0, 1.0)
@@ -5175,7 +5177,7 @@ func _reposition_customers() -> void:
 	for i in customers.size():
 		customers[i].lane = i
 		customers[i].target_x = -2.6 + i * 1.75
-		customers[i].global_position.y = 0.85
+		customers[i].global_position.y = 0.38
 
 
 func _create_ticket(customer: Node3D) -> void:

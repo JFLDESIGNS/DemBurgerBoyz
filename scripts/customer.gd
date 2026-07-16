@@ -14,7 +14,7 @@ const CHAR_SKINS: Array[String] = [
 	"res://assets/characters/Skins/cyborgFemaleA.png",
 ]
 ## Kenney medium characters are ~1.8m; shrink to fit the service window.
-const CHAR_SCALE := 0.72
+const CHAR_SCALE := 0.68
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
