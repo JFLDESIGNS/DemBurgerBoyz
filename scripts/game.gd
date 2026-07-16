@@ -41,6 +41,8 @@ const PATTY_PICK_PAD_PX := 22.0
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.034
+## Held bottle tip-down height above steel (~was 0.14; +12" so it clears the plate).
+const OIL_POUR_HEIGHT := 0.445
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
@@ -2758,8 +2760,8 @@ func _update_held_oil(_delta: float) -> void:
 		return
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.04, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.04)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.04, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.04)
-	## Hard snap, straight upside-down — no wobble.
-	oil_root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + 0.14, hit.z)
+	## Hard snap, straight upside-down — raised so the bottle clears the plate.
+	oil_root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + OIL_POUR_HEIGHT, hit.z)
 	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
 	if oil_particles:
 		oil_particles.emitting = true
@@ -3076,7 +3078,7 @@ func _build_oil_bottle() -> void:
 
 	oil_particles = GPUParticles3D.new()
 	oil_particles.amount = 56
-	oil_particles.lifetime = 0.35
+	oil_particles.lifetime = 0.55
 	oil_particles.explosiveness = 0.05
 	oil_particles.randomness = 0.45
 	oil_particles.emitting = false
@@ -3086,9 +3088,9 @@ func _build_oil_bottle() -> void:
 	op.emission_sphere_radius = 0.006
 	op.direction = Vector3(0, 1, 0)
 	op.spread = 12.0
-	op.initial_velocity_min = 0.55
-	op.initial_velocity_max = 1.1
-	op.gravity = Vector3(0, 4.0, 0)
+	op.initial_velocity_min = 0.75
+	op.initial_velocity_max = 1.35
+	op.gravity = Vector3(0, 5.5, 0)
 	op.scale_min = 0.35
 	op.scale_max = 0.9
 	op.color = Color(1.0, 0.88, 0.35, 0.8)
@@ -4724,7 +4726,7 @@ func _reposition_customers() -> void:
 func _create_ticket(customer: Node3D) -> void:
 	## Post-it pinned along the top of the window — one ingredient per line.
 	var note := PanelContainer.new()
-	note.custom_minimum_size = Vector2(200, 0)
+	note.custom_minimum_size = Vector2(220, 0)
 	note.mouse_filter = Control.MOUSE_FILTER_STOP
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(1.0, 1.0, 0.97, 1.0)
@@ -4759,7 +4761,7 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var title := Label.new()
 	title.text = "$%d" % customer.order_value
-	UiFontsScript.apply_ticket(title, 22)
+	UiFontsScript.apply_ticket(title, 24)
 	title.add_theme_color_override("font_color", Color(0.15, 0.12, 0.1))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4784,9 +4786,9 @@ func _create_ticket(customer: Node3D) -> void:
 		parts.append(label_txt)
 	var body := Label.new()
 	body.text = ("\n".join(parts) if parts.size() > 0 else "BURGER")
-	## Solid ExtraBold — no outline, no MSDF holes.
-	UiFontsScript.apply_ticket(body, 22)
-	body.add_theme_color_override("font_color", Color(0.12, 0.1, 0.08))
+	## Caveat handwriting — marker-on-slip feel.
+	UiFontsScript.apply_ticket(body, 28)
+	body.add_theme_color_override("font_color", Color(0.14, 0.1, 0.08))
 	body.autowrap_mode = TextServer.AUTOWRAP_OFF
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE

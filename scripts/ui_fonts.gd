@@ -5,14 +5,17 @@ const TITLE_PATH := "res://assets/fonts/Fredoka-Bold.ttf"
 const TITLE_SEMI_PATH := "res://assets/fonts/Fredoka-SemiBold.ttf"
 const BODY_PATH := "res://assets/fonts/Nunito-Bold.ttf"
 const BODY_HEAVY_PATH := "res://assets/fonts/Nunito-ExtraBold.ttf"
-## Amatic SC — handwritten look that stays clear in ALL CAPS.
+## Amatic SC — tall casual caps (legacy / Label3D accents).
 const HAND_PATH := "res://assets/fonts/AmaticSC-Bold.ttf"
+## Caveat — real pen handwriting for order tickets.
+const TICKET_HAND_PATH := "res://assets/fonts/Caveat-Variable.ttf"
 
 static var title: Font
 static var title_semi: Font
 static var body: Font
 static var body_heavy: Font
 static var handwritten: Font
+static var ticket_hand: Font
 static var _loaded: bool = false
 
 
@@ -24,6 +27,7 @@ static func ensure_loaded() -> void:
 	body = _load_clean(BODY_PATH)
 	body_heavy = _load_clean(BODY_HEAVY_PATH)
 	handwritten = _load_clean(HAND_PATH)
+	ticket_hand = _load_clean(TICKET_HAND_PATH)
 	_loaded = true
 
 
@@ -51,13 +55,15 @@ static func apply_label(label: Label, use_title: bool = false, size: int = -1) -
 		label.add_theme_font_size_override("font_size", size)
 
 
-## Order tickets — solid Nunito ExtraBold, no outline (Fredoka MSDF looked holey).
-static func apply_ticket(label: Label, size: int = 22) -> void:
+## Order tickets — Caveat handwriting (marker-on-slip), no outline.
+static func apply_ticket(label: Label, size: int = 26) -> void:
 	ensure_loaded()
-	if body_heavy:
+	if ticket_hand:
+		label.add_theme_font_override("font", ticket_hand)
+	elif handwritten:
+		label.add_theme_font_override("font", handwritten)
+	elif body_heavy:
 		label.add_theme_font_override("font", body_heavy)
-	elif body:
-		label.add_theme_font_override("font", body)
 	if size > 0:
 		label.add_theme_font_size_override("font_size", size)
 	label.add_theme_constant_override("outline_size", 0)
