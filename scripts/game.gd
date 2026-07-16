@@ -2194,7 +2194,7 @@ func _throw_held_patty_to_build() -> void:
 	patty.is_held = true
 	patty.visible = true
 	flicking_patty = patty
-	var start := patty.global_position
+	var start: Vector3 = patty.global_position
 	var end := Vector3(
 		GRILL_CENTER_X + GRILL_WIDTH * 0.62,
 		GRILL_SURFACE_Y + 0.22,
@@ -2209,7 +2209,7 @@ func _throw_held_patty_to_build() -> void:
 	tw.tween_method(func(t: float):
 		if patty == null or not is_instance_valid(patty):
 			return
-		var xz := start.lerp(end, t)
+		var xz: Vector3 = start.lerp(end, t)
 		var y := lerpf(start.y, end.y, t) + 4.0 * t * (1.0 - t) * (peak_y - lerpf(start.y, end.y, 0.5))
 		patty.global_position = Vector3(xz.x, y, xz.z)
 		patty.rotation_degrees.z = lerpf(patty.rotation_degrees.z, -28.0, t)
@@ -3637,8 +3637,8 @@ func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) ->
 			continue
 		var falloff := 1.0 - d / BRUSH_PATTY_PUSH_RADIUS
 		falloff *= falloff
-		var nx := p._rest_x + dir.x * push_len * falloff
-		var nz := p._rest_z + dir.y * push_len * falloff
+		var nx: float = float(p._rest_x) + dir.x * push_len * falloff
+		var nz: float = float(p._rest_z) + dir.y * push_len * falloff
 		nx = clampf(nx, min_x, max_x)
 		nz = clampf(nz, min_z, max_z)
 		var try := Vector3(nx, GRILL_SURFACE_Y, nz)
@@ -3905,7 +3905,7 @@ func _update_kitchen_sizzle() -> void:
 			heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.25, 1.0))
 	## Cooking sizzle is louder; empty hot burner keeps a quieter idle hiss.
 	## Hot-oil burst keeps the loud fry going even with no patties.
-	var oil_burst := game_audio.has_method("is_hot_oil_bursting") and game_audio.is_hot_oil_bursting()
+	var oil_burst: bool = game_audio.has_method("is_hot_oil_bursting") and bool(game_audio.is_hot_oil_bursting())
 	game_audio.set_sizzle_active(cooking or oil_burst, maxf(heat, 0.95 if oil_burst else 0.0))
 	if game_audio.has_method("set_burner_hiss"):
 		game_audio.set_burner_hiss(grill_on and not cooking and not oil_burst)
