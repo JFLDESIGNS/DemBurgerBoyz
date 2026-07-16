@@ -47,6 +47,10 @@ var _sz_sample_i := 0
 var _slide_player: AudioStreamPlayer
 var _slide_gain: float = 0.0
 var _slide_target: float = 0.0
+## Hot oil on a lit grill — loud 1s fry burst + dense pops.
+var _hot_oil_left: float = 0.0
+var _hot_oil_pop_cd: float = 0.0
+var _hot_oil_was_active: bool = false
 
 
 func _ready() -> void:
@@ -98,15 +102,41 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
+	## Hot oil on lit steel — loud fry + dense pops for ~1s.
+	if _hot_oil_left > 0.0:
+		_hot_oil_left = maxf(0.0, _hot_oil_left - delta)
+		_hot_oil_was_active = true
+		_sizzle_on = true
+		if _sizzle_player != null:
+			var burst_t := clampf(_hot_oil_left, 0.0, 1.0)
+			_sizzle_player.volume_db = lerpf(-14.0, -3.5, burst_t)
+			if not _sizzle_player.playing:
+				_sizzle_player.play()
+		_hot_oil_pop_cd -= delta
+		if _hot_oil_pop_cd <= 0.0:
+			play_grease_pop(true)
+			if randf() < 0.55:
+				play_grease_pop(true)
+			_hot_oil_pop_cd = 0.028 + randf() * 0.045
+	elif _hot_oil_was_active:
+		_hot_oil_was_active = false
+		if _sizzle_on and _sizzle_player != null:
+			_sizzle_player.volume_db = lerpf(-18.0, -12.0, clampf(_sizzle_intensity, 0.0, 1.0))
 	if _sizzle_on and _sizzle_player != null and _sizzle_player.playing:
 		var playback := _sizzle_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if playback != null:
 			var t := clampf(_sizzle_intensity, 0.0, 1.0)
+			var oil_mul := 1.0
+			if _hot_oil_left > 0.0:
+				oil_mul = 2.4
+				t = 1.0
 			## Quieter static bed (50%); crackles stay full strength.
-			var bed_gain := lerpf(0.06, 0.1, t)
-			var pop_chance_boost := lerpf(1.0, 1.6, t)
+			var bed_gain := lerpf(0.06, 0.1, t) * oil_mul
+			var pop_chance_boost := lerpf(1.0, 1.6, t) * (3.2 if _hot_oil_left > 0.0 else 1.0)
 			while playback.get_frames_available() > 0:
 				var sample := _next_sizzle_sample(bed_gain, pop_chance_boost)
+				if _hot_oil_left > 0.0:
+					sample = clampf(sample * 1.55, -1.0, 1.0)
 				playback.push_frame(Vector2(sample, sample))
 	if _hiss_on and _hiss_player != null and _hiss_player.playing:
 		var hp := _hiss_player.get_stream_playback() as AudioStreamGeneratorPlayback
@@ -120,15 +150,50 @@ func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
 	if _sizzle_player == null:
 		return
 	_sizzle_intensity = clampf(intensity, 0.0, 1.0)
+	if _hot_oil_left > 0.0:
+		active = true
+		_sizzle_intensity = maxf(_sizzle_intensity, 0.95)
 	if active:
 		_sizzle_on = true
-		_sizzle_player.volume_db = lerpf(-18.0, -12.0, _sizzle_intensity)
+		if _hot_oil_left <= 0.0:
+			_sizzle_player.volume_db = lerpf(-18.0, -12.0, _sizzle_intensity)
 		if not _sizzle_player.playing:
 			_sizzle_player.play()
 	else:
 		_sizzle_on = false
 		if _sizzle_player.playing:
 			_sizzle_player.stop()
+
+
+func is_hot_oil_bursting() -> bool:
+	return _hot_oil_left > 0.0
+
+
+func trigger_hot_oil(duration: float = 1.0) -> void:
+	## Oil hits a hot grill — loud fry for ~1s with a ton of pops.
+	var starting := _hot_oil_left <= 0.05
+	_hot_oil_left = maxf(_hot_oil_left, duration)
+	_sizzle_on = true
+	_sizzle_intensity = maxf(_sizzle_intensity, 0.95)
+	if _sizzle_player != null:
+		_sizzle_player.volume_db = -3.5
+		if not _sizzle_player.playing:
+			_sizzle_player.play()
+	## Kill idle hiss under the burst so the fry reads clearly.
+	if _hiss_on and _hiss_player != null and _hiss_player.playing:
+		_hiss_on = false
+		_hiss_player.stop()
+	if starting:
+		play_hot_oil_hit()
+		_hot_oil_pop_cd = 0.0
+		## Immediate pop cluster on contact.
+		for _i in 4:
+			play_grease_pop(true)
+
+
+func play_hot_oil_hit() -> void:
+	## One loud splash/hiss when oil first kisses hot steel.
+	_play_cached("hot_oil_hit", _make_hot_oil_hit, 0.0, 1.2)
 
 
 func set_burner_hiss(active: bool) -> void:
@@ -226,10 +291,17 @@ func play_trash() -> void:
 	_play_cached("trash", _make_trash, 0.0, 0.85)
 
 
-func play_grease_pop() -> void:
+func play_error() -> void:
+	## Short descending buzz — already holding a patty / invalid grab.
+	_play_cached("error_buzz", _make_error, 0.0, 0.55)
+
+
+func play_grease_pop(loud: bool = false) -> void:
 	## Fast fry crackle — same family as the grill sizzle pops, a bit quicker.
 	var key := "grease_pop_f_%d" % (randi() % 8)
-	_play_cached(key, _make_grease_pop, 1.15 + randf() * 0.45, 0.2 + randf() * 0.12)
+	var gain := (0.55 + randf() * 0.25) if loud else (0.2 + randf() * 0.12)
+	var pitch := (0.95 + randf() * 0.55) if loud else (1.15 + randf() * 0.45)
+	_play_cached(key, _make_grease_pop, pitch, gain)
 
 
 func set_slide_moving(moving: bool, speed: float = 0.0) -> void:
@@ -398,6 +470,30 @@ func _make_trash() -> AudioStreamWAV:
 	return _wav_from_pcm(pcm, false)
 
 
+func _make_error() -> AudioStreamWAV:
+	## Two low buzz notes falling — clear “nope” without being harsh.
+	var n := int(MIX_RATE * 0.22)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var sample := 0.0
+		## First hit ~E3.
+		if t < 0.12:
+			var u := t
+			var env := clampf(u / 0.008, 0.0, 1.0) * exp(-u * 18.0)
+			sample += sin(u * 164.8 * TAU) * 0.7 * env
+			sample += sin(u * 329.6 * TAU) * 0.2 * env
+		## Second hit lower ~C3.
+		if t >= 0.08:
+			var u2 := t - 0.08
+			var env2 := clampf(u2 / 0.01, 0.0, 1.0) * exp(-u2 * 14.0)
+			sample += sin(u2 * 130.8 * TAU) * 0.75 * env2
+			sample += sin(u2 * 261.6 * TAU) * 0.18 * env2
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 16000.0))
+	return _wav_from_pcm(pcm, false)
+
+
 func _make_grease_pop() -> AudioStreamWAV:
 	## Quick fry pop — same crackle DNA as the grill sizzle, shorter/faster.
 	var n := int(MIX_RATE * 0.028)
@@ -415,6 +511,34 @@ func _make_grease_pop() -> AudioStreamWAV:
 		if env > 0.55:
 			crackle += (randf() * 2.0 - 1.0) * 0.25
 		_write_s16(pcm, i, int(clampf((crackle + ping) * env, -1.0, 1.0) * 13000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_hot_oil_hit() -> AudioStreamWAV:
+	## Loud wet hiss when oil hits hot steel — about 0.35s of fury.
+	var n := int(MIX_RATE * 0.38)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	var hp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.55 + white * 0.45
+		hp = white - lp
+		var env := 1.0
+		if t < 0.02:
+			env = t / 0.02
+		else:
+			env = exp(-(t - 0.02) * 4.2)
+		## Bright spit + mid fry roar.
+		var roar := lp * 0.45 + hp * 0.9
+		var spit := 0.0
+		if randf() < 0.08:
+			spit = (randf() * 2.0 - 1.0) * 0.7
+		var whoosh := sin(t * 90.0 * TAU) * exp(-t * 8.0) * 0.35
+		var sample := (roar + spit + whoosh) * env
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 22000.0))
 	return _wav_from_pcm(pcm, false)
 
 

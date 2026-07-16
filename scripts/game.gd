@@ -39,6 +39,8 @@ const PATTY_PICK_MIN_PX := 62.0
 const PATTY_PICK_WORLD_EDGE := 0.17
 const PATTY_PICK_PAD_PX := 22.0
 const PATTY_SIT_Y := 0.055
+## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
+const OIL_SIT_Y := 0.034
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
@@ -165,14 +167,31 @@ var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
+## Scraper can shove nearby patties a little while scraping.
+const BRUSH_PATTY_PUSH_RADIUS := 0.32
+const BRUSH_PATTY_PUSH_SCALE := 0.72
+const BRUSH_PATTY_PUSH_MAX := 0.038
 ## Click-drag to slide patties on the flat-top.
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
 var drag_did_move: bool = false
 var drag_pop_accum: float = 0.0
 var drag_last_xz := Vector2.ZERO
+var drag_last_mouse := Vector2.ZERO
+var drag_vel_screen := Vector2.ZERO ## px/sec while sliding (for flick-to-Build)
+var flicking_patty = null ## mid air toward Build
+var spatula_last_mouse := Vector2.ZERO
+var spatula_vel_screen := Vector2.ZERO ## px/sec while carrying (flick throw)
+var spatula_carry_travel := 0.0
 const DRAG_MOVE_THRESH_PX := 8.0
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
+## Screen-left flick (negative X) throws a finished patty to Build.
+const FLICK_TO_BUILD_VX := -780.0
+const FLICK_MIN_SPEED := 900.0
+const FLICK_MIN_TRAVEL_PX := 48.0
+## Scooped patty floats under the cursor above the steel.
+const SPATULA_HOVER_Y := 0.12
+const SPATULA_HOVER_BOB := 0.012
 
 var radio: Node = null
 var radio_status_label: Label = null
@@ -265,7 +284,7 @@ func _ready() -> void:
 	if ticket_rail:
 		ticket_rail.z_index = 5
 	if hud_hint:
-		hud_hint.z_index = 6
+		hud_hint.visible = false
 		hud_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if flash_label:
 		flash_label.z_index = 35
@@ -436,6 +455,8 @@ func _process(delta: float) -> void:
 		_update_patty_drag(delta)
 	if cheese_held:
 		_update_cheese_ghost()
+	if spatula_patty != null:
+		_update_held_spatula_patty(delta)
 	if shaker_held:
 		_update_held_shaker(delta)
 	if oil_held:
@@ -472,26 +493,6 @@ func _process(delta: float) -> void:
 			spawn_timer = _next_spawn_delay()
 
 	rush_mode = customers.size() >= maxi(2, _customer_cap() - 1) and day >= 2
-	if service_window_closed:
-		hud_hint.text = "Window closed — cook in peace · OPEN when ready (%ds)" % maxi(0, int(ceil(service_break_left)))
-	elif shift_closing and customers.size() > 0:
-		hud_hint.text = "Closing time - finish the last %d order%s!" % [
-			customers.size(), "s" if customers.size() != 1 else ""
-		]
-	elif rush_mode and int(Time.get_ticks_msec() / 400) % 2 == 0:
-		hud_hint.text = "RUSH HOUR - keep flipping!"
-	elif cheese_held:
-		hud_hint.text = "Cheese: left-click to place · right-click returns to stack"
-	elif dialogue_panel != null and dialogue_panel.visible:
-		hud_hint.text = "Click ticket to choose order, Serve from Build"
-	elif oil_held:
-		hud_hint.text = "Oil upside-down — drag to draw puddle lines · release to put back"
-	elif shaker_held:
-		hud_hint.text = "Hold over raw beef to season · release to put shaker back"
-	elif spatula_patty != null:
-		hud_hint.text = "Holding patty — drop on Build or HOLD"
-	else:
-		hud_hint.text = "Click ticket to choose order, Serve from Build"
 
 	if shift_closing and customers.is_empty() and not service_window_closed:
 		_end_day()
@@ -643,16 +644,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 		if event.button_index == MOUSE_BUTTON_LEFT:
+			if spatula_patty != null:
+				_handle_spatula_click(event.position)
+				return
 			if _try_warmer_click(event.position):
 				return
-			if spatula_patty != null:
-				if _is_over_garbage(event.position):
-					_trash_spatula_patty()
-					return
-				var station_idx := _station_index_at(get_viewport().get_mouse_position())
-				if station_idx >= 0:
-					_drop_spatula_on_station(station_idx)
-					return
 			## Left click: flip / scoop / start drag — never spawn a patty.
 			_try_grill_raycast(event.position, false)
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
@@ -736,20 +732,11 @@ func _input(event: InputEvent) -> void:
 			_add_ingredient(ing)
 			get_viewport().set_input_as_handled()
 			return
-	## Mouse drop while holding a patty.
+	## Mouse drop while holding a patty (also works over some UI).
 	if spatula_patty == null:
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if _is_over_garbage(event.position):
-			_trash_spatula_patty()
-			get_viewport().set_input_as_handled()
-			return
-		if _try_warmer_click(event.position):
-			get_viewport().set_input_as_handled()
-			return
-		var station_idx := _station_index_at(get_viewport().get_mouse_position())
-		if station_idx >= 0:
-			_drop_spatula_on_station(station_idx)
+		if _handle_spatula_click(event.position):
 			get_viewport().set_input_as_handled()
 
 
@@ -816,8 +803,11 @@ func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
 
 
 func _station_index_at(screen_pos: Vector2) -> int:
-	## Prefer plate / buttons — don't steal far-left grill clicks with a fat panel pad.
-	const PAD := 8.0
+	## Whole Build column counts — click / drag / flick land anywhere in the zone.
+	if stations_row != null and is_instance_valid(stations_row):
+		if stations_row.get_global_rect().grow(24).has_point(screen_pos):
+			return STATION_CRAFT
+	const PAD := 12.0
 	for i in STATION_COUNT:
 		var plate: Control = stations[i].get("plate", null)
 		if plate != null and is_instance_valid(plate) and plate.get_global_rect().grow(PAD).has_point(screen_pos):
@@ -827,11 +817,8 @@ func _station_index_at(screen_pos: Vector2) -> int:
 				and drop_btn.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
 		var panel: Control = stations[i].get("panel", null)
-		if panel != null and is_instance_valid(panel) and panel.get_global_rect().has_point(screen_pos):
-			## Only count panel if over the lower button strip (Serve / trash).
-			var r := panel.get_global_rect()
-			if screen_pos.y >= r.end.y - 56.0:
-				return i
+		if panel != null and is_instance_valid(panel) and panel.get_global_rect().grow(PAD).has_point(screen_pos):
+			return i
 	return -1
 
 
@@ -1470,6 +1457,8 @@ func _trash_spatula_patty() -> void:
 	if is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
 	if game_audio and game_audio.has_method("play_trash"):
 		game_audio.play_trash()
@@ -1781,7 +1770,13 @@ func _spawn_patty_in_slot(idx: int) -> void:
 func _begin_patty_drag(patty: Area3D) -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held:
+	## Holding a scooped patty: still flip others on the grill; scooping another is blocked.
+	if spatula_patty != null:
+		_on_patty_clicked(patty)
+		return
+	if brush_held or cheese_held or shaker_held or oil_held:
+		return
+	if flicking_patty != null:
 		return
 	if patty.is_held:
 		return
@@ -1789,6 +1784,8 @@ func _begin_patty_drag(patty: Area3D) -> void:
 		return
 	dragging_patty = patty
 	drag_start_mouse = get_viewport().get_mouse_position()
+	drag_last_mouse = drag_start_mouse
+	drag_vel_screen = Vector2.ZERO
 	drag_did_move = false
 	drag_pop_accum = 0.0
 	drag_last_xz = Vector2(patty._rest_x, patty._rest_z)
@@ -1814,9 +1811,18 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 			game_audio.set_slide_moving(false)
 		return
 	var mouse := get_viewport().get_mouse_position()
+	var dt := maxf(delta, 0.001)
+	var instant_vel := (mouse - drag_last_mouse) / dt
+	drag_vel_screen = drag_vel_screen.lerp(instant_vel, clampf(dt * 18.0, 0.0, 1.0))
+	drag_last_mouse = mouse
 	if not drag_did_move and mouse.distance_to(drag_start_mouse) >= DRAG_MOVE_THRESH_PX:
 		drag_did_move = true
 	if not drag_did_move:
+		if game_audio:
+			game_audio.set_slide_moving(false)
+		return
+	## Over Build while dragging a finished patty — keep tracking; drop/flick on release.
+	if _station_index_at(mouse) >= 0 and dragging_patty.can_scoop():
 		if game_audio:
 			game_audio.set_slide_moving(false)
 		return
@@ -1855,9 +1861,7 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 			elif not _patty_blocked_at(try_z, ignore_idx):
 				target = try_z
 			else:
-				if game_audio:
-					game_audio.set_slide_moving(false)
-				return
+				target = Vector3(from.x, GRILL_SURFACE_Y, from.y)
 	var move_vec := Vector2(target.x - drag_last_xz.x, target.z - drag_last_xz.y)
 	var moved := move_vec.length()
 	dragging_patty._rest_x = target.x
@@ -1867,24 +1871,16 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 	var idx: int = dragging_patty.slot_index
 	if idx >= 0 and idx < slot_positions.size():
 		slot_positions[idx] = Vector3(target.x, GRILL_SURFACE_Y, target.z)
-	## Smear existing oil gently — never spawn new puddles (that glitched hard).
-	if moved > 0.003:
-		_smear_oil_along(Vector3(target.x, GRILL_SURFACE_Y + 0.016, target.z), move_vec, moved)
 	drag_last_xz = Vector2(target.x, target.z)
-	## Scrape bed + louder grease pops while sliding.
-	var speed := moved / maxf(delta, 0.0001)
 	if game_audio:
-		if moved > 0.0004:
-			game_audio.set_slide_moving(true, clampf(speed * 0.35, 0.0, 1.2))
-		else:
-			game_audio.set_slide_moving(false)
+		var speed := moved / dt
+		game_audio.set_slide_moving(true, clampf(speed * 0.35, 0.0, 1.2))
 	drag_pop_accum += moved
 	while drag_pop_accum >= DRAG_POP_DIST:
 		drag_pop_accum -= DRAG_POP_DIST
-		if game_audio:
-			game_audio.play_grease_pop()
-			## Extra quick follow-up pop — denser crackle while moving.
-			if randf() < 0.55:
+		_smear_oil_along(Vector3(target.x, GRILL_SURFACE_Y + OIL_SIT_Y, target.z), move_vec, moved)
+		if game_audio and randf() < 0.45:
+			if randf() < 0.5:
 				game_audio.play_grease_pop()
 			if randf() < 0.25:
 				game_audio.play_grease_pop()
@@ -1896,8 +1892,11 @@ func _end_patty_drag() -> void:
 	var patty = dragging_patty
 	var slid := drag_did_move
 	var mouse := get_viewport().get_mouse_position()
+	var vel := drag_vel_screen
+	var travel := mouse.distance_to(drag_start_mouse)
 	dragging_patty = null
 	drag_did_move = false
+	drag_vel_screen = Vector2.ZERO
 	if game_audio:
 		game_audio.set_slide_moving(false)
 	if not is_instance_valid(patty):
@@ -1910,7 +1909,11 @@ func _end_patty_drag() -> void:
 	if not slid:
 		_on_patty_clicked(patty)
 		return
-	## Drag onto a station UI → scoop + drop in one motion (if ready).
+	## Flick left with a finished patty → jump arc onto Build.
+	if _is_flick_to_build(vel, travel) and patty.can_scoop():
+		_flick_patty_to_build(patty)
+		return
+	## Drag onto Build UI → scoop + drop in one motion (if ready).
 	var station_idx := _station_index_at(mouse)
 	if station_idx >= 0:
 		_try_drag_patty_to_station(patty, station_idx)
@@ -1922,6 +1925,71 @@ func _end_patty_drag() -> void:
 		var z := _grill_zone_at(patty.position)
 		if not z.is_empty() and float(z["mul"]) < 0.99:
 			_flash("%s heat — cooks slower" % str(z["label"]), Color("FFCC80"))
+
+
+func _is_flick_to_build(vel: Vector2, travel_px: float) -> bool:
+	if travel_px < FLICK_MIN_TRAVEL_PX:
+		return false
+	if vel.length() < FLICK_MIN_SPEED:
+		return false
+	## Screen-left toss (Build lives on the left).
+	return vel.x <= FLICK_TO_BUILD_VX and absf(vel.x) >= absf(vel.y) * 0.55
+
+
+func _reject_second_scoop(msg: String = "Already holding a patty — drop on Build or the Warmer") -> void:
+	_flash(msg, Color("EF5350"))
+	if game_audio and game_audio.has_method("play_error"):
+		game_audio.play_error()
+
+
+func _flick_patty_to_build(patty: Area3D) -> void:
+	if patty == null or not is_instance_valid(patty) or flicking_patty != null:
+		return
+	if spatula_patty != null:
+		_reject_second_scoop("Already holding a patty")
+		return
+	if not patty.flipped_once or not patty.can_scoop():
+		_flash("Finish cooking before flicking to Build", Color("FFA726"))
+		return
+	var idx: int = patty.slot_index
+	if idx >= 0 and idx < grill.size():
+		grill[idx] = null
+	patty.heating = false
+	patty.is_held = true
+	_leave_grill_residue(idx, patty, false)
+	flicking_patty = patty
+	var start := patty.global_position
+	## Screen-left = world +X (camera is mirrored).
+	var end := Vector3(
+		GRILL_CENTER_X + GRILL_WIDTH * 0.62,
+		GRILL_SURFACE_Y + 0.22,
+		GRILL_SURFACE_Z - 0.08
+	)
+	var peak_y := maxf(start.y, end.y) + 0.42
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Flicking to Build!", Color("A5D6A7"))
+	var tw := create_tween()
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_method(func(t: float):
+		if patty == null or not is_instance_valid(patty):
+			return
+		var xz := start.lerp(end, t)
+		## Parabolic jump.
+		var y := lerpf(start.y, end.y, t) + 4.0 * t * (1.0 - t) * (peak_y - lerpf(start.y, end.y, 0.5))
+		patty.global_position = Vector3(xz.x, y, xz.z)
+		patty.rotation_degrees.z = lerpf(0.0, -28.0, t)
+	, 0.0, 1.0, 0.38)
+	tw.tween_callback(func():
+		flicking_patty = null
+		if patty == null or not is_instance_valid(patty):
+			return
+		patty.visible = false
+		patty.rotation_degrees.z = 0.0
+		spatula_patty = patty
+		_refresh_spatula_ui()
+		_drop_spatula_on_station(STATION_CRAFT)
+	)
 
 
 func _try_drag_patty_to_station(patty: Area3D, station_idx: int) -> void:
@@ -1937,7 +2005,7 @@ func _try_drag_patty_to_station(patty: Area3D, station_idx: int) -> void:
 			_flash("Still cooking — wait to scoop, then drag to a station", Color("FFA726"))
 		return
 	if spatula_patty != null:
-		_flash("Already holding a patty", Color("EF5350"))
+		_reject_second_scoop("Already holding a patty")
 		return
 	_pickup_patty(patty)
 	if spatula_patty != null:
@@ -1967,7 +2035,7 @@ func _on_patty_clicked(patty: Area3D) -> void:
 
 func _pickup_patty(patty: Area3D) -> void:
 	if spatula_patty != null:
-		_flash("Already holding a patty — drop on Build or the Warmer", Color("EF5350"))
+		_reject_second_scoop()
 		return
 	if not patty.flipped_once or not patty.can_scoop():
 		_flash("Flip and finish cooking before scooping", Color("EF5350"))
@@ -1977,17 +2045,188 @@ func _pickup_patty(patty: Area3D) -> void:
 		grill[idx] = null
 	patty.is_held = true
 	patty.heating = false
-	patty.visible = false
+	patty.visible = true
 	spatula_patty = patty
+	spatula_last_mouse = get_viewport().get_mouse_position()
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
 	_leave_grill_residue(idx, patty)
 	_refresh_spatula_ui()
+	_update_held_spatula_patty(0.016)
 	if game_audio:
 		game_audio.play_scoop()
 	var rating: Dictionary = patty.cook_rating()
-	_flash("Scooped! %s — %s" % [patty.cook_rating_text(), rating["detail"]], rating["color"])
+	_flash("Scooped! %s — drop on grill, HOLD, Build, or flick left to throw" % patty.cook_rating_text(), rating["color"])
 
 
-func _leave_grill_residue(slot: int, patty: Area3D) -> void:
+func _update_held_spatula_patty(delta: float = 0.016) -> void:
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		spatula_patty = null
+		return
+	if flicking_patty == spatula_patty:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var dt := maxf(delta, 0.001)
+	var instant := (mouse - spatula_last_mouse) / dt
+	spatula_vel_screen = spatula_vel_screen.lerp(instant, clampf(dt * 16.0, 0.0, 1.0))
+	spatula_carry_travel += mouse.distance_to(spatula_last_mouse)
+	spatula_last_mouse = mouse
+	var hit := _grill_plane_from_screen(mouse)
+	if hit == Vector3.ZERO and camera != null:
+		## Off-plane fallback: keep it in front of the camera.
+		var from := camera.project_ray_origin(mouse)
+		var dir := camera.project_ray_normal(mouse)
+		hit = from + dir * 1.35
+		hit.y = maxf(hit.y, GRILL_SURFACE_Y + SPATULA_HOVER_Y)
+	if hit == Vector3.ZERO:
+		return
+	## Soft clamp so it stays near the flat-top / HOLD strip while aiming.
+	var pad := 0.35
+	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 - pad, GRILL_CENTER_X + GRILL_WIDTH * 0.5 + pad)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 - pad, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 + pad)
+	var bob := sin(Time.get_ticks_msec() * 0.007) * SPATULA_HOVER_BOB
+	hit.y = GRILL_SURFACE_Y + PATTY_SIT_Y + SPATULA_HOVER_Y + bob
+	spatula_patty.global_position = hit
+	## Slight tip toward move direction so it feels carried.
+	var tip := clampf(spatula_vel_screen.x * 0.008, -18.0, 18.0)
+	spatula_patty.rotation_degrees = Vector3(8.0, 0.0, tip)
+
+
+func _handle_spatula_click(screen_pos: Vector2) -> bool:
+	## Returns true if the click was consumed (place / trash / throw / flip).
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return false
+	if _ui_blocks_world_click(screen_pos) and _station_index_at(screen_pos) < 0 and not _is_over_garbage(screen_pos):
+		## Let real UI buttons work; Build column still accepts drops.
+		return false
+	if _is_over_garbage(screen_pos):
+		_trash_spatula_patty()
+		return true
+	var station_idx := _station_index_at(screen_pos)
+	if station_idx >= 0:
+		_drop_spatula_on_station(station_idx)
+		return true
+	## Flick left while carrying → throw into Build.
+	if _is_flick_to_build(spatula_vel_screen, spatula_carry_travel):
+		_throw_held_patty_to_build()
+		return true
+	if _try_warmer_click(screen_pos):
+		return true
+	## Still free to flip another burger on the grill.
+	var other = _pick_patty_at_screen(screen_pos)
+	if other != null and other != spatula_patty:
+		_on_patty_clicked(other)
+		return true
+	## Click the steel → place / throw it down.
+	if _try_place_spatula_on_grill(screen_pos):
+		return true
+	_flash("Drop on the grill, HOLD, Build — or flick left to throw", Color("FFCC80"))
+	return true
+
+
+func _try_place_spatula_on_grill(screen_pos: Vector2) -> bool:
+	if spatula_patty == null:
+		return false
+	var hit := _grill_plane_from_screen(screen_pos)
+	if hit == Vector3.ZERO or not _is_on_grill_surface(hit):
+		return false
+	if _is_in_warmer_zone(hit):
+		_place_spatula_on_warmer(hit)
+		return true
+	_place_spatula_on_grill(hit)
+	return true
+
+
+func _place_spatula_on_grill(hit_pos: Vector3) -> void:
+	if spatula_patty == null:
+		return
+	var idx := _first_empty_slot()
+	if idx < 0:
+		_flash("Grill full — clear a spot first", Color("EF5350"))
+		return
+	var bounds := _grill_place_bounds()
+	var x := clampf(hit_pos.x, bounds.position.x, bounds.end.x)
+	var z := clampf(hit_pos.z, bounds.position.y, bounds.end.y)
+	var pos := Vector3(x, GRILL_SURFACE_Y, z)
+	if not _can_fit_patty_at(pos):
+		_flash("Too close to the edge — keep the patty on the grill", Color("FFA726"))
+		return
+	if _patty_blocked_at(pos):
+		pos = _nudge_to_open_grill_spot(pos)
+		if pos == Vector3.ZERO:
+			_flash("Too crowded — clear a spot first", Color("EF5350"))
+			return
+	var patty = spatula_patty
+	spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	patty.is_held = false
+	patty.visible = true
+	patty.rotation_degrees = Vector3.ZERO
+	patty.slot_index = idx
+	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+	patty.heating = grill_on
+	patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
+	patty.position = Vector3(pos.x, patty.base_y, pos.z)
+	patty._rest_x = pos.x
+	patty._rest_z = pos.z
+	if patty.get_parent() == null:
+		patties_root.add_child(patty)
+	grill[idx] = patty
+	slot_positions[idx] = Vector3(pos.x, GRILL_SURFACE_Y, pos.z)
+	_refresh_spatula_ui()
+	if game_audio:
+		game_audio.play_click()
+	if patty.has_method("refresh_cook_visuals"):
+		patty.refresh_cook_visuals()
+	_flash("Back on the grill", Color("A5D6A7"))
+
+
+func _throw_held_patty_to_build() -> void:
+	## Arc from the hand into Build (same destination as a left flick scoop).
+	if spatula_patty == null or not is_instance_valid(spatula_patty) or flicking_patty != null:
+		return
+	var patty = spatula_patty
+	spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	patty.is_held = true
+	patty.visible = true
+	flicking_patty = patty
+	var start := patty.global_position
+	var end := Vector3(
+		GRILL_CENTER_X + GRILL_WIDTH * 0.62,
+		GRILL_SURFACE_Y + 0.22,
+		GRILL_SURFACE_Z - 0.08
+	)
+	var peak_y := maxf(start.y, end.y) + 0.42
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Thrown to Build!", Color("A5D6A7"))
+	var tw := create_tween()
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_method(func(t: float):
+		if patty == null or not is_instance_valid(patty):
+			return
+		var xz := start.lerp(end, t)
+		var y := lerpf(start.y, end.y, t) + 4.0 * t * (1.0 - t) * (peak_y - lerpf(start.y, end.y, 0.5))
+		patty.global_position = Vector3(xz.x, y, xz.z)
+		patty.rotation_degrees.z = lerpf(patty.rotation_degrees.z, -28.0, t)
+	, 0.0, 1.0, 0.34)
+	tw.tween_callback(func():
+		flicking_patty = null
+		if patty == null or not is_instance_valid(patty):
+			return
+		patty.visible = false
+		patty.rotation_degrees = Vector3.ZERO
+		spatula_patty = patty
+		_refresh_spatula_ui()
+		_drop_spatula_on_station(STATION_CRAFT)
+	)
+
+
+func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> void:
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	var at := Vector3(patty._rest_x, GRILL_SURFACE_Y + 0.028, patty._rest_z) if patty else slot_positions[slot] + Vector3(0, 0.028, 0)
@@ -2000,7 +2239,8 @@ func _leave_grill_residue(slot: int, patty: Area3D) -> void:
 	if slot < grill_residue_meshes.size() and is_instance_valid(grill_residue_meshes[slot]):
 		grill_residue_meshes[slot].position = at
 		grill_residue_meshes[slot].visible = false
-	_flash("Grease left on the grill — grab the scraper by the window", Color("BCAAA4"))
+	if announce:
+		_flash("Grease left on the grill — grab the scraper by the window", Color("BCAAA4"))
 
 
 func _refresh_residue_visual(slot: int) -> void:
@@ -2525,7 +2765,7 @@ func _update_held_oil(_delta: float) -> void:
 		oil_particles.emitting = true
 		oil_particles.position = Vector3(0, 0.12, 0)
 	## Draw ABOVE the steel top (~+0.022), not inside the mesh.
-	var cur := Vector3(hit.x, GRILL_SURFACE_Y + 0.016, hit.z)
+	var cur := Vector3(hit.x, GRILL_SURFACE_Y + OIL_SIT_Y, hit.z)
 	if oil_last_draw == Vector3.ZERO:
 		oil_last_draw = cur
 		_spawn_oil_slick(cur, 0.055)
@@ -2574,8 +2814,8 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 	## Round soft puddle — never a stretched rectangle.
 	plane.size = Vector2(rad * 2.15, rad * 2.15)
 	slick.mesh = plane
-	## Sit under patties / tools — never float above the meat.
-	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + 0.016, pos.z)
+	## Sit on the steel, under patties — high enough to avoid grill z-fight.
+	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + OIL_SIT_Y, pos.z)
 	slick.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
 	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	slick.sorting_offset = -2.0
@@ -2613,6 +2853,9 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
 			m.queue_free()
+	## Hot steel + fresh oil → loud hiss/pop burst for ~1s.
+	if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
+		game_audio.trigger_hot_oil(1.0)
 
 
 func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
@@ -2705,7 +2948,7 @@ func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
 		var pull := clampf(1.0 - d / reach, 0.0, 1.0)
 		mesh.position.x += dir.x * moved * pull * 0.22
 		mesh.position.z += dir.y * moved * pull * 0.22
-		mesh.position.y = GRILL_SURFACE_Y + 0.016
+		mesh.position.y = GRILL_SURFACE_Y + OIL_SIT_Y
 		var s: float = mesh.scale.x
 		s = clampf(s + moved * 0.35 * pull, 0.95, 1.35)
 		mesh.scale = Vector3(s, 1.0, s)
@@ -3229,8 +3472,11 @@ func _place_spatula_on_warmer(hit_pos: Vector3) -> void:
 			return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
 	patty.is_held = false
 	patty.visible = true
+	patty.rotation_degrees = Vector3.ZERO
 	patty.slot_index = idx
 	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
 	patty.heating = grill_on
@@ -3341,6 +3587,13 @@ func _update_held_brush(delta: float) -> void:
 		sin(Time.get_ticks_msec() * 0.016) * 3.0
 	)
 	brush_root.rotation_degrees = brush_root.rotation_degrees.lerp(target_rot, clampf(delta * 14.0, 0.0, 1.0))
+	## Nudge burgers when the blade shoves into them.
+	if moved > 0.0008:
+		var move_xz := Vector2(
+			brush_root.global_position.x - prev.x,
+			brush_root.global_position.z - prev.z
+		)
+		_brush_nudge_patties(brush_root.global_position, move_xz, moved)
 	## Chip stuck-on bits with discrete swipes (not a continuous shrink).
 	for i in GRILL_SLOTS:
 		if i < brush_swipe_cool.size():
@@ -3358,6 +3611,56 @@ func _update_held_brush(delta: float) -> void:
 				_scrape_residue_hit(i)
 		elif i < brush_swipe_travel.size():
 			brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - delta * 0.2)
+
+
+func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	## Scraper slides patties a little — not a full drag, just a shove.
+	if move_xz.length_squared() < 0.0000001:
+		return
+	var dir := move_xz.normalized()
+	var push_len := clampf(moved * BRUSH_PATTY_PUSH_SCALE, 0.0, BRUSH_PATTY_PUSH_MAX)
+	var bounds := _grill_place_bounds()
+	## HOLD strip is also fair game for a nudge.
+	var warm := _warmer_place_bounds()
+	var min_x := minf(bounds.position.x, warm.position.x)
+	var max_x := maxf(bounds.end.x, warm.end.x)
+	var min_z := minf(bounds.position.y, warm.position.y)
+	var max_z := maxf(bounds.end.y, warm.end.y)
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or p.is_held:
+			continue
+		if p == dragging_patty or p == flicking_patty:
+			continue
+		var d := Vector2(brush_pos.x - p.position.x, brush_pos.z - p.position.z).length()
+		if d > BRUSH_PATTY_PUSH_RADIUS:
+			continue
+		var falloff := 1.0 - d / BRUSH_PATTY_PUSH_RADIUS
+		falloff *= falloff
+		var nx := p._rest_x + dir.x * push_len * falloff
+		var nz := p._rest_z + dir.y * push_len * falloff
+		nx = clampf(nx, min_x, max_x)
+		nz = clampf(nz, min_z, max_z)
+		var try := Vector3(nx, GRILL_SURFACE_Y, nz)
+		if _patty_blocked_at(try, i):
+			## Try axis-separated shove so it can slide along neighbors.
+			var try_x := Vector3(nx, GRILL_SURFACE_Y, p._rest_z)
+			var try_z := Vector3(p._rest_x, GRILL_SURFACE_Y, nz)
+			if not _patty_blocked_at(try_x, i):
+				try = try_x
+			elif not _patty_blocked_at(try_z, i):
+				try = try_z
+			else:
+				continue
+		p._rest_x = try.x
+		p._rest_z = try.z
+		p.position.x = try.x
+		p.position.z = try.z
+		p.position.y = p.base_y
+		slot_positions[i] = Vector3(try.x, GRILL_SURFACE_Y, try.z)
+		p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
+		if game_audio and moved > 0.012 and randf() < 0.18:
+			game_audio.play_grease_pop()
 
 
 func _throw_brush_home() -> void:
@@ -3601,9 +3904,11 @@ func _update_kitchen_sizzle() -> void:
 			cooking = true
 			heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.25, 1.0))
 	## Cooking sizzle is louder; empty hot burner keeps a quieter idle hiss.
-	game_audio.set_sizzle_active(cooking, heat)
+	## Hot-oil burst keeps the loud fry going even with no patties.
+	var oil_burst := game_audio.has_method("is_hot_oil_bursting") and game_audio.is_hot_oil_bursting()
+	game_audio.set_sizzle_active(cooking or oil_burst, maxf(heat, 0.95 if oil_burst else 0.0))
 	if game_audio.has_method("set_burner_hiss"):
-		game_audio.set_burner_hiss(grill_on and not cooking)
+		game_audio.set_burner_hiss(grill_on and not cooking and not oil_burst)
 
 
 func _build_radio_ui() -> void:
@@ -4228,6 +4533,8 @@ func _clear_spatula() -> void:
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
 
 
@@ -4918,7 +5225,7 @@ func _build_station_ui() -> void:
 		)
 		panel.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				if cheese_held:
+				if cheese_held or spatula_patty != null:
 					_on_station_plate_clicked(si)
 					panel.accept_event()
 				else:
@@ -4935,7 +5242,18 @@ func _build_station_ui() -> void:
 		stations[i]["drop_btn"] = drop_btn
 		stations[i]["fresh_label"] = fresh_label
 		_refresh_freshness_label(i)
+	## Click anywhere on the Build column while holding a scooped patty.
+	if not stations_row.gui_input.is_connected(_on_stations_row_gui_input):
+		stations_row.gui_input.connect(_on_stations_row_gui_input)
 	_highlight_active_station()
+
+
+func _on_stations_row_gui_input(ev: InputEvent) -> void:
+	if not (ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT):
+		return
+	if spatula_patty != null or cheese_held:
+		_on_station_plate_clicked(STATION_CRAFT)
+		stations_row.accept_event()
 
 
 func _make_reorder_drag(station_index: int, from_index: int, item_id: String) -> Dictionary:
@@ -5336,6 +5654,11 @@ func _drop_spatula_on_station(index: int) -> void:
 	var items: Array = st["items"]
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	patty.is_held = true
+	patty.visible = false
+	patty.rotation_degrees = Vector3.ZERO
 	st["patties"].append(patty)
 	## Bottom bun is always under the meat — no need to place it from the strip.
 	if not items.has("bun_bottom"):
@@ -5907,7 +6230,15 @@ func _refresh_spatula_ui() -> void:
 		held_row.visible = false
 		for child in held_row.get_children():
 			child.queue_free()
+	## Arm whole Build column to catch drops while holding a scooped patty.
+	if stations_row != null and is_instance_valid(stations_row):
+		stations_row.mouse_filter = Control.MOUSE_FILTER_STOP if spatula_patty != null \
+			else Control.MOUSE_FILTER_IGNORE
 	for i in STATION_COUNT:
+		var panel: Control = stations[i].get("panel", null) if i < stations.size() else null
+		if panel != null and is_instance_valid(panel):
+			panel.mouse_filter = Control.MOUSE_FILTER_STOP if spatula_patty != null \
+				else Control.MOUSE_FILTER_IGNORE
 		_refresh_station(i)
 
 func _on_serve() -> void:

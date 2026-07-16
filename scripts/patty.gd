@@ -475,6 +475,8 @@ func _process(delta: float) -> void:
 		cheese_melt = minf(1.0, cheese_melt + delta / CHEESE_MELT_TIME)
 		_update_cheese_visual()
 	if is_held:
+		if _hint:
+			_hint.visible = false
 		return
 	if heating:
 		var rate := (1.0 + smash_bonus) * heat_mul
