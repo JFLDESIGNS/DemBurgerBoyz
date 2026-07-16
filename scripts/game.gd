@@ -5013,8 +5013,8 @@ func _spawn_customer() -> void:
 		patience += 10.0
 	var lane := customers.size()
 	c.setup(order, color, patience, lane)
-	## Stand on the outside walk so heads sit in the service window (not floating high).
-	c.position = Vector3(-6.5, 0.38, 2.25)
+	## Stand low on the sidewalk so faces stay inside the window opening.
+	c.position = Vector3(-6.5, -0.08, 2.25)
 	c.target_x = -2.6 + lane * 1.75
 	c.rotation_degrees = Vector3(0, 180, 0)
 	c.scale = Vector3(1.0, 1.0, 1.0)
@@ -5177,7 +5177,7 @@ func _reposition_customers() -> void:
 	for i in customers.size():
 		customers[i].lane = i
 		customers[i].target_x = -2.6 + i * 1.75
-		customers[i].global_position.y = 0.38
+		customers[i].global_position.y = -0.08
 
 
 func _create_ticket(customer: Node3D) -> void:

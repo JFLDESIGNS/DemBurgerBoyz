@@ -5,6 +5,7 @@ const GameDataScript := preload("res://scripts/game_data.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 
 const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
+const IDLE_SCENE_PATH := "res://assets/characters/Animations/idle.fbx"
 const CHAR_SKINS: Array[String] = [
 	"res://assets/characters/Skins/skaterMaleA.png",
 	"res://assets/characters/Skins/skaterFemaleA.png",
@@ -13,8 +14,8 @@ const CHAR_SKINS: Array[String] = [
 	"res://assets/characters/Skins/criminalMaleA.png",
 	"res://assets/characters/Skins/cyborgFemaleA.png",
 ]
-## Kenney medium characters are ~1.8m; shrink to fit the service window.
-const CHAR_SCALE := 0.68
+## Shrink so face + torso sit in the service window (not cropped by the lintel).
+const CHAR_SCALE := 0.48
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -46,6 +47,7 @@ var _body: Node3D
 var _face: MeshInstance3D ## unused with 3D toon models (kept for old helpers)
 var _face_mat: StandardMaterial3D
 var _char_meshes: Array = [] ## MeshInstance3D skins we tint by mood
+var _anim_player: AnimationPlayer = null
 var _bubble: Label3D
 var _bubble_bg: MeshInstance3D
 var _bar_bg: MeshInstance3D
@@ -65,6 +67,7 @@ var _skin_path: String = ""
 static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
 static var _char_scene: PackedScene = null
 static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
+static var _idle_lib: AnimationLibrary = null
 
 
 func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int) -> void:
@@ -316,7 +319,7 @@ func _build() -> void:
 	var bg_mesh := BoxMesh.new()
 	bg_mesh.size = Vector3(1.6, 0.55, 0.05)
 	_bubble_bg.mesh = bg_mesh
-	_bubble_bg.position = Vector3(0, 2.05, 0)
+	_bubble_bg.position = Vector3(0, 1.28, 0)
 	var bgm := StandardMaterial3D.new()
 	bgm.albedo_color = Color(1, 1, 1, 0.95)
 	bgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -326,7 +329,7 @@ func _build() -> void:
 
 	_bubble = Label3D.new()
 	_bubble.text = speech
-	_bubble.position = Vector3(0, 2.05, 0.04)
+	_bubble.position = Vector3(0, 1.28, 0.04)
 	_bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_bubble.modulate = Color(0.12, 0.12, 0.14)
 	_bubble.visible = false
@@ -339,7 +342,7 @@ func _build() -> void:
 	var bg := BoxMesh.new()
 	bg.size = Vector3(0.9, 0.08, 0.05)
 	_bar_bg.mesh = bg
-	_bar_bg.position = Vector3(0, 1.72, 0)
+	_bar_bg.position = Vector3(0, 1.05, 0)
 	var bar_mat := StandardMaterial3D.new()
 	bar_mat.albedo_color = Color(0.15, 0.15, 0.15)
 	_bar_bg.material_override = bar_mat
@@ -349,7 +352,7 @@ func _build() -> void:
 	var fill := BoxMesh.new()
 	fill.size = Vector3(0.84, 0.06, 0.055)
 	_bar_fill.mesh = fill
-	_bar_fill.position = Vector3(0, 1.72, 0.01)
+	_bar_fill.position = Vector3(0, 1.05, 0.01)
 	var fm := StandardMaterial3D.new()
 	fm.albedo_color = Color("66BB6A")
 	_bar_fill.material_override = fm
@@ -374,7 +377,58 @@ func _try_attach_toon_character() -> bool:
 		_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
 	_apply_skin_texture(_skin_path)
 	_apply_mood_tint("happy")
+	_setup_idle_animation(model)
 	return not _char_meshes.is_empty()
+
+
+func _setup_idle_animation(model: Node) -> void:
+	## Play Kenney Idle so customers aren't stuck in a T-pose.
+	if _idle_lib == null:
+		_idle_lib = _load_idle_library()
+	if _idle_lib == null or not _idle_lib.has_animation("Idle"):
+		return
+	_anim_player = AnimationPlayer.new()
+	_anim_player.name = "CustomerAnim"
+	model.add_child(_anim_player)
+	_anim_player.add_animation_library("kenney", _idle_lib)
+	_anim_player.active = true
+	_anim_player.play("kenney/Idle")
+	_anim_player.speed_scale = 0.8 + randf() * 0.35
+	## Stagger so a line of customers don't sync-breathe.
+	var idle_anim := _idle_lib.get_animation("Idle")
+	if idle_anim != null and idle_anim.length > 0.05:
+		_anim_player.seek(randf() * idle_anim.length, true)
+
+
+func _load_idle_library() -> AnimationLibrary:
+	if not ResourceLoader.exists(IDLE_SCENE_PATH):
+		return null
+	var packed := load(IDLE_SCENE_PATH) as PackedScene
+	if packed == null:
+		return null
+	var temp: Node = packed.instantiate()
+	var src: AnimationPlayer = temp.find_child("AnimationPlayer", true, false) as AnimationPlayer
+	if src == null:
+		temp.queue_free()
+		return null
+	var lib := AnimationLibrary.new()
+	for full_name in src.get_animation_list():
+		var anim := src.get_animation(full_name)
+		if anim == null:
+			continue
+		var short := String(full_name)
+		if short.contains("|"):
+			short = short.get_slice("|", 1)
+		## Only keep the looping idle — skip the one-frame targeting pose.
+		if short.to_lower() != "idle":
+			continue
+		var copy := anim.duplicate() as Animation
+		copy.loop_mode = Animation.LOOP_LINEAR
+		lib.add_animation("Idle", copy)
+	temp.queue_free()
+	if lib.get_animation_list().is_empty():
+		return null
+	return lib
 
 
 func _collect_char_meshes(n: Node) -> void:
@@ -706,9 +760,15 @@ func _process(delta: float) -> void:
 func _apply_bobble(walking: bool) -> void:
 	if _body == null:
 		return
-	var bob_amp := 0.055 if walking else 0.035
+	## Idle skeleton owns the pose — only a light root bob so we don't fight the anim.
+	if _anim_player != null and _anim_player.is_playing():
+		var bob_amp := 0.01 if walking else 0.005
+		_body.position.y = _base_body_y + sin(_bobble_phase) * bob_amp
+		_body.rotation_degrees = Vector3.ZERO
+		return
+	var bob_amp2 := 0.055 if walking else 0.035
 	var sway := 4.5 if walking else 3.0
-	_body.position.y = _base_body_y + sin(_bobble_phase) * bob_amp
+	_body.position.y = _base_body_y + sin(_bobble_phase) * bob_amp2
 	_body.rotation_degrees.z = sin(_bobble_phase * 0.85) * sway
 	_body.rotation_degrees.x = cos(_bobble_phase * 0.7) * 2.0
 
@@ -716,7 +776,10 @@ func _apply_bobble(walking: bool) -> void:
 func _animate_expression(_delta: float) -> void:
 	if is_leaving or _body == null:
 		return
-	## Subtle breath / mood pulse on the whole character.
+	## Don't squash-scale over a playing idle clip.
+	if _anim_player != null and _anim_player.is_playing():
+		_body.scale = Vector3(CHAR_SCALE, CHAR_SCALE, CHAR_SCALE)
+		return
 	var pulse := 1.0 + sin(_expr_t * 4.5) * 0.012
 	if _mood == "mad":
 		pulse = 1.0 + sin(_expr_t * 10.0) * 0.02
