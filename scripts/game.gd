@@ -149,8 +149,9 @@ var brush_root: Node3D = null
 var brush_area: Area3D = null
 var brush_home: Vector3 = Vector3(-2.58, 1.52, 1.15)
 var brush_home_rot := Vector3(-172.0, -110.0, 8.0)
-## Held pose — blade flat on steel, handle tipped back toward the cook (no swipe spin).
-var brush_held_rot := Vector3(-84.0, 0.0, 180.0)
+## Held pose — blade flat on steel, handle tipped back toward the cook (camera / −Z).
+## Z must stay ~0: Z=180 flips the handle toward the window.
+var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel
