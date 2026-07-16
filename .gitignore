@@ -9,3 +9,6 @@ data_*/
 build/
 runlog.txt
 runout.txt
+runerr.txt
+*.log
+*.uid

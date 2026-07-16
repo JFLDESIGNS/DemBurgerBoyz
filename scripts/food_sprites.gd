@@ -1,6 +1,9 @@
 ## Procedural 2D food textures for burger stations + spatula cursor.
+## Ingredient art prefers sliced PNGs from assets/ingredients/ when present.
 extends RefCounted
 class_name FoodSprites
+
+const INGREDIENT_DIR := "res://assets/ingredients/"
 
 static var _cache: Dictionary = {}
 
@@ -8,47 +11,159 @@ static var _cache: Dictionary = {}
 static func get_tex(id: String) -> Texture2D:
 	if _cache.has(id):
 		return _cache[id]
-	var tex: ImageTexture
-	match id:
-		"plate":
-			tex = _make_plate()
-		"spatula":
-			tex = _make_spatula()
-		"bun_top":
-			tex = _make_bun(true)
-		"bun_bottom":
-			tex = _make_bun(false)
-		"patty":
-			tex = _make_patty(Color("6D4C41"))
-		"cheese":
-			tex = _make_square_layer(Color("F4C430"), 90, 28, 4)
-		"lettuce":
-			tex = _make_wavy_layer(Color("4CAF50"), 96, 26)
-		"tomato":
-			tex = _make_round_layer(Color("E53935"), 88, 22)
-		"onion":
-			tex = _make_ring_layer(Color("CE93D8"), 86, 20)
-		"bacon":
-			tex = _make_bacon()
-		"pickle":
-			tex = _make_round_layer(Color("7CB342"), 70, 18)
-		"ketchup":
-			tex = _make_sauce(Color("D32F2F"))
-		"mustard":
-			tex = _make_sauce(Color("F9A825"))
-		_:
-			tex = _make_round_layer(Color.WHITE, 80, 20)
+	var tex: Texture2D = _try_load_ingredient(id)
+	if tex == null:
+		match id:
+			"plate":
+				tex = _make_plate()
+			"spatula":
+				tex = _make_spatula()
+			"bun_top":
+				tex = _make_bun(true)
+			"bun_bottom":
+				tex = _make_bun(false)
+			"patty":
+				tex = _make_patty(Color("6D4C41"))
+			"cheese":
+				tex = _make_square_layer(Color("F4C430"), 90, 28, 4)
+			"lettuce":
+				tex = _make_wavy_layer(Color("4CAF50"), 96, 26)
+			"tomato":
+				tex = _make_round_layer(Color("E53935"), 88, 22)
+			"onion":
+				tex = _make_ring_layer(Color("CE93D8"), 86, 20)
+			"bacon":
+				tex = _make_bacon()
+			"pickle":
+				tex = _make_round_layer(Color("7CB342"), 70, 18)
+			"ketchup":
+				tex = _make_sauce(Color("D32F2F"))
+			"mustard":
+				tex = _make_sauce(Color("F9A825"))
+			"wood":
+				tex = _make_toon_wood()
+			"wood_inset":
+				tex = _make_toon_wood_inset()
+			"warmer_tray":
+				tex = _make_warmer_tray()
+			"cutting_board":
+				tex = _make_toon_wood_inset()
+			_:
+				tex = _make_round_layer(Color.WHITE, 80, 20)
 	_cache[id] = tex
 	return tex
 
 
+static func _try_load_ingredient(id: String) -> Texture2D:
+	## Load sliced sheet art when available (transparent PNG).
+	match id:
+		"bun_top", "bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion", "bacon", "pickle", "ketchup", "mustard", "cutting_board":
+			pass
+		_:
+			return null
+	var path := INGREDIENT_DIR + id + ".png"
+	## Export-safe: imported Texture2D first (Image.load(res://) fails in shipped builds).
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			if id == "cutting_board" or id == "bun_bottom" or id == "patty":
+				var img: Image = res.get_image()
+				if img != null:
+					if img.is_compressed():
+						img.decompress()
+					img.convert(Image.FORMAT_RGBA8)
+					_knockout_dark_backdrop(img)
+					return ImageTexture.create_from_image(img)
+			return res
+	## Editor fallback when import isn't ready yet.
+	var abs_try := ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(path) or FileAccess.file_exists(abs_try):
+		var img2 := Image.new()
+		var err := img2.load(abs_try if FileAccess.file_exists(abs_try) else path)
+		if err == OK:
+			if id == "cutting_board" or id == "bun_bottom" or id == "patty":
+				_knockout_dark_backdrop(img2)
+			return ImageTexture.create_from_image(img2)
+	return null
+
+
+static func _knockout_dark_backdrop(img: Image) -> void:
+	## Ensure studio black behind cutting-board art stays fully transparent.
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in h:
+		for x in w:
+			var c := img.get_pixel(x, y)
+			var m := maxf(c.r, maxf(c.g, c.b))
+			var chroma := maxf(absf(c.r - c.g), maxf(absf(c.g - c.b), absf(c.r - c.b)))
+			if m < 0.22 and chroma < 0.09:
+				c.a = 0.0 if m < 0.07 else c.a * clampf((m - 0.07) / 0.15, 0.0, 1.0)
+				img.set_pixel(x, y, c)
+
+
+static var _patty_sheet_img: Image = null
+
+
 static func patty_tex(color: Color) -> Texture2D:
-	var key := "patty_%s" % color.to_html(false)
+	## Station / ticket stack uses cutout sheet art, lightly tinted by cook color.
+	var key := "patty_art_%s" % color.to_html(false)
 	if _cache.has(key):
 		return _cache[key]
-	var tex := _make_patty(color)
+	var base := _get_patty_sheet_image()
+	var tex: Texture2D
+	if base != null:
+		var img := base.duplicate()
+		_tint_patty_sheet(img, color)
+		tex = ImageTexture.create_from_image(img)
+	else:
+		tex = _make_patty(color)
 	_cache[key] = tex
 	return tex
+
+
+static func _get_patty_sheet_image() -> Image:
+	if _patty_sheet_img != null:
+		return _patty_sheet_img
+	var path := INGREDIENT_DIR + "patty.png"
+	## Must use imported texture on export — raw Image.load(res://) is stripped.
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			var img: Image = res.get_image()
+			if img != null:
+				if img.is_compressed():
+					img.decompress()
+				img.convert(Image.FORMAT_RGBA8)
+				_knockout_dark_backdrop(img)
+				_patty_sheet_img = img
+				return _patty_sheet_img
+	var abs_try := ProjectSettings.globalize_path(path)
+	var img2 := Image.new()
+	var err := img2.load(abs_try)
+	if err != OK:
+		err = img2.load(path)
+	if err != OK:
+		return null
+	_knockout_dark_backdrop(img2)
+	_patty_sheet_img = img2
+	return _patty_sheet_img
+
+
+static func _tint_patty_sheet(img: Image, cook: Color) -> void:
+	## Keep grill-mark contrast; bias overall hue toward the live cook color.
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in h:
+		for x in w:
+			var p := img.get_pixel(x, y)
+			if p.a < 0.05:
+				continue
+			var lum := p.get_luminance()
+			var tinted := p.lerp(Color(cook.r, cook.g, cook.b, p.a), 0.35)
+			## Preserve dark char lines.
+			if lum < 0.18:
+				tinted = p.lerp(tinted, 0.25)
+			img.set_pixel(x, y, tinted)
 
 
 static func _img(w: int, h: int) -> Image:
@@ -80,31 +195,157 @@ static func _make_plate() -> ImageTexture:
 
 
 static func _make_bun(is_top: bool) -> ImageTexture:
-	var img := _img(120, 44)
-	var base := Color("E8A85C") if is_top else Color("D4924A")
-	_set_circle(img, 60, 28 if is_top else 18, 54, 18, base)
+	## Side-on burger-stack buns: clear dome / heel, no hollow center.
+	var w := 168
+	var h := 64
+	var img := _img(w, h)
+	var cx := w * 0.5
 	if is_top:
-		## Sesame dots
-		for i in 8:
-			var a := TAU * float(i) / 8.0
-			var sx := int(60 + cos(a) * 28)
-			var sy := int(22 + sin(a) * 8)
-			if sx >= 0 and sy >= 0 and sx < 120 and sy < 44:
-				img.set_pixel(sx, sy, Color("FFF8E1"))
-				if sx + 1 < 120:
-					img.set_pixel(sx + 1, sy, Color("FFF8E1"))
+		_paint_top_bun(img, cx, 34.0)
+	else:
+		_paint_bottom_bun(img, cx, 30.0)
 	return ImageTexture.create_from_image(img)
 
 
-static func _make_patty(col: Color) -> ImageTexture:
-	var img := _img(110, 34)
-	_set_circle(img, 55, 17, 50, 14, col)
-	## Grill lines
-	for x in range(18, 92, 10):
-		for y in range(10, 24):
+static func _paint_top_bun(img: Image, cx: float, cy: float) -> void:
+	var rx := 64.0
+	var ry := 24.0
+	## Soft contact shadow under the crown.
+	_fill_ellipse(img, cx, cy + 10.0, rx + 4.0, ry * 0.55, Color(0.15, 0.07, 0.02, 0.28), Color(0.15, 0.07, 0.02, 0.0))
+	## Outer crust dome.
+	_fill_ellipse(img, cx, cy, rx, ry, Color(0.86, 0.58, 0.28), Color(0.62, 0.36, 0.14))
+	## Inner dough body (slightly higher so it reads as volume, not a hole).
+	_fill_ellipse(img, cx, cy - 2.0, rx * 0.88, ry * 0.78, Color(0.98, 0.78, 0.48), Color(0.88, 0.60, 0.30))
+	## Soft highlight on the crown.
+	_fill_ellipse(img, cx - 4.0, cy - 10.0, rx * 0.42, ry * 0.32, Color(1.0, 0.92, 0.70, 0.85), Color(1.0, 0.88, 0.62, 0.0))
+	## Cut-face lip along the bottom edge (warm toasted rim).
+	for x in img.get_width():
+		for y in range(int(cy + 6), int(cy + ry + 2)):
 			var p := img.get_pixel(x, y)
-			if p.a > 0.2:
-				img.set_pixel(x, y, p.darkened(0.25))
+			if p.a < 0.2:
+				continue
+			var t := clampf((float(y) - (cy + 6.0)) / 10.0, 0.0, 1.0)
+			img.set_pixel(x, y, p.lerp(Color(0.70, 0.40, 0.16), t * 0.45))
+	## Sesame seeds — small soft ovals, not sparkles.
+	var seeds := [
+		Vector2(cx - 22, cy - 10), Vector2(cx - 10, cy - 16), Vector2(cx + 2, cy - 18),
+		Vector2(cx + 14, cy - 14), Vector2(cx + 26, cy - 8), Vector2(cx - 16, cy - 2),
+		Vector2(cx - 2, cy - 4), Vector2(cx + 12, cy - 2), Vector2(cx + 22, cy + 2),
+		Vector2(cx - 8, cy + 4), Vector2(cx + 6, cy + 6), Vector2(cx + 18, cy - 10),
+	]
+	for s in seeds:
+		_paint_sesame(img, int(s.x), int(s.y))
+
+
+static func _paint_bottom_bun(img: Image, cx: float, cy: float) -> void:
+	var rx := 66.0
+	var ry := 17.0
+	## Soft shadow.
+	_fill_ellipse(img, cx, cy + 9.0, rx + 4.0, ry * 0.75, Color(0.12, 0.05, 0.01, 0.35), Color(0.12, 0.05, 0.01, 0.0))
+	## Heel body — warm golden (reads clearly under a dark patty).
+	_fill_ellipse(img, cx, cy, rx, ry, Color(0.98, 0.78, 0.42), Color(0.78, 0.48, 0.18))
+	## Bright cut-face crumb on top — high contrast vs brown meat.
+	_fill_ellipse(img, cx, cy - 5.0, rx * 0.88, ry * 0.58, Color(1.0, 0.94, 0.78), Color(0.98, 0.82, 0.52))
+	## Toasted rim around the cut face.
+	for x in img.get_width():
+		for y in img.get_height():
+			var nx := (float(x) - cx) / (rx * 0.92)
+			var ny := (float(y) - (cy - 1.5)) / (ry * 0.9)
+			var d := nx * nx + ny * ny
+			if d < 0.7 or d > 1.05:
+				continue
+			var p := img.get_pixel(x, y)
+			if p.a < 0.2:
+				continue
+			img.set_pixel(x, y, p.lerp(Color(0.82, 0.52, 0.2), 0.4))
+	## Toasted underside strip.
+	for x in range(int(cx - rx + 4), int(cx + rx - 4)):
+		for y in range(int(cy + 5), int(cy + ry + 2)):
+			var p := img.get_pixel(x, y)
+			if p.a < 0.2:
+				continue
+			var t := clampf((float(y) - (cy + 5.0)) / 8.0, 0.0, 1.0)
+			img.set_pixel(x, y, p.lerp(Color(0.55, 0.3, 0.1), 0.35 + t * 0.45))
+
+
+static func _fill_ellipse(img: Image, cx: float, cy: float, rx: float, ry: float, col_center: Color, col_edge: Color) -> void:
+	## Soft shaded ellipse — bright toward center/top, darker at rim (no hollow look).
+	for y in img.get_height():
+		for x in img.get_width():
+			var nx := (float(x) - cx) / rx
+			var ny := (float(y) - cy) / ry
+			var d := nx * nx + ny * ny
+			if d > 1.0:
+				continue
+			var edge := sqrt(d)
+			var col := col_center.lerp(col_edge, edge * edge)
+			## Soft top-left light so volume reads.
+			var lit := clampf(0.12 - nx * 0.06 - ny * 0.1, -0.08, 0.14)
+			col = col.lightened(lit) if lit > 0.0 else col.darkened(-lit)
+			var existing := img.get_pixel(x, y)
+			if existing.a > 0.05:
+				col = existing.lerp(col, col.a)
+			img.set_pixel(x, y, col)
+
+
+static func _paint_sesame(img: Image, cx: int, cy: int) -> void:
+	## Tiny soft oval seed (cream with a faint brown rim).
+	var cream := Color(0.96, 0.90, 0.72)
+	var rim := Color(0.78, 0.62, 0.38, 0.9)
+	for oy in range(-1, 2):
+		for ox in range(-2, 3):
+			var px := cx + ox
+			var py := cy + oy
+			if px < 0 or py < 0 or px >= img.get_width() or py >= img.get_height():
+				continue
+			var nx := float(ox) / 2.2
+			var ny := float(oy) / 1.2
+			if nx * nx + ny * ny > 1.0:
+				continue
+			var existing := img.get_pixel(px, py)
+			if existing.a < 0.2:
+				continue
+			var col := cream if abs(ox) + abs(oy) <= 1 else rim
+			img.set_pixel(px, py, col)
+
+
+static func _make_patty(col: Color) -> ImageTexture:
+	## Force a meat-dark base so it never reads as bun crumb.
+	var meat := col.darkened(0.12)
+	if meat.get_luminance() > 0.38:
+		meat = meat.darkened(0.22)
+	var img := _img(118, 40)
+	## Soft shadow under the patty (separates it from the bun below).
+	_set_circle(img, 59, 24, 54, 12, Color(0.02, 0.01, 0.0, 0.45))
+	## Main patty — slightly narrower than bottom bun so golden rim peeks out.
+	_set_circle(img, 59, 18, 48, 12, meat)
+	## Darker edge crust
+	for y in 40:
+		for x in 118:
+			var nx := (x - 59.0) / 48.0
+			var ny := (y - 18.0) / 12.0
+			var d := nx * nx + ny * ny
+			if d > 0.65 and d <= 1.0:
+				var p := img.get_pixel(x, y)
+				if p.a > 0.2:
+					img.set_pixel(x, y, p.darkened(0.32))
+	## Grill marks
+	for gi in 4:
+		var gx := 28 + gi * 16
+		for y in range(9, 28):
+			for x in range(gx - 1, gx + 2):
+				if x < 0 or x >= 118:
+					continue
+				var p := img.get_pixel(x, y)
+				if p.a > 0.25:
+					img.set_pixel(x, y, p.darkened(0.5 if x == gx else 0.32))
+	## Speckle fat bits
+	for i in 12:
+		var sx := 24 + (i * 17) % 70
+		var sy := 11 + (i * 5) % 14
+		var p := img.get_pixel(sx, sy)
+		if p.a > 0.3:
+			img.set_pixel(sx, sy, p.lightened(0.14))
 	return ImageTexture.create_from_image(img)
 
 
@@ -207,4 +448,88 @@ static func _make_spatula() -> ImageTexture:
 			img.set_pixel(x, y, Color(0, 0, 0, 0))
 			if x + 1 < 96:
 				img.set_pixel(x + 1, y, Color(0, 0, 0, 0))
+	return ImageTexture.create_from_image(img)
+
+
+static func _make_toon_wood() -> ImageTexture:
+	## Chunky toon plank — warm boards with dark grain lines, no red plastic look.
+	var w := 96
+	var h := 96
+	var img := _img(w, h)
+	var base := Color(0.62, 0.42, 0.24)
+	var light := Color(0.78, 0.58, 0.36)
+	var dark := Color(0.42, 0.26, 0.14)
+	var grain := Color(0.28, 0.16, 0.08, 0.55)
+	for y in h:
+		for x in w:
+			## Vertical board stripes
+			var board := int(x / 24)
+			var local_x := x - board * 24
+			var shade := 0.0
+			if local_x < 2 or local_x > 21:
+				shade = -0.12 ## seam
+			elif local_x < 6:
+				shade = 0.08
+			## Soft horizontal grain waves
+			var wave := sin(float(y) * 0.35 + float(board) * 1.7) * 0.06
+			var n := sin(float(x) * 0.9 + float(y) * 0.15) * 0.04
+			var t := clampf(0.45 + shade + wave + n, 0.0, 1.0)
+			var col := dark.lerp(light, t)
+			## Occasional dark grain fleck
+			if int(x * 17 + y * 31) % 47 == 0:
+				col = col.lerp(Color(grain.r, grain.g, grain.b), 0.55)
+			## Top-left toon rim light
+			if x < 4 or y < 4:
+				col = col.lightened(0.12)
+			if x > w - 5 or y > h - 5:
+				col = col.darkened(0.1)
+			img.set_pixel(x, y, Color(col.r, col.g, col.b, 1.0))
+	## A few bold grain strokes
+	for stroke in 6:
+		var sx := 8 + stroke * 14
+		for y in range(6, h - 6):
+			var ox := int(sin(float(y) * 0.22 + float(stroke)) * 2.0)
+			var px := clampi(sx + ox, 0, w - 1)
+			var prev := img.get_pixel(px, y)
+			img.set_pixel(px, y, prev.lerp(Color(0.22, 0.12, 0.06), 0.45))
+			if px + 1 < w:
+				var prev2 := img.get_pixel(px + 1, y)
+				img.set_pixel(px + 1, y, prev2.lerp(Color(0.22, 0.12, 0.06), 0.25))
+	return ImageTexture.create_from_image(img)
+
+
+static func _make_toon_wood_inset() -> ImageTexture:
+	## Lighter cutting-board center for the burger stack well.
+	var w := 64
+	var h := 64
+	var img := _img(w, h)
+	for y in h:
+		for x in w:
+			var t := 0.55 + sin(float(x) * 0.4) * 0.05 + sin(float(y) * 0.25) * 0.04
+			var col := Color(0.55, 0.38, 0.22).lerp(Color(0.82, 0.64, 0.42), clampf(t, 0.0, 1.0))
+			if int(y) % 8 == 0:
+				col = col.darkened(0.08)
+			if x < 3 or y < 3:
+				col = col.lightened(0.1)
+			if x > w - 4 or y > h - 4:
+				col = col.darkened(0.12)
+			img.set_pixel(x, y, col)
+	return ImageTexture.create_from_image(img)
+
+
+static func _make_warmer_tray() -> ImageTexture:
+	## Dark steel holding tray for cooked meat.
+	var w := 220
+	var h := 140
+	var img := _img(w, h)
+	var cx := w * 0.5
+	var cy := h * 0.55
+	## Soft shadow under tray.
+	_fill_ellipse(img, cx, cy + 10.0, 98.0, 42.0, Color(0.02, 0.02, 0.03, 0.45), Color(0.02, 0.02, 0.03, 0.0))
+	## Outer tray rim.
+	_fill_ellipse(img, cx, cy, 96.0, 40.0, Color(0.38, 0.42, 0.48), Color(0.18, 0.2, 0.24))
+	## Inner well.
+	_fill_ellipse(img, cx, cy - 2.0, 82.0, 30.0, Color(0.22, 0.25, 0.3), Color(0.12, 0.14, 0.17))
+	## Specular streak.
+	_fill_ellipse(img, cx - 18.0, cy - 14.0, 28.0, 8.0, Color(0.75, 0.8, 0.88, 0.35), Color(0.75, 0.8, 0.88, 0.0))
 	return ImageTexture.create_from_image(img)

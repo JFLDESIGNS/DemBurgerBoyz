@@ -30,7 +30,20 @@ const INGREDIENT_COLORS := {
 	"bun_top": Color("E8A85C"),
 }
 
-const EXTRA_TOPPINGS := ["cheese", "lettuce", "tomato", "onion", "bacon", "pickle", "ketchup", "mustard"]
+const EXTRA_TOPPINGS := ["cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
+
+## Always the same stack order on tickets (and when normalizing builds).
+## Cheese first, then toppings right→left toward the buns.
+const TOPPING_ORDER: Array[String] = [
+	"cheese",
+	"tomato",
+	"lettuce",
+	"onion",
+	"pickle",
+	"bacon",
+	"ketchup",
+	"mustard",
+]
 
 const CUSTOMER_COLORS := [
 	Color("FF6B6B"),
@@ -46,6 +59,17 @@ const CUSTOMER_COLORS := [
 ]
 
 
+static func topping_sort_key(id: String) -> int:
+	var i := TOPPING_ORDER.find(id)
+	return i if i >= 0 else 100
+
+
+static func sort_toppings(ids: Array) -> Array:
+	var copy: Array = ids.duplicate()
+	copy.sort_custom(func(a, b): return topping_sort_key(str(a)) < topping_sort_key(str(b)))
+	return copy
+
+
 static func generate_order(difficulty: float = 0.0) -> Array[String]:
 	var order: Array[String] = ["bun_bottom", "patty"]
 	## Some orders ask for a double patty.
@@ -54,10 +78,13 @@ static func generate_order(difficulty: float = 0.0) -> Array[String]:
 	var pool := EXTRA_TOPPINGS.duplicate()
 	pool.shuffle()
 	var count := clampi(2 + int(difficulty * 2.5) + randi_range(0, 2), 2, 6)
+	var picked: Array = []
 	for i in count:
 		if pool.is_empty():
 			break
-		order.append(pool.pop_front())
+		picked.append(pool.pop_front())
+	## Tickets always list toppings in the same kitchen order.
+	order.append_array(sort_toppings(picked))
 	order.append("bun_top")
 	return order
 
@@ -108,10 +135,31 @@ static func compare_orders(built: Array, requested: Array) -> Dictionary:
 
 
 static func _soft_order_match(built: Array, requested: Array) -> bool:
+	## Same ingredients in canonical kitchen order counts as perfect.
 	if built.size() != requested.size():
 		return false
-	var b := built.duplicate()
-	var r := requested.duplicate()
-	b.sort()
-	r.sort()
-	return b == r
+	return _canonical_items(built) == _canonical_items(requested)
+
+
+static func _canonical_items(items: Array) -> Array:
+	var bottoms: Array = []
+	var patties: Array = []
+	var middles: Array = []
+	var tops: Array = []
+	for item in items:
+		match str(item):
+			"bun_bottom":
+				bottoms.append(item)
+			"patty":
+				patties.append(item)
+			"bun_top":
+				tops.append(item)
+			_:
+				middles.append(item)
+	middles = sort_toppings(middles)
+	var out: Array = []
+	out.append_array(bottoms)
+	out.append_array(patties)
+	out.append_array(middles)
+	out.append_array(tops)
+	return out

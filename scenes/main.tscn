@@ -43,9 +43,9 @@ unique_name_in_owner = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
 unique_name_in_owner = true
-transform = Transform3D(-1, 0, 0, 0, 0.96, 0.28, 0, 0.28, -0.96, 0, 1.9, -1.65)
+transform = Transform3D(-1, 0, 0, 0, 0.985, 0.174, 0, 0.174, -0.985, 0, 1.78, -1.65)
 current = true
-fov = 68.0
+fov = 58.0
 near = 0.05
 far = 80.0
 
@@ -62,6 +62,7 @@ grow_vertical = 2
 mouse_filter = 2
 
 [node name="TopBar" type="HBoxContainer" parent="UI/Root"]
+z_index = 25
 layout_mode = 0
 offset_left = 980.0
 offset_top = 8.0
@@ -97,41 +98,16 @@ theme_override_constants/outline_size = 4
 theme_override_font_sizes/font_size = 22
 text = "Day 1  -  120s"
 
-[node name="HintLabel" type="Label" parent="UI/Root"]
+[node name="WindowTicketRail" type="VBoxContainer" parent="UI/Root"]
 unique_name_in_owner = true
+z_index = 5
 layout_mode = 0
-offset_left = 24.0
-offset_top = 8.0
-offset_right = 960.0
-offset_bottom = 36.0
-theme_override_colors/font_color = Color(1, 1, 1, 0.9)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
-theme_override_constants/outline_size = 3
-theme_override_font_sizes/font_size = 13
-text = "Press Open the Truck to start"
-
-[node name="FlashLabel" type="Label" parent="UI/Root"]
-unique_name_in_owner = true
-layout_mode = 0
-offset_left = 320.0
-offset_top = 140.0
-offset_right = 960.0
-offset_bottom = 190.0
-theme_override_colors/font_color = Color(1, 0.92, 0.23, 1)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
-theme_override_constants/outline_size = 8
-theme_override_font_sizes/font_size = 28
-horizontal_alignment = 1
-
-[node name="WindowTicketRail" type="HBoxContainer" parent="UI/Root"]
-unique_name_in_owner = true
-layout_mode = 0
-offset_left = 280.0
-offset_top = 52.0
-offset_right = 1000.0
-offset_bottom = 118.0
+offset_left = 200.0
+offset_top = 36.0
+offset_right = 1080.0
+offset_bottom = 232.0
 mouse_filter = 0
-theme_override_constants/separation = 8
+theme_override_constants/separation = 6
 alignment = 1
 
 [node name="TicketBox" type="HBoxContainer" parent="UI/Root/WindowTicketRail"]
@@ -142,22 +118,79 @@ theme_override_constants/separation = 8
 alignment = 1
 mouse_filter = 0
 
-[node name="IngredientLegend" type="VBoxContainer" parent="UI/Root"]
+[node name="HintLabel" type="Label" parent="UI/Root/WindowTicketRail"]
 unique_name_in_owner = true
+z_index = 30
+mouse_filter = 2
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(1, 1, 1, 0.9)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 13
+text = "Press Open the Truck to start"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="FlashLabel" type="Label" parent="UI/Root"]
+unique_name_in_owner = true
+z_index = 35
+mouse_filter = 2
 layout_mode = 0
+offset_left = 280.0
+offset_top = 250.0
+offset_right = 1000.0
+offset_bottom = 300.0
+theme_override_colors/font_color = Color(1, 0.92, 0.23, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 28
+horizontal_alignment = 1
+
+[node name="IngredientLegend" type="HBoxContainer" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
 offset_left = 8.0
-offset_top = 130.0
-offset_right = 150.0
-offset_bottom = 420.0
+offset_top = -100.0
+offset_right = -8.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 0
 mouse_filter = 0
-theme_override_constants/separation = 3
+theme_override_constants/separation = 6
+alignment = 1
+
+[node name="StationsRow" type="VBoxContainer" parent="UI/Root"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = -560.0
+offset_right = 360.0
+offset_bottom = -108.0
+grow_vertical = 0
+mouse_filter = 0
+theme_override_constants/separation = 10
+alignment = 2
 
 [node name="BottomUI" type="VBoxContainer" parent="UI/Root"]
-layout_mode = 0
-offset_left = 160.0
-offset_top = 390.0
-offset_right = 1260.0
-offset_bottom = 718.0
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 312.0
+offset_top = -164.0
+offset_right = -12.0
+offset_bottom = -106.0
+grow_horizontal = 2
+grow_vertical = 0
 mouse_filter = 2
 theme_override_constants/separation = 4
 
@@ -170,13 +203,7 @@ theme_override_constants/separation = 8
 unique_name_in_owner = true
 layout_mode = 2
 alignment = 1
-theme_override_constants/separation = 10
-
-[node name="StationsRow" type="HBoxContainer" parent="UI/Root/BottomUI"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 200)
-layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 8
 
 [node name="IngLabel" type="Label" parent="UI/Root/BottomUI"]
 visible = false
@@ -203,7 +230,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.04, 0.05, 0.08, 0.82)
+color = Color(0.04, 0.06, 0.1, 0.55)
 
 [node name="StartCenter" type="VBoxContainer" parent="UI/Root/StartOverlay"]
 layout_mode = 1
@@ -234,8 +261,8 @@ horizontal_alignment = 1
 layout_mode = 2
 theme_override_colors/font_color = Color(0.92, 0.94, 0.98, 1)
 theme_override_font_sizes/font_size = 15
-text = "Inside the truck: cook on 4 grills, scoop with the spatula,
-drop onto image plates, stack toppings, serve customers."
+text = "Inside the truck: FULL · 1/4 · 1/8 heat zones, far-right HOLD (5 min),
+build on one board, serve customers. Close the window for a short break."
 horizontal_alignment = 1
 autowrap_mode = 3
 
