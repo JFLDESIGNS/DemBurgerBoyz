@@ -1181,10 +1181,28 @@ func _grill_place_bounds() -> Rect2:
 	)
 
 
+func _cook_place_bounds() -> Rect2:
+	## Raw patty spawn area — full steel minus the HOLD strip.
+	var b := _grill_place_bounds()
+	var warm := _warmer_rect()
+	var hold_end := warm.position.x + warm.size.x
+	var cook_min_x := maxf(b.position.x, hold_end + 0.02)
+	var w := b.end.x - cook_min_x
+	if w < 0.08:
+		return b
+	return Rect2(cook_min_x, b.position.y, w, b.size.y)
+
+
 func _is_on_grill_surface(world_pos: Vector3) -> bool:
 	## Anywhere on the steel plate (including rim) — used for click-on-grill checks.
 	return absf(world_pos.x - GRILL_CENTER_X) <= GRILL_WIDTH * 0.5 + 0.02 \
 		and absf(world_pos.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.5 + 0.02
+
+
+func _is_near_grill_for_place(world_pos: Vector3) -> bool:
+	## Forgiving right-click — near-misses still snap onto the cook surface.
+	return absf(world_pos.x - GRILL_CENTER_X) <= GRILL_WIDTH * 0.5 + 0.42 \
+		and absf(world_pos.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.5 + 0.42
 
 
 func _can_fit_patty_at(world_pos: Vector3) -> bool:
@@ -1661,20 +1679,65 @@ func _patty_screen_pick_radius_px(world_pt: Vector3) -> float:
 
 
 func _nudge_to_open_grill_spot(desired: Vector3) -> Vector3:
-	## If the click is crowded, snap to the nearest open spot instead of rejecting.
-	if _can_fit_patty_at(desired) and not _patty_blocked_at(desired):
-		return desired
-	for ring in [0.06, 0.10, 0.14, 0.18, 0.22]:
-		for seg in 10:
-			var ang := float(seg) / 10.0 * TAU
+	## Snap to the nearest open cook spot instead of rejecting the click.
+	return _find_closest_patty_place(desired)
+
+
+func _find_closest_patty_place(desired: Vector3) -> Vector3:
+	## Closest free cook-zone center to the click (rim / HOLD / crowding all snap).
+	var cook := _cook_place_bounds()
+	if cook.size.x < 0.05 or cook.size.y < 0.05:
+		return Vector3.ZERO
+	var aim := Vector3(
+		clampf(desired.x, cook.position.x, cook.end.x),
+		GRILL_SURFACE_Y,
+		clampf(desired.z, cook.position.y, cook.end.y)
+	)
+	if not _patty_blocked_at(aim):
+		return aim
+	var best := Vector3.ZERO
+	var best_d2 := INF
+	## Expanding rings from the aim point — prefer nearer openings.
+	for ring_i in 28:
+		var ring := 0.035 + float(ring_i) * 0.04
+		var segs := mini(28, 10 + ring_i * 2)
+		for seg in segs:
+			var ang := float(seg) / float(segs) * TAU
 			var try := Vector3(
-				desired.x + cos(ang) * ring,
-				desired.y,
-				desired.z + sin(ang) * ring
+				clampf(aim.x + cos(ang) * ring, cook.position.x, cook.end.x),
+				GRILL_SURFACE_Y,
+				clampf(aim.z + sin(ang) * ring, cook.position.y, cook.end.y)
 			)
-			if _can_fit_patty_at(try) and not _patty_blocked_at(try):
-				return try
-	return Vector3.ZERO
+			if _patty_blocked_at(try):
+				continue
+			var d2 := Vector2(try.x - desired.x, try.z - desired.z).length_squared()
+			if d2 < best_d2:
+				best_d2 = d2
+				best = try
+		## Early out once we found something close on an inner ring.
+		if best != Vector3.ZERO and ring > 0.2 and best_d2 < ring * ring * 1.5:
+			return best
+	if best != Vector3.ZERO:
+		return best
+	## Whole-area grid fallback — any open cook spot nearest the click.
+	var gx := 10
+	var gz := 6
+	for ix in gx:
+		for iz in gz:
+			var u := (float(ix) + 0.5) / float(gx)
+			var v := (float(iz) + 0.5) / float(gz)
+			var try2 := Vector3(
+				lerpf(cook.position.x, cook.end.x, u),
+				GRILL_SURFACE_Y,
+				lerpf(cook.position.y, cook.end.y, v)
+			)
+			if _patty_blocked_at(try2):
+				continue
+			var d2b := Vector2(try2.x - desired.x, try2.z - desired.z).length_squared()
+			if d2b < best_d2:
+				best_d2 = d2b
+				best = try2
+	return best
 
 
 func _on_grill_slot_clicked(_index: int, place_patty: bool = false) -> void:
@@ -1709,22 +1772,14 @@ func _try_place_patty_at(world_pos: Vector3) -> void:
 	if idx < 0:
 		_flash("Grill is full (%d patties)!" % GRILL_SLOTS, Color("EF5350"))
 		return
-	if world_pos == Vector3.ZERO or not _is_on_grill_surface(world_pos):
-		_flash("Click on the grill surface", Color("FFA726"))
+	## Forgiving: near-miss / rim / HOLD / crowded → snap to closest good cook spot.
+	if world_pos == Vector3.ZERO or not _is_near_grill_for_place(world_pos):
+		_flash("Click near the grill surface", Color("FFA726"))
 		return
-	if _is_in_warmer_zone(world_pos):
-		_flash("HOLD is for cooked meat — drop raw patties on the main grill", Color("FFCC80"))
+	var place_pos := _find_closest_patty_place(world_pos)
+	if place_pos == Vector3.ZERO:
+		_flash("No open spot — clear some space", Color("EF5350"))
 		return
-	## Don't allow rim clicks — burger has to fit fully on the steel.
-	if not _can_fit_patty_at(world_pos):
-		_flash("Too close to the edge — keep the patty on the grill", Color("FFA726"))
-		return
-	var place_pos := world_pos
-	if _patty_blocked_at(place_pos):
-		place_pos = _nudge_to_open_grill_spot(world_pos)
-		if place_pos == Vector3.ZERO:
-			_flash("Too close to another patty", Color("EF5350"))
-			return
 	_spawn_patty_at(idx, place_pos)
 
 
@@ -4529,7 +4584,8 @@ func _refresh_radio_ui() -> void:
 func _try_grill_raycast(screen_pos: Vector2, place_patty: bool) -> void:
 	if Time.get_ticks_msec() / 1000.0 < grill_ignore_pad_until:
 		return
-	if _blocks_grill_pick(screen_pos):
+	## Right-click place: don't let Build chrome swallow near-miss grill clicks.
+	if not place_patty and _blocks_grill_pick(screen_pos):
 		return
 	if not place_patty:
 		var picked = _pick_patty_at_screen(screen_pos)
@@ -4538,7 +4594,10 @@ func _try_grill_raycast(screen_pos: Vector2, place_patty: bool) -> void:
 			return
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	if plane_hit != Vector3.ZERO:
-		_on_grill_surface_clicked(place_patty, plane_hit)
+		if place_patty:
+			_try_place_patty_at(plane_hit)
+		else:
+			_on_grill_surface_clicked(false, plane_hit)
 		return
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
@@ -4550,14 +4609,14 @@ func _try_grill_raycast(screen_pos: Vector2, place_patty: bool) -> void:
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if not hit.is_empty():
 		if place_patty:
-			_place_nearest_slot(hit.position)
-		elif not place_patty:
+			_try_place_patty_at(hit.position)
+		else:
 			_on_grill_surface_clicked(false, hit.get("position", Vector3.ZERO))
 		return
 	if place_patty and absf(dir.y) > 0.001:
 		var t := (GRILL_SURFACE_Y - from.y) / dir.y
 		if t > 0.0:
-			_place_nearest_slot(from + dir * t)
+			_try_place_patty_at(from + dir * t)
 
 
 func _place_nearest_slot(world_pos: Vector3) -> void:
