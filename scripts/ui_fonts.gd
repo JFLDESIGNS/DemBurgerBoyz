@@ -53,7 +53,7 @@ static func apply_button(btn: Button, use_title: bool = true, size: int = -1) ->
 		btn.add_theme_font_size_override("font_size", size)
 
 
-## Crisp in-world text — high glyph res, no mip blur, modest outline.
+## Crisp in-world text — modest outline (fonts are non-MSDF for clean edges).
 static func apply_label3d(lab: Label3D, use_title: bool = true, font_size: int = 64, world_height: float = 0.078) -> void:
 	ensure_loaded()
 	var f: Font = title if use_title else body_heavy
@@ -61,7 +61,7 @@ static func apply_label3d(lab: Label3D, use_title: bool = true, font_size: int =
 		lab.font = f
 	lab.font_size = font_size
 	lab.pixel_size = world_height / float(font_size)
-	lab.outline_size = 6
+	lab.outline_size = 4
 	lab.outline_modulate = Color(0, 0, 0, 1)
 	lab.shaded = false
 	lab.double_sided = true

@@ -4,6 +4,8 @@ extends Node3D
 const GRILL_SLOTS := 10
 const STATION_COUNT := 1
 const STATION_CRAFT := 0
+## Build-board burger art scale (1.0 = prior size).
+const STATION_BURGER_SCALE := 0.75
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/4 · 1/8 · HOLD
 const ZONE_FULL_FRAC := 0.38
@@ -31,7 +33,11 @@ const GRILL_DEPTH := 0.95
 ## Patty must sit fully on the steel — reject clicks near the rim.
 const PATTY_FIT_RADIUS := 0.10
 const PATTY_MIN_SEP := 0.19
-const PATTY_PICK_WORLD := 0.30
+## Screen + world grab radius — generous so cheese / scoop clicks land reliably.
+const PATTY_PICK_WORLD := 0.42
+const PATTY_PICK_MIN_PX := 62.0
+const PATTY_PICK_WORLD_EDGE := 0.17
+const PATTY_PICK_PAD_PX := 22.0
 const PATTY_SIT_Y := 0.055
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
@@ -158,6 +164,7 @@ var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var _oil_blob_tex: ImageTexture = null
+var _oil_smoke_tex: ImageTexture = null
 ## Click-drag to slide patties on the flat-top.
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
@@ -175,6 +182,37 @@ var radio_dial_mesh: MeshInstance3D = null
 var radio_light_mat: StandardMaterial3D = null
 var radio_column: VBoxContainer = null
 var game_audio: Node = null
+## Graphics menu — live Environment + kitchen lights.
+var gfx_env: Environment = null
+var gfx_sun: DirectionalLight3D = null
+var gfx_outside_fill: DirectionalLight3D = null
+var gfx_kitchen: OmniLight3D = null
+var gfx_grill_lamp: SpotLight3D = null
+var gfx_window_wash: SpotLight3D = null
+var gfx_sky_mat: PanoramaSkyMaterial = null
+var gfx_panel: PanelContainer = null
+var gfx_btn: Button = null
+var gfx_sliders: Dictionary = {} ## key -> HSlider
+var gfx_checks: Dictionary = {} ## key -> CheckButton
+const GFX_CFG_PATH := "user://gfx_settings.cfg"
+const GFX_DEFAULTS := {
+	"bloom": 0.32,
+	"glow_intensity": 1.05,
+	"glow_strength": 1.35,
+	"glow_threshold": 0.55,
+	"glow_on": true,
+	"exposure": 0.92,
+	"ambient": 0.28,
+	"sun": 1.55,
+	"kitchen": 1.65,
+	"grill_lamp": 1.35,
+	"window_wash": 1.1,
+	"saturation": 1.06,
+	"contrast": 1.04,
+	"ssao": true,
+	"ssil": true,
+	"sky_energy": 0.42,
+}
 ## Ingredient strip notes — tracks unique presses toward a full-scale jingle.
 var _melody_pressed: Dictionary = {} ## id -> true
 ## Customer window chat popup.
@@ -218,6 +256,7 @@ func _ready() -> void:
 	_build_ingredient_legend()
 	_build_ingredient_buttons()
 	_setup_radio()
+	_build_graphics_ui()
 	_setup_game_audio()
 	_build_dialogue_ui()
 	## Hint sits under order tickets; flash stays on top.
@@ -240,7 +279,8 @@ func _ready() -> void:
 	held_row.visible = false
 	held_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ingredient_bar.mouse_filter = Control.MOUSE_FILTER_STOP
-	stations_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	## Pass-through so left grill clicks aren't blocked by empty Build chrome.
+	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ingredient_legend.mouse_filter = Control.MOUSE_FILTER_STOP
 	start_btn.pressed.connect(func():
 		_sfx_click()
@@ -263,6 +303,17 @@ func _style_static_labels() -> void:
 	UiFontsScript.apply_label(hud_day, true, 22)
 	UiFontsScript.apply_label(hud_hint, false, 13)
 	UiFontsScript.apply_label(flash_label, true, 30)
+	## Thin outline — thick outlines on MSDF fonts looked chewed-up.
+	for lab in [hud_money, hud_combo, hud_day]:
+		if lab:
+			lab.add_theme_constant_override("outline_size", 2)
+			lab.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	if hud_hint:
+		hud_hint.add_theme_constant_override("outline_size", 1)
+		hud_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	if flash_label:
+		flash_label.add_theme_constant_override("outline_size", 3)
+		flash_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	UiFontsScript.apply_button(start_btn, true, 22)
 	UiFontsScript.apply_button(restart_btn, true, 18)
 	var title := get_node_or_null("UI/Root/StartOverlay/StartCenter/Title") as Label
@@ -438,8 +489,6 @@ func _process(delta: float) -> void:
 		hud_hint.text = "Hold over raw beef to season · release to put shaker back"
 	elif spatula_patty != null:
 		hud_hint.text = "Holding patty — drop on Build or HOLD"
-	elif day == 1 and day_progress < 0.4:
-		hud_hint.text = "FULL · 1/4 · 1/8 heat · far-right HOLD (5 min, no cook)"
 	else:
 		hud_hint.text = "Click ticket to choose order, Serve from Build"
 
@@ -653,6 +702,10 @@ func _input(event: InputEvent) -> void:
 				return
 	## Cancel cheese hold with Escape.
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if gfx_panel != null and gfx_panel.visible:
+			_set_graphics_menu_open(false)
+			get_viewport().set_input_as_handled()
+			return
 		if cheese_held:
 			_cancel_cheese_hold()
 			get_viewport().set_input_as_handled()
@@ -720,18 +773,55 @@ func _ingredient_from_hotkey(keycode: Key) -> String:
 
 
 func _station_index_at(screen_pos: Vector2) -> int:
-	## Prefer the whole station panel so drag-drop is forgiving.
+	## Prefer plate / buttons — don't steal far-left grill clicks with a fat panel pad.
+	const PAD := 8.0
 	for i in STATION_COUNT:
-		var panel: Control = stations[i].get("panel", null)
-		if panel != null and is_instance_valid(panel) and panel.get_global_rect().has_point(screen_pos):
+		var plate: Control = stations[i].get("plate", null)
+		if plate != null and is_instance_valid(plate) and plate.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
 		var drop_btn: Control = stations[i].get("drop_btn", null)
-		if drop_btn != null and is_instance_valid(drop_btn) and drop_btn.visible and drop_btn.get_global_rect().has_point(screen_pos):
+		if drop_btn != null and is_instance_valid(drop_btn) and drop_btn.visible \
+				and drop_btn.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
-		var plate: Control = stations[i].get("plate", null)
-		if plate != null and is_instance_valid(plate) and plate.get_global_rect().has_point(screen_pos):
-			return i
+		var panel: Control = stations[i].get("panel", null)
+		if panel != null and is_instance_valid(panel) and panel.get_global_rect().has_point(screen_pos):
+			## Only count panel if over the lower button strip (Serve / trash).
+			var r := panel.get_global_rect()
+			if screen_pos.y >= r.end.y - 56.0:
+				return i
 	return -1
+
+
+func _blocks_grill_pick(screen_pos: Vector2) -> bool:
+	## Build UI is drawn over the grill — block 3D patty picks behind it (incl. yellow selection).
+	for i in STATION_COUNT:
+		var st: Dictionary = stations[i]
+		var panel: Control = st.get("panel", null)
+		var plate: Control = st.get("plate", null)
+		var preview: Control = st.get("preview", null)
+		var zone := Rect2()
+		var has_zone := false
+		if plate != null and is_instance_valid(plate):
+			zone = plate.get_global_rect()
+			has_zone = true
+		if preview != null and is_instance_valid(preview):
+			for child in preview.get_children():
+				if child is Control:
+					var cr: Rect2 = child.get_global_rect().grow(6)
+					zone = cr if not has_zone else zone.merge(cr)
+					has_zone = true
+		if panel != null and is_instance_valid(panel):
+			var pr := panel.get_global_rect()
+			## Title + burger stage — widen so selection chrome can't leak scoops to the grill.
+			var stage := Rect2(pr.position.x, pr.position.y, pr.size.x, maxf(pr.size.y - 52.0, 200.0))
+			zone = stage if not has_zone else zone.merge(stage)
+			has_zone = true
+		if has_zone and zone.grow(10).has_point(screen_pos):
+			return true
+	if stations_row != null and is_instance_valid(stations_row):
+		if stations_row.get_global_rect().grow(8).has_point(screen_pos):
+			return true
+	return false
 
 
 func _end_day() -> void:
@@ -818,61 +908,61 @@ func _build_3d_world() -> void:
 
 func _setup_world_lighting() -> void:
 	## Outside sun — cooler daylight through the service window.
-	var sun := DirectionalLight3D.new()
-	sun.name = "Sun"
-	sun.light_color = Color(1.0, 0.96, 0.88)
-	sun.light_energy = 1.55
-	sun.light_indirect_energy = 1.15
-	sun.shadow_enabled = true
-	sun.shadow_blur = 1.2
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	sun.rotation_degrees = Vector3(-48.0, 35.0, 8.0)
-	world.add_child(sun)
+	gfx_sun = DirectionalLight3D.new()
+	gfx_sun.name = "Sun"
+	gfx_sun.light_color = Color(1.0, 0.96, 0.88)
+	gfx_sun.light_energy = 1.55
+	gfx_sun.light_indirect_energy = 1.15
+	gfx_sun.shadow_enabled = true
+	gfx_sun.shadow_blur = 1.2
+	gfx_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	gfx_sun.rotation_degrees = Vector3(-48.0, 35.0, 8.0)
+	world.add_child(gfx_sun)
 
 	## Soft outdoor bounce so customers aren't harsh-lit.
-	var outside_fill := DirectionalLight3D.new()
-	outside_fill.name = "OutsideFill"
-	outside_fill.light_color = Color(0.55, 0.68, 0.95)
-	outside_fill.light_energy = 0.35
-	outside_fill.shadow_enabled = false
-	outside_fill.rotation_degrees = Vector3(-25.0, -140.0, 0.0)
-	world.add_child(outside_fill)
+	gfx_outside_fill = DirectionalLight3D.new()
+	gfx_outside_fill.name = "OutsideFill"
+	gfx_outside_fill.light_color = Color(0.55, 0.68, 0.95)
+	gfx_outside_fill.light_energy = 0.35
+	gfx_outside_fill.shadow_enabled = false
+	gfx_outside_fill.rotation_degrees = Vector3(-25.0, -140.0, 0.0)
+	world.add_child(gfx_outside_fill)
 
 	## Warm kitchen ceiling fill (inside the truck).
-	var kitchen := OmniLight3D.new()
-	kitchen.name = "KitchenFill"
-	kitchen.light_color = Color(1.0, 0.88, 0.72)
-	kitchen.light_energy = 1.65
-	kitchen.omni_range = 5.5
-	kitchen.omni_attenuation = 1.15
-	kitchen.shadow_enabled = true
-	kitchen.position = Vector3(0.0, 2.45, -0.35)
-	world.add_child(kitchen)
+	gfx_kitchen = OmniLight3D.new()
+	gfx_kitchen.name = "KitchenFill"
+	gfx_kitchen.light_color = Color(1.0, 0.88, 0.72)
+	gfx_kitchen.light_energy = 1.65
+	gfx_kitchen.omni_range = 5.5
+	gfx_kitchen.omni_attenuation = 1.15
+	gfx_kitchen.shadow_enabled = true
+	gfx_kitchen.position = Vector3(0.0, 2.45, -0.35)
+	world.add_child(gfx_kitchen)
 
 	## Focused grill work light — reads heat + metal reflections.
-	var grill_lamp := SpotLight3D.new()
-	grill_lamp.name = "GrillLamp"
-	grill_lamp.light_color = Color(1.0, 0.92, 0.78)
-	grill_lamp.light_energy = 1.35
-	grill_lamp.spot_range = 3.2
-	grill_lamp.spot_angle = 42.0
-	grill_lamp.spot_attenuation = 0.9
-	grill_lamp.shadow_enabled = true
-	grill_lamp.position = Vector3(GRILL_CENTER_X, 2.35, GRILL_SURFACE_Z - 0.15)
-	grill_lamp.rotation_degrees = Vector3(-72.0, 0.0, 0.0)
-	world.add_child(grill_lamp)
+	gfx_grill_lamp = SpotLight3D.new()
+	gfx_grill_lamp.name = "GrillLamp"
+	gfx_grill_lamp.light_color = Color(1.0, 0.92, 0.78)
+	gfx_grill_lamp.light_energy = 1.35
+	gfx_grill_lamp.spot_range = 3.2
+	gfx_grill_lamp.spot_angle = 42.0
+	gfx_grill_lamp.spot_attenuation = 0.9
+	gfx_grill_lamp.shadow_enabled = true
+	gfx_grill_lamp.position = Vector3(GRILL_CENTER_X, 2.35, GRILL_SURFACE_Z - 0.15)
+	gfx_grill_lamp.rotation_degrees = Vector3(-72.0, 0.0, 0.0)
+	world.add_child(gfx_grill_lamp)
 
 	## Window wash — daylight spilling onto the counter from outside.
-	var window_wash := SpotLight3D.new()
-	window_wash.name = "WindowWash"
-	window_wash.light_color = Color(0.75, 0.88, 1.0)
-	window_wash.light_energy = 1.1
-	window_wash.spot_range = 4.0
-	window_wash.spot_angle = 50.0
-	window_wash.shadow_enabled = false
-	window_wash.position = Vector3(0.0, 1.9, 1.55)
-	window_wash.rotation_degrees = Vector3(-25.0, 180.0, 0.0)
-	world.add_child(window_wash)
+	gfx_window_wash = SpotLight3D.new()
+	gfx_window_wash.name = "WindowWash"
+	gfx_window_wash.light_color = Color(0.75, 0.88, 1.0)
+	gfx_window_wash.light_energy = 1.1
+	gfx_window_wash.spot_range = 4.0
+	gfx_window_wash.spot_angle = 50.0
+	gfx_window_wash.shadow_enabled = false
+	gfx_window_wash.position = Vector3(0.0, 1.9, 1.55)
+	gfx_window_wash.rotation_degrees = Vector3(-25.0, 180.0, 0.0)
+	world.add_child(gfx_window_wash)
 
 	var env_node := WorldEnvironment.new()
 	env_node.name = "WorldEnvironment"
@@ -894,14 +984,16 @@ func _setup_world_lighting() -> void:
 	env.ssil_intensity = 0.65
 	env.ssil_radius = 1.0
 	env.glow_enabled = true
-	env.glow_intensity = 0.85
-	env.glow_strength = 1.15
-	env.glow_bloom = 0.22
-	env.glow_hdr_threshold = 0.72
-	env.glow_hdr_scale = 1.4
+	env.glow_intensity = 1.05
+	env.glow_strength = 1.35
+	env.glow_bloom = 0.32
+	env.glow_hdr_threshold = 0.55
+	env.glow_hdr_scale = 1.65
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	env.adjustment_enabled = true
 	env.adjustment_saturation = 1.06
 	env.adjustment_contrast = 1.04
+	gfx_env = env
 
 	var sky := Sky.new()
 	var panorama := PanoramaSkyMaterial.new()
@@ -909,6 +1001,8 @@ func _setup_world_lighting() -> void:
 	if hdr_tex != null:
 		panorama.panorama = hdr_tex
 		panorama.energy_multiplier = 0.42
+		gfx_sky_mat = panorama
+		sky.sky_material = panorama
 	else:
 		## Fallback procedural sky if HDRI missing.
 		var proc := ProceduralSkyMaterial.new()
@@ -918,11 +1012,6 @@ func _setup_world_lighting() -> void:
 		proc.ground_horizon_color = Color(0.55, 0.58, 0.62)
 		proc.sun_angle_max = 30.0
 		sky.sky_material = proc
-		env.sky = sky
-		env_node.environment = env
-		add_child(env_node)
-		return
-	sky.sky_material = panorama
 	env.sky = sky
 	env.sky_rotation = Vector3(0.0, deg_to_rad(40.0), 0.0)
 	env_node.environment = env
@@ -1439,11 +1528,11 @@ func _set_grill_on(on: bool) -> void:
 		if is_instance_valid(heat):
 			heat.light_energy = 0.0
 			heat.visible = false
-	if grill_surface_mat != null:
-		## Keep dark steel either way — no whole-zone orange wash.
-		grill_surface_mat.emission_enabled = false
-		grill_surface_mat.albedo_color = Color(0.28, 0.3, 0.33)
-		grill_surface_mat.roughness = 0.22
+	## Zone steel keeps a warm emission wash when the burner is on.
+	for mat in grill_pad_mats:
+		if mat is StandardMaterial3D:
+			var sm := mat as StandardMaterial3D
+			sm.emission_enabled = on and sm.emission_energy_multiplier > 0.01
 	_update_kitchen_sizzle()
 	_refresh_grill_ui_button(0)
 
@@ -1478,6 +1567,8 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 
 func _pick_patty_at_screen(screen_pos: Vector2):
 	## Aim at the grill plane, then pick the patty under the cursor — not just the front ray hit.
+	if _blocks_grill_pick(screen_pos):
+		return null
 	if camera == null:
 		return null
 	var plane_hit := _grill_plane_from_screen(screen_pos)
@@ -1490,8 +1581,12 @@ func _pick_patty_at_screen(screen_pos: Vector2):
 		if camera.is_position_behind(lift):
 			continue
 		var screen_pt := camera.unproject_position(lift)
-		var pick_px := maxf(38.0, _patty_screen_pick_radius_px(lift))
-		if screen_pos.distance_to(screen_pt) > pick_px:
+		var pick_px := maxf(PATTY_PICK_MIN_PX, _patty_screen_pick_radius_px(lift))
+		## Also accept near-misses via world distance on the grill plane.
+		var near_plane := false
+		if plane_hit != Vector3.ZERO:
+			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= PATTY_PICK_WORLD
+		if screen_pos.distance_to(screen_pt) > pick_px and not near_plane:
 			continue
 		candidates.append(p)
 	if candidates.is_empty():
@@ -1504,7 +1599,7 @@ func _pick_patty_at_screen(screen_pos: Vector2):
 		if plane_hit != Vector3.ZERO:
 			da = Vector2(plane_hit.x - a.position.x, plane_hit.z - a.position.z).length()
 			db = Vector2(plane_hit.x - b.position.x, plane_hit.z - b.position.z).length()
-		if absf(da - db) > 0.05:
+		if absf(da - db) > 0.04:
 			return da < db
 		## Overlapping stack — prefer the patty farther from the camera (click-through).
 		return cam_pos.distance_to(a.global_position) > cam_pos.distance_to(b.global_position)
@@ -1513,10 +1608,10 @@ func _pick_patty_at_screen(screen_pos: Vector2):
 
 
 func _patty_screen_pick_radius_px(world_pt: Vector3) -> float:
-	var edge := world_pt + Vector3(0.11, 0, 0)
+	var edge := world_pt + Vector3(PATTY_PICK_WORLD_EDGE, 0, 0)
 	var c2 := camera.unproject_position(world_pt)
 	var e2 := camera.unproject_position(edge)
-	return c2.distance_to(e2) + 10.0
+	return c2.distance_to(e2) + PATTY_PICK_PAD_PX
 
 
 func _nudge_to_open_grill_spot(desired: Vector3) -> Vector3:
@@ -1731,7 +1826,7 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 		slot_positions[idx] = Vector3(target.x, GRILL_SURFACE_Y, target.z)
 	## Smear existing oil gently — never spawn new puddles (that glitched hard).
 	if moved > 0.003:
-		_smear_oil_along(Vector3(target.x, GRILL_SURFACE_Y + 0.029, target.z), move_vec, moved)
+		_smear_oil_along(Vector3(target.x, GRILL_SURFACE_Y + 0.016, target.z), move_vec, moved)
 	drag_last_xz = Vector2(target.x, target.z)
 	## Scrape bed + louder grease pops while sliding.
 	var speed := moved / maxf(delta, 0.0001)
@@ -1933,7 +2028,7 @@ func _update_heat_warp(_delta: float) -> void:
 
 
 func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: float, intensity: float, tex: Texture2D) -> MeshInstance3D:
-	## Flat radial heat blot — intensity scales brightness per zone (full / 1/4 / 1/8).
+	## Flat radial heat blot — additive so it always brightens the steel (screen-like).
 	var glow := MeshInstance3D.new()
 	var glow_mesh := PlaneMesh.new()
 	glow_mesh.size = Vector2(maxf(0.2, width), maxf(0.2, depth))
@@ -1942,14 +2037,15 @@ func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: flo
 	var gm := StandardMaterial3D.new()
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	gm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	gm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	gm.albedo_texture = tex
-	gm.albedo_color = Color(1.0, 0.62, 0.28, clampf(0.55 * intensity, 0.28, 0.72))
+	gm.albedo_color = Color(1.0, 0.55, 0.18, clampf(0.85 * intensity + 0.2, 0.45, 1.0))
 	gm.emission_enabled = true
 	gm.emission_texture = tex
-	gm.emission = Color(1.0, 0.4, 0.08)
-	gm.emission_energy_multiplier = lerpf(0.85, 1.85, clampf(intensity, 0.0, 1.0))
+	gm.emission = Color(1.0, 0.48, 0.1)
+	gm.emission_energy_multiplier = lerpf(2.2, 4.8, clampf(intensity, 0.0, 1.0))
 	gm.render_priority = 6
 	glow.material_override = gm
 	glow.visible = false
@@ -2058,6 +2154,7 @@ func _build_wire_brush() -> void:
 	brush_root.name = "PaintScraper"
 	brush_root.position = brush_home
 	brush_root.rotation_degrees = Vector3(5.0, 70.0, -8.0)
+	brush_root.scale = Vector3(1.28, 1.28, 1.28)
 	world.add_child(brush_root)
 
 	brush_area = Area3D.new()
@@ -2142,14 +2239,6 @@ func _build_wire_brush() -> void:
 	shoulder.material_override = metal
 	brush_root.add_child(shoulder)
 
-	var tag := Label3D.new()
-	tag.text = "SCRAPER"
-	tag.position = Vector3(0, 0.34, 0.04)
-	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	tag.modulate = Color(0.9, 0.9, 0.85)
-	UiFontsScript.apply_label3d(tag, true, 64, 0.064)
-	brush_root.add_child(tag)
-
 
 func _build_season_shaker() -> void:
 	## Seasoning by the scraper on screen-right — clear of bottom UI.
@@ -2202,14 +2291,6 @@ func _build_season_shaker() -> void:
 	cmat.roughness = 0.35
 	cap.material_override = cmat
 	shaker_root.add_child(cap)
-
-	var tag := Label3D.new()
-	tag.text = "SEASON"
-	tag.position = Vector3(0, 0.14, 0)
-	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	tag.modulate = Color(1.0, 0.9, 0.55)
-	UiFontsScript.apply_label3d(tag, true, 40, 0.048)
-	shaker_root.add_child(tag)
 
 	shaker_particles = GPUParticles3D.new()
 	shaker_particles.amount = 48
@@ -2399,7 +2480,7 @@ func _update_held_oil(_delta: float) -> void:
 		oil_particles.emitting = true
 		oil_particles.position = Vector3(0, 0.12, 0)
 	## Draw ABOVE the steel top (~+0.022), not inside the mesh.
-	var cur := Vector3(hit.x, GRILL_SURFACE_Y + 0.029, hit.z)
+	var cur := Vector3(hit.x, GRILL_SURFACE_Y + 0.016, hit.z)
 	if oil_last_draw == Vector3.ZERO:
 		oil_last_draw = cur
 		_spawn_oil_slick(cur, 0.055)
@@ -2448,9 +2529,11 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 	## Round soft puddle — never a stretched rectangle.
 	plane.size = Vector2(rad * 2.15, rad * 2.15)
 	slick.mesh = plane
-	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + 0.029, pos.z)
+	## Sit under patties / tools — never float above the meat.
+	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + 0.016, pos.z)
 	slick.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
 	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	slick.sorting_offset = -2.0
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -2464,11 +2547,17 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 	mat.clearcoat_roughness = 0.06
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.render_priority = 8
+	## Below patty transparent layers (sear/frost use 1–3).
+	mat.render_priority = -2
 	slick.material_override = mat
 	grill_root.add_child(slick)
+	## Keep puddles under tools/patties in the scene tree draw order.
+	grill_root.move_child(slick, 0)
+	var smoke := _make_oil_burn_smoke(rad)
+	slick.add_child(smoke)
 	oil_slicks.append({
 		"mesh": slick,
+		"smoke": smoke,
 		"age": 0.0,
 		"life": 22.0 + randf() * 10.0,
 		"radius": rad,
@@ -2479,6 +2568,80 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
 			m.queue_free()
+
+
+func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
+	## Greasy smoke that ramps up as the puddle cooks off.
+	var smoke := GPUParticles3D.new()
+	smoke.name = "OilBurnSmoke"
+	smoke.amount = 22
+	smoke.lifetime = 1.35
+	smoke.explosiveness = 0.0
+	smoke.randomness = 0.65
+	smoke.emitting = false
+	smoke.amount_ratio = 0.0
+	smoke.position = Vector3(0, 0.02, 0)
+	smoke.visibility_aabb = AABB(Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 1.2, 0.8))
+	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = maxf(0.02, radius * 0.85)
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 22.0
+	pmat.initial_velocity_min = 0.1
+	pmat.initial_velocity_max = 0.28
+	pmat.gravity = Vector3(0, 0.12, 0)
+	pmat.damping_min = 0.35
+	pmat.damping_max = 0.85
+	pmat.scale_min = 0.8
+	pmat.scale_max = 1.9
+	pmat.color = Color(0.55, 0.5, 0.45, 0.4)
+	var fade := Gradient.new()
+	fade.add_point(0.0, Color(1, 1, 1, 0.0))
+	fade.add_point(0.15, Color(1, 1, 1, 0.55))
+	fade.add_point(0.55, Color(0.85, 0.8, 0.75, 0.28))
+	fade.add_point(1.0, Color(0.6, 0.55, 0.5, 0.0))
+	var fade_tex := GradientTexture1D.new()
+	fade_tex.gradient = fade
+	pmat.color_ramp = fade_tex
+	smoke.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.07, 0.07)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	draw.albedo_texture = _get_oil_smoke_texture()
+	draw.albedo_color = Color(0.75, 0.7, 0.65, 0.7)
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.vertex_color_use_as_albedo = true
+	smoke.draw_pass_1 = quad
+	smoke.material_override = draw
+	return smoke
+
+
+func _get_oil_smoke_texture() -> ImageTexture:
+	## Soft grey puff — reused for every oil slick.
+	if _oil_smoke_tex != null:
+		return _oil_smoke_tex
+	var w := 64
+	var h := 64
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var mid := float(w - 1) * 0.5
+	for y in h:
+		for x in w:
+			var dx := (float(x) - mid) / mid
+			var dy := (float(y) - mid) / mid
+			var r := sqrt(dx * dx + dy * dy)
+			var a := clampf(1.0 - r, 0.0, 1.0)
+			a = pow(a, 1.65) * 0.85
+			if a < 0.02:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				img.set_pixel(x, y, Color(0.7, 0.68, 0.64, a))
+	_oil_smoke_tex = ImageTexture.create_from_image(img)
+	return _oil_smoke_tex
 
 
 func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
@@ -2497,7 +2660,7 @@ func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
 		var pull := clampf(1.0 - d / reach, 0.0, 1.0)
 		mesh.position.x += dir.x * moved * pull * 0.22
 		mesh.position.z += dir.y * moved * pull * 0.22
-		mesh.position.y = GRILL_SURFACE_Y + 0.029
+		mesh.position.y = GRILL_SURFACE_Y + 0.016
 		var s: float = mesh.scale.x
 		s = clampf(s + moved * 0.35 * pull, 0.95, 1.35)
 		mesh.scale = Vector3(s, 1.0, s)
@@ -2505,9 +2668,11 @@ func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
 
 func _update_oil_slicks(delta: float) -> void:
 	var i := 0
+	## Hot flat-top cooks oil off faster and drives more smoke.
+	var burn_rate := 1.55 if grill_on else 0.85
 	while i < oil_slicks.size():
 		var item: Dictionary = oil_slicks[i]
-		item["age"] = float(item["age"]) + delta
+		item["age"] = float(item["age"]) + delta * burn_rate
 		var mesh = item.get("mesh")
 		var life := float(item["life"])
 		var age := float(item["age"])
@@ -2516,15 +2681,32 @@ func _update_oil_slicks(delta: float) -> void:
 				mesh.queue_free()
 			oil_slicks.remove_at(i)
 			continue
+		var burn := clampf(age / life, 0.0, 1.0)
 		var mat := mesh.material_override as StandardMaterial3D
 		if mat:
-			var fade := 1.0 - clampf(age / life, 0.0, 1.0)
-			## Ease out near the end so soft blobs don't flash as hard squares.
+			var fade := 1.0 - burn
 			fade = smoothstep(0.0, 1.0, fade)
 			var base_a := float(item.get("base_a", 0.9))
-			var c := mat.albedo_color
+			## Fresh amber → dark burnt as it cooks off.
+			var fresh := Color(0.16, 0.11, 0.05, base_a)
+			var scorched := Color(0.08, 0.05, 0.03, base_a * 0.55)
+			var c := fresh.lerp(scorched, smoothstep(0.15, 0.85, burn))
 			c.a = base_a * fade
 			mat.albedo_color = c
+			mat.roughness = lerpf(0.08, 0.45, burn)
+		## Shrink slightly as it evaporates.
+		var shrink := lerpf(1.0, 0.55, smoothstep(0.35, 1.0, burn))
+		mesh.scale = Vector3(shrink, 1.0, shrink)
+		## Smoke ramps mid-burn, peaks near the end, then trails off.
+		var smoke = item.get("smoke")
+		if smoke != null and is_instance_valid(smoke):
+			var smoke_amt := 0.0
+			if burn > 0.18:
+				smoke_amt = smoothstep(0.18, 0.45, burn) * (1.0 - smoothstep(0.88, 1.0, burn))
+				if grill_on:
+					smoke_amt = minf(1.0, smoke_amt * 1.35)
+			smoke.emitting = smoke_amt > 0.04
+			smoke.amount_ratio = smoke_amt
 		i += 1
 
 
@@ -2543,7 +2725,7 @@ func _build_oil_bottle() -> void:
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
 	oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
-	oil_root.scale = Vector3(1.4, 1.4, 1.4)
+	oil_root.scale = Vector3(1.75, 1.75, 1.75)
 	grill_root.add_child(oil_root)
 
 	oil_area = Area3D.new()
@@ -2603,14 +2785,6 @@ func _build_oil_bottle() -> void:
 	tmat.roughness = 0.5
 	tip.material_override = tmat
 	oil_root.add_child(tip)
-
-	var tag := Label3D.new()
-	tag.text = "OIL"
-	tag.position = Vector3(0, 0.2, 0)
-	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	tag.modulate = Color(1.0, 0.9, 0.5)
-	UiFontsScript.apply_label3d(tag, true, 48, 0.05)
-	oil_root.add_child(tag)
 
 	oil_particles = GPUParticles3D.new()
 	oil_particles.amount = 56
@@ -2685,7 +2859,7 @@ func _release_oil_bottle() -> void:
 	tw.set_parallel(true)
 	tw.tween_property(oil_root, "position", oil_home, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(oil_root, "rotation_degrees", Vector3(8.0, 40.0, -5.0), 0.22)
-	tw.tween_property(oil_root, "scale", Vector3(1.4, 1.4, 1.4), 0.22)
+	tw.tween_property(oil_root, "scale", Vector3(1.75, 1.75, 1.75), 0.22)
 	tw.chain().tween_callback(func():
 		if oil_area:
 			oil_area.input_ray_pickable = true
@@ -2703,7 +2877,7 @@ func _reset_oil_bottle() -> void:
 	if oil_root:
 		oil_root.position = oil_home
 		oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
-		oil_root.scale = Vector3(1.4, 1.4, 1.4)
+		oil_root.scale = Vector3(1.75, 1.75, 1.75)
 	if oil_area:
 		oil_area.input_ray_pickable = true
 	_clear_oil_slicks()
@@ -2915,8 +3089,8 @@ func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float) -> Sta
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	mat.emission_enabled = emit > 0.01
-	mat.emission = albedo
-	mat.emission_energy_multiplier = emit * 0.35
+	mat.emission = Color(1.0, 0.45, 0.12).lerp(albedo, 0.35)
+	mat.emission_energy_multiplier = emit * 1.15
 	return mat
 
 
@@ -2931,7 +3105,7 @@ func _add_grill_zone_panel(parent: Node3D, local_pos: Vector3, size: Vector3, ma
 
 
 func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
-	## Soft rectangular highlight band across the steel — reads as a fake reflection.
+	## Soft highlight band — additive so steel always reads brighter.
 	var shine := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(maxf(0.2, width), maxf(0.08, depth))
@@ -2941,9 +3115,13 @@ func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: f
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.albedo_texture = _make_grill_shine_texture()
-	mat.albedo_color = Color(1, 1, 1, 0.18)
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+	mat.emission_enabled = true
+	mat.emission = Color(0.95, 0.97, 1.0)
+	mat.emission_energy_multiplier = 1.4
 	mat.render_priority = 2
 	shine.material_override = mat
 	parent.add_child(shine)
@@ -3519,6 +3697,331 @@ func _build_radio_ui() -> void:
 	_build_window_pause_button(radio_column)
 
 
+func _build_graphics_ui() -> void:
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+
+	if radio_column != null and is_instance_valid(radio_column):
+		gfx_btn = Button.new()
+		gfx_btn.name = "GfxBtn"
+		gfx_btn.text = "GRAPHICS"
+		gfx_btn.focus_mode = Control.FOCUS_NONE
+		gfx_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		gfx_btn.custom_minimum_size = Vector2(0, 30)
+		UiFontsScript.apply_button(gfx_btn, true, 12)
+		var gsb := StyleBoxFlat.new()
+		gsb.bg_color = Color(0.16, 0.22, 0.28)
+		gsb.set_corner_radius_all(6)
+		gsb.set_border_width_all(1)
+		gsb.border_color = Color(0.55, 0.75, 0.95, 0.7)
+		gfx_btn.add_theme_stylebox_override("normal", gsb)
+		var gsbh := gsb.duplicate()
+		gsbh.bg_color = Color(0.22, 0.32, 0.42)
+		gfx_btn.add_theme_stylebox_override("hover", gsbh)
+		gfx_btn.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+		gfx_btn.pressed.connect(func():
+			_sfx_click()
+			_toggle_graphics_menu()
+		)
+		radio_column.add_child(gfx_btn)
+
+	gfx_panel = PanelContainer.new()
+	gfx_panel.name = "GraphicsPanel"
+	gfx_panel.visible = false
+	gfx_panel.z_index = 40
+	gfx_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	gfx_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	gfx_panel.offset_left = -320.0
+	gfx_panel.offset_right = -16.0
+	gfx_panel.offset_top = -220.0
+	gfx_panel.offset_bottom = 260.0
+	gfx_panel.custom_minimum_size = Vector2(300, 0)
+	gfx_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.08, 0.1, 0.12, 0.94)
+	psb.border_color = Color(0.55, 0.78, 1.0, 0.85)
+	psb.set_border_width_all(2)
+	psb.set_corner_radius_all(10)
+	psb.content_margin_left = 12
+	psb.content_margin_right = 12
+	psb.content_margin_top = 10
+	psb.content_margin_bottom = 10
+	gfx_panel.add_theme_stylebox_override("panel", psb)
+	ui_root.add_child(gfx_panel)
+
+	var root_v := VBoxContainer.new()
+	root_v.add_theme_constant_override("separation", 6)
+	gfx_panel.add_child(root_v)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	root_v.add_child(header)
+
+	var title := Label.new()
+	title.text = "GRAPHICS"
+	UiFontsScript.apply_label(title, true, 16)
+	title.add_theme_color_override("font_color", Color(0.85, 0.95, 1.0))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.custom_minimum_size = Vector2(32, 26)
+	UiFontsScript.apply_button(close_btn, true, 12)
+	close_btn.pressed.connect(func():
+		_sfx_click()
+		_set_graphics_menu_open(false)
+	)
+	header.add_child(close_btn)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 380)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	root_v.add_child(scroll)
+
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 5)
+	scroll.add_child(list)
+
+	_gfx_add_section(list, "BLOOM / GLOW")
+	_gfx_add_check(list, "glow_on", "Glow / Bloom")
+	_gfx_add_slider(list, "bloom", "Bloom", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "glow_intensity", "Glow Intensity", 0.0, 2.5, 0.01)
+	_gfx_add_slider(list, "glow_strength", "Glow Strength", 0.0, 2.5, 0.01)
+	_gfx_add_slider(list, "glow_threshold", "Glow Threshold", 0.1, 2.0, 0.01)
+
+	_gfx_add_section(list, "LIGHTING")
+	_gfx_add_slider(list, "exposure", "Exposure", 0.4, 1.8, 0.01)
+	_gfx_add_slider(list, "ambient", "Ambient", 0.0, 1.2, 0.01)
+	_gfx_add_slider(list, "sun", "Sun", 0.0, 3.0, 0.01)
+	_gfx_add_slider(list, "kitchen", "Kitchen Light", 0.0, 3.5, 0.01)
+	_gfx_add_slider(list, "grill_lamp", "Grill Lamp", 0.0, 3.5, 0.01)
+	_gfx_add_slider(list, "window_wash", "Window Wash", 0.0, 3.0, 0.01)
+	_gfx_add_slider(list, "sky_energy", "Sky Brightness", 0.05, 1.5, 0.01)
+
+	_gfx_add_section(list, "LOOK")
+	_gfx_add_slider(list, "saturation", "Saturation", 0.5, 1.6, 0.01)
+	_gfx_add_slider(list, "contrast", "Contrast", 0.7, 1.5, 0.01)
+	_gfx_add_check(list, "ssao", "Ambient Occlusion (SSAO)")
+	_gfx_add_check(list, "ssil", "Indirect Light (SSIL)")
+
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 8)
+	root_v.add_child(footer)
+
+	var reset_btn := Button.new()
+	reset_btn.text = "Reset Defaults"
+	reset_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_button(reset_btn, true, 12)
+	reset_btn.pressed.connect(func():
+		_sfx_click()
+		_reset_graphics_defaults()
+	)
+	footer.add_child(reset_btn)
+
+	_load_graphics_settings()
+	_apply_graphics_settings(_read_graphics_from_ui())
+	_sync_graphics_ui_from_world()
+
+
+func _gfx_add_section(parent: Control, text: String) -> void:
+	var lab := Label.new()
+	lab.text = text
+	UiFontsScript.apply_label(lab, true, 11)
+	lab.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	lab.add_theme_constant_override("outline_size", 1)
+	parent.add_child(lab)
+
+
+func _gfx_add_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float) -> void:
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 1)
+	parent.add_child(row)
+
+	var top := HBoxContainer.new()
+	row.add_child(top)
+
+	var lab := Label.new()
+	lab.text = label_text
+	UiFontsScript.apply_label(lab, false, 11)
+	lab.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(lab)
+
+	var val_lab := Label.new()
+	val_lab.name = "Val"
+	val_lab.custom_minimum_size = Vector2(42, 0)
+	val_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(val_lab, true, 11)
+	val_lab.add_theme_color_override("font_color", Color(0.75, 0.88, 1.0))
+	top.add_child(val_lab)
+
+	var slider := HSlider.new()
+	slider.min_value = min_v
+	slider.max_value = max_v
+	slider.step = step
+	slider.value = float(GFX_DEFAULTS.get(key, min_v))
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size = Vector2(0, 18)
+	slider.value_changed.connect(func(v: float):
+		val_lab.text = "%.2f" % v
+		_on_graphics_slider_changed()
+	)
+	row.add_child(slider)
+	val_lab.text = "%.2f" % slider.value
+	gfx_sliders[key] = slider
+
+
+func _gfx_add_check(parent: Control, key: String, label_text: String) -> void:
+	var btn := CheckButton.new()
+	btn.text = label_text
+	btn.button_pressed = bool(GFX_DEFAULTS.get(key, true))
+	UiFontsScript.apply_button(btn, false, 11)
+	btn.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	btn.toggled.connect(func(_on: bool):
+		_on_graphics_slider_changed()
+	)
+	parent.add_child(btn)
+	gfx_checks[key] = btn
+
+
+func _toggle_graphics_menu() -> void:
+	_set_graphics_menu_open(gfx_panel == null or not gfx_panel.visible)
+
+
+func _set_graphics_menu_open(open: bool) -> void:
+	if gfx_panel == null:
+		return
+	gfx_panel.visible = open
+	if gfx_btn:
+		gfx_btn.text = "GRAPHICS ▾" if open else "GRAPHICS"
+
+
+func _on_graphics_slider_changed() -> void:
+	var settings := _read_graphics_from_ui()
+	_apply_graphics_settings(settings)
+	_save_graphics_settings(settings)
+
+
+func _read_graphics_from_ui() -> Dictionary:
+	var out := GFX_DEFAULTS.duplicate()
+	for key in gfx_sliders:
+		var s: HSlider = gfx_sliders[key]
+		if s != null and is_instance_valid(s):
+			out[key] = s.value
+	for key in gfx_checks:
+		var c: CheckButton = gfx_checks[key]
+		if c != null and is_instance_valid(c):
+			out[key] = c.button_pressed
+	return out
+
+
+func _sync_graphics_ui_from_world() -> void:
+	## Push current values into controls without re-saving.
+	if gfx_env == null:
+		return
+	var map := {
+		"bloom": gfx_env.glow_bloom,
+		"glow_intensity": gfx_env.glow_intensity,
+		"glow_strength": gfx_env.glow_strength,
+		"glow_threshold": gfx_env.glow_hdr_threshold,
+		"exposure": gfx_env.tonemap_exposure,
+		"ambient": gfx_env.ambient_light_energy,
+		"saturation": gfx_env.adjustment_saturation,
+		"contrast": gfx_env.adjustment_contrast,
+		"sun": gfx_sun.light_energy if gfx_sun else float(GFX_DEFAULTS["sun"]),
+		"kitchen": gfx_kitchen.light_energy if gfx_kitchen else float(GFX_DEFAULTS["kitchen"]),
+		"grill_lamp": gfx_grill_lamp.light_energy if gfx_grill_lamp else float(GFX_DEFAULTS["grill_lamp"]),
+		"window_wash": gfx_window_wash.light_energy if gfx_window_wash else float(GFX_DEFAULTS["window_wash"]),
+		"sky_energy": gfx_sky_mat.energy_multiplier if gfx_sky_mat else float(GFX_DEFAULTS["sky_energy"]),
+	}
+	for key in map:
+		if gfx_sliders.has(key) and gfx_sliders[key] != null:
+			gfx_sliders[key].set_value_no_signal(float(map[key]))
+			var row: Node = gfx_sliders[key].get_parent()
+			if row:
+				var top = row.get_child(0) if row.get_child_count() > 0 else null
+				if top:
+					var val_lab = top.get_node_or_null("Val")
+					if val_lab:
+						val_lab.text = "%.2f" % float(map[key])
+	if gfx_checks.has("glow_on"):
+		gfx_checks["glow_on"].set_pressed_no_signal(gfx_env.glow_enabled)
+	if gfx_checks.has("ssao"):
+		gfx_checks["ssao"].set_pressed_no_signal(gfx_env.ssao_enabled)
+	if gfx_checks.has("ssil"):
+		gfx_checks["ssil"].set_pressed_no_signal(gfx_env.ssil_enabled)
+
+
+func _apply_graphics_settings(s: Dictionary) -> void:
+	if gfx_env != null:
+		gfx_env.glow_enabled = bool(s.get("glow_on", true))
+		gfx_env.glow_bloom = float(s.get("bloom", 0.32))
+		gfx_env.glow_intensity = float(s.get("glow_intensity", 1.05))
+		gfx_env.glow_strength = float(s.get("glow_strength", 1.35))
+		gfx_env.glow_hdr_threshold = float(s.get("glow_threshold", 0.55))
+		gfx_env.tonemap_exposure = float(s.get("exposure", 0.92))
+		gfx_env.ambient_light_energy = float(s.get("ambient", 0.28))
+		gfx_env.adjustment_enabled = true
+		gfx_env.adjustment_saturation = float(s.get("saturation", 1.06))
+		gfx_env.adjustment_contrast = float(s.get("contrast", 1.04))
+		gfx_env.ssao_enabled = bool(s.get("ssao", true))
+		gfx_env.ssil_enabled = bool(s.get("ssil", true))
+	if gfx_sun:
+		gfx_sun.light_energy = float(s.get("sun", 1.55))
+	if gfx_kitchen:
+		gfx_kitchen.light_energy = float(s.get("kitchen", 1.65))
+	if gfx_grill_lamp:
+		gfx_grill_lamp.light_energy = float(s.get("grill_lamp", 1.35))
+	if gfx_window_wash:
+		gfx_window_wash.light_energy = float(s.get("window_wash", 1.1))
+	if gfx_sky_mat:
+		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
+
+
+func _reset_graphics_defaults() -> void:
+	for key in GFX_DEFAULTS:
+		if gfx_sliders.has(key) and gfx_sliders[key] != null:
+			gfx_sliders[key].value = float(GFX_DEFAULTS[key])
+		elif gfx_checks.has(key) and gfx_checks[key] != null:
+			gfx_checks[key].button_pressed = bool(GFX_DEFAULTS[key])
+	var settings := _read_graphics_from_ui()
+	_apply_graphics_settings(settings)
+	_save_graphics_settings(settings)
+	_flash("Graphics reset", Color("90CAF9"))
+
+
+func _load_graphics_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	for key in GFX_DEFAULTS:
+		if not cfg.has_section_key("gfx", key):
+			continue
+		var val = cfg.get_value("gfx", key)
+		if gfx_sliders.has(key) and gfx_sliders[key] != null:
+			gfx_sliders[key].set_value_no_signal(float(val))
+			var row: Node = gfx_sliders[key].get_parent()
+			if row and row.get_child_count() > 0:
+				var top = row.get_child(0)
+				var val_lab = top.get_node_or_null("Val") if top else null
+				if val_lab:
+					val_lab.text = "%.2f" % float(val)
+		elif gfx_checks.has(key) and gfx_checks[key] != null:
+			gfx_checks[key].set_pressed_no_signal(bool(val))
+
+
+func _save_graphics_settings(s: Dictionary) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH) ## keep other sections if any
+	for key in s:
+		cfg.set_value("gfx", key, s[key])
+	cfg.save(GFX_CFG_PATH)
+
+
 func _build_window_pause_button(parent: Control) -> void:
 	window_pause_btn = Button.new()
 	window_pause_btn.name = "WindowPauseBtn"
@@ -3582,6 +4085,8 @@ func _refresh_radio_ui() -> void:
 
 func _try_grill_raycast(screen_pos: Vector2, place_patty: bool) -> void:
 	if Time.get_ticks_msec() / 1000.0 < grill_ignore_pad_until:
+		return
+	if _blocks_grill_pick(screen_pos):
 		return
 	if not place_patty:
 		var picked = _pick_patty_at_screen(screen_pos)
@@ -4159,18 +4664,22 @@ func _note_melody_press(id: String) -> void:
 
 
 func _build_station_ui() -> void:
-	stations_row.mouse_filter = Control.MOUSE_FILTER_STOP
-	stations_row.custom_minimum_size = Vector2(420, 0)
+	## Sit further screen-left so the far-left grill stays clickable.
+	stations_row.offset_left = -70.0
+	stations_row.offset_right = 250.0
+	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stations_row.custom_minimum_size = Vector2(300, 0)
 	stations_row.alignment = BoxContainer.ALIGNMENT_END
 	for child in stations_row.get_children():
 		child.queue_free()
 	for i in STATION_COUNT:
 		## Plain Control — no PanelContainer chrome / bounding box.
 		var panel := Control.new()
-		panel.custom_minimum_size = Vector2(340, 320)
+		panel.custom_minimum_size = Vector2(260, 320)
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		panel.size_flags_vertical = Control.SIZE_SHRINK_END
-		panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		## Empty panel area passes through to the 3D grill behind.
+		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 		var root_v := VBoxContainer.new()
 		root_v.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -4189,13 +4698,23 @@ func _build_station_ui() -> void:
 		title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		root_v.add_child(title)
 
-		## Stage sized for mid-large burger art.
+		## Stage sized for mid-large burger art — tight hitbox around the board.
 		var plate_wrap := Control.new()
-		plate_wrap.custom_minimum_size = Vector2(0, 240)
+		plate_wrap.custom_minimum_size = Vector2(158, 150)
+		plate_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		plate_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
 		plate_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 		plate_wrap.clip_contents = false
 		root_v.add_child(plate_wrap)
+
+		## Catches clicks over the grill behind the burger / yellow selection box.
+		var grill_blocker := ColorRect.new()
+		grill_blocker.name = "GrillPickBlocker"
+		grill_blocker.color = Color(0, 0, 0, 0)
+		grill_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+		grill_blocker.set_anchors_preset(Control.PRESET_FULL_RECT)
+		grill_blocker.z_index = -1
+		plate_wrap.add_child(grill_blocker)
 
 		var board := TextureRect.new()
 		board.name = "CuttingBoard"
@@ -4209,9 +4728,9 @@ func _build_station_ui() -> void:
 		board.set_anchors_preset(Control.PRESET_CENTER)
 		board.grow_horizontal = Control.GROW_DIRECTION_BOTH
 		board.grow_vertical = Control.GROW_DIRECTION_BOTH
-		board.custom_minimum_size = Vector2(200, 140)
-		board.size = Vector2(200, 140)
-		board.position = Vector2(-100, -40)
+		board.custom_minimum_size = Vector2(150, 105)
+		board.size = Vector2(150, 105)
+		board.position = Vector2(-75, -30)
 		plate_wrap.add_child(board)
 
 		## Absolute stack of floating ingredient sprites on top of the board.
@@ -4363,7 +4882,7 @@ func _build_grill_drop_zone() -> void:
 	grill_drop_zone.name = "GrillDropZone"
 	grill_drop_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
 	## Leave the left Build column free for station drops.
-	grill_drop_zone.offset_left = 370.0
+	grill_drop_zone.offset_left = 260.0
 	grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	grill_drop_zone.z_index = 8
 	ui_root.add_child(grill_drop_zone)
@@ -4887,30 +5406,19 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if not cheese_held:
 		return
 	## Station click while holding cheese → craft toppings.
-	var station_idx := _station_index_at(get_viewport().get_mouse_position())
+	var station_idx := _station_index_at(screen_pos)
 	if station_idx >= 0:
 		_cancel_cheese_hold()
 		_add_ingredient_to_station(station_idx, "cheese", true)
 		return
-	var target = _grill_patty_under_cursor()
+	## Same forgiving screen + plane pick used for scooping burgers.
+	var target = _pick_patty_at_screen(screen_pos)
 	if target == null:
-		## Ray from the click position in case cursor helpers miss.
-		var from := camera.project_ray_origin(screen_pos)
-		var dir := camera.project_ray_normal(screen_pos)
-		var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
-		q.collide_with_areas = true
-		q.collide_with_bodies = false
-		var hit := get_world_3d().direct_space_state.intersect_ray(q)
-		if not hit.is_empty():
-			var collider = hit.get("collider")
-			for p in grill:
-				if p != null and p == collider:
-					target = p
-					break
-			if target == null and collider == grill_surface_area:
-				var near := _nearest_patty_to(hit.get("position", Vector3.ZERO), 0.25)
-				if near >= 0:
-					target = grill[near]
+		var plane := _grill_plane_from_screen(screen_pos)
+		if plane != Vector3.ZERO:
+			var near := _nearest_patty_to(plane, PATTY_PICK_WORLD)
+			if near >= 0:
+				target = grill[near]
 	if target == null:
 		_flash("Click a patty on the grill (or a station)", Color("FFCC80"))
 		return
@@ -4943,26 +5451,16 @@ func _try_add_cheese_to_grill_patty() -> bool:
 
 
 func _grill_patty_under_cursor():
+	## Match scoop / cheese placement — screen-space pick, not a thin physics ray.
 	if camera == null:
 		return null
 	var mouse := get_viewport().get_mouse_position()
-	var from := camera.project_ray_origin(mouse)
-	var dir := camera.project_ray_normal(mouse)
-	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
-	q.collide_with_areas = true
-	q.collide_with_bodies = false
-	q.collision_mask = 0xFFFFFFFF
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	if hit.is_empty():
-		return null
-	var collider = hit.get("collider")
-	for p in grill:
-		if p != null and p == collider and not p.is_held:
-			return p
-	## Near a hit on the grill surface.
-	if collider == grill_surface_area:
-		var pos: Vector3 = hit.get("position", Vector3.ZERO)
-		var near := _nearest_patty_to(pos, 0.22)
+	var picked = _pick_patty_at_screen(mouse)
+	if picked != null:
+		return picked
+	var plane := _grill_plane_from_screen(mouse)
+	if plane != Vector3.ZERO:
+		var near := _nearest_patty_to(plane, PATTY_PICK_WORLD)
 		if near >= 0:
 			return grill[near]
 	return null
@@ -5268,14 +5766,17 @@ func _refresh_station(index: int) -> void:
 
 
 func _station_layer_scale(layer_count: int) -> float:
-	## ~60% of the oversized stack; still bigger than the original tiny build.
+	## ~60% of the oversized stack, then STATION_BURGER_SCALE (default −25%).
+	var base := 1.86
 	if layer_count <= 4:
-		return 1.86
-	if layer_count <= 6:
-		return 1.5
-	if layer_count <= 8:
-		return 1.2
-	return 0.93
+		base = 1.86
+	elif layer_count <= 6:
+		base = 1.5
+	elif layer_count <= 8:
+		base = 1.2
+	else:
+		base = 0.93
+	return base * STATION_BURGER_SCALE
 
 
 func _layer_width_mul(item: String) -> float:

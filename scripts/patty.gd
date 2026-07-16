@@ -102,8 +102,9 @@ func _ready() -> void:
 
 	var shape := CollisionShape3D.new()
 	var cyl := CylinderShape3D.new()
-	cyl.radius = 0.12
-	cyl.height = 0.12
+	## Fat hit volume — grab / cheese rays forgive near-misses.
+	cyl.radius = 0.17
+	cyl.height = 0.16
 	shape.shape = cyl
 	add_child(shape)
 
