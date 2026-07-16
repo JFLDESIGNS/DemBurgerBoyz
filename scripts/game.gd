@@ -256,6 +256,7 @@ func _ready() -> void:
 	_build_ingredient_legend()
 	_build_ingredient_buttons()
 	_setup_radio()
+	_build_pause_button()
 	_build_graphics_ui()
 	_setup_game_audio()
 	_build_dialogue_ui()
@@ -627,6 +628,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_add_ingredient(ing)
 			return
 	elif event is InputEventMouseButton and event.pressed:
+		if _ui_blocks_world_click(event.position):
+			return
 		if brush_held or oil_held or shaker_held or dragging_patty != null:
 			return
 		if cheese_held:
@@ -688,9 +691,11 @@ func _input(event: InputEvent) -> void:
 			_throw_brush_home()
 			get_viewport().set_input_as_handled()
 			return
-	## Wire brush / oil / shaker: hold LMB to use — pick the closest tool.
+	## Wire brush / oil / shaker: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if _ui_blocks_world_click(event.position):
+				return
 			if cheese_held:
 				## Place handled in unhandled — don't grab tools mid-hold.
 				return
@@ -700,7 +705,12 @@ func _input(event: InputEvent) -> void:
 			if _try_grab_nearest_tool(event.position):
 				get_viewport().set_input_as_handled()
 				return
-	## Cancel cheese hold with Escape.
+	## Cancel cheese hold with Escape / open graphics with F10.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F10:
+			_toggle_graphics_menu()
+			get_viewport().set_input_as_handled()
+			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		if gfx_panel != null and gfx_panel.visible:
 			_set_graphics_menu_open(false)
@@ -770,6 +780,39 @@ func _ingredient_from_hotkey(keycode: Key) -> String:
 		KEY_9, KEY_KP_9:
 			return INGREDIENT_HOTKEYS[8]
 	return ""
+
+
+func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
+	## Buttons / panels on top of the 3D tools — never grab scraper through UI.
+	var hovered := get_viewport().gui_get_hovered_control()
+	var node: Node = hovered
+	while node != null:
+		if node is Control:
+			var c := node as Control
+			if c.mouse_filter == Control.MOUSE_FILTER_STOP:
+				## Full-screen empty roots pass through; interactive chrome does not.
+				var n := String(c.name)
+				if n == "Root" or n == "BottomUI" or n == "StationsRow" or n == "GrillDropZone":
+					pass
+				else:
+					return true
+		node = node.get_parent()
+	## Explicit hit-tests — hovered can miss during the same-frame press.
+	for ctrl in [window_pause_btn, gfx_btn, gfx_panel, radio_column]:
+		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
+			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
+				return true
+	var top_bar: Control = get_node_or_null("UI/Root/TopBar")
+	if top_bar != null and top_bar.get_global_rect().has_point(screen_pos):
+		return true
+	var ingredient: Control = get_node_or_null("UI/Root/BottomUI/IngredientBar")
+	if ingredient == null:
+		ingredient = ingredient_bar
+	if ingredient != null and is_instance_valid(ingredient) and ingredient.get_global_rect().has_point(screen_pos):
+		return true
+	if dialogue_panel != null and dialogue_panel.visible and dialogue_panel.get_global_rect().has_point(screen_pos):
+		return true
+	return false
 
 
 func _station_index_at(screen_pos: Vector2) -> int:
@@ -2325,25 +2368,27 @@ func _build_season_shaker() -> void:
 
 
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
+	if _ui_blocks_world_click(screen_pos):
+		return false
 	## Seasoning: must click the 3D shaker mesh (ray hit only).
 	if not shaker_held and _ray_hits_tool(screen_pos, 32, shaker_area):
 		_begin_shaker_hold()
 		return shaker_held
-	## Other tools — oil is picky; scraper stays forgiving.
+	## Other tools — keep grab tight so radio / GFX clicks don't steal the scraper.
 	var best := ""
-	var best_d := 130.0
+	var best_d := 70.0
 	if brush_root != null and camera != null and not brush_held:
 		var tip := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
-		var bd := screen_pos.distance_to(camera.unproject_position(tip)) * 0.85
+		var bd := screen_pos.distance_to(camera.unproject_position(tip))
 		if bd < best_d:
 			best_d = bd
 			best = "brush"
 	if oil_root != null and camera != null and not oil_held:
 		var od := screen_pos.distance_to(camera.unproject_position(oil_root.global_position + Vector3(0, 0.06, 0)))
-		if od <= 42.0 and od * 1.75 < best_d:
-			best_d = od * 1.75
+		if od <= 36.0 and od < best_d:
+			best_d = od
 			best = "oil"
-	if best == "" or best_d > 95.0:
+	if best == "" or best_d > 55.0:
 		if _ray_hits_tool(screen_pos, 8, brush_area):
 			best = "brush"
 		elif _ray_hits_tool(screen_pos, 16, oil_area):
@@ -3214,6 +3259,8 @@ func _clear_warmer() -> void:
 func _try_grab_brush(screen_pos: Vector2) -> bool:
 	if brush_held or brush_throwing or brush_area == null or camera == null:
 		return false
+	if _ui_blocks_world_click(screen_pos):
+		return false
 	if spatula_patty != null or cheese_held or shaker_held or oil_held:
 		return false
 	var from := camera.project_ray_origin(screen_pos)
@@ -3228,10 +3275,10 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 	if not hit.is_empty() and hit.get("collider") == brush_area:
 		grabbed = true
 	else:
-		## Screen-space proximity fallback — easier when the ray misses the thin mesh.
+		## Tight proximity only — fat radius stole radio / GFX clicks.
 		var tip := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
 		var screen_pt := camera.unproject_position(tip)
-		if screen_pos.distance_to(screen_pt) <= 150.0:
+		if screen_pos.distance_to(screen_pt) <= 48.0:
 			grabbed = true
 	if not grabbed:
 		return false
@@ -3694,37 +3741,65 @@ func _build_radio_ui() -> void:
 	)
 	nav.add_child(slider)
 
-	_build_window_pause_button(radio_column)
-
 
 func _build_graphics_ui() -> void:
 	var ui_root: Control = get_node_or_null("UI/Root")
 	if ui_root == null:
 		return
 
-	if radio_column != null and is_instance_valid(radio_column):
+	## Always-visible button on the money / day bar (top-right).
+	var top_bar: Control = get_node_or_null("UI/Root/TopBar")
+	if top_bar != null and is_instance_valid(top_bar):
 		gfx_btn = Button.new()
 		gfx_btn.name = "GfxBtn"
-		gfx_btn.text = "GRAPHICS"
+		gfx_btn.text = "GFX"
 		gfx_btn.focus_mode = Control.FOCUS_NONE
-		gfx_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		gfx_btn.custom_minimum_size = Vector2(0, 30)
+		gfx_btn.custom_minimum_size = Vector2(56, 28)
 		UiFontsScript.apply_button(gfx_btn, true, 12)
 		var gsb := StyleBoxFlat.new()
-		gsb.bg_color = Color(0.16, 0.22, 0.28)
+		gsb.bg_color = Color(0.12, 0.28, 0.42)
 		gsb.set_corner_radius_all(6)
-		gsb.set_border_width_all(1)
-		gsb.border_color = Color(0.55, 0.75, 0.95, 0.7)
+		gsb.set_border_width_all(2)
+		gsb.border_color = Color(0.55, 0.85, 1.0, 0.95)
+		gsb.content_margin_left = 8
+		gsb.content_margin_right = 8
 		gfx_btn.add_theme_stylebox_override("normal", gsb)
 		var gsbh := gsb.duplicate()
-		gsbh.bg_color = Color(0.22, 0.32, 0.42)
+		gsbh.bg_color = Color(0.18, 0.4, 0.58)
 		gfx_btn.add_theme_stylebox_override("hover", gsbh)
-		gfx_btn.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+		gfx_btn.add_theme_color_override("font_color", Color.WHITE)
 		gfx_btn.pressed.connect(func():
 			_sfx_click()
 			_toggle_graphics_menu()
 		)
-		radio_column.add_child(gfx_btn)
+		top_bar.add_child(gfx_btn)
+		## Sit first so it isn't clipped off the right edge.
+		top_bar.move_child(gfx_btn, 0)
+		top_bar.offset_left = 820.0
+
+	if radio_column != null and is_instance_valid(radio_column):
+		var radio_gfx := Button.new()
+		radio_gfx.name = "GfxBtnRadio"
+		radio_gfx.text = "GRAPHICS"
+		radio_gfx.focus_mode = Control.FOCUS_NONE
+		radio_gfx.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		radio_gfx.custom_minimum_size = Vector2(0, 30)
+		UiFontsScript.apply_button(radio_gfx, true, 12)
+		var rsb := StyleBoxFlat.new()
+		rsb.bg_color = Color(0.16, 0.22, 0.28)
+		rsb.set_corner_radius_all(6)
+		rsb.set_border_width_all(1)
+		rsb.border_color = Color(0.55, 0.75, 0.95, 0.7)
+		radio_gfx.add_theme_stylebox_override("normal", rsb)
+		var rsbh := rsb.duplicate()
+		rsbh.bg_color = Color(0.22, 0.32, 0.42)
+		radio_gfx.add_theme_stylebox_override("hover", rsbh)
+		radio_gfx.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+		radio_gfx.pressed.connect(func():
+			_sfx_click()
+			_toggle_graphics_menu()
+		)
+		radio_column.add_child(radio_gfx)
 
 	gfx_panel = PanelContainer.new()
 	gfx_panel.name = "GraphicsPanel"
@@ -3897,7 +3972,7 @@ func _set_graphics_menu_open(open: bool) -> void:
 		return
 	gfx_panel.visible = open
 	if gfx_btn:
-		gfx_btn.text = "GRAPHICS ▾" if open else "GRAPHICS"
+		gfx_btn.text = "GFX ▾" if open else "GFX"
 
 
 func _on_graphics_slider_changed() -> void:
@@ -4022,19 +4097,25 @@ func _save_graphics_settings(s: Dictionary) -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
-func _build_window_pause_button(parent: Control) -> void:
+func _build_pause_button() -> void:
+	## Top-left pause — closes the service window / customer rush.
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
 	window_pause_btn = Button.new()
 	window_pause_btn.name = "WindowPauseBtn"
-	window_pause_btn.text = "CLOSE WINDOW"
+	window_pause_btn.text = "PAUSE"
 	window_pause_btn.focus_mode = Control.FOCUS_NONE
-	window_pause_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	window_pause_btn.custom_minimum_size = Vector2(0, 34)
-	UiFontsScript.apply_button(window_pause_btn, true, 13)
+	window_pause_btn.z_index = 30
+	window_pause_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	window_pause_btn.position = Vector2(12, 10)
+	window_pause_btn.custom_minimum_size = Vector2(110, 36)
+	UiFontsScript.apply_button(window_pause_btn, true, 14)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.18, 0.28, 0.42)
 	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
 	sb.content_margin_top = 6
 	sb.content_margin_bottom = 6
 	sb.border_color = Color(0.55, 0.75, 1.0, 0.7)
@@ -4048,7 +4129,7 @@ func _build_window_pause_button(parent: Control) -> void:
 		_sfx_click()
 		_toggle_service_window()
 	)
-	parent.add_child(window_pause_btn)
+	ui_root.add_child(window_pause_btn)
 
 
 func _spin_radio_dial(dir: int) -> void:
@@ -4371,9 +4452,8 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var title := Label.new()
 	title.text = "$%d" % customer.order_value
-	UiFontsScript.apply_label(title, true, 22)
+	UiFontsScript.apply_ticket(title, 22)
 	title.add_theme_color_override("font_color", Color(0.15, 0.12, 0.1))
-	title.add_theme_constant_override("outline_size", 0)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(title)
@@ -4397,10 +4477,9 @@ func _create_ticket(customer: Node3D) -> void:
 		parts.append(label_txt)
 	var body := Label.new()
 	body.text = ("\n".join(parts) if parts.size() > 0 else "BURGER")
-	## Clean rounded bold — no outline (outline made ExtraBold look distressed).
-	UiFontsScript.apply_label(body, true, 24)
+	## Solid ExtraBold — no outline, no MSDF holes.
+	UiFontsScript.apply_ticket(body, 22)
 	body.add_theme_color_override("font_color", Color(0.12, 0.1, 0.08))
-	body.add_theme_constant_override("outline_size", 0)
 	body.autowrap_mode = TextServer.AUTOWRAP_OFF
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4952,7 +5031,7 @@ func _close_service_window() -> void:
 		window_shutter.visible = true
 	if window_pause_btn:
 		window_pause_btn.text = "OPEN (%ds)" % int(SERVICE_BREAK_SEC)
-	_flash("Window closed — customers left for a bit", Color("90CAF9"))
+	_flash("Paused — customers left for a bit", Color("90CAF9"))
 
 
 func _open_service_window() -> void:
@@ -4962,8 +5041,8 @@ func _open_service_window() -> void:
 	if window_shutter:
 		window_shutter.visible = false
 	if window_pause_btn:
-		window_pause_btn.text = "CLOSE WINDOW"
-	_flash("Window open — customers on the way", Color("A5D6A7"))
+		window_pause_btn.text = "PAUSE"
+	_flash("Back on — customers on the way", Color("A5D6A7"))
 
 
 func _reset_service_window_open() -> void:
@@ -4972,7 +5051,7 @@ func _reset_service_window_open() -> void:
 	if window_shutter:
 		window_shutter.visible = false
 	if window_pause_btn:
-		window_pause_btn.text = "CLOSE WINDOW"
+		window_pause_btn.text = "PAUSE"
 
 
 func _can_drop_station_patty_on_grill(data: Variant) -> bool:

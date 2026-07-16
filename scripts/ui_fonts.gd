@@ -19,12 +19,27 @@ static var _loaded: bool = false
 static func ensure_loaded() -> void:
 	if _loaded:
 		return
-	title = load(TITLE_PATH) as Font
-	title_semi = load(TITLE_SEMI_PATH) as Font
-	body = load(BODY_PATH) as Font
-	body_heavy = load(BODY_HEAVY_PATH) as Font
-	handwritten = load(HAND_PATH) as Font
+	title = _load_clean(TITLE_PATH)
+	title_semi = _load_clean(TITLE_SEMI_PATH)
+	body = _load_clean(BODY_PATH)
+	body_heavy = _load_clean(BODY_HEAVY_PATH)
+	handwritten = _load_clean(HAND_PATH)
 	_loaded = true
+
+
+## Force raster (non-MSDF) settings — MSDF + bold fills looked full of holes.
+static func _load_clean(path: String) -> Font:
+	var f := load(path)
+	if f is FontFile:
+		var ff := f as FontFile
+		ff.multichannel_signed_distance_field = false
+		ff.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+		ff.hinting = TextServer.HINTING_NONE
+		ff.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+		ff.oversampling = 2.0
+		ff.generate_mipmaps = false
+		return ff
+	return f as Font
 
 
 static func apply_label(label: Label, use_title: bool = false, size: int = -1) -> void:
@@ -36,12 +51,25 @@ static func apply_label(label: Label, use_title: bool = false, size: int = -1) -
 		label.add_theme_font_size_override("font_size", size)
 
 
+## Order tickets — solid Nunito ExtraBold, no outline (Fredoka MSDF looked holey).
+static func apply_ticket(label: Label, size: int = 22) -> void:
+	ensure_loaded()
+	if body_heavy:
+		label.add_theme_font_override("font", body_heavy)
+	elif body:
+		label.add_theme_font_override("font", body)
+	if size > 0:
+		label.add_theme_font_size_override("font_size", size)
+	label.add_theme_constant_override("outline_size", 0)
+
+
 static func apply_handwritten(label: Label, size: int = 22) -> void:
 	ensure_loaded()
 	if handwritten:
 		label.add_theme_font_override("font", handwritten)
 	if size > 0:
 		label.add_theme_font_size_override("font_size", size)
+	label.add_theme_constant_override("outline_size", 0)
 
 
 static func apply_button(btn: Button, use_title: bool = true, size: int = -1) -> void:
@@ -56,12 +84,14 @@ static func apply_button(btn: Button, use_title: bool = true, size: int = -1) ->
 ## Crisp in-world text — modest outline (fonts are non-MSDF for clean edges).
 static func apply_label3d(lab: Label3D, use_title: bool = true, font_size: int = 64, world_height: float = 0.078) -> void:
 	ensure_loaded()
-	var f: Font = title if use_title else body_heavy
+	var f: Font = body_heavy if use_title else body
+	if f == null:
+		f = title if use_title else body_heavy
 	if f:
 		lab.font = f
 	lab.font_size = font_size
 	lab.pixel_size = world_height / float(font_size)
-	lab.outline_size = 4
+	lab.outline_size = 3
 	lab.outline_modulate = Color(0, 0, 0, 1)
 	lab.shaded = false
 	lab.double_sided = true
