@@ -139,13 +139,15 @@ var grill_residue_centers: Array = [] ## Vector3 per slot
 var brush_swipe_travel: Array = [] ## movement accum while over each residue
 var brush_last_pos: Vector3 = Vector3.ZERO
 var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
-const RESIDUE_SWIPE_DIST := 0.14 ## travel needed for one scrape swipe
-const RESIDUE_CHUNK_COUNT := 6 ## Extra flecks on top of the burnt disc.
 var brush_held: bool = false
 var brush_root: Node3D = null
 var brush_area: Area3D = null
 var brush_home: Vector3 = Vector3(-2.58, 1.52, 1.15)
+var brush_home_rot := Vector3(-172.0, -110.0, 8.0)
 var brush_throwing: bool = false
+const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
+const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel
+const RESIDUE_CHUNK_COUNT := 6 ## Extra flecks on top of the burnt disc.
 ## Click cheese → ghost → click a grill patty to place.
 var cheese_held: bool = false
 var cheese_ghost: MeshInstance3D = null
@@ -1317,55 +1319,73 @@ func _spawn_residue_chunks(slot: int, at: Vector3) -> void:
 	grill_residue_chunks[slot] = chunks
 
 
-func _scrape_residue_hit(slot: int) -> void:
-	## One swipe → fade disc + chip flecks. Two → clear.
+func _scrape_residue_hit(slot: int, swipe_dir: Vector2 = Vector2.ZERO) -> void:
+	## Chip flecks in the swipe direction; progressive clean uses continuous scrape.
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	var amt: float = float(grill_residue[slot])
 	if amt <= 0.04:
+		_scrape_finish_clean(slot)
 		return
-	if amt > 0.75:
-		grill_residue[slot] = 0.5
-		var chunks: Array = grill_residue_chunks[slot]
-		var survivors: Array = []
-		for i in chunks.size():
-			var ch = chunks[i]
-			if ch == null or not is_instance_valid(ch):
-				continue
-			## Keep the main disc (index 0); chip most flecks away.
-			if i == 0:
-				survivors.append(ch)
-				continue
-			if randf() < 0.72:
-				var fly: Vector3 = ch.position + Vector3(randf_range(-0.08, 0.08), 0.04, randf_range(-0.08, 0.08))
-				var tw := create_tween()
-				tw.set_parallel(true)
-				tw.tween_property(ch, "position", fly, 0.18)
-				tw.tween_property(ch, "scale", Vector3(0.2, 0.2, 0.2), 0.18)
-				tw.chain().tween_callback(ch.queue_free)
-			else:
-				survivors.append(ch)
-		grill_residue_chunks[slot] = survivors
-		_refresh_residue_visual(slot)
-		_flash("Scraped! One more swipe", Color("FFE082"))
-		if game_audio:
+	var dir := swipe_dir
+	if dir.length_squared() < 0.0001:
+		dir = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0))
+	dir = dir.normalized()
+	var chunks: Array = grill_residue_chunks[slot]
+	var survivors: Array = []
+	var chipped := 0
+	for i in chunks.size():
+		var ch = chunks[i]
+		if ch == null or not is_instance_valid(ch):
+			continue
+		## Keep the main disc; fling flecks away along the swipe.
+		if i == 0:
+			survivors.append(ch)
+			continue
+		if randf() < 0.55 + (1.0 - amt) * 0.35:
+			var kick := Vector3(dir.x, 0.0, dir.y) * (0.07 + randf() * 0.1)
+			kick.y = 0.035 + randf() * 0.05
+			var fly: Vector3 = ch.position + kick
+			var tw := create_tween()
+			tw.set_parallel(true)
+			tw.tween_property(ch, "position", fly, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			tw.tween_property(ch, "scale", Vector3(0.15, 0.15, 0.15), 0.2)
+			tw.tween_property(ch, "rotation_degrees", ch.rotation_degrees + Vector3(randf_range(-80, 80), randf_range(-120, 120), 0), 0.2)
+			tw.chain().tween_callback(ch.queue_free)
+			chipped += 1
+		else:
+			survivors.append(ch)
+	grill_residue_chunks[slot] = survivors
+	_refresh_residue_visual(slot)
+	if game_audio:
+		if game_audio.has_method("play_grease_pop"):
+			game_audio.play_grease_pop()
+		else:
 			game_audio.play_click()
-	else:
-		var chunks2: Array = grill_residue_chunks[slot]
-		for ch2 in chunks2:
-			if ch2 == null or not is_instance_valid(ch2):
-				continue
-			var fly2: Vector3 = ch2.position + Vector3(randf_range(-0.1, 0.1), 0.05, randf_range(-0.1, 0.1))
-			var tw2 := create_tween()
-			tw2.set_parallel(true)
-			tw2.tween_property(ch2, "position", fly2, 0.16)
-			tw2.tween_property(ch2, "scale", Vector3(0.15, 0.15, 0.15), 0.16)
-			tw2.chain().tween_callback(ch2.queue_free)
-		grill_residue_chunks[slot] = []
-		grill_residue[slot] = 0.0
-		_flash("Grill spot clean!", Color("A5D6A7"))
-		if game_audio:
-			game_audio.play_click()
+	if amt <= 0.2 and chipped > 0:
+		_flash("Almost clean — keep swiping", Color("FFE082"))
+
+
+func _scrape_finish_clean(slot: int) -> void:
+	if slot < 0 or slot >= GRILL_SLOTS:
+		return
+	var chunks: Array = grill_residue_chunks[slot] if slot < grill_residue_chunks.size() else []
+	for ch in chunks:
+		if ch == null or not is_instance_valid(ch):
+			continue
+		var fly := ch.position + Vector3(randf_range(-0.1, 0.1), 0.06, randf_range(-0.1, 0.1))
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(ch, "position", fly, 0.16)
+		tw.tween_property(ch, "scale", Vector3(0.12, 0.12, 0.12), 0.16)
+		tw.chain().tween_callback(ch.queue_free)
+	grill_residue_chunks[slot] = []
+	grill_residue[slot] = 0.0
+	if slot < brush_swipe_travel.size():
+		brush_swipe_travel[slot] = 0.0
+	_flash("Grill spot clean!", Color("A5D6A7"))
+	if game_audio:
+		game_audio.play_click()
 
 
 func _build_grill_burner_ui() -> void:
@@ -2358,19 +2378,21 @@ func _refresh_residue_visual(slot: int) -> void:
 		grill_residue[slot] = 0.0
 		_clear_residue_chunks(slot)
 		return
-	## Full = opaque · after one swipe = half-eaten look on remaining bits.
-	var alpha_mul := 1.0 if amt > 0.75 else 0.48
+	## Progressive wear — disc thins and shrinks as you scrape.
+	var alpha_mul := clampf(0.28 + amt * 0.72, 0.28, 1.0)
+	var shrink := clampf(0.55 + amt * 0.45, 0.55, 1.0)
 	for i in chunks.size():
 		var ch = chunks[i]
 		if ch == null or not is_instance_valid(ch):
 			continue
 		ch.visible = true
+		if i == 0:
+			ch.scale = Vector3(shrink, 1.0, shrink)
 		var mat: StandardMaterial3D = ch.material_override
 		if mat == null:
 			continue
 		var c := mat.albedo_color
 		if i == 0:
-			## Disc keeps texture; just thin it out after first scrape.
 			c.a = 0.92 * alpha_mul
 		else:
 			var base_a := 0.9 if c.r < 0.15 else (0.85 if c.r < 0.28 else 0.8)
@@ -2542,7 +2564,8 @@ func _build_wire_brush() -> void:
 	brush_root = Node3D.new()
 	brush_root.name = "PaintScraper"
 	brush_root.position = brush_home
-	brush_root.rotation_degrees = Vector3(5.0, 70.0, -8.0)
+	## Blade faces the grill (not edge-up). Flipped from the old parked pose.
+	brush_root.rotation_degrees = brush_home_rot
 	brush_root.scale = Vector3(1.28, 1.28, 1.28)
 	world.add_child(brush_root)
 
@@ -2554,14 +2577,14 @@ func _build_wire_brush() -> void:
 	brush_area.monitorable = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Extra-fat grab volume.
-	box.size = Vector3(0.45, 0.75, 0.4)
+	## Grab volume around handle + blade.
+	box.size = Vector3(0.28, 0.55, 0.32)
 	shape.shape = box
-	shape.position = Vector3(0, 0.08, 0.02)
+	shape.position = Vector3(0, 0.02, 0.0)
 	brush_area.add_child(shape)
 	brush_root.add_child(brush_area)
 
-	## Wooden handle
+	## Wooden handle — extends away from the blade (+Y).
 	var handle := MeshInstance3D.new()
 	var hmesh := BoxMesh.new()
 	hmesh.size = Vector3(0.028, 0.22, 0.034)
@@ -2595,13 +2618,13 @@ func _build_wire_brush() -> void:
 	neck.material_override = metal
 	brush_root.add_child(neck)
 
-	## Wide flat scraper blade (paint-scraper / putty-knife shape)
+	## Wide flat scraper blade — thin axis = up so the face lays on the steel when tipped.
 	var blade := MeshInstance3D.new()
 	var blade_mesh := BoxMesh.new()
-	blade_mesh.size = Vector3(0.11, 0.0028, 0.085)
+	blade_mesh.size = Vector3(0.12, 0.0028, 0.09)
 	blade.mesh = blade_mesh
-	blade.position = Vector3(0, -0.055, 0.01)
-	blade.rotation_degrees.x = -8.0
+	blade.position = Vector3(0, -0.048, 0.012)
+	blade.rotation_degrees.x = 6.0
 	var blade_mat := StandardMaterial3D.new()
 	blade_mat.albedo_color = Color(0.78, 0.8, 0.84)
 	blade_mat.metallic = 1.0
@@ -2609,13 +2632,13 @@ func _build_wire_brush() -> void:
 	blade.material_override = blade_mat
 	brush_root.add_child(blade)
 
-	## Beveled leading edge — slightly thinner look at the tip
+	## Beveled leading edge (toward +Z when scraping).
 	var tip := MeshInstance3D.new()
 	var tip_mesh := BoxMesh.new()
-	tip_mesh.size = Vector3(0.108, 0.0016, 0.018)
+	tip_mesh.size = Vector3(0.118, 0.0016, 0.02)
 	tip.mesh = tip_mesh
-	tip.position = Vector3(0, -0.058, 0.055)
-	tip.rotation_degrees.x = -18.0
+	tip.position = Vector3(0, -0.051, 0.058)
+	tip.rotation_degrees.x = 14.0
 	tip.material_override = blade_mat
 	brush_root.add_child(tip)
 
@@ -2624,7 +2647,7 @@ func _build_wire_brush() -> void:
 	var smesh := BoxMesh.new()
 	smesh.size = Vector3(0.055, 0.008, 0.03)
 	shoulder.mesh = smesh
-	shoulder.position = Vector3(0, -0.012, -0.01)
+	shoulder.position = Vector3(0, -0.01, -0.012)
 	shoulder.material_override = metal
 	brush_root.add_child(shoulder)
 
@@ -3645,7 +3668,7 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 		brush_area.input_ray_pickable = false
 	if game_audio:
 		game_audio.play_click()
-	_flash("Swipe stuck-on bits — release to put scraper back", Color("B0BEC5"))
+	_flash("Swipe grease off the steel — keep moving to scrub it clean", Color("B0BEC5"))
 	brush_last_pos = brush_root.global_position if brush_root else Vector3.ZERO
 	## Snap toward cursor immediately so it doesn't feel stuck.
 	_snap_brush_toward_cursor(screen_pos, 0.55)
@@ -3657,7 +3680,7 @@ func _snap_brush_toward_cursor(screen_pos: Vector2, amount: float = 1.0) -> void
 		return
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
-	var plane_y := 1.18
+	var plane_y := GRILL_SURFACE_Y + 0.045
 	if absf(dir.y) < 0.001:
 		return
 	var t := (plane_y - from.y) / dir.y
@@ -3666,8 +3689,9 @@ func _snap_brush_toward_cursor(screen_pos: Vector2, amount: float = 1.0) -> void
 	var hit := from + dir * t
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.7, GRILL_CENTER_X + GRILL_WIDTH * 0.7)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.7, GRILL_SURFACE_Z + GRILL_DEPTH * 0.55)
-	hit.y = plane_y + 0.05
+	hit.y = plane_y + 0.02
 	brush_root.global_position = brush_root.global_position.lerp(hit, clampf(amount, 0.0, 1.0))
+	brush_root.rotation_degrees = Vector3(-84.0, 18.0, 180.0)
 
 
 func _update_held_brush(delta: float) -> void:
@@ -3677,7 +3701,7 @@ func _update_held_brush(delta: float) -> void:
 	var from := camera.project_ray_origin(mouse)
 	var dir := camera.project_ray_normal(mouse)
 	## Project onto a plane just above the grill.
-	var plane_y := 1.18
+	var plane_y := GRILL_SURFACE_Y + 0.045
 	if absf(dir.y) < 0.001:
 		return
 	var t := (plane_y - from.y) / dir.y
@@ -3686,27 +3710,32 @@ func _update_held_brush(delta: float) -> void:
 	var hit := from + dir * t
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.7, GRILL_CENTER_X + GRILL_WIDTH * 0.7)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.7, GRILL_SURFACE_Z + GRILL_DEPTH * 0.55)
-	hit.y = plane_y + 0.05
+	hit.y = plane_y + 0.02
 	var prev := brush_root.global_position
 	## Snappier follow so scraping feels responsive.
 	var blend := clampf(delta * 32.0, 0.0, 1.0)
 	brush_root.global_position = brush_root.global_position.lerp(hit, blend)
-	var moved := Vector2(brush_root.global_position.x - prev.x, brush_root.global_position.z - prev.z).length()
-	## Blade on the steel, handle angled back toward the cook (camera).
+	var move_xz := Vector2(
+		brush_root.global_position.x - prev.x,
+		brush_root.global_position.z - prev.z
+	)
+	var moved := move_xz.length()
+	## Blade face-down on the steel, handle tipped back toward the cook.
+	var yaw := 18.0
+	if move_xz.length_squared() > 0.00001:
+		## Nudge yaw toward swipe direction so the blade leads the stroke.
+		yaw = rad_to_deg(atan2(move_xz.x, move_xz.y)) * 0.25 + 18.0
 	var target_rot := Vector3(
-		-78.0 + sin(Time.get_ticks_msec() * 0.018) * 2.5,
-		18.0 + sin(Time.get_ticks_msec() * 0.012) * 3.5,
-		sin(Time.get_ticks_msec() * 0.016) * 3.0
+		-84.0 + sin(Time.get_ticks_msec() * 0.02) * 2.0,
+		yaw + sin(Time.get_ticks_msec() * 0.012) * 2.5,
+		180.0 + sin(Time.get_ticks_msec() * 0.016) * 2.0
 	)
 	brush_root.rotation_degrees = brush_root.rotation_degrees.lerp(target_rot, clampf(delta * 14.0, 0.0, 1.0))
 	## Nudge burgers when the blade shoves into them.
 	if moved > 0.0008:
-		var move_xz := Vector2(
-			brush_root.global_position.x - prev.x,
-			brush_root.global_position.z - prev.z
-		)
 		_brush_nudge_patties(brush_root.global_position, move_xz, moved)
-	## Chip stuck-on bits with discrete swipes (not a continuous shrink).
+	## Continuous scrape — wear residue down while the blade is moving over it.
+	var scraping := false
 	for i in GRILL_SLOTS:
 		if i < brush_swipe_cool.size():
 			brush_swipe_cool[i] = maxf(0.0, float(brush_swipe_cool[i]) - delta)
@@ -3714,15 +3743,27 @@ func _update_held_brush(delta: float) -> void:
 			continue
 		var pad_pos: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else slot_positions[i]
 		var d := Vector2(brush_root.global_position.x - pad_pos.x, brush_root.global_position.z - pad_pos.z).length()
-		if d < 0.38:
+		if d < 0.34 and moved > 0.0005:
+			scraping = true
+			var before := float(grill_residue[i])
+			grill_residue[i] = maxf(0.0, before - moved * RESIDUE_SCRAPE_RATE)
+			_refresh_residue_visual(i)
 			if i < brush_swipe_travel.size():
 				brush_swipe_travel[i] = float(brush_swipe_travel[i]) + moved
+			## Chip flecks as you work the stain down.
 			if float(brush_swipe_cool[i]) <= 0.0 and float(brush_swipe_travel[i]) >= RESIDUE_SWIPE_DIST:
 				brush_swipe_travel[i] = 0.0
-				brush_swipe_cool[i] = 0.28
-				_scrape_residue_hit(i)
+				brush_swipe_cool[i] = 0.12
+				_scrape_residue_hit(i, move_xz)
+			if float(grill_residue[i]) <= 0.04:
+				_scrape_finish_clean(i)
 		elif i < brush_swipe_travel.size():
-			brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - delta * 0.2)
+			brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - delta * 0.25)
+	if game_audio and game_audio.has_method("set_slide_moving"):
+		if scraping:
+			game_audio.set_slide_moving(true, clampf(moved / maxf(delta, 0.001) * 0.25, 0.3, 1.2))
+		else:
+			game_audio.set_slide_moving(false)
 
 
 func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
@@ -3782,10 +3823,12 @@ func _throw_brush_home() -> void:
 	brush_throwing = true
 	if game_audio:
 		game_audio.play_click()
+		if game_audio.has_method("set_slide_moving"):
+			game_audio.set_slide_moving(false)
 	var tw := create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(brush_root, "position", brush_home, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(brush_root, "rotation_degrees", Vector3(5.0, 70.0, -8.0), 0.28)
+	tw.tween_property(brush_root, "rotation_degrees", brush_home_rot, 0.28)
 	tw.chain().tween_callback(func():
 		brush_throwing = false
 		if brush_area:
@@ -3808,7 +3851,7 @@ func _clear_all_residue() -> void:
 		brush_throwing = false
 		if brush_root:
 			brush_root.position = brush_home
-			brush_root.rotation_degrees = Vector3(5.0, 70.0, -8.0)
+			brush_root.rotation_degrees = brush_home_rot
 		if brush_area:
 			brush_area.input_ray_pickable = true
 
@@ -4193,30 +4236,6 @@ func _build_graphics_ui() -> void:
 		## Sit first so it isn't clipped off the right edge.
 		top_bar.move_child(gfx_btn, 0)
 		top_bar.offset_left = 820.0
-
-	if radio_column != null and is_instance_valid(radio_column):
-		var radio_gfx := Button.new()
-		radio_gfx.name = "GfxBtnRadio"
-		radio_gfx.text = "GRAPHICS"
-		radio_gfx.focus_mode = Control.FOCUS_NONE
-		radio_gfx.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		radio_gfx.custom_minimum_size = Vector2(0, 30)
-		UiFontsScript.apply_button(radio_gfx, true, 12)
-		var rsb := StyleBoxFlat.new()
-		rsb.bg_color = Color(0.16, 0.22, 0.28)
-		rsb.set_corner_radius_all(6)
-		rsb.set_border_width_all(1)
-		rsb.border_color = Color(0.55, 0.75, 0.95, 0.7)
-		radio_gfx.add_theme_stylebox_override("normal", rsb)
-		var rsbh := rsb.duplicate()
-		rsbh.bg_color = Color(0.22, 0.32, 0.42)
-		radio_gfx.add_theme_stylebox_override("hover", rsbh)
-		radio_gfx.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
-		radio_gfx.pressed.connect(func():
-			_sfx_click()
-			_toggle_graphics_menu()
-		)
-		radio_column.add_child(radio_gfx)
 
 	gfx_panel = PanelContainer.new()
 	gfx_panel.name = "GraphicsPanel"
@@ -5191,8 +5210,8 @@ func _build_station_ui() -> void:
 		panel.add_child(root_v)
 
 		var title := Label.new()
-		title.text = "BUILD"
-		UiFontsScript.apply_label(title, true, 16)
+		title.text = "drag patty here"
+		UiFontsScript.apply_label(title, true, 14)
 		title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.7))
 		title.add_theme_color_override("font_outline_color", Color.BLACK)
 		title.add_theme_constant_override("outline_size", 4)
@@ -5202,7 +5221,7 @@ func _build_station_ui() -> void:
 
 		## Stage sized for mid-large burger art — tight hitbox around the board.
 		var plate_wrap := Control.new()
-		plate_wrap.custom_minimum_size = Vector2(158, 150)
+		plate_wrap.custom_minimum_size = Vector2(205, 195)
 		plate_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		plate_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
 		plate_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -5226,13 +5245,13 @@ func _build_station_ui() -> void:
 		board.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		board.z_as_relative = true
 		board.z_index = 0
-		## Smaller board under a large burger stack.
+		## Board under the burger stack (~30% larger).
 		board.set_anchors_preset(Control.PRESET_CENTER)
 		board.grow_horizontal = Control.GROW_DIRECTION_BOTH
 		board.grow_vertical = Control.GROW_DIRECTION_BOTH
-		board.custom_minimum_size = Vector2(150, 105)
-		board.size = Vector2(150, 105)
-		board.position = Vector2(-75, -30)
+		board.custom_minimum_size = Vector2(195, 137)
+		board.size = Vector2(195, 137)
+		board.position = Vector2(-98, -39)
 		plate_wrap.add_child(board)
 
 		## Absolute stack of floating ingredient sprites on top of the board.
