@@ -432,6 +432,8 @@ var build_cutting_board: Node3D = null
 var burger_pals_decal: MeshInstance3D = null
 var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
+var start_logo_wrap: Control = null
+var start_logo_tween: Tween = null
 ## Cached order-slip paper (vignette) textures.
 var _ticket_paper_tex: ImageTexture = null
 var _ticket_paper_tex_sel: ImageTexture = null
@@ -847,6 +849,7 @@ func _setup_start_logo() -> void:
 	if title:
 		title.visible = false
 	if start_logo != null and is_instance_valid(start_logo):
+		_start_logo_hover()
 		return
 	if not ResourceLoader.exists(LOGO_TEX_PATH):
 		if title:
@@ -857,21 +860,53 @@ func _setup_start_logo() -> void:
 		if title:
 			title.visible = true
 		return
+	## Extra vertical room so a slow bob doesn't fight the VBox layout.
+	start_logo_wrap = Control.new()
+	start_logo_wrap.name = "BurgerPalsLogoWrap"
+	start_logo_wrap.custom_minimum_size = Vector2(300, 324)
+	start_logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	start_logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(start_logo_wrap)
+	center.move_child(start_logo_wrap, 0)
+
 	start_logo = TextureRect.new()
 	start_logo.name = "BurgerPalsLogo"
 	start_logo.texture = tex
 	start_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	start_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	start_logo.custom_minimum_size = Vector2(300, 300)
-	start_logo.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	start_logo.size = Vector2(300, 300)
+	start_logo.position = Vector2(0, 12)
 	start_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	## Sit where the old title lived (first child of the start column).
-	center.add_child(start_logo)
-	center.move_child(start_logo, 0)
+	start_logo_wrap.add_child(start_logo)
 	center.offset_top = -260.0
 	center.offset_bottom = 260.0
 	center.offset_left = -360.0
 	center.offset_right = 360.0
+	_start_logo_hover()
+
+
+func _start_logo_hover() -> void:
+	## Gentle up/down float on the title screen.
+	if start_logo == null or not is_instance_valid(start_logo):
+		return
+	if start_logo_tween != null and is_instance_valid(start_logo_tween):
+		start_logo_tween.kill()
+	var base_y := 12.0
+	var amp := 14.0
+	start_logo.position.y = base_y
+	start_logo_tween = create_tween()
+	start_logo_tween.set_loops()
+	start_logo_tween.tween_property(start_logo, "position:y", base_y - amp, 2.2) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	start_logo_tween.tween_property(start_logo, "position:y", base_y + amp, 2.2) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func _stop_logo_hover() -> void:
+	if start_logo_tween != null and is_instance_valid(start_logo_tween):
+		start_logo_tween.kill()
+		start_logo_tween = null
 
 
 func _setup_stations_data() -> void:
@@ -905,6 +940,7 @@ func _station_label(_index: int) -> String:
 
 
 func _start_game() -> void:
+	_stop_logo_hover()
 	start_overlay.visible = false
 	playing = true
 	money = 0
