@@ -700,6 +700,7 @@ var _mp_cursor_layer: Control = null
 var _mp_next_customer_net_id: int = 1
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
+var _mp_econ_accum: float = 0.0
 var multiplayer_btn: Button = null
 
 
@@ -1095,9 +1096,11 @@ func _process(delta: float) -> void:
 		_on_gui_drag_ended(get_viewport().gui_is_drag_successful())
 	_was_gui_dragging = gui_dragging
 
-	day_time -= delta
-	if day_time < 0.0:
-		day_time = 0.0
+	## Shared shift clock — host owns it in co-op (synced via economy packets).
+	if not mp_enabled or NetManager.is_host():
+		day_time -= delta
+		if day_time < 0.0:
+			day_time = 0.0
 	var day_progress := 1.0 - clampf(day_time / DAY_LENGTH, 0.0, 1.0)
 	var day_boost := clampf((day - 1) * 0.22, 0.0, 0.85)
 	difficulty = minf(1.0, day_progress * (0.38 if day == 1 else 0.55) + day_boost)
@@ -1147,6 +1150,11 @@ func _process(delta: float) -> void:
 		if _mp_cat_accum >= 0.1:
 			_mp_cat_accum = 0.0
 			_mp_send_cat_sync()
+	if mp_enabled and NetManager.is_host():
+		_mp_econ_accum += delta
+		if _mp_econ_accum >= 0.45:
+			_mp_econ_accum = 0.0
+			_mp_broadcast_economy()
 
 
 func _update_station_freshness(delta: float) -> void:
@@ -2741,6 +2749,9 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 		var st_i := int(data.get("station", -1))
 		var from_i := int(data.get("from", -1))
 		_pending_station_patty_drag = null
+		if mp_enabled and not _mp_applying:
+			mp_trash_station_patty.rpc(st_i, from_i)
+			return
 		var patty = _extract_station_patty(st_i, from_i)
 		if patty != null and is_instance_valid(patty):
 			patty.queue_free()
@@ -2753,6 +2764,9 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 		var from2 := int(data.get("from", -1))
 		_pending_reorder_drag = null
 		if st2 < 0 or st2 >= STATION_COUNT:
+			return
+		if mp_enabled and not _mp_applying:
+			mp_trash_build_layer.rpc(st2, from2)
 			return
 		_trash_station_layer(st2, from2)
 		return
@@ -8307,6 +8321,9 @@ func _spend_ingredient(id: String) -> bool:
 func _update_supply_freshness(delta: float) -> void:
 	if not playing:
 		return
+	## Guest stock/freshness comes from host economy sync.
+	if mp_enabled and not NetManager.is_host():
+		return
 	var spoiled := false
 	for id in SUPPLY_IDS:
 		var stock := int(supply_stock.get(id, 0))
@@ -8326,9 +8343,20 @@ func _update_supply_freshness(delta: float) -> void:
 			supply_fresh[id] = fresh
 	if spoiled:
 		_refresh_phone_ui()
+		if mp_enabled and NetManager.is_host():
+			_mp_broadcast_economy()
 
 
 func _buy_supply(id: String) -> void:
+	if not playing:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_buy_supply.rpc(id)
+		return
+	_buy_supply_local(id)
+
+
+func _buy_supply_local(id: String) -> void:
 	if not playing:
 		return
 	var pack := SUPPLY_BUY_PACK
@@ -8345,6 +8373,8 @@ func _buy_supply(id: String) -> void:
 	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 	_flash("Restocked %s (+%d)" % [label, pack], Color("A5D6A7"))
 	_sfx_click()
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
 
 
 func _social_rating_display() -> float:
@@ -10413,6 +10443,33 @@ func _close_dialogue_if_customer(customer: Node3D) -> void:
 
 
 func _on_customer_left(customer: Node3D, angry: bool) -> void:
+	## Angry walk-offs are host-authored so both cooks share the same -$2 / combo reset.
+	if mp_enabled and not _mp_applying and angry:
+		if not NetManager.is_host():
+			return
+		var nid := _customer_net_id(customer)
+		if nid < 0:
+			_customer_leave_apply(customer, true)
+			_mp_broadcast_economy()
+			return
+		mp_customer_leave.rpc(nid, true)
+		return
+	_customer_leave_apply(customer, angry)
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
+
+
+func _customer_net_id(customer: Node3D) -> int:
+	if customer == null or not is_instance_valid(customer):
+		return -1
+	if customer.has_meta("mp_net_id"):
+		return int(customer.get_meta("mp_net_id"))
+	return int(_mp_customer_net_ids.get(customer.get_instance_id(), -1))
+
+
+func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
 	_close_dialogue_if_customer(customer)
 	_remove_ticket(customer)
 	customers.erase(customer)
@@ -10420,7 +10477,7 @@ func _on_customer_left(customer: Node3D, angry: bool) -> void:
 		selected_customer = customers[0] if customers.size() > 0 else null
 	_highlight_tickets()
 	_reposition_customers()
-	if customer != null and bool(customer.get("is_terrorist")):
+	if bool(customer.get("is_terrorist")):
 		_check_terrorist_wave_end()
 		return
 	if angry:
@@ -10610,6 +10667,18 @@ func _ticket_paper_texture(selected: bool) -> ImageTexture:
 
 
 func _select_ticket(customer: Node3D) -> void:
+	if not is_instance_valid(customer) or not customer.is_waiting:
+		_flash("That customer is gone", Color("EF5350"))
+		return
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(customer)
+		if nid >= 0:
+			mp_select_customer.rpc(nid)
+			return
+	_select_ticket_local(customer)
+
+
+func _select_ticket_local(customer: Node3D) -> void:
 	if not is_instance_valid(customer) or not customer.is_waiting:
 		_flash("That customer is gone", Color("EF5350"))
 		return
@@ -12492,6 +12561,22 @@ func _trash_selected_or_top_layer(index: int) -> void:
 	var remove_i: int = int(st.get("selected_layer", -1))
 	if remove_i < 0 or remove_i >= items.size():
 		remove_i = items.size() - 1
+	if mp_enabled and not _mp_applying:
+		mp_trash_build_layer.rpc(index, remove_i)
+		return
+	_trash_build_layer_local(index, remove_i)
+
+
+func _trash_build_layer_local(index: int, remove_i: int) -> void:
+	if index < 0 or index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[index]
+	var items: Array = st["items"]
+	if items.is_empty():
+		_flash("%s is empty" % _station_label(index), Color("B0BEC5"))
+		return
+	if remove_i < 0 or remove_i >= items.size():
+		remove_i = items.size() - 1
 	var removed: String = str(items[remove_i])
 	## Bottom bun stays under the meat — trash other layers only.
 	if removed == "bun_bottom" and (items.count("patty") > 0 or st["patties"].size() > 0):
@@ -13349,6 +13434,8 @@ func _complete_serve(station_index: int) -> void:
 	))
 	_clear_station(station_index)
 	_update_hud()
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
 
 
 func _serve_reject_hint(order: Array, station_index: int) -> void:
@@ -13489,6 +13576,8 @@ func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> v
 	_update_hud()
 	if note != "":
 		_flash(note, col)
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
 
 
 func _update_hud() -> void:
@@ -14157,6 +14246,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 		window_cat.set("mp_puppet", not NetManager.is_host())
 		if NetManager.is_host():
 			_mp_send_cat_sync()
+			call_deferred("_mp_broadcast_economy")
 
 
 func _mp_update_cursors(delta: float) -> void:
@@ -14465,6 +14555,8 @@ func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
 		active_station = station_index
 	_on_serve_local()
 	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
 
 
 ## any_peer (host-only callers): authority can drop on relay peers.
@@ -14680,3 +14772,120 @@ func mp_steal_held(net_id: int) -> void:
 		_refresh_spatula_ui()
 		_flash("Yoink! Stole the scoop", Color("FF8A80"))
 	_mp_applying = false
+
+
+func _mp_broadcast_economy() -> void:
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	var stock_ids: Array = []
+	var stock_vals: Array = []
+	var fresh_vals: Array = []
+	for id in SUPPLY_IDS:
+		stock_ids.append(str(id))
+		stock_vals.append(int(supply_stock.get(id, 0)))
+		fresh_vals.append(float(supply_fresh.get(id, 0.0)))
+	mp_sync_economy.rpc(
+		money,
+		combo,
+		day_time,
+		day,
+		total_served,
+		perfect_serves,
+		social_rating_sum,
+		social_review_count,
+		stock_ids,
+		stock_vals,
+		fresh_vals
+	)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_sync_economy(
+	m: float,
+	cmb: int,
+	dtime: float,
+	d: int,
+	served: int,
+	perfect: int,
+	rating_sum: float,
+	rating_count: int,
+	stock_ids: Array,
+	stock_vals: Array,
+	fresh_vals: Array
+) -> void:
+	## Guest applies host world economy as absolute truth.
+	if NetManager.is_host():
+		return
+	money = m
+	combo = cmb
+	day_time = dtime
+	day = d
+	total_served = served
+	perfect_serves = perfect
+	social_rating_sum = rating_sum
+	social_review_count = rating_count
+	for i in stock_ids.size():
+		var id := str(stock_ids[i])
+		var stock := int(stock_vals[i]) if i < stock_vals.size() else 0
+		var fresh := float(fresh_vals[i]) if i < fresh_vals.size() else 0.0
+		supply_stock[id] = stock
+		supply_fresh[id] = fresh
+	_update_hud()
+	_refresh_phone_ui()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_buy_supply(id: String) -> void:
+	_mp_applying = true
+	_buy_supply_local(id)
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_customer_leave(net_id: int, angry: bool) -> void:
+	_mp_applying = true
+	var c = _customer_by_net_id(net_id)
+	if c != null and is_instance_valid(c):
+		_customer_leave_apply(c, angry)
+	elif angry:
+		combo = 0
+		_record_social_review(1.0)
+		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_select_customer(net_id: int) -> void:
+	var c = _customer_by_net_id(net_id)
+	if c == null:
+		return
+	_mp_applying = true
+	_select_ticket_local(c)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_trash_build_layer(station_index: int, layer_index: int) -> void:
+	_mp_applying = true
+	_trash_build_layer_local(station_index, layer_index)
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_trash_station_patty(station_index: int, from_index: int) -> void:
+	_mp_applying = true
+	var patty = _extract_station_patty(station_index, from_index)
+	if patty != null and is_instance_valid(patty):
+		patty.queue_free()
+		if game_audio and game_audio.has_method("play_trash"):
+			game_audio.play_trash()
+		_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
