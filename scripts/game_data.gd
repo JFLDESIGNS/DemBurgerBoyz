@@ -72,6 +72,15 @@ static func sort_toppings(ids: Array) -> Array:
 
 static func generate_order(difficulty: float = 0.0) -> Array[String]:
 	var order: Array[String] = ["bun_bottom", "patty"]
+	## Once in a while: plain patty or ketchup only — no other toppings.
+	const MINIMAL_CHANCE := 0.12
+	if randf() < MINIMAL_CHANCE:
+		if randf() < 0.5:
+			order.append("bun_top")
+			return order
+		order.append("ketchup")
+		order.append("bun_top")
+		return order
 	## Some orders ask for a double patty.
 	if difficulty >= 0.15 and randf() < 0.2 + difficulty * 0.35:
 		order.append("patty")
@@ -99,6 +108,14 @@ static func is_everything_order(order: Array) -> bool:
 		if not order.has(t):
 			return false
 	return true
+
+
+static func is_plain_patty_order(order: Array) -> bool:
+	## Bottom bun + one patty + top bun — nothing else.
+	return order.size() == 3 \
+		and order[0] == "bun_bottom" \
+		and order[1] == "patty" \
+		and order[2] == "bun_top"
 
 
 static func order_value(order: Array) -> int:

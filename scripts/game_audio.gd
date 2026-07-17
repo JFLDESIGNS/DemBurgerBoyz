@@ -301,7 +301,7 @@ func set_shaker_rattle(active: bool) -> void:
 		return
 	if active:
 		_shake_on = true
-		_shake_player.volume_db = -13.5
+		_shake_player.volume_db = -27.0
 		if not _shake_player.playing:
 			_shake_player.play()
 	else:
@@ -312,19 +312,19 @@ func set_shaker_rattle(active: bool) -> void:
 
 
 func _next_shaker_rattle_sample() -> float:
-	## ~9–12 Hz shake bursts with granular sprinkle noise.
+	## ~4–6 Hz shake bursts with granular sprinkle noise.
 	_shake_tick += 1.0 / float(MIX_RATE)
-	var shake_hz := 10.0 + sin(_shake_tick * 4.2) * 1.8
+	var shake_hz := 5.2 + sin(_shake_tick * 2.1) * 0.9
 	_shake_phase += shake_hz / float(MIX_RATE)
 	var pulse := maxf(0.0, sin(_shake_phase * TAU))
-	pulse = pow(pulse, 0.28)
+	pulse = pow(pulse, 0.45)
 	var white := randf() * 2.0 - 1.0
-	_shake_lp = _shake_lp * 0.58 + white * 0.42
-	var grain := (white - _shake_lp) * 0.62 + _shake_lp * 0.18
+	_shake_lp = _shake_lp * 0.72 + white * 0.28
+	var grain := (white - _shake_lp) * 0.35 + _shake_lp * 0.08
 	var tap := 0.0
-	if pulse > 0.88 and randf() < 0.07:
-		tap = (randf() * 2.0 - 1.0) * 0.35
-	return clampf((grain * 0.5 + tap) * pulse, -1.0, 1.0)
+	if pulse > 0.9 and randf() < 0.025:
+		tap = (randf() * 2.0 - 1.0) * 0.12
+	return clampf((grain * 0.22 + tap) * pulse, -1.0, 1.0)
 
 
 func _next_ext_spray_sample() -> float:
@@ -435,8 +435,13 @@ func play_scoop() -> void:
 
 
 func play_chaching() -> void:
-	## Soft service bell on successful serve — quiet and pleasant.
-	_play_cached("serve_bell", _make_serve_bell, 0.0, 0.38)
+	## Soft service bell fallback.
+	play_order_up()
+
+
+func play_order_up() -> void:
+	## Classic kitchen “order up!” — bright double service-bell ding.
+	_play_cached("order_up_bell", _make_serve_bell, 0.0, 0.72)
 
 
 func play_grade_tune(label: String) -> void:
@@ -825,29 +830,34 @@ func _make_scoop() -> AudioStreamWAV:
 
 
 func _make_serve_bell() -> AudioStreamWAV:
-	## Gentle desk-bell chime — soft strike, warm partials, long quiet decay.
-	var n := int(MIX_RATE * 1.15)
+	## Kitchen service bell — bright “order up!” ding-ding.
+	var n := int(MIX_RATE * 1.35)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
-	## ~E5 fundamental with inharmonic-ish bell overtones.
-	var f0 := 659.25
+	## Classic desk bell ~G5 / D6 sparkle.
+	var f0 := 784.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var attack := clampf(t / 0.008, 0.0, 1.0)
-		var env := attack * exp(-t * 2.4)
-		var wave := (
-			sin(t * f0 * TAU) * 0.55
-			+ sin(t * f0 * 2.0 * TAU) * 0.18 * exp(-t * 4.0)
-			+ sin(t * f0 * 2.76 * TAU) * 0.22 * exp(-t * 3.2)
-			+ sin(t * f0 * 5.4 * TAU) * 0.08 * exp(-t * 6.5)
-		)
-		## Tiny second partial ping for a soft double-bell feel.
-		if t >= 0.09:
-			var u := t - 0.09
-			var env2 := exp(-u * 3.0) * 0.35
-			wave += sin(u * f0 * 1.5 * TAU) * env2
-			wave += sin(u * f0 * 3.0 * TAU) * env2 * 0.25
-		_write_s16(pcm, i, int(clampf(wave * env, -1.0, 1.0) * 12000.0))
+		var wave := 0.0
+		## First strike.
+		var a0 := clampf(t / 0.004, 0.0, 1.0) * exp(-t * 3.1)
+		wave += (
+			sin(t * f0 * TAU) * 0.62
+			+ sin(t * f0 * 2.0 * TAU) * 0.22 * exp(-t * 5.0)
+			+ sin(t * f0 * 2.76 * TAU) * 0.28 * exp(-t * 3.8)
+			+ sin(t * f0 * 5.15 * TAU) * 0.12 * exp(-t * 7.0)
+		) * a0
+		## Second “order up” ding.
+		if t >= 0.16:
+			var u := t - 0.16
+			var a1 := clampf(u / 0.004, 0.0, 1.0) * exp(-u * 3.0) * 0.92
+			var f1 := f0 * 1.5
+			wave += (
+				sin(u * f1 * TAU) * 0.58
+				+ sin(u * f1 * 2.0 * TAU) * 0.2 * exp(-u * 5.0)
+				+ sin(u * f1 * 2.76 * TAU) * 0.24 * exp(-u * 3.6)
+			) * a1
+		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 16000.0))
 	return _wav_from_pcm(pcm, false)
 
 

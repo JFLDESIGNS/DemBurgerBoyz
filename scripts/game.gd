@@ -7,7 +7,7 @@ const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
-const STATION_INGREDIENT_SCALE := 0.6
+const STATION_INGREDIENT_SCALE := 0.42 ## 30% smaller than prior 0.6
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -200,6 +200,7 @@ var heat_warp_enabled: bool = true
 var grill_drop_zone: Control = null
 var build_drop_zone: Control = null ## Tall left catcher while holding a scooped patty
 var build_debug_root: Control = null
+var build_area_debug_outline: bool = false
 var _pending_station_patty_drag = null ## Dictionary while dragging a Build patty
 var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill burger
 var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
@@ -224,6 +225,7 @@ var _strip_gesture_added: bool = false ## Already applied a topping this LMB ges
 const STRIP_SWIPE_THRESH_PX := 28.0
 var _auto_serving: bool = false
 var _serve_fly_busy: bool = false
+var _ingredient_fly_busy: bool = false
 var grill_ignore_pad_until: float = 0.0
 var grill_residue: Array = [] ## 0 clean · 0.5 half-scraped · 1.0 full stuck-on
 var grill_residue_meshes: Array = [] ## legacy single mesh slot (unused visually)
@@ -392,6 +394,7 @@ var radio_dial_mesh: MeshInstance3D = null
 var radio_light_mat: StandardMaterial3D = null
 var radio_column: VBoxContainer = null
 var phone_column: Control = null
+var prep_ui_overlay: TextureRect = null
 var phone_ui_anchor: Node3D = null
 var phone_rating_stars: Label = null
 var phone_rating_value: Label = null
@@ -419,6 +422,7 @@ var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
+var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitboxes)
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -462,29 +466,52 @@ const PREP_INGREDIENTS_SIZE := Vector2(1.17, 0.36) ## 50% larger wire-basket art
 const PREP_INGREDIENTS_POS := Vector3(0.74, 1.714, 0.46) ## nudged right on counter
 const PREP_INGREDIENTS_ROT := Vector3(-74.0, 168.0, 0.0)
 const PREP_INGREDIENTS_ALBEDO := Color(0.616, 0.616, 0.616, 1.0) ## 30% darker than prior 0.88 tint
-## Build-station cutting board — on the counter just left of the grill steel.
-const CUTTING_BOARD_SIZE := Vector2(0.56, 0.42)
-const CUTTING_BOARD_POS := Vector3(1.14, 1.162, 0.34)
-const CUTTING_BOARD_ROT := Vector3(-72.0, 168.0, 0.0)
-const CUTTING_BOARD_ALBEDO := Color(0.96, 0.92, 0.86, 1.0)
-const CUTTING_BOARD_SLAB := Vector3(0.46, 0.032, 0.34)
+## Build-station cutting board — flat on the counter, left of the grill steel (+X = screen-left).
+const CUTTING_BOARD_SIZE := Vector3(0.48, 0.038, 0.44)
+const CUTTING_BOARD_GAP := 0.06
+const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from the window)
+const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
+const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
-const PREP_UI_BEHIND_X := -80.0 ## prep art offset inside build zone (text stays put)
-const PREP_UI_BEHIND_Y := -165.0 ## negative Y = up on screen (position-based)
-const BUILD_STATIONS_ROW_LEFT := -210.0
-const BUILD_STATIONS_ROW_RIGHT := 175.0
-const BUILD_PANEL_SIZE := Vector2(300, 210)
-const BUILD_ZONE_SIZE := Vector2(230, 195)
-const BUILD_UI_LEFT := 0.0 ## build column flush left inside panel
+const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
+const PREP_UI_BEHIND_Y := -165.0 ## legacy offset when prep lived inside BuildZone
+const BUILD_STATIONS_ROW_LEFT := 80.0
+const BUILD_STATIONS_ROW_RIGHT := 550.0
+const BUILD_PANEL_SIZE := Vector2(450, 320)
+const BUILD_ZONE_SIZE := Vector2(250, 280)
+const BUILD_UI_LEFT := 130.0 ## bun stack — right of prep backdrop so the burger stays on screen
+const BUILD_PLATE_SHIFT_X := 24.0 ## nudge floating stack toward the grill
 const BUILD_UI_LIFT_BOTTOM := 120.0 ## counter height — not tucked under the grill
+const PREP_UI_PANEL_X := BUILD_UI_LEFT + PREP_UI_BEHIND_X ## panel-left — independent of build zone
+const PREP_UI_PANEL_BOTTOM := BUILD_UI_LIFT_BOTTOM + BUILD_ZONE_SIZE.y - (PREP_UI_BEHIND_Y + PREP_UI_SIZE.y)
+const PREP_UI_PANEL_TOP := BUILD_PANEL_SIZE.y - PREP_UI_PANEL_BOTTOM - PREP_UI_SIZE.y
+const BUILD_ZONE_PANEL_TOP := BUILD_PANEL_SIZE.y - BUILD_UI_LIFT_BOTTOM - BUILD_ZONE_SIZE.y
 const BUILD_HIT_PAD_LEFT := 10.0
 const BUILD_HIT_PAD_TOP := 28.0 ## was 180 — only a little above the plate
 const BUILD_HIT_PAD_RIGHT := 10.0
 const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
-## Red outlines on Build UI hitboxes — toggle off when layout is tuned.
-const BUILD_AREA_DEBUG_OUTLINE := true
+## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
+const BUILD_ZONE_GFX_KEYS: Array[String] = [
+	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
+	"bz_panel_w", "bz_panel_h", "bz_zone_w", "bz_zone_h",
+	"bz_zone_left", "bz_zone_top", "bz_lift_bottom",
+	"bz_plate_w", "bz_plate_h", "bz_plate_shift", "bz_plate_y", "bz_plate_pad",
+	"bz_title_y", "bz_title_x",
+	"bz_hit_l", "bz_hit_t", "bz_hit_r", "bz_hit_b", "bz_hit_shift_x",
+	"bz_drop_left", "bz_drop_right", "bz_drop_top", "bz_drop_bottom",
+	"bz_grill_pad", "bz_lim_top", "bz_lim_bot",
+	"bz_grill_drop_left", "bz_grill_drop_top", "bz_grill_drop_bottom",
+]
+const PREP_GFX_KEYS: Array[String] = [
+	"prep_ui_x", "prep_ui_top", "prep_ui_y", "prep_ui_w", "prep_ui_h", "prep_img_y",
+]
+const STRIP_GFX_KEYS: Array[String] = [
+	"strip_icon_w", "strip_icon_h", "strip_icon_x", "strip_icon_y",
+	"strip_bar_left", "strip_bar_top", "strip_bar_right", "strip_bar_bottom",
+]
+const BUILD_GFX_KEYS: Array[String] = BUILD_ZONE_GFX_KEYS + PREP_GFX_KEYS + STRIP_GFX_KEYS
 const BUILD_DEBUG_OUTLINE_COLOR := Color(1.0, 0.1, 0.1, 0.95)
 const GRILL_POWER_ROW_BOTTOM := 112.0 ## px above screen bottom — centered on grill
 const GRILL_POWER_ROW_WIDTH := 268.0 ## burner + gap + garbage button widths
@@ -500,17 +527,19 @@ const RADIO_WALL_X := -2.84
 const RADIO_WORLD_NUDGE := Vector3(0.07, 0.0, 0.0)
 const RADIO_UI_ANCHOR := Vector2(0.54, 0.38) ## point on 2D panel the 3D model tracks
 const RADIO_TARGET_SIZE := 0.52
-const RADIO_UI_PANEL_SIZE := Vector2(210.0, 138.0)
+const RADIO_UI_PANEL_SIZE := Vector2(200.0, 138.0) ## match phone width
 const RADIO_UI_TOP := 52.0
 const RADIO_UI_RIGHT := 10.0
-const RADIO_UI_LEFT := 220.0
+const RADIO_UI_LEFT := 210.0 ## panel width + right margin
 ## Android phone HUD — floats under the truck radio.
 const PHONE_UI_BASE_H := 278.0
-const PHONE_UI_SIZE := Vector2(152.0, PHONE_UI_BASE_H * 1.15 * 1.05) ## +15% then +5% taller
+const PHONE_UI_SIZE := Vector2(200.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10) ## +15% +5% +10% +10% taller
 const PHONE_BEZEL_H := 9.0 ## small black chin / forehead inside the frame
+const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 16.0 ## logo band inside the bezel
+const PHONE_LOGO_WRAP_H := 86.0 ## ~2× old logo band height (was 52)
+const PHONE_LOGO_DISPLAY_H := 80.0
 const PHONE_SCROLL_DRAG_THRESH := 8.0
 const PHONE_BELOW_RADIO_GAP := 10.0
-const PHONE_FLOAT_AMP := 3.5
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -576,6 +605,55 @@ const GFX_DEFAULTS := {
 	"strip_angle": 76.0,
 	"strip_size": 0.55,
 	"strip_width": 0.99,
+	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
+	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
+	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
+	"bz_row_top": -560.0,
+	"bz_row_bottom": -108.0,
+	"bz_panel_w": BUILD_PANEL_SIZE.x,
+	"bz_panel_h": BUILD_PANEL_SIZE.y,
+	"bz_zone_w": BUILD_ZONE_SIZE.x,
+	"bz_zone_h": BUILD_ZONE_SIZE.y,
+	"bz_zone_left": 70.0,
+	"bz_zone_top": -25.0,
+	"bz_lift_bottom": BUILD_UI_LIFT_BOTTOM,
+	"bz_plate_w": 230.0,
+	"bz_plate_h": 210.0,
+	"bz_plate_shift": BUILD_PLATE_SHIFT_X,
+	"bz_plate_y": 0.0,
+	"bz_plate_pad": 12.0,
+	"bz_title_y": -2.0,
+	"bz_title_x": -35.0,
+	"bz_hit_l": BUILD_HIT_PAD_LEFT,
+	"bz_hit_t": BUILD_HIT_PAD_TOP,
+	"bz_hit_r": BUILD_HIT_PAD_RIGHT,
+	"bz_hit_b": BUILD_HIT_PAD_BOTTOM,
+	"bz_hit_shift_x": -20.0,
+	"bz_drop_left": 0.0,
+	"bz_drop_right": BUILD_DROP_MIN_PX,
+	"bz_drop_top": 220.0,
+	"bz_drop_bottom": -110.0,
+	"bz_grill_pad": BUILD_DROP_GRILL_PAD_PX,
+	"bz_lim_top": 280.0,
+	"bz_lim_bot": 120.0,
+	"bz_grill_drop_left": 140.0,
+	"bz_grill_drop_top": 48.0,
+	"bz_grill_drop_bottom": -110.0,
+	"prep_ui_x": 34.0,
+	"prep_ui_top": 343.0,
+	"prep_ui_y": 153.0,
+	"prep_ui_w": 321.6,
+	"prep_ui_h": 215.2,
+	"prep_img_y": -71.0,
+	"strip_icon_w": 64.0,
+	"strip_icon_h": 44.0,
+	"strip_icon_x": 0.0,
+	"strip_icon_y": 0.0,
+	"strip_bar_left": 8.0,
+	"strip_bar_top": -100.0,
+	"strip_bar_right": -8.0,
+	"strip_bar_bottom": -6.0,
+	"bz_debug_outline": false,
 }
 ## Ingredient strip notes — tracks unique presses toward a full-scale jingle.
 var _melody_pressed: Dictionary = {} ## id -> true
@@ -626,6 +704,7 @@ func _ready() -> void:
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
+	_build_prep_ui_overlay()
 	_build_grill_drop_zone()
 	_build_build_drop_zone()
 	_build_window_pause_ui()
@@ -634,11 +713,9 @@ func _ready() -> void:
 	_setup_radio()
 	if vp:
 		vp.size_changed.connect(_layout_phone_ui_overlay)
-		if BUILD_AREA_DEBUG_OUTLINE:
-			vp.size_changed.connect(_refresh_build_debug_outlines)
+		vp.size_changed.connect(_apply_prep_ui_overlay_layout)
+		vp.size_changed.connect(_refresh_build_debug_outlines)
 	call_deferred("_layout_phone_ui_overlay")
-	if BUILD_AREA_DEBUG_OUTLINE:
-		call_deferred("_refresh_build_debug_outlines")
 	_build_pause_button()
 	_build_master_volume_ui()
 	_build_graphics_ui()
@@ -671,6 +748,7 @@ func _ready() -> void:
 	ingredient_bar.mouse_filter = Control.MOUSE_FILTER_STOP
 	## Pass-through so left grill clicks aren't blocked by empty Build chrome.
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stations_row.z_index = 10
 	ingredient_legend.mouse_filter = Control.MOUSE_FILTER_STOP
 	ingredient_legend.z_index = 30 ## above GrillDropZone while holding cheese
 	start_btn.pressed.connect(func():
@@ -705,8 +783,8 @@ func _setup_glove_cursor() -> void:
 
 func _style_static_labels() -> void:
 	UiFontsScript.apply_label(hud_money, true, 30)
-	UiFontsScript.apply_label(hud_combo, true, 22)
-	UiFontsScript.apply_label(hud_day, true, 22)
+	UiFontsScript.apply_label(hud_combo, true, 11)
+	UiFontsScript.apply_label(hud_day, true, 11)
 	UiFontsScript.apply_label(hud_hint, false, 13)
 	UiFontsScript.apply_label(flash_label, true, 30)
 	## Thin outline — thick outlines on MSDF fonts looked chewed-up.
@@ -902,7 +980,6 @@ func _restart() -> void:
 
 
 func _process(delta: float) -> void:
-	_layout_phone_ui_overlay()
 	if not playing:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
@@ -1397,7 +1474,7 @@ func _strip_swipe_add(id: String) -> void:
 		return
 	_pulse_ingredient_feedback(id)
 	## Swipe cheese goes straight onto Build (no ghost hold interrupting the drag).
-	_add_ingredient_to_station(active_station, id, true)
+	_add_ingredient_to_station(active_station, id, false)
 	_strip_gesture_added = true
 
 
@@ -1460,8 +1537,8 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 				## Full-screen empty roots pass through; interactive chrome does not.
 				var n := String(c.name)
 				if n == "Root" or n == "BottomUI" or n == "StationsRow" or n == "GrillDropZone" \
-						or n == "WindowTicketRail" or n == "TicketBox" or n == "PrepIngredients" \
-						or n == "BuildTitle" or n == "PrepWrap" or n == "GrillPickBlocker" \
+						or n == "WindowTicketRail" or n == "TicketBox" or n == "PrepUiOverlay" \
+						or n == "BuildTitle" or n == "GrillPickBlocker" \
 						or n == "BuildColumn" or n == "BuildZone" or n == "BuildDebugRoot" \
 						or n.begins_with("DebugOutline"):
 					pass
@@ -1500,6 +1577,18 @@ func _build_plate_index_at(screen_pos: Vector2) -> int:
 	return -1
 
 
+func _init_build_zone_cfg() -> void:
+	if not _build_zone_cfg.is_empty():
+		return
+	for key in BUILD_GFX_KEYS:
+		_build_zone_cfg[key] = float(GFX_DEFAULTS.get(key, 0.0))
+
+
+func _bz(key: String) -> float:
+	_init_build_zone_cfg()
+	return float(_build_zone_cfg.get(key, GFX_DEFAULTS.get(key, 0.0)))
+
+
 func _build_station_hit_rect(panel: Control) -> Rect2:
 	## Match BuildZone + plate on the left — not the empty right side of the panel.
 	if panel == null or not is_instance_valid(panel):
@@ -1510,12 +1599,14 @@ func _build_station_hit_rect(panel: Control) -> Rect2:
 		base = zone.get_global_rect()
 	else:
 		base = panel.get_global_rect()
-	return base.grow_individual(
-		BUILD_HIT_PAD_LEFT,
-		BUILD_HIT_PAD_TOP,
-		BUILD_HIT_PAD_RIGHT,
-		BUILD_HIT_PAD_BOTTOM
+	var hit := base.grow_individual(
+		_bz("bz_hit_l"),
+		_bz("bz_hit_t"),
+		_bz("bz_hit_r"),
+		_bz("bz_hit_b")
 	)
+	hit.position.x += _bz("bz_hit_shift_x")
+	return hit
 
 
 func _make_build_debug_outline_style(fill_alpha: float = 0.06) -> StyleBoxFlat:
@@ -1528,11 +1619,11 @@ func _make_build_debug_outline_style(fill_alpha: float = 0.06) -> StyleBoxFlat:
 
 
 func _refresh_build_debug_outlines() -> void:
-	if not BUILD_AREA_DEBUG_OUTLINE:
-		return
 	if build_debug_root != null and is_instance_valid(build_debug_root):
 		build_debug_root.queue_free()
 		build_debug_root = null
+	if not build_area_debug_outline:
+		return
 	var ui_root: Control = get_node_or_null("UI/Root")
 	if ui_root == null:
 		return
@@ -1546,9 +1637,13 @@ func _refresh_build_debug_outlines() -> void:
 	if build_drop_zone != null and is_instance_valid(build_drop_zone):
 		_draw_build_debug_rect(build_drop_zone.get_global_rect(), "DROP_L", 0.04)
 	## Grill-left fuzzy drop line — only over the counter band.
-	var grill_x := _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX
+	var grill_x := _grill_left_screen_x() + _bz("bz_grill_pad")
 	var vr := get_viewport().get_visible_rect()
-	_draw_build_debug_vline(grill_x, "GRILL_LIM", vr.position.y + 280.0, vr.position.y + vr.size.y - 120.0)
+	_draw_build_debug_vline(
+		grill_x, "GRILL_LIM",
+		vr.position.y + _bz("bz_lim_top"),
+		vr.position.y + vr.size.y - _bz("bz_lim_bot")
+	)
 	## Per-station build hitboxes.
 	for i in STATION_COUNT:
 		if i >= stations.size():
@@ -1559,10 +1654,15 @@ func _refresh_build_debug_outlines() -> void:
 			_draw_build_debug_rect(panel.get_global_rect(), "PANEL", 0.03)
 			_draw_build_debug_rect(_build_station_hit_rect(panel), "BUILD_HIT", 0.05)
 		if plate != null and is_instance_valid(plate):
-			_draw_build_debug_rect(plate.get_global_rect().grow(12), "PLATE+12", 0.07)
+			var pad := _bz("bz_plate_pad")
+			_draw_build_debug_rect(plate.get_global_rect().grow_individual(pad, pad, pad, pad), "PLATE+12", 0.07)
 		var build_zone := panel.get_node_or_null("BuildZone") if panel != null else null
 		if build_zone is Control and is_instance_valid(build_zone):
 			_draw_build_debug_rect((build_zone as Control).get_global_rect(), "ZONE", 0.08)
+	if prep_ui_overlay != null and is_instance_valid(prep_ui_overlay):
+		_draw_build_debug_rect(prep_ui_overlay.get_global_rect(), "INGREDIENTS", 0.06)
+	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		_draw_build_debug_rect(grill_drop_zone.get_global_rect(), "GRILL_DROP", 0.04)
 
 
 func _draw_build_debug_rect(global_rect: Rect2, tag: String, fill_alpha: float) -> void:
@@ -1635,7 +1735,7 @@ func _station_index_at(screen_pos: Vector2) -> int:
 func _grill_left_screen_x() -> float:
 	## Screen X of the cook-surface's left edge (toward the cutting board).
 	if camera == null:
-		return BUILD_DROP_MIN_PX
+		return _bz("bz_drop_right")
 	var y := GRILL_SURFACE_Y + 0.04
 	var z := GRILL_SURFACE_Z
 	var a := camera.unproject_position(Vector3(GRILL_CENTER_X - GRILL_WIDTH * 0.5, y, z))
@@ -1648,9 +1748,9 @@ func _is_build_drop_at(screen_pos: Vector2) -> bool:
 	if _station_index_at(screen_pos) >= 0:
 		return true
 	var vr := get_viewport().get_visible_rect()
-	var frac_limit := vr.position.x + maxf(BUILD_DROP_MIN_PX, vr.size.x * BUILD_DROP_SCREEN_FRAC)
+	var frac_limit := vr.position.x + maxf(_bz("bz_drop_right"), vr.size.x * BUILD_DROP_SCREEN_FRAC)
 	## Prefer the real grill edge so the empty counter / window above the board always counts.
-	var grill_limit := _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX
+	var grill_limit := _grill_left_screen_x() + _bz("bz_grill_pad")
 	var limit := maxf(frac_limit, grill_limit)
 	return screen_pos.x <= limit
 
@@ -7518,57 +7618,71 @@ func _make_toon_wood_material(tex: Texture2D, tint: Color = Color.WHITE, uv_scal
 	return mat
 
 
+func _cutting_board_world_center() -> Vector3:
+	## Same plane as the grill top — tucked just screen-left of the steel edge.
+	var bw := CUTTING_BOARD_SIZE.x
+	var bh := CUTTING_BOARD_SIZE.y
+	var grill_left_edge := GRILL_CENTER_X + GRILL_WIDTH * 0.5
+	var cx := grill_left_edge + CUTTING_BOARD_GAP + bw * 0.5
+	var cy := GRILL_SURFACE_Y - bh * 0.5 + 0.012
+	return Vector3(cx, cy, GRILL_SURFACE_Z + CUTTING_BOARD_Z_OFFSET)
+
+
 func _build_cutting_board_prop() -> void:
-	## Toon wood board on the counter between Build and the grill (screen-left of steel).
+	## Procedural wood block — horizontal like the griddle, no billboard art.
 	if build_cutting_board != null and is_instance_valid(build_cutting_board):
 		build_cutting_board.queue_free()
 		build_cutting_board = null
-	var board_tex := FoodSpritesScript.get_tex("cutting_board")
-	if board_tex == null:
-		board_tex = FoodSpritesScript.get_tex("wood")
-	if board_tex == null:
-		push_warning("Cutting board texture missing")
-		return
 	var wood_tex := FoodSpritesScript.get_tex("wood")
 	var root := Node3D.new()
 	root.name = "BuildCuttingBoard"
-	root.position = CUTTING_BOARD_POS
-	root.rotation_degrees = CUTTING_BOARD_ROT
-	## Dark rim slab — gives the board weight on the black counter.
+	root.position = _cutting_board_world_center()
+	var bw := CUTTING_BOARD_SIZE.x
+	var bh := CUTTING_BOARD_SIZE.y
+	var bd := CUTTING_BOARD_SIZE.z
+	## Dark apron rim — matches the grill steel lip.
 	var rim := MeshInstance3D.new()
 	rim.name = "BoardRim"
 	var rim_mesh := BoxMesh.new()
-	rim_mesh.size = CUTTING_BOARD_SLAB + Vector3(0.04, 0.008, 0.04)
+	rim_mesh.size = Vector3(bw + 0.05, 0.014, bd + 0.05)
 	rim.mesh = rim_mesh
-	rim.position = Vector3(0.0, -0.018, 0.0)
+	rim.position = Vector3(0.0, -bh * 0.5 - 0.006, 0.0)
 	var rim_mat := StandardMaterial3D.new()
-	rim_mat.albedo_color = Color(0.28, 0.16, 0.09)
+	rim_mat.albedo_color = CUTTING_BOARD_RIM_TINT
 	rim_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	rim_mat.roughness = 0.82
+	rim_mat.roughness = 0.86
 	rim.material_override = rim_mat
 	root.add_child(rim)
-	## Plank slab under the illustrated board top.
+	## Main plank block — top face is the chop surface.
 	var slab := MeshInstance3D.new()
 	slab.name = "BoardSlab"
 	var slab_mesh := BoxMesh.new()
-	slab_mesh.size = CUTTING_BOARD_SLAB
+	slab_mesh.size = CUTTING_BOARD_SIZE
 	slab.mesh = slab_mesh
-	slab.position = Vector3(0.0, -0.008, 0.0)
 	if wood_tex != null:
-		slab.material_override = _make_toon_wood_material(wood_tex, Color(0.88, 0.72, 0.48), Vector3(2.2, 1.4, 1.0))
+		slab.material_override = _make_toon_wood_material(
+			wood_tex, CUTTING_BOARD_WOOD_TINT, Vector3(2.4, 0.35, 2.0)
+		)
+	else:
+		var slab_mat := StandardMaterial3D.new()
+		slab_mat.albedo_color = CUTTING_BOARD_WOOD_TINT
+		slab_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+		slab_mat.roughness = 0.72
+		slab.material_override = slab_mat
 	root.add_child(slab)
-	## Main board art — chunky toon wood from the ingredient sheet.
-	var face := MeshInstance3D.new()
-	face.name = "BoardFace"
-	var quad := QuadMesh.new()
-	quad.size = CUTTING_BOARD_SIZE
-	face.mesh = quad
-	face.position = Vector3(0.0, 0.014, 0.0)
-	var face_mat := _make_toon_wood_material(board_tex, CUTTING_BOARD_ALBEDO, Vector3.ONE)
-	face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	face.material_override = face_mat
-	face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(face)
+	## Shallow juice groove inset on the top face.
+	var groove := MeshInstance3D.new()
+	groove.name = "BoardGroove"
+	var groove_mesh := BoxMesh.new()
+	groove_mesh.size = Vector3(bw * 0.82, 0.006, bd * 0.78)
+	groove.mesh = groove_mesh
+	groove.position = Vector3(0.0, bh * 0.5 - 0.004, 0.0)
+	var groove_mat := StandardMaterial3D.new()
+	groove_mat.albedo_color = Color(0.62, 0.44, 0.26)
+	groove_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	groove_mat.roughness = 0.78
+	groove.material_override = groove_mat
+	root.add_child(groove)
 	grill_root.add_child(root)
 	build_cutting_board = root
 
@@ -7767,7 +7881,12 @@ func _layout_phone_ui_overlay() -> void:
 	phone_column.position = Vector2(
 		radio_rect.position.x + (radio_rect.size.x - PHONE_UI_SIZE.x) * 0.5,
 		radio_rect.position.y + radio_rect.size.y + PHONE_BELOW_RADIO_GAP
-			+ sin(Time.get_ticks_msec() * 0.0014) * PHONE_FLOAT_AMP
+	)
+	var vr := get_viewport().get_visible_rect()
+	phone_column.position.x = clampf(
+		phone_column.position.x,
+		vr.position.x + 6.0,
+		vr.position.x + vr.size.x - PHONE_UI_SIZE.x - 6.0
 	)
 	phone_column.size = PHONE_UI_SIZE
 	_sync_radio_3d_to_ui()
@@ -7963,16 +8082,17 @@ func _refresh_phone_ui() -> void:
 	for id in SUPPLY_IDS:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_theme_constant_override("separation", 3)
+		row.add_theme_constant_override("separation", 2)
 		row.custom_minimum_size = Vector2(0, 22)
 		phone_inventory_box.add_child(row)
 
 		var name_lab := Label.new()
 		var short := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
-		if short.length() > 9:
-			short = short.substr(0, 8) + "…"
+		if short.length() > 11:
+			short = short.substr(0, 10) + "…"
 		name_lab.text = short
 		name_lab.custom_minimum_size = Vector2(52, 0)
+		name_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		UiFontsScript.apply_label(name_lab, false, 9)
 		name_lab.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
 		row.add_child(name_lab)
@@ -7981,7 +8101,8 @@ func _refresh_phone_ui() -> void:
 		var fresh_r := clampf(float(supply_fresh.get(id, 0.0)) / SUPPLY_FRESH_MAX, 0.0, 1.0) if stock > 0 else 0.0
 		var count_lab := Label.new()
 		count_lab.text = str(stock)
-		count_lab.custom_minimum_size = Vector2(18, 0)
+		count_lab.custom_minimum_size = Vector2(16, 0)
+		count_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		count_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		UiFontsScript.apply_label(count_lab, true, 9)
 		count_lab.add_theme_color_override("font_color", _freshness_bar_color(fresh_r))
@@ -7989,8 +8110,9 @@ func _refresh_phone_ui() -> void:
 
 		var bar := ProgressBar.new()
 		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bar.custom_minimum_size = Vector2(44, 10)
+		bar.custom_minimum_size = Vector2(22, 10)
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		bar.size_flags_stretch_ratio = 1.0
 		bar.max_value = 1.0
 		bar.value = fresh_r
 		bar.show_percentage = false
@@ -8007,7 +8129,8 @@ func _refresh_phone_ui() -> void:
 		var buy := Button.new()
 		buy.text = "+"
 		buy.tooltip_text = "Buy %d (%s)" % [SUPPLY_BUY_PACK, _format_money(_supply_buy_unit_cost(id) * float(SUPPLY_BUY_PACK))]
-		buy.custom_minimum_size = Vector2(22, 18)
+		buy.custom_minimum_size = Vector2(20, 18)
+		buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 		buy.focus_mode = Control.FOCUS_NONE
 		UiFontsScript.apply_button(buy, true, 10)
 		var sid := id
@@ -8022,6 +8145,8 @@ func _build_phone_ui() -> void:
 	phone_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	phone_column.mouse_filter = Control.MOUSE_FILTER_STOP
 	phone_column.custom_minimum_size = PHONE_UI_SIZE
+	phone_column.size = PHONE_UI_SIZE
+	phone_column.clip_contents = false
 	phone_column.z_index = 20
 	ui_root.add_child(phone_column)
 
@@ -8103,16 +8228,17 @@ func _build_phone_ui() -> void:
 	scroll.add_child(v)
 
 	var logo_wrap := CenterContainer.new()
-	logo_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	logo_wrap.custom_minimum_size = Vector2(0, 52)
+	logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	logo_wrap.custom_minimum_size = Vector2(PHONE_LOGO_INNER_W, PHONE_LOGO_WRAP_H)
+	logo_wrap.clip_contents = false
 	logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(logo_wrap)
 	if ResourceLoader.exists(LOGO_TEX_PATH):
 		var logo := TextureRect.new()
 		logo.name = "BurgerPalsLogo"
 		logo.texture = load(LOGO_TEX_PATH) as Texture2D
-		logo.custom_minimum_size = Vector2(120, 44)
-		logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		logo.custom_minimum_size = Vector2(PHONE_LOGO_INNER_W, PHONE_LOGO_DISPLAY_H)
+		logo.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		logo_wrap.add_child(logo)
@@ -8176,6 +8302,7 @@ func _build_phone_ui() -> void:
 
 	phone_inventory_box = VBoxContainer.new()
 	phone_inventory_box.add_theme_constant_override("separation", 2)
+	phone_inventory_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_child(phone_inventory_box)
 
 	_refresh_phone_ui()
@@ -8517,6 +8644,73 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "strip_size", "Strip Size", 0.05, 2.0, 0.01)
 	_gfx_add_slider(list, "strip_width", "Strip Width", 0.2, 1.5, 0.01)
 
+	_gfx_add_section(list, "DRAG PATTY HERE")
+	_gfx_add_check(list, "bz_debug_outline", "Show Build Zone Outlines")
+	_gfx_add_slider(list, "bz_row_left", "PANEL Row Left", -400.0, 600.0, 1.0)
+	_gfx_add_slider(list, "bz_row_right", "PANEL Row Right", -150.0, 800.0, 1.0)
+	_gfx_add_slider(list, "bz_row_top", "PANEL Row Top", -800.0, -200.0, 1.0)
+	_gfx_add_slider(list, "bz_row_bottom", "PANEL Row Bottom", -300.0, 0.0, 1.0)
+	_gfx_add_slider(list, "bz_panel_w", "PANEL Width", 120.0, 600.0, 1.0)
+	_gfx_add_slider(list, "bz_panel_h", "PANEL Height", 80.0, 500.0, 1.0)
+	_gfx_add_slider(list, "bz_zone_w", "ZONE Width", 80.0, 500.0, 1.0)
+	_gfx_add_slider(list, "bz_zone_h", "ZONE Height", 80.0, 450.0, 1.0)
+	_gfx_add_slider(list, "bz_zone_left", "ZONE Left In Panel", -200.0, 200.0, 1.0)
+	_gfx_add_slider(list, "bz_zone_top", "ZONE Top", -400.0, 400.0, 1.0)
+	_gfx_add_slider(list, "bz_lift_bottom", "ZONE Bottom", 40.0, 260.0, 1.0)
+	_gfx_add_slider(list, "bz_plate_w", "PLATE Width", 80.0, 400.0, 1.0)
+	_gfx_add_slider(list, "bz_plate_h", "PLATE Height", 80.0, 400.0, 1.0)
+	_gfx_add_slider(list, "bz_plate_shift", "PLATE Shift X", -120.0, 120.0, 1.0)
+	_gfx_add_slider(list, "bz_plate_y", "PLATE Shift Y", -200.0, 200.0, 1.0)
+	_gfx_add_slider(list, "bz_title_y", "DRAG PATTY HERE Y", -80.0, 200.0, 1.0)
+	_gfx_add_slider(list, "bz_title_x", "DRAG PATTY HERE X", -120.0, 120.0, 1.0)
+	_gfx_add_slider(list, "bz_plate_pad", "PLATE+12 Pad", 0.0, 60.0, 1.0)
+	_gfx_add_slider(list, "bz_hit_l", "BUILD_HIT Pad Left", 0.0, 120.0, 1.0)
+	_gfx_add_slider(list, "bz_hit_t", "BUILD_HIT Pad Top", 0.0, 200.0, 1.0)
+	_gfx_add_slider(list, "bz_hit_r", "BUILD_HIT Pad Right", 0.0, 120.0, 1.0)
+	_gfx_add_slider(list, "bz_hit_b", "BUILD_HIT Pad Bottom", 0.0, 120.0, 1.0)
+	_gfx_add_slider(list, "bz_hit_shift_x", "BUILD_HIT Shift X", -120.0, 120.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_left", "DROP_L Left", -200.0, 200.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_right", "DROP_L Right", 80.0, 700.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_top", "DROP_L Top", 0.0, 600.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_bottom", "DROP_L Bottom", -300.0, 0.0, 1.0)
+	_gfx_add_slider(list, "bz_grill_pad", "GRILL_LIM Pad", 0.0, 300.0, 1.0)
+	_gfx_add_slider(list, "bz_lim_top", "GRILL_LIM Top", 0.0, 600.0, 1.0)
+	_gfx_add_slider(list, "bz_lim_bot", "GRILL_LIM Bot Inset", 0.0, 300.0, 1.0)
+	_gfx_add_slider(list, "bz_grill_drop_left", "GRILL_DROP Left", 0.0, 600.0, 1.0)
+	_gfx_add_slider(list, "bz_grill_drop_top", "GRILL_DROP Top", 0.0, 300.0, 1.0)
+	_gfx_add_slider(list, "bz_grill_drop_bottom", "GRILL_DROP Bottom", -300.0, 0.0, 1.0)
+
+	_gfx_add_section(list, "INGREDIENTS IMAGE")
+	_gfx_add_slider(list, "prep_ui_x", "INGREDIENTS Left", -200.0, 450.0, 1.0)
+	_gfx_add_slider(list, "prep_ui_top", "INGREDIENTS Top", -400.0, 500.0, 1.0)
+	_gfx_add_slider(list, "prep_ui_y", "INGREDIENTS Bottom", 0.0, 520.0, 1.0)
+	_gfx_add_slider(list, "prep_ui_w", "INGREDIENTS Width", 100.0, 700.0, 1.0)
+	_gfx_add_slider(list, "prep_ui_h", "INGREDIENTS Height", 80.0, 500.0, 1.0)
+	_gfx_add_slider(list, "prep_img_y", "INGREDIENTS Image Up/Down", -200.0, 200.0, 1.0)
+
+	_gfx_add_section(list, "BOTTOM STRIP ICONS")
+	_gfx_add_slider(list, "strip_icon_w", "Icon Width", 24.0, 160.0, 1.0)
+	_gfx_add_slider(list, "strip_icon_h", "Icon Height", 20.0, 120.0, 1.0)
+	_gfx_add_slider(list, "strip_icon_x", "Icon Offset X", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "strip_icon_y", "Icon Offset Y", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "strip_bar_left", "Strip Bar Left", -200.0, 200.0, 1.0)
+	_gfx_add_slider(list, "strip_bar_top", "Strip Bar Top", -200.0, 0.0, 1.0)
+	_gfx_add_slider(list, "strip_bar_right", "Strip Bar Right", -200.0, 200.0, 1.0)
+	_gfx_add_slider(list, "strip_bar_bottom", "Strip Bar Bottom", -200.0, 50.0, 1.0)
+
+	var zone_btns := HBoxContainer.new()
+	zone_btns.add_theme_constant_override("separation", 6)
+	list.add_child(zone_btns)
+	var copy_zones_btn := Button.new()
+	copy_zones_btn.text = "Copy Build GFX Values"
+	copy_zones_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_button(copy_zones_btn, true, 11)
+	copy_zones_btn.pressed.connect(func():
+		_sfx_click()
+		_copy_build_zone_values()
+	)
+	zone_btns.add_child(copy_zones_btn)
+
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 8)
 	root_v.add_child(footer)
@@ -8777,6 +8971,17 @@ func _sync_graphics_ui_from_world() -> void:
 						var val_lab6 = top6.get_node_or_null("Val")
 						if val_lab6:
 							val_lab6.text = "%.2f" % float(strip_map[key])
+	for key in BUILD_GFX_KEYS:
+		if gfx_sliders.has(key) and gfx_sliders[key] != null:
+			var val := float(_build_zone_cfg.get(key, GFX_DEFAULTS.get(key, 0.0)))
+			gfx_sliders[key].set_value_no_signal(val)
+			var row7: Node = gfx_sliders[key].get_parent()
+			if row7:
+				var top7 = row7.get_child(0) if row7.get_child_count() > 0 else null
+				if top7:
+					var val_lab7 = top7.get_node_or_null("Val")
+					if val_lab7:
+						val_lab7.text = "%.1f" % val
 
 
 func _apply_burner_strip_settings(s: Dictionary) -> void:
@@ -8841,6 +9046,138 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_first_sale_decal_settings(s)
 	_apply_menu_board_decal_settings(s)
 	_apply_burner_strip_settings(s)
+	_apply_build_zone_settings(s)
+
+
+func _apply_prep_ui_overlay_layout() -> void:
+	if prep_ui_overlay == null or not is_instance_valid(prep_ui_overlay):
+		return
+	var top := _bz("prep_ui_top")
+	var w := _bz("prep_ui_w")
+	var h := _bz("prep_ui_h")
+	prep_ui_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	prep_ui_overlay.position = Vector2(_bz("prep_ui_x"), top + _bz("prep_img_y"))
+	prep_ui_overlay.custom_minimum_size = Vector2(w, h)
+	prep_ui_overlay.size = Vector2(w, h)
+
+
+func _build_prep_ui_overlay() -> void:
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+	if prep_ui_overlay != null and is_instance_valid(prep_ui_overlay):
+		prep_ui_overlay.queue_free()
+		prep_ui_overlay = null
+	prep_ui_overlay = TextureRect.new()
+	prep_ui_overlay.name = "PrepUiOverlay"
+	prep_ui_overlay.texture = FoodSpritesScript.prep_ingredients_tex()
+	prep_ui_overlay.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	prep_ui_overlay.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	prep_ui_overlay.modulate = PREP_UI_MODULATE
+	prep_ui_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prep_ui_overlay.z_index = 2
+	ui_root.add_child(prep_ui_overlay)
+	_apply_prep_ui_overlay_layout()
+
+
+func _apply_build_zone_settings(s: Dictionary) -> void:
+	for key in BUILD_GFX_KEYS:
+		_build_zone_cfg[key] = float(s.get(key, GFX_DEFAULTS.get(key, 0.0)))
+	if stations_row != null and is_instance_valid(stations_row):
+		stations_row.offset_left = _bz("bz_row_left")
+		stations_row.offset_right = _bz("bz_row_right")
+		stations_row.offset_top = _bz("bz_row_top")
+		stations_row.offset_bottom = _bz("bz_row_bottom")
+		stations_row.custom_minimum_size.x = _bz("bz_panel_w")
+		stations_row.alignment = BoxContainer.ALIGNMENT_END
+		stations_row.z_index = 10
+	for i in STATION_COUNT:
+		if i >= stations.size():
+			continue
+		var panel: Control = stations[i].get("panel", null)
+		if panel == null or not is_instance_valid(panel):
+			continue
+		panel.custom_minimum_size = Vector2(_bz("bz_panel_w"), _bz("bz_panel_h"))
+		var build_zone := panel.get_node_or_null("BuildZone") as Control
+		if build_zone != null and is_instance_valid(build_zone):
+			var panel_h := _bz("bz_panel_h")
+			var zone_top := _bz("bz_zone_top")
+			var zone_bot := _bz("bz_lift_bottom")
+			var zone_h := _bz("bz_zone_h")
+			var stretched_zone_h := panel_h - zone_top - zone_bot
+			if stretched_zone_h > 20.0:
+				zone_h = stretched_zone_h
+			build_zone.set_anchors_preset(Control.PRESET_TOP_LEFT)
+			build_zone.grow_horizontal = Control.GROW_DIRECTION_END
+			build_zone.grow_vertical = Control.GROW_DIRECTION_END
+			build_zone.offset_left = int(_bz("bz_zone_left"))
+			build_zone.offset_top = int(zone_top)
+			build_zone.custom_minimum_size = Vector2(_bz("bz_zone_w"), zone_h)
+		var plate_wrap: Control = stations[i].get("plate", null)
+		if plate_wrap != null and is_instance_valid(plate_wrap):
+			plate_wrap.custom_minimum_size = Vector2(_bz("bz_plate_w"), _bz("bz_plate_h"))
+			plate_wrap.position = Vector2(_bz("bz_plate_shift"), _bz("bz_plate_y"))
+			var title := plate_wrap.get_node_or_null("BuildTitle") as Label
+			if title != null and is_instance_valid(title):
+				title.offset_top = int(_bz("bz_title_y"))
+				title.offset_left = int(_bz("bz_title_x"))
+	_apply_prep_ui_overlay_layout()
+	if build_drop_zone != null and is_instance_valid(build_drop_zone):
+		build_drop_zone.offset_left = _bz("bz_drop_left")
+		build_drop_zone.offset_right = _bz("bz_drop_right")
+		build_drop_zone.offset_top = _bz("bz_drop_top")
+		build_drop_zone.offset_bottom = _bz("bz_drop_bottom")
+	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		grill_drop_zone.offset_left = _bz("bz_grill_drop_left")
+		grill_drop_zone.offset_top = _bz("bz_grill_drop_top")
+		grill_drop_zone.offset_bottom = _bz("bz_grill_drop_bottom")
+	_apply_ingredient_strip_settings(s)
+	build_area_debug_outline = bool(s.get("bz_debug_outline", GFX_DEFAULTS["bz_debug_outline"]))
+	call_deferred("_refresh_build_debug_outlines")
+
+
+func _apply_ingredient_strip_settings(s: Dictionary) -> void:
+	if ingredient_legend != null and is_instance_valid(ingredient_legend):
+		ingredient_legend.offset_left = float(s.get("strip_bar_left", GFX_DEFAULTS["strip_bar_left"]))
+		ingredient_legend.offset_top = float(s.get("strip_bar_top", GFX_DEFAULTS["strip_bar_top"]))
+		ingredient_legend.offset_right = float(s.get("strip_bar_right", GFX_DEFAULTS["strip_bar_right"]))
+		ingredient_legend.offset_bottom = float(s.get("strip_bar_bottom", GFX_DEFAULTS["strip_bar_bottom"]))
+	var iw := float(s.get("strip_icon_w", GFX_DEFAULTS["strip_icon_w"]))
+	var ih := float(s.get("strip_icon_h", GFX_DEFAULTS["strip_icon_h"]))
+	var ix := float(s.get("strip_icon_x", GFX_DEFAULTS["strip_icon_x"]))
+	var iy := float(s.get("strip_icon_y", GFX_DEFAULTS["strip_icon_y"]))
+	for id in ingredient_buttons:
+		var btn: Control = ingredient_buttons[id]
+		if btn == null or not is_instance_valid(btn):
+			continue
+		var margin := btn.get_node_or_null("IconMargin") as MarginContainer
+		if margin == null or not is_instance_valid(margin):
+			continue
+		margin.add_theme_constant_override("margin_left", int(ix))
+		margin.add_theme_constant_override("margin_top", int(iy))
+		var icon := margin.get_node_or_null("StripIcon") as TextureRect
+		if icon != null and is_instance_valid(icon):
+			icon.custom_minimum_size = Vector2(iw, ih)
+			icon.size = Vector2(iw, ih)
+
+
+func _copy_build_zone_values() -> void:
+	var s := _read_graphics_from_ui()
+	var lines: PackedStringArray = []
+	lines.append("DRAG PATTY HERE / build zone:")
+	for key in BUILD_ZONE_GFX_KEYS:
+		lines.append("%s = %.1f" % [key, float(s.get(key, GFX_DEFAULTS.get(key, 0.0)))])
+	lines.append("")
+	lines.append("Ingredients image:")
+	for key in PREP_GFX_KEYS:
+		lines.append("%s = %.1f" % [key, float(s.get(key, GFX_DEFAULTS.get(key, 0.0)))])
+	lines.append("")
+	lines.append("Bottom strip icons:")
+	for key in STRIP_GFX_KEYS:
+		lines.append("%s = %.1f" % [key, float(s.get(key, GFX_DEFAULTS.get(key, 0.0)))])
+	var text := "\n".join(lines)
+	DisplayServer.clipboard_set(text)
+	_flash("Build GFX copied — paste in chat", Color("90CAF9"))
 
 
 func _apply_street_matte_settings(s: Dictionary) -> void:
@@ -8977,6 +9314,115 @@ func _load_graphics_settings() -> void:
 	if not cfg.has_section_key("gfx", "gfx_decal_v12"):
 		cfg.set_value("gfx", "sale_scale", GFX_DEFAULTS["sale_scale"])
 		cfg.set_value("gfx", "gfx_decal_v12", true)
+		cfg.save(GFX_CFG_PATH)
+	## Restore prep-ingredient row layout after hitbox tuning pass.
+	if not cfg.has_section_key("gfx", "gfx_bz_layout_v1"):
+		for key in BUILD_GFX_KEYS:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_bz_layout_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Shift build row right so the floating burger stays visible on screen.
+	if not cfg.has_section_key("gfx", "gfx_bz_layout_v2"):
+		for key in BUILD_GFX_KEYS:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_bz_layout_v2", true)
+		cfg.save(GFX_CFG_PATH)
+	## New plate / prep / strip GFX keys — add defaults without resetting tuned bz_* row.
+	if not cfg.has_section_key("gfx", "gfx_bz_layout_v3"):
+		for key in ["bz_plate_w", "bz_plate_h", "bz_plate_shift", "bz_plate_y", "bz_plate_pad", "bz_drop_left",
+				"bz_grill_drop_left", "bz_grill_drop_top", "bz_grill_drop_bottom",
+				"prep_ui_x", "prep_ui_top", "prep_ui_y", "prep_ui_w", "prep_ui_h", "prep_img_y",
+				"strip_icon_w", "strip_icon_h", "strip_icon_x", "strip_icon_y",
+				"strip_bar_left", "strip_bar_top", "strip_bar_right", "strip_bar_bottom"]:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_bz_layout_v3", true)
+		cfg.save(GFX_CFG_PATH)
+	## Prep image is panel-relative — convert old BuildZone-relative saved offsets.
+	if not cfg.has_section_key("gfx", "gfx_prep_panel_v1"):
+		var py_old := float(cfg.get_value("gfx", "prep_ui_y", GFX_DEFAULTS["prep_ui_y"]))
+		if py_old < 100.0:
+			var px_old := float(cfg.get_value("gfx", "prep_ui_x", GFX_DEFAULTS["prep_ui_x"]))
+			var ph := float(cfg.get_value("gfx", "prep_ui_h", GFX_DEFAULTS["prep_ui_h"]))
+			var zl := float(cfg.get_value("gfx", "bz_zone_left", GFX_DEFAULTS["bz_zone_left"]))
+			var lift := float(cfg.get_value("gfx", "bz_lift_bottom", GFX_DEFAULTS["bz_lift_bottom"]))
+			var zh := float(cfg.get_value("gfx", "bz_zone_h", GFX_DEFAULTS["bz_zone_h"]))
+			cfg.set_value("gfx", "prep_ui_x", zl + px_old)
+			cfg.set_value("gfx", "prep_ui_y", lift + zh - (py_old + ph))
+		cfg.set_value("gfx", "gfx_prep_panel_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Up/down box edges + image nudge — add defaults without resetting tuned layout.
+	if not cfg.has_section_key("gfx", "gfx_bz_layout_v4"):
+		var panel_h := float(cfg.get_value("gfx", "bz_panel_h", GFX_DEFAULTS["bz_panel_h"]))
+		var prep_bot := float(cfg.get_value("gfx", "prep_ui_y", GFX_DEFAULTS["prep_ui_y"]))
+		var prep_h := float(cfg.get_value("gfx", "prep_ui_h", GFX_DEFAULTS["prep_ui_h"]))
+		cfg.set_value("gfx", "prep_ui_top", panel_h - prep_bot - prep_h)
+		var zone_bot := float(cfg.get_value("gfx", "bz_lift_bottom", GFX_DEFAULTS["bz_lift_bottom"]))
+		var zone_h := float(cfg.get_value("gfx", "bz_zone_h", GFX_DEFAULTS["bz_zone_h"]))
+		cfg.set_value("gfx", "bz_zone_top", panel_h - zone_bot - zone_h)
+		cfg.set_value("gfx", "bz_plate_y", GFX_DEFAULTS["bz_plate_y"])
+		cfg.set_value("gfx", "prep_img_y", GFX_DEFAULTS["prep_img_y"])
+		cfg.set_value("gfx", "gfx_bz_layout_v4", true)
+		cfg.save(GFX_CFG_PATH)
+	## Prep image is screen-absolute on UI/Root — snap tuned placement.
+	if not cfg.has_section_key("gfx", "gfx_prep_screen_v1"):
+		cfg.set_value("gfx", "prep_ui_x", GFX_DEFAULTS["prep_ui_x"])
+		cfg.set_value("gfx", "prep_ui_top", GFX_DEFAULTS["prep_ui_top"])
+		cfg.set_value("gfx", "prep_ui_y", GFX_DEFAULTS["prep_ui_y"])
+		cfg.set_value("gfx", "gfx_prep_screen_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## User-tuned ingredients placement — snap as new defaults.
+	if not cfg.has_section_key("gfx", "gfx_prep_screen_v2"):
+		for key in PREP_GFX_KEYS:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_prep_screen_v2", true)
+		cfg.save(GFX_CFG_PATH)
+	## Nudge ingredients up and shrink 20%.
+	if not cfg.has_section_key("gfx", "gfx_prep_screen_v3"):
+		for key in PREP_GFX_KEYS:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_prep_screen_v3", true)
+		cfg.save(GFX_CFG_PATH)
+	## Nudge ingredients down 22px.
+	if not cfg.has_section_key("gfx", "gfx_prep_screen_v4"):
+		cfg.set_value("gfx", "prep_ui_top", GFX_DEFAULTS["prep_ui_top"])
+		cfg.set_value("gfx", "gfx_prep_screen_v4", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "bz_debug_outline"):
+		cfg.set_value("gfx", "bz_debug_outline", GFX_DEFAULTS["bz_debug_outline"])
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "bz_hit_shift_x"):
+		cfg.set_value("gfx", "bz_hit_shift_x", GFX_DEFAULTS["bz_hit_shift_x"])
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "gfx_bz_zone_nudge_v1"):
+		cfg.set_value("gfx", "bz_zone_left", GFX_DEFAULTS["bz_zone_left"])
+		cfg.set_value("gfx", "bz_zone_top", GFX_DEFAULTS["bz_zone_top"])
+		cfg.set_value("gfx", "gfx_bz_zone_nudge_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "gfx_bz_title_board_v1"):
+		cfg.set_value("gfx", "bz_zone_top", GFX_DEFAULTS["bz_zone_top"])
+		cfg.set_value("gfx", "bz_title_y", GFX_DEFAULTS["bz_title_y"])
+		cfg.set_value("gfx", "gfx_bz_title_board_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "gfx_bz_build_nudge_v1"):
+		cfg.set_value("gfx", "bz_zone_left", GFX_DEFAULTS["bz_zone_left"])
+		cfg.set_value("gfx", "bz_zone_top", GFX_DEFAULTS["bz_zone_top"])
+		cfg.set_value("gfx", "bz_title_x", GFX_DEFAULTS["bz_title_x"])
+		cfg.set_value("gfx", "gfx_bz_build_nudge_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "gfx_bz_build_nudge_v2"):
+		cfg.set_value("gfx", "bz_zone_left", GFX_DEFAULTS["bz_zone_left"])
+		cfg.set_value("gfx", "bz_zone_top", GFX_DEFAULTS["bz_zone_top"])
+		cfg.set_value("gfx", "gfx_bz_build_nudge_v2", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "gfx_bz_build_nudge_v3"):
+		cfg.set_value("gfx", "bz_zone_left", GFX_DEFAULTS["bz_zone_left"])
+		cfg.set_value("gfx", "bz_zone_top", GFX_DEFAULTS["bz_zone_top"])
+		cfg.set_value("gfx", "bz_title_y", GFX_DEFAULTS["bz_title_y"])
+		cfg.set_value("gfx", "gfx_bz_build_nudge_v3", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key("gfx", "gfx_bz_build_nudge_v4"):
+		cfg.set_value("gfx", "bz_title_y", GFX_DEFAULTS["bz_title_y"])
+		cfg.set_value("gfx", "gfx_bz_build_nudge_v4", true)
 		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
@@ -9725,7 +10171,9 @@ func _create_ticket(customer: Node3D) -> void:
 			patty_count += 1
 	if patty_count >= 2:
 		parts.append("DOUBLE PATTY")
-	if GameDataScript.is_everything_order(customer.order):
+	if GameDataScript.is_plain_patty_order(customer.order):
+		parts.append("PLAIN")
+	elif GameDataScript.is_everything_order(customer.order):
 		parts.append("EVERYTHING")
 	else:
 		for item in customer.order:
@@ -9876,12 +10324,13 @@ func _build_ingredient_legend() -> void:
 	ingredient_buttons.clear()
 	ingredient_legend.add_theme_constant_override("separation", 6)
 
-	## Compact Serve on the right of the bottom ingredient strip.
+	## Compact Order-Up bell on the right of the bottom ingredient strip.
 	var serve_btn := Button.new()
-	serve_btn.text = "SERVE!"
+	serve_btn.text = "🔔"
+	serve_btn.tooltip_text = "Order up! — Serve"
 	serve_btn.custom_minimum_size = Vector2(88, 84)
 	serve_btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(serve_btn, true, 18)
+	UiFontsScript.apply_button(serve_btn, true, 36)
 	var serve_sb := StyleBoxFlat.new()
 	serve_sb.bg_color = Color(0.2, 0.72, 0.35)
 	serve_sb.set_corner_radius_all(12)
@@ -9895,7 +10344,7 @@ func _build_ingredient_legend() -> void:
 	var serve_hover := serve_sb.duplicate()
 	serve_hover.bg_color = Color(0.32, 0.85, 0.42)
 	serve_btn.add_theme_stylebox_override("hover", serve_hover)
-	serve_btn.add_theme_color_override("font_color", Color.WHITE)
+	serve_btn.add_theme_color_override("font_color", Color(1.0, 0.95, 0.45))
 	serve_btn.add_theme_color_override("font_outline_color", Color.BLACK)
 	serve_btn.add_theme_constant_override("outline_size", 4)
 	serve_btn.pressed.connect(func():
@@ -9963,13 +10412,21 @@ func _build_ingredient_legend() -> void:
 		col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		tbtn.add_child(col)
 
+		var icon_margin := MarginContainer.new()
+		icon_margin.name = "IconMargin"
+		icon_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon_margin.add_theme_constant_override("margin_left", int(GFX_DEFAULTS["strip_icon_x"]))
+		icon_margin.add_theme_constant_override("margin_top", int(GFX_DEFAULTS["strip_icon_y"]))
+		col.add_child(icon_margin)
+
 		var icon := TextureRect.new()
+		icon.name = "StripIcon"
 		icon.texture = FoodSpritesScript.get_tex(id)
-		icon.custom_minimum_size = Vector2(64, 44)
+		icon.custom_minimum_size = Vector2(GFX_DEFAULTS["strip_icon_w"], GFX_DEFAULTS["strip_icon_h"])
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		col.add_child(icon)
+		icon_margin.add_child(icon)
 
 		var name_lab := Label.new()
 		name_lab.text = "%s %s" % [HOTKEY_LABELS[hi], GameDataScript.INGREDIENT_LABELS[id]]
@@ -10057,6 +10514,93 @@ func _pulse_ingredient_feedback(id: String) -> void:
 		_shake_ingredient_button(ingredient_buttons[id])
 	if game_audio:
 		game_audio.play_ingredient(id)
+
+
+func _ingredient_button_screen_center(id: String) -> Vector2:
+	if ingredient_buttons.has(id):
+		var btn: Control = ingredient_buttons[id]
+		if btn != null and is_instance_valid(btn):
+			var r := btn.get_global_rect()
+			return r.position + r.size * 0.5
+	var vr := get_viewport().get_visible_rect()
+	return vr.position + Vector2(vr.size.x * 0.5, vr.size.y - 52.0)
+
+
+func _station_ingredient_land_screen(station_index: int) -> Vector2:
+	var land := _station_stack_screen_center(station_index)
+	var st: Dictionary = stations[station_index]
+	var items: Array = st.get("items", [])
+	land.y -= 28.0 + mini(float(items.size()) * 6.0, 36.0)
+	return land
+
+
+func _ingredient_fly_icon_size(station_index: int, id: String) -> Vector2:
+	var items: Array = []
+	if station_index >= 0 and station_index < STATION_COUNT:
+		items = stations[station_index].get("items", [])
+	var layer_w := 320.0 * 0.96 * _layer_width_mul(id) * _station_item_build_scale(id)
+	var h := _layer_img_height(id) * _station_layer_scale(maxi(1, items.size() + 1)) \
+		* _station_item_build_scale(id)
+	return Vector2(mini(96.0, layer_w * 0.38), mini(72.0, h * 0.38))
+
+
+func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Callable) -> void:
+	if _ingredient_fly_busy:
+		on_done.call()
+		return
+	var ui_root: Control = get_node_or_null("UI/Root") as Control
+	if ui_root == null or station_index < 0 or station_index >= STATION_COUNT:
+		on_done.call()
+		return
+	var tex := FoodSpritesScript.get_tex(id)
+	if tex == null:
+		on_done.call()
+		return
+	var fly_root := Control.new()
+	fly_root.name = "IngredientFlyLayer"
+	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fly_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fly_root.z_index = 240
+	ui_root.add_child(fly_root)
+	var icon := TextureRect.new()
+	icon.name = "FlyIcon"
+	icon.texture = tex
+	var icon_size := _ingredient_fly_icon_size(station_index, id)
+	icon.custom_minimum_size = icon_size
+	icon.size = icon_size
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.pivot_offset = icon_size * 0.5
+	fly_root.add_child(icon)
+	var start := _ingredient_button_screen_center(id)
+	var end := _station_ingredient_land_screen(station_index)
+	icon.global_position = start - icon_size * 0.5
+	icon.scale = Vector2.ONE
+	icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_ingredient_fly_busy = true
+	var arc_h := 42.0
+	var tw := create_tween()
+	tw.tween_method(
+		func(t: float) -> void:
+			if not is_instance_valid(icon):
+				return
+			var eased := t * t * (3.0 - 2.0 * t)
+			var pos := start.lerp(end, eased)
+			pos.y -= arc_h * 4.0 * t * (1.0 - t)
+			icon.global_position = pos - icon_size * 0.5
+			icon.scale = Vector2.ONE.lerp(Vector2(0.82, 0.82), eased)
+			icon.modulate.a = lerpf(1.0, 0.92, eased),
+		0.0,
+		1.0,
+		0.34
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(fly_root):
+			fly_root.queue_free()
+		_ingredient_fly_busy = false
+		on_done.call()
+	)
 	var label: String = GameDataScript.INGREDIENT_LABELS.get(id, id)
 	_flash("+ %s" % label, Color("FFE082"))
 	_note_melody_press(id)
@@ -10076,55 +10620,40 @@ func _note_melody_press(id: String) -> void:
 
 
 func _build_station_ui() -> void:
+	_init_build_zone_cfg()
 	## Screen-left — over prep baskets / cutting board, not center-right.
-	stations_row.offset_left = BUILD_STATIONS_ROW_LEFT
-	stations_row.offset_right = BUILD_STATIONS_ROW_RIGHT
+	stations_row.offset_left = _bz("bz_row_left")
+	stations_row.offset_right = _bz("bz_row_right")
+	stations_row.offset_top = _bz("bz_row_top")
+	stations_row.offset_bottom = _bz("bz_row_bottom")
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stations_row.custom_minimum_size = Vector2(BUILD_PANEL_SIZE.x, 0)
-	stations_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	stations_row.z_index = 10
+	stations_row.custom_minimum_size = Vector2(_bz("bz_panel_w"), 0)
+	stations_row.alignment = BoxContainer.ALIGNMENT_END
 	for child in stations_row.get_children():
 		child.queue_free()
 	for i in STATION_COUNT:
 		## Plain Control — no PanelContainer chrome / bounding box.
 		var panel := Control.new()
-		panel.custom_minimum_size = BUILD_PANEL_SIZE
+		panel.custom_minimum_size = Vector2(_bz("bz_panel_w"), _bz("bz_panel_h"))
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		panel.size_flags_vertical = Control.SIZE_SHRINK_END
 		## Empty panel area passes through to the 3D grill behind.
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-		## Build zone — title + plate stay here; prep art is only a backdrop behind them.
+		## Build zone — title + plate only (DRAG PATTY HERE).
 		var build_zone := Control.new()
 		build_zone.name = "BuildZone"
-		build_zone.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+		build_zone.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		build_zone.grow_horizontal = Control.GROW_DIRECTION_END
-		build_zone.grow_vertical = Control.GROW_DIRECTION_BEGIN
-		build_zone.offset_left = int(BUILD_UI_LEFT)
-		build_zone.offset_bottom = int(BUILD_UI_LIFT_BOTTOM)
-		build_zone.custom_minimum_size = BUILD_ZONE_SIZE
+		build_zone.grow_vertical = Control.GROW_DIRECTION_END
+		build_zone.offset_left = int(_bz("bz_zone_left"))
+		build_zone.offset_top = int(_bz("bz_zone_top"))
+		build_zone.custom_minimum_size = Vector2(_bz("bz_zone_w"), _bz("bz_zone_h"))
 		build_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		build_zone.z_index = 2
+		build_zone.z_as_relative = true
 		panel.add_child(build_zone)
-
-		var prep_wrap := Control.new()
-		prep_wrap.name = "PrepWrap"
-		prep_wrap.custom_minimum_size = PREP_UI_SIZE
-		prep_wrap.size = PREP_UI_SIZE
-		prep_wrap.position = Vector2(PREP_UI_BEHIND_X, PREP_UI_BEHIND_Y)
-		prep_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		prep_wrap.z_index = -1
-		prep_wrap.z_as_relative = true
-		build_zone.add_child(prep_wrap)
-
-		var prep_img := TextureRect.new()
-		prep_img.name = "PrepIngredients"
-		prep_img.texture = FoodSpritesScript.prep_ingredients_tex()
-		prep_img.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-		prep_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		prep_img.custom_minimum_size = PREP_UI_SIZE
-		prep_img.size = PREP_UI_SIZE
-		prep_img.modulate = PREP_UI_MODULATE
-		prep_img.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		prep_wrap.add_child(prep_img)
 
 		var root_v := VBoxContainer.new()
 		root_v.name = "BuildColumn"
@@ -10136,6 +10665,16 @@ func _build_station_ui() -> void:
 		root_v.z_as_relative = true
 		build_zone.add_child(root_v)
 
+		## Stage sized for mid-large burger art — tight hitbox around the board.
+		var plate_wrap := Control.new()
+		plate_wrap.custom_minimum_size = Vector2(_bz("bz_plate_w"), _bz("bz_plate_h"))
+		plate_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		plate_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
+		plate_wrap.position = Vector2(_bz("bz_plate_shift"), _bz("bz_plate_y"))
+		plate_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
+		plate_wrap.clip_contents = false
+		root_v.add_child(plate_wrap)
+
 		var title := Label.new()
 		title.name = "BuildTitle"
 		title.text = BUILD_TITLE_TEXT
@@ -10145,16 +10684,12 @@ func _build_station_ui() -> void:
 		title.add_theme_constant_override("outline_size", 4)
 		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		root_v.add_child(title)
-
-		## Stage sized for mid-large burger art — tight hitbox around the board.
-		var plate_wrap := Control.new()
-		plate_wrap.custom_minimum_size = Vector2(230, 210)
-		plate_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		plate_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
-		plate_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
-		plate_wrap.clip_contents = false
-		root_v.add_child(plate_wrap)
+		title.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		title.offset_top = int(_bz("bz_title_y"))
+		title.offset_left = int(_bz("bz_title_x"))
+		title.z_index = 3
+		title.z_as_relative = true
+		plate_wrap.add_child(title)
 
 		## Catches left-clicks over the grill behind the burger / yellow selection box.
 		var grill_blocker := ColorRect.new()
@@ -10212,9 +10747,10 @@ func _build_station_ui() -> void:
 		btns.add_child(fresh_label)
 
 		var serve_one := Button.new()
-		serve_one.text = "Serve"
-		serve_one.custom_minimum_size = Vector2(64, 24)
-		UiFontsScript.apply_button(serve_one, true, 12)
+		serve_one.text = "🔔"
+		serve_one.tooltip_text = "Order up! — Serve"
+		serve_one.custom_minimum_size = Vector2(44, 28)
+		UiFontsScript.apply_button(serve_one, true, 18)
 		serve_one.pressed.connect(func():
 			_sfx_click()
 			_select_station(si)
@@ -10308,8 +10844,7 @@ func _build_station_ui() -> void:
 	if not stations_row.gui_input.is_connected(_on_stations_row_gui_input):
 		stations_row.gui_input.connect(_on_stations_row_gui_input)
 	_highlight_active_station()
-	if BUILD_AREA_DEBUG_OUTLINE:
-		call_deferred("_refresh_build_debug_outlines")
+	call_deferred("_refresh_build_debug_outlines")
 
 
 func _on_stations_row_gui_input(ev: InputEvent) -> void:
@@ -10343,10 +10878,10 @@ func _build_build_drop_zone() -> void:
 	build_drop_zone.name = "BuildDropZone"
 	build_drop_zone.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	build_drop_zone.anchor_right = 0.0
-	build_drop_zone.offset_left = 0.0
-	build_drop_zone.offset_right = BUILD_DROP_MIN_PX
-	build_drop_zone.offset_top = 220.0
-	build_drop_zone.offset_bottom = -110.0
+	build_drop_zone.offset_left = _bz("bz_drop_left")
+	build_drop_zone.offset_right = _bz("bz_drop_right")
+	build_drop_zone.offset_top = _bz("bz_drop_top")
+	build_drop_zone.offset_bottom = _bz("bz_drop_bottom")
 	build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	build_drop_zone.z_index = 9
 	ui_root.add_child(build_drop_zone)
@@ -10364,15 +10899,15 @@ func _arm_build_drop_zone(armed: bool) -> void:
 	if build_drop_zone == null or not is_instance_valid(build_drop_zone):
 		return
 	if armed:
-		var limit := maxf(BUILD_DROP_MIN_PX, _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX)
+		var limit := maxf(_bz("bz_drop_right"), _grill_left_screen_x() + _bz("bz_grill_pad"))
 		var vr := get_viewport().get_visible_rect()
 		limit = maxf(limit, vr.size.x * BUILD_DROP_SCREEN_FRAC)
 		build_drop_zone.offset_right = limit
 		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
 	else:
+		build_drop_zone.offset_right = _bz("bz_drop_right")
 		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if BUILD_AREA_DEBUG_OUTLINE:
-		call_deferred("_refresh_build_debug_outlines")
+	call_deferred("_refresh_build_debug_outlines")
 
 
 func _build_grill_drop_zone() -> void:
@@ -10384,9 +10919,9 @@ func _build_grill_drop_zone() -> void:
 	grill_drop_zone.name = "GrillDropZone"
 	grill_drop_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
 	## Leave Build column + bottom topping strip clickable.
-	grill_drop_zone.offset_left = 140.0
-	grill_drop_zone.offset_top = 48.0
-	grill_drop_zone.offset_bottom = -110.0
+	grill_drop_zone.offset_left = _bz("bz_grill_drop_left")
+	grill_drop_zone.offset_top = _bz("bz_grill_drop_top")
+	grill_drop_zone.offset_bottom = _bz("bz_grill_drop_bottom")
 	grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	grill_drop_zone.z_index = 12
 	ui_root.add_child(grill_drop_zone)
@@ -10636,7 +11171,9 @@ func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
 
 func _arm_grill_drop_zone() -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
-		grill_drop_zone.offset_bottom = -110.0
+		grill_drop_zone.offset_left = _bz("bz_grill_drop_left")
+		grill_drop_zone.offset_top = _bz("bz_grill_drop_top")
+		grill_drop_zone.offset_bottom = _bz("bz_grill_drop_bottom")
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
 		grill_drop_zone.z_index = 12
 
@@ -11125,12 +11662,17 @@ func _add_ingredient(id: String) -> void:
 	_pulse_ingredient_feedback(id)
 	## Cheese: pick up a ghost slice, then click a grill patty to place it.
 	if id == "cheese":
-		_begin_cheese_hold()
+		_begin_cheese_hold(false, true)
 		return
-	_add_ingredient_to_station(active_station, id, false)
+	if _ingredient_fly_busy:
+		return
+	var station := active_station
+	_play_ingredient_fly_to_build(id, station, func():
+		_add_ingredient_to_station(station, id, false)
+	)
 
 
-func _begin_cheese_hold(from_drag: bool = false) -> void:
+func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void:
 	if not playing or brush_held or oil_held or shaker_held or ext_held or glock_held or spatula_patty != null:
 		return
 	if cheese_held:
@@ -11146,7 +11688,7 @@ func _begin_cheese_hold(from_drag: bool = false) -> void:
 	_arm_grill_drop_zone()
 	if cheese_ghost:
 		cheese_ghost.visible = true
-	if game_audio:
+	if not skip_sfx and game_audio:
 		game_audio.play_ingredient("cheese")
 	if from_drag:
 		_flash("Drop cheese on grill, HOLD, or Build", Color("FFE082"))
@@ -11451,8 +11993,7 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
 		game_audio.play_ingredient(id)
-	if play_sfx:
-		_note_melody_press(id)
+	_note_melody_press(id)
 	call_deferred("_try_auto_serve")
 
 
@@ -11489,8 +12030,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
 		game_audio.play_ingredient("cheese")
-	if play_sfx:
-		_note_melody_press("cheese")
+	_note_melody_press("cheese")
 	_flash("Cheese on — melting 3s (order already counts it)", Color("FFE082"))
 
 
@@ -11670,7 +12210,7 @@ func _refresh_station(index: int) -> void:
 			if _station_patty_has_cheese(st, pidx):
 				layer_key = "patty_cheese"
 		var h_base := _layer_img_height(layer_key) * layer_scale
-		var build_scale := _station_item_build_scale(item)
+		var build_scale := _station_item_build_scale(layer_key)
 		h_base *= build_scale
 		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
 		var layer_tex: Texture2D = null
@@ -11785,9 +12325,21 @@ func _station_layer_scale(layer_count: int) -> float:
 
 
 func _station_item_build_scale(item: String) -> float:
-	## Buns define the plate footprint; everything else scales down to match.
-	if item == "bun_top" or item == "bun_bottom":
-		return 1.0
+	## Buns define the plate footprint; toppings scale relative to STATION_INGREDIENT_SCALE.
+	if item == "bun_top":
+		return 1.05
+	if item == "bun_bottom":
+		return 0.85
+	if item == "patty_cheese":
+		return STATION_INGREDIENT_SCALE * 1.128 * 2.0 ## cheese-melt patty reads small — 2×
+	if item == "patty":
+		return STATION_INGREDIENT_SCALE * 1.128 ## was 1.2 — 6% smaller
+	if item == "onion":
+		return STATION_INGREDIENT_SCALE * 0.7
+	if item == "pickle" or item == "tomato":
+		return STATION_INGREDIENT_SCALE * 0.5
+	if item == "bacon":
+		return STATION_INGREDIENT_SCALE * 0.7
 	return STATION_INGREDIENT_SCALE
 
 
@@ -12120,6 +12672,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var max_y := -INF
 	var top_row: Control = null
 	var bun_rows: Array[Control] = []
+	var patty_rows: Array[Control] = []
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -12136,8 +12689,10 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			if _station_patty_has_cheese(st, pidx):
 				layer_key = "patty_cheese"
 		var is_bun := item == "bun_bottom" or item == "bun_top"
-		var h_squish := 1.0 if is_bun else 0.92
-		var build_scale := _station_item_build_scale(item)
+		var is_patty := item == "patty"
+		## Don't vertically squash buns or patties for the fly stack.
+		var h_squish := 1.0 if (is_bun or is_patty) else 0.92
+		var build_scale := _station_item_build_scale(layer_key)
 		var h_base := _layer_img_height(layer_key) * layer_scale * h_squish * build_scale
 		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
 		var layer_tex: Texture2D = null
@@ -12168,6 +12723,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		if item == "bun_top":
 			top_row = row
 			bun_rows.append(row)
+		if is_patty:
+			patty_rows.append(row)
 
 		var tr := TextureRect.new()
 		tr.texture = layer_tex
@@ -12185,7 +12742,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		max_y = maxf(max_y, row.position.y + h)
 
 	var pivot := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
-	return {"stack": stack, "top_row": top_row, "pivot": pivot, "bun_rows": bun_rows}
+	return {"stack": stack, "top_row": top_row, "pivot": pivot, "bun_rows": bun_rows, "patty_rows": patty_rows}
 
 
 func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Callable) -> void:
@@ -12209,6 +12766,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var built: Dictionary = _build_serve_fly_stack(fly_root, station_index)
 	var stack: Control = built["stack"]
 	var bun_rows: Array = built.get("bun_rows", [])
+	var patty_rows: Array = built.get("patty_rows", [])
 	stack.pivot_offset = built["pivot"]
 	stack.scale = Vector2.ONE
 
@@ -12219,15 +12777,20 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if preview != null and is_instance_valid(preview):
 		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
-	var squashed := Vector2(1.12, 0.78)
-	var fly_end_scale := Vector2(0.92, 0.68)
+	var squashed := Vector2(1.04, 1.0)
+	var fly_end_scale := Vector2(0.9, 0.9)
 
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
 			return
 		stack.scale = s
-		var inv := Vector2(1.0 / maxf(s.x, 0.001), 1.0 / maxf(s.y, 0.001))
+		## Undo vertical squash only — keep patty/bun thickness (don't flatten or shrink-tall).
+		var inv_y := 1.0 / maxf(s.y, 0.001)
+		var inv := Vector2(1.0, inv_y)
 		for row in bun_rows:
+			if row != null and is_instance_valid(row):
+				(row as Control).scale = inv
+		for row in patty_rows:
 			if row != null and is_instance_valid(row):
 				(row as Control).scale = inv
 
@@ -12315,12 +12878,9 @@ func _complete_serve(station_index: int) -> void:
 		total_served += 1
 		if game_audio:
 			var grade_lab := str(cook_r.get("label", ""))
-			if was_meh:
-				game_audio.play_chaching()
-			elif grade_lab == "Wow!" or grade_lab == "Perfect!" or grade_lab == "Great!" or grade_lab == "Good":
+			## Order-up bell already rang at serve start — grade tunes only here.
+			if not was_meh and grade_lab in ["Wow!", "Perfect!", "Great!", "Good"]:
 				game_audio.play_grade_tune(grade_lab)
-			else:
-				game_audio.play_chaching()
 		var speed_top: bool = str(cook_r.get("label", "")) in ["Wow!", "Perfect!"]
 		var was_perfect: bool = (
 			not was_meh
@@ -12433,6 +12993,9 @@ func _on_serve() -> void:
 			_start_station_freshness(station_index)
 			_refresh_station(station_index)
 			items = st["items"]
+
+	if game_audio and game_audio.has_method("play_order_up"):
+		game_audio.play_order_up()
 
 	if station_index == STATION_CRAFT:
 		var cust: Node3D = selected_customer

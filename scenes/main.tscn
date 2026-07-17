@@ -86,7 +86,7 @@ layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.92, 0.4, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 2
-theme_override_font_sizes/font_size = 22
+theme_override_font_sizes/font_size = 11
 text = "Combo -"
 
 [node name="DayLabel" type="Label" parent="UI/Root/TopBar"]
@@ -95,7 +95,7 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.97, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 2
-theme_override_font_sizes/font_size = 22
+theme_override_font_sizes/font_size = 11
 text = "Day 1  -  120s"
 
 [node name="WindowTicketRail" type="VBoxContainer" parent="UI/Root"]
@@ -170,14 +170,14 @@ layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
-offset_left = -210.0
+offset_left = 80.0
 offset_top = -560.0
-offset_right = 175.0
+offset_right = 550.0
 offset_bottom = -108.0
 grow_vertical = 0
 mouse_filter = 2
 theme_override_constants/separation = 10
-alignment = 0
+alignment = 2
 
 [node name="BottomUI" type="VBoxContainer" parent="UI/Root"]
 layout_mode = 1
