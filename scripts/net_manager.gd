@@ -36,6 +36,7 @@ var room_code: String = "0000"
 var game_port: int = CODE_PORT_BASE
 var connected: bool = false
 var peers_ready: Dictionary = {}
+var peer_names: Dictionary = {} ## peer_id -> display name
 var discovered_rooms: Array = []
 var lan_ip: String = "127.0.0.1"
 var relay_url: String = DEFAULT_RELAY_URL
@@ -122,6 +123,33 @@ func color_for_peer(peer_id: int) -> Color:
 	if peer_id == 1:
 		return PEER_COLORS[0]
 	return PEER_COLORS[1]
+
+
+func name_for_peer(peer_id: int) -> String:
+	if peer_names.has(peer_id):
+		var n := str(peer_names[peer_id]).strip_edges()
+		if n != "":
+			return n
+	if peer_id == my_id() and player_name.strip_edges() != "":
+		return player_name.strip_edges()
+	return "Cook %d" % (1 if peer_id == 1 else 2)
+
+
+func announce_player_name() -> void:
+	if not is_online():
+		return
+	_rpc_set_peer_name.rpc(player_name)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_set_peer_name(p_name: String) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = my_id()
+	var clean := p_name.strip_edges()
+	if clean == "":
+		clean = "Cook"
+	peer_names[sid] = clean
 
 
 func alloc_net_id() -> int:
@@ -267,6 +295,7 @@ func _on_relay_hosted(code: String) -> void:
 	game_port = port_from_code(room_code)
 	connected = true
 	peers_ready = {1: false}
+	announce_player_name()
 	chat_flash.emit("Online room %s — friends anywhere can join!" % room_code, Color("81C784"))
 	connection_changed.emit()
 
@@ -360,6 +389,7 @@ func _on_relay_joined(code: String) -> void:
 	connected = true
 	_clear_join_seek()
 	peers_ready[my_id()] = false
+	announce_player_name()
 	chat_flash.emit("Joined online room %s!" % room_code, Color("81C784"))
 	connection_changed.emit()
 
@@ -511,12 +541,14 @@ func _on_peer_connected(id: int) -> void:
 		if not online_mode:
 			_write_local_room()
 			_broadcast_room()
+	announce_player_name()
 	connection_changed.emit()
 	peer_ready_changed.emit()
 
 
 func _on_peer_disconnected(id: int) -> void:
 	peers_ready.erase(id)
+	peer_names.erase(id)
 	chat_flash.emit("Cook left the truck", Color("EF5350"))
 	if role == Role.HOST and not online_mode:
 		_write_local_room()
@@ -532,6 +564,7 @@ func _on_connected_to_server() -> void:
 	connected = true
 	_clear_join_seek()
 	peers_ready[my_id()] = false
+	announce_player_name()
 	chat_flash.emit("Joined room %s!" % room_code, Color("81C784"))
 	connection_changed.emit()
 

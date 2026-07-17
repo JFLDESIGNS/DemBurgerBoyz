@@ -151,8 +151,10 @@ var _opening_terr_active: bool = false
 var _opening_terr_timer: float = 0.0
 var _opening_terr_spawned: int = 0
 var grill: Array = []
-var spatula_patty = null ## one patty on the spatula at a time
-var spatula_owner_id: int = 0 ## multiplayer: which peer controls the scoop
+var spatula_patty = null ## LOCAL scoop only (each cook can carry their own in co-op)
+var spatula_owner_id: int = 0 ## multiplayer: peer that owns spatula_patty (always local id when set)
+var mp_held_net: Dictionary = {} ## peer_id -> patty net_id (who is carrying what)
+var drag_owner_id: int = 0 ## multiplayer: who is sliding a grill patty
 var stations: Array = [] ## each: {items, patty, panel, preview, title, plate}
 var warmer_root: Node3D = null
 var warmer_label: Label3D = null
@@ -1301,12 +1303,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _try_window_cat_click(event.position):
 				return
 			if spatula_patty != null:
-				## Remote cook is carrying this scoop — click it to steal.
-				if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
-					if _try_steal_held_patty_at(event.position):
-						get_viewport().set_input_as_handled()
-					return
-				## Still dragging from Build — drop happens on release.
+				## Our scoop only — partner carries separately in co-op.
 				if spatula_lmb_held and spatula_from_build:
 					return
 				_handle_spatula_click(event.position)
@@ -3353,7 +3350,16 @@ func _begin_patty_drag(patty: Area3D) -> void:
 		return
 	if patty.is_held:
 		return
-	if dragging_patty == patty:
+	if dragging_patty == patty and (not mp_enabled or drag_owner_id == 0 or drag_owner_id == NetManager.my_id()):
+		return
+	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+		mp_claim_drag.rpc(int(patty.net_id))
+		return
+	_begin_patty_drag_local(patty)
+
+
+func _begin_patty_drag_local(patty: Area3D) -> void:
+	if patty == null or not is_instance_valid(patty):
 		return
 	dragging_patty = patty
 	drag_start_mouse = get_viewport().get_mouse_position()
@@ -3362,6 +3368,8 @@ func _begin_patty_drag(patty: Area3D) -> void:
 	drag_did_move = false
 	drag_pop_accum = 0.0
 	drag_last_xz = Vector2(patty._rest_x, patty._rest_z)
+	if mp_enabled:
+		drag_owner_id = NetManager.my_id()
 
 
 func _grill_plane_from_screen(screen_pos: Vector2) -> Vector3:
@@ -3380,8 +3388,11 @@ func _grill_plane_from_screen(screen_pos: Vector2) -> Vector3:
 func _update_patty_drag(delta: float = 0.016) -> void:
 	if dragging_patty == null or not is_instance_valid(dragging_patty):
 		dragging_patty = null
+		drag_owner_id = 0
 		if game_audio:
 			game_audio.set_slide_moving(false)
+		return
+	if mp_enabled and drag_owner_id != 0 and drag_owner_id != NetManager.my_id():
 		return
 	var mouse := get_viewport().get_mouse_position()
 	var dt := maxf(delta, 0.001)
@@ -3462,16 +3473,22 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 func _end_patty_drag() -> void:
 	if dragging_patty == null:
 		return
+	if mp_enabled and drag_owner_id != 0 and drag_owner_id != NetManager.my_id():
+		dragging_patty = null
+		return
 	var patty = dragging_patty
 	var slid := drag_did_move
 	var mouse := get_viewport().get_mouse_position()
 	var vel := drag_vel_screen
 	var travel := mouse.distance_to(drag_start_mouse)
 	dragging_patty = null
+	drag_owner_id = 0
 	drag_did_move = false
 	drag_vel_screen = Vector2.ZERO
 	if game_audio:
 		game_audio.set_slide_moving(false)
+	if mp_enabled and not _mp_applying and is_instance_valid(patty) and int(patty.get("net_id")) >= 0:
+		mp_release_drag.rpc(int(patty.net_id))
 	if not is_instance_valid(patty):
 		return
 	## Drag onto the peeking cat → feed (no trash fee).
@@ -3479,6 +3496,9 @@ func _end_patty_drag() -> void:
 		var idx: int = int(patty.slot_index)
 		if idx >= 0 and idx < grill.size() and grill[idx] == patty:
 			grill[idx] = null
+		if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+			mp_cat_feed.rpc("patty", int(patty.net_id))
+			return
 		patty.queue_free()
 		window_cat.feed("patty")
 		_on_window_cat_fed("patty")
@@ -3635,6 +3655,80 @@ func _on_patty_clicked_local(patty: Area3D) -> void:
 	_pickup_patty(patty)
 
 
+func _mp_mark_held(peer_id: int, patty) -> void:
+	if peer_id == 0:
+		return
+	if patty == null or not is_instance_valid(patty):
+		mp_held_net.erase(peer_id)
+		return
+	var nid := int(patty.get("net_id"))
+	if nid < 0:
+		mp_held_net.erase(peer_id)
+		return
+	## One scoop per peer.
+	for k in mp_held_net.keys():
+		if int(mp_held_net[k]) == nid and int(k) != peer_id:
+			mp_held_net.erase(k)
+	mp_held_net[peer_id] = nid
+
+
+func _mp_clear_held_net(net_id: int) -> void:
+	if net_id < 0:
+		return
+	for k in mp_held_net.keys():
+		if int(mp_held_net[k]) == net_id:
+			mp_held_net.erase(k)
+
+
+func _mp_peer_holding_net(net_id: int) -> int:
+	if net_id < 0:
+		return 0
+	for k in mp_held_net.keys():
+		if int(mp_held_net[k]) == net_id:
+			return int(k)
+	return 0
+
+
+func _mp_release_scoop_if(patty) -> void:
+	if patty == null:
+		return
+	var nid := int(patty.get("net_id")) if patty.get("net_id") != null else -1
+	_mp_clear_held_net(nid)
+	if spatula_patty == patty:
+		spatula_patty = null
+		spatula_owner_id = 0
+		spatula_from_build = false
+		spatula_lmb_held = false
+		spatula_vel_screen = Vector2.ZERO
+		spatula_carry_travel = 0.0
+		_refresh_spatula_ui()
+
+
+func _mp_apply_remote_scoop(patty: Area3D, peer_id: int) -> void:
+	## Partner scooped — show the patty in-air without taking our local spatula.
+	if patty == null or not is_instance_valid(patty):
+		return
+	var idx: int = int(patty.slot_index)
+	if idx >= 0 and idx < grill.size() and grill[idx] == patty:
+		grill[idx] = null
+	patty.is_held = true
+	patty.heating = false
+	patty.visible = true
+	_leave_grill_residue(idx, patty, false)
+	_mp_mark_held(peer_id, patty)
+
+
+func _customer_by_net_id(net_id: int):
+	if net_id < 0:
+		return null
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if c.has_meta("mp_net_id") and int(c.get_meta("mp_net_id")) == net_id:
+			return c
+	return null
+
+
 func _pickup_patty(patty: Area3D) -> void:
 	if spatula_patty != null:
 		_reject_second_scoop()
@@ -3642,6 +3736,12 @@ func _pickup_patty(patty: Area3D) -> void:
 	if not patty.flipped_once or not patty.can_scoop():
 		_flash("Flip and finish cooking before scooping", Color("EF5350"))
 		return
+	if mp_enabled:
+		var nid := int(patty.get("net_id")) if patty.get("net_id") != null else -1
+		var holder := _mp_peer_holding_net(nid)
+		if holder != 0 and holder != NetManager.my_id():
+			_flash("Partner is carrying that — click it to steal", Color("FFCC80"))
+			return
 	var idx: int = patty.slot_index
 	if idx >= 0 and idx < grill.size():
 		grill[idx] = null
@@ -3649,10 +3749,11 @@ func _pickup_patty(patty: Area3D) -> void:
 	patty.heating = false
 	patty.visible = true
 	spatula_patty = patty
-	if not mp_enabled:
-		spatula_owner_id = 0
-	elif spatula_owner_id == 0:
+	if mp_enabled:
 		spatula_owner_id = NetManager.my_id()
+		_mp_mark_held(spatula_owner_id, patty)
+	else:
+		spatula_owner_id = 0
 	spatula_last_mouse = get_viewport().get_mouse_position()
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
@@ -3829,44 +3930,27 @@ func _place_spatula_on_grill(hit_pos: Vector3) -> void:
 	_place_spatula_on_grill_local(idx, pos)
 
 
-func _place_spatula_on_grill_local(idx: int, pos: Vector3) -> void:
-	if spatula_patty == null:
+func _place_spatula_on_grill_local(idx: int, pos: Vector3, patty: Area3D = null) -> void:
+	if patty == null:
+		patty = spatula_patty
+	if patty == null or not is_instance_valid(patty):
 		return
-	var patty = spatula_patty
-	spatula_patty = null
-	spatula_owner_id = 0
-	spatula_from_build = false
-	spatula_lmb_held = false
-	spatula_vel_screen = Vector2.ZERO
-	spatula_carry_travel = 0.0
-	patty.is_held = false
-	patty.visible = true
-	patty.rotation_degrees = Vector3.ZERO
-	patty.slot_index = idx
-	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
-	patty.heating = grill_on
-	patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
-	patty.position = Vector3(pos.x, patty.base_y, pos.z)
-	patty._rest_x = pos.x
-	patty._rest_z = pos.z
-	if patty.get_parent() == null:
-		patties_root.add_child(patty)
-	grill[idx] = patty
-	slot_positions[idx] = Vector3(pos.x, GRILL_SURFACE_Y, pos.z)
-	_refresh_spatula_ui()
-	if game_audio:
-		game_audio.play_click()
-	if patty.has_method("refresh_cook_visuals"):
-		patty.refresh_cook_visuals()
-	_flash("Back on the grill", Color("A5D6A7"))
+	_mp_release_scoop_if(patty)
+	_place_extracted_patty_on_grill(patty, idx, pos)
 
 
 func _throw_held_patty_to_build() -> void:
 	## Arc from the hand into Build (same destination as a left flick scoop).
 	if spatula_patty == null or not is_instance_valid(spatula_patty) or flicking_patty != null:
 		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
+		return
+	if mp_enabled and not _mp_applying and int(spatula_patty.get("net_id")) >= 0:
+		mp_drop_to_build.rpc(int(spatula_patty.net_id), STATION_CRAFT)
+		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
@@ -3908,6 +3992,8 @@ func _throw_held_patty_to_grill() -> void:
 	## Arc from the hand onto the grill (screen-right flick).
 	if spatula_patty == null or not is_instance_valid(spatula_patty) or flicking_patty != null:
 		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
+		return
 	var mouse := get_viewport().get_mouse_position()
 	var aim := _grill_plane_from_screen(mouse)
 	if aim == Vector3.ZERO or not _is_near_grill_for_place(aim):
@@ -3923,8 +4009,12 @@ func _throw_held_patty_to_grill() -> void:
 	if idx < 0:
 		_flash("Grill full — clear a spot first", Color("EF5350"))
 		return
+	if mp_enabled and not _mp_applying and int(spatula_patty.get("net_id")) >= 0:
+		mp_place_spatula.rpc(int(spatula_patty.net_id), idx, place.x, place.z)
+		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
@@ -3967,8 +4057,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	## Land a scooped / thrown patty on Build without requiring spatula_patty.
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
-	if spatula_patty == patty:
-		spatula_patty = null
+	_mp_release_scoop_if(patty)
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	var st: Dictionary = stations[STATION_CRAFT]
@@ -4416,31 +4505,24 @@ func _held_patty_near_screen(patty: Area3D, screen_pos: Vector2, max_px: float =
 func _try_steal_held_patty_at(screen_pos: Vector2) -> bool:
 	if not mp_enabled or not playing or _mp_applying:
 		return false
+	if spatula_patty != null:
+		return false
 	var target = null
-	if spatula_patty != null and is_instance_valid(spatula_patty) \
-			and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() \
-			and _held_patty_near_screen(spatula_patty, screen_pos):
-		target = spatula_patty
-	elif flicking_patty != null and is_instance_valid(flicking_patty) \
+	var my_id := NetManager.my_id()
+	for peer_id in mp_held_net.keys():
+		if int(peer_id) == my_id:
+			continue
+		var p = _patty_by_net_id(int(mp_held_net[peer_id]))
+		if p != null and is_instance_valid(p) and _held_patty_near_screen(p, screen_pos):
+			target = p
+			break
+	if target == null and flicking_patty != null and is_instance_valid(flicking_patty) \
 			and _held_patty_near_screen(flicking_patty, screen_pos):
 		target = flicking_patty
-	if target == null:
-		for p in grill:
-			if p == null or not is_instance_valid(p):
-				continue
-			if not bool(p.is_held):
-				continue
-			if spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id()):
-				continue
-			if _held_patty_near_screen(p, screen_pos):
-				target = p
-				break
 	if target == null:
 		return false
 	var nid := int(target.get("net_id")) if target.get("net_id") != null else -1
 	if nid < 0:
-		return false
-	if spatula_patty == target and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id()):
 		return false
 	mp_steal_held.rpc(nid)
 	return true
@@ -7034,6 +7116,8 @@ func _try_warmer_click(screen_pos: Vector2) -> bool:
 func _place_spatula_on_warmer(hit_pos: Vector3) -> void:
 	if spatula_patty == null:
 		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
+		return
 	var idx := _first_empty_slot()
 	if idx < 0:
 		_flash("Grill full — clear a spot before using HOLD", Color("EF5350"))
@@ -7053,12 +7137,18 @@ func _place_spatula_on_warmer(hit_pos: Vector3) -> void:
 		if not placed:
 			_flash("HOLD is crowded — move a patty first", Color("FFA726"))
 			return
-	var patty = spatula_patty
-	spatula_patty = null
-	spatula_from_build = false
-	spatula_lmb_held = false
-	spatula_vel_screen = Vector2.ZERO
-	spatula_carry_travel = 0.0
+	if mp_enabled and not _mp_applying and int(spatula_patty.get("net_id")) >= 0:
+		mp_place_warmer.rpc(int(spatula_patty.net_id), idx, pos.x, pos.z)
+		return
+	_place_spatula_on_warmer_local(idx, pos, spatula_patty)
+
+
+func _place_spatula_on_warmer_local(idx: int, pos: Vector3, patty: Area3D = null) -> void:
+	if patty == null:
+		patty = spatula_patty
+	if patty == null or not is_instance_valid(patty):
+		return
+	_mp_release_scoop_if(patty)
 	patty.is_held = false
 	patty.visible = true
 	patty.rotation_degrees = Vector3.ZERO
@@ -11887,10 +11977,7 @@ func _drop_spatula_on_station_local(index: int) -> void:
 	if index < 0 or index >= STATION_COUNT:
 		return
 	var patty = spatula_patty
-	spatula_patty = null
-	spatula_owner_id = 0
-	spatula_from_build = false
-	spatula_lmb_held = false
+	_mp_release_scoop_if(patty)
 	_commit_patty_to_build(patty)
 	if index != STATION_CRAFT:
 		## Only one craft station today — keep API for future multi-station.
@@ -13287,7 +13374,10 @@ func _on_serve() -> void:
 	if not playing or _serve_fly_busy:
 		return
 	if mp_enabled and not _mp_applying:
-		mp_serve.rpc()
+		var cid := -1
+		if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.has_meta("mp_net_id"):
+			cid = int(selected_customer.get_meta("mp_net_id"))
+		mp_serve.rpc(cid, active_station)
 		return
 	_on_serve_local()
 
@@ -14054,10 +14144,13 @@ func _mp_rebuild_room_list() -> void:
 func _mp_on_session_start(session_seed: int) -> void:
 	seed(session_seed)
 	mp_enabled = true
+	mp_held_net.clear()
+	drag_owner_id = 0
 	if _mp_lobby_root:
 		_mp_lobby_root.visible = false
 	NetManager.stop_browse()
-	_flash("Co-op shift — cook together!", Color("FFEB3B"))
+	NetManager.announce_player_name()
+	_flash("Co-op shift — both cook! Orange / cyan gloves", Color("FFEB3B"))
 	_start_game()
 	## Host owns cat AI; guest follows sync so peeks / hearts match.
 	if window_cat != null and is_instance_valid(window_cat):
@@ -14079,7 +14172,17 @@ func _mp_update_cursors(delta: float) -> void:
 		var vp := get_viewport().get_visible_rect().size
 		if vp.x > 1.0 and vp.y > 1.0:
 			var m := get_viewport().get_mouse_position()
-			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y)
+			var held := 1 if spatula_patty != null else 0
+			var tool := 0
+			if cheese_held:
+				tool = 1
+			elif oil_held:
+				tool = 2
+			elif brush_held:
+				tool = 3
+			elif shaker_held:
+				tool = 4
+			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
 
 
 func _mp_ensure_remote_cursor(peer_id: int) -> Control:
@@ -14092,6 +14195,7 @@ func _mp_ensure_remote_cursor(peer_id: int) -> Control:
 	wrap.z_index = 90
 	var tex: Texture2D = load("res://assets/ui/cursor_glove.png") as Texture2D
 	var icon := TextureRect.new()
+	icon.name = "Icon"
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -14103,14 +14207,24 @@ func _mp_ensure_remote_cursor(peer_id: int) -> Control:
 	wrap.add_child(icon)
 	var tag := Label.new()
 	tag.name = "Tag"
-	tag.position = Vector2(8, 44)
-	tag.text = "P%d" % (1 if peer_id == 1 else 2)
+	tag.position = Vector2(4, 44)
+	tag.text = NetManager.name_for_peer(peer_id)
 	tag.add_theme_color_override("font_color", NetManager.color_for_peer(peer_id))
 	tag.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	tag.add_theme_constant_override("outline_size", 3)
 	UiFontsScript.apply_label(tag, true, 12)
 	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(tag)
+	var badge := Label.new()
+	badge.name = "Badge"
+	badge.position = Vector2(36, -2)
+	badge.text = ""
+	badge.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
+	badge.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
+	badge.add_theme_constant_override("outline_size", 3)
+	UiFontsScript.apply_label(badge, true, 11)
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(badge)
 	_mp_cursor_layer.add_child(wrap)
 	_mp_remote_cursors[peer_id] = wrap
 	return wrap
@@ -14144,7 +14258,7 @@ func _patty_by_net_id(net_id: int):
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func mp_cursor_pos(nx: float, ny: float) -> void:
+func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -14153,6 +14267,30 @@ func mp_cursor_pos(nx: float, ny: float) -> void:
 	var vp := get_viewport().get_visible_rect().size
 	## Hotspot matches local glove tip (~0, 3).
 	wrap.position = Vector2(nx * vp.x, ny * vp.y) - Vector2(0, 3)
+	var tag: Label = wrap.get_node_or_null("Tag") as Label
+	if tag:
+		tag.text = NetManager.name_for_peer(sid)
+	var badge: Label = wrap.get_node_or_null("Badge") as Label
+	if badge:
+		if held != 0:
+			badge.text = "●"
+		elif tool == 1:
+			badge.text = "C"
+		elif tool == 2:
+			badge.text = "O"
+		elif tool == 3:
+			badge.text = "B"
+		elif tool == 4:
+			badge.text = "S"
+		else:
+			badge.text = ""
+	var icon: TextureRect = wrap.get_node_or_null("Icon") as TextureRect
+	if icon:
+		var col := NetManager.color_for_peer(sid)
+		if held != 0:
+			icon.modulate = col.lightened(0.25)
+		else:
+			icon.modulate = col
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -14191,11 +14329,25 @@ func mp_patty_click(net_id: int) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0:
 		sid = NetManager.my_id()
+	var holder := _mp_peer_holding_net(net_id)
+	if holder != 0 and holder != sid:
+		## Someone else is carrying it — use steal instead of click.
+		return
 	_mp_applying = true
-	spatula_owner_id = sid
-	_on_patty_clicked_local(p)
-	if spatula_patty == null:
-		spatula_owner_id = 0
+	if sid == NetManager.my_id():
+		spatula_owner_id = sid
+		_on_patty_clicked_local(p)
+		if spatula_patty != null:
+			_mp_mark_held(sid, spatula_patty)
+		else:
+			spatula_owner_id = 0
+	else:
+		## Partner flip / scoop — never assign to our local spatula.
+		if not p.flipped_once:
+			if p.can_flip():
+				p.flip()
+		elif p.can_scoop():
+			_mp_apply_remote_scoop(p, sid)
 	_mp_applying = false
 
 
@@ -14215,9 +14367,9 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> voi
 	if p == null:
 		return
 	## Don't fight local drag / scoop ownership.
-	if dragging_patty == p:
+	if dragging_patty == p and drag_owner_id == NetManager.my_id():
 		return
-	if spatula_patty == p and spatula_owner_id == NetManager.my_id():
+	if spatula_patty == p:
 		return
 	p.position = Vector3(x, y, z)
 	p._rest_x = x
@@ -14225,8 +14377,37 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> voi
 	if held:
 		p.is_held = true
 		p.heating = false
-		if spatula_patty != p:
-			spatula_patty = p
+	## Never assign spatula_patty here — each cook keeps their own scoop.
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_claim_drag(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null or not is_instance_valid(p):
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	_mp_applying = true
+	## Transfer drag claim.
+	if dragging_patty == p and drag_owner_id != sid:
+		dragging_patty = null
+	drag_owner_id = sid
+	if sid == NetManager.my_id():
+		_begin_patty_drag_local(p)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_release_drag(net_id: int) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	if drag_owner_id == sid or drag_owner_id == 0:
+		drag_owner_id = 0
+	var p = _patty_by_net_id(net_id)
+	if p != null and dragging_patty == p and sid != NetManager.my_id():
+		dragging_patty = null
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -14256,11 +14437,12 @@ func mp_drop_to_build(net_id: int, index: int) -> void:
 	if p == null:
 		return
 	_mp_applying = true
-	if spatula_patty == p:
-		spatula_patty = null
-		spatula_from_build = false
-		spatula_lmb_held = false
-		spatula_owner_id = 0
+	_mp_release_scoop_if(p)
+	if flicking_patty == p:
+		flicking_patty = null
+	if dragging_patty == p:
+		dragging_patty = null
+		drag_owner_id = 0
 	var gidx: int = int(p.slot_index)
 	if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
 		grill[gidx] = null
@@ -14272,8 +14454,15 @@ func mp_drop_to_build(net_id: int, index: int) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_serve() -> void:
+func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
 	_mp_applying = true
+	if cust_net_id >= 0:
+		var c = _customer_by_net_id(cust_net_id)
+		if c != null:
+			selected_customer = c
+			_highlight_tickets()
+	if station_index >= 0 and station_index < STATION_COUNT:
+		active_station = station_index
 	_on_serve_local()
 	_mp_applying = false
 
@@ -14297,6 +14486,7 @@ func mp_trash_patty(net_id: int) -> void:
 	if p == null:
 		return
 	_mp_applying = true
+	_mp_clear_held_net(net_id)
 	if spatula_patty == p:
 		_trash_spatula_patty_local()
 	else:
@@ -14310,9 +14500,17 @@ func mp_place_spatula(net_id: int, idx: int, x: float, z: float) -> void:
 	if p == null:
 		return
 	_mp_applying = true
-	if spatula_patty != p:
-		spatula_patty = p
-	_place_spatula_on_grill_local(idx, Vector3(x, GRILL_SURFACE_Y, z))
+	_place_spatula_on_grill_local(idx, Vector3(x, GRILL_SURFACE_Y, z), p)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_place_warmer(net_id: int, idx: int, x: float, z: float) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	_mp_applying = true
+	_place_spatula_on_warmer_local(idx, Vector3(x, GRILL_SURFACE_Y, z), p)
 	_mp_applying = false
 
 
@@ -14327,11 +14525,10 @@ func mp_commit_patty_build(net_id: int) -> void:
 	var gidx: int = int(p.slot_index)
 	if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
 		grill[gidx] = null
-	if spatula_patty == p:
-		spatula_patty = null
-		spatula_owner_id = 0
+	_mp_release_scoop_if(p)
 	if dragging_patty == p:
 		dragging_patty = null
+		drag_owner_id = 0
 	p.is_held = false
 	p.heating = false
 	_leave_grill_residue(gidx, p, false)
@@ -14454,20 +14651,32 @@ func mp_steal_held(net_id: int) -> void:
 		flicking_patty = null
 	if dragging_patty == p:
 		dragging_patty = null
+		drag_owner_id = 0
 	var gidx: int = int(p.slot_index)
 	if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
 		grill[gidx] = null
+	## Victim loses their scoop if this was theirs.
+	if spatula_patty == p:
+		spatula_patty = null
+		spatula_owner_id = 0
+		spatula_from_build = false
+		spatula_lmb_held = false
+		spatula_vel_screen = Vector2.ZERO
+		spatula_carry_travel = 0.0
+		_refresh_spatula_ui()
+	_mp_clear_held_net(net_id)
 	p.is_held = true
 	p.heating = false
 	p.visible = true
-	spatula_patty = p
-	spatula_owner_id = sid
-	spatula_from_build = false
-	spatula_lmb_held = false
-	spatula_vel_screen = Vector2.ZERO
-	spatula_carry_travel = 0.0
-	_refresh_spatula_ui()
+	_mp_mark_held(sid, p)
 	if sid == NetManager.my_id():
+		spatula_patty = p
+		spatula_owner_id = sid
+		spatula_from_build = false
+		spatula_lmb_held = false
+		spatula_vel_screen = Vector2.ZERO
+		spatula_carry_travel = 0.0
 		spatula_last_mouse = get_viewport().get_mouse_position()
+		_refresh_spatula_ui()
 		_flash("Yoink! Stole the scoop", Color("FF8A80"))
 	_mp_applying = false
