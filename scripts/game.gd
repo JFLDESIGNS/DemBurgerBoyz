@@ -697,6 +697,7 @@ var _mp_remote_cursors: Dictionary = {} ## peer_id -> Control
 var _mp_cursor_layer: Control = null
 var _mp_next_customer_net_id: int = 1
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
+var _mp_cat_accum: float = 0.0
 var multiplayer_btn: Button = null
 
 
@@ -1137,7 +1138,13 @@ func _process(delta: float) -> void:
 			_mp_drag_accum = 0.0
 			_mp_send_patty_pose(dragging_patty)
 	if mp_enabled and spatula_patty != null and is_instance_valid(spatula_patty):
-		_mp_send_patty_pose(spatula_patty, true)
+		if spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id():
+			_mp_send_patty_pose(spatula_patty, true)
+	if mp_enabled and NetManager.is_host() and window_cat != null and is_instance_valid(window_cat):
+		_mp_cat_accum += delta
+		if _mp_cat_accum >= 0.1:
+			_mp_cat_accum = 0.0
+			_mp_send_cat_sync()
 
 
 func _update_station_freshness(delta: float) -> void:
@@ -1294,13 +1301,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _try_window_cat_click(event.position):
 				return
 			if spatula_patty != null:
-				## Remote cook is carrying this scoop — don't steal input.
+				## Remote cook is carrying this scoop — click it to steal.
 				if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
+					if _try_steal_held_patty_at(event.position):
+						get_viewport().set_input_as_handled()
 					return
 				## Still dragging from Build — drop happens on release.
 				if spatula_lmb_held and spatula_from_build:
 					return
 				_handle_spatula_click(event.position)
+				return
+			if mp_enabled and _try_steal_held_patty_at(event.position):
+				get_viewport().set_input_as_handled()
 				return
 			if _try_warmer_click(event.position):
 				return
@@ -4289,6 +4301,9 @@ func _build_window_cat() -> void:
 	cat.name = "WindowCat"
 	world.add_child(cat)
 	window_cat = cat
+	## Guest sees host-driven cat (peek / run / chonk) via sync RPCs.
+	if mp_enabled and not NetManager.is_host():
+		cat.set("mp_puppet", true)
 	if cat.has_signal("petted"):
 		cat.petted.connect(_on_window_cat_petted)
 	if cat.has_signal("fed"):
@@ -4304,10 +4319,15 @@ func _try_window_cat_click(screen_pos: Vector2) -> bool:
 		return false
 	## Holding food → feed; empty hands → pet (arms a short topping-treat window).
 	if spatula_patty != null and is_instance_valid(spatula_patty):
+		if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
+			return false
 		_feed_window_cat_patty()
 		return true
 	if cheese_held:
 		_feed_window_cat_ingredient("cheese")
+		return true
+	if mp_enabled and not _mp_applying:
+		mp_cat_pet.rpc()
 		return true
 	window_cat.pet()
 	return true
@@ -4316,8 +4336,19 @@ func _try_window_cat_click(screen_pos: Vector2) -> bool:
 func _feed_window_cat_patty() -> void:
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		return
+	if mp_enabled and not _mp_applying:
+		var nid := int(spatula_patty.get("net_id")) if spatula_patty.get("net_id") != null else -1
+		mp_cat_feed.rpc("patty", nid)
+		return
+	_feed_window_cat_patty_local()
+
+
+func _feed_window_cat_patty_local() -> void:
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
@@ -4326,13 +4357,14 @@ func _feed_window_cat_patty() -> void:
 	if is_instance_valid(patty):
 		patty.queue_free()
 	if window_cat:
-		window_cat.feed("patty")
-	_on_window_cat_fed("patty")
+		window_cat.feed("patty", true)
 	_flash("Cat stole the burger! ♥", Color("FF8A80"))
 
 
 func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return false
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
 		return false
 	if window_cat == null or not is_instance_valid(window_cat):
 		return false
@@ -4343,16 +4375,65 @@ func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
 
 
 func _feed_window_cat_ingredient(id: String) -> void:
+	if mp_enabled and not _mp_applying:
+		mp_cat_feed.rpc(id, -1)
+		return
+	_feed_window_cat_ingredient_local(id)
+
+
+func _feed_window_cat_ingredient_local(id: String) -> void:
 	if id == "cheese" and cheese_held:
 		_cancel_cheese_hold()
 	if not _spend_ingredient(id):
 		return
 	if window_cat:
-		window_cat.feed(id)
+		window_cat.feed(id, true)
 	var label := id.replace("_", " ")
 	_flash("Cat loves the %s!" % label, Color("FFE082"))
 	if game_audio:
 		game_audio.play_ingredient(id)
+
+
+func _held_patty_near_screen(patty: Area3D, screen_pos: Vector2, max_px: float = 78.0) -> bool:
+	if patty == null or not is_instance_valid(patty) or camera == null:
+		return false
+	var lift: Vector3 = patty.global_position + Vector3(0, 0.04, 0)
+	if camera.is_position_behind(lift):
+		return false
+	return screen_pos.distance_to(camera.unproject_position(lift)) <= max_px
+
+
+func _try_steal_held_patty_at(screen_pos: Vector2) -> bool:
+	if not mp_enabled or not playing or _mp_applying:
+		return false
+	var target = null
+	if spatula_patty != null and is_instance_valid(spatula_patty) \
+			and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() \
+			and _held_patty_near_screen(spatula_patty, screen_pos):
+		target = spatula_patty
+	elif flicking_patty != null and is_instance_valid(flicking_patty) \
+			and _held_patty_near_screen(flicking_patty, screen_pos):
+		target = flicking_patty
+	if target == null:
+		for p in grill:
+			if p == null or not is_instance_valid(p):
+				continue
+			if not bool(p.is_held):
+				continue
+			if spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id()):
+				continue
+			if _held_patty_near_screen(p, screen_pos):
+				target = p
+				break
+	if target == null:
+		return false
+	var nid := int(target.get("net_id")) if target.get("net_id") != null else -1
+	if nid < 0:
+		return false
+	if spatula_patty == target and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id()):
+		return false
+	mp_steal_held.rpc(nid)
+	return true
 
 
 func _on_window_cat_petted() -> void:
@@ -13965,6 +14046,11 @@ func _mp_on_session_start(session_seed: int) -> void:
 	NetManager.stop_browse()
 	_flash("Co-op shift — cook together!", Color("FFEB3B"))
 	_start_game()
+	## Host owns cat AI; guest follows sync so peeks / hearts match.
+	if window_cat != null and is_instance_valid(window_cat):
+		window_cat.set("mp_puppet", not NetManager.is_host())
+		if NetManager.is_host():
+			_mp_send_cat_sync()
 
 
 func _mp_update_cursors(delta: float) -> void:
@@ -14077,7 +14163,7 @@ func mp_request_spawn_patty(x: float, z: float) -> void:
 	mp_spawn_patty.rpc(nid, idx, place_pos.x, place_pos.z)
 
 
-@rpc("authority", "call_local", "reliable")
+@rpc("any_peer", "call_local", "reliable")
 func mp_spawn_patty(net_id: int, idx: int, x: float, z: float) -> void:
 	_mp_applying = true
 	_spawn_patty_at(idx, Vector3(x, GRILL_SURFACE_Y, z), net_id)
@@ -14115,8 +14201,10 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> voi
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
-	## Don't fight local drag ownership.
+	## Don't fight local drag / scoop ownership.
 	if dragging_patty == p:
+		return
+	if spatula_patty == p and spatula_owner_id == NetManager.my_id():
 		return
 	p.position = Vector3(x, y, z)
 	p._rest_x = x
@@ -14124,6 +14212,8 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> voi
 	if held:
 		p.is_held = true
 		p.heating = false
+		if spatula_patty != p:
+			spatula_patty = p
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -14175,14 +14265,15 @@ func mp_serve() -> void:
 	_mp_applying = false
 
 
-@rpc("authority", "call_local", "reliable")
+## any_peer (host-only callers): authority can drop on relay peers.
+@rpc("any_peer", "call_local", "reliable")
 func mp_spawn_customer(net_id: int, order: Array, cr: float, cg: float, cb: float, patience: float, lane: int) -> void:
 	_mp_applying = true
 	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id)
 	_mp_applying = false
 
 
-@rpc("authority", "call_local", "reliable")
+@rpc("any_peer", "call_local", "reliable")
 func mp_end_day() -> void:
 	_end_day()
 
@@ -14232,4 +14323,136 @@ func mp_commit_patty_build(net_id: int) -> void:
 	p.heating = false
 	_leave_grill_residue(gidx, p, false)
 	_commit_patty_to_build(p)
+	_mp_applying = false
+
+
+func _mp_send_cat_sync() -> void:
+	if window_cat == null or not is_instance_valid(window_cat):
+		return
+	if not window_cat.has_method("get_mp_sync"):
+		return
+	var d: Dictionary = window_cat.get_mp_sync()
+	mp_cat_sync.rpc(
+		str(d.get("state", "hidden")),
+		float(d.get("timer", 0.0)),
+		float(d.get("x", 0.0)),
+		float(d.get("y", 0.0)),
+		float(d.get("z", 0.0)),
+		float(d.get("yaw", 180.0)),
+		bool(d.get("vis", false)),
+		float(d.get("fat", 0.0)),
+		float(d.get("giant", 0.0)),
+		float(d.get("treat", 0.0)),
+		float(d.get("eat_w", 0.0)),
+		float(d.get("bob", 0.0))
+	)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_cat_sync(
+	state: String,
+	timer: float,
+	x: float,
+	y: float,
+	z: float,
+	yaw: float,
+	vis: bool,
+	fat: float,
+	giant: float,
+	treat: float,
+	eat_w: float,
+	bob: float
+) -> void:
+	if NetManager.is_host():
+		return
+	if window_cat == null or not is_instance_valid(window_cat):
+		return
+	if not window_cat.has_method("apply_mp_sync"):
+		return
+	window_cat.apply_mp_sync({
+		"state": state,
+		"timer": timer,
+		"x": x,
+		"y": y,
+		"z": z,
+		"yaw": yaw,
+		"vis": vis,
+		"fat": fat,
+		"giant": giant,
+		"treat": treat,
+		"eat_w": eat_w,
+		"bob": bob,
+	})
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_cat_pet() -> void:
+	_mp_applying = true
+	if window_cat != null and is_instance_valid(window_cat):
+		window_cat.pet(true)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_cat_feed(kind: String, patty_net_id: int) -> void:
+	_mp_applying = true
+	if kind == "patty":
+		var p = _patty_by_net_id(patty_net_id) if patty_net_id >= 0 else null
+		if p == null and spatula_patty != null and is_instance_valid(spatula_patty):
+			p = spatula_patty
+		if p != null:
+			if spatula_patty == p:
+				spatula_patty = null
+				spatula_owner_id = 0
+				spatula_from_build = false
+				spatula_lmb_held = false
+				spatula_vel_screen = Vector2.ZERO
+				spatula_carry_travel = 0.0
+				_refresh_spatula_ui()
+			var gidx: int = int(p.slot_index)
+			if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
+				grill[gidx] = null
+			if flicking_patty == p:
+				flicking_patty = null
+			if dragging_patty == p:
+				dragging_patty = null
+			if is_instance_valid(p):
+				p.queue_free()
+		if window_cat != null and is_instance_valid(window_cat):
+			window_cat.feed("patty", true)
+		_flash("Cat stole the burger! ♥", Color("FF8A80"))
+	else:
+		_feed_window_cat_ingredient_local(kind)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_steal_held(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null or not is_instance_valid(p):
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	_mp_applying = true
+	if flicking_patty == p:
+		flicking_patty = null
+	if dragging_patty == p:
+		dragging_patty = null
+	var gidx: int = int(p.slot_index)
+	if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
+		grill[gidx] = null
+	p.is_held = true
+	p.heating = false
+	p.visible = true
+	spatula_patty = p
+	spatula_owner_id = sid
+	spatula_from_build = false
+	spatula_lmb_held = false
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	if sid == NetManager.my_id():
+		spatula_last_mouse = get_viewport().get_mouse_position()
+		_flash("Yoink! Stole the scoop", Color("FF8A80"))
 	_mp_applying = false

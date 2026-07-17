@@ -66,6 +66,8 @@ var _fat: float = 0.0
 var _giant: float = 0.0
 ## 0–1 — patty chew swell (width grows to +25% during fed_hold, then commits to _fat).
 var _patty_eat_wide: float = 0.0
+## Non-host co-op: skip local peek AI; pose/state come from the host.
+var mp_puppet: bool = false
 
 
 func _ready() -> void:
@@ -378,6 +380,41 @@ func _burst_hearts() -> void:
 	_hearts.emitting = true
 
 
+func get_mp_sync() -> Dictionary:
+	return {
+		"state": _state,
+		"timer": _timer,
+		"x": position.x,
+		"y": position.y,
+		"z": position.z,
+		"yaw": rotation_degrees.y,
+		"vis": visible,
+		"fat": _fat,
+		"giant": _giant,
+		"treat": _treat_arm,
+		"eat_w": _patty_eat_wide,
+		"bob": _bob,
+	}
+
+
+func apply_mp_sync(d: Dictionary) -> void:
+	_state = str(d.get("state", _state))
+	_timer = float(d.get("timer", _timer))
+	position = Vector3(float(d.get("x", position.x)), float(d.get("y", position.y)), float(d.get("z", position.z)))
+	rotation_degrees.y = float(d.get("yaw", rotation_degrees.y))
+	visible = bool(d.get("vis", visible))
+	_fat = float(d.get("fat", _fat))
+	_giant = float(d.get("giant", _giant))
+	_treat_arm = float(d.get("treat", _treat_arm))
+	_patty_eat_wide = float(d.get("eat_w", _patty_eat_wide))
+	_bob = float(d.get("bob", _bob))
+	## Drop mouth prop when host is no longer chewing / bolting.
+	if _state != "fed_hold" and _state != "running":
+		_clear_mouth_burger()
+		if _hearts != null and is_instance_valid(_hearts) and _state == "hidden":
+			_hearts.emitting = false
+
+
 func _process(delta: float) -> void:
 	if not enabled or _visual == null:
 		return
@@ -385,6 +422,10 @@ func _process(delta: float) -> void:
 	_treat_arm = maxf(0.0, _treat_arm - delta)
 	_pet_squash = maxf(0.0, _pet_squash - delta * 3.2)
 	_eat_flash = maxf(0.0, _eat_flash - delta)
+	## Puppet peers still run squash / scale / bob, not the peek state machine.
+	if mp_puppet:
+		_apply_visual_scale()
+		return
 	_timer -= delta
 	match _state:
 		"hidden":
@@ -464,23 +505,28 @@ func _process(delta: float) -> void:
 				rotation_degrees.y = FACE_COOK_YAW
 				_treat_arm = 0.0
 				_clear_mouth_burger()
+	_apply_visual_scale()
+
+
+func _apply_visual_scale() -> void:
 	## Soft squash when petted / fed — keep accumulated width + giant size.
-	if _visual != null:
-		var fat_w := 1.0 + _fat
-		var eat_w := 1.0 + _patty_eat_wide * PATTY_EAT_WIDTH_BOOST
-		var size_m := _size_mul()
-		var sx := MESH_SCALE * fat_w * eat_w * size_m * (1.0 - _pet_squash * 0.08)
-		var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08) * size_m
-		var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
-		_visual.scale = Vector3(sx, sy, sz)
-		## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
-		_visual.position.y = -MESH_SCALE * VISUAL_FOOT_COMP * (size_m - 1.0)
-		## Grow the pet hitbox with the cat.
-		if _area != null:
-			var shape := _area.get_child(0) as CollisionShape3D
-			if shape != null and shape.shape is BoxShape3D:
-				(shape.shape as BoxShape3D).size = Vector3(0.55, 0.55, 0.45) * size_m
-				shape.position = Vector3(0.0, 0.42 * size_m + _visual.position.y, 0.08)
+	if _visual == null:
+		return
+	var fat_w := 1.0 + _fat
+	var eat_w := 1.0 + _patty_eat_wide * PATTY_EAT_WIDTH_BOOST
+	var size_m := _size_mul()
+	var sx := MESH_SCALE * fat_w * eat_w * size_m * (1.0 - _pet_squash * 0.08)
+	var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08) * size_m
+	var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
+	_visual.scale = Vector3(sx, sy, sz)
+	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
+	_visual.position.y = -MESH_SCALE * VISUAL_FOOT_COMP * (size_m - 1.0)
+	## Grow the pet hitbox with the cat.
+	if _area != null:
+		var shape := _area.get_child(0) as CollisionShape3D
+		if shape != null and shape.shape is BoxShape3D:
+			(shape.shape as BoxShape3D).size = Vector3(0.55, 0.55, 0.45) * size_m
+			shape.position = Vector3(0.0, 0.42 * size_m + _visual.position.y, 0.08)
 
 
 func _begin_run_away() -> void:
@@ -553,23 +599,33 @@ func hit_test_feed(camera: Camera3D, screen_pos: Vector2) -> bool:
 	return hit_test(camera, screen_pos, 130.0)
 
 
-func pet() -> void:
-	if not is_interactable():
+func pet(force: bool = false) -> void:
+	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
 	_treat_arm = 2.4
 	## Linger a bit longer when loved.
-	if _state == "peek":
+	if _state == "peek" or _state == "rising" or force:
 		_timer = maxf(_timer, 4.0)
+		if force and _state != "fed_hold" and _state != "running":
+			_state = "peek"
+			visible = true
+			position.y = _shown_y()
+	_burst_hearts()
 	petted.emit()
 
 
-func feed(kind: String) -> void:
-	if not is_interactable():
+func feed(kind: String, force: bool = false) -> void:
+	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
 	_eat_flash = 0.6
 	_treat_arm = 0.0
+	if force and not visible:
+		visible = true
+		position.y = _shown_y()
+		if _state == "hidden" or _state == "lowering":
+			_state = "peek"
 	## Widen on toppings a little; patty swell animates during fed_hold.
 	if kind == "patty":
 		_patty_eat_wide = 0.0
