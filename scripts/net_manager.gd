@@ -21,8 +21,8 @@ const RELAY_CFG_PATH := "user://mp_relay.cfg"
 const MAGIC := "FTFLIP_ROOM_v2"
 
 ## Paste your Railway public URL (https://… or wss://…). Empty = LAN-only.
-## Example: wss://burger-pals-mp-production.up.railway.app
-const DEFAULT_RELAY_URL := ""
+## Production relay (jfldesigns Railway):
+const DEFAULT_RELAY_URL := "wss://burger-pals-mp-production.up.railway.app"
 
 const GAME_PORT_MIN := CODE_PORT_BASE
 const GAME_PORT_MAX := CODE_PORT_BASE + 9999
