@@ -701,10 +701,13 @@ var _mp_next_customer_net_id: int = 1
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
 var _mp_econ_accum: float = 0.0
+var _mp_cust_accum: float = 0.0
 var _mp_oil_sync_cool: float = 0.0
 var _mp_residue_sync_cool: float = 0.0
 var _mp_ext_sync_cool: float = 0.0
 var _mp_season_sync_cool: float = 0.0
+## True while a co-op serve is in flight (fly tween) so peers share one outcome.
+var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
 
 
@@ -1164,6 +1167,10 @@ func _process(delta: float) -> void:
 		if _mp_econ_accum >= 0.45:
 			_mp_econ_accum = 0.0
 			_mp_broadcast_economy()
+		_mp_cust_accum += delta
+		if _mp_cust_accum >= 0.2:
+			_mp_cust_accum = 0.0
+			_mp_broadcast_customers()
 
 
 func _update_station_freshness(delta: float) -> void:
@@ -10433,6 +10440,8 @@ func _spawn_customer() -> void:
 	elif day == 3:
 		patience += 10.0
 	var lane := customers.size()
+	var skin_idx := randi() % CustomerScript.CHAR_SKINS.size()
+	var face_style := randi() % 3
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -10442,17 +10451,30 @@ func _spawn_customer() -> void:
 		for o in order:
 			order_packed.append(str(o))
 		if NetManager.is_host():
-			mp_spawn_customer.rpc(nid, order_packed, color.r, color.g, color.b, patience, lane)
+			mp_spawn_customer.rpc(
+				nid, order_packed, color.r, color.g, color.b, patience, lane, skin_idx, face_style
+			)
 			return
-	_spawn_customer_local(order, color, patience, lane, -1)
+	_spawn_customer_local(order, color, patience, lane, -1, skin_idx, face_style)
 
 
-func _spawn_customer_local(order: Array, color: Color, patience: float, lane: int, net_id: int = -1) -> void:
+func _spawn_customer_local(
+	order: Array,
+	color: Color,
+	patience: float,
+	lane: int,
+	net_id: int = -1,
+	skin_idx: int = -1,
+	face_style: int = -1
+) -> void:
 	var typed_order: Array[String] = []
 	for o in order:
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
-	c.setup(typed_order, color, patience, lane)
+	c.setup(typed_order, color, patience, lane, skin_idx, face_style)
+	## Guest customers are puppets — host owns patience expiry + leave.
+	if mp_enabled and not NetManager.is_host():
+		c.mp_host_driven = true
 	## Stand on the sidewalk — raised so more torso shows in the window.
 	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
 	c.target_x = CustomerScript.lane_x_for(lane)
@@ -10603,16 +10625,16 @@ func _close_dialogue_if_customer(customer: Node3D) -> void:
 
 
 func _on_customer_left(customer: Node3D, angry: bool) -> void:
-	## Angry walk-offs are host-authored so both cooks share the same -$2 / combo reset.
-	if mp_enabled and not _mp_applying and angry:
+	## Co-op: host alone authors leave so tickets / line stay identical.
+	if mp_enabled and not _mp_applying:
 		if not NetManager.is_host():
 			return
 		var nid := _customer_net_id(customer)
 		if nid < 0:
-			_customer_leave_apply(customer, true)
+			_customer_leave_apply(customer, angry)
 			_mp_broadcast_economy()
 			return
-		mp_customer_leave.rpc(nid, true)
+		mp_customer_leave.rpc(nid, angry)
 		return
 	_customer_leave_apply(customer, angry)
 	if mp_enabled and NetManager.is_host() and not _mp_applying:
@@ -10630,11 +10652,18 @@ func _customer_net_id(customer: Node3D) -> int:
 func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
+	## Idempotent — ignore if already removed from the line.
+	if not customers.has(customer) and not tickets.has(customer):
+		return
 	_close_dialogue_if_customer(customer)
 	_remove_ticket(customer)
 	customers.erase(customer)
 	if selected_customer == customer:
-		selected_customer = customers[0] if customers.size() > 0 else null
+		selected_customer = null
+		for c in customers:
+			if c != null and is_instance_valid(c) and bool(c.get("is_waiting")):
+				selected_customer = c
+				break
 	_highlight_tickets()
 	_reposition_customers()
 	if bool(customer.get("is_terrorist")):
@@ -10666,7 +10695,10 @@ func _create_ticket(customer: Node3D) -> void:
 	note.custom_minimum_size = Vector2(168, 0)
 	note.mouse_filter = Control.MOUSE_FILTER_STOP
 	## Slight crooked pin so slips don't look like UI cards.
-	note.rotation_degrees = randf_range(-5.5, 4.5)
+	var rot_seed := _customer_net_id(customer)
+	if rot_seed < 0:
+		rot_seed = customer.get_instance_id()
+	note.rotation_degrees = float((rot_seed * 37) % 100) / 100.0 * 10.0 - 5.0
 	note.pivot_offset = Vector2(84, 10)
 	note.set_meta("paper_rot", note.rotation_degrees)
 	## Outer shell: drop shadow + border (StyleBoxTexture can't cast shadows).
@@ -13330,6 +13362,25 @@ func _try_feed_bacon_to_customer(screen_pos: Vector2) -> bool:
 		return false
 	if not cust.has_method("feed_bacon_snack"):
 		return false
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust)
+		if nid < 0:
+			return false
+		if not _mp_can_spend_ingredient("bacon"):
+			return true
+		## Peek: only RPC if they can still take a snack.
+		if cust.patience >= cust.patience_max - 0.05:
+			_pending_ingredient_drag = ""
+			_pending_cheese_drag = false
+			_strip_did_drag = true
+			_flash("They're not hungry for more bacon", Color("FFCC80"))
+			return true
+		mp_bacon_customer.rpc(nid)
+		_pending_ingredient_drag = ""
+		_pending_cheese_drag = false
+		_strip_did_drag = true
+		_strip_gesture_added = true
+		return true
 	if not bool(cust.feed_bacon_snack(BACON_PATIENCE_RESTORE)):
 		_pending_ingredient_drag = ""
 		_pending_cheese_drag = false
@@ -13665,8 +13716,10 @@ func _complete_serve(station_index: int) -> void:
 	))
 	_clear_station(station_index)
 	_update_hud()
+	_mp_serve_sync = false
 	if mp_enabled and NetManager.is_host() and not _mp_applying:
 		_mp_broadcast_economy()
+		_mp_broadcast_customers()
 
 
 func _serve_reject_hint(order: Array, station_index: int) -> void:
@@ -13691,54 +13744,83 @@ func _serve_reject_hint(order: Array, station_index: int) -> void:
 func _on_serve() -> void:
 	if not playing or _serve_fly_busy:
 		return
-	if mp_enabled and not _mp_applying:
-		var cid := -1
-		if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.has_meta("mp_net_id"):
-			cid = int(selected_customer.get_meta("mp_net_id"))
-		mp_serve.rpc(cid, active_station)
+	## Resolve customer + perfect Build station before RPCing so peers share one outcome.
+	var cust = _resolve_serve_customer()
+	if cust == null:
+		if not _auto_serving:
+			_flash("Click an order ticket first, then Serve", Color("EF5350"))
 		return
-	_on_serve_local()
-
-
-func _on_serve_local() -> void:
-	if not playing or _serve_fly_busy:
-		return
-	## Selected ticket is the order we serve — auto-pick if only one waiting.
-	if selected_customer == null or not is_instance_valid(selected_customer) or not selected_customer.is_waiting:
-		selected_customer = null
-		for c in customers:
-			if c != null and is_instance_valid(c) and c.is_waiting:
-				if selected_customer != null:
-					selected_customer = null
-					break
-				selected_customer = c
-		_highlight_tickets()
-		if selected_customer == null:
-			if not _auto_serving:
-				_flash("Click an order ticket first, then Serve", Color("EF5350"))
-			return
-	if selected_customer.dialogue_open:
-		selected_customer.dialogue_open = false
-
-	var order: Array = selected_customer.order
-	## Only serve a perfect match (top bun may auto-crown at serve time).
+	var order: Array = cust.order
 	var station_index := _find_perfect_station_for(order)
 	if station_index < 0:
 		combo = 0
 		if not _auto_serving:
-			var hint_si := _find_station_for_order(order)
-			_serve_reject_hint(order, hint_si)
+			_serve_reject_hint(order, _find_station_for_order(order))
 		_update_hud()
 		return
+	if mp_enabled and not _mp_applying:
+		var cid := _customer_net_id(cust)
+		mp_serve.rpc(cid, station_index)
+		return
+	_begin_serve_at(cust, station_index, false)
 
-	## Keep cheese stack entries synced before matching.
-	_sync_station_cheese_items(station_index)
+
+func _resolve_serve_customer():
+	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
+		return selected_customer
+	selected_customer = null
+	for c in customers:
+		if c != null and is_instance_valid(c) and c.is_waiting:
+			if selected_customer != null:
+				selected_customer = null
+				break
+			selected_customer = c
+	_highlight_tickets()
+	return selected_customer
+
+
+func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> void:
+	if not playing or _serve_fly_busy:
+		return
+	if customer == null or not is_instance_valid(customer) or not customer.is_waiting:
+		if force_mp:
+			return
+		if not _auto_serving:
+			_flash("Click an order ticket first, then Serve", Color("EF5350"))
+		return
+	selected_customer = customer
+	_highlight_tickets()
+	if customer.dialogue_open:
+		customer.dialogue_open = false
+
+	if station_index < 0 or station_index >= STATION_COUNT:
+		if force_mp:
+			_mp_force_finish_customer(customer)
+		return
 
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
+	## Remote peer already validated — if our Build drifted empty, still clear the order.
+	if force_mp and (items.is_empty() or not items.has("patty")):
+		_mp_force_finish_customer(customer)
+		_clear_station(station_index)
+		_update_hud()
+		return
+
+	if not force_mp:
+		var order_check: Array = customer.order
+		if _find_perfect_station_for(order_check) != station_index \
+			and not _station_only_needs_top_bun(items, order_check) \
+			and not bool(GameDataScript.compare_orders(items, order_check).get("perfect", false)):
+			## Safety: local path should have validated already.
+			pass
+
+	_sync_station_cheese_items(station_index)
+	items = st["items"]
 	active_station = station_index
 	_highlight_active_station()
 
+	var order: Array = customer.order
 	var crowned_for_serve := false
 	if items.has("patty") and not items.has("bun_top") and order.has("bun_top"):
 		crowned_for_serve = _crown_serve_burger(station_index)
@@ -13751,16 +13833,45 @@ func _on_serve_local() -> void:
 		game_audio.play_order_up()
 
 	if station_index == STATION_CRAFT:
-		var cust: Node3D = selected_customer
+		var cust: Node3D = customer
+		var si := station_index
 		if crowned_for_serve:
-			_animate_top_bun_on_station(station_index, func() -> void:
-				_play_serve_fly_to_mouth(station_index, cust, func() -> void: _complete_serve(station_index))
+			_animate_top_bun_on_station(si, func() -> void:
+				_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si))
 			)
 		else:
-			_play_serve_fly_to_mouth(station_index, cust, func() -> void: _complete_serve(station_index))
+			_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si))
 		return
 
 	_complete_serve(station_index)
+
+
+func _mp_force_finish_customer(customer: Node3D) -> void:
+	## Build drifted on this peer — still dismiss the shared order.
+	if customer == null or not is_instance_valid(customer):
+		return
+	if customer.has_method("complete_serve"):
+		customer.complete_serve(0)
+	elif customer.has_method("leave_happy"):
+		customer.leave_happy()
+		_on_customer_left(customer, false)
+
+
+func _on_serve_local() -> void:
+	## Kept for older call sites — prefer _begin_serve_at.
+	var cust = _resolve_serve_customer()
+	if cust == null:
+		if not _auto_serving:
+			_flash("Click an order ticket first, then Serve", Color("EF5350"))
+		return
+	var station_index := _find_perfect_station_for(cust.order)
+	if station_index < 0:
+		combo = 0
+		if not _auto_serving:
+			_serve_reject_hint(cust.order, _find_station_for_order(cust.order))
+		_update_hud()
+		return
+	_begin_serve_at(cust, station_index, false)
 
 
 func _find_station_for_order(order: Array) -> int:
@@ -14788,25 +14899,39 @@ func mp_drop_to_build(net_id: int, index: int) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
+	_mp_serve_sync = true
 	_mp_applying = true
-	if cust_net_id >= 0:
-		var c = _customer_by_net_id(cust_net_id)
-		if c != null:
-			selected_customer = c
-			_highlight_tickets()
+	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
+	if cust != null:
+		selected_customer = cust
+		_highlight_tickets()
 	if station_index >= 0 and station_index < STATION_COUNT:
 		active_station = station_index
-	_on_serve_local()
+	## Force path: don't re-validate Build — initiator already had a perfect match.
+	_begin_serve_at(
+		cust if cust != null else selected_customer,
+		station_index if station_index >= 0 else active_station,
+		true
+	)
 	_mp_applying = false
-	if NetManager.is_host():
-		_mp_broadcast_economy()
+	## Fly tween may still be running; leave authority stays host via _on_customer_left.
 
 
 ## any_peer (host-only callers): authority can drop on relay peers.
 @rpc("any_peer", "call_local", "reliable")
-func mp_spawn_customer(net_id: int, order: Array, cr: float, cg: float, cb: float, patience: float, lane: int) -> void:
+func mp_spawn_customer(
+	net_id: int,
+	order: Array,
+	cr: float,
+	cg: float,
+	cb: float,
+	patience: float,
+	lane: int,
+	skin_idx: int = -1,
+	face_style: int = -1
+) -> void:
 	_mp_applying = true
-	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id)
+	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style)
 	_mp_applying = false
 
 
@@ -15091,14 +15216,104 @@ func mp_customer_leave(net_id: int, angry: bool) -> void:
 	_mp_applying = true
 	var c = _customer_by_net_id(net_id)
 	if c != null and is_instance_valid(c):
+		## Ensure walk-off anim if they were still waiting (guest ticket clear).
+		if bool(c.get("is_waiting")) and not bool(c.get("is_leaving")):
+			if angry and c.has_method("leave_mad"):
+				c.leave_mad()
+			elif (not angry) and c.has_method("leave_happy"):
+				c.leave_happy()
 		_customer_leave_apply(c, angry)
 	elif angry:
 		combo = 0
 		_record_social_review(1.0)
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 	_mp_applying = false
+	_mp_serve_sync = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
+
+
+func _mp_broadcast_customers() -> void:
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	var ids: Array = []
+	var pats: Array = []
+	var xs: Array = []
+	var zs: Array = []
+	var waits: Array = []
+	var leaves: Array = []
+	var clocks: Array = []
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		var nid := _customer_net_id(c)
+		if nid < 0:
+			continue
+		ids.append(nid)
+		pats.append(float(c.patience))
+		xs.append(float(c.global_position.x))
+		zs.append(float(c.global_position.z))
+		waits.append(bool(c.is_waiting))
+		leaves.append(bool(c.is_leaving))
+		clocks.append(float(c.get("order_elapsed_sec")) if "order_elapsed_sec" in c else 0.0)
+	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_sync_customers(
+	ids: Array,
+	pats: Array,
+	xs: Array,
+	zs: Array,
+	waits: Array,
+	leaves: Array,
+	clocks: Array
+) -> void:
+	if NetManager.is_host():
+		return
+	var seen: Dictionary = {}
+	for i in ids.size():
+		var nid := int(ids[i])
+		seen[nid] = true
+		var c = _customer_by_net_id(nid)
+		if c == null or not is_instance_valid(c):
+			continue
+		c.mp_host_driven = true
+		if i < pats.size():
+			c.patience = float(pats[i])
+			if c.has_method("_refresh_patience_bar"):
+				c._refresh_patience_bar()
+		if i < clocks.size() and "order_elapsed_sec" in c:
+			c.order_elapsed_sec = float(clocks[i])
+		if i < xs.size():
+			c.global_position.x = float(xs[i])
+			c.target_x = float(xs[i])
+		if i < zs.size():
+			c.global_position.z = float(zs[i])
+		var host_waiting := bool(waits[i]) if i < waits.size() else false
+		var host_leaving := bool(leaves[i]) if i < leaves.size() else false
+		## Host already dismissed them — clear our ticket even if serve FX lagged.
+		if host_leaving:
+			if not bool(c.is_leaving) and c.has_method("leave_happy"):
+				c.leave_happy()
+			_customer_leave_apply(c, false)
+			continue
+		## Host ticket is up — pin ours if arrival timing drifted.
+		if host_waiting:
+			if not bool(c.is_waiting):
+				c.is_waiting = true
+				c.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
+			if not tickets.has(c):
+				_create_ticket(c)
+	## Drop ghosts the host no longer has.
+	for c in customers.duplicate():
+		if c == null or not is_instance_valid(c):
+			continue
+		var nid2 := _customer_net_id(c)
+		if nid2 >= 0 and not seen.has(nid2):
+			if not bool(c.get("is_leaving")) and c.has_method("leave_happy"):
+				c.leave_happy()
+			_customer_leave_apply(c, false)
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -15109,6 +15324,27 @@ func mp_select_customer(net_id: int) -> void:
 	_mp_applying = true
 	_select_ticket_local(c)
 	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_bacon_customer(net_id: int) -> void:
+	var c = _customer_by_net_id(net_id)
+	if c == null or not is_instance_valid(c):
+		return
+	_mp_applying = true
+	if c.has_method("feed_bacon_snack"):
+		if bool(c.feed_bacon_snack(BACON_PATIENCE_RESTORE)):
+			_mp_spend_ingredient("bacon")
+			if game_audio:
+				game_audio.play_ingredient("bacon")
+			var pct := int(round(BACON_PATIENCE_RESTORE * 100.0))
+			_flash("Bacon snack! +%d%% patience" % pct, Color("FFAB91"))
+		else:
+			_flash("They're not hungry for more bacon", Color("FFCC80"))
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
 
 
 @rpc("any_peer", "call_local", "reliable")

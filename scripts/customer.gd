@@ -138,7 +138,18 @@ static var _idle_lib: AnimationLibrary = null
 static var _walk_lib: AnimationLibrary = null
 
 
-func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int) -> void:
+## When true (co-op guest), patience/order clock are driven by host sync — not local timers.
+var mp_host_driven: bool = false
+
+
+func setup(
+	p_order: Array[String],
+	color: Color,
+	p_patience: float,
+	p_lane: int,
+	skin_idx: int = -1,
+	face_style: int = -1
+) -> void:
 	order = p_order
 	body_color = color
 	patience_max = p_patience
@@ -147,8 +158,11 @@ func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int)
 	order_value = GameDataScript.order_value(order)
 	_roll_personality()
 	speech = _make_speech()
-	_face_style = randi() % 3
-	_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
+	_face_style = face_style if face_style >= 0 else (randi() % 3)
+	if skin_idx >= 0 and not CHAR_SKINS.is_empty():
+		_skin_path = CHAR_SKINS[skin_idx % CHAR_SKINS.size()]
+	else:
+		_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
 
 
 static func lane_x_for(lane_i: int) -> float:
@@ -939,14 +953,15 @@ func _process(delta: float) -> void:
 
 	if is_waiting:
 		## Drain pauses during chat, but the bar stays visible either way.
-		if not dialogue_open:
+		## Co-op guests mirror host patience — don't expire locally (desyncs tickets).
+		if not dialogue_open and not mp_host_driven:
 			patience -= delta
 		_refresh_patience_bar()
-		if patience <= 0.0:
+		if patience <= 0.0 and not mp_host_driven:
 			leave_mad()
 			patience_expired.emit(self)
 	## Ticket clock runs from the moment the slip is pinned until serve / leave.
-	if _order_clock_on and not is_leaving:
+	if _order_clock_on and not is_leaving and not mp_host_driven:
 		order_elapsed_sec += delta
 
 
