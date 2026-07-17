@@ -701,6 +701,9 @@ var _mp_next_customer_net_id: int = 1
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
 var _mp_econ_accum: float = 0.0
+var _mp_oil_sync_cool: float = 0.0
+var _mp_residue_sync_cool: float = 0.0
+var _mp_ext_sync_cool: float = 0.0
 var multiplayer_btn: Button = null
 
 
@@ -1150,6 +1153,10 @@ func _process(delta: float) -> void:
 		if _mp_cat_accum >= 0.1:
 			_mp_cat_accum = 0.0
 			_mp_send_cat_sync()
+	if mp_enabled:
+		_mp_oil_sync_cool = maxf(0.0, _mp_oil_sync_cool - delta)
+		_mp_residue_sync_cool = maxf(0.0, _mp_residue_sync_cool - delta)
+		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
 		if _mp_econ_accum >= 0.45:
@@ -1362,6 +1369,9 @@ func _input(event: InputEvent) -> void:
 				ext_spraying = true
 				if game_audio and game_audio.has_method("set_ext_spray"):
 					game_audio.set_ext_spray(true)
+				if mp_enabled:
+					var aim0 := _grill_plane_from_screen(event.position)
+					mp_ext_spray.rpc(true, aim0.x, aim0.z, false)
 				get_viewport().set_input_as_handled()
 				return
 			if glock_held:
@@ -1378,6 +1388,8 @@ func _input(event: InputEvent) -> void:
 					ext_powder.emitting = false
 				if game_audio and game_audio.has_method("set_ext_spray"):
 					game_audio.set_ext_spray(false)
+				if mp_enabled:
+					mp_ext_spray.rpc(false, 0.0, 0.0, false)
 				get_viewport().set_input_as_handled()
 				return
 	## Sliding a patty / oil / shaker: release ends hold and returns tools home.
@@ -2605,6 +2617,15 @@ func _scrape_residue_hit(slot: int, swipe_dir: Vector2 = Vector2.ZERO) -> void:
 
 
 func _scrape_finish_clean(slot: int) -> void:
+	if slot < 0 or slot >= GRILL_SLOTS:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_residue_clean.rpc(slot)
+		return
+	_scrape_finish_clean_local(slot)
+
+
+func _scrape_finish_clean_local(slot: int) -> void:
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	var chunks: Array = grill_residue_chunks[slot] if slot < grill_residue_chunks.size() else []
@@ -4121,6 +4142,15 @@ func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> vo
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	var at := Vector3(patty._rest_x, GRILL_SURFACE_Y + 0.028, patty._rest_z) if patty else slot_positions[slot] + Vector3(0, 0.028, 0)
+	if mp_enabled and not _mp_applying:
+		mp_residue_leave.rpc(slot, at.x, at.z, announce)
+		return
+	_leave_grill_residue_local(slot, at, announce)
+
+
+func _leave_grill_residue_local(slot: int, at: Vector3, announce: bool = true) -> void:
+	if slot < 0 or slot >= GRILL_SLOTS:
+		return
 	grill_residue[slot] = 1.0
 	if slot < brush_swipe_travel.size():
 		brush_swipe_travel[slot] = 0.0
@@ -5072,6 +5102,56 @@ func _fire_glock() -> void:
 		return
 	if glock_cooldown > 0.0:
 		return
+	var mouse := get_viewport().get_mouse_position()
+	var sight := _glock_sight_ray(mouse)
+	var from: Vector3 = sight["from"]
+	var dir: Vector3 = sight["dir"]
+	var cam_from: Vector3 = sight["cam_from"]
+	var cam_dir: Vector3 = sight["cam_dir"]
+	var impact := Vector3.ZERO
+	var cust_id := -1
+	var hostile := false
+	## Cat bolt?
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.is_interactable():
+		var head: Vector3 = window_cat.head_global()
+		var to_cat := head - cam_from
+		var along := cam_dir.dot(to_cat)
+		if along > 0.4:
+			var closest := cam_from + cam_dir * along
+			if closest.distance_to(head) < 0.55:
+				impact = head
+				cust_id = -2
+				if mp_enabled and not _mp_applying:
+					mp_glock_fire.rpc(impact.x, impact.y, impact.z, cust_id, true, false)
+					return
+				_apply_glock_shot(impact, cust_id, true, false, from, dir)
+				return
+	var shot_cust := _find_customer_under_gun_aim(cam_from, cam_dir, mouse)
+	if shot_cust != null:
+		impact = shot_cust.global_position + Vector3(0.0, 0.85, 0.0)
+		cust_id = _customer_net_id(shot_cust)
+		hostile = bool(shot_cust.get("is_terrorist"))
+		if mp_enabled and not _mp_applying:
+			mp_glock_fire.rpc(impact.x, impact.y, impact.z, cust_id, true, hostile)
+			return
+		_apply_glock_shot(impact, cust_id, true, hostile, from, dir)
+		return
+	var q := PhysicsRayQueryParameters3D.create(cam_from, cam_from + cam_dir * 45.0)
+	q.collide_with_areas = true
+	q.collide_with_bodies = true
+	q.collision_mask = 0xFFFFFFFF & ~STREET_MATTE_COLLISION_LAYER
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if not hit.is_empty():
+		impact = hit.get("position", Vector3.ZERO)
+	else:
+		impact = cam_from + cam_dir * 8.0
+	if mp_enabled and not _mp_applying:
+		mp_glock_fire.rpc(impact.x, impact.y, impact.z, -1, false, false)
+		return
+	_apply_glock_shot(impact, -1, false, false, from, dir)
+
+
+func _apply_glock_shot(impact: Vector3, cust_id: int, do_hit: bool, hostile: bool, from: Vector3 = Vector3.ZERO, dir: Vector3 = Vector3.FORWARD) -> void:
 	glock_cooldown = GLOCK_FIRE_COOLDOWN
 	glock_recoil = 1.0
 	_ensure_glock_fx()
@@ -5082,53 +5162,37 @@ func _fire_glock() -> void:
 		glock_flash.light_energy = 6.5
 	if game_audio and game_audio.has_method("play_gunshot"):
 		game_audio.play_gunshot()
-	var mouse := get_viewport().get_mouse_position()
-	var sight := _glock_sight_ray(mouse)
-	var from: Vector3 = sight["from"]
-	var dir: Vector3 = sight["dir"]
-	var cam_from: Vector3 = sight["cam_from"]
-	var cam_dir: Vector3 = sight["cam_dir"]
-	var q := PhysicsRayQueryParameters3D.create(cam_from, cam_from + cam_dir * 45.0)
-	q.collide_with_areas = true
-	q.collide_with_bodies = true
-	## Hit world geometry, but pass through the street backdrop painting.
-	q.collision_mask = 0xFFFFFFFF & ~STREET_MATTE_COLLISION_LAYER
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	if window_cat != null and is_instance_valid(window_cat) and window_cat.is_interactable():
-		var head: Vector3 = window_cat.head_global()
-		var to_cat := head - cam_from
-		var along := cam_dir.dot(to_cat)
-		if along > 0.4:
-			var closest := cam_from + cam_dir * along
-			if closest.distance_to(head) < 0.55:
-				window_cat.reset_shift()
-				_flash("Cat bolted!", Color("CE93D8"))
-				if game_audio and game_audio.has_method("play_cat_meow"):
-					game_audio.play_cat_meow()
-				return
-	## Shoot a customer → limp ragdoll + blood; keep firing for more hits.
-	var shot_cust := _find_customer_under_gun_aim(cam_from, cam_dir, mouse)
-	if shot_cust != null and shot_cust.has_method("get_shot"):
-		var first_hit: bool = bool(shot_cust.get_shot(from, dir))
-		var is_hostile: bool = bool(shot_cust.get("is_terrorist"))
-		if first_hit and game_audio and game_audio.has_method("play_wilhelm_scream"):
-			## BURGERWHY sting only for regular customers — not armed hostiles.
-			game_audio.play_wilhelm_scream(not is_hostile)
-		var impact_pos: Vector3 = shot_cust.global_position + Vector3(0.0, 0.85, 0.0)
-		_spawn_glock_impact(impact_pos)
-		if first_hit:
-			if is_hostile:
-				money += TERRORIST_KILL_BOUNTY
-				_flash("Hostile down! +%s" % _format_money(TERRORIST_KILL_BOUNTY), Color("A5D6A7"))
-				_on_customer_left(shot_cust, false)
-				_check_terrorist_wave_end()
-			else:
-				_flash("Wilhelm!", Color("EF5350"))
-				_on_customer_left(shot_cust, true)
+	if cust_id == -2:
+		if window_cat != null and is_instance_valid(window_cat):
+			window_cat.reset_shift()
+		_flash("Cat bolted!", Color("CE93D8"))
+		if game_audio and game_audio.has_method("play_cat_meow"):
+			game_audio.play_cat_meow()
 		return
-	if not hit.is_empty():
-		## Tiny spark ping at impact.
-		_spawn_glock_impact(hit.get("position", Vector3.ZERO))
+	_spawn_glock_impact(impact)
+	if cust_id < 0 or not do_hit:
+		return
+	var shot_cust = _customer_by_net_id(cust_id)
+	if shot_cust == null or not shot_cust.has_method("get_shot"):
+		return
+	var shot_from := from if from != Vector3.ZERO else impact + Vector3(0, 0, 0.5)
+	var shot_dir := dir if dir.length_squared() > 0.0001 else Vector3(0, 0, -1)
+	var first_hit: bool = bool(shot_cust.get_shot(shot_from, shot_dir))
+	if first_hit and game_audio and game_audio.has_method("play_wilhelm_scream"):
+		game_audio.play_wilhelm_scream(not hostile)
+	if not first_hit:
+		return
+	## Host resolves leave / bounty so money stays shared.
+	if mp_enabled and not NetManager.is_host():
+		return
+	if hostile:
+		money += TERRORIST_KILL_BOUNTY
+		_flash("Hostile down! +%s" % _format_money(TERRORIST_KILL_BOUNTY), Color("A5D6A7"))
+		_on_customer_left(shot_cust, false)
+		_check_terrorist_wave_end()
+	else:
+		_flash("Wilhelm!", Color("EF5350"))
+		_on_customer_left(shot_cust, true)
 
 
 func _find_customer_under_gun_aim(from: Vector3, dir: Vector3, mouse: Vector2) -> Node3D:
@@ -5693,6 +5757,14 @@ func _get_oil_blob_texture() -> ImageTexture:
 
 
 func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> void:
+	## Local puddle first (responsive pour), then tell the partner.
+	_spawn_oil_slick_local(pos, radius)
+	if mp_enabled and not _mp_applying and _mp_oil_sync_cool <= 0.0:
+		_mp_oil_sync_cool = 0.05
+		mp_oil_slick.rpc(pos.x, pos.z, radius)
+
+
+func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 	var slick := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	var rad := radius * (0.9 + randf() * 0.25)
@@ -5815,6 +5887,17 @@ func _start_grill_fire(origin: Vector3 = Vector3.ZERO) -> void:
 	if grill_on_fire:
 		return
 	## Never flash over on a cold flat-top.
+	if not grill_on:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_grill_fire_start.rpc(origin.x, origin.z)
+		return
+	_start_grill_fire_local(origin)
+
+
+func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO) -> void:
+	if grill_on_fire:
+		return
 	if not grill_on:
 		return
 	grill_on_fire = true
@@ -6292,6 +6375,9 @@ func _spray_extinguisher_powder(delta: float, aim: Vector3) -> void:
 	## Nozzle mist on customers or the steel.
 	if ext_powder:
 		ext_powder.emitting = sprayed or on_grill
+	if mp_enabled and not _mp_applying and _mp_ext_sync_cool <= 0.0:
+		_mp_ext_sync_cool = 0.05
+		mp_ext_spray.rpc(true, aim.x, aim.z, sprayed)
 	if sprayed:
 		return
 	if not on_grill:
@@ -6364,6 +6450,11 @@ func _try_spray_customer_with_powder(delta: float) -> Dictionary:
 		_flash(msg, Color("EF9A9A"))
 		if game_audio:
 			game_audio.play_click()
+		if mp_enabled and not _mp_applying:
+			var nid := _customer_net_id(cust as Node3D)
+			if nid >= 0:
+				mp_ext_customer.rpc(nid, zone)
+				return {"hit": true, "customer": cust, "zone": zone}
 		_on_customer_left(cust, true)
 	return {"hit": true, "customer": cust, "zone": zone}
 
@@ -6458,6 +6549,15 @@ func _clear_ext_powder_blobs() -> void:
 
 
 func _extinguish_grill_fire() -> void:
+	if not grill_on_fire and not _fire_killed_by_powder:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_grill_fire_end.rpc()
+		return
+	_extinguish_grill_fire_local()
+
+
+func _extinguish_grill_fire_local() -> void:
 	if not grill_on_fire and not _fire_killed_by_powder:
 		return
 	grill_on_fire = false
@@ -7276,6 +7376,9 @@ func _update_held_brush(_delta: float) -> void:
 			var before := float(grill_residue[i])
 			grill_residue[i] = maxf(0.0, before - moved * RESIDUE_SCRAPE_RATE)
 			_refresh_residue_visual(i)
+			if mp_enabled and not _mp_applying and _mp_residue_sync_cool <= 0.0:
+				_mp_residue_sync_cool = 0.09
+				mp_residue_amt.rpc(i, float(grill_residue[i]))
 			if i < brush_swipe_travel.size():
 				brush_swipe_travel[i] = float(brush_swipe_travel[i]) + moved
 			## Chip flecks as you work the stain down.
@@ -7283,6 +7386,8 @@ func _update_held_brush(_delta: float) -> void:
 				brush_swipe_travel[i] = 0.0
 				brush_swipe_cool[i] = 0.12
 				_scrape_residue_hit(i, move_xz)
+				if mp_enabled and not _mp_applying:
+					mp_residue_chip.rpc(i, move_xz.x, move_xz.y)
 			if float(grill_residue[i]) <= 0.04:
 				_scrape_finish_clean(i)
 		elif i < brush_swipe_travel.size():
@@ -14272,6 +14377,10 @@ func _mp_update_cursors(delta: float) -> void:
 				tool = 3
 			elif shaker_held:
 				tool = 4
+			elif ext_held:
+				tool = 5
+			elif glock_held:
+				tool = 6
 			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
 
 
@@ -14372,6 +14481,10 @@ func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 			badge.text = "B"
 		elif tool == 4:
 			badge.text = "S"
+		elif tool == 5:
+			badge.text = "E"
+		elif tool == 6:
+			badge.text = "G"
 		else:
 			badge.text = ""
 	var icon: TextureRect = wrap.get_node_or_null("Icon") as TextureRect
@@ -14889,3 +15002,93 @@ func mp_trash_station_patty(station_index: int, from_index: int) -> void:
 	_mp_applying = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_oil_slick(x: float, z: float, radius: float) -> void:
+	_spawn_oil_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_grill_fire_start(x: float, z: float) -> void:
+	_mp_applying = true
+	_start_grill_fire_local(Vector3(x, GRILL_SURFACE_Y, z))
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_grill_fire_end() -> void:
+	_mp_applying = true
+	_extinguish_grill_fire_local()
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_residue_leave(slot: int, x: float, z: float, announce: bool) -> void:
+	_mp_applying = true
+	_leave_grill_residue_local(slot, Vector3(x, GRILL_SURFACE_Y + 0.028, z), announce)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_residue_amt(slot: int, amt: float) -> void:
+	if slot < 0 or slot >= GRILL_SLOTS:
+		return
+	grill_residue[slot] = clampf(amt, 0.0, 1.0)
+	_refresh_residue_visual(slot)
+
+
+@rpc("any_peer", "call_remote", "unreliable")
+func mp_residue_chip(slot: int, dx: float, dz: float) -> void:
+	if slot < 0 or slot >= GRILL_SLOTS:
+		return
+	_scrape_residue_hit(slot, Vector2(dx, dz))
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_residue_clean(slot: int) -> void:
+	_mp_applying = true
+	_scrape_finish_clean_local(slot)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_ext_spray(spraying: bool, ax: float, az: float, on_customer: bool) -> void:
+	_ensure_ext_powder()
+	if ext_powder:
+		ext_powder.emitting = spraying
+	if spraying and not on_customer:
+		var on_grill := absf(ax - GRILL_CENTER_X) <= GRILL_WIDTH * 0.55 \
+			and absf(az - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.55
+		if on_grill:
+			_spawn_ext_powder_blob(Vector3(ax, GRILL_SURFACE_Y, az))
+		if grill_on_fire and _is_in_fire_zone(Vector3(ax, GRILL_SURFACE_Y, az)):
+			if not _fire_killed_by_powder:
+				_fire_killed_by_powder = true
+				_set_fire_fx_emitting(false)
+			fire_health = maxf(0.0, fire_health - 0.05)
+			if fire_health <= 0.0:
+				_extinguish_grill_fire_local()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_ext_customer(net_id: int, zone: String) -> void:
+	var c = _customer_by_net_id(net_id)
+	if c == null:
+		return
+	_mp_applying = true
+	if c.has_method("receive_ext_powder"):
+		c.call("receive_ext_powder", zone)
+	var msg := "Customer: \"Agh! My face!!\"" if zone == "face" else "Customer: \"What the heck?!\""
+	_flash(msg, Color("EF9A9A"))
+	_mp_applying = false
+	## Host owns the angry walk-off / fine.
+	if NetManager.is_host():
+		_on_customer_left(c, true)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_glock_fire(ix: float, iy: float, iz: float, cust_id: int, do_hit: bool, hostile: bool) -> void:
+	_mp_applying = true
+	_apply_glock_shot(Vector3(ix, iy, iz), cust_id, do_hit, hostile)
+	_mp_applying = false
