@@ -34,7 +34,7 @@ const RECONNECT_AFTER := 12.0
 var powered: bool = false
 var band: int = Band.FM
 var channel_index: int = 0
-var volume_linear: float = 0.05
+var volume_linear: float = 0.80
 
 var _http := HTTPClient.new()
 var _player: AudioStreamPlayer
@@ -150,8 +150,11 @@ func _stations() -> Array[Dictionary]:
 	return FM_STATIONS if band == Band.FM else AM_STATIONS
 
 
+## Streams are mastered hot; scale so ~5% VOL is soft background, not ear-level.
+const VOL_SCALE := 0.18 ## Louder max stream level
+
 func _vol_db() -> float:
-	return linear_to_db(maxf(volume_linear, 0.0001)) + 5.0
+	return linear_to_db(maxf(volume_linear * VOL_SCALE, 0.00005))
 
 
 func _process(delta: float) -> void:

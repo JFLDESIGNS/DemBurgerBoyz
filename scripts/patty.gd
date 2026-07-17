@@ -11,11 +11,11 @@ enum CookState { RAW, SEARING, COOKED, PERFECT, BURNT }
 ## ~15 seconds per side before flip / scoop.
 const COOK_SEAR := 8.0
 const COOK_DONE := 15.0
-const COOK_PERFECT := 19.0
-const COOK_BURNT := 28.0
+const COOK_PERFECT := 21.0
+const COOK_BURNT := 34.0 ## Extra grace if you don't flip right away.
 const FLIP_READY := 15.0
 const FLIP_WINDOW_START := 15.0
-const FLIP_WINDOW_END := 21.0
+const FLIP_WINDOW_END := 24.0 ## Slightly wider perfect-flip window.
 const SCOOP_READY := 15.0 ## second side cook time before scoop
 
 var cook_time: float = 0.0
@@ -62,9 +62,16 @@ var _sear_mat: StandardMaterial3D
 var _meat_top: MeshInstance3D
 var _meat_top_mat: StandardMaterial3D
 var _hint: Label3D
-var _hint_mode: String = "" ## "", cooking, flip, scoop
+var _hint_mode: String = "" ## "", cooking, flip, scoop, hold
 var _hint_age: float = 0.0
 var _hint_focused: bool = false
+## Compact HOLD timer — circular progress disc instead of giant "HOLD 241s" text.
+var _hold_meter: MeshInstance3D = null
+var _hold_meter_mat: StandardMaterial3D = null
+var _hold_meter_img: Image = null
+var _hold_meter_tex: ImageTexture = null
+var _hold_meter_last_q: int = -1
+const HOLD_METER_PX := 48
 var _sizzle: float = 0.0
 var _bubbles: GPUParticles3D
 var _top_bubbles: GPUParticles3D
@@ -88,6 +95,7 @@ const COOK_TEX_H := 48
 const BUBBLE_LEAD := 4.0 ## top grease bubbles start this many seconds before flip/scoop
 const HINT_SCALE_FOCUS := 1.0 ## Former "small" size — max when hovered.
 const HINT_SCALE_DIM := 0.55 ## Shrink when the cursor isn't on this patty.
+const HINT_SCALE_COOKING := 0.38 ## Status-only (COOKING…) stays quieter than flip/scoop.
 
 
 func _ready() -> void:
@@ -109,6 +117,7 @@ func _ready() -> void:
 	add_child(shape)
 
 	_mesh = MeshInstance3D.new()
+	_mesh.name = "PattyMesh"
 	var disk := CylinderMesh.new()
 	disk.top_radius = 0.105
 	disk.bottom_radius = 0.11
@@ -260,7 +269,11 @@ func _ready() -> void:
 	_hint.modulate = Color("FFEB3B")
 	_hint.visible = false
 	UiFontsScript.apply_label3d(_hint, true, 72, 0.078)
+	## Belt-and-suspenders — default Label3D outline is a chunky black halo.
+	_hint.outline_size = 0
+	_hint.outline_modulate = Color(0, 0, 0, 0)
 	add_child(_hint)
+	_ensure_hold_meter()
 	_setup_cook_fx()
 	_update_cook_gradient()
 	_update_frost_visual()
@@ -361,49 +374,64 @@ func _setup_cook_fx() -> void:
 	_top_bubbles.material_override = tdraw
 	add_child(_top_bubbles)
 
-	## Soft steam rising off the top while it cooks.
+	## Subtle rising steam strands — thin near the meat, flare sideways as they lift.
 	_steam = GPUParticles3D.new()
-	_steam.amount = 18
-	_steam.lifetime = 1.15
+	_steam.amount = 11
+	_steam.lifetime = 1.45
 	_steam.explosiveness = 0.0
-	_steam.randomness = 0.55
-	_steam.visibility_aabb = AABB(Vector3(-0.35, -0.05, -0.35), Vector3(0.7, 0.9, 0.7))
+	_steam.randomness = 0.7
+	_steam.visibility_aabb = AABB(Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 1.1, 0.8))
 	_steam.emitting = false
-	_steam.position = Vector3(0, 0.04, 0)
+	_steam.position = Vector3(0, 0.036, 0)
 	var smat := ParticleProcessMaterial.new()
 	smat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	smat.emission_sphere_radius = 0.07
+	smat.emission_sphere_radius = 0.05
 	smat.direction = Vector3(0, 1, 0)
-	smat.spread = 18.0
-	smat.initial_velocity_min = 0.12
-	smat.initial_velocity_max = 0.28
-	smat.gravity = Vector3(0, 0.08, 0)
-	smat.damping_min = 0.4
-	smat.damping_max = 0.9
-	smat.scale_min = 0.7
-	smat.scale_max = 1.6
-	smat.color = Color(0.95, 0.96, 0.98, 0.35)
+	smat.spread = 7.0
+	smat.initial_velocity_min = 0.09
+	smat.initial_velocity_max = 0.2
+	smat.gravity = Vector3(0, 0.05, 0)
+	smat.damping_min = 0.25
+	smat.damping_max = 0.55
+	## Start slim; scale curve widens strands as they rise / fade.
+	smat.scale_min = 0.55
+	smat.scale_max = 0.85
+	var sscale := Curve.new()
+	sscale.add_point(Vector2(0.0, 0.4))
+	sscale.add_point(Vector2(0.3, 0.75))
+	sscale.add_point(Vector2(0.7, 1.25))
+	sscale.add_point(Vector2(1.0, 1.85))
+	var sscale_tex := CurveTexture.new()
+	sscale_tex.curve = sscale
+	smat.scale_curve = sscale_tex
+	smat.particle_flag_align_y = true
+	smat.color = Color(0.94, 0.96, 0.98, 0.22)
 	var sfade := Gradient.new()
 	sfade.add_point(0.0, Color(1, 1, 1, 0.0))
-	sfade.add_point(0.2, Color(1, 1, 1, 0.45))
-	sfade.add_point(0.7, Color(1, 1, 1, 0.2))
+	sfade.add_point(0.12, Color(1, 1, 1, 0.28))
+	sfade.add_point(0.45, Color(1, 1, 1, 0.16))
+	sfade.add_point(0.8, Color(1, 1, 1, 0.06))
 	sfade.add_point(1.0, Color(1, 1, 1, 0.0))
 	var sfade_tex := GradientTexture1D.new()
 	sfade_tex.gradient = sfade
 	smat.color_ramp = sfade_tex
 	_steam.process_material = smat
+	## Tall thin quads read as wisps when aligned to velocity.
 	var squad := QuadMesh.new()
-	squad.size = Vector2(0.06, 0.06)
+	squad.size = Vector2(0.022, 0.095)
 	var sdraw := StandardMaterial3D.new()
 	sdraw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	sdraw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	sdraw.albedo_texture = _get_steam_texture()
-	sdraw.albedo_color = Color(1, 1, 1, 0.55)
-	sdraw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	sdraw.albedo_color = Color(1, 1, 1, 0.38)
+	sdraw.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	sdraw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	sdraw.vertex_color_use_as_albedo = true
+	sdraw.no_depth_test = false
+	sdraw.render_priority = 4
 	_steam.draw_pass_1 = squad
 	_steam.material_override = sdraw
+	_steam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_steam)
 
 
@@ -426,19 +454,34 @@ func _update_ready_cues() -> void:
 
 
 func _get_steam_texture() -> ImageTexture:
+	## Vertical soft strand — narrow near the base, flares sideways toward the tip.
 	if _steam_tex != null:
 		return _steam_tex
-	var size := 32
-	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var mid := float(size - 1) * 0.5
-	for y in size:
-		for x in size:
-			var dx := (float(x) - mid) / mid
-			var dy := (float(y) - mid) / mid
-			var d := sqrt(dx * dx + dy * dy)
-			var a := clampf(1.0 - d, 0.0, 1.0)
-			a = a * a
-			img.set_pixel(x, y, Color(1, 1, 1, a))
+	var w := 28
+	var h := 56
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var cx := float(w - 1) * 0.5
+	for y in h:
+		## y=0 is top of texture (tip of strand / farther from patty).
+		var ty := float(y) / float(h - 1)
+		var rise := 1.0 - ty
+		## Flare sideways as the strand rises.
+		var flare := lerpf(0.32, 1.15, rise)
+		## Gentle S-curve so wisps aren't ruler-straight.
+		var wave := sin(rise * TAU * 1.35 + float(y) * 0.08) * (1.2 + rise * 2.0)
+		## Denser near the meat, thinner toward the tip.
+		var dens := lerpf(0.72, 0.22, rise)
+		for x in w:
+			var dx := (float(x) - cx - wave) / maxf(cx * flare, 0.001)
+			var a := exp(-dx * dx * 3.4)
+			## Soft tip + soft foot so quads don't pop as hard edges.
+			var tip_fade := clampf(rise * 1.35, 0.0, 1.0)
+			var foot_fade := clampf(ty * 4.0, 0.0, 1.0)
+			a *= tip_fade * tip_fade * foot_fade * dens * 0.5
+			if a < 0.01:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				img.set_pixel(x, y, Color(0.93, 0.96, 1.0, a))
 	_steam_tex = ImageTexture.create_from_image(img)
 	return _steam_tex
 
@@ -477,6 +520,7 @@ func _process(delta: float) -> void:
 	if is_held:
 		if _hint:
 			_hint.visible = false
+		_set_hold_meter_visible(false)
 		return
 	if heating:
 		var rate := (1.0 + smash_bonus) * heat_mul
@@ -495,30 +539,35 @@ func _process(delta: float) -> void:
 			_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
 
 	if can_flip():
+		_set_hold_meter_visible(false)
 		var flip_txt := "CLICK TO FLIP!" if is_in_flip_window() else "FLIP NOW"
 		var flip_col := Color("FFEB3B") if is_in_flip_window() else Color("FFCC80")
 		_set_hint_mode("flip", flip_txt, flip_col)
 		_hint.modulate.a = 0.55 + 0.45 * absf(sin(Time.get_ticks_msec() * 0.01))
 	elif flipped_once and has_cheese and cheese_melt < 1.0 and cook_time >= SCOOP_READY:
+		_set_hold_meter_visible(false)
 		_set_hint_mode("melt", "CHEESE MELTING...", Color("FFE082"))
 		_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.01))
 	elif flipped_once and can_scoop():
-		if heat_mul <= 0.001:
-			var left := maxi(0, int(ceil(WARM_HOLD_MAX_SEC - warm_hold_time)))
-			_set_hint_mode("hold", "HOLD %ds" % left, Color("90CAF9"))
-			_hint.modulate.a = 0.75
+		if warm_hold_time > 0.0 or heat_mul <= 0.001:
+			_set_hint_mode("", "", Color.WHITE)
+			_set_hold_meter_visible(true)
+			_refresh_hold_meter()
 		else:
+			_set_hold_meter_visible(false)
 			_set_hint_mode("scoop", "CLICK TO SCOOP", Color("A5D6A7"))
 			_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.008))
 	elif flipped_once:
-		if heat_mul <= 0.001:
-			var left2 := maxi(0, int(ceil(WARM_HOLD_MAX_SEC - warm_hold_time)))
-			_set_hint_mode("hold", "HOLD %ds" % left2, Color("90CAF9"))
-			_hint.modulate.a = 0.75
+		if warm_hold_time > 0.0 or heat_mul <= 0.001:
+			_set_hint_mode("", "", Color.WHITE)
+			_set_hold_meter_visible(true)
+			_refresh_hold_meter()
 		else:
+			_set_hold_meter_visible(false)
 			_set_hint_mode("cooking", "COOKING...", Color("FFCC80"))
 			_hint.modulate.a = 0.7
 	else:
+		_set_hold_meter_visible(false)
 		_set_hint_mode("", "", Color.WHITE)
 
 	_update_hint_scale(delta)
@@ -567,7 +616,94 @@ func _set_hint_mode(mode: String, text: String, color: Color) -> void:
 		_hint_age = 0.0
 		## Never pop larger than focus size — start at dim/focus target.
 		var start := HINT_SCALE_FOCUS if _hint_focused else HINT_SCALE_DIM
+		if mode == "cooking" or mode == "melt":
+			start = HINT_SCALE_COOKING
 		_hint.scale = Vector3(start, start, start)
+
+
+func _ensure_hold_meter() -> void:
+	if _hold_meter != null and is_instance_valid(_hold_meter):
+		return
+	_hold_meter = MeshInstance3D.new()
+	_hold_meter.name = "HoldMeter"
+	## Flat disc like the patty (not a camera-facing billboard).
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.14, 0.14)
+	_hold_meter.mesh = quad
+	_hold_meter.position = Vector3(0, 0.072, 0)
+	_hold_meter.rotation_degrees = Vector3(-90, 0, 0)
+	_hold_meter_img = Image.create(HOLD_METER_PX, HOLD_METER_PX, false, Image.FORMAT_RGBA8)
+	_hold_meter_tex = ImageTexture.create_from_image(_hold_meter_img)
+	_hold_meter_mat = StandardMaterial3D.new()
+	_hold_meter_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_hold_meter_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_hold_meter_mat.albedo_texture = _hold_meter_tex
+	_hold_meter_mat.albedo_color = Color.WHITE
+	_hold_meter_mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
+	_hold_meter_mat.no_depth_test = true
+	_hold_meter_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_hold_meter_mat.render_priority = 18
+	_hold_meter.material_override = _hold_meter_mat
+	_hold_meter.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_hold_meter.visible = false
+	## Parent to meat mesh so sizzle / flip orientation matches the burger.
+	if _mesh != null:
+		_mesh.add_child(_hold_meter)
+	else:
+		add_child(_hold_meter)
+
+
+func _set_hold_meter_visible(on: bool) -> void:
+	_ensure_hold_meter()
+	if _hold_meter == null:
+		return
+	_hold_meter.visible = on
+	if not on:
+		_hold_meter_last_q = -1
+
+
+func _refresh_hold_meter() -> void:
+	_ensure_hold_meter()
+	if _hold_meter == null or _hold_meter_img == null:
+		return
+	## 1 = fresh on HOLD · 0 = about to spoil.
+	var left_ratio := 1.0 - clampf(warm_hold_time / WARM_HOLD_MAX_SEC, 0.0, 1.0)
+	var q := int(round(left_ratio * 40.0))
+	if q == _hold_meter_last_q:
+		return
+	_hold_meter_last_q = q
+	var mid := float(HOLD_METER_PX - 1) * 0.5
+	var outer := mid * 0.92
+	var inner := mid * 0.58
+	## Yellow (fresh) → red (spoiling); bright enough to read over the meat.
+	var fill := Color("FFEB3B").lerp(Color("E53935"), 1.0 - left_ratio)
+	fill.a = 0.72
+	var track := Color(0.12, 0.12, 0.14, 0.4)
+	var empty := Color(0, 0, 0, 0)
+	## Sweep clockwise from 12 o'clock.
+	var sweep := left_ratio * TAU
+	for y in HOLD_METER_PX:
+		for x in HOLD_METER_PX:
+			var dx := float(x) - mid
+			var dy := float(y) - mid
+			var d := sqrt(dx * dx + dy * dy)
+			if d > outer or d < inner:
+				_hold_meter_img.set_pixel(x, y, empty)
+				continue
+			## Soft ring edges.
+			var edge := 1.0
+			if d > outer - 1.2:
+				edge = clampf((outer - d) / 1.2, 0.0, 1.0)
+			elif d < inner + 1.2:
+				edge = clampf((d - inner) / 1.2, 0.0, 1.0)
+			## atan2: 0 at +X; shift so 0 is up (−Y in image space).
+			var ang := atan2(dx, -dy)
+			if ang < 0.0:
+				ang += TAU
+			var col := fill if ang <= sweep else track
+			col.a *= edge
+			_hold_meter_img.set_pixel(x, y, col)
+	_hold_meter_tex.update(_hold_meter_img)
 
 
 func _update_hint_scale(delta: float) -> void:
@@ -575,8 +711,10 @@ func _update_hint_scale(delta: float) -> void:
 		return
 	_hint_age += delta
 	var target := HINT_SCALE_FOCUS if _hint_focused else HINT_SCALE_DIM
+	if _hint_mode == "cooking" or _hint_mode == "melt":
+		target = HINT_SCALE_COOKING * (1.1 if _hint_focused else 1.0)
 	## Soft pulse only while focused on an action prompt.
-	if _hint_focused and (_hint_mode == "flip" or _hint_mode == "scoop"):
+	elif _hint_focused and (_hint_mode == "flip" or _hint_mode == "scoop"):
 		target *= 1.0 + 0.04 * absf(sin(Time.get_ticks_msec() * 0.01))
 	var cur := _hint.scale.x
 	var s := lerpf(cur, target, clampf(delta * 10.0, 0.0, 1.0))
@@ -953,7 +1091,7 @@ func color_at_cook_time(t: float) -> Color:
 		return seared.lerp(brown, (t - COOK_DONE) / (COOK_PERFECT - COOK_DONE))
 	if t < COOK_BURNT:
 		return brown.lerp(dark_brown, (t - COOK_PERFECT) / (COOK_BURNT - COOK_PERFECT))
-	var over := minf(1.0, (t - COOK_BURNT) / 5.0)
+	var over := minf(1.0, (t - COOK_BURNT) / 8.0)
 	return dark_brown.lerp(burnt, over)
 
 
@@ -1163,6 +1301,7 @@ func flip() -> bool:
 	_hint_age = 0.0
 	if _hint:
 		_hint.scale = Vector3(HINT_SCALE_DIM, HINT_SCALE_DIM, HINT_SCALE_DIM)
+	_set_hold_meter_visible(false)
 	var audio := _audio()
 	if audio:
 		audio.play_flip()
@@ -1181,8 +1320,10 @@ func smash() -> void:
 
 
 func add_cheese() -> bool:
-	## Lay a yellow cheese square — melts over ~5s on grill, HOLD, or Build.
+	## Lay a yellow cheese square — melts on grill cook zone or Build.
 	if has_cheese:
+		return false
+	if is_held:
 		return false
 	has_cheese = true
 	cheese_melt = 0.0
@@ -1191,6 +1332,19 @@ func add_cheese() -> bool:
 	_build_cheese_slice()
 	_update_cheese_visual()
 	return true
+
+
+func get_cheese_seat_global() -> Vector3:
+	## Where a fresh slice sits — matches `_cheese_root` on the meat mesh.
+	if _mesh != null and is_instance_valid(_mesh):
+		return _mesh.global_position + _mesh.global_transform.basis.y.normalized() * 0.028
+	return global_position + Vector3(0, 0.028, 0)
+
+
+func get_cheese_seat_basis() -> Basis:
+	if _mesh != null and is_instance_valid(_mesh):
+		return _mesh.global_transform.basis
+	return global_transform.basis
 
 
 func apply_seasoning(amount: float = 0.07) -> bool:
@@ -1251,49 +1405,62 @@ func _build_cheese_slice() -> void:
 	_cheese_flaps.clear()
 	_cheese_root = Node3D.new()
 	_cheese_root.name = "CheeseSlice"
-	_cheese_root.position = Vector3(0, 0.028, 0)
-	add_child(_cheese_root)
+	## Sit just above the meat top disc; parent to _mesh so sizzle wobble carries it.
+	_cheese_root.position = Vector3(0, 0.0325, 0)
+	if _mesh != null and is_instance_valid(_mesh):
+		_mesh.add_child(_cheese_root)
+	else:
+		add_child(_cheese_root)
 
 	_cheese_mat = StandardMaterial3D.new()
 	_cheese_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_cheese_mat.albedo_color = Color(1.0, 0.95, 0.32)
 	_cheese_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-	## One solid square slab (not a cross).
-	var center := MeshInstance3D.new()
-	var cmesh := BoxMesh.new()
-	cmesh.size = Vector3(0.168, 0.006, 0.168)
-	center.mesh = cmesh
-	center.material_override = _cheese_mat
-	_cheese_root.add_child(center)
-
-	## Four corner tips — hinge near each corner so only the tips droop down.
-	## Layout stays a square; as it melts the corners fold over the patty sides.
+	## Cross bars only — corners are separate flaps (no double-corner look).
 	var half := 0.084
-	var tip := 0.028
-	var hinge := half - tip
+	var tip := 0.038
+	var inner := half - tip
+	var thick := 0.006
+
+	var bar_x := MeshInstance3D.new()
+	var bx := BoxMesh.new()
+	bx.size = Vector3(half * 2.0, thick, inner * 2.0)
+	bar_x.mesh = bx
+	bar_x.material_override = _cheese_mat
+	_cheese_root.add_child(bar_x)
+
+	var bar_z := MeshInstance3D.new()
+	var bz := BoxMesh.new()
+	bz.size = Vector3(inner * 2.0, thick, half * 2.0)
+	bar_z.mesh = bz
+	bar_z.material_override = _cheese_mat
+	_cheese_root.add_child(bar_z)
+
+	## Four real corner tips — hinge on the inner square so the square's corners droop.
 	var corner_defs := [
-		{"hx": hinge, "hz": hinge, "sx": 1.0, "sz": 1.0}, ## +X +Z
-		{"hx": -hinge, "hz": hinge, "sx": -1.0, "sz": 1.0}, ## -X +Z
-		{"hx": hinge, "hz": -hinge, "sx": 1.0, "sz": -1.0}, ## +X -Z
-		{"hx": -hinge, "hz": -hinge, "sx": -1.0, "sz": -1.0}, ## -X -Z
+		{"sx": 1.0, "sz": 1.0},
+		{"sx": -1.0, "sz": 1.0},
+		{"sx": 1.0, "sz": -1.0},
+		{"sx": -1.0, "sz": -1.0},
 	]
 	for def in corner_defs:
+		var sx: float = float(def["sx"])
+		var sz: float = float(def["sz"])
 		var pivot := Node3D.new()
-		pivot.position = Vector3(def["hx"], 0.0, def["hz"])
+		pivot.position = Vector3(sx * inner, 0.0, sz * inner)
 		_cheese_root.add_child(pivot)
 		var flap := MeshInstance3D.new()
 		var fmesh := BoxMesh.new()
-		fmesh.size = Vector3(tip, 0.0055, tip)
+		fmesh.size = Vector3(tip, thick * 0.95, tip)
 		flap.mesh = fmesh
-		## Sit just past the hinge so the outer tip is the square's corner.
-		flap.position = Vector3(def["sx"] * tip * 0.5, 0.0, def["sz"] * tip * 0.5)
+		flap.position = Vector3(sx * tip * 0.5, 0.0, sz * tip * 0.5)
 		flap.material_override = _cheese_mat
 		pivot.add_child(flap)
 		_cheese_flaps.append({
 			"pivot": pivot,
-			"sx": float(def["sx"]),
-			"sz": float(def["sz"]),
+			"sx": sx,
+			"sz": sz,
 		})
 
 
@@ -1301,38 +1468,43 @@ func _update_cheese_visual() -> void:
 	if _cheese_root == null or _cheese_mat == null:
 		return
 	var t := clampf(cheese_melt, 0.0, 1.0)
-	var drape := smoothstep(0.08, 0.92, t)
+	var drape := smoothstep(0.12, 0.95, t)
 	drape = drape * drape * (3.0 - 2.0 * drape)
 	## Bright yellow → slightly more orange as it melts.
 	var yellow := Color(1.0, 0.95, 0.32)
 	var orange := Color(0.98, 0.7, 0.2)
 	_cheese_mat.albedo_color = yellow.lerp(orange, drape)
-	## Soft corner tip — subtle melt, stays on top of the patty (no clip-through).
-	var angle := drape * 12.0
+	## Soft tip fold — keep corners on top of the patty (no punch-through).
+	var angle := drape * 5.0
 	for item in _cheese_flaps:
 		var pivot: Node3D = item["pivot"]
 		var sx: float = item["sx"]
 		var sz: float = item["sz"]
 		pivot.rotation_degrees = Vector3(sz * angle, 0.0, -sx * angle)
-	_cheese_root.position.y = lerpf(0.028, 0.026, drape)
-	_cheese_root.scale = Vector3(lerpf(1.0, 1.008, drape), 1.0, lerpf(1.0, 1.008, drape))
+	_cheese_root.position.y = lerpf(0.0325, 0.0305, drape)
+	_cheese_root.scale = Vector3(lerpf(1.0, 1.006, drape), 1.0, lerpf(1.0, 1.006, drape))
 
 
-func quality_multiplier() -> float:
+func is_burnt() -> bool:
+	return get_state() == CookState.BURNT
+
+
+func doneness_multiplier() -> float:
+	## Cook quality only — ticket speed is graded on the customer clock.
 	if not flipped_once:
 		return 0.35
 	var mul := 1.0
 	match get_state():
 		CookState.PERFECT:
-			mul = 1.35 if perfect_flip else 1.2
+			mul = 1.15 if perfect_flip else 1.05
 		CookState.COOKED:
-			mul = 1.1 if perfect_flip else 1.0
+			mul = 1.05 if perfect_flip else 1.0
 		CookState.BURNT:
-			mul = 0.25
+			mul = 0.35
 		CookState.SEARING:
-			mul = 0.55
+			mul = 0.6
 		_:
-			mul = 0.3
+			mul = 0.4
 	if seasoning >= 0.4:
 		mul *= 1.06
 	elif seasoning >= 0.15:
@@ -1340,8 +1512,17 @@ func quality_multiplier() -> float:
 	return mul
 
 
+func is_seasoned() -> bool:
+	## At least one solid shake of pepper/seasoning on the beef.
+	return seasoning >= 0.1
+
+
+func quality_multiplier() -> float:
+	return doneness_multiplier()
+
+
 func cook_rating() -> Dictionary:
-	## Grade how well this patty was cooked (flip + second-side doneness).
+	## Scoop feedback — doneness, not ticket speed.
 	if not flipped_once:
 		return {
 			"score": 15,
@@ -1349,6 +1530,15 @@ func cook_rating() -> Dictionary:
 			"stars": 0,
 			"label": "RAW",
 			"detail": "Never flipped",
+			"color": Color("EF5350"),
+		}
+	if get_state() == CookState.BURNT:
+		return {
+			"score": 12,
+			"grade": "F",
+			"stars": 0,
+			"label": "BURNT",
+			"detail": "Charred",
 			"color": Color("EF5350"),
 		}
 	var score := 40.0
@@ -1363,54 +1553,24 @@ func cook_rating() -> Dictionary:
 			score += 28.0
 		CookState.SEARING:
 			score += 10.0
-		CookState.BURNT:
-			score -= 25.0
 		_:
 			score -= 10.0
 	score = clampf(score, 0.0, 100.0)
-	var grade := "F"
-	var stars := 0
-	var label := "BURNT"
-	var color := Color("EF5350")
-	var detail := "Charred"
+	var grade := "B"
+	var stars := 3
+	var label := "COOKED"
+	var color := Color("81C784")
+	var detail := "Ready"
 	if score >= 92.0:
-		grade = "S"
-		stars = 5
-		label = "PERFECT"
-		color = Color("FFEB3B")
-		detail = "Chef's kiss"
+		grade = "S"; stars = 5; label = "PERFECT"; color = Color("FFEB3B"); detail = "Chef's kiss"
 	elif score >= 82.0:
-		grade = "A"
-		stars = 4
-		label = "GREAT"
-		color = Color("A5D6A7")
-		detail = "Juicy & done"
+		grade = "A"; stars = 4; label = "GREAT"; color = Color("A5D6A7"); detail = "Juicy"
 	elif score >= 70.0:
-		grade = "B"
-		stars = 3
-		label = "GOOD"
-		color = Color("81C784")
-		detail = "Solid cook"
+		grade = "B"; stars = 3; label = "GOOD"; color = Color("81C784"); detail = "Solid"
 	elif score >= 55.0:
-		grade = "C"
-		stars = 2
-		label = "OKAY"
-		color = Color("FFCC80")
-		detail = "A bit off"
-	elif score >= 35.0:
-		grade = "D"
-		stars = 1
-		label = "POOR"
-		color = Color("FFA726")
-		detail = "Undercooked"
+		grade = "C"; stars = 2; label = "OKAY"; color = Color("FFCC80"); detail = "A bit off"
 	else:
-		grade = "F"
-		stars = 0
-		label = "BURNT" if get_state() == CookState.BURNT else "RAW"
-		color = Color("EF5350")
-		detail = "Do over"
-	if not perfect_flip and score >= 70.0:
-		detail = "Late flip"
+		grade = "D"; stars = 1; label = "POOR"; color = Color("FFA726"); detail = "Undercooked"
 	return {
 		"score": int(round(score)),
 		"grade": grade,
@@ -1423,9 +1583,4 @@ func cook_rating() -> Dictionary:
 
 func cook_rating_text() -> String:
 	var r := cook_rating()
-	var star_s := ""
-	for i in int(r["stars"]):
-		star_s += "★"
-	while star_s.length() < 5:
-		star_s += "☆"
-	return "%s  %s  %s (%d)" % [r["grade"], star_s, r["label"], r["score"]]
+	return "%s  %s" % [r["label"], r["detail"]]

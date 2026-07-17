@@ -75,22 +75,37 @@ static func generate_order(difficulty: float = 0.0) -> Array[String]:
 	## Some orders ask for a double patty.
 	if difficulty >= 0.15 and randf() < 0.2 + difficulty * 0.35:
 		order.append("patty")
-	var pool := EXTRA_TOPPINGS.duplicate()
-	pool.shuffle()
-	var count := clampi(2 + int(difficulty * 2.5) + randi_range(0, 2), 2, 6)
 	var picked: Array = []
-	for i in count:
-		if pool.is_empty():
-			break
-		picked.append(pool.pop_front())
+	## Some tickets just say EVERYTHING — every topping on the strip.
+	var everything_chance := 0.10 + difficulty * 0.18
+	if randf() < everything_chance:
+		picked = EXTRA_TOPPINGS.duplicate()
+	else:
+		var pool := EXTRA_TOPPINGS.duplicate()
+		pool.shuffle()
+		var count := clampi(2 + int(difficulty * 2.5) + randi_range(0, 2), 2, 6)
+		for i in count:
+			if pool.is_empty():
+				break
+			picked.append(pool.pop_front())
 	## Tickets always list toppings in the same kitchen order.
 	order.append_array(sort_toppings(picked))
 	order.append("bun_top")
 	return order
 
 
+static func is_everything_order(order: Array) -> bool:
+	for t in EXTRA_TOPPINGS:
+		if not order.has(t):
+			return false
+	return true
+
+
 static func order_value(order: Array) -> int:
-	return 4 + order.size()
+	var base := 4 + order.size()
+	if is_everything_order(order):
+		base += 3
+	return base
 
 
 static func compare_orders(built: Array, requested: Array) -> Dictionary:

@@ -7,14 +7,14 @@ const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
 const STATION_BURGER_SCALE := 0.75
 const MAX_HELD := 4
-## Grill heat bands screen-left → right: FULL · 1/4 · 1/8 · HOLD
+## Grill heat bands screen-left → right: FULL · 1/2 · 1/4 · HOLD
 const ZONE_FULL_FRAC := 0.38
 const ZONE_QUARTER_FRAC := 0.20
 const ZONE_EIGHTH_FRAC := 0.18
 const ZONE_HOLD_FRAC := 0.24
 const ZONE_FULL_MUL := 1.0
-const ZONE_QUARTER_MUL := 0.25
-const ZONE_EIGHTH_MUL := 0.125
+const ZONE_QUARTER_MUL := 0.5 ## was 1/4 cook → now half speed
+const ZONE_EIGHTH_MUL := 0.25 ## was 1/8 cook → now quarter speed
 const ZONE_HOLD_MUL := 0.0
 const WARM_HOLD_MAX := 300.0 ## 5 minutes on HOLD before meat goes bad
 ## Legacy aliases used by hold-zone helpers.
@@ -38,6 +38,11 @@ const PATTY_PICK_WORLD := 0.42
 const PATTY_PICK_MIN_PX := 62.0
 const PATTY_PICK_WORLD_EDGE := 0.17
 const PATTY_PICK_PAD_PX := 22.0
+## Cheese hover/drop — looser than scoop so ghost + click stay in sync.
+const CHEESE_PICK_WORLD := 0.58
+const CHEESE_PICK_MIN_PX := 96.0
+const CHEESE_PICK_PAD_PX := 40.0
+const CHEESE_PICK_WORLD_EDGE := 0.22
 ## Smash must hit the meat itself — near-miss right-clicks place a new patty.
 const PATTY_SMASH_WORLD := 0.115
 const PATTY_SMASH_MIN_PX := 26.0
@@ -47,6 +52,8 @@ const PATTY_SIT_Y := 0.055
 const OIL_SIT_Y := 0.038
 ## Held bottle tip-down height above steel (~was 0.14; +12" so it clears the plate).
 const OIL_POUR_HEIGHT := 0.445
+## Held shaker tip-down height — +1 ft from prior 0.2 so flakes don't clip the steel.
+const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
@@ -54,14 +61,19 @@ const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
-## Hotkeys 1-9 match ticket topping order (cheese first → top bun last).
-## Bottom bar is drawn right→left so you work toward Serve with top bun last.
+## Hotkeys 1-8 match ticket toppings (cheese → mustard). Top bun auto-caps.
+## Bottom bar left→right: cheese … mustard, then Serve on the right.
 ## Bottom bun is automatic when a patty hits a station — not on the strip.
 const INGREDIENT_HOTKEYS: Array[String] = [
 	"cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard",
-	"bun_top",
 ]
-const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8"]
+## Operating costs — waste & supplies cut into tips.
+const COST_DROP_BURGER := 3.00
+const COST_OIL_USE := 0.50
+const COST_SEASON_USE := 0.25
+const COST_INGREDIENT := 0.25
+const COST_BACON := 0.50
 
 @onready var camera: Camera3D = %Camera3D
 @onready var world: Node3D = %World
@@ -86,11 +98,15 @@ const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9
 @onready var grill_power_row: HBoxContainer = %GrillPowerRow
 @onready var ingredient_legend: HBoxContainer = %IngredientLegend
 
-var money: int = 0
+var money: float = 0.0
 var combo: int = 0
 var day: int = 1
 var day_time: float = DAY_LENGTH
 var playing: bool = false
+## Start tutorial: 1 = turn burner on · 2 = right-click patty · 0 = done.
+var _tutorial_step: int = 0
+var _tutorial_text: String = ""
+var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
 var customers: Array = []
@@ -123,6 +139,10 @@ var grill_ui_buttons: Array = []
 var grill_trash_btn: Button = null
 var grill_surface_area: Area3D = null
 var grill_surface_mat: StandardMaterial3D = null
+var grill_steel_tex: Texture2D = null
+## Meters per brushed-steel tile repeat on the flat-top.
+const GRILL_STEEL_TILE_M := 1.15 ## Larger tiles so the brushed grain reads on the flat-top.
+const GRILL_STEEL_TEX_PATH := "res://assets/grill/stainless_steel.png"
 var grill_glow_root: MeshInstance3D = null
 const GRILL_GLOW_DELAY_SEC := 0.2
 const GRILL_GLOW_FADE_SEC := 0.28
@@ -141,9 +161,21 @@ var service_window_closed: bool = false
 var service_break_left: float = 0.0
 var window_pause_btn: Button = null
 var window_shutter: ColorRect = null
+var master_vol_row: Control = null
+var master_vol_slider: HSlider = null
+## Slider 0–1; 1.0 = old ~20% bus level (comfortable game max).
+var master_volume_linear: float = 1.0
+const MASTER_VOL_MAX := 0.20
+const AUDIO_CFG_PATH := "user://audio_settings.cfg"
+const AUDIO_MASTER_KEY := "master_ui"
 const SERVICE_BREAK_SEC := 28.0
 var ingredient_buttons: Dictionary = {} ## id -> Button
-var _strip_did_drag: bool = false ## Skip press action after a strip drag.
+var _strip_did_drag: bool = false ## Skip press action after a paint-swipe.
+var _strip_swipe_active: bool = false ## LMB paint across topping buttons.
+var _strip_swipe_added: Dictionary = {} ## id -> true for this swipe
+var _strip_gesture_added: bool = false ## Already applied a topping this LMB gesture.
+const STRIP_SWIPE_THRESH_PX := 28.0
+var _auto_serving: bool = false
 var grill_ignore_pad_until: float = 0.0
 var grill_residue: Array = [] ## 0 clean · 0.5 half-scraped · 1.0 full stuck-on
 var grill_residue_meshes: Array = [] ## legacy single mesh slot (unused visually)
@@ -156,8 +188,9 @@ var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
 var brush_held: bool = false
 var brush_root: Node3D = null
 var brush_area: Area3D = null
-var brush_home: Vector3 = Vector3(-1.55, 2.28, 1.36)
-var brush_home_rot := Vector3(-12.0, 15.0, 8.0)
+## Parked on the left window lintel, hanging into the opening (toward the cook).
+var brush_home: Vector3 = Vector3(2.12, 1.99, 1.12)
+var brush_home_rot := Vector3(-8.0, 18.0, 6.0)
 ## Held pose — blade tipped on steel, handle toward the cook.
 var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
@@ -168,25 +201,36 @@ const RESIDUE_CHUNK_COUNT := 6 ## Extra flecks on top of the burnt disc.
 var cheese_held: bool = false
 var cheese_ghost: MeshInstance3D = null
 var cheese_ghost_mat: StandardMaterial3D = null
-## Seasoning shaker — parked by the scraper (screen-right), clear of UI.
+var _cheese_hover_patty = null ## Last burger the cheese ghost snapped to
+## Seasoning shaker — clustered with oil + scraper on the left window beam.
 var shaker_held: bool = false
 var shaker_root: Node3D = null
 var shaker_area: Area3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(0.05, 2.26, 1.34)
+var shaker_home: Vector3 = Vector3(1.78, 2.14, 1.12)
 var shaker_season_cool: float = 0.0
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
 var oil_root: Node3D = null
 var oil_area: Area3D = null
 var oil_particles: GPUParticles3D = null
-var oil_home: Vector3 = Vector3(1.65, 2.26, 1.34)
+var oil_home: Vector3 = Vector3(1.42, 2.12, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
+## Fire extinguisher — hang-mounted left of the tools; hold LMB to carry.
+var ext_held: bool = false
+var ext_root: Node3D = null
+var ext_visual: Node3D = null
+var ext_area: Area3D = null
+var ext_home: Vector3 = Vector3(2.52, 1.72, 1.14)
+var ext_home_rot := Vector3(0.0, 200.0, 0.0)
+var ext_held_rot := Vector3(-12.0, 200.0, 0.0)
+const EXT_HOLD_HEIGHT := 0.38
+const EXT_COLLISION_LAYER := 64
 ## Scraper can shove nearby patties a little while scraping.
 const BRUSH_PATTY_PUSH_RADIUS := 0.32
 const BRUSH_PATTY_PUSH_SCALE := 0.72
@@ -243,29 +287,75 @@ var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
+var street_matte: MeshInstance3D = null
+var first_sale_decal: MeshInstance3D = null
+var menu_board_decal: MeshInstance3D = null
+var burger_pals_decal: MeshInstance3D = null
+var start_logo: TextureRect = null
+## Cached order-slip paper (vignette) textures.
+var _ticket_paper_tex: ImageTexture = null
+var _ticket_paper_tex_sel: ImageTexture = null
+const STREET_MATTE_BASE_SIZE := Vector2(18.2, 9.1)
+const STREET_MATTE_BASE_Z := 7.8
+## Default Y: prior 2.55 minus ~3 ft (0.91 m).
+const STREET_MATTE_DEFAULT_Y := 1.64
+## First Sale plaque on the lintel above the service window (interior).
+const FIRST_SALE_BASE_SIZE := Vector2(1.15, 0.74)
+const FIRST_SALE_DEFAULT_X := 0.0
+const FIRST_SALE_DEFAULT_Y := 2.416
+const FIRST_SALE_DEFAULT_Z := 1.20
+const FIRST_SALE_DEFAULT_SCALE := 0.425
+## Menu board on the front wall (camera-right = world −X when looking out the window).
+const MENU_BOARD_BASE_SIZE := Vector2(0.72, 0.90)
+const MENU_BOARD_DEFAULT_X := -2.91
+const MENU_BOARD_DEFAULT_Y := 1.62
+const MENU_BOARD_DEFAULT_Z := 1.20
+const MENU_BOARD_DEFAULT_SCALE := 1.15
+const MENU_BOARD_DEFAULT_YAW := 180.0
+## Burger Pals brand mark — left front wall (camera-left = world +X).
+const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
+const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
+const LOGO_DEFAULT_X := 2.88
+const LOGO_DEFAULT_Y := 2.05
+const LOGO_DEFAULT_Z := 1.20
+const LOGO_DEFAULT_SCALE := 0.92
+const LOGO_DEFAULT_YAW := 180.0
+## Wall art tint — darker so they sit into the truck lighting.
+const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 1.0)
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const GFX_DEFAULTS := {
-	"bloom": 0.32,
-	"glow_intensity": 1.05,
-	"glow_strength": 1.35,
-	"glow_threshold": 0.55,
+	"bloom": 0.18,
+	"glow_intensity": 0.63,
+	"glow_strength": 1.07,
+	"glow_threshold": 0.28,
 	"glow_on": true,
-	"exposure": 0.92,
-	"ambient": 0.28,
-	"sun": 1.55,
-	"kitchen": 1.65,
-	"grill_lamp": 1.35,
-	"window_wash": 1.1,
-	"saturation": 1.06,
-	"contrast": 1.04,
-	"ssao": true,
-	"ssil": true,
-	"sky_energy": 0.42,
-	"heat_warp_on": true,
-	"heat_warp_size": 0.62,
-	"heat_warp_speed": 3.8,
-	"heat_warp_strength": 0.0048,
-	"heat_warp_tight": 1.4,
+	"exposure": 0.89,
+	"ambient": 0.33,
+	"sun": 1.53,
+	"kitchen": 2.90,
+	"grill_lamp": 1.66,
+	"window_wash": 0.97,
+	"saturation": 1.03,
+	"contrast": 1.05,
+	"ssao": false,
+	"ssil": false,
+	"sky_energy": 0.34,
+	"heat_warp_on": false,
+	"heat_warp_size": 0.83,
+	"heat_warp_speed": 1.00,
+	"heat_warp_strength": 0.00,
+	"heat_warp_tight": 1.70,
+	"bg_y": STREET_MATTE_DEFAULT_Y,
+	"bg_scale": 1.0,
+	"sale_x": FIRST_SALE_DEFAULT_X,
+	"sale_y": FIRST_SALE_DEFAULT_Y,
+	"sale_z": FIRST_SALE_DEFAULT_Z,
+	"sale_scale": FIRST_SALE_DEFAULT_SCALE,
+	"menu_x": MENU_BOARD_DEFAULT_X,
+	"menu_y": MENU_BOARD_DEFAULT_Y,
+	"menu_z": MENU_BOARD_DEFAULT_Z,
+	"menu_scale": MENU_BOARD_DEFAULT_SCALE,
+	"menu_yaw": MENU_BOARD_DEFAULT_YAW,
 }
 ## Ingredient strip notes — tracks unique presses toward a full-scale jingle.
 var _melody_pressed: Dictionary = {} ## id -> true
@@ -282,11 +372,14 @@ var _was_gui_dragging: bool = false
 
 func _ready() -> void:
 	randomize()
+	## Always boot fullscreen — no windowed chrome / minimize-on-launch.
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	## Soft edges on 3D characters / steel; FXAA helps Label3D + UI text a bit too.
 	var vp := get_viewport()
 	if vp:
 		vp.msaa_3d = Viewport.MSAA_4X
 		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+	_setup_glove_cursor()
 	UiFontsScript.ensure_loaded()
 	var ui_root: Control = get_node("UI/Root")
 	ui_root.theme = UiFontsScript.make_theme()
@@ -317,13 +410,19 @@ func _ready() -> void:
 	_build_ingredient_buttons()
 	_setup_radio()
 	_build_pause_button()
+	_build_master_volume_ui()
 	_build_graphics_ui()
+	_layout_top_bar_hud()
 	_setup_game_audio()
 	_build_dialogue_ui()
 	## Hint sits under order tickets; flash stays on top.
+	## Empty rail must IGNORE — it covers the hanging tools (oil/scraper/season).
 	var ticket_rail: Control = get_node_or_null("UI/Root/WindowTicketRail")
 	if ticket_rail:
 		ticket_rail.z_index = 5
+		ticket_rail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if ticket_box:
+		ticket_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if hud_hint:
 		hud_hint.visible = false
 		hud_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -358,6 +457,21 @@ func _ready() -> void:
 	_refresh_all_stations()
 
 
+func _setup_glove_cursor() -> void:
+	## Kitchen latex glove pointer — replaces the OS arrow everywhere.
+	var tex: Texture2D = load("res://assets/ui/cursor_glove.png") as Texture2D
+	if tex == null:
+		return
+	## Hotspot at index-finger tip (top-left of the art).
+	var tip := Vector2(6, 3)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_ARROW, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_POINTING_HAND, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_MOVE, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_DRAG, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_CAN_DROP, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_FORBIDDEN, tip)
+
+
 func _style_static_labels() -> void:
 	UiFontsScript.apply_label(hud_money, true, 30)
 	UiFontsScript.apply_label(hud_combo, true, 22)
@@ -375,15 +489,64 @@ func _style_static_labels() -> void:
 	if flash_label:
 		flash_label.add_theme_constant_override("outline_size", 3)
 		flash_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		## Toon caption plate — semi-transparent black so text pops over the window BG.
+		var flash_plate := StyleBoxFlat.new()
+		flash_plate.bg_color = Color(0.04, 0.05, 0.07, 0.32)
+		flash_plate.set_corner_radius_all(16)
+		flash_plate.content_margin_left = 28
+		flash_plate.content_margin_right = 28
+		flash_plate.content_margin_top = 14
+		flash_plate.content_margin_bottom = 14
+		flash_plate.border_color = Color(0.18, 0.2, 0.24, 0.35)
+		flash_plate.set_border_width_all(2)
+		flash_plate.shadow_color = Color(0, 0, 0, 0.12)
+		flash_plate.shadow_size = 4
+		flash_plate.shadow_offset = Vector2(0, 2)
+		flash_label.add_theme_stylebox_override("normal", flash_plate)
+		flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_button(start_btn, true, 22)
 	UiFontsScript.apply_button(restart_btn, true, 18)
-	var title := get_node_or_null("UI/Root/StartOverlay/StartCenter/Title") as Label
-	if title:
-		UiFontsScript.apply_label(title, true, 48)
+	_setup_start_logo()
 	var blurb := get_node_or_null("UI/Root/StartOverlay/StartCenter/Blurb") as Label
 	if blurb:
 		UiFontsScript.apply_label(blurb, false, 16)
 	UiFontsScript.apply_label(game_over_label, true, 22)
+
+
+func _setup_start_logo() -> void:
+	## Swap the text title for the Burger Pals brand mark on the open screen.
+	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
+	if center == null:
+		return
+	var title := center.get_node_or_null("Title") as Label
+	if title:
+		title.visible = false
+	if start_logo != null and is_instance_valid(start_logo):
+		return
+	if not ResourceLoader.exists(LOGO_TEX_PATH):
+		if title:
+			title.visible = true
+		return
+	var tex := load(LOGO_TEX_PATH) as Texture2D
+	if tex == null:
+		if title:
+			title.visible = true
+		return
+	start_logo = TextureRect.new()
+	start_logo.name = "BurgerPalsLogo"
+	start_logo.texture = tex
+	start_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	start_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	start_logo.custom_minimum_size = Vector2(300, 300)
+	start_logo.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	start_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	## Sit where the old title lived (first child of the start column).
+	center.add_child(start_logo)
+	center.move_child(start_logo, 0)
+	center.offset_top = -260.0
+	center.offset_bottom = 260.0
+	center.offset_left = -360.0
+	center.offset_right = 360.0
 
 
 func _setup_stations_data() -> void:
@@ -436,6 +599,7 @@ func _start_game() -> void:
 	_cancel_cheese_hold_silent()
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
+	_reset_fire_extinguisher()
 	_clear_all_stations()
 	_clear_customers()
 	_reset_service_window_open()
@@ -444,7 +608,7 @@ func _start_game() -> void:
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
-	_flash("Press G to light the burner, then right-click the grill for patties!", Color("FFEB3B"))
+	_begin_start_tutorial()
 
 
 func _restart() -> void:
@@ -465,6 +629,7 @@ func _restart() -> void:
 	_cancel_cheese_hold_silent()
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
+	_reset_fire_extinguisher()
 	_clear_all_stations()
 	_clear_customers()
 	_reset_service_window_open()
@@ -473,6 +638,7 @@ func _restart() -> void:
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
+	_begin_start_tutorial()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
 
 
@@ -502,6 +668,8 @@ func _process(delta: float) -> void:
 		_update_held_shaker(delta)
 	if oil_held:
 		_update_held_oil(delta)
+	if ext_held:
+		_update_held_fire_ext(delta)
 	_update_oil_slicks(delta)
 	if brush_held and not brush_throwing:
 		_update_held_brush(delta)
@@ -621,10 +789,10 @@ func _refresh_freshness_label(index: int) -> void:
 
 func _first_customer_delay() -> float:
 	match day:
-		1: return 14.0
-		2: return 8.0
-		3: return 5.0
-		_: return 3.0
+		1: return 19.0
+		2: return 13.0
+		3: return 10.0
+		_: return 8.0
 
 
 func _customer_cap() -> int:
@@ -673,7 +841,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed:
 		if _ui_blocks_world_click(event.position):
 			return
-		if brush_held or oil_held or shaker_held or dragging_patty != null:
+		if brush_held or oil_held or shaker_held or ext_held or dragging_patty != null:
 			return
 		if cheese_held:
 			if event.button_index == MOUSE_BUTTON_RIGHT:
@@ -709,6 +877,9 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not playing:
 		return
+	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
+	if _handle_strip_swipe_input(event):
+		return
 	## Right-click while holding cheese → put it back on the strip (works over UI too).
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		if cheese_held:
@@ -738,7 +909,11 @@ func _input(event: InputEvent) -> void:
 			_throw_brush_home()
 			get_viewport().set_input_as_handled()
 			return
-	## Wire brush / oil / shaker: hold LMB to use — never steal clicks from UI buttons.
+		if ext_held:
+			_release_fire_extinguisher()
+			get_viewport().set_input_as_handled()
+			return
+	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			if _ui_blocks_world_click(event.position):
@@ -746,7 +921,7 @@ func _input(event: InputEvent) -> void:
 			if cheese_held:
 				## Place handled in unhandled — don't grab tools mid-hold.
 				return
-			if brush_held or oil_held or shaker_held or dragging_patty != null:
+			if brush_held or oil_held or shaker_held or ext_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_nearest_tool(event.position):
@@ -769,6 +944,10 @@ func _input(event: InputEvent) -> void:
 			return
 		if shaker_held:
 			_cancel_shaker_hold()
+			get_viewport().set_input_as_handled()
+			return
+		if ext_held:
+			_release_fire_extinguisher()
 			get_viewport().set_input_as_handled()
 			return
 	## Enter always serves the active station burger.
@@ -800,6 +979,74 @@ func _is_enter_pressed(event: InputEvent) -> bool:
 	return event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER
 
 
+func _handle_strip_swipe_input(event: InputEvent) -> bool:
+	## Drag across topping buttons to stack them in order — one pass for EVERYTHING.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			var id := _strip_ingredient_at(event.position)
+			if id == "":
+				_strip_swipe_active = false
+				return false
+			## Fresh press — never inherit a stale skip flag from a prior drag.
+			_strip_did_drag = false
+			_strip_gesture_added = false
+			_strip_swipe_active = true
+			_strip_swipe_added.clear()
+			_strip_swipe_added["_start"] = event.position
+			_strip_swipe_added["_start_id"] = id
+			_strip_swipe_added["_moved"] = false
+			return false
+		## Release ends a paint swipe.
+		if _strip_swipe_active:
+			var moved: bool = bool(_strip_swipe_added.get("_moved", false))
+			_strip_swipe_active = false
+			if moved:
+				_strip_did_drag = true
+			_strip_swipe_added.clear()
+		return false
+	if event is InputEventMouseMotion and _strip_swipe_active and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		var start_pos: Vector2 = _strip_swipe_added.get("_start", event.position)
+		if not bool(_strip_swipe_added.get("_moved", false)):
+			if start_pos.distance_to(event.position) >= STRIP_SWIPE_THRESH_PX:
+				_strip_swipe_added["_moved"] = true
+				_strip_did_drag = true
+				var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
+				if start_id != "":
+					_strip_swipe_add(start_id)
+		if bool(_strip_swipe_added.get("_moved", false)):
+			var id2 := _strip_ingredient_at(event.position)
+			if id2 != "":
+				_strip_swipe_add(id2)
+		return true
+	return false
+
+
+func _strip_ingredient_at(screen_pos: Vector2) -> String:
+	for id in ingredient_buttons:
+		var btn: Control = ingredient_buttons[id]
+		if btn != null and is_instance_valid(btn) and btn.get_global_rect().has_point(screen_pos):
+			return str(id)
+	return ""
+
+
+func _strip_swipe_add(id: String) -> void:
+	if id == "" or _strip_swipe_added.has(id):
+		return
+	_strip_swipe_added[id] = true
+	if active_station < 0 or active_station >= STATION_COUNT:
+		return
+	var items: Array = stations[active_station]["items"]
+	## Skip if already on the burger (one of each topping per swipe pass).
+	if id != "bun_top" and items.has(id):
+		return
+	if id == "bun_top" and items.has("bun_top"):
+		return
+	_pulse_ingredient_feedback(id)
+	## Swipe cheese goes straight onto Build (no ghost hold interrupting the drag).
+	_add_ingredient_to_station(active_station, id, true)
+	_strip_gesture_added = true
+
+
 func _ingredient_from_hotkey(keycode: Key) -> String:
 	match keycode:
 		KEY_1, KEY_KP_1:
@@ -818,8 +1065,6 @@ func _ingredient_from_hotkey(keycode: Key) -> String:
 			return INGREDIENT_HOTKEYS[6]
 		KEY_8, KEY_KP_8:
 			return INGREDIENT_HOTKEYS[7]
-		KEY_9, KEY_KP_9:
-			return INGREDIENT_HOTKEYS[8]
 	return ""
 
 
@@ -833,13 +1078,14 @@ func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
 			if c.mouse_filter == Control.MOUSE_FILTER_STOP:
 				## Full-screen empty roots pass through; interactive chrome does not.
 				var n := String(c.name)
-				if n == "Root" or n == "BottomUI" or n == "StationsRow" or n == "GrillDropZone":
+				if n == "Root" or n == "BottomUI" or n == "StationsRow" or n == "GrillDropZone" \
+						or n == "WindowTicketRail" or n == "TicketBox":
 					pass
 				else:
 					return true
 		node = node.get_parent()
 	## Explicit hit-tests — hovered can miss during the same-frame press.
-	for ctrl in [window_pause_btn, gfx_btn, gfx_panel, radio_column]:
+	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, radio_column]:
 		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
 			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 				return true
@@ -935,8 +1181,8 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 func _end_day() -> void:
 	playing = false
 	day += 1
-	game_over_label.text = "Day %d over!\n\nServed: %d\nPerfect: %d\nWallet: $%d\n\nReady for the next rush?" % [
-		day - 1, total_served, perfect_serves, money
+	game_over_label.text = "Day %d over!\n\nServed: %d\nPerfect: %d\nWallet: %s\n\nReady for the next rush?" % [
+		day - 1, total_served, perfect_serves, _format_money(money)
 	]
 	restart_btn.text = "Start Day %d" % day
 	game_over_panel.visible = true
@@ -949,7 +1195,6 @@ func _build_3d_world() -> void:
 	camera.look_at(Vector3(0.0, 1.32, 0.55), Vector3.UP)
 	camera.fov = 58.0
 
-	_add_box(world, Vector3(16, 0.05, 10), Vector3(0, -0.02, 4.0), Color("3A3A3A"))
 	_build_checkered_floor()
 
 	# Truck shell — black interior walls / ceiling.
@@ -1006,10 +1251,12 @@ func _build_3d_world() -> void:
 	_build_meat_warmer()
 	_build_truck_radio_prop()
 	_build_season_shaker()
-
-	_add_box(world, Vector3(7, 0.04, 2.4), Vector3(0, 0.02, 2.9), Color("455A64"))
-	for i in 3:
-		_add_box(world, Vector3(0.35, 0.9, 0.35), Vector3(-2.5 + i * 2.2, 0.45, 4.2), Color("6D4C41"))
+	_build_fire_extinguisher()
+	_build_outdoor_street()
+	_build_first_sale_decal()
+	_build_menu_board_decal()
+	_build_burger_pals_logo_decal()
+	_build_window_bunting()
 
 	_setup_world_lighting()
 
@@ -1153,10 +1400,11 @@ func _build_flat_top_grill() -> void:
 	rim.material_override = rim_mat
 	surface.add_child(rim)
 
-	## Heat-zone steel panels — FULL · 1/4 · 1/8 · HOLD (screen-left → right).
+	## Heat-zone steel panels — FULL · 1/2 · 1/4 · HOLD (screen-left → right).
 	var bands: Array = _grill_zone_bands()
 	grill_surface_mat = null
 	grill_glow_meshes.clear()
+	_ensure_grill_steel_texture()
 	var heat_tex := _make_grill_heat_texture()
 	var cook_x0 := 0.0
 	var cook_x1 := 0.0
@@ -1164,7 +1412,7 @@ func _build_flat_top_grill() -> void:
 	for z in bands:
 		var local_cx := float(z["cx"]) - GRILL_CENTER_X
 		var zw := float(z["w"])
-		var mat := _make_grill_zone_metal(z["col"], float(z["rough"]), float(z["emit"]))
+		var mat := _make_grill_zone_metal(z["col"], float(z["rough"]), float(z["emit"]), zw, GRILL_DEPTH)
 		_add_grill_zone_panel(surface, Vector3(local_cx, 0, 0), Vector3(zw, 0.045, GRILL_DEPTH), mat)
 		grill_pad_mats.append(mat)
 		if str(z["id"]) == "full":
@@ -1188,12 +1436,9 @@ func _build_flat_top_grill() -> void:
 			)
 
 	if grill_surface_mat == null:
-		grill_surface_mat = StandardMaterial3D.new()
-		grill_surface_mat.albedo_color = Color(0.28, 0.3, 0.33)
-		grill_surface_mat.metallic = 1.0
-		grill_surface_mat.roughness = 0.22
+		grill_surface_mat = _make_grill_zone_metal(Color(0.28, 0.3, 0.33), 0.22, 0.0, GRILL_WIDTH, GRILL_DEPTH)
 
-	## Big fake brushed-steel shine across the whole flat-top.
+	## Soft specular band on top of the tiled steel (kept subtle).
 	_add_grill_shine(surface, Vector3(0, 0.024, 0), GRILL_WIDTH * 0.98, GRILL_DEPTH * 0.42)
 
 	## Spill omnis kept off — bloom made them look like hot orbs.
@@ -1208,12 +1453,12 @@ func _build_flat_top_grill() -> void:
 	surface.add_child(heat)
 	grill_heat_lights.append(heat)
 
-	## Heat shimmer / warp over the three cook bands (not HOLD) — compact by default.
+	## Heat shimmer / warp over the three cook bands (not HOLD).
 	_build_heat_warp_plane(
 		surface,
-		Vector3(cook_cx_world - GRILL_CENTER_X, 0.18, 0),
-		cook_w * 0.58,
-		GRILL_DEPTH * 0.48
+		Vector3(cook_cx_world - GRILL_CENTER_X, 0.22, 0),
+		cook_w * 0.82,
+		GRILL_DEPTH * 0.62
 	)
 	grill_glow_root = grill_glow_meshes[0] if not grill_glow_meshes.is_empty() else null
 
@@ -1551,7 +1796,7 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 			patty.queue_free()
 			if game_audio and game_audio.has_method("play_trash"):
 				game_audio.play_trash()
-			_flash("Trashed a patty", Color("FFAB91"))
+			_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 		return
 	if kind == "reorder":
 		var st2 := int(data.get("station", -1))
@@ -1577,7 +1822,7 @@ func _trash_spatula_patty() -> void:
 	_refresh_spatula_ui()
 	if game_audio and game_audio.has_method("play_trash"):
 		game_audio.play_trash()
-	_flash("Trashed scooped patty", Color("FFAB91"))
+	_spend(COST_DROP_BURGER, "Trashed scooped burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 
 
 func _trash_single_grill_patty(patty: Area3D) -> void:
@@ -1595,7 +1840,7 @@ func _trash_single_grill_patty(patty: Area3D) -> void:
 	patty.queue_free()
 	if game_audio and game_audio.has_method("play_trash"):
 		game_audio.play_trash()
-	_flash("Trashed a patty", Color("FFAB91"))
+	_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 
 
 func _trash_grill_patties() -> void:
@@ -1659,9 +1904,14 @@ func _toggle_grill_power(_index: int) -> void:
 		_sfx_click()
 	_set_grill_on(turning_on)
 	if grill_on:
-		_flash("Burner ON — right-click the grill where you want each patty", Color("FFCC80"))
+		if _tutorial_step == 1:
+			_set_tutorial_hint(2, "Right-click to add burger patty on grill")
+		else:
+			_flash("Burner ON — right-click the grill where you want each patty", Color("FFCC80"))
 	else:
 		_flash("Burner OFF", Color("B0BEC5"))
+		if _tutorial_step == 2:
+			_set_tutorial_hint(1, "Turn on grill or burner")
 
 
 func _set_grill_on(on: bool) -> void:
@@ -1784,7 +2034,7 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 
 
 func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
-	## Aim at the grill plane, then pick the patty under the cursor — not just the front ray hit.
+	## Prefer the burger under the cursor on screen — not a plane-hit or back-stack neighbor.
 	## max_world < 0 → generous scoop/drag pick; set tighter (e.g. smash) to require a real hit.
 	if _blocks_grill_pick(screen_pos):
 		return null
@@ -1796,7 +2046,7 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 	var edge_r := PATTY_PICK_WORLD_EDGE if max_world < 0.0 else max_world
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	var cam_pos := camera.global_position
-	var candidates: Array = []
+	var candidates: Array = [] ## {p, screen_d, cam_d, in_screen}
 	for p in grill:
 		if p == null or not is_instance_valid(p) or p.is_held:
 			continue
@@ -1805,29 +2055,38 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 			continue
 		var screen_pt := camera.unproject_position(lift)
 		var pick_px := maxf(min_px, _patty_screen_pick_radius_px(lift, edge_r, pad_px))
-		## World distance on the grill plane (tight for smash, forgiving for scoop).
+		var screen_d := screen_pos.distance_to(screen_pt)
+		var in_screen := screen_d <= pick_px
 		var near_plane := false
 		if plane_hit != Vector3.ZERO:
 			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= world_lim
-		if screen_pos.distance_to(screen_pt) > pick_px and not near_plane:
+		if not in_screen and not near_plane:
 			continue
-		candidates.append(p)
+		candidates.append({
+			"p": p,
+			"screen_d": screen_d,
+			"cam_d": cam_pos.distance_to(lift),
+			"in_screen": in_screen,
+		})
 	if candidates.is_empty():
 		return null
-	if candidates.size() == 1:
-		return candidates[0]
+	## If anything sits under the cursor on screen, ignore plane-only far misses.
+	var any_screen := false
+	for c in candidates:
+		if bool(c["in_screen"]):
+			any_screen = true
+			break
+	if any_screen:
+		candidates = candidates.filter(func(c): return bool(c["in_screen"]))
+	## Closest on screen wins; ties break toward the front (nearer camera).
 	candidates.sort_custom(func(a, b):
-		var da := 999.0
-		var db := 999.0
-		if plane_hit != Vector3.ZERO:
-			da = Vector2(plane_hit.x - a.position.x, plane_hit.z - a.position.z).length()
-			db = Vector2(plane_hit.x - b.position.x, plane_hit.z - b.position.z).length()
-		if absf(da - db) > 0.04:
-			return da < db
-		## Overlapping stack — prefer the patty farther from the camera (click-through).
-		return cam_pos.distance_to(a.global_position) > cam_pos.distance_to(b.global_position)
+		var sa: float = float(a["screen_d"])
+		var sb: float = float(b["screen_d"])
+		if absf(sa - sb) > 2.5:
+			return sa < sb
+		return float(a["cam_d"]) < float(b["cam_d"])
 	)
-	return candidates[0]
+	return candidates[0]["p"]
 
 
 func _patty_screen_pick_radius_px(world_pt: Vector3, edge_r: float = -1.0, pad_px: float = -1.0) -> float:
@@ -1983,6 +2242,8 @@ func _spawn_patty_at(idx: int, world_pos: Vector3) -> void:
 			_flash("Cooking on %s heat (%d/%d) — slower sear" % [lab, n, GRILL_SLOTS], Color("FFCC80"))
 		else:
 			_flash("Cooking on FULL! %d/%d — wait for FLIP" % [n, GRILL_SLOTS], Color("FFAB91"))
+	if _tutorial_step == 2:
+		_clear_tutorial_hint()
 
 
 func _spawn_patty_in_slot(idx: int) -> void:
@@ -2004,7 +2265,7 @@ func _begin_patty_drag(patty: Area3D) -> void:
 	if spatula_patty != null:
 		_on_patty_clicked(patty)
 		return
-	if brush_held or cheese_held or shaker_held or oil_held:
+	if brush_held or cheese_held or shaker_held or oil_held or ext_held:
 		return
 	if flicking_patty != null:
 		return
@@ -2590,7 +2851,8 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	if not items.has("bun_bottom"):
 		items.append("bun_bottom")
 	_insert_patty_into_stack(items)
-	if patty.has_cheese and patty.cheese_ready():
+	## Cheese counts for the order as soon as it's on the meat (melt is visual).
+	if patty.has_cheese:
 		items.append("cheese")
 	st["items"] = _normalize_burger_stack(items)
 	_refresh_spatula_ui()
@@ -2601,9 +2863,10 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 		game_audio.play_ingredient("patty")
 	var n: int = st["patties"].size()
 	if patty.has_cheese and not patty.cheese_ready():
-		_flash("Patty on Build — cheese still melting (%ds)" % maxi(1, int(ceil(5.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
+		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(5.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
 	else:
 		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
+	call_deferred("_try_auto_serve")
 
 
 func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> void:
@@ -2686,7 +2949,7 @@ func _update_heat_warp(_delta: float) -> void:
 	var heat := 0.0
 	if grill_on:
 		## Idle shimmer when burner is on; cooking pushes it a bit harder.
-		heat = 0.34
+		heat = 0.55
 		for i in GRILL_SLOTS:
 			var p = grill[i]
 			if p == null or not is_instance_valid(p) or p.is_held:
@@ -2694,7 +2957,7 @@ func _update_heat_warp(_delta: float) -> void:
 			if not p.heating:
 				continue
 			var cook_t := clampf(float(p.cook_time) / 9.0, 0.2, 1.0)
-			heat = maxf(heat, 0.42 + cook_t * 0.28 * clampf(float(p.heat_mul), 0.2, 1.0))
+			heat = maxf(heat, 0.62 + cook_t * 0.32 * clampf(float(p.heat_mul), 0.2, 1.0))
 	heat_warp_mat.set_shader_parameter("heat", heat)
 	heat_warp_mesh.visible = heat > 0.05
 
@@ -2703,13 +2966,13 @@ func _apply_heat_warp_settings(s: Dictionary) -> void:
 	heat_warp_enabled = bool(s.get("heat_warp_on", true))
 	if heat_warp_mat == null or heat_warp_mesh == null or not is_instance_valid(heat_warp_mesh):
 		return
-	var size_mul := clampf(float(s.get("heat_warp_size", 0.62)), 0.25, 1.6)
+	var size_mul := clampf(float(s.get("heat_warp_size", 0.83)), 0.25, 1.6)
 	var plane := heat_warp_mesh.mesh as PlaneMesh
 	if plane != null:
 		plane.size = heat_warp_base_size * size_mul
-	heat_warp_mat.set_shader_parameter("time_scale", float(s.get("heat_warp_speed", 3.8)))
-	heat_warp_mat.set_shader_parameter("warp_strength", float(s.get("heat_warp_strength", 0.0048)))
-	heat_warp_mat.set_shader_parameter("mask_tight", float(s.get("heat_warp_tight", 1.4)))
+	heat_warp_mat.set_shader_parameter("time_scale", float(s.get("heat_warp_speed", 1.00)))
+	heat_warp_mat.set_shader_parameter("warp_strength", float(s.get("heat_warp_strength", 0.00)))
+	heat_warp_mat.set_shader_parameter("mask_tight", float(s.get("heat_warp_tight", 1.70)))
 	if not heat_warp_enabled:
 		heat_warp_mesh.visible = false
 		heat_warp_mat.set_shader_parameter("heat", 0.0)
@@ -2837,16 +3100,144 @@ func _make_residue_texture(seed_i: int) -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
+func _build_fire_extinguisher() -> void:
+	## Mounted on the left window beam, just left of scraper / oil / seasoning.
+	const SCENE_PATH := "res://assets/fire_ext/FireExt.fbx"
+	const DIFF_PATH := "res://assets/fire_ext/DIFFUSE.jpg"
+	const NORM_PATH := "res://assets/fire_ext/NORMAL.jpg"
+	if not ResourceLoader.exists(SCENE_PATH):
+		push_warning("Fire extinguisher missing: %s" % SCENE_PATH)
+		return
+	var packed := load(SCENE_PATH) as PackedScene
+	if packed == null:
+		return
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	ext_home = Vector3(2.52, 1.72, 1.14)
+	ext_root = Node3D.new()
+	ext_root.name = "FireExtinguisher"
+	ext_root.position = ext_home
+	ext_root.rotation_degrees = ext_home_rot
+	world.add_child(ext_root)
+	## Unscaled root so grab volume stays world-sized; mesh stays tiny.
+	visual.name = "FireExtMesh"
+	visual.position = Vector3.ZERO
+	visual.rotation_degrees = Vector3.ZERO
+	visual.scale = Vector3(0.034, 0.034, 0.034)
+	var diff: Texture2D = load(DIFF_PATH) as Texture2D if ResourceLoader.exists(DIFF_PATH) else null
+	var norm: Texture2D = load(NORM_PATH) as Texture2D if ResourceLoader.exists(NORM_PATH) else null
+	_apply_fire_ext_materials(visual, diff, norm)
+	ext_root.add_child(visual)
+	ext_visual = visual
+
+	ext_area = Area3D.new()
+	ext_area.name = "FireExtGrab"
+	ext_area.input_ray_pickable = true
+	ext_area.collision_layer = EXT_COLLISION_LAYER
+	ext_area.collision_mask = 0
+	ext_area.monitoring = true
+	ext_area.monitorable = true
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.32, 0.62, 0.32)
+	shape.shape = box
+	shape.position = Vector3(0.0, 0.05, 0.0)
+	ext_area.add_child(shape)
+	ext_root.add_child(ext_area)
+
+
+func _apply_fire_ext_materials(node: Node, diff: Texture2D, norm: Texture2D) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.roughness = 0.42
+		mat.metallic = 0.15
+		mat.cull_mode = BaseMaterial3D.CULL_BACK
+		if diff != null:
+			mat.albedo_texture = diff
+			mat.albedo_color = Color.WHITE
+		else:
+			mat.albedo_color = Color(0.75, 0.12, 0.1)
+		if norm != null:
+			mat.normal_enabled = true
+			mat.normal_texture = norm
+			mat.normal_scale = 0.85
+		mi.material_override = mat
+	for child in node.get_children():
+		_apply_fire_ext_materials(child, diff, norm)
+
+
+func _begin_fire_ext_hold() -> bool:
+	if not playing or ext_held or ext_root == null:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	ext_held = true
+	ext_root.rotation_degrees = ext_held_rot
+	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + EXT_HOLD_HEIGHT)
+	if seat != Vector3.ZERO:
+		ext_root.global_position = seat
+	if ext_area:
+		ext_area.input_ray_pickable = false
+	if game_audio:
+		game_audio.play_click()
+	_flash("Fire extinguisher — drag it, release to hang it back", Color("FF8A80"))
+	return true
+
+
+func _update_held_fire_ext(_delta: float) -> void:
+	if ext_root == null or camera == null:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var hit := _grill_plane_from_screen(mouse)
+	if hit == Vector3.ZERO:
+		## Keep following even when aiming high (toward the window beam).
+		hit = _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + EXT_HOLD_HEIGHT)
+		if hit == Vector3.ZERO:
+			return
+	else:
+		hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.75, GRILL_CENTER_X + GRILL_WIDTH * 1.05)
+		hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.75, 1.28)
+		hit.y = GRILL_SURFACE_Y + EXT_HOLD_HEIGHT
+	ext_root.global_position = hit
+	ext_root.rotation_degrees = ext_held_rot
+
+
+func _release_fire_extinguisher() -> void:
+	if not ext_held or ext_root == null:
+		return
+	ext_held = false
+	ext_root.position = ext_home
+	ext_root.rotation_degrees = ext_home_rot
+	if ext_area:
+		ext_area.input_ray_pickable = true
+	if game_audio:
+		game_audio.play_click()
+
+
+func _reset_fire_extinguisher() -> void:
+	ext_held = false
+	if ext_root != null and is_instance_valid(ext_root):
+		ext_root.position = ext_home
+		ext_root.rotation_degrees = ext_home_rot
+	if ext_area != null and is_instance_valid(ext_area):
+		ext_area.input_ray_pickable = true
+
+
 func _build_wire_brush() -> void:
-	## Paint scraper on the top window beam (screen-right checkmark).
-	brush_home = Vector3(-1.55, 2.28, 1.36)
+	## Paint scraper hanging with oil + seasoning on the far-left window beam.
+	brush_home = Vector3(2.12, 1.99, 1.12)
 	brush_root = Node3D.new()
 	brush_root.name = "PaintScraper"
 	brush_root.position = brush_home
-	## Parked on the lintel — handle tipped slightly toward the cook.
-	brush_home_rot = Vector3(-12.0, 15.0, 8.0)
+	## Handle tips up into the lintel; blade hangs into the window opening.
+	brush_home_rot = Vector3(-8.0, 18.0, 6.0)
 	brush_root.rotation_degrees = brush_home_rot
-	brush_root.scale = Vector3(1.28, 1.28, 1.28)
+	brush_root.scale = Vector3(1.55, 1.55, 1.55)
 	world.add_child(brush_root)
 
 	brush_area = Area3D.new()
@@ -2857,8 +3248,8 @@ func _build_wire_brush() -> void:
 	brush_area.monitorable = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Grab volume around handle + blade.
-	box.size = Vector3(0.28, 0.55, 0.32)
+	## Grab volume around handle + blade — generous so hanging tools stay clickable.
+	box.size = Vector3(0.34, 0.62, 0.36)
 	shape.shape = box
 	shape.position = Vector3(0, 0.02, 0.0)
 	brush_area.add_child(shape)
@@ -2935,14 +3326,14 @@ func _build_wire_brush() -> void:
 
 
 func _build_season_shaker() -> void:
-	## Seasoning on the top window beam (center checkmark).
-	shaker_home = Vector3(0.05, 2.26, 1.34)
+	## Seasoning hanging next to the oil bottle on the far-left window beam.
+	shaker_home = Vector3(1.78, 2.14, 1.12)
 	shaker_root = Node3D.new()
 	shaker_root.name = "SeasonShaker"
 	shaker_root.position = shaker_home
 	shaker_root.rotation_degrees = Vector3(4.0, -10.0, 2.0)
-	shaker_root.scale = Vector3(1.85, 1.85, 1.85)
-	grill_root.add_child(shaker_root)
+	shaker_root.scale = Vector3(2.15, 2.15, 2.15)
+	world.add_child(shaker_root)
 
 	shaker_area = Area3D.new()
 	shaker_area.input_ray_pickable = true
@@ -2952,8 +3343,8 @@ func _build_season_shaker() -> void:
 	shaker_area.monitorable = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Match the bottle mesh — grab only when the ray hits the model.
-	box.size = Vector3(0.078, 0.14, 0.078)
+	## Roomier than the mesh so hanging tools stay easy to click.
+	box.size = Vector3(0.12, 0.2, 0.12)
 	shape.shape = box
 	shape.position = Vector3(0, 0.04, 0)
 	shaker_area.add_child(shape)
@@ -3019,37 +3410,84 @@ func _build_season_shaker() -> void:
 	shaker_root.add_child(shaker_particles)
 
 
+func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3:
+	## Cursor → world point at a hold height. Works even when aiming high at the window tools
+	## (grill-plane rays miss upward and left tools frozen until you drag down).
+	if camera == null:
+		return Vector3.ZERO
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var hit := Vector3.ZERO
+	if absf(dir.y) > 0.002:
+		var t := (hold_y - from.y) / dir.y
+		if t > 0.05:
+			hit = from + dir * t
+	if hit == Vector3.ZERO:
+		## Upward / grazing aim — park along the ray in front of the cook.
+		hit = from + dir * 2.4
+		hit.y = hold_y
+	## Soft work volume covering grill + window beam.
+	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.85, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.25)
+	hit.y = hold_y
+	return hit
+
+
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 	if _ui_blocks_world_click(screen_pos):
 		return false
-	## Seasoning: must click the 3D shaker mesh (ray hit only).
-	if not shaker_held and _ray_hits_tool(screen_pos, 32, shaker_area):
-		_begin_shaker_hold()
-		return shaker_held
-	## Other tools — keep grab tight so radio / GFX clicks don't steal the scraper.
+	## Prefer the nearest hanging tool by screen distance, then ray as fallback.
 	var best := ""
-	var best_d := 70.0
-	if brush_root != null and camera != null and not brush_held:
+	var best_d := 110.0
+	if shaker_root != null and camera != null and not shaker_held:
+		var sd := screen_pos.distance_to(camera.unproject_position(shaker_root.global_position + Vector3(0, 0.05, 0)))
+		if sd < best_d:
+			best_d = sd
+			best = "shaker"
+	if brush_root != null and camera != null and not brush_held and not brush_throwing:
 		var tip := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
 		var bd := screen_pos.distance_to(camera.unproject_position(tip))
 		if bd < best_d:
 			best_d = bd
 			best = "brush"
+	## Allow grabbing scraper while it's flying home.
+	if brush_root != null and camera != null and not brush_held and brush_throwing:
+		var tip2 := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
+		var bd2 := screen_pos.distance_to(camera.unproject_position(tip2))
+		if bd2 < best_d:
+			best_d = bd2
+			best = "brush"
 	if oil_root != null and camera != null and not oil_held:
 		var od := screen_pos.distance_to(camera.unproject_position(oil_root.global_position + Vector3(0, 0.06, 0)))
-		if od <= 36.0 and od < best_d:
+		if od < best_d:
 			best_d = od
 			best = "oil"
-	if best == "" or best_d > 55.0:
-		if _ray_hits_tool(screen_pos, 8, brush_area):
+	if ext_root != null and camera != null and not ext_held:
+		var ed := screen_pos.distance_to(camera.unproject_position(ext_root.global_position + Vector3(0, 0.12, 0)))
+		if ed < best_d:
+			best_d = ed
+			best = "ext"
+	if best == "" or best_d > 96.0:
+		if _ray_hits_tool(screen_pos, 32, shaker_area):
+			best = "shaker"
+		elif _ray_hits_tool(screen_pos, 8, brush_area):
 			best = "brush"
 		elif _ray_hits_tool(screen_pos, 16, oil_area):
 			best = "oil"
+		elif _ray_hits_tool(screen_pos, EXT_COLLISION_LAYER, ext_area):
+			best = "ext"
+		else:
+			return false
 	match best:
+		"shaker":
+			_begin_shaker_hold()
+			return shaker_held
 		"oil":
 			return _begin_oil_hold()
 		"brush":
 			return _try_grab_brush(screen_pos)
+		"ext":
+			return _begin_fire_ext_hold()
 	return false
 
 
@@ -3069,10 +3507,11 @@ func _ray_hits_tool(screen_pos: Vector2, layer: int, area: Area3D) -> bool:
 func _try_grab_shaker(screen_pos: Vector2) -> bool:
 	if shaker_held or shaker_root == null or camera == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or oil_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or oil_held or ext_held or dragging_patty != null:
 		return false
-	## Only the 3D model — no screen-proximity grab.
-	if not _ray_hits_tool(screen_pos, 32, shaker_area):
+	var tip := shaker_root.global_position + Vector3(0, 0.05, 0)
+	var near := screen_pos.distance_to(camera.unproject_position(tip)) <= 58.0
+	if not near and not _ray_hits_tool(screen_pos, 32, shaker_area):
 		return false
 	_begin_shaker_hold()
 	return shaker_held
@@ -3081,7 +3520,7 @@ func _try_grab_shaker(screen_pos: Vector2) -> bool:
 func _begin_shaker_hold() -> void:
 	if not playing:
 		return
-	if brush_held or oil_held or cheese_held or spatula_patty != null or dragging_patty != null:
+	if brush_held or oil_held or cheese_held or ext_held or spatula_patty != null or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return
 	if shaker_held:
@@ -3089,13 +3528,18 @@ func _begin_shaker_hold() -> void:
 	shaker_held = true
 	if shaker_root:
 		shaker_root.visible = true
-		shaker_root.scale = Vector3(1.85, 1.85, 1.85)
+		shaker_root.scale = Vector3(2.15, 2.15, 2.15)
 		shaker_root.rotation_degrees = Vector3(180.0, 25.0, 0.0)
+		## Instant snap under cursor — no wait for next grill-plane hit.
+		var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + SHAKER_POUR_HEIGHT)
+		if seat != Vector3.ZERO:
+			shaker_root.global_position = seat
 	if shaker_area:
 		shaker_area.input_ray_pickable = false
 	if game_audio:
 		game_audio.play_click()
-	_flash("Hold over beef to season — release to put back", Color("FFE082"))
+	_spend(COST_SEASON_USE)
+	_flash("Hold over beef to season — %s · release to put back" % _format_money(COST_SEASON_USE), Color("FFE082"))
 
 
 func _cancel_shaker_hold() -> void:
@@ -3105,7 +3549,7 @@ func _cancel_shaker_hold() -> void:
 	if shaker_root:
 		shaker_root.position = shaker_home
 		shaker_root.rotation_degrees = Vector3(6.0, 25.0, -4.0)
-		shaker_root.scale = Vector3(1.85, 1.85, 1.85)
+		shaker_root.scale = Vector3(2.15, 2.15, 2.15)
 		shaker_root.visible = true
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
@@ -3118,7 +3562,7 @@ func _cancel_shaker_hold_silent() -> void:
 	if shaker_root:
 		shaker_root.position = shaker_home
 		shaker_root.rotation_degrees = Vector3(6.0, 25.0, -4.0)
-		shaker_root.scale = Vector3(1.85, 1.85, 1.85)
+		shaker_root.scale = Vector3(2.15, 2.15, 2.15)
 		shaker_root.visible = true
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
@@ -3129,12 +3573,13 @@ func _update_held_shaker(_delta: float) -> void:
 		return
 	shaker_season_cool = maxf(0.0, shaker_season_cool - _delta)
 	var mouse := get_viewport().get_mouse_position()
+	## Drag like before: track the grill plane. Pickup snap still uses _tool_hold_point.
 	var hit := _grill_plane_from_screen(mouse)
 	if hit == Vector3.ZERO:
 		return
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.05, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.05)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.05, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.05)
-	hit.y = GRILL_SURFACE_Y + 0.2
+	hit.y = GRILL_SURFACE_Y + SHAKER_POUR_HEIGHT
 	shaker_root.global_position = hit
 	shaker_root.rotation_degrees = Vector3(180.0, 25.0, 0.0)
 	var target = _nearest_patty_near(Vector3(hit.x, GRILL_SURFACE_Y, hit.z), 0.22)
@@ -3165,18 +3610,17 @@ func _update_held_oil(_delta: float) -> void:
 	if oil_root == null or camera == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
+	## Drag like before: track the grill plane so back/forth feels free again.
 	var hit := _grill_plane_from_screen(mouse)
 	if hit == Vector3.ZERO:
 		return
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.04, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.04)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.04, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.04)
-	## Hard snap, straight upside-down — raised so the bottle clears the plate.
 	oil_root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + OIL_POUR_HEIGHT, hit.z)
 	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
 	if oil_particles:
 		oil_particles.emitting = true
 		oil_particles.position = Vector3(0, 0.12, 0)
-	## Draw ABOVE the steel top (~+0.022), not inside the mesh.
 	var cur := Vector3(hit.x, GRILL_SURFACE_Y + OIL_SIT_Y, hit.z)
 	if oil_last_draw == Vector3.ZERO:
 		oil_last_draw = cur
@@ -3431,14 +3875,14 @@ func _clear_oil_slicks() -> void:
 
 
 func _build_oil_bottle() -> void:
-	## Oil bottle on the top window beam (screen-left checkmark).
-	oil_home = Vector3(1.65, 2.26, 1.34)
+	## Oil bottle hanging from the far-left window beam.
+	oil_home = Vector3(1.42, 2.12, 1.12)
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
 	oil_root.rotation_degrees = Vector3(6.0, -18.0, 3.0)
-	oil_root.scale = Vector3(1.75, 1.75, 1.75)
-	grill_root.add_child(oil_root)
+	oil_root.scale = Vector3(2.05, 2.05, 2.05)
+	world.add_child(oil_root)
 
 	oil_area = Area3D.new()
 	oil_area.input_ray_pickable = true
@@ -3446,8 +3890,8 @@ func _build_oil_bottle() -> void:
 	oil_area.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Tight hitbox — have to click the bottle itself.
-	box.size = Vector3(0.07, 0.15, 0.07)
+	## Roomier than the bottle so hanging tools stay easy to click.
+	box.size = Vector3(0.12, 0.22, 0.12)
 	shape.shape = box
 	shape.position = Vector3(0, 0.04, 0)
 	oil_area.monitoring = true
@@ -3464,7 +3908,7 @@ func _build_oil_bottle() -> void:
 	bottle.mesh = bcyl
 	bottle.position = Vector3(0, 0.04, 0)
 	var bmat := StandardMaterial3D.new()
-	bmat.albedo_color = Color(0.95, 0.88, 0.45, 0.55)
+	bmat.albedo_color = Color(0.98, 0.9, 0.35, 0.78)
 	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	bmat.roughness = 0.25
 	bmat.metallic = 0.05
@@ -3537,11 +3981,11 @@ func _build_oil_bottle() -> void:
 func _try_grab_oil(screen_pos: Vector2) -> bool:
 	if oil_held or oil_root == null or camera == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or dragging_patty != null:
 		return false
 	var tip := oil_root.global_position + Vector3(0, 0.06, 0)
 	var screen_pt := camera.unproject_position(tip)
-	if screen_pos.distance_to(screen_pt) > 42.0 and not _ray_hits_tool(screen_pos, 16, oil_area):
+	if screen_pos.distance_to(screen_pt) > 58.0 and not _ray_hits_tool(screen_pos, 16, oil_area):
 		return false
 	return _begin_oil_hold()
 
@@ -3549,17 +3993,21 @@ func _try_grab_oil(screen_pos: Vector2) -> bool:
 func _begin_oil_hold() -> bool:
 	if not playing or oil_held or oil_root == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	oil_held = true
 	oil_last_draw = Vector3.ZERO
 	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + OIL_POUR_HEIGHT)
+	if seat != Vector3.ZERO:
+		oil_root.global_position = seat
 	if oil_area:
 		oil_area.input_ray_pickable = false
 	if game_audio:
 		game_audio.play_click()
-	_flash("Oil tipped — drag to draw on the grill", Color("FFE082"))
+	_spend(COST_OIL_USE)
+	_flash("Oil tipped — %s · drag to draw on the grill" % _format_money(COST_OIL_USE), Color("FFE082"))
 	return true
 
 
@@ -3570,15 +4018,12 @@ func _release_oil_bottle() -> void:
 	oil_last_draw = Vector3.ZERO
 	if oil_particles:
 		oil_particles.emitting = false
-	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(oil_root, "position", oil_home, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(oil_root, "rotation_degrees", Vector3(8.0, 40.0, -5.0), 0.22)
-	tw.tween_property(oil_root, "scale", Vector3(1.75, 1.75, 1.75), 0.22)
-	tw.chain().tween_callback(func():
-		if oil_area:
-			oil_area.input_ray_pickable = true
-	)
+	## Snappy put-away — was 0.22s and felt sticky.
+	oil_root.position = oil_home
+	oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
+	oil_root.scale = Vector3(2.05, 2.05, 2.05)
+	if oil_area:
+		oil_area.input_ray_pickable = true
 	if game_audio:
 		game_audio.play_click()
 
@@ -3592,14 +4037,14 @@ func _reset_oil_bottle() -> void:
 	if oil_root:
 		oil_root.position = oil_home
 		oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
-		oil_root.scale = Vector3(1.75, 1.75, 1.75)
+		oil_root.scale = Vector3(2.05, 2.05, 2.05)
 	if oil_area:
 		oil_area.input_ray_pickable = true
 	_clear_oil_slicks()
 
 
 func _grill_zone_bands() -> Array:
-	## Screen-left → right (world +X → −X): FULL · 1/4 · 1/8 · HOLD.
+	## Screen-left → right (world +X → −X): FULL · 1/2 · 1/4 · HOLD.
 	var half_w := GRILL_WIDTH * 0.5
 	var cursor := GRILL_CENTER_X + half_w ## start at screen-left edge
 	var defs: Array = [
@@ -3618,7 +4063,7 @@ func _grill_zone_bands() -> Array:
 			"id": "quarter",
 			"frac": ZONE_QUARTER_FRAC,
 			"mul": ZONE_QUARTER_MUL,
-			"label": "1/4",
+			"label": "1/2",
 			"col": Color(0.27, 0.28, 0.3),
 			"rough": 0.26,
 			"emit": 0.05,
@@ -3629,7 +4074,7 @@ func _grill_zone_bands() -> Array:
 			"id": "eighth",
 			"frac": ZONE_EIGHTH_FRAC,
 			"mul": ZONE_EIGHTH_MUL,
-			"label": "1/8",
+			"label": "1/4",
 			"col": Color(0.22, 0.24, 0.27),
 			"rough": 0.32,
 			"emit": 0.02,
@@ -3733,7 +4178,7 @@ func _warmer_place_bounds() -> Rect2:
 
 
 func _build_meat_warmer() -> void:
-	## Zone labels along the flat-top: FULL · 1/4 · 1/8 · HOLD.
+	## Zone labels along the flat-top: FULL · 1/2 · 1/4 · HOLD.
 	if warmer_root != null and is_instance_valid(warmer_root):
 		warmer_root.queue_free()
 	warmer_root = Node3D.new()
@@ -3764,15 +4209,15 @@ func _build_meat_warmer() -> void:
 
 
 func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
-	## Meat on the hold strip stays cooked but spoils after 5 minutes.
-	if patty == null or not is_instance_valid(patty) or patty.is_held:
+	## Meat starts its 5-min clock on first HOLD visit, then keeps aging everywhere
+	## (grill / spatula / slide-offs do NOT reset the meter).
+	if patty == null or not is_instance_valid(patty):
 		return
-	if not _is_in_warmer_zone(patty.position):
-		patty.warm_hold_time = 0.0
-		return
-	patty.warm_hold_time = float(patty.warm_hold_time) + delta
-	if float(patty.warm_hold_time) >= WARM_HOLD_MAX:
-		_trash_held_warm_patty(patty)
+	var on_hold: bool = (not patty.is_held) and _is_in_warmer_zone(patty.position)
+	if on_hold or float(patty.warm_hold_time) > 0.0:
+		patty.warm_hold_time = float(patty.warm_hold_time) + delta
+		if float(patty.warm_hold_time) >= WARM_HOLD_MAX:
+			_trash_held_warm_patty(patty)
 
 
 func _trash_held_warm_patty(patty: Area3D) -> void:
@@ -3781,7 +4226,7 @@ func _trash_held_warm_patty(patty: Area3D) -> void:
 		grill[idx] = null
 	if is_instance_valid(patty):
 		patty.queue_free()
-	_flash("Hold meat went BAD after 5 minutes — tossed", Color("EF5350"))
+	_spend(COST_DROP_BURGER, "Hold meat went BAD — tossed (%s)" % _format_money(COST_DROP_BURGER), Color("EF5350"))
 
 
 func _make_warmer_speed_label(text: String, local_pos: Vector3, col: Color) -> Label3D:
@@ -3790,7 +4235,7 @@ func _make_warmer_speed_label(text: String, local_pos: Vector3, col: Color) -> L
 	lab.position = local_pos
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.modulate = col
-	UiFontsScript.apply_label3d(lab, true, 64, 0.042)
+	UiFontsScript.apply_label3d(lab, true, 36, 0.022)
 	## No fat outline — it read as a jagged black halo on FULL / 1/4 / HOLD.
 	lab.outline_size = 0
 	lab.outline_modulate = Color(0, 0, 0, 0)
@@ -3798,9 +4243,30 @@ func _make_warmer_speed_label(text: String, local_pos: Vector3, col: Color) -> L
 	return lab
 
 
-func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float) -> StandardMaterial3D:
+func _ensure_grill_steel_texture() -> void:
+	if grill_steel_tex != null and is_instance_valid(grill_steel_tex):
+		return
+	if ResourceLoader.exists(GRILL_STEEL_TEX_PATH):
+		grill_steel_tex = load(GRILL_STEEL_TEX_PATH) as Texture2D
+
+
+func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float, zone_w: float = 1.0, zone_d: float = 1.0) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = albedo
+	_ensure_grill_steel_texture()
+	if grill_steel_tex != null:
+		mat.albedo_texture = grill_steel_tex
+		## Tint the brushed map per heat band (FULL warmer, HOLD cooler).
+		mat.albedo_color = Color(
+			clampf(albedo.r * 1.35, 0.0, 1.0),
+			clampf(albedo.g * 1.35, 0.0, 1.0),
+			clampf(albedo.b * 1.35, 0.0, 1.0)
+		)
+		## Tile across bands — larger tile = more visible brushed grain.
+		var tile := GRILL_STEEL_TILE_M
+		mat.uv1_scale = Vector3(maxf(0.35, zone_w / tile), maxf(0.35, zone_d / tile), 1.0)
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	else:
+		mat.albedo_color = albedo
 	mat.metallic = 1.0
 	mat.roughness = roughness
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
@@ -3835,10 +4301,10 @@ func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: f
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.albedo_texture = _make_grill_shine_texture()
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
 	mat.emission_enabled = true
 	mat.emission = Color(0.95, 0.97, 1.0)
-	mat.emission_energy_multiplier = 1.4
+	mat.emission_energy_multiplier = 0.7
 	mat.render_priority = 2
 	shine.material_override = mat
 	parent.add_child(shine)
@@ -3912,7 +4378,7 @@ func _place_spatula_on_warmer(hit_pos: Vector3) -> void:
 	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
 	patty.heating = grill_on
 	patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
-	patty.warm_hold_time = 0.0
+	## Keep existing hold age — putting back on HOLD must not refresh the 5-min clock.
 	patty.position = Vector3(pos.x, patty.base_y, pos.z)
 	patty._rest_x = pos.x
 	patty._rest_z = pos.z
@@ -3934,12 +4400,14 @@ func _clear_warmer() -> void:
 
 
 func _try_grab_brush(screen_pos: Vector2) -> bool:
-	if brush_held or brush_throwing or brush_area == null or camera == null:
+	if brush_held or brush_area == null or camera == null:
 		return false
 	if _ui_blocks_world_click(screen_pos):
 		return false
-	if spatula_patty != null or cheese_held or shaker_held or oil_held:
+	if spatula_patty != null or cheese_held or shaker_held or oil_held or ext_held:
 		return false
+	## Interrupt put-away so re-grabs feel instant.
+	brush_throwing = false
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
 	var to := from + dir * 20.0
@@ -3952,65 +4420,45 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 	if not hit.is_empty() and hit.get("collider") == brush_area:
 		grabbed = true
 	else:
-		## Tight proximity only — fat radius stole radio / GFX clicks.
 		var tip := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
 		var screen_pt := camera.unproject_position(tip)
-		if screen_pos.distance_to(screen_pt) <= 48.0:
+		if screen_pos.distance_to(screen_pt) <= 88.0:
 			grabbed = true
 	if not grabbed:
 		return false
 	brush_held = true
+	brush_throwing = false
 	if brush_area:
 		brush_area.input_ray_pickable = false
 	if game_audio:
 		game_audio.play_click()
 	_flash("Swipe grease off the steel — keep moving to scrub it clean", Color("B0BEC5"))
 	brush_last_pos = brush_root.global_position if brush_root else Vector3.ZERO
-	## Snap toward cursor immediately so it doesn't feel stuck.
-	_snap_brush_toward_cursor(screen_pos, 0.55)
+	## Full snap under cursor immediately.
+	_snap_brush_toward_cursor(screen_pos, 1.0)
 	return true
 
 
 func _snap_brush_toward_cursor(screen_pos: Vector2, amount: float = 1.0) -> void:
 	if brush_root == null or camera == null:
 		return
-	var from := camera.project_ray_origin(screen_pos)
-	var dir := camera.project_ray_normal(screen_pos)
-	var plane_y := GRILL_SURFACE_Y + 0.045
-	if absf(dir.y) < 0.001:
+	var hit := _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.065)
+	if hit == Vector3.ZERO:
 		return
-	var t := (plane_y - from.y) / dir.y
-	if t <= 0.0:
-		return
-	var hit := from + dir * t
-	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.7, GRILL_CENTER_X + GRILL_WIDTH * 0.7)
-	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.7, GRILL_SURFACE_Z + GRILL_DEPTH * 0.55)
-	hit.y = plane_y + 0.02
 	brush_root.global_position = brush_root.global_position.lerp(hit, clampf(amount, 0.0, 1.0))
 	brush_root.rotation_degrees = brush_held_rot
 
 
-func _update_held_brush(delta: float) -> void:
+func _update_held_brush(_delta: float) -> void:
 	if brush_root == null or camera == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
-	var from := camera.project_ray_origin(mouse)
-	var dir := camera.project_ray_normal(mouse)
-	## Project onto a plane just above the grill.
-	var plane_y := GRILL_SURFACE_Y + 0.045
-	if absf(dir.y) < 0.001:
+	var hit := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.065)
+	if hit == Vector3.ZERO:
 		return
-	var t := (plane_y - from.y) / dir.y
-	if t <= 0.0:
-		return
-	var hit := from + dir * t
-	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.7, GRILL_CENTER_X + GRILL_WIDTH * 0.7)
-	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.7, GRILL_SURFACE_Z + GRILL_DEPTH * 0.55)
-	hit.y = plane_y + 0.02
 	var prev := brush_root.global_position
-	## Snappier follow so scraping feels responsive.
-	var blend := clampf(delta * 32.0, 0.0, 1.0)
-	brush_root.global_position = brush_root.global_position.lerp(hit, blend)
+	## Near-instant follow.
+	brush_root.global_position = hit
 	var move_xz := Vector2(
 		brush_root.global_position.x - prev.x,
 		brush_root.global_position.z - prev.z
@@ -4026,7 +4474,7 @@ func _update_held_brush(delta: float) -> void:
 	var scraping := false
 	for i in GRILL_SLOTS:
 		if i < brush_swipe_cool.size():
-			brush_swipe_cool[i] = maxf(0.0, float(brush_swipe_cool[i]) - delta)
+			brush_swipe_cool[i] = maxf(0.0, float(brush_swipe_cool[i]) - _delta)
 		if float(grill_residue[i]) <= 0.0:
 			continue
 		var pad_pos: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else slot_positions[i]
@@ -4046,10 +4494,10 @@ func _update_held_brush(delta: float) -> void:
 			if float(grill_residue[i]) <= 0.04:
 				_scrape_finish_clean(i)
 		elif i < brush_swipe_travel.size():
-			brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - delta * 0.25)
+			brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - _delta * 0.25)
 	if game_audio and game_audio.has_method("set_slide_moving"):
 		if scraping:
-			game_audio.set_slide_moving(true, clampf(moved / maxf(delta, 0.001) * 0.25, 0.3, 1.2))
+			game_audio.set_slide_moving(true, clampf(moved / maxf(_delta, 0.001) * 0.25, 0.3, 1.2))
 		else:
 			game_audio.set_slide_moving(false)
 
@@ -4108,21 +4556,17 @@ func _throw_brush_home() -> void:
 	if not brush_held or brush_root == null:
 		return
 	brush_held = false
-	brush_throwing = true
+	brush_throwing = false
 	if game_audio:
 		game_audio.play_click()
 		if game_audio.has_method("set_slide_moving"):
 			game_audio.set_slide_moving(false)
-	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(brush_root, "position", brush_home, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(brush_root, "rotation_degrees", brush_home_rot, 0.28)
-	tw.chain().tween_callback(func():
-		brush_throwing = false
-		if brush_area:
-			brush_area.input_ray_pickable = true
-		_flash("Scraper put away", Color("B0BEC5"))
-	)
+	## Instant put-away — no 0.28s tween lockout.
+	brush_root.position = brush_home
+	brush_root.rotation_degrees = brush_home_rot
+	if brush_area:
+		brush_area.input_ray_pickable = true
+	_flash("Scraper put away", Color("B0BEC5"))
 
 
 func _clear_all_residue() -> void:
@@ -4144,60 +4588,44 @@ func _clear_all_residue() -> void:
 			brush_area.input_ray_pickable = true
 
 
-func _station_cook_rating(station_index: int) -> Dictionary:
-	## Average cook rating across patties on a station.
+func _station_cook_rating(station_index: int, customer: Node3D = null) -> Dictionary:
+	## Serve-speed grade from the order ticket clock; burnt meat forces Bad.
+	var burnt := false
 	var st: Dictionary = stations[station_index]
-	var patties: Array = st["patties"]
-	var sum := 0.0
-	var n := 0
-	var best: Dictionary = {}
-	for p in patties:
-		if p != null and is_instance_valid(p) and p.has_method("cook_rating"):
-			var r: Dictionary = p.cook_rating()
-			sum += float(r["score"])
-			n += 1
-			if best.is_empty() or int(r["score"]) > int(best.get("score", 0)):
-				best = r
-	if n <= 0:
-		return {
-			"score": 0,
-			"grade": "-",
-			"stars": 0,
-			"label": "NO PATTY",
-			"detail": "Missing meat",
-			"color": Color("B0BEC5"),
-			"text": "No patty",
-		}
-	var avg := int(round(sum / float(n)))
-	## Rebuild a grade from the average score for multi-patty burgers.
-	var grade := "F"
-	var stars := 0
-	var label := "POOR"
-	var color := Color("EF5350")
-	if avg >= 92:
-		grade = "S"; stars = 5; label = "PERFECT"; color = Color("FFEB3B")
-	elif avg >= 82:
-		grade = "A"; stars = 4; label = "GREAT"; color = Color("A5D6A7")
-	elif avg >= 70:
-		grade = "B"; stars = 3; label = "GOOD"; color = Color("81C784")
-	elif avg >= 55:
-		grade = "C"; stars = 2; label = "OKAY"; color = Color("FFCC80")
-	elif avg >= 35:
-		grade = "D"; stars = 1; label = "POOR"; color = Color("FFA726")
-	var star_s := ""
-	for i in stars:
-		star_s += "★"
-	while star_s.length() < 5:
-		star_s += "☆"
+	for p in st["patties"]:
+		if p != null and is_instance_valid(p) and p.has_method("is_burnt") and p.is_burnt():
+			burnt = true
+			break
+	var cust: Node3D = customer if customer != null else selected_customer
+	if cust != null and is_instance_valid(cust) and cust.has_method("speed_rating"):
+		return cust.speed_rating(burnt)
 	return {
-		"score": avg,
-		"grade": grade,
-		"stars": stars,
-		"label": label,
-		"detail": str(best.get("detail", "")),
-		"color": color,
-		"text": "%s  %s  %s (%d)" % [grade, star_s, label, avg],
+		"score": 0,
+		"grade": "-",
+		"stars": 0,
+		"label": "—",
+		"detail": "",
+		"color": Color("B0BEC5"),
+		"text": "—",
+		"pay_mul": 1.0,
 	}
+
+
+func _station_burgers_seasoned(station_index: int) -> bool:
+	## Any Build patty must have been seasoned; empty stack counts as N/A (ok).
+	if station_index < 0 or station_index >= stations.size():
+		return true
+	var patties: Array = stations[station_index]["patties"]
+	if patties.is_empty():
+		return true
+	for p in patties:
+		if p == null or not is_instance_valid(p):
+			continue
+		if p.has_method("is_seasoned") and not bool(p.is_seasoned()):
+			return false
+		elif "seasoning" in p and float(p.seasoning) < 0.1:
+			return false
+	return true
 
 
 func _clear_all_patty() -> void:
@@ -4222,6 +4650,291 @@ func _build_checkered_floor() -> void:
 			_add_box(root, Vector3(tile * 0.98, 0.03, tile * 0.98), Vector3(x * tile, 0.015, z * tile), c)
 
 
+## Painted street outside the service window + invisible walk collider for NPCs.
+func _build_outdoor_street() -> void:
+	var outdoor := Node3D.new()
+	outdoor.name = "OutdoorStreet"
+	world.add_child(outdoor)
+
+	## Invisible sidewalk / street floor — NPCs keep standing here; no visible mesh.
+	var floor_body := StaticBody3D.new()
+	floor_body.name = "OutdoorWalkFloor"
+	floor_body.position = Vector3(0.0, -0.08, 4.5)
+	var floor_shape := CollisionShape3D.new()
+	var floor_box := BoxShape3D.new()
+	floor_box.size = Vector3(24.0, 0.16, 14.0)
+	floor_shape.shape = floor_box
+	floor_body.add_child(floor_shape)
+	outdoor.add_child(floor_body)
+
+	## Matte painting fills the view beyond the window.
+	const BG_PATH := "res://assets/bg/street_window.png"
+	var tex: Texture2D = null
+	if ResourceLoader.exists(BG_PATH):
+		tex = load(BG_PATH) as Texture2D
+	if tex == null:
+		## Fallback flat sky if the paint isn't imported yet.
+		var fallback := _add_box(outdoor, Vector3(28, 14, 0.08), Vector3(0.0, 2.6, 8.5), Color("7EC8E8"))
+		fallback.rotation_degrees = Vector3(0, 0, 0)
+		return
+
+	var backdrop := MeshInstance3D.new()
+	backdrop.name = "StreetMatte"
+	var quad := QuadMesh.new()
+	## Wide enough to cover the FOV through the service window.
+	quad.size = STREET_MATTE_BASE_SIZE
+	backdrop.mesh = quad
+	## Sit past the sidewalk; face the truck (camera looks +Z through the window).
+	backdrop.position = Vector3(0.0, STREET_MATTE_DEFAULT_Y, STREET_MATTE_BASE_Z)
+	backdrop.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_texture = tex
+	mat.albedo_color = Color.WHITE
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	backdrop.material_override = mat
+	backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	outdoor.add_child(backdrop)
+	street_matte = backdrop
+
+
+func _build_first_sale_decal() -> void:
+	## Framed "FIRST SALE!" plaque on the interior lintel above the service window.
+	if first_sale_decal != null and is_instance_valid(first_sale_decal):
+		first_sale_decal.queue_free()
+		first_sale_decal = null
+	const TEX_PATH := "res://assets/decal/first_sale.png"
+	if not ResourceLoader.exists(TEX_PATH):
+		push_warning("First Sale texture missing: %s" % TEX_PATH)
+		return
+	var tex := load(TEX_PATH) as Texture2D
+	if tex == null:
+		push_warning("First Sale texture failed to load")
+		return
+	var plaque := MeshInstance3D.new()
+	plaque.name = "FirstSaleDecal"
+	var quad := QuadMesh.new()
+	quad.size = FIRST_SALE_BASE_SIZE
+	plaque.mesh = quad
+	plaque.position = Vector3(FIRST_SALE_DEFAULT_X, FIRST_SALE_DEFAULT_Y, FIRST_SALE_DEFAULT_Z)
+	## Face the cook (camera looks +Z through the window).
+	plaque.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = tex
+	mat.albedo_color = DECAL_ALBEDO
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.render_priority = 8
+	plaque.material_override = mat
+	plaque.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(plaque)
+	first_sale_decal = plaque
+
+
+func _build_menu_board_decal() -> void:
+	## Full menu poster on the left front wall beside the window (camera-visible).
+	if menu_board_decal != null and is_instance_valid(menu_board_decal):
+		menu_board_decal.queue_free()
+		menu_board_decal = null
+	const TEX_PATH := "res://assets/decal/menu_board.png"
+	if not ResourceLoader.exists(TEX_PATH):
+		push_warning("Menu board texture missing: %s" % TEX_PATH)
+		return
+	var tex := load(TEX_PATH) as Texture2D
+	if tex == null:
+		push_warning("Menu board texture failed to load")
+		return
+	var board := MeshInstance3D.new()
+	board.name = "MenuBoardDecal"
+	var quad := QuadMesh.new()
+	quad.size = MENU_BOARD_BASE_SIZE
+	board.mesh = quad
+	board.position = Vector3(MENU_BOARD_DEFAULT_X, MENU_BOARD_DEFAULT_Y, MENU_BOARD_DEFAULT_Z)
+	## Face the cook from the front wall.
+	board.rotation_degrees = Vector3(0.0, MENU_BOARD_DEFAULT_YAW, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = tex
+	mat.albedo_color = DECAL_ALBEDO
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.render_priority = 8
+	board.material_override = mat
+	board.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(board)
+	menu_board_decal = board
+
+
+func _build_burger_pals_logo_decal() -> void:
+	## Brand mark on the left front wall (mirrors the menu board on the right).
+	if burger_pals_decal != null and is_instance_valid(burger_pals_decal):
+		burger_pals_decal.queue_free()
+		burger_pals_decal = null
+	if not ResourceLoader.exists(LOGO_TEX_PATH):
+		push_warning("Burger Pals logo missing: %s" % LOGO_TEX_PATH)
+		return
+	var tex := load(LOGO_TEX_PATH) as Texture2D
+	if tex == null:
+		push_warning("Burger Pals logo failed to load")
+		return
+	var logo := MeshInstance3D.new()
+	logo.name = "BurgerPalsDecal"
+	var quad := QuadMesh.new()
+	quad.size = LOGO_BASE_SIZE
+	logo.mesh = quad
+	logo.position = Vector3(LOGO_DEFAULT_X, LOGO_DEFAULT_Y, LOGO_DEFAULT_Z)
+	logo.rotation_degrees = Vector3(0.0, LOGO_DEFAULT_YAW, 0.0)
+	logo.scale = Vector3(LOGO_DEFAULT_SCALE, LOGO_DEFAULT_SCALE, 1.0)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = tex
+	## Full color — brand mark should pop, not sit as faded wall art.
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.render_priority = 8
+	logo.material_override = mat
+	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(logo)
+	burger_pals_decal = logo
+
+
+func _build_window_bunting() -> void:
+	## Party bunting draped across the top of the service window opening.
+	const SCENE_PATH := "res://assets/bunting/Bunting.fbx"
+	const TEX_PATH := "res://assets/bunting/bunting_red_yellow.png"
+	if not ResourceLoader.exists(SCENE_PATH):
+		push_warning("Bunting model missing: %s" % SCENE_PATH)
+		return
+	var packed := load(SCENE_PATH) as PackedScene
+	if packed == null:
+		push_warning("Bunting PackedScene failed to load")
+		return
+	var root := packed.instantiate() as Node3D
+	if root == null:
+		return
+	root.name = "WindowBunting"
+	## Just outside the service window (wall slab ~z 1.25–1.45), hanging into the opening view.
+	## +3 in raise from prior y=1.715; +25% wider than prior x-scale 3.331.
+	root.position = Vector3(0.0, 1.791, 1.52)
+	root.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+	root.scale = Vector3(4.164, 2.665, 2.665)
+	var tex: Texture2D = null
+	if ResourceLoader.exists(TEX_PATH):
+		tex = load(TEX_PATH) as Texture2D
+	_apply_bunting_materials(root, tex)
+	world.add_child(root)
+
+
+func _apply_bunting_materials(node: Node, tex: Texture2D) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		## Mesh is paper-thin — slight extrude via scale so it doesn't vanish edge-on.
+		mi.scale = Vector3(1.0, 1.0, 8.0)
+		## Paint each triangle solid yellow/red from its pennant center (no mid-flag splits).
+		_paint_bunting_mesh_alternating(mi)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.vertex_color_use_as_albedo = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		mat.render_priority = 10
+		mi.material_override = mat
+	for child in node.get_children():
+		_apply_bunting_materials(child, tex)
+
+
+func _paint_bunting_mesh_alternating(mi: MeshInstance3D) -> void:
+	if mi.mesh == null:
+		return
+	## Model-space pennant centers (from FBX triangle histogram).
+	var peaks: Array[float] = [
+		-0.4457, -0.2750, -0.1612, 0.0095, 0.1802, 0.2940, 0.4078, 0.5216
+	]
+	var yellow := Color(1.0, 0.84, 0.16)
+	var red := Color(0.86, 0.14, 0.13)
+	var out := ArrayMesh.new()
+	for s in mi.mesh.get_surface_count():
+		var arrs := mi.mesh.surface_get_arrays(s)
+		var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		var norms = arrs[Mesh.ARRAY_NORMAL]
+		var uvs = arrs[Mesh.ARRAY_TEX_UV]
+		var idx = arrs[Mesh.ARRAY_INDEX]
+		## De-index so adjacent flags never share a vertex color.
+		var new_v := PackedVector3Array()
+		var new_n := PackedVector3Array()
+		var new_uv := PackedVector2Array()
+		var new_c := PackedColorArray()
+		var tris: Array = []
+		if idx != null and not idx.is_empty():
+			var t := 0
+			while t + 2 < idx.size():
+				tris.append([int(idx[t]), int(idx[t + 1]), int(idx[t + 2])])
+				t += 3
+		else:
+			var t2 := 0
+			while t2 + 2 < verts.size():
+				tris.append([t2, t2 + 1, t2 + 2])
+				t2 += 3
+		for tri in tris:
+			var i0: int = tri[0]
+			var i1: int = tri[1]
+			var i2: int = tri[2]
+			var cx := (verts[i0].x + verts[i1].x + verts[i2].x) / 3.0
+			var best_i := 0
+			var best_d := absf(cx - peaks[0])
+			for p in range(1, peaks.size()):
+				var d := absf(cx - peaks[p])
+				if d < best_d:
+					best_d = d
+					best_i = p
+			var col := yellow if (best_i % 2 == 0) else red
+			for ii in [i0, i1, i2]:
+				new_v.append(verts[ii])
+				if norms != null and ii < norms.size():
+					new_n.append(norms[ii])
+				else:
+					new_n.append(Vector3.UP)
+				if uvs != null and ii < uvs.size():
+					new_uv.append(uvs[ii])
+				else:
+					new_uv.append(Vector2.ZERO)
+				new_c.append(col)
+		var out_arrs := []
+		out_arrs.resize(Mesh.ARRAY_MAX)
+		out_arrs[Mesh.ARRAY_VERTEX] = new_v
+		out_arrs[Mesh.ARRAY_NORMAL] = new_n
+		out_arrs[Mesh.ARRAY_TEX_UV] = new_uv
+		out_arrs[Mesh.ARRAY_COLOR] = new_c
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out_arrs)
+	mi.mesh = out
+
+
+func _spawn_city_prop(path: String, parent: Node3D, pos: Vector3, yaw_deg: float = 0.0, scale_mul: float = 1.0) -> Node3D:
+	if not ResourceLoader.exists(path):
+		return null
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return null
+	var node := packed.instantiate() as Node3D
+	if node == null:
+		return null
+	node.position = pos
+	node.rotation_degrees = Vector3(0.0, yaw_deg, 0.0)
+	node.scale = Vector3(scale_mul, scale_mul, scale_mul)
+	parent.add_child(node)
+	return node
+
+
 func _add_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
@@ -4244,7 +4957,7 @@ func _setup_radio() -> void:
 	radio.channel_changed.connect(_on_radio_channel)
 	radio.powered_changed.connect(_on_radio_powered)
 	_build_radio_ui()
-	radio.set_volume_linear(0.05)
+	radio.set_volume_linear(0.80)
 	radio.set_powered(true)
 	_refresh_radio_ui()
 
@@ -4480,7 +5193,7 @@ func _build_radio_ui() -> void:
 	slider.min_value = 0.0
 	slider.max_value = 1.0
 	slider.step = 0.01
-	slider.value = 0.05
+	slider.value = 0.80
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.custom_minimum_size = Vector2(70, 16)
 	slider.value_changed.connect(func(v: float):
@@ -4495,35 +5208,21 @@ func _build_graphics_ui() -> void:
 	if ui_root == null:
 		return
 
-	## Always-visible button on the money / day bar (top-right).
-	var top_bar: Control = get_node_or_null("UI/Root/TopBar")
-	if top_bar != null and is_instance_valid(top_bar):
-		gfx_btn = Button.new()
-		gfx_btn.name = "GfxBtn"
-		gfx_btn.text = "GFX"
-		gfx_btn.focus_mode = Control.FOCUS_NONE
-		gfx_btn.custom_minimum_size = Vector2(56, 28)
-		UiFontsScript.apply_button(gfx_btn, true, 12)
-		var gsb := StyleBoxFlat.new()
-		gsb.bg_color = Color(0.12, 0.28, 0.42)
-		gsb.set_corner_radius_all(6)
-		gsb.set_border_width_all(2)
-		gsb.border_color = Color(0.55, 0.85, 1.0, 0.95)
-		gsb.content_margin_left = 8
-		gsb.content_margin_right = 8
-		gfx_btn.add_theme_stylebox_override("normal", gsb)
-		var gsbh := gsb.duplicate()
-		gsbh.bg_color = Color(0.18, 0.4, 0.58)
-		gfx_btn.add_theme_stylebox_override("hover", gsbh)
-		gfx_btn.add_theme_color_override("font_color", Color.WHITE)
-		gfx_btn.pressed.connect(func():
-			_sfx_click()
-			_toggle_graphics_menu()
-		)
-		top_bar.add_child(gfx_btn)
-		## Sit first so it isn't clipped off the right edge.
-		top_bar.move_child(gfx_btn, 0)
-		top_bar.offset_left = 820.0
+	## Sit beside Pause (top-left) — quiet black chrome.
+	gfx_btn = Button.new()
+	gfx_btn.name = "GfxBtn"
+	gfx_btn.text = "GFX"
+	gfx_btn.focus_mode = Control.FOCUS_NONE
+	gfx_btn.z_index = 30
+	gfx_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	gfx_btn.position = Vector2(130, 10)
+	gfx_btn.custom_minimum_size = Vector2(64, 36)
+	_style_quiet_hud_button(gfx_btn, 12)
+	gfx_btn.pressed.connect(func():
+		_sfx_click()
+		_toggle_graphics_menu()
+	)
+	ui_root.add_child(gfx_btn)
 
 	gfx_panel = PanelContainer.new()
 	gfx_panel.name = "GraphicsPanel"
@@ -4539,7 +5238,7 @@ func _build_graphics_ui() -> void:
 	gfx_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color(0.08, 0.1, 0.12, 0.94)
-	psb.border_color = Color(0.55, 0.78, 1.0, 0.85)
+	psb.border_color = Color(0.35, 0.35, 0.38, 0.85)
 	psb.set_border_width_all(2)
 	psb.set_corner_radius_all(10)
 	psb.content_margin_left = 12
@@ -4609,10 +5308,27 @@ func _build_graphics_ui() -> void:
 
 	_gfx_add_section(list, "HEAT WARP")
 	_gfx_add_check(list, "heat_warp_on", "Heat Shimmer")
-	_gfx_add_slider(list, "heat_warp_size", "Warp Size", 0.3, 1.5, 0.01)
+	_gfx_add_slider(list, "heat_warp_size", "Warp Size", 0.3, 1.6, 0.01)
 	_gfx_add_slider(list, "heat_warp_speed", "Warp Speed", 0.5, 10.0, 0.05)
-	_gfx_add_slider(list, "heat_warp_strength", "Warp Strength", 0.0, 0.02, 0.0005)
-	_gfx_add_slider(list, "heat_warp_tight", "Warp Tightness", 0.6, 2.2, 0.05)
+	_gfx_add_slider(list, "heat_warp_strength", "Warp Strength", 0.0, 0.03, 0.0005)
+	_gfx_add_slider(list, "heat_warp_tight", "Warp Tightness", 0.5, 2.2, 0.05)
+
+	_gfx_add_section(list, "WINDOW BG")
+	_gfx_add_slider(list, "bg_y", "BG Height", 0.2, 4.5, 0.02)
+	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
+
+	_gfx_add_section(list, "FIRST SALE DECAL")
+	_gfx_add_slider(list, "sale_x", "Sale X", -2.5, 2.5, 0.01)
+	_gfx_add_slider(list, "sale_y", "Sale Y", 1.5, 2.8, 0.01)
+	_gfx_add_slider(list, "sale_z", "Sale Z", 0.9, 1.5, 0.01)
+	_gfx_add_slider(list, "sale_scale", "Sale Scale", 0.25, 2.5, 0.01)
+
+	_gfx_add_section(list, "MENU BOARD")
+	_gfx_add_slider(list, "menu_x", "Menu X", -3.2, 3.2, 0.01)
+	_gfx_add_slider(list, "menu_y", "Menu Y", 0.8, 2.6, 0.01)
+	_gfx_add_slider(list, "menu_z", "Menu Z", 0.9, 1.5, 0.01)
+	_gfx_add_slider(list, "menu_scale", "Menu Scale", 0.25, 2.5, 0.01)
+	_gfx_add_slider(list, "menu_yaw", "Menu Yaw", -180.0, 180.0, 1.0)
 
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 8)
@@ -4630,6 +5346,14 @@ func _build_graphics_ui() -> void:
 
 	_load_graphics_settings()
 	_apply_graphics_settings(_read_graphics_from_ui())
+	## Belt-and-suspenders — heat warp must match the tuned defaults on boot.
+	_apply_heat_warp_settings({
+		"heat_warp_on": true,
+		"heat_warp_size": float(GFX_DEFAULTS["heat_warp_size"]),
+		"heat_warp_speed": float(GFX_DEFAULTS["heat_warp_speed"]),
+		"heat_warp_strength": float(GFX_DEFAULTS["heat_warp_strength"]),
+		"heat_warp_tight": float(GFX_DEFAULTS["heat_warp_tight"]),
+	})
 	_sync_graphics_ui_from_world()
 
 
@@ -4786,6 +5510,57 @@ func _sync_graphics_ui_from_world() -> void:
 					val_lab2.text = "%.2f" % float(hw_map[key])
 	if gfx_checks.has("heat_warp_on"):
 		gfx_checks["heat_warp_on"].set_pressed_no_signal(heat_warp_enabled)
+	## Window backdrop — read live transform so the menu matches the matte.
+	if street_matte != null and is_instance_valid(street_matte):
+		var bg_map := {
+			"bg_y": street_matte.position.y,
+			"bg_scale": street_matte.scale.x,
+		}
+		for key in bg_map:
+			if gfx_sliders.has(key) and gfx_sliders[key] != null:
+				gfx_sliders[key].set_value_no_signal(float(bg_map[key]))
+				var row3: Node = gfx_sliders[key].get_parent()
+				if row3:
+					var top3 = row3.get_child(0) if row3.get_child_count() > 0 else null
+					if top3:
+						var val_lab3 = top3.get_node_or_null("Val")
+						if val_lab3:
+							val_lab3.text = "%.2f" % float(bg_map[key])
+	if first_sale_decal != null and is_instance_valid(first_sale_decal):
+		var sale_map := {
+			"sale_x": first_sale_decal.position.x,
+			"sale_y": first_sale_decal.position.y,
+			"sale_z": first_sale_decal.position.z,
+			"sale_scale": first_sale_decal.scale.x,
+		}
+		for key in sale_map:
+			if gfx_sliders.has(key) and gfx_sliders[key] != null:
+				gfx_sliders[key].set_value_no_signal(float(sale_map[key]))
+				var row4: Node = gfx_sliders[key].get_parent()
+				if row4:
+					var top4 = row4.get_child(0) if row4.get_child_count() > 0 else null
+					if top4:
+						var val_lab4 = top4.get_node_or_null("Val")
+						if val_lab4:
+							val_lab4.text = "%.2f" % float(sale_map[key])
+	if menu_board_decal != null and is_instance_valid(menu_board_decal):
+		var menu_map := {
+			"menu_x": menu_board_decal.position.x,
+			"menu_y": menu_board_decal.position.y,
+			"menu_z": menu_board_decal.position.z,
+			"menu_scale": menu_board_decal.scale.x,
+			"menu_yaw": menu_board_decal.rotation_degrees.y,
+		}
+		for key in menu_map:
+			if gfx_sliders.has(key) and gfx_sliders[key] != null:
+				gfx_sliders[key].set_value_no_signal(float(menu_map[key]))
+				var row5: Node = gfx_sliders[key].get_parent()
+				if row5:
+					var top5 = row5.get_child(0) if row5.get_child_count() > 0 else null
+					if top5:
+						var val_lab5 = top5.get_node_or_null("Val")
+						if val_lab5:
+							val_lab5.text = "%.2f" % float(menu_map[key])
 
 
 func _apply_graphics_settings(s: Dictionary) -> void:
@@ -4813,6 +5588,42 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
 	_apply_heat_warp_settings(s)
+	_apply_street_matte_settings(s)
+	_apply_first_sale_decal_settings(s)
+	_apply_menu_board_decal_settings(s)
+
+
+func _apply_street_matte_settings(s: Dictionary) -> void:
+	if street_matte == null or not is_instance_valid(street_matte):
+		return
+	var y := float(s.get("bg_y", STREET_MATTE_DEFAULT_Y))
+	var sc := float(s.get("bg_scale", 1.0))
+	street_matte.position = Vector3(0.0, y, STREET_MATTE_BASE_Z)
+	street_matte.scale = Vector3(sc, sc, 1.0)
+
+
+func _apply_first_sale_decal_settings(s: Dictionary) -> void:
+	if first_sale_decal == null or not is_instance_valid(first_sale_decal):
+		return
+	var x := float(s.get("sale_x", FIRST_SALE_DEFAULT_X))
+	var y := float(s.get("sale_y", FIRST_SALE_DEFAULT_Y))
+	var z := float(s.get("sale_z", FIRST_SALE_DEFAULT_Z))
+	var sc := float(s.get("sale_scale", FIRST_SALE_DEFAULT_SCALE))
+	first_sale_decal.position = Vector3(x, y, z)
+	first_sale_decal.scale = Vector3(sc, sc, 1.0)
+
+
+func _apply_menu_board_decal_settings(s: Dictionary) -> void:
+	if menu_board_decal == null or not is_instance_valid(menu_board_decal):
+		return
+	var x := float(s.get("menu_x", MENU_BOARD_DEFAULT_X))
+	var y := float(s.get("menu_y", MENU_BOARD_DEFAULT_Y))
+	var z := float(s.get("menu_z", MENU_BOARD_DEFAULT_Z))
+	var sc := float(s.get("menu_scale", MENU_BOARD_DEFAULT_SCALE))
+	var yaw := float(s.get("menu_yaw", MENU_BOARD_DEFAULT_YAW))
+	menu_board_decal.position = Vector3(x, y, z)
+	menu_board_decal.rotation_degrees = Vector3(0.0, yaw, 0.0)
+	menu_board_decal.scale = Vector3(sc, sc, 1.0)
 
 
 func _reset_graphics_defaults() -> void:
@@ -4831,6 +5642,63 @@ func _load_graphics_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GFX_CFG_PATH) != OK:
 		return
+	## One-shot: apply full tuned graphics look (bloom + lighting + look + AO off).
+	if not cfg.has_section_key("gfx", "gfx_preset_v7"):
+		for hk in [
+			"bloom", "glow_intensity", "glow_strength", "glow_threshold", "glow_on",
+			"exposure", "ambient", "sun", "kitchen", "grill_lamp", "window_wash",
+			"saturation", "contrast", "ssao", "ssil", "sky_energy",
+			"heat_warp_on", "heat_warp_size", "heat_warp_speed", "heat_warp_strength", "heat_warp_tight",
+		]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_preset_v7", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot: snap wall decals into the camera frustum (were off-screen / broken).
+	if not cfg.has_section_key("gfx", "gfx_decal_v2"):
+		for hk in [
+			"sale_x", "sale_y", "sale_z", "sale_scale",
+			"menu_x", "menu_y", "menu_z", "menu_scale", "menu_yaw",
+		]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_decal_v2", true)
+		cfg.save(GFX_CFG_PATH)
+	## Half-size First Sale, nudge up; menu +0.5 ft right.
+	if not cfg.has_section_key("gfx", "gfx_decal_v3"):
+		for hk in [
+			"sale_x", "sale_y", "sale_z", "sale_scale",
+			"menu_x", "menu_y", "menu_z", "menu_scale", "menu_yaw",
+		]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_decal_v3", true)
+		cfg.save(GFX_CFG_PATH)
+	## Menu further right.
+	if not cfg.has_section_key("gfx", "gfx_decal_v4"):
+		cfg.set_value("gfx", "menu_x", GFX_DEFAULTS["menu_x"])
+		cfg.set_value("gfx", "gfx_decal_v4", true)
+		cfg.save(GFX_CFG_PATH)
+	## Menu +2 ft right; First Sale +1 ft up.
+	if not cfg.has_section_key("gfx", "gfx_decal_v5"):
+		cfg.set_value("gfx", "menu_x", GFX_DEFAULTS["menu_x"])
+		cfg.set_value("gfx", "sale_y", GFX_DEFAULTS["sale_y"])
+		cfg.set_value("gfx", "gfx_decal_v5", true)
+		cfg.save(GFX_CFG_PATH)
+	## Fix: camera-right is world −X; bill down 7 in.
+	if not cfg.has_section_key("gfx", "gfx_decal_v6"):
+		cfg.set_value("gfx", "menu_x", GFX_DEFAULTS["menu_x"])
+		cfg.set_value("gfx", "sale_y", GFX_DEFAULTS["sale_y"])
+		cfg.set_value("gfx", "gfx_decal_v6", true)
+		cfg.save(GFX_CFG_PATH)
+	## Bill −2 in; menu +6 in camera-right.
+	if not cfg.has_section_key("gfx", "gfx_decal_v7"):
+		cfg.set_value("gfx", "menu_x", GFX_DEFAULTS["menu_x"])
+		cfg.set_value("gfx", "sale_y", GFX_DEFAULTS["sale_y"])
+		cfg.set_value("gfx", "gfx_decal_v7", true)
+		cfg.save(GFX_CFG_PATH)
+	## First Sale 15% smaller.
+	if not cfg.has_section_key("gfx", "gfx_decal_v8"):
+		cfg.set_value("gfx", "sale_scale", GFX_DEFAULTS["sale_scale"])
+		cfg.set_value("gfx", "gfx_decal_v8", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -4855,6 +5723,52 @@ func _save_graphics_settings(s: Dictionary) -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
+func _style_quiet_hud_button(btn: Button, font_size: int = 12) -> void:
+	## Black chrome + grey text — stays out of the way of the cook view.
+	UiFontsScript.apply_button(btn, true, font_size)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.07, 0.07, 0.08, 0.88)
+	sb.set_corner_radius_all(8)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(0.26, 0.26, 0.28, 0.65)
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	btn.add_theme_stylebox_override("normal", sb)
+	var sbh := sb.duplicate()
+	sbh.bg_color = Color(0.13, 0.13, 0.14, 0.92)
+	sbh.border_color = Color(0.38, 0.38, 0.4, 0.75)
+	btn.add_theme_stylebox_override("hover", sbh)
+	var sbp := sb.duplicate()
+	sbp.bg_color = Color(0.04, 0.04, 0.05, 0.94)
+	btn.add_theme_stylebox_override("pressed", sbp)
+	var grey := Color(0.58, 0.58, 0.62)
+	btn.add_theme_color_override("font_color", grey)
+	btn.add_theme_color_override("font_hover_color", Color(0.78, 0.78, 0.82))
+	btn.add_theme_color_override("font_pressed_color", Color(0.5, 0.5, 0.54))
+
+
+func _layout_top_bar_hud() -> void:
+	## Combo / Day, then money pinned to the far right edge.
+	var top_bar: HBoxContainer = get_node_or_null("UI/Root/TopBar") as HBoxContainer
+	if top_bar == null:
+		return
+	top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	top_bar.offset_left = -460.0
+	top_bar.offset_right = -12.0
+	top_bar.offset_top = 8.0
+	top_bar.offset_bottom = 48.0
+	top_bar.alignment = BoxContainer.ALIGNMENT_END
+	if hud_combo != null and is_instance_valid(hud_combo):
+		top_bar.move_child(hud_combo, 0)
+	if hud_day != null and is_instance_valid(hud_day):
+		top_bar.move_child(hud_day, mini(1, top_bar.get_child_count() - 1))
+	if hud_money != null and is_instance_valid(hud_money):
+		top_bar.move_child(hud_money, top_bar.get_child_count() - 1)
+
+
 func _build_pause_button() -> void:
 	## Top-left pause — closes the service window / customer rush.
 	var ui_root: Control = get_node_or_null("UI/Root")
@@ -4868,26 +5782,88 @@ func _build_pause_button() -> void:
 	window_pause_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	window_pause_btn.position = Vector2(12, 10)
 	window_pause_btn.custom_minimum_size = Vector2(110, 36)
-	UiFontsScript.apply_button(window_pause_btn, true, 14)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.18, 0.28, 0.42)
-	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
-	sb.border_color = Color(0.55, 0.75, 1.0, 0.7)
-	sb.set_border_width_all(2)
-	window_pause_btn.add_theme_stylebox_override("normal", sb)
-	var sbh := sb.duplicate()
-	sbh.bg_color = Color(0.28, 0.42, 0.6)
-	window_pause_btn.add_theme_stylebox_override("hover", sbh)
-	window_pause_btn.add_theme_color_override("font_color", Color.WHITE)
+	_style_quiet_hud_button(window_pause_btn, 14)
 	window_pause_btn.pressed.connect(func():
 		_sfx_click()
 		_toggle_service_window()
 	)
 	ui_root.add_child(window_pause_btn)
+
+
+func _build_master_volume_ui() -> void:
+	## Top bar master volume — sits beside Pause + GFX.
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+	_load_audio_settings()
+
+	master_vol_row = HBoxContainer.new()
+	master_vol_row.name = "MasterVolumeRow"
+	master_vol_row.z_index = 30
+	master_vol_row.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	master_vol_row.position = Vector2(204, 12)
+	master_vol_row.custom_minimum_size = Vector2(210, 36)
+	master_vol_row.add_theme_constant_override("separation", 8)
+	master_vol_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(master_vol_row)
+
+	var lab := Label.new()
+	lab.text = "MASTER"
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(lab, true, 12)
+	lab.add_theme_color_override("font_color", Color(0.58, 0.58, 0.62))
+	lab.add_theme_constant_override("outline_size", 2)
+	lab.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	master_vol_row.add_child(lab)
+
+	master_vol_slider = HSlider.new()
+	master_vol_slider.min_value = 0.0
+	master_vol_slider.max_value = 1.0
+	master_vol_slider.step = 0.01
+	master_vol_slider.value = master_volume_linear
+	master_vol_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	master_vol_slider.custom_minimum_size = Vector2(140, 22)
+	master_vol_slider.focus_mode = Control.FOCUS_NONE
+	master_vol_slider.value_changed.connect(func(v: float):
+		_set_master_volume_linear(v, true)
+	)
+	master_vol_row.add_child(master_vol_slider)
+	_set_master_volume_linear(master_volume_linear, false)
+
+
+func _set_master_volume_linear(v: float, save: bool = true) -> void:
+	master_volume_linear = clampf(v, 0.0, 1.0)
+	var effective := master_volume_linear * MASTER_VOL_MAX
+	var bus := AudioServer.get_bus_index("Master")
+	if bus >= 0:
+		if effective <= 0.0001:
+			AudioServer.set_bus_volume_db(bus, -80.0)
+		else:
+			AudioServer.set_bus_volume_db(bus, linear_to_db(effective))
+	if master_vol_slider != null and is_instance_valid(master_vol_slider):
+		if absf(master_vol_slider.value - master_volume_linear) > 0.0005:
+			master_vol_slider.set_value_no_signal(master_volume_linear)
+	if save:
+		_save_audio_settings()
+
+
+func _load_audio_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(AUDIO_CFG_PATH) != OK:
+		return
+	if cfg.has_section_key("audio", AUDIO_MASTER_KEY):
+		master_volume_linear = clampf(float(cfg.get_value("audio", AUDIO_MASTER_KEY)), 0.0, 1.0)
+	elif cfg.has_section_key("audio", "master"):
+		## Legacy absolute bus linear → remap so old 0.20 ≈ full slider.
+		var old := clampf(float(cfg.get_value("audio", "master")), 0.0, 1.0)
+		master_volume_linear = clampf(old / MASTER_VOL_MAX, 0.0, 1.0)
+
+
+func _save_audio_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(AUDIO_CFG_PATH)
+	cfg.set_value("audio", AUDIO_MASTER_KEY, master_volume_linear)
+	cfg.save(AUDIO_CFG_PATH)
 
 
 func _spin_radio_dial(dir: int) -> void:
@@ -5013,10 +5989,11 @@ func _spawn_customer() -> void:
 		patience += 10.0
 	var lane := customers.size()
 	c.setup(order, color, patience, lane)
-	## Stand low on the sidewalk so faces stay inside the window opening.
-	c.position = Vector3(-6.5, -0.08, 2.25)
-	c.target_x = -2.6 + lane * 1.75
-	c.rotation_degrees = Vector3(0, 180, 0)
+	## Stand on the sidewalk — raised so more torso shows in the window.
+	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
+	c.target_x = CustomerScript.lane_x_for(lane)
+	## Face along the sidewalk (+X) while walking in; they turn to the truck on arrival.
+	c.rotation_degrees = Vector3(0, CustomerScript.WALK_PLUS_X_YAW, 0)
 	c.scale = Vector3(1.0, 1.0, 1.0)
 	c.arrived.connect(_on_customer_arrived)
 	c.patience_expired.connect(_on_customer_left.bind(true))
@@ -5118,14 +6095,12 @@ func _resolve_order_complaint(cust: Node3D, action: String) -> void:
 			var refund := 8
 			if cust != null and is_instance_valid(cust):
 				refund = maxi(4, int(cust.order_value))
-			money = maxi(0, money - refund)
+			_spend(float(refund), "Refunded %s — they left without the food" % _format_money(float(refund)), Color("EF5350"))
 			combo = 0
 			if st_i >= 0:
 				_clear_station(st_i)
-			_flash("Refunded $%d — they left without the food" % refund, Color("EF5350"))
 			if cust != null and is_instance_valid(cust) and cust.has_method("leave_after_dispute"):
 				cust.leave_after_dispute()
-			_update_hud()
 		"take_food":
 			combo = 0
 			if st_i >= 0:
@@ -5168,84 +6143,102 @@ func _on_customer_left(customer: Node3D, angry: bool) -> void:
 	_reposition_customers()
 	if angry:
 		combo = 0
-		money = maxi(0, money - 2)
-		_flash("Customer left angry! -$2", Color("EF5350"))
-		_update_hud()
+		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 
 
 func _reposition_customers() -> void:
 	for i in customers.size():
 		customers[i].lane = i
-		customers[i].target_x = -2.6 + i * 1.75
-		customers[i].global_position.y = -0.08
+		customers[i].target_x = CustomerScript.lane_x_for(i)
+		customers[i].global_position.y = CustomerScript.STAND_Y
 
 
 func _create_ticket(customer: Node3D) -> void:
-	## Post-it pinned along the top of the window — one ingredient per line.
+	## Torn guest-check slip pinned on the window — handwriting + paper feel.
 	var note := PanelContainer.new()
-	note.custom_minimum_size = Vector2(220, 0)
+	note.custom_minimum_size = Vector2(168, 0)
 	note.mouse_filter = Control.MOUSE_FILTER_STOP
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(1.0, 1.0, 0.97, 1.0)
-	style.border_color = Color(0.88, 0.86, 0.78)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(3)
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	style.shadow_color = Color(0, 0, 0, 0.22)
-	style.shadow_size = 4
-	style.shadow_offset = Vector2(2, 3)
-	note.add_theme_stylebox_override("panel", style)
+	## Slight crooked pin so slips don't look like UI cards.
+	note.rotation_degrees = randf_range(-5.5, 4.5)
+	note.pivot_offset = Vector2(84, 10)
+	note.set_meta("paper_rot", note.rotation_degrees)
+	## Outer shell: drop shadow + border (StyleBoxTexture can't cast shadows).
+	note.add_theme_stylebox_override("panel", _make_ticket_shell_style(false))
+	## Serve-speed clock starts when this slip is pinned — not when meat is scoop-ready.
+	if customer.has_method("start_order_clock"):
+		customer.start_order_clock()
 	note.gui_input.connect(func(event: InputEvent):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			_select_ticket(customer)
 			note.accept_event()
 	)
 
+	var paper := PanelContainer.new()
+	paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	paper.add_theme_stylebox_override("panel", _make_ticket_paper_style(false))
+	note.add_child(paper)
+	note.set_meta("paper_panel", paper)
+
 	var v := VBoxContainer.new()
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_theme_constant_override("separation", 1)
-	note.add_child(v)
+	v.add_theme_constant_override("separation", 2)
+	paper.add_child(v)
 
-	var pin := ColorRect.new()
-	pin.custom_minimum_size = Vector2(8, 8)
-	pin.color = Color(0.85, 0.2, 0.22)
-	pin.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	## Pushpin head — round metal pin, not a UI square.
+	var pin_wrap := CenterContainer.new()
+	pin_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pin_wrap.custom_minimum_size = Vector2(0, 12)
+	v.add_child(pin_wrap)
+	var pin := Panel.new()
+	pin.custom_minimum_size = Vector2(13, 13)
 	pin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(pin)
+	var pin_sb := StyleBoxFlat.new()
+	## Light cork/wood pushpin — readable on the darker slip.
+	pin_sb.bg_color = Color(0.78, 0.58, 0.36)
+	pin_sb.set_corner_radius_all(7)
+	pin_sb.border_color = Color(0.52, 0.34, 0.18)
+	pin_sb.set_border_width_all(1)
+	pin_sb.shadow_color = Color(0, 0, 0, 0.45)
+	pin_sb.shadow_size = 3
+	pin_sb.shadow_offset = Vector2(1, 2)
+	pin.add_theme_stylebox_override("panel", pin_sb)
+	pin_wrap.add_child(pin)
 
 	var title := Label.new()
 	title.text = "$%d" % customer.order_value
-	UiFontsScript.apply_ticket(title, 24)
-	title.add_theme_color_override("font_color", Color(0.15, 0.12, 0.1))
+	UiFontsScript.apply_ticket(title, 20)
+	title.add_theme_color_override("font_color", Color(0.22, 0.14, 0.1))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(title)
+
+	## Faint rule under the price — like a real guest check.
+	var rule := ColorRect.new()
+	rule.custom_minimum_size = Vector2(0, 1)
+	rule.color = Color(0.55, 0.42, 0.32, 0.35)
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(rule)
 
 	var parts: Array[String] = []
 	var patty_count := 0
 	for item in customer.order:
 		if item == "patty":
 			patty_count += 1
-	var listed_double := false
-	for item in customer.order:
-		if item == "bun_bottom" or item == "bun_top":
-			continue
-		## Single patty is implied — only call out doubles on the note.
-		if item == "patty":
-			if patty_count >= 2 and not listed_double:
-				parts.append("DOUBLE PATTY")
-				listed_double = true
-			continue
-		var label_txt: String = str(GameDataScript.INGREDIENT_LABELS.get(item, item)).to_upper()
-		parts.append(label_txt)
+	if patty_count >= 2:
+		parts.append("DOUBLE PATTY")
+	if GameDataScript.is_everything_order(customer.order):
+		parts.append("EVERYTHING")
+	else:
+		for item in customer.order:
+			if item == "bun_bottom" or item == "bun_top" or item == "patty":
+				continue
+			var label_txt: String = str(GameDataScript.INGREDIENT_LABELS.get(item, item)).to_upper()
+			parts.append(label_txt)
 	var body := Label.new()
 	body.text = ("\n".join(parts) if parts.size() > 0 else "BURGER")
 	## Caveat handwriting — marker-on-slip feel.
-	UiFontsScript.apply_ticket(body, 28)
-	body.add_theme_color_override("font_color", Color(0.14, 0.1, 0.08))
+	UiFontsScript.apply_ticket(body, 21)
+	body.add_theme_color_override("font_color", Color(0.18, 0.12, 0.08))
 	body.autowrap_mode = TextServer.AUTOWRAP_OFF
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -5254,6 +6247,74 @@ func _create_ticket(customer: Node3D) -> void:
 	ticket_box.add_child(note)
 	tickets[customer] = note
 	_highlight_tickets()
+
+
+func _make_ticket_shell_style(selected: bool) -> StyleBoxFlat:
+	## Transparent plate — only shadow, border, and torn-slip corners.
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0, 0, 0, 0)
+	style.border_color = Color(0.72, 0.48, 0.18, 0.85) if selected else Color(0.62, 0.52, 0.38, 0.5)
+	style.set_border_width_all(2 if selected else 1)
+	style.corner_radius_top_left = 2
+	style.corner_radius_top_right = 5
+	style.corner_radius_bottom_right = 3
+	style.corner_radius_bottom_left = 6
+	style.content_margin_left = 0
+	style.content_margin_right = 0
+	style.content_margin_top = 0
+	style.content_margin_bottom = 0
+	style.shadow_color = Color(0.08, 0.05, 0.02, 0.42)
+	style.shadow_size = 5
+	style.shadow_offset = Vector2(2, 4)
+	return style
+
+
+func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
+	## Darker aged receipt paper with soft vignette (edges browner than center).
+	var style := StyleBoxTexture.new()
+	style.texture = _ticket_paper_texture(selected)
+	style.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
+	style.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
+	style.content_margin_left = 10
+	style.content_margin_right = 10
+	style.content_margin_top = 8
+	style.content_margin_bottom = 10
+	if selected:
+		style.modulate = Color(1.06, 1.0, 0.9)
+	return style
+
+
+func _ticket_paper_texture(selected: bool) -> ImageTexture:
+	## Cache two paper plates so we don't rebuild per ticket.
+	if selected:
+		if _ticket_paper_tex_sel != null:
+			return _ticket_paper_tex_sel
+	elif _ticket_paper_tex != null:
+		return _ticket_paper_tex
+	var w := 128
+	var h := 160
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	## A step darker than the old flat cream.
+	var base := Color(0.90, 0.84, 0.68) if selected else Color(0.86, 0.80, 0.64)
+	var edge := Color(0.58, 0.48, 0.34) if selected else Color(0.52, 0.43, 0.30)
+	## Invalidate any prior cache if we rebuild (fresh process on export).
+	for y in h:
+		for x in w:
+			var nx := (float(x) / float(w - 1) - 0.5) * 2.0
+			var ny := (float(y) / float(h - 1) - 0.5) * 2.0
+			## Elliptical vignette — stronger at corners, gentle mid edges.
+			var d := sqrt(nx * nx * 0.85 + ny * ny * 1.05)
+			var vig := clampf((d - 0.25) / 1.15, 0.0, 1.0)
+			vig = pow(vig, 1.25)
+			var c := base.lerp(edge, vig * 0.55)
+			c.a = 1.0
+			img.set_pixel(x, y, c)
+	var tex := ImageTexture.create_from_image(img)
+	if selected:
+		_ticket_paper_tex_sel = tex
+	else:
+		_ticket_paper_tex = tex
+	return tex
 
 
 func _select_ticket(customer: Node3D) -> void:
@@ -5278,24 +6339,16 @@ func _highlight_tickets() -> void:
 		var note = tickets[cust]
 		if not is_instance_valid(note):
 			continue
-		var style := StyleBoxFlat.new()
-		style.set_corner_radius_all(3)
-		style.content_margin_left = 10
-		style.content_margin_right = 10
-		style.content_margin_top = 8
-		style.content_margin_bottom = 10
-		style.shadow_color = Color(0, 0, 0, 0.22)
-		style.shadow_size = 4
-		style.shadow_offset = Vector2(2, 3)
-		if cust == selected_customer:
-			style.bg_color = Color(1.0, 0.98, 0.82, 1.0)
-			style.border_color = Color("F57C00")
-			style.set_border_width_all(2)
-		else:
-			style.bg_color = Color(1.0, 1.0, 0.97, 1.0)
-			style.border_color = Color(0.88, 0.86, 0.78)
-			style.set_border_width_all(1)
-		note.add_theme_stylebox_override("panel", style)
+		var selected: bool = cust == selected_customer
+		note.add_theme_stylebox_override("panel", _make_ticket_shell_style(selected))
+		if note.has_meta("paper_panel"):
+			var paper = note.get_meta("paper_panel")
+			if is_instance_valid(paper):
+				paper.add_theme_stylebox_override("panel", _make_ticket_paper_style(selected))
+		if note.has_meta("paper_rot"):
+			note.rotation_degrees = float(note.get_meta("paper_rot"))
+		## Selected slip sits a hair more upright / forward.
+		note.modulate = Color(1.05, 1.02, 0.95) if selected else Color.WHITE
 
 
 func _clear_customers() -> void:
@@ -5319,7 +6372,7 @@ func _build_ingredient_legend() -> void:
 	ingredient_buttons.clear()
 	ingredient_legend.add_theme_constant_override("separation", 6)
 
-	## Compact Serve on the left of the bottom ingredient strip.
+	## Compact Serve on the right of the bottom ingredient strip.
 	var serve_btn := Button.new()
 	serve_btn.text = "SERVE!"
 	serve_btn.custom_minimum_size = Vector2(88, 84)
@@ -5345,9 +6398,8 @@ func _build_ingredient_legend() -> void:
 		_sfx_click()
 		_on_serve()
 	)
-	ingredient_legend.add_child(serve_btn)
 
-	## Horizontal strip of toppings along the bottom.
+	## Horizontal strip of toppings along the bottom (1 cheese → 8 mustard).
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var panel_sb := StyleBoxFlat.new()
@@ -5361,6 +6413,7 @@ func _build_ingredient_legend() -> void:
 	panel_sb.set_border_width_all(2)
 	panel.add_theme_stylebox_override("panel", panel_sb)
 	ingredient_legend.add_child(panel)
+	ingredient_legend.add_child(serve_btn)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -5372,7 +6425,7 @@ func _build_ingredient_legend() -> void:
 	var strip_hover := Color(0.24, 0.27, 0.32, 1.0)
 	var strip_press := Color(0.28, 0.32, 0.38, 1.0)
 
-	for hi in range(INGREDIENT_HOTKEYS.size() - 1, -1, -1):
+	for hi in range(INGREDIENT_HOTKEYS.size()):
 		var id: String = INGREDIENT_HOTKEYS[hi]
 		var tbtn := Button.new()
 		tbtn.custom_minimum_size = Vector2(86, 76)
@@ -5426,16 +6479,19 @@ func _build_ingredient_legend() -> void:
 
 		var capture: String = id
 		tbtn.pressed.connect(func():
-			## Drag already handled cheese as a topping — don't also pick it up.
-			if capture == "cheese" and _strip_did_drag:
+			## Skip if this LMB already painted toppings (swipe) or dropped one.
+			if _strip_did_drag or _strip_gesture_added:
 				_strip_did_drag = false
+				_strip_gesture_added = false
 				return
-			_strip_did_drag = false
 			_add_ingredient(capture)
 		)
 		tbtn.set_drag_forwarding(
 			func(_pos):
-				_strip_did_drag = true
+				## If paint-swipe already applied this topping, don't also start a UI drag
+				## that would drop a second copy on Build.
+				if _strip_gesture_added or _strip_did_drag:
+					return null
 				if capture == "cheese":
 					## Same ghost hold as a click — drop on a grill burger or Build.
 					_begin_cheese_hold(true)
@@ -5566,24 +6622,7 @@ func _build_station_ui() -> void:
 		grill_blocker.z_index = -1
 		plate_wrap.add_child(grill_blocker)
 
-		var board := TextureRect.new()
-		board.name = "CuttingBoard"
-		board.texture = FoodSpritesScript.get_tex("cutting_board")
-		board.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		board.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		board.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		board.z_as_relative = true
-		board.z_index = 0
-		## Board under the burger stack (~30% larger).
-		board.set_anchors_preset(Control.PRESET_CENTER)
-		board.grow_horizontal = Control.GROW_DIRECTION_BOTH
-		board.grow_vertical = Control.GROW_DIRECTION_BOTH
-		board.custom_minimum_size = Vector2(195, 137)
-		board.size = Vector2(195, 137)
-		board.position = Vector2(-98, -39)
-		plate_wrap.add_child(board)
-
-		## Absolute stack of floating ingredient sprites on top of the board.
+		## Absolute stack of floating ingredient sprites (cutting board art removed for now).
 		var burger_stack := Control.new()
 		burger_stack.name = "BurgerStack"
 		burger_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -6023,7 +7062,7 @@ func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
 	## Click a Build patty → turn it back into a held 3D patty (same as scoop).
 	if not playing:
 		return
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("EF5350"))
 		return
 	var patty = _extract_station_patty(station_index, item_index)
@@ -6052,7 +7091,7 @@ func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
 func _return_station_patty_to_grill(station_index: int, item_index: int, world_pos: Vector3) -> bool:
 	if not playing:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("EF5350"))
 		return false
 	var idx := _first_empty_slot()
@@ -6166,7 +7205,15 @@ func _drop_on_assembly(station_index: int, at_pos: Vector2, data: Variant) -> vo
 		_pending_cheese_drag = false
 		if id == "cheese":
 			_cancel_cheese_hold_silent()
+		## Swipe may have already painted this topping — don't stack a second copy.
+		var cur: Array = stations[station_index]["items"]
+		if id != "patty" and cur.has(id):
+			_strip_gesture_added = true
+			_strip_did_drag = true
+			return
 		_add_ingredient_to_station(station_index, id)
+		_strip_gesture_added = true
+		_strip_did_drag = true
 		return
 	if kind == "station_patty":
 		## Dropping back on a station keeps / moves the patty in the stack.
@@ -6332,7 +7379,7 @@ func _add_ingredient(id: String) -> void:
 
 
 func _begin_cheese_hold(from_drag: bool = false) -> void:
-	if not playing or brush_held or oil_held or shaker_held or spatula_patty != null:
+	if not playing or brush_held or oil_held or shaker_held or ext_held or spatula_patty != null:
 		return
 	if cheese_held:
 		## Drag re-arms an existing hold; click toggles it off.
@@ -6349,14 +7396,15 @@ func _begin_cheese_hold(from_drag: bool = false) -> void:
 	if game_audio:
 		game_audio.play_ingredient("cheese")
 	if from_drag:
-		_flash("Drop cheese on a grill burger (or Build)", Color("FFE082"))
+		_flash("Drop cheese on grill, HOLD, or Build", Color("FFE082"))
 	else:
-		_flash("Cheese ready — left-click to place · right-click returns to stack", Color("FFE082"))
+		_flash("Cheese ready — grill / HOLD / Build · right-click cancels", Color("FFE082"))
 
 
 func _cancel_cheese_hold() -> void:
 	_pending_cheese_drag = false
 	cheese_held = false
+	_cheese_hover_patty = null
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
 	_flash("Cheese back on the stack", Color("B0BEC5"))
@@ -6365,6 +7413,7 @@ func _cancel_cheese_hold() -> void:
 func _cancel_cheese_hold_silent() -> void:
 	_pending_cheese_drag = false
 	cheese_held = false
+	_cheese_hover_patty = null
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
 
@@ -6375,7 +7424,8 @@ func _ensure_cheese_ghost() -> void:
 	cheese_ghost = MeshInstance3D.new()
 	cheese_ghost.name = "CheeseGhost"
 	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.13, 0.006, 0.13)
+	## Match real slice footprint (half≈0.084 → ~0.168 across).
+	mesh.size = Vector3(0.15, 0.005, 0.15)
 	cheese_ghost.mesh = mesh
 	cheese_ghost_mat = StandardMaterial3D.new()
 	cheese_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -6390,57 +7440,150 @@ func _ensure_cheese_ghost() -> void:
 func _update_cheese_ghost() -> void:
 	if not cheese_held or cheese_ghost == null or not is_instance_valid(cheese_ghost):
 		return
-	var target = _grill_patty_under_cursor()
+	var target = _cheese_grill_target_under_cursor()
 	var pulse := 0.38 + 0.12 * absf(sin(Time.get_ticks_msec() * 0.008))
-	if target != null and is_instance_valid(target) and not target.has_cheese:
-		## Snap ghost onto the hovered patty.
-		cheese_ghost.global_position = target.global_position + Vector3(0, 0.055, 0)
-		cheese_ghost.rotation = target.rotation
+	if target != null and is_instance_valid(target) and _can_put_cheese_on_grill_patty(target):
+		## Seat on the meat mesh (same spot as a real slice) — not floating high.
+		_cheese_hover_patty = target
+		cheese_ghost.global_position = target.get_cheese_seat_global()
+		cheese_ghost.global_basis = target.get_cheese_seat_basis()
 		cheese_ghost.scale = Vector3.ONE
 		if cheese_ghost_mat:
 			cheese_ghost_mat.albedo_color = Color(1.0, 0.95, 0.32, pulse + 0.12)
 	else:
+		_cheese_hover_patty = null
 		## Float ghost over the grill plane under the cursor.
 		var hit := _grill_plane_from_screen(get_viewport().get_mouse_position())
 		if hit != Vector3.ZERO:
-			hit.y = GRILL_SURFACE_Y + 0.08
+			hit.y = GRILL_SURFACE_Y + 0.045
 			cheese_ghost.global_position = hit
 		cheese_ghost.rotation = Vector3.ZERO
 		cheese_ghost.scale = Vector3(0.92, 1.0, 0.92)
 		if cheese_ghost_mat:
 			## Dimmer when not over a valid patty.
-			var blocked: bool = target != null and bool(target.has_cheese)
+			var blocked: bool = target != null and not _can_put_cheese_on_grill_patty(target)
 			cheese_ghost_mat.albedo_color = Color(1.0, 0.55, 0.35, pulse * 0.7) if blocked \
 				else Color(1.0, 0.95, 0.32, pulse * 0.75)
+
+
+func _can_put_cheese_on_grill_patty(patty) -> bool:
+	## Cheese melts on any flat-top burger (cook zones + HOLD) or via Build — not spatula/drag.
+	if patty == null or not is_instance_valid(patty):
+		return false
+	if patty.is_held or patty == spatula_patty or patty == dragging_patty:
+		return false
+	if bool(patty.has_cheese):
+		return false
+	if not grill.has(patty):
+		return false
+	return true
+
+
+func _pick_cheese_patty_at_screen(screen_pos: Vector2):
+	## Extra-forgiving screen/world pick shared by ghost + drop.
+	if camera == null:
+		return null
+	## Still honor Build UI so cheese can go on the craft stack instead.
+	if _blocks_grill_pick(screen_pos):
+		return null
+	var plane_hit := _grill_plane_from_screen(screen_pos)
+	var cam_pos := camera.global_position
+	var candidates: Array = []
+	for p in grill:
+		if p == null or not is_instance_valid(p) or p.is_held:
+			continue
+		var lift: Vector3 = p.global_position + Vector3(0, 0.03, 0)
+		if camera.is_position_behind(lift):
+			continue
+		var screen_pt := camera.unproject_position(lift)
+		var pick_px := maxf(CHEESE_PICK_MIN_PX, _patty_screen_pick_radius_px(lift, CHEESE_PICK_WORLD_EDGE, CHEESE_PICK_PAD_PX))
+		var screen_d := screen_pos.distance_to(screen_pt)
+		var in_screen := screen_d <= pick_px
+		var near_plane := false
+		if plane_hit != Vector3.ZERO:
+			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= CHEESE_PICK_WORLD
+		if not in_screen and not near_plane:
+			continue
+		candidates.append({
+			"p": p,
+			"screen_d": screen_d,
+			"cam_d": cam_pos.distance_to(lift),
+			"in_screen": in_screen,
+		})
+	if candidates.is_empty():
+		return null
+	var any_screen := false
+	for c in candidates:
+		if bool(c["in_screen"]):
+			any_screen = true
+			break
+	if any_screen:
+		candidates = candidates.filter(func(c): return bool(c["in_screen"]))
+	candidates.sort_custom(func(a, b):
+		var sa: float = float(a["screen_d"])
+		var sb: float = float(b["screen_d"])
+		if absf(sa - sb) > 2.5:
+			return sa < sb
+		return float(a["cam_d"]) < float(b["cam_d"])
+	)
+	return candidates[0]["p"]
+
+
+func _cheese_grill_target_under_cursor():
+	## Ghost + click use the same forgiving pick.
+	var mouse := get_viewport().get_mouse_position()
+	var target = _pick_cheese_patty_at_screen(mouse)
+	if target != null:
+		return target
+	var plane := _grill_plane_from_screen(mouse)
+	if plane != Vector3.ZERO:
+		var near := _nearest_patty_to(plane, CHEESE_PICK_WORLD)
+		if near >= 0:
+			return grill[near]
+	## Keep sticky hover so a tiny mouse jitter doesn't lose the burger.
+	if _cheese_hover_patty != null and is_instance_valid(_cheese_hover_patty) \
+			and _can_put_cheese_on_grill_patty(_cheese_hover_patty):
+		return _cheese_hover_patty
+	return null
 
 
 func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if not cheese_held:
 		return
-	## Station click while holding cheese → craft toppings.
+	## Build station click → melt cheese onto the Build stack patty.
 	var station_idx := _station_index_at(screen_pos)
 	if station_idx >= 0:
 		_cancel_cheese_hold()
 		_add_ingredient_to_station(station_idx, "cheese", true)
 		return
-	## Same forgiving screen + plane pick used for scooping burgers.
-	var target = _pick_patty_at_screen(screen_pos)
+	## Same pick as the ghost — plus sticky hover if click lands a hair off.
+	var target = _pick_cheese_patty_at_screen(screen_pos)
 	if target == null:
 		var plane := _grill_plane_from_screen(screen_pos)
 		if plane != Vector3.ZERO:
-			var near := _nearest_patty_to(plane, PATTY_PICK_WORLD)
+			var near := _nearest_patty_to(plane, CHEESE_PICK_WORLD)
 			if near >= 0:
 				target = grill[near]
+	if target == null and _cheese_hover_patty != null and is_instance_valid(_cheese_hover_patty):
+		target = _cheese_hover_patty
 	if target == null:
-		_flash("Click a patty on the grill (or a station)", Color("FFCC80"))
+		_flash("Drop cheese on a grill / HOLD burger or Build", Color("FFCC80"))
+		return
+	if target.is_held or target == spatula_patty:
+		_flash("Put the burger on the grill, HOLD, or Build first", Color("FFCC80"))
+		return
+	if not grill.has(target):
+		_flash("Drop cheese on a grill / HOLD burger or Build", Color("FFCC80"))
 		return
 	if target.has_cheese:
 		_flash("That patty already has cheese", Color("FFCC80"))
 		return
 	if target.add_cheese():
 		cheese_held = false
+		_cheese_hover_patty = null
 		if cheese_ghost and is_instance_valid(cheese_ghost):
 			cheese_ghost.visible = false
+		_spend(_ingredient_cost("cheese"))
 		if game_audio:
 			game_audio.play_ingredient("cheese")
 		_flash("Cheese on! Melts in 5s", Color("FFE082"))
@@ -6513,17 +7656,23 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 	if id != "patty" and not items.has("patty") and st["patties"].is_empty():
 		_flash("Drop a patty on the build board first", Color("FFCC80"))
 		return
+	## One of each topping / bun — stops swipe+click / swipe+drop double-adds.
+	## (Patties stay stackable for doubles.)
+	if id != "patty" and items.has(id):
+		return
 	if id == "cheese":
 		_start_station_cheese_melt(station_index, play_sfx)
 		return
 	items.append(id)
 	st["items"] = _normalize_burger_stack(items)
+	_spend(_ingredient_cost(id))
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
 		game_audio.play_ingredient(id)
 	if play_sfx:
 		_note_melody_press(id)
+	call_deferred("_try_auto_serve")
 
 
 func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> void:
@@ -6546,24 +7695,34 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	if not patty.add_cheese():
 		_flash("Can't add cheese right now", Color("EF5350"))
 		return
+	## Count cheese in the stack immediately so Serve / matching aren't blocked by melt time.
+	var items: Array = st["items"]
+	items.append("cheese")
+	st["items"] = _normalize_burger_stack(items)
+	_spend(_ingredient_cost("cheese"))
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
 		game_audio.play_ingredient("cheese")
 	if play_sfx:
 		_note_melody_press("cheese")
-	_flash("Cheese melting onto the burger — 5 seconds", Color("FFE082"))
+	_flash("Cheese on — melting 5s (order already counts it)", Color("FFE082"))
 
 
 func _update_station_cheese_melt(_delta: float) -> void:
-	## When melt finishes on Build, add cheese to the stack once.
+	## Keep cheese item count in sync with cheesed patties; flash when melt finishes.
+	var did_melt := false
 	for i in STATION_COUNT:
 		var st: Dictionary = stations[i]
-		var melted_patties := 0
+		var cheesed := 0
+		var melted := 0
 		for p2 in st["patties"]:
-			if p2 != null and is_instance_valid(p2) and p2.has_cheese and p2.cheese_ready():
-				melted_patties += 1
-		if melted_patties <= 0:
+			if p2 == null or not is_instance_valid(p2) or not p2.has_cheese:
+				continue
+			cheesed += 1
+			if p2.cheese_ready():
+				melted += 1
+		if cheesed <= 0:
 			continue
 		var items: Array = st["items"]
 		var cheese_count := 0
@@ -6571,13 +7730,23 @@ func _update_station_cheese_melt(_delta: float) -> void:
 			if str(item) == "cheese":
 				cheese_count += 1
 		var added := 0
-		while cheese_count + added < melted_patties:
+		while cheese_count + added < cheesed:
 			items.append("cheese")
 			added += 1
 		if added > 0:
 			st["items"] = _normalize_burger_stack(items)
 			_refresh_station(i)
-			_flash("Cheese melted!", Color("FFE082"))
+		## Flash once when every cheesed patty on this board has finished melting.
+		if melted >= cheesed and melted > 0:
+			## Use a light flag on the station dict so we don't spam.
+			if not bool(st.get("cheese_melt_flashed", false)):
+				st["cheese_melt_flashed"] = true
+				_flash("Cheese melted!", Color("FFE082"))
+				did_melt = true
+		else:
+			st["cheese_melt_flashed"] = false
+	if did_melt:
+		call_deferred("_try_auto_serve")
 
 
 func _clear_active_station() -> void:
@@ -6631,7 +7800,10 @@ func _trash_selected_or_top_layer(index: int) -> void:
 	var label: String = GameDataScript.INGREDIENT_LABELS.get(removed, removed.capitalize())
 	if game_audio:
 		game_audio.play_trash()
-	_flash("Trashed %s" % label, Color("FFAB91"))
+	if removed == "patty":
+		_spend(COST_DROP_BURGER, "Trashed burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
+	else:
+		_flash("Trashed %s" % label, Color("FFAB91"))
 
 
 func _trash_top_layer(index: int) -> void:
@@ -6852,23 +8024,169 @@ func _refresh_spatula_ui() -> void:
 				else Control.MOUSE_FILTER_IGNORE
 		_refresh_station(i)
 
+func _try_auto_serve() -> void:
+	## Hand off as soon as a station matches a waiting ticket perfectly.
+	if not playing or _auto_serving:
+		return
+	## Cap with top bun automatically when that's the only thing left for a ticket.
+	_maybe_auto_top_bun()
+	var waiting: Array = []
+	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
+		waiting.append(selected_customer)
+	for c in customers:
+		if c == null or not is_instance_valid(c) or not c.is_waiting:
+			continue
+		if c == selected_customer:
+			continue
+		waiting.append(c)
+	for cust in waiting:
+		var si := _find_perfect_station_for(cust.order)
+		if si < 0:
+			continue
+		if _station_has_melting_cheese(si):
+			continue
+		_auto_serving = true
+		selected_customer = cust
+		active_station = si
+		_highlight_tickets()
+		_highlight_active_station()
+		_on_serve()
+		_auto_serving = false
+		return
+
+
+func _maybe_auto_top_bun() -> void:
+	## If a build is one top-bun away from matching a waiting ticket, crown it.
+	var waiting: Array = []
+	for c in customers:
+		if c != null and is_instance_valid(c) and c.is_waiting:
+			waiting.append(c)
+	if waiting.is_empty():
+		return
+	for i in STATION_COUNT:
+		if _station_has_melting_cheese(i):
+			continue
+		var st: Dictionary = stations[i]
+		var items: Array = st["items"]
+		if items.is_empty() or not items.has("patty") or items.has("bun_top"):
+			continue
+		for cust in waiting:
+			if not _station_only_needs_top_bun(items, cust.order):
+				continue
+			items.append("bun_top")
+			st["items"] = _normalize_burger_stack(items)
+			_spend(_ingredient_cost("bun_top"))
+			_start_station_freshness(i)
+			_refresh_station(i)
+			if game_audio:
+				game_audio.play_ingredient("bun_top")
+			_flash("Top bun on!", Color("FFE082"))
+			return
+
+
+func _station_only_needs_top_bun(items: Array, order: Array) -> bool:
+	## True when adding bun_top would make a perfect ticket match.
+	if items.has("bun_top") or not order.has("bun_top"):
+		return false
+	var trial: Array = items.duplicate()
+	trial.append("bun_top")
+	trial = _normalize_burger_stack(trial)
+	return bool(GameDataScript.compare_orders(trial, order).get("perfect", false))
+
+
+func _find_perfect_station_for(order: Array) -> int:
+	var best := -1
+	var best_q := -1.0
+	for i in STATION_COUNT:
+		_sync_station_cheese_items(i)
+		var items: Array = stations[i]["items"]
+		if items.is_empty() or not items.has("patty"):
+			continue
+		var result: Dictionary = GameDataScript.compare_orders(items, order)
+		if not bool(result.get("perfect", false)):
+			continue
+		## Prefer the active station when several match.
+		var q := 2.0 if i == active_station else 1.0
+		if q > best_q:
+			best_q = q
+			best = i
+	return best
+
+
+func _station_has_melting_cheese(station_index: int) -> bool:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return false
+	for p in stations[station_index]["patties"]:
+		if p != null and is_instance_valid(p) and p.has_cheese and not p.cheese_ready():
+			return true
+	return false
+
+
+func _sync_station_cheese_items(station_index: int) -> void:
+	## Order matching counts cheese as soon as it's on a patty (melt is visual only).
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var cheesed := 0
+	for p in st["patties"]:
+		if p != null and is_instance_valid(p) and p.has_cheese:
+			cheesed += 1
+	var items: Array = st["items"]
+	var cheese_count := 0
+	for item in items:
+		if str(item) == "cheese":
+			cheese_count += 1
+	if cheese_count >= cheesed:
+		return
+	for _i in range(cheesed - cheese_count):
+		items.append("cheese")
+	st["items"] = _normalize_burger_stack(items)
+	_refresh_station(station_index)
+
+
+func _missing_items_label(missing: Array) -> String:
+	var labels: Array[String] = []
+	var seen := {}
+	for id in missing:
+		var key := str(id)
+		if seen.has(key):
+			continue
+		seen[key] = true
+		labels.append(str(GameDataScript.INGREDIENT_LABELS.get(key, key)))
+	if labels.is_empty():
+		return "items"
+	return ", ".join(labels)
+
+
 func _on_serve() -> void:
 	if not playing:
 		return
-	## Selected ticket is the order we serve.
+	## Selected ticket is the order we serve — auto-pick if only one waiting.
 	if selected_customer == null or not is_instance_valid(selected_customer) or not selected_customer.is_waiting:
 		selected_customer = null
+		for c in customers:
+			if c != null and is_instance_valid(c) and c.is_waiting:
+				if selected_customer != null:
+					selected_customer = null
+					break
+				selected_customer = c
 		_highlight_tickets()
-		_flash("Click an order ticket first, then Serve", Color("EF5350"))
-		return
+		if selected_customer == null:
+			if not _auto_serving:
+				_flash("Click an order ticket first, then Serve", Color("EF5350"))
+			return
 	if selected_customer.dialogue_open:
 		selected_customer.dialogue_open = false
 
-	## Use any station that has a burger - prefer active, then best match for the ticket.
+	## Prefer a perfect match station (needed for auto-serve); else best partial.
 	var station_index := _find_station_for_order(selected_customer.order)
 	if station_index < 0:
-		_flash("Build the burger on any station, then Serve", Color("EF5350"))
+		if not _auto_serving:
+			_flash("Build the burger on any station, then Serve", Color("EF5350"))
 		return
+
+	## Keep cheese stack entries synced before matching.
+	_sync_station_cheese_items(station_index)
 
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
@@ -6880,7 +8198,11 @@ func _on_serve() -> void:
 	## Incomplete / wrong — just reject; no dialogue popup.
 	if not missing.is_empty() and float(result.get("quality", 0.0)) >= 0.35:
 		combo = 0
-		_flash("Missing items — fix the burger, then Serve", Color("FF8A65"))
+		if not _auto_serving:
+			if _station_has_melting_cheese(station_index) and missing.has("cheese"):
+				_flash("Cheese still melting — wait a sec, then Serve", Color("FFE082"))
+			else:
+				_flash("Need: %s" % _missing_items_label(missing), Color("FF8A65"))
 		_update_hud()
 		return
 
@@ -6891,48 +8213,89 @@ func _on_serve() -> void:
 		var n := 0
 		for p in patties:
 			if p != null and is_instance_valid(p):
-				sum += p.quality_multiplier()
+				## Doneness only here — ticket speed is applied below.
+				sum += p.doneness_multiplier() if p.has_method("doneness_multiplier") else 1.0
 				n += 1
 		if n > 0:
 			patty_mult = sum / float(n)
 	var tip_factor: float = selected_customer.patience_ratio()
 	var fresh_r := _station_freshness_ratio(station_index)
+	var cook_r := _station_cook_rating(station_index, selected_customer)
+	var seasoned := _station_burgers_seasoned(station_index)
+	## Pay uses ticket-speed grade (and burnt override inside speed_rating).
+	patty_mult *= float(cook_r.get("pay_mul", 1.0))
 	if fresh_r <= 0.15:
 		patty_mult *= 0.45
 		tip_factor *= 0.25
 	elif fresh_r <= 0.4:
 		patty_mult *= 0.75
 		tip_factor *= 0.6
-	var pay: Dictionary = selected_customer.receive_burger(items, patty_mult, combo, tip_factor, fresh_r)
+	## Bland beef — still pays base, but caps the cheer / tip path.
+	if not seasoned:
+		patty_mult *= 0.92
+		cook_r = {
+			"score": 48,
+			"grade": "C",
+			"stars": 2,
+			"label": "Meh",
+			"detail": "No seasoning",
+			"color": Color("B0BEC5"),
+			"pay_mul": float(cook_r.get("pay_mul", 1.0)),
+			"text": "Meh… OK",
+		}
+	var pay: Dictionary = selected_customer.receive_burger(
+		items, patty_mult, combo, tip_factor, fresh_r, seasoned
+	)
 	var payout: int = int(pay.get("total", 0))
 	var tip_amt: int = int(pay.get("tip", 0))
-	var cook_r := _station_cook_rating(station_index)
-	var cook_bit := "  Cook %s" % cook_r["text"]
+	var was_meh: bool = bool(pay.get("meh", false)) or not seasoned
+	var cook_bit := "  %s" % cook_r["text"]
+	if selected_customer.has_method("stop_order_clock"):
+		selected_customer.stop_order_clock()
 
 	if payout > 0:
 		money += payout
 		total_served += 1
 		if game_audio:
-			game_audio.play_chaching()
-		var was_perfect: bool = bool(pay.get("perfect", false)) and patty_mult >= 1.0 and fresh_r > 0.4
+			var grade_lab := str(cook_r.get("label", ""))
+			if was_meh:
+				game_audio.play_chaching()
+			elif grade_lab == "Wow!" or grade_lab == "Perfect!" or grade_lab == "Great!" or grade_lab == "Good":
+				game_audio.play_grade_tune(grade_lab)
+			else:
+				game_audio.play_chaching()
+		var speed_top: bool = str(cook_r.get("label", "")) in ["Wow!", "Perfect!"]
+		var was_perfect: bool = (
+			not was_meh
+			and ((bool(pay.get("perfect", false)) and patty_mult >= 1.0 and fresh_r > 0.4) or speed_top)
+		)
 		if was_perfect:
 			combo += 1
 			perfect_serves += 1
-		elif float(result.quality) > 0.85 and fresh_r > 0.4:
+		elif not was_meh and float(result.quality) > 0.85 and fresh_r > 0.4 and int(cook_r["score"]) >= 70:
 			combo += 1
 		else:
 			combo = 0
-		if tip_amt > 0:
-			_flash("+$%d  (+$%d tip!)%s%s" % [
-				payout, tip_amt,
+		if was_meh:
+			_flash(
+				"+%s  Meh… OK — needs seasoning (no tip)%s" % [
+					_format_money(float(payout)), cook_bit
+				],
+				Color("B0BEC5")
+			)
+		elif tip_amt > 0:
+			_flash("+%s  (+%s tip!)%s%s" % [
+				_format_money(float(payout)), _format_money(float(tip_amt)),
 				"  COMBO x%d" % combo if combo > 1 else "",
 				cook_bit
 			], cook_r["color"] if int(cook_r["score"]) >= 70 else Color("FFE082"))
-		elif was_perfect:
-			_flash("+$%d  PERFECT! COMBO x%d%s" % [payout, combo, cook_bit], Color("FFEB3B"))
+		elif str(cook_r.get("label", "")) == "Wow!":
+			_flash("+%s  Wow! COMBO x%d%s" % [_format_money(float(payout)), combo, cook_bit], Color("FFD54F"))
+		elif speed_top:
+			_flash("+%s  Perfect! COMBO x%d%s" % [_format_money(float(payout)), combo, cook_bit], Color("FFEB3B"))
 		else:
 			var fresh_note := " (stale)" if fresh_r <= 0.4 else ""
-			_flash("+$%d%s%s" % [payout, fresh_note, cook_bit], cook_r["color"])
+			_flash("+%s%s%s" % [_format_money(float(payout)), fresh_note, cook_bit], cook_r["color"])
 	else:
 		combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
@@ -6942,6 +8305,10 @@ func _on_serve() -> void:
 
 
 func _find_station_for_order(order: Array) -> int:
+	## Perfect match wins (auto-serve + manual Serve with a finished burger).
+	var perfect := _find_perfect_station_for(order)
+	if perfect >= 0:
+		return perfect
 	var candidates: Array[int] = []
 	for i in STATION_COUNT:
 		var items: Array = stations[i]["items"]
@@ -6962,8 +8329,29 @@ func _find_station_for_order(order: Array) -> int:
 	return best
 
 
+func _ingredient_cost(id: String) -> float:
+	if id == "bacon":
+		return COST_BACON
+	if id == "bun_bottom" or id == "patty" or id == "":
+		return 0.0
+	return COST_INGREDIENT
+
+
+func _format_money(amount: float) -> String:
+	return "$%.2f" % amount
+
+
+func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> void:
+	if amount <= 0.001:
+		return
+	money = maxf(0.0, money - amount)
+	_update_hud()
+	if note != "":
+		_flash(note, col)
+
+
 func _update_hud() -> void:
-	hud_money.text = "$%d" % money
+	hud_money.text = _format_money(money)
 	hud_combo.text = "Combo x%d" % combo if combo > 0 else "Combo -"
 	if day_time <= 0.0 and customers.size() > 0:
 		hud_day.text = "Day %d  -  CLOSING" % day
@@ -6971,12 +8359,55 @@ func _update_hud() -> void:
 		hud_day.text = "Day %d  -  %ds" % [day, maxi(0, int(ceil(day_time)))]
 
 
+func _begin_start_tutorial() -> void:
+	_set_tutorial_hint(1, "Turn on grill or burner")
+
+
+func _set_tutorial_hint(step: int, text: String) -> void:
+	_tutorial_step = step
+	_tutorial_text = text
+	if flash_label == null:
+		return
+	if _flash_tween != null and is_instance_valid(_flash_tween):
+		_flash_tween.kill()
+		_flash_tween = null
+	flash_label.text = text
+	flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
+	flash_label.visible = true
+	flash_label.modulate.a = 1.0
+
+
+func _clear_tutorial_hint() -> void:
+	_tutorial_step = 0
+	_tutorial_text = ""
+	if flash_label == null:
+		return
+	if _flash_tween != null and is_instance_valid(_flash_tween):
+		_flash_tween.kill()
+		_flash_tween = null
+	flash_label.visible = false
+	flash_label.modulate.a = 1.0
+
+
 func _flash(text: String, color: Color) -> void:
+	if flash_label == null:
+		return
 	flash_label.text = text
 	flash_label.add_theme_color_override("font_color", color)
 	flash_label.visible = true
 	flash_label.modulate.a = 1.0
-	var tw := create_tween()
-	tw.tween_interval(1.1)
-	tw.tween_property(flash_label, "modulate:a", 0.0, 0.4)
-	tw.tween_callback(func(): flash_label.visible = false)
+	if _flash_tween != null and is_instance_valid(_flash_tween):
+		_flash_tween.kill()
+	_flash_tween = create_tween()
+	_flash_tween.tween_interval(1.1)
+	_flash_tween.tween_property(flash_label, "modulate:a", 0.0, 0.4)
+	_flash_tween.tween_callback(func():
+		if _tutorial_text != "":
+			flash_label.text = _tutorial_text
+			flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
+			flash_label.visible = true
+			flash_label.modulate.a = 1.0
+		else:
+			flash_label.visible = false
+			flash_label.modulate.a = 1.0
+	)

@@ -328,6 +328,21 @@ func play_chaching() -> void:
 	_play_cached("serve_bell", _make_serve_bell, 0.0, 0.38)
 
 
+func play_grade_tune(label: String) -> void:
+	## Distinct cool stingers for ticket-speed grades.
+	match label:
+		"Wow!":
+			_play_cached("grade_wow", _make_wow_tune, 0.0, 0.82)
+		"Perfect!":
+			_play_cached("grade_perfect", _make_perfect_tune, 0.0, 0.72)
+		"Great!":
+			_play_cached("grade_great", _make_great_tune, 0.0, 0.62)
+		"Good":
+			_play_cached("grade_good", _make_good_tune, 0.0, 0.52)
+		_:
+			play_chaching()
+
+
 func play_trash() -> void:
 	_play_cached("trash", _make_trash, 0.0, 0.85)
 
@@ -383,8 +398,8 @@ func _make_soft_note(midi: int, duration: float) -> AudioStreamWAV:
 
 
 func _make_scale_jingle() -> AudioStreamWAV:
-	## Ascending C major run (cheese→bun) then a bright resolving sparkle.
-	var notes := [60, 62, 64, 65, 67, 69, 71, 72, 74, 79, 84]
+	## Ascending C major run (cheese→mustard) then a bright resolving sparkle.
+	var notes := [60, 62, 64, 65, 67, 69, 71, 72, 79, 84]
 	var step := 0.068
 	var hold := 0.11
 	var total := step * float(notes.size() - 1) + 0.55
@@ -416,6 +431,126 @@ func _make_scale_jingle() -> AudioStreamWAV:
 			sample += sin(t * 1318.5 * TAU) * exp(-v * 4.5) * 0.22
 			sample += sin(t * 1760.0 * TAU) * exp(-v * 5.5) * 0.12
 		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 14000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_good_tune() -> AudioStreamWAV:
+	## Warm major triad bump — friendly “nice one”.
+	return _make_arpeggio_tune([60, 64, 67], 0.11, 0.22, 0.35, false)
+
+
+func _make_great_tune() -> AudioStreamWAV:
+	## Bouncy climb with a resolving fifth — punchier than Good.
+	return _make_arpeggio_tune([62, 66, 69, 74], 0.085, 0.18, 0.42, true)
+
+
+func _make_perfect_tune() -> AudioStreamWAV:
+	## Flashy sparkle run + shimmer crown — big celebration.
+	var notes := [60, 64, 67, 72, 76, 79, 84]
+	var step := 0.07
+	var hold := 0.16
+	var total := step * float(notes.size() - 1) + 0.7
+	var n := int(MIX_RATE * total)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var sample := 0.0
+		for ni in notes.size():
+			var start := float(ni) * step
+			var u := t - start
+			if u < 0.0 or u > hold + 0.3:
+				continue
+			var midi: int = int(notes[ni])
+			var freq := 440.0 * pow(2.0, float(midi - 69) / 12.0)
+			var attack := clampf(u / 0.01, 0.0, 1.0)
+			var decay := 2.4 if ni < notes.size() - 1 else 1.35
+			var env := attack * exp(-u * decay)
+			var wave := (
+				sin(u * freq * TAU) * 0.65
+				+ sin(u * freq * 2.0 * TAU) * 0.22
+				+ sin(u * freq * 3.0 * TAU) * 0.1
+			)
+			sample += wave * env * (1.0 + float(ni) * 0.05)
+		## Golden shimmer after the peak.
+		var crown_t := step * float(notes.size() - 2)
+		if t > crown_t:
+			var v := t - crown_t
+			sample += sin(t * 1568.0 * TAU) * exp(-v * 3.2) * 0.28
+			sample += sin(t * 2093.0 * TAU) * exp(-v * 4.0) * 0.18
+			sample += sin(t * 2637.0 * TAU) * exp(-v * 5.0) * 0.1
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 15500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_wow_tune() -> AudioStreamWAV:
+	## Ultra-fast dazzle — bigger/brighter than Perfect for sub-3s serves.
+	var notes := [67, 71, 74, 79, 83, 86, 91, 95]
+	var step := 0.055
+	var hold := 0.14
+	var total := step * float(notes.size() - 1) + 0.85
+	var n := int(MIX_RATE * total)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var sample := 0.0
+		for ni in notes.size():
+			var start := float(ni) * step
+			var u := t - start
+			if u < 0.0 or u > hold + 0.28:
+				continue
+			var midi: int = int(notes[ni])
+			var freq := 440.0 * pow(2.0, float(midi - 69) / 12.0)
+			var attack := clampf(u / 0.008, 0.0, 1.0)
+			var decay := 2.8 if ni < notes.size() - 1 else 1.2
+			var env := attack * exp(-u * decay)
+			var wave := (
+				sin(u * freq * TAU) * 0.6
+				+ sin(u * freq * 2.0 * TAU) * 0.25
+				+ sin(u * freq * 4.0 * TAU) * 0.12
+			)
+			sample += wave * env * (1.05 + float(ni) * 0.06)
+		var crown_t := step * float(notes.size() - 2)
+		if t > crown_t:
+			var v := t - crown_t
+			sample += sin(t * 2093.0 * TAU) * exp(-v * 2.8) * 0.32
+			sample += sin(t * 2794.0 * TAU) * exp(-v * 3.4) * 0.22
+			sample += sin(t * 3136.0 * TAU) * exp(-v * 4.2) * 0.14
+			sample += sin(t * 3729.0 * TAU) * exp(-v * 5.0) * 0.08
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 16000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_arpeggio_tune(notes: Array, step: float, hold: float, tail: float, bounce: bool) -> AudioStreamWAV:
+	var total := step * float(maxi(notes.size() - 1, 0)) + hold + tail
+	var n := int(MIX_RATE * total)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var sample := 0.0
+		for ni in notes.size():
+			var start := float(ni) * step
+			var u := t - start
+			if u < 0.0 or u > hold + 0.28:
+				continue
+			var midi: int = int(notes[ni])
+			var freq := 440.0 * pow(2.0, float(midi - 69) / 12.0)
+			var attack := clampf(u / 0.014, 0.0, 1.0)
+			var env := attack * exp(-u * (3.0 if ni < notes.size() - 1 else 1.7))
+			if bounce and ni == notes.size() - 1:
+				env *= 1.15
+			var wave := (
+				sin(u * freq * TAU) * 0.72
+				+ sin(u * freq * 2.0 * TAU) * 0.16
+				+ sin(u * freq * 3.0 * TAU) * 0.07
+			)
+			sample += wave * env
+		if bounce and t > step * float(notes.size() - 1):
+			var v := t - step * float(notes.size() - 1)
+			sample += sin(t * 1175.0 * TAU) * exp(-v * 4.2) * 0.16
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 14500.0))
 	return _wav_from_pcm(pcm, false)
 
 

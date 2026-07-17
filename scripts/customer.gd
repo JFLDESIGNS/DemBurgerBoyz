@@ -6,16 +6,33 @@ const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 
 const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
 const IDLE_SCENE_PATH := "res://assets/characters/Animations/idle.fbx"
+const RUN_SCENE_PATH := "res://assets/characters/Animations/run.fbx"
+## Stylized Kenney toon skins only — skip photoreal human* (blurry/weird on this mesh).
 const CHAR_SKINS: Array[String] = [
 	"res://assets/characters/Skins/skaterMaleA.png",
 	"res://assets/characters/Skins/skaterFemaleA.png",
-	"res://assets/characters/Skins/humanMaleA.png",
-	"res://assets/characters/Skins/humanFemaleA.png",
 	"res://assets/characters/Skins/criminalMaleA.png",
 	"res://assets/characters/Skins/cyborgFemaleA.png",
 ]
 ## Shrink so face + torso sit in the service window (not cropped by the lintel).
-const CHAR_SCALE := 0.48
+const CHAR_SCALE := 0.552 ## ~15% larger than 0.48
+## Sidewalk stand height — feet on pavement (was floating ~1 ft at 0.22).
+const STAND_Y := -0.02
+## Compact patience chip just above the toon head (inside the window opening).
+const BAR_Y := 1.28
+const BAR_W := 0.38
+const BAR_H := 0.032
+const LEAVE_TURN_SEC := 0.38
+const ARRIVE_TURN_SEC := 0.42
+## Yaw: 180 faces the cook/truck (−Z); 0 walks away down the street (+Z).
+const FACE_TRUCK_YAW := 180.0
+const FACE_AWAY_YAW := 0.0
+## Approach along the sidewalk (world +X from spawn) — face travel, then turn to truck.
+const WALK_PLUS_X_YAW := -90.0
+const WALK_MINUS_X_YAW := 90.0
+## Wait slots shifted screen-right so the patience bar clears the ticket rail.
+## (world +X = screen-left, −X = screen-right)
+const LANE_X: Array[float] = [-0.45, 0.85, -1.85]
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -30,6 +47,14 @@ var lane: int = 0
 var is_waiting: bool = false
 var is_leaving: bool = false
 var order_value: int = 8
+## Serve-speed clock — starts when the order ticket appears (not when meat is ready).
+var order_elapsed_sec: float = 0.0
+var _order_clock_on: bool = false
+const SERVE_WOW_SEC := 3.0
+const SERVE_PERFECT_SEC := 6.0
+const SERVE_GREAT_SEC := 10.0
+const SERVE_GOOD_SEC := 30.0
+const SERVE_NOT_GOOD_SEC := 45.0
 var speech: String = ""
 var last_tip: int = 0
 var last_base_pay: int = 0
@@ -48,8 +73,10 @@ var _face: MeshInstance3D ## unused with 3D toon models (kept for old helpers)
 var _face_mat: StandardMaterial3D
 var _char_meshes: Array = [] ## MeshInstance3D skins we tint by mood
 var _anim_player: AnimationPlayer = null
+var _anim_state: String = "" ## idle | walk
 var _bubble: Label3D
 var _bubble_bg: MeshInstance3D
+var _bar_root: Node3D
 var _bar_bg: MeshInstance3D
 var _bar_fill: MeshInstance3D
 
@@ -60,6 +87,11 @@ var _shake_time: float = 0.0
 var _shake_amp: float = 0.0
 var _expr_t: float = 0.0
 var _leave_spin: float = 0.0
+var _leave_turned: bool = false
+var _leave_yaw_from: float = FACE_TRUCK_YAW
+var _arrive_turning: bool = false
+var _arrive_turn_t: float = 0.0
+var _arrive_yaw_from: float = WALK_PLUS_X_YAW
 var _base_body_y: float = 0.0
 var _home_x: float = 0.0
 var _face_style: int = 0 ## slight variety per customer
@@ -68,6 +100,7 @@ static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
 static var _char_scene: PackedScene = null
 static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
 static var _idle_lib: AnimationLibrary = null
+static var _walk_lib: AnimationLibrary = null
 
 
 func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int) -> void:
@@ -81,6 +114,12 @@ func setup(p_order: Array[String], color: Color, p_patience: float, p_lane: int)
 	speech = _make_speech()
 	_face_style = randi() % 3
 	_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
+
+
+static func lane_x_for(lane_i: int) -> float:
+	if LANE_X.is_empty():
+		return 0.0
+	return LANE_X[clampi(lane_i, 0, LANE_X.size() - 1)]
 
 
 func _roll_personality() -> void:
@@ -319,7 +358,7 @@ func _build() -> void:
 	var bg_mesh := BoxMesh.new()
 	bg_mesh.size = Vector3(1.6, 0.55, 0.05)
 	_bubble_bg.mesh = bg_mesh
-	_bubble_bg.position = Vector3(0, 1.28, 0)
+	_bubble_bg.position = Vector3(0, BAR_Y + 0.28, 0)
 	var bgm := StandardMaterial3D.new()
 	bgm.albedo_color = Color(1, 1, 1, 0.95)
 	bgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -329,34 +368,53 @@ func _build() -> void:
 
 	_bubble = Label3D.new()
 	_bubble.text = speech
-	_bubble.position = Vector3(0, 1.28, 0.04)
+	_bubble.position = Vector3(0, BAR_Y + 0.28, 0.04)
 	_bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_bubble.modulate = Color(0.12, 0.12, 0.14)
 	_bubble.visible = false
 	UiFontsScript.apply_label3d(_bubble, false, 64, 0.099)
-	_bubble.outline_modulate = Color.WHITE
-	_bubble.outline_size = 5
+	_bubble.outline_modulate = Color(0, 0, 0, 0)
+	_bubble.outline_size = 0
 	add_child(_bubble)
 
+	_bar_root = Node3D.new()
+	_bar_root.name = "PatienceBar"
+	_bar_root.position = Vector3(0, BAR_Y, 0.08)
+	add_child(_bar_root)
+
 	_bar_bg = MeshInstance3D.new()
-	var bg := BoxMesh.new()
-	bg.size = Vector3(0.9, 0.08, 0.05)
+	var bg := QuadMesh.new()
+	bg.size = Vector2(BAR_W, BAR_H)
 	_bar_bg.mesh = bg
-	_bar_bg.position = Vector3(0, 1.05, 0)
 	var bar_mat := StandardMaterial3D.new()
-	bar_mat.albedo_color = Color(0.15, 0.15, 0.15)
+	bar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bar_mat.albedo_color = Color(0.02, 0.03, 0.04, 0.88)
+	bar_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bar_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	bar_mat.no_depth_test = true
+	bar_mat.render_priority = 20
+	bar_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_bar_bg.material_override = bar_mat
-	add_child(_bar_bg)
+	_bar_bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bar_bg.visible = false
+	_bar_root.add_child(_bar_bg)
 
 	_bar_fill = MeshInstance3D.new()
-	var fill := BoxMesh.new()
-	fill.size = Vector3(0.84, 0.06, 0.055)
+	var fill := QuadMesh.new()
+	fill.size = Vector2(BAR_W * 0.90, BAR_H * 0.55)
 	_bar_fill.mesh = fill
-	_bar_fill.position = Vector3(0, 1.05, 0.01)
+	_bar_fill.position = Vector3(0, 0, 0.001)
 	var fm := StandardMaterial3D.new()
+	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fm.albedo_color = Color("66BB6A")
+	fm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	fm.no_depth_test = true
+	fm.render_priority = 21
+	fm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_bar_fill.material_override = fm
-	add_child(_bar_fill)
+	_bar_fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bar_fill.visible = false
+	_bar_root.add_child(_bar_fill)
 
 
 func _try_attach_toon_character() -> bool:
@@ -377,33 +435,52 @@ func _try_attach_toon_character() -> bool:
 		_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
 	_apply_skin_texture(_skin_path)
 	_apply_mood_tint("happy")
-	_setup_idle_animation(model)
+	_setup_character_animations(model)
 	return not _char_meshes.is_empty()
 
 
-func _setup_idle_animation(model: Node) -> void:
-	## Play Kenney Idle so customers aren't stuck in a T-pose.
+func _setup_character_animations(model: Node) -> void:
+	## Idle + walk (Kenney run clip at a calmer speed).
 	if _idle_lib == null:
-		_idle_lib = _load_idle_library()
-	if _idle_lib == null or not _idle_lib.has_animation("Idle"):
-		return
+		_idle_lib = _load_anim_library(IDLE_SCENE_PATH, "Idle", ["idle"])
+	if _walk_lib == null:
+		_walk_lib = _load_anim_library(RUN_SCENE_PATH, "Walk", ["run", "walk", "running"])
 	_anim_player = AnimationPlayer.new()
 	_anim_player.name = "CustomerAnim"
 	model.add_child(_anim_player)
-	_anim_player.add_animation_library("kenney", _idle_lib)
+	if _idle_lib != null and _idle_lib.has_animation("Idle"):
+		_anim_player.add_animation_library("kenney", _idle_lib)
+	if _walk_lib != null and _walk_lib.has_animation("Walk"):
+		## Separate library so Idle/Walk names don't collide.
+		_anim_player.add_animation_library("kenney_walk", _walk_lib)
 	_anim_player.active = true
-	_anim_player.play("kenney/Idle")
-	_anim_player.speed_scale = 0.8 + randf() * 0.35
-	## Stagger so a line of customers don't sync-breathe.
-	var idle_anim := _idle_lib.get_animation("Idle")
-	if idle_anim != null and idle_anim.length > 0.05:
-		_anim_player.seek(randf() * idle_anim.length, true)
+	_play_anim("idle")
 
 
-func _load_idle_library() -> AnimationLibrary:
-	if not ResourceLoader.exists(IDLE_SCENE_PATH):
+func _play_anim(state: String) -> void:
+	if _anim_player == null:
+		return
+	if state == _anim_state and _anim_player.is_playing():
+		return
+	var prev := _anim_state
+	_anim_state = state
+	if state == "walk" and _anim_player.has_animation("kenney_walk/Walk"):
+		_anim_player.play("kenney_walk/Walk")
+		_anim_player.speed_scale = 0.72 + randf() * 0.18
+		return
+	if _anim_player.has_animation("kenney/Idle"):
+		_anim_player.play("kenney/Idle")
+		_anim_player.speed_scale = 0.8 + randf() * 0.35
+		if prev != "idle":
+			var idle_anim := _anim_player.get_animation("kenney/Idle")
+			if idle_anim != null and idle_anim.length > 0.05:
+				_anim_player.seek(randf() * idle_anim.length, true)
+
+
+func _load_anim_library(scene_path: String, store_as: String, accept_names: Array) -> AnimationLibrary:
+	if not ResourceLoader.exists(scene_path):
 		return null
-	var packed := load(IDLE_SCENE_PATH) as PackedScene
+	var packed := load(scene_path) as PackedScene
 	if packed == null:
 		return null
 	var temp: Node = packed.instantiate()
@@ -412,6 +489,9 @@ func _load_idle_library() -> AnimationLibrary:
 		temp.queue_free()
 		return null
 	var lib := AnimationLibrary.new()
+	var accept_lower: Array = []
+	for n in accept_names:
+		accept_lower.append(str(n).to_lower())
 	for full_name in src.get_animation_list():
 		var anim := src.get_animation(full_name)
 		if anim == null:
@@ -419,12 +499,12 @@ func _load_idle_library() -> AnimationLibrary:
 		var short := String(full_name)
 		if short.contains("|"):
 			short = short.get_slice("|", 1)
-		## Only keep the looping idle — skip the one-frame targeting pose.
-		if short.to_lower() != "idle":
+		if not accept_lower.has(short.to_lower()):
 			continue
 		var copy := anim.duplicate() as Animation
 		copy.loop_mode = Animation.LOOP_LINEAR
-		lib.add_animation("Idle", copy)
+		lib.add_animation(store_as, copy)
+		break
 	temp.queue_free()
 	if lib.get_animation_list().is_empty():
 		return null
@@ -466,12 +546,12 @@ func _apply_skin_texture(path: String) -> void:
 		else:
 			sm = StandardMaterial3D.new()
 		sm.albedo_texture = tex
-		sm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
-		sm.roughness = 0.62
+		## Nearest keeps Kenney toon skins crisp (linear+mips made human skins mushy).
+		sm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		sm.roughness = 0.72
 		sm.metallic = 0.0
-		## Soft toon-ish shading so faces read clean with MSAA.
 		sm.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-		sm.specular_mode = BaseMaterial3D.SPECULAR_TOON
+		sm.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 		mesh_i.material_override = sm
 
 
@@ -689,7 +769,7 @@ func _process(delta: float) -> void:
 	_expr_t += delta
 	_home_x = target_x
 
-	if _shake_time > 0.0:
+	if _shake_time > 0.0 and not is_leaving:
 		_shake_time -= delta
 		var shake_x := sin(Time.get_ticks_msec() * 0.06) * _shake_amp
 		var shake_z := cos(Time.get_ticks_msec() * 0.08) * _shake_amp * 0.45
@@ -703,58 +783,219 @@ func _process(delta: float) -> void:
 				_body.rotation_degrees.z = 0.0
 			global_position.x = _home_x
 			global_position.z = 2.25
+	elif is_leaving:
+		_shake_time = 0.0
+		_shake_amp = 0.0
 
 	if is_leaving:
 		_leave_spin += delta
-		global_position.z += delta * 2.4
-		global_position.y += delta * 0.25
-		if _mood == "cheer":
-			## Happy hop away
+		## Stay planted on the sidewalk — never float up while leaving.
+		global_position.y = STAND_Y
+		if not _leave_turned:
+			var turn_t := clampf(_leave_spin / LEAVE_TURN_SEC, 0.0, 1.0)
+			var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
+			rotation_degrees.y = lerpf(_leave_yaw_from, FACE_AWAY_YAW, ease_t)
 			if _body:
-				_body.position.y = _base_body_y + absf(sin(_leave_spin * 8.0)) * 0.12
-				_body.rotation_degrees.y = sin(_leave_spin * 6.0) * 12.0
-		else:
-			## Mad storm-off wobble
-			if _body:
-				_body.position.y = _base_body_y + sin(_leave_spin * 10.0) * 0.05
-				_body.rotation_degrees.z = sin(_leave_spin * 14.0) * 18.0
+				_body.position.y = _base_body_y
+				_body.rotation_degrees = Vector3.ZERO
+			_play_anim("idle")
+			if turn_t >= 1.0:
+				_leave_turned = true
+				rotation_degrees.y = FACE_AWAY_YAW
+				_play_anim("walk")
+			return
+		## Facing away — walk off down the sidewalk at ground level.
+		global_position.z += delta * 2.6
+		_play_anim("walk")
+		if _body:
+			var step := absf(sin(_leave_spin * 9.0)) * 0.02
+			_body.position.y = _base_body_y + step
+			_body.rotation_degrees = Vector3.ZERO
 		if global_position.z > 14.0:
 			queue_free()
 		return
 
 	var dx: float = target_x - global_position.x
 	if absf(dx) > 0.05 and _shake_time <= 0.0:
+		## Face the way we're walking (along the sidewalk), not sideways at the truck.
+		rotation_degrees.y = WALK_PLUS_X_YAW if dx > 0.0 else WALK_MINUS_X_YAW
+		_arrive_turning = false
 		global_position.x += signf(dx) * minf(absf(dx), delta * 1.6)
+		_play_anim("walk")
 		_apply_bobble(true)
+		if _bar_root:
+			_bar_root.visible = false
+		if _bar_bg:
+			_bar_bg.visible = false
+		if _bar_fill:
+			_bar_fill.visible = false
 	elif not is_waiting:
+		## Arrived at the lane — turn to face the cook, then idle.
+		if not _arrive_turning:
+			_arrive_turning = true
+			_arrive_turn_t = 0.0
+			_arrive_yaw_from = rotation_degrees.y
+		_arrive_turn_t += delta
+		var turn_t := clampf(_arrive_turn_t / ARRIVE_TURN_SEC, 0.0, 1.0)
+		var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
+		rotation_degrees.y = lerpf(_arrive_yaw_from, FACE_TRUCK_YAW, ease_t)
+		_play_anim("idle")
+		_apply_bobble(false)
+		if _bar_root:
+			_bar_root.visible = false
+		if turn_t < 1.0:
+			_animate_expression(delta)
+			return
+		_arrive_turning = false
+		rotation_degrees.y = FACE_TRUCK_YAW
 		is_waiting = true
-		_bubble.visible = true
-		_bubble_bg.visible = true
+		## Speech bubble off for now — tickets carry the order.
+		if _bubble:
+			_bubble.visible = false
+		if _bubble_bg:
+			_bubble_bg.visible = false
+		_refresh_patience_bar()
+		_play_anim("idle")
 		arrived.emit(self)
 		_apply_bobble(false)
 	elif _shake_time <= 0.0:
+		rotation_degrees.y = FACE_TRUCK_YAW
+		_play_anim("idle")
 		_apply_bobble(false)
 
 	_animate_expression(delta)
 
-	if is_waiting and not dialogue_open:
-		patience -= delta
-		var t: float = clampf(patience / patience_max, 0.0, 1.0)
-		_bar_fill.scale = Vector3(t, 1, 1)
-		_bar_fill.position.x = -0.42 * (1.0 - t)
-		var fm: StandardMaterial3D = _bar_fill.material_override
-		if t > 0.55:
-			fm.albedo_color = Color("66BB6A")
-			_set_mood("happy")
-		elif t > 0.28:
-			fm.albedo_color = Color("FFCA28")
-			_set_mood("ok")
-		else:
-			fm.albedo_color = Color("EF5350")
-			_set_mood("mad")
+	if is_waiting:
+		## Drain pauses during chat, but the bar stays visible either way.
+		if not dialogue_open:
+			patience -= delta
+		_refresh_patience_bar()
 		if patience <= 0.0:
 			leave_mad()
 			patience_expired.emit(self)
+	## Ticket clock runs from the moment the slip is pinned until serve / leave.
+	if _order_clock_on and not is_leaving:
+		order_elapsed_sec += delta
+
+
+func start_order_clock() -> void:
+	## Call when the order ticket is created.
+	order_elapsed_sec = 0.0
+	_order_clock_on = true
+
+
+func stop_order_clock() -> void:
+	_order_clock_on = false
+
+
+func speed_rating(burnt: bool = false) -> Dictionary:
+	## Wow! ≤3s · Perfect! ≤6s · Great! ≤10s · Good <30s · Not good → Bad — from ticket time.
+	if burnt:
+		return {
+			"score": 12,
+			"grade": "F",
+			"stars": 0,
+			"label": "Bad",
+			"detail": "Burnt",
+			"color": Color("EF5350"),
+			"pay_mul": 0.22,
+			"wait": order_elapsed_sec,
+			"text": "Bad  Burnt",
+		}
+	var wait := order_elapsed_sec
+	var score := 70
+	var grade := "B"
+	var stars := 3
+	var label := "Good"
+	var detail := "%.0fs" % wait
+	var color := Color("81C784")
+	var pay_mul := 1.0
+	if wait <= SERVE_WOW_SEC:
+		score = 100
+		grade = "S"
+		stars = 5
+		label = "Wow!"
+		detail = "%.1fs" % wait
+		color = Color("FFD54F")
+		pay_mul = 1.5
+	elif wait <= SERVE_PERFECT_SEC:
+		score = 100
+		grade = "S"
+		stars = 5
+		label = "Perfect!"
+		detail = "%.1fs" % wait
+		color = Color("FFEB3B")
+		pay_mul = 1.35
+	elif wait <= SERVE_GREAT_SEC:
+		score = 88
+		grade = "A"
+		stars = 4
+		label = "Great!"
+		detail = "%.1fs" % wait
+		color = Color("A5D6A7")
+		pay_mul = 1.2
+	elif wait < SERVE_GOOD_SEC:
+		score = 72
+		grade = "B"
+		stars = 3
+		label = "Good"
+		detail = "%.0fs" % wait
+		color = Color("81C784")
+		pay_mul = 1.0
+	elif wait < SERVE_NOT_GOOD_SEC:
+		score = 38
+		grade = "D"
+		stars = 1
+		label = "Not good"
+		detail = "%.0fs" % wait
+		color = Color("FFA726")
+		pay_mul = 0.55
+	else:
+		score = 15
+		grade = "F"
+		stars = 0
+		label = "Bad"
+		detail = "%.0fs" % wait
+		color = Color("EF5350")
+		pay_mul = 0.28
+	return {
+		"score": score,
+		"grade": grade,
+		"stars": stars,
+		"label": label,
+		"detail": detail,
+		"color": color,
+		"pay_mul": pay_mul,
+		"wait": wait,
+		"text": "%s  %s" % [label, detail],
+	}
+
+
+func _refresh_patience_bar() -> void:
+	var t: float = clampf(patience / maxf(0.01, patience_max), 0.0, 1.0)
+	if _bar_root:
+		_bar_root.visible = true
+		_bar_root.position = Vector3(0, BAR_Y, 0.08)
+	if _bar_bg:
+		_bar_bg.visible = true
+	if _bar_fill:
+		_bar_fill.visible = true
+		## Shrink from the right — billboard quads scale in local X.
+		_bar_fill.scale = Vector3(maxf(t, 0.02), 1.0, 1.0)
+		_bar_fill.position.x = -(BAR_W * 0.45) * (1.0 - t)
+		_bar_fill.position.y = 0.0
+		_bar_fill.position.z = 0.001
+		var fm: StandardMaterial3D = _bar_fill.material_override
+		if fm:
+			if t > 0.55:
+				fm.albedo_color = Color("66BB6A")
+				_set_mood("happy")
+			elif t > 0.28:
+				fm.albedo_color = Color("FFCA28")
+				_set_mood("ok")
+			else:
+				fm.albedo_color = Color("EF5350")
+				_set_mood("mad")
 
 
 func _apply_bobble(walking: bool) -> void:
@@ -813,28 +1054,73 @@ func bounce_happy() -> void:
 
 
 func leave_happy() -> void:
+	stop_order_clock()
 	is_leaving = true
 	is_waiting = false
+	_leave_spin = 0.0
+	_leave_turned = false
+	_leave_yaw_from = rotation_degrees.y
+	global_position.y = STAND_Y
 	_set_mood("cheer")
-	bounce_happy()
-	## Keep the reaction bubble up briefly, then hide
-	get_tree().create_timer(0.45).timeout.connect(func():
-		if is_instance_valid(self):
-			_bubble.visible = false
-			_bubble_bg.visible = false
-	)
+	_play_anim("idle")
+	if _bubble:
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
+
+
+func leave_meh() -> void:
+	## Bland / unseasoned — shrug and walk off. Paid base, no tip energy.
+	stop_order_clock()
+	is_leaving = true
+	is_waiting = false
+	_leave_spin = 0.0
+	_leave_turned = false
+	_leave_yaw_from = rotation_degrees.y
+	global_position.y = STAND_Y
+	_set_mood("ok")
+	_play_anim("idle")
+	if _bubble:
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
 
 
 func leave_mad() -> void:
+	stop_order_clock()
 	is_leaving = true
 	is_waiting = false
+	_leave_spin = 0.0
+	_leave_turned = false
+	_leave_yaw_from = rotation_degrees.y
+	global_position.y = STAND_Y
 	_set_mood("mad")
-	shake_angry(0.75, 0.16)
+	_play_anim("idle")
+	if _bubble:
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
 	get_tree().create_timer(0.55).timeout.connect(func():
 		if is_instance_valid(self):
 			_set_mood("dead")
-			_bubble.visible = false
-			_bubble_bg.visible = false
 	)
 
 
@@ -842,9 +1128,6 @@ func leave_mad() -> void:
 func leave_after_dispute() -> void:
 	## Refund / take-the-food outcomes — walk off angry, no payout.
 	clear_complaint()
-	if _bubble:
-		_bubble.visible = true
-		_bubble.modulate = Color("C62828")
 	served.emit(self, 0)
 	leave_mad()
 
@@ -853,14 +1136,21 @@ func patience_ratio() -> float:
 	return clampf(patience / maxf(0.01, patience_max), 0.0, 1.0)
 
 
-## Returns {total, base, tip, perfect, wrong}
-func receive_burger(built: Array, patty_mult: float, combo: int, tip_factor: float, fresh_ratio: float = 1.0) -> Dictionary:
+## Returns {total, base, tip, perfect, wrong, meh}
+func receive_burger(
+	built: Array,
+	patty_mult: float,
+	combo: int,
+	tip_factor: float,
+	fresh_ratio: float = 1.0,
+	seasoned: bool = true
+) -> Dictionary:
 	var result: Dictionary = GameDataScript.compare_orders(built, order)
 	last_tip = 0
 	last_base_pay = 0
 	if float(result.quality) < 0.4:
 		react_wrong()
-		return {"total": 0, "base": 0, "tip": 0, "perfect": false, "wrong": true}
+		return {"total": 0, "base": 0, "tip": 0, "perfect": false, "wrong": true, "meh": false}
 
 	var base_pay: int = int(round(
 		float(order_value) * float(result.quality) * patty_mult * (1.0 + float(combo) * 0.05)
@@ -868,13 +1158,14 @@ func receive_burger(built: Array, patty_mult: float, combo: int, tip_factor: flo
 	base_pay = maxi(base_pay, 1 if float(result.quality) >= 0.55 else 0)
 	if base_pay <= 0:
 		react_wrong()
-		return {"total": 0, "base": 0, "tip": 0, "perfect": false, "wrong": true}
+		return {"total": 0, "base": 0, "tip": 0, "perfect": false, "wrong": true, "meh": false}
 
-	## Tip for doing a good job: perfect match, good cook, fresh, patient customer.
+	## Tip for doing a good job: perfect match, good cook, fresh, patient — and seasoned beef.
 	var tip_pay := 0
 	var perfect: bool = bool(result.perfect)
 	var good_job := perfect or float(result.quality) >= 0.9
-	if good_job:
+	var meh := not seasoned
+	if good_job and seasoned:
 		tip_pay = 2
 		if perfect:
 			tip_pay += 2
@@ -891,36 +1182,48 @@ func receive_burger(built: Array, patty_mult: float, combo: int, tip_factor: flo
 		if combo >= 2:
 			tip_pay += mini(combo, 4)
 		tip_pay = maxi(tip_pay, 1 if perfect else 0)
+	elif meh:
+		tip_pay = 0
 
 	last_base_pay = base_pay
 	last_tip = tip_pay
 	var total := base_pay + tip_pay
-	complete_serve(total)
+	if meh:
+		complete_serve_meh(total)
+	else:
+		complete_serve(total)
 	return {
 		"total": total,
 		"base": base_pay,
 		"tip": tip_pay,
 		"perfect": perfect,
 		"wrong": false,
+		"meh": meh,
 	}
 
 
 func react_wrong() -> void:
 	if _bubble:
-		_bubble.text = "WRONG!\n>_<"
-		_bubble.visible = true
-		_bubble.modulate = Color("C62828")
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
 	served.emit(self, 0)
 	leave_mad()
 
 
 func complete_serve(payout: int) -> void:
 	if _bubble:
-		if last_tip > 0:
-			_bubble.text = "Yum!\n+$%d tip!" % last_tip
-		else:
-			_bubble.text = "Thanks!"
-		_bubble.visible = true
-		_bubble.modulate = Color("2E7D32")
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
 	served.emit(self, payout)
 	leave_happy()
+
+
+func complete_serve_meh(payout: int) -> void:
+	if _bubble:
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	served.emit(self, payout)
+	leave_meh()

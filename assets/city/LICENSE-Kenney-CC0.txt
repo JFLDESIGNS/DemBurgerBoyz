@@ -1,0 +1,3 @@
+Kenney City Kit models (from Starter Kit City Builder)
+License: CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/
+Source: https://github.com/KenneyNL/Starter-Kit-City-Builder
