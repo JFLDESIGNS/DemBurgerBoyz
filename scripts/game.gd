@@ -371,7 +371,7 @@ const FLICK_MIN_SPEED := 620.0
 const FLICK_MIN_TRAVEL_PX := 36.0
 ## Left side of the screen / left of the grill counts as Build drop while carrying.
 const BUILD_DROP_SCREEN_FRAC := 0.48
-const BUILD_DROP_MIN_PX := 460.0
+const BUILD_DROP_MIN_PX := 320.0
 ## Flash toast placement — original top + 15% of screen height downward.
 const FLASH_LABEL_TOP_FRAC := 236.0 / 720.0 + 0.10
 const FLASH_LABEL_HEIGHT_FRAC := 74.0 / 720.0
@@ -397,6 +397,11 @@ var phone_rating_stars: Label = null
 var phone_rating_value: Label = null
 var phone_review_label: Label = null
 var phone_inventory_box: VBoxContainer = null
+var phone_scroll: ScrollContainer = null
+var _phone_scroll_dragging: bool = false
+var _phone_scroll_drag_pending: bool = false
+var _phone_scroll_drag_start_y: float = 0.0
+var _phone_scroll_drag_start_offset: int = 0
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
 var supply_stock: Dictionary = {}
@@ -467,8 +472,16 @@ const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -80.0 ## prep art offset inside build zone (text stays put)
 const PREP_UI_BEHIND_Y := -165.0 ## negative Y = up on screen (position-based)
-const BUILD_UI_LEFT := 85.0 ## bun stack — left of grill, beside prep baskets
+const BUILD_STATIONS_ROW_LEFT := -210.0
+const BUILD_STATIONS_ROW_RIGHT := 175.0
+const BUILD_PANEL_SIZE := Vector2(300, 210)
+const BUILD_ZONE_SIZE := Vector2(230, 195)
+const BUILD_UI_LEFT := 0.0 ## build column flush left inside panel
 const BUILD_UI_LIFT_BOTTOM := 120.0 ## counter height — not tucked under the grill
+const BUILD_HIT_PAD_LEFT := 10.0
+const BUILD_HIT_PAD_TOP := 28.0 ## was 180 — only a little above the plate
+const BUILD_HIT_PAD_RIGHT := 10.0
+const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
 ## Red outlines on Build UI hitboxes — toggle off when layout is tuned.
 const BUILD_AREA_DEBUG_OUTLINE := true
@@ -493,8 +506,9 @@ const RADIO_UI_RIGHT := 10.0
 const RADIO_UI_LEFT := 220.0
 ## Android phone HUD — floats under the truck radio.
 const PHONE_UI_BASE_H := 278.0
-const PHONE_UI_SIZE := Vector2(152.0, PHONE_UI_BASE_H * 1.15) ## 15% taller
+const PHONE_UI_SIZE := Vector2(152.0, PHONE_UI_BASE_H * 1.15 * 1.05) ## +15% then +5% taller
 const PHONE_BEZEL_H := 9.0 ## small black chin / forehead inside the frame
+const PHONE_SCROLL_DRAG_THRESH := 8.0
 const PHONE_BELOW_RADIO_GAP := 10.0
 const PHONE_FLOAT_AMP := 3.5
 const SUPPLY_IDS: Array[String] = [
@@ -1486,6 +1500,24 @@ func _build_plate_index_at(screen_pos: Vector2) -> int:
 	return -1
 
 
+func _build_station_hit_rect(panel: Control) -> Rect2:
+	## Match BuildZone + plate on the left — not the empty right side of the panel.
+	if panel == null or not is_instance_valid(panel):
+		return Rect2()
+	var zone := panel.get_node_or_null("BuildZone") as Control
+	var base: Rect2
+	if zone != null and is_instance_valid(zone):
+		base = zone.get_global_rect()
+	else:
+		base = panel.get_global_rect()
+	return base.grow_individual(
+		BUILD_HIT_PAD_LEFT,
+		BUILD_HIT_PAD_TOP,
+		BUILD_HIT_PAD_RIGHT,
+		BUILD_HIT_PAD_BOTTOM
+	)
+
+
 func _make_build_debug_outline_style(fill_alpha: float = 0.06) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(BUILD_DEBUG_OUTLINE_COLOR.r, BUILD_DEBUG_OUTLINE_COLOR.g, BUILD_DEBUG_OUTLINE_COLOR.b, fill_alpha)
@@ -1513,10 +1545,10 @@ func _refresh_build_debug_outlines() -> void:
 	## Left-column patty drop catcher (wide).
 	if build_drop_zone != null and is_instance_valid(build_drop_zone):
 		_draw_build_debug_rect(build_drop_zone.get_global_rect(), "DROP_L", 0.04)
-	## Grill-left fuzzy drop line (screen X where Build beats grill).
+	## Grill-left fuzzy drop line — only over the counter band.
 	var grill_x := _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX
 	var vr := get_viewport().get_visible_rect()
-	_draw_build_debug_vline(grill_x, "GRILL_LIM")
+	_draw_build_debug_vline(grill_x, "GRILL_LIM", vr.position.y + 280.0, vr.position.y + vr.size.y - 120.0)
 	## Per-station build hitboxes.
 	for i in STATION_COUNT:
 		if i >= stations.size():
@@ -1525,11 +1557,7 @@ func _refresh_build_debug_outlines() -> void:
 		var plate: Control = stations[i].get("plate", null)
 		if panel != null and is_instance_valid(panel):
 			_draw_build_debug_rect(panel.get_global_rect(), "PANEL", 0.03)
-			var pr := panel.get_global_rect()
-			var build_w := mini(280.0, pr.size.x)
-			var hit := Rect2(pr.position.x + maxf(0.0, pr.size.x - build_w), pr.position.y, build_w, pr.size.y)
-			hit = hit.grow_individual(24, 180, 24, 24)
-			_draw_build_debug_rect(hit, "BUILD_HIT", 0.05)
+			_draw_build_debug_rect(_build_station_hit_rect(panel), "BUILD_HIT", 0.05)
 		if plate != null and is_instance_valid(plate):
 			_draw_build_debug_rect(plate.get_global_rect().grow(12), "PLATE+12", 0.07)
 		var build_zone := panel.get_node_or_null("BuildZone") if panel != null else null
@@ -1561,17 +1589,19 @@ func _draw_build_debug_rect(global_rect: Rect2, tag: String, fill_alpha: float) 
 	box.add_child(lab)
 
 
-func _draw_build_debug_vline(screen_x: float, tag: String) -> void:
+func _draw_build_debug_vline(screen_x: float, tag: String, y0: float = -1.0, y1: float = -1.0) -> void:
 	if build_debug_root == null or not is_instance_valid(build_debug_root):
 		return
 	var vr := get_viewport().get_visible_rect()
+	var top_y := y0 if y0 >= 0.0 else vr.position.y
+	var bot_y := y1 if y1 >= 0.0 else vr.position.y + vr.size.y
 	var local_x := screen_x - build_debug_root.global_position.x
 	var line := ColorRect.new()
 	line.name = "DebugOutline_%s" % tag
 	line.color = BUILD_DEBUG_OUTLINE_COLOR
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	line.position = Vector2(local_x - 1.0, vr.position.y - build_debug_root.global_position.y)
-	line.size = Vector2(2.0, vr.size.y)
+	line.position = Vector2(local_x - 1.0, top_y - build_debug_root.global_position.y)
+	line.size = Vector2(2.0, maxf(8.0, bot_y - top_y))
 	build_debug_root.add_child(line)
 	var lab := Label.new()
 	lab.text = tag
@@ -1596,12 +1626,9 @@ func _station_index_at(screen_pos: Vector2) -> int:
 				and drop_btn.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
 		var panel: Control = stations[i].get("panel", null)
-		if panel != null and is_instance_valid(panel):
-			var pr := panel.get_global_rect()
-			var build_w := mini(280.0, pr.size.x)
-			var build_zone := Rect2(pr.position.x + maxf(0.0, pr.size.x - build_w), pr.position.y, build_w, pr.size.y)
-			if build_zone.grow_individual(24, 180, 24, 24).has_point(screen_pos):
-				return i
+		if panel != null and is_instance_valid(panel) \
+				and _build_station_hit_rect(panel).has_point(screen_pos):
+			return i
 	return -1
 
 
@@ -7935,6 +7962,7 @@ func _refresh_phone_ui() -> void:
 		child.queue_free()
 	for id in SUPPLY_IDS:
 		var row := HBoxContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_theme_constant_override("separation", 3)
 		row.custom_minimum_size = Vector2(0, 22)
 		phone_inventory_box.add_child(row)
@@ -7960,6 +7988,7 @@ func _refresh_phone_ui() -> void:
 		row.add_child(count_lab)
 
 		var bar := ProgressBar.new()
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		bar.custom_minimum_size = Vector2(44, 10)
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bar.max_value = 1.0
@@ -8059,15 +8088,34 @@ func _build_phone_ui() -> void:
 	screen.add_child(gloss)
 
 	var scroll := ScrollContainer.new()
+	phone_scroll = scroll
+	scroll.name = "PhoneScroll"
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER ## drag scroll — no bar
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	scroll.gui_input.connect(_on_phone_scroll_gui_input)
 	screen.add_child(scroll)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(v)
+
+	var logo_wrap := CenterContainer.new()
+	logo_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	logo_wrap.custom_minimum_size = Vector2(0, 52)
+	logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(logo_wrap)
+	if ResourceLoader.exists(LOGO_TEX_PATH):
+		var logo := TextureRect.new()
+		logo.name = "BurgerPalsLogo"
+		logo.texture = load(LOGO_TEX_PATH) as Texture2D
+		logo.custom_minimum_size = Vector2(120, 44)
+		logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		logo_wrap.add_child(logo)
 
 	var status_row := HBoxContainer.new()
 	status_row.add_theme_constant_override("separation", 4)
@@ -8131,6 +8179,34 @@ func _build_phone_ui() -> void:
 	v.add_child(phone_inventory_box)
 
 	_refresh_phone_ui()
+
+
+func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
+	## LMB drag to scroll — no visible scrollbar; small movement still clicks + buttons.
+	if phone_scroll == null:
+		return
+	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+		if ev.pressed:
+			_phone_scroll_drag_pending = true
+			_phone_scroll_dragging = false
+			_phone_scroll_drag_start_y = ev.global_position.y
+			_phone_scroll_drag_start_offset = phone_scroll.scroll_vertical
+		else:
+			_phone_scroll_drag_pending = false
+			_phone_scroll_dragging = false
+	elif ev is InputEventMouseMotion:
+		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_phone_scroll_drag_pending = false
+			_phone_scroll_dragging = false
+			return
+		if _phone_scroll_drag_pending:
+			if absf(ev.global_position.y - _phone_scroll_drag_start_y) >= PHONE_SCROLL_DRAG_THRESH:
+				_phone_scroll_dragging = true
+				_phone_scroll_drag_pending = false
+		if _phone_scroll_dragging:
+			var dy: float = ev.global_position.y - _phone_scroll_drag_start_y
+			phone_scroll.scroll_vertical = int(_phone_scroll_drag_start_offset - dy)
+			phone_scroll.accept_event()
 
 
 func _setup_game_audio() -> void:
@@ -9703,7 +9779,7 @@ func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
 	style.content_margin_top = 8
 	style.content_margin_bottom = 10
 	if selected:
-		style.modulate = Color(1.06, 1.0, 0.9)
+		style.modulate_color = Color(1.06, 1.0, 0.9)
 	return style
 
 
@@ -10000,18 +10076,18 @@ func _note_melody_press(id: String) -> void:
 
 
 func _build_station_ui() -> void:
-	## Sit further screen-left so the far-left grill stays clickable.
-	stations_row.offset_left = -70.0
-	stations_row.offset_right = 440.0
+	## Screen-left — over prep baskets / cutting board, not center-right.
+	stations_row.offset_left = BUILD_STATIONS_ROW_LEFT
+	stations_row.offset_right = BUILD_STATIONS_ROW_RIGHT
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stations_row.custom_minimum_size = Vector2(450, 0)
-	stations_row.alignment = BoxContainer.ALIGNMENT_END
+	stations_row.custom_minimum_size = Vector2(BUILD_PANEL_SIZE.x, 0)
+	stations_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	for child in stations_row.get_children():
 		child.queue_free()
 	for i in STATION_COUNT:
 		## Plain Control — no PanelContainer chrome / bounding box.
 		var panel := Control.new()
-		panel.custom_minimum_size = Vector2(450, 320)
+		panel.custom_minimum_size = BUILD_PANEL_SIZE
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		panel.size_flags_vertical = Control.SIZE_SHRINK_END
 		## Empty panel area passes through to the 3D grill behind.
@@ -10025,7 +10101,7 @@ func _build_station_ui() -> void:
 		build_zone.grow_vertical = Control.GROW_DIRECTION_BEGIN
 		build_zone.offset_left = int(BUILD_UI_LEFT)
 		build_zone.offset_bottom = int(BUILD_UI_LIFT_BOTTOM)
-		build_zone.custom_minimum_size = Vector2(250, 280)
+		build_zone.custom_minimum_size = BUILD_ZONE_SIZE
 		build_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		panel.add_child(build_zone)
 
@@ -10269,7 +10345,7 @@ func _build_build_drop_zone() -> void:
 	build_drop_zone.anchor_right = 0.0
 	build_drop_zone.offset_left = 0.0
 	build_drop_zone.offset_right = BUILD_DROP_MIN_PX
-	build_drop_zone.offset_top = 48.0
+	build_drop_zone.offset_top = 220.0
 	build_drop_zone.offset_bottom = -110.0
 	build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	build_drop_zone.z_index = 9
