@@ -11,9 +11,19 @@ const HOME_Z := 1.68
 const HIDDEN_Y := 0.141
 const SHOWN_Y := 0.741
 const MESH_SCALE := 3.35
+## Drop root Y only when overall (giant) scale grows — width chonk stays planted.
+## Small nudge only — large drops buried him as he grew.
+const GROUND_DROP_PER_GIANT := 0.18
+## Also pull the mesh down relative to pivot when overall Y-scale grows.
+const VISUAL_FOOT_COMP := 0.10
 ## Gets chunkier with each treat — width sticks when it comes back.
 const FAT_PER_TOPPING := 0.10
-const FAT_MAX := 1.35 ## ~2.35× horizontal scale at max chonk
+const FAT_MAX := 1.35 ## width chonk cap (~2.35× horizontal)
+## After max width, keep growing overall until 2× base size.
+const GIANT_MAX := 1.0 ## +100% uniform scale on top of width chonk
+## Bigger cats stand further from the truck so they still fit the window.
+const APPROACH_Z_PER_GIANT := 1.65
+const APPROACH_START_EXTRA := 0.55 ## extra street distance at the start of a rise
 ## Face the cook (mesh nose points +Z; yaw 180 looks into the truck).
 const FACE_COOK_YAW := 180.0
 const FACE_AWAY_YAW := 0.0
@@ -52,17 +62,53 @@ var _run_to: Vector3 = Vector3.ZERO
 var _run_yaw_from: float = FACE_COOK_YAW
 ## Persistent chonk from feeding (0 = slim … FAT_MAX = very wide). Survives run-aways.
 var _fat: float = 0.0
+## Extra overall size after width is maxed (0 = normal … GIANT_MAX = 2×).
+var _giant: float = 0.0
 ## 0–1 — patty chew swell (width grows to +25% during fed_hold, then commits to _fat).
 var _patty_eat_wide: float = 0.0
 
 
 func _ready() -> void:
 	_build()
-	position = Vector3(HOME_X, HIDDEN_Y, HOME_Z)
+	position = Vector3(_home_x(), _hidden_y(), _home_z())
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 	_timer = FIRST_PEEK_SEC
 	_state = "hidden"
 	visible = false
+
+
+func _home_x() -> float:
+	return HOME_X
+
+
+func _home_z() -> float:
+	## Stand further from the truck as overall size grows.
+	return HOME_Z + _giant * APPROACH_Z_PER_GIANT
+
+
+func _size_mul() -> float:
+	return 1.0 + _giant
+
+
+func _shown_y() -> float:
+	## Only drop for overall size-up — getting wider shouldn't sink the cat.
+	return SHOWN_Y - _giant * GROUND_DROP_PER_GIANT
+
+
+func _hidden_y() -> float:
+	return HIDDEN_Y - _giant * GROUND_DROP_PER_GIANT * 0.25
+
+
+func _add_chonk(amount: float) -> void:
+	## Fill width first; leftover / further treats grow overall size up to 2×.
+	if amount <= 0.0:
+		return
+	if _fat < FAT_MAX:
+		var before := _fat
+		_fat = minf(FAT_MAX, _fat + amount)
+		amount -= _fat - before
+	if amount > 0.0:
+		_giant = minf(GIANT_MAX, _giant + amount)
 
 
 func set_customer_gap(_open: bool) -> void:
@@ -343,32 +389,36 @@ func _process(delta: float) -> void:
 	match _state:
 		"hidden":
 			visible = false
-			position = Vector3(HOME_X, HIDDEN_Y, HOME_Z)
+			position = Vector3(_home_x(), _hidden_y(), _home_z() + APPROACH_START_EXTRA + _giant * 0.25)
 			if _timer <= 0.0:
 				## Every 45s: 75% chance to peek (even with a full window).
 				if randf() < PEEK_CHANCE:
 					_state = "rising"
 					_timer = 0.55
 					visible = true
-					position.y = HIDDEN_Y
+					position.y = _hidden_y()
+					position.x = _home_x()
+					position.z = _home_z() + APPROACH_START_EXTRA + _giant * 0.35
 				else:
 					_timer = REPEEK_SEC
 		"rising":
-			position.x = HOME_X
-			position.z = HOME_Z
+			## Walk in from further away as he gets giant.
 			visible = true
 			var t := 1.0 - clampf(_timer / 0.55, 0.0, 1.0)
 			var ease := 1.0 - pow(1.0 - t, 3.0)
-			position.y = lerpf(HIDDEN_Y, SHOWN_Y, ease)
+			var far_z := _home_z() + APPROACH_START_EXTRA + _giant * 0.35
+			position.x = _home_x()
+			position.z = lerpf(far_z, _home_z(), ease)
+			position.y = lerpf(_hidden_y(), _shown_y(), ease)
 			if _timer <= 0.0:
 				_state = "peek"
 				_timer = randf_range(PEEK_MIN_SEC, PEEK_MAX_SEC)
-				position.y = SHOWN_Y
+				position = Vector3(_home_x(), _shown_y(), _home_z())
 		"peek":
-			position.x = HOME_X
-			position.z = HOME_Z
+			position.x = _home_x()
+			position.z = _home_z()
 			visible = true
-			position.y = SHOWN_Y + sin(_bob * 2.4) * 0.012
+			position.y = _shown_y() + sin(_bob * 2.4) * 0.012
 			rotation_degrees.y = FACE_COOK_YAW + sin(_bob * 1.3) * 6.0
 			if _timer <= 0.0:
 				_state = "lowering"
@@ -376,9 +426,9 @@ func _process(delta: float) -> void:
 		"fed_hold":
 			## Proud pose with burger in mouth + hearts; width swells while chewing.
 			visible = true
-			position.x = HOME_X
-			position.z = HOME_Z
-			position.y = SHOWN_Y + sin(_bob * 5.0) * 0.03
+			position.x = _home_x()
+			position.z = _home_z()
+			position.y = _shown_y() + sin(_bob * 5.0) * 0.03
 			rotation_degrees.y = FACE_COOK_YAW + sin(_bob * 4.0) * 10.0
 			var eat_u := 1.0 - clampf(_timer / FED_HOLD_SEC, 0.0, 1.0)
 			_patty_eat_wide = eat_u * eat_u * (3.0 - 2.0 * eat_u)
@@ -400,39 +450,48 @@ func _process(delta: float) -> void:
 			if _timer <= 0.0:
 				_finish_run_away()
 		"lowering":
-			position.x = HOME_X
-			position.z = HOME_Z
+			position.x = _home_x()
+			position.z = _home_z()
 			visible = true
 			var t2 := 1.0 - clampf(_timer / 0.5, 0.0, 1.0)
 			var ease2 := t2 * t2
-			position.y = lerpf(SHOWN_Y, HIDDEN_Y, ease2)
+			position.y = lerpf(_shown_y(), _hidden_y(), ease2)
 			if _timer <= 0.0:
 				_state = "hidden"
 				_timer = REPEEK_SEC
 				visible = false
-				position.y = HIDDEN_Y
+				position = Vector3(_home_x(), _hidden_y(), _home_z() + APPROACH_START_EXTRA + _giant * 0.25)
 				rotation_degrees.y = FACE_COOK_YAW
 				_treat_arm = 0.0
 				_clear_mouth_burger()
-	## Soft squash when petted / fed — keep accumulated width.
+	## Soft squash when petted / fed — keep accumulated width + giant size.
 	if _visual != null:
 		var fat_w := 1.0 + _fat
 		var eat_w := 1.0 + _patty_eat_wide * PATTY_EAT_WIDTH_BOOST
-		var sx := MESH_SCALE * fat_w * eat_w * (1.0 - _pet_squash * 0.08)
-		var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08)
-		var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * (1.0 - _pet_squash * 0.05)
+		var size_m := _size_mul()
+		var sx := MESH_SCALE * fat_w * eat_w * size_m * (1.0 - _pet_squash * 0.08)
+		var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08) * size_m
+		var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
 		_visual.scale = Vector3(sx, sy, sz)
+		## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
+		_visual.position.y = -MESH_SCALE * VISUAL_FOOT_COMP * (size_m - 1.0)
+		## Grow the pet hitbox with the cat.
+		if _area != null:
+			var shape := _area.get_child(0) as CollisionShape3D
+			if shape != null and shape.shape is BoxShape3D:
+				(shape.shape as BoxShape3D).size = Vector3(0.55, 0.55, 0.45) * size_m
+				shape.position = Vector3(0.0, 0.42 * size_m + _visual.position.y, 0.08)
 
 
 func _begin_run_away() -> void:
-	## Lock in the patty chew chonk before bolting.
-	_fat = minf(FAT_MAX, _fat + PATTY_EAT_WIDTH_BOOST)
+	## Lock in the patty chew chonk before bolting (overflow goes to giant size).
+	_add_chonk(PATTY_EAT_WIDTH_BOOST)
 	_patty_eat_wide = 0.0
 	_state = "running"
 	_timer = RUN_SEC
 	_run_from = position
 	## Dash screen-left / street-ward with the burger.
-	_run_to = Vector3(HOME_X + 2.4, HIDDEN_Y + 0.15, HOME_Z + 2.8)
+	_run_to = Vector3(_home_x() + 2.4 + _giant * 0.8, _hidden_y() + 0.15, _home_z() + 2.8 + _giant * 0.6)
 	_run_yaw_from = rotation_degrees.y
 	if _anim != null:
 		_anim.speed_scale = 1.55
@@ -442,7 +501,7 @@ func _finish_run_away() -> void:
 	_state = "hidden"
 	_timer = AFTER_BURGER_HIDE_SEC
 	visible = false
-	position = Vector3(HOME_X, HIDDEN_Y, HOME_Z)
+	position = Vector3(_home_x(), _hidden_y(), _home_z() + APPROACH_START_EXTRA + _giant * 0.25)
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 	_treat_arm = 0.0
 	_clear_mouth_burger()
@@ -461,7 +520,11 @@ func treat_window_open() -> bool:
 
 
 func head_global() -> Vector3:
-	return global_position + Vector3(0.0, 0.48, 0.05)
+	var m := _size_mul()
+	var vis_y := 0.0
+	if _visual != null:
+		vis_y = _visual.position.y
+	return global_position + Vector3(0.0, 0.48 * m + vis_y, 0.05)
 
 
 func hit_test(camera: Camera3D, screen_pos: Vector2, max_px: float = 52.0) -> bool:
@@ -471,7 +534,9 @@ func hit_test(camera: Camera3D, screen_pos: Vector2, max_px: float = 52.0) -> bo
 	if camera.is_position_behind(tip):
 		return false
 	var screen_pt := camera.unproject_position(tip)
-	if screen_pos.distance_to(screen_pt) <= max_px:
+	## Bigger cat = easier to click.
+	var px := max_px * (0.85 + 0.35 * _size_mul())
+	if screen_pos.distance_to(screen_pt) <= px:
 		return true
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
@@ -510,7 +575,7 @@ func feed(kind: String) -> void:
 		_patty_eat_wide = 0.0
 		_feed_full_burger()
 	else:
-		_fat = minf(FAT_MAX, _fat + FAT_PER_TOPPING)
+		_add_chonk(FAT_PER_TOPPING)
 		if _state == "peek":
 			_timer = maxf(_timer, 5.0)
 		_burst_hearts()
@@ -524,7 +589,7 @@ func _feed_full_burger() -> void:
 	_state = "fed_hold"
 	_timer = FED_HOLD_SEC
 	visible = true
-	position.y = SHOWN_Y
+	position.y = _shown_y()
 	if _anim != null:
 		_anim.speed_scale = 1.25
 
@@ -535,10 +600,11 @@ func reset_shift() -> void:
 	_treat_arm = 0.0
 	_pet_squash = 0.0
 	_fat = 0.0
+	_giant = 0.0
 	_patty_eat_wide = 0.0
 	_gap_open = true
 	visible = false
-	position = Vector3(HOME_X, HIDDEN_Y, HOME_Z)
+	position = Vector3(_home_x(), _hidden_y(), _home_z())
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 	_clear_mouth_burger()
 	if _anim != null:
@@ -547,3 +613,4 @@ func reset_shift() -> void:
 		_hearts.emitting = false
 	if _visual != null:
 		_visual.scale = Vector3.ONE * MESH_SCALE
+		_visual.position.y = 0.0

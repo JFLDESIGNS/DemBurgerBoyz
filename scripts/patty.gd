@@ -24,6 +24,8 @@ var first_side_time: float = 0.0 ## cook progress locked in when flipped
 var is_held: bool = false
 var smash_bonus: float = 0.0
 var slot_index: int = -1
+## Multiplayer identity — assigned when spawned in a co-op session.
+var net_id: int = -1
 var perfect_flip: bool = false
 var heating: bool = true
 var heat_mul: float = 1.0 ## 1 = full grill · 0 = hold zone (no cook)
@@ -549,12 +551,12 @@ func _process(delta: float) -> void:
 		_set_hint_mode("melt", "CHEESE MELTING...", Color("FFE082"))
 		_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.01))
 	elif flipped_once and can_scoop():
+		## Freshness disc sits on the meat once cook is done — HOLD or still on heat.
+		_set_hold_meter_visible(true)
+		_refresh_hold_meter()
 		if warm_hold_time > 0.0 or heat_mul <= 0.001:
 			_set_hint_mode("", "", Color.WHITE)
-			_set_hold_meter_visible(true)
-			_refresh_hold_meter()
 		else:
-			_set_hold_meter_visible(false)
 			_set_hint_mode("scoop", "CLICK TO SCOOP", Color("A5D6A7"))
 			_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.008))
 	elif flipped_once:
@@ -630,7 +632,8 @@ func _ensure_hold_meter() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.14, 0.14)
 	_hold_meter.mesh = quad
-	_hold_meter.position = Vector3(0, 0.072, 0)
+	## Just above cheese (~0.0325) so the ring clears melted slices.
+	_hold_meter.position = Vector3(0, 0.052, 0)
 	_hold_meter.rotation_degrees = Vector3(-90, 0, 0)
 	_hold_meter_img = Image.create(HOLD_METER_PX, HOLD_METER_PX, false, Image.FORMAT_RGBA8)
 	_hold_meter_tex = ImageTexture.create_from_image(_hold_meter_img)
@@ -675,10 +678,10 @@ func _refresh_hold_meter() -> void:
 	var mid := float(HOLD_METER_PX - 1) * 0.5
 	var outer := mid * 0.92
 	var inner := mid * 0.58
-	## Yellow (fresh) → red (spoiling); bright enough to read over the meat.
-	var fill := Color("FFEB3B").lerp(Color("E53935"), 1.0 - left_ratio)
-	fill.a = 0.72
-	var track := Color(0.12, 0.12, 0.14, 0.4)
+	## Orange (fresh) → red (spoiling); readable over meat/cheese.
+	var fill := Color("FF9800").lerp(Color("E53935"), 1.0 - left_ratio)
+	fill.a = 0.64
+	var track := Color(0.12, 0.12, 0.14, 0.38)
 	var empty := Color(0, 0, 0, 0)
 	## Sweep clockwise from 12 o'clock.
 	var sweep := left_ratio * TAU
@@ -1430,7 +1433,7 @@ func _build_cheese_slice() -> void:
 
 	_cheese_mat = StandardMaterial3D.new()
 	_cheese_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_cheese_mat.albedo_color = Color(1.0, 0.95, 0.32)
+	_cheese_mat.albedo_color = Color(1.0, 0.82, 0.26)
 	_cheese_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	## Cross bars only — corners are separate flaps (no double-corner look).
@@ -1486,9 +1489,9 @@ func _update_cheese_visual() -> void:
 	var t := clampf(cheese_melt, 0.0, 1.0)
 	var drape := smoothstep(0.12, 0.95, t)
 	drape = drape * drape * (3.0 - 2.0 * drape)
-	## Bright yellow → slightly more orange as it melts.
-	var yellow := Color(1.0, 0.95, 0.32)
-	var orange := Color(0.98, 0.7, 0.2)
+	## Warm cheddar yellow → deeper orange as it melts.
+	var yellow := Color(1.0, 0.82, 0.26)
+	var orange := Color(0.96, 0.55, 0.12)
 	_cheese_mat.albedo_color = yellow.lerp(orange, drape)
 	## Soft tip fold — keep corners on top of the patty (no punch-through).
 	var angle := drape * 5.0

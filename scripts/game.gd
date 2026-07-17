@@ -46,11 +46,15 @@ const CHEESE_PICK_WORLD_EDGE := 0.32
 ## Near-miss drop snaps onto the closest cheesable burger within this radius.
 const CHEESE_SNAP_WORLD := 1.35
 const CHEESE_STICKY_PX := 160.0
-## Smash must hit near the patty center — near-miss right-clicks place a new patty.
-const PATTY_SMASH_WORLD := 0.052
-const PATTY_SMASH_MIN_PX := 14.0
-const PATTY_SMASH_PAD_PX := 2.0
-const PATTY_SMASH_MAX_PX := 18.0 ## Hard screen-radius to the meat center.
+## Smash: hit the visible meat (screen) or the steel disc under it.
+## Tight enough to place beside burgers; loose enough for top-surface clicks.
+const PATTY_SMASH_WORLD := 0.125
+const PATTY_SMASH_MIN_PX := 24.0
+const PATTY_SMASH_PAD_PX := 6.0
+const PATTY_SMASH_MAX_PX := 42.0
+## Sample heights above patty origin — slight lift for cheese, not the hold ring.
+const PATTY_SMASH_Y_LO := 0.02
+const PATTY_SMASH_Y_HI := 0.072
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.038
@@ -148,6 +152,7 @@ var _opening_terr_timer: float = 0.0
 var _opening_terr_spawned: int = 0
 var grill: Array = []
 var spatula_patty = null ## one patty on the spatula at a time
+var spatula_owner_id: int = 0 ## multiplayer: which peer controls the scoop
 var stations: Array = [] ## each: {items, patty, panel, preview, title, plate}
 var warmer_root: Node3D = null
 var warmer_label: Label3D = null
@@ -669,10 +674,36 @@ var dialogue_queue: Array = []
 var complaint_station: int = -1 ## Station held while customer complains about missing items.
 var _was_gui_dragging: bool = false
 
+## --- Multiplayer co-op -------------------------------------------------------
+var mp_enabled: bool = false
+var _mp_applying: bool = false ## true while applying a remote/local RPC action
+var _mp_cursor_accum: float = 0.0
+var _mp_drag_accum: float = 0.0
+var _mp_lobby_root: Control = null
+var _mp_room_list: VBoxContainer = null
+var _mp_status_label: Label = null
+var _mp_name_edit: LineEdit = null
+var _mp_relay_edit: LineEdit = null
+var _mp_host_btn: Button = null
+var _mp_ready_btn: Button = null
+var _mp_start_coop_btn: Button = null
+var _mp_back_btn: Button = null
+var _mp_join_local_btn: Button = null
+var _mp_refresh_btn: Button = null
+var _mp_code_edit: LineEdit = null
+var _mp_code_join_btn: Button = null
+var _mp_host_addr_label: Label = null
+var _mp_remote_cursors: Dictionary = {} ## peer_id -> Control
+var _mp_cursor_layer: Control = null
+var _mp_next_customer_net_id: int = 1
+var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
+var multiplayer_btn: Button = null
+
 
 func _ready() -> void:
 	randomize()
 	## Always boot fullscreen — no windowed chrome / minimize-on-launch.
+	## Multiplayer lobby switches to windowed so two instances can share a PC.
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	## Soft edges on 3D characters / steel; FXAA helps Label3D + UI text a bit too.
 	var vp := get_viewport()
@@ -761,6 +792,7 @@ func _ready() -> void:
 		_sfx_click()
 		_restart()
 	)
+	_setup_multiplayer_ui()
 	game_over_panel.visible = false
 	flash_label.visible = false
 	_update_hud()
@@ -849,7 +881,8 @@ func _setup_start_logo() -> void:
 	if title:
 		title.visible = false
 	if start_logo != null and is_instance_valid(start_logo):
-		_start_logo_hover()
+		_stop_logo_hover()
+		start_logo.position.y = 8.0
 		return
 	if not ResourceLoader.exists(LOGO_TEX_PATH):
 		if title:
@@ -860,10 +893,10 @@ func _setup_start_logo() -> void:
 		if title:
 			title.visible = true
 		return
-	## Extra vertical room so a slow bob doesn't fight the VBox layout.
+	## Extra vertical room so layout stays stable (no bob).
 	start_logo_wrap = Control.new()
 	start_logo_wrap.name = "BurgerPalsLogoWrap"
-	start_logo_wrap.custom_minimum_size = Vector2(300, 324)
+	start_logo_wrap.custom_minimum_size = Vector2(220, 236)
 	start_logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	start_logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(start_logo_wrap)
@@ -874,33 +907,24 @@ func _setup_start_logo() -> void:
 	start_logo.texture = tex
 	start_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	start_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	start_logo.custom_minimum_size = Vector2(300, 300)
-	start_logo.size = Vector2(300, 300)
-	start_logo.position = Vector2(0, 12)
+	start_logo.custom_minimum_size = Vector2(220, 220)
+	start_logo.size = Vector2(220, 220)
+	start_logo.position = Vector2(0, 8)
 	start_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	start_logo_wrap.add_child(start_logo)
-	center.offset_top = -260.0
-	center.offset_bottom = 260.0
-	center.offset_left = -360.0
-	center.offset_right = 360.0
-	_start_logo_hover()
+	## Tall enough for logo + blurb + Solo + Multiplayer.
+	center.offset_top = -300.0
+	center.offset_bottom = 300.0
+	center.offset_left = -380.0
+	center.offset_right = 380.0
+	_stop_logo_hover()
 
 
 func _start_logo_hover() -> void:
-	## Gentle up/down float on the title screen.
-	if start_logo == null or not is_instance_valid(start_logo):
-		return
-	if start_logo_tween != null and is_instance_valid(start_logo_tween):
-		start_logo_tween.kill()
-	var base_y := 12.0
-	var amp := 14.0
-	start_logo.position.y = base_y
-	start_logo_tween = create_tween()
-	start_logo_tween.set_loops()
-	start_logo_tween.tween_property(start_logo, "position:y", base_y - amp, 2.2) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	start_logo_tween.tween_property(start_logo, "position:y", base_y + amp, 2.2) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	## Hover disabled — keep logo still on the home screen.
+	_stop_logo_hover()
+	if start_logo != null and is_instance_valid(start_logo):
+		start_logo.position.y = 8.0
 
 
 func _stop_logo_hover() -> void:
@@ -1016,6 +1040,7 @@ func _restart() -> void:
 
 
 func _process(delta: float) -> void:
+	_mp_update_cursors(delta)
 	if not playing:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
@@ -1084,22 +1109,35 @@ func _process(delta: float) -> void:
 			_open_service_window()
 	else:
 		# _update_opening_terror_ambush(delta)
-		spawn_timer -= delta
-		var cap := _customer_cap()
-		if not shift_closing and spawn_timer <= 0.0 and customers.is_empty():
-			# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
-			# 	_spawn_terrorist_wave()
-			# 	spawn_timer = _next_spawn_delay()
-			if customers.size() < cap:
-				_spawn_customer()
-				spawn_timer = _next_spawn_delay()
+		## In co-op, only the host spawns customers (then replicates).
+		if not mp_enabled or NetManager.is_host():
+			spawn_timer -= delta
+			var cap := _customer_cap()
+			if not shift_closing and spawn_timer <= 0.0 and customers.is_empty():
+				# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
+				# 	_spawn_terrorist_wave()
+				# 	spawn_timer = _next_spawn_delay()
+				if customers.size() < cap:
+					_spawn_customer()
+					spawn_timer = _next_spawn_delay()
 
 	rush_mode = customers.size() >= maxi(2, _customer_cap() - 1) and day >= 2
 
 	if shift_closing and customers.is_empty() and not service_window_closed:
-		_end_day()
+		if mp_enabled:
+			if NetManager.is_host():
+				mp_end_day.rpc()
+		else:
+			_end_day()
 	_update_station_freshness(delta)
 	_update_hud()
+	if mp_enabled and dragging_patty != null and is_instance_valid(dragging_patty):
+		_mp_drag_accum += delta
+		if _mp_drag_accum >= 0.05:
+			_mp_drag_accum = 0.0
+			_mp_send_patty_pose(dragging_patty)
+	if mp_enabled and spatula_patty != null and is_instance_valid(spatula_patty):
+		_mp_send_patty_pose(spatula_patty, true)
 
 
 func _update_station_freshness(delta: float) -> void:
@@ -1256,6 +1294,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _try_window_cat_click(event.position):
 				return
 			if spatula_patty != null:
+				## Remote cook is carrying this scoop — don't steal input.
+				if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
+					return
 				## Still dragging from Build — drop happens on release.
 				if spatula_lmb_held and spatula_from_build:
 					return
@@ -1265,11 +1306,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 			## Left click: flip / scoop / start drag — never spawn a patty.
 			_try_grill_raycast(event.position, false)
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			## Squish only dead-center on the meat; anywhere else on steel places a patty.
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			## Squish burger under cursor; empty steel places a new patty.
 			var smash_target = _pick_patty_for_smash(event.position)
 			if smash_target != null:
-				smash_target.smash()
+				_smash_grill_patty(smash_target)
+				get_viewport().set_input_as_handled()
 			else:
 				_try_grill_raycast(event.position, true)
 
@@ -1554,7 +1596,7 @@ func _try_grill_right_click(screen_pos: Vector2) -> bool:
 		return false
 	var smash_target = _pick_patty_for_smash(screen_pos)
 	if smash_target != null:
-		smash_target.smash()
+		_smash_grill_patty(smash_target)
 	else:
 		_try_grill_raycast(screen_pos, true)
 	return true
@@ -2195,10 +2237,10 @@ func _build_burner_flames() -> void:
 		burner_flame_data.append({
 			"base": base,
 			"phase": randf() * TAU,
-			"spd": randf_range(8.0, 16.0),
-			"amp": randf_range(0.006, 0.012),
-			"lean": randf_range(-8.0, 8.0),
-			"pulse": randf_range(0.9, 1.4),
+			"spd": randf_range(4.5, 8.5),
+			"amp": randf_range(0.0025, 0.0055),
+			"lean": randf_range(-3.5, 3.5),
+			"pulse": randf_range(0.7, 1.05),
 			"sc": mi.scale.x,
 			"tri_h": TRI_H,
 			"tip_budget": tip_budget,
@@ -2329,23 +2371,23 @@ func _update_burner_flames(delta: float) -> void:
 		var tip_budget: float = float(d["tip_budget"])
 		var tri_h: float = float(d["tri_h"])
 		var pitch: float = float(d.get("pitch", -22.0))
-		var wob_x := sin(ph) * amp + sin(ph * 1.7 + 0.4) * amp * 0.55
-		var wob_z := cos(ph * 0.9 + 0.6) * amp * 0.35
-		var wob_y := absf(sin(ph * 1.35)) * amp * 0.3
+		var wob_x := sin(ph) * amp + sin(ph * 1.7 + 0.4) * amp * 0.28
+		var wob_z := cos(ph * 0.9 + 0.6) * amp * 0.18
+		var wob_y := absf(sin(ph * 1.35)) * amp * 0.22
 		var pos := base + Vector3(wob_x, wob_y, wob_z)
 		pos.z = clampf(pos.z, -0.03, 0.02)
-		var pulse := 0.94 + 0.12 * absf(sin(ph * float(d["pulse"])))
+		var pulse := 0.96 + 0.07 * absf(sin(ph * float(d["pulse"])))
 		var sc: float = float(d["sc"]) * pulse
 		## Soft tip clamp under the steel lip.
 		var tip_y := pos.y + tri_h * 0.55 * sc * cos(deg_to_rad(absf(pitch)))
 		if tip_y > tip_budget:
 			pos.y -= (tip_y - tip_budget) * 0.55
 		mi.position = pos
-		mi.scale = Vector3(sc * (0.94 + 0.08 * sin(ph * 2.1)), sc, sc)
+		mi.scale = Vector3(sc * (0.97 + 0.04 * sin(ph * 1.6)), sc, sc)
 		mi.rotation_degrees = Vector3(
-			pitch + sin(ph * 1.1) * 3.0,
-			180.0 + float(d["lean"]) + sin(ph * 0.8) * 6.0,
-			cos(ph * 1.3) * 4.0
+			pitch + sin(ph * 1.1) * 1.4,
+			180.0 + float(d["lean"]) + sin(ph * 0.8) * 2.2,
+			cos(ph * 1.3) * 1.6
 		)
 		burner_flame_data[i] = d
 
@@ -2738,9 +2780,22 @@ func _trash_spatula_patty() -> void:
 	if spatula_patty == null:
 		_flash("Nothing on the spatula to trash", Color("B0BEC5"))
 		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
+		return
+	if mp_enabled and not _mp_applying and int(spatula_patty.get("net_id")) >= 0:
+		mp_trash_patty.rpc(int(spatula_patty.net_id))
+		return
+	_trash_spatula_patty_local()
+
+
+func _trash_spatula_patty_local() -> void:
+	if spatula_patty == null:
+		_flash("Nothing on the spatula to trash", Color("B0BEC5"))
+		return
 	if is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
@@ -2755,6 +2810,15 @@ func _trash_single_grill_patty(patty: Area3D) -> void:
 	## Toss one grill patty — does not clear the whole flat-top.
 	if patty == null or not is_instance_valid(patty):
 		return
+	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+		mp_trash_patty.rpc(int(patty.net_id))
+		return
+	_trash_single_grill_patty_local(patty)
+
+
+func _trash_single_grill_patty_local(patty: Area3D) -> void:
+	if patty == null or not is_instance_valid(patty):
+		return
 	if dragging_patty == patty:
 		dragging_patty = null
 		drag_did_move = false
@@ -2763,6 +2827,9 @@ func _trash_single_grill_patty(patty: Area3D) -> void:
 	var idx: int = int(patty.slot_index)
 	if idx >= 0 and idx < grill.size() and grill[idx] == patty:
 		grill[idx] = null
+	if spatula_patty == patty:
+		spatula_patty = null
+		spatula_owner_id = 0
 	patty.queue_free()
 	if game_audio and game_audio.has_method("play_trash"):
 		game_audio.play_trash()
@@ -2824,8 +2891,14 @@ func _refresh_grill_ui_button(_index: int) -> void:
 func _toggle_grill_power(_index: int) -> void:
 	if not playing:
 		return
+	if mp_enabled and not _mp_applying:
+		mp_toggle_grill.rpc(not grill_on)
+		return
+	_toggle_grill_power_local(not grill_on)
+
+
+func _toggle_grill_power_local(turning_on: bool) -> void:
 	grill_ignore_pad_until = Time.get_ticks_msec() / 1000.0 + 0.35
-	var turning_on := not grill_on
 	if not turning_on:
 		_sfx_click()
 	_set_grill_on(turning_on)
@@ -3020,37 +3093,62 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 
 
 func _pick_patty_for_smash(screen_pos: Vector2):
-	## Smash only when the cursor is near the meat center (screen + world).
-	## Plane-near-miss alone does NOT smash — that places a new patty instead.
+	## Right-click on the burger → smash. Empty steel / near-miss → place.
+	## Screen-space first: clicking the raised top projects past the grill-plane disc.
 	if _blocks_grill_pick(screen_pos):
 		return null
 	if camera == null:
 		return null
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	var best = null
-	var best_d := 9999.0
+	var best_score := 9999.0
 	for p in grill:
 		if p == null or not is_instance_valid(p) or p.is_held:
 			continue
-		var lift: Vector3 = p.global_position + Vector3(0, 0.03, 0)
-		if camera.is_position_behind(lift):
+		## Tall hit column: meat mid → cheese / hold-ring so top clicks still count.
+		var screen_d := 9999.0
+		var pick_px := PATTY_SMASH_MIN_PX
+		var any_front := false
+		for i in 4:
+			var t := float(i) / 3.0
+			var y := lerpf(PATTY_SMASH_Y_LO, PATTY_SMASH_Y_HI, t)
+			var sample: Vector3 = p.global_position + Vector3(0, y, 0)
+			if camera.is_position_behind(sample):
+				continue
+			any_front = true
+			var screen_pt := camera.unproject_position(sample)
+			var d := screen_pos.distance_to(screen_pt)
+			if d < screen_d:
+				screen_d = d
+				pick_px = clampf(
+					_patty_screen_pick_radius_px(sample, PATTY_SMASH_WORLD, PATTY_SMASH_PAD_PX),
+					PATTY_SMASH_MIN_PX,
+					PATTY_SMASH_MAX_PX
+				)
+		if not any_front:
 			continue
-		var screen_pt := camera.unproject_position(lift)
-		var screen_d := screen_pos.distance_to(screen_pt)
-		if screen_d > PATTY_SMASH_MAX_PX:
-			continue
-		if plane_hit != Vector3.ZERO:
+		var on_meat := screen_d <= pick_px
+		if not on_meat and plane_hit != Vector3.ZERO:
 			var world_d := Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length()
-			if world_d > PATTY_SMASH_WORLD:
-				continue
-		else:
-			## No plane hit — still require a tight screen center hit.
-			if screen_d > PATTY_SMASH_MIN_PX:
-				continue
-		if screen_d < best_d:
-			best_d = screen_d
+			on_meat = world_d <= PATTY_SMASH_WORLD
+		if not on_meat:
+			continue
+		var score := screen_d
+		if plane_hit != Vector3.ZERO:
+			score = minf(score, Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() * 80.0)
+		if score < best_score:
+			best_score = score
 			best = p
 	return best
+
+
+func _smash_grill_patty(patty: Area3D) -> void:
+	if patty == null or not is_instance_valid(patty):
+		return
+	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+		mp_patty_smash.rpc(int(patty.net_id))
+		return
+	patty.smash()
 
 
 func _patty_screen_pick_radius_px(world_pt: Vector3, edge_r: float = -1.0, pad_px: float = -1.0) -> float:
@@ -3164,10 +3262,17 @@ func _try_place_patty_at(world_pos: Vector3) -> void:
 	if place_pos == Vector3.ZERO:
 		_flash("No open spot — clear some space", Color("EF5350"))
 		return
+	if mp_enabled and not _mp_applying:
+		if NetManager.is_host():
+			var nid := NetManager.alloc_net_id()
+			mp_spawn_patty.rpc(nid, idx, place_pos.x, place_pos.z)
+		else:
+			mp_request_spawn_patty.rpc_id(1, place_pos.x, place_pos.z)
+		return
 	_spawn_patty_at(idx, place_pos)
 
 
-func _spawn_patty_at(idx: int, world_pos: Vector3) -> void:
+func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 	if not playing:
 		return
 	if idx < 0 or idx >= GRILL_SLOTS:
@@ -3181,6 +3286,7 @@ func _spawn_patty_at(idx: int, world_pos: Vector3) -> void:
 	var z := world_pos.z
 	var p = PattyScript.new()
 	p.slot_index = idx
+	p.net_id = net_id if net_id >= 0 else (-1 if not mp_enabled else NetManager.alloc_net_id())
 	p.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
 	p.heating = true
 	p.position = Vector3(x, p.base_y, z)
@@ -3424,6 +3530,9 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 	if not patty.flipped_once or not patty.can_scoop():
 		_flash("Finish cooking before flicking to Build", Color("FFA726"))
 		return
+	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+		mp_commit_patty_build.rpc(int(patty.net_id))
+		return
 	var idx: int = patty.slot_index
 	if idx >= 0 and idx < grill.size():
 		grill[idx] = null
@@ -3476,6 +3585,9 @@ func _try_drag_patty_to_station(patty: Area3D, station_idx: int) -> void:
 	if spatula_patty != null:
 		_reject_second_scoop("Already holding a patty")
 		return
+	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+		mp_commit_patty_build.rpc(int(patty.net_id))
+		return
 	_pickup_patty(patty)
 	if spatula_patty != null:
 		_drop_spatula_on_station(station_idx)
@@ -3483,6 +3595,15 @@ func _try_drag_patty_to_station(patty: Area3D, station_idx: int) -> void:
 
 func _on_patty_clicked(patty: Area3D) -> void:
 	if not playing:
+		return
+	if mp_enabled and not _mp_applying and patty != null and int(patty.get("net_id")) >= 0:
+		mp_patty_click.rpc(int(patty.net_id))
+		return
+	_on_patty_clicked_local(patty)
+
+
+func _on_patty_clicked_local(patty: Area3D) -> void:
+	if not playing or patty == null or not is_instance_valid(patty):
 		return
 	## Must flip before scooping - never grab a pre-flip patty.
 	if not patty.flipped_once:
@@ -3516,6 +3637,10 @@ func _pickup_patty(patty: Area3D) -> void:
 	patty.heating = false
 	patty.visible = true
 	spatula_patty = patty
+	if not mp_enabled:
+		spatula_owner_id = 0
+	elif spatula_owner_id == 0:
+		spatula_owner_id = NetManager.my_id()
 	spatula_last_mouse = get_viewport().get_mouse_position()
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
@@ -3531,6 +3656,10 @@ func _pickup_patty(patty: Area3D) -> void:
 func _update_held_spatula_patty(delta: float = 0.016) -> void:
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		spatula_patty = null
+		spatula_owner_id = 0
+		return
+	## Remote scoop — pose is driven by mp_patty_pose, not local mouse.
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
 		return
 	if flicking_patty == spatula_patty:
 		return
@@ -3664,6 +3793,8 @@ func _try_place_spatula_on_grill(screen_pos: Vector2) -> bool:
 func _place_spatula_on_grill(hit_pos: Vector3) -> void:
 	if spatula_patty == null:
 		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
+		return
 	var idx := _first_empty_slot()
 	if idx < 0:
 		_flash("Grill full — clear a spot first", Color("EF5350"))
@@ -3680,8 +3811,18 @@ func _place_spatula_on_grill(hit_pos: Vector3) -> void:
 		if pos == Vector3.ZERO:
 			_flash("Too crowded — clear a spot first", Color("EF5350"))
 			return
+	if mp_enabled and not _mp_applying and int(spatula_patty.get("net_id")) >= 0:
+		mp_place_spatula.rpc(int(spatula_patty.net_id), idx, pos.x, pos.z)
+		return
+	_place_spatula_on_grill_local(idx, pos)
+
+
+func _place_spatula_on_grill_local(idx: int, pos: Vector3) -> void:
+	if spatula_patty == null:
+		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
@@ -6207,12 +6348,12 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 	pmat.damping_max = 0.85
 	pmat.scale_min = 0.8
 	pmat.scale_max = 1.9
-	pmat.color = Color(0.96, 0.97, 0.99, 0.22)
+	pmat.color = Color(0.96, 0.97, 0.99, 0.14)
 	var fade := Gradient.new()
 	fade.add_point(0.0, Color(1, 1, 1, 0.0))
-	fade.add_point(0.12, Color(0.98, 0.98, 1.0, 0.32))
-	fade.add_point(0.4, Color(0.95, 0.96, 0.98, 0.16))
-	fade.add_point(0.72, Color(0.82, 0.72, 0.58, 0.07)) ## faint brown fleck tint late
+	fade.add_point(0.12, Color(0.98, 0.98, 1.0, 0.20))
+	fade.add_point(0.4, Color(0.95, 0.96, 0.98, 0.10))
+	fade.add_point(0.72, Color(0.82, 0.72, 0.58, 0.04)) ## faint brown fleck tint late
 	fade.add_point(1.0, Color(0.9, 0.9, 0.92, 0.0))
 	var fade_tex := GradientTexture1D.new()
 	fade_tex.gradient = fade
@@ -6225,7 +6366,7 @@ func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
 	draw.albedo_texture = _get_oil_smoke_texture()
-	draw.albedo_color = Color(0.97, 0.97, 0.99, 0.38)
+	draw.albedo_color = Color(0.97, 0.97, 0.99, 0.24)
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.vertex_color_use_as_albedo = true
@@ -6253,7 +6394,7 @@ func _get_oil_smoke_texture() -> ImageTexture:
 			var dy := (float(y) - mid) / mid
 			var r := sqrt(dx * dx + dy * dy)
 			var a := clampf(1.0 - r, 0.0, 1.0)
-			a = pow(a, 1.75) * 0.42
+			a = pow(a, 1.75) * 0.28
 			if a < 0.015:
 				img.set_pixel(x, y, Color(0, 0, 0, 0))
 			else:
@@ -7611,34 +7752,11 @@ func _start_radio_fade_in() -> void:
 
 
 func _build_prep_ingredients_prop() -> void:
-	## Wire baskets + condiments on the counter left of the grill (Build zone).
+	## Hidden for now — wire baskets / produce art clutters the Build side.
 	if prep_ingredients_prop != null and is_instance_valid(prep_ingredients_prop):
 		prep_ingredients_prop.queue_free()
 		prep_ingredients_prop = null
-	var tex := FoodSpritesScript.prep_ingredients_tex()
-	if tex == null:
-		push_warning("Prep ingredients texture missing")
-		return
-	var prop := MeshInstance3D.new()
-	prop.name = "PrepIngredients"
-	var quad := QuadMesh.new()
-	quad.size = PREP_INGREDIENTS_SIZE
-	prop.mesh = quad
-	prop.position = PREP_INGREDIENTS_POS
-	prop.rotation_degrees = PREP_INGREDIENTS_ROT
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_texture = tex
-	mat.albedo_color = PREP_INGREDIENTS_ALBEDO
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = false
-	mat.render_priority = 4
-	prop.material_override = mat
-	prop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	grill_root.add_child(prop)
-	prep_ingredients_prop = prop
+	return
 
 
 func _make_toon_wood_material(tex: Texture2D, tint: Color = Color.WHITE, uv_scale: Vector3 = Vector3(1.5, 1.1, 1.0)) -> StandardMaterial3D:
@@ -9098,22 +9216,10 @@ func _apply_prep_ui_overlay_layout() -> void:
 
 
 func _build_prep_ui_overlay() -> void:
-	var ui_root: Control = get_node_or_null("UI/Root")
-	if ui_root == null:
-		return
+	## Hidden for now — tomatoes/onions/buns art over the Build counter.
 	if prep_ui_overlay != null and is_instance_valid(prep_ui_overlay):
 		prep_ui_overlay.queue_free()
 		prep_ui_overlay = null
-	prep_ui_overlay = TextureRect.new()
-	prep_ui_overlay.name = "PrepUiOverlay"
-	prep_ui_overlay.texture = FoodSpritesScript.prep_ingredients_tex()
-	prep_ui_overlay.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-	prep_ui_overlay.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	prep_ui_overlay.modulate = PREP_UI_MODULATE
-	prep_ui_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	prep_ui_overlay.z_index = 2
-	ui_root.add_child(prep_ui_overlay)
-	_apply_prep_ui_overlay_layout()
 
 
 func _apply_build_zone_settings(s: Dictionary) -> void:
@@ -9727,6 +9833,7 @@ func _clear_spatula() -> void:
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
@@ -9945,7 +10052,6 @@ func _sync_combat_audio() -> void:
 
 func _spawn_customer() -> void:
 	var order: Array[String] = GameDataScript.generate_order(difficulty)
-	var c = CustomerScript.new()
 	var color: Color = GameDataScript.CUSTOMER_COLORS[randi() % GameDataScript.CUSTOMER_COLORS.size()]
 	var patience := lerpf(62.0, 30.0, difficulty) + randf_range(-3, 5)
 	if day == 1:
@@ -9956,7 +10062,26 @@ func _spawn_customer() -> void:
 	elif day == 3:
 		patience += 10.0
 	var lane := customers.size()
-	c.setup(order, color, patience, lane)
+	if mp_enabled:
+		if not NetManager.is_host() and not _mp_applying:
+			return
+		var nid := _mp_next_customer_net_id
+		_mp_next_customer_net_id += 1
+		var order_packed: Array = []
+		for o in order:
+			order_packed.append(str(o))
+		if NetManager.is_host():
+			mp_spawn_customer.rpc(nid, order_packed, color.r, color.g, color.b, patience, lane)
+			return
+	_spawn_customer_local(order, color, patience, lane, -1)
+
+
+func _spawn_customer_local(order: Array, color: Color, patience: float, lane: int, net_id: int = -1) -> void:
+	var typed_order: Array[String] = []
+	for o in order:
+		typed_order.append(str(o))
+	var c = CustomerScript.new()
+	c.setup(typed_order, color, patience, lane)
 	## Stand on the sidewalk — raised so more torso shows in the window.
 	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
 	c.target_x = CustomerScript.lane_x_for(lane)
@@ -9966,6 +10091,9 @@ func _spawn_customer() -> void:
 	c.arrived.connect(_on_customer_arrived)
 	c.patience_expired.connect(_on_customer_left.bind(true))
 	c.served.connect(func(cust, _pay): _on_customer_left(cust, false))
+	if net_id >= 0:
+		c.set_meta("mp_net_id", net_id)
+		_mp_customer_net_ids[c.get_instance_id()] = net_id
 	customers_root.add_child(c)
 	customers.append(c)
 
@@ -10768,6 +10896,8 @@ func _build_station_ui() -> void:
 		var btns := HBoxContainer.new()
 		btns.alignment = BoxContainer.ALIGNMENT_CENTER
 		btns.add_theme_constant_override("separation", 5)
+		## Nudge left so bell / trash / All sit clear of the burner flames.
+		btns.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		root_v.add_child(btns)
 
 		var fresh_label := Label.new()
@@ -10826,6 +10956,12 @@ func _build_station_ui() -> void:
 			_flash("%s cleared" % _station_label(si), Color("B0BEC5"))
 		)
 		btns.add_child(clear_one)
+
+		## Spacer on the right shifts the centered button cluster left a bit.
+		var btn_nudge := Control.new()
+		btn_nudge.custom_minimum_size = Vector2(48, 1)
+		btn_nudge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btns.add_child(btn_nudge)
 
 		plate_wrap.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed:
@@ -11643,8 +11779,22 @@ func _drop_spatula_on_station(index: int) -> void:
 		return
 	if index < 0 or index >= STATION_COUNT:
 		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
+		return
+	if mp_enabled and not _mp_applying and int(spatula_patty.get("net_id")) >= 0:
+		mp_drop_to_build.rpc(int(spatula_patty.net_id), index)
+		return
+	_drop_spatula_on_station_local(index)
+
+
+func _drop_spatula_on_station_local(index: int) -> void:
+	if not playing or spatula_patty == null:
+		return
+	if index < 0 or index >= STATION_COUNT:
+		return
 	var patty = spatula_patty
 	spatula_patty = null
+	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
 	_commit_patty_to_build(patty)
@@ -11765,7 +11915,7 @@ func _ensure_cheese_ghost() -> void:
 	cheese_ghost_mat = StandardMaterial3D.new()
 	cheese_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cheese_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	cheese_ghost_mat.albedo_color = Color(1.0, 0.95, 0.32, 0.42)
+	cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.26, 0.42)
 	cheese_ghost_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	cheese_ghost.material_override = cheese_ghost_mat
 	cheese_ghost.visible = false
@@ -11784,7 +11934,7 @@ func _update_cheese_ghost() -> void:
 		cheese_ghost.global_basis = target.get_cheese_seat_basis()
 		cheese_ghost.scale = Vector3.ONE
 		if cheese_ghost_mat:
-			cheese_ghost_mat.albedo_color = Color(1.0, 0.95, 0.32, pulse + 0.12)
+			cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.26, pulse + 0.12)
 	else:
 		_cheese_hover_patty = null
 		## Float ghost over the grill plane under the cursor.
@@ -11798,7 +11948,7 @@ func _update_cheese_ghost() -> void:
 			## Dimmer when not over a valid patty.
 			var blocked: bool = target != null and not _can_put_cheese_on_grill_patty(target)
 			cheese_ghost_mat.albedo_color = Color(1.0, 0.55, 0.35, pulse * 0.7) if blocked \
-				else Color(1.0, 0.95, 0.32, pulse * 0.75)
+				else Color(1.0, 0.82, 0.26, pulse * 0.75)
 
 
 func _can_put_cheese_on_grill_patty(patty) -> bool:
@@ -11933,6 +12083,14 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if target.has_cheese:
 		_flash("That patty already has cheese", Color("FFCC80"))
 		return
+	if mp_enabled and not _mp_applying and int(target.get("net_id")) >= 0:
+		cheese_held = false
+		_cheese_hover_patty = null
+		_pending_cheese_drag = false
+		if cheese_ghost and is_instance_valid(cheese_ghost):
+			cheese_ghost.visible = false
+		mp_cheese_patty.rpc(int(target.net_id))
+		return
 	if target.add_cheese():
 		cheese_held = false
 		_cheese_hover_patty = null
@@ -11998,6 +12156,15 @@ func _add_cheese_to_warmer_patty(_station_index: int) -> bool:
 
 
 func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool = true) -> void:
+	if not playing or id == "":
+		return
+	if mp_enabled and not _mp_applying:
+		mp_add_ingredient.rpc(station_index, id)
+		return
+	_add_ingredient_to_station_local(station_index, id, play_sfx)
+
+
+func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: bool = true) -> void:
 	if not playing or id == "":
 		return
 	if id == "bun_bottom":
@@ -12372,7 +12539,9 @@ func _station_item_build_scale(item: String) -> float:
 		return STATION_INGREDIENT_SCALE * 1.128 ## was 1.2 — 6% smaller
 	if item == "onion":
 		return STATION_INGREDIENT_SCALE * 0.7
-	if item == "pickle" or item == "tomato":
+	if item == "tomato":
+		return STATION_INGREDIENT_SCALE * 0.825
+	if item == "pickle":
 		return STATION_INGREDIENT_SCALE * 0.5
 	if item == "bacon":
 		return STATION_INGREDIENT_SCALE * 0.7
@@ -12456,6 +12625,9 @@ func _refresh_spatula_ui() -> void:
 func _try_auto_serve() -> void:
 	## Hand off as soon as a station matches a waiting ticket perfectly.
 	if not playing or _auto_serving or _serve_fly_busy:
+		return
+	## Co-op: only host auto-serves so we don't double-fire RPCs.
+	if mp_enabled and not NetManager.is_host():
 		return
 	var waiting: Array = []
 	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
@@ -12693,7 +12865,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
-	var step_y := 12.0 * layer_scale
+	## Mild pressed look — barely tighter than the Build board.
+	var step_y := 11.25 * layer_scale
 	var layer_w := mini(320.0, stage_w * 0.96)
 	var stack_lift := 0.0
 
@@ -12707,8 +12880,12 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var min_y := INF
 	var max_y := -INF
 	var top_row: Control = null
+	var bottom_row: Control = null
 	var bun_rows: Array[Control] = []
 	var patty_rows: Array[Control] = []
+	## Condiment / thin toppings get pressed flat on the way to the mouth.
+	const FLY_SQUASH_IDS: Array[String] = ["mustard", "ketchup", "bacon", "pickle", "onion"]
+	const FLY_TOPPING_SQUISH := 0.48
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -12726,8 +12903,9 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 				layer_key = "patty_cheese"
 		var is_bun := item == "bun_bottom" or item == "bun_top"
 		var is_patty := item == "patty"
-		## Don't vertically squash buns or patties for the fly stack.
-		var h_squish := 1.0 if (is_bun or is_patty) else 0.92
+		var squash_flat := FLY_SQUASH_IDS.has(item)
+		## Don't vertically squash buns or patties; flatten sauces / thin toppings after fit.
+		var h_squish := 1.0 if (is_bun or is_patty or squash_flat) else 0.92
 		var build_scale := _station_item_build_scale(layer_key)
 		var h_base := _layer_img_height(layer_key) * layer_scale * h_squish * build_scale
 		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
@@ -12745,6 +12923,9 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
 		this_w = fit.x
 		var h := fit.y
+		## Force flat toppings into a shorter box (aspect fit alone won't squash).
+		if squash_flat:
+			h = maxf(8.0, h * FLY_TOPPING_SQUISH)
 		var row := Control.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.custom_minimum_size = Vector2(this_w, h)
@@ -12754,9 +12935,13 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			origin_y - stack_lift - float(stack_i) * step_y - h * 0.72
 		)
 		if item == "bun_bottom":
-			stack_lift += 10.0 * layer_scale
+			## Mild heel snug (Build uses 10).
+			stack_lift += 7.5 * layer_scale
+			bottom_row = row
 			bun_rows.append(row)
 		if item == "bun_top":
+			## Light crown seat onto toppings.
+			row.position.y += 5.0 * layer_scale
 			top_row = row
 			bun_rows.append(row)
 		if is_patty:
@@ -12765,7 +12950,9 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var tr := TextureRect.new()
 		tr.texture = layer_tex
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		## SCALE fills the squashed box; aspect-centered would ignore the short height.
+		tr.stretch_mode = TextureRect.STRETCH_SCALE if squash_flat \
+			else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.custom_minimum_size = Vector2(this_w, h)
 		tr.size = Vector2(this_w, h)
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -12778,7 +12965,14 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		max_y = maxf(max_y, row.position.y + h)
 
 	var pivot := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
-	return {"stack": stack, "top_row": top_row, "pivot": pivot, "bun_rows": bun_rows, "patty_rows": patty_rows}
+	return {
+		"stack": stack,
+		"top_row": top_row,
+		"bottom_row": bottom_row,
+		"pivot": pivot,
+		"bun_rows": bun_rows,
+		"patty_rows": patty_rows,
+	}
 
 
 func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Callable) -> void:
@@ -12803,6 +12997,8 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var stack: Control = built["stack"]
 	var bun_rows: Array = built.get("bun_rows", [])
 	var patty_rows: Array = built.get("patty_rows", [])
+	var top_row: Control = built.get("top_row", null)
+	var bottom_row: Control = built.get("bottom_row", null)
 	stack.pivot_offset = built["pivot"]
 	stack.scale = Vector2.ONE
 
@@ -12813,8 +13009,18 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if preview != null and is_instance_valid(preview):
 		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
-	var squashed := Vector2(1.04, 1.0)
+	var squashed := Vector2(1.06, 1.0)
 	var fly_end_scale := Vector2(0.9, 0.9)
+	## Extra pinch so heels/crowns hug the fillings on the way to the mouth.
+	var bun_pinch_px := 3.5
+	var bottom_base_y := bottom_row.position.y if bottom_row != null else 0.0
+	var top_base_y := top_row.position.y if top_row != null else 0.0
+
+	var apply_bun_pinch := func(amount: float) -> void:
+		if bottom_row != null and is_instance_valid(bottom_row):
+			bottom_row.position.y = bottom_base_y - amount ## up into fillings
+		if top_row != null and is_instance_valid(top_row):
+			top_row.position.y = top_base_y + amount ## down onto fillings
 
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
@@ -12834,19 +13040,19 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	tw.set_parallel(false)
 	tw.tween_interval(0.04)
 
-	tw.tween_method(func(t: float): apply_stack_scale.call(Vector2.ONE.lerp(squashed, t)), 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	var squash_step := func(t: float) -> void:
+		apply_stack_scale.call(Vector2.ONE.lerp(squashed, t))
+		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px, t))
+	tw.tween_method(squash_step, 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
-	tw.tween_method(
-		func(t: float) -> void:
-			if not is_instance_valid(stack):
-				return
-			var eased := t * t * (3.0 - 2.0 * t)
-			stack.global_position = start_pos.lerp(mouth_pos, eased)
-			apply_stack_scale.call(squashed.lerp(fly_end_scale, eased)),
-		0.0,
-		1.0,
-		0.55
-	)
+	var fly_step := func(t: float) -> void:
+		if not is_instance_valid(stack):
+			return
+		var eased := t * t * (3.0 - 2.0 * t)
+		stack.global_position = start_pos.lerp(mouth_pos, eased)
+		apply_stack_scale.call(squashed.lerp(fly_end_scale, eased))
+		apply_bun_pinch.call(bun_pinch_px)
+	tw.tween_method(fly_step, 0.0, 1.0, 0.55)
 
 	tw.tween_callback(func() -> void:
 		if preview != null and is_instance_valid(preview):
@@ -12984,6 +13190,15 @@ func _serve_reject_hint(order: Array, station_index: int) -> void:
 
 
 func _on_serve() -> void:
+	if not playing or _serve_fly_busy:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_serve.rpc()
+		return
+	_on_serve_local()
+
+
+func _on_serve_local() -> void:
 	if not playing or _serve_fly_busy:
 		return
 	## Selected ticket is the order we serve — auto-pick if only one waiting.
@@ -13153,3 +13368,868 @@ func _flash(text: String, color: Color) -> void:
 			flash_label.visible = false
 			flash_label.modulate.a = 1.0
 	)
+
+# =============================================================================
+func _setup_start_menu_chrome() -> void:
+	## Dark title wash + black CTA card; logo sits in front of the card.
+	if start_overlay != null and is_instance_valid(start_overlay):
+		start_overlay.color = Color(0.0, 0.0, 0.0, 0.78)
+		start_overlay.z_index = 40
+		start_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
+	if center == null:
+		return
+	if center.get_node_or_null("StartMenuCard") != null:
+		return
+
+	var card := PanelContainer.new()
+	card.name = "StartMenuCard"
+	card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.z_index = 0
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.0, 0.0, 0.0, 0.92)
+	style.set_corner_radius_all(18)
+	style.set_border_width_all(1)
+	style.border_color = Color(1.0, 1.0, 1.0, 0.12)
+	style.content_margin_left = 28
+	style.content_margin_right = 28
+	style.content_margin_top = 72 ## room for logo overlap
+	style.content_margin_bottom = 22
+	card.add_theme_stylebox_override("panel", style)
+
+	var card_col := VBoxContainer.new()
+	card_col.name = "StartMenuCol"
+	card_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	card_col.add_theme_constant_override("separation", 16)
+	card.add_child(card_col)
+
+	var blurb := center.get_node_or_null("Blurb") as Control
+	var mode_row := center.get_node_or_null("StartModeRow") as Control
+	## Fallback: start button still on center if row wasn't built yet.
+	if mode_row == null and start_btn != null and start_btn.get_parent() == center:
+		mode_row = start_btn
+
+	center.add_child(card)
+	## Card sits under logo in the stack; pull it up so the mark overlays the panel.
+	if start_logo_wrap != null and is_instance_valid(start_logo_wrap):
+		start_logo_wrap.z_index = 5
+		center.move_child(start_logo_wrap, 0)
+		center.move_child(card, 1)
+		center.add_theme_constant_override("separation", -56)
+	else:
+		center.move_child(card, 0)
+
+	if blurb != null and is_instance_valid(blurb):
+		blurb.reparent(card_col)
+		blurb.add_theme_color_override("font_color", Color(0.92, 0.94, 0.98, 0.95))
+	if mode_row != null and is_instance_valid(mode_row):
+		mode_row.reparent(card_col)
+
+	## Title label stays hidden / unused.
+	var title := center.get_node_or_null("Title") as Control
+	if title != null:
+		center.move_child(title, center.get_child_count() - 1)
+
+
+# Multiplayer co-op (P2P via NetManager)
+# =============================================================================
+
+func _setup_multiplayer_ui() -> void:
+	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
+	if center == null:
+		return
+	## Make sure the home panel is tall enough for both buttons.
+	center.offset_top = minf(center.offset_top, -300.0)
+	center.offset_bottom = maxf(center.offset_bottom, 300.0)
+	center.offset_left = minf(center.offset_left, -380.0)
+	center.offset_right = maxf(center.offset_right, 380.0)
+
+	## Solo + Multiplayer row directly under OPEN THE TRUCK.
+	var start_mode_row := HBoxContainer.new()
+	start_mode_row.name = "StartModeRow"
+	start_mode_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	start_mode_row.add_theme_constant_override("separation", 14)
+	start_mode_row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+
+	## Re-parent the existing start button into the row if possible.
+	if start_btn and start_btn.get_parent() == center:
+		center.remove_child(start_btn)
+		start_mode_row.add_child(start_btn)
+		start_btn.custom_minimum_size = Vector2(220, 56)
+
+	multiplayer_btn = Button.new()
+	multiplayer_btn.name = "MultiplayerButton"
+	multiplayer_btn.text = "MULTIPLAYER"
+	multiplayer_btn.custom_minimum_size = Vector2(220, 56)
+	multiplayer_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	UiFontsScript.apply_button(multiplayer_btn, true, 20)
+	## Warm accent so it reads as a second primary CTA.
+	var mp_normal := StyleBoxFlat.new()
+	mp_normal.bg_color = Color(0.85, 0.45, 0.12, 0.95)
+	mp_normal.set_corner_radius_all(10)
+	mp_normal.content_margin_left = 16
+	mp_normal.content_margin_right = 16
+	mp_normal.content_margin_top = 10
+	mp_normal.content_margin_bottom = 10
+	var mp_hover := mp_normal.duplicate() as StyleBoxFlat
+	mp_hover.bg_color = Color(1.0, 0.55, 0.18, 1.0)
+	var mp_pressed := mp_normal.duplicate() as StyleBoxFlat
+	mp_pressed.bg_color = Color(0.7, 0.35, 0.08, 1.0)
+	multiplayer_btn.add_theme_stylebox_override("normal", mp_normal)
+	multiplayer_btn.add_theme_stylebox_override("hover", mp_hover)
+	multiplayer_btn.add_theme_stylebox_override("pressed", mp_pressed)
+	multiplayer_btn.add_theme_color_override("font_color", Color(1, 1, 1, 1))
+	start_mode_row.add_child(multiplayer_btn)
+
+	center.add_child(start_mode_row)
+	## Keep buttons under the blurb (after Title/Logo/Blurb).
+	var blurb := center.get_node_or_null("Blurb")
+	if blurb:
+		center.move_child(start_mode_row, blurb.get_index() + 1)
+	elif start_btn and start_btn.get_parent() == start_mode_row:
+		## Already structured.
+		pass
+
+	multiplayer_btn.pressed.connect(func():
+		_sfx_click()
+		_open_mp_lobby()
+	)
+
+	_setup_start_menu_chrome()
+
+	_mp_lobby_root = Control.new()
+	_mp_lobby_root.name = "MpLobby"
+	_mp_lobby_root.visible = false
+	_mp_lobby_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_mp_lobby_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0.02, 0.03, 0.05, 0.78)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_mp_lobby_root.add_child(dim)
+
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.offset_left = -340.0
+	panel.offset_right = 340.0
+	panel.offset_top = -320.0
+	panel.offset_bottom = 320.0
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.11, 0.14, 0.97)
+	style.set_corner_radius_all(14)
+	style.set_border_width_all(2)
+	style.border_color = Color(1.0, 0.72, 0.28, 0.9)
+	style.content_margin_left = 18
+	style.content_margin_right = 18
+	style.content_margin_top = 14
+	style.content_margin_bottom = 14
+	panel.add_theme_stylebox_override("panel", style)
+	_mp_lobby_root.add_child(panel)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	panel.add_child(v)
+
+	var title := Label.new()
+	title.text = "ROOM BROWSER"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(title, true, 26)
+	title.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	v.add_child(title)
+
+	var tip := Label.new()
+	tip.text = "Online: paste your Railway relay URL, Host Room, share the 4-digit code.\nSame Wi‑Fi still works without a relay."
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(tip, false, 12)
+	v.add_child(tip)
+
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 8)
+	v.add_child(name_row)
+	var name_lab := Label.new()
+	name_lab.text = "Your name"
+	name_lab.custom_minimum_size = Vector2(88, 0)
+	UiFontsScript.apply_label(name_lab, false, 13)
+	name_row.add_child(name_lab)
+	_mp_name_edit = LineEdit.new()
+	_mp_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mp_name_edit.text = NetManager.player_name
+	_mp_name_edit.max_length = 12
+	_mp_name_edit.placeholder_text = "Cook"
+	name_row.add_child(_mp_name_edit)
+
+	var relay_row := HBoxContainer.new()
+	relay_row.add_theme_constant_override("separation", 8)
+	v.add_child(relay_row)
+	var relay_lab := Label.new()
+	relay_lab.text = "Online relay"
+	relay_lab.custom_minimum_size = Vector2(88, 0)
+	UiFontsScript.apply_label(relay_lab, false, 13)
+	relay_row.add_child(relay_lab)
+	_mp_relay_edit = LineEdit.new()
+	_mp_relay_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mp_relay_edit.text = NetManager.get_relay_url()
+	_mp_relay_edit.placeholder_text = "wss://your-app.up.railway.app"
+	_mp_relay_edit.focus_exited.connect(func():
+		if _mp_relay_edit:
+			NetManager.set_relay_url(_mp_relay_edit.text)
+	)
+	relay_row.add_child(_mp_relay_edit)
+
+	var lobby_actions := HBoxContainer.new()
+	lobby_actions.add_theme_constant_override("separation", 8)
+	lobby_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_child(lobby_actions)
+
+	_mp_host_btn = Button.new()
+	_mp_host_btn.text = "Host Room"
+	_mp_host_btn.custom_minimum_size = Vector2(140, 40)
+	UiFontsScript.apply_button(_mp_host_btn, true, 15)
+	lobby_actions.add_child(_mp_host_btn)
+	_mp_host_btn.pressed.connect(_mp_on_host_pressed)
+
+	_mp_refresh_btn = Button.new()
+	_mp_refresh_btn.text = "Refresh"
+	_mp_refresh_btn.custom_minimum_size = Vector2(110, 40)
+	UiFontsScript.apply_button(_mp_refresh_btn, true, 15)
+	lobby_actions.add_child(_mp_refresh_btn)
+	_mp_refresh_btn.pressed.connect(func():
+		_sfx_click()
+		NetManager.refresh_rooms()
+		_mp_rebuild_room_list()
+		_flash("Scanning for rooms...", Color("90CAF9"))
+	)
+
+	_mp_join_local_btn = Button.new()
+	_mp_join_local_btn.text = "Quick Join"
+	_mp_join_local_btn.custom_minimum_size = Vector2(120, 40)
+	UiFontsScript.apply_button(_mp_join_local_btn, true, 14)
+	lobby_actions.add_child(_mp_join_local_btn)
+	_mp_join_local_btn.pressed.connect(_mp_on_join_localhost)
+
+	_mp_host_addr_label = Label.new()
+	_mp_host_addr_label.visible = false
+	_mp_host_addr_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mp_host_addr_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(_mp_host_addr_label, true, 28)
+	_mp_host_addr_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.35))
+	v.add_child(_mp_host_addr_label)
+
+	var rooms_header := HBoxContainer.new()
+	rooms_header.add_theme_constant_override("separation", 8)
+	v.add_child(rooms_header)
+	var rooms_lab := Label.new()
+	rooms_lab.text = "Open rooms"
+	rooms_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(rooms_lab, true, 14)
+	rooms_header.add_child(rooms_lab)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 150)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	v.add_child(scroll)
+	_mp_room_list = VBoxContainer.new()
+	_mp_room_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mp_room_list.add_theme_constant_override("separation", 6)
+	scroll.add_child(_mp_room_list)
+
+	var manual_lab := Label.new()
+	manual_lab.text = "Join with room code"
+	UiFontsScript.apply_label(manual_lab, true, 13)
+	v.add_child(manual_lab)
+
+	var manual_row := HBoxContainer.new()
+	manual_row.add_theme_constant_override("separation", 8)
+	manual_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_child(manual_row)
+	_mp_code_edit = LineEdit.new()
+	_mp_code_edit.custom_minimum_size = Vector2(140, 40)
+	_mp_code_edit.placeholder_text = "1234"
+	_mp_code_edit.max_length = 4
+	_mp_code_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mp_code_edit.text = ""
+	_mp_code_edit.secret = false
+	manual_row.add_child(_mp_code_edit)
+	_mp_code_join_btn = Button.new()
+	_mp_code_join_btn.text = "Join Code"
+	_mp_code_join_btn.custom_minimum_size = Vector2(120, 40)
+	UiFontsScript.apply_button(_mp_code_join_btn, true, 15)
+	manual_row.add_child(_mp_code_join_btn)
+	_mp_code_join_btn.pressed.connect(_mp_on_code_join)
+	_mp_code_edit.text_submitted.connect(func(_t: String): _mp_on_code_join())
+
+	_mp_status_label = Label.new()
+	_mp_status_label.text = "Scanning for open rooms..."
+	_mp_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mp_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(_mp_status_label, false, 12)
+	v.add_child(_mp_status_label)
+
+	var ready_row := HBoxContainer.new()
+	ready_row.add_theme_constant_override("separation", 8)
+	ready_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_child(ready_row)
+
+	_mp_ready_btn = Button.new()
+	_mp_ready_btn.text = "Ready"
+	_mp_ready_btn.custom_minimum_size = Vector2(120, 40)
+	_mp_ready_btn.visible = false
+	UiFontsScript.apply_button(_mp_ready_btn, true, 16)
+	ready_row.add_child(_mp_ready_btn)
+	_mp_ready_btn.pressed.connect(func():
+		_sfx_click()
+		NetManager.set_ready(true)
+		_mp_refresh_lobby_status()
+	)
+
+	_mp_start_coop_btn = Button.new()
+	_mp_start_coop_btn.text = "Start Co-op"
+	_mp_start_coop_btn.custom_minimum_size = Vector2(140, 40)
+	_mp_start_coop_btn.visible = false
+	UiFontsScript.apply_button(_mp_start_coop_btn, true, 16)
+	ready_row.add_child(_mp_start_coop_btn)
+	_mp_start_coop_btn.pressed.connect(func():
+		_sfx_click()
+		NetManager.request_start_session()
+	)
+
+	_mp_back_btn = Button.new()
+	_mp_back_btn.text = "Back"
+	_mp_back_btn.custom_minimum_size = Vector2(120, 36)
+	_mp_back_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	UiFontsScript.apply_button(_mp_back_btn, false, 15)
+	v.add_child(_mp_back_btn)
+	_mp_back_btn.pressed.connect(func():
+		_sfx_click()
+		_close_mp_lobby()
+	)
+
+	var ui_root: Control = get_node("UI/Root")
+	ui_root.add_child(_mp_lobby_root)
+	_mp_lobby_root.z_index = 80
+
+	_mp_cursor_layer = Control.new()
+	_mp_cursor_layer.name = "MpRemoteCursors"
+	_mp_cursor_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_mp_cursor_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mp_cursor_layer.z_index = 90
+	ui_root.add_child(_mp_cursor_layer)
+
+	NetManager.rooms_updated.connect(_mp_rebuild_room_list)
+	NetManager.connection_changed.connect(_mp_on_connection_changed)
+	NetManager.peer_ready_changed.connect(_mp_refresh_lobby_status)
+	NetManager.session_start_requested.connect(_mp_on_session_start)
+	NetManager.chat_flash.connect(func(t: String, c: Color): _flash(t, c))
+
+
+func _open_mp_lobby() -> void:
+	_mp_enter_windowed_for_coop()
+	if _mp_lobby_root:
+		_mp_lobby_root.visible = true
+	NetManager.begin_browse()
+	NetManager.refresh_rooms()
+	_mp_rebuild_room_list()
+	_mp_refresh_lobby_status()
+
+
+func _close_mp_lobby() -> void:
+	if not NetManager.is_online():
+		NetManager.stop_browse()
+		NetManager.leave()
+	if _mp_lobby_root:
+		_mp_lobby_root.visible = false
+
+
+func _mp_enter_windowed_for_coop() -> void:
+	## Two instances on one PC need windowed mode.
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_size(Vector2i(1100, 640))
+	var idx := DisplayServer.get_primary_screen()
+	var screen := DisplayServer.screen_get_usable_rect(idx)
+	var offset := Vector2i(40, 40)
+	if NetManager.role == NetManager.Role.CLIENT or OS.get_process_id() % 2 == 0:
+		offset = Vector2i(120, 80)
+	DisplayServer.window_set_position(screen.position + offset)
+
+
+func _mp_on_host_pressed() -> void:
+	_sfx_click()
+	if _mp_name_edit:
+		NetManager.player_name = _mp_name_edit.text.strip_edges()
+	if _mp_relay_edit:
+		NetManager.set_relay_url(_mp_relay_edit.text)
+	_mp_enter_windowed_for_coop()
+	var err := NetManager.host_room(NetManager.player_name)
+	if err != OK:
+		_flash("Could not host — try again", Color("EF5350"))
+		return
+	mp_enabled = true
+	if _mp_code_edit:
+		_mp_code_edit.text = NetManager.room_code
+	_mp_refresh_lobby_status()
+	if NetManager.has_relay_url():
+		_flash("Hosting online — share the room code", Color("81C784"))
+	else:
+		_flash("No relay URL — LAN / same Wi‑Fi only", Color("FFA726"))
+
+
+func _mp_on_join_localhost() -> void:
+	_sfx_click()
+	if _mp_name_edit:
+		NetManager.player_name = _mp_name_edit.text.strip_edges()
+	## Join first open room with space (prefer this PC).
+	for r in NetManager.discovered_rooms:
+		var players := int(r.get("players", 1))
+		var max_p := int(r.get("max", NetManager.MAX_PLAYERS))
+		if players >= max_p:
+			continue
+		var code := str(r.get("code", ""))
+		if code == "":
+			continue
+		var ip := str(r.get("ip", ""))
+		if ip in ["127.0.0.1", "localhost"]:
+			_mp_join_by_code(code)
+			return
+	for r in NetManager.discovered_rooms:
+		if int(r.get("players", 1)) < int(r.get("max", 2)):
+			_mp_join_by_code(str(r.get("code", "")))
+			return
+	_flash("No open room found — Host one, or enter a code", Color("FFA726"))
+
+
+func _mp_on_code_join() -> void:
+	_sfx_click()
+	if _mp_name_edit:
+		NetManager.player_name = _mp_name_edit.text.strip_edges()
+	var raw := ""
+	if _mp_code_edit:
+		raw = _mp_code_edit.text.strip_edges()
+	if raw == "":
+		_flash("Enter the 4-digit room code", Color("FFA726"))
+		return
+	_mp_join_by_code(raw)
+
+
+func _mp_join_by_code(code: String) -> void:
+	if _mp_relay_edit:
+		NetManager.set_relay_url(_mp_relay_edit.text)
+	_mp_enter_windowed_for_coop()
+	var pname := NetManager.player_name
+	if _mp_name_edit:
+		pname = _mp_name_edit.text.strip_edges()
+	var normalized := NetManager.normalize_code(code)
+	if _mp_code_edit:
+		_mp_code_edit.text = normalized
+	var err := NetManager.join_by_code(normalized, pname)
+	if err != OK:
+		_flash("Join failed", Color("EF5350"))
+		return
+	mp_enabled = true
+	_mp_status_label.text = "Joining room %s..." % normalized
+	_mp_refresh_lobby_status()
+
+
+func _mp_join_room(ip: String, port: int) -> void:
+	## Legacy helper — route through room code.
+	_mp_join_by_code(NetManager.code_from_port(port))
+
+
+func _mp_on_connection_changed() -> void:
+	mp_enabled = NetManager.is_online() or NetManager.role == NetManager.Role.HOST or NetManager.role == NetManager.Role.CLIENT
+	_mp_refresh_lobby_status()
+	_mp_rebuild_room_list()
+
+
+func _mp_refresh_lobby_status() -> void:
+	if _mp_status_label == null:
+		return
+	var online := NetManager.is_online()
+	_mp_ready_btn.visible = online
+	_mp_start_coop_btn.visible = online and NetManager.is_host()
+	if _mp_host_addr_label:
+		if NetManager.role == NetManager.Role.HOST and online:
+			_mp_host_addr_label.visible = true
+			_mp_host_addr_label.text = "ROOM CODE  %s" % NetManager.room_code
+		elif NetManager.is_online() and NetManager.is_client():
+			_mp_host_addr_label.visible = true
+			_mp_host_addr_label.text = "Joined  %s" % NetManager.room_code
+			_mp_host_addr_label.add_theme_color_override("font_color", Color(0.55, 0.9, 1.0))
+		else:
+			_mp_host_addr_label.visible = false
+			_mp_host_addr_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.35))
+	if not online:
+		if NetManager.is_seeking_room() or NetManager.role == NetManager.Role.CLIENT:
+			var seek := NetManager.seeking_code()
+			if seek == "":
+				seek = NetManager.room_code
+			_mp_status_label.text = "Looking for room %s..." % NetManager.normalize_code(seek)
+		elif NetManager.role == NetManager.Role.HOST:
+			_mp_status_label.text = "Share code %s — waiting for a cook to join..." % NetManager.room_code
+		else:
+			var n := NetManager.discovered_rooms.size()
+			if n > 0:
+				_mp_status_label.text = "Found %d open room%s — Join, or type a code." % [n, "s" if n != 1 else ""]
+			else:
+				_mp_status_label.text = "Host a room for a code, or enter a friend's 4-digit code."
+		return
+	var n := NetManager.peer_count()
+	var who := "Host" if NetManager.is_host() else "Guest"
+	_mp_status_label.text = "%s · room %s — %d/%d cooks" % [who, NetManager.room_code, n, NetManager.MAX_PLAYERS]
+	_mp_start_coop_btn.disabled = n < 2
+
+
+func _mp_rebuild_room_list() -> void:
+	if _mp_room_list == null:
+		return
+	for c in _mp_room_list.get_children():
+		c.queue_free()
+	if NetManager.discovered_rooms.is_empty():
+		var empty := Label.new()
+		empty.text = "No open rooms yet.\nHost in one window, then Join with the code (or Quick Join) in the other."
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(empty, false, 12)
+		_mp_room_list.add_child(empty)
+		_mp_refresh_lobby_status()
+		return
+	for r in NetManager.discovered_rooms:
+		var players := int(r.get("players", 1))
+		var max_p := int(r.get("max", NetManager.MAX_PLAYERS))
+		var full := players >= max_p
+		var code := str(r.get("code", NetManager.code_from_port(int(r.get("port", 0)))))
+
+		var row := PanelContainer.new()
+		var row_style := StyleBoxFlat.new()
+		row_style.bg_color = Color(0.14, 0.16, 0.2, 0.95)
+		row_style.set_corner_radius_all(8)
+		row_style.set_border_width_all(1)
+		row_style.border_color = Color(0.35, 0.4, 0.48, 0.9) if full else Color(0.45, 0.7, 0.45, 0.85)
+		row_style.content_margin_left = 10
+		row_style.content_margin_right = 8
+		row_style.content_margin_top = 6
+		row_style.content_margin_bottom = 6
+		row.add_theme_stylebox_override("panel", row_style)
+		_mp_room_list.add_child(row)
+
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 10)
+		row.add_child(h)
+
+		var code_lab := Label.new()
+		code_lab.text = code
+		code_lab.custom_minimum_size = Vector2(72, 0)
+		UiFontsScript.apply_label(code_lab, true, 22)
+		code_lab.add_theme_color_override("font_color", Color(1.0, 0.88, 0.35))
+		h.add_child(code_lab)
+
+		var lab := Label.new()
+		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lab.text = "%s\n%s · %d/%d cooks" % [
+			str(r.get("name", "Truck")),
+			str(r.get("host", "Cook")),
+			players,
+			max_p,
+		]
+		UiFontsScript.apply_label(lab, false, 12)
+		h.add_child(lab)
+
+		var join := Button.new()
+		join.custom_minimum_size = Vector2(78, 36)
+		if full:
+			join.text = "Full"
+			join.disabled = true
+		else:
+			join.text = "Join"
+		UiFontsScript.apply_button(join, true, 13)
+		var join_code := code
+		join.pressed.connect(func():
+			_sfx_click()
+			if _mp_name_edit:
+				NetManager.player_name = _mp_name_edit.text.strip_edges()
+			if _mp_code_edit:
+				_mp_code_edit.text = join_code
+			_mp_join_by_code(join_code)
+		)
+		h.add_child(join)
+	_mp_refresh_lobby_status()
+
+
+func _mp_on_session_start(session_seed: int) -> void:
+	seed(session_seed)
+	mp_enabled = true
+	if _mp_lobby_root:
+		_mp_lobby_root.visible = false
+	NetManager.stop_browse()
+	_flash("Co-op shift — cook together!", Color("FFEB3B"))
+	_start_game()
+
+
+func _mp_update_cursors(delta: float) -> void:
+	if not mp_enabled or not NetManager.is_online():
+		for k in _mp_remote_cursors.keys():
+			var node: Control = _mp_remote_cursors[k]
+			if node and is_instance_valid(node):
+				node.visible = false
+		return
+	_mp_cursor_accum += delta
+	if _mp_cursor_accum >= 0.033:
+		_mp_cursor_accum = 0.0
+		var vp := get_viewport().get_visible_rect().size
+		if vp.x > 1.0 and vp.y > 1.0:
+			var m := get_viewport().get_mouse_position()
+			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y)
+
+
+func _mp_ensure_remote_cursor(peer_id: int) -> Control:
+	if _mp_remote_cursors.has(peer_id):
+		var existing: Control = _mp_remote_cursors[peer_id]
+		if existing != null and is_instance_valid(existing):
+			return existing
+	var wrap := Control.new()
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.z_index = 90
+	var tex: Texture2D = load("res://assets/ui/cursor_glove.png") as Texture2D
+	var icon := TextureRect.new()
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = Vector2(48, 48)
+	icon.size = Vector2(48, 48)
+	if tex:
+		icon.texture = tex
+	icon.modulate = NetManager.color_for_peer(peer_id)
+	wrap.add_child(icon)
+	var tag := Label.new()
+	tag.name = "Tag"
+	tag.position = Vector2(8, 44)
+	tag.text = "P%d" % (1 if peer_id == 1 else 2)
+	tag.add_theme_color_override("font_color", NetManager.color_for_peer(peer_id))
+	tag.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	tag.add_theme_constant_override("outline_size", 3)
+	UiFontsScript.apply_label(tag, true, 12)
+	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(tag)
+	_mp_cursor_layer.add_child(wrap)
+	_mp_remote_cursors[peer_id] = wrap
+	return wrap
+
+
+func _mp_send_patty_pose(patty: Area3D, held: bool = false) -> void:
+	if patty == null or not is_instance_valid(patty):
+		return
+	var nid := int(patty.get("net_id"))
+	if nid < 0:
+		return
+	mp_patty_pose.rpc(nid, patty.position.x, patty.position.y, patty.position.z, held)
+
+
+func _patty_by_net_id(net_id: int):
+	if net_id < 0:
+		return null
+	for p in grill:
+		if p != null and is_instance_valid(p) and int(p.get("net_id")) == net_id:
+			return p
+	if spatula_patty != null and is_instance_valid(spatula_patty) and int(spatula_patty.get("net_id")) == net_id:
+		return spatula_patty
+	for st in stations:
+		for p in st.get("patties", []):
+			if p != null and is_instance_valid(p) and int(p.get("net_id")) == net_id:
+				return p
+	for child in patties_root.get_children():
+		if child != null and is_instance_valid(child) and int(child.get("net_id")) == net_id:
+			return child
+	return null
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_cursor_pos(nx: float, ny: float) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	var wrap := _mp_ensure_remote_cursor(sid)
+	wrap.visible = true
+	var vp := get_viewport().get_visible_rect().size
+	## Hotspot matches local glove tip (~0, 3).
+	wrap.position = Vector2(nx * vp.x, ny * vp.y) - Vector2(0, 3)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_toggle_grill(on: bool) -> void:
+	_mp_applying = true
+	_toggle_grill_power_local(on)
+	_mp_applying = false
+
+
+@rpc("any_peer", "reliable")
+func mp_request_spawn_patty(x: float, z: float) -> void:
+	if not NetManager.is_host():
+		return
+	var idx := _first_empty_slot()
+	if idx < 0 or not grill_on:
+		return
+	var place_pos := _find_closest_patty_place(Vector3(x, GRILL_SURFACE_Y, z))
+	if place_pos == Vector3.ZERO:
+		place_pos = Vector3(x, GRILL_SURFACE_Y, z)
+	var nid := NetManager.alloc_net_id()
+	mp_spawn_patty.rpc(nid, idx, place_pos.x, place_pos.z)
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_spawn_patty(net_id: int, idx: int, x: float, z: float) -> void:
+	_mp_applying = true
+	_spawn_patty_at(idx, Vector3(x, GRILL_SURFACE_Y, z), net_id)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_patty_click(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	_mp_applying = true
+	spatula_owner_id = sid
+	_on_patty_clicked_local(p)
+	if spatula_patty == null:
+		spatula_owner_id = 0
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_patty_smash(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	_mp_applying = true
+	p.smash()
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	## Don't fight local drag ownership.
+	if dragging_patty == p:
+		return
+	p.position = Vector3(x, y, z)
+	p._rest_x = x
+	p._rest_z = z
+	if held:
+		p.is_held = true
+		p.heating = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_add_ingredient(station_index: int, id: String) -> void:
+	_mp_applying = true
+	_add_ingredient_to_station_local(station_index, id, true)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_cheese_patty(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null or p.has_cheese:
+		return
+	_mp_applying = true
+	if p.add_cheese():
+		_spend_ingredient("cheese")
+		if game_audio:
+			game_audio.play_ingredient("cheese")
+		_flash("Cheese on! Melts in 3s", Color("FFE082"))
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_drop_to_build(net_id: int, index: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	_mp_applying = true
+	if spatula_patty == p:
+		spatula_patty = null
+		spatula_from_build = false
+		spatula_lmb_held = false
+		spatula_owner_id = 0
+	var gidx: int = int(p.slot_index)
+	if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
+		grill[gidx] = null
+	p.is_held = false
+	_commit_patty_to_build(p)
+	if index != STATION_CRAFT:
+		_select_station(index)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_serve() -> void:
+	_mp_applying = true
+	_on_serve_local()
+	_mp_applying = false
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_spawn_customer(net_id: int, order: Array, cr: float, cg: float, cb: float, patience: float, lane: int) -> void:
+	_mp_applying = true
+	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id)
+	_mp_applying = false
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_end_day() -> void:
+	_end_day()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_trash_patty(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	_mp_applying = true
+	if spatula_patty == p:
+		_trash_spatula_patty_local()
+	else:
+		_trash_single_grill_patty_local(p)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_place_spatula(net_id: int, idx: int, x: float, z: float) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null:
+		return
+	_mp_applying = true
+	if spatula_patty != p:
+		spatula_patty = p
+	_place_spatula_on_grill_local(idx, Vector3(x, GRILL_SURFACE_Y, z))
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_commit_patty_build(net_id: int) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null or not is_instance_valid(p):
+		return
+	if not p.flipped_once or not p.can_scoop():
+		return
+	_mp_applying = true
+	var gidx: int = int(p.slot_index)
+	if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
+		grill[gidx] = null
+	if spatula_patty == p:
+		spatula_patty = null
+		spatula_owner_id = 0
+	if dragging_patty == p:
+		dragging_patty = null
+	p.is_held = false
+	p.heating = false
+	_leave_grill_residue(gidx, p, false)
+	_commit_patty_to_build(p)
+	_mp_applying = false
