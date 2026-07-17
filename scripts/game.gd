@@ -704,6 +704,7 @@ var _mp_econ_accum: float = 0.0
 var _mp_oil_sync_cool: float = 0.0
 var _mp_residue_sync_cool: float = 0.0
 var _mp_ext_sync_cool: float = 0.0
+var _mp_season_sync_cool: float = 0.0
 var multiplayer_btn: Button = null
 
 
@@ -1157,6 +1158,7 @@ func _process(delta: float) -> void:
 		_mp_oil_sync_cool = maxf(0.0, _mp_oil_sync_cool - delta)
 		_mp_residue_sync_cool = maxf(0.0, _mp_residue_sync_cool - delta)
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
+		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
 		if _mp_econ_accum >= 0.45:
@@ -1176,8 +1178,14 @@ func _update_station_freshness(delta: float) -> void:
 		st["freshness"] = maxf(0.0, float(st["freshness"]) - delta)
 		_refresh_freshness_label(i)
 		if float(st["freshness"]) <= 0.0 and not st.get("spoiled", false):
+			## Co-op: host owns spoil so both boards clear together.
+			if mp_enabled and not NetManager.is_host():
+				continue
 			st["spoiled"] = true
-			_clear_station(i)
+			if mp_enabled:
+				mp_clear_station.rpc(i)
+			else:
+				_clear_station(i)
 			_flash("%s went BAD - trash it next time sooner!" % _station_label(i), Color("EF5350"))
 
 
@@ -4103,12 +4111,12 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	patty.rotation_degrees = Vector3.ZERO
 	if not st["patties"].has(patty):
 		var needs_bun := not items.has("bun_bottom")
-		if needs_bun and not _try_use_supply("bun_bottom"):
+		if needs_bun and not _mp_try_use_supply("bun_bottom"):
 			patty.is_held = false
 			patty.visible = true
 			patty.heating = grill_on
 			return
-		if not _try_use_supply("patty"):
+		if not _mp_try_use_supply("patty"):
 			if needs_bun:
 				supply_stock["bun_bottom"] = int(supply_stock.get("bun_bottom", 0)) + 1
 				_refresh_phone_ui()
@@ -4135,6 +4143,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(3.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
 	else:
 		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
+	_mp_broadcast_station(STATION_CRAFT)
 	call_deferred("_try_auto_serve")
 
 
@@ -5677,7 +5686,12 @@ func _update_held_shaker(_delta: float) -> void:
 		game_audio.set_shaker_rattle(over_beef)
 	if over_beef and shaker_season_cool <= 0.0:
 		shaker_season_cool = 0.05
-		target.apply_seasoning(0.1)
+		if mp_enabled and not _mp_applying and int(target.get("net_id")) >= 0:
+			if _mp_season_sync_cool <= 0.0:
+				_mp_season_sync_cool = 0.05
+				mp_season_patty.rpc(int(target.net_id), 0.1)
+		else:
+			target.apply_seasoning(0.1)
 
 
 func _nearest_patty_near(world_pos: Vector3, max_dist: float):
@@ -8420,6 +8434,47 @@ func _spend_ingredient(id: String) -> bool:
 	if not _try_use_supply(id):
 		return false
 	_spend(_ingredient_cost(id))
+	return true
+
+
+func _mp_try_use_supply(id: String, amount: int = 1) -> bool:
+	## Shared build/grill mutations must not abort because one peer's stock is stale.
+	if not mp_enabled or not _mp_applying:
+		return _try_use_supply(id, amount)
+	if NetManager.is_host() and id != "":
+		var have := int(supply_stock.get(id, 0))
+		if have >= amount:
+			supply_stock[id] = have - amount
+			_refresh_phone_ui()
+	return true
+
+
+func _mp_spend_ingredient(id: String) -> bool:
+	## Always allow the shared stack change; host alone adjusts stock/money.
+	if not mp_enabled or not _mp_applying:
+		return _spend_ingredient(id)
+	if NetManager.is_host() and id != "":
+		var have := int(supply_stock.get(id, 0))
+		if have > 0:
+			supply_stock[id] = have - 1
+			_refresh_phone_ui()
+			_spend(_ingredient_cost(id))
+	return true
+
+
+func _mp_can_spend_ingredient(id: String) -> bool:
+	## Pre-RPC gate so we don't ship adds when host stock is clearly empty.
+	if id == "" or id == "patty" or id == "bun_bottom":
+		return true
+	if int(supply_stock.get(id, 0)) <= 0:
+		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		_flash("Out of %s — restock on phone!" % label, Color("EF5350"))
+		_refresh_phone_ui()
+		return false
+	var cost := _ingredient_cost(id)
+	if cost > 0.0 and money + 0.001 < cost:
+		_flash("Need %s for %s" % [_format_money(cost), str(GameDataScript.INGREDIENT_LABELS.get(id, id))], Color("EF5350"))
+		return false
 	return true
 
 
@@ -11307,8 +11362,7 @@ func _build_station_ui() -> void:
 		clear_one.pressed.connect(func():
 			_sfx_click()
 			_select_station(si)
-			_clear_station(si)
-			_flash("%s cleared" % _station_label(si), Color("B0BEC5"))
+			_request_clear_station(si)
 		)
 		btns.add_child(clear_one)
 
@@ -11853,12 +11907,49 @@ func _extract_station_patty(station_index: int, item_index: int):
 	return patty
 
 
+func _extract_station_patty_by_net_id(station_index: int, net_id: int):
+	if station_index < 0 or station_index >= STATION_COUNT or net_id < 0:
+		return null
+	var st: Dictionary = stations[station_index]
+	var pidx := -1
+	for i in range(st["patties"].size()):
+		var p = st["patties"][i]
+		if p != null and is_instance_valid(p) and int(p.get("net_id")) == net_id:
+			pidx = i
+			break
+	if pidx < 0:
+		return null
+	var seen := 0
+	var item_index := -1
+	var items: Array = st["items"]
+	for j in range(items.size()):
+		if str(items[j]) == "patty":
+			if seen == pidx:
+				item_index = j
+				break
+			seen += 1
+	if item_index < 0:
+		return null
+	return _extract_station_patty(station_index, item_index)
+
+
 func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
 	## Click a Build patty → turn it back into a held 3D patty (same as scoop).
 	if not playing:
 		return
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("EF5350"))
+		return
+	var pidx := _patty_index_for_item_slot(station_index, item_index)
+	if pidx < 0 or station_index < 0 or station_index >= STATION_COUNT:
+		_flash("Couldn't grab that patty", Color("EF5350"))
+		return
+	var preview = stations[station_index]["patties"][pidx] if pidx < stations[station_index]["patties"].size() else null
+	if preview == null or not is_instance_valid(preview) or int(preview.get("net_id")) < 0:
+		_flash("Couldn't grab that patty", Color("EF5350"))
+		return
+	if mp_enabled and not _mp_applying:
+		mp_pickup_build_patty.rpc(int(preview.net_id), station_index)
 		return
 	var patty = _extract_station_patty(station_index, item_index)
 	if patty == null:
@@ -11896,6 +11987,17 @@ func _return_station_patty_to_grill(station_index: int, item_index: int, world_p
 	if world_pos == Vector3.ZERO or not _is_near_grill_for_place(world_pos):
 		_flash("Drop on the grill surface", Color("FFCC80"))
 		return false
+	var pidx := _patty_index_for_item_slot(station_index, item_index)
+	if pidx < 0 or station_index < 0 or station_index >= STATION_COUNT:
+		_flash("Couldn't grab that patty", Color("EF5350"))
+		return false
+	var preview = stations[station_index]["patties"][pidx] if pidx < stations[station_index]["patties"].size() else null
+	if preview == null or not is_instance_valid(preview) or int(preview.get("net_id")) < 0:
+		_flash("Couldn't grab that patty", Color("EF5350"))
+		return false
+	if mp_enabled and not _mp_applying:
+		mp_return_build_to_grill.rpc(int(preview.net_id), station_index, world_pos.x, world_pos.z)
+		return true
 	## HOLD strip is fine for cooked meat pulled off Build.
 	if _is_in_warmer_zone(world_pos):
 		var patty_w = _extract_station_patty(station_index, item_index)
@@ -12039,6 +12141,13 @@ func _assembly_insert_index(station_index: int, local_pos: Vector2) -> int:
 
 
 func _reorder_station_item(station_index: int, from_index: int, insert_at: int) -> void:
+	if mp_enabled and not _mp_applying:
+		mp_reorder_station.rpc(station_index, from_index, insert_at)
+		return
+	_reorder_station_item_local(station_index, from_index, insert_at)
+
+
+func _reorder_station_item_local(station_index: int, from_index: int, insert_at: int) -> void:
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
 	if from_index < 0 or from_index >= items.size():
@@ -12075,6 +12184,7 @@ func _after_station_edit(station_index: int) -> void:
 		return
 	_sync_station_cheese_items(station_index)
 	_refresh_station(station_index)
+	_mp_broadcast_station(station_index)
 	call_deferred("_try_auto_serve")
 
 
@@ -12514,6 +12624,8 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 	if not playing or id == "":
 		return
 	if mp_enabled and not _mp_applying:
+		if not _mp_can_spend_ingredient(id):
+			return
 		mp_add_ingredient.rpc(station_index, id)
 		return
 	_add_ingredient_to_station_local(station_index, id, play_sfx)
@@ -12543,7 +12655,7 @@ func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: 
 	if id == "cheese":
 		_start_station_cheese_melt(station_index, play_sfx)
 		return
-	if not _spend_ingredient(id):
+	if not _mp_spend_ingredient(id):
 		return
 	items.append(id)
 	st["items"] = _normalize_burger_stack(items)
@@ -12552,6 +12664,7 @@ func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: 
 	if play_sfx and game_audio:
 		game_audio.play_ingredient(id)
 	_note_melody_press(id)
+	_mp_broadcast_station(station_index)
 	call_deferred("_try_auto_serve")
 
 
@@ -12579,7 +12692,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	var items: Array = st["items"]
 	items.append("cheese")
 	st["items"] = _normalize_burger_stack(items)
-	if not _spend_ingredient("cheese"):
+	if not _mp_spend_ingredient("cheese"):
 		items.erase("cheese")
 		patty.has_cheese = false
 		st["items"] = _normalize_burger_stack(items)
@@ -12590,6 +12703,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 		game_audio.play_ingredient("cheese")
 	_note_melody_press("cheese")
 	_flash("Cheese on — melting 3s (order already counts it)", Color("FFE082"))
+	_mp_broadcast_station(station_index)
 
 
 func _update_station_cheese_melt(_delta: float) -> void:
@@ -12715,6 +12829,16 @@ func _trash_top_layer(index: int) -> void:
 	_trash_selected_or_top_layer(index)
 
 
+func _request_clear_station(index: int) -> void:
+	if index < 0 or index >= STATION_COUNT:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_clear_station.rpc(index)
+		return
+	_clear_station(index)
+	_flash("%s cleared" % _station_label(index), Color("B0BEC5"))
+
+
 func _clear_station(index: int) -> void:
 	var st: Dictionary = stations[index]
 	for p in st["patties"]:
@@ -12725,6 +12849,7 @@ func _clear_station(index: int) -> void:
 	st["selected_layer"] = -1
 	_reset_station_freshness(index)
 	_refresh_station(index)
+	_mp_broadcast_station(index)
 
 
 func _clear_all_stations() -> void:
@@ -13112,10 +13237,11 @@ func _crown_serve_burger(station_index: int) -> bool:
 	var items: Array = st["items"]
 	if items.has("bun_top") or not items.has("patty"):
 		return false
-	if not _spend_ingredient("bun_top"):
+	if not _mp_spend_ingredient("bun_top"):
 		return false
 	items.append("bun_top")
 	st["items"] = _normalize_burger_stack(items)
+	_mp_broadcast_station(station_index)
 	return true
 
 
@@ -14618,6 +14744,8 @@ func mp_add_ingredient(station_index: int, id: String) -> void:
 	_mp_applying = true
 	_add_ingredient_to_station_local(station_index, id, true)
 	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -14627,11 +14755,13 @@ func mp_cheese_patty(net_id: int) -> void:
 		return
 	_mp_applying = true
 	if p.add_cheese():
-		_spend_ingredient("cheese")
+		_mp_spend_ingredient("cheese")
 		if game_audio:
 			game_audio.play_ingredient("cheese")
 		_flash("Cheese on! Melts in 3s", Color("FFE082"))
 	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -15002,6 +15132,166 @@ func mp_trash_station_patty(station_index: int, from_index: int) -> void:
 	_mp_applying = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
+		_mp_broadcast_station(station_index)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_clear_station(station_index: int) -> void:
+	_mp_applying = true
+	_clear_station(station_index)
+	_flash("%s cleared" % _station_label(station_index), Color("B0BEC5"))
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_reorder_station(station_index: int, from_index: int, insert_at: int) -> void:
+	_mp_applying = true
+	_reorder_station_item_local(station_index, from_index, insert_at)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_season_patty(net_id: int, amount: float) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null or not is_instance_valid(p):
+		return
+	_mp_applying = true
+	p.apply_seasoning(amount)
+	_mp_applying = false
+
+
+func _mp_broadcast_station(station_index: int) -> void:
+	## Host pushes absolute Build stack so toppings never diverge after stock races.
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	if not playing:
+		return
+	var st: Dictionary = stations[station_index]
+	var item_ids: Array = []
+	for it in st["items"]:
+		item_ids.append(str(it))
+	var patty_ids: Array = []
+	for p in st["patties"]:
+		if p != null and is_instance_valid(p) and int(p.get("net_id")) >= 0:
+			patty_ids.append(int(p.net_id))
+		else:
+			patty_ids.append(-1)
+	mp_sync_station.rpc(station_index, item_ids, patty_ids)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_sync_station(station_index: int, item_ids: Array, patty_net_ids: Array) -> void:
+	if NetManager.is_host():
+		return
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	_mp_applying = true
+	var st: Dictionary = stations[station_index]
+	var new_patties: Array = []
+	for nid_v in patty_net_ids:
+		var nid := int(nid_v)
+		var p = _patty_by_net_id(nid) if nid >= 0 else null
+		if p == null or not is_instance_valid(p):
+			continue
+		## Seat on Build for display — don't free extras; place/scoop/serve RPCs own lifetime.
+		if not grill.has(p) and p != spatula_patty and p != dragging_patty and p != flicking_patty:
+			_mp_release_scoop_if(p)
+			p.is_held = true
+			p.heating = false
+			p.visible = false
+			p.rotation_degrees = Vector3.ZERO
+			var gidx: int = int(p.slot_index)
+			if gidx >= 0 and gidx < grill.size() and grill[gidx] == p:
+				grill[gidx] = null
+		if not new_patties.has(p):
+			new_patties.append(p)
+	st["patties"] = new_patties
+	var items: Array = []
+	for id_v in item_ids:
+		items.append(str(id_v))
+	st["items"] = items
+	st["selected_layer"] = -1
+	if items.is_empty():
+		_reset_station_freshness(station_index)
+	elif not bool(st.get("fresh_active", false)):
+		_start_station_freshness(station_index)
+	_sync_station_cheese_items(station_index)
+	_refresh_station(station_index)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_pickup_build_patty(net_id: int, station_index: int) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	_mp_applying = true
+	var patty = _extract_station_patty_by_net_id(station_index, net_id)
+	if patty == null:
+		patty = _patty_by_net_id(net_id)
+	if patty == null or not is_instance_valid(patty):
+		_mp_applying = false
+		return
+	patty.is_held = true
+	patty.heating = false
+	patty.visible = true
+	patty.rotation_degrees = Vector3.ZERO
+	if patty.get_parent() == null and patties_root != null:
+		patties_root.add_child(patty)
+	_mp_mark_held(sid, patty)
+	if sid == NetManager.my_id():
+		spatula_patty = patty
+		spatula_owner_id = sid
+		spatula_from_build = true
+		spatula_lmb_held = true
+		spatula_last_mouse = get_viewport().get_mouse_position()
+		spatula_vel_screen = Vector2.ZERO
+		spatula_carry_travel = 0.0
+		_refresh_spatula_ui()
+		_update_held_spatula_patty(0.016)
+		if game_audio:
+			game_audio.play_scoop()
+		_flash("Drag to grill & release · flick right to throw · Build to put back", Color("90CAF9"))
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_station(station_index)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_return_build_to_grill(net_id: int, station_index: int, x: float, z: float) -> void:
+	_mp_applying = true
+	var world_pos := Vector3(x, GRILL_SURFACE_Y, z)
+	var patty = _extract_station_patty_by_net_id(station_index, net_id)
+	if patty == null:
+		patty = _patty_by_net_id(net_id)
+	if patty == null or not is_instance_valid(patty):
+		_mp_applying = false
+		return
+	_mp_release_scoop_if(patty)
+	if _is_in_warmer_zone(world_pos):
+		var widx := _first_empty_slot()
+		if widx < 0:
+			_commit_patty_to_build(patty)
+			_mp_applying = false
+			return
+		_place_spatula_on_warmer_local(widx, world_pos, patty)
+	else:
+		var place_pos := _find_closest_patty_place(world_pos)
+		if place_pos == Vector3.ZERO:
+			_commit_patty_to_build(patty)
+			_mp_applying = false
+			return
+		var gidx := _first_empty_slot()
+		if gidx < 0:
+			_commit_patty_to_build(patty)
+			_mp_applying = false
+			return
+		_place_extracted_patty_on_grill(patty, gidx, place_pos)
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_station(station_index)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
