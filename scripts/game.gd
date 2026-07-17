@@ -87,10 +87,11 @@ const INGREDIENT_HOTKEYS: Array[String] = [
 const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8"]
 ## Operating costs — waste & supplies cut into tips.
 const COST_DROP_BURGER := 3.00
-const COST_OIL_USE := 0.50
-const COST_SEASON_USE := 0.25
-const COST_INGREDIENT := 0.25
+const COST_OIL_USE := 0.0 ## Stocked tools are free to use
+const COST_SEASON_USE := 0.0
+const COST_INGREDIENT := 0.25 ## Phone restock unit baseline (using fridge stock is free)
 const COST_BACON := 0.50
+const START_MONEY := 200.0
 const BACON_PATIENCE_RESTORE := 0.10
 const BACON_MOUTH_PICK_PX := 130.0
 
@@ -978,7 +979,7 @@ func _start_game() -> void:
 	_stop_logo_hover()
 	start_overlay.visible = false
 	playing = true
-	money = 0
+	money = START_MONEY
 	combo = 0
 	day = 1
 	day_time = DAY_LENGTH
@@ -5638,7 +5639,7 @@ func _begin_shaker_hold() -> void:
 	if game_audio:
 		game_audio.play_click()
 	_spend(COST_SEASON_USE)
-	_flash("Hold over beef to season — %s · release to put back" % _format_money(COST_SEASON_USE), Color("FFE082"))
+	_flash("Hold over beef to season — release to put back", Color("FFE082"))
 
 
 func _cancel_shaker_hold() -> void:
@@ -6924,7 +6925,7 @@ func _begin_oil_hold() -> bool:
 	if game_audio:
 		game_audio.play_click()
 	_spend(COST_OIL_USE)
-	_flash("Oil tipped — %s · drag to draw on the grill" % _format_money(COST_OIL_USE), Color("FFE082"))
+	_flash("Oil tipped — drag to draw on the grill", Color("FFE082"))
 	return true
 
 
@@ -8414,13 +8415,16 @@ func _reset_supplies() -> void:
 
 
 func _supply_buy_unit_cost(id: String) -> float:
-	var base := _ingredient_cost(id)
-	if base <= 0.001:
-		if id == "patty":
+	## Phone restock prices only — pulling from current fridge stock is free.
+	match id:
+		"patty":
 			return 0.35
-		if id == "bun_bottom" or id == "bun_top":
+		"bun_bottom", "bun_top":
 			return 0.20
-	return base * 4.0
+		"bacon":
+			return 2.00
+		_:
+			return 1.00
 
 
 func _try_use_supply(id: String, amount: int = 1) -> bool:
@@ -8438,10 +8442,8 @@ func _try_use_supply(id: String, amount: int = 1) -> bool:
 
 
 func _spend_ingredient(id: String) -> bool:
-	if not _try_use_supply(id):
-		return false
-	_spend(_ingredient_cost(id))
-	return true
+	## Using what's already in the fridge is free — only stock counts.
+	return _try_use_supply(id)
 
 
 func _mp_try_use_supply(id: String, amount: int = 1) -> bool:
@@ -8457,7 +8459,7 @@ func _mp_try_use_supply(id: String, amount: int = 1) -> bool:
 
 
 func _mp_spend_ingredient(id: String) -> bool:
-	## Always allow the shared stack change; host alone adjusts stock/money.
+	## Always allow the shared stack change; host alone adjusts stock (no cash charge).
 	if not mp_enabled or not _mp_applying:
 		return _spend_ingredient(id)
 	if NetManager.is_host() and id != "":
@@ -8465,7 +8467,6 @@ func _mp_spend_ingredient(id: String) -> bool:
 		if have > 0:
 			supply_stock[id] = have - 1
 			_refresh_phone_ui()
-			_spend(_ingredient_cost(id))
 	return true
 
 
@@ -8477,10 +8478,6 @@ func _mp_can_spend_ingredient(id: String) -> bool:
 		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		_flash("Out of %s — restock on phone!" % label, Color("EF5350"))
 		_refresh_phone_ui()
-		return false
-	var cost := _ingredient_cost(id)
-	if cost > 0.0 and money + 0.001 < cost:
-		_flash("Need %s for %s" % [_format_money(cost), str(GameDataScript.INGREDIENT_LABELS.get(id, id))], Color("EF5350"))
 		return false
 	return true
 
