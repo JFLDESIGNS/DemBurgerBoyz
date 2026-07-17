@@ -65,7 +65,9 @@ const OIL_POUR_HEIGHT := 0.445
 const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
-const TerroristCustomerScript := preload("res://scripts/terrorist_customer.gd")
+## DISABLED — armed hostiles backed up under GREAT IDEA THAT NOBODY LIKES/
+const TERRORISTS_ENABLED := false
+# const TerroristCustomerScript := preload("res://GREAT IDEA THAT NOBODY LIKES/terrorist_customer.gd")
 const WindowCatScript := preload("res://scripts/window_cat.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
@@ -743,7 +745,7 @@ func _start_game() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
-	_begin_opening_terror_ambush()
+	# _begin_opening_terror_ambush()
 
 
 func _restart() -> void:
@@ -778,7 +780,7 @@ func _restart() -> void:
 	_refresh_all_stations()
 	_begin_start_tutorial()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
-	_begin_opening_terror_ambush()
+	# _begin_opening_terror_ambush()
 
 
 func _process(delta: float) -> void:
@@ -848,14 +850,14 @@ func _process(delta: float) -> void:
 		if service_break_left <= 0.0:
 			_open_service_window()
 	else:
-		_update_opening_terror_ambush(delta)
+		# _update_opening_terror_ambush(delta)
 		spawn_timer -= delta
 		var cap := _customer_cap()
-		if not shift_closing and not terrorist_wave_active and spawn_timer <= 0.0 and customers.is_empty():
-			if day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
-				_spawn_terrorist_wave()
-				spawn_timer = _next_spawn_delay()
-			elif customers.size() < cap:
+		if not shift_closing and spawn_timer <= 0.0 and customers.is_empty():
+			# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
+			# 	_spawn_terrorist_wave()
+			# 	spawn_timer = _next_spawn_delay()
+			if customers.size() < cap:
 				_spawn_customer()
 				spawn_timer = _next_spawn_delay()
 
@@ -8237,29 +8239,33 @@ func _clear_spatula() -> void:
 # --- Customers --------------------------------------------------------------
 
 func _spawn_terrorist_wave() -> void:
-	terrorist_wave_active = true
-	_sync_combat_audio()
-	var count := randi_range(3, 5)
-	_flash("ARMED HOSTILES — GRAB THE GLOCK!", Color("EF5350"))
-	if game_audio and game_audio.has_method("play_gunshot"):
-		game_audio.play_gunshot()
-	for i in count:
-		var role := "bomber" if randf() < 0.38 else "gun"
-		var roll := randf()
-		var tier := "distant" if roll < 0.4 else ("far" if roll < 0.75 else "mid")
-		var pose: Dictionary = TerroristCustomerScript.opening_pose(i, tier, role)
-		_spawn_terrorist_unit(
-			i % TerroristCustomerScript.TERR_LANE_X.size(),
-			pose["pos"],
-			float(pose["target_x"]),
-			float(pose["target_z"]),
-			role,
-			role == "gun",
-			role == "gun"
-		)
+	if not TERRORISTS_ENABLED:
+		return
+	# terrorist_wave_active = true
+	# _sync_combat_audio()
+	# var count := randi_range(3, 5)
+	# _flash("ARMED HOSTILES — GRAB THE GLOCK!", Color("EF5350"))
+	# if game_audio and game_audio.has_method("play_gunshot"):
+	# 	game_audio.play_gunshot()
+	# for i in count:
+	# 	var role := "bomber" if randf() < 0.38 else "gun"
+	# 	var roll := randf()
+	# 	var tier := "distant" if roll < 0.4 else ("far" if roll < 0.75 else "mid")
+	# 	var pose: Dictionary = TerroristCustomerScript.opening_pose(i, tier, role)
+	# 	_spawn_terrorist_unit(
+	# 		i % TerroristCustomerScript.TERR_LANE_X.size(),
+	# 		pose["pos"],
+	# 		float(pose["target_x"]),
+	# 		float(pose["target_z"]),
+	# 		role,
+	# 		role == "gun",
+	# 		role == "gun"
+	# 	)
 
 
 func _begin_opening_terror_ambush() -> void:
+	if not TERRORISTS_ENABLED:
+		return
 	_opening_terr_active = true
 	_opening_terr_timer = 0.0
 	_opening_terr_spawned = 0
@@ -8268,6 +8274,8 @@ func _begin_opening_terror_ambush() -> void:
 
 
 func _update_opening_terror_ambush(delta: float) -> void:
+	if not TERRORISTS_ENABLED:
+		return
 	if not _opening_terr_active:
 		return
 	_opening_terr_timer += delta
@@ -8281,24 +8289,26 @@ func _update_opening_terror_ambush(delta: float) -> void:
 
 
 func _spawn_opening_terrorist(slot: int) -> void:
-	var spec: Dictionary = OPENING_TERR_SPECS[clampi(slot, 0, OPENING_TERR_SPECS.size() - 1)]
-	var role: String = str(spec.get("role", "gun"))
-	var tier: String = str(spec.get("tier", "far"))
-	var lane := slot % TerroristCustomerScript.TERR_LANE_X.size()
-	var pose: Dictionary = TerroristCustomerScript.opening_pose(slot, tier, role)
-	if slot == 0:
-		_flash("ARMED HOSTILES — GRAB THE GLOCK!", Color("EF5350"))
-		if game_audio and game_audio.has_method("play_gunshot"):
-			game_audio.play_gunshot()
-	_spawn_terrorist_unit(
-		lane,
-		pose["pos"],
-		float(pose["target_x"]),
-		float(pose["target_z"]),
-		role,
-		role == "gun",
-		role == "gun"
-	)
+	if not TERRORISTS_ENABLED:
+		return
+	# var spec: Dictionary = OPENING_TERR_SPECS[clampi(slot, 0, OPENING_TERR_SPECS.size() - 1)]
+	# var role: String = str(spec.get("role", "gun"))
+	# var tier: String = str(spec.get("tier", "far"))
+	# var lane := slot % TerroristCustomerScript.TERR_LANE_X.size()
+	# var pose: Dictionary = TerroristCustomerScript.opening_pose(slot, tier, role)
+	# if slot == 0:
+	# 	_flash("ARMED HOSTILES — GRAB THE GLOCK!", Color("EF5350"))
+	# 	if game_audio and game_audio.has_method("play_gunshot"):
+	# 		game_audio.play_gunshot()
+	# _spawn_terrorist_unit(
+	# 	lane,
+	# 	pose["pos"],
+	# 	float(pose["target_x"]),
+	# 	float(pose["target_z"]),
+	# 	role,
+	# 	role == "gun",
+	# 	role == "gun"
+	# )
 
 
 func _spawn_terrorist_unit(
@@ -8310,29 +8320,31 @@ func _spawn_terrorist_unit(
 	guns_out: bool,
 	combat_ready: bool = false
 ) -> void:
-	var c = TerroristCustomerScript.new()
-	if role == "bomber":
-		c.setup_bomber(lane)
-	else:
-		c.setup_terrorist(lane)
-	c.position = spawn_pos
-	c.target_x = hold_x
-	c.target_z = hold_z
-	c.rotation_degrees = Vector3(
-		0.0,
-		CustomerScript.FACE_TRUCK_YAW if combat_ready else CustomerScript.WALK_PLUS_X_YAW,
-		0.0
-	)
-	if role == "bomber" and c.has_signal("detonated"):
-		c.detonated.connect(func(damage: float, at: Vector3) -> void:
-			_on_terrorist_detonated(c, damage, at)
-		)
-	elif c.has_signal("shot_player"):
-		c.shot_player.connect(_on_terrorist_shot_player)
-	customers_root.add_child(c)
-	customers.append(c)
-	if guns_out and c.has_method("present_weapon"):
-		c.call_deferred("present_weapon", combat_ready)
+	if not TERRORISTS_ENABLED:
+		return
+	# var c = TerroristCustomerScript.new()
+	# if role == "bomber":
+	# 	c.setup_bomber(lane)
+	# else:
+	# 	c.setup_terrorist(lane)
+	# c.position = spawn_pos
+	# c.target_x = hold_x
+	# c.target_z = hold_z
+	# c.rotation_degrees = Vector3(
+	# 	0.0,
+	# 	CustomerScript.FACE_TRUCK_YAW if combat_ready else CustomerScript.WALK_PLUS_X_YAW,
+	# 	0.0
+	# )
+	# if role == "bomber" and c.has_signal("detonated"):
+	# 	c.detonated.connect(func(damage: float, at: Vector3) -> void:
+	# 		_on_terrorist_detonated(c, damage, at)
+	# 	)
+	# elif c.has_signal("shot_player"):
+	# 	c.shot_player.connect(_on_terrorist_shot_player)
+	# customers_root.add_child(c)
+	# customers.append(c)
+	# if guns_out and c.has_method("present_weapon"):
+	# 	c.call_deferred("present_weapon", combat_ready)
 
 
 func _spawn_terror_explosion(at: Vector3) -> void:
@@ -10884,6 +10896,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var min_y := INF
 	var max_y := -INF
 	var top_row: Control = null
+	var bun_rows: Array[Control] = []
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -10901,8 +10914,10 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		)
 		if item == "bun_bottom":
 			stack_lift += 10.0 * layer_scale
+			bun_rows.append(row)
 		if item == "bun_top":
 			top_row = row
+			bun_rows.append(row)
 
 		var tr := TextureRect.new()
 		if item == "patty":
@@ -10931,7 +10946,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		max_y = maxf(max_y, row.position.y + h)
 
 	var pivot := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
-	return {"stack": stack, "top_row": top_row, "pivot": pivot}
+	return {"stack": stack, "top_row": top_row, "pivot": pivot, "bun_rows": bun_rows}
 
 
 func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Callable) -> void:
@@ -10954,6 +10969,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 
 	var built: Dictionary = _build_serve_fly_stack(fly_root, station_index)
 	var stack: Control = built["stack"]
+	var bun_rows: Array = built.get("bun_rows", [])
 	stack.pivot_offset = built["pivot"]
 	stack.scale = Vector2.ONE
 
@@ -10964,21 +10980,31 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if preview != null and is_instance_valid(preview):
 		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
+	var squashed := Vector2(1.12, 0.78)
+	var fly_end_scale := Vector2(0.92, 0.68)
+
+	var apply_stack_scale := func(s: Vector2) -> void:
+		if not is_instance_valid(stack):
+			return
+		stack.scale = s
+		var inv := Vector2(1.0 / maxf(s.x, 0.001), 1.0 / maxf(s.y, 0.001))
+		for row in bun_rows:
+			if row != null and is_instance_valid(row):
+				(row as Control).scale = inv
+
 	var tw := create_tween()
 	tw.set_parallel(false)
 	tw.tween_interval(0.04)
 
-	var squashed := Vector2(1.12, 0.78)
-	tw.tween_property(stack, "scale", squashed, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_method(func(t: float): apply_stack_scale.call(Vector2.ONE.lerp(squashed, t)), 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
-	var fly_end_scale := Vector2(0.92, 0.68)
 	tw.tween_method(
 		func(t: float) -> void:
 			if not is_instance_valid(stack):
 				return
 			var eased := t * t * (3.0 - 2.0 * t)
 			stack.global_position = start_pos.lerp(mouth_pos, eased)
-			stack.scale = squashed.lerp(fly_end_scale, eased),
+			apply_stack_scale.call(squashed.lerp(fly_end_scale, eased)),
 		0.0,
 		1.0,
 		0.55
