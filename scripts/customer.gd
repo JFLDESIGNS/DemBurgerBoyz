@@ -28,8 +28,9 @@ const BAR_H := 0.032
 const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
 ## Knock-back tumble after a Glock hit, then settle and despawn.
-const RAGDOLL_ACTIVE_SEC := 2.15
-const RAGDOLL_TWIST_SEC := 0.9 ## Free spin window before settling onto their back.
+const RAGDOLL_ACTIVE_SEC := 9.5
+const RAGDOLL_TWIST_SEC := 2.2 ## Free spin window before settling onto their back.
+const RAGDOLL_DESPAWN_SEC := 5.5 ## Extra time lying around after the active flop.
 ## Yaw: 180 faces the cook/truck (−Z); 0 walks away down the street (+Z).
 ## Kenney mesh noses along +Z, so these match travel on ±X.
 const FACE_TRUCK_YAW := 180.0
@@ -103,6 +104,7 @@ var _base_body_y: float = 0.0
 var _home_x: float = 0.0
 var _face_style: int = 0 ## slight variety per customer
 var _skin_path: String = ""
+var is_terrorist: bool = false
 ## Fire-extinguisher powder stuck to the toon (white spheres that build up).
 var _powder_hit: bool = false
 var _powdering: bool = false ## Standing still while powder coats them.
@@ -110,6 +112,8 @@ var _powder_stand_t: float = 0.0
 var _powder_drip_cool: float = 0.0
 var _powder_face_build: float = 0.0 ## 0–1 — spray buildup on the face
 var _powder_panic_t: float = 0.0
+var _powder_knock_x: float = 0.0
+var _powder_knock_z: float = 0.0
 const POWDER_STAND_SEC := 2.6
 var _powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale, zone}
 var _panic_bones: Dictionary = {} ## Kenney arm bone indices for hands-up pose
@@ -121,6 +125,7 @@ var _ragdoll_vel: Vector3 = Vector3.ZERO
 var _ragdoll_ang: Vector3 = Vector3.ZERO
 var _ragdoll_t: float = 0.0
 var _ragdoll_lie: float = 0.0 ## 0 upright → 1 flat on back
+var _ragdoll_bone_phase: Dictionary = {} ## Per-limb wobble seeds for noodle flop.
 var _skeleton: Skeleton3D = null
 var _blood_bursts: Array = [] ## GPUParticles3D to free later
 static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
@@ -383,9 +388,9 @@ func _build() -> void:
 
 	_bubble_bg = MeshInstance3D.new()
 	var bg_mesh := BoxMesh.new()
-	bg_mesh.size = Vector3(1.6, 0.55, 0.05)
+	bg_mesh.size = Vector3(0.92, 0.32, 0.04)
 	_bubble_bg.mesh = bg_mesh
-	_bubble_bg.position = Vector3(0, BAR_Y + 0.28, 0)
+	_bubble_bg.position = Vector3(0, BAR_Y + 0.22, 0)
 	var bgm := StandardMaterial3D.new()
 	bgm.albedo_color = Color(1, 1, 1, 0.95)
 	bgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -395,11 +400,11 @@ func _build() -> void:
 
 	_bubble = Label3D.new()
 	_bubble.text = speech
-	_bubble.position = Vector3(0, BAR_Y + 0.28, 0.04)
+	_bubble.position = Vector3(0, BAR_Y + 0.22, 0.035)
 	_bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_bubble.modulate = Color(0.12, 0.12, 0.14)
 	_bubble.visible = false
-	UiFontsScript.apply_label3d(_bubble, false, 64, 0.099)
+	UiFontsScript.apply_label3d(_bubble, false, 40, 0.062)
 	_bubble.outline_modulate = Color(0, 0, 0, 0)
 	_bubble.outline_size = 0
 	add_child(_bubble)
@@ -542,7 +547,9 @@ func _collect_char_meshes(n: Node) -> void:
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
 		## Keep toons in front of the street matte painting.
-		mi.sorting_offset = 12.0
+		mi.sorting_offset = 24.0
+		if mi.material_override is StandardMaterial3D:
+			(mi.material_override as StandardMaterial3D).render_priority = 2
 		_char_meshes.append(mi)
 	for c in n.get_children():
 		_collect_char_meshes(c)
@@ -1203,11 +1210,11 @@ func receive_ext_powder(spray_zone: String = "body") -> bool:
 		_powder_face_build = clampf(_powder_face_build + 0.14, 0.0, 1.0)
 	else:
 		_powder_face_build = clampf(_powder_face_build + 0.04, 0.0, 1.0)
-	var face_n := 4 if zone == "face" else 1
-	var body_n := 3 if zone == "body" else 1
+	var face_n := 2 if zone == "face" else 1
+	var body_n := 2 if zone == "body" else 1
 	if _powdering:
-		face_n = maxi(face_n, 2 + int(_powder_face_build * 3.0))
-		body_n = maxi(body_n, 2)
+		face_n = maxi(face_n, 1 + int(_powder_face_build * 2.0))
+		body_n = maxi(body_n, 1)
 	for _i in face_n:
 		_spawn_powder_blob("face")
 	for _i in body_n:
@@ -1221,8 +1228,23 @@ func receive_ext_powder(spray_zone: String = "body") -> bool:
 	_powder_stand_t = 0.0
 	_powder_panic_t = 0.0
 	_powder_drip_cool = 0.0
+	_powder_knock_x = 0.0
+	_powder_knock_z = 0.0
 	_begin_powder_stand()
 	return true
+
+
+func apply_ext_spray_push(delta: float, zone: String = "body") -> void:
+	## Continuous knock-back while the extinguisher cone hits them.
+	if is_ragdoll or is_leaving:
+		return
+	var push_z := 1.55 if zone == "face" else 0.95
+	_powder_knock_z += delta * push_z
+	_powder_knock_x += randf_range(-delta * 0.42, delta * 0.42)
+	_powder_knock_x = clampf(_powder_knock_x, -0.65, 0.65)
+	_powder_knock_z = clampf(_powder_knock_z, 0.0, 2.4)
+	global_position.z = clampf(global_position.z + delta * push_z * 0.62, WAIT_Z - 0.08, MATTE_FRONT_Z_MAX - 0.12)
+	global_position.x = clampf(global_position.x + randf_range(-delta * 0.22, delta * 0.22), _home_x - 0.55, _home_x + 0.55)
 
 
 func _begin_powder_stand() -> void:
@@ -1260,9 +1282,11 @@ func _update_powder_stand(delta: float) -> void:
 	_powder_stand_t += delta
 	_powder_panic_t += delta
 	global_position.y = STAND_Y
-	global_position.z = WAIT_Z
+	_powder_knock_x = lerpf(_powder_knock_x, 0.0, delta * 1.35)
+	_powder_knock_z = lerpf(_powder_knock_z, 0.0, delta * 0.95)
 	var wob := sin(_powder_panic_t * 16.0) * 0.05
-	global_position.x = _home_x + wob
+	global_position.x = _home_x + wob + _powder_knock_x
+	global_position.z = clampf(WAIT_Z + _powder_knock_z, WAIT_Z, MATTE_FRONT_Z_MAX - 0.15)
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
 		_body.position.y = _base_body_y + absf(sin(_powder_panic_t * 10.0)) * 0.015
@@ -1273,11 +1297,11 @@ func _update_powder_stand(delta: float) -> void:
 	_powder_drip_cool -= delta
 	if _powder_drip_cool <= 0.0:
 		_powder_drip_cool = 0.09
-		var face_drips := 2 + int(_powder_face_build * 4.0)
+		var face_drips := 1 + int(_powder_face_build * 2.0)
 		for _i in face_drips:
 			_spawn_powder_blob("face")
 		_spawn_powder_blob("body")
-		if randf() < 0.45:
+		if randf() < 0.3:
 			_spawn_powder_blob("body")
 	if _powder_stand_t >= POWDER_STAND_SEC:
 		_powdering = false
@@ -1332,7 +1356,8 @@ func get_shot(shot_from: Vector3, shot_dir: Vector3) -> bool:
 	## Returns true on the first fatal hit (caller should drop the ticket / queue).
 	_spawn_blood_splash(shot_dir)
 	if is_ragdoll:
-		## Extra hits: blood + harder shove / twist.
+		## Extra hits: blood + harder shove / twist — also keep the body around longer.
+		_ragdoll_t = minf(_ragdoll_t, RAGDOLL_ACTIVE_SEC * 0.35)
 		var nudge := shot_dir.normalized()
 		if nudge.length_squared() < 0.01:
 			nudge = Vector3(0, 0, 1)
@@ -1350,7 +1375,7 @@ func get_shot(shot_from: Vector3, shot_dir: Vector3) -> bool:
 			randf_range(-280.0, 280.0),
 			randf_range(-200.0, 200.0)
 		)
-		_apply_limp_skeleton(0.45)
+		_bump_noodle_impulse()
 		return false
 	stop_order_clock()
 	is_ragdoll = true
@@ -1396,7 +1421,7 @@ func get_shot(shot_from: Vector3, shot_dir: Vector3) -> bool:
 		_body.position.y = _base_body_y
 		_body.rotation_degrees = Vector3.ZERO
 	_cache_skeleton()
-	_apply_limp_skeleton(1.0)
+	_init_noodle_ragdoll(push)
 	return true
 
 
@@ -1408,22 +1433,64 @@ func _cache_skeleton() -> void:
 	_skeleton = _body.find_child("Skeleton3D", true, false) as Skeleton3D
 
 
-func _apply_limp_skeleton(amount: float = 1.0) -> void:
-	## Collapse bone poses into a floppy dead pose (animation stays off).
+func _init_noodle_ragdoll(shot_dir: Vector3) -> void:
+	_ragdoll_bone_phase.clear()
+	for bn in [
+		"LeftArm", "RightArm", "LeftForeArm", "RightForeArm",
+		"LeftHand", "RightHand", "Head", "Neck", "UpperChest", "Chest", "Spine"
+	]:
+		_ragdoll_bone_phase[bn] = randf() * TAU
+	## Shot from the right → right arm whips harder (and vice versa).
+	var side := clampf(shot_dir.x, -1.0, 1.0)
+	_ragdoll_bone_phase["RightArm"] = side * PI * 0.5 + randf_range(-0.4, 0.4)
+	_ragdoll_bone_phase["LeftArm"] = -side * PI * 0.5 + randf_range(-0.4, 0.4)
+	_update_noodle_skeleton(0.0)
+
+
+func _bump_noodle_impulse() -> void:
+	for bn in _ragdoll_bone_phase.keys():
+		_ragdoll_bone_phase[bn] = float(_ragdoll_bone_phase[bn]) + randf_range(-1.2, 1.2)
+
+
+func _noodle_bone(bone_name: String, base: Vector3, t: float, speed: float, flop: float) -> void:
+	if not _panic_bones.has(bone_name):
+		return
+	var phase := float(_ragdoll_bone_phase.get(bone_name, 0.0))
+	var w1 := sin(t * speed + phase) * deg_to_rad(42.0) * flop
+	var w2 := cos(t * speed * 1.41 + phase * 1.6) * deg_to_rad(32.0) * flop
+	var w3 := sin(t * speed * 0.77 + phase * 2.1) * deg_to_rad(24.0) * flop
+	_set_panic_bone_rot(bone_name, base + Vector3(w1, w2 * 0.45, w3))
+
+
+func _update_noodle_skeleton(_delta: float) -> void:
+	## Live noodly limbs — arms swing on damped sines instead of locking in rest pose.
 	_cache_skeleton()
+	_cache_panic_bones()
 	if _skeleton == null:
 		return
-	var a := clampf(amount, 0.0, 1.0)
-	for i in _skeleton.get_bone_count():
-		var rest := _skeleton.get_bone_rest(i)
-		var limp := Basis.from_euler(Vector3(
-			deg_to_rad(randf_range(-28.0, 28.0) * a),
-			deg_to_rad(randf_range(-22.0, 22.0) * a),
-			deg_to_rad(randf_range(-40.0, 40.0) * a)
-		))
-		var pose := rest
-		pose.basis = rest.basis * limp
-		_skeleton.set_bone_pose(i, pose)
+	_skeleton.reset_bone_poses()
+	var flop := clampf(1.0 - _ragdoll_t * 0.065, 0.4, 1.0)
+	var t := _ragdoll_t
+	var sway := sin(t * 2.6) * deg_to_rad(26.0) * flop
+	var sway2 := cos(t * 3.4) * deg_to_rad(20.0) * flop
+	## Arms hang out and flap — big elbow/knee bends.
+	_noodle_bone("RightArm", Vector3(deg_to_rad(28.0) + sway, deg_to_rad(6.0), deg_to_rad(112.0) + sway2), t, 2.35, flop)
+	_noodle_bone("RightForeArm", Vector3(deg_to_rad(-105.0) + sway2 * 1.6, deg_to_rad(10.0), deg_to_rad(18.0)), t, 3.9, flop)
+	_noodle_bone("RightHand", Vector3(deg_to_rad(-32.0), deg_to_rad(8.0), deg_to_rad(42.0) + sway), t, 4.5, flop)
+	_noodle_bone("LeftArm", Vector3(deg_to_rad(22.0) - sway, deg_to_rad(-5.0), deg_to_rad(-108.0) - sway2), t, 2.2, flop)
+	_noodle_bone("LeftForeArm", Vector3(deg_to_rad(-98.0) - sway2 * 1.5, deg_to_rad(-8.0), deg_to_rad(-14.0)), t, 3.7, flop)
+	_noodle_bone("LeftHand", Vector3(deg_to_rad(-28.0), deg_to_rad(-6.0), deg_to_rad(-38.0) - sway), t, 4.3, flop)
+	## Torso + head loosely follow the flop.
+	_noodle_bone("Spine", Vector3(deg_to_rad(10.0) + sway * 0.35, sway2 * 0.2, 0.0), t, 1.6, flop * 0.55)
+	_noodle_bone("Chest", Vector3(deg_to_rad(8.0) + sway * 0.3, 0.0, sway2 * 0.25), t, 1.8, flop * 0.5)
+	_noodle_bone("UpperChest", Vector3(deg_to_rad(6.0) + sway * 0.25, 0.0, sway2 * 0.2), t, 2.0, flop * 0.45)
+	_noodle_bone("Neck", Vector3(deg_to_rad(-14.0) + sway * 0.4, sway2 * 0.35, 0.0), t, 2.4, flop * 0.5)
+	_noodle_bone("Head", Vector3(deg_to_rad(-18.0) + sway * 0.55, sway2 * 0.4, sway * 0.3), t, 2.8, flop * 0.55)
+
+
+func _apply_limp_skeleton(amount: float = 1.0) -> void:
+	## Legacy entry — noodle ragdoll replaces the old stiff random twist.
+	_init_noodle_ragdoll(Vector3(0, 0, 1))
 
 
 func _spawn_blood_splash(shot_dir: Vector3) -> void:
@@ -1512,25 +1579,26 @@ func _update_ragdoll(delta: float) -> void:
 	_ragdoll_t += delta
 	var active := _ragdoll_t < RAGDOLL_ACTIVE_SEC
 	var twisting := _ragdoll_t < RAGDOLL_TWIST_SEC
+	_update_noodle_skeleton(delta)
 	_ragdoll_vel.y -= 15.5 * delta
 	global_position += _ragdoll_vel * delta
 	if twisting:
-		## Free blast tumble — twist on all axes while flying back.
-		rotation_degrees.x += _ragdoll_ang.x * delta
-		rotation_degrees.y += _ragdoll_ang.y * delta
-		rotation_degrees.z += _ragdoll_ang.z * delta
+		## Softer tumble — limbs do most of the flop.
+		rotation_degrees.x += _ragdoll_ang.x * delta * 0.72
+		rotation_degrees.y += _ragdoll_ang.y * delta * 0.85
+		rotation_degrees.z += _ragdoll_ang.z * delta * 0.65
 		if _body:
-			_body.rotation_degrees.x += _ragdoll_ang.x * delta * 0.35
-			_body.rotation_degrees.z += _ragdoll_ang.z * delta * 0.45
+			_body.rotation_degrees.x += _ragdoll_ang.x * delta * 0.22
+			_body.rotation_degrees.z += _ragdoll_ang.z * delta * 0.28
 	else:
-		## Ease onto their back after the twist window.
-		_ragdoll_lie = minf(1.0, _ragdoll_lie + delta * 1.6)
-		rotation_degrees.x = lerpf(rotation_degrees.x, 82.0 * _ragdoll_lie, 1.0 - exp(-delta * 5.0))
-		rotation_degrees.y += _ragdoll_ang.y * delta * 0.35
-		rotation_degrees.z = lerpf(rotation_degrees.z, clampf(_ragdoll_ang.z * 0.12, -35.0, 35.0), 1.0 - exp(-delta * 4.0))
+		## Ease onto their back but keep a little slack.
+		_ragdoll_lie = minf(1.0, _ragdoll_lie + delta * 1.35)
+		rotation_degrees.x = lerpf(rotation_degrees.x, 78.0 * _ragdoll_lie, 1.0 - exp(-delta * 3.5))
+		rotation_degrees.y += _ragdoll_ang.y * delta * 0.28
+		rotation_degrees.z = lerpf(rotation_degrees.z, clampf(_ragdoll_ang.z * 0.18, -48.0, 48.0), 1.0 - exp(-delta * 3.0))
 		if _body:
-			_body.rotation_degrees.x = lerpf(_body.rotation_degrees.x, 12.0 * _ragdoll_lie, 1.0 - exp(-delta * 5.0))
-			_body.rotation_degrees.z = lerpf(_body.rotation_degrees.z, clampf(_ragdoll_ang.z * 0.06, -22.0, 22.0), 1.0 - exp(-delta * 4.0))
+			_body.rotation_degrees.x = lerpf(_body.rotation_degrees.x, 16.0 * _ragdoll_lie, 1.0 - exp(-delta * 3.5))
+			_body.rotation_degrees.z = lerpf(_body.rotation_degrees.z, clampf(_ragdoll_ang.z * 0.1, -28.0, 28.0), 1.0 - exp(-delta * 3.0))
 	## Never slip behind the street matte painting.
 	if global_position.z > MATTE_FRONT_Z_MAX:
 		global_position.z = MATTE_FRONT_Z_MAX
@@ -1548,7 +1616,7 @@ func _update_ragdoll(delta: float) -> void:
 	_ragdoll_ang *= 1.0 - delta * (1.6 if twisting else (2.6 if active else 6.0))
 	_ragdoll_vel.x *= 1.0 - delta * (1.1 if active else 3.5)
 	_ragdoll_vel.z *= 1.0 - delta * (1.0 if active else 3.5)
-	if not active and _ragdoll_t > RAGDOLL_ACTIVE_SEC + 1.1:
+	if not active and _ragdoll_t > RAGDOLL_ACTIVE_SEC + RAGDOLL_DESPAWN_SEC:
 		queue_free()
 	if global_position.y < -2.0:
 		queue_free()
@@ -1566,32 +1634,33 @@ func _cache_panic_bones() -> void:
 
 
 func _ensure_powder_mounts() -> void:
-	## Bone mounts so powder spheres follow the mesh during panic / walk-off.
-	if _powder_face_mount != null and is_instance_valid(_powder_face_mount):
-		return
+	## Only cache skeleton — blobs are now parented to _body with manual offsets.
 	_cache_panic_bones()
 	_cache_skeleton()
-	if _skeleton == null:
-		return
-	_powder_face_mount = BoneAttachment3D.new()
-	_powder_face_mount.name = "PowderFaceMount"
-	_powder_face_mount.bone_name = "Head"
-	_skeleton.add_child(_powder_face_mount)
-	_powder_body_mount = BoneAttachment3D.new()
-	_powder_body_mount.name = "PowderBodyMount"
-	if _panic_bones.has("UpperChest"):
-		_powder_body_mount.bone_name = "UpperChest"
-	else:
-		_powder_body_mount.bone_name = "Chest"
-	_skeleton.add_child(_powder_body_mount)
 
 
-func _powder_parent_for_zone(zone: String) -> Node3D:
-	_ensure_powder_mounts()
-	if zone == "face" and _powder_face_mount != null:
-		return _powder_face_mount
-	if _powder_body_mount != null:
-		return _powder_body_mount
+func _head_pos_in_body() -> Vector3:
+	if _skeleton == null or _body == null:
+		return Vector3(0.0, 1.75, 0.0)
+	var idx := int(_panic_bones.get("Head", -1))
+	if idx < 0:
+		return Vector3(0.0, 1.75, 0.0)
+	var head_global := (_skeleton.global_transform * _skeleton.get_bone_global_pose(idx)).origin
+	return _body.to_local(head_global)
+
+
+func _chest_pos_in_body() -> Vector3:
+	if _skeleton == null or _body == null:
+		return Vector3(0.0, 1.1, 0.0)
+	var bone_name := "UpperChest" if _panic_bones.has("UpperChest") else "Chest"
+	var idx := int(_panic_bones.get(bone_name, -1))
+	if idx < 0:
+		return Vector3(0.0, 1.1, 0.0)
+	var chest_global := (_skeleton.global_transform * _skeleton.get_bone_global_pose(idx)).origin
+	return _body.to_local(chest_global)
+
+
+func _powder_parent_for_zone(_zone: String) -> Node3D:
 	return _body if _body != null else self
 
 
@@ -1626,26 +1695,32 @@ func _apply_hands_up_pose(strength: float) -> void:
 
 
 func _spawn_powder_blob(zone: String) -> void:
-	## White spheres parented to head/chest bones so they move with the toon.
+	## White spheres parented to _body at bone position — NOT bone-attached (scale bloat).
+	_ensure_powder_mounts()
 	var blob := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
-	var rad := 0.04 + randf() * 0.055
+	var rad := 0.008 + randf() * 0.012
 	if zone == "face":
-		rad *= 1.08
+		rad *= 0.9
 	sphere.radius = rad
 	sphere.height = rad * 2.0
+	sphere.radial_segments = 6
+	sphere.rings = 4
 	blob.mesh = sphere
+	var anchor: Vector3
 	if zone == "face":
-		blob.position = Vector3(
-			randf_range(-0.11, 0.11),
-			randf_range(-0.06, 0.14),
-			randf_range(0.05, 0.14)
+		anchor = _head_pos_in_body()
+		blob.position = anchor + Vector3(
+			randf_range(-0.035, 0.035),
+			randf_range(-0.02, 0.04),
+			randf_range(0.02, 0.06)
 		)
 	else:
-		blob.position = Vector3(
-			randf_range(-0.18, 0.18),
-			randf_range(-0.12, 0.18),
-			randf_range(0.04, 0.12)
+		anchor = _chest_pos_in_body()
+		blob.position = anchor + Vector3(
+			randf_range(-0.06, 0.06),
+			randf_range(-0.05, 0.06),
+			randf_range(0.01, 0.06)
 		)
 	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	blob.sorting_offset = 8.0
@@ -1660,18 +1735,17 @@ func _spawn_powder_blob(zone: String) -> void:
 	blob.material_override = mat
 	var parent := _powder_parent_for_zone(zone)
 	parent.add_child(blob)
+	blob.scale = Vector3.ONE
 	var life := 4.0 + randf() * 2.5
-	var start_s := 0.72 + randf() * 0.58
-	blob.scale = Vector3.ONE * start_s
 	_powder_blobs.append({
 		"mesh": blob,
 		"mat": mat,
 		"life": life,
 		"max_life": life,
-		"start_scale": start_s,
+		"start_scale": 1.0,
 		"zone": zone,
 	})
-	while _powder_blobs.size() > 100:
+	while _powder_blobs.size() > 120:
 		var old: Dictionary = _powder_blobs.pop_front()
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
@@ -1746,6 +1820,11 @@ func leave_after_dispute() -> void:
 
 func patience_ratio() -> float:
 	return clampf(patience / maxf(0.01, patience_max), 0.0, 1.0)
+
+
+## Serve fly animation target — roughly lip height in the service window.
+func mouth_global() -> Vector3:
+	return global_position + Vector3(0.0, 1.18, 0.06)
 
 
 ## Returns {total, base, tip, perfect, wrong, meh}

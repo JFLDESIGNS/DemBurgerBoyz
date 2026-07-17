@@ -36,6 +36,8 @@ var band: int = Band.FM
 ## Default: FM 92.1 Smooth Jazz (index in FM_STATIONS).
 var channel_index: int = 1
 var volume_linear: float = 0.80
+## Temporary mute for combat theme — keeps stream alive so resume is instant.
+var _combat_silenced: bool = false
 
 var _http := HTTPClient.new()
 var _player: AudioStreamPlayer
@@ -146,8 +148,30 @@ func set_channel(index: int) -> void:
 
 func set_volume_linear(v: float) -> void:
 	volume_linear = clampf(v, 0.0, 1.0)
-	if _player:
+	if _player and not _combat_silenced:
 		_player.volume_db = _vol_db()
+
+
+func set_combat_silence(on: bool) -> void:
+	## Duck the live stream without powering off — gun/terror theme takes over.
+	if _combat_silenced == on:
+		return
+	_combat_silenced = on
+	if _player == null:
+		return
+	if on:
+		_player.volume_db = -80.0
+		_emit_status("Radio muted — combat")
+	else:
+		_player.volume_db = _vol_db()
+		if powered:
+			_emit_status("♪ LIVE %s" % short_title())
+		else:
+			_emit_status("Radio off")
+
+
+func is_combat_silenced() -> bool:
+	return _combat_silenced
 
 
 func _stations() -> Array[Dictionary]:
@@ -158,6 +182,8 @@ func _stations() -> Array[Dictionary]:
 const VOL_SCALE := 0.18 ## Louder max stream level
 
 func _vol_db() -> float:
+	if _combat_silenced:
+		return -80.0
 	return linear_to_db(maxf(volume_linear * VOL_SCALE, 0.00005))
 
 

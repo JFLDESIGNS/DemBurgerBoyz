@@ -441,7 +441,48 @@ func play_gunshot() -> void:
 	_play_cached("gunshot_%d" % (randi() % 4), _make_gunshot, 0.92 + randf() * 0.16, 1.15)
 
 
-func play_wilhelm_scream() -> void:
+const COMBAT_THEME_PATH := "res://assets/music/double_agent.mp3"
+var _combat_player: AudioStreamPlayer = null
+var _combat_theme_on: bool = false
+
+
+func play_combat_theme() -> void:
+	## "008 Double Agent" — loops while hostiles are out or the glock is drawn.
+	if _combat_player == null:
+		_combat_player = AudioStreamPlayer.new()
+		_combat_player.name = "CombatTheme"
+		_combat_player.bus = "Master"
+		add_child(_combat_player)
+	if _combat_theme_on and _combat_player.playing:
+		return
+	if not ResourceLoader.exists(COMBAT_THEME_PATH):
+		push_warning("Combat theme missing: %s" % COMBAT_THEME_PATH)
+		return
+	var stream: AudioStream = load(COMBAT_THEME_PATH) as AudioStream
+	if stream == null:
+		return
+	if stream is AudioStreamMP3:
+		(stream as AudioStreamMP3).loop = true
+	elif stream is AudioStreamOggVorbis:
+		(stream as AudioStreamOggVorbis).loop = true
+	_combat_player.stream = stream
+	_combat_player.volume_db = linear_to_db(0.72)
+	_combat_player.pitch_scale = 1.0
+	_combat_player.play()
+	_combat_theme_on = true
+
+
+func stop_combat_theme() -> void:
+	_combat_theme_on = false
+	if _combat_player != null and is_instance_valid(_combat_player):
+		_combat_player.stop()
+
+
+func is_combat_theme_playing() -> bool:
+	return _combat_theme_on and _combat_player != null and _combat_player.playing
+
+
+func play_wilhelm_scream(include_burger_why: bool = true) -> void:
 	## Classic Wilhelm scream (CC0 — USC / Wikimedia).
 	if not _cache.has("wilhelm"):
 		var stream: AudioStream = null
@@ -456,8 +497,8 @@ func play_wilhelm_scream() -> void:
 	p.pitch_scale = 0.96 + randf() * 0.1
 	p.volume_db = linear_to_db(1.05)
 	p.play()
-	## 65% — follow with BURGERWHY right after the scream ends.
-	if randf() < 0.65:
+	## 65% — follow with BURGERWHY (regular customers only; not hostiles).
+	if include_burger_why and randf() < 0.65:
 		var delay := 1.05
 		if p.stream != null and p.stream.get_length() > 0.05:
 			delay = p.stream.get_length() / maxf(p.pitch_scale, 0.5)

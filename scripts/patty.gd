@@ -1338,6 +1338,18 @@ func add_cheese() -> bool:
 	return true
 
 
+func remove_cheese() -> void:
+	if not has_cheese:
+		return
+	has_cheese = false
+	cheese_melt = 0.0
+	if _cheese_root != null and is_instance_valid(_cheese_root):
+		_cheese_root.queue_free()
+	_cheese_root = null
+	_cheese_flaps.clear()
+	_cheese_mat = null
+
+
 func get_cheese_seat_global() -> Vector3:
 	## Where a fresh slice sits — matches `_cheese_root` on the meat mesh.
 	if _mesh != null and is_instance_valid(_mesh):

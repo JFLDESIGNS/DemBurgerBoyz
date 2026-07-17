@@ -65,6 +65,7 @@ const OIL_POUR_HEIGHT := 0.445
 const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
+const TerroristCustomerScript := preload("res://scripts/terrorist_customer.gd")
 const WindowCatScript := preload("res://scripts/window_cat.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
@@ -120,6 +121,27 @@ var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
 var customers: Array = []
+## Occasional armed hostile wave — spawns far back with guns.
+var terrorist_wave_active: bool = false
+const TERRORIST_WAVE_CHANCE := 0.34
+const TERRORIST_MIN_DAY := 2
+const TERRORIST_KILL_BOUNTY := 12.0
+const OPENING_TERR_COUNT := 8
+const OPENING_TERR_WINDOW := 20.0
+const OPENING_TERR_AT: Array[float] = [0.5, 2.8, 5.2, 7.5, 10.0, 12.5, 15.5, 18.0]
+const OPENING_TERR_SPECS: Array[Dictionary] = [
+	{"role": "gun", "tier": "distant"},
+	{"role": "gun", "tier": "distant"},
+	{"role": "gun", "tier": "distant"},
+	{"role": "gun", "tier": "far"},
+	{"role": "gun", "tier": "far"},
+	{"role": "bomber", "tier": "distant"},
+	{"role": "bomber", "tier": "far"},
+	{"role": "bomber", "tier": "mid"},
+]
+var _opening_terr_active: bool = false
+var _opening_terr_timer: float = 0.0
+var _opening_terr_spawned: int = 0
 var grill: Array = []
 var spatula_patty = null ## one patty on the spatula at a time
 var stations: Array = [] ## each: {items, patty, panel, preview, title, plate}
@@ -164,8 +186,9 @@ var burner_flame_root: Node3D = null
 var burner_flame_tris: Array = [] ## MeshInstance3D
 var burner_flame_data: Array = [] ## {phase, spd, amp, lean, base}
 var burner_flame_lights: Array = [] ## SpotLight3D strip under the lip
-const BURNER_STRIP_LIGHT_ENERGY := 0.18
-const BURNER_STRIP_LIGHT_RANGE := 1.45
+var burner_strip_root: Node3D = null
+var burner_strip_cook_w: float = 0.0
+var burner_strip_energy: float = 0.18
 var heat_warp_mesh: MeshInstance3D = null
 var heat_warp_mat: ShaderMaterial = null
 var heat_warp_base_size := Vector2(1.0, 0.6)
@@ -195,6 +218,7 @@ var _strip_swipe_added: Dictionary = {} ## id -> true for this swipe
 var _strip_gesture_added: bool = false ## Already applied a topping this LMB gesture.
 const STRIP_SWIPE_THRESH_PX := 28.0
 var _auto_serving: bool = false
+var _serve_fly_busy: bool = false
 var grill_ignore_pad_until: float = 0.0
 var grill_residue: Array = [] ## 0 clean · 0.5 half-scraped · 1.0 full stuck-on
 var grill_residue_meshes: Array = [] ## legacy single mesh slot (unused visually)
@@ -297,14 +321,17 @@ var glock_recoil: float = 0.0
 var glock_aim_roll: float = 0.0 ## Smoothed left/right lean while aiming.
 var glock_aim_yaw: float = 0.0
 var glock_prev_mouse_x: float = -1.0
-const GLOCK_HOLD_HEIGHT := 0.34
+const GLOCK_HOLD_HEIGHT := 0.213 ## ~5 inches lower than prior 0.34 for easier aiming.
+const GLOCK_HOLD_DIST := 1.24 ## Push grip toward camera along the sight line.
+const GLOCK_HOLD_DROP := 0.10 ## Nudge lower while tracking the cursor.
+const GLOCK_AIM_REACH := 30.0
 const GLOCK_COLLISION_LAYER := 256
 const GLOCK_FIRE_COOLDOWN := 0.10
 const GLOCK_MESH_SCALE := 1.755 ## ~30% larger on the wall mount.
 const GLOCK_MUZZLE_LOCAL := Vector3(0.0, 0.015, 0.12)
 ## Laser under the rail — nudged up 4" / forward 1" from the old low hang.
 const GLOCK_LASER_LOCAL := Vector3(0.0, 0.09, 0.08)
-const GLOCK_LASER_MAX := 8.5
+const GLOCK_LASER_MAX := 14.0
 ## Twin night-sight dots on the rear sight posts (left / right of the notch).
 const GLOCK_REAR_SIGHT_Y := 0.048
 const GLOCK_REAR_SIGHT_Z := -0.042
@@ -367,6 +394,7 @@ var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
 var street_matte: MeshInstance3D = null
+var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var burger_pals_decal: MeshInstance3D = null
@@ -380,6 +408,8 @@ const STREET_MATTE_BASE_SIZE := Vector2(18.2, 9.1)
 const STREET_MATTE_BASE_Z := 11.5
 ## Default Y: prior 2.55 minus ~3 ft (0.91 m).
 const STREET_MATTE_DEFAULT_Y := 1.64
+## Backdrop wall — blocks bodies/ragdolls; bullet rays exclude this layer.
+const STREET_MATTE_COLLISION_LAYER := 2048
 ## First Sale plaque on the lintel above the service window (interior).
 ## Slide it aside to reveal the wall Glock tucked behind.
 const FIRST_SALE_BASE_SIZE := Vector2(1.15, 0.74)
@@ -408,8 +438,8 @@ const LOGO_DEFAULT_SCALE := 0.92
 const LOGO_DEFAULT_YAW := 180.0
 ## Wall art tint — darker so they sit into the truck lighting.
 const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 1.0)
-## License / health / photo cluster — 30% darker than prior 0.50 tint.
-const WALL_PAPER_ALBEDO := Color(0.35, 0.35, 0.35, 1.0)
+## License / health / photo cluster — 20% darker than prior 0.35 tint.
+const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 1.0)
 const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const GFX_DEFAULTS := {
@@ -445,6 +475,18 @@ const GFX_DEFAULTS := {
 	"menu_z": MENU_BOARD_DEFAULT_Z,
 	"menu_scale": MENU_BOARD_DEFAULT_SCALE,
 	"menu_yaw": MENU_BOARD_DEFAULT_YAW,
+	## Orange strip under the grill lip (burner on only).
+	"strip_x": 0.0,
+	"strip_y": -0.008,
+	"strip_z": 0.06,
+	"strip_pitch": 58.0,
+	"strip_yaw": 180.0,
+	"strip_roll": 0.0,
+	"strip_energy": 0.18,
+	"strip_range": 1.45,
+	"strip_angle": 76.0,
+	"strip_size": 0.55,
+	"strip_width": 0.99,
 }
 ## Ingredient strip notes — tracks unique presses toward a full-scale jingle.
 var _melody_pressed: Dictionary = {} ## id -> true
@@ -701,6 +743,7 @@ func _start_game() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
+	_begin_opening_terror_ambush()
 
 
 func _restart() -> void:
@@ -735,6 +778,7 @@ func _restart() -> void:
 	_refresh_all_stations()
 	_begin_start_tutorial()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
+	_begin_opening_terror_ambush()
 
 
 func _process(delta: float) -> void:
@@ -804,11 +848,16 @@ func _process(delta: float) -> void:
 		if service_break_left <= 0.0:
 			_open_service_window()
 	else:
+		_update_opening_terror_ambush(delta)
 		spawn_timer -= delta
 		var cap := _customer_cap()
-		if not shift_closing and spawn_timer <= 0.0 and customers.size() < cap:
-			_spawn_customer()
-			spawn_timer = _next_spawn_delay()
+		if not shift_closing and not terrorist_wave_active and spawn_timer <= 0.0 and customers.is_empty():
+			if day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
+				_spawn_terrorist_wave()
+				spawn_timer = _next_spawn_delay()
+			elif customers.size() < cap:
+				_spawn_customer()
+				spawn_timer = _next_spawn_delay()
 
 	rush_mode = customers.size() >= maxi(2, _customer_cap() - 1) and day >= 2
 
@@ -1395,6 +1444,8 @@ func _build_3d_world() -> void:
 	burner_flame_tris.clear()
 	burner_flame_data.clear()
 	burner_flame_lights.clear()
+	burner_strip_root = null
+	burner_strip_cook_w = 0.0
 
 	_build_flat_top_grill()
 	_build_burner_flames()
@@ -1611,9 +1662,9 @@ func _build_flat_top_grill() -> void:
 	## Heat shimmer / warp over the three cook bands (not HOLD).
 	_build_heat_warp_plane(
 		surface,
-		Vector3(cook_cx_world - GRILL_CENTER_X, 0.22, 0),
+		Vector3(cook_cx_world - GRILL_CENTER_X, 0.12, 0.07),
 		cook_w * 0.82,
-		GRILL_DEPTH * 0.62
+		GRILL_DEPTH * 0.92
 	)
 	grill_glow_root = grill_glow_meshes[0] if not grill_glow_meshes.is_empty() else null
 
@@ -1641,6 +1692,8 @@ func _build_burner_flames() -> void:
 	burner_flame_tris.clear()
 	burner_flame_data.clear()
 	burner_flame_lights.clear()
+	burner_strip_root = null
+	burner_strip_cook_w = 0.0
 
 	var root := Node3D.new()
 	root.name = "BurnerFlames"
@@ -1703,25 +1756,22 @@ func _build_burner_flames() -> void:
 	## Orange strip — spans cook width, pitched down onto the lip / apron (+Z, −Y).
 	var strip_root := Node3D.new()
 	strip_root.name = "BurnerStripLight"
+	burner_strip_root = strip_root
+	burner_strip_cook_w = cook_w
 	const STRIP_COUNT := 11
 	for i in STRIP_COUNT:
 		var sl := SpotLight3D.new()
 		sl.name = "BurnerStripSeg"
 		sl.light_color = Color(1.0, 0.46, 0.12)
-		sl.light_energy = BURNER_STRIP_LIGHT_ENERGY
 		sl.light_indirect_energy = 0.35
-		sl.spot_range = BURNER_STRIP_LIGHT_RANGE
-		sl.spot_angle = 76.0
 		sl.spot_attenuation = 0.48
-		sl.light_size = 0.55
 		sl.shadow_enabled = false
 		var t := (float(i) + 0.5) / float(STRIP_COUNT) - 0.5
-		sl.position = Vector3(t * cook_w * 0.99, -0.008, 0.06)
-		## Down + toward the cook so the front lip surface actually catches light.
-		sl.rotation_degrees = Vector3(58.0, 180.0, 0.0)
+		sl.position = Vector3(t * cook_w * float(GFX_DEFAULTS["strip_width"]), 0.0, 0.0)
 		strip_root.add_child(sl)
 		burner_flame_lights.append(sl)
 	root.add_child(strip_root)
+	_apply_burner_strip_settings(GFX_DEFAULTS)
 
 	root.visible = false
 
@@ -1807,7 +1857,7 @@ func _set_burner_flames_visible(on: bool) -> void:
 		if is_instance_valid(light):
 			light.visible = on
 			if light is SpotLight3D:
-				(light as SpotLight3D).light_energy = BURNER_STRIP_LIGHT_ENERGY if on else 0.0
+				(light as SpotLight3D).light_energy = burner_strip_energy if on else 0.0
 			elif light is OmniLight3D:
 				(light as OmniLight3D).light_energy = 0.22 if on else 0.0
 
@@ -4093,18 +4143,55 @@ func _set_glock_laser_length(length: float) -> void:
 	_set_glock_laser_visible(glock_held)
 
 
+func _glock_muzzle_global() -> Vector3:
+	if glock_root == null or not is_instance_valid(glock_root):
+		return Vector3.ZERO
+	return glock_root.to_global(GLOCK_MUZZLE_LOCAL)
+
+
+func _glock_sight_ray(mouse: Vector2) -> Dictionary:
+	## Crosshair = camera ray; bullets/laser follow the cursor, not muzzle offset.
+	if camera == null:
+		return {"from": Vector3.ZERO, "dir": Vector3.FORWARD, "cam_from": Vector3.ZERO, "cam_dir": Vector3.FORWARD, "aim": Vector3.FORWARD * 12.0}
+	var cam_from := camera.project_ray_origin(mouse)
+	var cam_dir := camera.project_ray_normal(mouse).normalized()
+	var aim := cam_from + cam_dir * GLOCK_AIM_REACH
+	var muzzle := _glock_muzzle_global()
+	var from := muzzle if muzzle != Vector3.ZERO else cam_from
+	return {"from": from, "dir": cam_dir, "cam_from": cam_from, "cam_dir": cam_dir, "aim": aim}
+
+
+func _aim_held_glock_at_mouse(mouse: Vector2) -> void:
+	if glock_root == null or camera == null:
+		return
+	var cam_from := camera.project_ray_origin(mouse)
+	var cam_dir := camera.project_ray_normal(mouse).normalized()
+	var grip := cam_from + cam_dir * GLOCK_HOLD_DIST
+	grip.y = maxf(GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT - GLOCK_HOLD_DROP, grip.y - GLOCK_HOLD_DROP)
+	glock_root.global_position = grip
+	var barrel_target := grip + cam_dir * 2.4
+	if (barrel_target - grip).length_squared() > 0.0001:
+		glock_root.look_at(barrel_target, Vector3.UP)
+		glock_root.rotate_object_local(Vector3.UP, PI)
+		glock_root.rotate_object_local(Vector3.RIGHT, deg_to_rad(-4.0))
+
+
 func _update_glock_laser_aim() -> void:
 	_ensure_glock_laser()
 	if not glock_held or glock_root == null or camera == null:
 		_set_glock_laser_visible(false)
 		return
 	_set_glock_laser_visible(true)
-	var origin := glock_root.to_global(GLOCK_LASER_LOCAL + Vector3(0.0, 0.0, 0.028))
-	var dir := glock_root.global_transform.basis.z.normalized()
+	var origin := _glock_muzzle_global()
+	if origin == Vector3.ZERO:
+		origin = glock_root.global_position
+	var mouse := get_viewport().get_mouse_position()
+	var sight := _glock_sight_ray(mouse)
+	var dir: Vector3 = sight["dir"]
 	var q := PhysicsRayQueryParameters3D.create(origin, origin + dir * GLOCK_LASER_MAX)
 	q.collide_with_areas = true
 	q.collide_with_bodies = true
-	q.collision_mask = 0xFFFFFFFF
+	q.collision_mask = 0xFFFFFFFF & ~STREET_MATTE_COLLISION_LAYER
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
 		_set_glock_laser_length(GLOCK_LASER_MAX)
@@ -4128,9 +4215,8 @@ func _begin_glock_hold() -> bool:
 	glock_aim_roll = 0.0
 	glock_aim_yaw = 0.0
 	glock_prev_mouse_x = get_viewport().get_mouse_position().x
-	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT)
-	if seat != Vector3.ZERO:
-		glock_root.global_position = seat
+	var mouse := get_viewport().get_mouse_position()
+	_aim_held_glock_at_mouse(mouse)
 	if glock_area:
 		glock_area.input_ray_pickable = false
 	_ensure_glock_fx()
@@ -4138,6 +4224,7 @@ func _begin_glock_hold() -> bool:
 	_update_glock_laser_aim()
 	if game_audio:
 		game_audio.play_click()
+	_sync_combat_audio()
 	_flash("Glock ready — right-click to shoot · laser on · release LMB to hang up", Color("FFCC80"))
 	return true
 
@@ -4146,51 +4233,11 @@ func _update_held_glock(delta: float) -> void:
 	if glock_root == null or camera == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
-	var seat := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT)
-	if seat == Vector3.ZERO:
-		var hit := _grill_plane_from_screen(mouse)
-		if hit == Vector3.ZERO:
-			return
-		hit.y = GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT
-		seat = hit
-	## Hold slightly toward the camera so it reads as a pointed handgun.
-	var cam_fwd := -camera.global_transform.basis.z
-	glock_root.global_position = seat - cam_fwd * 0.04
-	## Aim barrel (+Z on the new Display mesh) along the camera ray.
-	var from := camera.project_ray_origin(mouse)
-	var dir := camera.project_ray_normal(mouse)
-	var aim := from + dir * 5.0
-	## Left/right lean — stronger angle + flick sway from mouse motion.
-	var vp := get_viewport().get_visible_rect().size
-	var nx := 0.0
-	if vp.x > 1.0:
-		nx = clampf((mouse.x / vp.x) * 2.0 - 1.0, -1.0, 1.0)
-	var ny := 0.0
-	if vp.y > 1.0:
-		ny = clampf((mouse.y / vp.y) * 2.0 - 1.0, -1.0, 1.0)
-	var dx := 0.0
-	if glock_prev_mouse_x >= 0.0:
-		dx = mouse.x - glock_prev_mouse_x
-	glock_prev_mouse_x = mouse.x
-	var sway := clampf(dx * 0.22, -28.0, 28.0)
-	var roll_target := nx * 28.0 + sway
-	var yaw_target := -nx * 22.0
-	var pitch_extra := ny * 10.0
-	var blend := 1.0 - exp(-delta * 14.0)
-	glock_aim_roll = lerpf(glock_aim_roll, roll_target, blend)
-	glock_aim_yaw = lerpf(glock_aim_yaw, yaw_target, blend)
-	if (aim - glock_root.global_position).length_squared() > 0.0001:
-		## look_at points -Z; flip so +Z barrel faces the target.
-		glock_root.look_at(aim, Vector3.UP)
-		glock_root.rotate_object_local(Vector3.UP, PI)
-		## Tip muzzle + dynamic pitch from vertical mouse.
-		glock_root.rotate_object_local(Vector3.RIGHT, deg_to_rad(-8.0 - pitch_extra))
-		## Extra yaw / roll so sweeping left-right feels alive.
-		glock_root.rotate_object_local(Vector3.UP, deg_to_rad(glock_aim_yaw))
-		glock_root.rotate_object_local(Vector3.FORWARD, deg_to_rad(glock_aim_roll))
-	if glock_recoil > 0.0:
-		glock_root.rotate_object_local(Vector3.RIGHT, -glock_recoil * 0.28)
-	if glock_visual != null and is_instance_valid(glock_visual):
+	_aim_held_glock_at_mouse(mouse)
+	if glock_recoil > 0.0 and glock_visual != null and is_instance_valid(glock_visual):
+		glock_visual.rotation_degrees = Vector3(-glock_recoil * 11.0, 0.0, 0.0)
+		glock_visual.scale = Vector3.ONE * (GLOCK_MESH_SCALE * 1.05)
+	elif glock_visual != null and is_instance_valid(glock_visual):
 		glock_visual.rotation_degrees = Vector3.ZERO
 		glock_visual.scale = Vector3.ONE * (GLOCK_MESH_SCALE * 1.05)
 	if glock_flash != null and is_instance_valid(glock_flash):
@@ -4216,21 +4263,24 @@ func _fire_glock() -> void:
 		glock_flash.light_energy = 6.5
 	if game_audio and game_audio.has_method("play_gunshot"):
 		game_audio.play_gunshot()
-	## Ray from muzzle toward aim — scare the window cat if it peeks into the shot.
 	var mouse := get_viewport().get_mouse_position()
-	var from := camera.project_ray_origin(mouse)
-	var dir := camera.project_ray_normal(mouse)
-	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 30.0)
+	var sight := _glock_sight_ray(mouse)
+	var from: Vector3 = sight["from"]
+	var dir: Vector3 = sight["dir"]
+	var cam_from: Vector3 = sight["cam_from"]
+	var cam_dir: Vector3 = sight["cam_dir"]
+	var q := PhysicsRayQueryParameters3D.create(cam_from, cam_from + cam_dir * 45.0)
 	q.collide_with_areas = true
 	q.collide_with_bodies = true
-	q.collision_mask = 0xFFFFFFFF
+	## Hit world geometry, but pass through the street backdrop painting.
+	q.collision_mask = 0xFFFFFFFF & ~STREET_MATTE_COLLISION_LAYER
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.is_interactable():
 		var head: Vector3 = window_cat.head_global()
-		var to_cat := head - from
-		var along := dir.dot(to_cat)
+		var to_cat := head - cam_from
+		var along := cam_dir.dot(to_cat)
 		if along > 0.4:
-			var closest := from + dir * along
+			var closest := cam_from + cam_dir * along
 			if closest.distance_to(head) < 0.55:
 				window_cat.reset_shift()
 				_flash("Cat bolted!", Color("CE93D8"))
@@ -4238,16 +4288,24 @@ func _fire_glock() -> void:
 					game_audio.play_cat_meow()
 				return
 	## Shoot a customer → limp ragdoll + blood; keep firing for more hits.
-	var shot_cust := _find_customer_under_gun_aim(from, dir, mouse)
+	var shot_cust := _find_customer_under_gun_aim(cam_from, cam_dir, mouse)
 	if shot_cust != null and shot_cust.has_method("get_shot"):
 		var first_hit: bool = bool(shot_cust.get_shot(from, dir))
+		var is_hostile: bool = bool(shot_cust.get("is_terrorist"))
 		if first_hit and game_audio and game_audio.has_method("play_wilhelm_scream"):
-			game_audio.play_wilhelm_scream()
+			## BURGERWHY sting only for regular customers — not armed hostiles.
+			game_audio.play_wilhelm_scream(not is_hostile)
 		var impact_pos: Vector3 = shot_cust.global_position + Vector3(0.0, 0.85, 0.0)
 		_spawn_glock_impact(impact_pos)
 		if first_hit:
-			_flash("Wilhelm!", Color("EF5350"))
-			_on_customer_left(shot_cust, true)
+			if is_hostile:
+				money += TERRORIST_KILL_BOUNTY
+				_flash("Hostile down! +%s" % _format_money(TERRORIST_KILL_BOUNTY), Color("A5D6A7"))
+				_on_customer_left(shot_cust, false)
+				_check_terrorist_wave_end()
+			else:
+				_flash("Wilhelm!", Color("EF5350"))
+				_on_customer_left(shot_cust, true)
 		return
 	if not hit.is_empty():
 		## Tiny spark ping at impact.
@@ -4255,7 +4313,7 @@ func _fire_glock() -> void:
 
 
 func _find_customer_under_gun_aim(from: Vector3, dir: Vector3, mouse: Vector2) -> Node3D:
-	## Prefer screen proximity to torso/head; fall back to ray closeness.
+	## Crosshair ray first — screen proximity breaks ties for distant hostiles.
 	if customers_root == null or camera == null:
 		return null
 	var best: Node3D = null
@@ -4265,9 +4323,10 @@ func _find_customer_under_gun_aim(from: Vector3, dir: Vector3, mouse: Vector2) -
 			continue
 		if not c.has_method("get_shot"):
 			continue
-		## Already tumbling — still allow extra hits for more blood.
 		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
 		var head: Vector3 = c.global_position + Vector3(0.0, 1.15, 0.0)
+		if c.has_method("mouth_global"):
+			head = c.mouth_global()
 		if camera.is_position_behind(torso):
 			continue
 		var screen_d := mini(
@@ -4276,15 +4335,18 @@ func _find_customer_under_gun_aim(from: Vector3, dir: Vector3, mouse: Vector2) -
 		)
 		var to_torso := torso - from
 		var along := dir.dot(to_torso)
-		if along < 0.3:
+		if along < 0.08:
 			continue
 		var closest := from + dir * along
-		var ray_d := closest.distance_to(torso)
-		## Combined score — easy to hit through the window.
-		var score := screen_d + ray_d * 40.0
-		if screen_d < 110.0 and ray_d < 0.85 and score < best_score:
-			best_score = score
-			best = c
+		var ray_d := mini(closest.distance_to(torso), closest.distance_to(head))
+		var is_hostile: bool = bool(c.get("is_terrorist"))
+		var screen_limit := 190.0 if is_hostile else 150.0
+		var ray_limit := 1.35 if is_hostile else 1.05
+		if screen_d < screen_limit and ray_d < ray_limit:
+			var score := screen_d + ray_d * 18.0
+			if score < best_score:
+				best_score = score
+				best = c
 	return best
 
 
@@ -4322,6 +4384,7 @@ func _release_glock() -> void:
 	_refresh_glock_cover_lock()
 	if game_audio:
 		game_audio.play_click()
+	_sync_combat_audio()
 
 
 func _reset_glock() -> void:
@@ -4343,6 +4406,7 @@ func _reset_glock() -> void:
 		glock_root.rotation_degrees = glock_home_rot
 	_set_glock_laser_visible(false)
 	_refresh_glock_cover_lock()
+	_sync_combat_audio()
 
 
 func _build_wire_brush() -> void:
@@ -5465,6 +5529,8 @@ func _try_spray_customer_with_powder(delta: float) -> Dictionary:
 	var zone: String = String(hit.get("zone", "body"))
 	if cust == null or not cust.has_method("receive_ext_powder"):
 		return {"hit": false}
+	if cust.has_method("apply_ext_spray_push"):
+		cust.call("apply_ext_spray_push", delta, zone)
 	ext_blob_spawn_cool -= delta
 	if ext_blob_spawn_cool > 0.0:
 		return {"hit": true, "customer": cust, "zone": zone}
@@ -6610,6 +6676,23 @@ func _build_outdoor_street() -> void:
 	outdoor.add_child(backdrop)
 	street_matte = backdrop
 
+	## Thin wall on the paint — stops ragdolls / bodies clipping behind it.
+	## Bullet / laser rays exclude STREET_MATTE_COLLISION_LAYER so shots pass through.
+	if street_matte_body != null and is_instance_valid(street_matte_body):
+		street_matte_body.queue_free()
+	street_matte_body = StaticBody3D.new()
+	street_matte_body.name = "StreetMatteWall"
+	street_matte_body.collision_layer = STREET_MATTE_COLLISION_LAYER
+	street_matte_body.collision_mask = 0
+	street_matte_body.position = backdrop.position
+	street_matte_body.rotation_degrees = backdrop.rotation_degrees
+	var wall_shape := CollisionShape3D.new()
+	var wall_box := BoxShape3D.new()
+	wall_box.size = Vector3(STREET_MATTE_BASE_SIZE.x, STREET_MATTE_BASE_SIZE.y, 0.18)
+	wall_shape.shape = wall_box
+	street_matte_body.add_child(wall_shape)
+	outdoor.add_child(street_matte_body)
+
 
 func _build_first_sale_decal() -> void:
 	## Framed "FIRST SALE!" plaque on the interior lintel — covers the wall Glock.
@@ -7403,6 +7486,19 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "menu_scale", "Menu Scale", 0.25, 2.5, 0.01)
 	_gfx_add_slider(list, "menu_yaw", "Menu Yaw", -180.0, 180.0, 1.0)
 
+	_gfx_add_section(list, "GRILL STRIP LIGHT")
+	_gfx_add_slider(list, "strip_x", "Strip X", -1.5, 1.5, 0.005)
+	_gfx_add_slider(list, "strip_y", "Strip Y", -0.25, 0.25, 0.005)
+	_gfx_add_slider(list, "strip_z", "Strip Z", -0.5, 0.5, 0.005)
+	_gfx_add_slider(list, "strip_pitch", "Strip Pitch", -90.0, 90.0, 1.0)
+	_gfx_add_slider(list, "strip_yaw", "Strip Yaw", -180.0, 180.0, 1.0)
+	_gfx_add_slider(list, "strip_roll", "Strip Roll", -45.0, 45.0, 1.0)
+	_gfx_add_slider(list, "strip_energy", "Strip Brightness", 0.0, 2.0, 0.01)
+	_gfx_add_slider(list, "strip_range", "Strip Range", 0.3, 4.0, 0.01)
+	_gfx_add_slider(list, "strip_angle", "Strip Cone", 20.0, 120.0, 1.0)
+	_gfx_add_slider(list, "strip_size", "Strip Size", 0.05, 2.0, 0.01)
+	_gfx_add_slider(list, "strip_width", "Strip Width", 0.2, 1.5, 0.01)
+
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 8)
 	root_v.add_child(footer)
@@ -7634,6 +7730,68 @@ func _sync_graphics_ui_from_world() -> void:
 						var val_lab5 = top5.get_node_or_null("Val")
 						if val_lab5:
 							val_lab5.text = "%.2f" % float(menu_map[key])
+	if burner_strip_root != null and is_instance_valid(burner_strip_root) and not burner_flame_lights.is_empty():
+		var probe: SpotLight3D = burner_flame_lights[0] as SpotLight3D
+		var strip_map := {
+			"strip_x": burner_strip_root.position.x,
+			"strip_y": burner_strip_root.position.y,
+			"strip_z": burner_strip_root.position.z,
+			"strip_energy": burner_strip_energy,
+		}
+		if probe != null:
+			strip_map["strip_pitch"] = probe.rotation_degrees.x
+			strip_map["strip_yaw"] = probe.rotation_degrees.y
+			strip_map["strip_roll"] = probe.rotation_degrees.z
+			strip_map["strip_range"] = probe.spot_range
+			strip_map["strip_angle"] = probe.spot_angle
+			strip_map["strip_size"] = probe.light_size
+		if burner_strip_cook_w > 0.001 and probe != null and burner_flame_lights.size() > 1:
+			var edge: SpotLight3D = burner_flame_lights[burner_flame_lights.size() - 1] as SpotLight3D
+			if edge != null:
+				strip_map["strip_width"] = absf(edge.position.x) * 2.0 / burner_strip_cook_w
+		for key in strip_map:
+			if gfx_sliders.has(key) and gfx_sliders[key] != null:
+				gfx_sliders[key].set_value_no_signal(float(strip_map[key]))
+				var row6: Node = gfx_sliders[key].get_parent()
+				if row6:
+					var top6 = row6.get_child(0) if row6.get_child_count() > 0 else null
+					if top6:
+						var val_lab6 = top6.get_node_or_null("Val")
+						if val_lab6:
+							val_lab6.text = "%.2f" % float(strip_map[key])
+
+
+func _apply_burner_strip_settings(s: Dictionary) -> void:
+	if burner_strip_root == null or not is_instance_valid(burner_strip_root):
+		return
+	burner_strip_energy = float(s.get("strip_energy", GFX_DEFAULTS["strip_energy"]))
+	burner_strip_root.position = Vector3(
+		float(s.get("strip_x", GFX_DEFAULTS["strip_x"])),
+		float(s.get("strip_y", GFX_DEFAULTS["strip_y"])),
+		float(s.get("strip_z", GFX_DEFAULTS["strip_z"]))
+	)
+	var pitch := float(s.get("strip_pitch", GFX_DEFAULTS["strip_pitch"]))
+	var yaw := float(s.get("strip_yaw", GFX_DEFAULTS["strip_yaw"]))
+	var roll := float(s.get("strip_roll", GFX_DEFAULTS["strip_roll"]))
+	var rng := float(s.get("strip_range", GFX_DEFAULTS["strip_range"]))
+	var angle := float(s.get("strip_angle", GFX_DEFAULTS["strip_angle"]))
+	var size := float(s.get("strip_size", GFX_DEFAULTS["strip_size"]))
+	var width_mul := float(s.get("strip_width", GFX_DEFAULTS["strip_width"]))
+	var count := burner_flame_lights.size()
+	var strip_on := grill_on and burner_flame_root != null and is_instance_valid(burner_flame_root) and burner_flame_root.visible
+	for i in count:
+		var light = burner_flame_lights[i]
+		if light == null or not is_instance_valid(light) or not light is SpotLight3D:
+			continue
+		var sl := light as SpotLight3D
+		if count > 0 and burner_strip_cook_w > 0.001:
+			var t := (float(i) + 0.5) / float(count) - 0.5
+			sl.position = Vector3(t * burner_strip_cook_w * width_mul, 0.0, 0.0)
+		sl.rotation_degrees = Vector3(pitch, yaw, roll)
+		sl.light_energy = burner_strip_energy if strip_on else 0.0
+		sl.spot_range = rng
+		sl.spot_angle = angle
+		sl.light_size = size
 
 
 func _apply_graphics_settings(s: Dictionary) -> void:
@@ -7664,6 +7822,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_street_matte_settings(s)
 	_apply_first_sale_decal_settings(s)
 	_apply_menu_board_decal_settings(s)
+	_apply_burner_strip_settings(s)
 
 
 func _apply_street_matte_settings(s: Dictionary) -> void:
@@ -7673,6 +7832,10 @@ func _apply_street_matte_settings(s: Dictionary) -> void:
 	var sc := float(s.get("bg_scale", 1.0))
 	street_matte.position = Vector3(0.0, y, STREET_MATTE_BASE_Z)
 	street_matte.scale = Vector3(sc, sc, 1.0)
+	if street_matte_body != null and is_instance_valid(street_matte_body):
+		street_matte_body.position = street_matte.position
+		street_matte_body.rotation_degrees = street_matte.rotation_degrees
+		street_matte_body.scale = Vector3(sc, sc, 1.0)
 
 
 func _apply_first_sale_decal_settings(s: Dictionary) -> void:
@@ -8073,6 +8236,203 @@ func _clear_spatula() -> void:
 
 # --- Customers --------------------------------------------------------------
 
+func _spawn_terrorist_wave() -> void:
+	terrorist_wave_active = true
+	_sync_combat_audio()
+	var count := randi_range(3, 5)
+	_flash("ARMED HOSTILES — GRAB THE GLOCK!", Color("EF5350"))
+	if game_audio and game_audio.has_method("play_gunshot"):
+		game_audio.play_gunshot()
+	for i in count:
+		var role := "bomber" if randf() < 0.38 else "gun"
+		var roll := randf()
+		var tier := "distant" if roll < 0.4 else ("far" if roll < 0.75 else "mid")
+		var pose: Dictionary = TerroristCustomerScript.opening_pose(i, tier, role)
+		_spawn_terrorist_unit(
+			i % TerroristCustomerScript.TERR_LANE_X.size(),
+			pose["pos"],
+			float(pose["target_x"]),
+			float(pose["target_z"]),
+			role,
+			role == "gun",
+			role == "gun"
+		)
+
+
+func _begin_opening_terror_ambush() -> void:
+	_opening_terr_active = true
+	_opening_terr_timer = 0.0
+	_opening_terr_spawned = 0
+	terrorist_wave_active = true
+	_sync_combat_audio()
+
+
+func _update_opening_terror_ambush(delta: float) -> void:
+	if not _opening_terr_active:
+		return
+	_opening_terr_timer += delta
+	while _opening_terr_spawned < OPENING_TERR_COUNT:
+		if _opening_terr_timer < OPENING_TERR_AT[_opening_terr_spawned]:
+			break
+		_spawn_opening_terrorist(_opening_terr_spawned)
+		_opening_terr_spawned += 1
+	if _opening_terr_spawned >= OPENING_TERR_COUNT and _opening_terr_timer >= OPENING_TERR_WINDOW:
+		_opening_terr_active = false
+
+
+func _spawn_opening_terrorist(slot: int) -> void:
+	var spec: Dictionary = OPENING_TERR_SPECS[clampi(slot, 0, OPENING_TERR_SPECS.size() - 1)]
+	var role: String = str(spec.get("role", "gun"))
+	var tier: String = str(spec.get("tier", "far"))
+	var lane := slot % TerroristCustomerScript.TERR_LANE_X.size()
+	var pose: Dictionary = TerroristCustomerScript.opening_pose(slot, tier, role)
+	if slot == 0:
+		_flash("ARMED HOSTILES — GRAB THE GLOCK!", Color("EF5350"))
+		if game_audio and game_audio.has_method("play_gunshot"):
+			game_audio.play_gunshot()
+	_spawn_terrorist_unit(
+		lane,
+		pose["pos"],
+		float(pose["target_x"]),
+		float(pose["target_z"]),
+		role,
+		role == "gun",
+		role == "gun"
+	)
+
+
+func _spawn_terrorist_unit(
+	lane: int,
+	spawn_pos: Vector3,
+	hold_x: float,
+	hold_z: float,
+	role: String,
+	guns_out: bool,
+	combat_ready: bool = false
+) -> void:
+	var c = TerroristCustomerScript.new()
+	if role == "bomber":
+		c.setup_bomber(lane)
+	else:
+		c.setup_terrorist(lane)
+	c.position = spawn_pos
+	c.target_x = hold_x
+	c.target_z = hold_z
+	c.rotation_degrees = Vector3(
+		0.0,
+		CustomerScript.FACE_TRUCK_YAW if combat_ready else CustomerScript.WALK_PLUS_X_YAW,
+		0.0
+	)
+	if role == "bomber" and c.has_signal("detonated"):
+		c.detonated.connect(func(damage: float, at: Vector3) -> void:
+			_on_terrorist_detonated(c, damage, at)
+		)
+	elif c.has_signal("shot_player"):
+		c.shot_player.connect(_on_terrorist_shot_player)
+	customers_root.add_child(c)
+	customers.append(c)
+	if guns_out and c.has_method("present_weapon"):
+		c.call_deferred("present_weapon", combat_ready)
+
+
+func _spawn_terror_explosion(at: Vector3) -> void:
+	if world == null:
+		return
+	var flash := OmniLight3D.new()
+	flash.light_color = Color(1.0, 0.55, 0.18)
+	flash.light_energy = 14.0
+	flash.omni_range = 4.2
+	flash.shadow_enabled = false
+	flash.position = at
+	world.add_child(flash)
+	var burst := GPUParticles3D.new()
+	burst.amount = 48
+	burst.lifetime = 0.55
+	burst.one_shot = true
+	burst.explosiveness = 1.0
+	burst.emitting = true
+	burst.position = at
+	var pmat := ParticleProcessMaterial.new()
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 180.0
+	pmat.initial_velocity_min = 2.5
+	pmat.initial_velocity_max = 6.5
+	pmat.gravity = Vector3(0, -9.0, 0)
+	pmat.scale_min = 0.08
+	pmat.scale_max = 0.22
+	pmat.color = Color(1.0, 0.45, 0.12, 0.95)
+	burst.process_material = pmat
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.04
+	sphere.height = 0.08
+	burst.draw_pass_1 = sphere
+	world.add_child(burst)
+	var tw := create_tween()
+	tw.tween_property(flash, "light_energy", 0.0, 0.35)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(flash):
+			flash.queue_free()
+		if is_instance_valid(burst):
+			burst.queue_free()
+	)
+
+
+func _on_terrorist_detonated(terr: Node, damage: float, at: Vector3) -> void:
+	if not playing:
+		return
+	customers.erase(terr)
+	_spawn_terror_explosion(at)
+	_spend(damage, "BOMBER! -%s" % _format_money(damage), Color("FF7043"))
+	_flash("SUICIDE BOMBER!", Color("FF5722"))
+	if game_audio and game_audio.has_method("play_gunshot"):
+		game_audio.play_gunshot()
+	_check_terrorist_wave_end()
+
+
+func _on_terrorist_shot_player(damage: float) -> void:
+	if not playing:
+		return
+	## Every muzzle flash reports here (0 damage = miss) so gunshots always play.
+	if game_audio and game_audio.has_method("play_gunshot"):
+		game_audio.play_gunshot()
+	if damage > 0.0:
+		_spend(damage, "Under fire! -%s" % _format_money(damage), Color("EF5350"))
+
+
+func _check_terrorist_wave_end() -> void:
+	if not terrorist_wave_active:
+		return
+	for c in customers:
+		if c != null and is_instance_valid(c) and bool(c.get("is_terrorist")) and not bool(c.get("is_ragdoll")):
+			return
+	terrorist_wave_active = false
+	_flash("Threat cleared.", Color("A5D6A7"))
+	_sync_combat_audio()
+
+
+func _any_living_terrorist() -> bool:
+	for c in customers:
+		if c != null and is_instance_valid(c) and bool(c.get("is_terrorist")) and not bool(c.get("is_ragdoll")):
+			return true
+	return false
+
+
+func _sync_combat_audio() -> void:
+	## Double Agent theme + mute truck radio while fighting or holding the glock.
+	var hostiles := terrorist_wave_active or _any_living_terrorist()
+	var want_theme := hostiles or glock_held
+	## Radio stays muted while the glock is out, or while the combat theme is up.
+	var mute_radio := glock_held or want_theme
+	if game_audio:
+		if want_theme:
+			if game_audio.has_method("play_combat_theme"):
+				game_audio.play_combat_theme()
+		elif game_audio.has_method("stop_combat_theme"):
+			game_audio.stop_combat_theme()
+	if radio and radio.has_method("set_combat_silence"):
+		radio.set_combat_silence(mute_radio)
+
+
 func _spawn_customer() -> void:
 	var order: Array[String] = GameDataScript.generate_order(difficulty)
 	var c = CustomerScript.new()
@@ -8101,6 +8461,8 @@ func _spawn_customer() -> void:
 
 
 func _on_customer_arrived(customer: Node3D) -> void:
+	if customer != null and bool(customer.get("is_terrorist")):
+		return
 	_create_ticket(customer)
 	if selected_customer == null:
 		selected_customer = customer
@@ -8239,6 +8601,9 @@ func _on_customer_left(customer: Node3D, angry: bool) -> void:
 		selected_customer = customers[0] if customers.size() > 0 else null
 	_highlight_tickets()
 	_reposition_customers()
+	if customer != null and bool(customer.get("is_terrorist")):
+		_check_terrorist_wave_end()
+		return
 	if angry:
 		combo = 0
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
@@ -8246,9 +8611,16 @@ func _on_customer_left(customer: Node3D, angry: bool) -> void:
 
 func _reposition_customers() -> void:
 	for i in customers.size():
-		customers[i].lane = i
-		customers[i].target_x = CustomerScript.lane_x_for(i)
-		customers[i].global_position.y = CustomerScript.STAND_Y
+		var c = customers[i]
+		if c == null or not is_instance_valid(c):
+			continue
+		## Hostiles manage their own patrol waypoints — don't yank them into customer lanes.
+		if bool(c.get("is_terrorist")):
+			c.global_position.y = CustomerScript.STAND_Y
+			continue
+		c.lane = i
+		c.target_x = CustomerScript.lane_x_for(i)
+		c.global_position.y = CustomerScript.STAND_Y
 
 
 func _create_ticket(customer: Node3D) -> void:
@@ -8460,6 +8832,11 @@ func _clear_customers() -> void:
 			c.queue_free()
 	customers.clear()
 	selected_customer = null
+	terrorist_wave_active = false
+	_opening_terr_active = false
+	_opening_terr_timer = 0.0
+	_opening_terr_spawned = 0
+	_sync_combat_audio()
 
 
 # --- Spatula + assembly stations -------------------------------------------
@@ -9286,7 +9663,7 @@ func _extract_station_patty(station_index: int, item_index: int):
 		_reset_station_freshness(station_index)
 	else:
 		_start_station_freshness(station_index)
-	_refresh_station(station_index)
+	_after_station_edit(station_index)
 	return patty
 
 
@@ -9489,7 +9866,30 @@ func _reorder_station_item(station_index: int, from_index: int, insert_at: int) 
 	## Keep burger physics: bottom bun / patty / toppings / top bun.
 	st["items"] = _normalize_burger_stack(items)
 	_sync_patties_with_items(station_index)
+	_after_station_edit(station_index)
+
+
+func _strip_cheese_from_station_patty(station_index: int) -> void:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	for j in range(st["patties"].size() - 1, -1, -1):
+		var p = st["patties"][j]
+		if p != null and is_instance_valid(p) and p.has_cheese:
+			if p.has_method("remove_cheese"):
+				p.remove_cheese()
+			else:
+				p.has_cheese = false
+			break
+
+
+func _after_station_edit(station_index: int) -> void:
+	## Re-sync stack vs order after any add/remove/reorder — may auto-serve when fixed.
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	_sync_station_cheese_items(station_index)
 	_refresh_station(station_index)
+	call_deferred("_try_auto_serve")
 
 
 func _sync_patties_with_items(station_index: int) -> void:
@@ -10047,9 +10447,11 @@ func _trash_selected_or_top_layer(index: int) -> void:
 	st["items"] = _normalize_burger_stack(items)
 	st["selected_layer"] = -1
 	_sync_patties_with_items(index)
+	if removed == "cheese":
+		_strip_cheese_from_station_patty(index)
 	if items.is_empty():
 		_reset_station_freshness(index)
-	_refresh_station(index)
+	_after_station_edit(index)
 	var label: String = GameDataScript.INGREDIENT_LABELS.get(removed, removed.capitalize())
 	if game_audio:
 		game_audio.play_trash()
@@ -10224,37 +10626,37 @@ func _layer_width_mul(item: String) -> float:
 	## Sheet art has uneven canvas fill — normalize stack silhouette.
 	match item:
 		"bun_top":
-			return 0.82
+			return 0.88
 		"bun_bottom":
-			return 1.18
+			return 1.24
 		"patty":
-			return 1.081 ## ~15% bigger than previous 0.94
+			return 1.28
 		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
-			return 1.16
+			return 1.3
 		"ketchup", "mustard":
-			return 0.82
+			return 0.92
 		_:
-			return 1.0
+			return 1.1
 
 
 func _layer_img_height(item: String) -> float:
 	match item:
 		"bun_top":
-			return 48.0
+			return 54.0
 		"bun_bottom":
-			return 56.0
+			return 62.0
 		"patty":
-			return 55.2 ## ~15% bigger than previous 48
+			return 68.0
 		"bacon":
-			return 46.0
+			return 54.0
 		"lettuce":
-			return 44.0
+			return 52.0
 		"tomato", "onion", "pickle", "cheese":
-			return 46.0
+			return 54.0
 		"ketchup", "mustard":
-			return 24.0
+			return 28.0
 		_:
-			return 40.0
+			return 48.0
 
 
 func _refresh_all_stations() -> void:
@@ -10283,10 +10685,8 @@ func _refresh_spatula_ui() -> void:
 
 func _try_auto_serve() -> void:
 	## Hand off as soon as a station matches a waiting ticket perfectly.
-	if not playing or _auto_serving:
+	if not playing or _auto_serving or _serve_fly_busy:
 		return
-	## Cap with top bun automatically when that's the only thing left for a ticket.
-	_maybe_auto_top_bun()
 	var waiting: Array = []
 	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
 		waiting.append(selected_customer)
@@ -10308,37 +10708,14 @@ func _try_auto_serve() -> void:
 		_highlight_tickets()
 		_highlight_active_station()
 		_on_serve()
-		_auto_serving = false
+		if not _serve_fly_busy:
+			_auto_serving = false
 		return
 
 
 func _maybe_auto_top_bun() -> void:
-	## If a build is one top-bun away from matching a waiting ticket, crown it.
-	var waiting: Array = []
-	for c in customers:
-		if c != null and is_instance_valid(c) and c.is_waiting:
-			waiting.append(c)
-	if waiting.is_empty():
-		return
-	for i in STATION_COUNT:
-		if _station_has_melting_cheese(i):
-			continue
-		var st: Dictionary = stations[i]
-		var items: Array = st["items"]
-		if items.is_empty() or not items.has("patty") or items.has("bun_top"):
-			continue
-		for cust in waiting:
-			if not _station_only_needs_top_bun(items, cust.order):
-				continue
-			items.append("bun_top")
-			st["items"] = _normalize_burger_stack(items)
-			_spend(_ingredient_cost("bun_top"))
-			_start_station_freshness(i)
-			_refresh_station(i)
-			if game_audio:
-				game_audio.play_ingredient("bun_top")
-			_flash("Top bun on!", Color("FFE082"))
-			return
+	## Legacy hook — top bun is auto-crowned at serve time with a left-board drop anim.
+	pass
 
 
 func _station_only_needs_top_bun(items: Array, order: Array) -> bool:
@@ -10360,7 +10737,8 @@ func _find_perfect_station_for(order: Array) -> int:
 		if items.is_empty() or not items.has("patty"):
 			continue
 		var result: Dictionary = GameDataScript.compare_orders(items, order)
-		if not bool(result.get("perfect", false)):
+		var ready := bool(result.get("perfect", false)) or _station_only_needs_top_bun(items, order)
+		if not ready:
 			continue
 		## Prefer the active station when several match.
 		var q := 2.0 if i == active_station else 1.0
@@ -10415,53 +10793,213 @@ func _missing_items_label(missing: Array) -> String:
 	return ", ".join(labels)
 
 
-func _on_serve() -> void:
-	if not playing:
-		return
-	## Selected ticket is the order we serve — auto-pick if only one waiting.
-	if selected_customer == null or not is_instance_valid(selected_customer) or not selected_customer.is_waiting:
-		selected_customer = null
-		for c in customers:
-			if c != null and is_instance_valid(c) and c.is_waiting:
-				if selected_customer != null:
-					selected_customer = null
-					break
-				selected_customer = c
-		_highlight_tickets()
-		if selected_customer == null:
-			if not _auto_serving:
-				_flash("Click an order ticket first, then Serve", Color("EF5350"))
-			return
-	if selected_customer.dialogue_open:
-		selected_customer.dialogue_open = false
-
-	## Prefer a perfect match station (needed for auto-serve); else best partial.
-	var station_index := _find_station_for_order(selected_customer.order)
-	if station_index < 0:
-		if not _auto_serving:
-			_flash("Build the burger on any station, then Serve", Color("EF5350"))
-		return
-
-	## Keep cheese stack entries synced before matching.
-	_sync_station_cheese_items(station_index)
-
+func _crown_serve_burger(station_index: int) -> bool:
+	## Crown the build stack before the serve fly — returns true if bun_top was added.
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
-	active_station = station_index
-	_highlight_active_station()
+	if items.has("bun_top") or not items.has("patty"):
+		return false
+	items.append("bun_top")
+	st["items"] = _normalize_burger_stack(items)
+	_spend(_ingredient_cost("bun_top"))
+	return true
 
-	var result: Dictionary = GameDataScript.compare_orders(items, selected_customer.order)
-	var missing: Array = result.get("missing", [])
-	## Incomplete / wrong — just reject; no dialogue popup.
-	if not missing.is_empty() and float(result.get("quality", 0.0)) >= 0.35:
-		combo = 0
-		if not _auto_serving:
-			if _station_has_melting_cheese(station_index) and missing.has("cheese"):
-				_flash("Cheese still melting — wait a sec, then Serve", Color("FFE082"))
-			else:
-				_flash("Need: %s" % _missing_items_label(missing), Color("FF8A65"))
-		_update_hud()
+
+func _find_station_top_bun_row(station_index: int) -> Control:
+	var st: Dictionary = stations[station_index]
+	var preview: Control = st.get("preview", null)
+	var items: Array = st["items"]
+	if preview == null or not is_instance_valid(preview) or not items.has("bun_top"):
+		return null
+	var kids := preview.get_children()
+	if kids.is_empty():
+		return null
+	return kids[kids.size() - 1] as Control
+
+
+func _animate_top_bun_on_station(station_index: int, on_done: Callable) -> void:
+	## Drop the crown onto the left Build board before squash / fly.
+	var row := _find_station_top_bun_row(station_index)
+	if row == null or not is_instance_valid(row):
+		on_done.call()
 		return
+	_serve_fly_busy = true
+	var final_y: float = row.position.y
+	row.position.y = final_y - 46.0
+	if game_audio:
+		game_audio.play_ingredient("bun_top")
+	var tw := create_tween()
+	tw.tween_property(row, "position:y", final_y, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.04)
+	tw.tween_callback(on_done)
+
+
+func _station_stack_screen_center(index: int) -> Vector2:
+	var st: Dictionary = stations[index]
+	var preview: Control = st.get("preview", null)
+	if preview != null and is_instance_valid(preview):
+		var r := preview.get_global_rect()
+		return r.position + r.size * 0.5
+	var plate: Control = st.get("plate", null)
+	if plate != null and is_instance_valid(plate):
+		var pr := plate.get_global_rect()
+		return pr.position + Vector2(pr.size.x * 0.5, pr.size.y * 0.38)
+	return get_viewport().get_visible_rect().size * Vector2(0.18, 0.72)
+
+
+func _customer_mouth_screen(customer: Node3D) -> Vector2:
+	if camera == null or customer == null or not is_instance_valid(customer):
+		return get_viewport().get_visible_rect().size * Vector2(0.72, 0.42)
+	var mouth: Vector3 = customer.global_position + Vector3(0.0, 1.18, 0.06)
+	if customer.has_method("mouth_global"):
+		mouth = customer.mouth_global()
+	var screen_pt := camera.unproject_position(mouth)
+	return screen_pt + Vector2(0.0, -42.0)
+
+
+func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	var plate: Control = st.get("plate", null)
+	var layer_scale := _station_layer_scale(items.size())
+	var stage_w := 320.0
+	var stage_h := 240.0
+	if plate != null and plate.size.x > 8.0:
+		stage_w = plate.size.x
+		stage_h = plate.size.y
+	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
+	var origin_x := stage_w * 0.5
+	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
+	var step_y := 12.0 * layer_scale
+	var layer_w := mini(300.0, stage_w * 0.88)
+	var stack_lift := 0.0
+
+	var stack := Control.new()
+	stack.name = "ServeFlyStack"
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(stack)
+
+	var min_x := INF
+	var max_x := -INF
+	var min_y := INF
+	var max_y := -INF
+	var top_row: Control = null
+
+	for stack_i in items.size():
+		var item: String = items[stack_i]
+		var is_bun := item == "bun_bottom" or item == "bun_top"
+		var h_squish := 1.0 if is_bun else 0.8
+		var h := _layer_img_height(item) * layer_scale * h_squish
+		var this_w := layer_w * _layer_width_mul(item)
+		var row := Control.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.custom_minimum_size = Vector2(this_w, h)
+		row.size = Vector2(this_w, h)
+		row.position = Vector2(
+			origin_x - this_w * 0.5 - float(stack_i) * 1.2,
+			origin_y - stack_lift - float(stack_i) * step_y - h * 0.72
+		)
+		if item == "bun_bottom":
+			stack_lift += 10.0 * layer_scale
+		if item == "bun_top":
+			top_row = row
+
+		var tr := TextureRect.new()
+		if item == "patty":
+			var patty_from_bottom := 0
+			for j in range(stack_i + 1):
+				if items[j] == "patty":
+					patty_from_bottom += 1
+			var pidx := patty_from_bottom - 1
+			var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
+			if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
+				pcolor = st["patties"][pidx].get_patty_color()
+			tr.texture = FoodSpritesScript.patty_tex(pcolor)
+		else:
+			tr.texture = FoodSpritesScript.get_tex(item)
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.custom_minimum_size = Vector2(this_w, h)
+		tr.size = Vector2(this_w, h)
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(tr)
+		stack.add_child(row)
+
+		min_x = minf(min_x, row.position.x)
+		max_x = maxf(max_x, row.position.x + this_w)
+		min_y = minf(min_y, row.position.y)
+		max_y = maxf(max_y, row.position.y + h)
+
+	var pivot := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
+	return {"stack": stack, "top_row": top_row, "pivot": pivot}
+
+
+func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Callable) -> void:
+	_serve_fly_busy = true
+	var ui_root: Control = get_node_or_null("UI/Root") as Control
+	if ui_root == null or camera == null:
+		_serve_fly_busy = false
+		on_done.call()
+		return
+
+	var st: Dictionary = stations[station_index]
+	var preview: Control = st.get("preview", null)
+
+	var fly_root := Control.new()
+	fly_root.name = "ServeFlyLayer"
+	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fly_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fly_root.z_index = 250
+	ui_root.add_child(fly_root)
+
+	var built: Dictionary = _build_serve_fly_stack(fly_root, station_index)
+	var stack: Control = built["stack"]
+	stack.pivot_offset = built["pivot"]
+	stack.scale = Vector2.ONE
+
+	var start_pos := _station_stack_screen_center(station_index)
+	stack.global_position = start_pos
+	var mouth_pos := _customer_mouth_screen(customer)
+
+	if preview != null and is_instance_valid(preview):
+		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
+
+	var tw := create_tween()
+	tw.set_parallel(false)
+	tw.tween_interval(0.04)
+
+	var squashed := Vector2(1.12, 0.78)
+	tw.tween_property(stack, "scale", squashed, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+	var fly_end_scale := Vector2(0.92, 0.68)
+	tw.tween_method(
+		func(t: float) -> void:
+			if not is_instance_valid(stack):
+				return
+			var eased := t * t * (3.0 - 2.0 * t)
+			stack.global_position = start_pos.lerp(mouth_pos, eased)
+			stack.scale = squashed.lerp(fly_end_scale, eased),
+		0.0,
+		1.0,
+		0.55
+	)
+
+	tw.tween_callback(func() -> void:
+		if preview != null and is_instance_valid(preview):
+			preview.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		if is_instance_valid(fly_root):
+			fly_root.queue_free()
+		_serve_fly_busy = false
+		if _auto_serving:
+			_auto_serving = false
+		on_done.call()
+	)
+
+
+func _complete_serve(station_index: int) -> void:
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	var result: Dictionary = GameDataScript.compare_orders(items, selected_customer.order)
 
 	var patty_mult := 1.0
 	var patties: Array = st["patties"]
@@ -10470,7 +11008,6 @@ func _on_serve() -> void:
 		var n := 0
 		for p in patties:
 			if p != null and is_instance_valid(p):
-				## Doneness only here — ticket speed is applied below.
 				sum += p.doneness_multiplier() if p.has_method("doneness_multiplier") else 1.0
 				n += 1
 		if n > 0:
@@ -10479,7 +11016,6 @@ func _on_serve() -> void:
 	var fresh_r := _station_freshness_ratio(station_index)
 	var cook_r := _station_cook_rating(station_index, selected_customer)
 	var seasoned := _station_burgers_seasoned(station_index)
-	## Pay uses ticket-speed grade (and burnt override inside speed_rating).
 	patty_mult *= float(cook_r.get("pay_mul", 1.0))
 	if fresh_r <= 0.15:
 		patty_mult *= 0.45
@@ -10487,7 +11023,6 @@ func _on_serve() -> void:
 	elif fresh_r <= 0.4:
 		patty_mult *= 0.75
 		tip_factor *= 0.6
-	## Bland beef — still pays base, but caps the cheer / tip path.
 	if not seasoned:
 		patty_mult *= 0.92
 		cook_r = {
@@ -10559,6 +11094,85 @@ func _on_serve() -> void:
 
 	_clear_station(station_index)
 	_update_hud()
+
+
+func _serve_reject_hint(order: Array, station_index: int) -> void:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		_flash("Build the burger on Build, then Serve", Color("EF5350"))
+		return
+	_sync_station_cheese_items(station_index)
+	var items: Array = stations[station_index]["items"]
+	var result: Dictionary = GameDataScript.compare_orders(items, order)
+	var missing: Array = result.get("missing", [])
+	var extra: Array = result.get("extra", [])
+	if not extra.is_empty():
+		_flash("Remove: %s" % _missing_items_label(extra), Color("FF8A65"))
+	elif _station_has_melting_cheese(station_index) and missing.has("cheese"):
+		_flash("Cheese still melting — wait a sec, then Serve", Color("FFE082"))
+	elif not missing.is_empty():
+		_flash("Need: %s" % _missing_items_label(missing), Color("FF8A65"))
+	else:
+		_flash("Fix the burger on Build, then Serve", Color("FF8A65"))
+
+
+func _on_serve() -> void:
+	if not playing or _serve_fly_busy:
+		return
+	## Selected ticket is the order we serve — auto-pick if only one waiting.
+	if selected_customer == null or not is_instance_valid(selected_customer) or not selected_customer.is_waiting:
+		selected_customer = null
+		for c in customers:
+			if c != null and is_instance_valid(c) and c.is_waiting:
+				if selected_customer != null:
+					selected_customer = null
+					break
+				selected_customer = c
+		_highlight_tickets()
+		if selected_customer == null:
+			if not _auto_serving:
+				_flash("Click an order ticket first, then Serve", Color("EF5350"))
+			return
+	if selected_customer.dialogue_open:
+		selected_customer.dialogue_open = false
+
+	var order: Array = selected_customer.order
+	## Only serve a perfect match (top bun may auto-crown at serve time).
+	var station_index := _find_perfect_station_for(order)
+	if station_index < 0:
+		combo = 0
+		if not _auto_serving:
+			var hint_si := _find_station_for_order(order)
+			_serve_reject_hint(order, hint_si)
+		_update_hud()
+		return
+
+	## Keep cheese stack entries synced before matching.
+	_sync_station_cheese_items(station_index)
+
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	active_station = station_index
+	_highlight_active_station()
+
+	var crowned_for_serve := false
+	if items.has("patty") and not items.has("bun_top") and order.has("bun_top"):
+		crowned_for_serve = _crown_serve_burger(station_index)
+		if crowned_for_serve:
+			_start_station_freshness(station_index)
+			_refresh_station(station_index)
+			items = st["items"]
+
+	if station_index == STATION_CRAFT:
+		var cust: Node3D = selected_customer
+		if crowned_for_serve:
+			_animate_top_bun_on_station(station_index, func() -> void:
+				_play_serve_fly_to_mouth(station_index, cust, func() -> void: _complete_serve(station_index))
+			)
+		else:
+			_play_serve_fly_to_mouth(station_index, cust, func() -> void: _complete_serve(station_index))
+		return
+
+	_complete_serve(station_index)
 
 
 func _find_station_for_order(order: Array) -> int:

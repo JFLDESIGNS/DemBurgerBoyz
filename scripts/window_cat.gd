@@ -13,7 +13,6 @@ const SHOWN_Y := 0.741
 const MESH_SCALE := 3.35
 ## Gets chunkier with each treat — width sticks when it comes back.
 const FAT_PER_TOPPING := 0.10
-const FAT_PER_PATTY := 0.22
 const FAT_MAX := 1.35 ## ~2.35× horizontal scale at max chonk
 ## Face the cook (mesh nose points +Z; yaw 180 looks into the truck).
 const FACE_COOK_YAW := 180.0
@@ -27,6 +26,7 @@ const PEEK_MIN_SEC := 5.5
 const PEEK_MAX_SEC := 9.0
 ## After a full burger — celebrate, then bolt for a long break.
 const FED_HOLD_SEC := 1.15
+const PATTY_EAT_WIDTH_BOOST := 0.25 ## +25% width while chewing a patty, before run-away.
 const RUN_SEC := 1.35
 const AFTER_BURGER_HIDE_SEC := 95.0
 
@@ -52,6 +52,8 @@ var _run_to: Vector3 = Vector3.ZERO
 var _run_yaw_from: float = FACE_COOK_YAW
 ## Persistent chonk from feeding (0 = slim … FAT_MAX = very wide). Survives run-aways.
 var _fat: float = 0.0
+## 0–1 — patty chew swell (width grows to +25% during fed_hold, then commits to _fat).
+var _patty_eat_wide: float = 0.0
 
 
 func _ready() -> void:
@@ -372,12 +374,14 @@ func _process(delta: float) -> void:
 				_state = "lowering"
 				_timer = 0.5
 		"fed_hold":
-			## Proud pose with burger in mouth + hearts.
+			## Proud pose with burger in mouth + hearts; width swells while chewing.
 			visible = true
 			position.x = HOME_X
 			position.z = HOME_Z
 			position.y = SHOWN_Y + sin(_bob * 5.0) * 0.03
 			rotation_degrees.y = FACE_COOK_YAW + sin(_bob * 4.0) * 10.0
+			var eat_u := 1.0 - clampf(_timer / FED_HOLD_SEC, 0.0, 1.0)
+			_patty_eat_wide = eat_u * eat_u * (3.0 - 2.0 * eat_u)
 			if _mouth_burger != null and is_instance_valid(_mouth_burger):
 				_mouth_burger.rotation_degrees.y = sin(_bob * 6.0) * 12.0
 				_mouth_burger.position.y = 0.34 + sin(_bob * 7.0) * 0.01
@@ -413,13 +417,17 @@ func _process(delta: float) -> void:
 	## Soft squash when petted / fed — keep accumulated width.
 	if _visual != null:
 		var fat_w := 1.0 + _fat
-		var sx := MESH_SCALE * fat_w * (1.0 - _pet_squash * 0.08)
+		var eat_w := 1.0 + _patty_eat_wide * PATTY_EAT_WIDTH_BOOST
+		var sx := MESH_SCALE * fat_w * eat_w * (1.0 - _pet_squash * 0.08)
 		var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08)
-		var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * (1.0 - _pet_squash * 0.05)
+		var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * (1.0 - _pet_squash * 0.05)
 		_visual.scale = Vector3(sx, sy, sz)
 
 
 func _begin_run_away() -> void:
+	## Lock in the patty chew chonk before bolting.
+	_fat = minf(FAT_MAX, _fat + PATTY_EAT_WIDTH_BOOST)
+	_patty_eat_wide = 0.0
 	_state = "running"
 	_timer = RUN_SEC
 	_run_from = position
@@ -497,9 +505,9 @@ func feed(kind: String) -> void:
 	_pet_squash = 1.0
 	_eat_flash = 0.6
 	_treat_arm = 0.0
-	## Widen on every treat — toppings a little, full burger a lot.
+	## Widen on toppings a little; patty swell animates during fed_hold.
 	if kind == "patty":
-		_fat = minf(FAT_MAX, _fat + FAT_PER_PATTY)
+		_patty_eat_wide = 0.0
 		_feed_full_burger()
 	else:
 		_fat = minf(FAT_MAX, _fat + FAT_PER_TOPPING)
@@ -527,6 +535,7 @@ func reset_shift() -> void:
 	_treat_arm = 0.0
 	_pet_squash = 0.0
 	_fat = 0.0
+	_patty_eat_wide = 0.0
 	_gap_open = true
 	visible = false
 	position = Vector3(HOME_X, HIDDEN_Y, HOME_Z)

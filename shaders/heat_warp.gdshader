@@ -14,7 +14,8 @@ void fragment() {
 		discard;
 	}
 	vec2 centered = UV * 2.0 - 1.0;
-	float edge = 1.0 - smoothstep(0.22 / mask_tight, 0.88 / mask_tight, length(centered * vec2(1.0, 1.2)));
+	/* Softer Y scale = taller vertical shimmer band on the plane. */
+	float edge = 1.0 - smoothstep(0.18 / mask_tight, 0.92 / mask_tight, length(centered * vec2(1.0, 0.78)));
 	if (edge < 0.01) {
 		discard;
 	}
