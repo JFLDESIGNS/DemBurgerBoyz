@@ -38,24 +38,34 @@ const PATTY_PICK_WORLD := 0.42
 const PATTY_PICK_MIN_PX := 62.0
 const PATTY_PICK_WORLD_EDGE := 0.17
 const PATTY_PICK_PAD_PX := 22.0
-## Cheese hover/drop — looser than scoop so ghost + click stay in sync.
-const CHEESE_PICK_WORLD := 0.58
-const CHEESE_PICK_MIN_PX := 96.0
-const CHEESE_PICK_PAD_PX := 40.0
-const CHEESE_PICK_WORLD_EDGE := 0.22
-## Smash must hit the meat itself — near-miss right-clicks place a new patty.
-const PATTY_SMASH_WORLD := 0.115
-const PATTY_SMASH_MIN_PX := 26.0
-const PATTY_SMASH_PAD_PX := 4.0
+## Cheese hover/drop — very forgiving so drag-to-burger lands easily.
+const CHEESE_PICK_WORLD := 0.85
+const CHEESE_PICK_MIN_PX := 140.0
+const CHEESE_PICK_PAD_PX := 64.0
+const CHEESE_PICK_WORLD_EDGE := 0.32
+## Near-miss drop snaps onto the closest cheesable burger within this radius.
+const CHEESE_SNAP_WORLD := 1.35
+const CHEESE_STICKY_PX := 160.0
+## Smash must hit near the patty center — near-miss right-clicks place a new patty.
+const PATTY_SMASH_WORLD := 0.052
+const PATTY_SMASH_MIN_PX := 14.0
+const PATTY_SMASH_PAD_PX := 2.0
+const PATTY_SMASH_MAX_PX := 18.0 ## Hard screen-radius to the meat center.
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.038
+## Too many puddles → warn only (fire needs a sustained pour — see OIL_POUR_FIRE_SEC).
+## Only ignites while the burner is ON.
+const OIL_FIRE_WARN_COUNT := 40
+## Continuous grease pour (LMB held) this long on a lit grill → fire.
+const OIL_POUR_FIRE_SEC := 5.0
 ## Held bottle tip-down height above steel (~was 0.14; +12" so it clears the plate).
 const OIL_POUR_HEIGHT := 0.445
 ## Held shaker tip-down height — +1 ft from prior 0.2 so flakes don't clip the steel.
 const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
+const WindowCatScript := preload("res://scripts/window_cat.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
@@ -149,6 +159,10 @@ const GRILL_GLOW_FADE_SEC := 0.28
 const GRILL_GLOW_BRIGHT_MULT := 1.18
 var _grill_glow_tween: Tween = null
 var _grill_glow_gen: int = 0
+## Little flame triangles under the griddle when the burner is on.
+var burner_flame_root: Node3D = null
+var burner_flame_tris: Array = [] ## MeshInstance3D
+var burner_flame_data: Array = [] ## {phase, spd, amp, lean, base}
 var heat_warp_mesh: MeshInstance3D = null
 var heat_warp_mat: ShaderMaterial = null
 var heat_warp_base_size := Vector2(1.0, 0.6)
@@ -157,6 +171,8 @@ var grill_drop_zone: Control = null
 var build_drop_zone: Control = null ## Tall left catcher while holding a scooped patty
 var _pending_station_patty_drag = null ## Dictionary while dragging a Build patty
 var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill burger
+var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
+var _pending_reorder_drag = null ## Dictionary while dragging a Build stack layer
 var service_window_closed: bool = false
 var service_break_left: float = 0.0
 var window_pause_btn: Button = null
@@ -189,7 +205,7 @@ var brush_held: bool = false
 var brush_root: Node3D = null
 var brush_area: Area3D = null
 ## Parked on the left window lintel, hanging into the opening (toward the cook).
-var brush_home: Vector3 = Vector3(2.12, 1.99, 1.12)
+var brush_home: Vector3 = Vector3(1.866, 1.99, 1.12)
 var brush_home_rot := Vector3(-8.0, 18.0, 6.0)
 ## Held pose — blade tipped on steel, handle toward the cook.
 var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
@@ -208,29 +224,89 @@ var shaker_root: Node3D = null
 var shaker_area: Area3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(1.78, 2.14, 1.12)
+var shaker_home: Vector3 = Vector3(1.526, 2.14, 1.12)
 var shaker_season_cool: float = 0.0
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
 var oil_root: Node3D = null
 var oil_area: Area3D = null
 var oil_particles: GPUParticles3D = null
-var oil_home: Vector3 = Vector3(1.42, 2.12, 1.12)
+var oil_home: Vector3 = Vector3(1.166, 2.12, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
+var oil_pour_hold_t: float = 0.0 ## Seconds continuously pouring while held.
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
+## Grease fire from over-oiling the flat-top.
+var grill_on_fire: bool = false
+var fire_health: float = 0.0
+## Which heat band the blaze started in (FULL / 1/2 / 1/4 / HOLD) — fire stays there.
+var fire_zone_id: String = ""
+var fire_root: Node3D = null
+var fire_light: OmniLight3D = null
+var fire_light_rim: OmniLight3D = null
+## Real OmniLight energies (~10% of the old values) — particles carry the look.
+const FIRE_LIGHT_CORE := 0.045
+const FIRE_LIGHT_RIM := 0.018
+const FIRE_LIGHT_CORE_SET := 0.055
+const FIRE_LIGHT_RIM_SET := 0.022
+var fire_particles: GPUParticles3D = null
+var fire_particles_red: GPUParticles3D = null
+var fire_embers: GPUParticles3D = null
+var fire_smoke: GPUParticles3D = null
+var _oil_fire_warned: bool = false
+var _fire_flicker_t: float = 0.0
 ## Fire extinguisher — hang-mounted left of the tools; hold LMB to carry.
 var ext_held: bool = false
 var ext_root: Node3D = null
 var ext_visual: Node3D = null
 var ext_area: Area3D = null
-var ext_home: Vector3 = Vector3(2.52, 1.72, 1.14)
+var ext_home: Vector3 = Vector3(2.063, 1.72, 0.937)
 var ext_home_rot := Vector3(0.0, 200.0, 0.0)
-var ext_held_rot := Vector3(-12.0, 200.0, 0.0)
-const EXT_HOLD_HEIGHT := 0.38
+var ext_held_rot := Vector3(-18.0, 200.0, 8.0)
+var ext_spraying: bool = false
+var ext_powder: GPUParticles3D = null
+var ext_powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale}
+var ext_blob_spawn_cool: float = 0.0
+var _fire_killed_by_powder: bool = false ## Flames already snuffed; blobs finishing the job.
+const EXT_HOLD_HEIGHT := 0.16 ## Lower hold so the can sits nearer the grill.
 const EXT_COLLISION_LAYER := 64
+var window_cat: Node3D = null
+## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
+var glock_held: bool = false
+var glock_root: Node3D = null
+var glock_visual: Node3D = null
+var glock_area: Area3D = null
+## Screen-right of First Sale (camera looks +Z → −X is right).
+## Hung sideways on the wall (barrel along wall, not aimed at the cook).
+var glock_home: Vector3 = Vector3(0.0, 2.38, 1.232) ## Behind First Sale plaque (toward wall)
+var glock_home_rot := Vector3(0.0, 270.0, 0.0) ## 90° CCW from facing-cook (180)
+var glock_flash: OmniLight3D = null
+var glock_muzzle: GPUParticles3D = null
+var glock_laser_beam: MeshInstance3D = null
+var glock_laser_dot: MeshInstance3D = null
+var glock_laser_module: MeshInstance3D = null
+var glock_rear_sight_l: MeshInstance3D = null
+var glock_rear_sight_r: MeshInstance3D = null
+var glock_cooldown: float = 0.0
+var glock_recoil: float = 0.0
+var glock_aim_roll: float = 0.0 ## Smoothed left/right lean while aiming.
+var glock_aim_yaw: float = 0.0
+var glock_prev_mouse_x: float = -1.0
+const GLOCK_HOLD_HEIGHT := 0.34
+const GLOCK_COLLISION_LAYER := 256
+const GLOCK_FIRE_COOLDOWN := 0.10
+const GLOCK_MESH_SCALE := 1.755 ## ~30% larger on the wall mount.
+const GLOCK_MUZZLE_LOCAL := Vector3(0.0, 0.015, 0.12)
+## Laser under the rail — nudged up 4" / forward 1" from the old low hang.
+const GLOCK_LASER_LOCAL := Vector3(0.0, 0.09, 0.08)
+const GLOCK_LASER_MAX := 8.5
+## Twin night-sight dots on the rear sight posts (left / right of the notch).
+const GLOCK_REAR_SIGHT_Y := 0.048
+const GLOCK_REAR_SIGHT_Z := -0.042
+const GLOCK_REAR_SIGHT_X := 0.011
+const GLOCK_REAR_SIGHT_R := 0.0048
 ## Scraper can shove nearby patties a little while scraping.
 const BRUSH_PATTY_PUSH_RADIUS := 0.32
 const BRUSH_PATTY_PUSH_SCALE := 0.72
@@ -291,20 +367,27 @@ var street_matte: MeshInstance3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var burger_pals_decal: MeshInstance3D = null
+var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
 ## Cached order-slip paper (vignette) textures.
 var _ticket_paper_tex: ImageTexture = null
 var _ticket_paper_tex_sel: ImageTexture = null
 const STREET_MATTE_BASE_SIZE := Vector2(18.2, 9.1)
-const STREET_MATTE_BASE_Z := 7.8
+## Far enough that sidewalk NPCs always sit in front of the paint.
+const STREET_MATTE_BASE_Z := 11.5
 ## Default Y: prior 2.55 minus ~3 ft (0.91 m).
 const STREET_MATTE_DEFAULT_Y := 1.64
 ## First Sale plaque on the lintel above the service window (interior).
+## Slide it aside to reveal the wall Glock tucked behind.
 const FIRST_SALE_BASE_SIZE := Vector2(1.15, 0.74)
 const FIRST_SALE_DEFAULT_X := 0.0
-const FIRST_SALE_DEFAULT_Y := 2.416
-const FIRST_SALE_DEFAULT_Z := 1.20
-const FIRST_SALE_DEFAULT_SCALE := 0.425
+const FIRST_SALE_DEFAULT_Y := 2.391
+const FIRST_SALE_DEFAULT_Z := 1.18
+const FIRST_SALE_DEFAULT_SCALE := 0.44 ## 20% smaller than prior 0.55
+const SALE_COLLISION_LAYER := 512
+var sale_held: bool = false
+var sale_area: Area3D = null
+var sale_home: Vector3 = Vector3(FIRST_SALE_DEFAULT_X, FIRST_SALE_DEFAULT_Y, FIRST_SALE_DEFAULT_Z)
 ## Menu board on the front wall (camera-right = world −X when looking out the window).
 const MENU_BOARD_BASE_SIZE := Vector2(0.72, 0.90)
 const MENU_BOARD_DEFAULT_X := -2.91
@@ -322,6 +405,9 @@ const LOGO_DEFAULT_SCALE := 0.92
 const LOGO_DEFAULT_YAW := 180.0
 ## Wall art tint — darker so they sit into the truck lighting.
 const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 1.0)
+## License / health / photo cluster — 30% darker than prior 0.50 tint.
+const WALL_PAPER_ALBEDO := Color(0.35, 0.35, 0.35, 1.0)
+const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const GFX_DEFAULTS := {
 	"bloom": 0.18,
@@ -458,12 +544,12 @@ func _ready() -> void:
 
 
 func _setup_glove_cursor() -> void:
-	## Kitchen latex glove pointer — replaces the OS arrow everywhere.
+	## Cartoon glove pointer — replaces the OS arrow everywhere.
 	var tex: Texture2D = load("res://assets/ui/cursor_glove.png") as Texture2D
 	if tex == null:
 		return
-	## Hotspot at index-finger tip (top-left of the art).
-	var tip := Vector2(6, 3)
+	## Hotspot at the pointing fingertip (upper-left of the glove art).
+	var tip := Vector2(0, 3)
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_ARROW, tip)
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_POINTING_HAND, tip)
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_MOVE, tip)
@@ -600,6 +686,9 @@ func _start_game() -> void:
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
 	_reset_fire_extinguisher()
+	_reset_glock()
+	if window_cat != null and window_cat.has_method("reset_shift"):
+		window_cat.reset_shift()
 	_clear_all_stations()
 	_clear_customers()
 	_reset_service_window_open()
@@ -630,6 +719,9 @@ func _restart() -> void:
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
 	_reset_fire_extinguisher()
+	_reset_glock()
+	if window_cat != null and window_cat.has_method("reset_shift"):
+		window_cat.reset_shift()
 	_clear_all_stations()
 	_clear_customers()
 	_reset_service_window_open()
@@ -658,6 +750,7 @@ func _process(delta: float) -> void:
 	_update_patty_hint_focus()
 	_update_kitchen_sizzle()
 	_update_heat_warp(delta)
+	_update_burner_flames(delta)
 	if dragging_patty != null:
 		_update_patty_drag(delta)
 	if cheese_held:
@@ -670,7 +763,20 @@ func _process(delta: float) -> void:
 		_update_held_oil(delta)
 	if ext_held:
 		_update_held_fire_ext(delta)
+	if glock_held:
+		_update_held_glock(delta)
+	if sale_held:
+		_update_held_sale(delta)
+	if glock_cooldown > 0.0:
+		glock_cooldown = maxf(0.0, glock_cooldown - delta)
+	if glock_recoil > 0.0:
+		glock_recoil = maxf(0.0, glock_recoil - delta * 8.0)
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("set_customer_gap"):
+		## Peek with an empty window or a single customer (cat sits screen-left).
+		window_cat.set_customer_gap(customers.size() <= 1)
 	_update_oil_slicks(delta)
+	_update_grill_fire(delta)
+	_update_ext_powder_blobs(delta)
 	if brush_held and not brush_throwing:
 		_update_held_brush(delta)
 	## Viewport has no gui_drag_ended signal in 4.x — poll instead.
@@ -841,7 +947,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed:
 		if _ui_blocks_world_click(event.position):
 			return
-		if brush_held or oil_held or shaker_held or ext_held or dragging_patty != null:
+		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 			return
 		if cheese_held:
 			if event.button_index == MOUSE_BUTTON_RIGHT:
@@ -850,10 +956,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			if event.button_index == MOUSE_BUTTON_LEFT:
+				if _try_window_cat_click(event.position):
+					get_viewport().set_input_as_handled()
+					return
 				_try_place_held_cheese(event.position)
 				get_viewport().set_input_as_handled()
 				return
 		if event.button_index == MOUSE_BUTTON_LEFT:
+			if _try_window_cat_click(event.position):
+				return
 			if spatula_patty != null:
 				## Still dragging from Build — drop happens on release.
 				if spatula_lmb_held and spatula_from_build:
@@ -865,8 +976,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			## Left click: flip / scoop / start drag — never spawn a patty.
 			_try_grill_raycast(event.position, false)
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			## Squish only on a direct hit; nearby empty steel still adds a patty.
-			var smash_target = _pick_patty_at_screen(event.position, PATTY_SMASH_WORLD)
+			## Squish only dead-center on the meat; anywhere else on steel places a patty.
+			var smash_target = _pick_patty_for_smash(event.position)
 			if smash_target != null:
 				smash_target.smash()
 			else:
@@ -881,11 +992,32 @@ func _input(event: InputEvent) -> void:
 	if _handle_strip_swipe_input(event):
 		return
 	## Right-click while holding cheese → put it back on the strip (works over UI too).
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
-		if cheese_held:
-			_cancel_cheese_hold()
-			get_viewport().set_input_as_handled()
-			return
+	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			if cheese_held:
+				_cancel_cheese_hold()
+				get_viewport().set_input_as_handled()
+				return
+			if ext_held:
+				ext_spraying = true
+				if game_audio and game_audio.has_method("set_ext_spray"):
+					game_audio.set_ext_spray(true)
+				get_viewport().set_input_as_handled()
+				return
+			if glock_held:
+				_fire_glock()
+				get_viewport().set_input_as_handled()
+				return
+		else:
+			if ext_spraying:
+				ext_spraying = false
+				if ext_powder:
+					ext_powder.emitting = false
+				if game_audio and game_audio.has_method("set_ext_spray"):
+					game_audio.set_ext_spray(false)
+				get_viewport().set_input_as_handled()
+				return
 	## Sliding a patty / oil / shaker: release ends hold and returns tools home.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		if spatula_patty != null and spatula_lmb_held:
@@ -913,6 +1045,14 @@ func _input(event: InputEvent) -> void:
 			_release_fire_extinguisher()
 			get_viewport().set_input_as_handled()
 			return
+		if glock_held:
+			_release_glock()
+			get_viewport().set_input_as_handled()
+			return
+		if sale_held:
+			_release_sale_plaque()
+			get_viewport().set_input_as_handled()
+			return
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -921,7 +1061,7 @@ func _input(event: InputEvent) -> void:
 			if cheese_held:
 				## Place handled in unhandled — don't grab tools mid-hold.
 				return
-			if brush_held or oil_held or shaker_held or ext_held or dragging_patty != null:
+			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_nearest_tool(event.position):
@@ -948,6 +1088,10 @@ func _input(event: InputEvent) -> void:
 			return
 		if ext_held:
 			_release_fire_extinguisher()
+			get_viewport().set_input_as_handled()
+			return
+		if glock_held:
+			_release_glock()
 			get_viewport().set_input_as_handled()
 			return
 	## Enter always serves the active station burger.
@@ -1244,18 +1388,25 @@ func _build_3d_world() -> void:
 	grill_surface_mat = null
 	grill_glow_root = null
 	grill_on = false
+	burner_flame_root = null
+	burner_flame_tris.clear()
+	burner_flame_data.clear()
 
 	_build_flat_top_grill()
+	_build_burner_flames()
 	_build_wire_brush()
 	_build_oil_bottle()
 	_build_meat_warmer()
 	_build_truck_radio_prop()
 	_build_season_shaker()
 	_build_fire_extinguisher()
+	_build_glock()
+	_build_window_cat()
 	_build_outdoor_street()
 	_build_first_sale_decal()
+	_build_wall_paper_decals()
 	_build_menu_board_decal()
-	_build_burger_pals_logo_decal()
+	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
 	_build_window_bunting()
 
 	_setup_world_lighting()
@@ -1476,6 +1627,177 @@ func _build_flat_top_grill() -> void:
 		brush_swipe_cool.append(0.0)
 		slot_positions.append(Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z))
 		_make_slot_residue(i)
+
+
+func _build_burner_flames() -> void:
+	## Compact flame triangles tucked under the cook-facing grill lip.
+	if burner_flame_root != null and is_instance_valid(burner_flame_root):
+		burner_flame_root.queue_free()
+	burner_flame_root = null
+	burner_flame_tris.clear()
+	burner_flame_data.clear()
+
+	var root := Node3D.new()
+	root.name = "BurnerFlames"
+	const TRI_H := 0.048
+	const TRI_W := 0.030
+	var gap_y := GRILL_SURFACE_Y - 0.048
+	## Under the cook lip, nudged ~2" toward the player (was 3").
+	var gap_z := GRILL_SURFACE_Z - GRILL_DEPTH * 0.48 - 0.051
+	root.position = Vector3(GRILL_CENTER_X, gap_y, gap_z)
+	world.add_child(root)
+	burner_flame_root = root
+
+	var max_tip_y := GRILL_SURFACE_Y + 0.002
+	var tip_budget := max_tip_y - gap_y
+	var cook_w := GRILL_WIDTH * 0.92
+	var mesh := _make_burner_flame_triangle_mesh(TRI_W, TRI_H)
+	var count := 70
+	for i in count:
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+		mat.vertex_color_use_as_albedo = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.disable_receive_shadows = true
+		mat.render_priority = 12
+		mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+		mi.material_override = mat
+		var nx := (float(i) + 0.5) / float(count) - 0.5
+		var row := i % 3
+		var base := Vector3(
+			nx * cook_w + randf_range(-0.008, 0.008),
+			randf_range(0.0, 0.006) + float(row) * 0.003,
+			randf_range(-0.008, 0.012) - float(row) * 0.008
+		)
+		mi.position = base
+		mi.scale = Vector3.ONE * randf_range(0.72, 1.05)
+		## Mild pitch toward camera — enough to read, not lean into the player.
+		mi.rotation_degrees = Vector3(-22.0 + randf_range(-4.0, 4.0), 180.0 + randf_range(-8.0, 8.0), randf_range(-6.0, 6.0))
+		mi.visible = false
+		root.add_child(mi)
+		burner_flame_tris.append(mi)
+		burner_flame_data.append({
+			"base": base,
+			"phase": randf() * TAU,
+			"spd": randf_range(8.0, 16.0),
+			"amp": randf_range(0.006, 0.012),
+			"lean": randf_range(-8.0, 8.0),
+			"pulse": randf_range(0.9, 1.4),
+			"sc": mi.scale.x,
+			"tri_h": TRI_H,
+			"tip_budget": tip_budget,
+			"pitch": -22.0 + randf_range(-4.0, 4.0),
+		})
+	root.visible = false
+
+
+func _make_burner_flame_triangle_mesh(w: float, h: float) -> ArrayMesh:
+	## Tiny purple base → yellow → orange → red tip. No white.
+	var mesh := ArrayMesh.new()
+	var n := Vector3(0, 0, 1)
+	var y0 := -h * 0.45 ## purple (tiny bottom)
+	var y1 := -h * 0.28 ## yellow
+	var y2 := h * 0.05 ## deep yellow / orange
+	var y3 := h * 0.28 ## orange
+	var y4 := h * 0.55 ## red tip
+	var c_purp := Color(0.42, 0.12, 0.95, 1.0)
+	var c_yel := Color(1.0, 0.78, 0.05, 1.0)
+	var c_yel2 := Color(1.0, 0.55, 0.02, 1.0)
+	var c_org := Color(1.0, 0.32, 0.0, 1.0)
+	var c_red := Color(0.92, 0.05, 0.0, 1.0)
+
+	var rows: Array = [
+		{"y": y0, "hw": w * 0.55, "c": c_purp},
+		{"y": y1, "hw": w * 0.46, "c": c_yel},
+		{"y": y2, "hw": w * 0.36, "c": c_yel2},
+		{"y": y3, "hw": w * 0.24, "c": c_org},
+		{"y": y4, "hw": 0.0, "c": c_red},
+	]
+	for r in range(rows.size() - 1):
+		var a: Dictionary = rows[r]
+		var b: Dictionary = rows[r + 1]
+		var ay: float = float(a["y"])
+		var by: float = float(b["y"])
+		var aw: float = float(a["hw"])
+		var bw: float = float(b["hw"])
+		var ca: Color = a["c"]
+		var cb: Color = b["c"]
+		var al := Vector3(-aw, ay, 0.0)
+		var ar := Vector3(aw, ay, 0.0)
+		var bl := Vector3(-bw, by, 0.0)
+		var br := Vector3(bw, by, 0.0)
+		if bw <= 0.0001:
+			var tip := Vector3(0.0, by, 0.0)
+			var arr: Array = []
+			arr.resize(Mesh.ARRAY_MAX)
+			arr[Mesh.ARRAY_VERTEX] = PackedVector3Array([tip, al, ar])
+			arr[Mesh.ARRAY_NORMAL] = PackedVector3Array([n, n, n])
+			arr[Mesh.ARRAY_COLOR] = PackedColorArray([cb, ca, ca])
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		else:
+			var arr1: Array = []
+			arr1.resize(Mesh.ARRAY_MAX)
+			arr1[Mesh.ARRAY_VERTEX] = PackedVector3Array([bl, al, ar])
+			arr1[Mesh.ARRAY_NORMAL] = PackedVector3Array([n, n, n])
+			arr1[Mesh.ARRAY_COLOR] = PackedColorArray([cb, ca, ca])
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr1)
+			var arr2: Array = []
+			arr2.resize(Mesh.ARRAY_MAX)
+			arr2[Mesh.ARRAY_VERTEX] = PackedVector3Array([bl, ar, br])
+			arr2[Mesh.ARRAY_NORMAL] = PackedVector3Array([n, n, n])
+			arr2[Mesh.ARRAY_COLOR] = PackedColorArray([cb, ca, cb])
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr2)
+	return mesh
+
+
+func _set_burner_flames_visible(on: bool) -> void:
+	if burner_flame_root == null or not is_instance_valid(burner_flame_root):
+		return
+	burner_flame_root.visible = on
+	for mi in burner_flame_tris:
+		if is_instance_valid(mi):
+			mi.visible = on
+
+
+func _update_burner_flames(delta: float) -> void:
+	if not grill_on or burner_flame_root == null or not burner_flame_root.visible:
+		return
+	for i in burner_flame_tris.size():
+		var mi: MeshInstance3D = burner_flame_tris[i]
+		if not is_instance_valid(mi):
+			continue
+		var d: Dictionary = burner_flame_data[i]
+		d["phase"] = float(d["phase"]) + delta * float(d["spd"])
+		var ph: float = float(d["phase"])
+		var amp: float = float(d["amp"])
+		var base: Vector3 = d["base"]
+		var tip_budget: float = float(d["tip_budget"])
+		var tri_h: float = float(d["tri_h"])
+		var pitch: float = float(d.get("pitch", -22.0))
+		var wob_x := sin(ph) * amp + sin(ph * 1.7 + 0.4) * amp * 0.55
+		var wob_z := cos(ph * 0.9 + 0.6) * amp * 0.35
+		var wob_y := absf(sin(ph * 1.35)) * amp * 0.3
+		var pos := base + Vector3(wob_x, wob_y, wob_z)
+		pos.z = clampf(pos.z, -0.03, 0.02)
+		var pulse := 0.94 + 0.12 * absf(sin(ph * float(d["pulse"])))
+		var sc: float = float(d["sc"]) * pulse
+		## Soft tip clamp under the steel lip.
+		var tip_y := pos.y + tri_h * 0.55 * sc * cos(deg_to_rad(absf(pitch)))
+		if tip_y > tip_budget:
+			pos.y -= (tip_y - tip_budget) * 0.55
+		mi.position = pos
+		mi.scale = Vector3(sc * (0.94 + 0.08 * sin(ph * 2.1)), sc, sc)
+		mi.rotation_degrees = Vector3(
+			pitch + sin(ph * 1.1) * 3.0,
+			180.0 + float(d["lean"]) + sin(ph * 0.8) * 6.0,
+			cos(ph * 1.3) * 4.0
+		)
+		burner_flame_data[i] = d
 
 
 func _grill_place_bounds() -> Rect2:
@@ -1733,7 +2055,7 @@ func _build_grill_burner_ui() -> void:
 
 	var trash := Button.new()
 	trash.text = "🗑 GARBAGE"
-	trash.tooltip_text = "Drag a patty here to toss it"
+	trash.tooltip_text = "Drag a Build topping or patty here to toss it"
 	trash.custom_minimum_size = Vector2(120, 28)
 	trash.focus_mode = Control.FOCUS_NONE
 	UiFontsScript.apply_button(trash, true, 13)
@@ -1773,7 +2095,8 @@ func _build_grill_burner_ui() -> void:
 func _is_over_garbage(screen_pos: Vector2) -> bool:
 	if grill_trash_btn == null or not is_instance_valid(grill_trash_btn):
 		return false
-	var r := grill_trash_btn.get_global_rect().grow(10.0)
+	## Generous catch pad — Build toppings are dragged from across the screen.
+	var r := grill_trash_btn.get_global_rect().grow(28.0)
 	return r.has_point(screen_pos)
 
 
@@ -1781,7 +2104,8 @@ func _can_drop_patty_on_garbage(data: Variant) -> bool:
 	if typeof(data) != TYPE_DICTIONARY:
 		return false
 	var kind: String = data.get("kind", "")
-	return kind == "station_patty" or kind == "reorder"
+	## Build layers, Build patties, or strip toppings dragged to trash.
+	return kind == "station_patty" or kind == "reorder" or kind == "ingredient"
 
 
 func _drop_patty_on_garbage(data: Variant) -> void:
@@ -1791,6 +2115,7 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 	if kind == "station_patty":
 		var st_i := int(data.get("station", -1))
 		var from_i := int(data.get("from", -1))
+		_pending_station_patty_drag = null
 		var patty = _extract_station_patty(st_i, from_i)
 		if patty != null and is_instance_valid(patty):
 			patty.queue_free()
@@ -1801,11 +2126,38 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 	if kind == "reorder":
 		var st2 := int(data.get("station", -1))
 		var from2 := int(data.get("from", -1))
+		_pending_reorder_drag = null
 		if st2 < 0 or st2 >= STATION_COUNT:
 			return
-		_select_station(st2)
-		stations[st2]["selected_layer"] = from2
-		_trash_selected_or_top_layer(st2)
+		_trash_station_layer(st2, from2)
+		return
+	if kind == "ingredient":
+		## Strip topping tossed before it hit Build — just discard the drag.
+		_pending_ingredient_drag = ""
+		_pending_cheese_drag = false
+		if cheese_held:
+			_cancel_cheese_hold_silent()
+		var id := str(data.get("id", ""))
+		if game_audio and game_audio.has_method("play_trash"):
+			game_audio.play_trash()
+		var label: String = GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize())
+		_flash("Trashed %s" % label, Color("FFAB91"))
+		_strip_gesture_added = true
+		_strip_did_drag = true
+
+
+func _trash_station_layer(station_index: int, layer_index: int) -> void:
+	## Remove a specific Build stack layer (used by drag-to-garbage).
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	if layer_index < 0 or layer_index >= items.size():
+		_flash("%s is empty" % _station_label(station_index), Color("B0BEC5"))
+		return
+	_select_station(station_index)
+	st["selected_layer"] = layer_index
+	_trash_selected_or_top_layer(station_index)
 
 
 func _trash_spatula_patty() -> void:
@@ -2001,6 +2353,10 @@ func _set_grill_on(on: bool) -> void:
 			sm.emission_enabled = on and sm.emission_energy_multiplier > 0.01
 	if turning_on and game_audio and game_audio.has_method("play_stove_light"):
 		game_audio.play_stove_light()
+	## Lighting a grill already swimming in grease → it can catch immediately.
+	if on:
+		_check_oil_fire_risk()
+	_set_burner_flames_visible(on)
 	_update_kitchen_sizzle()
 	_refresh_grill_ui_button(0)
 
@@ -2087,6 +2443,40 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 		return float(a["cam_d"]) < float(b["cam_d"])
 	)
 	return candidates[0]["p"]
+
+
+func _pick_patty_for_smash(screen_pos: Vector2):
+	## Smash only when the cursor is near the meat center (screen + world).
+	## Plane-near-miss alone does NOT smash — that places a new patty instead.
+	if _blocks_grill_pick(screen_pos):
+		return null
+	if camera == null:
+		return null
+	var plane_hit := _grill_plane_from_screen(screen_pos)
+	var best = null
+	var best_d := 9999.0
+	for p in grill:
+		if p == null or not is_instance_valid(p) or p.is_held:
+			continue
+		var lift: Vector3 = p.global_position + Vector3(0, 0.03, 0)
+		if camera.is_position_behind(lift):
+			continue
+		var screen_pt := camera.unproject_position(lift)
+		var screen_d := screen_pos.distance_to(screen_pt)
+		if screen_d > PATTY_SMASH_MAX_PX:
+			continue
+		if plane_hit != Vector3.ZERO:
+			var world_d := Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length()
+			if world_d > PATTY_SMASH_WORLD:
+				continue
+		else:
+			## No plane hit — still require a tight screen center hit.
+			if screen_d > PATTY_SMASH_MIN_PX:
+				continue
+		if screen_d < best_d:
+			best_d = screen_d
+			best = p
+	return best
 
 
 func _patty_screen_pick_radius_px(world_pt: Vector3, edge_r: float = -1.0, pad_px: float = -1.0) -> float:
@@ -2265,7 +2655,7 @@ func _begin_patty_drag(patty: Area3D) -> void:
 	if spatula_patty != null:
 		_on_patty_clicked(patty)
 		return
-	if brush_held or cheese_held or shaker_held or oil_held or ext_held:
+	if brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held:
 		return
 	if flicking_patty != null:
 		return
@@ -2391,6 +2781,16 @@ func _end_patty_drag() -> void:
 	if game_audio:
 		game_audio.set_slide_moving(false)
 	if not is_instance_valid(patty):
+		return
+	## Drag onto the peeking cat → feed (no trash fee).
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, mouse):
+		var idx: int = int(patty.slot_index)
+		if idx >= 0 and idx < grill.size() and grill[idx] == patty:
+			grill[idx] = null
+		patty.queue_free()
+		window_cat.feed("patty")
+		_on_window_cat_fed("patty")
+		_flash("Cat stole the burger! ♥", Color("FF8A80"))
 		return
 	## Drag onto GARBAGE to toss this one patty.
 	if _is_over_garbage(mouse):
@@ -2591,6 +2991,8 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 	## Returns true if the click was consumed (place / trash / throw / flip).
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		return false
+	if _try_feed_held_patty_to_cat(screen_pos):
+		return true
 	if _is_over_garbage(screen_pos):
 		_trash_spatula_patty()
 		return true
@@ -2634,9 +3036,11 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 
 
 func _handle_spatula_release(screen_pos: Vector2) -> void:
-	## Build pickup: release LMB to drop — flick / Build area / grill.
+	## Build pickup: release LMB to drop — flick / Build area / grill / cat.
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		spatula_from_build = false
+		return
+	if _try_feed_held_patty_to_cat(screen_pos):
 		return
 	if _is_over_garbage(screen_pos):
 		_trash_spatula_patty()
@@ -2863,7 +3267,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 		game_audio.play_ingredient("patty")
 	var n: int = st["patties"].size()
 	if patty.has_cheese and not patty.cheese_ready():
-		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(5.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
+		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(3.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
 	else:
 		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
 	call_deferred("_try_auto_serve")
@@ -3114,7 +3518,7 @@ func _build_fire_extinguisher() -> void:
 	var visual := packed.instantiate() as Node3D
 	if visual == null:
 		return
-	ext_home = Vector3(2.52, 1.72, 1.14)
+	ext_home = Vector3(2.063, 1.72, 0.937)
 	ext_root = Node3D.new()
 	ext_root.name = "FireExtinguisher"
 	ext_root.position = ext_home
@@ -3147,6 +3551,93 @@ func _build_fire_extinguisher() -> void:
 	ext_root.add_child(ext_area)
 
 
+func _build_window_cat() -> void:
+	## Peeks under the service window between customer lanes — pet or feed.
+	if window_cat != null and is_instance_valid(window_cat):
+		window_cat.queue_free()
+		window_cat = null
+	var cat: Node3D = WindowCatScript.new()
+	cat.name = "WindowCat"
+	world.add_child(cat)
+	window_cat = cat
+	if cat.has_signal("petted"):
+		cat.petted.connect(_on_window_cat_petted)
+	if cat.has_signal("fed"):
+		cat.fed.connect(_on_window_cat_fed)
+
+
+func _try_window_cat_click(screen_pos: Vector2) -> bool:
+	if not playing or window_cat == null or not is_instance_valid(window_cat):
+		return false
+	if brush_held or oil_held or shaker_held or ext_held or glock_held or dragging_patty != null:
+		return false
+	if not window_cat.hit_test(camera, screen_pos):
+		return false
+	## Holding food → feed; empty hands → pet (arms a short topping-treat window).
+	if spatula_patty != null and is_instance_valid(spatula_patty):
+		_feed_window_cat_patty()
+		return true
+	if cheese_held:
+		_feed_window_cat_ingredient("cheese")
+		return true
+	window_cat.pet()
+	return true
+
+
+func _feed_window_cat_patty() -> void:
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return
+	var patty = spatula_patty
+	spatula_patty = null
+	spatula_from_build = false
+	spatula_lmb_held = false
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	if is_instance_valid(patty):
+		patty.queue_free()
+	if window_cat:
+		window_cat.feed("patty")
+	_on_window_cat_fed("patty")
+	_flash("Cat stole the burger! ♥", Color("FF8A80"))
+
+
+func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return false
+	if window_cat == null or not is_instance_valid(window_cat):
+		return false
+	if not window_cat.hit_test_feed(camera, screen_pos):
+		return false
+	_feed_window_cat_patty()
+	return true
+
+
+func _feed_window_cat_ingredient(id: String) -> void:
+	if id == "cheese" and cheese_held:
+		_cancel_cheese_hold()
+	_spend(_ingredient_cost(id))
+	if window_cat:
+		window_cat.feed(id)
+	var label := id.replace("_", " ")
+	_flash("Cat loves the %s!" % label, Color("FFE082"))
+	if game_audio:
+		game_audio.play_ingredient(id)
+
+
+func _on_window_cat_petted() -> void:
+	if game_audio and game_audio.has_method("play_cat_purr"):
+		game_audio.play_cat_purr()
+	_flash("Purr… drag a topping or full burger over!", Color("CE93D8"))
+
+
+func _on_window_cat_fed(kind: String) -> void:
+	if game_audio and game_audio.has_method("play_cat_meow"):
+		game_audio.play_cat_meow()
+	if kind == "patty" and game_audio and game_audio.has_method("play_cat_purr"):
+		game_audio.play_cat_purr()
+
+
 func _apply_fire_ext_materials(node: Node, diff: Texture2D, norm: Texture2D) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
@@ -3173,23 +3664,28 @@ func _apply_fire_ext_materials(node: Node, diff: Texture2D, norm: Texture2D) -> 
 func _begin_fire_ext_hold() -> bool:
 	if not playing or ext_held or ext_root == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or sale_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	ext_held = true
+	ext_spraying = false
 	ext_root.rotation_degrees = ext_held_rot
 	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + EXT_HOLD_HEIGHT)
 	if seat != Vector3.ZERO:
 		ext_root.global_position = seat
 	if ext_area:
 		ext_area.input_ray_pickable = false
+	_ensure_ext_powder()
 	if game_audio:
 		game_audio.play_click()
-	_flash("Fire extinguisher — drag it, release to hang it back", Color("FF8A80"))
+	if grill_on_fire:
+		_flash("Right-click to spray powder on the fire — or the customers…", Color("FF8A80"))
+	else:
+		_flash("Fire extinguisher — right-click sprays · aim at customers or fire · release LMB to hang up", Color("FF8A80"))
 	return true
 
 
-func _update_held_fire_ext(_delta: float) -> void:
+func _update_held_fire_ext(delta: float) -> void:
 	if ext_root == null or camera == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
@@ -3204,13 +3700,21 @@ func _update_held_fire_ext(_delta: float) -> void:
 		hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.75, 1.28)
 		hit.y = GRILL_SURFACE_Y + EXT_HOLD_HEIGHT
 	ext_root.global_position = hit
-	ext_root.rotation_degrees = ext_held_rot
+	## Tip nozzle slightly toward the steel while spraying.
+	ext_root.rotation_degrees = Vector3(-28.0, 200.0, 8.0) if ext_spraying else ext_held_rot
+	if ext_spraying:
+		_spray_extinguisher_powder(delta, hit)
 
 
 func _release_fire_extinguisher() -> void:
 	if not ext_held or ext_root == null:
 		return
 	ext_held = false
+	ext_spraying = false
+	if ext_powder:
+		ext_powder.emitting = false
+	if game_audio and game_audio.has_method("set_ext_spray"):
+		game_audio.set_ext_spray(false)
 	ext_root.position = ext_home
 	ext_root.rotation_degrees = ext_home_rot
 	if ext_area:
@@ -3221,16 +3725,581 @@ func _release_fire_extinguisher() -> void:
 
 func _reset_fire_extinguisher() -> void:
 	ext_held = false
+	ext_spraying = false
+	if game_audio and game_audio.has_method("set_ext_spray"):
+		game_audio.set_ext_spray(false)
+	if ext_powder != null and is_instance_valid(ext_powder):
+		ext_powder.emitting = false
 	if ext_root != null and is_instance_valid(ext_root):
 		ext_root.position = ext_home
 		ext_root.rotation_degrees = ext_home_rot
 	if ext_area != null and is_instance_valid(ext_area):
 		ext_area.input_ray_pickable = true
+	_clear_grill_fire()
+	_clear_ext_powder_blobs()
+
+
+func _build_glock() -> void:
+	## Hung on the window lintel, immediately right of the FIRST SALE plaque.
+	const SCENE_PATH := "res://assets/glock/Glock.fbx"
+	const DIFF_PATH := "res://assets/glock/Low_Explode_Glock_Mat_BaseColor.png"
+	const MET_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Metallic.png"
+	const NORM_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Normal.png"
+	const ROUGH_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Roughness.png"
+	const EMIS_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Emissive.png"
+	if glock_root != null and is_instance_valid(glock_root):
+		glock_root.queue_free()
+		glock_root = null
+	glock_flash = null
+	glock_muzzle = null
+	glock_laser_beam = null
+	glock_laser_dot = null
+	glock_laser_module = null
+	glock_rear_sight_l = null
+	glock_rear_sight_r = null
+	glock_visual = null
+	glock_area = null
+	## Drop leftover mount key / shadow plate from older builds.
+	var old_key := world.get_node_or_null("GlockMountKey")
+	if old_key != null and is_instance_valid(old_key):
+		old_key.queue_free()
+	var old_plate := world.get_node_or_null("GlockShadowPlate")
+	if old_plate != null and is_instance_valid(old_plate):
+		old_plate.queue_free()
+	if not ResourceLoader.exists(SCENE_PATH):
+		push_warning("Glock missing: %s" % SCENE_PATH)
+		return
+	var packed := load(SCENE_PATH) as PackedScene
+	if packed == null:
+		return
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	## Tucked behind the First Sale plaque — slide the bill aside to grab it.
+	glock_home = Vector3(0.0, 2.38, 1.232)
+	glock_home_rot = Vector3(0.0, 270.0, 0.0)
+	glock_root = Node3D.new()
+	glock_root.name = "WallGlock"
+	glock_root.position = glock_home
+	glock_root.rotation_degrees = glock_home_rot
+	world.add_child(glock_root)
+	visual.name = "GlockMesh"
+	## New single-gun Display mesh: barrel +Z, grip −Y — hang upright on the beam.
+	visual.position = Vector3(0.0, 0.02, 0.0)
+	visual.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+	## Model is already ~handgun-sized (~20cm); slight upscale so it reads on the wall.
+	visual.scale = Vector3.ONE * GLOCK_MESH_SCALE
+	var diff: Texture2D = load(DIFF_PATH) as Texture2D if ResourceLoader.exists(DIFF_PATH) else null
+	var met: Texture2D = load(MET_PATH) as Texture2D if ResourceLoader.exists(MET_PATH) else null
+	var norm: Texture2D = load(NORM_PATH) as Texture2D if ResourceLoader.exists(NORM_PATH) else null
+	var rough: Texture2D = load(ROUGH_PATH) as Texture2D if ResourceLoader.exists(ROUGH_PATH) else null
+	var emis: Texture2D = load(EMIS_PATH) as Texture2D if ResourceLoader.exists(EMIS_PATH) else null
+	_apply_glock_materials(visual, diff, met, norm, rough, emis)
+	glock_root.add_child(visual)
+	glock_visual = visual
+
+	glock_area = Area3D.new()
+	glock_area.name = "GlockGrab"
+	glock_area.input_ray_pickable = true
+	glock_area.collision_layer = GLOCK_COLLISION_LAYER
+	glock_area.collision_mask = 0
+	glock_area.monitoring = false
+	glock_area.monitorable = true
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.22, 0.28, 0.32)
+	shape.shape = box
+	shape.position = Vector3(0.0, 0.0, 0.02)
+	glock_area.add_child(shape)
+	glock_root.add_child(glock_area)
+	_ensure_glock_fx()
+
+
+func _apply_glock_materials(node: Node, diff: Texture2D, met: Texture2D, norm: Texture2D, rough: Texture2D, emis: Texture2D) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.cull_mode = BaseMaterial3D.CULL_BACK
+		if diff != null:
+			mat.albedo_texture = diff
+			mat.albedo_color = Color.WHITE
+		else:
+			mat.albedo_color = Color(0.18, 0.18, 0.2)
+		if met != null:
+			mat.metallic_texture = met
+			mat.metallic = 0.28 ## Polymer / phosphate — less mirror chrome.
+		else:
+			mat.metallic = 0.18
+		## Duty matte — ignore glossy roughness map so highlights stay soft.
+		mat.roughness = 0.72
+		mat.metallic = minf(mat.metallic, 0.32)
+		if norm != null:
+			mat.normal_enabled = true
+			mat.normal_texture = norm
+			mat.normal_scale = 1.0
+		if emis != null:
+			mat.emission_enabled = true
+			mat.emission_texture = emis
+			mat.emission_energy_multiplier = 0.35
+		mi.material_override = mat
+	for child in node.get_children():
+		_apply_glock_materials(child, diff, met, norm, rough, emis)
+
+
+func _ensure_glock_fx() -> void:
+	if glock_root == null:
+		return
+	if glock_flash == null or not is_instance_valid(glock_flash):
+		glock_flash = OmniLight3D.new()
+		glock_flash.name = "GlockMuzzleLight"
+		glock_flash.light_color = Color(1.0, 0.85, 0.45)
+		glock_flash.light_energy = 0.0
+		glock_flash.omni_range = 1.8
+		glock_flash.shadow_enabled = false
+		glock_flash.position = GLOCK_MUZZLE_LOCAL
+		glock_root.add_child(glock_flash)
+	if glock_muzzle == null or not is_instance_valid(glock_muzzle):
+		glock_muzzle = GPUParticles3D.new()
+		glock_muzzle.name = "GlockMuzzleFlash"
+		glock_muzzle.amount = 18
+		glock_muzzle.lifetime = 0.08
+		glock_muzzle.one_shot = true
+		glock_muzzle.explosiveness = 1.0
+		glock_muzzle.emitting = false
+		glock_muzzle.position = GLOCK_MUZZLE_LOCAL
+		var mat := ParticleProcessMaterial.new()
+		mat.direction = Vector3(0, 0, 1)
+		mat.spread = 28.0
+		mat.initial_velocity_min = 1.5
+		mat.initial_velocity_max = 3.2
+		mat.gravity = Vector3.ZERO
+		mat.scale_min = 0.02
+		mat.scale_max = 0.06
+		mat.color = Color(1.0, 0.75, 0.25, 1.0)
+		glock_muzzle.process_material = mat
+		var dm := SphereMesh.new()
+		dm.radius = 0.02
+		dm.height = 0.04
+		glock_muzzle.draw_pass_1 = dm
+		glock_root.add_child(glock_muzzle)
+	_ensure_glock_laser()
+	_ensure_glock_rear_sights()
+
+
+func _ensure_glock_rear_sights() -> void:
+	## Two glowing night-sight discs on the rear sight posts.
+	if glock_root == null:
+		return
+	if glock_rear_sight_l == null or not is_instance_valid(glock_rear_sight_l):
+		glock_rear_sight_l = _make_glock_rear_sight_disc("GlockRearSightL", -1.0)
+		glock_root.add_child(glock_rear_sight_l)
+	else:
+		glock_rear_sight_l.position = Vector3(-GLOCK_REAR_SIGHT_X, GLOCK_REAR_SIGHT_Y, GLOCK_REAR_SIGHT_Z)
+	if glock_rear_sight_r == null or not is_instance_valid(glock_rear_sight_r):
+		glock_rear_sight_r = _make_glock_rear_sight_disc("GlockRearSightR", 1.0)
+		glock_root.add_child(glock_rear_sight_r)
+	else:
+		glock_rear_sight_r.position = Vector3(GLOCK_REAR_SIGHT_X, GLOCK_REAR_SIGHT_Y, GLOCK_REAR_SIGHT_Z)
+
+
+func _make_glock_rear_sight_disc(disc_name: String, side: float) -> MeshInstance3D:
+	var disc := MeshInstance3D.new()
+	disc.name = disc_name
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = GLOCK_REAR_SIGHT_R
+	cyl.bottom_radius = GLOCK_REAR_SIGHT_R
+	cyl.height = 0.0022
+	cyl.radial_segments = 16
+	disc.mesh = cyl
+	## Sit on the rear posts; face the shooter (−Z / back of the slide).
+	disc.position = Vector3(side * GLOCK_REAR_SIGHT_X, GLOCK_REAR_SIGHT_Y, GLOCK_REAR_SIGHT_Z)
+	disc.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.55, 1.0, 0.45)
+	mat.emission_enabled = true
+	mat.emission = Color(0.35, 1.0, 0.4)
+	mat.emission_energy_multiplier = 5.5
+	mat.roughness = 0.15
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.disable_receive_shadows = true
+	disc.material_override = mat
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	disc.sorting_offset = 4.0
+	return disc
+
+
+func _ensure_glock_laser() -> void:
+	if glock_root == null:
+		return
+	## Tiny under-barrel laser module.
+	if glock_laser_module == null or not is_instance_valid(glock_laser_module):
+		glock_laser_module = MeshInstance3D.new()
+		glock_laser_module.name = "GlockLaserModule"
+		var box := BoxMesh.new()
+		box.size = Vector3(0.022, 0.018, 0.048)
+		glock_laser_module.mesh = box
+		glock_laser_module.position = GLOCK_LASER_LOCAL
+		var mod_mat := StandardMaterial3D.new()
+		mod_mat.albedo_color = Color(0.12, 0.12, 0.13)
+		mod_mat.metallic = 0.7
+		mod_mat.roughness = 0.35
+		glock_laser_module.material_override = mod_mat
+		glock_laser_module.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		glock_root.add_child(glock_laser_module)
+		## Red emitter lens on the front of the module.
+		var lens := MeshInstance3D.new()
+		var lens_mesh := SphereMesh.new()
+		lens_mesh.radius = 0.006
+		lens_mesh.height = 0.012
+		lens.mesh = lens_mesh
+		lens.position = Vector3(0.0, 0.0, 0.026)
+		var lens_mat := StandardMaterial3D.new()
+		lens_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		lens_mat.albedo_color = Color(1.0, 0.08, 0.05)
+		lens_mat.emission_enabled = true
+		lens_mat.emission = Color(1.0, 0.12, 0.05)
+		lens_mat.emission_energy_multiplier = 2.4
+		lens.material_override = lens_mat
+		lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		glock_laser_module.add_child(lens)
+	else:
+		glock_laser_module.position = GLOCK_LASER_LOCAL
+	## Thin red beam along +Z from the muzzle / module.
+	if glock_laser_beam == null or not is_instance_valid(glock_laser_beam):
+		glock_laser_beam = MeshInstance3D.new()
+		glock_laser_beam.name = "GlockLaserBeam"
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.0022
+		cyl.bottom_radius = 0.0022
+		cyl.height = 1.0
+		cyl.radial_segments = 8
+		glock_laser_beam.mesh = cyl
+		## Cylinder is Y-up — rotate so length runs along +Z.
+		glock_laser_beam.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+		var beam_mat := StandardMaterial3D.new()
+		beam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		beam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		beam_mat.albedo_color = Color(1.0, 0.05, 0.05, 0.72)
+		beam_mat.emission_enabled = true
+		beam_mat.emission = Color(1.0, 0.08, 0.05)
+		beam_mat.emission_energy_multiplier = 3.5
+		beam_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		beam_mat.disable_receive_shadows = true
+		glock_laser_beam.material_override = beam_mat
+		glock_laser_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		glock_root.add_child(glock_laser_beam)
+	## Impact dot at the end of the beam.
+	if glock_laser_dot == null or not is_instance_valid(glock_laser_dot):
+		glock_laser_dot = MeshInstance3D.new()
+		glock_laser_dot.name = "GlockLaserDot"
+		var sphere := SphereMesh.new()
+		sphere.radius = 0.012
+		sphere.height = 0.024
+		glock_laser_dot.mesh = sphere
+		var dot_mat := StandardMaterial3D.new()
+		dot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		dot_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dot_mat.albedo_color = Color(1.0, 0.15, 0.1, 0.95)
+		dot_mat.emission_enabled = true
+		dot_mat.emission = Color(1.0, 0.2, 0.1)
+		dot_mat.emission_energy_multiplier = 4.5
+		dot_mat.disable_receive_shadows = true
+		glock_laser_dot.material_override = dot_mat
+		glock_laser_dot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		glock_root.add_child(glock_laser_dot)
+	_set_glock_laser_visible(glock_held)
+	if glock_held:
+		_set_glock_laser_length(2.5)
+
+
+func _set_glock_laser_visible(on: bool) -> void:
+	if glock_laser_module != null and is_instance_valid(glock_laser_module):
+		glock_laser_module.visible = on
+	if glock_laser_beam != null and is_instance_valid(glock_laser_beam):
+		glock_laser_beam.visible = on
+	if glock_laser_dot != null and is_instance_valid(glock_laser_dot):
+		glock_laser_dot.visible = on
+
+
+func _set_glock_laser_length(length: float) -> void:
+	var L := clampf(length, 0.08, GLOCK_LASER_MAX)
+	var start_z := GLOCK_LASER_LOCAL.z + 0.028
+	var ly := GLOCK_LASER_LOCAL.y
+	if glock_laser_beam != null and is_instance_valid(glock_laser_beam):
+		var cyl := glock_laser_beam.mesh as CylinderMesh
+		if cyl == null:
+			cyl = CylinderMesh.new()
+			cyl.top_radius = 0.0022
+			cyl.bottom_radius = 0.0022
+			cyl.radial_segments = 8
+			glock_laser_beam.mesh = cyl
+		cyl.height = L
+		## Beam starts at module lens and extends along +Z.
+		glock_laser_beam.position = Vector3(0.0, ly, start_z + L * 0.5)
+	if glock_laser_dot != null and is_instance_valid(glock_laser_dot):
+		glock_laser_dot.position = Vector3(0.0, ly, start_z + L)
+	## Visibility is owned by hold state — never force on while hung up.
+	_set_glock_laser_visible(glock_held)
+
+
+func _update_glock_laser_aim() -> void:
+	_ensure_glock_laser()
+	if not glock_held or glock_root == null or camera == null:
+		_set_glock_laser_visible(false)
+		return
+	_set_glock_laser_visible(true)
+	var origin := glock_root.to_global(GLOCK_LASER_LOCAL + Vector3(0.0, 0.0, 0.028))
+	var dir := glock_root.global_transform.basis.z.normalized()
+	var q := PhysicsRayQueryParameters3D.create(origin, origin + dir * GLOCK_LASER_MAX)
+	q.collide_with_areas = true
+	q.collide_with_bodies = true
+	q.collision_mask = 0xFFFFFFFF
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		_set_glock_laser_length(GLOCK_LASER_MAX)
+	else:
+		var dist: float = origin.distance_to(hit.get("position", origin + dir))
+		_set_glock_laser_length(maxf(0.12, dist))
+
+
+func _begin_glock_hold() -> bool:
+	if not playing or glock_held or glock_root == null:
+		return false
+	if _sale_covers_glock():
+		_flash("Move the First Sale plaque first", Color("FFCC80"))
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or sale_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	glock_held = true
+	glock_cooldown = 0.0
+	glock_recoil = 0.0
+	glock_aim_roll = 0.0
+	glock_aim_yaw = 0.0
+	glock_prev_mouse_x = get_viewport().get_mouse_position().x
+	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT)
+	if seat != Vector3.ZERO:
+		glock_root.global_position = seat
+	if glock_area:
+		glock_area.input_ray_pickable = false
+	_ensure_glock_fx()
+	_set_glock_laser_visible(true)
+	_update_glock_laser_aim()
+	if game_audio:
+		game_audio.play_click()
+	_flash("Glock ready — right-click to shoot · laser on · release LMB to hang up", Color("FFCC80"))
+	return true
+
+
+func _update_held_glock(delta: float) -> void:
+	if glock_root == null or camera == null:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var seat := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT)
+	if seat == Vector3.ZERO:
+		var hit := _grill_plane_from_screen(mouse)
+		if hit == Vector3.ZERO:
+			return
+		hit.y = GRILL_SURFACE_Y + GLOCK_HOLD_HEIGHT
+		seat = hit
+	## Hold slightly toward the camera so it reads as a pointed handgun.
+	var cam_fwd := -camera.global_transform.basis.z
+	glock_root.global_position = seat - cam_fwd * 0.04
+	## Aim barrel (+Z on the new Display mesh) along the camera ray.
+	var from := camera.project_ray_origin(mouse)
+	var dir := camera.project_ray_normal(mouse)
+	var aim := from + dir * 5.0
+	## Left/right lean — stronger angle + flick sway from mouse motion.
+	var vp := get_viewport().get_visible_rect().size
+	var nx := 0.0
+	if vp.x > 1.0:
+		nx = clampf((mouse.x / vp.x) * 2.0 - 1.0, -1.0, 1.0)
+	var ny := 0.0
+	if vp.y > 1.0:
+		ny = clampf((mouse.y / vp.y) * 2.0 - 1.0, -1.0, 1.0)
+	var dx := 0.0
+	if glock_prev_mouse_x >= 0.0:
+		dx = mouse.x - glock_prev_mouse_x
+	glock_prev_mouse_x = mouse.x
+	var sway := clampf(dx * 0.22, -28.0, 28.0)
+	var roll_target := nx * 28.0 + sway
+	var yaw_target := -nx * 22.0
+	var pitch_extra := ny * 10.0
+	var blend := 1.0 - exp(-delta * 14.0)
+	glock_aim_roll = lerpf(glock_aim_roll, roll_target, blend)
+	glock_aim_yaw = lerpf(glock_aim_yaw, yaw_target, blend)
+	if (aim - glock_root.global_position).length_squared() > 0.0001:
+		## look_at points -Z; flip so +Z barrel faces the target.
+		glock_root.look_at(aim, Vector3.UP)
+		glock_root.rotate_object_local(Vector3.UP, PI)
+		## Tip muzzle + dynamic pitch from vertical mouse.
+		glock_root.rotate_object_local(Vector3.RIGHT, deg_to_rad(-8.0 - pitch_extra))
+		## Extra yaw / roll so sweeping left-right feels alive.
+		glock_root.rotate_object_local(Vector3.UP, deg_to_rad(glock_aim_yaw))
+		glock_root.rotate_object_local(Vector3.FORWARD, deg_to_rad(glock_aim_roll))
+	if glock_recoil > 0.0:
+		glock_root.rotate_object_local(Vector3.RIGHT, -glock_recoil * 0.28)
+	if glock_visual != null and is_instance_valid(glock_visual):
+		glock_visual.rotation_degrees = Vector3.ZERO
+		glock_visual.scale = Vector3.ONE * (GLOCK_MESH_SCALE * 1.05)
+	if glock_flash != null and is_instance_valid(glock_flash):
+		glock_flash.light_energy = maxf(0.0, glock_flash.light_energy - delta * 28.0)
+		glock_flash.position = GLOCK_MUZZLE_LOCAL
+	if glock_muzzle != null and is_instance_valid(glock_muzzle):
+		glock_muzzle.position = GLOCK_MUZZLE_LOCAL
+	_update_glock_laser_aim()
+
+
+func _fire_glock() -> void:
+	if not glock_held or glock_root == null or camera == null:
+		return
+	if glock_cooldown > 0.0:
+		return
+	glock_cooldown = GLOCK_FIRE_COOLDOWN
+	glock_recoil = 1.0
+	_ensure_glock_fx()
+	if glock_muzzle != null:
+		glock_muzzle.restart()
+		glock_muzzle.emitting = true
+	if glock_flash != null:
+		glock_flash.light_energy = 6.5
+	if game_audio and game_audio.has_method("play_gunshot"):
+		game_audio.play_gunshot()
+	## Ray from muzzle toward aim — scare the window cat if it peeks into the shot.
+	var mouse := get_viewport().get_mouse_position()
+	var from := camera.project_ray_origin(mouse)
+	var dir := camera.project_ray_normal(mouse)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 30.0)
+	q.collide_with_areas = true
+	q.collide_with_bodies = true
+	q.collision_mask = 0xFFFFFFFF
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.is_interactable():
+		var head: Vector3 = window_cat.head_global()
+		var to_cat := head - from
+		var along := dir.dot(to_cat)
+		if along > 0.4:
+			var closest := from + dir * along
+			if closest.distance_to(head) < 0.55:
+				window_cat.reset_shift()
+				_flash("Cat bolted!", Color("CE93D8"))
+				if game_audio and game_audio.has_method("play_cat_meow"):
+					game_audio.play_cat_meow()
+				return
+	## Shoot a customer → limp ragdoll + blood; keep firing for more hits.
+	var shot_cust := _find_customer_under_gun_aim(from, dir, mouse)
+	if shot_cust != null and shot_cust.has_method("get_shot"):
+		var first_hit: bool = bool(shot_cust.get_shot(from, dir))
+		if first_hit and game_audio and game_audio.has_method("play_wilhelm_scream"):
+			game_audio.play_wilhelm_scream()
+		var impact_pos: Vector3 = shot_cust.global_position + Vector3(0.0, 0.85, 0.0)
+		_spawn_glock_impact(impact_pos)
+		if first_hit:
+			_flash("Wilhelm!", Color("EF5350"))
+			_on_customer_left(shot_cust, true)
+		return
+	if not hit.is_empty():
+		## Tiny spark ping at impact.
+		_spawn_glock_impact(hit.get("position", Vector3.ZERO))
+
+
+func _find_customer_under_gun_aim(from: Vector3, dir: Vector3, mouse: Vector2) -> Node3D:
+	## Prefer screen proximity to torso/head; fall back to ray closeness.
+	if customers_root == null or camera == null:
+		return null
+	var best: Node3D = null
+	var best_score := 9999.0
+	for c in customers_root.get_children():
+		if c == null or not is_instance_valid(c):
+			continue
+		if not c.has_method("get_shot"):
+			continue
+		## Already tumbling — still allow extra hits for more blood.
+		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
+		var head: Vector3 = c.global_position + Vector3(0.0, 1.15, 0.0)
+		if camera.is_position_behind(torso):
+			continue
+		var screen_d := mini(
+			mouse.distance_to(camera.unproject_position(torso)),
+			mouse.distance_to(camera.unproject_position(head))
+		)
+		var to_torso := torso - from
+		var along := dir.dot(to_torso)
+		if along < 0.3:
+			continue
+		var closest := from + dir * along
+		var ray_d := closest.distance_to(torso)
+		## Combined score — easy to hit through the window.
+		var score := screen_d + ray_d * 40.0
+		if screen_d < 110.0 and ray_d < 0.85 and score < best_score:
+			best_score = score
+			best = c
+	return best
+
+
+func _spawn_glock_impact(pos: Vector3) -> void:
+	var spark := OmniLight3D.new()
+	spark.light_color = Color(1.0, 0.9, 0.5)
+	spark.light_energy = 2.2
+	spark.omni_range = 0.55
+	spark.shadow_enabled = false
+	spark.position = pos
+	world.add_child(spark)
+	var tw := create_tween()
+	tw.tween_property(spark, "light_energy", 0.0, 0.12)
+	tw.tween_callback(spark.queue_free)
+
+
+func _release_glock() -> void:
+	if not glock_held or glock_root == null:
+		return
+	glock_held = false
+	glock_recoil = 0.0
+	glock_aim_roll = 0.0
+	glock_aim_yaw = 0.0
+	glock_prev_mouse_x = -1.0
+	if glock_flash != null and is_instance_valid(glock_flash):
+		glock_flash.light_energy = 0.0
+	if glock_muzzle != null and is_instance_valid(glock_muzzle):
+		glock_muzzle.emitting = false
+	if glock_visual != null and is_instance_valid(glock_visual):
+		glock_visual.rotation_degrees = Vector3.ZERO
+		glock_visual.scale = Vector3.ONE * GLOCK_MESH_SCALE
+	glock_root.position = glock_home
+	glock_root.rotation_degrees = glock_home_rot
+	_set_glock_laser_visible(false)
+	_refresh_glock_cover_lock()
+	if game_audio:
+		game_audio.play_click()
+
+
+func _reset_glock() -> void:
+	glock_held = false
+	glock_cooldown = 0.0
+	glock_recoil = 0.0
+	glock_aim_roll = 0.0
+	glock_aim_yaw = 0.0
+	glock_prev_mouse_x = -1.0
+	if glock_flash != null and is_instance_valid(glock_flash):
+		glock_flash.light_energy = 0.0
+	if glock_muzzle != null and is_instance_valid(glock_muzzle):
+		glock_muzzle.emitting = false
+	if glock_visual != null and is_instance_valid(glock_visual):
+		glock_visual.rotation_degrees = Vector3.ZERO
+		glock_visual.scale = Vector3.ONE * GLOCK_MESH_SCALE
+	if glock_root != null and is_instance_valid(glock_root):
+		glock_root.position = glock_home
+		glock_root.rotation_degrees = glock_home_rot
+	_set_glock_laser_visible(false)
+	_refresh_glock_cover_lock()
 
 
 func _build_wire_brush() -> void:
 	## Paint scraper hanging with oil + seasoning on the far-left window beam.
-	brush_home = Vector3(2.12, 1.99, 1.12)
+	brush_home = Vector3(1.866, 1.99, 1.12)
 	brush_root = Node3D.new()
 	brush_root.name = "PaintScraper"
 	brush_root.position = brush_home
@@ -3327,7 +4396,7 @@ func _build_wire_brush() -> void:
 
 func _build_season_shaker() -> void:
 	## Seasoning hanging next to the oil bottle on the far-left window beam.
-	shaker_home = Vector3(1.78, 2.14, 1.12)
+	shaker_home = Vector3(1.526, 2.14, 1.12)
 	shaker_root = Node3D.new()
 	shaker_root.name = "SeasonShaker"
 	shaker_root.position = shaker_home
@@ -3439,6 +4508,12 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 	## Prefer the nearest hanging tool by screen distance, then ray as fallback.
 	var best := ""
 	var best_d := 110.0
+	## First Sale plaque first — covers the Glock until you slide it aside.
+	if first_sale_decal != null and camera != null and not sale_held:
+		var sd_sale := screen_pos.distance_to(camera.unproject_position(first_sale_decal.global_position))
+		if sd_sale < best_d:
+			best_d = sd_sale
+			best = "sale"
 	if shaker_root != null and camera != null and not shaker_held:
 		var sd := screen_pos.distance_to(camera.unproject_position(shaker_root.global_position + Vector3(0, 0.05, 0)))
 		if sd < best_d:
@@ -3467,8 +4542,15 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 		if ed < best_d:
 			best_d = ed
 			best = "ext"
+	if glock_root != null and camera != null and not glock_held and not _sale_covers_glock():
+		var gd := screen_pos.distance_to(camera.unproject_position(glock_root.global_position + Vector3(0, 0.05, 0)))
+		if gd < best_d:
+			best_d = gd
+			best = "glock"
 	if best == "" or best_d > 96.0:
-		if _ray_hits_tool(screen_pos, 32, shaker_area):
+		if _ray_hits_tool(screen_pos, SALE_COLLISION_LAYER, sale_area):
+			best = "sale"
+		elif _ray_hits_tool(screen_pos, 32, shaker_area):
 			best = "shaker"
 		elif _ray_hits_tool(screen_pos, 8, brush_area):
 			best = "brush"
@@ -3476,9 +4558,13 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			best = "oil"
 		elif _ray_hits_tool(screen_pos, EXT_COLLISION_LAYER, ext_area):
 			best = "ext"
+		elif not _sale_covers_glock() and _ray_hits_tool(screen_pos, GLOCK_COLLISION_LAYER, glock_area):
+			best = "glock"
 		else:
 			return false
 	match best:
+		"sale":
+			return _begin_sale_hold()
 		"shaker":
 			_begin_shaker_hold()
 			return shaker_held
@@ -3488,6 +4574,8 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			return _try_grab_brush(screen_pos)
 		"ext":
 			return _begin_fire_ext_hold()
+		"glock":
+			return _begin_glock_hold()
 	return false
 
 
@@ -3507,7 +4595,7 @@ func _ray_hits_tool(screen_pos: Vector2, layer: int, area: Area3D) -> bool:
 func _try_grab_shaker(screen_pos: Vector2) -> bool:
 	if shaker_held or shaker_root == null or camera == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or oil_held or ext_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or oil_held or ext_held or glock_held or dragging_patty != null:
 		return false
 	var tip := shaker_root.global_position + Vector3(0, 0.05, 0)
 	var near := screen_pos.distance_to(camera.unproject_position(tip)) <= 58.0
@@ -3520,7 +4608,7 @@ func _try_grab_shaker(screen_pos: Vector2) -> bool:
 func _begin_shaker_hold() -> void:
 	if not playing:
 		return
-	if brush_held or oil_held or cheese_held or ext_held or spatula_patty != null or dragging_patty != null:
+	if brush_held or oil_held or cheese_held or ext_held or glock_held or spatula_patty != null or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return
 	if shaker_held:
@@ -3606,7 +4694,7 @@ func _nearest_patty_near(world_pos: Vector3, max_dist: float):
 	return best
 
 
-func _update_held_oil(_delta: float) -> void:
+func _update_held_oil(delta: float) -> void:
 	if oil_root == null or camera == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
@@ -3621,6 +4709,12 @@ func _update_held_oil(_delta: float) -> void:
 	if oil_particles:
 		oil_particles.emitting = true
 		oil_particles.position = Vector3(0, 0.12, 0)
+	## Holding grease down on a lit grill too long → grease fire.
+	oil_pour_hold_t += delta
+	if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
+		_flash("Grease held too long on a hot grill!", Color("FF5252"))
+		_start_grill_fire(hit)
+		return
 	var cur := Vector3(hit.x, GRILL_SURFACE_Y + OIL_SIT_Y, hit.z)
 	if oil_last_draw == Vector3.ZERO:
 		oil_last_draw = cur
@@ -3711,6 +4805,755 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 	## Hot steel + fresh oil → loud fry, then a soft fade-out.
 	if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
 		game_audio.trigger_hot_oil(3.0)
+	_check_oil_fire_risk()
+
+
+func _check_oil_fire_risk() -> void:
+	if grill_on_fire:
+		return
+	## Cold grill can't ignite grease — puddles are fine until the burner is on.
+	if not grill_on:
+		return
+	## Puddle count only warns — fire requires holding the pour for OIL_POUR_FIRE_SEC.
+	var n := oil_slicks.size()
+	if n >= OIL_FIRE_WARN_COUNT and not _oil_fire_warned:
+		_oil_fire_warned = true
+		_flash("Lots of oil — keep pouring and it'll catch!", Color("FF8A65"))
+
+
+func _pick_fire_start_zone(hint: Vector3 = Vector3.ZERO) -> Dictionary:
+	## Prefer the band under the pour tip / densest oil — fire stays in that section only.
+	if hint != Vector3.ZERO:
+		var zh := _grill_zone_at(hint)
+		if not zh.is_empty():
+			return zh
+	if oil_last_draw != Vector3.ZERO:
+		var zl := _grill_zone_at(oil_last_draw)
+		if not zl.is_empty():
+			return zl
+	var tallies: Dictionary = {} ## id -> count
+	var samples: Dictionary = {} ## id -> zone dict
+	for item in oil_slicks:
+		var m = item.get("mesh")
+		if m == null or not is_instance_valid(m):
+			continue
+		var z := _grill_zone_at(m.position)
+		if z.is_empty():
+			continue
+		var id := str(z.get("id", ""))
+		tallies[id] = int(tallies.get(id, 0)) + 1
+		samples[id] = z
+	var best_id := ""
+	var best_n := -1
+	for id in tallies.keys():
+		var c := int(tallies[id])
+		if c > best_n:
+			best_n = c
+			best_id = str(id)
+	if best_id != "" and samples.has(best_id):
+		return samples[best_id]
+	## Fallback: FULL heat band.
+	for z2 in _grill_zone_bands():
+		if str(z2.get("id", "")) == "full":
+			return z2
+	return {}
+
+
+func _fire_zone_dict() -> Dictionary:
+	if fire_zone_id == "":
+		return {}
+	for z in _grill_zone_bands():
+		if str(z.get("id", "")) == fire_zone_id:
+			return z
+	return {}
+
+
+func _is_in_fire_zone(world_pos: Vector3) -> bool:
+	var z := _fire_zone_dict()
+	if z.is_empty():
+		return grill_on_fire
+	return world_pos.x >= float(z["x0"]) - 0.01 and world_pos.x <= float(z["x1"]) + 0.01 \
+		and absf(world_pos.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.55
+
+
+func _start_grill_fire(origin: Vector3 = Vector3.ZERO) -> void:
+	if grill_on_fire:
+		return
+	## Never flash over on a cold flat-top.
+	if not grill_on:
+		return
+	grill_on_fire = true
+	fire_health = 1.0
+	_oil_fire_warned = true
+	_fire_killed_by_powder = false
+	oil_pour_hold_t = 0.0
+	var zone := _pick_fire_start_zone(origin)
+	fire_zone_id = str(zone.get("id", "full"))
+	## Drop the oil bottle so they can grab the extinguisher.
+	if oil_held:
+		_release_oil_bottle()
+	_ensure_grill_fire_fx()
+	_sync_fire_to_oil_area()
+	_set_fire_fx_emitting(true)
+	## Char only patties sitting in the burning section.
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p):
+			continue
+		if not _is_in_fire_zone(p.position):
+			continue
+		p.cook_time = maxf(float(p.cook_time), 40.0)
+		p.heating = true
+		p.heat_mul = 1.4
+	if game_audio:
+		game_audio.play_error()
+	var lab := str(zone.get("label", "grill"))
+	_flash("GREASE FIRE on %s! Grab the extinguisher!" % lab, Color("FF5252"))
+
+
+func _oil_fire_bounds() -> Dictionary:
+	## Fire lives only inside the heat band where it started.
+	var zone := _fire_zone_dict()
+	if zone.is_empty():
+		zone = _pick_fire_start_zone()
+		fire_zone_id = str(zone.get("id", "full"))
+	var x0 := float(zone.get("x0", GRILL_CENTER_X - 0.3))
+	var x1 := float(zone.get("x1", GRILL_CENTER_X + 0.3))
+	var zw := maxf(0.18, float(zone.get("w", 0.4)))
+	var cx := float(zone.get("cx", (x0 + x1) * 0.5))
+	var sum_z := 0.0
+	var n := 0
+	for item in oil_slicks:
+		var m = item.get("mesh")
+		if m == null or not is_instance_valid(m):
+			continue
+		var p: Vector3 = m.position
+		if p.x < x0 - 0.02 or p.x > x1 + 0.02:
+			continue
+		sum_z += p.z
+		n += 1
+	var cz := GRILL_SURFACE_Z
+	if n > 0:
+		cz = sum_z / float(n)
+	cz = clampf(cz, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
+	var center := Vector3(cx, GRILL_SURFACE_Y + 0.05, cz)
+	## Tight box — one section only, not the whole flat-top.
+	var half := Vector3(
+		clampf(zw * 0.42, 0.14, zw * 0.48),
+		0.02,
+		clampf(GRILL_DEPTH * 0.38, 0.16, GRILL_DEPTH * 0.42)
+	)
+	return {"center": center, "half": half}
+
+
+func _sync_fire_to_oil_area() -> void:
+	if fire_root == null or not is_instance_valid(fire_root):
+		return
+	var b := _oil_fire_bounds()
+	var center: Vector3 = b["center"]
+	var half: Vector3 = b["half"]
+	## Fire lives in grill_root local space — slick positions are already local.
+	fire_root.position = center
+	for sys in [fire_particles, fire_particles_red, fire_embers]:
+		if sys == null or not is_instance_valid(sys):
+			continue
+		var pmat := sys.process_material as ParticleProcessMaterial
+		if pmat == null:
+			continue
+		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		pmat.emission_box_extents = half
+	if fire_smoke != null and is_instance_valid(fire_smoke):
+		var sm := fire_smoke.process_material as ParticleProcessMaterial
+		if sm != null:
+			sm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+			sm.emission_box_extents = Vector3(half.x * 0.85, 0.02, half.z * 0.85)
+	## Tight, dim omnis — push falloff hard so only that section glows.
+	if fire_light != null and is_instance_valid(fire_light):
+		fire_light.position = Vector3(0.0, 0.14, 0.0)
+		fire_light.omni_range = clampf(0.55 + half.x * 0.35, 0.55, 0.95)
+		fire_light.omni_attenuation = 3.4
+	if fire_light_rim != null and is_instance_valid(fire_light_rim):
+		fire_light_rim.position = Vector3(0.0, 0.08, 0.0)
+		fire_light_rim.omni_range = clampf(0.4 + half.x * 0.25, 0.4, 0.7)
+		fire_light_rim.omni_attenuation = 3.8
+
+
+func _set_fire_fx_emitting(on: bool) -> void:
+	for sys in [fire_particles, fire_particles_red, fire_embers, fire_smoke]:
+		if sys != null and is_instance_valid(sys):
+			sys.emitting = on
+	if fire_light != null and is_instance_valid(fire_light):
+		fire_light.visible = on
+		## ~10% of the old core glow.
+		fire_light.light_energy = FIRE_LIGHT_CORE_SET if on else 0.0
+	if fire_light_rim != null and is_instance_valid(fire_light_rim):
+		fire_light_rim.visible = on
+		fire_light_rim.light_energy = FIRE_LIGHT_RIM_SET if on else 0.0
+
+
+func _ensure_grill_fire_fx() -> void:
+	if fire_root != null and is_instance_valid(fire_root):
+		return
+	fire_root = Node3D.new()
+	fire_root.name = "GreaseFire"
+	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.05, GRILL_SURFACE_Z)
+	grill_root.add_child(fire_root)
+
+	## Soft core light — toned way down so particles read, not a room flood.
+	fire_light = OmniLight3D.new()
+	fire_light.name = "FireCoreLight"
+	fire_light.light_color = Color(1.0, 0.35, 0.08)
+	fire_light.light_energy = 0.0
+	fire_light.omni_range = 1.6
+	fire_light.omni_attenuation = 2.2
+	fire_light.shadow_enabled = false
+	fire_light.position = Vector3(0, 0.18, 0)
+	fire_light.visible = false
+	fire_root.add_child(fire_light)
+
+	fire_light_rim = OmniLight3D.new()
+	fire_light_rim.name = "FireRimLight"
+	fire_light_rim.light_color = Color(0.95, 0.18, 0.04)
+	fire_light_rim.light_energy = 0.0
+	fire_light_rim.omni_range = 1.1
+	fire_light_rim.omni_attenuation = 2.6
+	fire_light_rim.shadow_enabled = false
+	fire_light_rim.position = Vector3(0, 0.1, 0)
+	fire_light_rim.visible = false
+	fire_root.add_child(fire_light_rim)
+
+	## Fewer, chunkier flame triangles.
+	fire_particles = _make_fire_flame_particles("Flames", 28, 0.6, Vector2(0.055, 0.11), 0.4, 1.05, false)
+	fire_root.add_child(fire_particles)
+
+	## Extra red triangle shards mixed into the blaze.
+	fire_particles_red = _make_fire_flame_particles("FlamesRed", 14, 0.55, Vector2(0.048, 0.098), 0.32, 0.9, true)
+	fire_root.add_child(fire_particles_red)
+
+	fire_embers = _make_fire_ember_particles()
+	fire_root.add_child(fire_embers)
+
+	fire_smoke = _make_fire_smoke_particles()
+	fire_root.add_child(fire_smoke)
+
+
+func _make_fire_triangle_mesh(w: float, h: float) -> ArrayMesh:
+	## Pointy flame shard — tip up, base down (not square quads).
+	var mesh := ArrayMesh.new()
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	var verts := PackedVector3Array([
+		Vector3(0.0, h * 0.5, 0.0), ## tip
+		Vector3(-w * 0.5, -h * 0.5, 0.0),
+		Vector3(w * 0.5, -h * 0.5, 0.0),
+	])
+	var norms := PackedVector3Array([
+		Vector3(0, 0, 1),
+		Vector3(0, 0, 1),
+		Vector3(0, 0, 1),
+	])
+	var uvs := PackedVector2Array([
+		Vector2(0.5, 0.0),
+		Vector2(0.0, 1.0),
+		Vector2(1.0, 1.0),
+	])
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_size: Vector2, vel_min: float, vel_max: float, redder: bool = false) -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.name = p_name
+	fx.amount = amount
+	fx.lifetime = life
+	fx.explosiveness = 0.02
+	fx.randomness = 0.85
+	fx.emitting = false
+	fx.position = Vector3(0, 0.01, 0)
+	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 3.0, 2.4))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pmat.emission_box_extents = Vector3(0.28, 0.015, 0.18)
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 14.0 if not redder else 18.0
+	pmat.initial_velocity_min = vel_min
+	pmat.initial_velocity_max = vel_max
+	pmat.gravity = Vector3(0, 1.9, 0)
+	pmat.damping_min = 0.5
+	pmat.damping_max = 1.2
+	pmat.scale_min = 0.85 if not redder else 0.75
+	pmat.scale_max = 1.65 if not redder else 1.45
+	pmat.color = Color(1.0, 0.22, 0.05, 1.0) if redder else Color(1.0, 0.42, 0.08, 1.0)
+	var grad := Gradient.new()
+	if redder:
+		grad.offsets = PackedFloat32Array([0.0, 0.12, 0.4, 0.72, 1.0])
+		grad.colors = PackedColorArray([
+			Color(1.0, 0.35, 0.12, 0.0),
+			Color(1.0, 0.18, 0.05, 0.95), ## deep red
+			Color(0.92, 0.08, 0.02, 0.8),
+			Color(0.55, 0.02, 0.01, 0.4),
+			Color(0.12, 0.0, 0.0, 0.0),
+		])
+	else:
+		grad.offsets = PackedFloat32Array([0.0, 0.1, 0.35, 0.7, 1.0])
+		grad.colors = PackedColorArray([
+			Color(1.0, 0.7, 0.25, 0.0),
+			Color(1.0, 0.45, 0.08, 0.95),
+			Color(1.0, 0.22, 0.04, 0.8), ## more red in the mid flame
+			Color(0.85, 0.1, 0.02, 0.4),
+			Color(0.18, 0.02, 0.0, 0.0),
+		])
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = grad
+	pmat.color_ramp = gtex
+	fx.process_material = pmat
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	draw.albedo_color = Color(1.0, 0.16, 0.04, 0.92) if redder else Color(1.0, 0.4, 0.08, 0.9)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.disable_receive_shadows = true
+	fx.draw_pass_1 = _make_fire_triangle_mesh(tri_size.x, tri_size.y)
+	fx.material_override = draw
+	return fx
+
+
+func _make_fire_ember_particles() -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.name = "Embers"
+	fx.amount = 14
+	fx.lifetime = 0.75
+	fx.explosiveness = 0.0
+	fx.randomness = 1.0
+	fx.emitting = false
+	fx.position = Vector3(0, 0.03, 0)
+	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 3.5, 2.4))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pmat.emission_box_extents = Vector3(0.24, 0.015, 0.16)
+	pmat.direction = Vector3(0, 1, 0.1)
+	pmat.spread = 28.0
+	pmat.initial_velocity_min = 0.8
+	pmat.initial_velocity_max = 1.8
+	pmat.gravity = Vector3(0, 0.5, 0)
+	pmat.damping_min = 0.9
+	pmat.damping_max = 2.0
+	pmat.scale_min = 0.35
+	pmat.scale_max = 0.7
+	pmat.color = Color(1.0, 0.5, 0.1, 1.0)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.7, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.75, 0.25, 0.0),
+		Color(1.0, 0.55, 0.1, 1.0),
+		Color(1.0, 0.28, 0.04, 0.65),
+		Color(0.25, 0.05, 0.0, 0.0),
+	])
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = grad
+	pmat.color_ramp = gtex
+	fx.process_material = pmat
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	draw.albedo_color = Color(1.0, 0.5, 0.1, 1.0)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	fx.draw_pass_1 = _make_fire_triangle_mesh(0.034, 0.058)
+	fx.material_override = draw
+	return fx
+
+
+func _make_fire_smoke_particles() -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.name = "FireSmoke"
+	fx.amount = 36
+	fx.lifetime = 1.6
+	fx.explosiveness = 0.0
+	fx.randomness = 0.7
+	fx.emitting = false
+	fx.position = Vector3(0, 0.08, 0)
+	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 4.0, 2.4))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pmat.emission_box_extents = Vector3(0.28, 0.02, 0.18)
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 22.0
+	pmat.initial_velocity_min = 0.35
+	pmat.initial_velocity_max = 0.85
+	pmat.gravity = Vector3(0, 0.55, 0)
+	pmat.damping_min = 0.2
+	pmat.damping_max = 0.6
+	pmat.scale_min = 1.2
+	pmat.scale_max = 2.8
+	pmat.color = Color(0.15, 0.12, 0.1, 0.45)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.15, 0.55, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.25, 0.18, 0.12, 0.0),
+		Color(0.18, 0.14, 0.12, 0.4),
+		Color(0.12, 0.11, 0.1, 0.22),
+		Color(0.08, 0.08, 0.08, 0.0),
+	])
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = grad
+	pmat.color_ramp = gtex
+	fx.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.14, 0.16)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	draw.albedo_color = Color(0.2, 0.16, 0.14, 0.5)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	fx.draw_pass_1 = quad
+	fx.material_override = draw
+	return fx
+
+
+func _update_grill_fire(delta: float) -> void:
+	if not grill_on_fire:
+		return
+	## Powder already snuffed the visible blaze — don't revive flames/lights.
+	if _fire_killed_by_powder:
+		_set_fire_fx_emitting(false)
+		## Still char meat in the burning section until fully extinguished.
+		for i in GRILL_SLOTS:
+			var p = grill[i]
+			if p != null and is_instance_valid(p) and _is_in_fire_zone(p.position):
+				p.heating = true
+				p.heat_mul = maxf(float(p.heat_mul), 1.35)
+				p.cook_time += delta * 2.8
+		return
+	_sync_fire_to_oil_area()
+	_fire_flicker_t += delta
+	var t := Time.get_ticks_msec() * 0.001
+	## Uneven flicker so the kitchen reads hot and dangerous.
+	var flicker := 0.72 \
+		+ 0.22 * sin(t * 17.3) \
+		+ 0.12 * sin(t * 31.7 + 1.1) \
+		+ 0.08 * sin(t * 53.0 + 0.4) \
+		+ randf() * 0.06
+	if fire_light != null and is_instance_valid(fire_light):
+		fire_light.visible = true
+		fire_light.light_energy = FIRE_LIGHT_CORE * flicker
+		fire_light.light_color = Color(1.0, lerpf(0.28, 0.4, flicker), lerpf(0.04, 0.08, flicker))
+	if fire_light_rim != null and is_instance_valid(fire_light_rim):
+		fire_light_rim.visible = true
+		fire_light_rim.light_energy = FIRE_LIGHT_RIM * (0.75 + flicker * 0.45)
+		fire_light_rim.light_color = Color(0.95, 0.16, 0.03)
+	## Oil puddles glow only under the burning section.
+	for item in oil_slicks:
+		var m = item.get("mesh")
+		if m == null or not is_instance_valid(m):
+			continue
+		var mat := m.material_override as StandardMaterial3D
+		if mat == null:
+			continue
+		if not _is_in_fire_zone(m.position):
+			mat.emission_enabled = false
+			continue
+		var pulse := 0.55 + 0.45 * sin(t * 9.0 + float(m.get_instance_id() % 7))
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.35, 0.05)
+		mat.emission_energy_multiplier = 1.2 + pulse * 2.4
+		mat.albedo_color = Color(0.35, 0.12, 0.04, 0.85)
+	## Keep cooking meat only in the blaze section.
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p != null and is_instance_valid(p) and _is_in_fire_zone(p.position):
+			p.heating = true
+			p.heat_mul = maxf(float(p.heat_mul), 1.35)
+			p.cook_time += delta * 2.8
+
+
+func _ensure_ext_powder_collision() -> void:
+	## Kill powder particles the moment they hit the flat-top (no falling through).
+	if grill_root == null:
+		return
+	if grill_root.has_node("ExtPowderCollision"):
+		return
+	var col := GPUParticlesCollisionBox3D.new()
+	col.name = "ExtPowderCollision"
+	## Thin pad on the steel — HIDE_ON_CONTACT removes particles that reach it.
+	col.size = Vector3(GRILL_WIDTH + 0.35, 0.06, GRILL_DEPTH + 0.35)
+	col.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.01, GRILL_SURFACE_Z)
+	grill_root.add_child(col)
+
+
+func _ensure_ext_powder() -> void:
+	_ensure_ext_powder_collision()
+	if ext_powder != null and is_instance_valid(ext_powder):
+		return
+	if ext_root == null:
+		return
+	ext_powder = GPUParticles3D.new()
+	ext_powder.name = "ExtPowder"
+	ext_powder.amount = 70
+	ext_powder.lifetime = 0.38
+	ext_powder.explosiveness = 0.12
+	ext_powder.randomness = 0.4
+	ext_powder.emitting = false
+	ext_powder.position = Vector3(0.0, -0.08, 0.06)
+	## Don't draw anything that falls below the grill face.
+	ext_powder.visibility_aabb = AABB(Vector3(-0.9, -0.15, -0.9), Vector3(1.8, 1.0, 1.8))
+	ext_powder.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pmat := ParticleProcessMaterial.new()
+	pmat.direction = Vector3(0, -1, 0.2)
+	pmat.spread = 14.0
+	pmat.initial_velocity_min = 1.6
+	pmat.initial_velocity_max = 2.8
+	pmat.gravity = Vector3(0, -14.0, 0)
+	pmat.damping_min = 2.0
+	pmat.damping_max = 4.0
+	pmat.scale_min = 0.25
+	pmat.scale_max = 0.55
+	pmat.color = Color(0.96, 0.96, 0.98, 0.85)
+	## Die on contact with the grill collision pad — no punch-through squares.
+	pmat.collision_mode = ParticleProcessMaterial.COLLISION_HIDE_ON_CONTACT
+	var fade := Gradient.new()
+	fade.add_point(0.0, Color(1, 1, 1, 0.0))
+	fade.add_point(0.08, Color(1, 1, 1, 0.9))
+	fade.add_point(0.55, Color(0.95, 0.95, 0.97, 0.45))
+	fade.add_point(1.0, Color(0.9, 0.9, 0.92, 0.0))
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = fade
+	pmat.color_ramp = gtex
+	ext_powder.process_material = pmat
+	## Soft spheres — never billboard quads (those read as white squares under the rim).
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.012
+	sphere.height = 0.024
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.albedo_color = Color(0.97, 0.97, 0.99, 0.75)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.disable_receive_shadows = true
+	ext_powder.draw_pass_1 = sphere
+	ext_powder.material_override = draw
+	ext_root.add_child(ext_powder)
+
+
+func _spray_extinguisher_powder(delta: float, aim: Vector3) -> void:
+	_ensure_ext_powder()
+	## Aiming at a waiting customer through the window?
+	var sprayed := _try_spray_customer_with_powder(delta)
+	## White powder blobs only land on the flat-top.
+	var on_grill := absf(aim.x - GRILL_CENTER_X) <= GRILL_WIDTH * 0.55 \
+		and absf(aim.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.55
+	## Nozzle mist only while aimed at the steel — never spray into the void under the rim.
+	if ext_powder:
+		ext_powder.emitting = on_grill and not sprayed
+	if sprayed:
+		return
+	if not on_grill:
+		return
+	ext_blob_spawn_cool -= delta
+	if ext_blob_spawn_cool <= 0.0:
+		ext_blob_spawn_cool = 0.045
+		_spawn_ext_powder_blob(aim)
+	if not grill_on_fire:
+		return
+	## First hit on the burning section — kill flame particles / lights immediately.
+	if not _is_in_fire_zone(aim):
+		return
+	if not _fire_killed_by_powder:
+		_fire_killed_by_powder = true
+		_set_fire_fx_emitting(false)
+		_flash("Powder on the fire — keep spraying!", Color("E3F2FD"))
+	fire_health = maxf(0.0, fire_health - delta * 0.85)
+	if fire_health <= 0.0:
+		_extinguish_grill_fire()
+
+
+func _find_customer_under_ext_cursor() -> Node3D:
+	## Cursor near a customer's torso / head on screen → they're in the spray.
+	if camera == null or customers_root == null:
+		return null
+	var mouse := get_viewport().get_mouse_position()
+	var best: Node3D = null
+	var best_d := 96.0
+	## Include folks already storming off so more powder can stick while they leave.
+	for c in customers_root.get_children():
+		if c == null or not is_instance_valid(c):
+			continue
+		if not c.has_method("receive_ext_powder"):
+			continue
+		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
+		if camera.is_position_behind(torso):
+			continue
+		var head: Vector3 = c.global_position + Vector3(0.0, 1.15, 0.0)
+		var d := mini(
+			mouse.distance_to(camera.unproject_position(torso)),
+			mouse.distance_to(camera.unproject_position(head))
+		)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+func _try_spray_customer_with_powder(delta: float) -> bool:
+	var cust := _find_customer_under_ext_cursor()
+	if cust == null or not cust.has_method("receive_ext_powder"):
+		return false
+	ext_blob_spawn_cool -= delta
+	if ext_blob_spawn_cool > 0.0:
+		return true
+	ext_blob_spawn_cool = 0.035
+	var first_hit: bool = bool(cust.receive_ext_powder())
+	if first_hit:
+		_flash("Customer: \"Omg, I am never coming back!\"", Color("EF9A9A"))
+		if game_audio:
+			game_audio.play_click()
+		## Ticket / queue drop now; they stand 2s while powder builds, then walk.
+		_on_customer_left(cust, true)
+	return true
+
+
+func _spawn_ext_powder_blob(aim: Vector3) -> void:
+	if grill_root == null:
+		return
+	var blob := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	var rad := 0.055 + randf() * 0.07
+	sphere.radius = rad
+	sphere.height = rad * 2.0
+	blob.mesh = sphere
+	## Sit on the steel with a little scatter around the aim point.
+	var jitter := Vector3(randf_range(-0.08, 0.08), 0.0, randf_range(-0.07, 0.07))
+	blob.position = Vector3(
+		clampf(aim.x + jitter.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48),
+		GRILL_SURFACE_Y + rad * 0.55,
+		clampf(aim.z + jitter.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	)
+	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	blob.sorting_offset = 6.0
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.96, 0.97, 1.0, 0.88)
+	mat.roughness = 0.85
+	mat.metallic = 0.0
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.render_priority = 10
+	blob.material_override = mat
+	grill_root.add_child(blob)
+	var life := 2.4 + randf() * 1.6
+	var start_s := 0.85 + randf() * 0.55
+	blob.scale = Vector3.ONE * start_s
+	ext_powder_blobs.append({
+		"mesh": blob,
+		"mat": mat,
+		"life": life,
+		"max_life": life,
+		"start_scale": start_s,
+	})
+	## Cap so a long spray doesn't explode the scene.
+	while ext_powder_blobs.size() > 90:
+		var old: Dictionary = ext_powder_blobs.pop_front()
+		var m = old.get("mesh")
+		if m != null and is_instance_valid(m):
+			m.queue_free()
+
+
+func _update_ext_powder_blobs(delta: float) -> void:
+	var i := 0
+	while i < ext_powder_blobs.size():
+		var item: Dictionary = ext_powder_blobs[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			ext_powder_blobs.remove_at(i)
+			continue
+		item["life"] = float(item["life"]) - delta
+		var life: float = float(item["life"])
+		var max_life: float = maxf(0.05, float(item["max_life"]))
+		var t := clampf(life / max_life, 0.0, 1.0)
+		## Shrink + fade as the powder settles into the steel.
+		var s: float = float(item["start_scale"]) * (0.15 + 0.85 * t)
+		mesh.scale = Vector3.ONE * s
+		var mat = item.get("mat") as StandardMaterial3D
+		if mat != null:
+			var c: Color = mat.albedo_color
+			c.a = 0.15 + 0.75 * t
+			mat.albedo_color = c
+		if life <= 0.0:
+			mesh.queue_free()
+			ext_powder_blobs.remove_at(i)
+			continue
+		ext_powder_blobs[i] = item
+		i += 1
+
+
+func _clear_ext_powder_blobs() -> void:
+	for item in ext_powder_blobs:
+		var m = item.get("mesh")
+		if m != null and is_instance_valid(m):
+			m.queue_free()
+	ext_powder_blobs.clear()
+	ext_blob_spawn_cool = 0.0
+
+
+func _extinguish_grill_fire() -> void:
+	if not grill_on_fire and not _fire_killed_by_powder:
+		return
+	grill_on_fire = false
+	fire_health = 0.0
+	fire_zone_id = ""
+	_fire_killed_by_powder = false
+	_set_fire_fx_emitting(false)
+	## Smother the oil puddles too — powder mess.
+	_clear_oil_slicks()
+	_oil_fire_warned = false
+	if game_audio:
+		game_audio.play_chaching()
+	_flash("Fire out! …customers: \"What the heck?!\"", Color("B0BEC5"))
+	_scare_customers_after_fire()
+
+
+func _scare_customers_after_fire() -> void:
+	## Anyone waiting bolts after the grease-fire scare.
+	for c in customers.duplicate():
+		if c == null or not is_instance_valid(c):
+			continue
+		if c.has_method("leave_heck"):
+			c.leave_heck()
+		elif c.has_method("leave_mad"):
+			c.leave_mad()
+		## No angry fine — they just freaked out and left.
+		_on_customer_left(c, false)
+
+
+func _clear_grill_fire() -> void:
+	grill_on_fire = false
+	fire_health = 0.0
+	fire_zone_id = ""
+	_oil_fire_warned = false
+	_fire_killed_by_powder = false
+	ext_spraying = false
+	_set_fire_fx_emitting(false)
+	_clear_ext_powder_blobs()
+	if fire_root != null and is_instance_valid(fire_root):
+		fire_root.queue_free()
+	fire_root = null
+	fire_light = null
+	fire_light_rim = null
+	fire_particles = null
+	fire_particles_red = null
+	fire_embers = null
+	fire_smoke = null
 
 
 func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
@@ -3872,11 +5715,12 @@ func _clear_oil_slicks() -> void:
 		if mesh != null and is_instance_valid(mesh):
 			mesh.queue_free()
 	oil_slicks.clear()
+	_oil_fire_warned = false
 
 
 func _build_oil_bottle() -> void:
 	## Oil bottle hanging from the far-left window beam.
-	oil_home = Vector3(1.42, 2.12, 1.12)
+	oil_home = Vector3(1.166, 2.12, 1.12)
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
@@ -3981,7 +5825,7 @@ func _build_oil_bottle() -> void:
 func _try_grab_oil(screen_pos: Vector2) -> bool:
 	if oil_held or oil_root == null or camera == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held or dragging_patty != null:
 		return false
 	var tip := oil_root.global_position + Vector3(0, 0.06, 0)
 	var screen_pt := camera.unproject_position(tip)
@@ -3993,11 +5837,12 @@ func _try_grab_oil(screen_pos: Vector2) -> bool:
 func _begin_oil_hold() -> bool:
 	if not playing or oil_held or oil_root == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	oil_held = true
 	oil_last_draw = Vector3.ZERO
+	oil_pour_hold_t = 0.0
 	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
 	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + OIL_POUR_HEIGHT)
 	if seat != Vector3.ZERO:
@@ -4016,6 +5861,7 @@ func _release_oil_bottle() -> void:
 		return
 	oil_held = false
 	oil_last_draw = Vector3.ZERO
+	oil_pour_hold_t = 0.0
 	if oil_particles:
 		oil_particles.emitting = false
 	## Snappy put-away — was 0.22s and felt sticky.
@@ -4032,6 +5878,7 @@ func _reset_oil_bottle() -> void:
 	oil_held = false
 	oil_spray_cool = 0.0
 	oil_last_draw = Vector3.ZERO
+	oil_pour_hold_t = 0.0
 	if oil_particles:
 		oil_particles.emitting = false
 	if oil_root:
@@ -4404,7 +6251,7 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 		return false
 	if _ui_blocks_world_click(screen_pos):
 		return false
-	if spatula_patty != null or cheese_held or shaker_held or oil_held or ext_held:
+	if spatula_patty != null or cheese_held or shaker_held or oil_held or ext_held or glock_held:
 		return false
 	## Interrupt put-away so re-grabs feel instant.
 	brush_throwing = false
@@ -4693,17 +6540,22 @@ func _build_outdoor_street() -> void:
 	mat.albedo_color = Color.WHITE
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	## Draw behind characters — never paint over the sidewalk NPCs.
+	mat.render_priority = -8
 	backdrop.material_override = mat
 	backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	backdrop.sorting_offset = -20.0
 	outdoor.add_child(backdrop)
 	street_matte = backdrop
 
 
 func _build_first_sale_decal() -> void:
-	## Framed "FIRST SALE!" plaque on the interior lintel above the service window.
+	## Framed "FIRST SALE!" plaque on the interior lintel — covers the wall Glock.
 	if first_sale_decal != null and is_instance_valid(first_sale_decal):
 		first_sale_decal.queue_free()
 		first_sale_decal = null
+	sale_area = null
+	sale_held = false
 	const TEX_PATH := "res://assets/decal/first_sale.png"
 	if not ResourceLoader.exists(TEX_PATH):
 		push_warning("First Sale texture missing: %s" % TEX_PATH)
@@ -4717,22 +6569,210 @@ func _build_first_sale_decal() -> void:
 	var quad := QuadMesh.new()
 	quad.size = FIRST_SALE_BASE_SIZE
 	plaque.mesh = quad
-	plaque.position = Vector3(FIRST_SALE_DEFAULT_X, FIRST_SALE_DEFAULT_Y, FIRST_SALE_DEFAULT_Z)
+	sale_home = Vector3(FIRST_SALE_DEFAULT_X, FIRST_SALE_DEFAULT_Y, FIRST_SALE_DEFAULT_Z)
+	plaque.position = sale_home
 	## Face the cook (camera looks +Z through the window).
 	plaque.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	plaque.scale = Vector3(FIRST_SALE_DEFAULT_SCALE, FIRST_SALE_DEFAULT_SCALE, 1.0)
+	var mat := StandardMaterial3D.new()
+	## Flat/unshaded bill — not a shadow caster. Depth pre-pass still hides the gun behind it.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+	mat.albedo_texture = tex
+	## ~50% darker than the prior bright (0.72) tint.
+	mat.albedo_color = Color(0.30, 0.30, 0.30, 1.0)
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	mat.render_priority = 0
+	plaque.material_override = mat
+	plaque.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	plaque.sorting_offset = 0.5
+	world.add_child(plaque)
+	first_sale_decal = plaque
+
+	## Grab volume — drag the bill aside to reveal the Glock.
+	sale_area = Area3D.new()
+	sale_area.name = "FirstSaleGrab"
+	sale_area.input_ray_pickable = true
+	sale_area.collision_layer = SALE_COLLISION_LAYER
+	sale_area.collision_mask = 0
+	sale_area.monitoring = false
+	sale_area.monitorable = true
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(FIRST_SALE_BASE_SIZE.x * 0.95, FIRST_SALE_BASE_SIZE.y * 0.95, 0.08)
+	shape.shape = box
+	shape.position = Vector3.ZERO
+	sale_area.add_child(shape)
+	plaque.add_child(sale_area)
+	_refresh_glock_cover_lock()
+
+
+func _sale_covers_glock() -> bool:
+	## Gun stays locked until the First Sale plaque is slid clear of the mount.
+	if sale_held:
+		## Still dragging — only unlock once the bill has cleared the gun.
+		pass
+	if first_sale_decal == null or not is_instance_valid(first_sale_decal):
+		return false
+	var sc := first_sale_decal.scale.x
+	var half_w := FIRST_SALE_BASE_SIZE.x * sc * 0.52
+	var half_h := FIRST_SALE_BASE_SIZE.y * sc * 0.52
+	var p := first_sale_decal.global_position
+	var g := glock_home
+	return absf(p.x - g.x) <= half_w and absf(p.y - g.y) <= half_h
+
+
+func _refresh_glock_cover_lock() -> void:
+	if glock_area == null or not is_instance_valid(glock_area):
+		return
+	var covered := _sale_covers_glock()
+	## Can't ray-pick the gun while the plaque still covers it.
+	glock_area.input_ray_pickable = not glock_held and not covered
+	## Hide mesh while covered so transparent sorting can't draw it over the bill.
+	if not glock_held:
+		_set_glock_cover_meshes_visible(not covered)
+
+
+func _set_glock_cover_meshes_visible(on: bool) -> void:
+	if glock_visual != null and is_instance_valid(glock_visual):
+		glock_visual.visible = on
+	if glock_rear_sight_l != null and is_instance_valid(glock_rear_sight_l):
+		glock_rear_sight_l.visible = on
+	if glock_rear_sight_r != null and is_instance_valid(glock_rear_sight_r):
+		glock_rear_sight_r.visible = on
+	if glock_laser_module != null and is_instance_valid(glock_laser_module):
+		glock_laser_module.visible = on
+	if not on:
+		_set_glock_laser_visible(false)
+
+
+func _begin_sale_hold() -> bool:
+	if not playing or sale_held or first_sale_decal == null:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	sale_held = true
+	if sale_area:
+		sale_area.input_ray_pickable = false
+	if game_audio:
+		game_audio.play_click()
+	_flash("Slide the First Sale plaque — Glock is behind it", Color("FFE082"))
+	return true
+
+
+func _update_held_sale(_delta: float) -> void:
+	if first_sale_decal == null or camera == null:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var from := camera.project_ray_origin(mouse)
+	var dir := camera.project_ray_normal(mouse)
+	## Slide on the lintel plane (fixed Z toward the cook side of the wall).
+	var plane_z := FIRST_SALE_DEFAULT_Z
+	if absf(dir.z) < 0.002:
+		return
+	var t := (plane_z - from.z) / dir.z
+	if t < 0.05:
+		return
+	var hit := from + dir * t
+	hit.x = clampf(hit.x, -1.6, 1.6)
+	hit.y = clampf(hit.y, 1.85, 2.75)
+	hit.z = plane_z
+	first_sale_decal.position = hit
+	_refresh_glock_cover_lock()
+
+
+func _release_sale_plaque() -> void:
+	if not sale_held or first_sale_decal == null:
+		return
+	sale_held = false
+	## Leave it where you dragged it (gun stays revealed until you cover it again).
+	sale_home = first_sale_decal.position
+	if sale_area:
+		sale_area.input_ray_pickable = true
+	_refresh_glock_cover_lock()
+	if game_audio:
+		game_audio.play_click()
+	if _sale_covers_glock():
+		_flash("Glock still covered — slide the plaque aside", Color("FFCC80"))
+	else:
+		_flash("Glock unlocked", Color("FFE082"))
+
+
+func _build_wall_paper_decals() -> void:
+	## Business license, health certificate, and beach photo — camera-right of First Sale.
+	if wall_paper_decals != null and is_instance_valid(wall_paper_decals):
+		wall_paper_decals.queue_free()
+		wall_paper_decals = null
+	var root := Node3D.new()
+	root.name = "WallPaperDecals"
+	world.add_child(root)
+	wall_paper_decals = root
+	## Camera-right = world −X. Cluster sits just past the First Sale plaque edge.
+	## Sheet order left→right: license, health cert, beach polaroid.
+	var specs: Array = [
+		{
+			"name": "BusinessLicense",
+			"path": "res://assets/decal/business_license.png",
+			"size": Vector2(0.40, 0.333),
+			## +6" up, +6" camera-right (−X).
+			"pos": Vector3(-0.732, 2.372, WALL_PAPER_Z),
+		},
+		{
+			"name": "HealthCertificate",
+			"path": "res://assets/decal/health_certificate.png",
+			"size": Vector2(0.30, 0.254),
+			"pos": Vector3(-1.112, 2.452, WALL_PAPER_Z),
+		},
+		{
+			"name": "BeachPhoto",
+			"path": "res://assets/decal/beach_photo.png",
+			"size": Vector2(0.175, 0.163),
+			"pos": Vector3(-1.372, 2.292, WALL_PAPER_Z),
+		},
+	]
+	for spec in specs:
+		_add_wall_paper_decal(
+			root,
+			String(spec["name"]),
+			String(spec["path"]),
+			spec["size"] as Vector2,
+			spec["pos"] as Vector3
+		)
+
+
+func _add_wall_paper_decal(
+	parent: Node3D, decal_name: String, tex_path: String, size: Vector2, pos: Vector3
+) -> void:
+	if not ResourceLoader.exists(tex_path):
+		push_warning("Wall paper texture missing: %s" % tex_path)
+		return
+	var tex := load(tex_path) as Texture2D
+	if tex == null:
+		push_warning("Wall paper texture failed to load: %s" % tex_path)
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = decal_name
+	var quad := QuadMesh.new()
+	quad.size = size
+	mi.mesh = quad
+	mi.position = pos
+	mi.rotation_degrees = Vector3(0.0, 180.0, 0.0)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_texture = tex
-	mat.albedo_color = DECAL_ALBEDO
+	mat.albedo_color = WALL_PAPER_ALBEDO
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.no_depth_test = false
-	mat.render_priority = 8
-	plaque.material_override = mat
-	plaque.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	world.add_child(plaque)
-	first_sale_decal = plaque
+	mat.render_priority = 6
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
 
 
 func _build_menu_board_decal() -> void:
@@ -4772,39 +6812,10 @@ func _build_menu_board_decal() -> void:
 
 
 func _build_burger_pals_logo_decal() -> void:
-	## Brand mark on the left front wall (mirrors the menu board on the right).
+	## Wall brand mark removed (cluttered the extinguisher / tools).
 	if burger_pals_decal != null and is_instance_valid(burger_pals_decal):
 		burger_pals_decal.queue_free()
 		burger_pals_decal = null
-	if not ResourceLoader.exists(LOGO_TEX_PATH):
-		push_warning("Burger Pals logo missing: %s" % LOGO_TEX_PATH)
-		return
-	var tex := load(LOGO_TEX_PATH) as Texture2D
-	if tex == null:
-		push_warning("Burger Pals logo failed to load")
-		return
-	var logo := MeshInstance3D.new()
-	logo.name = "BurgerPalsDecal"
-	var quad := QuadMesh.new()
-	quad.size = LOGO_BASE_SIZE
-	logo.mesh = quad
-	logo.position = Vector3(LOGO_DEFAULT_X, LOGO_DEFAULT_Y, LOGO_DEFAULT_Z)
-	logo.rotation_degrees = Vector3(0.0, LOGO_DEFAULT_YAW, 0.0)
-	logo.scale = Vector3(LOGO_DEFAULT_SCALE, LOGO_DEFAULT_SCALE, 1.0)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_texture = tex
-	## Full color — brand mark should pop, not sit as faded wall art.
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = false
-	mat.render_priority = 8
-	logo.material_override = mat
-	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	world.add_child(logo)
-	burger_pals_decal = logo
 
 
 func _build_window_bunting() -> void:
@@ -5138,7 +7149,7 @@ func _build_radio_ui() -> void:
 	title_row.add_child(radio_power_btn)
 
 	radio_channel_label = Label.new()
-	radio_channel_label.text = "FM 88.5"
+	radio_channel_label.text = "FM 92.1 Smooth Jazz"
 	radio_channel_label.clip_text = true
 	radio_channel_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	UiFontsScript.apply_label(radio_channel_label, true, 11)
@@ -5611,6 +7622,8 @@ func _apply_first_sale_decal_settings(s: Dictionary) -> void:
 	var sc := float(s.get("sale_scale", FIRST_SALE_DEFAULT_SCALE))
 	first_sale_decal.position = Vector3(x, y, z)
 	first_sale_decal.scale = Vector3(sc, sc, 1.0)
+	sale_home = first_sale_decal.position
+	_refresh_glock_cover_lock()
 
 
 func _apply_menu_board_decal_settings(s: Dictionary) -> void:
@@ -5698,6 +7711,29 @@ func _load_graphics_settings() -> void:
 	if not cfg.has_section_key("gfx", "gfx_decal_v8"):
 		cfg.set_value("gfx", "sale_scale", GFX_DEFAULTS["sale_scale"])
 		cfg.set_value("gfx", "gfx_decal_v8", true)
+		cfg.save(GFX_CFG_PATH)
+	## First Sale slightly bigger again (covers the hidden Glock).
+	if not cfg.has_section_key("gfx", "gfx_decal_v9"):
+		cfg.set_value("gfx", "sale_scale", GFX_DEFAULTS["sale_scale"])
+		cfg.set_value("gfx", "sale_x", GFX_DEFAULTS["sale_x"])
+		cfg.set_value("gfx", "sale_y", GFX_DEFAULTS["sale_y"])
+		cfg.set_value("gfx", "sale_z", GFX_DEFAULTS["sale_z"])
+		cfg.set_value("gfx", "gfx_decal_v9", true)
+		cfg.save(GFX_CFG_PATH)
+	## Pull plaque toward cook so the Glock sits clearly behind it.
+	if not cfg.has_section_key("gfx", "gfx_decal_v10"):
+		cfg.set_value("gfx", "sale_z", GFX_DEFAULTS["sale_z"])
+		cfg.set_value("gfx", "gfx_decal_v10", true)
+		cfg.save(GFX_CFG_PATH)
+	## First Sale down 1 in.
+	if not cfg.has_section_key("gfx", "gfx_decal_v11"):
+		cfg.set_value("gfx", "sale_y", GFX_DEFAULTS["sale_y"])
+		cfg.set_value("gfx", "gfx_decal_v11", true)
+		cfg.save(GFX_CFG_PATH)
+	## First Sale 20% smaller.
+	if not cfg.has_section_key("gfx", "gfx_decal_v12"):
+		cfg.set_value("gfx", "sale_scale", GFX_DEFAULTS["sale_scale"])
+		cfg.set_value("gfx", "gfx_decal_v12", true)
 		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
@@ -6496,9 +8532,11 @@ func _build_ingredient_legend() -> void:
 					## Same ghost hold as a click — drop on a grill burger or Build.
 					_begin_cheese_hold(true)
 					_pending_cheese_drag = true
+					_pending_ingredient_drag = ""
 					_arm_grill_drop_zone()
 				else:
 					_pending_cheese_drag = false
+					_pending_ingredient_drag = capture
 				var drag_preview := TextureRect.new()
 				drag_preview.texture = FoodSpritesScript.get_tex(capture)
 				drag_preview.custom_minimum_size = Vector2(120, 48)
@@ -6528,19 +8566,19 @@ func _shake_ingredient_button(btn: Control) -> void:
 	var tw2 := create_tween()
 	tw2.tween_property(btn, "scale", Vector2(1.1, 1.1), 0.06)
 	tw2.tween_property(btn, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK)
-	## Brief gold flash on the strip
+	## Brief soft pulse on the strip — no loud yellow box.
 	var flash := StyleBoxFlat.new()
-	flash.bg_color = Color(0.45, 0.38, 0.18)
+	flash.bg_color = Color(0.28, 0.26, 0.22, 0.55)
 	flash.set_corner_radius_all(12)
-	flash.border_color = Color("FFEB3B")
-	flash.set_border_width_all(3)
+	flash.border_color = Color(1.0, 1.0, 1.0, 0.2)
+	flash.set_border_width_all(1)
 	flash.content_margin_left = 6
 	flash.content_margin_right = 8
 	flash.content_margin_top = 6
 	flash.content_margin_bottom = 6
 	var prev_normal = btn.get_theme_stylebox("normal")
 	btn.add_theme_stylebox_override("normal", flash)
-	get_tree().create_timer(0.18).timeout.connect(func():
+	get_tree().create_timer(0.14).timeout.connect(func():
 		if is_instance_valid(btn) and prev_normal:
 			btn.add_theme_stylebox_override("normal", prev_normal)
 	)
@@ -6738,7 +8776,7 @@ func _build_station_ui() -> void:
 		stations_row.add_child(panel)
 		stations[i]["panel"] = panel
 		stations[i]["preview"] = burger_stack
-		stations[i]["board"] = board
+		stations[i]["board"] = null
 		stations[i]["title"] = title
 		stations[i]["plate"] = plate_wrap
 		stations[i]["drop_hint"] = null
@@ -6821,7 +8859,7 @@ func _build_grill_drop_zone() -> void:
 	grill_drop_zone.name = "GrillDropZone"
 	grill_drop_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
 	## Leave a slim strip for the Build board; cover the rest of the cook surface.
-	grill_drop_zone.offset_left = 200.0
+	grill_drop_zone.offset_left = 140.0
 	grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	grill_drop_zone.z_index = 12
 	ui_root.add_child(grill_drop_zone)
@@ -6865,23 +8903,105 @@ func _drop_cheese_on_grill(data: Variant) -> void:
 		return
 	if not cheese_held:
 		_begin_cheese_hold(true)
-	_try_place_held_cheese(get_viewport().get_mouse_position())
-	## Drag-miss (no burger under cursor) returns cheese to the strip.
+	var mouse := get_viewport().get_mouse_position()
+	_try_place_held_cheese(mouse)
+	## Near-miss: still snap onto the closest cheesable burger.
+	if cheese_held:
+		_try_snap_cheese_to_nearest(mouse)
 	if cheese_held:
 		_cancel_cheese_hold_silent()
 		_flash("Drop cheese on a burger", Color("FFCC80"))
 
 
+func _nearest_cheesable_grill_patty(screen_pos: Vector2 = Vector2.ZERO, max_world: float = -1.0):
+	## Closest grill burger that can take cheese (screen + world).
+	var max_d := CHEESE_SNAP_WORLD if max_world < 0.0 else max_world
+	var plane := Vector3.ZERO
+	if screen_pos != Vector2.ZERO:
+		plane = _grill_plane_from_screen(screen_pos)
+	var best = null
+	var best_score := INF
+	for p in grill:
+		if not _can_put_cheese_on_grill_patty(p):
+			continue
+		var lift: Vector3 = p.global_position + Vector3(0, 0.03, 0)
+		var world_d := 0.0
+		if plane != Vector3.ZERO:
+			world_d = Vector2(plane.x - p.position.x, plane.z - p.position.z).length()
+		else:
+			world_d = 0.0
+		if world_d > max_d:
+			continue
+		var screen_d := 0.0
+		if camera != null and screen_pos != Vector2.ZERO and not camera.is_position_behind(lift):
+			screen_d = screen_pos.distance_to(camera.unproject_position(lift))
+		var score := world_d * 80.0 + screen_d
+		if score < best_score:
+			best_score = score
+			best = p
+	## Single burger on the grill → always allow a generous snap.
+	if best == null:
+		var only = null
+		var count := 0
+		for p2 in grill:
+			if _can_put_cheese_on_grill_patty(p2):
+				only = p2
+				count += 1
+		if count == 1:
+			return only
+	return best
+
+
+func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
+	if not cheese_held:
+		return false
+	var target = _nearest_cheesable_grill_patty(screen_pos, CHEESE_SNAP_WORLD)
+	if target == null or not target.add_cheese():
+		return false
+	cheese_held = false
+	_cheese_hover_patty = null
+	_pending_cheese_drag = false
+	if cheese_ghost and is_instance_valid(cheese_ghost):
+		cheese_ghost.visible = false
+	_spend(_ingredient_cost("cheese"))
+	if game_audio:
+		game_audio.play_ingredient("cheese")
+	_flash("Cheese on! Melts in 3s", Color("FFE082"))
+	return true
+
+
 func _on_gui_drag_ended(was_accepted: bool) -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var mouse := get_viewport().get_mouse_position()
+	## Drag toppings / cheese / Build patties onto the peeking cat.
+	if _try_drop_dragged_food_on_cat(mouse):
+		_pending_reorder_drag = null
+		return
+	## Fallback: missed the GARBAGE Control but released over it.
+	if not was_accepted and _is_over_garbage(mouse):
+		if _pending_reorder_drag != null and typeof(_pending_reorder_drag) == TYPE_DICTIONARY:
+			_drop_patty_on_garbage(_pending_reorder_drag)
+			_pending_reorder_drag = null
+			return
+		if _pending_station_patty_drag != null and typeof(_pending_station_patty_drag) == TYPE_DICTIONARY:
+			_drop_patty_on_garbage(_pending_station_patty_drag)
+			_pending_station_patty_drag = null
+			return
+		if _pending_ingredient_drag != "" or _pending_cheese_drag or cheese_held:
+			var id := _pending_ingredient_drag
+			if id == "" and (_pending_cheese_drag or cheese_held):
+				id = "cheese"
+			_drop_patty_on_garbage({"kind": "ingredient", "id": id})
+			return
 	## If the drop missed a Control target, still try to land on the grill under the cursor.
 	if not was_accepted and _pending_station_patty_drag != null:
 		var data = _pending_station_patty_drag
 		_pending_station_patty_drag = null
 		_pending_cheese_drag = false
+		_pending_ingredient_drag = ""
+		_pending_reorder_drag = null
 		if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "station_patty":
-			var mouse := get_viewport().get_mouse_position()
 			## Don't yank it if they dropped back on Build.
 			if _station_index_at(mouse) < 0:
 				var hit := _grill_plane_from_screen(mouse)
@@ -6890,7 +9010,9 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 		return
 	if not was_accepted and _pending_cheese_drag:
 		_pending_cheese_drag = false
-		var mouse2 := get_viewport().get_mouse_position()
+		_pending_ingredient_drag = ""
+		_pending_reorder_drag = null
+		var mouse2 := mouse
 		if _station_index_at(mouse2) >= 0:
 			## Dropped on Build chrome without a Control accept — add as topping.
 			if cheese_held:
@@ -6900,11 +9022,59 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 		if cheese_held:
 			_try_place_held_cheese(mouse2)
 			if cheese_held:
+				_try_snap_cheese_to_nearest(mouse2)
+			if cheese_held:
 				_cancel_cheese_hold_silent()
 				_flash("Drop cheese on a burger", Color("FFCC80"))
 		return
+	if not was_accepted and _pending_ingredient_drag != "":
+		## Missed Build and cat — cancel the ghost drag.
+		_pending_ingredient_drag = ""
+		_pending_reorder_drag = null
+		return
 	_pending_station_patty_drag = null
 	_pending_cheese_drag = false
+	_pending_ingredient_drag = ""
+	_pending_reorder_drag = null
+
+
+func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
+	if not playing or window_cat == null or not is_instance_valid(window_cat):
+		return false
+	if not window_cat.hit_test_feed(camera, screen_pos):
+		return false
+	## Build-stack patty drag → feed whole burger piece.
+	if _pending_station_patty_drag != null and typeof(_pending_station_patty_drag) == TYPE_DICTIONARY:
+		var data = _pending_station_patty_drag
+		if str(data.get("kind", "")) == "station_patty":
+			var st_i := int(data.get("station", -1))
+			var from_i := int(data.get("from", -1))
+			_pending_station_patty_drag = null
+			_pending_cheese_drag = false
+			_pending_ingredient_drag = ""
+			var patty = _extract_station_patty(st_i, from_i)
+			if patty != null and is_instance_valid(patty):
+				patty.queue_free()
+			window_cat.feed("patty")
+			_on_window_cat_fed("patty")
+			_flash("Cat stole the burger! ♥", Color("FF8A80"))
+			return true
+	## Cheese ghost drag.
+	if _pending_cheese_drag or cheese_held:
+		_pending_cheese_drag = false
+		_pending_ingredient_drag = ""
+		_feed_window_cat_ingredient("cheese")
+		return true
+	## Strip topping drag (lettuce, bacon, …).
+	if _pending_ingredient_drag != "":
+		var id := _pending_ingredient_drag
+		_pending_ingredient_drag = ""
+		_pending_cheese_drag = false
+		_feed_window_cat_ingredient(id)
+		_strip_gesture_added = true
+		_strip_did_drag = true
+		return true
+	return false
 
 
 func _arm_grill_drop_zone() -> void:
@@ -7062,7 +9232,7 @@ func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
 	## Click a Build patty → turn it back into a held 3D patty (same as scoop).
 	if not playing:
 		return
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("EF5350"))
 		return
 	var patty = _extract_station_patty(station_index, item_index)
@@ -7091,7 +9261,7 @@ func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
 func _return_station_patty_to_grill(station_index: int, item_index: int, world_pos: Vector3) -> bool:
 	if not playing:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("EF5350"))
 		return false
 	var idx := _first_empty_slot()
@@ -7203,6 +9373,7 @@ func _drop_on_assembly(station_index: int, at_pos: Vector2, data: Variant) -> vo
 	if kind == "ingredient":
 		var id := str(data.get("id", ""))
 		_pending_cheese_drag = false
+		_pending_ingredient_drag = ""
 		if id == "cheese":
 			_cancel_cheese_hold_silent()
 		## Swipe may have already painted this topping — don't stack a second copy.
@@ -7379,7 +9550,7 @@ func _add_ingredient(id: String) -> void:
 
 
 func _begin_cheese_hold(from_drag: bool = false) -> void:
-	if not playing or brush_held or oil_held or shaker_held or ext_held or spatula_patty != null:
+	if not playing or brush_held or oil_held or shaker_held or ext_held or glock_held or spatula_patty != null:
 		return
 	if cheese_held:
 		## Drag re-arms an existing hold; click toggles it off.
@@ -7497,6 +9668,9 @@ func _pick_cheese_patty_at_screen(screen_pos: Vector2):
 			continue
 		var screen_pt := camera.unproject_position(lift)
 		var pick_px := maxf(CHEESE_PICK_MIN_PX, _patty_screen_pick_radius_px(lift, CHEESE_PICK_WORLD_EDGE, CHEESE_PICK_PAD_PX))
+		## Sticky: once hovered, keep a wider grab until you leave it.
+		if _cheese_hover_patty == p:
+			pick_px = maxf(pick_px, CHEESE_STICKY_PX)
 		var screen_d := screen_pos.distance_to(screen_pt)
 		var in_screen := screen_d <= pick_px
 		var near_plane := false
@@ -7538,17 +9712,31 @@ func _cheese_grill_target_under_cursor():
 	var plane := _grill_plane_from_screen(mouse)
 	if plane != Vector3.ZERO:
 		var near := _nearest_patty_to(plane, CHEESE_PICK_WORLD)
-		if near >= 0:
+		if near >= 0 and _can_put_cheese_on_grill_patty(grill[near]):
 			return grill[near]
+		## Wider snap so the ghost sticks while dragging near burgers.
+		var snap = _nearest_cheesable_grill_patty(mouse, CHEESE_SNAP_WORLD)
+		if snap != null:
+			return snap
 	## Keep sticky hover so a tiny mouse jitter doesn't lose the burger.
 	if _cheese_hover_patty != null and is_instance_valid(_cheese_hover_patty) \
 			and _can_put_cheese_on_grill_patty(_cheese_hover_patty):
-		return _cheese_hover_patty
+		if camera != null:
+			var lift2: Vector3 = _cheese_hover_patty.global_position + Vector3(0, 0.03, 0)
+			if not camera.is_position_behind(lift2):
+				var d := mouse.distance_to(camera.unproject_position(lift2))
+				if d <= CHEESE_STICKY_PX:
+					return _cheese_hover_patty
+		else:
+			return _cheese_hover_patty
 	return null
 
 
 func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if not cheese_held:
+		return
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, screen_pos):
+		_feed_window_cat_ingredient("cheese")
 		return
 	## Build station click → melt cheese onto the Build stack patty.
 	var station_idx := _station_index_at(screen_pos)
@@ -7556,16 +9744,18 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 		_cancel_cheese_hold()
 		_add_ingredient_to_station(station_idx, "cheese", true)
 		return
-	## Same pick as the ghost — plus sticky hover if click lands a hair off.
+	## Same pick as the ghost — plus sticky hover / wide snap if click lands off.
 	var target = _pick_cheese_patty_at_screen(screen_pos)
 	if target == null:
 		var plane := _grill_plane_from_screen(screen_pos)
 		if plane != Vector3.ZERO:
-			var near := _nearest_patty_to(plane, CHEESE_PICK_WORLD)
+			var near := _nearest_patty_to(plane, CHEESE_SNAP_WORLD)
 			if near >= 0:
 				target = grill[near]
 	if target == null and _cheese_hover_patty != null and is_instance_valid(_cheese_hover_patty):
 		target = _cheese_hover_patty
+	if target == null:
+		target = _nearest_cheesable_grill_patty(screen_pos, CHEESE_SNAP_WORLD)
 	if target == null:
 		_flash("Drop cheese on a grill / HOLD burger or Build", Color("FFCC80"))
 		return
@@ -7581,12 +9771,13 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if target.add_cheese():
 		cheese_held = false
 		_cheese_hover_patty = null
+		_pending_cheese_drag = false
 		if cheese_ghost and is_instance_valid(cheese_ghost):
 			cheese_ghost.visible = false
 		_spend(_ingredient_cost("cheese"))
 		if game_audio:
 			game_audio.play_ingredient("cheese")
-		_flash("Cheese on! Melts in 5s", Color("FFE082"))
+		_flash("Cheese on! Melts in 3s", Color("FFE082"))
 
 
 func _update_patty_hint_focus() -> void:
@@ -7676,7 +9867,7 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 
 
 func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> void:
-	## Cheese melts onto the top patty over 5 seconds on Build (same as grill).
+	## Cheese melts onto the top patty over 3 seconds on Build (same as grill).
 	var st: Dictionary = stations[station_index]
 	if st["patties"].is_empty():
 		_flash("Drop a patty on the build board first", Color("FFCC80"))
@@ -7689,7 +9880,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 		if patty.cheese_ready():
 			_flash("That patty already has melted cheese", Color("FFCC80"))
 		else:
-			var left := maxi(1, int(ceil(5.0 * (1.0 - float(patty.cheese_melt)))))
+			var left := maxi(1, int(ceil(3.0 * (1.0 - float(patty.cheese_melt)))))
 			_flash("Cheese still melting — %ds left" % left, Color("FFE082"))
 		return
 	if not patty.add_cheese():
@@ -7706,7 +9897,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 		game_audio.play_ingredient("cheese")
 	if play_sfx:
 		_note_melody_press("cheese")
-	_flash("Cheese on — melting 5s (order already counts it)", Color("FFE082"))
+	_flash("Cheese on — melting 3s (order already counts it)", Color("FFE082"))
 
 
 func _update_station_cheese_melt(_delta: float) -> void:
@@ -7880,9 +10071,10 @@ func _refresh_station(index: int) -> void:
 		row_style.set_content_margin_all(0)
 		row_style.set_corner_radius_all(4)
 		if stack_i == selected_layer:
-			row_style.bg_color = Color(1.0, 0.85, 0.25, 0.28)
-			row_style.border_color = Color("FFEB3B")
-			row_style.set_border_width_all(2)
+			## Soft select — no loud yellow box.
+			row_style.bg_color = Color(1.0, 1.0, 1.0, 0.10)
+			row_style.border_color = Color(1.0, 1.0, 1.0, 0.22)
+			row_style.set_border_width_all(1)
 		else:
 			row_style.bg_color = Color(0, 0, 0, 0)
 			row_style.set_border_width_all(0)
@@ -7940,10 +10132,13 @@ func _refresh_station(index: int) -> void:
 				color_preview.color = GameDataScript.INGREDIENT_COLORS.get(item_id, Color.GRAY)
 				row.set_drag_preview(color_preview)
 				_pending_station_patty_drag = null
-				return _make_reorder_drag(index, from_i, item_id),
+				var drag_data := _make_reorder_drag(index, from_i, item_id)
+				_pending_reorder_drag = drag_data
+				return drag_data,
 			func(_pos, data): return _can_drop_on_assembly(index, data),
 			func(pos, data):
 				_pending_station_patty_drag = null
+				_pending_reorder_drag = null
 				_drop_on_assembly(index, pos, data)
 		)
 		preview.add_child(row)

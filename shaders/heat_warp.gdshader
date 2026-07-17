@@ -19,16 +19,16 @@ void fragment() {
 		discard;
 	}
 	float ts = time_scale;
-	/* Bigger rising heat blobs — lower frequency, still lively. */
-	float wobble = sin(UV.y * 9.0 + TIME * ts * 1.55) * 0.55
-		+ sin(UV.x * 7.0 + TIME * ts * 1.15 + 1.2) * 0.35
-		+ sin((UV.x + UV.y) * 5.5 + TIME * ts * 1.9) * 0.22
-		+ sin(UV.y * 14.0 - TIME * ts * 2.3 + 0.7) * 0.12;
-	float wobble_y = cos(UV.x * 8.0 + TIME * ts * 1.35) * 0.48
-		+ sin(UV.y * 6.5 + TIME * ts * 1.05 + 0.5) * 0.35
-		+ cos(UV.y * 12.0 - TIME * ts * 1.85) * 0.18
-		+ sin((UV.x * 3.0 - UV.y) * 4.5 + TIME * ts * 1.45) * 0.15;
-	vec2 offset = vec2(wobble, wobble_y) * warp_strength * h * edge;
+	/* Rising heat: mostly vertical screen warp, light horizontal sway. */
+	float rise = sin(UV.x * 10.0 + TIME * ts * 1.55) * 0.72
+		+ sin(UV.x * 17.0 - TIME * ts * 2.1 + 0.8) * 0.38
+		+ cos(UV.y * 5.0 + TIME * ts * 1.05) * 0.22
+		+ sin(UV.y * 11.0 - TIME * ts * 1.75 + 0.4) * 0.12;
+	float sway = sin(UV.y * 9.0 + TIME * ts * 1.35) * 0.55
+		+ cos(UV.x * 6.0 + TIME * ts * 0.95 + 1.1) * 0.35
+		+ sin((UV.x + UV.y) * 4.5 + TIME * ts * 1.2) * 0.25;
+	/* ~20% horizontal, ~100% vertical — reads as rising heat, not sideways smear. */
+	vec2 offset = vec2(sway * 0.22, rise) * warp_strength * h * edge;
 	vec3 col = texture(screen_texture, SCREEN_UV + offset).rgb;
 	ALBEDO = col;
 	/* Stronger visibility so the shimmer reads without going opaque. */

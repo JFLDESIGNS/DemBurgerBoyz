@@ -35,7 +35,7 @@ var _rest_z: float = 0.0
 ## Cheese slice melting on the grill.
 var has_cheese: bool = false
 var cheese_melt: float = 0.0 ## 0..1 over CHEESE_MELT_TIME
-const CHEESE_MELT_TIME := 5.0
+const CHEESE_MELT_TIME := 3.0
 var _cheese_root: Node3D
 var _cheese_mat: StandardMaterial3D
 var _cheese_flaps: Array = [] ## MeshInstance3D flaps whose corners droop
@@ -1314,8 +1314,12 @@ func flip() -> bool:
 
 func smash() -> void:
 	smash_bonus = 1.6
+	var audio := _audio()
+	if audio:
+		audio.play_smash_sizzle()
+	## Milder squash — still reads as a press without pancaking.
 	var tw := create_tween()
-	tw.tween_property(self, "scale", Vector3(1.3, 0.55, 1.3), 0.06)
+	tw.tween_property(self, "scale", Vector3(1.16, 0.72, 1.16), 0.05)
 	tw.tween_property(self, "scale", Vector3.ONE, 0.1)
 
 

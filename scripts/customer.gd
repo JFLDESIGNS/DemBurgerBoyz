@@ -18,18 +18,25 @@ const CHAR_SKINS: Array[String] = [
 const CHAR_SCALE := 0.552 ## ~15% larger than 0.48
 ## Sidewalk stand height — feet on pavement (was floating ~1 ft at 0.22).
 const STAND_Y := -0.02
+## Stay nearer the camera than the street matte (game.gd STREET_MATTE_BASE_Z ≈ 11.5).
+const MATTE_FRONT_Z_MAX := 9.8
+const WAIT_Z := 2.25
 ## Compact patience chip just above the toon head (inside the window opening).
 const BAR_Y := 1.28
 const BAR_W := 0.38
 const BAR_H := 0.032
 const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
+## Knock-back tumble after a Glock hit, then settle and despawn.
+const RAGDOLL_ACTIVE_SEC := 2.15
+const RAGDOLL_TWIST_SEC := 0.9 ## Free spin window before settling onto their back.
 ## Yaw: 180 faces the cook/truck (−Z); 0 walks away down the street (+Z).
+## Kenney mesh noses along +Z, so these match travel on ±X.
 const FACE_TRUCK_YAW := 180.0
 const FACE_AWAY_YAW := 0.0
-## Approach along the sidewalk (world +X from spawn) — face travel, then turn to truck.
-const WALK_PLUS_X_YAW := -90.0
-const WALK_MINUS_X_YAW := 90.0
+## Approach along the sidewalk — face travel, then turn to truck.
+const WALK_PLUS_X_YAW := 90.0
+const WALK_MINUS_X_YAW := -90.0
 ## Wait slots shifted screen-right so the patience bar clears the ticket rail.
 ## (world +X = screen-left, −X = screen-right)
 const LANE_X: Array[float] = [-0.45, 0.85, -1.85]
@@ -96,6 +103,21 @@ var _base_body_y: float = 0.0
 var _home_x: float = 0.0
 var _face_style: int = 0 ## slight variety per customer
 var _skin_path: String = ""
+## Fire-extinguisher powder stuck to the toon (white spheres that build up).
+var _powder_hit: bool = false
+var _powdering: bool = false ## Standing still while powder coats them.
+var _powder_stand_t: float = 0.0
+var _powder_drip_cool: float = 0.0
+const POWDER_STAND_SEC := 2.0
+var _powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale, rise}
+## Glock hit — blood + limp skeleton flop (not a spinning tornado).
+var is_ragdoll: bool = false
+var _ragdoll_vel: Vector3 = Vector3.ZERO
+var _ragdoll_ang: Vector3 = Vector3.ZERO
+var _ragdoll_t: float = 0.0
+var _ragdoll_lie: float = 0.0 ## 0 upright → 1 flat on back
+var _skeleton: Skeleton3D = null
+var _blood_bursts: Array = [] ## GPUParticles3D to free later
 static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
 static var _char_scene: PackedScene = null
 static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
@@ -513,7 +535,10 @@ func _load_anim_library(scene_path: String, store_as: String, accept_names: Arra
 
 func _collect_char_meshes(n: Node) -> void:
 	if n is MeshInstance3D:
-		_char_meshes.append(n)
+		var mi := n as MeshInstance3D
+		## Keep toons in front of the street matte painting.
+		mi.sorting_offset = 12.0
+		_char_meshes.append(mi)
 	for c in n.get_children():
 		_collect_char_meshes(c)
 
@@ -768,13 +793,23 @@ func _process(delta: float) -> void:
 	_bobble_phase += delta * 2.4
 	_expr_t += delta
 	_home_x = target_x
+	_update_powder_blobs(delta)
+
+	if is_ragdoll:
+		_update_ragdoll(delta)
+		return
+
+	## Powdered — stand still (same size) while spheres build up, then walk off.
+	if _powdering and not is_leaving:
+		_update_powder_stand(delta)
+		return
 
 	if _shake_time > 0.0 and not is_leaving:
 		_shake_time -= delta
 		var shake_x := sin(Time.get_ticks_msec() * 0.06) * _shake_amp
 		var shake_z := cos(Time.get_ticks_msec() * 0.08) * _shake_amp * 0.45
 		global_position.x = _home_x + shake_x
-		global_position.z = 2.25 + shake_z
+		global_position.z = WAIT_Z + shake_z
 		if _body:
 			_body.rotation_degrees.z = shake_x * 35.0
 		if _shake_time <= 0.0:
@@ -782,7 +817,7 @@ func _process(delta: float) -> void:
 			if _body:
 				_body.rotation_degrees.z = 0.0
 			global_position.x = _home_x
-			global_position.z = 2.25
+			global_position.z = WAIT_Z
 	elif is_leaving:
 		_shake_time = 0.0
 		_shake_amp = 0.0
@@ -804,14 +839,14 @@ func _process(delta: float) -> void:
 				rotation_degrees.y = FACE_AWAY_YAW
 				_play_anim("walk")
 			return
-		## Facing away — walk off down the sidewalk at ground level.
+		## Facing away — walk off down the sidewalk at ground level (never behind matte).
 		global_position.z += delta * 2.6
 		_play_anim("walk")
 		if _body:
 			var step := absf(sin(_leave_spin * 9.0)) * 0.02
 			_body.position.y = _base_body_y + step
 			_body.rotation_degrees = Vector3.ZERO
-		if global_position.z > 14.0:
+		if global_position.z >= MATTE_FRONT_Z_MAX:
 			queue_free()
 		return
 
@@ -1035,11 +1070,11 @@ func shake_angry(duration: float = 0.7, amp: float = 0.12) -> void:
 	_set_mood("mad")
 	_shake_time = duration
 	_shake_amp = amp
-	## Quick squash punch
+	## Quick squash punch — stay at CHAR_SCALE (never jump to 1.0).
 	if _body:
 		var tw := create_tween()
-		tw.tween_property(_body, "scale", Vector3(1.12, 0.88, 1.12), 0.08)
-		tw.tween_property(_body, "scale", Vector3.ONE, 0.12)
+		tw.tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.06, CHAR_SCALE * 0.94, CHAR_SCALE * 1.06), 0.08)
+		tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.12)
 
 
 func bounce_happy() -> void:
@@ -1049,8 +1084,8 @@ func bounce_happy() -> void:
 	var tw := create_tween()
 	tw.tween_property(_body, "position:y", _base_body_y + 0.22, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(_body, "position:y", _base_body_y, 0.18).set_trans(Tween.TRANS_BOUNCE)
-	tw.parallel().tween_property(_body, "scale", Vector3(1.08, 0.92, 1.08), 0.1)
-	tw.tween_property(_body, "scale", Vector3.ONE, 0.15)
+	tw.parallel().tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.05, CHAR_SCALE * 0.95, CHAR_SCALE * 1.05), 0.1)
+	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.15)
 
 
 func leave_happy() -> void:
@@ -1096,6 +1131,453 @@ func leave_meh() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
+
+
+func leave_heck() -> void:
+	## Grease-fire scare — blurt and bolt.
+	stop_order_clock()
+	is_leaving = true
+	is_waiting = false
+	_leave_spin = 0.0
+	_leave_turned = false
+	_leave_yaw_from = rotation_degrees.y
+	global_position.y = STAND_Y
+	speech = "What the heck?!"
+	_set_mood("mad")
+	_play_anim("idle")
+	if _bubble:
+		_bubble.text = speech
+		_bubble.visible = true
+	if _bubble_bg:
+		_bubble_bg.visible = true
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
+	## Hide the blurt after a beat so they can turn and leave.
+	get_tree().create_timer(0.85).timeout.connect(func():
+		if not is_instance_valid(self):
+			return
+		if _bubble:
+			_bubble.visible = false
+		if _bubble_bg:
+			_bubble_bg.visible = false
+	)
+
+
+func receive_ext_powder() -> bool:
+	## Stick white spheres on the toon. First hit → stand 2s while they build, then leave.
+	if is_ragdoll:
+		return false
+	## Build up several blobs per spray tick so coating is visible.
+	var n := 3 if _powdering else 5
+	for _i in n:
+		_spawn_powder_blob_on_body()
+	if is_leaving:
+		return false
+	if _powdering:
+		return false
+	_powder_hit = true
+	_powdering = true
+	_powder_stand_t = 0.0
+	_powder_drip_cool = 0.0
+	_begin_powder_stand()
+	return true
+
+
+func _begin_powder_stand() -> void:
+	## Freeze in place — same size — while powder accumulates.
+	stop_order_clock()
+	is_waiting = false
+	_shake_time = 0.0
+	_shake_amp = 0.0
+	global_position.y = STAND_Y
+	global_position.z = WAIT_Z
+	speech = "Omg, I am never coming back!"
+	_set_mood("mad")
+	_play_anim("idle")
+	if _body:
+		_body.scale = Vector3.ONE * CHAR_SCALE
+		_body.position.y = _base_body_y
+		_body.rotation_degrees = Vector3.ZERO
+	if _bubble:
+		_bubble.text = speech
+		_bubble.visible = true
+	## No white box backdrop — Label3D only (the BoxMesh looked like a block by the head).
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
+
+
+func _update_powder_stand(delta: float) -> void:
+	_powder_stand_t += delta
+	global_position.y = STAND_Y
+	global_position.z = WAIT_Z
+	global_position.x = _home_x
+	if _body:
+		_body.scale = Vector3.ONE * CHAR_SCALE
+		_body.position.y = _base_body_y
+		_body.rotation_degrees = Vector3.ZERO
+	_play_anim("idle")
+	## Keep dripping powder spheres so they visibly build up during the stand.
+	_powder_drip_cool -= delta
+	if _powder_drip_cool <= 0.0:
+		_powder_drip_cool = 0.12
+		_spawn_powder_blob_on_body()
+		_spawn_powder_blob_on_body()
+	if _powder_stand_t >= POWDER_STAND_SEC:
+		_powdering = false
+		leave_powdered()
+
+
+func leave_powdered() -> void:
+	## After the stand — walk off. Do not resize the character.
+	if is_ragdoll:
+		return
+	if is_leaving:
+		return
+	_powdering = false
+	stop_order_clock()
+	is_leaving = true
+	is_waiting = false
+	_leave_spin = 0.0
+	_leave_turned = false
+	_leave_yaw_from = rotation_degrees.y
+	global_position.y = STAND_Y
+	speech = "Omg, I am never coming back!"
+	_set_mood("mad")
+	_play_anim("idle")
+	if _body:
+		_body.scale = Vector3.ONE * CHAR_SCALE
+		_body.position.y = _base_body_y
+	if _bubble:
+		_bubble.text = speech
+		_bubble.visible = true
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
+	get_tree().create_timer(1.1).timeout.connect(func():
+		if not is_instance_valid(self):
+			return
+		if _bubble:
+			_bubble.visible = false
+		if _bubble_bg:
+			_bubble_bg.visible = false
+	)
+
+
+func get_shot(shot_from: Vector3, shot_dir: Vector3) -> bool:
+	## Returns true on the first fatal hit (caller should drop the ticket / queue).
+	_spawn_blood_splash(shot_dir)
+	if is_ragdoll:
+		## Extra hits: blood + harder shove / twist.
+		var nudge := shot_dir.normalized()
+		if nudge.length_squared() < 0.01:
+			nudge = Vector3(0, 0, 1)
+		nudge.y = 0.0
+		if nudge.length_squared() < 0.01:
+			nudge = Vector3(0, 0, 1)
+		nudge = nudge.normalized()
+		nudge.z = maxf(nudge.z, 0.55)
+		nudge = nudge.normalized()
+		_ragdoll_vel += nudge * randf_range(2.8, 4.2) + Vector3(0, randf_range(0.8, 1.4), 0)
+		_ragdoll_vel.x = clampf(_ragdoll_vel.x, -7.0, 7.0)
+		_ragdoll_vel.z = clampf(_ragdoll_vel.z, -2.0, 9.0)
+		_ragdoll_ang += Vector3(
+			randf_range(-220.0, 220.0),
+			randf_range(-280.0, 280.0),
+			randf_range(-200.0, 200.0)
+		)
+		_apply_limp_skeleton(0.45)
+		return false
+	stop_order_clock()
+	is_ragdoll = true
+	is_leaving = true
+	is_waiting = false
+	_ragdoll_t = 0.0
+	_ragdoll_lie = 0.0
+	_set_mood("mad")
+	if _anim_player:
+		_anim_player.stop()
+		_anim_player.active = false
+	_anim_state = ""
+	if _bubble:
+		_bubble.visible = false
+	if _bubble_bg:
+		_bubble_bg.visible = false
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
+	## Blast them backward into the street with a hard twist.
+	var push := shot_dir.normalized()
+	if push.length_squared() < 0.01:
+		push = (global_position - shot_from).normalized()
+	push.y = 0.0
+	if push.length_squared() < 0.01:
+		push = Vector3(0, 0, 1)
+	push = push.normalized()
+	## Prefer street-ward (+Z) so they fly away from the truck window.
+	push.z = maxf(push.z, 0.65)
+	push = push.normalized()
+	_ragdoll_vel = push * randf_range(6.2, 8.8) + Vector3(0.0, randf_range(2.6, 3.8), 0.0)
+	var yaw_sign := 1.0 if randf() < 0.5 else -1.0
+	var roll_sign := 1.0 if randf() < 0.5 else -1.0
+	_ragdoll_ang = Vector3(
+		randf_range(160.0, 280.0), ## tumble over backward
+		yaw_sign * randf_range(180.0, 340.0), ## spin / twist
+		roll_sign * randf_range(120.0, 240.0) ## barrel roll
+	)
+	if _body:
+		_body.position.y = _base_body_y
+		_body.rotation_degrees = Vector3.ZERO
+	_cache_skeleton()
+	_apply_limp_skeleton(1.0)
+	return true
+
+
+func _cache_skeleton() -> void:
+	if _skeleton != null and is_instance_valid(_skeleton):
+		return
+	if _body == null:
+		return
+	_skeleton = _body.find_child("Skeleton3D", true, false) as Skeleton3D
+
+
+func _apply_limp_skeleton(amount: float = 1.0) -> void:
+	## Collapse bone poses into a floppy dead pose (animation stays off).
+	_cache_skeleton()
+	if _skeleton == null:
+		return
+	var a := clampf(amount, 0.0, 1.0)
+	for i in _skeleton.get_bone_count():
+		var rest := _skeleton.get_bone_rest(i)
+		var limp := Basis.from_euler(Vector3(
+			deg_to_rad(randf_range(-28.0, 28.0) * a),
+			deg_to_rad(randf_range(-22.0, 22.0) * a),
+			deg_to_rad(randf_range(-40.0, 40.0) * a)
+		))
+		var pose := rest
+		pose.basis = rest.basis * limp
+		_skeleton.set_bone_pose(i, pose)
+
+
+func _spawn_blood_splash(shot_dir: Vector3) -> void:
+	## Red splash burst out of the torso.
+	var fx := GPUParticles3D.new()
+	fx.name = "BloodSplash"
+	fx.amount = 42
+	fx.lifetime = 0.55
+	fx.one_shot = true
+	fx.explosiveness = 1.0
+	fx.randomness = 0.7
+	fx.emitting = true
+	fx.position = Vector3(0.0, 0.85, 0.05)
+	fx.visibility_aabb = AABB(Vector3(-2, -1, -2), Vector3(4, 4, 4))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pmat := ParticleProcessMaterial.new()
+	var out := shot_dir.normalized()
+	if out.length_squared() < 0.01:
+		out = Vector3(0, 0.2, 1)
+	pmat.direction = Vector3(out.x, 0.35, out.z).normalized()
+	pmat.spread = 55.0
+	pmat.initial_velocity_min = 2.2
+	pmat.initial_velocity_max = 5.5
+	pmat.gravity = Vector3(0, -9.0, 0)
+	pmat.damping_min = 1.0
+	pmat.damping_max = 2.5
+	pmat.scale_min = 0.35
+	pmat.scale_max = 1.1
+	pmat.color = Color(0.75, 0.05, 0.05, 1.0)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.75, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.95, 0.12, 0.08, 0.0),
+		Color(0.85, 0.05, 0.05, 1.0),
+		Color(0.55, 0.02, 0.02, 0.75),
+		Color(0.25, 0.0, 0.0, 0.0),
+	])
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = grad
+	pmat.color_ramp = gtex
+	fx.process_material = pmat
+	var dm := SphereMesh.new()
+	dm.radius = 0.028
+	dm.height = 0.056
+	fx.draw_pass_1 = dm
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.albedo_color = Color(0.8, 0.05, 0.05, 0.95)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.disable_receive_shadows = true
+	fx.material_override = draw
+	add_child(fx)
+	_blood_bursts.append(fx)
+	## A few bigger flying blobs for splash read.
+	for i in 6:
+		var blob := MeshInstance3D.new()
+		var sphere := SphereMesh.new()
+		var rad := 0.03 + randf() * 0.045
+		sphere.radius = rad
+		sphere.height = rad * 2.0
+		blob.mesh = sphere
+		blob.position = Vector3(randf_range(-0.08, 0.08), 0.75 + randf() * 0.25, randf_range(-0.05, 0.1))
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(0.7, 0.04, 0.04, 0.92)
+		mat.disable_receive_shadows = true
+		blob.material_override = mat
+		blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(blob)
+		var fly := out * randf_range(1.2, 2.4) + Vector3(randf_range(-0.8, 0.8), randf_range(1.5, 3.0), randf_range(-0.4, 0.6))
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(blob, "position", blob.position + fly, 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(blob, "scale", Vector3.ONE * 0.15, 0.45)
+		tw.chain().tween_callback(blob.queue_free)
+	## Cleanup particle node after it finishes.
+	get_tree().create_timer(0.9).timeout.connect(func():
+		if is_instance_valid(fx):
+			fx.queue_free()
+	)
+
+
+func _update_ragdoll(delta: float) -> void:
+	_ragdoll_t += delta
+	var active := _ragdoll_t < RAGDOLL_ACTIVE_SEC
+	var twisting := _ragdoll_t < RAGDOLL_TWIST_SEC
+	_ragdoll_vel.y -= 15.5 * delta
+	global_position += _ragdoll_vel * delta
+	if twisting:
+		## Free blast tumble — twist on all axes while flying back.
+		rotation_degrees.x += _ragdoll_ang.x * delta
+		rotation_degrees.y += _ragdoll_ang.y * delta
+		rotation_degrees.z += _ragdoll_ang.z * delta
+		if _body:
+			_body.rotation_degrees.x += _ragdoll_ang.x * delta * 0.35
+			_body.rotation_degrees.z += _ragdoll_ang.z * delta * 0.45
+	else:
+		## Ease onto their back after the twist window.
+		_ragdoll_lie = minf(1.0, _ragdoll_lie + delta * 1.6)
+		rotation_degrees.x = lerpf(rotation_degrees.x, 82.0 * _ragdoll_lie, 1.0 - exp(-delta * 5.0))
+		rotation_degrees.y += _ragdoll_ang.y * delta * 0.35
+		rotation_degrees.z = lerpf(rotation_degrees.z, clampf(_ragdoll_ang.z * 0.12, -35.0, 35.0), 1.0 - exp(-delta * 4.0))
+		if _body:
+			_body.rotation_degrees.x = lerpf(_body.rotation_degrees.x, 12.0 * _ragdoll_lie, 1.0 - exp(-delta * 5.0))
+			_body.rotation_degrees.z = lerpf(_body.rotation_degrees.z, clampf(_ragdoll_ang.z * 0.06, -22.0, 22.0), 1.0 - exp(-delta * 4.0))
+	## Never slip behind the street matte painting.
+	if global_position.z > MATTE_FRONT_Z_MAX:
+		global_position.z = MATTE_FRONT_Z_MAX
+		_ragdoll_vel.z = -absf(_ragdoll_vel.z) * 0.35
+	## Soft land — no bounce storm.
+	if global_position.y < STAND_Y:
+		global_position.y = STAND_Y
+		if _ragdoll_vel.y < 0.0:
+			_ragdoll_vel.y *= -0.12
+			_ragdoll_vel.x *= 0.68
+			_ragdoll_vel.z *= 0.68
+			_ragdoll_ang *= 0.5
+			if absf(_ragdoll_vel.y) < 0.4:
+				_ragdoll_vel.y = 0.0
+	_ragdoll_ang *= 1.0 - delta * (1.6 if twisting else (2.6 if active else 6.0))
+	_ragdoll_vel.x *= 1.0 - delta * (1.1 if active else 3.5)
+	_ragdoll_vel.z *= 1.0 - delta * (1.0 if active else 3.5)
+	if not active and _ragdoll_t > RAGDOLL_ACTIVE_SEC + 1.1:
+		queue_free()
+	if global_position.y < -2.0:
+		queue_free()
+
+
+func _spawn_powder_blob_on_body() -> void:
+	## White spheres stick on the character and pile up (minimal float).
+	var blob := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	var rad := 0.04 + randf() * 0.055
+	sphere.radius = rad
+	sphere.height = rad * 2.0
+	blob.mesh = sphere
+	## Scatter across torso / shoulders / head.
+	blob.position = Vector3(
+		randf_range(-0.18, 0.18),
+		randf_range(0.45, 1.25),
+		randf_range(0.02, 0.16)
+	)
+	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	blob.sorting_offset = 8.0
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.96, 0.97, 1.0, 0.92)
+	mat.roughness = 0.8
+	mat.metallic = 0.0
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.render_priority = 12
+	blob.material_override = mat
+	add_child(blob)
+	## Long life so they accumulate during the 2s stand instead of vanishing.
+	var life := 3.5 + randf() * 2.0
+	var start_s := 0.7 + randf() * 0.55
+	blob.scale = Vector3.ONE * start_s
+	_powder_blobs.append({
+		"mesh": blob,
+		"mat": mat,
+		"life": life,
+		"max_life": life,
+		"start_scale": start_s,
+		"rise": 0.02 + randf() * 0.04, ## barely drift — mostly stick
+	})
+	while _powder_blobs.size() > 80:
+		var old: Dictionary = _powder_blobs.pop_front()
+		var m = old.get("mesh")
+		if m != null and is_instance_valid(m):
+			m.queue_free()
+
+
+func _update_powder_blobs(delta: float) -> void:
+	var i := 0
+	while i < _powder_blobs.size():
+		var item: Dictionary = _powder_blobs[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			_powder_blobs.remove_at(i)
+			continue
+		item["life"] = float(item["life"]) - delta
+		var life: float = float(item["life"])
+		var max_life: float = maxf(0.05, float(item["max_life"]))
+		var t := clampf(life / max_life, 0.0, 1.0)
+		## Tiny drift — stay on the body so coverage builds.
+		mesh.position.y += float(item.get("rise", 0.03)) * delta
+		mesh.position.x += sin(Time.get_ticks_msec() * 0.008 + float(i)) * delta * 0.015
+		## Hold size until late fade.
+		var s: float = float(item["start_scale"]) * (0.55 + 0.45 * t)
+		mesh.scale = Vector3.ONE * s
+		var mat = item.get("mat") as StandardMaterial3D
+		if mat != null:
+			var c: Color = mat.albedo_color
+			c.a = 0.25 + 0.7 * t
+			mat.albedo_color = c
+		if life <= 0.0:
+			mesh.queue_free()
+			_powder_blobs.remove_at(i)
+			continue
+		_powder_blobs[i] = item
+		i += 1
 
 
 func leave_mad() -> void:

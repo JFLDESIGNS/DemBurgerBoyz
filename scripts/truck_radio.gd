@@ -33,7 +33,8 @@ const RECONNECT_AFTER := 12.0
 
 var powered: bool = false
 var band: int = Band.FM
-var channel_index: int = 0
+## Default: FM 92.1 Smooth Jazz (index in FM_STATIONS).
+var channel_index: int = 1
 var volume_linear: float = 0.80
 
 var _http := HTTPClient.new()
@@ -105,7 +106,10 @@ func toggle_power() -> void:
 
 func toggle_band() -> void:
 	band = Band.AM if band == Band.FM else Band.FM
-	channel_index = 0
+	## FM boots on Smooth Jazz; AM starts at the first listing.
+	channel_index = 1 if band == Band.FM else 0
+	if channel_index >= channel_count():
+		channel_index = 0
 	channel_changed.emit(channel_index, channel_title())
 	if powered:
 		_tune_current()

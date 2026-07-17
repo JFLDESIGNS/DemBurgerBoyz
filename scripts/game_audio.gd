@@ -32,6 +32,14 @@ var _hiss_gen: AudioStreamGenerator
 var _hiss_on: bool = false
 var _hiss_lp := 0.0
 var _hiss_hp := 0.0
+## Extinguisher spray — continuous powder/static hiss while RMB held.
+var _spray_player: AudioStreamPlayer
+var _spray_gen: AudioStreamGenerator
+var _spray_on: bool = false
+var _spray_lp := 0.0
+var _spray_bp := 0.0
+var _spray_tick := 0.0
+var _spray_flutter := 1.0
 ## Live fry filters / pop state (never loops).
 var _sz_mid := 0.0
 var _sz_mid2 := 0.0
@@ -81,6 +89,15 @@ func _ready() -> void:
 	_hiss_player.stream = _hiss_gen
 	_hiss_player.volume_db = -80.0
 	add_child(_hiss_player)
+	## Live extinguisher spray static (powder / CO2 rush).
+	_spray_gen = AudioStreamGenerator.new()
+	_spray_gen.mix_rate = MIX_RATE
+	_spray_gen.buffer_length = 0.12
+	_spray_player = AudioStreamPlayer.new()
+	_spray_player.bus = "Master"
+	_spray_player.stream = _spray_gen
+	_spray_player.volume_db = -80.0
+	add_child(_spray_player)
 	## Looping soft metal scrape for patty slides.
 	_slide_player = AudioStreamPlayer.new()
 	_slide_player.bus = "Master"
@@ -165,6 +182,12 @@ func _process(delta: float) -> void:
 			while hp.get_frames_available() > 0:
 				var hs := _next_burner_hiss_sample()
 				hp.push_frame(Vector2(hs, hs))
+	if _spray_on and _spray_player != null and _spray_player.playing:
+		var sp := _spray_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if sp != null:
+			while sp.get_frames_available() > 0:
+				var ss := _next_ext_spray_sample()
+				sp.push_frame(Vector2(ss, ss))
 
 
 func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
@@ -234,6 +257,40 @@ func set_burner_hiss(active: bool) -> void:
 			_hiss_player.stop()
 
 
+func set_ext_spray(active: bool) -> void:
+	## Continuous powder-can static while the extinguisher nozzle is open.
+	if _spray_player == null:
+		return
+	if active:
+		_spray_on = true
+		_spray_player.volume_db = -9.5
+		if not _spray_player.playing:
+			_spray_player.play()
+	else:
+		_spray_on = false
+		if _spray_player.playing:
+			_spray_player.stop()
+		_spray_player.volume_db = -80.0
+
+
+func _next_ext_spray_sample() -> float:
+	## Harsh mid/high static — pressurized powder blast, not a soft gas hiss.
+	var white := randf() * 2.0 - 1.0
+	_spray_lp = _spray_lp * 0.78 + white * 0.22
+	var hp := white - _spray_lp
+	_spray_bp = _spray_bp * 0.55 + hp * 0.45
+	_spray_tick += 1.0 / float(MIX_RATE)
+	if _spray_tick > 0.03 + randf() * 0.05:
+		_spray_tick = 0.0
+		_spray_flutter = 0.82 + randf() * 0.45
+	_spray_flutter = lerpf(_spray_flutter, 1.0, 0.004)
+	var rush := _spray_bp * 0.55 + hp * 0.35 + _spray_lp * 0.08
+	## Occasional spit crackles in the stream.
+	if randf() < 0.004:
+		rush += (randf() * 2.0 - 1.0) * 0.55
+	return clampf(rush * 0.42 * _spray_flutter, -1.0, 1.0)
+
+
 func _next_burner_hiss_sample() -> float:
 	## Soft high-band gas/metal hiss — quiet idle bed only.
 	var white := randf() * 2.0 - 1.0
@@ -280,13 +337,13 @@ func _next_sizzle_sample(bed_gain: float, pop_boost: float) -> float:
 
 func play_ingredient(id: String) -> void:
 	var midi: int = int(INGREDIENT_MIDI.get(id, 60))
-	## Quiet, soft tap — should not punch over sizzle/radio.
-	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.28)
+	## Soft quiet tap — stays under sizzle / radio / grade stingers.
+	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.12)
 
 
 func play_scale_jingle() -> void:
 	## Quick rising arpeggio + sparkle when every strip note has been hit.
-	_play_cached("scale_jingle", _make_scale_jingle, 0.0, 0.55)
+	_play_cached("scale_jingle", _make_scale_jingle, 0.0, 0.32)
 
 
 func play_click() -> void:
@@ -329,16 +386,16 @@ func play_chaching() -> void:
 
 
 func play_grade_tune(label: String) -> void:
-	## Distinct cool stingers for ticket-speed grades.
+	## Distinct cool stingers for ticket-speed grades — a bit lower + softer.
 	match label:
 		"Wow!":
-			_play_cached("grade_wow", _make_wow_tune, 0.0, 0.82)
+			_play_cached("grade_wow", _make_wow_tune, 0.88, 0.52)
 		"Perfect!":
-			_play_cached("grade_perfect", _make_perfect_tune, 0.0, 0.72)
+			_play_cached("grade_perfect", _make_perfect_tune, 0.88, 0.46)
 		"Great!":
-			_play_cached("grade_great", _make_great_tune, 0.0, 0.62)
+			_play_cached("grade_great", _make_great_tune, 0.88, 0.40)
 		"Good":
-			_play_cached("grade_good", _make_good_tune, 0.0, 0.52)
+			_play_cached("grade_good", _make_good_tune, 0.90, 0.34)
 		_:
 			play_chaching()
 
@@ -358,6 +415,71 @@ func play_grease_pop(loud: bool = false) -> void:
 	var gain := (0.55 + randf() * 0.25) if loud else (0.2 + randf() * 0.12)
 	var pitch := (0.95 + randf() * 0.55) if loud else (1.15 + randf() * 0.45)
 	_play_cached(key, _make_grease_pop, pitch, gain)
+
+
+func play_smash_sizzle() -> void:
+	## Press juice hiss + a few grease pops when you smash a patty.
+	_play_cached("smash_hiss_%d" % (randi() % 4), _make_smash_hiss, 0.92 + randf() * 0.16, 0.85)
+	play_grease_pop(true)
+	var tree := get_tree()
+	if tree == null:
+		return
+	tree.create_timer(0.04).timeout.connect(func(): play_grease_pop(true))
+	tree.create_timer(0.09).timeout.connect(func(): play_grease_pop(false))
+	tree.create_timer(0.15).timeout.connect(func(): play_grease_pop(true))
+
+
+func play_cat_meow() -> void:
+	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 0.92 + randf() * 0.18, 0.72)
+
+
+func play_cat_purr() -> void:
+	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.55)
+
+
+func play_gunshot() -> void:
+	_play_cached("gunshot_%d" % (randi() % 4), _make_gunshot, 0.92 + randf() * 0.16, 1.15)
+
+
+func play_wilhelm_scream() -> void:
+	## Classic Wilhelm scream (CC0 — USC / Wikimedia).
+	if not _cache.has("wilhelm"):
+		var stream: AudioStream = null
+		if ResourceLoader.exists("res://sounds/wilhelm_scream.ogg"):
+			stream = load("res://sounds/wilhelm_scream.ogg") as AudioStream
+		if stream == null:
+			return
+		_cache["wilhelm"] = stream
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache["wilhelm"]
+	p.pitch_scale = 0.96 + randf() * 0.1
+	p.volume_db = linear_to_db(1.05)
+	p.play()
+	## 65% — follow with BURGERWHY right after the scream ends.
+	if randf() < 0.65:
+		var delay := 1.05
+		if p.stream != null and p.stream.get_length() > 0.05:
+			delay = p.stream.get_length() / maxf(p.pitch_scale, 0.5)
+		get_tree().create_timer(delay).timeout.connect(_play_burger_why)
+
+
+func _play_burger_why() -> void:
+	if not _cache.has("burger_why"):
+		var stream: AudioStream = null
+		if ResourceLoader.exists("res://sounds/BURGERWHY.wav"):
+			stream = load("res://sounds/BURGERWHY.wav") as AudioStream
+		if stream == null:
+			return
+		_cache["burger_why"] = stream
+	if _players.is_empty():
+		return
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache["burger_why"]
+	p.pitch_scale = 1.0
+	p.volume_db = linear_to_db(0.95)
+	p.play()
 
 
 func set_slide_moving(moving: bool, speed: float = 0.0) -> void:
@@ -715,6 +837,98 @@ func _make_hot_oil_hit() -> AudioStreamWAV:
 		var whoosh := sin(t * 90.0 * TAU) * exp(-t * 8.0) * 0.35
 		var sample := (roar + spit + whoosh) * env
 		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 22000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_smash_hiss() -> AudioStreamWAV:
+	## Short steam hiss when juice hits hot steel — pops layered separately.
+	var n := int(MIX_RATE * 0.22)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	var hp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.62 + white * 0.38
+		hp = white - lp
+		var env := 1.0
+		if t < 0.012:
+			env = t / 0.012
+		else:
+			env = exp(-(t - 0.012) * 7.5)
+		var roar := lp * 0.35 + hp * 0.85
+		var spit := 0.0
+		if randf() < 0.12:
+			spit = (randf() * 2.0 - 1.0) * 0.55
+		var sample := (roar + spit) * env
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 18000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_cat_meow() -> AudioStreamWAV:
+	## Soft cartoon meow — short rising then falling chirp.
+	var n := int(MIX_RATE * 0.28)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var base := 680.0 + randf() * 90.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var glide := 1.0
+		if t < 0.08:
+			glide = 0.85 + t / 0.08 * 0.35
+		else:
+			glide = 1.2 - (t - 0.08) * 1.6
+		glide = maxf(0.55, glide)
+		var freq := base * glide
+		var wave := sin(t * freq * TAU) * 0.7 + sin(t * freq * 2.0 * TAU) * 0.18
+		var env := 1.0
+		if t < 0.02:
+			env = t / 0.02
+		else:
+			env = exp(-(t - 0.02) * 7.0)
+		_write_s16(pcm, i, int(clampf(wave * env, -1.0, 1.0) * 14000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_cat_purr() -> AudioStreamWAV:
+	## Gentle throaty purr / pet chirp.
+	var n := int(MIX_RATE * 0.32)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var pulse := 0.55 + 0.45 * sin(t * 28.0 * TAU)
+		var rumble := sin(t * 55.0 * TAU) * 0.35 + sin(t * 110.0 * TAU) * 0.2
+		var chirp := sin(t * 920.0 * TAU) * exp(-t * 9.0) * 0.25
+		var env := 1.0
+		if t < 0.03:
+			env = t / 0.03
+		elif t > 0.26:
+			env = (0.32 - t) / 0.06
+		var sample := (rumble * pulse + chirp) * env
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 11000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_gunshot() -> AudioStreamWAV:
+	## Sharp crack + short body boom.
+	var n := int(MIX_RATE * 0.22)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.72 + white * 0.28
+		var crack := white * exp(-t * 85.0)
+		var body := lp * exp(-t * 18.0) * 0.85
+		var thump := sin(t * 90.0 * TAU) * exp(-t * 28.0) * 0.55
+		var env := 1.0
+		if t < 0.002:
+			env = t / 0.002
+		var sample := (crack * 0.9 + body + thump) * env
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 24000.0))
 	return _wav_from_pcm(pcm, false)
 
 
