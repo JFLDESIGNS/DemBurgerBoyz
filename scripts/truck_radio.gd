@@ -55,6 +55,7 @@ var _has_playback := false
 var _play_started_at_buf := 0
 var _status := "Radio off"
 var _redirects := 0
+var _volume_fade_tween: Tween = null
 
 
 func _ready() -> void:
@@ -147,6 +148,36 @@ func set_channel(index: int) -> void:
 
 
 func set_volume_linear(v: float) -> void:
+	if _volume_fade_tween != null and is_instance_valid(_volume_fade_tween):
+		_volume_fade_tween.kill()
+		_volume_fade_tween = null
+	volume_linear = clampf(v, 0.0, 1.0)
+	if _player and not _combat_silenced:
+		_player.volume_db = _vol_db()
+
+
+func fade_volume_in(duration_sec: float, target_linear: float) -> void:
+	## Ramp live stream volume so day start is not a full-blast hit.
+	if _volume_fade_tween != null and is_instance_valid(_volume_fade_tween):
+		_volume_fade_tween.kill()
+		_volume_fade_tween = null
+	var target := clampf(target_linear, 0.0, 1.0)
+	volume_linear = 0.0
+	if _player and not _combat_silenced:
+		_player.volume_db = _vol_db()
+	if duration_sec <= 0.0:
+		set_volume_linear(target)
+		return
+	var tree := get_tree()
+	if tree == null:
+		set_volume_linear(target)
+		return
+	_volume_fade_tween = tree.create_tween()
+	_volume_fade_tween.tween_method(_set_fade_volume_linear, 0.0, target, duration_sec)\
+		.set_trans(Tween.TRANS_LINEAR)
+
+
+func _set_fade_volume_linear(v: float) -> void:
 	volume_linear = clampf(v, 0.0, 1.0)
 	if _player and not _combat_silenced:
 		_player.volume_db = _vol_db()

@@ -87,6 +87,8 @@ const COST_OIL_USE := 0.50
 const COST_SEASON_USE := 0.25
 const COST_INGREDIENT := 0.25
 const COST_BACON := 0.50
+const BACON_PATIENCE_RESTORE := 0.10
+const BACON_MOUTH_PICK_PX := 130.0
 
 @onready var camera: Camera3D = %Camera3D
 @onready var world: Node3D = %World
@@ -369,6 +371,10 @@ const FLICK_MIN_TRAVEL_PX := 36.0
 ## Left side of the screen / left of the grill counts as Build drop while carrying.
 const BUILD_DROP_SCREEN_FRAC := 0.48
 const BUILD_DROP_MIN_PX := 460.0
+## Flash toast placement — original top + 15% of screen height downward.
+const FLASH_LABEL_TOP_FRAC := 236.0 / 720.0 + 0.10
+const FLASH_LABEL_HEIGHT_FRAC := 74.0 / 720.0
+const FLASH_LABEL_SIDE_FRAC := 280.0 / 1280.0
 ## Extra screen pixels past the grill's left edge that still count as Build.
 const BUILD_DROP_GRILL_PAD_PX := 110.0
 ## Scooped patty floats under the cursor above the steel.
@@ -399,6 +405,7 @@ var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
+var prep_ingredients_prop: MeshInstance3D = null
 var burger_pals_decal: MeshInstance3D = null
 var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
@@ -430,6 +437,12 @@ const MENU_BOARD_DEFAULT_Y := 1.62
 const MENU_BOARD_DEFAULT_Z := 1.20
 const MENU_BOARD_DEFAULT_SCALE := 1.15
 const MENU_BOARD_DEFAULT_YAW := 180.0
+## Wire baskets + produce on the counter left of the grill / Build board.
+const PREP_INGREDIENTS_TEX_PATH := "res://assets/props/prep_ingredients.png"
+const PREP_INGREDIENTS_SIZE := Vector2(0.78, 0.24)
+const PREP_INGREDIENTS_POS := Vector3(0.62, 1.104, 0.46)
+const PREP_INGREDIENTS_ROT := Vector3(-74.0, 168.0, 0.0)
+const PREP_INGREDIENTS_ALBEDO := Color(0.88, 0.88, 0.88, 1.0)
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
@@ -517,6 +530,9 @@ func _ready() -> void:
 	var ui_root: Control = get_node("UI/Root")
 	ui_root.theme = UiFontsScript.make_theme()
 	_style_static_labels()
+	if vp:
+		vp.size_changed.connect(_layout_flash_label)
+		call_deferred("_layout_flash_label")
 	grill.resize(GRILL_SLOTS)
 	grill.fill(null)
 	grill_powered.resize(GRILL_SLOTS)
@@ -637,6 +653,7 @@ func _style_static_labels() -> void:
 		flash_plate.shadow_offset = Vector2(0, 2)
 		flash_label.add_theme_stylebox_override("normal", flash_plate)
 		flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_layout_flash_label()
 	UiFontsScript.apply_button(start_btn, true, 22)
 	UiFontsScript.apply_button(restart_btn, true, 18)
 	_setup_start_logo()
@@ -644,6 +661,21 @@ func _style_static_labels() -> void:
 	if blurb:
 		UiFontsScript.apply_label(blurb, false, 16)
 	UiFontsScript.apply_label(game_over_label, true, 22)
+
+
+func _layout_flash_label() -> void:
+	if flash_label == null:
+		return
+	var vr := get_viewport().get_visible_rect()
+	var vw := vr.size.x
+	var vh := vr.size.y
+	var top := vh * FLASH_LABEL_TOP_FRAC
+	var height := maxf(64.0, vh * FLASH_LABEL_HEIGHT_FRAC)
+	var side := vw * FLASH_LABEL_SIDE_FRAC
+	flash_label.offset_left = side
+	flash_label.offset_top = top
+	flash_label.offset_right = vw - side
+	flash_label.offset_bottom = top + height
 
 
 func _setup_start_logo() -> void:
@@ -745,6 +777,7 @@ func _start_game() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
+	_start_radio_fade_in()
 	# _begin_opening_terror_ambush()
 
 
@@ -779,6 +812,7 @@ func _restart() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
+	_start_radio_fade_in()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
 	# _begin_opening_terror_ambush()
 
@@ -4746,6 +4780,8 @@ func _begin_shaker_hold() -> void:
 
 func _cancel_shaker_hold() -> void:
 	shaker_held = false
+	if game_audio:
+		game_audio.set_shaker_rattle(false)
 	if shaker_particles:
 		shaker_particles.emitting = false
 	if shaker_root:
@@ -4759,6 +4795,8 @@ func _cancel_shaker_hold() -> void:
 
 func _cancel_shaker_hold_silent() -> void:
 	shaker_held = false
+	if game_audio:
+		game_audio.set_shaker_rattle(false)
 	if shaker_particles:
 		shaker_particles.emitting = false
 	if shaker_root:
@@ -4788,11 +4826,11 @@ func _update_held_shaker(_delta: float) -> void:
 	var over_beef: bool = target != null
 	if shaker_particles:
 		shaker_particles.emitting = over_beef
+	if game_audio:
+		game_audio.set_shaker_rattle(over_beef)
 	if over_beef and shaker_season_cool <= 0.0:
 		shaker_season_cool = 0.05
-		if target.apply_seasoning(0.1):
-			if game_audio and randf() < 0.25:
-				game_audio.play_click()
+		target.apply_seasoning(0.1)
 
 
 func _nearest_patty_near(world_pos: Vector3, max_dist: float):
@@ -7115,9 +7153,49 @@ func _setup_radio() -> void:
 	radio.channel_changed.connect(_on_radio_channel)
 	radio.powered_changed.connect(_on_radio_powered)
 	_build_radio_ui()
-	radio.set_volume_linear(0.80)
-	radio.set_powered(true)
+	radio.set_volume_linear(0.0)
+	radio.set_powered(false)
 	_refresh_radio_ui()
+
+
+func _start_radio_fade_in() -> void:
+	if radio == null:
+		return
+	radio.set_volume_linear(0.0)
+	radio.set_powered(true)
+	radio.fade_volume_in(3.0, 0.80)
+	_refresh_radio_ui()
+
+
+func _build_prep_ingredients_prop() -> void:
+	## Wire baskets + condiments on the counter left of the grill (Build zone).
+	if prep_ingredients_prop != null and is_instance_valid(prep_ingredients_prop):
+		prep_ingredients_prop.queue_free()
+		prep_ingredients_prop = null
+	var tex := FoodSpritesScript.prep_ingredients_tex()
+	if tex == null:
+		push_warning("Prep ingredients texture missing")
+		return
+	var prop := MeshInstance3D.new()
+	prop.name = "PrepIngredients"
+	var quad := QuadMesh.new()
+	quad.size = PREP_INGREDIENTS_SIZE
+	prop.mesh = quad
+	prop.position = PREP_INGREDIENTS_POS
+	prop.rotation_degrees = PREP_INGREDIENTS_ROT
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = tex
+	mat.albedo_color = PREP_INGREDIENTS_ALBEDO
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.render_priority = 4
+	prop.material_override = mat
+	prop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	grill_root.add_child(prop)
+	prep_ingredients_prop = prop
 
 
 func _build_truck_radio_prop() -> void:
@@ -9061,27 +9139,51 @@ func _note_melody_press(id: String) -> void:
 func _build_station_ui() -> void:
 	## Sit further screen-left so the far-left grill stays clickable.
 	stations_row.offset_left = -70.0
-	stations_row.offset_right = 250.0
+	stations_row.offset_right = 440.0
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stations_row.custom_minimum_size = Vector2(300, 0)
+	stations_row.custom_minimum_size = Vector2(450, 0)
 	stations_row.alignment = BoxContainer.ALIGNMENT_END
 	for child in stations_row.get_children():
 		child.queue_free()
 	for i in STATION_COUNT:
 		## Plain Control — no PanelContainer chrome / bounding box.
 		var panel := Control.new()
-		panel.custom_minimum_size = Vector2(260, 320)
+		panel.custom_minimum_size = Vector2(450, 320)
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		panel.size_flags_vertical = Control.SIZE_SHRINK_END
 		## Empty panel area passes through to the 3D grill behind.
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+		var row := HBoxContainer.new()
+		row.set_anchors_preset(Control.PRESET_FULL_RECT)
+		row.add_theme_constant_override("separation", 6)
+		row.alignment = BoxContainer.ALIGNMENT_END
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		panel.add_child(row)
+
+		## Prep baskets / condiments — left of the Build board, beside the grill.
+		var prep_wrap := Control.new()
+		prep_wrap.custom_minimum_size = Vector2(280, 168)
+		prep_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
+		prep_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(prep_wrap)
+
+		var prep_img := TextureRect.new()
+		prep_img.name = "PrepIngredients"
+		prep_img.texture = FoodSpritesScript.prep_ingredients_tex()
+		prep_img.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+		prep_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		prep_img.set_anchors_preset(Control.PRESET_FULL_RECT)
+		prep_img.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		prep_wrap.add_child(prep_img)
+
 		var root_v := VBoxContainer.new()
-		root_v.set_anchors_preset(Control.PRESET_FULL_RECT)
+		root_v.custom_minimum_size = Vector2(250, 0)
+		root_v.size_flags_horizontal = Control.SIZE_SHRINK_END
 		root_v.add_theme_constant_override("separation", 2)
 		root_v.alignment = BoxContainer.ALIGNMENT_END
 		root_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		panel.add_child(root_v)
+		row.add_child(root_v)
 
 		var title := Label.new()
 		title.text = "drag patty here"
@@ -9425,6 +9527,10 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var mouse := get_viewport().get_mouse_position()
+	## Bacon strip → waiting customer's mouth (+10% patience).
+	if _try_feed_bacon_to_customer(mouse):
+		_pending_reorder_drag = null
+		return
 	## Drag toppings / cheese / Build patties onto the peeking cat.
 	if _try_drop_dragged_food_on_cat(mouse):
 		_pending_reorder_drag = null
@@ -9479,6 +9585,9 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 				_flash("Drop cheese on a burger", Color("FFCC80"))
 		return
 	if not was_accepted and _pending_ingredient_drag != "":
+		if _pending_ingredient_drag == "bacon" and _try_feed_bacon_to_customer(mouse):
+			_pending_reorder_drag = null
+			return
 		## Missed Build and cat — cancel the ghost drag.
 		_pending_ingredient_drag = ""
 		_pending_reorder_drag = null
@@ -10537,8 +10646,20 @@ func _refresh_station(index: int) -> void:
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
-		var h := _layer_img_height(item) * layer_scale
-		var this_w := layer_w * _layer_width_mul(item)
+		if item == "cheese":
+			continue ## Shown on the patty via burger_cheese art.
+		var layer_key := item
+		var pidx := -1
+		if item == "patty":
+			var patty_from_bottom := 0
+			for j in range(stack_i + 1):
+				if items[j] == "patty":
+					patty_from_bottom += 1
+			pidx = patty_from_bottom - 1
+			if _station_patty_has_cheese(st, pidx):
+				layer_key = "patty_cheese"
+		var h := _layer_img_height(layer_key) * layer_scale
+		var this_w := layer_w * _layer_width_mul(layer_key)
 		var row := PanelContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_STOP
 		row.z_as_relative = true
@@ -10567,15 +10688,13 @@ func _refresh_station(index: int) -> void:
 
 		var tr := TextureRect.new()
 		if item == "patty":
-			var patty_from_bottom := 0
-			for j in range(stack_i + 1):
-				if items[j] == "patty":
-					patty_from_bottom += 1
-			var pidx := patty_from_bottom - 1
-			var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
-			if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
-				pcolor = st["patties"][pidx].get_patty_color()
-			tr.texture = FoodSpritesScript.patty_tex(pcolor)
+			if layer_key == "patty_cheese":
+				tr.texture = FoodSpritesScript.burger_cheese_tex()
+			else:
+				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
+				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
+					pcolor = st["patties"][pidx].get_patty_color()
+				tr.texture = FoodSpritesScript.patty_tex(pcolor)
 		else:
 			tr.texture = FoodSpritesScript.get_tex(item)
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -10620,6 +10739,19 @@ func _refresh_station(index: int) -> void:
 		preview.add_child(row)
 
 
+func _station_patty_has_cheese(st: Dictionary, pidx: int) -> bool:
+	var patties: Array = st.get("patties", [])
+	if pidx >= 0 and pidx < patties.size():
+		var p = patties[pidx]
+		if p != null and is_instance_valid(p) and bool(p.get("has_cheese")):
+			return true
+	var cheese_n := 0
+	for item in st.get("items", []):
+		if str(item) == "cheese":
+			cheese_n += 1
+	return pidx < cheese_n
+
+
 func _station_layer_scale(layer_count: int) -> float:
 	## ~60% of the oversized stack, then STATION_BURGER_SCALE (default −25%).
 	var base := 1.86
@@ -10643,6 +10775,8 @@ func _layer_width_mul(item: String) -> float:
 			return 1.24
 		"patty":
 			return 1.28
+		"patty_cheese":
+			return 1.34
 		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
 			return 1.3
 		"ketchup", "mustard":
@@ -10659,6 +10793,8 @@ func _layer_img_height(item: String) -> float:
 			return 62.0
 		"patty":
 			return 68.0
+		"patty_cheese":
+			return 82.0
 		"bacon":
 			return 54.0
 		"lettuce":
@@ -10860,13 +10996,64 @@ func _station_stack_screen_center(index: int) -> Vector2:
 
 
 func _customer_mouth_screen(customer: Node3D) -> Vector2:
-	if camera == null or customer == null or not is_instance_valid(customer):
-		return get_viewport().get_visible_rect().size * Vector2(0.72, 0.42)
+	if camera == null or customer == null:
+		return Vector2.ZERO
 	var mouth: Vector3 = customer.global_position + Vector3(0.0, 1.18, 0.06)
 	if customer.has_method("mouth_global"):
 		mouth = customer.mouth_global()
 	var screen_pt := camera.unproject_position(mouth)
 	return screen_pt + Vector2(0.0, -42.0)
+
+
+func _find_waiting_customer_at_mouth(screen_pos: Vector2) -> Node3D:
+	if customers_root == null or camera == null:
+		return null
+	var best: Node3D = null
+	var best_d := BACON_MOUTH_PICK_PX
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_waiting")):
+			continue
+		if bool(c.get("is_leaving")) or bool(c.get("is_ragdoll")):
+			continue
+		var mouth: Vector3 = c.global_position + Vector3(0.0, 1.18, 0.06)
+		if c.has_method("mouth_global"):
+			mouth = c.mouth_global()
+		if camera.is_position_behind(mouth):
+			continue
+		var mouth_pt := camera.unproject_position(mouth)
+		var d := screen_pos.distance_to(mouth_pt)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+func _try_feed_bacon_to_customer(screen_pos: Vector2) -> bool:
+	if not playing or _pending_ingredient_drag != "bacon":
+		return false
+	var cust := _find_waiting_customer_at_mouth(screen_pos)
+	if cust == null:
+		return false
+	if not cust.has_method("feed_bacon_snack"):
+		return false
+	if not bool(cust.feed_bacon_snack(BACON_PATIENCE_RESTORE)):
+		_pending_ingredient_drag = ""
+		_pending_cheese_drag = false
+		_strip_did_drag = true
+		_flash("They're not hungry for more bacon", Color("FFCC80"))
+		return true
+	_spend(_ingredient_cost("bacon"))
+	_pending_ingredient_drag = ""
+	_pending_cheese_drag = false
+	_strip_did_drag = true
+	_strip_gesture_added = true
+	if game_audio:
+		game_audio.play_ingredient("bacon")
+	var pct := int(round(BACON_PATIENCE_RESTORE * 100.0))
+	_flash("Bacon snack! +%d%% patience" % pct, Color("FFAB91"))
+	return true
 
 
 func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
@@ -10900,10 +11087,22 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
+		if item == "cheese":
+			continue ## Shown on the patty via burger_cheese art.
+		var layer_key := item
+		var pidx := -1
+		if item == "patty":
+			var patty_from_bottom := 0
+			for j in range(stack_i + 1):
+				if items[j] == "patty":
+					patty_from_bottom += 1
+			pidx = patty_from_bottom - 1
+			if _station_patty_has_cheese(st, pidx):
+				layer_key = "patty_cheese"
 		var is_bun := item == "bun_bottom" or item == "bun_top"
 		var h_squish := 1.0 if is_bun else 0.8
-		var h := _layer_img_height(item) * layer_scale * h_squish
-		var this_w := layer_w * _layer_width_mul(item)
+		var h := _layer_img_height(layer_key) * layer_scale * h_squish
+		var this_w := layer_w * _layer_width_mul(layer_key)
 		var row := Control.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.custom_minimum_size = Vector2(this_w, h)
@@ -10921,15 +11120,13 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 
 		var tr := TextureRect.new()
 		if item == "patty":
-			var patty_from_bottom := 0
-			for j in range(stack_i + 1):
-				if items[j] == "patty":
-					patty_from_bottom += 1
-			var pidx := patty_from_bottom - 1
-			var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
-			if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
-				pcolor = st["patties"][pidx].get_patty_color()
-			tr.texture = FoodSpritesScript.patty_tex(pcolor)
+			if layer_key == "patty_cheese":
+				tr.texture = FoodSpritesScript.burger_cheese_tex()
+			else:
+				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
+				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
+					pcolor = st["patties"][pidx].get_patty_color()
+				tr.texture = FoodSpritesScript.patty_tex(pcolor)
 		else:
 			tr.texture = FoodSpritesScript.get_tex(item)
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE

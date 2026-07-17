@@ -54,6 +54,57 @@ static func get_tex(id: String) -> Texture2D:
 	return tex
 
 
+static func burger_cheese_tex() -> Texture2D:
+	## Patty + melted cheese sheet for Build stacks (replaces separate cheese layer art).
+	if _cache.has("burger_cheese"):
+		return _cache["burger_cheese"]
+	var tex: Texture2D = null
+	var path := INGREDIENT_DIR + "burger_cheese.png"
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			var img: Image = res.get_image()
+			if img != null:
+				if img.is_compressed():
+					img.decompress()
+				img.convert(Image.FORMAT_RGBA8)
+				_knockout_dark_backdrop(img)
+				tex = ImageTexture.create_from_image(img)
+			else:
+				tex = res
+	if tex == null:
+		var fallback := "res://IMAGES/BURGERCHEEESE.png"
+		if ResourceLoader.exists(fallback):
+			tex = load(fallback) as Texture2D
+	if tex == null:
+		tex = get_tex("cheese")
+	_cache["burger_cheese"] = tex
+	return tex
+
+
+static func prep_ingredients_tex() -> Texture2D:
+	## Wire baskets + produce beside the Build board (left of grill).
+	if _cache.has("prep_ingredients"):
+		return _cache["prep_ingredients"]
+	var tex: Texture2D = null
+	const path := "res://assets/props/prep_ingredients.png"
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			tex = res
+			var img: Image = tex.get_image()
+			if img != null and img.get_width() > 0 and img.get_height() > 0:
+				if img.is_compressed():
+					img.decompress()
+				img.convert(Image.FORMAT_RGBA8)
+				_knockout_dark_backdrop(img)
+				tex = ImageTexture.create_from_image(img)
+	if tex == null:
+		push_warning("Prep ingredients texture missing or failed import: %s" % path)
+	_cache["prep_ingredients"] = tex
+	return tex
+
+
 static func _try_load_ingredient(id: String) -> Texture2D:
 	## Load sliced sheet art when available (transparent PNG).
 	match id:

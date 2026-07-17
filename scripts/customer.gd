@@ -21,10 +21,13 @@ const STAND_Y := -0.02
 ## Stay nearer the camera than the street matte (game.gd STREET_MATTE_BASE_Z ≈ 11.5).
 const MATTE_FRONT_Z_MAX := 9.8
 const WAIT_Z := 2.25
-## Compact patience chip just above the toon head (inside the window opening).
-const BAR_Y := 1.28
-const BAR_W := 0.38
-const BAR_H := 0.032
+## Compact patience chip above the toon head (inside the window opening).
+## Tuned for the service-window camera — higher world Y reads lower on screen.
+const HEAD_TOP_Y := 0.95
+const BAR_ABOVE_HEAD := 0.14
+const BAR_Y := HEAD_TOP_Y + BAR_ABOVE_HEAD
+const BAR_W := 0.42
+const BAR_H := 0.038
 const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
 ## Knock-back tumble after a Glock hit, then settle and despawn.
@@ -411,7 +414,7 @@ func _build() -> void:
 
 	_bar_root = Node3D.new()
 	_bar_root.name = "PatienceBar"
-	_bar_root.position = Vector3(0, BAR_Y, 0.08)
+	_bar_root.position = Vector3(0, BAR_Y, 0.14)
 	add_child(_bar_root)
 
 	_bar_bg = MeshInstance3D.new()
@@ -424,7 +427,7 @@ func _build() -> void:
 	bar_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	bar_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	bar_mat.no_depth_test = true
-	bar_mat.render_priority = 20
+	bar_mat.render_priority = 40
 	bar_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_bar_bg.material_override = bar_mat
 	_bar_bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -441,7 +444,7 @@ func _build() -> void:
 	fm.albedo_color = Color("66BB6A")
 	fm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	fm.no_depth_test = true
-	fm.render_priority = 21
+	fm.render_priority = 41
 	fm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_bar_fill.material_override = fm
 	_bar_fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1044,7 +1047,7 @@ func _refresh_patience_bar() -> void:
 	var t: float = clampf(patience / maxf(0.01, patience_max), 0.0, 1.0)
 	if _bar_root:
 		_bar_root.visible = true
-		_bar_root.position = Vector3(0, BAR_Y, 0.08)
+		_bar_root.position = Vector3(0, BAR_Y, 0.14)
 	if _bar_bg:
 		_bar_bg.visible = true
 	if _bar_fill:
@@ -1820,6 +1823,27 @@ func leave_after_dispute() -> void:
 
 func patience_ratio() -> float:
 	return clampf(patience / maxf(0.01, patience_max), 0.0, 1.0)
+
+
+func feed_bacon_snack(restore_ratio: float = 0.10) -> bool:
+	## Dragged bacon treat — bump patience up to max (10% of bar by default).
+	if not is_waiting or is_leaving or is_ragdoll:
+		return false
+	if patience >= patience_max - 0.05:
+		return false
+	var bump := patience_max * clampf(restore_ratio, 0.0, 1.0)
+	patience = minf(patience_max, patience + bump)
+	_refresh_patience_bar()
+	bounce_happy()
+	if _bubble:
+		_bubble.text = "Mmm… bacon!"
+		_bubble.visible = true
+		_bubble.modulate = Color(1.0, 0.92, 0.75)
+		get_tree().create_timer(0.9).timeout.connect(func():
+			if is_instance_valid(self) and _bubble and is_waiting:
+				_bubble.visible = false
+		)
+	return true
 
 
 ## Serve fly animation target — roughly lip height in the service window.

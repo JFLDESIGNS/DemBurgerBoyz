@@ -40,6 +40,13 @@ var _spray_lp := 0.0
 var _spray_bp := 0.0
 var _spray_tick := 0.0
 var _spray_flutter := 1.0
+## Seasoning shaker — rhythmic rattle while shaking over patties.
+var _shake_player: AudioStreamPlayer
+var _shake_gen: AudioStreamGenerator
+var _shake_on: bool = false
+var _shake_lp := 0.0
+var _shake_phase := 0.0
+var _shake_tick := 0.0
 ## Live fry filters / pop state (never loops).
 var _sz_mid := 0.0
 var _sz_mid2 := 0.0
@@ -98,6 +105,15 @@ func _ready() -> void:
 	_spray_player.stream = _spray_gen
 	_spray_player.volume_db = -80.0
 	add_child(_spray_player)
+	## Live shaker rattle while seasoning patties.
+	_shake_gen = AudioStreamGenerator.new()
+	_shake_gen.mix_rate = MIX_RATE
+	_shake_gen.buffer_length = 0.12
+	_shake_player = AudioStreamPlayer.new()
+	_shake_player.bus = "Master"
+	_shake_player.stream = _shake_gen
+	_shake_player.volume_db = -80.0
+	add_child(_shake_player)
 	## Looping soft metal scrape for patty slides.
 	_slide_player = AudioStreamPlayer.new()
 	_slide_player.bus = "Master"
@@ -188,6 +204,12 @@ func _process(delta: float) -> void:
 			while sp.get_frames_available() > 0:
 				var ss := _next_ext_spray_sample()
 				sp.push_frame(Vector2(ss, ss))
+	if _shake_on and _shake_player != null and _shake_player.playing:
+		var shp := _shake_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if shp != null:
+			while shp.get_frames_available() > 0:
+				var shs := _next_shaker_rattle_sample()
+				shp.push_frame(Vector2(shs, shs))
 
 
 func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
@@ -271,6 +293,38 @@ func set_ext_spray(active: bool) -> void:
 		if _spray_player.playing:
 			_spray_player.stop()
 		_spray_player.volume_db = -80.0
+
+
+func set_shaker_rattle(active: bool) -> void:
+	## Plastic shaker rattle + salt sprinkle while held over a patty.
+	if _shake_player == null:
+		return
+	if active:
+		_shake_on = true
+		_shake_player.volume_db = -13.5
+		if not _shake_player.playing:
+			_shake_player.play()
+	else:
+		_shake_on = false
+		if _shake_player.playing:
+			_shake_player.stop()
+		_shake_player.volume_db = -80.0
+
+
+func _next_shaker_rattle_sample() -> float:
+	## ~9–12 Hz shake bursts with granular sprinkle noise.
+	_shake_tick += 1.0 / float(MIX_RATE)
+	var shake_hz := 10.0 + sin(_shake_tick * 4.2) * 1.8
+	_shake_phase += shake_hz / float(MIX_RATE)
+	var pulse := maxf(0.0, sin(_shake_phase * TAU))
+	pulse = pow(pulse, 0.28)
+	var white := randf() * 2.0 - 1.0
+	_shake_lp = _shake_lp * 0.58 + white * 0.42
+	var grain := (white - _shake_lp) * 0.62 + _shake_lp * 0.18
+	var tap := 0.0
+	if pulse > 0.88 and randf() < 0.07:
+		tap = (randf() * 2.0 - 1.0) * 0.35
+	return clampf((grain * 0.5 + tap) * pulse, -1.0, 1.0)
 
 
 func _next_ext_spray_sample() -> float:
