@@ -1,15 +1,24 @@
-# Godot 4+
+﻿# Godot 4+
 .godot/
 *.translation
-export.cfg
-export_presets.cfg
 *.tmp
 .mono/
 data_*/
+*.uid
+
+# Local exports / junk
 build/
+FoodTruckFlip.exe
+FoodTruckFlip.console.exe
+*.pck
+_tmp_chars/
+tools/
 debug_captures/
+assets/**/debug_*.png
+assets/**/debug_*.png.import
+
+# Logs
+*.log
 runlog.txt
 runout.txt
 runerr.txt
-*.log
-*.uid
