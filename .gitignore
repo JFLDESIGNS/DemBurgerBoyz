@@ -7,6 +7,7 @@ export_presets.cfg
 .mono/
 data_*/
 build/
+debug_captures/
 runlog.txt
 runout.txt
 runerr.txt

@@ -6,15 +6,15 @@ const STATION_COUNT := 1
 const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
 const STATION_BURGER_SCALE := 1.0
+## Patties / toppings on the build board — buns stay full size.
+const STATION_INGREDIENT_SCALE := 0.6
 const MAX_HELD := 4
-## Grill heat bands screen-left → right: FULL · 1/2 · 1/4 · HOLD
-const ZONE_FULL_FRAC := 0.38
-const ZONE_QUARTER_FRAC := 0.20
-const ZONE_EIGHTH_FRAC := 0.18
-const ZONE_HOLD_FRAC := 0.24
+## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
+const ZONE_FULL_FRAC := 0.50
+const ZONE_HALF_FRAC := 0.263
+const ZONE_HOLD_FRAC := 0.237 ## former 1/4 strip — warm hold only (no cook)
 const ZONE_FULL_MUL := 1.0
-const ZONE_QUARTER_MUL := 0.5 ## was 1/4 cook → now half speed
-const ZONE_EIGHTH_MUL := 0.25 ## was 1/8 cook → now quarter speed
+const ZONE_HALF_MUL := 0.5
 const ZONE_HOLD_MUL := 0.0
 const WARM_HOLD_MAX := 300.0 ## 5 minutes on HOLD before meat goes bad
 ## Legacy aliases used by hold-zone helpers.
@@ -27,8 +27,8 @@ const FRESHNESS_DEGRADE := 30.0 ## then 30s of quality drop before it goes bad
 const FRESHNESS_MAX := FRESHNESS_FULL + FRESHNESS_DEGRADE
 const GRILL_SURFACE_Y := 1.155
 const GRILL_SURFACE_Z := -0.02 ## farther from cook, closer to window
-const GRILL_CENTER_X := -0.35
-const GRILL_WIDTH := 2.35
+const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the right
+const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## Patty must sit fully on the steel — reject clicks near the rim.
 const PATTY_FIT_RADIUS := 0.10
@@ -151,8 +151,8 @@ var spatula_patty = null ## one patty on the spatula at a time
 var stations: Array = [] ## each: {items, patty, panel, preview, title, plate}
 var warmer_root: Node3D = null
 var warmer_label: Label3D = null
-var warmer_label_quarter: Label3D = null
-var warmer_label_eighth: Label3D = null
+var warmer_label_half: Label3D = null
+var warmer_label_hold: Label3D = null
 var warmer_outline_mat: StandardMaterial3D = null
 var active_station: int = 0
 var selected_customer = null
@@ -199,6 +199,7 @@ var heat_warp_base_size := Vector2(1.0, 0.6)
 var heat_warp_enabled: bool = true
 var grill_drop_zone: Control = null
 var build_drop_zone: Control = null ## Tall left catcher while holding a scooped patty
+var build_debug_root: Control = null
 var _pending_station_patty_drag = null ## Dictionary while dragging a Build patty
 var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill burger
 var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
@@ -272,7 +273,7 @@ var _oil_smoke_tex: ImageTexture = null
 ## Grease fire from over-oiling the flat-top.
 var grill_on_fire: bool = false
 var fire_health: float = 0.0
-## Which heat band the blaze started in (FULL / 1/2 / 1/4 / HOLD) — fire stays there.
+## Which heat band the blaze started in (FULL / 1/2 / HOLD) — fire stays there.
 var fire_zone_id: String = ""
 var fire_root: Node3D = null
 var fire_light: OmniLight3D = null
@@ -418,6 +419,7 @@ var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
+var build_cutting_board: Node3D = null
 var burger_pals_decal: MeshInstance3D = null
 var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
@@ -455,13 +457,24 @@ const PREP_INGREDIENTS_SIZE := Vector2(1.17, 0.36) ## 50% larger wire-basket art
 const PREP_INGREDIENTS_POS := Vector3(0.74, 1.714, 0.46) ## nudged right on counter
 const PREP_INGREDIENTS_ROT := Vector3(-74.0, 168.0, 0.0)
 const PREP_INGREDIENTS_ALBEDO := Color(0.616, 0.616, 0.616, 1.0) ## 30% darker than prior 0.88 tint
+## Build-station cutting board — on the counter just left of the grill steel.
+const CUTTING_BOARD_SIZE := Vector2(0.56, 0.42)
+const CUTTING_BOARD_POS := Vector3(1.14, 1.162, 0.34)
+const CUTTING_BOARD_ROT := Vector3(-72.0, 168.0, 0.0)
+const CUTTING_BOARD_ALBEDO := Color(0.96, 0.92, 0.86, 1.0)
+const CUTTING_BOARD_SLAB := Vector3(0.46, 0.032, 0.34)
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
-const PREP_UI_BEHIND_X := -118.0 ## prep art offset inside build zone (text stays put)
-const PREP_UI_BEHIND_Y := -130.0 ## negative Y = up on screen (position-based — anchors were ignored)
+const PREP_UI_BEHIND_X := -80.0 ## prep art offset inside build zone (text stays put)
+const PREP_UI_BEHIND_Y := -165.0 ## negative Y = up on screen (position-based)
 const BUILD_UI_LEFT := 85.0 ## bun stack — left of grill, beside prep baskets
 const BUILD_UI_LIFT_BOTTOM := 120.0 ## counter height — not tucked under the grill
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
+## Red outlines on Build UI hitboxes — toggle off when layout is tuned.
+const BUILD_AREA_DEBUG_OUTLINE := true
+const BUILD_DEBUG_OUTLINE_COLOR := Color(1.0, 0.1, 0.1, 0.95)
+const GRILL_POWER_ROW_BOTTOM := 112.0 ## px above screen bottom — centered on grill
+const GRILL_POWER_ROW_WIDTH := 268.0 ## burner + gap + garbage button widths
 ## Kenney / Sketchfab truck radio — replaces procedural CabRadio mesh.
 const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
 const RADIO_TEX_ALBEDO := "res://models/RADIO/textures/RADIO_SCETC_FAB_albedo.tga.png"
@@ -479,7 +492,9 @@ const RADIO_UI_TOP := 52.0
 const RADIO_UI_RIGHT := 10.0
 const RADIO_UI_LEFT := 220.0
 ## Android phone HUD — floats under the truck radio.
-const PHONE_UI_SIZE := Vector2(152.0, 278.0)
+const PHONE_UI_BASE_H := 278.0
+const PHONE_UI_SIZE := Vector2(152.0, PHONE_UI_BASE_H * 1.15) ## 15% taller
+const PHONE_BEZEL_H := 9.0 ## small black chin / forehead inside the frame
 const PHONE_BELOW_RADIO_GAP := 10.0
 const PHONE_FLOAT_AMP := 3.5
 const SUPPLY_IDS: Array[String] = [
@@ -605,7 +620,11 @@ func _ready() -> void:
 	_setup_radio()
 	if vp:
 		vp.size_changed.connect(_layout_phone_ui_overlay)
+		if BUILD_AREA_DEBUG_OUTLINE:
+			vp.size_changed.connect(_refresh_build_debug_outlines)
 	call_deferred("_layout_phone_ui_overlay")
+	if BUILD_AREA_DEBUG_OUTLINE:
+		call_deferred("_refresh_build_debug_outlines")
 	_build_pause_button()
 	_build_master_volume_ui()
 	_build_graphics_ui()
@@ -639,6 +658,7 @@ func _ready() -> void:
 	## Pass-through so left grill clicks aren't blocked by empty Build chrome.
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ingredient_legend.mouse_filter = Control.MOUSE_FILTER_STOP
+	ingredient_legend.z_index = 30 ## above GrillDropZone while holding cheese
 	start_btn.pressed.connect(func():
 		_sfx_click()
 		_start_game()
@@ -784,7 +804,7 @@ func _setup_stations_data() -> void:
 
 
 func _is_warmer_station(_index: int) -> bool:
-	## UI warmer removed — hold zone is on the 3D grill far-right.
+	## UI warmer removed — HOLD is the rightmost grill band.
 	return false
 
 
@@ -1091,16 +1111,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 			return
 		if cheese_held:
+			if _is_ingredient_strip_click(event.global_position):
+				return
 			if event.button_index == MOUSE_BUTTON_RIGHT:
 				## Also handled in _input so UI can't eat the cancel click.
 				_cancel_cheese_hold()
 				get_viewport().set_input_as_handled()
 				return
 			if event.button_index == MOUSE_BUTTON_LEFT:
-				if _try_window_cat_click(event.position):
+				if _try_window_cat_click(event.global_position):
 					get_viewport().set_input_as_handled()
 					return
-				_try_place_held_cheese(event.position)
+				_try_place_held_cheese(event.global_position)
 				get_viewport().set_input_as_handled()
 				return
 		if event.button_index == MOUSE_BUTTON_LEFT:
@@ -1132,13 +1154,15 @@ func _input(event: InputEvent) -> void:
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
 		return
-	## Right-click while holding cheese → put it back on the strip (works over UI too).
+	## Cheese pick-up / placement — run before UI, but never steal the topping strip.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if cheese_held:
-			if _try_window_cat_click(event.position):
+			if _is_ingredient_strip_click(event.global_position):
+				return
+			if _try_window_cat_click(event.global_position):
 				get_viewport().set_input_as_handled()
 				return
-			_try_place_held_cheese(event.position)
+			_try_place_held_cheese(event.global_position)
 			get_viewport().set_input_as_handled()
 			return
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
@@ -1325,6 +1349,26 @@ func _strip_ingredient_at(screen_pos: Vector2) -> String:
 	return ""
 
 
+func _is_ingredient_strip_click(screen_pos: Vector2) -> bool:
+	if _strip_ingredient_at(screen_pos) != "":
+		return true
+	if ingredient_legend != null and is_instance_valid(ingredient_legend) \
+			and ingredient_legend.get_global_rect().has_point(screen_pos):
+		return true
+	return false
+
+
+func _cheese_targets_build_at(screen_pos: Vector2) -> bool:
+	## Overlapping build + grill hits prefer the patty on the steel.
+	if _cheese_prefers_grill_at(screen_pos):
+		return false
+	return _build_plate_index_at(screen_pos) >= 0
+
+
+func _cheese_prefers_grill_at(screen_pos: Vector2) -> bool:
+	return _is_grill_screen_point(screen_pos)
+
+
 func _strip_swipe_add(id: String) -> void:
 	if id == "" or _strip_swipe_added.has(id):
 		return
@@ -1404,7 +1448,8 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 				if n == "Root" or n == "BottomUI" or n == "StationsRow" or n == "GrillDropZone" \
 						or n == "WindowTicketRail" or n == "TicketBox" or n == "PrepIngredients" \
 						or n == "BuildTitle" or n == "PrepWrap" or n == "GrillPickBlocker" \
-						or n == "BuildColumn" or n == "BuildZone":
+						or n == "BuildColumn" or n == "BuildZone" or n == "BuildDebugRoot" \
+						or n.begins_with("DebugOutline"):
 					pass
 				else:
 					return true
@@ -1439,6 +1484,104 @@ func _build_plate_index_at(screen_pos: Vector2) -> int:
 				and drop_btn.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
 	return -1
+
+
+func _make_build_debug_outline_style(fill_alpha: float = 0.06) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(BUILD_DEBUG_OUTLINE_COLOR.r, BUILD_DEBUG_OUTLINE_COLOR.g, BUILD_DEBUG_OUTLINE_COLOR.b, fill_alpha)
+	sb.border_color = BUILD_DEBUG_OUTLINE_COLOR
+	sb.set_border_width_all(3)
+	sb.set_corner_radius_all(2)
+	return sb
+
+
+func _refresh_build_debug_outlines() -> void:
+	if not BUILD_AREA_DEBUG_OUTLINE:
+		return
+	if build_debug_root != null and is_instance_valid(build_debug_root):
+		build_debug_root.queue_free()
+		build_debug_root = null
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+	build_debug_root = Control.new()
+	build_debug_root.name = "BuildDebugRoot"
+	build_debug_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	build_debug_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	build_debug_root.z_index = 18
+	ui_root.add_child(build_debug_root)
+	## Left-column patty drop catcher (wide).
+	if build_drop_zone != null and is_instance_valid(build_drop_zone):
+		_draw_build_debug_rect(build_drop_zone.get_global_rect(), "DROP_L", 0.04)
+	## Grill-left fuzzy drop line (screen X where Build beats grill).
+	var grill_x := _grill_left_screen_x() + BUILD_DROP_GRILL_PAD_PX
+	var vr := get_viewport().get_visible_rect()
+	_draw_build_debug_vline(grill_x, "GRILL_LIM")
+	## Per-station build hitboxes.
+	for i in STATION_COUNT:
+		if i >= stations.size():
+			continue
+		var panel: Control = stations[i].get("panel", null)
+		var plate: Control = stations[i].get("plate", null)
+		if panel != null and is_instance_valid(panel):
+			_draw_build_debug_rect(panel.get_global_rect(), "PANEL", 0.03)
+			var pr := panel.get_global_rect()
+			var build_w := mini(280.0, pr.size.x)
+			var hit := Rect2(pr.position.x + maxf(0.0, pr.size.x - build_w), pr.position.y, build_w, pr.size.y)
+			hit = hit.grow_individual(24, 180, 24, 24)
+			_draw_build_debug_rect(hit, "BUILD_HIT", 0.05)
+		if plate != null and is_instance_valid(plate):
+			_draw_build_debug_rect(plate.get_global_rect().grow(12), "PLATE+12", 0.07)
+		var build_zone := panel.get_node_or_null("BuildZone") if panel != null else null
+		if build_zone is Control and is_instance_valid(build_zone):
+			_draw_build_debug_rect((build_zone as Control).get_global_rect(), "ZONE", 0.08)
+
+
+func _draw_build_debug_rect(global_rect: Rect2, tag: String, fill_alpha: float) -> void:
+	if build_debug_root == null or not is_instance_valid(build_debug_root):
+		return
+	if global_rect.size.x < 2.0 or global_rect.size.y < 2.0:
+		return
+	var local := build_debug_root.get_global_transform_with_canvas().affine_inverse() * global_rect.position
+	var box := PanelContainer.new()
+	box.name = "DebugOutline_%s" % tag
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.position = local
+	box.size = global_rect.size
+	box.add_theme_stylebox_override("panel", _make_build_debug_outline_style(fill_alpha))
+	build_debug_root.add_child(box)
+	var lab := Label.new()
+	lab.text = tag
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lab.add_theme_color_override("font_color", BUILD_DEBUG_OUTLINE_COLOR)
+	lab.add_theme_color_override("font_outline_color", Color.BLACK)
+	lab.add_theme_constant_override("outline_size", 3)
+	UiFontsScript.apply_label(lab, true, 10)
+	lab.position = Vector2(3, 1)
+	box.add_child(lab)
+
+
+func _draw_build_debug_vline(screen_x: float, tag: String) -> void:
+	if build_debug_root == null or not is_instance_valid(build_debug_root):
+		return
+	var vr := get_viewport().get_visible_rect()
+	var local_x := screen_x - build_debug_root.global_position.x
+	var line := ColorRect.new()
+	line.name = "DebugOutline_%s" % tag
+	line.color = BUILD_DEBUG_OUTLINE_COLOR
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.position = Vector2(local_x - 1.0, vr.position.y - build_debug_root.global_position.y)
+	line.size = Vector2(2.0, vr.size.y)
+	build_debug_root.add_child(line)
+	var lab := Label.new()
+	lab.text = tag
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lab.add_theme_color_override("font_color", BUILD_DEBUG_OUTLINE_COLOR)
+	lab.add_theme_color_override("font_outline_color", Color.BLACK)
+	lab.add_theme_constant_override("outline_size", 3)
+	UiFontsScript.apply_label(lab, true, 9)
+	lab.position = Vector2(local_x + 4.0, 52.0)
+	build_debug_root.add_child(lab)
 
 
 func _station_index_at(screen_pos: Vector2) -> int:
@@ -1594,6 +1737,7 @@ func _build_3d_world() -> void:
 
 	_build_flat_top_grill()
 	_build_burner_flames()
+	_build_cutting_board_prop()
 	_build_wire_brush()
 	_build_oil_bottle()
 	_build_meat_warmer()
@@ -1751,7 +1895,7 @@ func _build_flat_top_grill() -> void:
 	rim.material_override = rim_mat
 	surface.add_child(rim)
 
-	## Heat-zone steel panels — FULL · 1/2 · 1/4 · HOLD (screen-left → right).
+	## Heat-zone steel panels — FULL · 1/2 · HOLD (screen-left → right).
 	var bands: Array = _grill_zone_bands()
 	grill_surface_mat = null
 	grill_glow_meshes.clear()
@@ -1804,7 +1948,7 @@ func _build_flat_top_grill() -> void:
 	surface.add_child(heat)
 	grill_heat_lights.append(heat)
 
-	## Heat shimmer / warp over the three cook bands (not HOLD).
+	## Heat shimmer / warp over FULL + 1/2 cook bands (not HOLD).
 	_build_heat_warp_plane(
 		surface,
 		Vector3(cook_cx_world - GRILL_CENTER_X, 0.12, 0.07),
@@ -2331,8 +2475,32 @@ func _build_grill_burner_ui() -> void:
 	)
 	grill_power_row.add_child(trash)
 	grill_trash_btn = trash
-
+	_layout_grill_power_row_centered()
 	_refresh_grill_ui_button(0)
+
+
+func _layout_grill_power_row_centered() -> void:
+	## BottomUI is right-aligned for toppings — pin burner/garbage to screen center.
+	if grill_power_row == null:
+		return
+	var ui_root: Control = get_node_or_null("UI/Root") as Control
+	if ui_root == null:
+		return
+	if grill_power_row.get_parent() != ui_root:
+		var old_parent := grill_power_row.get_parent()
+		if old_parent != null:
+			old_parent.remove_child(grill_power_row)
+		ui_root.add_child(grill_power_row)
+	grill_power_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	grill_power_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	grill_power_row.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	grill_power_row.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	var half_w := GRILL_POWER_ROW_WIDTH * 0.5
+	grill_power_row.offset_left = -half_w
+	grill_power_row.offset_right = half_w
+	grill_power_row.offset_bottom = -GRILL_POWER_ROW_BOTTOM
+	grill_power_row.offset_top = grill_power_row.offset_bottom - 32.0
+	grill_power_row.z_index = 8
 
 
 func _is_over_garbage(screen_pos: Vector2) -> bool:
@@ -6183,7 +6351,7 @@ func _reset_oil_bottle() -> void:
 
 
 func _grill_zone_bands() -> Array:
-	## Screen-left → right (world +X → −X): FULL · 1/2 · 1/4 · HOLD.
+	## Screen-left → right (world +X → −X): FULL · 1/2 · HOLD.
 	var half_w := GRILL_WIDTH * 0.5
 	var cursor := GRILL_CENTER_X + half_w ## start at screen-left edge
 	var defs: Array = [
@@ -6199,26 +6367,15 @@ func _grill_zone_bands() -> Array:
 			"lab_col": Color(1.0, 0.82, 0.55, 0.95),
 		},
 		{
-			"id": "quarter",
-			"frac": ZONE_QUARTER_FRAC,
-			"mul": ZONE_QUARTER_MUL,
+			"id": "half",
+			"frac": ZONE_HALF_FRAC,
+			"mul": ZONE_HALF_MUL,
 			"label": "1/2",
 			"col": Color(0.27, 0.28, 0.3),
 			"rough": 0.26,
 			"emit": 0.05,
 			"glow": 0.42,
 			"lab_col": Color(1.0, 0.9, 0.65, 0.92),
-		},
-		{
-			"id": "eighth",
-			"frac": ZONE_EIGHTH_FRAC,
-			"mul": ZONE_EIGHTH_MUL,
-			"label": "1/4",
-			"col": Color(0.22, 0.24, 0.27),
-			"rough": 0.32,
-			"emit": 0.02,
-			"glow": 0.2,
-			"lab_col": Color(0.85, 0.9, 1.0, 0.9),
 		},
 		{
 			"id": "hold",
@@ -6258,7 +6415,7 @@ func _grill_zone_at(world_pos: Vector3) -> Dictionary:
 
 
 func _warmer_rect() -> Rect2:
-	## Far-right HOLD strip only.
+	## HOLD band (former 1/4 strip).
 	for z in _grill_zone_bands():
 		if str(z["id"]) == "hold":
 			return Rect2(float(z["x0"]), GRILL_SURFACE_Z - GRILL_DEPTH * 0.5, float(z["w"]), GRILL_DEPTH)
@@ -6317,7 +6474,7 @@ func _warmer_place_bounds() -> Rect2:
 
 
 func _build_meat_warmer() -> void:
-	## Zone labels along the flat-top: FULL · 1/2 · 1/4 · HOLD.
+	## Zone labels along the flat-top: FULL · 1/2 · HOLD.
 	if warmer_root != null and is_instance_valid(warmer_root):
 		warmer_root.queue_free()
 	warmer_root = Node3D.new()
@@ -6327,8 +6484,8 @@ func _build_meat_warmer() -> void:
 
 	var label_z := -GRILL_DEPTH * 0.42
 	warmer_label = null
-	warmer_label_quarter = null
-	warmer_label_eighth = null
+	warmer_label_half = null
+	warmer_label_hold = null
 	for z in _grill_zone_bands():
 		var lab := _make_warmer_speed_label(
 			str(z["label"]),
@@ -6338,13 +6495,10 @@ func _build_meat_warmer() -> void:
 		match str(z["id"]):
 			"full":
 				warmer_label = lab
-			"quarter":
-				warmer_label_quarter = lab
-			"eighth":
-				warmer_label_eighth = lab
+			"half":
+				warmer_label_half = lab
 			"hold":
-				if warmer_label == null:
-					warmer_label = lab
+				warmer_label_hold = lab
 
 
 func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
@@ -6375,7 +6529,7 @@ func _make_warmer_speed_label(text: String, local_pos: Vector3, col: Color) -> L
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.modulate = col
 	UiFontsScript.apply_label3d(lab, true, 36, 0.022)
-	## No fat outline — it read as a jagged black halo on FULL / 1/4 / HOLD.
+	## No fat outline — it read as a jagged black halo on FULL / HOLD.
 	lab.outline_size = 0
 	lab.outline_modulate = Color(0, 0, 0, 0)
 	warmer_root.add_child(lab)
@@ -7324,6 +7478,74 @@ func _build_prep_ingredients_prop() -> void:
 	prep_ingredients_prop = prop
 
 
+func _make_toon_wood_material(tex: Texture2D, tint: Color = Color.WHITE, uv_scale: Vector3 = Vector3(1.5, 1.1, 1.0)) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.albedo_color = tint
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	mat.specular_mode = BaseMaterial3D.SPECULAR_TOON
+	mat.roughness = 0.68
+	mat.metallic = 0.0
+	mat.uv1_scale = uv_scale
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	return mat
+
+
+func _build_cutting_board_prop() -> void:
+	## Toon wood board on the counter between Build and the grill (screen-left of steel).
+	if build_cutting_board != null and is_instance_valid(build_cutting_board):
+		build_cutting_board.queue_free()
+		build_cutting_board = null
+	var board_tex := FoodSpritesScript.get_tex("cutting_board")
+	if board_tex == null:
+		board_tex = FoodSpritesScript.get_tex("wood")
+	if board_tex == null:
+		push_warning("Cutting board texture missing")
+		return
+	var wood_tex := FoodSpritesScript.get_tex("wood")
+	var root := Node3D.new()
+	root.name = "BuildCuttingBoard"
+	root.position = CUTTING_BOARD_POS
+	root.rotation_degrees = CUTTING_BOARD_ROT
+	## Dark rim slab — gives the board weight on the black counter.
+	var rim := MeshInstance3D.new()
+	rim.name = "BoardRim"
+	var rim_mesh := BoxMesh.new()
+	rim_mesh.size = CUTTING_BOARD_SLAB + Vector3(0.04, 0.008, 0.04)
+	rim.mesh = rim_mesh
+	rim.position = Vector3(0.0, -0.018, 0.0)
+	var rim_mat := StandardMaterial3D.new()
+	rim_mat.albedo_color = Color(0.28, 0.16, 0.09)
+	rim_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	rim_mat.roughness = 0.82
+	rim.material_override = rim_mat
+	root.add_child(rim)
+	## Plank slab under the illustrated board top.
+	var slab := MeshInstance3D.new()
+	slab.name = "BoardSlab"
+	var slab_mesh := BoxMesh.new()
+	slab_mesh.size = CUTTING_BOARD_SLAB
+	slab.mesh = slab_mesh
+	slab.position = Vector3(0.0, -0.008, 0.0)
+	if wood_tex != null:
+		slab.material_override = _make_toon_wood_material(wood_tex, Color(0.88, 0.72, 0.48), Vector3(2.2, 1.4, 1.0))
+	root.add_child(slab)
+	## Main board art — chunky toon wood from the ingredient sheet.
+	var face := MeshInstance3D.new()
+	face.name = "BoardFace"
+	var quad := QuadMesh.new()
+	quad.size = CUTTING_BOARD_SIZE
+	face.mesh = quad
+	face.position = Vector3(0.0, 0.014, 0.0)
+	var face_mat := _make_toon_wood_material(board_tex, CUTTING_BOARD_ALBEDO, Vector3.ONE)
+	face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	face.material_override = face_mat
+	face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(face)
+	grill_root.add_child(root)
+	build_cutting_board = root
+
+
 func _build_truck_radio_prop() -> void:
 	## Wall-mounted cab radio — synced each frame to the top-right 2D HUD.
 	if radio_root != null and is_instance_valid(radio_root):
@@ -7792,8 +8014,22 @@ func _build_phone_ui() -> void:
 	body.add_theme_stylebox_override("panel", body_sb)
 	phone_column.add_child(body)
 
+	var phone_stack := VBoxContainer.new()
+	phone_stack.add_theme_constant_override("separation", 0)
+	phone_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(phone_stack)
+
+	var top_bezel := ColorRect.new()
+	top_bezel.name = "PhoneTopBezel"
+	top_bezel.color = Color(0.02, 0.02, 0.02, 1.0)
+	top_bezel.custom_minimum_size = Vector2(0.0, PHONE_BEZEL_H)
+	top_bezel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_stack.add_child(top_bezel)
+
 	var screen := PanelContainer.new()
 	screen.name = "PhoneScreen"
+	screen.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	screen.mouse_filter = Control.MOUSE_FILTER_STOP
 	var screen_sb := StyleBoxFlat.new()
 	screen_sb.bg_color = Color(0.04, 0.06, 0.11, 0.98)
@@ -7805,7 +8041,14 @@ func _build_phone_ui() -> void:
 	screen_sb.content_margin_top = 6
 	screen_sb.content_margin_bottom = 6
 	screen.add_theme_stylebox_override("panel", screen_sb)
-	body.add_child(screen)
+	phone_stack.add_child(screen)
+
+	var bottom_bezel := ColorRect.new()
+	bottom_bezel.name = "PhoneBottomBezel"
+	bottom_bezel.color = Color(0.02, 0.02, 0.02, 1.0)
+	bottom_bezel.custom_minimum_size = Vector2(0.0, PHONE_BEZEL_H)
+	bottom_bezel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_stack.add_child(bottom_bezel)
 
 	var gloss := ColorRect.new()
 	gloss.color = Color(1.0, 1.0, 1.0, 0.07)
@@ -9943,6 +10186,10 @@ func _build_station_ui() -> void:
 						plate_wrap.accept_event()
 					return
 				if ev.button_index == MOUSE_BUTTON_LEFT:
+					if cheese_held and _cheese_prefers_grill_at(ev.global_position):
+						_try_place_held_cheese(ev.global_position)
+						plate_wrap.accept_event()
+						return
 					_on_station_plate_clicked(si)
 		)
 		plate_wrap.set_drag_forwarding(
@@ -9957,7 +10204,14 @@ func _build_station_ui() -> void:
 		)
 		panel.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				if cheese_held or spatula_patty != null:
+				if cheese_held:
+					if _cheese_prefers_grill_at(ev.global_position):
+						_try_place_held_cheese(ev.global_position)
+						panel.accept_event()
+						return
+					_on_station_plate_clicked(si)
+					panel.accept_event()
+				elif spatula_patty != null:
 					_on_station_plate_clicked(si)
 					panel.accept_event()
 				else:
@@ -9978,6 +10232,8 @@ func _build_station_ui() -> void:
 	if not stations_row.gui_input.is_connected(_on_stations_row_gui_input):
 		stations_row.gui_input.connect(_on_stations_row_gui_input)
 	_highlight_active_station()
+	if BUILD_AREA_DEBUG_OUTLINE:
+		call_deferred("_refresh_build_debug_outlines")
 
 
 func _on_stations_row_gui_input(ev: InputEvent) -> void:
@@ -10039,6 +10295,8 @@ func _arm_build_drop_zone(armed: bool) -> void:
 		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
 	else:
 		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if BUILD_AREA_DEBUG_OUTLINE:
+		call_deferred("_refresh_build_debug_outlines")
 
 
 func _build_grill_drop_zone() -> void:
@@ -10049,16 +10307,37 @@ func _build_grill_drop_zone() -> void:
 	grill_drop_zone = Control.new()
 	grill_drop_zone.name = "GrillDropZone"
 	grill_drop_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
-	## Leave a slim strip for the Build board; cover the rest of the cook surface.
+	## Leave Build column + bottom topping strip clickable.
 	grill_drop_zone.offset_left = 140.0
+	grill_drop_zone.offset_top = 48.0
+	grill_drop_zone.offset_bottom = -110.0
 	grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	grill_drop_zone.z_index = 12
 	ui_root.add_child(grill_drop_zone)
+	grill_drop_zone.gui_input.connect(_on_grill_drop_zone_gui_input)
 	grill_drop_zone.set_drag_forwarding(
 		Callable(),
 		func(_pos, data): return _can_drop_on_grill_zone(data),
 		func(_pos, data): _drop_on_grill_zone(data)
 	)
+
+
+func _on_grill_drop_zone_gui_input(ev: InputEvent) -> void:
+	## GrillDropZone is STOP while cheese is armed — GUI gets the click before _unhandled_input.
+	if not (ev is InputEventMouseButton and ev.pressed):
+		return
+	var mb := ev as InputEventMouseButton
+	if mb.button_index == MOUSE_BUTTON_RIGHT and cheese_held:
+		_cancel_cheese_hold()
+		grill_drop_zone.accept_event()
+		return
+	if mb.button_index == MOUSE_BUTTON_LEFT and cheese_held:
+		if _try_window_cat_click(mb.global_position):
+			grill_drop_zone.accept_event()
+			return
+		_try_place_held_cheese(mb.global_position)
+		grill_drop_zone.accept_event()
+		return
 
 
 func _can_drop_on_grill_zone(data: Variant) -> bool:
@@ -10082,8 +10361,9 @@ func _can_drop_cheese_on_grill(data: Variant) -> bool:
 		return false
 	if str(data.get("id", "")) != "cheese":
 		return false
-	## Don't steal drops meant for the Build plate — grill still accepts cheese nearby.
-	if _build_plate_index_at(get_viewport().get_mouse_position()) >= 0:
+	## Don't steal drops meant for the Build plate — grill still accepts cheese on the steel.
+	var mouse := get_viewport().get_mouse_position()
+	if _cheese_targets_build_at(mouse):
 		return false
 	return true
 
@@ -10211,7 +10491,7 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 		_pending_reorder_drag = null
 		var mouse2 := mouse
 		var build_i := _build_plate_index_at(mouse2)
-		if build_i >= 0:
+		if build_i >= 0 and _cheese_targets_build_at(mouse2):
 			## Dropped on Build plate without a Control accept — add as topping.
 			if cheese_held:
 				_cancel_cheese_hold_silent()
@@ -10280,6 +10560,7 @@ func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
 
 func _arm_grill_drop_zone() -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		grill_drop_zone.offset_bottom = -110.0
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
 		grill_drop_zone.z_index = 12
 
@@ -10883,8 +11164,8 @@ func _pick_cheese_patty_at_screen(screen_pos: Vector2):
 	## Extra-forgiving screen/world pick shared by ghost + drop.
 	if camera == null:
 		return null
-	## Cheese onto grill — only block when pointer is on the build plate itself.
-	if _build_plate_index_at(screen_pos) >= 0:
+	## Cheese onto grill — only block when pointer is on build plate, not overlapping steel.
+	if _cheese_targets_build_at(screen_pos):
 		return null
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	var cam_pos := camera.global_position
@@ -10968,11 +11249,12 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 		_feed_window_cat_ingredient("cheese")
 		return
 	## Build plate click → melt cheese onto the Build stack patty.
-	var station_idx := _build_plate_index_at(screen_pos)
-	if station_idx >= 0:
-		_cancel_cheese_hold()
-		_add_ingredient_to_station(station_idx, "cheese", true)
-		return
+	if _cheese_targets_build_at(screen_pos):
+		var station_idx := _build_plate_index_at(screen_pos)
+		if station_idx >= 0:
+			_cancel_cheese_hold()
+			_add_ingredient_to_station(station_idx, "cheese", true)
+			return
 	## Same pick as the ghost — plus sticky hover / wide snap if click lands off.
 	var target = _pick_cheese_patty_at_screen(screen_pos)
 	if target == null:
@@ -11312,7 +11594,9 @@ func _refresh_station(index: int) -> void:
 			if _station_patty_has_cheese(st, pidx):
 				layer_key = "patty_cheese"
 		var h_base := _layer_img_height(layer_key) * layer_scale
-		var this_w := layer_w * _layer_width_mul(layer_key)
+		var build_scale := _station_item_build_scale(item)
+		h_base *= build_scale
+		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
 		var layer_tex: Texture2D = null
 		if item == "patty":
 			if layer_key == "patty_cheese":
@@ -11422,6 +11706,13 @@ func _station_layer_scale(layer_count: int) -> float:
 	else:
 		base = 0.93
 	return base * STATION_BURGER_SCALE
+
+
+func _station_item_build_scale(item: String) -> float:
+	## Buns define the plate footprint; everything else scales down to match.
+	if item == "bun_top" or item == "bun_bottom":
+		return 1.0
+	return STATION_INGREDIENT_SCALE
 
 
 func _layer_width_mul(item: String) -> float:
@@ -11770,8 +12061,9 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 				layer_key = "patty_cheese"
 		var is_bun := item == "bun_bottom" or item == "bun_top"
 		var h_squish := 1.0 if is_bun else 0.92
-		var h_base := _layer_img_height(layer_key) * layer_scale * h_squish
-		var this_w := layer_w * _layer_width_mul(layer_key)
+		var build_scale := _station_item_build_scale(item)
+		var h_base := _layer_img_height(layer_key) * layer_scale * h_squish * build_scale
+		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
 		var layer_tex: Texture2D = null
 		if item == "patty":
 			if layer_key == "patty_cheese":
