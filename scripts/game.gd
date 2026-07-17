@@ -452,9 +452,11 @@ const MENU_BOARD_DEFAULT_YAW := 180.0
 ## Wire baskets + produce on the counter left of the grill / Build board.
 const PREP_INGREDIENTS_TEX_PATH := "res://assets/props/prep_ingredients.png"
 const PREP_INGREDIENTS_SIZE := Vector2(1.17, 0.36) ## 50% larger wire-basket art
-const PREP_INGREDIENTS_POS := Vector3(0.62, 1.714, 0.46) ## +2 ft (~0.61 m) on counter
+const PREP_INGREDIENTS_POS := Vector3(0.74, 1.714, 0.46) ## nudged right on counter
 const PREP_INGREDIENTS_ROT := Vector3(-74.0, 168.0, 0.0)
-const PREP_INGREDIENTS_ALBEDO := Color(0.88, 0.88, 0.88, 1.0)
+const PREP_INGREDIENTS_ALBEDO := Color(0.616, 0.616, 0.616, 1.0) ## 30% darker than prior 0.88 tint
+const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
+const PREP_UI_NUDGE_X := 52.0
 ## Kenney / Sketchfab truck radio — replaces procedural CabRadio mesh.
 const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
 const RADIO_TEX_ALBEDO := "res://models/RADIO/textures/RADIO_SCETC_FAB_albedo.tga.png"
@@ -463,8 +465,11 @@ const RADIO_TEX_METAL := "res://models/RADIO/textures/RADIO_SCETC_FAB_metalness.
 const RADIO_TEX_AO := "res://models/RADIO/textures/RADIO_SCETC_FAB_ao.tga.png"
 const RADIO_HOME_POS := Vector3(1.48, 1.12, -0.42)
 const RADIO_HOME_ROT := Vector3(0.0, 158.0, 0.0)
-const RADIO_TARGET_SIZE := 0.44
+const RADIO_TARGET_SIZE := 0.52
 const RADIO_UI_PANEL_SIZE := Vector2(210.0, 138.0)
+const RADIO_UI_TOP := 52.0
+const RADIO_UI_RIGHT := 10.0
+const RADIO_UI_LEFT := 220.0
 ## Android phone HUD — floats under the truck radio.
 const PHONE_UI_SIZE := Vector2(152.0, 278.0)
 const PHONE_BELOW_RADIO_GAP := 10.0
@@ -590,6 +595,9 @@ func _ready() -> void:
 	_build_ingredient_legend()
 	_build_ingredient_buttons()
 	_setup_radio()
+	if vp:
+		vp.size_changed.connect(_layout_phone_ui_overlay)
+	call_deferred("_layout_phone_ui_overlay")
 	_build_pause_button()
 	_build_master_volume_ui()
 	_build_graphics_ui()
@@ -852,7 +860,6 @@ func _restart() -> void:
 
 
 func _process(delta: float) -> void:
-	_layout_radio_ui_overlay()
 	_layout_phone_ui_overlay()
 	if not playing:
 		if game_audio:
@@ -7253,20 +7260,26 @@ func _build_prep_ingredients_prop() -> void:
 
 
 func _build_truck_radio_prop() -> void:
-	## Imported radio model on the cook's left (+X / screen-left), away from the grills.
+	## Dash radio on the cook's left shelf (+X / screen-left) — not on the Build counter.
 	if radio_root != null and is_instance_valid(radio_root):
 		radio_root.queue_free()
 	radio_root = null
 	radio_ui_anchor = null
+	phone_ui_anchor = null
 	radio_dial_mesh = null
 	radio_light_mat = null
-	if not ResourceLoader.exists(RADIO_MESH_PATH):
-		push_warning("Radio model missing: %s" % RADIO_MESH_PATH)
-		return
-	var mesh: Mesh = load(RADIO_MESH_PATH) as Mesh
-	if mesh == null:
-		push_warning("Radio mesh failed to load")
-		return
+
+	var mesh: Mesh = null
+	if ResourceLoader.exists(RADIO_MESH_PATH):
+		mesh = load(RADIO_MESH_PATH) as Mesh
+	if mesh != null and mesh.get_surface_count() > 0:
+		_build_truck_radio_from_mesh(mesh)
+	else:
+		push_warning("Radio OBJ unavailable — using dash radio fallback mesh")
+		_build_truck_radio_procedural()
+
+
+func _build_truck_radio_from_mesh(mesh: Mesh) -> void:
 	var aabb := mesh.get_aabb()
 	var fit := RADIO_TARGET_SIZE / maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
 	radio_root = Node3D.new()
@@ -7279,7 +7292,12 @@ func _build_truck_radio_prop() -> void:
 	body.name = "RadioBody"
 	body.mesh = mesh
 	body.scale = Vector3.ONE * fit
-	body.position = -aabb.get_center() * fit
+	## Sit on the dash shelf — bottom of mesh at local Y=0 (shelf top ~1.05 m).
+	body.position = Vector3(
+		-aabb.get_center().x * fit,
+		-aabb.position.y * fit,
+		-aabb.get_center().z * fit
+	)
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	var alb: Texture2D = load(RADIO_TEX_ALBEDO) as Texture2D if ResourceLoader.exists(RADIO_TEX_ALBEDO) else null
 	var norm: Texture2D = load(RADIO_TEX_NORMAL) as Texture2D if ResourceLoader.exists(RADIO_TEX_NORMAL) else null
@@ -7287,27 +7305,91 @@ func _build_truck_radio_prop() -> void:
 	var ao: Texture2D = load(RADIO_TEX_AO) as Texture2D if ResourceLoader.exists(RADIO_TEX_AO) else null
 	_apply_radio_materials(body, alb, norm, met, ao)
 	radio_root.add_child(body)
+	_add_radio_dash_extras(aabb.size * fit)
 
-	radio_ui_anchor = Node3D.new()
-	radio_ui_anchor.name = "RadioUIAnchor"
-	## Front face of the centered mesh — overlay HUD tracks this point.
-	radio_ui_anchor.position = Vector3(0.0, aabb.size.y * fit * 0.18, -aabb.size.z * fit * 0.42)
-	radio_root.add_child(radio_ui_anchor)
 
-	phone_ui_anchor = Node3D.new()
-	phone_ui_anchor.name = "PhoneUIAnchor"
-	phone_ui_anchor.position = Vector3(0.0, aabb.size.y * fit * -0.28, -aabb.size.z * fit * 0.38)
-	radio_root.add_child(phone_ui_anchor)
+func _build_truck_radio_procedural() -> void:
+	## Original chunky dash radio — reliable fallback if OBJ import fails.
+	radio_root = Node3D.new()
+	radio_root.name = "CabRadio"
+	radio_root.position = RADIO_HOME_POS
+	radio_root.rotation_degrees = RADIO_HOME_ROT
+	grill_root.add_child(radio_root)
 
-	## Tuning knob stand-in (spins on channel change until we map real mesh parts).
+	var body := _add_box(radio_root, Vector3(0.42, 0.22, 0.18), Vector3.ZERO, Color(0.18, 0.16, 0.14))
+	body.material_override.metallic = 0.55
+	body.material_override.roughness = 0.35
+
+	var face := _add_box(radio_root, Vector3(0.36, 0.12, 0.02), Vector3(0, 0.02, -0.1), Color(0.08, 0.1, 0.09))
+	face.material_override.roughness = 0.55
+
+	var lcd := MeshInstance3D.new()
+	var lcd_mesh := BoxMesh.new()
+	lcd_mesh.size = Vector3(0.28, 0.045, 0.008)
+	lcd.mesh = lcd_mesh
+	lcd.position = Vector3(0.02, 0.035, -0.112)
+	radio_light_mat = StandardMaterial3D.new()
+	radio_light_mat.albedo_color = Color(0.15, 0.35, 0.18)
+	radio_light_mat.emission_enabled = true
+	radio_light_mat.emission = Color(0.2, 0.9, 0.35)
+	radio_light_mat.emission_energy_multiplier = 0.15
+	radio_light_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lcd.material_override = radio_light_mat
+	radio_root.add_child(lcd)
+
 	radio_dial_mesh = MeshInstance3D.new()
 	var dial := CylinderMesh.new()
-	dial.top_radius = 0.018
-	dial.bottom_radius = 0.02
-	dial.height = 0.012
+	dial.top_radius = 0.035
+	dial.bottom_radius = 0.038
+	dial.height = 0.03
 	radio_dial_mesh.mesh = dial
 	radio_dial_mesh.rotation_degrees = Vector3(90, 0, 0)
-	radio_dial_mesh.position = Vector3(-0.06, aabb.size.y * fit * 0.08, -aabb.size.z * fit * 0.38)
+	radio_dial_mesh.position = Vector3(-0.13, 0.01, -0.11)
+	var dial_mat := StandardMaterial3D.new()
+	dial_mat.albedo_color = Color(0.75, 0.55, 0.2)
+	dial_mat.metallic = 0.8
+	dial_mat.roughness = 0.25
+	radio_dial_mesh.material_override = dial_mat
+	radio_root.add_child(radio_dial_mesh)
+
+	var speaker := _add_box(radio_root, Vector3(0.12, 0.08, 0.04), Vector3(0.12, -0.02, -0.1), Color(0.12, 0.12, 0.12))
+	speaker.material_override.roughness = 0.9
+
+	var tag := Label3D.new()
+	tag.text = "AM / FM"
+	tag.position = Vector3(0, 0.14, -0.05)
+	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	tag.modulate = Color("FFCC80")
+	UiFontsScript.apply_label3d(tag, true, 64, 0.062)
+	radio_root.add_child(tag)
+
+	_add_radio_click_area(Vector3(0.5, 0.32, 0.28))
+
+
+func _add_radio_dash_extras(scaled_size: Vector3) -> void:
+	## Tuning dial + LCD glow on imported mesh (same role as procedural radio).
+	var lcd := MeshInstance3D.new()
+	var lcd_mesh := BoxMesh.new()
+	lcd_mesh.size = Vector3(scaled_size.x * 0.55, scaled_size.y * 0.08, 0.008)
+	lcd.mesh = lcd_mesh
+	lcd.position = Vector3(0.02, scaled_size.y * 0.22, -scaled_size.z * 0.42)
+	radio_light_mat = StandardMaterial3D.new()
+	radio_light_mat.albedo_color = Color(0.15, 0.35, 0.18)
+	radio_light_mat.emission_enabled = true
+	radio_light_mat.emission = Color(0.2, 0.9, 0.35)
+	radio_light_mat.emission_energy_multiplier = 0.15
+	radio_light_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lcd.material_override = radio_light_mat
+	radio_root.add_child(lcd)
+
+	radio_dial_mesh = MeshInstance3D.new()
+	var dial := CylinderMesh.new()
+	dial.top_radius = 0.022
+	dial.bottom_radius = 0.026
+	dial.height = 0.014
+	radio_dial_mesh.mesh = dial
+	radio_dial_mesh.rotation_degrees = Vector3(90, 0, 0)
+	radio_dial_mesh.position = Vector3(-scaled_size.x * 0.28, scaled_size.y * 0.08, -scaled_size.z * 0.38)
 	var dial_mat := StandardMaterial3D.new()
 	dial_mat.albedo_color = Color(0.75, 0.55, 0.2)
 	dial_mat.metallic = 0.85
@@ -7315,13 +7397,17 @@ func _build_truck_radio_prop() -> void:
 	radio_dial_mesh.material_override = dial_mat
 	radio_root.add_child(radio_dial_mesh)
 
+	_add_radio_click_area(scaled_size * 1.05)
+
+
+func _add_radio_click_area(hit_size: Vector3) -> void:
 	var area := Area3D.new()
 	area.input_ray_pickable = true
 	area.collision_layer = 1
 	area.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(aabb.size.x, aabb.size.y, aabb.size.z) * fit * 1.05
+	box.size = hit_size
 	shape.shape = box
 	area.add_child(shape)
 	radio_root.add_child(area)
@@ -7341,7 +7427,7 @@ func _apply_radio_materials(node: Node, alb: Texture2D, norm: Texture2D, met: Te
 		mat.cull_mode = BaseMaterial3D.CULL_BACK
 		if alb != null:
 			mat.albedo_texture = alb
-			mat.albedo_color = Color.WHITE
+			mat.albedo_color = Color(1.15, 1.15, 1.12)
 		else:
 			mat.albedo_color = Color(0.18, 0.16, 0.14)
 		if met != null:
@@ -7362,43 +7448,16 @@ func _apply_radio_materials(node: Node, alb: Texture2D, norm: Texture2D, met: Te
 		_apply_radio_materials(child, alb, norm, met, ao)
 
 
-func _layout_radio_ui_overlay() -> void:
-	## Pin the radio HUD over the 3D model face (temporary until controls are remapped).
-	if radio_column == null or radio_ui_anchor == null or camera == null:
-		return
-	if not is_instance_valid(radio_ui_anchor):
-		return
-	var sp := camera.unproject_position(radio_ui_anchor.global_position)
-	var panel := radio_column.get_node_or_null("RadioPanel") as Control
-	var panel_h := RADIO_UI_PANEL_SIZE.y
-	if panel != null and panel.size.y > 8.0:
-		panel_h = panel.size.y
-	radio_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	radio_column.position = Vector2(
-		sp.x - RADIO_UI_PANEL_SIZE.x * 0.5,
-		sp.y - panel_h * 0.42
-	)
-	radio_column.size = RADIO_UI_PANEL_SIZE
-
-
 func _layout_phone_ui_overlay() -> void:
-	if phone_column == null or camera == null:
+	## Phone stacks under the fixed top-right radio panel.
+	if phone_column == null or radio_column == null:
 		return
-	var anchor: Node3D = phone_ui_anchor if phone_ui_anchor != null and is_instance_valid(phone_ui_anchor) else radio_ui_anchor
-	if anchor == null or not is_instance_valid(anchor):
-		return
-	var sp := camera.unproject_position(anchor.global_position)
-	var base_y := sp.y
-	if phone_ui_anchor == null and radio_column != null:
-		var panel := radio_column.get_node_or_null("RadioPanel") as Control
-		var panel_h := RADIO_UI_PANEL_SIZE.y
-		if panel != null and panel.size.y > 8.0:
-			panel_h = panel.size.y
-		base_y = radio_column.position.y + panel_h + PHONE_BELOW_RADIO_GAP
+	var radio_rect := radio_column.get_global_rect()
 	phone_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	phone_column.position = Vector2(
-		sp.x - PHONE_UI_SIZE.x * 0.5,
-		base_y + sin(Time.get_ticks_msec() * 0.0014) * PHONE_FLOAT_AMP
+		radio_rect.position.x + (radio_rect.size.x - PHONE_UI_SIZE.x) * 0.5,
+		radio_rect.position.y + radio_rect.size.y + PHONE_BELOW_RADIO_GAP
+			+ sin(Time.get_ticks_msec() * 0.0014) * PHONE_FLOAT_AMP
 	)
 	phone_column.size = PHONE_UI_SIZE
 
@@ -7775,9 +7834,15 @@ func _build_radio_ui() -> void:
 	var ui_root: Control = get_node("UI/Root")
 	radio_column = VBoxContainer.new()
 	radio_column.name = "RadioColumn"
-	radio_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
+	radio_column.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	radio_column.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	radio_column.offset_left = -RADIO_UI_LEFT
+	radio_column.offset_right = -RADIO_UI_RIGHT
+	radio_column.offset_top = RADIO_UI_TOP
+	radio_column.offset_bottom = RADIO_UI_TOP
 	radio_column.custom_minimum_size = RADIO_UI_PANEL_SIZE
+	radio_column.add_theme_constant_override("separation", 6)
+	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
 	radio_column.z_index = 20
 	ui_root.add_child(radio_column)
 
@@ -7786,14 +7851,14 @@ func _build_radio_ui() -> void:
 	panel.custom_minimum_size = RADIO_UI_PANEL_SIZE
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.05, 0.07, 0.62)
-	sb.border_color = Color(1.0, 0.75, 0.35, 0.55)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(6)
+	sb.bg_color = Color(0.1, 0.12, 0.14, 0.9)
+	sb.border_color = Color(1.0, 0.75, 0.35, 0.8)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
 	sb.content_margin_left = 8
 	sb.content_margin_right = 8
-	sb.content_margin_top = 5
-	sb.content_margin_bottom = 5
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
 	panel.add_theme_stylebox_override("panel", sb)
 	radio_column.add_child(panel)
 
@@ -9628,6 +9693,7 @@ func _build_station_ui() -> void:
 		## Prep baskets / condiments — left of the Build board, beside the grill.
 		var prep_outer := MarginContainer.new()
 		prep_outer.add_theme_constant_override("margin_bottom", 132) ## ~2 ft higher on counter
+		prep_outer.add_theme_constant_override("margin_left", int(PREP_UI_NUDGE_X))
 		prep_outer.custom_minimum_size = Vector2(420, 252)
 		prep_outer.size_flags_vertical = Control.SIZE_SHRINK_END
 		prep_outer.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -9644,6 +9710,7 @@ func _build_station_ui() -> void:
 		prep_img.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		prep_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		prep_img.set_anchors_preset(Control.PRESET_FULL_RECT)
+		prep_img.modulate = PREP_UI_MODULATE
 		prep_img.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		prep_wrap.add_child(prep_img)
 
