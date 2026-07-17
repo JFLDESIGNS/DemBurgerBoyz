@@ -1,0 +1,12 @@
+{
+  "name": "burger-pals-mp-root",
+  "private": true,
+  "description": "Railway entrypoint — runs the online multiplayer relay in mp_server/",
+  "scripts": {
+    "postinstall": "npm --prefix mp_server install",
+    "start": "npm --prefix mp_server start"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
