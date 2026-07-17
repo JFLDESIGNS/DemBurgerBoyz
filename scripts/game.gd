@@ -14408,6 +14408,8 @@ func mp_cat_pet() -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_cat_feed(kind: String, patty_net_id: int) -> void:
+	if not _cat_accepts_food(kind):
+		return
 	_mp_applying = true
 	if kind == "patty":
 		var p = _patty_by_net_id(patty_net_id) if patty_net_id >= 0 else null
