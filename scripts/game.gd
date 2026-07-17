@@ -382,12 +382,24 @@ const SPATULA_HOVER_Y := 0.12
 const SPATULA_HOVER_BOB := 0.012
 
 var radio: Node = null
+var radio_root: Node3D = null
+var radio_ui_anchor: Node3D = null
 var radio_status_label: Label = null
 var radio_channel_label: Label = null
 var radio_power_btn: Button = null
 var radio_dial_mesh: MeshInstance3D = null
 var radio_light_mat: StandardMaterial3D = null
 var radio_column: VBoxContainer = null
+var phone_column: Control = null
+var phone_ui_anchor: Node3D = null
+var phone_rating_stars: Label = null
+var phone_rating_value: Label = null
+var phone_review_label: Label = null
+var phone_inventory_box: VBoxContainer = null
+var social_rating_sum: float = 0.0
+var social_review_count: int = 0
+var supply_stock: Dictionary = {}
+var supply_fresh: Dictionary = {}
 var game_audio: Node = null
 ## Graphics menu — live Environment + kitchen lights.
 var gfx_env: Environment = null
@@ -439,10 +451,30 @@ const MENU_BOARD_DEFAULT_SCALE := 1.15
 const MENU_BOARD_DEFAULT_YAW := 180.0
 ## Wire baskets + produce on the counter left of the grill / Build board.
 const PREP_INGREDIENTS_TEX_PATH := "res://assets/props/prep_ingredients.png"
-const PREP_INGREDIENTS_SIZE := Vector2(0.78, 0.24)
-const PREP_INGREDIENTS_POS := Vector3(0.62, 1.104, 0.46)
+const PREP_INGREDIENTS_SIZE := Vector2(1.17, 0.36) ## 50% larger wire-basket art
+const PREP_INGREDIENTS_POS := Vector3(0.62, 1.714, 0.46) ## +2 ft (~0.61 m) on counter
 const PREP_INGREDIENTS_ROT := Vector3(-74.0, 168.0, 0.0)
 const PREP_INGREDIENTS_ALBEDO := Color(0.88, 0.88, 0.88, 1.0)
+## Kenney / Sketchfab truck radio — replaces procedural CabRadio mesh.
+const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
+const RADIO_TEX_ALBEDO := "res://models/RADIO/textures/RADIO_SCETC_FAB_albedo.tga.png"
+const RADIO_TEX_NORMAL := "res://models/RADIO/textures/RADIO_SCETC_FAB_normal.tga.png"
+const RADIO_TEX_METAL := "res://models/RADIO/textures/RADIO_SCETC_FAB_metalness.tga.png"
+const RADIO_TEX_AO := "res://models/RADIO/textures/RADIO_SCETC_FAB_ao.tga.png"
+const RADIO_HOME_POS := Vector3(1.48, 1.12, -0.42)
+const RADIO_HOME_ROT := Vector3(0.0, 158.0, 0.0)
+const RADIO_TARGET_SIZE := 0.44
+const RADIO_UI_PANEL_SIZE := Vector2(210.0, 138.0)
+## Android phone HUD — floats under the truck radio.
+const PHONE_UI_SIZE := Vector2(152.0, 278.0)
+const PHONE_BELOW_RADIO_GAP := 10.0
+const PHONE_FLOAT_AMP := 3.5
+const SUPPLY_IDS: Array[String] = [
+	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
+	"pickle", "bacon", "ketchup", "mustard", "bun_top",
+]
+const SUPPLY_FRESH_MAX := 360.0
+const SUPPLY_BUY_PACK := 8
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
@@ -777,6 +809,7 @@ func _start_game() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
+	_reset_supplies()
 	_start_radio_fade_in()
 	# _begin_opening_terror_ambush()
 
@@ -812,12 +845,15 @@ func _restart() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
+	_reset_supplies()
 	_start_radio_fade_in()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
 	# _begin_opening_terror_ambush()
 
 
 func _process(delta: float) -> void:
+	_layout_radio_ui_overlay()
+	_layout_phone_ui_overlay()
 	if not playing:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
@@ -830,6 +866,7 @@ func _process(delta: float) -> void:
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 			_update_patty_warm_hold(p, delta)
 	_update_station_cheese_melt(delta)
+	_update_supply_freshness(delta)
 	_update_patty_hint_focus()
 	_update_kitchen_sizzle()
 	_update_heat_warp(delta)
@@ -1317,7 +1354,7 @@ func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
 					return true
 		node = node.get_parent()
 	## Explicit hit-tests — hovered can miss during the same-frame press.
-	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, radio_column]:
+	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, radio_column, phone_column]:
 		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
 			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 				return true
@@ -3140,7 +3177,7 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 		if _ui_blocks_world_click(screen_pos) and _station_index_at(screen_pos) < 0:
 			var top_bar: Control = get_node_or_null("UI/Root/TopBar")
 			var over_chrome := false
-			for ctrl in [window_pause_btn, gfx_btn, gfx_panel, radio_column, top_bar]:
+			for ctrl in [window_pause_btn, gfx_btn, gfx_panel, radio_column, phone_column, top_bar]:
 				if ctrl != null and is_instance_valid(ctrl) and ctrl.visible \
 						and ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 					over_chrome = true
@@ -3385,10 +3422,24 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	patty.visible = false
 	patty.rotation_degrees = Vector3.ZERO
 	if not st["patties"].has(patty):
+		var needs_bun := not items.has("bun_bottom")
+		if needs_bun and not _try_use_supply("bun_bottom"):
+			patty.is_held = false
+			patty.visible = true
+			patty.heating = grill_on
+			return
+		if not _try_use_supply("patty"):
+			if needs_bun:
+				supply_stock["bun_bottom"] = int(supply_stock.get("bun_bottom", 0)) + 1
+				_refresh_phone_ui()
+			patty.is_held = false
+			patty.visible = true
+			patty.heating = grill_on
+			return
 		st["patties"].append(patty)
-	if not items.has("bun_bottom"):
-		items.append("bun_bottom")
-	_insert_patty_into_stack(items)
+		if needs_bun:
+			items.append("bun_bottom")
+		_insert_patty_into_stack(items)
 	## Cheese counts for the order as soon as it's on the meat (melt is visual).
 	if patty.has_cheese:
 		items.append("cheese")
@@ -3750,7 +3801,8 @@ func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
 func _feed_window_cat_ingredient(id: String) -> void:
 	if id == "cheese" and cheese_held:
 		_cancel_cheese_hold()
-	_spend(_ingredient_cost(id))
+	if not _spend_ingredient(id):
+		return
 	if window_cat:
 		window_cat.feed(id)
 	var label := id.replace("_", " ")
@@ -7153,6 +7205,8 @@ func _setup_radio() -> void:
 	radio.channel_changed.connect(_on_radio_channel)
 	radio.powered_changed.connect(_on_radio_powered)
 	_build_radio_ui()
+	_build_phone_ui()
+	_reset_supplies()
 	radio.set_volume_linear(0.0)
 	radio.set_powered(false)
 	_refresh_radio_ui()
@@ -7199,60 +7253,67 @@ func _build_prep_ingredients_prop() -> void:
 
 
 func _build_truck_radio_prop() -> void:
-	## Chunky dash radio on the cook's left (+X / screen-left), away from the grills.
-	var root := Node3D.new()
-	root.name = "CabRadio"
-	root.position = Vector3(1.48, 1.12, -0.42)
-	grill_root.add_child(root)
+	## Imported radio model on the cook's left (+X / screen-left), away from the grills.
+	if radio_root != null and is_instance_valid(radio_root):
+		radio_root.queue_free()
+	radio_root = null
+	radio_ui_anchor = null
+	radio_dial_mesh = null
+	radio_light_mat = null
+	if not ResourceLoader.exists(RADIO_MESH_PATH):
+		push_warning("Radio model missing: %s" % RADIO_MESH_PATH)
+		return
+	var mesh: Mesh = load(RADIO_MESH_PATH) as Mesh
+	if mesh == null:
+		push_warning("Radio mesh failed to load")
+		return
+	var aabb := mesh.get_aabb()
+	var fit := RADIO_TARGET_SIZE / maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+	radio_root = Node3D.new()
+	radio_root.name = "CabRadio"
+	radio_root.position = RADIO_HOME_POS
+	radio_root.rotation_degrees = RADIO_HOME_ROT
+	grill_root.add_child(radio_root)
 
-	var body := _add_box(root, Vector3(0.42, 0.22, 0.18), Vector3.ZERO, Color(0.18, 0.16, 0.14))
-	body.material_override.metallic = 0.55
-	body.material_override.roughness = 0.35
+	var body := MeshInstance3D.new()
+	body.name = "RadioBody"
+	body.mesh = mesh
+	body.scale = Vector3.ONE * fit
+	body.position = -aabb.get_center() * fit
+	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var alb: Texture2D = load(RADIO_TEX_ALBEDO) as Texture2D if ResourceLoader.exists(RADIO_TEX_ALBEDO) else null
+	var norm: Texture2D = load(RADIO_TEX_NORMAL) as Texture2D if ResourceLoader.exists(RADIO_TEX_NORMAL) else null
+	var met: Texture2D = load(RADIO_TEX_METAL) as Texture2D if ResourceLoader.exists(RADIO_TEX_METAL) else null
+	var ao: Texture2D = load(RADIO_TEX_AO) as Texture2D if ResourceLoader.exists(RADIO_TEX_AO) else null
+	_apply_radio_materials(body, alb, norm, met, ao)
+	radio_root.add_child(body)
 
-	var face := _add_box(root, Vector3(0.36, 0.12, 0.02), Vector3(0, 0.02, -0.1), Color(0.08, 0.1, 0.09))
-	face.material_override.roughness = 0.55
+	radio_ui_anchor = Node3D.new()
+	radio_ui_anchor.name = "RadioUIAnchor"
+	## Front face of the centered mesh — overlay HUD tracks this point.
+	radio_ui_anchor.position = Vector3(0.0, aabb.size.y * fit * 0.18, -aabb.size.z * fit * 0.42)
+	radio_root.add_child(radio_ui_anchor)
 
-	## Amber LCD strip
-	var lcd := MeshInstance3D.new()
-	var lcd_mesh := BoxMesh.new()
-	lcd_mesh.size = Vector3(0.28, 0.045, 0.008)
-	lcd.mesh = lcd_mesh
-	lcd.position = Vector3(0.02, 0.035, -0.112)
-	radio_light_mat = StandardMaterial3D.new()
-	radio_light_mat.albedo_color = Color(0.15, 0.35, 0.18)
-	radio_light_mat.emission_enabled = true
-	radio_light_mat.emission = Color(0.2, 0.9, 0.35)
-	radio_light_mat.emission_energy_multiplier = 0.15
-	radio_light_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	lcd.material_override = radio_light_mat
-	root.add_child(lcd)
+	phone_ui_anchor = Node3D.new()
+	phone_ui_anchor.name = "PhoneUIAnchor"
+	phone_ui_anchor.position = Vector3(0.0, aabb.size.y * fit * -0.28, -aabb.size.z * fit * 0.38)
+	radio_root.add_child(phone_ui_anchor)
 
-	## Tuning dial
+	## Tuning knob stand-in (spins on channel change until we map real mesh parts).
 	radio_dial_mesh = MeshInstance3D.new()
 	var dial := CylinderMesh.new()
-	dial.top_radius = 0.035
-	dial.bottom_radius = 0.038
-	dial.height = 0.03
+	dial.top_radius = 0.018
+	dial.bottom_radius = 0.02
+	dial.height = 0.012
 	radio_dial_mesh.mesh = dial
 	radio_dial_mesh.rotation_degrees = Vector3(90, 0, 0)
-	radio_dial_mesh.position = Vector3(-0.13, 0.01, -0.11)
+	radio_dial_mesh.position = Vector3(-0.06, aabb.size.y * fit * 0.08, -aabb.size.z * fit * 0.38)
 	var dial_mat := StandardMaterial3D.new()
 	dial_mat.albedo_color = Color(0.75, 0.55, 0.2)
-	dial_mat.metallic = 0.8
-	dial_mat.roughness = 0.25
+	dial_mat.metallic = 0.85
+	dial_mat.roughness = 0.28
 	radio_dial_mesh.material_override = dial_mat
-	root.add_child(radio_dial_mesh)
-
-	var speaker := _add_box(root, Vector3(0.12, 0.08, 0.04), Vector3(0.12, -0.02, -0.1), Color(0.12, 0.12, 0.12))
-	speaker.material_override.roughness = 0.9
-
-	var tag := Label3D.new()
-	tag.text = "AM / FM"
-	tag.position = Vector3(0, 0.14, -0.05)
-	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	tag.modulate = Color("FFCC80")
-	UiFontsScript.apply_label3d(tag, true, 64, 0.062)
-	root.add_child(tag)
+	radio_root.add_child(radio_dial_mesh)
 
 	var area := Area3D.new()
 	area.input_ray_pickable = true
@@ -7260,16 +7321,423 @@ func _build_truck_radio_prop() -> void:
 	area.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.5, 0.32, 0.28)
+	box.size = Vector3(aabb.size.x, aabb.size.y, aabb.size.z) * fit * 1.05
 	shape.shape = box
 	area.add_child(shape)
-	root.add_child(area)
+	radio_root.add_child(area)
 	area.input_event.connect(func(_cam, event, _pos, _n, _s):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			if radio:
 				radio.toggle_power()
 				_flash("Radio %s" % ("ON" if radio.powered else "OFF"), Color("FFCC80"))
 	)
+
+
+func _apply_radio_materials(node: Node, alb: Texture2D, norm: Texture2D, met: Texture2D, ao: Texture2D) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.cull_mode = BaseMaterial3D.CULL_BACK
+		if alb != null:
+			mat.albedo_texture = alb
+			mat.albedo_color = Color.WHITE
+		else:
+			mat.albedo_color = Color(0.18, 0.16, 0.14)
+		if met != null:
+			mat.metallic_texture = met
+			mat.metallic = 1.0
+		else:
+			mat.metallic = 0.35
+		mat.roughness = 0.58
+		if norm != null:
+			mat.normal_enabled = true
+			mat.normal_texture = norm
+		if ao != null:
+			mat.ao_enabled = true
+			mat.ao_texture = ao
+			mat.ao_light_affect = 0.55
+		mi.material_override = mat
+	for child in node.get_children():
+		_apply_radio_materials(child, alb, norm, met, ao)
+
+
+func _layout_radio_ui_overlay() -> void:
+	## Pin the radio HUD over the 3D model face (temporary until controls are remapped).
+	if radio_column == null or radio_ui_anchor == null or camera == null:
+		return
+	if not is_instance_valid(radio_ui_anchor):
+		return
+	var sp := camera.unproject_position(radio_ui_anchor.global_position)
+	var panel := radio_column.get_node_or_null("RadioPanel") as Control
+	var panel_h := RADIO_UI_PANEL_SIZE.y
+	if panel != null and panel.size.y > 8.0:
+		panel_h = panel.size.y
+	radio_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	radio_column.position = Vector2(
+		sp.x - RADIO_UI_PANEL_SIZE.x * 0.5,
+		sp.y - panel_h * 0.42
+	)
+	radio_column.size = RADIO_UI_PANEL_SIZE
+
+
+func _layout_phone_ui_overlay() -> void:
+	if phone_column == null or camera == null:
+		return
+	var anchor: Node3D = phone_ui_anchor if phone_ui_anchor != null and is_instance_valid(phone_ui_anchor) else radio_ui_anchor
+	if anchor == null or not is_instance_valid(anchor):
+		return
+	var sp := camera.unproject_position(anchor.global_position)
+	var base_y := sp.y
+	if phone_ui_anchor == null and radio_column != null:
+		var panel := radio_column.get_node_or_null("RadioPanel") as Control
+		var panel_h := RADIO_UI_PANEL_SIZE.y
+		if panel != null and panel.size.y > 8.0:
+			panel_h = panel.size.y
+		base_y = radio_column.position.y + panel_h + PHONE_BELOW_RADIO_GAP
+	phone_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	phone_column.position = Vector2(
+		sp.x - PHONE_UI_SIZE.x * 0.5,
+		base_y + sin(Time.get_ticks_msec() * 0.0014) * PHONE_FLOAT_AMP
+	)
+	phone_column.size = PHONE_UI_SIZE
+
+
+func _reset_supplies() -> void:
+	social_rating_sum = 0.0
+	social_review_count = 0
+	supply_stock.clear()
+	supply_fresh.clear()
+	for id in SUPPLY_IDS:
+		match id:
+			"bun_bottom", "bun_top":
+				supply_stock[id] = 28
+			"patty":
+				supply_stock[id] = 22
+			_:
+				supply_stock[id] = 16
+		supply_fresh[id] = SUPPLY_FRESH_MAX
+	_refresh_phone_ui()
+
+
+func _supply_buy_unit_cost(id: String) -> float:
+	var base := _ingredient_cost(id)
+	if base <= 0.001:
+		if id == "patty":
+			return 0.35
+		if id == "bun_bottom" or id == "bun_top":
+			return 0.20
+	return base * 4.0
+
+
+func _try_use_supply(id: String, amount: int = 1) -> bool:
+	if id == "":
+		return true
+	var have := int(supply_stock.get(id, 0))
+	if have < amount:
+		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		_flash("Out of %s — restock on phone!" % label, Color("EF5350"))
+		_refresh_phone_ui()
+		return false
+	supply_stock[id] = have - amount
+	_refresh_phone_ui()
+	return true
+
+
+func _spend_ingredient(id: String) -> bool:
+	if not _try_use_supply(id):
+		return false
+	_spend(_ingredient_cost(id))
+	return true
+
+
+func _update_supply_freshness(delta: float) -> void:
+	if not playing:
+		return
+	var spoiled := false
+	for id in SUPPLY_IDS:
+		var stock := int(supply_stock.get(id, 0))
+		if stock <= 0:
+			supply_fresh[id] = 0.0
+			continue
+		var fresh := float(supply_fresh.get(id, SUPPLY_FRESH_MAX))
+		fresh -= delta
+		if fresh <= 0.0:
+			supply_stock[id] = stock - 1
+			spoiled = true
+			if int(supply_stock.get(id, 0)) > 0:
+				supply_fresh[id] = SUPPLY_FRESH_MAX
+			else:
+				supply_fresh[id] = 0.0
+		else:
+			supply_fresh[id] = fresh
+	if spoiled:
+		_refresh_phone_ui()
+
+
+func _buy_supply(id: String) -> void:
+	if not playing:
+		return
+	var pack := SUPPLY_BUY_PACK
+	var unit := _supply_buy_unit_cost(id)
+	var cost := unit * float(pack)
+	if money + 0.001 < cost:
+		_flash("Need %s to restock" % _format_money(cost), Color("EF5350"))
+		return
+	money -= cost
+	supply_stock[id] = int(supply_stock.get(id, 0)) + pack
+	supply_fresh[id] = SUPPLY_FRESH_MAX
+	_update_hud()
+	_refresh_phone_ui()
+	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+	_flash("Restocked %s (+%d)" % [label, pack], Color("A5D6A7"))
+	_sfx_click()
+
+
+func _social_rating_display() -> float:
+	if social_review_count <= 0:
+		return 0.0
+	return social_rating_sum / float(social_review_count)
+
+
+func _star_bar_text(rating: float) -> String:
+	var full := int(floor(rating + 0.25))
+	full = clampi(full, 0, 5)
+	var out := ""
+	for i in 5:
+		out += "★" if i < full else "☆"
+	return out
+
+
+func _freshness_bar_color(ratio: float) -> Color:
+	if ratio > 0.65:
+		return Color("66BB6A")
+	if ratio > 0.35:
+		return Color("FFCA28")
+	return Color("EF5350")
+
+
+func _record_social_review(stars: float) -> void:
+	social_review_count += 1
+	social_rating_sum += clampf(stars, 0.0, 5.0)
+	_refresh_phone_ui()
+
+
+func _review_stars_from_serve(
+	payout: int,
+	meh: bool,
+	wrong: bool,
+	cook_r: Dictionary,
+	quality: float
+) -> float:
+	if wrong or payout <= 0:
+		return 1.0
+	if meh:
+		return clampf(float(cook_r.get("stars", 2)) * 0.55, 1.0, 2.5)
+	var stars := float(cook_r.get("stars", 3))
+	if quality >= 0.98:
+		stars = maxf(stars, 5.0)
+	elif quality >= 0.9:
+		stars = maxf(stars, 4.0)
+	return clampf(stars, 1.0, 5.0)
+
+
+func _refresh_phone_ui() -> void:
+	if phone_rating_stars == null or phone_rating_value == null or phone_review_label == null:
+		return
+	if social_review_count <= 0:
+		phone_rating_stars.text = "☆☆☆☆☆"
+		phone_rating_value.text = "—"
+		phone_review_label.text = "New business · 0 reviews"
+	else:
+		var avg := _social_rating_display()
+		phone_rating_stars.text = _star_bar_text(avg)
+		phone_rating_value.text = "%.1f" % avg
+		phone_review_label.text = "%d review%s" % [
+			social_review_count,
+			"s" if social_review_count != 1 else ""
+		]
+	if phone_inventory_box == null:
+		return
+	for child in phone_inventory_box.get_children():
+		child.queue_free()
+	for id in SUPPLY_IDS:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 3)
+		row.custom_minimum_size = Vector2(0, 22)
+		phone_inventory_box.add_child(row)
+
+		var name_lab := Label.new()
+		var short := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		if short.length() > 9:
+			short = short.substr(0, 8) + "…"
+		name_lab.text = short
+		name_lab.custom_minimum_size = Vector2(52, 0)
+		UiFontsScript.apply_label(name_lab, false, 9)
+		name_lab.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
+		row.add_child(name_lab)
+
+		var stock := int(supply_stock.get(id, 0))
+		var fresh_r := clampf(float(supply_fresh.get(id, 0.0)) / SUPPLY_FRESH_MAX, 0.0, 1.0) if stock > 0 else 0.0
+		var count_lab := Label.new()
+		count_lab.text = str(stock)
+		count_lab.custom_minimum_size = Vector2(18, 0)
+		count_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		UiFontsScript.apply_label(count_lab, true, 9)
+		count_lab.add_theme_color_override("font_color", _freshness_bar_color(fresh_r))
+		row.add_child(count_lab)
+
+		var bar := ProgressBar.new()
+		bar.custom_minimum_size = Vector2(44, 10)
+		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		bar.max_value = 1.0
+		bar.value = fresh_r
+		bar.show_percentage = false
+		var bar_bg := StyleBoxFlat.new()
+		bar_bg.bg_color = Color(0.12, 0.14, 0.18, 0.95)
+		bar_bg.set_corner_radius_all(3)
+		var bar_fill := StyleBoxFlat.new()
+		bar_fill.bg_color = _freshness_bar_color(fresh_r)
+		bar_fill.set_corner_radius_all(3)
+		bar.add_theme_stylebox_override("background", bar_bg)
+		bar.add_theme_stylebox_override("fill", bar_fill)
+		row.add_child(bar)
+
+		var buy := Button.new()
+		buy.text = "+"
+		buy.tooltip_text = "Buy %d (%s)" % [SUPPLY_BUY_PACK, _format_money(_supply_buy_unit_cost(id) * float(SUPPLY_BUY_PACK))]
+		buy.custom_minimum_size = Vector2(22, 18)
+		buy.focus_mode = Control.FOCUS_NONE
+		UiFontsScript.apply_button(buy, true, 10)
+		var sid := id
+		buy.pressed.connect(func(): _buy_supply(sid))
+		row.add_child(buy)
+
+
+func _build_phone_ui() -> void:
+	var ui_root: Control = get_node("UI/Root")
+	phone_column = Control.new()
+	phone_column.name = "PhoneColumn"
+	phone_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	phone_column.mouse_filter = Control.MOUSE_FILTER_STOP
+	phone_column.custom_minimum_size = PHONE_UI_SIZE
+	phone_column.z_index = 20
+	ui_root.add_child(phone_column)
+
+	var body := PanelContainer.new()
+	body.name = "PhoneBody"
+	body.set_anchors_preset(Control.PRESET_FULL_RECT)
+	body.mouse_filter = Control.MOUSE_FILTER_STOP
+	var body_sb := StyleBoxFlat.new()
+	body_sb.bg_color = Color(0.11, 0.12, 0.14, 0.98)
+	body_sb.border_color = Color(0.28, 0.30, 0.34, 1.0)
+	body_sb.set_border_width_all(3)
+	body_sb.set_corner_radius_all(22)
+	body_sb.shadow_color = Color(0, 0, 0, 0.45)
+	body_sb.shadow_size = 8
+	body_sb.content_margin_left = 5
+	body_sb.content_margin_right = 5
+	body_sb.content_margin_top = 7
+	body_sb.content_margin_bottom = 7
+	body.add_theme_stylebox_override("panel", body_sb)
+	phone_column.add_child(body)
+
+	var screen := PanelContainer.new()
+	screen.name = "PhoneScreen"
+	screen.mouse_filter = Control.MOUSE_FILTER_STOP
+	var screen_sb := StyleBoxFlat.new()
+	screen_sb.bg_color = Color(0.04, 0.06, 0.11, 0.98)
+	screen_sb.border_color = Color(0.55, 0.62, 0.72, 0.35)
+	screen_sb.set_border_width_all(1)
+	screen_sb.set_corner_radius_all(14)
+	screen_sb.content_margin_left = 6
+	screen_sb.content_margin_right = 6
+	screen_sb.content_margin_top = 6
+	screen_sb.content_margin_bottom = 6
+	screen.add_theme_stylebox_override("panel", screen_sb)
+	body.add_child(screen)
+
+	var gloss := ColorRect.new()
+	gloss.color = Color(1.0, 1.0, 1.0, 0.07)
+	gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gloss.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	gloss.offset_bottom = 72.0
+	gloss.z_index = 2
+	screen.add_child(gloss)
+
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	screen.add_child(scroll)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(v)
+
+	var status_row := HBoxContainer.new()
+	status_row.add_theme_constant_override("separation", 4)
+	v.add_child(status_row)
+	var status_dot := Label.new()
+	status_dot.text = "●"
+	UiFontsScript.apply_label(status_dot, true, 10)
+	status_dot.add_theme_color_override("font_color", Color("66BB6A"))
+	status_row.add_child(status_dot)
+	var status_lab := Label.new()
+	status_lab.text = "BizPhone"
+	UiFontsScript.apply_label(status_lab, true, 10)
+	status_lab.add_theme_color_override("font_color", Color(0.75, 0.82, 0.92))
+	status_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_row.add_child(status_lab)
+
+	var rating_title := Label.new()
+	rating_title.text = "SOCIAL RATING"
+	UiFontsScript.apply_label(rating_title, true, 9)
+	rating_title.add_theme_color_override("font_color", Color("90CAF9"))
+	v.add_child(rating_title)
+
+	phone_rating_stars = Label.new()
+	phone_rating_stars.text = "☆☆☆☆☆"
+	UiFontsScript.apply_label(phone_rating_stars, true, 16)
+	phone_rating_stars.add_theme_color_override("font_color", Color("FFD54F"))
+	v.add_child(phone_rating_stars)
+
+	var rating_row := HBoxContainer.new()
+	rating_row.add_theme_constant_override("separation", 4)
+	v.add_child(rating_row)
+	phone_rating_value = Label.new()
+	phone_rating_value.text = "—"
+	UiFontsScript.apply_label(phone_rating_value, true, 14)
+	phone_rating_value.add_theme_color_override("font_color", Color.WHITE)
+	rating_row.add_child(phone_rating_value)
+	var out_of := Label.new()
+	out_of.text = "/ 5"
+	UiFontsScript.apply_label(out_of, false, 10)
+	out_of.add_theme_color_override("font_color", Color(0.65, 0.7, 0.78))
+	rating_row.add_child(out_of)
+
+	phone_review_label = Label.new()
+	phone_review_label.text = "New business · 0 reviews"
+	UiFontsScript.apply_label(phone_review_label, false, 9)
+	phone_review_label.add_theme_color_override("font_color", Color(0.55, 0.62, 0.72))
+	v.add_child(phone_review_label)
+
+	var sep := HSeparator.new()
+	sep.modulate = Color(1, 1, 1, 0.25)
+	v.add_child(sep)
+
+	var inv_title := Label.new()
+	inv_title.text = "INVENTORY"
+	UiFontsScript.apply_label(inv_title, true, 9)
+	inv_title.add_theme_color_override("font_color", Color("A5D6A7"))
+	v.add_child(inv_title)
+
+	phone_inventory_box = VBoxContainer.new()
+	phone_inventory_box.add_theme_constant_override("separation", 2)
+	v.add_child(phone_inventory_box)
+
+	_refresh_phone_ui()
 
 
 func _setup_game_audio() -> void:
@@ -7307,30 +7775,25 @@ func _build_radio_ui() -> void:
 	var ui_root: Control = get_node("UI/Root")
 	radio_column = VBoxContainer.new()
 	radio_column.name = "RadioColumn"
-	radio_column.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	radio_column.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	radio_column.offset_left = -220.0
-	radio_column.offset_right = -10.0
-	radio_column.offset_top = 52.0
-	radio_column.offset_bottom = 52.0
-	radio_column.custom_minimum_size = Vector2(210, 0)
-	radio_column.add_theme_constant_override("separation", 6)
+	radio_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
+	radio_column.custom_minimum_size = RADIO_UI_PANEL_SIZE
+	radio_column.z_index = 20
 	ui_root.add_child(radio_column)
 
 	var panel := PanelContainer.new()
 	panel.name = "RadioPanel"
-	panel.custom_minimum_size = Vector2(210, 0)
+	panel.custom_minimum_size = RADIO_UI_PANEL_SIZE
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.14, 0.9)
-	sb.border_color = Color(1.0, 0.75, 0.35, 0.8)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(8)
+	sb.bg_color = Color(0.04, 0.05, 0.07, 0.62)
+	sb.border_color = Color(1.0, 0.75, 0.35, 0.55)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(6)
 	sb.content_margin_left = 8
 	sb.content_margin_right = 8
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
+	sb.content_margin_top = 5
+	sb.content_margin_bottom = 5
 	panel.add_theme_stylebox_override("panel", sb)
 	radio_column.add_child(panel)
 
@@ -8696,6 +9159,7 @@ func _on_customer_left(customer: Node3D, angry: bool) -> void:
 		return
 	if angry:
 		combo = 0
+		_record_social_review(1.0)
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 
 
@@ -9162,11 +9626,17 @@ func _build_station_ui() -> void:
 		panel.add_child(row)
 
 		## Prep baskets / condiments — left of the Build board, beside the grill.
+		var prep_outer := MarginContainer.new()
+		prep_outer.add_theme_constant_override("margin_bottom", 132) ## ~2 ft higher on counter
+		prep_outer.custom_minimum_size = Vector2(420, 252)
+		prep_outer.size_flags_vertical = Control.SIZE_SHRINK_END
+		prep_outer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(prep_outer)
+
 		var prep_wrap := Control.new()
-		prep_wrap.custom_minimum_size = Vector2(280, 168)
-		prep_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
+		prep_wrap.custom_minimum_size = Vector2(420, 252)
 		prep_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(prep_wrap)
+		prep_outer.add_child(prep_wrap)
 
 		var prep_img := TextureRect.new()
 		prep_img.name = "PrepIngredients"
@@ -9516,7 +9986,9 @@ func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
 	_pending_cheese_drag = false
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
-	_spend(_ingredient_cost("cheese"))
+	if not _spend_ingredient("cheese"):
+		target.has_cheese = false
+		return false
 	if game_audio:
 		game_audio.play_ingredient("cheese")
 	_flash("Cheese on! Melts in 3s", Color("FFE082"))
@@ -10357,7 +10829,9 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 		_pending_cheese_drag = false
 		if cheese_ghost and is_instance_valid(cheese_ghost):
 			cheese_ghost.visible = false
-		_spend(_ingredient_cost("cheese"))
+		if not _spend_ingredient("cheese"):
+			target.has_cheese = false
+			return
 		if game_audio:
 			game_audio.play_ingredient("cheese")
 		_flash("Cheese on! Melts in 3s", Color("FFE082"))
@@ -10437,9 +10911,10 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 	if id == "cheese":
 		_start_station_cheese_melt(station_index, play_sfx)
 		return
+	if not _spend_ingredient(id):
+		return
 	items.append(id)
 	st["items"] = _normalize_burger_stack(items)
-	_spend(_ingredient_cost(id))
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
@@ -10473,7 +10948,11 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	var items: Array = st["items"]
 	items.append("cheese")
 	st["items"] = _normalize_burger_stack(items)
-	_spend(_ingredient_cost("cheese"))
+	if not _spend_ingredient("cheese"):
+		items.erase("cheese")
+		patty.has_cheese = false
+		st["items"] = _normalize_burger_stack(items)
+		return
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
@@ -10947,9 +11426,10 @@ func _crown_serve_burger(station_index: int) -> bool:
 	var items: Array = st["items"]
 	if items.has("bun_top") or not items.has("patty"):
 		return false
+	if not _spend_ingredient("bun_top"):
+		return false
 	items.append("bun_top")
 	st["items"] = _normalize_burger_stack(items)
-	_spend(_ingredient_cost("bun_top"))
 	return true
 
 
@@ -11044,7 +11524,8 @@ func _try_feed_bacon_to_customer(screen_pos: Vector2) -> bool:
 		_strip_did_drag = true
 		_flash("They're not hungry for more bacon", Color("FFCC80"))
 		return true
-	_spend(_ingredient_cost("bacon"))
+	if not _spend_ingredient("bacon"):
+		return true
 	_pending_ingredient_drag = ""
 	_pending_cheese_drag = false
 	_strip_did_drag = true
@@ -11315,6 +11796,13 @@ func _complete_serve(station_index: int) -> void:
 		combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
 
+	_record_social_review(_review_stars_from_serve(
+		payout,
+		was_meh,
+		payout <= 0,
+		cook_r,
+		float(result.quality)
+	))
 	_clear_station(station_index)
 	_update_hud()
 
