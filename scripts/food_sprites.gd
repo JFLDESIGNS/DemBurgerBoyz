@@ -6,6 +6,47 @@ class_name FoodSprites
 const INGREDIENT_DIR := "res://assets/ingredients/"
 
 static var _cache: Dictionary = {}
+static var _content_aspect_cache: Dictionary = {}
+
+
+static func texture_content_aspect(tex: Texture2D) -> float:
+	## Opaque-pixel aspect (h/w) — ignores empty sheet padding (e.g. burger_cheese).
+	if tex == null:
+		return 1.0
+	var key: int = tex.get_instance_id()
+	if _content_aspect_cache.has(key):
+		return _content_aspect_cache[key]
+	var img: Image = tex.get_image()
+	if img == null:
+		_content_aspect_cache[key] = 1.0
+		return 1.0
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	var w := img.get_width()
+	var h := img.get_height()
+	if w < 1 or h < 1:
+		_content_aspect_cache[key] = 1.0
+		return 1.0
+	var min_x := w
+	var max_x := -1
+	var min_y := h
+	var max_y := -1
+	for y in h:
+		for x in w:
+			if img.get_pixel(x, y).a > 0.08:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+				min_y = mini(min_y, y)
+				max_y = maxi(max_y, y)
+	if max_x < min_x or max_y < min_y:
+		_content_aspect_cache[key] = float(h) / float(w)
+		return _content_aspect_cache[key]
+	var cw := float(max_x - min_x + 1)
+	var ch := float(max_y - min_y + 1)
+	var aspect := ch / maxf(cw, 1.0)
+	_content_aspect_cache[key] = aspect
+	return aspect
 
 
 static func get_tex(id: String) -> Texture2D:

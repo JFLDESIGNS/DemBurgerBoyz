@@ -5,7 +5,7 @@ const GRILL_SLOTS := 10
 const STATION_COUNT := 1
 const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
-const STATION_BURGER_SCALE := 0.75
+const STATION_BURGER_SCALE := 1.0
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · 1/4 · HOLD
 const ZONE_FULL_FRAC := 0.38
@@ -456,15 +456,23 @@ const PREP_INGREDIENTS_POS := Vector3(0.74, 1.714, 0.46) ## nudged right on coun
 const PREP_INGREDIENTS_ROT := Vector3(-74.0, 168.0, 0.0)
 const PREP_INGREDIENTS_ALBEDO := Color(0.616, 0.616, 0.616, 1.0) ## 30% darker than prior 0.88 tint
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
-const PREP_UI_NUDGE_X := 52.0
+const PREP_UI_SIZE := Vector2(420.0, 252.0)
+const PREP_UI_BEHIND_X := -118.0 ## prep art offset inside build zone (text stays put)
+const PREP_UI_BEHIND_Y := -130.0 ## negative Y = up on screen (position-based — anchors were ignored)
+const BUILD_UI_LEFT := 85.0 ## bun stack — left of grill, beside prep baskets
+const BUILD_UI_LIFT_BOTTOM := 120.0 ## counter height — not tucked under the grill
+const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
 ## Kenney / Sketchfab truck radio — replaces procedural CabRadio mesh.
 const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
 const RADIO_TEX_ALBEDO := "res://models/RADIO/textures/RADIO_SCETC_FAB_albedo.tga.png"
 const RADIO_TEX_NORMAL := "res://models/RADIO/textures/RADIO_SCETC_FAB_normal.tga.png"
 const RADIO_TEX_METAL := "res://models/RADIO/textures/RADIO_SCETC_FAB_metalness.tga.png"
 const RADIO_TEX_AO := "res://models/RADIO/textures/RADIO_SCETC_FAB_ao.tga.png"
-const RADIO_HOME_POS := Vector3(1.48, 1.12, -0.42)
-const RADIO_HOME_ROT := Vector3(0.0, 158.0, 0.0)
+const RADIO_HOME_POS := Vector3(-2.84, 2.05, 1.08) ## fallback — usually synced to 2D HUD
+const RADIO_HOME_ROT := Vector3(0.0, -90.0, 0.0) ## right wall, facing the cook
+const RADIO_WALL_X := -2.84
+const RADIO_WORLD_NUDGE := Vector3(0.07, 0.0, 0.0)
+const RADIO_UI_ANCHOR := Vector2(0.54, 0.38) ## point on 2D panel the 3D model tracks
 const RADIO_TARGET_SIZE := 0.52
 const RADIO_UI_PANEL_SIZE := Vector2(210.0, 138.0)
 const RADIO_UI_TOP := 52.0
@@ -1077,7 +1085,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_add_ingredient(ing)
 			return
 	elif event is InputEventMouseButton and event.pressed:
-		if _ui_blocks_world_click(event.position):
+		var grill_place: bool = event.button_index == MOUSE_BUTTON_RIGHT
+		if not cheese_held and _ui_blocks_world_click(event.position, grill_place):
 			return
 		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 			return
@@ -1124,6 +1133,14 @@ func _input(event: InputEvent) -> void:
 	if _handle_strip_swipe_input(event):
 		return
 	## Right-click while holding cheese → put it back on the strip (works over UI too).
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if cheese_held:
+			if _try_window_cat_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
+			_try_place_held_cheese(event.position)
+			get_viewport().set_input_as_handled()
+			return
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
@@ -1139,6 +1156,9 @@ func _input(event: InputEvent) -> void:
 				return
 			if glock_held:
 				_fire_glock()
+				get_viewport().set_input_as_handled()
+				return
+			if playing and _try_grill_right_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 		else:
@@ -1344,8 +1364,35 @@ func _ingredient_from_hotkey(keycode: Key) -> String:
 	return ""
 
 
-func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
+func _is_grill_screen_point(screen_pos: Vector2) -> bool:
+	var hit := _grill_plane_from_screen(screen_pos)
+	if hit == Vector3.ZERO:
+		return false
+	return _is_on_grill_surface(hit)
+
+
+func _try_grill_right_click(screen_pos: Vector2) -> bool:
+	## Runs in _input (before UI) so Build chrome never eats grill right-clicks.
+	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+		return false
+	if spatula_patty != null or dragging_patty != null or cheese_held:
+		return false
+	if not _is_grill_screen_point(screen_pos):
+		return false
+	if _ui_blocks_world_click(screen_pos, true):
+		return false
+	var smash_target = _pick_patty_for_smash(screen_pos)
+	if smash_target != null:
+		smash_target.smash()
+	else:
+		_try_grill_raycast(screen_pos, true)
+	return true
+
+
+func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) -> bool:
 	## Buttons / panels on top of the 3D tools — never grab scraper through UI.
+	if for_grill_place and _is_grill_screen_point(screen_pos):
+		return false
 	var hovered := get_viewport().gui_get_hovered_control()
 	var node: Node = hovered
 	while node != null:
@@ -1355,7 +1402,9 @@ func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
 				## Full-screen empty roots pass through; interactive chrome does not.
 				var n := String(c.name)
 				if n == "Root" or n == "BottomUI" or n == "StationsRow" or n == "GrillDropZone" \
-						or n == "WindowTicketRail" or n == "TicketBox":
+						or n == "WindowTicketRail" or n == "TicketBox" or n == "PrepIngredients" \
+						or n == "BuildTitle" or n == "PrepWrap" or n == "GrillPickBlocker" \
+						or n == "BuildColumn" or n == "BuildZone":
 					pass
 				else:
 					return true
@@ -1378,12 +1427,22 @@ func _ui_blocks_world_click(screen_pos: Vector2) -> bool:
 	return false
 
 
+func _build_plate_index_at(screen_pos: Vector2) -> int:
+	## Tight build-plate hitbox — must not swallow grill cheese drops.
+	const PAD := 12.0
+	for i in STATION_COUNT:
+		var plate: Control = stations[i].get("plate", null)
+		if plate != null and is_instance_valid(plate) and plate.get_global_rect().grow(PAD).has_point(screen_pos):
+			return i
+		var drop_btn: Control = stations[i].get("drop_btn", null)
+		if drop_btn != null and is_instance_valid(drop_btn) and drop_btn.visible \
+				and drop_btn.get_global_rect().grow(PAD).has_point(screen_pos):
+			return i
+	return -1
+
+
 func _station_index_at(screen_pos: Vector2) -> int:
-	## Whole Build column counts — click / drag / flick land anywhere in the zone.
-	if stations_row != null and is_instance_valid(stations_row):
-		## Tall forgiving pad — covers empty counter / window above the board.
-		if stations_row.get_global_rect().grow_individual(48, 220, 48, 28).has_point(screen_pos):
-			return STATION_CRAFT
+	## Build column only — prep overlay + grill steel must stay clickable.
 	const PAD := 48.0
 	for i in STATION_COUNT:
 		var plate: Control = stations[i].get("plate", null)
@@ -1394,8 +1453,12 @@ func _station_index_at(screen_pos: Vector2) -> int:
 				and drop_btn.get_global_rect().grow(PAD).has_point(screen_pos):
 			return i
 		var panel: Control = stations[i].get("panel", null)
-		if panel != null and is_instance_valid(panel) and panel.get_global_rect().grow(PAD).has_point(screen_pos):
-			return i
+		if panel != null and is_instance_valid(panel):
+			var pr := panel.get_global_rect()
+			var build_w := mini(280.0, pr.size.x)
+			var build_zone := Rect2(pr.position.x + maxf(0.0, pr.size.x - build_w), pr.position.y, build_w, pr.size.y)
+			if build_zone.grow_individual(24, 180, 24, 24).has_point(screen_pos):
+				return i
 	return -1
 
 
@@ -1424,6 +1487,13 @@ func _is_build_drop_at(screen_pos: Vector2) -> bool:
 
 func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 	## Build UI is drawn over the grill — block 3D patty picks behind it (incl. yellow selection).
+	if _is_grill_screen_point(screen_pos):
+		for i in STATION_COUNT:
+			var plate: Control = stations[i].get("plate", null)
+			if plate != null and is_instance_valid(plate):
+				if plate.get_global_rect().grow_individual(8, 34, 8, 8).has_point(screen_pos):
+					return true
+		return false
 	for i in STATION_COUNT:
 		var st: Dictionary = stations[i]
 		var panel: Control = st.get("panel", null)
@@ -1432,7 +1502,7 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 		var zone := Rect2()
 		var has_zone := false
 		if plate != null and is_instance_valid(plate):
-			zone = plate.get_global_rect()
+			zone = plate.get_global_rect().grow_individual(8, 34, 8, 8)
 			has_zone = true
 		if preview != null and is_instance_valid(preview):
 			for child in preview.get_children():
@@ -1440,16 +1510,11 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 					var cr: Rect2 = child.get_global_rect().grow(6)
 					zone = cr if not has_zone else zone.merge(cr)
 					has_zone = true
-		if panel != null and is_instance_valid(panel):
-			var pr := panel.get_global_rect()
-			## Title + burger stage — widen so selection chrome can't leak scoops to the grill.
-			var stage := Rect2(pr.position.x, pr.position.y, pr.size.x, maxf(pr.size.y - 52.0, 200.0))
-			zone = stage if not has_zone else zone.merge(stage)
-			has_zone = true
-		if has_zone and zone.grow(10).has_point(screen_pos):
+		if has_zone and zone.grow(6).has_point(screen_pos):
 			return true
 	if stations_row != null and is_instance_valid(stations_row):
-		if stations_row.get_global_rect().grow(8).has_point(screen_pos):
+		## Only block when carrying a patty — empty chrome passes grill picks through.
+		if spatula_patty != null and stations_row.get_global_rect().grow(8).has_point(screen_pos):
 			return true
 	return false
 
@@ -7260,7 +7325,7 @@ func _build_prep_ingredients_prop() -> void:
 
 
 func _build_truck_radio_prop() -> void:
-	## Dash radio on the cook's left shelf (+X / screen-left) — not on the Build counter.
+	## Wall-mounted cab radio — synced each frame to the top-right 2D HUD.
 	if radio_root != null and is_instance_valid(radio_root):
 		radio_root.queue_free()
 	radio_root = null
@@ -7286,18 +7351,14 @@ func _build_truck_radio_from_mesh(mesh: Mesh) -> void:
 	radio_root.name = "CabRadio"
 	radio_root.position = RADIO_HOME_POS
 	radio_root.rotation_degrees = RADIO_HOME_ROT
-	grill_root.add_child(radio_root)
+	world.add_child(radio_root)
 
 	var body := MeshInstance3D.new()
 	body.name = "RadioBody"
 	body.mesh = mesh
 	body.scale = Vector3.ONE * fit
-	## Sit on the dash shelf — bottom of mesh at local Y=0 (shelf top ~1.05 m).
-	body.position = Vector3(
-		-aabb.get_center().x * fit,
-		-aabb.position.y * fit,
-		-aabb.get_center().z * fit
-	)
+	## Center on wall anchor (synced to the 2D HUD each frame).
+	body.position = -aabb.get_center() * fit
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	var alb: Texture2D = load(RADIO_TEX_ALBEDO) as Texture2D if ResourceLoader.exists(RADIO_TEX_ALBEDO) else null
 	var norm: Texture2D = load(RADIO_TEX_NORMAL) as Texture2D if ResourceLoader.exists(RADIO_TEX_NORMAL) else null
@@ -7314,7 +7375,7 @@ func _build_truck_radio_procedural() -> void:
 	radio_root.name = "CabRadio"
 	radio_root.position = RADIO_HOME_POS
 	radio_root.rotation_degrees = RADIO_HOME_ROT
-	grill_root.add_child(radio_root)
+	world.add_child(radio_root)
 
 	var body := _add_box(radio_root, Vector3(0.42, 0.22, 0.18), Vector3.ZERO, Color(0.18, 0.16, 0.14))
 	body.material_override.metallic = 0.55
@@ -7460,6 +7521,36 @@ func _layout_phone_ui_overlay() -> void:
 			+ sin(Time.get_ticks_msec() * 0.0014) * PHONE_FLOAT_AMP
 	)
 	phone_column.size = PHONE_UI_SIZE
+	_sync_radio_3d_to_ui()
+
+
+func _sync_radio_3d_to_ui() -> void:
+	## Keep the 3D cab radio on the right wall under the top-right HUD.
+	if radio_root == null or not is_instance_valid(radio_root) or radio_column == null or camera == null:
+		return
+	var ui_rect := radio_column.get_global_rect()
+	if ui_rect.size.x < 8.0 or ui_rect.size.y < 8.0:
+		return
+	var screen_pt := ui_rect.position + ui_rect.size * RADIO_UI_ANCHOR
+	var hit := _ui_screen_to_wall_point(screen_pt)
+	radio_root.global_position = hit + RADIO_WORLD_NUDGE
+	radio_root.global_rotation_degrees = RADIO_HOME_ROT
+
+
+func _ui_screen_to_wall_point(screen_pos: Vector2) -> Vector3:
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	if absf(dir.x) > 0.00001:
+		var t_wall := (RADIO_WALL_X - from.x) / dir.x
+		if t_wall > 0.04:
+			return from + dir * t_wall
+	## Fallback: intersect a front bulkhead plane if the ray misses the side wall.
+	var plane_z := RADIO_HOME_POS.z
+	if absf(dir.z) > 0.00001:
+		var t_z := (plane_z - from.z) / dir.z
+		if t_z > 0.04:
+			return from + dir * t_z
+	return RADIO_HOME_POS
 
 
 func _reset_supplies() -> void:
@@ -9683,47 +9774,52 @@ func _build_station_ui() -> void:
 		## Empty panel area passes through to the 3D grill behind.
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-		var row := HBoxContainer.new()
-		row.set_anchors_preset(Control.PRESET_FULL_RECT)
-		row.add_theme_constant_override("separation", 6)
-		row.alignment = BoxContainer.ALIGNMENT_END
-		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		panel.add_child(row)
-
-		## Prep baskets / condiments — left of the Build board, beside the grill.
-		var prep_outer := MarginContainer.new()
-		prep_outer.add_theme_constant_override("margin_bottom", 132) ## ~2 ft higher on counter
-		prep_outer.add_theme_constant_override("margin_left", int(PREP_UI_NUDGE_X))
-		prep_outer.custom_minimum_size = Vector2(420, 252)
-		prep_outer.size_flags_vertical = Control.SIZE_SHRINK_END
-		prep_outer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(prep_outer)
+		## Build zone — title + plate stay here; prep art is only a backdrop behind them.
+		var build_zone := Control.new()
+		build_zone.name = "BuildZone"
+		build_zone.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+		build_zone.grow_horizontal = Control.GROW_DIRECTION_END
+		build_zone.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		build_zone.offset_left = int(BUILD_UI_LEFT)
+		build_zone.offset_bottom = int(BUILD_UI_LIFT_BOTTOM)
+		build_zone.custom_minimum_size = Vector2(250, 280)
+		build_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		panel.add_child(build_zone)
 
 		var prep_wrap := Control.new()
-		prep_wrap.custom_minimum_size = Vector2(420, 252)
+		prep_wrap.name = "PrepWrap"
+		prep_wrap.custom_minimum_size = PREP_UI_SIZE
+		prep_wrap.size = PREP_UI_SIZE
+		prep_wrap.position = Vector2(PREP_UI_BEHIND_X, PREP_UI_BEHIND_Y)
 		prep_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		prep_outer.add_child(prep_wrap)
+		prep_wrap.z_index = -1
+		prep_wrap.z_as_relative = true
+		build_zone.add_child(prep_wrap)
 
 		var prep_img := TextureRect.new()
 		prep_img.name = "PrepIngredients"
 		prep_img.texture = FoodSpritesScript.prep_ingredients_tex()
 		prep_img.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		prep_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		prep_img.set_anchors_preset(Control.PRESET_FULL_RECT)
+		prep_img.custom_minimum_size = PREP_UI_SIZE
+		prep_img.size = PREP_UI_SIZE
 		prep_img.modulate = PREP_UI_MODULATE
 		prep_img.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		prep_wrap.add_child(prep_img)
 
 		var root_v := VBoxContainer.new()
-		root_v.custom_minimum_size = Vector2(250, 0)
-		root_v.size_flags_horizontal = Control.SIZE_SHRINK_END
+		root_v.name = "BuildColumn"
+		root_v.set_anchors_preset(Control.PRESET_FULL_RECT)
 		root_v.add_theme_constant_override("separation", 2)
 		root_v.alignment = BoxContainer.ALIGNMENT_END
 		root_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(root_v)
+		root_v.z_index = 1
+		root_v.z_as_relative = true
+		build_zone.add_child(root_v)
 
 		var title := Label.new()
-		title.text = "drag patty here"
+		title.name = "BuildTitle"
+		title.text = BUILD_TITLE_TEXT
 		UiFontsScript.apply_label(title, true, 14)
 		title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.7))
 		title.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -9734,18 +9830,18 @@ func _build_station_ui() -> void:
 
 		## Stage sized for mid-large burger art — tight hitbox around the board.
 		var plate_wrap := Control.new()
-		plate_wrap.custom_minimum_size = Vector2(205, 195)
+		plate_wrap.custom_minimum_size = Vector2(230, 210)
 		plate_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		plate_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
 		plate_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 		plate_wrap.clip_contents = false
 		root_v.add_child(plate_wrap)
 
-		## Catches clicks over the grill behind the burger / yellow selection box.
+		## Catches left-clicks over the grill behind the burger / yellow selection box.
 		var grill_blocker := ColorRect.new()
 		grill_blocker.name = "GrillPickBlocker"
 		grill_blocker.color = Color(0, 0, 0, 0)
-		grill_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+		grill_blocker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		grill_blocker.set_anchors_preset(Control.PRESET_FULL_RECT)
 		grill_blocker.z_index = -1
 		plate_wrap.add_child(grill_blocker)
@@ -9841,8 +9937,13 @@ func _build_station_ui() -> void:
 		btns.add_child(clear_one)
 
 		plate_wrap.gui_input.connect(func(ev):
-			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				_on_station_plate_clicked(si)
+			if ev is InputEventMouseButton and ev.pressed:
+				if ev.button_index == MOUSE_BUTTON_RIGHT:
+					if _try_grill_right_click(ev.global_position):
+						plate_wrap.accept_event()
+					return
+				if ev.button_index == MOUSE_BUTTON_LEFT:
+					_on_station_plate_clicked(si)
 		)
 		plate_wrap.set_drag_forwarding(
 			Callable(),
@@ -9981,8 +10082,8 @@ func _can_drop_cheese_on_grill(data: Variant) -> bool:
 		return false
 	if str(data.get("id", "")) != "cheese":
 		return false
-	## Don't steal drops meant for the Build board.
-	if _station_index_at(get_viewport().get_mouse_position()) >= 0:
+	## Don't steal drops meant for the Build plate — grill still accepts cheese nearby.
+	if _build_plate_index_at(get_viewport().get_mouse_position()) >= 0:
 		return false
 	return true
 
@@ -10109,11 +10210,12 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 		_pending_ingredient_drag = ""
 		_pending_reorder_drag = null
 		var mouse2 := mouse
-		if _station_index_at(mouse2) >= 0:
-			## Dropped on Build chrome without a Control accept — add as topping.
+		var build_i := _build_plate_index_at(mouse2)
+		if build_i >= 0:
+			## Dropped on Build plate without a Control accept — add as topping.
 			if cheese_held:
 				_cancel_cheese_hold_silent()
-			_add_ingredient_to_station(_station_index_at(mouse2), "cheese", true)
+			_add_ingredient_to_station(build_i, "cheese", true)
 			return
 		if cheese_held:
 			_try_place_held_cheese(mouse2)
@@ -10684,6 +10786,7 @@ func _begin_cheese_hold(from_drag: bool = false) -> void:
 		return
 	cheese_held = true
 	_ensure_cheese_ghost()
+	_arm_grill_drop_zone()
 	if cheese_ghost:
 		cheese_ghost.visible = true
 	if game_audio:
@@ -10698,6 +10801,8 @@ func _cancel_cheese_hold() -> void:
 	_pending_cheese_drag = false
 	cheese_held = false
 	_cheese_hover_patty = null
+	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
 	_flash("Cheese back on the stack", Color("B0BEC5"))
@@ -10707,6 +10812,8 @@ func _cancel_cheese_hold_silent() -> void:
 	_pending_cheese_drag = false
 	cheese_held = false
 	_cheese_hover_patty = null
+	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
 
@@ -10776,8 +10883,8 @@ func _pick_cheese_patty_at_screen(screen_pos: Vector2):
 	## Extra-forgiving screen/world pick shared by ghost + drop.
 	if camera == null:
 		return null
-	## Still honor Build UI so cheese can go on the craft stack instead.
-	if _blocks_grill_pick(screen_pos):
+	## Cheese onto grill — only block when pointer is on the build plate itself.
+	if _build_plate_index_at(screen_pos) >= 0:
 		return null
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	var cam_pos := camera.global_position
@@ -10860,8 +10967,8 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, screen_pos):
 		_feed_window_cat_ingredient("cheese")
 		return
-	## Build station click → melt cheese onto the Build stack patty.
-	var station_idx := _station_index_at(screen_pos)
+	## Build plate click → melt cheese onto the Build stack patty.
+	var station_idx := _build_plate_index_at(screen_pos)
 	if station_idx >= 0:
 		_cancel_cheese_hold()
 		_add_ingredient_to_station(station_idx, "cheese", true)
@@ -11186,7 +11293,7 @@ func _refresh_station(index: int) -> void:
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
 	var step_y := 20.0 * layer_scale
-	var layer_w := mini(300.0, stage_w * 0.88)
+	var layer_w := mini(320.0, stage_w * 0.96)
 	## Extra lift after bottom bun so meat doesn't sit flush on the crumb.
 	var stack_lift := 0.0
 
@@ -11204,8 +11311,22 @@ func _refresh_station(index: int) -> void:
 			pidx = patty_from_bottom - 1
 			if _station_patty_has_cheese(st, pidx):
 				layer_key = "patty_cheese"
-		var h := _layer_img_height(layer_key) * layer_scale
+		var h_base := _layer_img_height(layer_key) * layer_scale
 		var this_w := layer_w * _layer_width_mul(layer_key)
+		var layer_tex: Texture2D = null
+		if item == "patty":
+			if layer_key == "patty_cheese":
+				layer_tex = FoodSpritesScript.burger_cheese_tex()
+			else:
+				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
+				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
+					pcolor = st["patties"][pidx].get_patty_color()
+				layer_tex = FoodSpritesScript.patty_tex(pcolor)
+		else:
+			layer_tex = FoodSpritesScript.get_tex(item)
+		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
+		this_w = fit.x
+		var h := fit.y
 		var row := PanelContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_STOP
 		row.z_as_relative = true
@@ -11233,16 +11354,7 @@ func _refresh_station(index: int) -> void:
 			stack_lift += 10.0 * layer_scale
 
 		var tr := TextureRect.new()
-		if item == "patty":
-			if layer_key == "patty_cheese":
-				tr.texture = FoodSpritesScript.burger_cheese_tex()
-			else:
-				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
-				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
-					pcolor = st["patties"][pidx].get_patty_color()
-				tr.texture = FoodSpritesScript.patty_tex(pcolor)
-		else:
-			tr.texture = FoodSpritesScript.get_tex(item)
+		tr.texture = layer_tex
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.custom_minimum_size = Vector2(this_w, h)
@@ -11313,44 +11425,53 @@ func _station_layer_scale(layer_count: int) -> float:
 
 
 func _layer_width_mul(item: String) -> float:
-	## Sheet art has uneven canvas fill — normalize stack silhouette.
+	## Buns read large in sheet art — keep them narrower than meat/toppings.
 	match item:
 		"bun_top":
-			return 0.88
+			return 0.62
 		"bun_bottom":
-			return 1.24
+			return 0.78
 		"patty":
-			return 1.28
+			return 1.38
 		"patty_cheese":
-			return 1.34
+			return 1.44
 		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
-			return 1.3
+			return 1.56
 		"ketchup", "mustard":
-			return 0.92
+			return 1.14
 		_:
-			return 1.1
+			return 1.28
 
 
 func _layer_img_height(item: String) -> float:
 	match item:
 		"bun_top":
-			return 54.0
+			return 38.0
 		"bun_bottom":
-			return 62.0
+			return 44.0
 		"patty":
-			return 68.0
+			return 86.0
 		"patty_cheese":
-			return 82.0
+			return 96.0
 		"bacon":
-			return 54.0
+			return 72.0
 		"lettuce":
-			return 52.0
+			return 74.0
 		"tomato", "onion", "pickle", "cheese":
-			return 54.0
+			return 76.0
 		"ketchup", "mustard":
-			return 28.0
+			return 42.0
 		_:
-			return 48.0
+			return 64.0
+
+
+func _fit_layer_box_size(tex: Texture2D, target_w: float, min_h: float) -> Vector2:
+	## Size box from opaque art bounds so padded sheets (cheese patty) don't shrink.
+	if tex == null:
+		return Vector2(target_w, min_h)
+	var aspect := FoodSpritesScript.texture_content_aspect(tex)
+	var aspect_h := target_w * aspect
+	return Vector2(target_w, maxf(min_h, aspect_h))
 
 
 func _refresh_all_stations() -> void:
@@ -11618,7 +11739,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
 	var step_y := 12.0 * layer_scale
-	var layer_w := mini(300.0, stage_w * 0.88)
+	var layer_w := mini(320.0, stage_w * 0.96)
 	var stack_lift := 0.0
 
 	var stack := Control.new()
@@ -11648,9 +11769,23 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			if _station_patty_has_cheese(st, pidx):
 				layer_key = "patty_cheese"
 		var is_bun := item == "bun_bottom" or item == "bun_top"
-		var h_squish := 1.0 if is_bun else 0.8
-		var h := _layer_img_height(layer_key) * layer_scale * h_squish
+		var h_squish := 1.0 if is_bun else 0.92
+		var h_base := _layer_img_height(layer_key) * layer_scale * h_squish
 		var this_w := layer_w * _layer_width_mul(layer_key)
+		var layer_tex: Texture2D = null
+		if item == "patty":
+			if layer_key == "patty_cheese":
+				layer_tex = FoodSpritesScript.burger_cheese_tex()
+			else:
+				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
+				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
+					pcolor = st["patties"][pidx].get_patty_color()
+				layer_tex = FoodSpritesScript.patty_tex(pcolor)
+		else:
+			layer_tex = FoodSpritesScript.get_tex(item)
+		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
+		this_w = fit.x
+		var h := fit.y
 		var row := Control.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.custom_minimum_size = Vector2(this_w, h)
@@ -11667,16 +11802,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			bun_rows.append(row)
 
 		var tr := TextureRect.new()
-		if item == "patty":
-			if layer_key == "patty_cheese":
-				tr.texture = FoodSpritesScript.burger_cheese_tex()
-			else:
-				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
-				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
-					pcolor = st["patties"][pidx].get_patty_color()
-				tr.texture = FoodSpritesScript.patty_tex(pcolor)
-		else:
-			tr.texture = FoodSpritesScript.get_tex(item)
+		tr.texture = layer_tex
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.custom_minimum_size = Vector2(this_w, h)
