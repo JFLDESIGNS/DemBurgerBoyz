@@ -707,6 +707,10 @@ var _mp_oil_sync_cool: float = 0.0
 var _mp_residue_sync_cool: float = 0.0
 var _mp_ext_sync_cool: float = 0.0
 var _mp_season_sync_cool: float = 0.0
+var _mp_tool_pose_cool: float = 0.0
+## peer_id -> ghost Node3D so partners see held oil / shaker + pour FX
+var _mp_remote_oil: Dictionary = {}
+var _mp_remote_shaker: Dictionary = {}
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
 var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
@@ -1163,6 +1167,9 @@ func _process(delta: float) -> void:
 		_mp_residue_sync_cool = maxf(0.0, _mp_residue_sync_cool - delta)
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
 		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
+		_mp_tool_pose_cool = maxf(0.0, _mp_tool_pose_cool - delta)
+		if oil_held or shaker_held:
+			_mp_send_held_tool_pose(false)
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
 		if _mp_econ_accum >= 0.45:
@@ -5459,6 +5466,7 @@ func _build_season_shaker() -> void:
 	shaker_root.add_child(cap)
 
 	shaker_particles = GPUParticles3D.new()
+	shaker_particles.name = "SeasonParticles"
 	shaker_particles.amount = 48
 	shaker_particles.lifetime = 0.55
 	shaker_particles.explosiveness = 0.05
@@ -5640,6 +5648,8 @@ func _begin_shaker_hold() -> void:
 		game_audio.play_click()
 	_spend(COST_SEASON_USE)
 	_flash("Hold over beef to season — release to put back", Color("FFE082"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
 
 
 func _cancel_shaker_hold() -> void:
@@ -5655,6 +5665,8 @@ func _cancel_shaker_hold() -> void:
 		shaker_root.visible = true
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
+	if mp_enabled:
+		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false)
 
 
 func _cancel_shaker_hold_silent() -> void:
@@ -5670,6 +5682,8 @@ func _cancel_shaker_hold_silent() -> void:
 		shaker_root.visible = true
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
+	if mp_enabled:
+		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false)
 
 
 func _update_held_shaker(_delta: float) -> void:
@@ -5781,9 +5795,11 @@ func _get_oil_blob_texture() -> ImageTexture:
 func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> void:
 	## Local puddle first (responsive pour), then tell the partner.
 	_spawn_oil_slick_local(pos, radius)
-	if mp_enabled and not _mp_applying and _mp_oil_sync_cool <= 0.0:
-		_mp_oil_sync_cool = 0.05
-		mp_oil_slick.rpc(pos.x, pos.z, radius)
+	if mp_enabled and not _mp_applying:
+		## Keep grease trails visible on both cooks — light throttle only.
+		if _mp_oil_sync_cool <= 0.0:
+			_mp_oil_sync_cool = 0.03
+			mp_oil_slick.rpc(pos.x, pos.z, radius)
 
 
 func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
@@ -6860,6 +6876,7 @@ func _build_oil_bottle() -> void:
 	oil_root.add_child(tip)
 
 	oil_particles = GPUParticles3D.new()
+	oil_particles.name = "OilParticles"
 	oil_particles.amount = 56
 	oil_particles.lifetime = 0.55
 	oil_particles.explosiveness = 0.05
@@ -6926,6 +6943,8 @@ func _begin_oil_hold() -> bool:
 		game_audio.play_click()
 	_spend(COST_OIL_USE)
 	_flash("Oil tipped — drag to draw on the grill", Color("FFE082"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
 	return true
 
 
@@ -6945,6 +6964,8 @@ func _release_oil_bottle() -> void:
 		oil_area.input_ray_pickable = true
 	if game_audio:
 		game_audio.play_click()
+	if mp_enabled:
+		mp_tool_pose.rpc(2, false, 0.0, 0.0, 0.0, false)
 
 
 func _reset_oil_bottle() -> void:
@@ -6961,6 +6982,8 @@ func _reset_oil_bottle() -> void:
 	if oil_area:
 		oil_area.input_ray_pickable = true
 	_clear_oil_slicks()
+	if mp_enabled:
+		mp_tool_pose.rpc(2, false, 0.0, 0.0, 0.0, false)
 
 
 func _grill_zone_bands() -> Array:
@@ -14586,6 +14609,118 @@ func _mp_on_session_start(session_seed: int) -> void:
 		if NetManager.is_host():
 			_mp_send_cat_sync()
 			call_deferred("_mp_broadcast_economy")
+
+
+func _mp_send_held_tool_pose(force: bool = false) -> void:
+	## Stream oil / shaker world pose so the partner sees the bottle + pour FX.
+	if not mp_enabled or not NetManager.is_online():
+		return
+	if not force and _mp_tool_pose_cool > 0.0:
+		return
+	_mp_tool_pose_cool = 0.04
+	if oil_held and oil_root != null and is_instance_valid(oil_root):
+		var p: Vector3 = oil_root.global_position
+		var emitting := oil_particles != null and oil_particles.emitting
+		mp_tool_pose.rpc(2, true, p.x, p.y, p.z, emitting)
+	elif shaker_held and shaker_root != null and is_instance_valid(shaker_root):
+		var sp: Vector3 = shaker_root.global_position
+		var semitting := shaker_particles != null and shaker_particles.emitting
+		mp_tool_pose.rpc(4, true, sp.x, sp.y, sp.z, semitting)
+
+
+func _mp_strip_tool_pickable(node: Node) -> void:
+	if node == null:
+		return
+	if node is Area3D:
+		(node as Area3D).input_ray_pickable = false
+		(node as Area3D).collision_layer = 0
+		(node as Area3D).monitoring = false
+		(node as Area3D).monitorable = false
+	for child in node.get_children():
+		_mp_strip_tool_pickable(child)
+
+
+func _mp_ensure_remote_oil(peer_id: int) -> Node3D:
+	if _mp_remote_oil.has(peer_id):
+		var existing: Node3D = _mp_remote_oil[peer_id]
+		if existing != null and is_instance_valid(existing):
+			return existing
+	if oil_root == null or world == null:
+		return null
+	var ghost: Node3D = oil_root.duplicate() as Node3D
+	ghost.name = "RemoteOil_%d" % peer_id
+	_mp_strip_tool_pickable(ghost)
+	ghost.visible = false
+	world.add_child(ghost)
+	_mp_remote_oil[peer_id] = ghost
+	return ghost
+
+
+func _mp_ensure_remote_shaker(peer_id: int) -> Node3D:
+	if _mp_remote_shaker.has(peer_id):
+		var existing: Node3D = _mp_remote_shaker[peer_id]
+		if existing != null and is_instance_valid(existing):
+			return existing
+	if shaker_root == null or world == null:
+		return null
+	var ghost: Node3D = shaker_root.duplicate() as Node3D
+	ghost.name = "RemoteShaker_%d" % peer_id
+	_mp_strip_tool_pickable(ghost)
+	ghost.visible = false
+	world.add_child(ghost)
+	_mp_remote_shaker[peer_id] = ghost
+	return ghost
+
+
+func _mp_set_remote_tool_fx(root: Node3D, fx_name: String, emitting: bool) -> void:
+	if root == null:
+		return
+	var fx = root.find_child(fx_name, true, false)
+	if fx is GPUParticles3D:
+		(fx as GPUParticles3D).emitting = emitting
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_tool_pose(kind: int, active: bool, x: float, y: float, z: float, emitting: bool) -> void:
+	## kind 2 = oil, 4 = shaker (matches cursor tool badges).
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	if kind == 2:
+		var oil := _mp_ensure_remote_oil(sid)
+		if oil == null:
+			return
+		oil.visible = active
+		if active:
+			oil.global_position = Vector3(x, y, z)
+			oil.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+			oil.scale = Vector3(2.05, 2.05, 2.05)
+			_mp_set_remote_tool_fx(oil, "OilParticles", emitting)
+		else:
+			_mp_set_remote_tool_fx(oil, "OilParticles", false)
+		## Hide partner's shaker ghost if they switched tools.
+		if _mp_remote_shaker.has(sid):
+			var sh: Node3D = _mp_remote_shaker[sid]
+			if sh != null and is_instance_valid(sh):
+				sh.visible = false
+				_mp_set_remote_tool_fx(sh, "SeasonParticles", false)
+	elif kind == 4:
+		var shaker := _mp_ensure_remote_shaker(sid)
+		if shaker == null:
+			return
+		shaker.visible = active
+		if active:
+			shaker.global_position = Vector3(x, y, z)
+			shaker.rotation_degrees = Vector3(180.0, 25.0, 0.0)
+			shaker.scale = Vector3(2.15, 2.15, 2.15)
+			_mp_set_remote_tool_fx(shaker, "SeasonParticles", emitting)
+		else:
+			_mp_set_remote_tool_fx(shaker, "SeasonParticles", false)
+		if _mp_remote_oil.has(sid):
+			var ol: Node3D = _mp_remote_oil[sid]
+			if ol != null and is_instance_valid(ol):
+				ol.visible = false
+				_mp_set_remote_tool_fx(ol, "OilParticles", false)
 
 
 func _mp_update_cursors(delta: float) -> void:
