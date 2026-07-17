@@ -4374,7 +4374,15 @@ func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
 	return true
 
 
+func _cat_accepts_food(id: String) -> bool:
+	## Only cheese, bacon, or a scooped/full patty — no other toppings.
+	return id == "cheese" or id == "bacon" or id == "patty"
+
+
 func _feed_window_cat_ingredient(id: String) -> void:
+	if not _cat_accepts_food(id):
+		_flash("Cat only wants cheese, bacon, or a patty", Color("FFCC80"))
+		return
 	if mp_enabled and not _mp_applying:
 		mp_cat_feed.rpc(id, -1)
 		return
@@ -4382,6 +4390,8 @@ func _feed_window_cat_ingredient(id: String) -> void:
 
 
 func _feed_window_cat_ingredient_local(id: String) -> void:
+	if not _cat_accepts_food(id):
+		return
 	if id == "cheese" and cheese_held:
 		_cancel_cheese_hold()
 	if not _spend_ingredient(id):
@@ -4439,7 +4449,7 @@ func _try_steal_held_patty_at(screen_pos: Vector2) -> bool:
 func _on_window_cat_petted() -> void:
 	if game_audio and game_audio.has_method("play_cat_purr"):
 		game_audio.play_cat_purr()
-	_flash("Purr… drag a topping or full burger over!", Color("CE93D8"))
+	_flash("Purr… feed cheese, bacon, or a patty!", Color("CE93D8"))
 
 
 func _on_window_cat_fed(kind: String) -> void:
@@ -11410,9 +11420,12 @@ func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
 		_pending_ingredient_drag = ""
 		_feed_window_cat_ingredient("cheese")
 		return true
-	## Strip topping drag (lettuce, bacon, …).
+	## Strip topping drag — cat only takes cheese / bacon (patties via scoop/drag).
 	if _pending_ingredient_drag != "":
 		var id := _pending_ingredient_drag
+		if not _cat_accepts_food(id):
+			_flash("Cat only wants cheese, bacon, or a patty", Color("FFCC80"))
+			return false
 		_pending_ingredient_drag = ""
 		_pending_cheese_drag = false
 		_feed_window_cat_ingredient(id)
