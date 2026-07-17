@@ -154,8 +154,8 @@ var grill_steel_tex: Texture2D = null
 const GRILL_STEEL_TILE_M := 1.15 ## Larger tiles so the brushed grain reads on the flat-top.
 const GRILL_STEEL_TEX_PATH := "res://assets/grill/stainless_steel.png"
 var grill_glow_root: MeshInstance3D = null
-const GRILL_GLOW_DELAY_SEC := 0.2
-const GRILL_GLOW_FADE_SEC := 0.28
+const GRILL_GLOW_DELAY_SEC := 0.15
+const GRILL_GLOW_FADE_SEC := 4.0
 const GRILL_GLOW_BRIGHT_MULT := 1.18
 var _grill_glow_tween: Tween = null
 var _grill_glow_gen: int = 0
@@ -163,6 +163,9 @@ var _grill_glow_gen: int = 0
 var burner_flame_root: Node3D = null
 var burner_flame_tris: Array = [] ## MeshInstance3D
 var burner_flame_data: Array = [] ## {phase, spd, amp, lean, base}
+var burner_flame_lights: Array = [] ## SpotLight3D strip under the lip
+const BURNER_STRIP_LIGHT_ENERGY := 0.18
+const BURNER_STRIP_LIGHT_RANGE := 1.45
 var heat_warp_mesh: MeshInstance3D = null
 var heat_warp_mat: ShaderMaterial = null
 var heat_warp_base_size := Vector2(1.0, 0.6)
@@ -1391,6 +1394,7 @@ func _build_3d_world() -> void:
 	burner_flame_root = null
 	burner_flame_tris.clear()
 	burner_flame_data.clear()
+	burner_flame_lights.clear()
 
 	_build_flat_top_grill()
 	_build_burner_flames()
@@ -1636,12 +1640,14 @@ func _build_burner_flames() -> void:
 	burner_flame_root = null
 	burner_flame_tris.clear()
 	burner_flame_data.clear()
+	burner_flame_lights.clear()
 
 	var root := Node3D.new()
 	root.name = "BurnerFlames"
-	const TRI_H := 0.048
+	## ~12% up from last pass; thickness restored.
+	const TRI_H := 0.043
 	const TRI_W := 0.030
-	var gap_y := GRILL_SURFACE_Y - 0.048
+	var gap_y := GRILL_SURFACE_Y - 0.045
 	## Under the cook lip, nudged ~2" toward the player (was 3").
 	var gap_z := GRILL_SURFACE_Z - GRILL_DEPTH * 0.48 - 0.051
 	root.position = Vector3(GRILL_CENTER_X, gap_y, gap_z)
@@ -1675,7 +1681,7 @@ func _build_burner_flames() -> void:
 			randf_range(-0.008, 0.012) - float(row) * 0.008
 		)
 		mi.position = base
-		mi.scale = Vector3.ONE * randf_range(0.72, 1.05)
+		mi.scale = Vector3.ONE * randf_range(0.65, 0.94)
 		## Mild pitch toward camera — enough to read, not lean into the player.
 		mi.rotation_degrees = Vector3(-22.0 + randf_range(-4.0, 4.0), 180.0 + randf_range(-8.0, 8.0), randf_range(-6.0, 6.0))
 		mi.visible = false
@@ -1693,30 +1699,65 @@ func _build_burner_flames() -> void:
 			"tip_budget": tip_budget,
 			"pitch": -22.0 + randf_range(-4.0, 4.0),
 		})
+
+	## Orange strip — spans cook width, pitched down onto the lip / apron (+Z, −Y).
+	var strip_root := Node3D.new()
+	strip_root.name = "BurnerStripLight"
+	const STRIP_COUNT := 11
+	for i in STRIP_COUNT:
+		var sl := SpotLight3D.new()
+		sl.name = "BurnerStripSeg"
+		sl.light_color = Color(1.0, 0.46, 0.12)
+		sl.light_energy = BURNER_STRIP_LIGHT_ENERGY
+		sl.light_indirect_energy = 0.35
+		sl.spot_range = BURNER_STRIP_LIGHT_RANGE
+		sl.spot_angle = 76.0
+		sl.spot_attenuation = 0.48
+		sl.light_size = 0.55
+		sl.shadow_enabled = false
+		var t := (float(i) + 0.5) / float(STRIP_COUNT) - 0.5
+		sl.position = Vector3(t * cook_w * 0.99, -0.008, 0.06)
+		## Down + toward the cook so the front lip surface actually catches light.
+		sl.rotation_degrees = Vector3(58.0, 180.0, 0.0)
+		strip_root.add_child(sl)
+		burner_flame_lights.append(sl)
+	root.add_child(strip_root)
+
 	root.visible = false
 
 
+func _make_burner_strip_projector() -> Texture2D:
+	## Unused — kept so older gfx presets don't break if referenced.
+	const W := 128
+	const H := 32
+	var img := Image.create(W, H, false, Image.FORMAT_RGBA8)
+	for y in H:
+		for x in W:
+			img.set_pixel(x, y, Color(1, 1, 1, 1))
+	return ImageTexture.create_from_image(img)
+
+
 func _make_burner_flame_triangle_mesh(w: float, h: float) -> ArrayMesh:
-	## Tiny purple base → yellow → orange → red tip. No white.
+	## Dark purple base → yellow → orange → modest red tip. No pale/white.
 	var mesh := ArrayMesh.new()
 	var n := Vector3(0, 0, 1)
-	var y0 := -h * 0.45 ## purple (tiny bottom)
+	var y0 := -h * 0.45 ## deep purple (tiny bottom)
 	var y1 := -h * 0.28 ## yellow
-	var y2 := h * 0.05 ## deep yellow / orange
-	var y3 := h * 0.28 ## orange
-	var y4 := h * 0.55 ## red tip
-	var c_purp := Color(0.42, 0.12, 0.95, 1.0)
-	var c_yel := Color(1.0, 0.78, 0.05, 1.0)
-	var c_yel2 := Color(1.0, 0.55, 0.02, 1.0)
-	var c_org := Color(1.0, 0.32, 0.0, 1.0)
-	var c_red := Color(0.92, 0.05, 0.0, 1.0)
+	var y2 := h * 0.08 ## orange (bulk)
+	var y3 := h * 0.32 ## soft red
+	var y4 := h * 0.55 ## tip
+	var c_purp := Color(0.28, 0.06, 0.55, 1.0) ## darker — won't bloom white
+	var c_yel := Color(1.0, 0.68, 0.04, 1.0)
+	var c_org := Color(1.0, 0.38, 0.02, 1.0)
+	var c_red := Color(0.95, 0.12, 0.0, 1.0)
+	var c_tip := Color(0.88, 0.08, 0.0, 1.0)
 
 	var rows: Array = [
-		{"y": y0, "hw": w * 0.55, "c": c_purp},
-		{"y": y1, "hw": w * 0.46, "c": c_yel},
-		{"y": y2, "hw": w * 0.36, "c": c_yel2},
-		{"y": y3, "hw": w * 0.24, "c": c_org},
-		{"y": y4, "hw": 0.0, "c": c_red},
+		{"y": y0, "hw": w * 0.52, "c": c_purp},
+		{"y": y1, "hw": w * 0.44, "c": c_yel},
+		{"y": y2, "hw": w * 0.34, "c": c_org},
+		{"y": y3, "hw": w * 0.20, "c": c_red},
+		{"y": y4, "hw": 0.0, "c": c_tip},
 	]
 	for r in range(rows.size() - 1):
 		var a: Dictionary = rows[r]
@@ -1762,6 +1803,13 @@ func _set_burner_flames_visible(on: bool) -> void:
 	for mi in burner_flame_tris:
 		if is_instance_valid(mi):
 			mi.visible = on
+	for light in burner_flame_lights:
+		if is_instance_valid(light):
+			light.visible = on
+			if light is SpotLight3D:
+				(light as SpotLight3D).light_energy = BURNER_STRIP_LIGHT_ENERGY if on else 0.0
+			elif light is OmniLight3D:
+				(light as OmniLight3D).light_energy = 0.22 if on else 0.0
 
 
 func _update_burner_flames(delta: float) -> void:
@@ -5349,13 +5397,14 @@ func _ensure_ext_powder() -> void:
 func _spray_extinguisher_powder(delta: float, aim: Vector3) -> void:
 	_ensure_ext_powder()
 	## Aiming at a waiting customer through the window?
-	var sprayed := _try_spray_customer_with_powder(delta)
+	var spray_hit := _try_spray_customer_with_powder(delta)
+	var sprayed: bool = bool(spray_hit.get("hit", false))
 	## White powder blobs only land on the flat-top.
 	var on_grill := absf(aim.x - GRILL_CENTER_X) <= GRILL_WIDTH * 0.55 \
 		and absf(aim.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.55
-	## Nozzle mist only while aimed at the steel — never spray into the void under the rim.
+	## Nozzle mist on customers or the steel.
 	if ext_powder:
-		ext_powder.emitting = on_grill and not sprayed
+		ext_powder.emitting = sprayed or on_grill
 	if sprayed:
 		return
 	if not on_grill:
@@ -5378,14 +5427,13 @@ func _spray_extinguisher_powder(delta: float, aim: Vector3) -> void:
 		_extinguish_grill_fire()
 
 
-func _find_customer_under_ext_cursor() -> Node3D:
-	## Cursor near a customer's torso / head on screen → they're in the spray.
+func _find_customer_under_ext_spray() -> Dictionary:
+	## Cursor near a customer's head or torso → they're in the spray cone.
 	if camera == null or customers_root == null:
-		return null
+		return {}
 	var mouse := get_viewport().get_mouse_position()
-	var best: Node3D = null
-	var best_d := 96.0
-	## Include folks already storming off so more powder can stick while they leave.
+	var best: Dictionary = {}
+	var best_d := 108.0
 	for c in customers_root.get_children():
 		if c == null or not is_instance_valid(c):
 			continue
@@ -5394,33 +5442,47 @@ func _find_customer_under_ext_cursor() -> Node3D:
 		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
 		if camera.is_position_behind(torso):
 			continue
-		var head: Vector3 = c.global_position + Vector3(0.0, 1.15, 0.0)
-		var d := mini(
-			mouse.distance_to(camera.unproject_position(torso)),
-			mouse.distance_to(camera.unproject_position(head))
-		)
+		var head: Vector3 = c.global_position + Vector3(0.0, 1.22, 0.0)
+		var face: Vector3 = c.global_position + Vector3(0.0, 1.38, 0.06)
+		var d_head := mouse.distance_to(camera.unproject_position(head))
+		var d_face := mouse.distance_to(camera.unproject_position(face))
+		var d_torso := mouse.distance_to(camera.unproject_position(torso))
+		var d := mini(mini(d_head, d_face), d_torso)
 		if d < best_d:
 			best_d = d
-			best = c
+			var zone := "face"
+			if d_torso + 6.0 < mini(d_head, d_face):
+				zone = "body"
+			best = {"customer": c, "zone": zone}
 	return best
 
 
-func _try_spray_customer_with_powder(delta: float) -> bool:
-	var cust := _find_customer_under_ext_cursor()
+func _try_spray_customer_with_powder(delta: float) -> Dictionary:
+	var hit := _find_customer_under_ext_spray()
+	if hit.is_empty():
+		return {"hit": false}
+	var cust: Node = hit.get("customer")
+	var zone: String = String(hit.get("zone", "body"))
 	if cust == null or not cust.has_method("receive_ext_powder"):
-		return false
+		return {"hit": false}
 	ext_blob_spawn_cool -= delta
 	if ext_blob_spawn_cool > 0.0:
-		return true
-	ext_blob_spawn_cool = 0.035
-	var first_hit: bool = bool(cust.receive_ext_powder())
+		return {"hit": true, "customer": cust, "zone": zone}
+	ext_blob_spawn_cool = 0.028
+	var first_hit: bool = bool(cust.call("receive_ext_powder", zone))
 	if first_hit:
-		_flash("Customer: \"Omg, I am never coming back!\"", Color("EF9A9A"))
+		var msg := "Customer: \"Agh! My face!!\"" if zone == "face" else "Customer: \"What the heck?!\""
+		_flash(msg, Color("EF9A9A"))
 		if game_audio:
 			game_audio.play_click()
-		## Ticket / queue drop now; they stand 2s while powder builds, then walk.
 		_on_customer_left(cust, true)
-	return true
+	return {"hit": true, "customer": cust, "zone": zone}
+
+
+func _find_customer_under_ext_cursor() -> Node3D:
+	var hit := _find_customer_under_ext_spray()
+	var c = hit.get("customer")
+	return c as Node3D if c != null else null
 
 
 func _spawn_ext_powder_blob(aim: Vector3) -> void:

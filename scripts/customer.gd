@@ -108,8 +108,13 @@ var _powder_hit: bool = false
 var _powdering: bool = false ## Standing still while powder coats them.
 var _powder_stand_t: float = 0.0
 var _powder_drip_cool: float = 0.0
-const POWDER_STAND_SEC := 2.0
-var _powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale, rise}
+var _powder_face_build: float = 0.0 ## 0–1 — spray buildup on the face
+var _powder_panic_t: float = 0.0
+const POWDER_STAND_SEC := 2.6
+var _powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale, zone}
+var _panic_bones: Dictionary = {} ## Kenney arm bone indices for hands-up pose
+var _powder_face_mount: BoneAttachment3D = null
+var _powder_body_mount: BoneAttachment3D = null
 ## Glock hit — blood + limp skeleton flop (not a spinning tornado).
 var is_ragdoll: bool = false
 var _ragdoll_vel: Vector3 = Vector3.ZERO
@@ -832,20 +837,42 @@ func _process(delta: float) -> void:
 			rotation_degrees.y = lerpf(_leave_yaw_from, FACE_AWAY_YAW, ease_t)
 			if _body:
 				_body.position.y = _base_body_y
-				_body.rotation_degrees = Vector3.ZERO
-			_play_anim("idle")
+				if _powder_hit:
+					_powder_panic_t += delta
+					var wob := sin(_powder_panic_t * 17.0) * 0.07
+					global_position.x = _home_x + wob
+					_body.rotation_degrees.x = sin(_powder_panic_t * 11.0) * 3.0
+					_body.rotation_degrees.z = sin(_powder_panic_t * 14.0) * 5.0
+					_apply_hands_up_pose(1.0)
+					if _anim_player:
+						_anim_player.stop()
+				else:
+					_body.rotation_degrees = Vector3.ZERO
+			if not _powder_hit:
+				_play_anim("idle")
 			if turn_t >= 1.0:
 				_leave_turned = true
 				rotation_degrees.y = FACE_AWAY_YAW
+				if _powder_hit:
+					_reset_skeleton_pose()
+					if _anim_player:
+						_anim_player.active = true
 				_play_anim("walk")
 			return
 		## Facing away — walk off down the sidewalk at ground level (never behind matte).
-		global_position.z += delta * 2.6
+		global_position.z += delta * (2.15 if _powder_hit else 2.6)
 		_play_anim("walk")
 		if _body:
 			var step := absf(sin(_leave_spin * 9.0)) * 0.02
 			_body.position.y = _base_body_y + step
-			_body.rotation_degrees = Vector3.ZERO
+			if _powder_hit:
+				_powder_panic_t += delta
+				var stomp := sin(_powder_panic_t * 15.0) * 0.09
+				global_position.x = _home_x + stomp
+				_body.rotation_degrees.z = sin(_powder_panic_t * 12.0) * 14.0
+				_body.rotation_degrees.x = sin(_powder_panic_t * 8.5) * 7.0
+			else:
+				_body.rotation_degrees = Vector3.ZERO
 		if global_position.z >= MATTE_FRONT_Z_MAX:
 			queue_free()
 		return
@@ -1167,14 +1194,24 @@ func leave_heck() -> void:
 	)
 
 
-func receive_ext_powder() -> bool:
-	## Stick white spheres on the toon. First hit → stand 2s while they build, then leave.
+func receive_ext_powder(spray_zone: String = "body") -> bool:
+	## Stick white spheres on face + body. First hit → hands-up panic, then storm off.
 	if is_ragdoll:
 		return false
-	## Build up several blobs per spray tick so coating is visible.
-	var n := 3 if _powdering else 5
-	for _i in n:
-		_spawn_powder_blob_on_body()
+	var zone := spray_zone if spray_zone == "face" or spray_zone == "body" else "body"
+	if zone == "face":
+		_powder_face_build = clampf(_powder_face_build + 0.14, 0.0, 1.0)
+	else:
+		_powder_face_build = clampf(_powder_face_build + 0.04, 0.0, 1.0)
+	var face_n := 4 if zone == "face" else 1
+	var body_n := 3 if zone == "body" else 1
+	if _powdering:
+		face_n = maxi(face_n, 2 + int(_powder_face_build * 3.0))
+		body_n = maxi(body_n, 2)
+	for _i in face_n:
+		_spawn_powder_blob("face")
+	for _i in body_n:
+		_spawn_powder_blob("body")
 	if is_leaving:
 		return false
 	if _powdering:
@@ -1182,30 +1219,33 @@ func receive_ext_powder() -> bool:
 	_powder_hit = true
 	_powdering = true
 	_powder_stand_t = 0.0
+	_powder_panic_t = 0.0
 	_powder_drip_cool = 0.0
 	_begin_powder_stand()
 	return true
 
 
 func _begin_powder_stand() -> void:
-	## Freeze in place — same size — while powder accumulates.
+	## Freeze — throw hands up while powder piles on face + torso.
 	stop_order_clock()
 	is_waiting = false
 	_shake_time = 0.0
 	_shake_amp = 0.0
 	global_position.y = STAND_Y
 	global_position.z = WAIT_Z
-	speech = "Omg, I am never coming back!"
+	speech = "Agh! My face!! Never coming back!"
 	_set_mood("mad")
-	_play_anim("idle")
+	if _anim_player:
+		_anim_player.stop()
+		_anim_player.active = false
+	_apply_hands_up_pose(1.0)
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
 		_body.position.y = _base_body_y
-		_body.rotation_degrees = Vector3.ZERO
+		_body.rotation_degrees.x = 0.0
 	if _bubble:
 		_bubble.text = speech
 		_bubble.visible = true
-	## No white box backdrop — Label3D only (the BoxMesh looked like a block by the head).
 	if _bubble_bg:
 		_bubble_bg.visible = false
 	if _bar_root:
@@ -1218,27 +1258,34 @@ func _begin_powder_stand() -> void:
 
 func _update_powder_stand(delta: float) -> void:
 	_powder_stand_t += delta
+	_powder_panic_t += delta
 	global_position.y = STAND_Y
 	global_position.z = WAIT_Z
-	global_position.x = _home_x
+	var wob := sin(_powder_panic_t * 16.0) * 0.05
+	global_position.x = _home_x + wob
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
-		_body.position.y = _base_body_y
-		_body.rotation_degrees = Vector3.ZERO
-	_play_anim("idle")
-	## Keep dripping powder spheres so they visibly build up during the stand.
+		_body.position.y = _base_body_y + absf(sin(_powder_panic_t * 10.0)) * 0.015
+		_body.rotation_degrees.x = sin(_powder_panic_t * 9.0) * 3.0
+		_body.rotation_degrees.z = sin(_powder_panic_t * 13.0) * 4.0
+	_apply_hands_up_pose(1.0)
+	## Keep dripping — bias toward the face as it gets coated.
 	_powder_drip_cool -= delta
 	if _powder_drip_cool <= 0.0:
-		_powder_drip_cool = 0.12
-		_spawn_powder_blob_on_body()
-		_spawn_powder_blob_on_body()
+		_powder_drip_cool = 0.09
+		var face_drips := 2 + int(_powder_face_build * 4.0)
+		for _i in face_drips:
+			_spawn_powder_blob("face")
+		_spawn_powder_blob("body")
+		if randf() < 0.45:
+			_spawn_powder_blob("body")
 	if _powder_stand_t >= POWDER_STAND_SEC:
 		_powdering = false
 		leave_powdered()
 
 
 func leave_powdered() -> void:
-	## After the stand — walk off. Do not resize the character.
+	## After the stand — wobble off angry with powder still stuck on.
 	if is_ragdoll:
 		return
 	if is_leaving:
@@ -1251,9 +1298,12 @@ func leave_powdered() -> void:
 	_leave_turned = false
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
-	speech = "Omg, I am never coming back!"
+	speech = "I'm calling the health department!!"
 	_set_mood("mad")
-	_play_anim("idle")
+	if _anim_player:
+		_anim_player.stop()
+		_anim_player.active = false
+	_apply_hands_up_pose(1.0)
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
 		_body.position.y = _base_body_y
@@ -1268,7 +1318,7 @@ func leave_powdered() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	get_tree().create_timer(1.1).timeout.connect(func():
+	get_tree().create_timer(1.2).timeout.connect(func():
 		if not is_instance_valid(self):
 			return
 		if _bubble:
@@ -1504,20 +1554,99 @@ func _update_ragdoll(delta: float) -> void:
 		queue_free()
 
 
-func _spawn_powder_blob_on_body() -> void:
-	## White spheres stick on the character and pile up (minimal float).
+func _cache_panic_bones() -> void:
+	if not _panic_bones.is_empty():
+		return
+	_cache_skeleton()
+	if _skeleton == null:
+		return
+	for i in _skeleton.get_bone_count():
+		var bn := _skeleton.get_bone_name(i)
+		_panic_bones[bn] = i
+
+
+func _ensure_powder_mounts() -> void:
+	## Bone mounts so powder spheres follow the mesh during panic / walk-off.
+	if _powder_face_mount != null and is_instance_valid(_powder_face_mount):
+		return
+	_cache_panic_bones()
+	_cache_skeleton()
+	if _skeleton == null:
+		return
+	_powder_face_mount = BoneAttachment3D.new()
+	_powder_face_mount.name = "PowderFaceMount"
+	_powder_face_mount.bone_name = "Head"
+	_skeleton.add_child(_powder_face_mount)
+	_powder_body_mount = BoneAttachment3D.new()
+	_powder_body_mount.name = "PowderBodyMount"
+	if _panic_bones.has("UpperChest"):
+		_powder_body_mount.bone_name = "UpperChest"
+	else:
+		_powder_body_mount.bone_name = "Chest"
+	_skeleton.add_child(_powder_body_mount)
+
+
+func _powder_parent_for_zone(zone: String) -> Node3D:
+	_ensure_powder_mounts()
+	if zone == "face" and _powder_face_mount != null:
+		return _powder_face_mount
+	if _powder_body_mount != null:
+		return _powder_body_mount
+	return _body if _body != null else self
+
+
+func _reset_skeleton_pose() -> void:
+	_cache_skeleton()
+	if _skeleton == null:
+		return
+	_skeleton.reset_bone_poses()
+
+
+func _set_panic_bone_rot(bone_name: String, euler: Vector3) -> void:
+	var i := int(_panic_bones.get(bone_name, -1))
+	if i < 0 or _skeleton == null:
+		return
+	_skeleton.set_bone_pose_rotation(i, Quaternion.from_euler(euler))
+
+
+func _apply_hands_up_pose(strength: float) -> void:
+	## Arms raised beside the head — rotate in bone-local space (Kenney T-pose).
+	_cache_panic_bones()
+	if _skeleton == null:
+		return
+	var s := clampf(strength, 0.0, 1.0)
+	_skeleton.reset_bone_poses()
+	if s <= 0.01:
+		return
+	## Negative Z lifts the left arm upward; positive Z mirrors for the right.
+	_set_panic_bone_rot("LeftArm", Vector3(deg_to_rad(-8.0 * s), 0.0, deg_to_rad(-82.0 * s)))
+	_set_panic_bone_rot("RightArm", Vector3(deg_to_rad(-8.0 * s), 0.0, deg_to_rad(82.0 * s)))
+	_set_panic_bone_rot("LeftForeArm", Vector3(deg_to_rad(-36.0 * s), 0.0, 0.0))
+	_set_panic_bone_rot("RightForeArm", Vector3(deg_to_rad(-36.0 * s), 0.0, 0.0))
+
+
+func _spawn_powder_blob(zone: String) -> void:
+	## White spheres parented to head/chest bones so they move with the toon.
 	var blob := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
 	var rad := 0.04 + randf() * 0.055
+	if zone == "face":
+		rad *= 1.08
 	sphere.radius = rad
 	sphere.height = rad * 2.0
 	blob.mesh = sphere
-	## Scatter across torso / shoulders / head.
-	blob.position = Vector3(
-		randf_range(-0.18, 0.18),
-		randf_range(0.45, 1.25),
-		randf_range(0.02, 0.16)
-	)
+	if zone == "face":
+		blob.position = Vector3(
+			randf_range(-0.11, 0.11),
+			randf_range(-0.06, 0.14),
+			randf_range(0.05, 0.14)
+		)
+	else:
+		blob.position = Vector3(
+			randf_range(-0.18, 0.18),
+			randf_range(-0.12, 0.18),
+			randf_range(0.04, 0.12)
+		)
 	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	blob.sorting_offset = 8.0
 	var mat := StandardMaterial3D.new()
@@ -1529,10 +1658,10 @@ func _spawn_powder_blob_on_body() -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.render_priority = 12
 	blob.material_override = mat
-	add_child(blob)
-	## Long life so they accumulate during the 2s stand instead of vanishing.
-	var life := 3.5 + randf() * 2.0
-	var start_s := 0.7 + randf() * 0.55
+	var parent := _powder_parent_for_zone(zone)
+	parent.add_child(blob)
+	var life := 4.0 + randf() * 2.5
+	var start_s := 0.72 + randf() * 0.58
 	blob.scale = Vector3.ONE * start_s
 	_powder_blobs.append({
 		"mesh": blob,
@@ -1540,13 +1669,17 @@ func _spawn_powder_blob_on_body() -> void:
 		"life": life,
 		"max_life": life,
 		"start_scale": start_s,
-		"rise": 0.02 + randf() * 0.04, ## barely drift — mostly stick
+		"zone": zone,
 	})
-	while _powder_blobs.size() > 80:
+	while _powder_blobs.size() > 100:
 		var old: Dictionary = _powder_blobs.pop_front()
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
 			m.queue_free()
+
+
+func _spawn_powder_blob_on_body() -> void:
+	_spawn_powder_blob("body")
 
 
 func _update_powder_blobs(delta: float) -> void:
@@ -1561,10 +1694,7 @@ func _update_powder_blobs(delta: float) -> void:
 		var life: float = float(item["life"])
 		var max_life: float = maxf(0.05, float(item["max_life"]))
 		var t := clampf(life / max_life, 0.0, 1.0)
-		## Tiny drift — stay on the body so coverage builds.
-		mesh.position.y += float(item.get("rise", 0.03)) * delta
-		mesh.position.x += sin(Time.get_ticks_msec() * 0.008 + float(i)) * delta * 0.015
-		## Hold size until late fade.
+		## Locked to bone — only shrink/fade, no drifting away from the mesh.
 		var s: float = float(item["start_scale"]) * (0.55 + 0.45 * t)
 		mesh.scale = Vector3.ONE * s
 		var mat = item.get("mat") as StandardMaterial3D
