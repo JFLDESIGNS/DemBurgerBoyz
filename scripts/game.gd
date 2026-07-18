@@ -8,8 +8,8 @@ const STATION_CRAFT := 0
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
-const STATION_PATTY_BUILD_SCALE := 0.95 ## bare meat — keep readable between buns
-const STATION_PATTY_CHEESE_BUILD_SCALE := 0.98 ## melt art
+const STATION_PATTY_BUILD_SCALE := 0.827 ## bare meat (13% smaller than 0.95)
+const STATION_PATTY_CHEESE_BUILD_SCALE := 0.853 ## melt art (13% smaller than 0.98)
 ## Mild finished-stack nest — crown settles, heel rises; keep light so meat stays visible.
 const BUILD_BUN_NEST_BOTTOM_PX := 5.0
 const BUILD_BUN_NEST_TOP_PX := 7.0
@@ -219,6 +219,8 @@ var _pending_station_patty_drag = null ## Dictionary while dragging a Build patt
 var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill burger
 var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
 var _pending_reorder_drag = null ## Dictionary while dragging a Build stack layer
+var _reorder_drag_origin: Vector2 = Vector2.ZERO ## Screen pos when Build layer drag began
+const BUILD_SWIPE_TRASH_RIGHT_PX := 56.0 ## Swipe right this far + release off Build → trash
 var service_window_closed: bool = false
 var service_break_left: float = 0.0
 var window_pause_btn: Button = null
@@ -12871,6 +12873,15 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 				id = "cheese"
 			_drop_patty_on_garbage({"kind": "ingredient", "id": id})
 			return
+	## Build topping: swipe right + release outside Build → remove layer.
+	if not was_accepted and _pending_reorder_drag != null and typeof(_pending_reorder_drag) == TYPE_DICTIONARY:
+		var reorder_data = _pending_reorder_drag
+		if str(reorder_data.get("kind", "")) == "reorder":
+			var swipe_right := mouse.x - _reorder_drag_origin.x >= BUILD_SWIPE_TRASH_RIGHT_PX
+			if swipe_right and not _is_build_drop_at(mouse):
+				_drop_patty_on_garbage(reorder_data)
+				_pending_reorder_drag = null
+				return
 	## If the drop missed a Control target, still try to land on the grill under the cursor.
 	if not was_accepted and _pending_station_patty_drag != null:
 		var data = _pending_station_patty_drag
@@ -14201,6 +14212,7 @@ func _refresh_station(index: int) -> void:
 				color_preview.color = GameDataScript.INGREDIENT_COLORS.get(item_id, Color.GRAY)
 				row.set_drag_preview(color_preview)
 				_pending_station_patty_drag = null
+				_reorder_drag_origin = get_viewport().get_mouse_position()
 				var drag_data := _make_reorder_drag(index, from_i, item_id)
 				_pending_reorder_drag = drag_data
 				return drag_data,
