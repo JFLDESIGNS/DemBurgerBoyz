@@ -1230,14 +1230,14 @@ func receive_ext_powder(spray_zone: String = "body") -> bool:
 		return false
 	var zone := spray_zone if spray_zone == "face" or spray_zone == "body" else "body"
 	if zone == "face":
-		_powder_face_build = clampf(_powder_face_build + 0.14, 0.0, 1.0)
+		_powder_face_build = clampf(_powder_face_build + 0.18, 0.0, 1.0)
 	else:
-		_powder_face_build = clampf(_powder_face_build + 0.04, 0.0, 1.0)
-	var face_n := 2 if zone == "face" else 1
-	var body_n := 2 if zone == "body" else 1
+		_powder_face_build = clampf(_powder_face_build + 0.08, 0.0, 1.0)
+	var face_n := 3 if zone == "face" else 2
+	var body_n := 3 if zone == "body" else 2
 	if _powdering:
-		face_n = maxi(face_n, 1 + int(_powder_face_build * 2.0))
-		body_n = maxi(body_n, 1)
+		face_n = maxi(face_n, 2 + int(_powder_face_build * 3.0))
+		body_n = maxi(body_n, 2 + int(_powder_face_build * 2.0))
 	for _i in face_n:
 		_spawn_powder_blob("face")
 	for _i in body_n:
@@ -1319,12 +1319,13 @@ func _update_powder_stand(delta: float) -> void:
 	## Keep dripping — bias toward the face as it gets coated.
 	_powder_drip_cool -= delta
 	if _powder_drip_cool <= 0.0:
-		_powder_drip_cool = 0.09
-		var face_drips := 1 + int(_powder_face_build * 2.0)
+		_powder_drip_cool = 0.07
+		var face_drips := 2 + int(_powder_face_build * 3.0)
 		for _i in face_drips:
 			_spawn_powder_blob("face")
 		_spawn_powder_blob("body")
-		if randf() < 0.3:
+		_spawn_powder_blob("body")
+		if randf() < 0.45:
 			_spawn_powder_blob("body")
 	if _powder_stand_t >= POWDER_STAND_SEC:
 		_powdering = false
@@ -1718,57 +1719,61 @@ func _apply_hands_up_pose(strength: float) -> void:
 
 
 func _spawn_powder_blob(zone: String) -> void:
-	## White spheres parented to _body at bone position — NOT bone-attached (scale bloat).
+	## White spheres parented to _body — sized in local space (body is CHAR_SCALE).
 	_ensure_powder_mounts()
 	var blob := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
-	var rad := 0.008 + randf() * 0.012
+	## Local radii ~0.07–0.16 → world ~0.04–0.09 after CHAR_SCALE (readable clumps).
+	var rad := 0.07 + randf() * 0.09
 	if zone == "face":
-		rad *= 0.9
+		rad = 0.055 + randf() * 0.065
+	## Buildup makes later clumps a bit bigger.
+	rad *= 1.0 + _powder_face_build * 0.55
 	sphere.radius = rad
 	sphere.height = rad * 2.0
-	sphere.radial_segments = 6
-	sphere.rings = 4
+	sphere.radial_segments = 8
+	sphere.rings = 5
 	blob.mesh = sphere
 	var anchor: Vector3
 	if zone == "face":
 		anchor = _head_pos_in_body()
 		blob.position = anchor + Vector3(
-			randf_range(-0.035, 0.035),
-			randf_range(-0.02, 0.04),
-			randf_range(0.02, 0.06)
+			randf_range(-0.06, 0.06),
+			randf_range(-0.04, 0.07),
+			randf_range(0.03, 0.09)
 		)
 	else:
 		anchor = _chest_pos_in_body()
 		blob.position = anchor + Vector3(
-			randf_range(-0.06, 0.06),
-			randf_range(-0.05, 0.06),
-			randf_range(0.01, 0.06)
+			randf_range(-0.11, 0.11),
+			randf_range(-0.09, 0.10),
+			randf_range(0.02, 0.10)
 		)
 	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	blob.sorting_offset = 8.0
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(0.96, 0.97, 1.0, 0.92)
-	mat.roughness = 0.8
+	mat.albedo_color = Color(0.97, 0.98, 1.0, 0.95)
+	mat.roughness = 0.75
 	mat.metallic = 0.0
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.render_priority = 12
 	blob.material_override = mat
 	var parent := _powder_parent_for_zone(zone)
 	parent.add_child(blob)
-	blob.scale = Vector3.ONE
-	var life := 4.0 + randf() * 2.5
+	var start_s := 0.85 + randf() * 0.45
+	blob.scale = Vector3.ONE * start_s
+	var life := 6.0 + randf() * 3.0
 	_powder_blobs.append({
 		"mesh": blob,
 		"mat": mat,
 		"life": life,
 		"max_life": life,
-		"start_scale": 1.0,
+		"start_scale": start_s,
 		"zone": zone,
 	})
-	while _powder_blobs.size() > 120:
+	while _powder_blobs.size() > 160:
 		var old: Dictionary = _powder_blobs.pop_front()
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
@@ -1791,13 +1796,13 @@ func _update_powder_blobs(delta: float) -> void:
 		var life: float = float(item["life"])
 		var max_life: float = maxf(0.05, float(item["max_life"]))
 		var t := clampf(life / max_life, 0.0, 1.0)
-		## Locked to bone — only shrink/fade, no drifting away from the mesh.
-		var s: float = float(item["start_scale"]) * (0.55 + 0.45 * t)
+		## Stick around — only mild shrink/fade so buildup stays readable.
+		var s: float = float(item["start_scale"]) * (0.78 + 0.22 * t)
 		mesh.scale = Vector3.ONE * s
 		var mat = item.get("mat") as StandardMaterial3D
 		if mat != null:
 			var c: Color = mat.albedo_color
-			c.a = 0.25 + 0.7 * t
+			c.a = 0.55 + 0.40 * t
 			mat.albedo_color = c
 		if life <= 0.0:
 			mesh.queue_free()

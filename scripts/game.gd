@@ -420,6 +420,9 @@ var _phone_scroll_dragging: bool = false
 var _phone_scroll_drag_pending: bool = false
 var _phone_scroll_drag_start_y: float = 0.0
 var _phone_scroll_drag_start_offset: int = 0
+var _phone_scroll_vel: float = 0.0
+var _phone_scroll_last_mouse_y: float = 0.0
+var _phone_scroll_last_msec: int = 0
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
 ## Newest-first feed posts: {stars, who, text}
@@ -559,19 +562,23 @@ const RADIO_WALL_X := -2.84
 const RADIO_WORLD_NUDGE := Vector3(0.07, 0.0, 0.0)
 const RADIO_UI_ANCHOR := Vector2(0.54, 0.38) ## point on 2D panel the 3D model tracks
 const RADIO_TARGET_SIZE := 0.52
-const RADIO_UI_PANEL_SIZE := Vector2(200.0, 138.0) ## match phone width
+const RADIO_UI_PANEL_SIZE := Vector2(200.0, 0.0) ## width locked; height hugs content
 const RADIO_UI_TOP := 52.0
 const RADIO_UI_RIGHT := 10.0
 const RADIO_UI_LEFT := 210.0 ## panel width + right margin
 ## Android phone HUD — floats under the truck radio.
 const PHONE_UI_BASE_H := 278.0
 const PHONE_UI_SIZE := Vector2(200.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10) ## +15% +5% +10% +10% taller
-const PHONE_BEZEL_H := 9.0 ## small black chin / forehead inside the frame
-const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 16.0 ## logo band inside the bezel
+const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 28.0 ## fit inside screen + section margins
 const PHONE_LOGO_WRAP_H := 86.0 ## ~2× old logo band height (was 52)
 const PHONE_LOGO_DISPLAY_H := 80.0
 const PHONE_SCROLL_DRAG_THRESH := 8.0
-const PHONE_BELOW_RADIO_GAP := 10.0
+const PHONE_SCROLL_FRICTION := 7.5
+const PHONE_SCROLL_MIN_VEL := 18.0
+const PHONE_SCROLL_WHEEL_KICK := 520.0
+const PHONE_CORNER_OUTER := 10
+const PHONE_CORNER_INNER := 6
+const PHONE_BELOW_RADIO_GAP := 5.0
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -1088,6 +1095,7 @@ func _restart() -> void:
 
 func _process(delta: float) -> void:
 	_mp_update_cursors(delta)
+	_update_phone_scroll_inertia(delta)
 	if not playing:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
@@ -6619,8 +6627,8 @@ func _ensure_ext_powder() -> void:
 	pmat.gravity = Vector3(0, -14.0, 0)
 	pmat.damping_min = 2.0
 	pmat.damping_max = 4.0
-	pmat.scale_min = 0.25
-	pmat.scale_max = 0.55
+	pmat.scale_min = 0.45
+	pmat.scale_max = 0.95
 	pmat.color = Color(0.96, 0.96, 0.98, 0.85)
 	## Die on contact with the grill collision pad — no punch-through squares.
 	pmat.collision_mode = ParticleProcessMaterial.COLLISION_HIDE_ON_CONTACT
@@ -6635,8 +6643,8 @@ func _ensure_ext_powder() -> void:
 	ext_powder.process_material = pmat
 	## Soft spheres — never billboard quads (those read as white squares under the rim).
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.012
-	sphere.height = 0.024
+	sphere.radius = 0.022
+	sphere.height = 0.044
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -6726,20 +6734,30 @@ func _try_spray_customer_with_powder(delta: float) -> Dictionary:
 		cust.call("apply_ext_spray_push", delta, zone)
 	ext_blob_spawn_cool -= delta
 	if ext_blob_spawn_cool > 0.0:
+		## Keep remotes seeing knock-back even between powder pulses.
+		if mp_enabled and not _mp_applying and _mp_ext_sync_cool <= 0.0:
+			var nid_push := _customer_net_id(cust as Node3D)
+			if nid_push >= 0:
+				_mp_ext_sync_cool = 0.08
+				mp_ext_customer_push.rpc(nid_push, zone, delta)
 		return {"hit": true, "customer": cust, "zone": zone}
-	ext_blob_spawn_cool = 0.028
+	ext_blob_spawn_cool = 0.022
 	var first_hit: bool = bool(cust.call("receive_ext_powder", zone))
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust as Node3D)
+		if nid >= 0:
+			## Remotes get every powder pulse so clumps build up for everyone.
+			## Host also authors ticket leave on first_hit (guests can't).
+			mp_ext_customer.rpc(nid, zone, first_hit)
 	if first_hit:
 		var msg := "Customer: \"Agh! My face!!\"" if zone == "face" else "Customer: \"What the heck?!\""
 		_flash(msg, Color("EF9A9A"))
 		if game_audio:
 			game_audio.play_click()
-		if mp_enabled and not _mp_applying:
-			var nid := _customer_net_id(cust as Node3D)
-			if nid >= 0:
-				mp_ext_customer.rpc(nid, zone)
-				return {"hit": true, "customer": cust, "zone": zone}
-		_on_customer_left(cust, true)
+		## Solo / host: apply leave + forced spray review now.
+		## Guest sprayer: host applies leave inside mp_ext_customer(first_hit).
+		if not mp_enabled or NetManager.is_host():
+			_on_customer_left(cust as Node3D, true)
 	return {"hit": true, "customer": cust, "zone": zone}
 
 
@@ -8851,6 +8869,17 @@ func _maybe_record_social_review(stars: float, kind: String = "serve", tip: int 
 		return
 	if randf() >= SOCIAL_REVIEW_CHANCE:
 		return
+	_commit_social_review(stars, kind, tip)
+
+
+func _force_record_social_review(stars: float, kind: String = "angry", tip: int = 0) -> void:
+	## Guaranteed feed post (e.g. extinguisher spray victims).
+	if mp_enabled and not NetManager.is_host():
+		return
+	_commit_social_review(stars, kind, tip)
+
+
+func _commit_social_review(stars: float, kind: String, tip: int = 0) -> void:
 	var who := SOCIAL_REVIEWER_NAMES[randi() % SOCIAL_REVIEWER_NAMES.size()]
 	var text := _generate_review_text(stars, kind, tip)
 	_apply_social_review(stars, who, text)
@@ -8870,6 +8899,15 @@ func _apply_social_review(stars: float, who: String, text: String) -> void:
 
 func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 	var s := clampf(stars, 0.0, 5.0)
+	if kind == "spray":
+		return [
+			"ONE STAR. They sprayed me with a fire extinguisher??",
+			"Covered in white powder. Calling corporate. Never again.",
+			"Got blasted by the extinguisher through the window. Disgusting.",
+			"Why did they spray me?! Hair full of powder. 1 star.",
+			"Health hazard. Extinguisher to the face. I'm done.",
+			"Came for a burger, left looking like a powdered donut. ☆",
+		][randi() % 6]
 	if kind == "angry" or s <= 1.5:
 		return [
 			"Walked out. Never coming back.",
@@ -8960,60 +8998,104 @@ func _refresh_phone_ui() -> void:
 	for id in SUPPLY_IDS:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_theme_constant_override("separation", 2)
-		row.custom_minimum_size = Vector2(0, 22)
+		row.add_theme_constant_override("separation", 3)
+		row.custom_minimum_size = Vector2(0, 18)
 		phone_inventory_box.add_child(row)
 
 		var name_lab := Label.new()
 		var short := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
-		if short.length() > 11:
-			short = short.substr(0, 10) + "…"
+		if short.length() > 10:
+			short = short.substr(0, 9) + "…"
 		name_lab.text = short
-		name_lab.custom_minimum_size = Vector2(52, 0)
+		name_lab.custom_minimum_size = Vector2(40, 0)
 		name_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		UiFontsScript.apply_label(name_lab, false, 9)
-		name_lab.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
+		name_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		name_lab.clip_text = true
+		name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UiFontsScript.apply_label(name_lab, false, 8)
+		name_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
 		row.add_child(name_lab)
 
 		var stock := int(supply_stock.get(id, 0))
 		var fresh_r := clampf(float(supply_fresh.get(id, 0.0)) / SUPPLY_FRESH_MAX, 0.0, 1.0) if stock > 0 else 0.0
 		var count_lab := Label.new()
 		count_lab.text = str(stock)
-		count_lab.custom_minimum_size = Vector2(16, 0)
+		count_lab.custom_minimum_size = Vector2(12, 0)
 		count_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		count_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		UiFontsScript.apply_label(count_lab, true, 9)
+		count_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		UiFontsScript.apply_label(count_lab, true, 8)
 		count_lab.add_theme_color_override("font_color", _freshness_bar_color(fresh_r))
 		row.add_child(count_lab)
 
 		var bar := ProgressBar.new()
 		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bar.custom_minimum_size = Vector2(22, 10)
+		bar.custom_minimum_size = Vector2(12, 5)
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		bar.size_flags_stretch_ratio = 1.0
+		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		bar.max_value = 1.0
 		bar.value = fresh_r
 		bar.show_percentage = false
 		var bar_bg := StyleBoxFlat.new()
-		bar_bg.bg_color = Color(0.12, 0.14, 0.18, 0.95)
-		bar_bg.set_corner_radius_all(3)
+		bar_bg.bg_color = Color(0.10, 0.12, 0.16, 0.95)
+		bar_bg.set_corner_radius_all(2)
 		var bar_fill := StyleBoxFlat.new()
 		bar_fill.bg_color = _freshness_bar_color(fresh_r)
-		bar_fill.set_corner_radius_all(3)
+		bar_fill.set_corner_radius_all(2)
 		bar.add_theme_stylebox_override("background", bar_bg)
 		bar.add_theme_stylebox_override("fill", bar_fill)
 		row.add_child(bar)
 
+		var pack_cost: float = _supply_buy_unit_cost(id) * float(SUPPLY_BUY_PACK)
 		var buy := Button.new()
-		buy.text = "+"
-		buy.tooltip_text = "Buy %d (%s)" % [SUPPLY_BUY_PACK, _format_money(_supply_buy_unit_cost(id) * float(SUPPLY_BUY_PACK))]
-		buy.custom_minimum_size = Vector2(20, 18)
+		buy.text = "Buy"
+		buy.tooltip_text = "Buy %d for %s" % [SUPPLY_BUY_PACK, _format_money(pack_cost)]
+		buy.custom_minimum_size = Vector2(28, 16)
 		buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 		buy.focus_mode = Control.FOCUS_NONE
-		UiFontsScript.apply_button(buy, true, 10)
+		UiFontsScript.apply_button(buy, true, 7)
+		_style_phone_buy_button(buy)
 		var sid := id
 		buy.pressed.connect(func(): _buy_supply(sid))
 		row.add_child(buy)
+
+
+func _style_phone_buy_button(btn: Button) -> void:
+	var n := StyleBoxFlat.new()
+	n.bg_color = Color(0.16, 0.32, 0.22, 0.98)
+	n.border_color = Color(0.45, 0.78, 0.55, 0.85)
+	n.set_border_width_all(1)
+	n.set_corner_radius_all(3)
+	n.content_margin_left = 3
+	n.content_margin_right = 3
+	n.content_margin_top = 1
+	n.content_margin_bottom = 1
+	var h := n.duplicate() as StyleBoxFlat
+	h.bg_color = Color(0.22, 0.42, 0.28, 1.0)
+	var p := n.duplicate() as StyleBoxFlat
+	p.bg_color = Color(0.12, 0.24, 0.16, 1.0)
+	btn.add_theme_stylebox_override("normal", n)
+	btn.add_theme_stylebox_override("hover", h)
+	btn.add_theme_stylebox_override("pressed", p)
+	btn.add_theme_color_override("font_color", Color(0.82, 0.96, 0.86))
+	btn.add_theme_color_override("font_hover_color", Color(0.95, 1.0, 0.95))
+	btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.9, 0.75))
+
+
+func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.06, 0.08, 0.12, 0.92)
+	sb.border_color = Color(accent.r, accent.g, accent.b, 0.45)
+	sb.border_width_left = 2
+	sb.border_width_top = 1
+	sb.border_width_right = 1
+	sb.border_width_bottom = 1
+	sb.set_corner_radius_all(PHONE_CORNER_INNER)
+	sb.content_margin_left = 5
+	sb.content_margin_right = 6
+	sb.content_margin_top = 5
+	sb.content_margin_bottom = 5
+	return sb
 
 
 func _refresh_phone_feed() -> void:
@@ -9026,25 +9108,25 @@ func _refresh_phone_feed() -> void:
 		empty.text = "No posts yet — serve someone!"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		UiFontsScript.apply_label(empty, false, 8)
-		empty.add_theme_color_override("font_color", Color(0.45, 0.52, 0.6))
+		empty.add_theme_color_override("font_color", Color(0.48, 0.55, 0.64))
 		phone_feed_box.add_child(empty)
 		return
 	for post in social_reviews:
 		var card := PanelContainer.new()
 		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var card_sb := StyleBoxFlat.new()
-		card_sb.bg_color = Color(0.08, 0.10, 0.14, 0.95)
-		card_sb.set_corner_radius_all(6)
+		card_sb.bg_color = Color(0.09, 0.11, 0.16, 0.9)
+		card_sb.set_corner_radius_all(4)
 		card_sb.content_margin_left = 5
 		card_sb.content_margin_right = 5
-		card_sb.content_margin_top = 4
-		card_sb.content_margin_bottom = 4
-		card_sb.border_color = Color(0.22, 0.28, 0.36, 0.8)
+		card_sb.content_margin_top = 3
+		card_sb.content_margin_bottom = 3
+		card_sb.border_color = Color(0.28, 0.34, 0.44, 0.55)
 		card_sb.set_border_width_all(1)
 		card.add_theme_stylebox_override("panel", card_sb)
 		phone_feed_box.add_child(card)
 		var cv := VBoxContainer.new()
-		cv.add_theme_constant_override("separation", 1)
+		cv.add_theme_constant_override("separation", 2)
 		cv.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		card.add_child(cv)
 		var head := HBoxContainer.new()
@@ -9053,20 +9135,20 @@ func _refresh_phone_feed() -> void:
 		cv.add_child(head)
 		var who := Label.new()
 		who.text = str(post.get("who", "Guest"))
-		UiFontsScript.apply_label(who, true, 9)
-		who.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+		UiFontsScript.apply_label(who, true, 8)
+		who.add_theme_color_override("font_color", Color(0.88, 0.93, 1.0))
 		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		head.add_child(who)
 		var stars := Label.new()
 		stars.text = _star_bar_text(float(post.get("stars", 3.0)))
-		UiFontsScript.apply_label(stars, true, 8)
+		UiFontsScript.apply_label(stars, true, 7)
 		stars.add_theme_color_override("font_color", Color("FFD54F"))
 		head.add_child(stars)
 		var body := Label.new()
 		body.text = str(post.get("text", ""))
 		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		UiFontsScript.apply_label(body, false, 8)
-		body.add_theme_color_override("font_color", Color(0.72, 0.78, 0.86))
+		body.add_theme_color_override("font_color", Color(0.68, 0.74, 0.82))
 		cv.add_child(body)
 
 
@@ -9090,13 +9172,13 @@ func _build_phone_ui() -> void:
 	body_sb.bg_color = Color(0.11, 0.12, 0.14, 0.98)
 	body_sb.border_color = Color(0.28, 0.30, 0.34, 1.0)
 	body_sb.set_border_width_all(3)
-	body_sb.set_corner_radius_all(22)
+	body_sb.set_corner_radius_all(PHONE_CORNER_OUTER)
 	body_sb.shadow_color = Color(0, 0, 0, 0.45)
 	body_sb.shadow_size = 8
 	body_sb.content_margin_left = 6
-	body_sb.content_margin_right = 6
-	body_sb.content_margin_top = 10
-	body_sb.content_margin_bottom = 12
+	body_sb.content_margin_right = 8
+	body_sb.content_margin_top = 8
+	body_sb.content_margin_bottom = 10
 	body.add_theme_stylebox_override("panel", body_sb)
 	phone_column.add_child(body)
 
@@ -9116,11 +9198,11 @@ func _build_phone_ui() -> void:
 	screen_sb.bg_color = Color(0.04, 0.06, 0.11, 0.98)
 	screen_sb.border_color = Color(0.55, 0.62, 0.72, 0.35)
 	screen_sb.set_border_width_all(1)
-	screen_sb.set_corner_radius_all(14)
-	screen_sb.content_margin_left = 6
-	screen_sb.content_margin_right = 6
-	screen_sb.content_margin_top = 6
-	screen_sb.content_margin_bottom = 6
+	screen_sb.set_corner_radius_all(PHONE_CORNER_INNER)
+	screen_sb.content_margin_left = 4
+	screen_sb.content_margin_right = 7
+	screen_sb.content_margin_top = 5
+	screen_sb.content_margin_bottom = 5
 	screen.add_theme_stylebox_override("panel", screen_sb)
 	phone_stack.add_child(screen)
 
@@ -9152,7 +9234,7 @@ func _build_phone_ui() -> void:
 	screen_host.add_child(scroll)
 
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 4)
+	v.add_theme_constant_override("separation", 6)
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(v)
 
@@ -9177,87 +9259,125 @@ func _build_phone_ui() -> void:
 	v.add_child(status_row)
 	var status_dot := Label.new()
 	status_dot.text = "●"
-	UiFontsScript.apply_label(status_dot, true, 10)
+	UiFontsScript.apply_label(status_dot, true, 9)
 	status_dot.add_theme_color_override("font_color", Color("66BB6A"))
 	status_row.add_child(status_dot)
 	var status_lab := Label.new()
 	status_lab.text = "BizPhone"
-	UiFontsScript.apply_label(status_lab, true, 10)
+	UiFontsScript.apply_label(status_lab, true, 9)
 	status_lab.add_theme_color_override("font_color", Color(0.75, 0.82, 0.92))
 	status_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(status_lab)
 
-	var rating_title := Label.new()
-	rating_title.text = "SOCIAL RATING"
-	UiFontsScript.apply_label(rating_title, true, 9)
-	rating_title.add_theme_color_override("font_color", Color("90CAF9"))
-	v.add_child(rating_title)
+	## Social app card — rating + feed
+	var social_panel := PanelContainer.new()
+	social_panel.name = "SocialApp"
+	social_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	social_panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("90CAF9")))
+	v.add_child(social_panel)
+	var social_v := VBoxContainer.new()
+	social_v.add_theme_constant_override("separation", 3)
+	social_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	social_panel.add_child(social_v)
+
+	var feed_title := Label.new()
+	feed_title.text = "SOCIAL"
+	UiFontsScript.apply_label(feed_title, true, 9)
+	feed_title.add_theme_color_override("font_color", Color("90CAF9"))
+	social_v.add_child(feed_title)
 
 	phone_rating_stars = Label.new()
 	phone_rating_stars.text = "☆☆☆☆☆"
-	UiFontsScript.apply_label(phone_rating_stars, true, 16)
+	UiFontsScript.apply_label(phone_rating_stars, true, 14)
 	phone_rating_stars.add_theme_color_override("font_color", Color("FFD54F"))
-	v.add_child(phone_rating_stars)
+	social_v.add_child(phone_rating_stars)
 
 	var rating_row := HBoxContainer.new()
 	rating_row.add_theme_constant_override("separation", 4)
-	v.add_child(rating_row)
+	rating_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	social_v.add_child(rating_row)
 	phone_rating_value = Label.new()
 	phone_rating_value.text = "—"
-	UiFontsScript.apply_label(phone_rating_value, true, 14)
+	UiFontsScript.apply_label(phone_rating_value, true, 12)
 	phone_rating_value.add_theme_color_override("font_color", Color.WHITE)
 	rating_row.add_child(phone_rating_value)
 	var out_of := Label.new()
 	out_of.text = "/ 5"
-	UiFontsScript.apply_label(out_of, false, 10)
+	UiFontsScript.apply_label(out_of, false, 9)
 	out_of.add_theme_color_override("font_color", Color(0.65, 0.7, 0.78))
 	rating_row.add_child(out_of)
 
 	phone_review_label = Label.new()
 	phone_review_label.text = "New business · 0 reviews"
-	UiFontsScript.apply_label(phone_review_label, false, 9)
+	UiFontsScript.apply_label(phone_review_label, false, 8)
 	phone_review_label.add_theme_color_override("font_color", Color(0.55, 0.62, 0.72))
-	v.add_child(phone_review_label)
+	social_v.add_child(phone_review_label)
 
-	var feed_title := Label.new()
-	feed_title.text = "FEED"
-	UiFontsScript.apply_label(feed_title, true, 9)
-	feed_title.add_theme_color_override("font_color", Color("90CAF9"))
-	v.add_child(feed_title)
+	var feed_sub := Label.new()
+	feed_sub.text = "FEED"
+	UiFontsScript.apply_label(feed_sub, true, 8)
+	feed_sub.add_theme_color_override("font_color", Color(0.55, 0.68, 0.82))
+	social_v.add_child(feed_sub)
 
 	phone_feed_box = VBoxContainer.new()
-	phone_feed_box.add_theme_constant_override("separation", 4)
+	phone_feed_box.add_theme_constant_override("separation", 3)
 	phone_feed_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_child(phone_feed_box)
+	phone_feed_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	social_v.add_child(phone_feed_box)
 
-	var sep := HSeparator.new()
-	sep.modulate = Color(1, 1, 1, 0.25)
-	v.add_child(sep)
+	## Inventory app card
+	var inv_panel := PanelContainer.new()
+	inv_panel.name = "InventoryApp"
+	inv_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inv_panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("A5D6A7")))
+	v.add_child(inv_panel)
+	var inv_v := VBoxContainer.new()
+	inv_v.add_theme_constant_override("separation", 3)
+	inv_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inv_panel.add_child(inv_v)
 
 	var inv_title := Label.new()
 	inv_title.text = "INVENTORY"
 	UiFontsScript.apply_label(inv_title, true, 9)
 	inv_title.add_theme_color_override("font_color", Color("A5D6A7"))
-	v.add_child(inv_title)
+	inv_v.add_child(inv_title)
+
+	var inv_hint := Label.new()
+	inv_hint.text = "Freshness · restock packs of %d" % SUPPLY_BUY_PACK
+	UiFontsScript.apply_label(inv_hint, false, 7)
+	inv_hint.add_theme_color_override("font_color", Color(0.45, 0.55, 0.48))
+	inv_v.add_child(inv_hint)
 
 	phone_inventory_box = VBoxContainer.new()
 	phone_inventory_box.add_theme_constant_override("separation", 2)
 	phone_inventory_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_child(phone_inventory_box)
+	phone_inventory_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inv_v.add_child(phone_inventory_box)
 
 	_refresh_phone_ui()
 
 
 func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
-	## LMB drag to scroll — no visible scrollbar; small movement still clicks + buttons.
+	## LMB drag + flick inertia — no visible scrollbar; small movement still clicks Buy.
 	if phone_scroll == null:
+		return
+	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_WHEEL_UP:
+		_phone_scroll_vel -= PHONE_SCROLL_WHEEL_KICK
+		phone_scroll.accept_event()
+		return
+	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		_phone_scroll_vel += PHONE_SCROLL_WHEEL_KICK
+		phone_scroll.accept_event()
 		return
 	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
 		if ev.pressed:
+			_phone_scroll_vel = 0.0
 			_phone_scroll_drag_pending = true
 			_phone_scroll_dragging = false
 			_phone_scroll_drag_start_y = ev.global_position.y
 			_phone_scroll_drag_start_offset = phone_scroll.scroll_vertical
+			_phone_scroll_last_mouse_y = ev.global_position.y
+			_phone_scroll_last_msec = Time.get_ticks_msec()
 		else:
 			_phone_scroll_drag_pending = false
 			_phone_scroll_dragging = false
@@ -9271,9 +9391,28 @@ func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
 				_phone_scroll_dragging = true
 				_phone_scroll_drag_pending = false
 		if _phone_scroll_dragging:
+			var now_ms: int = Time.get_ticks_msec()
+			var dt: float = maxf(float(now_ms - _phone_scroll_last_msec) / 1000.0, 0.001)
+			var dy_frame: float = ev.global_position.y - _phone_scroll_last_mouse_y
+			var inst_vel: float = -dy_frame / dt
+			_phone_scroll_vel = lerpf(_phone_scroll_vel, inst_vel, 0.55)
+			_phone_scroll_last_mouse_y = ev.global_position.y
+			_phone_scroll_last_msec = now_ms
 			var dy: float = ev.global_position.y - _phone_scroll_drag_start_y
 			phone_scroll.scroll_vertical = int(_phone_scroll_drag_start_offset - dy)
 			phone_scroll.accept_event()
+
+
+func _update_phone_scroll_inertia(delta: float) -> void:
+	if phone_scroll == null or not is_instance_valid(phone_scroll):
+		return
+	if _phone_scroll_dragging:
+		return
+	if absf(_phone_scroll_vel) < PHONE_SCROLL_MIN_VEL:
+		_phone_scroll_vel = 0.0
+		return
+	phone_scroll.scroll_vertical = int(round(float(phone_scroll.scroll_vertical) - _phone_scroll_vel * delta))
+	_phone_scroll_vel *= exp(-PHONE_SCROLL_FRICTION * delta)
 
 
 func _setup_game_audio() -> void:
@@ -9317,47 +9456,59 @@ func _build_radio_ui() -> void:
 	radio_column.offset_right = -RADIO_UI_RIGHT
 	radio_column.offset_top = RADIO_UI_TOP
 	radio_column.offset_bottom = RADIO_UI_TOP
-	radio_column.custom_minimum_size = RADIO_UI_PANEL_SIZE
-	radio_column.add_theme_constant_override("separation", 6)
+	radio_column.custom_minimum_size = Vector2(RADIO_UI_PANEL_SIZE.x, 0.0)
+	radio_column.add_theme_constant_override("separation", 0)
 	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
 	radio_column.z_index = 20
 	ui_root.add_child(radio_column)
 
+	## Match BizPhone outer frame (same border / corners / shadow language).
 	var panel := PanelContainer.new()
 	panel.name = "RadioPanel"
-	panel.custom_minimum_size = RADIO_UI_PANEL_SIZE
+	panel.custom_minimum_size = Vector2(RADIO_UI_PANEL_SIZE.x, 0.0)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.14, 0.9)
-	sb.border_color = Color(1.0, 0.75, 0.35, 0.8)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
+	sb.bg_color = Color(0.11, 0.12, 0.14, 0.98)
+	sb.border_color = Color(0.28, 0.30, 0.34, 1.0)
+	sb.set_border_width_all(3)
+	sb.set_corner_radius_all(PHONE_CORNER_OUTER)
+	sb.shadow_color = Color(0, 0, 0, 0.45)
+	sb.shadow_size = 8
+	sb.content_margin_left = 6
+	sb.content_margin_right = 6
+	sb.content_margin_top = 4
+	sb.content_margin_bottom = 4
 	panel.add_theme_stylebox_override("panel", sb)
 	radio_column.add_child(panel)
 
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 4)
-	panel.add_child(v)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 4)
+	panel.add_child(outer)
 
 	var title_row := HBoxContainer.new()
 	title_row.add_theme_constant_override("separation", 6)
-	v.add_child(title_row)
+	outer.add_child(title_row)
+
+	var title_dot := Label.new()
+	title_dot.text = "●"
+	UiFontsScript.apply_label(title_dot, true, 9)
+	title_dot.add_theme_color_override("font_color", Color("FFCC80"))
+	title_row.add_child(title_dot)
 
 	var title := Label.new()
-	title.text = "AM/FM"
-	UiFontsScript.apply_label(title, true, 12)
-	title.add_theme_color_override("font_color", Color("FFCC80"))
+	title.text = "Cab Radio"
+	UiFontsScript.apply_label(title, true, 10)
+	title.add_theme_color_override("font_color", Color(0.75, 0.82, 0.92))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title)
 
 	var band_btn := Button.new()
 	band_btn.text = "BAND"
-	band_btn.custom_minimum_size = Vector2(48, 24)
-	UiFontsScript.apply_button(band_btn, true, 10)
+	band_btn.custom_minimum_size = Vector2(44, 22)
+	band_btn.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(band_btn, true, 9)
+	_style_radio_chrome_button(band_btn)
 	band_btn.pressed.connect(func():
 		_sfx_click()
 		if radio:
@@ -9369,14 +9520,36 @@ func _build_radio_ui() -> void:
 
 	radio_power_btn = Button.new()
 	radio_power_btn.text = "OFF"
-	radio_power_btn.custom_minimum_size = Vector2(44, 24)
-	UiFontsScript.apply_button(radio_power_btn, true, 11)
+	radio_power_btn.custom_minimum_size = Vector2(40, 22)
+	radio_power_btn.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(radio_power_btn, true, 9)
+	_style_radio_chrome_button(radio_power_btn)
 	radio_power_btn.pressed.connect(func():
 		_sfx_click()
 		if radio:
 			radio.toggle_power()
 	)
 	title_row.add_child(radio_power_btn)
+
+	## Inner screen — same inset look as the phone display.
+	var screen := PanelContainer.new()
+	screen.name = "RadioScreen"
+	screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var screen_sb := StyleBoxFlat.new()
+	screen_sb.bg_color = Color(0.04, 0.06, 0.11, 0.98)
+	screen_sb.border_color = Color(0.55, 0.62, 0.72, 0.35)
+	screen_sb.set_border_width_all(1)
+	screen_sb.set_corner_radius_all(PHONE_CORNER_INNER)
+	screen_sb.content_margin_left = 5
+	screen_sb.content_margin_right = 5
+	screen_sb.content_margin_top = 4
+	screen_sb.content_margin_bottom = 4
+	screen.add_theme_stylebox_override("panel", screen_sb)
+	outer.add_child(screen)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 2)
+	screen.add_child(v)
 
 	radio_channel_label = Label.new()
 	radio_channel_label.text = "FM 92.1 Smooth Jazz"
@@ -9390,8 +9563,8 @@ func _build_radio_ui() -> void:
 	radio_status_label.text = "Radio off"
 	radio_status_label.clip_text = true
 	radio_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(radio_status_label, false, 10)
-	radio_status_label.add_theme_color_override("font_color", Color(0.7, 0.78, 0.75))
+	UiFontsScript.apply_label(radio_status_label, false, 9)
+	radio_status_label.add_theme_color_override("font_color", Color(0.55, 0.68, 0.62))
 	v.add_child(radio_status_label)
 
 	var nav := HBoxContainer.new()
@@ -9401,8 +9574,10 @@ func _build_radio_ui() -> void:
 	var prev_btn := Button.new()
 	prev_btn.text = "◀"
 	prev_btn.tooltip_text = "Previous station"
-	prev_btn.custom_minimum_size = Vector2(36, 24)
-	UiFontsScript.apply_button(prev_btn, true, 12)
+	prev_btn.custom_minimum_size = Vector2(32, 22)
+	prev_btn.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(prev_btn, true, 11)
+	_style_radio_chrome_button(prev_btn)
 	prev_btn.pressed.connect(func():
 		_sfx_click()
 		if radio:
@@ -9414,8 +9589,10 @@ func _build_radio_ui() -> void:
 	var next_btn := Button.new()
 	next_btn.text = "▶"
 	next_btn.tooltip_text = "Next station"
-	next_btn.custom_minimum_size = Vector2(36, 24)
-	UiFontsScript.apply_button(next_btn, true, 12)
+	next_btn.custom_minimum_size = Vector2(32, 22)
+	next_btn.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(next_btn, true, 11)
+	_style_radio_chrome_button(next_btn)
 	next_btn.pressed.connect(func():
 		_sfx_click()
 		if radio:
@@ -9426,8 +9603,8 @@ func _build_radio_ui() -> void:
 
 	var vol_lab := Label.new()
 	vol_lab.text = "VOL"
-	UiFontsScript.apply_label(vol_lab, true, 10)
-	vol_lab.add_theme_color_override("font_color", Color(0.75, 0.8, 0.85))
+	UiFontsScript.apply_label(vol_lab, true, 9)
+	vol_lab.add_theme_color_override("font_color", Color(0.65, 0.72, 0.8))
 	nav.add_child(vol_lab)
 
 	var slider := HSlider.new()
@@ -9436,12 +9613,34 @@ func _build_radio_ui() -> void:
 	slider.step = 0.01
 	slider.value = 0.80
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.custom_minimum_size = Vector2(70, 16)
+	slider.custom_minimum_size = Vector2(70, 14)
 	slider.value_changed.connect(func(v: float):
 		if radio:
 			radio.set_volume_linear(v)
 	)
 	nav.add_child(slider)
+
+
+func _style_radio_chrome_button(btn: Button) -> void:
+	var n := StyleBoxFlat.new()
+	n.bg_color = Color(0.16, 0.18, 0.22, 0.98)
+	n.border_color = Color(0.40, 0.44, 0.50, 0.9)
+	n.set_border_width_all(1)
+	n.set_corner_radius_all(3)
+	n.content_margin_left = 4
+	n.content_margin_right = 4
+	n.content_margin_top = 2
+	n.content_margin_bottom = 2
+	var h := n.duplicate() as StyleBoxFlat
+	h.bg_color = Color(0.22, 0.25, 0.30, 1.0)
+	var p := n.duplicate() as StyleBoxFlat
+	p.bg_color = Color(0.12, 0.14, 0.17, 1.0)
+	btn.add_theme_stylebox_override("normal", n)
+	btn.add_theme_stylebox_override("hover", h)
+	btn.add_theme_stylebox_override("pressed", p)
+	btn.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	btn.add_theme_color_override("font_pressed_color", Color(0.75, 0.8, 0.86))
 
 
 func _build_graphics_ui() -> void:
@@ -11332,7 +11531,11 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		return
 	if angry:
 		combo = 0
-		_maybe_record_social_review(1.0, "angry")
+		## Extinguisher victims always roast you on the feed.
+		if bool(customer.get("_powder_hit")):
+			_force_record_social_review(1.0, "spray")
+		else:
+			_maybe_record_social_review(1.0, "angry")
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 
 
@@ -11408,11 +11611,11 @@ func _create_ticket(customer: Node3D) -> void:
 	## Order code = strip hotkeys for requested toppings (ketchup → 7, everything → 12345678).
 	var order_code := GameDataScript.order_number_code(customer.order)
 	title.text = order_code if order_code != "" else "—"
-	var title_size := 20
+	var title_size := 30
 	if order_code.length() >= 7:
-		title_size = 14
+		title_size = 22
 	elif order_code.length() >= 5:
-		title_size = 16
+		title_size = 26
 	UiFontsScript.apply_ticket(title, title_size)
 	title.add_theme_color_override("font_color", Color(0.22, 0.14, 0.1))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -11426,36 +11629,114 @@ func _create_ticket(customer: Node3D) -> void:
 	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(rule)
 
-	var parts: Array[String] = []
-	var patty_count := 0
-	for item in customer.order:
-		if item == "patty":
-			patty_count += 1
-	if patty_count >= 2:
-		parts.append("DOUBLE PATTY")
-	if GameDataScript.is_plain_patty_order(customer.order):
-		parts.append("PLAIN")
-	elif GameDataScript.is_everything_order(customer.order):
-		parts.append("EVERYTHING")
-	else:
-		for item in customer.order:
-			if item == "bun_bottom" or item == "bun_top" or item == "patty":
-				continue
-			var label_txt: String = str(GameDataScript.INGREDIENT_LABELS.get(item, item)).to_upper()
-			parts.append(label_txt)
-	var body := Label.new()
-	body.text = ("\n".join(parts) if parts.size() > 0 else "BURGER")
-	## Caveat handwriting — marker-on-slip feel.
-	UiFontsScript.apply_ticket(body, 21)
-	body.add_theme_color_override("font_color", Color(0.18, 0.12, 0.08))
-	body.autowrap_mode = TextServer.AUTOWRAP_OFF
-	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(body)
+	var lines_box := VBoxContainer.new()
+	lines_box.name = "TicketLines"
+	lines_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lines_box.add_theme_constant_override("separation", 1)
+	v.add_child(lines_box)
+	note.set_meta("lines_box", lines_box)
+	note.set_meta("order_customer", customer)
+
+	for spec in _ticket_line_specs(customer.order):
+		var row := HBoxContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_theme_constant_override("separation", 4)
+		row.set_meta("line_id", str(spec.get("id", "")))
+		lines_box.add_child(row)
+
+		var mark := Label.new()
+		mark.name = "Check"
+		mark.text = "○"
+		mark.custom_minimum_size = Vector2(18, 0)
+		UiFontsScript.apply_ticket(mark, 18)
+		mark.add_theme_color_override("font_color", Color(0.55, 0.45, 0.35, 0.55))
+		mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(mark)
+
+		var lab := Label.new()
+		lab.name = "Item"
+		lab.text = str(spec.get("label", ""))
+		UiFontsScript.apply_ticket(lab, 21)
+		lab.add_theme_color_override("font_color", Color(0.18, 0.12, 0.08))
+		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lab.autowrap_mode = TextServer.AUTOWRAP_OFF
+		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(lab)
 
 	ticket_box.add_child(note)
 	tickets[customer] = note
 	_highlight_tickets()
+	_refresh_ticket_checkmarks()
+
+
+func _ticket_line_specs(order: Array) -> Array:
+	## One slip line per checkable ask (toppings expand even on EVERYTHING).
+	var lines: Array = []
+	var patty_count := 0
+	for item in order:
+		if item == "patty":
+			patty_count += 1
+	if patty_count >= 2:
+		lines.append({"id": "double_patty", "label": "DOUBLE PATTY"})
+	if GameDataScript.is_plain_patty_order(order):
+		lines.append({"id": "plain", "label": "PLAIN"})
+	else:
+		for item in order:
+			if item == "bun_bottom" or item == "bun_top" or item == "patty":
+				continue
+			var label_txt: String = str(GameDataScript.INGREDIENT_LABELS.get(item, item)).to_upper()
+			lines.append({"id": str(item), "label": label_txt})
+	if lines.is_empty():
+		lines.append({"id": "burger", "label": "BURGER"})
+	return lines
+
+
+func _ticket_line_is_done(line_id: String, built: Array) -> bool:
+	match line_id:
+		"double_patty":
+			var n := 0
+			for x in built:
+				if str(x) == "patty":
+					n += 1
+			return n >= 2
+		"plain", "burger":
+			return built.has("patty")
+		_:
+			return built.has(line_id)
+
+
+func _refresh_ticket_checkmarks() -> void:
+	## Tick off slip lines as matching ingredients land on Build.
+	var built: Array = []
+	if STATION_CRAFT >= 0 and STATION_CRAFT < stations.size():
+		_sync_station_cheese_items(STATION_CRAFT)
+		built = stations[STATION_CRAFT]["items"]
+	for cust in tickets:
+		var note = tickets[cust]
+		if not is_instance_valid(note) or not note.has_meta("lines_box"):
+			continue
+		var lines_box = note.get_meta("lines_box")
+		if not is_instance_valid(lines_box):
+			continue
+		for row in lines_box.get_children():
+			if not (row is Control) or not row.has_meta("line_id"):
+				continue
+			var line_id := str(row.get_meta("line_id"))
+			var done := _ticket_line_is_done(line_id, built)
+			var mark = row.get_node_or_null("Check")
+			var lab = row.get_node_or_null("Item")
+			if mark is Label:
+				mark.text = "✓" if done else "○"
+				mark.add_theme_color_override(
+					"font_color",
+					Color(0.18, 0.52, 0.28) if done else Color(0.55, 0.45, 0.35, 0.55)
+				)
+			if lab is Label:
+				lab.add_theme_color_override(
+					"font_color",
+					Color(0.14, 0.38, 0.22) if done else Color(0.18, 0.12, 0.08)
+				)
 
 
 func _make_ticket_shell_style(selected: bool) -> StyleBoxFlat:
@@ -13621,6 +13902,7 @@ func _refresh_station(index: int) -> void:
 
 	if items.is_empty():
 		st["selected_layer"] = -1
+		_refresh_ticket_checkmarks()
 		return
 
 	## Fake-3D float stack: board is z0; bun/patty/toppings rise above it.
@@ -13739,6 +14021,7 @@ func _refresh_station(index: int) -> void:
 				_drop_on_assembly(index, pos, data)
 		)
 		preview.add_child(row)
+	_refresh_ticket_checkmarks()
 
 
 func _station_patty_has_cheese(st: Dictionary, pidx: int) -> bool:
@@ -16896,20 +17179,31 @@ func mp_ext_spray(spraying: bool, ax: float, az: float, on_customer: bool) -> vo
 				_extinguish_grill_fire_local()
 
 
-@rpc("any_peer", "call_local", "reliable")
-func mp_ext_customer(net_id: int, zone: String) -> void:
+@rpc("any_peer", "call_remote", "reliable")
+func mp_ext_customer(net_id: int, zone: String, first_hit: bool = true) -> void:
+	## Remote peers only — sprayer already applied powder locally.
 	var c = _customer_by_net_id(net_id)
 	if c == null:
 		return
 	_mp_applying = true
 	if c.has_method("receive_ext_powder"):
 		c.call("receive_ext_powder", zone)
-	var msg := "Customer: \"Agh! My face!!\"" if zone == "face" else "Customer: \"What the heck?!\""
-	_flash(msg, Color("EF9A9A"))
+	if first_hit:
+		var msg := "Customer: \"Agh! My face!!\"" if zone == "face" else "Customer: \"What the heck?!\""
+		_flash(msg, Color("EF9A9A"))
 	_mp_applying = false
-	## Host owns the angry walk-off / fine.
-	if NetManager.is_host():
+	## Guest sprayed — host owns ticket / fine / 1★ spray review (must not be under _mp_applying).
+	if first_hit and NetManager.is_host() and c != null and is_instance_valid(c):
 		_on_customer_left(c, true)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_ext_customer_push(net_id: int, zone: String, delta: float) -> void:
+	var c = _customer_by_net_id(net_id)
+	if c == null:
+		return
+	if c.has_method("apply_ext_spray_push"):
+		c.call("apply_ext_spray_push", clampf(delta, 0.0, 0.05), zone)
 
 
 @rpc("any_peer", "call_local", "reliable")
