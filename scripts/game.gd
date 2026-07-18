@@ -7454,6 +7454,7 @@ func _build_meat_warmer() -> void:
 			Vector3(float(z["cx"]), 0.018, label_z),
 			z["lab_col"]
 		)
+		_nudge_label3d_on_screen(lab, Vector2(0.0, 15.0))
 		match str(z["id"]):
 			"full":
 				warmer_label = lab
@@ -7461,6 +7462,19 @@ func _build_meat_warmer() -> void:
 				warmer_label_half = lab
 			"hold":
 				warmer_label_hold = lab
+
+
+func _nudge_label3d_on_screen(lab: Label3D, screen_delta: Vector2) -> void:
+	## Shift a world Label3D by viewport pixels (e.g. +Y = down on screen).
+	if camera == null or lab == null or not is_instance_valid(lab):
+		return
+	var gp := lab.global_position
+	if camera.is_position_behind(gp):
+		return
+	var sp := camera.unproject_position(gp)
+	var depth := camera.global_position.distance_to(gp)
+	var target := sp + screen_delta
+	lab.global_position = camera.project_ray_origin(target) + camera.project_ray_normal(target) * depth
 
 
 func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
