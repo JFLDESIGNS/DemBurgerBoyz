@@ -624,7 +624,8 @@ const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
 ## Soda fountain — right counter, nudged in so the face isn't clipped.
 ## Yaw 180: face on local +Z points at the camera (same as menu board / First Sale).
-const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
+## Soda fountain — right counter (screen-right = world −X). Nudged ~1 ft further right.
+const SODA_STATION_POS := Vector3(-1.85, 1.08, 0.52)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const CUP_COLLISION_LAYER := 1024
 const SODA_FLAVOR_COLLISION_LAYER := 4096
@@ -718,7 +719,7 @@ const GFX_DEFAULTS := {
 	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
 	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
 	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
-	"bz_row_top": 0.0,
+	"bz_row_top": 200.0, ## sit 🔔/🗑/All below the cutting board
 	"bz_row_bottom": 0.0,
 	"bz_panel_w": BUILD_PANEL_SIZE.x,
 	"bz_panel_h": BUILD_PANEL_SIZE.y,
@@ -7585,36 +7586,16 @@ func _warmer_place_bounds() -> Rect2:
 
 
 func _build_meat_warmer() -> void:
-	## Zone labels along the flat-top: FULL · 1/2 · HOLD.
+	## Grill heat-zone 3D text labels removed for now (FULL / 1/2 / HOLD).
 	if warmer_root != null and is_instance_valid(warmer_root):
 		warmer_root.queue_free()
 	warmer_root = Node3D.new()
 	warmer_root.name = "GrillHeatZones"
 	grill_root.add_child(warmer_root)
-	## Same origin as the steel surface so label X matches zone / heat-glow centers.
-	## +~4\" above the steel so FULL / 1/2 / HOLD clear the rim and stay readable.
 	warmer_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.128, GRILL_SURFACE_Z)
-
-	## Near-rim depth (not further toward camera) — extra Z skews labels off-band in perspective.
-	var label_z := -GRILL_DEPTH * 0.42
 	warmer_label = null
 	warmer_label_half = null
 	warmer_label_hold = null
-	for z in _grill_zone_bands():
-		var lab := _make_warmer_speed_label(
-			str(z["label"]),
-			Vector3(float(z["cx"]) - GRILL_CENTER_X, 0.04, label_z),
-			z["lab_col"]
-		)
-		## Slight screen-up nudge so text sits above the steel lip.
-		_nudge_label3d_on_screen(lab, Vector2(0.0, -22.0))
-		match str(z["id"]):
-			"full":
-				warmer_label = lab
-			"half":
-				warmer_label_half = lab
-			"hold":
-				warmer_label_hold = lab
 
 
 func _nudge_label3d_on_screen(lab: Label3D, screen_delta: Vector2) -> void:
@@ -8908,7 +8889,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 		spare_mesh.height = 0.09
 		spare.mesh = spare_mesh
 		spare.position = Vector3(0.0, 0.12 - float(i) * 0.038, 0.05)
-		spare.material_override = _make_clear_cup_material(0.22)
+		spare.material_override = _make_clear_cup_material(0.55)
 		rack.add_child(spare)
 
 	var cup_lab := Label3D.new()
@@ -8944,7 +8925,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	shell_mesh.cap_bottom = true
 	cup_shell.mesh = shell_mesh
 	cup_shell.position = Vector3(0.0, 0.07, 0.0)
-	cup_shell.material_override = _make_clear_cup_material(0.32)
+	cup_shell.material_override = _make_clear_cup_material(0.62)
 	cup_root.add_child(cup_shell)
 	cup_shell_mesh = cup_shell
 
@@ -9028,17 +9009,17 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 
 func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
+	## Frosted plastic — opaque enough to read as a cup; both faces so you don't see through.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.78, 0.90, 0.98, alpha)
+	mat.albedo_color = Color(0.88, 0.94, 0.98, clampf(alpha, 0.45, 0.85))
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.06
-	mat.metallic = 0.08
-	## Back-face only — dual-sided clear cylinders read as a ghosted double cup.
-	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.roughness = 0.22
+	mat.metallic = 0.04
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.refraction_enabled = false
 	mat.emission_enabled = true
-	mat.emission = Color(0.55, 0.75, 0.95)
-	mat.emission_energy_multiplier = 0.05
+	mat.emission = Color(0.70, 0.82, 0.92)
+	mat.emission_energy_multiplier = 0.04
 	return mat
 
 
@@ -12233,6 +12214,11 @@ func _load_graphics_settings() -> void:
 	if not cfg.has_section_key("gfx", "gfx_bz_build_column_v3"):
 		cfg.set_value("gfx", "bz_row_left", GFX_DEFAULTS["bz_row_left"])
 		cfg.set_value("gfx", "gfx_bz_build_column_v3", true)
+		cfg.save(GFX_CFG_PATH)
+	## Drop Build chrome ~200px so 🔔/🗑/All sit below the cutting board.
+	if not cfg.has_section_key("gfx", "gfx_bz_actions_down_v1"):
+		cfg.set_value("gfx", "bz_row_top", GFX_DEFAULTS["bz_row_top"])
+		cfg.set_value("gfx", "gfx_bz_actions_down_v1", true)
 		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
