@@ -719,7 +719,7 @@ const GFX_DEFAULTS := {
 	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
 	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
 	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
-	"bz_row_top": 500.0, ## sit 🔔/🗑/All below the cutting board
+	"bz_row_top": 0.0, ## stations_row packs to column bottom (ALIGNMENT_END)
 	"bz_row_bottom": 0.0,
 	"bz_panel_w": BUILD_PANEL_SIZE.x,
 	"bz_panel_h": BUILD_PANEL_SIZE.y,
@@ -2085,7 +2085,8 @@ func _layout_build_column_children() -> void:
 		stations_row.grow_vertical = Control.GROW_DIRECTION_BOTH
 		stations_row.custom_minimum_size = Vector2(0, 0)
 		stations_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		stations_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+		## Pack Build chrome (title + 🔔/🗑/All) to the bottom of the left column.
+		stations_row.alignment = BoxContainer.ALIGNMENT_END
 		stations_row.z_index = 1
 		stations_row.z_as_relative = true
 	if build_drop_zone != null and is_instance_valid(build_drop_zone):
@@ -12225,6 +12226,11 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_row_top", GFX_DEFAULTS["bz_row_top"])
 		cfg.set_value("gfx", "gfx_bz_actions_down_v2", true)
 		cfg.save(GFX_CFG_PATH)
+	## Undo offset_top hack (200/500 blew layout up) — pack to column bottom instead.
+	if not cfg.has_section_key("gfx", "gfx_bz_actions_down_v3"):
+		cfg.set_value("gfx", "bz_row_top", GFX_DEFAULTS["bz_row_top"])
+		cfg.set_value("gfx", "gfx_bz_actions_down_v3", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -13646,7 +13652,7 @@ func _build_station_ui() -> void:
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stations_row.z_index = 1
 	stations_row.z_as_relative = true
-	stations_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	stations_row.alignment = BoxContainer.ALIGNMENT_END
 	for child in stations_row.get_children():
 		child.queue_free()
 	for i in STATION_COUNT:
