@@ -8,8 +8,8 @@ const STATION_CRAFT := 0
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
-const STATION_PATTY_BUILD_SCALE := 0.827 ## bare meat (13% smaller than 0.95)
-const STATION_PATTY_CHEESE_BUILD_SCALE := 0.853 ## melt art (13% smaller than 0.98)
+const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
+const STATION_PATTY_CHEESE_BUILD_SCALE := 0.768 ## melt art (10% smaller than 0.853)
 ## Mild finished-stack nest — crown settles, heel rises; keep light so meat stays visible.
 const BUILD_BUN_NEST_BOTTOM_PX := 5.0
 const BUILD_BUN_NEST_TOP_PX := 7.0
