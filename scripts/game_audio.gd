@@ -68,6 +68,19 @@ var _hot_oil_fade_left: float = 0.0
 const HOT_OIL_FADE_SEC := 2.0
 var _hot_oil_pop_cd: float = 0.0
 var _hot_oil_was_active: bool = false
+## Fountain soda pour — continuous dispenser static.
+var _soda_player: AudioStreamPlayer
+var _soda_gen: AudioStreamGenerator
+var _soda_on: bool = false
+var _soda_lp := 0.0
+var _soda_bp := 0.0
+## Ice machine — crumb/crusher grind while dispensing cubes.
+var _ice_player: AudioStreamPlayer
+var _ice_gen: AudioStreamGenerator
+var _ice_on: bool = false
+var _ice_lp := 0.0
+var _ice_phase := 0.0
+var _ice_tick := 0.0
 
 
 func _ready() -> void:
@@ -114,6 +127,24 @@ func _ready() -> void:
 	_shake_player.stream = _shake_gen
 	_shake_player.volume_db = -80.0
 	add_child(_shake_player)
+	## Soda fountain dispenser hiss / carbonation rush.
+	_soda_gen = AudioStreamGenerator.new()
+	_soda_gen.mix_rate = MIX_RATE
+	_soda_gen.buffer_length = 0.12
+	_soda_player = AudioStreamPlayer.new()
+	_soda_player.bus = "Master"
+	_soda_player.stream = _soda_gen
+	_soda_player.volume_db = -80.0
+	add_child(_soda_player)
+	## Ice crusher grind while cubes drop.
+	_ice_gen = AudioStreamGenerator.new()
+	_ice_gen.mix_rate = MIX_RATE
+	_ice_gen.buffer_length = 0.12
+	_ice_player = AudioStreamPlayer.new()
+	_ice_player.bus = "Master"
+	_ice_player.stream = _ice_gen
+	_ice_player.volume_db = -80.0
+	add_child(_ice_player)
 	## Looping soft metal scrape for patty slides.
 	_slide_player = AudioStreamPlayer.new()
 	_slide_player.bus = "Master"
@@ -210,6 +241,18 @@ func _process(delta: float) -> void:
 			while shp.get_frames_available() > 0:
 				var shs := _next_shaker_rattle_sample()
 				shp.push_frame(Vector2(shs, shs))
+	if _soda_on and _soda_player != null and _soda_player.playing:
+		var sop := _soda_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if sop != null:
+			while sop.get_frames_available() > 0:
+				var sos := _next_soda_pour_sample()
+				sop.push_frame(Vector2(sos, sos))
+	if _ice_on and _ice_player != null and _ice_player.playing:
+		var ip := _ice_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if ip != null:
+			while ip.get_frames_available() > 0:
+				var ics := _next_ice_grind_sample()
+				ip.push_frame(Vector2(ics, ics))
 
 
 func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
@@ -309,6 +352,70 @@ func set_shaker_rattle(active: bool) -> void:
 		if _shake_player.playing:
 			_shake_player.stop()
 		_shake_player.volume_db = -80.0
+
+
+func set_soda_pour(active: bool) -> void:
+	## Static drink-dispenser rush while soda is pouring.
+	if _soda_player == null:
+		return
+	if active:
+		_soda_on = true
+		_soda_player.volume_db = -14.0
+		if not _soda_player.playing:
+			_soda_player.play()
+	else:
+		_soda_on = false
+		if _soda_player.playing:
+			_soda_player.stop()
+		_soda_player.volume_db = -80.0
+
+
+func set_ice_grind(active: bool) -> void:
+	## Ice-machine crumb grind while cubes are dispensing.
+	if _ice_player == null:
+		return
+	if active:
+		_ice_on = true
+		_ice_player.volume_db = -16.0
+		if not _ice_player.playing:
+			_ice_player.play()
+	else:
+		_ice_on = false
+		if _ice_player.playing:
+			_ice_player.stop()
+		_ice_player.volume_db = -80.0
+
+
+func play_ice_tink() -> void:
+	## Cube hits the cup glass.
+	_play_cached("ice_tink", _make_ice_tink, 0.85 + randf() * 0.3, 0.55 + randf() * 0.2)
+
+
+func _next_soda_pour_sample() -> float:
+	## Soft carbonated dispenser static — continuous fountain hiss.
+	var white := randf() * 2.0 - 1.0
+	_soda_lp = _soda_lp * 0.86 + white * 0.14
+	var hp := white - _soda_lp
+	_soda_bp = _soda_bp * 0.62 + hp * 0.38
+	var rush := _soda_bp * 0.42 + hp * 0.28 + _soda_lp * 0.06
+	if randf() < 0.003:
+		rush += (randf() * 2.0 - 1.0) * 0.22
+	return clampf(rush * 0.34, -1.0, 1.0)
+
+
+func _next_ice_grind_sample() -> float:
+	## Low crunchy grind — crushed ice crumbs through the chute.
+	_ice_tick += 1.0 / float(MIX_RATE)
+	var grind_hz := 18.0 + sin(_ice_tick * 3.4) * 4.0
+	_ice_phase += grind_hz / float(MIX_RATE)
+	var pulse := 0.55 + 0.45 * absf(sin(_ice_phase * TAU))
+	var white := randf() * 2.0 - 1.0
+	_ice_lp = _ice_lp * 0.7 + white * 0.3
+	var grit := (white - _ice_lp) * 0.45 + _ice_lp * 0.22
+	var chunk := 0.0
+	if randf() < 0.012:
+		chunk = (randf() * 2.0 - 1.0) * 0.35
+	return clampf((grit * 0.28 + chunk) * pulse, -1.0, 1.0)
 
 
 func _next_shaker_rattle_sample() -> float:
@@ -795,6 +902,20 @@ func _make_click() -> AudioStreamWAV:
 		var env := exp(-t * 70.0)
 		var wave := sin(t * 1800.0 * TAU) * 0.55 + (randf() * 2.0 - 1.0) * 0.15
 		_write_s16(pcm, i, int(wave * env * 16000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_ice_tink() -> AudioStreamWAV:
+	## Short glass ping when a cube lands in the cup.
+	var n := int(MIX_RATE * 0.09)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := exp(-t * 38.0)
+		var ping := sin(t * 2650.0 * TAU) * 0.55 + sin(t * 4120.0 * TAU) * 0.28
+		var tick := (randf() * 2.0 - 1.0) * exp(-t * 90.0) * 0.2
+		_write_s16(pcm, i, int(clampf((ping + tick) * env, -1.0, 1.0) * 17000.0))
 	return _wav_from_pcm(pcm, false)
 
 

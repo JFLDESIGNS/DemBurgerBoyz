@@ -437,6 +437,7 @@ var _phone_scroll_last_mouse_y: float = 0.0
 var _phone_scroll_last_msec: int = 0
 ## Soda fountain + wall cups (orders later).
 var soda_root: Node3D = null
+var soda_colliders: Array = [] ## {p: Vector3, h: Vector3} local box centers / half-extents
 var soda_selected_flavor: String = "cola"
 var soda_flavor_areas: Dictionary = {} ## flavor id -> Area3D
 var soda_flavor_mats: Dictionary = {} ## flavor id -> StandardMaterial3D
@@ -448,12 +449,13 @@ var cup_root: Node3D = null
 var cup_area: Area3D = null
 var cup_shell_mesh: MeshInstance3D = null
 var cup_liquid_mesh: MeshInstance3D = null
-var cup_liquid_mat: StandardMaterial3D = null
+var cup_liquid_mat: ShaderMaterial = null ## body: vertical pop→white gradient
 var cup_liquid_pivot: Node3D = null ## mild body lean with motion
 var cup_surface_pivot: Node3D = null ## top disc — steeper splash tilt
 var cup_liquid_surface: MeshInstance3D = null ## splash / free-surface disc
-var cup_fizz_mesh: MeshInstance3D = null ## foam cap — big while pouring, dies down
-var cup_bubble_fx: GPUParticles3D = null ## rising bubbles in the soda
+var cup_fizz_mesh: MeshInstance3D = null ## squashed foam dome with noise holes
+var cup_bubble_fx: GPUParticles3D = null ## ~20 white spheres bubbling on foam top
+## ... keep reading for _cup_fizz
 var cup_ice_root: Node3D = null ## stacked cubes inside the clear cup
 var cup_held: bool = false
 var cup_home: Vector3 = Vector3.ZERO ## rack spawn (spare grab)
@@ -465,6 +467,16 @@ var cup_soda_fill: float = 0.0
 var cup_ice_fill: float = 0.0 ## can exceed 1.0 while overfilling under ICE
 var soda_stream_mesh: MeshInstance3D = null
 var soda_stream_mat: StandardMaterial3D = null
+## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
+var air_motes_mm: MultiMeshInstance3D = null
+var _air_mote_pos: PackedVector3Array = PackedVector3Array()
+var _air_mote_vel: PackedVector3Array = PackedVector3Array()
+var _air_mote_phase: PackedFloat32Array = PackedFloat32Array()
+var _air_push_prev: Vector3 = Vector3.ZERO
+var _air_push_have: bool = false
+const AIR_MOTE_COUNT := 56
+const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
+const AIR_MOTE_BOUNDS_MAX := Vector3(2.35, 2.35, 1.25)
 var _cup_ice_spawn_cd: float = 0.0
 var _cup_prev_pos: Vector3 = Vector3.ZERO
 var _cup_vel: Vector3 = Vector3.ZERO
@@ -475,7 +487,12 @@ var _cup_surface_spin: float = 0.0 ## yaw on the splash disc
 var _cup_splash_cd: float = 0.0
 var _cup_surface_wobble: float = 0.0 ## brief pour / splash kick on the disc
 var _cup_fizz: float = 0.0 ## 0–1 foam head; spikes on pour, fades after
+var _cup_fizz_peak: bool = false ## hit a strong head this pour cycle
+var _cup_fizz_poof: float = 0.0 ## 0–1 end-of-life poof out the top
+var _cup_fizz_poofing: bool = false
 var _cup_pouring: bool = false
+var _cup_pour_white: float = 0.0 ## 1 while pouring (top-half white), fades to 0 over 2s
+const CUP_POUR_WHITE_FADE := 2.0
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
 ## Newest-first feed posts: {stars, who, text, pic?}
@@ -660,9 +677,12 @@ const CUP_LIQUID_TOP_R := 0.076
 const CUP_LIQUID_BOT_R := 0.062
 const CUP_FILL_RATE := 0.95
 const CUP_SPOUT_REACH := 0.55
-const CUP_ICE_CUBE_INTERVAL := 0.09
-const CUP_ICE_OVERFILL_INTERVAL := 0.06
-const CUP_ICE_STACK_MAX := 12
+const CUP_ICE_CUBE_INTERVAL := 0.065
+const CUP_ICE_OVERFILL_INTERVAL := 0.032
+const CUP_ICE_STACK_MAX := 36
+const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
+const CUP_ICE_OVERFILL_CAP := 2.4
+const CUP_ICE_CUBE_SIZE := 0.036
 const CUP_SLOSH_FOLLOW := 10.0
 const CUP_SLOSH_RETURN := 2.2 ## slow settle — correct with opposite motion
 const CUP_TILT_ACCEL := 9.5
@@ -676,6 +696,10 @@ const CUP_SPOUT_VERT := 0.30
 const CUP_MAGNET_RADIUS := 0.12
 const CUP_FIZZ_POUR_RATE := 2.8
 const CUP_FIZZ_FADE_RATE := 0.42
+const CUP_FIZZ_MAX_H := 0.038 ## Squashed dome height at full head.
+const CUP_FIZZ_OVERSIZE := 1.12 ## Grows slightly past the cup rim.
+const CUP_BUBBLE_AMOUNT := 20
+const CUP_DRAW_PRIORITY := 10 ## Above grill shine (render_priority 2).
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -1196,6 +1220,7 @@ func _restart() -> void:
 func _process(delta: float) -> void:
 	_mp_update_cursors(delta)
 	_update_phone_scroll_inertia(delta)
+	_update_air_motes(delta)
 	if not playing:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
@@ -1233,9 +1258,17 @@ func _process(delta: float) -> void:
 		_update_held_oil(delta)
 	if cup_held:
 		_update_held_cup(delta)
-	elif cup_soda_fill > 0.02 and _cup_fizz > 0.0:
-		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * delta)
+	elif cup_soda_fill > 0.02 and (_cup_fizz > 0.0 or _cup_fizz_poofing or _cup_pour_white > 0.001):
+		_update_cup_fizz_life(delta)
+		_update_cup_pour_white(delta)
 		_refresh_cup_fizz_visual()
+		if cup_liquid_mat != null and cup_flavor != "":
+			var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+			_apply_soda_liquid_gradient(cup_liquid_mat, col, _cup_fizz)
+			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
+				var sm := cup_liquid_surface.material_override as StandardMaterial3D
+				if sm:
+					_apply_soda_surface_look(sm, col, _cup_fizz)
 	if ext_held:
 		_update_held_fire_ext(delta)
 	if glock_held:
@@ -2357,6 +2390,7 @@ func _build_3d_world() -> void:
 	_build_soda_station()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
 	_build_window_bunting()
+	_build_air_motes()
 
 	_setup_world_lighting()
 
@@ -8526,6 +8560,7 @@ func _build_soda_station() -> void:
 		soda_stream_mesh.queue_free()
 	soda_flavor_areas.clear()
 	soda_flavor_mats.clear()
+	soda_colliders.clear()
 	soda_spout_marker = null
 	ice_spout_marker = null
 	soda_spout_mat = null
@@ -8553,6 +8588,10 @@ func _build_soda_station() -> void:
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
 	_cup_fizz = 0.0
+	_cup_fizz_peak = false
+	_cup_fizz_poof = 0.0
+	_cup_fizz_poofing = false
+	_cup_pour_white = 0.0
 	_cup_pouring = false
 	cup_held = false
 	cup_flavor = ""
@@ -8673,17 +8712,17 @@ func _build_soda_station() -> void:
 		root.add_child(area)
 		soda_flavor_areas[fid] = area
 
-	## Raised taps — high above the drip tray so the pour clears the cup rim.
-	_add_soda_spout(root, "SodaSpout", Vector3(-0.18, 0.54, 0.30), true)
-	_add_soda_spout(root, "IceSpout", Vector3(0.18, 0.54, 0.30), false)
+	## Pour spots shifted camera-left on the face (local −X = world +X with yaw 180).
+	_add_soda_spout(root, "SodaSpout", Vector3(-0.28, 0.54, 0.30), true)
+	_add_soda_spout(root, "IceSpout", Vector3(-0.02, 0.54, 0.30), false)
 
-	## Cup rest surface (drip tray) under the nozzles.
+	## Cup rest surface (drip tray) under the nozzles — pushed toward camera (+Z).
 	var tray := MeshInstance3D.new()
 	tray.name = "DripTray"
 	var tray_mesh := BoxMesh.new()
-	tray_mesh.size = Vector3(0.58, 0.028, 0.28)
+	tray_mesh.size = Vector3(0.58, 0.028, 0.32)
 	tray.mesh = tray_mesh
-	tray.position = Vector3(0.0, 0.085, 0.28)
+	tray.position = Vector3(0.0, 0.085, 0.34)
 	tray.material_override = _make_soda_metal_mat(Color(0.32, 0.34, 0.38), 0.88, 0.28)
 	root.add_child(tray)
 
@@ -8692,17 +8731,17 @@ func _build_soda_station() -> void:
 		var gm := BoxMesh.new()
 		gm.size = Vector3(0.54, 0.005, 0.012)
 		grate.mesh = gm
-		grate.position = Vector3(0.0, 0.102, 0.18 + float(gi) * 0.038)
+		grate.position = Vector3(0.0, 0.105, 0.22 + float(gi) * 0.042)
 		grate.material_override = _make_soda_metal_mat(Color(0.55, 0.58, 0.62), 0.9, 0.22)
 		root.add_child(grate)
 
-	## World park spot: on top of the grate (not sunk into the bars).
-	cup_rest = root.to_global(Vector3(0.0, 0.118, 0.30))
+	## Park on front of tray, clear above the grate (closer to player / camera).
+	cup_rest = root.to_global(Vector3(0.0, 0.138, 0.40))
 	cup_rest_rot = Vector3.ZERO
 
 	var soda_lab := Label3D.new()
 	soda_lab.text = "SODA"
-	soda_lab.position = Vector3(-0.18, 0.62, 0.32)
+	soda_lab.position = Vector3(-0.28, 0.62, 0.32)
 	soda_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	soda_lab.font_size = 13
 	soda_lab.pixel_size = 0.0013
@@ -8712,7 +8751,7 @@ func _build_soda_station() -> void:
 	root.add_child(soda_lab)
 	var ice_lab := Label3D.new()
 	ice_lab.text = "ICE"
-	ice_lab.position = Vector3(0.18, 0.62, 0.32)
+	ice_lab.position = Vector3(-0.02, 0.62, 0.32)
 	ice_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	ice_lab.font_size = 13
 	ice_lab.pixel_size = 0.0013
@@ -8732,6 +8771,17 @@ func _build_soda_station() -> void:
 
 	_build_soda_cup_rack(root)
 	_refresh_soda_flavor_lights()
+	## Solid volumes the held cup cannot clip through (local space of soda_root).
+	## Drip tray / spout volume in front of the cabinet face is intentionally open.
+	soda_colliders = [
+		{"p": Vector3(0.0, 0.26, 0.0), "h": Vector3(0.43, 0.24, 0.215)}, ## main body
+		{"p": Vector3(0.0, 0.38, 0.225), "h": Vector3(0.37, 0.12, 0.03)}, ## face plate
+		{"p": Vector3(0.0, 0.66, 0.0), "h": Vector3(0.42, 0.14, 0.14)}, ## flavor tanks
+		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.03, 0.21)}, ## tank deck
+		{"p": Vector3(-0.28, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## soda arm
+		{"p": Vector3(-0.02, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## ice arm
+		{"p": Vector3(-0.58, 0.32, 0.14), "h": Vector3(0.10, 0.19, 0.03)}, ## cup rack board
+	]
 
 
 func _make_soda_metal_mat(col: Color, metallic: float, roughness: float) -> StandardMaterial3D:
@@ -8991,7 +9041,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = station.to_global(rack.position + Vector3(0.0, -0.06, 0.10))
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(0.0, 0.118, 0.30))
+		cup_rest = station.to_global(Vector3(0.0, 0.138, 0.40))
 		cup_rest_rot = Vector3.ZERO
 	world.add_child(cup_root)
 	cup_root.global_position = cup_home
@@ -9007,7 +9057,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	shell_mesh.cap_bottom = true
 	cup_shell.mesh = shell_mesh
 	cup_shell.position = Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
-	cup_shell.material_override = _make_clear_cup_material(0.14)
+	cup_shell.material_override = _make_clear_cup_material(0.06)
+	_boost_cup_draw_order(cup_shell)
 	cup_root.add_child(cup_shell)
 	cup_shell_mesh = cup_shell
 
@@ -9019,7 +9070,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rim_mesh.outer_radius = CUP_SHELL_TOP_R + 0.004
 	rim.mesh = rim_mesh
 	rim.position = Vector3(0.0, CUP_SHELL_H - 0.004, 0.0)
-	rim.material_override = _make_clear_cup_material(0.55)
+	rim.material_override = _make_clear_cup_material(0.28)
+	_boost_cup_draw_order(rim)
 	cup_root.add_child(rim)
 
 	## Single soda volume + independent top disc (splash angle lives on the disc).
@@ -9039,8 +9091,9 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_liquid_mesh.mesh = liq
 	cup_liquid_mesh.position = Vector3(0.0, 0.01, 0.0)
 	cup_liquid_mesh.visible = false
-	cup_liquid_mat = _make_soda_liquid_material(Color(0.32, 0.10, 0.06))
+	cup_liquid_mat = _make_soda_liquid_gradient_material(Color(0.28, 0.08, 0.05))
 	cup_liquid_mesh.material_override = cup_liquid_mat
+	_boost_cup_draw_order(cup_liquid_mesh)
 	cup_liquid_pivot.add_child(cup_liquid_mesh)
 
 	cup_surface_pivot = Node3D.new()
@@ -9057,30 +9110,32 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	surf.cap_bottom = true
 	cup_liquid_surface.mesh = surf
 	cup_liquid_surface.visible = false
-	cup_liquid_surface.material_override = _make_soda_liquid_material(Color(0.36, 0.12, 0.07))
+	cup_liquid_surface.material_override = _make_soda_surface_material(Color(0.30, 0.09, 0.05))
+	_boost_cup_draw_order(cup_liquid_surface)
 	cup_surface_pivot.add_child(cup_liquid_surface)
 
-	## Foam / fizz head — thick while pouring, shrinks after.
+	## Squashed half-dome foam cap — noise holes, grows past rim, poofs at end.
 	cup_fizz_mesh = MeshInstance3D.new()
 	cup_fizz_mesh.name = "FizzFoam"
-	var foam := CylinderMesh.new()
-	foam.top_radius = CUP_LIQUID_TOP_R * 0.98
-	foam.bottom_radius = CUP_LIQUID_TOP_R * 0.95
-	foam.height = 0.02
-	foam.cap_top = true
-	foam.cap_bottom = true
-	cup_fizz_mesh.mesh = foam
+	cup_fizz_mesh.mesh = _make_foam_dome_mesh()
 	cup_fizz_mesh.visible = false
 	var foam_mat := StandardMaterial3D.new()
-	foam_mat.albedo_color = Color(0.95, 0.92, 0.88, 0.72)
+	foam_mat.albedo_color = Color(0.98, 0.96, 0.92, 1.0)
+	foam_mat.albedo_texture = _make_foam_hole_texture()
 	foam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	foam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	foam_mat.cull_mode = BaseMaterial3D.CULL_BACK
+	foam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	foam_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	foam_mat.roughness = 0.55
+	foam_mat.rim_enabled = true
+	foam_mat.rim = 0.35
+	foam_mat.rim_tint = 0.85
+	foam_mat.render_priority = CUP_DRAW_PRIORITY
 	cup_fizz_mesh.material_override = foam_mat
+	_boost_cup_draw_order(cup_fizz_mesh)
 	cup_surface_pivot.add_child(cup_fizz_mesh)
 
 	cup_bubble_fx = _make_cup_bubble_particles()
-	cup_liquid_pivot.add_child(cup_bubble_fx)
+	cup_surface_pivot.add_child(cup_bubble_fx)
 
 	cup_ice_root = Node3D.new()
 	cup_ice_root.name = "IceStack"
@@ -9089,8 +9144,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	soda_stream_mesh = MeshInstance3D.new()
 	soda_stream_mesh.name = "SodaStream"
 	var stream_cyl := CylinderMesh.new()
-	stream_cyl.top_radius = 0.007
-	stream_cyl.bottom_radius = 0.011
+	stream_cyl.top_radius = 0.014 ## 2× thicker pour
+	stream_cyl.bottom_radius = 0.022
 	stream_cyl.height = 0.1
 	stream_cyl.cap_top = false
 	stream_cyl.cap_bottom = false
@@ -9098,11 +9153,13 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	soda_stream_mat = StandardMaterial3D.new()
 	soda_stream_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	soda_stream_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	soda_stream_mat.albedo_color = Color(0.45, 0.18, 0.12, 0.75)
+	soda_stream_mat.albedo_color = Color(0.45, 0.18, 0.12, 0.85)
 	soda_stream_mat.cull_mode = BaseMaterial3D.CULL_BACK
+	soda_stream_mat.render_priority = CUP_DRAW_PRIORITY
 	soda_stream_mesh.material_override = soda_stream_mat
 	soda_stream_mesh.visible = false
 	soda_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_boost_cup_draw_order(soda_stream_mesh)
 	world.add_child(soda_stream_mesh)
 
 	cup_area = Area3D.new()
@@ -9122,68 +9179,177 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 
 func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
-	## Clear plastic — thin alpha so soda color shows through (not milky frost).
+	## Very clear plastic — drink must read through the walls.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.92, 0.96, 1.0, clampf(alpha, 0.08, 0.65))
+	mat.albedo_color = Color(0.95, 0.98, 1.0, clampf(alpha, 0.03, 0.45))
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.12
+	mat.roughness = 0.06
 	mat.metallic = 0.0
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.refraction_enabled = false
 	mat.emission_enabled = false
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.clearcoat_enabled = false
+	mat.render_priority = CUP_DRAW_PRIORITY
 	return mat
 
 
-func _make_soda_liquid_material(col: Color) -> StandardMaterial3D:
-	## Clear tinted soda — see through the cup wall with flavor color.
+func _make_soda_liquid_gradient_material(col: Color) -> ShaderMaterial:
+	## Pour-only top-half white → fades back to flat pop after pour stops.
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode blend_mix, depth_draw_always, cull_back, diffuse_burley, specular_schlick_ggx;
+
+uniform vec4 bottom_color : source_color = vec4(0.28, 0.08, 0.05, 0.94);
+uniform vec4 top_color : source_color = vec4(0.96, 0.96, 0.97, 0.98);
+uniform float roughness : hint_range(0.0, 1.0) = 0.16;
+uniform float rim_strength : hint_range(0.0, 1.0) = 0.45;
+uniform float uv_flip : hint_range(0.0, 1.0) = 0.0;
+uniform float pour_blend : hint_range(0.0, 1.0) = 0.0;
+
+void fragment() {
+	float t = mix(UV.y, 1.0 - UV.y, uv_flip);
+	t = clamp(t, 0.0, 1.0);
+	// White only on the upper half of whatever liquid is in the cup.
+	float top_w = smoothstep(0.5, 1.0, t);
+	vec4 poured = mix(bottom_color, top_color, top_w);
+	vec4 flat_pop = bottom_color;
+	vec4 col = mix(flat_pop, poured, pour_blend);
+	ALBEDO = col.rgb;
+	ALPHA = col.a;
+	ROUGHNESS = roughness;
+	METALLIC = 0.0;
+	EMISSION = col.rgb * 0.14;
+	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), 2.2);
+	ALBEDO = mix(ALBEDO, vec3(1.0), fres * rim_strength * 0.22);
+	ALPHA = mix(ALPHA, min(1.0, ALPHA + 0.08), fres * 0.35);
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.render_priority = CUP_DRAW_PRIORITY
+	_apply_soda_liquid_gradient(mat, col, 0.0)
+	return mat
+
+
+func _make_soda_surface_material(col: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	var c := col
-	c.a = 0.58
+	_apply_soda_surface_look(mat, col, 0.0)
+	return mat
+
+
+func _apply_soda_liquid_gradient(mat: ShaderMaterial, col: Color, foam_amt: float = -1.0) -> void:
+	if mat == null:
+		return
+	if foam_amt < 0.0:
+		foam_amt = _cup_fizz
+	foam_amt = clampf(foam_amt, 0.0, 1.0)
+	var bot := col
+	bot.a = 0.94
+	## Top white / cream — denser opacity while the pour head is active.
+	var top := Color(0.97, 0.97, 0.98, 0.98)
+	top = top.lerp(Color(0.99, 0.97, 0.93, 1.0), foam_amt * 0.4)
+	mat.set_shader_parameter("bottom_color", bot)
+	mat.set_shader_parameter("top_color", top)
+	mat.set_shader_parameter("roughness", 0.16)
+	mat.set_shader_parameter("rim_strength", 0.45)
+	mat.set_shader_parameter("uv_flip", 1.0)
+	mat.set_shader_parameter("pour_blend", clampf(_cup_pour_white, 0.0, 1.0))
+
+
+func _apply_soda_surface_look(mat: StandardMaterial3D, col: Color, foam_amt: float = -1.0) -> void:
+	if mat == null:
+		return
+	if foam_amt < 0.0:
+		foam_amt = _cup_fizz
+	foam_amt = clampf(foam_amt, 0.0, 1.0)
+	## Surface only goes white while pour-white is up.
+	var w := clampf(_cup_pour_white, 0.0, 1.0)
+	var foam_tint := Color(0.97, 0.96, 0.94)
+	var c := col.lightened(0.08)
+	c = c.lerp(foam_tint, w * (0.55 + foam_amt * 0.25))
+	c.a = lerpf(0.9, 0.97, w)
 	mat.albedo_color = c
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
-	mat.emission_enabled = false
-	return mat
+	mat.roughness = 0.08
+	mat.metallic = 0.0
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.rim_enabled = true
+	mat.rim = 0.65
+	mat.rim_tint = 0.4
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.9
+	mat.clearcoat_roughness = 0.04
+	mat.refraction_enabled = false
+	mat.emission_enabled = true
+	mat.emission = Color(c.r * 0.5, c.g * 0.5, c.b * 0.5)
+	mat.emission_energy_multiplier = 0.22
+	mat.render_priority = CUP_DRAW_PRIORITY
+
+
+func _update_cup_pour_white(delta: float) -> void:
+	## Full white head while soda streams; ease back to flat pop over 2s.
+	if _cup_pouring and cup_soda_fill > 0.02:
+		_cup_pour_white = 1.0
+	else:
+		_cup_pour_white = move_toward(_cup_pour_white, 0.0, delta / CUP_POUR_WHITE_FADE)
+
+
+func _boost_cup_draw_order(gi: GeometryInstance3D) -> void:
+	## Sit above grill fake-shine (priority 2) when the cup is over the flat-top.
+	gi.sorting_offset = 10.0
+	var m := gi.material_override
+	if m is BaseMaterial3D:
+		(m as BaseMaterial3D).render_priority = CUP_DRAW_PRIORITY
+	elif m is ShaderMaterial:
+		(m as ShaderMaterial).render_priority = CUP_DRAW_PRIORITY
 
 
 func _make_cup_bubble_particles() -> GPUParticles3D:
+	## ~20 small white spheres that bubble up on the foam head.
 	var fx := GPUParticles3D.new()
 	fx.name = "CupBubbles"
-	fx.amount = 28
-	fx.lifetime = 1.1
-	fx.preprocess = 0.2
-	fx.explosiveness = 0.0
-	fx.randomness = 0.4
+	fx.amount = CUP_BUBBLE_AMOUNT
+	fx.lifetime = 0.55
+	fx.preprocess = 0.05
+	fx.explosiveness = 0.05
+	fx.randomness = 0.65
 	fx.emitting = false
-	fx.position = Vector3(0.0, 0.04, 0.0)
+	fx.position = Vector3(0.0, 0.01, 0.0)
+	fx.sorting_offset = 10.0
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var pm := ParticleProcessMaterial.new()
-	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pm.emission_sphere_radius = 0.045
+	## Flat disc emit (Godot has no cylinder emission shape).
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(0.05, 0.002, 0.05)
 	pm.direction = Vector3(0, 1, 0)
-	pm.spread = 8.0
-	pm.initial_velocity_min = 0.04
-	pm.initial_velocity_max = 0.11
+	pm.spread = 28.0
+	pm.initial_velocity_min = 0.03
+	pm.initial_velocity_max = 0.09
 	pm.gravity = Vector3(0, 0.02, 0)
-	pm.damping_min = 0.1
-	pm.damping_max = 0.35
-	pm.scale_min = 0.35
-	pm.scale_max = 0.85
-	pm.color = Color(1.0, 1.0, 1.0, 0.55)
+	pm.damping_min = 0.6
+	pm.damping_max = 1.4
+	pm.scale_min = 0.45
+	pm.scale_max = 1.0
+	pm.color = Color(1.0, 1.0, 1.0, 0.95)
 	fx.process_material = pm
 	var draw := StandardMaterial3D.new()
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	draw.albedo_color = Color(1, 1, 1, 0.55)
-	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.albedo_color = Color(1, 1, 1, 0.95)
+	draw.cull_mode = BaseMaterial3D.CULL_BACK
+	draw.render_priority = CUP_DRAW_PRIORITY
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.0045
-	sphere.height = 0.009
+	sphere.radius = 0.0038
+	sphere.height = 0.0076
 	sphere.material = draw
 	fx.draw_pass_1 = sphere
-	fx.visibility_aabb = AABB(Vector3(-0.1, -0.02, -0.1), Vector3(0.2, 0.22, 0.2))
+	fx.material_override = draw
+	fx.visibility_aabb = AABB(Vector3(-0.1, -0.02, -0.1), Vector3(0.2, 0.12, 0.2))
 	return fx
 
 
@@ -9282,6 +9448,10 @@ func _begin_cup_hold() -> bool:
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
 	_cup_fizz = 0.0
+	_cup_fizz_peak = false
+	_cup_fizz_poof = 0.0
+	_cup_fizz_poofing = false
+	_cup_pour_white = 0.0
 	_cup_pouring = false
 	if cup_area:
 		cup_area.input_ray_pickable = false
@@ -9306,8 +9476,8 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	if hit == Vector3.ZERO:
 		hit = from + dir * 2.4
 		hit.y = hold_y
-	## Work volume: grill + soda fountain on camera-left (world +X).
-	hit.x = clampf(hit.x, -2.20, 1.95)
+	## Work volume: grill + soda fountain on the right (world −X).
+	hit.x = clampf(hit.x, -2.20, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.20)
 	hit.y = hold_y
 	## Soft snap under a nozzle — seat the cup low so the rim sits below the tip.
@@ -9345,7 +9515,9 @@ func _update_held_cup(delta: float) -> void:
 	var seat := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	if seat != Vector3.ZERO:
 		var prev := cup_root.global_position
-		cup_root.global_position = prev.lerp(seat, clampf(delta * 28.0, 0.0, 1.0))
+		cup_root.global_position = _resolve_cup_against_soda(
+			prev.lerp(seat, clampf(delta * 28.0, 0.0, 1.0))
+		)
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 		_cup_prev_pos = cup_root.global_position
@@ -9367,6 +9539,48 @@ func _update_held_cup(delta: float) -> void:
 	)
 	_update_cup_slosh(delta)
 	_try_fill_cup_at_spouts(delta)
+	## After spout sets _cup_pouring — drive the pour-white fade.
+	_update_cup_pour_white(delta)
+	if cup_soda_fill > 0.02 and cup_flavor != "" and cup_liquid_mat != null:
+		var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+		_apply_soda_liquid_gradient(cup_liquid_mat, col, _cup_fizz)
+		if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
+			var sm := cup_liquid_surface.material_override as StandardMaterial3D
+			if sm:
+				_apply_soda_surface_look(sm, col, _cup_fizz)
+
+
+func _resolve_cup_against_soda(world_pos: Vector3) -> Vector3:
+	## Push the cup out of soda-machine colliders so it can't clip through metal.
+	if soda_root == null or not is_instance_valid(soda_root) or soda_colliders.is_empty():
+		return world_pos
+	var cup_half := Vector3(0.05, 0.07, 0.05)
+	var cup_center_world := world_pos + Vector3(0.0, 0.055, 0.0)
+	var inv := soda_root.global_transform.affine_inverse()
+	var resolved: Vector3 = inv * cup_center_world
+	for _pass in range(3):
+		var moved := false
+		for box in soda_colliders:
+			var bp: Vector3 = box["p"]
+			var bh: Vector3 = box["h"]
+			var d: Vector3 = resolved - bp
+			var ox: float = (bh.x + cup_half.x) - absf(d.x)
+			var oy: float = (bh.y + cup_half.y) - absf(d.y)
+			var oz: float = (bh.z + cup_half.z) - absf(d.z)
+			if ox <= 0.0 or oy <= 0.0 or oz <= 0.0:
+				continue
+			## Push along the shallowest overlap axis.
+			if ox <= oy and ox <= oz:
+				resolved.x += ox if d.x >= 0.0 else -ox
+			elif oy <= ox and oy <= oz:
+				resolved.y += oy if d.y >= 0.0 else -oy
+			else:
+				resolved.z += oz if d.z >= 0.0 else -oz
+			moved = true
+		if not moved:
+			break
+	var out_center: Vector3 = soda_root.global_transform * resolved
+	return out_center - Vector3(0.0, 0.055, 0.0)
 
 
 func _update_cup_slosh(delta: float) -> void:
@@ -9396,11 +9610,8 @@ func _update_cup_slosh(delta: float) -> void:
 			_cup_surface_spin,
 			clampf(_cup_surface_slosh.x + wobble_z, -52.0, 52.0)
 		)
-	## Fizz head: builds while pouring, dies down after.
-	if _cup_pouring and cup_soda_fill > 0.02:
-		_cup_fizz = minf(1.0, _cup_fizz + CUP_FIZZ_POUR_RATE * delta)
-	else:
-		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * delta)
+	## Fizz head: builds while pouring, dies down after — then poofs out the top.
+	_update_cup_fizz_life(delta)
 	_cup_splash_cd = maxf(0.0, _cup_splash_cd - delta)
 	var speed := _cup_vel.length()
 	var lean := maxf(_cup_surface_slosh.length(), _cup_tilt.length())
@@ -9456,6 +9667,8 @@ func _spawn_cup_splash_drops() -> void:
 func _try_fill_cup_at_spouts(delta: float) -> void:
 	if cup_root == null:
 		_hide_soda_stream()
+		if game_audio and game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(false)
 		return
 	var rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.95, 0.0)
 	## Pick the nearer nozzle only — soda and ice never fire together.
@@ -9490,82 +9703,140 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		_hide_soda_stream()
 	if ice_d < 900.0 and ice_d < soda_d:
 		var before_i := cup_ice_fill
-		cup_ice_fill += CUP_FILL_RATE * delta
+		cup_ice_fill = minf(CUP_ICE_OVERFILL_CAP, cup_ice_fill + CUP_FILL_RATE * delta)
 		pouring_ice = true
 		_cup_ice_spawn_cd -= delta
-		var interval := CUP_ICE_CUBE_INTERVAL if cup_ice_fill < 1.0 else CUP_ICE_OVERFILL_INTERVAL
+		var overflowing := cup_ice_fill > CUP_ICE_FULL
+		var interval := CUP_ICE_OVERFILL_INTERVAL if overflowing else CUP_ICE_CUBE_INTERVAL
 		if _cup_ice_spawn_cd <= 0.0:
 			_cup_ice_spawn_cd = interval
-			var overflow := cup_ice_fill > 1.0
-			_spawn_flying_ice_cube(ice_tip, rim, overflow)
-		if before_i < 1.0 and cup_ice_fill >= 1.0:
-			_flash("Ice packed — keep holding to overfill!", Color("B3E5FC"))
-		elif before_i < 1.6 and cup_ice_fill >= 1.6:
-			_flash("Way too much ice!", Color("81D4FA"))
+			_spawn_flying_ice_cube(ice_tip, rim, overflowing)
+			## Extra spill burst once the cup is packed.
+			if overflowing and randf() < 0.55:
+				_spawn_flying_ice_cube(ice_tip, rim, true)
+		if before_i < CUP_ICE_FULL and cup_ice_fill >= CUP_ICE_FULL:
+			_flash("Ice packed — keep holding, it spills!", Color("B3E5FC"))
+		elif before_i < 1.7 and cup_ice_fill >= 1.7:
+			_flash("Ice everywhere!", Color("81D4FA"))
 	_cup_pouring = pouring_soda
+	if game_audio:
+		if game_audio.has_method("set_soda_pour"):
+			game_audio.set_soda_pour(pouring_soda)
+		if game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(pouring_ice)
 	if pouring_soda or pouring_ice or cup_soda_fill > 0.0 or cup_ice_fill > 0.0:
 		_refresh_cup_visuals()
 
 
 func _update_soda_stream(from_tip: Vector3, to_rim: Vector3, flavor: String) -> void:
+	## Straight vertical pour from the nozzle — never bends toward the cup.
 	if soda_stream_mesh == null or not is_instance_valid(soda_stream_mesh):
 		return
-	var delta_v := to_rim - from_tip
-	var length := delta_v.length()
-	if length < 0.03 or length > 0.7:
-		_hide_soda_stream()
-		return
-	var mid := (from_tip + to_rim) * 0.5
+	var drop := clampf(from_tip.y - to_rim.y, 0.08, 0.42)
+	var mid := Vector3(from_tip.x, from_tip.y - drop * 0.5, from_tip.z)
 	soda_stream_mesh.visible = true
 	soda_stream_mesh.global_position = mid
-	soda_stream_mesh.look_at(to_rim, Vector3.UP)
-	soda_stream_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	soda_stream_mesh.global_basis = Basis.IDENTITY ## CylinderMesh is Y-up = straight down
 	var cyl := soda_stream_mesh.mesh as CylinderMesh
 	if cyl:
-		cyl.height = length
-		cyl.top_radius = 0.005
-		cyl.bottom_radius = 0.009
+		cyl.height = drop
+		cyl.top_radius = 0.014
+		cyl.bottom_radius = 0.022
 	if soda_stream_mat != null:
 		var col: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
-		col.a = 0.8
+		col.a = 0.92
 		soda_stream_mat.albedo_color = col
+		soda_stream_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		soda_stream_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		soda_stream_mat.roughness = 0.12
+		soda_stream_mat.refraction_enabled = true
+		soda_stream_mat.refraction_scale = 0.015
+		soda_stream_mat.clearcoat_enabled = true
+		soda_stream_mat.clearcoat = 0.5
+		soda_stream_mat.clearcoat_roughness = 0.08
+		soda_stream_mat.render_priority = CUP_DRAW_PRIORITY
 
 
 func _hide_soda_stream() -> void:
 	if soda_stream_mesh != null and is_instance_valid(soda_stream_mesh):
 		soda_stream_mesh.visible = false
+	if game_audio and game_audio.has_method("set_soda_pour"):
+		game_audio.set_soda_pour(false)
 
 
 func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool = false) -> void:
 	if world == null:
 		return
-	## Simple clean cubes — short drop into the cup (or fling on overflow).
 	var cube := MeshInstance3D.new()
 	cube.name = "FlyingIce"
 	var box := BoxMesh.new()
-	var s := 0.028
+	var s := randf_range(CUP_ICE_CUBE_SIZE * 0.85, CUP_ICE_CUBE_SIZE * 1.1)
 	box.size = Vector3(s, s, s)
 	cube.mesh = box
 	cube.material_override = _make_ice_cube_material()
 	world.add_child(cube)
-	var start := from_tip + Vector3(randf_range(-0.012, 0.012), 0.0, randf_range(-0.012, 0.012))
-	var end: Vector3
-	if overflow:
-		end = to_rim + Vector3(randf_range(-0.14, 0.14), randf_range(-0.02, 0.08), randf_range(0.06, 0.2))
-	else:
-		end = to_rim + Vector3(randf_range(-0.02, 0.02), -0.02, randf_range(-0.02, 0.02))
+	var start := from_tip + Vector3(randf_range(-0.01, 0.01), 0.0, randf_range(-0.01, 0.01))
 	cube.global_position = start
-	cube.rotation_degrees = Vector3(randf_range(0, 40), randf_range(0, 90), randf_range(0, 40))
-	var tw := create_tween()
-	tw.tween_property(cube, "global_position", end, 0.16 if not overflow else 0.22) \
+	cube.rotation_degrees = Vector3(randf_range(0, 360), randf_range(0, 360), randf_range(0, 360))
+	if not overflow:
+		## Drop into the cup.
+		var end := Vector3(
+			from_tip.x + randf_range(-0.04, 0.04),
+			to_rim.y - 0.02,
+			from_tip.z + randf_range(-0.04, 0.04)
+		)
+		var tw := create_tween()
+		tw.tween_property(cube, "global_position", end, 0.16) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(cube, "rotation_degrees",
+				cube.rotation_degrees + Vector3(randf_range(40, 120), randf_range(60, 180), randf_range(40, 120)), 0.16)
+		tw.tween_callback(func() -> void:
+			if is_instance_valid(cube):
+				cube.queue_free()
+			if game_audio and game_audio.has_method("play_ice_tink"):
+				game_audio.play_ice_tink()
+			_refresh_cup_ice_stack()
+		)
+		return
+	## Overflow — fling cubes all over the counter / tray, then leave them a while.
+	var ang := randf() * TAU
+	var dist := randf_range(0.18, 0.55)
+	var land_y := SODA_STATION_POS.y + 0.10
+	if cup_rest != Vector3.ZERO:
+		land_y = cup_rest.y + 0.002
+	var mid := Vector3(
+		from_tip.x + cos(ang) * dist * 0.55,
+		from_tip.y + randf_range(0.06, 0.16),
+		from_tip.z + sin(ang) * dist * 0.55
+	)
+	var end := Vector3(
+		from_tip.x + cos(ang) * dist + randf_range(-0.06, 0.06),
+		land_y,
+		from_tip.z + sin(ang) * dist + randf_range(-0.08, 0.12)
+	)
+	var up_t := randf_range(0.14, 0.2)
+	var down_t := randf_range(0.18, 0.28)
+	var tw2 := create_tween()
+	tw2.set_parallel(true)
+	tw2.tween_property(cube, "global_position", mid, up_t) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw2.tween_property(cube, "rotation_degrees",
+			cube.rotation_degrees + Vector3(randf_range(60, 140), randf_range(80, 180), randf_range(60, 140)), up_t)
+	tw2.chain().set_parallel(true)
+	tw2.tween_property(cube, "global_position", end, down_t) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	if overflow:
-		tw.parallel().tween_property(cube, "scale", Vector3.ONE * 0.4, 0.22)
-	tw.tween_callback(func() -> void:
+	tw2.tween_property(cube, "rotation_degrees",
+			cube.rotation_degrees + Vector3(randf_range(90, 200), randf_range(100, 240), randf_range(90, 200)), down_t)
+	tw2.chain().tween_callback(func() -> void:
+		if game_audio and game_audio.has_method("play_ice_tink") and randf() < 0.7:
+			game_audio.play_ice_tink()
+	)
+	## Linger on the counter, then melt away.
+	tw2.tween_interval(randf_range(3.5, 7.0))
+	tw2.tween_property(cube, "scale", Vector3.ONE * 0.15, 0.55).set_trans(Tween.TRANS_SINE)
+	tw2.tween_callback(func() -> void:
 		if is_instance_valid(cube):
 			cube.queue_free()
-		if not overflow:
-			_refresh_cup_ice_stack()
 	)
 
 
@@ -9583,12 +9854,8 @@ func _refresh_cup_visuals() -> void:
 				liq.cap_bottom = true
 			cup_liquid_mesh.position.y = h * 0.5
 			if cup_liquid_mat != null:
-				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.32, 0.10, 0.06))
-				col.a = 0.58
-				cup_liquid_mat.albedo_color = col
-				cup_liquid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				cup_liquid_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_BACK
+				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+				_apply_soda_liquid_gradient(cup_liquid_mat, col, _cup_fizz)
 			var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
 			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
 				cup_liquid_surface.visible = true
@@ -9597,22 +9864,13 @@ func _refresh_cup_visuals() -> void:
 					cup_surface_pivot.position.y = h + 0.002
 				var sm := cup_liquid_surface.material_override as StandardMaterial3D
 				if sm:
-					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.32, 0.10, 0.06))
-					sc = sc.lightened(0.1)
-					sc.a = 0.65
-					sm.albedo_color = sc
-					sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-					sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-					sm.cull_mode = BaseMaterial3D.CULL_BACK
+					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+					_apply_soda_surface_look(sm, sc, _cup_fizz)
 				var surf := cup_liquid_surface.mesh as CylinderMesh
 				if surf:
 					surf.top_radius = r * 0.99
 					surf.bottom_radius = r * 0.99
 					surf.height = 0.008
-			if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
-				cup_bubble_fx.emitting = true
-				cup_bubble_fx.position = Vector3(0.0, h * 0.35, 0.0)
-				cup_bubble_fx.amount = clampi(10 + int(cup_soda_fill * 22.0) + int(_cup_fizz * 12.0), 10, 40)
 			_refresh_cup_fizz_visual()
 		else:
 			cup_liquid_mesh.visible = false
@@ -9625,31 +9883,178 @@ func _refresh_cup_visuals() -> void:
 	_refresh_cup_ice_stack()
 
 
+func _update_cup_fizz_life(delta: float) -> void:
+	## Build while pouring; after a strong head dies, poof the dome out the top.
+	if _cup_pouring and cup_soda_fill > 0.02:
+		_cup_fizz = minf(1.0, _cup_fizz + CUP_FIZZ_POUR_RATE * delta)
+		if _cup_fizz >= 0.82:
+			_cup_fizz_peak = true
+		_cup_fizz_poofing = false
+		_cup_fizz_poof = 0.0
+		return
+	if _cup_fizz_poofing:
+		_cup_fizz_poof = minf(1.0, _cup_fizz_poof + delta * 2.8)
+		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * 1.6 * delta)
+		if _cup_fizz_poof >= 1.0:
+			_cup_fizz = 0.0
+			_cup_fizz_poofing = false
+			_cup_fizz_peak = false
+			_cup_fizz_poof = 0.0
+		return
+	_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * delta)
+	if _cup_fizz_peak and _cup_fizz < 0.28 and _cup_fizz > 0.02:
+		_cup_fizz_poofing = true
+		_cup_fizz_poof = 0.0
+		_cup_fizz_peak = false
+
+
+func _make_foam_dome_mesh() -> ArrayMesh:
+	## Unit hemisphere (Y-up) — squashed / scaled at runtime into a foam cap.
+	var rings := 10
+	var segs := 24
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	## Apex.
+	verts.append(Vector3(0.0, 1.0, 0.0))
+	norms.append(Vector3(0.0, 1.0, 0.0))
+	uvs.append(Vector2(0.5, 0.0))
+	for ring in range(1, rings + 1):
+		var v := float(ring) / float(rings)
+		var polar := v * PI * 0.5 ## 0 at top → π/2 at equator
+		var y := cos(polar)
+		var rad := sin(polar)
+		for s in segs:
+			var u := float(s) / float(segs)
+			var ang := u * TAU
+			var p := Vector3(cos(ang) * rad, y, sin(ang) * rad)
+			verts.append(p)
+			norms.append(p.normalized())
+			uvs.append(Vector2(u, v))
+	## Apex fan.
+	for s in segs:
+		var a := 1 + s
+		var b := 1 + ((s + 1) % segs)
+		indices.append_array([0, a, b])
+	## Rings.
+	for ring in range(1, rings):
+		for s in segs:
+			var i0 := 1 + (ring - 1) * segs + s
+			var i1 := 1 + (ring - 1) * segs + ((s + 1) % segs)
+			var i2 := 1 + ring * segs + s
+			var i3 := 1 + ring * segs + ((s + 1) % segs)
+			indices.append_array([i0, i2, i1, i1, i2, i3])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return am
+
+
+func _make_foam_hole_texture() -> ImageTexture:
+	## Cream foam with irregular holes punched by noise.
+	var n := 128
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for y in n:
+		for x in n:
+			var fx := float(x) / float(n)
+			var fy := float(y) / float(n)
+			## Layered value noise (hash-ish).
+			var n1 := _foam_noise2(fx * 7.0, fy * 7.0)
+			var n2 := _foam_noise2(fx * 14.0 + 3.1, fy * 14.0 - 1.7)
+			var n3 := _foam_noise2(fx * 28.0 - 2.4, fy * 28.0 + 5.2)
+			var holes := n1 * 0.55 + n2 * 0.3 + n3 * 0.15
+			## Punch clear holes where noise is high.
+			var hole := holes > 0.62
+			var edge := smoothstep(0.55, 0.62, holes)
+			var cream := Color(0.97, 0.95, 0.90, 1.0)
+			var a := 0.0 if hole else lerpf(0.95, 0.35, edge)
+			## Soft cell walls around holes.
+			if not hole and holes > 0.48:
+				cream = cream.lerp(Color(0.88, 0.84, 0.78), (holes - 0.48) / 0.14)
+			img.set_pixel(x, y, Color(cream.r, cream.g, cream.b, a))
+	return ImageTexture.create_from_image(img)
+
+
+func _foam_noise2(x: float, y: float) -> float:
+	## Cheap hash noise 0–1.
+	var ix := floori(x)
+	var iy := floori(y)
+	var fx := x - float(ix)
+	var fy := y - float(iy)
+	var a := _foam_hash(ix, iy)
+	var b := _foam_hash(ix + 1, iy)
+	var c := _foam_hash(ix, iy + 1)
+	var d := _foam_hash(ix + 1, iy + 1)
+	var ux := fx * fx * (3.0 - 2.0 * fx)
+	var uy := fy * fy * (3.0 - 2.0 * fy)
+	return lerpf(lerpf(a, b, ux), lerpf(c, d, ux), uy)
+
+
+func _foam_hash(x: int, y: int) -> float:
+	var n := x * 374761393 + y * 668265263
+	n = (n ^ (n >> 13)) * 1274126177
+	return float((n ^ (n >> 16)) & 0x7fffffff) / 2147483647.0
+
+
 func _refresh_cup_fizz_visual() -> void:
 	if cup_fizz_mesh == null or not is_instance_valid(cup_fizz_mesh):
 		return
-	if cup_soda_fill < 0.02 or _cup_fizz < 0.04:
+	## Keep top liquid lighter while foam is alive.
+	if cup_soda_fill > 0.02 and cup_flavor != "":
+		var base: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+		if cup_liquid_mat != null:
+			_apply_soda_liquid_gradient(cup_liquid_mat, base, _cup_fizz)
+		if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
+			var sm := cup_liquid_surface.material_override as StandardMaterial3D
+			if sm:
+				_apply_soda_surface_look(sm, base, _cup_fizz)
+	var alive := cup_soda_fill > 0.02 and (_cup_fizz > 0.04 or _cup_fizz_poofing)
+	if not alive:
 		cup_fizz_mesh.visible = false
+		if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
+			cup_bubble_fx.emitting = false
 		return
 	cup_fizz_mesh.visible = true
-	var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
-	var foam_h := 0.006 + _cup_fizz * 0.028
-	var foam := cup_fizz_mesh.mesh as CylinderMesh
-	if foam:
-		foam.height = foam_h
-		foam.top_radius = r * (0.92 + _cup_fizz * 0.08)
-		foam.bottom_radius = r * 0.9
-	cup_fizz_mesh.position = Vector3(0.0, foam_h * 0.55, 0.0)
+	var rim_r := CUP_SHELL_TOP_R
+	var fill_r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
+	## Grow from fill radius → slightly past the cup rim.
+	var grow := smoothstep(0.0, 1.0, _cup_fizz)
+	var target_r := lerpf(fill_r * 0.75, rim_r * CUP_FIZZ_OVERSIZE, grow)
+	var dome_h := lerpf(0.008, CUP_FIZZ_MAX_H, grow)
+	## Poof: shoot up and out the top, then vanish.
+	var poof := _cup_fizz_poof if _cup_fizz_poofing else 0.0
+	var poof_ease := poof * poof
+	target_r *= 1.0 + poof_ease * 0.85
+	dome_h *= 1.0 + poof_ease * 2.6
+	cup_fizz_mesh.position = Vector3(0.0, dome_h * (0.15 + poof_ease * 0.9), 0.0)
+	## Unit dome → scale XZ = radius, Y = height (squashed half-circle).
+	cup_fizz_mesh.scale = Vector3(target_r, dome_h, target_r)
 	var fm := cup_fizz_mesh.material_override as StandardMaterial3D
 	if fm:
-		var base: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.32, 0.10, 0.06))
-		var foam_col := Color(
-			lerpf(0.95, base.r, 0.15),
-			lerpf(0.93, base.g, 0.12),
-			lerpf(0.90, base.b, 0.10),
-			0.35 + _cup_fizz * 0.45
-		)
-		fm.albedo_color = foam_col
+		var a := lerpf(0.35, 0.92, grow)
+		a *= 1.0 - poof_ease
+		fm.albedo_color = Color(0.98, 0.96, 0.92, a)
+		fm.render_priority = CUP_DRAW_PRIORITY
+	## Bubbles ride the dome; burst harder on poof.
+	if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
+		cup_bubble_fx.emitting = grow > 0.08 or poof > 0.05
+		cup_bubble_fx.amount = CUP_BUBBLE_AMOUNT + (12 if poof > 0.1 else 0)
+		cup_bubble_fx.position = Vector3(0.0, dome_h * (0.7 + poof_ease * 0.8), 0.0)
+		var em := cup_bubble_fx.process_material as ParticleProcessMaterial
+		if em:
+			em.emission_box_extents = Vector3(target_r * 0.75, 0.004 + poof_ease * 0.02, target_r * 0.75)
+			if poof > 0.05:
+				em.initial_velocity_min = 0.08
+				em.initial_velocity_max = 0.28
+			else:
+				em.initial_velocity_min = 0.03
+				em.initial_velocity_max = 0.09
 
 
 func _refresh_cup_ice_stack() -> void:
@@ -9657,7 +10062,8 @@ func _refresh_cup_ice_stack() -> void:
 		return
 	var want := 0
 	if cup_ice_fill > 0.04:
-		var packed := clampf(cup_ice_fill, 0.0, 1.35)
+		## Pack denser — overflow fill does not add more in-cup cubes.
+		var packed := clampf(cup_ice_fill / CUP_ICE_FULL, 0.0, 1.0)
 		want = clampi(int(ceil(packed * float(CUP_ICE_STACK_MAX))), 1, CUP_ICE_STACK_MAX)
 	var have := cup_ice_root.get_child_count()
 	if have != want:
@@ -9668,59 +10074,83 @@ func _refresh_cup_ice_stack() -> void:
 		for i in want:
 			var cube := MeshInstance3D.new()
 			var box := BoxMesh.new()
-			## Uniform cubes — pack cleanly in the cup.
-			var s := 0.026
+			var s := CUP_ICE_CUBE_SIZE
 			box.size = Vector3(s, s, s)
 			cube.mesh = box
 			cube.material_override = _make_ice_cube_material()
+			_boost_cup_draw_order(cube)
 			cup_ice_root.add_child(cube)
+	else:
+		## Keep pop tint in sync when flavor / fill changes.
+		for child in cup_ice_root.get_children():
+			if child is MeshInstance3D:
+				(child as MeshInstance3D).material_override = _make_ice_cube_material()
 	_layout_cup_ice_cubes(want)
 
 
 func _make_ice_cube_material() -> StandardMaterial3D:
+	## Translucent ice tinted by the pop in the cup (or cool clear if empty).
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.85, 0.95, 1.0, 0.45)
+	var pop: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.55, 0.75, 0.95)) if cup_flavor != "" \
+			else Color(0.55, 0.75, 0.95)
+	var ice := Color(
+		lerpf(0.78, pop.r, 0.55),
+		lerpf(0.88, pop.g, 0.55),
+		lerpf(0.95, pop.b, 0.55),
+		0.62
+	)
+	mat.albedo_color = ice
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
-	mat.emission_enabled = false
+	mat.roughness = 0.1
+	mat.metallic = 0.04
+	mat.rim_enabled = true
+	mat.rim = 0.55
+	mat.rim_tint = 0.7
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.7
+	mat.clearcoat_roughness = 0.04
+	mat.emission_enabled = true
+	mat.emission = Color(pop.r * 0.55, pop.g * 0.55, pop.b * 0.55)
+	mat.emission_energy_multiplier = 0.18
+	mat.render_priority = CUP_DRAW_PRIORITY
 	return mat
 
 
 func _layout_cup_ice_cubes(count: int) -> void:
 	if cup_ice_root == null:
 		return
-	var soda_h := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
-	## Nest cubes in a tight pyramid sitting in the soda.
-	var base_y := 0.02 + soda_h * 0.35
+	## Fill from cup floor up to near the rim / liquid top.
+	var liquid_top := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
+	var ice_top := maxf(liquid_top, CUP_SHELL_H * 0.82)
+	if cup_soda_fill < 0.05:
+		ice_top = lerpf(0.06, CUP_SHELL_H * 0.82, clampf(cup_ice_fill, 0.0, 1.0))
+	var base_y := 0.02 + CUP_ICE_CUBE_SIZE * 0.45
 	var kids := cup_ice_root.get_children()
-	## Offsets for a packed 3×3 then stack — simple cube formation.
-	var slots: Array[Vector3] = [
-		Vector3(0.0, 0.0, 0.0),
-		Vector3(0.018, 0.0, 0.0),
-		Vector3(-0.018, 0.0, 0.0),
-		Vector3(0.0, 0.0, 0.018),
-		Vector3(0.0, 0.0, -0.018),
-		Vector3(0.014, 0.0, 0.014),
-		Vector3(-0.014, 0.0, 0.014),
-		Vector3(0.014, 0.0, -0.014),
-		Vector3(-0.014, 0.0, -0.014),
-		Vector3(0.0, 0.026, 0.0),
-		Vector3(0.012, 0.026, 0.0),
-		Vector3(-0.012, 0.026, 0.0),
-	]
+	var cup_r := lerpf(CUP_LIQUID_BOT_R, CUP_LIQUID_TOP_R, clampf(maxf(cup_soda_fill, cup_ice_fill), 0.0, 1.0))
+	var spread := cup_r * 0.72
+	var per_layer := 6
+	var layer_h := CUP_ICE_CUBE_SIZE * 0.78
+	var max_layers := maxi(1, int(ceil((ice_top - base_y) / layer_h)))
 	for i in mini(count, kids.size()):
 		var cube: Node3D = kids[i]
-		var slot: Vector3 = slots[i] if i < slots.size() else Vector3(
-			cos(float(i)) * 0.012,
-			0.026 * float(i / 9),
-			sin(float(i)) * 0.012
-		)
-		cube.position = Vector3(slot.x, base_y + slot.y, slot.z)
+		var layer := mini(i / per_layer, max_layers - 1)
+		var in_layer := i % per_layer
+		var ang := float(in_layer) * TAU / float(per_layer) + float(layer) * 0.4
+		var rad := spread * (0.2 + 0.75 * (0.3 + 0.7 * float((in_layer + layer) % 3) / 2.0))
+		if in_layer == 0 and layer == 0:
+			rad = spread * 0.08
+		## Stretch layers so the stack reaches the top of the glass.
+		var y_span := maxf(0.02, ice_top - base_y - CUP_ICE_CUBE_SIZE * 0.35)
+		var y := base_y + (float(layer) / float(maxi(max_layers - 1, 1))) * y_span
+		if max_layers <= 1:
+			y = base_y + float(i) * 0.01
+		cube.position = Vector3(cos(ang) * rad, y, sin(ang) * rad)
 		cube.rotation_degrees = Vector3(
-			8.0 * float(i % 3),
-			22.0 * float(i),
-			6.0 * float((i * 2) % 5)
+			14.0 * float(i % 5) - 22.0,
+			40.0 * float(i),
+			11.0 * float((i * 3) % 7) - 24.0
 		)
 
 
@@ -9743,9 +10173,13 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	if cup_root == null:
 		cup_held = false
 		_hide_soda_stream()
+		if game_audio and game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(false)
 		return
 	cup_held = false
 	_hide_soda_stream()
+	if game_audio and game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(false)
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
 	_cup_tilt = Vector2.ZERO
@@ -9763,6 +10197,10 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		cup_soda_fill = 0.0
 		cup_ice_fill = 0.0
 		_cup_fizz = 0.0
+		_cup_fizz_peak = false
+		_cup_fizz_poof = 0.0
+		_cup_fizz_poofing = false
+		_cup_pour_white = 0.0
 	_cup_ice_spawn_cd = 0.0
 	_refresh_cup_visuals()
 	if cup_area:
@@ -9800,6 +10238,191 @@ func _build_burger_pals_logo_decal() -> void:
 	if burger_pals_decal != null and is_instance_valid(burger_pals_decal):
 		burger_pals_decal.queue_free()
 		burger_pals_decal = null
+
+
+func _make_air_mote_soft_texture() -> ImageTexture:
+	## Soft radial blob — reads blurrier than a hard sphere.
+	var n := 48
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	var mid := float(n - 1) * 0.5
+	for y in n:
+		for x in n:
+			var dx := (float(x) - mid) / mid
+			var dy := (float(y) - mid) / mid
+			var d := sqrt(dx * dx + dy * dy)
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			a = a * a * (0.55 + 0.45 * a) ## soft falloff
+			img.set_pixel(x, y, Color(1, 1, 1, a))
+	return ImageTexture.create_from_image(img)
+
+
+func _build_air_motes() -> void:
+	## Tiny soft flecks — faint, blurry, drifting; shove with tools / cursor.
+	if world == null:
+		return
+	air_motes_mm = MultiMeshInstance3D.new()
+	air_motes_mm.name = "AirMotes"
+	air_motes_mm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	air_motes_mm.sorting_offset = 2.0
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.instance_count = AIR_MOTE_COUNT
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.018, 0.018) ## small soft speck
+	mm.mesh = quad
+	air_motes_mm.multimesh = mm
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_texture = _make_air_mote_soft_texture()
+	mat.albedo_color = Color(0.95, 0.97, 1.0, 0.28)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.render_priority = 3
+	air_motes_mm.material_override = mat
+	world.add_child(air_motes_mm)
+	_air_mote_pos.resize(AIR_MOTE_COUNT)
+	_air_mote_vel.resize(AIR_MOTE_COUNT)
+	_air_mote_phase.resize(AIR_MOTE_COUNT)
+	var b0 := AIR_MOTE_BOUNDS_MIN
+	var b1 := AIR_MOTE_BOUNDS_MAX
+	for i in AIR_MOTE_COUNT:
+		_air_mote_pos[i] = Vector3(
+			randf_range(b0.x, b1.x),
+			randf_range(b0.y, b1.y),
+			randf_range(b0.z, b1.z)
+		)
+		_air_mote_vel[i] = Vector3(
+			randf_range(-0.12, 0.12),
+			randf_range(-0.06, 0.06),
+			randf_range(-0.12, 0.12)
+		)
+		_air_mote_phase[i] = randf() * TAU
+		var s := randf_range(0.85, 1.6)
+		mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * s), _air_mote_pos[i]))
+		mm.set_instance_color(i, Color(1, 1, 1, randf_range(0.12, 0.35)))
+	_air_push_have = false
+
+
+func _air_mote_push_point(delta: float) -> Vector3:
+	## Prefer a held tool; otherwise the cursor point in kitchen space.
+	if cup_held and cup_root != null and is_instance_valid(cup_root):
+		return cup_root.global_position + Vector3(0.0, 0.12, 0.0)
+	if spatula_patty != null and is_instance_valid(spatula_patty):
+		return spatula_patty.global_position
+	if brush_held and brush_root != null and is_instance_valid(brush_root):
+		return brush_root.global_position
+	if oil_held and oil_root != null and is_instance_valid(oil_root):
+		return oil_root.global_position
+	if shaker_held and shaker_root != null and is_instance_valid(shaker_root):
+		return shaker_root.global_position
+	if ext_held and ext_root != null and is_instance_valid(ext_root):
+		return ext_root.global_position
+	if glock_held and glock_root != null and is_instance_valid(glock_root):
+		return glock_root.global_position
+	if camera == null:
+		return Vector3.ZERO
+	var mouse := get_viewport().get_mouse_position()
+	var from := camera.project_ray_origin(mouse)
+	var dir := camera.project_ray_normal(mouse)
+	## Intersect a mid-kitchen plane facing the camera.
+	var plane_z := 0.15
+	if absf(dir.z) < 0.001:
+		return from + dir * 2.0
+	var t := (plane_z - from.z) / dir.z
+	if t < 0.2:
+		t = 2.0
+	return from + dir * t
+
+
+func _update_air_motes(delta: float) -> void:
+	if air_motes_mm == null or not is_instance_valid(air_motes_mm):
+		return
+	var mm := air_motes_mm.multimesh
+	if mm == null:
+		return
+	var push := _air_mote_push_point(delta)
+	var push_vel := Vector3.ZERO
+	if _air_push_have and delta > 0.0001:
+		push_vel = (push - _air_push_prev) / delta
+	_air_push_prev = push
+	_air_push_have = push != Vector3.ZERO
+	var push_speed := push_vel.length()
+	var b0 := AIR_MOTE_BOUNDS_MIN
+	var b1 := AIR_MOTE_BOUNDS_MAX
+	var tsec := Time.get_ticks_msec() * 0.001
+	for i in AIR_MOTE_COUNT:
+		var p: Vector3 = _air_mote_pos[i]
+		var v: Vector3 = _air_mote_vel[i]
+		var ph: float = _air_mote_phase[i]
+		## Stronger ambient drift + bob.
+		v.x += sin(tsec * 1.15 + ph) * 0.085 * delta
+		v.y += cos(tsec * 1.4 + ph * 1.3) * 0.055 * delta
+		v.z += sin(tsec * 0.95 + ph * 0.7) * 0.075 * delta
+		## Extra wander so they never sit still.
+		v.x += sin(tsec * 0.35 + ph * 2.1) * 0.04 * delta
+		v.z += cos(tsec * 0.4 + ph * 1.7) * 0.04 * delta
+		## Cursor / tool shove — nearby flecks get flicked aside.
+		if push_speed > 0.08:
+			var to_mote := p - push
+			var dist := to_mote.length()
+			var radius := 0.48
+			if dist < radius and dist > 0.001:
+				var falloff := 1.0 - dist / radius
+				falloff *= falloff
+				var shove := push_vel * (0.65 * falloff)
+				shove += to_mote.normalized() * (push_speed * 0.4 * falloff)
+				v += shove * delta * 3.6
+		## Soda pour stream shoves motes outward / down.
+		if _cup_pouring and soda_stream_mesh != null and is_instance_valid(soda_stream_mesh) \
+				and soda_stream_mesh.visible:
+			var stream_p: Vector3 = soda_stream_mesh.global_position
+			var to_s := p - stream_p
+			var sd := to_s.length()
+			if sd < 0.35 and sd > 0.001:
+				var sf := 1.0 - sd / 0.35
+				sf *= sf
+				v += to_s.normalized() * (1.8 * sf * delta)
+				v.y -= 1.2 * sf * delta
+		## Light air drag — keep them drifting longer.
+		v = v.lerp(Vector3.ZERO, clampf(delta * 0.55, 0.0, 1.0))
+		v.x = clampf(v.x, -2.4, 2.4)
+		v.y = clampf(v.y, -1.4, 1.4)
+		v.z = clampf(v.z, -2.4, 2.4)
+		p += v * delta
+		## Soft wrap inside the kitchen volume.
+		if p.x < b0.x:
+			p.x = b1.x
+			v.x *= 0.3
+		elif p.x > b1.x:
+			p.x = b0.x
+			v.x *= 0.3
+		if p.y < b0.y:
+			p.y = b0.y + 0.02
+			v.y = absf(v.y) * 0.4
+		elif p.y > b1.y:
+			p.y = b1.y - 0.02
+			v.y = -absf(v.y) * 0.4
+		if p.z < b0.z:
+			p.z = b1.z
+			v.z *= 0.3
+		elif p.z > b1.z:
+			p.z = b0.z
+			v.z *= 0.3
+		_air_mote_pos[i] = p
+		_air_mote_vel[i] = v
+		## Fade in/out — each mote breathes at its own rate.
+		var fade := 0.5 + 0.5 * sin(tsec * (0.55 + fmod(ph, 1.2)) + ph)
+		fade = smoothstep(0.0, 1.0, fade)
+		## Occasionally dip quieter, but stay readable.
+		var ghost := 0.5 + 0.5 * sin(tsec * 0.22 + ph * 3.1)
+		var alpha := lerpf(0.1, 0.42, fade) * lerpf(0.55, 1.0, ghost)
+		var s := 0.85 + 0.7 * (0.5 + 0.5 * sin(ph + float(i) * 0.37))
+		mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * s), p))
+		mm.set_instance_color(i, Color(1.0, 1.0, 1.0, alpha))
 
 
 func _build_window_bunting() -> void:
