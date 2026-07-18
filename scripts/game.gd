@@ -14732,6 +14732,8 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var bottom_row: Control = built.get("bottom_row", null)
 	stack.pivot_offset = built["pivot"]
 	stack.scale = Vector2.ONE
+	stack.rotation = 0.0
+	stack.modulate = Color.WHITE
 
 	var start_pos := _station_stack_screen_center(station_index)
 	stack.global_position = start_pos
@@ -14740,11 +14742,12 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if preview != null and is_instance_valid(preview):
 		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
-	## Hard smash — wide + flat, toppings crush into the patty.
-	var squashed := Vector2(1.38, 0.36)
-	var fly_end_scale := Vector2(0.78, 0.58)
-	var bun_pinch_px := 18.0
-	var topping_crush_px := 11.0
+	## Customer hands up + open mouth while the toss is in flight.
+	if customer != null and is_instance_valid(customer) and customer.has_method("begin_catch_burger"):
+		customer.begin_catch_burger()
+
+	var bun_pinch_px := 10.0
+	var topping_crush_px := 7.0
 	var bottom_base_y := bottom_row.position.y if bottom_row != null else 0.0
 	var top_base_y := top_row.position.y if top_row != null else 0.0
 	var topping_base_y: Array[float] = []
@@ -14753,9 +14756,9 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 
 	var apply_bun_pinch := func(amount: float) -> void:
 		if bottom_row != null and is_instance_valid(bottom_row):
-			bottom_row.position.y = bottom_base_y - amount ## up into fillings
+			bottom_row.position.y = bottom_base_y - amount
 		if top_row != null and is_instance_valid(top_row):
-			top_row.position.y = top_base_y + amount ## down onto fillings
+			top_row.position.y = top_base_y + amount
 
 	var apply_topping_crush := func(amount: float) -> void:
 		var mid := (bottom_base_y + top_base_y) * 0.5 if top_row != null else bottom_base_y - 20.0
@@ -14764,17 +14767,16 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 			if row == null or not is_instance_valid(row):
 				continue
 			var base_y: float = topping_base_y[i] if i < topping_base_y.size() else row.position.y
-			## Pull toppings toward the stack middle as the smash lands.
 			row.position.y = lerpf(base_y, mid, clampf(amount / maxf(topping_crush_px, 0.01), 0.0, 1.0))
 
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
 			return
 		stack.scale = s
-		## Top/bottom buns keep full vertical thickness; patties flatten a bit; toppings smash hard.
+		## Buns keep full height; patties flatten a bit; toppings smash harder.
 		var bun_inv_y := 1.0 / maxf(s.y, 0.001)
 		var bun_inv := Vector2(1.0, bun_inv_y)
-		var patty_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.25))
+		var patty_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.2))
 		for row in bun_rows:
 			if row != null and is_instance_valid(row):
 				(row as Control).scale = bun_inv
@@ -14783,29 +14785,11 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 				(row as Control).scale = patty_inv
 		for row in topping_rows:
 			if row != null and is_instance_valid(row):
-				(row as Control).scale = Vector2(1.08, 0.7)
+				(row as Control).scale = Vector2(1.06, 0.75)
 
-	var tw := create_tween()
-	tw.set_parallel(false)
-	tw.tween_interval(0.03)
-
-	var squash_step := func(t: float) -> void:
-		apply_stack_scale.call(Vector2.ONE.lerp(squashed, t))
-		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px, t))
-		apply_topping_crush.call(lerpf(0.0, topping_crush_px, t))
-	tw.tween_method(squash_step, 0.0, 1.0, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-
-	var fly_step := func(t: float) -> void:
-		if not is_instance_valid(stack):
-			return
-		var eased := t * t * (3.0 - 2.0 * t)
-		stack.global_position = start_pos.lerp(mouth_pos, eased)
-		apply_stack_scale.call(squashed.lerp(fly_end_scale, eased))
-		apply_bun_pinch.call(bun_pinch_px)
-		apply_topping_crush.call(topping_crush_px)
-	tw.tween_method(fly_step, 0.0, 1.0, 0.52)
-
-	tw.tween_callback(func() -> void:
+	var finish_serve := func() -> void:
+		if customer != null and is_instance_valid(customer) and customer.has_method("finish_catch_burger"):
+			customer.finish_catch_burger()
 		if preview != null and is_instance_valid(preview):
 			preview.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		if is_instance_valid(fly_root):
@@ -14814,7 +14798,120 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		if _auto_serving:
 			_auto_serving = false
 		on_done.call()
+
+	var tw := create_tween()
+	tw.set_parallel(false)
+	tw.tween_interval(0.02)
+
+	## A · Seal — light press so it reads as one object.
+	var seal_step := func(t: float) -> void:
+		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.08, 0.88), t))
+		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.45, t))
+		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.4, t))
+	tw.tween_method(seal_step, 0.0, 1.0, 0.1).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+	## B · Windup — dip + rotate back before the toss.
+	var windup_step := func(t: float) -> void:
+		if not is_instance_valid(stack):
+			return
+		var crouch := Vector2(1.12, 0.78).lerp(Vector2(0.92, 1.12), t)
+		apply_stack_scale.call(crouch)
+		stack.rotation = deg_to_rad(lerpf(0.0, -10.0, t))
+		stack.global_position = start_pos + Vector2(lerpf(0.0, -6.0, t), lerpf(0.0, 10.0, t))
+		apply_bun_pinch.call(bun_pinch_px * 0.55)
+		apply_topping_crush.call(topping_crush_px * 0.5)
+	tw.tween_method(windup_step, 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+
+	tw.tween_callback(func() -> void:
+		if game_audio and game_audio.has_method("play_serve_whoosh"):
+			game_audio.play_serve_whoosh()
 	)
+
+	## C/D · Launch + arc over the window to the mouth.
+	var fly_step := func(t: float) -> void:
+		if not is_instance_valid(stack):
+			return
+		## Re-aim at mouth in case they lean.
+		var end_pos := mouth_pos
+		if customer != null and is_instance_valid(customer):
+			end_pos = _customer_mouth_screen(customer)
+		var mid := start_pos.lerp(end_pos, 0.48) + Vector2(0.0, -118.0)
+		## Ease-out launch, ease-in land.
+		var eased := t * t * (3.0 - 2.0 * t)
+		var launch := 1.0 - pow(1.0 - t, 2.2)
+		var path_t := lerpf(launch, eased, 0.55)
+		var u := 1.0 - path_t
+		stack.global_position = u * u * start_pos + 2.0 * u * path_t * mid + path_t * path_t * end_pos
+		## Spin through the toss, settle upright near the mouth.
+		stack.rotation = deg_to_rad(lerpf(-10.0, 18.0, sin(t * PI * 0.92)))
+		## Foreshorten midair, swell toward camera at the lips.
+		var mid_s := Vector2(0.58, 0.7)
+		var near_s := Vector2(0.9, 0.82)
+		var s: Vector2
+		if t < 0.45:
+			s = Vector2(0.92, 1.1).lerp(mid_s, t / 0.45)
+		else:
+			s = mid_s.lerp(near_s, (t - 0.45) / 0.55)
+		apply_stack_scale.call(s)
+		apply_bun_pinch.call(bun_pinch_px)
+		apply_topping_crush.call(topping_crush_px)
+	tw.tween_method(fly_step, 0.0, 1.0, 0.48)
+
+	## E · Catch / eat away in front of us.
+	tw.tween_callback(func() -> void:
+		if customer != null and is_instance_valid(customer):
+			if customer.has_method("chomp_burger"):
+				customer.chomp_burger()
+		if game_audio and game_audio.has_method("play_burger_chomp"):
+			game_audio.play_burger_chomp()
+		_spawn_serve_crumb_burst(fly_root, _customer_mouth_screen(customer) if customer != null and is_instance_valid(customer) else mouth_pos)
+	)
+
+	var eat_step := func(t: float) -> void:
+		if not is_instance_valid(stack):
+			return
+		var end_pos := mouth_pos
+		if customer != null and is_instance_valid(customer):
+			end_pos = _customer_mouth_screen(customer)
+		stack.global_position = end_pos
+		stack.rotation = deg_to_rad(lerpf(8.0, 0.0, t))
+		## Burger shrinks into the mouth and fades out.
+		var s := Vector2(0.9, 0.82).lerp(Vector2(0.12, 0.06), t * t)
+		apply_stack_scale.call(s)
+		stack.modulate.a = 1.0 - t
+		apply_bun_pinch.call(bun_pinch_px * (1.0 + t))
+		apply_topping_crush.call(topping_crush_px * (1.0 + t * 0.5))
+	tw.tween_method(eat_step, 0.0, 1.0, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+
+	tw.tween_callback(finish_serve)
+
+
+func _spawn_serve_crumb_burst(parent: Control, at: Vector2) -> void:
+	if parent == null or not is_instance_valid(parent):
+		return
+	var colors: Array[Color] = [
+		Color("FFE0B2"), Color("A5D6A7"), Color("FFCC80"), Color("EF9A9A"), Color("FFF59D"),
+	]
+	for i in 10:
+		var crumb := ColorRect.new()
+		crumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		crumb.color = colors[i % colors.size()]
+		var sz := randf_range(3.0, 7.0)
+		crumb.size = Vector2(sz, sz)
+		crumb.pivot_offset = crumb.size * 0.5
+		crumb.global_position = at - crumb.size * 0.5
+		crumb.z_index = 260
+		parent.add_child(crumb)
+		var dir := Vector2(randf_range(-1.0, 1.0), randf_range(-1.15, -0.15)).normalized()
+		var dist := randf_range(28.0, 72.0)
+		var end_p := at + dir * dist - crumb.size * 0.5
+		var life := randf_range(0.28, 0.48)
+		var ctw := create_tween()
+		ctw.set_parallel(true)
+		ctw.tween_property(crumb, "global_position", end_p, life).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		ctw.tween_property(crumb, "modulate:a", 0.0, life)
+		ctw.tween_property(crumb, "rotation", randf_range(-2.5, 2.5), life)
+		ctw.chain().tween_callback(crumb.queue_free)
 
 
 func _complete_serve(station_index: int) -> void:

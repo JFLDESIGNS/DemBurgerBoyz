@@ -444,6 +444,16 @@ func play_order_up() -> void:
 	_play_cached("order_up_bell", _make_serve_bell, 0.0, 0.72)
 
 
+func play_serve_whoosh() -> void:
+	## Soft air rush as the burger tosses through the window.
+	_play_cached("serve_whoosh", _make_serve_whoosh, 0.0, 0.38)
+
+
+func play_burger_chomp() -> void:
+	## Quick bite when the burger hits the customer's mouth.
+	_play_cached("burger_chomp", _make_burger_chomp, 0.0, 0.55)
+
+
 func play_grade_tune(label: String) -> void:
 	## Distinct cool stingers for ticket-speed grades — a bit lower + softer.
 	match label:
@@ -799,6 +809,34 @@ func _make_flip() -> AudioStreamWAV:
 		var whoosh := (randf() * 2.0 - 1.0) * exp(-t * 18.0) * 0.45
 		var slap := sin(t * 220.0 * TAU) * exp(-t * 28.0) * 0.7
 		_write_s16(pcm, i, int(clampf((whoosh + slap) * env, -1.0, 1.0) * 20000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_serve_whoosh() -> AudioStreamWAV:
+	var n := int(MIX_RATE * 0.28)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var u := t / 0.28
+		var env := sin(clampf(u, 0.0, 1.0) * PI) * exp(-u * 1.4)
+		var noise := (randf() * 2.0 - 1.0) * 0.55
+		var tone := sin(t * lerpf(420.0, 180.0, u) * TAU) * 0.22
+		_write_s16(pcm, i, int(clampf((noise + tone) * env, -1.0, 1.0) * 14000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_burger_chomp() -> AudioStreamWAV:
+	var n := int(MIX_RATE * 0.16)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := exp(-t * 22.0)
+		var thud := sin(t * 95.0 * TAU) * 0.7
+		var crunch := (randf() * 2.0 - 1.0) * exp(-t * 40.0) * 0.45
+		var slap := sin(t * 260.0 * TAU) * exp(-t * 30.0) * 0.35
+		_write_s16(pcm, i, int(clampf((thud + crunch + slap) * env, -1.0, 1.0) * 21000.0))
 	return _wav_from_pcm(pcm, false)
 
 

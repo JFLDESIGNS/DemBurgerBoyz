@@ -124,6 +124,9 @@ var _powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale, zone}
 var _panic_bones: Dictionary = {} ## Kenney arm bone indices for hands-up pose
 var _powder_face_mount: BoneAttachment3D = null
 var _powder_body_mount: BoneAttachment3D = null
+## Catching / eating a served burger in the window.
+var _eating: bool = false
+var _eat_lean_x: float = 0.0
 ## Glock hit — blood + limp skeleton flop (not a spinning tornado).
 var is_ragdoll: bool = false
 var _ragdoll_vel: Vector3 = Vector3.ZERO
@@ -951,18 +954,28 @@ func _process(delta: float) -> void:
 		_apply_bobble(false)
 	elif _shake_time <= 0.0:
 		rotation_degrees.y = FACE_TRUCK_YAW
-		_play_anim("idle")
-		_apply_bobble(false)
+		if _eating:
+			_play_anim("idle")
+			if _anim_player:
+				_anim_player.stop()
+			_apply_eat_hands_pose(1.0)
+			if _body:
+				_body.position.y = _base_body_y
+				_body.rotation_degrees.x = _eat_lean_x
+				_body.rotation_degrees.z = 0.0
+		else:
+			_play_anim("idle")
+			_apply_bobble(false)
 
 	_animate_expression(delta)
 
 	if is_waiting:
-		## Drain pauses during chat, but the bar stays visible either way.
+		## Drain pauses during chat / mid-bite, but the bar stays visible either way.
 		## Co-op guests mirror host patience — don't expire locally (desyncs tickets).
-		if not dialogue_open and not mp_host_driven:
+		if not dialogue_open and not mp_host_driven and not _eating:
 			patience -= delta
 		_refresh_patience_bar()
-		if patience <= 0.0 and not mp_host_driven:
+		if patience <= 0.0 and not mp_host_driven and not _eating:
 			leave_mad()
 			patience_expired.emit(self)
 	## Ticket clock runs from the moment the slip is pinned until serve / leave.
@@ -1147,6 +1160,8 @@ func bounce_happy() -> void:
 
 func leave_happy() -> void:
 	stop_order_clock()
+	_eating = false
+	_eat_lean_x = 0.0
 	is_leaving = true
 	is_waiting = false
 	_leave_spin = 0.0
@@ -1154,7 +1169,10 @@ func leave_happy() -> void:
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
 	_set_mood("cheer")
+	_reset_skeleton_pose()
 	_play_anim("idle")
+	if _body:
+		_body.rotation_degrees.x = 0.0
 	if _bubble:
 		_bubble.visible = false
 	if _bubble_bg:
@@ -1170,6 +1188,8 @@ func leave_happy() -> void:
 func leave_meh() -> void:
 	## Bland / unseasoned — shrug and walk off. Paid base, no tip energy.
 	stop_order_clock()
+	_eating = false
+	_eat_lean_x = 0.0
 	is_leaving = true
 	is_waiting = false
 	_leave_spin = 0.0
@@ -1177,7 +1197,10 @@ func leave_meh() -> void:
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
 	_set_mood("ok")
+	_reset_skeleton_pose()
 	_play_anim("idle")
+	if _body:
+		_body.rotation_degrees.x = 0.0
 	if _bubble:
 		_bubble.visible = false
 	if _bubble_bg:
@@ -1718,6 +1741,65 @@ func _apply_hands_up_pose(strength: float) -> void:
 	_set_panic_bone_rot("RightForeArm", Vector3(deg_to_rad(-36.0 * s), 0.0, 0.0))
 
 
+func _apply_eat_hands_pose(strength: float) -> void:
+	## Hands up toward the window — ready to catch / shove the burger in.
+	_cache_panic_bones()
+	if _skeleton == null:
+		return
+	var s := clampf(strength, 0.0, 1.0)
+	_skeleton.reset_bone_poses()
+	if s <= 0.01:
+		return
+	_set_panic_bone_rot("LeftArm", Vector3(deg_to_rad(-42.0 * s), deg_to_rad(18.0 * s), deg_to_rad(-68.0 * s)))
+	_set_panic_bone_rot("RightArm", Vector3(deg_to_rad(-42.0 * s), deg_to_rad(-18.0 * s), deg_to_rad(68.0 * s)))
+	_set_panic_bone_rot("LeftForeArm", Vector3(deg_to_rad(-58.0 * s), deg_to_rad(8.0 * s), 0.0))
+	_set_panic_bone_rot("RightForeArm", Vector3(deg_to_rad(-58.0 * s), deg_to_rad(-8.0 * s), 0.0))
+	_set_panic_bone_rot("LeftHand", Vector3(deg_to_rad(-12.0 * s), 0.0, deg_to_rad(-20.0 * s)))
+	_set_panic_bone_rot("RightHand", Vector3(deg_to_rad(-12.0 * s), 0.0, deg_to_rad(20.0 * s)))
+
+
+func begin_catch_burger() -> void:
+	## Hands up + open mouth while the burger flies in.
+	if is_leaving or is_ragdoll:
+		return
+	_eating = true
+	_eat_lean_x = -10.0
+	_set_mood("cheer")
+	if _anim_player:
+		_anim_player.stop()
+	_apply_eat_hands_pose(1.0)
+	if _body:
+		var tw := create_tween()
+		tw.tween_property(_body, "rotation_degrees:x", _eat_lean_x, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+func chomp_burger() -> void:
+	## Bite reaction at contact — keep hands up while the burger disappears.
+	if not is_instance_valid(self):
+		return
+	_set_mood("cheer")
+	_apply_eat_hands_pose(1.0)
+	if _body == null:
+		return
+	var tw := create_tween()
+	tw.tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.08, CHAR_SCALE * 0.9, CHAR_SCALE * 1.08), 0.07)
+	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(_body, "position:y", _base_body_y + 0.06, 0.08)
+	tw.tween_property(_body, "position:y", _base_body_y, 0.12).set_trans(Tween.TRANS_BOUNCE)
+
+
+func finish_catch_burger() -> void:
+	_eating = false
+	_eat_lean_x = 0.0
+	_reset_skeleton_pose()
+	if _body and is_instance_valid(_body):
+		_body.rotation_degrees.x = 0.0
+		_body.scale = Vector3.ONE * CHAR_SCALE
+		_body.position.y = _base_body_y
+	if _anim_player:
+		_anim_player.active = true
+
+
 func _spawn_powder_blob(zone: String) -> void:
 	## White spheres parented to _body — sized in local space (body is CHAR_SCALE).
 	_ensure_powder_mounts()
@@ -1814,6 +1896,8 @@ func _update_powder_blobs(delta: float) -> void:
 
 func leave_mad() -> void:
 	stop_order_clock()
+	_eating = false
+	_eat_lean_x = 0.0
 	is_leaving = true
 	is_waiting = false
 	_leave_spin = 0.0
@@ -1821,7 +1905,10 @@ func leave_mad() -> void:
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
 	_set_mood("mad")
+	_reset_skeleton_pose()
 	_play_anim("idle")
+	if _body:
+		_body.rotation_degrees.x = 0.0
 	if _bubble:
 		_bubble.visible = false
 	if _bubble_bg:
