@@ -1496,8 +1496,9 @@ func _spawn_season_fleck() -> void:
 		return
 	var fleck := MeshInstance3D.new()
 	var fm := BoxMesh.new()
-	var s := 0.008 + randf() * 0.012
-	fm.size = Vector3(s * (0.5 + randf()), 0.0025 + randf() * 0.002, s * (0.4 + randf() * 0.8))
+	## Slightly finer pepper grains on the beef.
+	var s := 0.0055 + randf() * 0.008
+	fm.size = Vector3(s * (0.5 + randf()), 0.0018 + randf() * 0.0014, s * (0.4 + randf() * 0.8))
 	fleck.mesh = fm
 	var ang := randf() * TAU
 	var rad := sqrt(randf()) * 0.095

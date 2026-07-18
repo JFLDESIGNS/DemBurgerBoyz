@@ -8,8 +8,11 @@ const STATION_CRAFT := 0
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
-const STATION_PATTY_BUILD_SCALE := 0.792 ## bare meat (+20%)
-const STATION_PATTY_CHEESE_BUILD_SCALE := 0.84 ## melt art (+20%)
+const STATION_PATTY_BUILD_SCALE := 0.95 ## bare meat — keep readable between buns
+const STATION_PATTY_CHEESE_BUILD_SCALE := 0.98 ## melt art
+## Mild finished-stack nest — crown settles, heel rises; keep light so meat stays visible.
+const BUILD_BUN_NEST_BOTTOM_PX := 5.0
+const BUILD_BUN_NEST_TOP_PX := 7.0
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -5761,12 +5764,12 @@ func _build_season_shaker() -> void:
 	pmat.gravity = Vector3(0, -6.5, 0)
 	pmat.damping_min = 0.5
 	pmat.damping_max = 1.2
-	pmat.scale_min = 0.3
-	pmat.scale_max = 0.75
+	pmat.scale_min = 0.22
+	pmat.scale_max = 0.55
 	pmat.color = Color(0.18, 0.12, 0.08, 0.9)
 	shaker_particles.process_material = pmat
 	var pmesh := BoxMesh.new()
-	pmesh.size = Vector3(0.008, 0.005, 0.006)
+	pmesh.size = Vector3(0.0055, 0.0035, 0.0045)
 	var pdraw := StandardMaterial3D.new()
 	pdraw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	pdraw.albedo_color = Color(0.16, 0.1, 0.06, 0.85)
@@ -14102,10 +14105,13 @@ func _refresh_station(index: int) -> void:
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
-	var step_y := 20.0 * layer_scale
+	## Slightly airier steps so bigger patties aren't buried by the nest.
+	var step_y := 22.0 * layer_scale
 	var layer_w := mini(320.0, stage_w * 0.96)
 	## Extra lift after bottom bun so meat doesn't sit flush on the crumb.
 	var stack_lift := 0.0
+	var bottom_row: Control = null
+	var top_row: Control = null
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -14157,7 +14163,11 @@ func _refresh_station(index: int) -> void:
 			origin_y - stack_lift - float(stack_i) * step_y - h * 0.72
 		)
 		if item == "bun_bottom":
-			stack_lift += 10.0 * layer_scale
+			## Keep heel clear of meat before the light nest pinch.
+			stack_lift += 12.0 * layer_scale
+			bottom_row = row
+		elif item == "bun_top":
+			top_row = row
 
 		var tr := TextureRect.new()
 		tr.texture = layer_tex
@@ -14201,6 +14211,11 @@ func _refresh_station(index: int) -> void:
 				_drop_on_assembly(index, pos, data)
 		)
 		preview.add_child(row)
+	## Light nest: heel rises a touch, crown settles — patties stay full size / visible.
+	if bottom_row != null and is_instance_valid(bottom_row):
+		bottom_row.position.y -= BUILD_BUN_NEST_BOTTOM_PX * layer_scale
+	if top_row != null and is_instance_valid(top_row):
+		top_row.position.y += BUILD_BUN_NEST_TOP_PX * layer_scale
 	_refresh_ticket_checkmarks()
 
 
@@ -14282,9 +14297,9 @@ func _layer_width_mul(item: String) -> float:
 		"bun_bottom":
 			return 0.92
 		"patty":
-			return 1.12
+			return 1.20
 		"patty_cheese":
-			return 1.14
+			return 1.22
 		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
 			return 1.18
 		"ketchup", "mustard":
@@ -14300,9 +14315,9 @@ func _layer_img_height(item: String) -> float:
 		"bun_bottom":
 			return 44.0
 		"patty":
-			return 64.0
+			return 72.0
 		"patty_cheese":
-			return 66.0
+			return 74.0
 		"bacon":
 			return 58.0
 		"lettuce":
