@@ -17063,7 +17063,7 @@ func _setup_multiplayer_ui() -> void:
 	v.add_child(title)
 
 	var tip := Label.new()
-	tip.text = "2–4 cooks. Host → code → Join → host taps Start Co-op (Ready checkmarks optional)."
+	tip.text = "Host Room → Start Co-op anytime (even solo). Friends join later with your 4-digit code (up to 4)."
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(tip, false, 12)
@@ -17393,6 +17393,7 @@ func _mp_refresh_lobby_status() -> void:
 		return
 	var online := NetManager.is_online()
 	_mp_ready_btn.visible = online
+	## Start Co-op stays on-screen for the host whenever a room is up (solo or full party).
 	_mp_start_coop_btn.visible = online and NetManager.is_host()
 	if _mp_host_addr_label:
 		if NetManager.role == NetManager.Role.HOST and online:
@@ -17431,23 +17432,26 @@ func _mp_refresh_lobby_status() -> void:
 			who, NetManager.room_code, n, NetManager.MAX_PLAYERS
 		]
 	else:
-		_mp_status_label.text = "%s · room %s — %d/%d cooks\n%s\nHost: tap Start Co-op anytime with 2+ cooks" % [
+		_mp_status_label.text = "%s · room %s — %d/%d cooks\n%s\nHost: Start Co-op anytime — others join later with the code" % [
 			who, NetManager.room_code, n, NetManager.MAX_PLAYERS, ready_line
 		]
-	## Start as soon as 2+ cooks are connected — Ready is optional (never bricks the lobby).
-	var can_start := n >= 2 and n <= NetManager.MAX_PLAYERS and not NetManager.session_active
+	## Start Co-op always available for the host once a room exists (solo OK; late joins welcome).
+	var can_start := NetManager.is_host() and n >= 1 and n <= NetManager.MAX_PLAYERS \
+		and not NetManager.session_active
 	_mp_start_coop_btn.disabled = not can_start
-	if n < 2:
-		_mp_start_coop_btn.text = "Need 2+ cooks"
+	if NetManager.session_active:
+		_mp_start_coop_btn.text = "Shift live"
+		_mp_start_coop_btn.disabled = true
+	elif n < 1:
+		_mp_start_coop_btn.text = "Start Co-op"
 	elif n > NetManager.MAX_PLAYERS:
 		_mp_start_coop_btn.text = "Too many cooks"
-	elif NetManager.all_peers_ready():
-		_mp_start_coop_btn.text = "Start Co-op (%d)" % n
+	elif n == 1:
+		_mp_start_coop_btn.text = "Start Co-op (solo)"
 	else:
 		_mp_start_coop_btn.text = "Start Co-op (%d)" % n
 	if can_start:
-		_mp_start_coop_btn.modulate = Color(1.0, 1.0, 0.55) if NetManager.all_peers_ready() \
-			else Color(0.85, 1.0, 0.75)
+		_mp_start_coop_btn.modulate = Color(1.0, 1.0, 0.55)
 	else:
 		_mp_start_coop_btn.modulate = Color(1, 1, 1)
 

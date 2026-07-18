@@ -522,15 +522,18 @@ func request_start_session() -> void:
 		return
 	if session_active:
 		return
-	if peer_count() < 2:
-		chat_flash.emit("Need at least 2 cooks to start (up to 4)", Color("FFA726"))
+	if not is_online():
+		chat_flash.emit("Host a room first, then Start Co-op", Color("FFA726"))
+		return
+	if peer_count() < 1:
 		return
 	if peer_count() > MAX_PLAYERS:
 		chat_flash.emit("Room overflow — max %d cooks" % MAX_PLAYERS, Color("EF5350"))
 		return
-	## Ready checkmarks are preferred, but never hard-block a 2+ room (relay Ready can flake).
-	if not all_peers_ready():
-		chat_flash.emit("Starting anyway — not everyone tapped Ready", Color("FFCC80"))
+	if peer_count() == 1:
+		chat_flash.emit("Starting solo — friends can still join with code %s" % room_code, Color("81C784"))
+	elif not all_peers_ready():
+		chat_flash.emit("Starting — friends can still join mid-shift with the code", Color("FFCC80"))
 	_host_begin_session(randi())
 
 
@@ -557,14 +560,20 @@ func _broadcast_lobby_ready() -> void:
 func _host_begin_session(session_seed: int) -> void:
 	if not is_host() or session_active:
 		return
-	if peer_count() < 2 or peer_count() > MAX_PLAYERS:
+	if peer_count() < 1 or peer_count() > MAX_PLAYERS:
 		return
 	session_active = true
 	last_session_seed = session_seed
-	## Local host starts immediately; clients get the RPC (2–4 cooks).
+	## Keep the room open for mid-shift joins (code) until we hit max cooks.
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.refuse_new_connections = peer_count() >= MAX_PLAYERS
+	## Local host starts immediately; clients get the RPC (1–4 cooks).
 	session_start_requested.emit(session_seed)
 	_rpc_start_session.rpc(session_seed)
-	chat_flash.emit("Shift starting — %d cooks!" % peer_count(), Color("FFEB3B"))
+	if peer_count() <= 1:
+		chat_flash.emit("Shift live — share code %s for late joins" % room_code, Color("FFEB3B"))
+	else:
+		chat_flash.emit("Shift starting — %d cooks!" % peer_count(), Color("FFEB3B"))
 
 
 func _peer_known_in_room(peer_id: int) -> bool:

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Burger Pals online room relay for Railway.
- * Hosts create a 4-digit code; up to 4 cooks can join (including mid-round).
+ *
+ * Hosts create a 4-digit code and can Start Co-op alone.
+ * Friends join anytime with that code (lobby or mid-shift) up to MAX_PLAYERS.
  * All game packets are relayed over WebSocket (works across the internet / NAT).
  */
 const http = require("http");
@@ -9,11 +11,12 @@ const { WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 8080);
 const MAX_PLAYERS = 4;
-const ROOM_IDLE_MS = 45 * 60 * 1000;
+// Keep empty rooms briefly; active rooms refresh lastActive on traffic.
+const ROOM_IDLE_MS = 90 * 60 * 1000;
 const HEADER_SIZE = 10;
 
 /**
- * @typedef {{ code: string, peers: Map<number, import('ws').WebSocket>, created: number }} Room
+ * @typedef {{ code: string, peers: Map<number, import('ws').WebSocket>, created: number, lastActive: number }} Room
  * @type {Map<string, Room>}
  */
 const rooms = new Map();
@@ -37,6 +40,10 @@ function sendJson(ws, obj) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify(obj));
   }
+}
+
+function touchRoom(room) {
+  if (room) room.lastActive = Date.now();
 }
 
 function readU32(buf, offset) {
@@ -71,6 +78,7 @@ function clearSocketRoom(ws) {
   }
   const leftId = ws.peerId;
   room.peers.delete(leftId);
+  touchRoom(room);
   for (const [, other] of room.peers) {
     if (other && other.readyState === 1) {
       sendJson(other, { op: "peer_left", peer_id: leftId });
@@ -86,7 +94,8 @@ function clearSocketRoom(ws) {
 function pruneRooms() {
   const now = Date.now();
   for (const [code, room] of rooms) {
-    if (now - room.created > ROOM_IDLE_MS && room.peers.size === 0) {
+    const idleFrom = room.lastActive || room.created;
+    if (room.peers.size === 0 && now - idleFrom > ROOM_IDLE_MS) {
       rooms.delete(code);
     }
   }
@@ -96,6 +105,7 @@ function forwardBinary(ws, data) {
   if (!ws.roomCode) return;
   const room = rooms.get(ws.roomCode);
   if (!room) return;
+  touchRoom(room);
   if (!Buffer.isBuffer(data) && !(data instanceof Uint8Array)) return;
   const buf = Buffer.from(data);
   if (buf.length < HEADER_SIZE) return;
@@ -124,6 +134,8 @@ const server = http.createServer((req, res) => {
         service: "burger-pals-mp-relay",
         rooms: rooms.size,
         max_players: MAX_PLAYERS,
+        mid_round_join: true,
+        solo_host_ok: true,
       })
     );
     return;
@@ -142,7 +154,12 @@ wss.on("connection", (ws) => {
     ws.isAlive = true;
   });
 
-  sendJson(ws, { op: "hello", max_players: MAX_PLAYERS });
+  sendJson(ws, {
+    op: "hello",
+    max_players: MAX_PLAYERS,
+    mid_round_join: true,
+    solo_host_ok: true,
+  });
 
   ws.on("message", (data, isBinary) => {
     if (isBinary) {
@@ -168,8 +185,9 @@ wss.on("connection", (ws) => {
       if (existing && existing.peers.has(1) && existing.peers.get(1)?.readyState === 1) {
         code = randomCode();
       }
+      const now = Date.now();
       /** @type {Room} */
-      const room = { code, peers: new Map(), created: Date.now() };
+      const room = { code, peers: new Map(), created: now, lastActive: now };
       rooms.set(code, room);
       room.peers.set(1, ws);
       ws.roomCode = code;
@@ -179,6 +197,7 @@ wss.on("connection", (ws) => {
         code,
         peer_id: 1,
         max_players: MAX_PLAYERS,
+        mid_round_join: true,
         name: String(msg.name || "Host").slice(0, 24),
       });
       return;
@@ -192,6 +211,7 @@ wss.on("connection", (ws) => {
         return;
       }
       const room = rooms.get(code);
+      // Host must still be connected — late joins OK while they play (solo or co-op).
       if (!room || !room.peers.has(1) || room.peers.get(1)?.readyState !== 1) {
         sendJson(ws, { op: "error", msg: `no room ${code}` });
         return;
@@ -202,6 +222,7 @@ wss.on("connection", (ws) => {
         return;
       }
       room.peers.set(peerId, ws);
+      touchRoom(room);
       ws.roomCode = code;
       ws.peerId = peerId;
       const others = alivePeers(room).filter((id) => id !== peerId);
@@ -211,6 +232,7 @@ wss.on("connection", (ws) => {
         peer_id: peerId,
         max_players: MAX_PLAYERS,
         peers: others,
+        mid_round_join: true,
         name: String(msg.name || "Cook").slice(0, 24),
       });
       for (const id of others) {
@@ -225,6 +247,10 @@ wss.on("connection", (ws) => {
     }
 
     if (op === "ping") {
+      if (ws.roomCode) {
+        const room = rooms.get(ws.roomCode);
+        touchRoom(room);
+      }
       sendJson(ws, { op: "pong", t: msg.t || 0 });
       return;
     }
@@ -254,5 +280,7 @@ setInterval(() => {
 }, 25000);
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Burger Pals MP relay on :${PORT} (max ${MAX_PLAYERS} players)`);
+  console.log(
+    `Burger Pals MP relay on :${PORT} (max ${MAX_PLAYERS}, mid-round join OK, solo host OK)`
+  );
 });
