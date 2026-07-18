@@ -8,6 +8,7 @@ const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const TOAST_READY := 2.0 ## Perfect toasted score window center
 const TOAST_BURNT := 4.2
 const TOAST_PERFECT_SLACK := 0.35 ## ±sec around 2s still counts as perfect
+const TOAST_HOLD_MAX := 40.0 ## Toasted buns stay fresh this long on HOLD
 
 signal clicked(bun: Area3D)
 
@@ -127,6 +128,14 @@ func is_burnt() -> bool:
 	return cook_time >= TOAST_BURNT
 
 
+func is_hold_stale() -> bool:
+	return warm_hold_time >= TOAST_HOLD_MAX
+
+
+func hold_seconds_left() -> float:
+	return maxf(0.0, TOAST_HOLD_MAX - warm_hold_time)
+
+
 func can_scoop() -> bool:
 	return true
 
@@ -214,7 +223,15 @@ func _update_hint() -> void:
 	if is_held:
 		_hint.visible = false
 		return
-	if is_burnt():
+	if is_hold_stale():
+		_hint.text = "STALE"
+		_hint.modulate = Color("EF5350")
+		_hint.visible = true
+	elif warm_hold_time > 0.05 and cook_time >= TOAST_READY and not is_burnt():
+		_hint.text = "HOLD %ds" % maxi(1, int(ceil(hold_seconds_left())))
+		_hint.modulate = Color("90CAF9")
+		_hint.visible = true
+	elif is_burnt():
 		_hint.text = "BURNT"
 		_hint.modulate = Color("EF5350")
 		_hint.visible = true

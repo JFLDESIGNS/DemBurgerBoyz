@@ -1122,6 +1122,8 @@ func _process(delta: float) -> void:
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 			if not _is_bun_toast(p):
 				_update_patty_warm_hold(p, delta)
+			else:
+				_update_bun_toast_hold(p, delta)
 	_update_station_cheese_melt(delta)
 	_update_supply_freshness(delta)
 	_update_patty_hint_focus()
@@ -7548,6 +7550,46 @@ func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
 				_trash_held_warm_patty(patty)
 
 
+func _update_bun_toast_hold(bun: Area3D, delta: float) -> void:
+	## Toasted buns stay fresh on HOLD for 40s, then go stale and get tossed.
+	if bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
+		return
+	if mp_enabled and not NetManager.is_host():
+		return
+	if bun.is_held:
+		return
+	## Only after done toasting (ready or burnt) — park on HOLD to keep.
+	if float(bun.cook_time) < BunToastScript.TOAST_READY:
+		return
+	var on_hold: bool = _is_in_warmer_zone(bun.position)
+	if not on_hold:
+		return
+	bun.warm_hold_time = float(bun.warm_hold_time) + delta
+	if float(bun.warm_hold_time) >= BunToastScript.TOAST_HOLD_MAX:
+		if mp_enabled and int(bun.get("net_id")) >= 0:
+			mp_trash_patty.rpc(int(bun.net_id))
+			_flash("Toasted buns went stale on HOLD (40s) — tossed", Color("EF5350"))
+		else:
+			_trash_stale_toast_buns(bun)
+
+
+func _trash_stale_toast_buns(bun: Area3D) -> void:
+	if bun == null or not is_instance_valid(bun):
+		return
+	var idx: int = int(bun.slot_index)
+	if idx >= 0 and idx < grill.size() and grill[idx] == bun:
+		grill[idx] = null
+	if spatula_patty == bun:
+		spatula_patty = null
+		spatula_owner_id = 0
+		spatula_from_build = false
+		_refresh_spatula_ui()
+	bun.queue_free()
+	if game_audio and game_audio.has_method("play_trash"):
+		game_audio.play_trash()
+	_flash("Toasted buns went stale on HOLD (40s) — tossed", Color("EF5350"))
+
+
 func _trash_held_warm_patty(patty: Area3D) -> void:
 	var idx: int = int(patty.slot_index)
 	if idx >= 0 and idx < grill.size() and grill[idx] == patty:
@@ -7727,7 +7769,14 @@ func _place_spatula_on_warmer_local(idx: int, pos: Vector3, patty: Area3D = null
 		game_audio.play_click()
 	if patty.has_method("refresh_cook_visuals"):
 		patty.refresh_cook_visuals()
-	_flash("On HOLD — stays warm up to 5 minutes (won't cook more)", Color("90CAF9"))
+	if _is_bun_toast(patty):
+		if float(patty.cook_time) >= BunToastScript.TOAST_READY:
+			var left := int(ceil(BunToastScript.TOAST_HOLD_MAX - float(patty.warm_hold_time)))
+			_flash("Buns on HOLD — stay fresh %ds" % maxi(1, left), Color("90CAF9"))
+		else:
+			_flash("Toast the buns first (2s) — then HOLD keeps them 40s", Color("FFCC80"))
+	else:
+		_flash("On HOLD — stays warm up to 5 minutes (won't cook more)", Color("90CAF9"))
 
 
 func _clear_warmer() -> void:
