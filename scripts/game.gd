@@ -635,8 +635,8 @@ const PHONE_SCROLL_WHEEL_KICK := 520.0
 const PHONE_CORNER_OUTER := 10
 const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
-## Soda fountain — camera-left (world +X). Yaw 180 faces the camera.
-const SODA_STATION_POS := Vector3(1.28, 1.08, 0.52)
+## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
+const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const CUP_COLLISION_LAYER := 1024
 const SODA_FLAVOR_COLLISION_LAYER := 4096
