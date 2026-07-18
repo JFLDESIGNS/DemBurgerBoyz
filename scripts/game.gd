@@ -624,8 +624,8 @@ const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
 ## Soda fountain — right counter, nudged in so the face isn't clipped.
 ## Yaw 180: face on local +Z points at the camera (same as menu board / First Sale).
-## Soda fountain — right counter (screen-right = world −X). Nudged ~1 ft further right.
-const SODA_STATION_POS := Vector3(-1.85, 1.08, 0.52)
+## Soda fountain — right counter (screen-right = world −X). Nudged ~1 ft screen-left.
+const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const CUP_COLLISION_LAYER := 1024
 const SODA_FLAVOR_COLLISION_LAYER := 4096
