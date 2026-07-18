@@ -17544,7 +17544,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 		return
 	if playing and not NetManager.is_host():
 		## Rare: guest already playing; still request a fresh host snapshot.
-		mp_request_bootstrap.rpc_id(1)
+		mp_request_bootstrap.rpc_id(1, NetManager.my_id())
 		return
 	_flash("Co-op shift — up to 4 cooks! Match glove colors", Color("FFEB3B"))
 	_start_game()
@@ -17564,17 +17564,19 @@ func _mp_request_bootstrap_deferred() -> void:
 		return
 	if not NetManager.is_online():
 		return
-	mp_request_bootstrap.rpc_id(1)
+	mp_request_bootstrap.rpc_id(1, NetManager.my_id())
 
 
 @rpc("any_peer", "reliable")
-func mp_request_bootstrap() -> void:
+func mp_request_bootstrap(claimed_id: int = 0) -> void:
 	if not NetManager.is_host():
 		return
 	var sid := multiplayer.get_remote_sender_id()
-	if sid == 0:
+	## Prefer network sender; claimed_id covers relay quirks (sid 0).
+	var peer_id := sid if sid > 0 else int(claimed_id)
+	if peer_id <= 0:
 		return
-	_mp_send_bootstrap_to(sid)
+	_mp_send_bootstrap_to(peer_id)
 
 
 func _mp_send_bootstrap_to(peer_id: int) -> void:

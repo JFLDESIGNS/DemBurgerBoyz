@@ -288,7 +288,8 @@ func _is_server() -> bool:
 
 
 func _is_server_relay_supported() -> bool:
-	return true
+	## Railway already meshes room peers — Godot SYS double-relay breaks sender ids / RPCs.
+	return false
 
 
 func _get_connection_status() -> MultiplayerPeer.ConnectionStatus:

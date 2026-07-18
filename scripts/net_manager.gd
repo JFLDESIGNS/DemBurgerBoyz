@@ -562,14 +562,16 @@ func _host_begin_session(session_seed: int) -> void:
 		return
 	if peer_count() < 1 or peer_count() > MAX_PLAYERS:
 		return
-	session_active = true
 	last_session_seed = session_seed
 	## Keep the room open for mid-shift joins (code) until we hit max cooks.
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.refuse_new_connections = peer_count() >= MAX_PLAYERS
-	## Local host starts immediately; clients get the RPC (1–4 cooks).
-	session_start_requested.emit(session_seed)
+	## call_local starts the host; remotes get the same handler (relay-safe).
 	_rpc_start_session.rpc(session_seed)
+	## Fan out explicitly — broadcast alone can flake on the WebSocket relay.
+	if multiplayer.multiplayer_peer != null:
+		for p in multiplayer.get_peers():
+			_rpc_start_session.rpc_id(int(p), session_seed)
 	if peer_count() <= 1:
 		chat_flash.emit("Shift live — share code %s for late joins" % room_code, Color("FFEB3B"))
 	else:
@@ -639,11 +641,12 @@ func _rpc_sync_lobby_ready(ready_ids: Array) -> void:
 	peer_ready_changed.emit()
 
 
-@rpc("any_peer", "call_remote", "reliable")
+@rpc("any_peer", "call_local", "reliable")
 func _rpc_start_session(session_seed: int) -> void:
-	## Host already emitted locally in _host_begin_session — clients only here.
-	if is_host():
+	## Idempotent — host call_local + per-peer rpc_id can deliver twice.
+	if session_active:
 		return
+	## sid 0 = local / flaky relay; sid 1 = host. Guests must never start for others.
 	var sid := multiplayer.get_remote_sender_id()
 	if sid > 1:
 		return
@@ -652,11 +655,14 @@ func _rpc_start_session(session_seed: int) -> void:
 	session_start_requested.emit(session_seed)
 
 
-@rpc("any_peer", "reliable")
+@rpc("any_peer", "call_local", "reliable")
 func _rpc_join_in_progress(session_seed: int) -> void:
 	## Late joiner only — pull them into the live shift with the same seed.
+	if session_active and last_session_seed == session_seed:
+		return
 	var sid := multiplayer.get_remote_sender_id()
-	if sid != 0 and sid != 1:
+	## Accept host (1) or unknown sender (0) from the WebSocket relay.
+	if sid > 1:
 		return
 	session_active = true
 	last_session_seed = session_seed
