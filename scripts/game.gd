@@ -647,7 +647,7 @@ const SODA_FLAVOR_COLORS: Dictionary = {
 	"lemon_lime": Color(0.55, 0.82, 0.22),
 	"orange": Color(0.95, 0.48, 0.12),
 }
-const CUP_HOLD_HEIGHT := 0.22
+const CUP_HOLD_HEIGHT := 0.04 ## low seat under fountain (was too high mid-tap)
 const CUP_SHELL_H := 0.21 ## tall clear cup
 const CUP_SHELL_TOP_R := 0.082
 const CUP_SHELL_BOT_R := 0.066
@@ -8656,9 +8656,9 @@ func _build_soda_station() -> void:
 		root.add_child(area)
 		soda_flavor_areas[fid] = area
 
-	## Raised taps — spaced far apart so SODA / ICE are separate actions.
-	_add_soda_spout(root, "SodaSpout", Vector3(-0.18, 0.40, 0.30), true)
-	_add_soda_spout(root, "IceSpout", Vector3(0.18, 0.40, 0.30), false)
+	## Raised taps — high above the drip tray so the pour clears the cup rim.
+	_add_soda_spout(root, "SodaSpout", Vector3(-0.18, 0.54, 0.30), true)
+	_add_soda_spout(root, "IceSpout", Vector3(0.18, 0.54, 0.30), false)
 
 	## Cup rest surface (drip tray) under the nozzles.
 	var tray := MeshInstance3D.new()
@@ -8685,7 +8685,7 @@ func _build_soda_station() -> void:
 
 	var soda_lab := Label3D.new()
 	soda_lab.text = "SODA"
-	soda_lab.position = Vector3(-0.18, 0.48, 0.32)
+	soda_lab.position = Vector3(-0.18, 0.62, 0.32)
 	soda_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	soda_lab.font_size = 13
 	soda_lab.pixel_size = 0.0013
@@ -8695,7 +8695,7 @@ func _build_soda_station() -> void:
 	root.add_child(soda_lab)
 	var ice_lab := Label3D.new()
 	ice_lab.text = "ICE"
-	ice_lab.position = Vector3(0.18, 0.48, 0.32)
+	ice_lab.position = Vector3(0.18, 0.62, 0.32)
 	ice_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	ice_lab.font_size = 13
 	ice_lab.pixel_size = 0.0013
@@ -8887,15 +8887,15 @@ func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, is_
 	arm.material_override = sm
 	group.add_child(arm)
 
-	## Vertical nozzle (short hang — tip sits high above the tray).
+	## Vertical nozzle — tip hangs just below the arm (pour point stays high).
 	var nozzle := MeshInstance3D.new()
 	nozzle.name = "Nozzle"
 	var nz := CylinderMesh.new()
 	nz.top_radius = 0.016
 	nz.bottom_radius = 0.022
-	nz.height = 0.055
+	nz.height = 0.045
 	nozzle.mesh = nz
-	nozzle.position = Vector3(0.0, -0.01, 0.04)
+	nozzle.position = Vector3(0.0, 0.0, 0.04)
 	nozzle.material_override = sm
 	group.add_child(nozzle)
 
@@ -8905,14 +8905,14 @@ func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, is_
 	ring.bottom_radius = 0.024
 	ring.height = 0.012
 	tip_ring.mesh = ring
-	tip_ring.position = Vector3(0.0, -0.04, 0.04)
+	tip_ring.position = Vector3(0.0, -0.028, 0.04)
 	tip_ring.material_override = sm
 	group.add_child(tip_ring)
 
 	var tip := Marker3D.new()
 	tip.name = "%sTip" % spout_name
-	## Raised pour tip — higher than the old hanging cylinder tip.
-	tip.position = local_pos + Vector3(0.0, -0.048, 0.045)
+	## Pour tip near the ring — well above a cup on the tray.
+	tip.position = local_pos + Vector3(0.0, -0.032, 0.045)
 	parent.add_child(tip)
 	if is_soda:
 		soda_spout_marker = tip
@@ -9231,21 +9231,25 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	hit.x = clampf(hit.x, -2.20, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.20)
 	hit.y = hold_y
-	## Tiny soft snap only when already nearly under a nozzle — never fight free drag.
+	## Soft snap under a nozzle — seat the cup low so the rim sits below the tip.
 	var best_tip: Vector3 = Vector3.ZERO
 	var best_d := CUP_MAGNET_RADIUS
+	var seat_y := hold_y
 	for tip in [soda_spout_marker, ice_spout_marker]:
 		if tip == null or not is_instance_valid(tip):
 			continue
-		var tpos: Vector3 = tip.global_position + Vector3(0.0, -0.10, 0.0)
-		tpos.y = hold_y
+		var tip_p: Vector3 = tip.global_position
+		var fill_y := tip_p.y - CUP_SHELL_H - 0.06 ## rim ~6cm under the pour tip
+		var tpos := Vector3(tip_p.x, fill_y, tip_p.z)
 		var d := Vector2(hit.x - tpos.x, hit.z - tpos.z).length()
 		if d < best_d:
 			best_d = d
 			best_tip = tpos
+			seat_y = fill_y
 	if best_tip != Vector3.ZERO:
-		var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0) * 0.35
+		var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0) * 0.45
 		hit = hit.lerp(best_tip, pull)
+		hit.y = lerpf(hold_y, seat_y, pull)
 	return hit
 
 
@@ -9440,15 +9444,7 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 	var s := randf_range(0.022, 0.034)
 	box.size = Vector3(s, s * 0.88, s * randf_range(0.9, 1.1))
 	cube.mesh = box
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.78, 0.92, 1.0, 0.92)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.08
-	mat.metallic = 0.18
-	mat.emission_enabled = true
-	mat.emission = Color(0.65, 0.88, 1.0)
-	mat.emission_energy_multiplier = 0.35
-	cube.material_override = mat
+	cube.material_override = _make_ice_cube_material()
 	world.add_child(cube)
 	var start := from_tip + Vector3(randf_range(-0.025, 0.025), 0.0, randf_range(-0.025, 0.025))
 	var end: Vector3
