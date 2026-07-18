@@ -1297,6 +1297,18 @@ func get_patty_color() -> Color:
 	return color_at_cook_time(cook_time - HEAT_LAG * 0.45)
 
 
+func build_char_amount() -> float:
+	## 0 = normal Build art · 1 = fully charcoal overlay for burnt meat.
+	var t := cook_time
+	if flipped_once:
+		t = maxf(t, first_side_time)
+	if t < COOK_PERFECT:
+		return 0.0
+	if t < COOK_BURNT:
+		return lerpf(0.0, 0.5, (t - COOK_PERFECT) / maxf(0.01, COOK_BURNT - COOK_PERFECT))
+	return lerpf(0.5, 1.0, minf(1.0, (t - COOK_BURNT) / 8.0))
+
+
 func get_state() -> CookState:
 	if cook_time >= COOK_BURNT:
 		return CookState.BURNT

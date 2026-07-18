@@ -13941,13 +13941,7 @@ func _refresh_station(index: int) -> void:
 		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
 		var layer_tex: Texture2D = null
 		if item == "patty":
-			if layer_key == "patty_cheese":
-				layer_tex = FoodSpritesScript.burger_cheese_tex()
-			else:
-				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
-				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
-					pcolor = st["patties"][pidx].get_patty_color()
-				layer_tex = FoodSpritesScript.patty_tex(pcolor)
+			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
 		else:
 			layer_tex = FoodSpritesScript.get_tex(item)
 		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
@@ -14035,6 +14029,22 @@ func _station_patty_has_cheese(st: Dictionary, pidx: int) -> bool:
 		if str(item) == "cheese":
 			cheese_n += 1
 	return pidx < cheese_n
+
+
+func _station_patty_layer_tex(st: Dictionary, pidx: int, with_cheese: bool) -> Texture2D:
+	## Build-board meat (and melt art) follow grill cook / burn.
+	var pcolor: Color = GameDataScript.INGREDIENT_COLORS.get("patty", Color(0.45, 0.24, 0.14))
+	var char_amt := 0.0
+	var patties: Array = st.get("patties", [])
+	if pidx >= 0 and pidx < patties.size() and is_instance_valid(patties[pidx]):
+		var p = patties[pidx]
+		if p.has_method("get_patty_color"):
+			pcolor = p.get_patty_color()
+		if p.has_method("build_char_amount"):
+			char_amt = float(p.build_char_amount())
+	if with_cheese:
+		return FoodSpritesScript.burger_cheese_tex(pcolor, char_amt)
+	return FoodSpritesScript.patty_tex(pcolor, char_amt)
 
 
 func _station_layer_scale(layer_count: int) -> float:
@@ -14459,13 +14469,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
 		var layer_tex: Texture2D = null
 		if item == "patty":
-			if layer_key == "patty_cheese":
-				layer_tex = FoodSpritesScript.burger_cheese_tex()
-			else:
-				var pcolor := GameDataScript.INGREDIENT_COLORS["patty"]
-				if pidx >= 0 and pidx < st["patties"].size() and is_instance_valid(st["patties"][pidx]):
-					pcolor = st["patties"][pidx].get_patty_color()
-				layer_tex = FoodSpritesScript.patty_tex(pcolor)
+			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
 		else:
 			layer_tex = FoodSpritesScript.get_tex(item)
 		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)

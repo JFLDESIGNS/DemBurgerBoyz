@@ -95,11 +95,30 @@ static func get_tex(id: String) -> Texture2D:
 	return tex
 
 
-static func burger_cheese_tex() -> Texture2D:
+static func burger_cheese_tex(cook_color: Color = Color(0.45, 0.24, 0.14), char_amount: float = 0.0) -> Texture2D:
 	## Patty + melted cheese sheet for Build stacks (replaces separate cheese layer art).
-	if _cache.has("burger_cheese"):
-		return _cache["burger_cheese"]
-	var tex: Texture2D = null
+	var char_q := snappedf(clampf(char_amount, 0.0, 1.0), 0.05)
+	var key := "burger_cheese_%s_c%.2f" % [cook_color.to_html(false), char_q]
+	if _cache.has(key):
+		return _cache[key]
+	var base := _get_burger_cheese_sheet_image()
+	var tex: Texture2D
+	if base != null:
+		var img := base.duplicate()
+		_tint_patty_sheet(img, cook_color, char_q)
+		tex = ImageTexture.create_from_image(img)
+	else:
+		tex = get_tex("cheese")
+	_cache[key] = tex
+	return tex
+
+
+static var _burger_cheese_sheet_img: Image = null
+
+
+static func _get_burger_cheese_sheet_image() -> Image:
+	if _burger_cheese_sheet_img != null:
+		return _burger_cheese_sheet_img
 	var path := INGREDIENT_DIR + "burger_cheese.png"
 	if ResourceLoader.exists(path):
 		var res = load(path)
@@ -110,30 +129,23 @@ static func burger_cheese_tex() -> Texture2D:
 					img.decompress()
 				img.convert(Image.FORMAT_RGBA8)
 				_knockout_dark_backdrop(img)
-				## Square sheet has huge empty padding — crop so Build scale matches bare patty.
 				img = _crop_to_opaque(img)
-				tex = ImageTexture.create_from_image(img)
-			else:
-				tex = res
-	if tex == null:
-		var fallback := "res://IMAGES/BURGERCHEEESE.png"
-		if ResourceLoader.exists(fallback):
-			var fb = load(fallback)
-			if fb is Texture2D:
-				var img2: Image = fb.get_image()
-				if img2 != null:
-					if img2.is_compressed():
-						img2.decompress()
-					img2.convert(Image.FORMAT_RGBA8)
-					_knockout_dark_backdrop(img2)
-					img2 = _crop_to_opaque(img2)
-					tex = ImageTexture.create_from_image(img2)
-				else:
-					tex = fb
-	if tex == null:
-		tex = get_tex("cheese")
-	_cache["burger_cheese"] = tex
-	return tex
+				_burger_cheese_sheet_img = img
+				return _burger_cheese_sheet_img
+	var fallback := "res://IMAGES/BURGERCHEEESE.png"
+	if ResourceLoader.exists(fallback):
+		var fb = load(fallback)
+		if fb is Texture2D:
+			var img2: Image = fb.get_image()
+			if img2 != null:
+				if img2.is_compressed():
+					img2.decompress()
+				img2.convert(Image.FORMAT_RGBA8)
+				_knockout_dark_backdrop(img2)
+				img2 = _crop_to_opaque(img2)
+				_burger_cheese_sheet_img = img2
+				return _burger_cheese_sheet_img
+	return null
 
 
 static func _crop_to_opaque(img: Image, alpha_cut: float = 0.08) -> Image:
@@ -242,16 +254,17 @@ static func _knockout_dark_backdrop(img: Image) -> void:
 static var _patty_sheet_img: Image = null
 
 
-static func patty_tex(color: Color) -> Texture2D:
-	## Station / ticket stack uses cutout sheet art, lightly tinted by cook color.
-	var key := "patty_art_%s" % color.to_html(false)
+static func patty_tex(color: Color, char_amount: float = 0.0) -> Texture2D:
+	## Station / ticket stack uses cutout sheet art, tinted + charred by cook state.
+	var char_q := snappedf(clampf(char_amount, 0.0, 1.0), 0.05)
+	var key := "patty_art_%s_c%.2f" % [color.to_html(false), char_q]
 	if _cache.has(key):
 		return _cache[key]
 	var base := _get_patty_sheet_image()
 	var tex: Texture2D
 	if base != null:
 		var img := base.duplicate()
-		_tint_patty_sheet(img, color)
+		_tint_patty_sheet(img, color, char_q)
 		tex = ImageTexture.create_from_image(img)
 	else:
 		tex = _make_patty(color)
@@ -280,15 +293,19 @@ static func _get_patty_sheet_image() -> Image:
 	var err := img2.load(abs_try)
 	if err != OK:
 		err = img2.load(path)
-	if err != OK:
-		return null
-	_knockout_dark_backdrop(img2)
-	_patty_sheet_img = img2
-	return _patty_sheet_img
+	if err == OK:
+		_knockout_dark_backdrop(img2)
+		_patty_sheet_img = img2
+		return _patty_sheet_img
+	return null
 
 
-static func _tint_patty_sheet(img: Image, cook: Color) -> void:
-	## Keep grill-mark contrast; bias overall hue toward the live cook color.
+static func _tint_patty_sheet(img: Image, cook: Color, char_amount: float = 0.0) -> void:
+	## Cook hue + progressive charcoal so Build burgers match grill burntness.
+	var char_t := clampf(char_amount, 0.0, 1.0)
+	## Bare cook tint is mild; ramps hard once meat starts charring.
+	var tint_str := lerpf(0.42, 0.78, char_t)
+	var soot := Color(0.04, 0.03, 0.02)
 	var w := img.get_width()
 	var h := img.get_height()
 	for y in h:
@@ -297,10 +314,21 @@ static func _tint_patty_sheet(img: Image, cook: Color) -> void:
 			if p.a < 0.05:
 				continue
 			var lum := p.get_luminance()
-			var tinted := p.lerp(Color(cook.r, cook.g, cook.b, p.a), 0.35)
-			## Preserve dark char lines.
+			## Yellow cheese stays a bit readable; meat takes the charcoal.
+			var is_cheese := p.r > 0.55 and p.g > 0.4 and p.b < 0.35 and (p.r - p.b) > 0.2
+			var local_char := char_t * (0.35 if is_cheese else 1.0)
+			var local_darken := lerpf(1.0, 0.22, local_char)
+			var local_tint := tint_str * (0.55 if is_cheese else 1.0)
+			var tinted := p.lerp(Color(cook.r, cook.g, cook.b, p.a), local_tint)
+			## Preserve existing dark grill marks a bit.
 			if lum < 0.18:
-				tinted = p.lerp(tinted, 0.25)
+				tinted = p.lerp(tinted, 0.35)
+			tinted.r *= local_darken
+			tinted.g *= local_darken
+			tinted.b *= local_darken
+			if local_char > 0.01:
+				tinted = tinted.lerp(Color(soot.r, soot.g, soot.b, p.a), local_char * 0.72)
+			tinted.a = p.a
 			img.set_pixel(x, y, tinted)
 
 
