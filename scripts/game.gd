@@ -3193,10 +3193,31 @@ func _scrape_residue_hit(slot: int, swipe_dir: Vector2 = Vector2.ZERO) -> void:
 func _scrape_finish_clean(slot: int) -> void:
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
+	var cx := 0.0
+	var cz := 0.0
+	if slot < grill_residue_centers.size():
+		var c: Vector3 = grill_residue_centers[slot]
+		cx = c.x
+		cz = c.z
 	if mp_enabled and not _mp_applying:
-		mp_residue_clean.rpc(slot)
+		## Include world pos — peers may have the same char in a different slot index.
+		mp_residue_clean.rpc(slot, cx, cz)
 		return
-	_scrape_finish_clean_local(slot)
+	_scrape_finish_clean_at(slot, cx, cz)
+
+
+func _scrape_finish_clean_at(slot: int, x: float, z: float) -> void:
+	## Clear the named slot plus any residue pile sitting on the same grill spot.
+	if slot >= 0 and slot < GRILL_SLOTS and float(grill_residue[slot]) > 0.0:
+		_scrape_finish_clean_local(slot)
+	for i in GRILL_SLOTS:
+		if i == slot:
+			continue
+		if float(grill_residue[i]) <= 0.0:
+			continue
+		var c: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
+		if Vector2(c.x - x, c.z - z).length() <= 0.42:
+			_scrape_finish_clean_local(i)
 
 
 func _scrape_finish_clean_local(slot: int) -> void:
@@ -4822,6 +4843,33 @@ func _pick_residue_slot_at(at: Vector3) -> int:
 			best_empty_d = d
 			best_empty = i
 	return best_empty if best_empty >= 0 else best_any
+
+
+func _find_residue_slot_near(x: float, z: float, max_d: float = 0.42) -> int:
+	## Match a scrap pile by grill position (co-op peers can disagree on slot index).
+	var best := -1
+	var best_d := max_d
+	for i in GRILL_SLOTS:
+		if float(grill_residue[i]) <= 0.0:
+			continue
+		var c: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
+		var d := Vector2(c.x - x, c.z - z).length()
+		if d <= best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _clear_residue_near(x: float, z: float, max_d: float = 0.42) -> void:
+	for i in GRILL_SLOTS:
+		if float(grill_residue[i]) <= 0.0:
+			continue
+		var c: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
+		if Vector2(c.x - x, c.z - z).length() <= max_d:
+			grill_residue[i] = 0.0
+			_clear_residue_chunks(i)
+			if i < brush_swipe_travel.size():
+				brush_swipe_travel[i] = 0.0
 
 
 func _leave_cup_char_residue(at: Vector3) -> void:
@@ -8536,17 +8584,22 @@ func _finish_cup_grow_crust(item: Dictionary, at: Vector3) -> void:
 		return
 	crust.global_position = Vector3(at.x, GRILL_SURFACE_Y + 0.027, at.z)
 	crust.scale = Vector3.ONE
-	_adopt_cup_grow_crust_as_residue(crust, at, not bool(item.get("remote", false)))
+	var is_remote := bool(item.get("remote", false))
+	var slot := _adopt_cup_grow_crust_as_residue(crust, at, not is_remote)
+	## Authority peer publishes the exact slot+pos so partners scrape the same pile.
+	if slot >= 0 and mp_enabled and not _mp_applying and not is_remote:
+		var c: Vector3 = grill_residue_centers[slot] if slot < grill_residue_centers.size() else at
+		mp_cup_residue_place.rpc(slot, c.x, c.z)
 
 
-func _adopt_cup_grow_crust_as_residue(crust: Node3D, at: Vector3, announce: bool) -> void:
+func _adopt_cup_grow_crust_as_residue(crust: Node3D, at: Vector3, announce: bool) -> int:
 	## Promote the melt-grow meshes into the scrap system (same visuals, no respawn).
 	if crust == null or not is_instance_valid(crust) or grill_root == null:
-		return
+		return -1
 	var slot := _pick_residue_slot_at(at)
 	if slot < 0:
 		crust.queue_free()
-		return
+		return -1
 	_clear_residue_chunks(slot)
 	grill_residue[slot] = 1.0
 	if slot < brush_swipe_travel.size():
@@ -8575,13 +8628,14 @@ func _adopt_cup_grow_crust_as_residue(crust: Node3D, at: Vector3, announce: bool
 			chunks.append(mesh_i)
 	crust.queue_free()
 	if chunks.is_empty():
-		return
+		return -1
 	grill_residue_chunks[slot] = chunks
 	if slot < grill_residue_meshes.size() and is_instance_valid(grill_residue_meshes[slot]):
 		grill_residue_meshes[slot].position = sit
 		grill_residue_meshes[slot].visible = false
 	if announce:
 		_flash("Charred cup stuck on the grill — scrape it off", Color("BCAAA4"))
+	return slot
 
 
 func _clear_melting_cups() -> void:
@@ -9302,7 +9356,7 @@ func _update_held_brush(_delta: float) -> void:
 			_refresh_residue_visual(i)
 			if mp_enabled and not _mp_applying and _mp_residue_sync_cool <= 0.0:
 				_mp_residue_sync_cool = 0.09
-				mp_residue_amt.rpc(i, float(grill_residue[i]))
+				mp_residue_amt.rpc(i, float(grill_residue[i]), pad_pos.x, pad_pos.z)
 			if i < brush_swipe_travel.size():
 				brush_swipe_travel[i] = float(brush_swipe_travel[i]) + moved
 			## Chip flecks as you work the stain down.
@@ -9311,7 +9365,7 @@ func _update_held_brush(_delta: float) -> void:
 				brush_swipe_cool[i] = 0.12
 				_scrape_residue_hit(i, move_xz)
 				if mp_enabled and not _mp_applying:
-					mp_residue_chip.rpc(i, move_xz.x, move_xz.y)
+					mp_residue_chip.rpc(i, move_xz.x, move_xz.y, pad_pos.x, pad_pos.z)
 			if float(grill_residue[i]) <= 0.04:
 				_scrape_finish_clean(i)
 		elif i < brush_swipe_travel.size():
@@ -24280,25 +24334,49 @@ func mp_residue_leave(slot: int, x: float, z: float, announce: bool, kind: Strin
 	_mp_applying = false
 
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
-func mp_residue_amt(slot: int, amt: float) -> void:
+@rpc("any_peer", "call_remote", "reliable")
+func mp_cup_residue_place(slot: int, x: float, z: float) -> void:
+	## Partner's melted cup char finished — lock the same slot/pos so scrapes match.
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
-	grill_residue[slot] = clampf(amt, 0.0, 1.0)
-	_refresh_residue_visual(slot)
+	_mp_applying = true
+	_clear_residue_near(x, z, 0.45)
+	_leave_grill_residue_local(slot, Vector3(x, GRILL_SURFACE_Y + 0.027, z), false, "cup")
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_residue_amt(slot: int, amt: float, x: float = 0.0, z: float = 0.0) -> void:
+	var target := slot
+	var near := _find_residue_slot_near(x, z, 0.45)
+	if near >= 0:
+		target = near
+	elif target < 0 or target >= GRILL_SLOTS:
+		return
+	if target < 0 or target >= GRILL_SLOTS:
+		return
+	grill_residue[target] = clampf(amt, 0.0, 1.0)
+	_refresh_residue_visual(target)
+	## If this scrape finished the pile, wipe any twin pile at the same spot.
+	if float(grill_residue[target]) <= 0.04:
+		_scrape_finish_clean_at(target, x, z)
 
 
 @rpc("any_peer", "call_remote", "unreliable")
-func mp_residue_chip(slot: int, dx: float, dz: float) -> void:
-	if slot < 0 or slot >= GRILL_SLOTS:
+func mp_residue_chip(slot: int, dx: float, dz: float, x: float = 0.0, z: float = 0.0) -> void:
+	var target := slot
+	var near := _find_residue_slot_near(x, z, 0.45)
+	if near >= 0:
+		target = near
+	if target < 0 or target >= GRILL_SLOTS:
 		return
-	_scrape_residue_hit(slot, Vector2(dx, dz))
+	_scrape_residue_hit(target, Vector2(dx, dz))
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_residue_clean(slot: int) -> void:
+func mp_residue_clean(slot: int, x: float = 0.0, z: float = 0.0) -> void:
 	_mp_applying = true
-	_scrape_finish_clean_local(slot)
+	_scrape_finish_clean_at(slot, x, z)
 	_mp_applying = false
 
 
