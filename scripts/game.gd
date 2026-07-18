@@ -14072,17 +14072,19 @@ func _station_item_build_scale(item: String) -> float:
 	if item == "patty":
 		return STATION_PATTY_BUILD_SCALE
 	if item == "onion":
-		return STATION_INGREDIENT_SCALE * 0.85
+		return STATION_INGREDIENT_SCALE * 0.595 ## −30%
 	if item == "tomato":
 		return STATION_INGREDIENT_SCALE * 0.9
 	if item == "pickle":
-		return STATION_INGREDIENT_SCALE * 0.8
+		return STATION_INGREDIENT_SCALE * 0.56 ## −30%
 	if item == "bacon":
 		return STATION_INGREDIENT_SCALE * 0.88
 	if item == "lettuce":
 		return STATION_INGREDIENT_SCALE * 0.92
 	if item == "cheese":
 		return STATION_INGREDIENT_SCALE * 0.9
+	if item == "ketchup" or item == "mustard":
+		return STATION_INGREDIENT_SCALE * 0.9 ## −10%
 	return STATION_INGREDIENT_SCALE
 
 
