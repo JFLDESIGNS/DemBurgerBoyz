@@ -1411,6 +1411,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_on_serve()
 	elif event.is_action_pressed("trash"):
 		_clear_active_station()
+	elif event is InputEventKey and event.pressed and not event.echo \
+			and (event.keycode == KEY_BACKSPACE or event.physical_keycode == KEY_BACKSPACE):
+		## Backspace = trash selected / top Build layer (same as trash key).
+		_clear_active_station()
+		get_viewport().set_input_as_handled()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var ing := _ingredient_from_hotkey(event.keycode)
 		if ing != "":
@@ -7971,6 +7976,29 @@ func _station_burgers_seasoned(station_index: int) -> bool:
 	return true
 
 
+func _station_bun_toast_mul(station_index: int) -> float:
+	## Shared top+bottom toast clock — peak at 2.0s perfect.
+	if station_index < 0 or station_index >= stations.size():
+		return 1.0
+	var cook := maxf(
+		_station_bun_cook_time(station_index, "bun_bottom"),
+		_station_bun_cook_time(station_index, "bun_top")
+	)
+	if cook <= 0.05:
+		return 1.0
+	if cook >= BunToastScript.TOAST_BURNT:
+		return 0.72
+	if absf(cook - BunToastScript.TOAST_READY) <= BunToastScript.TOAST_PERFECT_SLACK:
+		return 1.15
+	if cook < BunToastScript.TOAST_READY:
+		return lerpf(0.94, 1.15, cook / BunToastScript.TOAST_READY)
+	return lerpf(
+		1.15,
+		0.72,
+		(cook - BunToastScript.TOAST_READY) / maxf(0.001, BunToastScript.TOAST_BURNT - BunToastScript.TOAST_READY)
+	)
+
+
 func _clear_all_patty() -> void:
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -13266,9 +13294,9 @@ func _extract_station_bun(station_index: int, item_index: int) -> String:
 	return bun_id
 
 
-func _make_held_bun(kind: String, cook_time: float = 0.0) -> Area3D:
+func _make_held_bun(_kind: String = "bun_pair", cook_time: float = 0.0) -> Area3D:
 	var bun = BunToastScript.new()
-	bun.setup(kind, cook_time)
+	bun.setup("bun_pair", cook_time)
 	bun.is_held = true
 	bun.heating = false
 	bun.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
@@ -13280,6 +13308,7 @@ func _make_held_bun(kind: String, cook_time: float = 0.0) -> Area3D:
 
 
 func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
+	## Click either bun half → lift the whole pair (top + bottom toast together).
 	if not playing:
 		return
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
@@ -13294,14 +13323,37 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 	var bun_id := str(items[item_index])
 	if bun_id != "bun_bottom" and bun_id != "bun_top":
 		return
-	var cook := _station_bun_cook_time(station_index, bun_id)
-	var extracted := _extract_station_bun(station_index, item_index)
-	if extracted == "":
+	## Shared toast progress — max of either half already on the board.
+	var cook := maxf(
+		_station_bun_cook_time(station_index, "bun_bottom"),
+		_station_bun_cook_time(station_index, "bun_top")
+	)
+	## Pull every bun half off the stack (toast both at once on the grill).
+	var removed_any := false
+	for _pass in 4:
+		var found := -1
+		for i in range(items.size()):
+			var id := str(items[i])
+			if id == "bun_bottom" or id == "bun_top":
+				found = i
+				break
+		if found < 0:
+			break
+		items.remove_at(found)
+		removed_any = true
+	if not removed_any:
 		_flash("Couldn't grab that bun", Color("EF5350"))
 		return
-	## Cook progress travels with the half we lifted.
-	_set_station_bun_cook_time(station_index, bun_id, 0.0)
-	var bun := _make_held_bun(bun_id, cook)
+	st["items"] = _normalize_burger_stack(items)
+	st["selected_layer"] = -1
+	_set_station_bun_cook_time(station_index, "bun_bottom", 0.0)
+	_set_station_bun_cook_time(station_index, "bun_top", 0.0)
+	if items.is_empty():
+		_reset_station_freshness(station_index)
+	else:
+		_start_station_freshness(station_index)
+	_after_station_edit(station_index)
+	var bun := _make_held_bun("bun_pair", cook)
 	spatula_patty = bun
 	spatula_from_build = true
 	spatula_owner_id = 0
@@ -13313,7 +13365,7 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 	_update_held_spatula_patty(0.016)
 	if game_audio:
 		game_audio.play_scoop()
-	_flash("Bun ready — drop on the grill to toast (2s ready · 4.2s burns)", Color("FFCC80"))
+	_flash("Buns ready — grill toast (2s perfect · 4.2s burns)", Color("FFCC80"))
 
 
 func _pickup_bun_from_grill(bun: Area3D) -> void:
@@ -13346,20 +13398,22 @@ func _pickup_bun_from_grill(bun: Area3D) -> void:
 	var col: Color = Color("FFCC80")
 	if bun.has_method("cook_rating"):
 		col = bun.cook_rating().get("color", col)
-	_flash("Scooped bun (%s) — grill, Build, or trash" % note, col)
+	_flash("Scooped buns (%s) — grill, Build, or trash" % note, col)
 
 
 func _commit_bun_to_build(bun: Area3D) -> void:
 	if not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
 		return
-	var kind := str(bun.bun_kind)
 	var cook := float(bun.cook_time)
 	var st: Dictionary = stations[STATION_CRAFT]
 	var items: Array = st["items"]
-	if not items.has(kind):
-		items.append(kind)
+	if not items.has("bun_bottom"):
+		items.append("bun_bottom")
+	if not items.has("bun_top"):
+		items.append("bun_top")
 	st["items"] = _normalize_burger_stack(items)
-	_set_station_bun_cook_time(STATION_CRAFT, kind, cook)
+	_set_station_bun_cook_time(STATION_CRAFT, "bun_bottom", cook)
+	_set_station_bun_cook_time(STATION_CRAFT, "bun_top", cook)
 	if spatula_patty == bun:
 		spatula_patty = null
 		spatula_owner_id = 0
@@ -13373,13 +13427,15 @@ func _commit_bun_to_build(bun: Area3D) -> void:
 	_refresh_station(STATION_CRAFT)
 	_select_station(STATION_CRAFT)
 	if game_audio:
-		game_audio.play_ingredient(kind)
+		game_audio.play_ingredient("bun_top")
 	var note := "raw"
 	if cook >= BunToastScript.TOAST_BURNT:
 		note = "burnt"
+	elif absf(cook - BunToastScript.TOAST_READY) <= BunToastScript.TOAST_PERFECT_SLACK:
+		note = "perfect toast"
 	elif cook >= BunToastScript.TOAST_READY:
 		note = "toasted"
-	_flash("%s on Build (%s)" % [GameDataScript.INGREDIENT_LABELS.get(kind, kind), note], Color("A5D6A7"))
+	_flash("Buns on Build (%s)" % note, Color("A5D6A7"))
 	_mp_broadcast_station(STATION_CRAFT)
 
 
@@ -13516,13 +13572,15 @@ func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> v
 		game_audio.play_click()
 	if _is_bun_toast(patty):
 		if not grill_on:
-			_flash("Bun on grill — turn BURNER ON to toast (2s ready · 4.2s burns)", Color("FFA726"))
+			_flash("Buns on grill — turn BURNER ON (2s perfect · 4.2s burns)", Color("FFA726"))
 		elif patty.has_method("is_burnt") and patty.is_burnt():
-			_flash("Burnt bun back on grill", Color("EF5350"))
+			_flash("Burnt buns back on grill", Color("EF5350"))
+		elif patty.has_method("is_perfect_toast") and patty.is_perfect_toast():
+			_flash("Perfect toast — scoop when ready", Color("FFE082"))
 		elif patty.has_method("is_ready") and patty.is_ready():
-			_flash("Toasted bun on grill — scoop when you want", Color("FFCC80"))
+			_flash("Toasted buns on grill — scoop when you want", Color("FFCC80"))
 		else:
-			_flash("Toasting bun — ready in 2s, burns at 4.2s", Color("FFE082"))
+			_flash("Toasting both buns — 2s perfect, burns at 4.2s", Color("FFE082"))
 		return
 	var cook_note: String = str(patty.cook_rating_text()) if patty.has_method("cook_rating_text") else "cooked"
 	if patty.has_cheese:
@@ -14267,12 +14325,7 @@ func _trash_build_layer_local(index: int, remove_i: int) -> void:
 	if remove_i < 0 or remove_i >= items.size():
 		remove_i = items.size() - 1
 	var removed: String = str(items[remove_i])
-	## Bottom bun stays under the meat — trash other layers only.
-	if removed == "bun_bottom" and (items.count("patty") > 0 or st["patties"].size() > 0):
-		_flash("Bottom bun stays under the patty — click it to toast on the grill", Color("FFCC80"))
-		st["selected_layer"] = -1
-		_refresh_station(index)
-		return
+	## Buns (and other layers) can always be trashed — including heel under meat.
 	items.remove_at(remove_i)
 	if removed == "bun_bottom" or removed == "bun_top":
 		_set_station_bun_cook_time(index, removed, 0.0)
@@ -15229,6 +15282,8 @@ func _complete_serve(station_index: int) -> void:
 	var cook_r := _station_cook_rating(station_index, selected_customer)
 	var seasoned := _station_burgers_seasoned(station_index)
 	patty_mult *= float(cook_r.get("pay_mul", 1.0))
+	## Perfect toasted buns (~2s) bump payout; burnt toast hurts it.
+	patty_mult *= _station_bun_toast_mul(station_index)
 	if fresh_r <= 0.15:
 		patty_mult *= 0.45
 		tip_factor *= 0.25

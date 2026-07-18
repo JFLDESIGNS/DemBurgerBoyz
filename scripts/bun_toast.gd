@@ -1,15 +1,18 @@
-## Toastable bun half on the flat-top. Ready at 2s, burns at 4.2s.
+## Toastable bun pair on the flat-top — 2D top + bottom art, shared cook clock.
+## Perfect toast at 2.0s; burns at 4.2s.
 extends Area3D
 
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
+const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 
-const TOAST_READY := 2.0
+const TOAST_READY := 2.0 ## Perfect toasted score window center
 const TOAST_BURNT := 4.2
+const TOAST_PERFECT_SLACK := 0.35 ## ±sec around 2s still counts as perfect
 
 signal clicked(bun: Area3D)
 
-## "bun_bottom" or "bun_top"
-var bun_kind: String = "bun_bottom"
+## Kept for duck-typing; pair always carries both halves.
+var bun_kind: String = "bun_pair"
 var cook_time: float = 0.0
 var heating: bool = true
 var heat_mul: float = 1.0
@@ -17,7 +20,6 @@ var is_held: bool = false
 var slot_index: int = -1
 var net_id: int = -1
 var warm_hold_time: float = 0.0
-## Duck-type so grill code that expects patties keeps working.
 var flipped_once: bool = true
 var has_cheese: bool = false
 var base_y: float = 0.9
@@ -25,8 +27,8 @@ var _rest_x: float = 0.0
 var _rest_z: float = 0.0
 var mp_puppet: bool = false
 
-var _mesh: MeshInstance3D
-var _mat: StandardMaterial3D
+var _bottom_spr: Sprite3D
+var _top_spr: Sprite3D
 var _hint: Label3D
 var _hint_focused: bool = false
 var _announced_ready: bool = false
@@ -43,36 +45,50 @@ func _ready() -> void:
 	monitoring = false
 	monitorable = true
 	input_ray_pickable = true
-	_build_mesh()
+	_build_sprites()
+	_build_collision()
 	_build_hint()
 	_refresh_visuals()
 
 
-func _build_mesh() -> void:
-	_mesh = MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	var is_top := bun_kind == "bun_top"
-	cyl.top_radius = 0.118 if is_top else 0.122
-	cyl.bottom_radius = 0.122 if is_top else 0.118
-	cyl.height = 0.038 if is_top else 0.028
-	_mesh.mesh = cyl
-	_mat = StandardMaterial3D.new()
-	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_mesh.material_override = _mat
-	add_child(_mesh)
+func _build_sprites() -> void:
+	## Flat 2D burger-art facing the cook — both halves toast together.
+	_bottom_spr = Sprite3D.new()
+	_bottom_spr.name = "BunBottom2D"
+	_bottom_spr.texture = FoodSpritesScript.get_tex("bun_bottom")
+	_bottom_spr.pixel_size = 0.00135
+	_bottom_spr.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	_bottom_spr.shaded = false
+	_bottom_spr.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	_bottom_spr.position = Vector3(0.0, 0.002, 0.0)
+	_bottom_spr.rotation_degrees = Vector3(-72.0, 0.0, 0.0)
+	add_child(_bottom_spr)
+
+	_top_spr = Sprite3D.new()
+	_top_spr.name = "BunTop2D"
+	_top_spr.texture = FoodSpritesScript.get_tex("bun_top")
+	_top_spr.pixel_size = 0.00135
+	_top_spr.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	_top_spr.shaded = false
+	_top_spr.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	_top_spr.position = Vector3(0.0, 0.028, -0.012)
+	_top_spr.rotation_degrees = Vector3(-72.0, 0.0, 0.0)
+	add_child(_top_spr)
+
+
+func _build_collision() -> void:
 	var col := CollisionShape3D.new()
-	var shape := CylinderShape3D.new()
-	shape.radius = 0.125
-	shape.height = 0.04
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(0.28, 0.06, 0.22)
 	col.shape = shape
+	col.position = Vector3(0.0, 0.02, 0.0)
 	add_child(col)
 
 
 func _build_hint() -> void:
 	_hint = Label3D.new()
 	_hint.text = ""
-	_hint.position = Vector3(0, 0.12, 0)
+	_hint.position = Vector3(0, 0.14, 0.02)
 	_hint.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_hint.visible = false
 	UiFontsScript.apply_label3d(_hint, true, 56, 0.06)
@@ -80,13 +96,12 @@ func _build_hint() -> void:
 	add_child(_hint)
 
 
-func setup(kind: String, start_cook: float = 0.0) -> void:
-	bun_kind = kind
+func setup(_kind: String = "bun_pair", start_cook: float = 0.0) -> void:
+	bun_kind = "bun_pair"
 	cook_time = maxf(0.0, start_cook)
 	_announced_ready = cook_time >= TOAST_READY
 	_announced_burnt = cook_time >= TOAST_BURNT
-	if _mesh != null:
-		_refresh_visuals()
+	_refresh_visuals()
 
 
 func _process(delta: float) -> void:
@@ -104,12 +119,15 @@ func is_ready() -> bool:
 	return cook_time >= TOAST_READY and cook_time < TOAST_BURNT
 
 
+func is_perfect_toast() -> bool:
+	return absf(cook_time - TOAST_READY) <= TOAST_PERFECT_SLACK and cook_time < TOAST_BURNT
+
+
 func is_burnt() -> bool:
 	return cook_time >= TOAST_BURNT
 
 
 func can_scoop() -> bool:
-	## Always liftable — toasting is optional, burn is the risk.
 	return true
 
 
@@ -122,15 +140,29 @@ func flip() -> bool:
 
 
 func toast_frac() -> float:
-	## 0 raw · 1 ready · >1 toward burnt (caps ~2).
 	if cook_time <= TOAST_READY:
 		return cook_time / TOAST_READY
 	return 1.0 + clampf((cook_time - TOAST_READY) / maxf(0.001, TOAST_BURNT - TOAST_READY), 0.0, 1.0)
 
 
+func toast_score_mul() -> float:
+	## Peak pay at exactly 2s toasted; raw (never grilled) is neutral 1.0.
+	if cook_time <= 0.05:
+		return 1.0
+	if is_burnt():
+		return 0.72
+	if is_perfect_toast():
+		return 1.15
+	if cook_time < TOAST_READY:
+		return lerpf(0.94, 1.15, cook_time / TOAST_READY)
+	return lerpf(1.15, 0.72, (cook_time - TOAST_READY) / maxf(0.001, TOAST_BURNT - TOAST_READY))
+
+
 func cook_rating_text() -> String:
 	if is_burnt():
 		return "BURNT"
+	if is_perfect_toast():
+		return "PERFECT TOAST"
 	if is_ready():
 		return "TOASTED"
 	return "TOASTING"
@@ -139,9 +171,11 @@ func cook_rating_text() -> String:
 func cook_rating() -> Dictionary:
 	if is_burnt():
 		return {"color": Color("EF5350")}
+	if is_perfect_toast():
+		return {"color": Color("FFE082")}
 	if is_ready():
 		return {"color": Color("FFCC80")}
-	return {"color": Color("FFE082")}
+	return {"color": Color("FFF3E0")}
 
 
 func set_hint_focus(on: bool) -> void:
@@ -153,31 +187,25 @@ func refresh_cook_visuals() -> void:
 	_refresh_visuals()
 
 
-func _raw_color() -> Color:
-	if bun_kind == "bun_top":
-		return Color(0.91, 0.66, 0.36)
-	return Color(0.98, 0.78, 0.42)
-
-
-func _toasted_color() -> Color:
-	return Color(0.72, 0.42, 0.18)
-
-
-func _burnt_color() -> Color:
-	return Color(0.18, 0.10, 0.06)
+func _toast_modulate() -> Color:
+	var raw := Color(1, 1, 1, 1)
+	var toasted := Color(0.82, 0.58, 0.36, 1)
+	var burnt := Color(0.28, 0.16, 0.10, 1)
+	if cook_time <= TOAST_READY:
+		return raw.lerp(toasted, cook_time / TOAST_READY)
+	var t := clampf(
+		(cook_time - TOAST_READY) / maxf(0.001, TOAST_BURNT - TOAST_READY),
+		0.0, 1.0
+	)
+	return toasted.lerp(burnt, t)
 
 
 func _refresh_visuals() -> void:
-	if _mat == null:
-		return
-	var c := _raw_color()
-	if cook_time <= TOAST_READY:
-		var t := cook_time / TOAST_READY
-		c = c.lerp(_toasted_color(), t)
-	else:
-		var t2 := clampf((cook_time - TOAST_READY) / maxf(0.001, TOAST_BURNT - TOAST_READY), 0.0, 1.0)
-		c = _toasted_color().lerp(_burnt_color(), t2)
-	_mat.albedo_color = c
+	var m := _toast_modulate()
+	if _bottom_spr != null:
+		_bottom_spr.modulate = m
+	if _top_spr != null:
+		_top_spr.modulate = m
 
 
 func _update_hint() -> void:
@@ -190,14 +218,17 @@ func _update_hint() -> void:
 		_hint.text = "BURNT"
 		_hint.modulate = Color("EF5350")
 		_hint.visible = true
-		if not _announced_burnt:
-			_announced_burnt = true
+		_announced_burnt = true
+	elif is_perfect_toast():
+		_hint.text = "PERFECT"
+		_hint.modulate = Color("FFE082")
+		_hint.visible = true
+		_announced_ready = true
 	elif is_ready():
 		_hint.text = "READY"
 		_hint.modulate = Color("FFCC80")
 		_hint.visible = true
-		if not _announced_ready:
-			_announced_ready = true
+		_announced_ready = true
 	elif heating and heat_mul > 0.001:
 		_hint.text = "TOAST"
 		_hint.modulate = Color("FFE082")
