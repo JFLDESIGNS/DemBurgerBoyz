@@ -8899,7 +8899,15 @@ func _apply_social_review(stars: float, who: String, text: String) -> void:
 
 func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 	var s := clampf(stars, 0.0, 5.0)
+	## ~1 in 3 posts go full essay so the feed feels like real people.
+	var long_post := randf() < 0.32
 	if kind == "spray":
+		if long_post:
+			return [
+				"I am still shaking. Ordered a simple burger, leaned toward the window, and they blasted me with a fire extinguisher like I was a grease fire. White powder in my hair, on my jacket, in my mouth. Called my cousin. Called corporate. One star forever.",
+				"Excuse me??? Your cook emptied an extinguisher THROUGH THE WINDOW onto a paying customer. I looked like a powdered donut walking back to my car. This is a health hazard and honestly traumatic. Never. Coming. Back.",
+				"Long review because short ones don't cover this: arrived hungry, left covered in extinguisher dust, coughing, and embarrassed in front of the whole line. If this is the vibe at Burger Pals, close the truck. ☆",
+			][randi() % 3]
 		return [
 			"ONE STAR. They sprayed me with a fire extinguisher??",
 			"Covered in white powder. Calling corporate. Never again.",
@@ -8909,6 +8917,12 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 			"Came for a burger, left looking like a powdered donut. ☆",
 		][randi() % 6]
 	if kind == "angry" or s <= 1.5:
+		if long_post:
+			return [
+				"Stood there forever watching them flip the same patty while my stomach growled. Nobody acknowledged me, the line didn't move, and when I finally left I was hungrier and angrier than when I showed up. One star and I'm telling the neighborhood group chat.",
+				"Worst food-truck experience I've had all year. Slow service, cold attitude, and I walked away with nothing. If you can't run a window, don't open the window. Blocking this place and moving on.",
+				"I wanted to give them a chance but the wait was ridiculous and the whole vibe felt like they forgot customers exist. Left hungry, left mad, leaving this review so nobody else wastes their lunch break here.",
+			][randi() % 3]
 		return [
 			"Walked out. Never coming back.",
 			"Waited forever. Absolute joke.",
@@ -8917,6 +8931,11 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 			"Trash experience. Blocking this place.",
 		][randi() % 5]
 	if kind == "wrong":
+		if long_post:
+			return [
+				"I ordered exactly what was on my ticket and somehow got a totally different stack. Had to explain it twice through the window while they looked confused. Not trying to be dramatic but if you can't match an order, the whole truck falls apart. Disappointed.",
+				"Wrong burger, wrong toppings, wrong everything. I held up the ticket like a courtroom exhibit and still got shrugged at. Fix your build board before you take more customers. Two stars is generous.",
+			][randi() % 2]
 		return [
 			"Wrong order?? Come on.",
 			"That wasn't what I asked for.",
@@ -8924,6 +8943,11 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 			"Order mix-up. Not impressed.",
 		][randi() % 4]
 	if kind == "meh" or s < 2.75:
+		if long_post:
+			return [
+				"It's edible, I'll give them that, but the patty was bland and the whole thing tasted like it needed salt, love, and maybe a manager. Not angry enough for one star — just… meh. Expected more from a smash-burger truck with a cute logo.",
+				"Came in hopeful, left shrugging. Bun was fine, meat was okay, seasoning was optional apparently. Wouldn't drive across town for it again unless they tighten up the cook.",
+			][randi() % 2]
 		return [
 			"Burger was… fine. Bland though.",
 			"Edible. Seasoning optional apparently.",
@@ -8931,6 +8955,17 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 			"Okay burger. Nothing to shout about.",
 		][randi() % 4]
 	if s >= 4.5:
+		if long_post:
+			var essays := [
+				"Okay I need to write a real review because this smashed me (pun intended). Patty had the perfect crust, cheese melted like a dream, and they handed it over hot without making me wait forever. Instant favorite. I'm bringing my whole group next shift.",
+				"Five stars isn't enough. I watched them cook it, smelled the grill, and the first bite actually made me stop talking mid-sentence. Fast, hot, ridiculous flavor. If you're on the fence — just go. Tell them a loud person on the internet sent you.",
+				"Rare that a truck lives up to the hype but this one does. Clean window, solid stack, juicy meat, and they actually seemed happy to serve. Already plotting my next order. Burger Pals forever.",
+			]
+			if tip > 0:
+				essays.append(
+					"Tipped hard on purpose. Service was sharp, burger was perfect, and I want this truck to stay parked in my neighborhood forever. Best smash I've had in ages — thank you cooks."
+				)
+			return essays[randi() % essays.size()]
 		var lines := [
 			"Insane burger. Instant favorite.",
 			"Five stars. That patty was perfect.",
@@ -8942,12 +8977,22 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 			lines.append("Tipped hard. They earned it.")
 		return lines[randi() % lines.size()]
 	if s >= 3.5:
+		if long_post:
+			return [
+				"Really solid overall — fresh toppings, hot patty, didn't mess up my order. Not quite life-changing but I'd happily come back on a lunch break and recommend it to a friend who likes smash burgers.",
+				"Pretty good truck night. Wait wasn't bad, burger hit the spot, and the window crew kept it moving. Leaving a longer note because short reviews never capture that 'yeah I'd order this again' feeling.",
+			][randi() % 2]
 		return [
 			"Solid burger, would order again.",
 			"Pretty good! Fresh and hot.",
 			"Nice job — tasty stack.",
 			"Hit the spot. Happy customer.",
 		][randi() % 4]
+	if long_post:
+		return [
+			"Three-star energy: got my food, it was fine, service was fine, nothing wild. Room to grow on seasoning and speed but I wasn't mad about spending the money. Decent for a truck stop.",
+			"Alright burger with a side of 'could be better.' Not a disaster, not a revelation. If they tighten the cook and keep the line moving, they'll earn the fourth star from me next time.",
+		][randi() % 2]
 	return [
 		"Decent. Not bad for a truck.",
 		"Alright burger. Room to grow.",
@@ -9206,7 +9251,7 @@ func _build_phone_ui() -> void:
 	screen.add_theme_stylebox_override("panel", screen_sb)
 	phone_stack.add_child(screen)
 
-	## PanelContainer only lays out one child cleanly — wrap gloss + scroll together.
+	## PanelContainer needs a single content host for the scrollable screen.
 	var screen_host := Control.new()
 	screen_host.name = "PhoneScreenHost"
 	screen_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -9214,14 +9259,6 @@ func _build_phone_ui() -> void:
 	screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	screen_host.clip_contents = true
 	screen.add_child(screen_host)
-
-	var gloss := ColorRect.new()
-	gloss.color = Color(1.0, 1.0, 1.0, 0.07)
-	gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	gloss.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	gloss.offset_bottom = 72.0
-	gloss.z_index = 2
-	screen_host.add_child(gloss)
 
 	var scroll := ScrollContainer.new()
 	phone_scroll = scroll
