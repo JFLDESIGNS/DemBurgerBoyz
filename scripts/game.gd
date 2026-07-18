@@ -3694,7 +3694,8 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 				_begin_patty_drag(grill[near])
 				return
 		if grill_on:
-			_flash("Right-click where you want the patty", Color("FFCC80"))
+			if _grill_meat_count() == 0:
+				_flash("Right-click where you want the patty", Color("FFCC80"))
 		else:
 			_flash("Turn the BURNER ON first", Color("FFA726"))
 		return
