@@ -75,7 +75,6 @@ const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const BunToastScript := preload("res://scripts/bun_toast.gd")
 const SocialReviewsScript := preload("res://scripts/social_reviews.gd")
-const KitchenTvBrowserScript := preload("res://scripts/kitchen_tv_browser.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
 ## DISABLED — set true later to restore grill-toastable bun pairs (see bun_toast.gd).
 const BUN_TOAST_ENABLED := false
@@ -474,13 +473,6 @@ var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
-var kitchen_tv_root: Node3D = null
-var kitchen_tv_screen: MeshInstance3D = null
-var kitchen_tv_area: Area3D = null
-var kitchen_tv_viewport: SubViewport = null
-var kitchen_tv_label: Label = null
-var kitchen_browser: Control = null
-var kitchen_browser_open: bool = false
 var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
 var burger_pals_decal: MeshInstance3D = null
@@ -506,10 +498,6 @@ const FIRST_SALE_DEFAULT_Y := 2.391
 const FIRST_SALE_DEFAULT_Z := 1.18
 const FIRST_SALE_DEFAULT_SCALE := 0.44 ## 20% smaller than prior 0.55
 const SALE_COLLISION_LAYER := 512
-## Kitchen wall TV (browser) — camera-right of First Sale.
-const KITCHEN_TV_COLLISION_LAYER := 1024
-const KITCHEN_TV_POS := Vector3(-0.58, 2.38, FIRST_SALE_DEFAULT_Z + 0.012)
-const KITCHEN_TV_SCREEN_SIZE := Vector2(0.40, 0.26)
 var sale_held: bool = false
 var sale_area: Area3D = null
 var sale_home: Vector3 = Vector3(FIRST_SALE_DEFAULT_X, FIRST_SALE_DEFAULT_Y, FIRST_SALE_DEFAULT_Z)
@@ -1423,8 +1411,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if options_menu_open:
 		return
-	if kitchen_browser_open:
-		return
 	if not playing:
 		return
 	if event.is_action_pressed("toggle_burner"):
@@ -1506,13 +1492,6 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			return
 		## Leave mouse/keys alone so CanvasLayer Options buttons receive them.
-		return
-	## Kitchen TV browser owns the mouse while open.
-	if kitchen_browser_open:
-		if event is InputEventKey and event.pressed and not event.echo:
-			if event.keycode == KEY_ESCAPE:
-				_close_kitchen_browser()
-				get_viewport().set_input_as_handled()
 		return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
@@ -1608,9 +1587,6 @@ func _input(event: InputEvent) -> void:
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
-			if _try_kitchen_tv_click(event.position):
-				get_viewport().set_input_as_handled()
-				return
 			if _try_grab_nearest_tool(event.position):
 				get_viewport().set_input_as_handled()
 				return
@@ -1621,10 +1597,6 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		if kitchen_browser_open:
-			_close_kitchen_browser()
-			get_viewport().set_input_as_handled()
-			return
 		if cheese_held:
 			_cancel_cheese_hold()
 			get_viewport().set_input_as_handled()
@@ -1827,8 +1799,6 @@ func _try_grill_right_click(screen_pos: Vector2) -> bool:
 
 func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) -> bool:
 	## Buttons / panels on top of the 3D tools — never grab scraper through UI.
-	if kitchen_browser_open:
-		return true
 	if for_grill_place and _is_grill_screen_point(screen_pos):
 		return false
 	var hovered := get_viewport().gui_get_hovered_control()
@@ -1849,7 +1819,7 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 					return true
 		node = node.get_parent()
 	## Explicit hit-tests — hovered can miss during the same-frame press.
-	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column, kitchen_browser]:
+	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column]:
 		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
 			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 				return true
@@ -2276,7 +2246,6 @@ func _build_3d_world() -> void:
 	_build_window_cat()
 	_build_outdoor_street()
 	_build_first_sale_decal()
-	_build_kitchen_tv()
 	_build_wall_paper_decals()
 	_build_menu_board_decal()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
@@ -7545,9 +7514,19 @@ func _build_meat_warmer() -> void:
 	warmer_label_half = null
 	warmer_label_hold = null
 	for z in _grill_zone_bands():
+		## Bias screen-left (+world X) so perspective / phone chrome don't pin labels to the right edge.
+		## HOLD especially needs inset — geometric center sits flush against the phone column.
+		var x_bias := 0.0
+		match str(z["id"]):
+			"full":
+				x_bias = float(z["w"]) * 0.06
+			"half":
+				x_bias = float(z["w"]) * 0.14
+			"hold":
+				x_bias = float(z["w"]) * 0.28
 		var lab := _make_warmer_speed_label(
 			str(z["label"]),
-			Vector3(float(z["cx"]) - GRILL_CENTER_X, 0.018, label_z),
+			Vector3(float(z["cx"]) - GRILL_CENTER_X + x_bias, 0.018, label_z),
 			z["lab_col"]
 		)
 		## Slight screen-down nudge so text clears the near steel lip.
@@ -8248,185 +8227,6 @@ func _build_first_sale_decal() -> void:
 	_refresh_glock_cover_lock()
 
 
-func _build_kitchen_tv() -> void:
-	## Flat-screen TV on the lintel, camera-right of the First Sale plaque.
-	if kitchen_tv_root != null and is_instance_valid(kitchen_tv_root):
-		kitchen_tv_root.queue_free()
-	kitchen_tv_root = null
-	kitchen_tv_screen = null
-	kitchen_tv_area = null
-	kitchen_tv_viewport = null
-	kitchen_tv_label = null
-
-	var root := Node3D.new()
-	root.name = "KitchenTV"
-	root.position = KITCHEN_TV_POS
-	## Face the cook (same as First Sale / wall papers).
-	root.rotation_degrees = Vector3(0.0, 180.0, 0.0)
-	world.add_child(root)
-	kitchen_tv_root = root
-
-	## Dark plastic bezel.
-	var bezel := MeshInstance3D.new()
-	bezel.name = "Bezel"
-	var bezel_mesh := BoxMesh.new()
-	bezel_mesh.size = Vector3(KITCHEN_TV_SCREEN_SIZE.x + 0.06, KITCHEN_TV_SCREEN_SIZE.y + 0.05, 0.035)
-	bezel.mesh = bezel_mesh
-	bezel.position = Vector3(0.0, 0.0, 0.0)
-	var bezel_mat := StandardMaterial3D.new()
-	bezel_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bezel_mat.albedo_color = Color(0.08, 0.08, 0.09, 1.0)
-	bezel_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	bezel.material_override = bezel_mat
-	bezel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(bezel)
-
-	## Tiny stand lip under the bezel.
-	var lip := MeshInstance3D.new()
-	lip.name = "Lip"
-	var lip_mesh := BoxMesh.new()
-	lip_mesh.size = Vector3(KITCHEN_TV_SCREEN_SIZE.x * 0.55, 0.018, 0.028)
-	lip.mesh = lip_mesh
-	lip.position = Vector3(0.0, -(KITCHEN_TV_SCREEN_SIZE.y * 0.5 + 0.028), 0.0)
-	var lip_mat := StandardMaterial3D.new()
-	lip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	lip_mat.albedo_color = Color(0.12, 0.12, 0.13, 1.0)
-	lip.material_override = lip_mat
-	lip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(lip)
-
-	## Live screen via SubViewport (title / now-playing).
-	kitchen_tv_viewport = SubViewport.new()
-	kitchen_tv_viewport.name = "TvViewport"
-	kitchen_tv_viewport.size = Vector2i(320, 200)
-	kitchen_tv_viewport.transparent_bg = false
-	kitchen_tv_viewport.handle_input_locally = false
-	kitchen_tv_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	root.add_child(kitchen_tv_viewport)
-
-	var screen_bg := ColorRect.new()
-	screen_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	screen_bg.color = Color(0.05, 0.07, 0.12, 1.0)
-	kitchen_tv_viewport.add_child(screen_bg)
-
-	kitchen_tv_label = Label.new()
-	kitchen_tv_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	kitchen_tv_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	kitchen_tv_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	kitchen_tv_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	kitchen_tv_label.text = "KITCHEN TV\nClick for Browser"
-	kitchen_tv_label.add_theme_font_size_override("font_size", 22)
-	kitchen_tv_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0, 0.95))
-	kitchen_tv_viewport.add_child(kitchen_tv_label)
-
-	kitchen_tv_screen = MeshInstance3D.new()
-	kitchen_tv_screen.name = "Screen"
-	var screen_quad := QuadMesh.new()
-	screen_quad.size = KITCHEN_TV_SCREEN_SIZE
-	kitchen_tv_screen.mesh = screen_quad
-	## Slightly proud of the bezel so it reads as glass.
-	kitchen_tv_screen.position = Vector3(0.0, 0.0, 0.019)
-	var screen_mat := StandardMaterial3D.new()
-	screen_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	screen_mat.albedo_color = Color(1, 1, 1, 1)
-	screen_mat.albedo_texture = kitchen_tv_viewport.get_texture()
-	screen_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	screen_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	kitchen_tv_screen.material_override = screen_mat
-	kitchen_tv_screen.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	kitchen_tv_screen.sorting_offset = 0.6
-	root.add_child(kitchen_tv_screen)
-
-	## Soft glow so the screen pops on the gray wall.
-	var glow := OmniLight3D.new()
-	glow.name = "TvGlow"
-	glow.light_color = Color(0.45, 0.65, 1.0)
-	glow.light_energy = 0.35
-	glow.omni_range = 0.55
-	glow.position = Vector3(0.0, 0.0, 0.08)
-	glow.shadow_enabled = false
-	root.add_child(glow)
-
-	kitchen_tv_area = Area3D.new()
-	kitchen_tv_area.name = "KitchenTvClick"
-	kitchen_tv_area.input_ray_pickable = true
-	kitchen_tv_area.collision_layer = KITCHEN_TV_COLLISION_LAYER
-	kitchen_tv_area.collision_mask = 0
-	kitchen_tv_area.monitoring = false
-	kitchen_tv_area.monitorable = true
-	var shape := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	box.size = Vector3(KITCHEN_TV_SCREEN_SIZE.x + 0.08, KITCHEN_TV_SCREEN_SIZE.y + 0.08, 0.1)
-	shape.shape = box
-	kitchen_tv_area.add_child(shape)
-	root.add_child(kitchen_tv_area)
-
-	_ensure_kitchen_browser()
-
-
-func _ensure_kitchen_browser() -> void:
-	if kitchen_browser != null and is_instance_valid(kitchen_browser):
-		return
-	var layer := CanvasLayer.new()
-	layer.name = "KitchenTvBrowserLayer"
-	layer.layer = 60
-	add_child(layer)
-	kitchen_browser = KitchenTvBrowserScript.new()
-	kitchen_browser.name = "KitchenTvBrowser"
-	kitchen_browser.setup(_sync_kitchen_tv_screen)
-	kitchen_browser.closed.connect(_close_kitchen_browser)
-	kitchen_browser.visible = false
-	layer.add_child(kitchen_browser)
-
-
-func _sync_kitchen_tv_screen(url: String, title: String) -> void:
-	if kitchen_tv_label == null or not is_instance_valid(kitchen_tv_label):
-		return
-	if url == "kitchen://home" or url == "":
-		kitchen_tv_label.text = "KITCHEN TV\nClick for Browser"
-		kitchen_tv_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0, 0.95))
-	else:
-		kitchen_tv_label.text = "▶ NOW PLAYING\n%s" % title
-		kitchen_tv_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45, 0.98))
-
-
-func _try_kitchen_tv_click(screen_pos: Vector2) -> bool:
-	if not playing or kitchen_browser_open or options_menu_open:
-		return false
-	if kitchen_tv_root == null or camera == null:
-		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
-			or ext_held or glock_held or sale_held or dragging_patty != null:
-		return false
-	var near := false
-	var d := screen_pos.distance_to(camera.unproject_position(kitchen_tv_root.global_position))
-	if d < 100.0:
-		near = true
-	elif _ray_hits_tool(screen_pos, KITCHEN_TV_COLLISION_LAYER, kitchen_tv_area):
-		near = true
-	if not near:
-		return false
-	_open_kitchen_browser()
-	return true
-
-
-func _open_kitchen_browser() -> void:
-	_ensure_kitchen_browser()
-	if kitchen_browser == null:
-		return
-	kitchen_browser.visible = true
-	kitchen_browser_open = true
-	if game_audio:
-		game_audio.play_click()
-	_flash("Kitchen TV — pick YouTube / a podcast", Color("80CBC4"))
-
-
-func _close_kitchen_browser() -> void:
-	kitchen_browser_open = false
-	if kitchen_browser != null and is_instance_valid(kitchen_browser):
-		kitchen_browser.visible = false
-
-
 func _sale_covers_glock() -> bool:
 	## Gun stays locked until the First Sale plaque is slid clear of the mount.
 	if sale_held:
@@ -8528,26 +8328,27 @@ func _build_wall_paper_decals() -> void:
 	root.name = "WallPaperDecals"
 	world.add_child(root)
 	wall_paper_decals = root
-	## Camera-right = world −X. Papers sit past the kitchen TV (right of First Sale).
+	## Camera-right = world −X. Cluster sits just past the First Sale plaque edge.
 	## Sheet order left→right: license, health cert, beach polaroid.
 	var specs: Array = [
 		{
 			"name": "BusinessLicense",
 			"path": "res://assets/decal/business_license.png",
 			"size": Vector2(0.40, 0.333),
-			"pos": Vector3(-1.18, 2.372, WALL_PAPER_Z),
+			## +6" up, +6" camera-right (−X).
+			"pos": Vector3(-0.732, 2.372, WALL_PAPER_Z),
 		},
 		{
 			"name": "HealthCertificate",
 			"path": "res://assets/decal/health_certificate.png",
 			"size": Vector2(0.30, 0.254),
-			"pos": Vector3(-1.52, 2.452, WALL_PAPER_Z),
+			"pos": Vector3(-1.112, 2.452, WALL_PAPER_Z),
 		},
 		{
 			"name": "BeachPhoto",
 			"path": "res://assets/decal/beach_photo.png",
 			"size": Vector2(0.175, 0.163),
-			"pos": Vector3(-1.78, 2.292, WALL_PAPER_Z),
+			"pos": Vector3(-1.372, 2.292, WALL_PAPER_Z),
 		},
 	]
 	for spec in specs:
