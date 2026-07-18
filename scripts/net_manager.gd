@@ -316,6 +316,7 @@ func _host_online() -> Error:
 	_relay = RelayPeerScript.new()
 	_relay.relay_hosted.connect(_on_relay_hosted)
 	_relay.relay_failed.connect(_on_relay_failed_host)
+	_relay.relay_session_start.connect(_on_relay_session_start)
 	var err: Error = _relay.host_online(get_relay_url(), player_name)
 	if err != OK:
 		_relay = null
@@ -411,6 +412,7 @@ func _join_online(code: String) -> Error:
 	_relay = RelayPeerScript.new()
 	_relay.relay_joined.connect(_on_relay_joined)
 	_relay.relay_failed.connect(_on_relay_failed_join)
+	_relay.relay_session_start.connect(_on_relay_session_start)
 	var err: Error = _relay.join_online(get_relay_url(), code, player_name)
 	if err != OK:
 		_relay = null
@@ -434,6 +436,11 @@ func _on_relay_joined(code: String) -> void:
 	announce_player_name()
 	chat_flash.emit("Joined online room %s!" % room_code, Color("81C784"))
 	connection_changed.emit()
+
+
+func _on_relay_session_start(seed: int) -> void:
+	## Railway JSON handoff — guests (and mid-joiners) enter the shift here.
+	_apply_session_start(seed)
 
 
 func _on_relay_failed_join(message: String) -> void:
@@ -566,16 +573,39 @@ func _host_begin_session(session_seed: int) -> void:
 	## Keep the room open for mid-shift joins (code) until we hit max cooks.
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.refuse_new_connections = peer_count() >= MAX_PLAYERS
-	## call_local starts the host; remotes get the same handler (relay-safe).
-	_rpc_start_session.rpc(session_seed)
-	## Fan out explicitly — broadcast alone can flake on the WebSocket relay.
-	if multiplayer.multiplayer_peer != null:
-		for p in multiplayer.get_peers():
-			_rpc_start_session.rpc_id(int(p), session_seed)
+	## Host enters immediately.
+	_apply_session_start(session_seed)
+	## Online: JSON room broadcast (reliable). LAN: Godot RPC fallback.
+	if online_mode and _relay != null and is_instance_valid(_relay):
+		_relay.send_session_start(session_seed)
+		## Repeat once next frame in case a guest just connected.
+		call_deferred("_deferred_resend_session_start", session_seed)
+	else:
+		_rpc_start_session.rpc(session_seed)
+		if multiplayer.multiplayer_peer != null:
+			for p in multiplayer.get_peers():
+				_rpc_start_session.rpc_id(int(p), session_seed)
 	if peer_count() <= 1:
 		chat_flash.emit("Shift live — share code %s for late joins" % room_code, Color("FFEB3B"))
 	else:
-		chat_flash.emit("Shift starting — %d cooks!" % peer_count(), Color("FFEB3B"))
+		chat_flash.emit("Shift starting — pulling %d cooks in!" % peer_count(), Color("FFEB3B"))
+
+
+func _deferred_resend_session_start(session_seed: int) -> void:
+	if not is_host() or not online_mode:
+		return
+	if _relay == null or not is_instance_valid(_relay):
+		return
+	_relay.send_session_start(session_seed)
+
+
+func _apply_session_start(session_seed: int) -> void:
+	## Idempotent — host local + JSON + RPC may all fire.
+	if session_active:
+		return
+	session_active = true
+	last_session_seed = session_seed
+	session_start_requested.emit(session_seed)
 
 
 func _peer_known_in_room(peer_id: int) -> bool:
@@ -643,30 +673,21 @@ func _rpc_sync_lobby_ready(ready_ids: Array) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_start_session(session_seed: int) -> void:
-	## Idempotent — host call_local + per-peer rpc_id can deliver twice.
-	if session_active:
-		return
-	## sid 0 = local / flaky relay; sid 1 = host. Guests must never start for others.
+	## LAN / legacy path — online uses Railway JSON session_start instead.
 	var sid := multiplayer.get_remote_sender_id()
 	if sid > 1:
 		return
-	session_active = true
-	last_session_seed = session_seed
-	session_start_requested.emit(session_seed)
+	_apply_session_start(session_seed)
 
 
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_join_in_progress(session_seed: int) -> void:
 	## Late joiner only — pull them into the live shift with the same seed.
-	if session_active and last_session_seed == session_seed:
-		return
 	var sid := multiplayer.get_remote_sender_id()
 	## Accept host (1) or unknown sender (0) from the WebSocket relay.
 	if sid > 1:
 		return
-	session_active = true
-	last_session_seed = session_seed
-	session_start_requested.emit(session_seed)
+	_apply_session_start(session_seed)
 
 
 func _update_join_seek(delta: float) -> void:

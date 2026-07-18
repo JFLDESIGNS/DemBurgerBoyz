@@ -16,10 +16,27 @@ const ROOM_IDLE_MS = 90 * 60 * 1000;
 const HEADER_SIZE = 10;
 
 /**
- * @typedef {{ code: string, peers: Map<number, import('ws').WebSocket>, created: number, lastActive: number }} Room
+ * @typedef {{
+ *   code: string,
+ *   peers: Map<number, import('ws').WebSocket>,
+ *   created: number,
+ *   lastActive: number,
+ *   sessionActive?: boolean,
+ *   sessionSeed?: number,
+ * }} Room
  * @type {Map<string, Room>}
  */
 const rooms = new Map();
+
+function broadcastRoomJson(room, fromPeerId, obj) {
+  if (!room) return;
+  for (const [id, other] of room.peers) {
+    if (id === fromPeerId) continue;
+    if (other && other.readyState === 1) {
+      sendJson(other, obj);
+    }
+  }
+}
 
 function normalizeCode(raw) {
   const digits = String(raw || "").replace(/\D/g, "");
@@ -187,7 +204,7 @@ wss.on("connection", (ws) => {
       }
       const now = Date.now();
       /** @type {Room} */
-      const room = { code, peers: new Map(), created: now, lastActive: now };
+      const room = { code, peers: new Map(), created: now, lastActive: now, sessionActive: false, sessionSeed: 0 };
       rooms.set(code, room);
       room.peers.set(1, ws);
       ws.roomCode = code;
@@ -233,6 +250,8 @@ wss.on("connection", (ws) => {
         max_players: MAX_PLAYERS,
         peers: others,
         mid_round_join: true,
+        session_active: !!room.sessionActive,
+        session_seed: Number(room.sessionSeed || 0),
         name: String(msg.name || "Cook").slice(0, 24),
       });
       for (const id of others) {
@@ -243,6 +262,39 @@ wss.on("connection", (ws) => {
           name: String(msg.name || "Cook").slice(0, 24),
         });
       }
+      // Mid-shift joiner — immediately pull them into the live shift.
+      if (room.sessionActive) {
+        sendJson(ws, {
+          op: "session_start",
+          seed: Number(room.sessionSeed || 0),
+          from_peer: 1,
+        });
+      }
+      return;
+    }
+
+    // Host starts co-op — JSON handoff (does not rely on Godot binary RPCs).
+    if (op === "session_start") {
+      if (!ws.roomCode || ws.peerId !== 1) {
+        sendJson(ws, { op: "error", msg: "only host can start" });
+        return;
+      }
+      const room = rooms.get(ws.roomCode);
+      if (!room) {
+        sendJson(ws, { op: "error", msg: "no room" });
+        return;
+      }
+      const seed = Number(msg.seed || 0) || (Date.now() & 0x7fffffff);
+      room.sessionActive = true;
+      room.sessionSeed = seed;
+      touchRoom(room);
+      broadcastRoomJson(room, ws.peerId, {
+        op: "session_start",
+        seed,
+        from_peer: 1,
+      });
+      // Ack host so client can confirm relay accepted the start.
+      sendJson(ws, { op: "session_started", seed, peers: alivePeers(room).length });
       return;
     }
 

@@ -6,6 +6,7 @@ extends MultiplayerPeerExtension
 signal relay_hosted(code: String)
 signal relay_joined(code: String)
 signal relay_failed(message: String)
+signal relay_session_start(seed: int) ## JSON handoff from Railway (bypasses Godot RPC)
 
 const HEADER_SIZE := 10
 const MAGIC := 0x47
@@ -41,6 +42,11 @@ func join_online(url: String, code: String, player_name: String = "Cook") -> Err
 
 func get_room_code() -> String:
 	return _room_code
+
+
+func send_session_start(seed: int) -> void:
+	## Host → relay JSON → every other cook in the room (reliable lobby handoff).
+	_send_json({"op": "session_start", "seed": int(seed)})
 
 
 func _begin(url: String, as_host: bool, code: String, player_name: String) -> Error:
@@ -139,9 +145,18 @@ func _handle_json(text: String) -> void:
 				for pid_v in existing:
 					_emit_peer_connected(int(pid_v))
 			relay_joined.emit(_room_code)
+			## Mid-shift join — room already live; pull into the shift immediately.
+			if bool(data.get("session_active", false)):
+				relay_session_start.emit(int(data.get("session_seed", 0)))
 		"peer_joined":
 			var pid := int(data.get("peer_id", 2))
 			_emit_peer_connected(pid)
+		"session_start":
+			## Host started co-op — every lobby cook loads into the shift.
+			relay_session_start.emit(int(data.get("seed", 0)))
+		"session_started":
+			## Host ack from relay (optional); seed already applied locally.
+			pass
 		"peer_left":
 			var left_id := int(data.get("peer_id", 0))
 			if _peer_connected_emitted.has(left_id):

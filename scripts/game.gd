@@ -17530,20 +17530,22 @@ func _mp_rebuild_room_list() -> void:
 
 
 func _mp_on_session_start(session_seed: int) -> void:
+	## Every cook in the lobby (Ready or not) loads into the shift with the host.
 	seed(session_seed)
 	mp_enabled = true
 	mp_held_net.clear()
 	drag_owner_id = 0
 	if _mp_lobby_root:
 		_mp_lobby_root.visible = false
+	if start_overlay != null and is_instance_valid(start_overlay):
+		start_overlay.visible = false
 	NetManager.stop_browse()
 	NetManager.announce_player_name()
-	var mid_join := playing and NetManager.is_host()
-	if mid_join:
-		## Host already mid-shift — late joiner gets catch-up via bootstrap request.
+	if playing and NetManager.is_host():
+		## Host already mid-shift — late joiner bootstraps themselves.
 		return
 	if playing and not NetManager.is_host():
-		## Rare: guest already playing; still request a fresh host snapshot.
+		## Guest already playing; still request a fresh host snapshot.
 		mp_request_bootstrap.rpc_id(1, NetManager.my_id())
 		return
 	_flash("Co-op shift — up to 4 cooks! Match glove colors", Color("FFEB3B"))
