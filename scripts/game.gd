@@ -639,15 +639,17 @@ const SODA_FLAVOR_COLORS: Dictionary = {
 	"lemon_lime": Color(0.55, 0.82, 0.22),
 	"orange": Color(0.95, 0.48, 0.12),
 }
-const CUP_HOLD_HEIGHT := 0.16
+const CUP_HOLD_HEIGHT := 0.22
 const CUP_FILL_RATE := 0.95 ## fill units per second while under spout
-const CUP_SPOUT_REACH := 0.45 ## world meters — forgiving aim under nozzle
+const CUP_SPOUT_REACH := 0.55 ## world meters — forgiving aim under nozzle
 const CUP_ICE_CUBE_INTERVAL := 0.11
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 5.5
 const CUP_SPLASH_SPEED := 2.35 ## world m/s — whip hard enough and soda flies out
 const CUP_SPLASH_LOSS := 0.07
 const CUP_HOLD_DIST := 1.12 ## meters along camera ray while carrying
+const CUP_SPOUT_HORIZ := 0.30 ## horizontal fill radius under a nozzle
+const CUP_SPOUT_VERT := 0.38 ## vertical forgiveness under a nozzle
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -7590,7 +7592,8 @@ func _build_meat_warmer() -> void:
 	warmer_root.name = "GrillHeatZones"
 	grill_root.add_child(warmer_root)
 	## Same origin as the steel surface so label X matches zone / heat-glow centers.
-	warmer_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.026, GRILL_SURFACE_Z)
+	## +~2\" above the steel so FULL / 1/2 / HOLD clear the rim and stay readable.
+	warmer_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.077, GRILL_SURFACE_Z)
 
 	## Near-rim depth (not further toward camera) — extra Z skews labels off-band in perspective.
 	var label_z := -GRILL_DEPTH * 0.42
@@ -7600,11 +7603,11 @@ func _build_meat_warmer() -> void:
 	for z in _grill_zone_bands():
 		var lab := _make_warmer_speed_label(
 			str(z["label"]),
-			Vector3(float(z["cx"]) - GRILL_CENTER_X, 0.018, label_z),
+			Vector3(float(z["cx"]) - GRILL_CENTER_X, 0.028, label_z),
 			z["lab_col"]
 		)
-		## Slight screen-down nudge so text clears the near steel lip.
-		_nudge_label3d_on_screen(lab, Vector2(0.0, 15.0))
+		## Slight screen-up nudge so text sits above the steel lip.
+		_nudge_label3d_on_screen(lab, Vector2(0.0, -12.0))
 		match str(z["id"]):
 			"full":
 				warmer_label = lab
@@ -9152,22 +9155,29 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	var hit := from + dir * CUP_HOLD_DIST
 	hit.x = clampf(hit.x, -2.85, 0.55)
 	hit.z = clampf(hit.z, -0.35, 1.15)
-	hit.y = clampf(hit.y, GRILL_SURFACE_Y + 0.06, GRILL_SURFACE_Y + 0.48)
+	hit.y = clampf(hit.y, GRILL_SURFACE_Y + 0.06, GRILL_SURFACE_Y + 0.62)
 	## Soft magnet toward a spout tip when close — easier to fill.
 	var best_tip: Vector3 = Vector3.ZERO
-	var best_d := 0.55
+	var best_d := 0.70
 	for tip in [soda_spout_marker, ice_spout_marker]:
 		if tip == null or not is_instance_valid(tip):
 			continue
-		var tpos: Vector3 = tip.global_position + Vector3(0.0, -0.05, 0.0)
+		var tpos: Vector3 = tip.global_position + Vector3(0.0, -0.08, 0.0)
 		var d := hit.distance_to(tpos)
 		if d < best_d:
 			best_d = d
 			best_tip = tpos
-	if best_tip != Vector3.ZERO and best_d < 0.45:
-		var pull := clampf(1.0 - best_d / 0.45, 0.0, 1.0) * 0.55
+	if best_tip != Vector3.ZERO and best_d < 0.62:
+		var pull := clampf(1.0 - best_d / 0.62, 0.0, 1.0) * 0.72
 		hit = hit.lerp(best_tip, pull)
 	return hit
+
+
+func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
+	## Prefer horizontal aim under the nozzle; allow generous vertical slack.
+	var horiz := Vector2(tip.x - rim.x, tip.z - rim.z).length()
+	var vert := absf(tip.y - rim.y)
+	return horiz <= CUP_SPOUT_HORIZ and vert <= CUP_SPOUT_VERT
 
 
 func _update_held_cup(delta: float) -> void:
@@ -9257,7 +9267,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 	var pouring_ice := false
 	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
 		var soda_tip: Vector3 = soda_spout_marker.global_position
-		if rim.distance_to(soda_tip) < CUP_SPOUT_REACH:
+		if _cup_under_spout(soda_tip, rim):
 			var before := cup_soda_fill
 			if cup_flavor != "" and cup_flavor != soda_selected_flavor and cup_soda_fill > 0.05:
 				_flash("Empty / return cup first — wrong flavor", Color("FFAB91"))
@@ -9275,7 +9285,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		_hide_soda_stream()
 	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
 		var ice_tip: Vector3 = ice_spout_marker.global_position
-		if rim.distance_to(ice_tip) < CUP_SPOUT_REACH:
+		if _cup_under_spout(ice_tip, rim):
 			var before_i := cup_ice_fill
 			cup_ice_fill = minf(1.0, cup_ice_fill + CUP_FILL_RATE * delta)
 			pouring_ice = cup_ice_fill < 1.0 or before_i < 1.0
