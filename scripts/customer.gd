@@ -41,9 +41,9 @@ const FACE_AWAY_YAW := 0.0
 ## Approach along the sidewalk — face travel, then turn to truck.
 const WALK_PLUS_X_YAW := 90.0
 const WALK_MINUS_X_YAW := -90.0
-## Wait slots shifted screen-right so the patience bar clears the ticket rail.
+## Wait slots: front of line near window center; new customers queue screen-right.
 ## (world +X = screen-left, −X = screen-right)
-const LANE_X: Array[float] = [-0.45, 0.85, -1.85, 1.95]
+const LANE_X: Array[float] = [-0.35, -1.1, -1.85, -2.6]
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -1759,22 +1759,24 @@ func _apply_eat_hands_pose(strength: float) -> void:
 
 
 func begin_catch_burger() -> void:
-	## Hands up + open mouth while the burger flies in.
+	## Hands up + lean in while the burger flies.
 	if is_leaving or is_ragdoll:
 		return
 	_eating = true
-	_eat_lean_x = -10.0
+	_eat_lean_x = -14.0
 	_set_mood("cheer")
 	if _anim_player:
 		_anim_player.stop()
 	_apply_eat_hands_pose(1.0)
 	if _body:
 		var tw := create_tween()
-		tw.tween_property(_body, "rotation_degrees:x", _eat_lean_x, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.set_parallel(true)
+		tw.tween_property(_body, "rotation_degrees:x", _eat_lean_x, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_body, "position:y", _base_body_y + 0.03, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
 func chomp_burger() -> void:
-	## Bite reaction at contact — keep hands up while the burger disappears.
+	## Sharp bite at contact — squash, hop, then settle while chewing.
 	if not is_instance_valid(self):
 		return
 	_set_mood("cheer")
@@ -1782,10 +1784,13 @@ func chomp_burger() -> void:
 	if _body == null:
 		return
 	var tw := create_tween()
-	tw.tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.08, CHAR_SCALE * 0.9, CHAR_SCALE * 1.08), 0.07)
-	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(_body, "position:y", _base_body_y + 0.06, 0.08)
-	tw.tween_property(_body, "position:y", _base_body_y, 0.12).set_trans(Tween.TRANS_BOUNCE)
+	tw.tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.1, CHAR_SCALE * 0.82, CHAR_SCALE * 1.1), 0.05)
+	tw.parallel().tween_property(_body, "rotation_degrees:x", _eat_lean_x - 6.0, 0.05)
+	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(_body, "rotation_degrees:x", _eat_lean_x + 2.0, 0.14)
+	tw.parallel().tween_property(_body, "position:y", _base_body_y + 0.08, 0.08)
+	tw.tween_property(_body, "position:y", _base_body_y, 0.16).set_trans(Tween.TRANS_BOUNCE)
+	tw.parallel().tween_property(_body, "rotation_degrees:x", -4.0, 0.16)
 
 
 func finish_catch_burger() -> void:
@@ -1793,9 +1798,11 @@ func finish_catch_burger() -> void:
 	_eat_lean_x = 0.0
 	_reset_skeleton_pose()
 	if _body and is_instance_valid(_body):
-		_body.rotation_degrees.x = 0.0
-		_body.scale = Vector3.ONE * CHAR_SCALE
-		_body.position.y = _base_body_y
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(_body, "rotation_degrees:x", 0.0, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.12)
+		tw.tween_property(_body, "position:y", _base_body_y, 0.18)
 	if _anim_player:
 		_anim_player.active = true
 

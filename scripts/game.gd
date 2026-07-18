@@ -5,7 +5,7 @@ const GRILL_SLOTS := 10
 const STATION_COUNT := 1
 const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
-const STATION_BURGER_SCALE := 1.0
+const STATION_BURGER_SCALE := 1.18 ## wider stack so the build reads on the board
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
 const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
@@ -74,6 +74,8 @@ const OIL_POUR_HEIGHT := 0.445
 const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const BunToastScript := preload("res://scripts/bun_toast.gd")
+const SocialReviewsScript := preload("res://scripts/social_reviews.gd")
+const KitchenTvBrowserScript := preload("res://scripts/kitchen_tv_browser.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
 ## DISABLED — set true later to restore grill-toastable bun pairs (see bun_toast.gd).
 const BUN_TOAST_ENABLED := false
@@ -391,8 +393,9 @@ const FLICK_TO_GRILL_VX := 520.0
 const FLICK_MIN_SPEED := 620.0
 const FLICK_MIN_TRAVEL_PX := 36.0
 ## Build UI + DROP_L live in a left column (not grill hitboxes).
-const BUILD_COLUMN_SCREEN_FRAC := 0.15
-const BUILD_COLUMN_BOTTOM_CLEAR := 118.0 ## keep clear of ingredient strip
+const BUILD_COLUMN_SCREEN_FRAC := 0.185 ## wider left Build column
+const BUILD_COLUMN_LEFT_MARGIN := 22.0 ## inset from screen left so the stack isn't flush
+const BUILD_COLUMN_BOTTOM_CLEAR := 100.0 ## keep clear of ingredient strip (was 118)
 ## Legacy aliases — drop catcher no longer expands across half the screen.
 const BUILD_DROP_SCREEN_FRAC := BUILD_COLUMN_SCREEN_FRAC
 const BUILD_DROP_MIN_PX := 160.0
@@ -433,13 +436,16 @@ var _phone_scroll_last_mouse_y: float = 0.0
 var _phone_scroll_last_msec: int = 0
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
-## Newest-first feed posts: {stars, who, text}
+## Newest-first feed posts: {stars, who, text, pic?}
 var social_reviews: Array = []
 const SOCIAL_REVIEW_CHANCE := 0.70
-const SOCIAL_FEED_MAX := 8
+const SOCIAL_FEED_MAX := 10
+## Roughly 1 in 8 posts attach a 2D snapshot of the Build burger.
+const SOCIAL_REVIEW_PIC_CHANCE := 0.125
 const SOCIAL_REVIEWER_NAMES: Array[String] = [
 	"Maya", "Chris", "Jordan", "Sam", "Alex", "Riley", "Casey", "Morgan",
 	"Taylor", "Jamie", "Quinn", "Avery", "Drew", "Parker", "Reese", "Skyler",
+	"Nova", "Kai", "Remy", "Sage", "Frankie", "Harper", "Elliot", "Rowan",
 ]
 var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
@@ -468,6 +474,13 @@ var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
+var kitchen_tv_root: Node3D = null
+var kitchen_tv_screen: MeshInstance3D = null
+var kitchen_tv_area: Area3D = null
+var kitchen_tv_viewport: SubViewport = null
+var kitchen_tv_label: Label = null
+var kitchen_browser: Control = null
+var kitchen_browser_open: bool = false
 var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
 var burger_pals_decal: MeshInstance3D = null
@@ -493,6 +506,10 @@ const FIRST_SALE_DEFAULT_Y := 2.391
 const FIRST_SALE_DEFAULT_Z := 1.18
 const FIRST_SALE_DEFAULT_SCALE := 0.44 ## 20% smaller than prior 0.55
 const SALE_COLLISION_LAYER := 512
+## Kitchen wall TV (browser) — camera-right of First Sale.
+const KITCHEN_TV_COLLISION_LAYER := 1024
+const KITCHEN_TV_POS := Vector3(-0.58, 2.38, FIRST_SALE_DEFAULT_Z + 0.012)
+const KITCHEN_TV_SCREEN_SIZE := Vector2(0.40, 0.26)
 var sale_held: bool = false
 var sale_area: Area3D = null
 var sale_home: Vector3 = Vector3(FIRST_SALE_DEFAULT_X, FIRST_SALE_DEFAULT_Y, FIRST_SALE_DEFAULT_Z)
@@ -519,12 +536,12 @@ const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
 const PREP_UI_BEHIND_Y := -165.0 ## legacy offset when prep lived inside BuildZone
-const BUILD_STATIONS_ROW_LEFT := 0.0
+const BUILD_STATIONS_ROW_LEFT := 10.0 ## inner left pad inside the Build column
 const BUILD_STATIONS_ROW_RIGHT := 0.0
-const BUILD_PANEL_SIZE := Vector2(170, 300)
-const BUILD_ZONE_SIZE := Vector2(170, 260)
+const BUILD_PANEL_SIZE := Vector2(210, 320)
+const BUILD_ZONE_SIZE := Vector2(210, 280)
 const BUILD_UI_LEFT := 0.0 ## bun stack fills the left Build column
-const BUILD_PLATE_SHIFT_X := 0.0 ## full-width plate — no side nudge
+const BUILD_PLATE_SHIFT_X := 12.0 ## nudge stack right for left margin
 const BUILD_UI_LIFT_BOTTOM := 8.0 ## column already clears the ingredient strip
 const PREP_UI_PANEL_X := BUILD_UI_LEFT + PREP_UI_BEHIND_X ## panel-left — independent of build zone
 const PREP_UI_PANEL_BOTTOM := BUILD_UI_LIFT_BOTTOM + BUILD_ZONE_SIZE.y - (PREP_UI_BEHIND_Y + PREP_UI_SIZE.y)
@@ -665,9 +682,9 @@ const GFX_DEFAULTS := {
 	"bz_zone_top": 8.0,
 	"bz_lift_bottom": BUILD_UI_LIFT_BOTTOM,
 	"bz_plate_w": 0.0, ## 0 = stretch to full Build column / panel width
-	"bz_plate_h": 200.0,
+	"bz_plate_h": 230.0,
 	"bz_plate_shift": BUILD_PLATE_SHIFT_X,
-	"bz_plate_y": 0.0,
+	"bz_plate_y": 40.0, ## sit lower on the cutting board
 	"bz_plate_pad": 8.0,
 	"bz_title_y": -2.0,
 	"bz_title_x": 0.0,
@@ -1406,6 +1423,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if options_menu_open:
 		return
+	if kitchen_browser_open:
+		return
 	if not playing:
 		return
 	if event.is_action_pressed("toggle_burner"):
@@ -1487,6 +1506,13 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			return
 		## Leave mouse/keys alone so CanvasLayer Options buttons receive them.
+		return
+	## Kitchen TV browser owns the mouse while open.
+	if kitchen_browser_open:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_ESCAPE:
+				_close_kitchen_browser()
+				get_viewport().set_input_as_handled()
 		return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
@@ -1582,6 +1608,9 @@ func _input(event: InputEvent) -> void:
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
+			if _try_kitchen_tv_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _try_grab_nearest_tool(event.position):
 				get_viewport().set_input_as_handled()
 				return
@@ -1592,6 +1621,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if kitchen_browser_open:
+			_close_kitchen_browser()
+			get_viewport().set_input_as_handled()
+			return
 		if cheese_held:
 			_cancel_cheese_hold()
 			get_viewport().set_input_as_handled()
@@ -1794,6 +1827,8 @@ func _try_grill_right_click(screen_pos: Vector2) -> bool:
 
 func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) -> bool:
 	## Buttons / panels on top of the 3D tools — never grab scraper through UI.
+	if kitchen_browser_open:
+		return true
 	if for_grill_place and _is_grill_screen_point(screen_pos):
 		return false
 	var hovered := get_viewport().gui_get_hovered_control()
@@ -1814,7 +1849,7 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 					return true
 		node = node.get_parent()
 	## Explicit hit-tests — hovered can miss during the same-frame press.
-	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column]:
+	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column, kitchen_browser]:
 		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
 			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 				return true
@@ -1964,7 +1999,7 @@ func _layout_build_column_root() -> void:
 	build_column_root.anchor_right = BUILD_COLUMN_SCREEN_FRAC
 	build_column_root.anchor_top = 0.0
 	build_column_root.anchor_bottom = 1.0
-	build_column_root.offset_left = 0.0
+	build_column_root.offset_left = BUILD_COLUMN_LEFT_MARGIN
 	build_column_root.offset_right = 0.0
 	build_column_root.offset_top = 8.0
 	build_column_root.offset_bottom = -BUILD_COLUMN_BOTTOM_CLEAR
@@ -2029,9 +2064,9 @@ func _build_column_screen_rect() -> Rect2:
 		return build_column_root.get_global_rect()
 	var vr := get_viewport().get_visible_rect()
 	return Rect2(
-		vr.position.x,
+		vr.position.x + BUILD_COLUMN_LEFT_MARGIN,
 		vr.position.y + 8.0,
-		vr.size.x * BUILD_COLUMN_SCREEN_FRAC,
+		maxf(80.0, vr.size.x * BUILD_COLUMN_SCREEN_FRAC - BUILD_COLUMN_LEFT_MARGIN),
 		vr.size.y - 8.0 - BUILD_COLUMN_BOTTOM_CLEAR
 	)
 
@@ -2241,6 +2276,7 @@ func _build_3d_world() -> void:
 	_build_window_cat()
 	_build_outdoor_street()
 	_build_first_sale_decal()
+	_build_kitchen_tv()
 	_build_wall_paper_decals()
 	_build_menu_board_decal()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
@@ -7500,21 +7536,22 @@ func _build_meat_warmer() -> void:
 	warmer_root = Node3D.new()
 	warmer_root.name = "GrillHeatZones"
 	grill_root.add_child(warmer_root)
-	warmer_root.position = Vector3(0, GRILL_SURFACE_Y + 0.026, GRILL_SURFACE_Z)
+	## Same origin as the steel surface so label X matches zone / heat-glow centers.
+	warmer_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.026, GRILL_SURFACE_Z)
 
-	## ~2" up + ~2" toward cook/camera so labels clear the near steel rim.
-	const INCH := 0.0254
-	var label_y := 0.018 + INCH * 2.0
-	var label_z := -GRILL_DEPTH * 0.42 - INCH * 2.0
+	## Near-rim depth (not further toward camera) — extra Z skews labels off-band in perspective.
+	var label_z := -GRILL_DEPTH * 0.42
 	warmer_label = null
 	warmer_label_half = null
 	warmer_label_hold = null
 	for z in _grill_zone_bands():
 		var lab := _make_warmer_speed_label(
 			str(z["label"]),
-			Vector3(float(z["cx"]), label_y, label_z),
+			Vector3(float(z["cx"]) - GRILL_CENTER_X, 0.018, label_z),
 			z["lab_col"]
 		)
+		## Slight screen-down nudge so text clears the near steel lip.
+		_nudge_label3d_on_screen(lab, Vector2(0.0, 15.0))
 		match str(z["id"]):
 			"full":
 				warmer_label = lab
@@ -7611,6 +7648,8 @@ func _make_warmer_speed_label(text: String, local_pos: Vector3, col: Color) -> L
 	lab.text = text
 	lab.position = local_pos
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.modulate = col
 	UiFontsScript.apply_label3d(lab, true, 36, 0.022)
 	## No fat outline — it read as a jagged black halo on FULL / HOLD.
@@ -8209,6 +8248,185 @@ func _build_first_sale_decal() -> void:
 	_refresh_glock_cover_lock()
 
 
+func _build_kitchen_tv() -> void:
+	## Flat-screen TV on the lintel, camera-right of the First Sale plaque.
+	if kitchen_tv_root != null and is_instance_valid(kitchen_tv_root):
+		kitchen_tv_root.queue_free()
+	kitchen_tv_root = null
+	kitchen_tv_screen = null
+	kitchen_tv_area = null
+	kitchen_tv_viewport = null
+	kitchen_tv_label = null
+
+	var root := Node3D.new()
+	root.name = "KitchenTV"
+	root.position = KITCHEN_TV_POS
+	## Face the cook (same as First Sale / wall papers).
+	root.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	world.add_child(root)
+	kitchen_tv_root = root
+
+	## Dark plastic bezel.
+	var bezel := MeshInstance3D.new()
+	bezel.name = "Bezel"
+	var bezel_mesh := BoxMesh.new()
+	bezel_mesh.size = Vector3(KITCHEN_TV_SCREEN_SIZE.x + 0.06, KITCHEN_TV_SCREEN_SIZE.y + 0.05, 0.035)
+	bezel.mesh = bezel_mesh
+	bezel.position = Vector3(0.0, 0.0, 0.0)
+	var bezel_mat := StandardMaterial3D.new()
+	bezel_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bezel_mat.albedo_color = Color(0.08, 0.08, 0.09, 1.0)
+	bezel_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	bezel.material_override = bezel_mat
+	bezel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(bezel)
+
+	## Tiny stand lip under the bezel.
+	var lip := MeshInstance3D.new()
+	lip.name = "Lip"
+	var lip_mesh := BoxMesh.new()
+	lip_mesh.size = Vector3(KITCHEN_TV_SCREEN_SIZE.x * 0.55, 0.018, 0.028)
+	lip.mesh = lip_mesh
+	lip.position = Vector3(0.0, -(KITCHEN_TV_SCREEN_SIZE.y * 0.5 + 0.028), 0.0)
+	var lip_mat := StandardMaterial3D.new()
+	lip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lip_mat.albedo_color = Color(0.12, 0.12, 0.13, 1.0)
+	lip.material_override = lip_mat
+	lip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(lip)
+
+	## Live screen via SubViewport (title / now-playing).
+	kitchen_tv_viewport = SubViewport.new()
+	kitchen_tv_viewport.name = "TvViewport"
+	kitchen_tv_viewport.size = Vector2i(320, 200)
+	kitchen_tv_viewport.transparent_bg = false
+	kitchen_tv_viewport.handle_input_locally = false
+	kitchen_tv_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(kitchen_tv_viewport)
+
+	var screen_bg := ColorRect.new()
+	screen_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	screen_bg.color = Color(0.05, 0.07, 0.12, 1.0)
+	kitchen_tv_viewport.add_child(screen_bg)
+
+	kitchen_tv_label = Label.new()
+	kitchen_tv_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	kitchen_tv_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	kitchen_tv_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	kitchen_tv_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	kitchen_tv_label.text = "KITCHEN TV\nClick for Browser"
+	kitchen_tv_label.add_theme_font_size_override("font_size", 22)
+	kitchen_tv_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0, 0.95))
+	kitchen_tv_viewport.add_child(kitchen_tv_label)
+
+	kitchen_tv_screen = MeshInstance3D.new()
+	kitchen_tv_screen.name = "Screen"
+	var screen_quad := QuadMesh.new()
+	screen_quad.size = KITCHEN_TV_SCREEN_SIZE
+	kitchen_tv_screen.mesh = screen_quad
+	## Slightly proud of the bezel so it reads as glass.
+	kitchen_tv_screen.position = Vector3(0.0, 0.0, 0.019)
+	var screen_mat := StandardMaterial3D.new()
+	screen_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	screen_mat.albedo_color = Color(1, 1, 1, 1)
+	screen_mat.albedo_texture = kitchen_tv_viewport.get_texture()
+	screen_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	screen_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	kitchen_tv_screen.material_override = screen_mat
+	kitchen_tv_screen.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	kitchen_tv_screen.sorting_offset = 0.6
+	root.add_child(kitchen_tv_screen)
+
+	## Soft glow so the screen pops on the gray wall.
+	var glow := OmniLight3D.new()
+	glow.name = "TvGlow"
+	glow.light_color = Color(0.45, 0.65, 1.0)
+	glow.light_energy = 0.35
+	glow.omni_range = 0.55
+	glow.position = Vector3(0.0, 0.0, 0.08)
+	glow.shadow_enabled = false
+	root.add_child(glow)
+
+	kitchen_tv_area = Area3D.new()
+	kitchen_tv_area.name = "KitchenTvClick"
+	kitchen_tv_area.input_ray_pickable = true
+	kitchen_tv_area.collision_layer = KITCHEN_TV_COLLISION_LAYER
+	kitchen_tv_area.collision_mask = 0
+	kitchen_tv_area.monitoring = false
+	kitchen_tv_area.monitorable = true
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(KITCHEN_TV_SCREEN_SIZE.x + 0.08, KITCHEN_TV_SCREEN_SIZE.y + 0.08, 0.1)
+	shape.shape = box
+	kitchen_tv_area.add_child(shape)
+	root.add_child(kitchen_tv_area)
+
+	_ensure_kitchen_browser()
+
+
+func _ensure_kitchen_browser() -> void:
+	if kitchen_browser != null and is_instance_valid(kitchen_browser):
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "KitchenTvBrowserLayer"
+	layer.layer = 60
+	add_child(layer)
+	kitchen_browser = KitchenTvBrowserScript.new()
+	kitchen_browser.name = "KitchenTvBrowser"
+	kitchen_browser.setup(_sync_kitchen_tv_screen)
+	kitchen_browser.closed.connect(_close_kitchen_browser)
+	kitchen_browser.visible = false
+	layer.add_child(kitchen_browser)
+
+
+func _sync_kitchen_tv_screen(url: String, title: String) -> void:
+	if kitchen_tv_label == null or not is_instance_valid(kitchen_tv_label):
+		return
+	if url == "kitchen://home" or url == "":
+		kitchen_tv_label.text = "KITCHEN TV\nClick for Browser"
+		kitchen_tv_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0, 0.95))
+	else:
+		kitchen_tv_label.text = "▶ NOW PLAYING\n%s" % title
+		kitchen_tv_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45, 0.98))
+
+
+func _try_kitchen_tv_click(screen_pos: Vector2) -> bool:
+	if not playing or kitchen_browser_open or options_menu_open:
+		return false
+	if kitchen_tv_root == null or camera == null:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null:
+		return false
+	var near := false
+	var d := screen_pos.distance_to(camera.unproject_position(kitchen_tv_root.global_position))
+	if d < 100.0:
+		near = true
+	elif _ray_hits_tool(screen_pos, KITCHEN_TV_COLLISION_LAYER, kitchen_tv_area):
+		near = true
+	if not near:
+		return false
+	_open_kitchen_browser()
+	return true
+
+
+func _open_kitchen_browser() -> void:
+	_ensure_kitchen_browser()
+	if kitchen_browser == null:
+		return
+	kitchen_browser.visible = true
+	kitchen_browser_open = true
+	if game_audio:
+		game_audio.play_click()
+	_flash("Kitchen TV — pick YouTube / a podcast", Color("80CBC4"))
+
+
+func _close_kitchen_browser() -> void:
+	kitchen_browser_open = false
+	if kitchen_browser != null and is_instance_valid(kitchen_browser):
+		kitchen_browser.visible = false
+
+
 func _sale_covers_glock() -> bool:
 	## Gun stays locked until the First Sale plaque is slid clear of the mount.
 	if sale_held:
@@ -8310,27 +8528,26 @@ func _build_wall_paper_decals() -> void:
 	root.name = "WallPaperDecals"
 	world.add_child(root)
 	wall_paper_decals = root
-	## Camera-right = world −X. Cluster sits just past the First Sale plaque edge.
+	## Camera-right = world −X. Papers sit past the kitchen TV (right of First Sale).
 	## Sheet order left→right: license, health cert, beach polaroid.
 	var specs: Array = [
 		{
 			"name": "BusinessLicense",
 			"path": "res://assets/decal/business_license.png",
 			"size": Vector2(0.40, 0.333),
-			## +6" up, +6" camera-right (−X).
-			"pos": Vector3(-0.732, 2.372, WALL_PAPER_Z),
+			"pos": Vector3(-1.18, 2.372, WALL_PAPER_Z),
 		},
 		{
 			"name": "HealthCertificate",
 			"path": "res://assets/decal/health_certificate.png",
 			"size": Vector2(0.30, 0.254),
-			"pos": Vector3(-1.112, 2.452, WALL_PAPER_Z),
+			"pos": Vector3(-1.52, 2.452, WALL_PAPER_Z),
 		},
 		{
 			"name": "BeachPhoto",
 			"path": "res://assets/decal/beach_photo.png",
 			"size": Vector2(0.175, 0.163),
-			"pos": Vector3(-1.372, 2.292, WALL_PAPER_Z),
+			"pos": Vector3(-1.78, 2.292, WALL_PAPER_Z),
 		},
 	]
 	for spec in specs:
@@ -9080,171 +9297,150 @@ func _record_social_review(stars: float) -> void:
 	_maybe_record_social_review(stars, "angry")
 
 
-func _maybe_record_social_review(stars: float, kind: String = "serve", tip: int = 0) -> void:
+func _maybe_record_social_review(
+	stars: float,
+	kind: String = "serve",
+	tip: int = 0,
+	station_index: int = -1
+) -> void:
 	## Host/solo: ~70% of customers leave a visible social post right away.
 	if mp_enabled and not NetManager.is_host():
 		return
 	if randf() >= SOCIAL_REVIEW_CHANCE:
 		return
-	_commit_social_review(stars, kind, tip)
+	_commit_social_review(stars, kind, tip, station_index)
 
 
-func _force_record_social_review(stars: float, kind: String = "angry", tip: int = 0) -> void:
+func _force_record_social_review(
+	stars: float,
+	kind: String = "angry",
+	tip: int = 0,
+	station_index: int = -1
+) -> void:
 	## Guaranteed feed post (e.g. extinguisher spray victims).
 	if mp_enabled and not NetManager.is_host():
 		return
-	_commit_social_review(stars, kind, tip)
+	_commit_social_review(stars, kind, tip, station_index)
 
 
-func _commit_social_review(stars: float, kind: String, tip: int = 0) -> void:
+func _commit_social_review(
+	stars: float,
+	kind: String,
+	tip: int = 0,
+	station_index: int = -1
+) -> void:
 	var who := SOCIAL_REVIEWER_NAMES[randi() % SOCIAL_REVIEWER_NAMES.size()]
-	var text := _generate_review_text(stars, kind, tip)
-	_apply_social_review(stars, who, text)
+	var text := SocialReviewsScript.generate(stars, kind, tip)
+	var pic: Texture2D = null
+	if station_index >= 0 and randf() < SOCIAL_REVIEW_PIC_CHANCE:
+		pic = _make_review_burger_snapshot(station_index)
+	var pic_png: PackedByteArray = PackedByteArray()
+	if pic != null:
+		var img := pic.get_image()
+		if img != null:
+			if img.is_compressed():
+				img.decompress()
+			pic_png = img.save_png_to_buffer()
+	_apply_social_review(stars, who, text, pic)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
-		mp_social_review.rpc(stars, who, text)
+		mp_social_review.rpc(stars, who, text, pic_png)
 
 
-func _apply_social_review(stars: float, who: String, text: String) -> void:
+func _apply_social_review(stars: float, who: String, text: String, pic: Texture2D = null) -> void:
 	social_review_count += 1
 	social_rating_sum += clampf(stars, 0.0, 5.0)
-	social_reviews.push_front({"stars": clampf(stars, 0.0, 5.0), "who": who, "text": text})
+	var post := {"stars": clampf(stars, 0.0, 5.0), "who": who, "text": text}
+	if pic != null:
+		post["pic"] = pic
+	social_reviews.push_front(post)
 	while social_reviews.size() > SOCIAL_FEED_MAX:
 		social_reviews.pop_back()
 	_refresh_phone_ui()
 	_flash("%s left a review!" % who, Color("90CAF9"))
 
 
+func _make_review_burger_snapshot(station_index: int) -> Texture2D:
+	## Compact 2D stack photo for ~1/8 social posts.
+	if station_index < 0 or station_index >= stations.size():
+		return null
+	var st: Dictionary = stations[station_index]
+	var items: Array = st.get("items", [])
+	if items.is_empty():
+		return null
+	const OUT := 112
+	var canvas := Image.create(OUT, OUT, false, Image.FORMAT_RGBA8)
+	canvas.fill(Color(0.14, 0.12, 0.10, 0.92))
+	## Soft plate disc.
+	for y in OUT:
+		for x in OUT:
+			var dx := (float(x) + 0.5) / float(OUT) - 0.5
+			var dy := (float(y) + 0.5) / float(OUT) - 0.5
+			if dx * dx + dy * dy < 0.22:
+				canvas.set_pixel(x, y, Color(0.22, 0.2, 0.18, 1.0))
+
+	var layer_scale := 0.92
+	var layer_w := 78.0
+	var step_y := 11.0
+	var stack_lift := 0.0
+	var layers: Array = [] ## {img, w, h, y}
+	for stack_i in items.size():
+		var item: String = str(items[stack_i])
+		if item == "cheese":
+			continue
+		var layer_key := item
+		var pidx := -1
+		if item == "patty":
+			var patty_from_bottom := 0
+			for j in range(stack_i + 1):
+				if str(items[j]) == "patty":
+					patty_from_bottom += 1
+			pidx = patty_from_bottom - 1
+			if _station_patty_has_cheese(st, pidx):
+				layer_key = "patty_cheese"
+		var build_scale := _station_item_build_scale(layer_key)
+		var h_base := _layer_img_height(layer_key) * layer_scale * build_scale
+		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
+		var layer_tex: Texture2D = null
+		if item == "patty":
+			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
+		else:
+			layer_tex = FoodSpritesScript.get_tex(item)
+		if layer_tex == null:
+			continue
+		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
+		this_w = fit.x
+		var h := fit.y
+		var y := float(OUT) * 0.62 - stack_lift - float(stack_i) * step_y - h * 0.55
+		if item == "bun_bottom":
+			stack_lift += 3.0
+		elif item == "patty":
+			stack_lift += 4.0
+		var src := layer_tex.get_image()
+		if src == null:
+			continue
+		if src.is_compressed():
+			src.decompress()
+		src.convert(Image.FORMAT_RGBA8)
+		var tw := maxi(4, int(round(this_w)))
+		var th := maxi(4, int(round(h)))
+		src.resize(tw, th, Image.INTERPOLATE_BILINEAR)
+		layers.append({"img": src, "w": tw, "h": th, "y": y})
+
+	for L in layers:
+		var src: Image = L["img"]
+		var tw: int = int(L["w"])
+		var th: int = int(L["h"])
+		var px := int(round((float(OUT) - float(tw)) * 0.5))
+		var py := clampi(int(round(float(L["y"]))), 0, OUT - th)
+		if tw > 0 and th > 0 and px < OUT and py < OUT:
+			canvas.blit_rect(src, Rect2i(0, 0, tw, th), Vector2i(px, py))
+
+	return ImageTexture.create_from_image(canvas)
+
+
 func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
-	var s := clampf(stars, 0.0, 5.0)
-	## ~1 in 3 posts go full essay so the feed feels like real people.
-	var long_post := randf() < 0.32
-	if kind == "burnt":
-		## Stars already rolled: high = charcoal lovers, low = everyone else.
-		if s >= 3.5:
-			if long_post:
-				return [
-					"Okay hear me out — I KNOW it was burnt and I loved it. Black crust, bitter edges, smoky as hell. Leave it on the grill longer next time please. Four stars from a well-done freak.",
-					"Most people will hate this but that charcoal patty slapped. Crunchy, dark, tastes like a campfire. Keep burning them. Five stars (yes I'm serious).",
-					"Burnt on purpose? Don't care. I asked for well-done and this truck delivered ash in the best way. Mentioning it so the cooks know SOME of us want the puck.",
-				][randi() % 3]
-			return [
-				"Burnt AF and I loved it. More please.",
-				"Charcoal crust = elite. Well-done gang.",
-				"Black patty slap. Don't listen to the haters.",
-				"I like them burnt. Five stars honestly.",
-				"Crispy ash burger. Perfect for me.",
-			][randi() % 5]
-		if long_post:
-			return [
-				"I asked for a burger and got a charcoal briquette with toppings. Crunchy in the worst way. One star — learn when to scoop.",
-				"Burnt. Like, properly burnt. The outside was black and bitter and I still paid for it because I was starving. Never again until y'all watch the grill.",
-				"Long review for a short meal: perfect ticket build, absolute ash patty. Matching the order doesn't fix serving hockey pucks. One star.",
-			][randi() % 3]
-		return [
-			"Burnt hockey puck. One star.",
-			"Charcoal with cheese. Gross.",
-			"That patty was BLACK. No thanks.",
-			"Burnt meat. Fix your grill timing.",
-			"Tasted like ash. Never again.",
-		][randi() % 5]
-	if kind == "spray":
-		if long_post:
-			return [
-				"I am still shaking. Ordered a simple burger, leaned toward the window, and they blasted me with a fire extinguisher like I was a grease fire. White powder in my hair, on my jacket, in my mouth. Called my cousin. Called corporate. One star forever.",
-				"Excuse me??? Your cook emptied an extinguisher THROUGH THE WINDOW onto a paying customer. I looked like a powdered donut walking back to my car. This is a health hazard and honestly traumatic. Never. Coming. Back.",
-				"Long review because short ones don't cover this: arrived hungry, left covered in extinguisher dust, coughing, and embarrassed in front of the whole line. If this is the vibe at Burger Pals, close the truck. ☆",
-			][randi() % 3]
-		return [
-			"ONE STAR. They sprayed me with a fire extinguisher??",
-			"Covered in white powder. Calling corporate. Never again.",
-			"Got blasted by the extinguisher through the window. Disgusting.",
-			"Why did they spray me?! Hair full of powder. 1 star.",
-			"Health hazard. Extinguisher to the face. I'm done.",
-			"Came for a burger, left looking like a powdered donut. ☆",
-		][randi() % 6]
-	if kind == "angry" or s <= 1.5:
-		if long_post:
-			return [
-				"Stood there forever watching them flip the same patty while my stomach growled. Nobody acknowledged me, the line didn't move, and when I finally left I was hungrier and angrier than when I showed up. One star and I'm telling the neighborhood group chat.",
-				"Worst food-truck experience I've had all year. Slow service, cold attitude, and I walked away with nothing. If you can't run a window, don't open the window. Blocking this place and moving on.",
-				"I wanted to give them a chance but the wait was ridiculous and the whole vibe felt like they forgot customers exist. Left hungry, left mad, leaving this review so nobody else wastes their lunch break here.",
-			][randi() % 3]
-		return [
-			"Walked out. Never coming back.",
-			"Waited forever. Absolute joke.",
-			"One star. Do better.",
-			"Left hungry and mad. Fix your service.",
-			"Trash experience. Blocking this place.",
-		][randi() % 5]
-	if kind == "wrong":
-		if long_post:
-			return [
-				"I ordered exactly what was on my ticket and somehow got a totally different stack. Had to explain it twice through the window while they looked confused. Not trying to be dramatic but if you can't match an order, the whole truck falls apart. Disappointed.",
-				"Wrong burger, wrong toppings, wrong everything. I held up the ticket like a courtroom exhibit and still got shrugged at. Fix your build board before you take more customers. Two stars is generous.",
-			][randi() % 2]
-		return [
-			"Wrong order?? Come on.",
-			"That wasn't what I asked for.",
-			"They served me something else entirely.",
-			"Order mix-up. Not impressed.",
-		][randi() % 4]
-	if kind == "meh" or s < 2.75:
-		if long_post:
-			return [
-				"It's edible, I'll give them that, but the patty was bland and the whole thing tasted like it needed salt, love, and maybe a manager. Not angry enough for one star — just… meh. Expected more from a smash-burger truck with a cute logo.",
-				"Came in hopeful, left shrugging. Bun was fine, meat was okay, seasoning was optional apparently. Wouldn't drive across town for it again unless they tighten up the cook.",
-			][randi() % 2]
-		return [
-			"Burger was… fine. Bland though.",
-			"Edible. Seasoning optional apparently.",
-			"Meh. Expected more from a food truck.",
-			"Okay burger. Nothing to shout about.",
-		][randi() % 4]
-	if s >= 4.5:
-		if long_post:
-			var essays := [
-				"Okay I need to write a real review because this smashed me (pun intended). Patty had the perfect crust, cheese melted like a dream, and they handed it over hot without making me wait forever. Instant favorite. I'm bringing my whole group next shift.",
-				"Five stars isn't enough. I watched them cook it, smelled the grill, and the first bite actually made me stop talking mid-sentence. Fast, hot, ridiculous flavor. If you're on the fence — just go. Tell them a loud person on the internet sent you.",
-				"Rare that a truck lives up to the hype but this one does. Clean window, solid stack, juicy meat, and they actually seemed happy to serve. Already plotting my next order. Burger Pals forever.",
-			]
-			if tip > 0:
-				essays.append(
-					"Tipped hard on purpose. Service was sharp, burger was perfect, and I want this truck to stay parked in my neighborhood forever. Best smash I've had in ages — thank you cooks."
-				)
-			return essays[randi() % essays.size()]
-		var lines := [
-			"Insane burger. Instant favorite.",
-			"Five stars. That patty was perfect.",
-			"I'm telling everyone about this truck.",
-			"Best smash burger I've had in ages.",
-			"Fast, hot, delicious. Obsessed.",
-		]
-		if tip > 0:
-			lines.append("Tipped hard. They earned it.")
-		return lines[randi() % lines.size()]
-	if s >= 3.5:
-		if long_post:
-			return [
-				"Really solid overall — fresh toppings, hot patty, didn't mess up my order. Not quite life-changing but I'd happily come back on a lunch break and recommend it to a friend who likes smash burgers.",
-				"Pretty good truck night. Wait wasn't bad, burger hit the spot, and the window crew kept it moving. Leaving a longer note because short reviews never capture that 'yeah I'd order this again' feeling.",
-			][randi() % 2]
-		return [
-			"Solid burger, would order again.",
-			"Pretty good! Fresh and hot.",
-			"Nice job — tasty stack.",
-			"Hit the spot. Happy customer.",
-		][randi() % 4]
-	if long_post:
-		return [
-			"Three-star energy: got my food, it was fine, service was fine, nothing wild. Room to grow on seasoning and speed but I wasn't mad about spending the money. Decent for a truck stop.",
-			"Alright burger with a side of 'could be better.' Not a disaster, not a revelation. If they tighten the cook and keep the line moving, they'll earn the fourth star from me next time.",
-		][randi() % 2]
-	return [
-		"Decent. Not bad for a truck.",
-		"Alright burger. Room to grow.",
-		"Three stars. Service was fine.",
-		"Got my order. It was okay.",
-	][randi() % 4]
+	## Kept for callers — writer lives in social_reviews.gd.
+	return SocialReviewsScript.generate(stars, kind, tip)
 
 
 func _review_stars_from_serve(
@@ -9459,6 +9655,16 @@ func _refresh_phone_feed() -> void:
 		UiFontsScript.apply_label(body, false, 8)
 		body.add_theme_color_override("font_color", Color(0.68, 0.74, 0.82))
 		cv.add_child(body)
+		var pic = post.get("pic", null)
+		if pic is Texture2D and is_instance_valid(pic):
+			var shot := TextureRect.new()
+			shot.texture = pic
+			shot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			shot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			shot.custom_minimum_size = Vector2(72, 72)
+			shot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cv.add_child(shot)
 
 
 func _build_phone_ui() -> void:
@@ -9956,9 +10162,9 @@ func _build_graphics_ui() -> void:
 	gfx_btn.focus_mode = Control.FOCUS_NONE
 	gfx_btn.z_index = 30
 	gfx_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	gfx_btn.position = Vector2(130, 10)
-	gfx_btn.custom_minimum_size = Vector2(96, 36)
-	_style_quiet_hud_button(gfx_btn, 12)
+	gfx_btn.position = Vector2(98, 10)
+	gfx_btn.custom_minimum_size = Vector2(72, 26)
+	_style_quiet_hud_button(gfx_btn, 10)
 	gfx_btn.pressed.connect(func():
 		_sfx_click()
 		_toggle_options_menu()
@@ -10090,7 +10296,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "bz_row_right", "PANEL Row Right", -40.0, 40.0, 1.0)
 	_gfx_add_slider(list, "bz_row_top", "PANEL Row Top", -40.0, 80.0, 1.0)
 	_gfx_add_slider(list, "bz_row_bottom", "PANEL Row Bottom", -40.0, 40.0, 1.0)
-	_gfx_add_slider(list, "bz_panel_w", "PANEL Width", 80.0, 280.0, 1.0)
+	_gfx_add_slider(list, "bz_panel_w", "PANEL Width", 80.0, 360.0, 1.0)
 	_gfx_add_slider(list, "bz_panel_h", "PANEL Height", 120.0, 500.0, 1.0)
 	_gfx_add_slider(list, "bz_zone_w", "ZONE Width", 80.0, 260.0, 1.0)
 	_gfx_add_slider(list, "bz_zone_h", "ZONE Height", 80.0, 400.0, 1.0)
@@ -11000,6 +11206,15 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "prep_img_y", GFX_DEFAULTS["prep_img_y"])
 		cfg.set_value("gfx", "gfx_bz_layout_v4", true)
 		cfg.save(GFX_CFG_PATH)
+	## Wider / lower Build stack with left margin.
+	if not cfg.has_section_key("gfx", "gfx_bz_layout_v5"):
+		for key in [
+			"bz_row_left", "bz_panel_w", "bz_panel_h", "bz_zone_w", "bz_zone_h",
+			"bz_plate_h", "bz_plate_shift", "bz_plate_y",
+		]:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_bz_layout_v5", true)
+		cfg.save(GFX_CFG_PATH)
 	## Prep image is screen-absolute on UI/Root — snap tuned placement.
 	if not cfg.has_section_key("gfx", "gfx_prep_screen_v1"):
 		cfg.set_value("gfx", "prep_ui_x", GFX_DEFAULTS["prep_ui_x"])
@@ -11142,8 +11357,8 @@ func _layout_top_bar_hud() -> void:
 	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	top_bar.offset_left = -320.0
 	top_bar.offset_right = -12.0
-	top_bar.offset_top = 23.0
-	top_bar.offset_bottom = 63.0
+	top_bar.offset_top = 33.0
+	top_bar.offset_bottom = 73.0
 	top_bar.alignment = BoxContainer.ALIGNMENT_END
 	if hud_day != null and is_instance_valid(hud_day):
 		top_bar.move_child(hud_day, 0)
@@ -11184,8 +11399,8 @@ func _build_pause_button() -> void:
 	window_pause_btn.z_index = 30
 	window_pause_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	window_pause_btn.position = Vector2(12, 10)
-	window_pause_btn.custom_minimum_size = Vector2(110, 36)
-	_style_quiet_hud_button(window_pause_btn, 14)
+	window_pause_btn.custom_minimum_size = Vector2(78, 26)
+	_style_quiet_hud_button(window_pause_btn, 11)
 	window_pause_btn.pressed.connect(func():
 		_sfx_click()
 		_toggle_service_window()
@@ -14487,13 +14702,13 @@ func _refresh_station(index: int) -> void:
 	if plate != null and plate.size.x > 8.0:
 		stage_w = plate.size.x
 		stage_h = plate.size.y
-	## Bottom bun center sits on the cutting-board center.
+	## Bottom bun sits lower on the plate so the stack meets the cutting board.
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
-	var origin_x := stage_w * 0.5
-	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
+	var origin_x := stage_w * 0.52 ## slight right bias for left margin
+	var origin_y := stage_h * 0.66 + bun_h0 * 0.18
 	## Stack step — room between layers without floating the meat.
 	var step_y := 18.0 * layer_scale
-	var layer_w := mini(320.0, stage_w * 0.96)
+	var layer_w := mini(360.0, stage_w * 0.94)
 	## Small gap above heel so patty sits on the bottom bun (not glued to the crown).
 	var stack_lift := 0.0
 	var bottom_row: Control = null
@@ -14685,12 +14900,12 @@ func _station_item_build_scale(item: String) -> float:
 
 
 func _layer_width_mul(item: String) -> float:
-	## Buns read large in sheet art — keep them narrower than meat/toppings.
+	## Buns define the plate footprint — keep them wide enough to read.
 	match item:
 		"bun_top":
-			return 0.78
+			return 0.88
 		"bun_bottom":
-			return 0.92
+			return 0.98
 		"patty":
 			return 1.20
 		"patty_cheese":
@@ -15012,18 +15227,19 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
 	var plate: Control = st.get("plate", null)
-	var layer_scale := _station_layer_scale(items.size())
-	var stage_w := 320.0
-	var stage_h := 240.0
+	## Compact toss burger — smaller than Build art so it fits the mouth.
+	var layer_scale := _station_layer_scale(items.size()) * 0.62
+	var stage_w := 220.0
+	var stage_h := 180.0
 	if plate != null and plate.size.x > 8.0:
-		stage_w = plate.size.x
-		stage_h = plate.size.y
+		stage_w = mini(240.0, plate.size.x * 0.72)
+		stage_h = mini(200.0, plate.size.y * 0.72)
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.5
-	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
-	## Pressed stack — tighter than Build so the handoff reads as a smash.
-	var step_y := 7.2 * layer_scale
-	var layer_w := mini(320.0, stage_w * 0.96)
+	var origin_y := stage_h * 0.55 + bun_h0 * 0.18
+	## Pressed stack — tight layers so the handoff reads as one smash.
+	var step_y := 5.4 * layer_scale
+	var layer_w := mini(200.0, stage_w * 0.9)
 	var stack_lift := 0.0
 
 	var stack := Control.new()
@@ -15043,6 +15259,9 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	## Condiment / thin toppings get pressed flat on the way to the mouth.
 	const FLY_SQUASH_IDS: Array[String] = ["mustard", "ketchup", "bacon", "pickle", "onion", "lettuce", "tomato"]
 	const FLY_TOPPING_SQUISH := 0.28
+	## Patties were oversized vs buns in the toss — keep meat tucked in the stack.
+	const FLY_PATTY_W := 0.48
+	const FLY_PATTY_H := 0.40
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -15061,11 +15280,15 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var is_bun := item == "bun_bottom" or item == "bun_top"
 		var is_patty := item == "patty"
 		var squash_flat := FLY_SQUASH_IDS.has(item)
-		## Don't vertically squash buns or patties; flatten sauces / thin toppings after fit.
-		var h_squish := 1.0 if (is_bun or is_patty or squash_flat) else 0.92
+		## Don't vertically squash buns; flatten sauces / thin toppings after fit.
+		var h_squish := 1.0 if (is_bun or squash_flat) else 0.9
 		var build_scale := _station_item_build_scale(layer_key)
+		if is_patty:
+			build_scale *= FLY_PATTY_H
 		var h_base := _layer_img_height(layer_key) * layer_scale * h_squish * build_scale
 		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
+		if is_patty:
+			this_w *= FLY_PATTY_W / maxf(FLY_PATTY_H, 0.01)
 		var layer_tex: Texture2D = null
 		if item == "patty":
 			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
@@ -15076,26 +15299,25 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var h := fit.y
 		## Force flat toppings into a shorter box (aspect fit alone won't squash).
 		if squash_flat:
-			h = maxf(8.0, h * FLY_TOPPING_SQUISH)
+			h = maxf(6.0, h * FLY_TOPPING_SQUISH)
 		var row := Control.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.custom_minimum_size = Vector2(this_w, h)
 		row.size = Vector2(this_w, h)
 		row.position = Vector2(
-			origin_x - this_w * 0.5 - float(stack_i) * 1.2,
+			origin_x - this_w * 0.5 - float(stack_i) * 0.8,
 			origin_y - stack_lift - float(stack_i) * step_y - h * 0.72
 		)
 		if item == "bun_bottom":
-			## Mild heel snug (Build uses 10).
-			stack_lift += 7.5 * layer_scale
+			stack_lift += 5.5 * layer_scale
 			bottom_row = row
 			bun_rows.append(row)
 		if item == "bun_top":
-			## Light crown seat onto toppings.
-			row.position.y += 5.0 * layer_scale
+			row.position.y += 3.5 * layer_scale
 			top_row = row
 			bun_rows.append(row)
 		if is_patty:
+			stack_lift += 3.5 * layer_scale
 			patty_rows.append(row)
 		elif not is_bun:
 			topping_rows.append(row)
@@ -15170,8 +15392,8 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if customer != null and is_instance_valid(customer) and customer.has_method("begin_catch_burger"):
 		customer.begin_catch_burger()
 
-	var bun_pinch_px := 10.0
-	var topping_crush_px := 7.0
+	var bun_pinch_px := 8.0
+	var topping_crush_px := 6.0
 	var bottom_base_y := bottom_row.position.y if bottom_row != null else 0.0
 	var top_base_y := top_row.position.y if top_row != null else 0.0
 	var topping_base_y: Array[float] = []
@@ -15185,7 +15407,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 			top_row.position.y = top_base_y + amount
 
 	var apply_topping_crush := func(amount: float) -> void:
-		var mid := (bottom_base_y + top_base_y) * 0.5 if top_row != null else bottom_base_y - 20.0
+		var mid := (bottom_base_y + top_base_y) * 0.5 if top_row != null else bottom_base_y - 16.0
 		for i in topping_rows.size():
 			var row: Control = topping_rows[i]
 			if row == null or not is_instance_valid(row):
@@ -15196,8 +15418,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
 			return
-		## Uniform stack scale only — undoing bun Y while the toss tilts made the
-		## patty stick out sideways toward the customer's face.
+		## Uniform stack scale — patties stay nested (no counter-scale that pops meat out).
 		stack.scale = s
 		for row in bun_rows:
 			if row != null and is_instance_valid(row):
@@ -15223,87 +15444,104 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 
 	var tw := create_tween()
 	tw.set_parallel(false)
-	tw.tween_interval(0.02)
+	tw.tween_interval(0.01)
 
-	## A · Seal — light press so it reads as one object.
+	## A · Seal — quick press into one smash.
 	var seal_step := func(t: float) -> void:
-		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.08, 0.88), t))
-		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.45, t))
-		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.4, t))
-	tw.tween_method(seal_step, 0.0, 1.0, 0.1).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.06, 0.86), t))
+		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.5, t))
+		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.45, t))
+	tw.tween_method(seal_step, 0.0, 1.0, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
-	## B · Windup — dip + rotate back before the toss.
+	## B · Windup — dip back before the toss.
 	var windup_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
 			return
-		var crouch := Vector2(1.12, 0.78).lerp(Vector2(0.92, 1.12), t)
+		var crouch := Vector2(1.08, 0.8).lerp(Vector2(0.88, 1.08), t)
 		apply_stack_scale.call(crouch)
-		stack.rotation = deg_to_rad(lerpf(0.0, -10.0, t))
-		stack.global_position = start_pos + Vector2(lerpf(0.0, -6.0, t), lerpf(0.0, 10.0, t))
-		apply_bun_pinch.call(bun_pinch_px * 0.55)
-		apply_topping_crush.call(topping_crush_px * 0.5)
-	tw.tween_method(windup_step, 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		stack.rotation = deg_to_rad(lerpf(0.0, -14.0, t))
+		stack.global_position = start_pos + Vector2(lerpf(0.0, -8.0, t), lerpf(0.0, 12.0, t))
+		apply_bun_pinch.call(bun_pinch_px * 0.6)
+		apply_topping_crush.call(topping_crush_px * 0.55)
+	tw.tween_method(windup_step, 0.0, 1.0, 0.1).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 
 	tw.tween_callback(func() -> void:
 		if game_audio and game_audio.has_method("play_serve_whoosh"):
 			game_audio.play_serve_whoosh()
 	)
 
-	## C/D · Launch + arc over the window to the mouth.
+	## C · Arc to the mouth — shrink in flight so it doesn't eat the face.
 	var fly_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
 			return
-		## Re-aim at mouth in case they lean.
 		var end_pos := mouth_pos
 		if customer != null and is_instance_valid(customer):
 			end_pos = _customer_mouth_screen(customer)
-		var mid := start_pos.lerp(end_pos, 0.48) + Vector2(0.0, -118.0)
-		## Ease-out launch, ease-in land.
+		var mid := start_pos.lerp(end_pos, 0.45) + Vector2(0.0, -96.0)
 		var eased := t * t * (3.0 - 2.0 * t)
-		var launch := 1.0 - pow(1.0 - t, 2.2)
-		var path_t := lerpf(launch, eased, 0.55)
+		var launch := 1.0 - pow(1.0 - t, 2.4)
+		var path_t := lerpf(launch, eased, 0.5)
 		var u := 1.0 - path_t
 		stack.global_position = u * u * start_pos + 2.0 * u * path_t * mid + path_t * path_t * end_pos
-		## Spin through the toss, settle upright near the mouth.
-		stack.rotation = deg_to_rad(lerpf(-10.0, 18.0, sin(t * PI * 0.92)))
-		## Foreshorten midair, swell toward camera at the lips.
-		var mid_s := Vector2(0.58, 0.7)
-		var near_s := Vector2(0.9, 0.82)
+		## Soft flip through the toss, settle near upright.
+		stack.rotation = deg_to_rad(lerpf(-14.0, 8.0, sin(t * PI * 0.85)))
+		## Midair shrink → arrive bite-sized at the lips.
+		var mid_s := Vector2(0.38, 0.42)
+		var near_s := Vector2(0.40, 0.36)
 		var s: Vector2
-		if t < 0.45:
-			s = Vector2(0.92, 1.1).lerp(mid_s, t / 0.45)
+		if t < 0.4:
+			s = Vector2(0.86, 1.02).lerp(mid_s, t / 0.4)
 		else:
-			s = mid_s.lerp(near_s, (t - 0.45) / 0.55)
+			s = mid_s.lerp(near_s, (t - 0.4) / 0.6)
 		apply_stack_scale.call(s)
 		apply_bun_pinch.call(bun_pinch_px)
 		apply_topping_crush.call(topping_crush_px)
-	tw.tween_method(fly_step, 0.0, 1.0, 0.48)
+	tw.tween_method(fly_step, 0.0, 1.0, 0.42).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-	## E · Catch / eat away in front of us.
+	## D · Impact — bite squash + crumbs + chomp.
 	tw.tween_callback(func() -> void:
 		if customer != null and is_instance_valid(customer):
 			if customer.has_method("chomp_burger"):
 				customer.chomp_burger()
 		if game_audio and game_audio.has_method("play_burger_chomp"):
 			game_audio.play_burger_chomp()
-		_spawn_serve_crumb_burst(fly_root, _customer_mouth_screen(customer) if customer != null and is_instance_valid(customer) else mouth_pos)
+		_spawn_serve_crumb_burst(
+			fly_root,
+			_customer_mouth_screen(customer) if customer != null and is_instance_valid(customer) else mouth_pos
+		)
 	)
 
+	var impact_step := func(t: float) -> void:
+		if not is_instance_valid(stack):
+			return
+		var end_pos := mouth_pos
+		if customer != null and is_instance_valid(customer):
+			end_pos = _customer_mouth_screen(customer)
+		## Nudge slightly into the face as they bite.
+		stack.global_position = end_pos + Vector2(0.0, lerpf(0.0, 4.0, t))
+		stack.rotation = deg_to_rad(lerpf(8.0, -4.0, t))
+		## Stay compact at the lips — don't balloon width on bite.
+		var s := Vector2(0.40, 0.36).lerp(Vector2(0.44, 0.24), t)
+		apply_stack_scale.call(s)
+		apply_bun_pinch.call(bun_pinch_px * (1.0 + t * 0.8))
+		apply_topping_crush.call(topping_crush_px * (1.0 + t))
+	tw.tween_method(impact_step, 0.0, 1.0, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+	## E · Vanish into the mouth.
 	var eat_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
 			return
 		var end_pos := mouth_pos
 		if customer != null and is_instance_valid(customer):
 			end_pos = _customer_mouth_screen(customer)
-		stack.global_position = end_pos
-		stack.rotation = deg_to_rad(lerpf(8.0, 0.0, t))
-		## Burger shrinks into the mouth and fades out.
-		var s := Vector2(0.9, 0.82).lerp(Vector2(0.12, 0.06), t * t)
+		stack.global_position = end_pos + Vector2(0.0, lerpf(4.0, 10.0, t))
+		stack.rotation = deg_to_rad(lerpf(-4.0, 0.0, t))
+		var s := Vector2(0.44, 0.24).lerp(Vector2(0.08, 0.04), ease(t, 2.2))
 		apply_stack_scale.call(s)
-		stack.modulate.a = 1.0 - t
-		apply_bun_pinch.call(bun_pinch_px * (1.0 + t))
-		apply_topping_crush.call(topping_crush_px * (1.0 + t * 0.5))
-	tw.tween_method(eat_step, 0.0, 1.0, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		stack.modulate.a = 1.0 - ease(t, 1.6)
+		apply_bun_pinch.call(bun_pinch_px * (1.6 + t))
+		apply_topping_crush.call(topping_crush_px * (1.4 + t * 0.4))
+	tw.tween_method(eat_step, 0.0, 1.0, 0.26).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 
 	tw.tween_callback(finish_serve)
 
@@ -15456,7 +15694,7 @@ func _complete_serve(station_index: int) -> void:
 			review_kind = "meh"
 		elif review_stars <= 1.5:
 			review_kind = "angry"
-		_maybe_record_social_review(review_stars, review_kind, tip_amt)
+		_maybe_record_social_review(review_stars, review_kind, tip_amt, station_index)
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
@@ -17561,11 +17799,16 @@ func mp_customer_leave(net_id: int, angry: bool) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_social_review(stars: float, who: String, text: String) -> void:
+func mp_social_review(stars: float, who: String, text: String, pic_png: PackedByteArray = PackedByteArray()) -> void:
 	## Guest mirrors a host feed post (chance already rolled on host).
 	if NetManager.is_host():
 		return
-	_apply_social_review(stars, who, text)
+	var pic: Texture2D = null
+	if pic_png != null and pic_png.size() > 32:
+		var img := Image.new()
+		if img.load_png_from_buffer(pic_png) == OK:
+			pic = ImageTexture.create_from_image(img)
+	_apply_social_review(stars, who, text, pic)
 
 
 func _mp_broadcast_customers() -> void:
