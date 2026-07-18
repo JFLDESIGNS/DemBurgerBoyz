@@ -12,7 +12,7 @@ enum CookState { RAW, SEARING, COOKED, PERFECT, BURNT }
 const COOK_SEAR := 8.0
 const COOK_DONE := 15.0
 const COOK_PERFECT := 21.0
-const COOK_BURNT := 34.0 ## Extra grace if you don't flip right away.
+const COOK_BURNT := 38.0 ## Slightly more grace before charcoal.
 const FLIP_READY := 15.0
 const FLIP_WINDOW_START := 15.0
 const FLIP_WINDOW_END := 24.0 ## Slightly wider perfect-flip window.
