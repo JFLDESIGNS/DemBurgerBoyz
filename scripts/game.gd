@@ -451,6 +451,8 @@ var options_panel: PanelContainer = null
 var options_menu_open: bool = false
 var options_vol_slider: HSlider = null
 var options_lobby_btn: Button = null
+var options_layer: CanvasLayer = null
+var options_dim: ColorRect = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -1447,14 +1449,18 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not playing:
 		return
-	## Options is up — skip gameplay grabs, but do NOT mark mouse as handled
-	## or the Options / Graphics buttons never receive clicks.
+	## Options owns the mouse — never let kitchen grabs see clicks while it's open.
 	if options_menu_open:
-		var is_menu_key := false
 		if event is InputEventKey and event.pressed and not event.echo:
-			is_menu_key = event.keycode == KEY_ESCAPE or event.keycode == KEY_F10
-		if not is_menu_key:
+			if event.keycode == KEY_ESCAPE or event.keycode == KEY_F10:
+				if gfx_panel != null and gfx_panel.visible:
+					_set_graphics_menu_open(false)
+				else:
+					_set_options_menu_open(false)
+				get_viewport().set_input_as_handled()
 			return
+		## Leave mouse/keys alone so CanvasLayer Options buttons receive them.
+		return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
 		return
@@ -1559,13 +1565,6 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		if options_menu_open:
-			if gfx_panel != null and gfx_panel.visible:
-				_set_graphics_menu_open(false)
-			else:
-				_set_options_menu_open(false)
-			get_viewport().set_input_as_handled()
-			return
 		if cheese_held:
 			_cancel_cheese_hold()
 			get_viewport().set_input_as_handled()
@@ -9752,66 +9751,68 @@ func _set_graphics_menu_open(open: bool) -> void:
 		return
 	gfx_panel.visible = open
 	if open:
-		## Keep graphics above the Options dim so it isn't buried / unclickable.
-		if options_root != null and is_instance_valid(options_root):
-			if gfx_panel.get_parent() != options_root:
-				gfx_panel.reparent(options_root)
-			options_root.move_child(gfx_panel, options_root.get_child_count() - 1)
-			gfx_panel.z_index = 20
-		else:
-			var ui_root: Control = get_node_or_null("UI/Root")
-			if ui_root != null and gfx_panel.get_parent() == ui_root:
-				ui_root.move_child(gfx_panel, ui_root.get_child_count() - 1)
-		## Nudge centered over the options panel.
+		## Parent under Options layer so it sits above the dim + panel.
+		var host: Node = options_root if options_root != null else get_node_or_null("UI/Root")
+		if host != null and is_instance_valid(host):
+			if gfx_panel.get_parent() != host:
+				gfx_panel.reparent(host)
+			host.move_child(gfx_panel, host.get_child_count() - 1)
+		gfx_panel.z_index = 30
 		gfx_panel.set_anchors_preset(Control.PRESET_CENTER)
-		gfx_panel.offset_left = -200.0
-		gfx_panel.offset_right = 200.0
-		gfx_panel.offset_top = -300.0
-		gfx_panel.offset_bottom = 300.0
+		gfx_panel.offset_left = -210.0
+		gfx_panel.offset_right = 210.0
+		gfx_panel.offset_top = -310.0
+		gfx_panel.offset_bottom = 310.0
 		_flash("Graphics settings", Color("90CAF9"))
 
 
 func _build_options_menu() -> void:
-	var ui_root: Control = get_node_or_null("UI/Root")
-	if ui_root == null:
-		return
-
-	## Hide old top-bar master volume — lives inside Options now.
+	## Own CanvasLayer so kitchen HUD / _input never blocks these buttons.
 	if master_vol_row != null and is_instance_valid(master_vol_row):
 		master_vol_row.visible = false
+
+	options_layer = CanvasLayer.new()
+	options_layer.name = "OptionsLayer"
+	options_layer.layer = 100
+	add_child(options_layer)
 
 	options_root = Control.new()
 	options_root.name = "OptionsMenu"
 	options_root.visible = false
-	options_root.z_index = 90
 	options_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	options_root.mouse_filter = Control.MOUSE_FILTER_STOP
-	ui_root.add_child(options_root)
+	options_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	options_layer.add_child(options_root)
 
-	var dim := ColorRect.new()
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.color = Color(0.02, 0.03, 0.05, 0.72)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	dim.gui_input.connect(func(ev: InputEvent):
+	options_dim = ColorRect.new()
+	options_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	options_dim.color = Color(0.02, 0.03, 0.05, 0.72)
+	options_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	options_dim.gui_input.connect(func(ev: InputEvent):
 		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-			## Click outside panel closes options (not while graphics subpanel open).
-			if gfx_panel == null or not gfx_panel.visible:
-				_set_options_menu_open(false)
+			if gfx_panel != null and gfx_panel.visible:
+				return
+			## Only close when clicking the dim itself (not the panel).
+			_set_options_menu_open(false)
 	)
-	options_root.add_child(dim)
+	options_root.add_child(options_dim)
 
 	options_panel = PanelContainer.new()
 	options_panel.name = "OptionsPanel"
+	options_panel.z_index = 2
+	options_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	options_panel.custom_minimum_size = Vector2(400, 0)
 	options_panel.set_anchors_preset(Control.PRESET_CENTER)
+	options_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	options_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	## Size from content; pin center.
 	options_panel.offset_left = -200.0
 	options_panel.offset_right = 200.0
-	options_panel.offset_top = -250.0
-	options_panel.offset_bottom = 250.0
-	options_panel.custom_minimum_size = Vector2(380, 0)
-	options_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	options_panel.offset_top = -280.0
+	options_panel.offset_bottom = 280.0
 	var psb := StyleBoxFlat.new()
-	psb.bg_color = Color(0.1, 0.11, 0.14, 0.97)
-	psb.border_color = Color(1.0, 0.72, 0.28, 0.9)
+	psb.bg_color = Color(0.1, 0.11, 0.14, 0.98)
+	psb.border_color = Color(1.0, 0.72, 0.28, 0.95)
 	psb.set_border_width_all(2)
 	psb.set_corner_radius_all(14)
 	psb.content_margin_left = 18
@@ -9823,11 +9824,13 @@ func _build_options_menu() -> void:
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
+	v.mouse_filter = Control.MOUSE_FILTER_STOP
 	options_panel.add_child(v)
 
 	var title := Label.new()
 	title.text = "OPTIONS"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UiFontsScript.apply_label(title, true, 26)
 	title.add_theme_color_override("font_color", Color(1.0, 0.88, 0.4))
 	v.add_child(title)
@@ -9835,12 +9838,14 @@ func _build_options_menu() -> void:
 	var hint := Label.new()
 	hint.text = "Esc to resume"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UiFontsScript.apply_label(hint, false, 12)
 	hint.add_theme_color_override("font_color", Color(0.7, 0.72, 0.76))
 	v.add_child(hint)
 
 	var vol_lab := Label.new()
 	vol_lab.text = "MASTER VOLUME"
+	vol_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UiFontsScript.apply_label(vol_lab, true, 13)
 	vol_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	v.add_child(vol_lab)
@@ -9851,64 +9856,46 @@ func _build_options_menu() -> void:
 	options_vol_slider.step = 0.01
 	options_vol_slider.value = master_volume_linear
 	options_vol_slider.custom_minimum_size = Vector2(0, 28)
-	options_vol_slider.focus_mode = Control.FOCUS_NONE
+	options_vol_slider.focus_mode = Control.FOCUS_ALL
+	options_vol_slider.mouse_filter = Control.MOUSE_FILTER_STOP
 	options_vol_slider.value_changed.connect(func(val: float):
 		_set_master_volume_linear(val, true)
 	)
 	v.add_child(options_vol_slider)
 
-	var gfx_open_btn := Button.new()
-	gfx_open_btn.text = "Graphics Settings…"
-	gfx_open_btn.custom_minimum_size = Vector2(0, 40)
-	UiFontsScript.apply_button(gfx_open_btn, true, 15)
-	gfx_open_btn.pressed.connect(func():
-		_sfx_click()
+	_options_add_btn(v, "Graphics Settings…", func():
 		_set_graphics_menu_open(true)
 	)
-	v.add_child(gfx_open_btn)
-
-	var sep := HSeparator.new()
-	v.add_child(sep)
-
-	var resume_btn := Button.new()
-	resume_btn.text = "Resume"
-	resume_btn.custom_minimum_size = Vector2(0, 42)
-	UiFontsScript.apply_button(resume_btn, true, 16)
-	resume_btn.pressed.connect(func():
-		_sfx_click()
+	v.add_child(HSeparator.new())
+	_options_add_btn(v, "Resume", func():
 		_set_options_menu_open(false)
 	)
-	v.add_child(resume_btn)
-
-	var restart_opt := Button.new()
-	restart_opt.text = "Restart Day"
-	restart_opt.custom_minimum_size = Vector2(0, 40)
-	UiFontsScript.apply_button(restart_opt, true, 15)
-	restart_opt.pressed.connect(func():
-		_sfx_click()
+	_options_add_btn(v, "Restart Day", func():
 		_options_restart_day()
 	)
-	v.add_child(restart_opt)
-
-	options_lobby_btn = Button.new()
-	options_lobby_btn.text = "Back to Lobby"
-	options_lobby_btn.custom_minimum_size = Vector2(0, 40)
-	UiFontsScript.apply_button(options_lobby_btn, true, 15)
-	options_lobby_btn.pressed.connect(func():
-		_sfx_click()
+	options_lobby_btn = _options_add_btn(v, "Back to Lobby", func():
 		_options_back_to_lobby()
 	)
-	v.add_child(options_lobby_btn)
-
-	var exit_btn := Button.new()
-	exit_btn.text = "Exit Game"
-	exit_btn.custom_minimum_size = Vector2(0, 40)
-	UiFontsScript.apply_button(exit_btn, true, 15)
-	exit_btn.pressed.connect(func():
-		_sfx_click()
+	_options_add_btn(v, "Exit Game", func():
 		_options_exit_game()
 	)
-	v.add_child(exit_btn)
+
+
+func _options_add_btn(parent: Control, text: String, action: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(0, 42)
+	btn.focus_mode = Control.FOCUS_ALL
+	btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_button(btn, true, 15)
+	## button_down fires even if something eats the release — more reliable than pressed alone.
+	btn.button_down.connect(func():
+		_sfx_click()
+		action.call()
+	)
+	parent.add_child(btn)
+	return btn
 
 
 func _toggle_options_menu() -> void:
@@ -9919,6 +9906,8 @@ func _set_options_menu_open(open: bool) -> void:
 	options_menu_open = open
 	if options_root != null and is_instance_valid(options_root):
 		options_root.visible = open
+	if options_layer != null and is_instance_valid(options_layer):
+		options_layer.visible = open
 	if not open:
 		_set_graphics_menu_open(false)
 	else:
@@ -9936,7 +9925,6 @@ func _set_options_menu_open(open: bool) -> void:
 func _options_restart_day() -> void:
 	_set_options_menu_open(false)
 	if not playing and game_over_panel != null and game_over_panel.visible:
-		## End-of-day panel already has Start Day — mirror that path.
 		if mp_enabled:
 			mp_restart_day.rpc()
 		else:
