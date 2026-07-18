@@ -1785,6 +1785,11 @@ func _input(event: InputEvent) -> void:
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
+			## Syrup jugs beat CUPS rack / empty dispenser cup when aimed at a tank.
+			if _soda_flavor_under_cursor(event.position):
+				if _try_soda_flavor_click(event.position):
+					get_viewport().set_input_as_handled()
+					return
 			## Cups / tools win over syrup jugs when the cursor is on a cup / tray.
 			if _cup_click_should_win(event.position):
 				if _try_grab_nearest_tool(event.position):
@@ -10217,7 +10222,7 @@ func _build_soda_station() -> void:
 		var tank_mat := _add_soda_flavor_tank(root, fid, Vector3(tank_xs[i], 0.66, 0.0))
 		soda_flavor_mats[fid] = tank_mat
 
-		## Big pick volume on the jug itself.
+		## Big pick volume on the jug itself (proud of the cabinet so cola isn't stolen by CUPS).
 		var area := Area3D.new()
 		area.name = "FlavorArea_%s" % fid
 		area.input_ray_pickable = true
@@ -10225,10 +10230,10 @@ func _build_soda_station() -> void:
 		area.collision_mask = 0
 		area.monitoring = false
 		area.monitorable = true
-		area.position = Vector3(tank_xs[i], 0.66, 0.02)
+		area.position = Vector3(tank_xs[i], 0.68, 0.08)
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = Vector3(0.26, 0.34, 0.28)
+		box.size = Vector3(0.28, 0.40, 0.34)
 		shape.shape = box
 		area.add_child(shape)
 		root.add_child(area)
@@ -10707,7 +10712,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_lab.outline_modulate = Color(0, 0, 0, 0.8)
 	rack.add_child(cup_lab)
 
-	## Grab volume — bumped a bit higher so the click lands on the nest, not the grate.
+	## Grab volume — nest / open mouth only (keep below the syrup tanks).
 	var rack_grab := Area3D.new()
 	rack_grab.name = "CupRackGrab"
 	rack_grab.input_ray_pickable = true
@@ -10715,10 +10720,10 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack_grab.collision_mask = 0
 	rack_grab.monitoring = false
 	rack_grab.monitorable = true
-	rack_grab.position = Vector3(0.0, 0.11, 0.08)
+	rack_grab.position = Vector3(0.0, -0.02, 0.10)
 	var rack_shape := CollisionShape3D.new()
 	var rack_box := BoxShape3D.new()
-	rack_box.size = Vector3(0.28, 0.54, 0.24)
+	rack_box.size = Vector3(0.20, 0.28, 0.18)
 	rack_shape.shape = rack_box
 	rack_grab.add_child(rack_shape)
 	rack.add_child(rack_grab)
@@ -11820,10 +11825,16 @@ func _refresh_soda_flavor_lights() -> void:
 
 
 func _cup_click_should_win(screen_pos: Vector2) -> bool:
-	## Prefer grabbing/moving a cup over flavor pads when the cursor is near either.
+	## Prefer grabbing/moving a cup over flavor pads — but never over a syrup jug.
 	if cup_held:
 		return false
-	if _cursor_near_cup_rack(screen_pos) or _cup_rack_ray_hit(screen_pos):
+	## Cola / lime / orange tanks always beat the CUPS rack steal radius.
+	if _soda_flavor_under_cursor(screen_pos):
+		return false
+	if _cup_rack_ray_hit(screen_pos):
+		return true
+	## Soft screen proximity for the nest — keep tight so tanks stay clickable.
+	if _cursor_near_cup_rack(screen_pos):
 		return true
 	if _ray_hits_any_cup(screen_pos):
 		return true
@@ -11832,12 +11843,14 @@ func _cup_click_should_win(screen_pos: Vector2) -> bool:
 	return false
 
 
-func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
+func _soda_flavor_under_cursor(screen_pos: Vector2) -> bool:
+	return _soda_flavor_id_at(screen_pos) != ""
+
+
+func _soda_flavor_id_at(screen_pos: Vector2) -> String:
+	## Ray first, then a generous screen hit on the jug centers.
 	if camera == null or soda_flavor_areas.is_empty():
-		return false
-	## Don't steal clicks meant for cups / drip tray / holder.
-	if not cup_held and _cup_click_should_win(screen_pos):
-		return false
+		return ""
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
@@ -11845,28 +11858,32 @@ func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
 	q.collide_with_bodies = false
 	q.collision_mask = SODA_FLAVOR_COLLISION_LAYER
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	if hit.is_empty():
-		## Screen fallback for the syrup jugs up top.
-		var best_id := ""
-		var best_d := 52.0
+	if not hit.is_empty():
+		var col = hit.get("collider")
 		for fid in soda_flavor_areas.keys():
-			var area: Area3D = soda_flavor_areas[fid]
-			if area == null or not is_instance_valid(area):
-				continue
-			var d := screen_pos.distance_to(camera.unproject_position(area.global_position))
-			if d < best_d:
-				best_d = d
-				best_id = str(fid)
-		if best_id == "":
-			return false
-		_set_soda_flavor(best_id)
-		return true
-	var col = hit.get("collider")
+			if soda_flavor_areas[fid] == col:
+				return str(fid)
+	var best_id := ""
+	var best_d := 78.0
 	for fid in soda_flavor_areas.keys():
-		if soda_flavor_areas[fid] == col:
-			_set_soda_flavor(str(fid))
-			return true
-	return false
+		var area: Area3D = soda_flavor_areas[fid]
+		if area == null or not is_instance_valid(area):
+			continue
+		var d := screen_pos.distance_to(camera.unproject_position(area.global_position))
+		if d < best_d:
+			best_d = d
+			best_id = str(fid)
+	return best_id
+
+
+func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
+	if camera == null or soda_flavor_areas.is_empty():
+		return false
+	var fid := _soda_flavor_id_at(screen_pos)
+	if fid == "":
+		return false
+	_set_soda_flavor(fid)
+	return true
 
 
 func _set_soda_flavor(fid: String) -> void:
@@ -11882,11 +11899,12 @@ func _set_soda_flavor(fid: String) -> void:
 
 
 func _cursor_near_cup_rack(screen_pos: Vector2) -> bool:
-	## Take a fresh cup from the left CUPS peg (not the drip tray).
+	## Take a fresh cup from the left CUPS peg (not the drip tray / cola jug).
 	if camera == null or cup_home == Vector3.ZERO:
 		return false
-	var rack_pt := camera.unproject_position(cup_home + Vector3(0.0, 0.20, 0.0))
-	return screen_pos.distance_to(rack_pt) < 128.0
+	## Aim at the nest mouth — not high into the syrup tanks.
+	var rack_pt := camera.unproject_position(cup_home + Vector3(0.0, 0.06, 0.04))
+	return screen_pos.distance_to(rack_pt) < 70.0
 
 
 func _cup_rack_ray_hit(screen_pos: Vector2) -> bool:
