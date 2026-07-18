@@ -10,9 +10,9 @@ const STATION_BURGER_SCALE := 1.0
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
 const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
 const STATION_PATTY_CHEESE_BUILD_SCALE := 0.768 ## melt art (10% smaller than 0.853)
-## Mild finished-stack nest — crown settles, heel rises; keep light so meat stays visible.
-const BUILD_BUN_NEST_BOTTOM_PX := 5.0
-const BUILD_BUN_NEST_TOP_PX := 7.0
+## Mild finished-stack nest — heel tucks under meat; crown stays clear of patty.
+const BUILD_BUN_NEST_BOTTOM_PX := 2.0
+const BUILD_BUN_NEST_TOP_PX := -6.0 ## negative = lift crown off meat (was +7 glue)
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -14419,10 +14419,10 @@ func _refresh_station(index: int) -> void:
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
-	## Slightly airier steps so bigger patties aren't buried by the nest.
-	var step_y := 22.0 * layer_scale
+	## Stack step — room between layers without floating the meat.
+	var step_y := 18.0 * layer_scale
 	var layer_w := mini(320.0, stage_w * 0.96)
-	## Extra lift after bottom bun so meat doesn't sit flush on the crumb.
+	## Small gap above heel so patty sits on the bottom bun (not glued to the crown).
 	var stack_lift := 0.0
 	var bottom_row: Control = null
 	var top_row: Control = null
@@ -14477,9 +14477,12 @@ func _refresh_station(index: int) -> void:
 			origin_y - stack_lift - float(stack_i) * step_y - h * 0.72
 		)
 		if item == "bun_bottom":
-			## Keep heel clear of meat before the light nest pinch.
-			stack_lift += 12.0 * layer_scale
+			## Modest lift so meat rests on the heel with a little air.
+			stack_lift += 4.0 * layer_scale
 			bottom_row = row
+		elif item == "patty":
+			## Keep crown from sitting on the meat.
+			stack_lift += 6.0 * layer_scale
 		elif item == "bun_top":
 			top_row = row
 
