@@ -75,6 +75,8 @@ const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
 const BunToastScript := preload("res://scripts/bun_toast.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
+## DISABLED — set true later to restore grill-toastable bun pairs (see bun_toast.gd).
+const BUN_TOAST_ENABLED := false
 ## DISABLED — armed hostiles backed up under GREAT IDEA THAT NOBODY LIKES/
 const TERRORISTS_ENABLED := false
 # const TerroristCustomerScript := preload("res://GREAT IDEA THAT NOBODY LIKES/terrorist_customer.gd")
@@ -1122,7 +1124,7 @@ func _process(delta: float) -> void:
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 			if not _is_bun_toast(p):
 				_update_patty_warm_hold(p, delta)
-			else:
+			elif BUN_TOAST_ENABLED:
 				_update_bun_toast_hold(p, delta)
 	_update_station_cheese_melt(delta)
 	_update_supply_freshness(delta)
@@ -3651,7 +3653,8 @@ func _begin_patty_drag(patty: Area3D) -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
 	if _is_bun_toast(patty):
-		_pickup_bun_from_grill(patty)
+		if BUN_TOAST_ENABLED:
+			_pickup_bun_from_grill(patty)
 		return
 	## Holding a scooped patty: still flip others on the grill; scooping another is blocked.
 	if spatula_patty != null:
@@ -3873,6 +3876,8 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 		_reject_second_scoop("Already holding a patty")
 		return
 	if _is_bun_toast(patty):
+		if not BUN_TOAST_ENABLED:
+			return
 		## Treat like a ready scoop — no flip gate.
 		pass
 	elif not patty.flipped_once or not patty.can_scoop():
@@ -3925,6 +3930,8 @@ func _try_drag_patty_to_station(patty: Area3D, station_idx: int) -> void:
 	if patty == null or not is_instance_valid(patty):
 		return
 	if _is_bun_toast(patty):
+		if not BUN_TOAST_ENABLED:
+			return
 		_pickup_bun_from_grill(patty)
 		if spatula_patty != null:
 			_drop_spatula_on_station(station_idx)
@@ -8027,6 +8034,8 @@ func _station_burgers_seasoned(station_index: int) -> bool:
 
 func _station_bun_toast_mul(station_index: int) -> float:
 	## Shared top+bottom toast clock — peak at 2.0s perfect.
+	if not BUN_TOAST_ENABLED:
+		return 1.0
 	if station_index < 0 or station_index >= stations.size():
 		return 1.0
 	var cook := maxf(
@@ -13276,6 +13285,8 @@ func _is_bun_toast(node) -> bool:
 
 func _seed_cutting_board_buns(station_index: int = STATION_CRAFT) -> void:
 	## Empty Build board always starts with a toastable top + bottom bun.
+	if not BUN_TOAST_ENABLED:
+		return
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
 	var st: Dictionary = stations[station_index]
@@ -13344,6 +13355,8 @@ func _extract_station_bun(station_index: int, item_index: int) -> String:
 
 
 func _make_held_bun(_kind: String = "bun_pair", cook_time: float = 0.0) -> Area3D:
+	if not BUN_TOAST_ENABLED:
+		return null
 	var bun = BunToastScript.new()
 	bun.setup("bun_pair", cook_time)
 	bun.is_held = true
@@ -13358,7 +13371,7 @@ func _make_held_bun(_kind: String = "bun_pair", cook_time: float = 0.0) -> Area3
 
 func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 	## Click either bun half → lift the whole pair (top + bottom toast together).
-	if not playing:
+	if not BUN_TOAST_ENABLED or not playing:
 		return
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("EF5350"))
@@ -13418,7 +13431,7 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 
 
 func _pickup_bun_from_grill(bun: Area3D) -> void:
-	if not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
+	if not BUN_TOAST_ENABLED or not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
 		return
 	if spatula_patty != null and spatula_patty != bun:
 		_reject_second_scoop("Already holding something")
@@ -13452,6 +13465,16 @@ func _pickup_bun_from_grill(bun: Area3D) -> void:
 
 func _commit_bun_to_build(bun: Area3D) -> void:
 	if not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
+		return
+	if not BUN_TOAST_ENABLED:
+		## Feature parked — free any leftover toast node instead of rebuilding toast flow.
+		if spatula_patty == bun:
+			spatula_patty = null
+			spatula_owner_id = 0
+			spatula_from_build = false
+			spatula_lmb_held = false
+			_refresh_spatula_ui()
+		bun.queue_free()
 		return
 	var cook := float(bun.cook_time)
 	var st: Dictionary = stations[STATION_CRAFT]
@@ -14556,7 +14579,7 @@ func _refresh_station(index: int) -> void:
 				if item_id == "patty":
 					## Click → held 3D patty so you can place it back on the grill.
 					_pickup_station_patty_to_hand(index, from_i)
-				elif item_id == "bun_bottom" or item_id == "bun_top":
+				elif BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top"):
 					_pickup_station_bun_to_hand(index, from_i)
 				else:
 					_select_station_layer(index, from_i)
@@ -14564,8 +14587,8 @@ func _refresh_station(index: int) -> void:
 		)
 		row.set_drag_forwarding(
 			func(_pos):
-				if item_id == "patty" or item_id == "bun_bottom" or item_id == "bun_top":
-					## Patties / buns use click-to-hand; toppings stay Control-drag.
+				if item_id == "patty" or (BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top")):
+					## Patties / toastable buns use click-to-hand; toppings stay Control-drag.
 					return null
 				var color_preview := ColorRect.new()
 				color_preview.custom_minimum_size = Vector2(100, 16)

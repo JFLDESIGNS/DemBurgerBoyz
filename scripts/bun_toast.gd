@@ -1,5 +1,6 @@
 ## Toastable bun pair on the flat-top — 2D top + bottom art, shared cook clock.
 ## Perfect toast at 2.0s; burns at 4.2s.
+## Gated off in game.gd via BUN_TOAST_ENABLED — flip that true to restore.
 extends Area3D
 
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
