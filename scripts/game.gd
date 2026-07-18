@@ -8,8 +8,8 @@ const STATION_CRAFT := 0
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
-const STATION_PATTY_BUILD_SCALE := 0.78 ## meat disc — match bun footprint
-const STATION_PATTY_CHEESE_BUILD_SCALE := 0.86 ## melt art sits on the patty
+const STATION_PATTY_BUILD_SCALE := 0.66 ## bare meat — sit inside bun rim
+const STATION_PATTY_CHEESE_BUILD_SCALE := 0.70 ## melt art (cropped) — match bare patty
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -14084,9 +14084,9 @@ func _layer_width_mul(item: String) -> float:
 		"bun_bottom":
 			return 0.92
 		"patty":
-			return 1.28
+			return 1.12
 		"patty_cheese":
-			return 1.32
+			return 1.14
 		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
 			return 1.18
 		"ketchup", "mustard":
@@ -14102,9 +14102,9 @@ func _layer_img_height(item: String) -> float:
 		"bun_bottom":
 			return 44.0
 		"patty":
-			return 78.0
+			return 64.0
 		"patty_cheese":
-			return 86.0
+			return 66.0
 		"bacon":
 			return 58.0
 		"lettuce":

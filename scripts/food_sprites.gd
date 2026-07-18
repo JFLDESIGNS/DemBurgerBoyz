@@ -110,17 +110,63 @@ static func burger_cheese_tex() -> Texture2D:
 					img.decompress()
 				img.convert(Image.FORMAT_RGBA8)
 				_knockout_dark_backdrop(img)
+				## Square sheet has huge empty padding — crop so Build scale matches bare patty.
+				img = _crop_to_opaque(img)
 				tex = ImageTexture.create_from_image(img)
 			else:
 				tex = res
 	if tex == null:
 		var fallback := "res://IMAGES/BURGERCHEEESE.png"
 		if ResourceLoader.exists(fallback):
-			tex = load(fallback) as Texture2D
+			var fb = load(fallback)
+			if fb is Texture2D:
+				var img2: Image = fb.get_image()
+				if img2 != null:
+					if img2.is_compressed():
+						img2.decompress()
+					img2.convert(Image.FORMAT_RGBA8)
+					_knockout_dark_backdrop(img2)
+					img2 = _crop_to_opaque(img2)
+					tex = ImageTexture.create_from_image(img2)
+				else:
+					tex = fb
 	if tex == null:
 		tex = get_tex("cheese")
 	_cache["burger_cheese"] = tex
 	return tex
+
+
+static func _crop_to_opaque(img: Image, alpha_cut: float = 0.08) -> Image:
+	## Trim transparent / knocked-out padding so TextureRect aspect matches the food.
+	if img == null:
+		return img
+	var w := img.get_width()
+	var h := img.get_height()
+	if w < 2 or h < 2:
+		return img
+	var min_x := w
+	var max_x := -1
+	var min_y := h
+	var max_y := -1
+	for y in h:
+		for x in w:
+			if img.get_pixel(x, y).a > alpha_cut:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+				min_y = mini(min_y, y)
+				max_y = maxi(max_y, y)
+	if max_x < min_x or max_y < min_y:
+		return img
+	## Tiny pad so melt edges aren't clipped.
+	min_x = maxi(0, min_x - 2)
+	min_y = maxi(0, min_y - 2)
+	max_x = mini(w - 1, max_x + 2)
+	max_y = mini(h - 1, max_y + 2)
+	var cw := max_x - min_x + 1
+	var ch := max_y - min_y + 1
+	if cw >= w - 1 and ch >= h - 1:
+		return img
+	return img.get_region(Rect2i(min_x, min_y, cw, ch))
 
 
 static func prep_ingredients_tex() -> Texture2D:
