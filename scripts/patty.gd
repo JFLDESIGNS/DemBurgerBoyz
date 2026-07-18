@@ -516,7 +516,8 @@ func apply_mp_state(
 	px: float,
 	py: float,
 	pz: float,
-	p_slot: int
+	p_slot: int,
+	p_perfect_flip: bool = false
 ) -> void:
 	## Absolute cook snapshot from the host — keeps both kitchens identical.
 	cook_time = p_cook
@@ -528,6 +529,7 @@ func apply_mp_state(
 	warm_hold_time = p_hold
 	is_held = p_held
 	slot_index = p_slot
+	perfect_flip = p_perfect_flip
 	position = Vector3(px, py, pz)
 	_rest_x = px
 	_rest_z = pz

@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 /**
  * Burger Pals online room relay for Railway.
- * Hosts create a 4-digit code; joiners enter that code.
+ * Hosts create a 4-digit code; up to 4 cooks can join (including mid-round).
  * All game packets are relayed over WebSocket (works across the internet / NAT).
  */
 const http = require("http");
 const { WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT || 8080);
-const MAX_PLAYERS = 2;
+const MAX_PLAYERS = 4;
 const ROOM_IDLE_MS = 45 * 60 * 1000;
+const HEADER_SIZE = 10;
 
-/** @type {Map<string, { code: string, host: import('ws').WebSocket|null, client: import('ws').WebSocket|null, created: number }>} */
+/**
+ * @typedef {{ code: string, peers: Map<number, import('ws').WebSocket>, created: number }} Room
+ * @type {Map<string, Room>}
+ */
 const rooms = new Map();
 
 function normalizeCode(raw) {
@@ -24,7 +28,7 @@ function randomCode() {
   for (let i = 0; i < 64; i++) {
     const code = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
     const room = rooms.get(code);
-    if (!room || (!room.host && !room.client)) return code;
+    if (!room || room.peers.size === 0) return code;
   }
   return String(Date.now() % 10000).padStart(4, "0");
 }
@@ -33,6 +37,27 @@ function sendJson(ws, obj) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify(obj));
   }
+}
+
+function readU32(buf, offset) {
+  return buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24);
+}
+
+function alivePeers(room) {
+  /** @type {number[]} */
+  const ids = [];
+  for (const [id, sock] of room.peers) {
+    if (sock && sock.readyState === 1) ids.push(id);
+  }
+  return ids.sort((a, b) => a - b);
+}
+
+function nextPeerId(room) {
+  for (let id = 1; id <= MAX_PLAYERS; id++) {
+    const sock = room.peers.get(id);
+    if (!sock || sock.readyState !== 1) return id;
+  }
+  return 0;
 }
 
 function clearSocketRoom(ws) {
@@ -44,13 +69,14 @@ function clearSocketRoom(ws) {
     ws.peerId = 0;
     return;
   }
-  const other = ws.peerId === 1 ? room.client : room.host;
-  if (ws.peerId === 1) room.host = null;
-  if (ws.peerId === 2) room.client = null;
-  if (other) {
-    sendJson(other, { op: "peer_left", peer_id: ws.peerId });
+  const leftId = ws.peerId;
+  room.peers.delete(leftId);
+  for (const [, other] of room.peers) {
+    if (other && other.readyState === 1) {
+      sendJson(other, { op: "peer_left", peer_id: leftId });
+    }
   }
-  if (!room.host && !room.client) {
+  if (room.peers.size === 0) {
     rooms.delete(code);
   }
   ws.roomCode = null;
@@ -60,9 +86,32 @@ function clearSocketRoom(ws) {
 function pruneRooms() {
   const now = Date.now();
   for (const [code, room] of rooms) {
-    if (now - room.created > ROOM_IDLE_MS && !room.host && !room.client) {
+    if (now - room.created > ROOM_IDLE_MS && room.peers.size === 0) {
       rooms.delete(code);
     }
+  }
+}
+
+function forwardBinary(ws, data) {
+  if (!ws.roomCode) return;
+  const room = rooms.get(ws.roomCode);
+  if (!room) return;
+  if (!Buffer.isBuffer(data) && !(data instanceof Uint8Array)) return;
+  const buf = Buffer.from(data);
+  if (buf.length < HEADER_SIZE) return;
+  const target = readU32(buf, 5);
+  if (target === 0) {
+    for (const [id, other] of room.peers) {
+      if (id === ws.peerId) continue;
+      if (other && other.readyState === 1) {
+        other.send(buf, { binary: true });
+      }
+    }
+    return;
+  }
+  const dest = room.peers.get(target);
+  if (dest && dest.readyState === 1 && target !== ws.peerId) {
+    dest.send(buf, { binary: true });
   }
 }
 
@@ -74,6 +123,7 @@ const server = http.createServer((req, res) => {
         ok: true,
         service: "burger-pals-mp-relay",
         rooms: rooms.size,
+        max_players: MAX_PLAYERS,
       })
     );
     return;
@@ -96,14 +146,7 @@ wss.on("connection", (ws) => {
 
   ws.on("message", (data, isBinary) => {
     if (isBinary) {
-      // Binary game packet: forward to the other peer in the room.
-      if (!ws.roomCode) return;
-      const room = rooms.get(ws.roomCode);
-      if (!room) return;
-      const other = ws.peerId === 1 ? room.client : room.host;
-      if (other && other.readyState === 1) {
-        other.send(data, { binary: true });
-      }
+      forwardBinary(ws, data);
       return;
     }
 
@@ -121,17 +164,21 @@ wss.on("connection", (ws) => {
       pruneRooms();
       let code = normalizeCode(msg.code || "");
       if (!code) code = randomCode();
-      if (rooms.has(code) && rooms.get(code).host) {
+      const existing = rooms.get(code);
+      if (existing && existing.peers.has(1) && existing.peers.get(1)?.readyState === 1) {
         code = randomCode();
       }
-      const room = { code, host: ws, client: null, created: Date.now() };
+      /** @type {Room} */
+      const room = { code, peers: new Map(), created: Date.now() };
       rooms.set(code, room);
+      room.peers.set(1, ws);
       ws.roomCode = code;
       ws.peerId = 1;
       sendJson(ws, {
         op: "hosted",
         code,
         peer_id: 1,
+        max_players: MAX_PLAYERS,
         name: String(msg.name || "Host").slice(0, 24),
       });
       return;
@@ -145,28 +192,35 @@ wss.on("connection", (ws) => {
         return;
       }
       const room = rooms.get(code);
-      if (!room || !room.host || room.host.readyState !== 1) {
+      if (!room || !room.peers.has(1) || room.peers.get(1)?.readyState !== 1) {
         sendJson(ws, { op: "error", msg: `no room ${code}` });
         return;
       }
-      if (room.client && room.client.readyState === 1) {
+      const peerId = nextPeerId(room);
+      if (!peerId) {
         sendJson(ws, { op: "error", msg: "room full" });
         return;
       }
-      room.client = ws;
+      room.peers.set(peerId, ws);
       ws.roomCode = code;
-      ws.peerId = 2;
+      ws.peerId = peerId;
+      const others = alivePeers(room).filter((id) => id !== peerId);
       sendJson(ws, {
         op: "joined",
         code,
-        peer_id: 2,
+        peer_id: peerId,
+        max_players: MAX_PLAYERS,
+        peers: others,
         name: String(msg.name || "Cook").slice(0, 24),
       });
-      sendJson(room.host, {
-        op: "peer_joined",
-        peer_id: 2,
-        name: String(msg.name || "Cook").slice(0, 24),
-      });
+      for (const id of others) {
+        const other = room.peers.get(id);
+        sendJson(other, {
+          op: "peer_joined",
+          peer_id: peerId,
+          name: String(msg.name || "Cook").slice(0, 24),
+        });
+      }
       return;
     }
 
@@ -200,5 +254,5 @@ setInterval(() => {
 }, 25000);
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Burger Pals MP relay on :${PORT}`);
+  console.log(`Burger Pals MP relay on :${PORT} (max ${MAX_PLAYERS} players)`);
 });

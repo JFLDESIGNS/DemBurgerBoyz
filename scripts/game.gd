@@ -1171,15 +1171,15 @@ func _process(delta: float) -> void:
 		if not mp_enabled or NetManager.is_host():
 			spawn_timer -= delta
 			var cap := _customer_cap()
-			if not shift_closing and spawn_timer <= 0.0 and customers.is_empty():
+			var waiting_n := _waiting_customer_count()
+			if not shift_closing and spawn_timer <= 0.0 and waiting_n < cap:
 				# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
 				# 	_spawn_terrorist_wave()
 				# 	spawn_timer = _next_spawn_delay()
-				if customers.size() < cap:
-					_spawn_customer()
-					spawn_timer = _next_spawn_delay()
+				_spawn_customer()
+				spawn_timer = _next_spawn_delay()
 
-	rush_mode = customers.size() >= maxi(2, _customer_cap() - 1) and day >= 2
+	rush_mode = _waiting_customer_count() >= maxi(2, _customer_cap() - 1) and day >= 2
 
 	if shift_closing and customers.is_empty() and not service_window_closed:
 		if mp_enabled:
@@ -1237,12 +1237,13 @@ func _update_station_freshness(delta: float) -> void:
 		if st["items"].is_empty():
 			_reset_station_freshness(i)
 			continue
+		## Co-op guests take absolute freshness from host snapshots — don't local-tick.
+		if mp_enabled and not NetManager.is_host():
+			_refresh_freshness_label(i)
+			continue
 		st["freshness"] = maxf(0.0, float(st["freshness"]) - delta)
 		_refresh_freshness_label(i)
 		if float(st["freshness"]) <= 0.0 and not st.get("spoiled", false):
-			## Co-op: host owns spoil so both boards clear together.
-			if mp_enabled and not NetManager.is_host():
-				continue
 			st["spoiled"] = true
 			if mp_enabled:
 				mp_clear_station.rpc(i)
@@ -1321,17 +1322,36 @@ func _first_customer_delay() -> float:
 
 
 func _customer_cap() -> int:
-	## One order at a time — next customer only after the current is done.
-	return 1
+	## Day 1: one at a time. Day 2+: a growing line (up to 4 lanes).
+	match day:
+		1:
+			return 1
+		2:
+			return 2
+		3:
+			return 3
+		_:
+			return MAX_CUSTOMERS
+
+
+func _waiting_customer_count() -> int:
+	var n := 0
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if bool(c.get("is_leaving")):
+			continue
+		n += 1
+	return n
 
 
 func _next_spawn_delay() -> float:
 	var day_progress := 1.0 - clampf(day_time / DAY_LENGTH, 0.0, 1.0)
 	match day:
 		1: return lerpf(26.0, 14.0, day_progress) + randf_range(0.0, 5.0)
-		2: return lerpf(16.0, 9.0, day_progress) + randf_range(0.0, 4.0)
-		3: return lerpf(12.0, 6.5, day_progress) + randf_range(0.0, 3.0)
-		_: return lerpf(8.0, 4.0, minf(1.0, day_progress + (day - 4) * 0.1)) + randf_range(0.0, 2.0)
+		2: return lerpf(12.0, 6.5, day_progress) + randf_range(0.0, 2.5)
+		3: return lerpf(9.0, 4.5, day_progress) + randf_range(0.0, 2.0)
+		_: return lerpf(6.5, 3.0, minf(1.0, day_progress + (day - 4) * 0.1)) + randf_range(0.0, 1.5)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -10821,7 +10841,7 @@ func _spawn_customer() -> void:
 		patience += 20.0
 	elif day == 3:
 		patience += 10.0
-	var lane := customers.size()
+	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
 	var skin_idx := randi() % CustomerScript.CHAR_SKINS.size()
 	var face_style := randi() % 3
 	if mp_enabled:
@@ -14091,6 +14111,7 @@ func _complete_serve(station_index: int) -> void:
 			"pay_mul": float(cook_r.get("pay_mul", 1.0)),
 			"text": "Meh… OK",
 		}
+	var guest_mp := mp_enabled and not NetManager.is_host()
 	var pay: Dictionary = selected_customer.receive_burger(
 		items, patty_mult, combo, tip_factor, fresh_r, seasoned
 	)
@@ -14101,9 +14122,11 @@ func _complete_serve(station_index: int) -> void:
 	if selected_customer.has_method("stop_order_clock"):
 		selected_customer.stop_order_clock()
 
+	## Host/solo owns money + combo; guests keep FX/flashes then take economy sync.
 	if payout > 0:
-		money += payout
-		total_served += 1
+		if not guest_mp:
+			money += payout
+			total_served += 1
 		if game_audio:
 			var grade_lab := str(cook_r.get("label", ""))
 			## Order-up bell already rang at serve start — grade tunes only here.
@@ -14114,13 +14137,14 @@ func _complete_serve(station_index: int) -> void:
 			not was_meh
 			and ((bool(pay.get("perfect", false)) and patty_mult >= 1.0 and fresh_r > 0.4) or speed_top)
 		)
-		if was_perfect:
-			combo += 1
-			perfect_serves += 1
-		elif not was_meh and float(result.quality) > 0.85 and fresh_r > 0.4 and int(cook_r["score"]) >= 70:
-			combo += 1
-		else:
-			combo = 0
+		if not guest_mp:
+			if was_perfect:
+				combo += 1
+				perfect_serves += 1
+			elif not was_meh and float(result.quality) > 0.85 and fresh_r > 0.4 and int(cook_r["score"]) >= 70:
+				combo += 1
+			else:
+				combo = 0
 		if was_meh:
 			_flash(
 				"+%s  Meh… OK — needs seasoning (no tip)%s" % [
@@ -14142,28 +14166,32 @@ func _complete_serve(station_index: int) -> void:
 			var fresh_note := " (stale)" if fresh_r <= 0.4 else ""
 			_flash("+%s%s%s" % [_format_money(float(payout)), fresh_note, cook_bit], cook_r["color"])
 	else:
-		combo = 0
+		if not guest_mp:
+			combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
 
-	var review_stars := _review_stars_from_serve(
-		payout,
-		was_meh,
-		payout <= 0,
-		cook_r,
-		float(result.quality)
-	)
-	var review_kind := "good"
-	if payout <= 0:
-		review_kind = "wrong"
-	elif was_meh:
-		review_kind = "meh"
-	_maybe_record_social_review(review_stars, review_kind, tip_amt)
+	if not guest_mp:
+		var review_stars := _review_stars_from_serve(
+			payout,
+			was_meh,
+			payout <= 0,
+			cook_r,
+			float(result.quality)
+		)
+		var review_kind := "good"
+		if payout <= 0:
+			review_kind = "wrong"
+		elif was_meh:
+			review_kind = "meh"
+		_maybe_record_social_review(review_stars, review_kind, tip_amt)
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
 	if mp_enabled and NetManager.is_host() and not _mp_applying:
 		_mp_broadcast_economy()
 		_mp_broadcast_customers()
+		_mp_broadcast_grill()
+		_mp_broadcast_station(station_index)
 
 
 func _serve_reject_hint(order: Array, station_index: int) -> void:
@@ -14598,7 +14626,7 @@ func _setup_multiplayer_ui() -> void:
 	v.add_child(title)
 
 	var tip := Label.new()
-	tip.text = "Online: paste your Railway relay URL, Host Room, share the 4-digit code.\nSame Wi‑Fi still works without a relay."
+	tip.text = "Up to 4 cooks. Host Room, share the code — Ready, then Start at 2+ (or wait for 4).\nFriends can join mid-shift with the same code. Same Wi‑Fi works without a relay."
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(tip, false, 12)
@@ -14740,13 +14768,15 @@ func _setup_multiplayer_ui() -> void:
 	ready_row.add_child(_mp_ready_btn)
 	_mp_ready_btn.pressed.connect(func():
 		_sfx_click()
-		NetManager.set_ready(true)
+		var me := NetManager.my_id()
+		var now_ready := not bool(NetManager.peers_ready.get(me, false))
+		NetManager.set_ready(now_ready)
 		_mp_refresh_lobby_status()
 	)
 
 	_mp_start_coop_btn = Button.new()
 	_mp_start_coop_btn.text = "Start Co-op"
-	_mp_start_coop_btn.custom_minimum_size = Vector2(140, 40)
+	_mp_start_coop_btn.custom_minimum_size = Vector2(160, 40)
 	_mp_start_coop_btn.visible = false
 	UiFontsScript.apply_button(_mp_start_coop_btn, true, 16)
 	ready_row.add_child(_mp_start_coop_btn)
@@ -14853,7 +14883,7 @@ func _mp_on_join_localhost() -> void:
 			_mp_join_by_code(code)
 			return
 	for r in NetManager.discovered_rooms:
-		if int(r.get("players", 1)) < int(r.get("max", 2)):
+		if int(r.get("players", 1)) < int(r.get("max", NetManager.MAX_PLAYERS)):
 			_mp_join_by_code(str(r.get("code", "")))
 			return
 	_flash("No open room found — Host one, or enter a code", Color("FFA726"))
@@ -14936,8 +14966,20 @@ func _mp_refresh_lobby_status() -> void:
 		return
 	var n := NetManager.peer_count()
 	var who := "Host" if NetManager.is_host() else "Guest"
-	_mp_status_label.text = "%s · room %s — %d/%d cooks" % [who, NetManager.room_code, n, NetManager.MAX_PLAYERS]
-	_mp_start_coop_btn.disabled = n < 2
+	var me_ready := bool(NetManager.peers_ready.get(NetManager.my_id(), false))
+	if _mp_ready_btn:
+		_mp_ready_btn.text = "Unready" if me_ready else "Ready"
+	var ready_line := NetManager.ready_summary()
+	if NetManager.session_active:
+		_mp_status_label.text = "%s · room %s — shift live · %d/%d (code joins OK)" % [
+			who, NetManager.room_code, n, NetManager.MAX_PLAYERS
+		]
+	else:
+		_mp_status_label.text = "%s · room %s — %d/%d cooks\n%s\nWait for 4, or Start at 2+ when everyone Ready" % [
+			who, NetManager.room_code, n, NetManager.MAX_PLAYERS, ready_line
+		]
+	_mp_start_coop_btn.disabled = n < 2 or not NetManager.all_peers_ready()
+	_mp_start_coop_btn.text = "Start Co-op" if n < NetManager.MAX_PLAYERS else "Start (full)"
 
 
 func _mp_rebuild_room_list() -> void:
@@ -15025,7 +15067,15 @@ func _mp_on_session_start(session_seed: int) -> void:
 		_mp_lobby_root.visible = false
 	NetManager.stop_browse()
 	NetManager.announce_player_name()
-	_flash("Co-op shift — both cook! Orange / cyan gloves", Color("FFEB3B"))
+	var mid_join := playing and NetManager.is_host()
+	if mid_join:
+		## Host already mid-shift — late joiner gets catch-up via bootstrap request.
+		return
+	if playing and not NetManager.is_host():
+		## Rare: guest already playing; still request a fresh host snapshot.
+		mp_request_bootstrap.rpc_id(1)
+		return
+	_flash("Co-op shift — up to 4 cooks! Match glove colors", Color("FFEB3B"))
 	_start_game()
 	## Host owns cat AI; guest follows sync so peeks / hearts match.
 	if window_cat != null and is_instance_valid(window_cat):
@@ -15033,6 +15083,93 @@ func _mp_on_session_start(session_seed: int) -> void:
 		if NetManager.is_host():
 			_mp_send_cat_sync()
 			call_deferred("_mp_broadcast_economy")
+		else:
+			## Late join / first start: pull absolute kitchen state from host.
+			call_deferred("_mp_request_bootstrap_deferred")
+
+
+func _mp_request_bootstrap_deferred() -> void:
+	if not mp_enabled or NetManager.is_host():
+		return
+	if not NetManager.is_online():
+		return
+	mp_request_bootstrap.rpc_id(1)
+
+
+@rpc("any_peer", "reliable")
+func mp_request_bootstrap() -> void:
+	if not NetManager.is_host():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		return
+	_mp_send_bootstrap_to(sid)
+
+
+func _mp_send_bootstrap_to(peer_id: int) -> void:
+	## Full mid-round catch-up: economy, customers, patties, grill, Build.
+	if not NetManager.is_host() or not playing:
+		return
+	mp_bootstrap_meta.rpc_id(peer_id, NetManager.peek_next_net_id(), _mp_next_customer_net_id, day, day_time)
+	_mp_broadcast_economy()
+	## Respawn every living customer with order + look so tickets match.
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if bool(c.get("is_leaving")):
+			continue
+		var nid := _customer_net_id(c)
+		if nid < 0:
+			continue
+		var order_packed: Array = []
+		for o in c.order:
+			order_packed.append(str(o))
+		var col: Color = c.body_color if "body_color" in c else Color(0.8, 0.4, 0.3)
+		var patience := float(c.patience) if "patience" in c else 40.0
+		var lane := int(c.lane) if "lane" in c else 0
+		var skin_i := int(c.skin_idx) if "skin_idx" in c else 0
+		var face_i := int(c.face_style) if "face_style" in c else 0
+		mp_spawn_customer.rpc_id(
+			peer_id, nid, order_packed, col.r, col.g, col.b, patience, lane, skin_i, face_i
+		)
+	## Grill + Build patties.
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p):
+			continue
+		var pnid := int(p.get("net_id"))
+		if pnid < 0:
+			continue
+		mp_spawn_patty.rpc_id(peer_id, pnid, i, float(p.position.x), float(p.position.z))
+	for st in stations:
+		for bp in st.get("patties", []):
+			if bp == null or not is_instance_valid(bp):
+				continue
+			var bnid := int(bp.get("net_id"))
+			if bnid < 0:
+				continue
+			## Spawn into a free grill slot on joiner, then station sync seats on Build.
+			var slot := _first_empty_slot()
+			if slot < 0:
+				slot = 0
+			mp_spawn_patty.rpc_id(peer_id, bnid, slot, float(bp.position.x), float(bp.position.z))
+	_mp_broadcast_grill()
+	for si in STATION_COUNT:
+		_mp_broadcast_station(si)
+	_mp_broadcast_customers()
+	if window_cat != null and is_instance_valid(window_cat):
+		_mp_send_cat_sync()
+
+
+@rpc("any_peer", "reliable")
+func mp_bootstrap_meta(next_patty_id: int, next_cust_id: int, d: int, dtime: float) -> void:
+	if NetManager.is_host():
+		return
+	NetManager.bump_net_id_floor(next_patty_id)
+	_mp_next_customer_net_id = maxi(_mp_next_customer_net_id, next_cust_id)
+	day = d
+	day_time = dtime
+	_update_hud()
 
 
 func _mp_send_held_tool_pose(force: bool = false) -> void:
@@ -15373,6 +15510,8 @@ func mp_request_spawn_patty(x: float, z: float) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_spawn_patty(net_id: int, idx: int, x: float, z: float) -> void:
+	if net_id >= 0 and _patty_by_net_id(net_id) != null:
+		return
 	_mp_applying = true
 	_spawn_patty_at(idx, Vector3(x, GRILL_SURFACE_Y, z), net_id)
 	_mp_applying = false
@@ -15547,6 +15686,8 @@ func mp_spawn_customer(
 	skin_idx: int = -1,
 	face_style: int = -1
 ) -> void:
+	if net_id >= 0 and _customer_by_net_id(net_id) != null:
+		return
 	_mp_applying = true
 	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style)
 	_mp_applying = false
@@ -15571,6 +15712,50 @@ func mp_restart_day() -> void:
 			_mp_broadcast_station(si)
 
 
+func _mp_append_patty_snap(
+	p,
+	slot: int,
+	held_snap: bool,
+	ids: Array,
+	slots: Array,
+	xs: Array,
+	ys: Array,
+	zs: Array,
+	cooks: Array,
+	flipped: Array,
+	firsts: Array,
+	smashs: Array,
+	heatings: Array,
+	heat_muls: Array,
+	holds: Array,
+	cheeses: Array,
+	melts: Array,
+	seasons: Array,
+	helds: Array,
+	perfects: Array
+) -> void:
+	var nid := int(p.get("net_id"))
+	if nid < 0 or ids.has(nid):
+		return
+	ids.append(nid)
+	slots.append(slot)
+	xs.append(float(p.position.x))
+	ys.append(float(p.position.y))
+	zs.append(float(p.position.z))
+	cooks.append(float(p.cook_time))
+	flipped.append(bool(p.flipped_once))
+	firsts.append(float(p.first_side_time))
+	smashs.append(float(p.smash_bonus))
+	heatings.append(bool(p.heating) and not held_snap)
+	heat_muls.append(float(p.heat_mul))
+	holds.append(float(p.warm_hold_time))
+	cheeses.append(bool(p.has_cheese))
+	melts.append(float(p.cheese_melt))
+	seasons.append(float(p.seasoning))
+	helds.append(held_snap)
+	perfects.append(bool(p.perfect_flip))
+
+
 func _mp_broadcast_grill() -> void:
 	## Absolute cook-state snapshot so guests never drift on color / HOLD / flip.
 	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
@@ -15593,53 +15778,36 @@ func _mp_broadcast_grill() -> void:
 	var melts: Array = []
 	var seasons: Array = []
 	var helds: Array = []
+	var perfects: Array = []
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p == null or not is_instance_valid(p):
 			continue
-		var nid := int(p.get("net_id"))
-		if nid < 0:
-			continue
-		ids.append(nid)
-		slots.append(i)
-		xs.append(float(p.position.x))
-		ys.append(float(p.position.y))
-		zs.append(float(p.position.z))
-		cooks.append(float(p.cook_time))
-		flipped.append(bool(p.flipped_once))
-		firsts.append(float(p.first_side_time))
-		smashs.append(float(p.smash_bonus))
-		heatings.append(bool(p.heating))
-		heat_muls.append(float(p.heat_mul))
-		holds.append(float(p.warm_hold_time))
-		cheeses.append(bool(p.has_cheese))
-		melts.append(float(p.cheese_melt))
-		seasons.append(float(p.seasoning))
-		helds.append(bool(p.is_held))
+		_mp_append_patty_snap(
+			p, i, bool(p.is_held),
+			ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
+			heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
+		)
 	## Spatula meat still needs cook/HOLD age even while scooped.
 	if spatula_patty != null and is_instance_valid(spatula_patty):
-		var sp = spatula_patty
-		var snid := int(sp.get("net_id"))
-		if snid >= 0 and not ids.has(snid):
-			ids.append(snid)
-			slots.append(int(sp.slot_index))
-			xs.append(float(sp.position.x))
-			ys.append(float(sp.position.y))
-			zs.append(float(sp.position.z))
-			cooks.append(float(sp.cook_time))
-			flipped.append(bool(sp.flipped_once))
-			firsts.append(float(sp.first_side_time))
-			smashs.append(float(sp.smash_bonus))
-			heatings.append(false)
-			heat_muls.append(float(sp.heat_mul))
-			holds.append(float(sp.warm_hold_time))
-			cheeses.append(bool(sp.has_cheese))
-			melts.append(float(sp.cheese_melt))
-			seasons.append(float(sp.seasoning))
-			helds.append(true)
+		_mp_append_patty_snap(
+			spatula_patty, int(spatula_patty.slot_index), true,
+			ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
+			heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
+		)
+	## Build-board patties need the same cook/cheese/season parity for pay grades.
+	for st in stations:
+		for bp in st.get("patties", []):
+			if bp == null or not is_instance_valid(bp):
+				continue
+			_mp_append_patty_snap(
+				bp, int(bp.slot_index), true,
+				ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
+				heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
+			)
 	mp_sync_grill.rpc(
 		ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
-		heatings, heat_muls, holds, cheeses, melts, seasons, helds
+		heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
 	)
 
 
@@ -15660,7 +15828,8 @@ func mp_sync_grill(
 	cheeses: Array,
 	melts: Array,
 	seasons: Array,
-	helds: Array
+	helds: Array,
+	perfects: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -15691,6 +15860,7 @@ func mp_sync_grill(
 		## Don't yank local scoop / drag ownership mid-gesture.
 		var local_scoop := spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id())
 		var local_drag := dragging_patty == p and drag_owner_id == NetManager.my_id()
+		var perfect_snap := bool(perfects[i]) if i < perfects.size() else bool(p.perfect_flip)
 		if local_scoop or local_drag:
 			## Still repair absolute cook / HOLD / cheese so day-2 desync heals.
 			if p.has_method("apply_mp_state"):
@@ -15707,7 +15877,8 @@ func mp_sync_grill(
 					float(seasons[i]) if i < seasons.size() else float(p.seasoning),
 					true,
 					p.position.x, p.position.y, p.position.z,
-					int(p.slot_index)
+					int(p.slot_index),
+					perfect_snap
 				)
 			p.mp_puppet = true
 			continue
@@ -15745,8 +15916,18 @@ func mp_sync_grill(
 				float(seasons[i]) if i < seasons.size() else 0.0,
 				is_held_snap,
 				px, py, pz,
-				slot
+				slot,
+				perfect_snap
 			)
+		## Build / scooped meat stays hidden until station refresh seats it.
+		if is_held_snap:
+			var on_build := false
+			for st_chk in stations:
+				if st_chk.get("patties", []).has(p):
+					on_build = true
+					break
+			if on_build or p == spatula_patty:
+				p.visible = p == spatula_patty
 		p.mp_puppet = true
 	## Cull grill ghosts the host no longer has (keep Build / local scoop).
 	for gi in GRILL_SLOTS:
@@ -16253,11 +16434,25 @@ func _mp_broadcast_station(station_index: int) -> void:
 			patty_ids.append(int(p.net_id))
 		else:
 			patty_ids.append(-1)
-	mp_sync_station.rpc(station_index, item_ids, patty_ids)
+	mp_sync_station.rpc(
+		station_index,
+		item_ids,
+		patty_ids,
+		bool(st.get("fresh_active", false)),
+		float(st.get("freshness", FRESHNESS_MAX)),
+		bool(st.get("spoiled", false))
+	)
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_sync_station(station_index: int, item_ids: Array, patty_net_ids: Array) -> void:
+func mp_sync_station(
+	station_index: int,
+	item_ids: Array,
+	patty_net_ids: Array,
+	fresh_active: bool = false,
+	freshness: float = -1.0,
+	spoiled: bool = false
+) -> void:
 	if NetManager.is_host():
 		return
 	if station_index < 0 or station_index >= STATION_COUNT:
@@ -16290,10 +16485,16 @@ func mp_sync_station(station_index: int, item_ids: Array, patty_net_ids: Array) 
 	st["selected_layer"] = -1
 	if items.is_empty():
 		_reset_station_freshness(station_index)
-	elif not bool(st.get("fresh_active", false)):
-		_start_station_freshness(station_index)
+	else:
+		st["fresh_active"] = fresh_active if freshness >= 0.0 else true
+		if freshness >= 0.0:
+			st["freshness"] = freshness
+		elif not bool(st.get("fresh_active", false)):
+			st["freshness"] = FRESHNESS_MAX
+		st["spoiled"] = spoiled
 	_sync_station_cheese_items(station_index)
 	_refresh_station(station_index)
+	_refresh_freshness_label(station_index)
 	_mp_applying = false
 
 

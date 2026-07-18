@@ -43,7 +43,7 @@ const WALK_PLUS_X_YAW := 90.0
 const WALK_MINUS_X_YAW := -90.0
 ## Wait slots shifted screen-right so the patience bar clears the ticket rail.
 ## (world +X = screen-left, −X = screen-right)
-const LANE_X: Array[float] = [-0.45, 0.85, -1.85]
+const LANE_X: Array[float] = [-0.45, 0.85, -1.85, 1.95]
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -51,6 +51,8 @@ signal served(customer: Node3D, payout: int)
 
 var order: Array[String] = []
 var body_color: Color = Color.WHITE
+var skin_idx: int = 0
+var face_style: int = 0
 var patience_max: float = 45.0
 var patience: float = 45.0
 var target_x: float = 0.0
@@ -158,11 +160,14 @@ func setup(
 	order_value = GameDataScript.order_value(order)
 	_roll_personality()
 	speech = _make_speech()
-	_face_style = face_style if face_style >= 0 else (randi() % 3)
+	self.face_style = face_style if face_style >= 0 else (randi() % 3)
+	_face_style = self.face_style
 	if skin_idx >= 0 and not CHAR_SKINS.is_empty():
-		_skin_path = CHAR_SKINS[skin_idx % CHAR_SKINS.size()]
+		self.skin_idx = skin_idx % CHAR_SKINS.size()
+		_skin_path = CHAR_SKINS[self.skin_idx]
 	else:
-		_skin_path = CHAR_SKINS[randi() % CHAR_SKINS.size()]
+		self.skin_idx = randi() % CHAR_SKINS.size()
+		_skin_path = CHAR_SKINS[self.skin_idx]
 
 
 static func lane_x_for(lane_i: int) -> float:

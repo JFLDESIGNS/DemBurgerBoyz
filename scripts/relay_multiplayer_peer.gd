@@ -1,5 +1,5 @@
 ## WebSocket multiplayer peer that talks to the Railway room relay.
-## Host peer_id=1, joiner peer_id=2. Game packets are fully relayed (works over NAT).
+## Host peer_id=1, joiners 2–4. Game packets are fully relayed (works over NAT).
 class_name RelayMultiplayerPeer
 extends MultiplayerPeerExtension
 
@@ -131,8 +131,13 @@ func _handle_json(text: String) -> void:
 			_unique_id = int(data.get("peer_id", 2))
 			_acting_as_server = false
 			_status = MultiplayerPeer.CONNECTION_CONNECTED
-			## Client sees host (1) as connected.
-			_emit_peer_connected(1)
+			## Announce every peer already in the room (host + earlier cooks).
+			var existing: Array = data.get("peers", [])
+			if existing.is_empty():
+				_emit_peer_connected(1)
+			else:
+				for pid_v in existing:
+					_emit_peer_connected(int(pid_v))
 			relay_joined.emit(_room_code)
 		"peer_joined":
 			var pid := int(data.get("peer_id", 2))
@@ -192,10 +197,8 @@ func _put_packet_script(buffer: PackedByteArray) -> Error:
 		return ERR_UNCONFIGURED
 	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return ERR_CANT_CONNECT
+	## 0 = relay broadcasts to every other peer in the room (up to 4 cooks).
 	var target := _target_peer
-	## 0 = broadcast to the other cook.
-	if target == 0:
-		target = 2 if _acting_as_server else 1
 	var out := PackedByteArray()
 	out.resize(HEADER_SIZE + buffer.size())
 	out[0] = MAGIC
@@ -290,7 +293,7 @@ func _close() -> void:
 
 
 func _disconnect_peer(_peer: int, _force: bool) -> void:
-	## Two-player room — closing drops everyone.
+	## Room relay — closing this socket drops us from the room.
 	close()
 
 

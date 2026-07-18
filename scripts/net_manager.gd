@@ -12,7 +12,7 @@ const RelayPeerScript := preload("res://scripts/relay_multiplayer_peer.gd")
 ## Port = CODE_PORT_BASE + code (0000–9999) → 41000–50999 (LAN / same-PC only)
 const CODE_PORT_BASE := 41000
 const DISCOVERY_PORT := 7770
-const MAX_PLAYERS := 2
+const MAX_PLAYERS := 4
 const ROOM_STALE_SEC := 5.0
 const BROADCAST_INTERVAL := 0.75
 const JOIN_SEEK_SEC := 12.0
@@ -41,6 +41,8 @@ var discovered_rooms: Array = []
 var lan_ip: String = "127.0.0.1"
 var relay_url: String = DEFAULT_RELAY_URL
 var online_mode: bool = false ## true when using Railway relay
+var session_active: bool = false
+var last_session_seed: int = 0
 
 var _peer: MultiplayerPeer = null
 var _enet: ENetMultiplayerPeer = null
@@ -59,6 +61,8 @@ var _join_seek_left: float = 0.0
 const PEER_COLORS := [
 	Color(1.0, 0.55, 0.2),
 	Color(0.35, 0.85, 1.0),
+	Color(0.55, 0.9, 0.45),
+	Color(0.95, 0.55, 0.85),
 ]
 
 
@@ -120,9 +124,8 @@ func peer_count() -> int:
 
 
 func color_for_peer(peer_id: int) -> Color:
-	if peer_id == 1:
-		return PEER_COLORS[0]
-	return PEER_COLORS[1]
+	var idx := clampi(peer_id - 1, 0, PEER_COLORS.size() - 1)
+	return PEER_COLORS[idx]
 
 
 func name_for_peer(peer_id: int) -> String:
@@ -132,7 +135,41 @@ func name_for_peer(peer_id: int) -> String:
 			return n
 	if peer_id == my_id() and player_name.strip_edges() != "":
 		return player_name.strip_edges()
-	return "Cook %d" % (1 if peer_id == 1 else 2)
+	return "Cook %d" % clampi(peer_id, 1, MAX_PLAYERS)
+
+
+func bump_net_id_floor(v: int) -> void:
+	_next_net_id = maxi(_next_net_id, v)
+
+
+func peek_next_net_id() -> int:
+	return _next_net_id
+
+
+func all_peers_ready() -> bool:
+	if peer_count() < 2:
+		return false
+	var ids: Array = [my_id()]
+	for p in multiplayer.get_peers():
+		ids.append(int(p))
+	for id in ids:
+		if not bool(peers_ready.get(int(id), false)):
+			return false
+	return true
+
+
+func ready_summary() -> String:
+	var ids: Array = [my_id()]
+	if is_online():
+		for p in multiplayer.get_peers():
+			ids.append(int(p))
+	ids.sort()
+	var bits: Array[String] = []
+	for id in ids:
+		var nm := name_for_peer(int(id))
+		var ok := bool(peers_ready.get(int(id), false))
+		bits.append("%s%s" % [nm, " ✓" if ok else ""])
+	return ", ".join(bits)
 
 
 func announce_player_name() -> void:
@@ -455,6 +492,8 @@ func leave(emit_signal: bool = true) -> void:
 	role = Role.NONE
 	connected = false
 	online_mode = false
+	session_active = false
+	last_session_seed = 0
 	peers_ready.clear()
 	if emit_signal:
 		connection_changed.emit()
@@ -470,7 +509,10 @@ func request_start_session() -> void:
 	if not is_host():
 		return
 	if peer_count() < 2:
-		chat_flash.emit("Need a second cook to start co-op", Color("FFA726"))
+		chat_flash.emit("Need at least 2 cooks to start (up to 4)", Color("FFA726"))
+		return
+	if not all_peers_ready():
+		chat_flash.emit("Everyone in the lobby must Ready first", Color("FFA726"))
 		return
 	var session_seed := randi()
 	_rpc_start_session.rpc(session_seed)
@@ -487,6 +529,16 @@ func _rpc_set_ready(is_ready: bool) -> void:
 
 @rpc("authority", "call_local", "reliable")
 func _rpc_start_session(session_seed: int) -> void:
+	session_active = true
+	last_session_seed = session_seed
+	session_start_requested.emit(session_seed)
+
+
+@rpc("authority", "reliable")
+func _rpc_join_in_progress(session_seed: int) -> void:
+	## Late joiner only — pull them into the live shift with the same seed.
+	session_active = true
+	last_session_seed = session_seed
 	session_start_requested.emit(session_seed)
 
 
@@ -537,7 +589,11 @@ func _clear_peer_only() -> void:
 func _on_peer_connected(id: int) -> void:
 	peers_ready[id] = false
 	if role == Role.HOST:
-		chat_flash.emit("Cook joined room %s!" % room_code, Color("81C784"))
+		if session_active:
+			chat_flash.emit("Cook joined mid-shift — syncing kitchen...", Color("81C784"))
+			_rpc_join_in_progress.rpc_id(id, last_session_seed)
+		else:
+			chat_flash.emit("Cook joined room %s! (%d/%d)" % [room_code, peer_count(), MAX_PLAYERS], Color("81C784"))
 		if not online_mode:
 			_write_local_room()
 			_broadcast_room()
