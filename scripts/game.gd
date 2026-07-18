@@ -14771,9 +14771,9 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		if not is_instance_valid(stack):
 			return
 		stack.scale = s
-		## Buns keep some thickness; patties flatten a bit; toppings take full smash.
+		## Top/bottom buns keep full vertical thickness; patties flatten a bit; toppings smash hard.
 		var bun_inv_y := 1.0 / maxf(s.y, 0.001)
-		var bun_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.55))
+		var bun_inv := Vector2(1.0, bun_inv_y)
 		var patty_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.25))
 		for row in bun_rows:
 			if row != null and is_instance_valid(row):
