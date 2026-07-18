@@ -639,7 +639,7 @@ const SODA_FLAVOR_COLORS: Dictionary = {
 	"lemon_lime": Color(0.55, 0.82, 0.22),
 	"orange": Color(0.95, 0.48, 0.12),
 }
-const CUP_HOLD_HEIGHT := 0.22
+const CUP_HOLD_HEIGHT := 0.18
 const CUP_FILL_RATE := 0.95 ## fill units per second while under spout
 const CUP_SPOUT_REACH := 0.55 ## world meters — forgiving aim under nozzle
 const CUP_ICE_CUBE_INTERVAL := 0.11
@@ -647,9 +647,9 @@ const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 5.5
 const CUP_SPLASH_SPEED := 2.35 ## world m/s — whip hard enough and soda flies out
 const CUP_SPLASH_LOSS := 0.07
-const CUP_HOLD_DIST := 1.12 ## meters along camera ray while carrying
-const CUP_SPOUT_HORIZ := 0.30 ## horizontal fill radius under a nozzle
-const CUP_SPOUT_VERT := 0.38 ## vertical forgiveness under a nozzle
+const CUP_SPOUT_HORIZ := 0.28 ## horizontal fill radius under a nozzle
+const CUP_SPOUT_VERT := 0.32 ## vertical forgiveness under a nozzle
+const CUP_MAGNET_RADIUS := 0.20 ## soft snap only when nearly under a spout
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -8948,25 +8948,6 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_root.add_child(cup_shell)
 	cup_shell_mesh = cup_shell
 
-	## Thin red band so the clear cup still reads as a grab target.
-	var stripe := MeshInstance3D.new()
-	stripe.name = "Stripe"
-	var stripe_mesh := CylinderMesh.new()
-	stripe_mesh.top_radius = 0.0565
-	stripe_mesh.bottom_radius = 0.0565
-	stripe_mesh.height = 0.016
-	stripe_mesh.cap_top = false
-	stripe_mesh.cap_bottom = false
-	stripe.mesh = stripe_mesh
-	stripe.position = Vector3(0.0, 0.10, 0.0)
-	var stripe_mat := StandardMaterial3D.new()
-	stripe_mat.albedo_color = Color(0.92, 0.22, 0.18, 0.95)
-	stripe_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	stripe_mat.roughness = 0.4
-	stripe_mat.cull_mode = BaseMaterial3D.CULL_BACK
-	stripe.material_override = stripe_mat
-	cup_root.add_child(stripe)
-
 	cup_liquid_pivot = Node3D.new()
 	cup_liquid_pivot.name = "LiquidPivot"
 	cup_liquid_pivot.position = Vector3(0.0, 0.02, 0.0)
@@ -9147,28 +9128,38 @@ func _begin_cup_hold() -> bool:
 
 
 func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
-	## Carry along the camera ray so the cup tracks the cursor (not stuck on a flat plane).
+	## Plane tracking at cup height (like other tools) — keeps the cursor on-screen.
 	if camera == null:
 		return Vector3.ZERO
+	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
-	var hit := from + dir * CUP_HOLD_DIST
-	hit.x = clampf(hit.x, -2.85, 0.55)
-	hit.z = clampf(hit.z, -0.35, 1.15)
-	hit.y = clampf(hit.y, GRILL_SURFACE_Y + 0.06, GRILL_SURFACE_Y + 0.78)
-	## Soft magnet toward a spout tip when close — easier to fill.
+	var hit := Vector3.ZERO
+	if absf(dir.y) > 0.002:
+		var t := (hold_y - from.y) / dir.y
+		if t > 0.05:
+			hit = from + dir * t
+	if hit == Vector3.ZERO:
+		hit = from + dir * 2.4
+		hit.y = hold_y
+	## Work volume: grill + soda fountain on the right (world −X).
+	hit.x = clampf(hit.x, -2.20, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.20)
+	hit.y = hold_y
+	## Tiny soft snap only when already nearly under a nozzle — never fight free drag.
 	var best_tip: Vector3 = Vector3.ZERO
-	var best_d := 0.70
+	var best_d := CUP_MAGNET_RADIUS
 	for tip in [soda_spout_marker, ice_spout_marker]:
 		if tip == null or not is_instance_valid(tip):
 			continue
-		var tpos: Vector3 = tip.global_position + Vector3(0.0, -0.08, 0.0)
-		var d := hit.distance_to(tpos)
+		var tpos: Vector3 = tip.global_position + Vector3(0.0, -0.10, 0.0)
+		tpos.y = hold_y
+		var d := Vector2(hit.x - tpos.x, hit.z - tpos.z).length()
 		if d < best_d:
 			best_d = d
 			best_tip = tpos
-	if best_tip != Vector3.ZERO and best_d < 0.62:
-		var pull := clampf(1.0 - best_d / 0.62, 0.0, 1.0) * 0.72
+	if best_tip != Vector3.ZERO:
+		var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0) * 0.35
 		hit = hit.lerp(best_tip, pull)
 	return hit
 
@@ -9185,9 +9176,9 @@ func _update_held_cup(delta: float) -> void:
 		return
 	var seat := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	if seat != Vector3.ZERO:
-		## Smooth follow so motion reads as carrying, not teleporting.
+		## Snappy follow so the cup tracks the cursor without lag fights.
 		var prev := cup_root.global_position
-		cup_root.global_position = prev.lerp(seat, clampf(delta * 18.0, 0.0, 1.0))
+		cup_root.global_position = prev.lerp(seat, clampf(delta * 28.0, 0.0, 1.0))
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 		_cup_prev_pos = cup_root.global_position
