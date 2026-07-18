@@ -80,15 +80,6 @@ theme_override_constants/outline_size = 2
 theme_override_font_sizes/font_size = 28
 text = "$0"
 
-[node name="ComboLabel" type="Label" parent="UI/Root/TopBar"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.92, 0.4, 1)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
-theme_override_constants/outline_size = 2
-theme_override_font_sizes/font_size = 11
-text = "Combo -"
-
 [node name="DayLabel" type="Label" parent="UI/Root/TopBar"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -109,6 +100,18 @@ offset_bottom = 248.0
 mouse_filter = 2
 theme_override_constants/separation = 6
 alignment = 0
+
+[node name="ComboLabel" type="Label" parent="UI/Root/WindowTicketRail"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 0
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 0.92, 0.4, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
+theme_override_constants/outline_size = 2
+theme_override_font_sizes/font_size = 13
+text = "Combo -"
+horizontal_alignment = 0
 
 [node name="TicketBox" type="HBoxContainer" parent="UI/Root/WindowTicketRail"]
 unique_name_in_owner = true
@@ -167,14 +170,13 @@ alignment = 1
 [node name="StationsRow" type="VBoxContainer" parent="UI/Root"]
 unique_name_in_owner = true
 layout_mode = 1
-anchors_preset = 2
-anchor_top = 1.0
+anchors_preset = 15
+anchor_right = 0.15
 anchor_bottom = 1.0
-offset_left = 80.0
-offset_top = -560.0
-offset_right = 550.0
-offset_bottom = -108.0
-grow_vertical = 0
+offset_top = 8.0
+offset_bottom = -118.0
+grow_horizontal = 1
+grow_vertical = 2
 mouse_filter = 2
 theme_override_constants/separation = 10
 alignment = 2

@@ -7,7 +7,9 @@ const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
-const STATION_INGREDIENT_SCALE := 0.42 ## 30% smaller than prior 0.6
+const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
+const STATION_PATTY_BUILD_SCALE := 0.78 ## meat disc — match bun footprint
+const STATION_PATTY_CHEESE_BUILD_SCALE := 0.86 ## melt art sits on the patty
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -206,6 +208,7 @@ var heat_warp_mat: ShaderMaterial = null
 var heat_warp_base_size := Vector2(1.0, 0.6)
 var heat_warp_enabled: bool = true
 var grill_drop_zone: Control = null
+var build_column_root: Control = null ## Left 15% parent for Build / DROP_L (not grill)
 var build_drop_zone: Control = null ## Tall left catcher while holding a scooped patty
 var build_debug_root: Control = null
 var build_area_debug_outline: bool = false
@@ -379,9 +382,12 @@ const FLICK_TO_BUILD_VX := -520.0
 const FLICK_TO_GRILL_VX := 520.0
 const FLICK_MIN_SPEED := 620.0
 const FLICK_MIN_TRAVEL_PX := 36.0
-## Left side of the screen / left of the grill counts as Build drop while carrying.
-const BUILD_DROP_SCREEN_FRAC := 0.48
-const BUILD_DROP_MIN_PX := 320.0
+## Build UI + DROP_L live in a left column (not grill hitboxes).
+const BUILD_COLUMN_SCREEN_FRAC := 0.15
+const BUILD_COLUMN_BOTTOM_CLEAR := 118.0 ## keep clear of ingredient strip
+## Legacy aliases — drop catcher no longer expands across half the screen.
+const BUILD_DROP_SCREEN_FRAC := BUILD_COLUMN_SCREEN_FRAC
+const BUILD_DROP_MIN_PX := 160.0
 ## Flash toast placement — original top + 15% of screen height downward.
 const FLASH_LABEL_TOP_FRAC := 236.0 / 720.0 + 0.10
 const FLASH_LABEL_HEIGHT_FRAC := 74.0 / 720.0
@@ -407,6 +413,7 @@ var phone_ui_anchor: Node3D = null
 var phone_rating_stars: Label = null
 var phone_rating_value: Label = null
 var phone_review_label: Label = null
+var phone_feed_box: VBoxContainer = null
 var phone_inventory_box: VBoxContainer = null
 var phone_scroll: ScrollContainer = null
 var _phone_scroll_dragging: bool = false
@@ -415,6 +422,14 @@ var _phone_scroll_drag_start_y: float = 0.0
 var _phone_scroll_drag_start_offset: int = 0
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
+## Newest-first feed posts: {stars, who, text}
+var social_reviews: Array = []
+const SOCIAL_REVIEW_CHANCE := 0.70
+const SOCIAL_FEED_MAX := 8
+const SOCIAL_REVIEWER_NAMES: Array[String] = [
+	"Maya", "Chris", "Jordan", "Sam", "Alex", "Riley", "Casey", "Morgan",
+	"Taylor", "Jamie", "Quinn", "Avery", "Drew", "Parker", "Reese", "Skyler",
+]
 var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
 var game_audio: Node = null
@@ -486,13 +501,13 @@ const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
 const PREP_UI_BEHIND_Y := -165.0 ## legacy offset when prep lived inside BuildZone
-const BUILD_STATIONS_ROW_LEFT := 80.0
-const BUILD_STATIONS_ROW_RIGHT := 550.0
-const BUILD_PANEL_SIZE := Vector2(450, 320)
-const BUILD_ZONE_SIZE := Vector2(250, 280)
-const BUILD_UI_LEFT := 130.0 ## bun stack — right of prep backdrop so the burger stays on screen
-const BUILD_PLATE_SHIFT_X := 24.0 ## nudge floating stack toward the grill
-const BUILD_UI_LIFT_BOTTOM := 120.0 ## counter height — not tucked under the grill
+const BUILD_STATIONS_ROW_LEFT := 0.0
+const BUILD_STATIONS_ROW_RIGHT := 0.0
+const BUILD_PANEL_SIZE := Vector2(170, 300)
+const BUILD_ZONE_SIZE := Vector2(170, 260)
+const BUILD_UI_LEFT := 0.0 ## bun stack fills the left Build column
+const BUILD_PLATE_SHIFT_X := 0.0 ## full-width plate — no side nudge
+const BUILD_UI_LIFT_BOTTOM := 8.0 ## column already clears the ingredient strip
 const PREP_UI_PANEL_X := BUILD_UI_LEFT + PREP_UI_BEHIND_X ## panel-left — independent of build zone
 const PREP_UI_PANEL_BOTTOM := BUILD_UI_LIFT_BOTTOM + BUILD_ZONE_SIZE.y - (PREP_UI_BEHIND_Y + PREP_UI_SIZE.y)
 const PREP_UI_PANEL_TOP := BUILD_PANEL_SIZE.y - PREP_UI_PANEL_BOTTOM - PREP_UI_SIZE.y
@@ -618,31 +633,31 @@ const GFX_DEFAULTS := {
 	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
 	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
 	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
-	"bz_row_top": -560.0,
-	"bz_row_bottom": -108.0,
+	"bz_row_top": 0.0,
+	"bz_row_bottom": 0.0,
 	"bz_panel_w": BUILD_PANEL_SIZE.x,
 	"bz_panel_h": BUILD_PANEL_SIZE.y,
 	"bz_zone_w": BUILD_ZONE_SIZE.x,
 	"bz_zone_h": BUILD_ZONE_SIZE.y,
-	"bz_zone_left": 70.0,
-	"bz_zone_top": -25.0,
+	"bz_zone_left": 0.0,
+	"bz_zone_top": 8.0,
 	"bz_lift_bottom": BUILD_UI_LIFT_BOTTOM,
-	"bz_plate_w": 230.0,
-	"bz_plate_h": 210.0,
+	"bz_plate_w": 0.0, ## 0 = stretch to full Build column / panel width
+	"bz_plate_h": 200.0,
 	"bz_plate_shift": BUILD_PLATE_SHIFT_X,
 	"bz_plate_y": 0.0,
-	"bz_plate_pad": 12.0,
+	"bz_plate_pad": 8.0,
 	"bz_title_y": -2.0,
-	"bz_title_x": -35.0,
+	"bz_title_x": 0.0,
 	"bz_hit_l": BUILD_HIT_PAD_LEFT,
 	"bz_hit_t": BUILD_HIT_PAD_TOP,
 	"bz_hit_r": BUILD_HIT_PAD_RIGHT,
 	"bz_hit_b": BUILD_HIT_PAD_BOTTOM,
-	"bz_hit_shift_x": -20.0,
+	"bz_hit_shift_x": 0.0,
 	"bz_drop_left": 0.0,
-	"bz_drop_right": BUILD_DROP_MIN_PX,
-	"bz_drop_top": 220.0,
-	"bz_drop_bottom": -110.0,
+	"bz_drop_right": 0.0,
+	"bz_drop_top": 0.0,
+	"bz_drop_bottom": 0.0,
 	"bz_grill_pad": BUILD_DROP_GRILL_PAD_PX,
 	"bz_lim_top": 280.0,
 	"bz_lim_bot": 120.0,
@@ -703,14 +718,18 @@ var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
 var _mp_econ_accum: float = 0.0
 var _mp_cust_accum: float = 0.0
+var _mp_grill_accum: float = 0.0
 var _mp_oil_sync_cool: float = 0.0
 var _mp_residue_sync_cool: float = 0.0
 var _mp_ext_sync_cool: float = 0.0
 var _mp_season_sync_cool: float = 0.0
 var _mp_tool_pose_cool: float = 0.0
-## peer_id -> ghost Node3D so partners see held oil / shaker + pour FX
+var _serve_fly_watch: float = 0.0
+## peer_id -> ghost Node3D so partners see held tools in-hand
 var _mp_remote_oil: Dictionary = {}
 var _mp_remote_shaker: Dictionary = {}
+var _mp_remote_ext: Dictionary = {}
+var _mp_remote_glock: Dictionary = {}
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
 var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
@@ -763,6 +782,7 @@ func _ready() -> void:
 	if vp:
 		vp.size_changed.connect(_layout_phone_ui_overlay)
 		vp.size_changed.connect(_apply_prep_ui_overlay_layout)
+		vp.size_changed.connect(_layout_build_column_root)
 		vp.size_changed.connect(_refresh_build_debug_outlines)
 	call_deferred("_layout_phone_ui_overlay")
 	_build_pause_button()
@@ -806,6 +826,9 @@ func _ready() -> void:
 	)
 	restart_btn.pressed.connect(func():
 		_sfx_click()
+		if mp_enabled and not _mp_applying:
+			mp_restart_day.rpc()
+			return
 		_restart()
 	)
 	_setup_multiplayer_ui()
@@ -1108,6 +1131,23 @@ func _process(delta: float) -> void:
 		_on_gui_drag_ended(get_viewport().gui_is_drag_successful())
 	_was_gui_dragging = gui_dragging
 
+	## Recover stuck input blockers (cheese drop arm / serve fly / build catcher).
+	if not cheese_held and grill_drop_zone != null and is_instance_valid(grill_drop_zone) \
+			and grill_drop_zone.mouse_filter == Control.MOUSE_FILTER_STOP:
+		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if spatula_patty == null and build_drop_zone != null and is_instance_valid(build_drop_zone) \
+			and build_drop_zone.mouse_filter == Control.MOUSE_FILTER_STOP:
+		_arm_build_drop_zone(false)
+	if _serve_fly_busy:
+		_serve_fly_watch += delta
+		if _serve_fly_watch > 6.5:
+			_serve_fly_busy = false
+			_serve_fly_watch = 0.0
+			_auto_serving = false
+			_mp_serve_sync = false
+	else:
+		_serve_fly_watch = 0.0
+
 	## Shared shift clock — host owns it in co-op (synced via economy packets).
 	if not mp_enabled or NetManager.is_host():
 		day_time -= delta
@@ -1168,7 +1208,7 @@ func _process(delta: float) -> void:
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
 		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
 		_mp_tool_pose_cool = maxf(0.0, _mp_tool_pose_cool - delta)
-		if oil_held or shaker_held:
+		if oil_held or shaker_held or ext_held or glock_held:
 			_mp_send_held_tool_pose(false)
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
@@ -1179,6 +1219,13 @@ func _process(delta: float) -> void:
 		if _mp_cust_accum >= 0.2:
 			_mp_cust_accum = 0.0
 			_mp_broadcast_customers()
+		_mp_grill_accum += delta
+		if _mp_grill_accum >= 0.28:
+			_mp_grill_accum = 0.0
+			_mp_broadcast_grill()
+			## Build board absolute repair every cook tick too.
+			for si in STATION_COUNT:
+				_mp_broadcast_station(si)
 
 
 func _update_station_freshness(delta: float) -> void:
@@ -1763,10 +1810,13 @@ func _refresh_build_debug_outlines() -> void:
 	build_debug_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	build_debug_root.z_index = 18
 	ui_root.add_child(build_debug_root)
-	## Left-column patty drop catcher (wide).
+	## Parent column for all non-grill build boxes.
+	if build_column_root != null and is_instance_valid(build_column_root):
+		_draw_build_debug_rect(build_column_root.get_global_rect(), "BUILD_COL", 0.03)
+	## Left-column patty drop catcher (fills BUILD_COL).
 	if build_drop_zone != null and is_instance_valid(build_drop_zone):
 		_draw_build_debug_rect(build_drop_zone.get_global_rect(), "DROP_L", 0.04)
-	## Grill-left fuzzy drop line — only over the counter band.
+	## Grill-left fuzzy drop line — only over the counter band (stays outside BUILD_COL).
 	var grill_x := _grill_left_screen_x() + _bz("bz_grill_pad")
 	var vr := get_viewport().get_visible_rect()
 	_draw_build_debug_vline(
@@ -1774,7 +1824,7 @@ func _refresh_build_debug_outlines() -> void:
 		vr.position.y + _bz("bz_lim_top"),
 		vr.position.y + vr.size.y - _bz("bz_lim_bot")
 	)
-	## Per-station build hitboxes.
+	## Per-station build hitboxes (children of BUILD_COL).
 	for i in STATION_COUNT:
 		if i >= stations.size():
 			continue
@@ -1793,6 +1843,106 @@ func _refresh_build_debug_outlines() -> void:
 		_draw_build_debug_rect(prep_ui_overlay.get_global_rect(), "INGREDIENTS", 0.06)
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		_draw_build_debug_rect(grill_drop_zone.get_global_rect(), "GRILL_DROP", 0.04)
+
+
+func _ensure_build_column_root() -> Control:
+	## Left ~15% parent for DROP_L / stations / plate / BUILD_HIT — not grill zones.
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return null
+	if build_column_root != null and is_instance_valid(build_column_root):
+		_layout_build_column_root()
+		return build_column_root
+	build_column_root = Control.new()
+	build_column_root.name = "BuildColumnRoot"
+	build_column_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	build_column_root.z_index = 10
+	ui_root.add_child(build_column_root)
+	_layout_build_column_root()
+	var view := get_viewport()
+	if view != null and not view.size_changed.is_connected(_layout_build_column_root):
+		view.size_changed.connect(_layout_build_column_root)
+	return build_column_root
+
+
+func _layout_build_column_root() -> void:
+	if build_column_root == null or not is_instance_valid(build_column_root):
+		return
+	build_column_root.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	build_column_root.anchor_left = 0.0
+	build_column_root.anchor_right = BUILD_COLUMN_SCREEN_FRAC
+	build_column_root.anchor_top = 0.0
+	build_column_root.anchor_bottom = 1.0
+	build_column_root.offset_left = 0.0
+	build_column_root.offset_right = 0.0
+	build_column_root.offset_top = 8.0
+	build_column_root.offset_bottom = -BUILD_COLUMN_BOTTOM_CLEAR
+	build_column_root.grow_horizontal = Control.GROW_DIRECTION_END
+	build_column_root.grow_vertical = Control.GROW_DIRECTION_BOTH
+
+
+func _adopt_into_build_column(node: Control) -> void:
+	var col := _ensure_build_column_root()
+	if col == null or node == null or not is_instance_valid(node):
+		return
+	if node.get_parent() == col:
+		return
+	var gp := node.global_position
+	if node.get_parent() != null:
+		node.get_parent().remove_child(node)
+	col.add_child(node)
+	node.global_position = gp
+
+
+func _layout_build_column_children() -> void:
+	## Stations + DROP_L fill the left column parent (grill zones stay outside).
+	_layout_build_column_root()
+	if stations_row != null and is_instance_valid(stations_row):
+		_adopt_into_build_column(stations_row)
+		stations_row.set_anchors_preset(Control.PRESET_FULL_RECT)
+		stations_row.anchor_left = 0.0
+		stations_row.anchor_right = 1.0
+		stations_row.anchor_top = 0.0
+		stations_row.anchor_bottom = 1.0
+		stations_row.offset_left = _bz("bz_row_left")
+		stations_row.offset_right = _bz("bz_row_right")
+		stations_row.offset_top = _bz("bz_row_top")
+		stations_row.offset_bottom = _bz("bz_row_bottom")
+		stations_row.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		stations_row.grow_vertical = Control.GROW_DIRECTION_BOTH
+		stations_row.custom_minimum_size = Vector2(0, 0)
+		stations_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stations_row.alignment = BoxContainer.ALIGNMENT_END
+		stations_row.z_index = 1
+		stations_row.z_as_relative = true
+	if build_drop_zone != null and is_instance_valid(build_drop_zone):
+		_adopt_into_build_column(build_drop_zone)
+		build_drop_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
+		build_drop_zone.anchor_left = 0.0
+		build_drop_zone.anchor_right = 1.0
+		build_drop_zone.anchor_top = 0.0
+		build_drop_zone.anchor_bottom = 1.0
+		build_drop_zone.offset_left = _bz("bz_drop_left")
+		build_drop_zone.offset_right = _bz("bz_drop_right")
+		build_drop_zone.offset_top = _bz("bz_drop_top")
+		build_drop_zone.offset_bottom = _bz("bz_drop_bottom")
+		build_drop_zone.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		build_drop_zone.grow_vertical = Control.GROW_DIRECTION_BOTH
+		build_drop_zone.z_index = 0
+		build_drop_zone.z_as_relative = true
+	call_deferred("_refresh_build_debug_outlines")
+
+
+func _build_column_screen_rect() -> Rect2:
+	if build_column_root != null and is_instance_valid(build_column_root):
+		return build_column_root.get_global_rect()
+	var vr := get_viewport().get_visible_rect()
+	return Rect2(
+		vr.position.x,
+		vr.position.y + 8.0,
+		vr.size.x * BUILD_COLUMN_SCREEN_FRAC,
+		vr.size.y - 8.0 - BUILD_COLUMN_BOTTOM_CLEAR
+	)
 
 
 func _draw_build_debug_rect(global_rect: Rect2, tag: String, fill_alpha: float) -> void:
@@ -1874,15 +2024,10 @@ func _grill_left_screen_x() -> float:
 
 
 func _is_build_drop_at(screen_pos: Vector2) -> bool:
-	## Anywhere left of the grill (and the Build UI) drops a carried patty onto Build.
+	## Left Build column (BUILD_COL) — not the grill / GRILL_LIM stretch.
 	if _station_index_at(screen_pos) >= 0:
 		return true
-	var vr := get_viewport().get_visible_rect()
-	var frac_limit := vr.position.x + maxf(_bz("bz_drop_right"), vr.size.x * BUILD_DROP_SCREEN_FRAC)
-	## Prefer the real grill edge so the empty counter / window above the board always counts.
-	var grill_limit := _grill_left_screen_x() + _bz("bz_grill_pad")
-	var limit := maxf(frac_limit, grill_limit)
-	return screen_pos.x <= limit
+	return _build_column_screen_rect().has_point(screen_pos)
 
 
 func _blocks_grill_pick(screen_pos: Vector2) -> bool:
@@ -3340,13 +3485,23 @@ func _try_place_patty_at(world_pos: Vector3) -> void:
 
 
 func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
-	if not playing:
+	if not playing and not _mp_applying:
 		return
 	if idx < 0 or idx >= GRILL_SLOTS:
 		return
 	if grill[idx] != null:
-		return
-	if not grill_on:
+		## Sync repair: free wrong occupant so the host's net_id can take this slot.
+		if _mp_applying and net_id >= 0:
+			var old = grill[idx]
+			if old != null and is_instance_valid(old) and int(old.get("net_id")) != net_id:
+				grill[idx] = null
+				if spatula_patty != old and dragging_patty != old:
+					old.queue_free()
+			else:
+				return
+		else:
+			return
+	if not grill_on and not _mp_applying:
 		_flash("Burner is OFF", Color("FFA726"))
 		return
 	var x := world_pos.x
@@ -3356,6 +3511,7 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 	p.net_id = net_id if net_id >= 0 else (-1 if not mp_enabled else NetManager.alloc_net_id())
 	p.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
 	p.heating = true
+	p.mp_puppet = mp_enabled and not NetManager.is_host()
 	p.position = Vector3(x, p.base_y, z)
 	p._rest_x = x
 	p._rest_z = z
@@ -3365,6 +3521,9 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 	p.scale = Vector3(0.2, 0.2, 0.2)
 	var tw := create_tween()
 	tw.tween_property(p, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK)
+	if _mp_applying:
+		## Silent repair spawn during grill sync — no flash spam.
+		return
 	var n := 0
 	for i in GRILL_SLOTS:
 		if grill[i] != null:
@@ -3784,6 +3943,13 @@ func _customer_by_net_id(net_id: int):
 			continue
 		if c.has_meta("mp_net_id") and int(c.get_meta("mp_net_id")) == net_id:
 			return c
+	## Fallback — hostiles / edge cases still under customers_root.
+	if customers_root != null:
+		for c in customers_root.get_children():
+			if c == null or not is_instance_valid(c):
+				continue
+			if c.has_meta("mp_net_id") and int(c.get_meta("mp_net_id")) == net_id:
+				return c
 	return null
 
 
@@ -4653,6 +4819,8 @@ func _begin_fire_ext_hold() -> bool:
 		_flash("Right-click to spray powder on the fire — or the customers…", Color("FF8A80"))
 	else:
 		_flash("Fire extinguisher — right-click sprays · aim at customers or fire · release LMB to hang up", Color("FF8A80"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
 	return true
 
 
@@ -4692,6 +4860,8 @@ func _release_fire_extinguisher() -> void:
 		ext_area.input_ray_pickable = true
 	if game_audio:
 		game_audio.play_click()
+	if mp_enabled:
+		mp_tool_pose.rpc(5, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _reset_fire_extinguisher() -> void:
@@ -5099,6 +5269,8 @@ func _begin_glock_hold() -> bool:
 		game_audio.play_click()
 	_sync_combat_audio()
 	_flash("Glock ready — right-click to shoot · laser on · release LMB to hang up", Color("FFCC80"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
 	return true
 
 
@@ -5156,9 +5328,13 @@ func _fire_glock() -> void:
 		cust_id = _customer_net_id(shot_cust)
 		hostile = bool(shot_cust.get("is_terrorist"))
 		if mp_enabled and not _mp_applying:
+			## Co-op needs a net id; solo passes the node below.
+			if cust_id < 0:
+				_apply_glock_shot(impact, -1, true, hostile, from, dir, shot_cust)
+				return
 			mp_glock_fire.rpc(impact.x, impact.y, impact.z, cust_id, true, hostile)
 			return
-		_apply_glock_shot(impact, cust_id, true, hostile, from, dir)
+		_apply_glock_shot(impact, cust_id, true, hostile, from, dir, shot_cust)
 		return
 	var q := PhysicsRayQueryParameters3D.create(cam_from, cam_from + cam_dir * 45.0)
 	q.collide_with_areas = true
@@ -5175,7 +5351,15 @@ func _fire_glock() -> void:
 	_apply_glock_shot(impact, -1, false, false, from, dir)
 
 
-func _apply_glock_shot(impact: Vector3, cust_id: int, do_hit: bool, hostile: bool, from: Vector3 = Vector3.ZERO, dir: Vector3 = Vector3.FORWARD) -> void:
+func _apply_glock_shot(
+	impact: Vector3,
+	cust_id: int,
+	do_hit: bool,
+	hostile: bool,
+	from: Vector3 = Vector3.ZERO,
+	dir: Vector3 = Vector3.FORWARD,
+	hit_customer: Node3D = null
+) -> void:
 	glock_cooldown = GLOCK_FIRE_COOLDOWN
 	glock_recoil = 1.0
 	_ensure_glock_fx()
@@ -5194,10 +5378,13 @@ func _apply_glock_shot(impact: Vector3, cust_id: int, do_hit: bool, hostile: boo
 			game_audio.play_cat_meow()
 		return
 	_spawn_glock_impact(impact)
-	if cust_id < 0 or not do_hit:
+	if not do_hit:
 		return
-	var shot_cust = _customer_by_net_id(cust_id)
-	if shot_cust == null or not shot_cust.has_method("get_shot"):
+	## Solo has no customer net ids — use the aimed node when provided.
+	var shot_cust = hit_customer
+	if shot_cust == null and cust_id >= 0:
+		shot_cust = _customer_by_net_id(cust_id)
+	if shot_cust == null or not is_instance_valid(shot_cust) or not shot_cust.has_method("get_shot"):
 		return
 	var shot_from := from if from != Vector3.ZERO else impact + Vector3(0, 0, 0.5)
 	var shot_dir := dir if dir.length_squared() > 0.0001 else Vector3(0, 0, -1)
@@ -5292,6 +5479,8 @@ func _release_glock() -> void:
 	if game_audio:
 		game_audio.play_click()
 	_sync_combat_audio()
+	if mp_enabled:
+		mp_tool_pose.rpc(6, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _reset_glock() -> void:
@@ -5666,7 +5855,7 @@ func _cancel_shaker_hold() -> void:
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
 	if mp_enabled:
-		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false)
+		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _cancel_shaker_hold_silent() -> void:
@@ -5683,7 +5872,7 @@ func _cancel_shaker_hold_silent() -> void:
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
 	if mp_enabled:
-		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false)
+		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _update_held_shaker(_delta: float) -> void:
@@ -6965,7 +7154,7 @@ func _release_oil_bottle() -> void:
 	if game_audio:
 		game_audio.play_click()
 	if mp_enabled:
-		mp_tool_pose.rpc(2, false, 0.0, 0.0, 0.0, false)
+		mp_tool_pose.rpc(2, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _reset_oil_bottle() -> void:
@@ -6983,7 +7172,7 @@ func _reset_oil_bottle() -> void:
 		oil_area.input_ray_pickable = true
 	_clear_oil_slicks()
 	if mp_enabled:
-		mp_tool_pose.rpc(2, false, 0.0, 0.0, 0.0, false)
+		mp_tool_pose.rpc(2, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _grill_zone_bands() -> Array:
@@ -7142,11 +7331,17 @@ func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
 	## (grill / spatula / slide-offs do NOT reset the meter).
 	if patty == null or not is_instance_valid(patty):
 		return
+	## Guest hold-age comes from host grill snapshots — don't double-tick or solo-trash.
+	if mp_enabled and not NetManager.is_host():
+		return
 	var on_hold: bool = (not patty.is_held) and _is_in_warmer_zone(patty.position)
 	if on_hold or float(patty.warm_hold_time) > 0.0:
 		patty.warm_hold_time = float(patty.warm_hold_time) + delta
 		if float(patty.warm_hold_time) >= WARM_HOLD_MAX:
-			_trash_held_warm_patty(patty)
+			if mp_enabled and int(patty.get("net_id")) >= 0:
+				mp_trash_patty.rpc(int(patty.net_id))
+			else:
+				_trash_held_warm_patty(patty)
 
 
 func _trash_held_warm_patty(patty: Area3D) -> void:
@@ -8423,6 +8618,7 @@ func _ui_screen_to_wall_point(screen_pos: Vector2) -> Vector3:
 func _reset_supplies() -> void:
 	social_rating_sum = 0.0
 	social_review_count = 0
+	social_reviews.clear()
 	supply_stock.clear()
 	supply_fresh.clear()
 	for id in SUPPLY_IDS:
@@ -8588,9 +8784,81 @@ func _freshness_bar_color(ratio: float) -> Color:
 
 
 func _record_social_review(stars: float) -> void:
+	## Legacy entry — prefer _maybe_record_social_review for new posts.
+	_maybe_record_social_review(stars, "angry")
+
+
+func _maybe_record_social_review(stars: float, kind: String = "serve", tip: int = 0) -> void:
+	## Host/solo: ~70% of customers leave a visible social post right away.
+	if mp_enabled and not NetManager.is_host():
+		return
+	if randf() >= SOCIAL_REVIEW_CHANCE:
+		return
+	var who := SOCIAL_REVIEWER_NAMES[randi() % SOCIAL_REVIEWER_NAMES.size()]
+	var text := _generate_review_text(stars, kind, tip)
+	_apply_social_review(stars, who, text)
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		mp_social_review.rpc(stars, who, text)
+
+
+func _apply_social_review(stars: float, who: String, text: String) -> void:
 	social_review_count += 1
 	social_rating_sum += clampf(stars, 0.0, 5.0)
+	social_reviews.push_front({"stars": clampf(stars, 0.0, 5.0), "who": who, "text": text})
+	while social_reviews.size() > SOCIAL_FEED_MAX:
+		social_reviews.pop_back()
 	_refresh_phone_ui()
+	_flash("%s left a review!" % who, Color("90CAF9"))
+
+
+func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
+	var s := clampf(stars, 0.0, 5.0)
+	if kind == "angry" or s <= 1.5:
+		return [
+			"Walked out. Never coming back.",
+			"Waited forever. Absolute joke.",
+			"One star. Do better.",
+			"Left hungry and mad. Fix your service.",
+			"Trash experience. Blocking this place.",
+		][randi() % 5]
+	if kind == "wrong":
+		return [
+			"Wrong order?? Come on.",
+			"That wasn't what I asked for.",
+			"They served me something else entirely.",
+			"Order mix-up. Not impressed.",
+		][randi() % 4]
+	if kind == "meh" or s < 2.75:
+		return [
+			"Burger was… fine. Bland though.",
+			"Edible. Seasoning optional apparently.",
+			"Meh. Expected more from a food truck.",
+			"Okay burger. Nothing to shout about.",
+		][randi() % 4]
+	if s >= 4.5:
+		var lines := [
+			"Insane burger. Instant favorite.",
+			"Five stars. That patty was perfect.",
+			"I'm telling everyone about this truck.",
+			"Best smash burger I've had in ages.",
+			"Fast, hot, delicious. Obsessed.",
+		]
+		if tip > 0:
+			lines.append("Tipped hard. They earned it.")
+		return lines[randi() % lines.size()]
+	if s >= 3.5:
+		return [
+			"Solid burger, would order again.",
+			"Pretty good! Fresh and hot.",
+			"Nice job — tasty stack.",
+			"Hit the spot. Happy customer.",
+		][randi() % 4]
+	return [
+		"Decent. Not bad for a truck.",
+		"Alright burger. Room to grow.",
+		"Three stars. Service was fine.",
+		"Got my order. It was okay.",
+	][randi() % 4]
 
 
 func _review_stars_from_serve(
@@ -8627,6 +8895,7 @@ func _refresh_phone_ui() -> void:
 			social_review_count,
 			"s" if social_review_count != 1 else ""
 		]
+	_refresh_phone_feed()
 	if phone_inventory_box == null:
 		return
 	for child in phone_inventory_box.get_children():
@@ -8688,6 +8957,60 @@ func _refresh_phone_ui() -> void:
 		var sid := id
 		buy.pressed.connect(func(): _buy_supply(sid))
 		row.add_child(buy)
+
+
+func _refresh_phone_feed() -> void:
+	if phone_feed_box == null or not is_instance_valid(phone_feed_box):
+		return
+	for child in phone_feed_box.get_children():
+		child.queue_free()
+	if social_reviews.is_empty():
+		var empty := Label.new()
+		empty.text = "No posts yet — serve someone!"
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(empty, false, 8)
+		empty.add_theme_color_override("font_color", Color(0.45, 0.52, 0.6))
+		phone_feed_box.add_child(empty)
+		return
+	for post in social_reviews:
+		var card := PanelContainer.new()
+		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var card_sb := StyleBoxFlat.new()
+		card_sb.bg_color = Color(0.08, 0.10, 0.14, 0.95)
+		card_sb.set_corner_radius_all(6)
+		card_sb.content_margin_left = 5
+		card_sb.content_margin_right = 5
+		card_sb.content_margin_top = 4
+		card_sb.content_margin_bottom = 4
+		card_sb.border_color = Color(0.22, 0.28, 0.36, 0.8)
+		card_sb.set_border_width_all(1)
+		card.add_theme_stylebox_override("panel", card_sb)
+		phone_feed_box.add_child(card)
+		var cv := VBoxContainer.new()
+		cv.add_theme_constant_override("separation", 1)
+		cv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(cv)
+		var head := HBoxContainer.new()
+		head.add_theme_constant_override("separation", 4)
+		head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cv.add_child(head)
+		var who := Label.new()
+		who.text = str(post.get("who", "Guest"))
+		UiFontsScript.apply_label(who, true, 9)
+		who.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		head.add_child(who)
+		var stars := Label.new()
+		stars.text = _star_bar_text(float(post.get("stars", 3.0)))
+		UiFontsScript.apply_label(stars, true, 8)
+		stars.add_theme_color_override("font_color", Color("FFD54F"))
+		head.add_child(stars)
+		var body := Label.new()
+		body.text = str(post.get("text", ""))
+		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(body, false, 8)
+		body.add_theme_color_override("font_color", Color(0.72, 0.78, 0.86))
+		cv.add_child(body)
 
 
 func _build_phone_ui() -> void:
@@ -8841,6 +9164,17 @@ func _build_phone_ui() -> void:
 	UiFontsScript.apply_label(phone_review_label, false, 9)
 	phone_review_label.add_theme_color_override("font_color", Color(0.55, 0.62, 0.72))
 	v.add_child(phone_review_label)
+
+	var feed_title := Label.new()
+	feed_title.text = "FEED"
+	UiFontsScript.apply_label(feed_title, true, 9)
+	feed_title.add_theme_color_override("font_color", Color("90CAF9"))
+	v.add_child(feed_title)
+
+	phone_feed_box = VBoxContainer.new()
+	phone_feed_box.add_theme_constant_override("separation", 4)
+	phone_feed_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(phone_feed_box)
 
 	var sep := HSeparator.new()
 	sep.modulate = Color(1, 1, 1, 0.25)
@@ -9198,18 +9532,18 @@ func _build_graphics_ui() -> void:
 
 	_gfx_add_section(list, "DRAG PATTY HERE")
 	_gfx_add_check(list, "bz_debug_outline", "Show Build Zone Outlines")
-	_gfx_add_slider(list, "bz_row_left", "PANEL Row Left", -400.0, 600.0, 1.0)
-	_gfx_add_slider(list, "bz_row_right", "PANEL Row Right", -150.0, 800.0, 1.0)
-	_gfx_add_slider(list, "bz_row_top", "PANEL Row Top", -800.0, -200.0, 1.0)
-	_gfx_add_slider(list, "bz_row_bottom", "PANEL Row Bottom", -300.0, 0.0, 1.0)
-	_gfx_add_slider(list, "bz_panel_w", "PANEL Width", 120.0, 600.0, 1.0)
-	_gfx_add_slider(list, "bz_panel_h", "PANEL Height", 80.0, 500.0, 1.0)
-	_gfx_add_slider(list, "bz_zone_w", "ZONE Width", 80.0, 500.0, 1.0)
-	_gfx_add_slider(list, "bz_zone_h", "ZONE Height", 80.0, 450.0, 1.0)
+	_gfx_add_slider(list, "bz_row_left", "PANEL Row Left", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "bz_row_right", "PANEL Row Right", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "bz_row_top", "PANEL Row Top", -40.0, 80.0, 1.0)
+	_gfx_add_slider(list, "bz_row_bottom", "PANEL Row Bottom", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "bz_panel_w", "PANEL Width", 80.0, 280.0, 1.0)
+	_gfx_add_slider(list, "bz_panel_h", "PANEL Height", 120.0, 500.0, 1.0)
+	_gfx_add_slider(list, "bz_zone_w", "ZONE Width", 80.0, 260.0, 1.0)
+	_gfx_add_slider(list, "bz_zone_h", "ZONE Height", 80.0, 400.0, 1.0)
 	_gfx_add_slider(list, "bz_zone_left", "ZONE Left In Panel", -200.0, 200.0, 1.0)
 	_gfx_add_slider(list, "bz_zone_top", "ZONE Top", -400.0, 400.0, 1.0)
 	_gfx_add_slider(list, "bz_lift_bottom", "ZONE Bottom", 40.0, 260.0, 1.0)
-	_gfx_add_slider(list, "bz_plate_w", "PLATE Width", 80.0, 400.0, 1.0)
+	_gfx_add_slider(list, "bz_plate_w", "PLATE Width (0=full)", 0.0, 400.0, 1.0)
 	_gfx_add_slider(list, "bz_plate_h", "PLATE Height", 80.0, 400.0, 1.0)
 	_gfx_add_slider(list, "bz_plate_shift", "PLATE Shift X", -120.0, 120.0, 1.0)
 	_gfx_add_slider(list, "bz_plate_y", "PLATE Shift Y", -200.0, 200.0, 1.0)
@@ -9221,10 +9555,10 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "bz_hit_r", "BUILD_HIT Pad Right", 0.0, 120.0, 1.0)
 	_gfx_add_slider(list, "bz_hit_b", "BUILD_HIT Pad Bottom", 0.0, 120.0, 1.0)
 	_gfx_add_slider(list, "bz_hit_shift_x", "BUILD_HIT Shift X", -120.0, 120.0, 1.0)
-	_gfx_add_slider(list, "bz_drop_left", "DROP_L Left", -200.0, 200.0, 1.0)
-	_gfx_add_slider(list, "bz_drop_right", "DROP_L Right", 80.0, 700.0, 1.0)
-	_gfx_add_slider(list, "bz_drop_top", "DROP_L Top", 0.0, 600.0, 1.0)
-	_gfx_add_slider(list, "bz_drop_bottom", "DROP_L Bottom", -300.0, 0.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_left", "DROP_L Left", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_right", "DROP_L Right", -40.0, 40.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_top", "DROP_L Top", -40.0, 80.0, 1.0)
+	_gfx_add_slider(list, "bz_drop_bottom", "DROP_L Bottom", -40.0, 40.0, 1.0)
 	_gfx_add_slider(list, "bz_grill_pad", "GRILL_LIM Pad", 0.0, 300.0, 1.0)
 	_gfx_add_slider(list, "bz_lim_top", "GRILL_LIM Top", 0.0, 600.0, 1.0)
 	_gfx_add_slider(list, "bz_lim_bot", "GRILL_LIM Bot Inset", 0.0, 300.0, 1.0)
@@ -9623,14 +9957,7 @@ func _build_prep_ui_overlay() -> void:
 func _apply_build_zone_settings(s: Dictionary) -> void:
 	for key in BUILD_GFX_KEYS:
 		_build_zone_cfg[key] = float(s.get(key, GFX_DEFAULTS.get(key, 0.0)))
-	if stations_row != null and is_instance_valid(stations_row):
-		stations_row.offset_left = _bz("bz_row_left")
-		stations_row.offset_right = _bz("bz_row_right")
-		stations_row.offset_top = _bz("bz_row_top")
-		stations_row.offset_bottom = _bz("bz_row_bottom")
-		stations_row.custom_minimum_size.x = _bz("bz_panel_w")
-		stations_row.alignment = BoxContainer.ALIGNMENT_END
-		stations_row.z_index = 10
+	_layout_build_column_children()
 	for i in STATION_COUNT:
 		if i >= stations.size():
 			continue
@@ -9640,33 +9967,27 @@ func _apply_build_zone_settings(s: Dictionary) -> void:
 		panel.custom_minimum_size = Vector2(_bz("bz_panel_w"), _bz("bz_panel_h"))
 		var build_zone := panel.get_node_or_null("BuildZone") as Control
 		if build_zone != null and is_instance_valid(build_zone):
-			var panel_h := _bz("bz_panel_h")
-			var zone_top := _bz("bz_zone_top")
-			var zone_bot := _bz("bz_lift_bottom")
-			var zone_h := _bz("bz_zone_h")
-			var stretched_zone_h := panel_h - zone_top - zone_bot
-			if stretched_zone_h > 20.0:
-				zone_h = stretched_zone_h
-			build_zone.set_anchors_preset(Control.PRESET_TOP_LEFT)
-			build_zone.grow_horizontal = Control.GROW_DIRECTION_END
-			build_zone.grow_vertical = Control.GROW_DIRECTION_END
+			build_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
+			build_zone.grow_horizontal = Control.GROW_DIRECTION_BOTH
+			build_zone.grow_vertical = Control.GROW_DIRECTION_BOTH
 			build_zone.offset_left = int(_bz("bz_zone_left"))
-			build_zone.offset_top = int(zone_top)
-			build_zone.custom_minimum_size = Vector2(_bz("bz_zone_w"), zone_h)
+			build_zone.offset_top = int(_bz("bz_zone_top"))
+			build_zone.offset_right = 0
+			build_zone.offset_bottom = -int(_bz("bz_lift_bottom"))
+			build_zone.custom_minimum_size = Vector2.ZERO
 		var plate_wrap: Control = stations[i].get("plate", null)
 		if plate_wrap != null and is_instance_valid(plate_wrap):
-			plate_wrap.custom_minimum_size = Vector2(_bz("bz_plate_w"), _bz("bz_plate_h"))
+			var plate_w := _bz("bz_plate_w")
+			if plate_w <= 1.0:
+				plate_w = _bz("bz_panel_w")
+			plate_wrap.custom_minimum_size = Vector2(plate_w, _bz("bz_plate_h"))
+			plate_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			plate_wrap.position = Vector2(_bz("bz_plate_shift"), _bz("bz_plate_y"))
 			var title := plate_wrap.get_node_or_null("BuildTitle") as Label
 			if title != null and is_instance_valid(title):
 				title.offset_top = int(_bz("bz_title_y"))
 				title.offset_left = int(_bz("bz_title_x"))
 	_apply_prep_ui_overlay_layout()
-	if build_drop_zone != null and is_instance_valid(build_drop_zone):
-		build_drop_zone.offset_left = _bz("bz_drop_left")
-		build_drop_zone.offset_right = _bz("bz_drop_right")
-		build_drop_zone.offset_top = _bz("bz_drop_top")
-		build_drop_zone.offset_bottom = _bz("bz_drop_bottom")
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.offset_left = _bz("bz_grill_drop_left")
 		grill_drop_zone.offset_top = _bz("bz_grill_drop_top")
@@ -9964,6 +10285,28 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_title_y", GFX_DEFAULTS["bz_title_y"])
 		cfg.set_value("gfx", "gfx_bz_build_nudge_v4", true)
 		cfg.save(GFX_CFG_PATH)
+	## Left Build column parent (~15% width) — reset row / plate / drop into the column.
+	if not cfg.has_section_key("gfx", "gfx_bz_build_column_v1"):
+		for key in [
+			"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
+			"bz_panel_w", "bz_panel_h", "bz_zone_w", "bz_zone_h",
+			"bz_zone_left", "bz_zone_top", "bz_lift_bottom",
+			"bz_plate_w", "bz_plate_h", "bz_plate_shift", "bz_plate_y", "bz_plate_pad",
+			"bz_title_y", "bz_title_x", "bz_hit_shift_x",
+			"bz_drop_left", "bz_drop_right", "bz_drop_top", "bz_drop_bottom",
+		]:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_bz_build_column_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Full-width plate in Build column + rebalanced layer sizes.
+	if not cfg.has_section_key("gfx", "gfx_bz_build_column_v2"):
+		for key in [
+			"bz_zone_w", "bz_zone_left", "bz_zone_top",
+			"bz_plate_w", "bz_plate_h", "bz_plate_shift", "bz_plate_y",
+		]:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_bz_build_column_v2", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -10015,23 +10358,42 @@ func _style_quiet_hud_button(btn: Button, font_size: int = 12) -> void:
 
 
 func _layout_top_bar_hud() -> void:
-	## Combo / Day, then money pinned to the far right edge.
+	## Day + money stay top-right; combo sits above the order ticket rail.
 	var top_bar: HBoxContainer = get_node_or_null("UI/Root/TopBar") as HBoxContainer
 	if top_bar == null:
 		return
 	top_bar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	top_bar.offset_left = -460.0
+	top_bar.offset_left = -320.0
 	top_bar.offset_right = -12.0
 	top_bar.offset_top = 8.0
 	top_bar.offset_bottom = 48.0
 	top_bar.alignment = BoxContainer.ALIGNMENT_END
-	if hud_combo != null and is_instance_valid(hud_combo):
-		top_bar.move_child(hud_combo, 0)
 	if hud_day != null and is_instance_valid(hud_day):
-		top_bar.move_child(hud_day, mini(1, top_bar.get_child_count() - 1))
+		top_bar.move_child(hud_day, 0)
 	if hud_money != null and is_instance_valid(hud_money):
 		top_bar.move_child(hud_money, top_bar.get_child_count() - 1)
+	_layout_combo_above_tickets()
+
+
+func _layout_combo_above_tickets() -> void:
+	if hud_combo == null or not is_instance_valid(hud_combo):
+		return
+	var ticket_rail: Control = get_node_or_null("UI/Root/WindowTicketRail")
+	if ticket_rail == null:
+		return
+	if hud_combo.get_parent() != ticket_rail:
+		hud_combo.reparent(ticket_rail)
+	ticket_rail.move_child(hud_combo, 0)
+	hud_combo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_combo.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	hud_combo.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	hud_combo.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hud_combo.custom_minimum_size = Vector2(0, 18)
+	UiFontsScript.apply_label(hud_combo, true, 13)
+	hud_combo.add_theme_color_override("font_color", Color(1.0, 0.92, 0.4))
+	hud_combo.add_theme_constant_override("outline_size", 2)
+	hud_combo.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 
 
 func _build_pause_button() -> void:
@@ -10691,7 +11053,7 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		return
 	if angry:
 		combo = 0
-		_record_social_review(1.0)
+		_maybe_record_social_review(1.0, "angry")
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 
 
@@ -10764,14 +11126,21 @@ func _create_ticket(customer: Node3D) -> void:
 	pin_wrap.add_child(pin)
 
 	var title := Label.new()
-	title.text = "$%d" % customer.order_value
-	UiFontsScript.apply_ticket(title, 20)
+	## Order code = strip hotkeys for requested toppings (ketchup → 7, everything → 12345678).
+	var order_code := GameDataScript.order_number_code(customer.order)
+	title.text = order_code if order_code != "" else "—"
+	var title_size := 20
+	if order_code.length() >= 7:
+		title_size = 14
+	elif order_code.length() >= 5:
+		title_size = 16
+	UiFontsScript.apply_ticket(title, title_size)
 	title.add_theme_color_override("font_color", Color(0.22, 0.14, 0.1))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(title)
 
-	## Faint rule under the price — like a real guest check.
+	## Faint rule under the order number — like a real guest check.
 	var rule := ColorRect.new()
 	rule.custom_minimum_size = Vector2(0, 1)
 	rule.color = Color(0.55, 0.42, 0.32, 0.35)
@@ -11247,14 +11616,12 @@ func _note_melody_press(id: String) -> void:
 
 func _build_station_ui() -> void:
 	_init_build_zone_cfg()
-	## Screen-left — over prep baskets / cutting board, not center-right.
-	stations_row.offset_left = _bz("bz_row_left")
-	stations_row.offset_right = _bz("bz_row_right")
-	stations_row.offset_top = _bz("bz_row_top")
-	stations_row.offset_bottom = _bz("bz_row_bottom")
+	_ensure_build_column_root()
+	## Screen-left column (~15%) — over the cutting board, clear of ingredients.
+	_layout_build_column_children()
 	stations_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stations_row.z_index = 10
-	stations_row.custom_minimum_size = Vector2(_bz("bz_panel_w"), 0)
+	stations_row.z_index = 1
+	stations_row.z_as_relative = true
 	stations_row.alignment = BoxContainer.ALIGNMENT_END
 	for child in stations_row.get_children():
 		child.queue_free()
@@ -11267,15 +11634,15 @@ func _build_station_ui() -> void:
 		## Empty panel area passes through to the 3D grill behind.
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-		## Build zone — title + plate only (DRAG PATTY HERE).
 		var build_zone := Control.new()
 		build_zone.name = "BuildZone"
-		build_zone.set_anchors_preset(Control.PRESET_TOP_LEFT)
-		build_zone.grow_horizontal = Control.GROW_DIRECTION_END
-		build_zone.grow_vertical = Control.GROW_DIRECTION_END
+		build_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
+		build_zone.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		build_zone.grow_vertical = Control.GROW_DIRECTION_BOTH
 		build_zone.offset_left = int(_bz("bz_zone_left"))
 		build_zone.offset_top = int(_bz("bz_zone_top"))
-		build_zone.custom_minimum_size = Vector2(_bz("bz_zone_w"), _bz("bz_zone_h"))
+		build_zone.offset_right = 0
+		build_zone.offset_bottom = -int(_bz("bz_lift_bottom"))
 		build_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		build_zone.z_index = 2
 		build_zone.z_as_relative = true
@@ -11291,10 +11658,13 @@ func _build_station_ui() -> void:
 		root_v.z_as_relative = true
 		build_zone.add_child(root_v)
 
-		## Stage sized for mid-large burger art — tight hitbox around the board.
+		## Stage fills the left Build column width — burger art uses the full plate.
 		var plate_wrap := Control.new()
-		plate_wrap.custom_minimum_size = Vector2(_bz("bz_plate_w"), _bz("bz_plate_h"))
-		plate_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		var plate_w := _bz("bz_plate_w")
+		if plate_w <= 1.0:
+			plate_w = _bz("bz_panel_w")
+		plate_wrap.custom_minimum_size = Vector2(plate_w, _bz("bz_plate_h"))
+		plate_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		plate_wrap.size_flags_vertical = Control.SIZE_SHRINK_END
 		plate_wrap.position = Vector2(_bz("bz_plate_shift"), _bz("bz_plate_y"))
 		plate_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -11355,30 +11725,59 @@ func _build_station_ui() -> void:
 		)
 		root_v.add_child(drop_btn)
 
+		## Buttons on top, freshness under — nudged left ~20px from center, down ~20px.
+		var actions_top := Control.new()
+		actions_top.custom_minimum_size = Vector2(0, 20)
+		actions_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root_v.add_child(actions_top)
+		var actions_strip := HBoxContainer.new()
+		actions_strip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		actions_strip.add_theme_constant_override("separation", 0)
+		root_v.add_child(actions_strip)
+		var pad_l := Control.new()
+		pad_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pad_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		actions_strip.add_child(pad_l)
+		var actions := VBoxContainer.new()
+		actions.alignment = BoxContainer.ALIGNMENT_CENTER
+		actions.add_theme_constant_override("separation", 2)
+		actions.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		actions_strip.add_child(actions)
+		## Fixed right gap so equal expand pads shift the strip ~20px left.
+		var nudge_r := Control.new()
+		nudge_r.custom_minimum_size = Vector2(40, 0)
+		nudge_r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		actions_strip.add_child(nudge_r)
+		var pad_r := Control.new()
+		pad_r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pad_r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		actions_strip.add_child(pad_r)
+
 		var btns := HBoxContainer.new()
 		btns.alignment = BoxContainer.ALIGNMENT_CENTER
-		btns.add_theme_constant_override("separation", 5)
-		## Nudge left so bell / trash / All sit clear of the burner flames.
+		btns.add_theme_constant_override("separation", 8)
 		btns.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		root_v.add_child(btns)
-
-		var fresh_label := Label.new()
-		fresh_label.text = "--"
-		fresh_label.custom_minimum_size = Vector2(78, 0)
-		UiFontsScript.apply_label(fresh_label, true, 12)
-		fresh_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.8))
-		fresh_label.add_theme_color_override("font_outline_color", Color.BLACK)
-		fresh_label.add_theme_constant_override("outline_size", 3)
-		fresh_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		fresh_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		fresh_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btns.add_child(fresh_label)
+		actions.add_child(btns)
 
 		var serve_one := Button.new()
 		serve_one.text = "🔔"
 		serve_one.tooltip_text = "Order up! — Serve"
-		serve_one.custom_minimum_size = Vector2(44, 28)
-		UiFontsScript.apply_button(serve_one, true, 18)
+		serve_one.custom_minimum_size = Vector2(40, 30)
+		serve_one.focus_mode = Control.FOCUS_NONE
+		serve_one.clip_text = true
+		UiFontsScript.apply_button(serve_one, true, 16)
+		var ssb := StyleBoxFlat.new()
+		ssb.bg_color = Color(0.14, 0.16, 0.18, 0.92)
+		ssb.set_corner_radius_all(6)
+		ssb.content_margin_left = 4
+		ssb.content_margin_right = 4
+		ssb.content_margin_top = 2
+		ssb.content_margin_bottom = 2
+		serve_one.add_theme_stylebox_override("normal", ssb)
+		var ssbh := ssb.duplicate()
+		ssbh.bg_color = Color(0.22, 0.24, 0.28, 0.95)
+		serve_one.add_theme_stylebox_override("hover", ssbh)
+		serve_one.add_theme_color_override("font_color", Color(1.0, 0.92, 0.35))
 		serve_one.pressed.connect(func():
 			_sfx_click()
 			_select_station(si)
@@ -11389,11 +11788,17 @@ func _build_station_ui() -> void:
 		var trash_one := Button.new()
 		trash_one.text = "🗑"
 		trash_one.tooltip_text = "Trash selected layer (or top)"
-		trash_one.custom_minimum_size = Vector2(32, 24)
-		UiFontsScript.apply_button(trash_one, true, 12)
+		trash_one.custom_minimum_size = Vector2(40, 30)
+		trash_one.focus_mode = Control.FOCUS_NONE
+		trash_one.clip_text = true
+		UiFontsScript.apply_button(trash_one, true, 14)
 		var tsb := StyleBoxFlat.new()
 		tsb.bg_color = Color(0.45, 0.18, 0.16)
 		tsb.set_corner_radius_all(6)
+		tsb.content_margin_left = 4
+		tsb.content_margin_right = 4
+		tsb.content_margin_top = 2
+		tsb.content_margin_bottom = 2
 		trash_one.add_theme_stylebox_override("normal", tsb)
 		var tsbh := tsb.duplicate()
 		tsbh.bg_color = Color(0.65, 0.25, 0.2)
@@ -11409,7 +11814,8 @@ func _build_station_ui() -> void:
 		var clear_one := Button.new()
 		clear_one.text = "All"
 		clear_one.tooltip_text = "Clear whole burger"
-		clear_one.custom_minimum_size = Vector2(36, 24)
+		clear_one.custom_minimum_size = Vector2(40, 30)
+		clear_one.focus_mode = Control.FOCUS_NONE
 		UiFontsScript.apply_button(clear_one, false, 11)
 		clear_one.pressed.connect(func():
 			_sfx_click()
@@ -11418,11 +11824,17 @@ func _build_station_ui() -> void:
 		)
 		btns.add_child(clear_one)
 
-		## Spacer on the right shifts the centered button cluster left a bit.
-		var btn_nudge := Control.new()
-		btn_nudge.custom_minimum_size = Vector2(48, 1)
-		btn_nudge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btns.add_child(btn_nudge)
+		var fresh_label := Label.new()
+		fresh_label.text = "--"
+		fresh_label.custom_minimum_size = Vector2(128, 18)
+		UiFontsScript.apply_label(fresh_label, true, 11)
+		fresh_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.8))
+		fresh_label.add_theme_color_override("font_outline_color", Color.BLACK)
+		fresh_label.add_theme_constant_override("outline_size", 3)
+		fresh_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		fresh_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		fresh_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		actions.add_child(fresh_label)
 
 		plate_wrap.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed:
@@ -11503,21 +11915,20 @@ func _make_station_patty_drag(station_index: int, from_index: int, patty_index: 
 
 
 func _build_build_drop_zone() -> void:
-	## Full-height left column — click anywhere left of the grill to land on Build.
-	var ui_root: Control = get_node_or_null("UI/Root")
-	if ui_root == null:
+	## Fills the left Build column — click here while holding a scooped patty.
+	var col := _ensure_build_column_root()
+	if col == null:
+		return
+	if build_drop_zone != null and is_instance_valid(build_drop_zone):
+		_layout_build_column_children()
 		return
 	build_drop_zone = Control.new()
 	build_drop_zone.name = "BuildDropZone"
-	build_drop_zone.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	build_drop_zone.anchor_right = 0.0
-	build_drop_zone.offset_left = _bz("bz_drop_left")
-	build_drop_zone.offset_right = _bz("bz_drop_right")
-	build_drop_zone.offset_top = _bz("bz_drop_top")
-	build_drop_zone.offset_bottom = _bz("bz_drop_bottom")
 	build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	build_drop_zone.z_index = 9
-	ui_root.add_child(build_drop_zone)
+	build_drop_zone.z_index = 0
+	build_drop_zone.z_as_relative = true
+	col.add_child(build_drop_zone)
+	_layout_build_column_children()
 	build_drop_zone.gui_input.connect(func(ev: InputEvent):
 		if not (ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT):
 			return
@@ -11531,15 +11942,9 @@ func _build_build_drop_zone() -> void:
 func _arm_build_drop_zone(armed: bool) -> void:
 	if build_drop_zone == null or not is_instance_valid(build_drop_zone):
 		return
-	if armed:
-		var limit := maxf(_bz("bz_drop_right"), _grill_left_screen_x() + _bz("bz_grill_pad"))
-		var vr := get_viewport().get_visible_rect()
-		limit = maxf(limit, vr.size.x * BUILD_DROP_SCREEN_FRAC)
-		build_drop_zone.offset_right = limit
-		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
-	else:
-		build_drop_zone.offset_right = _bz("bz_drop_right")
-		build_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	## Stay inside BUILD_COL — never stretch across the grill.
+	_layout_build_column_children()
+	build_drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP if armed else Control.MOUSE_FILTER_IGNORE
 	call_deferred("_refresh_build_debug_outlines")
 
 
@@ -11997,12 +12402,17 @@ func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
 		_flash("Couldn't grab that patty", Color("EF5350"))
 		return
 	var preview = stations[station_index]["patties"][pidx] if pidx < stations[station_index]["patties"].size() else null
-	if preview == null or not is_instance_valid(preview) or int(preview.get("net_id")) < 0:
+	if preview == null or not is_instance_valid(preview):
 		_flash("Couldn't grab that patty", Color("EF5350"))
 		return
-	if mp_enabled and not _mp_applying:
-		mp_pickup_build_patty.rpc(int(preview.net_id), station_index)
-		return
+	## Solo patties keep net_id -1; only co-op needs a real id for the RPC.
+	if mp_enabled:
+		if int(preview.get("net_id")) < 0:
+			_flash("Couldn't grab that patty", Color("EF5350"))
+			return
+		if not _mp_applying:
+			mp_pickup_build_patty.rpc(int(preview.net_id), station_index)
+			return
 	var patty = _extract_station_patty(station_index, item_index)
 	if patty == null:
 		_flash("Couldn't grab that patty", Color("EF5350"))
@@ -12044,12 +12454,16 @@ func _return_station_patty_to_grill(station_index: int, item_index: int, world_p
 		_flash("Couldn't grab that patty", Color("EF5350"))
 		return false
 	var preview = stations[station_index]["patties"][pidx] if pidx < stations[station_index]["patties"].size() else null
-	if preview == null or not is_instance_valid(preview) or int(preview.get("net_id")) < 0:
+	if preview == null or not is_instance_valid(preview):
 		_flash("Couldn't grab that patty", Color("EF5350"))
 		return false
-	if mp_enabled and not _mp_applying:
-		mp_return_build_to_grill.rpc(int(preview.net_id), station_index, world_pos.x, world_pos.z)
-		return true
+	if mp_enabled:
+		if int(preview.get("net_id")) < 0:
+			_flash("Couldn't grab that patty", Color("EF5350"))
+			return false
+		if not _mp_applying:
+			mp_return_build_to_grill.rpc(int(preview.net_id), station_index, world_pos.x, world_pos.z)
+			return true
 	## HOLD strip is fine for cooked meat pulled off Build.
 	if _is_in_warmer_zone(world_pos):
 		var patty_w = _extract_station_patty(station_index, item_index)
@@ -13080,19 +13494,23 @@ func _station_item_build_scale(item: String) -> float:
 	if item == "bun_top":
 		return 1.05
 	if item == "bun_bottom":
-		return 0.85
+		return 0.92
 	if item == "patty_cheese":
-		return STATION_INGREDIENT_SCALE * 1.128 * 2.0 ## cheese-melt patty reads small — 2×
+		return STATION_PATTY_CHEESE_BUILD_SCALE
 	if item == "patty":
-		return STATION_INGREDIENT_SCALE * 1.128 ## was 1.2 — 6% smaller
+		return STATION_PATTY_BUILD_SCALE
 	if item == "onion":
-		return STATION_INGREDIENT_SCALE * 0.7
+		return STATION_INGREDIENT_SCALE * 0.85
 	if item == "tomato":
-		return STATION_INGREDIENT_SCALE * 0.825
+		return STATION_INGREDIENT_SCALE * 0.9
 	if item == "pickle":
-		return STATION_INGREDIENT_SCALE * 0.5
+		return STATION_INGREDIENT_SCALE * 0.8
 	if item == "bacon":
-		return STATION_INGREDIENT_SCALE * 0.7
+		return STATION_INGREDIENT_SCALE * 0.88
+	if item == "lettuce":
+		return STATION_INGREDIENT_SCALE * 0.92
+	if item == "cheese":
+		return STATION_INGREDIENT_SCALE * 0.9
 	return STATION_INGREDIENT_SCALE
 
 
@@ -13100,19 +13518,19 @@ func _layer_width_mul(item: String) -> float:
 	## Buns read large in sheet art — keep them narrower than meat/toppings.
 	match item:
 		"bun_top":
-			return 0.62
-		"bun_bottom":
 			return 0.78
+		"bun_bottom":
+			return 0.92
 		"patty":
-			return 1.38
-		"patty_cheese":
-			return 1.44
-		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
-			return 1.56
-		"ketchup", "mustard":
-			return 1.14
-		_:
 			return 1.28
+		"patty_cheese":
+			return 1.32
+		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
+			return 1.18
+		"ketchup", "mustard":
+			return 1.05
+		_:
+			return 1.15
 
 
 func _layer_img_height(item: String) -> float:
@@ -13122,19 +13540,19 @@ func _layer_img_height(item: String) -> float:
 		"bun_bottom":
 			return 44.0
 		"patty":
-			return 86.0
+			return 78.0
 		"patty_cheese":
-			return 96.0
+			return 86.0
 		"bacon":
-			return 72.0
+			return 58.0
 		"lettuce":
-			return 74.0
+			return 60.0
 		"tomato", "onion", "pickle", "cheese":
-			return 76.0
+			return 58.0
 		"ketchup", "mustard":
-			return 42.0
+			return 40.0
 		_:
-			return 64.0
+			return 56.0
 
 
 func _fit_layer_box_size(tex: Texture2D, target_w: float, min_h: float) -> Vector2:
@@ -13727,13 +14145,19 @@ func _complete_serve(station_index: int) -> void:
 		combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
 
-	_record_social_review(_review_stars_from_serve(
+	var review_stars := _review_stars_from_serve(
 		payout,
 		was_meh,
 		payout <= 0,
 		cook_r,
 		float(result.quality)
-	))
+	)
+	var review_kind := "good"
+	if payout <= 0:
+		review_kind = "wrong"
+	elif was_meh:
+		review_kind = "meh"
+	_maybe_record_social_review(review_stars, review_kind, tip_amt)
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
@@ -14612,7 +15036,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 
 
 func _mp_send_held_tool_pose(force: bool = false) -> void:
-	## Stream oil / shaker world pose so the partner sees the bottle + pour FX.
+	## Stream held tool world pose so the partner sees oil / shaker / ext / glock in-hand.
 	if not mp_enabled or not NetManager.is_online():
 		return
 	if not force and _mp_tool_pose_cool > 0.0:
@@ -14620,12 +15044,23 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 	_mp_tool_pose_cool = 0.04
 	if oil_held and oil_root != null and is_instance_valid(oil_root):
 		var p: Vector3 = oil_root.global_position
+		var r: Vector3 = oil_root.global_rotation_degrees
 		var emitting := oil_particles != null and oil_particles.emitting
-		mp_tool_pose.rpc(2, true, p.x, p.y, p.z, emitting)
+		mp_tool_pose.rpc(2, true, p.x, p.y, p.z, emitting, r.x, r.y, r.z)
 	elif shaker_held and shaker_root != null and is_instance_valid(shaker_root):
 		var sp: Vector3 = shaker_root.global_position
+		var sr: Vector3 = shaker_root.global_rotation_degrees
 		var semitting := shaker_particles != null and shaker_particles.emitting
-		mp_tool_pose.rpc(4, true, sp.x, sp.y, sp.z, semitting)
+		mp_tool_pose.rpc(4, true, sp.x, sp.y, sp.z, semitting, sr.x, sr.y, sr.z)
+	elif ext_held and ext_root != null and is_instance_valid(ext_root):
+		var ep: Vector3 = ext_root.global_position
+		var er: Vector3 = ext_root.global_rotation_degrees
+		var eemit := ext_spraying or (ext_powder != null and ext_powder.emitting)
+		mp_tool_pose.rpc(5, true, ep.x, ep.y, ep.z, eemit, er.x, er.y, er.z)
+	elif glock_held and glock_root != null and is_instance_valid(glock_root):
+		var gp: Vector3 = glock_root.global_position
+		var gr: Vector3 = glock_root.global_rotation_degrees
+		mp_tool_pose.rpc(6, true, gp.x, gp.y, gp.z, true, gr.x, gr.y, gr.z)
 
 
 func _mp_strip_tool_pickable(node: Node) -> void:
@@ -14640,36 +15075,36 @@ func _mp_strip_tool_pickable(node: Node) -> void:
 		_mp_strip_tool_pickable(child)
 
 
-func _mp_ensure_remote_oil(peer_id: int) -> Node3D:
-	if _mp_remote_oil.has(peer_id):
-		var existing: Node3D = _mp_remote_oil[peer_id]
+func _mp_ensure_remote_tool(store: Dictionary, peer_id: int, source: Node3D, ghost_name: String) -> Node3D:
+	if store.has(peer_id):
+		var existing: Node3D = store[peer_id]
 		if existing != null and is_instance_valid(existing):
 			return existing
-	if oil_root == null or world == null:
+	if source == null or world == null:
 		return null
-	var ghost: Node3D = oil_root.duplicate() as Node3D
-	ghost.name = "RemoteOil_%d" % peer_id
+	var ghost: Node3D = source.duplicate() as Node3D
+	ghost.name = "%s_%d" % [ghost_name, peer_id]
 	_mp_strip_tool_pickable(ghost)
 	ghost.visible = false
 	world.add_child(ghost)
-	_mp_remote_oil[peer_id] = ghost
+	store[peer_id] = ghost
 	return ghost
+
+
+func _mp_ensure_remote_oil(peer_id: int) -> Node3D:
+	return _mp_ensure_remote_tool(_mp_remote_oil, peer_id, oil_root, "RemoteOil")
 
 
 func _mp_ensure_remote_shaker(peer_id: int) -> Node3D:
-	if _mp_remote_shaker.has(peer_id):
-		var existing: Node3D = _mp_remote_shaker[peer_id]
-		if existing != null and is_instance_valid(existing):
-			return existing
-	if shaker_root == null or world == null:
-		return null
-	var ghost: Node3D = shaker_root.duplicate() as Node3D
-	ghost.name = "RemoteShaker_%d" % peer_id
-	_mp_strip_tool_pickable(ghost)
-	ghost.visible = false
-	world.add_child(ghost)
-	_mp_remote_shaker[peer_id] = ghost
-	return ghost
+	return _mp_ensure_remote_tool(_mp_remote_shaker, peer_id, shaker_root, "RemoteShaker")
+
+
+func _mp_ensure_remote_ext(peer_id: int) -> Node3D:
+	return _mp_ensure_remote_tool(_mp_remote_ext, peer_id, ext_root, "RemoteExt")
+
+
+func _mp_ensure_remote_glock(peer_id: int) -> Node3D:
+	return _mp_ensure_remote_tool(_mp_remote_glock, peer_id, glock_root, "RemoteGlock")
 
 
 func _mp_set_remote_tool_fx(root: Node3D, fx_name: String, emitting: bool) -> void:
@@ -14680,47 +15115,97 @@ func _mp_set_remote_tool_fx(root: Node3D, fx_name: String, emitting: bool) -> vo
 		(fx as GPUParticles3D).emitting = emitting
 
 
+func _mp_set_remote_glock_laser(root: Node3D, on: bool) -> void:
+	if root == null:
+		return
+	for n in ["GlockLaserModule", "GlockLaserBeam", "GlockLaserDot"]:
+		var node = root.find_child(n, true, false)
+		if node != null and is_instance_valid(node):
+			node.visible = on
+
+
+func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
+	if except_kind != 2 and _mp_remote_oil.has(peer_id):
+		var oil: Node3D = _mp_remote_oil[peer_id]
+		if oil != null and is_instance_valid(oil):
+			oil.visible = false
+			_mp_set_remote_tool_fx(oil, "OilParticles", false)
+	if except_kind != 4 and _mp_remote_shaker.has(peer_id):
+		var sh: Node3D = _mp_remote_shaker[peer_id]
+		if sh != null and is_instance_valid(sh):
+			sh.visible = false
+			_mp_set_remote_tool_fx(sh, "SeasonParticles", false)
+	if except_kind != 5 and _mp_remote_ext.has(peer_id):
+		var ex: Node3D = _mp_remote_ext[peer_id]
+		if ex != null and is_instance_valid(ex):
+			ex.visible = false
+			_mp_set_remote_tool_fx(ex, "ExtPowder", false)
+	if except_kind != 6 and _mp_remote_glock.has(peer_id):
+		var gl: Node3D = _mp_remote_glock[peer_id]
+		if gl != null and is_instance_valid(gl):
+			gl.visible = false
+			_mp_set_remote_glock_laser(gl, false)
+
+
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func mp_tool_pose(kind: int, active: bool, x: float, y: float, z: float, emitting: bool) -> void:
-	## kind 2 = oil, 4 = shaker (matches cursor tool badges).
+func mp_tool_pose(
+	kind: int,
+	active: bool,
+	x: float,
+	y: float,
+	z: float,
+	emitting: bool,
+	rx: float = 0.0,
+	ry: float = 0.0,
+	rz: float = 0.0
+) -> void:
+	## kind: 2 oil · 4 shaker · 5 extinguisher · 6 glock
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
-	if kind == 2:
-		var oil := _mp_ensure_remote_oil(sid)
-		if oil == null:
-			return
-		oil.visible = active
-		if active:
-			oil.global_position = Vector3(x, y, z)
-			oil.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	if not active:
+		_mp_hide_remote_tools(sid, -1)
+		return
+	_mp_hide_remote_tools(sid, kind)
+	var pos := Vector3(x, y, z)
+	var rot := Vector3(rx, ry, rz)
+	match kind:
+		2:
+			var oil := _mp_ensure_remote_oil(sid)
+			if oil == null:
+				return
+			oil.visible = true
+			oil.global_position = pos
+			oil.global_rotation_degrees = rot
 			oil.scale = Vector3(2.05, 2.05, 2.05)
 			_mp_set_remote_tool_fx(oil, "OilParticles", emitting)
-		else:
-			_mp_set_remote_tool_fx(oil, "OilParticles", false)
-		## Hide partner's shaker ghost if they switched tools.
-		if _mp_remote_shaker.has(sid):
-			var sh: Node3D = _mp_remote_shaker[sid]
-			if sh != null and is_instance_valid(sh):
-				sh.visible = false
-				_mp_set_remote_tool_fx(sh, "SeasonParticles", false)
-	elif kind == 4:
-		var shaker := _mp_ensure_remote_shaker(sid)
-		if shaker == null:
-			return
-		shaker.visible = active
-		if active:
-			shaker.global_position = Vector3(x, y, z)
-			shaker.rotation_degrees = Vector3(180.0, 25.0, 0.0)
+		4:
+			var shaker := _mp_ensure_remote_shaker(sid)
+			if shaker == null:
+				return
+			shaker.visible = true
+			shaker.global_position = pos
+			shaker.global_rotation_degrees = rot
 			shaker.scale = Vector3(2.15, 2.15, 2.15)
 			_mp_set_remote_tool_fx(shaker, "SeasonParticles", emitting)
-		else:
-			_mp_set_remote_tool_fx(shaker, "SeasonParticles", false)
-		if _mp_remote_oil.has(sid):
-			var ol: Node3D = _mp_remote_oil[sid]
-			if ol != null and is_instance_valid(ol):
-				ol.visible = false
-				_mp_set_remote_tool_fx(ol, "OilParticles", false)
+		5:
+			var ext := _mp_ensure_remote_ext(sid)
+			if ext == null:
+				return
+			ext.visible = true
+			ext.global_position = pos
+			ext.global_rotation_degrees = rot
+			_mp_set_remote_tool_fx(ext, "ExtPowder", emitting)
+		6:
+			var glock := _mp_ensure_remote_glock(sid)
+			if glock == null:
+				return
+			glock.visible = true
+			glock.global_position = pos
+			glock.global_rotation_degrees = rot
+			_mp_set_remote_glock_laser(glock, true)
+		_:
+			pass
 
 
 func _mp_update_cursors(delta: float) -> void:
@@ -15073,6 +15558,220 @@ func mp_end_day() -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
+func mp_restart_day() -> void:
+	## Both peers must start day 2 together — local Restart alone desyncs cook/build.
+	_mp_applying = true
+	_restart()
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+		_mp_broadcast_grill()
+		for si in STATION_COUNT:
+			_mp_broadcast_station(si)
+
+
+func _mp_broadcast_grill() -> void:
+	## Absolute cook-state snapshot so guests never drift on color / HOLD / flip.
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	if not playing:
+		return
+	var ids: Array = []
+	var slots: Array = []
+	var xs: Array = []
+	var ys: Array = []
+	var zs: Array = []
+	var cooks: Array = []
+	var flipped: Array = []
+	var firsts: Array = []
+	var smashs: Array = []
+	var heatings: Array = []
+	var heat_muls: Array = []
+	var holds: Array = []
+	var cheeses: Array = []
+	var melts: Array = []
+	var seasons: Array = []
+	var helds: Array = []
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p):
+			continue
+		var nid := int(p.get("net_id"))
+		if nid < 0:
+			continue
+		ids.append(nid)
+		slots.append(i)
+		xs.append(float(p.position.x))
+		ys.append(float(p.position.y))
+		zs.append(float(p.position.z))
+		cooks.append(float(p.cook_time))
+		flipped.append(bool(p.flipped_once))
+		firsts.append(float(p.first_side_time))
+		smashs.append(float(p.smash_bonus))
+		heatings.append(bool(p.heating))
+		heat_muls.append(float(p.heat_mul))
+		holds.append(float(p.warm_hold_time))
+		cheeses.append(bool(p.has_cheese))
+		melts.append(float(p.cheese_melt))
+		seasons.append(float(p.seasoning))
+		helds.append(bool(p.is_held))
+	## Spatula meat still needs cook/HOLD age even while scooped.
+	if spatula_patty != null and is_instance_valid(spatula_patty):
+		var sp = spatula_patty
+		var snid := int(sp.get("net_id"))
+		if snid >= 0 and not ids.has(snid):
+			ids.append(snid)
+			slots.append(int(sp.slot_index))
+			xs.append(float(sp.position.x))
+			ys.append(float(sp.position.y))
+			zs.append(float(sp.position.z))
+			cooks.append(float(sp.cook_time))
+			flipped.append(bool(sp.flipped_once))
+			firsts.append(float(sp.first_side_time))
+			smashs.append(float(sp.smash_bonus))
+			heatings.append(false)
+			heat_muls.append(float(sp.heat_mul))
+			holds.append(float(sp.warm_hold_time))
+			cheeses.append(bool(sp.has_cheese))
+			melts.append(float(sp.cheese_melt))
+			seasons.append(float(sp.seasoning))
+			helds.append(true)
+	mp_sync_grill.rpc(
+		ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
+		heatings, heat_muls, holds, cheeses, melts, seasons, helds
+	)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_sync_grill(
+	ids: Array,
+	slots: Array,
+	xs: Array,
+	ys: Array,
+	zs: Array,
+	cooks: Array,
+	flipped: Array,
+	firsts: Array,
+	smashs: Array,
+	heatings: Array,
+	heat_muls: Array,
+	holds: Array,
+	cheeses: Array,
+	melts: Array,
+	seasons: Array,
+	helds: Array
+) -> void:
+	if NetManager.is_host():
+		return
+	if not playing:
+		return
+	_mp_applying = true
+	var seen: Dictionary = {}
+	for i in ids.size():
+		var nid := int(ids[i])
+		seen[nid] = true
+		var slot := int(slots[i]) if i < slots.size() else 0
+		var px := float(xs[i]) if i < xs.size() else 0.0
+		var py := float(ys[i]) if i < ys.size() else (GRILL_SURFACE_Y + PATTY_SIT_Y)
+		var pz := float(zs[i]) if i < zs.size() else 0.0
+		var is_held_snap := bool(helds[i]) if i < helds.size() else false
+		var p = _patty_by_net_id(nid)
+		if p == null or not is_instance_valid(p):
+			## Missing on guest — spawn into host slot (or first empty).
+			var spawn_slot := slot
+			if spawn_slot < 0 or spawn_slot >= GRILL_SLOTS or grill[spawn_slot] != null:
+				spawn_slot = _first_empty_slot()
+			if spawn_slot < 0:
+				continue
+			_spawn_patty_at(spawn_slot, Vector3(px, GRILL_SURFACE_Y, pz), nid)
+			p = _patty_by_net_id(nid)
+			if p == null:
+				continue
+		## Don't yank local scoop / drag ownership mid-gesture.
+		var local_scoop := spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id())
+		var local_drag := dragging_patty == p and drag_owner_id == NetManager.my_id()
+		if local_scoop or local_drag:
+			## Still repair absolute cook / HOLD / cheese so day-2 desync heals.
+			if p.has_method("apply_mp_state"):
+				p.apply_mp_state(
+					float(cooks[i]) if i < cooks.size() else float(p.cook_time),
+					bool(flipped[i]) if i < flipped.size() else bool(p.flipped_once),
+					float(firsts[i]) if i < firsts.size() else float(p.first_side_time),
+					float(smashs[i]) if i < smashs.size() else float(p.smash_bonus),
+					false,
+					float(heat_muls[i]) if i < heat_muls.size() else float(p.heat_mul),
+					float(holds[i]) if i < holds.size() else float(p.warm_hold_time),
+					bool(cheeses[i]) if i < cheeses.size() else bool(p.has_cheese),
+					float(melts[i]) if i < melts.size() else float(p.cheese_melt),
+					float(seasons[i]) if i < seasons.size() else float(p.seasoning),
+					true,
+					p.position.x, p.position.y, p.position.z,
+					int(p.slot_index)
+				)
+			p.mp_puppet = true
+			continue
+		## Seat into grill slot if host still has it on the flat-top.
+		if not is_held_snap and slot >= 0 and slot < GRILL_SLOTS:
+			var gidx: int = int(p.slot_index)
+			if gidx >= 0 and gidx < grill.size() and grill[gidx] == p and gidx != slot:
+				grill[gidx] = null
+			if grill[slot] != null and grill[slot] != p:
+				var usurped = grill[slot]
+				if usurped != null and is_instance_valid(usurped) and usurped != spatula_patty and usurped != dragging_patty:
+					var uid := int(usurped.get("net_id"))
+					if uid < 0 or not seen.has(uid):
+						grill[slot] = null
+						usurped.queue_free()
+			grill[slot] = p
+			## Pull off Build if it drifted there alone.
+			for st in stations:
+				var arr: Array = st.get("patties", [])
+				if arr.has(p):
+					arr.erase(p)
+					st["patties"] = arr
+			p.visible = true
+		if p.has_method("apply_mp_state"):
+			p.apply_mp_state(
+				float(cooks[i]) if i < cooks.size() else 0.0,
+				bool(flipped[i]) if i < flipped.size() else false,
+				float(firsts[i]) if i < firsts.size() else 0.0,
+				float(smashs[i]) if i < smashs.size() else 0.0,
+				bool(heatings[i]) if i < heatings.size() else false,
+				float(heat_muls[i]) if i < heat_muls.size() else 1.0,
+				float(holds[i]) if i < holds.size() else 0.0,
+				bool(cheeses[i]) if i < cheeses.size() else false,
+				float(melts[i]) if i < melts.size() else 0.0,
+				float(seasons[i]) if i < seasons.size() else 0.0,
+				is_held_snap,
+				px, py, pz,
+				slot
+			)
+		p.mp_puppet = true
+	## Cull grill ghosts the host no longer has (keep Build / local scoop).
+	for gi in GRILL_SLOTS:
+		var gp = grill[gi]
+		if gp == null or not is_instance_valid(gp):
+			continue
+		var gnid := int(gp.get("net_id"))
+		if gnid >= 0 and seen.has(gnid):
+			continue
+		if gp == spatula_patty or gp == dragging_patty or gp == flicking_patty:
+			continue
+		var on_build := false
+		for st2 in stations:
+			if st2.get("patties", []).has(gp):
+				on_build = true
+				break
+		if on_build:
+			grill[gi] = null
+			continue
+		grill[gi] = null
+		gp.queue_free()
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
 func mp_trash_patty(net_id: int) -> void:
 	var p = _patty_by_net_id(net_id)
 	if p == null:
@@ -15357,12 +16056,20 @@ func mp_customer_leave(net_id: int, angry: bool) -> void:
 		_customer_leave_apply(c, angry)
 	elif angry:
 		combo = 0
-		_record_social_review(1.0)
+		_maybe_record_social_review(1.0, "angry")
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 	_mp_applying = false
 	_mp_serve_sync = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_social_review(stars: float, who: String, text: String) -> void:
+	## Guest mirrors a host feed post (chance already rolled on host).
+	if NetManager.is_host():
+		return
+	_apply_social_review(stars, who, text)
 
 
 func _mp_broadcast_customers() -> void:

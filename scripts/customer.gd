@@ -1911,7 +1911,8 @@ func receive_burger(
 		tip_pay = int(round(float(tip_pay) * (0.55 + tip_factor * 1.4) * tip_mood_mult))
 		if combo >= 2:
 			tip_pay += mini(combo, 4)
-		tip_pay = maxi(tip_pay, 1 if perfect else 0)
+		## Tips stay in a tight band — never stingy, never wild.
+		tip_pay = clampi(tip_pay, 3, 10)
 	elif meh:
 		tip_pay = 0
 

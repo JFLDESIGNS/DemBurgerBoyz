@@ -31,6 +31,8 @@ var heating: bool = true
 var heat_mul: float = 1.0 ## 1 = full grill · 0 = hold zone (no cook)
 var warm_hold_time: float = 0.0 ## seconds parked on the hold strip
 const WARM_HOLD_MAX_SEC := 300.0
+## Co-op guest: cook / hold timers come from host snapshots (no local drift).
+var mp_puppet: bool = false
 var base_y: float = 0.9
 var _rest_x: float = 0.0
 var _rest_z: float = 0.0
@@ -499,6 +501,58 @@ func refresh_cook_visuals() -> void:
 	_update_ready_cues()
 
 
+func apply_mp_state(
+	p_cook: float,
+	p_flipped: bool,
+	p_first: float,
+	p_smash: float,
+	p_heating: bool,
+	p_heat_mul: float,
+	p_hold: float,
+	p_cheese: bool,
+	p_melt: float,
+	p_season: float,
+	p_held: bool,
+	px: float,
+	py: float,
+	pz: float,
+	p_slot: int
+) -> void:
+	## Absolute cook snapshot from the host — keeps both kitchens identical.
+	cook_time = p_cook
+	flipped_once = p_flipped
+	first_side_time = p_first
+	smash_bonus = p_smash
+	heating = p_heating and not p_held
+	heat_mul = p_heat_mul
+	warm_hold_time = p_hold
+	is_held = p_held
+	slot_index = p_slot
+	position = Vector3(px, py, pz)
+	_rest_x = px
+	_rest_z = pz
+	visible = true
+	if p_cheese and not has_cheese:
+		add_cheese()
+	elif (not p_cheese) and has_cheese:
+		if has_method("remove_cheese"):
+			remove_cheese()
+		else:
+			has_cheese = false
+	has_cheese = p_cheese
+	cheese_melt = clampf(p_melt, 0.0, 1.0)
+	if p_season > seasoning + 0.02:
+		apply_seasoning(p_season - seasoning)
+	else:
+		seasoning = clampf(p_season, 0.0, 1.0)
+	if has_cheese:
+		_update_cheese_visual()
+	refresh_cook_visuals()
+	if warm_hold_time > 0.0 or heat_mul <= 0.001:
+		_set_hold_meter_visible(flipped_once and can_scoop())
+		_refresh_hold_meter()
+
+
 func _process(delta: float) -> void:
 	var cooking := heating and not is_held
 	if _bubbles:
@@ -516,18 +570,23 @@ func _process(delta: float) -> void:
 		_steam.emitting = cooking
 	_update_ready_cues()
 	## Cheese keeps melting anywhere — grill, HOLD, spatula, or Build board.
-	if has_cheese and cheese_melt < 1.0:
+	## Guests take melt from host snapshots so co-op doesn't desync scoop-ready.
+	if has_cheese and cheese_melt < 1.0 and not mp_puppet:
 		cheese_melt = minf(1.0, cheese_melt + delta / CHEESE_MELT_TIME)
+		_update_cheese_visual()
+	elif has_cheese and cheese_melt < 1.0 and mp_puppet:
 		_update_cheese_visual()
 	if is_held:
 		if _hint:
 			_hint.visible = false
 		_set_hold_meter_visible(false)
 		return
-	if heating:
+	if heating and not mp_puppet:
 		var rate := (1.0 + smash_bonus) * heat_mul
 		smash_bonus = maxf(0.0, smash_bonus - delta * 0.8)
 		cook_time += delta * rate
+		_sizzle += delta * 10.0 * heat_mul
+	elif heating:
 		_sizzle += delta * 10.0 * heat_mul
 	_update_cook_gradient()
 	_update_frost_visual()

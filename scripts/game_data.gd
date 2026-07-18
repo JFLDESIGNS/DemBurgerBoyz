@@ -118,6 +118,17 @@ static func is_plain_patty_order(order: Array) -> bool:
 		and order[2] == "bun_top"
 
 
+## Strip hotkey digits for toppings on the ticket (1 cheese … 8 mustard).
+## Everything → "12345678"; ketchup only → "7"; plain → "".
+static func order_number_code(order: Array) -> String:
+	const DIGITS := ["1", "2", "3", "4", "5", "6", "7", "8"]
+	var code := ""
+	for i in EXTRA_TOPPINGS.size():
+		if order.has(EXTRA_TOPPINGS[i]):
+			code += DIGITS[i]
+	return code
+
+
 static func order_value(order: Array) -> int:
 	var base := 4 + order.size()
 	if is_everything_order(order):
