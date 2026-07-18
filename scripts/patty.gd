@@ -82,6 +82,8 @@ var _top_bubbles: GPUParticles3D
 var _steam: GPUParticles3D
 var _announced_flip: bool = false
 var _announced_scoop: bool = false
+var _done_jump_y: float = 0.0 ## Extra hop height when scoop-ready
+var _done_jump_tw: Tween = null
 var _cook_img: Image
 var _cook_tex: ImageTexture
 static var _steam_tex: ImageTexture
@@ -447,14 +449,37 @@ func _audio() -> Node:
 
 func _update_ready_cues() -> void:
 	var audio := _audio()
-	if audio == null:
-		return
 	if can_flip() and not _announced_flip:
 		_announced_flip = true
-		audio.play_ready()
+		if audio:
+			audio.play_ready()
 	elif flipped_once and can_scoop() and not _announced_scoop:
 		_announced_scoop = true
-		audio.play_ready()
+		if audio:
+			audio.play_ready()
+		_play_done_jump()
+
+
+func _set_done_jump_y(y: float) -> void:
+	_done_jump_y = y
+
+
+func _play_done_jump() -> void:
+	## Little hop when the second side finishes — reads as “done”.
+	if _done_jump_tw != null and is_instance_valid(_done_jump_tw):
+		_done_jump_tw.kill()
+	_done_jump_y = 0.0
+	var peak := 0.09
+	_done_jump_tw = create_tween()
+	_done_jump_tw.tween_property(self, "scale", Vector3(1.14, 0.72, 1.14), 0.05)
+	_done_jump_tw.tween_method(_set_done_jump_y, 0.0, peak, 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_done_jump_tw.parallel().tween_property(self, "scale", Vector3(0.9, 1.18, 0.9), 0.11)
+	_done_jump_tw.tween_method(_set_done_jump_y, peak, 0.0, 0.16).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	_done_jump_tw.parallel().tween_property(self, "scale", Vector3.ONE, 0.16)
+	_done_jump_tw.tween_callback(func() -> void:
+		_done_jump_y = 0.0
+		scale = Vector3.ONE
+	)
 
 
 func _get_steam_texture() -> ImageTexture:
@@ -601,42 +626,40 @@ func _process(delta: float) -> void:
 		else:
 			_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
 
+	var on_hold := warm_hold_time > 0.0 or heat_mul <= 0.001
+	## Freshness disc only on finished meat parked in HOLD — never while still cooking.
+	var show_fresh := flipped_once and can_scoop() and on_hold
+	_set_hold_meter_visible(show_fresh)
+	if show_fresh:
+		_refresh_hold_meter()
+
 	if can_flip():
-		_set_hold_meter_visible(false)
 		var flip_txt := "CLICK TO FLIP!" if is_in_flip_window() else "FLIP NOW"
 		var flip_col := Color("FFEB3B") if is_in_flip_window() else Color("FFCC80")
 		_set_hint_mode("flip", flip_txt, flip_col)
 		_hint.modulate.a = 0.55 + 0.45 * absf(sin(Time.get_ticks_msec() * 0.01))
 	elif flipped_once and has_cheese and cheese_melt < 1.0 and cook_time >= SCOOP_READY:
-		_set_hold_meter_visible(false)
 		_set_hint_mode("melt", "CHEESE MELTING...", Color("FFE082"))
 		_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.01))
 	elif flipped_once and can_scoop():
-		## Freshness disc sits on the meat once cook is done — HOLD or still on heat.
-		_set_hold_meter_visible(true)
-		_refresh_hold_meter()
-		if warm_hold_time > 0.0 or heat_mul <= 0.001:
+		if on_hold:
 			_set_hint_mode("", "", Color.WHITE)
 		else:
 			_set_hint_mode("scoop", "CLICK TO SCOOP", Color("A5D6A7"))
 			_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.008))
 	elif flipped_once:
-		if warm_hold_time > 0.0 or heat_mul <= 0.001:
+		if on_hold:
 			_set_hint_mode("", "", Color.WHITE)
-			_set_hold_meter_visible(true)
-			_refresh_hold_meter()
 		else:
-			_set_hold_meter_visible(false)
 			_set_hint_mode("cooking", "COOKING...", Color("FFCC80"))
 			_hint.modulate.a = 0.7
 	else:
-		_set_hold_meter_visible(false)
 		_set_hint_mode("", "", Color.WHITE)
 
 	_update_hint_scale(delta)
 
 	## Keep patty seated on the pad, with a light sizzle shake while cooking.
-	position.y = slot_base_y()
+	position.y = slot_base_y() + _done_jump_y
 	if heating and not is_held:
 		var shake := 0.0018
 		position.x = _rest_x + sin(_sizzle * 1.7) * shake + cos(_sizzle * 2.3) * shake * 0.5
@@ -1368,6 +1391,10 @@ func flip() -> bool:
 	## Fresh timer for the second side (~15s to scoop).
 	cook_time = 0.0
 	_announced_scoop = false
+	_done_jump_y = 0.0
+	if _done_jump_tw != null and is_instance_valid(_done_jump_tw):
+		_done_jump_tw.kill()
+		_done_jump_tw = null
 	_update_frost_visual()
 	_update_cook_gradient()
 	_update_sear_disc()
