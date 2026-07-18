@@ -14,6 +14,9 @@ const INGREDIENT_LABELS := {
 	"ketchup": "Ketchup",
 	"mustard": "Mustard",
 	"bun_top": "Top Bun",
+	"soda_cola": "Cola",
+	"soda_lemon_lime": "Lime Soda",
+	"soda_orange": "Orange Soda",
 }
 
 const INGREDIENT_COLORS := {
@@ -28,9 +31,15 @@ const INGREDIENT_COLORS := {
 	"ketchup": Color("D32F2F"),
 	"mustard": Color("F9A825"),
 	"bun_top": Color("E8A85C"),
+	"soda_cola": Color("5D2A1A"),
+	"soda_lemon_lime": Color("7CB342"),
+	"soda_orange": Color("F57C00"),
 }
 
 const EXTRA_TOPPINGS := ["cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
+const SODA_ORDER_IDS: Array[String] = ["soda_cola", "soda_lemon_lime", "soda_orange"]
+const SODA_ONLY_CHANCE := 0.08
+const SODA_WITH_BURGER_CHANCE := 0.30
 
 ## Always the same stack order on tickets (and when normalizing builds).
 ## Cheese first, then toppings right→left toward the buns.
@@ -70,81 +79,143 @@ static func sort_toppings(ids: Array) -> Array:
 	return copy
 
 
+static func is_soda_item(id: String) -> bool:
+	return str(id).begins_with("soda_")
+
+
+static func soda_flavor_from_order_id(id: String) -> String:
+	## "soda_cola" → "cola", "soda_lemon_lime" → "lemon_lime"
+	var s := str(id)
+	if s.begins_with("soda_"):
+		return s.substr(5)
+	return ""
+
+
+static func order_soda_ids(order: Array) -> Array:
+	var out: Array = []
+	for item in order:
+		if is_soda_item(str(item)):
+			out.append(str(item))
+	return out
+
+
+static func order_burger_items(order: Array) -> Array:
+	var out: Array = []
+	for item in order:
+		if not is_soda_item(str(item)):
+			out.append(item)
+	return out
+
+
+static func is_soda_only_order(order: Array) -> bool:
+	if order.is_empty():
+		return false
+	for item in order:
+		if not is_soda_item(str(item)):
+			return false
+	return true
+
+
+static func random_soda_order_id() -> String:
+	return SODA_ORDER_IDS[randi() % SODA_ORDER_IDS.size()]
+
+
 static func generate_order(difficulty: float = 0.0) -> Array[String]:
+	## Occasional drink-only ticket.
+	if randf() < SODA_ONLY_CHANCE:
+		return [random_soda_order_id()] as Array[String]
 	var order: Array[String] = ["bun_bottom", "patty"]
 	## Once in a while: plain patty or ketchup only — no other toppings.
 	const MINIMAL_CHANCE := 0.12
 	if randf() < MINIMAL_CHANCE:
 		if randf() < 0.5:
 			order.append("bun_top")
-			return order
-		order.append("ketchup")
-		order.append("bun_top")
-		return order
-	## Some orders ask for a double patty.
-	if difficulty >= 0.15 and randf() < 0.2 + difficulty * 0.35:
-		order.append("patty")
-	var picked: Array = []
-	## Some tickets just say EVERYTHING — every topping on the strip.
-	var everything_chance := 0.10 + difficulty * 0.18
-	if randf() < everything_chance:
-		picked = EXTRA_TOPPINGS.duplicate()
+		else:
+			order.append("ketchup")
+			order.append("bun_top")
 	else:
-		var pool := EXTRA_TOPPINGS.duplicate()
-		pool.shuffle()
-		var count := clampi(2 + int(difficulty * 2.5) + randi_range(0, 2), 2, 6)
-		for i in count:
-			if pool.is_empty():
-				break
-			picked.append(pool.pop_front())
-	## Tickets always list toppings in the same kitchen order.
-	order.append_array(sort_toppings(picked))
-	order.append("bun_top")
+		## Some orders ask for a double patty.
+		if difficulty >= 0.15 and randf() < 0.2 + difficulty * 0.35:
+			order.append("patty")
+		var picked: Array = []
+		## Some tickets just say EVERYTHING — every topping on the strip.
+		var everything_chance := 0.10 + difficulty * 0.18
+		if randf() < everything_chance:
+			picked = EXTRA_TOPPINGS.duplicate()
+		else:
+			var pool := EXTRA_TOPPINGS.duplicate()
+			pool.shuffle()
+			var count := clampi(2 + int(difficulty * 2.5) + randi_range(0, 2), 2, 6)
+			for i in count:
+				if pool.is_empty():
+					break
+				picked.append(pool.pop_front())
+		## Tickets always list toppings in the same kitchen order.
+		order.append_array(sort_toppings(picked))
+		order.append("bun_top")
+	## Chance the burger comes with a fountain drink.
+	var soda_chance := SODA_WITH_BURGER_CHANCE + difficulty * 0.12
+	if randf() < soda_chance:
+		order.append(random_soda_order_id())
 	return order
 
 
 static func is_everything_order(order: Array) -> bool:
+	var burger := order_burger_items(order)
 	for t in EXTRA_TOPPINGS:
-		if not order.has(t):
+		if not burger.has(t):
 			return false
 	return true
 
 
 static func is_plain_patty_order(order: Array) -> bool:
-	## Bottom bun + one patty + top bun — nothing else.
-	return order.size() == 3 \
-		and order[0] == "bun_bottom" \
-		and order[1] == "patty" \
-		and order[2] == "bun_top"
+	## Bottom bun + one patty + top bun — nothing else (soda side ok).
+	var burger := order_burger_items(order)
+	return burger.size() == 3 \
+		and burger[0] == "bun_bottom" \
+		and burger[1] == "patty" \
+		and burger[2] == "bun_top"
 
 
 ## Strip hotkey digits for toppings on the ticket (1 cheese … 8 mustard).
 ## Everything → "12345678"; ketchup only → "7"; plain → "".
 static func order_number_code(order: Array) -> String:
 	const DIGITS := ["1", "2", "3", "4", "5", "6", "7", "8"]
+	var burger := order_burger_items(order)
 	var code := ""
 	for i in EXTRA_TOPPINGS.size():
-		if order.has(EXTRA_TOPPINGS[i]):
+		if burger.has(EXTRA_TOPPINGS[i]):
 			code += DIGITS[i]
 	return code
 
 
 static func order_value(order: Array) -> int:
-	var base := 4 + order.size()
-	if is_everything_order(order):
-		base += 3
-	return base
+	var burger := order_burger_items(order)
+	var sodas := order_soda_ids(order)
+	var base := 0
+	if not burger.is_empty():
+		base += 4 + burger.size()
+		if is_everything_order(order):
+			base += 3
+	base += sodas.size() * 3
+	return maxi(base, 3)
 
 
 static func compare_orders(built: Array, requested: Array) -> Dictionary:
-	if built.is_empty():
-		return {"quality": 0.0, "perfect": false, "missing": requested.duplicate(), "extra": []}
+	## Burger layers only — soda is checked separately against the cup.
+	var req_burger := order_burger_items(requested)
+	var built_burger := order_burger_items(built)
+	if req_burger.is_empty():
+		## Drink-only ticket — burger side is vacuously perfect.
+		return {"quality": 1.0, "perfect": true, "missing": [], "extra": []}
+	if built_burger.is_empty():
+		return {"quality": 0.0, "perfect": false, "missing": req_burger.duplicate(), "extra": []}
 
 	var req_counts := {}
 	var built_counts := {}
-	for item in requested:
+	for item in req_burger:
 		req_counts[item] = req_counts.get(item, 0) + 1
-	for item in built:
+	for item in built_burger:
 		built_counts[item] = built_counts.get(item, 0) + 1
 
 	var matched := 0
@@ -169,11 +240,11 @@ static func compare_orders(built: Array, requested: Array) -> Dictionary:
 	var quality := 0.0 if total == 0 else float(matched) / float(total)
 	if not extra.is_empty():
 		quality *= 0.85
-	if built.size() >= 2 and built[0] == "bun_bottom" and built[built.size() - 1] == "bun_top":
+	if built_burger.size() >= 2 and built_burger[0] == "bun_bottom" and built_burger[built_burger.size() - 1] == "bun_top":
 		quality = minf(1.0, quality + 0.05)
-	var perfect := missing.is_empty() and extra.is_empty() and built.size() == requested.size()
+	var perfect := missing.is_empty() and extra.is_empty() and built_burger.size() == req_burger.size()
 	if perfect:
-		perfect = built == requested or _soft_order_match(built, requested)
+		perfect = built_burger == req_burger or _soft_order_match(built_burger, req_burger)
 	return {"quality": quality, "perfect": perfect, "missing": missing, "extra": extra}
 
 

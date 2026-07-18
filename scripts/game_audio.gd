@@ -371,12 +371,12 @@ func set_soda_pour(active: bool) -> void:
 
 
 func set_ice_grind(active: bool) -> void:
-	## Ice-machine crumb grind while cubes are dispensing.
+	## Soft ice-machine hush while cubes are dispensing.
 	if _ice_player == null:
 		return
 	if active:
 		_ice_on = true
-		_ice_player.volume_db = -16.0
+		_ice_player.volume_db = -22.0
 		if not _ice_player.playing:
 			_ice_player.play()
 	else:
@@ -387,8 +387,8 @@ func set_ice_grind(active: bool) -> void:
 
 
 func play_ice_tink() -> void:
-	## Cube hits the cup glass.
-	_play_cached("ice_tink", _make_ice_tink, 0.85 + randf() * 0.3, 0.55 + randf() * 0.2)
+	## Soft cube settle in the cup.
+	_play_cached("ice_tink_v2", _make_ice_tink, 0.92 + randf() * 0.18, 0.35 + randf() * 0.15)
 
 
 func _next_soda_pour_sample() -> float:
@@ -404,18 +404,19 @@ func _next_soda_pour_sample() -> float:
 
 
 func _next_ice_grind_sample() -> float:
-	## Low crunchy grind — crushed ice crumbs through the chute.
+	## Soft cooler hush — gentle rumble, light rain of crumbs (not a harsh grind).
 	_ice_tick += 1.0 / float(MIX_RATE)
-	var grind_hz := 18.0 + sin(_ice_tick * 3.4) * 4.0
+	var grind_hz := 9.0 + sin(_ice_tick * 1.6) * 1.5
 	_ice_phase += grind_hz / float(MIX_RATE)
-	var pulse := 0.55 + 0.45 * absf(sin(_ice_phase * TAU))
+	var pulse := 0.78 + 0.22 * absf(sin(_ice_phase * TAU))
 	var white := randf() * 2.0 - 1.0
-	_ice_lp = _ice_lp * 0.7 + white * 0.3
-	var grit := (white - _ice_lp) * 0.45 + _ice_lp * 0.22
-	var chunk := 0.0
-	if randf() < 0.012:
-		chunk = (randf() * 2.0 - 1.0) * 0.35
-	return clampf((grit * 0.28 + chunk) * pulse, -1.0, 1.0)
+	## Heavy low-pass so it stays soft / soothing.
+	_ice_lp = _ice_lp * 0.88 + white * 0.12
+	var soft := _ice_lp * 0.55 + (white - _ice_lp) * 0.08
+	var flake := 0.0
+	if randf() < 0.004:
+		flake = (randf() * 2.0 - 1.0) * 0.08
+	return clampf((soft * 0.22 + flake) * pulse, -1.0, 1.0)
 
 
 func _next_shaker_rattle_sample() -> float:
@@ -906,16 +907,16 @@ func _make_click() -> AudioStreamWAV:
 
 
 func _make_ice_tink() -> AudioStreamWAV:
-	## Short glass ping when a cube lands in the cup.
-	var n := int(MIX_RATE * 0.09)
+	## Soft muffled tap when a cube settles in the cup.
+	var n := int(MIX_RATE * 0.11)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var env := exp(-t * 38.0)
-		var ping := sin(t * 2650.0 * TAU) * 0.55 + sin(t * 4120.0 * TAU) * 0.28
-		var tick := (randf() * 2.0 - 1.0) * exp(-t * 90.0) * 0.2
-		_write_s16(pcm, i, int(clampf((ping + tick) * env, -1.0, 1.0) * 17000.0))
+		var env := exp(-t * 26.0)
+		var ping := sin(t * 980.0 * TAU) * 0.42 + sin(t * 1480.0 * TAU) * 0.18
+		var tick := (randf() * 2.0 - 1.0) * exp(-t * 70.0) * 0.08
+		_write_s16(pcm, i, int(clampf((ping + tick) * env, -1.0, 1.0) * 11000.0))
 	return _wav_from_pcm(pcm, false)
 
 
