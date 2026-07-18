@@ -105,6 +105,8 @@ const COST_BACON := 0.50
 const START_MONEY := 200.0
 const BACON_PATIENCE_RESTORE := 0.10
 const BACON_MOUTH_PICK_PX := 130.0
+const CUP_MOUTH_HAND_PX := 155.0 ## Auto-hand a held drink when cursor is this close to a face
+const CUP_MOUTH_HAND_WORLD := 0.58 ## Or when the cup itself is this close to their mouth (meters)
 
 @onready var camera: Camera3D = %Camera3D
 @onready var world: Node3D = %World
@@ -10307,7 +10309,7 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.03, 0.21)}, ## tank deck
 		{"p": Vector3(-0.28, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## soda arm
 		{"p": Vector3(-0.02, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## ice arm
-		{"p": Vector3(-0.682, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser (matches CupRack)
+		{"p": Vector3(-0.733, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser (matches CupRack)
 	]
 
 
@@ -10618,7 +10620,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack.name = "CupRack"
 	## With yaw 180 on the right side, local −X faces the grill (world +X).
 	## Raised ~1ft; nudged camera-left ~4in so the tube doesn't cover cola.
-	rack.position = Vector3(-0.682, 0.645, 0.16)
+	rack.position = Vector3(-0.733, 0.645, 0.16)
 	station.add_child(rack)
 
 	var chrome := _make_soda_metal_mat(Color(0.72, 0.75, 0.80), 0.94, 0.16)
@@ -12156,6 +12158,9 @@ func _update_held_cup(delta: float) -> void:
 			var sm := cup_liquid_surface.material_override as StandardMaterial3D
 			if sm:
 				_apply_soda_surface_look(sm, col, _cup_fizz)
+	## Auto-hand a full drink when you drag it onto a waiting customer's face (no click release).
+	if cup_held and cup_soda_fill >= 0.82 and cup_flavor != "" and not _serve_fly_busy:
+		_try_hand_drink_to_customer_face(get_viewport().get_mouse_position())
 
 
 func _resolve_cup_against_soda(world_pos: Vector3) -> Vector3:
@@ -13192,11 +13197,12 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 		return false
 	if cup_soda_fill < 0.82 or cup_flavor == "":
 		return false
-	var cust := _find_waiting_customer_at_mouth(screen_pos)
+	var cust := _find_waiting_customer_at_mouth(screen_pos, CUP_MOUTH_HAND_PX)
+	if cust == null:
+		cust = _find_waiting_customer_near_cup(cup_root.global_position)
 	if cust == null or not _customer_wants_flavor(cust, cup_flavor):
 		return false
 	if _customer_soda_handed(cust):
-		_flash("They already have their drink", Color("B0BEC5"))
 		return false
 	## Drink-only ticket → full serve path.
 	if GameDataScript.is_soda_only_order(cust.order):
@@ -13224,6 +13230,28 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 		return true
 	_begin_early_drink_hand(cust, cup_flavor)
 	return true
+
+
+func _find_waiting_customer_near_cup(cup_pos: Vector3) -> Node3D:
+	## World-space hand-off when the cup itself is near a mouth (cursor can lag).
+	var best: Node3D = null
+	var best_d := CUP_MOUTH_HAND_WORLD
+	var cup_mid := cup_pos + Vector3(0.0, CUP_SHELL_H * 0.55, 0.0)
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_waiting")):
+			continue
+		if bool(c.get("is_leaving")) or bool(c.get("is_ragdoll")):
+			continue
+		var mouth: Vector3 = c.global_position + Vector3(0.0, 1.18, 0.06)
+		if c.has_method("mouth_global"):
+			mouth = c.mouth_global()
+		var d := mouth.distance_to(cup_mid)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
 
 
 func _begin_early_drink_hand(customer: Node3D, flavor: String) -> void:
@@ -20565,11 +20593,11 @@ func _customer_mouth_screen(customer: Node3D) -> Vector2:
 	return screen_pt + Vector2(0.0, -42.0)
 
 
-func _find_waiting_customer_at_mouth(screen_pos: Vector2) -> Node3D:
+func _find_waiting_customer_at_mouth(screen_pos: Vector2, max_px: float = -1.0) -> Node3D:
 	if customers_root == null or camera == null:
 		return null
 	var best: Node3D = null
-	var best_d := BACON_MOUTH_PICK_PX
+	var best_d := BACON_MOUTH_PICK_PX if max_px < 0.0 else max_px
 	for c in customers:
 		if c == null or not is_instance_valid(c):
 			continue
