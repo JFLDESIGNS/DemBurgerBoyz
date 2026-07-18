@@ -446,6 +446,11 @@ var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
 var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitboxes)
+var options_root: Control = null
+var options_panel: PanelContainer = null
+var options_menu_open: bool = false
+var options_vol_slider: HSlider = null
+var options_lobby_btn: Button = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -788,6 +793,7 @@ func _ready() -> void:
 	_build_pause_button()
 	_build_master_volume_ui()
 	_build_graphics_ui()
+	_build_options_menu()
 	_layout_top_bar_hud()
 	_setup_game_audio()
 	_build_dialogue_ui()
@@ -1084,6 +1090,11 @@ func _process(delta: float) -> void:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
 		return
+	## Options freezes the shift clock / cook sim until Resume / Esc.
+	if options_menu_open:
+		if game_audio:
+			game_audio.set_sizzle_active(false)
+		return
 	## Sync grill heat to patties (only cook while burner is on + on cook zone).
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -1369,6 +1380,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			radio.toggle_power()
 			_flash("Radio %s" % ("ON" if radio.powered else "OFF"), Color("FFCC80"))
 			return
+	if options_menu_open:
+		return
 	if not playing:
 		return
 	if event.is_action_pressed("toggle_burner"):
@@ -1434,6 +1447,14 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not playing:
 		return
+	## While Options is up, only Esc / F10 reach the handlers below.
+	if options_menu_open:
+		var is_menu_key := false
+		if event is InputEventKey and event.pressed and not event.echo:
+			is_menu_key = event.keycode == KEY_ESCAPE or event.keycode == KEY_F10
+		if not is_menu_key:
+			get_viewport().set_input_as_handled()
+			return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
 		return
@@ -1531,15 +1552,18 @@ func _input(event: InputEvent) -> void:
 			if _try_grab_nearest_tool(event.position):
 				get_viewport().set_input_as_handled()
 				return
-	## Cancel cheese hold with Escape / open graphics with F10.
+	## Escape / F10 → Options (or cancel held tools first).
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F10:
-			_toggle_graphics_menu()
+			_toggle_options_menu()
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		if gfx_panel != null and gfx_panel.visible:
-			_set_graphics_menu_open(false)
+		if options_menu_open:
+			if gfx_panel != null and gfx_panel.visible:
+				_set_graphics_menu_open(false)
+			else:
+				_set_options_menu_open(false)
 			get_viewport().set_input_as_handled()
 			return
 		if cheese_held:
@@ -1556,6 +1580,20 @@ func _input(event: InputEvent) -> void:
 			return
 		if glock_held:
 			_release_glock()
+			get_viewport().set_input_as_handled()
+			return
+		if oil_held:
+			_reset_oil_bottle()
+			get_viewport().set_input_as_handled()
+			return
+		if brush_held:
+			_throw_brush_home()
+			get_viewport().set_input_as_handled()
+			return
+		if playing:
+			if _mp_lobby_root != null and _mp_lobby_root.visible:
+				return
+			_toggle_options_menu()
 			get_viewport().set_input_as_handled()
 			return
 	## Enter always serves the active station burger.
@@ -1743,7 +1781,7 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 					return true
 		node = node.get_parent()
 	## Explicit hit-tests — hovered can miss during the same-frame press.
-	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, radio_column, phone_column]:
+	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column]:
 		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
 			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 				return true
@@ -4066,7 +4104,7 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 		if _ui_blocks_world_click(screen_pos) and _station_index_at(screen_pos) < 0:
 			var top_bar: Control = get_node_or_null("UI/Root/TopBar")
 			var over_chrome := false
-			for ctrl in [window_pause_btn, gfx_btn, gfx_panel, radio_column, phone_column, top_bar]:
+			for ctrl in [window_pause_btn, gfx_btn, gfx_panel, options_root, radio_column, phone_column, top_bar]:
 				if ctrl != null and is_instance_valid(ctrl) and ctrl.visible \
 						and ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 					over_chrome = true
@@ -9415,37 +9453,37 @@ func _build_graphics_ui() -> void:
 	if ui_root == null:
 		return
 
-	## Sit beside Pause (top-left) — quiet black chrome.
+	## Top-left OPTIONS (replaces old GFX) — opens the Escape menu.
 	gfx_btn = Button.new()
-	gfx_btn.name = "GfxBtn"
-	gfx_btn.text = "GFX"
+	gfx_btn.name = "OptionsBtn"
+	gfx_btn.text = "OPTIONS"
 	gfx_btn.focus_mode = Control.FOCUS_NONE
 	gfx_btn.z_index = 30
 	gfx_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	gfx_btn.position = Vector2(130, 10)
-	gfx_btn.custom_minimum_size = Vector2(64, 36)
+	gfx_btn.custom_minimum_size = Vector2(96, 36)
 	_style_quiet_hud_button(gfx_btn, 12)
 	gfx_btn.pressed.connect(func():
 		_sfx_click()
-		_toggle_graphics_menu()
+		_toggle_options_menu()
 	)
 	ui_root.add_child(gfx_btn)
 
+	## Advanced graphics panel — opened from Options → Graphics.
 	gfx_panel = PanelContainer.new()
 	gfx_panel.name = "GraphicsPanel"
 	gfx_panel.visible = false
-	gfx_panel.z_index = 40
-	gfx_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	gfx_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	gfx_panel.offset_left = -320.0
-	gfx_panel.offset_right = -16.0
-	gfx_panel.offset_top = -220.0
-	gfx_panel.offset_bottom = 260.0
-	gfx_panel.custom_minimum_size = Vector2(300, 0)
+	gfx_panel.z_index = 95
+	gfx_panel.set_anchors_preset(Control.PRESET_CENTER)
+	gfx_panel.offset_left = -180.0
+	gfx_panel.offset_right = 180.0
+	gfx_panel.offset_top = -280.0
+	gfx_panel.offset_bottom = 280.0
+	gfx_panel.custom_minimum_size = Vector2(340, 0)
 	gfx_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var psb := StyleBoxFlat.new()
-	psb.bg_color = Color(0.08, 0.1, 0.12, 0.94)
-	psb.border_color = Color(0.35, 0.35, 0.38, 0.85)
+	psb.bg_color = Color(0.08, 0.1, 0.12, 0.96)
+	psb.border_color = Color(0.45, 0.55, 0.65, 0.9)
 	psb.set_border_width_all(2)
 	psb.set_corner_radius_all(10)
 	psb.content_margin_left = 12
@@ -9713,8 +9751,227 @@ func _set_graphics_menu_open(open: bool) -> void:
 	if gfx_panel == null:
 		return
 	gfx_panel.visible = open
-	if gfx_btn:
-		gfx_btn.text = "GFX ▾" if open else "GFX"
+	if open:
+		var ui_root: Control = get_node_or_null("UI/Root")
+		if ui_root != null and gfx_panel.get_parent() == ui_root:
+			ui_root.move_child(gfx_panel, ui_root.get_child_count() - 1)
+
+
+func _build_options_menu() -> void:
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+
+	## Hide old top-bar master volume — lives inside Options now.
+	if master_vol_row != null and is_instance_valid(master_vol_row):
+		master_vol_row.visible = false
+
+	options_root = Control.new()
+	options_root.name = "OptionsMenu"
+	options_root.visible = false
+	options_root.z_index = 90
+	options_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	options_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(options_root)
+
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0.02, 0.03, 0.05, 0.72)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			## Click outside panel closes options (not while graphics subpanel open).
+			if gfx_panel == null or not gfx_panel.visible:
+				_set_options_menu_open(false)
+	)
+	options_root.add_child(dim)
+
+	options_panel = PanelContainer.new()
+	options_panel.name = "OptionsPanel"
+	options_panel.set_anchors_preset(Control.PRESET_CENTER)
+	options_panel.offset_left = -200.0
+	options_panel.offset_right = 200.0
+	options_panel.offset_top = -250.0
+	options_panel.offset_bottom = 250.0
+	options_panel.custom_minimum_size = Vector2(380, 0)
+	options_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.1, 0.11, 0.14, 0.97)
+	psb.border_color = Color(1.0, 0.72, 0.28, 0.9)
+	psb.set_border_width_all(2)
+	psb.set_corner_radius_all(14)
+	psb.content_margin_left = 18
+	psb.content_margin_right = 18
+	psb.content_margin_top = 16
+	psb.content_margin_bottom = 16
+	options_panel.add_theme_stylebox_override("panel", psb)
+	options_root.add_child(options_panel)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	options_panel.add_child(v)
+
+	var title := Label.new()
+	title.text = "OPTIONS"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(title, true, 26)
+	title.add_theme_color_override("font_color", Color(1.0, 0.88, 0.4))
+	v.add_child(title)
+
+	var hint := Label.new()
+	hint.text = "Esc to resume"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(hint, false, 12)
+	hint.add_theme_color_override("font_color", Color(0.7, 0.72, 0.76))
+	v.add_child(hint)
+
+	var vol_lab := Label.new()
+	vol_lab.text = "MASTER VOLUME"
+	UiFontsScript.apply_label(vol_lab, true, 13)
+	vol_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	v.add_child(vol_lab)
+
+	options_vol_slider = HSlider.new()
+	options_vol_slider.min_value = 0.0
+	options_vol_slider.max_value = 1.0
+	options_vol_slider.step = 0.01
+	options_vol_slider.value = master_volume_linear
+	options_vol_slider.custom_minimum_size = Vector2(0, 28)
+	options_vol_slider.focus_mode = Control.FOCUS_NONE
+	options_vol_slider.value_changed.connect(func(val: float):
+		_set_master_volume_linear(val, true)
+	)
+	v.add_child(options_vol_slider)
+
+	var gfx_open_btn := Button.new()
+	gfx_open_btn.text = "Graphics Settings…"
+	gfx_open_btn.custom_minimum_size = Vector2(0, 40)
+	UiFontsScript.apply_button(gfx_open_btn, true, 15)
+	gfx_open_btn.pressed.connect(func():
+		_sfx_click()
+		_set_graphics_menu_open(true)
+	)
+	v.add_child(gfx_open_btn)
+
+	var sep := HSeparator.new()
+	v.add_child(sep)
+
+	var resume_btn := Button.new()
+	resume_btn.text = "Resume"
+	resume_btn.custom_minimum_size = Vector2(0, 42)
+	UiFontsScript.apply_button(resume_btn, true, 16)
+	resume_btn.pressed.connect(func():
+		_sfx_click()
+		_set_options_menu_open(false)
+	)
+	v.add_child(resume_btn)
+
+	var restart_opt := Button.new()
+	restart_opt.text = "Restart Day"
+	restart_opt.custom_minimum_size = Vector2(0, 40)
+	UiFontsScript.apply_button(restart_opt, true, 15)
+	restart_opt.pressed.connect(func():
+		_sfx_click()
+		_options_restart_day()
+	)
+	v.add_child(restart_opt)
+
+	options_lobby_btn = Button.new()
+	options_lobby_btn.text = "Back to Lobby"
+	options_lobby_btn.custom_minimum_size = Vector2(0, 40)
+	UiFontsScript.apply_button(options_lobby_btn, true, 15)
+	options_lobby_btn.pressed.connect(func():
+		_sfx_click()
+		_options_back_to_lobby()
+	)
+	v.add_child(options_lobby_btn)
+
+	var exit_btn := Button.new()
+	exit_btn.text = "Exit Game"
+	exit_btn.custom_minimum_size = Vector2(0, 40)
+	UiFontsScript.apply_button(exit_btn, true, 15)
+	exit_btn.pressed.connect(func():
+		_sfx_click()
+		_options_exit_game()
+	)
+	v.add_child(exit_btn)
+
+
+func _toggle_options_menu() -> void:
+	_set_options_menu_open(not options_menu_open)
+
+
+func _set_options_menu_open(open: bool) -> void:
+	options_menu_open = open
+	if options_root != null and is_instance_valid(options_root):
+		options_root.visible = open
+	if not open:
+		_set_graphics_menu_open(false)
+	else:
+		if options_vol_slider != null and is_instance_valid(options_vol_slider):
+			options_vol_slider.set_value_no_signal(master_volume_linear)
+		if options_lobby_btn != null and is_instance_valid(options_lobby_btn):
+			if mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE:
+				options_lobby_btn.text = "Back to Lobby"
+			else:
+				options_lobby_btn.text = "Main Menu"
+	if gfx_btn != null and is_instance_valid(gfx_btn):
+		gfx_btn.text = "OPTIONS ▾" if open else "OPTIONS"
+
+
+func _options_restart_day() -> void:
+	_set_options_menu_open(false)
+	if not playing and game_over_panel != null and game_over_panel.visible:
+		## End-of-day panel already has Start Day — mirror that path.
+		if mp_enabled:
+			mp_restart_day.rpc()
+		else:
+			_restart()
+		return
+	if mp_enabled:
+		mp_restart_day.rpc()
+	else:
+		_restart()
+	_flash("Day restarted", Color("90CAF9"))
+
+
+func _options_back_to_lobby() -> void:
+	_set_options_menu_open(false)
+	playing = false
+	if game_audio:
+		game_audio.set_sizzle_active(false)
+	if game_over_panel:
+		game_over_panel.visible = false
+	_clear_all_patty()
+	_clear_spatula()
+	_clear_warmer()
+	_clear_customers()
+	_clear_all_stations()
+	_cancel_cheese_hold_silent()
+	_cancel_shaker_hold_silent()
+	_reset_oil_bottle()
+	_reset_fire_extinguisher()
+	_reset_glock()
+	var was_mp := mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE
+	if was_mp:
+		NetManager.stop_browse()
+		NetManager.leave()
+		mp_enabled = false
+		_open_mp_lobby()
+		if start_overlay:
+			start_overlay.visible = true
+		_flash("Back in the lobby — host or join again", Color("90CAF9"))
+	else:
+		if start_overlay:
+			start_overlay.visible = true
+		_flash("Main menu", Color("90CAF9"))
+
+
+func _options_exit_game() -> void:
+	_set_options_menu_open(false)
+	if mp_enabled or NetManager.is_online():
+		NetManager.leave(false)
+	get_tree().quit()
 
 
 func _on_graphics_slider_changed() -> void:
@@ -10490,6 +10747,9 @@ func _set_master_volume_linear(v: float, save: bool = true) -> void:
 	if master_vol_slider != null and is_instance_valid(master_vol_slider):
 		if absf(master_vol_slider.value - master_volume_linear) > 0.0005:
 			master_vol_slider.set_value_no_signal(master_volume_linear)
+	if options_vol_slider != null and is_instance_valid(options_vol_slider):
+		if absf(options_vol_slider.value - master_volume_linear) > 0.0005:
+			options_vol_slider.set_value_no_signal(master_volume_linear)
 	if save:
 		_save_audio_settings()
 
