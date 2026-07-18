@@ -3628,6 +3628,8 @@ func _set_grill_on(on: bool) -> void:
 	_set_burner_flames_visible(on)
 	_update_kitchen_sizzle()
 	_refresh_grill_ui_button(0)
+	if turning_on:
+		_ignite_unsafe_steel_cups()
 
 
 func _set_grill_power(_index: int, on: bool) -> void:
@@ -8150,12 +8152,12 @@ func _get_black_smoke_texture() -> ImageTexture:
 
 
 func _begin_cup_melt_on_grill() -> void:
-	## Drop the held drink onto the flat-top — delay if full, then melt / spill / smoke / char.
-	if not grill_on:
-		_flash("Burner is off — cup won't melt", Color("90A4AE"))
-		_park_cup_on_tray(true)
-		return
+	## Drop the held drink onto a hot cook zone — delay if full, then melt / spill / smoke / char.
 	if cup_root == null or not is_instance_valid(cup_root) or grill_root == null:
+		return
+	## Safety nets — cold steel / HOLD never melt from this path.
+	if not grill_on or _is_in_warmer_zone(cup_root.global_position):
+		_place_cup_on_steel()
 		return
 	var drop_pos := cup_root.global_position
 	if not _is_on_grill_surface(drop_pos):
@@ -10906,13 +10908,17 @@ func _spawn_and_bind_empty_cup() -> void:
 
 func _layout_parked_cups() -> void:
 	var n := parked_cups.size()
+	## Tray slots only — steel / HOLD cups keep their world seat.
+	var tray_i := 0
 	for i in n:
 		var c: Node3D = parked_cups[i]
 		if c == null or not is_instance_valid(c):
 			continue
-		## Newest is index 0 (push_front) → camera-left; older drinks sit to its right.
+		if bool(c.get_meta("on_steel", false)):
+			continue
+		## Newest tray drinks sit camera-left; older drinks to the right.
 		## local −X = screen-left with soda yaw 180.
-		var lx := -0.28 + float(i) * CUP_TRAY_SPACING
+		var lx := -0.28 + float(tray_i) * CUP_TRAY_SPACING
 		lx = clampf(lx, -0.32, 0.28)
 		var local := Vector3(lx, 0.138, 0.54)
 		if soda_root != null and is_instance_valid(soda_root):
@@ -10921,6 +10927,7 @@ func _layout_parked_cups() -> void:
 			var park := cup_rest if cup_rest != Vector3.ZERO else cup_home
 			c.global_position = park
 		c.rotation_degrees = cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
+		tray_i += 1
 
 
 func _filled_drink_count() -> int:
@@ -10997,6 +11004,8 @@ func _promote_cup_to_active(root: Node3D) -> void:
 	if parked_cups.has(root):
 		parked_cups.erase(root)
 		_layout_parked_cups()
+	root.set_meta("on_steel", false)
+	root.set_meta("steel_hold", false)
 	if cup_root != null and cup_root != root and is_instance_valid(cup_root):
 		## Stash the previous working cup empty on the rack if somehow replaced.
 		if cup_soda_fill < 0.05:
@@ -11765,7 +11774,7 @@ func _begin_cup_hold() -> bool:
 	var from_rack := _cursor_near_cup_rack(mouse) or _cup_rack_ray_hit(mouse)
 	var draw_from_stack := false
 	if target == null or (from_rack and (cup_root == null or not is_instance_valid(cup_root))):
-		if parked_cups.size() >= CUP_MAX and (cup_root == null or not is_instance_valid(cup_root)):
+		if _tray_parked_count() >= CUP_MAX and (cup_root == null or not is_instance_valid(cup_root)):
 			_flash("Tray full — serve a drink first", Color("FFCC80"))
 			return false
 		if cup_root == null or not is_instance_valid(cup_root):
@@ -12832,7 +12841,7 @@ func _layout_cup_ice_cubes(count: int) -> void:
 
 
 func _put_cup_down() -> void:
-	## Release LMB / Esc — trash, hand to customer face, melt on hot grill, or park.
+	## Release LMB / Esc — trash, hand to customer face, melt on hot cook zone, or park.
 	if cup_held and _is_over_garbage(get_viewport().get_mouse_position()):
 		_trash_held_cup()
 		return
@@ -12840,13 +12849,137 @@ func _put_cup_down() -> void:
 		return
 	if cup_held and cup_root != null and is_instance_valid(cup_root) \
 			and _is_on_grill_surface(cup_root.global_position):
-		if not grill_on:
-			_flash("Burner is off — cup won't melt", Color("90A4AE"))
-			_park_cup_on_tray(true)
+		## HOLD strip is always safe. Cold steel is safe. Hot cook zones melt.
+		if _is_in_warmer_zone(cup_root.global_position) or not grill_on:
+			_place_cup_on_steel()
 			return
 		_begin_cup_melt_on_grill()
 		return
 	_park_cup_on_tray(true)
+
+
+func _tray_parked_count() -> int:
+	var n := 0
+	for c in parked_cups:
+		if c != null and is_instance_valid(c) and not bool(c.get_meta("on_steel", false)):
+			n += 1
+	return n
+
+
+func _steel_parked_count() -> int:
+	var n := 0
+	for c in parked_cups:
+		if c != null and is_instance_valid(c) and bool(c.get_meta("on_steel", false)):
+			n += 1
+	return n
+
+
+func _place_cup_on_steel() -> void:
+	## Set a drink on cold steel or the HOLD band — no melt until a cook zone is hot.
+	if cup_root == null or not is_instance_valid(cup_root):
+		return
+	if _steel_parked_count() >= 6:
+		_flash("Grill's crowded — pick a drink up first", Color("FFCC80"))
+		return
+	var drop := cup_root.global_position
+	drop.x = clampf(drop.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+	drop.z = clampf(drop.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	drop.y = GRILL_SURFACE_Y + 0.01
+	var on_hold := _is_in_warmer_zone(drop)
+	cup_held = false
+	cup_drawing = false
+	cup_root.scale = Vector3.ONE
+	_hide_soda_stream()
+	if game_audio and game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(false)
+	_cup_vel = Vector3.ZERO
+	_cup_slosh = Vector2.ZERO
+	_cup_tilt = Vector2.ZERO
+	_cup_surface_slosh = Vector2.ZERO
+	_cup_surface_spin = 0.0
+	_cup_surface_wobble = 0.0
+	_cup_pouring = false
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
+	_refresh_soda_tank_bubbles()
+	if cup_liquid_pivot != null and is_instance_valid(cup_liquid_pivot):
+		cup_liquid_pivot.rotation_degrees = Vector3.ZERO
+		cup_liquid_pivot.position = Vector3(0.0, CUP_LIQUID_FLOOR_Y, 0.0)
+	if cup_surface_pivot != null and is_instance_valid(cup_surface_pivot):
+		cup_surface_pivot.rotation_degrees = Vector3.ZERO
+	_save_active_cup_meta()
+	if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
+		cup_bubble_fx.emitting = false
+	var stashed := cup_root
+	stashed.set_meta("on_steel", true)
+	stashed.set_meta("steel_hold", on_hold)
+	if float(stashed.get_meta("foam_linger", 0.0)) <= 0.0 and float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
+		stashed.set_meta("foam_linger", CUP_FOAM_LINGER)
+	if float(stashed.get_meta("fizz", 0.0)) > 0.0:
+		stashed.set_meta("fizz_peak", true)
+	stashed.global_position = drop
+	stashed.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
+	if cup_area != null and is_instance_valid(cup_area):
+		cup_area.input_ray_pickable = true
+	## Detach grab area ref before clearing active cup.
+	var area := stashed.get_node_or_null("CupGrab") as Area3D
+	if area:
+		area.input_ray_pickable = true
+	parked_cups.push_front(stashed)
+	_clear_cup_refs()
+	cup_root = null
+	cup_flavor = ""
+	cup_soda_fill = 0.0
+	cup_ice_fill = 0.0
+	_cup_fizz = 0.0
+	_cup_foam_linger = 0.0
+	_cup_pour_white = 0.0
+	_update_parked_cups_foam(0.0)
+	_spawn_and_bind_empty_cup()
+	_refresh_ticket_checkmarks()
+	if mp_enabled and not _mp_applying:
+		mp_cup_steel.rpc(
+			drop.x,
+			drop.z,
+			str(stashed.get_meta("flavor", "")),
+			float(stashed.get_meta("soda_fill", 0.0)),
+			float(stashed.get_meta("ice_fill", 0.0)),
+			float(stashed.get_meta("fizz", 0.0)),
+			on_hold
+		)
+	if game_audio:
+		game_audio.play_click()
+	if on_hold:
+		_flash("Drink on HOLD — stays cool here", Color("90CAF9"))
+	else:
+		_flash("Drink on cold steel — burner off, safe for now", Color("B0BEC5"))
+
+
+func _ignite_unsafe_steel_cups() -> void:
+	## Burner just came on — melt any cups left on FULL / 1/2 (HOLD stays safe).
+	## Each peer melts its own mirrored steel cups (no extra melt RPC).
+	var doomed: Array = []
+	for c in parked_cups:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get_meta("on_steel", false)):
+			continue
+		if bool(c.get_meta("steel_hold", false)) or _is_in_warmer_zone(c.global_position):
+			continue
+		doomed.append(c)
+	for item in doomed:
+		var cup := item as Node3D
+		if cup == null or not is_instance_valid(cup):
+			continue
+		parked_cups.erase(cup)
+		var flavor := str(cup.get_meta("flavor", soda_selected_flavor))
+		var fill := float(cup.get_meta("soda_fill", 0.0))
+		var ice := float(cup.get_meta("ice_fill", 0.0))
+		var pos: Vector3 = cup.global_position
+		_begin_cup_melt_local(cup, pos, flavor, fill, ice, _mp_applying)
+	if not doomed.is_empty() and not _mp_applying:
+		_flash("Cups on the hot steel are melting!", Color("FF8A65"))
+		_refresh_ticket_checkmarks()
 
 
 func _customer_soda_handed(customer: Node3D) -> bool:
@@ -13063,7 +13196,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 
 	## Filled drink → stash on tray (up to 3). Grab the next empty from the CUPS rack.
 	if keep_fill and cup_soda_fill >= 0.2:
-		if parked_cups.size() >= CUP_MAX:
+		if _tray_parked_count() >= CUP_MAX:
 			## Already max parked — keep this as the working cup on the tray.
 			var park_full := cup_rest if cup_rest != Vector3.ZERO else cup_home
 			var park_full_rot := cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
@@ -13082,6 +13215,8 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
 			cup_bubble_fx.emitting = false
 		var stashed := cup_root
+		stashed.set_meta("on_steel", false)
+		stashed.set_meta("steel_hold", false)
 		## Arm residual foam so parked drinks don't freeze a permanent head.
 		if float(stashed.get_meta("foam_linger", 0.0)) <= 0.0 and float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
 			stashed.set_meta("foam_linger", CUP_FOAM_LINGER)
@@ -13105,7 +13240,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 				float(stashed.get_meta("ice_fill", 0.0)),
 				float(stashed.get_meta("fizz", 0.0))
 			)
-		var left := CUP_MAX - parked_cups.size()
+		var left := CUP_MAX - _tray_parked_count()
 		if left > 0:
 			_flash("Drink ready — grab a cup from the rack (%d free)" % left, Color("80CBC4"))
 		else:
@@ -22141,13 +22276,25 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 	for pc in parked_cups:
 		if pc == null or not is_instance_valid(pc):
 			continue
-		mp_cup_park.rpc_id(
-			peer_id,
-			str(pc.get_meta("flavor", "")),
-			float(pc.get_meta("soda_fill", 0.0)),
-			float(pc.get_meta("ice_fill", 0.0)),
-			float(pc.get_meta("fizz", 0.0))
-		)
+		if bool(pc.get_meta("on_steel", false)):
+			mp_cup_steel.rpc_id(
+				peer_id,
+				float(pc.global_position.x),
+				float(pc.global_position.z),
+				str(pc.get_meta("flavor", "")),
+				float(pc.get_meta("soda_fill", 0.0)),
+				float(pc.get_meta("ice_fill", 0.0)),
+				float(pc.get_meta("fizz", 0.0)),
+				bool(pc.get_meta("steel_hold", false))
+			)
+		else:
+			mp_cup_park.rpc_id(
+				peer_id,
+				str(pc.get_meta("flavor", "")),
+				float(pc.get_meta("soda_fill", 0.0)),
+				float(pc.get_meta("ice_fill", 0.0)),
+				float(pc.get_meta("fizz", 0.0))
+			)
 	_mp_send_social_feed_to(peer_id)
 	## Grill mess catch-up: soda spills (wet → burnt) + scrapable residue.
 	for slick in soda_slicks:
@@ -23894,6 +24041,16 @@ func mp_cup_park(flavor: String, fill: float, ice: float, fizz: float) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
+func mp_cup_steel(
+	x: float, z: float, flavor: String, fill: float, ice: float, fizz: float, on_hold: bool
+) -> void:
+	## Partner set a drink on cold steel or HOLD — sit it there, no melt.
+	_mp_applying = true
+	_mp_spawn_steel_drink_local(x, z, flavor, fill, ice, fizz, on_hold)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
 func mp_cup_consume(flavor: String) -> void:
 	## Partner served a drink — remove one matching ready cup on this peer.
 	_mp_applying = true
@@ -23923,7 +24080,7 @@ func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float) ->
 func _mp_spawn_parked_drink_local(flavor: String, fill: float, ice: float, fizz: float) -> void:
 	if world == null:
 		return
-	if parked_cups.size() >= CUP_MAX:
+	if _tray_parked_count() >= CUP_MAX:
 		return
 	var root := _create_drink_cup_node()
 	world.add_child(root)
@@ -23937,6 +24094,8 @@ func _mp_spawn_parked_drink_local(flavor: String, fill: float, ice: float, fizz:
 	root.set_meta("foam_linger", CUP_FOAM_LINGER if fill > 0.08 else 0.0)
 	root.set_meta("pour_white", 0.0)
 	root.set_meta("fizz_peak", fizz > 0.0)
+	root.set_meta("on_steel", false)
+	root.set_meta("steel_hold", false)
 	## Size the liquid column to the synced fill.
 	var liq_pivot := root.get_node_or_null("LiquidPivot") as Node3D
 	var liq: MeshInstance3D = null
@@ -23960,6 +24119,56 @@ func _mp_spawn_parked_drink_local(flavor: String, fill: float, ice: float, fizz:
 		_apply_parked_cup_liquid_gradient(root, flavor, fizz, 0.0, fill)
 	parked_cups.push_front(root)
 	_layout_parked_cups()
+	_update_parked_cups_foam(0.0)
+	_refresh_ticket_checkmarks()
+
+
+func _mp_spawn_steel_drink_local(
+	x: float, z: float, flavor: String, fill: float, ice: float, fizz: float, on_hold: bool
+) -> void:
+	if world == null:
+		return
+	if _steel_parked_count() >= 6:
+		return
+	var root := _create_drink_cup_node()
+	world.add_child(root)
+	fill = clampf(fill, 0.0, 1.0)
+	ice = clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP)
+	fizz = clampf(fizz, 0.0, 1.0)
+	root.set_meta("flavor", flavor)
+	root.set_meta("soda_fill", fill)
+	root.set_meta("ice_fill", ice)
+	root.set_meta("fizz", fizz)
+	root.set_meta("foam_linger", CUP_FOAM_LINGER if fill > 0.08 else 0.0)
+	root.set_meta("pour_white", 0.0)
+	root.set_meta("fizz_peak", fizz > 0.0)
+	root.set_meta("on_steel", true)
+	root.set_meta("steel_hold", on_hold)
+	root.global_position = Vector3(x, GRILL_SURFACE_Y + 0.01, z)
+	root.rotation_degrees = Vector3.ZERO
+	var area := root.get_node_or_null("CupGrab") as Area3D
+	if area:
+		area.input_ray_pickable = true
+	var liq_pivot := root.get_node_or_null("LiquidPivot") as Node3D
+	var liq: MeshInstance3D = null
+	if liq_pivot != null:
+		liq = liq_pivot.get_node_or_null("Liquid") as MeshInstance3D
+	if liq != null and fill >= 0.02:
+		liq.visible = true
+		var h := 0.02 + fill * CUP_LIQUID_MAX_H
+		var cyl := liq.mesh as CylinderMesh
+		if cyl == null:
+			cyl = CylinderMesh.new()
+			liq.mesh = cyl
+		cyl.height = h
+		cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
+		cyl.bottom_radius = CUP_LIQUID_BOT_R
+		liq.position.y = h * 0.5
+		var surf_piv := liq_pivot.get_node_or_null("SurfacePivot") as Node3D
+		if surf_piv:
+			surf_piv.position.y = h + 0.001
+		_apply_parked_cup_liquid_gradient(root, flavor, fizz, 0.0, fill)
+	parked_cups.push_front(root)
 	_update_parked_cups_foam(0.0)
 	_refresh_ticket_checkmarks()
 
