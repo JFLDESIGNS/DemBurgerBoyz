@@ -9549,42 +9549,72 @@ func _refresh_cup_ice_stack() -> void:
 		for i in want:
 			var cube := MeshInstance3D.new()
 			var box := BoxMesh.new()
-			var s := randf_range(0.024, 0.032) - float(i) * 0.0004
-			box.size = Vector3(s, s * randf_range(0.75, 0.95), s * randf_range(0.85, 1.05))
+			## Slightly irregular chunks that nest when packed tight.
+			var s := randf_range(0.026, 0.034) - float(i) * 0.00025
+			box.size = Vector3(s, s * randf_range(0.72, 0.92), s * randf_range(0.82, 1.05))
 			cube.mesh = box
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = Color(0.78, 0.92, 1.0, 0.88)
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.roughness = 0.08
-			mat.metallic = 0.16
-			mat.emission_enabled = true
-			mat.emission = Color(0.7, 0.9, 1.0)
-			mat.emission_energy_multiplier = 0.18
-			cube.material_override = mat
+			cube.material_override = _make_ice_cube_material()
 			cup_ice_root.add_child(cube)
 	_layout_cup_ice_cubes(want)
+
+
+func _make_ice_cube_material() -> StandardMaterial3D:
+	## Semi-transparent frost — see soda through the clump.
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.82, 0.94, 1.0, 0.42)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.roughness = 0.06
+	mat.metallic = 0.12
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	mat.emission_enabled = true
+	mat.emission = Color(0.72, 0.90, 1.0)
+	mat.emission_energy_multiplier = 0.10
+	return mat
 
 
 func _layout_cup_ice_cubes(count: int) -> void:
 	if cup_ice_root == null:
 		return
 	var soda_h := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
-	var base_y := 0.028 + soda_h * 0.55
+	## Clump sits in the soda — low and centered, cubes overlapping.
+	var base_y := 0.022 + soda_h * 0.42
 	var kids := cup_ice_root.get_children()
+	## 4 per layer packs a tight mound instead of a sparse ring.
+	const PER_LAYER := 4
 	for i in mini(count, kids.size()):
 		var cube: Node3D = kids[i]
-		var layer := i / 3
-		var in_layer := i % 3
-		var ang := float(in_layer) * TAU / 3.0 + float(layer) * 0.4 + float(i) * 0.15
-		var r := 0.008 if count <= 2 else (0.016 + float(layer) * 0.004)
-		if count >= 7:
-			r = 0.022 + float(layer % 2) * 0.006
+		var layer := i / PER_LAYER
+		var in_layer := i % PER_LAYER
+		## Small angular jitter so faces don't look grid-perfect.
+		var ang := float(in_layer) * TAU / float(PER_LAYER) \
+				+ float(layer) * 0.55 \
+				+ float(i) * 0.08
+		## Tight radius — cubes overlap / nest in the center.
+		var r := 0.0
+		if count == 1:
+			r = 0.0
+		elif count == 2:
+			r = 0.010
+		else:
+			r = 0.011 + float(layer) * 0.0035 + float(in_layer % 2) * 0.002
+		## Pull outer cubes inward as the clump grows.
+		r *= 0.78 if count >= 6 else 1.0
+		var y_off := float(layer) * 0.014 + float(in_layer) * 0.0025
+		## Slight inward lean toward center for a glued clump look.
 		cube.position = Vector3(
 			cos(ang) * r,
-			base_y + float(layer) * 0.018 + float(in_layer) * 0.004,
+			base_y + y_off,
 			sin(ang) * r
 		)
-		cube.rotation_degrees = Vector3(18.0 * float(i % 5), 40.0 * float(i), 12.0 * float((i * 3) % 7))
+		cube.rotation_degrees = Vector3(
+			12.0 + 22.0 * float(i % 5),
+			35.0 * float(i) + float(layer) * 18.0,
+			8.0 + 15.0 * float((i * 3) % 7)
+		)
+		## Tiny scale variance already in mesh; nudge bigger cubes toward center.
+		if i == 0 and count > 1:
+			cube.position = Vector3(0.0, base_y, 0.0)
 
 
 func _put_cup_down() -> void:
