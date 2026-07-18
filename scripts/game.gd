@@ -652,8 +652,8 @@ const CUP_SHELL_H := 0.21 ## tall clear cup
 const CUP_SHELL_TOP_R := 0.082
 const CUP_SHELL_BOT_R := 0.066
 const CUP_LIQUID_MAX_H := 0.162 ## soda column inside the shell
-const CUP_LIQUID_TOP_R := 0.072
-const CUP_LIQUID_BOT_R := 0.060
+const CUP_LIQUID_TOP_R := 0.076 ## almost fills the shell so cola reads through the wall
+const CUP_LIQUID_BOT_R := 0.062
 const CUP_FILL_RATE := 0.95 ## fill units per second while under spout
 const CUP_SPOUT_REACH := 0.55 ## world meters — forgiving aim under nozzle
 const CUP_ICE_CUBE_INTERVAL := 0.08 ## keep dumping cubes while held under ICE
@@ -8990,7 +8990,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	shell_mesh.cap_bottom = true
 	cup_shell.mesh = shell_mesh
 	cup_shell.position = Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
-	cup_shell.material_override = _make_clear_cup_material(0.68)
+	cup_shell.material_override = _make_clear_cup_material(0.14)
 	cup_root.add_child(cup_shell)
 	cup_shell_mesh = cup_shell
 
@@ -9002,7 +9002,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rim_mesh.outer_radius = CUP_SHELL_TOP_R + 0.004
 	rim.mesh = rim_mesh
 	rim.position = Vector3(0.0, CUP_SHELL_H - 0.004, 0.0)
-	rim.material_override = _make_clear_cup_material(0.82)
+	rim.material_override = _make_clear_cup_material(0.55)
 	cup_root.add_child(rim)
 
 	## Single soda volume + independent top disc (splash angle lives on the disc).
@@ -9017,18 +9017,12 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	liq.top_radius = CUP_LIQUID_TOP_R
 	liq.bottom_radius = CUP_LIQUID_BOT_R
 	liq.height = 0.02
-	## Closed volume — open top + backface cull made the body vanish when looking into the cup.
 	liq.cap_top = true
 	liq.cap_bottom = true
 	cup_liquid_mesh.mesh = liq
 	cup_liquid_mesh.position = Vector3(0.0, 0.01, 0.0)
 	cup_liquid_mesh.visible = false
-	cup_liquid_mat = StandardMaterial3D.new()
-	cup_liquid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	cup_liquid_mat.roughness = 0.08
-	cup_liquid_mat.metallic = 0.02
-	cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	cup_liquid_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	cup_liquid_mat = _make_soda_liquid_material(Color(0.28, 0.08, 0.05))
 	cup_liquid_mesh.material_override = cup_liquid_mat
 	cup_liquid_pivot.add_child(cup_liquid_mesh)
 
@@ -9046,16 +9040,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	surf.cap_bottom = true
 	cup_liquid_surface.mesh = surf
 	cup_liquid_surface.visible = false
-	var surf_mat := StandardMaterial3D.new()
-	surf_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	surf_mat.albedo_color = Color(1, 1, 1, 0.58)
-	surf_mat.roughness = 0.03
-	surf_mat.metallic = 0.08
-	surf_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	surf_mat.emission_enabled = true
-	surf_mat.emission = Color(1, 1, 1)
-	surf_mat.emission_energy_multiplier = 0.12
-	cup_liquid_surface.material_override = surf_mat
+	cup_liquid_surface.material_override = _make_soda_liquid_material(Color(0.32, 0.10, 0.06))
 	cup_surface_pivot.add_child(cup_liquid_surface)
 
 	cup_ice_root = Node3D.new()
@@ -9098,17 +9083,30 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 
 func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
-	## Bright plastic cup — opaque enough to read; slight blue frost.
+	## Clear plastic — thin alpha so soda color shows through (not milky frost).
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.90, 0.95, 0.99, clampf(alpha, 0.48, 0.88))
+	mat.albedo_color = Color(0.92, 0.96, 1.0, clampf(alpha, 0.08, 0.65))
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.18
-	mat.metallic = 0.06
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.roughness = 0.12
+	mat.metallic = 0.0
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.refraction_enabled = false
-	mat.emission_enabled = true
-	mat.emission = Color(0.72, 0.84, 0.94)
-	mat.emission_energy_multiplier = 0.055
+	mat.emission_enabled = false
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	return mat
+
+
+func _make_soda_liquid_material(col: Color) -> StandardMaterial3D:
+	## Opaque unshaded soda — sides stay flavor-colored (lit transparent walls looked white).
+	var mat := StandardMaterial3D.new()
+	var c := col
+	c.a = 1.0
+	mat.albedo_color = c
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.emission_enabled = false
 	return mat
 
 
