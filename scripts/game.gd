@@ -261,6 +261,7 @@ var brush_area: Area3D = null
 ## Parked on the left window lintel, hanging into the opening (toward the cook).
 var brush_home: Vector3 = Vector3(1.866, 1.99, 1.12)
 var brush_home_rot := Vector3(-8.0, 18.0, 6.0)
+const BRUSH_HOME_SCALE := Vector3(1.55, 1.55, 1.55)
 ## Held pose — blade tipped on steel, handle toward the cook.
 var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
@@ -3546,14 +3547,33 @@ func _toggle_grill_power_local(turning_on: bool) -> void:
 		_sfx_click()
 	_set_grill_on(turning_on)
 	if grill_on:
-		if _tutorial_step == 1:
+		var empty := _grill_meat_count() == 0
+		if _tutorial_step == 1 and empty:
 			_set_tutorial_hint(2, "Right-click to add burger patty on grill")
-		else:
+		elif empty:
 			_flash("Burner ON — right-click the grill where you want each patty", Color("FFCC80"))
+		else:
+			## Burgers already cooking — don't nag co-op cooks to place more.
+			if _tutorial_step == 2:
+				_clear_tutorial_hint()
+			_flash("Burner ON", Color("FFCC80"))
 	else:
 		_flash("Burner OFF", Color("B0BEC5"))
 		if _tutorial_step == 2:
 			_set_tutorial_hint(1, "Turn on grill or burner")
+
+
+func _grill_meat_count() -> int:
+	## Live burger patties on the steel (excludes toasting buns).
+	var n := 0
+	for i in GRILL_SLOTS:
+		var p = grill[i] if i < grill.size() else null
+		if p == null or not is_instance_valid(p):
+			continue
+		if _is_bun_toast(p):
+			continue
+		n += 1
+	return n
 
 
 func _set_grill_on(on: bool) -> void:
@@ -3954,6 +3974,9 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 	p.scale = Vector3(0.2, 0.2, 0.2)
 	var tw := create_tween()
 	tw.tween_property(p, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK)
+	## Clear place-patty coach text even when the partner spawned it (co-op).
+	if _tutorial_step == 2:
+		_clear_tutorial_hint()
 	if _mp_applying:
 		## Silent repair spawn during grill sync — no flash spam.
 		return
@@ -3971,8 +3994,6 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 			_flash("Cooking on %s heat (%d/%d) — slower sear" % [lab, n, GRILL_SLOTS], Color("FFCC80"))
 		else:
 			_flash("Cooking on FULL! %d/%d — wait for FLIP" % [n, GRILL_SLOTS], Color("FFAB91"))
-	if _tutorial_step == 2:
-		_clear_tutorial_hint()
 
 
 func _spawn_patty_in_slot(idx: int) -> void:
@@ -6062,7 +6083,7 @@ func _build_wire_brush() -> void:
 	## Handle tips up into the lintel; blade hangs into the window opening.
 	brush_home_rot = Vector3(-8.0, 18.0, 6.0)
 	brush_root.rotation_degrees = brush_home_rot
-	brush_root.scale = Vector3(1.55, 1.55, 1.55)
+	brush_root.scale = BRUSH_HOME_SCALE
 	world.add_child(brush_root)
 
 	brush_area = Area3D.new()
@@ -9296,6 +9317,8 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 		return false
 	brush_held = true
 	brush_throwing = false
+	if brush_root != null and is_instance_valid(brush_root):
+		brush_root.scale = BRUSH_HOME_SCALE
 	if brush_area:
 		brush_area.input_ray_pickable = false
 	if game_audio:
@@ -9603,11 +9626,13 @@ func _throw_brush_home() -> void:
 		brush_root,
 		brush_home,
 		brush_home_rot,
-		Vector3.ONE,
+		BRUSH_HOME_SCALE,
 		0.3,
 		func() -> void:
 			if brush_area != null and is_instance_valid(brush_area):
 				brush_area.input_ray_pickable = true
+			if brush_root != null and is_instance_valid(brush_root):
+				brush_root.scale = BRUSH_HOME_SCALE
 	)
 	_flash("Scraper put away", Color("B0BEC5"))
 
@@ -9627,6 +9652,7 @@ func _clear_all_residue() -> void:
 		if brush_root:
 			brush_root.position = brush_home
 			brush_root.rotation_degrees = brush_home_rot
+			brush_root.scale = BRUSH_HOME_SCALE
 		if brush_area:
 			brush_area.input_ray_pickable = true
 
@@ -22795,7 +22821,7 @@ func mp_tool_pose(
 			brush.visible = true
 			brush.global_position = pos
 			brush.global_rotation_degrees = rot
-			brush.scale = Vector3(1.55, 1.55, 1.55)
+			brush.scale = BRUSH_HOME_SCALE
 		4:
 			var shaker := _mp_ensure_remote_shaker(sid)
 			if shaker == null:
