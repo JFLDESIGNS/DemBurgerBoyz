@@ -8,8 +8,8 @@ const STATION_CRAFT := 0
 const STATION_BURGER_SCALE := 1.0
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
-const STATION_PATTY_BUILD_SCALE := 0.66 ## bare meat — sit inside bun rim
-const STATION_PATTY_CHEESE_BUILD_SCALE := 0.70 ## melt art (cropped) — match bare patty
+const STATION_PATTY_BUILD_SCALE := 0.792 ## bare meat (+20%)
+const STATION_PATTY_CHEESE_BUILD_SCALE := 0.84 ## melt art (+20%)
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
