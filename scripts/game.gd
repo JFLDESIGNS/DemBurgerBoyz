@@ -73,6 +73,7 @@ const OIL_POUR_HEIGHT := 0.445
 ## Held shaker tip-down height — +1 ft from prior 0.2 so flakes don't clip the steel.
 const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
+const BunToastScript := preload("res://scripts/bun_toast.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
 ## DISABLED — armed hostiles backed up under GREAT IDEA THAT NOBODY LIKES/
 const TERRORISTS_ENABLED := false
@@ -999,6 +1000,7 @@ func _setup_stations_data() -> void:
 			"kind": "craft",
 			"items": [] as Array[String],
 			"patties": [],
+			"bun_toast": {}, ## bun_bottom / bun_top -> cook_time seconds
 			"panel": null,
 			"preview": null,
 			"title": null,
@@ -1048,6 +1050,7 @@ func _start_game() -> void:
 	if window_cat != null and window_cat.has_method("reset_shift"):
 		window_cat.reset_shift()
 	_clear_all_stations()
+	_seed_cutting_board_buns()
 	_clear_customers()
 	_reset_service_window_open()
 	for i in GRILL_SLOTS:
@@ -1084,6 +1087,7 @@ func _restart() -> void:
 	if window_cat != null and window_cat.has_method("reset_shift"):
 		window_cat.reset_shift()
 	_clear_all_stations()
+	_seed_cutting_board_buns()
 	_clear_customers()
 	_reset_service_window_open()
 	for i in GRILL_SLOTS:
@@ -1110,13 +1114,14 @@ func _process(delta: float) -> void:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
 		return
-	## Sync grill heat to patties (only cook while burner is on + on cook zone).
+	## Sync grill heat to patties / toasting buns (only cook while burner is on + on cook zone).
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p != null and is_instance_valid(p):
 			p.heating = grill_on
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
-			_update_patty_warm_hold(p, delta)
+			if not _is_bun_toast(p):
+				_update_patty_warm_hold(p, delta)
 	_update_station_cheese_melt(delta)
 	_update_supply_freshness(delta)
 	_update_patty_hint_focus()
@@ -3081,6 +3086,7 @@ func _trash_spatula_patty_local() -> void:
 	if spatula_patty == null:
 		_flash("Nothing on the spatula to trash", Color("B0BEC5"))
 		return
+	var was_bun := _is_bun_toast(spatula_patty)
 	if is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
 	spatula_patty = null
@@ -3092,7 +3098,10 @@ func _trash_spatula_patty_local() -> void:
 	_refresh_spatula_ui()
 	if game_audio and game_audio.has_method("play_trash"):
 		game_audio.play_trash()
-	_spend(COST_DROP_BURGER, "Trashed scooped burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
+	if was_bun:
+		_flash("Trashed bun", Color("FFAB91"))
+	else:
+		_spend(COST_DROP_BURGER, "Trashed scooped burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 
 
 func _trash_single_grill_patty(patty: Area3D) -> void:
@@ -3634,6 +3643,9 @@ func _spawn_patty_in_slot(idx: int) -> void:
 func _begin_patty_drag(patty: Area3D) -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
+	if _is_bun_toast(patty):
+		_pickup_bun_from_grill(patty)
+		return
 	## Holding a scooped patty: still flip others on the grill; scooping another is blocked.
 	if spatula_patty != null:
 		_on_patty_clicked(patty)
@@ -3853,7 +3865,10 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 	if spatula_patty != null:
 		_reject_second_scoop("Already holding a patty")
 		return
-	if not patty.flipped_once or not patty.can_scoop():
+	if _is_bun_toast(patty):
+		## Treat like a ready scoop — no flip gate.
+		pass
+	elif not patty.flipped_once or not patty.can_scoop():
 		_flash("Finish cooking before flicking to Build", Color("FFA726"))
 		return
 	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
@@ -3892,12 +3907,20 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 		flicking_patty = null
 		if patty == null or not is_instance_valid(patty):
 			return
-		_commit_patty_to_build(patty)
+		if _is_bun_toast(patty):
+			_commit_bun_to_build(patty)
+		else:
+			_commit_patty_to_build(patty)
 	)
 
 
 func _try_drag_patty_to_station(patty: Area3D, station_idx: int) -> void:
 	if patty == null or not is_instance_valid(patty):
+		return
+	if _is_bun_toast(patty):
+		_pickup_bun_from_grill(patty)
+		if spatula_patty != null:
+			_drop_spatula_on_station(station_idx)
 		return
 	if not patty.flipped_once:
 		_flash("Flip it before dragging to a station", Color("FFA726"))
@@ -3930,6 +3953,9 @@ func _on_patty_clicked(patty: Area3D) -> void:
 
 func _on_patty_clicked_local(patty: Area3D) -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
+		return
+	if _is_bun_toast(patty):
+		_pickup_bun_from_grill(patty)
 		return
 	## Must flip before scooping - never grab a pre-flip patty.
 	if not patty.flipped_once:
@@ -4033,6 +4059,9 @@ func _customer_by_net_id(net_id: int):
 func _pickup_patty(patty: Area3D) -> void:
 	if spatula_patty != null:
 		_reject_second_scoop()
+		return
+	if _is_bun_toast(patty):
+		_pickup_bun_from_grill(patty)
 		return
 	if not patty.flipped_once or not patty.can_scoop():
 		_flash("Flip and finish cooking before scooping", Color("EF5350"))
@@ -4285,7 +4314,10 @@ func _throw_held_patty_to_build() -> void:
 		if patty == null or not is_instance_valid(patty):
 			return
 		## Commit directly — never re-hold on the spatula (that left throws stuck in-hand).
-		_commit_patty_to_build(patty)
+		if _is_bun_toast(patty):
+			_commit_bun_to_build(patty)
+		else:
+			_commit_patty_to_build(patty)
 	)
 
 
@@ -4358,6 +4390,9 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	## Land a scooped / thrown patty on Build without requiring spatula_patty.
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
+	if _is_bun_toast(patty):
+		_commit_bun_to_build(patty)
+		return
 	_mp_release_scoop_if(patty)
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
@@ -4406,6 +4441,8 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 
 
 func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> void:
+	if patty != null and _is_bun_toast(patty):
+		return
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	var at := Vector3(patty._rest_x, GRILL_SURFACE_Y + 0.028, patty._rest_z) if patty else slot_positions[slot] + Vector3(0, 0.028, 0)
@@ -4763,6 +4800,8 @@ func _feed_window_cat_patty_local() -> void:
 
 func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return false
+	if _is_bun_toast(spatula_patty):
 		return false
 	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
 		return false
@@ -7449,17 +7488,19 @@ func _build_meat_warmer() -> void:
 	grill_root.add_child(warmer_root)
 	warmer_root.position = Vector3(0, GRILL_SURFACE_Y + 0.026, GRILL_SURFACE_Z)
 
-	var label_z := -GRILL_DEPTH * 0.42
+	## ~2" up + ~2" toward cook/camera so labels clear the near steel rim.
+	const INCH := 0.0254
+	var label_y := 0.018 + INCH * 2.0
+	var label_z := -GRILL_DEPTH * 0.42 - INCH * 2.0
 	warmer_label = null
 	warmer_label_half = null
 	warmer_label_hold = null
 	for z in _grill_zone_bands():
 		var lab := _make_warmer_speed_label(
 			str(z["label"]),
-			Vector3(float(z["cx"]), 0.018, label_z),
+			Vector3(float(z["cx"]), label_y, label_z),
 			z["lab_col"]
 		)
-		_nudge_label3d_on_screen(lab, Vector2(0.0, 15.0))
 		match str(z["id"]):
 			"full":
 				warmer_label = lab
@@ -7486,6 +7527,8 @@ func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
 	## Meat starts its 5-min clock on first HOLD visit, then keeps aging everywhere
 	## (grill / spatula / slide-offs do NOT reset the meter).
 	if patty == null or not is_instance_valid(patty):
+		return
+	if _is_bun_toast(patty):
 		return
 	## Guest hold-age comes from host grill snapshots — don't double-tick or solo-trash.
 	if mp_enabled and not NetManager.is_host():
@@ -13113,9 +13156,7 @@ func _extract_station_patty(station_index: int, item_index: int):
 		var cidx := items.find("cheese")
 		if cidx >= 0:
 			items.remove_at(cidx)
-	## If only the automatic bottom bun remains, clear the craft station.
-	if items.size() == 1 and str(items[0]) == "bun_bottom":
-		items.clear()
+	## Keep leftover buns on the board (toast / rebuild).
 	st["items"] = _normalize_burger_stack(items)
 	st["selected_layer"] = -1
 	if items.is_empty():
@@ -13150,6 +13191,196 @@ func _extract_station_patty_by_net_id(station_index: int, net_id: int):
 	if item_index < 0:
 		return null
 	return _extract_station_patty(station_index, item_index)
+
+
+func _is_bun_toast(node) -> bool:
+	return node != null and is_instance_valid(node) and node.has_method("is_bun_toast") and bool(node.is_bun_toast())
+
+
+func _seed_cutting_board_buns(station_index: int = STATION_CRAFT) -> void:
+	## Empty Build board always starts with a toastable top + bottom bun.
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	var patties: Array = st.get("patties", [])
+	if not items.is_empty() or not patties.is_empty():
+		return
+	st["items"] = ["bun_bottom", "bun_top"]
+	st["bun_toast"] = {}
+	st["selected_layer"] = -1
+	_refresh_station(station_index)
+	_mp_broadcast_station(station_index)
+
+
+func _station_bun_cook_time(station_index: int, bun_id: String) -> float:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return 0.0
+	var toast: Dictionary = stations[station_index].get("bun_toast", {})
+	return float(toast.get(bun_id, 0.0))
+
+
+func _set_station_bun_cook_time(station_index: int, bun_id: String, cook: float) -> void:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var toast: Dictionary = st.get("bun_toast", {})
+	if cook <= 0.001:
+		toast.erase(bun_id)
+	else:
+		toast[bun_id] = cook
+	st["bun_toast"] = toast
+
+
+func _bun_layer_modulate(cook_time: float) -> Color:
+	var raw := Color(1, 1, 1, 1)
+	var toasted := Color(0.82, 0.62, 0.42, 1)
+	var burnt := Color(0.35, 0.22, 0.16, 1)
+	if cook_time <= BunToastScript.TOAST_READY:
+		return raw.lerp(toasted, cook_time / BunToastScript.TOAST_READY)
+	var t := clampf(
+		(cook_time - BunToastScript.TOAST_READY) / maxf(0.001, BunToastScript.TOAST_BURNT - BunToastScript.TOAST_READY),
+		0.0, 1.0
+	)
+	return toasted.lerp(burnt, t)
+
+
+func _extract_station_bun(station_index: int, item_index: int) -> String:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return ""
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	if item_index < 0 or item_index >= items.size():
+		return ""
+	var bun_id := str(items[item_index])
+	if bun_id != "bun_bottom" and bun_id != "bun_top":
+		return ""
+	items.remove_at(item_index)
+	st["items"] = _normalize_burger_stack(items)
+	st["selected_layer"] = -1
+	if items.is_empty():
+		_reset_station_freshness(station_index)
+	else:
+		_start_station_freshness(station_index)
+	_after_station_edit(station_index)
+	return bun_id
+
+
+func _make_held_bun(kind: String, cook_time: float = 0.0) -> Area3D:
+	var bun = BunToastScript.new()
+	bun.setup(kind, cook_time)
+	bun.is_held = true
+	bun.heating = false
+	bun.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+	bun.visible = true
+	if patties_root != null:
+		patties_root.add_child(bun)
+	bun.clicked.connect(_on_patty_clicked)
+	return bun
+
+
+func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
+	if not playing:
+		return
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("EF5350"))
+		return
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	if item_index < 0 or item_index >= items.size():
+		return
+	var bun_id := str(items[item_index])
+	if bun_id != "bun_bottom" and bun_id != "bun_top":
+		return
+	var cook := _station_bun_cook_time(station_index, bun_id)
+	var extracted := _extract_station_bun(station_index, item_index)
+	if extracted == "":
+		_flash("Couldn't grab that bun", Color("EF5350"))
+		return
+	## Cook progress travels with the half we lifted.
+	_set_station_bun_cook_time(station_index, bun_id, 0.0)
+	var bun := _make_held_bun(bun_id, cook)
+	spatula_patty = bun
+	spatula_from_build = true
+	spatula_owner_id = 0
+	spatula_lmb_held = true
+	spatula_last_mouse = get_viewport().get_mouse_position()
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	_update_held_spatula_patty(0.016)
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Bun ready — drop on the grill to toast (2s ready · 4.2s burns)", Color("FFCC80"))
+
+
+func _pickup_bun_from_grill(bun: Area3D) -> void:
+	if not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
+		return
+	if spatula_patty != null and spatula_patty != bun:
+		_reject_second_scoop("Already holding something")
+		return
+	if brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("EF5350"))
+		return
+	var idx: int = int(bun.slot_index)
+	if idx >= 0 and idx < grill.size() and grill[idx] == bun:
+		grill[idx] = null
+	bun.is_held = true
+	bun.heating = false
+	bun.visible = true
+	spatula_patty = bun
+	spatula_from_build = false
+	spatula_owner_id = 0
+	spatula_lmb_held = false
+	spatula_last_mouse = get_viewport().get_mouse_position()
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	_update_held_spatula_patty(0.016)
+	if game_audio:
+		game_audio.play_scoop()
+	var note: String = bun.cook_rating_text() if bun.has_method("cook_rating_text") else "bun"
+	var col: Color = Color("FFCC80")
+	if bun.has_method("cook_rating"):
+		col = bun.cook_rating().get("color", col)
+	_flash("Scooped bun (%s) — grill, Build, or trash" % note, col)
+
+
+func _commit_bun_to_build(bun: Area3D) -> void:
+	if not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
+		return
+	var kind := str(bun.bun_kind)
+	var cook := float(bun.cook_time)
+	var st: Dictionary = stations[STATION_CRAFT]
+	var items: Array = st["items"]
+	if not items.has(kind):
+		items.append(kind)
+	st["items"] = _normalize_burger_stack(items)
+	_set_station_bun_cook_time(STATION_CRAFT, kind, cook)
+	if spatula_patty == bun:
+		spatula_patty = null
+		spatula_owner_id = 0
+		spatula_from_build = false
+		spatula_lmb_held = false
+		spatula_vel_screen = Vector2.ZERO
+		spatula_carry_travel = 0.0
+	bun.queue_free()
+	_refresh_spatula_ui()
+	_start_station_freshness(STATION_CRAFT)
+	_refresh_station(STATION_CRAFT)
+	_select_station(STATION_CRAFT)
+	if game_audio:
+		game_audio.play_ingredient(kind)
+	var note := "raw"
+	if cook >= BunToastScript.TOAST_BURNT:
+		note = "burnt"
+	elif cook >= BunToastScript.TOAST_READY:
+		note = "toasted"
+	_flash("%s on Build (%s)" % [GameDataScript.INGREDIENT_LABELS.get(kind, kind), note], Color("A5D6A7"))
+	_mp_broadcast_station(STATION_CRAFT)
 
 
 func _pickup_station_patty_to_hand(station_index: int, item_index: int) -> void:
@@ -13264,7 +13495,7 @@ func _return_station_patty_to_grill(station_index: int, item_index: int, world_p
 
 
 func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> void:
-	## Same cooked patty returns to the grill — keep cook_time / flip / cheese.
+	## Same cooked patty / toasting bun returns to the grill — keep cook_time / flip / cheese.
 	patty.is_held = false
 	patty.visible = true
 	patty.rotation_degrees = Vector3.ZERO
@@ -13283,6 +13514,16 @@ func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> v
 		patty.refresh_cook_visuals()
 	if game_audio:
 		game_audio.play_click()
+	if _is_bun_toast(patty):
+		if not grill_on:
+			_flash("Bun on grill — turn BURNER ON to toast (2s ready · 4.2s burns)", Color("FFA726"))
+		elif patty.has_method("is_burnt") and patty.is_burnt():
+			_flash("Burnt bun back on grill", Color("EF5350"))
+		elif patty.has_method("is_ready") and patty.is_ready():
+			_flash("Toasted bun on grill — scoop when you want", Color("FFCC80"))
+		else:
+			_flash("Toasting bun — ready in 2s, burns at 4.2s", Color("FFE082"))
+		return
 	var cook_note: String = str(patty.cook_rating_text()) if patty.has_method("cook_rating_text") else "cooked"
 	if patty.has_cheese:
 		_flash("Back on grill (%s) — cheese melting" % cook_note, Color("FFE082"))
@@ -13488,6 +13729,9 @@ func _drop_spatula_on_station_local(index: int) -> void:
 		return
 	if index < 0 or index >= STATION_COUNT:
 		return
+	if _is_bun_toast(spatula_patty):
+		_commit_bun_to_build(spatula_patty)
+		return
 	var patty = spatula_patty
 	_mp_release_scoop_if(patty)
 	_commit_patty_to_build(patty)
@@ -13503,6 +13747,8 @@ func _insert_patty_into_stack(items: Array) -> void:
 
 func _normalize_burger_stack(items: Array) -> Array:
 	## Canonical order: bottom bun(s) -> patty(s) -> toppings (fixed kitchen order) -> top bun(s).
+	## Does not auto-inject a heel — board can hold toastable buns alone, or meat without a heel
+	## while that bun is toasting on the grill. Heel still auto-adds when a patty first lands.
 	var bottoms: Array = []
 	var patties: Array = []
 	var middles: Array = []
@@ -13517,8 +13763,6 @@ func _normalize_burger_stack(items: Array) -> Array:
 				tops.append(item)
 			_:
 				middles.append(item)
-	if bottoms.is_empty() and (patties.size() > 0 or middles.size() > 0 or tops.size() > 0):
-		bottoms.append("bun_bottom")
 	middles = GameDataScript.sort_toppings(middles)
 	var out: Array = []
 	out.append_array(bottoms)
@@ -14025,11 +14269,13 @@ func _trash_build_layer_local(index: int, remove_i: int) -> void:
 	var removed: String = str(items[remove_i])
 	## Bottom bun stays under the meat — trash other layers only.
 	if removed == "bun_bottom" and (items.count("patty") > 0 or st["patties"].size() > 0):
-		_flash("Bottom bun stays under the patty", Color("FFCC80"))
+		_flash("Bottom bun stays under the patty — click it to toast on the grill", Color("FFCC80"))
 		st["selected_layer"] = -1
 		_refresh_station(index)
 		return
 	items.remove_at(remove_i)
+	if removed == "bun_bottom" or removed == "bun_top":
+		_set_station_bun_cook_time(index, removed, 0.0)
 	st["items"] = _normalize_burger_stack(items)
 	st["selected_layer"] = -1
 	_sync_patties_with_items(index)
@@ -14072,10 +14318,14 @@ func _clear_station(index: int) -> void:
 			p.queue_free()
 	st["patties"] = []
 	st["items"] = [] as Array[String]
+	st["bun_toast"] = {}
 	st["selected_layer"] = -1
 	_reset_station_freshness(index)
 	_refresh_station(index)
 	_mp_broadcast_station(index)
+	## Empty board gets a fresh toastable bun pair.
+	if playing:
+		_seed_cutting_board_buns(index)
 
 
 func _clear_all_stations() -> void:
@@ -14188,7 +14438,10 @@ func _refresh_station(index: int) -> void:
 		tr.size = Vector2(this_w, h)
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		## Soft drop shadow under each float layer.
-		tr.modulate = Color(1, 1, 1, 1)
+		var bun_cook := 0.0
+		if item == "bun_bottom" or item == "bun_top":
+			bun_cook = _station_bun_cook_time(index, item)
+		tr.modulate = _bun_layer_modulate(bun_cook) if bun_cook > 0.001 else Color(1, 1, 1, 1)
 		row.add_child(tr)
 
 		var from_i := stack_i
@@ -14198,14 +14451,16 @@ func _refresh_station(index: int) -> void:
 				if item_id == "patty":
 					## Click → held 3D patty so you can place it back on the grill.
 					_pickup_station_patty_to_hand(index, from_i)
+				elif item_id == "bun_bottom" or item_id == "bun_top":
+					_pickup_station_bun_to_hand(index, from_i)
 				else:
 					_select_station_layer(index, from_i)
 				row.accept_event()
 		)
 		row.set_drag_forwarding(
 			func(_pos):
-				if item_id == "patty":
-					## Patties use click-to-hand; keep Control drag for toppings only.
+				if item_id == "patty" or item_id == "bun_bottom" or item_id == "bun_top":
+					## Patties / buns use click-to-hand; toppings stay Control-drag.
 					return null
 				var color_preview := ColorRect.new()
 				color_preview.custom_minimum_size = Vector2(100, 16)
@@ -14813,20 +15068,18 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
 			return
+		## Uniform stack scale only — undoing bun Y while the toss tilts made the
+		## patty stick out sideways toward the customer's face.
 		stack.scale = s
-		## Buns keep full height; patties flatten a bit; toppings smash harder.
-		var bun_inv_y := 1.0 / maxf(s.y, 0.001)
-		var bun_inv := Vector2(1.0, bun_inv_y)
-		var patty_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.2))
 		for row in bun_rows:
 			if row != null and is_instance_valid(row):
-				(row as Control).scale = bun_inv
+				(row as Control).scale = Vector2.ONE
 		for row in patty_rows:
 			if row != null and is_instance_valid(row):
-				(row as Control).scale = patty_inv
+				(row as Control).scale = Vector2.ONE
 		for row in topping_rows:
 			if row != null and is_instance_valid(row):
-				(row as Control).scale = Vector2(1.06, 0.75)
+				(row as Control).scale = Vector2.ONE
 
 	var finish_serve := func() -> void:
 		if customer != null and is_instance_valid(customer) and customer.has_method("finish_catch_burger"):
