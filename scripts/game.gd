@@ -9093,10 +9093,10 @@ func _build_phone_ui() -> void:
 	body_sb.set_corner_radius_all(22)
 	body_sb.shadow_color = Color(0, 0, 0, 0.45)
 	body_sb.shadow_size = 8
-	body_sb.content_margin_left = 5
-	body_sb.content_margin_right = 5
-	body_sb.content_margin_top = 7
-	body_sb.content_margin_bottom = 7
+	body_sb.content_margin_left = 6
+	body_sb.content_margin_right = 6
+	body_sb.content_margin_top = 10
+	body_sb.content_margin_bottom = 12
 	body.add_theme_stylebox_override("panel", body_sb)
 	phone_column.add_child(body)
 
@@ -9106,16 +9106,11 @@ func _build_phone_ui() -> void:
 	phone_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_child(phone_stack)
 
-	var top_bezel := ColorRect.new()
-	top_bezel.name = "PhoneTopBezel"
-	top_bezel.color = Color(0.02, 0.02, 0.02, 1.0)
-	top_bezel.custom_minimum_size = Vector2(0.0, PHONE_BEZEL_H)
-	top_bezel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	phone_stack.add_child(top_bezel)
-
+	## Screen fills the frame — no solid black forehead/chin bars (those read as bugs).
 	var screen := PanelContainer.new()
 	screen.name = "PhoneScreen"
 	screen.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	screen.mouse_filter = Control.MOUSE_FILTER_STOP
 	var screen_sb := StyleBoxFlat.new()
 	screen_sb.bg_color = Color(0.04, 0.06, 0.11, 0.98)
@@ -9129,12 +9124,14 @@ func _build_phone_ui() -> void:
 	screen.add_theme_stylebox_override("panel", screen_sb)
 	phone_stack.add_child(screen)
 
-	var bottom_bezel := ColorRect.new()
-	bottom_bezel.name = "PhoneBottomBezel"
-	bottom_bezel.color = Color(0.02, 0.02, 0.02, 1.0)
-	bottom_bezel.custom_minimum_size = Vector2(0.0, PHONE_BEZEL_H)
-	bottom_bezel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	phone_stack.add_child(bottom_bezel)
+	## PanelContainer only lays out one child cleanly — wrap gloss + scroll together.
+	var screen_host := Control.new()
+	screen_host.name = "PhoneScreenHost"
+	screen_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	screen_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	screen_host.clip_contents = true
+	screen.add_child(screen_host)
 
 	var gloss := ColorRect.new()
 	gloss.color = Color(1.0, 1.0, 1.0, 0.07)
@@ -9142,7 +9139,7 @@ func _build_phone_ui() -> void:
 	gloss.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	gloss.offset_bottom = 72.0
 	gloss.z_index = 2
-	screen.add_child(gloss)
+	screen_host.add_child(gloss)
 
 	var scroll := ScrollContainer.new()
 	phone_scroll = scroll
@@ -9152,7 +9149,7 @@ func _build_phone_ui() -> void:
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER ## drag scroll — no bar
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	scroll.gui_input.connect(_on_phone_scroll_gui_input)
-	screen.add_child(scroll)
+	screen_host.add_child(scroll)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
