@@ -633,9 +633,9 @@ const SODA_FLAVOR_COLORS: Dictionary = {
 	"lemon_lime": Color(0.55, 0.82, 0.22),
 	"orange": Color(0.95, 0.48, 0.12),
 }
-const CUP_HOLD_HEIGHT := 0.24
+const CUP_HOLD_HEIGHT := 0.16
 const CUP_FILL_RATE := 0.95 ## fill units per second while under spout
-const CUP_SPOUT_REACH := 0.42 ## world meters — forgiving aim under nozzle
+const CUP_SPOUT_REACH := 0.45 ## world meters — forgiving aim under nozzle
 const CUP_ICE_CUBE_INTERVAL := 0.11
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
@@ -8493,7 +8493,7 @@ func _build_menu_board_decal() -> void:
 
 
 func _build_soda_station() -> void:
-	## Fountain behind phone/radio chrome — 3 flavors, soda + ice spouts, wall cups.
+	## Compact fountain (~½ old height) with clear flavor tanks on top.
 	if soda_root != null and is_instance_valid(soda_root):
 		soda_root.queue_free()
 	soda_root = null
@@ -8527,62 +8527,96 @@ func _build_soda_station() -> void:
 	world.add_child(root)
 	soda_root = root
 
-	## Cabinet body — light face so it reads on the dark truck wall.
+	## Short stainless cabinet.
 	var body := MeshInstance3D.new()
 	body.name = "Cabinet"
 	var body_mesh := BoxMesh.new()
-	body_mesh.size = Vector3(0.78, 1.05, 0.42)
+	body_mesh.size = Vector3(0.70, 0.46, 0.36)
 	body.mesh = body_mesh
-	body.position = Vector3(0.0, 0.52, 0.0)
+	body.position = Vector3(0.0, 0.23, 0.0)
 	var body_mat := StandardMaterial3D.new()
-	body_mat.albedo_color = Color(0.78, 0.80, 0.84)
-	body_mat.metallic = 0.25
-	body_mat.roughness = 0.48
+	body_mat.albedo_color = Color(0.82, 0.84, 0.88)
+	body_mat.metallic = 0.55
+	body_mat.roughness = 0.32
 	body.material_override = body_mat
 	root.add_child(body)
 
-	## Chrome face plate (local +Z = toward cook with yaw −90).
+	## Toe kick / base skirt.
+	var skirt := MeshInstance3D.new()
+	skirt.name = "Skirt"
+	var skirt_mesh := BoxMesh.new()
+	skirt_mesh.size = Vector3(0.72, 0.06, 0.38)
+	skirt.mesh = skirt_mesh
+	skirt.position = Vector3(0.0, 0.03, 0.0)
+	var skirt_mat := StandardMaterial3D.new()
+	skirt_mat.albedo_color = Color(0.22, 0.24, 0.28)
+	skirt_mat.metallic = 0.4
+	skirt_mat.roughness = 0.5
+	skirt.material_override = skirt_mat
+	root.add_child(skirt)
+
+	## Deck plate the tanks sit on.
+	var deck := MeshInstance3D.new()
+	deck.name = "TankDeck"
+	var deck_mesh := BoxMesh.new()
+	deck_mesh.size = Vector3(0.68, 0.03, 0.34)
+	deck.mesh = deck_mesh
+	deck.position = Vector3(0.0, 0.475, 0.0)
+	var deck_mat := StandardMaterial3D.new()
+	deck_mat.albedo_color = Color(0.62, 0.65, 0.70)
+	deck_mat.metallic = 0.75
+	deck_mat.roughness = 0.25
+	deck.material_override = deck_mat
+	root.add_child(deck)
+
+	## Chrome pour face.
 	var face := MeshInstance3D.new()
 	face.name = "Face"
 	var face_mesh := BoxMesh.new()
-	face_mesh.size = Vector3(0.72, 0.48, 0.05)
+	face_mesh.size = Vector3(0.62, 0.20, 0.04)
 	face.mesh = face_mesh
-	face.position = Vector3(0.0, 0.78, 0.22)
+	face.position = Vector3(0.0, 0.34, 0.19)
 	var face_mat := StandardMaterial3D.new()
-	face_mat.albedo_color = Color(0.55, 0.58, 0.64)
-	face_mat.metallic = 0.8
-	face_mat.roughness = 0.28
+	face_mat.albedo_color = Color(0.58, 0.60, 0.66)
+	face_mat.metallic = 0.85
+	face_mat.roughness = 0.22
 	face.material_override = face_mat
 	root.add_child(face)
 
-	## Flavor pads — left to right on the face.
-	var pad_xs: Array[float] = [-0.22, 0.0, 0.22]
+	## Clear tinted syrup tanks on top — one per flavor, with rising bubbles.
+	var tank_xs: Array[float] = [-0.22, 0.0, 0.22]
 	for i in SODA_FLAVORS.size():
 		var fid: String = SODA_FLAVORS[i]
+		var tank := _add_soda_flavor_tank(root, fid, Vector3(tank_xs[i], 0.62, 0.0))
+		soda_flavor_mats[fid] = tank
+
+		## Small lit select pad on the face under each tank.
 		var pad := MeshInstance3D.new()
-		pad.name = "Flavor_%s" % fid
+		pad.name = "FlavorPad_%s" % fid
 		var pad_mesh := BoxMesh.new()
-		pad_mesh.size = Vector3(0.18, 0.12, 0.04)
+		pad_mesh.size = Vector3(0.14, 0.07, 0.03)
 		pad.mesh = pad_mesh
-		pad.position = Vector3(pad_xs[i], 0.84, 0.26)
+		pad.position = Vector3(tank_xs[i], 0.34, 0.22)
 		var pmat := StandardMaterial3D.new()
-		pmat.albedo_color = SODA_FLAVOR_COLORS[fid]
+		var base_col: Color = SODA_FLAVOR_COLORS[fid]
+		pmat.albedo_color = base_col
 		pmat.emission_enabled = true
-		pmat.emission = SODA_FLAVOR_COLORS[fid]
-		pmat.emission_energy_multiplier = 0.55 if fid == soda_selected_flavor else 0.12
+		pmat.emission = base_col
+		pmat.emission_energy_multiplier = 0.55 if fid == soda_selected_flavor else 0.10
 		pad.material_override = pmat
 		root.add_child(pad)
-		soda_flavor_mats[fid] = pmat
+		## Keep pad mat as secondary key for light refresh (tank liquid is primary).
+		soda_flavor_mats["pad_%s" % fid] = pmat
 
 		var lab := Label3D.new()
 		lab.text = str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper()))
-		lab.position = Vector3(pad_xs[i], 0.84, 0.29)
+		lab.position = Vector3(tank_xs[i], 0.34, 0.245)
 		lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-		lab.font_size = 18
-		lab.pixel_size = 0.0018
+		lab.font_size = 14
+		lab.pixel_size = 0.0014
 		lab.modulate = Color(1, 1, 1, 0.95)
-		lab.outline_size = 3
-		lab.outline_modulate = Color(0, 0, 0, 0.75)
+		lab.outline_size = 2
+		lab.outline_modulate = Color(0, 0, 0, 0.8)
 		root.add_child(lab)
 
 		var area := Area3D.new()
@@ -8592,78 +8626,219 @@ func _build_soda_station() -> void:
 		area.collision_mask = 0
 		area.monitoring = false
 		area.monitorable = true
-		area.position = pad.position
+		## Tall click volume covering tank + pad.
+		area.position = Vector3(tank_xs[i], 0.50, 0.10)
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = Vector3(0.2, 0.14, 0.1)
+		box.size = Vector3(0.18, 0.42, 0.28)
 		shape.shape = box
 		area.add_child(shape)
 		root.add_child(area)
 		soda_flavor_areas[fid] = area
 
-	## Two spouts side-by-side: soda (left) · ice (right) — hang down over the tray.
-	_add_soda_spout(root, "SodaSpout", Vector3(-0.15, 0.52, 0.30), Color(0.85, 0.2, 0.18), true)
-	_add_soda_spout(root, "IceSpout", Vector3(0.15, 0.52, 0.30), Color(0.55, 0.82, 1.0), false)
+	## Spouts hang from the pour lip.
+	_add_soda_spout(root, "SodaSpout", Vector3(-0.13, 0.26, 0.26), Color(0.85, 0.22, 0.18), true)
+	_add_soda_spout(root, "IceSpout", Vector3(0.13, 0.26, 0.26), Color(0.55, 0.82, 1.0), false)
 
-	## Drip tray under both spouts.
 	var tray := MeshInstance3D.new()
 	tray.name = "DripTray"
 	var tray_mesh := BoxMesh.new()
-	tray_mesh.size = Vector3(0.58, 0.04, 0.26)
+	tray_mesh.size = Vector3(0.50, 0.03, 0.22)
 	tray.mesh = tray_mesh
-	tray.position = Vector3(0.0, 0.20, 0.28)
+	tray.position = Vector3(0.0, 0.09, 0.24)
 	var tray_mat := StandardMaterial3D.new()
-	tray_mat.albedo_color = Color(0.28, 0.30, 0.34)
-	tray_mat.metallic = 0.55
-	tray_mat.roughness = 0.4
+	tray_mat.albedo_color = Color(0.24, 0.26, 0.30)
+	tray_mat.metallic = 0.6
+	tray_mat.roughness = 0.38
 	tray.material_override = tray_mat
 	root.add_child(tray)
 
+	## Grate lines on the drip tray.
+	for gi in 4:
+		var grate := MeshInstance3D.new()
+		var gm := BoxMesh.new()
+		gm.size = Vector3(0.46, 0.006, 0.012)
+		grate.mesh = gm
+		grate.position = Vector3(0.0, 0.108, 0.16 + float(gi) * 0.04)
+		var gmat := StandardMaterial3D.new()
+		gmat.albedo_color = Color(0.45, 0.48, 0.52)
+		gmat.metallic = 0.7
+		grate.material_override = gmat
+		root.add_child(grate)
+
 	var soda_lab := Label3D.new()
 	soda_lab.text = "SODA"
-	soda_lab.position = Vector3(-0.15, 0.62, 0.34)
+	soda_lab.position = Vector3(-0.13, 0.40, 0.28)
 	soda_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	soda_lab.font_size = 16
-	soda_lab.pixel_size = 0.0016
+	soda_lab.font_size = 13
+	soda_lab.pixel_size = 0.0013
 	soda_lab.modulate = Color(1.0, 0.55, 0.5)
-	soda_lab.outline_size = 3
+	soda_lab.outline_size = 2
 	soda_lab.outline_modulate = Color(0, 0, 0, 0.75)
 	root.add_child(soda_lab)
 	var ice_lab := Label3D.new()
 	ice_lab.text = "ICE"
-	ice_lab.position = Vector3(0.15, 0.62, 0.34)
+	ice_lab.position = Vector3(0.13, 0.40, 0.28)
 	ice_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	ice_lab.font_size = 16
-	ice_lab.pixel_size = 0.0016
+	ice_lab.font_size = 13
+	ice_lab.pixel_size = 0.0013
 	ice_lab.modulate = Color(0.7, 0.9, 1.0)
-	ice_lab.outline_size = 3
+	ice_lab.outline_size = 2
 	ice_lab.outline_modulate = Color(0, 0, 0, 0.75)
 	root.add_child(ice_lab)
 
-	## Soft fill light so the face isn't lost in the dark kitchen.
 	var lamp := OmniLight3D.new()
 	lamp.name = "SodaLamp"
-	lamp.light_color = Color(1.0, 0.95, 0.88)
-	lamp.light_energy = 0.85
-	lamp.omni_range = 1.4
+	lamp.light_color = Color(1.0, 0.96, 0.90)
+	lamp.light_energy = 0.7
+	lamp.omni_range = 1.1
 	lamp.shadow_enabled = false
-	lamp.position = Vector3(0.0, 1.1, 0.45)
+	lamp.position = Vector3(0.0, 0.85, 0.40)
 	root.add_child(lamp)
 
-	## Wall cup rack toward the grill (beside the face).
 	_build_soda_cup_rack(root)
 	_refresh_soda_flavor_lights()
+
+
+func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3) -> StandardMaterial3D:
+	## Clear cylinder with tinted syrup + rising bubbles. Returns liquid mat for select glow.
+	var tank := Node3D.new()
+	tank.name = "Tank_%s" % flavor_id
+	tank.position = local_pos
+	parent.add_child(tank)
+
+	var glass := MeshInstance3D.new()
+	glass.name = "Glass"
+	var glass_mesh := CylinderMesh.new()
+	glass_mesh.top_radius = 0.085
+	glass_mesh.bottom_radius = 0.085
+	glass_mesh.height = 0.26
+	glass.mesh = glass_mesh
+	var glass_mat := StandardMaterial3D.new()
+	glass_mat.albedo_color = Color(0.85, 0.92, 1.0, 0.18)
+	glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass_mat.roughness = 0.05
+	glass_mat.metallic = 0.15
+	glass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	glass.material_override = glass_mat
+	tank.add_child(glass)
+
+	var liquid := MeshInstance3D.new()
+	liquid.name = "Syrup"
+	var liq_mesh := CylinderMesh.new()
+	liq_mesh.top_radius = 0.072
+	liq_mesh.bottom_radius = 0.072
+	liq_mesh.height = 0.20
+	liquid.mesh = liq_mesh
+	liquid.position = Vector3(0.0, -0.015, 0.0)
+	var liq_mat := StandardMaterial3D.new()
+	var col: Color = SODA_FLAVOR_COLORS.get(flavor_id, Color(0.4, 0.2, 0.15))
+	col.a = 0.55
+	liq_mat.albedo_color = col
+	liq_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	liq_mat.roughness = 0.12
+	liq_mat.metallic = 0.05
+	liq_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	liq_mat.emission_enabled = true
+	liq_mat.emission = Color(col.r, col.g, col.b)
+	liq_mat.emission_energy_multiplier = 0.35 if flavor_id == soda_selected_flavor else 0.12
+	liquid.material_override = liq_mat
+	tank.add_child(liquid)
+
+	## Chrome lid + neck.
+	var lid := MeshInstance3D.new()
+	lid.name = "Lid"
+	var lid_mesh := CylinderMesh.new()
+	lid_mesh.top_radius = 0.088
+	lid_mesh.bottom_radius = 0.088
+	lid_mesh.height = 0.028
+	lid.mesh = lid_mesh
+	lid.position = Vector3(0.0, 0.14, 0.0)
+	var lid_mat := StandardMaterial3D.new()
+	lid_mat.albedo_color = Color(0.72, 0.74, 0.78)
+	lid_mat.metallic = 0.9
+	lid_mat.roughness = 0.2
+	lid.material_override = lid_mat
+	tank.add_child(lid)
+
+	var neck := MeshInstance3D.new()
+	var neck_mesh := CylinderMesh.new()
+	neck_mesh.top_radius = 0.03
+	neck_mesh.bottom_radius = 0.035
+	neck_mesh.height = 0.04
+	neck.mesh = neck_mesh
+	neck.position = Vector3(0.0, 0.17, 0.0)
+	neck.material_override = lid_mat
+	tank.add_child(neck)
+
+	var tag := Label3D.new()
+	tag.text = str(SODA_FLAVOR_LABELS.get(flavor_id, flavor_id.to_upper()))
+	tag.position = Vector3(0.0, 0.02, 0.09)
+	tag.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	tag.font_size = 15
+	tag.pixel_size = 0.0015
+	tag.modulate = Color(1, 1, 1, 0.95)
+	tag.outline_size = 3
+	tag.outline_modulate = Color(0, 0, 0, 0.75)
+	tank.add_child(tag)
+
+	_add_soda_tank_bubbles(tank, col)
+	return liq_mat
+
+
+func _add_soda_tank_bubbles(tank: Node3D, syrup_col: Color) -> void:
+	var fx := GPUParticles3D.new()
+	fx.name = "Bubbles"
+	fx.amount = 22
+	fx.lifetime = 1.5
+	fx.preprocess = 0.8
+	fx.explosiveness = 0.0
+	fx.randomness = 0.35
+	fx.emitting = true
+	fx.position = Vector3(0.0, -0.08, 0.0)
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.05
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 12.0
+	pm.initial_velocity_min = 0.05
+	pm.initial_velocity_max = 0.11
+	pm.gravity = Vector3(0, 0.015, 0)
+	pm.damping_min = 0.2
+	pm.damping_max = 0.5
+	pm.scale_min = 0.35
+	pm.scale_max = 0.85
+	var bubble_col := Color(
+		lerpf(1.0, syrup_col.r, 0.25),
+		lerpf(1.0, syrup_col.g, 0.25),
+		lerpf(1.0, syrup_col.b, 0.25),
+		0.65
+	)
+	pm.color = bubble_col
+	fx.process_material = pm
+	var draw := StandardMaterial3D.new()
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.albedo_color = bubble_col
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.007
+	sphere.height = 0.014
+	sphere.material = draw
+	fx.draw_pass_1 = sphere
+	## Keep bubbles inside the tank glass.
+	fx.visibility_aabb = AABB(Vector3(-0.1, -0.05, -0.1), Vector3(0.2, 0.28, 0.2))
+	tank.add_child(fx)
 
 
 func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, col: Color, is_soda: bool) -> void:
 	var spout := MeshInstance3D.new()
 	spout.name = spout_name
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.016
-	cyl.bottom_radius = 0.026
-	cyl.height = 0.14
+	cyl.top_radius = 0.014
+	cyl.bottom_radius = 0.022
+	cyl.height = 0.11
 	spout.mesh = cyl
-	## Hang downward (default cylinder is Y-up) — do NOT pitch 90° or it reads as a side peg.
 	spout.position = local_pos
 	var sm := StandardMaterial3D.new()
 	sm.albedo_color = col
@@ -8677,8 +8852,7 @@ func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, col
 
 	var tip := Marker3D.new()
 	tip.name = "%sTip" % spout_name
-	## Tip under the nozzle toward the drip tray / cup.
-	tip.position = local_pos + Vector3(0.0, -0.12, 0.05)
+	tip.position = local_pos + Vector3(0.0, -0.10, 0.04)
 	parent.add_child(tip)
 	if is_soda:
 		soda_spout_marker = tip
@@ -8691,13 +8865,13 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	var rack := Node3D.new()
 	rack.name = "CupRack"
 	## With yaw 180 on the right side, local −X faces the grill (world +X).
-	rack.position = Vector3(-0.58, 0.55, 0.22)
+	rack.position = Vector3(-0.52, 0.32, 0.18)
 	station.add_child(rack)
 
 	var board := MeshInstance3D.new()
 	board.name = "CupBoard"
 	var board_mesh := BoxMesh.new()
-	board_mesh.size = Vector3(0.22, 0.55, 0.05)
+	board_mesh.size = Vector3(0.18, 0.40, 0.04)
 	board.mesh = board_mesh
 	board.position = Vector3(0.0, 0.0, -0.02)
 	var board_mat := StandardMaterial3D.new()
@@ -8710,22 +8884,22 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 		var spare := MeshInstance3D.new()
 		spare.name = "SpareCup_%d" % i
 		var spare_mesh := CylinderMesh.new()
-		spare_mesh.top_radius = 0.048
-		spare_mesh.bottom_radius = 0.040
-		spare_mesh.height = 0.11
+		spare_mesh.top_radius = 0.040
+		spare_mesh.bottom_radius = 0.034
+		spare_mesh.height = 0.09
 		spare.mesh = spare_mesh
-		spare.position = Vector3(0.0, 0.18 - float(i) * 0.045, 0.06)
+		spare.position = Vector3(0.0, 0.12 - float(i) * 0.038, 0.05)
 		spare.material_override = _make_clear_cup_material(0.22)
 		rack.add_child(spare)
 
 	var cup_lab := Label3D.new()
 	cup_lab.text = "CUPS"
-	cup_lab.position = Vector3(0.0, 0.36, 0.08)
+	cup_lab.position = Vector3(0.0, 0.26, 0.07)
 	cup_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	cup_lab.font_size = 16
-	cup_lab.pixel_size = 0.0016
+	cup_lab.font_size = 14
+	cup_lab.pixel_size = 0.0014
 	cup_lab.modulate = Color(1.0, 0.95, 0.7)
-	cup_lab.outline_size = 3
+	cup_lab.outline_size = 2
 	cup_lab.outline_modulate = Color(0, 0, 0, 0.75)
 	rack.add_child(cup_lab)
 
@@ -8734,7 +8908,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 		cup_root.queue_free()
 	cup_root = Node3D.new()
 	cup_root.name = "DrinkCup"
-	cup_home = station.to_global(rack.position + Vector3(0.0, -0.08, 0.10))
+	cup_home = station.to_global(rack.position + Vector3(0.0, -0.06, 0.08))
 	cup_home_rot = Vector3.ZERO
 	world.add_child(cup_root)
 	cup_root.global_position = cup_home
@@ -8836,11 +9010,24 @@ func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
 
 
 func _refresh_soda_flavor_lights() -> void:
-	for fid in soda_flavor_mats.keys():
-		var mat: StandardMaterial3D = soda_flavor_mats[fid]
+	for key in soda_flavor_mats.keys():
+		var mat: StandardMaterial3D = soda_flavor_mats[key]
 		if mat == null:
 			continue
-		mat.emission_energy_multiplier = 0.55 if str(fid) == soda_selected_flavor else 0.05
+		var fid := str(key)
+		if fid.begins_with("pad_"):
+			fid = fid.substr(4)
+		var selected := fid == soda_selected_flavor
+		mat.emission_enabled = true
+		if str(key).begins_with("pad_"):
+			mat.emission_energy_multiplier = 0.6 if selected else 0.08
+		else:
+			## Tank syrup — brighter when that flavor is armed.
+			mat.emission_energy_multiplier = 0.45 if selected else 0.12
+			var col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.4, 0.2, 0.15))
+			col.a = 0.58 if selected else 0.48
+			mat.albedo_color = col
+			mat.emission = Color(col.r, col.g, col.b)
 
 
 func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
