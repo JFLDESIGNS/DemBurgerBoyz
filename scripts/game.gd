@@ -63,6 +63,8 @@ const PATTY_SMASH_Y_HI := 0.072
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.038
+## Cups sit clear of the 0.045-thick zone panels so the bottom rim stays visible.
+const CUP_STEEL_SIT_Y := 0.052
 ## Too many puddles → warn only (fire needs a sustained pour — see OIL_POUR_FIRE_SEC).
 ## Only ignites while the burner is ON.
 const OIL_FIRE_WARN_COUNT := 40
@@ -8266,7 +8268,7 @@ func _begin_cup_melt_local(
 		return
 	if root.get_parent() != world:
 		root.reparent(world, true)
-	root.global_position = Vector3(drop_pos.x, GRILL_SURFACE_Y + 0.01, drop_pos.z)
+	root.global_position = Vector3(drop_pos.x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, drop_pos.z)
 	root.rotation_degrees = Vector3(randf_range(-8.0, 8.0), randf() * 360.0, randf_range(-8.0, 8.0))
 	root.scale = Vector3.ONE
 	root.visible = true
@@ -8298,7 +8300,7 @@ func _begin_cup_melt_local(
 		"ice": ice,
 		"smoke": smoke,
 		"mats": mats,
-		"base_y": GRILL_SURFACE_Y + 0.01,
+		"base_y": GRILL_SURFACE_Y + CUP_STEEL_SIT_Y,
 		"hiss_cd": 0.0,
 		"doused": false,
 		"spill_t": 0.0,
@@ -8388,16 +8390,26 @@ func _update_cup_spill_grow(item: Dictionary, delta: float) -> void:
 
 
 func _start_cup_burn_hiss(loud_hit: bool = false) -> void:
-	## Loud fry hiss while plastic burns on hot steel.
+	## Short plastic-fry burst — one hit at burn start, not a looping 5s oil bed.
 	if not grill_on:
 		return
 	if game_audio == null:
 		return
 	if game_audio.has_method("trigger_hot_oil"):
-		game_audio.trigger_hot_oil(5.5)
-	if loud_hit and game_audio.has_method("play_hot_oil_hit"):
-		game_audio.play_hot_oil_hit()
-		game_audio.play_hot_oil_hit()
+		## Match melt length roughly; fade handles the tail.
+		game_audio.trigger_hot_oil(1.15 if loud_hit else 0.7)
+	## trigger_hot_oil already plays the hit on a fresh burst — don't double it.
+
+
+func _stop_cup_burn_hiss_if_idle() -> void:
+	## End the fry bed once no cups are still actively burning.
+	for item in melting_cups:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		if str(item.get("phase", "")) == "burn" and bool(item.get("burn_started", false)):
+			return
+	if game_audio != null and game_audio.has_method("stop_hot_oil"):
+		game_audio.stop_hot_oil()
 
 
 func _update_melting_cups(delta: float) -> void:
@@ -8420,6 +8432,8 @@ func _update_melting_cups(delta: float) -> void:
 			if smoke != null and is_instance_valid(smoke):
 				smoke.emitting = false
 				smoke.amount_ratio = 0.0
+			if game_audio != null and game_audio.has_method("stop_hot_oil"):
+				game_audio.stop_hot_oil()
 			i += 1
 			continue
 		var phase := str(item.get("phase", "burn"))
@@ -8465,10 +8479,6 @@ func _update_melting_cups(delta: float) -> void:
 		var life := float(item["life"])
 		var age := float(item["age"])
 		var melt := clampf(age / life, 0.0, 1.0)
-		item["hiss_cd"] = float(item.get("hiss_cd", 0.0)) - delta
-		if float(item["hiss_cd"]) <= 0.0:
-			item["hiss_cd"] = 1.4
-			_start_cup_burn_hiss(false)
 		## Growing black crust under the wobbling cup — starts small, expands with melt.
 		_update_cup_grow_crust(item, melt)
 		if melt >= 1.0:
@@ -8479,6 +8489,7 @@ func _update_melting_cups(delta: float) -> void:
 				smoke.queue_free()
 			root.queue_free()
 			melting_cups.remove_at(i)
+			_stop_cup_burn_hiss_if_idle()
 			continue
 		## Collapse height + mild footprint shrink (keep rim from looking tiny).
 		var ease := melt * melt
@@ -8489,8 +8500,8 @@ func _update_melting_cups(delta: float) -> void:
 		var liq_keep := root.find_child("Liquid", true, false) as MeshInstance3D
 		if liq_keep != null and is_instance_valid(liq_keep) and liq_keep.visible and sy > 0.05:
 			liq_keep.scale = Vector3(1.0 / maxf(sxz, 0.2), 1.0 / maxf(sy, 0.15), 1.0 / maxf(sxz, 0.2))
-		var base_y := float(item.get("base_y", GRILL_SURFACE_Y + 0.01))
-		root.global_position.y = lerpf(base_y, GRILL_SURFACE_Y + 0.004, melt)
+		var base_y := float(item.get("base_y", GRILL_SURFACE_Y + CUP_STEEL_SIT_Y))
+		root.global_position.y = lerpf(base_y, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y * 0.35, melt)
 		var mats: Array = item.get("mats", [])
 		for mat in mats:
 			if mat is ShaderMaterial:
@@ -8672,6 +8683,8 @@ func _clear_melting_cups() -> void:
 		if crust != null and is_instance_valid(crust):
 			crust.queue_free()
 	melting_cups.clear()
+	if game_audio != null and game_audio.has_method("stop_hot_oil"):
+		game_audio.stop_hot_oil()
 
 func _build_oil_bottle() -> void:
 	## Oil bottle hanging from the far-left window beam.
@@ -13033,7 +13046,7 @@ func _place_cup_on_steel() -> void:
 	var drop := cup_root.global_position
 	drop.x = clampf(drop.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
 	drop.z = clampf(drop.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
-	drop.y = GRILL_SURFACE_Y + 0.01
+	drop.y = GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
 	var on_hold := _is_in_warmer_zone(drop)
 	cup_held = false
 	cup_drawing = false
@@ -24229,7 +24242,7 @@ func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float) ->
 	world.add_child(root)
 	_begin_cup_melt_local(
 		root,
-		Vector3(x, GRILL_SURFACE_Y + 0.01, z),
+		Vector3(x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, z),
 		flavor,
 		clampf(fill, 0.0, 1.0),
 		clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP),
@@ -24305,7 +24318,7 @@ func _mp_spawn_steel_drink_local(
 	root.set_meta("fizz_peak", fizz > 0.0)
 	root.set_meta("on_steel", true)
 	root.set_meta("steel_hold", on_hold)
-	root.global_position = Vector3(x, GRILL_SURFACE_Y + 0.01, z)
+	root.global_position = Vector3(x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, z)
 	root.rotation_degrees = Vector3.ZERO
 	var area := root.get_node_or_null("CupGrab") as Area3D
 	if area:

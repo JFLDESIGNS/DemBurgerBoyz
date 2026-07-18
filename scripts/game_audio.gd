@@ -301,6 +301,12 @@ func trigger_hot_oil(duration: float = 3.0) -> void:
 			play_grease_pop(true)
 
 
+func stop_hot_oil() -> void:
+	## End a plastic/oil fry burst early (cup finished melting).
+	_hot_oil_full_left = 0.0
+	_hot_oil_fade_left = 0.45
+
+
 func play_hot_oil_hit() -> void:
 	## One loud splash/hiss when oil first kisses hot steel.
 	_play_cached("hot_oil_hit", _make_hot_oil_hit, 0.0, 1.2)
