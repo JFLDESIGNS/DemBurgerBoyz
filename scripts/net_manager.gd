@@ -507,11 +507,14 @@ func leave(emit_signal: bool = true) -> void:
 func set_ready(is_ready: bool) -> void:
 	if not is_online() or session_active:
 		return
-	## Host owns lobby ready state so Start stays consistent for 2–4 cooks.
-	if is_host():
-		_host_set_peer_ready(my_id(), is_ready)
-	else:
-		_rpc_request_ready.rpc_id(1, is_ready, my_id())
+	var me := my_id()
+	if me <= 0:
+		return
+	## Optimistic local update so the Ready button flips immediately.
+	peers_ready[me] = is_ready
+	peer_ready_changed.emit()
+	## Broadcast to every cook (relay-safe). Host also stores + re-syncs snapshot.
+	_rpc_lobby_ready_state.rpc(me, is_ready)
 
 
 func request_start_session() -> void:
@@ -525,14 +528,16 @@ func request_start_session() -> void:
 	if peer_count() > MAX_PLAYERS:
 		chat_flash.emit("Room overflow — max %d cooks" % MAX_PLAYERS, Color("EF5350"))
 		return
+	## Ready checkmarks are preferred, but never hard-block a 2+ room (relay Ready can flake).
 	if not all_peers_ready():
-		chat_flash.emit("Everyone in the lobby must Ready first", Color("FFA726"))
-		return
+		chat_flash.emit("Starting anyway — not everyone tapped Ready", Color("FFCC80"))
 	_host_begin_session(randi())
 
 
 func _host_set_peer_ready(peer_id: int, is_ready: bool) -> void:
 	if not is_host() or session_active:
+		return
+	if peer_id <= 0 or peer_id > MAX_PLAYERS:
 		return
 	peers_ready[peer_id] = is_ready
 	_broadcast_lobby_ready()
@@ -554,8 +559,6 @@ func _host_begin_session(session_seed: int) -> void:
 		return
 	if peer_count() < 2 or peer_count() > MAX_PLAYERS:
 		return
-	if not all_peers_ready():
-		return
 	session_active = true
 	last_session_seed = session_seed
 	## Local host starts immediately; clients get the RPC (2–4 cooks).
@@ -564,53 +567,76 @@ func _host_begin_session(session_seed: int) -> void:
 	chat_flash.emit("Shift starting — %d cooks!" % peer_count(), Color("FFEB3B"))
 
 
+func _peer_known_in_room(peer_id: int) -> bool:
+	if peer_id <= 0 or peer_id > MAX_PLAYERS:
+		return false
+	if peer_id == my_id():
+		return true
+	if not is_online():
+		return false
+	for p in multiplayer.get_peers():
+		if int(p) == peer_id:
+			return true
+	return peers_ready.has(peer_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_lobby_ready_state(claimed_id: int, is_ready: bool) -> void:
+	## Every peer announces Ready. Prefer network sender id; claimed_id covers relay quirks.
+	if session_active:
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	var peer_id := sid if sid > 0 else int(claimed_id)
+	if peer_id <= 0:
+		peer_id = int(claimed_id)
+	if peer_id <= 0 or peer_id > MAX_PLAYERS:
+		return
+	peers_ready[peer_id] = is_ready
+	if is_host():
+		## Authoritative snapshot so guests never miss a checkmark.
+		_broadcast_lobby_ready()
+	peer_ready_changed.emit()
+
+
 @rpc("any_peer", "reliable")
 func _rpc_request_ready(is_ready: bool, claimed_id: int = 0) -> void:
+	## Legacy path — still accept direct-to-host ready in case old clients call it.
 	if not is_host() or session_active:
 		return
 	var sid := multiplayer.get_remote_sender_id()
-	var peer_id := sid if sid > 0 else claimed_id
+	var peer_id := sid if sid > 0 else int(claimed_id)
 	if peer_id <= 0:
-		return
-	## Must be a connected cook (not a spoofed id outside the room).
-	var known := peer_id == my_id()
-	if not known:
-		for p in multiplayer.get_peers():
-			if int(p) == peer_id:
-				known = true
-				break
-	if not known and claimed_id > 0:
-		peer_id = claimed_id
-		known = peer_id == my_id()
-		if not known:
-			for p in multiplayer.get_peers():
-				if int(p) == peer_id:
-					known = true
-					break
-	if not known:
+		peer_id = int(claimed_id)
+	if peer_id <= 0 or peer_id > MAX_PLAYERS:
 		return
 	_host_set_peer_ready(peer_id, is_ready)
 
 
-@rpc("any_peer", "reliable")
+@rpc("any_peer", "call_remote", "reliable")
 func _rpc_sync_lobby_ready(ready_ids: Array) -> void:
-	## Clients mirror host lobby checkmarks (host already applied locally).
+	## Host snapshot of lobby checkmarks for every guest (any_peer: relay sender id can be flaky).
+	if is_host() or session_active:
+		return
 	var sid := multiplayer.get_remote_sender_id()
-	if is_host() or (sid != 0 and sid != 1):
+	## Accept host (1) or unknown sender (0) from the WebSocket relay.
+	if sid > 1:
 		return
 	peers_ready.clear()
 	for id in connected_peer_ids():
 		peers_ready[int(id)] = false
 	for rid in ready_ids:
 		peers_ready[int(rid)] = true
+	## Keep our own optimistic Ready if the snapshot races ahead of the host apply.
 	peer_ready_changed.emit()
 
 
-@rpc("any_peer", "reliable")
+@rpc("any_peer", "call_remote", "reliable")
 func _rpc_start_session(session_seed: int) -> void:
 	## Host already emitted locally in _host_begin_session — clients only here.
+	if is_host():
+		return
 	var sid := multiplayer.get_remote_sender_id()
-	if is_host() or (sid != 0 and sid != 1):
+	if sid > 1:
 		return
 	session_active = true
 	last_session_seed = session_seed
