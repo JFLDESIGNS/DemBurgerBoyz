@@ -17247,6 +17247,7 @@ func _setup_multiplayer_ui() -> void:
 	NetManager.connection_changed.connect(_mp_on_connection_changed)
 	NetManager.peer_ready_changed.connect(_mp_refresh_lobby_status)
 	NetManager.session_start_requested.connect(_mp_on_session_start)
+	NetManager.peer_joined_live.connect(_mp_on_peer_joined_live)
 	NetManager.chat_flash.connect(func(t: String, c: Color): _flash(t, c))
 
 
@@ -17542,29 +17543,73 @@ func _mp_on_session_start(session_seed: int) -> void:
 	NetManager.stop_browse()
 	NetManager.announce_player_name()
 	if playing and NetManager.is_host():
-		## Host already mid-shift — late joiner bootstraps themselves.
+		## Host already mid-shift — push kitchen snapshot to everyone.
+		call_deferred("_mp_host_push_bootstrap_all")
 		return
 	if playing and not NetManager.is_host():
 		## Guest already playing; still request a fresh host snapshot.
-		mp_request_bootstrap.rpc_id(1, NetManager.my_id())
+		call_deferred("_mp_request_bootstrap_deferred")
 		return
 	_flash("Co-op shift — up to 4 cooks! Match glove colors", Color("FFEB3B"))
 	_start_game()
 	## Host owns cat AI; guest follows sync so peeks / hearts match.
 	if window_cat != null and is_instance_valid(window_cat):
 		window_cat.set("mp_puppet", not NetManager.is_host())
-		if NetManager.is_host():
-			_mp_send_cat_sync()
-			call_deferred("_mp_broadcast_economy")
-		else:
-			## Late join / first start: pull absolute kitchen state from host.
-			call_deferred("_mp_request_bootstrap_deferred")
+	if NetManager.is_host():
+		_mp_send_cat_sync()
+		call_deferred("_mp_broadcast_economy")
+		## Don't wait for guests to ask — push the live kitchen to every cook.
+		call_deferred("_mp_host_push_bootstrap_all")
+	else:
+		## First start: pull absolute kitchen state from host (with retries).
+		call_deferred("_mp_request_bootstrap_deferred")
+
+
+func _mp_host_push_bootstrap_all() -> void:
+	if not mp_enabled or not NetManager.is_host() or not playing:
+		return
+	for pid in NetManager.connected_peer_ids():
+		var id := int(pid)
+		if id == NetManager.my_id():
+			continue
+		_mp_send_bootstrap_to(id)
+	## One more push next frame in case a guest's _start_game was still running.
+	call_deferred("_mp_host_push_bootstrap_all_again")
+
+
+func _mp_host_push_bootstrap_all_again() -> void:
+	if not mp_enabled or not NetManager.is_host() or not playing:
+		return
+	for pid in NetManager.connected_peer_ids():
+		var id := int(pid)
+		if id == NetManager.my_id():
+			continue
+		_mp_send_bootstrap_to(id)
+
+
+func _mp_on_peer_joined_live(peer_id: int) -> void:
+	## Mid-shift joiner — give them a moment to enter, then push the live kitchen.
+	if not mp_enabled or not NetManager.is_host() or not playing:
+		return
+	var pid := int(peer_id)
+	get_tree().create_timer(0.4).timeout.connect(func():
+		if mp_enabled and NetManager.is_host() and playing:
+			_mp_send_bootstrap_to(pid)
+	, CONNECT_ONE_SHOT)
 
 
 func _mp_request_bootstrap_deferred() -> void:
 	if not mp_enabled or NetManager.is_host():
 		return
 	if not NetManager.is_online():
+		return
+	mp_request_bootstrap.rpc_id(1, NetManager.my_id())
+	## Retry — first request can race the host's own _start_game.
+	get_tree().create_timer(0.35).timeout.connect(_mp_request_bootstrap_retry, CONNECT_ONE_SHOT)
+
+
+func _mp_request_bootstrap_retry() -> void:
+	if not mp_enabled or NetManager.is_host() or not NetManager.is_online():
 		return
 	mp_request_bootstrap.rpc_id(1, NetManager.my_id())
 
@@ -17585,9 +17630,17 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 	## Full mid-round catch-up: economy, customers, patties, grill, Build.
 	if not NetManager.is_host() or not playing:
 		return
-	mp_bootstrap_meta.rpc_id(peer_id, NetManager.peek_next_net_id(), _mp_next_customer_net_id, day, day_time)
+	mp_bootstrap_meta.rpc_id(
+		peer_id,
+		NetManager.peek_next_net_id(),
+		_mp_next_customer_net_id,
+		day,
+		day_time,
+		grill_on
+	)
 	_mp_broadcast_economy()
-	## Respawn every living customer with order + look so tickets match.
+	## Match burner so guests can place meat immediately.
+	mp_toggle_grill.rpc_id(peer_id, grill_on)
 	for c in customers:
 		if c == null or not is_instance_valid(c):
 			continue
@@ -17637,13 +17690,22 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 
 
 @rpc("any_peer", "reliable")
-func mp_bootstrap_meta(next_patty_id: int, next_cust_id: int, d: int, dtime: float) -> void:
+func mp_bootstrap_meta(
+	next_patty_id: int,
+	next_cust_id: int,
+	d: int,
+	dtime: float,
+	burner_on: bool = false
+) -> void:
 	if NetManager.is_host():
 		return
 	NetManager.bump_net_id_floor(next_patty_id)
 	_mp_next_customer_net_id = maxi(_mp_next_customer_net_id, next_cust_id)
 	day = d
 	day_time = dtime
+	_mp_applying = true
+	_set_grill_on(burner_on)
+	_mp_applying = false
 	_update_hud()
 
 

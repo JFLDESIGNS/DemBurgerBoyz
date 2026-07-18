@@ -157,6 +157,21 @@ func _handle_json(text: String) -> void:
 		"session_started":
 			## Host ack from relay (optional); seed already applied locally.
 			pass
+		"game_bin":
+			## SceneMultiplayer payload tunneled through JSON.
+			var b64 := str(data.get("b64", ""))
+			if b64 == "":
+				pass
+			else:
+				var raw: PackedByteArray = Marshalls.base64_to_raw(b64)
+				if not raw.is_empty():
+					var mode_i := int(data.get("mode", int(MultiplayerPeer.TRANSFER_MODE_RELIABLE)))
+					_inbox.append({
+						"from": int(data.get("from", 1)),
+						"channel": int(data.get("ch", 0)),
+						"mode": mode_i as MultiplayerPeer.TransferMode,
+						"data": raw,
+					})
 		"peer_left":
 			var left_id := int(data.get("peer_id", 0))
 			if _peer_connected_emitted.has(left_id):
@@ -212,19 +227,17 @@ func _put_packet_script(buffer: PackedByteArray) -> Error:
 		return ERR_UNCONFIGURED
 	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return ERR_CANT_CONNECT
-	## 0 = relay broadcasts to every other peer in the room (up to 4 cooks).
+	## Tunnel SceneMultiplayer bytes as JSON — same reliable path as host/join/start.
+	## (Raw binary WS frames were not delivering RPCs to guests on Railway.)
 	var target := _target_peer
-	var out := PackedByteArray()
-	out.resize(HEADER_SIZE + buffer.size())
-	out[0] = MAGIC
-	_write_u32(out, 1, _unique_id)
-	_write_u32(out, 5, target)
-	out[8] = int(_transfer_mode)
-	out[9] = _transfer_channel & 0xFF
-	for i in buffer.size():
-		out[HEADER_SIZE + i] = buffer[i]
-	var err := _ws.put_packet(out)
-	return err
+	_send_json({
+		"op": "game_bin",
+		"to": int(target),
+		"ch": int(_transfer_channel),
+		"mode": int(_transfer_mode),
+		"b64": Marshalls.raw_to_base64(buffer),
+	})
+	return OK
 
 
 func _get_packet_script() -> PackedByteArray:

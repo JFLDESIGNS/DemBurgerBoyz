@@ -5,6 +5,7 @@ signal connection_changed
 signal rooms_updated
 signal peer_ready_changed
 signal session_start_requested(seed: int)
+signal peer_joined_live(peer_id: int) ## Host: cook joined mid-shift — push kitchen snapshot
 signal chat_flash(text: String, color: Color)
 
 const RelayPeerScript := preload("res://scripts/relay_multiplayer_peer.gd")
@@ -745,6 +746,7 @@ func _on_peer_connected(id: int) -> void:
 		if session_active:
 			chat_flash.emit("Cook joined mid-shift — syncing kitchen...", Color("81C784"))
 			_rpc_join_in_progress.rpc_id(id, last_session_seed)
+			peer_joined_live.emit(id)
 		else:
 			chat_flash.emit("Cook joined room %s! (%d/%d)" % [room_code, peer_count(), MAX_PLAYERS], Color("81C784"))
 			_broadcast_lobby_ready()

@@ -298,6 +298,34 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // Godot SceneMultiplayer packets tunneled as JSON (binary WS frames were dropping).
+    if (op === "game_bin") {
+      if (!ws.roomCode || !ws.peerId) {
+        return;
+      }
+      const room = rooms.get(ws.roomCode);
+      if (!room) return;
+      touchRoom(room);
+      const target = Number(msg.to || 0);
+      const payload = {
+        op: "game_bin",
+        from: ws.peerId,
+        ch: Number(msg.ch || 0),
+        mode: Number(msg.mode || 2),
+        b64: String(msg.b64 || ""),
+      };
+      if (!payload.b64) return;
+      if (target === 0) {
+        broadcastRoomJson(room, ws.peerId, payload);
+      } else {
+        const dest = room.peers.get(target);
+        if (dest && dest.readyState === 1 && target !== ws.peerId) {
+          sendJson(dest, payload);
+        }
+      }
+      return;
+    }
+
     if (op === "ping") {
       if (ws.roomCode) {
         const room = rooms.get(ws.roomCode);
