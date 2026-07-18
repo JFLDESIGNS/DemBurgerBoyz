@@ -8902,6 +8902,21 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 	## ~1 in 3 posts go full essay so the feed feels like real people.
 	var long_post := randf() < 0.32
 	if kind == "burnt":
+		## Stars already rolled: high = charcoal lovers, low = everyone else.
+		if s >= 3.5:
+			if long_post:
+				return [
+					"Okay hear me out — I KNOW it was burnt and I loved it. Black crust, bitter edges, smoky as hell. Leave it on the grill longer next time please. Four stars from a well-done freak.",
+					"Most people will hate this but that charcoal patty slapped. Crunchy, dark, tastes like a campfire. Keep burning them. Five stars (yes I'm serious).",
+					"Burnt on purpose? Don't care. I asked for well-done and this truck delivered ash in the best way. Mentioning it so the cooks know SOME of us want the puck.",
+				][randi() % 3]
+			return [
+				"Burnt AF and I loved it. More please.",
+				"Charcoal crust = elite. Well-done gang.",
+				"Black patty slap. Don't listen to the haters.",
+				"I like them burnt. Five stars honestly.",
+				"Crispy ash burger. Perfect for me.",
+			][randi() % 5]
 		if long_post:
 			return [
 				"I asked for a burger and got a charcoal briquette with toppings. Crunchy in the worst way. One star — learn when to scoop.",
@@ -9026,8 +9041,10 @@ func _review_stars_from_serve(
 		return 1.0
 	var cook_stars := float(cook_r.get("stars", 3))
 	var cook_score := int(cook_r.get("score", 70))
-	## Burnt / Bad cook must never get inflated by a perfect ticket match.
+	## Burnt: 80% hate it (1★) · 20% charcoal weirdos leave a good review about it.
 	if _cook_rating_is_burnt(cook_r):
+		if randf() < 0.20:
+			return 5.0 if randf() < 0.45 else 4.0
 		return 1.0
 	if meh:
 		return clampf(cook_stars * 0.55, 1.0, 2.5)
