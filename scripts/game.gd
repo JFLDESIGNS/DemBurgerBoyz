@@ -907,6 +907,10 @@ var _mp_remote_oil: Dictionary = {}
 var _mp_remote_shaker: Dictionary = {}
 var _mp_remote_ext: Dictionary = {}
 var _mp_remote_glock: Dictionary = {}
+var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
+var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
+var _mp_cup_pose_cool: float = 0.0
+var _mp_slick_sync_cool: float = 0.0
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
 var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
@@ -1420,8 +1424,12 @@ func _process(delta: float) -> void:
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
 		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
 		_mp_tool_pose_cool = maxf(0.0, _mp_tool_pose_cool - delta)
-		if oil_held or shaker_held or ext_held or glock_held:
+		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
+		_mp_slick_sync_cool = maxf(0.0, _mp_slick_sync_cool - delta)
+		if oil_held or shaker_held or ext_held or glock_held or brush_held:
 			_mp_send_held_tool_pose(false)
+		if cup_held:
+			_mp_send_held_cup_pose(false)
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
 		if _mp_econ_accum >= 0.45:
@@ -8122,6 +8130,8 @@ func _begin_cup_melt_on_grill() -> void:
 	if game_audio and game_audio.has_method("set_ice_grind"):
 		game_audio.set_ice_grind(false)
 	_cup_pouring = false
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
 	var root := cup_root
 	_clear_cup_refs()
 	cup_root = null
@@ -9195,6 +9205,8 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 	brush_last_pos = brush_root.global_position if brush_root else Vector3.ZERO
 	## Full snap under cursor immediately.
 	_snap_brush_toward_cursor(screen_pos, 1.0)
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
 	return true
 
 
@@ -9272,8 +9284,8 @@ func _update_held_brush(_delta: float) -> void:
 func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool:
 	## Scraper clears wet oil/soda drops and soft char spots on the flat-top.
 	var hit_any := false
-	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28) or hit_any
-	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3) or hit_any
+	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28, false) or hit_any
+	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3, true) or hit_any
 	## Char blotches — swipe to fling away.
 	var ci := 0
 	while ci < soda_char_spots.size():
@@ -9285,6 +9297,8 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool
 		var d := Vector2(pos.x - mesh.position.x, pos.z - mesh.position.z).length()
 		if d < 0.32 and moved > 0.001:
 			hit_any = true
+			var cx := float(mesh.position.x)
+			var cz := float(mesh.position.z)
 			var dir := move_xz.normalized() if move_xz.length_squared() > 0.0001 else Vector2(randf_range(-1, 1), randf_range(-1, 1)).normalized()
 			var fly: Vector3 = mesh.position + Vector3(dir.x, 0.0, dir.y) * (0.08 + randf() * 0.1)
 			fly.y += 0.04
@@ -9294,12 +9308,16 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool
 			tw.tween_property(mesh, "scale", Vector3(0.1, 1.0, 0.1), 0.16)
 			tw.chain().tween_callback(mesh.queue_free)
 			soda_char_spots.remove_at(ci)
+			if mp_enabled and not _mp_applying:
+				mp_soda_char_clear.rpc(cx, cz)
 			continue
 		ci += 1
 	return hit_any
 
 
-func _scrape_slick_array(arr: Array, pos: Vector3, move_xz: Vector2, moved: float, reach: float) -> bool:
+func _scrape_slick_array(
+	arr: Array, pos: Vector3, move_xz: Vector2, moved: float, reach: float, sync_soda: bool = false
+) -> bool:
 	var hit_any := false
 	var i := 0
 	while i < arr.size():
@@ -9327,7 +9345,14 @@ func _scrape_slick_array(arr: Array, pos: Vector3, move_xz: Vector2, moved: floa
 			c.a = maxf(0.05, c.a - moved * 1.8)
 			mat.albedo_color = c
 			item["base_a"] = minf(float(item.get("base_a", c.a)), c.a)
-		if scrape <= 0.16:
+		var removed := scrape <= 0.16
+		if sync_soda and mp_enabled and not _mp_applying:
+			if removed or _mp_slick_sync_cool <= 0.0:
+				_mp_slick_sync_cool = 0.08
+				mp_soda_slick_scrape.rpc(
+					float(mesh.position.x), float(mesh.position.z), scrape, removed
+				)
+		if removed:
 			var dir := move_xz.normalized() if move_xz.length_squared() > 0.0001 else Vector2(1, 0)
 			var fly: Vector3 = mesh.position + Vector3(dir.x, 0.0, dir.y) * (0.1 + randf() * 0.12)
 			fly.y += 0.05
@@ -9343,6 +9368,73 @@ func _scrape_slick_array(arr: Array, pos: Vector3, move_xz: Vector2, moved: floa
 			continue
 		i += 1
 	return hit_any
+
+
+func _mp_find_nearest_slick_idx(arr: Array, x: float, z: float, max_d: float = 0.22) -> int:
+	var best := -1
+	var best_d := max_d
+	for i in arr.size():
+		var item: Dictionary = arr[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			continue
+		var d := Vector2(x - mesh.position.x, z - mesh.position.z).length()
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _mp_apply_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	var idx := _mp_find_nearest_slick_idx(soda_slicks, x, z, 0.28)
+	if idx < 0:
+		return
+	var item: Dictionary = soda_slicks[idx]
+	var mesh = item.get("mesh")
+	if mesh == null or not is_instance_valid(mesh):
+		soda_slicks.remove_at(idx)
+		return
+	scrape = clampf(scrape, 0.08, 1.0)
+	item["scrape"] = scrape
+	mesh.scale = Vector3(scrape, 1.0, scrape)
+	var mat := mesh.material_override as StandardMaterial3D
+	if mat:
+		var c := mat.albedo_color
+		c.a = maxf(0.05, float(item.get("base_a", c.a)) * scrape)
+		mat.albedo_color = c
+	if not remove:
+		return
+	var smoke = item.get("smoke")
+	if smoke != null and is_instance_valid(smoke):
+		smoke.emitting = false
+	var fly: Vector3 = mesh.position + Vector3(randf_range(-0.1, 0.1), 0.05, randf_range(-0.1, 0.1))
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(mesh, "position", fly, 0.18)
+	tw.tween_property(mesh, "scale", Vector3(0.05, 1.0, 0.05), 0.18)
+	tw.chain().tween_callback(mesh.queue_free)
+	soda_slicks.remove_at(idx)
+
+
+func _mp_apply_soda_char_clear(x: float, z: float) -> void:
+	var best := -1
+	var best_d := 0.28
+	for i in soda_char_spots.size():
+		var item: Dictionary = soda_char_spots[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			continue
+		var d := Vector2(x - mesh.position.x, z - mesh.position.z).length()
+		if d < best_d:
+			best_d = d
+			best = i
+	if best < 0:
+		return
+	var spot: Dictionary = soda_char_spots[best]
+	var sm = spot.get("mesh")
+	if sm != null and is_instance_valid(sm):
+		sm.queue_free()
+	soda_char_spots.remove_at(best)
 
 
 func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
@@ -9400,6 +9492,8 @@ func _throw_brush_home() -> void:
 		return
 	brush_held = false
 	brush_throwing = false
+	if mp_enabled:
+		mp_tool_pose.rpc(3, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 	if game_audio:
 		game_audio.play_click()
 		if game_audio.has_method("set_slide_moving"):
@@ -10069,7 +10163,7 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.03, 0.21)}, ## tank deck
 		{"p": Vector3(-0.28, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## soda arm
 		{"p": Vector3(-0.02, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## ice arm
-		{"p": Vector3(-0.58, 0.36, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser
+		{"p": Vector3(-0.58, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser (raised)
 	]
 
 
@@ -10379,7 +10473,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	var rack := Node3D.new()
 	rack.name = "CupRack"
 	## With yaw 180 on the right side, local −X faces the grill (world +X).
-	rack.position = Vector3(-0.58, 0.34, 0.16)
+	## Raised ~1ft so the stack clears the flat-top.
+	rack.position = Vector3(-0.58, 0.645, 0.16)
 	station.add_child(rack)
 
 	var chrome := _make_soda_metal_mat(Color(0.72, 0.75, 0.80), 0.94, 0.16)
@@ -11657,6 +11752,8 @@ func _begin_cup_hold() -> bool:
 	if game_audio:
 		game_audio.play_click()
 	_flash("Hold under SODA or ICE — release onto the tray", Color("80DEEA"))
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
 	return true
 
 
@@ -12673,6 +12770,8 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 		if game_audio and game_audio.has_method("set_ice_grind"):
 			game_audio.set_ice_grind(false)
 		_cup_pouring = false
+		if mp_enabled:
+			_mp_send_held_cup_pose(true)
 		if mp_enabled and not _mp_applying:
 			var cid := _customer_net_id(cust)
 			mp_serve.rpc(cid, -2)
@@ -12708,6 +12807,8 @@ func _begin_early_drink_hand(customer: Node3D, flavor: String) -> void:
 	_cup_slosh = Vector2.ZERO
 	_cup_tilt = Vector2.ZERO
 	_cup_pouring = false
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
 	var soda_id := "soda_%s" % flavor
 	var has_local := false
 	if cup_root != null and is_instance_valid(cup_root) and cup_flavor == flavor and cup_soda_fill >= 0.82:
@@ -12757,6 +12858,8 @@ func _trash_held_cup() -> void:
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
 	_cup_tilt = Vector2.ZERO
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
 	var had_drink := cup_soda_fill >= 0.15 or cup_ice_fill >= 0.15
 	if cup_root != null and is_instance_valid(cup_root):
 		cup_root.queue_free()
@@ -12809,6 +12912,8 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
 	_cup_pouring = false
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
 	_refresh_soda_tank_bubbles()
 	## Fizz keeps dying down while parked (refresh once; fade continues next grab).
 	if cup_liquid_pivot != null and is_instance_valid(cup_liquid_pivot):
@@ -21919,6 +22024,30 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			float(pc.get_meta("fizz", 0.0))
 		)
 	_mp_send_social_feed_to(peer_id)
+	## Grill mess catch-up: soda spills (wet → burnt) + scrapable residue.
+	for slick in soda_slicks:
+		if typeof(slick) != TYPE_DICTIONARY:
+			continue
+		var sm = slick.get("mesh")
+		if sm == null or not is_instance_valid(sm):
+			continue
+		mp_soda_slick_state.rpc_id(
+			peer_id,
+			float(sm.position.x),
+			float(sm.position.z),
+			float(slick.get("radius", 0.05)),
+			str(slick.get("flavor", "cola")),
+			float(slick.get("age", 0.0)),
+			float(slick.get("life", 16.0)),
+			float(slick.get("scrape", 1.0)),
+			bool(slick.get("charred", false))
+		)
+	for ri in GRILL_SLOTS:
+		if float(grill_residue[ri]) <= 0.05:
+			continue
+		var rc: Vector3 = grill_residue_centers[ri] if ri < grill_residue_centers.size() else Vector3.ZERO
+		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, "patty")
+		mp_residue_amt.rpc_id(peer_id, ri, float(grill_residue[ri]))
 
 
 func _mp_send_social_feed_to(peer_id: int) -> void:
@@ -21968,13 +22097,17 @@ func mp_bootstrap_meta(
 
 
 func _mp_send_held_tool_pose(force: bool = false) -> void:
-	## Stream held tool world pose so the partner sees oil / shaker / ext / glock in-hand.
+	## Stream held tool world pose so the partner sees oil / scraper / shaker / ext / glock.
 	if not mp_enabled or not NetManager.is_online():
 		return
 	if not force and _mp_tool_pose_cool > 0.0:
 		return
 	_mp_tool_pose_cool = 0.04
-	if oil_held and oil_root != null and is_instance_valid(oil_root):
+	if brush_held and brush_root != null and is_instance_valid(brush_root):
+		var bp: Vector3 = brush_root.global_position
+		var br: Vector3 = brush_root.global_rotation_degrees
+		mp_tool_pose.rpc(3, true, bp.x, bp.y, bp.z, true, br.x, br.y, br.z)
+	elif oil_held and oil_root != null and is_instance_valid(oil_root):
 		var p: Vector3 = oil_root.global_position
 		var r: Vector3 = oil_root.global_rotation_degrees
 		var emitting := oil_particles != null and oil_particles.emitting
@@ -21993,6 +22126,31 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 		var gp: Vector3 = glock_root.global_position
 		var gr: Vector3 = glock_root.global_rotation_degrees
 		mp_tool_pose.rpc(6, true, gp.x, gp.y, gp.z, true, gr.x, gr.y, gr.z)
+
+
+func _mp_send_held_cup_pose(force: bool = false) -> void:
+	## Stream held drink so partners see pour / carry (fill + flavor included).
+	if not mp_enabled or not NetManager.is_online():
+		return
+	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
+		if force:
+			mp_cup_pose.rpc(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "", 0.0, 0.0, 0.0, false)
+		return
+	if not force and _mp_cup_pose_cool > 0.0:
+		return
+	_mp_cup_pose_cool = 0.04
+	var p: Vector3 = cup_root.global_position
+	var r: Vector3 = cup_root.global_rotation_degrees
+	mp_cup_pose.rpc(
+		true,
+		p.x, p.y, p.z,
+		r.x, r.y, r.z,
+		cup_flavor,
+		cup_soda_fill,
+		cup_ice_fill,
+		_cup_fizz,
+		_cup_pouring
+	)
 
 
 func _mp_strip_tool_pickable(node: Node) -> void:
@@ -22039,6 +22197,10 @@ func _mp_ensure_remote_glock(peer_id: int) -> Node3D:
 	return _mp_ensure_remote_tool(_mp_remote_glock, peer_id, glock_root, "RemoteGlock")
 
 
+func _mp_ensure_remote_brush(peer_id: int) -> Node3D:
+	return _mp_ensure_remote_tool(_mp_remote_brush, peer_id, brush_root, "RemoteBrush")
+
+
 func _mp_set_remote_tool_fx(root: Node3D, fx_name: String, emitting: bool) -> void:
 	if root == null:
 		return
@@ -22062,6 +22224,10 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		if oil != null and is_instance_valid(oil):
 			oil.visible = false
 			_mp_set_remote_tool_fx(oil, "OilParticles", false)
+	if except_kind != 3 and _mp_remote_brush.has(peer_id):
+		var br: Node3D = _mp_remote_brush[peer_id]
+		if br != null and is_instance_valid(br):
+			br.visible = false
 	if except_kind != 4 and _mp_remote_shaker.has(peer_id):
 		var sh: Node3D = _mp_remote_shaker[peer_id]
 		if sh != null and is_instance_valid(sh):
@@ -22077,6 +22243,111 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		if gl != null and is_instance_valid(gl):
 			gl.visible = false
 			_mp_set_remote_glock_laser(gl, false)
+	if _mp_remote_cups.has(peer_id):
+		var cup: Node3D = _mp_remote_cups[peer_id]
+		if cup != null and is_instance_valid(cup):
+			cup.visible = false
+
+
+func _mp_ensure_remote_cup(peer_id: int) -> Node3D:
+	if _mp_remote_cups.has(peer_id):
+		var existing: Node3D = _mp_remote_cups[peer_id]
+		if existing != null and is_instance_valid(existing):
+			return existing
+	if world == null:
+		return null
+	var ghost := _create_drink_cup_node()
+	ghost.name = "RemoteCup_%d" % peer_id
+	_mp_strip_tool_pickable(ghost)
+	ghost.visible = false
+	world.add_child(ghost)
+	_mp_remote_cups[peer_id] = ghost
+	return ghost
+
+
+func _mp_apply_remote_cup_fill(root: Node3D, flavor: String, fill: float, ice: float, fizz: float) -> void:
+	## Mirror liquid / ice look on a partner's held cup ghost.
+	if root == null or not is_instance_valid(root):
+		return
+	fill = clampf(fill, 0.0, 1.0)
+	ice = clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP)
+	fizz = clampf(fizz, 0.0, 1.0)
+	root.set_meta("flavor", flavor)
+	root.set_meta("soda_fill", fill)
+	root.set_meta("ice_fill", ice)
+	root.set_meta("fizz", fizz)
+	var liq_pivot := root.get_node_or_null("LiquidPivot") as Node3D
+	var liq: MeshInstance3D = null
+	if liq_pivot != null:
+		liq = liq_pivot.get_node_or_null("Liquid") as MeshInstance3D
+	if liq != null:
+		if fill >= 0.02 and flavor != "":
+			liq.visible = true
+			var h := 0.02 + fill * CUP_LIQUID_MAX_H
+			var cyl := liq.mesh as CylinderMesh
+			if cyl == null:
+				cyl = CylinderMesh.new()
+				liq.mesh = cyl
+			cyl.height = h
+			cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
+			cyl.bottom_radius = CUP_LIQUID_BOT_R
+			liq.position.y = h * 0.5
+			var surf_piv := liq_pivot.get_node_or_null("SurfacePivot") as Node3D
+			if surf_piv:
+				surf_piv.position.y = h + 0.001
+			var prev := cup_flavor
+			cup_flavor = flavor
+			var mat := liq.material_override as ShaderMaterial
+			if mat == null:
+				mat = _make_soda_liquid_gradient_material(
+					SODA_FLAVOR_COLORS.get(flavor, Color(0.28, 0.08, 0.05))
+				)
+				liq.material_override = mat
+			_apply_soda_liquid_gradient(mat, SODA_FLAVOR_COLORS.get(flavor, Color(0.28, 0.08, 0.05)), fizz, 0.0)
+			cup_flavor = prev
+		else:
+			liq.visible = false
+	_apply_parked_cup_foam_visual(root, fizz, CUP_FOAM_LINGER if fill > 0.08 else 0.0, fill, false, 0.0)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_cup_pose(
+	active: bool,
+	x: float,
+	y: float,
+	z: float,
+	rx: float,
+	ry: float,
+	rz: float,
+	flavor: String,
+	fill: float,
+	ice: float,
+	fizz: float,
+	pouring: bool
+) -> void:
+	## Partner is carrying / pouring a drink — show a ghost cup in their hand.
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	if not active:
+		if _mp_remote_cups.has(sid):
+			var hide_cup: Node3D = _mp_remote_cups[sid]
+			if hide_cup != null and is_instance_valid(hide_cup):
+				hide_cup.visible = false
+		return
+	_mp_hide_remote_tools(sid, -1)
+	var ghost := _mp_ensure_remote_cup(sid)
+	if ghost == null:
+		return
+	ghost.visible = true
+	ghost.global_position = Vector3(x, y, z)
+	ghost.global_rotation_degrees = Vector3(rx, ry, rz)
+	_mp_apply_remote_cup_fill(ghost, flavor, fill, ice, fizz)
+	## Soft stream hint while they pour under the nozzle.
+	if pouring and soda_stream_mesh != null and is_instance_valid(soda_stream_mesh) \
+			and not cup_held:
+		## Don't steal local stream — partner pour is visible via fill rise only.
+		pass
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -22091,7 +22362,7 @@ func mp_tool_pose(
 	ry: float = 0.0,
 	rz: float = 0.0
 ) -> void:
-	## kind: 2 oil · 4 shaker · 5 extinguisher · 6 glock
+	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -22111,6 +22382,14 @@ func mp_tool_pose(
 			oil.global_rotation_degrees = rot
 			oil.scale = Vector3(2.05, 2.05, 2.05)
 			_mp_set_remote_tool_fx(oil, "OilParticles", emitting)
+		3:
+			var brush := _mp_ensure_remote_brush(sid)
+			if brush == null:
+				return
+			brush.visible = true
+			brush.global_position = pos
+			brush.global_rotation_degrees = rot
+			brush.scale = Vector3(1.55, 1.55, 1.55)
 		4:
 			var shaker := _mp_ensure_remote_shaker(sid)
 			if shaker == null:
@@ -22167,6 +22446,8 @@ func _mp_update_cursors(delta: float) -> void:
 				tool = 5
 			elif glock_held:
 				tool = 6
+			elif cup_held:
+				tool = 7
 			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
 
 
@@ -22271,6 +22552,8 @@ func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 			badge.text = "E"
 		elif tool == 6:
 			badge.text = "G"
+		elif tool == 7:
+			badge.text = "D"
 		else:
 			badge.text = ""
 	var icon: TextureRect = wrap.get_node_or_null("Icon") as TextureRect
@@ -23422,6 +23705,50 @@ func mp_oil_slick(x: float, z: float, radius: float) -> void:
 func mp_soda_slick(x: float, z: float, radius: float, flavor: String) -> void:
 	_mp_applying = true
 	_spawn_soda_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius, flavor)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_soda_slick_state(
+	x: float,
+	z: float,
+	radius: float,
+	flavor: String,
+	age: float,
+	life: float,
+	scrape: float,
+	charred: bool
+) -> void:
+	## Mid-join / catch-up: recreate a soda spill with cook + scrape progress.
+	_mp_applying = true
+	_spawn_soda_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius, flavor)
+	if not soda_slicks.is_empty():
+		var item: Dictionary = soda_slicks[soda_slicks.size() - 1]
+		item["age"] = maxf(0.0, age)
+		item["life"] = maxf(0.5, life)
+		item["scrape"] = clampf(scrape, 0.08, 1.0)
+		item["charred"] = charred
+		if charred:
+			item["age"] = float(item["life"])
+		var mesh = item.get("mesh")
+		if mesh != null and is_instance_valid(mesh):
+			mesh.scale = Vector3(float(item["scrape"]), 1.0, float(item["scrape"]))
+			mesh.position = Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	## Partner scraped a soda puddle / burnt crust — keep both grills matching.
+	_mp_applying = true
+	_mp_apply_soda_slick_scrape(x, z, scrape, remove)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_soda_char_clear(x: float, z: float) -> void:
+	_mp_applying = true
+	_mp_apply_soda_char_clear(x, z)
 	_mp_applying = false
 
 
