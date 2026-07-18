@@ -216,14 +216,15 @@ static func _try_load_ingredient(id: String) -> Texture2D:
 	if ResourceLoader.exists(path):
 		var res = load(path)
 		if res is Texture2D:
-			if id == "cutting_board" or id == "bun_bottom" or id == "patty":
-				var img: Image = res.get_image()
-				if img != null:
-					if img.is_compressed():
-						img.decompress()
-					img.convert(Image.FORMAT_RGBA8)
-					_knockout_dark_backdrop(img)
-					return ImageTexture.create_from_image(img)
+			var img: Image = res.get_image()
+			if img != null:
+				if img.is_compressed():
+					img.decompress()
+				img.convert(Image.FORMAT_RGBA8)
+				_knockout_dark_backdrop(img)
+				if id != "cutting_board":
+					img = _crop_to_opaque(img)
+				return ImageTexture.create_from_image(img)
 			return res
 	## Editor fallback when import isn't ready yet.
 	var abs_try := ProjectSettings.globalize_path(path)
@@ -231,10 +232,24 @@ static func _try_load_ingredient(id: String) -> Texture2D:
 		var img2 := Image.new()
 		var err := img2.load(abs_try if FileAccess.file_exists(abs_try) else path)
 		if err == OK:
-			if id == "cutting_board" or id == "bun_bottom" or id == "patty":
-				_knockout_dark_backdrop(img2)
+			_knockout_dark_backdrop(img2)
+			if id != "cutting_board":
+				img2 = _crop_to_opaque(img2)
 			return ImageTexture.create_from_image(img2)
 	return null
+
+
+static func prep_layer_image_for_composite(src: Image) -> Image:
+	## Knock out studio-black padding and trim — used by review burger snapshots.
+	if src == null:
+		return null
+	var img := src.duplicate()
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	_knockout_dark_backdrop(img)
+	img = _crop_to_opaque(img)
+	return img
 
 
 static func _knockout_dark_backdrop(img: Image) -> void:
