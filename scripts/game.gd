@@ -737,13 +737,13 @@ const CUP_FIZZ_POUR_RATE := 2.8
 const CUP_FIZZ_FADE_RATE := 0.347 ## ~0.5s longer than 0.42 before the head is gone
 const CUP_FIZZ_MAX_H := 0.0342 ## Big half-sphere when the cup is full.
 const CUP_FIZZ_OVERSIZE := 1.12 ## Full head grows slightly past the rim.
-const CUP_FOAM_LINGER := 60.0 ## Leftover foam+bubbles after the head settles.
-const CUP_FOAM_LINGER_SHRINK := 5.0 ## Last seconds shrinking away.
+const CUP_FOAM_LINGER := 30.0 ## Leftover top foam fades out over this many seconds from set-down.
+const CUP_FOAM_LINGER_SHRINK := 4.0 ## Last seconds also shrink the dome a bit.
 const CUP_BUBBLE_AMOUNT := 34
-const CUP_LIQUID_BUBBLE_COUNT := 36
-const CUP_LIQUID_BUBBLE_TOP_COUNT := 6 ## linger near foam and fade in place
-const CUP_LIQUID_BUBBLE_RISE_COUNT := 14 ## bottom → top risers in the pop body
-const CUP_LIQUID_BUBBLE_SIZE := 0.0024 ## tiny carbonation pearls
+const CUP_LIQUID_BUBBLE_COUNT := 56
+const CUP_LIQUID_BUBBLE_TOP_COUNT := 10 ## linger near foam and fade in place
+const CUP_LIQUID_BUBBLE_RISE_COUNT := 22 ## bottom → top risers in the pop body
+const CUP_LIQUID_BUBBLE_SIZE := 0.0038 ## idle carbonation pearls (was too tiny)
 const CUP_TRAY_SPACING := 0.20 ## gap between parked drinks on the drip tray
 const CUP_DRAW_PRIORITY := 10 ## Above grill shine (render_priority 2).
 const SUPPLY_IDS: Array[String] = [
@@ -11288,7 +11288,7 @@ func _apply_soda_liquid_gradient(
 	mat.set_shader_parameter("bottom_fade_start", -0.11)
 	mat.set_shader_parameter("bottom_fade_end", 0.03)
 	## Soft in-volume carbonation (shader flecks) — always on for filled pop.
-	mat.set_shader_parameter("bubble_amt", 0.38 if fid == "cola" else 0.32)
+	mat.set_shader_parameter("bubble_amt", 0.55 if fid == "cola" else 0.48)
 	mat.set_shader_parameter("time_scale", 0.85)
 
 
@@ -11596,24 +11596,24 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 	var top_r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
 	var bot_r := CUP_LIQUID_BOT_R
 	var tsec := Time.get_ticks_msec() * 0.001
-	var linger_t := clampf(linger / CUP_FOAM_LINGER, 0.0, 1.0) if linger > 0.0 else 0.55
-	var n := mini(mm.instance_count, 18)
+	var linger_t := clampf(linger / CUP_FOAM_LINGER, 0.0, 1.0) if linger > 0.0 else 0.7
+	var n := mini(mm.instance_count, 40)
 	var any_alive := false
 	for i in n:
-		## Procedural mid-cup pearls — always visible while soda sits.
+		## Procedural mid-cup pearls — denser / larger so idle pop reads as carbonated.
 		var ph := float(i) * 1.7 + tsec * 0.55
-		var t := 0.2 + fmod(ph * 0.13, 0.55)
+		var t := 0.12 + fmod(ph * 0.11 + float(i) * 0.017, 0.72)
 		var y := liquid_h * t
-		var r_at := lerpf(bot_r, top_r, clampf(y / maxf(liquid_h, 0.01), 0.0, 1.0)) * 0.7
-		var ang := ph * 1.3 + float(i)
-		var rad := r_at * (0.25 + 0.55 * absf(sin(ph * 0.9)))
+		var r_at := lerpf(bot_r, top_r, clampf(y / maxf(liquid_h, 0.01), 0.0, 1.0)) * 0.72
+		var ang := ph * 1.3 + float(i) * 0.91
+		var rad := r_at * (0.18 + 0.62 * absf(sin(ph * 0.9)))
 		var pos := Vector3(cos(ang) * rad, y + sin(ph * 2.1) * 0.004, sin(ang) * rad)
-		var pulse := 0.75 + 0.45 * absf(sin(tsec * 2.4 + float(i) * 0.8))
-		var s := pulse * lerpf(0.55, 0.9, linger_t)
-		var alpha := clampf(0.35 + 0.28 * linger_t, 0.28, 0.62) * pulse
+		var pulse := 0.82 + 0.38 * absf(sin(tsec * 2.4 + float(i) * 0.8))
+		var s := pulse * lerpf(0.95, 1.45, linger_t)
+		var alpha := clampf(0.52 + 0.32 * linger_t, 0.48, 0.88) * pulse
 		any_alive = true
 		mm.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * s), pos))
-		mm.set_instance_color(i, Color(0.96, 0.93, 0.88, alpha))
+		mm.set_instance_color(i, Color(0.98, 0.96, 0.92, alpha))
 	## Hide unused instances.
 	for j in range(n, mm.instance_count):
 		mm.set_instance_transform(j, Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3.ZERO))
@@ -11622,11 +11622,13 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 	## Nudge emission so they pop against dark pop.
 	if mm.mesh is SphereMesh:
 		var sph := mm.mesh as SphereMesh
+		sph.radius = CUP_LIQUID_BUBBLE_SIZE
+		sph.height = CUP_LIQUID_BUBBLE_SIZE * 2.0
 		var mat := sph.material as StandardMaterial3D
 		if mat:
 			mat.emission_enabled = true
-			mat.emission = Color(0.92, 0.90, 0.86)
-			mat.emission_energy_multiplier = 0.4
+			mat.emission = Color(0.96, 0.94, 0.90)
+			mat.emission_energy_multiplier = 0.72
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			mat.render_priority = CUP_DRAW_PRIORITY + 2
 
@@ -12334,14 +12336,14 @@ func _refresh_cup_visuals() -> void:
 
 
 func _update_cup_fizz_life(delta: float) -> void:
-	## Build while pouring; when full, arm a thin edge foam that lasts ~1 min after pour.
+	## Build while pouring; residual edge foam fades over CUP_FOAM_LINGER after pour stops.
 	if _cup_pouring and cup_soda_fill > 0.02:
 		_cup_fizz = minf(1.0, _cup_fizz + CUP_FIZZ_POUR_RATE * delta)
 		if _cup_fizz >= 0.82:
 			_cup_fizz_peak = true
 		_cup_fizz_poofing = false
 		_cup_fizz_poof = 0.0
-		## Full cup: keep residual armed so it appears the instant pouring stops.
+		## Full cup: keep residual armed so fade starts the instant pouring stops.
 		if cup_soda_fill >= 0.95:
 			_cup_foam_linger = CUP_FOAM_LINGER
 		else:
@@ -12358,16 +12360,21 @@ func _update_cup_fizz_life(delta: float) -> void:
 	if _cup_fizz_poofing:
 		_cup_fizz_poof = minf(1.0, _cup_fizz_poof + delta * 2.8)
 		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * 1.6 * delta)
+		## Tick residual in parallel so foam never freezes forever during the poof.
+		if _cup_foam_linger > 0.0 and cup_soda_fill > 0.08:
+			_cup_foam_linger = maxf(0.0, _cup_foam_linger - delta)
 		if _cup_fizz_poof >= 1.0:
 			_cup_fizz = 0.0
 			_cup_fizz_poofing = false
 			_cup_fizz_peak = false
 			_cup_fizz_poof = 0.0
-			if cup_soda_fill > 0.08:
+			if cup_soda_fill > 0.08 and _cup_foam_linger <= 0.0:
 				_cup_foam_linger = CUP_FOAM_LINGER
 		return
 	if _cup_fizz > 0.0:
 		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * delta)
+		if _cup_foam_linger > 0.0 and cup_soda_fill > 0.08:
+			_cup_foam_linger = maxf(0.0, _cup_foam_linger - delta)
 		if _cup_fizz_peak and _cup_fizz < 0.28 and _cup_fizz > 0.02:
 			_cup_fizz_poofing = true
 			_cup_fizz_poof = 0.0
@@ -12375,7 +12382,8 @@ func _update_cup_fizz_life(delta: float) -> void:
 		elif _cup_fizz <= 0.02 and cup_soda_fill > 0.08:
 			_cup_fizz = 0.0
 			_cup_fizz_peak = false
-			_cup_foam_linger = CUP_FOAM_LINGER
+			if _cup_foam_linger <= 0.0:
+				_cup_foam_linger = CUP_FOAM_LINGER
 		return
 	if _cup_foam_linger > 0.0 and cup_soda_fill > 0.08:
 		_cup_foam_linger = maxf(0.0, _cup_foam_linger - delta)
@@ -12384,14 +12392,14 @@ func _update_cup_fizz_life(delta: float) -> void:
 
 
 func _cup_residual_foam_amt() -> float:
-	## 1 at start of linger → 0 at the end of the full minute (drives foam alpha).
+	## 1 at start of linger → 0 at the end of the fade window (drives foam alpha).
 	if _cup_foam_linger <= 0.0 or cup_soda_fill < 0.08:
 		return 0.0
 	return clampf(_cup_foam_linger / CUP_FOAM_LINGER, 0.0, 1.0)
 
 
 func _update_parked_cups_foam(delta: float) -> void:
-	## Parked tray cups keep fading foam + pour cream gradient after set-down.
+	## Parked tray / steel cups: foam starts fading the moment they sit, gone by 30s.
 	for c in parked_cups:
 		if c == null or not is_instance_valid(c):
 			continue
@@ -12411,18 +12419,17 @@ func _update_parked_cups_foam(delta: float) -> void:
 		var poofing := bool(c.get_meta("fizz_poofing", false))
 		var poof := float(c.get_meta("fizz_poof", 0.0))
 		if delta > 0.0:
+			## Kill the tall pour head quickly so residual edge foam can fade on schedule.
 			if poofing:
-				poof = minf(1.0, poof + delta * 2.8)
-				fizz = maxf(0.0, fizz - CUP_FIZZ_FADE_RATE * 1.6 * delta)
-				if poof >= 1.0:
+				poof = minf(1.0, poof + delta * 3.5)
+				fizz = maxf(0.0, fizz - CUP_FIZZ_FADE_RATE * 2.4 * delta)
+				if poof >= 1.0 or fizz <= 0.02:
 					fizz = 0.0
 					poofing = false
 					peak = false
 					poof = 0.0
-					if linger <= 0.0:
-						linger = CUP_FOAM_LINGER
 			elif fizz > 0.0:
-				fizz = maxf(0.0, fizz - CUP_FIZZ_FADE_RATE * delta)
+				fizz = maxf(0.0, fizz - CUP_FIZZ_FADE_RATE * 2.2 * delta)
 				if peak and fizz < 0.28 and fizz > 0.02:
 					poofing = true
 					poof = 0.0
@@ -12430,12 +12437,9 @@ func _update_parked_cups_foam(delta: float) -> void:
 				elif fizz <= 0.02:
 					fizz = 0.0
 					peak = false
-					if linger <= 0.0:
-						linger = CUP_FOAM_LINGER
-			elif linger > 0.0:
+			## Always tick linger from the moment the cup sits — never re-arm forever.
+			if linger > 0.0:
 				linger = maxf(0.0, linger - delta)
-			else:
-				linger = 0.0
 		c.set_meta("fizz", fizz)
 		c.set_meta("foam_linger", linger)
 		c.set_meta("fizz_peak", peak)
@@ -12520,7 +12524,7 @@ func _apply_parked_cup_foam_visual(
 		dome_h *= 1.0 + poof_ease * 2.6
 		fizz_mesh.position = Vector3(0.0, dome_h * (0.15 + poof_ease * 0.9), 0.0)
 	else:
-		## Keep foam edge-to-edge; only alpha fades over the minute.
+		## Keep foam edge-to-edge; only alpha fades over the linger window.
 		target_r = fill_r * 0.998
 		dome_h = 0.010
 		fizz_mesh.position = Vector3(0.0, dome_h * 0.08, 0.0)
@@ -12531,7 +12535,7 @@ func _apply_parked_cup_foam_visual(
 		if head_alive:
 			a = lerpf(0.35, 0.92, grow) * (1.0 - poof_ease)
 		else:
-			a = 0.78 * residual ## full → 0 over the linger minute
+			a = 0.78 * residual ## full → 0 over ~30s
 		fm.albedo_color = Color(0.98, 0.96, 0.92, a)
 	if bubble_fx != null and is_instance_valid(bubble_fx):
 		if head_alive:
@@ -12677,7 +12681,7 @@ func _refresh_cup_fizz_visual() -> void:
 		dome_h *= 1.0 + poof_ease * 2.6
 		cup_fizz_mesh.position = Vector3(0.0, dome_h * (0.15 + poof_ease * 0.9), 0.0)
 	else:
-		## Thin leftover foam — size stays; alpha fades full→0 over the linger minute.
+		## Thin leftover foam — size stays; alpha fades full→0 over ~30s.
 		target_r = fill_r * 0.998
 		dome_h = 0.010
 		cup_fizz_mesh.position = Vector3(0.0, dome_h * 0.08, 0.0)
@@ -12689,7 +12693,7 @@ func _refresh_cup_fizz_visual() -> void:
 		if head_alive:
 			a = lerpf(0.35, 0.92, grow) * (1.0 - poof_ease)
 		else:
-			a = 0.78 * residual ## full → 0 over ~60s
+			a = 0.78 * residual ## full → 0 over ~30s
 		fm.albedo_color = Color(0.98, 0.96, 0.92, a)
 		fm.render_priority = CUP_DRAW_PRIORITY
 	## Bubbles ride the foam; quieter on residual linger.
@@ -12913,10 +12917,13 @@ func _place_cup_on_steel() -> void:
 	var stashed := cup_root
 	stashed.set_meta("on_steel", true)
 	stashed.set_meta("steel_hold", on_hold)
-	if float(stashed.get_meta("foam_linger", 0.0)) <= 0.0 and float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
+	## Fresh 30s foam fade clock the moment the drink sits idle.
+	if float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
 		stashed.set_meta("foam_linger", CUP_FOAM_LINGER)
-	if float(stashed.get_meta("fizz", 0.0)) > 0.0:
-		stashed.set_meta("fizz_peak", true)
+		stashed.set_meta("fizz", 0.0)
+		stashed.set_meta("fizz_peak", false)
+		stashed.set_meta("fizz_poofing", false)
+		stashed.set_meta("fizz_poof", 0.0)
 	stashed.global_position = drop
 	stashed.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
 	if cup_area != null and is_instance_valid(cup_area):
@@ -13217,12 +13224,13 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		var stashed := cup_root
 		stashed.set_meta("on_steel", false)
 		stashed.set_meta("steel_hold", false)
-		## Arm residual foam so parked drinks don't freeze a permanent head.
-		if float(stashed.get_meta("foam_linger", 0.0)) <= 0.0 and float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
+		## Fresh 30s foam fade clock the moment the drink sits idle on the tray.
+		if float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
 			stashed.set_meta("foam_linger", CUP_FOAM_LINGER)
-		## Keep fading the head after set-down.
-		if float(stashed.get_meta("fizz", 0.0)) > 0.0:
-			stashed.set_meta("fizz_peak", true)
+			stashed.set_meta("fizz", 0.0)
+			stashed.set_meta("fizz_peak", false)
+			stashed.set_meta("fizz_poofing", false)
+			stashed.set_meta("fizz_poof", 0.0)
 		parked_cups.push_front(stashed)
 		_clear_cup_refs()
 		cup_root = null
