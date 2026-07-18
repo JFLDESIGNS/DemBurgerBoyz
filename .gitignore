@@ -22,3 +22,7 @@ assets/**/debug_*.png.import
 runlog.txt
 runout.txt
 runerr.txt
+
+# Node (Railway relay local install)
+mp_server/node_modules/
+mp_server/package-lock.json
