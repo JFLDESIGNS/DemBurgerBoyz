@@ -451,7 +451,9 @@ var cup_liquid_mesh: MeshInstance3D = null
 var cup_liquid_mat: StandardMaterial3D = null
 var cup_liquid_pivot: Node3D = null ## mild body lean with motion
 var cup_surface_pivot: Node3D = null ## top disc — steeper splash tilt
-var cup_liquid_surface: MeshInstance3D = null ## single surface disc on the soda
+var cup_liquid_surface: MeshInstance3D = null ## splash / free-surface disc
+var cup_fizz_mesh: MeshInstance3D = null ## foam cap — big while pouring, dies down
+var cup_bubble_fx: GPUParticles3D = null ## rising bubbles in the soda
 var cup_ice_root: Node3D = null ## stacked cubes inside the clear cup
 var cup_held: bool = false
 var cup_home: Vector3 = Vector3.ZERO ## rack spawn (spare grab)
@@ -467,9 +469,13 @@ var _cup_ice_spawn_cd: float = 0.0
 var _cup_prev_pos: Vector3 = Vector3.ZERO
 var _cup_vel: Vector3 = Vector3.ZERO
 var _cup_slosh: Vector2 = Vector2.ZERO ## x = tilt Z, y = tilt X (degrees)
+var _cup_tilt: Vector2 = Vector2.ZERO ## inertia lean — must correct with opposite motion
 var _cup_surface_slosh: Vector2 = Vector2.ZERO ## independent top-disc splash angle
+var _cup_surface_spin: float = 0.0 ## yaw on the splash disc
 var _cup_splash_cd: float = 0.0
 var _cup_surface_wobble: float = 0.0 ## brief pour / splash kick on the disc
+var _cup_fizz: float = 0.0 ## 0–1 foam head; spikes on pour, fades after
+var _cup_pouring: bool = false
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
 ## Newest-first feed posts: {stars, who, text, pic?}
@@ -629,10 +635,8 @@ const PHONE_SCROLL_WHEEL_KICK := 520.0
 const PHONE_CORNER_OUTER := 10
 const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
-## Soda fountain — right counter, nudged in so the face isn't clipped.
-## Yaw 180: face on local +Z points at the camera (same as menu board / First Sale).
-## Soda fountain — right counter (screen-right = world −X). Nudged ~1 ft screen-left.
-const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
+## Soda fountain — camera-left (world +X). Yaw 180 faces the camera.
+const SODA_STATION_POS := Vector3(1.28, 1.08, 0.52)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const CUP_COLLISION_LAYER := 1024
 const SODA_FLAVOR_COLLISION_LAYER := 4096
@@ -643,31 +647,35 @@ const SODA_FLAVOR_LABELS: Dictionary = {
 	"orange": "ORANGE",
 }
 const SODA_FLAVOR_COLORS: Dictionary = {
-	"cola": Color(0.28, 0.08, 0.05),
+	"cola": Color(0.32, 0.10, 0.06),
 	"lemon_lime": Color(0.45, 0.78, 0.18),
 	"orange": Color(0.92, 0.42, 0.08),
 }
-const CUP_HOLD_HEIGHT := 0.04 ## low seat under fountain (was too high mid-tap)
-const CUP_SHELL_H := 0.21 ## tall clear cup
+const CUP_HOLD_HEIGHT := 0.04
+const CUP_SHELL_H := 0.21
 const CUP_SHELL_TOP_R := 0.082
 const CUP_SHELL_BOT_R := 0.066
-const CUP_LIQUID_MAX_H := 0.162 ## soda column inside the shell
-const CUP_LIQUID_TOP_R := 0.076 ## almost fills the shell so cola reads through the wall
+const CUP_LIQUID_MAX_H := 0.162
+const CUP_LIQUID_TOP_R := 0.076
 const CUP_LIQUID_BOT_R := 0.062
-const CUP_FILL_RATE := 0.95 ## fill units per second while under spout
-const CUP_SPOUT_REACH := 0.55 ## world meters — forgiving aim under nozzle
-const CUP_ICE_CUBE_INTERVAL := 0.08 ## keep dumping cubes while held under ICE
-const CUP_ICE_OVERFILL_INTERVAL := 0.055 ## faster spray once the cup is packed
+const CUP_FILL_RATE := 0.95
+const CUP_SPOUT_REACH := 0.55
+const CUP_ICE_CUBE_INTERVAL := 0.09
+const CUP_ICE_OVERFILL_INTERVAL := 0.06
 const CUP_ICE_STACK_MAX := 12
-const CUP_SLOSH_FOLLOW := 14.0
-const CUP_SLOSH_RETURN := 5.5
-const CUP_SURFACE_SLOSH_MUL := 1.85 ## top disc tips harder for splash look
-const CUP_SPLASH_SPEED := 2.35 ## world m/s — whip hard enough and soda flies out
+const CUP_SLOSH_FOLLOW := 10.0
+const CUP_SLOSH_RETURN := 2.2 ## slow settle — correct with opposite motion
+const CUP_TILT_ACCEL := 9.5
+const CUP_TILT_MAX := 38.0
+const CUP_SURFACE_SLOSH_MUL := 2.6
+const CUP_SURFACE_SPIN_MUL := 55.0
+const CUP_SPLASH_SPEED := 2.55
 const CUP_SPLASH_LOSS := 0.07
-## Tight aim so SODA and ICE never both fire — nozzles sit ~0.36 apart.
 const CUP_SPOUT_HORIZ := 0.10
 const CUP_SPOUT_VERT := 0.30
 const CUP_MAGNET_RADIUS := 0.12
+const CUP_FIZZ_POUR_RATE := 2.8
+const CUP_FIZZ_FADE_RATE := 0.42
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -1225,6 +1233,9 @@ func _process(delta: float) -> void:
 		_update_held_oil(delta)
 	if cup_held:
 		_update_held_cup(delta)
+	elif cup_soda_fill > 0.02 and _cup_fizz > 0.0:
+		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * delta)
+		_refresh_cup_fizz_visual()
 	if ext_held:
 		_update_held_fire_ext(delta)
 	if glock_held:
@@ -8527,6 +8538,8 @@ func _build_soda_station() -> void:
 	cup_liquid_pivot = null
 	cup_surface_pivot = null
 	cup_liquid_surface = null
+	cup_fizz_mesh = null
+	cup_bubble_fx = null
 	cup_ice_root = null
 	soda_stream_mesh = null
 	soda_stream_mat = null
@@ -8534,9 +8547,13 @@ func _build_soda_station() -> void:
 	_cup_prev_pos = Vector3.ZERO
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
+	_cup_tilt = Vector2.ZERO
 	_cup_surface_slosh = Vector2.ZERO
+	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
+	_cup_fizz = 0.0
+	_cup_pouring = false
 	cup_held = false
 	cup_flavor = ""
 	cup_soda_fill = 0.0
@@ -8679,8 +8696,8 @@ func _build_soda_station() -> void:
 		grate.material_override = _make_soda_metal_mat(Color(0.55, 0.58, 0.62), 0.9, 0.22)
 		root.add_child(grate)
 
-	## World park spot: on the tray grate (cup bottom sits here when released).
-	cup_rest = root.to_global(Vector3(0.0, 0.102, 0.30))
+	## World park spot: on top of the grate (not sunk into the bars).
+	cup_rest = root.to_global(Vector3(0.0, 0.118, 0.30))
 	cup_rest_rot = Vector3.ZERO
 
 	var soda_lab := Label3D.new()
@@ -8974,7 +8991,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = station.to_global(rack.position + Vector3(0.0, -0.06, 0.10))
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(0.0, 0.102, 0.30))
+		cup_rest = station.to_global(Vector3(0.0, 0.118, 0.30))
 		cup_rest_rot = Vector3.ZERO
 	world.add_child(cup_root)
 	cup_root.global_position = cup_home
@@ -9022,7 +9039,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_liquid_mesh.mesh = liq
 	cup_liquid_mesh.position = Vector3(0.0, 0.01, 0.0)
 	cup_liquid_mesh.visible = false
-	cup_liquid_mat = _make_soda_liquid_material(Color(0.28, 0.08, 0.05))
+	cup_liquid_mat = _make_soda_liquid_material(Color(0.32, 0.10, 0.06))
 	cup_liquid_mesh.material_override = cup_liquid_mat
 	cup_liquid_pivot.add_child(cup_liquid_mesh)
 
@@ -9040,8 +9057,30 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	surf.cap_bottom = true
 	cup_liquid_surface.mesh = surf
 	cup_liquid_surface.visible = false
-	cup_liquid_surface.material_override = _make_soda_liquid_material(Color(0.32, 0.10, 0.06))
+	cup_liquid_surface.material_override = _make_soda_liquid_material(Color(0.36, 0.12, 0.07))
 	cup_surface_pivot.add_child(cup_liquid_surface)
+
+	## Foam / fizz head — thick while pouring, shrinks after.
+	cup_fizz_mesh = MeshInstance3D.new()
+	cup_fizz_mesh.name = "FizzFoam"
+	var foam := CylinderMesh.new()
+	foam.top_radius = CUP_LIQUID_TOP_R * 0.98
+	foam.bottom_radius = CUP_LIQUID_TOP_R * 0.95
+	foam.height = 0.02
+	foam.cap_top = true
+	foam.cap_bottom = true
+	cup_fizz_mesh.mesh = foam
+	cup_fizz_mesh.visible = false
+	var foam_mat := StandardMaterial3D.new()
+	foam_mat.albedo_color = Color(0.95, 0.92, 0.88, 0.72)
+	foam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	foam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	foam_mat.cull_mode = BaseMaterial3D.CULL_BACK
+	cup_fizz_mesh.material_override = foam_mat
+	cup_surface_pivot.add_child(cup_fizz_mesh)
+
+	cup_bubble_fx = _make_cup_bubble_particles()
+	cup_liquid_pivot.add_child(cup_bubble_fx)
 
 	cup_ice_root = Node3D.new()
 	cup_ice_root.name = "IceStack"
@@ -9098,16 +9137,54 @@ func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
 
 
 func _make_soda_liquid_material(col: Color) -> StandardMaterial3D:
-	## Opaque unshaded soda — sides stay flavor-colored (lit transparent walls looked white).
+	## Clear tinted soda — see through the cup wall with flavor color.
 	var mat := StandardMaterial3D.new()
 	var c := col
-	c.a = 1.0
+	c.a = 0.58
 	mat.albedo_color = c
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.emission_enabled = false
 	return mat
+
+
+func _make_cup_bubble_particles() -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.name = "CupBubbles"
+	fx.amount = 28
+	fx.lifetime = 1.1
+	fx.preprocess = 0.2
+	fx.explosiveness = 0.0
+	fx.randomness = 0.4
+	fx.emitting = false
+	fx.position = Vector3(0.0, 0.04, 0.0)
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.045
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 8.0
+	pm.initial_velocity_min = 0.04
+	pm.initial_velocity_max = 0.11
+	pm.gravity = Vector3(0, 0.02, 0)
+	pm.damping_min = 0.1
+	pm.damping_max = 0.35
+	pm.scale_min = 0.35
+	pm.scale_max = 0.85
+	pm.color = Color(1.0, 1.0, 1.0, 0.55)
+	fx.process_material = pm
+	var draw := StandardMaterial3D.new()
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.albedo_color = Color(1, 1, 1, 0.55)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.0045
+	sphere.height = 0.009
+	sphere.material = draw
+	fx.draw_pass_1 = sphere
+	fx.visibility_aabb = AABB(Vector3(-0.1, -0.02, -0.1), Vector3(0.2, 0.22, 0.2))
+	return fx
 
 
 func _refresh_soda_flavor_lights() -> void:
@@ -9199,9 +9276,13 @@ func _begin_cup_hold() -> bool:
 	_cup_prev_pos = cup_root.global_position
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
+	_cup_tilt = Vector2.ZERO
 	_cup_surface_slosh = Vector2.ZERO
+	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
+	_cup_fizz = 0.0
+	_cup_pouring = false
 	if cup_area:
 		cup_area.input_ray_pickable = false
 	if game_audio:
@@ -9225,8 +9306,8 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	if hit == Vector3.ZERO:
 		hit = from + dir * 2.4
 		hit.y = hold_y
-	## Work volume: grill + soda fountain on the right (world −X).
-	hit.x = clampf(hit.x, -2.20, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
+	## Work volume: grill + soda fountain on camera-left (world +X).
+	hit.x = clampf(hit.x, -2.20, 1.95)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.20)
 	hit.y = hold_y
 	## Soft snap under a nozzle — seat the cup low so the rim sits below the tip.
@@ -9263,48 +9344,68 @@ func _update_held_cup(delta: float) -> void:
 		return
 	var seat := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	if seat != Vector3.ZERO:
-		## Snappy follow so the cup tracks the cursor without lag fights.
 		var prev := cup_root.global_position
 		cup_root.global_position = prev.lerp(seat, clampf(delta * 28.0, 0.0, 1.0))
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 		_cup_prev_pos = cup_root.global_position
-	## Mild cup tilt from motion + resting tip.
-	var tip_x := clampf(-_cup_vel.z * 4.0, -18.0, 18.0)
-	var tip_z := clampf(_cup_vel.x * 4.0, -18.0, 18.0)
-	cup_root.rotation_degrees = Vector3(-8.0 + tip_x * 0.15, 12.0, tip_z * 0.2)
+	## Inertia tilt: whip one way banks the cup; opposite motion corrects it.
+	var kick := Vector2(-_cup_vel.x, _cup_vel.z) * CUP_TILT_ACCEL * delta
+	_cup_tilt += kick
+	## Opposite velocity damps lean faster (steering back upright).
+	if signf(kick.x) != 0.0 and signf(_cup_tilt.x) != 0.0 and signf(kick.x) != signf(_cup_tilt.x):
+		_cup_tilt.x *= maxf(0.0, 1.0 - delta * 6.0)
+	if signf(kick.y) != 0.0 and signf(_cup_tilt.y) != 0.0 and signf(kick.y) != signf(_cup_tilt.y):
+		_cup_tilt.y *= maxf(0.0, 1.0 - delta * 6.0)
+	_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN, 0.0, 1.0))
+	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
+	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
+	cup_root.rotation_degrees = Vector3(
+		-6.0 + _cup_tilt.y,
+		12.0,
+		_cup_tilt.x
+	)
 	_update_cup_slosh(delta)
 	_try_fill_cup_at_spouts(delta)
 
 
 func _update_cup_slosh(delta: float) -> void:
-	## Body leans a little; top disc tips harder so the free surface reads as splashy soda.
+	## Liquid follows carry lean; top disc tips + spins harder for splash.
 	var target := Vector2(
-		clampf(-_cup_vel.x * 3.2, -22.0, 22.0),
-		clampf(_cup_vel.z * 3.2, -22.0, 22.0)
+		clampf(_cup_tilt.x * 0.85 + (-_cup_vel.x * 1.4), -32.0, 32.0),
+		clampf(_cup_tilt.y * 0.85 + (_cup_vel.z * 1.4), -32.0, 32.0)
 	)
 	_cup_slosh = _cup_slosh.lerp(target, clampf(delta * CUP_SLOSH_FOLLOW, 0.0, 1.0))
-	_cup_slosh = _cup_slosh.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN, 0.0, 1.0))
-	## Surface disc: same lean, amplified, plus pour/splash wobble on the angle.
+	_cup_slosh = _cup_slosh.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN * 0.7, 0.0, 1.0))
 	var surf_target := target * CUP_SURFACE_SLOSH_MUL
-	_cup_surface_slosh = _cup_surface_slosh.lerp(surf_target, clampf(delta * CUP_SLOSH_FOLLOW * 1.15, 0.0, 1.0))
-	_cup_surface_slosh = _cup_surface_slosh.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN * 0.85, 0.0, 1.0))
-	_cup_surface_wobble = maxf(0.0, _cup_surface_wobble - delta * 2.8)
-	var wobble_x := sin(Time.get_ticks_msec() * 0.042) * _cup_surface_wobble * 9.0
-	var wobble_z := cos(Time.get_ticks_msec() * 0.051) * _cup_surface_wobble * 7.0
+	_cup_surface_slosh = _cup_surface_slosh.lerp(surf_target, clampf(delta * CUP_SLOSH_FOLLOW * 1.2, 0.0, 1.0))
+	_cup_surface_slosh = _cup_surface_slosh.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN * 0.55, 0.0, 1.0))
+	## Spin the splash disc around Y from lateral whip / pour.
+	_cup_surface_spin += (_cup_vel.x * 0.35 + _cup_vel.z * 0.25) * CUP_SURFACE_SPIN_MUL * delta
+	if _cup_pouring:
+		_cup_surface_spin += delta * 140.0
+	_cup_surface_spin = fmod(_cup_surface_spin, 360.0)
+	_cup_surface_wobble = maxf(0.0, _cup_surface_wobble - delta * 2.4)
+	var wobble_x := sin(Time.get_ticks_msec() * 0.055) * _cup_surface_wobble * 14.0
+	var wobble_z := cos(Time.get_ticks_msec() * 0.068) * _cup_surface_wobble * 12.0
 	if cup_liquid_pivot != null and is_instance_valid(cup_liquid_pivot):
-		cup_liquid_pivot.rotation_degrees = Vector3(_cup_slosh.y * 0.55, 0.0, _cup_slosh.x * 0.55)
+		cup_liquid_pivot.rotation_degrees = Vector3(_cup_slosh.y * 0.7, 0.0, _cup_slosh.x * 0.7)
 	if cup_surface_pivot != null and is_instance_valid(cup_surface_pivot):
 		cup_surface_pivot.rotation_degrees = Vector3(
-			clampf(_cup_surface_slosh.y + wobble_x, -38.0, 38.0),
-			0.0,
-			clampf(_cup_surface_slosh.x + wobble_z, -38.0, 38.0)
+			clampf(_cup_surface_slosh.y + wobble_x, -52.0, 52.0),
+			_cup_surface_spin,
+			clampf(_cup_surface_slosh.x + wobble_z, -52.0, 52.0)
 		)
+	## Fizz head: builds while pouring, dies down after.
+	if _cup_pouring and cup_soda_fill > 0.02:
+		_cup_fizz = minf(1.0, _cup_fizz + CUP_FIZZ_POUR_RATE * delta)
+	else:
+		_cup_fizz = maxf(0.0, _cup_fizz - CUP_FIZZ_FADE_RATE * delta)
 	_cup_splash_cd = maxf(0.0, _cup_splash_cd - delta)
 	var speed := _cup_vel.length()
-	var lean := _cup_surface_slosh.length()
+	var lean := maxf(_cup_surface_slosh.length(), _cup_tilt.length())
 	if cup_soda_fill > 0.05 and _cup_splash_cd <= 0.0 \
-			and (speed > CUP_SPLASH_SPEED or lean > 20.0):
+			and (speed > CUP_SPLASH_SPEED or lean > 26.0):
 		_cup_splash_cd = 0.22
 		_cup_surface_wobble = 1.0
 		var loss := CUP_SPLASH_LOSS * (1.0 + clampf((speed - CUP_SPLASH_SPEED) * 0.35, 0.0, 1.5))
@@ -9317,6 +9418,8 @@ func _update_cup_slosh(delta: float) -> void:
 			_flash("Spilled the drink!", Color("FFAB91"))
 		elif loss > 0.08:
 			_flash("Whoa — spilled some!", Color("FFCC80"))
+	elif cup_soda_fill > 0.02:
+		_refresh_cup_fizz_visual()
 
 
 func _spawn_cup_splash_drops() -> void:
@@ -9379,7 +9482,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			cup_flavor = soda_selected_flavor
 			cup_soda_fill = minf(1.0, cup_soda_fill + CUP_FILL_RATE * delta)
 			pouring_soda = true
-			_cup_surface_wobble = maxf(_cup_surface_wobble, 0.55)
+			_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
 			_update_soda_stream(soda_tip, rim, cup_flavor)
 			if before < 1.0 and cup_soda_fill >= 1.0:
 				_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
@@ -9387,7 +9490,6 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		_hide_soda_stream()
 	if ice_d < 900.0 and ice_d < soda_d:
 		var before_i := cup_ice_fill
-		## Keep dumping ice while held under the ICE nozzle — overfill is allowed.
 		cup_ice_fill += CUP_FILL_RATE * delta
 		pouring_ice = true
 		_cup_ice_spawn_cd -= delta
@@ -9400,6 +9502,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			_flash("Ice packed — keep holding to overfill!", Color("B3E5FC"))
 		elif before_i < 1.6 and cup_ice_fill >= 1.6:
 			_flash("Way too much ice!", Color("81D4FA"))
+	_cup_pouring = pouring_soda
 	if pouring_soda or pouring_ice or cup_soda_fill > 0.0 or cup_ice_fill > 0.0:
 		_refresh_cup_visuals()
 
@@ -9436,33 +9539,28 @@ func _hide_soda_stream() -> void:
 func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool = false) -> void:
 	if world == null:
 		return
+	## Simple clean cubes — short drop into the cup (or fling on overflow).
 	var cube := MeshInstance3D.new()
 	cube.name = "FlyingIce"
 	var box := BoxMesh.new()
-	var s := randf_range(0.022, 0.034)
-	box.size = Vector3(s, s * 0.88, s * randf_range(0.9, 1.1))
+	var s := 0.028
+	box.size = Vector3(s, s, s)
 	cube.mesh = box
 	cube.material_override = _make_ice_cube_material()
 	world.add_child(cube)
-	var start := from_tip + Vector3(randf_range(-0.025, 0.025), 0.0, randf_range(-0.025, 0.025))
+	var start := from_tip + Vector3(randf_range(-0.012, 0.012), 0.0, randf_range(-0.012, 0.012))
 	var end: Vector3
 	if overflow:
-		## Shoot past the rim — cubes bounce out when the cup is packed.
-		var fling := Vector3(randf_range(-0.18, 0.18), randf_range(-0.05, 0.12), randf_range(0.08, 0.28))
-		end = to_rim + fling
+		end = to_rim + Vector3(randf_range(-0.14, 0.14), randf_range(-0.02, 0.08), randf_range(0.06, 0.2))
 	else:
-		end = to_rim + Vector3(randf_range(-0.03, 0.03), randf_range(-0.02, 0.02), randf_range(-0.03, 0.03))
-	var arc := (start + end) * 0.5 + Vector3(0.0, 0.09 if not overflow else 0.14, 0.0)
+		end = to_rim + Vector3(randf_range(-0.02, 0.02), -0.02, randf_range(-0.02, 0.02))
 	cube.global_position = start
-	var spin := Vector3(randf_range(100, 220), randf_range(80, 180), randf_range(60, 160))
-	cube.rotation_degrees = Vector3(randf_range(0, 360), randf_range(0, 360), randf_range(0, 360))
+	cube.rotation_degrees = Vector3(randf_range(0, 40), randf_range(0, 90), randf_range(0, 40))
 	var tw := create_tween()
-	tw.tween_property(cube, "global_position", arc, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(cube, "rotation_degrees", cube.rotation_degrees + spin, 0.30)
-	tw.chain().tween_property(cube, "global_position", end, 0.14 if not overflow else 0.22) \
+	tw.tween_property(cube, "global_position", end, 0.16 if not overflow else 0.22) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	if overflow:
-		tw.parallel().tween_property(cube, "scale", Vector3.ONE * 0.35, 0.22)
+		tw.parallel().tween_property(cube, "scale", Vector3.ONE * 0.4, 0.22)
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(cube):
 			cube.queue_free()
@@ -9481,24 +9579,17 @@ func _refresh_cup_visuals() -> void:
 				liq.height = h
 				liq.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
 				liq.bottom_radius = CUP_LIQUID_BOT_R
-				## Keep both caps — open top + backface cull erased the soda when looking in.
 				liq.cap_top = true
 				liq.cap_bottom = true
 			cup_liquid_mesh.position.y = h * 0.5
 			if cup_liquid_mat != null:
-				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
-				## Solid tinted soda — no glow wash (emission made cola read as white).
-				col.a = 0.96
+				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.32, 0.10, 0.06))
+				col.a = 0.58
 				cup_liquid_mat.albedo_color = col
-				cup_liquid_mat.emission_enabled = false
-				cup_liquid_mat.emission_energy_multiplier = 0.0
-				cup_liquid_mat.roughness = 0.22
-				cup_liquid_mat.metallic = 0.0
-				## Single-sided + both caps: looking down shows the colored top, not milky doubles.
-				cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_BACK
-				cup_liquid_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 				cup_liquid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			## Splash disc sits just above the filled volume (tilts independently).
+				cup_liquid_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_BACK
+			var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
 			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
 				cup_liquid_surface.visible = true
 				cup_liquid_surface.position = Vector3(0.0, 0.0, 0.0)
@@ -9506,30 +9597,59 @@ func _refresh_cup_visuals() -> void:
 					cup_surface_pivot.position.y = h + 0.002
 				var sm := cup_liquid_surface.material_override as StandardMaterial3D
 				if sm:
-					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
-					## Slight highlight only — keep cola dark brown, not pink/white.
-					sc = sc.lightened(0.12)
-					sc.a = 0.9
+					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.32, 0.10, 0.06))
+					sc = sc.lightened(0.1)
+					sc.a = 0.65
 					sm.albedo_color = sc
-					sm.emission_enabled = false
-					sm.emission_energy_multiplier = 0.0
-					sm.roughness = 0.15
-					sm.metallic = 0.0
-					sm.cull_mode = BaseMaterial3D.CULL_BACK
 					sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+					sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					sm.cull_mode = BaseMaterial3D.CULL_BACK
 				var surf := cup_liquid_surface.mesh as CylinderMesh
 				if surf:
-					var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
-					surf.top_radius = r * 0.98
-					surf.bottom_radius = r * 0.98
-					surf.height = 0.01
-					surf.cap_top = true
-					surf.cap_bottom = true
+					surf.top_radius = r * 0.99
+					surf.bottom_radius = r * 0.99
+					surf.height = 0.008
+			if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
+				cup_bubble_fx.emitting = true
+				cup_bubble_fx.position = Vector3(0.0, h * 0.35, 0.0)
+				cup_bubble_fx.amount = clampi(10 + int(cup_soda_fill * 22.0) + int(_cup_fizz * 12.0), 10, 40)
+			_refresh_cup_fizz_visual()
 		else:
 			cup_liquid_mesh.visible = false
 			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
 				cup_liquid_surface.visible = false
+			if cup_fizz_mesh != null and is_instance_valid(cup_fizz_mesh):
+				cup_fizz_mesh.visible = false
+			if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
+				cup_bubble_fx.emitting = false
 	_refresh_cup_ice_stack()
+
+
+func _refresh_cup_fizz_visual() -> void:
+	if cup_fizz_mesh == null or not is_instance_valid(cup_fizz_mesh):
+		return
+	if cup_soda_fill < 0.02 or _cup_fizz < 0.04:
+		cup_fizz_mesh.visible = false
+		return
+	cup_fizz_mesh.visible = true
+	var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
+	var foam_h := 0.006 + _cup_fizz * 0.028
+	var foam := cup_fizz_mesh.mesh as CylinderMesh
+	if foam:
+		foam.height = foam_h
+		foam.top_radius = r * (0.92 + _cup_fizz * 0.08)
+		foam.bottom_radius = r * 0.9
+	cup_fizz_mesh.position = Vector3(0.0, foam_h * 0.55, 0.0)
+	var fm := cup_fizz_mesh.material_override as StandardMaterial3D
+	if fm:
+		var base: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.32, 0.10, 0.06))
+		var foam_col := Color(
+			lerpf(0.95, base.r, 0.15),
+			lerpf(0.93, base.g, 0.12),
+			lerpf(0.90, base.b, 0.10),
+			0.35 + _cup_fizz * 0.45
+		)
+		fm.albedo_color = foam_col
 
 
 func _refresh_cup_ice_stack() -> void:
@@ -9537,7 +9657,6 @@ func _refresh_cup_ice_stack() -> void:
 		return
 	var want := 0
 	if cup_ice_fill > 0.04:
-		## Pack denser as fill rises; overfill keeps a heaping mound.
 		var packed := clampf(cup_ice_fill, 0.0, 1.35)
 		want = clampi(int(ceil(packed * float(CUP_ICE_STACK_MAX))), 1, CUP_ICE_STACK_MAX)
 	var have := cup_ice_root.get_child_count()
@@ -9549,9 +9668,9 @@ func _refresh_cup_ice_stack() -> void:
 		for i in want:
 			var cube := MeshInstance3D.new()
 			var box := BoxMesh.new()
-			## Slightly irregular chunks that nest when packed tight.
-			var s := randf_range(0.026, 0.034) - float(i) * 0.00025
-			box.size = Vector3(s, s * randf_range(0.72, 0.92), s * randf_range(0.82, 1.05))
+			## Uniform cubes — pack cleanly in the cup.
+			var s := 0.026
+			box.size = Vector3(s, s, s)
 			cube.mesh = box
 			cube.material_override = _make_ice_cube_material()
 			cup_ice_root.add_child(cube)
@@ -9559,17 +9678,12 @@ func _refresh_cup_ice_stack() -> void:
 
 
 func _make_ice_cube_material() -> StandardMaterial3D:
-	## Semi-transparent frost — see soda through the clump.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.82, 0.94, 1.0, 0.42)
+	mat.albedo_color = Color(0.85, 0.95, 1.0, 0.45)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.06
-	mat.metallic = 0.12
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-	mat.emission_enabled = true
-	mat.emission = Color(0.72, 0.90, 1.0)
-	mat.emission_energy_multiplier = 0.10
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.emission_enabled = false
 	return mat
 
 
@@ -9577,44 +9691,37 @@ func _layout_cup_ice_cubes(count: int) -> void:
 	if cup_ice_root == null:
 		return
 	var soda_h := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
-	## Clump sits in the soda — low and centered, cubes overlapping.
-	var base_y := 0.022 + soda_h * 0.42
+	## Nest cubes in a tight pyramid sitting in the soda.
+	var base_y := 0.02 + soda_h * 0.35
 	var kids := cup_ice_root.get_children()
-	## 4 per layer packs a tight mound instead of a sparse ring.
-	const PER_LAYER := 4
+	## Offsets for a packed 3×3 then stack — simple cube formation.
+	var slots: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(0.018, 0.0, 0.0),
+		Vector3(-0.018, 0.0, 0.0),
+		Vector3(0.0, 0.0, 0.018),
+		Vector3(0.0, 0.0, -0.018),
+		Vector3(0.014, 0.0, 0.014),
+		Vector3(-0.014, 0.0, 0.014),
+		Vector3(0.014, 0.0, -0.014),
+		Vector3(-0.014, 0.0, -0.014),
+		Vector3(0.0, 0.026, 0.0),
+		Vector3(0.012, 0.026, 0.0),
+		Vector3(-0.012, 0.026, 0.0),
+	]
 	for i in mini(count, kids.size()):
 		var cube: Node3D = kids[i]
-		var layer := i / PER_LAYER
-		var in_layer := i % PER_LAYER
-		## Small angular jitter so faces don't look grid-perfect.
-		var ang := float(in_layer) * TAU / float(PER_LAYER) \
-				+ float(layer) * 0.55 \
-				+ float(i) * 0.08
-		## Tight radius — cubes overlap / nest in the center.
-		var r := 0.0
-		if count == 1:
-			r = 0.0
-		elif count == 2:
-			r = 0.010
-		else:
-			r = 0.011 + float(layer) * 0.0035 + float(in_layer % 2) * 0.002
-		## Pull outer cubes inward as the clump grows.
-		r *= 0.78 if count >= 6 else 1.0
-		var y_off := float(layer) * 0.014 + float(in_layer) * 0.0025
-		## Slight inward lean toward center for a glued clump look.
-		cube.position = Vector3(
-			cos(ang) * r,
-			base_y + y_off,
-			sin(ang) * r
+		var slot: Vector3 = slots[i] if i < slots.size() else Vector3(
+			cos(float(i)) * 0.012,
+			0.026 * float(i / 9),
+			sin(float(i)) * 0.012
 		)
+		cube.position = Vector3(slot.x, base_y + slot.y, slot.z)
 		cube.rotation_degrees = Vector3(
-			12.0 + 22.0 * float(i % 5),
-			35.0 * float(i) + float(layer) * 18.0,
-			8.0 + 15.0 * float((i * 3) % 7)
+			8.0 * float(i % 3),
+			22.0 * float(i),
+			6.0 * float((i * 2) % 5)
 		)
-		## Tiny scale variance already in mesh; nudge bigger cubes toward center.
-		if i == 0 and count > 1:
-			cube.position = Vector3(0.0, base_y, 0.0)
 
 
 func _put_cup_down() -> void:
@@ -9641,8 +9748,12 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	_hide_soda_stream()
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
+	_cup_tilt = Vector2.ZERO
 	_cup_surface_slosh = Vector2.ZERO
+	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
+	_cup_pouring = false
+	## Fizz keeps dying down while parked (refresh once; fade continues next grab).
 	if cup_liquid_pivot != null and is_instance_valid(cup_liquid_pivot):
 		cup_liquid_pivot.rotation_degrees = Vector3.ZERO
 	if cup_surface_pivot != null and is_instance_valid(cup_surface_pivot):
@@ -9651,12 +9762,16 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		cup_flavor = ""
 		cup_soda_fill = 0.0
 		cup_ice_fill = 0.0
+		_cup_fizz = 0.0
 	_cup_ice_spawn_cd = 0.0
 	_refresh_cup_visuals()
 	if cup_area:
 		cup_area.input_ray_pickable = false
 	var park := cup_rest if cup_rest != Vector3.ZERO else cup_home
 	var park_rot := cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
+	## Sit upright on the tray surface (no carry lean).
+	if cup_root != null and is_instance_valid(cup_root):
+		cup_root.rotation_degrees = park_rot
 	_tween_tool_to_wall(
 		cup_root,
 		park,
