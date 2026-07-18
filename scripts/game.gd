@@ -719,7 +719,7 @@ const GFX_DEFAULTS := {
 	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
 	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
 	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
-	"bz_row_top": 200.0, ## sit 🔔/🗑/All below the cutting board
+	"bz_row_top": 500.0, ## sit 🔔/🗑/All below the cutting board
 	"bz_row_bottom": 0.0,
 	"bz_panel_w": BUILD_PANEL_SIZE.x,
 	"bz_panel_h": BUILD_PANEL_SIZE.y,
@@ -12215,10 +12215,15 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_row_left", GFX_DEFAULTS["bz_row_left"])
 		cfg.set_value("gfx", "gfx_bz_build_column_v3", true)
 		cfg.save(GFX_CFG_PATH)
-	## Drop Build chrome ~200px so 🔔/🗑/All sit below the cutting board.
+	## Drop Build chrome so 🔔/🗑/All sit below the cutting board.
 	if not cfg.has_section_key("gfx", "gfx_bz_actions_down_v1"):
 		cfg.set_value("gfx", "bz_row_top", GFX_DEFAULTS["bz_row_top"])
 		cfg.set_value("gfx", "gfx_bz_actions_down_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Another +300px — buttons were still above the board.
+	if not cfg.has_section_key("gfx", "gfx_bz_actions_down_v2"):
+		cfg.set_value("gfx", "bz_row_top", GFX_DEFAULTS["bz_row_top"])
+		cfg.set_value("gfx", "gfx_bz_actions_down_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
