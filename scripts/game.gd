@@ -8901,6 +8901,20 @@ func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
 	var s := clampf(stars, 0.0, 5.0)
 	## ~1 in 3 posts go full essay so the feed feels like real people.
 	var long_post := randf() < 0.32
+	if kind == "burnt":
+		if long_post:
+			return [
+				"I asked for a burger and got a charcoal briquette with toppings. Crunchy in the worst way. One star — learn when to scoop.",
+				"Burnt. Like, properly burnt. The outside was black and bitter and I still paid for it because I was starving. Never again until y'all watch the grill.",
+				"Long review for a short meal: perfect ticket build, absolute ash patty. Matching the order doesn't fix serving hockey pucks. One star.",
+			][randi() % 3]
+		return [
+			"Burnt hockey puck. One star.",
+			"Charcoal with cheese. Gross.",
+			"That patty was BLACK. No thanks.",
+			"Burnt meat. Fix your grill timing.",
+			"Tasted like ash. Never again.",
+		][randi() % 5]
 	if kind == "spray":
 		if long_post:
 			return [
@@ -9010,14 +9024,30 @@ func _review_stars_from_serve(
 ) -> float:
 	if wrong or payout <= 0:
 		return 1.0
+	var cook_stars := float(cook_r.get("stars", 3))
+	var cook_score := int(cook_r.get("score", 70))
+	## Burnt / Bad cook must never get inflated by a perfect ticket match.
+	if _cook_rating_is_burnt(cook_r):
+		return 1.0
 	if meh:
-		return clampf(float(cook_r.get("stars", 2)) * 0.55, 1.0, 2.5)
-	var stars := float(cook_r.get("stars", 3))
-	if quality >= 0.98:
-		stars = maxf(stars, 5.0)
-	elif quality >= 0.9:
-		stars = maxf(stars, 4.0)
+		return clampf(cook_stars * 0.55, 1.0, 2.5)
+	var stars := cook_stars
+	## Order quality can lift a decent cook — not a charcoal puck.
+	if cook_score >= 70 and cook_stars >= 3.0:
+		if quality >= 0.98:
+			stars = maxf(stars, 5.0)
+		elif quality >= 0.9:
+			stars = maxf(stars, 4.0)
+	elif cook_stars <= 1.0:
+		stars = minf(stars, 1.5)
+	elif cook_stars <= 2.0:
+		stars = minf(maxf(stars, 1.0), 2.5)
 	return clampf(stars, 1.0, 5.0)
+
+
+func _cook_rating_is_burnt(cook_r: Dictionary) -> bool:
+	return str(cook_r.get("detail", "")) == "Burnt" \
+		or (str(cook_r.get("label", "")) == "Bad" and float(cook_r.get("stars", 3)) <= 0.5)
 
 
 func _refresh_phone_ui() -> void:
@@ -14686,16 +14716,18 @@ func _complete_serve(station_index: int) -> void:
 		tip_factor *= 0.6
 	if not seasoned:
 		patty_mult *= 0.92
-		cook_r = {
-			"score": 48,
-			"grade": "C",
-			"stars": 2,
-			"label": "Meh",
-			"detail": "No seasoning",
-			"color": Color("B0BEC5"),
-			"pay_mul": float(cook_r.get("pay_mul", 1.0)),
-			"text": "Meh… OK",
-		}
+		## Don't erase a Burnt grade — charcoal still counts as charcoal.
+		if not _cook_rating_is_burnt(cook_r):
+			cook_r = {
+				"score": 48,
+				"grade": "C",
+				"stars": 2,
+				"label": "Meh",
+				"detail": "No seasoning",
+				"color": Color("B0BEC5"),
+				"pay_mul": float(cook_r.get("pay_mul", 1.0)),
+				"text": "Meh… OK",
+			}
 	var guest_mp := mp_enabled and not NetManager.is_host()
 	var pay: Dictionary = selected_customer.receive_burger(
 		items, patty_mult, combo, tip_factor, fresh_r, seasoned
@@ -14766,8 +14798,12 @@ func _complete_serve(station_index: int) -> void:
 		var review_kind := "good"
 		if payout <= 0:
 			review_kind = "wrong"
-		elif was_meh:
+		elif _cook_rating_is_burnt(cook_r):
+			review_kind = "burnt"
+		elif was_meh or review_stars < 2.75:
 			review_kind = "meh"
+		elif review_stars <= 1.5:
+			review_kind = "angry"
 		_maybe_record_social_review(review_stars, review_kind, tip_amt)
 	_clear_station(station_index)
 	_update_hud()
