@@ -14534,7 +14534,7 @@ func _refresh_station(index: int) -> void:
 				_drop_on_assembly(index, pos, data)
 		)
 		preview.add_child(row)
-	## Light nest: heel rises a touch, crown settles — patties stay full size / visible.
+	## Nest: heel tucks slightly; crown lifts clear of the patty.
 	if bottom_row != null and is_instance_valid(bottom_row):
 		bottom_row.position.y -= BUILD_BUN_NEST_BOTTOM_PX * layer_scale
 	if top_row != null and is_instance_valid(top_row):
