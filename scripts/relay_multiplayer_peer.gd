@@ -213,6 +213,7 @@ func _put_packet_script(buffer: PackedByteArray) -> Error:
 
 
 func _get_packet_script() -> PackedByteArray:
+	## Pop after SceneMultiplayer has already peeked peer/channel/mode via the getters below.
 	if _inbox.is_empty():
 		return PackedByteArray()
 	var item: Dictionary = _inbox.pop_front()
@@ -230,16 +231,32 @@ func _get_max_packet_size() -> int:
 	return 65535
 
 
+func _peek_inbox() -> Dictionary:
+	## Godot reads peer/channel/mode BEFORE get_packet — must peek front, not last-popped.
+	if _inbox.is_empty():
+		return {}
+	return _inbox[0] as Dictionary
+
+
 func _get_packet_channel() -> int:
-	return _current_channel
+	var item := _peek_inbox()
+	if item.is_empty():
+		return _current_channel
+	return int(item.get("channel", 0))
 
 
 func _get_packet_mode() -> MultiplayerPeer.TransferMode:
-	return _current_mode
+	var item := _peek_inbox()
+	if item.is_empty():
+		return _current_mode
+	return item.get("mode", MultiplayerPeer.TRANSFER_MODE_RELIABLE) as MultiplayerPeer.TransferMode
 
 
 func _get_packet_peer() -> int:
-	return _current_from
+	var item := _peek_inbox()
+	if item.is_empty():
+		return maxi(_current_from, 1)
+	return maxi(int(item.get("from", 1)), 1)
 
 
 func _set_transfer_channel(channel: int) -> void:

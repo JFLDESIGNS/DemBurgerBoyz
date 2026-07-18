@@ -15139,26 +15139,35 @@ func _setup_multiplayer_ui() -> void:
 	_mp_lobby_root.add_child(dim)
 
 	var panel := PanelContainer.new()
+	panel.name = "LobbyPanel"
 	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.offset_left = -340.0
-	panel.offset_right = 340.0
-	panel.offset_top = -320.0
-	panel.offset_bottom = 320.0
+	panel.offset_left = -360.0
+	panel.offset_right = 360.0
+	panel.offset_top = -300.0
+	panel.offset_bottom = 300.0
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.1, 0.11, 0.14, 0.97)
 	style.set_corner_radius_all(14)
 	style.set_border_width_all(2)
 	style.border_color = Color(1.0, 0.72, 0.28, 0.9)
-	style.content_margin_left = 18
-	style.content_margin_right = 18
-	style.content_margin_top = 14
-	style.content_margin_bottom = 14
+	style.content_margin_left = 16
+	style.content_margin_right = 16
+	style.content_margin_top = 12
+	style.content_margin_bottom = 12
 	panel.add_theme_stylebox_override("panel", style)
 	_mp_lobby_root.add_child(panel)
 
+	## Scroll so Ready / Start never fall below the window on short displays.
+	var panel_scroll := ScrollContainer.new()
+	panel_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	panel.add_child(panel_scroll)
+
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	panel.add_child(v)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 7)
+	panel_scroll.add_child(v)
 
 	var title := Label.new()
 	title.text = "ROOM BROWSER"
@@ -15168,7 +15177,7 @@ func _setup_multiplayer_ui() -> void:
 	v.add_child(title)
 
 	var tip := Label.new()
-	tip.text = "Up to 4 cooks. Host Room, share the code — Ready, then Start at 2+ (or wait for 4).\nFriends can join mid-shift with the same code. Same Wi‑Fi works without a relay."
+	tip.text = "2–4 cooks. Host → code → everyone Ready → host Start Co-op (or wait for more)."
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(tip, false, 12)
@@ -15246,6 +15255,38 @@ func _setup_multiplayer_ui() -> void:
 	_mp_host_addr_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.35))
 	v.add_child(_mp_host_addr_label)
 
+	## Ready / Start sit under the room code so they stay on-screen (not under the room list).
+	var ready_row := HBoxContainer.new()
+	ready_row.name = "ReadyRow"
+	ready_row.add_theme_constant_override("separation", 10)
+	ready_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_child(ready_row)
+
+	_mp_ready_btn = Button.new()
+	_mp_ready_btn.text = "Ready"
+	_mp_ready_btn.custom_minimum_size = Vector2(140, 44)
+	_mp_ready_btn.visible = false
+	UiFontsScript.apply_button(_mp_ready_btn, true, 17)
+	ready_row.add_child(_mp_ready_btn)
+	_mp_ready_btn.pressed.connect(func():
+		_sfx_click()
+		var me := NetManager.my_id()
+		var now_ready := not bool(NetManager.peers_ready.get(me, false))
+		NetManager.set_ready(now_ready)
+		_mp_refresh_lobby_status()
+	)
+
+	_mp_start_coop_btn = Button.new()
+	_mp_start_coop_btn.text = "Start Co-op"
+	_mp_start_coop_btn.custom_minimum_size = Vector2(180, 44)
+	_mp_start_coop_btn.visible = false
+	UiFontsScript.apply_button(_mp_start_coop_btn, true, 17)
+	ready_row.add_child(_mp_start_coop_btn)
+	_mp_start_coop_btn.pressed.connect(func():
+		_sfx_click()
+		NetManager.request_start_session()
+	)
+
 	var rooms_header := HBoxContainer.new()
 	rooms_header.add_theme_constant_override("separation", 8)
 	v.add_child(rooms_header)
@@ -15256,7 +15297,7 @@ func _setup_multiplayer_ui() -> void:
 	rooms_header.add_child(rooms_lab)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 150)
+	scroll.custom_minimum_size = Vector2(0, 110)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	v.add_child(scroll)
@@ -15297,36 +15338,6 @@ func _setup_multiplayer_ui() -> void:
 	UiFontsScript.apply_label(_mp_status_label, false, 12)
 	v.add_child(_mp_status_label)
 
-	var ready_row := HBoxContainer.new()
-	ready_row.add_theme_constant_override("separation", 8)
-	ready_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_child(ready_row)
-
-	_mp_ready_btn = Button.new()
-	_mp_ready_btn.text = "Ready"
-	_mp_ready_btn.custom_minimum_size = Vector2(120, 40)
-	_mp_ready_btn.visible = false
-	UiFontsScript.apply_button(_mp_ready_btn, true, 16)
-	ready_row.add_child(_mp_ready_btn)
-	_mp_ready_btn.pressed.connect(func():
-		_sfx_click()
-		var me := NetManager.my_id()
-		var now_ready := not bool(NetManager.peers_ready.get(me, false))
-		NetManager.set_ready(now_ready)
-		_mp_refresh_lobby_status()
-	)
-
-	_mp_start_coop_btn = Button.new()
-	_mp_start_coop_btn.text = "Start Co-op"
-	_mp_start_coop_btn.custom_minimum_size = Vector2(160, 40)
-	_mp_start_coop_btn.visible = false
-	UiFontsScript.apply_button(_mp_start_coop_btn, true, 16)
-	ready_row.add_child(_mp_start_coop_btn)
-	_mp_start_coop_btn.pressed.connect(func():
-		_sfx_click()
-		NetManager.request_start_session()
-	)
-
 	_mp_back_btn = Button.new()
 	_mp_back_btn.text = "Back"
 	_mp_back_btn.custom_minimum_size = Vector2(120, 36)
@@ -15358,12 +15369,29 @@ func _setup_multiplayer_ui() -> void:
 
 func _open_mp_lobby() -> void:
 	_mp_enter_windowed_for_coop()
+	_fit_mp_lobby_panel()
 	if _mp_lobby_root:
 		_mp_lobby_root.visible = true
 	NetManager.begin_browse()
 	NetManager.refresh_rooms()
 	_mp_rebuild_room_list()
 	_mp_refresh_lobby_status()
+
+
+func _fit_mp_lobby_panel() -> void:
+	## Dual windowed clients often have a short client area — keep Ready/Start on screen.
+	if _mp_lobby_root == null:
+		return
+	var panel := _mp_lobby_root.get_node_or_null("LobbyPanel") as PanelContainer
+	if panel == null:
+		return
+	var vr := get_viewport().get_visible_rect()
+	var half_w := mini(360.0, vr.size.x * 0.48)
+	var half_h := clampf(vr.size.y * 0.46, 200.0, 300.0)
+	panel.offset_left = -half_w
+	panel.offset_right = half_w
+	panel.offset_top = -half_h
+	panel.offset_bottom = half_h
 
 
 func _close_mp_lobby() -> void:
@@ -15377,7 +15405,7 @@ func _close_mp_lobby() -> void:
 func _mp_enter_windowed_for_coop() -> void:
 	## Two instances on one PC need windowed mode.
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	DisplayServer.window_set_size(Vector2i(1100, 640))
+	DisplayServer.window_set_size(Vector2i(1100, 720))
 	var idx := DisplayServer.get_primary_screen()
 	var screen := DisplayServer.screen_get_usable_rect(idx)
 	var offset := Vector2i(40, 40)
@@ -15517,11 +15545,25 @@ func _mp_refresh_lobby_status() -> void:
 			who, NetManager.room_code, n, NetManager.MAX_PLAYERS
 		]
 	else:
-		_mp_status_label.text = "%s · room %s — %d/%d cooks\n%s\nWait for 4, or Start at 2+ when everyone Ready" % [
+		_mp_status_label.text = "%s · room %s — %d/%d cooks\n%s\nAll Ready → host taps Start Co-op (works with 2, 3, or 4)" % [
 			who, NetManager.room_code, n, NetManager.MAX_PLAYERS, ready_line
 		]
-	_mp_start_coop_btn.disabled = n < 2 or not NetManager.all_peers_ready()
-	_mp_start_coop_btn.text = "Start Co-op" if n < NetManager.MAX_PLAYERS else "Start (full)"
+	var can_start := n >= 2 and n <= NetManager.MAX_PLAYERS and NetManager.all_peers_ready()
+	_mp_start_coop_btn.disabled = not can_start
+	if n < 2:
+		_mp_start_coop_btn.text = "Need 2+ cooks"
+	elif n > NetManager.MAX_PLAYERS:
+		_mp_start_coop_btn.text = "Too many cooks"
+	elif not NetManager.all_peers_ready():
+		_mp_start_coop_btn.text = "Waiting for Ready"
+	elif n >= NetManager.MAX_PLAYERS:
+		_mp_start_coop_btn.text = "Start Co-op (4)"
+	else:
+		_mp_start_coop_btn.text = "Start Co-op (%d)" % n
+	if can_start:
+		_mp_start_coop_btn.modulate = Color(1.0, 1.0, 0.85)
+	else:
+		_mp_start_coop_btn.modulate = Color(1, 1, 1)
 
 
 func _mp_rebuild_room_list() -> void:

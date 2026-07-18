@@ -123,6 +123,18 @@ func peer_count() -> int:
 	return multiplayer.get_peers().size() + 1
 
 
+func connected_peer_ids() -> Array[int]:
+	var ids: Array[int] = []
+	if not is_online():
+		ids.append(1)
+		return ids
+	ids.append(my_id())
+	for p in multiplayer.get_peers():
+		ids.append(int(p))
+	ids.sort()
+	return ids
+
+
 func color_for_peer(peer_id: int) -> Color:
 	var idx := clampi(peer_id - 1, 0, PEER_COLORS.size() - 1)
 	return PEER_COLORS[idx]
@@ -149,21 +161,14 @@ func peek_next_net_id() -> int:
 func all_peers_ready() -> bool:
 	if peer_count() < 2:
 		return false
-	var ids: Array = [my_id()]
-	for p in multiplayer.get_peers():
-		ids.append(int(p))
-	for id in ids:
+	for id in connected_peer_ids():
 		if not bool(peers_ready.get(int(id), false)):
 			return false
 	return true
 
 
 func ready_summary() -> String:
-	var ids: Array = [my_id()]
-	if is_online():
-		for p in multiplayer.get_peers():
-			ids.append(int(p))
-	ids.sort()
+	var ids := connected_peer_ids()
 	var bits: Array[String] = []
 	for id in ids:
 		var nm := name_for_peer(int(id))
@@ -500,43 +505,124 @@ func leave(emit_signal: bool = true) -> void:
 
 
 func set_ready(is_ready: bool) -> void:
-	if not is_online():
+	if not is_online() or session_active:
 		return
-	_rpc_set_ready.rpc(is_ready)
+	## Host owns lobby ready state so Start stays consistent for 2–4 cooks.
+	if is_host():
+		_host_set_peer_ready(my_id(), is_ready)
+	else:
+		_rpc_request_ready.rpc_id(1, is_ready, my_id())
 
 
 func request_start_session() -> void:
 	if not is_host():
 		return
+	if session_active:
+		return
 	if peer_count() < 2:
 		chat_flash.emit("Need at least 2 cooks to start (up to 4)", Color("FFA726"))
+		return
+	if peer_count() > MAX_PLAYERS:
+		chat_flash.emit("Room overflow — max %d cooks" % MAX_PLAYERS, Color("EF5350"))
 		return
 	if not all_peers_ready():
 		chat_flash.emit("Everyone in the lobby must Ready first", Color("FFA726"))
 		return
-	var session_seed := randi()
-	_rpc_start_session.rpc(session_seed)
+	_host_begin_session(randi())
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_set_ready(is_ready: bool) -> void:
-	var sid := multiplayer.get_remote_sender_id()
-	if sid == 0:
-		sid = my_id()
-	peers_ready[sid] = is_ready
+func _host_set_peer_ready(peer_id: int, is_ready: bool) -> void:
+	if not is_host() or session_active:
+		return
+	peers_ready[peer_id] = is_ready
+	_broadcast_lobby_ready()
 	peer_ready_changed.emit()
 
 
-@rpc("authority", "call_local", "reliable")
+func _broadcast_lobby_ready() -> void:
+	if not is_host():
+		return
+	var ready_ids: Array = []
+	for id in connected_peer_ids():
+		if bool(peers_ready.get(int(id), false)):
+			ready_ids.append(int(id))
+	_rpc_sync_lobby_ready.rpc(ready_ids)
+
+
+func _host_begin_session(session_seed: int) -> void:
+	if not is_host() or session_active:
+		return
+	if peer_count() < 2 or peer_count() > MAX_PLAYERS:
+		return
+	if not all_peers_ready():
+		return
+	session_active = true
+	last_session_seed = session_seed
+	## Local host starts immediately; clients get the RPC (2–4 cooks).
+	session_start_requested.emit(session_seed)
+	_rpc_start_session.rpc(session_seed)
+	chat_flash.emit("Shift starting — %d cooks!" % peer_count(), Color("FFEB3B"))
+
+
+@rpc("any_peer", "reliable")
+func _rpc_request_ready(is_ready: bool, claimed_id: int = 0) -> void:
+	if not is_host() or session_active:
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	var peer_id := sid if sid > 0 else claimed_id
+	if peer_id <= 0:
+		return
+	## Must be a connected cook (not a spoofed id outside the room).
+	var known := peer_id == my_id()
+	if not known:
+		for p in multiplayer.get_peers():
+			if int(p) == peer_id:
+				known = true
+				break
+	if not known and claimed_id > 0:
+		peer_id = claimed_id
+		known = peer_id == my_id()
+		if not known:
+			for p in multiplayer.get_peers():
+				if int(p) == peer_id:
+					known = true
+					break
+	if not known:
+		return
+	_host_set_peer_ready(peer_id, is_ready)
+
+
+@rpc("any_peer", "reliable")
+func _rpc_sync_lobby_ready(ready_ids: Array) -> void:
+	## Clients mirror host lobby checkmarks (host already applied locally).
+	var sid := multiplayer.get_remote_sender_id()
+	if is_host() or (sid != 0 and sid != 1):
+		return
+	peers_ready.clear()
+	for id in connected_peer_ids():
+		peers_ready[int(id)] = false
+	for rid in ready_ids:
+		peers_ready[int(rid)] = true
+	peer_ready_changed.emit()
+
+
+@rpc("any_peer", "reliable")
 func _rpc_start_session(session_seed: int) -> void:
+	## Host already emitted locally in _host_begin_session — clients only here.
+	var sid := multiplayer.get_remote_sender_id()
+	if is_host() or (sid != 0 and sid != 1):
+		return
 	session_active = true
 	last_session_seed = session_seed
 	session_start_requested.emit(session_seed)
 
 
-@rpc("authority", "reliable")
+@rpc("any_peer", "reliable")
 func _rpc_join_in_progress(session_seed: int) -> void:
 	## Late joiner only — pull them into the live shift with the same seed.
+	var sid := multiplayer.get_remote_sender_id()
+	if sid != 0 and sid != 1:
+		return
 	session_active = true
 	last_session_seed = session_seed
 	session_start_requested.emit(session_seed)
@@ -588,15 +674,24 @@ func _clear_peer_only() -> void:
 
 func _on_peer_connected(id: int) -> void:
 	peers_ready[id] = false
+	## New cook joins unreadied — clear everyone's Ready so the party re-confirms.
+	if role == Role.HOST and not session_active:
+		for pid in connected_peer_ids():
+			peers_ready[int(pid)] = false
+		peers_ready[id] = false
 	if role == Role.HOST:
 		if session_active:
 			chat_flash.emit("Cook joined mid-shift — syncing kitchen...", Color("81C784"))
 			_rpc_join_in_progress.rpc_id(id, last_session_seed)
 		else:
 			chat_flash.emit("Cook joined room %s! (%d/%d)" % [room_code, peer_count(), MAX_PLAYERS], Color("81C784"))
+			_broadcast_lobby_ready()
 		if not online_mode:
 			_write_local_room()
 			_broadcast_room()
+		## Full at 4 — stop taking more seats until someone leaves.
+		if peer_count() >= MAX_PLAYERS and multiplayer.multiplayer_peer != null:
+			multiplayer.multiplayer_peer.refuse_new_connections = true
 	announce_player_name()
 	connection_changed.emit()
 	peer_ready_changed.emit()
@@ -606,9 +701,14 @@ func _on_peer_disconnected(id: int) -> void:
 	peers_ready.erase(id)
 	peer_names.erase(id)
 	chat_flash.emit("Cook left the truck", Color("EF5350"))
-	if role == Role.HOST and not online_mode:
-		_write_local_room()
-		_broadcast_room()
+	if role == Role.HOST:
+		if multiplayer.multiplayer_peer != null:
+			multiplayer.multiplayer_peer.refuse_new_connections = peer_count() >= MAX_PLAYERS
+		if not session_active:
+			_broadcast_lobby_ready()
+		if not online_mode:
+			_write_local_room()
+			_broadcast_room()
 	connection_changed.emit()
 	peer_ready_changed.emit()
 
