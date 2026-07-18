@@ -643,9 +643,9 @@ const SODA_FLAVOR_LABELS: Dictionary = {
 	"orange": "ORANGE",
 }
 const SODA_FLAVOR_COLORS: Dictionary = {
-	"cola": Color(0.42, 0.14, 0.10),
-	"lemon_lime": Color(0.55, 0.82, 0.22),
-	"orange": Color(0.95, 0.48, 0.12),
+	"cola": Color(0.28, 0.08, 0.05),
+	"lemon_lime": Color(0.45, 0.78, 0.18),
+	"orange": Color(0.92, 0.42, 0.08),
 }
 const CUP_HOLD_HEIGHT := 0.04 ## low seat under fountain (was too high mid-tap)
 const CUP_SHELL_H := 0.21 ## tall clear cup
@@ -9488,15 +9488,17 @@ func _refresh_cup_visuals() -> void:
 				liq.cap_bottom = true
 			cup_liquid_mesh.position.y = h * 0.5
 			if cup_liquid_mat != null:
-				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.4, 0.2, 0.15))
-				col.a = 0.94
+				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+				## Solid tinted soda — no glow wash (emission made cola read as white).
+				col.a = 0.96
 				cup_liquid_mat.albedo_color = col
-				cup_liquid_mat.emission_enabled = true
-				cup_liquid_mat.emission = col.lightened(0.08)
-				cup_liquid_mat.emission_energy_multiplier = 0.28
-				cup_liquid_mat.roughness = 0.07
-				cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-				cup_liquid_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+				cup_liquid_mat.emission_enabled = false
+				cup_liquid_mat.emission_energy_multiplier = 0.0
+				cup_liquid_mat.roughness = 0.22
+				cup_liquid_mat.metallic = 0.0
+				## Single-sided + both caps: looking down shows the colored top, not milky doubles.
+				cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_BACK
+				cup_liquid_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 				cup_liquid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			## Splash disc sits just above the filled volume (tilts independently).
 			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
@@ -9506,13 +9508,17 @@ func _refresh_cup_visuals() -> void:
 					cup_surface_pivot.position.y = h + 0.002
 				var sm := cup_liquid_surface.material_override as StandardMaterial3D
 				if sm:
-					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.4, 0.2, 0.15))
-					sc = sc.lightened(0.35)
-					sc.a = 0.78
+					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
+					## Slight highlight only — keep cola dark brown, not pink/white.
+					sc = sc.lightened(0.12)
+					sc.a = 0.9
 					sm.albedo_color = sc
-					sm.emission = sc
-					sm.emission_energy_multiplier = 0.22
-					sm.cull_mode = BaseMaterial3D.CULL_DISABLED
+					sm.emission_enabled = false
+					sm.emission_energy_multiplier = 0.0
+					sm.roughness = 0.15
+					sm.metallic = 0.0
+					sm.cull_mode = BaseMaterial3D.CULL_BACK
+					sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 				var surf := cup_liquid_surface.mesh as CylinderMesh
 				if surf:
 					var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
