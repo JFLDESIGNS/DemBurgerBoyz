@@ -555,7 +555,7 @@ const STRIP_GFX_KEYS: Array[String] = [
 const BUILD_GFX_KEYS: Array[String] = BUILD_ZONE_GFX_KEYS + PREP_GFX_KEYS + STRIP_GFX_KEYS
 const BUILD_DEBUG_OUTLINE_COLOR := Color(1.0, 0.1, 0.1, 0.95)
 const GRILL_POWER_ROW_BOTTOM := 112.0 ## px above screen bottom — centered on grill
-const GRILL_POWER_ROW_WIDTH := 268.0 ## burner + gap + garbage button widths
+const GRILL_POWER_ROW_WIDTH := 214.0 ## burner + gap + garbage (~20% smaller)
 ## Kenney / Sketchfab truck radio — replaces procedural CabRadio mesh.
 const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
 const RADIO_TEX_ALBEDO := "res://models/RADIO/textures/RADIO_SCETC_FAB_albedo.tga.png"
@@ -569,7 +569,7 @@ const RADIO_WORLD_NUDGE := Vector3(0.07, 0.0, 0.0)
 const RADIO_UI_ANCHOR := Vector2(0.54, 0.38) ## point on 2D panel the 3D model tracks
 const RADIO_TARGET_SIZE := 0.52
 const RADIO_UI_PANEL_SIZE := Vector2(200.0, 0.0) ## width locked; height hugs content
-const RADIO_UI_TOP := 52.0
+const RADIO_UI_TOP := 82.0 ## was 52 — nudged down 30px with phone
 const RADIO_UI_RIGHT := 10.0
 const RADIO_UI_LEFT := 210.0 ## panel width + right margin
 ## Android phone HUD — floats under the truck radio.
@@ -2910,18 +2910,18 @@ func _build_grill_burner_ui() -> void:
 
 	var btn := Button.new()
 	btn.text = "BURNER: OFF"
-	btn.custom_minimum_size = Vector2(140, 28)
+	btn.custom_minimum_size = Vector2(112, 22)
 	btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(btn, true, 13)
+	UiFontsScript.apply_button(btn, true, 10)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.35, 0.12, 0.1)
-	sb.set_corner_radius_all(10)
+	sb.set_corner_radius_all(8)
 	sb.set_border_width_all(2)
 	sb.border_color = Color(0.7, 0.25, 0.15)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
+	sb.content_margin_left = 11
+	sb.content_margin_right = 11
+	sb.content_margin_top = 5
+	sb.content_margin_bottom = 5
 	btn.add_theme_stylebox_override("normal", sb)
 	var hover := sb.duplicate()
 	hover.bg_color = Color(0.48, 0.16, 0.12)
@@ -2936,18 +2936,18 @@ func _build_grill_burner_ui() -> void:
 	var trash := Button.new()
 	trash.text = "🗑 GARBAGE"
 	trash.tooltip_text = "Drag a Build topping or patty here to toss it"
-	trash.custom_minimum_size = Vector2(120, 28)
+	trash.custom_minimum_size = Vector2(96, 22)
 	trash.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(trash, true, 13)
+	UiFontsScript.apply_button(trash, true, 10)
 	var tsb := StyleBoxFlat.new()
 	tsb.bg_color = Color(0.22, 0.22, 0.24)
-	tsb.set_corner_radius_all(10)
+	tsb.set_corner_radius_all(8)
 	tsb.set_border_width_all(2)
 	tsb.border_color = Color(0.55, 0.55, 0.58)
-	tsb.content_margin_left = 12
-	tsb.content_margin_right = 12
-	tsb.content_margin_top = 6
-	tsb.content_margin_bottom = 6
+	tsb.content_margin_left = 10
+	tsb.content_margin_right = 10
+	tsb.content_margin_top = 5
+	tsb.content_margin_bottom = 5
 	trash.add_theme_stylebox_override("normal", tsb)
 	var thov := tsb.duplicate()
 	thov.bg_color = Color(0.38, 0.18, 0.16)
@@ -2992,7 +2992,7 @@ func _layout_grill_power_row_centered() -> void:
 	grill_power_row.offset_left = -half_w
 	grill_power_row.offset_right = half_w
 	grill_power_row.offset_bottom = -GRILL_POWER_ROW_BOTTOM
-	grill_power_row.offset_top = grill_power_row.offset_bottom - 32.0
+	grill_power_row.offset_top = grill_power_row.offset_bottom - 26.0
 	grill_power_row.z_index = 8
 
 
@@ -11056,8 +11056,8 @@ func _layout_top_bar_hud() -> void:
 	top_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	top_bar.offset_left = -320.0
 	top_bar.offset_right = -12.0
-	top_bar.offset_top = 8.0
-	top_bar.offset_bottom = 48.0
+	top_bar.offset_top = 23.0
+	top_bar.offset_bottom = 63.0
 	top_bar.alignment = BoxContainer.ALIGNMENT_END
 	if hud_day != null and is_instance_valid(hud_day):
 		top_bar.move_child(hud_day, 0)
