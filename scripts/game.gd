@@ -1447,13 +1447,13 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not playing:
 		return
-	## While Options is up, only Esc / F10 reach the handlers below.
+	## Options is up — skip gameplay grabs, but do NOT mark mouse as handled
+	## or the Options / Graphics buttons never receive clicks.
 	if options_menu_open:
 		var is_menu_key := false
 		if event is InputEventKey and event.pressed and not event.echo:
 			is_menu_key = event.keycode == KEY_ESCAPE or event.keycode == KEY_F10
 		if not is_menu_key:
-			get_viewport().set_input_as_handled()
 			return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
@@ -9752,9 +9752,23 @@ func _set_graphics_menu_open(open: bool) -> void:
 		return
 	gfx_panel.visible = open
 	if open:
-		var ui_root: Control = get_node_or_null("UI/Root")
-		if ui_root != null and gfx_panel.get_parent() == ui_root:
-			ui_root.move_child(gfx_panel, ui_root.get_child_count() - 1)
+		## Keep graphics above the Options dim so it isn't buried / unclickable.
+		if options_root != null and is_instance_valid(options_root):
+			if gfx_panel.get_parent() != options_root:
+				gfx_panel.reparent(options_root)
+			options_root.move_child(gfx_panel, options_root.get_child_count() - 1)
+			gfx_panel.z_index = 20
+		else:
+			var ui_root: Control = get_node_or_null("UI/Root")
+			if ui_root != null and gfx_panel.get_parent() == ui_root:
+				ui_root.move_child(gfx_panel, ui_root.get_child_count() - 1)
+		## Nudge centered over the options panel.
+		gfx_panel.set_anchors_preset(Control.PRESET_CENTER)
+		gfx_panel.offset_left = -200.0
+		gfx_panel.offset_right = 200.0
+		gfx_panel.offset_top = -300.0
+		gfx_panel.offset_bottom = 300.0
+		_flash("Graphics settings", Color("90CAF9"))
 
 
 func _build_options_menu() -> void:
