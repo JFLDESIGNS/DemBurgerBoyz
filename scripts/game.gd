@@ -10959,6 +10959,52 @@ func _find_ready_drink_for_soda(soda_id: String) -> Node3D:
 	return null
 
 
+func _count_ready_drinks_for_flavor(flavor: String) -> int:
+	if flavor == "":
+		return 0
+	var n := 0
+	for c in parked_cups:
+		if c == null or not is_instance_valid(c):
+			continue
+		if float(c.get_meta("soda_fill", 0.0)) >= 0.82 and str(c.get_meta("flavor", "")) == flavor:
+			n += 1
+	if cup_root != null and is_instance_valid(cup_root) and cup_soda_fill >= 0.82 and cup_flavor == flavor:
+		n += 1
+	return n
+
+
+func _customers_waiting_for_soda(soda_id: String) -> Array:
+	## Queue order: one poured cup may only satisfy one waiting soda line.
+	var want := GameDataScript.soda_flavor_from_order_id(soda_id)
+	var out: Array = []
+	if want == "":
+		return out
+	for c in customers:
+		if c == null or not is_instance_valid(c) or not c.is_waiting:
+			continue
+		if _customer_soda_handed(c):
+			continue
+		var sodas: Array = GameDataScript.order_soda_ids(c.order)
+		if sodas.is_empty():
+			continue
+		if GameDataScript.soda_flavor_from_order_id(str(sodas[0])) == want:
+			out.append(c)
+	return out
+
+
+func _customer_can_claim_soda(customer: Node3D, soda_id: String) -> bool:
+	## True only if this ticket has an exclusive ready cup reserved for it.
+	if customer == null or not is_instance_valid(customer):
+		return false
+	var want := GameDataScript.soda_flavor_from_order_id(soda_id)
+	var ready := _count_ready_drinks_for_flavor(want)
+	if ready <= 0:
+		return false
+	var needing := _customers_waiting_for_soda(soda_id)
+	var idx := needing.find(customer)
+	return idx >= 0 and idx < ready
+
+
 func _nearest_cup_at_screen(screen_pos: Vector2) -> Node3D:
 	if camera == null:
 		return null
@@ -13088,14 +13134,12 @@ func _complete_early_drink_hand(customer: Node3D, flavor: String, consume_local:
 		_mark_customer_soda_handed(customer, true)
 	## Consume only when this peer actually had the drink (host pourer / matching tray).
 	if consume_local:
-		selected_customer = customer
-		_consume_cup_for_serve()
+		_consume_cup_for_serve(customer)
 	else:
 		## Remote: drop a matching tray cup if bootstrap/park sync left one.
 		var soda_id := "soda_%s" % flavor
 		if _find_ready_drink_for_soda(soda_id) != null:
-			selected_customer = customer
-			_consume_cup_for_serve()
+			_consume_cup_for_serve(customer)
 	_refresh_ticket_checkmarks()
 	_update_hud()
 	if not _mp_applying:
@@ -17373,7 +17417,8 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 	if GameDataScript.is_soda_item(line_id):
 		if _customer_soda_handed(customer):
 			return true
-		return _cup_matches_soda_order_id(line_id)
+		## One cup must not check off every matching ticket.
+		return _customer_can_claim_soda(customer, line_id)
 	match line_id:
 		"double_patty":
 			var n := 0
@@ -17399,15 +17444,18 @@ func _cup_ready_for_order(order: Array, customer: Node3D = null) -> bool:
 	## Already handed the drink to their face — burger can finish without another pour.
 	if _customer_soda_handed(customer):
 		return true
-	## One fountain drink per ticket — match the first soda line.
-	return _cup_matches_soda_order_id(str(sodas[0]))
+	## One fountain drink per ticket — only if this customer uniquely claims a cup.
+	return _customer_can_claim_soda(customer, str(sodas[0]))
 
 
-func _consume_cup_for_serve() -> void:
+func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	## Hand off a matching ready drink with the order (parked tray cup preferred).
 	var target: Node3D = null
-	if selected_customer != null and is_instance_valid(selected_customer):
-		var sodas: Array = GameDataScript.order_soda_ids(selected_customer.order)
+	var cust: Node3D = for_customer
+	if cust == null or not is_instance_valid(cust):
+		cust = selected_customer
+	if cust != null and is_instance_valid(cust):
+		var sodas: Array = GameDataScript.order_soda_ids(cust.order)
 		if not sodas.is_empty():
 			target = _find_ready_drink_for_soda(str(sodas[0]))
 	if target == null:
@@ -20218,13 +20266,9 @@ func _try_auto_serve() -> void:
 		if not _cup_ready_for_order(cust.order, cust):
 			continue
 		if GameDataScript.is_soda_only_order(cust.order):
-			_auto_serving = true
-			selected_customer = cust
-			_highlight_tickets()
-			_on_serve()
-			if not _serve_fly_busy:
-				_auto_serving = false
-			return
+			## Never auto-complete drink-only tickets — that stole cups from other
+			## soda lines and could finish the wrong order mid-pour.
+			continue
 		var si := _find_perfect_station_for(cust.order)
 		if si < 0:
 			continue
@@ -20997,10 +21041,16 @@ func _spawn_serve_crumb_burst(parent: Control, at: Vector2) -> void:
 		ctw.chain().tween_callback(crumb.queue_free)
 
 
-func _complete_serve(station_index: int) -> void:
+func _complete_serve(station_index: int, customer: Node3D = null) -> void:
+	var cust: Node3D = customer
+	if cust == null or not is_instance_valid(cust):
+		cust = selected_customer
+	if cust == null or not is_instance_valid(cust):
+		return
+	selected_customer = cust
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
-	var result: Dictionary = GameDataScript.compare_orders(items, selected_customer.order)
+	var result: Dictionary = GameDataScript.compare_orders(items, cust.order)
 
 	var patty_mult := 1.0
 	var patties: Array = st["patties"]
@@ -21013,9 +21063,9 @@ func _complete_serve(station_index: int) -> void:
 				n += 1
 		if n > 0:
 			patty_mult = sum / float(n)
-	var tip_factor: float = selected_customer.patience_ratio()
+	var tip_factor: float = cust.patience_ratio()
 	var fresh_r := _station_freshness_ratio(station_index)
-	var cook_r := _station_cook_rating(station_index, selected_customer)
+	var cook_r := _station_cook_rating(station_index, cust)
 	var seasoned := _station_burgers_seasoned(station_index)
 	patty_mult *= float(cook_r.get("pay_mul", 1.0))
 	## Perfect toasted buns (~2s) bump payout; burnt toast hurts it.
@@ -21041,15 +21091,15 @@ func _complete_serve(station_index: int) -> void:
 				"text": "Meh… OK",
 			}
 	var guest_mp := mp_enabled and not NetManager.is_host()
-	var pay: Dictionary = selected_customer.receive_burger(
+	var pay: Dictionary = cust.receive_burger(
 		items, patty_mult, combo, tip_factor, fresh_r, seasoned
 	)
 	var payout: int = int(pay.get("total", 0))
 	var tip_amt: int = int(pay.get("tip", 0))
 	var was_meh: bool = bool(pay.get("meh", false)) or not seasoned
 	var cook_bit := "  %s" % cook_r["text"]
-	if selected_customer.has_method("stop_order_clock"):
-		selected_customer.stop_order_clock()
+	if cust.has_method("stop_order_clock"):
+		cust.stop_order_clock()
 
 	## Host/solo owns money + combo; guests keep FX/flashes then take economy sync.
 	if payout > 0:
@@ -21119,12 +21169,10 @@ func _complete_serve(station_index: int) -> void:
 			review_kind = "angry"
 		_maybe_record_social_review(review_stars, review_kind, tip_amt, station_index)
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
-	if selected_customer != null and is_instance_valid(selected_customer) \
-			and not GameDataScript.order_soda_ids(selected_customer.order).is_empty() \
-			and not _customer_soda_handed(selected_customer):
-		_consume_cup_for_serve()
-	if selected_customer != null and is_instance_valid(selected_customer):
-		_mark_customer_soda_handed(selected_customer, false)
+	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
+			and not _customer_soda_handed(cust):
+		_consume_cup_for_serve(cust)
+	_mark_customer_soda_handed(cust, false)
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
@@ -21212,41 +21260,47 @@ func _begin_soda_only_serve(customer: Node3D) -> void:
 		customer.dialogue_open = false
 	if game_audio and game_audio.has_method("play_order_up"):
 		game_audio.play_order_up()
-	_play_cup_fly_to_mouth(customer, func() -> void: _complete_soda_only_serve())
+	var cust: Node3D = customer
+	_play_cup_fly_to_mouth(cust, func() -> void: _complete_soda_only_serve(cust))
 
 
-func _complete_soda_only_serve() -> void:
-	if selected_customer == null or not is_instance_valid(selected_customer):
+func _complete_soda_only_serve(customer: Node3D = null) -> void:
+	var cust: Node3D = customer
+	if cust == null or not is_instance_valid(cust):
+		cust = selected_customer
+	if cust == null or not is_instance_valid(cust):
 		return
-	var order: Array = selected_customer.order
+	selected_customer = cust
+	var order: Array = cust.order
 	var guest_mp := mp_enabled and not NetManager.is_host()
 	## Fake a perfect empty burger build — compare_orders treats drink-only as perfect.
-	var pay: Dictionary = selected_customer.receive_burger(
-		[], 1.0, combo, selected_customer.patience_ratio(), 1.0, true
+	var pay: Dictionary = cust.receive_burger(
+		[], 1.0, combo, cust.patience_ratio(), 1.0, true
 	)
 	var payout: int = int(pay.get("total", 0))
 	## Ensure drink-only still pays at least the soda value.
 	if payout <= 0 and not guest_mp:
-		payout = maxi(3, int(selected_customer.order_value))
-	if selected_customer.has_method("stop_order_clock"):
-		selected_customer.stop_order_clock()
+		payout = maxi(3, int(cust.order_value))
+	if cust.has_method("stop_order_clock"):
+		cust.stop_order_clock()
 	if payout > 0 and not guest_mp:
 		money += payout
 		total_served += 1
 		combo += 1
 		perfect_serves += 1
-	_consume_cup_for_serve()
+	_consume_cup_for_serve(cust)
 	var soda_lab := "SODA"
 	var sodas: Array = GameDataScript.order_soda_ids(order)
 	if not sodas.is_empty():
 		soda_lab = str(GameDataScript.INGREDIENT_LABELS.get(sodas[0], "Soda")).to_upper()
 	_flash("+%s  %s up!" % [_format_money(float(payout)), soda_lab], Color("80DEEA"))
-	if selected_customer.has_method("complete_serve"):
-		selected_customer.complete_serve(payout)
-	elif selected_customer.has_method("leave_happy"):
-		selected_customer.leave_happy()
-		_on_customer_left(selected_customer, false)
-	selected_customer = null
+	if cust.has_method("complete_serve"):
+		cust.complete_serve(payout)
+	elif cust.has_method("leave_happy"):
+		cust.leave_happy()
+		_on_customer_left(cust, false)
+	if selected_customer == cust:
+		selected_customer = null
 	_highlight_tickets()
 	_update_hud()
 	_refresh_ticket_checkmarks()
@@ -21325,13 +21379,13 @@ func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> vo
 		var si := station_index
 		if crowned_for_serve:
 			_animate_top_bun_on_station(si, func() -> void:
-				_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si))
+				_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si, cust))
 			)
 		else:
-			_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si))
+			_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si, cust))
 		return
 
-	_complete_serve(station_index)
+	_complete_serve(station_index, customer)
 
 
 func _mp_force_finish_customer(customer: Node3D) -> void:
