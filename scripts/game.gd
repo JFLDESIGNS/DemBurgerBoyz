@@ -705,8 +705,8 @@ const CUP_SHELL_BOT_R := 0.0594
 const CUP_LIQUID_MAX_H := 0.1458
 const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
 const CUP_LIQUID_BOT_R := 0.0558
-## Liquid sits above the plastic floor — thin empty sliver of cup at the bottom.
-const CUP_LIQUID_FLOOR_Y := 0.026
+## Thin empty sliver under the pop — keep liquid near the plastic floor.
+const CUP_LIQUID_FLOOR_Y := 0.008
 const CUP_FILL_RATE := 0.95
 const CUP_SPOUT_REACH := 0.55
 const CUP_ICE_CUBE_INTERVAL := 0.065
@@ -739,7 +739,7 @@ const CUP_BUBBLE_AMOUNT := 34
 const CUP_LIQUID_BUBBLE_COUNT := 36
 const CUP_LIQUID_BUBBLE_TOP_COUNT := 6 ## linger near foam and fade in place
 const CUP_LIQUID_BUBBLE_RISE_COUNT := 14 ## bottom → top risers in the pop body
-const CUP_LIQUID_BUBBLE_SIZE := 0.0042 ## subtle carbonation pearls
+const CUP_LIQUID_BUBBLE_SIZE := 0.0024 ## tiny carbonation pearls
 const CUP_TRAY_SPACING := 0.20 ## gap between parked drinks on the drip tray
 const CUP_DRAW_PRIORITY := 10 ## Above grill shine (render_priority 2).
 const SUPPLY_IDS: Array[String] = [
@@ -10083,11 +10083,15 @@ func _make_soda_metal_mat(col: Color, metallic: float, roughness: float) -> Stan
 
 
 func _add_soda_face_flavor_hint(station: Node3D) -> void:
-	## Raised metal lettering on the big grey pour face.
-	var metal := _make_soda_metal_mat(Color(0.88, 0.90, 0.94), 0.98, 0.12)
-	metal.emission_enabled = true
-	metal.emission = Color(0.35, 0.38, 0.42)
-	metal.emission_energy_multiplier = 0.18
+	## Thin glossy black lettering on the pour face — easy to read on grey steel.
+	var gloss := StandardMaterial3D.new()
+	gloss.albedo_color = Color(0.04, 0.04, 0.045)
+	gloss.metallic = 0.92
+	gloss.roughness = 0.12
+	gloss.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	gloss.clearcoat_enabled = true
+	gloss.clearcoat = 0.85
+	gloss.clearcoat_roughness = 0.08
 	var lines: Array[String] = ["CLICK FLAVOR ABOVE", "TO SWITCH"]
 	var y0 := 0.405
 	for i in lines.size():
@@ -10097,14 +10101,14 @@ func _add_soda_face_flavor_hint(station: Node3D) -> void:
 		tm.text = lines[i]
 		tm.font_size = 40
 		tm.pixel_size = 0.00105
-		tm.depth = 0.007
+		tm.depth = 0.0022
 		tm.curve_step = 0.5
 		tm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		tm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		letter.mesh = tm
 		## Sit just proud of the face front (face z=0.225, depth 0.05 → front ≈ 0.25).
-		letter.position = Vector3(0.0, y0 - float(i) * 0.048, 0.254)
-		letter.material_override = metal
+		letter.position = Vector3(0.0, y0 - float(i) * 0.048, 0.252)
+		letter.material_override = gloss
 		letter.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		station.add_child(letter)
 
@@ -10380,8 +10384,6 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 	var chrome := _make_soda_metal_mat(Color(0.72, 0.75, 0.80), 0.94, 0.16)
 	var chrome_dark := _make_soda_metal_mat(Color(0.38, 0.40, 0.45), 0.88, 0.28)
-	var plastic := _make_soda_metal_mat(Color(0.88, 0.90, 0.93), 0.15, 0.42)
-	plastic.metallic = 0.08
 
 	## Grab cup bottom sits here; decorative nest stacks above it.
 	var stack_base := Vector3(0.0, -0.12, 0.06)
@@ -10439,36 +10441,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	hood_lip.material_override = chrome_dark
 	rack.add_child(hood_lip)
 
-	## Retainer ring catches the bottom cup near the rim (classic pull dispenser).
-	var collar := MeshInstance3D.new()
-	collar.name = "Retainer"
-	var collar_mesh := TorusMesh.new()
-	collar_mesh.inner_radius = CUP_SHELL_TOP_R * 0.94
-	collar_mesh.outer_radius = CUP_SHELL_TOP_R * 1.22
-	collar_mesh.rings = 10
-	collar_mesh.ring_segments = 22
-	collar.mesh = collar_mesh
-	collar.position = Vector3(stack_base.x, stack_base.y + CUP_SHELL_H * 0.88, stack_base.z)
-	collar.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	collar.material_override = plastic
-	rack.add_child(collar)
-	## Small spring fingers under the ring so it reads as a real dispenser latch.
-	for ang_i in 4:
-		var finger := MeshInstance3D.new()
-		finger.name = "Finger_%d" % ang_i
-		var fmesh := BoxMesh.new()
-		fmesh.size = Vector3(0.018, 0.006, 0.028)
-		finger.mesh = fmesh
-		var ang := float(ang_i) * TAU * 0.25 + 0.4
-		var fr := CUP_SHELL_TOP_R * 1.02
-		finger.position = collar.position + Vector3(cos(ang) * fr, -0.01, sin(ang) * fr)
-		finger.rotation_degrees = Vector3(0.0, rad_to_deg(-ang), 12.0)
-		finger.material_override = chrome_dark
-		rack.add_child(finger)
-
-	## Nested decorative cups above the grabable one — same mesh/size.
+	## Nested decorative cups above the grabable one — same mesh/size (no extra rim rings).
 	var stack_mat := _make_clear_cup_material(0.16)
-	var rim_mat := _make_clear_cup_material(0.28)
 	for i in spare_count:
 		var nest_y := float(i + 1) * nest_step
 		var spare := MeshInstance3D.new()
@@ -10478,17 +10452,6 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 		spare.material_override = stack_mat
 		spare.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		rack.add_child(spare)
-		var rim := MeshInstance3D.new()
-		rim.name = "SpareRim_%d" % i
-		var rim_mesh := TorusMesh.new()
-		var lip := 0.0038
-		rim_mesh.inner_radius = CUP_SHELL_TOP_R - lip
-		rim_mesh.outer_radius = CUP_SHELL_TOP_R + lip
-		rim.mesh = rim_mesh
-		rim.position = stack_base + Vector3(0.0, CUP_SHELL_H - 0.002 + nest_y, 0.0)
-		rim.material_override = rim_mat
-		rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		rack.add_child(rim)
 
 	## Face plaque with CUPS label (reads as part of the machine, not floating).
 	var plaque := MeshInstance3D.new()
@@ -10510,7 +10473,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_lab.outline_modulate = Color(0, 0, 0, 0.8)
 	rack.add_child(cup_lab)
 
-	## Grab volume covers the protruding bottom cup + retainer.
+	## Grab volume covers the protruding bottom cup.
 	var rack_grab := Area3D.new()
 	rack_grab.name = "CupRackGrab"
 	rack_grab.input_ray_pickable = true
@@ -10526,7 +10489,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack_grab.add_child(rack_shape)
 	rack.add_child(rack_grab)
 
-	## Grabable empty sits in the retainer — same size as the decorative nest above it.
+	## Grabable empty sits at the bottom of the nest — same size as the decorative cups.
 	cup_home = station.to_global(rack.position + stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
@@ -11085,27 +11048,29 @@ void fragment() {
 	vec3 warm_core = mix(col.rgb, warm_color.rgb, 0.68);
 	col.rgb = mix(edge, warm_core, core * warm_strength * 0.72);
 
-	// Subtle carbonation flecks drifting through the body of the pop.
+	// Subtle round carbonation flecks (angle + height — not xz-only, which streaked).
 	float body_mask = smoothstep(0.06, 0.18, t) * (1.0 - smoothstep(0.88, 0.98, t));
 	body_mask *= (1.0 - bottom_cap) * (1.0 - smoothstep(0.55, 0.95, wn.y));
 	float bub = 0.0;
 	float clock = TIME * time_scale;
+	float ang = atan(v_local_pos.z, v_local_pos.x);
 	for (int i = 0; i < 3; i++) {
 		float fi = float(i);
-		vec2 cell = v_local_pos.xz * (38.0 + fi * 11.0) + vec2(0.0, clock * (0.35 + fi * 0.18));
+		vec2 cell = vec2(ang * (9.0 + fi * 2.5), v_local_pos.y * (72.0 + fi * 18.0));
+		cell.y += clock * (0.55 + fi * 0.22);
 		vec2 id = floor(cell);
 		vec2 f = fract(cell) - 0.5;
 		float h = hash21(id + fi * 17.0);
-		float rise = fract(h + clock * (0.12 + fi * 0.05));
-		vec2 jitter = vec2(h - 0.5, fract(h * 7.13) - 0.5) * 0.35;
+		float rise = fract(h + clock * (0.08 + fi * 0.04));
+		vec2 jitter = vec2(h - 0.5, fract(h * 7.13) - 0.5) * 0.28;
 		float d = length(f - jitter);
-		float spot = smoothstep(0.16, 0.04, d) * smoothstep(0.0, 0.15, rise) * smoothstep(1.0, 0.7, rise);
-		bub += spot * (0.55 + 0.45 * h);
+		float spot = smoothstep(0.085, 0.022, d) * smoothstep(0.0, 0.12, rise) * smoothstep(1.0, 0.75, rise);
+		bub += spot * (0.45 + 0.4 * h);
 	}
 	bub = clamp(bub * body_mask * bubble_amt, 0.0, 1.0);
-	vec3 pearl = mix(col.rgb * 1.35, vec3(0.95, 0.92, 0.88), 0.55);
-	col.rgb = mix(col.rgb, pearl, bub * 0.42);
-	col.a = mix(col.a, min(1.0, col.a + 0.08), bub * 0.35);
+	vec3 pearl = mix(col.rgb * 1.25, vec3(0.95, 0.92, 0.88), 0.45);
+	col.rgb = mix(col.rgb, pearl, bub * 0.28);
+	col.a = mix(col.a, min(1.0, col.a + 0.05), bub * 0.25);
 
 	ALBEDO = col.rgb;
 	ALPHA = col.a;
@@ -11168,8 +11133,8 @@ func _apply_soda_liquid_gradient(
 	mat.set_shader_parameter("bottom_fade_start", -0.11)
 	mat.set_shader_parameter("bottom_fade_end", 0.03)
 	## Soft in-volume carbonation (shader flecks) — always on for filled pop.
-	mat.set_shader_parameter("bubble_amt", 0.62 if cup_flavor == "cola" else 0.48)
-	mat.set_shader_parameter("time_scale", 1.0)
+	mat.set_shader_parameter("bubble_amt", 0.38 if cup_flavor == "cola" else 0.32)
+	mat.set_shader_parameter("time_scale", 0.85)
 
 
 func _apply_soda_surface_look(
@@ -11345,7 +11310,7 @@ func _seed_liq_bubble(i: int, liquid_h: float, top_r: float, bot_r: float) -> vo
 		var rad := r_at * randf_range(0.72, 0.96)
 		_liq_bubble_pos[i] = Vector3(cos(ang) * rad, y, sin(ang) * rad)
 		_liq_bubble_spd[i] = 0.0
-		_liq_bubble_scl[i] = randf_range(0.7, 1.15)
+		_liq_bubble_scl[i] = randf_range(0.55, 0.85)
 	elif kind == 1:
 		## Rise from the bottom toward the cream band.
 		var t := randf_range(0.05, 0.22)
@@ -11353,8 +11318,8 @@ func _seed_liq_bubble(i: int, liquid_h: float, top_r: float, bot_r: float) -> vo
 		var r_at := lerpf(bot_r, top_r, clampf(y / maxf(liquid_h, 0.01), 0.0, 1.0)) * 0.70
 		var rad := r_at * randf_range(0.1, 0.85)
 		_liq_bubble_pos[i] = Vector3(cos(ang) * rad, y, sin(ang) * rad)
-		_liq_bubble_spd[i] = randf_range(0.028, 0.055)
-		_liq_bubble_scl[i] = randf_range(0.55, 0.95)
+		_liq_bubble_spd[i] = randf_range(0.022, 0.042)
+		_liq_bubble_scl[i] = randf_range(0.4, 0.7)
 	else:
 		## Mid-drink fizz that drifts around.
 		var t := randf_range(0.22, 0.78)
@@ -11362,8 +11327,8 @@ func _seed_liq_bubble(i: int, liquid_h: float, top_r: float, bot_r: float) -> vo
 		var r_at := lerpf(bot_r, top_r, clampf(y / maxf(liquid_h, 0.01), 0.0, 1.0)) * 0.68
 		var rad := r_at * randf_range(0.1, 0.9)
 		_liq_bubble_pos[i] = Vector3(cos(ang) * rad, y, sin(ang) * rad)
-		_liq_bubble_spd[i] = randf_range(0.012, 0.028)
-		_liq_bubble_scl[i] = randf_range(0.7, 1.15)
+		_liq_bubble_spd[i] = randf_range(0.01, 0.022)
+		_liq_bubble_scl[i] = randf_range(0.45, 0.75)
 
 
 func _update_cup_liquid_bubbles(delta: float) -> void:
@@ -12649,9 +12614,11 @@ func _layout_cup_ice_cubes(count: int) -> void:
 
 
 func _put_cup_down() -> void:
-	## Release LMB / Esc — trash, melt on hot grill, or park on the drip tray.
+	## Release LMB / Esc — trash, hand to customer face, melt on hot grill, or park.
 	if cup_held and _is_over_garbage(get_viewport().get_mouse_position()):
 		_trash_held_cup()
+		return
+	if cup_held and _try_hand_drink_to_customer_face(get_viewport().get_mouse_position()):
 		return
 	if cup_held and cup_root != null and is_instance_valid(cup_root) \
 			and _is_on_grill_surface(cup_root.global_position):
@@ -12662,6 +12629,116 @@ func _put_cup_down() -> void:
 		_begin_cup_melt_on_grill()
 		return
 	_park_cup_on_tray(true)
+
+
+func _customer_soda_handed(customer: Node3D) -> bool:
+	return customer != null and is_instance_valid(customer) and bool(customer.get_meta("soda_handed", false))
+
+
+func _mark_customer_soda_handed(customer: Node3D, handed: bool = true) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	customer.set_meta("soda_handed", handed)
+
+
+func _customer_wants_flavor(customer: Node3D, flavor: String) -> bool:
+	if customer == null or not is_instance_valid(customer) or flavor == "":
+		return false
+	for sid in GameDataScript.order_soda_ids(customer.order):
+		if GameDataScript.soda_flavor_from_order_id(str(sid)) == flavor:
+			return true
+	return false
+
+
+func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
+	## Drag a full drink onto a waiting customer's face to hand it off early.
+	if not playing or not cup_held or _serve_fly_busy:
+		return false
+	if cup_root == null or not is_instance_valid(cup_root):
+		return false
+	if cup_soda_fill < 0.82 or cup_flavor == "":
+		return false
+	var cust := _find_waiting_customer_at_mouth(screen_pos)
+	if cust == null or not _customer_wants_flavor(cust, cup_flavor):
+		return false
+	if _customer_soda_handed(cust):
+		_flash("They already have their drink", Color("B0BEC5"))
+		return false
+	## Drink-only ticket → full serve path.
+	if GameDataScript.is_soda_only_order(cust.order):
+		selected_customer = cust
+		_highlight_tickets()
+		cup_held = false
+		_hide_soda_stream()
+		if game_audio and game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(false)
+		_cup_pouring = false
+		if mp_enabled and not _mp_applying:
+			var cid := _customer_net_id(cust)
+			mp_serve.rpc(cid, -2)
+			return true
+		_begin_soda_only_serve(cust)
+		return true
+	## Burger + soda: hand the drink now, keep cooking the burger.
+	if mp_enabled and not _mp_applying:
+		var cid2 := _customer_net_id(cust)
+		var lab0: String = str(GameDataScript.INGREDIENT_LABELS.get("soda_%s" % cup_flavor, cup_flavor)).to_upper()
+		_flash("%s handed early — finish the burger!" % lab0, Color("80DEEA"))
+		mp_drink_hand.rpc(cid2, cup_flavor)
+		return true
+	_begin_early_drink_hand(cust, cup_flavor)
+	return true
+
+
+func _begin_early_drink_hand(customer: Node3D, flavor: String) -> void:
+	if customer == null or not is_instance_valid(customer) or not customer.is_waiting:
+		return
+	if _serve_fly_busy:
+		return
+	if _customer_soda_handed(customer):
+		return
+	selected_customer = customer
+	_highlight_tickets()
+	## Release hold so the fly can consume this cup cleanly.
+	cup_held = false
+	_hide_soda_stream()
+	if game_audio and game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(false)
+	_cup_vel = Vector3.ZERO
+	_cup_slosh = Vector2.ZERO
+	_cup_tilt = Vector2.ZERO
+	_cup_pouring = false
+	var soda_id := "soda_%s" % flavor
+	var has_local := false
+	if cup_root != null and is_instance_valid(cup_root) and cup_flavor == flavor and cup_soda_fill >= 0.82:
+		has_local = true
+	elif _find_ready_drink_for_soda(soda_id) != null:
+		has_local = true
+	var lab: String = str(GameDataScript.INGREDIENT_LABELS.get(soda_id, flavor)).to_upper()
+	if not _mp_applying:
+		_flash("%s handed early — finish the burger!" % lab, Color("80DEEA"))
+	## Peers without a local cup still play the toss + tick the order line.
+	_play_cup_fly_to_mouth(customer, func() -> void: _complete_early_drink_hand(customer, flavor, has_local))
+
+
+func _complete_early_drink_hand(customer: Node3D, flavor: String, consume_local: bool = true) -> void:
+	if customer != null and is_instance_valid(customer):
+		_mark_customer_soda_handed(customer, true)
+	## Consume only when this peer actually had the drink (host pourer / matching tray).
+	if consume_local:
+		selected_customer = customer
+		_consume_cup_for_serve()
+	else:
+		## Remote: drop a matching tray cup if bootstrap/park sync left one.
+		var soda_id := "soda_%s" % flavor
+		if _find_ready_drink_for_soda(soda_id) != null:
+			selected_customer = customer
+			_consume_cup_for_serve()
+	_refresh_ticket_checkmarks()
+	_update_hud()
+	if not _mp_applying:
+		var lab: String = str(GameDataScript.INGREDIENT_LABELS.get("soda_%s" % flavor, "Drink")).to_upper()
+		_flash("%s ✓ — burger still cooking" % lab, Color("A5D6A7"))
 
 
 func _trash_held_cup() -> void:
@@ -16513,6 +16590,7 @@ func _spawn_customer_local(
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
 	c.setup(typed_order, color, patience, lane, skin_idx, face_style)
+	c.set_meta("soda_handed", false)
 	## Guest customers are puppets — host owns patience expiry + leave.
 	if mp_enabled and not NetManager.is_host():
 		c.mp_host_driven = true
@@ -16918,8 +16996,10 @@ func _ticket_line_specs(order: Array) -> Array:
 	return lines
 
 
-func _ticket_line_is_done(line_id: String, built: Array) -> bool:
+func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null) -> bool:
 	if GameDataScript.is_soda_item(line_id):
+		if _customer_soda_handed(customer):
+			return true
 		return _cup_matches_soda_order_id(line_id)
 	match line_id:
 		"double_patty":
@@ -16939,9 +17019,12 @@ func _cup_matches_soda_order_id(soda_id: String) -> bool:
 	return _find_ready_drink_for_soda(soda_id) != null
 
 
-func _cup_ready_for_order(order: Array) -> bool:
+func _cup_ready_for_order(order: Array, customer: Node3D = null) -> bool:
 	var sodas: Array = GameDataScript.order_soda_ids(order)
 	if sodas.is_empty():
+		return true
+	## Already handed the drink to their face — burger can finish without another pour.
+	if _customer_soda_handed(customer):
 		return true
 	## One fountain drink per ticket — match the first soda line.
 	return _cup_matches_soda_order_id(str(sodas[0]))
@@ -17012,7 +17095,7 @@ func _refresh_ticket_checkmarks() -> void:
 			if not (row is Control) or not row.has_meta("line_id"):
 				continue
 			var line_id := str(row.get_meta("line_id"))
-			var done := _ticket_line_is_done(line_id, built)
+			var done := _ticket_line_is_done(line_id, built, cust)
 			var mark = row.get_node_or_null("Check")
 			var lab = row.get_node_or_null("Item")
 			if mark is Label:
@@ -19758,8 +19841,8 @@ func _try_auto_serve() -> void:
 			continue
 		waiting.append(c)
 	for cust in waiting:
-		## Don't auto-hand-off until any ordered soda is poured.
-		if not _cup_ready_for_order(cust.order):
+		## Don't auto-hand-off until any ordered soda is poured (or already handed).
+		if not _cup_ready_for_order(cust.order, cust):
 			continue
 		if GameDataScript.is_soda_only_order(cust.order):
 			_auto_serving = true
@@ -20350,10 +20433,12 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if customer != null and is_instance_valid(customer) and customer.has_method("begin_catch_burger"):
 		customer.begin_catch_burger()
 
-	## Ordered soda flies beside the burger.
+	## Ordered soda flies beside the burger (unless already handed to their face).
 	var with_soda := customer != null and is_instance_valid(customer) \
 			and not GameDataScript.order_soda_ids(customer.order).is_empty() \
-			and cup_soda_fill > 0.3
+			and not _customer_soda_handed(customer) \
+			and (_find_ready_drink_for_soda(str(GameDataScript.order_soda_ids(customer.order)[0])) != null \
+				or cup_soda_fill > 0.3)
 	if with_soda:
 		_play_cup_fly_to_mouth(customer, func() -> void: pass, true)
 
@@ -20660,10 +20745,13 @@ func _complete_serve(station_index: int) -> void:
 		elif review_stars <= 1.5:
 			review_kind = "angry"
 		_maybe_record_social_review(review_stars, review_kind, tip_amt, station_index)
-	## Hand off any ordered fountain drink with the burger.
+	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if selected_customer != null and is_instance_valid(selected_customer) \
-			and not GameDataScript.order_soda_ids(selected_customer.order).is_empty():
+			and not GameDataScript.order_soda_ids(selected_customer.order).is_empty() \
+			and not _customer_soda_handed(selected_customer):
 		_consume_cup_for_serve()
+	if selected_customer != null and is_instance_valid(selected_customer):
+		_mark_customer_soda_handed(selected_customer, false)
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
@@ -20706,13 +20794,16 @@ func _on_serve() -> void:
 			_flash("Click an order ticket first, then Serve", Color("EF5350"))
 		return
 	var order: Array = cust.order
-	if not _cup_ready_for_order(order):
+	if not _cup_ready_for_order(order, cust):
 		combo = 0
 		if not _auto_serving:
-			var sodas: Array = GameDataScript.order_soda_ids(order)
-			var want := str(sodas[0]) if not sodas.is_empty() else "soda"
-			var lab: String = str(GameDataScript.INGREDIENT_LABELS.get(want, "Soda"))
-			_flash("Pour a full %s first" % lab, Color("FF8A65"))
+			if _customer_soda_handed(cust):
+				pass
+			else:
+				var sodas: Array = GameDataScript.order_soda_ids(order)
+				var want := str(sodas[0]) if not sodas.is_empty() else "soda"
+				var lab: String = str(GameDataScript.INGREDIENT_LABELS.get(want, "Soda"))
+				_flash("Pour a full %s first" % lab, Color("FF8A65"))
 		_update_hud()
 		return
 	## Drink-only — hand off the cup with no burger station.
@@ -22380,6 +22471,16 @@ func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
 	)
 	_mp_applying = false
 	## Fly tween may still be running; leave authority stays host via _on_customer_left.
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_drink_hand(cust_net_id: int, flavor: String) -> void:
+	## Early drink hand-off to a waiting customer (burger may still be cooking).
+	_mp_applying = true
+	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
+	if cust != null and is_instance_valid(cust):
+		_begin_early_drink_hand(cust, flavor)
+	_mp_applying = false
 
 
 ## any_peer (host-only callers): authority can drop on relay peers.
