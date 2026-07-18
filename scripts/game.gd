@@ -1716,7 +1716,14 @@ func _strip_swipe_add(id: String) -> void:
 		return
 	_pulse_ingredient_feedback(id)
 	## Swipe cheese goes straight onto Build (no ghost hold interrupting the drag).
-	_add_ingredient_to_station(active_station, id, false)
+	if id == "cheese":
+		_add_ingredient_to_station(active_station, id, false)
+		_strip_gesture_added = true
+		return
+	var station := active_station
+	_play_ingredient_fly_to_build(id, station, func():
+		_add_ingredient_to_station(station, id, false)
+	)
 	_strip_gesture_added = true
 
 
@@ -4919,10 +4926,18 @@ func _release_fire_extinguisher() -> void:
 		ext_powder.emitting = false
 	if game_audio and game_audio.has_method("set_ext_spray"):
 		game_audio.set_ext_spray(false)
-	ext_root.position = ext_home
-	ext_root.rotation_degrees = ext_home_rot
 	if ext_area:
-		ext_area.input_ray_pickable = true
+		ext_area.input_ray_pickable = false
+	_tween_tool_to_wall(
+		ext_root,
+		ext_home,
+		ext_home_rot,
+		Vector3.ONE,
+		0.34,
+		func() -> void:
+			if ext_area != null and is_instance_valid(ext_area):
+				ext_area.input_ray_pickable = true
+	)
 	if game_audio:
 		game_audio.play_click()
 	if mp_enabled:
@@ -5537,10 +5552,18 @@ func _release_glock() -> void:
 	if glock_visual != null and is_instance_valid(glock_visual):
 		glock_visual.rotation_degrees = Vector3.ZERO
 		glock_visual.scale = Vector3.ONE * GLOCK_MESH_SCALE
-	glock_root.position = glock_home
-	glock_root.rotation_degrees = glock_home_rot
 	_set_glock_laser_visible(false)
-	_refresh_glock_cover_lock()
+	if glock_area:
+		glock_area.input_ray_pickable = false
+	_tween_tool_to_wall(
+		glock_root,
+		glock_home,
+		glock_home_rot,
+		Vector3.ONE,
+		0.34,
+		func() -> void:
+			_refresh_glock_cover_lock()
+	)
 	if game_audio:
 		game_audio.play_click()
 	_sync_combat_audio()
@@ -5913,12 +5936,19 @@ func _cancel_shaker_hold() -> void:
 	if shaker_particles:
 		shaker_particles.emitting = false
 	if shaker_root:
-		shaker_root.position = shaker_home
-		shaker_root.rotation_degrees = Vector3(6.0, 25.0, -4.0)
-		shaker_root.scale = Vector3(2.15, 2.15, 2.15)
 		shaker_root.visible = true
-	if shaker_area:
-		shaker_area.input_ray_pickable = true
+		if shaker_area:
+			shaker_area.input_ray_pickable = false
+		_tween_tool_to_wall(
+			shaker_root,
+			shaker_home,
+			Vector3(6.0, 25.0, -4.0),
+			Vector3(2.15, 2.15, 2.15),
+			0.3,
+			func() -> void:
+				if shaker_area != null and is_instance_valid(shaker_area):
+					shaker_area.input_ray_pickable = true
+		)
 	if mp_enabled:
 		mp_tool_pose.rpc(4, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
@@ -7212,6 +7242,32 @@ func _begin_oil_hold() -> bool:
 	return true
 
 
+func _tween_tool_to_wall(
+	node: Node3D,
+	home_pos: Vector3,
+	home_rot: Vector3,
+	home_scale: Vector3 = Vector3.ONE,
+	duration: float = 0.32,
+	on_done: Callable = Callable()
+) -> void:
+	## Smooth put-away instead of snapping tools back onto the wall.
+	if node == null or not is_instance_valid(node):
+		if on_done.is_valid():
+			on_done.call()
+		return
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(node, "position", home_pos, duration) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(node, "rotation_degrees", home_rot, duration) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if home_scale != Vector3.ONE or node.scale.distance_to(home_scale) > 0.01:
+		tw.tween_property(node, "scale", home_scale, duration) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if on_done.is_valid():
+		tw.chain().tween_callback(on_done)
+
+
 func _release_oil_bottle() -> void:
 	if not oil_held or oil_root == null:
 		return
@@ -7220,12 +7276,18 @@ func _release_oil_bottle() -> void:
 	oil_pour_hold_t = 0.0
 	if oil_particles:
 		oil_particles.emitting = false
-	## Snappy put-away — was 0.22s and felt sticky.
-	oil_root.position = oil_home
-	oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
-	oil_root.scale = Vector3(2.05, 2.05, 2.05)
 	if oil_area:
-		oil_area.input_ray_pickable = true
+		oil_area.input_ray_pickable = false
+	_tween_tool_to_wall(
+		oil_root,
+		oil_home,
+		Vector3(8.0, 40.0, -5.0),
+		Vector3(2.05, 2.05, 2.05),
+		0.3,
+		func() -> void:
+			if oil_area != null and is_instance_valid(oil_area):
+				oil_area.input_ray_pickable = true
+	)
 	if game_audio:
 		game_audio.play_click()
 	if mp_enabled:
@@ -7773,11 +7835,18 @@ func _throw_brush_home() -> void:
 		game_audio.play_click()
 		if game_audio.has_method("set_slide_moving"):
 			game_audio.set_slide_moving(false)
-	## Instant put-away — no 0.28s tween lockout.
-	brush_root.position = brush_home
-	brush_root.rotation_degrees = brush_home_rot
 	if brush_area:
-		brush_area.input_ray_pickable = true
+		brush_area.input_ray_pickable = false
+	_tween_tool_to_wall(
+		brush_root,
+		brush_home,
+		brush_home_rot,
+		Vector3.ONE,
+		0.3,
+		func() -> void:
+			if brush_area != null and is_instance_valid(brush_area):
+				brush_area.input_ray_pickable = true
+	)
 	_flash("Scraper put away", Color("B0BEC5"))
 
 
@@ -12166,10 +12235,30 @@ func _ingredient_button_screen_center(id: String) -> Vector2:
 
 
 func _station_ingredient_land_screen(station_index: int) -> Vector2:
-	var land := _station_stack_screen_center(station_index)
+	## Land on the current top of the Build stack (not the plate center).
 	var st: Dictionary = stations[station_index]
+	var preview: Control = st.get("preview", null)
+	if preview != null and is_instance_valid(preview):
+		var kids := preview.get_children()
+		if not kids.is_empty():
+			var top_y := INF
+			var sum_x := 0.0
+			var n := 0
+			for c in kids:
+				if c is Control and is_instance_valid(c):
+					var r: Rect2 = (c as Control).get_global_rect()
+					if r.size.x < 2.0 or r.size.y < 2.0:
+						continue
+					top_y = minf(top_y, r.position.y)
+					sum_x += r.position.x + r.size.x * 0.5
+					n += 1
+			if n > 0 and top_y < INF:
+				return Vector2(sum_x / float(n), top_y + 6.0)
+		var pr := preview.get_global_rect()
+		return pr.position + Vector2(pr.size.x * 0.5, pr.size.y * 0.32)
+	var land := _station_stack_screen_center(station_index)
 	var items: Array = st.get("items", [])
-	land.y -= 28.0 + mini(float(items.size()) * 6.0, 36.0)
+	land.y -= 28.0 + mini(float(items.size()) * 8.0, 48.0)
 	return land
 
 
@@ -12180,13 +12269,10 @@ func _ingredient_fly_icon_size(station_index: int, id: String) -> Vector2:
 	var layer_w := 320.0 * 0.96 * _layer_width_mul(id) * _station_item_build_scale(id)
 	var h := _layer_img_height(id) * _station_layer_scale(maxi(1, items.size() + 1)) \
 		* _station_item_build_scale(id)
-	return Vector2(mini(96.0, layer_w * 0.38), mini(72.0, h * 0.38))
+	return Vector2(mini(110.0, layer_w * 0.42), mini(84.0, h * 0.42))
 
 
 func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Callable) -> void:
-	if _ingredient_fly_busy:
-		on_done.call()
-		return
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
 	if ui_root == null or station_index < 0 or station_index >= STATION_COUNT:
 		on_done.call()
@@ -12213,27 +12299,31 @@ func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Call
 	icon.pivot_offset = icon_size * 0.5
 	fly_root.add_child(icon)
 	var start := _ingredient_button_screen_center(id)
-	var end := _station_ingredient_land_screen(station_index)
+	## Capture land point at start; re-sample near the end so it tracks a growing stack.
+	var end0 := _station_ingredient_land_screen(station_index)
 	icon.global_position = start - icon_size * 0.5
-	icon.scale = Vector2.ONE
+	icon.scale = Vector2(1.15, 1.15)
 	icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
 	_ingredient_fly_busy = true
-	var arc_h := 42.0
+	var arc_h := 56.0
 	var tw := create_tween()
 	tw.tween_method(
 		func(t: float) -> void:
 			if not is_instance_valid(icon):
 				return
 			var eased := t * t * (3.0 - 2.0 * t)
-			var pos := start.lerp(end, eased)
+			var end_now := end0
+			if t > 0.55:
+				end_now = end0.lerp(_station_ingredient_land_screen(station_index), (t - 0.55) / 0.45)
+			var pos := start.lerp(end_now, eased)
 			pos.y -= arc_h * 4.0 * t * (1.0 - t)
 			icon.global_position = pos - icon_size * 0.5
-			icon.scale = Vector2.ONE.lerp(Vector2(0.82, 0.82), eased)
-			icon.modulate.a = lerpf(1.0, 0.92, eased),
+			icon.scale = Vector2(1.15, 1.15).lerp(Vector2(0.78, 0.78), eased)
+			icon.modulate.a = lerpf(1.0, 0.95, eased),
 		0.0,
 		1.0,
-		0.34
-	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		0.42
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(fly_root):
 			fly_root.queue_free()
@@ -13425,8 +13515,6 @@ func _add_ingredient(id: String) -> void:
 	if id == "cheese":
 		_begin_cheese_hold(false, true)
 		return
-	if _ingredient_fly_busy:
-		return
 	var station := active_station
 	_play_ingredient_fly_to_build(id, station, func():
 		_add_ingredient_to_station(station, id, false)
@@ -14509,8 +14597,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.5 + bun_h0 * 0.22
-	## Mild pressed look — barely tighter than the Build board.
-	var step_y := 11.25 * layer_scale
+	## Pressed stack — tighter than Build so the handoff reads as a smash.
+	var step_y := 7.2 * layer_scale
 	var layer_w := mini(320.0, stage_w * 0.96)
 	var stack_lift := 0.0
 
@@ -14527,9 +14615,10 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var bottom_row: Control = null
 	var bun_rows: Array[Control] = []
 	var patty_rows: Array[Control] = []
+	var topping_rows: Array[Control] = []
 	## Condiment / thin toppings get pressed flat on the way to the mouth.
-	const FLY_SQUASH_IDS: Array[String] = ["mustard", "ketchup", "bacon", "pickle", "onion"]
-	const FLY_TOPPING_SQUISH := 0.48
+	const FLY_SQUASH_IDS: Array[String] = ["mustard", "ketchup", "bacon", "pickle", "onion", "lettuce", "tomato"]
+	const FLY_TOPPING_SQUISH := 0.28
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -14584,6 +14673,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			bun_rows.append(row)
 		if is_patty:
 			patty_rows.append(row)
+		elif not is_bun:
+			topping_rows.append(row)
 
 		var tr := TextureRect.new()
 		tr.texture = layer_tex
@@ -14610,6 +14701,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		"pivot": pivot,
 		"bun_rows": bun_rows,
 		"patty_rows": patty_rows,
+		"topping_rows": topping_rows,
 	}
 
 
@@ -14635,6 +14727,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var stack: Control = built["stack"]
 	var bun_rows: Array = built.get("bun_rows", [])
 	var patty_rows: Array = built.get("patty_rows", [])
+	var topping_rows: Array = built.get("topping_rows", [])
 	var top_row: Control = built.get("top_row", null)
 	var bottom_row: Control = built.get("bottom_row", null)
 	stack.pivot_offset = built["pivot"]
@@ -14647,12 +14740,16 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if preview != null and is_instance_valid(preview):
 		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
-	var squashed := Vector2(1.06, 1.0)
-	var fly_end_scale := Vector2(0.9, 0.9)
-	## Extra pinch so heels/crowns hug the fillings on the way to the mouth.
-	var bun_pinch_px := 3.5
+	## Hard smash — wide + flat, toppings crush into the patty.
+	var squashed := Vector2(1.38, 0.36)
+	var fly_end_scale := Vector2(0.78, 0.58)
+	var bun_pinch_px := 18.0
+	var topping_crush_px := 11.0
 	var bottom_base_y := bottom_row.position.y if bottom_row != null else 0.0
 	var top_base_y := top_row.position.y if top_row != null else 0.0
+	var topping_base_y: Array[float] = []
+	for tr in topping_rows:
+		topping_base_y.append((tr as Control).position.y if tr != null else 0.0)
 
 	var apply_bun_pinch := func(amount: float) -> void:
 		if bottom_row != null and is_instance_valid(bottom_row):
@@ -14660,28 +14757,43 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		if top_row != null and is_instance_valid(top_row):
 			top_row.position.y = top_base_y + amount ## down onto fillings
 
+	var apply_topping_crush := func(amount: float) -> void:
+		var mid := (bottom_base_y + top_base_y) * 0.5 if top_row != null else bottom_base_y - 20.0
+		for i in topping_rows.size():
+			var row: Control = topping_rows[i]
+			if row == null or not is_instance_valid(row):
+				continue
+			var base_y: float = topping_base_y[i] if i < topping_base_y.size() else row.position.y
+			## Pull toppings toward the stack middle as the smash lands.
+			row.position.y = lerpf(base_y, mid, clampf(amount / maxf(topping_crush_px, 0.01), 0.0, 1.0))
+
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
 			return
 		stack.scale = s
-		## Undo vertical squash only — keep patty/bun thickness (don't flatten or shrink-tall).
-		var inv_y := 1.0 / maxf(s.y, 0.001)
-		var inv := Vector2(1.0, inv_y)
+		## Buns keep some thickness; patties flatten a bit; toppings take full smash.
+		var bun_inv_y := 1.0 / maxf(s.y, 0.001)
+		var bun_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.55))
+		var patty_inv := Vector2(1.0, lerpf(1.0, bun_inv_y, 0.25))
 		for row in bun_rows:
 			if row != null and is_instance_valid(row):
-				(row as Control).scale = inv
+				(row as Control).scale = bun_inv
 		for row in patty_rows:
 			if row != null and is_instance_valid(row):
-				(row as Control).scale = inv
+				(row as Control).scale = patty_inv
+		for row in topping_rows:
+			if row != null and is_instance_valid(row):
+				(row as Control).scale = Vector2(1.08, 0.7)
 
 	var tw := create_tween()
 	tw.set_parallel(false)
-	tw.tween_interval(0.04)
+	tw.tween_interval(0.03)
 
 	var squash_step := func(t: float) -> void:
 		apply_stack_scale.call(Vector2.ONE.lerp(squashed, t))
 		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px, t))
-	tw.tween_method(squash_step, 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		apply_topping_crush.call(lerpf(0.0, topping_crush_px, t))
+	tw.tween_method(squash_step, 0.0, 1.0, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 	var fly_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
@@ -14690,7 +14802,8 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		stack.global_position = start_pos.lerp(mouth_pos, eased)
 		apply_stack_scale.call(squashed.lerp(fly_end_scale, eased))
 		apply_bun_pinch.call(bun_pinch_px)
-	tw.tween_method(fly_step, 0.0, 1.0, 0.55)
+		apply_topping_crush.call(topping_crush_px)
+	tw.tween_method(fly_step, 0.0, 1.0, 0.52)
 
 	tw.tween_callback(func() -> void:
 		if preview != null and is_instance_valid(preview):
@@ -14816,6 +14929,7 @@ func _complete_serve(station_index: int) -> void:
 		if payout <= 0:
 			review_kind = "wrong"
 		elif _cook_rating_is_burnt(cook_r):
+			## Keep kind=burnt so the text can brag about liking ash (or trash it).
 			review_kind = "burnt"
 		elif was_meh or review_stars < 2.75:
 			review_kind = "meh"
