@@ -10262,7 +10262,7 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.03, 0.21)}, ## tank deck
 		{"p": Vector3(-0.28, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## soda arm
 		{"p": Vector3(-0.02, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## ice arm
-		{"p": Vector3(-0.58, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser (raised)
+		{"p": Vector3(-0.682, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser (matches CupRack)
 	]
 
 
@@ -10684,7 +10684,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack.add_child(rack_grab)
 
 	## Grabable empty sits at the bottom of the nest — same size as the decorative cups.
-	cup_home = station.to_global(rack.position + stack_base)
+	## stack_base is the cup root (floor); shell mesh is centered +H/2 above it.
+	cup_home = rack.to_global(stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
 		cup_rest = station.to_global(Vector3(-0.28, 0.138, 0.54))
@@ -10943,6 +10944,7 @@ func _spawn_and_bind_empty_cup() -> void:
 		return
 	var root := _create_drink_cup_node()
 	world.add_child(root)
+	cup_home = _cup_rack_seat_global()
 	root.global_position = cup_home if cup_home != Vector3.ZERO else Vector3.ZERO
 	root.rotation_degrees = cup_home_rot
 	_bind_cup_refs(root)
@@ -11930,11 +11932,21 @@ func _begin_cup_hold() -> bool:
 	return true
 
 
+func _cup_rack_seat_global() -> Vector3:
+	## Live bottom-of-stack seat (matches SpareCup nest floor).
+	if soda_root != null and is_instance_valid(soda_root):
+		var rack := soda_root.get_node_or_null("CupRack") as Node3D
+		if rack != null and is_instance_valid(rack):
+			return rack.to_global(Vector3(0.0, -0.12, 0.06))
+	return cup_home
+
+
 func _start_cup_draw_from_rack() -> void:
 	## Seat the cup in the nest, then arc it into the hand.
 	if cup_root == null or not is_instance_valid(cup_root):
 		cup_drawing = false
 		return
+	cup_home = _cup_rack_seat_global()
 	_cup_draw_from = cup_home if cup_home != Vector3.ZERO else cup_root.global_position
 	cup_root.global_position = _cup_draw_from
 	cup_root.rotation_degrees = cup_home_rot
@@ -11954,16 +11966,20 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 	var s := u * u * (3.0 - 2.0 * u)
 	var e := 1.0 - pow(1.0 - s, 2.2)
 	var seat := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
+	## Soda face is local +Z; with yaw 180 that is toward the cook — never world +Z (behind the cabinet).
+	var face := Vector3(0.0, 0.0, -1.0)
+	if soda_root != null and is_instance_valid(soda_root):
+		face = soda_root.global_transform.basis.z.normalized()
 	if seat == Vector3.ZERO:
-		seat = _cup_draw_from + Vector3(0.0, 0.08, 0.12)
-	## Quadratic arc: lift out of the tube toward camera, then into the cursor.
-	var mid := _cup_draw_from.lerp(seat, 0.42)
-	mid.y += 0.14
-	mid.z += 0.10
+		seat = _cup_draw_from + face * 0.18 + Vector3(0.0, 0.10, 0.0)
+	## Quadratic arc: lift out of the open tube face, then into the cursor.
+	var mid := _cup_draw_from.lerp(seat, 0.45)
+	mid += face * 0.16 + Vector3(0.0, 0.12, 0.0)
 	var omt := 1.0 - e
 	var pos := omt * omt * _cup_draw_from + 2.0 * omt * e * mid + e * e * seat
 	var prev := cup_root.global_position
-	cup_root.global_position = _resolve_cup_against_soda(pos)
+	## Don't resolve soda colliders during the draw — that shoved the cup behind the machine.
+	cup_root.global_position = pos
 	if delta > 0.0001:
 		_cup_vel = (cup_root.global_position - prev) / delta
 	_cup_prev_pos = cup_root.global_position
@@ -11979,6 +11995,8 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		cup_drawing = false
 		cup_root.scale = Vector3.ONE
 		_cup_tilt = Vector2.ZERO
+		## Soft collide once settled in-hand so it doesn't rest inside metal.
+		cup_root.global_position = _resolve_cup_against_soda(cup_root.global_position)
 
 
 func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
