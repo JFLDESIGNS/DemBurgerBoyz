@@ -418,6 +418,8 @@ var radio_dial_mesh: MeshInstance3D = null
 var radio_light_mat: StandardMaterial3D = null
 var radio_column: VBoxContainer = null
 var phone_column: Control = null
+var hud_chrome_collapsed: bool = false
+var hud_chrome_toggle: Button = null
 var prep_ui_overlay: TextureRect = null
 var phone_ui_anchor: Node3D = null
 var phone_rating_stars: Label = null
@@ -433,6 +435,23 @@ var _phone_scroll_drag_start_offset: int = 0
 var _phone_scroll_vel: float = 0.0
 var _phone_scroll_last_mouse_y: float = 0.0
 var _phone_scroll_last_msec: int = 0
+## Soda fountain + wall cups (orders later).
+var soda_root: Node3D = null
+var soda_selected_flavor: String = "cola"
+var soda_flavor_areas: Dictionary = {} ## flavor id -> Area3D
+var soda_flavor_mats: Dictionary = {} ## flavor id -> StandardMaterial3D
+var soda_spout_marker: Marker3D = null
+var ice_spout_marker: Marker3D = null
+var cup_root: Node3D = null
+var cup_area: Area3D = null
+var cup_liquid_mesh: MeshInstance3D = null
+var cup_ice_mesh: MeshInstance3D = null
+var cup_held: bool = false
+var cup_home: Vector3 = Vector3.ZERO
+var cup_home_rot: Vector3 = Vector3(0.0, 90.0, 0.0)
+var cup_flavor: String = ""
+var cup_soda_fill: float = 0.0
+var cup_ice_fill: float = 0.0
 var social_rating_sum: float = 0.0
 var social_review_count: int = 0
 ## Newest-first feed posts: {stars, who, text, pic?}
@@ -592,6 +611,24 @@ const PHONE_SCROLL_WHEEL_KICK := 520.0
 const PHONE_CORNER_OUTER := 10
 const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
+## Soda fountain — right counter behind phone/radio chrome (screen-right = world −X).
+const SODA_STATION_POS := Vector3(-2.40, 1.02, 0.50)
+const SODA_STATION_ROT := Vector3(0.0, 90.0, 0.0) ## face the cook from the right wall
+const CUP_COLLISION_LAYER := 1024
+const SODA_FLAVOR_COLLISION_LAYER := 4096
+const SODA_FLAVORS: Array[String] = ["cola", "lemon_lime", "orange"]
+const SODA_FLAVOR_LABELS: Dictionary = {
+	"cola": "COLA",
+	"lemon_lime": "LIME",
+	"orange": "ORANGE",
+}
+const SODA_FLAVOR_COLORS: Dictionary = {
+	"cola": Color(0.42, 0.14, 0.10),
+	"lemon_lime": Color(0.55, 0.82, 0.22),
+	"orange": Color(0.95, 0.48, 0.12),
+}
+const CUP_HOLD_HEIGHT := 0.22
+const CUP_FILL_RATE := 0.85 ## fill units per second while under spout + LMB
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -1147,6 +1184,8 @@ func _process(delta: float) -> void:
 		_update_held_shaker(delta)
 	if oil_held:
 		_update_held_oil(delta)
+	if cup_held:
+		_update_held_cup(delta)
 	if ext_held:
 		_update_held_fire_ext(delta)
 	if glock_held:
@@ -1434,7 +1473,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var grill_place: bool = event.button_index == MOUSE_BUTTON_RIGHT
 		if not cheese_held and _ui_blocks_world_click(event.position, grill_place):
 			return
-		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
+		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
 			return
 		if cheese_held:
 			if _is_ingredient_strip_click(event.global_position):
@@ -1576,6 +1615,7 @@ func _input(event: InputEvent) -> void:
 			_release_sale_plaque()
 			get_viewport().set_input_as_handled()
 			return
+		## Cup stays held on LMB release — fill while pressing under a spout.
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -1584,7 +1624,19 @@ func _input(event: InputEvent) -> void:
 			if cheese_held:
 				## Place handled in unhandled — don't grab tools mid-hold.
 				return
+			if cup_held:
+				if _try_return_cup_to_rack(event.position):
+					get_viewport().set_input_as_handled()
+					return
+				if _try_soda_flavor_click(event.position):
+					get_viewport().set_input_as_handled()
+					return
+				get_viewport().set_input_as_handled()
+				return
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
+				get_viewport().set_input_as_handled()
+				return
+			if _try_soda_flavor_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_nearest_tool(event.position):
@@ -1597,6 +1649,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if cup_held:
+			_return_cup_home()
+			get_viewport().set_input_as_handled()
+			return
 		if cheese_held:
 			_cancel_cheese_hold()
 			get_viewport().set_input_as_handled()
@@ -1819,7 +1875,7 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 					return true
 		node = node.get_parent()
 	## Explicit hit-tests — hovered can miss during the same-frame press.
-	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column]:
+	for ctrl in [window_pause_btn, master_vol_row, gfx_btn, gfx_panel, options_root, radio_column, phone_column, hud_chrome_toggle]:
 		if ctrl != null and is_instance_valid(ctrl) and ctrl.visible:
 			if ctrl is Control and (ctrl as Control).get_global_rect().has_point(screen_pos):
 				return true
@@ -2248,6 +2304,7 @@ func _build_3d_world() -> void:
 	_build_first_sale_decal()
 	_build_wall_paper_decals()
 	_build_menu_board_decal()
+	_build_soda_station()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
 	_build_window_bunting()
 
@@ -5907,6 +5964,11 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 		if gd < best_d:
 			best_d = gd
 			best = "glock"
+	if cup_root != null and camera != null and not cup_held:
+		var cd := screen_pos.distance_to(camera.unproject_position(cup_root.global_position + Vector3(0, 0.04, 0)))
+		if cd < best_d:
+			best_d = cd
+			best = "cup"
 	if best == "" or best_d > 96.0:
 		if _ray_hits_tool(screen_pos, SALE_COLLISION_LAYER, sale_area):
 			best = "sale"
@@ -5920,6 +5982,8 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			best = "ext"
 		elif not _sale_covers_glock() and _ray_hits_tool(screen_pos, GLOCK_COLLISION_LAYER, glock_area):
 			best = "glock"
+		elif _ray_hits_tool(screen_pos, CUP_COLLISION_LAYER, cup_area):
+			best = "cup"
 		else:
 			return false
 	match best:
@@ -5936,6 +6000,8 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			return _begin_fire_ext_hold()
 		"glock":
 			return _begin_glock_hold()
+		"cup":
+			return _begin_cup_hold()
 	return false
 
 
@@ -7284,7 +7350,7 @@ func _try_grab_oil(screen_pos: Vector2) -> bool:
 func _begin_oil_hold() -> bool:
 	if not playing or oil_held or oil_root == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held or cup_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	oil_held = true
@@ -8269,7 +8335,7 @@ func _set_glock_cover_meshes_visible(on: bool) -> void:
 func _begin_sale_hold() -> bool:
 	if not playing or sale_held or first_sale_decal == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or cup_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	sale_held = true
@@ -8426,6 +8492,442 @@ func _build_menu_board_decal() -> void:
 	board.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(board)
 	menu_board_decal = board
+
+
+func _build_soda_station() -> void:
+	## Fountain behind phone/radio chrome — 3 flavors, soda + ice spouts, wall cups.
+	if soda_root != null and is_instance_valid(soda_root):
+		soda_root.queue_free()
+	soda_root = null
+	soda_flavor_areas.clear()
+	soda_flavor_mats.clear()
+	soda_spout_marker = null
+	ice_spout_marker = null
+	cup_root = null
+	cup_area = null
+	cup_liquid_mesh = null
+	cup_ice_mesh = null
+	cup_held = false
+	cup_flavor = ""
+	cup_soda_fill = 0.0
+	cup_ice_fill = 0.0
+	soda_selected_flavor = "cola"
+
+	var root := Node3D.new()
+	root.name = "SodaStation"
+	root.position = SODA_STATION_POS
+	root.rotation_degrees = SODA_STATION_ROT
+	world.add_child(root)
+	soda_root = root
+
+	## Cabinet body.
+	var body := MeshInstance3D.new()
+	body.name = "Cabinet"
+	var body_mesh := BoxMesh.new()
+	body_mesh.size = Vector3(0.72, 0.95, 0.38)
+	body.mesh = body_mesh
+	body.position = Vector3(0.0, 0.48, 0.0)
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.16, 0.17, 0.20)
+	body_mat.metallic = 0.35
+	body_mat.roughness = 0.45
+	body.material_override = body_mat
+	root.add_child(body)
+
+	## Chrome face plate.
+	var face := MeshInstance3D.new()
+	face.name = "Face"
+	var face_mesh := BoxMesh.new()
+	face_mesh.size = Vector3(0.68, 0.42, 0.04)
+	face.mesh = face_mesh
+	face.position = Vector3(0.0, 0.72, 0.20)
+	var face_mat := StandardMaterial3D.new()
+	face_mat.albedo_color = Color(0.72, 0.74, 0.78)
+	face_mat.metallic = 0.85
+	face_mat.roughness = 0.28
+	face.material_override = face_mat
+	root.add_child(face)
+
+	## Flavor pads — left to right on the face.
+	var pad_xs: Array[float] = [-0.22, 0.0, 0.22]
+	for i in SODA_FLAVORS.size():
+		var fid: String = SODA_FLAVORS[i]
+		var pad := MeshInstance3D.new()
+		pad.name = "Flavor_%s" % fid
+		var pad_mesh := BoxMesh.new()
+		pad_mesh.size = Vector3(0.16, 0.11, 0.03)
+		pad.mesh = pad_mesh
+		pad.position = Vector3(pad_xs[i], 0.78, 0.23)
+		var pmat := StandardMaterial3D.new()
+		pmat.albedo_color = SODA_FLAVOR_COLORS[fid]
+		pmat.emission_enabled = true
+		pmat.emission = SODA_FLAVOR_COLORS[fid]
+		pmat.emission_energy_multiplier = 0.35 if fid == soda_selected_flavor else 0.05
+		pad.material_override = pmat
+		root.add_child(pad)
+		soda_flavor_mats[fid] = pmat
+
+		var lab := Label3D.new()
+		lab.text = str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper()))
+		lab.position = Vector3(pad_xs[i], 0.78, 0.255)
+		lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+		lab.font_size = 28
+		lab.modulate = Color(1, 1, 1, 0.95)
+		lab.outline_size = 4
+		lab.outline_modulate = Color(0, 0, 0, 0.7)
+		root.add_child(lab)
+
+		var area := Area3D.new()
+		area.name = "FlavorArea_%s" % fid
+		area.input_ray_pickable = true
+		area.collision_layer = SODA_FLAVOR_COLLISION_LAYER
+		area.collision_mask = 0
+		area.monitoring = false
+		area.monitorable = true
+		area.position = pad.position
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(0.18, 0.13, 0.08)
+		shape.shape = box
+		area.add_child(shape)
+		root.add_child(area)
+		soda_flavor_areas[fid] = area
+
+	## Two spouts side-by-side: soda (left) · ice (right).
+	_add_soda_spout(root, "SodaSpout", Vector3(-0.14, 0.48, 0.28), Color(0.85, 0.2, 0.18), true)
+	_add_soda_spout(root, "IceSpout", Vector3(0.14, 0.48, 0.28), Color(0.65, 0.85, 1.0), false)
+
+	## Drip tray under both spouts.
+	var tray := MeshInstance3D.new()
+	tray.name = "DripTray"
+	var tray_mesh := BoxMesh.new()
+	tray_mesh.size = Vector3(0.55, 0.03, 0.22)
+	tray.mesh = tray_mesh
+	tray.position = Vector3(0.0, 0.18, 0.26)
+	var tray_mat := StandardMaterial3D.new()
+	tray_mat.albedo_color = Color(0.22, 0.23, 0.26)
+	tray_mat.metallic = 0.6
+	tray_mat.roughness = 0.4
+	tray.material_override = tray_mat
+	root.add_child(tray)
+
+	var soda_lab := Label3D.new()
+	soda_lab.text = "SODA"
+	soda_lab.position = Vector3(-0.14, 0.58, 0.30)
+	soda_lab.font_size = 22
+	soda_lab.modulate = Color(1.0, 0.75, 0.7)
+	root.add_child(soda_lab)
+	var ice_lab := Label3D.new()
+	ice_lab.text = "ICE"
+	ice_lab.position = Vector3(0.14, 0.58, 0.30)
+	ice_lab.font_size = 22
+	ice_lab.modulate = Color(0.75, 0.9, 1.0)
+	root.add_child(ice_lab)
+
+	## Wall cup rack to the left of the cabinet (toward grill / screen-left of machine).
+	_build_soda_cup_rack(root)
+	_refresh_soda_flavor_lights()
+
+
+func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, col: Color, is_soda: bool) -> void:
+	var spout := MeshInstance3D.new()
+	spout.name = spout_name
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.018
+	cyl.bottom_radius = 0.028
+	cyl.height = 0.12
+	spout.mesh = cyl
+	spout.position = local_pos
+	spout.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	var sm := StandardMaterial3D.new()
+	sm.albedo_color = col
+	sm.metallic = 0.7
+	sm.roughness = 0.35
+	spout.material_override = sm
+	parent.add_child(spout)
+
+	var tip := Marker3D.new()
+	tip.name = "%sTip" % spout_name
+	## Tip hangs below the nozzle toward the drip tray.
+	tip.position = local_pos + Vector3(0.0, -0.10, 0.06)
+	parent.add_child(tip)
+	if is_soda:
+		soda_spout_marker = tip
+	else:
+		ice_spout_marker = tip
+
+
+func _build_soda_cup_rack(station: Node3D) -> void:
+	## Peg with a grabable cup — infinite restock when returned.
+	var rack := Node3D.new()
+	rack.name = "CupRack"
+	rack.position = Vector3(0.52, 0.55, 0.05)
+	station.add_child(rack)
+
+	var peg := MeshInstance3D.new()
+	var peg_mesh := BoxMesh.new()
+	peg_mesh.size = Vector3(0.08, 0.35, 0.06)
+	peg.mesh = peg_mesh
+	peg.position = Vector3(0.0, 0.0, -0.04)
+	var peg_mat := StandardMaterial3D.new()
+	peg_mat.albedo_color = Color(0.35, 0.28, 0.22)
+	peg.material_override = peg_mat
+	rack.add_child(peg)
+
+	var spare := MeshInstance3D.new()
+	spare.name = "SpareCups"
+	var spare_mesh := CylinderMesh.new()
+	spare_mesh.top_radius = 0.035
+	spare_mesh.bottom_radius = 0.04
+	spare_mesh.height = 0.10
+	spare.mesh = spare_mesh
+	spare.position = Vector3(0.0, 0.14, 0.02)
+	var spare_mat := StandardMaterial3D.new()
+	spare_mat.albedo_color = Color(0.92, 0.92, 0.94)
+	spare.material_override = spare_mat
+	rack.add_child(spare)
+
+	cup_root = Node3D.new()
+	cup_root.name = "DrinkCup"
+	## Local to station; home is rack peg in front.
+	cup_home = station.to_global(rack.position + Vector3(0.0, -0.02, 0.08))
+	cup_home_rot = SODA_STATION_ROT
+	world.add_child(cup_root)
+	cup_root.global_position = cup_home
+	cup_root.rotation_degrees = cup_home_rot
+
+	var cup_shell := MeshInstance3D.new()
+	cup_shell.name = "Shell"
+	var shell_mesh := CylinderMesh.new()
+	shell_mesh.top_radius = 0.045
+	shell_mesh.bottom_radius = 0.038
+	shell_mesh.height = 0.12
+	cup_shell.mesh = shell_mesh
+	cup_shell.position = Vector3(0.0, 0.06, 0.0)
+	var shell_mat := StandardMaterial3D.new()
+	shell_mat.albedo_color = Color(0.95, 0.95, 0.97, 0.55)
+	shell_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	shell_mat.roughness = 0.25
+	cup_shell.material_override = shell_mat
+	cup_root.add_child(cup_shell)
+
+	cup_liquid_mesh = MeshInstance3D.new()
+	cup_liquid_mesh.name = "Liquid"
+	var liq := CylinderMesh.new()
+	liq.top_radius = 0.038
+	liq.bottom_radius = 0.034
+	liq.height = 0.02
+	cup_liquid_mesh.mesh = liq
+	cup_liquid_mesh.position = Vector3(0.0, 0.02, 0.0)
+	cup_liquid_mesh.visible = false
+	cup_root.add_child(cup_liquid_mesh)
+
+	cup_ice_mesh = MeshInstance3D.new()
+	cup_ice_mesh.name = "Ice"
+	var ice_m := BoxMesh.new()
+	ice_m.size = Vector3(0.06, 0.03, 0.06)
+	cup_ice_mesh.mesh = ice_m
+	cup_ice_mesh.position = Vector3(0.0, 0.10, 0.0)
+	var ice_mat := StandardMaterial3D.new()
+	ice_mat.albedo_color = Color(0.75, 0.9, 1.0, 0.75)
+	ice_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cup_ice_mesh.material_override = ice_mat
+	cup_ice_mesh.visible = false
+	cup_root.add_child(cup_ice_mesh)
+
+	cup_area = Area3D.new()
+	cup_area.name = "CupGrab"
+	cup_area.input_ray_pickable = true
+	cup_area.collision_layer = CUP_COLLISION_LAYER
+	cup_area.collision_mask = 0
+	cup_area.monitoring = false
+	cup_area.monitorable = true
+	var cshape := CollisionShape3D.new()
+	var cbox := BoxShape3D.new()
+	cbox.size = Vector3(0.1, 0.14, 0.1)
+	cshape.shape = cbox
+	cshape.position = Vector3(0.0, 0.06, 0.0)
+	cup_area.add_child(cshape)
+	cup_root.add_child(cup_area)
+
+	var cup_lab := Label3D.new()
+	cup_lab.text = "CUPS"
+	cup_lab.position = Vector3(0.52, 0.78, 0.12)
+	cup_lab.font_size = 20
+	cup_lab.modulate = Color(0.9, 0.9, 0.85)
+	station.add_child(cup_lab)
+
+
+func _refresh_soda_flavor_lights() -> void:
+	for fid in soda_flavor_mats.keys():
+		var mat: StandardMaterial3D = soda_flavor_mats[fid]
+		if mat == null:
+			continue
+		mat.emission_energy_multiplier = 0.55 if str(fid) == soda_selected_flavor else 0.05
+
+
+func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
+	if camera == null or soda_flavor_areas.is_empty():
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	q.collision_mask = SODA_FLAVOR_COLLISION_LAYER
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		## Fallback: nearest pad by screen distance.
+		var best_id := ""
+		var best_d := 48.0
+		for fid in soda_flavor_areas.keys():
+			var area: Area3D = soda_flavor_areas[fid]
+			if area == null or not is_instance_valid(area):
+				continue
+			var d := screen_pos.distance_to(camera.unproject_position(area.global_position))
+			if d < best_d:
+				best_d = d
+				best_id = str(fid)
+		if best_id == "":
+			return false
+		_set_soda_flavor(best_id)
+		return true
+	var col = hit.get("collider")
+	for fid in soda_flavor_areas.keys():
+		if soda_flavor_areas[fid] == col:
+			_set_soda_flavor(str(fid))
+			return true
+	return false
+
+
+func _set_soda_flavor(fid: String) -> void:
+	if not SODA_FLAVORS.has(fid):
+		return
+	soda_selected_flavor = fid
+	_refresh_soda_flavor_lights()
+	if game_audio:
+		game_audio.play_click()
+	_flash("Flavor: %s" % str(SODA_FLAVOR_LABELS.get(fid, fid)), Color("FFE082"))
+
+
+func _begin_cup_hold() -> bool:
+	if not playing or cup_held or cup_root == null:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	cup_held = true
+	if cup_area:
+		cup_area.input_ray_pickable = false
+	if game_audio:
+		game_audio.play_click()
+	_flash("Cup ready — pick a flavor, push under SODA or ICE", Color("80DEEA"))
+	return true
+
+
+func _update_held_cup(delta: float) -> void:
+	if cup_root == null or camera == null:
+		return
+	var seat := _tool_hold_point_from_screen(
+		get_viewport().get_mouse_position(),
+		GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	)
+	if seat != Vector3.ZERO:
+		## Soft clamp toward the fountain / counter.
+		seat.x = clampf(seat.x, -2.9, 0.4)
+		seat.z = clampf(seat.z, -0.2, 1.1)
+		cup_root.global_position = seat
+	cup_root.rotation_degrees = Vector3(-8.0, 20.0, 0.0)
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_try_fill_cup_at_spouts(delta)
+
+
+func _try_fill_cup_at_spouts(delta: float) -> void:
+	if cup_root == null:
+		return
+	var tip := cup_root.global_position + Vector3(0.0, 0.12, 0.0)
+	var filled := false
+	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
+		if tip.distance_to(soda_spout_marker.global_position) < 0.16:
+			var before := cup_soda_fill
+			if cup_flavor != "" and cup_flavor != soda_selected_flavor and cup_soda_fill > 0.05:
+				_flash("Empty / return cup first — wrong flavor", Color("FFAB91"))
+				return
+			cup_flavor = soda_selected_flavor
+			cup_soda_fill = minf(1.0, cup_soda_fill + CUP_FILL_RATE * delta)
+			filled = true
+			if before < 1.0 and cup_soda_fill >= 1.0:
+				_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
+	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
+		if tip.distance_to(ice_spout_marker.global_position) < 0.16:
+			var before_i := cup_ice_fill
+			cup_ice_fill = minf(1.0, cup_ice_fill + CUP_FILL_RATE * delta)
+			filled = true
+			if before_i < 1.0 and cup_ice_fill >= 1.0:
+				_flash("Ice topped off", Color("B3E5FC"))
+	if filled:
+		_refresh_cup_visuals()
+
+
+func _refresh_cup_visuals() -> void:
+	if cup_liquid_mesh != null and is_instance_valid(cup_liquid_mesh):
+		if cup_soda_fill > 0.02 and cup_flavor != "":
+			cup_liquid_mesh.visible = true
+			var h := 0.02 + cup_soda_fill * 0.08
+			var liq := cup_liquid_mesh.mesh as CylinderMesh
+			if liq:
+				liq.height = h
+			cup_liquid_mesh.position.y = 0.015 + h * 0.5
+			var lm := StandardMaterial3D.new()
+			lm.albedo_color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.4, 0.2, 0.15))
+			lm.albedo_color.a = 0.85
+			lm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			cup_liquid_mesh.material_override = lm
+		else:
+			cup_liquid_mesh.visible = false
+	if cup_ice_mesh != null and is_instance_valid(cup_ice_mesh):
+		cup_ice_mesh.visible = cup_ice_fill > 0.08
+		cup_ice_mesh.scale = Vector3.ONE * (0.6 + cup_ice_fill * 0.5)
+		cup_ice_mesh.position.y = 0.08 + cup_soda_fill * 0.04
+
+
+func _try_return_cup_to_rack(screen_pos: Vector2) -> bool:
+	if not cup_held or cup_root == null or camera == null:
+		return false
+	var rack_pt := camera.unproject_position(cup_home)
+	if screen_pos.distance_to(rack_pt) > 70.0:
+		return false
+	_return_cup_home()
+	return true
+
+
+func _return_cup_home() -> void:
+	if cup_root == null:
+		cup_held = false
+		return
+	cup_held = false
+	## Fresh cup on the peg — filled drinks stay as visual for now (orders later).
+	## Keep fill state until next grab if you want to inspect; reset for clean loop:
+	cup_flavor = ""
+	cup_soda_fill = 0.0
+	cup_ice_fill = 0.0
+	_refresh_cup_visuals()
+	if cup_area:
+		cup_area.input_ray_pickable = false
+	_tween_tool_to_wall(
+		cup_root,
+		cup_home,
+		cup_home_rot,
+		Vector3.ONE,
+		0.28,
+		func() -> void:
+			if cup_area != null and is_instance_valid(cup_area):
+				cup_area.input_ray_pickable = true
+	)
+	if game_audio:
+		game_audio.play_click()
+	_flash("Cup back on the rack", Color("B0BEC5"))
 
 
 func _build_burger_pals_logo_decal() -> void:
@@ -8586,6 +9088,7 @@ func _setup_radio() -> void:
 	radio.powered_changed.connect(_on_radio_powered)
 	_build_radio_ui()
 	_build_phone_ui()
+	_build_hud_chrome_toggle()
 	_reset_supplies()
 	radio.set_volume_linear(0.0)
 	radio.set_powered(false)
@@ -8893,7 +9396,77 @@ func _layout_phone_ui_overlay() -> void:
 		vr.position.x + vr.size.x - PHONE_UI_SIZE.x - 6.0
 	)
 	phone_column.size = PHONE_UI_SIZE
+	_layout_hud_chrome_toggle()
 	_sync_radio_3d_to_ui()
+
+
+func _build_hud_chrome_toggle() -> void:
+	## ▲ under the phone collapses phone + radio so the soda fountain is clear.
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null:
+		return
+	if hud_chrome_toggle != null and is_instance_valid(hud_chrome_toggle):
+		hud_chrome_toggle.queue_free()
+	hud_chrome_toggle = Button.new()
+	hud_chrome_toggle.name = "HudChromeToggle"
+	hud_chrome_toggle.text = "▲"
+	hud_chrome_toggle.tooltip_text = "Hide phone & radio — use soda fountain"
+	hud_chrome_toggle.custom_minimum_size = Vector2(44, 28)
+	hud_chrome_toggle.focus_mode = Control.FOCUS_NONE
+	hud_chrome_toggle.z_index = 22
+	UiFontsScript.apply_button(hud_chrome_toggle, true, 14)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.12, 0.13, 0.16, 0.94)
+	sb.border_color = Color(0.35, 0.38, 0.44, 1.0)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	hud_chrome_toggle.add_theme_stylebox_override("normal", sb)
+	hud_chrome_toggle.pressed.connect(_toggle_hud_chrome_collapsed)
+	ui_root.add_child(hud_chrome_toggle)
+	_layout_hud_chrome_toggle()
+
+
+func _layout_hud_chrome_toggle() -> void:
+	if hud_chrome_toggle == null or not is_instance_valid(hud_chrome_toggle):
+		return
+	var vr := get_viewport().get_visible_rect()
+	hud_chrome_toggle.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	if hud_chrome_collapsed or phone_column == null or not phone_column.visible:
+		hud_chrome_toggle.position = Vector2(
+			vr.position.x + vr.size.x - 54.0,
+			RADIO_UI_TOP
+		)
+	else:
+		var pr := phone_column.get_global_rect()
+		hud_chrome_toggle.position = Vector2(
+			pr.position.x + (pr.size.x - 44.0) * 0.5,
+			pr.position.y + pr.size.y + 4.0
+		)
+
+
+func _toggle_hud_chrome_collapsed() -> void:
+	hud_chrome_collapsed = not hud_chrome_collapsed
+	if radio_column != null and is_instance_valid(radio_column):
+		radio_column.visible = not hud_chrome_collapsed
+	if phone_column != null and is_instance_valid(phone_column):
+		phone_column.visible = not hud_chrome_collapsed
+	if hud_chrome_toggle != null and is_instance_valid(hud_chrome_toggle):
+		if hud_chrome_collapsed:
+			hud_chrome_toggle.text = "▼"
+			hud_chrome_toggle.tooltip_text = "Show phone & radio"
+			_flash("Phone & radio tucked — soda fountain clear", Color("80CBC4"))
+		else:
+			hud_chrome_toggle.text = "▲"
+			hud_chrome_toggle.tooltip_text = "Hide phone & radio — use soda fountain"
+	if game_audio:
+		game_audio.play_click()
+	_layout_hud_chrome_toggle()
+	if not hud_chrome_collapsed:
+		_sync_radio_3d_to_ui()
 
 
 func _sync_radio_3d_to_ui() -> void:
