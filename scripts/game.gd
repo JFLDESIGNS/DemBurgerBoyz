@@ -9017,7 +9017,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	liq.top_radius = CUP_LIQUID_TOP_R
 	liq.bottom_radius = CUP_LIQUID_BOT_R
 	liq.height = 0.02
-	liq.cap_top = false
+	## Closed volume — open top + backface cull made the body vanish when looking into the cup.
+	liq.cap_top = true
 	liq.cap_bottom = true
 	cup_liquid_mesh.mesh = liq
 	cup_liquid_mesh.position = Vector3(0.0, 0.01, 0.0)
@@ -9026,7 +9027,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_liquid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	cup_liquid_mat.roughness = 0.08
 	cup_liquid_mat.metallic = 0.02
-	cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_BACK
+	cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cup_liquid_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	cup_liquid_mesh.material_override = cup_liquid_mat
 	cup_liquid_pivot.add_child(cup_liquid_mesh)
 
@@ -9485,37 +9487,44 @@ func _refresh_cup_visuals() -> void:
 				liq.height = h
 				liq.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
 				liq.bottom_radius = CUP_LIQUID_BOT_R
-				liq.cap_top = false
+				## Keep both caps — open top + backface cull erased the soda when looking in.
+				liq.cap_top = true
 				liq.cap_bottom = true
 			cup_liquid_mesh.position.y = h * 0.5
 			if cup_liquid_mat != null:
 				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.4, 0.2, 0.15))
-				col.a = 0.92
+				col.a = 0.94
 				cup_liquid_mat.albedo_color = col
 				cup_liquid_mat.emission_enabled = true
 				cup_liquid_mat.emission = col.lightened(0.08)
 				cup_liquid_mat.emission_energy_multiplier = 0.28
 				cup_liquid_mat.roughness = 0.07
+				cup_liquid_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+				cup_liquid_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+				cup_liquid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			## Splash disc sits just above the filled volume (tilts independently).
 			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
 				cup_liquid_surface.visible = true
-				## Disc sits on the free surface; angle comes from cup_surface_pivot.
 				cup_liquid_surface.position = Vector3(0.0, 0.0, 0.0)
 				if cup_surface_pivot != null and is_instance_valid(cup_surface_pivot):
-					cup_surface_pivot.position.y = h
+					cup_surface_pivot.position.y = h + 0.002
 				var sm := cup_liquid_surface.material_override as StandardMaterial3D
 				if sm:
 					var sc: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.4, 0.2, 0.15))
 					sc = sc.lightened(0.35)
-					sc.a = 0.72
+					sc.a = 0.78
 					sm.albedo_color = sc
 					sm.emission = sc
-					sm.emission_energy_multiplier = 0.2
+					sm.emission_energy_multiplier = 0.22
+					sm.cull_mode = BaseMaterial3D.CULL_DISABLED
 				var surf := cup_liquid_surface.mesh as CylinderMesh
 				if surf:
 					var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
-					surf.top_radius = r
-					surf.bottom_radius = r
-					surf.height = 0.009
+					surf.top_radius = r * 0.98
+					surf.bottom_radius = r * 0.98
+					surf.height = 0.01
+					surf.cap_top = true
+					surf.cap_bottom = true
 		else:
 			cup_liquid_mesh.visible = false
 			if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
