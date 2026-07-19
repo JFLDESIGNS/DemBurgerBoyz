@@ -10290,7 +10290,7 @@ func _build_soda_station() -> void:
 		root.add_child(grate)
 
 	## Default park under soda; newest drinks land camera-left of older ones.
-	cup_rest = root.to_global(Vector3(-0.28, 0.138, 0.54))
+	cup_rest = root.to_global(Vector3(-0.28, 0.148, 0.54))
 	cup_rest_rot = Vector3.ZERO
 
 	var soda_lab := Label3D.new()
@@ -10326,15 +10326,17 @@ func _build_soda_station() -> void:
 	_build_soda_cup_rack(root)
 	_refresh_soda_flavor_lights()
 	## Solid volumes the held cup cannot clip through (local space of soda_root).
-	## Drip tray / spout volume in front of the cabinet face is intentionally open.
+	## Tray is a floor plate — cups eject upward so they never sink through the grate.
 	soda_colliders = [
-		{"p": Vector3(0.0, 0.26, 0.0), "h": Vector3(0.43, 0.24, 0.215)}, ## main body
-		{"p": Vector3(0.0, 0.38, 0.225), "h": Vector3(0.37, 0.12, 0.03)}, ## face plate
-		{"p": Vector3(0.0, 0.66, 0.0), "h": Vector3(0.42, 0.14, 0.14)}, ## flavor tanks
-		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.03, 0.21)}, ## tank deck
-		{"p": Vector3(-0.28, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## soda arm
-		{"p": Vector3(-0.02, 0.62, 0.22), "h": Vector3(0.08, 0.10, 0.12)}, ## ice arm
-		{"p": Vector3(-0.733, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser (matches CupRack)
+		{"p": Vector3(0.0, 0.26, 0.0), "h": Vector3(0.44, 0.25, 0.22)}, ## main body
+		{"p": Vector3(0.0, 0.38, 0.225), "h": Vector3(0.38, 0.13, 0.045)}, ## face plate
+		{"p": Vector3(0.0, 0.30, 0.18), "h": Vector3(0.40, 0.20, 0.07)}, ## apron behind tray
+		{"p": Vector3(0.0, 0.66, 0.0), "h": Vector3(0.42, 0.15, 0.16)}, ## flavor tanks
+		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.035, 0.21)}, ## tank deck
+		{"p": Vector3(-0.28, 0.62, 0.24), "h": Vector3(0.09, 0.11, 0.13)}, ## soda arm
+		{"p": Vector3(-0.02, 0.62, 0.24), "h": Vector3(0.09, 0.11, 0.13)}, ## ice arm
+		{"p": Vector3(-0.733, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser
+		{"p": Vector3(-0.02, 0.092, 0.40), "h": Vector3(0.39, 0.024, 0.23), "floor": true}, ## drip tray + grate
 	]
 
 
@@ -11048,7 +11050,7 @@ func _layout_parked_cups() -> void:
 		## local −X = screen-left with soda yaw 180.
 		var lx := -0.28 + float(tray_i) * CUP_TRAY_SPACING
 		lx = clampf(lx, -0.32, 0.28)
-		var local := Vector3(lx, 0.138, 0.54)
+		var local := Vector3(lx, 0.148, 0.54)
 		if soda_root != null and is_instance_valid(soda_root):
 			c.global_position = soda_root.to_global(local)
 		else:
@@ -12151,7 +12153,7 @@ func _update_held_cup(delta: float) -> void:
 		var follow := clampf(delta * CUP_FOLLOW_RATE * heavy, 0.0, 1.0)
 		## Soft ease-out so motion isn't robotic.
 		follow = follow * (2.0 - follow)
-		cup_root.global_position = _resolve_cup_against_soda(prev.lerp(seat, follow))
+		cup_root.global_position = prev.lerp(seat, follow)
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 		_cup_prev_pos = cup_root.global_position
@@ -12166,6 +12168,10 @@ func _update_held_cup(delta: float) -> void:
 	_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN, 0.0, 1.0))
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
+	## Tip lifts the base so a leaned cup doesn't dig through the drip tray.
+	var tip_amt := (absf(_cup_tilt.x) + absf(_cup_tilt.y)) / maxf(CUP_TILT_MAX, 1.0)
+	cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.95)
+	cup_root.global_position = _resolve_cup_against_soda(cup_root.global_position)
 	cup_root.rotation_degrees = Vector3(
 		-8.0 + _cup_tilt.y,
 		12.0,
@@ -12192,11 +12198,16 @@ func _resolve_cup_against_soda(world_pos: Vector3) -> Vector3:
 	## Push the cup out of soda-machine colliders so it can't clip through metal.
 	if soda_root == null or not is_instance_valid(soda_root) or soda_colliders.is_empty():
 		return world_pos
-	var cup_half := Vector3(0.05, 0.07, 0.05)
-	var cup_center_world := world_pos + Vector3(0.0, 0.055, 0.0)
+	## Match the real plastic shell (old half-size was too small → dig-ins).
+	var cup_half := Vector3(
+		CUP_SHELL_TOP_R + 0.014,
+		CUP_SHELL_H * 0.5 + 0.006,
+		CUP_SHELL_TOP_R + 0.014
+	)
+	var cup_center_world := world_pos + Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	var inv := soda_root.global_transform.affine_inverse()
 	var resolved: Vector3 = inv * cup_center_world
-	for _pass in range(3):
+	for _pass in range(5):
 		var moved := false
 		for box in soda_colliders:
 			var bp: Vector3 = box["p"]
@@ -12207,18 +12218,29 @@ func _resolve_cup_against_soda(world_pos: Vector3) -> Vector3:
 			var oz: float = (bh.z + cup_half.z) - absf(d.z)
 			if ox <= 0.0 or oy <= 0.0 or oz <= 0.0:
 				continue
+			## Drip tray / deck floors: always lift — never shove sideways into the cabinet.
+			if bool(box.get("floor", false)):
+				var top := bp.y + bh.y + cup_half.y + 0.004
+				if resolved.y < top:
+					resolved.y = top
+					moved = true
+				continue
 			## Push along the shallowest overlap axis.
 			if ox <= oy and ox <= oz:
 				resolved.x += ox if d.x >= 0.0 else -ox
 			elif oy <= ox and oy <= oz:
-				resolved.y += oy if d.y >= 0.0 else -oy
+				## Prefer lifting off metal rather than burying under it.
+				if d.y >= -0.01:
+					resolved.y += oy
+				else:
+					resolved.y -= oy
 			else:
 				resolved.z += oz if d.z >= 0.0 else -oz
 			moved = true
 		if not moved:
 			break
 	var out_center: Vector3 = soda_root.global_transform * resolved
-	return out_center - Vector3(0.0, 0.055, 0.0)
+	return out_center - Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 
 
 func _update_cup_slosh(delta: float) -> void:
