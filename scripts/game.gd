@@ -15691,7 +15691,7 @@ func _layout_phone_ui_overlay() -> void:
 
 
 func _build_hud_chrome_toggle() -> void:
-	## ▲ under the phone collapses phone + radio so the soda fountain is clear.
+	## Bare ▲ under the phone collapses phone + radio so the soda fountain is clear.
 	var ui_root: Control = get_node_or_null("UI/Root")
 	if ui_root == null:
 		return
@@ -15701,20 +15701,20 @@ func _build_hud_chrome_toggle() -> void:
 	hud_chrome_toggle.name = "HudChromeToggle"
 	hud_chrome_toggle.text = "▲"
 	hud_chrome_toggle.tooltip_text = "Hide phone & radio — use soda fountain"
-	hud_chrome_toggle.custom_minimum_size = Vector2(44, 28)
+	hud_chrome_toggle.custom_minimum_size = Vector2(36, 22)
 	hud_chrome_toggle.focus_mode = Control.FOCUS_NONE
 	hud_chrome_toggle.z_index = 22
-	UiFontsScript.apply_button(hud_chrome_toggle, true, 14)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.12, 0.13, 0.16, 0.94)
-	sb.border_color = Color(0.35, 0.38, 0.44, 1.0)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 2
-	sb.content_margin_bottom = 2
-	hud_chrome_toggle.add_theme_stylebox_override("normal", sb)
+	hud_chrome_toggle.flat = true
+	UiFontsScript.apply_button(hud_chrome_toggle, true, 18)
+	hud_chrome_toggle.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95, 0.95))
+	hud_chrome_toggle.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0, 1.0))
+	hud_chrome_toggle.add_theme_color_override("font_pressed_color", Color(0.65, 0.92, 0.88, 1.0))
+	hud_chrome_toggle.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.05, 0.75))
+	hud_chrome_toggle.add_theme_constant_override("outline_size", 4)
+	## No house / outline box — arrow only.
+	var empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		hud_chrome_toggle.add_theme_stylebox_override(state, empty)
 	hud_chrome_toggle.pressed.connect(_toggle_hud_chrome_collapsed)
 	ui_root.add_child(hud_chrome_toggle)
 	_layout_hud_chrome_toggle()
@@ -15727,14 +15727,14 @@ func _layout_hud_chrome_toggle() -> void:
 	hud_chrome_toggle.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	if hud_chrome_collapsed or phone_column == null or not phone_column.visible:
 		hud_chrome_toggle.position = Vector2(
-			vr.position.x + vr.size.x - 54.0,
-			RADIO_UI_TOP
+			vr.position.x + vr.size.x - 50.0,
+			RADIO_UI_TOP - 2.0
 		)
 	else:
 		var pr := phone_column.get_global_rect()
 		hud_chrome_toggle.position = Vector2(
-			pr.position.x + (pr.size.x - 44.0) * 0.5,
-			pr.position.y + pr.size.y + 4.0
+			pr.position.x + (pr.size.x - 36.0) * 0.5,
+			pr.position.y + pr.size.y + 2.0 ## was +4 — nudge 2px up
 		)
 
 
