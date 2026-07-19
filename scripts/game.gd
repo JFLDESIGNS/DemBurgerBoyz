@@ -225,6 +225,8 @@ var build_debug_root: Control = null
 var build_area_debug_outline: bool = false
 var _pending_station_patty_drag = null ## Dictionary while dragging a Build patty
 var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill burger
+var _cheese_lmb_drag: bool = false ## Pressed cheese wheel / empty air — place on release
+var _cheese_drag_origin: Vector2 = Vector2.ZERO
 var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
 var _pending_reorder_drag = null ## Dictionary while dragging a Build stack layer
 var _reorder_drag_origin: Vector2 = Vector2.ZERO ## Screen pos when Build layer drag began
@@ -582,6 +584,12 @@ var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
 var cheese_station_root: Node3D = null
 var cheese_station_area: Area3D = null
+var cheese_stack_anchor: Node3D = null ## World home for returning unused slices
+var cheese_stack_top: MeshInstance3D = null ## Hidden while a slice is in hand
+var _cheese_returning: bool = false
+var _cheese_return_t: float = 0.0
+var _cheese_return_from: Vector3 = Vector3.ZERO
+var _cheese_return_to: Vector3 = Vector3.ZERO
 var burger_pals_decal: MeshInstance3D = null
 var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
@@ -627,9 +635,10 @@ const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from the window)
 const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
-## Cheese wheel + slice stack — cook-side of the cutting board (grab here, not the strip).
+## Cheese wheel + slice stack — cook-side of the cutting board (grab slices, not the strip).
 const CHEESE_STATION_COLLISION_LAYER := 8192
 const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.055, 0.28) ## relative to board center
+const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
@@ -1342,8 +1351,8 @@ func _process(delta: float) -> void:
 	_update_burner_flames(delta)
 	if dragging_patty != null:
 		_update_patty_drag(delta)
-	if cheese_held:
-		_update_cheese_ghost()
+	if cheese_held or _cheese_returning:
+		_update_cheese_ghost(delta)
 	if spatula_patty != null:
 		_update_held_spatula_patty(delta)
 	if shaker_held:
@@ -1680,11 +1689,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			if event.button_index == MOUSE_BUTTON_LEFT:
-				if _try_window_cat_click(event.global_position):
-					get_viewport().set_input_as_handled()
-					return
-				_try_place_held_cheese(event.global_position)
-				get_viewport().set_input_as_handled()
+				## Press placement / drag start is owned by _input so release-to-drop works.
 				return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if _try_window_cat_click(event.position):
@@ -1732,16 +1737,45 @@ func _input(event: InputEvent) -> void:
 	if _handle_strip_swipe_input(event):
 		return
 	## Cheese pick-up / placement — run before UI, but never steal the topping strip.
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		if cheese_held:
-			if _is_ingredient_strip_click(_strip_mouse_pos(event)):
-				return
-			if _try_window_cat_click(_strip_mouse_pos(event)):
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		var cheese_mouse := _strip_mouse_pos(event)
+		if event.pressed:
+			if cheese_held:
+				if _is_ingredient_strip_click(cheese_mouse):
+					return
+				## Instant place/feed when already aiming at a target.
+				if _cheese_release_target_ready(cheese_mouse):
+					if _try_window_cat_click(cheese_mouse):
+						get_viewport().set_input_as_handled()
+						return
+					_try_place_held_cheese(cheese_mouse)
+					get_viewport().set_input_as_handled()
+					return
+				## Otherwise start a drag — release over a burger / cat to place.
+				_cheese_lmb_drag = true
+				_cheese_drag_origin = cheese_mouse
 				get_viewport().set_input_as_handled()
 				return
-			_try_place_held_cheese(_strip_mouse_pos(event))
-			get_viewport().set_input_as_handled()
-			return
+		else:
+			## Release after grabbing from the stack → drop on burger / cat, else lerp home.
+			if cheese_held and _cheese_lmb_drag:
+				_cheese_lmb_drag = false
+				## Quick click on the stack only — keep the slice in hand for the cat.
+				if _cheese_station_under_cursor(cheese_mouse) \
+						and cheese_mouse.distance_to(_cheese_drag_origin) < 28.0:
+					get_viewport().set_input_as_handled()
+					return
+				if _try_window_cat_click(cheese_mouse):
+					get_viewport().set_input_as_handled()
+					return
+				if _cheese_release_target_ready(cheese_mouse):
+					_try_place_held_cheese(cheese_mouse)
+					if cheese_held:
+						_try_snap_cheese_to_nearest(cheese_mouse)
+				if cheese_held:
+					_start_cheese_return_to_stack()
+				get_viewport().set_input_as_handled()
+				return
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
@@ -5410,7 +5444,10 @@ func _feed_window_cat_ingredient_local(id: String) -> void:
 	if not _cat_accepts_food(id):
 		return
 	if id == "cheese" and cheese_held:
-		_cancel_cheese_hold()
+		## Don't clear another player's local cheese grab on call_local sync.
+		var sid := multiplayer.get_remote_sender_id() if mp_enabled else 0
+		if sid == 0 or sid == NetManager.my_id():
+			_clear_cheese_hold_after_use()
 	if not _spend_ingredient(id):
 		return
 	if window_cat:
@@ -14850,11 +14887,13 @@ func _build_cutting_board_prop() -> void:
 
 
 func _build_cheese_station_prop() -> void:
-	## Wheel of cheese + slice stack in front of the cutting board — grab slices here.
+	## Bigger deli wheel with a triangle wedge cut out + grab-from slice stack in front.
 	if cheese_station_root != null and is_instance_valid(cheese_station_root):
 		cheese_station_root.queue_free()
 	cheese_station_root = null
 	cheese_station_area = null
+	cheese_stack_anchor = null
+	cheese_stack_top = null
 	if grill_root == null:
 		return
 	var board_c := _cutting_board_world_center()
@@ -14866,75 +14905,105 @@ func _build_cheese_station_prop() -> void:
 		bh * 0.5 + CHEESE_STATION_OFFSET.y,
 		CHEESE_STATION_OFFSET.z
 	)
-	## --- Wheel (flat on the board like a deli wheel) ---
-	var wheel := MeshInstance3D.new()
-	wheel.name = "CheeseWheel"
-	var wheel_mesh := CylinderMesh.new()
-	wheel_mesh.top_radius = 0.095
-	wheel_mesh.bottom_radius = 0.095
-	wheel_mesh.height = 0.055
-	wheel_mesh.radial_segments = 28
-	wheel.mesh = wheel_mesh
-	wheel.rotation_degrees = Vector3(0.0, 22.0, 0.0)
-	wheel.position = Vector3(-0.07, 0.028, -0.02)
 	var rind := StandardMaterial3D.new()
 	rind.albedo_color = Color(0.78, 0.52, 0.14)
 	rind.roughness = 0.82
 	rind.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	var cheese_col := StandardMaterial3D.new()
+	cheese_col.albedo_color = Color(0.98, 0.86, 0.28)
+	cheese_col.roughness = 0.55
+	cheese_col.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	var cut_col := StandardMaterial3D.new()
+	cut_col.albedo_color = Color(1.0, 0.9, 0.42)
+	cut_col.roughness = 0.48
+	cut_col.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	## --- Wheel (slightly larger) with a ~55° triangle wedge removed ---
+	var wheel_yaw := 18.0
+	var wheel_pos := Vector3(-0.08, 0.034, -0.04)
+	var wheel_r := 0.118
+	var wheel_h := 0.062
+	var wheel := MeshInstance3D.new()
+	wheel.name = "CheeseWheel"
+	wheel.mesh = _make_cheese_wheel_pie_mesh(wheel_r, wheel_h, 32, deg_to_rad(55.0))
+	wheel.position = wheel_pos
+	wheel.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
 	wheel.material_override = rind
 	root.add_child(wheel)
-	## Inner cheese top (cut face).
+	## Yellow top face (same missing wedge).
 	var face := MeshInstance3D.new()
 	face.name = "CheeseFace"
-	var face_mesh := CylinderMesh.new()
-	face_mesh.top_radius = 0.084
-	face_mesh.bottom_radius = 0.084
-	face_mesh.height = 0.012
-	face_mesh.radial_segments = 24
-	face.mesh = face_mesh
-	face.position = wheel.position + Vector3(0.0, 0.028, 0.0)
-	face.rotation_degrees = wheel.rotation_degrees
-	var face_mat := StandardMaterial3D.new()
-	face_mat.albedo_color = Color(0.98, 0.86, 0.28)
-	face_mat.roughness = 0.55
-	face_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	face.material_override = face_mat
+	face.mesh = _make_cheese_wheel_pie_mesh(wheel_r * 0.88, 0.01, 28, deg_to_rad(55.0))
+	face.position = wheel_pos + Vector3(0.0, wheel_h * 0.5 + 0.004, 0.0)
+	face.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
+	face.material_override = cheese_col
 	root.add_child(face)
-	## Hole / eye speckles on the cut face.
-	for ei in 5:
+	## Cut walls of the triangle (fresh cheese faces).
+	var cut_a := MeshInstance3D.new()
+	cut_a.name = "CheeseCutA"
+	var wall := BoxMesh.new()
+	wall.size = Vector3(wheel_r * 0.92, wheel_h * 0.92, 0.008)
+	cut_a.mesh = wall
+	cut_a.material_override = cut_col
+	cut_a.position = wheel_pos + Vector3(0.0, 0.0, 0.0)
+	## Align one wall along the wedge edge (yaw ± half gap).
+	cut_a.rotation_degrees = Vector3(0.0, wheel_yaw - 27.5, 0.0)
+	cut_a.position = wheel_pos + Vector3(
+		cos(deg_to_rad(wheel_yaw - 27.5)) * wheel_r * 0.42,
+		0.0,
+		-sin(deg_to_rad(wheel_yaw - 27.5)) * wheel_r * 0.42
+	)
+	root.add_child(cut_a)
+	var cut_b := cut_a.duplicate() as MeshInstance3D
+	cut_b.name = "CheeseCutB"
+	cut_b.rotation_degrees = Vector3(0.0, wheel_yaw + 27.5, 0.0)
+	cut_b.position = wheel_pos + Vector3(
+		cos(deg_to_rad(wheel_yaw + 27.5)) * wheel_r * 0.42,
+		0.0,
+		-sin(deg_to_rad(wheel_yaw + 27.5)) * wheel_r * 0.42
+	)
+	root.add_child(cut_b)
+	## Eyes on the remaining face.
+	for ei in 4:
 		var eye := MeshInstance3D.new()
 		var em := SphereMesh.new()
-		em.radius = 0.006 + float(ei % 2) * 0.003
+		em.radius = 0.007 + float(ei % 2) * 0.003
 		em.height = em.radius * 2.0
 		eye.mesh = em
-		var ang := float(ei) * TAU / 5.0 + 0.4
-		eye.position = face.position + Vector3(cos(ang) * 0.038, 0.008, sin(ang) * 0.038)
+		var ang := deg_to_rad(wheel_yaw + 50.0 + float(ei) * 55.0)
+		eye.position = face.position + Vector3(cos(ang) * 0.045, 0.008, -sin(ang) * 0.045)
 		var emat := StandardMaterial3D.new()
 		emat.albedo_color = Color(0.92, 0.72, 0.22)
 		emat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 		eye.material_override = emat
 		root.add_child(eye)
-	## --- Stack of slices in front of the wheel ---
+	## --- Stack of slices in front of the wheel (this is what you grab) ---
 	var slice_mat := StandardMaterial3D.new()
 	slice_mat.albedo_color = Color(1.0, 0.88, 0.22)
 	slice_mat.roughness = 0.48
 	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var stack_base := Vector3(0.08, 0.004, 0.04)
-	for si in 6:
+	var stack_root := Node3D.new()
+	stack_root.name = "CheeseSliceStack"
+	stack_root.position = Vector3(0.1, 0.004, 0.07)
+	root.add_child(stack_root)
+	cheese_stack_anchor = stack_root
+	var stack_n := 7
+	for si in stack_n:
 		var slice := MeshInstance3D.new()
 		slice.name = "CheeseSlice_%d" % si
 		var sm := BoxMesh.new()
-		sm.size = Vector3(0.11, 0.007, 0.11)
+		sm.size = Vector3(0.125, 0.008, 0.125)
 		slice.mesh = sm
-		slice.position = stack_base + Vector3(
-			float(si) * 0.004 - 0.01,
-			float(si) * 0.008,
-			float(si) * -0.003
+		slice.position = Vector3(
+			float(si) * 0.003 - 0.008,
+			float(si) * 0.009,
+			float(si) * -0.004
 		)
-		slice.rotation_degrees = Vector3(0.0, float(si) * 3.0 - 6.0, 0.0)
+		slice.rotation_degrees = Vector3(0.0, float(si) * 2.5 - 7.0, 0.0)
 		slice.material_override = slice_mat
-		root.add_child(slice)
-	## Grab volume covering wheel + stack.
+		stack_root.add_child(slice)
+		if si == stack_n - 1:
+			cheese_stack_top = slice
+	## Grab volume covers the slice stack (not the whole wheel).
 	var area := Area3D.new()
 	area.name = "CheeseGrab"
 	area.collision_layer = CHEESE_STATION_COLLISION_LAYER
@@ -14943,14 +15012,79 @@ func _build_cheese_station_prop() -> void:
 	area.monitorable = true
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.32, 0.14, 0.28)
+	box.size = Vector3(0.2, 0.12, 0.2)
 	cs.shape = box
-	cs.position = Vector3(0.02, 0.05, 0.02)
+	cs.position = stack_root.position + Vector3(0.0, 0.04, 0.0)
 	area.add_child(cs)
 	root.add_child(area)
 	grill_root.add_child(root)
 	cheese_station_root = root
 	cheese_station_area = area
+
+
+func _make_cheese_wheel_pie_mesh(radius: float, height: float, segments: int, gap_rad: float) -> ArrayMesh:
+	## Flat cylinder with a triangular wedge removed (gap centered on +X in local space).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half_h := height * 0.5
+	var start_a := gap_rad * 0.5
+	var end_a := TAU - gap_rad * 0.5
+	var span := end_a - start_a
+	var n := maxi(8, segments)
+	var top_c := Vector3(0, half_h, 0)
+	var bot_c := Vector3(0, -half_h, 0)
+	## Top + bottom fans (skip the gap).
+	for i in n:
+		var t0 := float(i) / float(n)
+		var t1 := float(i + 1) / float(n)
+		var a0 := start_a + span * t0
+		var a1 := start_a + span * t1
+		var p0 := Vector3(cos(a0) * radius, half_h, -sin(a0) * radius)
+		var p1 := Vector3(cos(a1) * radius, half_h, -sin(a1) * radius)
+		var q0 := Vector3(p0.x, -half_h, p0.z)
+		var q1 := Vector3(p1.x, -half_h, p1.z)
+		st.add_vertex(top_c)
+		st.add_vertex(p0)
+		st.add_vertex(p1)
+		st.add_vertex(bot_c)
+		st.add_vertex(q1)
+		st.add_vertex(q0)
+		## Outer wall quad.
+		st.add_vertex(p0)
+		st.add_vertex(q0)
+		st.add_vertex(q1)
+		st.add_vertex(p0)
+		st.add_vertex(q1)
+		st.add_vertex(p1)
+	## Two radial cut faces of the triangle wedge.
+	var a_lo := start_a
+	var a_hi := end_a
+	var lo_t := Vector3(cos(a_lo) * radius, half_h, -sin(a_lo) * radius)
+	var lo_b := Vector3(lo_t.x, -half_h, lo_t.z)
+	var hi_t := Vector3(cos(a_hi) * radius, half_h, -sin(a_hi) * radius)
+	var hi_b := Vector3(hi_t.x, -half_h, hi_t.z)
+	st.add_vertex(top_c)
+	st.add_vertex(bot_c)
+	st.add_vertex(lo_b)
+	st.add_vertex(top_c)
+	st.add_vertex(lo_b)
+	st.add_vertex(lo_t)
+	st.add_vertex(top_c)
+	st.add_vertex(hi_t)
+	st.add_vertex(hi_b)
+	st.add_vertex(top_c)
+	st.add_vertex(hi_b)
+	st.add_vertex(bot_c)
+	st.generate_normals()
+	return st.commit()
+
+
+func _cheese_stack_home_world() -> Vector3:
+	if cheese_stack_anchor != null and is_instance_valid(cheese_stack_anchor):
+		return cheese_stack_anchor.global_position + Vector3(0.0, 0.055, 0.0)
+	if cheese_station_area != null and is_instance_valid(cheese_station_area):
+		return cheese_station_area.global_position + Vector3(0.0, 0.04, 0.0)
+	return _cutting_board_world_center() + Vector3(0.1, 0.08, 0.3)
 
 
 func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
@@ -14965,13 +15099,13 @@ func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if not hit.is_empty() and hit.get("collider") == cheese_station_area:
 		return true
-	## Generous screen fallback — board sits under the Build UI sometimes.
-	var anchor := cheese_station_area.global_position + Vector3(0.02, 0.04, 0.0)
-	return screen_pos.distance_to(camera.unproject_position(anchor)) < 72.0
+	## Screen fallback aimed at the slice stack.
+	var anchor := _cheese_stack_home_world()
+	return screen_pos.distance_to(camera.unproject_position(anchor)) < 78.0
 
 
 func _try_cheese_station_click(screen_pos: Vector2) -> bool:
-	if not playing or cheese_held:
+	if not playing or cheese_held or _cheese_returning:
 		return false
 	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
 		return false
@@ -14980,7 +15114,66 @@ func _try_cheese_station_click(screen_pos: Vector2) -> bool:
 	if not _cheese_station_under_cursor(screen_pos):
 		return false
 	_begin_cheese_hold(false)
+	if cheese_held:
+		## Drag from the slice stack — release on a burger, or miss → lerp home.
+		_cheese_lmb_drag = true
+		_cheese_drag_origin = screen_pos
+		if cheese_stack_top != null and is_instance_valid(cheese_stack_top):
+			cheese_stack_top.visible = false
 	return cheese_held
+
+
+func _cheese_release_target_ready(screen_pos: Vector2) -> bool:
+	## True when release/click would succeed immediately (burger, Build, or cat).
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, screen_pos):
+		return true
+	if _cheese_targets_build_at(screen_pos):
+		return true
+	var target = _pick_cheese_patty_at_screen(screen_pos)
+	if target == null:
+		target = _nearest_cheesable_grill_patty(screen_pos, CHEESE_SNAP_WORLD)
+	if target == null and _cheese_hover_patty != null and is_instance_valid(_cheese_hover_patty):
+		target = _cheese_hover_patty
+	return target != null and _can_put_cheese_on_grill_patty(target)
+
+
+func _start_cheese_return_to_stack() -> void:
+	## Missed drop — fly the ghost slice back onto the stack (local; hold is already local).
+	if cheese_ghost == null or not is_instance_valid(cheese_ghost):
+		_cancel_cheese_hold_silent()
+		_restore_cheese_stack_top()
+		return
+	_cheese_returning = true
+	_cheese_return_t = 0.0
+	_cheese_return_from = cheese_ghost.global_position
+	_cheese_return_to = _cheese_stack_home_world()
+	_cheese_lmb_drag = false
+	_pending_cheese_drag = false
+	_cheese_hover_patty = null
+	## Still "held" visually until the lerp finishes so nothing else grabs mid-flight.
+	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if cheese_ghost_mat:
+		cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.26, 0.55)
+
+
+func _restore_cheese_stack_top() -> void:
+	if cheese_stack_top != null and is_instance_valid(cheese_stack_top):
+		cheese_stack_top.visible = true
+
+
+func _clear_cheese_hold_after_use() -> void:
+	## Slice was placed / fed — put the stack top back without a "returned" flash.
+	_pending_cheese_drag = false
+	_cheese_lmb_drag = false
+	_cheese_returning = false
+	cheese_held = false
+	_cheese_hover_patty = null
+	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
+		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if cheese_ghost and is_instance_valid(cheese_ghost):
+		cheese_ghost.visible = false
+	_restore_cheese_stack_top()
 
 
 func _build_truck_radio_prop() -> void:
@@ -18418,40 +18611,6 @@ func _create_ticket(customer: Node3D) -> void:
 	pin.add_theme_stylebox_override("panel", pin_sb)
 	pin_wrap.add_child(pin)
 
-	## Waiting patience — top of the slip (was a 3D bar over the customer).
-	var patience_track := PanelContainer.new()
-	patience_track.name = "PatienceTrack"
-	patience_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	patience_track.custom_minimum_size = Vector2(0, 12)
-	var track_sb := StyleBoxFlat.new()
-	track_sb.bg_color = Color(0.12, 0.08, 0.05, 0.55)
-	track_sb.set_corner_radius_all(3)
-	track_sb.content_margin_left = 2
-	track_sb.content_margin_right = 2
-	track_sb.content_margin_top = 2
-	track_sb.content_margin_bottom = 2
-	patience_track.add_theme_stylebox_override("panel", track_sb)
-	v.add_child(patience_track)
-	var patience_bar := ProgressBar.new()
-	patience_bar.name = "PatienceBar"
-	patience_bar.min_value = 0.0
-	patience_bar.max_value = 1.0
-	patience_bar.value = 1.0
-	patience_bar.show_percentage = false
-	patience_bar.custom_minimum_size = Vector2(0, 8)
-	patience_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var pbg := StyleBoxFlat.new()
-	pbg.bg_color = Color(0.05, 0.04, 0.03, 0.85)
-	pbg.set_corner_radius_all(2)
-	patience_bar.add_theme_stylebox_override("background", pbg)
-	var pfill := StyleBoxFlat.new()
-	pfill.bg_color = Color("66BB6A")
-	pfill.set_corner_radius_all(2)
-	patience_bar.add_theme_stylebox_override("fill", pfill)
-	patience_track.add_child(patience_bar)
-	wrap.set_meta("patience_bar", patience_bar)
-	wrap.set_meta("patience_fill_style", pfill)
-
 	var title := Label.new()
 	## Order code = strip hotkeys + C for cheese from the board wheel.
 	var order_code := GameDataScript.order_number_code(customer.order)
@@ -18467,12 +18626,34 @@ func _create_ticket(customer: Node3D) -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(title)
 
-	## Faint rule under the order number — like a real guest check.
-	var rule := ColorRect.new()
-	rule.custom_minimum_size = Vector2(0, 1)
-	rule.color = Color(0.55, 0.42, 0.32, 0.35)
-	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(rule)
+	## Patience meter replaces the old hairline rule under the order number.
+	var patience_track := Control.new()
+	patience_track.name = "PatienceTrack"
+	patience_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	patience_track.custom_minimum_size = Vector2(0, 7)
+	v.add_child(patience_track)
+	var patience_bar := ProgressBar.new()
+	patience_bar.name = "PatienceBar"
+	patience_bar.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	patience_bar.min_value = 0.0
+	patience_bar.max_value = 1.0
+	patience_bar.value = 1.0
+	patience_bar.show_percentage = false
+	patience_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	## Paper-ink groove + stamped fill (not a glossy UI chip).
+	var pbg := StyleBoxFlat.new()
+	pbg.bg_color = Color(0.42, 0.32, 0.22, 0.28)
+	pbg.set_corner_radius_all(1)
+	pbg.border_color = Color(0.38, 0.28, 0.18, 0.22)
+	pbg.set_border_width_all(1)
+	patience_bar.add_theme_stylebox_override("background", pbg)
+	var pfill := StyleBoxFlat.new()
+	pfill.bg_color = Color(0.38, 0.52, 0.30, 0.78) ## olive ink when calm
+	pfill.set_corner_radius_all(1)
+	patience_bar.add_theme_stylebox_override("fill", pfill)
+	patience_track.add_child(patience_bar)
+	wrap.set_meta("patience_bar", patience_bar)
+	wrap.set_meta("patience_fill_style", pfill)
 
 	var lines_box := VBoxContainer.new()
 	lines_box.name = "TicketLines"
@@ -18721,12 +18902,13 @@ func _refresh_ticket_patience_bars() -> void:
 		bar.value = t
 		var fill: StyleBoxFlat = wrap.get_meta("patience_fill_style") if wrap.has_meta("patience_fill_style") else null
 		if fill != null:
+			## Stamp-ink tones that sit on receipt paper.
 			if t > 0.55:
-				fill.bg_color = Color("66BB6A")
+				fill.bg_color = Color(0.38, 0.52, 0.30, 0.78)
 			elif t > 0.28:
-				fill.bg_color = Color("FFCA28")
+				fill.bg_color = Color(0.72, 0.52, 0.22, 0.82)
 			else:
-				fill.bg_color = Color("EF5350")
+				fill.bg_color = Color(0.62, 0.28, 0.20, 0.85)
 		bar.visible = bool(cust.get("is_waiting")) and not bool(cust.get("is_leaving"))
 
 
@@ -18767,10 +18949,11 @@ func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
 
 func _ticket_paper_texture(selected: bool) -> ImageTexture:
 	## Cache two paper plates so we don't rebuild per ticket.
+	## Meta "wm1" = includes Burger Pals watermark stamp.
 	if selected:
-		if _ticket_paper_tex_sel != null:
+		if _ticket_paper_tex_sel != null and bool(_ticket_paper_tex_sel.get_meta("wm1", false)):
 			return _ticket_paper_tex_sel
-	elif _ticket_paper_tex != null:
+	elif _ticket_paper_tex != null and bool(_ticket_paper_tex.get_meta("wm1", false)):
 		return _ticket_paper_tex
 	var w := 128
 	var h := 160
@@ -18778,7 +18961,6 @@ func _ticket_paper_texture(selected: bool) -> ImageTexture:
 	## A step darker than the old flat cream.
 	var base := Color(0.90, 0.84, 0.68) if selected else Color(0.86, 0.80, 0.64)
 	var edge := Color(0.58, 0.48, 0.34) if selected else Color(0.52, 0.43, 0.30)
-	## Invalidate any prior cache if we rebuild (fresh process on export).
 	for y in h:
 		for x in w:
 			var nx := (float(x) / float(w - 1) - 0.5) * 2.0
@@ -18790,12 +18972,57 @@ func _ticket_paper_texture(selected: bool) -> ImageTexture:
 			var c := base.lerp(edge, vig * 0.55)
 			c.a = 1.0
 			img.set_pixel(x, y, c)
+	_stamp_ticket_logo_watermark(img)
 	var tex := ImageTexture.create_from_image(img)
+	tex.set_meta("wm1", true)
 	if selected:
 		_ticket_paper_tex_sel = tex
 	else:
 		_ticket_paper_tex = tex
 	return tex
+
+
+func _stamp_ticket_logo_watermark(img: Image) -> void:
+	## Subtle B&W Burger Pals mark centered on the slip — reads as printed, not a sticker.
+	if img == null or not ResourceLoader.exists(LOGO_TEX_PATH):
+		return
+	var logo_tex := load(LOGO_TEX_PATH) as Texture2D
+	if logo_tex == null:
+		return
+	var logo := logo_tex.get_image()
+	if logo == null:
+		return
+	if logo.is_compressed():
+		logo.decompress()
+	logo.convert(Image.FORMAT_RGBA8)
+	var tw := img.get_width()
+	var th := img.get_height()
+	## ~55% of slip width, centered a bit low so it sits under the order code.
+	var mark_w := int(float(tw) * 0.58)
+	var aspect := float(logo.get_height()) / maxf(1.0, float(logo.get_width()))
+	var mark_h := maxi(8, int(float(mark_w) * aspect))
+	logo.resize(mark_w, mark_h, Image.INTERPOLATE_LANCZOS)
+	var ox := (tw - mark_w) / 2
+	var oy := int(float(th) * 0.42) - mark_h / 2
+	var strength := 0.085 ## low opacity black stamp
+	for py in mark_h:
+		for px in mark_w:
+			var sx := ox + px
+			var sy := oy + py
+			if sx < 0 or sy < 0 or sx >= tw or sy >= th:
+				continue
+			var lp := logo.get_pixel(px, py)
+			var a := lp.a * strength
+			if a < 0.004:
+				continue
+			## Luma → dark ink (ignore logo color).
+			var ink := 1.0 - clampf(lp.r * 0.3 + lp.g * 0.59 + lp.b * 0.11, 0.0, 1.0)
+			a *= lerpf(0.35, 1.0, ink)
+			if a < 0.004:
+				continue
+			var dst := img.get_pixel(sx, sy)
+			var ink_c := Color(0.18, 0.14, 0.10, 1.0)
+			img.set_pixel(sx, sy, dst.lerp(ink_c, a))
 
 
 func _select_ticket(customer: Node3D) -> void:
@@ -19554,18 +19781,38 @@ func _build_grill_drop_zone() -> void:
 
 func _on_grill_drop_zone_gui_input(ev: InputEvent) -> void:
 	## GrillDropZone is STOP while cheese is armed — GUI gets the click before _unhandled_input.
-	if not (ev is InputEventMouseButton and ev.pressed):
+	if not (ev is InputEventMouseButton):
 		return
 	var mb := ev as InputEventMouseButton
-	if mb.button_index == MOUSE_BUTTON_RIGHT and cheese_held:
+	if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and cheese_held:
 		_cancel_cheese_hold()
 		grill_drop_zone.accept_event()
 		return
-	if mb.button_index == MOUSE_BUTTON_LEFT and cheese_held:
+	if mb.button_index != MOUSE_BUTTON_LEFT or not cheese_held:
+		return
+	## Drag-from-wheel places on release; click-on-target still places on press.
+	if mb.pressed:
+		if _cheese_lmb_drag:
+			grill_drop_zone.accept_event()
+			return
 		if _try_window_cat_click(mb.global_position):
 			grill_drop_zone.accept_event()
 			return
 		_try_place_held_cheese(mb.global_position)
+		grill_drop_zone.accept_event()
+		return
+	## Mouse released over the grill while dragging cheese.
+	if _cheese_lmb_drag:
+		_cheese_lmb_drag = false
+		if _try_window_cat_click(mb.global_position):
+			grill_drop_zone.accept_event()
+			return
+		if _cheese_release_target_ready(mb.global_position):
+			_try_place_held_cheese(mb.global_position)
+			if cheese_held:
+				_try_snap_cheese_to_nearest(mb.global_position)
+		if cheese_held:
+			_start_cheese_return_to_stack()
 		grill_drop_zone.accept_event()
 		return
 
@@ -19610,8 +19857,7 @@ func _drop_cheese_on_grill(data: Variant) -> void:
 	if cheese_held:
 		_try_snap_cheese_to_nearest(mouse)
 	if cheese_held:
-		_cancel_cheese_hold_silent()
-		_flash("Drop cheese on a burger", Color("FFCC80"))
+		_start_cheese_return_to_stack()
 
 
 func _nearest_cheesable_grill_patty(screen_pos: Vector2 = Vector2.ZERO, max_world: float = -1.0):
@@ -19659,11 +19905,7 @@ func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
 	var target = _nearest_cheesable_grill_patty(screen_pos, CHEESE_SNAP_WORLD)
 	if target == null or not target.add_cheese():
 		return false
-	cheese_held = false
-	_cheese_hover_patty = null
-	_pending_cheese_drag = false
-	if cheese_ghost and is_instance_valid(cheese_ghost):
-		cheese_ghost.visible = false
+	_clear_cheese_hold_after_use()
 	if not _spend_ingredient("cheese"):
 		target.has_cheese = false
 		return false
@@ -19733,7 +19975,7 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 		if build_i >= 0 and _cheese_targets_build_at(mouse2):
 			## Dropped on Build plate without a Control accept — add as topping.
 			if cheese_held:
-				_cancel_cheese_hold_silent()
+				_clear_cheese_hold_after_use()
 			_add_ingredient_to_station(build_i, "cheese", true)
 			return
 		if cheese_held:
@@ -19741,8 +19983,7 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 			if cheese_held:
 				_try_snap_cheese_to_nearest(mouse2)
 			if cheese_held:
-				_cancel_cheese_hold_silent()
-				_flash("Drop cheese on a burger", Color("FFCC80"))
+				_start_cheese_return_to_stack()
 		return
 	if not was_accepted and _pending_ingredient_drag != "":
 		if _pending_ingredient_drag == "bacon" and _try_feed_bacon_to_customer(mouse):
@@ -20631,6 +20872,8 @@ func _add_ingredient(id: String) -> void:
 func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void:
 	if not playing or brush_held or oil_held or shaker_held or ext_held or glock_held or spatula_patty != null:
 		return
+	if _cheese_returning:
+		return
 	if cheese_held:
 		## Drag re-arms an existing hold; click toggles it off.
 		if from_drag:
@@ -20644,33 +20887,41 @@ func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void
 	_arm_grill_drop_zone()
 	if cheese_ghost:
 		cheese_ghost.visible = true
+	if cheese_stack_top != null and is_instance_valid(cheese_stack_top):
+		cheese_stack_top.visible = false
 	if not skip_sfx and game_audio:
 		game_audio.play_ingredient("cheese")
 	if from_drag:
-		_flash("Drop cheese on grill, HOLD, or Build", Color("FFE082"))
+		_flash("Release on a burger, Build, or the cat", Color("FFE082"))
 	else:
-		_flash("Cheese slice ready — grill / HOLD / Build · right-click cancels", Color("FFE082"))
+		_flash("Cheese in hand — drag onto burger / cat · miss returns to stack", Color("FFE082"))
 
 
 func _cancel_cheese_hold() -> void:
 	_pending_cheese_drag = false
+	_cheese_lmb_drag = false
+	_cheese_returning = false
 	cheese_held = false
 	_cheese_hover_patty = null
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
+	_restore_cheese_stack_top()
 	_flash("Cheese back on the stack", Color("B0BEC5"))
 
 
 func _cancel_cheese_hold_silent() -> void:
 	_pending_cheese_drag = false
+	_cheese_lmb_drag = false
+	_cheese_returning = false
 	cheese_held = false
 	_cheese_hover_patty = null
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
+	_restore_cheese_stack_top()
 
 
 func _ensure_cheese_ghost() -> void:
@@ -20692,8 +20943,28 @@ func _ensure_cheese_ghost() -> void:
 	world.add_child(cheese_ghost)
 
 
-func _update_cheese_ghost() -> void:
-	if not cheese_held or cheese_ghost == null or not is_instance_valid(cheese_ghost):
+func _update_cheese_ghost(delta: float = 0.016) -> void:
+	if cheese_ghost == null or not is_instance_valid(cheese_ghost):
+		return
+	## Fly unused slice back onto the stack.
+	if _cheese_returning:
+		_cheese_return_t += delta / maxf(CHEESE_RETURN_SEC, 0.05)
+		var u := clampf(_cheese_return_t, 0.0, 1.0)
+		var ease_t := 1.0 - pow(1.0 - u, 2.4)
+		cheese_ghost.visible = true
+		cheese_ghost.global_position = _cheese_return_from.lerp(_cheese_return_to, ease_t)
+		cheese_ghost.rotation = Vector3.ZERO
+		cheese_ghost.scale = Vector3.ONE * lerpf(1.0, 0.85, ease_t)
+		if cheese_ghost_mat:
+			cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.26, lerpf(0.55, 0.0, ease_t))
+		if u >= 1.0:
+			_cheese_returning = false
+			cheese_held = false
+			cheese_ghost.visible = false
+			_restore_cheese_stack_top()
+			_flash("Cheese back on the stack", Color("B0BEC5"))
+		return
+	if not cheese_held:
 		return
 	var target = _cheese_grill_target_under_cursor()
 	var pulse := 0.38 + 0.12 * absf(sin(Time.get_ticks_msec() * 0.008))
@@ -20707,15 +20978,18 @@ func _update_cheese_ghost() -> void:
 			cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.26, pulse + 0.12)
 	else:
 		_cheese_hover_patty = null
-		## Float ghost over the grill plane under the cursor.
-		var hit := _grill_plane_from_screen(get_viewport().get_mouse_position())
+		var mouse := get_viewport().get_mouse_position()
+		var hit := _grill_plane_from_screen(mouse)
 		if hit != Vector3.ZERO:
 			hit.y = GRILL_SURFACE_Y + 0.045
 			cheese_ghost.global_position = hit
+		elif camera != null:
+			var from := camera.project_ray_origin(mouse)
+			var dir := camera.project_ray_normal(mouse)
+			cheese_ghost.global_position = from + dir * 1.6
 		cheese_ghost.rotation = Vector3.ZERO
 		cheese_ghost.scale = Vector3(0.92, 1.0, 0.92)
 		if cheese_ghost_mat:
-			## Dimmer when not over a valid patty.
 			var blocked: bool = target != null and not _can_put_cheese_on_grill_patty(target)
 			cheese_ghost_mat.albedo_color = Color(1.0, 0.55, 0.35, pulse * 0.7) if blocked \
 				else Color(1.0, 0.82, 0.26, pulse * 0.75)
@@ -20826,7 +21100,7 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if _cheese_targets_build_at(screen_pos):
 		var station_idx := _build_plate_index_at(screen_pos)
 		if station_idx >= 0:
-			_cancel_cheese_hold()
+			_clear_cheese_hold_after_use()
 			_add_ingredient_to_station(station_idx, "cheese", true)
 			return
 	## Same pick as the ghost — plus sticky hover / wide snap if click lands off.
@@ -20854,19 +21128,11 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 		_flash("That patty already has cheese", Color("FFCC80"))
 		return
 	if mp_enabled and not _mp_applying and int(target.get("net_id")) >= 0:
-		cheese_held = false
-		_cheese_hover_patty = null
-		_pending_cheese_drag = false
-		if cheese_ghost and is_instance_valid(cheese_ghost):
-			cheese_ghost.visible = false
+		_clear_cheese_hold_after_use()
 		mp_cheese_patty.rpc(int(target.net_id))
 		return
 	if target.add_cheese():
-		cheese_held = false
-		_cheese_hover_patty = null
-		_pending_cheese_drag = false
-		if cheese_ghost and is_instance_valid(cheese_ghost):
-			cheese_ghost.visible = false
+		_clear_cheese_hold_after_use()
 		if not _spend_ingredient("cheese"):
 			target.has_cheese = false
 			return
