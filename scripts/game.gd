@@ -20587,7 +20587,10 @@ func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
 		return false
 	_clear_cheese_hold_after_use()
 	if not _spend_ingredient("cheese"):
-		target.has_cheese = false
+		if target.has_method("remove_cheese"):
+			target.remove_cheese()
+		else:
+			target.has_cheese = false
 		return false
 	if game_audio:
 		game_audio.play_ingredient("cheese")
@@ -21594,6 +21597,11 @@ func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void
 			return
 		_cancel_cheese_hold()
 		return
+	## Don't pick up a slice when fridge stock is empty — avoids ghost cheese that never melts.
+	if int(supply_stock.get("cheese", 0)) <= 0:
+		_flash("Out of cheese — restock on phone!", Color("EF5350"))
+		_refresh_phone_ui()
+		return
 	cheese_held = true
 	_ensure_cheese_ghost()
 	_arm_grill_drop_zone()
@@ -21846,7 +21854,10 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if target.add_cheese():
 		_clear_cheese_hold_after_use()
 		if not _spend_ingredient("cheese"):
-			target.has_cheese = false
+			if target.has_method("remove_cheese"):
+				target.remove_cheese()
+			else:
+				target.has_cheese = false
 			return
 		if game_audio:
 			game_audio.play_ingredient("cheese")
@@ -21977,7 +21988,10 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	st["items"] = _normalize_burger_stack(items)
 	if not _mp_spend_ingredient("cheese"):
 		items.erase("cheese")
-		patty.has_cheese = false
+		if patty.has_method("remove_cheese"):
+			patty.remove_cheese()
+		else:
+			patty.has_cheese = false
 		st["items"] = _normalize_burger_stack(items)
 		return
 	_start_station_freshness(station_index)

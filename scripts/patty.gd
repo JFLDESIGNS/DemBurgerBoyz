@@ -559,21 +559,21 @@ func apply_mp_state(
 	_rest_x = px
 	_rest_z = pz
 	visible = true
-	if p_cheese and not has_cheese:
-		add_cheese()
-	elif (not p_cheese) and has_cheese:
-		if has_method("remove_cheese"):
-			remove_cheese()
-		else:
-			has_cheese = false
-	has_cheese = p_cheese
-	cheese_melt = clampf(p_melt, 0.0, 1.0)
+	if p_cheese:
+		if not has_cheese:
+			add_cheese()
+		elif _cheese_root == null or not is_instance_valid(_cheese_root):
+			## Recover orphaned melt state (e.g. spend rolled back has_cheese without clearing mesh).
+			_build_cheese_slice()
+		has_cheese = true
+		cheese_melt = clampf(p_melt, 0.0, 1.0)
+		_update_cheese_visual()
+	elif has_cheese:
+		remove_cheese()
 	if p_season > seasoning + 0.02:
 		apply_seasoning(p_season - seasoning)
 	else:
 		seasoning = clampf(p_season, 0.0, 1.0)
-	if has_cheese:
-		_update_cheese_visual()
 	refresh_cook_visuals()
 	if warm_hold_time > 0.0 or heat_mul <= 0.001:
 		_set_hold_meter_visible(flipped_once and can_scoop())
@@ -1427,10 +1427,9 @@ func smash() -> void:
 
 
 func add_cheese() -> bool:
-	## Lay a yellow cheese square — melts on grill cook zone or Build.
+	## Lay a yellow cheese square — melts on grill, HOLD, or Build.
+	## Callers block spatula/drag; Build parks meat with is_held=true so we must allow that.
 	if has_cheese:
-		return false
-	if is_held:
 		return false
 	has_cheese = true
 	cheese_melt = 0.0
@@ -1585,7 +1584,7 @@ func _build_cheese_slice() -> void:
 
 
 func _update_cheese_visual() -> void:
-	if _cheese_root == null or _cheese_mat == null:
+	if _cheese_root == null or not is_instance_valid(_cheese_root) or _cheese_mat == null:
 		return
 	var t := clampf(cheese_melt, 0.0, 1.0)
 	var drape := smoothstep(0.12, 0.95, t)
