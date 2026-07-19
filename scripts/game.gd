@@ -601,6 +601,8 @@ var cheese_station_root: Node3D = null
 var cheese_station_area: Area3D = null
 var cheese_stack_anchor: Node3D = null ## World home for returning unused slices
 var cheese_stack_top: MeshInstance3D = null ## Hidden while a slice is in hand
+var cheese_pile_slices: Array = [] ## MeshInstance3D slots — visibility tracks fridge stock
+const CHEESE_PILE_MAX_EACH := 10 ## visual cap per pile (20 total)
 var _cheese_returning: bool = false
 var _cheese_return_t: float = 0.0
 var _cheese_return_from: Vector3 = Vector3.ZERO
@@ -650,9 +652,9 @@ const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from the window)
 const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
-## Cheese wheel + slice stack — on the counter beside the board (not on the wood rim).
+## Cheese slice piles on the counter — height tracks fridge stock (no wheel).
 const CHEESE_STATION_COLLISION_LAYER := 8192
-const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.0, 0.38) ## ~1 ft camera-left of grill; beside the board
+const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.0, 0.38) ## beside the board, back from the cook
 const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
@@ -15241,13 +15243,14 @@ func _build_cutting_board_prop() -> void:
 
 
 func _build_cheese_station_prop() -> void:
-	## Bigger deli wheel with a triangle wedge cut out + grab-from slice stack in front.
+	## Two cheese-slice piles on the counter — height tracks fridge stock.
 	if cheese_station_root != null and is_instance_valid(cheese_station_root):
 		cheese_station_root.queue_free()
 	cheese_station_root = null
 	cheese_station_area = null
 	cheese_stack_anchor = null
 	cheese_stack_top = null
+	cheese_pile_slices.clear()
 	if grill_root == null:
 		return
 	var board_c := _cutting_board_world_center()
@@ -15259,97 +15262,53 @@ func _build_cheese_station_prop() -> void:
 		bh * 0.5 + CHEESE_STATION_OFFSET.y,
 		CHEESE_STATION_OFFSET.z
 	)
-	var rind := StandardMaterial3D.new()
-	rind.albedo_color = Color(0.78, 0.52, 0.14)
-	rind.roughness = 0.82
-	rind.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var cheese_col := StandardMaterial3D.new()
-	cheese_col.albedo_color = Color(0.98, 0.86, 0.28)
-	cheese_col.roughness = 0.55
-	cheese_col.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var cut_col := StandardMaterial3D.new()
-	cut_col.albedo_color = Color(1.0, 0.9, 0.42)
-	cut_col.roughness = 0.48
-	cut_col.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	## --- Wheel on the counter beside the board (away from the cook) ---
-	var wheel_yaw := 18.0
-	var wheel_r := 0.118
-	var wheel_h := 0.098 ## taller deli wheel
-	var wheel_gap := deg_to_rad(55.0)
-	## Sit on the counter — center at half height; +6″ away from the cook.
-	var wheel_pos := Vector3(0.02, wheel_h * 0.5, 0.06 + 0.152)
-	var wheel := MeshInstance3D.new()
-	wheel.name = "CheeseWheel"
-	## Rind shell only (sides + bottom) — cut faces / top are separate clean meshes.
-	wheel.mesh = _make_cheese_wheel_shell_mesh(wheel_r, wheel_h, 36, wheel_gap)
-	wheel.position = wheel_pos
-	wheel.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
-	wheel.material_override = rind
-	root.add_child(wheel)
-	## Yellow top face (same missing wedge) — flat fan, clean up-normals.
-	var face := MeshInstance3D.new()
-	face.name = "CheeseFace"
-	face.mesh = _make_cheese_wheel_top_mesh(wheel_r * 0.96, 36, wheel_gap)
-	face.position = wheel_pos + Vector3(0.0, wheel_h * 0.5 + 0.001, 0.0)
-	face.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
-	face.material_override = cheese_col
-	root.add_child(face)
-	## Fresh cut faces of the wedge — proper radial quads (no overlapping boxes).
-	var half_gap_deg := 27.5
-	for side in [-1.0, 1.0]:
-		var cut := MeshInstance3D.new()
-		cut.name = "CheeseCut%s" % ("A" if side < 0.0 else "B")
-		cut.mesh = _make_cheese_cut_face_mesh(wheel_r, wheel_h)
-		cut.material_override = cut_col
-		cut.position = wheel_pos
-		## Local mesh lies in +X; yaw aims each face into the missing wedge.
-		cut.rotation_degrees = Vector3(0.0, wheel_yaw + side * half_gap_deg, 0.0)
-		root.add_child(cut)
-	## Eyes on the remaining face.
-	for ei in 4:
-		var eye := MeshInstance3D.new()
-		var em := SphereMesh.new()
-		em.radius = 0.007 + float(ei % 2) * 0.003
-		em.height = em.radius * 2.0
-		eye.mesh = em
-		var ang := deg_to_rad(wheel_yaw + 50.0 + float(ei) * 55.0)
-		eye.position = face.position + Vector3(cos(ang) * 0.045, 0.008, -sin(ang) * 0.045)
-		var emat := StandardMaterial3D.new()
-		emat.albedo_color = Color(0.92, 0.72, 0.22)
-		emat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-		eye.material_override = emat
-		root.add_child(eye)
-	## --- Slice stack beside the wheel ---
 	var slice_mat := StandardMaterial3D.new()
-	slice_mat.albedo_color = Color(1.0, 0.88, 0.22)
-	slice_mat.roughness = 0.48
+	slice_mat.albedo_color = Color(1.0, 0.86, 0.22)
+	slice_mat.roughness = 0.45
 	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var slice_thick := 0.014 ## taller slices
-	var slice_step := 0.0155
-	var stack_root := Node3D.new()
-	stack_root.name = "CheeseSliceStack"
-	## Dropped onto the counter; +6″ further from the cook.
-	stack_root.position = Vector3(0.06, slice_thick * 0.5 - 0.076, -0.02 + 0.152)
-	root.add_child(stack_root)
-	cheese_stack_anchor = stack_root
-	var stack_n := 7
-	for si in stack_n:
-		var slice := MeshInstance3D.new()
-		slice.name = "CheeseSlice_%d" % si
-		var sm := BoxMesh.new()
-		sm.size = Vector3(0.125, slice_thick, 0.125)
-		slice.mesh = sm
-		slice.position = Vector3(
-			float(si) * 0.003 - 0.008,
-			float(si) * slice_step,
-			float(si) * -0.004
-		)
-		slice.rotation_degrees = Vector3(0.0, float(si) * 2.5 - 7.0, 0.0)
-		slice.material_override = slice_mat
-		stack_root.add_child(slice)
-		if si == stack_n - 1:
-			cheese_stack_top = slice
-	## Grab volume covers the slice stack (not the whole wheel).
+	var slice_thick := 0.013
+	var slice_step := 0.0145
+	var slice_w := 0.118
+	## Two piles side-by-side, planted on the counter, back from the cook.
+	var pile_defs := [
+		{"name": "CheesePileA", "pos": Vector3(-0.07, slice_thick * 0.5 - 0.076, 0.14), "yaw": -8.0},
+		{"name": "CheesePileB", "pos": Vector3(0.08, slice_thick * 0.5 - 0.076, 0.15), "yaw": 11.0},
+	]
+	var mid := Node3D.new()
+	mid.name = "CheesePileMid"
+	mid.position = Vector3(0.005, slice_thick * 0.5 - 0.076, 0.145)
+	root.add_child(mid)
+	cheese_stack_anchor = mid
+	for pi in pile_defs.size():
+		var def: Dictionary = pile_defs[pi]
+		var pile := Node3D.new()
+		pile.name = str(def["name"])
+		pile.position = def["pos"]
+		root.add_child(pile)
+		for si in CHEESE_PILE_MAX_EACH:
+			var slice := MeshInstance3D.new()
+			slice.name = "CheeseSlice_%d_%d" % [pi, si]
+			var sm := BoxMesh.new()
+			## Slight size jitter so piles don't look like perfect bricks.
+			var jx := 1.0 + float(si % 3) * 0.012 - 0.012
+			var jz := 1.0 + float((si + 1) % 3) * 0.01 - 0.01
+			sm.size = Vector3(slice_w * jx, slice_thick, slice_w * jz)
+			slice.mesh = sm
+			slice.position = Vector3(
+				float(si) * 0.0025 - 0.006 + float(pi) * 0.001,
+				float(si) * slice_step,
+				float(si) * -0.0035 + float(pi) * 0.0015
+			)
+			slice.rotation_degrees = Vector3(
+				0.0,
+				float(def["yaw"]) + float(si) * 2.2 - 6.0,
+				float(si % 2) * 0.8 - 0.4
+			)
+			slice.material_override = slice_mat
+			slice.visible = false
+			pile.add_child(slice)
+			cheese_pile_slices.append(slice)
+	## Grab volume covers both piles.
 	var area := Area3D.new()
 	area.name = "CheeseGrab"
 	area.collision_layer = CHEESE_STATION_COLLISION_LAYER
@@ -15358,134 +15317,52 @@ func _build_cheese_station_prop() -> void:
 	area.monitorable = true
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.2, 0.16, 0.2)
+	box.size = Vector3(0.32, 0.22, 0.24)
 	cs.shape = box
-	cs.position = stack_root.position + Vector3(0.0, 0.055, 0.0)
+	cs.position = mid.position + Vector3(0.0, 0.07, 0.0)
 	area.add_child(cs)
 	root.add_child(area)
 	grill_root.add_child(root)
 	cheese_station_root = root
 	cheese_station_area = area
+	_refresh_cheese_piles()
 
 
-func _cheese_st_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var n := (b - a).cross(c - a)
-	if n.length_squared() < 0.0000001:
+func _cheese_visual_stock_count() -> int:
+	## Piles mirror fridge cheese; slice in hand is already off the pile.
+	var stock := int(supply_stock.get("cheese", 0))
+	if cheese_held or _cheese_returning:
+		stock = maxi(0, stock - 1)
+	return stock
+
+
+func _refresh_cheese_piles() -> void:
+	## Spread remaining cheese across two piles (left fills slightly first).
+	if cheese_pile_slices.is_empty():
 		return
-	n = n.normalized()
-	st.set_normal(n)
-	st.add_vertex(a)
-	st.set_normal(n)
-	st.add_vertex(b)
-	st.set_normal(n)
-	st.add_vertex(c)
-
-
-func _cheese_rim_point(angle: float, radius: float, y: float) -> Vector3:
-	return Vector3(cos(angle) * radius, y, -sin(angle) * radius)
-
-
-func _make_cheese_wheel_shell_mesh(radius: float, height: float, segments: int, gap_rad: float) -> ArrayMesh:
-	## Rind body: outer wall + bottom only (top + cuts are separate materials).
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var half_h := height * 0.5
-	var start_a := gap_rad * 0.5
-	var end_a := TAU - gap_rad * 0.5
-	var span := end_a - start_a
-	var n := maxi(12, segments)
-	var bot_c := Vector3(0.0, -half_h, 0.0)
-	for i in n:
-		var a0 := start_a + span * (float(i) / float(n))
-		var a1 := start_a + span * (float(i + 1) / float(n))
-		var p0 := _cheese_rim_point(a0, radius, half_h)
-		var p1 := _cheese_rim_point(a1, radius, half_h)
-		var q0 := _cheese_rim_point(a0, radius, -half_h)
-		var q1 := _cheese_rim_point(a1, radius, -half_h)
-		## Outer wall (outward).
-		_cheese_st_tri(st, p0, q0, q1)
-		_cheese_st_tri(st, p0, q1, p1)
-		## Bottom (downward).
-		_cheese_st_tri(st, bot_c, q1, q0)
-	st.index()
-	return st.commit()
-
-
-func _make_cheese_wheel_top_mesh(radius: float, segments: int, gap_rad: float) -> ArrayMesh:
-	## Flat cheese top with the wedge missing — normals all +Y.
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var start_a := gap_rad * 0.5
-	var end_a := TAU - gap_rad * 0.5
-	var span := end_a - start_a
-	var n := maxi(12, segments)
-	var top_c := Vector3.ZERO
-	for i in n:
-		var a0 := start_a + span * (float(i) / float(n))
-		var a1 := start_a + span * (float(i + 1) / float(n))
-		var p0 := _cheese_rim_point(a0, radius, 0.0)
-		var p1 := _cheese_rim_point(a1, radius, 0.0)
-		_cheese_st_tri(st, top_c, p0, p1)
-	st.index()
-	return st.commit()
-
-
-func _make_cheese_cut_face_mesh(radius: float, height: float) -> ArrayMesh:
-	## Radial cut quad in the local +X plane (rotate instance to aim into the wedge).
-	## Normal faces +Z in local space so the fresh face reads toward the gap.
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var half_h := height * 0.5
-	var a := Vector3(0.0, half_h, 0.0)
-	var b := Vector3(radius, half_h, 0.0)
-	var c := Vector3(radius, -half_h, 0.0)
-	var d := Vector3(0.0, -half_h, 0.0)
-	_cheese_st_tri(st, a, b, c)
-	_cheese_st_tri(st, a, c, d)
-	## Backface so it reads from either side of the cut.
-	_cheese_st_tri(st, a, c, b)
-	_cheese_st_tri(st, a, d, c)
-	st.index()
-	return st.commit()
-
-
-func _make_cheese_wheel_pie_mesh(radius: float, height: float, segments: int, gap_rad: float) -> ArrayMesh:
-	## Full pie with explicit outward normals (legacy helper).
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var half_h := height * 0.5
-	var start_a := gap_rad * 0.5
-	var end_a := TAU - gap_rad * 0.5
-	var span := end_a - start_a
-	var n := maxi(12, segments)
-	var top_c := Vector3(0.0, half_h, 0.0)
-	var bot_c := Vector3(0.0, -half_h, 0.0)
-	for i in n:
-		var a0 := start_a + span * (float(i) / float(n))
-		var a1 := start_a + span * (float(i + 1) / float(n))
-		var p0 := _cheese_rim_point(a0, radius, half_h)
-		var p1 := _cheese_rim_point(a1, radius, half_h)
-		var q0 := _cheese_rim_point(a0, radius, -half_h)
-		var q1 := _cheese_rim_point(a1, radius, -half_h)
-		_cheese_st_tri(st, top_c, p0, p1)
-		_cheese_st_tri(st, bot_c, q1, q0)
-		_cheese_st_tri(st, p0, q0, q1)
-		_cheese_st_tri(st, p0, q1, p1)
-	var lo_t := _cheese_rim_point(start_a, radius, half_h)
-	var lo_b := _cheese_rim_point(start_a, radius, -half_h)
-	var hi_t := _cheese_rim_point(end_a, radius, half_h)
-	var hi_b := _cheese_rim_point(end_a, radius, -half_h)
-	_cheese_st_tri(st, top_c, lo_t, lo_b)
-	_cheese_st_tri(st, top_c, lo_b, bot_c)
-	_cheese_st_tri(st, top_c, hi_b, hi_t)
-	_cheese_st_tri(st, top_c, bot_c, hi_b)
-	st.index()
-	return st.commit()
+	var stock := _cheese_visual_stock_count()
+	var cap := CHEESE_PILE_MAX_EACH * 2
+	var show_n := mini(stock, cap)
+	var left_n := int((show_n + 1) / 2)
+	var right_n := int(show_n / 2)
+	cheese_stack_top = null
+	for i in cheese_pile_slices.size():
+		var slice: MeshInstance3D = cheese_pile_slices[i]
+		if slice == null or not is_instance_valid(slice):
+			continue
+		var pile_i := i / CHEESE_PILE_MAX_EACH
+		var slot_i := i % CHEESE_PILE_MAX_EACH
+		var need := left_n if pile_i == 0 else right_n
+		var on := slot_i < need
+		slice.visible = on
+		if on:
+			cheese_stack_top = slice
 
 
 func _cheese_stack_home_world() -> Vector3:
 	if cheese_stack_anchor != null and is_instance_valid(cheese_stack_anchor):
-		return cheese_stack_anchor.global_position + Vector3(0.0, 0.075, 0.0)
+		var lift := 0.02 + float(mini(_cheese_visual_stock_count(), CHEESE_PILE_MAX_EACH)) * 0.0145
+		return cheese_stack_anchor.global_position + Vector3(0.0, lift, 0.0)
 	if cheese_station_area != null and is_instance_valid(cheese_station_area):
 		return cheese_station_area.global_position + Vector3(0.0, 0.05, 0.0)
 	return _cutting_board_world_center() + Vector3(0.1, 0.08, 0.3)
@@ -15522,8 +15399,7 @@ func _try_cheese_station_click(screen_pos: Vector2) -> bool:
 		## Drag from the slice stack — release on a burger, or miss → lerp home.
 		_cheese_lmb_drag = true
 		_cheese_drag_origin = screen_pos
-		if cheese_stack_top != null and is_instance_valid(cheese_stack_top):
-			cheese_stack_top.visible = false
+		_refresh_cheese_piles()
 	return cheese_held
 
 
@@ -15562,8 +15438,7 @@ func _start_cheese_return_to_stack() -> void:
 
 
 func _restore_cheese_stack_top() -> void:
-	if cheese_stack_top != null and is_instance_valid(cheese_stack_top):
-		cheese_stack_top.visible = true
+	_refresh_cheese_piles()
 
 
 func _clear_cheese_hold_after_use() -> void:
@@ -16552,6 +16427,7 @@ func _refresh_phone_ui() -> void:
 	if phone_rating_stars == null or phone_rating_value == null or phone_review_label == null:
 		## Still try the feed — rating labels can lag a frame behind build.
 		_refresh_phone_feed()
+		_refresh_cheese_piles()
 		return
 	if social_review_count <= 0:
 		phone_rating_stars.text = "☆☆☆☆☆"
@@ -16567,6 +16443,7 @@ func _refresh_phone_ui() -> void:
 		]
 	_refresh_phone_feed()
 	if phone_inventory_box == null:
+		_refresh_cheese_piles()
 		return
 	_clear_phone_box_children(phone_inventory_box)
 	for id in SUPPLY_IDS:
@@ -16706,6 +16583,7 @@ func _refresh_phone_ui() -> void:
 		if not pend2:
 			buy2.pressed.connect(func(): _buy_supply(syrup_id))
 		row2.add_child(buy2)
+	_refresh_cheese_piles()
 
 
 func _style_phone_buy_button(btn: Button) -> void:
@@ -21680,8 +21558,7 @@ func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void
 	_arm_grill_drop_zone()
 	if cheese_ghost:
 		cheese_ghost.visible = true
-	if cheese_stack_top != null and is_instance_valid(cheese_stack_top):
-		cheese_stack_top.visible = false
+	_refresh_cheese_piles()
 	if not skip_sfx and game_audio:
 		game_audio.play_ingredient("cheese")
 	if from_drag:
