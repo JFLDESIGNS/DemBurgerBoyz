@@ -68,6 +68,8 @@ var _giant: float = 0.0
 var _patty_eat_wide: float = 0.0
 ## Non-host co-op: skip local peek AI; pose/state come from the host.
 var mp_puppet: bool = false
+## When > 0, next peek uses this hold time (cat delivery).
+var _peek_override_sec: float = 0.0
 
 
 func _ready() -> void:
@@ -494,7 +496,11 @@ func _process(delta: float) -> void:
 			position.y = lerpf(_hidden_y(), _shown_y(), ease)
 			if _timer <= 0.0:
 				_state = "peek"
-				_timer = randf_range(PEEK_MIN_SEC, PEEK_MAX_SEC)
+				if _peek_override_sec > 0.0:
+					_timer = _peek_override_sec
+					_peek_override_sec = 0.0
+				else:
+					_timer = randf_range(PEEK_MIN_SEC, PEEK_MAX_SEC)
 				position = Vector3(_home_x(), _shown_y(), _home_z())
 		"peek":
 			position.x = _home_x()
@@ -596,6 +602,21 @@ func _finish_run_away() -> void:
 		_anim.speed_scale = 0.85
 	if _hearts != null and is_instance_valid(_hearts):
 		_hearts.emitting = false
+
+
+func request_delivery_peek(hold_sec: float = 5.5) -> void:
+	## Force a peek so the cat can toss phone restocks into the kitchen.
+	if not enabled or _visual == null or mp_puppet:
+		return
+	if _state == "fed_hold" or _state == "running":
+		_clear_mouth_burger()
+		_patty_eat_wide = 0.0
+	_peek_override_sec = maxf(hold_sec, 3.5)
+	_state = "rising"
+	_timer = 0.45
+	visible = true
+	position = Vector3(_home_x(), _hidden_y(), _home_z() + APPROACH_START_EXTRA + _giant * 0.35)
+	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 
 
 func is_interactable() -> bool:

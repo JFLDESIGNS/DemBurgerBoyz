@@ -465,6 +465,11 @@ var soda_flavor_mats: Dictionary = {} ## flavor id / pad_* -> Material (tank Sha
 var soda_flavor_pads: Dictionary = {} ## flavor id -> MeshInstance3D (press-in buttons)
 var soda_flavor_labels: Dictionary = {} ## flavor id -> Label3D
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
+var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
+var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
+var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
+var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
+var _supply_order_seq: int = 0
 var soda_spout_marker: Marker3D = null
 var ice_spout_marker: Marker3D = null
 var soda_spout_mat: StandardMaterial3D = null ## colored metal nozzle (tracks selected flavor)
@@ -781,8 +786,16 @@ const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
 ]
+const SYRUP_SUPPLY_IDS: Array[String] = [
+	"syrup_cola", "syrup_lemon_lime", "syrup_orange",
+]
 const SUPPLY_FRESH_MAX := 360.0
 const SUPPLY_BUY_PACK := 8
+const SUPPLY_ORDER_WAIT := 15.0 ## Phone order → cat delivery delay
+const SODA_TANK_CUP_COST := 0.12 ## Full cup pour drains this fraction of a tank
+const SODA_TANK_SYRUP_REFILL := 0.65 ## One syrup order restores this much tank fill
+const SODA_TANK_MAX_H := 0.245
+const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
@@ -1345,6 +1358,7 @@ func _process(delta: float) -> void:
 				_update_bun_toast_hold(p, delta)
 	_update_station_cheese_melt(delta)
 	_update_supply_freshness(delta)
+	_update_supply_orders(delta)
 	_update_patty_hint_focus()
 	_update_kitchen_sizzle()
 	_update_heat_warp(delta)
@@ -8108,12 +8122,13 @@ func _clear_soda_char_spots() -> void:
 
 func _get_cup_melt_shader() -> Shader:
 	## Bump ver whenever the burn look changes so a stale Shader resource can't stick around.
-	const SHADER_VER := 10
+	const SHADER_VER := 11
 	if _cup_melt_shader != null and int(_cup_melt_shader.get_meta("ver", 0)) == SHADER_VER:
 		return _cup_melt_shader
 	var sh := Shader.new()
 	sh.set_meta("ver", SHADER_VER)
-	## Milk + rainbow in the bottom band (UV.y = 1 at floor). Noisy milk edge; clearer rainbow.
+	## Milk + rainbow ONLY on the bottom band. Height comes from COLOR.r baked into the
+	## shell mesh (0 = floor, 1 = rim) — UV / world-Y both lied after melt squash.
 	sh.code = """
 shader_type spatial;
 render_mode blend_mix, depth_draw_always, cull_back, unshaded;
@@ -8122,9 +8137,9 @@ uniform vec4 albedo_color : source_color = vec4(0.78, 0.86, 0.92, 0.10);
 uniform float melt_amt : hint_range(0.0, 1.0) = 0.0;
 uniform float wobble_amp : hint_range(0.0, 0.12) = 0.035;
 uniform float shell_half_h : hint_range(0.01, 0.5) = 0.0945;
-uniform float milk_frac : hint_range(0.02, 0.4) = 0.18;
+uniform float milk_frac : hint_range(0.02, 0.35) = 0.16;
 
-varying float v_h; // 0 = bottom lip, 1 = top rim
+varying float v_h; // 0 = bottom lip, 1 = top rim (baked COLOR.r)
 varying float v_around;
 
 vec3 hsv2rgb(float h, float s, float v) {
@@ -8150,8 +8165,8 @@ float noise2(vec2 p) {
 }
 
 void vertex() {
-	// Shell mesh UV.y = 1 at bottom ring, 0 at top rim.
-	v_h = clamp(1.0 - UV.y, 0.0, 1.0);
+	// COLOR.r is authored height (0 bottom → 1 top). Never derive from deformed VERTEX/UV.
+	v_h = clamp(COLOR.r, 0.0, 1.0);
 	v_around = UV.x;
 
 	float t = TIME * 4.2;
@@ -8173,28 +8188,26 @@ void fragment() {
 	vec3 clear_c = albedo_color.rgb;
 	float clear_a = albedo_color.a;
 
-	float band = max(milk_frac, 0.02);
-	// Noisy breakup on the milk edge so it isn't a flat ring.
+	// Hard ceiling so milk can never climb the wall (noise only softens the edge).
+	float band = clamp(milk_frac, 0.04, 0.20);
 	float n = noise2(vec2(v_around * 28.0, v_h * 40.0 + TIME * 0.15));
 	n = n * 0.55 + noise2(vec2(v_around * 11.0 - TIME * 0.08, v_h * 18.0)) * 0.45;
-	float band_n = band * (0.72 + n * 0.55);
+	float band_n = band * (0.82 + n * 0.28);
 
 	float milky = 0.0;
-	if (v_h <= band_n * 1.15) {
+	if (v_h <= band_n) {
 		milky = 1.0 - smoothstep(0.0, band_n, v_h);
-		milky = pow(max(milky, 0.0), 1.15) * smoothstep(0.0, 0.18, melt);
-		// Extra speckled holes in the milk.
-		milky *= mix(0.55, 1.0, smoothstep(0.25, 0.75, n));
+		milky = pow(max(milky, 0.0), 1.35) * smoothstep(0.0, 0.18, melt);
+		milky *= mix(0.6, 1.0, smoothstep(0.25, 0.75, n));
 	}
 
 	vec3 milk_c = vec3(0.95, 0.96, 0.98);
-	float milk_a = 0.72;
+	float milk_a = 0.68;
 	vec3 c = mix(clear_c, milk_c, milky);
 	float a = mix(clear_a, milk_a, milky);
-	c = mix(c, vec3(0.12, 0.09, 0.07), milky * 0.22);
+	c = mix(c, vec3(0.12, 0.09, 0.07), milky * 0.2);
 
-	// Rainbow — a bit stronger / taller inside the milk band.
-	float rb_h = band * 0.95;
+	float rb_h = band * 0.78;
 	float rainbow_band = 0.0;
 	if (v_h <= rb_h) {
 		rainbow_band = 1.0 - smoothstep(0.0, rb_h, v_h);
@@ -8203,19 +8216,19 @@ void fragment() {
 	}
 	float hue = fract(v_around * 2.6 + TIME * 0.32 + v_h * 4.0);
 	vec3 rainbow = hsv2rgb(hue, 0.9, 1.0);
-	c = mix(c, rainbow, rainbow_band * 0.55);
-	a = max(a, rainbow_band * 0.42);
+	c = mix(c, rainbow, rainbow_band * 0.5);
+	a = max(a, rainbow_band * 0.38);
 
-	// Above the noisy milk band → clear.
-	if (v_h > band_n * 1.15) {
+	// Absolute clear above the milk ceiling — no leftover wash.
+	if (v_h > band) {
 		c = clear_c;
 		a = clear_a;
 		rainbow_band = 0.0;
 	}
 
 	ALBEDO = c;
-	ALPHA = clamp(a, 0.05, 0.82);
-	EMISSION = rainbow * rainbow_band * 0.38;
+	ALPHA = clamp(a, 0.05, 0.78);
+	EMISSION = rainbow * rainbow_band * 0.34;
 }
 """
 	_cup_melt_shader = sh
@@ -8228,8 +8241,8 @@ func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
 	var base: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.28, 0.08, 0.05))
 	_cup_melt_shader = null ## force fresh shader so milk-height fixes always land
 	var sh := _get_cup_melt_shader()
-	## ~1.35 inch of the solo cup height (a bit taller than the tight lip).
-	var milk_frac := clampf(0.034 / maxf(CUP_SHELL_H, 0.01), 0.10, 0.22)
+	## ~1.2 inch milky lip at the floor (hard-capped in the shader too).
+	var milk_frac := clampf(0.030 / maxf(CUP_SHELL_H, 0.01), 0.12, 0.18)
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
 		if mi == null:
@@ -10530,6 +10543,8 @@ func _build_soda_station() -> void:
 	soda_flavor_pads.clear()
 	soda_flavor_labels.clear()
 	soda_tank_bubbles.clear()
+	soda_tank_syrup.clear()
+	## Keep fill levels across rebuilds within a shift; reset only on new economy.
 	soda_colliders.clear()
 	soda_spout_marker = null
 	ice_spout_marker = null
@@ -10831,6 +10846,10 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 	_apply_soda_tank_gradient(liq_mat, col, flavor_id == soda_selected_flavor, flavor_id)
 	liquid.material_override = liq_mat
 	tank.add_child(liquid)
+	soda_tank_syrup[flavor_id] = liquid
+	if not soda_tank_fill.has(flavor_id):
+		soda_tank_fill[flavor_id] = 1.0
+	_set_soda_tank_visual_level(flavor_id, float(soda_tank_fill.get(flavor_id, 1.0)))
 
 	var lid := MeshInstance3D.new()
 	lid.name = "Lid"
@@ -10868,6 +10887,63 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 
 	_add_soda_tank_bubbles(tank, col, flavor_id)
 	return liq_mat
+
+
+func _syrup_id_for_flavor(flavor_id: String) -> String:
+	return "syrup_%s" % flavor_id
+
+
+func _flavor_from_syrup_id(syrup_id: String) -> String:
+	if str(syrup_id).begins_with("syrup_"):
+		return str(syrup_id).substr(6)
+	return str(syrup_id)
+
+
+func _set_soda_tank_visual_level(flavor_id: String, fill: float) -> void:
+	fill = clampf(fill, 0.0, 1.0)
+	soda_tank_fill[flavor_id] = fill
+	var liq: MeshInstance3D = soda_tank_syrup.get(flavor_id) as MeshInstance3D
+	if liq == null or not is_instance_valid(liq):
+		return
+	var cyl := liq.mesh as CylinderMesh
+	if cyl == null:
+		cyl = CylinderMesh.new()
+		cyl.top_radius = 0.114
+		cyl.bottom_radius = 0.114
+		liq.mesh = cyl
+	if fill < 0.02:
+		liq.visible = false
+		return
+	liq.visible = true
+	var h := maxf(0.012, fill * SODA_TANK_MAX_H)
+	cyl.height = h
+	liq.position.y = SODA_TANK_FLOOR_Y + h * 0.5
+
+
+func _refresh_all_soda_tank_levels() -> void:
+	for fid in SODA_FLAVORS:
+		_set_soda_tank_visual_level(str(fid), float(soda_tank_fill.get(fid, 1.0)))
+
+
+func _drain_soda_tank(flavor_id: String, cup_fill_delta: float) -> float:
+	## Returns how much cup fill was actually allowed by remaining syrup.
+	if flavor_id == "" or cup_fill_delta <= 0.0:
+		return 0.0
+	var have := float(soda_tank_fill.get(flavor_id, 0.0))
+	if have <= 0.02:
+		return 0.0
+	var need := cup_fill_delta * SODA_TANK_CUP_COST
+	var take := minf(have, need)
+	var allowed := take / maxf(SODA_TANK_CUP_COST, 0.001)
+	soda_tank_fill[flavor_id] = have - take
+	_set_soda_tank_visual_level(flavor_id, float(soda_tank_fill[flavor_id]))
+	return allowed
+
+
+func _refill_soda_tank(flavor_id: String, amount: float) -> void:
+	var have := float(soda_tank_fill.get(flavor_id, 0.0))
+	_set_soda_tank_visual_level(flavor_id, have + amount)
+	_refresh_soda_tank_bubbles()
 
 
 func _apply_soda_tank_gradient(mat: ShaderMaterial, col: Color, selected: bool = false, flavor_id: String = "") -> void:
@@ -11701,6 +11777,7 @@ func _make_solo_cup_shell_mesh(
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var uvs := PackedVector2Array()
+	var cols := PackedColorArray()
 	var indices := PackedInt32Array()
 	## Wall rings — Y centered like CylinderMesh (−h/2 … +h/2).
 	for ring in range(rings + 1):
@@ -11721,6 +11798,8 @@ func _make_solo_cup_shell_mesh(
 			## Approximate outward normal (refined after faces).
 			norms.append(Vector3(cos(ang), 0.0, sin(ang)))
 			uvs.append(Vector2(u, 1.0 - t))
+			## COLOR.r = normalized height for burn milk mask (survives melt squash).
+			cols.append(Color(t, 0.0, 0.0, 1.0))
 	## Wall quads.
 	for ring in rings:
 		for s in segs:
@@ -11736,6 +11815,7 @@ func _make_solo_cup_shell_mesh(
 	verts.append(Vector3(0.0, bot_y, 0.0))
 	norms.append(Vector3(0.0, -1.0, 0.0))
 	uvs.append(Vector2(0.5, 0.5))
+	cols.append(Color(0.0, 0.0, 0.0, 1.0))
 	for s in segs:
 		var a := s ## bottom ring vertex
 		var b := (s + 1) % segs
@@ -11775,6 +11855,7 @@ func _make_solo_cup_shell_mesh(
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_NORMAL] = norms
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_COLOR] = cols
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -12867,17 +12948,26 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		if cup_flavor != "" and cup_flavor != soda_selected_flavor and cup_soda_fill > 0.05:
 			_flash("Empty / return cup first — wrong flavor", Color("FFAB91"))
 			_hide_soda_stream()
+		elif float(soda_tank_fill.get(soda_selected_flavor, 0.0)) <= 0.02:
+			_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
+			_hide_soda_stream()
 		else:
 			cup_flavor = soda_selected_flavor
-			cup_soda_fill = minf(1.0, cup_soda_fill + CUP_FILL_RATE * delta)
-			pouring_soda = true
-			_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
-			## Pour all the way to the cup floor (not just the rim).
-			var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
-			_update_soda_stream(soda_tip, cup_floor, cup_flavor)
-			if before < 1.0 and cup_soda_fill >= 1.0:
-				_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
-				_refresh_ticket_checkmarks()
+			var want := minf(1.0 - cup_soda_fill, CUP_FILL_RATE * delta)
+			var got := _drain_soda_tank(cup_flavor, want)
+			if got > 0.0005:
+				cup_soda_fill = minf(1.0, cup_soda_fill + got)
+				pouring_soda = true
+				_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
+				## Pour all the way to the cup floor (not just the rim).
+				var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
+				_update_soda_stream(soda_tip, cup_floor, cup_flavor)
+				if before < 1.0 and cup_soda_fill >= 1.0:
+					_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
+					_refresh_ticket_checkmarks()
+			else:
+				_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
+				_hide_soda_stream()
 	else:
 		_hide_soda_stream()
 	if ice_d < 900.0 and ice_d < soda_d:
@@ -12901,6 +12991,10 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 	_cup_pouring = pouring_soda
 	if _cup_pouring != was_pouring:
 		_refresh_soda_tank_bubbles()
+		if not _cup_pouring:
+			_refresh_phone_ui()
+			if mp_enabled and NetManager.is_host():
+				_mp_broadcast_economy()
 	if game_audio:
 		if game_audio.has_method("set_soda_pour"):
 			game_audio.set_soda_pour(pouring_soda)
@@ -14983,7 +15077,7 @@ func _build_cheese_station_prop() -> void:
 	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 	var stack_root := Node3D.new()
 	stack_root.name = "CheeseSliceStack"
-	stack_root.position = Vector3(0.1, 0.004, 0.07)
+	stack_root.position = Vector3(-0.02, 0.004, 0.155)
 	root.add_child(stack_root)
 	cheese_stack_anchor = stack_root
 	var stack_n := 7
@@ -15488,6 +15582,8 @@ func _reset_supplies() -> void:
 	day_social_rating_sum = 0.0
 	supply_stock.clear()
 	supply_fresh.clear()
+	supply_orders.clear()
+	_clear_supply_delivery_fx()
 	for id in SUPPLY_IDS:
 		match id:
 			"bun_bottom", "bun_top":
@@ -15497,6 +15593,9 @@ func _reset_supplies() -> void:
 			_:
 				supply_stock[id] = 16
 		supply_fresh[id] = SUPPLY_FRESH_MAX
+	for fid in SODA_FLAVORS:
+		soda_tank_fill[str(fid)] = 1.0
+	_refresh_all_soda_tank_levels()
 	_refresh_phone_ui()
 
 
@@ -15509,8 +15608,207 @@ func _supply_buy_unit_cost(id: String) -> float:
 			return 0.20
 		"bacon":
 			return 2.00
+		"syrup_cola", "syrup_lemon_lime", "syrup_orange":
+			return 0.45
 		_:
 			return 1.00
+
+
+func _is_syrup_supply(id: String) -> bool:
+	return str(id).begins_with("syrup_")
+
+
+func _supply_order_pending(id: String) -> bool:
+	for o in supply_orders:
+		if typeof(o) == TYPE_DICTIONARY and str(o.get("id", "")) == id:
+			return true
+	return false
+
+
+func _buy_supply(id: String) -> void:
+	if not playing:
+		return
+	if mp_enabled and not _mp_applying:
+		mp_buy_supply.rpc(id)
+		return
+	_buy_supply_local(id)
+
+
+func _buy_supply_local(id: String) -> void:
+	if not playing:
+		return
+	if _supply_order_pending(id):
+		_flash("Already ordered — cat's on the way", Color("FFE082"))
+		return
+	var is_syrup := _is_syrup_supply(id)
+	var pack := 1 if is_syrup else SUPPLY_BUY_PACK
+	var unit := _supply_buy_unit_cost(id)
+	var cost := unit * float(pack if not is_syrup else SUPPLY_BUY_PACK)
+	## Syrup: charge as a pack of concentrate (same pack count pricing feel).
+	if is_syrup:
+		cost = unit * float(SUPPLY_BUY_PACK)
+		pack = 1
+	if money + 0.001 < cost:
+		_flash("Need %s to restock" % _format_money(cost), Color("EF5350"))
+		return
+	money -= cost
+	_supply_order_seq += 1
+	supply_orders.append({
+		"id": id,
+		"pack": pack,
+		"wait": SUPPLY_ORDER_WAIT,
+		"kind": "syrup" if is_syrup else "stock",
+		"seq": _supply_order_seq,
+	})
+	_update_hud()
+	_refresh_phone_ui()
+	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+	_flash("Ordered %s — cat delivery in %ds" % [label, int(SUPPLY_ORDER_WAIT)], Color("A5D6A7"))
+	_sfx_click()
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
+
+
+func _update_supply_orders(delta: float) -> void:
+	if not playing:
+		return
+	var i := 0
+	var phone_dirty := false
+	while i < supply_orders.size():
+		var o: Dictionary = supply_orders[i]
+		var prev_wait := float(o.get("wait", 0.0))
+		o["wait"] = prev_wait - delta
+		supply_orders[i] = o
+		if int(ceil(prev_wait)) != int(ceil(float(o["wait"]))):
+			phone_dirty = true
+		if float(o["wait"]) > 0.0:
+			i += 1
+			continue
+		supply_orders.remove_at(i)
+		phone_dirty = true
+		_begin_cat_supply_delivery(str(o.get("id", "")), int(o.get("pack", SUPPLY_BUY_PACK)), str(o.get("kind", "stock")))
+	if phone_dirty:
+		_refresh_phone_ui()
+	_update_supply_delivery_fx(delta)
+
+
+func _clear_supply_delivery_fx() -> void:
+	for item in supply_delivery_fx:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var mesh = item.get("mesh")
+		if mesh != null and is_instance_valid(mesh):
+			mesh.queue_free()
+	supply_delivery_fx.clear()
+
+
+func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
+	if id == "":
+		return
+	## Ask the window cat to peek, then toss packages toward the kitchen.
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("request_delivery_peek"):
+		window_cat.request_delivery_peek(5.5)
+	var from := Vector3(1.2, 1.05, 1.55)
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("head_global"):
+		from = window_cat.head_global() + Vector3(0.0, 0.08, 0.05)
+	var to := _supply_delivery_landing()
+	var throws := mini(3, maxi(1, pack if kind != "syrup" else 2))
+	for n in throws:
+		var mesh := _make_supply_pack_mesh(id, kind)
+		world.add_child(mesh)
+		var spread := Vector3(randf_range(-0.08, 0.08), randf_range(0.0, 0.06), randf_range(-0.05, 0.05))
+		mesh.global_position = from + spread
+		supply_delivery_fx.append({
+			"mesh": mesh,
+			"from": from + spread,
+			"to": to + Vector3(randf_range(-0.12, 0.12), 0.0, randf_range(-0.08, 0.08)),
+			"t": 0.0,
+			"dur": 0.55 + float(n) * 0.08,
+			"arc": 0.55 + randf() * 0.25,
+			"id": id,
+			"pack": pack if n == 0 else 0, ## credit stock once on first pack landing
+			"kind": kind,
+			"spin": randf_range(-8.0, 8.0),
+		})
+	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+	_flash("Cat delivery — %s incoming!" % label, Color("FFE082"))
+
+
+func _supply_delivery_landing() -> Vector3:
+	## Aim near the fridge / prep side so packs fly into the kitchen.
+	if grill_root != null and is_instance_valid(grill_root):
+		return grill_root.global_position + Vector3(-0.55, 0.85, 0.35)
+	return Vector3(-0.4, 1.0, 0.6)
+
+
+func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = "SupplyPack"
+	var box := BoxMesh.new()
+	box.size = Vector3(0.09, 0.07, 0.09) if kind != "syrup" else Vector3(0.06, 0.11, 0.06)
+	mi.mesh = box
+	var mat := StandardMaterial3D.new()
+	var col: Color = GameDataScript.INGREDIENT_COLORS.get(id, Color(0.75, 0.55, 0.25))
+	if kind == "syrup":
+		var fid := _flavor_from_syrup_id(id)
+		col = SODA_FLAVOR_COLORS.get(fid, col)
+	mat.albedo_color = col
+	mat.roughness = 0.55
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	mi.material_override = mat
+	return mi
+
+
+func _update_supply_delivery_fx(delta: float) -> void:
+	var i := 0
+	while i < supply_delivery_fx.size():
+		var item: Dictionary = supply_delivery_fx[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			supply_delivery_fx.remove_at(i)
+			continue
+		item["t"] = float(item.get("t", 0.0)) + delta
+		var dur := maxf(0.2, float(item.get("dur", 0.6)))
+		var u := clampf(float(item["t"]) / dur, 0.0, 1.0)
+		var ease := 1.0 - pow(1.0 - u, 2.2)
+		var from: Vector3 = item.get("from", Vector3.ZERO)
+		var to: Vector3 = item.get("to", Vector3.ZERO)
+		var pos := from.lerp(to, ease)
+		pos.y += sin(ease * PI) * float(item.get("arc", 0.6))
+		mesh.global_position = pos
+		mesh.rotation_degrees.y += float(item.get("spin", 4.0)) * delta * 60.0
+		mesh.rotation_degrees.x += float(item.get("spin", 4.0)) * delta * 40.0
+		if u >= 1.0:
+			var pack := int(item.get("pack", 0))
+			var id := str(item.get("id", ""))
+			var kind := str(item.get("kind", "stock"))
+			if pack > 0 and id != "":
+				_credit_supply_delivery(id, pack, kind)
+			mesh.queue_free()
+			supply_delivery_fx.remove_at(i)
+			continue
+		supply_delivery_fx[i] = item
+		i += 1
+
+
+func _credit_supply_delivery(id: String, pack: int, kind: String) -> void:
+	## Guests only watch the throw — host stock/tank is authoritative.
+	if mp_enabled and not NetManager.is_host():
+		return
+	if kind == "syrup":
+		var fid := _flavor_from_syrup_id(id)
+		_refill_soda_tank(fid, SODA_TANK_SYRUP_REFILL)
+		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		_flash("%s topped up!" % label, Color("A5D6A7"))
+	else:
+		supply_stock[id] = int(supply_stock.get(id, 0)) + pack
+		supply_fresh[id] = SUPPLY_FRESH_MAX
+		var label2 := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		_flash("Restocked %s (+%d)" % [label2, pack], Color("A5D6A7"))
+	_refresh_phone_ui()
+	_update_hud()
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_economy()
 
 
 func _try_use_supply(id: String, amount: int = 1) -> bool:
@@ -15595,36 +15893,6 @@ func _update_supply_freshness(delta: float) -> void:
 		_refresh_phone_ui()
 		if mp_enabled and NetManager.is_host():
 			_mp_broadcast_economy()
-
-
-func _buy_supply(id: String) -> void:
-	if not playing:
-		return
-	if mp_enabled and not _mp_applying:
-		mp_buy_supply.rpc(id)
-		return
-	_buy_supply_local(id)
-
-
-func _buy_supply_local(id: String) -> void:
-	if not playing:
-		return
-	var pack := SUPPLY_BUY_PACK
-	var unit := _supply_buy_unit_cost(id)
-	var cost := unit * float(pack)
-	if money + 0.001 < cost:
-		_flash("Need %s to restock" % _format_money(cost), Color("EF5350"))
-		return
-	money -= cost
-	supply_stock[id] = int(supply_stock.get(id, 0)) + pack
-	supply_fresh[id] = SUPPLY_FRESH_MAX
-	_update_hud()
-	_refresh_phone_ui()
-	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
-	_flash("Restocked %s (+%d)" % [label, pack], Color("A5D6A7"))
-	_sfx_click()
-	if mp_enabled and NetManager.is_host() and not _mp_applying:
-		_mp_broadcast_economy()
 
 
 func _social_rating_display() -> float:
@@ -15992,16 +16260,90 @@ func _refresh_phone_ui() -> void:
 
 		var pack_cost: float = _supply_buy_unit_cost(id) * float(SUPPLY_BUY_PACK)
 		var buy := Button.new()
-		buy.text = "Buy"
-		buy.tooltip_text = "Buy %d for %s" % [SUPPLY_BUY_PACK, _format_money(pack_cost)]
+		var pending := _supply_order_pending(id)
+		buy.text = "…" if pending else "Buy"
+		buy.disabled = pending
+		if pending:
+			buy.tooltip_text = "Cat delivering…"
+		else:
+			buy.tooltip_text = "Buy %d for %s · cat delivers in %ds" % [SUPPLY_BUY_PACK, _format_money(pack_cost), int(SUPPLY_ORDER_WAIT)]
 		buy.custom_minimum_size = Vector2(28, 16)
 		buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 		buy.focus_mode = Control.FOCUS_NONE
 		UiFontsScript.apply_button(buy, true, 7)
 		_style_phone_buy_button(buy)
 		var sid := id
-		buy.pressed.connect(func(): _buy_supply(sid))
+		if not pending:
+			buy.pressed.connect(func(): _buy_supply(sid))
 		row.add_child(buy)
+
+	## Syrup tanks — volume % + order refill (cat delivery).
+	for sid2 in SYRUP_SUPPLY_IDS:
+		var fid := _flavor_from_syrup_id(sid2)
+		var row2 := HBoxContainer.new()
+		row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row2.add_theme_constant_override("separation", 3)
+		row2.custom_minimum_size = Vector2(0, 18)
+		phone_inventory_box.add_child(row2)
+
+		var name2 := Label.new()
+		var short2 := str(GameDataScript.INGREDIENT_LABELS.get(sid2, sid2))
+		if short2.length() > 10:
+			short2 = short2.substr(0, 9) + "…"
+		name2.text = short2
+		name2.custom_minimum_size = Vector2(40, 0)
+		name2.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		name2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		name2.clip_text = true
+		UiFontsScript.apply_label(name2, false, 8)
+		name2.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+		row2.add_child(name2)
+
+		var fill_r := clampf(float(soda_tank_fill.get(fid, 0.0)), 0.0, 1.0)
+		var pct := Label.new()
+		pct.text = "%d%%" % int(round(fill_r * 100.0))
+		pct.custom_minimum_size = Vector2(22, 0)
+		pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		pct.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		UiFontsScript.apply_label(pct, true, 8)
+		pct.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35) if fill_r < 0.25 else Color(0.7, 0.9, 0.75))
+		row2.add_child(pct)
+
+		var bar2 := ProgressBar.new()
+		bar2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bar2.custom_minimum_size = Vector2(12, 5)
+		bar2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		bar2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		bar2.max_value = 1.0
+		bar2.value = fill_r
+		bar2.show_percentage = false
+		var bar2_bg := StyleBoxFlat.new()
+		bar2_bg.bg_color = Color(0.10, 0.12, 0.16, 0.95)
+		bar2_bg.set_corner_radius_all(2)
+		var bar2_fill := StyleBoxFlat.new()
+		var tank_col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.7, 0.4, 0.2))
+		bar2_fill.bg_color = tank_col
+		bar2_fill.set_corner_radius_all(2)
+		bar2.add_theme_stylebox_override("background", bar2_bg)
+		bar2.add_theme_stylebox_override("fill", bar2_fill)
+		row2.add_child(bar2)
+
+		var syrup_cost: float = _supply_buy_unit_cost(sid2) * float(SUPPLY_BUY_PACK)
+		var buy2 := Button.new()
+		var pend2 := _supply_order_pending(sid2)
+		buy2.text = "…" if pend2 else "Buy"
+		buy2.disabled = pend2
+		buy2.tooltip_text = "Order syrup refill for %s · cat in %ds" % [_format_money(syrup_cost), int(SUPPLY_ORDER_WAIT)]
+		if pend2:
+			buy2.tooltip_text = "Cat delivering syrup…"
+		buy2.custom_minimum_size = Vector2(28, 16)
+		buy2.focus_mode = Control.FOCUS_NONE
+		UiFontsScript.apply_button(buy2, true, 7)
+		_style_phone_buy_button(buy2)
+		var syrup_id := sid2
+		if not pend2:
+			buy2.pressed.connect(func(): _buy_supply(syrup_id))
+		row2.add_child(buy2)
 
 
 func _style_phone_buy_button(btn: Button) -> void:
@@ -25092,6 +25434,11 @@ func _mp_broadcast_economy() -> void:
 		stock_ids.append(str(id))
 		stock_vals.append(int(supply_stock.get(id, 0)))
 		fresh_vals.append(float(supply_fresh.get(id, 0.0)))
+	var tank_ids: Array = []
+	var tank_vals: Array = []
+	for fid in SODA_FLAVORS:
+		tank_ids.append(str(fid))
+		tank_vals.append(float(soda_tank_fill.get(fid, 1.0)))
 	mp_sync_economy.rpc(
 		money,
 		combo,
@@ -25103,7 +25450,9 @@ func _mp_broadcast_economy() -> void:
 		social_review_count,
 		stock_ids,
 		stock_vals,
-		fresh_vals
+		fresh_vals,
+		tank_ids,
+		tank_vals
 	)
 
 
@@ -25119,7 +25468,9 @@ func mp_sync_economy(
 	rating_count: int,
 	stock_ids: Array,
 	stock_vals: Array,
-	fresh_vals: Array
+	fresh_vals: Array,
+	tank_ids: Array = [],
+	tank_vals: Array = []
 ) -> void:
 	## Guest applies host world economy as absolute truth.
 	if NetManager.is_host():
@@ -25138,6 +25489,10 @@ func mp_sync_economy(
 		var fresh := float(fresh_vals[i]) if i < fresh_vals.size() else 0.0
 		supply_stock[id] = stock
 		supply_fresh[id] = fresh
+	for ti in tank_ids.size():
+		var fid := str(tank_ids[ti])
+		var fill := float(tank_vals[ti]) if ti < tank_vals.size() else 1.0
+		_set_soda_tank_visual_level(fid, fill)
 	_update_hud()
 	_refresh_phone_ui()
 

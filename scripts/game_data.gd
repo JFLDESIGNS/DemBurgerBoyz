@@ -17,6 +17,9 @@ const INGREDIENT_LABELS := {
 	"soda_cola": "Cola",
 	"soda_lemon_lime": "Lime Soda",
 	"soda_orange": "Orange Soda",
+	"syrup_cola": "Cola Syrup",
+	"syrup_lemon_lime": "Lime Syrup",
+	"syrup_orange": "Orange Syrup",
 }
 
 const INGREDIENT_COLORS := {
@@ -34,6 +37,9 @@ const INGREDIENT_COLORS := {
 	"soda_cola": Color("5D2A1A"),
 	"soda_lemon_lime": Color("7CB342"),
 	"soda_orange": Color("F57C00"),
+	"syrup_cola": Color("5D2A1A"),
+	"syrup_lemon_lime": Color("7CB342"),
+	"syrup_orange": Color("F57C00"),
 }
 
 const EXTRA_TOPPINGS := ["cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
