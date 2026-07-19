@@ -652,7 +652,7 @@ const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
 ## Cheese wheel + slice stack — cook-side of the cutting board (grab slices, not the strip).
 const CHEESE_STATION_COLLISION_LAYER := 8192
-const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.055, 0.28) ## relative to board center
+const CHEESE_STATION_OFFSET := Vector3(-0.06, -0.02, 0.28) ## relative to board center (planted, not floating)
 const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
@@ -15273,9 +15273,10 @@ func _build_cheese_station_prop() -> void:
 	cut_col.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 	## --- Wheel further from the cook (higher Z = toward window) ---
 	var wheel_yaw := 18.0
-	var wheel_pos := Vector3(-0.06, 0.034, 0.08)
 	var wheel_r := 0.118
-	var wheel_h := 0.062
+	var wheel_h := 0.098 ## taller deli wheel
+	## Sit on the board — center at half height (was floating ~2–3").
+	var wheel_pos := Vector3(-0.06, wheel_h * 0.5, 0.08)
 	var wheel := MeshInstance3D.new()
 	wheel.name = "CheeseWheel"
 	wheel.mesh = _make_cheese_wheel_pie_mesh(wheel_r, wheel_h, 32, deg_to_rad(55.0))
@@ -15286,8 +15287,8 @@ func _build_cheese_station_prop() -> void:
 	## Yellow top face (same missing wedge).
 	var face := MeshInstance3D.new()
 	face.name = "CheeseFace"
-	face.mesh = _make_cheese_wheel_pie_mesh(wheel_r * 0.88, 0.01, 28, deg_to_rad(55.0))
-	face.position = wheel_pos + Vector3(0.0, wheel_h * 0.5 + 0.004, 0.0)
+	face.mesh = _make_cheese_wheel_pie_mesh(wheel_r * 0.88, 0.012, 28, deg_to_rad(55.0))
+	face.position = wheel_pos + Vector3(0.0, wheel_h * 0.5 + 0.005, 0.0)
 	face.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
 	face.material_override = cheese_col
 	root.add_child(face)
@@ -15335,9 +15336,12 @@ func _build_cheese_station_prop() -> void:
 	slice_mat.albedo_color = Color(1.0, 0.88, 0.22)
 	slice_mat.roughness = 0.48
 	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	var slice_thick := 0.014 ## taller slices
+	var slice_step := 0.0155
 	var stack_root := Node3D.new()
 	stack_root.name = "CheeseSliceStack"
-	stack_root.position = Vector3(-0.02, 0.004, -0.14)
+	## Planted on the board (half thickness up).
+	stack_root.position = Vector3(-0.02, slice_thick * 0.5, -0.14)
 	root.add_child(stack_root)
 	cheese_stack_anchor = stack_root
 	var stack_n := 7
@@ -15345,11 +15349,11 @@ func _build_cheese_station_prop() -> void:
 		var slice := MeshInstance3D.new()
 		slice.name = "CheeseSlice_%d" % si
 		var sm := BoxMesh.new()
-		sm.size = Vector3(0.125, 0.008, 0.125)
+		sm.size = Vector3(0.125, slice_thick, 0.125)
 		slice.mesh = sm
 		slice.position = Vector3(
 			float(si) * 0.003 - 0.008,
-			float(si) * 0.009,
+			float(si) * slice_step,
 			float(si) * -0.004
 		)
 		slice.rotation_degrees = Vector3(0.0, float(si) * 2.5 - 7.0, 0.0)
@@ -15366,9 +15370,9 @@ func _build_cheese_station_prop() -> void:
 	area.monitorable = true
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.2, 0.12, 0.2)
+	box.size = Vector3(0.2, 0.16, 0.2)
 	cs.shape = box
-	cs.position = stack_root.position + Vector3(0.0, 0.04, 0.0)
+	cs.position = stack_root.position + Vector3(0.0, 0.055, 0.0)
 	area.add_child(cs)
 	root.add_child(area)
 	grill_root.add_child(root)
@@ -15435,9 +15439,9 @@ func _make_cheese_wheel_pie_mesh(radius: float, height: float, segments: int, ga
 
 func _cheese_stack_home_world() -> Vector3:
 	if cheese_stack_anchor != null and is_instance_valid(cheese_stack_anchor):
-		return cheese_stack_anchor.global_position + Vector3(0.0, 0.055, 0.0)
+		return cheese_stack_anchor.global_position + Vector3(0.0, 0.075, 0.0)
 	if cheese_station_area != null and is_instance_valid(cheese_station_area):
-		return cheese_station_area.global_position + Vector3(0.0, 0.04, 0.0)
+		return cheese_station_area.global_position + Vector3(0.0, 0.05, 0.0)
 	return _cutting_board_world_center() + Vector3(0.1, 0.08, 0.3)
 
 
