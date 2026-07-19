@@ -22005,6 +22005,7 @@ func _station_layer_scale(layer_count: int) -> float:
 
 func _station_item_build_scale(item: String) -> float:
 	## Buns define the plate footprint; toppings scale relative to STATION_INGREDIENT_SCALE.
+	## Sauces + meat/buns stay put; other toppings are 2× so they read on the patty.
 	if item == "bun_top":
 		return 1.05
 	if item == "bun_bottom":
@@ -22014,17 +22015,17 @@ func _station_item_build_scale(item: String) -> float:
 	if item == "patty":
 		return STATION_PATTY_BUILD_SCALE
 	if item == "onion":
-		return STATION_INGREDIENT_SCALE * 0.595 ## −30%
+		return STATION_INGREDIENT_SCALE * 1.19 ## was 0.595 (−30%), then 2×
 	if item == "tomato":
-		return STATION_INGREDIENT_SCALE * 0.98
+		return STATION_INGREDIENT_SCALE * 1.96 ## was 0.98, then 2×
 	if item == "pickle":
-		return STATION_INGREDIENT_SCALE * 0.56 ## −30%
+		return STATION_INGREDIENT_SCALE * 1.12 ## was 0.56 (−30%), then 2×
 	if item == "bacon":
-		return STATION_INGREDIENT_SCALE * 0.88
+		return STATION_INGREDIENT_SCALE * 1.76 ## was 0.88, then 2×
 	if item == "lettuce":
-		return STATION_INGREDIENT_SCALE * 0.92
+		return STATION_INGREDIENT_SCALE * 1.84 ## was 0.92, then 2×
 	if item == "cheese":
-		return STATION_INGREDIENT_SCALE * 0.9
+		return STATION_INGREDIENT_SCALE * 1.8 ## was 0.9, then 2×
 	if item == "ketchup":
 		return STATION_INGREDIENT_SCALE * 1.12
 	if item == "mustard":
