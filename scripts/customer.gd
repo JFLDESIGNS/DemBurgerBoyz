@@ -116,8 +116,13 @@ var is_terrorist: bool = false
 var is_disguise_cat: bool = false
 var _mustache_root: Node3D = null
 var _disguise_cat_mesh: Node3D = null
-## Match max window-cat presence — fills the service opening at the customer stand.
-const DISGUISE_CAT_MESH_SCALE := 6.2
+## Match maxed window cat (MESH_SCALE 3.35 × 2). Bigger made the pivot bury him.
+const DISGUISE_CAT_MESH_SCALE := 6.7
+## Mid-body FBX pivot — lift so paws sit on the sidewalk and head fills the window.
+const DISGUISE_CAT_MESH_Y := 0.52
+## Window-cat mouth sits at (0, 0.34, 0.22) with MESH_SCALE 3.35 — scale with us.
+const _WINDOW_CAT_MESH_SCALE := 3.35
+const _WINDOW_CAT_MOUTH := Vector3(0.0, 0.34, 0.22)
 ## Fire-extinguisher powder stuck to the toon (white spheres that build up).
 var _powder_hit: bool = false
 var _powdering: bool = false ## Standing still while powder coats them.
@@ -1970,9 +1975,19 @@ func feed_bacon_snack(restore_ratio: float = 0.10) -> bool:
 ## Serve fly animation target — roughly lip height in the service window.
 func mouth_global() -> Vector3:
 	if is_disguise_cat:
-		## Snout on the oversized stand-in cat.
-		return global_position + Vector3(0.0, 1.55, 0.35)
+		var mouth_local := _disguise_mustache_local()
+		return global_position + Vector3(mouth_local.x, mouth_local.y, mouth_local.z + 0.12)
 	return global_position + Vector3(0.0, 1.18, 0.06)
+
+
+func _disguise_mustache_local() -> Vector3:
+	## Same snout placement as the window cat, scaled up for our mesh size + plant lift.
+	var s := DISGUISE_CAT_MESH_SCALE / _WINDOW_CAT_MESH_SCALE
+	return Vector3(
+		_WINDOW_CAT_MOUTH.x,
+		DISGUISE_CAT_MESH_Y + _WINDOW_CAT_MOUTH.y * s,
+		_WINDOW_CAT_MOUTH.z * s
+	)
 
 
 func apply_disguise_cat_look() -> void:
@@ -1983,16 +1998,9 @@ func apply_disguise_cat_look() -> void:
 	speech = "One triple patty burger… please."
 	if _bubble:
 		_bubble.text = speech
-	if _body == null:
-		return
-	for child in _body.get_children():
-		child.visible = false
-		child.queue_free()
-	_char_meshes.clear()
-	_anim_player = null
-	_skeleton = null
-	_body.scale = Vector3.ONE
-	_body.position = Vector3(0.0, _base_body_y, 0.0)
+	## Hide the human toon — cat mesh parents to this root so CHAR_SCALE never shrinks it.
+	if _body != null and is_instance_valid(_body):
+		_body.visible = false
 	const CAT_PATH := "res://assets/cat/cat.fbx"
 	if ResourceLoader.exists(CAT_PATH):
 		var packed := load(CAT_PATH) as PackedScene
@@ -2000,10 +2008,12 @@ func apply_disguise_cat_look() -> void:
 			_disguise_cat_mesh = packed.instantiate() as Node3D
 			if _disguise_cat_mesh != null:
 				_disguise_cat_mesh.name = "DisguiseCatMesh"
-				## Huge — same presence as max window-cat chonk, planted at the stand.
 				_disguise_cat_mesh.scale = Vector3.ONE * DISGUISE_CAT_MESH_SCALE
-				_disguise_cat_mesh.position = Vector3(0.0, -0.12, 0.05)
-				_body.add_child(_disguise_cat_mesh)
+				_disguise_cat_mesh.position = Vector3(0.0, DISGUISE_CAT_MESH_Y, 0.06)
+				_disguise_cat_mesh.rotation_degrees = Vector3.ZERO
+				add_child(_disguise_cat_mesh)
+				## Same black street-cat retint as the window cat (raw FBX is purple).
+				_retint_disguise_cat_fur(_disguise_cat_mesh)
 				var anim := _disguise_cat_mesh.find_child("AnimationPlayer", true, false) as AnimationPlayer
 				if anim != null and anim.has_animation("CINEMA_4D_Main"):
 					anim.get_animation("CINEMA_4D_Main").loop_mode = Animation.LOOP_LINEAR
@@ -2012,30 +2022,99 @@ func apply_disguise_cat_look() -> void:
 	_build_fake_mustache()
 
 
+func _retint_disguise_cat_fur(node: Node) -> void:
+	## Kill the stock purple cast — match window_cat black fur + glossy eyes.
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var is_eye := str(mi.name).to_lower().contains("eye")
+		var surf_count := 0
+		if mi.mesh != null:
+			surf_count = mi.mesh.get_surface_count()
+		if surf_count <= 0:
+			surf_count = maxi(1, mi.get_surface_override_material_count())
+		for si in surf_count:
+			var base: Material = mi.get_active_material(si) if mi.mesh != null and si < mi.mesh.get_surface_count() else null
+			if base == null:
+				base = mi.material_override
+			var sm: StandardMaterial3D
+			if base is StandardMaterial3D:
+				sm = (base as StandardMaterial3D).duplicate() as StandardMaterial3D
+			elif base == null:
+				sm = StandardMaterial3D.new()
+			else:
+				continue
+			if is_eye:
+				_disguise_make_eye_glossy(sm, si, base)
+			else:
+				_disguise_make_fur_dark(sm)
+			if mi.mesh != null and si < mi.mesh.get_surface_count():
+				mi.set_surface_override_material(si, sm)
+			else:
+				mi.material_override = sm
+	for child in node.get_children():
+		_retint_disguise_cat_fur(child)
+
+
+func _disguise_make_eye_glossy(sm: StandardMaterial3D, surf_i: int, base: Material) -> void:
+	var src := sm.albedo_color
+	if base is StandardMaterial3D:
+		src = (base as StandardMaterial3D).albedo_color
+	var name_hint := ""
+	if base != null:
+		name_hint = str(base.resource_name).to_lower()
+	var is_yellow := name_hint.contains("yellow") or (src.r > 0.45 and src.g > 0.35 and src.b < 0.45)
+	var is_black := name_hint.contains("black") or src.get_luminance() < 0.25
+	if is_yellow or (not is_black and surf_i == 0 and src.g > src.b):
+		sm.albedo_color = Color(0.95, 0.78, 0.12)
+		if sm.albedo_texture != null:
+			sm.albedo_color = Color(1.0, 0.92, 0.55)
+	else:
+		sm.albedo_color = Color(0.04, 0.035, 0.03)
+		if sm.albedo_texture != null:
+			sm.albedo_color = Color(0.12, 0.1, 0.09)
+	sm.metallic = 0.15
+	sm.roughness = 0.08
+	sm.clearcoat_enabled = true
+	sm.clearcoat = 1.0
+	sm.clearcoat_roughness = 0.04
+	sm.rim_enabled = true
+	sm.rim = 0.45
+	sm.rim_tint = 0.35
+	sm.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+
+
+func _disguise_make_fur_dark(sm: StandardMaterial3D) -> void:
+	var c := sm.albedo_color
+	var gray := (c.r + c.g + c.b) / 3.0
+	c.r = lerpf(c.r, gray, 0.35)
+	c.g = lerpf(c.g, gray, 0.2)
+	c.b = lerpf(c.b, gray * 0.85, 0.7)
+	if sm.albedo_texture != null:
+		c = Color(0.38, 0.34, 0.30) * Color(minf(c.r + 0.15, 1.0), minf(c.g + 0.12, 1.0), minf(c.b + 0.08, 1.0))
+	else:
+		c = c.darkened(0.42)
+		c.b *= 0.75
+	sm.albedo_color = c
+	sm.metallic = minf(sm.metallic, 0.05)
+	sm.roughness = maxf(sm.roughness, 0.72)
+
+
 func _build_fake_mustache() -> void:
-	if _body == null:
-		return
 	if _mustache_root != null and is_instance_valid(_mustache_root):
 		_mustache_root.queue_free()
 	_mustache_root = Node3D.new()
 	_mustache_root.name = "FakeMustache"
-	## Local snout on the cat mesh so it scales with DISGUISE_CAT_MESH_SCALE.
-	var parent: Node3D = _body
-	if _disguise_cat_mesh != null and is_instance_valid(_disguise_cat_mesh):
-		parent = _disguise_cat_mesh
-		_mustache_root.position = Vector3(0.0, 0.23, 0.165)
-	else:
-		var s := DISGUISE_CAT_MESH_SCALE / 2.55
-		_mustache_root.position = Vector3(0.0, 0.58 * s, 0.42 * s)
-	parent.add_child(_mustache_root)
+	## Parent to the customer root (same trick as window-cat mouth burger) so the
+	## mustache sits on the snout — not scaled into the sky by the mesh transform.
+	_mustache_root.position = _disguise_mustache_local()
+	add_child(_mustache_root)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.06, 0.05, 0.05)
 	mat.roughness = 0.9
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	## Local sizes — mesh parent already scales them up.
-	var on_mesh := parent == _disguise_cat_mesh
-	var r := 0.0125 if on_mesh else 0.032 * (DISGUISE_CAT_MESH_SCALE / 2.55)
-	var h := 0.059 if on_mesh else 0.15 * (DISGUISE_CAT_MESH_SCALE / 2.55)
+	var s := DISGUISE_CAT_MESH_SCALE / _WINDOW_CAT_MESH_SCALE
+	var r := 0.028 * s
+	var h := 0.11 * s
 	for side in [-1.0, 1.0]:
 		var curl := MeshInstance3D.new()
 		var cap := CapsuleMesh.new()
@@ -2044,7 +2123,7 @@ func _build_fake_mustache() -> void:
 		curl.mesh = cap
 		curl.material_override = mat
 		curl.rotation_degrees = Vector3(88.0, 0.0, side * 38.0)
-		curl.position = Vector3(side * (0.022 if on_mesh else 0.055), -0.004, 0.008)
+		curl.position = Vector3(side * 0.05 * s, -0.008 * s, 0.012 * s)
 		_mustache_root.add_child(curl)
 	var mid := MeshInstance3D.new()
 	var ball := SphereMesh.new()
@@ -2052,7 +2131,7 @@ func _build_fake_mustache() -> void:
 	ball.height = r * 2.4
 	mid.mesh = ball
 	mid.material_override = mat
-	mid.position = Vector3(0.0, -0.006, 0.004)
+	mid.position = Vector3(0.0, -0.01 * s, 0.006 * s)
 	_mustache_root.add_child(mid)
 
 

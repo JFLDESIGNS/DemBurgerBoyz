@@ -654,8 +654,11 @@ const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
 ## Cheese slice piles on the counter — height tracks fridge stock (no wheel).
 const CHEESE_STATION_COLLISION_LAYER := 8192
-const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.0, 0.38) ## beside the board, back from the cook
+## +8″ camera-left from prior (-0.06 → +0.143). Camera-left = world +X.
+const CHEESE_STATION_OFFSET := Vector3(0.143, 0.0, 0.38)
 const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
+## Screen grab must be tight — generous radius stole grill scoop/drag clicks.
+const CHEESE_STATION_SCREEN_PX := 40.0
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
@@ -5457,8 +5460,8 @@ func _spawn_disguise_cat_customer() -> void:
 	var order: Array[String] = _disguise_cat_order()
 	var color := Color(0.55, 0.45, 0.4)
 	var patience := 75.0
-	## Always front of line so the huge cat is in the service window.
-	var lane := 0
+	## Join the back of the line like any other customer — walk up after them.
+	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -15320,7 +15323,7 @@ func _build_cheese_station_prop() -> void:
 			slice.visible = false
 			pile.add_child(slice)
 			cheese_pile_slices.append(slice)
-	## Grab volume covers both piles.
+	## Grab volume covers both piles — keep it tight so grill clicks win nearby.
 	var area := Area3D.new()
 	area.name = "CheeseGrab"
 	area.collision_layer = CHEESE_STATION_COLLISION_LAYER
@@ -15329,9 +15332,9 @@ func _build_cheese_station_prop() -> void:
 	area.monitorable = true
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.32, 0.22, 0.24)
+	box.size = Vector3(0.26, 0.18, 0.20)
 	cs.shape = box
-	cs.position = mid.position + Vector3(0.0, 0.07, 0.0)
+	cs.position = mid.position + Vector3(0.0, 0.06, 0.0)
 	area.add_child(cs)
 	root.add_child(area)
 	grill_root.add_child(root)
@@ -15383,6 +15386,12 @@ func _cheese_stack_home_world() -> Vector3:
 func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 	if camera == null or cheese_station_area == null or not is_instance_valid(cheese_station_area):
 		return false
+	## Grill scoop / drag wins — never steal when a burger or the steel is under the cursor.
+	if _pick_patty_at_screen(screen_pos) != null:
+		return false
+	var plane := _grill_plane_from_screen(screen_pos)
+	if plane != Vector3.ZERO and _is_on_grill_surface(plane):
+		return false
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
@@ -15392,9 +15401,11 @@ func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if not hit.is_empty() and hit.get("collider") == cheese_station_area:
 		return true
-	## Screen fallback aimed at the slice stack.
+	## Tight screen fallback — only when clearly aiming at the slice piles.
 	var anchor := _cheese_stack_home_world()
-	return screen_pos.distance_to(camera.unproject_position(anchor)) < 78.0
+	if camera.is_position_behind(anchor):
+		return false
+	return screen_pos.distance_to(camera.unproject_position(anchor)) < CHEESE_STATION_SCREEN_PX
 
 
 func _try_cheese_station_click(screen_pos: Vector2) -> bool:
@@ -15403,6 +15414,12 @@ func _try_cheese_station_click(screen_pos: Vector2) -> bool:
 	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
 		return false
 	if spatula_patty != null or dragging_patty != null or cup_held:
+		return false
+	## Hands busy on the flat-top — don't yank a cheese slice by accident.
+	if _pick_patty_at_screen(screen_pos) != null:
+		return false
+	var plane := _grill_plane_from_screen(screen_pos)
+	if plane != Vector3.ZERO and _is_on_grill_surface(plane):
 		return false
 	if not _cheese_station_under_cursor(screen_pos):
 		return false
@@ -16197,9 +16214,20 @@ func _commit_social_review(
 	customer: Node3D = null
 ) -> void:
 	var who := SOCIAL_REVIEWER_NAMES[randi() % SOCIAL_REVIEWER_NAMES.size()]
+	if kind == "cat_burnt":
+		var cat_names: Array[String] = [
+			"StreetKitty",
+			"xX_MEOW_Xx",
+			"MustacheFan99",
+			"WindowCatReviews",
+			"MEOW_BOARD",
+		]
+		who = cat_names[randi() % cat_names.size()]
 	var text := SocialReviewsScript.generate(stars, kind, tip)
 	var pic: Texture2D = null
-	if station_index >= 0 and randf() < SOCIAL_REVIEW_PIC_CHANCE:
+	## Cat burnt-triple posts always attach the burger photo as evidence.
+	var force_pic := kind == "cat_burnt"
+	if station_index >= 0 and (force_pic or randf() < SOCIAL_REVIEW_PIC_CHANCE):
 		pic = _make_review_burger_snapshot(station_index)
 	var pic_png: PackedByteArray = PackedByteArray()
 	if pic != null:
@@ -18981,27 +19009,14 @@ func _spawn_customer_local(
 		c.apply_disguise_cat_look()
 		_disguise_cat_active = true
 		_park_window_cat_for_disguise()
-		## Front of the line, planted at the stand — huge cat fills the window.
-		customers.erase(c)
-		customers.insert(0, c)
-		_reposition_customers()
-		var stand_x: float = CustomerScript.lane_x_for(0)
-		c.lane = 0
-		c.target_x = stand_x
-		c.position = Vector3(stand_x, CustomerScript.STAND_Y, CustomerScript.WAIT_Z)
-		c.rotation_degrees = Vector3(0.0, CustomerScript.FACE_TRUCK_YAW, 0.0)
-		c.is_waiting = true
-		if not tickets.has(c):
-			_create_ticket(c)
-		selected_customer = c
-		_highlight_tickets()
+		## Walks in from the sidewalk like a normal guest — ticket pins on arrive.
 		_flash("Odd customer… is that a mustache?", Color("CE93D8"))
 
 
 func _on_customer_arrived(customer: Node3D) -> void:
 	if customer != null and bool(customer.get("is_terrorist")):
 		return
-	## Disguise cat doesn't care about a filthy grill — ticket already pinned on spawn.
+	## Disguise cat doesn't care about a filthy grill.
 	if customer != null and bool(customer.get("is_disguise_cat")):
 		if not tickets.has(customer):
 			_create_ticket(customer)
@@ -23411,7 +23426,10 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 			combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
 
-	if not guest_mp and not disguise:
+	if not guest_mp and disguise and _cook_rating_is_burnt(cook_r):
+		## Freeloader got charcoal — 1★ meow meltdown + photo of the burnt triple.
+		_force_record_social_review(1.0, "cat_burnt", 0, station_index, cust)
+	elif not guest_mp and not disguise:
 		var review_stars := _review_stars_from_serve(
 			payout,
 			was_meh,

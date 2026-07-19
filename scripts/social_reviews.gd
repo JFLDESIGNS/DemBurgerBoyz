@@ -16,6 +16,8 @@ static var _recent: Array[String] = []
 
 static func generate(stars: float, kind: String, tip: int = 0) -> String:
 	var s := clampf(stars, 0.0, 5.0)
+	if kind == "cat_burnt":
+		return _remember(_cat_burnt())
 	if kind != "spray" and randf() < ROBBER_FULL_CHANCE:
 		return _remember(_pick(_ROBBER_FULL))
 	if kind == "spray":
@@ -249,6 +251,20 @@ static func _spray(_s: float) -> String:
 		"Came for a burger, left looking like a powdered donut. ☆",
 		"Powdered. Traumatized. One star.",
 		"Extinguisher to the face. Absolutely not.",
+	])
+
+
+static func _cat_burnt() -> String:
+	## Mustache cat got charcoal — phone floods with furious meows.
+	return _pick([
+		"MEOW! MEOW! MEOW! MEOW! MEOW!",
+		"MEOW MEOW MEOW MEOW MEOW MEOW!!!",
+		"MEOW! MEOW! MEOW!\nMEOW! MEOW! MEOW!",
+		"MEOW! MEOW! MEOW! MEOW! MEOW! MEOW! MEOW!",
+		"MEOW MEOW MEOW!!!!\nMEOW MEOW MEOW!!!!",
+		"MEOW! MEOW! MEOW! MEOW! MEOW! MEOW!",
+		"MEOWMEOWMEOWMEOWMEOW\nMEOW! MEOW! MEOW!",
+		"MEOW! MEOW!\nMEOW! MEOW!\nMEOW! MEOW!",
 	])
 
 
