@@ -353,8 +353,8 @@ var window_cat: Node3D = null
 var _disguise_cat_pending: bool = false
 var _disguise_cat_active: bool = false
 var _disguise_cat_cool: float = 0.0
-const DISGUISE_CAT_CHANCE := 0.55
-const DISGUISE_CAT_COOLDOWN := 120.0
+const DISGUISE_CAT_CHANCE := 1.0 ## Always joins once maxed (was 0.55 and never retried)
+const DISGUISE_CAT_COOLDOWN := 90.0
 ## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
 var glock_held: bool = false
 var glock_root: Node3D = null
@@ -1345,9 +1345,11 @@ func _restart() -> void:
 	_reset_supplies()
 	_start_radio_fade_in()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
-	_disguise_cat_pending = false
+	## Keep a pending mustache-cat visit across the day break; clear cool so it can land.
 	_disguise_cat_active = false
 	_disguise_cat_cool = 0.0
+	if _disguise_cat_pending:
+		_try_spawn_disguise_cat()
 	# _begin_opening_terror_ambush()
 
 
@@ -5407,16 +5409,22 @@ func _build_window_cat() -> void:
 
 
 func _on_window_cat_full_sized() -> void:
-	## Max chonk — sometimes the cat puts on a fake mustache and joins the line.
+	## Max chonk — cat puts on a fake mustache and joins the line.
+	_queue_disguise_cat("That cat looks too big for the window…")
+
+
+func _queue_disguise_cat(flash_text: String = "") -> void:
 	if not playing:
 		return
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
 		return
 	if _disguise_cat_active or _disguise_cat_pending or _disguise_cat_cool > 0.0:
 		return
-	if randf() >= DISGUISE_CAT_CHANCE:
+	if DISGUISE_CAT_CHANCE < 1.0 and randf() >= DISGUISE_CAT_CHANCE:
 		return
 	_disguise_cat_pending = true
+	if flash_text != "":
+		_flash(flash_text, Color("CE93D8"))
 	_try_spawn_disguise_cat()
 
 
@@ -5427,6 +5435,7 @@ func _try_spawn_disguise_cat() -> void:
 		return
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
 		return
+	## Wait for a free lane — pending stays set until there's room.
 	if _waiting_customer_count() >= _customer_cap():
 		return
 	_disguise_cat_pending = false
@@ -5434,11 +5443,11 @@ func _try_spawn_disguise_cat() -> void:
 
 
 func _disguise_cat_order() -> Array[String]:
-	## Triple patty — cheese optional so the ticket still reads as a real ask.
+	## Always a clear TRIPLE PATTY ticket (cheese + lettuce optional).
 	var order: Array[String] = ["bun_bottom", "patty", "patty", "patty"]
-	if randf() < 0.65:
+	if randf() < 0.7:
 		order.append("cheese")
-	if randf() < 0.4:
+	if randf() < 0.45:
 		order.append("lettuce")
 	order.append("bun_top")
 	return order
@@ -5739,6 +5748,10 @@ func _on_window_cat_fed(kind: String) -> void:
 		game_audio.play_cat_meow()
 	if kind == "patty" and game_audio and game_audio.has_method("play_cat_purr"):
 		game_audio.play_cat_purr()
+	## If already maxed (signal already fired earlier), still queue the mustache visit.
+	if window_cat != null and is_instance_valid(window_cat) \
+			and window_cat.has_method("is_full_size") and bool(window_cat.is_full_size()):
+		_queue_disguise_cat()
 
 
 func _apply_fire_ext_materials(node: Node, diff: Texture2D, norm: Texture2D) -> void:
@@ -6639,33 +6652,32 @@ func _build_season_shaker() -> void:
 
 	shaker_particles = GPUParticles3D.new()
 	shaker_particles.name = "SeasonParticles"
-	shaker_particles.amount = 48
-	shaker_particles.lifetime = 0.55
+	shaker_particles.amount = 34
+	shaker_particles.lifetime = 0.62
 	shaker_particles.explosiveness = 0.05
-	shaker_particles.randomness = 0.7
+	shaker_particles.randomness = 0.35
 	shaker_particles.emitting = false
 	shaker_particles.position = Vector3(0, 0.07, 0)
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pmat.emission_sphere_radius = 0.014
+	pmat.emission_sphere_radius = 0.01
 	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 22.0
-	pmat.initial_velocity_min = 0.35
-	pmat.initial_velocity_max = 0.75
+	pmat.spread = 14.0
+	pmat.initial_velocity_min = 0.42
+	pmat.initial_velocity_max = 0.9
 	## World-space gravity — pull seasoning down onto the patty.
 	pmat.gravity = Vector3(0, -6.5, 0)
 	pmat.damping_min = 0.5
 	pmat.damping_max = 1.2
-	pmat.scale_min = 0.22
-	pmat.scale_max = 0.55
-	pmat.color = Color(0.18, 0.12, 0.08, 0.9)
+	pmat.scale_min = 0.85
+	pmat.scale_max = 1.45
+	pmat.color = Color(0.2, 0.12, 0.055, 1.0)
 	shaker_particles.process_material = pmat
 	var pmesh := BoxMesh.new()
-	pmesh.size = Vector3(0.0055, 0.0035, 0.0045)
+	pmesh.size = Vector3(0.011, 0.0065, 0.0085)
 	var pdraw := StandardMaterial3D.new()
 	pdraw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	pdraw.albedo_color = Color(0.16, 0.1, 0.06, 0.85)
-	pdraw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pdraw.albedo_color = Color(0.2, 0.11, 0.045, 1.0)
 	shaker_particles.draw_pass_1 = pmesh
 	shaker_particles.material_override = pdraw
 	shaker_root.add_child(shaker_particles)
@@ -15783,6 +15795,7 @@ func _reset_supplies() -> void:
 		_soda_low_warned[str(fid)] = false
 	_refresh_all_soda_tank_levels()
 	_refresh_phone_ui()
+	_refresh_ingredient_stock_bars()
 
 
 func _supply_buy_unit_cost(id: String) -> float:
@@ -15848,6 +15861,7 @@ func _buy_supply_local(id: String) -> void:
 	})
 	_update_hud()
 	_refresh_phone_ui()
+	_refresh_ingredient_stock_bars()
 	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 	_flash("Ordered %s — cat delivery in %ds" % [label, int(SUPPLY_ORDER_WAIT)], Color("A5D6A7"))
 	_sfx_click()
@@ -15992,6 +16006,7 @@ func _credit_supply_delivery(id: String, pack: int, kind: String) -> void:
 		var label2 := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		_flash("Restocked %s (+%d)" % [label2, pack], Color("A5D6A7"))
 	_refresh_phone_ui()
+	_refresh_ingredient_stock_bars()
 	_update_hud()
 	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_economy()
@@ -16005,9 +16020,11 @@ func _try_use_supply(id: String, amount: int = 1) -> bool:
 		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		_flash("Out of %s — restock on phone!" % label, Color("EF5350"))
 		_refresh_phone_ui()
+		_refresh_ingredient_stock_bars()
 		return false
 	supply_stock[id] = have - amount
 	_refresh_phone_ui()
+	_refresh_ingredient_stock_bars()
 	return true
 
 
@@ -16025,6 +16042,7 @@ func _mp_try_use_supply(id: String, amount: int = 1) -> bool:
 		if have >= amount:
 			supply_stock[id] = have - amount
 			_refresh_phone_ui()
+			_refresh_ingredient_stock_bars()
 	return true
 
 
@@ -16037,6 +16055,7 @@ func _mp_spend_ingredient(id: String) -> bool:
 		if have > 0:
 			supply_stock[id] = have - 1
 			_refresh_phone_ui()
+			_refresh_ingredient_stock_bars()
 	return true
 
 
@@ -16048,6 +16067,7 @@ func _mp_can_spend_ingredient(id: String) -> bool:
 		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		_flash("Out of %s — restock on phone!" % label, Color("EF5350"))
 		_refresh_phone_ui()
+		_refresh_ingredient_stock_bars()
 		return false
 	return true
 
@@ -16077,6 +16097,7 @@ func _update_supply_freshness(delta: float) -> void:
 			supply_fresh[id] = fresh
 	if spoiled:
 		_refresh_phone_ui()
+		_refresh_ingredient_stock_bars()
 		if mp_enabled and NetManager.is_host():
 			_mp_broadcast_economy()
 
@@ -16102,6 +16123,37 @@ func _freshness_bar_color(ratio: float) -> Color:
 	if ratio > 0.35:
 		return Color("FFCA28")
 	return Color("EF5350")
+
+
+func _ingredient_stock_cap(id: String) -> int:
+	match id:
+		"bun_bottom", "bun_top":
+			return 28
+		"patty":
+			return 22
+		_:
+			return 16
+
+
+func _refresh_ingredient_stock_bars() -> void:
+	for id in ingredient_buttons:
+		var btn := ingredient_buttons[id] as Button
+		if btn == null or not is_instance_valid(btn):
+			continue
+		var stock_bar := btn.get_node_or_null("Stack/StockBar") as Control
+		var fill := btn.get_node_or_null("Stack/StockBar/Fill") as ColorRect
+		if stock_bar == null or fill == null:
+			continue
+		var stock := int(supply_stock.get(id, 0))
+		var cap := max(1, _ingredient_stock_cap(str(id)))
+		var stock_ratio := clampf(float(stock) / float(cap), 0.0, 1.0)
+		var fresh_ratio := clampf(float(supply_fresh.get(id, 0.0)) / SUPPLY_FRESH_MAX, 0.0, 1.0)
+		var width := stock_bar.size.x
+		if width < 2.0:
+			width = stock_bar.custom_minimum_size.x
+		fill.offset_right = width * stock_ratio
+		fill.color = Color(0.18, 0.19, 0.22, 1.0) if stock <= 0 else _freshness_bar_color(fresh_ratio)
+		btn.tooltip_text = "%s\nStock: %d" % [btn.tooltip_text.get_slice("\n", 0), stock]
 
 
 func _record_social_review(stars: float) -> void:
@@ -19821,6 +19873,7 @@ func _build_ingredient_legend() -> void:
 		tbtn.add_theme_stylebox_override("pressed", tsbp)
 
 		var col := VBoxContainer.new()
+		col.name = "Stack"
 		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		col.add_theme_constant_override("separation", 2)
 		col.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -19853,6 +19906,28 @@ func _build_ingredient_legend() -> void:
 		name_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		col.add_child(name_lab)
 
+		var stock_bar := Control.new()
+		stock_bar.name = "StockBar"
+		stock_bar.custom_minimum_size = Vector2(62, 5)
+		stock_bar.clip_contents = true
+		stock_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		col.add_child(stock_bar)
+
+		var stock_bg := ColorRect.new()
+		stock_bg.name = "Bg"
+		stock_bg.color = Color(0.035, 0.04, 0.05, 0.95)
+		stock_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		stock_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		stock_bar.add_child(stock_bg)
+
+		var stock_fill := ColorRect.new()
+		stock_fill.name = "Fill"
+		stock_fill.color = Color("66BB6A")
+		stock_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		stock_fill.anchor_bottom = 1.0
+		stock_fill.offset_bottom = 0.0
+		stock_bar.add_child(stock_fill)
+
 		var capture: String = id
 		tbtn.pressed.connect(func():
 			## Skip if this LMB already painted toppings (swipe) or dropped one.
@@ -19882,6 +19957,8 @@ func _build_ingredient_legend() -> void:
 		)
 		row.add_child(tbtn)
 		ingredient_buttons[id] = tbtn
+	_refresh_ingredient_stock_bars()
+	call_deferred("_refresh_ingredient_stock_bars")
 
 
 func _shake_ingredient_button(btn: Control) -> void:
@@ -25917,6 +25994,7 @@ func mp_sync_economy(
 		_set_soda_tank_visual_level(fid, fill)
 	_update_hud()
 	_refresh_phone_ui()
+	_refresh_ingredient_stock_bars()
 
 
 @rpc("any_peer", "call_local", "reliable")
