@@ -453,27 +453,29 @@ func _update_ready_cues() -> void:
 		_announced_flip = true
 		if audio:
 			audio.play_ready()
+		_play_done_jump(0.055) ## Slight hop — time to flip
 	elif flipped_once and can_scoop() and not _announced_scoop:
 		_announced_scoop = true
 		if audio:
 			audio.play_ready()
-		_play_done_jump()
+		_play_done_jump(0.09)
 
 
 func _set_done_jump_y(y: float) -> void:
 	_done_jump_y = y
 
 
-func _play_done_jump() -> void:
-	## Little hop when the second side finishes — reads as “done”.
+func _play_done_jump(peak: float = 0.09) -> void:
+	## Little hop when flip-ready or scoop-ready.
+	if is_held:
+		return
 	if _done_jump_tw != null and is_instance_valid(_done_jump_tw):
 		_done_jump_tw.kill()
 	_done_jump_y = 0.0
-	var peak := 0.09
 	_done_jump_tw = create_tween()
-	_done_jump_tw.tween_property(self, "scale", Vector3(1.14, 0.72, 1.14), 0.05)
+	_done_jump_tw.tween_property(self, "scale", Vector3(1.12, 0.78, 1.12), 0.05)
 	_done_jump_tw.tween_method(_set_done_jump_y, 0.0, peak, 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	_done_jump_tw.parallel().tween_property(self, "scale", Vector3(0.9, 1.18, 0.9), 0.11)
+	_done_jump_tw.parallel().tween_property(self, "scale", Vector3(0.92, 1.14, 0.92), 0.11)
 	_done_jump_tw.tween_method(_set_done_jump_y, peak, 0.0, 0.16).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
 	_done_jump_tw.parallel().tween_property(self, "scale", Vector3.ONE, 0.16)
 	_done_jump_tw.tween_callback(func() -> void:
