@@ -274,6 +274,10 @@ var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel
 const RESIDUE_CHUNK_COUNT := 6 ## Extra flecks on top of the burnt disc.
+## Filthy grill — this many big crust piles and customers walk out disgusted.
+const CRUST_GROSS_COUNT := 5
+const CRUST_GROSS_MIN_AMT := 0.45 ## Half-scraped or worse counts as a "big" spot
+const CRUST_GROSS_REVIEW_CHANCE := 0.50
 ## Click cheese → ghost → click a grill patty to place.
 var cheese_held: bool = false
 var cheese_ghost: MeshInstance3D = null
@@ -771,9 +775,9 @@ const LOGO_DEFAULT_Z := 1.20
 const LOGO_DEFAULT_SCALE := 0.92
 const LOGO_DEFAULT_YAW := 180.0
 ## Wall art tint — darker so they sit into the truck lighting.
-const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 1.0)
-## License / health / photo cluster — 20% darker than prior 0.35 tint.
-const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 1.0)
+const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 0.6) ## 40% transparent wall art
+## License / health / photo cluster — 20% darker than prior 0.35 tint; 40% transparent.
+const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 0.6)
 const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const GFX_DEFAULTS := {
@@ -924,6 +928,8 @@ var _mp_remote_glock: Dictionary = {}
 var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
 var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
 var _mp_cup_pose_cool: float = 0.0
+var _mp_cup_seq: int = 1 ## per-peer idle-drink ids (owner*1e6 + seq)
+var _mp_idle_drink_accum: float = 0.0 ## periodic re-broadcast of local parked drinks
 var _mp_slick_sync_cool: float = 0.0
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
 var _mp_serve_sync: bool = false
@@ -1457,6 +1463,11 @@ func _process(delta: float) -> void:
 			_mp_send_held_tool_pose(false)
 		if cup_held:
 			_mp_send_held_cup_pose(false)
+		## Idle tray / steel drinks — keep re-upserting so partners don't miss parks.
+		_mp_idle_drink_accum += delta
+		if _mp_idle_drink_accum >= 1.25:
+			_mp_idle_drink_accum = 0.0
+			_mp_broadcast_local_idle_drinks()
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
 		if _mp_econ_accum >= 0.45:
@@ -4879,6 +4890,52 @@ func _leave_grill_residue_local(
 			_flash("Charred cup stuck on the grill — scrape it off", Color("BCAAA4"))
 		else:
 			_flash("Grease left on the grill — grab the scraper by the window", Color("BCAAA4"))
+	## Too much crust and the line freaks out.
+	_check_waiting_customers_gross_grill()
+
+
+func _big_crust_spot_count() -> int:
+	var n := 0
+	for i in GRILL_SLOTS:
+		if i < grill_residue.size() and float(grill_residue[i]) >= CRUST_GROSS_MIN_AMT:
+			n += 1
+	return n
+
+
+func _grill_is_gross() -> bool:
+	return _big_crust_spot_count() >= CRUST_GROSS_COUNT
+
+
+func _check_waiting_customers_gross_grill() -> void:
+	if not playing or not _grill_is_gross():
+		return
+	## Host/solo only — guests mirror leave via RPC.
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
+	for c in customers.duplicate():
+		_try_customer_gross_leave(c)
+
+
+func _try_customer_gross_leave(customer: Node3D) -> bool:
+	## Filthy flat-top → "Gross!" walkout. Returns true if they left.
+	if customer == null or not is_instance_valid(customer):
+		return false
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return false
+	if bool(customer.get("is_terrorist")):
+		return false
+	if bool(customer.get("is_leaving")):
+		return false
+	if not bool(customer.get("is_waiting")):
+		return false
+	if not _grill_is_gross():
+		return false
+	customer.set_meta("left_gross", true)
+	_flash("Gross! Filthy grill — they walked out", Color("EF5350"))
+	if customer.has_method("leave_mad"):
+		customer.leave_mad()
+	_on_customer_left(customer, true)
+	return true
 
 
 func _pick_residue_slot_at(at: Vector3) -> int:
@@ -7964,44 +8021,86 @@ func _clear_soda_char_spots() -> void:
 
 
 func _get_cup_melt_shader() -> Shader:
-	if _cup_melt_shader != null:
+	## Bump ver whenever the burn look changes so a stale Shader resource can't stick around.
+	const SHADER_VER := 3
+	if _cup_melt_shader != null and int(_cup_melt_shader.get_meta("ver", 0)) == SHADER_VER:
 		return _cup_melt_shader
 	var sh := Shader.new()
+	sh.set_meta("ver", SHADER_VER)
 	sh.code = """
 shader_type spatial;
-render_mode blend_mix, depth_draw_opaque, cull_disabled, diffuse_burley, specular_schlick_ggx;
+render_mode blend_mix, depth_draw_always, cull_disabled, diffuse_lambert, specular_disabled;
 
-uniform vec4 albedo_color : source_color = vec4(1.0);
+uniform vec4 albedo_color : source_color = vec4(0.9, 0.94, 1.0, 0.11);
 uniform float melt_amt : hint_range(0.0, 1.0) = 0.0;
 uniform float wobble_amp : hint_range(0.0, 0.12) = 0.035;
-uniform float metallic : hint_range(0.0, 1.0) = 0.05;
-uniform float roughness : hint_range(0.0, 1.0) = 0.35;
+uniform float metallic : hint_range(0.0, 1.0) = 0.0;
+uniform float roughness : hint_range(0.0, 1.0) = 0.2;
+uniform float shell_half_h : hint_range(0.01, 0.5) = 0.0945;
+
+varying float v_h; // 0 = bottom, 1 = top — from model Y BEFORE squash
+varying float v_around;
+
+vec3 hsv2rgb(float h, float s, float v) {
+	vec3 p = abs(fract(h + vec3(0.0, 1.0 / 3.0, 2.0 / 3.0)) * 6.0 - 3.0);
+	return v * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), s);
+}
 
 void vertex() {
+	// Capture cup height before melt squash — UV caps/rims were wrong and whitened everything.
+	v_h = clamp(VERTEX.y / max(shell_half_h, 0.001) * 0.5 + 0.5, 0.0, 1.0);
+	v_around = UV.x;
+
 	float t = TIME * 4.2;
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	float n1 = sin(wp.x * 34.0 + t) * cos(wp.z * 27.0 + t * 1.35);
 	float n2 = sin(wp.x * 51.0 - t * 0.85 + wp.z * 19.0);
 	float n3 = cos(wp.z * 43.0 + t * 1.1 + wp.x * 12.0);
 	float amp = wobble_amp * melt_amt * melt_amt;
-	// Melting ripple driven by world-ish position + time.
 	VERTEX.x += (n1 * 0.65 + n3 * 0.35) * amp;
 	VERTEX.z += (n2 * 0.7 + n1 * 0.3) * amp;
-	// Collapse height as it melts into the steel.
 	float h = max(VERTEX.y, 0.0);
 	VERTEX.y -= h * melt_amt * melt_amt * 0.92;
 	VERTEX.y += n2 * amp * 0.35;
 }
 
 void fragment() {
-	vec3 c = albedo_color.rgb;
-	// Char toward soot — don't pass through a milky mid-tone.
-	c = mix(c, vec3(0.06, 0.04, 0.03), melt_amt * melt_amt * 0.92);
+	float melt = clamp(melt_amt, 0.0, 1.0);
+
+	// Fresh clear plastic for most of the wall — soda must stay readable.
+	vec3 clear_c = albedo_color.rgb;
+	float clear_a = albedo_color.a;
+
+	// Milky ONLY in the bottom band (~28% of height), fades out fast.
+	float milky = 1.0 - smoothstep(0.0, 0.28, v_h);
+	milky = pow(max(milky, 0.0), 1.75) * melt;
+
+	vec3 milk_c = vec3(0.93, 0.95, 0.97);
+	float milk_a = 0.62;
+	vec3 c = mix(clear_c, milk_c, milky);
+	float a = mix(clear_a, milk_a, milky);
+
+	// Soft soot in the milky band only — never wash the upper wall white.
+	c = mix(c, vec3(0.12, 0.09, 0.07), milky * 0.35);
+
+	// Thin rainbow burn strip at the very bottom.
+	float rainbow_band = 1.0 - smoothstep(0.0, 0.07, v_h);
+	rainbow_band *= smoothstep(0.12, 0.40, melt);
+	float hue = fract(v_around * 2.8 + TIME * 0.22 + v_h * 5.0);
+	vec3 rainbow = hsv2rgb(hue, 0.85, 1.0);
+	c = mix(c, rainbow, rainbow_band * 0.32);
+	a = max(a, rainbow_band * 0.18);
+
+	// Force upper wall back to clear glass (anything above ~35% height).
+	float upper = smoothstep(0.30, 0.48, v_h);
+	c = mix(c, clear_c, upper);
+	a = mix(a, clear_a, upper);
+
 	ALBEDO = c;
-	ALPHA = mix(albedo_color.a, albedo_color.a * 0.28, melt_amt);
-	METALLIC = mix(metallic, 0.15, melt_amt);
-	ROUGHNESS = mix(roughness, 0.95, melt_amt);
-	EMISSION = vec3(0.0);
+	ALPHA = clamp(a, 0.04, 0.85);
+	METALLIC = 0.0;
+	ROUGHNESS = mix(0.12, 0.55, milky);
+	EMISSION = rainbow * rainbow_band * 0.10;
 }
 """
 	_cup_melt_shader = sh
@@ -8009,7 +8108,7 @@ void fragment() {
 
 
 func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
-	## Melt WPO on the plastic shell only — soda keeps the same flat-pop look as a held cup.
+	## Melt WPO on the Shell only — rim stays clear; soda keeps held-cup pop look.
 	var mats: Array = []
 	var base: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.28, 0.08, 0.05))
 	var sh := _get_cup_melt_shader()
@@ -8018,7 +8117,7 @@ func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
 		if mi == null:
 			continue
 		var nm := str(mi.name)
-		## Drink volume — lock flat cola/lime/orange (never pour-cream / empty cup_flavor).
+		## Drink volume — flat flavor soda (no pour-cream wash).
 		if nm == "Liquid":
 			mi.visible = true
 			var liq_mat := _make_soda_liquid_gradient_material(base)
@@ -8026,17 +8125,17 @@ func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
 			mi.material_override = liq_mat
 			_boost_cup_draw_order(mi)
 			continue
-		## Foam / surface / ice would read as a giant white disc on the grill — hide them.
+		## Foam / surface / ice read as a giant white disc — hide for melt.
 		if nm == "LiquidSurface" or nm == "FizzFoam" or nm.begins_with("Ice") or nm == "LiquidBubbles" \
 				or nm == "CupBubbles":
 			mi.visible = false
 			continue
-		## Floor stays nearly clear — a milky melt floor bleaches the whole drink when viewed from above.
+		## Floor: mild milky pad only (not a white bowl that bleaches the drink).
 		if nm == "Floor":
 			var floor_mat := StandardMaterial3D.new()
-			floor_mat.albedo_color = Color(0.92, 0.96, 1.0, 0.05)
+			floor_mat.albedo_color = Color(0.92, 0.95, 0.98, 0.22)
 			floor_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			floor_mat.roughness = 0.35
+			floor_mat.roughness = 0.4
 			floor_mat.metallic = 0.0
 			floor_mat.clearcoat_enabled = false
 			floor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
@@ -8045,19 +8144,22 @@ func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
 			mi.material_override = floor_mat
 			_boost_cup_draw_order(mi)
 			continue
+		## Rim stays normal clear plastic — do NOT run the melt whitener on the torus.
+		if nm == "Rim":
+			mi.material_override = _make_clear_cup_material(0.18)
+			_boost_cup_draw_order(mi)
+			continue
+		## Only the Shell walls get the height-gradient melt look.
+		if nm != "Shell":
+			continue
 		var mat := ShaderMaterial.new()
 		mat.shader = sh
-		## Start from clear-cup plastic (not milky white) so soda stays readable during the delay.
-		var col := Color(0.92, 0.96, 1.0, 0.14)
-		if nm == "Shell":
-			col = Color(0.92, 0.96, 1.0, 0.12)
-		elif nm == "Rim":
-			col = Color(0.92, 0.96, 1.0, 0.20)
-		mat.set_shader_parameter("albedo_color", col)
+		mat.set_shader_parameter("albedo_color", Color(0.88, 0.92, 0.96, 0.10))
 		mat.set_shader_parameter("melt_amt", 0.0)
 		mat.set_shader_parameter("wobble_amp", 0.04)
-		mat.set_shader_parameter("metallic", 0.05 if nm == "Shell" else 0.02)
-		mat.set_shader_parameter("roughness", 0.18)
+		mat.set_shader_parameter("metallic", 0.0)
+		mat.set_shader_parameter("roughness", 0.14)
+		mat.set_shader_parameter("shell_half_h", CUP_SHELL_H * 0.5)
 		mat.render_priority = CUP_DRAW_PRIORITY
 		mi.material_override = mat
 		mats.append(mat)
@@ -8270,6 +8372,7 @@ func _begin_cup_melt_on_grill() -> void:
 	var flavor := cup_flavor if cup_flavor != "" else soda_selected_flavor
 	var fill := cup_soda_fill
 	var ice := cup_ice_fill
+	var melt_nid := int(cup_root.get_meta("cup_net_id", -1)) if cup_root != null else -1
 	cup_held = false
 	cup_drawing = false
 	_hide_soda_stream()
@@ -8289,7 +8392,7 @@ func _begin_cup_melt_on_grill() -> void:
 	_cup_pour_white = 0.0
 	_begin_cup_melt_local(root, drop_pos, flavor, fill, ice, false)
 	if mp_enabled and not _mp_applying:
-		mp_cup_melt.rpc(drop_pos.x, drop_pos.z, flavor, fill, ice)
+		mp_cup_melt.rpc(drop_pos.x, drop_pos.z, flavor, fill, ice, melt_nid)
 
 
 func _begin_cup_melt_local(
@@ -8301,9 +8404,18 @@ func _begin_cup_melt_local(
 	if root.get_parent() != world:
 		root.reparent(world, true)
 	root.global_position = Vector3(drop_pos.x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, drop_pos.z)
-	root.rotation_degrees = Vector3(randf_range(-8.0, 8.0), randf() * 360.0, randf_range(-8.0, 8.0))
+	## Sit flat on the steel — only spin yaw (held lean / random tip looked broken).
+	root.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
 	root.scale = Vector3.ONE
 	root.visible = true
+	## Clear any held-cup slosh so liquid doesn't stay tipped after the drop.
+	var liq_piv := root.get_node_or_null("LiquidPivot") as Node3D
+	if liq_piv != null:
+		liq_piv.rotation_degrees = Vector3.ZERO
+		liq_piv.position = Vector3(0.0, CUP_LIQUID_FLOOR_Y, 0.0)
+		var surf_piv := liq_piv.get_node_or_null("SurfacePivot") as Node3D
+		if surf_piv != null:
+			surf_piv.rotation_degrees = Vector3.ZERO
 	root.set_meta("melt_flavor", flavor)
 	var mats := _apply_melt_materials_to_cup(root, flavor)
 	_set_melting_cup_liquid_level(root, fill, flavor)
@@ -10189,8 +10301,8 @@ func _build_soda_station() -> void:
 	world.add_child(root)
 	soda_root = root
 
-	## Shorter stainless cabinet — wide footprint, metal body.
-	var body_mat := _make_soda_metal_mat(Color(0.78, 0.81, 0.86), 0.94, 0.16)
+	## Darker cabinet body — blackened steel with brighter stainless accents elsewhere.
+	var body_mat := _make_soda_metal_mat(Color(0.16, 0.17, 0.19), 0.92, 0.28)
 	var body := MeshInstance3D.new()
 	body.name = "Cabinet"
 	var body_mesh := BoxMesh.new()
@@ -10200,7 +10312,7 @@ func _build_soda_station() -> void:
 	body.material_override = body_mat
 	root.add_child(body)
 
-	## Side panels (same metal, slight inset for depth).
+	## Side panels (same dark metal, slight inset for depth).
 	for sx in [-1.0, 1.0]:
 		var side := MeshInstance3D.new()
 		var smesh := BoxMesh.new()
@@ -10217,28 +10329,28 @@ func _build_soda_station() -> void:
 	skirt_mesh.size = Vector3(0.86, 0.05, 0.44)
 	skirt.mesh = skirt_mesh
 	skirt.position = Vector3(0.0, 0.025, 0.0)
-	var skirt_mat := _make_soda_metal_mat(Color(0.28, 0.30, 0.34), 0.85, 0.38)
+	var skirt_mat := _make_soda_metal_mat(Color(0.08, 0.08, 0.09), 0.9, 0.42)
 	skirt.material_override = skirt_mat
 	root.add_child(skirt)
 
-	## Deck plate the tanks sit on.
+	## Deck plate the tanks sit on — brushed stainless highlight on the dark body.
 	var deck := MeshInstance3D.new()
 	deck.name = "TankDeck"
 	var deck_mesh := BoxMesh.new()
 	deck_mesh.size = Vector3(0.82, 0.03, 0.40)
 	deck.mesh = deck_mesh
 	deck.position = Vector3(0.0, 0.505, 0.0)
-	deck.material_override = _make_soda_metal_mat(Color(0.70, 0.73, 0.78), 0.92, 0.18)
+	deck.material_override = _make_soda_metal_mat(Color(0.58, 0.60, 0.64), 0.94, 0.18)
 	root.add_child(deck)
 
-	## Chrome pour face — pads + raised taps.
+	## Chrome pour face — pads + raised taps (darker face, still metallic).
 	var face := MeshInstance3D.new()
 	face.name = "Face"
 	var face_mesh := BoxMesh.new()
 	face_mesh.size = Vector3(0.72, 0.22, 0.05)
 	face.mesh = face_mesh
 	face.position = Vector3(0.0, 0.38, 0.225)
-	face.material_override = _make_soda_metal_mat(Color(0.62, 0.65, 0.72), 0.95, 0.14)
+	face.material_override = _make_soda_metal_mat(Color(0.28, 0.30, 0.34), 0.93, 0.22)
 	root.add_child(face)
 	_add_soda_face_flavor_hint(root)
 
@@ -10277,7 +10389,7 @@ func _build_soda_station() -> void:
 	tray_mesh.size = Vector3(0.74, 0.028, 0.42)
 	tray.mesh = tray_mesh
 	tray.position = Vector3(-0.02, 0.085, 0.40)
-	tray.material_override = _make_soda_metal_mat(Color(0.32, 0.34, 0.38), 0.88, 0.28)
+	tray.material_override = _make_soda_metal_mat(Color(0.14, 0.15, 0.17), 0.9, 0.34)
 	root.add_child(tray)
 
 	for gi in 6:
@@ -10286,7 +10398,8 @@ func _build_soda_station() -> void:
 		gm.size = Vector3(0.70, 0.005, 0.012)
 		grate.mesh = gm
 		grate.position = Vector3(-0.02, 0.105, 0.24 + float(gi) * 0.045)
-		grate.material_override = _make_soda_metal_mat(Color(0.55, 0.58, 0.62), 0.9, 0.22)
+		## Stainless grate strips on the dark tray.
+		grate.material_override = _make_soda_metal_mat(Color(0.62, 0.64, 0.68), 0.94, 0.16)
 		root.add_child(grate)
 
 	## Default park under soda; newest drinks land camera-left of older ones.
@@ -10350,31 +10463,46 @@ func _make_soda_metal_mat(col: Color, metallic: float, roughness: float) -> Stan
 
 
 func _add_soda_face_flavor_hint(station: Node3D) -> void:
-	## Thin glossy black lettering on the pour face — easy to read on grey steel.
+	## Thin stainless lettering with a soft glow — readable on the dark pour face.
 	var gloss := StandardMaterial3D.new()
-	gloss.albedo_color = Color(0.04, 0.04, 0.045)
-	gloss.metallic = 0.92
-	gloss.roughness = 0.12
+	gloss.albedo_color = Color(0.82, 0.86, 0.92)
+	gloss.metallic = 0.55
+	gloss.roughness = 0.28
 	gloss.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
-	gloss.clearcoat_enabled = true
-	gloss.clearcoat = 0.85
-	gloss.clearcoat_roughness = 0.08
-	var lines: Array[String] = ["CLICK FLAVOR ABOVE", "TO SWITCH"]
-	var y0 := 0.405
+	gloss.emission_enabled = true
+	gloss.emission = Color(0.55, 0.72, 0.95)
+	gloss.emission_energy_multiplier = 0.55
+	## Small ↑ above the tip, pointing at the syrup tanks.
+	var arrow := MeshInstance3D.new()
+	arrow.name = "FlavorHintArrow"
+	var am := TextMesh.new()
+	am.text = "▲"
+	am.font_size = 48
+	am.pixel_size = 0.00105
+	am.depth = 0.0006
+	am.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	am.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	arrow.mesh = am
+	arrow.position = Vector3(0.0, 0.458, 0.251)
+	arrow.material_override = gloss
+	arrow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	station.add_child(arrow)
+	var lines: Array[String] = ["CLICK FLAVOR TANK ABOVE", "TO SWITCH"]
+	var y0 := 0.398
 	for i in lines.size():
 		var letter := MeshInstance3D.new()
 		letter.name = "FlavorHint_%d" % i
 		var tm := TextMesh.new()
 		tm.text = lines[i]
-		tm.font_size = 40
+		tm.font_size = 36
 		tm.pixel_size = 0.00105
-		tm.depth = 0.0022
+		tm.depth = 0.0006 ## Thin relief — was chunky extruded metal
 		tm.curve_step = 0.5
 		tm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		tm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		letter.mesh = tm
 		## Sit just proud of the face front (face z=0.225, depth 0.05 → front ≈ 0.25).
-		letter.position = Vector3(0.0, y0 - float(i) * 0.048, 0.252)
+		letter.position = Vector3(0.0, y0 - float(i) * 0.044, 0.251)
 		letter.material_override = gloss
 		letter.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		station.add_child(letter)
@@ -10642,7 +10770,7 @@ func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, is_
 
 
 func _build_soda_cup_rack(station: Node3D) -> void:
-	## Chrome tube dispenser — stack matches the grabable cup size exactly.
+	## Black-metal tube dispenser — stack matches the grabable cup size exactly.
 	var rack := Node3D.new()
 	rack.name = "CupRack"
 	## With yaw 180 on the right side, local −X faces the grill (world +X).
@@ -10650,8 +10778,11 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack.position = Vector3(-0.733, 0.645, 0.16)
 	station.add_child(rack)
 
-	var chrome := _make_soda_metal_mat(Color(0.72, 0.75, 0.80), 0.94, 0.16)
-	var chrome_dark := _make_soda_metal_mat(Color(0.38, 0.40, 0.45), 0.88, 0.28)
+	## Dark black metal housing — slight polish so it still reads as metal.
+	var black_metal := _make_soda_metal_mat(Color(0.08, 0.08, 0.09), 0.94, 0.32)
+	var black_edge := _make_soda_metal_mat(Color(0.14, 0.14, 0.16), 0.9, 0.38)
+	## Thin stainless trim so it matches the fountain accents.
+	var steel_trim := _make_soda_metal_mat(Color(0.58, 0.60, 0.64), 0.95, 0.16)
 
 	## Grab cup bottom sits here; decorative nest stacks above it.
 	var stack_base := Vector3(0.0, -0.12, 0.06)
@@ -10666,7 +10797,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	mount_mesh.size = Vector3(0.20, 0.50, 0.028)
 	mount.mesh = mount_mesh
 	mount.position = Vector3(0.0, 0.06, -0.055)
-	mount.material_override = chrome_dark
+	mount.material_override = black_edge
 	rack.add_child(mount)
 
 	## Open-front tube body — left / right / back rails hold the nest.
@@ -10680,7 +10811,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 		rail_mesh.size = Vector3(0.022, tube_h, 0.14)
 		rail.mesh = rail_mesh
 		rail.position = Vector3(side_x, tube_y, rail_z)
-		rail.material_override = chrome
+		rail.material_override = black_metal
 		rack.add_child(rail)
 	var back_rail := MeshInstance3D.new()
 	back_rail.name = "BackRail"
@@ -10688,7 +10819,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	back_mesh.size = Vector3(0.15, tube_h, 0.022)
 	back_rail.mesh = back_mesh
 	back_rail.position = Vector3(0.0, tube_y, -0.028)
-	back_rail.material_override = chrome
+	back_rail.material_override = black_metal
 	rack.add_child(back_rail)
 
 	## Top hood / dust cap.
@@ -10698,7 +10829,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	hood_mesh.size = Vector3(0.20, 0.032, 0.16)
 	hood.mesh = hood_mesh
 	hood.position = Vector3(0.0, maxf(stack_top_y, tube_y + tube_h * 0.5) + 0.02, 0.02)
-	hood.material_override = chrome
+	hood.material_override = black_metal
 	rack.add_child(hood)
 	var hood_lip := MeshInstance3D.new()
 	hood_lip.name = "HoodLip"
@@ -10706,7 +10837,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	lip_mesh.size = Vector3(0.188, 0.012, 0.04)
 	hood_lip.mesh = lip_mesh
 	hood_lip.position = Vector3(0.0, hood.position.y - 0.016, 0.088)
-	hood_lip.material_override = chrome_dark
+	hood_lip.material_override = steel_trim
 	rack.add_child(hood_lip)
 
 	## Nested decorative cups above the grabable one — same mesh/size (no extra rim rings).
@@ -10728,7 +10859,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	plaque_mesh.size = Vector3(0.11, 0.036, 0.01)
 	plaque.mesh = plaque_mesh
 	plaque.position = Vector3(0.0, hood.position.y + 0.01, 0.095)
-	plaque.material_override = chrome_dark
+	plaque.material_override = steel_trim
 	rack.add_child(plaque)
 	var cup_lab := Label3D.new()
 	cup_lab.text = "CUPS"
@@ -11177,11 +11308,14 @@ func _nearest_cup_at_screen(screen_pos: Vector2) -> Node3D:
 func _promote_cup_to_active(root: Node3D) -> void:
 	if root == null or not is_instance_valid(root):
 		return
+	## Partner's idle mirror / our parked drink — tell everyone to drop this net id.
 	if parked_cups.has(root):
+		_mp_send_cup_unpark(root)
 		parked_cups.erase(root)
 		_layout_parked_cups()
 	root.set_meta("on_steel", false)
 	root.set_meta("steel_hold", false)
+	root.set_meta("mp_mirror", false)
 	if cup_root != null and cup_root != root and is_instance_valid(cup_root):
 		## Stash the previous working cup empty on the rack if somehow replaced.
 		if cup_soda_fill < 0.05:
@@ -11189,8 +11323,11 @@ func _promote_cup_to_active(root: Node3D) -> void:
 			cup_root.rotation_degrees = cup_home_rot
 		else:
 			_save_active_cup_meta()
+			cup_root.set_meta("on_steel", false)
+			cup_root.set_meta("steel_hold", false)
 			parked_cups.push_front(cup_root)
 			_layout_parked_cups()
+			_mp_send_cup_park(cup_root)
 		_clear_cup_refs()
 		cup_root = null
 	_bind_cup_refs(root)
@@ -13090,20 +13227,137 @@ func _put_cup_down() -> void:
 	_park_cup_on_tray(true)
 
 
-func _tray_parked_count() -> int:
+func _tray_parked_count(local_only: bool = true) -> int:
+	## local_only: partner mirrors must not eat your own 3-tray slots / block parks.
 	var n := 0
 	for c in parked_cups:
-		if c != null and is_instance_valid(c) and not bool(c.get_meta("on_steel", false)):
-			n += 1
+		if c == null or not is_instance_valid(c):
+			continue
+		if bool(c.get_meta("on_steel", false)):
+			continue
+		if local_only and bool(c.get_meta("mp_mirror", false)):
+			continue
+		n += 1
 	return n
 
 
-func _steel_parked_count() -> int:
+func _steel_parked_count(local_only: bool = true) -> int:
 	var n := 0
 	for c in parked_cups:
-		if c != null and is_instance_valid(c) and bool(c.get_meta("on_steel", false)):
-			n += 1
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get_meta("on_steel", false)):
+			continue
+		if local_only and bool(c.get_meta("mp_mirror", false)):
+			continue
+		n += 1
 	return n
+
+
+func _alloc_cup_net_id() -> int:
+	## Peer-scoped so host + client ids never collide.
+	var id := NetManager.my_id() * 1000000 + _mp_cup_seq
+	_mp_cup_seq += 1
+	return id
+
+
+func _ensure_cup_net_id(root: Node3D) -> int:
+	if root == null or not is_instance_valid(root):
+		return -1
+	var nid := int(root.get_meta("cup_net_id", -1))
+	if nid < 0:
+		nid = _alloc_cup_net_id()
+		root.set_meta("cup_net_id", nid)
+	root.set_meta("mp_mirror", false)
+	return nid
+
+
+func _mp_find_cup_by_net_id(cup_net_id: int) -> Node3D:
+	if cup_net_id < 0:
+		return null
+	for c in parked_cups:
+		if c != null and is_instance_valid(c) and int(c.get_meta("cup_net_id", -1)) == cup_net_id:
+			return c
+	return null
+
+
+func _mp_remove_parked_cup_by_net_id(cup_net_id: int) -> bool:
+	var target := _mp_find_cup_by_net_id(cup_net_id)
+	if target == null:
+		return false
+	parked_cups.erase(target)
+	_layout_parked_cups()
+	if is_instance_valid(target):
+		target.queue_free()
+	_refresh_ticket_checkmarks()
+	return true
+
+
+func _mp_broadcast_local_idle_drinks() -> void:
+	## Re-send our parked tray/steel drinks so partners catch missed park RPCs.
+	if not mp_enabled or not NetManager.is_online() or _mp_applying:
+		return
+	for pc in parked_cups:
+		if pc == null or not is_instance_valid(pc):
+			continue
+		if bool(pc.get_meta("mp_mirror", false)):
+			continue
+		var nid := _ensure_cup_net_id(pc)
+		var flavor := str(pc.get_meta("flavor", ""))
+		var fill := float(pc.get_meta("soda_fill", 0.0))
+		var ice := float(pc.get_meta("ice_fill", 0.0))
+		var fizz := float(pc.get_meta("fizz", 0.0))
+		if bool(pc.get_meta("on_steel", false)):
+			mp_cup_steel.rpc(
+				nid,
+				float(pc.global_position.x),
+				float(pc.global_position.z),
+				flavor,
+				fill,
+				ice,
+				fizz,
+				bool(pc.get_meta("steel_hold", false))
+			)
+		else:
+			mp_cup_park.rpc(nid, flavor, fill, ice, fizz)
+
+
+func _mp_send_cup_park(root: Node3D) -> void:
+	if not mp_enabled or _mp_applying or root == null or not is_instance_valid(root):
+		return
+	var nid := _ensure_cup_net_id(root)
+	mp_cup_park.rpc(
+		nid,
+		str(root.get_meta("flavor", "")),
+		float(root.get_meta("soda_fill", 0.0)),
+		float(root.get_meta("ice_fill", 0.0)),
+		float(root.get_meta("fizz", 0.0))
+	)
+
+
+func _mp_send_cup_steel(root: Node3D, drop: Vector3, on_hold: bool) -> void:
+	if not mp_enabled or _mp_applying or root == null or not is_instance_valid(root):
+		return
+	var nid := _ensure_cup_net_id(root)
+	mp_cup_steel.rpc(
+		nid,
+		drop.x,
+		drop.z,
+		str(root.get_meta("flavor", "")),
+		float(root.get_meta("soda_fill", 0.0)),
+		float(root.get_meta("ice_fill", 0.0)),
+		float(root.get_meta("fizz", 0.0)),
+		on_hold
+	)
+
+
+func _mp_send_cup_unpark(root: Node3D) -> void:
+	if not mp_enabled or _mp_applying or root == null or not is_instance_valid(root):
+		return
+	var nid := int(root.get_meta("cup_net_id", -1))
+	if nid < 0:
+		return
+	mp_cup_unpark.rpc(nid)
 
 
 func _place_cup_on_steel() -> void:
@@ -13172,16 +13426,7 @@ func _place_cup_on_steel() -> void:
 	_update_parked_cups_foam(0.0)
 	_spawn_and_bind_empty_cup()
 	_refresh_ticket_checkmarks()
-	if mp_enabled and not _mp_applying:
-		mp_cup_steel.rpc(
-			drop.x,
-			drop.z,
-			str(stashed.get_meta("flavor", "")),
-			float(stashed.get_meta("soda_fill", 0.0)),
-			float(stashed.get_meta("ice_fill", 0.0)),
-			float(stashed.get_meta("fizz", 0.0)),
-			on_hold
-		)
+	_mp_send_cup_steel(stashed, drop, on_hold)
 	if game_audio:
 		game_audio.play_click()
 	if on_hold:
@@ -13490,13 +13735,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		_cup_foam_linger = 0.0
 		_layout_parked_cups()
 		_update_parked_cups_foam(0.0) ## snap foam state onto the parked mesh
-		if mp_enabled and not _mp_applying:
-			mp_cup_park.rpc(
-				str(stashed.get_meta("flavor", "")),
-				float(stashed.get_meta("soda_fill", 0.0)),
-				float(stashed.get_meta("ice_fill", 0.0)),
-				float(stashed.get_meta("fizz", 0.0))
-			)
+		_mp_send_cup_park(stashed)
 		var left := CUP_MAX - _tray_parked_count()
 		if left > 0:
 			_flash("Drink ready — grab a cup from the rack (%d free)" % left, Color("80CBC4"))
@@ -17329,6 +17568,9 @@ func _spawn_customer_local(
 func _on_customer_arrived(customer: Node3D) -> void:
 	if customer != null and bool(customer.get("is_terrorist")):
 		return
+	## Walk up to a crusty grill → immediate "Gross!" exit.
+	if _try_customer_gross_leave(customer):
+		return
 	_create_ticket(customer)
 	if selected_customer == null:
 		selected_customer = customer
@@ -17509,6 +17751,10 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		## Extinguisher victims always roast you on the feed.
 		if bool(customer.get("_powder_hit")):
 			_force_record_social_review(1.0, "spray")
+		elif bool(customer.get_meta("left_gross", false)):
+			## Filthy-grill walkouts — only half leave a 1★ review.
+			if randf() < CRUST_GROSS_REVIEW_CHANCE:
+				_force_record_social_review(1.0, "angry")
 		else:
 			_maybe_record_social_review(1.0, "angry")
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
@@ -17770,6 +18016,7 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 
 	if target != null and is_instance_valid(target) and parked_cups.has(target):
 		var consumed_flavor := str(target.get_meta("flavor", ""))
+		var consumed_nid := int(target.get_meta("cup_net_id", -1))
 		parked_cups.erase(target)
 		_layout_parked_cups()
 		target.visible = false
@@ -17777,12 +18024,13 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 		## Don't auto-spawn — next empty comes from the CUPS rack.
 		_refresh_soda_tank_bubbles()
 		_refresh_ticket_checkmarks()
-		if mp_enabled and not _mp_applying and consumed_flavor != "":
-			mp_cup_consume.rpc(consumed_flavor)
+		if mp_enabled and not _mp_applying and (consumed_flavor != "" or consumed_nid >= 0):
+			mp_cup_consume.rpc(consumed_flavor, consumed_nid)
 		return
 
 	## Consuming the active working cup.
 	var active_flavor := cup_flavor
+	var active_nid := int(cup_root.get_meta("cup_net_id", -1)) if cup_root != null and is_instance_valid(cup_root) else -1
 	cup_flavor = ""
 	cup_soda_fill = 0.0
 	cup_ice_fill = 0.0
@@ -17802,7 +18050,7 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	_refresh_soda_tank_bubbles()
 	_refresh_ticket_checkmarks()
 	if mp_enabled and not _mp_applying and active_flavor != "":
-		mp_cup_consume.rpc(active_flavor)
+		mp_cup_consume.rpc(active_flavor, active_nid)
 
 
 func _refresh_ticket_checkmarks() -> void:
@@ -22647,9 +22895,14 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 	for pc in parked_cups:
 		if pc == null or not is_instance_valid(pc):
 			continue
+		## Skip mirrors — joiner will get those from their owner peer's next idle broadcast.
+		if bool(pc.get_meta("mp_mirror", false)):
+			continue
+		var nid := _ensure_cup_net_id(pc)
 		if bool(pc.get_meta("on_steel", false)):
 			mp_cup_steel.rpc_id(
 				peer_id,
+				nid,
 				float(pc.global_position.x),
 				float(pc.global_position.z),
 				str(pc.get_meta("flavor", "")),
@@ -22661,6 +22914,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		else:
 			mp_cup_park.rpc_id(
 				peer_id,
+				nid,
 				str(pc.get_meta("flavor", "")),
 				float(pc.get_meta("soda_fill", 0.0)),
 				float(pc.get_meta("ice_fill", 0.0)),
@@ -22737,6 +22991,8 @@ func mp_bootstrap_meta(
 	_set_grill_on(burner_on)
 	_mp_applying = false
 	_update_hud()
+	## Push any drinks we already parked so the host sees our idle tray/steel.
+	call_deferred("_mp_broadcast_local_idle_drinks")
 
 
 func _mp_send_held_tool_pose(force: bool = false) -> void:
@@ -24404,37 +24660,55 @@ func mp_soda_flavor(fid: String) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_cup_park(flavor: String, fill: float, ice: float, fizz: float) -> void:
-	## Partner poured a drink onto the tray — mirror it so soda orders can serve.
+func mp_cup_park(cup_net_id: int, flavor: String, fill: float, ice: float, fizz: float) -> void:
+	## Partner set a drink idle on the tray — upsert so fill/foam stay in sync.
 	_mp_applying = true
-	_mp_spawn_parked_drink_local(flavor, fill, ice, fizz)
+	_mp_spawn_parked_drink_local(cup_net_id, flavor, fill, ice, fizz)
 	_mp_applying = false
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func mp_cup_steel(
-	x: float, z: float, flavor: String, fill: float, ice: float, fizz: float, on_hold: bool
+	cup_net_id: int,
+	x: float,
+	z: float,
+	flavor: String,
+	fill: float,
+	ice: float,
+	fizz: float,
+	on_hold: bool
 ) -> void:
 	## Partner set a drink on cold steel or HOLD — sit it there, no melt.
 	_mp_applying = true
-	_mp_spawn_steel_drink_local(x, z, flavor, fill, ice, fizz, on_hold)
+	_mp_spawn_steel_drink_local(cup_net_id, x, z, flavor, fill, ice, fizz, on_hold)
 	_mp_applying = false
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_cup_consume(flavor: String) -> void:
-	## Partner served a drink — remove one matching ready cup on this peer.
+func mp_cup_unpark(cup_net_id: int) -> void:
+	## Partner picked up / moved an idle drink — remove our mirror of that cup.
 	_mp_applying = true
-	_mp_consume_drink_local(flavor)
+	_mp_remove_parked_cup_by_net_id(cup_net_id)
 	_mp_applying = false
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float) -> void:
+func mp_cup_consume(flavor: String, cup_net_id: int = -1) -> void:
+	## Partner served a drink — remove the matching idle/active cup here.
+	_mp_applying = true
+	_mp_consume_drink_local(flavor, cup_net_id)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float, cup_net_id: int = -1) -> void:
 	## Partner dropped a drink on the flat-top — mirror melt / smoke / spill grow.
 	if world == null:
 		return
 	_mp_applying = true
+	## Clear any idle mirror of this cup so we don't leave a ghost beside the melt.
+	if cup_net_id >= 0:
+		_mp_remove_parked_cup_by_net_id(cup_net_id)
 	var root := _create_drink_cup_node()
 	world.add_child(root)
 	_begin_cup_melt_local(
@@ -24448,46 +24722,85 @@ func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float) ->
 	_mp_applying = false
 
 
-func _mp_spawn_parked_drink_local(flavor: String, fill: float, ice: float, fizz: float) -> void:
-	if world == null:
+func _mp_apply_idle_drink_visuals(root: Node3D, flavor: String, fill: float, ice: float, fizz: float) -> void:
+	## Shared liquid / foam sizing for parked + steel mirrors.
+	if root == null or not is_instance_valid(root):
 		return
-	if _tray_parked_count() >= CUP_MAX:
-		return
-	var root := _create_drink_cup_node()
-	world.add_child(root)
-	fill = clampf(fill, 0.0, 1.0)
-	ice = clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP)
-	fizz = clampf(fizz, 0.0, 1.0)
 	root.set_meta("flavor", flavor)
 	root.set_meta("soda_fill", fill)
 	root.set_meta("ice_fill", ice)
 	root.set_meta("fizz", fizz)
-	root.set_meta("foam_linger", CUP_FOAM_LINGER if fill > 0.08 else 0.0)
+	if not root.has_meta("foam_linger") or float(root.get_meta("foam_linger", 0.0)) <= 0.0:
+		root.set_meta("foam_linger", CUP_FOAM_LINGER if fill > 0.08 else 0.0)
 	root.set_meta("pour_white", 0.0)
 	root.set_meta("fizz_peak", fizz > 0.0)
-	root.set_meta("on_steel", false)
-	root.set_meta("steel_hold", false)
-	## Size the liquid column to the synced fill.
 	var liq_pivot := root.get_node_or_null("LiquidPivot") as Node3D
 	var liq: MeshInstance3D = null
 	if liq_pivot != null:
 		liq = liq_pivot.get_node_or_null("Liquid") as MeshInstance3D
-	if liq != null and fill >= 0.02:
-		liq.visible = true
-		var h := 0.02 + fill * CUP_LIQUID_MAX_H
-		var cyl := liq.mesh as CylinderMesh
-		if cyl == null:
-			cyl = CylinderMesh.new()
-			liq.mesh = cyl
-		cyl.height = h
-		cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
-		cyl.bottom_radius = CUP_LIQUID_BOT_R
-		liq.position.y = h * 0.5
-		var surf_piv := liq_pivot.get_node_or_null("SurfacePivot") as Node3D
-		if surf_piv:
-			surf_piv.position.y = h + 0.001
-		## Apply cola look + carbonation flecks so MP trays match the host pour.
-		_apply_parked_cup_liquid_gradient(root, flavor, fizz, 0.0, fill)
+	if liq != null:
+		if fill >= 0.02 and flavor != "":
+			liq.visible = true
+			var h := 0.02 + fill * CUP_LIQUID_MAX_H
+			var cyl := liq.mesh as CylinderMesh
+			if cyl == null:
+				cyl = CylinderMesh.new()
+				liq.mesh = cyl
+			cyl.height = h
+			cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
+			cyl.bottom_radius = CUP_LIQUID_BOT_R
+			liq.position.y = h * 0.5
+			var surf_piv := liq_pivot.get_node_or_null("SurfacePivot") as Node3D
+			if surf_piv:
+				surf_piv.position.y = h + 0.001
+			var mat := liq.material_override as ShaderMaterial
+			if mat == null:
+				mat = _make_soda_liquid_gradient_material(
+					SODA_FLAVOR_COLORS.get(flavor, Color(0.28, 0.08, 0.05))
+				)
+				liq.material_override = mat
+			_apply_parked_cup_liquid_gradient(root, flavor, fizz, 0.0, fill)
+		else:
+			liq.visible = false
+	## Ice cubes for idle mirrors (uses active ice helpers briefly).
+	var prev_ice := cup_ice_fill
+	var prev_root := cup_ice_root
+	cup_ice_fill = ice
+	cup_ice_root = root.get_node_or_null("IceStack") as Node3D
+	_refresh_cup_ice_stack()
+	cup_ice_fill = prev_ice
+	cup_ice_root = prev_root
+
+
+func _mp_spawn_parked_drink_local(
+	cup_net_id: int, flavor: String, fill: float, ice: float, fizz: float
+) -> void:
+	if world == null:
+		return
+	fill = clampf(fill, 0.0, 1.0)
+	ice = clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP)
+	fizz = clampf(fizz, 0.0, 1.0)
+	## Upsert — never drop partner idle drinks because our own tray is full.
+	var root := _mp_find_cup_by_net_id(cup_net_id)
+	if root != null:
+		root.set_meta("mp_mirror", true)
+		root.set_meta("on_steel", false)
+		root.set_meta("steel_hold", false)
+		_mp_apply_idle_drink_visuals(root, flavor, fill, ice, fizz)
+		_layout_parked_cups()
+		_update_parked_cups_foam(0.0)
+		_refresh_ticket_checkmarks()
+		return
+	root = _create_drink_cup_node()
+	world.add_child(root)
+	root.set_meta("cup_net_id", cup_net_id)
+	root.set_meta("mp_mirror", true)
+	root.set_meta("on_steel", false)
+	root.set_meta("steel_hold", false)
+	_mp_apply_idle_drink_visuals(root, flavor, fill, ice, fizz)
+	var area := root.get_node_or_null("CupGrab") as Area3D
+	if area:
+		area.input_ray_pickable = true
 	parked_cups.push_front(root)
 	_layout_parked_cups()
 	_update_parked_cups_foam(0.0)
@@ -24495,57 +24808,43 @@ func _mp_spawn_parked_drink_local(flavor: String, fill: float, ice: float, fizz:
 
 
 func _mp_spawn_steel_drink_local(
-	x: float, z: float, flavor: String, fill: float, ice: float, fizz: float, on_hold: bool
+	cup_net_id: int,
+	x: float,
+	z: float,
+	flavor: String,
+	fill: float,
+	ice: float,
+	fizz: float,
+	on_hold: bool
 ) -> void:
 	if world == null:
 		return
-	if _steel_parked_count() >= 6:
-		return
-	var root := _create_drink_cup_node()
-	world.add_child(root)
 	fill = clampf(fill, 0.0, 1.0)
 	ice = clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP)
 	fizz = clampf(fizz, 0.0, 1.0)
-	root.set_meta("flavor", flavor)
-	root.set_meta("soda_fill", fill)
-	root.set_meta("ice_fill", ice)
-	root.set_meta("fizz", fizz)
-	root.set_meta("foam_linger", CUP_FOAM_LINGER if fill > 0.08 else 0.0)
-	root.set_meta("pour_white", 0.0)
-	root.set_meta("fizz_peak", fizz > 0.0)
+	var root := _mp_find_cup_by_net_id(cup_net_id)
+	if root == null:
+		root = _create_drink_cup_node()
+		world.add_child(root)
+		root.set_meta("cup_net_id", cup_net_id)
+		parked_cups.push_front(root)
+	root.set_meta("mp_mirror", true)
 	root.set_meta("on_steel", true)
 	root.set_meta("steel_hold", on_hold)
 	root.global_position = Vector3(x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, z)
-	root.rotation_degrees = Vector3.ZERO
+	root.rotation_degrees = Vector3(0.0, root.rotation_degrees.y, 0.0)
 	var area := root.get_node_or_null("CupGrab") as Area3D
 	if area:
 		area.input_ray_pickable = true
-	var liq_pivot := root.get_node_or_null("LiquidPivot") as Node3D
-	var liq: MeshInstance3D = null
-	if liq_pivot != null:
-		liq = liq_pivot.get_node_or_null("Liquid") as MeshInstance3D
-	if liq != null and fill >= 0.02:
-		liq.visible = true
-		var h := 0.02 + fill * CUP_LIQUID_MAX_H
-		var cyl := liq.mesh as CylinderMesh
-		if cyl == null:
-			cyl = CylinderMesh.new()
-			liq.mesh = cyl
-		cyl.height = h
-		cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
-		cyl.bottom_radius = CUP_LIQUID_BOT_R
-		liq.position.y = h * 0.5
-		var surf_piv := liq_pivot.get_node_or_null("SurfacePivot") as Node3D
-		if surf_piv:
-			surf_piv.position.y = h + 0.001
-		_apply_parked_cup_liquid_gradient(root, flavor, fizz, 0.0, fill)
-	parked_cups.push_front(root)
+	_mp_apply_idle_drink_visuals(root, flavor, fill, ice, fizz)
 	_update_parked_cups_foam(0.0)
 	_refresh_ticket_checkmarks()
 
 
-func _mp_consume_drink_local(flavor: String) -> void:
-	## Prefer a parked match; else clear active cup if it matches.
+func _mp_consume_drink_local(flavor: String, cup_net_id: int = -1) -> void:
+	## Prefer exact net id; else a parked flavor match; else clear active cup.
+	if cup_net_id >= 0 and _mp_remove_parked_cup_by_net_id(cup_net_id):
+		return
 	var target: Node3D = null
 	for c in parked_cups:
 		if c != null and is_instance_valid(c) and str(c.get_meta("flavor", "")) == flavor \
