@@ -453,7 +453,7 @@ func _update_ready_cues() -> void:
 		_announced_flip = true
 		if audio:
 			audio.play_ready()
-		_play_done_jump(0.055) ## Slight hop — time to flip
+		_play_done_jump(0.027) ## Slight hop — time to flip (half prior height)
 	elif flipped_once and can_scoop() and not _announced_scoop:
 		_announced_scoop = true
 		if audio:
