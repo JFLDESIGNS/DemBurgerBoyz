@@ -15275,48 +15275,36 @@ func _build_cheese_station_prop() -> void:
 	var wheel_yaw := 18.0
 	var wheel_r := 0.118
 	var wheel_h := 0.098 ## taller deli wheel
+	var wheel_gap := deg_to_rad(55.0)
 	## Sit on the counter — center at half height; +6″ away from the cook.
 	var wheel_pos := Vector3(0.02, wheel_h * 0.5, 0.06 + 0.152)
 	var wheel := MeshInstance3D.new()
 	wheel.name = "CheeseWheel"
-	wheel.mesh = _make_cheese_wheel_pie_mesh(wheel_r, wheel_h, 32, deg_to_rad(55.0))
+	## Rind shell only (sides + bottom) — cut faces / top are separate clean meshes.
+	wheel.mesh = _make_cheese_wheel_shell_mesh(wheel_r, wheel_h, 36, wheel_gap)
 	wheel.position = wheel_pos
 	wheel.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
 	wheel.material_override = rind
 	root.add_child(wheel)
-	## Yellow top face (same missing wedge).
+	## Yellow top face (same missing wedge) — flat fan, clean up-normals.
 	var face := MeshInstance3D.new()
 	face.name = "CheeseFace"
-	face.mesh = _make_cheese_wheel_pie_mesh(wheel_r * 0.88, 0.012, 28, deg_to_rad(55.0))
-	face.position = wheel_pos + Vector3(0.0, wheel_h * 0.5 + 0.005, 0.0)
+	face.mesh = _make_cheese_wheel_top_mesh(wheel_r * 0.96, 36, wheel_gap)
+	face.position = wheel_pos + Vector3(0.0, wheel_h * 0.5 + 0.001, 0.0)
 	face.rotation_degrees = Vector3(0.0, wheel_yaw, 0.0)
 	face.material_override = cheese_col
 	root.add_child(face)
-	## Cut walls of the triangle (fresh cheese faces).
-	var cut_a := MeshInstance3D.new()
-	cut_a.name = "CheeseCutA"
-	var wall := BoxMesh.new()
-	wall.size = Vector3(wheel_r * 0.92, wheel_h * 0.92, 0.008)
-	cut_a.mesh = wall
-	cut_a.material_override = cut_col
-	cut_a.position = wheel_pos + Vector3(0.0, 0.0, 0.0)
-	## Align one wall along the wedge edge (yaw ± half gap).
-	cut_a.rotation_degrees = Vector3(0.0, wheel_yaw - 27.5, 0.0)
-	cut_a.position = wheel_pos + Vector3(
-		cos(deg_to_rad(wheel_yaw - 27.5)) * wheel_r * 0.42,
-		0.0,
-		-sin(deg_to_rad(wheel_yaw - 27.5)) * wheel_r * 0.42
-	)
-	root.add_child(cut_a)
-	var cut_b := cut_a.duplicate() as MeshInstance3D
-	cut_b.name = "CheeseCutB"
-	cut_b.rotation_degrees = Vector3(0.0, wheel_yaw + 27.5, 0.0)
-	cut_b.position = wheel_pos + Vector3(
-		cos(deg_to_rad(wheel_yaw + 27.5)) * wheel_r * 0.42,
-		0.0,
-		-sin(deg_to_rad(wheel_yaw + 27.5)) * wheel_r * 0.42
-	)
-	root.add_child(cut_b)
+	## Fresh cut faces of the wedge — proper radial quads (no overlapping boxes).
+	var half_gap_deg := 27.5
+	for side in [-1.0, 1.0]:
+		var cut := MeshInstance3D.new()
+		cut.name = "CheeseCut%s" % ("A" if side < 0.0 else "B")
+		cut.mesh = _make_cheese_cut_face_mesh(wheel_r, wheel_h)
+		cut.material_override = cut_col
+		cut.position = wheel_pos
+		## Local mesh lies in +X; yaw aims each face into the missing wedge.
+		cut.rotation_degrees = Vector3(0.0, wheel_yaw + side * half_gap_deg, 0.0)
+		root.add_child(cut)
 	## Eyes on the remaining face.
 	for ei in 4:
 		var eye := MeshInstance3D.new()
@@ -15331,7 +15319,7 @@ func _build_cheese_station_prop() -> void:
 		emat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 		eye.material_override = emat
 		root.add_child(eye)
-	## --- Slice stack beside the wheel (not hanging off the board rim toward the cook) ---
+	## --- Slice stack beside the wheel ---
 	var slice_mat := StandardMaterial3D.new()
 	slice_mat.albedo_color = Color(1.0, 0.88, 0.22)
 	slice_mat.roughness = 0.48
@@ -15340,8 +15328,8 @@ func _build_cheese_station_prop() -> void:
 	var slice_step := 0.0155
 	var stack_root := Node3D.new()
 	stack_root.name = "CheeseSliceStack"
-	## Drop ~3″ onto the counter surface (was floating above).
-	stack_root.position = Vector3(0.06, slice_thick * 0.5 - 0.076, -0.02)
+	## Dropped onto the counter; +6″ further from the cook.
+	stack_root.position = Vector3(0.06, slice_thick * 0.5 - 0.076, -0.02 + 0.152)
 	root.add_child(stack_root)
 	cheese_stack_anchor = stack_root
 	var stack_n := 7
@@ -15380,60 +15368,118 @@ func _build_cheese_station_prop() -> void:
 	cheese_station_area = area
 
 
-func _make_cheese_wheel_pie_mesh(radius: float, height: float, segments: int, gap_rad: float) -> ArrayMesh:
-	## Flat cylinder with a triangular wedge removed (gap centered on +X in local space).
+func _cheese_st_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	var n := (b - a).cross(c - a)
+	if n.length_squared() < 0.0000001:
+		return
+	n = n.normalized()
+	st.set_normal(n)
+	st.add_vertex(a)
+	st.set_normal(n)
+	st.add_vertex(b)
+	st.set_normal(n)
+	st.add_vertex(c)
+
+
+func _cheese_rim_point(angle: float, radius: float, y: float) -> Vector3:
+	return Vector3(cos(angle) * radius, y, -sin(angle) * radius)
+
+
+func _make_cheese_wheel_shell_mesh(radius: float, height: float, segments: int, gap_rad: float) -> ArrayMesh:
+	## Rind body: outer wall + bottom only (top + cuts are separate materials).
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var half_h := height * 0.5
 	var start_a := gap_rad * 0.5
 	var end_a := TAU - gap_rad * 0.5
 	var span := end_a - start_a
-	var n := maxi(8, segments)
-	var top_c := Vector3(0, half_h, 0)
-	var bot_c := Vector3(0, -half_h, 0)
-	## Top + bottom fans (skip the gap).
+	var n := maxi(12, segments)
+	var bot_c := Vector3(0.0, -half_h, 0.0)
 	for i in n:
-		var t0 := float(i) / float(n)
-		var t1 := float(i + 1) / float(n)
-		var a0 := start_a + span * t0
-		var a1 := start_a + span * t1
-		var p0 := Vector3(cos(a0) * radius, half_h, -sin(a0) * radius)
-		var p1 := Vector3(cos(a1) * radius, half_h, -sin(a1) * radius)
-		var q0 := Vector3(p0.x, -half_h, p0.z)
-		var q1 := Vector3(p1.x, -half_h, p1.z)
-		st.add_vertex(top_c)
-		st.add_vertex(p0)
-		st.add_vertex(p1)
-		st.add_vertex(bot_c)
-		st.add_vertex(q1)
-		st.add_vertex(q0)
-		## Outer wall quad.
-		st.add_vertex(p0)
-		st.add_vertex(q0)
-		st.add_vertex(q1)
-		st.add_vertex(p0)
-		st.add_vertex(q1)
-		st.add_vertex(p1)
-	## Two radial cut faces of the triangle wedge.
-	var a_lo := start_a
-	var a_hi := end_a
-	var lo_t := Vector3(cos(a_lo) * radius, half_h, -sin(a_lo) * radius)
-	var lo_b := Vector3(lo_t.x, -half_h, lo_t.z)
-	var hi_t := Vector3(cos(a_hi) * radius, half_h, -sin(a_hi) * radius)
-	var hi_b := Vector3(hi_t.x, -half_h, hi_t.z)
-	st.add_vertex(top_c)
-	st.add_vertex(bot_c)
-	st.add_vertex(lo_b)
-	st.add_vertex(top_c)
-	st.add_vertex(lo_b)
-	st.add_vertex(lo_t)
-	st.add_vertex(top_c)
-	st.add_vertex(hi_t)
-	st.add_vertex(hi_b)
-	st.add_vertex(top_c)
-	st.add_vertex(hi_b)
-	st.add_vertex(bot_c)
-	st.generate_normals()
+		var a0 := start_a + span * (float(i) / float(n))
+		var a1 := start_a + span * (float(i + 1) / float(n))
+		var p0 := _cheese_rim_point(a0, radius, half_h)
+		var p1 := _cheese_rim_point(a1, radius, half_h)
+		var q0 := _cheese_rim_point(a0, radius, -half_h)
+		var q1 := _cheese_rim_point(a1, radius, -half_h)
+		## Outer wall (outward).
+		_cheese_st_tri(st, p0, q0, q1)
+		_cheese_st_tri(st, p0, q1, p1)
+		## Bottom (downward).
+		_cheese_st_tri(st, bot_c, q1, q0)
+	st.index()
+	return st.commit()
+
+
+func _make_cheese_wheel_top_mesh(radius: float, segments: int, gap_rad: float) -> ArrayMesh:
+	## Flat cheese top with the wedge missing — normals all +Y.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var start_a := gap_rad * 0.5
+	var end_a := TAU - gap_rad * 0.5
+	var span := end_a - start_a
+	var n := maxi(12, segments)
+	var top_c := Vector3.ZERO
+	for i in n:
+		var a0 := start_a + span * (float(i) / float(n))
+		var a1 := start_a + span * (float(i + 1) / float(n))
+		var p0 := _cheese_rim_point(a0, radius, 0.0)
+		var p1 := _cheese_rim_point(a1, radius, 0.0)
+		_cheese_st_tri(st, top_c, p0, p1)
+	st.index()
+	return st.commit()
+
+
+func _make_cheese_cut_face_mesh(radius: float, height: float) -> ArrayMesh:
+	## Radial cut quad in the local +X plane (rotate instance to aim into the wedge).
+	## Normal faces +Z in local space so the fresh face reads toward the gap.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half_h := height * 0.5
+	var a := Vector3(0.0, half_h, 0.0)
+	var b := Vector3(radius, half_h, 0.0)
+	var c := Vector3(radius, -half_h, 0.0)
+	var d := Vector3(0.0, -half_h, 0.0)
+	_cheese_st_tri(st, a, b, c)
+	_cheese_st_tri(st, a, c, d)
+	## Backface so it reads from either side of the cut.
+	_cheese_st_tri(st, a, c, b)
+	_cheese_st_tri(st, a, d, c)
+	st.index()
+	return st.commit()
+
+
+func _make_cheese_wheel_pie_mesh(radius: float, height: float, segments: int, gap_rad: float) -> ArrayMesh:
+	## Full pie with explicit outward normals (legacy helper).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half_h := height * 0.5
+	var start_a := gap_rad * 0.5
+	var end_a := TAU - gap_rad * 0.5
+	var span := end_a - start_a
+	var n := maxi(12, segments)
+	var top_c := Vector3(0.0, half_h, 0.0)
+	var bot_c := Vector3(0.0, -half_h, 0.0)
+	for i in n:
+		var a0 := start_a + span * (float(i) / float(n))
+		var a1 := start_a + span * (float(i + 1) / float(n))
+		var p0 := _cheese_rim_point(a0, radius, half_h)
+		var p1 := _cheese_rim_point(a1, radius, half_h)
+		var q0 := _cheese_rim_point(a0, radius, -half_h)
+		var q1 := _cheese_rim_point(a1, radius, -half_h)
+		_cheese_st_tri(st, top_c, p0, p1)
+		_cheese_st_tri(st, bot_c, q1, q0)
+		_cheese_st_tri(st, p0, q0, q1)
+		_cheese_st_tri(st, p0, q1, p1)
+	var lo_t := _cheese_rim_point(start_a, radius, half_h)
+	var lo_b := _cheese_rim_point(start_a, radius, -half_h)
+	var hi_t := _cheese_rim_point(end_a, radius, half_h)
+	var hi_b := _cheese_rim_point(end_a, radius, -half_h)
+	_cheese_st_tri(st, top_c, lo_t, lo_b)
+	_cheese_st_tri(st, top_c, lo_b, bot_c)
+	_cheese_st_tri(st, top_c, hi_b, hi_t)
+	_cheese_st_tri(st, top_c, bot_c, hi_b)
+	st.index()
 	return st.commit()
 
 
