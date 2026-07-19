@@ -22721,8 +22721,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
 	var plate: Control = st.get("plate", null)
-	## Compact toss burger — smaller than Build art so it fits the mouth.
-	var layer_scale := _station_layer_scale(items.size()) * 0.62
+	## Readable toss burger — big enough to see the patty in flight.
+	var layer_scale := _station_layer_scale(items.size()) * 0.88
 	var stage_w := 220.0
 	var stage_h := 180.0
 	if plate != null and plate.size.x > 8.0:
@@ -22731,8 +22731,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.5
 	var origin_y := stage_h * 0.55 + bun_h0 * 0.18
-	## Pressed stack — tight layers so the handoff reads as one smash.
-	var step_y := 5.4 * layer_scale
+	## Loose enough stack that meat still reads between the buns.
+	var step_y := 9.5 * layer_scale
 	var layer_w := mini(200.0, stage_w * 0.9)
 	var stack_lift := 0.0
 
@@ -22750,12 +22750,12 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 	var bun_rows: Array[Control] = []
 	var patty_rows: Array[Control] = []
 	var topping_rows: Array[Control] = []
-	## Condiment / thin toppings get pressed flat on the way to the mouth.
+	## Mild topping flatten only — patty stays full and visible.
 	const FLY_SQUASH_IDS: Array[String] = ["mustard", "ketchup", "bacon", "pickle", "onion", "lettuce", "tomato"]
-	const FLY_TOPPING_SQUISH := 0.28
-	## Patties were oversized vs buns in the toss — keep meat tucked in the stack.
-	const FLY_PATTY_W := 0.48
-	const FLY_PATTY_H := 0.40
+	const FLY_TOPPING_SQUISH := 0.55
+	## Keep patties near bun footprint (was ~0.4 — meat vanished in the smash).
+	const FLY_PATTY_W := 0.92
+	const FLY_PATTY_H := 0.88
 
 	for stack_i in items.size():
 		var item: String = items[stack_i]
@@ -22774,8 +22774,8 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var is_bun := item == "bun_bottom" or item == "bun_top"
 		var is_patty := item == "patty"
 		var squash_flat := FLY_SQUASH_IDS.has(item)
-		## Don't vertically squash buns; flatten sauces / thin toppings after fit.
-		var h_squish := 1.0 if (is_bun or squash_flat) else 0.9
+		## Don't vertically squash buns or patties.
+		var h_squish := 1.0 if (is_bun or is_patty or squash_flat) else 0.95
 		var build_scale := _station_item_build_scale(layer_key)
 		if is_patty:
 			build_scale *= FLY_PATTY_H
@@ -22793,7 +22793,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		var h := fit.y
 		## Force flat toppings into a shorter box (aspect fit alone won't squash).
 		if squash_flat:
-			h = maxf(6.0, h * FLY_TOPPING_SQUISH)
+			h = maxf(8.0, h * FLY_TOPPING_SQUISH)
 		var row := Control.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.custom_minimum_size = Vector2(this_w, h)
@@ -22803,15 +22803,15 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			origin_y - stack_lift - float(stack_i) * step_y - h * 0.72
 		)
 		if item == "bun_bottom":
-			stack_lift += 5.5 * layer_scale
+			stack_lift += 3.0 * layer_scale
 			bottom_row = row
 			bun_rows.append(row)
 		if item == "bun_top":
-			row.position.y += 3.5 * layer_scale
+			row.position.y += 2.0 * layer_scale
 			top_row = row
 			bun_rows.append(row)
 		if is_patty:
-			stack_lift += 3.5 * layer_scale
+			stack_lift += 5.5 * layer_scale
 			patty_rows.append(row)
 		elif not is_bun:
 			topping_rows.append(row)
@@ -23070,8 +23070,8 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	if with_soda:
 		_play_cup_fly_to_mouth(customer, func() -> void: pass, true)
 
-	var bun_pinch_px := 8.0
-	var topping_crush_px := 6.0
+	var bun_pinch_px := 3.5
+	var topping_crush_px := 2.5
 	var bottom_base_y := bottom_row.position.y if bottom_row != null else 0.0
 	var top_base_y := top_row.position.y if top_row != null else 0.0
 	var topping_base_y: Array[float] = []
@@ -23091,7 +23091,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 			if row == null or not is_instance_valid(row):
 				continue
 			var base_y: float = topping_base_y[i] if i < topping_base_y.size() else row.position.y
-			row.position.y = lerpf(base_y, mid, clampf(amount / maxf(topping_crush_px, 0.01), 0.0, 1.0))
+			row.position.y = lerpf(base_y, mid, clampf(amount / maxf(topping_crush_px, 0.01), 0.0, 0.55))
 
 	var apply_stack_scale := func(s: Vector2) -> void:
 		if not is_instance_valid(stack):
@@ -23124,23 +23124,23 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	tw.set_parallel(false)
 	tw.tween_interval(0.01)
 
-	## A · Seal — quick press into one smash.
+	## A · Light seal — gentle press, keep the patty readable.
 	var seal_step := func(t: float) -> void:
-		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.06, 0.86), t))
-		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.5, t))
-		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.45, t))
+		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.03, 0.94), t))
+		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.35, t))
+		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.3, t))
 	tw.tween_method(seal_step, 0.0, 1.0, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 	## B · Windup — dip back before the toss.
 	var windup_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
 			return
-		var crouch := Vector2(1.08, 0.8).lerp(Vector2(0.88, 1.08), t)
+		var crouch := Vector2(1.04, 0.94).lerp(Vector2(0.96, 1.04), t)
 		apply_stack_scale.call(crouch)
 		stack.rotation = deg_to_rad(lerpf(0.0, -14.0, t))
 		stack.global_position = start_pos + Vector2(lerpf(0.0, -8.0, t), lerpf(0.0, 12.0, t))
-		apply_bun_pinch.call(bun_pinch_px * 0.6)
-		apply_topping_crush.call(topping_crush_px * 0.55)
+		apply_bun_pinch.call(bun_pinch_px * 0.4)
+		apply_topping_crush.call(topping_crush_px * 0.35)
 	tw.tween_method(windup_step, 0.0, 1.0, 0.1).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 
 	tw.tween_callback(func() -> void:
@@ -23148,7 +23148,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 			game_audio.play_serve_whoosh()
 	)
 
-	## C · Arc to the mouth — shrink in flight so it doesn't eat the face.
+	## C · Arc to the mouth — mild shrink only; patty stays visible.
 	var fly_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
 			return
@@ -23163,17 +23163,17 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		stack.global_position = u * u * start_pos + 2.0 * u * path_t * mid + path_t * path_t * end_pos
 		## Soft flip through the toss, settle near upright.
 		stack.rotation = deg_to_rad(lerpf(-14.0, 8.0, sin(t * PI * 0.85)))
-		## Midair shrink → arrive bite-sized at the lips.
-		var mid_s := Vector2(0.38, 0.42)
-		var near_s := Vector2(0.40, 0.36)
+		## Stay large through the flight — only ease down a bit at the lips.
+		var mid_s := Vector2(0.78, 0.82)
+		var near_s := Vector2(0.70, 0.68)
 		var s: Vector2
 		if t < 0.4:
-			s = Vector2(0.86, 1.02).lerp(mid_s, t / 0.4)
+			s = Vector2(0.98, 1.0).lerp(mid_s, t / 0.4)
 		else:
 			s = mid_s.lerp(near_s, (t - 0.4) / 0.6)
 		apply_stack_scale.call(s)
-		apply_bun_pinch.call(bun_pinch_px)
-		apply_topping_crush.call(topping_crush_px)
+		apply_bun_pinch.call(bun_pinch_px * 0.55)
+		apply_topping_crush.call(topping_crush_px * 0.5)
 	tw.tween_method(fly_step, 0.0, 1.0, 0.42).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 	## D · Impact — bite squash + crumbs + chomp.
@@ -23198,11 +23198,11 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		## Nudge slightly into the face as they bite.
 		stack.global_position = end_pos + Vector2(0.0, lerpf(0.0, 4.0, t))
 		stack.rotation = deg_to_rad(lerpf(8.0, -4.0, t))
-		## Stay compact at the lips — don't balloon width on bite.
-		var s := Vector2(0.40, 0.36).lerp(Vector2(0.44, 0.24), t)
+		## Soft bite — don't pancake the stack.
+		var s := Vector2(0.70, 0.68).lerp(Vector2(0.74, 0.52), t)
 		apply_stack_scale.call(s)
-		apply_bun_pinch.call(bun_pinch_px * (1.0 + t * 0.8))
-		apply_topping_crush.call(topping_crush_px * (1.0 + t))
+		apply_bun_pinch.call(bun_pinch_px * (0.7 + t * 0.35))
+		apply_topping_crush.call(topping_crush_px * (0.6 + t * 0.4))
 	tw.tween_method(impact_step, 0.0, 1.0, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 	## E · Vanish into the mouth.
@@ -23214,11 +23214,11 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 			end_pos = _customer_mouth_screen(customer)
 		stack.global_position = end_pos + Vector2(0.0, lerpf(4.0, 10.0, t))
 		stack.rotation = deg_to_rad(lerpf(-4.0, 0.0, t))
-		var s := Vector2(0.44, 0.24).lerp(Vector2(0.08, 0.04), ease(t, 2.2))
+		var s := Vector2(0.74, 0.52).lerp(Vector2(0.18, 0.12), ease(t, 2.2))
 		apply_stack_scale.call(s)
 		stack.modulate.a = 1.0 - ease(t, 1.6)
-		apply_bun_pinch.call(bun_pinch_px * (1.6 + t))
-		apply_topping_crush.call(topping_crush_px * (1.4 + t * 0.4))
+		apply_bun_pinch.call(bun_pinch_px * (1.0 + t * 0.5))
+		apply_topping_crush.call(topping_crush_px * (0.9 + t * 0.3))
 	tw.tween_method(eat_step, 0.0, 1.0, 0.26).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 
 	tw.tween_callback(finish_serve)
