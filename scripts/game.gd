@@ -652,7 +652,7 @@ const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
 ## Cheese wheel + slice stack — on the counter beside the board (not on the wood rim).
 const CHEESE_STATION_COLLISION_LAYER := 8192
-const CHEESE_STATION_OFFSET := Vector3(-0.36, 0.0, 0.38) ## off board toward grill, back from cook
+const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.0, 0.38) ## ~1 ft camera-left of grill; beside the board
 const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
