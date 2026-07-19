@@ -742,7 +742,7 @@ const CUP_FIZZ_POUR_RATE := 2.8
 const CUP_FIZZ_FADE_RATE := 0.347 ## ~0.5s longer than 0.42 before the head is gone
 const CUP_FIZZ_MAX_H := 0.0342 ## Big half-sphere when the cup is full.
 const CUP_FIZZ_OVERSIZE := 1.12 ## Full head grows slightly past the rim.
-const CUP_FOAM_LINGER := 30.0 ## Leftover top foam fades out over this many seconds from set-down.
+const CUP_FOAM_LINGER := 15.0 ## Leftover top foam fades out over this many seconds from set-down.
 const CUP_FOAM_LINGER_SHRINK := 4.0 ## Last seconds also shrink the dome a bit.
 const CUP_BUBBLE_AMOUNT := 34
 const CUP_LIQUID_BUBBLE_COUNT := 56
@@ -1050,7 +1050,7 @@ func _style_static_labels() -> void:
 	UiFontsScript.apply_label(hud_combo, true, 11)
 	UiFontsScript.apply_label(hud_day, true, 11)
 	UiFontsScript.apply_label(hud_hint, false, 13)
-	UiFontsScript.apply_label(flash_label, true, 30)
+	UiFontsScript.apply_label(flash_label, true, 24)
 	## Thin outline — thick outlines on MSDF fonts looked chewed-up.
 	for lab in [hud_money, hud_combo, hud_day]:
 		if lab:
@@ -1065,11 +1065,11 @@ func _style_static_labels() -> void:
 		## Toon caption plate — semi-transparent black so text pops over the window BG.
 		var flash_plate := StyleBoxFlat.new()
 		flash_plate.bg_color = Color(0.04, 0.05, 0.07, 0.32)
-		flash_plate.set_corner_radius_all(16)
-		flash_plate.content_margin_left = 28
-		flash_plate.content_margin_right = 28
-		flash_plate.content_margin_top = 14
-		flash_plate.content_margin_bottom = 14
+		flash_plate.set_corner_radius_all(14)
+		flash_plate.content_margin_left = 16
+		flash_plate.content_margin_right = 16
+		flash_plate.content_margin_top = 10
+		flash_plate.content_margin_bottom = 10
 		flash_plate.border_color = Color(0.18, 0.2, 0.24, 0.35)
 		flash_plate.set_border_width_all(2)
 		flash_plate.shadow_color = Color(0, 0, 0, 0.12)
@@ -1077,6 +1077,8 @@ func _style_static_labels() -> void:
 		flash_plate.shadow_offset = Vector2(0, 2)
 		flash_label.add_theme_stylebox_override("normal", flash_plate)
 		flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		flash_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_layout_flash_label()
 	UiFontsScript.apply_button(start_btn, true, 22)
 	UiFontsScript.apply_button(restart_btn, true, 18)
@@ -1094,12 +1096,21 @@ func _layout_flash_label() -> void:
 	var vw := vr.size.x
 	var vh := vr.size.y
 	var top := vh * FLASH_LABEL_TOP_FRAC
-	var height := maxf(64.0, vh * FLASH_LABEL_HEIGHT_FRAC)
-	var side := vw * FLASH_LABEL_SIDE_FRAC
-	flash_label.offset_left = side
+	var height := maxf(52.0, vh * FLASH_LABEL_HEIGHT_FRAC * 0.88)
+	## Hug the text — don't stretch a full-width plate for short tips.
+	var max_w := vw * (1.0 - 2.0 * FLASH_LABEL_SIDE_FRAC)
+	flash_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	var need := flash_label.get_combined_minimum_size()
+	var w := clampf(need.x, 64.0, max_w)
+	if need.x > max_w or flash_label.text.length() > 42:
+		w = max_w
+		flash_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		need = flash_label.get_combined_minimum_size()
+	var left := (vw - w) * 0.5
+	flash_label.offset_left = left
 	flash_label.offset_top = top
-	flash_label.offset_right = vw - side
-	flash_label.offset_bottom = top + height
+	flash_label.offset_right = left + w
+	flash_label.offset_bottom = top + maxf(height, need.y)
 
 
 func _setup_start_logo() -> void:
@@ -16687,6 +16698,8 @@ func _layout_top_bar_hud() -> void:
 func _layout_combo_above_tickets() -> void:
 	if hud_combo == null or not is_instance_valid(hud_combo):
 		return
+	## Hidden for now — combo still tracks under the hood.
+	hud_combo.visible = false
 	var ticket_rail: Control = get_node_or_null("UI/Root/WindowTicketRail")
 	if ticket_rail == null:
 		return
@@ -17545,7 +17558,7 @@ func _fit_ticket_wrap_size(wrap: Control, s: float) -> void:
 	wrap.custom_minimum_size = Vector2(TICKET_BASE_W * s, note_h * s)
 
 func _ticket_line_specs(order: Array) -> Array:
-	## One slip line per checkable ask (toppings expand even on EVERYTHING).
+	## One slip line per checkable ask — EVERYTHING stays one line, not every topping.
 	var lines: Array = []
 	var burger: Array = GameDataScript.order_burger_items(order)
 	var sodas: Array = GameDataScript.order_soda_ids(order)
@@ -17557,6 +17570,8 @@ func _ticket_line_specs(order: Array) -> Array:
 		lines.append({"id": "double_patty", "label": "DOUBLE PATTY"})
 	if GameDataScript.is_plain_patty_order(order) and not burger.is_empty():
 		lines.append({"id": "plain", "label": "PLAIN"})
+	elif GameDataScript.is_everything_order(order):
+		lines.append({"id": "everything", "label": "EVERYTHING"})
 	elif not burger.is_empty():
 		for item in burger:
 			if item == "bun_bottom" or item == "bun_top" or item == "patty":
@@ -17584,6 +17599,11 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 				if str(x) == "patty":
 					n += 1
 			return n >= 2
+		"everything":
+			for t in GameDataScript.EXTRA_TOPPINGS:
+				if not built.has(t):
+					return false
+			return true
 		"plain", "burger":
 			return built.has("patty")
 		_:
@@ -21647,6 +21667,7 @@ func _set_tutorial_hint(step: int, text: String) -> void:
 	flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
 	flash_label.visible = true
 	flash_label.modulate.a = 1.0
+	_layout_flash_label()
 
 
 func _clear_tutorial_hint() -> void:
@@ -21668,6 +21689,7 @@ func _flash(text: String, color: Color) -> void:
 	flash_label.add_theme_color_override("font_color", color)
 	flash_label.visible = true
 	flash_label.modulate.a = 1.0
+	_layout_flash_label()
 	if _flash_tween != null and is_instance_valid(_flash_tween):
 		_flash_tween.kill()
 	_flash_tween = create_tween()
@@ -21679,6 +21701,7 @@ func _flash(text: String, color: Color) -> void:
 			flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
 			flash_label.visible = true
 			flash_label.modulate.a = 1.0
+			_layout_flash_label()
 		else:
 			flash_label.visible = false
 			flash_label.modulate.a = 1.0

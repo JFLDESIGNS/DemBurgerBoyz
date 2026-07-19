@@ -103,6 +103,7 @@ alignment = 0
 
 [node name="ComboLabel" type="Label" parent="UI/Root/WindowTicketRail"]
 unique_name_in_owner = true
+visible = false
 layout_mode = 2
 size_flags_horizontal = 0
 mouse_filter = 2
