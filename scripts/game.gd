@@ -1287,7 +1287,8 @@ func _start_game() -> void:
 	_reset_fire_extinguisher()
 	_reset_glock()
 	if window_cat != null and window_cat.has_method("reset_shift"):
-		window_cat.reset_shift()
+		## Brand-new run — slim cat again.
+		window_cat.reset_shift(false)
 	_clear_all_stations()
 	_seed_cutting_board_buns()
 	_clear_customers()
@@ -1327,7 +1328,8 @@ func _restart() -> void:
 	_reset_fire_extinguisher()
 	_reset_glock()
 	if window_cat != null and window_cat.has_method("reset_shift"):
-		window_cat.reset_shift()
+		## Carry chonk into the next day (max size softens to ~75%).
+		window_cat.reset_shift(true)
 	_clear_all_stations()
 	_seed_cutting_board_buns()
 	_clear_customers()
@@ -6342,7 +6344,8 @@ func _apply_glock_shot(
 		game_audio.play_gunshot()
 	if cust_id == -2:
 		if window_cat != null and is_instance_valid(window_cat):
-			window_cat.reset_shift()
+			## Shot — bolts and drops the weight.
+			window_cat.reset_shift(false)
 		_flash("Cat bolted!", Color("CE93D8"))
 		if game_audio and game_audio.has_method("play_cat_meow"):
 			game_audio.play_cat_meow()

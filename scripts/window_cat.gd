@@ -109,6 +109,28 @@ func is_full_size() -> bool:
 	return _fat >= FAT_MAX - 0.001 and _giant >= GIANT_MAX - 0.001
 
 
+func _chonk_budget_max() -> float:
+	return FAT_MAX + GIANT_MAX
+
+
+func _chonk_fraction() -> float:
+	var cap := _chonk_budget_max()
+	if cap <= 0.0:
+		return 0.0
+	return clampf((_fat + _giant) / cap, 0.0, 1.0)
+
+
+func _set_chonk_fraction(t: float) -> void:
+	## Map 0..1 onto fat-first, then giant (same path as feeding).
+	var budget := _chonk_budget_max() * clampf(t, 0.0, 1.0)
+	if budget <= FAT_MAX:
+		_fat = budget
+		_giant = 0.0
+	else:
+		_fat = FAT_MAX
+		_giant = budget - FAT_MAX
+
+
 func _add_chonk(amount: float) -> void:
 	## Fill width first; leftover / further treats grow overall size up to 2×.
 	if amount <= 0.0:
@@ -721,15 +743,21 @@ func _feed_full_burger() -> void:
 		_anim.speed_scale = 1.25
 
 
-func reset_shift() -> void:
+func reset_shift(persist_weight: bool = true) -> void:
+	## New day / hide — keep fed weight across days; only a fresh run wipes it.
 	_state = "hidden"
 	_timer = FIRST_PEEK_SEC
 	_treat_arm = 0.0
 	_pet_squash = 0.0
-	_fat = 0.0
-	_giant = 0.0
 	_patty_eat_wide = 0.0
 	_gap_open = true
+	if persist_weight:
+		## Maxed cats start the next day at ~75% so they don't join the line immediately.
+		if is_full_size() or _chonk_fraction() >= 0.999:
+			_set_chonk_fraction(0.75)
+	else:
+		_fat = 0.0
+		_giant = 0.0
 	visible = false
 	position = Vector3(_home_x(), _hidden_y(), _home_z())
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
@@ -738,6 +766,4 @@ func reset_shift() -> void:
 		_anim.speed_scale = 0.85
 	if _hearts != null and is_instance_valid(_hearts):
 		_hearts.emitting = false
-	if _visual != null:
-		_visual.scale = Vector3.ONE * MESH_SCALE
-		_visual.position.y = 0.0
+	_apply_visual_scale()
