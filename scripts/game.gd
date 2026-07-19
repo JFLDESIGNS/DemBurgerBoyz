@@ -266,6 +266,8 @@ var brush_area: Area3D = null
 var brush_home: Vector3 = Vector3(1.866, 1.99, 1.12)
 var brush_home_rot := Vector3(-8.0, 18.0, 6.0)
 const BRUSH_HOME_SCALE := Vector3(1.55, 1.55, 1.55)
+## Hold height above steel — ~3" extra so the handle clears the grill lip while scraping.
+const BRUSH_HOLD_HEIGHT := 0.141
 ## Held pose — blade tipped on steel, handle toward the cook.
 var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
@@ -530,6 +532,9 @@ var social_rating_sum: float = 0.0
 var social_review_count: int = 0
 ## Newest-first feed posts: {stars, who, text, pic?}
 var social_reviews: Array = []
+## All reviews from the current day (not capped like the phone feed) — for end-of-day recap.
+var day_social_reviews: Array = []
+var day_social_rating_sum: float = 0.0
 const SOCIAL_REVIEW_CHANCE := 0.70
 const SOCIAL_FEED_MAX := 10
 ## Roughly 1 in 8 posts attach a 2D snapshot of the Build burger.
@@ -805,17 +810,17 @@ const GFX_DEFAULTS := {
 	"menu_scale": MENU_BOARD_DEFAULT_SCALE,
 	"menu_yaw": MENU_BOARD_DEFAULT_YAW,
 	## Orange strip under the grill lip (burner on only).
-	"strip_x": 0.0,
-	"strip_y": -0.008,
-	"strip_z": 0.06,
-	"strip_pitch": 58.0,
+	"strip_x": 0.05,
+	"strip_y": -0.19,
+	"strip_z": -0.08,
+	"strip_pitch": -56.0,
 	"strip_yaw": 180.0,
-	"strip_roll": 0.0,
-	"strip_energy": 0.18,
-	"strip_range": 1.45,
+	"strip_roll": 15.0,
+	"strip_energy": 0.01,
+	"strip_range": 0.36,
 	"strip_angle": 76.0,
 	"strip_size": 0.55,
-	"strip_width": 0.99,
+	"strip_width": 0.20,
 	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
 	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
 	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
@@ -2393,11 +2398,20 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 func _end_day() -> void:
 	playing = false
 	day += 1
-	game_over_label.text = "Day %d over!\n\nServed: %d\nPerfect: %d\nWallet: %s\n\nReady for the next rush?" % [
-		day - 1, total_served, perfect_serves, _format_money(money)
+	var social_block := _format_day_social_recap()
+	game_over_label.text = "Day %d over!\n\nServed: %d\nPerfect: %d\nWallet: %s\n\n%s\n\nReady for the next rush?" % [
+		day - 1, total_served, perfect_serves, _format_money(money), social_block
 	]
 	restart_btn.text = "Start Day %d" % day
 	game_over_panel.visible = true
+	## Bigger panel so best/worst quotes fit.
+	game_over_panel.offset_left = -300.0
+	game_over_panel.offset_right = 300.0
+	game_over_panel.offset_top = -240.0
+	game_over_panel.offset_bottom = 240.0
+	if game_over_label:
+		game_over_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(game_over_label, true, 15)
 
 
 # --- 3D world: inside truck, looking out ------------------------------------
@@ -9367,7 +9381,7 @@ func _try_grab_brush(screen_pos: Vector2) -> bool:
 func _snap_brush_toward_cursor(screen_pos: Vector2, amount: float = 1.0) -> void:
 	if brush_root == null or camera == null:
 		return
-	var hit := _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.065)
+	var hit := _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + BRUSH_HOLD_HEIGHT)
 	if hit == Vector3.ZERO:
 		return
 	brush_root.global_position = brush_root.global_position.lerp(hit, clampf(amount, 0.0, 1.0))
@@ -9378,7 +9392,7 @@ func _update_held_brush(_delta: float) -> void:
 	if brush_root == null or camera == null:
 		return
 	var mouse := get_viewport().get_mouse_position()
-	var hit := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.065)
+	var hit := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + BRUSH_HOLD_HEIGHT)
 	if hit == Vector3.ZERO:
 		return
 	var prev := brush_root.global_position
@@ -14435,6 +14449,8 @@ func _reset_supplies() -> void:
 	social_rating_sum = 0.0
 	social_review_count = 0
 	social_reviews.clear()
+	day_social_reviews.clear()
+	day_social_rating_sum = 0.0
 	supply_stock.clear()
 	supply_fresh.clear()
 	for id in SUPPLY_IDS:
@@ -14654,16 +14670,87 @@ func _commit_social_review(
 
 
 func _apply_social_review(stars: float, who: String, text: String, pic: Texture2D = null) -> void:
+	var clamped := clampf(stars, 0.0, 5.0)
 	social_review_count += 1
-	social_rating_sum += clampf(stars, 0.0, 5.0)
-	var post := {"stars": clampf(stars, 0.0, 5.0), "who": who, "text": text}
+	social_rating_sum += clamped
+	var post := {"stars": clamped, "who": who, "text": text}
 	if pic != null:
 		post["pic"] = pic
 	social_reviews.push_front(post)
 	while social_reviews.size() > SOCIAL_FEED_MAX:
 		social_reviews.pop_back()
+	## Keep a full-day copy for the closing recap (best / worst / average).
+	day_social_reviews.append({"stars": clamped, "who": who, "text": text})
+	day_social_rating_sum += clamped
 	_refresh_phone_ui()
 	_flash("%s left a review!" % who, Color("90CAF9"))
+
+
+func _day_social_average() -> float:
+	if day_social_reviews.is_empty():
+		return 0.0
+	return day_social_rating_sum / float(day_social_reviews.size())
+
+
+func _day_social_extremes() -> Dictionary:
+	## Returns {best, worst} post dicts for the day, or empty if none.
+	var best: Dictionary = {}
+	var worst: Dictionary = {}
+	for post in day_social_reviews:
+		if typeof(post) != TYPE_DICTIONARY:
+			continue
+		var s := float(post.get("stars", 0.0))
+		if best.is_empty() or s > float(best.get("stars", -1.0)):
+			best = post
+		elif is_equal_approx(s, float(best.get("stars", -1.0))):
+			## Prefer the longer / more interesting best quote on a tie.
+			if str(post.get("text", "")).length() > str(best.get("text", "")).length():
+				best = post
+		if worst.is_empty() or s < float(worst.get("stars", 99.0)):
+			worst = post
+		elif is_equal_approx(s, float(worst.get("stars", 99.0))):
+			if str(post.get("text", "")).length() > str(worst.get("text", "")).length():
+				worst = post
+	return {"best": best, "worst": worst}
+
+
+func _clip_review_quote(text: String, max_chars: int = 110) -> String:
+	var t := text.strip_edges().replace("\n", " ")
+	while t.find("  ") >= 0:
+		t = t.replace("  ", " ")
+	if t.length() <= max_chars:
+		return t
+	return t.substr(0, max_chars - 1).strip_edges() + "…"
+
+
+func _format_day_social_recap() -> String:
+	if day_social_reviews.is_empty():
+		return "Social: no reviews today."
+	var n := day_social_reviews.size()
+	var avg := _day_social_average()
+	var ext := _day_social_extremes()
+	var best: Dictionary = ext.get("best", {})
+	var worst: Dictionary = ext.get("worst", {})
+	var lines: PackedStringArray = PackedStringArray()
+	lines.append("Social avg %s  (%.1f · %d review%s)" % [
+		_star_bar_text(avg), avg, n, "s" if n != 1 else ""
+	])
+	if not best.is_empty():
+		lines.append("Best %s %s: \"%s\"" % [
+			_star_bar_text(float(best.get("stars", 5.0))),
+			str(best.get("who", "Guest")),
+			_clip_review_quote(str(best.get("text", ""))),
+		])
+	## Only show a separate worst if it isn't the same lone review / same stars.
+	if not worst.is_empty() and (n > 1 or float(worst.get("stars", 0.0)) < float(best.get("stars", 0.0)) - 0.01):
+		if str(worst.get("who", "")) != str(best.get("who", "")) \
+			or str(worst.get("text", "")) != str(best.get("text", "")):
+			lines.append("Worst %s %s: \"%s\"" % [
+				_star_bar_text(float(worst.get("stars", 1.0))),
+				str(worst.get("who", "Guest")),
+				_clip_review_quote(str(worst.get("text", ""))),
+			])
+	return "\n".join(lines)
 
 
 func _make_review_burger_snapshot(station_index: int) -> Texture2D:
@@ -14768,19 +14855,28 @@ func _review_stars_from_serve(
 			return 5.0 if randf() < 0.45 else 4.0
 		return 1.0
 	if meh:
-		return clampf(cook_stars * 0.55, 1.0, 2.5)
+		## Mild misses land on 2–3★ more often than a hard 1.
+		return 2.0 if randf() < 0.55 else 3.0
 	var stars := cook_stars
-	## Order quality can lift a decent cook — not a charcoal puck.
+	## Order quality can lift a decent cook — not always straight to 5.
 	if cook_score >= 70 and cook_stars >= 3.0:
 		if quality >= 0.98:
-			stars = maxf(stars, 5.0)
+			stars = 5.0 if randf() < 0.55 else 4.0
 		elif quality >= 0.9:
-			stars = maxf(stars, 4.0)
+			stars = 4.0 if randf() < 0.7 else 3.0
+		elif cook_stars >= 4.0:
+			## Great timing still sometimes posts a chill 3★.
+			if randf() < 0.22:
+				stars = 3.0
+		elif cook_stars >= 3.0:
+			## Good serves spread across 3 / 4.
+			stars = 4.0 if randf() < 0.45 else 3.0
 	elif cook_stars <= 1.0:
-		stars = minf(stars, 1.5)
+		stars = 1.0 if randf() < 0.7 else 2.0
 	elif cook_stars <= 2.0:
-		stars = minf(maxf(stars, 1.0), 2.5)
-	return clampf(stars, 1.0, 5.0)
+		stars = 2.0 if randf() < 0.65 else 3.0
+	## Whole-star posts only — BizPhone never shows half stars in the feed copy.
+	return clampf(roundf(stars), 1.0, 5.0)
 
 
 func _cook_rating_is_burnt(cook_r: Dictionary) -> bool:
@@ -16386,6 +16482,16 @@ func _load_graphics_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GFX_CFG_PATH) != OK:
 		return
+	## One-shot: tuned grill strip light pose / intensity from in-game GFX.
+	if not cfg.has_section_key("gfx", "gfx_strip_v1"):
+		for hk in [
+			"strip_x", "strip_y", "strip_z",
+			"strip_pitch", "strip_yaw", "strip_roll",
+			"strip_energy", "strip_range", "strip_angle", "strip_size", "strip_width",
+		]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_strip_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	## One-shot: apply full tuned graphics look (bloom + lighting + look + AO off).
 	if not cfg.has_section_key("gfx", "gfx_preset_v7"):
 		for hk in [
