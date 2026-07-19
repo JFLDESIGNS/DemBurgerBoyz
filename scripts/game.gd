@@ -15275,8 +15275,8 @@ func _build_cheese_station_prop() -> void:
 	var wheel_yaw := 18.0
 	var wheel_r := 0.118
 	var wheel_h := 0.098 ## taller deli wheel
-	## Sit on the counter — center at half height.
-	var wheel_pos := Vector3(0.02, wheel_h * 0.5, 0.06)
+	## Sit on the counter — center at half height; +6″ away from the cook.
+	var wheel_pos := Vector3(0.02, wheel_h * 0.5, 0.06 + 0.152)
 	var wheel := MeshInstance3D.new()
 	wheel.name = "CheeseWheel"
 	wheel.mesh = _make_cheese_wheel_pie_mesh(wheel_r, wheel_h, 32, deg_to_rad(55.0))
@@ -15340,8 +15340,8 @@ func _build_cheese_station_prop() -> void:
 	var slice_step := 0.0155
 	var stack_root := Node3D.new()
 	stack_root.name = "CheeseSliceStack"
-	## Keep taller slices; sit on the counter next to the wheel (not toward the player).
-	stack_root.position = Vector3(0.06, slice_thick * 0.5, -0.02)
+	## Drop ~3″ onto the counter surface (was floating above).
+	stack_root.position = Vector3(0.06, slice_thick * 0.5 - 0.076, -0.02)
 	root.add_child(stack_root)
 	cheese_stack_anchor = stack_root
 	var stack_n := 7
