@@ -89,6 +89,7 @@ const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
+const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 ## Hotkeys 1-7 match strip toppings (tomato → mustard). Cheese is grabbed from the board wheel.
 ## Bottom bar left→right: tomato … mustard, then Serve on the right.
 ## Bottom bun is automatic when a patty hits a station — not on the strip.
@@ -139,6 +140,7 @@ var playing: bool = false
 ## Start tutorial: 1 = turn burner on · 2 = right-click patty · 0 = done.
 var _tutorial_step: int = 0
 var _tutorial_text: String = ""
+var _tutorial_hint_cycle_t: float = 0.0
 var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
@@ -150,6 +152,8 @@ const TERRORIST_MIN_DAY := 2
 const TERRORIST_KILL_BOUNTY := 12.0
 const OPENING_TERR_COUNT := 8
 const OPENING_TERR_WINDOW := 20.0
+const TUTORIAL_HINT_VISIBLE_TIME := 4.0
+const TUTORIAL_HINT_HIDDEN_TIME := 6.0
 const OPENING_TERR_AT: Array[float] = [0.5, 2.8, 5.2, 7.5, 10.0, 12.5, 15.5, 18.0]
 const OPENING_TERR_SPECS: Array[Dictionary] = [
 	{"role": "gun", "tier": "distant"},
@@ -307,6 +311,7 @@ var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var soda_slicks: Array = [] ## soda puddles on steel — oil-like, soda-colored
 var soda_char_spots: Array = [] ## burnt black marks left after soda cooks off
 var melting_cups: Array = [] ## cups dropped on the grill — melt / smoke / char
+var melting_icecreams: Array = [] ## cones dropped on hot steel — serve slumps into burnt crust
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
 var _black_smoke_tex: ImageTexture = null
@@ -393,9 +398,9 @@ const GLOCK_REAR_SIGHT_Z := -0.042
 const GLOCK_REAR_SIGHT_X := 0.011
 const GLOCK_REAR_SIGHT_R := 0.0048
 ## Scraper can shove nearby patties a little while scraping.
-const BRUSH_PATTY_PUSH_RADIUS := 0.32
-const BRUSH_PATTY_PUSH_SCALE := 0.72
-const BRUSH_PATTY_PUSH_MAX := 0.038
+const BRUSH_PATTY_PUSH_RADIUS := 0.38
+const BRUSH_PATTY_PUSH_SCALE := 1.15
+const BRUSH_PATTY_PUSH_MAX := 0.072
 ## Click-drag to slide patties on the flat-top.
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
@@ -428,7 +433,7 @@ const BUILD_DROP_SCREEN_FRAC := BUILD_COLUMN_SCREEN_FRAC
 const BUILD_DROP_MIN_PX := 160.0
 ## Flash toast — centered, nudged up from mid so it clears the grill/counter.
 const FLASH_LABEL_CENTER_Y_FRAC := 0.56
-const FLASH_LABEL_NUDGE_UP_PX := 40.0
+const FLASH_LABEL_NUDGE_UP_PX := 55.0
 const FLASH_LABEL_SIDE_FRAC := 280.0 / 1280.0
 ## Extra screen pixels past the grill's left edge that still count as Build.
 const BUILD_DROP_GRILL_PAD_PX := 110.0
@@ -456,6 +461,9 @@ var phone_review_label: Label = null
 var phone_feed_box: VBoxContainer = null
 var phone_inventory_box: VBoxContainer = null
 var phone_scroll: ScrollContainer = null
+var phone_status_signal: Label = null
+var phone_status_net: Label = null
+var phone_status_battery: Label = null
 var _phone_scroll_dragging: bool = false
 var _phone_scroll_drag_pending: bool = false
 var _phone_scroll_drag_start_y: float = 0.0
@@ -463,6 +471,33 @@ var _phone_scroll_drag_start_offset: int = 0
 var _phone_scroll_vel: float = 0.0
 var _phone_scroll_last_mouse_y: float = 0.0
 var _phone_scroll_last_msec: int = 0
+var _social_post_seq: int = 0
+var _phone_reply_open_id: int = -1
+var _phone_reply_show_custom: bool = false
+var _phone_reply_custom_draft: String = ""
+## Keyboard cook shortcuts (mouse ways still work).
+const KB_C_HOLD_FOR_COLA := 0.28
+const KB_SCRAPE_TOTAL_SEC := 5.0
+const KB_OIL_EACH_SEC := 0.5
+var _kb_c_down: bool = false
+var _kb_c_hold_t: float = 0.0
+var _kb_c_cola: bool = false
+var _kb_i_down: bool = false
+var _kb_l_down: bool = false
+var _kb_o_down: bool = false
+var _kb_h_down: bool = false
+var _kb_s_down: bool = false
+var _kb_s_t: float = 0.0
+var _kb_soda_flavor: String = "" ## cola | lemon_lime | orange while key-held
+var _kb_oil_mode: bool = false
+var _kb_oil_t: float = 0.0
+var _kb_oil_idx: int = 0
+var _kb_oil_started: bool = false
+var _kb_force_cup_seat: Vector3 = Vector3.ZERO
+var _kb_force_cone_seat: Vector3 = Vector3.ZERO
+var _kb_force_brush_pos: Vector3 = Vector3.ZERO
+var _kb_force_oil_pos: Vector3 = Vector3.ZERO
+var _kb_brush_prev: Vector3 = Vector3.ZERO
 ## Soda fountain + wall cups (orders later).
 var soda_root: Node3D = null
 var soda_colliders: Array = [] ## {p: Vector3, h: Vector3} local box centers / half-extents
@@ -520,7 +555,7 @@ var soda_stream_mesh: MeshInstance3D = null
 var soda_stream_mat: ShaderMaterial = null ## white→soda gradient pour
 var soda_stream_bubbles: GPUParticles3D = null ## white jiggle bubbles at pour impact
 var _soda_stream_shader: Shader = null
-## Soft-serve machine — left window counter, cone workflow mirrors fountain cups.
+## Soft-serve machine — tucked camera-left of the soda fountain.
 var icecream_root: Node3D = null
 var icecream_cone_root: Node3D = null
 var icecream_cone_area: Area3D = null
@@ -535,7 +570,16 @@ var icecream_cone_held: bool = false
 var icecream_cone_fill: float = 0.0
 var _icecream_prev_pos: Vector3 = Vector3.ZERO
 var _icecream_vel: Vector3 = Vector3.ZERO
+var _icecream_swirl_bounce: float = 0.0
+var _icecream_swirl_tilt: Vector2 = Vector2.ZERO
+var _icecream_swirl_scale: Vector3 = Vector3.ONE
 var _icecream_spin_phase: float = 0.0
+var _icecream_grab_lockout: float = 0.0
+var _icecream_auto_hand_token: int = 0
+const ICECREAM_AUTO_HAND_DELAY := 0.5
+var burnt_icecream_cone_held: bool = false
+var burnt_icecream_cone_root: Node3D = null
+var burnt_icecream_cone_puddle: Node3D = null
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -560,6 +604,9 @@ var _cup_surface_slosh: Vector2 = Vector2.ZERO ## independent top-disc splash an
 var _cup_surface_spin: float = 0.0 ## yaw on the splash disc
 var _cup_splash_cd: float = 0.0
 var _cup_surface_wobble: float = 0.0 ## brief pour / splash kick on the disc
+var _cup_spout_lock: Node3D = null
+var _cup_spout_unlock_grace: float = 0.0
+var _cup_machine_contact_grace: float = 0.0
 var _cup_fizz: float = 0.0 ## 0–1 foam head; spikes on pour, fades after
 var _cup_fizz_peak: bool = false ## hit a strong head this pour cycle
 var _cup_fizz_poof: float = 0.0 ## 0–1 end-of-life poof out the top
@@ -587,6 +634,7 @@ const SOCIAL_REVIEWER_NAMES: Array[String] = [
 var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
 var game_audio: Node = null
+var intro_music_player: AudioStreamPlayer = null
 ## Graphics menu — live Environment + kitchen lights.
 var gfx_env: Environment = null
 var gfx_sun: DirectionalLight3D = null
@@ -607,18 +655,31 @@ var options_vol_slider: HSlider = null
 var options_lobby_btn: Button = null
 var options_layer: CanvasLayer = null
 var options_dim: ColorRect = null
+var options_fullscreen_check: CheckButton = null
+var options_vsync_check: CheckButton = null
+var options_graphics_sliders: Dictionary = {}
+var options_graphics_checks: Dictionary = {}
+var options_hidden_password: LineEdit = null
+var options_hidden_unlock_btn: Button = null
+var options_hidden_advanced_btn: Button = null
+var options_hidden_status: Label = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
+var build_board_hint_label: Label3D = null
 var cheese_station_root: Node3D = null
 var cheese_station_area: Area3D = null
 var cheese_stack_anchor: Node3D = null ## World home for returning unused slices
 var cheese_stack_top: MeshInstance3D = null ## Hidden while a slice is in hand
 var cheese_pile_slices: Array = [] ## MeshInstance3D slots — visibility tracks fridge stock
 const CHEESE_PILE_MAX_EACH := 10 ## visual cap per pile (20 total)
+var bun_pile_root: Node3D = null
+var bun_pile_anchors: Dictionary = {} ## bun id -> Node3D visual stack home
+var bun_pile_sprites: Dictionary = {} ## bun id -> Array[Sprite3D]
+const BUN_PILE_MAX_EACH := 16
 var _cheese_returning: bool = false
 var _cheese_return_t: float = 0.0
 var _cheese_return_from: Vector3 = Vector3.ZERO
@@ -628,6 +689,15 @@ var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
 var start_logo_wrap: Control = null
 var start_logo_tween: Tween = null
+var start_patty_preview_wrap: SubViewportContainer = null
+var start_patty_preview_vp: SubViewport = null
+var start_patty_preview: Area3D = null
+var start_patty_preview_age: float = 0.0
+var start_patty_preview_flipped: bool = false
+var start_patty_preview_cheesed: bool = false
+var start_patty_preview_done_popped: bool = false
+var start_patty_preview_done_pop_t: float = -1.0
+const START_PATTY_PREVIEW_SCALE := Vector3(1.08, 1.08, 1.08)
 ## Cached order-slip paper (vignette) textures.
 var _ticket_paper_tex: ImageTexture = null
 var _ticket_paper_tex_sel: ImageTexture = null
@@ -738,17 +808,19 @@ const RADIO_UI_LEFT := 210.0 ## panel width + right margin
 const PHONE_UI_BASE_H := 278.0
 const PHONE_UI_SIZE := Vector2(200.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10) ## +15% +5% +10% +10% taller
 const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 28.0 ## fit inside screen + section margins
-const PHONE_LOGO_WRAP_H := 56.0 ## keep SOCIAL feed on-screen without scrolling
-const PHONE_LOGO_DISPLAY_H := 50.0
+const PHONE_LOGO_WRAP_H := 78.0 ## bigger home-screen brand mark
+const PHONE_LOGO_DISPLAY_H := 72.0
+const PHONE_STATUS_H := 16.0
 const PHONE_SCROLL_DRAG_THRESH := 8.0
-const PHONE_SCROLL_FRICTION := 7.5
-const PHONE_SCROLL_MIN_VEL := 18.0
+const PHONE_SCROLL_FRICTION := 4.8
+const PHONE_SCROLL_MIN_VEL := 10.0
 const PHONE_SCROLL_WHEEL_KICK := 520.0
 const PHONE_CORNER_OUTER := 10
 const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
+const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a clap-back
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
-const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
+const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.67)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const CUP_COLLISION_LAYER := 1024
 const CUP_RACK_COLLISION_LAYER := 2048 ## empty CUPS peg pick volume (must not steal cup rays)
@@ -784,15 +856,34 @@ const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
 const CUP_ICE_STACK_MAX := 36
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
-const ICECREAM_STATION_POS := Vector3(1.58, 1.02, 0.62)
+## Soft-serve — camera-left of the soda fountain (world +X of soda) so tank/cup hits don't eat cone clicks.
+const ICECREAM_STATION_POS := Vector3(-0.86, 1.19, 0.647)
 const ICECREAM_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const ICECREAM_CONE_COLLISION_LAYER := 16384
-const ICECREAM_CONE_H := 0.19
-const ICECREAM_CONE_R := 0.062
+const ICECREAM_CONE_H := 0.151
+const ICECREAM_CONE_R := 0.049
+const ICECREAM_CONE_VISUAL_DROP := -0.024
 const ICECREAM_FILL_RATE := 0.72
-const ICECREAM_SPOUT_HORIZ := 0.105
-const ICECREAM_SPOUT_VERT := 0.22
-const ICECREAM_MAGNET_RADIUS := 0.36
+const ICECREAM_SPOUT_HORIZ := 0.155
+const ICECREAM_SPOUT_VERT := 0.46
+const ICECREAM_MAGNET_RADIUS := 0.48
+const ICECREAM_GRAB_SCREEN_PX := 52.0
+const ICECREAM_CONE_FILL_DROP := 0.18
+const ICECREAM_SWIRL_H := 0.143
+const ICECREAM_SWIRL_TURNS := 4.65
+const ICECREAM_SWIRL_TOP_SQUEEZE := 1.45
+const ICECREAM_SWIRL_STEPS := 72
+const ICECREAM_SWIRL_SEGMENTS := 30
+const ICECREAM_SWIRL_STAR_POINTS := 6.0
+const ICECREAM_SWIRL_STAR_DEPTH := 0.31
+const ICECREAM_SWIRL_SPIKE_FRAC := 0.90
+const ICECREAM_SWIRL_SPIKE_H := 0.026
+const ICECREAM_FILL_ORBIT_R := 0.012
+const ICECREAM_FILL_ORBIT_Z_R := 0.009
+const ICECREAM_SWIRL_FAST_SQUASH_MAX := 0.15
+const ICECREAM_GRILL_MELT_SEC := 5.0
+const ICECREAM_GRILL_FIRE_SEC := 6.0
+const ICECREAM_PUDDLE_R := 0.105
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
 const CUP_FOLLOW_RATE := 15.0 ## hand follow (empty); full drinks feel heavier
@@ -806,9 +897,14 @@ const CUP_SURFACE_SPIN_MUL := 0.0
 const CUP_FOAM_ROCK_MAX := 22.0
 const CUP_SPLASH_SPEED := 2.15
 const CUP_SPLASH_LOSS := 0.07
-const CUP_SPOUT_HORIZ := 0.13
-const CUP_SPOUT_VERT := 0.34
-const CUP_MAGNET_RADIUS := 0.15
+const CUP_HOT_GRILL_RESCUE_SEC := 1.0
+const CUP_HOT_GRILL_HISS_WARN_SEC := 0.5
+const CUP_SPOUT_HORIZ := 0.18
+const CUP_SPOUT_VERT := 0.39
+const CUP_MAGNET_RADIUS := 0.18
+const CUP_TRAY_MAGNET_RADIUS := 0.26
+const CUP_TRAY_RELEASE_RADIUS := 0.34
+const CUP_TRAY_MAGNET_PULL := 0.16
 const CUP_FIZZ_POUR_RATE := 2.8
 const CUP_FIZZ_FADE_RATE := 0.347 ## ~0.5s longer than 0.42 before the head is gone
 const CUP_FIZZ_MAX_H := 0.0342 ## Big half-sphere when the cup is full.
@@ -820,6 +916,7 @@ const CUP_LIQUID_BUBBLE_COUNT := 56
 const CUP_LIQUID_BUBBLE_TOP_COUNT := 10 ## linger near foam and fade in place
 const CUP_LIQUID_BUBBLE_RISE_COUNT := 22 ## bottom → top risers in the pop body
 const CUP_LIQUID_BUBBLE_SIZE := 0.0038 ## idle carbonation pearls (was too tiny)
+const CUP_TRAY_FIRST_X := -0.38 ## camera-left first parked cup spot
 const CUP_TRAY_SPACING := 0.20 ## gap between parked drinks on the drip tray
 const CUP_DRAW_PRIORITY := 10 ## Above grill shine (render_priority 2).
 const SUPPLY_IDS: Array[String] = [
@@ -867,11 +964,11 @@ const GFX_DEFAULTS := {
 	"ssao": false,
 	"ssil": false,
 	"sky_energy": 0.34,
-	"heat_warp_on": false,
-	"heat_warp_size": 0.83,
-	"heat_warp_speed": 1.00,
-	"heat_warp_strength": 0.00,
-	"heat_warp_tight": 1.70,
+	"heat_warp_on": true,
+	"heat_warp_size": 0.86,
+	"heat_warp_speed": 1.65,
+	"heat_warp_strength": 0.006,
+	"heat_warp_tight": 1.45,
 	"bg_y": STREET_MATTE_DEFAULT_Y,
 	"bg_scale": 1.0,
 	"sale_x": FIRST_SALE_DEFAULT_X,
@@ -912,8 +1009,8 @@ const GFX_DEFAULTS := {
 	"bz_plate_shift": BUILD_PLATE_SHIFT_X,
 	"bz_plate_y": 40.0, ## sit lower on the cutting board
 	"bz_plate_pad": 8.0,
-	"bz_title_y": -2.0,
-	"bz_title_x": 0.0,
+	"bz_title_y": 38.0,
+	"bz_title_x": 20.0,
 	"bz_hit_l": BUILD_HIT_PAD_LEFT,
 	"bz_hit_t": BUILD_HIT_PAD_TOP,
 	"bz_hit_r": BUILD_HIT_PAD_RIGHT,
@@ -997,13 +1094,18 @@ var _mp_remote_ext: Dictionary = {}
 var _mp_remote_glock: Dictionary = {}
 var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
 var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
+var _mp_remote_icecreams: Dictionary = {} ## peer_id -> soft-serve cone ghost while held
 var _mp_cup_pose_cool: float = 0.0
+var _mp_icecream_pose_cool: float = 0.0
 var _mp_cup_seq: int = 1 ## per-peer idle-drink ids (owner*1e6 + seq)
 var _mp_idle_drink_accum: float = 0.0 ## periodic re-broadcast of local parked drinks
 var _mp_slick_sync_cool: float = 0.0
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
 var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
+var _burger_assets_warmed: bool = false
+const PATTY_PREWARM_POOL_SIZE := 3
+var _patty_spawn_pool: Array = []
 
 
 func _ready() -> void:
@@ -1051,10 +1153,14 @@ func _ready() -> void:
 	_build_ingredient_buttons()
 	_setup_radio()
 	if vp:
-		vp.size_changed.connect(_layout_phone_ui_overlay)
-		vp.size_changed.connect(_apply_prep_ui_overlay_layout)
-		vp.size_changed.connect(_layout_build_column_root)
-		vp.size_changed.connect(_refresh_build_debug_outlines)
+		if not vp.size_changed.is_connected(_layout_phone_ui_overlay):
+			vp.size_changed.connect(_layout_phone_ui_overlay)
+		if not vp.size_changed.is_connected(_apply_prep_ui_overlay_layout):
+			vp.size_changed.connect(_apply_prep_ui_overlay_layout)
+		if not vp.size_changed.is_connected(_layout_build_column_root):
+			vp.size_changed.connect(_layout_build_column_root)
+		if not vp.size_changed.is_connected(_refresh_build_debug_outlines):
+			vp.size_changed.connect(_refresh_build_debug_outlines)
 	call_deferred("_layout_phone_ui_overlay")
 	_build_pause_button()
 	_build_master_volume_ui()
@@ -1062,6 +1168,7 @@ func _ready() -> void:
 	_build_options_menu()
 	_layout_top_bar_hud()
 	_setup_game_audio()
+	_setup_intro_title_music()
 	_build_dialogue_ui()
 	## Hint sits under order tickets; flash stays on top.
 	## Empty rail must IGNORE — it covers the hanging tools (oil/scraper/season).
@@ -1109,6 +1216,142 @@ func _ready() -> void:
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
+	call_deferred("_warm_burger_assets")
+
+
+func _warm_burger_assets() -> void:
+	## Pay first-use cost on the title screen, not on the first right-click patty spawn.
+	if _burger_assets_warmed:
+		_ensure_patty_spawn_pool()
+		return
+	_burger_assets_warmed = true
+	FoodSpritesScript.get_tex("patty")
+	FoodSpritesScript.get_tex("bun_bottom")
+	FoodSpritesScript.get_tex("bun_top")
+	FoodSpritesScript.patty_tex(GameDataScript.INGREDIENT_COLORS.get("patty", Color(0.45, 0.24, 0.14)), 0.0)
+	FoodSpritesScript.burger_cheese_tex(GameDataScript.INGREDIENT_COLORS.get("patty", Color(0.45, 0.24, 0.14)), 0.0)
+	_ensure_patty_spawn_pool()
+
+
+func _ensure_patty_spawn_pool() -> void:
+	if patties_root == null or not is_instance_valid(patties_root):
+		return
+	_patty_spawn_pool = _patty_spawn_pool.filter(func(p):
+		return p != null and is_instance_valid(p)
+	)
+	while _patty_spawn_pool.size() < PATTY_PREWARM_POOL_SIZE:
+		var warm := PattyScript.new()
+		warm.name = "PattyWarmPool"
+		warm.visible = false
+		warm.heating = false
+		warm.process_mode = Node.PROCESS_MODE_DISABLED
+		warm.position = Vector3(999.0, -999.0, 999.0)
+		warm.set_meta("patty_pool", true)
+		patties_root.add_child(warm)
+		_patty_spawn_pool.append(warm)
+		await get_tree().process_frame
+
+
+func _take_prewarmed_patty():
+	while not _patty_spawn_pool.is_empty():
+		var p = _patty_spawn_pool.pop_back()
+		if p != null and is_instance_valid(p):
+			p.set_meta("patty_pool", false)
+			p.process_mode = Node.PROCESS_MODE_INHERIT
+			return p
+	return PattyScript.new()
+
+
+func _return_patty_to_spawn_pool(p) -> void:
+	if p == null or not is_instance_valid(p):
+		return
+	if p.has_method("reset_for_grill_spawn"):
+		p.reset_for_grill_spawn(-1, -1, Vector3(999.0, -999.0, 999.0), GRILL_SURFACE_Y + PATTY_SIT_Y, false, false)
+	p.visible = false
+	p.heating = false
+	p.process_mode = Node.PROCESS_MODE_DISABLED
+	p.set_meta("patty_pool", true)
+	if not _patty_spawn_pool.has(p):
+		_patty_spawn_pool.append(p)
+
+
+func _reset_start_patty_preview() -> void:
+	if start_patty_preview == null or not is_instance_valid(start_patty_preview):
+		return
+	start_patty_preview_age = 0.0
+	start_patty_preview_flipped = false
+	start_patty_preview_cheesed = false
+	start_patty_preview_done_popped = false
+	start_patty_preview_done_pop_t = -1.0
+	if start_patty_preview.has_method("reset_for_grill_spawn"):
+		start_patty_preview.reset_for_grill_spawn(-1, -1, Vector3.ZERO, 0.0, false, false)
+	start_patty_preview.scale = START_PATTY_PREVIEW_SCALE
+	start_patty_preview.position.y = 0.0
+	start_patty_preview.rotation_degrees = Vector3(-8.0, 34.0, 4.0)
+	start_patty_preview.heating = false
+	start_patty_preview.visible = true
+
+
+func _update_start_patty_preview(delta: float) -> void:
+	if start_overlay == null or not start_overlay.visible:
+		return
+	if start_patty_preview == null or not is_instance_valid(start_patty_preview):
+		return
+	start_patty_preview_age += delta
+	const PREVIEW_LOOP_SEC := 7.6
+	const PREVIEW_FLIP_AT := 3.2
+	const PREVIEW_CHEESE_AT := 5.15
+	const PREVIEW_DONE_AT := 6.25
+	var loop_t := fmod(start_patty_preview_age, PREVIEW_LOOP_SEC)
+	if loop_t < delta:
+		_reset_start_patty_preview()
+		return
+	start_patty_preview.cook_time = minf(18.0, loop_t * (15.0 / PREVIEW_FLIP_AT))
+	if loop_t >= PREVIEW_FLIP_AT and not start_patty_preview_flipped:
+		start_patty_preview.first_side_time = 16.0
+		start_patty_preview.flipped_once = true
+		start_patty_preview.perfect_flip = true
+		start_patty_preview.cook_time = 0.0
+		start_patty_preview_flipped = true
+	if start_patty_preview_flipped:
+		start_patty_preview.cook_time = minf(15.0, maxf(0.0, loop_t - PREVIEW_FLIP_AT) * (15.0 / maxf(PREVIEW_DONE_AT - PREVIEW_FLIP_AT, 0.001)))
+	if loop_t >= PREVIEW_CHEESE_AT and not start_patty_preview_cheesed:
+		start_patty_preview.add_cheese()
+		start_patty_preview_cheesed = true
+	if start_patty_preview_cheesed:
+		start_patty_preview.cheese_melt = clampf((loop_t - PREVIEW_CHEESE_AT) / 1.1, 0.0, 1.0)
+	if loop_t >= PREVIEW_DONE_AT and not start_patty_preview_done_popped:
+		start_patty_preview_done_popped = true
+		start_patty_preview_done_pop_t = 0.0
+	if start_patty_preview_done_pop_t >= 0.0:
+		start_patty_preview_done_pop_t += delta
+	var flip_t := clampf((loop_t - PREVIEW_FLIP_AT) / 0.58, 0.0, 1.0)
+	var flip_arc := sin(flip_t * PI)
+	var flip_spin := 360.0 * smoothstep(0.0, 1.0, flip_t)
+	start_patty_preview.rotation_degrees = Vector3(
+		-8.0 + sin(loop_t * 2.3) * 3.0 + flip_arc * 34.0,
+		34.0 + sin(loop_t * 1.1) * 10.0 + flip_spin,
+		4.0 + cos(loop_t * 1.7) * 4.0 + flip_arc * 10.0
+	)
+	if start_patty_preview.has_method("refresh_cook_visuals"):
+		start_patty_preview.refresh_cook_visuals()
+	var pop_scale := Vector3.ONE
+	var pop_y := 0.0
+	if start_patty_preview_done_pop_t >= 0.0 and start_patty_preview_done_pop_t <= 0.34:
+		var pt := start_patty_preview_done_pop_t
+		if pt < 0.06:
+			var a := pt / 0.06
+			pop_scale = Vector3.ONE.lerp(Vector3(1.10, 0.84, 1.10), a)
+		elif pt < 0.17:
+			var a := (pt - 0.06) / 0.11
+			pop_scale = Vector3(1.10, 0.84, 1.10).lerp(Vector3(0.94, 1.18, 0.94), a)
+			pop_y = sin(a * PI) * 0.055
+		else:
+			var a := (pt - 0.17) / 0.17
+			pop_scale = Vector3(0.94, 1.18, 0.94).lerp(Vector3.ONE, a)
+			pop_y = (1.0 - a) * 0.035
+	start_patty_preview.scale = START_PATTY_PREVIEW_SCALE * pop_scale
+	start_patty_preview.position.y = pop_y
 
 
 func _setup_glove_cursor() -> void:
@@ -1225,7 +1468,7 @@ func _setup_start_logo() -> void:
 	## Extra vertical room so layout stays stable (no bob).
 	start_logo_wrap = Control.new()
 	start_logo_wrap.name = "BurgerPalsLogoWrap"
-	start_logo_wrap.custom_minimum_size = Vector2(220, 236)
+	start_logo_wrap.custom_minimum_size = Vector2(260, 344)
 	start_logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	start_logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(start_logo_wrap)
@@ -1238,15 +1481,75 @@ func _setup_start_logo() -> void:
 	start_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	start_logo.custom_minimum_size = Vector2(220, 220)
 	start_logo.size = Vector2(220, 220)
-	start_logo.position = Vector2(0, 8)
+	start_logo.position = Vector2(20, 8)
 	start_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	start_logo_wrap.add_child(start_logo)
+	_setup_start_patty_preview()
 	## Tall enough for logo + blurb + Solo + Multiplayer.
-	center.offset_top = -300.0
-	center.offset_bottom = 300.0
+	center.offset_top = -390.0
+	center.offset_bottom = 210.0
 	center.offset_left = -380.0
 	center.offset_right = 380.0
 	_stop_logo_hover()
+
+
+func _setup_start_patty_preview() -> void:
+	if start_logo_wrap == null or not is_instance_valid(start_logo_wrap):
+		return
+	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
+		return
+	start_patty_preview_wrap = SubViewportContainer.new()
+	start_patty_preview_wrap.name = "StartPattyPreview"
+	start_patty_preview_wrap.custom_minimum_size = Vector2(250, 142)
+	start_patty_preview_wrap.size = Vector2(250, 142)
+	start_patty_preview_wrap.position = Vector2(5, 188)
+	start_patty_preview_wrap.stretch = true
+	start_patty_preview_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	start_patty_preview_wrap.modulate.a = 0.98
+	start_logo_wrap.add_child(start_patty_preview_wrap)
+	start_patty_preview_wrap.z_index = 8
+
+	start_patty_preview_vp = SubViewport.new()
+	start_patty_preview_vp.name = "PattyPreviewViewport"
+	start_patty_preview_vp.size = Vector2i(500, 284)
+	start_patty_preview_vp.transparent_bg = true
+	start_patty_preview_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	start_patty_preview_vp.world_3d = World3D.new()
+	start_patty_preview_vp.get_world_3d().environment = Environment.new()
+	start_patty_preview_wrap.add_child(start_patty_preview_vp)
+
+	var preview_world := Node3D.new()
+	preview_world.name = "PattyPreviewWorld"
+	start_patty_preview_vp.add_child(preview_world)
+
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.78, 0.48)
+	light.light_energy = 1.85
+	light.omni_range = 3.0
+	light.position = Vector3(0.25, 0.75, 0.65)
+	preview_world.add_child(light)
+
+	var fill := DirectionalLight3D.new()
+	fill.light_color = Color(0.55, 0.68, 1.0)
+	fill.light_energy = 0.55
+	fill.rotation_degrees = Vector3(-38.0, 30.0, 0.0)
+	preview_world.add_child(fill)
+
+	var cam := Camera3D.new()
+	cam.position = Vector3(0.0, 0.36, 0.78)
+	cam.rotation_degrees = Vector3(-25.0, 0.0, 0.0)
+	cam.fov = 30.0
+	start_patty_preview_vp.add_child(cam)
+	cam.current = true
+
+	start_patty_preview = PattyScript.new()
+	start_patty_preview.name = "StartCookingPatty"
+	start_patty_preview.position = Vector3(0.0, 0.0, 0.0)
+	start_patty_preview.scale = START_PATTY_PREVIEW_SCALE
+	start_patty_preview.heating = false
+	start_patty_preview.set_meta("start_preview", true)
+	preview_world.add_child(start_patty_preview)
+	_reset_start_patty_preview()
 
 
 func _start_logo_hover() -> void:
@@ -1295,6 +1598,7 @@ func _station_label(_index: int) -> String:
 
 func _start_game() -> void:
 	_stop_logo_hover()
+	_stop_intro_title_music()
 	start_overlay.visible = false
 	playing = true
 	money = START_MONEY
@@ -1320,6 +1624,7 @@ func _start_game() -> void:
 		## Brand-new run — slim cat again.
 		window_cat.reset_shift(false)
 	_clear_all_stations()
+	_reset_icecream_cone_to_home()
 	_seed_cutting_board_buns()
 	_clear_customers()
 	_reset_service_window_open()
@@ -1361,6 +1666,7 @@ func _restart() -> void:
 		## Carry chonk into the next day (max size softens to ~75%).
 		window_cat.reset_shift(true)
 	_clear_all_stations()
+	_reset_icecream_cone_to_home()
 	_seed_cutting_board_buns()
 	_clear_customers()
 	_reset_service_window_open()
@@ -1384,13 +1690,16 @@ func _restart() -> void:
 func _process(delta: float) -> void:
 	_mp_update_cursors(delta)
 	_update_phone_scroll_inertia(delta)
+	_update_keyboard_cook_shortcuts(delta)
 	_update_air_motes(delta)
+	_update_start_patty_preview(delta)
 	## Window godrays disabled for now (too strong).
 	# _update_window_godrays(delta)
 	if not playing:
 		if game_audio:
 			game_audio.set_sizzle_active(false)
 		return
+	_update_tutorial_hint_cycle(delta)
 	## Options freezes the shift clock / cook sim until Resume / Esc.
 	if options_menu_open:
 		if game_audio:
@@ -1439,8 +1748,11 @@ func _process(delta: float) -> void:
 					var sm := cup_liquid_surface.material_override as StandardMaterial3D
 					if sm:
 						_apply_soda_surface_look(sm, col, _cup_fizz)
+	_icecream_grab_lockout = maxf(0.0, _icecream_grab_lockout - delta)
 	if icecream_cone_held:
 		_update_held_icecream_cone(delta)
+	if burnt_icecream_cone_held:
+		_update_held_burnt_icecream_cone(delta)
 	## Parked tray drinks keep dying their foam head down.
 	_update_parked_cups_foam(delta)
 	if ext_held:
@@ -1460,6 +1772,7 @@ func _process(delta: float) -> void:
 	_update_soda_slicks(delta)
 	_update_soda_char_spots(delta)
 	_update_melting_cups(delta)
+	_update_melting_icecreams(delta)
 	_update_grill_fire(delta)
 	_update_ext_powder_blobs(delta)
 	if not tickets.is_empty():
@@ -1554,11 +1867,14 @@ func _process(delta: float) -> void:
 		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
 		_mp_tool_pose_cool = maxf(0.0, _mp_tool_pose_cool - delta)
 		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
+		_mp_icecream_pose_cool = maxf(0.0, _mp_icecream_pose_cool - delta)
 		_mp_slick_sync_cool = maxf(0.0, _mp_slick_sync_cool - delta)
 		if oil_held or shaker_held or ext_held or glock_held or brush_held:
 			_mp_send_held_tool_pose(false)
 		if cup_held:
 			_mp_send_held_cup_pose(false)
+		if icecream_cone_held:
+			_mp_send_held_icecream_pose(false)
 		## Idle tray / steel drinks — keep re-upserting so partners don't miss parks.
 		_mp_idle_drink_accum += delta
 		if _mp_idle_drink_accum >= 1.25:
@@ -1744,6 +2060,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if ing != "":
 			_add_ingredient(ing)
 			return
+	elif event is InputEventKey and _handle_keyboard_cook_key(event):
+		return
 	elif event is InputEventMouseButton and event.pressed:
 		var grill_place: bool = event.button_index == MOUSE_BUTTON_RIGHT
 		if not cheese_held and _ui_blocks_world_click(event.position, grill_place):
@@ -1882,6 +2200,10 @@ func _input(event: InputEvent) -> void:
 				return
 	## Sliding a patty / oil / shaker: release ends hold and returns tools home.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		if burnt_icecream_cone_held:
+			_release_burnt_icecream_cone_to_garbage()
+			get_viewport().set_input_as_handled()
+			return
 		if spatula_patty != null and spatula_lmb_held:
 			spatula_lmb_held = false
 			_handle_spatula_release(event.position)
@@ -1930,6 +2252,11 @@ func _input(event: InputEvent) -> void:
 			if not cheese_held and _try_cheese_station_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
+			## Top CUPS stack overlaps HUD chrome on screen; rack clicks still need to pull a cup.
+			if not cup_held and (_cursor_near_cup_rack(event.position) or _cup_rack_ray_hit(event.position)):
+				if _begin_cup_hold():
+					get_viewport().set_input_as_handled()
+					return
 			if _ui_blocks_world_click(event.position):
 				return
 			if cheese_held:
@@ -1943,9 +2270,25 @@ func _input(event: InputEvent) -> void:
 			if icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
+			if burnt_icecream_cone_held:
+				get_viewport().set_input_as_handled()
+				return
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
+			## Direct rack clicks take a fresh cone even if a dropped cone is nearby on the grill.
+			if not icecream_cone_held and _ray_hits_icecream_rack(event.position):
+				if _begin_icecream_cone_hold():
+					get_viewport().set_input_as_handled()
+					return
+			if _try_grab_fallen_icecream_cone(event.position):
+				get_viewport().set_input_as_handled()
+				return
+			## Soft-serve cone nest beats soda tanks / cups when aimed at the machine.
+			if not icecream_cone_held and _icecream_click_should_win(event.position):
+				if _try_grab_nearest_tool(event.position):
+					get_viewport().set_input_as_handled()
+					return
 			## Syrup jugs beat CUPS rack / empty dispenser cup when aimed at a tank.
 			if _soda_flavor_under_cursor(event.position):
 				if _try_soda_flavor_click(event.position):
@@ -2020,6 +2363,8 @@ func _input(event: InputEvent) -> void:
 			_add_ingredient(ing)
 			get_viewport().set_input_as_handled()
 			return
+	if event is InputEventKey and _handle_keyboard_cook_key(event):
+		return
 	## Mouse drop while holding a patty (also works over some UI).
 	## Skip while still holding LMB from a Build pickup — release handles the drop.
 	if spatula_patty == null:
@@ -2183,6 +2528,376 @@ func _ingredient_from_hotkey(keycode: Key) -> String:
 		KEY_7, KEY_KP_7:
 			return INGREDIENT_HOTKEYS[6] if INGREDIENT_HOTKEYS.size() > 6 else ""
 	return ""
+
+
+func _kb_typing_blocked() -> bool:
+	if options_menu_open or not playing:
+		return true
+	var focus := get_viewport().gui_get_focus_owner() if get_viewport() else null
+	return focus is LineEdit or focus is TextEdit
+
+
+func _handle_keyboard_cook_key(event: InputEventKey) -> bool:
+	## Tap C = cheese to Build · hold C/L/O = soda · hold I = soft serve · hold S = scrape · hold H oils FULL burgers.
+	if _kb_typing_blocked():
+		return false
+	var code := event.keycode
+	if code == KEY_NONE:
+		code = event.physical_keycode
+	var is_down := event.pressed
+	match code:
+		KEY_C:
+			if is_down and not event.echo:
+				_kb_c_down = true
+				_kb_c_hold_t = 0.0
+				_kb_c_cola = false
+			elif not is_down and _kb_c_down:
+				_kb_c_down = false
+				if _kb_c_cola:
+					_kb_stop_soda_pour()
+				elif _kb_c_hold_t < KB_C_HOLD_FOR_COLA:
+					_kb_fly_cheese_to_build()
+				_kb_c_hold_t = 0.0
+				_kb_c_cola = false
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+		KEY_I:
+			if is_down and not event.echo:
+				_kb_i_down = true
+				_kb_start_icecream()
+			elif not is_down and _kb_i_down:
+				_kb_i_down = false
+				_kb_stop_icecream()
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+		KEY_L:
+			if is_down and not event.echo:
+				_kb_l_down = true
+				_kb_start_soda_pour("lemon_lime")
+			elif not is_down and _kb_l_down:
+				_kb_l_down = false
+				_kb_stop_soda_pour()
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+		KEY_O:
+			if is_down and not event.echo:
+				_kb_o_down = true
+				_kb_start_soda_pour("orange")
+			elif not is_down and _kb_o_down:
+				_kb_o_down = false
+				_kb_stop_soda_pour()
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+		KEY_H:
+			if is_down and not event.echo:
+				_kb_h_down = true
+				_kb_oil_mode = true
+				_kb_oil_t = 0.0
+				_kb_oil_idx = 0
+				_kb_oil_started = false
+			elif not is_down and _kb_h_down:
+				_kb_h_down = false
+				_kb_stop_oil()
+				_kb_oil_mode = false
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+		KEY_S:
+			if is_down and not event.echo:
+				_kb_s_down = true
+				_kb_s_t = 0.0
+				_kb_brush_prev = Vector3.ZERO
+				_kb_start_scrape()
+			elif not is_down and _kb_s_down:
+				_kb_s_down = false
+				_kb_stop_scrape()
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+	return false
+
+
+func _update_keyboard_cook_shortcuts(delta: float) -> void:
+	if not playing or options_menu_open:
+		_kb_force_cup_seat = Vector3.ZERO
+		_kb_force_cone_seat = Vector3.ZERO
+		_kb_force_brush_pos = Vector3.ZERO
+		_kb_force_oil_pos = Vector3.ZERO
+		return
+	## C held long enough → cola pour (tap already handled on release).
+	if _kb_c_down:
+		_kb_c_hold_t += delta
+		if not _kb_c_cola and _kb_c_hold_t >= KB_C_HOLD_FOR_COLA:
+			_kb_c_cola = true
+			_kb_start_soda_pour("cola")
+	if _kb_soda_flavor != "" and cup_held and soda_spout_marker != null and is_instance_valid(soda_spout_marker):
+		_kb_force_cup_seat = _cup_target_for_spout(soda_spout_marker)
+	else:
+		_kb_force_cup_seat = Vector3.ZERO
+	if _kb_i_down and icecream_cone_held and icecream_spout_marker != null and is_instance_valid(icecream_spout_marker):
+		var tip := icecream_spout_marker.global_position
+		_kb_force_cone_seat = Vector3(tip.x, tip.y - ICECREAM_CONE_H - 0.045 - ICECREAM_CONE_FILL_DROP, tip.z)
+	else:
+		_kb_force_cone_seat = Vector3.ZERO
+	if _kb_s_down:
+		_kb_update_scrape(delta)
+	else:
+		_kb_force_brush_pos = Vector3.ZERO
+	if _kb_h_down and _kb_oil_mode:
+		_kb_update_oil(delta)
+	else:
+		_kb_force_oil_pos = Vector3.ZERO
+
+
+func _kb_fly_cheese_to_build() -> void:
+	if _ingredient_fly_busy:
+		return
+	if int(supply_stock.get("cheese", 0)) <= 0:
+		_flash("Out of cheese — restock on phone!", Color("EF5350"))
+		return
+	if cheese_held:
+		_cancel_cheese_hold_silent()
+	var station := active_station
+	var st: Dictionary = stations[station] if station >= 0 and station < stations.size() else {}
+	if st.is_empty() or (st.get("patties", []) as Array).is_empty():
+		_flash("Drop a patty on Build first", Color("FFCC80"))
+		return
+	var start := _cheese_station_screen_center()
+	_play_ingredient_fly_to_build("cheese", station, func():
+		_add_ingredient_to_station(station, "cheese", true)
+	, start)
+
+
+func _cheese_station_screen_center() -> Vector2:
+	if camera != null and cheese_station_area != null and is_instance_valid(cheese_station_area):
+		var pt := cheese_station_area.global_position + Vector3(0.0, 0.06, 0.0)
+		if not camera.is_position_behind(pt):
+			return camera.unproject_position(pt)
+	return _ingredient_button_screen_center("cheese")
+
+
+func _kb_start_soda_pour(flavor: String) -> void:
+	if flavor == "":
+		return
+	if _kb_soda_flavor == flavor:
+		_kb_stop_soda_pour()
+		return
+	## One soda key at a time.
+	if _kb_soda_flavor != "":
+		_kb_stop_soda_pour()
+	_kb_soda_flavor = flavor
+	soda_selected_flavor = flavor
+	_refresh_soda_flavor_lights()
+	if not cup_held:
+		if not _kb_grab_cup_from_rack():
+			_kb_soda_flavor = ""
+			return
+	_flash("Pouring %s…" % str(SODA_FLAVOR_LABELS.get(flavor, flavor)), Color("80DEEA"))
+
+
+func _kb_stop_soda_pour() -> void:
+	var was := _kb_soda_flavor
+	_kb_soda_flavor = ""
+	_kb_force_cup_seat = Vector3.ZERO
+	if was == "" or not cup_held:
+		return
+	_park_cup_on_tray(true)
+
+
+func _kb_grab_cup_from_rack() -> bool:
+	if cup_held:
+		return true
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null or icecream_cone_held:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	if _tray_parked_count() >= CUP_MAX and (cup_root == null or not is_instance_valid(cup_root)):
+		_flash("Tray full — serve a drink first", Color("FFCC80"))
+		return false
+	if cup_root == null or not is_instance_valid(cup_root):
+		_spawn_and_bind_empty_cup()
+	if cup_root == null or not is_instance_valid(cup_root):
+		return false
+	cup_held = true
+	_clear_tray_slot(cup_root)
+	_cup_prev_pos = cup_root.global_position
+	_cup_vel = Vector3.ZERO
+	_cup_pouring = false
+	if cup_area:
+		cup_area.input_ray_pickable = false
+	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
+		cup_root.global_position = _cup_target_for_spout(soda_spout_marker)
+	if game_audio:
+		if game_audio.has_method("play_rack_take"):
+			game_audio.play_rack_take()
+		game_audio.play_click()
+	return true
+
+
+func _kb_start_icecream() -> void:
+	if icecream_cone_held:
+		return
+	if not _begin_icecream_cone_hold():
+		return
+	if icecream_spout_marker != null and is_instance_valid(icecream_spout_marker) and icecream_cone_root != null:
+		var tip := icecream_spout_marker.global_position
+		icecream_cone_root.global_position = Vector3(tip.x, tip.y - ICECREAM_CONE_H - 0.045 - ICECREAM_CONE_FILL_DROP, tip.z)
+
+
+func _kb_stop_icecream() -> void:
+	_kb_force_cone_seat = Vector3.ZERO
+	if icecream_cone_held:
+		_put_icecream_cone_down()
+
+
+func _kb_full_zone_patties() -> Array:
+	var out: Array = []
+	for p in grill:
+		if p == null or not is_instance_valid(p):
+			continue
+		if p == spatula_patty or p == dragging_patty:
+			continue
+		if bool(p.is_held):
+			continue
+		var z := _grill_zone_at(p.position)
+		if str(z.get("id", "")) == "full":
+			out.append(p)
+	return out
+
+
+func _kb_start_scrape() -> void:
+	if brush_held:
+		return
+	if spatula_patty != null or cheese_held or shaker_held or oil_held or ext_held or glock_held \
+			or cup_held or dragging_patty != null or icecream_cone_held:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		_kb_s_down = false
+		return
+	if brush_root == null:
+		return
+	brush_throwing = false
+	brush_held = true
+	if brush_root != null and is_instance_valid(brush_root):
+		brush_root.scale = BRUSH_HOME_SCALE
+	if brush_area:
+		brush_area.input_ray_pickable = false
+	_kb_brush_prev = brush_root.global_position if brush_root else Vector3.ZERO
+	if game_audio:
+		game_audio.play_click()
+	_flash("Auto-scrape — hold S for 5s", Color("B0BEC5"))
+
+
+func _kb_stop_scrape() -> void:
+	_kb_force_brush_pos = Vector3.ZERO
+	_kb_s_t = 0.0
+	if brush_held:
+		_throw_brush_home()
+
+
+func _kb_update_scrape(delta: float) -> void:
+	if not brush_held or brush_root == null:
+		_kb_start_scrape()
+		if not brush_held:
+			return
+	_kb_s_t += delta
+	## Sweep the steel for 5s — clears residue + puddles while held.
+	var u := clampf(_kb_s_t / KB_SCRAPE_TOTAL_SEC, 0.0, 1.0)
+	var x := lerpf(GRILL_CENTER_X + GRILL_WIDTH * 0.46, GRILL_CENTER_X - GRILL_WIDTH * 0.46, u)
+	var z := GRILL_SURFACE_Z + sin(u * TAU * 4.0) * GRILL_DEPTH * 0.38
+	var pos := Vector3(x, GRILL_SURFACE_Y + BRUSH_HOLD_HEIGHT, z)
+	_kb_force_brush_pos = pos
+	var prev := _kb_brush_prev if _kb_brush_prev != Vector3.ZERO else brush_root.global_position
+	brush_root.global_position = pos
+	var move_xz := Vector2(pos.x - prev.x, pos.z - prev.z)
+	var moved := maxf(move_xz.length(), 0.012)
+	_kb_brush_prev = pos
+	for i in GRILL_SLOTS:
+		if float(grill_residue[i]) <= 0.0:
+			continue
+		## Pace so a full crust clears across the hold window.
+		var before := float(grill_residue[i])
+		grill_residue[i] = maxf(0.0, before - delta * (1.05 / KB_SCRAPE_TOTAL_SEC))
+		_refresh_residue_visual(i)
+		if float(grill_residue[i]) <= 0.04:
+			_scrape_finish_clean(i)
+	_scrape_grill_liquids(pos, move_xz, moved)
+	if game_audio and game_audio.has_method("set_slide_moving"):
+		game_audio.set_slide_moving(true, 0.85)
+	if _kb_s_t >= KB_SCRAPE_TOTAL_SEC:
+		_flash("Grill scraped clean", Color("B0BEC5"))
+		_kb_s_down = false
+		_kb_stop_scrape()
+
+
+func _kb_update_oil(delta: float) -> void:
+	var patties := _kb_full_zone_patties()
+	if patties.is_empty():
+		_kb_stop_oil()
+		return
+	if not oil_held:
+		if not _kb_begin_oil_quiet():
+			_kb_h_down = false
+			_kb_oil_mode = false
+			return
+	_kb_oil_t += delta
+	var idx := _kb_oil_idx % patties.size()
+	var p = patties[idx]
+	var pos := Vector3(p.position.x, GRILL_SURFACE_Y + OIL_POUR_HEIGHT, p.position.z)
+	_kb_force_oil_pos = pos
+	if oil_root != null:
+		oil_root.global_position = pos
+		oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	if oil_particles:
+		oil_particles.emitting = true
+	## Lay grease under this burger for 0.5s, then advance (loops while held).
+	if fmod(_kb_oil_t, 0.12) < delta + 0.001:
+		_spawn_oil_slick(Vector3(p.position.x, GRILL_SURFACE_Y + OIL_SIT_Y, p.position.z), 0.055)
+	if _kb_oil_t >= KB_OIL_EACH_SEC:
+		_kb_oil_t = 0.0
+		_kb_oil_idx += 1
+
+
+func _kb_begin_oil_quiet() -> bool:
+	if oil_held:
+		return true
+	if oil_root == null:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held \
+			or cup_held or dragging_patty != null or icecream_cone_held:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	oil_held = true
+	oil_last_draw = Vector3.ZERO
+	oil_pour_hold_t = 0.0
+	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	if oil_area:
+		oil_area.input_ray_pickable = false
+	if not _kb_oil_started:
+		_kb_oil_started = true
+		_spend(COST_OIL_USE)
+		if game_audio:
+			game_audio.play_click()
+		_flash("Oiling FULL-zone burgers…", Color("FFE082"))
+	return true
+
+
+func _kb_stop_oil() -> void:
+	_kb_force_oil_pos = Vector3.ZERO
+	_kb_oil_t = 0.0
+	_kb_oil_idx = 0
+	_kb_oil_started = false
+	if oil_held:
+		_release_oil_bottle()
 
 
 func _is_grill_screen_point(screen_pos: Vector2) -> bool:
@@ -3757,7 +4472,7 @@ func _toggle_grill_power(_index: int) -> void:
 
 
 func _toggle_grill_power_local(turning_on: bool) -> void:
-	grill_ignore_pad_until = Time.get_ticks_msec() / 1000.0 + 0.35
+	grill_ignore_pad_until = Time.get_ticks_msec() / 1000.0 + (0.08 if turning_on else 0.22)
 	if not turning_on:
 		_sfx_click()
 	_set_grill_on(turning_on)
@@ -3886,6 +4601,7 @@ func _set_grill_on(on: bool) -> void:
 	_refresh_grill_ui_button(0)
 	if turning_on:
 		_ignite_unsafe_steel_cups()
+		_ignite_unsafe_steel_icecream()
 
 
 func _set_grill_power(_index: int, on: bool) -> void:
@@ -4175,21 +4891,29 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 		return
 	var x := world_pos.x
 	var z := world_pos.z
-	var p = PattyScript.new()
-	p.slot_index = idx
-	p.net_id = net_id if net_id >= 0 else (-1 if not mp_enabled else NetManager.alloc_net_id())
-	p.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
-	p.heating = true
-	p.mp_puppet = mp_enabled and not NetManager.is_host()
-	p.position = Vector3(x, p.base_y, z)
-	p._rest_x = x
-	p._rest_z = z
-	patties_root.add_child(p)
+	var p = _take_prewarmed_patty()
+	var nid := net_id if net_id >= 0 else (-1 if not mp_enabled else NetManager.alloc_net_id())
+	var base_y := GRILL_SURFACE_Y + PATTY_SIT_Y
+	var mp_puppet := mp_enabled and not NetManager.is_host()
+	if p.has_method("reset_for_grill_spawn"):
+		p.reset_for_grill_spawn(idx, nid, Vector3(x, base_y, z), base_y, true, mp_puppet)
+	else:
+		p.slot_index = idx
+		p.net_id = nid
+		p.base_y = base_y
+		p.heating = true
+		p.mp_puppet = mp_puppet
+		p.position = Vector3(x, base_y, z)
+		p._rest_x = x
+		p._rest_z = z
+	if p.get_parent() == null:
+		patties_root.add_child(p)
 	grill[idx] = p
 	slot_positions[idx] = Vector3(x, GRILL_SURFACE_Y, z)
-	p.scale = Vector3(0.2, 0.2, 0.2)
+	p.scale = Vector3(0.7, 0.7, 0.7)
 	var tw := create_tween()
-	tw.tween_property(p, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK)
+	tw.tween_property(p, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	call_deferred("_ensure_patty_spawn_pool")
 	## Clear place-patty coach text even when the partner spawned it (co-op).
 	if _tutorial_step == 2:
 		_clear_tutorial_hint()
@@ -5009,6 +5733,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 		st["patties"].append(patty)
 		if needs_bun:
 			items.append("bun_bottom")
+			_animate_bun_to_build_station("bun_bottom", STATION_CRAFT)
 		_insert_patty_into_stack(items)
 	## Cheese counts for the order as soon as it's on the meat (melt is visual).
 	if patty.has_cheese:
@@ -5235,9 +5960,11 @@ func _update_heat_warp(_delta: float) -> void:
 		heat_warp_mat.set_shader_parameter("heat", 0.0)
 		return
 	var heat := 0.0
+	var warp_strength := 0.0
 	if grill_on:
-		## Idle shimmer when burner is on; cooking pushes it a bit harder.
-		heat = 0.55
+		## Normal heat is subtle; heavy hot oil pushes the shimmer into the stronger greasy look.
+		heat = 0.26
+		warp_strength = 0.0045
 		for i in GRILL_SLOTS:
 			var p = grill[i]
 			if p == null or not is_instance_valid(p) or p.is_held:
@@ -5245,9 +5972,32 @@ func _update_heat_warp(_delta: float) -> void:
 			if not p.heating:
 				continue
 			var cook_t := clampf(float(p.cook_time) / 9.0, 0.2, 1.0)
-			heat = maxf(heat, 0.62 + cook_t * 0.32 * clampf(float(p.heat_mul), 0.2, 1.0))
+			heat = maxf(heat, 0.34 + cook_t * 0.16 * clampf(float(p.heat_mul), 0.2, 1.0))
+			warp_strength = maxf(warp_strength, 0.006)
+		var oil_heat := _hot_oil_warp_ratio()
+		if oil_heat > 0.0:
+			heat = maxf(heat, lerpf(0.42, 0.94, oil_heat))
+			warp_strength = maxf(warp_strength, lerpf(0.007, 0.014, oil_heat))
 	heat_warp_mat.set_shader_parameter("heat", heat)
+	heat_warp_mat.set_shader_parameter("warp_strength", warp_strength)
 	heat_warp_mesh.visible = heat > 0.05
+
+
+func _hot_oil_warp_ratio() -> float:
+	if oil_slicks.is_empty():
+		return 0.0
+	var area := 0.0
+	for item in oil_slicks:
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			continue
+		var p: Vector3 = mesh.position
+		if _is_in_warmer_zone(p):
+			continue
+		var scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
+		var r := float(item.get("radius", 0.05)) * scrape
+		area += r * r
+	return clampf((area - 0.055) / 0.18, 0.0, 1.0)
 
 
 func _apply_heat_warp_settings(s: Dictionary) -> void:
@@ -5259,7 +6009,7 @@ func _apply_heat_warp_settings(s: Dictionary) -> void:
 	if plane != null:
 		plane.size = heat_warp_base_size * size_mul
 	heat_warp_mat.set_shader_parameter("time_scale", float(s.get("heat_warp_speed", 1.00)))
-	heat_warp_mat.set_shader_parameter("warp_strength", float(s.get("heat_warp_strength", 0.00)))
+	heat_warp_mat.set_shader_parameter("warp_strength", float(s.get("heat_warp_strength", 0.006)))
 	heat_warp_mat.set_shader_parameter("mask_tight", float(s.get("heat_warp_tight", 1.70)))
 	if not heat_warp_enabled:
 		heat_warp_mesh.visible = false
@@ -5718,7 +6468,7 @@ func _try_feed_held_patty_to_cat(screen_pos: Vector2) -> bool:
 
 func _cat_accepts_food(id: String) -> bool:
 	## Only cheese, bacon, or a scooped/full patty — no other toppings.
-	return id == "cheese" or id == "bacon" or id == "patty"
+	return id == "cheese" or id == "bacon" or id == "patty" or id == "icecream"
 
 
 func _feed_window_cat_ingredient(id: String) -> void:
@@ -5733,6 +6483,13 @@ func _feed_window_cat_ingredient(id: String) -> void:
 
 func _feed_window_cat_ingredient_local(id: String) -> void:
 	if not _cat_accepts_food(id):
+		return
+	if id == "icecream":
+		if window_cat:
+			window_cat.feed(id, true)
+		_flash("Cat got ice cream!", Color("FFF59D"))
+		if game_audio and game_audio.has_method("play_cat_purr"):
+			game_audio.play_cat_purr()
 		return
 	if id == "cheese" and cheese_held:
 		## Don't clear another player's local cheese grab on call_local sync.
@@ -6878,6 +7635,15 @@ func _ray_hits_any_cup(screen_pos: Vector2) -> bool:
 		var area := c.get_node_or_null("CupGrab") as Area3D
 		if _ray_hits_tool(screen_pos, CUP_COLLISION_LAYER, area):
 			return true
+	for item in melting_cups:
+		if typeof(item) != TYPE_DICTIONARY or str(item.get("phase", "")) != "rescue":
+			continue
+		var root: Node3D = item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var area := root.get_node_or_null("CupGrab") as Area3D
+		if _ray_hits_tool(screen_pos, CUP_COLLISION_LAYER, area):
+			return true
 	return false
 
 
@@ -7020,6 +7786,13 @@ func _nearest_patty_near(world_pos: Vector3, max_dist: float):
 
 func _update_held_oil(delta: float) -> void:
 	if oil_root == null or camera == null:
+		return
+	if _kb_force_oil_pos != Vector3.ZERO:
+		## Keyboard FULL-zone oil cycle owns the bottle this frame.
+		oil_pour_hold_t += delta
+		if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
+			_flash("Grease held too long on a hot grill!", Color("FF5252"))
+			_start_grill_fire(_kb_force_oil_pos)
 		return
 	var mouse := get_viewport().get_mouse_position()
 	## Drag like before: track the grill plane so back/forth feels free again.
@@ -7377,12 +8150,12 @@ func _ensure_grill_fire_fx() -> void:
 	fire_light_rim.visible = false
 	fire_root.add_child(fire_light_rim)
 
-	## Fewer, chunkier flame triangles.
-	fire_particles = _make_fire_flame_particles("Flames", 28, 0.6, Vector2(0.055, 0.11), 0.4, 1.05, false)
+	## Smaller, denser flame triangles so grill fires read hotter without towering over food.
+	fire_particles = _make_fire_flame_particles("Flames", 38, 0.55, Vector2(0.045, 0.092), 0.36, 0.9, false)
 	fire_root.add_child(fire_particles)
 
 	## Extra red triangle shards mixed into the blaze.
-	fire_particles_red = _make_fire_flame_particles("FlamesRed", 14, 0.55, Vector2(0.048, 0.098), 0.32, 0.9, true)
+	fire_particles_red = _make_fire_flame_particles("FlamesRed", 22, 0.5, Vector2(0.039, 0.082), 0.3, 0.78, true)
 	fire_root.add_child(fire_particles_red)
 
 	fire_embers = _make_fire_ember_particles()
@@ -7440,26 +8213,26 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	pmat.gravity = Vector3(0, 1.9, 0)
 	pmat.damping_min = 0.5
 	pmat.damping_max = 1.2
-	pmat.scale_min = 0.85 if not redder else 0.75
-	pmat.scale_max = 1.65 if not redder else 1.45
+	pmat.scale_min = 0.72 if not redder else 0.66
+	pmat.scale_max = 1.34 if not redder else 1.22
 	pmat.color = Color(1.0, 0.22, 0.05, 1.0) if redder else Color(1.0, 0.42, 0.08, 1.0)
 	var grad := Gradient.new()
 	if redder:
 		grad.offsets = PackedFloat32Array([0.0, 0.12, 0.4, 0.72, 1.0])
 		grad.colors = PackedColorArray([
 			Color(1.0, 0.35, 0.12, 0.0),
-			Color(1.0, 0.18, 0.05, 0.95), ## deep red
-			Color(0.92, 0.08, 0.02, 0.8),
-			Color(0.55, 0.02, 0.01, 0.4),
+			Color(1.0, 0.18, 0.05, 1.0), ## deep red
+			Color(0.92, 0.08, 0.02, 0.92),
+			Color(0.55, 0.02, 0.01, 0.58),
 			Color(0.12, 0.0, 0.0, 0.0),
 		])
 	else:
 		grad.offsets = PackedFloat32Array([0.0, 0.1, 0.35, 0.7, 1.0])
 		grad.colors = PackedColorArray([
 			Color(1.0, 0.7, 0.25, 0.0),
-			Color(1.0, 0.45, 0.08, 0.95),
-			Color(1.0, 0.22, 0.04, 0.8), ## more red in the mid flame
-			Color(0.85, 0.1, 0.02, 0.4),
+			Color(1.0, 0.45, 0.08, 1.0),
+			Color(1.0, 0.22, 0.04, 0.92), ## more red in the mid flame
+			Color(0.85, 0.1, 0.02, 0.58),
 			Color(0.18, 0.02, 0.0, 0.0),
 		])
 	var gtex := GradientTexture1D.new()
@@ -7470,7 +8243,7 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	draw.albedo_color = Color(1.0, 0.16, 0.04, 0.92) if redder else Color(1.0, 0.4, 0.08, 0.9)
+	draw.albedo_color = Color(1.0, 0.16, 0.04, 0.98) if redder else Color(1.0, 0.4, 0.08, 0.97)
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.disable_receive_shadows = true
@@ -8961,6 +9734,17 @@ func _begin_cup_melt_local(
 		if surf_piv != null:
 			surf_piv.rotation_degrees = Vector3.ZERO
 	root.set_meta("melt_flavor", flavor)
+	root.set_meta("flavor", flavor)
+	root.set_meta("soda_fill", fill)
+	root.set_meta("ice_fill", ice)
+	root.set_meta("fizz", 0.0)
+	root.set_meta("foam_linger", 0.0)
+	root.set_meta("pour_white", 0.0)
+	root.set_meta("on_steel", true)
+	root.set_meta("steel_hold", false)
+	var rescue_area := root.get_node_or_null("CupGrab") as Area3D
+	if rescue_area != null:
+		rescue_area.input_ray_pickable = true
 	var mats := _apply_melt_materials_to_cup(root, flavor)
 	_set_melting_cup_liquid_level(root, fill, flavor)
 	## Smoke + steel bubbles live on the grill so cup squash doesn't erase them.
@@ -8976,16 +9760,20 @@ func _begin_cup_melt_local(
 	smoke.global_position = grill_fx_pos
 	bubbles.global_position = Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.012, root.global_position.z)
 	var has_liquid := fill >= 0.15
-	var phase := "delay" if has_liquid else "burn"
-	## No smoke/bubbles during the cool-down delay — only once plastic actually burns.
-	smoke.emitting = not has_liquid
-	smoke.amount_ratio = 0.95 if not has_liquid else 0.0
-	bubbles.emitting = not has_liquid
-	bubbles.amount_ratio = 0.9 if not has_liquid else 0.0
+	var next_phase := "delay" if has_liquid else "burn"
+	## First half second is a rescue window; plastic only reacts after that.
+	smoke.emitting = false
+	smoke.amount_ratio = 0.0
+	bubbles.emitting = false
+	bubbles.amount_ratio = 0.0
 	melting_cups.append({
 		"root": root,
 		"age": 0.0,
-		"phase": phase,
+		"phase": "rescue",
+		"next_phase": next_phase,
+		"rescue": CUP_HOT_GRILL_RESCUE_SEC,
+		"rescue_age": 0.0,
+		"hiss_warned": false,
 		"delay": 2.0 if has_liquid else 0.0,
 		"delay_age": 0.0,
 		"life": 2.8 + fill * 1.1,
@@ -9002,22 +9790,21 @@ func _begin_cup_melt_local(
 		"spill_t": 0.0,
 		"spill_done": not has_liquid,
 		"spill_mesh": null,
-		"burn_started": not has_liquid,
+		"burn_started": false,
 		"crust_root": null,
 		"remote": is_remote,
 	})
 	if has_liquid:
 		if not is_remote:
-			_flash("Soda's cooling the steel… 2s before it burns", Color("81D4FA"))
+			_flash("Grab it quick — cup on the hot grill!", Color("FFE082"))
 		if grill_on_fire:
 			_extinguish_grill_fire()
 			if not is_remote:
 				_flash("Soda put out the fire!", Color("B0BEC5"))
 		melting_cups[melting_cups.size() - 1]["doused"] = true
 	else:
-		_start_cup_burn_hiss(true)
 		if not is_remote:
-			_flash("Empty cup on the grill — melting!", Color("FF8A65"))
+			_flash("Grab it quick — cup on the hot grill!", Color("FFE082"))
 	_refresh_ticket_checkmarks()
 
 
@@ -9128,18 +9915,6 @@ func _update_melting_cups(delta: float) -> void:
 			continue
 		var smoke = item.get("smoke")
 		var bubbles = item.get("bubbles")
-		## Cold steel — melt / smoke pause until the burner is back on.
-		if not grill_on:
-			if smoke != null and is_instance_valid(smoke):
-				smoke.emitting = false
-				smoke.amount_ratio = 0.0
-			if bubbles != null and is_instance_valid(bubbles):
-				bubbles.emitting = false
-				bubbles.amount_ratio = 0.0
-			if game_audio != null and game_audio.has_method("stop_hot_oil"):
-				game_audio.stop_hot_oil()
-			i += 1
-			continue
 		var phase := str(item.get("phase", "burn"))
 		var fill_amt := float(item.get("fill", 0.5))
 		## Keep world-space FX glued to the steel under the cup (ignore cup squash).
@@ -9149,6 +9924,52 @@ func _update_melting_cups(delta: float) -> void:
 		if bubbles != null and is_instance_valid(bubbles):
 			bubbles.global_position = Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.012, root.global_position.z)
 			bubbles.global_basis = Basis.IDENTITY
+		## --- Rescue: brief grace window where the cup can still be picked back up ---
+		if phase == "rescue":
+			item["rescue_age"] = float(item.get("rescue_age", 0.0)) + delta
+			if not bool(item.get("hiss_warned", false)) \
+					and float(item["rescue_age"]) >= CUP_HOT_GRILL_HISS_WARN_SEC:
+				item["hiss_warned"] = true
+				_start_cup_burn_hiss(false)
+			_set_melting_cup_liquid_level(
+				root, float(item.get("fill_left", fill_amt)), str(item.get("flavor", ""))
+			)
+			if smoke != null and is_instance_valid(smoke):
+				smoke.emitting = false
+				smoke.amount_ratio = 0.0
+			if bubbles != null and is_instance_valid(bubbles):
+				bubbles.emitting = false
+				bubbles.amount_ratio = 0.0
+			root.scale = Vector3.ONE
+			var mats_r: Array = item.get("mats", [])
+			for mat in mats_r:
+				if mat is ShaderMaterial:
+					(mat as ShaderMaterial).set_shader_parameter("melt_amt", 0.0)
+					(mat as ShaderMaterial).set_shader_parameter("wobble_amp", 0.0)
+			if float(item["rescue_age"]) >= float(item.get("rescue", CUP_HOT_GRILL_RESCUE_SEC)):
+				var next_phase := str(item.get("next_phase", "burn"))
+				item["phase"] = next_phase
+				var rescue_area := root.get_node_or_null("CupGrab") as Area3D
+				if rescue_area != null:
+					rescue_area.input_ray_pickable = false
+				if next_phase == "delay":
+					item["delay_age"] = 0.0
+					if not bool(item.get("remote", false)):
+						_flash("Soda's cooling the steel… 2s before it burns", Color("81D4FA"))
+				else:
+					item["age"] = 0.0
+					item["burn_started"] = true
+					_start_cup_burn_hiss(true)
+					if smoke != null and is_instance_valid(smoke):
+						smoke.emitting = true
+						smoke.amount_ratio = 0.95
+					if bubbles != null and is_instance_valid(bubbles):
+						bubbles.emitting = true
+						bubbles.amount_ratio = 0.9
+					if not bool(item.get("remote", false)):
+						_flash("Empty cup on the grill — melting!", Color("FF8A65"))
+			i += 1
+			continue
 		## --- Delay: liquid stays in the cup for 2s (no smoke yet) ---
 		if phase == "delay":
 			item["delay_age"] = float(item.get("delay_age", 0.0)) + delta
@@ -10089,6 +10910,9 @@ func _snap_brush_toward_cursor(screen_pos: Vector2, amount: float = 1.0) -> void
 func _update_held_brush(_delta: float) -> void:
 	if brush_root == null or camera == null:
 		return
+	if _kb_force_brush_pos != Vector3.ZERO:
+		## Keyboard auto-scrape owns brush motion this frame.
+		return
 	var mouse := get_viewport().get_mouse_position()
 	var hit := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + BRUSH_HOLD_HEIGHT)
 	if hit == Vector3.ZERO:
@@ -10152,6 +10976,7 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool
 	var hit_any := false
 	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28, false) or hit_any
 	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3, true) or hit_any
+	hit_any = _scrape_burnt_icecreams(pos, move_xz, moved) or hit_any
 	## Char blotches — swipe to fling away.
 	var ci := 0
 	while ci < soda_char_spots.size():
@@ -10178,6 +11003,62 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool
 				mp_soda_char_clear.rpc(cx, cz)
 			continue
 		ci += 1
+	return hit_any
+
+
+func _scrape_burnt_icecreams(pos: Vector3, move_xz: Vector2, moved: float) -> bool:
+	var hit_any := false
+	var i := 0
+	while i < melting_icecreams.size():
+		var item: Dictionary = melting_icecreams[i]
+		if not bool(item.get("charred", false)) and not bool(item.get("fired", false)):
+			i += 1
+			continue
+		var root = item.get("root")
+		var puddle = item.get("puddle")
+		var root_valid := root != null and is_instance_valid(root)
+		if puddle == null or not is_instance_valid(puddle):
+			melting_icecreams.remove_at(i)
+			continue
+		var p := (puddle as Node3D).global_position
+		var d := Vector2(pos.x - p.x, pos.z - p.z).length()
+		if d > 0.34 or moved <= 0.001:
+			i += 1
+			continue
+		hit_any = true
+		var scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
+		scrape = maxf(0.08, scrape - moved * 3.8)
+		item["scrape"] = scrape
+		var scale_xz := lerpf(0.16, 1.0, scrape)
+		if root_valid:
+			(root as Node3D).scale = Vector3(scale_xz, maxf(0.12, scrape), scale_xz)
+		(puddle as Node3D).scale = Vector3.ONE * scale_xz
+		var mat := (puddle as MeshInstance3D).material_override as StandardMaterial3D
+		if mat:
+			var c := mat.albedo_color
+			c.a = maxf(0.04, 0.97 * scrape)
+			mat.albedo_color = c
+		if scrape > 0.16:
+			i += 1
+			continue
+		var dir := move_xz.normalized() if move_xz.length_squared() > 0.0001 else Vector2(1, 0)
+		var fly := p + Vector3(dir.x, 0.05, dir.y) * (0.1 + randf() * 0.12)
+		var smoke = item.get("smoke")
+		if smoke != null and is_instance_valid(smoke):
+			smoke.emitting = false
+		var tw := create_tween()
+		tw.set_parallel(true)
+		if root_valid:
+			tw.tween_property(root, "global_position", fly + Vector3(0.0, 0.03, 0.0), 0.18)
+			tw.tween_property(root, "scale", Vector3(0.05, 0.05, 0.05), 0.18)
+		tw.tween_property(puddle, "global_position", fly, 0.18)
+		tw.tween_property(puddle, "scale", Vector3(0.04, 0.04, 0.04), 0.18)
+		if root_valid:
+			tw.chain().tween_callback(root.queue_free)
+		tw.chain().tween_callback(puddle.queue_free)
+		if mp_enabled and not _mp_applying:
+			mp_icecream_melt_clear.rpc(p.x, p.z)
+		melting_icecreams.remove_at(i)
 	return hit_any
 
 
@@ -10326,9 +11207,15 @@ func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) ->
 		if d > BRUSH_PATTY_PUSH_RADIUS:
 			continue
 		var falloff := 1.0 - d / BRUSH_PATTY_PUSH_RADIUS
-		falloff *= falloff
-		var nx: float = float(p._rest_x) + dir.x * push_len * falloff
-		var nz: float = float(p._rest_z) + dir.y * push_len * falloff
+		falloff = 0.25 + falloff * falloff * 0.75
+		var side := Vector2(-dir.y, dir.x)
+		var away := Vector2(p.position.x - brush_pos.x, p.position.z - brush_pos.z)
+		if away.length_squared() > 0.0001:
+			away = away.normalized()
+			side *= signf(side.dot(away)) if absf(side.dot(away)) > 0.05 else 1.0
+		var blended_dir := (dir + side * 0.32).normalized()
+		var nx: float = float(p.position.x) + blended_dir.x * push_len * falloff
+		var nz: float = float(p.position.z) + blended_dir.y * push_len * falloff
 		nx = clampf(nx, min_x, max_x)
 		nz = clampf(nz, min_z, max_z)
 		var try := Vector3(nx, GRILL_SURFACE_Y, nz)
@@ -10470,11 +11357,15 @@ func _clear_all_patty() -> void:
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p:
-			p.queue_free()
+			if bool(p.get_meta("patty_pool", false)):
+				_return_patty_to_spawn_pool(p)
+			else:
+				p.queue_free()
 		grill[i] = null
 		if i < slot_areas.size() and is_instance_valid(slot_areas[i]):
 			slot_areas[i].input_ray_pickable = true
 	_clear_all_residue()
+	call_deferred("_ensure_patty_spawn_pool")
 
 
 func _build_checkered_floor() -> void:
@@ -10874,6 +11765,8 @@ func _build_soda_station() -> void:
 	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
+	_cup_spout_lock = null
+	_cup_spout_unlock_grace = 0.0
 	_cup_fizz = 0.0
 	_cup_fizz_peak = false
 	_cup_fizz_poof = 0.0
@@ -11004,27 +11897,27 @@ func _build_soda_station() -> void:
 		root.add_child(grate)
 
 	## Default park under soda; newest drinks land camera-left of older ones.
-	cup_rest = root.to_global(Vector3(-0.28, 0.148, 0.54))
+	cup_rest = root.to_global(Vector3(CUP_TRAY_FIRST_X, 0.148, 0.54))
 	cup_rest_rot = Vector3.ZERO
 
 	var soda_lab := Label3D.new()
 	soda_lab.text = "SODA"
 	soda_lab.position = Vector3(-0.28, 0.62, 0.32)
 	soda_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	soda_lab.font_size = 13
+	soda_lab.font_size = 39
 	soda_lab.pixel_size = 0.0013
 	soda_lab.modulate = Color(1.0, 0.55, 0.5)
-	soda_lab.outline_size = 2
+	soda_lab.outline_size = 6
 	soda_lab.outline_modulate = Color(0, 0, 0, 0.75)
 	root.add_child(soda_lab)
 	var ice_lab := Label3D.new()
 	ice_lab.text = "ICE"
 	ice_lab.position = Vector3(-0.02, 0.62, 0.32)
 	ice_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	ice_lab.font_size = 13
+	ice_lab.font_size = 39
 	ice_lab.pixel_size = 0.0013
 	ice_lab.modulate = Color(0.7, 0.9, 1.0)
-	ice_lab.outline_size = 2
+	ice_lab.outline_size = 6
 	ice_lab.outline_modulate = Color(0, 0, 0, 0.75)
 	root.add_child(ice_lab)
 
@@ -11049,7 +11942,7 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.505, 0.0), "h": Vector3(0.42, 0.035, 0.21)}, ## tank deck
 		{"p": Vector3(-0.28, 0.62, 0.24), "h": Vector3(0.09, 0.11, 0.13)}, ## soda arm
 		{"p": Vector3(-0.02, 0.62, 0.24), "h": Vector3(0.09, 0.11, 0.13)}, ## ice arm
-		{"p": Vector3(-0.733, 0.66, 0.16), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser
+		{"p": Vector3(-0.514, 1.163, 0.16), "h": Vector3(0.13, 0.14, 0.11)}, ## cup dispenser
 		{"p": Vector3(-0.02, 0.092, 0.40), "h": Vector3(0.39, 0.024, 0.23), "floor": true}, ## drip tray + grate
 	]
 
@@ -11061,6 +11954,1447 @@ func _make_soda_metal_mat(col: Color, metallic: float, roughness: float) -> Stan
 	mat.roughness = roughness
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	return mat
+
+
+func _make_icecream_mat(col: Color, roughness: float = 0.55, emission: float = 0.0) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.roughness = roughness
+	mat.metallic = 0.0
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.set("subsurf_scatter_enabled", true)
+	mat.set("subsurf_scatter_strength", 0.18)
+	mat.set("subsurf_scatter_skin_mode", false)
+	mat.set("subsurf_scatter_transmittance_enabled", true)
+	mat.set("subsurf_scatter_transmittance_color", Color(1.0, 0.86, 0.62))
+	mat.set("subsurf_scatter_transmittance_depth", 0.045)
+	if emission > 0.0:
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.94, 0.72)
+		mat.emission_energy_multiplier = emission
+	return mat
+
+
+func _make_waffle_cone_mat(col: Color, roughness: float = 0.72) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.roughness = roughness
+	mat.metallic = 0.0
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.rim_enabled = true
+	mat.rim = 0.18
+	mat.rim_tint = 0.25
+	return mat
+
+
+func _build_icecream_machine() -> void:
+	if icecream_root != null and is_instance_valid(icecream_root):
+		icecream_root.queue_free()
+	icecream_root = null
+	icecream_cone_root = null
+	icecream_cone_area = null
+	icecream_swirl_root = null
+	icecream_spout_marker = null
+	if icecream_stream_mesh != null and is_instance_valid(icecream_stream_mesh):
+		icecream_stream_mesh.queue_free()
+	if icecream_stream_fx != null and is_instance_valid(icecream_stream_fx):
+		icecream_stream_fx.queue_free()
+	icecream_stream_mesh = null
+	icecream_stream_mat = null
+	icecream_stream_fx = null
+	icecream_cone_held = false
+	icecream_cone_fill = 0.0
+
+	var root := Node3D.new()
+	root.name = "SoftServeStation"
+	root.position = ICECREAM_STATION_POS
+	root.rotation_degrees = ICECREAM_STATION_ROT
+	world.add_child(root)
+	icecream_root = root
+
+	var body_mat := _make_soda_metal_mat(Color(0.78, 0.80, 0.82), 0.86, 0.2)
+	var dark_mat := _make_soda_metal_mat(Color(0.12, 0.13, 0.15), 0.88, 0.34)
+	var trim_mat := _make_soda_metal_mat(Color(0.94, 0.95, 0.92), 0.38, 0.18)
+
+	## Slim cabinet so it tucks beside the fountain without eating counter space.
+	var body := MeshInstance3D.new()
+	body.name = "FreezerCabinet"
+	var body_mesh := BoxMesh.new()
+	body_mesh.size = Vector3(0.219, 0.48, 0.34)
+	body.mesh = body_mesh
+	body.position = Vector3(0.0, 0.26, 0.0)
+	body.material_override = body_mat
+	root.add_child(body)
+
+	var top_lid := MeshInstance3D.new()
+	top_lid.name = "CleanTopLid"
+	var top_lid_mesh := BoxMesh.new()
+	top_lid_mesh.size = Vector3(0.253, 0.052, 0.37)
+	top_lid.mesh = top_lid_mesh
+	top_lid.position = Vector3(0.0, 0.526, 0.0)
+	top_lid.material_override = trim_mat
+	root.add_child(top_lid)
+
+	var lower_trim := MeshInstance3D.new()
+	lower_trim.name = "LowerCabinetTrim"
+	var lower_trim_mesh := BoxMesh.new()
+	lower_trim_mesh.size = Vector3(0.253, 0.035, 0.36)
+	lower_trim.mesh = lower_trim_mesh
+	lower_trim.position = Vector3(0.0, 0.035, 0.0)
+	lower_trim.material_override = trim_mat
+	root.add_child(lower_trim)
+
+	var face := MeshInstance3D.new()
+	face.name = "PourFace"
+	var face_mesh := BoxMesh.new()
+	face_mesh.size = Vector3(0.173, 0.24, 0.045)
+	face.mesh = face_mesh
+	face.position = Vector3(0.0, 0.38, 0.195)
+	face.material_override = dark_mat
+	root.add_child(face)
+
+	var face_gloss := MeshInstance3D.new()
+	face_gloss.name = "PourFaceGloss"
+	var face_gloss_mesh := BoxMesh.new()
+	face_gloss_mesh.size = Vector3(0.127, 0.018, 0.006)
+	face_gloss.mesh = face_gloss_mesh
+	face_gloss.position = Vector3(0.0, 0.47, 0.221)
+	face_gloss.material_override = _make_soda_metal_mat(Color(0.74, 0.80, 0.88), 0.2, 0.16)
+	root.add_child(face_gloss)
+
+	var handle := MeshInstance3D.new()
+	handle.name = "PullHandle"
+	var handle_mesh := BoxMesh.new()
+	handle_mesh.size = Vector3(0.036, 0.15, 0.028)
+	handle.mesh = handle_mesh
+	handle.position = Vector3(0.0, 0.42, 0.245)
+	handle.material_override = _make_soda_metal_mat(Color(0.95, 0.96, 0.98), 0.96, 0.12)
+	root.add_child(handle)
+
+	icecream_spout_marker = Marker3D.new()
+	icecream_spout_marker.name = "SoftServeSpoutTip"
+	icecream_spout_marker.position = Vector3(0.0, 0.50, 0.285)
+	root.add_child(icecream_spout_marker)
+
+	var nozzle := MeshInstance3D.new()
+	nozzle.name = "SoftServeNozzle"
+	var nozzle_mesh := CylinderMesh.new()
+	nozzle_mesh.top_radius = 0.026
+	nozzle_mesh.bottom_radius = 0.016
+	nozzle_mesh.height = 0.095
+	nozzle_mesh.radial_segments = 18
+	nozzle.mesh = nozzle_mesh
+	nozzle.rotation_degrees.x = 90.0
+	nozzle.position = Vector3(0.0, 0.51, 0.245)
+	nozzle.material_override = _make_soda_metal_mat(Color(0.88, 0.90, 0.94), 0.96, 0.1)
+	root.add_child(nozzle)
+
+	## Cone nest on the center-facing side (away from the soda tanks).
+	var cone_rack := Node3D.new()
+	cone_rack.name = "ConeRack"
+	cone_rack.position = Vector3(-0.34, 0.373, 0.32)
+	root.add_child(cone_rack)
+	for i in 4:
+		var deco := _create_icecream_cone_node(false)
+		deco.position = Vector3(0.0, float(i) * 0.024, -float(i) * 0.010)
+		deco.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
+		deco.scale = Vector3(0.72, 0.72, 0.72)
+		cone_rack.add_child(deco)
+	icecream_cone_home = cone_rack.to_global(Vector3(0.0, 0.02, 0.0))
+	icecream_cone_rest = root.to_global(Vector3(0.0, 0.12, 0.42))
+
+	var rack_area := Area3D.new()
+	rack_area.name = "ConeRackGrab"
+	rack_area.input_ray_pickable = true
+	rack_area.collision_layer = ICECREAM_CONE_COLLISION_LAYER
+	rack_area.collision_mask = 0
+	var rack_shape := CollisionShape3D.new()
+	var rack_box := BoxShape3D.new()
+	rack_box.size = Vector3(0.16, 0.18, 0.16)
+	rack_shape.shape = rack_box
+	rack_area.add_child(rack_shape)
+	cone_rack.add_child(rack_area)
+
+	var lab := Label3D.new()
+	lab.text = "SOFT SERVE"
+	lab.position = Vector3(0.0, 0.52, 0.22)
+	lab.font_size = 11
+	lab.pixel_size = 0.00125
+	lab.modulate = Color(1.0, 0.92, 0.70)
+	lab.outline_size = 2
+	lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.78)
+	root.add_child(lab)
+
+	var lamp := OmniLight3D.new()
+	lamp.name = "SoftServeGlow"
+	lamp.light_color = Color(1.0, 0.86, 0.64)
+	lamp.light_energy = 0.38
+	lamp.omni_range = 0.8
+	lamp.shadow_enabled = false
+	lamp.position = Vector3(0.0, 0.50, 0.34)
+	root.add_child(lamp)
+
+	_spawn_and_bind_empty_icecream_cone()
+	_build_icecream_stream_fx()
+
+
+func _create_icecream_cone_node(grabbable: bool = true) -> Node3D:
+	var root := Node3D.new()
+	root.name = "IceCreamCone"
+	root.set_meta("icecream_fill", 0.0)
+
+	var cone_mat := _make_waffle_cone_mat(Color(0.94, 0.60, 0.22), 0.72)
+	var line_mat := _make_waffle_cone_mat(Color(0.72, 0.39, 0.12), 0.76)
+	var cone_visual := Node3D.new()
+	cone_visual.name = "ConeVisual"
+	cone_visual.position = Vector3(0.0, ICECREAM_CONE_VISUAL_DROP, 0.0)
+	root.add_child(cone_visual)
+
+	var cone := MeshInstance3D.new()
+	cone.name = "WaffleCone"
+	var cone_mesh := CylinderMesh.new()
+	cone_mesh.top_radius = ICECREAM_CONE_R
+	cone_mesh.bottom_radius = 0.0
+	cone_mesh.height = ICECREAM_CONE_H
+	cone_mesh.radial_segments = 14
+	cone.mesh = cone_mesh
+	cone.position = Vector3(0.0, ICECREAM_CONE_H * 0.5, 0.0)
+	cone.material_override = cone_mat
+	cone_visual.add_child(cone)
+
+	for i in 5:
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		var cone_t := lerpf(0.20, 0.88, float(i) / 4.0)
+		var r := ICECREAM_CONE_R * cone_t
+		torus.inner_radius = maxf(0.002, r - 0.002)
+		torus.outer_radius = r + 0.002
+		torus.rings = 5
+		torus.ring_segments = 18
+		ring.mesh = torus
+		ring.position = Vector3(0.0, ICECREAM_CONE_H * cone_t, 0.0)
+		ring.material_override = line_mat
+		cone_visual.add_child(ring)
+
+	icecream_swirl_root = Node3D.new() if grabbable else null
+	var swirl_parent := icecream_swirl_root if grabbable else Node3D.new()
+	swirl_parent.name = "SoftServeSwirl"
+	swirl_parent.position = Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + 0.006, 0.0)
+	root.add_child(swirl_parent)
+	var cream_mat := _make_icecream_mat(Color(1.0, 0.92, 0.76, 1.0), 0.38, 0.090)
+	var corkscrew := MeshInstance3D.new()
+	corkscrew.name = "CorkscrewSplineServe"
+	## Leave mesh null until filled; empty ArrayMesh surfaces can upset exported startup.
+	corkscrew.material_override = cream_mat
+	corkscrew.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	corkscrew.visible = false
+	swirl_parent.add_child(corkscrew)
+
+	if grabbable:
+		var area := Area3D.new()
+		area.name = "ConeGrab"
+		area.input_ray_pickable = true
+		area.collision_layer = ICECREAM_CONE_COLLISION_LAYER
+		area.collision_mask = 0
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(0.13, 0.25, 0.13)
+		shape.shape = box
+		shape.position = Vector3(0.0, 0.100, 0.0)
+		area.add_child(shape)
+		root.add_child(area)
+	return root
+
+
+func _spawn_and_bind_empty_icecream_cone() -> void:
+	icecream_cone_root = _create_icecream_cone_node(true)
+	world.add_child(icecream_cone_root)
+	icecream_cone_root.global_position = icecream_cone_home
+	icecream_cone_root.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
+	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
+	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
+	icecream_cone_fill = 0.0
+	_reset_icecream_swirl_motion()
+	_refresh_icecream_cone_visuals()
+
+
+func _reset_icecream_cone_to_home() -> void:
+	_cancel_auto_hand_finished_icecream()
+	icecream_cone_held = false
+	icecream_cone_fill = 0.0
+	_hide_icecream_stream()
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	if icecream_cone_home == Vector3.ZERO:
+		return
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		_spawn_and_bind_empty_icecream_cone()
+		return
+	icecream_cone_root.visible = true
+	icecream_cone_root.global_position = icecream_cone_home
+	icecream_cone_root.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
+	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
+	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
+	if icecream_cone_area != null:
+		icecream_cone_area.input_ray_pickable = true
+	_reset_icecream_swirl_motion()
+	_refresh_icecream_cone_visuals()
+
+
+func _ray_hits_icecream_cone(screen_pos: Vector2) -> bool:
+	if _ray_hits_tool(screen_pos, ICECREAM_CONE_COLLISION_LAYER, icecream_cone_area):
+		return true
+	if _ray_hits_icecream_rack(screen_pos):
+		return true
+	return false
+
+
+func _ray_hits_icecream_rack(screen_pos: Vector2) -> bool:
+	if icecream_root == null or not is_instance_valid(icecream_root):
+		return false
+	var rack := icecream_root.get_node_or_null("ConeRack/ConeRackGrab") as Area3D
+	return _ray_hits_tool(screen_pos, ICECREAM_CONE_COLLISION_LAYER, rack)
+
+
+func _icecream_click_should_win(screen_pos: Vector2) -> bool:
+	## Prefer cone / nest grabs over neighboring soda tanks and cup radii.
+	if icecream_cone_held:
+		return false
+	if _ray_hits_icecream_cone(screen_pos):
+		return true
+	if camera == null:
+		return false
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root):
+		var tip := icecream_cone_root.global_position + Vector3(0.0, 0.12, 0.0)
+		if not camera.is_position_behind(tip) \
+				and screen_pos.distance_to(camera.unproject_position(tip)) <= ICECREAM_GRAB_SCREEN_PX:
+			return true
+	if icecream_cone_home != Vector3.ZERO:
+		var home := icecream_cone_home + Vector3(0.0, 0.12, 0.0)
+		if not camera.is_position_behind(home) \
+				and screen_pos.distance_to(camera.unproject_position(home)) <= ICECREAM_GRAB_SCREEN_PX:
+			return true
+	return false
+
+
+func _begin_icecream_cone_hold() -> bool:
+	if not playing or icecream_cone_held:
+		return false
+	if _icecream_grab_lockout > 0.0:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		_spawn_and_bind_empty_icecream_cone()
+	icecream_cone_held = true
+	if icecream_cone_area != null:
+		icecream_cone_area.input_ray_pickable = false
+	_icecream_prev_pos = icecream_cone_root.global_position
+	_icecream_vel = Vector3.ZERO
+	if game_audio:
+		if game_audio.has_method("play_rack_take"):
+			game_audio.play_rack_take()
+		game_audio.play_click()
+	_flash("Hold cone under SOFT SERVE", Color("FFF3B0"))
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	return true
+
+
+func _icecream_cone_hold_point(screen_pos: Vector2) -> Vector3:
+	if camera == null:
+		return Vector3.ZERO
+	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	var tip := icecream_spout_marker.global_position if icecream_spout_marker != null and is_instance_valid(icecream_spout_marker) else Vector3.ZERO
+	if tip != Vector3.ZERO:
+		hold_y = maxf(hold_y, tip.y - ICECREAM_CONE_H - 0.045 - ICECREAM_CONE_FILL_DROP)
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var hit := Vector3.ZERO
+	if absf(dir.y) > 0.002:
+		var t := (hold_y - from.y) / dir.y
+		if t > 0.05:
+			hit = from + dir * t
+	if hit == Vector3.ZERO:
+		hit = from + dir * 2.4
+		hit.y = hold_y
+	## Full counter reach for the cone; the soda cup clamp is intentionally narrower.
+	hit.x = clampf(hit.x, -2.35, 2.35)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.9, 1.28)
+	hit.y = hold_y
+	if tip != Vector3.ZERO:
+		var seat := Vector3(tip.x, tip.y - ICECREAM_CONE_H - 0.045 - ICECREAM_CONE_FILL_DROP, tip.z)
+		var d := Vector2(hit.x - seat.x, hit.z - seat.z).length()
+		if d < ICECREAM_MAGNET_RADIUS:
+			var pull := clampf(1.0 - d / ICECREAM_MAGNET_RADIUS, 0.0, 1.0) * 0.62
+			hit = hit.lerp(seat, pull)
+			hit.y = lerpf(hold_y, seat.y, pull)
+	hit = _icecream_cone_machine_safe_point(hit)
+	return hit
+
+
+func _icecream_cone_machine_safe_point(world_pos: Vector3) -> Vector3:
+	if icecream_root == null or not is_instance_valid(icecream_root):
+		return world_pos
+	var local := icecream_root.to_local(world_pos)
+	## Keep the carried cone / serve in front of the cabinet face while still allowing the spout snap.
+	var serve_radius := lerpf(ICECREAM_CONE_R, 0.076, clampf(icecream_cone_fill, 0.0, 1.0))
+	var min_front_z := 0.225 + serve_radius
+	if absf(local.x) <= 0.173 and local.y <= 0.62:
+		local.z = maxf(local.z, min_front_z)
+	return icecream_root.to_global(local)
+
+
+func _update_held_icecream_cone(delta: float) -> void:
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	var prev := icecream_cone_root.global_position
+	var seat := _kb_force_cone_seat
+	if seat == Vector3.ZERO:
+		seat = _icecream_cone_hold_point(get_viewport().get_mouse_position())
+	icecream_cone_root.global_position = prev.lerp(seat, clampf(delta * 12.0, 0.0, 1.0))
+	if delta > 0.0001:
+		_icecream_vel = (icecream_cone_root.global_position - _icecream_prev_pos) / delta
+	_icecream_prev_pos = icecream_cone_root.global_position
+	icecream_cone_root.rotation_degrees = Vector3(-9.0 + clampf(_icecream_vel.z * 8.0, -12.0, 12.0), 8.0, clampf(-_icecream_vel.x * 8.0, -12.0, 12.0))
+	_update_held_icecream_swirl_motion(delta)
+	_try_fill_icecream_cone(delta)
+
+
+func _reset_icecream_swirl_motion() -> void:
+	_icecream_swirl_bounce = 0.0
+	_icecream_swirl_tilt = Vector2.ZERO
+	_icecream_swirl_scale = Vector3.ONE
+	if icecream_swirl_root != null and is_instance_valid(icecream_swirl_root):
+		icecream_swirl_root.position = Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + 0.006, 0.0)
+		icecream_swirl_root.rotation_degrees = Vector3.ZERO
+		icecream_swirl_root.scale = Vector3.ONE
+
+
+func _update_held_icecream_swirl_motion(delta: float) -> void:
+	if icecream_swirl_root == null or not is_instance_valid(icecream_swirl_root):
+		return
+	var fill_weight := smoothstep(0.10, 1.0, clampf(icecream_cone_fill, 0.0, 1.0))
+	var target_bounce := clampf(-_icecream_vel.y * 0.018, -0.025, 0.025) * fill_weight
+	_icecream_swirl_bounce = lerpf(_icecream_swirl_bounce, target_bounce, clampf(delta * 9.0, 0.0, 1.0))
+	var target_tilt := Vector2(
+		clampf(_icecream_vel.z * 17.0, -15.0, 15.0),
+		clampf(-_icecream_vel.x * 17.0, -15.0, 15.0)
+	) * fill_weight
+	_icecream_swirl_tilt = _icecream_swirl_tilt.lerp(target_tilt, clampf(delta * 10.5, 0.0, 1.0))
+	var bounce_abs := absf(_icecream_swirl_bounce)
+	var speed_squash := smoothstep(0.55, 1.55, _icecream_vel.length()) \
+		* ICECREAM_SWIRL_FAST_SQUASH_MAX * fill_weight
+	var target_scale := Vector3(
+		1.0 + bounce_abs * 2.6 + speed_squash * 0.42,
+		maxf(0.85, 1.0 - bounce_abs * 4.1 - speed_squash),
+		1.0 + bounce_abs * 2.6 + speed_squash * 0.42
+	)
+	var scale_rate := 13.0 if speed_squash > 0.01 else 5.0
+	_icecream_swirl_scale = _icecream_swirl_scale.lerp(target_scale, clampf(delta * scale_rate, 0.0, 1.0))
+	icecream_swirl_root.position = Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + 0.006 + _icecream_swirl_bounce, 0.0)
+	icecream_swirl_root.rotation_degrees = Vector3(_icecream_swirl_tilt.x, 0.0, _icecream_swirl_tilt.y)
+	icecream_swirl_root.scale = _icecream_swirl_scale
+
+
+func _try_fill_icecream_cone(delta: float) -> void:
+	if icecream_spout_marker == null or icecream_cone_root == null:
+		_hide_icecream_stream()
+		return
+	var tip := icecream_spout_marker.global_position
+	var rim := icecream_cone_root.global_position + Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + icecream_cone_fill * 0.09, 0.0)
+	var horiz := Vector2(tip.x - rim.x, tip.z - rim.z).length()
+	var vert := absf(tip.y - rim.y)
+	if horiz <= ICECREAM_SPOUT_HORIZ and vert <= ICECREAM_SPOUT_VERT and icecream_cone_fill < 1.0:
+		if game_audio and game_audio.has_method("set_softserve_dispense"):
+			game_audio.set_softserve_dispense(true)
+		icecream_cone_fill = minf(1.0, icecream_cone_fill + ICECREAM_FILL_RATE * delta)
+		_icecream_spin_phase += delta * 6.2
+		rim = icecream_cone_root.global_position + Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + icecream_cone_fill * 0.09, 0.0)
+		_update_icecream_stream(tip, rim)
+		_refresh_icecream_cone_visuals()
+		if icecream_cone_fill >= 1.0:
+			_schedule_auto_hand_finished_icecream()
+			_flash("Soft serve ready!", Color("FFF59D"))
+	else:
+		_hide_icecream_stream()
+
+
+func _cancel_auto_hand_finished_icecream() -> void:
+	_icecream_auto_hand_token += 1
+
+
+func _schedule_auto_hand_finished_icecream() -> void:
+	_icecream_auto_hand_token += 1
+	var token := _icecream_auto_hand_token
+	get_tree().create_timer(ICECREAM_AUTO_HAND_DELAY).timeout.connect(func() -> void:
+		if token != _icecream_auto_hand_token:
+			return
+		_try_auto_hand_finished_icecream()
+	)
+
+
+func _make_icecream_corkscrew_mesh(fill: float) -> ArrayMesh:
+	fill = clampf(fill, 0.0, 1.0)
+	var mesh := ArrayMesh.new()
+	if fill <= 0.01:
+		return mesh
+
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var centers: Array[Vector3] = []
+	var path_count: int = maxi(2, int(ceil(float(ICECREAM_SWIRL_STEPS) * fill)))
+	var seg_count: int = ICECREAM_SWIRL_SEGMENTS
+
+	for i in range(path_count + 1):
+		var t := (float(i) / float(path_count)) * fill
+		var spike_t := clampf((t - ICECREAM_SWIRL_SPIKE_FRAC) / maxf(1.0 - ICECREAM_SWIRL_SPIKE_FRAC, 0.001), 0.0, 1.0)
+		var spiral_t := t
+		if t > ICECREAM_SWIRL_SPIKE_FRAC:
+			spiral_t = ICECREAM_SWIRL_SPIKE_FRAC
+		var angle := -spiral_t * TAU * ICECREAM_SWIRL_TURNS
+		var turns_done := spiral_t * ICECREAM_SWIRL_TURNS
+		var base_loop := clampf(turns_done, 0.0, 1.0)
+		var taper_t := clampf((turns_done - 1.0) / maxf(ICECREAM_SWIRL_TURNS - 1.0, 0.001), 0.0, 1.0)
+		var cone_taper := pow(taper_t, 0.82)
+		var path_r := lerpf(0.047, 0.007, cone_taper)
+		var tube_r := lerpf(0.029, 0.0065, cone_taper)
+		var y_t := 1.0 - pow(1.0 - taper_t, ICECREAM_SWIRL_TOP_SQUEEZE)
+		var y := lerpf(0.0, 0.023, base_loop)
+		if turns_done > 1.0:
+			y = 0.023 + y_t * (ICECREAM_SWIRL_H - 0.023)
+		if spike_t > 0.0:
+			var ease_spike := spike_t * spike_t * (3.0 - 2.0 * spike_t)
+			tube_r = lerpf(tube_r, 0.0012, ease_spike)
+			y += ease_spike * ICECREAM_SWIRL_SPIKE_H
+		var radial := Vector3(cos(angle), 0.0, sin(angle)).normalized()
+		var center := Vector3(radial.x * path_r, y, radial.z * path_r)
+		centers.append(center)
+		for j in range(seg_count):
+			var phi := (float(j) / float(seg_count)) * TAU
+			var star_lobe := pow(0.5 + 0.5 * cos(phi * ICECREAM_SWIRL_STAR_POINTS), 1.7)
+			var star_r := tube_r * lerpf(1.0 - ICECREAM_SWIRL_STAR_DEPTH, 1.0 + ICECREAM_SWIRL_STAR_DEPTH * 0.42, star_lobe)
+			var normal := (radial * cos(phi) + Vector3.UP * sin(phi)).normalized()
+			verts.append(center + normal * star_r)
+			normals.append(normal)
+			uvs.append(Vector2(float(j) / float(seg_count), t))
+
+	for i in range(path_count):
+		for j in range(seg_count):
+			var a := i * seg_count + j
+			var b := i * seg_count + ((j + 1) % seg_count)
+			var c := (i + 1) * seg_count + j
+			var d := (i + 1) * seg_count + ((j + 1) % seg_count)
+			indices.append(a)
+			indices.append(b)
+			indices.append(c)
+			indices.append(b)
+			indices.append(d)
+			indices.append(c)
+
+	var start_tangent := (centers[1] - centers[0]).normalized()
+	var end_tangent := (centers[centers.size() - 1] - centers[centers.size() - 2]).normalized()
+	var start_center_i := verts.size()
+	verts.append(centers[0])
+	normals.append(-start_tangent)
+	uvs.append(Vector2(0.5, 0.0))
+	for j in range(seg_count):
+		var a0 := j
+		var b0 := (j + 1) % seg_count
+		indices.append(start_center_i)
+		indices.append(a0)
+		indices.append(b0)
+	var end_center_i := verts.size()
+	verts.append(centers[centers.size() - 1])
+	normals.append(end_tangent)
+	uvs.append(Vector2(0.5, fill))
+	var end_ring: int = path_count * seg_count
+	for j in range(seg_count):
+		var a1: int = end_ring + j
+		var b1: int = end_ring + ((j + 1) % seg_count)
+		indices.append(end_center_i)
+		indices.append(b1)
+		indices.append(a1)
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _refresh_icecream_cone_visuals() -> void:
+	_refresh_icecream_cone_visuals_for(icecream_swirl_root, icecream_cone_fill)
+
+
+func _refresh_icecream_cone_visuals_for(swirl_root: Node3D, fill_amount: float) -> void:
+	if swirl_root == null or not is_instance_valid(swirl_root):
+		return
+	var fill := clampf(fill_amount, 0.0, 1.0)
+	var corkscrew := swirl_root.get_node_or_null("CorkscrewSplineServe") as MeshInstance3D
+	if corkscrew != null:
+		corkscrew.visible = fill > 0.01
+		corkscrew.mesh = _make_icecream_corkscrew_mesh(fill)
+		corkscrew.rotation_degrees.y = 0.0
+
+
+func _build_icecream_stream_fx() -> void:
+	icecream_stream_mesh = MeshInstance3D.new()
+	icecream_stream_mesh.name = "SoftServeRibbon"
+	icecream_stream_mesh.mesh = ArrayMesh.new()
+	icecream_stream_mat = _make_icecream_mat(Color(1.0, 0.91, 0.72, 1.0), 0.34, 0.064)
+	icecream_stream_mesh.material_override = icecream_stream_mat
+	icecream_stream_mesh.visible = false
+	icecream_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(icecream_stream_mesh)
+
+	icecream_stream_fx = GPUParticles3D.new()
+	icecream_stream_fx.name = "SoftServeDroplets"
+	icecream_stream_fx.amount = 18
+	icecream_stream_fx.lifetime = 0.45
+	icecream_stream_fx.emitting = false
+	icecream_stream_fx.explosiveness = 0.08
+	icecream_stream_fx.randomness = 0.35
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = 0.018
+	pmat.direction = Vector3(0, -1, 0)
+	pmat.spread = 28.0
+	pmat.initial_velocity_min = 0.025
+	pmat.initial_velocity_max = 0.12
+	pmat.gravity = Vector3(0, -0.45, 0)
+	pmat.scale_min = 0.35
+	pmat.scale_max = 0.9
+	pmat.color = Color(1.0, 0.91, 0.72, 0.95)
+	icecream_stream_fx.process_material = pmat
+	var drop_mesh := SphereMesh.new()
+	drop_mesh.radius = 0.008
+	drop_mesh.height = 0.012
+	icecream_stream_fx.draw_pass_1 = drop_mesh
+	icecream_stream_fx.material_override = icecream_stream_mat
+	world.add_child(icecream_stream_fx)
+
+
+func _update_icecream_stream(from_tip: Vector3, to_rim: Vector3) -> void:
+	if icecream_stream_mesh == null:
+		return
+	icecream_stream_mesh.visible = true
+	icecream_stream_mesh.global_position = from_tip
+	icecream_stream_mesh.global_basis = Basis.IDENTITY
+	icecream_stream_mesh.mesh = _make_icecream_stream_curve_mesh(from_tip, to_rim)
+	icecream_stream_mesh.rotation_degrees = Vector3.ZERO
+	if icecream_stream_fx != null:
+		icecream_stream_fx.global_position = to_rim + Vector3(0.0, 0.018, 0.0)
+		icecream_stream_fx.emitting = true
+
+
+func _make_icecream_stream_curve_mesh(from_tip: Vector3, to_rim: Vector3) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	var rel_end := to_rim - from_tip
+	var drop := clampf(from_tip.y - to_rim.y, 0.08, 0.48)
+	var lateral := Vector3(rel_end.x, 0.0, rel_end.z)
+	var p0 := Vector3.ZERO
+	var p1 := lateral * 0.28 + Vector3(0.0, -drop * 0.45, 0.0)
+	var p2 := rel_end
+	var rings := 12
+	var segs := 14
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for i in range(rings + 1):
+		var t := float(i) / float(rings)
+		var omt := 1.0 - t
+		var center := omt * omt * p0 + 2.0 * omt * t * p1 + t * t * p2
+		var tangent := (2.0 * omt * (p1 - p0) + 2.0 * t * (p2 - p1)).normalized()
+		if tangent.length() <= 0.001:
+			tangent = Vector3.DOWN
+		var side := tangent.cross(Vector3.UP)
+		if side.length() <= 0.001:
+			side = Vector3.RIGHT
+		side = side.normalized()
+		var up := side.cross(tangent).normalized()
+		var radius := lerpf(
+			0.0115 + sin(_icecream_spin_phase) * 0.0012,
+			0.0058 + cos(_icecream_spin_phase * 1.3) * 0.0007,
+			t
+		)
+		for j in range(segs):
+			var a := (float(j) / float(segs)) * TAU
+			var normal := (side * cos(a) + up * sin(a)).normalized()
+			verts.append(center + normal * radius)
+			normals.append(normal)
+			uvs.append(Vector2(float(j) / float(segs), t))
+	for i in range(rings):
+		for j in range(segs):
+			var a0 := i * segs + j
+			var b0 := i * segs + ((j + 1) % segs)
+			var c0 := (i + 1) * segs + j
+			var d0 := (i + 1) * segs + ((j + 1) % segs)
+			indices.append(a0)
+			indices.append(b0)
+			indices.append(c0)
+			indices.append(b0)
+			indices.append(d0)
+			indices.append(c0)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _hide_icecream_stream() -> void:
+	if icecream_stream_mesh != null and is_instance_valid(icecream_stream_mesh):
+		icecream_stream_mesh.visible = false
+	if icecream_stream_fx != null and is_instance_valid(icecream_stream_fx):
+		icecream_stream_fx.emitting = false
+	if game_audio and game_audio.has_method("set_softserve_dispense"):
+		game_audio.set_softserve_dispense(false)
+
+
+func _put_icecream_cone_down() -> void:
+	if not icecream_cone_held:
+		return
+	icecream_cone_held = false
+	_cancel_auto_hand_finished_icecream()
+	_hide_icecream_stream()
+	_reset_icecream_swirl_motion()
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	var mouse := get_viewport().get_mouse_position()
+	if _is_over_garbage(mouse):
+		icecream_cone_root.queue_free()
+		_spawn_and_bind_empty_icecream_cone()
+		return
+	if _try_hand_held_icecream_to_customer(mouse, false):
+		return
+	if _try_feed_held_icecream_to_cat(mouse):
+		return
+	## Drop from the carried cone's visible X/Z first.
+	## The cone floats above the plate and machine-safe clamping can leave the cursor
+	## ray farther across the grill than where the player sees the cone.
+	var grill_hit := _grill_plane_from_screen(mouse)
+	var cone_hit := Vector3(icecream_cone_root.global_position.x, GRILL_SURFACE_Y, icecream_cone_root.global_position.z)
+	var drop_hit := Vector3.ZERO
+	if _is_near_grill_for_place(cone_hit):
+		drop_hit = cone_hit
+	elif grill_hit != Vector3.ZERO and _is_near_grill_for_place(grill_hit):
+		drop_hit = grill_hit
+	if drop_hit != Vector3.ZERO:
+		var land_pos := Vector3(
+			clampf(drop_hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48),
+			GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012,
+			clampf(drop_hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+		)
+		var should_melt := grill_on and not _is_in_warmer_zone(land_pos)
+		_lerp_icecream_cone_to_grill(icecream_cone_root, land_pos, should_melt)
+		return
+	icecream_cone_root.global_position = icecream_cone_rest
+	icecream_cone_root.rotation_degrees = Vector3(-6.0, 8.0, 0.0)
+	if icecream_cone_area != null:
+		icecream_cone_area.input_ray_pickable = true
+
+
+func _lerp_icecream_cone_to_grill(root: Node3D, land_pos: Vector3, should_melt: bool) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	var area := root.get_node_or_null("ConeGrab") as Area3D
+	if area != null:
+		area.input_ray_pickable = false
+	var land_rot := Vector3(-92.0, randf() * 360.0, randf_range(-5.0, 5.0))
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(root, "global_position", land_pos, 0.20).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tw.tween_property(root, "rotation_degrees", land_rot, 0.20).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tw.chain().tween_callback(func() -> void:
+		if root == null or not is_instance_valid(root):
+			return
+		root.global_position = land_pos
+		root.rotation_degrees = land_rot
+		if should_melt:
+			icecream_cone_root = root
+			icecream_cone_area = root.get_node_or_null("ConeGrab") as Area3D
+			icecream_swirl_root = root.get_node_or_null("SoftServeSwirl") as Node3D
+			_begin_icecream_melt_on_grill()
+		else:
+			if area != null and is_instance_valid(area):
+				area.input_ray_pickable = true
+	)
+
+
+func _try_auto_hand_finished_icecream() -> void:
+	if not playing or _serve_fly_busy:
+		return
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	if not icecream_cone_held or icecream_cone_fill < 1.0:
+		return
+	if mp_enabled and not NetManager.is_host():
+		return
+	var cust := _find_waiting_customer_needing_icecream()
+	if cust == null:
+		return
+	_try_hand_held_icecream_to_customer(get_viewport().get_mouse_position(), true, cust)
+
+
+func _find_waiting_customer_needing_icecream() -> Node3D:
+	if selected_customer != null and is_instance_valid(selected_customer) \
+			and bool(selected_customer.get("is_waiting")) \
+			and _customer_wants_icecream(selected_customer) \
+			and not _customer_icecream_handed(selected_customer):
+		return selected_customer
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_waiting")) or bool(c.get("is_leaving")):
+			continue
+		if _customer_wants_icecream(c) and not _customer_icecream_handed(c):
+			return c
+	return null
+
+
+func _try_hand_held_icecream_to_customer(
+	screen_pos: Vector2,
+	auto_only: bool = false,
+	forced_customer: Node3D = null
+) -> bool:
+	if not playing or _serve_fly_busy:
+		return false
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return false
+	if icecream_cone_fill < 0.82:
+		return false
+	var cust := forced_customer
+	if cust == null:
+		cust = _find_waiting_customer_at_mouth(screen_pos, CUP_MOUTH_HAND_PX)
+	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
+		return false
+	if _customer_wants_icecream(cust) and not _customer_icecream_handed(cust):
+		_begin_icecream_customer_hand(cust)
+		return true
+	if auto_only:
+		return false
+	_begin_free_icecream_customer_hand(cust)
+	return true
+
+
+func _begin_icecream_customer_hand(customer: Node3D) -> void:
+	if customer == null or not is_instance_valid(customer) or not customer.is_waiting:
+		return
+	if _serve_fly_busy:
+		return
+	_cancel_auto_hand_finished_icecream()
+	selected_customer = customer
+	_highlight_tickets()
+	icecream_cone_held = false
+	_hide_icecream_stream()
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	var served_root := icecream_cone_root
+	icecream_cone_root = null
+	icecream_cone_area = null
+	icecream_swirl_root = null
+	icecream_cone_fill = 0.0
+	if game_audio and game_audio.has_method("play_order_up"):
+		game_audio.play_order_up()
+	_play_icecream_fly_to_mouth(served_root, customer, func() -> void:
+		if GameDataScript.is_icecream_only_order(customer.order):
+			_complete_icecream_only_serve(customer)
+		else:
+			_complete_early_icecream_hand(customer)
+	)
+	_spawn_and_bind_empty_icecream_cone()
+
+
+func _begin_free_icecream_customer_hand(customer: Node3D) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	_cancel_auto_hand_finished_icecream()
+	icecream_cone_held = false
+	_hide_icecream_stream()
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	var accepted := randf() >= 0.20
+	if customer.has_method("react_free_icecream"):
+		customer.react_free_icecream(accepted)
+	if accepted:
+		var served_root := icecream_cone_root
+		icecream_cone_root = null
+		icecream_cone_area = null
+		icecream_swirl_root = null
+		icecream_cone_fill = 0.0
+		_play_icecream_fly_to_mouth(served_root, customer, func() -> void:
+			_flash("Free cone made their day!", Color("FF8FC3"))
+		)
+		_spawn_and_bind_empty_icecream_cone()
+	else:
+		_flash("They don't want ice cream!", Color("EF5350"))
+		_drop_rejected_icecream_on_grill(customer)
+
+
+func _drop_rejected_icecream_on_grill(customer: Node3D) -> void:
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	var drop_x := GRILL_CENTER_X + randf_range(-GRILL_WIDTH * 0.18, GRILL_WIDTH * 0.18)
+	if customer != null and is_instance_valid(customer):
+		drop_x = clampf(customer.global_position.x * 0.06, GRILL_CENTER_X - GRILL_WIDTH * 0.28, GRILL_CENTER_X + GRILL_WIDTH * 0.28)
+	icecream_cone_root.global_position = Vector3(
+		drop_x,
+		GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012,
+		GRILL_SURFACE_Z + randf_range(-0.18, 0.18)
+	)
+	_begin_icecream_melt_on_grill()
+
+
+func _complete_early_icecream_hand(customer: Node3D) -> void:
+	if customer != null and is_instance_valid(customer):
+		_mark_customer_icecream_handed(customer, true)
+		if customer.has_method("react_free_icecream"):
+			customer.react_free_icecream(true)
+	_refresh_ticket_checkmarks()
+	_update_hud()
+	if customer != null and is_instance_valid(customer) and GameDataScript.has_burger_items(customer.order):
+		_flash("ICE CREAM ✓ — finish the burger!", Color("FFF3B0"))
+	else:
+		_flash("ICE CREAM ✓", Color("FFF3B0"))
+	call_deferred("_try_auto_serve")
+
+
+func _complete_icecream_only_serve(customer: Node3D = null) -> void:
+	var cust: Node3D = customer
+	if cust == null or not is_instance_valid(cust):
+		cust = selected_customer
+	if cust == null or not is_instance_valid(cust):
+		return
+	selected_customer = cust
+	var guest_mp := mp_enabled and not NetManager.is_host()
+	var pay: Dictionary = cust.receive_burger([], 1.0, combo, cust.patience_ratio(), 1.0, true)
+	var payout: int = int(pay.get("total", 0))
+	if payout <= 0 and not guest_mp:
+		payout = maxi(4, int(cust.order_value))
+	if cust.has_method("stop_order_clock"):
+		cust.stop_order_clock()
+	if payout > 0 and not guest_mp:
+		money += payout
+		total_served += 1
+		combo += 1
+		perfect_serves += 1
+	_flash("+%s  ICE CREAM!" % _format_money(float(payout)), Color("FFF3B0"))
+	if not guest_mp:
+		_maybe_record_social_review(4.4, "good", int(pay.get("tip", 0)), -1, cust)
+	if selected_customer == cust:
+		selected_customer = null
+	_highlight_tickets()
+	_update_hud()
+	_refresh_ticket_checkmarks()
+
+
+func _try_feed_held_icecream_to_cat(screen_pos: Vector2) -> bool:
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return false
+	if icecream_cone_fill < 0.25:
+		return false
+	if window_cat == null or not is_instance_valid(window_cat):
+		return false
+	if not window_cat.hit_test_feed(camera, screen_pos):
+		return false
+	_cancel_auto_hand_finished_icecream()
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	var fed_root := icecream_cone_root
+	fed_root.queue_free()
+	icecream_cone_root = null
+	icecream_cone_area = null
+	icecream_swirl_root = null
+	icecream_cone_fill = 0.0
+	if mp_enabled and not _mp_applying:
+		mp_cat_feed.rpc("icecream", -1)
+	else:
+		_feed_window_cat_ingredient_local("icecream")
+	_spawn_and_bind_empty_icecream_cone()
+	return true
+
+
+func _begin_icecream_melt_on_grill() -> void:
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root) or grill_root == null:
+		return
+	var root := icecream_cone_root
+	var fill := clampf(icecream_cone_fill, 0.0, 1.0)
+	_begin_icecream_melt_local(root, fill, false)
+	icecream_cone_root = null
+	icecream_cone_area = null
+	icecream_swirl_root = null
+	icecream_cone_fill = 0.0
+	_icecream_grab_lockout = 0.35
+	_spawn_and_bind_empty_icecream_cone()
+	if mp_enabled and not _mp_applying:
+		var drop := root.global_position
+		mp_icecream_melt.rpc(drop.x, drop.z, fill)
+	if game_audio and game_audio.has_method("trigger_hot_oil"):
+		game_audio.trigger_hot_oil(1.8)
+	_flash("Ice cream melting on the grill!", Color("FFF3B0"))
+
+
+func _begin_icecream_melt_local(root: Node3D, fill: float, remote_mirror: bool = false) -> void:
+	if root == null or not is_instance_valid(root) or grill_root == null:
+		return
+	var drop := root.global_position
+	drop.x = clampf(drop.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+	drop.z = clampf(drop.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	drop.y = GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012
+	if root.get_parent() != world:
+		root.reparent(world, true)
+	root.global_position = drop
+	root.rotation_degrees = Vector3(-88.0, randf() * 360.0, randf_range(-8.0, 8.0))
+	var root_rot := root.rotation_degrees
+	root.scale = Vector3.ONE
+	var grab_area := root.get_node_or_null("ConeGrab") as Area3D
+	if grab_area != null and is_instance_valid(grab_area):
+		grab_area.input_ray_pickable = false
+		grab_area.collision_layer = 0
+		grab_area.monitoring = false
+		grab_area.monitorable = false
+	var swirl := root.get_node_or_null("SoftServeSwirl") as Node3D
+	var swirl_pos := swirl.position if swirl != null else Vector3.ZERO
+	var swirl_rot := swirl.rotation_degrees if swirl != null else Vector3.ZERO
+	var swirl_global_pos := swirl.global_position if swirl != null else Vector3.ZERO
+	var swirl_global_rot := swirl.global_rotation_degrees if swirl != null else Vector3.ZERO
+	var puddle := _make_icecream_grill_puddle(drop, maxf(0.25, fill))
+	var smoke := _make_surface_burn_smoke(ICECREAM_PUDDLE_R)
+	puddle.add_child(smoke)
+	melting_icecreams.append({
+		"root": root,
+		"swirl": swirl,
+		"puddle": puddle,
+		"smoke": smoke,
+		"bubbles": [],
+		"bubble_cd": 0.0,
+		"age": 0.0,
+		"fill": clampf(fill, 0.0, 1.0),
+		"root_rot": root_rot,
+		"swirl_pos": swirl_pos,
+		"swirl_rot": swirl_rot,
+		"swirl_global_pos": swirl_global_pos,
+		"swirl_global_rot": swirl_global_rot,
+		"charred": false,
+		"fired": false,
+		"mp_mirror": remote_mirror,
+	})
+
+
+func _try_grab_fallen_icecream_cone(screen_pos: Vector2) -> bool:
+	## Pick up melting / charred / post-fire cones from the steel (toss on release).
+	if not playing or camera == null or burnt_icecream_cone_held:
+		return false
+	if icecream_cone_held or cup_held or brush_held or oil_held or shaker_held or ext_held or glock_held:
+		return false
+	if spatula_patty != null or dragging_patty != null or cheese_held or sale_held:
+		return false
+	var best_i := -1
+	var best_d := 128.0
+	for i in melting_icecreams.size():
+		var item: Dictionary = melting_icecreams[i]
+		if bool(item.get("cone_removed", false)):
+			continue
+		var root := item.get("root") as Node3D
+		var puddle := item.get("puddle") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var picks: Array[Vector3] = [root.global_position + Vector3(0.0, 0.05, 0.0)]
+		if puddle != null and is_instance_valid(puddle):
+			picks.append(puddle.global_position + Vector3(0.0, 0.02, 0.0))
+		## Fallen cones require a deliberate hover so rack clicks still pull a fresh cone.
+		var reach := 68.0 if bool(item.get("charred", false)) or bool(item.get("fired", false)) else 54.0
+		for pick in picks:
+			if camera.is_position_behind(pick):
+				continue
+			var d := screen_pos.distance_to(camera.unproject_position(pick))
+			if d < best_d and d <= reach:
+				best_d = d
+				best_i = i
+	if best_i < 0:
+		return false
+	var item2: Dictionary = melting_icecreams[best_i]
+	burnt_icecream_cone_root = item2.get("root") as Node3D
+	burnt_icecream_cone_puddle = item2.get("puddle") as Node3D
+	if burnt_icecream_cone_root == null or not is_instance_valid(burnt_icecream_cone_root):
+		burnt_icecream_cone_root = null
+		burnt_icecream_cone_puddle = null
+		return false
+	var fallen_swirl := item2.get("swirl") as Node3D
+	if fallen_swirl != null and is_instance_valid(fallen_swirl):
+		fallen_swirl.reparent(world, true)
+	var smoke = item2.get("smoke")
+	if smoke != null and is_instance_valid(smoke):
+		smoke.emitting = false
+	item2["root"] = null
+	item2["cone_removed"] = true
+	melting_icecreams[best_i] = item2
+	if mp_enabled and not _mp_applying:
+		var sync_p: Vector3 = burnt_icecream_cone_root.global_position
+		mp_icecream_cone_removed.rpc(sync_p.x, sync_p.z)
+	burnt_icecream_cone_held = true
+	if burnt_icecream_cone_root.get_parent() != world:
+		burnt_icecream_cone_root.reparent(world, true)
+	## Unflatten so it reads as a grabable cone in hand.
+	burnt_icecream_cone_root.scale = Vector3.ONE
+	burnt_icecream_cone_root.rotation_degrees = Vector3(-28.0, burnt_icecream_cone_root.rotation_degrees.y, 0.0)
+	if game_audio:
+		game_audio.play_click()
+	_flash("Burnt cone — release to trash", Color("FFF3B0"))
+	return true
+
+
+func _update_held_burnt_icecream_cone(_delta: float) -> void:
+	if not burnt_icecream_cone_held or burnt_icecream_cone_root == null or camera == null:
+		return
+	if not is_instance_valid(burnt_icecream_cone_root):
+		burnt_icecream_cone_held = false
+		burnt_icecream_cone_root = null
+		burnt_icecream_cone_puddle = null
+		return
+	var hit := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + 0.16)
+	if hit == Vector3.ZERO:
+		return
+	burnt_icecream_cone_root.global_position = burnt_icecream_cone_root.global_position.lerp(hit, 0.65)
+
+
+func _garbage_lerp_target_world() -> Vector3:
+	if camera != null and grill_trash_btn != null and is_instance_valid(grill_trash_btn):
+		var r := grill_trash_btn.get_global_rect()
+		var screen := r.position + r.size * 0.5
+		var hit := _tool_hold_point_from_screen(screen, GRILL_SURFACE_Y + 0.18)
+		if hit != Vector3.ZERO:
+			return hit
+	return Vector3(GRILL_CENTER_X + GRILL_WIDTH * 0.56, GRILL_SURFACE_Y + 0.18, GRILL_SURFACE_Z + GRILL_DEPTH * 0.42)
+
+
+func _release_burnt_icecream_cone_to_garbage() -> void:
+	if not burnt_icecream_cone_held:
+		return
+	burnt_icecream_cone_held = false
+	var root := burnt_icecream_cone_root
+	burnt_icecream_cone_root = null
+	burnt_icecream_cone_puddle = null
+	if root == null or not is_instance_valid(root):
+		return
+	var target := _garbage_lerp_target_world()
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(root, "global_position", target, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(root, "scale", Vector3.ONE * 0.08, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.chain().tween_callback(func() -> void:
+		if root != null and is_instance_valid(root):
+			root.queue_free()
+	)
+	if game_audio and game_audio.has_method("play_trash"):
+		game_audio.play_trash()
+	_flash("Burnt cone tossed", Color("B0BEC5"))
+
+
+func _make_icecream_grill_puddle(pos: Vector3, fill: float) -> MeshInstance3D:
+	var puddle := MeshInstance3D.new()
+	puddle.name = "IceCreamMeltPuddle"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(ICECREAM_PUDDLE_R * 2.0, ICECREAM_PUDDLE_R * 2.0)
+	puddle.mesh = plane
+	puddle.global_position = Vector3(pos.x, GRILL_SURFACE_Y + OIL_SIT_Y + 0.003, pos.z)
+	puddle.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
+	puddle.scale = Vector3.ONE * lerpf(0.35, 0.58, fill)
+	puddle.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	puddle.sorting_offset = 4.6
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = _get_soda_blob_texture()
+	mat.albedo_color = Color(1.0, 0.94, 0.78, 0.86)
+	mat.metallic = 0.12
+	mat.roughness = 0.16
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.75
+	mat.clearcoat_roughness = 0.08
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.86, 0.58)
+	mat.emission_energy_multiplier = 0.13
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 5
+	puddle.material_override = mat
+	grill_root.add_child(puddle)
+	return puddle
+
+
+func _make_icecream_melt_bubble(pos: Vector3, radius: float) -> MeshInstance3D:
+	var bubble := MeshInstance3D.new()
+	bubble.name = "IceCreamMeltBubble"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	bubble.mesh = quad
+	bubble.global_position = pos
+	bubble.rotation_degrees = Vector3(-90.0, randf() * 360.0, 0.0)
+	bubble.scale = Vector3.ONE * radius
+	bubble.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bubble.sorting_offset = 7.2
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.albedo_texture = _get_burn_bubble_texture()
+	mat.albedo_color = Color(1.0, 0.94, 0.78, 0.72)
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = 12
+	bubble.material_override = mat
+	grill_root.add_child(bubble)
+	return bubble
+
+
+func _spawn_icecream_melt_bubble(item: Dictionary, melt: float) -> void:
+	var puddle := item.get("puddle") as Node3D
+	if puddle == null or not is_instance_valid(puddle):
+		return
+	var fill := float(item.get("fill", 1.0))
+	var puddle_r := ICECREAM_PUDDLE_R * lerpf(0.46, lerpf(0.95, 1.25, fill), smoothstep(0.0, 1.0, melt))
+	var ang := randf() * TAU
+	var dist := randf_range(0.02, maxf(0.035, puddle_r * 0.72))
+	var pos := puddle.global_position + Vector3(cos(ang) * dist, 0.006 + randf_range(0.0, 0.004), sin(ang) * dist)
+	var start_r := randf_range(0.020, 0.034)
+	var end_r := randf_range(0.050, 0.074)
+	var bubble := _make_icecream_melt_bubble(pos, start_r)
+	var bubbles: Array = item.get("bubbles", [])
+	bubbles.append({
+		"node": bubble,
+		"age": 0.0,
+		"life": randf_range(0.48, 0.72),
+		"start_r": start_r,
+		"end_r": end_r,
+		"drift": Vector3(randf_range(-0.018, 0.018), 0.0, randf_range(-0.018, 0.018)),
+	})
+	item["bubbles"] = bubbles
+
+
+func _update_icecream_melt_bubbles(item: Dictionary, delta: float, melt: float) -> void:
+	if melt >= 0.98:
+		item["bubble_cd"] = 0.18
+	else:
+		var cd := float(item.get("bubble_cd", 0.0)) - delta
+		if cd <= 0.0:
+			_spawn_icecream_melt_bubble(item, melt)
+			cd = randf_range(0.16, 0.32)
+		item["bubble_cd"] = cd
+	var bubbles: Array = item.get("bubbles", [])
+	var cream := Color(1.0, 0.94, 0.78, 0.78)
+	var yellow := Color(1.0, 0.78, 0.22, 0.0)
+	var i := 0
+	while i < bubbles.size():
+		var b: Dictionary = bubbles[i]
+		var node := b.get("node") as MeshInstance3D
+		if node == null or not is_instance_valid(node):
+			bubbles.remove_at(i)
+			continue
+		var age := float(b.get("age", 0.0)) + delta
+		var life := maxf(0.05, float(b.get("life", 0.5)))
+		var t := clampf(age / life, 0.0, 1.0)
+		var start_r := float(b.get("start_r", 0.024))
+		var end_r := float(b.get("end_r", 0.06))
+		var s := lerpf(start_r, end_r, smoothstep(0.0, 1.0, t))
+		node.scale = Vector3.ONE * s
+		node.global_position += (b.get("drift", Vector3.ZERO) as Vector3) * delta
+		var mat := node.material_override as StandardMaterial3D
+		if mat != null:
+			var col := cream.lerp(yellow, smoothstep(0.18, 1.0, t))
+			col.a = (1.0 - smoothstep(0.58, 1.0, t)) * lerpf(0.72, 0.42, melt)
+			mat.albedo_color = col
+		if t >= 1.0:
+			node.queue_free()
+			bubbles.remove_at(i)
+			continue
+		b["age"] = age
+		bubbles[i] = b
+		i += 1
+	item["bubbles"] = bubbles
+
+
+func _clear_icecream_melt_bubbles(item: Dictionary) -> void:
+	var bubbles: Array = item.get("bubbles", [])
+	for b in bubbles:
+		if typeof(b) != TYPE_DICTIONARY:
+			continue
+		var node := (b as Dictionary).get("node") as Node
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+	item["bubbles"] = []
+
+
+func _update_melting_icecreams(delta: float) -> void:
+	var i := 0
+	while i < melting_icecreams.size():
+		var item: Dictionary = melting_icecreams[i]
+		var root = item.get("root")
+		var puddle = item.get("puddle")
+		var cone_removed := bool(item.get("cone_removed", false))
+		var root_valid := root != null and is_instance_valid(root)
+		if puddle == null or not is_instance_valid(puddle):
+			_clear_icecream_melt_bubbles(item)
+			melting_icecreams.remove_at(i)
+			continue
+		if not root_valid and not cone_removed:
+			_clear_icecream_melt_bubbles(item)
+			puddle.queue_free()
+			melting_icecreams.remove_at(i)
+			continue
+		var age := float(item.get("age", 0.0)) + delta
+		item["age"] = age
+		var melt := clampf(age / ICECREAM_GRILL_MELT_SEC, 0.0, 1.0)
+		var fill := float(item.get("fill", 1.0))
+		if root_valid:
+			root.scale = Vector3(1.0, lerpf(1.0, 0.72, melt), 1.0)
+		var swirl = item.get("swirl")
+		if swirl != null and is_instance_valid(swirl):
+			var upright := smoothstep(0.0, 0.34, melt)
+			var squash := smoothstep(0.30, 1.0, melt)
+			var start_global_pos: Vector3 = item.get("swirl_global_pos", swirl.global_position)
+			var start_global_rot: Vector3 = item.get("swirl_global_rot", swirl.global_rotation_degrees)
+			var anchor_pos: Vector3 = root.global_position if root_valid else (puddle as Node3D).global_position
+			var anchor_yaw: float = root.global_rotation_degrees.y if root_valid else float(item.get("swirl_fall_yaw", start_global_rot.y))
+			var upright_pos := Vector3(
+				anchor_pos.x - 0.006,
+				GRILL_SURFACE_Y + 0.006,
+				anchor_pos.z + 0.038
+			)
+			var upright_rot := Vector3(-2.0, anchor_yaw, 2.0)
+			swirl.global_position = start_global_pos.lerp(upright_pos, upright)
+			swirl.global_rotation_degrees = start_global_rot.lerp(upright_rot, upright)
+			swirl.scale = Vector3(
+				lerpf(1.0, 1.28, squash),
+				lerpf(1.0, 0.06, squash),
+				lerpf(1.0, 0.78, squash)
+			)
+			swirl.global_position = start_global_pos.lerp(upright_pos, upright)
+			_tint_burning_icecream_swirl(swirl, smoothstep(0.08, 1.0, melt))
+		if root_valid:
+			_tint_burning_icecream_cone(root, smoothstep(0.04, 0.72, melt))
+		puddle.scale = Vector3.ONE * lerpf(0.46, lerpf(0.95, 1.25, fill), smoothstep(0.0, 1.0, melt))
+		var mat := puddle.material_override as StandardMaterial3D
+		if mat != null:
+			if melt < 1.0:
+				var scorch := smoothstep(0.12, 1.0, melt)
+				var burn_col := _icecream_burn_color(scorch)
+				burn_col.a = lerpf(0.86, 0.94, scorch)
+				mat.albedo_color = burn_col
+				mat.metallic = lerpf(0.12, 0.02, scorch)
+				mat.roughness = lerpf(0.16, 0.78, scorch)
+				mat.clearcoat = lerpf(0.75, 0.05, scorch)
+				mat.emission_energy_multiplier = lerpf(0.13, 0.0, scorch)
+			else:
+				mat.albedo_texture = _get_char_crust_texture()
+				mat.albedo_color = Color(0.018, 0.014, 0.011, 0.97)
+				mat.metallic = 0.0
+				mat.roughness = 0.96
+				mat.clearcoat_enabled = false
+				mat.emission_enabled = false
+		var smoke = item.get("smoke")
+		if smoke != null and is_instance_valid(smoke):
+			smoke.emitting = age > 0.45
+			smoke.amount_ratio = clampf(smoothstep(0.35, 1.0, melt) * 0.75, 0.0, 0.75)
+		_update_icecream_melt_bubbles(item, delta, melt)
+		if melt >= 1.0 and not bool(item.get("charred", false)):
+			item["charred"] = true
+			if root_valid:
+				_blacken_icecream_cone(root)
+		if root_valid and age >= ICECREAM_GRILL_FIRE_SEC and not bool(item.get("fired", false)):
+			_blacken_icecream_cone(root)
+			if grill_on:
+				item["fired"] = true
+				var fire_pos := Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.05, root.global_position.z)
+				_start_grill_fire(fire_pos)
+				_flash("Cone caught fire!", Color("FF7043"))
+		i += 1
+
+
+func _blacken_icecream_cone(root: Node) -> void:
+	if root == null:
+		return
+	if root is MeshInstance3D:
+		var mesh := root as MeshInstance3D
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.albedo_color = Color(0.025, 0.018, 0.012, 1.0)
+		mat.metallic = 0.0
+		mat.roughness = 0.94
+		mat.emission_enabled = false
+		mesh.material_override = mat
+	for child in root.get_children():
+		_blacken_icecream_cone(child)
+
+
+func _tint_burning_icecream_cone(root: Node, burn: float) -> void:
+	if root == null:
+		return
+	if root is MeshInstance3D:
+		var mesh := root as MeshInstance3D
+		var n := mesh.name
+		if n == "WaffleCone" or mesh.get_parent().name == "ConeVisual":
+			var mat := StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			var base := Color(0.92, 0.58, 0.22, 1.0) if n == "WaffleCone" else Color(0.66, 0.36, 0.12, 1.0)
+			var toasted := Color(0.42, 0.19, 0.06, 1.0)
+			var black := Color(0.025, 0.018, 0.012, 1.0)
+			var mid := smoothstep(0.0, 0.52, burn)
+			var dark := smoothstep(0.42, 1.0, burn)
+			mat.albedo_color = base.lerp(toasted, mid).lerp(black, dark)
+			mat.metallic = 0.0
+			mat.roughness = lerpf(0.66, 0.94, burn)
+			mat.emission_enabled = false
+			mesh.material_override = mat
+	for child in root.get_children():
+		_tint_burning_icecream_cone(child, burn)
+
+
+func _icecream_burn_color(burn: float) -> Color:
+	var t := clampf(burn, 0.0, 1.0)
+	var cream := Color(1.0, 0.92, 0.76, 1.0)
+	var yellow := Color(1.0, 0.78, 0.18, 1.0)
+	var orange := Color(0.62, 0.34, 0.18, 1.0)
+	var black := Color(0.025, 0.018, 0.012, 1.0)
+	if t < 0.34:
+		return cream.lerp(yellow, smoothstep(0.0, 0.34, t))
+	if t < 0.72:
+		return yellow.lerp(orange, smoothstep(0.34, 0.72, t))
+	return orange.lerp(black, smoothstep(0.72, 1.0, t))
+
+
+func _tint_burning_icecream_swirl(root: Node, burn: float) -> void:
+	if root == null:
+		return
+	if root is MeshInstance3D:
+		var mesh := root as MeshInstance3D
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.albedo_color = _icecream_burn_color(burn)
+		mat.metallic = 0.0
+		mat.roughness = lerpf(0.38, 0.9, burn)
+		mat.emission_enabled = burn < 0.45
+		mat.emission = mat.albedo_color
+		mat.emission_energy_multiplier = lerpf(0.055, 0.0, smoothstep(0.0, 0.55, burn))
+		mesh.material_override = mat
+	for child in root.get_children():
+		_tint_burning_icecream_swirl(child, burn)
 
 
 func _add_soda_face_flavor_hint(station: Node3D) -> void:
@@ -11178,10 +13512,10 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 	tag.text = str(SODA_FLAVOR_LABELS.get(flavor_id, flavor_id.to_upper()))
 	tag.position = Vector3(0.0, 0.0, 0.132)
 	tag.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	tag.font_size = 15
+	tag.font_size = 45
 	tag.pixel_size = 0.0015
 	tag.modulate = Color(1, 1, 1, 0.95)
-	tag.outline_size = 3
+	tag.outline_size = 8
 	tag.outline_modulate = Color(0, 0, 0, 0.75)
 	tank.add_child(tag)
 	soda_flavor_labels[flavor_id] = tag
@@ -11529,72 +13863,34 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	## Black-metal tube dispenser — stack matches the grabable cup size exactly.
 	var rack := Node3D.new()
 	rack.name = "CupRack"
-	## With yaw 180 on the right side, local −X faces the grill (world +X).
-	## Raised ~1ft; nudged camera-left ~4in so the tube doesn't cover cola.
-	rack.position = Vector3(-0.733, 0.645, 0.16)
+	## Top cup tube nudged camera-left of the fountain face.
+	rack.position = Vector3(-0.412, 1.046, 0.16)
 	station.add_child(rack)
 
-	## Dark black metal housing — slight polish so it still reads as metal.
-	var black_metal := _make_soda_metal_mat(Color(0.08, 0.08, 0.09), 0.94, 0.32)
-	var black_edge := _make_soda_metal_mat(Color(0.14, 0.14, 0.16), 0.9, 0.38)
-	## Thin stainless trim so it matches the fountain accents.
-	var steel_trim := _make_soda_metal_mat(Color(0.58, 0.60, 0.64), 0.95, 0.16)
+	var tube_mat := _make_soda_metal_mat(Color(0.02, 0.02, 0.025, 0.38), 0.84, 0.24)
+	tube_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	tube_mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	tube_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	## Grab cup bottom sits here; decorative nest stacks above it.
 	var stack_base := Vector3(0.0, -0.12, 0.06)
 	var nest_step := 0.0175
-	var spare_count := 7
-	var stack_top_y := stack_base.y + CUP_SHELL_H + float(spare_count) * nest_step
+	var spare_count := 3
 
-	## Wall mount plate (against soda cabinet).
-	var mount := MeshInstance3D.new()
-	mount.name = "MountPlate"
-	var mount_mesh := BoxMesh.new()
-	mount_mesh.size = Vector3(0.20, 0.50, 0.028)
-	mount.mesh = mount_mesh
-	mount.position = Vector3(0.0, 0.06, -0.055)
-	mount.material_override = black_edge
-	rack.add_child(mount)
-
-	## Open-front tube body — left / right / back rails hold the nest.
-	var tube_h := 0.42
-	var tube_y := 0.06
-	var rail_z := 0.02
-	for side_x in [-0.086, 0.086]:
-		var rail := MeshInstance3D.new()
-		rail.name = "Rail_%s" % ("L" if side_x < 0.0 else "R")
-		var rail_mesh := BoxMesh.new()
-		rail_mesh.size = Vector3(0.022, tube_h, 0.14)
-		rail.mesh = rail_mesh
-		rail.position = Vector3(side_x, tube_y, rail_z)
-		rail.material_override = black_metal
-		rack.add_child(rail)
-	var back_rail := MeshInstance3D.new()
-	back_rail.name = "BackRail"
-	var back_mesh := BoxMesh.new()
-	back_mesh.size = Vector3(0.15, tube_h, 0.022)
-	back_rail.mesh = back_mesh
-	back_rail.position = Vector3(0.0, tube_y, -0.028)
-	back_rail.material_override = black_metal
-	rack.add_child(back_rail)
-
-	## Top hood / dust cap.
-	var hood := MeshInstance3D.new()
-	hood.name = "Hood"
-	var hood_mesh := BoxMesh.new()
-	hood_mesh.size = Vector3(0.20, 0.032, 0.16)
-	hood.mesh = hood_mesh
-	hood.position = Vector3(0.0, maxf(stack_top_y, tube_y + tube_h * 0.5) + 0.02, 0.02)
-	hood.material_override = black_metal
-	rack.add_child(hood)
-	var hood_lip := MeshInstance3D.new()
-	hood_lip.name = "HoodLip"
-	var lip_mesh := BoxMesh.new()
-	lip_mesh.size = Vector3(0.188, 0.012, 0.04)
-	hood_lip.mesh = lip_mesh
-	hood_lip.position = Vector3(0.0, hood.position.y - 0.016, 0.088)
-	hood_lip.material_override = steel_trim
-	rack.add_child(hood_lip)
+	var tube := MeshInstance3D.new()
+	tube.name = "CupStackCylinder"
+	var tube_mesh := CylinderMesh.new()
+	tube_mesh.top_radius = CUP_SHELL_TOP_R + 0.018
+	tube_mesh.bottom_radius = CUP_SHELL_TOP_R + 0.018
+	tube_mesh.height = 0.70
+	tube_mesh.radial_segments = 32
+	tube_mesh.cap_top = false
+	tube_mesh.cap_bottom = false
+	tube.mesh = tube_mesh
+	tube.position = Vector3(0.0, 0.18, 0.06)
+	tube.material_override = tube_mat
+	tube.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rack.add_child(tube)
 
 	## Nested decorative cups above the grabable one — same mesh/size (no extra rim rings).
 	var stack_mat := _make_clear_cup_material(0.16)
@@ -11608,26 +13904,6 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 		spare.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		rack.add_child(spare)
 
-	## Face plaque with CUPS label (reads as part of the machine, not floating).
-	var plaque := MeshInstance3D.new()
-	plaque.name = "CupsPlaque"
-	var plaque_mesh := BoxMesh.new()
-	plaque_mesh.size = Vector3(0.11, 0.036, 0.01)
-	plaque.mesh = plaque_mesh
-	plaque.position = Vector3(0.0, hood.position.y + 0.01, 0.095)
-	plaque.material_override = steel_trim
-	rack.add_child(plaque)
-	var cup_lab := Label3D.new()
-	cup_lab.text = "CUPS"
-	cup_lab.position = Vector3(0.0, hood.position.y + 0.01, 0.102)
-	cup_lab.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	cup_lab.font_size = 16
-	cup_lab.pixel_size = 0.00115
-	cup_lab.modulate = Color(1.0, 0.96, 0.82)
-	cup_lab.outline_size = 3
-	cup_lab.outline_modulate = Color(0, 0, 0, 0.8)
-	rack.add_child(cup_lab)
-
 	## Grab volume — nest / open mouth only (keep below the syrup tanks).
 	var rack_grab := Area3D.new()
 	rack_grab.name = "CupRackGrab"
@@ -11636,10 +13912,10 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack_grab.collision_mask = 0
 	rack_grab.monitoring = false
 	rack_grab.monitorable = true
-	rack_grab.position = Vector3(0.0, -0.02, 0.10)
+	rack_grab.position = Vector3(0.0, -0.06, 0.10)
 	var rack_shape := CollisionShape3D.new()
 	var rack_box := BoxShape3D.new()
-	rack_box.size = Vector3(0.20, 0.28, 0.18)
+	rack_box.size = Vector3(0.20, 0.15, 0.18)
 	rack_shape.shape = rack_box
 	rack_grab.add_child(rack_shape)
 	rack.add_child(rack_grab)
@@ -11649,7 +13925,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = rack.to_global(stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(-0.28, 0.138, 0.54))
+		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, 0.138, 0.54))
 		cup_rest_rot = Vector3.ZERO
 	_spawn_and_bind_empty_cup()
 
@@ -11690,6 +13966,9 @@ func _clear_all_drink_cups() -> void:
 
 
 func _clear_cup_refs() -> void:
+	_cup_spout_lock = null
+	_cup_spout_unlock_grace = 0.0
+	_cup_machine_contact_grace = 0.0
 	cup_area = null
 	cup_shell_mesh = null
 	cup_liquid_mesh = null
@@ -11806,6 +14085,8 @@ func _create_drink_cup_node() -> Node3D:
 	_boost_cup_draw_order(rim)
 	root.add_child(rim)
 
+	_add_cup_burger_pals_logo(root)
+
 	var liquid_pivot := Node3D.new()
 	liquid_pivot.name = "LiquidPivot"
 	liquid_pivot.position = Vector3(0.0, CUP_LIQUID_FLOOR_Y, 0.0)
@@ -11895,6 +14176,100 @@ func _create_drink_cup_node() -> Node3D:
 	return root
 
 
+func _add_cup_burger_pals_logo(root: Node3D) -> void:
+	var tex := load(LOGO_TEX_PATH) as Texture2D
+	if tex == null:
+		return
+	var logo := MeshInstance3D.new()
+	logo.name = "BurgerPalsCupLogo"
+	logo.mesh = _make_cup_curved_label_mesh(1.462, 0.084, CUP_SHELL_H * 0.54, 16, 4, 0.0024)
+	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.23) ## half prior 0.46 — more see-through on the cup
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.roughness = 0.11
+	mat.metallic = 0.0
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 1.0
+	mat.clearcoat_roughness = 0.025
+	mat.rim_enabled = true
+	mat.rim = 0.28
+	mat.rim_tint = 0.75
+	mat.no_depth_test = true
+	mat.render_priority = CUP_DRAW_PRIORITY + 2
+	logo.material_override = mat
+	_boost_cup_draw_order(logo)
+	root.add_child(logo)
+
+	var gloss := MeshInstance3D.new()
+	gloss.name = "BurgerPalsCupLogoGloss"
+	gloss.mesh = _make_cup_curved_label_mesh(1.343, 0.028, CUP_SHELL_H * 0.64, 14, 2, 0.0028)
+	gloss.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var gloss_mat := StandardMaterial3D.new()
+	gloss_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	gloss_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gloss_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	gloss_mat.albedo_color = Color(0.82, 0.94, 1.0, 0.14)
+	gloss_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	gloss_mat.roughness = 0.03
+	gloss_mat.metallic = 0.0
+	gloss_mat.clearcoat_enabled = true
+	gloss_mat.clearcoat = 1.0
+	gloss_mat.clearcoat_roughness = 0.01
+	gloss_mat.no_depth_test = true
+	gloss_mat.render_priority = CUP_DRAW_PRIORITY + 3
+	gloss.material_override = gloss_mat
+	_boost_cup_draw_order(gloss)
+	root.add_child(gloss)
+
+
+func _make_cup_curved_label_mesh(
+	arc: float,
+	label_h: float,
+	center_y: float,
+	segs: int,
+	rings: int,
+	lift: float
+) -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var start_ang := -PI * 0.5 - arc * 0.5
+	for y_i in range(rings + 1):
+		var v := float(y_i) / float(rings)
+		var y := center_y + (v - 0.5) * label_h
+		var cup_t := clampf(y / maxf(CUP_SHELL_H, 0.001), 0.0, 1.0)
+		var radius := lerpf(CUP_SHELL_BOT_R, CUP_SHELL_TOP_R, cup_t) + lift
+		for x_i in range(segs + 1):
+			var u := float(x_i) / float(segs)
+			var ang := start_ang + u * arc
+			var radial := Vector3(cos(ang), 0.0, sin(ang))
+			verts.append(Vector3(radial.x * radius, y, radial.z * radius))
+			norms.append(radial)
+			uvs.append(Vector2(1.0 - u, 1.0 - v))
+	for y_i in rings:
+		for x_i in segs:
+			var i0 := y_i * (segs + 1) + x_i
+			var i1 := i0 + 1
+			var i2 := (y_i + 1) * (segs + 1) + x_i
+			var i3 := i2 + 1
+			indices.append_array([i0, i2, i1, i1, i2, i3])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
 func _spawn_and_bind_empty_cup() -> void:
 	if world == null:
 		return
@@ -11921,35 +14296,147 @@ func _spawn_and_bind_empty_cup() -> void:
 
 
 func _layout_parked_cups() -> void:
-	var n := parked_cups.size()
 	## Tray slots only — steel / HOLD cups keep their world seat.
-	var tray_i := 0
-	for i in n:
+	for i in parked_cups.size():
 		var c: Node3D = parked_cups[i]
 		if c == null or not is_instance_valid(c):
 			continue
 		if bool(c.get_meta("on_steel", false)):
 			continue
-		## Newest tray drinks sit camera-left; older drinks to the right.
-		## local −X = screen-left with soda yaw 180.
-		var lx := -0.28 + float(tray_i) * CUP_TRAY_SPACING
-		lx = clampf(lx, -0.32, 0.28)
-		var local := Vector3(lx, 0.148, 0.54)
+		var slot := int(c.get_meta("tray_slot", -1))
+		if slot < 0 or slot >= CUP_MAX or _tray_slot_taken(slot, c):
+			slot = _first_free_tray_slot(c)
+			c.set_meta("tray_slot", slot)
+		var local := _tray_slot_local(slot)
 		if soda_root != null and is_instance_valid(soda_root):
 			c.global_position = soda_root.to_global(local)
 		else:
 			var park := cup_rest if cup_rest != Vector3.ZERO else cup_home
 			c.global_position = park
-		c.rotation_degrees = cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
-		tray_i += 1
+		c.rotation_degrees = _cup_presented_rotation(c)
+
+
+func _cup_presented_rotation(root: Node3D = null) -> Vector3:
+	var base := cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
+	if base == Vector3.ZERO:
+		base = Vector3.ZERO
+	base.x = 0.0
+	base.z = 0.0
+	base.y += _cup_small_display_yaw(root)
+	return base
+
+
+func _cup_small_display_yaw(root: Node3D = null) -> float:
+	## The cup logo lives on local -Z, so keep set-down cups facing the cook.
+	if root == null or not is_instance_valid(root):
+		return 0.0
+	var slot := int(root.get_meta("tray_slot", -1))
+	if slot >= 0:
+		var yaw_by_slot := [-5.0, 0.0, 5.0]
+		return float(yaw_by_slot[clampi(slot, 0, yaw_by_slot.size() - 1)])
+	var nid := int(root.get_meta("cup_net_id", 0))
+	return float((abs(nid) % 3) - 1) * 4.0
+
+
+func _tray_slot_local(slot: int) -> Vector3:
+	## local -X is screen-left with soda yaw 180. Slots stay fixed once assigned.
+	var lx := CUP_TRAY_FIRST_X + float(clampi(slot, 0, CUP_MAX - 1)) * CUP_TRAY_SPACING
+	lx = clampf(lx, CUP_TRAY_FIRST_X, 0.28)
+	return Vector3(lx, 0.148, 0.54)
+
+
+func _tray_slot_taken(slot: int, ignore: Node3D = null) -> bool:
+	for c in parked_cups:
+		if c == null or not is_instance_valid(c) or c == ignore:
+			continue
+		if bool(c.get_meta("on_steel", false)):
+			continue
+		if int(c.get_meta("tray_slot", -1)) == slot:
+			return true
+	return false
+
+
+func _first_free_tray_slot(ignore: Node3D = null) -> int:
+	for slot in CUP_MAX:
+		if not _tray_slot_taken(slot, ignore):
+			return slot
+	return 0
+
+
+func _tray_slot_global(slot: int) -> Vector3:
+	var local := _tray_slot_local(slot)
+	if soda_root != null and is_instance_valid(soda_root):
+		return soda_root.to_global(local)
+	if cup_rest != Vector3.ZERO:
+		return cup_rest + Vector3(float(slot) * CUP_TRAY_SPACING, 0.0, 0.0)
+	return cup_home
+
+
+func _nearest_free_tray_slot(world_pos: Vector3, max_dist: float, ignore: Node3D = null) -> int:
+	var best_slot := -1
+	var best_d := max_dist
+	for slot in CUP_MAX:
+		if _tray_slot_taken(slot, ignore):
+			continue
+		var p := _tray_slot_global(slot)
+		var d := Vector2(world_pos.x - p.x, world_pos.z - p.z).length()
+		if d <= best_d:
+			best_d = d
+			best_slot = slot
+	return best_slot
+
+
+func _cup_soft_lock_tray_target(hit: Vector3, hold_y: float) -> Vector3:
+	if cup_root == null or not is_instance_valid(cup_root):
+		return hit
+	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
+		return hit
+	var slot := _nearest_free_tray_slot(hit, CUP_TRAY_MAGNET_RADIUS, cup_root)
+	if slot < 0:
+		return hit
+	var target := _tray_slot_global(slot)
+	target.y = hold_y
+	var d := Vector2(hit.x - target.x, hit.z - target.z).length()
+	var amt := clampf(1.0 - d / CUP_TRAY_MAGNET_RADIUS, 0.0, 1.0)
+	amt = amt * amt * CUP_TRAY_MAGNET_PULL
+	return hit.lerp(target, amt)
+
+
+func _assign_free_tray_slot(c: Node3D) -> int:
+	if c == null or not is_instance_valid(c):
+		return 0
+	var slot := int(c.get_meta("tray_slot", -1))
+	if slot < 0 or slot >= CUP_MAX or _tray_slot_taken(slot, c):
+		slot = _first_free_tray_slot(c)
+	c.set_meta("tray_slot", slot)
+	return slot
+
+
+func _assign_preferred_or_free_tray_slot(c: Node3D) -> int:
+	if c == null or not is_instance_valid(c):
+		return 0
+	var slot := _nearest_free_tray_slot(c.global_position, CUP_TRAY_RELEASE_RADIUS, c)
+	if slot < 0:
+		slot = int(c.get_meta("tray_slot", -1))
+	if slot < 0 or slot >= CUP_MAX or _tray_slot_taken(slot, c):
+		slot = _first_free_tray_slot(c)
+	c.set_meta("tray_slot", slot)
+	return slot
+
+
+func _clear_tray_slot(c: Node3D) -> void:
+	if c != null and is_instance_valid(c) and c.has_meta("tray_slot"):
+		c.remove_meta("tray_slot")
 
 
 func _filled_drink_count() -> int:
 	var n := 0
 	for c in parked_cups:
-		if c != null and is_instance_valid(c) and float(c.get_meta("soda_fill", 0.0)) >= 0.82:
+		if c != null and is_instance_valid(c) and not bool(c.get_meta("serving", false)) \
+				and float(c.get_meta("soda_fill", 0.0)) >= 0.82:
 			n += 1
-	if cup_root != null and is_instance_valid(cup_root) and cup_soda_fill >= 0.82:
+	if cup_root != null and is_instance_valid(cup_root) and not bool(cup_root.get_meta("serving", false)) \
+			and cup_soda_fill >= 0.82:
 		n += 1
 	return n
 
@@ -11959,15 +14446,19 @@ func _find_ready_drink_for_soda(soda_id: String) -> Node3D:
 	if want == "":
 		return null
 	if cup_root != null and is_instance_valid(cup_root) and not cup_held \
+			and not bool(cup_root.get_meta("serving", false)) \
 			and cup_soda_fill >= 0.82 and cup_flavor == want:
 		return cup_root
 	for c in parked_cups:
 		if c == null or not is_instance_valid(c):
 			continue
+		if bool(c.get_meta("serving", false)):
+			continue
 		if float(c.get_meta("soda_fill", 0.0)) >= 0.82 and str(c.get_meta("flavor", "")) == want:
 			return c
 	## Held cup still counts for readiness while pouring/checking tickets.
 	if cup_root != null and is_instance_valid(cup_root) \
+			and not bool(cup_root.get_meta("serving", false)) \
 			and cup_soda_fill >= 0.82 and cup_flavor == want:
 		return cup_root
 	return null
@@ -11980,9 +14471,12 @@ func _count_ready_drinks_for_flavor(flavor: String) -> int:
 	for c in parked_cups:
 		if c == null or not is_instance_valid(c):
 			continue
+		if bool(c.get_meta("serving", false)):
+			continue
 		if float(c.get_meta("soda_fill", 0.0)) >= 0.82 and str(c.get_meta("flavor", "")) == flavor:
 			n += 1
-	if cup_root != null and is_instance_valid(cup_root) and cup_soda_fill >= 0.82 and cup_flavor == flavor:
+	if cup_root != null and is_instance_valid(cup_root) and not bool(cup_root.get_meta("serving", false)) \
+			and cup_soda_fill >= 0.82 and cup_flavor == flavor:
 		n += 1
 	return n
 
@@ -12019,6 +14513,42 @@ func _customer_can_claim_soda(customer: Node3D, soda_id: String) -> bool:
 	return idx >= 0 and idx < ready
 
 
+func _melting_cup_can_rescue(root: Node3D) -> bool:
+	if root == null or not is_instance_valid(root):
+		return false
+	for item in melting_cups:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		if item.get("root") == root and str(item.get("phase", "")) == "rescue":
+			return true
+	return false
+
+
+func _try_rescue_melting_cup(root: Node3D) -> bool:
+	if root == null or not is_instance_valid(root):
+		return false
+	for i in range(melting_cups.size()):
+		var item: Dictionary = melting_cups[i]
+		if item.get("root") != root or str(item.get("phase", "")) != "rescue":
+			continue
+		var sm = item.get("smoke")
+		if sm != null and is_instance_valid(sm):
+			sm.queue_free()
+		var bub = item.get("bubbles")
+		if bub != null and is_instance_valid(bub):
+			bub.queue_free()
+		var crust = item.get("crust_root")
+		if crust != null and is_instance_valid(crust):
+			crust.queue_free()
+		root.scale = Vector3.ONE
+		root.set_meta("on_steel", false)
+		root.set_meta("steel_hold", false)
+		melting_cups.remove_at(i)
+		_stop_cup_burn_hiss_if_idle()
+		return true
+	return false
+
+
 func _nearest_cup_at_screen(screen_pos: Vector2) -> Node3D:
 	if camera == null:
 		return null
@@ -12030,6 +14560,12 @@ func _nearest_cup_at_screen(screen_pos: Vector2) -> Node3D:
 	for c in parked_cups:
 		if c != null and is_instance_valid(c):
 			candidates.append(c)
+	for item in melting_cups:
+		if typeof(item) != TYPE_DICTIONARY or str(item.get("phase", "")) != "rescue":
+			continue
+		var rescue_root: Node3D = item.get("root") as Node3D
+		if rescue_root != null and is_instance_valid(rescue_root):
+			candidates.append(rescue_root)
 	for c in candidates:
 		var d := screen_pos.distance_to(camera.unproject_position(c.global_position + Vector3(0, 0.04, 0)))
 		if d < best_d:
@@ -12053,7 +14589,7 @@ func _nearest_cup_at_screen(screen_pos: Vector2) -> Node3D:
 	if col == null:
 		return null
 	var root: Node = col.get_parent()
-	if root is Node3D and (root == cup_root or parked_cups.has(root)):
+	if root is Node3D and (root == cup_root or parked_cups.has(root) or _melting_cup_can_rescue(root as Node3D)):
 		return root as Node3D
 	return null
 
@@ -12065,6 +14601,7 @@ func _promote_cup_to_active(root: Node3D) -> void:
 	if parked_cups.has(root):
 		_mp_send_cup_unpark(root)
 		parked_cups.erase(root)
+		_clear_tray_slot(root)
 		_layout_parked_cups()
 	root.set_meta("on_steel", false)
 	root.set_meta("steel_hold", false)
@@ -12078,7 +14615,8 @@ func _promote_cup_to_active(root: Node3D) -> void:
 			_save_active_cup_meta()
 			cup_root.set_meta("on_steel", false)
 			cup_root.set_meta("steel_hold", false)
-			parked_cups.push_front(cup_root)
+			_assign_free_tray_slot(cup_root)
+			parked_cups.append(cup_root)
 			_layout_parked_cups()
 			_mp_send_cup_park(cup_root)
 		_clear_cup_refs()
@@ -12836,8 +15374,8 @@ func _cursor_near_cup_rack(screen_pos: Vector2) -> bool:
 	if camera == null or cup_home == Vector3.ZERO:
 		return false
 	## Aim at the nest mouth — not high into the syrup tanks.
-	var rack_pt := camera.unproject_position(cup_home + Vector3(0.0, 0.06, 0.04))
-	return screen_pos.distance_to(rack_pt) < 70.0
+	var rack_pt := camera.unproject_position(cup_home + Vector3(0.0, 0.10, 0.04))
+	return screen_pos.distance_to(rack_pt) < 96.0
 
 
 func _cup_rack_ray_hit(screen_pos: Vector2) -> bool:
@@ -12884,6 +15422,7 @@ func _begin_cup_hold() -> bool:
 			target = cup_root
 	if target == null or not is_instance_valid(target):
 		return false
+	var rescued_from_grill := _try_rescue_melting_cup(target)
 	if target != cup_root:
 		_promote_cup_to_active(target)
 	## Empty cup sitting in the dispenser — pull it out with a stack-to-hand lerp.
@@ -12892,6 +15431,7 @@ func _begin_cup_hold() -> bool:
 		if draw_from_stack or near_home:
 			draw_from_stack = true
 	cup_held = true
+	_clear_tray_slot(cup_root)
 	_cup_prev_pos = cup_root.global_position
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
@@ -12900,6 +15440,10 @@ func _begin_cup_hold() -> bool:
 	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
+	_cup_machine_contact_grace = 0.0
+	_cup_spout_unlock_grace = 0.0
+	if rescued_from_grill:
+		_flash("Saved the cup!", Color("C5E1A5"))
 	## Only reset foam when picking up an empty cup.
 	if cup_soda_fill < 0.05:
 		_cup_fizz = 0.0
@@ -12912,6 +15456,8 @@ func _begin_cup_hold() -> bool:
 	if cup_area:
 		cup_area.input_ray_pickable = false
 	if game_audio:
+		if draw_from_stack and game_audio.has_method("play_rack_take"):
+			game_audio.play_rack_take()
 		game_audio.play_click()
 	_flash("Hold under SODA or ICE — release onto the tray", Color("80DEEA"))
 	if draw_from_stack:
@@ -12956,16 +15502,21 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 	## Smoothstep then ease-out so it pops free, then settles into the hand.
 	var s := u * u * (3.0 - 2.0 * u)
 	var e := 1.0 - pow(1.0 - s, 2.2)
-	var seat := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	## Soda face is local +Z; with yaw 180 that is toward the cook — never world +Z (behind the cabinet).
 	var face := Vector3(0.0, 0.0, -1.0)
 	if soda_root != null and is_instance_valid(soda_root):
 		face = soda_root.global_transform.basis.z.normalized()
+	var hand := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
+	var draw_target := _cup_draw_from + face * 0.34 + Vector3(-0.08, -0.22, 0.0)
+	if hand != Vector3.ZERO:
+		draw_target = draw_target.lerp(hand + face * 0.10 + Vector3(0.0, -0.04, 0.0), 0.58)
+	draw_target = _resolve_cup_against_soda(draw_target)
+	var seat := draw_target
 	if seat == Vector3.ZERO:
 		seat = _cup_draw_from + face * 0.18 + Vector3(0.0, 0.10, 0.0)
 	## Quadratic arc: lift out of the open tube face, then into the cursor.
 	var mid := _cup_draw_from.lerp(seat, 0.45)
-	mid += face * 0.16 + Vector3(0.0, 0.12, 0.0)
+	mid += face * 0.22 + Vector3(0.0, 0.06, 0.0)
 	var omt := 1.0 - e
 	var pos := omt * omt * _cup_draw_from + 2.0 * omt * e * mid + e * e * seat
 	var prev := cup_root.global_position
@@ -12988,6 +15539,7 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		_cup_tilt = Vector2.ZERO
 		## Soft collide once settled in-hand so it doesn't rest inside metal.
 		cup_root.global_position = _resolve_cup_against_soda(cup_root.global_position)
+		_cup_prev_pos = cup_root.global_position
 
 
 func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
@@ -13009,26 +15561,65 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	hit.x = clampf(hit.x, -2.20, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.20)
 	hit.y = hold_y
-	## Soft snap under a nozzle — seat the cup low so the rim sits below the tip.
-	var best_tip: Vector3 = Vector3.ZERO
+	var locked := _cup_soft_lock_spout_target(hit, hold_y)
+	return _cup_soft_lock_tray_target(locked, hold_y)
+
+
+func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
+	## Hysteresis: once the cup catches a nozzle, keep it there until the cursor clearly leaves.
+	var lock_acquire := 0.16
+	var lock_release := 0.24
+	var lock_tight := 0.052
+	var candidates: Array[Node3D] = []
+	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
+		candidates.append(soda_spout_marker)
+	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
+		candidates.append(ice_spout_marker)
+	if candidates.is_empty():
+		_cup_spout_lock = null
+		_cup_spout_unlock_grace = 0.20
+		_cup_vel = Vector3.ZERO
+		if cup_root != null and is_instance_valid(cup_root):
+			_cup_prev_pos = cup_root.global_position
+		return hit
+
+	var locked_valid := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
+	if locked_valid:
+		var locked_target := _cup_target_for_spout(_cup_spout_lock)
+		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
+		if locked_d <= lock_release:
+			var tight := clampf(1.0 - locked_d / lock_release, 0.0, 1.0)
+			var pull := lerpf(0.48, 0.72, tight * tight)
+			if locked_d <= lock_tight:
+				pull = 0.82
+			return hit.lerp(locked_target, pull)
+		_cup_spout_lock = null
+
+	var best_node: Node3D = null
+	var best_target := Vector3.ZERO
 	var best_d := CUP_MAGNET_RADIUS
-	var seat_y := hold_y
-	for tip in [soda_spout_marker, ice_spout_marker]:
-		if tip == null or not is_instance_valid(tip):
-			continue
-		var tip_p: Vector3 = tip.global_position
-		var fill_y := tip_p.y - CUP_SHELL_H - 0.06 ## rim ~6cm under the pour tip
-		var tpos := Vector3(tip_p.x, fill_y, tip_p.z)
+	for tip in candidates:
+		var tpos := _cup_target_for_spout(tip)
 		var d := Vector2(hit.x - tpos.x, hit.z - tpos.z).length()
 		if d < best_d:
 			best_d = d
-			best_tip = tpos
-			seat_y = fill_y
-	if best_tip != Vector3.ZERO:
-		var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0) * 0.45
-		hit = hit.lerp(best_tip, pull)
-		hit.y = lerpf(hold_y, seat_y, pull)
-	return hit
+			best_node = tip
+			best_target = tpos
+	if best_node == null:
+		return hit
+	if best_d <= lock_acquire:
+		_cup_spout_lock = best_node
+	var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0)
+	pull = pull * pull * 0.38
+	var out := hit.lerp(best_target, pull)
+	out.y = lerpf(hold_y, best_target.y, pull)
+	return out
+
+
+func _cup_target_for_spout(tip: Node3D) -> Vector3:
+	var tip_p := tip.global_position
+	var fill_y := tip_p.y - CUP_SHELL_H - 0.06 ## rim ~6cm under the pour tip
+	return Vector3(tip_p.x, fill_y, tip_p.z)
 
 
 func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
@@ -13041,6 +15632,8 @@ func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
 func _update_held_cup(delta: float) -> void:
 	if cup_root == null or camera == null:
 		return
+	_cup_spout_unlock_grace = maxf(0.0, _cup_spout_unlock_grace - delta)
+	_cup_machine_contact_grace = maxf(0.0, _cup_machine_contact_grace - delta)
 	if cup_drawing:
 		_update_cup_draw_from_rack(delta)
 		_update_cup_slosh(delta)
@@ -13049,17 +15642,25 @@ func _update_held_cup(delta: float) -> void:
 		if mp_enabled:
 			_mp_send_held_cup_pose(false)
 		return
-	var seat := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
+	var seat := Vector3.ZERO
+	if _kb_force_cup_seat != Vector3.ZERO:
+		seat = _kb_force_cup_seat
+	else:
+		seat = _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	if seat != Vector3.ZERO:
 		var prev := cup_root.global_position
 		## Weight: fuller drinks lag the cursor a bit — empties stay snappy.
 		var heavy := lerpf(1.0, 0.58, clampf(cup_soda_fill, 0.0, 1.0))
 		var follow := clampf(delta * CUP_FOLLOW_RATE * heavy, 0.0, 1.0)
+		if _cup_spout_unlock_grace > 0.0:
+			follow *= 0.42
 		## Soft ease-out so motion isn't robotic.
 		follow = follow * (2.0 - follow)
 		cup_root.global_position = prev.lerp(seat, follow)
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
+			if _cup_spout_unlock_grace > 0.0:
+				_cup_vel *= 0.18
 		_cup_prev_pos = cup_root.global_position
 	## Inertia tilt: whip one way banks the cup; opposite motion corrects it.
 	var kick := Vector2(-_cup_vel.x, _cup_vel.z) * CUP_TILT_ACCEL * delta
@@ -13070,12 +15671,26 @@ func _update_held_cup(delta: float) -> void:
 	if signf(kick.y) != 0.0 and signf(_cup_tilt.y) != 0.0 and signf(kick.y) != signf(_cup_tilt.y):
 		_cup_tilt.y *= maxf(0.0, 1.0 - delta * 5.0)
 	_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * CUP_SLOSH_RETURN, 0.0, 1.0))
+	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
+		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
+		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 6.0, 0.0, 1.0))
+	if _cup_machine_contact_grace > 0.0:
+		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 10.0, 0.0, 1.0))
+		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 12.0, 0.0, 1.0))
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
 	## Tip lifts the base so a leaned cup doesn't dig through the drip tray.
 	var tip_amt := (absf(_cup_tilt.x) + absf(_cup_tilt.y)) / maxf(CUP_TILT_MAX, 1.0)
 	cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.95)
-	cup_root.global_position = _resolve_cup_against_soda(cup_root.global_position)
+	var can_reach_customer := cup_soda_fill >= 0.82 and cup_flavor != "" \
+		and _find_waiting_customer_at_mouth(get_viewport().get_mouse_position(), CUP_MOUTH_HAND_PX) != null
+	var can_use_fill_bay := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
+	var before_resolve := cup_root.global_position
+	cup_root.global_position = _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
+	if not can_use_fill_bay and cup_root.global_position.distance_to(before_resolve) > 0.004:
+		_cup_machine_contact_grace = 0.22
+		_cup_vel *= 0.15
+		_cup_prev_pos = cup_root.global_position
 	cup_root.rotation_degrees = Vector3(
 		-8.0 + _cup_tilt.y,
 		12.0,
@@ -13098,17 +15713,21 @@ func _update_held_cup(delta: float) -> void:
 		_try_hand_drink_to_customer_face(get_viewport().get_mouse_position())
 
 
-func _resolve_cup_against_soda(world_pos: Vector3) -> Vector3:
-	## Push the cup out of soda-machine colliders so it can't clip through metal.
-	if soda_root == null or not is_instance_valid(soda_root) or soda_colliders.is_empty():
+func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = false) -> Vector3:
+	## Keep hand-held cups on the cook-facing side of the soda / soft-serve machines.
+	if allow_customer_reach:
 		return world_pos
+	var clamped := _clamp_cup_to_machine_front(world_pos, soda_root, 0.54, 1.24, 0.37)
+	clamped = _clamp_cup_to_machine_front(clamped, icecream_root, 0.184, 0.78, 0.215)
+	if soda_root == null or not is_instance_valid(soda_root) or soda_colliders.is_empty():
+		return clamped
 	## Match the real plastic shell (old half-size was too small → dig-ins).
 	var cup_half := Vector3(
 		CUP_SHELL_TOP_R + 0.014,
 		CUP_SHELL_H * 0.5 + 0.006,
 		CUP_SHELL_TOP_R + 0.014
 	)
-	var cup_center_world := world_pos + Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
+	var cup_center_world := clamped + Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	var inv := soda_root.global_transform.affine_inverse()
 	var resolved: Vector3 = inv * cup_center_world
 	for _pass in range(5):
@@ -13144,6 +15763,29 @@ func _resolve_cup_against_soda(world_pos: Vector3) -> Vector3:
 		if not moved:
 			break
 	var out_center: Vector3 = soda_root.global_transform * resolved
+	var out := out_center - Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
+	out = _clamp_cup_to_machine_front(out, soda_root, 0.54, 1.24, 0.37)
+	out = _clamp_cup_to_machine_front(out, icecream_root, 0.184, 0.78, 0.215)
+	return out
+
+
+func _clamp_cup_to_machine_front(
+	world_pos: Vector3,
+	machine: Node3D,
+	half_x: float,
+	height: float,
+	front_z: float
+) -> Vector3:
+	if machine == null or not is_instance_valid(machine):
+		return world_pos
+	var cup_center_world := world_pos + Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
+	var local := machine.to_local(cup_center_world)
+	var cup_r := CUP_SHELL_TOP_R + 0.018
+	var in_width := absf(local.x) <= half_x + cup_r
+	var in_height := local.y >= -0.06 and local.y <= height
+	if in_width and in_height:
+		local.z = maxf(local.z, front_z + cup_r)
+	var out_center := machine.to_global(local)
 	return out_center - Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 
 
@@ -13185,7 +15827,8 @@ func _update_cup_slosh(delta: float) -> void:
 	_cup_splash_cd = maxf(0.0, _cup_splash_cd - delta)
 	var speed := _cup_vel.length()
 	var lean := maxf(_cup_surface_slosh.length(), _cup_tilt.length())
-	if cup_soda_fill > 0.05 and _cup_splash_cd <= 0.0 \
+	if cup_soda_fill > 0.05 and _cup_splash_cd <= 0.0 and _cup_spout_unlock_grace <= 0.0 \
+			and _cup_machine_contact_grace <= 0.0 \
 			and (speed > CUP_SPLASH_SPEED or lean > 26.0):
 		_cup_splash_cd = 0.22
 		_cup_surface_wobble = 1.0
@@ -13298,6 +15941,8 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 				if before < 1.0 and cup_soda_fill >= 1.0:
 					_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
 					_refresh_ticket_checkmarks()
+				if before < 0.82 and cup_soda_fill >= 0.82:
+					call_deferred("_try_auto_hand_finished_soda")
 			elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
 				_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 				_hide_soda_stream()
@@ -14312,6 +16957,7 @@ func _place_cup_on_steel() -> void:
 	var stashed := cup_root
 	stashed.set_meta("on_steel", true)
 	stashed.set_meta("steel_hold", on_hold)
+	_clear_tray_slot(stashed)
 	## Fresh 30s foam fade clock the moment the drink sits idle.
 	if float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
 		stashed.set_meta("foam_linger", CUP_FOAM_LINGER)
@@ -14320,14 +16966,14 @@ func _place_cup_on_steel() -> void:
 		stashed.set_meta("fizz_poofing", false)
 		stashed.set_meta("fizz_poof", 0.0)
 	stashed.global_position = drop
-	stashed.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
+	stashed.rotation_degrees = _cup_presented_rotation(stashed)
 	if cup_area != null and is_instance_valid(cup_area):
 		cup_area.input_ray_pickable = true
 	## Detach grab area ref before clearing active cup.
 	var area := stashed.get_node_or_null("CupGrab") as Area3D
 	if area:
 		area.input_ray_pickable = true
-	parked_cups.push_front(stashed)
+	parked_cups.append(stashed)
 	_clear_cup_refs()
 	cup_root = null
 	cup_flavor = ""
@@ -14375,6 +17021,44 @@ func _ignite_unsafe_steel_cups() -> void:
 		_refresh_ticket_checkmarks()
 
 
+func _ignite_unsafe_steel_icecream() -> void:
+	## Burner just came on — melt a cone that was set on cold cook steel.
+	if icecream_cone_held:
+		return
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	## Cone nest hangs over the grill XZ — don't yank the rack cone onto the steel.
+	if _icecream_cone_is_shelved():
+		return
+	if not _is_on_grill_surface(icecream_cone_root.global_position):
+		return
+	## Must be sitting on the plate, not hovering above it on the machine.
+	if icecream_cone_root.global_position.y > GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.08:
+		return
+	if _is_in_warmer_zone(icecream_cone_root.global_position):
+		return
+	_begin_icecream_melt_on_grill()
+
+
+func _icecream_cone_is_shelved() -> bool:
+	## Idle cone still on the nest / counter rest (burner ignite must ignore these).
+	if icecream_cone_held:
+		return false
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return true
+	var p := icecream_cone_root.global_position
+	if icecream_cone_home != Vector3.ZERO and p.distance_to(icecream_cone_home) < 0.28:
+		return true
+	if icecream_cone_rest != Vector3.ZERO and p.distance_to(icecream_cone_rest) < 0.22:
+		return true
+	## Sitting up on the soft-serve cabinet (overhangs grill XZ).
+	if icecream_root != null and is_instance_valid(icecream_root):
+		var local := icecream_root.to_local(p)
+		if absf(local.x) < 0.55 and local.z > -0.12 and local.z < 0.58 and local.y > 0.02:
+			return true
+	return false
+
+
 func _customer_soda_handed(customer: Node3D) -> bool:
 	return customer != null and is_instance_valid(customer) and bool(customer.get_meta("soda_handed", false))
 
@@ -14383,6 +17067,20 @@ func _mark_customer_soda_handed(customer: Node3D, handed: bool = true) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
 	customer.set_meta("soda_handed", handed)
+
+
+func _customer_icecream_handed(customer: Node3D) -> bool:
+	return customer != null and is_instance_valid(customer) and bool(customer.get_meta("icecream_handed", false))
+
+
+func _mark_customer_icecream_handed(customer: Node3D, handed: bool = true) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	customer.set_meta("icecream_handed", handed)
+
+
+func _customer_wants_icecream(customer: Node3D) -> bool:
+	return customer != null and is_instance_valid(customer) and GameDataScript.wants_icecream(customer.order)
 
 
 func _customer_wants_flavor(customer: Node3D, flavor: String) -> bool:
@@ -14435,6 +17133,52 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 		return true
 	_begin_early_drink_hand(cust, cup_flavor)
 	return true
+
+
+func _try_auto_hand_finished_soda() -> void:
+	if not playing or _serve_fly_busy:
+		return
+	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
+		return
+	if cup_soda_fill < 0.82 or cup_flavor == "":
+		return
+	if mp_enabled and not NetManager.is_host():
+		return
+	var cust := _find_waiting_customer_for_soda_flavor(cup_flavor)
+	if cust == null:
+		return
+	_try_hand_drink_to_customer_face(get_viewport().get_mouse_position())
+	if cup_held:
+		if GameDataScript.is_soda_only_order(cust.order):
+			selected_customer = cust
+			_highlight_tickets()
+			cup_held = false
+			_hide_soda_stream()
+			if game_audio and game_audio.has_method("set_ice_grind"):
+				game_audio.set_ice_grind(false)
+			_cup_pouring = false
+			_begin_soda_only_serve(cust)
+		else:
+			_begin_early_drink_hand(cust, cup_flavor)
+
+
+func _find_waiting_customer_for_soda_flavor(flavor: String) -> Node3D:
+	if flavor == "":
+		return null
+	if selected_customer != null and is_instance_valid(selected_customer) \
+			and bool(selected_customer.get("is_waiting")) \
+			and not bool(selected_customer.get("is_leaving")) \
+			and _customer_wants_flavor(selected_customer, flavor) \
+			and not _customer_soda_handed(selected_customer):
+		return selected_customer
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_waiting")) or bool(c.get("is_leaving")):
+			continue
+		if _customer_wants_flavor(c, flavor) and not _customer_soda_handed(c):
+			return c
+	return null
 
 
 func _find_waiting_customer_near_cup(cup_pos: Vector3) -> Node3D:
@@ -14508,6 +17252,7 @@ func _complete_early_drink_hand(customer: Node3D, flavor: String, consume_local:
 	if not _mp_applying:
 		var lab: String = str(GameDataScript.INGREDIENT_LABELS.get("soda_%s" % flavor, "Drink")).to_upper()
 		_flash("%s ✓ — burger still cooking" % lab, Color("A5D6A7"))
+	call_deferred("_try_auto_serve")
 
 
 func _trash_held_cup() -> void:
@@ -14613,7 +17358,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		if _tray_parked_count() >= CUP_MAX:
 			## Already max parked — keep this as the working cup on the tray.
 			var park_full := cup_rest if cup_rest != Vector3.ZERO else cup_home
-			var park_full_rot := cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
+			var park_full_rot := _cup_presented_rotation(cup_root)
 			if cup_root != null and is_instance_valid(cup_root):
 				cup_root.rotation_degrees = park_full_rot
 			_tween_tool_to_wall(cup_root, park_full, park_full_rot, Vector3.ONE, 0.28, func() -> void:
@@ -14631,6 +17376,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		var stashed := cup_root
 		stashed.set_meta("on_steel", false)
 		stashed.set_meta("steel_hold", false)
+		_assign_preferred_or_free_tray_slot(stashed)
 		## Fresh 30s foam fade clock the moment the drink sits idle on the tray.
 		if float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
 			stashed.set_meta("foam_linger", CUP_FOAM_LINGER)
@@ -14638,7 +17384,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 			stashed.set_meta("fizz_peak", false)
 			stashed.set_meta("fizz_poofing", false)
 			stashed.set_meta("fizz_poof", 0.0)
-		parked_cups.push_front(stashed)
+		parked_cups.append(stashed)
 		_clear_cup_refs()
 		cup_root = null
 		cup_flavor = ""
@@ -14660,7 +17406,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		return
 
 	var park := cup_rest if cup_rest != Vector3.ZERO else cup_home
-	var park_rot := cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
+	var park_rot := _cup_presented_rotation(cup_root)
 	## Sit upright on the tray surface (no carry lean).
 	if cup_root != null and is_instance_valid(cup_root):
 		cup_root.rotation_degrees = park_rot
@@ -15313,6 +18059,48 @@ func _build_cutting_board_prop() -> void:
 	root.add_child(groove)
 	grill_root.add_child(root)
 	build_cutting_board = root
+	_build_board_hint_label()
+
+
+func _build_board_hint_label() -> void:
+	if build_board_hint_label != null and is_instance_valid(build_board_hint_label):
+		build_board_hint_label.queue_free()
+	build_board_hint_label = null
+	if grill_root == null or build_cutting_board == null or not is_instance_valid(build_cutting_board):
+		return
+	var lab := Label3D.new()
+	lab.name = "BuildBoardHint"
+	lab.text = BUILD_TITLE_TEXT
+	lab.font_size = 18
+	lab.modulate = Color(1.0, 0.92, 0.22, 1.0)
+	lab.outline_modulate = Color(0.0, 0.0, 0.0, 1.0)
+	lab.outline_size = 4
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lab.no_depth_test = true
+	lab.fixed_size = true
+	lab.pixel_size = 0.0016
+	lab.position = Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.05)
+	lab.visible = true
+	build_cutting_board.add_child(lab)
+	build_board_hint_label = lab
+	_refresh_build_board_hint()
+
+
+func _refresh_build_board_hint() -> void:
+	if build_board_hint_label == null or not is_instance_valid(build_board_hint_label):
+		return
+	if not playing:
+		build_board_hint_label.visible = false
+		return
+	if stations.size() <= STATION_CRAFT:
+		build_board_hint_label.visible = false
+		return
+	var st: Dictionary = stations[STATION_CRAFT]
+	var items: Array = st.get("items", [])
+	var patties: Array = st.get("patties", [])
+	build_board_hint_label.visible = items.is_empty() and patties.is_empty() and spatula_patty == null
 
 
 func _build_cheese_station_prop() -> void:
@@ -15324,6 +18112,9 @@ func _build_cheese_station_prop() -> void:
 	cheese_stack_anchor = null
 	cheese_stack_top = null
 	cheese_pile_slices.clear()
+	bun_pile_root = null
+	bun_pile_anchors.clear()
+	bun_pile_sprites.clear()
 	if grill_root == null:
 		return
 	var board_c := _cutting_board_world_center()
@@ -15398,7 +18189,9 @@ func _build_cheese_station_prop() -> void:
 	grill_root.add_child(root)
 	cheese_station_root = root
 	cheese_station_area = area
+	_build_bun_inventory_piles(root)
 	_refresh_cheese_piles()
+	_refresh_bun_inventory_piles()
 
 
 func _cheese_visual_stock_count() -> int:
@@ -15430,6 +18223,110 @@ func _refresh_cheese_piles() -> void:
 		slice.visible = on
 		if on:
 			cheese_stack_top = slice
+
+
+func _build_bun_inventory_piles(parent: Node3D) -> void:
+	bun_pile_root = Node3D.new()
+	bun_pile_root.name = "BunInventoryPiles"
+	parent.add_child(bun_pile_root)
+	bun_pile_root.visible = false
+	bun_pile_anchors.clear()
+	bun_pile_sprites.clear()
+	return
+	var defs := [
+		{"id": "bun_bottom", "pos": Vector3(-0.005, -0.074, 0.360), "yaw": -2.0, "pair_y": 0.0, "pair_z": 0.022, "offset": Vector3.ZERO, "scale_mul": 1.0, "priority": 1},
+		{"id": "bun_top", "pos": Vector3(-0.005, -0.074, 0.360), "yaw": 2.0, "pair_y": 0.045, "pair_z": -0.024, "offset": Vector3(-0.016, 0.0, 0.0), "scale_mul": 1.04, "priority": 0},
+	]
+	for def in defs:
+		var id := str(def["id"])
+		var anchor := Node3D.new()
+		anchor.name = "%sPileAnchor" % id.capitalize()
+		anchor.position = def["pos"]
+		bun_pile_root.add_child(anchor)
+		bun_pile_anchors[id] = anchor
+		var sprites: Array = []
+		for i in BUN_PILE_MAX_EACH:
+			var spr := Sprite3D.new()
+			spr.name = "%sSprite_%02d" % [id, i]
+			spr.texture = FoodSpritesScript.get_tex(id)
+			spr.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+			spr.double_sided = true
+			spr.pixel_size = 0.00150
+			spr.shaded = false
+			spr.alpha_cut = SpriteBase3D.ALPHA_CUT_OPAQUE_PREPASS
+			spr.modulate = Color(0.90, 0.84, 0.72, 0.97)
+			var col := i % 4
+			var row := int(i / 4)
+			var stack_y := float(row) * 0.056 + float(def["pair_y"])
+			var stack_z := -float(row) * 0.026 + float(def["pair_z"]) + float(col % 2) * 0.004
+			spr.position = Vector3((float(col) - 1.5) * 0.165, stack_y, stack_z) + Vector3(def["offset"])
+			spr.rotation_degrees = Vector3(-36.0, float(def["yaw"]) + (float(col) - 1.5) * 1.1, 0.0)
+			spr.render_priority = int(def["priority"]) + row * 3
+			var scale_mul := float(def["scale_mul"])
+			spr.scale = Vector3(0.70, 0.92, 0.70) * scale_mul
+			spr.visible = false
+			anchor.add_child(spr)
+			sprites.append(spr)
+		bun_pile_sprites[id] = sprites
+
+
+func _bun_visual_stock_count(id: String) -> int:
+	if id == "bun_bottom":
+		return maxi(0, int(supply_stock.get(id, 0)))
+	return maxi(0, int(supply_stock.get(id, 0)))
+
+
+func _refresh_bun_inventory_piles() -> void:
+	if bun_pile_sprites.is_empty():
+		return
+	for id in ["bun_bottom", "bun_top"]:
+		var sprites: Array = bun_pile_sprites.get(id, [])
+		var show_n := mini(_bun_visual_stock_count(id), sprites.size())
+		for i in sprites.size():
+			var spr: Sprite3D = sprites[i]
+			if spr == null or not is_instance_valid(spr):
+				continue
+			spr.visible = i < show_n
+
+
+func _bun_pile_home_world(id: String) -> Vector3:
+	var anchor = bun_pile_anchors.get(id, null)
+	if anchor != null and is_instance_valid(anchor):
+		var shown := mini(_bun_visual_stock_count(id), BUN_PILE_MAX_EACH)
+		var rows := int(ceil(float(shown) / 4.0))
+		var lift := 0.030 + float(rows) * 0.012
+		return anchor.global_position + Vector3(0.0, lift, 0.0)
+	return _cheese_stack_home_world() + Vector3(0.0, 0.02, 0.10)
+
+
+func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAFT) -> void:
+	if world == null or camera == null:
+		return
+	if id != "bun_bottom" and id != "bun_top":
+		return
+	var start := _bun_pile_home_world(id)
+	var end := _cutting_board_world_center() + Vector3(-0.03, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.02)
+	if station_index >= 0 and station_index < STATION_COUNT:
+		end = _cutting_board_world_center() + Vector3(-0.03 + float(station_index - STATION_CRAFT) * 0.06, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.02)
+	var spr := Sprite3D.new()
+	spr.name = "%sFlyToBuild" % id.capitalize()
+	spr.texture = FoodSpritesScript.get_tex(id)
+	spr.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	spr.double_sided = true
+	spr.pixel_size = 0.00175
+	spr.shaded = true
+	spr.modulate = Color(1, 1, 1, 0.98)
+	spr.global_position = start
+	spr.rotation_degrees = Vector3(-66.0, -6.0, 0.0)
+	world.add_child(spr)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(spr, "global_position", end, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(spr, "scale", Vector3(1.12, 1.12, 1.12), 0.14).set_trans(Tween.TRANS_BACK)
+	tw.tween_property(spr, "rotation_degrees:z", 16.0 if id == "bun_top" else -12.0, 0.34)
+	tw.set_parallel(false)
+	tw.tween_property(spr, "modulate:a", 0.0, 0.10)
+	tw.tween_callback(spr.queue_free)
 
 
 func _cheese_stack_home_world() -> Vector3:
@@ -15852,6 +18749,10 @@ func _reset_supplies() -> void:
 	social_reviews.clear()
 	day_social_reviews.clear()
 	day_social_rating_sum = 0.0
+	_social_post_seq = 0
+	_phone_reply_open_id = -1
+	_phone_reply_show_custom = false
+	_phone_reply_custom_draft = ""
 	supply_stock.clear()
 	supply_fresh.clear()
 	supply_orders.clear()
@@ -16200,6 +19101,17 @@ func _freshness_bar_color(ratio: float) -> Color:
 	return Color("EF5350")
 
 
+func _stock_bar_color(stock: int, cap: int) -> Color:
+	if stock <= 0:
+		return Color("E53935")
+	var ratio := clampf(float(stock) / float(maxi(1, cap)), 0.0, 1.0)
+	if ratio <= 0.22:
+		return Color("FF7043")
+	if ratio <= 0.45:
+		return Color("FFB300")
+	return Color("66BB6A")
+
+
 func _ingredient_stock_cap(id: String) -> int:
 	match id:
 		"bun_bottom", "bun_top":
@@ -16220,14 +19132,15 @@ func _refresh_ingredient_stock_bars() -> void:
 		if stock_bar == null or fill == null:
 			continue
 		var stock := int(supply_stock.get(id, 0))
-		var cap := max(1, _ingredient_stock_cap(str(id)))
+		var cap: int = maxi(1, _ingredient_stock_cap(str(id)))
 		var stock_ratio := clampf(float(stock) / float(cap), 0.0, 1.0)
-		var fresh_ratio := clampf(float(supply_fresh.get(id, 0.0)) / SUPPLY_FRESH_MAX, 0.0, 1.0)
+		stock_bar.custom_minimum_size = Vector2(46, 3)
+		stock_bar.size.y = 3.0
 		var width := stock_bar.size.x
 		if width < 2.0:
 			width = stock_bar.custom_minimum_size.x
 		fill.offset_right = width * stock_ratio
-		fill.color = Color(0.18, 0.19, 0.22, 1.0) if stock <= 0 else _freshness_bar_color(fresh_ratio)
+		fill.color = _stock_bar_color(stock, cap)
 		btn.tooltip_text = "%s\nStock: %d" % [btn.tooltip_text.get_slice("\n", 0), stock]
 
 
@@ -16335,7 +19248,16 @@ func _apply_social_review(
 		social_rating_sum += clamped
 		day_social_reviews.append({"stars": clamped, "who": who, "text": text})
 		day_social_rating_sum += clamped
-	var post := {"stars": clamped, "who": who, "text": text}
+	_social_post_seq += 1
+	var post := {
+		"id": _social_post_seq,
+		"stars": clamped,
+		"who": who,
+		"text": text,
+		"reply": "",
+		"reply_kind": "",
+		"argue": "",
+	}
 	if pic != null:
 		post["pic"] = pic
 	social_reviews.push_front(post)
@@ -16566,6 +19488,7 @@ func _refresh_phone_ui() -> void:
 		## Still try the feed — rating labels can lag a frame behind build.
 		_refresh_phone_feed()
 		_refresh_cheese_piles()
+		_refresh_bun_inventory_piles()
 		return
 	if social_review_count <= 0:
 		phone_rating_stars.text = "☆☆☆☆☆"
@@ -16582,6 +19505,7 @@ func _refresh_phone_ui() -> void:
 	_refresh_phone_feed()
 	if phone_inventory_box == null:
 		_refresh_cheese_piles()
+		_refresh_bun_inventory_piles()
 		return
 	_clear_phone_box_children(phone_inventory_box)
 	for id in SUPPLY_IDS:
@@ -16606,7 +19530,9 @@ func _refresh_phone_ui() -> void:
 		row.add_child(name_lab)
 
 		var stock := int(supply_stock.get(id, 0))
-		var fresh_r := clampf(float(supply_fresh.get(id, 0.0)) / SUPPLY_FRESH_MAX, 0.0, 1.0) if stock > 0 else 0.0
+		var stock_cap := maxi(1, _ingredient_stock_cap(str(id)))
+		var stock_r := clampf(float(stock) / float(stock_cap), 0.0, 1.0)
+		var stock_col := _stock_bar_color(stock, stock_cap)
 		var count_lab := Label.new()
 		count_lab.text = str(stock)
 		count_lab.custom_minimum_size = Vector2(12, 0)
@@ -16614,22 +19540,22 @@ func _refresh_phone_ui() -> void:
 		count_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		UiFontsScript.apply_label(count_lab, true, 8)
-		count_lab.add_theme_color_override("font_color", _freshness_bar_color(fresh_r))
+		count_lab.add_theme_color_override("font_color", stock_col)
 		row.add_child(count_lab)
 
 		var bar := ProgressBar.new()
 		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bar.custom_minimum_size = Vector2(12, 5)
+		bar.custom_minimum_size = Vector2(12, 4)
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		bar.max_value = 1.0
-		bar.value = fresh_r
+		bar.value = stock_r
 		bar.show_percentage = false
 		var bar_bg := StyleBoxFlat.new()
 		bar_bg.bg_color = Color(0.10, 0.12, 0.16, 0.95)
 		bar_bg.set_corner_radius_all(2)
 		var bar_fill := StyleBoxFlat.new()
-		bar_fill.bg_color = _freshness_bar_color(fresh_r)
+		bar_fill.bg_color = stock_col
 		bar_fill.set_corner_radius_all(2)
 		bar.add_theme_stylebox_override("background", bar_bg)
 		bar.add_theme_stylebox_override("fill", bar_fill)
@@ -16722,6 +19648,7 @@ func _refresh_phone_ui() -> void:
 			buy2.pressed.connect(func(): _buy_supply(syrup_id))
 		row2.add_child(buy2)
 	_refresh_cheese_piles()
+	_refresh_bun_inventory_piles()
 
 
 func _style_phone_buy_button(btn: Button) -> void:
@@ -16746,6 +19673,28 @@ func _style_phone_buy_button(btn: Button) -> void:
 	btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.9, 0.75))
 
 
+func _style_phone_reply_button(btn: Button, accent: Color = Color(0.45, 0.68, 0.95)) -> void:
+	var n := StyleBoxFlat.new()
+	n.bg_color = Color(0.12, 0.16, 0.24, 0.98)
+	n.border_color = Color(accent.r, accent.g, accent.b, 0.8)
+	n.set_border_width_all(1)
+	n.set_corner_radius_all(3)
+	n.content_margin_left = 3
+	n.content_margin_right = 3
+	n.content_margin_top = 1
+	n.content_margin_bottom = 1
+	var h := n.duplicate() as StyleBoxFlat
+	h.bg_color = Color(0.18, 0.24, 0.34, 1.0)
+	var p := n.duplicate() as StyleBoxFlat
+	p.bg_color = Color(0.08, 0.11, 0.18, 1.0)
+	btn.add_theme_stylebox_override("normal", n)
+	btn.add_theme_stylebox_override("hover", h)
+	btn.add_theme_stylebox_override("pressed", p)
+	btn.add_theme_color_override("font_color", Color(0.82, 0.90, 1.0))
+	btn.add_theme_color_override("font_hover_color", Color(0.95, 0.98, 1.0))
+	btn.add_theme_color_override("font_pressed_color", Color(0.7, 0.8, 0.95))
+
+
 func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.06, 0.08, 0.12, 0.92)
@@ -16762,6 +19711,98 @@ func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 	return sb
 
 
+func _find_social_post_index(post_id: int) -> int:
+	for i in social_reviews.size():
+		var post = social_reviews[i]
+		if typeof(post) == TYPE_DICTIONARY and int(post.get("id", -1)) == post_id:
+			return i
+	return -1
+
+
+func _open_social_reply_menu(post_id: int) -> void:
+	_sfx_click()
+	if _phone_reply_open_id == post_id:
+		_phone_reply_open_id = -1
+		_phone_reply_show_custom = false
+	else:
+		_phone_reply_open_id = post_id
+		_phone_reply_show_custom = false
+		_phone_reply_custom_draft = ""
+	_refresh_phone_feed()
+
+
+func _show_social_reply_custom(post_id: int) -> void:
+	_sfx_click()
+	_phone_reply_open_id = post_id
+	_phone_reply_show_custom = true
+	_refresh_phone_feed()
+
+
+func _reply_to_social_review(post_id: int, kind: String, custom_text: String = "") -> void:
+	## Owner reply on a feed post — Not True / We'll do better / Liar / custom.
+	var idx := _find_social_post_index(post_id)
+	if idx < 0:
+		return
+	var post: Dictionary = social_reviews[idx]
+	if str(post.get("reply", "")).strip_edges() != "":
+		return
+	var text := ""
+	match kind:
+		"not_true":
+			text = "Uhh, Not True!"
+		"better":
+			text = "We will do better."
+		"liar":
+			text = "Liar!"
+		"custom":
+			text = custom_text.strip_edges()
+		_:
+			return
+	if text == "":
+		return
+	if text.length() > 140:
+		text = text.substr(0, 140)
+	post["reply"] = text
+	post["reply_kind"] = kind
+	post["reply_who"] = "Burger Pals"
+	var argue := ""
+	if kind == "not_true" or kind == "liar":
+		if randf() < SOCIAL_REPLY_ARGUE_CHANCE:
+			argue = SocialReviewsScript.argue_back(kind, str(post.get("who", "Guest")))
+	post["argue"] = argue
+	social_reviews[idx] = post
+	_phone_reply_open_id = -1
+	_phone_reply_show_custom = false
+	_phone_reply_custom_draft = ""
+	_sfx_click()
+	_refresh_phone_feed()
+	if argue != "":
+		_flash("%s clapped back…" % str(post.get("who", "Guest")), Color("FFAB91"))
+	else:
+		_flash("Replied as Burger Pals", Color("90CAF9"))
+	if mp_enabled and NetManager.is_online():
+		if NetManager.is_host():
+			_mp_broadcast_social_feed()
+		else:
+			mp_social_reply.rpc_id(1, post_id, kind, text, argue)
+
+
+func _apply_social_reply_remote(post_id: int, kind: String, text: String, argue: String) -> void:
+	var idx := _find_social_post_index(post_id)
+	if idx < 0:
+		## Fallback: match unreplied who/text by newest if ids drifted.
+		return
+	var post: Dictionary = social_reviews[idx]
+	if str(post.get("reply", "")).strip_edges() != "":
+		return
+	post["reply"] = text
+	post["reply_kind"] = kind
+	post["reply_who"] = "Burger Pals"
+	post["argue"] = argue
+	social_reviews[idx] = post
+	_refresh_phone_feed()
+
+
 func _refresh_phone_feed() -> void:
 	if phone_feed_box == null or not is_instance_valid(phone_feed_box):
 		return
@@ -16776,8 +19817,14 @@ func _refresh_phone_feed() -> void:
 		return
 	for post_i in social_reviews.size():
 		var post = social_reviews[post_i]
+		if typeof(post) != TYPE_DICTIONARY:
+			continue
+		var post_id := int(post.get("id", post_i + 1))
+		if int(post.get("id", -1)) < 0:
+			post["id"] = post_id
+			social_reviews[post_i] = post
 		var card := PanelContainer.new()
-		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.mouse_filter = Control.MOUSE_FILTER_STOP
 		var card_sb := StyleBoxFlat.new()
 		card_sb.bg_color = Color(0.09, 0.11, 0.16, 0.9)
 		card_sb.set_corner_radius_all(4)
@@ -16796,7 +19843,7 @@ func _refresh_phone_feed() -> void:
 		phone_feed_box.add_child(card)
 		var cv := VBoxContainer.new()
 		cv.add_theme_constant_override("separation", 2)
-		cv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cv.mouse_filter = Control.MOUSE_FILTER_STOP
 		card.add_child(cv)
 		var head := HBoxContainer.new()
 		head.add_theme_constant_override("separation", 4)
@@ -16829,6 +19876,167 @@ func _refresh_phone_feed() -> void:
 			shot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			cv.add_child(shot)
+
+		var reply_text := str(post.get("reply", "")).strip_edges()
+		if reply_text != "":
+			var ours := Label.new()
+			ours.text = "Burger Pals: %s" % reply_text
+			ours.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			UiFontsScript.apply_label(ours, true, 7)
+			ours.add_theme_color_override("font_color", Color(0.72, 0.88, 1.0))
+			cv.add_child(ours)
+			var argue_text := str(post.get("argue", "")).strip_edges()
+			if argue_text != "":
+				var theirs := Label.new()
+				theirs.text = "%s: %s" % [str(post.get("who", "Guest")), argue_text]
+				theirs.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				UiFontsScript.apply_label(theirs, false, 7)
+				theirs.add_theme_color_override("font_color", Color(1.0, 0.72, 0.62))
+				cv.add_child(theirs)
+		else:
+			## Reply affordance — presets + optional custom box.
+			if _phone_reply_open_id == post_id:
+				var opt_row := HBoxContainer.new()
+				opt_row.add_theme_constant_override("separation", 2)
+				opt_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				cv.add_child(opt_row)
+				var b_not := Button.new()
+				b_not.text = "Not True!"
+				b_not.focus_mode = Control.FOCUS_NONE
+				b_not.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				b_not.custom_minimum_size = Vector2(0, 16)
+				UiFontsScript.apply_button(b_not, true, 6)
+				_style_phone_reply_button(b_not, Color(0.95, 0.72, 0.45))
+				var pid_not := post_id
+				b_not.pressed.connect(func(): _reply_to_social_review(pid_not, "not_true"))
+				opt_row.add_child(b_not)
+				var b_better := Button.new()
+				b_better.text = "Do better"
+				b_better.focus_mode = Control.FOCUS_NONE
+				b_better.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				b_better.custom_minimum_size = Vector2(0, 16)
+				UiFontsScript.apply_button(b_better, true, 6)
+				_style_phone_reply_button(b_better, Color(0.55, 0.85, 0.65))
+				var pid_better := post_id
+				b_better.pressed.connect(func(): _reply_to_social_review(pid_better, "better"))
+				opt_row.add_child(b_better)
+
+				var opt_row2 := HBoxContainer.new()
+				opt_row2.add_theme_constant_override("separation", 2)
+				opt_row2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				cv.add_child(opt_row2)
+				var b_liar := Button.new()
+				b_liar.text = "Liar!"
+				b_liar.focus_mode = Control.FOCUS_NONE
+				b_liar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				b_liar.custom_minimum_size = Vector2(0, 16)
+				UiFontsScript.apply_button(b_liar, true, 6)
+				_style_phone_reply_button(b_liar, Color(0.95, 0.45, 0.45))
+				var pid_liar := post_id
+				b_liar.pressed.connect(func(): _reply_to_social_review(pid_liar, "liar"))
+				opt_row2.add_child(b_liar)
+				var b_custom := Button.new()
+				b_custom.text = "Custom"
+				b_custom.focus_mode = Control.FOCUS_NONE
+				b_custom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				b_custom.custom_minimum_size = Vector2(0, 16)
+				UiFontsScript.apply_button(b_custom, true, 6)
+				_style_phone_reply_button(b_custom)
+				var pid_custom := post_id
+				b_custom.pressed.connect(func(): _show_social_reply_custom(pid_custom))
+				opt_row2.add_child(b_custom)
+
+				if _phone_reply_show_custom:
+					var draft_row := HBoxContainer.new()
+					draft_row.add_theme_constant_override("separation", 2)
+					cv.add_child(draft_row)
+					var edit := LineEdit.new()
+					edit.placeholder_text = "Type a reply…"
+					edit.text = _phone_reply_custom_draft
+					edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					edit.custom_minimum_size = Vector2(0, 18)
+					edit.max_length = 140
+					edit.focus_mode = Control.FOCUS_ALL
+					edit.add_theme_font_size_override("font_size", 8)
+					edit.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
+					edit.add_theme_color_override("font_placeholder_color", Color(0.45, 0.52, 0.62))
+					var pid_edit := post_id
+					edit.text_changed.connect(func(t: String): _phone_reply_custom_draft = t)
+					edit.text_submitted.connect(func(t: String): _reply_to_social_review(pid_edit, "custom", t))
+					draft_row.add_child(edit)
+					var send := Button.new()
+					send.text = "Send"
+					send.focus_mode = Control.FOCUS_NONE
+					send.custom_minimum_size = Vector2(34, 18)
+					UiFontsScript.apply_button(send, true, 6)
+					_style_phone_reply_button(send, Color(0.55, 0.78, 1.0))
+					send.pressed.connect(func(): _reply_to_social_review(pid_edit, "custom", edit.text))
+					draft_row.add_child(send)
+					edit.call_deferred("grab_focus")
+			else:
+				var reply_btn := Button.new()
+				reply_btn.text = "Reply"
+				reply_btn.focus_mode = Control.FOCUS_NONE
+				reply_btn.custom_minimum_size = Vector2(44, 15)
+				reply_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+				UiFontsScript.apply_button(reply_btn, true, 6)
+				_style_phone_reply_button(reply_btn)
+				var pid_open := post_id
+				reply_btn.pressed.connect(func(): _open_social_reply_menu(pid_open))
+				cv.add_child(reply_btn)
+
+
+func _build_phone_status_bar() -> Control:
+	## Fake phone bezel strip — signal bars, network, battery.
+	var bar := PanelContainer.new()
+	bar.name = "PhoneStatusBar"
+	bar.custom_minimum_size = Vector2(0, PHONE_STATUS_H)
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bar_sb := StyleBoxFlat.new()
+	bar_sb.bg_color = Color(0.02, 0.03, 0.06, 0.92)
+	bar_sb.set_corner_radius_all(3)
+	bar_sb.content_margin_left = 4
+	bar_sb.content_margin_right = 4
+	bar_sb.content_margin_top = 1
+	bar_sb.content_margin_bottom = 1
+	bar.add_theme_stylebox_override("panel", bar_sb)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.add_child(row)
+
+	phone_status_signal = Label.new()
+	phone_status_signal.text = "▂▄▆█"
+	UiFontsScript.apply_label(phone_status_signal, true, 7)
+	phone_status_signal.add_theme_color_override("font_color", Color(0.82, 0.88, 0.96))
+	phone_status_signal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(phone_status_signal)
+
+	phone_status_net = Label.new()
+	phone_status_net.text = "5G"
+	UiFontsScript.apply_label(phone_status_net, true, 7)
+	phone_status_net.add_theme_color_override("font_color", Color(0.7, 0.78, 0.9))
+	phone_status_net.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_status_net.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(phone_status_net)
+
+	var carrier := Label.new()
+	carrier.text = "BizTel"
+	UiFontsScript.apply_label(carrier, false, 6)
+	carrier.add_theme_color_override("font_color", Color(0.5, 0.58, 0.68))
+	carrier.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(carrier)
+
+	phone_status_battery = Label.new()
+	phone_status_battery.text = "▮ 78%"
+	UiFontsScript.apply_label(phone_status_battery, true, 7)
+	phone_status_battery.add_theme_color_override("font_color", Color(0.55, 0.92, 0.62))
+	phone_status_battery.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	phone_status_battery.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(phone_status_battery)
+	return bar
 
 
 func _build_phone_ui() -> void:
@@ -16885,14 +20093,25 @@ func _build_phone_ui() -> void:
 	screen.add_theme_stylebox_override("panel", screen_sb)
 	phone_stack.add_child(screen)
 
-	## PanelContainer needs a single content host for the scrollable screen.
-	var screen_host := Control.new()
+	## PanelContainer needs a content host: fixed status bezel + scrollable home.
+	var screen_host := VBoxContainer.new()
 	screen_host.name = "PhoneScreenHost"
+	screen_host.add_theme_constant_override("separation", 2)
 	screen_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	screen_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	screen_host.clip_contents = true
 	screen.add_child(screen_host)
+
+	var status := _build_phone_status_bar()
+	screen_host.add_child(status)
+
+	var scroll_host := Control.new()
+	scroll_host.name = "PhoneScrollHost"
+	scroll_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	scroll_host.clip_contents = true
+	screen_host.add_child(scroll_host)
 
 	var scroll := ScrollContainer.new()
 	phone_scroll = scroll
@@ -16902,7 +20121,7 @@ func _build_phone_ui() -> void:
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER ## drag scroll — no bar
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	scroll.gui_input.connect(_on_phone_scroll_gui_input)
-	screen_host.add_child(scroll)
+	scroll_host.add_child(scroll)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
@@ -16924,21 +20143,6 @@ func _build_phone_ui() -> void:
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		logo_wrap.add_child(logo)
-
-	var status_row := HBoxContainer.new()
-	status_row.add_theme_constant_override("separation", 4)
-	v.add_child(status_row)
-	var status_dot := Label.new()
-	status_dot.text = "●"
-	UiFontsScript.apply_label(status_dot, true, 9)
-	status_dot.add_theme_color_override("font_color", Color("66BB6A"))
-	status_row.add_child(status_dot)
-	var status_lab := Label.new()
-	status_lab.text = "BizPhone"
-	UiFontsScript.apply_label(status_lab, true, 9)
-	status_lab.add_theme_color_override("font_color", Color(0.75, 0.82, 0.92))
-	status_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	status_row.add_child(status_lab)
 
 	## Social app card — rating + feed
 	var social_panel := PanelContainer.new()
@@ -17050,6 +20254,11 @@ func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
 			_phone_scroll_last_mouse_y = ev.global_position.y
 			_phone_scroll_last_msec = Time.get_ticks_msec()
 		else:
+			if _phone_scroll_dragging:
+				var total_dy: float = ev.global_position.y - _phone_scroll_drag_start_y
+				var release_kick: float = -total_dy * 7.5
+				if absf(release_kick) > absf(_phone_scroll_vel):
+					_phone_scroll_vel = release_kick
 			_phone_scroll_drag_pending = false
 			_phone_scroll_dragging = false
 	elif ev is InputEventMouseMotion:
@@ -17082,7 +20291,7 @@ func _update_phone_scroll_inertia(delta: float) -> void:
 	if absf(_phone_scroll_vel) < PHONE_SCROLL_MIN_VEL:
 		_phone_scroll_vel = 0.0
 		return
-	phone_scroll.scroll_vertical = int(round(float(phone_scroll.scroll_vertical) - _phone_scroll_vel * delta))
+	phone_scroll.scroll_vertical = int(round(float(phone_scroll.scroll_vertical) + _phone_scroll_vel * delta))
 	_phone_scroll_vel *= exp(-PHONE_SCROLL_FRICTION * delta)
 
 
@@ -17090,6 +20299,32 @@ func _setup_game_audio() -> void:
 	game_audio = GameAudioScript.new()
 	game_audio.name = "GameAudio"
 	add_child(game_audio)
+
+
+func _setup_intro_title_music() -> void:
+	if intro_music_player != null and is_instance_valid(intro_music_player):
+		return
+	var stream := load(INTRO_MUSIC_PATH)
+	if stream == null:
+		push_warning("Intro music missing: %s" % INTRO_MUSIC_PATH)
+		return
+	if stream is AudioStreamMP3:
+		stream.loop = true
+	intro_music_player = AudioStreamPlayer.new()
+	intro_music_player.name = "IntroTitleMusic"
+	intro_music_player.bus = "Master"
+	intro_music_player.stream = stream
+	intro_music_player.volume_db = -9.5
+	add_child(intro_music_player)
+	if start_overlay == null or start_overlay.visible:
+		intro_music_player.play()
+
+
+func _stop_intro_title_music() -> void:
+	if intro_music_player == null or not is_instance_valid(intro_music_player):
+		return
+	if intro_music_player.playing:
+		intro_music_player.stop()
 
 
 func _sfx_click() -> void:
@@ -17710,12 +20945,31 @@ func _build_options_menu() -> void:
 	hint.add_theme_color_override("font_color", Color(0.7, 0.72, 0.76))
 	v.add_child(hint)
 
+	var tabs := TabContainer.new()
+	tabs.custom_minimum_size = Vector2(0, 360)
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.mouse_filter = Control.MOUSE_FILTER_STOP
+	v.add_child(tabs)
+
+	var general_tab := MarginContainer.new()
+	general_tab.name = "General"
+	general_tab.add_theme_constant_override("margin_left", 4)
+	general_tab.add_theme_constant_override("margin_right", 4)
+	general_tab.add_theme_constant_override("margin_top", 10)
+	general_tab.add_theme_constant_override("margin_bottom", 4)
+	tabs.add_child(general_tab)
+
+	var general := VBoxContainer.new()
+	general.add_theme_constant_override("separation", 10)
+	general_tab.add_child(general)
+
 	var vol_lab := Label.new()
 	vol_lab.text = "MASTER VOLUME"
 	vol_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UiFontsScript.apply_label(vol_lab, true, 13)
 	vol_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	v.add_child(vol_lab)
+	general.add_child(vol_lab)
 
 	options_vol_slider = HSlider.new()
 	options_vol_slider.min_value = 0.0
@@ -17728,24 +20982,89 @@ func _build_options_menu() -> void:
 	options_vol_slider.value_changed.connect(func(val: float):
 		_set_master_volume_linear(val, true)
 	)
-	v.add_child(options_vol_slider)
+	general.add_child(options_vol_slider)
 
-	_options_add_btn(v, "Graphics Settings…", func():
-		_set_graphics_menu_open(true)
-	)
-	v.add_child(HSeparator.new())
-	_options_add_btn(v, "Resume", func():
+	general.add_child(HSeparator.new())
+	_options_add_btn(general, "Resume", func():
 		_set_options_menu_open(false)
 	)
-	_options_add_btn(v, "Restart Day", func():
+	_options_add_btn(general, "Restart Day", func():
 		_options_restart_day()
 	)
-	options_lobby_btn = _options_add_btn(v, "Back to Lobby", func():
+	options_lobby_btn = _options_add_btn(general, "Back to Lobby", func():
 		_options_back_to_lobby()
 	)
-	_options_add_btn(v, "Exit Game", func():
+	_options_add_btn(general, "Exit Game", func():
 		_options_exit_game()
 	)
+
+	var graphics_tab := MarginContainer.new()
+	graphics_tab.name = "Graphics"
+	graphics_tab.add_theme_constant_override("margin_left", 4)
+	graphics_tab.add_theme_constant_override("margin_right", 4)
+	graphics_tab.add_theme_constant_override("margin_top", 10)
+	graphics_tab.add_theme_constant_override("margin_bottom", 4)
+	tabs.add_child(graphics_tab)
+
+	var graphics := VBoxContainer.new()
+	graphics.add_theme_constant_override("separation", 8)
+	graphics_tab.add_child(graphics)
+	_options_add_standard_check(graphics, "glow_on", "Glow / Bloom")
+	_options_add_standard_check(graphics, "heat_warp_on", "Heat Shimmer")
+	options_fullscreen_check = _options_add_display_check(graphics, "Fullscreen", func(on: bool):
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if on else DisplayServer.WINDOW_MODE_WINDOWED)
+	)
+	options_vsync_check = _options_add_display_check(graphics, "VSync", func(on: bool):
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if on else DisplayServer.VSYNC_DISABLED)
+	)
+	graphics.add_child(HSeparator.new())
+	_options_add_standard_slider(graphics, "exposure", "Brightness", 0.4, 1.8, 0.01)
+	_options_add_standard_slider(graphics, "saturation", "Saturation", 0.5, 1.6, 0.01)
+	_options_add_standard_slider(graphics, "contrast", "Contrast", 0.7, 1.5, 0.01)
+	_options_add_standard_slider(graphics, "ambient", "Ambient Light", 0.0, 1.2, 0.01)
+	_options_add_standard_slider(graphics, "bloom", "Bloom Amount", 0.0, 1.0, 0.01)
+
+	var hidden_tab := MarginContainer.new()
+	hidden_tab.name = "Hidden"
+	hidden_tab.add_theme_constant_override("margin_left", 4)
+	hidden_tab.add_theme_constant_override("margin_right", 4)
+	hidden_tab.add_theme_constant_override("margin_top", 10)
+	hidden_tab.add_theme_constant_override("margin_bottom", 4)
+	tabs.add_child(hidden_tab)
+
+	var hidden := VBoxContainer.new()
+	hidden.add_theme_constant_override("separation", 10)
+	hidden_tab.add_child(hidden)
+
+	var hidden_lab := Label.new()
+	hidden_lab.text = "PASSWORD"
+	UiFontsScript.apply_label(hidden_lab, true, 13)
+	hidden_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	hidden.add_child(hidden_lab)
+
+	options_hidden_password = LineEdit.new()
+	options_hidden_password.placeholder_text = "Enter password"
+	options_hidden_password.secret = true
+	options_hidden_password.custom_minimum_size = Vector2(0, 38)
+	options_hidden_password.text_submitted.connect(func(_txt: String):
+		_try_unlock_hidden_options()
+	)
+	hidden.add_child(options_hidden_password)
+
+	options_hidden_unlock_btn = _options_add_btn(hidden, "Unlock Hidden", func():
+		_try_unlock_hidden_options()
+	)
+	options_hidden_advanced_btn = _options_add_btn(hidden, "Open Advanced Graphics", func():
+		_set_graphics_menu_open(true)
+	)
+	options_hidden_advanced_btn.visible = false
+
+	options_hidden_status = Label.new()
+	options_hidden_status.text = ""
+	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(options_hidden_status, false, 12)
+	options_hidden_status.add_theme_color_override("font_color", Color(0.78, 0.82, 0.9))
+	hidden.add_child(options_hidden_status)
 
 
 func _options_add_btn(parent: Control, text: String, action: Callable) -> Button:
@@ -17765,6 +21084,145 @@ func _options_add_btn(parent: Control, text: String, action: Callable) -> Button
 	return btn
 
 
+func _options_add_display_check(parent: Control, text: String, action: Callable) -> CheckButton:
+	var btn := CheckButton.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(0, 34)
+	btn.focus_mode = Control.FOCUS_ALL
+	btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	UiFontsScript.apply_button(btn, false, 13)
+	btn.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	btn.toggled.connect(func(on: bool):
+		_sfx_click()
+		action.call(on)
+	)
+	parent.add_child(btn)
+	return btn
+
+
+func _options_add_standard_check(parent: Control, key: String, text: String) -> CheckButton:
+	var btn := CheckButton.new()
+	btn.text = text
+	btn.button_pressed = bool(GFX_DEFAULTS.get(key, true))
+	btn.custom_minimum_size = Vector2(0, 34)
+	btn.focus_mode = Control.FOCUS_ALL
+	btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	UiFontsScript.apply_button(btn, false, 13)
+	btn.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	btn.toggled.connect(func(on: bool):
+		_sfx_click()
+		_set_graphics_check_value(key, on)
+	)
+	parent.add_child(btn)
+	options_graphics_checks[key] = btn
+	return btn
+
+
+func _options_add_standard_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float) -> HSlider:
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	parent.add_child(row)
+
+	var top := HBoxContainer.new()
+	row.add_child(top)
+
+	var lab := Label.new()
+	lab.text = label_text
+	UiFontsScript.apply_label(lab, false, 12)
+	lab.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(lab)
+
+	var val_lab := Label.new()
+	val_lab.name = "Val"
+	val_lab.custom_minimum_size = Vector2(44, 0)
+	val_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(val_lab, true, 11)
+	val_lab.add_theme_color_override("font_color", Color(0.78, 0.88, 1.0))
+	top.add_child(val_lab)
+
+	var slider := HSlider.new()
+	slider.min_value = min_v
+	slider.max_value = max_v
+	slider.step = step
+	slider.value = float(GFX_DEFAULTS.get(key, min_v))
+	slider.custom_minimum_size = Vector2(0, 22)
+	slider.focus_mode = Control.FOCUS_ALL
+	slider.mouse_filter = Control.MOUSE_FILTER_STOP
+	slider.value_changed.connect(func(v: float):
+		val_lab.text = "%.2f" % v
+		_set_graphics_slider_value(key, v)
+	)
+	row.add_child(slider)
+	val_lab.text = "%.2f" % slider.value
+	options_graphics_sliders[key] = slider
+	return slider
+
+
+func _set_graphics_slider_value(key: String, value: float) -> void:
+	if gfx_sliders.has(key):
+		var s: HSlider = gfx_sliders[key]
+		if s != null and is_instance_valid(s):
+			s.set_value_no_signal(value)
+	var settings := _read_graphics_from_ui()
+	settings[key] = value
+	_apply_graphics_settings(settings)
+	_save_graphics_settings(settings)
+
+
+func _set_graphics_check_value(key: String, value: bool) -> void:
+	if gfx_checks.has(key):
+		var c: CheckButton = gfx_checks[key]
+		if c != null and is_instance_valid(c):
+			c.set_pressed_no_signal(value)
+	var settings := _read_graphics_from_ui()
+	settings[key] = value
+	_apply_graphics_settings(settings)
+	_save_graphics_settings(settings)
+
+
+func _refresh_options_graphics_controls() -> void:
+	if options_fullscreen_check != null and is_instance_valid(options_fullscreen_check):
+		options_fullscreen_check.set_pressed_no_signal(DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN)
+	if options_vsync_check != null and is_instance_valid(options_vsync_check):
+		options_vsync_check.set_pressed_no_signal(DisplayServer.window_get_vsync_mode() != DisplayServer.VSYNC_DISABLED)
+	for key in options_graphics_sliders:
+		var s: HSlider = options_graphics_sliders[key]
+		if s == null or not is_instance_valid(s):
+			continue
+		var val := float(GFX_DEFAULTS.get(key, s.min_value))
+		if gfx_sliders.has(key) and gfx_sliders[key] != null:
+			val = float(gfx_sliders[key].value)
+		s.set_value_no_signal(val)
+		var row: Node = s.get_parent()
+		if row:
+			var top := row.get_child(0) if row.get_child_count() > 0 else null
+			if top is HBoxContainer:
+				var val_lab := top.get_node_or_null("Val") as Label
+				if val_lab:
+					val_lab.text = "%.2f" % val
+	for key2 in options_graphics_checks:
+		var c2: CheckButton = options_graphics_checks[key2]
+		if c2 == null or not is_instance_valid(c2):
+			continue
+		var checked := bool(GFX_DEFAULTS.get(key2, true))
+		if gfx_checks.has(key2) and gfx_checks[key2] != null:
+			checked = bool(gfx_checks[key2].button_pressed)
+		c2.set_pressed_no_signal(checked)
+
+
+func _try_unlock_hidden_options() -> void:
+	var typed := options_hidden_password.text.strip_edges() if options_hidden_password != null else ""
+	var ok := typed == "Pal"
+	if options_hidden_advanced_btn != null and is_instance_valid(options_hidden_advanced_btn):
+		options_hidden_advanced_btn.visible = ok
+	if options_hidden_status != null and is_instance_valid(options_hidden_status):
+		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
+		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
+	if ok and options_hidden_password != null:
+		options_hidden_password.release_focus()
+
+
 func _toggle_options_menu() -> void:
 	_set_options_menu_open(not options_menu_open)
 
@@ -17780,6 +21238,7 @@ func _set_options_menu_open(open: bool) -> void:
 	else:
 		if options_vol_slider != null and is_instance_valid(options_vol_slider):
 			options_vol_slider.set_value_no_signal(master_volume_linear)
+		_refresh_options_graphics_controls()
 		if options_lobby_btn != null and is_instance_valid(options_lobby_btn):
 			if mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE:
 				options_lobby_btn.text = "Back to Lobby"
@@ -18492,6 +21951,12 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_row_top", GFX_DEFAULTS["bz_row_top"])
 		cfg.set_value("gfx", "gfx_bz_actions_down_v3", true)
 		cfg.save(GFX_CFG_PATH)
+	## Move cutting-board hint down 40px and camera-right 20px.
+	if not cfg.has_section_key("gfx", "gfx_bz_title_nudge_v1"):
+		cfg.set_value("gfx", "bz_title_y", GFX_DEFAULTS["bz_title_y"])
+		cfg.set_value("gfx", "bz_title_x", GFX_DEFAULTS["bz_title_x"])
+		cfg.set_value("gfx", "gfx_bz_title_nudge_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -19046,6 +22511,7 @@ func _spawn_customer_local(
 	var c = CustomerScript.new()
 	c.setup(typed_order, color, patience, lane, skin_idx, face_style)
 	c.set_meta("soda_handed", false)
+	c.set_meta("icecream_handed", false)
 	## Guest customers are puppets — host owns patience expiry + leave.
 	if mp_enabled and not NetManager.is_host():
 		c.mp_host_driven = true
@@ -19403,6 +22869,12 @@ func _create_ticket(customer: Node3D) -> void:
 	wrap.set_meta("patience_bar", patience_bar)
 	wrap.set_meta("patience_fill_style", pfill)
 
+	var patience_gap := Control.new()
+	patience_gap.name = "PatienceBottomGap"
+	patience_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	patience_gap.custom_minimum_size = Vector2(0, 12)
+	v.add_child(patience_gap)
+
 	var lines_box := VBoxContainer.new()
 	lines_box.name = "TicketLines"
 	lines_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -19437,6 +22909,12 @@ func _create_ticket(customer: Node3D) -> void:
 		lab.autowrap_mode = TextServer.AUTOWRAP_OFF
 		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(lab)
+
+	var bottom_pad := Control.new()
+	bottom_pad.name = "TicketBottomPad"
+	bottom_pad.custom_minimum_size = Vector2(0, 30)
+	bottom_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(bottom_pad)
 
 	wrap.add_child(note)
 	ticket_box.add_child(wrap)
@@ -19480,6 +22958,7 @@ func _ticket_line_specs(order: Array) -> Array:
 	var lines: Array = []
 	var burger: Array = GameDataScript.order_burger_items(order)
 	var sodas: Array = GameDataScript.order_soda_ids(order)
+	var wants_icecream := GameDataScript.wants_icecream(order)
 	var patty_count := 0
 	for item in burger:
 		if item == "patty":
@@ -19501,6 +22980,8 @@ func _ticket_line_specs(order: Array) -> Array:
 	for sid in sodas:
 		var soda_lab: String = str(GameDataScript.INGREDIENT_LABELS.get(sid, sid)).to_upper()
 		lines.append({"id": str(sid), "label": soda_lab})
+	if wants_icecream:
+		lines.append({"id": "icecream", "label": "ICE CREAM"})
 	if lines.is_empty():
 		lines.append({"id": "burger", "label": "BURGER"})
 	return lines
@@ -19512,6 +22993,8 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 			return true
 		## One cup must not check off every matching ticket.
 		return _customer_can_claim_soda(customer, line_id)
+	if line_id == "icecream":
+		return _customer_icecream_handed(customer)
 	match line_id:
 		"triple_patty":
 			var n3 := 0
@@ -19552,13 +23035,25 @@ func _cup_ready_for_order(order: Array, customer: Node3D = null) -> bool:
 	return _customer_can_claim_soda(customer, str(sodas[0]))
 
 
+func _icecream_ready_for_order(order: Array, customer: Node3D = null) -> bool:
+	if not GameDataScript.wants_icecream(order):
+		return true
+	return _customer_icecream_handed(customer)
+
+
+func _sides_ready_for_order(order: Array, customer: Node3D = null) -> bool:
+	return _cup_ready_for_order(order, customer) and _icecream_ready_for_order(order, customer)
+
+
 func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	## Hand off a matching ready drink with the order (parked tray cup preferred).
 	var target: Node3D = null
+	if _serve_cup_node != null and is_instance_valid(_serve_cup_node):
+		target = _serve_cup_node
 	var cust: Node3D = for_customer
 	if cust == null or not is_instance_valid(cust):
 		cust = selected_customer
-	if cust != null and is_instance_valid(cust):
+	if target == null and cust != null and is_instance_valid(cust):
 		var sodas: Array = GameDataScript.order_soda_ids(cust.order)
 		if not sodas.is_empty():
 			target = _find_ready_drink_for_soda(str(sodas[0]))
@@ -19566,18 +23061,23 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 		target = cup_root
 	_serve_cup_node = target
 
-	if target != null and is_instance_valid(target) and parked_cups.has(target):
+	if target != null and is_instance_valid(target) and (parked_cups.has(target) or bool(target.get_meta("serving", false))):
 		var consumed_flavor := str(target.get_meta("flavor", ""))
 		var consumed_nid := int(target.get_meta("cup_net_id", -1))
 		parked_cups.erase(target)
 		_layout_parked_cups()
+		target.set_meta("serving_consumed", true)
 		target.visible = false
 		target.queue_free()
+		if cup_root == target:
+			cup_root = null
+			_clear_cup_refs()
 		## Don't auto-spawn — next empty comes from the CUPS rack.
 		_refresh_soda_tank_bubbles()
 		_refresh_ticket_checkmarks()
 		if mp_enabled and not _mp_applying and (consumed_flavor != "" or consumed_nid >= 0):
 			mp_cup_consume.rpc(consumed_flavor, consumed_nid)
+		_serve_cup_node = null
 		return
 
 	## Consuming the active working cup.
@@ -19594,6 +23094,7 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	_cup_pour_white = 0.0
 	_cup_pouring = false
 	if cup_root != null and is_instance_valid(cup_root):
+		cup_root.set_meta("serving_consumed", true)
 		cup_root.visible = true
 	if cup_held:
 		_park_cup_on_tray(false)
@@ -19603,6 +23104,7 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	_refresh_ticket_checkmarks()
 	if mp_enabled and not _mp_applying and active_flavor != "":
 		mp_cup_consume.rpc(active_flavor, active_nid)
+	_serve_cup_node = null
 
 
 func _refresh_ticket_checkmarks() -> void:
@@ -19697,7 +23199,7 @@ func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
 	style.content_margin_left = 8
 	style.content_margin_right = 8
 	style.content_margin_top = 5
-	style.content_margin_bottom = 6
+	style.content_margin_bottom = -6
 	if selected:
 		style.modulate_color = Color(1.06, 1.0, 0.9)
 	return style
@@ -19981,14 +23483,14 @@ func _build_ingredient_legend() -> void:
 
 		var stock_bar := Control.new()
 		stock_bar.name = "StockBar"
-		stock_bar.custom_minimum_size = Vector2(62, 5)
+		stock_bar.custom_minimum_size = Vector2(46, 3)
 		stock_bar.clip_contents = true
 		stock_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		col.add_child(stock_bar)
 
 		var stock_bg := ColorRect.new()
 		stock_bg.name = "Bg"
-		stock_bg.color = Color(0.035, 0.04, 0.05, 0.95)
+		stock_bg.color = Color(0.035, 0.04, 0.05, 0.86)
 		stock_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		stock_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		stock_bar.add_child(stock_bg)
@@ -20124,7 +23626,7 @@ func _ingredient_fly_icon_size(station_index: int, id: String) -> Vector2:
 	return Vector2(mini(110.0, layer_w * 0.42), mini(84.0, h * 0.42))
 
 
-func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Callable) -> void:
+func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Callable, start_override: Vector2 = Vector2(INF, INF)) -> void:
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
 	if ui_root == null or station_index < 0 or station_index >= STATION_COUNT:
 		on_done.call()
@@ -20150,7 +23652,9 @@ func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Call
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.pivot_offset = icon_size * 0.5
 	fly_root.add_child(icon)
-	var start := _ingredient_button_screen_center(id)
+	var start := start_override
+	if not is_finite(start.x) or not is_finite(start.y):
+		start = _ingredient_button_screen_center(id)
 	## Capture land point at start; re-sample near the end so it tracks a growing stack.
 	var end0 := _station_ingredient_land_screen(station_index)
 	icon.global_position = start - icon_size * 0.5
@@ -20259,7 +23763,8 @@ func _build_station_ui() -> void:
 
 		var title := Label.new()
 		title.name = "BuildTitle"
-		title.text = BUILD_TITLE_TEXT
+		title.text = ""
+		title.visible = false
 		UiFontsScript.apply_label(title, true, 14)
 		title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.7))
 		title.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -20391,12 +23896,12 @@ func _build_station_ui() -> void:
 
 		var fresh_label := Label.new()
 		fresh_label.text = "--"
-		fresh_label.custom_minimum_size = Vector2(128, 18)
+		fresh_label.custom_minimum_size = Vector2(136, 18)
 		UiFontsScript.apply_label(fresh_label, true, 11)
 		fresh_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.8))
 		fresh_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		fresh_label.add_theme_constant_override("outline_size", 3)
-		fresh_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		fresh_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		fresh_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		fresh_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		actions.add_child(fresh_label)
@@ -22054,6 +25559,8 @@ func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: 
 	if not _mp_spend_ingredient(id):
 		return
 	items.append(id)
+	if id == "bun_top":
+		_animate_bun_to_build_station("bun_top", station_index)
 	st["items"] = _normalize_burger_stack(items)
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
@@ -22266,6 +25773,8 @@ func _refresh_station(index: int) -> void:
 	var plate: Control = st.get("plate", null)
 	if drop_btn and is_instance_valid(drop_btn):
 		drop_btn.visible = spatula_patty != null
+	if index == STATION_CRAFT:
+		_refresh_build_board_hint()
 
 	if items.is_empty():
 		st["selected_layer"] = -1
@@ -22462,13 +25971,13 @@ func _station_item_build_scale(item: String) -> float:
 	if item == "onion":
 		return STATION_INGREDIENT_SCALE * 1.19 ## was 0.595 (−30%), then 2×
 	if item == "tomato":
-		return STATION_INGREDIENT_SCALE * 1.96 ## was 0.98, then 2×
+		return STATION_INGREDIENT_SCALE * 1.372 ## 30% smaller on Build board
 	if item == "pickle":
-		return STATION_INGREDIENT_SCALE * 1.12 ## was 0.56 (−30%), then 2×
+		return STATION_INGREDIENT_SCALE * 0.784 ## 30% smaller on Build board
 	if item == "bacon":
 		return STATION_INGREDIENT_SCALE * 1.76 ## was 0.88, then 2×
 	if item == "lettuce":
-		return STATION_INGREDIENT_SCALE * 1.84 ## was 0.92, then 2×
+		return STATION_INGREDIENT_SCALE * 1.288 ## 30% smaller on Build board
 	if item == "cheese":
 		return STATION_INGREDIENT_SCALE * 1.8 ## was 0.9, then 2×
 	if item == "ketchup":
@@ -22536,6 +26045,7 @@ func _refresh_all_stations() -> void:
 
 func _refresh_spatula_ui() -> void:
 	## Spatula status strip removed — stations show Drop Patty when holding.
+	_refresh_build_board_hint()
 	if held_row:
 		held_row.visible = false
 		for child in held_row.get_children():
@@ -22570,13 +26080,19 @@ func _try_auto_serve() -> void:
 		waiting.append(c)
 	for cust in waiting:
 		## Don't auto-hand-off until any ordered soda is poured (or already handed).
-		if not _cup_ready_for_order(cust.order, cust):
+		if not _sides_ready_for_order(cust.order, cust):
 			continue
 		if GameDataScript.is_soda_only_order(cust.order):
 			## Never auto-complete drink-only tickets — that stole cups from other
 			## soda lines and could finish the wrong order mid-pour.
 			continue
 		var si := _find_perfect_station_for(cust.order)
+		if si < 0:
+			var near_si := _find_station_for_order(cust.order)
+			if near_si >= 0:
+				var near_items: Array = stations[near_si]["items"]
+				if _station_only_needs_top_bun(near_items, cust.order):
+					si = near_si
 		if si < 0:
 			continue
 		if _station_has_melting_cheese(si):
@@ -22586,7 +26102,11 @@ func _try_auto_serve() -> void:
 		active_station = si
 		_highlight_tickets()
 		_highlight_active_station()
-		_on_serve()
+		if mp_enabled and not _mp_applying:
+			var cid := _customer_net_id(cust)
+			mp_serve.rpc(cid, si)
+		else:
+			_begin_serve_at(cust, si, false)
 		if not _serve_fly_busy:
 			_auto_serving = false
 		return
@@ -22700,6 +26220,7 @@ func _crown_serve_burger(station_index: int) -> bool:
 	if not _mp_spend_ingredient("bun_top"):
 		return false
 	items.append("bun_top")
+	_animate_bun_to_build_station("bun_top", station_index)
 	st["items"] = _normalize_burger_stack(items)
 	_mp_broadcast_station(station_index)
 	return true
@@ -23023,6 +26544,147 @@ func _make_serve_fly_cup(parent: Control, flavor: String) -> Control:
 	return cup
 
 
+func _icecream_screen_center(from_cone: Node3D = null) -> Vector2:
+	var node := from_cone if from_cone != null else icecream_cone_root
+	if camera != null and node != null and is_instance_valid(node):
+		return camera.unproject_position(node.global_position + Vector3(0.0, ICECREAM_CONE_H * 0.75, 0.0))
+	return get_viewport().get_visible_rect().size * Vector2(0.28, 0.55)
+
+
+func _make_serve_fly_icecream(parent: Control) -> Control:
+	var cone := Control.new()
+	cone.name = "ServeFlyIceCream"
+	cone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var cw := 58.0
+	var ch := 82.0
+	cone.custom_minimum_size = Vector2(cw, ch)
+	cone.size = Vector2(cw, ch)
+	cone.pivot_offset = Vector2(cw * 0.5, ch * 0.58)
+	parent.add_child(cone)
+
+	var cream_col := Color(1.0, 0.93, 0.78, 1.0)
+	var scoop_ws: Array[float] = [44.0, 36.0, 27.0, 18.0]
+	var scoop_hs: Array[float] = [20.0, 18.0, 15.0, 12.0]
+	for i in 4:
+		var scoop := Panel.new()
+		scoop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var w: float = scoop_ws[i]
+		var h: float = scoop_hs[i]
+		scoop.position = Vector2((cw - w) * 0.5 + sin(float(i) * 1.2) * 2.0, 7.0 + float(3 - i) * 11.0)
+		scoop.size = Vector2(w, h)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = cream_col
+		sb.set_corner_radius_all(int(h * 0.5))
+		sb.shadow_color = Color(1.0, 0.78, 0.42, 0.18)
+		sb.shadow_size = 4
+		scoop.add_theme_stylebox_override("panel", sb)
+		cone.add_child(scoop)
+
+	var tip := ColorRect.new()
+	tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tip.color = cream_col
+	tip.position = Vector2(cw * 0.5 + 4.0, 1.0)
+	tip.size = Vector2(5.0, 13.0)
+	tip.rotation = deg_to_rad(-28.0)
+	cone.add_child(tip)
+
+	var waffle := Polygon2D.new()
+	waffle.color = Color(0.84, 0.48, 0.18, 1.0)
+	waffle.polygon = PackedVector2Array([
+		Vector2(cw * 0.24, 49.0),
+		Vector2(cw * 0.76, 49.0),
+		Vector2(cw * 0.50, ch - 3.0),
+	])
+	cone.add_child(waffle)
+	for i in 4:
+		var line := ColorRect.new()
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.color = Color(0.42, 0.20, 0.08, 0.55)
+		line.position = Vector2(cw * 0.32, 55.0 + i * 6.0)
+		line.size = Vector2(cw * 0.36, 2.0)
+		line.rotation = deg_to_rad(18.0)
+		cone.add_child(line)
+	return cone
+
+
+func _play_icecream_fly_to_mouth(from_cone: Node3D, customer: Node3D, on_done: Callable) -> void:
+	_serve_fly_busy = true
+	var ui_root: Control = get_node_or_null("UI/Root") as Control
+	if ui_root == null or camera == null or customer == null or not is_instance_valid(customer):
+		_serve_fly_busy = false
+		if from_cone != null and is_instance_valid(from_cone):
+			from_cone.queue_free()
+		on_done.call()
+		return
+
+	var fly_root := Control.new()
+	fly_root.name = "IceCreamFlyLayer"
+	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fly_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fly_root.z_index = 253
+	ui_root.add_child(fly_root)
+
+	var cone_ui := _make_serve_fly_icecream(fly_root)
+	var start_pos := _icecream_screen_center(from_cone) - cone_ui.pivot_offset
+	var mouth_pos := _customer_mouth_screen(customer) - cone_ui.pivot_offset + Vector2(-10.0, 8.0)
+	cone_ui.global_position = start_pos
+	cone_ui.scale = Vector2.ONE
+	cone_ui.rotation = 0.0
+	cone_ui.modulate = Color.WHITE
+
+	if from_cone != null and is_instance_valid(from_cone):
+		from_cone.visible = false
+	if customer.has_method("begin_catch_burger"):
+		customer.begin_catch_burger()
+
+	var finish_cone := func() -> void:
+		if customer != null and is_instance_valid(customer) and customer.has_method("finish_catch_burger"):
+			customer.finish_catch_burger()
+		if from_cone != null and is_instance_valid(from_cone):
+			from_cone.queue_free()
+		if is_instance_valid(fly_root):
+			fly_root.queue_free()
+		_serve_fly_busy = false
+		on_done.call()
+
+	var tw := create_tween()
+	tw.tween_callback(func() -> void:
+		if game_audio and game_audio.has_method("play_serve_whoosh"):
+			game_audio.play_serve_whoosh()
+	)
+	var fly_step := func(t: float) -> void:
+		if not is_instance_valid(cone_ui):
+			return
+		var end_pos := mouth_pos
+		if customer != null and is_instance_valid(customer):
+			end_pos = _customer_mouth_screen(customer) - cone_ui.pivot_offset + Vector2(-10.0, 8.0)
+		var mid := start_pos.lerp(end_pos, 0.5) + Vector2(0.0, -82.0)
+		var eased := t * t * (3.0 - 2.0 * t)
+		var u := 1.0 - eased
+		cone_ui.global_position = u * u * start_pos + 2.0 * u * eased * mid + eased * eased * end_pos
+		cone_ui.rotation = deg_to_rad(lerpf(-10.0, 12.0, sin(t * PI * 0.9)))
+		cone_ui.scale = Vector2.ONE.lerp(Vector2(0.46, 0.46), ease(t, 1.35))
+	tw.tween_method(fly_step, 0.0, 1.0, 0.48).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func() -> void:
+		if customer != null and is_instance_valid(customer) and customer.has_method("chomp_burger"):
+			customer.chomp_burger()
+		if game_audio and game_audio.has_method("play_burger_chomp"):
+			game_audio.play_burger_chomp()
+	)
+	var eat_step := func(t: float) -> void:
+		if not is_instance_valid(cone_ui):
+			return
+		var end_pos := mouth_pos
+		if customer != null and is_instance_valid(customer):
+			end_pos = _customer_mouth_screen(customer) - cone_ui.pivot_offset + Vector2(-10.0, 8.0)
+		cone_ui.global_position = end_pos + Vector2(0.0, lerpf(0.0, 10.0, t))
+		cone_ui.scale = Vector2(0.46, 0.46).lerp(Vector2(0.08, 0.05), ease(t, 2.0))
+		cone_ui.modulate.a = 1.0 - ease(t, 1.5)
+		cone_ui.rotation = deg_to_rad(lerpf(12.0, -4.0, t))
+	tw.tween_method(eat_step, 0.0, 1.0, 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(finish_cone)
+
+
 func _play_cup_fly_to_mouth(customer: Node3D, on_done: Callable, companion: bool = false) -> void:
 	## Toss the fountain drink to the customer. companion=true runs beside a burger toss.
 	if not companion:
@@ -23042,9 +26704,29 @@ func _play_cup_fly_to_mouth(customer: Node3D, on_done: Callable, companion: bool
 	elif cup_flavor != "":
 		flavor = cup_flavor
 	_serve_cup_node = drink
+	var serving_drink := drink
+	var serving_was_active := serving_drink != null and serving_drink == cup_root
+	if serving_drink != null and is_instance_valid(serving_drink):
+		serving_drink.set_meta("serving", true)
+		parked_cups.erase(serving_drink)
+		_clear_tray_slot(serving_drink)
+		if serving_was_active:
+			cup_root = null
+			cup_held = false
+			cup_drawing = false
+			_clear_cup_refs()
+			cup_flavor = ""
+			cup_soda_fill = 0.0
+			cup_ice_fill = 0.0
+			_cup_fizz = 0.0
+			_cup_foam_linger = 0.0
+			_cup_pour_white = 0.0
+		_layout_parked_cups()
 	if ui_root == null or camera == null or customer == null or not is_instance_valid(customer):
 		if not companion:
 			_serve_fly_busy = false
+		if serving_drink != null and is_instance_valid(serving_drink):
+			serving_drink.queue_free()
 		on_done.call()
 		return
 
@@ -23082,7 +26764,14 @@ func _play_cup_fly_to_mouth(customer: Node3D, on_done: Callable, companion: bool
 				_auto_serving = false
 			## Consume removes / clears the drink that flew.
 			on_done.call()
-			if cup_root != null and is_instance_valid(cup_root):
+			if serving_drink != null and is_instance_valid(serving_drink) \
+					and not bool(serving_drink.get_meta("serving_consumed", false)):
+				serving_drink.visible = true
+				serving_drink.remove_meta("serving")
+				if serving_was_active:
+					cup_root = serving_drink
+			elif cup_root != null and is_instance_valid(cup_root) \
+					and not bool(cup_root.get_meta("serving", false)):
 				cup_root.visible = true
 		else:
 			## Burger fly owns the serve callback; cup stays hidden until consume.
@@ -23567,6 +27256,12 @@ func _on_serve() -> void:
 				_flash("Pour a full %s first" % lab, Color("FF8A65"))
 		_update_hud()
 		return
+	if not _icecream_ready_for_order(order, cust):
+		combo = 0
+		if not _auto_serving:
+			_flash("Make the ice cream cone first", Color("FFF3B0"))
+		_update_hud()
+		return
 	## Drink-only — hand off the cup with no burger station.
 	if GameDataScript.is_soda_only_order(order):
 		if mp_enabled and not _mp_applying:
@@ -23708,12 +27403,17 @@ func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> vo
 	var order: Array = customer.order
 	var burger_order: Array = GameDataScript.order_burger_items(order)
 	var crowned_for_serve := false
-	if items.has("patty") and not items.has("bun_top") and burger_order.has("bun_top"):
+	var needs_serve_crown := items.has("patty") and not items.has("bun_top") and burger_order.has("bun_top")
+	if needs_serve_crown:
 		crowned_for_serve = _crown_serve_burger(station_index)
 		if crowned_for_serve:
 			_start_station_freshness(station_index)
 			_refresh_station(station_index)
 			items = st["items"]
+		elif not force_mp:
+			if not _auto_serving:
+				_flash("Need a top bun before serving", Color("FFCC80"))
+			return
 
 	if game_audio and game_audio.has_method("play_order_up"):
 		game_audio.play_order_up()
@@ -23824,16 +27524,13 @@ func _begin_start_tutorial() -> void:
 func _set_tutorial_hint(step: int, text: String) -> void:
 	_tutorial_step = step
 	_tutorial_text = text
+	_tutorial_hint_cycle_t = 0.0
 	if flash_label == null:
 		return
 	if _flash_tween != null and is_instance_valid(_flash_tween):
 		_flash_tween.kill()
 		_flash_tween = null
-	flash_label.text = text
-	flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
-	flash_label.visible = true
-	flash_label.modulate.a = 1.0
-	_layout_flash_label()
+	_apply_tutorial_hint_visibility()
 
 
 func _clear_tutorial_hint() -> void:
@@ -23846,6 +27543,36 @@ func _clear_tutorial_hint() -> void:
 		_flash_tween = null
 	flash_label.visible = false
 	flash_label.modulate.a = 1.0
+
+
+func _tutorial_hint_period() -> float:
+	return TUTORIAL_HINT_VISIBLE_TIME + TUTORIAL_HINT_HIDDEN_TIME
+
+
+func _tutorial_hint_should_show() -> bool:
+	return _tutorial_hint_cycle_t < TUTORIAL_HINT_VISIBLE_TIME
+
+
+func _apply_tutorial_hint_visibility() -> void:
+	if flash_label == null or _tutorial_text == "":
+		return
+	flash_label.text = _tutorial_text
+	flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
+	flash_label.visible = _tutorial_hint_should_show()
+	flash_label.modulate.a = 1.0
+	if flash_label.visible:
+		_layout_flash_label()
+
+
+func _update_tutorial_hint_cycle(delta: float) -> void:
+	if flash_label == null or _tutorial_text == "":
+		return
+	if _flash_tween != null and is_instance_valid(_flash_tween):
+		return
+	var was_visible := _tutorial_hint_should_show()
+	_tutorial_hint_cycle_t = fposmod(_tutorial_hint_cycle_t + delta, _tutorial_hint_period())
+	if was_visible != _tutorial_hint_should_show() or flash_label.text != _tutorial_text:
+		_apply_tutorial_hint_visibility()
 
 
 func _flash(text: String, color: Color) -> void:
@@ -23862,12 +27589,9 @@ func _flash(text: String, color: Color) -> void:
 	_flash_tween.tween_interval(1.1)
 	_flash_tween.tween_property(flash_label, "modulate:a", 0.0, 0.4)
 	_flash_tween.tween_callback(func():
+		_flash_tween = null
 		if _tutorial_text != "":
-			flash_label.text = _tutorial_text
-			flash_label.add_theme_color_override("font_color", Color("FFEB3B"))
-			flash_label.visible = true
-			flash_label.modulate.a = 1.0
-			_layout_flash_label()
+			_apply_tutorial_hint_visibility()
 		else:
 			flash_label.visible = false
 			flash_label.modulate.a = 1.0
@@ -23877,12 +27601,28 @@ func _flash(text: String, color: Color) -> void:
 func _setup_start_menu_chrome() -> void:
 	## Dark title wash + black CTA card; logo sits in front of the card.
 	if start_overlay != null and is_instance_valid(start_overlay):
-		start_overlay.color = Color(0.0, 0.0, 0.0, 0.78)
+		start_overlay.color = Color(0.0, 0.0, 0.0, 0.30)
 		start_overlay.z_index = 40
 		start_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+		var blocker := start_overlay.get_node_or_null("TruckDimmingBlocker") as ColorRect
+		if blocker == null:
+			blocker = ColorRect.new()
+			blocker.name = "TruckDimmingBlocker"
+			blocker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			start_overlay.add_child(blocker)
+			start_overlay.move_child(blocker, 0)
+		blocker.color = Color(0.0, 0.0, 0.0, 0.30)
+		blocker.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+		blocker.offset_left = -520.0
+		blocker.offset_top = -280.0
+		blocker.offset_right = 520.0
+		blocker.offset_bottom = 245.0
+		blocker.z_index = -1
 	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
 	if center == null:
 		return
+	center.offset_top = -390.0
+	center.offset_bottom = 210.0
 	if center.get_node_or_null("StartMenuCard") != null:
 		return
 
@@ -23892,14 +27632,17 @@ func _setup_start_menu_chrome() -> void:
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	card.z_index = 0
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.0, 0.0, 0.0, 0.92)
-	style.set_corner_radius_all(18)
+	style.bg_color = Color(0.0, 0.0, 0.0, 0.94)
+	style.set_corner_radius_all(16)
 	style.set_border_width_all(1)
-	style.border_color = Color(1.0, 1.0, 1.0, 0.12)
+	style.border_color = Color(1.0, 0.88, 0.55, 0.18)
 	style.content_margin_left = 28
 	style.content_margin_right = 28
-	style.content_margin_top = 72 ## room for logo overlap
-	style.content_margin_bottom = 22
+	style.content_margin_top = 66 ## room for logo overlap
+	style.content_margin_bottom = 24
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
+	style.shadow_size = 16
+	style.shadow_offset = Vector2(0, 8)
 	card.add_theme_stylebox_override("panel", style)
 
 	var card_col := VBoxContainer.new()
@@ -23920,13 +27663,20 @@ func _setup_start_menu_chrome() -> void:
 		start_logo_wrap.z_index = 5
 		center.move_child(start_logo_wrap, 0)
 		center.move_child(card, 1)
-		center.add_theme_constant_override("separation", -56)
+		center.add_theme_constant_override("separation", -88)
 	else:
 		center.move_child(card, 0)
 
 	if blurb != null and is_instance_valid(blurb):
 		blurb.reparent(card_col)
-		blurb.add_theme_color_override("font_color", Color(0.92, 0.94, 0.98, 0.95))
+		blurb.add_theme_color_override("font_color", Color(0.96, 0.97, 1.0, 0.98))
+		blurb.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.88))
+		blurb.add_theme_constant_override("outline_size", 4)
+		if blurb is Label:
+			var blurb_label := blurb as Label
+			blurb_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			blurb_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			blurb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if mode_row != null and is_instance_valid(mode_row):
 		mode_row.reparent(card_col)
 
@@ -23960,14 +27710,35 @@ func _setup_multiplayer_ui() -> void:
 	if start_btn and start_btn.get_parent() == center:
 		center.remove_child(start_btn)
 		start_mode_row.add_child(start_btn)
-		start_btn.custom_minimum_size = Vector2(220, 56)
+		start_btn.custom_minimum_size = Vector2(238, 58)
+		UiFontsScript.apply_button(start_btn, true, 22)
+		start_btn.add_theme_color_override("font_color", Color(0.96, 0.97, 1.0, 1.0))
+		start_btn.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+		start_btn.add_theme_constant_override("outline_size", 4)
+		var solo_normal := StyleBoxFlat.new()
+		solo_normal.bg_color = Color(0.055, 0.06, 0.07, 0.98)
+		solo_normal.set_corner_radius_all(9)
+		solo_normal.set_border_width_all(1)
+		solo_normal.border_color = Color(1.0, 1.0, 1.0, 0.10)
+		solo_normal.content_margin_left = 18
+		solo_normal.content_margin_right = 18
+		solo_normal.content_margin_top = 10
+		solo_normal.content_margin_bottom = 10
+		var solo_hover := solo_normal.duplicate() as StyleBoxFlat
+		solo_hover.bg_color = Color(0.10, 0.11, 0.13, 1.0)
+		solo_hover.border_color = Color(1.0, 0.82, 0.36, 0.35)
+		var solo_pressed := solo_normal.duplicate() as StyleBoxFlat
+		solo_pressed.bg_color = Color(0.035, 0.04, 0.05, 1.0)
+		start_btn.add_theme_stylebox_override("normal", solo_normal)
+		start_btn.add_theme_stylebox_override("hover", solo_hover)
+		start_btn.add_theme_stylebox_override("pressed", solo_pressed)
 
 	multiplayer_btn = Button.new()
 	multiplayer_btn.name = "MultiplayerButton"
 	multiplayer_btn.text = "MULTIPLAYER"
-	multiplayer_btn.custom_minimum_size = Vector2(220, 56)
+	multiplayer_btn.custom_minimum_size = Vector2(238, 58)
 	multiplayer_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	UiFontsScript.apply_button(multiplayer_btn, true, 20)
+	UiFontsScript.apply_button(multiplayer_btn, true, 22)
 	## Warm accent so it reads as a second primary CTA.
 	var mp_normal := StyleBoxFlat.new()
 	mp_normal.bg_color = Color(0.85, 0.45, 0.12, 0.95)
@@ -23984,6 +27755,8 @@ func _setup_multiplayer_ui() -> void:
 	multiplayer_btn.add_theme_stylebox_override("hover", mp_hover)
 	multiplayer_btn.add_theme_stylebox_override("pressed", mp_pressed)
 	multiplayer_btn.add_theme_color_override("font_color", Color(1, 1, 1, 1))
+	multiplayer_btn.add_theme_color_override("font_outline_color", Color(0.35, 0.12, 0.02, 0.75))
+	multiplayer_btn.add_theme_constant_override("outline_size", 3)
 	start_mode_row.add_child(multiplayer_btn)
 
 	center.add_child(start_mode_row)
@@ -24528,6 +28301,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 	mp_enabled = true
 	mp_held_net.clear()
 	drag_owner_id = 0
+	_stop_intro_title_music()
 	if _mp_lobby_root:
 		_mp_lobby_root.visible = false
 	if start_overlay != null and is_instance_valid(start_overlay):
@@ -24729,6 +28503,23 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			float(slick.get("scrape", 1.0)),
 			bool(slick.get("charred", false))
 		)
+	for ice in melting_icecreams:
+		if typeof(ice) != TYPE_DICTIONARY:
+			continue
+		var puddle = (ice as Dictionary).get("puddle")
+		if puddle == null or not is_instance_valid(puddle):
+			continue
+		mp_icecream_melt_state.rpc_id(
+			peer_id,
+			float((puddle as Node3D).global_position.x),
+			float((puddle as Node3D).global_position.z),
+			float((ice as Dictionary).get("fill", 1.0)),
+			float((ice as Dictionary).get("age", 0.0)),
+			float((ice as Dictionary).get("scrape", 1.0)),
+			bool((ice as Dictionary).get("charred", false)),
+			bool((ice as Dictionary).get("fired", false)),
+			bool((ice as Dictionary).get("cone_removed", false))
+		)
 	for ri in GRILL_SLOTS:
 		if float(grill_residue[ri]) <= 0.05:
 			continue
@@ -24747,7 +28538,11 @@ func _mp_send_social_feed_to(peer_id: int) -> void:
 		pack["stars"],
 		pack["who"],
 		pack["text"],
-		pack["pic"]
+		pack["pic"],
+		pack["id"],
+		pack["reply"],
+		pack["reply_kind"],
+		pack["argue"]
 	)
 
 
@@ -24755,7 +28550,16 @@ func _mp_broadcast_social_feed() -> void:
 	if not NetManager.is_host() or not NetManager.is_online():
 		return
 	var pack: Dictionary = _mp_pack_social_feed()
-	mp_social_feed_sync.rpc(pack["stars"], pack["who"], pack["text"], pack["pic"])
+	mp_social_feed_sync.rpc(
+		pack["stars"],
+		pack["who"],
+		pack["text"],
+		pack["pic"],
+		pack["id"],
+		pack["reply"],
+		pack["reply_kind"],
+		pack["argue"]
+	)
 
 
 func _mp_pack_social_feed() -> Dictionary:
@@ -24763,12 +28567,20 @@ func _mp_pack_social_feed() -> Dictionary:
 	var who_arr: Array = []
 	var text_arr: Array = []
 	var pic_arr: Array = []
+	var id_arr: Array = []
+	var reply_arr: Array = []
+	var reply_kind_arr: Array = []
+	var argue_arr: Array = []
 	for post in social_reviews:
 		if typeof(post) != TYPE_DICTIONARY:
 			continue
 		stars_arr.append(float(post.get("stars", 0.0)))
 		who_arr.append(str(post.get("who", "Guest")))
 		text_arr.append(str(post.get("text", "")))
+		id_arr.append(int(post.get("id", 0)))
+		reply_arr.append(str(post.get("reply", "")))
+		reply_kind_arr.append(str(post.get("reply_kind", "")))
+		argue_arr.append(str(post.get("argue", "")))
 		var pic_png := PackedByteArray()
 		var pic = post.get("pic")
 		if pic is Texture2D:
@@ -24778,7 +28590,16 @@ func _mp_pack_social_feed() -> Dictionary:
 					img.decompress()
 				pic_png = img.save_png_to_buffer()
 		pic_arr.append(pic_png)
-	return {"stars": stars_arr, "who": who_arr, "text": text_arr, "pic": pic_arr}
+	return {
+		"stars": stars_arr,
+		"who": who_arr,
+		"text": text_arr,
+		"pic": pic_arr,
+		"id": id_arr,
+		"reply": reply_arr,
+		"reply_kind": reply_kind_arr,
+		"argue": argue_arr,
+	}
 
 
 @rpc("any_peer", "reliable")
@@ -24857,6 +28678,29 @@ func _mp_send_held_cup_pose(force: bool = false) -> void:
 		cup_ice_fill,
 		_cup_fizz,
 		_cup_pouring
+	)
+
+
+func _mp_send_held_icecream_pose(force: bool = false) -> void:
+	## Stream held soft-serve so partners see the cone, fill level, and dispensing.
+	if not mp_enabled or not NetManager.is_online():
+		return
+	if not icecream_cone_held or icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		if force:
+			mp_icecream_pose.rpc(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false)
+		return
+	if not force and _mp_icecream_pose_cool > 0.0:
+		return
+	_mp_icecream_pose_cool = 0.04
+	var p: Vector3 = icecream_cone_root.global_position
+	var r: Vector3 = icecream_cone_root.global_rotation_degrees
+	var pouring := icecream_stream_mesh != null and is_instance_valid(icecream_stream_mesh) and icecream_stream_mesh.visible
+	mp_icecream_pose.rpc(
+		true,
+		p.x, p.y, p.z,
+		r.x, r.y, r.z,
+		clampf(icecream_cone_fill, 0.0, 1.0),
+		pouring
 	)
 
 
@@ -24954,6 +28798,11 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		var cup: Node3D = _mp_remote_cups[peer_id]
 		if cup != null and is_instance_valid(cup):
 			cup.visible = false
+	if _mp_remote_icecreams.has(peer_id):
+		var ice: Node3D = _mp_remote_icecreams[peer_id]
+		if ice != null and is_instance_valid(ice):
+			ice.visible = false
+			_mp_set_remote_icecream_stream(ice, false)
 
 
 func _mp_ensure_remote_cup(peer_id: int) -> Node3D:
@@ -24970,6 +28819,64 @@ func _mp_ensure_remote_cup(peer_id: int) -> Node3D:
 	world.add_child(ghost)
 	_mp_remote_cups[peer_id] = ghost
 	return ghost
+
+
+func _mp_ensure_remote_icecream(peer_id: int) -> Node3D:
+	if _mp_remote_icecreams.has(peer_id):
+		var existing: Node3D = _mp_remote_icecreams[peer_id]
+		if existing != null and is_instance_valid(existing):
+			return existing
+	if world == null:
+		return null
+	var ghost := _create_icecream_cone_node(false)
+	ghost.name = "RemoteIceCreamCone_%d" % peer_id
+	_mp_strip_tool_pickable(ghost)
+	ghost.visible = false
+	world.add_child(ghost)
+	_mp_remote_icecreams[peer_id] = ghost
+	return ghost
+
+
+func _mp_ensure_remote_icecream_stream(root: Node3D) -> MeshInstance3D:
+	if root == null or not is_instance_valid(root):
+		return null
+	var existing := root.get_node_or_null("RemoteSoftServeStream") as MeshInstance3D
+	if existing != null:
+		return existing
+	var stream := MeshInstance3D.new()
+	stream.name = "RemoteSoftServeStream"
+	stream.mesh = ArrayMesh.new()
+	stream.material_override = icecream_stream_mat if icecream_stream_mat != null else _make_icecream_mat(Color(1.0, 0.91, 0.72, 1.0), 0.34, 0.064)
+	stream.visible = false
+	stream.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(stream)
+	return stream
+
+
+func _mp_set_remote_icecream_stream(root: Node3D, pouring: bool) -> void:
+	var stream := _mp_ensure_remote_icecream_stream(root)
+	if stream == null:
+		return
+	if not pouring or icecream_spout_marker == null or not is_instance_valid(icecream_spout_marker):
+		stream.visible = false
+		return
+	var fill := clampf(float(root.get_meta("icecream_fill", 0.0)), 0.0, 1.0)
+	var tip := icecream_spout_marker.global_position
+	var rim := root.global_position + Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + fill * 0.09, 0.0)
+	stream.visible = true
+	stream.global_position = tip
+	stream.global_basis = Basis.IDENTITY
+	stream.mesh = _make_icecream_stream_curve_mesh(tip, rim)
+
+
+func _mp_apply_remote_icecream_fill(root: Node3D, fill: float, pouring: bool) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	fill = clampf(fill, 0.0, 1.0)
+	root.set_meta("icecream_fill", fill)
+	var swirl := root.get_node_or_null("SoftServeSwirl") as Node3D
+	_refresh_icecream_cone_visuals_for(swirl, fill)
+	_mp_set_remote_icecream_stream(root, pouring)
 
 
 func _mp_apply_remote_cup_fill(root: Node3D, flavor: String, fill: float, ice: float, fizz: float) -> void:
@@ -25015,6 +28922,39 @@ func _mp_apply_remote_cup_fill(root: Node3D, flavor: String, fill: float, ice: f
 		else:
 			liq.visible = false
 	_apply_parked_cup_foam_visual(root, fizz, CUP_FOAM_LINGER if fill > 0.08 else 0.0, fill, false, 0.0)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_icecream_pose(
+	active: bool,
+	x: float,
+	y: float,
+	z: float,
+	rx: float,
+	ry: float,
+	rz: float,
+	fill: float,
+	pouring: bool
+) -> void:
+	## Partner is carrying / dispensing soft serve — show a ghost cone in their hand.
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	if not active:
+		if _mp_remote_icecreams.has(sid):
+			var hide_cone: Node3D = _mp_remote_icecreams[sid]
+			if hide_cone != null and is_instance_valid(hide_cone):
+				hide_cone.visible = false
+				_mp_set_remote_icecream_stream(hide_cone, false)
+		return
+	_mp_hide_remote_tools(sid, -1)
+	var ghost := _mp_ensure_remote_icecream(sid)
+	if ghost == null:
+		return
+	ghost.visible = true
+	ghost.global_position = Vector3(x, y, z)
+	ghost.global_rotation_degrees = Vector3(rx, ry, rz)
+	_mp_apply_remote_icecream_fill(ghost, fill, pouring)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -25225,7 +29165,7 @@ func _patty_by_net_id(net_id: int):
 			if p != null and is_instance_valid(p) and int(p.get("net_id")) == net_id:
 				return p
 	for child in patties_root.get_children():
-		if child != null and is_instance_valid(child) and int(child.get("net_id")) == net_id:
+		if child != null and is_instance_valid(child) and not bool(child.get_meta("patty_pool", false)) and int(child.get("net_id")) == net_id:
 			return child
 	return null
 
@@ -26134,18 +30074,29 @@ func mp_social_feed_sync(
 	stars_arr: Array,
 	who_arr: Array,
 	text_arr: Array,
-	pic_arr: Array
+	pic_arr: Array,
+	id_arr: Array = [],
+	reply_arr: Array = [],
+	reply_kind_arr: Array = [],
+	argue_arr: Array = []
 ) -> void:
 	## Absolute feed replace (late-join + live sync). Ratings stay on economy sync.
 	if NetManager.is_host():
 		return
 	social_reviews.clear()
 	var n := mini(stars_arr.size(), mini(who_arr.size(), text_arr.size()))
+	var max_id := _social_post_seq
 	for i in n:
+		var pid := int(id_arr[i]) if i < id_arr.size() else (i + 1)
+		max_id = maxi(max_id, pid)
 		var post := {
+			"id": pid,
 			"stars": clampf(float(stars_arr[i]), 0.0, 5.0),
 			"who": str(who_arr[i]),
 			"text": str(text_arr[i]),
+			"reply": str(reply_arr[i]) if i < reply_arr.size() else "",
+			"reply_kind": str(reply_kind_arr[i]) if i < reply_kind_arr.size() else "",
+			"argue": str(argue_arr[i]) if i < argue_arr.size() else "",
 		}
 		if i < pic_arr.size():
 			var pic_png: PackedByteArray = pic_arr[i] as PackedByteArray
@@ -26154,9 +30105,20 @@ func mp_social_feed_sync(
 				if img.load_png_from_buffer(pic_png) == OK:
 					post["pic"] = ImageTexture.create_from_image(img)
 		social_reviews.append(post)
+	_social_post_seq = max_id
 	_refresh_phone_ui()
 	if n > 0:
 		_scroll_phone_to_social()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_social_reply(post_id: int, kind: String, text: String, argue: String) -> void:
+	## Guest → host: apply owner reply, then rebroadcast absolute feed.
+	if not NetManager.is_host():
+		_apply_social_reply_remote(post_id, kind, text, argue)
+		return
+	_apply_social_reply_remote(post_id, kind, text, argue)
+	_mp_broadcast_social_feed()
 
 
 func _mp_broadcast_customers() -> void:
@@ -26605,6 +30567,110 @@ func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float, cu
 	_mp_applying = false
 
 
+@rpc("any_peer", "call_remote", "reliable")
+func mp_icecream_melt(x: float, z: float, fill: float) -> void:
+	## Partner dropped a cone on the flat-top — mirror the slump / puddle / burn.
+	if world == null:
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid != 0 and _mp_remote_icecreams.has(sid):
+		var held_ghost: Node3D = _mp_remote_icecreams[sid]
+		if held_ghost != null and is_instance_valid(held_ghost):
+			held_ghost.visible = false
+			_mp_set_remote_icecream_stream(held_ghost, false)
+	_mp_applying = true
+	var root := _create_icecream_cone_node(false)
+	world.add_child(root)
+	root.global_position = Vector3(x, GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012, z)
+	_refresh_icecream_cone_visuals_for(root.get_node_or_null("SoftServeSwirl") as Node3D, fill)
+	_begin_icecream_melt_local(root, clampf(fill, 0.0, 1.0), true)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_icecream_melt_state(
+	x: float,
+	z: float,
+	fill: float,
+	age: float,
+	scrape: float,
+	charred: bool,
+	fired: bool,
+	cone_removed: bool
+) -> void:
+	## Mid-join catch-up for soft-serve already melting on the flat-top.
+	if world == null:
+		return
+	_mp_applying = true
+	var root := _create_icecream_cone_node(false)
+	world.add_child(root)
+	root.global_position = Vector3(x, GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012, z)
+	_refresh_icecream_cone_visuals_for(root.get_node_or_null("SoftServeSwirl") as Node3D, fill)
+	_begin_icecream_melt_local(root, clampf(fill, 0.0, 1.0), true)
+	if not melting_icecreams.is_empty():
+		var item: Dictionary = melting_icecreams[melting_icecreams.size() - 1]
+		item["age"] = maxf(0.0, age)
+		item["scrape"] = clampf(scrape, 0.08, 1.0)
+		item["charred"] = charred
+		item["fired"] = fired
+		if cone_removed:
+			var r = item.get("root")
+			if r != null and is_instance_valid(r):
+				(r as Node).queue_free()
+			item["root"] = null
+			item["cone_removed"] = true
+		elif charred:
+			_blacken_icecream_cone(root)
+		melting_icecreams[melting_icecreams.size() - 1] = item
+	_mp_applying = false
+
+
+func _mp_find_nearest_icecream_melt_idx(x: float, z: float, max_d: float = 0.26) -> int:
+	var best := -1
+	var best_d := max_d
+	for i in melting_icecreams.size():
+		var item: Dictionary = melting_icecreams[i]
+		var puddle = item.get("puddle")
+		if puddle == null or not is_instance_valid(puddle):
+			continue
+		var p := (puddle as Node3D).global_position
+		var d := Vector2(x - p.x, z - p.z).length()
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_icecream_cone_removed(x: float, z: float) -> void:
+	## Partner picked the burnt cone out of a melting pile; leave the cream/crust behind.
+	var idx := _mp_find_nearest_icecream_melt_idx(x, z)
+	if idx < 0:
+		return
+	var item: Dictionary = melting_icecreams[idx]
+	var root = item.get("root")
+	if root != null and is_instance_valid(root):
+		(root as Node).queue_free()
+	item["root"] = null
+	item["cone_removed"] = true
+	melting_icecreams[idx] = item
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_icecream_melt_clear(x: float, z: float) -> void:
+	## Partner scraped away a burnt ice-cream crust.
+	var idx := _mp_find_nearest_icecream_melt_idx(x, z)
+	if idx < 0:
+		return
+	var item: Dictionary = melting_icecreams[idx]
+	_clear_icecream_melt_bubbles(item)
+	for key in ["root", "swirl", "puddle", "smoke"]:
+		var node = item.get(key)
+		if node != null and is_instance_valid(node):
+			(node as Node).queue_free()
+	melting_icecreams.remove_at(idx)
+
+
 func _mp_apply_idle_drink_visuals(root: Node3D, flavor: String, fill: float, ice: float, fizz: float) -> void:
 	## Shared liquid / foam sizing for parked + steel mirrors.
 	if root == null or not is_instance_valid(root):
@@ -26669,6 +30735,7 @@ func _mp_spawn_parked_drink_local(
 		root.set_meta("mp_mirror", true)
 		root.set_meta("on_steel", false)
 		root.set_meta("steel_hold", false)
+		_assign_free_tray_slot(root)
 		_mp_apply_idle_drink_visuals(root, flavor, fill, ice, fizz)
 		_layout_parked_cups()
 		_update_parked_cups_foam(0.0)
@@ -26680,11 +30747,12 @@ func _mp_spawn_parked_drink_local(
 	root.set_meta("mp_mirror", true)
 	root.set_meta("on_steel", false)
 	root.set_meta("steel_hold", false)
+	_assign_free_tray_slot(root)
 	_mp_apply_idle_drink_visuals(root, flavor, fill, ice, fizz)
 	var area := root.get_node_or_null("CupGrab") as Area3D
 	if area:
 		area.input_ray_pickable = true
-	parked_cups.push_front(root)
+	parked_cups.append(root)
 	_layout_parked_cups()
 	_update_parked_cups_foam(0.0)
 	_refresh_ticket_checkmarks()
@@ -26710,12 +30778,13 @@ func _mp_spawn_steel_drink_local(
 		root = _create_drink_cup_node()
 		world.add_child(root)
 		root.set_meta("cup_net_id", cup_net_id)
-		parked_cups.push_front(root)
+		parked_cups.append(root)
 	root.set_meta("mp_mirror", true)
 	root.set_meta("on_steel", true)
 	root.set_meta("steel_hold", on_hold)
+	_clear_tray_slot(root)
 	root.global_position = Vector3(x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, z)
-	root.rotation_degrees = Vector3(0.0, root.rotation_degrees.y, 0.0)
+	root.rotation_degrees = _cup_presented_rotation(root)
 	var area := root.get_node_or_null("CupGrab") as Area3D
 	if area:
 		area.input_ray_pickable = true

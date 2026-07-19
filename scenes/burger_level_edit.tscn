@@ -1,0 +1,391 @@
+[gd_scene load_steps=48 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/bg/street_window.png" id="1_street"]
+[ext_resource type="Texture2D" path="res://assets/grill/stainless_steel.png" id="2_steel"]
+[ext_resource type="Texture2D" path="res://assets/decal/first_sale.png" id="3_first_sale"]
+[ext_resource type="Texture2D" path="res://assets/decal/business_license.png" id="4_license"]
+[ext_resource type="Texture2D" path="res://assets/decal/health_certificate.png" id="5_health"]
+[ext_resource type="Texture2D" path="res://assets/decal/beach_photo.png" id="6_beach"]
+[ext_resource type="Texture2D" path="res://assets/decal/menu_board.png" id="7_menu"]
+[ext_resource type="Texture2D" path="res://assets/bunting/bunting_red_yellow.png" id="8_bunting"]
+[ext_resource type="Script" path="res://scripts/burger_level_edit.gd" id="9_level_script"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_black"]
+albedo_color = Color(0.0313726, 0.0313726, 0.0313726, 1)
+roughness = 0.7
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
+albedo_color = Color(0.101961, 0.101961, 0.101961, 1)
+roughness = 0.7
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_trim"]
+albedo_color = Color(0.0705882, 0.0705882, 0.0705882, 1)
+roughness = 0.7
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_counter"]
+albedo_color = Color(0.0196078, 0.0196078, 0.0196078, 1)
+roughness = 0.82
+metallic = 0.1
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_steel"]
+albedo_texture = ExtResource("2_steel")
+albedo_color = Color(0.75, 0.78, 0.8, 1)
+roughness = 0.26
+metallic = 0.85
+uv1_scale = Vector3(1.55, 0.85, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_steel_dark"]
+albedo_color = Color(0.32, 0.35, 0.38, 1)
+roughness = 0.28
+metallic = 0.9
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_hold"]
+albedo_texture = ExtResource("2_steel")
+albedo_color = Color(0.45, 0.49, 0.51, 1)
+roughness = 0.34
+metallic = 0.8
+uv1_scale = Vector3(0.5, 0.85, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_street"]
+shading_mode = 0
+albedo_texture = ExtResource("1_street")
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_first_sale"]
+shading_mode = 0
+transparency = 1
+albedo_texture = ExtResource("3_first_sale")
+albedo_color = Color(0.62, 0.62, 0.62, 0.9)
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_license"]
+shading_mode = 0
+transparency = 1
+albedo_texture = ExtResource("4_license")
+albedo_color = Color(0.28, 0.28, 0.28, 0.6)
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_health"]
+shading_mode = 0
+transparency = 1
+albedo_texture = ExtResource("5_health")
+albedo_color = Color(0.28, 0.28, 0.28, 0.6)
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_beach"]
+shading_mode = 0
+transparency = 1
+albedo_texture = ExtResource("6_beach")
+albedo_color = Color(0.28, 0.28, 0.28, 0.6)
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_menu"]
+shading_mode = 0
+transparency = 1
+albedo_texture = ExtResource("7_menu")
+albedo_color = Color(0.34, 0.34, 0.34, 0.6)
+cull_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bunting"]
+shading_mode = 0
+transparency = 1
+albedo_texture = ExtResource("8_bunting")
+cull_mode = 2
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor"]
+size = Vector3(6.5, 0.12, 4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_side_wall"]
+size = Vector3(0.22, 2.7, 4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_back_wall"]
+size = Vector3(6.5, 2.7, 0.22)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ceiling"]
+size = Vector3(6.5, 0.16, 4.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_front_side"]
+size = Vector3(1.15, 2.7, 0.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_front_top"]
+size = Vector3(4.8, 0.55, 0.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_front_bottom"]
+size = Vector3(4.8, 0.7, 0.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_window_rail"]
+size = Vector3(4.9, 0.12, 0.18)
+
+[sub_resource type="BoxMesh" id="BoxMesh_window_post"]
+size = Vector3(0.12, 1.3, 0.18)
+
+[sub_resource type="BoxMesh" id="BoxMesh_sill"]
+size = Vector3(4.8, 0.18, 0.65)
+
+[sub_resource type="BoxMesh" id="BoxMesh_cabinet"]
+size = Vector3(3.5, 0.95, 1.4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_side_counter"]
+size = Vector3(0.55, 0.95, 1.4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_grill_rim"]
+size = Vector3(1.846, 0.035, 1.01)
+
+[sub_resource type="BoxMesh" id="BoxMesh_grill_full"]
+size = Vector3(0.893, 0.045, 0.95)
+
+[sub_resource type="BoxMesh" id="BoxMesh_grill_half"]
+size = Vector3(0.469718, 0.045, 0.95)
+
+[sub_resource type="BoxMesh" id="BoxMesh_grill_hold"]
+size = Vector3(0.423282, 0.045, 0.95)
+
+[sub_resource type="QuadMesh" id="QuadMesh_street"]
+size = Vector2(18.2, 9.1)
+
+[sub_resource type="QuadMesh" id="QuadMesh_sale"]
+size = Vector2(0.72, 0.44)
+
+[sub_resource type="QuadMesh" id="QuadMesh_license"]
+size = Vector2(0.4, 0.333)
+
+[sub_resource type="QuadMesh" id="QuadMesh_health"]
+size = Vector2(0.3, 0.254)
+
+[sub_resource type="QuadMesh" id="QuadMesh_beach"]
+size = Vector2(0.175, 0.163)
+
+[sub_resource type="QuadMesh" id="QuadMesh_menu"]
+size = Vector2(0.52, 0.64)
+
+[sub_resource type="QuadMesh" id="QuadMesh_bunting"]
+size = Vector2(4.5, 0.45)
+
+[sub_resource type="Environment" id="Environment_edit"]
+background_mode = 2
+ambient_light_source = 2
+ambient_light_energy = 0.28
+reflected_light_source = 2
+tonemap_mode = 3
+tonemap_exposure = 0.92
+ssao_enabled = true
+ssao_radius = 1.15
+ssao_intensity = 1.35
+ssil_enabled = true
+ssil_intensity = 0.65
+glow_enabled = true
+glow_intensity = 1.05
+glow_strength = 1.35
+glow_bloom = 0.32
+adjustment_enabled = true
+adjustment_saturation = 1.06
+adjustment_contrast = 1.04
+
+[node name="BurgerLevelEdit" type="Node3D"]
+script = ExtResource("9_level_script")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 0.97908, 0.203475, 0, 0.203475, -0.97908, 0, 1.65, -1.62)
+current = true
+fov = 58.0
+
+[node name="World" type="Node3D" parent="."]
+
+[node name="TruckShell" type="Node3D" parent="World"]
+
+[node name="Floor" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.06, -0.4)
+mesh = SubResource("BoxMesh_floor")
+material_override = SubResource("StandardMaterial3D_floor")
+
+[node name="LeftWall" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3.25, 1.35, -0.4)
+mesh = SubResource("BoxMesh_side_wall")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="RightWall" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.25, 1.35, -0.4)
+mesh = SubResource("BoxMesh_side_wall")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="BackWall" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.35, -2.35)
+mesh = SubResource("BoxMesh_back_wall")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="Ceiling" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.72, -0.4)
+mesh = SubResource("BoxMesh_ceiling")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="FrontWallLeft" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.95, 1.35, 1.35)
+mesh = SubResource("BoxMesh_front_side")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="FrontWallRight" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.95, 1.35, 1.35)
+mesh = SubResource("BoxMesh_front_side")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="FrontWallTop" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.45, 1.35)
+mesh = SubResource("BoxMesh_front_top")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="FrontWallBottom" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, 1.35)
+mesh = SubResource("BoxMesh_front_bottom")
+material_override = SubResource("StandardMaterial3D_black")
+
+[node name="WindowTopRail" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.12, 1.38)
+mesh = SubResource("BoxMesh_window_rail")
+material_override = SubResource("StandardMaterial3D_trim")
+
+[node name="WindowBottomRail" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.95, 1.38)
+mesh = SubResource("BoxMesh_window_rail")
+material_override = SubResource("StandardMaterial3D_trim")
+
+[node name="WindowPostLeft" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.4, 1.55, 1.38)
+mesh = SubResource("BoxMesh_window_post")
+material_override = SubResource("StandardMaterial3D_trim")
+
+[node name="WindowPostRight" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.4, 1.55, 1.38)
+mesh = SubResource("BoxMesh_window_post")
+material_override = SubResource("StandardMaterial3D_trim")
+
+[node name="WindowSill" type="MeshInstance3D" parent="World/TruckShell"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.88, 1.1)
+mesh = SubResource("BoxMesh_sill")
+material_override = SubResource("StandardMaterial3D_trim")
+
+[node name="CounterCabinet" type="MeshInstance3D" parent="World"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.48, 0.3)
+mesh = SubResource("BoxMesh_cabinet")
+material_override = SubResource("StandardMaterial3D_counter")
+
+[node name="CounterLeftFill" type="MeshInstance3D" parent="World"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.05, 0.48, 0.3)
+mesh = SubResource("BoxMesh_side_counter")
+material_override = SubResource("StandardMaterial3D_counter")
+
+[node name="CounterRightFill" type="MeshInstance3D" parent="World"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.05, 0.48, 0.3)
+mesh = SubResource("BoxMesh_side_counter")
+material_override = SubResource("StandardMaterial3D_counter")
+
+[node name="Grill" type="Node3D" parent="."]
+
+[node name="GrillRim" type="MeshInstance3D" parent="Grill"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.068, 1.145, -0.02)
+mesh = SubResource("BoxMesh_grill_rim")
+material_override = SubResource("StandardMaterial3D_steel_dark")
+
+[node name="GrillFullHeat" type="MeshInstance3D" parent="Grill"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.5145, 1.155, -0.02)
+mesh = SubResource("BoxMesh_grill_full")
+material_override = SubResource("StandardMaterial3D_steel")
+
+[node name="GrillHalfHeat" type="MeshInstance3D" parent="Grill"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.166859, 1.155, -0.02)
+mesh = SubResource("BoxMesh_grill_half")
+material_override = SubResource("StandardMaterial3D_steel")
+
+[node name="GrillHold" type="MeshInstance3D" parent="Grill"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.613359, 1.155, -0.02)
+mesh = SubResource("BoxMesh_grill_hold")
+material_override = SubResource("StandardMaterial3D_hold")
+
+[node name="OutdoorStreet" type="Node3D" parent="World"]
+
+[node name="StreetMatte" type="MeshInstance3D" parent="World/OutdoorStreet"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 0, 1.64, 11.5)
+mesh = SubResource("QuadMesh_street")
+material_override = SubResource("StandardMaterial3D_street")
+cast_shadow = 0
+
+[node name="WallDecals" type="Node3D" parent="World"]
+
+[node name="FirstSale" type="MeshInstance3D" parent="World/WallDecals"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 0.42, 2.34, 1.23)
+mesh = SubResource("QuadMesh_sale")
+material_override = SubResource("StandardMaterial3D_first_sale")
+cast_shadow = 0
+
+[node name="BusinessLicense" type="MeshInstance3D" parent="World/WallDecals"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, -0.732, 2.372, 1.23)
+mesh = SubResource("QuadMesh_license")
+material_override = SubResource("StandardMaterial3D_license")
+cast_shadow = 0
+
+[node name="HealthCertificate" type="MeshInstance3D" parent="World/WallDecals"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, -1.112, 2.452, 1.23)
+mesh = SubResource("QuadMesh_health")
+material_override = SubResource("StandardMaterial3D_health")
+cast_shadow = 0
+
+[node name="BeachPhoto" type="MeshInstance3D" parent="World/WallDecals"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, -1.372, 2.292, 1.23)
+mesh = SubResource("QuadMesh_beach")
+material_override = SubResource("StandardMaterial3D_beach")
+cast_shadow = 0
+
+[node name="MenuBoard" type="MeshInstance3D" parent="World/WallDecals"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, -2.58, 1.72, 1.24)
+mesh = SubResource("QuadMesh_menu")
+material_override = SubResource("StandardMaterial3D_menu")
+cast_shadow = 0
+
+[node name="WindowBuntingPreview" type="MeshInstance3D" parent="World/WallDecals"]
+transform = Transform3D(1, 0, 0, 0, 0.965926, -0.258819, 0, 0.258819, 0.965926, 0, 1.88, 1.46)
+mesh = SubResource("QuadMesh_bunting")
+material_override = SubResource("StandardMaterial3D_bunting")
+cast_shadow = 0
+
+[node name="Lighting" type="Node3D" parent="."]
+
+[node name="Sun" type="DirectionalLight3D" parent="Lighting"]
+transform = Transform3D(0.817287, -0.198903, 0.540863, 0, 0.938191, 0.346117, -0.576231, -0.282862, 0.766761, 0, 0, 0)
+light_color = Color(1, 0.96, 0.88, 1)
+light_energy = 1.55
+light_indirect_energy = 1.15
+shadow_enabled = true
+shadow_blur = 1.2
+
+[node name="OutsideFill" type="DirectionalLight3D" parent="Lighting"]
+transform = Transform3D(-0.766044, -0.271654, 0.582563, 0, 0.906308, 0.422618, -0.642788, 0.323744, -0.694272, 0, 0, 0)
+light_color = Color(0.55, 0.68, 0.95, 1)
+light_energy = 0.35
+shadow_enabled = false
+
+[node name="KitchenFill" type="OmniLight3D" parent="Lighting"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.45, -0.35)
+light_color = Color(1, 0.88, 0.72, 1)
+light_energy = 1.65
+omni_range = 5.5
+omni_attenuation = 1.15
+shadow_enabled = true
+
+[node name="GrillLamp" type="SpotLight3D" parent="Lighting"]
+transform = Transform3D(1, 0, 0, 0, 0.309017, 0.951057, 0, -0.951057, 0.309017, -0.068, 2.35, -0.17)
+light_color = Color(1, 0.92, 0.78, 1)
+light_energy = 1.35
+spot_range = 3.2
+spot_attenuation = 0.9
+spot_angle = 42.0
+shadow_enabled = true
+
+[node name="WindowWash" type="SpotLight3D" parent="Lighting"]
+transform = Transform3D(-1, -3.69449e-08, -7.92864e-08, 0, 0.906308, -0.422618, 8.74228e-08, -0.422618, -0.906308, 0, 1.9, 1.55)
+light_color = Color(0.75, 0.88, 1, 1)
+light_energy = 1.1
+shadow_enabled = false
+spot_range = 4.0
+spot_angle = 50.0
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_edit")

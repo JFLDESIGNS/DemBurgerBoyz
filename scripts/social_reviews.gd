@@ -38,6 +38,51 @@ static func generate(stars: float, kind: String, tip: int = 0) -> String:
 	return _remember(_short_classic(s, kind, tip))
 
 
+static func argue_back(reply_kind: String, who: String = "Guest") -> String:
+	## Clap-back under a Burger Pals "Not True!" / "Liar!" reply.
+	var name := who if who.strip_edges() != "" else "Guest"
+	if reply_kind == "liar":
+		return _remember(_pick(_ARGUE_LIAR).replace("{who}", name))
+	return _remember(_pick(_ARGUE_NOT_TRUE).replace("{who}", name))
+
+
+const _ARGUE_NOT_TRUE: Array[String] = [
+	"It IS true lol I was there",
+	"Uhh yeah it is?? Receipts in my camera roll",
+	"Not true? Bro I still taste it",
+	"Cope. That burger was mid and you know it",
+	"Sure Jan. My stomach says otherwise",
+	"Deny it all you want — still happened",
+	"Okay Burger Pals PR team 💀",
+	"Funny how \"not true\" shows up faster than my food did",
+	"Keep lying to the algorithm",
+	"Nah I'm standing on business",
+	"Tell that to the burnt edges",
+	"Not true is crazy when I have the photo",
+	"Y'all reply faster than you cook",
+	"It's true and I'll say it again",
+	"Gaslight the customers challenge (impossible)",
+]
+
+const _ARGUE_LIAR: Array[String] = [
+	"I'm the liar?? YOU served that 💀",
+	"Liar? Check the pic then talk",
+	"Bold of the truck to call ME a liar",
+	"Okay then post the security cam",
+	"Calling customers liars is a choice",
+	"LMAO the audacity",
+	"I don't need to lie — your grill did the crime",
+	"Name's not Liar, it's {who}, and I'm right",
+	"If I'm lying why did you reply so fast",
+	"Keep that energy when health inspects",
+	"Projection much?",
+	"Burger Pals calling foul like a ref with no whistle",
+	"Say liar again. Say it to my cold fries",
+	"You called me a liar over a 1★? Wild",
+	"I'll be the liar AND the reviewer then",
+]
+
+
 static func _remember(text: String) -> String:
 	var t := text.strip_edges()
 	if t == "":

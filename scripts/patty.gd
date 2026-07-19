@@ -285,6 +285,80 @@ func _ready() -> void:
 	_update_frost_visual()
 
 
+func reset_for_grill_spawn(
+	p_slot_index: int,
+	p_net_id: int,
+	p_world_pos: Vector3,
+	p_base_y: float,
+	p_heating: bool,
+	p_mp_puppet: bool
+) -> void:
+	if _done_jump_tw != null and is_instance_valid(_done_jump_tw):
+		_done_jump_tw.kill()
+	_done_jump_tw = null
+	if has_cheese or (_cheese_root != null and is_instance_valid(_cheese_root)):
+		remove_cheese()
+	if _cheese_root != null and is_instance_valid(_cheese_root):
+		_cheese_root.queue_free()
+	_cheese_root = null
+	_cheese_flaps.clear()
+	_cheese_mat = null
+	has_cheese = false
+	cheese_melt = 0.0
+	if _season_root != null and is_instance_valid(_season_root):
+		_season_root.queue_free()
+	_season_root = null
+	_season_fleck_count = 0
+	seasoning = 0.0
+	cook_time = 0.0
+	flipped_once = false
+	first_side_time = 0.0
+	is_held = false
+	smash_bonus = 0.0
+	slot_index = p_slot_index
+	net_id = p_net_id
+	perfect_flip = false
+	heating = p_heating
+	heat_mul = 1.0
+	warm_hold_time = 0.0
+	mp_puppet = p_mp_puppet
+	base_y = p_base_y
+	_rest_x = p_world_pos.x
+	_rest_z = p_world_pos.z
+	_sizzle = randf() * TAU
+	_announced_flip = false
+	_announced_scoop = false
+	_done_jump_y = 0.0
+	_hint_mode = ""
+	_hint_age = 0.0
+	_hint_focused = false
+	position = p_world_pos
+	rotation = Vector3.ZERO
+	scale = Vector3.ONE
+	visible = true
+	input_ray_pickable = false
+	monitoring = false
+	monitorable = false
+	if _mesh:
+		_mesh.position = Vector3.ZERO
+		_mesh.rotation_degrees = Vector3.ZERO
+	if _hint:
+		_hint.visible = false
+	_set_hold_meter_visible(false)
+	if _bubbles:
+		_bubbles.emitting = false
+	if _top_bubbles:
+		_top_bubbles.emitting = false
+	if _steam:
+		_steam.emitting = false
+	_update_cook_gradient()
+	_update_frost_visual()
+	_update_sear_disc()
+	_update_meat_top()
+	if _under_mat:
+		_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+
+
 func _setup_cook_fx() -> void:
 	## Grease bubbles popping out from under the patty edge, near the grill surface.
 	_bubbles = GPUParticles3D.new()
@@ -449,14 +523,15 @@ func _audio() -> Node:
 
 func _update_ready_cues() -> void:
 	var audio := _audio()
+	var silent_preview := bool(get_meta("start_preview", false))
 	if can_flip() and not _announced_flip:
 		_announced_flip = true
-		if audio:
+		if audio and not silent_preview:
 			audio.play_ready()
 		_play_done_jump(0.027) ## Slight hop — time to flip (half prior height)
 	elif flipped_once and can_scoop() and not _announced_scoop:
 		_announced_scoop = true
-		if audio:
+		if audio and not silent_preview:
 			audio.play_ready()
 		_play_done_jump(0.09)
 
@@ -641,6 +716,12 @@ func _process(delta: float) -> void:
 	_set_hold_meter_visible(show_fresh)
 	if show_fresh:
 		_refresh_hold_meter()
+
+	if bool(get_meta("start_preview", false)):
+		if _hint:
+			_hint.visible = false
+		_set_hold_meter_visible(false)
+		return
 
 	if can_flip():
 		var flip_txt := "CLICK TO FLIP!" if is_in_flip_window() else "FLIP NOW"

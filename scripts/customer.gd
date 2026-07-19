@@ -21,6 +21,16 @@ const STAND_Y := -0.02
 ## Stay nearer the camera than the street matte (game.gd STREET_MATTE_BASE_Z ≈ 11.5).
 const MATTE_FRONT_Z_MAX := 9.8
 const WAIT_Z := 2.25
+const ANTSY_WAIT_RATIO_START := 0.34
+const ANTSY_HANDS_UP_RATIO_START := 0.16
+const ANTSY_MIN_WAIT_SEC := 12.0
+const ANTSY_HANDS_UP_MIN_WAIT_SEC := 24.0
+## Impatient wawa mutter after the patience bar drops below half.
+const GROBBLE_PATIENCE_RATIO := 0.5
+const GROBBLE_INTERVAL_SEC := 10.0
+const GROBBLE_SHAKE_SEC := 3.0
+const GROBBLE_SHAKE_AMP := 0.085
+const GROBBLE_SHAKE_RATE := 0.28 ## Slow impatient sway (angry shake is ~1.0).
 ## Compact patience chip above the toon head (inside the window opening).
 ## Tuned for the service-window camera — higher world Y reads lower on screen.
 const HEAD_TOP_Y := 0.95
@@ -34,6 +44,7 @@ const ARRIVE_TURN_SEC := 0.42
 const RAGDOLL_ACTIVE_SEC := 9.5
 const RAGDOLL_TWIST_SEC := 2.2 ## Free spin window before settling onto their back.
 const RAGDOLL_DESPAWN_SEC := 5.5 ## Extra time lying around after the active flop.
+const LEAVE_FADE_SEC := 1.5
 ## Yaw: 180 faces the cook/truck (−Z); 0 walks away down the street (+Z).
 ## Kenney mesh noses along +Z, so these match travel on ±X.
 const FACE_TRUCK_YAW := 180.0
@@ -94,16 +105,27 @@ var _bar_bg: MeshInstance3D
 var _bar_fill: MeshInstance3D
 var _review_stars: Label3D = null
 var _review_stars_tween: Tween = null
+var _treat_hearts: Label3D = null
+var _treat_hearts_tween: Tween = null
 
 var _bounce: float = 0.0
 var _bobble_phase: float = 0.0
+var _antsy_phase: float = 0.0
+var _antsy_active: bool = false
+var _antsy_hands_up_active: bool = false
+var _grobble_cd: float = 0.0
 var _mood: String = "happy"
 var _shake_time: float = 0.0
 var _shake_amp: float = 0.0
+var _shake_rate: float = 1.0
+var _shake_tilt: float = 35.0
 var _expr_t: float = 0.0
 var _leave_spin: float = 0.0
 var _leave_turned: bool = false
 var _leave_yaw_from: float = FACE_TRUCK_YAW
+var _leave_fade_t: float = 0.0
+var _leave_fade_active: bool = false
+var _leave_fade_alpha: float = 1.0
 var _arrive_turning: bool = false
 var _arrive_turn_t: float = 0.0
 var _arrive_yaw_from: float = WALK_PLUS_X_YAW
@@ -115,11 +137,15 @@ var is_terrorist: bool = false
 ## Full-size window cat in a fake mustache — orders a triple, never pays.
 var is_disguise_cat: bool = false
 var _mustache_root: Node3D = null
+var _disguise_hat_root: Node3D = null
 var _disguise_cat_mesh: Node3D = null
-## Match maxed window cat (MESH_SCALE 3.35 × 2). Bigger made the pivot bury him.
-const DISGUISE_CAT_MESH_SCALE := 6.7
+## Match the fattest window cat: width chonk first, then 2× overall growth.
+const DISGUISE_CAT_SCALE_X := 14.35
+const DISGUISE_CAT_SCALE_Y := 7.05
+const DISGUISE_CAT_SCALE_Z := 12.35
 ## Mid-body FBX pivot — lift so paws sit on the sidewalk and head fills the window.
-const DISGUISE_CAT_MESH_Y := 0.52
+const DISGUISE_CAT_MESH_Y := 0.47
+const DISGUISE_CAT_WAIT_Z_OFFSET := 0.15
 ## Window-cat mouth sits at (0, 0.34, 0.22) with MESH_SCALE 3.35 — scale with us.
 const _WINDOW_CAT_MESH_SCALE := 3.35
 const _WINDOW_CAT_MOUTH := Vector3(0.0, 0.34, 0.22)
@@ -190,6 +216,10 @@ static func lane_x_for(lane_i: int) -> float:
 	if LANE_X.is_empty():
 		return 0.0
 	return LANE_X[clampi(lane_i, 0, LANE_X.size() - 1)]
+
+
+func _wait_z() -> float:
+	return WAIT_Z + (DISGUISE_CAT_WAIT_Z_OFFSET if is_disguise_cat else 0.0)
 
 
 func _roll_personality() -> void:
@@ -641,7 +671,7 @@ func _apply_face(mood: String) -> void:
 
 func _apply_mood_tint(mood: String) -> void:
 	## Soft color wash over the toon skin so patience mood still reads.
-	var tint := Color(1, 1, 1, 1)
+	var tint := Color(1, 1, 1, _leave_fade_alpha)
 	match mood:
 		"happy", "cheer":
 			tint = Color(1.05, 1.02, 0.98)
@@ -655,6 +685,7 @@ func _apply_mood_tint(mood: String) -> void:
 			tint = Color(1, 1, 1)
 	## Blend a hint of the assigned body_color so customers stay distinct.
 	tint = tint.lerp(body_color.lightened(0.35), 0.12)
+	tint.a = _leave_fade_alpha
 	for mi in _char_meshes:
 		if mi == null or not is_instance_valid(mi):
 			continue
@@ -663,6 +694,93 @@ func _apply_mood_tint(mood: String) -> void:
 		if sm == null:
 			continue
 		sm.albedo_color = tint
+
+
+func _begin_leave_fade() -> void:
+	_leave_fade_t = 0.0
+	_leave_fade_active = true
+	_leave_fade_alpha = 1.0
+	_apply_leave_fade_alpha(1.0)
+
+
+func _update_leave_fade(delta: float) -> void:
+	if not _leave_fade_active:
+		return
+	_leave_fade_t += delta
+	var alpha := 1.0 - clampf(_leave_fade_t / LEAVE_FADE_SEC, 0.0, 1.0)
+	_apply_leave_fade_alpha(alpha)
+
+
+func _apply_leave_fade_alpha(alpha: float) -> void:
+	_leave_fade_alpha = clampf(alpha, 0.0, 1.0)
+	_fade_node_materials(self, _leave_fade_alpha)
+	if _bubble:
+		_bubble.modulate.a = minf(_bubble.modulate.a, alpha)
+	if _treat_hearts:
+		_treat_hearts.modulate.a = minf(_treat_hearts.modulate.a, alpha)
+	if _review_stars:
+		_review_stars.modulate.a = minf(_review_stars.modulate.a, alpha)
+
+
+func _fade_node_materials(node: Node, alpha: float) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var surf_count := 0
+		if mi.mesh != null:
+			surf_count = mi.mesh.get_surface_count()
+		surf_count = maxi(surf_count, mi.get_surface_override_material_count())
+		if surf_count <= 0:
+			var mat := _material_for_fade(mi.material_override)
+			if mat != null:
+				mi.material_override = mat
+				_set_material_alpha(mat, alpha)
+		else:
+			for si in surf_count:
+				var base: Material = mi.get_surface_override_material(si)
+				if base == null:
+					base = mi.get_active_material(si)
+				if base == null and mi.mesh != null and si < mi.mesh.get_surface_count():
+					base = mi.mesh.surface_get_material(si)
+				if base == null:
+					base = mi.material_override
+				var sm := _material_for_fade(base)
+				if sm == null:
+					continue
+				if mi.mesh != null and si < mi.mesh.get_surface_count():
+					mi.set_surface_override_material(si, sm)
+				else:
+					mi.material_override = sm
+				_set_material_alpha(sm, alpha)
+	for child in node.get_children():
+		_fade_node_materials(child, alpha)
+
+
+func _material_for_fade(base: Material) -> StandardMaterial3D:
+	if base is StandardMaterial3D:
+		var sm := base as StandardMaterial3D
+		if not bool(sm.get_meta("customer_fade_unique", false)):
+			sm = sm.duplicate() as StandardMaterial3D
+			sm.set_meta("customer_fade_unique", true)
+		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		sm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+		return sm
+	var fresh := StandardMaterial3D.new()
+	fresh.set_meta("customer_fade_unique", true)
+	fresh.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fresh.cull_mode = BaseMaterial3D.CULL_DISABLED
+	fresh.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	fresh.albedo_color = Color(1.0, 1.0, 1.0, _leave_fade_alpha)
+	fresh.roughness = 0.72
+	fresh.metallic = 0.0
+	fresh.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	return fresh
+
+
+func _set_material_alpha(sm: StandardMaterial3D, alpha: float) -> void:
+	var c := sm.albedo_color
+	c.a = alpha
+	sm.albedo_color = c
 
 
 func _get_face_tex(mood: String) -> ImageTexture:
@@ -810,6 +928,7 @@ func _process(delta: float) -> void:
 	_expr_t += delta
 	_home_x = target_x
 	_update_powder_blobs(delta)
+	_update_leave_fade(delta)
 
 	if is_ragdoll:
 		_update_ragdoll(delta)
@@ -822,21 +941,26 @@ func _process(delta: float) -> void:
 
 	if _shake_time > 0.0 and not is_leaving:
 		_shake_time -= delta
-		var shake_x := sin(Time.get_ticks_msec() * 0.06) * _shake_amp
-		var shake_z := cos(Time.get_ticks_msec() * 0.08) * _shake_amp * 0.45
+		var rate := maxf(0.05, _shake_rate)
+		var shake_x := sin(Time.get_ticks_msec() * 0.06 * rate) * _shake_amp
+		var shake_z := cos(Time.get_ticks_msec() * 0.08 * rate) * _shake_amp * 0.45
 		global_position.x = _home_x + shake_x
-		global_position.z = WAIT_Z + shake_z
+		global_position.z = _wait_z() + shake_z
 		if _body:
-			_body.rotation_degrees.z = shake_x * 35.0
+			_body.rotation_degrees.z = shake_x * _shake_tilt
 		if _shake_time <= 0.0:
 			_shake_amp = 0.0
+			_shake_rate = 1.0
+			_shake_tilt = 35.0
 			if _body:
 				_body.rotation_degrees.z = 0.0
 			global_position.x = _home_x
-			global_position.z = WAIT_Z
+			global_position.z = _wait_z()
 	elif is_leaving:
 		_shake_time = 0.0
 		_shake_amp = 0.0
+		_shake_rate = 1.0
+		_shake_tilt = 35.0
 
 	if is_leaving:
 		_leave_spin += delta
@@ -944,7 +1068,11 @@ func _process(delta: float) -> void:
 				_body.rotation_degrees.z = 0.0
 		else:
 			_play_anim("idle")
-			_apply_bobble(false)
+			if _should_antsy_wait():
+				_apply_antsy_wait(delta)
+			else:
+				_clear_antsy_wait_pose()
+				_apply_bobble(false)
 
 	_animate_expression(delta)
 
@@ -954,6 +1082,7 @@ func _process(delta: float) -> void:
 		if not dialogue_open and not mp_host_driven and not _eating:
 			patience -= delta
 		_refresh_patience_bar()
+		_update_wait_grobble(delta)
 		if patience <= 0.0 and not mp_host_driven and not _eating:
 			leave_mad()
 			patience_expired.emit(self)
@@ -1082,6 +1211,78 @@ func _apply_bobble(walking: bool) -> void:
 	_body.rotation_degrees.x = cos(_bobble_phase * 0.7) * 2.0
 
 
+func _update_wait_grobble(delta: float) -> void:
+	## Every 10s past half patience — play 3s of pitched-up wawawa from a random offset.
+	if not is_waiting or is_leaving or is_ragdoll or _eating or _powdering or dialogue_open:
+		_grobble_cd = 0.0
+		return
+	if is_disguise_cat or is_terrorist:
+		_grobble_cd = 0.0
+		return
+	if patience_ratio() > GROBBLE_PATIENCE_RATIO:
+		_grobble_cd = 0.0
+		return
+	_grobble_cd -= delta
+	if _grobble_cd > 0.0:
+		return
+	_grobble_cd = GROBBLE_INTERVAL_SEC
+	var impatience := clampf((GROBBLE_PATIENCE_RATIO - patience_ratio()) / GROBBLE_PATIENCE_RATIO, 0.0, 1.0)
+	shake_angry(GROBBLE_SHAKE_SEC, GROBBLE_SHAKE_AMP, GROBBLE_SHAKE_RATE, false)
+	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
+	if audio != null and audio.has_method("play_customer_grobble"):
+		audio.play_customer_grobble(impatience)
+
+
+func _should_antsy_wait() -> bool:
+	if not is_waiting or is_leaving or is_ragdoll or _eating or _powdering or dialogue_open:
+		return false
+	if _shake_time > 0.0:
+		return false
+	return order_elapsed_sec >= ANTSY_MIN_WAIT_SEC and patience_ratio() <= ANTSY_WAIT_RATIO_START
+
+
+func _antsy_wait_strength() -> float:
+	var patience_t := patience_ratio()
+	var patience_s := clampf((ANTSY_WAIT_RATIO_START - patience_t) / ANTSY_WAIT_RATIO_START, 0.0, 1.0)
+	var time_s := clampf((order_elapsed_sec - ANTSY_MIN_WAIT_SEC) / 10.0, 0.0, 1.0)
+	return patience_s * time_s
+
+
+func _apply_antsy_wait(delta: float) -> void:
+	if _body == null:
+		return
+	_antsy_active = true
+	var s := _antsy_wait_strength()
+	_antsy_phase += delta * lerpf(4.2, 8.8, s)
+	var step := sin(_antsy_phase)
+	var hop := absf(sin(_antsy_phase * 1.7))
+	var lean := sin(_antsy_phase * 1.15)
+	_body.position.y = _base_body_y + hop * lerpf(0.004, 0.026, s)
+	_body.rotation_degrees.x = sin(_antsy_phase * 1.35) * lerpf(0.8, 4.0, s)
+	_body.rotation_degrees.z = lean * lerpf(2.0, 8.5, s)
+	rotation_degrees.y = FACE_TRUCK_YAW + step * lerpf(0.5, 4.5, s)
+	if order_elapsed_sec >= ANTSY_HANDS_UP_MIN_WAIT_SEC and patience_ratio() <= ANTSY_HANDS_UP_RATIO_START:
+		var panic_s := clampf((ANTSY_HANDS_UP_RATIO_START - patience_ratio()) / ANTSY_HANDS_UP_RATIO_START, 0.0, 1.0)
+		var throw_up := 0.45 + 0.55 * absf(sin(_antsy_phase * 0.72))
+		_antsy_hands_up_active = true
+		_apply_hands_up_pose(panic_s * throw_up)
+	elif _antsy_hands_up_active:
+		_antsy_hands_up_active = false
+		_reset_skeleton_pose()
+
+
+func _clear_antsy_wait_pose() -> void:
+	if not _antsy_active:
+		return
+	_antsy_active = false
+	_antsy_hands_up_active = false
+	_reset_skeleton_pose()
+	if _body:
+		_body.position.y = _base_body_y
+		_body.rotation_degrees.x = 0.0
+		_body.rotation_degrees.z = 0.0
+
+
 func _animate_expression(_delta: float) -> void:
 	if is_leaving or _body == null:
 		return
@@ -1099,12 +1300,15 @@ func _animate_expression(_delta: float) -> void:
 		_face.scale = Vector3(pulse, pulse, 1.0)
 
 
-func shake_angry(duration: float = 0.7, amp: float = 0.12) -> void:
+func shake_angry(duration: float = 0.7, amp: float = 0.12, rate: float = 1.0, punch: bool = true) -> void:
 	_set_mood("mad")
 	_shake_time = duration
 	_shake_amp = amp
+	_shake_rate = rate
+	## Slower shakes lean less so they don't look twitchy.
+	_shake_tilt = lerpf(12.0, 35.0, clampf(rate, 0.0, 1.0))
 	## Quick squash punch — stay at CHAR_SCALE (never jump to 1.0).
-	if _body:
+	if punch and _body:
 		var tw := create_tween()
 		tw.tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.06, CHAR_SCALE * 0.94, CHAR_SCALE * 1.06), 0.08)
 		tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.12)
@@ -1165,6 +1369,65 @@ func show_review_stars(stars: float) -> void:
 	)
 
 
+func react_free_icecream(accepted: bool = true) -> void:
+	if is_leaving or is_ragdoll:
+		return
+	if accepted:
+		_set_mood("cheer")
+		bounce_happy()
+		if _bubble:
+			_bubble.text = "Free cone!"
+			_bubble.visible = true
+			_bubble.modulate = Color(1.0, 0.88, 0.96)
+			get_tree().create_timer(0.8).timeout.connect(func():
+				if is_instance_valid(self) and _bubble and is_waiting:
+					_bubble.visible = false
+			)
+		_show_treat_hearts()
+	else:
+		_set_mood("mad")
+		shake_angry(0.65, 0.09)
+		if _bubble:
+			_bubble.text = "I didn't order that!"
+			_bubble.visible = true
+			_bubble.modulate = Color(1.0, 0.52, 0.42)
+			get_tree().create_timer(1.0).timeout.connect(func():
+				if is_instance_valid(self) and _bubble and is_waiting:
+					_bubble.visible = false
+			)
+
+
+func _show_treat_hearts() -> void:
+	if _treat_hearts == null:
+		_treat_hearts = Label3D.new()
+		_treat_hearts.name = "TreatHearts"
+		_treat_hearts.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_treat_hearts.no_depth_test = true
+		_treat_hearts.shaded = false
+		UiFontsScript.apply_label3d(_treat_hearts, true, 58, 0.11)
+		_treat_hearts.outline_size = 8
+		_treat_hearts.outline_modulate = Color(0.2, 0.02, 0.08, 0.85)
+		add_child(_treat_hearts)
+	_treat_hearts.text = "♥ ♥"
+	_treat_hearts.position = Vector3(0.0, BAR_Y + 0.08, 0.05)
+	_treat_hearts.modulate = Color(1.0, 0.24, 0.48, 1.0)
+	_treat_hearts.visible = true
+	if _treat_hearts_tween != null and is_instance_valid(_treat_hearts_tween):
+		_treat_hearts_tween.kill()
+	_treat_hearts_tween = create_tween()
+	_treat_hearts_tween.set_parallel(true)
+	_treat_hearts_tween.tween_property(
+		_treat_hearts, "position:y", BAR_Y + 0.55, 1.1
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_treat_hearts_tween.tween_property(
+		_treat_hearts, "modulate:a", 0.0, 1.1
+	).set_delay(0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_treat_hearts_tween.chain().tween_callback(func() -> void:
+		if _treat_hearts != null and is_instance_valid(_treat_hearts):
+			_treat_hearts.visible = false
+	)
+
+
 func leave_happy() -> void:
 	stop_order_clock()
 	_eating = false
@@ -1176,6 +1439,7 @@ func leave_happy() -> void:
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
 	_set_mood("cheer")
+	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
 	_play_anim("idle")
 	if _body:
@@ -1190,6 +1454,7 @@ func leave_happy() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
+	_begin_leave_fade()
 
 
 func leave_meh() -> void:
@@ -1204,6 +1469,7 @@ func leave_meh() -> void:
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
 	_set_mood("ok")
+	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
 	_play_anim("idle")
 	if _body:
@@ -1218,6 +1484,7 @@ func leave_meh() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
+	_begin_leave_fade()
 
 
 func leave_heck() -> void:
@@ -1231,6 +1498,7 @@ func leave_heck() -> void:
 	global_position.y = STAND_Y
 	speech = "What the heck?!"
 	_set_mood("mad")
+	_clear_antsy_wait_pose()
 	_play_anim("idle")
 	if _bubble:
 		_bubble.text = speech
@@ -1243,6 +1511,7 @@ func leave_heck() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
+	_begin_leave_fade()
 	## Hide the blurt after a beat so they can turn and leave.
 	get_tree().create_timer(0.85).timeout.connect(func():
 		if not is_instance_valid(self):
@@ -1296,7 +1565,7 @@ func apply_ext_spray_push(delta: float, zone: String = "body") -> void:
 	_powder_knock_x += randf_range(-delta * 0.42, delta * 0.42)
 	_powder_knock_x = clampf(_powder_knock_x, -0.65, 0.65)
 	_powder_knock_z = clampf(_powder_knock_z, 0.0, 2.4)
-	global_position.z = clampf(global_position.z + delta * push_z * 0.62, WAIT_Z - 0.08, MATTE_FRONT_Z_MAX - 0.12)
+	global_position.z = clampf(global_position.z + delta * push_z * 0.62, _wait_z() - 0.08, MATTE_FRONT_Z_MAX - 0.12)
 	global_position.x = clampf(global_position.x + randf_range(-delta * 0.22, delta * 0.22), _home_x - 0.55, _home_x + 0.55)
 
 
@@ -1307,7 +1576,7 @@ func _begin_powder_stand() -> void:
 	_shake_time = 0.0
 	_shake_amp = 0.0
 	global_position.y = STAND_Y
-	global_position.z = WAIT_Z
+	global_position.z = _wait_z()
 	speech = "Agh! My face!! Never coming back!"
 	_set_mood("mad")
 	if _anim_player:
@@ -1339,7 +1608,7 @@ func _update_powder_stand(delta: float) -> void:
 	_powder_knock_z = lerpf(_powder_knock_z, 0.0, delta * 0.95)
 	var wob := sin(_powder_panic_t * 16.0) * 0.05
 	global_position.x = _home_x + wob + _powder_knock_x
-	global_position.z = clampf(WAIT_Z + _powder_knock_z, WAIT_Z, MATTE_FRONT_Z_MAX - 0.15)
+	global_position.z = clampf(_wait_z() + _powder_knock_z, _wait_z(), MATTE_FRONT_Z_MAX - 0.15)
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
 		_body.position.y = _base_body_y + absf(sin(_powder_panic_t * 10.0)) * 0.015
@@ -1396,6 +1665,7 @@ func leave_powdered() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
+	_begin_leave_fade()
 	get_tree().create_timer(1.2).timeout.connect(func():
 		if not is_instance_valid(self):
 			return
@@ -1919,6 +2189,7 @@ func leave_mad() -> void:
 	_leave_yaw_from = rotation_degrees.y
 	global_position.y = STAND_Y
 	_set_mood("mad")
+	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
 	_play_anim("idle")
 	if _body:
@@ -1933,6 +2204,7 @@ func leave_mad() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
+	_begin_leave_fade()
 	get_tree().create_timer(0.55).timeout.connect(func():
 		if is_instance_valid(self):
 			_set_mood("dead")
@@ -1982,17 +2254,18 @@ func mouth_global() -> Vector3:
 
 func _disguise_mustache_local() -> Vector3:
 	## Same snout placement as the window cat, scaled up for our mesh size + plant lift.
-	var s := DISGUISE_CAT_MESH_SCALE / _WINDOW_CAT_MESH_SCALE
 	return Vector3(
 		_WINDOW_CAT_MOUTH.x,
-		DISGUISE_CAT_MESH_Y + _WINDOW_CAT_MOUTH.y * s,
-		_WINDOW_CAT_MOUTH.z * s
+		DISGUISE_CAT_MESH_Y + _WINDOW_CAT_MOUTH.y * (DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE),
+		_WINDOW_CAT_MOUTH.z * (DISGUISE_CAT_SCALE_Z / _WINDOW_CAT_MESH_SCALE)
 	)
 
 
 func apply_disguise_cat_look() -> void:
 	## Swap the toon for the street cat + a cheap fake mustache.
 	is_disguise_cat = true
+	global_position.z = _wait_z()
+	global_position.y = STAND_Y
 	personality = "quiet"
 	chatter = ""
 	speech = "One triple patty burger… please."
@@ -2008,7 +2281,7 @@ func apply_disguise_cat_look() -> void:
 			_disguise_cat_mesh = packed.instantiate() as Node3D
 			if _disguise_cat_mesh != null:
 				_disguise_cat_mesh.name = "DisguiseCatMesh"
-				_disguise_cat_mesh.scale = Vector3.ONE * DISGUISE_CAT_MESH_SCALE
+				_disguise_cat_mesh.scale = Vector3(DISGUISE_CAT_SCALE_X, DISGUISE_CAT_SCALE_Y, DISGUISE_CAT_SCALE_Z)
 				_disguise_cat_mesh.position = Vector3(0.0, DISGUISE_CAT_MESH_Y, 0.06)
 				_disguise_cat_mesh.rotation_degrees = Vector3.ZERO
 				add_child(_disguise_cat_mesh)
@@ -2016,10 +2289,10 @@ func apply_disguise_cat_look() -> void:
 				_retint_disguise_cat_fur(_disguise_cat_mesh)
 				var anim := _disguise_cat_mesh.find_child("AnimationPlayer", true, false) as AnimationPlayer
 				if anim != null and anim.has_animation("CINEMA_4D_Main"):
-					anim.get_animation("CINEMA_4D_Main").loop_mode = Animation.LOOP_LINEAR
-					anim.play("CINEMA_4D_Main")
-					anim.speed_scale = 0.85
+					anim.stop()
+					anim.active = false
 	_build_fake_mustache()
+	_build_disguise_top_hat()
 
 
 func _retint_disguise_cat_fur(node: Node) -> void:
@@ -2109,30 +2382,105 @@ func _build_fake_mustache() -> void:
 	_mustache_root.position = _disguise_mustache_local()
 	add_child(_mustache_root)
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.06, 0.05, 0.05)
-	mat.roughness = 0.9
+	mat.albedo_color = Color(0.48, 0.24, 0.10)
+	mat.roughness = 0.64
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var s := DISGUISE_CAT_MESH_SCALE / _WINDOW_CAT_MESH_SCALE
-	var r := 0.028 * s
-	var h := 0.11 * s
+	var s := DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE
+	var r := 0.015 * s
+	var h := 0.14 * s
 	for side in [-1.0, 1.0]:
-		var curl := MeshInstance3D.new()
+		var bar := MeshInstance3D.new()
 		var cap := CapsuleMesh.new()
 		cap.radius = r
 		cap.height = h
-		curl.mesh = cap
+		bar.mesh = cap
+		bar.material_override = mat
+		bar.rotation_degrees = Vector3(88.0, side * -5.0, side * 72.0)
+		bar.position = Vector3(side * 0.050 * s, -0.008 * s, 0.016 * s)
+		_mustache_root.add_child(bar)
+
+		var curl := MeshInstance3D.new()
+		var curl_ball := SphereMesh.new()
+		curl_ball.radius = r * 1.35
+		curl_ball.height = r * 2.7
+		curl.mesh = curl_ball
 		curl.material_override = mat
-		curl.rotation_degrees = Vector3(88.0, 0.0, side * 38.0)
-		curl.position = Vector3(side * 0.05 * s, -0.008 * s, 0.012 * s)
+		curl.position = Vector3(side * 0.112 * s, 0.010 * s, 0.018 * s)
+		curl.scale = Vector3(1.0, 0.82, 1.0)
 		_mustache_root.add_child(curl)
 	var mid := MeshInstance3D.new()
 	var ball := SphereMesh.new()
-	ball.radius = r * 1.2
-	ball.height = r * 2.4
+	ball.radius = r * 1.55
+	ball.height = r * 2.7
 	mid.mesh = ball
 	mid.material_override = mat
-	mid.position = Vector3(0.0, -0.01 * s, 0.006 * s)
+	mid.position = Vector3(0.0, -0.010 * s, 0.022 * s)
+	mid.scale = Vector3(1.15, 0.72, 0.82)
 	_mustache_root.add_child(mid)
+
+
+func _disguise_hat_local() -> Vector3:
+	return Vector3(
+		0.0,
+		DISGUISE_CAT_MESH_Y + 0.57 * (DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE),
+		0.01 * (DISGUISE_CAT_SCALE_Z / _WINDOW_CAT_MESH_SCALE)
+	)
+
+
+func _build_disguise_top_hat() -> void:
+	if _disguise_hat_root != null and is_instance_valid(_disguise_hat_root):
+		_disguise_hat_root.queue_free()
+	_disguise_hat_root = Node3D.new()
+	_disguise_hat_root.name = "DisguiseTopHat"
+	_disguise_hat_root.position = _disguise_hat_local()
+	_disguise_hat_root.rotation_degrees = Vector3(-5.0, 0.0, 3.0)
+	add_child(_disguise_hat_root)
+
+	var black_mat := StandardMaterial3D.new()
+	black_mat.albedo_color = Color(0.018, 0.015, 0.014)
+	black_mat.roughness = 0.38
+	black_mat.metallic = 0.05
+	black_mat.clearcoat_enabled = true
+	black_mat.clearcoat = 0.45
+	var band_mat := StandardMaterial3D.new()
+	band_mat.albedo_color = Color(0.34, 0.08, 0.07)
+	band_mat.roughness = 0.54
+
+	var s := DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE
+	var brim := MeshInstance3D.new()
+	brim.name = "TopHatBrim"
+	var brim_mesh := CylinderMesh.new()
+	brim_mesh.top_radius = 0.20 * s
+	brim_mesh.bottom_radius = 0.24 * s
+	brim_mesh.height = 0.030 * s
+	brim_mesh.radial_segments = 36
+	brim.mesh = brim_mesh
+	brim.material_override = black_mat
+	_disguise_hat_root.add_child(brim)
+
+	var crown := MeshInstance3D.new()
+	crown.name = "TopHatCrown"
+	var crown_mesh := CylinderMesh.new()
+	crown_mesh.top_radius = 0.135 * s
+	crown_mesh.bottom_radius = 0.155 * s
+	crown_mesh.height = 0.22 * s
+	crown_mesh.radial_segments = 36
+	crown.mesh = crown_mesh
+	crown.material_override = black_mat
+	crown.position = Vector3(0.0, 0.12 * s, 0.0)
+	_disguise_hat_root.add_child(crown)
+
+	var band := MeshInstance3D.new()
+	band.name = "TopHatBand"
+	var band_mesh := CylinderMesh.new()
+	band_mesh.top_radius = 0.158 * s
+	band_mesh.bottom_radius = 0.160 * s
+	band_mesh.height = 0.026 * s
+	band_mesh.radial_segments = 36
+	band.mesh = band_mesh
+	band.material_override = band_mat
+	band.position = Vector3(0.0, 0.055 * s, 0.0)
+	_disguise_hat_root.add_child(band)
 
 
 func drop_mustache_and_flee() -> void:
@@ -2149,6 +2497,17 @@ func drop_mustache_and_flee() -> void:
 		tw.chain().tween_callback(func() -> void:
 			if is_instance_valid(m):
 				m.queue_free()
+		)
+	if _disguise_hat_root != null and is_instance_valid(_disguise_hat_root):
+		var h := _disguise_hat_root
+		_disguise_hat_root = null
+		var hat_tw := create_tween()
+		hat_tw.set_parallel(true)
+		hat_tw.tween_property(h, "position", h.position + Vector3(-0.22, -1.0, 0.28), 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		hat_tw.tween_property(h, "rotation_degrees", Vector3(120.0, -35.0, 45.0), 0.55)
+		hat_tw.chain().tween_callback(func() -> void:
+			if is_instance_valid(h):
+				h.queue_free()
 		)
 	if _bubble:
 		_bubble.text = "MEOW?!"

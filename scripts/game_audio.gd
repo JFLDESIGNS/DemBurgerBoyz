@@ -81,6 +81,13 @@ var _ice_on: bool = false
 var _ice_lp := 0.0
 var _ice_phase := 0.0
 var _ice_tick := 0.0
+var _softserve_player: AudioStreamPlayer
+var _softserve_gen: AudioStreamGenerator
+var _softserve_on: bool = false
+var _softserve_lp := 0.0
+var _softserve_phase := 0.0
+var _softserve_chime_phase := 0.0
+var _softserve_tick := 0.0
 
 
 func _ready() -> void:
@@ -145,6 +152,14 @@ func _ready() -> void:
 	_ice_player.stream = _ice_gen
 	_ice_player.volume_db = -80.0
 	add_child(_ice_player)
+	_softserve_gen = AudioStreamGenerator.new()
+	_softserve_gen.mix_rate = MIX_RATE
+	_softserve_gen.buffer_length = 0.12
+	_softserve_player = AudioStreamPlayer.new()
+	_softserve_player.bus = "Master"
+	_softserve_player.stream = _softserve_gen
+	_softserve_player.volume_db = -80.0
+	add_child(_softserve_player)
 	## Looping soft metal scrape for patty slides.
 	_slide_player = AudioStreamPlayer.new()
 	_slide_player.bus = "Master"
@@ -253,6 +268,12 @@ func _process(delta: float) -> void:
 			while ip.get_frames_available() > 0:
 				var ics := _next_ice_grind_sample()
 				ip.push_frame(Vector2(ics, ics))
+	if _softserve_on and _softserve_player != null and _softserve_player.playing:
+		var ssp := _softserve_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if ssp != null:
+			while ssp.get_frames_available() > 0:
+				var ss := _next_softserve_sample()
+				ssp.push_frame(Vector2(ss, ss))
 
 
 func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
@@ -392,6 +413,21 @@ func set_ice_grind(active: bool) -> void:
 		_ice_player.volume_db = -80.0
 
 
+func set_softserve_dispense(active: bool) -> void:
+	if _softserve_player == null:
+		return
+	if active:
+		_softserve_on = true
+		_softserve_player.volume_db = -13.5
+		if not _softserve_player.playing:
+			_softserve_player.play()
+	else:
+		_softserve_on = false
+		if _softserve_player.playing:
+			_softserve_player.stop()
+		_softserve_player.volume_db = -80.0
+
+
 func play_ice_tink() -> void:
 	## Soft cube settle in the cup.
 	_play_cached("ice_tink_v2", _make_ice_tink, 0.92 + randf() * 0.18, 0.35 + randf() * 0.15)
@@ -423,6 +459,21 @@ func _next_ice_grind_sample() -> float:
 	if randf() < 0.004:
 		flake = (randf() * 2.0 - 1.0) * 0.08
 	return clampf((soft * 0.22 + flake) * pulse, -1.0, 1.0)
+
+
+func _next_softserve_sample() -> float:
+	## Gentle motor plus a soft airy cream flow.
+	_softserve_tick += 1.0 / float(MIX_RATE)
+	var motor_hz := 54.0 + sin(_softserve_tick * 1.1) * 2.0
+	_softserve_phase = fposmod(_softserve_phase + motor_hz / float(MIX_RATE), 1.0)
+	_softserve_chime_phase = fposmod(_softserve_chime_phase + 247.0 / float(MIX_RATE), 1.0)
+	var motor := sin(_softserve_phase * TAU) * 0.16 + sin(_softserve_phase * TAU * 2.0) * 0.035
+	var white := randf() * 2.0 - 1.0
+	_softserve_lp = _softserve_lp * 0.92 + white * 0.08
+	var airy := _softserve_lp * 0.18 + (white - _softserve_lp) * 0.035
+	var shimmer := sin(_softserve_chime_phase * TAU) * 0.035
+	var pulse := 0.82 + 0.18 * sin(_softserve_tick * 4.2)
+	return clampf((motor + airy + shimmer) * pulse * 0.64, -1.0, 1.0)
 
 
 func _next_shaker_rattle_sample() -> float:
@@ -516,6 +567,11 @@ func play_scale_jingle() -> void:
 
 func play_click() -> void:
 	_play_cached("ui_click", _make_click, 1.0, 0.85)
+
+
+func play_rack_take() -> void:
+	## Pleasant little thud when a cup/cone leaves its holder.
+	_play_cached("rack_take_thud", _make_rack_take_thud, 0.96 + randf() * 0.08, 0.62)
 
 
 func play_stove_light() -> void:
@@ -618,6 +674,49 @@ func play_cat_meow() -> void:
 
 func play_cat_purr() -> void:
 	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.55)
+
+
+const WAWA_PATH := "res://sounds/wawawa.ogg"
+const GROBBLE_CLIP_SEC := 3.0
+const GROBBLE_FADE_IN_SEC := 0.3
+const GROBBLE_PITCH := 1.293 ## prior 1.22 × +6%
+
+func play_customer_grobble(impatience: float = 0.5) -> void:
+	## Random 3s slice of wawawa.ogg — pitched up, fade in over 0.3s, then stop.
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if not _cache.has("wawawa"):
+		var loaded: AudioStream = load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_cache["wawawa"] = loaded
+	var stream: AudioStream = _cache["wawawa"]
+	var length := stream.get_length()
+	## Pitched playback consumes more source per wall-clock second.
+	var source_needed := GROBBLE_CLIP_SEC * GROBBLE_PITCH
+	var max_start := maxf(0.0, length - source_needed)
+	var start_at := randf() * max_start if max_start > 0.0 else 0.0
+	## Louder as they wait — up to +8% by late patience.
+	var base_gain := lerpf(0.62, 0.82, clampf(impatience, 0.0, 1.0))
+	var gain := base_gain * lerpf(1.0, 1.08, clampf(impatience, 0.0, 1.0))
+	var target_db := linear_to_db(gain)
+	var p := AudioStreamPlayer.new()
+	p.bus = "Master"
+	p.stream = stream
+	p.pitch_scale = GROBBLE_PITCH
+	p.volume_db = -80.0
+	add_child(p)
+	p.play(start_at)
+	var tw := create_tween()
+	tw.tween_property(p, "volume_db", target_db, GROBBLE_FADE_IN_SEC)
+	var tree := get_tree()
+	if tree == null:
+		return
+	tree.create_timer(GROBBLE_CLIP_SEC).timeout.connect(func():
+		if is_instance_valid(p):
+			p.stop()
+			p.queue_free()
+	)
 
 
 func play_gunshot() -> void:
@@ -909,6 +1008,21 @@ func _make_click() -> AudioStreamWAV:
 		var env := exp(-t * 70.0)
 		var wave := sin(t * 1800.0 * TAU) * 0.55 + (randf() * 2.0 - 1.0) * 0.15
 		_write_s16(pcm, i, int(wave * env * 16000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_rack_take_thud() -> AudioStreamWAV:
+	var n := int(MIX_RATE * 0.16)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var bump_env := clampf(t / 0.012, 0.0, 1.0) * exp(-t * 18.0)
+		var tick_env := exp(-t * 48.0)
+		var bump := sin(t * 128.0 * TAU) * 0.72 + sin(t * 246.0 * TAU) * 0.18
+		var tick := sin(t * 1120.0 * TAU) * 0.12 + (randf() * 2.0 - 1.0) * 0.035
+		var sample := bump * bump_env + tick * tick_env
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 12500.0))
 	return _wav_from_pcm(pcm, false)
 
 

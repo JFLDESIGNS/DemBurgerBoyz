@@ -233,7 +233,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0, 0, 0, 0.78)
+color = Color(0, 0, 0, 0.3)
 z_index = 40
 
 [node name="StartCenter" type="VBoxContainer" parent="UI/Root/StartOverlay"]
@@ -244,9 +244,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -380.0
-offset_top = -300.0
+offset_top = -390.0
 offset_right = 380.0
-offset_bottom = 300.0
+offset_bottom = 210.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 14

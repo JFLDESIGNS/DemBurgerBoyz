@@ -17,6 +17,7 @@ const INGREDIENT_LABELS := {
 	"soda_cola": "Cola",
 	"soda_lemon_lime": "Lime Soda",
 	"soda_orange": "Orange Soda",
+	"icecream": "Ice Cream",
 	"syrup_cola": "Cola Syrup",
 	"syrup_lemon_lime": "Lime Syrup",
 	"syrup_orange": "Orange Syrup",
@@ -37,6 +38,7 @@ const INGREDIENT_COLORS := {
 	"soda_cola": Color("5D2A1A"),
 	"soda_lemon_lime": Color("7CB342"),
 	"soda_orange": Color("F57C00"),
+	"icecream": Color("FFF3D0"),
 	"syrup_cola": Color("5D2A1A"),
 	"syrup_lemon_lime": Color("7CB342"),
 	"syrup_orange": Color("F57C00"),
@@ -46,6 +48,8 @@ const EXTRA_TOPPINGS := ["cheese", "tomato", "lettuce", "onion", "pickle", "baco
 const SODA_ORDER_IDS: Array[String] = ["soda_cola", "soda_lemon_lime", "soda_orange"]
 const SODA_ONLY_CHANCE := 0.08
 const SODA_WITH_BURGER_CHANCE := 0.30
+const ICECREAM_ONLY_CHANCE := 0.10
+const ICECREAM_WITH_BURGER_CHANCE := 0.22
 
 ## Always the same stack order on tickets (and when normalizing builds).
 ## Cheese first, then toppings right→left toward the buns.
@@ -89,6 +93,14 @@ static func is_soda_item(id: String) -> bool:
 	return str(id).begins_with("soda_")
 
 
+static func is_icecream_item(id: String) -> bool:
+	return str(id) == "icecream"
+
+
+static func is_side_item(id: String) -> bool:
+	return is_soda_item(id) or is_icecream_item(id)
+
+
 static func soda_flavor_from_order_id(id: String) -> String:
 	## "soda_cola" → "cola", "soda_lemon_lime" → "lemon_lime"
 	var s := str(id)
@@ -108,7 +120,7 @@ static func order_soda_ids(order: Array) -> Array:
 static func order_burger_items(order: Array) -> Array:
 	var out: Array = []
 	for item in order:
-		if not is_soda_item(str(item)):
+		if not is_side_item(str(item)):
 			out.append(item)
 	return out
 
@@ -122,6 +134,31 @@ static func is_soda_only_order(order: Array) -> bool:
 	return true
 
 
+static func order_icecream_count(order: Array) -> int:
+	var n := 0
+	for item in order:
+		if is_icecream_item(str(item)):
+			n += 1
+	return n
+
+
+static func wants_icecream(order: Array) -> bool:
+	return order_icecream_count(order) > 0
+
+
+static func is_icecream_only_order(order: Array) -> bool:
+	if order.is_empty():
+		return false
+	for item in order:
+		if not is_icecream_item(str(item)):
+			return false
+	return true
+
+
+static func has_burger_items(order: Array) -> bool:
+	return not order_burger_items(order).is_empty()
+
+
 static func random_soda_order_id() -> String:
 	return SODA_ORDER_IDS[randi() % SODA_ORDER_IDS.size()]
 
@@ -130,6 +167,8 @@ static func generate_order(difficulty: float = 0.0) -> Array[String]:
 	## Occasional drink-only ticket.
 	if randf() < SODA_ONLY_CHANCE:
 		return [random_soda_order_id()] as Array[String]
+	if randf() < ICECREAM_ONLY_CHANCE:
+		return ["icecream"] as Array[String]
 	var order: Array[String] = ["bun_bottom", "patty"]
 	## Once in a while: plain patty or ketchup only — no other toppings.
 	const MINIMAL_CHANCE := 0.12
@@ -163,6 +202,9 @@ static func generate_order(difficulty: float = 0.0) -> Array[String]:
 	var soda_chance := SODA_WITH_BURGER_CHANCE + difficulty * 0.12
 	if randf() < soda_chance:
 		order.append(random_soda_order_id())
+	var icecream_chance := ICECREAM_WITH_BURGER_CHANCE + difficulty * 0.08
+	if randf() < icecream_chance:
+		order.append("icecream")
 	return order
 
 
@@ -191,6 +233,8 @@ static func order_number_code(order: Array) -> String:
 	const DIGITS := ["1", "2", "3", "4", "5", "6", "7"]
 	var burger := order_burger_items(order)
 	var code := ""
+	if wants_icecream(order):
+		code += "IC"
 	if burger.has("cheese"):
 		code += "C"
 	for i in STRIP.size():
@@ -208,6 +252,7 @@ static func order_value(order: Array) -> int:
 		if is_everything_order(order):
 			base += 3
 	base += sodas.size() * 3
+	base += order_icecream_count(order) * 4
 	return maxi(base, 3)
 
 
