@@ -177,14 +177,18 @@ static func is_plain_patty_order(order: Array) -> bool:
 		and burger[2] == "bun_top"
 
 
-## Strip hotkey digits for toppings on the ticket (1 cheese … 8 mustard).
-## Everything → "12345678"; ketchup only → "7"; plain → "".
+## Strip hotkey digits for toppings on the ticket (1 tomato … 7 mustard).
+## Cheese is grabbed from the board wheel — shown as "C" when ordered.
+## Everything → "C1234567"; ketchup only → "6"; plain → "".
 static func order_number_code(order: Array) -> String:
-	const DIGITS := ["1", "2", "3", "4", "5", "6", "7", "8"]
+	const STRIP := ["tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
+	const DIGITS := ["1", "2", "3", "4", "5", "6", "7"]
 	var burger := order_burger_items(order)
 	var code := ""
-	for i in EXTRA_TOPPINGS.size():
-		if burger.has(EXTRA_TOPPINGS[i]):
+	if burger.has("cheese"):
+		code += "C"
+	for i in STRIP.size():
+		if burger.has(STRIP[i]):
 			code += DIGITS[i]
 	return code
 

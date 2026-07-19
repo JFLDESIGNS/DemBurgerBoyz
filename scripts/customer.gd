@@ -434,44 +434,10 @@ func _build() -> void:
 	_bubble.outline_size = 0
 	add_child(_bubble)
 
-	_bar_root = Node3D.new()
-	_bar_root.name = "PatienceBar"
-	_bar_root.position = Vector3(0, BAR_Y, 0.14)
-	add_child(_bar_root)
-
-	_bar_bg = MeshInstance3D.new()
-	var bg := QuadMesh.new()
-	bg.size = Vector2(BAR_W, BAR_H)
-	_bar_bg.mesh = bg
-	var bar_mat := StandardMaterial3D.new()
-	bar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bar_mat.albedo_color = Color(0.02, 0.03, 0.04, 0.88)
-	bar_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bar_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	bar_mat.no_depth_test = true
-	bar_mat.render_priority = 40
-	bar_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_bar_bg.material_override = bar_mat
-	_bar_bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_bar_bg.visible = false
-	_bar_root.add_child(_bar_bg)
-
-	_bar_fill = MeshInstance3D.new()
-	var fill := QuadMesh.new()
-	fill.size = Vector2(BAR_W * 0.90, BAR_H * 0.55)
-	_bar_fill.mesh = fill
-	_bar_fill.position = Vector3(0, 0, 0.001)
-	var fm := StandardMaterial3D.new()
-	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	fm.albedo_color = Color("66BB6A")
-	fm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	fm.no_depth_test = true
-	fm.render_priority = 41
-	fm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_bar_fill.material_override = fm
-	_bar_fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_bar_fill.visible = false
-	_bar_root.add_child(_bar_fill)
+	## Patience meter lives on the order ticket UI — no 3D overlay on the customer.
+	_bar_root = null
+	_bar_bg = null
+	_bar_fill = null
 
 
 func _try_attach_toon_character() -> bool:
@@ -1077,30 +1043,14 @@ func speed_rating(burnt: bool = false) -> Dictionary:
 
 
 func _refresh_patience_bar() -> void:
+	## Mood only — the fill meter is drawn on the order ticket (game.gd).
 	var t: float = clampf(patience / maxf(0.01, patience_max), 0.0, 1.0)
-	if _bar_root:
-		_bar_root.visible = true
-		_bar_root.position = Vector3(0, BAR_Y, 0.14)
-	if _bar_bg:
-		_bar_bg.visible = true
-	if _bar_fill:
-		_bar_fill.visible = true
-		## Shrink from the right — billboard quads scale in local X.
-		_bar_fill.scale = Vector3(maxf(t, 0.02), 1.0, 1.0)
-		_bar_fill.position.x = -(BAR_W * 0.45) * (1.0 - t)
-		_bar_fill.position.y = 0.0
-		_bar_fill.position.z = 0.001
-		var fm: StandardMaterial3D = _bar_fill.material_override
-		if fm:
-			if t > 0.55:
-				fm.albedo_color = Color("66BB6A")
-				_set_mood("happy")
-			elif t > 0.28:
-				fm.albedo_color = Color("FFCA28")
-				_set_mood("ok")
-			else:
-				fm.albedo_color = Color("EF5350")
-				_set_mood("mad")
+	if t > 0.55:
+		_set_mood("happy")
+	elif t > 0.28:
+		_set_mood("ok")
+	else:
+		_set_mood("mad")
 
 
 func _apply_bobble(walking: bool) -> void:

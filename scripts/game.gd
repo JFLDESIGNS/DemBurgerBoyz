@@ -89,13 +89,13 @@ const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
-## Hotkeys 1-8 match ticket toppings (cheese → mustard). Top bun auto-caps.
-## Bottom bar left→right: cheese … mustard, then Serve on the right.
+## Hotkeys 1-7 match strip toppings (tomato → mustard). Cheese is grabbed from the board wheel.
+## Bottom bar left→right: tomato … mustard, then Serve on the right.
 ## Bottom bun is automatic when a patty hits a station — not on the strip.
 const INGREDIENT_HOTKEYS: Array[String] = [
-	"cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard",
+	"tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard",
 ]
-const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8"]
+const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7"]
 ## Operating costs — waste & supplies cut into tips.
 const COST_DROP_BURGER := 3.00
 const COST_OIL_USE := 0.0 ## Stocked tools are free to use
@@ -228,7 +228,7 @@ var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill bu
 var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
 var _pending_reorder_drag = null ## Dictionary while dragging a Build stack layer
 var _reorder_drag_origin: Vector2 = Vector2.ZERO ## Screen pos when Build layer drag began
-const BUILD_SWIPE_TRASH_RIGHT_PX := 56.0 ## Swipe right this far + release off Build → trash
+const BUILD_SWIPE_TRASH_RIGHT_PX := 24.0 ## Min drag distance before off-Build release trashes a layer
 var service_window_closed: bool = false
 var service_break_left: float = 0.0
 var window_pause_btn: Button = null
@@ -246,7 +246,7 @@ var _strip_did_drag: bool = false ## Skip press action after a paint-swipe.
 var _strip_swipe_active: bool = false ## LMB paint across topping buttons.
 var _strip_swipe_added: Dictionary = {} ## id -> true for this swipe
 var _strip_gesture_added: bool = false ## Already applied a topping this LMB gesture.
-const STRIP_SWIPE_THRESH_PX := 28.0
+const STRIP_SWIPE_THRESH_PX := 44.0 ## Higher = fewer mis-paints when clicking cheese next to tomato
 var _auto_serving: bool = false
 var _serve_fly_busy: bool = false
 var _ingredient_fly_busy: bool = false
@@ -307,6 +307,7 @@ var melting_cups: Array = [] ## cups dropped on the grill — melt / smoke / cha
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
 var _black_smoke_tex: ImageTexture = null
+var _burn_bubble_tex: ImageTexture = null
 var _soda_blob_tex: ImageTexture = null
 var _char_crust_tex: ImageTexture = null
 var _cup_melt_shader: Shader = null
@@ -416,9 +417,9 @@ const BUILD_COLUMN_BOTTOM_CLEAR := 100.0 ## keep clear of ingredient strip (was 
 ## Legacy aliases — drop catcher no longer expands across half the screen.
 const BUILD_DROP_SCREEN_FRAC := BUILD_COLUMN_SCREEN_FRAC
 const BUILD_DROP_MIN_PX := 160.0
-## Flash toast placement — original top + 15% of screen height downward.
-const FLASH_LABEL_TOP_FRAC := 236.0 / 720.0 + 0.10
-const FLASH_LABEL_HEIGHT_FRAC := 74.0 / 720.0
+## Flash toast — centered, nudged up from mid so it clears the grill/counter.
+const FLASH_LABEL_CENTER_Y_FRAC := 0.56
+const FLASH_LABEL_NUDGE_UP_PX := 40.0
 const FLASH_LABEL_SIDE_FRAC := 280.0 / 1280.0
 ## Extra screen pixels past the grill's left edge that still count as Build.
 const BUILD_DROP_GRILL_PAD_PX := 110.0
@@ -499,7 +500,9 @@ const CUP_MAX := 3 ## filled drinks that can sit ready on the tray
 var parked_cups: Array = [] ## Node3D cups parked on tray (filled, ready to serve)
 var _serve_cup_node: Node3D = null ## cup currently flying to a customer
 var soda_stream_mesh: MeshInstance3D = null
-var soda_stream_mat: StandardMaterial3D = null
+var soda_stream_mat: ShaderMaterial = null ## white→soda gradient pour
+var soda_stream_bubbles: GPUParticles3D = null ## white jiggle bubbles at pour impact
+var _soda_stream_shader: Shader = null
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -577,6 +580,8 @@ var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
+var cheese_station_root: Node3D = null
+var cheese_station_area: Area3D = null
 var burger_pals_decal: MeshInstance3D = null
 var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
@@ -622,6 +627,9 @@ const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from the window)
 const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
+## Cheese wheel + slice stack — cook-side of the cutting board (grab here, not the strip).
+const CHEESE_STATION_COLLISION_LAYER := 8192
+const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.055, 0.28) ## relative to board center
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
@@ -1101,14 +1109,16 @@ func _style_static_labels() -> void:
 
 
 func _layout_flash_label() -> void:
+	## Always keep the tip plate horizontally + vertically centered (nudge a bit low).
 	if flash_label == null:
 		return
 	var vr := get_viewport().get_visible_rect()
 	var vw := vr.size.x
 	var vh := vr.size.y
-	var top := vh * FLASH_LABEL_TOP_FRAC
-	var height := maxf(52.0, vh * FLASH_LABEL_HEIGHT_FRAC * 0.88)
-	## Hug the text — don't stretch a full-width plate for short tips.
+	flash_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	flash_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	flash_label.grow_vertical = Control.GROW_DIRECTION_BOTH
+	## Hug the text — don't stretch a tall empty plate that makes the line look high.
 	var max_w := vw * (1.0 - 2.0 * FLASH_LABEL_SIDE_FRAC)
 	flash_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	var need := flash_label.get_combined_minimum_size()
@@ -1117,11 +1127,16 @@ func _layout_flash_label() -> void:
 		w = max_w
 		flash_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		need = flash_label.get_combined_minimum_size()
+	var box_h := maxf(need.y, 44.0)
 	var left := (vw - w) * 0.5
+	var top := vh * FLASH_LABEL_CENTER_Y_FRAC - box_h * 0.5 - FLASH_LABEL_NUDGE_UP_PX
+	top = clampf(top, vh * 0.08, vh * 0.78 - box_h)
 	flash_label.offset_left = left
 	flash_label.offset_top = top
 	flash_label.offset_right = left + w
-	flash_label.offset_bottom = top + maxf(height, need.y)
+	flash_label.offset_bottom = top + box_h
+	flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 
 
 func _setup_start_logo() -> void:
@@ -1372,6 +1387,8 @@ func _process(delta: float) -> void:
 	_update_melting_cups(delta)
 	_update_grill_fire(delta)
 	_update_ext_powder_blobs(delta)
+	if not tickets.is_empty():
+		_refresh_ticket_patience_bars()
 	if brush_held and not brush_throwing:
 		_update_held_brush(delta)
 	## Viewport has no gui_drag_ended signal in 4.x — poll instead.
@@ -1717,12 +1734,12 @@ func _input(event: InputEvent) -> void:
 	## Cheese pick-up / placement — run before UI, but never steal the topping strip.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		if cheese_held:
-			if _is_ingredient_strip_click(event.global_position):
+			if _is_ingredient_strip_click(_strip_mouse_pos(event)):
 				return
-			if _try_window_cat_click(event.global_position):
+			if _try_window_cat_click(_strip_mouse_pos(event)):
 				get_viewport().set_input_as_handled()
 				return
-			_try_place_held_cheese(event.global_position)
+			_try_place_held_cheese(_strip_mouse_pos(event))
 			get_viewport().set_input_as_handled()
 			return
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
@@ -1801,6 +1818,10 @@ func _input(event: InputEvent) -> void:
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			## Cheese wheel sits under the Build column — grab before UI blocks world picks.
+			if not cheese_held and _try_cheese_station_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _ui_blocks_world_click(event.position):
 				return
 			if cheese_held:
@@ -1903,18 +1924,26 @@ func _is_enter_pressed(event: InputEvent) -> bool:
 
 func _handle_strip_swipe_input(event: InputEvent) -> bool:
 	## Drag across topping buttons to stack them in order — one pass for EVERYTHING.
+	## Cheese is excluded: it's a pick-up ghost, and swipe drifts often paint tomato instead.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			var id := _strip_ingredient_at(event.position)
+			var mouse := _strip_mouse_pos(event)
+			var id := _strip_ingredient_at(mouse)
 			if id == "":
 				_strip_swipe_active = false
+				return false
+			## Cheese click/drag is hold-to-place — never start a paint-swipe from it.
+			if id == "cheese":
+				_strip_swipe_active = false
+				_strip_did_drag = false
+				_strip_gesture_added = false
 				return false
 			## Fresh press — never inherit a stale skip flag from a prior drag.
 			_strip_did_drag = false
 			_strip_gesture_added = false
 			_strip_swipe_active = true
 			_strip_swipe_added.clear()
-			_strip_swipe_added["_start"] = event.position
+			_strip_swipe_added["_start"] = mouse
 			_strip_swipe_added["_start_id"] = id
 			_strip_swipe_added["_moved"] = false
 			return false
@@ -1927,28 +1956,49 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 			_strip_swipe_added.clear()
 		return false
 	if event is InputEventMouseMotion and _strip_swipe_active and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		var start_pos: Vector2 = _strip_swipe_added.get("_start", event.position)
+		var mouse2 := _strip_mouse_pos(event)
+		var start_pos: Vector2 = _strip_swipe_added.get("_start", mouse2)
 		if not bool(_strip_swipe_added.get("_moved", false)):
-			if start_pos.distance_to(event.position) >= STRIP_SWIPE_THRESH_PX:
+			if start_pos.distance_to(mouse2) >= STRIP_SWIPE_THRESH_PX:
 				_strip_swipe_added["_moved"] = true
 				_strip_did_drag = true
 				var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
-				if start_id != "":
+				if start_id != "" and start_id != "cheese":
 					_strip_swipe_add(start_id)
 		if bool(_strip_swipe_added.get("_moved", false)):
-			var id2 := _strip_ingredient_at(event.position)
-			if id2 != "":
+			var id2 := _strip_ingredient_at(mouse2)
+			## Never paint cheese mid-swipe — keeps tomato/cheese boundary clean.
+			if id2 != "" and id2 != "cheese":
 				_strip_swipe_add(id2)
 		return true
 	return false
 
 
+func _strip_mouse_pos(event: InputEvent = null) -> Vector2:
+	## Viewport coords match Control.get_global_rect() under canvas_items stretch.
+	if event is InputEventMouse:
+		return get_viewport().get_mouse_position()
+	return get_viewport().get_mouse_position()
+
+
 func _strip_ingredient_at(screen_pos: Vector2) -> String:
-	for id in ingredient_buttons:
+	## Nearest button center among hits — avoids cheese/tomato edge ambiguity.
+	var best_id := ""
+	var best_d := INF
+	for id in INGREDIENT_HOTKEYS:
+		if not ingredient_buttons.has(id):
+			continue
 		var btn: Control = ingredient_buttons[id]
-		if btn != null and is_instance_valid(btn) and btn.get_global_rect().has_point(screen_pos):
-			return str(id)
-	return ""
+		if btn == null or not is_instance_valid(btn):
+			continue
+		var r: Rect2 = btn.get_global_rect()
+		if not r.has_point(screen_pos):
+			continue
+		var d := screen_pos.distance_squared_to(r.get_center())
+		if d < best_d:
+			best_d = d
+			best_id = str(id)
+	return best_id
 
 
 func _is_ingredient_strip_click(screen_pos: Vector2) -> bool:
@@ -1999,21 +2049,19 @@ func _strip_swipe_add(id: String) -> void:
 func _ingredient_from_hotkey(keycode: Key) -> String:
 	match keycode:
 		KEY_1, KEY_KP_1:
-			return INGREDIENT_HOTKEYS[0]
+			return INGREDIENT_HOTKEYS[0] if INGREDIENT_HOTKEYS.size() > 0 else ""
 		KEY_2, KEY_KP_2:
-			return INGREDIENT_HOTKEYS[1]
+			return INGREDIENT_HOTKEYS[1] if INGREDIENT_HOTKEYS.size() > 1 else ""
 		KEY_3, KEY_KP_3:
-			return INGREDIENT_HOTKEYS[2]
+			return INGREDIENT_HOTKEYS[2] if INGREDIENT_HOTKEYS.size() > 2 else ""
 		KEY_4, KEY_KP_4:
-			return INGREDIENT_HOTKEYS[3]
+			return INGREDIENT_HOTKEYS[3] if INGREDIENT_HOTKEYS.size() > 3 else ""
 		KEY_5, KEY_KP_5:
-			return INGREDIENT_HOTKEYS[4]
+			return INGREDIENT_HOTKEYS[4] if INGREDIENT_HOTKEYS.size() > 4 else ""
 		KEY_6, KEY_KP_6:
-			return INGREDIENT_HOTKEYS[5]
+			return INGREDIENT_HOTKEYS[5] if INGREDIENT_HOTKEYS.size() > 5 else ""
 		KEY_7, KEY_KP_7:
-			return INGREDIENT_HOTKEYS[6]
-		KEY_8, KEY_KP_8:
-			return INGREDIENT_HOTKEYS[7]
+			return INGREDIENT_HOTKEYS[6] if INGREDIENT_HOTKEYS.size() > 6 else ""
 	return ""
 
 
@@ -2491,6 +2539,7 @@ func _build_3d_world() -> void:
 	_build_flat_top_grill()
 	_build_burner_flames()
 	_build_cutting_board_prop()
+	_build_cheese_station_prop()
 	_build_wire_brush()
 	_build_oil_bottle()
 	_build_meat_warmer()
@@ -8022,23 +8071,23 @@ func _clear_soda_char_spots() -> void:
 
 func _get_cup_melt_shader() -> Shader:
 	## Bump ver whenever the burn look changes so a stale Shader resource can't stick around.
-	const SHADER_VER := 3
+	const SHADER_VER := 10
 	if _cup_melt_shader != null and int(_cup_melt_shader.get_meta("ver", 0)) == SHADER_VER:
 		return _cup_melt_shader
 	var sh := Shader.new()
 	sh.set_meta("ver", SHADER_VER)
+	## Milk + rainbow in the bottom band (UV.y = 1 at floor). Noisy milk edge; clearer rainbow.
 	sh.code = """
 shader_type spatial;
-render_mode blend_mix, depth_draw_always, cull_disabled, diffuse_lambert, specular_disabled;
+render_mode blend_mix, depth_draw_always, cull_back, unshaded;
 
-uniform vec4 albedo_color : source_color = vec4(0.9, 0.94, 1.0, 0.11);
+uniform vec4 albedo_color : source_color = vec4(0.78, 0.86, 0.92, 0.10);
 uniform float melt_amt : hint_range(0.0, 1.0) = 0.0;
 uniform float wobble_amp : hint_range(0.0, 0.12) = 0.035;
-uniform float metallic : hint_range(0.0, 1.0) = 0.0;
-uniform float roughness : hint_range(0.0, 1.0) = 0.2;
 uniform float shell_half_h : hint_range(0.01, 0.5) = 0.0945;
+uniform float milk_frac : hint_range(0.02, 0.4) = 0.18;
 
-varying float v_h; // 0 = bottom, 1 = top — from model Y BEFORE squash
+varying float v_h; // 0 = bottom lip, 1 = top rim
 varying float v_around;
 
 vec3 hsv2rgb(float h, float s, float v) {
@@ -8046,9 +8095,26 @@ vec3 hsv2rgb(float h, float s, float v) {
 	return v * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), s);
 }
 
+float hash21(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+
+float noise2(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	float a = hash21(i);
+	float b = hash21(i + vec2(1.0, 0.0));
+	float c = hash21(i + vec2(0.0, 1.0));
+	float d = hash21(i + vec2(1.0, 1.0));
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
 void vertex() {
-	// Capture cup height before melt squash — UV caps/rims were wrong and whitened everything.
-	v_h = clamp(VERTEX.y / max(shell_half_h, 0.001) * 0.5 + 0.5, 0.0, 1.0);
+	// Shell mesh UV.y = 1 at bottom ring, 0 at top rim.
+	v_h = clamp(1.0 - UV.y, 0.0, 1.0);
 	v_around = UV.x;
 
 	float t = TIME * 4.2;
@@ -8067,40 +8133,52 @@ void vertex() {
 void fragment() {
 	float melt = clamp(melt_amt, 0.0, 1.0);
 
-	// Fresh clear plastic for most of the wall — soda must stay readable.
 	vec3 clear_c = albedo_color.rgb;
 	float clear_a = albedo_color.a;
 
-	// Milky ONLY in the bottom band (~28% of height), fades out fast.
-	float milky = 1.0 - smoothstep(0.0, 0.28, v_h);
-	milky = pow(max(milky, 0.0), 1.75) * melt;
+	float band = max(milk_frac, 0.02);
+	// Noisy breakup on the milk edge so it isn't a flat ring.
+	float n = noise2(vec2(v_around * 28.0, v_h * 40.0 + TIME * 0.15));
+	n = n * 0.55 + noise2(vec2(v_around * 11.0 - TIME * 0.08, v_h * 18.0)) * 0.45;
+	float band_n = band * (0.72 + n * 0.55);
 
-	vec3 milk_c = vec3(0.93, 0.95, 0.97);
-	float milk_a = 0.62;
+	float milky = 0.0;
+	if (v_h <= band_n * 1.15) {
+		milky = 1.0 - smoothstep(0.0, band_n, v_h);
+		milky = pow(max(milky, 0.0), 1.15) * smoothstep(0.0, 0.18, melt);
+		// Extra speckled holes in the milk.
+		milky *= mix(0.55, 1.0, smoothstep(0.25, 0.75, n));
+	}
+
+	vec3 milk_c = vec3(0.95, 0.96, 0.98);
+	float milk_a = 0.72;
 	vec3 c = mix(clear_c, milk_c, milky);
 	float a = mix(clear_a, milk_a, milky);
+	c = mix(c, vec3(0.12, 0.09, 0.07), milky * 0.22);
 
-	// Soft soot in the milky band only — never wash the upper wall white.
-	c = mix(c, vec3(0.12, 0.09, 0.07), milky * 0.35);
+	// Rainbow — a bit stronger / taller inside the milk band.
+	float rb_h = band * 0.95;
+	float rainbow_band = 0.0;
+	if (v_h <= rb_h) {
+		rainbow_band = 1.0 - smoothstep(0.0, rb_h, v_h);
+		rainbow_band *= smoothstep(0.02, 0.18, melt);
+		rainbow_band *= mix(0.75, 1.0, n);
+	}
+	float hue = fract(v_around * 2.6 + TIME * 0.32 + v_h * 4.0);
+	vec3 rainbow = hsv2rgb(hue, 0.9, 1.0);
+	c = mix(c, rainbow, rainbow_band * 0.55);
+	a = max(a, rainbow_band * 0.42);
 
-	// Thin rainbow burn strip at the very bottom.
-	float rainbow_band = 1.0 - smoothstep(0.0, 0.07, v_h);
-	rainbow_band *= smoothstep(0.12, 0.40, melt);
-	float hue = fract(v_around * 2.8 + TIME * 0.22 + v_h * 5.0);
-	vec3 rainbow = hsv2rgb(hue, 0.85, 1.0);
-	c = mix(c, rainbow, rainbow_band * 0.32);
-	a = max(a, rainbow_band * 0.18);
-
-	// Force upper wall back to clear glass (anything above ~35% height).
-	float upper = smoothstep(0.30, 0.48, v_h);
-	c = mix(c, clear_c, upper);
-	a = mix(a, clear_a, upper);
+	// Above the noisy milk band → clear.
+	if (v_h > band_n * 1.15) {
+		c = clear_c;
+		a = clear_a;
+		rainbow_band = 0.0;
+	}
 
 	ALBEDO = c;
-	ALPHA = clamp(a, 0.04, 0.85);
-	METALLIC = 0.0;
-	ROUGHNESS = mix(0.12, 0.55, milky);
-	EMISSION = rainbow * rainbow_band * 0.10;
+	ALPHA = clamp(a, 0.05, 0.82);
+	EMISSION = rainbow * rainbow_band * 0.38;
 }
 """
 	_cup_melt_shader = sh
@@ -8108,10 +8186,13 @@ void fragment() {
 
 
 func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
-	## Melt WPO on the Shell only — rim stays clear; soda keeps held-cup pop look.
+	## Melt WPO on the Shell only — walls stay holder-clear until burn milk kicks in.
 	var mats: Array = []
 	var base: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.28, 0.08, 0.05))
+	_cup_melt_shader = null ## force fresh shader so milk-height fixes always land
 	var sh := _get_cup_melt_shader()
+	## ~1.35 inch of the solo cup height (a bit taller than the tight lip).
+	var milk_frac := clampf(0.034 / maxf(CUP_SHELL_H, 0.01), 0.10, 0.22)
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
 		if mi == null:
@@ -8130,23 +8211,14 @@ func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
 				or nm == "CupBubbles":
 			mi.visible = false
 			continue
-		## Floor: mild milky pad only (not a white bowl that bleaches the drink).
+		## Floor: clear plastic disc (not opaque white).
 		if nm == "Floor":
-			var floor_mat := StandardMaterial3D.new()
-			floor_mat.albedo_color = Color(0.92, 0.95, 0.98, 0.22)
-			floor_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			floor_mat.roughness = 0.4
-			floor_mat.metallic = 0.0
-			floor_mat.clearcoat_enabled = false
-			floor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-			floor_mat.cull_mode = BaseMaterial3D.CULL_BACK
-			floor_mat.render_priority = CUP_DRAW_PRIORITY
-			mi.material_override = floor_mat
+			mi.material_override = _make_clear_cup_material(0.10)
 			_boost_cup_draw_order(mi)
 			continue
-		## Rim stays normal clear plastic — do NOT run the melt whitener on the torus.
+		## Rim stays normal clear plastic.
 		if nm == "Rim":
-			mi.material_override = _make_clear_cup_material(0.18)
+			mi.material_override = _make_clear_cup_material(0.16)
 			_boost_cup_draw_order(mi)
 			continue
 		## Only the Shell walls get the height-gradient melt look.
@@ -8154,12 +8226,12 @@ func _apply_melt_materials_to_cup(root: Node3D, flavor: String) -> Array:
 			continue
 		var mat := ShaderMaterial.new()
 		mat.shader = sh
-		mat.set_shader_parameter("albedo_color", Color(0.88, 0.92, 0.96, 0.10))
+		## Dimmer/clearer than before so upper wall never reads as milk.
+		mat.set_shader_parameter("albedo_color", Color(0.78, 0.86, 0.92, 0.10))
 		mat.set_shader_parameter("melt_amt", 0.0)
 		mat.set_shader_parameter("wobble_amp", 0.04)
-		mat.set_shader_parameter("metallic", 0.0)
-		mat.set_shader_parameter("roughness", 0.14)
 		mat.set_shader_parameter("shell_half_h", CUP_SHELL_H * 0.5)
+		mat.set_shader_parameter("milk_frac", milk_frac)
 		mat.render_priority = CUP_DRAW_PRIORITY
 		mi.material_override = mat
 		mats.append(mat)
@@ -8219,54 +8291,84 @@ func _set_melting_cup_liquid_level(root: Node3D, fill: float, flavor: String = "
 
 
 func _make_cup_burn_smoke(radius: float) -> GPUParticles3D:
-	## Black soot rising from a ring around the cup footprint on the steel.
+	## Soft circular soot/steam poofs — low puffs, not tall vertical streaks.
 	var smoke := GPUParticles3D.new()
 	smoke.name = "CupBurnSmoke"
-	smoke.amount = 54 ## ~3× prior count
-	smoke.lifetime = 2.1
-	smoke.randomness = 0.75
+	smoke.amount = 28
+	smoke.lifetime = 1.15
+	smoke.randomness = 0.5
 	smoke.explosiveness = 0.0
 	smoke.emitting = false
 	smoke.amount_ratio = 0.0
-	smoke.visibility_aabb = AABB(Vector3(-0.55, -0.08, -0.55), Vector3(1.1, 1.8, 1.1))
+	smoke.local_coords = false
+	smoke.visibility_aabb = AABB(Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 0.7, 0.8))
 	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	smoke.sorting_offset = 8.0
-	var ring_r := maxf(CUP_SHELL_BOT_R * 0.95, radius * 0.9)
+	var ring_r := maxf(CUP_SHELL_BOT_R * 0.9, radius * 0.85)
 	var pmat := ParticleProcessMaterial.new()
-	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
-	pmat.emission_ring_axis = Vector3(0, 1, 0)
-	pmat.emission_ring_height = 0.018
-	pmat.emission_ring_radius = ring_r
-	pmat.emission_ring_inner_radius = maxf(0.02, ring_r * 0.72)
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = maxf(0.03, ring_r * 0.75)
 	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 14.0
-	pmat.initial_velocity_min = 0.14
-	pmat.initial_velocity_max = 0.38
-	## Buoyant upward drift (negative gravity = rise).
-	pmat.gravity = Vector3(0, 0.28, 0)
-	pmat.damping_min = 0.25
-	pmat.damping_max = 0.65
-	pmat.scale_min = 1.0
-	pmat.scale_max = 2.1
-	pmat.color = Color(0.05, 0.04, 0.035, 0.55)
+	pmat.spread = 28.0
+	pmat.initial_velocity_min = 0.06
+	pmat.initial_velocity_max = 0.16
+	pmat.gravity = Vector3(0, 0.08, 0)
+	pmat.damping_min = 0.55
+	pmat.damping_max = 1.1
+	pmat.scale_min = 0.7
+	pmat.scale_max = 1.35
+	var grow := Curve.new()
+	grow.add_point(Vector2(0.0, 0.55))
+	grow.add_point(Vector2(0.3, 1.15))
+	grow.add_point(Vector2(0.7, 1.0))
+	grow.add_point(Vector2(1.0, 0.35))
+	var grow_tex := CurveTexture.new()
+	grow_tex.curve = grow
+	pmat.scale_curve = grow_tex
+	pmat.turbulence_enabled = true
+	pmat.turbulence_noise_strength = 1.2
+	pmat.turbulence_noise_scale = 2.0
+	pmat.turbulence_influence_min = 0.08
+	pmat.turbulence_influence_max = 0.28
+	pmat.turbulence_initial_displacement_min = 0.0
+	pmat.turbulence_initial_displacement_max = 0.02
+	pmat.angular_velocity_min = -18.0
+	pmat.angular_velocity_max = 18.0
+	pmat.particle_flag_align_y = false
+	pmat.color = Color(1, 1, 1, 1)
+	var birth := Gradient.new()
+	birth.offsets = PackedFloat32Array([0.0, 0.45, 0.58, 1.0])
+	birth.colors = PackedColorArray([
+		Color(0.05, 0.045, 0.04, 0.72),
+		Color(0.1, 0.09, 0.08, 0.55),
+		Color(0.78, 0.8, 0.82, 0.4),
+		Color(0.94, 0.95, 0.96, 0.45),
+	])
+	var birth_tex := GradientTexture1D.new()
+	birth_tex.gradient = birth
+	pmat.color_initial_ramp = birth_tex
 	var fade := Gradient.new()
-	fade.add_point(0.0, Color(0.08, 0.07, 0.06, 0.0))
-	fade.add_point(0.08, Color(0.03, 0.025, 0.02, 0.7))
-	fade.add_point(0.4, Color(0.05, 0.045, 0.04, 0.35))
-	fade.add_point(0.75, Color(0.09, 0.08, 0.07, 0.12))
-	fade.add_point(1.0, Color(0.12, 0.11, 0.1, 0.0))
+	fade.offsets = PackedFloat32Array([0.0, 0.1, 0.45, 0.8, 1.0])
+	fade.colors = PackedColorArray([
+		Color(1, 1, 1, 0.0),
+		Color(1, 1, 1, 1.0),
+		Color(1, 1, 1, 0.7),
+		Color(1, 1, 1, 0.2),
+		Color(1, 1, 1, 0.0),
+	])
 	var fade_tex := GradientTexture1D.new()
 	fade_tex.gradient = fade
 	pmat.color_ramp = fade_tex
 	smoke.process_material = pmat
+	## Round soft poofs (square quad + circular texture).
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.1, 0.1)
+	quad.size = Vector2(0.09, 0.09)
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
 	draw.albedo_texture = _get_black_smoke_texture()
-	draw.albedo_color = Color(0.07, 0.06, 0.05, 0.85)
+	draw.albedo_color = Color(1, 1, 1, 1)
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.vertex_color_use_as_albedo = true
@@ -8275,6 +8377,102 @@ func _make_cup_burn_smoke(radius: float) -> GPUParticles3D:
 	smoke.draw_pass_1 = quad
 	smoke.material_override = draw
 	return smoke
+
+
+func _make_cup_burn_bubbles(radius: float) -> GPUParticles3D:
+	## Soft white bubbles on the steel under a burning cup — grow, then fade out.
+	var fx := GPUParticles3D.new()
+	fx.name = "CupBurnBubbles"
+	fx.amount = 28
+	fx.lifetime = 0.85
+	fx.randomness = 0.55
+	fx.explosiveness = 0.0
+	fx.emitting = false
+	fx.amount_ratio = 0.0
+	fx.visibility_aabb = AABB(Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 0.45, 0.8))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fx.sorting_offset = 6.0
+	var ring_r := maxf(CUP_SHELL_BOT_R * 1.05, radius * 1.0)
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	pmat.emission_ring_axis = Vector3(0, 1, 0)
+	pmat.emission_ring_height = 0.008
+	pmat.emission_ring_radius = ring_r
+	pmat.emission_ring_inner_radius = maxf(0.01, ring_r * 0.35)
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 8.0
+	pmat.initial_velocity_min = 0.02
+	pmat.initial_velocity_max = 0.07
+	pmat.gravity = Vector3(0, 0.04, 0)
+	pmat.damping_min = 0.8
+	pmat.damping_max = 1.6
+	pmat.scale_min = 0.55
+	pmat.scale_max = 1.15
+	## Grow from tiny → plump, then shrink away.
+	var grow := Curve.new()
+	grow.add_point(Vector2(0.0, 0.15))
+	grow.add_point(Vector2(0.35, 1.15))
+	grow.add_point(Vector2(0.7, 1.35))
+	grow.add_point(Vector2(1.0, 0.05))
+	var grow_tex := CurveTexture.new()
+	grow_tex.curve = grow
+	pmat.scale_curve = grow_tex
+	pmat.color = Color(1.0, 1.0, 1.0, 0.55)
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0, 0.12, 0.55, 0.82, 1.0])
+	fade.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.55),
+		Color(0.95, 0.97, 1.0, 0.35),
+		Color(0.9, 0.94, 1.0, 0.12),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var fade_tex := GradientTexture1D.new()
+	fade_tex.gradient = fade
+	pmat.color_ramp = fade_tex
+	fx.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.038, 0.038)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	draw.albedo_texture = _get_burn_bubble_texture()
+	draw.albedo_color = Color(1.0, 1.0, 1.0, 0.85)
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.vertex_color_use_as_albedo = true
+	draw.render_priority = 13
+	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fx.draw_pass_1 = quad
+	fx.material_override = draw
+	return fx
+
+
+func _get_burn_bubble_texture() -> ImageTexture:
+	## Soft translucent white disc with a faint rim highlight.
+	if _burn_bubble_tex != null:
+		return _burn_bubble_tex
+	var w := 64
+	var img := Image.create(w, w, false, Image.FORMAT_RGBA8)
+	var mid := float(w - 1) * 0.5
+	for y in w:
+		for x in w:
+			var dx := (float(x) - mid) / mid
+			var dy := (float(y) - mid) / mid
+			var r := sqrt(dx * dx + dy * dy)
+			if r > 1.0:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				var edge := 1.0 - smoothstep(0.55, 1.0, r)
+				var core := 1.0 - smoothstep(0.0, 0.7, r)
+				var a := clampf(core * 0.35 + edge * 0.55, 0.0, 0.85)
+				## Soft specular glint toward the top-left.
+				var glint := exp(-((dx + 0.25) * (dx + 0.25) + (dy + 0.3) * (dy + 0.3)) * 14.0)
+				var shade := clampf(0.88 + glint * 0.2, 0.0, 1.0)
+				img.set_pixel(x, y, Color(shade, shade, 1.0, a))
+	_burn_bubble_tex = ImageTexture.create_from_image(img)
+	return _burn_bubble_tex
 
 
 func _make_surface_burn_smoke(radius: float) -> GPUParticles3D:
@@ -8332,28 +8530,29 @@ func _make_surface_burn_smoke(radius: float) -> GPUParticles3D:
 
 
 func _get_black_smoke_texture() -> ImageTexture:
-	## Dense sooty puff — hard lobed core so it reads as black smoke, not gray mist.
-	if _black_smoke_tex != null:
+	## Soft circular puff — round blob, not a tall vertical plume.
+	if _black_smoke_tex != null and bool(_black_smoke_tex.get_meta("v4", false)):
 		return _black_smoke_tex
 	var w := 64
-	var img := Image.create(w, w, false, Image.FORMAT_RGBA8)
+	var h := 64
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
 	var mid := float(w - 1) * 0.5
-	for y in w:
+	for y in h:
 		for x in w:
 			var dx := (float(x) - mid) / mid
 			var dy := (float(y) - mid) / mid
 			var r := sqrt(dx * dx + dy * dy)
-			var ang := atan2(dy, dx)
-			var edge := 0.78 + 0.14 * sin(ang * 3.0) + 0.08 * cos(ang * 7.0 + 0.4)
-			if r > edge:
+			var soft := 1.0 - smoothstep(0.35, 1.0, r)
+			if soft <= 0.001:
 				img.set_pixel(x, y, Color(0, 0, 0, 0))
 			else:
-				## Soft only in the outer 12% — interior stays near-opaque soot.
-				var rim := clampf((edge - r) / maxf(edge * 0.12, 0.01), 0.0, 1.0)
-				var a := lerpf(0.55, 0.98, rim)
-				var shade := lerpf(0.01, 0.08, pow(r / maxf(edge, 0.01), 1.6))
-				img.set_pixel(x, y, Color(shade, shade * 0.95, shade * 0.88, a))
+				var core := 1.0 - smoothstep(0.0, 0.45, r)
+				var a := clampf(soft * (0.28 + core * 0.55), 0.0, 0.85)
+				a *= a
+				var shade := lerpf(0.95, 0.55, pow(r, 0.85))
+				img.set_pixel(x, y, Color(shade, shade, shade, a))
 	_black_smoke_tex = ImageTexture.create_from_image(img)
+	_black_smoke_tex.set_meta("v4", true)
 	return _black_smoke_tex
 
 
@@ -8419,18 +8618,25 @@ func _begin_cup_melt_local(
 	root.set_meta("melt_flavor", flavor)
 	var mats := _apply_melt_materials_to_cup(root, flavor)
 	_set_melting_cup_liquid_level(root, fill, flavor)
-	## Smoke lives on the grill so cup squash doesn't erase the plume.
+	## Smoke + steel bubbles live on the grill so cup squash doesn't erase them.
 	var smoke := _make_cup_burn_smoke(CUP_SHELL_BOT_R)
+	var bubbles := _make_cup_burn_bubbles(CUP_SHELL_BOT_R)
 	if grill_root != null:
 		grill_root.add_child(smoke)
+		grill_root.add_child(bubbles)
 	else:
 		world.add_child(smoke)
-	smoke.global_position = Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.03, root.global_position.z)
+		world.add_child(bubbles)
+	var grill_fx_pos := Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.03, root.global_position.z)
+	smoke.global_position = grill_fx_pos
+	bubbles.global_position = Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.012, root.global_position.z)
 	var has_liquid := fill >= 0.15
 	var phase := "delay" if has_liquid else "burn"
-	## No smoke during the cool-down delay — only once plastic actually burns.
+	## No smoke/bubbles during the cool-down delay — only once plastic actually burns.
 	smoke.emitting = not has_liquid
 	smoke.amount_ratio = 0.95 if not has_liquid else 0.0
+	bubbles.emitting = not has_liquid
+	bubbles.amount_ratio = 0.9 if not has_liquid else 0.0
 	melting_cups.append({
 		"root": root,
 		"age": 0.0,
@@ -8443,6 +8649,7 @@ func _begin_cup_melt_local(
 		"fill_left": fill,
 		"ice": ice,
 		"smoke": smoke,
+		"bubbles": bubbles,
 		"mats": mats,
 		"base_y": GRILL_SURFACE_Y + CUP_STEEL_SIT_Y,
 		"hiss_cd": 0.0,
@@ -8503,8 +8710,9 @@ func _update_cup_spill_grow(item: Dictionary, delta: float) -> void:
 		return
 	var root: Node3D = item.get("root") as Node3D
 	item["spill_t"] = float(item.get("spill_t", 0.0)) + delta
-	var t := clampf(float(item["spill_t"]) / 1.05, 0.0, 1.0)
-	var ease := 1.0 - pow(1.0 - t, 2.4)
+	## Was 1.05s — emptied too fast while burning; stretch the pour-out.
+	var t := clampf(float(item["spill_t"]) / 1.85, 0.0, 1.0)
+	var ease := 1.0 - pow(1.0 - t, 2.15)
 	var mesh = item.get("spill_mesh")
 	var target_r := float(item.get("spill_target_r", 0.1))
 	if mesh != null and is_instance_valid(mesh):
@@ -8565,28 +8773,37 @@ func _update_melting_cups(delta: float) -> void:
 			var sm0 = item.get("smoke")
 			if sm0 != null and is_instance_valid(sm0):
 				sm0.queue_free()
+			var bub0 = item.get("bubbles")
+			if bub0 != null and is_instance_valid(bub0):
+				bub0.queue_free()
 			var cr0 = item.get("crust_root")
 			if cr0 != null and is_instance_valid(cr0):
 				cr0.queue_free()
 			melting_cups.remove_at(i)
 			continue
 		var smoke = item.get("smoke")
+		var bubbles = item.get("bubbles")
 		## Cold steel — melt / smoke pause until the burner is back on.
 		if not grill_on:
 			if smoke != null and is_instance_valid(smoke):
 				smoke.emitting = false
 				smoke.amount_ratio = 0.0
+			if bubbles != null and is_instance_valid(bubbles):
+				bubbles.emitting = false
+				bubbles.amount_ratio = 0.0
 			if game_audio != null and game_audio.has_method("stop_hot_oil"):
 				game_audio.stop_hot_oil()
 			i += 1
 			continue
 		var phase := str(item.get("phase", "burn"))
 		var fill_amt := float(item.get("fill", 0.5))
-		## Keep world-space smoke glued above the cup (ignore cup squash).
+		## Keep world-space FX glued to the steel under the cup (ignore cup squash).
 		if smoke != null and is_instance_valid(smoke):
-			## Rise from the cook surface under the cup, not a mid-air ball.
 			smoke.global_position = Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.03, root.global_position.z)
 			smoke.global_basis = Basis.IDENTITY
+		if bubbles != null and is_instance_valid(bubbles):
+			bubbles.global_position = Vector3(root.global_position.x, GRILL_SURFACE_Y + 0.012, root.global_position.z)
+			bubbles.global_basis = Basis.IDENTITY
 		## --- Delay: liquid stays in the cup for 2s (no smoke yet) ---
 		if phase == "delay":
 			item["delay_age"] = float(item.get("delay_age", 0.0)) + delta
@@ -8598,12 +8815,17 @@ func _update_melting_cups(delta: float) -> void:
 			if smoke != null and is_instance_valid(smoke):
 				smoke.emitting = false
 				smoke.amount_ratio = 0.0
+			if bubbles != null and is_instance_valid(bubbles):
+				bubbles.emitting = false
+				bubbles.amount_ratio = 0.0
 			var pre := delay_t * 0.1
 			root.scale = Vector3(lerpf(1.0, 1.04, pre), lerpf(1.0, 0.94, pre), lerpf(1.0, 1.04, pre))
+			## Keep melt_amt at 0 while cooling — milk/rainbow only once it actually burns.
 			var mats_d: Array = item.get("mats", [])
 			for mat in mats_d:
 				if mat is ShaderMaterial:
-					(mat as ShaderMaterial).set_shader_parameter("melt_amt", pre)
+					(mat as ShaderMaterial).set_shader_parameter("melt_amt", 0.0)
+					(mat as ShaderMaterial).set_shader_parameter("wobble_amp", 0.0)
 			if float(item["delay_age"]) >= delay_need:
 				item["phase"] = "burn"
 				item["age"] = 0.0
@@ -8613,6 +8835,9 @@ func _update_melting_cups(delta: float) -> void:
 				if smoke != null and is_instance_valid(smoke):
 					smoke.emitting = true
 					smoke.amount_ratio = 0.95
+				if bubbles != null and is_instance_valid(bubbles):
+					bubbles.emitting = true
+					bubbles.amount_ratio = 0.9
 				if not bool(item.get("remote", false)):
 					_flash("Cup's burning — soda spills!", Color("FF8A65"))
 			i += 1
@@ -8631,6 +8856,9 @@ func _update_melting_cups(delta: float) -> void:
 			if smoke != null and is_instance_valid(smoke):
 				smoke.emitting = false
 				smoke.queue_free()
+			if bubbles != null and is_instance_valid(bubbles):
+				bubbles.emitting = false
+				bubbles.queue_free()
 			root.queue_free()
 			melting_cups.remove_at(i)
 			_stop_cup_burn_hiss_if_idle()
@@ -8662,6 +8890,16 @@ func _update_melting_cups(delta: float) -> void:
 				var ring_r := CUP_SHELL_BOT_R * lerpf(1.0, 0.7, melt)
 				pmat.emission_ring_radius = ring_r
 				pmat.emission_ring_inner_radius = maxf(0.02, ring_r * 0.72)
+		if bubbles != null and is_instance_valid(bubbles):
+			var bub_amt := lerpf(0.7, 1.0, smoothstep(0.0, 0.25, melt))
+			bub_amt *= 1.0 - smoothstep(0.8, 1.0, melt) * 0.55
+			bubbles.emitting = bub_amt > 0.05
+			bubbles.amount_ratio = bub_amt
+			var bmat := bubbles.process_material as ParticleProcessMaterial
+			if bmat and bmat.emission_shape == ParticleProcessMaterial.EMISSION_SHAPE_RING:
+				var br := CUP_SHELL_BOT_R * lerpf(1.05, 0.75, melt)
+				bmat.emission_ring_radius = br
+				bmat.emission_ring_inner_radius = maxf(0.01, br * 0.35)
 		root.rotation_degrees.x = sin(age * 9.0) * lerpf(4.0, 16.0, melt)
 		root.rotation_degrees.z = cos(age * 7.5) * lerpf(3.0, 14.0, melt)
 		i += 1
@@ -8823,6 +9061,9 @@ func _clear_melting_cups() -> void:
 		var sm = item.get("smoke") if typeof(item) == TYPE_DICTIONARY else null
 		if sm != null and is_instance_valid(sm):
 			sm.queue_free()
+		var bub = item.get("bubbles") if typeof(item) == TYPE_DICTIONARY else null
+		if bub != null and is_instance_valid(bub):
+			bub.queue_free()
 		var crust = item.get("crust_root") if typeof(item) == TYPE_DICTIONARY else null
 		if crust != null and is_instance_valid(crust):
 			crust.queue_free()
@@ -10241,6 +10482,12 @@ func _build_soda_station() -> void:
 	_clear_all_drink_cups()
 	if soda_stream_mesh != null and is_instance_valid(soda_stream_mesh):
 		soda_stream_mesh.queue_free()
+	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
+		soda_stream_bubbles.queue_free()
+	soda_stream_mesh = null
+	soda_stream_mat = null
+	soda_stream_bubbles = null
+	_soda_stream_shader = null
 	soda_flavor_areas.clear()
 	soda_flavor_mats.clear()
 	soda_flavor_pads.clear()
@@ -10269,6 +10516,7 @@ func _build_soda_station() -> void:
 	cup_ice_root = null
 	soda_stream_mesh = null
 	soda_stream_mat = null
+	soda_stream_bubbles = null
 	_serve_cup_node = null
 	_cup_ice_spawn_cd = 0.0
 	_cup_prev_pos = Vector3.ZERO
@@ -10471,7 +10719,7 @@ func _add_soda_face_flavor_hint(station: Node3D) -> void:
 	gloss.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	gloss.emission_enabled = true
 	gloss.emission = Color(0.55, 0.72, 0.95)
-	gloss.emission_energy_multiplier = 0.55
+	gloss.emission_energy_multiplier = 0.275 ## Half prior glow — less bloom on the face tip
 	## Small ↑ above the tip, pointing at the syrup tanks.
 	var arrow := MeshInstance3D.new()
 	arrow.name = "FlavorHintArrow"
@@ -10699,27 +10947,26 @@ func _refresh_soda_tank_bubbles() -> void:
 
 
 func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, is_soda: bool) -> void:
-	## Metal faucet: arm out from face + colored metal nozzle tip (raised pour point).
+	## Soda = slim colored metal faucet. Ice = thick white plastic chute (reads different).
 	var group := Node3D.new()
 	group.name = spout_name
 	group.position = local_pos
 	parent.add_child(group)
 
-	var metal_col: Color
-	if is_soda:
-		var fc: Color = SODA_FLAVOR_COLORS.get(soda_selected_flavor, Color(0.85, 0.22, 0.18))
-		metal_col = Color(
-			lerpf(0.55, fc.r, 0.72),
-			lerpf(0.55, fc.g, 0.72),
-			lerpf(0.55, fc.b, 0.72)
-		)
-	else:
-		metal_col = Color(0.62, 0.78, 0.92)
+	if not is_soda:
+		_add_ice_dispenser_spout(group, parent, local_pos)
+		return
 
+	var fc: Color = SODA_FLAVOR_COLORS.get(soda_selected_flavor, Color(0.85, 0.22, 0.18))
+	var metal_col := Color(
+		lerpf(0.55, fc.r, 0.72),
+		lerpf(0.55, fc.g, 0.72),
+		lerpf(0.55, fc.b, 0.72)
+	)
 	var sm := _make_soda_metal_mat(metal_col, 0.96, 0.12)
 	sm.emission_enabled = true
 	sm.emission = metal_col
-	sm.emission_energy_multiplier = 0.18 if is_soda else 0.12
+	sm.emission_energy_multiplier = 0.18
 
 	## Horizontal arm from the face.
 	var arm := MeshInstance3D.new()
@@ -10761,12 +11008,84 @@ func _add_soda_spout(parent: Node3D, spout_name: String, local_pos: Vector3, is_
 	## Pour tip near the ring — well above a cup on the tray.
 	tip.position = local_pos + Vector3(0.0, -0.032, 0.045)
 	parent.add_child(tip)
-	if is_soda:
-		soda_spout_marker = tip
-		soda_spout_mat = sm
-	else:
-		ice_spout_marker = tip
-		ice_spout_mat = sm
+	soda_spout_marker = tip
+	soda_spout_mat = sm
+
+
+func _make_ice_dispenser_mat() -> StandardMaterial3D:
+	## Matte white plastic — reads as ice machine, not soda metal.
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.94, 0.96, 0.98)
+	mat.metallic = 0.05
+	mat.roughness = 0.55
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	return mat
+
+
+func _add_ice_dispenser_spout(group: Node3D, parent: Node3D, local_pos: Vector3) -> void:
+	## Thick white ice chute — boxy head + fat spout, clearly not the soda faucet.
+	var white := _make_ice_dispenser_mat()
+	var white_trim := _make_ice_dispenser_mat()
+	white_trim.albedo_color = Color(0.82, 0.86, 0.90)
+	white_trim.roughness = 0.42
+	ice_spout_mat = white
+
+	## Chunky horizontal housing from the cabinet face.
+	var housing := MeshInstance3D.new()
+	housing.name = "IceHousing"
+	var house_mesh := BoxMesh.new()
+	house_mesh.size = Vector3(0.078, 0.055, 0.11)
+	housing.mesh = house_mesh
+	housing.position = Vector3(0.0, 0.01, 0.02)
+	housing.material_override = white
+	group.add_child(housing)
+
+	## Fat vertical chute — ~2× soda nozzle thickness.
+	var chute := MeshInstance3D.new()
+	chute.name = "Nozzle"
+	var chute_mesh := CylinderMesh.new()
+	chute_mesh.top_radius = 0.032
+	chute_mesh.bottom_radius = 0.038
+	chute_mesh.height = 0.070
+	chute.mesh = chute_mesh
+	chute.position = Vector3(0.0, -0.018, 0.055)
+	chute.material_override = white
+	group.add_child(chute)
+
+	## Wide mouth ring at the drop point.
+	var mouth := MeshInstance3D.new()
+	mouth.name = "IceMouth"
+	var mouth_mesh := CylinderMesh.new()
+	mouth_mesh.top_radius = 0.042
+	mouth_mesh.bottom_radius = 0.044
+	mouth_mesh.height = 0.018
+	mouth.mesh = mouth_mesh
+	mouth.position = Vector3(0.0, -0.055, 0.055)
+	mouth.material_override = white_trim
+	group.add_child(mouth)
+
+	## Inner dark throat so it reads as a hollow ice spout.
+	var throat := MeshInstance3D.new()
+	throat.name = "IceThroat"
+	var throat_mesh := CylinderMesh.new()
+	throat_mesh.top_radius = 0.022
+	throat_mesh.bottom_radius = 0.024
+	throat_mesh.height = 0.022
+	throat.mesh = throat_mesh
+	throat.position = Vector3(0.0, -0.056, 0.055)
+	var throat_mat := StandardMaterial3D.new()
+	throat_mat.albedo_color = Color(0.22, 0.26, 0.30)
+	throat_mat.roughness = 0.7
+	throat_mat.metallic = 0.1
+	throat.material_override = throat_mat
+	group.add_child(throat)
+
+	var tip := Marker3D.new()
+	tip.name = "IceSpoutTip"
+	tip.position = local_pos + Vector3(0.0, -0.066, 0.055)
+	parent.add_child(tip)
+	ice_spout_marker = tip
 
 
 func _build_soda_cup_rack(station: Node3D) -> void:
@@ -10900,23 +11219,20 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	soda_stream_mesh = MeshInstance3D.new()
 	soda_stream_mesh.name = "SodaStream"
 	var stream_cyl := CylinderMesh.new()
-	stream_cyl.top_radius = 0.014 ## 2× thicker pour
-	stream_cyl.bottom_radius = 0.022
+	stream_cyl.top_radius = 0.014 ## nozzle end
+	stream_cyl.bottom_radius = 0.020 ## cup-floor end
 	stream_cyl.height = 0.1
 	stream_cyl.cap_top = false
 	stream_cyl.cap_bottom = false
 	soda_stream_mesh.mesh = stream_cyl
-	soda_stream_mat = StandardMaterial3D.new()
-	soda_stream_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	soda_stream_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	soda_stream_mat.albedo_color = Color(0.45, 0.18, 0.12, 0.85)
-	soda_stream_mat.cull_mode = BaseMaterial3D.CULL_BACK
-	soda_stream_mat.render_priority = CUP_DRAW_PRIORITY
+	soda_stream_mat = _make_soda_stream_material()
 	soda_stream_mesh.material_override = soda_stream_mat
 	soda_stream_mesh.visible = false
 	soda_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_boost_cup_draw_order(soda_stream_mesh)
 	world.add_child(soda_stream_mesh)
+	soda_stream_bubbles = _make_soda_stream_bubbles()
+	world.add_child(soda_stream_bubbles)
 
 
 func _clear_all_drink_cups() -> void:
@@ -12519,7 +12835,9 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			cup_soda_fill = minf(1.0, cup_soda_fill + CUP_FILL_RATE * delta)
 			pouring_soda = true
 			_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
-			_update_soda_stream(soda_tip, rim, cup_flavor)
+			## Pour all the way to the cup floor (not just the rim).
+			var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
+			_update_soda_stream(soda_tip, cup_floor, cup_flavor)
 			if before < 1.0 and cup_soda_fill >= 1.0:
 				_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
 				_refresh_ticket_checkmarks()
@@ -12555,11 +12873,132 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		_refresh_cup_visuals()
 
 
-func _update_soda_stream(from_tip: Vector3, to_rim: Vector3, flavor: String) -> void:
-	## Straight vertical pour from the nozzle — never bends toward the cup.
+func _get_soda_stream_shader() -> Shader:
+	if _soda_stream_shader != null:
+		return _soda_stream_shader
+	var sh := Shader.new()
+	## Cylinder Y: +top (nozzle) → −bottom (cup floor). White splash at bottom (~25%),
+	## soda color for the upper ~75% of the stream.
+	sh.code = """
+shader_type spatial;
+render_mode blend_mix, depth_draw_opaque, cull_disabled, unshaded;
+
+uniform vec4 soda_color : source_color = vec4(0.45, 0.18, 0.12, 0.92);
+uniform vec4 foam_color : source_color = vec4(0.97, 0.97, 0.98, 0.95);
+uniform float foam_frac : hint_range(0.0, 0.5) = 0.25; // white share at the bottom
+uniform float half_h : hint_range(0.01, 1.0) = 0.1;
+
+varying float v_t; // 0 = cup floor, 1 = nozzle
+
+void vertex() {
+	v_t = clamp(VERTEX.y / max(half_h, 0.001) * 0.5 + 0.5, 0.0, 1.0);
+}
+
+void fragment() {
+	// White only in the bottom foam_frac (~25%); soda is the remaining ~75%.
+	float foam = 1.0 - smoothstep(0.0, max(foam_frac, 0.01), v_t);
+	foam = pow(max(foam, 0.0), 0.85);
+	vec3 c = mix(soda_color.rgb, foam_color.rgb, foam);
+	float a = mix(soda_color.a, foam_color.a, foam);
+	c = mix(c, vec3(1.0), foam * 0.25);
+	ALBEDO = c;
+	ALPHA = clamp(a, 0.35, 0.98);
+	EMISSION = foam_color.rgb * foam * 0.22;
+}
+"""
+	_soda_stream_shader = sh
+	return _soda_stream_shader
+
+
+func _make_soda_stream_material() -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = _get_soda_stream_shader()
+	mat.set_shader_parameter("soda_color", Color(0.45, 0.18, 0.12, 0.92))
+	mat.set_shader_parameter("foam_color", Color(0.97, 0.97, 0.98, 0.95))
+	mat.set_shader_parameter("foam_frac", 0.25) ## 75% soda / 25% white bottom
+	mat.set_shader_parameter("half_h", 0.1)
+	mat.render_priority = CUP_DRAW_PRIORITY
+	return mat
+
+
+func _make_soda_stream_bubbles() -> GPUParticles3D:
+	## White splash bubbles that jiggle at the pour impact on the cup floor.
+	var fx := GPUParticles3D.new()
+	fx.name = "SodaStreamBubbles"
+	fx.amount = 36
+	fx.lifetime = 0.55
+	fx.randomness = 0.7
+	fx.explosiveness = 0.05
+	fx.emitting = false
+	fx.visibility_aabb = AABB(Vector3(-0.2, -0.05, -0.2), Vector3(0.4, 0.25, 0.4))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fx.sorting_offset = 12.0
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = 0.022
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 165.0 ## spray sideways so they jiggle around the impact
+	pmat.initial_velocity_min = 0.04
+	pmat.initial_velocity_max = 0.14
+	pmat.gravity = Vector3(0, -0.08, 0)
+	pmat.damping_min = 1.2
+	pmat.damping_max = 2.4
+	pmat.angular_velocity_min = -220.0
+	pmat.angular_velocity_max = 220.0
+	pmat.scale_min = 0.45
+	pmat.scale_max = 1.15
+	## Tiny → plump → pop.
+	var grow := Curve.new()
+	grow.add_point(Vector2(0.0, 0.25))
+	grow.add_point(Vector2(0.3, 1.2))
+	grow.add_point(Vector2(0.7, 1.05))
+	grow.add_point(Vector2(1.0, 0.1))
+	var grow_tex := CurveTexture.new()
+	grow_tex.curve = grow
+	pmat.scale_curve = grow_tex
+	## Keep them jittering in place.
+	pmat.turbulence_enabled = true
+	pmat.turbulence_noise_strength = 1.8
+	pmat.turbulence_noise_scale = 3.5
+	pmat.turbulence_influence_min = 0.15
+	pmat.turbulence_influence_max = 0.45
+	pmat.color = Color(1.0, 1.0, 1.0, 0.7)
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0, 0.1, 0.55, 0.85, 1.0])
+	fade.colors = PackedColorArray([
+		Color(1, 1, 1, 0.0),
+		Color(1, 1, 1, 0.75),
+		Color(0.95, 0.97, 1.0, 0.45),
+		Color(0.9, 0.94, 1.0, 0.15),
+		Color(1, 1, 1, 0.0),
+	])
+	var fade_tex := GradientTexture1D.new()
+	fade_tex.gradient = fade
+	pmat.color_ramp = fade_tex
+	fx.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.028, 0.028)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	draw.albedo_texture = _get_burn_bubble_texture()
+	draw.albedo_color = Color(1.0, 1.0, 1.0, 0.95)
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.vertex_color_use_as_albedo = true
+	draw.render_priority = CUP_DRAW_PRIORITY + 2
+	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fx.draw_pass_1 = quad
+	fx.material_override = draw
+	return fx
+
+
+func _update_soda_stream(from_tip: Vector3, to_floor: Vector3, flavor: String) -> void:
+	## Straight vertical pour from nozzle tip down to the cup floor.
 	if soda_stream_mesh == null or not is_instance_valid(soda_stream_mesh):
 		return
-	var drop := clampf(from_tip.y - to_rim.y, 0.08, 0.42)
+	var drop := clampf(from_tip.y - to_floor.y, 0.10, 0.55)
 	var mid := Vector3(from_tip.x, from_tip.y - drop * 0.5, from_tip.z)
 	soda_stream_mesh.visible = true
 	soda_stream_mesh.global_position = mid
@@ -12567,26 +13006,34 @@ func _update_soda_stream(from_tip: Vector3, to_rim: Vector3, flavor: String) -> 
 	var cyl := soda_stream_mesh.mesh as CylinderMesh
 	if cyl:
 		cyl.height = drop
-		cyl.top_radius = 0.014
-		cyl.bottom_radius = 0.022
-	if soda_stream_mat != null:
-		var col: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
-		col.a = 0.92
-		soda_stream_mat.albedo_color = col
-		soda_stream_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		soda_stream_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		soda_stream_mat.roughness = 0.12
-		soda_stream_mat.refraction_enabled = true
-		soda_stream_mat.refraction_scale = 0.015
-		soda_stream_mat.clearcoat_enabled = true
-		soda_stream_mat.clearcoat = 0.5
-		soda_stream_mat.clearcoat_roughness = 0.08
-		soda_stream_mat.render_priority = CUP_DRAW_PRIORITY
+		cyl.top_radius = 0.013
+		cyl.bottom_radius = 0.019
+	if soda_stream_mat == null:
+		soda_stream_mat = _make_soda_stream_material()
+		soda_stream_mesh.material_override = soda_stream_mat
+	var col: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
+	col.a = 0.92
+	soda_stream_mat.set_shader_parameter("soda_color", col)
+	soda_stream_mat.set_shader_parameter("foam_color", Color(0.97, 0.97, 0.98, 0.95))
+	soda_stream_mat.set_shader_parameter("foam_frac", 0.25)
+	soda_stream_mat.set_shader_parameter("half_h", drop * 0.5)
+	soda_stream_mat.render_priority = CUP_DRAW_PRIORITY
+	## White jiggle bubbles at the stream impact (cup floor).
+	if soda_stream_bubbles == null or not is_instance_valid(soda_stream_bubbles):
+		soda_stream_bubbles = _make_soda_stream_bubbles()
+		world.add_child(soda_stream_bubbles)
+	soda_stream_bubbles.global_position = Vector3(from_tip.x, to_floor.y + 0.01, from_tip.z)
+	soda_stream_bubbles.global_basis = Basis.IDENTITY
+	soda_stream_bubbles.emitting = true
+	soda_stream_bubbles.amount_ratio = 1.0
 
 
 func _hide_soda_stream() -> void:
 	if soda_stream_mesh != null and is_instance_valid(soda_stream_mesh):
 		soda_stream_mesh.visible = false
+	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
+		soda_stream_bubbles.emitting = false
+		soda_stream_bubbles.amount_ratio = 0.0
 	if game_audio and game_audio.has_method("set_soda_pour"):
 		game_audio.set_soda_pour(false)
 
@@ -14400,6 +14847,140 @@ func _build_cutting_board_prop() -> void:
 	root.add_child(groove)
 	grill_root.add_child(root)
 	build_cutting_board = root
+
+
+func _build_cheese_station_prop() -> void:
+	## Wheel of cheese + slice stack in front of the cutting board — grab slices here.
+	if cheese_station_root != null and is_instance_valid(cheese_station_root):
+		cheese_station_root.queue_free()
+	cheese_station_root = null
+	cheese_station_area = null
+	if grill_root == null:
+		return
+	var board_c := _cutting_board_world_center()
+	var bh := CUTTING_BOARD_SIZE.y
+	var root := Node3D.new()
+	root.name = "CheeseStation"
+	root.position = board_c + Vector3(
+		CHEESE_STATION_OFFSET.x,
+		bh * 0.5 + CHEESE_STATION_OFFSET.y,
+		CHEESE_STATION_OFFSET.z
+	)
+	## --- Wheel (flat on the board like a deli wheel) ---
+	var wheel := MeshInstance3D.new()
+	wheel.name = "CheeseWheel"
+	var wheel_mesh := CylinderMesh.new()
+	wheel_mesh.top_radius = 0.095
+	wheel_mesh.bottom_radius = 0.095
+	wheel_mesh.height = 0.055
+	wheel_mesh.radial_segments = 28
+	wheel.mesh = wheel_mesh
+	wheel.rotation_degrees = Vector3(0.0, 22.0, 0.0)
+	wheel.position = Vector3(-0.07, 0.028, -0.02)
+	var rind := StandardMaterial3D.new()
+	rind.albedo_color = Color(0.78, 0.52, 0.14)
+	rind.roughness = 0.82
+	rind.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	wheel.material_override = rind
+	root.add_child(wheel)
+	## Inner cheese top (cut face).
+	var face := MeshInstance3D.new()
+	face.name = "CheeseFace"
+	var face_mesh := CylinderMesh.new()
+	face_mesh.top_radius = 0.084
+	face_mesh.bottom_radius = 0.084
+	face_mesh.height = 0.012
+	face_mesh.radial_segments = 24
+	face.mesh = face_mesh
+	face.position = wheel.position + Vector3(0.0, 0.028, 0.0)
+	face.rotation_degrees = wheel.rotation_degrees
+	var face_mat := StandardMaterial3D.new()
+	face_mat.albedo_color = Color(0.98, 0.86, 0.28)
+	face_mat.roughness = 0.55
+	face_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	face.material_override = face_mat
+	root.add_child(face)
+	## Hole / eye speckles on the cut face.
+	for ei in 5:
+		var eye := MeshInstance3D.new()
+		var em := SphereMesh.new()
+		em.radius = 0.006 + float(ei % 2) * 0.003
+		em.height = em.radius * 2.0
+		eye.mesh = em
+		var ang := float(ei) * TAU / 5.0 + 0.4
+		eye.position = face.position + Vector3(cos(ang) * 0.038, 0.008, sin(ang) * 0.038)
+		var emat := StandardMaterial3D.new()
+		emat.albedo_color = Color(0.92, 0.72, 0.22)
+		emat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+		eye.material_override = emat
+		root.add_child(eye)
+	## --- Stack of slices in front of the wheel ---
+	var slice_mat := StandardMaterial3D.new()
+	slice_mat.albedo_color = Color(1.0, 0.88, 0.22)
+	slice_mat.roughness = 0.48
+	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	var stack_base := Vector3(0.08, 0.004, 0.04)
+	for si in 6:
+		var slice := MeshInstance3D.new()
+		slice.name = "CheeseSlice_%d" % si
+		var sm := BoxMesh.new()
+		sm.size = Vector3(0.11, 0.007, 0.11)
+		slice.mesh = sm
+		slice.position = stack_base + Vector3(
+			float(si) * 0.004 - 0.01,
+			float(si) * 0.008,
+			float(si) * -0.003
+		)
+		slice.rotation_degrees = Vector3(0.0, float(si) * 3.0 - 6.0, 0.0)
+		slice.material_override = slice_mat
+		root.add_child(slice)
+	## Grab volume covering wheel + stack.
+	var area := Area3D.new()
+	area.name = "CheeseGrab"
+	area.collision_layer = CHEESE_STATION_COLLISION_LAYER
+	area.collision_mask = 0
+	area.monitoring = false
+	area.monitorable = true
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.32, 0.14, 0.28)
+	cs.shape = box
+	cs.position = Vector3(0.02, 0.05, 0.02)
+	area.add_child(cs)
+	root.add_child(area)
+	grill_root.add_child(root)
+	cheese_station_root = root
+	cheese_station_area = area
+
+
+func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
+	if camera == null or cheese_station_area == null or not is_instance_valid(cheese_station_area):
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	q.collision_mask = CHEESE_STATION_COLLISION_LAYER
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if not hit.is_empty() and hit.get("collider") == cheese_station_area:
+		return true
+	## Generous screen fallback — board sits under the Build UI sometimes.
+	var anchor := cheese_station_area.global_position + Vector3(0.02, 0.04, 0.0)
+	return screen_pos.distance_to(camera.unproject_position(anchor)) < 72.0
+
+
+func _try_cheese_station_click(screen_pos: Vector2) -> bool:
+	if not playing or cheese_held:
+		return false
+	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+		return false
+	if spatula_patty != null or dragging_patty != null or cup_held:
+		return false
+	if not _cheese_station_under_cursor(screen_pos):
+		return false
+	_begin_cheese_hold(false)
+	return cheese_held
 
 
 func _build_truck_radio_prop() -> void:
@@ -17779,7 +18360,7 @@ func _create_ticket(customer: Node3D) -> void:
 	## Wrap owns layout size so non-selected slips can shrink without layout gaps.
 	var wrap := Control.new()
 	wrap.name = "TicketWrap"
-	wrap.custom_minimum_size = Vector2(152, 0)
+	wrap.custom_minimum_size = Vector2(164, 0)
 	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 	wrap.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	wrap.gui_input.connect(func(event: InputEvent):
@@ -17790,14 +18371,14 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var note := PanelContainer.new()
 	note.name = "TicketNote"
-	note.custom_minimum_size = Vector2(152, 0)
+	note.custom_minimum_size = Vector2(164, 0)
 	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	## Slight crooked pin so slips don't look like UI cards.
+	## Mild crooked pin — selected slip is almost upright.
 	var rot_seed := _customer_net_id(customer)
 	if rot_seed < 0:
 		rot_seed = customer.get_instance_id()
-	note.rotation_degrees = float((rot_seed * 37) % 100) / 100.0 * 10.0 - 5.0
-	note.pivot_offset = Vector2(76, 8)
+	note.rotation_degrees = float((rot_seed * 37) % 100) / 100.0 * 4.0 - 2.0
+	note.pivot_offset = Vector2(82, 8)
 	wrap.set_meta("paper_rot", note.rotation_degrees)
 	wrap.set_meta("ticket_note", note)
 	## Outer shell: drop shadow + border (StyleBoxTexture can't cast shadows).
@@ -17837,15 +18418,49 @@ func _create_ticket(customer: Node3D) -> void:
 	pin.add_theme_stylebox_override("panel", pin_sb)
 	pin_wrap.add_child(pin)
 
+	## Waiting patience — top of the slip (was a 3D bar over the customer).
+	var patience_track := PanelContainer.new()
+	patience_track.name = "PatienceTrack"
+	patience_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	patience_track.custom_minimum_size = Vector2(0, 12)
+	var track_sb := StyleBoxFlat.new()
+	track_sb.bg_color = Color(0.12, 0.08, 0.05, 0.55)
+	track_sb.set_corner_radius_all(3)
+	track_sb.content_margin_left = 2
+	track_sb.content_margin_right = 2
+	track_sb.content_margin_top = 2
+	track_sb.content_margin_bottom = 2
+	patience_track.add_theme_stylebox_override("panel", track_sb)
+	v.add_child(patience_track)
+	var patience_bar := ProgressBar.new()
+	patience_bar.name = "PatienceBar"
+	patience_bar.min_value = 0.0
+	patience_bar.max_value = 1.0
+	patience_bar.value = 1.0
+	patience_bar.show_percentage = false
+	patience_bar.custom_minimum_size = Vector2(0, 8)
+	patience_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var pbg := StyleBoxFlat.new()
+	pbg.bg_color = Color(0.05, 0.04, 0.03, 0.85)
+	pbg.set_corner_radius_all(2)
+	patience_bar.add_theme_stylebox_override("background", pbg)
+	var pfill := StyleBoxFlat.new()
+	pfill.bg_color = Color("66BB6A")
+	pfill.set_corner_radius_all(2)
+	patience_bar.add_theme_stylebox_override("fill", pfill)
+	patience_track.add_child(patience_bar)
+	wrap.set_meta("patience_bar", patience_bar)
+	wrap.set_meta("patience_fill_style", pfill)
+
 	var title := Label.new()
-	## Order code = strip hotkeys for requested toppings (ketchup → 7, everything → 12345678).
+	## Order code = strip hotkeys + C for cheese from the board wheel.
 	var order_code := GameDataScript.order_number_code(customer.order)
 	title.text = order_code if order_code != "" else "—"
-	var title_size := 24
+	var title_size := 28
 	if order_code.length() >= 7:
-		title_size = 17
-	elif order_code.length() >= 5:
 		title_size = 20
+	elif order_code.length() >= 5:
+		title_size = 24
 	UiFontsScript.apply_ticket(title, title_size)
 	title.add_theme_color_override("font_color", Color(0.22, 0.14, 0.1))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -17877,8 +18492,8 @@ func _create_ticket(customer: Node3D) -> void:
 		var mark := Label.new()
 		mark.name = "Check"
 		mark.text = "○"
-		mark.custom_minimum_size = Vector2(14, 0)
-		UiFontsScript.apply_ticket(mark, 14)
+		mark.custom_minimum_size = Vector2(16, 0)
+		UiFontsScript.apply_ticket(mark, 17)
 		mark.add_theme_color_override("font_color", Color(0.55, 0.45, 0.35, 0.55))
 		mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -17887,7 +18502,7 @@ func _create_ticket(customer: Node3D) -> void:
 		var lab := Label.new()
 		lab.name = "Item"
 		lab.text = str(spec.get("label", ""))
-		UiFontsScript.apply_ticket(lab, 16)
+		UiFontsScript.apply_ticket(lab, 19)
 		lab.add_theme_color_override("font_color", Color(0.18, 0.12, 0.08))
 		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		lab.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -17901,7 +18516,7 @@ func _create_ticket(customer: Node3D) -> void:
 	_refresh_ticket_checkmarks()
 
 
-const TICKET_BASE_W := 152.0
+const TICKET_BASE_W := 164.0
 const TICKET_SMALL_SCALE := 0.70
 
 
@@ -18084,6 +18699,35 @@ func _refresh_ticket_checkmarks() -> void:
 					"font_color",
 					Color(0.14, 0.38, 0.22) if done else Color(0.18, 0.12, 0.08)
 				)
+	_refresh_ticket_patience_bars()
+
+
+func _refresh_ticket_patience_bars() -> void:
+	## Keep each slip's top patience chip in sync with the waiting customer.
+	for cust in tickets:
+		if cust == null or not is_instance_valid(cust):
+			continue
+		var wrap = tickets[cust]
+		if wrap == null or not is_instance_valid(wrap) or not wrap.has_meta("patience_bar"):
+			continue
+		var bar: ProgressBar = wrap.get_meta("patience_bar")
+		if bar == null or not is_instance_valid(bar):
+			continue
+		var t := 0.0
+		if cust.has_method("patience_ratio"):
+			t = float(cust.patience_ratio())
+		elif "patience" in cust and "patience_max" in cust:
+			t = clampf(float(cust.patience) / maxf(0.01, float(cust.patience_max)), 0.0, 1.0)
+		bar.value = t
+		var fill: StyleBoxFlat = wrap.get_meta("patience_fill_style") if wrap.has_meta("patience_fill_style") else null
+		if fill != null:
+			if t > 0.55:
+				fill.bg_color = Color("66BB6A")
+			elif t > 0.28:
+				fill.bg_color = Color("FFCA28")
+			else:
+				fill.bg_color = Color("EF5350")
+		bar.visible = bool(cust.get("is_waiting")) and not bool(cust.get("is_leaving"))
 
 
 func _make_ticket_shell_style(selected: bool) -> StyleBoxFlat:
@@ -18202,7 +18846,9 @@ func _highlight_tickets() -> void:
 				if is_instance_valid(paper):
 					paper.add_theme_stylebox_override("panel", _make_ticket_paper_style(selected))
 			if wrap.has_meta("paper_rot"):
-				note.rotation_degrees = float(wrap.get_meta("paper_rot"))
+				var base_rot := float(wrap.get_meta("paper_rot"))
+				## Main (selected) ticket tilts even less.
+				note.rotation_degrees = base_rot * 0.35 if selected else base_rot
 			## Selected slip sits a hair more upright / forward.
 			note.modulate = Color(1.05, 1.02, 0.95) if selected else Color(0.94, 0.92, 0.88)
 		_apply_ticket_display_size(wrap, selected)
@@ -18262,7 +18908,7 @@ func _build_ingredient_legend() -> void:
 		_on_serve()
 	)
 
-	## Horizontal strip of toppings along the bottom (1 cheese → 8 mustard).
+	## Horizontal strip of toppings along the bottom (1 tomato → 7 mustard).
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var panel_sb := StyleBoxFlat.new()
@@ -18291,10 +18937,11 @@ func _build_ingredient_legend() -> void:
 	for hi in range(INGREDIENT_HOTKEYS.size()):
 		var id: String = INGREDIENT_HOTKEYS[hi]
 		var tbtn := Button.new()
-		tbtn.custom_minimum_size = Vector2(86, 76)
+		tbtn.custom_minimum_size = Vector2(90, 76)
 		tbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		tbtn.focus_mode = Control.FOCUS_NONE
 		tbtn.flat = true
+		tbtn.clip_contents = true
 		tbtn.tooltip_text = "%s (%s)" % [GameDataScript.INGREDIENT_LABELS[id], HOTKEY_LABELS[hi]]
 
 		var tsb := StyleBoxFlat.new()
@@ -18339,8 +18986,8 @@ func _build_ingredient_legend() -> void:
 		icon_margin.add_child(icon)
 
 		var name_lab := Label.new()
-		name_lab.text = "%s %s" % [HOTKEY_LABELS[hi], GameDataScript.INGREDIENT_LABELS[id]]
-		UiFontsScript.apply_label(name_lab, true, 11)
+		name_lab.text = "%s %s" % [GameDataScript.INGREDIENT_LABELS[id], HOTKEY_LABELS[hi]]
+		UiFontsScript.apply_label(name_lab, true, 14)
 		name_lab.add_theme_color_override("font_color", Color(1.0, 0.98, 0.92))
 		name_lab.add_theme_color_override("font_outline_color", Color.BLACK)
 		name_lab.add_theme_constant_override("outline_size", 2)
@@ -18363,15 +19010,8 @@ func _build_ingredient_legend() -> void:
 				## that would drop a second copy on Build.
 				if _strip_gesture_added or _strip_did_drag:
 					return null
-				if capture == "cheese":
-					## Same ghost hold as a click — drop on a grill burger or Build.
-					_begin_cheese_hold(true)
-					_pending_cheese_drag = true
-					_pending_ingredient_drag = ""
-					_arm_grill_drop_zone()
-				else:
-					_pending_cheese_drag = false
-					_pending_ingredient_drag = capture
+				_pending_cheese_drag = false
+				_pending_ingredient_drag = capture
 				var drag_preview := TextureRect.new()
 				drag_preview.texture = FoodSpritesScript.get_tex(capture)
 				drag_preview.custom_minimum_size = Vector2(120, 48)
@@ -18819,6 +19459,32 @@ func _make_reorder_drag(station_index: int, from_index: int, item_id: String) ->
 	return {"kind": "reorder", "station": station_index, "from": from_index, "id": item_id}
 
 
+func _make_layer_drag_preview(item_id: String) -> Control:
+	## Ghost sprite that follows the cursor while dragging a Build layer off to trash.
+	var wrap := Control.new()
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tex: Texture2D = FoodSpritesScript.get_tex(item_id)
+	if tex != null:
+		var tr := TextureRect.new()
+		tr.texture = tex
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.custom_minimum_size = Vector2(96, 48)
+		tr.size = Vector2(96, 48)
+		tr.modulate = Color(1, 1, 1, 0.92)
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.custom_minimum_size = Vector2(96, 48)
+		wrap.add_child(tr)
+	else:
+		var color_preview := ColorRect.new()
+		color_preview.custom_minimum_size = Vector2(100, 20)
+		color_preview.color = GameDataScript.INGREDIENT_COLORS.get(item_id, Color.GRAY)
+		color_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.custom_minimum_size = Vector2(100, 20)
+		wrap.add_child(color_preview)
+	return wrap
+
+
 func _make_station_patty_drag(station_index: int, from_index: int, patty_index: int) -> Dictionary:
 	return {
 		"kind": "station_patty",
@@ -19035,12 +19701,12 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 				id = "cheese"
 			_drop_patty_on_garbage({"kind": "ingredient", "id": id})
 			return
-	## Build topping: swipe right + release outside Build → remove layer.
+	## Build topping: drag off the left Build column → trash (garbage).
 	if not was_accepted and _pending_reorder_drag != null and typeof(_pending_reorder_drag) == TYPE_DICTIONARY:
 		var reorder_data = _pending_reorder_drag
 		if str(reorder_data.get("kind", "")) == "reorder":
-			var swipe_right := mouse.x - _reorder_drag_origin.x >= BUILD_SWIPE_TRASH_RIGHT_PX
-			if swipe_right and not _is_build_drop_at(mouse):
+			var dragged := mouse.distance_to(_reorder_drag_origin) >= BUILD_SWIPE_TRASH_RIGHT_PX
+			if dragged and not _is_build_drop_at(mouse):
 				_drop_patty_on_garbage(reorder_data)
 				_pending_reorder_drag = null
 				return
@@ -19952,7 +20618,7 @@ func _add_ingredient(id: String) -> void:
 	if id == "bun_bottom":
 		return
 	_pulse_ingredient_feedback(id)
-	## Cheese: pick up a ghost slice, then click a grill patty to place it.
+	## Cheese comes from the board wheel — strip no longer has it.
 	if id == "cheese":
 		_begin_cheese_hold(false, true)
 		return
@@ -19983,7 +20649,7 @@ func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void
 	if from_drag:
 		_flash("Drop cheese on grill, HOLD, or Build", Color("FFE082"))
 	else:
-		_flash("Cheese ready — grill / HOLD / Build · right-click cancels", Color("FFE082"))
+		_flash("Cheese slice ready — grill / HOLD / Build · right-click cancels", Color("FFE082"))
 
 
 func _cancel_cheese_hold() -> void:
@@ -20389,7 +21055,7 @@ func _clear_active_station() -> void:
 	_trash_selected_or_top_layer(active_station)
 
 
-func _select_station_layer(station_index: int, layer_index: int) -> void:
+func _select_station_layer(station_index: int, layer_index: int, refresh_ui: bool = true) -> void:
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
 	_select_station(station_index)
@@ -20399,13 +21065,15 @@ func _select_station_layer(station_index: int, layer_index: int) -> void:
 		st["selected_layer"] = -1
 	else:
 		st["selected_layer"] = layer_index
-	_refresh_station(station_index)
+	## Refresh rebuilds layer Controls — never do that on press or drag dies.
+	if refresh_ui:
+		_refresh_station(station_index)
 	var id: String = str(items[layer_index]) if layer_index >= 0 and layer_index < items.size() else ""
 	if id != "":
 		if game_audio:
 			game_audio.play_ingredient(id)
 		var label: String = GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize())
-		_flash("Selected %s - 🗑 to remove" % label, Color("FFE082"))
+		_flash("Selected %s — drag off Build to trash" % label, Color("FFE082"))
 
 
 func _trash_selected_or_top_layer(index: int) -> void:
@@ -20618,25 +21286,27 @@ func _refresh_station(index: int) -> void:
 				if item_id == "patty":
 					## Click → held 3D patty so you can place it back on the grill.
 					_pickup_station_patty_to_hand(index, from_i)
+					row.accept_event()
 				elif BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top"):
 					_pickup_station_bun_to_hand(index, from_i)
+					row.accept_event()
 				else:
-					_select_station_layer(index, from_i)
-				row.accept_event()
+					## Soft-select only — full refresh frees this row and cancels drag.
+					_select_station_layer(index, from_i, false)
+					row.accept_event()
 		)
 		row.set_drag_forwarding(
 			func(_pos):
 				if item_id == "patty" or (BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top")):
 					## Patties / toastable buns use click-to-hand; toppings stay Control-drag.
 					return null
-				var color_preview := ColorRect.new()
-				color_preview.custom_minimum_size = Vector2(100, 16)
-				color_preview.color = GameDataScript.INGREDIENT_COLORS.get(item_id, Color.GRAY)
-				row.set_drag_preview(color_preview)
+				row.set_drag_preview(_make_layer_drag_preview(item_id))
 				_pending_station_patty_drag = null
 				_reorder_drag_origin = get_viewport().get_mouse_position()
 				var drag_data := _make_reorder_drag(index, from_i, item_id)
 				_pending_reorder_drag = drag_data
+				var label: String = GameDataScript.INGREDIENT_LABELS.get(item_id, item_id.capitalize())
+				_flash("Drag %s off Build to trash" % label, Color("FFCC80"))
 				return drag_data,
 			func(_pos, data): return _can_drop_on_assembly(index, data),
 			func(pos, data):
@@ -24359,6 +25029,8 @@ func mp_sync_customers(
 			if not bool(c.get("is_leaving")) and c.has_method("leave_happy"):
 				c.leave_happy()
 			_customer_leave_apply(c, false)
+	## Keep ticket patience chips in sync with host values.
+	_refresh_ticket_patience_bars()
 
 
 @rpc("any_peer", "call_local", "reliable")

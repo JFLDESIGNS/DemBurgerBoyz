@@ -263,34 +263,75 @@ func _ensure_hearts() -> void:
 	mat.gravity = Vector3(0, 0.35, 0)
 	mat.damping_min = 0.4
 	mat.damping_max = 1.1
-	mat.scale_min = 0.55
-	mat.scale_max = 1.15
-	mat.color = Color(1.0, 0.35, 0.48, 1.0)
+	mat.scale_min = 0.7
+	mat.scale_max = 1.35
+	mat.color = Color(1.0, 0.32, 0.45, 1.0)
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.75, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.72, 1.0])
 	grad.colors = PackedColorArray([
 		Color(1.0, 0.55, 0.65, 0.0),
-		Color(1.0, 0.28, 0.42, 1.0),
-		Color(1.0, 0.45, 0.55, 0.85),
+		Color(1.0, 0.22, 0.38, 1.0),
+		Color(1.0, 0.40, 0.52, 0.9),
 		Color(1.0, 0.7, 0.8, 0.0),
 	])
-	var tex := GradientTexture1D.new()
-	tex.gradient = grad
-	mat.color_ramp = tex
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = grad
+	mat.color_ramp = ramp
 	_hearts.process_material = mat
-	## Little heart-ish billboards (pink quads).
+	## Billboard quads with a drawn heart alpha — reads as ♥ not pink boxes.
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.09, 0.09)
+	quad.size = Vector2(0.11, 0.11)
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	draw.albedo_color = Color(1.0, 0.35, 0.5, 0.95)
+	draw.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	draw.albedo_texture = _make_heart_texture()
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.vertex_color_use_as_albedo = true
+	draw.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	quad.material = draw
 	_hearts.draw_pass_1 = quad
 	add_child(_hearts)
+
+
+func _make_heart_texture() -> ImageTexture:
+	## Soft ♥ silhouette for particle billboards.
+	const S := 64
+	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for y in S:
+		for x in S:
+			## Map to classic heart implicit curve space.
+			var u := (float(x) + 0.5) / float(S) * 2.0 - 1.0
+			var v := 1.0 - (float(y) + 0.5) / float(S) * 2.0 ## +Y up
+			var hx := u * 1.15
+			var hy := v * 1.15 - 0.12
+			var a := hx * hx + hy * hy - 1.0
+			var inside := a * a * a - hx * hx * hy * hy * hy < 0.0
+			if not inside:
+				## Soft edge — nearby pixels get a faint rim.
+				var edge := false
+				for oy in range(-1, 2):
+					for ox in range(-1, 2):
+						var u2 := (float(x + ox) + 0.5) / float(S) * 2.0 - 1.0
+						var v2 := 1.0 - (float(y + oy) + 0.5) / float(S) * 2.0
+						var hx2 := u2 * 1.15
+						var hy2 := v2 * 1.15 - 0.12
+						var a2 := hx2 * hx2 + hy2 * hy2 - 1.0
+						if a2 * a2 * a2 - hx2 * hx2 * hy2 * hy2 * hy2 < 0.0:
+							edge = true
+							break
+					if edge:
+						break
+				if edge:
+					img.set_pixel(x, y, Color(0.75, 0.12, 0.28, 0.35))
+				continue
+			## Fill — brighter center, deeper rim.
+			var r := sqrt(hx * hx + hy * hy)
+			var bright := clampf(1.15 - r * 0.55, 0.55, 1.0)
+			img.set_pixel(x, y, Color(1.0 * bright, 0.18 + 0.2 * bright, 0.32 + 0.15 * bright, 1.0))
+	return ImageTexture.create_from_image(img)
 
 
 func _build_mouth_burger() -> void:
