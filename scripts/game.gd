@@ -2767,6 +2767,10 @@ func _kb_start_icecream() -> void:
 func _kb_stop_icecream() -> void:
 	_kb_force_cone_seat = Vector3.ZERO
 	if icecream_cone_held:
+		if icecream_cone_fill >= 0.82 and _find_waiting_customer_needing_icecream() != null:
+			_try_auto_hand_finished_icecream()
+			if not icecream_cone_held:
+				return
 		_put_icecream_cone_down()
 
 
@@ -12918,7 +12922,7 @@ func _complete_early_icecream_hand(customer: Node3D) -> void:
 		_flash("ICE CREAM ✓ — finish the burger!", Color("FFF3B0"))
 	else:
 		_flash("ICE CREAM ✓", Color("FFF3B0"))
-	if mp_enabled and NetManager.is_host() and not _mp_applying:
+	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_customers()
 	call_deferred("_try_auto_serve")
 
@@ -12950,6 +12954,10 @@ func _complete_icecream_only_serve(customer: Node3D = null) -> void:
 	_highlight_tickets()
 	_update_hud()
 	_refresh_ticket_checkmarks()
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+		_mp_broadcast_social_feed()
 
 
 func _complete_synced_icecream_hand(cust_net_id: int) -> void:
@@ -17490,7 +17498,7 @@ func _complete_early_drink_hand(customer: Node3D, flavor: String, consume_local:
 	if not _mp_applying:
 		var lab: String = str(GameDataScript.INGREDIENT_LABELS.get("soda_%s" % flavor, "Drink")).to_upper()
 		_flash("%s ✓ — burger still cooking" % lab, Color("A5D6A7"))
-	if mp_enabled and NetManager.is_host() and not _mp_applying:
+	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_customers()
 	call_deferred("_try_auto_serve")
 
@@ -23346,7 +23354,8 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 		## Don't auto-spawn — next empty comes from the CUPS rack.
 		_refresh_soda_tank_bubbles()
 		_refresh_ticket_checkmarks()
-		if mp_enabled and not _mp_applying and (consumed_flavor != "" or consumed_nid >= 0):
+		if mp_enabled and (not _mp_applying or NetManager.is_host()) \
+				and (consumed_flavor != "" or consumed_nid >= 0):
 			mp_cup_consume.rpc(consumed_flavor, consumed_nid)
 		_serve_cup_node = null
 		return
@@ -23373,7 +23382,7 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 		_refresh_cup_visuals()
 	_refresh_soda_tank_bubbles()
 	_refresh_ticket_checkmarks()
-	if mp_enabled and not _mp_applying and active_flavor != "":
+	if mp_enabled and (not _mp_applying or NetManager.is_host()) and active_flavor != "":
 		mp_cup_consume.rpc(active_flavor, active_nid)
 	_serve_cup_node = null
 
@@ -27526,7 +27535,7 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
-	if mp_enabled and NetManager.is_host() and not _mp_applying:
+	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_economy()
 		_mp_broadcast_customers()
 		_mp_broadcast_grill()
@@ -27662,8 +27671,10 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 	_highlight_tickets()
 	_update_hud()
 	_refresh_ticket_checkmarks()
-	if mp_enabled and NetManager.is_host() and not _mp_applying:
+	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+		_mp_broadcast_social_feed()
 
 
 func _resolve_serve_customer():
@@ -30500,6 +30511,8 @@ func mp_customer_leave(net_id: int, angry: bool) -> void:
 	_mp_serve_sync = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+		_mp_broadcast_social_feed()
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -30652,6 +30665,14 @@ func mp_sync_customers(
 			if not bool(c.is_leaving) and c.has_method("leave_happy"):
 				c.leave_happy()
 			_customer_leave_apply(c, false)
+			continue
+		if not host_waiting:
+			## Host is still syncing the body (walking in/out), but the order slip is gone.
+			if tickets.has(c):
+				_remove_ticket(c)
+			c.is_waiting = false
+			if selected_customer == c:
+				selected_customer = null
 			continue
 		## Host ticket is up — pin ours if arrival timing drifted.
 		if host_waiting:
