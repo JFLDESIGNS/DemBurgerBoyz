@@ -702,7 +702,7 @@ func _play_burger_why() -> void:
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache["burger_why"]
 	p.pitch_scale = 1.0
-	p.volume_db = linear_to_db(0.95)
+	p.volume_db = linear_to_db(0.475) ## half prior loudness
 	p.play()
 
 

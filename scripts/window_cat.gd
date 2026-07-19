@@ -42,6 +42,8 @@ const AFTER_BURGER_HIDE_SEC := 95.0
 
 signal fed(kind: String)
 signal petted
+signal became_full_sized
+
 
 var _visual: Node3D = null
 var _area: Area3D = null
@@ -103,16 +105,23 @@ func _hidden_y() -> float:
 	return HIDDEN_Y - _giant * GROUND_DROP_PER_GIANT * 0.25
 
 
+func is_full_size() -> bool:
+	return _fat >= FAT_MAX - 0.001 and _giant >= GIANT_MAX - 0.001
+
+
 func _add_chonk(amount: float) -> void:
 	## Fill width first; leftover / further treats grow overall size up to 2×.
 	if amount <= 0.0:
 		return
+	var was_full := is_full_size()
 	if _fat < FAT_MAX:
 		var before := _fat
 		_fat = minf(FAT_MAX, _fat + amount)
 		amount -= _fat - before
 	if amount > 0.0:
 		_giant = minf(GIANT_MAX, _giant + amount)
+	if not was_full and is_full_size():
+		became_full_sized.emit()
 
 
 func set_customer_gap(_open: bool) -> void:

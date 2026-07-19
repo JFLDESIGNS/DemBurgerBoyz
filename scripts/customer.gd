@@ -112,6 +112,10 @@ var _home_x: float = 0.0
 var _face_style: int = 0 ## slight variety per customer
 var _skin_path: String = ""
 var is_terrorist: bool = false
+## Full-size window cat in a fake mustache — orders a triple, never pays.
+var is_disguise_cat: bool = false
+var _mustache_root: Node3D = null
+var _disguise_cat_mesh: Node3D = null
 ## Fire-extinguisher powder stuck to the toon (white spheres that build up).
 var _powder_hit: bool = false
 var _powdering: bool = false ## Standing still while powder coats them.
@@ -1963,7 +1967,114 @@ func feed_bacon_snack(restore_ratio: float = 0.10) -> bool:
 
 ## Serve fly animation target — roughly lip height in the service window.
 func mouth_global() -> Vector3:
+	if is_disguise_cat:
+		return global_position + Vector3(0.0, 0.92, 0.14)
 	return global_position + Vector3(0.0, 1.18, 0.06)
+
+
+func apply_disguise_cat_look() -> void:
+	## Swap the toon for the street cat + a cheap fake mustache.
+	is_disguise_cat = true
+	personality = "quiet"
+	chatter = ""
+	speech = "One triple patty burger… please."
+	if _bubble:
+		_bubble.text = speech
+	if _body == null:
+		return
+	for child in _body.get_children():
+		child.visible = false
+		child.queue_free()
+	_char_meshes.clear()
+	_anim_player = null
+	_skeleton = null
+	_body.scale = Vector3.ONE
+	_body.position = Vector3(0.0, _base_body_y, 0.0)
+	const CAT_PATH := "res://assets/cat/cat.fbx"
+	if ResourceLoader.exists(CAT_PATH):
+		var packed := load(CAT_PATH) as PackedScene
+		if packed != null:
+			_disguise_cat_mesh = packed.instantiate() as Node3D
+			if _disguise_cat_mesh != null:
+				_disguise_cat_mesh.name = "DisguiseCatMesh"
+				## Full-size window cat vibes — fills the service opening.
+				_disguise_cat_mesh.scale = Vector3.ONE * 2.55
+				_disguise_cat_mesh.position = Vector3(0.0, -0.02, 0.0)
+				_body.add_child(_disguise_cat_mesh)
+				var anim := _disguise_cat_mesh.find_child("AnimationPlayer", true, false) as AnimationPlayer
+				if anim != null and anim.has_animation("CINEMA_4D_Main"):
+					anim.get_animation("CINEMA_4D_Main").loop_mode = Animation.LOOP_LINEAR
+					anim.play("CINEMA_4D_Main")
+					anim.speed_scale = 0.9
+	_build_fake_mustache()
+
+
+func _build_fake_mustache() -> void:
+	if _body == null:
+		return
+	if _mustache_root != null and is_instance_valid(_mustache_root):
+		_mustache_root.queue_free()
+	_mustache_root = Node3D.new()
+	_mustache_root.name = "FakeMustache"
+	## Snout height on the scaled cat mesh.
+	_mustache_root.position = Vector3(0.0, 0.58, 0.42)
+	_body.add_child(_mustache_root)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.06, 0.05, 0.05)
+	mat.roughness = 0.9
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	for side in [-1.0, 1.0]:
+		var curl := MeshInstance3D.new()
+		var cap := CapsuleMesh.new()
+		cap.radius = 0.032
+		cap.height = 0.15
+		curl.mesh = cap
+		curl.material_override = mat
+		curl.rotation_degrees = Vector3(88.0, 0.0, side * 38.0)
+		curl.position = Vector3(side * 0.055, -0.01, 0.02)
+		_mustache_root.add_child(curl)
+	var mid := MeshInstance3D.new()
+	var ball := SphereMesh.new()
+	ball.radius = 0.038
+	ball.height = 0.076
+	mid.mesh = ball
+	mid.material_override = mat
+	mid.position = Vector3(0.0, -0.015, 0.01)
+	_mustache_root.add_child(mid)
+
+
+func drop_mustache_and_flee() -> void:
+	## Clicked the freeloader — mustache falls off, busted, runs.
+	if not is_disguise_cat or is_leaving:
+		return
+	if _mustache_root != null and is_instance_valid(_mustache_root):
+		var m := _mustache_root
+		_mustache_root = null
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(m, "position", m.position + Vector3(0.25, -1.1, 0.35), 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(m, "rotation_degrees", Vector3(95.0, 50.0, -30.0), 0.55)
+		tw.chain().tween_callback(func() -> void:
+			if is_instance_valid(m):
+				m.queue_free()
+		)
+	if _bubble:
+		_bubble.text = "MEOW?!"
+		_bubble.visible = true
+		_bubble.modulate = Color(1.0, 0.45, 0.4)
+	served.emit(self, 0)
+	leave_mad()
+
+
+func disguise_bribe_leave() -> void:
+	## Fed a treat — they take it and split (still no bill).
+	if not is_disguise_cat or is_leaving:
+		return
+	if _bubble:
+		_bubble.text = "…ok bye"
+		_bubble.visible = true
+	served.emit(self, 0)
+	leave_happy()
 
 
 ## Returns {total, base, tip, perfect, wrong, meh}

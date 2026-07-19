@@ -276,9 +276,10 @@ var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel
 const RESIDUE_CHUNK_COUNT := 6 ## Extra flecks on top of the burnt disc.
-## Filthy grill — this many big crust piles and customers walk out disgusted.
-const CRUST_GROSS_COUNT := 5
-const CRUST_GROSS_MIN_AMT := 0.45 ## Half-scraped or worse counts as a "big" spot
+## Filthy grill — need nearly a full flat-top of heavy crust before walkouts.
+const CRUST_GROSS_COUNT := 9 ## was 5 — allow lots of grime before the line freaks out
+const CRUST_GROSS_MIN_AMT := 0.72 ## was 0.45 — half-scraped piles no longer count as "big"
+const CRUST_GROSS_LEAVE_CHANCE := 0.50 ## On dirty grill, half the customers walk; half don't care
 const CRUST_GROSS_REVIEW_CHANCE := 0.50
 ## Click cheese → ghost → click a grill patty to place.
 var cheese_held: bool = false
@@ -348,6 +349,12 @@ var _fire_killed_by_powder: bool = false ## Flames already snuffed; blobs finish
 const EXT_HOLD_HEIGHT := 0.16 ## Lower hold so the can sits nearer the grill.
 const EXT_COLLISION_LAYER := 64
 var window_cat: Node3D = null
+## Full-size cat in a fake mustache — pending spawn after chonk max.
+var _disguise_cat_pending: bool = false
+var _disguise_cat_active: bool = false
+var _disguise_cat_cool: float = 0.0
+const DISGUISE_CAT_CHANCE := 0.55
+const DISGUISE_CAT_COOLDOWN := 120.0
 ## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
 var glock_held: bool = false
 var glock_root: Node3D = null
@@ -467,6 +474,9 @@ var soda_flavor_labels: Dictionary = {} ## flavor id -> Label3D
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
 var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
 var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
+var _soda_low_warned: Dictionary = {} ## flavor id -> already flashed 25% warning
+const SODA_TANK_LOW_WARN := 0.25 ## Flash once when syrup crosses this level
+const SODA_TANK_EMPTY := 0.02 ## Truly empty — stop pouring
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
 var _supply_order_seq: int = 0
@@ -707,8 +717,8 @@ const RADIO_UI_LEFT := 210.0 ## panel width + right margin
 const PHONE_UI_BASE_H := 278.0
 const PHONE_UI_SIZE := Vector2(200.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10) ## +15% +5% +10% +10% taller
 const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 28.0 ## fit inside screen + section margins
-const PHONE_LOGO_WRAP_H := 86.0 ## ~2× old logo band height (was 52)
-const PHONE_LOGO_DISPLAY_H := 80.0
+const PHONE_LOGO_WRAP_H := 56.0 ## keep SOCIAL feed on-screen without scrolling
+const PHONE_LOGO_DISPLAY_H := 50.0
 const PHONE_SCROLL_DRAG_THRESH := 8.0
 const PHONE_SCROLL_FRICTION := 7.5
 const PHONE_SCROLL_MIN_VEL := 18.0
@@ -1289,6 +1299,9 @@ func _start_game() -> void:
 	_refresh_all_stations()
 	_begin_start_tutorial()
 	_reset_supplies()
+	_disguise_cat_pending = false
+	_disguise_cat_active = false
+	_disguise_cat_cool = 0.0
 	_start_radio_fade_in()
 	# _begin_opening_terror_ambush()
 
@@ -1328,6 +1341,9 @@ func _restart() -> void:
 	_reset_supplies()
 	_start_radio_fade_in()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
+	_disguise_cat_pending = false
+	_disguise_cat_active = false
+	_disguise_cat_cool = 0.0
 	# _begin_opening_terror_ambush()
 
 
@@ -1458,6 +1474,10 @@ func _process(delta: float) -> void:
 		# _update_opening_terror_ambush(delta)
 		## In co-op, only the host spawns customers (then replicates).
 		if not mp_enabled or NetManager.is_host():
+			if _disguise_cat_cool > 0.0:
+				_disguise_cat_cool = maxf(0.0, _disguise_cat_cool - delta)
+			if _disguise_cat_pending:
+				_try_spawn_disguise_cat()
 			spawn_timer -= delta
 			var cap := _customer_cap()
 			var waiting_n := _waiting_customer_count()
@@ -5014,7 +5034,7 @@ func _check_waiting_customers_gross_grill() -> void:
 
 
 func _try_customer_gross_leave(customer: Node3D) -> bool:
-	## Filthy flat-top → "Gross!" walkout. Returns true if they left.
+	## Filthy flat-top → 50% "Gross!" walkout, 50% don't care. One roll per guest.
 	if customer == null or not is_instance_valid(customer):
 		return false
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
@@ -5026,6 +5046,13 @@ func _try_customer_gross_leave(customer: Node3D) -> bool:
 	if not bool(customer.get("is_waiting")):
 		return false
 	if not _grill_is_gross():
+		return false
+	## Already decided this grill mess is fine — never walk for grime.
+	if bool(customer.get_meta("gross_ok", false)):
+		return false
+	## One roll when they first notice the dirty grill (arrive or it gets filthy).
+	if randf() >= CRUST_GROSS_LEAVE_CHANCE:
+		customer.set_meta("gross_ok", true)
 		return false
 	customer.set_meta("left_gross", true)
 	_flash("Gross! Filthy grill — they walked out", Color("EF5350"))
@@ -5371,9 +5398,94 @@ func _build_window_cat() -> void:
 		cat.petted.connect(_on_window_cat_petted)
 	if cat.has_signal("fed"):
 		cat.fed.connect(_on_window_cat_fed)
+	if cat.has_signal("became_full_sized"):
+		cat.became_full_sized.connect(_on_window_cat_full_sized)
+
+
+func _on_window_cat_full_sized() -> void:
+	## Max chonk — sometimes the cat puts on a fake mustache and joins the line.
+	if not playing:
+		return
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
+	if _disguise_cat_active or _disguise_cat_pending or _disguise_cat_cool > 0.0:
+		return
+	if randf() >= DISGUISE_CAT_CHANCE:
+		return
+	_disguise_cat_pending = true
+	_try_spawn_disguise_cat()
+
+
+func _try_spawn_disguise_cat() -> void:
+	if not _disguise_cat_pending or _disguise_cat_active:
+		return
+	if not playing:
+		return
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
+	if _waiting_customer_count() >= _customer_cap():
+		return
+	_disguise_cat_pending = false
+	_spawn_disguise_cat_customer()
+
+
+func _disguise_cat_order() -> Array[String]:
+	## Triple patty — cheese optional so the ticket still reads as a real ask.
+	var order: Array[String] = ["bun_bottom", "patty", "patty", "patty"]
+	if randf() < 0.65:
+		order.append("cheese")
+	if randf() < 0.4:
+		order.append("lettuce")
+	order.append("bun_top")
+	return order
+
+
+func _spawn_disguise_cat_customer() -> void:
+	var order: Array[String] = _disguise_cat_order()
+	var color := Color(0.55, 0.45, 0.4)
+	var patience := 75.0
+	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
+	if mp_enabled:
+		if not NetManager.is_host() and not _mp_applying:
+			return
+		var nid := _mp_next_customer_net_id
+		_mp_next_customer_net_id += 1
+		var order_packed: Array = []
+		for o in order:
+			order_packed.append(str(o))
+		if NetManager.is_host():
+			mp_spawn_customer.rpc(
+				nid, order_packed, color.r, color.g, color.b, patience, lane, 0, 0, true
+			)
+			return
+	_spawn_customer_local(order, color, patience, lane, -1, 0, 0, true)
+
+
+func _clear_disguise_cat_state() -> void:
+	_disguise_cat_active = false
+	_disguise_cat_cool = DISGUISE_CAT_COOLDOWN
+	## Window cat can peek again after the bit.
+	if window_cat != null and is_instance_valid(window_cat):
+		window_cat.set("enabled", true)
+
+
+func _park_window_cat_for_disguise() -> void:
+	if window_cat == null or not is_instance_valid(window_cat):
+		return
+	window_cat.set("enabled", false)
+	window_cat.visible = false
+	if window_cat.has_method("reset_shift"):
+		## Keep chonk — only hide AI; don't wipe fat/giant.
+		pass
+	## Force hidden pose without wiping size.
+	window_cat.set("_state", "hidden")
+	window_cat.set("_timer", 30.0)
 
 
 func _try_window_cat_click(screen_pos: Vector2) -> bool:
+	## Fake-mustache freeloader first — click busts them; food shoos them.
+	if _try_disguise_cat_click(screen_pos):
+		return true
 	if not playing or window_cat == null or not is_instance_valid(window_cat):
 		return false
 	if brush_held or oil_held or shaker_held or ext_held or glock_held or dragging_patty != null:
@@ -5394,6 +5506,110 @@ func _try_window_cat_click(screen_pos: Vector2) -> bool:
 		return true
 	window_cat.pet()
 	return true
+
+
+func _find_disguise_cat_at_screen(screen_pos: Vector2, max_px: float = 72.0) -> Node3D:
+	if camera == null:
+		return null
+	var best: Node3D = null
+	var best_d := max_px
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_disguise_cat")):
+			continue
+		if not bool(c.get("is_waiting")) or bool(c.get("is_leaving")):
+			continue
+		var mouth: Vector3 = c.global_position + Vector3(0.0, 0.9, 0.1)
+		if c.has_method("mouth_global"):
+			mouth = c.mouth_global()
+		if camera.is_position_behind(mouth):
+			continue
+		var d := screen_pos.distance_to(camera.unproject_position(mouth))
+		## Also accept body center — easier click on the big cat.
+		var body_pt: Vector3 = c.global_position + Vector3(0.0, 0.55, 0.0)
+		if not camera.is_position_behind(body_pt):
+			d = minf(d, screen_pos.distance_to(camera.unproject_position(body_pt)))
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+func _try_disguise_cat_click(screen_pos: Vector2) -> bool:
+	if not playing:
+		return false
+	var cust := _find_disguise_cat_at_screen(screen_pos)
+	if cust == null:
+		return false
+	## Holding food they like → bribe leave; empty hands → unmask.
+	if spatula_patty != null and is_instance_valid(spatula_patty):
+		if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
+			return false
+		_bribe_disguise_cat_with_patty(cust)
+		return true
+	if cheese_held:
+		_bribe_disguise_cat_ingredient(cust, "cheese")
+		return true
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust)
+		if nid >= 0:
+			mp_disguise_cat_unmask.rpc(nid)
+			return true
+	_unmask_disguise_cat(cust)
+	return true
+
+
+func _bribe_disguise_cat_with_patty(cust: Node3D) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust)
+		var pnid := int(spatula_patty.get("net_id")) if spatula_patty != null else -1
+		if nid >= 0:
+			mp_disguise_cat_bribe.rpc(nid, "patty", pnid)
+			return
+	if spatula_patty != null and is_instance_valid(spatula_patty):
+		var patty = spatula_patty
+		spatula_patty = null
+		spatula_owner_id = 0
+		spatula_from_build = false
+		spatula_lmb_held = false
+		_refresh_spatula_ui()
+		if is_instance_valid(patty):
+			patty.queue_free()
+	_flash("Fed the freeloader — they split", Color("CE93D8"))
+	if cust.has_method("disguise_bribe_leave"):
+		cust.disguise_bribe_leave()
+
+
+func _bribe_disguise_cat_ingredient(cust: Node3D, id: String) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust)
+		if nid >= 0:
+			mp_disguise_cat_bribe.rpc(nid, id, -1)
+			return
+	if id == "cheese":
+		_clear_cheese_hold_after_use()
+		_spend_ingredient("cheese")
+	elif id == "bacon":
+		if not _spend_ingredient("bacon"):
+			return
+	_flash("Fed the freeloader — they split", Color("CE93D8"))
+	if cust.has_method("disguise_bribe_leave"):
+		cust.disguise_bribe_leave()
+
+
+func _unmask_disguise_cat(cust: Node3D) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	_flash("Busted! Fake mustache — it's the CAT!", Color("FF8A80"))
+	if game_audio and game_audio.has_method("play_cat_meow"):
+		game_audio.play_cat_meow()
+	if cust.has_method("drop_mustache_and_flee"):
+		cust.drop_mustache_and_flee()
 
 
 func _feed_window_cat_patty() -> void:
@@ -10905,10 +11121,23 @@ func _flavor_from_syrup_id(syrup_id: String) -> String:
 	return str(syrup_id)
 
 
+func _soda_tank_amount(flavor_id: String) -> float:
+	## Always treat missing keys as full — never false-empty a full jug.
+	var fid := str(flavor_id)
+	if fid == "" or not SODA_FLAVORS.has(fid):
+		return 0.0
+	if not soda_tank_fill.has(fid):
+		soda_tank_fill[fid] = 1.0
+	return clampf(float(soda_tank_fill[fid]), 0.0, 1.0)
+
+
 func _set_soda_tank_visual_level(flavor_id: String, fill: float) -> void:
+	var fid := str(flavor_id)
 	fill = clampf(fill, 0.0, 1.0)
-	soda_tank_fill[flavor_id] = fill
-	var liq: MeshInstance3D = soda_tank_syrup.get(flavor_id) as MeshInstance3D
+	soda_tank_fill[fid] = fill
+	if fill > SODA_TANK_LOW_WARN:
+		_soda_low_warned[fid] = false
+	var liq: MeshInstance3D = soda_tank_syrup.get(fid) as MeshInstance3D
 	if liq == null or not is_instance_valid(liq):
 		return
 	var cyl := liq.mesh as CylinderMesh
@@ -10917,7 +11146,7 @@ func _set_soda_tank_visual_level(flavor_id: String, fill: float) -> void:
 		cyl.top_radius = 0.114
 		cyl.bottom_radius = 0.114
 		liq.mesh = cyl
-	if fill < 0.02:
+	if fill < SODA_TANK_EMPTY:
 		liq.visible = false
 		return
 	liq.visible = true
@@ -10928,27 +11157,37 @@ func _set_soda_tank_visual_level(flavor_id: String, fill: float) -> void:
 
 func _refresh_all_soda_tank_levels() -> void:
 	for fid in SODA_FLAVORS:
-		_set_soda_tank_visual_level(str(fid), float(soda_tank_fill.get(fid, 1.0)))
+		_set_soda_tank_visual_level(str(fid), _soda_tank_amount(str(fid)))
 
 
 func _drain_soda_tank(flavor_id: String, cup_fill_delta: float) -> float:
 	## Returns how much cup fill was actually allowed by remaining syrup.
-	if flavor_id == "" or cup_fill_delta <= 0.0:
+	var fid := str(flavor_id)
+	if fid == "" or cup_fill_delta <= 0.0:
 		return 0.0
-	var have := float(soda_tank_fill.get(flavor_id, 0.0))
-	if have <= 0.02:
+	var have := _soda_tank_amount(fid)
+	if have <= SODA_TANK_EMPTY:
 		return 0.0
 	var need := cup_fill_delta * SODA_TANK_CUP_COST
 	var take := minf(have, need)
 	var allowed := take / maxf(SODA_TANK_CUP_COST, 0.001)
-	soda_tank_fill[flavor_id] = have - take
-	_set_soda_tank_visual_level(flavor_id, float(soda_tank_fill[flavor_id]))
+	var after := have - take
+	_set_soda_tank_visual_level(fid, after)
+	## One-shot low syrup warning at 25% — not an "empty" scare while jugs are full.
+	if have > SODA_TANK_LOW_WARN and after <= SODA_TANK_LOW_WARN:
+		if not bool(_soda_low_warned.get(fid, false)):
+			_soda_low_warned[fid] = true
+			_flash(
+				"Low %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(fid, "soda")),
+				Color("FFB74D")
+			)
 	return allowed
 
 
 func _refill_soda_tank(flavor_id: String, amount: float) -> void:
-	var have := float(soda_tank_fill.get(flavor_id, 0.0))
-	_set_soda_tank_visual_level(flavor_id, have + amount)
+	var fid := str(flavor_id)
+	var have := _soda_tank_amount(fid)
+	_set_soda_tank_visual_level(fid, have + amount)
 	_refresh_soda_tank_bubbles()
 
 
@@ -12963,7 +13202,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		if cup_flavor != "" and cup_flavor != soda_selected_flavor and cup_soda_fill > 0.05:
 			_flash("Empty / return cup first — wrong flavor", Color("FFAB91"))
 			_hide_soda_stream()
-		elif float(soda_tank_fill.get(soda_selected_flavor, 0.0)) <= 0.02:
+		elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
 			_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 			_hide_soda_stream()
 		else:
@@ -12980,8 +13219,10 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 				if before < 1.0 and cup_soda_fill >= 1.0:
 					_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
 					_refresh_ticket_checkmarks()
-			else:
+			elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
 				_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
+				_hide_soda_stream()
+			else:
 				_hide_soda_stream()
 	else:
 		_hide_soda_stream()
@@ -15610,6 +15851,7 @@ func _reset_supplies() -> void:
 		supply_fresh[id] = SUPPLY_FRESH_MAX
 	for fid in SODA_FLAVORS:
 		soda_tank_fill[str(fid)] = 1.0
+		_soda_low_warned[str(fid)] = false
 	_refresh_all_soda_tank_levels()
 	_refresh_phone_ui()
 
@@ -15992,6 +16234,8 @@ func _commit_social_review(
 		var nid := _customer_net_id(customer)
 		if nid >= 0:
 			mp_customer_review_stars.rpc(nid, stars)
+		## Absolute feed replace so guests never show stars with an empty FEED.
+		_mp_broadcast_social_feed()
 
 
 func _show_customer_review_stars(customer: Node3D, stars: float) -> void:
@@ -16001,21 +16245,55 @@ func _show_customer_review_stars(customer: Node3D, stars: float) -> void:
 		customer.show_review_stars(stars)
 
 
-func _apply_social_review(stars: float, who: String, text: String, pic: Texture2D = null) -> void:
+func _apply_social_review(
+	stars: float,
+	who: String,
+	text: String,
+	pic: Texture2D = null,
+	mirror: bool = false
+) -> void:
+	## mirror=true: guest feed post only (host already owns rating totals via economy sync).
 	var clamped := clampf(stars, 0.0, 5.0)
-	social_review_count += 1
-	social_rating_sum += clamped
+	if mirror:
+		## Avoid dupes when a feed sync already carried this post.
+		for existing in social_reviews:
+			if typeof(existing) != TYPE_DICTIONARY:
+				continue
+			if str(existing.get("who", "")) == who and str(existing.get("text", "")) == text:
+				_refresh_phone_ui()
+				_scroll_phone_to_social()
+				return
+	if not mirror:
+		social_review_count += 1
+		social_rating_sum += clamped
+		day_social_reviews.append({"stars": clamped, "who": who, "text": text})
+		day_social_rating_sum += clamped
 	var post := {"stars": clamped, "who": who, "text": text}
 	if pic != null:
 		post["pic"] = pic
 	social_reviews.push_front(post)
 	while social_reviews.size() > SOCIAL_FEED_MAX:
 		social_reviews.pop_back()
-	## Keep a full-day copy for the closing recap (best / worst / average).
-	day_social_reviews.append({"stars": clamped, "who": who, "text": text})
-	day_social_rating_sum += clamped
 	_refresh_phone_ui()
+	_scroll_phone_to_social()
 	_flash("%s left a review!" % who, Color("90CAF9"))
+
+
+func _scroll_phone_to_social() -> void:
+	## Jump to top of BizPhone so the new SOCIAL post is on-screen (not buried under Inventory).
+	if phone_scroll == null or not is_instance_valid(phone_scroll):
+		return
+	phone_scroll.scroll_vertical = 0
+	_phone_scroll_vel = 0.0
+
+
+func _clear_phone_box_children(box: Node) -> void:
+	if box == null or not is_instance_valid(box):
+		return
+	while box.get_child_count() > 0:
+		var child: Node = box.get_child(0)
+		box.remove_child(child)
+		child.free()
 
 
 func _day_social_average() -> float:
@@ -16218,6 +16496,8 @@ func _cook_rating_is_burnt(cook_r: Dictionary) -> bool:
 
 func _refresh_phone_ui() -> void:
 	if phone_rating_stars == null or phone_rating_value == null or phone_review_label == null:
+		## Still try the feed — rating labels can lag a frame behind build.
+		_refresh_phone_feed()
 		return
 	if social_review_count <= 0:
 		phone_rating_stars.text = "☆☆☆☆☆"
@@ -16234,8 +16514,7 @@ func _refresh_phone_ui() -> void:
 	_refresh_phone_feed()
 	if phone_inventory_box == null:
 		return
-	for child in phone_inventory_box.get_children():
-		child.queue_free()
+	_clear_phone_box_children(phone_inventory_box)
 	for id in SUPPLY_IDS:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -16328,14 +16607,14 @@ func _refresh_phone_ui() -> void:
 		name2.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
 		row2.add_child(name2)
 
-		var fill_r := clampf(float(soda_tank_fill.get(fid, 0.0)), 0.0, 1.0)
+		var fill_r := _soda_tank_amount(fid)
 		var pct := Label.new()
 		pct.text = "%d%%" % int(round(fill_r * 100.0))
 		pct.custom_minimum_size = Vector2(22, 0)
 		pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		pct.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		UiFontsScript.apply_label(pct, true, 8)
-		pct.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35) if fill_r < 0.25 else Color(0.7, 0.9, 0.75))
+		pct.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35) if fill_r < SODA_TANK_LOW_WARN else Color(0.7, 0.9, 0.75))
 		row2.add_child(pct)
 
 		var bar2 := ProgressBar.new()
@@ -16416,8 +16695,7 @@ func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 func _refresh_phone_feed() -> void:
 	if phone_feed_box == null or not is_instance_valid(phone_feed_box):
 		return
-	for child in phone_feed_box.get_children():
-		child.queue_free()
+	_clear_phone_box_children(phone_feed_box)
 	if social_reviews.is_empty():
 		var empty := Label.new()
 		empty.text = "No posts yet — serve someone!"
@@ -16426,7 +16704,8 @@ func _refresh_phone_feed() -> void:
 		empty.add_theme_color_override("font_color", Color(0.48, 0.55, 0.64))
 		phone_feed_box.add_child(empty)
 		return
-	for post in social_reviews:
+	for post_i in social_reviews.size():
+		var post = social_reviews[post_i]
 		var card := PanelContainer.new()
 		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var card_sb := StyleBoxFlat.new()
@@ -16436,8 +16715,13 @@ func _refresh_phone_feed() -> void:
 		card_sb.content_margin_right = 5
 		card_sb.content_margin_top = 3
 		card_sb.content_margin_bottom = 3
-		card_sb.border_color = Color(0.28, 0.34, 0.44, 0.55)
-		card_sb.set_border_width_all(1)
+		## Newest post pops with a brighter border so it reads as “just in”.
+		if post_i == 0:
+			card_sb.border_color = Color(0.55, 0.78, 1.0, 0.9)
+			card_sb.set_border_width_all(2)
+		else:
+			card_sb.border_color = Color(0.28, 0.34, 0.44, 0.55)
+			card_sb.set_border_width_all(1)
 		card.add_theme_stylebox_override("panel", card_sb)
 		phone_feed_box.add_child(card)
 		var cv := VBoxContainer.new()
@@ -18683,7 +18967,8 @@ func _spawn_customer_local(
 	lane: int,
 	net_id: int = -1,
 	skin_idx: int = -1,
-	face_style: int = -1
+	face_style: int = -1,
+	disguise_cat: bool = false
 ) -> void:
 	var typed_order: Array[String] = []
 	for o in order:
@@ -18708,12 +18993,24 @@ func _spawn_customer_local(
 		_mp_customer_net_ids[c.get_instance_id()] = net_id
 	customers_root.add_child(c)
 	customers.append(c)
+	if disguise_cat and c.has_method("apply_disguise_cat_look"):
+		c.apply_disguise_cat_look()
+		_disguise_cat_active = true
+		_park_window_cat_for_disguise()
+		_flash("Odd customer… is that a mustache?", Color("CE93D8"))
 
 
 func _on_customer_arrived(customer: Node3D) -> void:
 	if customer != null and bool(customer.get("is_terrorist")):
 		return
-	## Walk up to a crusty grill → immediate "Gross!" exit.
+	## Disguise cat doesn't care about a filthy grill.
+	if customer != null and bool(customer.get("is_disguise_cat")):
+		_create_ticket(customer)
+		if selected_customer == null:
+			selected_customer = customer
+			_highlight_tickets()
+		return
+	## Walk up to a crusty grill → 50% walk out, 50% don't care.
 	if _try_customer_gross_leave(customer):
 		return
 	_create_ticket(customer)
@@ -18888,6 +19185,10 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 				break
 	_highlight_tickets()
 	_reposition_customers()
+	if bool(customer.get("is_disguise_cat")):
+		_clear_disguise_cat_state()
+		## Busted / dashed — no angry-$2 (the bit is the free burger).
+		return
 	if bool(customer.get("is_terrorist")):
 		_check_terrorist_wave_end()
 		return
@@ -19107,7 +19408,9 @@ func _ticket_line_specs(order: Array) -> Array:
 	for item in burger:
 		if item == "patty":
 			patty_count += 1
-	if patty_count >= 2:
+	if patty_count >= 3:
+		lines.append({"id": "triple_patty", "label": "TRIPLE PATTY"})
+	elif patty_count >= 2:
 		lines.append({"id": "double_patty", "label": "DOUBLE PATTY"})
 	if GameDataScript.is_plain_patty_order(order) and not burger.is_empty():
 		lines.append({"id": "plain", "label": "PLAIN"})
@@ -19134,6 +19437,12 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 		## One cup must not check off every matching ticket.
 		return _customer_can_claim_soda(customer, line_id)
 	match line_id:
+		"triple_patty":
+			var n3 := 0
+			for x3 in built:
+				if str(x3) == "patty":
+					n3 += 1
+			return n3 >= 3
 		"double_patty":
 			var n := 0
 			for x in built:
@@ -20371,6 +20680,38 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 
 
 func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
+	## Mustache freeloader accepts the same bribes as the window cat.
+	var disguise := _find_disguise_cat_at_screen(screen_pos, 90.0)
+	if disguise != null:
+		if _pending_station_patty_drag != null and typeof(_pending_station_patty_drag) == TYPE_DICTIONARY:
+			var data0 = _pending_station_patty_drag
+			if str(data0.get("kind", "")) == "station_patty":
+				var st_i0 := int(data0.get("station", -1))
+				var from_i0 := int(data0.get("from", -1))
+				_pending_station_patty_drag = null
+				_pending_cheese_drag = false
+				_pending_ingredient_drag = ""
+				var patty0 = _extract_station_patty(st_i0, from_i0)
+				if patty0 != null and is_instance_valid(patty0):
+					patty0.queue_free()
+				_flash("Fed the freeloader — they split", Color("CE93D8"))
+				if disguise.has_method("disguise_bribe_leave"):
+					disguise.disguise_bribe_leave()
+				return true
+		if _pending_cheese_drag or cheese_held:
+			_pending_cheese_drag = false
+			_pending_ingredient_drag = ""
+			_bribe_disguise_cat_ingredient(disguise, "cheese")
+			return true
+		if _pending_ingredient_drag != "":
+			var id0 := _pending_ingredient_drag
+			if id0 == "bacon" or id0 == "cheese" or id0 == "patty":
+				_pending_ingredient_drag = ""
+				_pending_cheese_drag = false
+				_strip_gesture_added = true
+				_strip_did_drag = true
+				_bribe_disguise_cat_ingredient(disguise, id0 if id0 != "patty" else "bacon")
+				return true
 	if not playing or window_cat == null or not is_instance_valid(window_cat):
 		return false
 	if not window_cat.hit_test_feed(camera, screen_pos):
@@ -22328,6 +22669,14 @@ func _try_feed_bacon_to_customer(screen_pos: Vector2) -> bool:
 	var cust := _find_waiting_customer_at_mouth(screen_pos)
 	if cust == null:
 		return false
+	## Disguise cat: bacon bribe shoos them (no patience snack).
+	if bool(cust.get("is_disguise_cat")):
+		_pending_ingredient_drag = ""
+		_pending_cheese_drag = false
+		_strip_did_drag = true
+		_strip_gesture_added = true
+		_bribe_disguise_cat_ingredient(cust, "bacon")
+		return true
 	if not cust.has_method("feed_bacon_snack"):
 		return false
 	if mp_enabled and not _mp_applying:
@@ -22953,6 +23302,7 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 				"text": "Meh… OK",
 			}
 	var guest_mp := mp_enabled and not NetManager.is_host()
+	var disguise := bool(cust.get("is_disguise_cat"))
 	var pay: Dictionary = cust.receive_burger(
 		items, patty_mult, combo, tip_factor, fresh_r, seasoned
 	)
@@ -22963,8 +23313,14 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	if cust.has_method("stop_order_clock"):
 		cust.stop_order_clock()
 
-	## Host/solo owns money + combo; guests keep FX/flashes then take economy sync.
-	if payout > 0:
+	## Mustache cat stiffs you — burger leaves, wallet doesn't.
+	if disguise and payout > 0:
+		if not guest_mp:
+			total_served += 1
+		_flash("Dine and dash! Fake mustache cat never pays", Color("FF8A80"))
+		if game_audio and game_audio.has_method("play_cat_meow"):
+			game_audio.play_cat_meow()
+	elif payout > 0:
 		if not guest_mp:
 			money += payout
 			total_served += 1
@@ -23011,7 +23367,7 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 			combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
 
-	if not guest_mp:
+	if not guest_mp and not disguise:
 		var review_stars := _review_stars_from_serve(
 			payout,
 			was_meh,
@@ -23156,6 +23512,8 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 	if not sodas.is_empty():
 		soda_lab = str(GameDataScript.INGREDIENT_LABELS.get(sodas[0], "Soda")).to_upper()
 	_flash("+%s  %s up!" % [_format_money(float(payout)), soda_lab], Color("80DEEA"))
+	if not guest_mp:
+		_maybe_record_social_review(4.2, "good", int(pay.get("tip", 0)), -1, cust)
 	if cust.has_method("complete_serve"):
 		cust.complete_serve(payout)
 	elif cust.has_method("leave_happy"):
@@ -23166,6 +23524,8 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 	_highlight_tickets()
 	_update_hud()
 	_refresh_ticket_checkmarks()
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
 
 
 func _resolve_serve_customer():
@@ -24259,6 +24619,24 @@ func _mp_send_social_feed_to(peer_id: int) -> void:
 	## Absolute feed snapshot (ratings already in economy sync — do not re-count).
 	if not NetManager.is_host() or not NetManager.is_online():
 		return
+	var pack: Dictionary = _mp_pack_social_feed()
+	mp_social_feed_sync.rpc_id(
+		peer_id,
+		pack["stars"],
+		pack["who"],
+		pack["text"],
+		pack["pic"]
+	)
+
+
+func _mp_broadcast_social_feed() -> void:
+	if not NetManager.is_host() or not NetManager.is_online():
+		return
+	var pack: Dictionary = _mp_pack_social_feed()
+	mp_social_feed_sync.rpc(pack["stars"], pack["who"], pack["text"], pack["pic"])
+
+
+func _mp_pack_social_feed() -> Dictionary:
 	var stars_arr: Array = []
 	var who_arr: Array = []
 	var text_arr: Array = []
@@ -24278,7 +24656,7 @@ func _mp_send_social_feed_to(peer_id: int) -> void:
 					img.decompress()
 				pic_png = img.save_png_to_buffer()
 		pic_arr.append(pic_png)
-	mp_social_feed_sync.rpc_id(peer_id, stars_arr, who_arr, text_arr, pic_arr)
+	return {"stars": stars_arr, "who": who_arr, "text": text_arr, "pic": pic_arr}
 
 
 @rpc("any_peer", "reliable")
@@ -24984,12 +25362,59 @@ func mp_spawn_customer(
 	patience: float,
 	lane: int,
 	skin_idx: int = -1,
-	face_style: int = -1
+	face_style: int = -1,
+	disguise_cat: bool = false
 ) -> void:
 	if net_id >= 0 and _customer_by_net_id(net_id) != null:
 		return
 	_mp_applying = true
-	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style)
+	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_disguise_cat_unmask(net_id: int) -> void:
+	_mp_applying = true
+	var c = _customer_by_net_id(net_id)
+	if c != null and is_instance_valid(c) and bool(c.get("is_disguise_cat")):
+		_unmask_disguise_cat(c)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) -> void:
+	_mp_applying = true
+	var c = _customer_by_net_id(net_id)
+	if c == null or not is_instance_valid(c) or not bool(c.get("is_disguise_cat")):
+		_mp_applying = false
+		return
+	if kind == "patty":
+		if spatula_patty != null and is_instance_valid(spatula_patty):
+			var p = spatula_patty
+			spatula_patty = null
+			spatula_owner_id = 0
+			_refresh_spatula_ui()
+			if is_instance_valid(p):
+				p.queue_free()
+		elif patty_net_id >= 0:
+			var p2 = _patty_by_net_id(patty_net_id)
+			if p2 != null and is_instance_valid(p2):
+				if spatula_patty == p2:
+					spatula_patty = null
+					spatula_owner_id = 0
+					_refresh_spatula_ui()
+				p2.queue_free()
+		_flash("Fed the freeloader — they split", Color("CE93D8"))
+		if c.has_method("disguise_bribe_leave"):
+			c.disguise_bribe_leave()
+	elif kind == "cheese" or kind == "bacon":
+		if kind == "cheese" and cheese_held:
+			_clear_cheese_hold_after_use()
+		if NetManager.is_host() or not mp_enabled:
+			_spend_ingredient(kind)
+		_flash("Fed the freeloader — they split", Color("CE93D8"))
+		if c.has_method("disguise_bribe_leave"):
+			c.disguise_bribe_leave()
 	_mp_applying = false
 
 
@@ -25568,7 +25993,8 @@ func mp_social_review(stars: float, who: String, text: String, pic_png: PackedBy
 		var img := Image.new()
 		if img.load_png_from_buffer(pic_png) == OK:
 			pic = ImageTexture.create_from_image(img)
-	_apply_social_review(stars, who, text, pic)
+	## Don't bump rating totals — economy sync owns those; this only fills FEED.
+	_apply_social_review(stars, who, text, pic, true)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -25587,7 +26013,7 @@ func mp_social_feed_sync(
 	text_arr: Array,
 	pic_arr: Array
 ) -> void:
-	## Late-join feed replace — economy sync already set rating sum/count.
+	## Absolute feed replace (late-join + live sync). Ratings stay on economy sync.
 	if NetManager.is_host():
 		return
 	social_reviews.clear()
@@ -25606,6 +26032,8 @@ func mp_social_feed_sync(
 					post["pic"] = ImageTexture.create_from_image(img)
 		social_reviews.append(post)
 	_refresh_phone_ui()
+	if n > 0:
+		_scroll_phone_to_social()
 
 
 func _mp_broadcast_customers() -> void:
