@@ -262,6 +262,7 @@ var grill_residue_meshes: Array = [] ## legacy single mesh slot (unused visually
 var grill_residue_mats: Array = []
 var grill_residue_chunks: Array = [] ## per slot: Array of MeshInstance3D pieces
 var grill_residue_centers: Array = [] ## Vector3 per slot
+var grill_residue_kind: Array = [] ## "patty" / "cup" so multiplayer rebuilds the same debris
 var brush_swipe_travel: Array = [] ## movement accum while over each residue
 var brush_last_pos: Vector3 = Vector3.ZERO
 var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
@@ -765,6 +766,7 @@ const BUILD_HIT_PAD_TOP := 28.0 ## was 180 — only a little above the plate
 const BUILD_HIT_PAD_RIGHT := 10.0
 const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
+const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(30.0, 40.0)
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -1095,9 +1097,11 @@ var _mp_remote_glock: Dictionary = {}
 var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
 var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
 var _mp_remote_icecreams: Dictionary = {} ## peer_id -> soft-serve cone ghost while held
+var _mp_steel_icecreams: Dictionary = {} ## cone_net_id -> partner cold-steel sit mirror
 var _mp_cup_pose_cool: float = 0.0
 var _mp_icecream_pose_cool: float = 0.0
 var _mp_cup_seq: int = 1 ## per-peer idle-drink ids (owner*1e6 + seq)
+var _mp_icecream_melt_seq: int = 1 ## per-peer fallen-cone ids (owner*1e6 + seq)
 var _mp_idle_drink_accum: float = 0.0 ## periodic re-broadcast of local parked drinks
 var _mp_slick_sync_cool: float = 0.0
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
@@ -1137,6 +1141,8 @@ func _ready() -> void:
 		grill_residue_chunks[_i] = []
 	grill_residue_centers.resize(GRILL_SLOTS)
 	grill_residue_centers.fill(Vector3.ZERO)
+	grill_residue_kind.resize(GRILL_SLOTS)
+	grill_residue_kind.fill("")
 	brush_swipe_travel.resize(GRILL_SLOTS)
 	brush_swipe_travel.fill(0.0)
 	brush_swipe_cool.resize(GRILL_SLOTS)
@@ -1634,7 +1640,7 @@ func _start_game() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
-	_reset_supplies()
+	_reset_supplies(true)
 	_disguise_cat_pending = false
 	_disguise_cat_active = false
 	_disguise_cat_cool = 0.0
@@ -1676,7 +1682,7 @@ func _restart() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
-	_reset_supplies()
+	_reset_supplies(false)
 	_start_radio_fade_in()
 	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
 	## Keep a pending mustache-cat visit across the day break; clear cool so it can land.
@@ -1880,6 +1886,7 @@ func _process(delta: float) -> void:
 		if _mp_idle_drink_accum >= 1.25:
 			_mp_idle_drink_accum = 0.0
 			_mp_broadcast_local_idle_drinks()
+			_mp_broadcast_local_steel_icecream()
 	if mp_enabled and NetManager.is_host():
 		_mp_econ_accum += delta
 		if _mp_econ_accum >= 0.45:
@@ -2274,6 +2281,9 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
+				get_viewport().set_input_as_handled()
+				return
+			if _try_grab_remote_steel_icecream(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			## Direct rack clicks take a fresh cone even if a dropped cone is nearby on the grill.
@@ -3358,6 +3368,7 @@ func _build_3d_world() -> void:
 	grill_residue_mats.clear()
 	grill_residue_chunks.clear()
 	grill_residue_centers.clear()
+	grill_residue_kind.clear()
 	brush_swipe_travel.clear()
 	brush_swipe_cool.clear()
 	grill_surface_area = null
@@ -3609,6 +3620,7 @@ func _build_flat_top_grill() -> void:
 		grill_residue.append(0.0)
 		grill_residue_chunks.append([])
 		grill_residue_centers.append(Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z))
+		grill_residue_kind.append("")
 		brush_swipe_travel.append(0.0)
 		brush_swipe_cool.append(0.0)
 		slot_positions.append(Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z))
@@ -3899,10 +3911,14 @@ func _clear_residue_chunks(slot: int) -> void:
 		if ch != null and is_instance_valid(ch):
 			ch.queue_free()
 	grill_residue_chunks[slot] = []
+	if slot < grill_residue_kind.size():
+		grill_residue_kind[slot] = ""
 
 
 func _spawn_residue_chunks(slot: int, at: Vector3, kind: String = "patty") -> void:
 	_clear_residue_chunks(slot)
+	if slot < grill_residue_kind.size():
+		grill_residue_kind[slot] = kind
 	if slot >= grill_residue_centers.size():
 		return
 	grill_residue_centers[slot] = at
@@ -4166,6 +4182,8 @@ func _scrape_finish_clean_local(slot: int) -> void:
 		tw.chain().tween_callback(ch.queue_free)
 	grill_residue_chunks[slot] = []
 	grill_residue[slot] = 0.0
+	if slot < grill_residue_kind.size():
+		grill_residue_kind[slot] = ""
 	if slot < brush_swipe_travel.size():
 		brush_swipe_travel[slot] = 0.0
 	_flash("Grill spot clean!", Color("A5D6A7"))
@@ -5772,6 +5790,8 @@ func _leave_grill_residue_local(
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	grill_residue[slot] = 1.0
+	if slot < grill_residue_kind.size():
+		grill_residue_kind[slot] = kind
 	if slot < brush_swipe_travel.size():
 		brush_swipe_travel[slot] = 0.0
 	if slot < brush_swipe_cool.size():
@@ -5883,6 +5903,8 @@ func _clear_residue_near(x: float, z: float, max_d: float = 0.42) -> void:
 		if Vector2(c.x - x, c.z - z).length() <= max_d:
 			grill_residue[i] = 0.0
 			_clear_residue_chunks(i)
+			if i < grill_residue_kind.size():
+				grill_residue_kind[i] = ""
 			if i < brush_swipe_travel.size():
 				brush_swipe_travel[i] = 0.0
 
@@ -7913,6 +7935,7 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 		"radius": rad,
 		"base_a": 0.72,
 		"scrape": 1.0,
+		"boost_heat": true,
 	})
 	while oil_slicks.size() > 70:
 		var old: Dictionary = oil_slicks.pop_front()
@@ -9768,6 +9791,7 @@ func _begin_cup_melt_local(
 	bubbles.amount_ratio = 0.0
 	melting_cups.append({
 		"root": root,
+		"cup_net_id": int(root.get_meta("cup_net_id", -1)),
 		"age": 0.0,
 		"phase": "rescue",
 		"next_phase": next_phase,
@@ -10183,6 +10207,8 @@ func _adopt_cup_grow_crust_as_residue(crust: Node3D, at: Vector3, announce: bool
 		return -1
 	_clear_residue_chunks(slot)
 	grill_residue[slot] = 1.0
+	if slot < grill_residue_kind.size():
+		grill_residue_kind[slot] = "cup"
 	if slot < brush_swipe_travel.size():
 		brush_swipe_travel[slot] = 0.0
 	if slot < brush_swipe_cool.size():
@@ -10542,6 +10568,12 @@ func _oil_heat_mul(world_pos: Vector3) -> float:
 	for item in oil_slicks:
 		var mesh = item.get("mesh")
 		if mesh == null or not is_instance_valid(mesh):
+			continue
+		if not bool(item.get("boost_heat", false)):
+			continue
+		var age := float(item.get("age", 0.0))
+		var life := maxf(0.001, float(item.get("life", 1.0)))
+		if age >= life or float(item.get("scrape", 1.0)) <= 0.12:
 			continue
 		var rad := float(item.get("radius", 0.05)) * maxf(mesh.scale.x, 1.0)
 		var d := Vector2(mesh.position.x - world_pos.x, mesh.position.z - world_pos.z).length()
@@ -11029,15 +11061,10 @@ func _scrape_burnt_icecreams(pos: Vector3, move_xz: Vector2, moved: float) -> bo
 		var scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
 		scrape = maxf(0.08, scrape - moved * 3.8)
 		item["scrape"] = scrape
-		var scale_xz := lerpf(0.16, 1.0, scrape)
-		if root_valid:
-			(root as Node3D).scale = Vector3(scale_xz, maxf(0.12, scrape), scale_xz)
-		(puddle as Node3D).scale = Vector3.ONE * scale_xz
-		var mat := (puddle as MeshInstance3D).material_override as StandardMaterial3D
-		if mat:
-			var c := mat.albedo_color
-			c.a = maxf(0.04, 0.97 * scrape)
-			mat.albedo_color = c
+		_apply_icecream_melt_scrape_visuals(item, scrape)
+		if mp_enabled and not _mp_applying and _mp_slick_sync_cool <= 0.0:
+			_mp_slick_sync_cool = 0.08
+			mp_icecream_melt_scrape.rpc(p.x, p.z, scrape, false)
 		if scrape > 0.16:
 			i += 1
 			continue
@@ -12177,8 +12204,9 @@ func _create_icecream_cone_node(grabbable: bool = true) -> Node3D:
 		ring.material_override = line_mat
 		cone_visual.add_child(ring)
 
-	icecream_swirl_root = Node3D.new() if grabbable else null
-	var swirl_parent := icecream_swirl_root if grabbable else Node3D.new()
+	## Never write the global icecream_swirl_root here — remote/mirror cones also call this
+	## and would blank the local held swirl (guest soft-serve never appeared after host dispensed).
+	var swirl_parent := Node3D.new()
 	swirl_parent.name = "SoftServeSwirl"
 	swirl_parent.position = Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + 0.006, 0.0)
 	root.add_child(swirl_parent)
@@ -12290,10 +12318,15 @@ func _begin_icecream_cone_hold() -> bool:
 	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		_spawn_and_bind_empty_icecream_cone()
 	icecream_cone_held = true
+	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
+	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
 	if icecream_cone_area != null:
 		icecream_cone_area.input_ray_pickable = false
 	_icecream_prev_pos = icecream_cone_root.global_position
 	_icecream_vel = Vector3.ZERO
+	## Picking a cold steel cone back up — clear partner mirrors of that sit.
+	if mp_enabled and not _mp_applying:
+		_mp_send_icecream_unsteel(icecream_cone_root)
 	if game_audio:
 		if game_audio.has_method("play_rack_take"):
 			game_audio.play_rack_take()
@@ -12532,6 +12565,9 @@ func _make_icecream_corkscrew_mesh(fill: float) -> ArrayMesh:
 
 
 func _refresh_icecream_cone_visuals() -> void:
+	if (icecream_swirl_root == null or not is_instance_valid(icecream_swirl_root)) \
+			and icecream_cone_root != null and is_instance_valid(icecream_cone_root):
+		icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
 	_refresh_icecream_cone_visuals_for(icecream_swirl_root, icecream_cone_fill)
 
 
@@ -12677,6 +12713,8 @@ func _put_icecream_cone_down() -> void:
 		return
 	var mouse := get_viewport().get_mouse_position()
 	if _is_over_garbage(mouse):
+		if mp_enabled and not _mp_applying:
+			_mp_send_icecream_unsteel(icecream_cone_root)
 		icecream_cone_root.queue_free()
 		_spawn_and_bind_empty_icecream_cone()
 		return
@@ -12705,6 +12743,7 @@ func _put_icecream_cone_down() -> void:
 		return
 	icecream_cone_root.global_position = icecream_cone_rest
 	icecream_cone_root.rotation_degrees = Vector3(-6.0, 8.0, 0.0)
+	icecream_cone_root.set_meta("on_steel", false)
 	if icecream_cone_area != null:
 		icecream_cone_area.input_ray_pickable = true
 
@@ -12733,6 +12772,11 @@ func _lerp_icecream_cone_to_grill(root: Node3D, land_pos: Vector3, should_melt: 
 		else:
 			if area != null and is_instance_valid(area):
 				area.input_ray_pickable = true
+			root.set_meta("icecream_fill", clampf(icecream_cone_fill, 0.0, 1.0))
+			root.set_meta("on_steel", true)
+			_ensure_icecream_melt_id(root)
+			if mp_enabled and not _mp_applying:
+				_mp_send_icecream_steel(root, land_pos)
 	)
 
 
@@ -12742,8 +12786,6 @@ func _try_auto_hand_finished_icecream() -> void:
 	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		return
 	if not icecream_cone_held or icecream_cone_fill < 1.0:
-		return
-	if mp_enabled and not NetManager.is_host():
 		return
 	var cust := _find_waiting_customer_needing_icecream()
 	if cust == null:
@@ -12784,6 +12826,11 @@ func _try_hand_held_icecream_to_customer(
 	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
 		return false
 	if _customer_wants_icecream(cust) and not _customer_icecream_handed(cust):
+		if mp_enabled and not _mp_applying:
+			var cid := _customer_net_id(cust)
+			if cid >= 0:
+				mp_icecream_hand.rpc(cid)
+				return true
 		_begin_icecream_customer_hand(cust)
 		return true
 	if auto_only:
@@ -12871,6 +12918,8 @@ func _complete_early_icecream_hand(customer: Node3D) -> void:
 		_flash("ICE CREAM ✓ — finish the burger!", Color("FFF3B0"))
 	else:
 		_flash("ICE CREAM ✓", Color("FFF3B0"))
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_customers()
 	call_deferred("_try_auto_serve")
 
 
@@ -12901,6 +12950,16 @@ func _complete_icecream_only_serve(customer: Node3D = null) -> void:
 	_highlight_tickets()
 	_update_hud()
 	_refresh_ticket_checkmarks()
+
+
+func _complete_synced_icecream_hand(cust_net_id: int) -> void:
+	var cust = _customer_by_net_id(cust_net_id)
+	if cust == null or not is_instance_valid(cust):
+		return
+	if GameDataScript.is_icecream_only_order(cust.order):
+		_complete_icecream_only_serve(cust)
+	else:
+		_complete_early_icecream_hand(cust)
 
 
 func _try_feed_held_icecream_to_cat(screen_pos: Vector2) -> bool:
@@ -12934,6 +12993,10 @@ func _begin_icecream_melt_on_grill() -> void:
 		return
 	var root := icecream_cone_root
 	var fill := clampf(icecream_cone_fill, 0.0, 1.0)
+	var melt_id := _ensure_icecream_melt_id(root)
+	if mp_enabled and not _mp_applying:
+		## Clear any cold-steel mirror before melt so partners don't stack cone+puddle.
+		_mp_send_icecream_unsteel(root)
 	_begin_icecream_melt_local(root, fill, false)
 	icecream_cone_root = null
 	icecream_cone_area = null
@@ -12943,7 +13006,7 @@ func _begin_icecream_melt_on_grill() -> void:
 	_spawn_and_bind_empty_icecream_cone()
 	if mp_enabled and not _mp_applying:
 		var drop := root.global_position
-		mp_icecream_melt.rpc(drop.x, drop.z, fill)
+		mp_icecream_melt.rpc(melt_id, drop.x, drop.z, fill)
 	if game_audio and game_audio.has_method("trigger_hot_oil"):
 		game_audio.trigger_hot_oil(1.8)
 	_flash("Ice cream melting on the grill!", Color("FFF3B0"))
@@ -12978,6 +13041,7 @@ func _begin_icecream_melt_local(root: Node3D, fill: float, remote_mirror: bool =
 	puddle.add_child(smoke)
 	melting_icecreams.append({
 		"root": root,
+		"melt_id": int(root.get_meta("icecream_melt_id", -1)),
 		"swirl": swirl,
 		"puddle": puddle,
 		"smoke": smoke,
@@ -13003,6 +13067,8 @@ func _try_grab_fallen_icecream_cone(screen_pos: Vector2) -> bool:
 	if icecream_cone_held or cup_held or brush_held or oil_held or shaker_held or ext_held or glock_held:
 		return false
 	if spatula_patty != null or dragging_patty != null or cheese_held or sale_held:
+		return false
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root) and not _icecream_cone_is_shelved():
 		return false
 	var best_i := -1
 	var best_d := 128.0
@@ -14531,6 +14597,9 @@ func _try_rescue_melting_cup(root: Node3D) -> bool:
 		var item: Dictionary = melting_cups[i]
 		if item.get("root") != root or str(item.get("phase", "")) != "rescue":
 			continue
+		if mp_enabled and not _mp_applying:
+			var rp := root.global_position
+			mp_cup_melt_remove.rpc(int(item.get("cup_net_id", root.get_meta("cup_net_id", -1))), rp.x, rp.z)
 		var sm = item.get("smoke")
 		if sm != null and is_instance_valid(sm):
 			sm.queue_free()
@@ -16830,6 +16899,23 @@ func _ensure_cup_net_id(root: Node3D) -> int:
 	return nid
 
 
+func _alloc_icecream_melt_id() -> int:
+	## Peer-scoped so host + client fallen cones never collide.
+	var id := NetManager.my_id() * 1000000 + _mp_icecream_melt_seq
+	_mp_icecream_melt_seq += 1
+	return id
+
+
+func _ensure_icecream_melt_id(root: Node3D) -> int:
+	if root == null or not is_instance_valid(root):
+		return -1
+	var nid := int(root.get_meta("icecream_melt_id", -1))
+	if nid < 0:
+		nid = _alloc_icecream_melt_id()
+		root.set_meta("icecream_melt_id", nid)
+	return nid
+
+
 func _mp_find_cup_by_net_id(cup_net_id: int) -> Node3D:
 	if cup_net_id < 0:
 		return null
@@ -16916,6 +17002,152 @@ func _mp_send_cup_unpark(root: Node3D) -> void:
 	if nid < 0:
 		return
 	mp_cup_unpark.rpc(nid)
+
+
+func _mp_send_icecream_steel(root: Node3D, drop: Vector3) -> void:
+	## Mirror a cold / HOLD sit for soft-serve (grill burner off).
+	if not mp_enabled or _mp_applying or root == null or not is_instance_valid(root):
+		return
+	if not NetManager.is_online():
+		return
+	var nid := _ensure_icecream_melt_id(root)
+	var fill := clampf(float(root.get_meta("icecream_fill", icecream_cone_fill)), 0.0, 1.0)
+	mp_icecream_steel.rpc(nid, drop.x, drop.z, fill)
+
+
+func _mp_send_icecream_unsteel(root: Node3D) -> void:
+	if not mp_enabled or _mp_applying or root == null or not is_instance_valid(root):
+		return
+	if not NetManager.is_online():
+		return
+	var nid := int(root.get_meta("icecream_melt_id", -1))
+	if nid < 0:
+		return
+	root.set_meta("on_steel", false)
+	mp_icecream_unsteel.rpc(nid)
+
+
+func _mp_remove_steel_icecream_local(cone_id: int) -> void:
+	if cone_id < 0 or not _mp_steel_icecreams.has(cone_id):
+		return
+	var ghost: Node3D = _mp_steel_icecreams[cone_id]
+	_mp_steel_icecreams.erase(cone_id)
+	if ghost != null and is_instance_valid(ghost):
+		ghost.queue_free()
+
+
+func _mp_remove_local_steel_icecream_if_id(cone_id: int) -> void:
+	if cone_id < 0:
+		return
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	if int(icecream_cone_root.get_meta("icecream_melt_id", -1)) != cone_id:
+		return
+	if not bool(icecream_cone_root.get_meta("on_steel", false)):
+		return
+	if icecream_cone_held:
+		return
+	icecream_cone_root.queue_free()
+	icecream_cone_root = null
+	icecream_cone_area = null
+	icecream_swirl_root = null
+	icecream_cone_fill = 0.0
+	_spawn_and_bind_empty_icecream_cone()
+
+
+func _mp_upsert_steel_icecream_local(cone_id: int, x: float, z: float, fill: float) -> void:
+	if world == null or cone_id < 0:
+		return
+	_mp_remove_steel_icecream_local(cone_id)
+	var root := _create_icecream_cone_node(false)
+	root.name = "RemoteSteelIceCream_%d" % cone_id
+	root.set_meta("icecream_melt_id", cone_id)
+	root.set_meta("icecream_fill", clampf(fill, 0.0, 1.0))
+	root.set_meta("on_steel", true)
+	root.set_meta("mp_mirror", true)
+	_mp_strip_tool_pickable(root)
+	world.add_child(root)
+	root.global_position = Vector3(x, GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012, z)
+	root.rotation_degrees = Vector3(-92.0, 24.0, 0.0)
+	_refresh_icecream_cone_visuals_for(root.get_node_or_null("SoftServeSwirl") as Node3D, fill)
+	_mp_steel_icecreams[cone_id] = root
+
+
+func _try_grab_remote_steel_icecream(screen_pos: Vector2) -> bool:
+	if not playing or camera == null or icecream_cone_held or burnt_icecream_cone_held:
+		return false
+	if _icecream_grab_lockout > 0.0:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
+		return false
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root) and not _icecream_cone_is_shelved():
+		return false
+	var best_id := -1
+	var best_d := 74.0
+	for key in _mp_steel_icecreams.keys():
+		var cone_id := int(key)
+		var root: Node3D = _mp_steel_icecreams[key] as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var picks: Array[Vector3] = [
+			root.global_position + Vector3(0.0, 0.06, 0.0),
+			root.global_position + Vector3(0.0, 0.14, 0.0),
+		]
+		for p in picks:
+			if camera.is_position_behind(p):
+				continue
+			var d := screen_pos.distance_to(camera.unproject_position(p))
+			if d < best_d:
+				best_d = d
+				best_id = cone_id
+	if best_id < 0:
+		return false
+	var grabbed: Node3D = _mp_steel_icecreams.get(best_id, null) as Node3D
+	if grabbed == null or not is_instance_valid(grabbed):
+		_mp_steel_icecreams.erase(best_id)
+		return false
+	_mp_steel_icecreams.erase(best_id)
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root) and _icecream_cone_is_shelved():
+		icecream_cone_root.queue_free()
+	icecream_cone_root = grabbed
+	icecream_cone_area = grabbed.get_node_or_null("ConeGrab") as Area3D
+	icecream_swirl_root = grabbed.get_node_or_null("SoftServeSwirl") as Node3D
+	icecream_cone_fill = clampf(float(grabbed.get_meta("icecream_fill", 0.0)), 0.0, 1.0)
+	grabbed.set_meta("mp_mirror", false)
+	grabbed.set_meta("on_steel", false)
+	grabbed.set_meta("icecream_melt_id", best_id)
+	if grabbed.get_parent() != world:
+		grabbed.reparent(world, true)
+	if icecream_cone_area != null and is_instance_valid(icecream_cone_area):
+		icecream_cone_area.input_ray_pickable = true
+		icecream_cone_area.collision_layer = ICECREAM_CONE_COLLISION_LAYER
+		icecream_cone_area.monitoring = true
+		icecream_cone_area.monitorable = true
+	if mp_enabled and not _mp_applying:
+		mp_icecream_unsteel.rpc(best_id)
+	return _begin_icecream_cone_hold()
+
+
+func _mp_broadcast_local_steel_icecream() -> void:
+	## Re-send our cold-steel cone sit so partners catch a missed drop.
+	if not mp_enabled or not NetManager.is_online() or _mp_applying:
+		return
+	if icecream_cone_held:
+		return
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+		return
+	if not bool(icecream_cone_root.get_meta("on_steel", false)):
+		## Infer from position if meta was lost mid-session.
+		if _icecream_cone_is_shelved():
+			return
+		if not _is_on_grill_surface(icecream_cone_root.global_position):
+			return
+		if icecream_cone_root.global_position.y > GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.08:
+			return
+		icecream_cone_root.set_meta("on_steel", true)
+		icecream_cone_root.set_meta("icecream_fill", clampf(icecream_cone_fill, 0.0, 1.0))
+	_mp_send_icecream_steel(icecream_cone_root, icecream_cone_root.global_position)
 
 
 func _place_cup_on_steel() -> void:
@@ -17142,8 +17374,6 @@ func _try_auto_hand_finished_soda() -> void:
 		return
 	if cup_soda_fill < 0.82 or cup_flavor == "":
 		return
-	if mp_enabled and not NetManager.is_host():
-		return
 	var cust := _find_waiting_customer_for_soda_flavor(cup_flavor)
 	if cust == null:
 		return
@@ -17157,8 +17387,16 @@ func _try_auto_hand_finished_soda() -> void:
 			if game_audio and game_audio.has_method("set_ice_grind"):
 				game_audio.set_ice_grind(false)
 			_cup_pouring = false
+			if mp_enabled and not _mp_applying:
+				var cid := _customer_net_id(cust)
+				mp_serve.rpc(cid, -2)
+				return
 			_begin_soda_only_serve(cust)
 		else:
+			if mp_enabled and not _mp_applying:
+				var cid2 := _customer_net_id(cust)
+				mp_drink_hand.rpc(cid2, cup_flavor)
+				return
 			_begin_early_drink_hand(cust, cup_flavor)
 
 
@@ -17252,6 +17490,8 @@ func _complete_early_drink_hand(customer: Node3D, flavor: String, consume_local:
 	if not _mp_applying:
 		var lab: String = str(GameDataScript.INGREDIENT_LABELS.get("soda_%s" % flavor, "Drink")).to_upper()
 		_flash("%s ✓ — burger still cooking" % lab, Color("A5D6A7"))
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_customers()
 	call_deferred("_try_auto_serve")
 
 
@@ -18085,6 +18325,7 @@ func _build_board_hint_label() -> void:
 	lab.visible = true
 	build_cutting_board.add_child(lab)
 	build_board_hint_label = lab
+	_nudge_label3d_on_screen(build_board_hint_label, BUILD_BOARD_HINT_SCREEN_NUDGE)
 	_refresh_build_board_hint()
 
 
@@ -18743,13 +18984,14 @@ func _ui_screen_to_wall_point(screen_pos: Vector2) -> Vector3:
 	return RADIO_HOME_POS
 
 
-func _reset_supplies() -> void:
-	social_rating_sum = 0.0
-	social_review_count = 0
-	social_reviews.clear()
+func _reset_supplies(reset_social_history: bool = true) -> void:
+	if reset_social_history:
+		social_rating_sum = 0.0
+		social_review_count = 0
+		social_reviews.clear()
+		_social_post_seq = 0
 	day_social_reviews.clear()
 	day_social_rating_sum = 0.0
-	_social_post_seq = 0
 	_phone_reply_open_id = -1
 	_phone_reply_show_custom = false
 	_phone_reply_custom_draft = ""
@@ -18900,6 +19142,8 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 			"to": to + Vector3(randf_range(-0.12, 0.12), 0.0, randf_range(-0.08, 0.08)),
 			"t": 0.0,
 			"dur": 0.55 + float(n) * 0.08,
+			"landed": false,
+			"settle": 0.28,
 			"arc": 0.55 + randf() * 0.25,
 			"id": id,
 			"pack": pack if n == 0 else 0, ## credit stock once on first pack landing
@@ -18911,10 +19155,11 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 
 
 func _supply_delivery_landing() -> Vector3:
-	## Aim near the fridge / prep side so packs fly into the kitchen.
+	## Aim near the fridge / prep side, but nearer the player so packs do not
+	## vanish flat against the street/truck backdrop.
 	if grill_root != null and is_instance_valid(grill_root):
-		return grill_root.global_position + Vector3(-0.55, 0.85, 0.35)
-	return Vector3(-0.4, 1.0, 0.6)
+		return grill_root.global_position + Vector3(-0.58, 0.72, -0.32)
+	return Vector3(-0.45, 0.85, -0.28)
 
 
 func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
@@ -18943,6 +19188,26 @@ func _update_supply_delivery_fx(delta: float) -> void:
 		if mesh == null or not is_instance_valid(mesh):
 			supply_delivery_fx.remove_at(i)
 			continue
+		if bool(item.get("landed", false)):
+			var settle_left := maxf(0.0, float(item.get("settle", 0.0)) - delta)
+			item["settle"] = settle_left
+			var settle_total := 0.28
+			var settled := 1.0 - clampf(settle_left / settle_total, 0.0, 1.0)
+			var land_pos: Vector3 = item.get("land_pos", (mesh as Node3D).global_position)
+			(mesh as Node3D).global_position = land_pos + Vector3(0.0, sin(settled * PI) * 0.025, -0.14 * settled)
+			var mat := (mesh as MeshInstance3D).material_override as StandardMaterial3D
+			if mat != null:
+				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				var c := mat.albedo_color
+				c.a = 1.0 - settled
+				mat.albedo_color = c
+			if settle_left <= 0.0:
+				mesh.queue_free()
+				supply_delivery_fx.remove_at(i)
+				continue
+			supply_delivery_fx[i] = item
+			i += 1
+			continue
 		item["t"] = float(item.get("t", 0.0)) + delta
 		var dur := maxf(0.2, float(item.get("dur", 0.6)))
 		var u := clampf(float(item["t"]) / dur, 0.0, 1.0)
@@ -18960,8 +19225,11 @@ func _update_supply_delivery_fx(delta: float) -> void:
 			var kind := str(item.get("kind", "stock"))
 			if pack > 0 and id != "":
 				_credit_supply_delivery(id, pack, kind)
-			mesh.queue_free()
-			supply_delivery_fx.remove_at(i)
+			item["pack"] = 0
+			item["landed"] = true
+			item["land_pos"] = mesh.global_position
+			supply_delivery_fx[i] = item
+			i += 1
 			continue
 		supply_delivery_fx[i] = item
 		i += 1
@@ -22790,9 +23058,11 @@ func _create_ticket(customer: Node3D) -> void:
 	wrap.set_meta("ticket_note", note)
 	## Outer shell: drop shadow + border (StyleBoxTexture can't cast shadows).
 	note.add_theme_stylebox_override("panel", _make_ticket_shell_style(false))
-	## Serve-speed clock starts when this slip is pinned — not when meat is scoop-ready.
+	## Queue timers start only when this customer becomes first in line.
 	if customer.has_method("start_order_clock"):
-		customer.start_order_clock()
+		customer.start_order_clock(false)
+	if customer.has_method("set_queue_timer_active"):
+		customer.set_queue_timer_active(false)
 
 	var paper := PanelContainer.new()
 	paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -22921,6 +23191,7 @@ func _create_ticket(customer: Node3D) -> void:
 	tickets[customer] = wrap
 	_highlight_tickets()
 	_refresh_ticket_checkmarks()
+	_refresh_customer_queue_timers()
 
 
 const TICKET_BASE_W := 164.0
@@ -23310,6 +23581,57 @@ func _remove_ticket(customer: Node3D) -> void:
 		tickets.erase(customer)
 		if is_instance_valid(p):
 			p.queue_free()
+	_refresh_customer_queue_timers()
+
+
+func _refresh_customer_queue_timers() -> void:
+	## Only the front active ticket burns patience / serve-speed time.
+	var front: Node3D = null
+	if selected_customer != null and is_instance_valid(selected_customer) \
+			and bool(selected_customer.get("is_waiting")) \
+			and not bool(selected_customer.get("is_leaving")) \
+			and tickets.has(selected_customer):
+		front = selected_customer
+	else:
+		for c in customers:
+			if c == null or not is_instance_valid(c):
+				continue
+			if bool(c.get("is_waiting")) and not bool(c.get("is_leaving")) and tickets.has(c):
+				front = c
+				break
+	for cust in tickets.keys():
+		if cust == null or not is_instance_valid(cust):
+			continue
+		var active: bool = cust == front
+		if active and not bool(cust.get_meta("queue_clock_started", false)):
+			cust.set_meta("queue_clock_started", true)
+			if "order_elapsed_sec" in cust:
+				cust.order_elapsed_sec = 0.0
+		if cust.has_method("set_queue_timer_active"):
+			cust.set_queue_timer_active(active)
+
+
+func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
+	## Co-op guest repair: tickets can outlive their customer array entry after a
+	## missed leave/sync race. Host IDs are authoritative.
+	for cust in tickets.keys():
+		var stale := false
+		if cust == null or not is_instance_valid(cust):
+			stale = true
+		else:
+			var nid := _customer_net_id(cust)
+			stale = nid >= 0 and not seen_customer_ids.has(nid)
+		if stale:
+			_remove_ticket(cust)
+			if cust != null and is_instance_valid(cust):
+				customers.erase(cust)
+				cust.queue_free()
+	if selected_customer != null and (not is_instance_valid(selected_customer) or not tickets.has(selected_customer)):
+		selected_customer = null
+		for c in customers:
+			if c != null and is_instance_valid(c) and bool(c.get("is_waiting")) and tickets.has(c):
+				selected_customer = c
+				break
 
 
 func _highlight_tickets() -> void:
@@ -23337,6 +23659,7 @@ func _highlight_tickets() -> void:
 			## Selected slip sits a hair more upright / forward.
 			note.modulate = Color(1.05, 1.02, 0.95) if selected else Color(0.94, 0.92, 0.88)
 		_apply_ticket_display_size(wrap, selected)
+	_refresh_customer_queue_timers()
 
 
 func _clear_customers() -> void:
@@ -26066,9 +26389,7 @@ func _try_auto_serve() -> void:
 	## Hand off as soon as a station matches a waiting ticket perfectly.
 	if not playing or _auto_serving or _serve_fly_busy:
 		return
-	## Co-op: only host auto-serves so we don't double-fire RPCs.
-	if mp_enabled and not NetManager.is_host():
-		return
+	## Co-op: any cook can initiate; the reliable serve RPC keeps peers in one outcome.
 	var waiting: Array = []
 	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
 		waiting.append(selected_customer)
@@ -27601,7 +27922,7 @@ func _flash(text: String, color: Color) -> void:
 func _setup_start_menu_chrome() -> void:
 	## Dark title wash + black CTA card; logo sits in front of the card.
 	if start_overlay != null and is_instance_valid(start_overlay):
-		start_overlay.color = Color(0.0, 0.0, 0.0, 0.30)
+		start_overlay.color = Color(0.0, 0.0, 0.0, 0.42)
 		start_overlay.z_index = 40
 		start_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 		var blocker := start_overlay.get_node_or_null("TruckDimmingBlocker") as ColorRect
@@ -27611,12 +27932,12 @@ func _setup_start_menu_chrome() -> void:
 			blocker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			start_overlay.add_child(blocker)
 			start_overlay.move_child(blocker, 0)
-		blocker.color = Color(0.0, 0.0, 0.0, 0.30)
-		blocker.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-		blocker.offset_left = -520.0
-		blocker.offset_top = -280.0
-		blocker.offset_right = 520.0
-		blocker.offset_bottom = 245.0
+		blocker.color = Color(0.0, 0.0, 0.0, 0.46)
+		blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		blocker.offset_left = 0.0
+		blocker.offset_top = 0.0
+		blocker.offset_right = 0.0
+		blocker.offset_bottom = 0.0
 		blocker.z_index = -1
 	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
 	if center == null:
@@ -28300,6 +28621,11 @@ func _mp_on_session_start(session_seed: int) -> void:
 	seed(session_seed)
 	mp_enabled = true
 	mp_held_net.clear()
+	for steel_id in _mp_steel_icecreams.keys():
+		var steel_ghost: Node3D = _mp_steel_icecreams[steel_id]
+		if steel_ghost != null and is_instance_valid(steel_ghost):
+			steel_ghost.queue_free()
+	_mp_steel_icecreams.clear()
 	drag_owner_id = 0
 	_stop_intro_title_music()
 	if _mp_lobby_root:
@@ -28484,6 +28810,18 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 				float(pc.get_meta("ice_fill", 0.0)),
 				float(pc.get_meta("fizz", 0.0))
 			)
+	## Cold-steel soft-serve sit (burner off) — joiner must see host/guest drops.
+	if not icecream_cone_held \
+			and icecream_cone_root != null and is_instance_valid(icecream_cone_root) \
+			and bool(icecream_cone_root.get_meta("on_steel", false)):
+		var ice_nid := _ensure_icecream_melt_id(icecream_cone_root)
+		mp_icecream_steel.rpc_id(
+			peer_id,
+			ice_nid,
+			float(icecream_cone_root.global_position.x),
+			float(icecream_cone_root.global_position.z),
+			clampf(float(icecream_cone_root.get_meta("icecream_fill", icecream_cone_fill)), 0.0, 1.0)
+		)
 	_mp_send_social_feed_to(peer_id)
 	## Grill mess catch-up: soda spills (wet → burnt) + scrapable residue.
 	for slick in soda_slicks:
@@ -28511,6 +28849,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			continue
 		mp_icecream_melt_state.rpc_id(
 			peer_id,
+			int((ice as Dictionary).get("melt_id", -1)),
 			float((puddle as Node3D).global_position.x),
 			float((puddle as Node3D).global_position.z),
 			float((ice as Dictionary).get("fill", 1.0)),
@@ -28520,11 +28859,37 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			bool((ice as Dictionary).get("fired", false)),
 			bool((ice as Dictionary).get("cone_removed", false))
 		)
+	for cup in melting_cups:
+		if typeof(cup) != TYPE_DICTIONARY:
+			continue
+		var cup_root_state = (cup as Dictionary).get("root")
+		if cup_root_state == null or not is_instance_valid(cup_root_state):
+			continue
+		var cup_pos: Vector3 = (cup_root_state as Node3D).global_position
+		mp_cup_melt_state.rpc_id(
+			peer_id,
+			int((cup as Dictionary).get("cup_net_id", (cup_root_state as Node3D).get_meta("cup_net_id", -1))),
+			cup_pos.x,
+			cup_pos.z,
+			str((cup as Dictionary).get("flavor", "")),
+			float((cup as Dictionary).get("fill", 0.0)),
+			float((cup as Dictionary).get("fill_left", (cup as Dictionary).get("fill", 0.0))),
+			float((cup as Dictionary).get("ice", 0.0)),
+			str((cup as Dictionary).get("phase", "burn")),
+			float((cup as Dictionary).get("age", 0.0)),
+			float((cup as Dictionary).get("rescue_age", 0.0)),
+			float((cup as Dictionary).get("delay_age", 0.0)),
+			bool((cup as Dictionary).get("spill_done", true)),
+			float((cup as Dictionary).get("spill_t", 0.0))
+		)
 	for ri in GRILL_SLOTS:
 		if float(grill_residue[ri]) <= 0.05:
 			continue
 		var rc: Vector3 = grill_residue_centers[ri] if ri < grill_residue_centers.size() else Vector3.ZERO
-		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, "patty")
+		var rkind := str(grill_residue_kind[ri]) if ri < grill_residue_kind.size() else "patty"
+		if rkind == "":
+			rkind = "patty"
+		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, rkind)
 		mp_residue_amt.rpc_id(peer_id, ri, float(grill_residue[ri]))
 
 
@@ -29170,6 +29535,42 @@ func _patty_by_net_id(net_id: int):
 	return null
 
 
+func _mp_cull_orphan_patties(_seen_net_ids: Dictionary = {}) -> void:
+	## Remove patty nodes that are no longer owned by grill, spatula, Build, or
+	## another player's hold state. These are the usual source of phantom burgers.
+	if patties_root == null or not is_instance_valid(patties_root):
+		return
+	var live_patty_instances: Dictionary = {}
+	for gp_live in grill:
+		if gp_live != null and is_instance_valid(gp_live):
+			live_patty_instances[gp_live.get_instance_id()] = true
+	for held_live in [spatula_patty, dragging_patty, flicking_patty]:
+		if held_live != null and is_instance_valid(held_live):
+			live_patty_instances[held_live.get_instance_id()] = true
+	for st_live in stations:
+		var arr_live: Array = st_live.get("patties", [])
+		for bp_live in arr_live:
+			if bp_live != null and is_instance_valid(bp_live):
+				live_patty_instances[bp_live.get_instance_id()] = true
+	for child in patties_root.get_children():
+		if child == null or not is_instance_valid(child):
+			continue
+		if bool(child.get_meta("patty_pool", false)):
+			continue
+		if not (child is Area3D):
+			continue
+		var child_id := child.get_instance_id()
+		if live_patty_instances.has(child_id):
+			continue
+		var cnid := int(child.get("net_id"))
+		if cnid < 0:
+			continue
+		var holder := _mp_peer_holding_net(cnid)
+		if holder != 0 and bool(child.get("is_held")):
+			continue
+		child.queue_free()
+
+
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 	var sid := multiplayer.get_remote_sender_id()
@@ -29376,6 +29777,9 @@ func mp_drop_to_build(net_id: int, index: int) -> void:
 	if index != STATION_CRAFT:
 		_select_station(index)
 	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_station(index)
+		_mp_broadcast_grill()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -29411,6 +29815,41 @@ func mp_drink_hand(cust_net_id: int, flavor: String) -> void:
 	if cust != null and is_instance_valid(cust):
 		_begin_early_drink_hand(cust, flavor)
 	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_icecream_hand(cust_net_id: int) -> void:
+	## Early / ice-cream-only hand-off; host owns the order close, peers share the toss.
+	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
+	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	_mp_applying = true
+	selected_customer = cust
+	_highlight_tickets()
+	if sid == NetManager.my_id():
+		_begin_icecream_customer_hand(cust)
+		_mp_applying = false
+		return
+	if cust.dialogue_open:
+		cust.dialogue_open = false
+	var served_root: Node3D = null
+	if _mp_remote_icecreams.has(sid):
+		served_root = _mp_remote_icecreams[sid] as Node3D
+		_mp_remote_icecreams.erase(sid)
+	if served_root != null and is_instance_valid(served_root):
+		_mp_set_remote_icecream_stream(served_root, false)
+		_mp_applying = false
+		_play_icecream_fly_to_mouth(served_root, cust, func() -> void:
+			_complete_synced_icecream_hand(cust_net_id)
+		)
+		return
+	else:
+		_mp_applying = false
+		call_deferred("_complete_synced_icecream_hand", cust_net_id)
+		return
 
 
 ## any_peer (host-only callers): authority can drop on relay peers.
@@ -29549,6 +29988,7 @@ func _mp_broadcast_grill() -> void:
 		return
 	if not playing:
 		return
+	_mp_cull_orphan_patties()
 	var ids: Array = []
 	var slots: Array = []
 	var xs: Array = []
@@ -29592,6 +30032,18 @@ func _mp_broadcast_grill() -> void:
 				ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
 				heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
 			)
+	## Patties scooped by a partner are not in our local spatula, grill, or Build
+	## arrays, but they still need snapshots so nobody repairs them into ghosts.
+	for peer_key in mp_held_net.keys():
+		var held_nid := int(mp_held_net[peer_key])
+		var hp = _patty_by_net_id(held_nid)
+		if hp == null or not is_instance_valid(hp):
+			continue
+		_mp_append_patty_snap(
+			hp, int(hp.slot_index), true,
+			ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
+			heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
+		)
 	mp_sync_grill.rpc(
 		ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
 		heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
@@ -29736,6 +30188,7 @@ func mp_sync_grill(
 			continue
 		grill[gi] = null
 		gp.queue_free()
+	_mp_cull_orphan_patties(seen)
 	_mp_applying = false
 
 
@@ -29793,6 +30246,9 @@ func mp_commit_patty_build(net_id: int) -> void:
 	_leave_grill_residue(gidx, p, false)
 	_commit_patty_to_build(p)
 	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_station(STATION_CRAFT)
+		_mp_broadcast_grill()
 
 
 func _mp_send_cat_sync() -> void:
@@ -30124,6 +30580,7 @@ func mp_social_reply(post_id: int, kind: String, text: String, argue: String) ->
 func _mp_broadcast_customers() -> void:
 	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
 		return
+	_refresh_customer_queue_timers()
 	var ids: Array = []
 	var pats: Array = []
 	var xs: Array = []
@@ -30131,6 +30588,8 @@ func _mp_broadcast_customers() -> void:
 	var waits: Array = []
 	var leaves: Array = []
 	var clocks: Array = []
+	var sodas_handed: Array = []
+	var icecreams_handed: Array = []
 	for c in customers:
 		if c == null or not is_instance_valid(c):
 			continue
@@ -30144,7 +30603,9 @@ func _mp_broadcast_customers() -> void:
 		waits.append(bool(c.is_waiting))
 		leaves.append(bool(c.is_leaving))
 		clocks.append(float(c.get("order_elapsed_sec")) if "order_elapsed_sec" in c else 0.0)
-	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks)
+		sodas_handed.append(_customer_soda_handed(c))
+		icecreams_handed.append(_customer_icecream_handed(c))
+	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -30155,7 +30616,9 @@ func mp_sync_customers(
 	zs: Array,
 	waits: Array,
 	leaves: Array,
-	clocks: Array
+	clocks: Array,
+	sodas_handed: Array = [],
+	icecreams_handed: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -30173,6 +30636,10 @@ func mp_sync_customers(
 				c._refresh_patience_bar()
 		if i < clocks.size() and "order_elapsed_sec" in c:
 			c.order_elapsed_sec = float(clocks[i])
+		if i < sodas_handed.size():
+			_mark_customer_soda_handed(c, bool(sodas_handed[i]))
+		if i < icecreams_handed.size():
+			_mark_customer_icecream_handed(c, bool(icecreams_handed[i]))
 		if i < xs.size():
 			c.global_position.x = float(xs[i])
 			c.target_x = float(xs[i])
@@ -30202,7 +30669,9 @@ func mp_sync_customers(
 			if not bool(c.get("is_leaving")) and c.has_method("leave_happy"):
 				c.leave_happy()
 			_customer_leave_apply(c, false)
+	_mp_cull_stale_tickets(seen)
 	## Keep ticket patience chips in sync with host values.
+	_refresh_customer_queue_timers()
 	_refresh_ticket_patience_bars()
 
 
@@ -30555,6 +31024,9 @@ func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float, cu
 	if cup_net_id >= 0:
 		_mp_remove_parked_cup_by_net_id(cup_net_id)
 	var root := _create_drink_cup_node()
+	if cup_net_id >= 0:
+		root.set_meta("cup_net_id", cup_net_id)
+		root.set_meta("mp_mirror", true)
 	world.add_child(root)
 	_begin_cup_melt_local(
 		root,
@@ -30567,10 +31039,112 @@ func mp_cup_melt(x: float, z: float, flavor: String, fill: float, ice: float, cu
 	_mp_applying = false
 
 
+func _mp_find_melting_cup_idx(cup_net_id: int, x: float, z: float, max_d: float = 0.28) -> int:
+	if cup_net_id >= 0:
+		for i in melting_cups.size():
+			var item: Dictionary = melting_cups[i]
+			if int(item.get("cup_net_id", -1)) == cup_net_id:
+				return i
+	var best := -1
+	var best_d := max_d
+	for i in melting_cups.size():
+		var item2: Dictionary = melting_cups[i]
+		var root = item2.get("root")
+		if root == null or not is_instance_valid(root):
+			continue
+		var p := (root as Node3D).global_position
+		var d := Vector2(x - p.x, z - p.z).length()
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _remove_melting_cup_idx(idx: int) -> void:
+	if idx < 0 or idx >= melting_cups.size():
+		return
+	var item: Dictionary = melting_cups[idx]
+	for key in ["root", "smoke", "bubbles", "crust_root", "spill_mesh"]:
+		var node = item.get(key)
+		if node != null and is_instance_valid(node):
+			(node as Node).queue_free()
+	melting_cups.remove_at(idx)
+	_stop_cup_burn_hiss_if_idle()
+
+
 @rpc("any_peer", "call_remote", "reliable")
-func mp_icecream_melt(x: float, z: float, fill: float) -> void:
+func mp_cup_melt_remove(cup_net_id: int, x: float, z: float) -> void:
+	## Partner rescued / removed a melting cup before it became final debris.
+	var idx := _mp_find_melting_cup_idx(cup_net_id, x, z)
+	if idx >= 0:
+		_remove_melting_cup_idx(idx)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_cup_melt_state(
+	cup_net_id: int,
+	x: float,
+	z: float,
+	flavor: String,
+	fill: float,
+	fill_left: float,
+	ice: float,
+	phase: String,
+	age: float,
+	rescue_age: float,
+	delay_age: float,
+	spill_done: bool,
+	spill_t: float
+) -> void:
+	## Mid-join catch-up for cups that are still melting / spilling on the grill.
+	if world == null:
+		return
+	if _mp_find_melting_cup_idx(cup_net_id, x, z, 0.16) >= 0:
+		return
+	_mp_applying = true
+	if cup_net_id >= 0:
+		_mp_remove_parked_cup_by_net_id(cup_net_id)
+	var root := _create_drink_cup_node()
+	if cup_net_id >= 0:
+		root.set_meta("cup_net_id", cup_net_id)
+		root.set_meta("mp_mirror", true)
+	world.add_child(root)
+	_begin_cup_melt_local(
+		root,
+		Vector3(x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, z),
+		flavor,
+		clampf(fill, 0.0, 1.0),
+		clampf(ice, 0.0, CUP_ICE_OVERFILL_CAP),
+		true
+	)
+	if not melting_cups.is_empty():
+		var item: Dictionary = melting_cups[melting_cups.size() - 1]
+		item["phase"] = phase
+		item["age"] = maxf(0.0, age)
+		item["rescue_age"] = maxf(0.0, rescue_age)
+		item["delay_age"] = maxf(0.0, delay_age)
+		item["fill_left"] = clampf(fill_left, 0.0, 1.0)
+		item["spill_done"] = spill_done
+		item["spill_t"] = maxf(0.0, spill_t)
+		if phase == "burn" and not spill_done and float(item.get("fill_left", 0.0)) >= 0.08:
+			_start_cup_spill_grow(item)
+			item["spill_t"] = maxf(0.0, spill_t)
+		if phase == "burn":
+			item["burn_started"] = true
+			_update_cup_grow_crust(item, clampf(age / maxf(float(item.get("life", 1.0)), 0.01), 0.0, 1.0))
+		melting_cups[melting_cups.size() - 1] = item
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_icecream_melt(melt_id: int, x: float, z: float, fill: float) -> void:
 	## Partner dropped a cone on the flat-top — mirror the slump / puddle / burn.
 	if world == null:
+		return
+	if melt_id >= 0:
+		_mp_remove_steel_icecream_local(melt_id)
+		_mp_remove_local_steel_icecream_if_id(melt_id)
+	if _mp_find_nearest_icecream_melt_idx(x, z, 0.08, melt_id) >= 0:
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	if sid != 0 and _mp_remote_icecreams.has(sid):
@@ -30580,6 +31154,8 @@ func mp_icecream_melt(x: float, z: float, fill: float) -> void:
 			_mp_set_remote_icecream_stream(held_ghost, false)
 	_mp_applying = true
 	var root := _create_icecream_cone_node(false)
+	if melt_id >= 0:
+		root.set_meta("icecream_melt_id", melt_id)
 	world.add_child(root)
 	root.global_position = Vector3(x, GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012, z)
 	_refresh_icecream_cone_visuals_for(root.get_node_or_null("SoftServeSwirl") as Node3D, fill)
@@ -30588,7 +31164,27 @@ func mp_icecream_melt(x: float, z: float, fill: float) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
+func mp_icecream_steel(cone_id: int, x: float, z: float, fill: float) -> void:
+	## Partner set a soft-serve cone on cold steel / HOLD — sit it there, no melt.
+	if world == null:
+		return
+	_mp_applying = true
+	_mp_upsert_steel_icecream_local(cone_id, x, z, clampf(fill, 0.0, 1.0))
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_icecream_unsteel(cone_id: int) -> void:
+	## Partner picked up / melted / trashed a cold-steel cone — remove our mirror.
+	_mp_applying = true
+	_mp_remove_steel_icecream_local(cone_id)
+	_mp_remove_local_steel_icecream_if_id(cone_id)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
 func mp_icecream_melt_state(
+	melt_id: int,
 	x: float,
 	z: float,
 	fill: float,
@@ -30601,8 +31197,12 @@ func mp_icecream_melt_state(
 	## Mid-join catch-up for soft-serve already melting on the flat-top.
 	if world == null:
 		return
+	if _mp_find_nearest_icecream_melt_idx(x, z, 0.08, melt_id) >= 0:
+		return
 	_mp_applying = true
 	var root := _create_icecream_cone_node(false)
+	if melt_id >= 0:
+		root.set_meta("icecream_melt_id", melt_id)
 	world.add_child(root)
 	root.global_position = Vector3(x, GRILL_SURFACE_Y + ICECREAM_CONE_R + 0.012, z)
 	_refresh_icecream_cone_visuals_for(root.get_node_or_null("SoftServeSwirl") as Node3D, fill)
@@ -30614,6 +31214,9 @@ func mp_icecream_melt_state(
 		item["charred"] = charred
 		item["fired"] = fired
 		if cone_removed:
+			var sw = item.get("swirl")
+			if sw != null and is_instance_valid(sw):
+				(sw as Node3D).reparent(world, true)
 			var r = item.get("root")
 			if r != null and is_instance_valid(r):
 				(r as Node).queue_free()
@@ -30625,7 +31228,14 @@ func mp_icecream_melt_state(
 	_mp_applying = false
 
 
-func _mp_find_nearest_icecream_melt_idx(x: float, z: float, max_d: float = 0.26) -> int:
+func _mp_find_nearest_icecream_melt_idx(
+	x: float, z: float, max_d: float = 0.26, melt_id: int = -1
+) -> int:
+	if melt_id >= 0:
+		for i in melting_icecreams.size():
+			var item_by_id: Dictionary = melting_icecreams[i]
+			if int(item_by_id.get("melt_id", -1)) == melt_id:
+				return i
 	var best := -1
 	var best_d := max_d
 	for i in melting_icecreams.size():
@@ -30641,6 +31251,37 @@ func _mp_find_nearest_icecream_melt_idx(x: float, z: float, max_d: float = 0.26)
 	return best
 
 
+func _apply_icecream_melt_scrape_visuals(item: Dictionary, scrape: float) -> void:
+	scrape = clampf(scrape, 0.08, 1.0)
+	var root = item.get("root")
+	var puddle = item.get("puddle")
+	var scale_xz := lerpf(0.16, 1.0, scrape)
+	if root != null and is_instance_valid(root):
+		(root as Node3D).scale = Vector3(scale_xz, maxf(0.12, scrape), scale_xz)
+	if puddle != null and is_instance_valid(puddle):
+		(puddle as Node3D).scale = Vector3.ONE * scale_xz
+		var mat := (puddle as MeshInstance3D).material_override as StandardMaterial3D
+		if mat:
+			var c := mat.albedo_color
+			c.a = maxf(0.04, 0.97 * scrape)
+			mat.albedo_color = c
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_icecream_melt_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	## Partner is scraping a burnt cone / soft-serve puddle; mirror its shrink/fade.
+	var idx := _mp_find_nearest_icecream_melt_idx(x, z, 0.34)
+	if idx < 0:
+		return
+	if remove:
+		mp_icecream_melt_clear(x, z)
+		return
+	var item: Dictionary = melting_icecreams[idx]
+	item["scrape"] = clampf(scrape, 0.08, 1.0)
+	_apply_icecream_melt_scrape_visuals(item, float(item["scrape"]))
+	melting_icecreams[idx] = item
+
+
 @rpc("any_peer", "call_remote", "reliable")
 func mp_icecream_cone_removed(x: float, z: float) -> void:
 	## Partner picked the burnt cone out of a melting pile; leave the cream/crust behind.
@@ -30648,6 +31289,9 @@ func mp_icecream_cone_removed(x: float, z: float) -> void:
 	if idx < 0:
 		return
 	var item: Dictionary = melting_icecreams[idx]
+	var swirl = item.get("swirl")
+	if swirl != null and is_instance_valid(swirl):
+		(swirl as Node3D).reparent(world, true)
 	var root = item.get("root")
 	if root != null and is_instance_valid(root):
 		(root as Node).queue_free()

@@ -7,6 +7,7 @@ const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
 const IDLE_SCENE_PATH := "res://assets/characters/Animations/idle.fbx"
 const RUN_SCENE_PATH := "res://assets/characters/Animations/run.fbx"
+const DISGUISE_MUSTACHE_TEX := "res://IMAGES/MUSTACHE.png"
 ## Stylized Kenney toon skins only — skip photoreal human* (blurry/weird on this mesh).
 const CHAR_SKINS: Array[String] = [
 	"res://assets/characters/Skins/skaterMaleA.png",
@@ -44,7 +45,7 @@ const ARRIVE_TURN_SEC := 0.42
 const RAGDOLL_ACTIVE_SEC := 9.5
 const RAGDOLL_TWIST_SEC := 2.2 ## Free spin window before settling onto their back.
 const RAGDOLL_DESPAWN_SEC := 5.5 ## Extra time lying around after the active flop.
-const LEAVE_FADE_SEC := 1.5
+const LEAVE_FADE_SEC := 1.2
 ## Yaw: 180 faces the cook/truck (−Z); 0 walks away down the street (+Z).
 ## Kenney mesh noses along +Z, so these match travel on ±X.
 const FACE_TRUCK_YAW := 180.0
@@ -71,6 +72,7 @@ var lane: int = 0
 var is_waiting: bool = false
 var is_leaving: bool = false
 var order_value: int = 8
+var queue_timer_active: bool = true
 ## Serve-speed clock — starts when the order ticket appears (not when meat is ready).
 var order_elapsed_sec: float = 0.0
 var _order_clock_on: bool = false
@@ -125,6 +127,7 @@ var _leave_turned: bool = false
 var _leave_yaw_from: float = FACE_TRUCK_YAW
 var _leave_fade_t: float = 0.0
 var _leave_fade_active: bool = false
+var _leave_fade_wait_for_turn: bool = false
 var _leave_fade_alpha: float = 1.0
 var _arrive_turning: bool = false
 var _arrive_turn_t: float = 0.0
@@ -698,8 +701,16 @@ func _apply_mood_tint(mood: String) -> void:
 
 func _begin_leave_fade() -> void:
 	_leave_fade_t = 0.0
-	_leave_fade_active = true
+	_leave_fade_active = false
+	_leave_fade_wait_for_turn = true
 	_leave_fade_alpha = 1.0
+	_apply_leave_fade_alpha(1.0)
+
+
+func _start_leave_fade_now() -> void:
+	_leave_fade_t = 0.0
+	_leave_fade_wait_for_turn = false
+	_leave_fade_active = true
 	_apply_leave_fade_alpha(1.0)
 
 
@@ -709,6 +720,8 @@ func _update_leave_fade(delta: float) -> void:
 	_leave_fade_t += delta
 	var alpha := 1.0 - clampf(_leave_fade_t / LEAVE_FADE_SEC, 0.0, 1.0)
 	_apply_leave_fade_alpha(alpha)
+	if alpha <= 0.01:
+		queue_free()
 
 
 func _apply_leave_fade_alpha(alpha: float) -> void:
@@ -988,6 +1001,8 @@ func _process(delta: float) -> void:
 			if turn_t >= 1.0:
 				_leave_turned = true
 				rotation_degrees.y = FACE_AWAY_YAW
+				if _leave_fade_wait_for_turn:
+					_start_leave_fade_now()
 				if _powder_hit:
 					_reset_skeleton_pose()
 					if _anim_player:
@@ -996,6 +1011,7 @@ func _process(delta: float) -> void:
 			return
 		## Facing away — walk off down the sidewalk at ground level (never behind matte).
 		global_position.z += delta * (2.15 if _powder_hit else 2.6)
+		global_position.z = minf(global_position.z, MATTE_FRONT_Z_MAX)
 		_play_anim("walk")
 		if _body:
 			var step := absf(sin(_leave_spin * 9.0)) * 0.02
@@ -1008,7 +1024,7 @@ func _process(delta: float) -> void:
 				_body.rotation_degrees.x = sin(_powder_panic_t * 8.5) * 7.0
 			else:
 				_body.rotation_degrees = Vector3.ZERO
-		if global_position.z >= MATTE_FRONT_Z_MAX:
+		if global_position.z >= MATTE_FRONT_Z_MAX and not _leave_fade_active:
 			queue_free()
 		return
 
@@ -1079,26 +1095,36 @@ func _process(delta: float) -> void:
 	if is_waiting:
 		## Drain pauses during chat / mid-bite, but the bar stays visible either way.
 		## Co-op guests mirror host patience — don't expire locally (desyncs tickets).
-		if not dialogue_open and not mp_host_driven and not _eating:
+		if queue_timer_active and not dialogue_open and not mp_host_driven and not _eating:
 			patience -= delta
 		_refresh_patience_bar()
-		_update_wait_grobble(delta)
-		if patience <= 0.0 and not mp_host_driven and not _eating:
+		if queue_timer_active:
+			_update_wait_grobble(delta)
+		if queue_timer_active and patience <= 0.0 and not mp_host_driven and not _eating:
 			leave_mad()
 			patience_expired.emit(self)
 	## Ticket clock runs from the moment the slip is pinned until serve / leave.
-	if _order_clock_on and not is_leaving and not mp_host_driven:
+	if _order_clock_on and queue_timer_active and not is_leaving and not mp_host_driven:
 		order_elapsed_sec += delta
 
 
-func start_order_clock() -> void:
+func start_order_clock(reset_elapsed: bool = true) -> void:
 	## Call when the order ticket is created.
-	order_elapsed_sec = 0.0
+	if reset_elapsed:
+		order_elapsed_sec = 0.0
 	_order_clock_on = true
 
 
 func stop_order_clock() -> void:
 	_order_clock_on = false
+
+
+func set_queue_timer_active(active: bool) -> void:
+	queue_timer_active = active
+	if active:
+		start_order_clock(false)
+	else:
+		stop_order_clock()
 
 
 func speed_rating(burnt: bool = false) -> Dictionary:
@@ -2381,48 +2407,29 @@ func _build_fake_mustache() -> void:
 	## mustache sits on the snout — not scaled into the sky by the mesh transform.
 	_mustache_root.position = _disguise_mustache_local()
 	add_child(_mustache_root)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.48, 0.24, 0.10)
-	mat.roughness = 0.64
-	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var s := DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE
-	var r := 0.015 * s
-	var h := 0.14 * s
-	for side in [-1.0, 1.0]:
-		var bar := MeshInstance3D.new()
-		var cap := CapsuleMesh.new()
-		cap.radius = r
-		cap.height = h
-		bar.mesh = cap
-		bar.material_override = mat
-		bar.rotation_degrees = Vector3(88.0, side * -5.0, side * 72.0)
-		bar.position = Vector3(side * 0.050 * s, -0.008 * s, 0.016 * s)
-		_mustache_root.add_child(bar)
-
-		var curl := MeshInstance3D.new()
-		var curl_ball := SphereMesh.new()
-		curl_ball.radius = r * 1.35
-		curl_ball.height = r * 2.7
-		curl.mesh = curl_ball
-		curl.material_override = mat
-		curl.position = Vector3(side * 0.112 * s, 0.010 * s, 0.018 * s)
-		curl.scale = Vector3(1.0, 0.82, 1.0)
-		_mustache_root.add_child(curl)
-	var mid := MeshInstance3D.new()
-	var ball := SphereMesh.new()
-	ball.radius = r * 1.55
-	ball.height = r * 2.7
-	mid.mesh = ball
-	mid.material_override = mat
-	mid.position = Vector3(0.0, -0.010 * s, 0.022 * s)
-	mid.scale = Vector3(1.15, 0.72, 0.82)
-	_mustache_root.add_child(mid)
+	var mustache_s := DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE
+	var card := MeshInstance3D.new()
+	card.name = "MustacheCard"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.25 * mustache_s, 0.156 * mustache_s)
+	card.mesh = quad
+	card.position = Vector3(0.0, -0.016 * mustache_s, 0.040 * mustache_s)
+	var card_mat := StandardMaterial3D.new()
+	card_mat.albedo_texture = load(DISGUISE_MUSTACHE_TEX) as Texture2D
+	card_mat.albedo_color = Color.WHITE
+	card_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	card_mat.alpha_scissor_threshold = 0.08
+	card_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	card_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	card_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	card.material_override = card_mat
+	_mustache_root.add_child(card)
 
 
 func _disguise_hat_local() -> Vector3:
 	return Vector3(
 		0.0,
-		DISGUISE_CAT_MESH_Y + 0.57 * (DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE),
+		DISGUISE_CAT_MESH_Y + 0.532 * (DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE),
 		0.01 * (DISGUISE_CAT_SCALE_Z / _WINDOW_CAT_MESH_SCALE)
 	)
 
@@ -2437,23 +2444,23 @@ func _build_disguise_top_hat() -> void:
 	add_child(_disguise_hat_root)
 
 	var black_mat := StandardMaterial3D.new()
-	black_mat.albedo_color = Color(0.018, 0.015, 0.014)
-	black_mat.roughness = 0.38
-	black_mat.metallic = 0.05
-	black_mat.clearcoat_enabled = true
-	black_mat.clearcoat = 0.45
+	black_mat.albedo_color = Color(0.012, 0.011, 0.010)
+	black_mat.roughness = 0.82
+	black_mat.metallic = 0.0
+	black_mat.clearcoat_enabled = false
 	var band_mat := StandardMaterial3D.new()
-	band_mat.albedo_color = Color(0.34, 0.08, 0.07)
-	band_mat.roughness = 0.54
+	band_mat.albedo_color = Color(0.22, 0.045, 0.04)
+	band_mat.roughness = 0.78
+	band_mat.metallic = 0.0
 
-	var s := DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE
+	var s := DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE * 1.18
 	var brim := MeshInstance3D.new()
 	brim.name = "TopHatBrim"
 	var brim_mesh := CylinderMesh.new()
-	brim_mesh.top_radius = 0.20 * s
-	brim_mesh.bottom_radius = 0.24 * s
-	brim_mesh.height = 0.030 * s
-	brim_mesh.radial_segments = 36
+	brim_mesh.top_radius = 0.215 * s
+	brim_mesh.bottom_radius = 0.215 * s
+	brim_mesh.height = 0.022 * s
+	brim_mesh.radial_segments = 28
 	brim.mesh = brim_mesh
 	brim.material_override = black_mat
 	_disguise_hat_root.add_child(brim)
@@ -2461,25 +2468,37 @@ func _build_disguise_top_hat() -> void:
 	var crown := MeshInstance3D.new()
 	crown.name = "TopHatCrown"
 	var crown_mesh := CylinderMesh.new()
-	crown_mesh.top_radius = 0.135 * s
-	crown_mesh.bottom_radius = 0.155 * s
-	crown_mesh.height = 0.22 * s
-	crown_mesh.radial_segments = 36
+	crown_mesh.top_radius = 0.145 * s
+	crown_mesh.bottom_radius = 0.145 * s
+	crown_mesh.height = 0.205 * s
+	crown_mesh.radial_segments = 28
 	crown.mesh = crown_mesh
 	crown.material_override = black_mat
-	crown.position = Vector3(0.0, 0.12 * s, 0.0)
+	crown.position = Vector3(0.0, 0.106 * s, 0.0)
 	_disguise_hat_root.add_child(crown)
+
+	var cap := MeshInstance3D.new()
+	cap.name = "TopHatTopCap"
+	var cap_mesh := CylinderMesh.new()
+	cap_mesh.top_radius = 0.148 * s
+	cap_mesh.bottom_radius = 0.148 * s
+	cap_mesh.height = 0.014 * s
+	cap_mesh.radial_segments = 28
+	cap.mesh = cap_mesh
+	cap.material_override = black_mat
+	cap.position = Vector3(0.0, 0.214 * s, 0.0)
+	_disguise_hat_root.add_child(cap)
 
 	var band := MeshInstance3D.new()
 	band.name = "TopHatBand"
 	var band_mesh := CylinderMesh.new()
-	band_mesh.top_radius = 0.158 * s
-	band_mesh.bottom_radius = 0.160 * s
-	band_mesh.height = 0.026 * s
-	band_mesh.radial_segments = 36
+	band_mesh.top_radius = 0.149 * s
+	band_mesh.bottom_radius = 0.149 * s
+	band_mesh.height = 0.028 * s
+	band_mesh.radial_segments = 28
 	band.mesh = band_mesh
 	band.material_override = band_mat
-	band.position = Vector3(0.0, 0.055 * s, 0.0)
+	band.position = Vector3(0.0, 0.052 * s, 0.0)
 	_disguise_hat_root.add_child(band)
 
 

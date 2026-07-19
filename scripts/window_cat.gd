@@ -39,6 +39,7 @@ const FED_HOLD_SEC := 1.15
 const PATTY_EAT_WIDTH_BOOST := 0.25 ## +25% width while chewing a patty, before run-away.
 const RUN_SEC := 1.35
 const AFTER_BURGER_HIDE_SEC := 95.0
+const DELIVERY_TURN_SEC := 0.45
 
 signal fed(kind: String)
 signal petted
@@ -48,7 +49,7 @@ signal became_full_sized
 var _visual: Node3D = null
 var _area: Area3D = null
 var _anim: AnimationPlayer = null
-var _state: String = "hidden" ## hidden | rising | peek | lowering | fed_hold | running
+var _state: String = "hidden" ## hidden | rising | peek | delivery_turning | lowering | fed_hold | running
 var _timer: float = 4.0
 var _bob: float = 0.0
 var _pet_squash: float = 0.0
@@ -72,6 +73,7 @@ var _patty_eat_wide: float = 0.0
 var mp_puppet: bool = false
 ## When > 0, next peek uses this hold time (cat delivery).
 var _peek_override_sec: float = 0.0
+var _delivery_peek_active: bool = false
 
 
 func _ready() -> void:
@@ -540,6 +542,22 @@ func _process(delta: float) -> void:
 			position.y = _shown_y() + sin(_bob * 2.4) * 0.012
 			rotation_degrees.y = FACE_COOK_YAW + sin(_bob * 1.3) * 6.0
 			if _timer <= 0.0:
+				if _delivery_peek_active:
+					_state = "delivery_turning"
+					_timer = DELIVERY_TURN_SEC
+				else:
+					_state = "lowering"
+					_timer = 0.5
+		"delivery_turning":
+			position.x = _home_x()
+			position.z = _home_z()
+			visible = true
+			position.y = _shown_y() + sin(_bob * 2.4) * 0.008
+			var turn_u := 1.0 - clampf(_timer / DELIVERY_TURN_SEC, 0.0, 1.0)
+			var turn_ease := turn_u * turn_u * (3.0 - 2.0 * turn_u)
+			rotation_degrees.y = lerpf(FACE_COOK_YAW, FACE_AWAY_YAW, turn_ease)
+			if _timer <= 0.0:
+				_delivery_peek_active = false
 				_state = "lowering"
 				_timer = 0.5
 		"fed_hold":
@@ -570,11 +588,13 @@ func _process(delta: float) -> void:
 				_finish_run_away()
 		"lowering":
 			position.x = _home_x()
-			position.z = _home_z()
 			visible = true
 			var t2 := 1.0 - clampf(_timer / 0.5, 0.0, 1.0)
 			var ease2 := t2 * t2
 			position.y = lerpf(_shown_y(), _hidden_y(), ease2)
+			position.z = lerpf(_home_z(), _home_z() + APPROACH_START_EXTRA + _giant * 0.25, ease2)
+			if not _delivery_peek_active:
+				rotation_degrees.y = lerpf(rotation_degrees.y, FACE_AWAY_YAW, minf(1.0, t2 * 1.8))
 			if _timer <= 0.0:
 				_state = "hidden"
 				_timer = REPEEK_SEC
@@ -643,6 +663,7 @@ func request_delivery_peek(hold_sec: float = 5.5) -> void:
 		_clear_mouth_burger()
 		_patty_eat_wide = 0.0
 	_peek_override_sec = maxf(hold_sec, 3.5)
+	_delivery_peek_active = true
 	_state = "rising"
 	_timer = 0.45
 	visible = true
