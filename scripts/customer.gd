@@ -116,6 +116,8 @@ var is_terrorist: bool = false
 var is_disguise_cat: bool = false
 var _mustache_root: Node3D = null
 var _disguise_cat_mesh: Node3D = null
+## Match max window-cat presence — fills the service opening at the customer stand.
+const DISGUISE_CAT_MESH_SCALE := 6.2
 ## Fire-extinguisher powder stuck to the toon (white spheres that build up).
 var _powder_hit: bool = false
 var _powdering: bool = false ## Standing still while powder coats them.
@@ -1968,7 +1970,8 @@ func feed_bacon_snack(restore_ratio: float = 0.10) -> bool:
 ## Serve fly animation target — roughly lip height in the service window.
 func mouth_global() -> Vector3:
 	if is_disguise_cat:
-		return global_position + Vector3(0.0, 0.92, 0.14)
+		## Snout on the oversized stand-in cat.
+		return global_position + Vector3(0.0, 1.55, 0.35)
 	return global_position + Vector3(0.0, 1.18, 0.06)
 
 
@@ -1997,15 +2000,15 @@ func apply_disguise_cat_look() -> void:
 			_disguise_cat_mesh = packed.instantiate() as Node3D
 			if _disguise_cat_mesh != null:
 				_disguise_cat_mesh.name = "DisguiseCatMesh"
-				## Full-size window cat vibes — fills the service opening.
-				_disguise_cat_mesh.scale = Vector3.ONE * 2.55
-				_disguise_cat_mesh.position = Vector3(0.0, -0.02, 0.0)
+				## Huge — same presence as max window-cat chonk, planted at the stand.
+				_disguise_cat_mesh.scale = Vector3.ONE * DISGUISE_CAT_MESH_SCALE
+				_disguise_cat_mesh.position = Vector3(0.0, -0.12, 0.05)
 				_body.add_child(_disguise_cat_mesh)
 				var anim := _disguise_cat_mesh.find_child("AnimationPlayer", true, false) as AnimationPlayer
 				if anim != null and anim.has_animation("CINEMA_4D_Main"):
 					anim.get_animation("CINEMA_4D_Main").loop_mode = Animation.LOOP_LINEAR
 					anim.play("CINEMA_4D_Main")
-					anim.speed_scale = 0.9
+					anim.speed_scale = 0.85
 	_build_fake_mustache()
 
 
@@ -2016,30 +2019,40 @@ func _build_fake_mustache() -> void:
 		_mustache_root.queue_free()
 	_mustache_root = Node3D.new()
 	_mustache_root.name = "FakeMustache"
-	## Snout height on the scaled cat mesh.
-	_mustache_root.position = Vector3(0.0, 0.58, 0.42)
-	_body.add_child(_mustache_root)
+	## Local snout on the cat mesh so it scales with DISGUISE_CAT_MESH_SCALE.
+	var parent: Node3D = _body
+	if _disguise_cat_mesh != null and is_instance_valid(_disguise_cat_mesh):
+		parent = _disguise_cat_mesh
+		_mustache_root.position = Vector3(0.0, 0.23, 0.165)
+	else:
+		var s := DISGUISE_CAT_MESH_SCALE / 2.55
+		_mustache_root.position = Vector3(0.0, 0.58 * s, 0.42 * s)
+	parent.add_child(_mustache_root)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.06, 0.05, 0.05)
 	mat.roughness = 0.9
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	## Local sizes — mesh parent already scales them up.
+	var on_mesh := parent == _disguise_cat_mesh
+	var r := 0.0125 if on_mesh else 0.032 * (DISGUISE_CAT_MESH_SCALE / 2.55)
+	var h := 0.059 if on_mesh else 0.15 * (DISGUISE_CAT_MESH_SCALE / 2.55)
 	for side in [-1.0, 1.0]:
 		var curl := MeshInstance3D.new()
 		var cap := CapsuleMesh.new()
-		cap.radius = 0.032
-		cap.height = 0.15
+		cap.radius = r
+		cap.height = h
 		curl.mesh = cap
 		curl.material_override = mat
 		curl.rotation_degrees = Vector3(88.0, 0.0, side * 38.0)
-		curl.position = Vector3(side * 0.055, -0.01, 0.02)
+		curl.position = Vector3(side * (0.022 if on_mesh else 0.055), -0.004, 0.008)
 		_mustache_root.add_child(curl)
 	var mid := MeshInstance3D.new()
 	var ball := SphereMesh.new()
-	ball.radius = 0.038
-	ball.height = 0.076
+	ball.radius = r * 1.2
+	ball.height = r * 2.4
 	mid.mesh = ball
 	mid.material_override = mat
-	mid.position = Vector3(0.0, -0.015, 0.01)
+	mid.position = Vector3(0.0, -0.006, 0.004)
 	_mustache_root.add_child(mid)
 
 

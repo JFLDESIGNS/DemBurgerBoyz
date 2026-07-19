@@ -5444,7 +5444,8 @@ func _spawn_disguise_cat_customer() -> void:
 	var order: Array[String] = _disguise_cat_order()
 	var color := Color(0.55, 0.45, 0.4)
 	var patience := 75.0
-	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
+	## Always front of line so the huge cat is in the service window.
+	var lane := 0
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -5508,7 +5509,7 @@ func _try_window_cat_click(screen_pos: Vector2) -> bool:
 	return true
 
 
-func _find_disguise_cat_at_screen(screen_pos: Vector2, max_px: float = 72.0) -> Node3D:
+func _find_disguise_cat_at_screen(screen_pos: Vector2, max_px: float = 120.0) -> Node3D:
 	if camera == null:
 		return null
 	var best: Node3D = null
@@ -5526,8 +5527,8 @@ func _find_disguise_cat_at_screen(screen_pos: Vector2, max_px: float = 72.0) -> 
 		if camera.is_position_behind(mouth):
 			continue
 		var d := screen_pos.distance_to(camera.unproject_position(mouth))
-		## Also accept body center — easier click on the big cat.
-		var body_pt: Vector3 = c.global_position + Vector3(0.0, 0.55, 0.0)
+		## Huge body — generous click on torso / head.
+		var body_pt: Vector3 = c.global_position + Vector3(0.0, 1.1, 0.0)
 		if not camera.is_position_behind(body_pt):
 			d = minf(d, screen_pos.distance_to(camera.unproject_position(body_pt)))
 		if d < best_d:
@@ -18997,15 +18998,30 @@ func _spawn_customer_local(
 		c.apply_disguise_cat_look()
 		_disguise_cat_active = true
 		_park_window_cat_for_disguise()
+		## Front of the line, planted at the stand — huge cat fills the window.
+		customers.erase(c)
+		customers.insert(0, c)
+		_reposition_customers()
+		var stand_x: float = CustomerScript.lane_x_for(0)
+		c.lane = 0
+		c.target_x = stand_x
+		c.position = Vector3(stand_x, CustomerScript.STAND_Y, CustomerScript.WAIT_Z)
+		c.rotation_degrees = Vector3(0.0, CustomerScript.FACE_TRUCK_YAW, 0.0)
+		c.is_waiting = true
+		if not tickets.has(c):
+			_create_ticket(c)
+		selected_customer = c
+		_highlight_tickets()
 		_flash("Odd customer… is that a mustache?", Color("CE93D8"))
 
 
 func _on_customer_arrived(customer: Node3D) -> void:
 	if customer != null and bool(customer.get("is_terrorist")):
 		return
-	## Disguise cat doesn't care about a filthy grill.
+	## Disguise cat doesn't care about a filthy grill — ticket already pinned on spawn.
 	if customer != null and bool(customer.get("is_disguise_cat")):
-		_create_ticket(customer)
+		if not tickets.has(customer):
+			_create_ticket(customer)
 		if selected_customer == null:
 			selected_customer = customer
 			_highlight_tickets()
@@ -19222,6 +19238,10 @@ func _reposition_customers() -> void:
 
 func _create_ticket(customer: Node3D) -> void:
 	## Torn guest-check slip pinned on the window — handwriting + paper feel.
+	if customer == null or not is_instance_valid(customer):
+		return
+	if tickets.has(customer):
+		return
 	## Wrap owns layout size so non-selected slips can shrink without layout gaps.
 	var wrap := Control.new()
 	wrap.name = "TicketWrap"
@@ -22016,20 +22036,11 @@ func _update_station_cheese_melt(_delta: float) -> void:
 			cheesed += 1
 			if p2.cheese_ready():
 				melted += 1
+		## Always reconcile stack cheese ↔ patty.has_cheese (strips false melt art).
+		_sync_station_cheese_items(i)
 		if cheesed <= 0:
+			st["cheese_melt_flashed"] = false
 			continue
-		var items: Array = st["items"]
-		var cheese_count := 0
-		for item in items:
-			if str(item) == "cheese":
-				cheese_count += 1
-		var added := 0
-		while cheese_count + added < cheesed:
-			items.append("cheese")
-			added += 1
-		if added > 0:
-			st["items"] = _normalize_burger_stack(items)
-			_refresh_station(i)
 		## Flash once when every cheesed patty on this board has finished melting.
 		if melted >= cheesed and melted > 0:
 			## Use a light flag on the station dict so we don't spam.
@@ -22316,16 +22327,13 @@ func _refresh_station(index: int) -> void:
 
 
 func _station_patty_has_cheese(st: Dictionary, pidx: int) -> bool:
+	## Only the patty's own melt state — never infer from leftover "cheese" stack items
+	## (that painted melt art onto bare patties in doubles/triples).
 	var patties: Array = st.get("patties", [])
-	if pidx >= 0 and pidx < patties.size():
-		var p = patties[pidx]
-		if p != null and is_instance_valid(p) and bool(p.get("has_cheese")):
-			return true
-	var cheese_n := 0
-	for item in st.get("items", []):
-		if str(item) == "cheese":
-			cheese_n += 1
-	return pidx < cheese_n
+	if pidx < 0 or pidx >= patties.size():
+		return false
+	var p = patties[pidx]
+	return p != null and is_instance_valid(p) and bool(p.get("has_cheese"))
 
 
 func _station_patty_layer_tex(st: Dictionary, pidx: int, with_cheese: bool) -> Texture2D:
@@ -22552,6 +22560,7 @@ func _station_has_melting_cheese(station_index: int) -> bool:
 
 func _sync_station_cheese_items(station_index: int) -> void:
 	## Order matching counts cheese as soon as it's on a patty (melt is visual only).
+	## Keep item count == cheesed patties (add missing, strip orphans).
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
 	var st: Dictionary = stations[station_index]
@@ -22564,10 +22573,24 @@ func _sync_station_cheese_items(station_index: int) -> void:
 	for item in items:
 		if str(item) == "cheese":
 			cheese_count += 1
-	if cheese_count >= cheesed:
-		return
-	for _i in range(cheesed - cheese_count):
+	var changed := false
+	while cheese_count > cheesed:
+		var ri := -1
+		for j in range(items.size() - 1, -1, -1):
+			if str(items[j]) == "cheese":
+				ri = j
+				break
+		if ri < 0:
+			break
+		items.remove_at(ri)
+		cheese_count -= 1
+		changed = true
+	while cheese_count < cheesed:
 		items.append("cheese")
+		cheese_count += 1
+		changed = true
+	if not changed:
+		return
 	st["items"] = _normalize_burger_stack(items)
 	_refresh_station(station_index)
 

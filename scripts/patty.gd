@@ -596,6 +596,13 @@ func _process(delta: float) -> void:
 	if _steam:
 		_steam.emitting = cooking
 	_update_ready_cues()
+	## Drop orphan melt mesh if has_cheese was cleared without remove_cheese().
+	if not has_cheese and _cheese_root != null:
+		if is_instance_valid(_cheese_root):
+			_cheese_root.queue_free()
+		_cheese_root = null
+		_cheese_flaps.clear()
+		_cheese_mat = null
 	## Cheese keeps melting anywhere — grill, HOLD, spatula, or Build board.
 	## Guests take melt from host snapshots so co-op doesn't desync scoop-ready.
 	if has_cheese and cheese_melt < 1.0 and not mp_puppet:
