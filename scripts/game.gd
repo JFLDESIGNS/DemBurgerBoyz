@@ -10658,10 +10658,11 @@ func _build_soda_station() -> void:
 	var tank_xs: Array[float] = [-0.26, 0.0, 0.26]
 	for i in SODA_FLAVORS.size():
 		var fid: String = SODA_FLAVORS[i]
-		var tank_mat := _add_soda_flavor_tank(root, fid, Vector3(tank_xs[i], 0.66, 0.0))
+		var tank_pos := Vector3(tank_xs[i], 0.66, 0.0)
+		var tank_mat := _add_soda_flavor_tank(root, fid, tank_pos)
 		soda_flavor_mats[fid] = tank_mat
-
-		## Big pick volume on the jug itself (proud of the cabinet so cola isn't stolen by CUPS).
+		var tank_node := root.get_node_or_null("Tank_%s" % fid) as Node3D
+		## Hit volume matches the glass cylinder (no overlap / forward offset).
 		var area := Area3D.new()
 		area.name = "FlavorArea_%s" % fid
 		area.input_ray_pickable = true
@@ -10669,13 +10670,18 @@ func _build_soda_station() -> void:
 		area.collision_mask = 0
 		area.monitoring = false
 		area.monitorable = true
-		area.position = Vector3(tank_xs[i], 0.68, 0.08)
 		var shape := CollisionShape3D.new()
-		var box := BoxShape3D.new()
-		box.size = Vector3(0.28, 0.40, 0.34)
-		shape.shape = box
+		var cyl := CylinderShape3D.new()
+		cyl.radius = 0.125
+		cyl.height = 0.30
+		shape.shape = cyl
+		shape.position = Vector3(0.0, 0.0, 0.0)
 		area.add_child(shape)
-		root.add_child(area)
+		if tank_node != null:
+			tank_node.add_child(area)
+		else:
+			area.position = tank_pos
+			root.add_child(area)
 		soda_flavor_areas[fid] = area
 
 	## Pour spots shifted camera-left on the face (local −X = world +X with yaw 180).
@@ -12448,9 +12454,12 @@ func _soda_flavor_under_cursor(screen_pos: Vector2) -> bool:
 
 
 func _soda_flavor_id_at(screen_pos: Vector2) -> String:
-	## Ray first, then a generous screen hit on the jug centers.
+	## Prefer nearest tank center on screen — overlapping/offset hitboxes used to steal clicks.
 	if camera == null or soda_flavor_areas.is_empty():
 		return ""
+	var best_id := ""
+	var best_d := 58.0
+	var ray_id := ""
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
@@ -12462,18 +12471,24 @@ func _soda_flavor_id_at(screen_pos: Vector2) -> String:
 		var col = hit.get("collider")
 		for fid in soda_flavor_areas.keys():
 			if soda_flavor_areas[fid] == col:
-				return str(fid)
-	var best_id := ""
-	var best_d := 78.0
+				ray_id = str(fid)
+				break
 	for fid in soda_flavor_areas.keys():
 		var area: Area3D = soda_flavor_areas[fid]
 		if area == null or not is_instance_valid(area):
 			continue
-		var d := screen_pos.distance_to(camera.unproject_position(area.global_position))
+		## Aim at tank mid-glass (area is parented on the jug now).
+		var tip: Vector3 = area.global_position
+		if camera.is_position_behind(tip):
+			continue
+		var d := screen_pos.distance_to(camera.unproject_position(tip))
 		if d < best_d:
 			best_d = d
 			best_id = str(fid)
-	return best_id
+	## If ray and nearest disagree but both are close, trust nearest (fixes angled offset).
+	if best_id != "":
+		return best_id
+	return ray_id
 
 
 func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
@@ -15011,9 +15026,9 @@ func _build_cheese_station_prop() -> void:
 	cut_col.albedo_color = Color(1.0, 0.9, 0.42)
 	cut_col.roughness = 0.48
 	cut_col.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	## --- Wheel (slightly larger) with a ~55° triangle wedge removed ---
+	## --- Wheel further from the cook (higher Z = toward window) ---
 	var wheel_yaw := 18.0
-	var wheel_pos := Vector3(-0.08, 0.034, -0.04)
+	var wheel_pos := Vector3(-0.06, 0.034, 0.08)
 	var wheel_r := 0.118
 	var wheel_h := 0.062
 	var wheel := MeshInstance3D.new()
@@ -15070,14 +15085,14 @@ func _build_cheese_station_prop() -> void:
 		emat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 		eye.material_override = emat
 		root.add_child(eye)
-	## --- Stack of slices in front of the wheel (this is what you grab) ---
+	## --- Slice stack on the cook side of the wheel (lower Z = closer to player) ---
 	var slice_mat := StandardMaterial3D.new()
 	slice_mat.albedo_color = Color(1.0, 0.88, 0.22)
 	slice_mat.roughness = 0.48
 	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 	var stack_root := Node3D.new()
 	stack_root.name = "CheeseSliceStack"
-	stack_root.position = Vector3(-0.02, 0.004, 0.155)
+	stack_root.position = Vector3(-0.02, 0.004, -0.14)
 	root.add_child(stack_root)
 	cheese_stack_anchor = stack_root
 	var stack_n := 7
@@ -15927,33 +15942,36 @@ func _maybe_record_social_review(
 	stars: float,
 	kind: String = "serve",
 	tip: int = 0,
-	station_index: int = -1
+	station_index: int = -1,
+	customer: Node3D = null
 ) -> void:
 	## Host/solo: ~70% of customers leave a visible social post right away.
 	if mp_enabled and not NetManager.is_host():
 		return
 	if randf() >= SOCIAL_REVIEW_CHANCE:
 		return
-	_commit_social_review(stars, kind, tip, station_index)
+	_commit_social_review(stars, kind, tip, station_index, customer)
 
 
 func _force_record_social_review(
 	stars: float,
 	kind: String = "angry",
 	tip: int = 0,
-	station_index: int = -1
+	station_index: int = -1,
+	customer: Node3D = null
 ) -> void:
 	## Guaranteed feed post (e.g. extinguisher spray victims).
 	if mp_enabled and not NetManager.is_host():
 		return
-	_commit_social_review(stars, kind, tip, station_index)
+	_commit_social_review(stars, kind, tip, station_index, customer)
 
 
 func _commit_social_review(
 	stars: float,
 	kind: String,
 	tip: int = 0,
-	station_index: int = -1
+	station_index: int = -1,
+	customer: Node3D = null
 ) -> void:
 	var who := SOCIAL_REVIEWER_NAMES[randi() % SOCIAL_REVIEWER_NAMES.size()]
 	var text := SocialReviewsScript.generate(stars, kind, tip)
@@ -15968,8 +15986,19 @@ func _commit_social_review(
 				img.decompress()
 			pic_png = img.save_png_to_buffer()
 	_apply_social_review(stars, who, text, pic)
+	_show_customer_review_stars(customer, stars)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
 		mp_social_review.rpc(stars, who, text, pic_png)
+		var nid := _customer_net_id(customer)
+		if nid >= 0:
+			mp_customer_review_stars.rpc(nid, stars)
+
+
+func _show_customer_review_stars(customer: Node3D, stars: float) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	if customer.has_method("show_review_stars"):
+		customer.show_review_stars(stars)
 
 
 func _apply_social_review(stars: float, who: String, text: String, pic: Texture2D = null) -> void:
@@ -18866,13 +18895,13 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		combo = 0
 		## Extinguisher victims always roast you on the feed.
 		if bool(customer.get("_powder_hit")):
-			_force_record_social_review(1.0, "spray")
+			_force_record_social_review(1.0, "spray", 0, -1, customer)
 		elif bool(customer.get_meta("left_gross", false)):
 			## Filthy-grill walkouts — only half leave a 1★ review.
 			if randf() < CRUST_GROSS_REVIEW_CHANCE:
-				_force_record_social_review(1.0, "angry")
+				_force_record_social_review(1.0, "angry", 0, -1, customer)
 		else:
-			_maybe_record_social_review(1.0, "angry")
+			_maybe_record_social_review(1.0, "angry", 0, -1, customer)
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
 
 
@@ -19291,11 +19320,11 @@ func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
 
 func _ticket_paper_texture(selected: bool) -> ImageTexture:
 	## Cache two paper plates so we don't rebuild per ticket.
-	## Meta "wm1" = includes Burger Pals watermark stamp.
+	## Meta "wm2" = larger Burger Pals watermark (~2× prior).
 	if selected:
-		if _ticket_paper_tex_sel != null and bool(_ticket_paper_tex_sel.get_meta("wm1", false)):
+		if _ticket_paper_tex_sel != null and bool(_ticket_paper_tex_sel.get_meta("wm2", false)):
 			return _ticket_paper_tex_sel
-	elif _ticket_paper_tex != null and bool(_ticket_paper_tex.get_meta("wm1", false)):
+	elif _ticket_paper_tex != null and bool(_ticket_paper_tex.get_meta("wm2", false)):
 		return _ticket_paper_tex
 	var w := 128
 	var h := 160
@@ -19316,7 +19345,7 @@ func _ticket_paper_texture(selected: bool) -> ImageTexture:
 			img.set_pixel(x, y, c)
 	_stamp_ticket_logo_watermark(img)
 	var tex := ImageTexture.create_from_image(img)
-	tex.set_meta("wm1", true)
+	tex.set_meta("wm2", true)
 	if selected:
 		_ticket_paper_tex_sel = tex
 	else:
@@ -19339,14 +19368,14 @@ func _stamp_ticket_logo_watermark(img: Image) -> void:
 	logo.convert(Image.FORMAT_RGBA8)
 	var tw := img.get_width()
 	var th := img.get_height()
-	## ~55% of slip width, centered a bit low so it sits under the order code.
-	var mark_w := int(float(tw) * 0.58)
+	## ~2× prior stamp — nearly full slip width, centered mid-ticket.
+	var mark_w := int(float(tw) * 0.94)
 	var aspect := float(logo.get_height()) / maxf(1.0, float(logo.get_width()))
 	var mark_h := maxi(8, int(float(mark_w) * aspect))
 	logo.resize(mark_w, mark_h, Image.INTERPOLATE_LANCZOS)
 	var ox := (tw - mark_w) / 2
-	var oy := int(float(th) * 0.42) - mark_h / 2
-	var strength := 0.085 ## low opacity black stamp
+	var oy := int(float(th) * 0.48) - mark_h / 2
+	var strength := 0.08 ## low opacity black stamp
 	for py in mark_h:
 		for px in mark_w:
 			var sx := ox + px
@@ -22999,7 +23028,7 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 			review_kind = "meh"
 		elif review_stars <= 1.5:
 			review_kind = "angry"
-		_maybe_record_social_review(review_stars, review_kind, tip_amt, station_index)
+		_maybe_record_social_review(review_stars, review_kind, tip_amt, station_index, cust)
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
 			and not _customer_soda_handed(cust):
@@ -25539,6 +25568,15 @@ func mp_social_review(stars: float, who: String, text: String, pic_png: PackedBy
 		if img.load_png_from_buffer(pic_png) == OK:
 			pic = ImageTexture.create_from_image(img)
 	_apply_social_review(stars, who, text, pic)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_customer_review_stars(net_id: int, stars: float) -> void:
+	## Guest: float ★ rating above the customer who just posted.
+	if NetManager.is_host():
+		return
+	var c = _customer_by_net_id(net_id)
+	_show_customer_review_stars(c, stars)
 
 
 @rpc("any_peer", "call_remote", "reliable")

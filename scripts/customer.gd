@@ -92,6 +92,8 @@ var _bubble_bg: MeshInstance3D
 var _bar_root: Node3D
 var _bar_bg: MeshInstance3D
 var _bar_fill: MeshInstance3D
+var _review_stars: Label3D = null
+var _review_stars_tween: Tween = null
 
 var _bounce: float = 0.0
 var _bobble_phase: float = 0.0
@@ -1106,6 +1108,50 @@ func bounce_happy() -> void:
 	tw.tween_property(_body, "position:y", _base_body_y, 0.18).set_trans(Tween.TRANS_BOUNCE)
 	tw.parallel().tween_property(_body, "scale", Vector3(CHAR_SCALE * 1.05, CHAR_SCALE * 0.95, CHAR_SCALE * 1.05), 0.1)
 	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.15)
+
+
+func show_review_stars(stars: float) -> void:
+	## Floating ★★★★☆ above the head when this guest posts a social review.
+	var full := clampi(int(floor(clampf(stars, 0.0, 5.0) + 0.25)), 0, 5)
+	var text := ""
+	for i in 5:
+		text += "★" if i < full else "☆"
+	if _review_stars == null:
+		_review_stars = Label3D.new()
+		_review_stars.name = "ReviewStars"
+		_review_stars.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_review_stars.no_depth_test = true
+		_review_stars.shaded = false
+		UiFontsScript.apply_label3d(_review_stars, true, 56, 0.11)
+		_review_stars.outline_size = 10
+		_review_stars.outline_modulate = Color(0.08, 0.05, 0.0, 0.85)
+		add_child(_review_stars)
+	_review_stars.text = text
+	_review_stars.position = Vector3(0.0, BAR_Y + 0.08, 0.05)
+	## Gold for solid ratings; cooler amber when they roasted you.
+	if full >= 4:
+		_review_stars.modulate = Color(1.0, 0.86, 0.22, 1.0)
+	elif full >= 3:
+		_review_stars.modulate = Color(1.0, 0.78, 0.28, 1.0)
+	elif full >= 2:
+		_review_stars.modulate = Color(0.92, 0.72, 0.35, 1.0)
+	else:
+		_review_stars.modulate = Color(0.95, 0.45, 0.35, 1.0)
+	_review_stars.visible = true
+	if _review_stars_tween != null and is_instance_valid(_review_stars_tween):
+		_review_stars_tween.kill()
+	_review_stars_tween = create_tween()
+	_review_stars_tween.set_parallel(true)
+	_review_stars_tween.tween_property(
+		_review_stars, "position:y", BAR_Y + 0.58, 1.55
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_review_stars_tween.tween_property(
+		_review_stars, "modulate:a", 0.0, 1.55
+	).set_delay(0.4).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_review_stars_tween.chain().tween_callback(func() -> void:
+		if _review_stars != null and is_instance_valid(_review_stars):
+			_review_stars.visible = false
+	)
 
 
 func leave_happy() -> void:
