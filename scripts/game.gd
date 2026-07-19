@@ -520,6 +520,22 @@ var soda_stream_mesh: MeshInstance3D = null
 var soda_stream_mat: ShaderMaterial = null ## white→soda gradient pour
 var soda_stream_bubbles: GPUParticles3D = null ## white jiggle bubbles at pour impact
 var _soda_stream_shader: Shader = null
+## Soft-serve machine — left window counter, cone workflow mirrors fountain cups.
+var icecream_root: Node3D = null
+var icecream_cone_root: Node3D = null
+var icecream_cone_area: Area3D = null
+var icecream_swirl_root: Node3D = null
+var icecream_spout_marker: Marker3D = null
+var icecream_stream_mesh: MeshInstance3D = null
+var icecream_stream_mat: StandardMaterial3D = null
+var icecream_stream_fx: GPUParticles3D = null
+var icecream_cone_home: Vector3 = Vector3.ZERO
+var icecream_cone_rest: Vector3 = Vector3.ZERO
+var icecream_cone_held: bool = false
+var icecream_cone_fill: float = 0.0
+var _icecream_prev_pos: Vector3 = Vector3.ZERO
+var _icecream_vel: Vector3 = Vector3.ZERO
+var _icecream_spin_phase: float = 0.0
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -768,6 +784,15 @@ const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
 const CUP_ICE_STACK_MAX := 36
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
+const ICECREAM_STATION_POS := Vector3(1.58, 1.02, 0.62)
+const ICECREAM_STATION_ROT := Vector3(0.0, 180.0, 0.0)
+const ICECREAM_CONE_COLLISION_LAYER := 16384
+const ICECREAM_CONE_H := 0.19
+const ICECREAM_CONE_R := 0.062
+const ICECREAM_FILL_RATE := 0.72
+const ICECREAM_SPOUT_HORIZ := 0.105
+const ICECREAM_SPOUT_VERT := 0.22
+const ICECREAM_MAGNET_RADIUS := 0.36
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
 const CUP_FOLLOW_RATE := 15.0 ## hand follow (empty); full drinks feel heavier
@@ -1414,6 +1439,8 @@ func _process(delta: float) -> void:
 					var sm := cup_liquid_surface.material_override as StandardMaterial3D
 					if sm:
 						_apply_soda_surface_look(sm, col, _cup_fizz)
+	if icecream_cone_held:
+		_update_held_icecream_cone(delta)
 	## Parked tray drinks keep dying their foam head down.
 	_update_parked_cups_foam(delta)
 	if ext_held:
@@ -1892,6 +1919,10 @@ func _input(event: InputEvent) -> void:
 			_put_cup_down()
 			get_viewport().set_input_as_handled()
 			return
+		if icecream_cone_held:
+			_put_icecream_cone_down()
+			get_viewport().set_input_as_handled()
+			return
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -1908,6 +1939,9 @@ func _input(event: InputEvent) -> void:
 				## Still holding LMB from the grab — flavor pick while carrying.
 				if _try_soda_flavor_click(event.position):
 					get_viewport().set_input_as_handled()
+				return
+			if icecream_cone_held:
+				get_viewport().set_input_as_handled()
 				return
 			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
@@ -1938,6 +1972,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		if cup_held:
 			_put_cup_down()
+			get_viewport().set_input_as_handled()
+			return
+		if icecream_cone_held:
+			_put_icecream_cone_down()
 			get_viewport().set_input_as_handled()
 			return
 		if cheese_held:
@@ -2035,17 +2073,22 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 	if event is InputEventMouseMotion and _strip_swipe_active and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		var mouse2 := _strip_mouse_pos(event)
 		var start_pos: Vector2 = _strip_swipe_added.get("_start", mouse2)
+		var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
 		if not bool(_strip_swipe_added.get("_moved", false)):
 			if start_pos.distance_to(mouse2) >= STRIP_SWIPE_THRESH_PX:
 				_strip_swipe_added["_moved"] = true
 				_strip_did_drag = true
-				var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
-				if start_id != "" and start_id != "cheese":
-					_strip_swipe_add(start_id)
+				## Do NOT auto-send the pressed topping to Build here — a grab/hold
+				## drag (bacon → cat, etc.) is not a click. Paint only when the
+				## cursor crosses onto a different strip button below.
 		if bool(_strip_swipe_added.get("_moved", false)):
 			var id2 := _strip_ingredient_at(mouse2)
 			## Never paint cheese mid-swipe — keeps tomato/cheese boundary clean.
 			if id2 != "" and id2 != "cheese":
+				## Entering a new topping: include the start button once, then this one.
+				if start_id != "" and start_id != "cheese" and id2 != start_id \
+						and not _strip_swipe_added.has(start_id):
+					_strip_swipe_add(start_id)
 				_strip_swipe_add(id2)
 		return true
 	return false
@@ -2629,6 +2672,7 @@ func _build_3d_world() -> void:
 	_build_first_sale_decal()
 	_build_wall_paper_decals()
 	_build_menu_board_decal()
+	_build_icecream_machine()
 	_build_soda_station()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
 	_build_window_bunting()
@@ -6759,6 +6803,11 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 		if cd < best_d:
 			best_d = cd
 			best = "cup"
+	if icecream_cone_root != null and camera != null and not icecream_cone_held:
+		var id := screen_pos.distance_to(camera.unproject_position(icecream_cone_root.global_position + Vector3(0, 0.12, 0)))
+		if id < best_d:
+			best_d = id
+			best = "icecream"
 	for pc in parked_cups:
 		if pc == null or not is_instance_valid(pc) or camera == null:
 			continue
@@ -6772,6 +6821,11 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 		if rd < best_d:
 			best_d = rd
 			best = "cup"
+	if camera != null and icecream_cone_home != Vector3.ZERO and not icecream_cone_held:
+		var ice_rd := screen_pos.distance_to(camera.unproject_position(icecream_cone_home + Vector3(0.0, 0.12, 0.0)))
+		if ice_rd < best_d:
+			best_d = ice_rd
+			best = "icecream"
 	if best == "" or best_d > 110.0:
 		if _ray_hits_tool(screen_pos, SALE_COLLISION_LAYER, sale_area):
 			best = "sale"
@@ -6787,6 +6841,8 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			best = "glock"
 		elif _ray_hits_any_cup(screen_pos):
 			best = "cup"
+		elif _ray_hits_icecream_cone(screen_pos):
+			best = "icecream"
 		else:
 			return false
 	match best:
@@ -6805,6 +6861,8 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			return _begin_glock_hold()
 		"cup":
 			return _begin_cup_hold()
+		"icecream":
+			return _begin_icecream_cone_hold()
 	return false
 
 
@@ -19956,8 +20014,10 @@ func _build_ingredient_legend() -> void:
 			func(_pos):
 				## If paint-swipe already applied this topping, don't also start a UI drag
 				## that would drop a second copy on Build.
-				if _strip_gesture_added or _strip_did_drag:
+				if _strip_gesture_added:
 					return null
+				## Grab-and-hold is not a click — suppress the button pressed → Build add.
+				_strip_did_drag = true
 				_pending_cheese_drag = false
 				_pending_ingredient_drag = capture
 				var drag_preview := TextureRect.new()
