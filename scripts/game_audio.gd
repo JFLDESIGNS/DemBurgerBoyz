@@ -418,7 +418,7 @@ func set_softserve_dispense(active: bool) -> void:
 		return
 	if active:
 		_softserve_on = true
-		_softserve_player.volume_db = -13.5
+		_softserve_player.volume_db = -7.5
 		if not _softserve_player.playing:
 			_softserve_player.play()
 	else:

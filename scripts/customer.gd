@@ -952,6 +952,10 @@ func _process(delta: float) -> void:
 		_update_powder_stand(delta)
 		return
 
+	if mp_host_driven and not is_leaving:
+		_update_host_driven_pose(delta)
+		return
+
 	if _shake_time > 0.0 and not is_leaving:
 		_shake_time -= delta
 		var rate := maxf(0.05, _shake_rate)
@@ -1106,6 +1110,35 @@ func _process(delta: float) -> void:
 	## Ticket clock runs from the moment the slip is pinned until serve / leave.
 	if _order_clock_on and queue_timer_active and not is_leaving and not mp_host_driven:
 		order_elapsed_sec += delta
+
+
+func _update_host_driven_pose(delta: float) -> void:
+	## Multiplayer guests receive position/ticket state from the host; avoid local
+	## arrival-turn code fighting that snapshot and spinning remote customers.
+	global_position.y = STAND_Y
+	if is_waiting:
+		rotation_degrees.y = FACE_TRUCK_YAW
+		if _eating:
+			_play_anim("idle")
+			if _anim_player:
+				_anim_player.stop()
+			_apply_eat_hands_pose(1.0)
+			if _body:
+				_body.position.y = _base_body_y
+				_body.rotation_degrees.x = _eat_lean_x
+				_body.rotation_degrees.z = 0.0
+		else:
+			_play_anim("idle")
+			if _should_antsy_wait():
+				_apply_antsy_wait(delta)
+			else:
+				_clear_antsy_wait_pose()
+		_animate_expression(delta)
+		return
+	rotation_degrees.y = WALK_PLUS_X_YAW
+	_play_anim("walk")
+	_apply_bobble(true)
+	_animate_expression(delta)
 
 
 func start_order_clock(reset_elapsed: bool = true) -> void:

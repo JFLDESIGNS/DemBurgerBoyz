@@ -575,6 +575,7 @@ var _icecream_swirl_bounce: float = 0.0
 var _icecream_swirl_tilt: Vector2 = Vector2.ZERO
 var _icecream_swirl_scale: Vector3 = Vector3.ONE
 var _icecream_spin_phase: float = 0.0
+var _icecream_sparkle_phase: float = 0.0
 var _icecream_grab_lockout: float = 0.0
 var _icecream_auto_hand_token: int = 0
 const ICECREAM_AUTO_HAND_DELAY := 0.5
@@ -883,6 +884,7 @@ const ICECREAM_SWIRL_SPIKE_H := 0.026
 const ICECREAM_FILL_ORBIT_R := 0.012
 const ICECREAM_FILL_ORBIT_Z_R := 0.009
 const ICECREAM_SWIRL_FAST_SQUASH_MAX := 0.15
+const ICECREAM_SPARKLE_COUNT := 14
 const ICECREAM_GRILL_MELT_SEC := 5.0
 const ICECREAM_GRILL_FIRE_SEC := 6.0
 const ICECREAM_PUDDLE_R := 0.105
@@ -6239,7 +6241,7 @@ func _on_window_cat_full_sized() -> void:
 func _queue_disguise_cat(flash_text: String = "") -> void:
 	if not playing:
 		return
-	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+	if mp_enabled and not NetManager.is_host():
 		return
 	if _disguise_cat_active or _disguise_cat_pending or _disguise_cat_cool > 0.0:
 		return
@@ -6256,7 +6258,7 @@ func _try_spawn_disguise_cat() -> void:
 		return
 	if not playing:
 		return
-	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+	if mp_enabled and not NetManager.is_host():
 		return
 	## Wait for a free lane — pending stays set until there's room.
 	if _waiting_customer_count() >= _customer_cap():
@@ -6283,7 +6285,7 @@ func _spawn_disguise_cat_customer() -> void:
 	## Join the back of the line like any other customer — walk up after them.
 	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
 	if mp_enabled:
-		if not NetManager.is_host() and not _mp_applying:
+		if not NetManager.is_host():
 			return
 		var nid := _mp_next_customer_net_id
 		_mp_next_customer_net_id += 1
@@ -12432,9 +12434,11 @@ func _update_held_icecream_swirl_motion(delta: float) -> void:
 	)
 	var scale_rate := 13.0 if speed_squash > 0.01 else 5.0
 	_icecream_swirl_scale = _icecream_swirl_scale.lerp(target_scale, clampf(delta * scale_rate, 0.0, 1.0))
+	_icecream_sparkle_phase = fposmod(_icecream_sparkle_phase + delta * (2.0 + _icecream_vel.length() * 2.25), TAU)
 	icecream_swirl_root.position = Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + 0.006 + _icecream_swirl_bounce, 0.0)
 	icecream_swirl_root.rotation_degrees = Vector3(_icecream_swirl_tilt.x, 0.0, _icecream_swirl_tilt.y)
 	icecream_swirl_root.scale = _icecream_swirl_scale
+	_update_icecream_sparkles_for(icecream_swirl_root, icecream_cone_fill, smoothstep(0.15, 1.25, _icecream_vel.length()))
 
 
 func _try_fill_icecream_cone(delta: float) -> void:
@@ -12568,6 +12572,89 @@ func _make_icecream_corkscrew_mesh(fill: float) -> ArrayMesh:
 	return mesh
 
 
+func _make_icecream_sparkle_mat() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(1.0, 0.98, 0.82, 0.58)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.96, 0.72)
+	mat.emission_energy_multiplier = 0.34
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 6
+	return mat
+
+
+func _icecream_sparkle_pos(t: float, phase: float) -> Vector3:
+	var spiral_t := minf(clampf(t, 0.0, 1.0), ICECREAM_SWIRL_SPIKE_FRAC)
+	var angle := -spiral_t * TAU * ICECREAM_SWIRL_TURNS + phase
+	var turns_done := spiral_t * ICECREAM_SWIRL_TURNS
+	var base_loop := clampf(turns_done, 0.0, 1.0)
+	var taper_t := clampf((turns_done - 1.0) / maxf(ICECREAM_SWIRL_TURNS - 1.0, 0.001), 0.0, 1.0)
+	var cone_taper := pow(taper_t, 0.82)
+	var path_r := lerpf(0.047, 0.007, cone_taper)
+	var tube_r := lerpf(0.029, 0.0065, cone_taper)
+	var y_t := 1.0 - pow(1.0 - taper_t, ICECREAM_SWIRL_TOP_SQUEEZE)
+	var y := lerpf(0.0, 0.023, base_loop)
+	if turns_done > 1.0:
+		y = 0.023 + y_t * (ICECREAM_SWIRL_H - 0.023)
+	var radial := Vector3(cos(angle), 0.0, sin(angle)).normalized()
+	var height_lift := lerpf(-0.18, 0.52, fposmod(phase * 0.71, 1.0))
+	return radial * (path_r + tube_r * 0.82) + Vector3.UP * (y + tube_r * height_lift)
+
+
+func _ensure_icecream_sparkles(swirl_root: Node3D) -> Node3D:
+	var holder := swirl_root.get_node_or_null("IceCreamSnowSparkles") as Node3D
+	if holder != null and is_instance_valid(holder):
+		return holder
+	holder = Node3D.new()
+	holder.name = "IceCreamSnowSparkles"
+	swirl_root.add_child(holder)
+	var sparkle_mesh := BoxMesh.new()
+	sparkle_mesh.size = Vector3.ONE
+	for i in range(ICECREAM_SPARKLE_COUNT):
+		var bit := MeshInstance3D.new()
+		bit.name = "IceCreamSparkle_%02d" % i
+		bit.mesh = sparkle_mesh
+		bit.material_override = _make_icecream_sparkle_mat()
+		bit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var t := 0.18 + (float(i) + 0.2) / float(ICECREAM_SPARKLE_COUNT) * 0.74
+		var phase := float(i) * 2.17 + 0.37
+		bit.set_meta("spark_t", t)
+		bit.set_meta("spark_phase", phase)
+		bit.set_meta("spark_size", 0.0022 + fposmod(float(i) * 0.331, 1.0) * 0.0019)
+		bit.position = _icecream_sparkle_pos(t, phase)
+		bit.visible = false
+		holder.add_child(bit)
+	return holder
+
+
+func _update_icecream_sparkles_for(swirl_root: Node3D, fill_amount: float, motion: float = 0.0) -> void:
+	if swirl_root == null or not is_instance_valid(swirl_root):
+		return
+	var holder := _ensure_icecream_sparkles(swirl_root)
+	var fill := clampf(fill_amount, 0.0, 1.0)
+	var drive := clampf(motion, 0.0, 1.0)
+	for child in holder.get_children():
+		var bit := child as MeshInstance3D
+		if bit == null or not is_instance_valid(bit):
+			continue
+		var t := float(bit.get_meta("spark_t", 1.0))
+		bit.visible = fill >= t and fill > 0.20
+		if not bit.visible:
+			continue
+		var phase := float(bit.get_meta("spark_phase", 0.0))
+		var blink := 0.5 + 0.5 * sin(_icecream_sparkle_phase * (2.2 + phase * 0.05) + phase)
+		var glow := lerpf(0.28, 1.0, blink) * lerpf(0.55, 1.0, drive)
+		var size := float(bit.get_meta("spark_size", 0.003)) * lerpf(0.72, 1.2, blink)
+		bit.scale = Vector3.ONE * size
+		var mat := bit.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_color = Color(1.0, 0.98, 0.82, lerpf(0.14, 0.62, glow))
+			mat.emission_energy_multiplier = lerpf(0.18, 0.55, glow)
+
+
 func _refresh_icecream_cone_visuals() -> void:
 	if (icecream_swirl_root == null or not is_instance_valid(icecream_swirl_root)) \
 			and icecream_cone_root != null and is_instance_valid(icecream_cone_root):
@@ -12584,6 +12671,7 @@ func _refresh_icecream_cone_visuals_for(swirl_root: Node3D, fill_amount: float) 
 		corkscrew.visible = fill > 0.01
 		corkscrew.mesh = _make_icecream_corkscrew_mesh(fill)
 		corkscrew.rotation_degrees.y = 0.0
+	_update_icecream_sparkles_for(swirl_root, fill, 0.0)
 
 
 func _build_icecream_stream_fx() -> void:
@@ -13351,13 +13439,20 @@ func _update_melting_icecreams(delta: float) -> void:
 				GRILL_SURFACE_Y + 0.006,
 				anchor_pos.z + 0.038
 			)
+			var wobble_window := smoothstep(0.02, 0.38, melt) * (1.0 - smoothstep(0.70, 1.0, melt))
+			var wobble := Vector3(
+				sin(age * 9.4 + fill * 2.1) * 0.0045,
+				sin(age * 13.2 + fill) * 0.0022,
+				cos(age * 8.1 + fill * 3.3) * 0.0045
+			) * wobble_window
+			upright_pos += wobble
 			var upright_rot := Vector3(-2.0, anchor_yaw, 2.0)
 			swirl.global_position = start_global_pos.lerp(upright_pos, upright)
 			swirl.global_rotation_degrees = start_global_rot.lerp(upright_rot, upright)
 			swirl.scale = Vector3(
-				lerpf(1.0, 1.28, squash),
+				lerpf(1.0, 1.28, squash) + absf(wobble.x) * 9.0,
 				lerpf(1.0, 0.06, squash),
-				lerpf(1.0, 0.78, squash)
+				lerpf(1.0, 0.78, squash) + absf(wobble.z) * 7.0
 			)
 			swirl.global_position = start_global_pos.lerp(upright_pos, upright)
 			_tint_burning_icecream_swirl(swirl, smoothstep(0.08, 1.0, melt))
@@ -13455,6 +13550,9 @@ func _icecream_burn_color(burn: float) -> Color:
 
 func _tint_burning_icecream_swirl(root: Node, burn: float) -> void:
 	if root == null:
+		return
+	if root.name == "IceCreamSnowSparkles":
+		(root as Node3D).visible = false
 		return
 	if root is MeshInstance3D:
 		var mesh := root as MeshInstance3D
@@ -29877,6 +29975,9 @@ func mp_spawn_customer(
 	face_style: int = -1,
 	disguise_cat: bool = false
 ) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if mp_enabled and not NetManager.is_host() and sid != 1:
+		return
 	if net_id >= 0 and _customer_by_net_id(net_id) != null:
 		return
 	_mp_applying = true
@@ -30333,6 +30434,9 @@ func mp_cat_pet() -> void:
 func mp_cat_feed(kind: String, patty_net_id: int) -> void:
 	if not _cat_accepts_food(kind):
 		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
 	_mp_applying = true
 	if kind == "patty":
 		var p = _patty_by_net_id(patty_net_id) if patty_net_id >= 0 else null
@@ -30360,8 +30464,25 @@ func mp_cat_feed(kind: String, patty_net_id: int) -> void:
 			window_cat.feed("patty", true)
 		_flash("Cat stole the burger! ♥", Color("FF8A80"))
 	else:
-		_feed_window_cat_ingredient_local(kind)
+		if kind == "cheese" and cheese_held and sid == NetManager.my_id():
+			_clear_cheese_hold_after_use()
+		if NetManager.is_host() or not mp_enabled:
+			if not _spend_ingredient(kind):
+				_mp_applying = false
+				return
+		if window_cat != null and is_instance_valid(window_cat):
+			window_cat.feed(kind, true)
+		var label := kind.replace("_", " ")
+		_flash("Cat loves the %s!" % label, Color("FFE082"))
+		if game_audio:
+			game_audio.play_ingredient(kind)
 	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_grill()
+		for si in STATION_COUNT:
+			_mp_broadcast_station(si)
+		_mp_send_cat_sync()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -30603,6 +30724,7 @@ func _mp_broadcast_customers() -> void:
 	var clocks: Array = []
 	var sodas_handed: Array = []
 	var icecreams_handed: Array = []
+	var yaws: Array = []
 	for c in customers:
 		if c == null or not is_instance_valid(c):
 			continue
@@ -30618,7 +30740,8 @@ func _mp_broadcast_customers() -> void:
 		clocks.append(float(c.get("order_elapsed_sec")) if "order_elapsed_sec" in c else 0.0)
 		sodas_handed.append(_customer_soda_handed(c))
 		icecreams_handed.append(_customer_icecream_handed(c))
-	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed)
+		yaws.append(float(c.rotation_degrees.y))
+	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -30631,7 +30754,8 @@ func mp_sync_customers(
 	leaves: Array,
 	clocks: Array,
 	sodas_handed: Array = [],
-	icecreams_handed: Array = []
+	icecreams_handed: Array = [],
+	yaws: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -30658,6 +30782,8 @@ func mp_sync_customers(
 			c.target_x = float(xs[i])
 		if i < zs.size():
 			c.global_position.z = float(zs[i])
+		if i < yaws.size():
+			c.rotation_degrees.y = float(yaws[i])
 		var host_waiting := bool(waits[i]) if i < waits.size() else false
 		var host_leaving := bool(leaves[i]) if i < leaves.size() else false
 		## Host already dismissed them — clear our ticket even if serve FX lagged.
@@ -30689,6 +30815,8 @@ func mp_sync_customers(
 		if nid2 >= 0 and not seen.has(nid2):
 			if not bool(c.get("is_leaving")) and c.has_method("leave_happy"):
 				c.leave_happy()
+			_customer_leave_apply(c, false)
+		elif nid2 < 0 and bool(c.get("is_disguise_cat")):
 			_customer_leave_apply(c, false)
 	_mp_cull_stale_tickets(seen)
 	## Keep ticket patience chips in sync with host values.
