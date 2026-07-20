@@ -88,6 +88,16 @@ var _softserve_lp := 0.0
 var _softserve_phase := 0.0
 var _softserve_chime_phase := 0.0
 var _softserve_tick := 0.0
+var _fryer_player: AudioStreamPlayer
+var _fryer_gen: AudioStreamGenerator
+var _fryer_on: bool = false
+var _fryer_intensity: float = 1.0
+var _fryer_lp := 0.0
+var _fryer_hp := 0.0
+var _fryer_pop_env := 0.0
+var _fryer_pop_tick := 2200.0
+var _fryer_next_pop := 0.0
+var _fryer_sample_i := 0
 
 
 func _ready() -> void:
@@ -160,6 +170,14 @@ func _ready() -> void:
 	_softserve_player.stream = _softserve_gen
 	_softserve_player.volume_db = -80.0
 	add_child(_softserve_player)
+	_fryer_gen = AudioStreamGenerator.new()
+	_fryer_gen.mix_rate = MIX_RATE
+	_fryer_gen.buffer_length = 0.12
+	_fryer_player = AudioStreamPlayer.new()
+	_fryer_player.bus = "Master"
+	_fryer_player.stream = _fryer_gen
+	_fryer_player.volume_db = -80.0
+	add_child(_fryer_player)
 	## Looping soft metal scrape for patty slides.
 	_slide_player = AudioStreamPlayer.new()
 	_slide_player.bus = "Master"
@@ -274,6 +292,12 @@ func _process(delta: float) -> void:
 			while ssp.get_frames_available() > 0:
 				var ss := _next_softserve_sample()
 				ssp.push_frame(Vector2(ss, ss))
+	if _fryer_on and _fryer_player != null and _fryer_player.playing:
+		var fp := _fryer_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if fp != null:
+			while fp.get_frames_available() > 0:
+				var fs := _next_fryer_oil_sample()
+				fp.push_frame(Vector2(fs, fs))
 
 
 func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
@@ -428,6 +452,22 @@ func set_softserve_dispense(active: bool) -> void:
 		_softserve_player.volume_db = -80.0
 
 
+func set_fryer_oil(active: bool, intensity: float = 1.0) -> void:
+	if _fryer_player == null:
+		return
+	_fryer_intensity = clampf(intensity, 0.0, 1.35)
+	if active:
+		_fryer_on = true
+		_fryer_player.volume_db = -4.5
+		if not _fryer_player.playing:
+			_fryer_player.play()
+	else:
+		_fryer_on = false
+		if _fryer_player.playing:
+			_fryer_player.stop()
+		_fryer_player.volume_db = -80.0
+
+
 func play_ice_tink() -> void:
 	## Soft cube settle in the cup.
 	_play_cached("ice_tink_v2", _make_ice_tink, 0.92 + randf() * 0.18, 0.35 + randf() * 0.15)
@@ -474,6 +514,27 @@ func _next_softserve_sample() -> float:
 	var shimmer := sin(_softserve_chime_phase * TAU) * 0.035
 	var pulse := 0.82 + 0.18 * sin(_softserve_tick * 4.2)
 	return clampf((motor + airy + shimmer) * pulse * 0.64, -1.0, 1.0)
+
+
+func _next_fryer_oil_sample() -> float:
+	var t := clampf(_fryer_intensity, 0.0, 1.35)
+	var white := randf() * 2.0 - 1.0
+	_fryer_lp = _fryer_lp * 0.50 + white * 0.50
+	_fryer_hp = white - _fryer_lp
+	_fryer_next_pop -= 1.0 / float(MIX_RATE)
+	if _fryer_pop_env < 0.018 and _fryer_next_pop <= 0.0:
+		_fryer_pop_env = 0.8 + randf() * 1.1
+		_fryer_pop_tick = 1800.0 + randf() * 3900.0
+		_fryer_next_pop = 0.012 + randf() * 0.055 if randf() < 0.58 else 0.06 + randf() * 0.11
+	_fryer_pop_env *= 0.80
+	var bed := (_fryer_lp * 0.34 + _fryer_hp * 0.78) * lerpf(0.28, 0.48, t)
+	var pop := 0.0
+	if _fryer_pop_env > 0.01:
+		pop = (randf() * 2.0 - 1.0) * _fryer_pop_env * 0.64
+		pop += sin(float(_fryer_sample_i) * _fryer_pop_tick * TAU / float(MIX_RATE)) * _fryer_pop_env * 0.20
+	_fryer_sample_i += 1
+	var wet := sin(float(_fryer_sample_i) * 94.0 * TAU / float(MIX_RATE)) * 0.035
+	return clampf((bed + pop + wet) * 0.82, -1.0, 1.0)
 
 
 func _next_shaker_rattle_sample() -> float:

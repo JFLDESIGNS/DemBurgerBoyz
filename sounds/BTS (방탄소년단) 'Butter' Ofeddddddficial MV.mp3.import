@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://bkqdrw04icjlp"
+path="res://.godot/imported/BTS (방탄소년단) 'Butter' Ofeddddddficial MV.mp3-c9ca6221b810411849553618483fc9e8.mp3str"
+
+[deps]
+
+source_file="res://sounds/BTS (방탄소년단) 'Butter' Ofeddddddficial MV.mp3"
+dest_files=["res://.godot/imported/BTS (방탄소년단) 'Butter' Ofeddddddficial MV.mp3-c9ca6221b810411849553618483fc9e8.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

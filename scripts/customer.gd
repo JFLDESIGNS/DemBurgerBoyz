@@ -8,12 +8,109 @@ const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
 const IDLE_SCENE_PATH := "res://assets/characters/Animations/idle.fbx"
 const RUN_SCENE_PATH := "res://assets/characters/Animations/run.fbx"
 const DISGUISE_MUSTACHE_TEX := "res://IMAGES/MUSTACHE.png"
+const JIN_SKIN_PATH := "res://models/characters/Skins/JIN.png"
+const JIMIN_SKIN_PATH := "res://models/characters/Skins/JIMIN.png"
+const V_SKIN_PATH := "res://models/characters/Skins/v.png"
+const JHOPE_SKIN_PATH := "res://models/characters/Skins/JHOPE.png"
+const JUNG_SKIN_PATH := "res://models/characters/Skins/JUNG.png"
+const RM_SKIN_PATH := "res://models/characters/Skins/rm.png"
+const SUGA_SKIN_PATH := "res://models/characters/Skins/SUGA.png"
 ## Stylized Kenney toon skins only — skip photoreal human* (blurry/weird on this mesh).
 const CHAR_SKINS: Array[String] = [
 	"res://assets/characters/Skins/skaterMaleA.png",
-	"res://assets/characters/Skins/skaterFemaleA.png",
+	"res://models/characters/Skins/skaterFemaleA copy.png",
 	"res://assets/characters/Skins/criminalMaleA.png",
 	"res://assets/characters/Skins/cyborgFemaleA.png",
+	"res://models/characters/Skins/criminalMaleA copy 2.png",
+	"res://models/characters/Skins/cyborgFemaleA.png",
+	"res://models/characters/Skins/skaterMaleA copy 2.png",
+	JIN_SKIN_PATH,
+	JIMIN_SKIN_PATH,
+	V_SKIN_PATH,
+	JHOPE_SKIN_PATH,
+	JUNG_SKIN_PATH,
+	RM_SKIN_PATH,
+	SUGA_SKIN_PATH,
+]
+const JIN_SKIN_IDX := 7
+const JIMIN_SKIN_IDX := 8
+const V_SKIN_IDX := 9
+const JHOPE_SKIN_IDX := 10
+const JUNG_SKIN_IDX := 11
+const RM_SKIN_IDX := 12
+const SUGA_SKIN_IDX := 13
+const BTS_SKIN_IDXS: Array[int] = [
+	JIN_SKIN_IDX,
+	JIMIN_SKIN_IDX,
+	V_SKIN_IDX,
+	JHOPE_SKIN_IDX,
+	JUNG_SKIN_IDX,
+	RM_SKIN_IDX,
+	SUGA_SKIN_IDX,
+]
+const JIN_FACTS: Array[String] = [
+	"Jin fact: My real name is Kim Seok-jin.",
+	"Jin fact: I was born on December 4, 1992.",
+	"Jin fact: I am the oldest member of BTS.",
+	"Jin fact: I debuted with BTS on June 13, 2013.",
+	"Jin fact: I am part of the BTS vocal line.",
+	"Jin fact: I studied Film Studies at Konkuk University.",
+	"Jin fact: I graduated from Konkuk University in 2017.",
+	"Jin fact: Big Hit scouted me while I was studying acting.",
+	"Jin fact: Awake was my solo song on Wings.",
+	"Jin fact: Epiphany was my solo song for Love Yourself: Answer.",
+	"Jin fact: Moon was my solo song on Map of the Soul: 7.",
+	"Jin fact: Tonight was my first independent song.",
+	"Jin fact: Abyss was released in 2020.",
+	"Jin fact: Yours was my Jirisan drama OST.",
+	"Jin fact: Super Tuna started as a birthday gift song.",
+	"Jin fact: The Astronaut was my first official solo single.",
+	"Jin fact: The Astronaut was released in October 2022.",
+	"Jin fact: I co-wrote The Astronaut with Coldplay.",
+	"Jin fact: I performed The Astronaut with Coldplay in Buenos Aires.",
+	"Jin fact: I enlisted for military service in December 2022.",
+	"Jin fact: I was discharged from military service in June 2024.",
+	"Jin fact: I carried the Paris 2024 Olympic torch.",
+	"Jin fact: Happy was my first solo album.",
+	"Jin fact: Happy was released in November 2024.",
+	"Jin fact: Happy has six tracks.",
+	"Jin fact: Run Jin is my solo variety show.",
+	"Jin fact: I was a host on Korean music shows.",
+	"Jin fact: BTS received the Hwagwan Order of Cultural Merit in 2018.",
+	"Jin fact: My BT21 character is RJ.",
+	"Jin fact: RJ loves cooking and eating.",
+]
+const JIMIN_FACTS: Array[String] = [
+	"Jimin fact: My real name is Park Ji-min.",
+	"Jimin fact: I was born on October 13, 1995.",
+	"Jimin fact: I was born in Busan, South Korea.",
+	"Jimin fact: I debuted with BTS on June 13, 2013.",
+	"Jimin fact: I am a vocalist and dancer in BTS.",
+	"Jimin fact: I studied contemporary dance before debut.",
+	"Jimin fact: I trained at Just Dance Academy in Busan.",
+	"Jimin fact: I attended Busan High School of Arts.",
+	"Jimin fact: I transferred to Korean Arts High School.",
+	"Jimin fact: I graduated from Korean Arts High School in 2014.",
+	"Jimin fact: I graduated from Global Cyber University.",
+	"Jimin fact: I majored in Broadcasting and Entertainment.",
+	"Jimin fact: I received Global Cyber University's President's Award.",
+	"Jimin fact: Lie was my solo song on Wings.",
+	"Jimin fact: Serendipity was my solo intro on Love Yourself: Her.",
+	"Jimin fact: Filter was my solo song on Map of the Soul: 7.",
+	"Jimin fact: I co-wrote Friends for Map of the Soul: 7.",
+	"Jimin fact: Promise was my first credited solo song.",
+	"Jimin fact: Promise came out in December 2018.",
+	"Jimin fact: Christmas Love came out in December 2020.",
+	"Jimin fact: With You was my Our Blues drama OST duet.",
+	"Jimin fact: I featured on Taeyang's Vibe in 2023.",
+	"Jimin fact: FACE was my first solo album.",
+	"Jimin fact: FACE was released in March 2023.",
+	"Jimin fact: Like Crazy reached No. 1 on the Billboard Hot 100.",
+	"Jimin fact: I released Closer Than This for fans in December 2023.",
+	"Jimin fact: MUSE was my second solo album.",
+	"Jimin fact: MUSE was released in July 2024.",
+	"Jimin fact: MUSE has seven tracks.",
+	"Jimin fact: My BT21 character is Chimmy.",
 ]
 ## Shrink so face + torso sit in the service window (not cropped by the lintel).
 const CHAR_SCALE := 0.552 ## ~15% larger than 0.48
@@ -139,6 +236,9 @@ var _skin_path: String = ""
 var is_terrorist: bool = false
 ## Full-size window cat in a fake mustache — orders a triple, never pays.
 var is_disguise_cat: bool = false
+var is_jin_guest: bool = false
+var is_jimin_guest: bool = false
+var is_bts_guest: bool = false
 var _mustache_root: Node3D = null
 var _disguise_hat_root: Node3D = null
 var _disguise_cat_mesh: Node3D = null
@@ -195,7 +295,8 @@ func setup(
 	p_patience: float,
 	p_lane: int,
 	skin_idx: int = -1,
-	face_style: int = -1
+	face_style: int = -1,
+	jin_fact_idx: int = -1
 ) -> void:
 	order = p_order
 	body_color = color
@@ -204,7 +305,6 @@ func setup(
 	lane = p_lane
 	order_value = GameDataScript.order_value(order)
 	_roll_personality()
-	speech = _make_speech()
 	self.face_style = face_style if face_style >= 0 else (randi() % 3)
 	_face_style = self.face_style
 	if skin_idx >= 0 and not CHAR_SKINS.is_empty():
@@ -213,6 +313,15 @@ func setup(
 	else:
 		self.skin_idx = randi() % CHAR_SKINS.size()
 		_skin_path = CHAR_SKINS[self.skin_idx]
+	is_jin_guest = self.skin_idx == JIN_SKIN_IDX
+	is_jimin_guest = self.skin_idx == JIMIN_SKIN_IDX
+	is_bts_guest = BTS_SKIN_IDXS.has(self.skin_idx)
+	if is_jin_guest:
+		_apply_jin_guest_fact(jin_fact_idx)
+	elif is_jimin_guest:
+		_apply_jimin_guest_fact(jin_fact_idx)
+	else:
+		speech = _make_speech()
 
 
 static func lane_x_for(lane_i: int) -> float:
@@ -236,6 +345,48 @@ func _roll_personality() -> void:
 	else:
 		personality = "annoying"
 		chatter = _pick_annoying_line()
+
+
+func _apply_jin_guest_fact(fact_idx: int = -1) -> void:
+	personality = "chatty"
+	dialogue_mode = "chat"
+	complaint_active = false
+	pending_missing.clear()
+	var idx := fact_idx
+	if idx < 0 or idx >= JIN_FACTS.size():
+		idx = randi() % JIN_FACTS.size()
+	chatter = JIN_FACTS[idx]
+	speech = "%s\n%s" % [chatter, _order_line()]
+
+
+func _apply_jimin_guest_fact(fact_idx: int = -1) -> void:
+	personality = "chatty"
+	dialogue_mode = "chat"
+	complaint_active = false
+	pending_missing.clear()
+	var idx := fact_idx
+	if idx < 0 or idx >= JIMIN_FACTS.size():
+		idx = randi() % JIMIN_FACTS.size()
+	chatter = JIMIN_FACTS[idx]
+	speech = "%s\n%s" % [chatter, _order_line()]
+
+
+func show_special_speech(duration: float = 5.5) -> void:
+	if chatter == "":
+		return
+	if _bubble:
+		_bubble.text = chatter
+		_bubble.modulate = Color(1.0, 0.94, 0.62)
+		_bubble.visible = true
+	if _bubble_bg:
+		_bubble_bg.visible = true
+	await get_tree().create_timer(duration).timeout
+	if not is_instance_valid(self):
+		return
+	if _bubble and is_waiting:
+		_bubble.visible = false
+	if _bubble_bg and is_waiting:
+		_bubble_bg.visible = false
 
 
 func needs_dialogue() -> bool:
@@ -487,6 +638,8 @@ func _build() -> void:
 
 
 func _try_attach_toon_character() -> bool:
+	if is_bts_guest:
+		return _build_bts_portrait_card()
 	if _char_scene == null:
 		if not ResourceLoader.exists(CHAR_SCENE_PATH):
 			return false
@@ -506,6 +659,37 @@ func _try_attach_toon_character() -> bool:
 	_apply_mood_tint("happy")
 	_setup_character_animations(model)
 	return not _char_meshes.is_empty()
+
+
+func _build_bts_portrait_card() -> bool:
+	var portrait_path := _skin_path
+	if portrait_path == "":
+		portrait_path = JIMIN_SKIN_PATH if is_jimin_guest else JIN_SKIN_PATH
+	var tex := load(portrait_path) as Texture2D
+	if tex == null:
+		return false
+	var mesh := QuadMesh.new()
+	mesh.size = Vector2(1.942, 2.948)
+	var card := MeshInstance3D.new()
+	card.name = "BTSPortrait"
+	card.mesh = mesh
+	card.position = Vector3(0.0, 2.37, 0.0)
+	card.sorting_offset = 28.0
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.albedo_color = Color.WHITE
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.alpha_scissor_threshold = 0.035
+	mat.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	mat.roughness = 0.62
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	card.material_override = mat
+	_body.add_child(card)
+	_char_meshes.clear()
+	_char_meshes.append(card)
+	_anim_player = null
+	return true
 
 
 func _setup_character_animations(model: Node) -> void:

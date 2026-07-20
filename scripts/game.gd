@@ -90,6 +90,8 @@ const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
+const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
+const BTS_CAT_BOOK_COVER_PATH := "res://assets/decal/magic_breaking_book.png"
 ## Hotkeys 1-7 match strip toppings (tomato → mustard). Cheese is grabbed from the board wheel.
 ## Bottom bar left→right: tomato … mustard, then Serve on the right.
 ## Bottom bun is automatic when a patty hits a station — not on the strip.
@@ -104,6 +106,14 @@ const COST_SEASON_USE := 0.0
 const COST_INGREDIENT := 0.25 ## Phone restock unit baseline (using fridge stock is free)
 const COST_BACON := 0.50
 const START_MONEY := 200.0
+const SHOP_SODA_MACHINE := "soda_machine"
+const SHOP_ICECREAM_MACHINE := "icecream_machine"
+const SHOP_FRYER_MACHINE := "fryer_machine"
+const SHOP_FRIDGE_UPGRADE := "fridge_upgrade"
+const SHOP_SODA_MACHINE_COST := 300.0
+const SHOP_ICECREAM_MACHINE_COST := 500.0
+const SHOP_FRYER_MACHINE_COST := 100.0
+const SHOP_FRIDGE_UPGRADE_COST := 400.0
 const BACON_PATIENCE_RESTORE := 0.10
 const BACON_MOUTH_PICK_PX := 130.0
 const CUP_MOUTH_HAND_PX := 155.0 ## Auto-hand a held drink when cursor is this close to a face
@@ -145,6 +155,22 @@ var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
 var customers: Array = []
+var _customer_skin_bag: Array[int] = []
+const BTS_SPECIAL_GUESTS_ENABLED := true
+const BTS_DAY1_REGULAR_BEFORE := 2
+const BTS_DAY1_SKIN_QUEUE: Array[int] = [
+	CustomerScript.JIN_SKIN_IDX,
+	CustomerScript.JIMIN_SKIN_IDX,
+	CustomerScript.V_SKIN_IDX,
+	CustomerScript.JHOPE_SKIN_IDX,
+	CustomerScript.JUNG_SKIN_IDX,
+	CustomerScript.RM_SKIN_IDX,
+	CustomerScript.SUGA_SKIN_IDX,
+]
+var _bts_day1_queue_i: int = 0
+var _bts_day1_regular_spawned: int = 0
+var _bts_day1_performance_done: bool = false
+var _bts_day1_announcement_done: bool = false
 ## Occasional armed hostile wave — spawns far back with guns.
 var terrorist_wave_active: bool = false
 const TERRORIST_WAVE_CHANCE := 0.34
@@ -387,6 +413,7 @@ const GLOCK_HOLD_DIST := 1.24 ## Push grip toward camera along the sight line.
 const GLOCK_HOLD_DROP := 0.10 ## Nudge lower while tracking the cursor.
 const GLOCK_AIM_REACH := 30.0
 const GLOCK_COLLISION_LAYER := 256
+const BTS_LIGHTSTICK_COLLISION_LAYER := 65536
 const GLOCK_FIRE_COOLDOWN := 0.10
 const GLOCK_MESH_SCALE := 1.755 ## ~30% larger on the wall mount.
 const GLOCK_MUZZLE_LOCAL := Vector3(0.0, 0.015, 0.12)
@@ -513,6 +540,12 @@ var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
 var _soda_low_warned: Dictionary = {} ## flavor id -> already flashed 25% warning
 const SODA_TANK_LOW_WARN := 0.25 ## Flash once when syrup crosses this level
 const SODA_TANK_EMPTY := 0.02 ## Truly empty — stop pouring
+var owned_machines: Dictionary = {
+	SHOP_SODA_MACHINE: false,
+	SHOP_ICECREAM_MACHINE: false,
+	SHOP_FRYER_MACHINE: false,
+	SHOP_FRIDGE_UPGRADE: false,
+}
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
 var _supply_order_seq: int = 0
@@ -582,6 +615,20 @@ const ICECREAM_AUTO_HAND_DELAY := 0.5
 var burnt_icecream_cone_held: bool = false
 var burnt_icecream_cone_root: Node3D = null
 var burnt_icecream_cone_puddle: Node3D = null
+## Fryer machine — unlockable phone equipment.
+var fryer_root: Node3D = null
+var fryer_baskets: Array = []
+var fryer_held_index: int = -1
+var fryer_ready_servings: int = 0
+var fryer_ready_root: Node3D = null
+var fryer_oil_bubbles: Array = []
+var _fryer_prev_pos: Vector3 = Vector3.ZERO
+var _fryer_vel: Vector3 = Vector3.ZERO
+var _fryer_hold_offset: Vector3 = Vector3.ZERO
+var fries_pack_held: bool = false
+var fries_pack_root: Node3D = null
+var _fries_pack_prev_pos: Vector3 = Vector3.ZERO
+var _fries_pack_vel: Vector3 = Vector3.ZERO
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -637,6 +684,70 @@ var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
 var game_audio: Node = null
 var intro_music_player: AudioStreamPlayer = null
+var bts_day_music_player: AudioStreamPlayer = null
+var bts_day_intro_label: Label = null
+var bts_day_intro_root: Node3D = null
+var bts_day_intro_lights_root: Node3D = null
+var _bts_day_intro_active: bool = false
+var _bts_day_intro_t: float = 0.0
+var _bts_day_intro_song_started: bool = false
+var _bts_day_intro_swap_t: float = 0.0
+var _bts_day_intro_sync_t: float = 0.0
+var _bts_day_intro_cards: Array = []
+var _bts_day_intro_crowd: Array = []
+var _bts_day_intro_cat: Node3D = null
+var _bts_day_intro_cat_hearts: GPUParticles3D = null
+var _bts_day_intro_cat_lightstick: Node3D = null
+var _bts_day_intro_cat_book: Node3D = null
+var _bts_day_intro_cat_heart_t: float = 0.0
+var bts_lightsticks: Array = []
+var bts_lightstick_held_index: int = -1
+var _bts_lightstick_prev_mouse: Vector2 = Vector2.ZERO
+var _bts_reviews_posted: bool = false
+const BTS_DAY_INTRO_TEXT_SEC := 2.4
+const BTS_DAY_MUSIC_START_SEC := 5.0
+const BTS_DAY_INTRO_FALLBACK_DANCE_SEC := 12.0
+const BTS_DAY_INTRO_DANCE_SCALE := 1.15
+const BTS_DAY_INTRO_JUNGKOOK_SCALE := 1.08
+const BTS_DAY_INTRO_JHOPE_SCALE := 1.20
+const BTS_DAY_INTRO_SUGA_SCALE := 1.15
+const BTS_DAY_INTRO_SWAP_DUR := 1.05
+const BTS_DAY_INTRO_FACTS: Array[String] = [
+	"We are BTS and we love you.",
+	"BTS debuted on June 13, 2013.",
+	"BTS has seven members: RM, Jin, SUGA, j-hope, Jimin, V, and Jung Kook.",
+	"ARMY is the name of the BTS fandom.",
+	"Butter debuted at number one on the Billboard Hot 100 in 2021.",
+	"BTS performed at the Grammy Awards.",
+	"BTS has spoken at the United Nations.",
+	"Dynamite was BTS's first all-English single.",
+	"RM is the leader of BTS.",
+	"Jin is the oldest BTS member.",
+	"j-hope released Hope World in 2018.",
+	"Jimin is part of the BTS vocal and dance lines.",
+	"V is also known by his birth name Kim Taehyung.",
+	"Jung Kook is the youngest BTS member.",
+	"SUGA also releases music as Agust D.",
+]
+const BTS_DAY_INTRO_CROWD_SKINS: Array[int] = [0, 1, 2, 3, 4, 5, 6, 0]
+const BTS_REVIEW_POSTS: Array[Dictionary] = [
+	{"who": "Jin", "text": "Milla is cute, caring, funny, smart, and lovely. Five stars from worldwide handsome."},
+	{"who": "Jimin", "text": "Milla served us with so much heart. Sweet, caring, and seriously lovely."},
+	{"who": "V", "text": "Milla has the cutest truck energy. Funny, warm, and very smart service."},
+	{"who": "j-hope", "text": "Milla is sunshine too. Caring, bright, funny, and the food made us dance."},
+	{"who": "Jung Kook", "text": "Milla is amazing. Cute, kind, quick, smart, and the burger was perfect."},
+	{"who": "RM", "text": "Milla runs this place with intelligence and care. Lovely work, deeply appreciated."},
+	{"who": "SUGA", "text": "Milla is calm, funny, and good at this. That was a perfect everything burger."},
+]
+const BTS_REVIEW_BY_SKIN: Dictionary = {
+	CustomerScript.JIN_SKIN_IDX: {"who": "Jin", "text": "Milla is cute, caring, funny, smart, and lovely. Five stars from worldwide handsome."},
+	CustomerScript.JIMIN_SKIN_IDX: {"who": "Jimin", "text": "Milla served us with so much heart. Sweet, caring, and seriously lovely."},
+	CustomerScript.V_SKIN_IDX: {"who": "V", "text": "Milla has the cutest truck energy. Funny, warm, and very smart service."},
+	CustomerScript.JHOPE_SKIN_IDX: {"who": "j-hope", "text": "Milla is sunshine too. Caring, bright, funny, and the food made us dance."},
+	CustomerScript.JUNG_SKIN_IDX: {"who": "Jung Kook", "text": "Milla is amazing. Cute, kind, quick, smart, and the burger was perfect."},
+	CustomerScript.RM_SKIN_IDX: {"who": "RM", "text": "Milla runs this place with intelligence and care. Lovely work, deeply appreciated."},
+	CustomerScript.SUGA_SKIN_IDX: {"who": "SUGA", "text": "Milla is calm, funny, and good at this. That was a perfect everything burger."},
+}
 ## Graphics menu — live Environment + kitchen lights.
 var gfx_env: Environment = null
 var gfx_sun: DirectionalLight3D = null
@@ -884,10 +995,19 @@ const ICECREAM_SWIRL_SPIKE_H := 0.026
 const ICECREAM_FILL_ORBIT_R := 0.012
 const ICECREAM_FILL_ORBIT_Z_R := 0.009
 const ICECREAM_SWIRL_FAST_SQUASH_MAX := 0.15
-const ICECREAM_SPARKLE_COUNT := 14
+const ICECREAM_SPARKLE_COUNT := 28
 const ICECREAM_GRILL_MELT_SEC := 5.0
 const ICECREAM_GRILL_FIRE_SEC := 6.0
 const ICECREAM_PUDDLE_R := 0.105
+const FRYER_STATION_POS := SODA_STATION_POS
+const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
+const FRYER_COLLISION_LAYER := 32768
+const FRY_BASKET_COOK_SEC := 5.0
+const FRY_BASKET_SHAKE_NEED := 1.25
+const FRYER_OIL_LOCAL := Vector3(0.0, 0.165, 0.16)
+const FRYER_TUB_X := 0.20
+const FRYER_OIL_RADIUS := 0.20
+const FRYER_BASKET_HOLD_Y := 0.18
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
 const CUP_FOLLOW_RATE := 15.0 ## hand follow (empty); full drinks feel heavier
@@ -1605,6 +1725,7 @@ func _station_label(_index: int) -> String:
 
 
 func _start_game() -> void:
+	_clear_bts_day_intro(false)
 	_stop_logo_hover()
 	_stop_intro_title_music()
 	start_overlay.visible = false
@@ -1617,6 +1738,7 @@ func _start_game() -> void:
 	total_served = 0
 	perfect_serves = 0
 	spawn_timer = _first_customer_delay()
+	_reset_bts_day1_flow()
 	active_station = STATION_CRAFT
 	complaint_station = -1
 	_melody_pressed.clear()
@@ -1642,15 +1764,20 @@ func _start_game() -> void:
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	_begin_start_tutorial()
+	_reset_shop_unlocks()
 	_reset_supplies(true)
 	_disguise_cat_pending = false
 	_disguise_cat_active = false
 	_disguise_cat_cool = 0.0
-	_start_radio_fade_in()
+	if not mp_enabled or NetManager.is_host():
+		if day == 1 and BTS_SPECIAL_GUESTS_ENABLED:
+			_begin_bts_day1_cat_announcement()
+		_start_radio_fade_in()
 	# _begin_opening_terror_ambush()
 
 
 func _restart() -> void:
+	_clear_bts_day_intro(false)
 	game_over_panel.visible = false
 	start_overlay.visible = false
 	playing = true
@@ -1660,6 +1787,8 @@ func _restart() -> void:
 	total_served = 0
 	perfect_serves = 0
 	spawn_timer = _first_customer_delay()
+	if day == 1:
+		_reset_bts_day1_flow()
 	active_station = STATION_CRAFT
 	complaint_station = -1
 	_clear_all_patty()
@@ -1685,8 +1814,14 @@ func _restart() -> void:
 	_refresh_all_stations()
 	_begin_start_tutorial()
 	_reset_supplies(false)
-	_start_radio_fade_in()
-	_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
+	if day != 1:
+		_start_radio_fade_in()
+	elif not mp_enabled or NetManager.is_host():
+		if BTS_SPECIAL_GUESTS_ENABLED:
+			_begin_bts_day1_cat_announcement()
+		_start_radio_fade_in()
+	if day != 1:
+		_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
 	## Keep a pending mustache-cat visit across the day break; clear cool so it can land.
 	_disguise_cat_active = false
 	_disguise_cat_cool = 0.0
@@ -1761,6 +1896,13 @@ func _process(delta: float) -> void:
 		_update_held_icecream_cone(delta)
 	if burnt_icecream_cone_held:
 		_update_held_burnt_icecream_cone(delta)
+	if fryer_held_index >= 0:
+		_update_held_fryer_basket(delta)
+	if fries_pack_held:
+		_update_held_fries_pack(delta)
+	if bts_lightstick_held_index >= 0:
+		_update_held_bts_lightstick(delta)
+	_update_fryer_oil_bubbles(delta)
 	## Parked tray drinks keep dying their foam head down.
 	_update_parked_cups_foam(delta)
 	if ext_held:
@@ -1810,8 +1952,12 @@ func _process(delta: float) -> void:
 	else:
 		_serve_fly_watch = 0.0
 
+	_update_bts_day_intro(delta)
+	var day_intro_blocking := _bts_day_intro_active
+	var day1_needs_bts_sequence := _bts_day1_needs_sequence_customers()
+
 	## Shared shift clock — host owns it in co-op (synced via economy packets).
-	if not mp_enabled or NetManager.is_host():
+	if not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
 		day_time -= delta
 		if day_time < 0.0:
 			day_time = 0.0
@@ -1830,7 +1976,7 @@ func _process(delta: float) -> void:
 	else:
 		# _update_opening_terror_ambush(delta)
 		## In co-op, only the host spawns customers (then replicates).
-		if not mp_enabled or NetManager.is_host():
+		if not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
 			if _disguise_cat_cool > 0.0:
 				_disguise_cat_cool = maxf(0.0, _disguise_cat_cool - delta)
 			if _disguise_cat_pending:
@@ -1838,17 +1984,22 @@ func _process(delta: float) -> void:
 			spawn_timer -= delta
 			var cap := _customer_cap()
 			var waiting_n := _waiting_customer_count()
-			if not shift_closing and spawn_timer <= 0.0 and waiting_n < cap:
+			if (not shift_closing or day1_needs_bts_sequence) and spawn_timer <= 0.0 and waiting_n < cap:
 				# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
 				# 	_spawn_terrorist_wave()
 				# 	spawn_timer = _next_spawn_delay()
-				_spawn_customer()
+				if not _maybe_begin_bts_day1_performance():
+					_spawn_customer()
 				spawn_timer = _next_spawn_delay()
 
 	rush_mode = _waiting_customer_count() >= maxi(2, _customer_cap() - 1) and day >= 2
 
 	if shift_closing and customers.is_empty() and not service_window_closed:
-		if mp_enabled:
+		if _maybe_begin_bts_day1_performance():
+			pass
+		elif _bts_day1_blocks_day_end():
+			pass
+		elif mp_enabled:
 			if NetManager.is_host():
 				mp_end_day.rpc()
 		else:
@@ -2254,6 +2405,18 @@ func _input(event: InputEvent) -> void:
 			_put_icecream_cone_down()
 			get_viewport().set_input_as_handled()
 			return
+		if fryer_held_index >= 0:
+			_release_fryer_basket()
+			get_viewport().set_input_as_handled()
+			return
+		if fries_pack_held:
+			_release_fries_pack(event.position)
+			get_viewport().set_input_as_handled()
+			return
+		if bts_lightstick_held_index >= 0:
+			_release_bts_lightstick()
+			get_viewport().set_input_as_handled()
+			return
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -2266,6 +2429,15 @@ func _input(event: InputEvent) -> void:
 				if _begin_cup_hold():
 					get_viewport().set_input_as_handled()
 					return
+			if _try_fryer_basket_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
+			if _try_ready_fries_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
+			if _try_bts_lightstick_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _ui_blocks_world_click(event.position):
 				return
 			if cheese_held:
@@ -2282,7 +2454,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
+			if fryer_held_index >= 0 or fries_pack_held or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -2331,6 +2503,18 @@ func _input(event: InputEvent) -> void:
 			return
 		if icecream_cone_held:
 			_put_icecream_cone_down()
+			get_viewport().set_input_as_handled()
+			return
+		if fryer_held_index >= 0:
+			_release_fryer_basket()
+			get_viewport().set_input_as_handled()
+			return
+		if fries_pack_held:
+			_release_fries_pack(event.position)
+			get_viewport().set_input_as_handled()
+			return
+		if bts_lightstick_held_index >= 0:
+			_release_bts_lightstick()
 			get_viewport().set_input_as_handled()
 			return
 		if cheese_held:
@@ -2701,6 +2885,9 @@ func _cheese_station_screen_center() -> Vector2:
 func _kb_start_soda_pour(flavor: String) -> void:
 	if flavor == "":
 		return
+	if not _owns_soda_machine():
+		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
+		return
 	if _kb_soda_flavor == flavor:
 		_kb_stop_soda_pour()
 		return
@@ -2727,6 +2914,9 @@ func _kb_stop_soda_pour() -> void:
 
 
 func _kb_grab_cup_from_rack() -> bool:
+	if not _owns_soda_machine():
+		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
+		return false
 	if cup_held:
 		return true
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
@@ -2757,6 +2947,9 @@ func _kb_grab_cup_from_rack() -> bool:
 
 
 func _kb_start_icecream() -> void:
+	if not _owns_icecream_machine():
+		_flash("Buy the ice cream machine on BizPhone first", Color("FFE082"))
+		return
 	if icecream_cone_held:
 		return
 	if not _begin_icecream_cone_hold():
@@ -3406,6 +3599,8 @@ func _build_3d_world() -> void:
 	_build_menu_board_decal()
 	_build_icecream_machine()
 	_build_soda_station()
+	_build_fryer_machine()
+	_apply_machine_unlock_visibility()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
 	_build_window_bunting()
 	_build_air_motes()
@@ -12021,6 +12216,767 @@ func _make_waffle_cone_mat(col: Color, roughness: float = 0.72) -> StandardMater
 	return mat
 
 
+func _make_basic_mat(col: Color, metallic: float = 0.0, roughness: float = 0.55) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.metallic = metallic
+	mat.roughness = roughness
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	return mat
+
+
+func _add_mesh_box(parent: Node3D, name: String, size: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = name
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	mi.mesh = mesh
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+func _add_mesh_rod(parent: Node3D, name: String, length: float, radius: float, pos: Vector3, axis: String, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = name
+	var mesh := CylinderMesh.new()
+	mesh.height = length
+	mesh.top_radius = radius
+	mesh.bottom_radius = radius
+	mesh.radial_segments = 8
+	mi.mesh = mesh
+	mi.position = pos
+	match axis:
+		"x":
+			mi.rotation_degrees.z = 90.0
+		"z":
+			mi.rotation_degrees.x = 90.0
+		_:
+			pass
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+func _fryer_oil_local_for_index(index: int = -1) -> Vector3:
+	var p := FRYER_OIL_LOCAL
+	if index == 0:
+		p.x = -FRYER_TUB_X
+	elif index == 1:
+		p.x = FRYER_TUB_X
+	return p
+
+
+func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material, oil_mat: Material) -> void:
+	var tub := Node3D.new()
+	tub.name = "OilTub%d" % index
+	tub.position = Vector3(x, 0.0, 0.0)
+	parent.add_child(tub)
+	var well_mat := _make_basic_mat(Color(0.035, 0.030, 0.024), 0.0, 0.7)
+	_add_mesh_box(tub, "BackWall", Vector3(0.30, 0.105, 0.018), Vector3(0.0, 0.205, FRYER_OIL_LOCAL.z - 0.125), well_mat)
+	_add_mesh_box(tub, "FrontLowLip", Vector3(0.30, 0.024, 0.018), Vector3(0.0, 0.165, FRYER_OIL_LOCAL.z + 0.125), well_mat)
+	_add_mesh_box(tub, "LeftWall", Vector3(0.018, 0.105, 0.25), Vector3(-0.140, 0.205, FRYER_OIL_LOCAL.z), well_mat)
+	_add_mesh_box(tub, "RightWall", Vector3(0.018, 0.105, 0.25), Vector3(0.140, 0.205, FRYER_OIL_LOCAL.z), well_mat)
+	_add_mesh_box(tub, "TubBottom", Vector3(0.30, 0.024, 0.260), Vector3(0.0, 0.115, FRYER_OIL_LOCAL.z), steel_mat)
+	_add_mesh_box(tub, "OilLiquid", Vector3(0.255, 0.014, 0.225), Vector3(0.0, FRYER_OIL_LOCAL.y, FRYER_OIL_LOCAL.z), oil_mat)
+	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
+	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bubble_mat.emission_enabled = true
+	bubble_mat.emission = Color(1.0, 0.78, 0.12)
+	bubble_mat.emission_energy_multiplier = 0.24
+	for i in 7:
+		var bubble := MeshInstance3D.new()
+		bubble.name = "OilBubble%d" % i
+		var mesh := SphereMesh.new()
+		var r := randf_range(0.020, 0.044)
+		mesh.radius = r
+		mesh.height = r * 2.0
+		mesh.radial_segments = 12
+		mesh.rings = 6
+		bubble.mesh = mesh
+		bubble.material_override = bubble_mat
+		bubble.position = Vector3(
+			randf_range(-0.105, 0.105),
+			FRYER_OIL_LOCAL.y + 0.010 + randf_range(0.0, 0.012),
+			FRYER_OIL_LOCAL.z + randf_range(-0.085, 0.085)
+		)
+		bubble.set_meta("home", bubble.position)
+		bubble.set_meta("phase", randf_range(0.0, TAU))
+		bubble.set_meta("rise", randf_range(0.010, 0.035))
+		tub.add_child(bubble)
+		fryer_oil_bubbles.append(bubble)
+
+
+func _build_fryer_machine() -> void:
+	if fryer_root != null and is_instance_valid(fryer_root):
+		fryer_root.queue_free()
+	fryer_root = null
+	fryer_baskets.clear()
+	fryer_oil_bubbles.clear()
+	fryer_held_index = -1
+	_fryer_prev_pos = Vector3.ZERO
+	_fryer_vel = Vector3.ZERO
+
+	var root := Node3D.new()
+	root.name = "FrenchFryStation"
+	root.position = FRYER_STATION_POS
+	root.rotation_degrees = FRYER_STATION_ROT
+	world.add_child(root)
+	fryer_root = root
+
+	var body_mat := _make_soda_metal_mat(Color(0.16, 0.16, 0.15), 0.86, 0.30)
+	var steel_mat := _make_soda_metal_mat(Color(0.60, 0.61, 0.58), 0.92, 0.18)
+	var oil_mat := _make_basic_mat(Color(1.0, 0.76, 0.06, 0.90), 0.0, 0.16)
+	oil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	oil_mat.emission_enabled = true
+	oil_mat.emission = Color(1.0, 0.67, 0.08)
+	oil_mat.emission_energy_multiplier = 0.26
+
+	_add_mesh_box(root, "FryerCabinet", Vector3(0.84, 0.18, 0.42), Vector3(0.0, 0.095, 0.0), body_mat)
+	_build_fryer_tub(root, 0, -FRYER_TUB_X, steel_mat, oil_mat)
+	_build_fryer_tub(root, 1, FRYER_TUB_X, steel_mat, oil_mat)
+	_add_mesh_box(root, "FrontLip", Vector3(0.82, 0.04, 0.045), Vector3(0.0, 0.070, 0.38), steel_mat)
+
+	var label := Label3D.new()
+	label.text = "FRYER"
+	label.position = Vector3(0.0, 0.250, 0.27)
+	label.font_size = 34
+	label.pixel_size = 0.00125
+	label.modulate = Color(1.0, 0.76, 0.28)
+	label.outline_size = 5
+	label.outline_modulate = Color(0, 0, 0, 0.78)
+	root.add_child(label)
+
+	fryer_ready_root = Node3D.new()
+	fryer_ready_root.name = "ReadyFries"
+	fryer_ready_root.position = Vector3(-0.28, 0.12, 0.43)
+	root.add_child(fryer_ready_root)
+
+	_create_fryer_basket(0, Vector3(-0.20, 0.35, 0.10))
+	_create_fryer_basket(1, Vector3(0.20, 0.35, 0.10))
+	_refresh_ready_fries_visuals()
+
+
+func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
+	if fryer_root == null:
+		return
+	var basket := Node3D.new()
+	basket.name = "FryBasket%d" % index
+	basket.position = local_pos
+	basket.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	fryer_root.add_child(basket)
+
+	var metal := _make_soda_metal_mat(Color(0.52, 0.54, 0.56), 0.96, 0.24)
+	var dark := _make_soda_metal_mat(Color(0.10, 0.09, 0.08), 0.7, 0.36)
+	## Basket is mostly wire rods: open sides + visible grid, with a thicker rim for readability.
+	_add_mesh_rod(basket, "BackRim", 0.27, 0.006, Vector3(0.0, 0.135, -0.090), "x", metal)
+	_add_mesh_rod(basket, "FrontRim", 0.27, 0.006, Vector3(0.0, 0.130, 0.090), "x", metal)
+	_add_mesh_rod(basket, "LeftRim", 0.19, 0.006, Vector3(-0.135, 0.132, 0.0), "z", metal)
+	_add_mesh_rod(basket, "RightRim", 0.19, 0.006, Vector3(0.135, 0.132, 0.0), "z", metal)
+	for sx in [-0.135, 0.135]:
+		for sz in [-0.090, 0.090]:
+			_add_mesh_rod(basket, "CornerWire", 0.135, 0.0045, Vector3(sx, 0.065, sz), "y", metal)
+	for z in [-0.070, -0.035, 0.0, 0.035, 0.070]:
+		_add_mesh_rod(basket, "BottomWireX", 0.25, 0.0032, Vector3(0.0, 0.005, z), "x", metal)
+	for x in [-0.100, -0.050, 0.0, 0.050, 0.100]:
+		_add_mesh_rod(basket, "BottomWireZ", 0.17, 0.0032, Vector3(x, 0.007, 0.0), "z", metal)
+	for y in [0.035, 0.070, 0.105]:
+		_add_mesh_rod(basket, "FrontWire", 0.25, 0.0033, Vector3(0.0, y, 0.090), "x", metal)
+		_add_mesh_rod(basket, "BackWire", 0.25, 0.0033, Vector3(0.0, y, -0.090), "x", metal)
+		_add_mesh_rod(basket, "LeftWire", 0.17, 0.0033, Vector3(-0.135, y, 0.0), "z", metal)
+		_add_mesh_rod(basket, "RightWire", 0.17, 0.0033, Vector3(0.135, y, 0.0), "z", metal)
+	for x2 in [-0.080, -0.040, 0.0, 0.040, 0.080]:
+		_add_mesh_rod(basket, "FrontVerticalWire", 0.118, 0.0028, Vector3(x2, 0.068, 0.091), "y", metal)
+		_add_mesh_rod(basket, "BackVerticalWire", 0.118, 0.0028, Vector3(x2, 0.068, -0.091), "y", metal)
+	_add_mesh_box(basket, "BasketHandle", Vector3(0.05, 0.035, 0.22), Vector3(0.0, 0.050, 0.22), dark)
+	_add_mesh_box(basket, "BasketHandleGrip", Vector3(0.16, 0.045, 0.045), Vector3(0.0, 0.050, 0.34), dark)
+
+	var fries_root := Node3D.new()
+	fries_root.name = "Potatoes"
+	basket.add_child(fries_root)
+	var raw_mat := _make_basic_mat(Color(0.96, 0.82, 0.42), 0.0, 0.62)
+	for i in 26:
+		var fry := _add_mesh_box(
+			fries_root,
+			"Fry%d" % i,
+			Vector3(randf_range(0.012, 0.017), randf_range(0.010, 0.016), randf_range(0.095, 0.150)),
+			Vector3(randf_range(-0.100, 0.100), 0.030 + randf_range(0.0, 0.075), randf_range(-0.060, 0.060)),
+			raw_mat
+		)
+		fry.rotation_degrees = Vector3(randf_range(-10.0, 10.0), randf_range(0.0, 180.0), randf_range(-14.0, 14.0))
+	fries_root.visible = false
+
+	var area := Area3D.new()
+	area.name = "FryBasketGrab"
+	area.input_ray_pickable = true
+	area.collision_layer = FRYER_COLLISION_LAYER
+	area.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.34, 0.28, 0.36)
+	shape.shape = box
+	shape.position = Vector3(0.0, 0.085, 0.08)
+	area.add_child(shape)
+	basket.add_child(area)
+
+	fryer_baskets.append({
+		"root": basket,
+		"area": area,
+		"state": "empty",
+		"cook": 0.0,
+		"shake": 0.0,
+		"home": basket.global_position,
+		"home_rot": basket.rotation_degrees,
+	})
+
+
+func _refresh_fryer_basket_visual(index: int) -> void:
+	if index < 0 or index >= fryer_baskets.size():
+		return
+	var data: Dictionary = fryer_baskets[index]
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	var fries_root := root.get_node_or_null("Potatoes") as Node3D
+	var state := str(data.get("state", "empty"))
+	if fries_root != null:
+		fries_root.visible = state != "empty"
+		var cooked_t := clampf(float(data.get("cook", 0.0)) / FRY_BASKET_COOK_SEC, 0.0, 1.0)
+		for child in fries_root.get_children():
+			var mi := child as MeshInstance3D
+			if mi == null:
+				continue
+			var mat := mi.material_override as StandardMaterial3D
+			if mat != null:
+				mat.albedo_color = Color(0.92, 0.72, 0.34).lerp(Color(1.0, 0.82, 0.20), cooked_t)
+	var area := data.get("area") as Area3D
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = fryer_held_index != index
+
+
+func _add_fry_cup_logo(parent: Node3D) -> void:
+	if not ResourceLoader.exists(LOGO_TEX_PATH):
+		return
+	var tex := load(LOGO_TEX_PATH) as Texture2D
+	if tex == null:
+		return
+	var logo := MeshInstance3D.new()
+	logo.name = "BurgerPalsFriesLogo"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.070, 0.042)
+	logo.mesh = quad
+	logo.position = Vector3(0.0, 0.055, 0.047)
+	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.94)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.render_priority = 3
+	logo.material_override = mat
+	parent.add_child(logo)
+
+
+func _populate_fry_pack(pack: Node3D) -> void:
+	var cup_mat := _make_basic_mat(Color(0.82, 0.05, 0.035), 0.0, 0.36)
+	var rim_mat := _make_basic_mat(Color(1.0, 0.82, 0.24), 0.0, 0.32)
+	var fry_mat := _make_basic_mat(Color(1.0, 0.78, 0.16), 0.0, 0.58)
+	var cup := MeshInstance3D.new()
+	cup.name = "RedFryCup"
+	var cup_mesh := CylinderMesh.new()
+	cup_mesh.height = 0.095
+	cup_mesh.top_radius = 0.048
+	cup_mesh.bottom_radius = 0.034
+	cup_mesh.radial_segments = 24
+	cup.mesh = cup_mesh
+	cup.position = Vector3(0.0, 0.048, 0.0)
+	cup.material_override = cup_mat
+	pack.add_child(cup)
+	var rim := MeshInstance3D.new()
+	rim.name = "CupGoldRim"
+	var rim_mesh := TorusMesh.new()
+	rim_mesh.inner_radius = 0.045
+	rim_mesh.outer_radius = 0.050
+	rim_mesh.ring_segments = 24
+	rim_mesh.rings = 6
+	rim.mesh = rim_mesh
+	rim.position = Vector3(0.0, 0.098, 0.0)
+	rim.material_override = rim_mat
+	pack.add_child(rim)
+	_add_fry_cup_logo(pack)
+	for f in 28:
+		var ring_t := float(f) / 28.0
+		var ang := ring_t * TAU * 2.35 + randf_range(-0.10, 0.10)
+		var outer := f >= 10
+		var radius := randf_range(0.010, 0.024) if not outer else randf_range(0.022, 0.041)
+		var x := cos(ang) * radius
+		var z := sin(ang) * radius * 0.78
+		var height := randf_range(0.102, 0.158)
+		var outward_tilt := randf_range(2.0, 6.0) if not outer else randf_range(7.0, 15.0)
+		var fry := _add_mesh_box(
+			pack,
+			"HotFry%d" % f,
+			Vector3(randf_range(0.007, 0.011), height, randf_range(0.007, 0.011)),
+			Vector3(x, 0.128 + height * 0.12 + randf_range(-0.006, 0.010), z),
+			fry_mat
+		)
+		fry.rotation_degrees = Vector3(
+			-sin(ang) * outward_tilt + randf_range(-1.5, 1.5),
+			rad_to_deg(ang) + randf_range(-4.0, 4.0),
+			cos(ang) * outward_tilt + randf_range(-1.5, 1.5)
+		)
+
+
+func _refresh_ready_fries_visuals() -> void:
+	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
+		return
+	for child in fryer_ready_root.get_children():
+		child.queue_free()
+	var count := mini(fryer_ready_servings, 6)
+	for i in count:
+		var pack := Node3D.new()
+		pack.name = "ReadyFries%d" % i
+		pack.position = Vector3(float(i % 3) * 0.12, float(i / 3) * 0.065, 0.0)
+		fryer_ready_root.add_child(pack)
+		_populate_fry_pack(pack)
+		var area := Area3D.new()
+		area.name = "ReadyFriesGrab"
+		area.input_ray_pickable = true
+		area.collision_layer = FRYER_COLLISION_LAYER
+		area.collision_mask = 0
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(0.16, 0.20, 0.16)
+		shape.shape = box
+		shape.position = Vector3(0.0, 0.085, 0.0)
+		area.add_child(shape)
+		pack.add_child(area)
+
+
+func _reset_fryer_state(clear_servings: bool = true) -> void:
+	fryer_held_index = -1
+	_fryer_prev_pos = Vector3.ZERO
+	_fryer_vel = Vector3.ZERO
+	_fryer_hold_offset = Vector3.ZERO
+	fries_pack_held = false
+	if fries_pack_root != null and is_instance_valid(fries_pack_root):
+		fries_pack_root.queue_free()
+	fries_pack_root = null
+	_fries_pack_prev_pos = Vector3.ZERO
+	_fries_pack_vel = Vector3.ZERO
+	for i in fryer_baskets.size():
+		var data: Dictionary = fryer_baskets[i]
+		var root := data.get("root") as Node3D
+		if root != null and is_instance_valid(root):
+			root.global_position = data.get("home", root.global_position)
+			root.rotation_degrees = data.get("home_rot", root.rotation_degrees)
+		data["state"] = "empty"
+		data["cook"] = 0.0
+		data["shake"] = 0.0
+		fryer_baskets[i] = data
+		_refresh_fryer_basket_visual(i)
+	if clear_servings:
+		fryer_ready_servings = 0
+	_refresh_ready_fries_visuals()
+
+
+func _fryer_oil_global(index: int = -1) -> Vector3:
+	if fryer_root == null or not is_instance_valid(fryer_root):
+		return Vector3.ZERO
+	return fryer_root.to_global(_fryer_oil_local_for_index(index))
+
+
+func _update_fryer_oil_bubbles(delta: float) -> void:
+	if fryer_root == null or not is_instance_valid(fryer_root) or not fryer_root.visible:
+		return
+	var t := float(Time.get_ticks_msec()) * 0.001
+	for i in range(fryer_oil_bubbles.size() - 1, -1, -1):
+		var bubble := fryer_oil_bubbles[i] as MeshInstance3D
+		if bubble == null or not is_instance_valid(bubble):
+			fryer_oil_bubbles.remove_at(i)
+			continue
+		var home: Vector3 = bubble.get_meta("home", bubble.position)
+		var phase := float(bubble.get_meta("phase", 0.0))
+		var rise := float(bubble.get_meta("rise", 0.02))
+		var pulse := 0.5 + 0.5 * sin(t * 3.3 + phase)
+		bubble.position = home + Vector3(0.0, pulse * rise, 0.0)
+		var s := 0.78 + pulse * 0.45
+		bubble.scale = Vector3(s, s * 0.65, s)
+		var mat := bubble.material_override as StandardMaterial3D
+		if mat != null:
+			var c := mat.albedo_color
+			c.a = 0.55 + pulse * 0.35
+			mat.albedo_color = c
+
+
+func _fryer_basket_index_at(screen_pos: Vector2) -> int:
+	if not _owns_fryer_machine() or camera == null or fryer_baskets.is_empty():
+		return -1
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 12.0
+	var q := PhysicsRayQueryParameters3D.create(from, to, FRYER_COLLISION_LAYER)
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.has("collider"):
+		var hit_area := hit["collider"] as Area3D
+		for i in fryer_baskets.size():
+			var data: Dictionary = fryer_baskets[i]
+			if data.get("area") == hit_area:
+				return i
+	## Tiny wire baskets can be fussy to ray-hit; screen fallback keeps clicks friendly.
+	var best := -1
+	var best_d := 54.0
+	for i in fryer_baskets.size():
+		var data2: Dictionary = fryer_baskets[i]
+		var root := data2.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var sp := camera.unproject_position(root.global_position + Vector3(0.0, 0.06, 0.08))
+		var d := sp.distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
+	var idx := _fryer_basket_index_at(screen_pos)
+	if idx < 0:
+		return false
+	if idx >= fryer_baskets.size():
+		return false
+	var data: Dictionary = fryer_baskets[idx]
+	var state := str(data.get("state", "empty"))
+	if state == "empty":
+		data["state"] = "raw"
+		data["cook"] = 0.0
+		data["shake"] = 0.0
+		fryer_baskets[idx] = data
+		_refresh_fryer_basket_visual(idx)
+		_flash("Potatoes loaded — dunk the basket", Color("FFE082"))
+		if game_audio:
+			game_audio.play_click()
+		return true
+	return _begin_fryer_basket_hold(idx)
+
+
+func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
+	if not _owns_fryer_machine() or fryer_ready_servings <= 0 or fryer_ready_root == null \
+			or not is_instance_valid(fryer_ready_root) or camera == null:
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 12.0
+	var q := PhysicsRayQueryParameters3D.create(from, to, FRYER_COLLISION_LAYER)
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.has("collider"):
+		var node := hit["collider"] as Node
+		while node != null:
+			if node == fryer_ready_root:
+				return true
+			node = node.get_parent()
+	var best_d := 64.0
+	var count := mini(fryer_ready_servings, 6)
+	for i in count:
+		var local := Vector3(float(i % 3) * 0.12, float(i / 3) * 0.065, 0.0)
+		var sp := camera.unproject_position(fryer_ready_root.to_global(local + Vector3(0.0, 0.10, 0.0)))
+		best_d = minf(best_d, sp.distance_to(screen_pos))
+	return best_d < 58.0
+
+
+func _try_ready_fries_click(screen_pos: Vector2) -> bool:
+	if not _ready_fries_under_cursor(screen_pos):
+		return false
+	return _begin_fries_pack_hold()
+
+
+func _begin_fries_pack_hold() -> bool:
+	if fryer_ready_servings <= 0 or fries_pack_held:
+		return false
+	if fryer_held_index >= 0 or spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null \
+			or cup_held or icecream_cone_held or burnt_icecream_cone_held or fries_pack_held:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	fryer_ready_servings = maxi(0, fryer_ready_servings - 1)
+	_refresh_ready_fries_visuals()
+	_refresh_ticket_checkmarks()
+	fries_pack_held = true
+	fries_pack_root = Node3D.new()
+	fries_pack_root.name = "HeldFries"
+	world.add_child(fries_pack_root)
+	var start := Vector3.ZERO
+	if fryer_ready_root != null and is_instance_valid(fryer_ready_root):
+		start = fryer_ready_root.global_position + Vector3(0.02, 0.10, 0.0)
+	fries_pack_root.global_position = start
+	fries_pack_root.scale = Vector3(1.18, 1.18, 1.18)
+	_populate_fry_pack(fries_pack_root)
+	_fries_pack_prev_pos = fries_pack_root.global_position
+	_fries_pack_vel = Vector3.ZERO
+	if game_audio:
+		if game_audio.has_method("play_rack_take"):
+			game_audio.play_rack_take()
+		game_audio.play_click()
+	return true
+
+
+func _begin_fryer_basket_hold(index: int) -> bool:
+	if index < 0 or index >= fryer_baskets.size():
+		return false
+	if fryer_held_index >= 0:
+		return true
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null \
+			or cup_held or icecream_cone_held or burnt_icecream_cone_held:
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	fryer_held_index = index
+	var data: Dictionary = fryer_baskets[index]
+	var root := data.get("root") as Node3D
+	var area := data.get("area") as Area3D
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = false
+	if root != null and is_instance_valid(root):
+		_fryer_prev_pos = root.global_position
+		var oil := _fryer_oil_global(index)
+		var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), oil.y + 0.20 if oil != Vector3.ZERO else GRILL_SURFACE_Y + FRYER_BASKET_HOLD_Y)
+		_fryer_hold_offset = root.global_position - seat
+		_fryer_hold_offset = _fryer_hold_offset.limit_length(0.18)
+		root.rotation_degrees = Vector3(-12.0, 0.0, 0.0)
+	_fryer_vel = Vector3.ZERO
+	if str(data.get("state", "raw")) == "done":
+		_flash("Shake the basket!", Color("FFD54F"))
+	else:
+		_flash("Hold in oil for 5 seconds", Color("FFE082"))
+	if game_audio:
+		game_audio.play_click()
+	return true
+
+
+func _update_held_fryer_basket(delta: float) -> void:
+	if fryer_held_index < 0 or fryer_held_index >= fryer_baskets.size():
+		return
+	var data: Dictionary = fryer_baskets[fryer_held_index]
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var oil := _fryer_oil_global(fryer_held_index)
+	var carry_y := GRILL_SURFACE_Y + FRYER_BASKET_HOLD_Y
+	if oil != Vector3.ZERO:
+		carry_y = oil.y + 0.20
+	var seat := _tool_hold_point_from_screen(mouse, carry_y)
+	seat += _fryer_hold_offset
+	_fryer_hold_offset = _fryer_hold_offset.lerp(Vector3.ZERO, clampf(delta * 3.0, 0.0, 1.0))
+	var oil_lock := 0.0
+	if oil != Vector3.ZERO:
+		seat.x = clampf(seat.x, oil.x - 0.62, oil.x + 0.62)
+		seat.z = clampf(seat.z, oil.z - 0.38, oil.z + 0.46)
+		var screen_lock := 0.0
+		if camera != null:
+			var oil_screen := camera.unproject_position(oil + Vector3(0.0, 0.06, 0.0))
+			screen_lock = clampf(1.0 - mouse.distance_to(oil_screen) / 185.0, 0.0, 1.0)
+		var pre_dunk_dist := Vector2(seat.x - oil.x, seat.z - oil.z).length()
+		var world_lock := clampf(1.0 - pre_dunk_dist / (FRYER_OIL_RADIUS * 1.55), 0.0, 1.0)
+		oil_lock = maxf(screen_lock, world_lock)
+		if oil_lock > 0.05:
+			var pull := clampf(oil_lock * 1.25, 0.0, 1.0)
+			seat.x = lerpf(seat.x, oil.x, pull)
+			seat.z = lerpf(seat.z, oil.z, pull)
+		var dunk_y := oil.y - 0.115
+		seat.y = lerpf(oil.y + 0.22, dunk_y, oil_lock)
+	var prev := root.global_position
+	root.global_position = root.global_position.lerp(seat, clampf(delta * 12.0, 0.0, 1.0))
+	_fryer_vel = (root.global_position - _fryer_prev_pos) / maxf(delta, 0.001)
+	_fryer_prev_pos = root.global_position
+	var state := str(data.get("state", "empty"))
+	var oil_dist := Vector2(root.global_position.x - oil.x, root.global_position.z - oil.z).length()
+	var in_oil := oil != Vector3.ZERO and (oil_lock > 0.72 or oil_dist <= FRYER_OIL_RADIUS * 0.86) and root.global_position.y <= oil.y - 0.050
+	if (state == "raw" or state == "cooking") and in_oil:
+		if state != "cooking" and game_audio and game_audio.has_method("set_fryer_oil"):
+			game_audio.set_fryer_oil(true, 1.0)
+		state = "cooking"
+		data["cook"] = minf(FRY_BASKET_COOK_SEC, float(data.get("cook", 0.0)) + delta)
+		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.115, clampf(delta * 12.0, 0.0, 1.0))
+		root.rotation_degrees.x = lerpf(root.rotation_degrees.x, -26.0, clampf(delta * 8.0, 0.0, 1.0))
+		if float(data["cook"]) >= FRY_BASKET_COOK_SEC:
+			state = "done"
+			data["shake"] = 0.0
+			if game_audio and game_audio.has_method("set_fryer_oil"):
+				game_audio.set_fryer_oil(false)
+			_flash("Fries ready — shake basket!", Color("FFD54F"))
+	elif state == "cooking":
+		if game_audio and game_audio.has_method("set_fryer_oil"):
+			game_audio.set_fryer_oil(false)
+		state = "raw"
+	elif state == "done":
+		var lateral_speed := Vector2(_fryer_vel.x, _fryer_vel.z).length()
+		if lateral_speed > 0.42:
+			data["shake"] = float(data.get("shake", 0.0)) + delta * lateral_speed
+			root.rotation_degrees.z = sin(Time.get_ticks_msec() * 0.035) * 8.0
+		if float(data.get("shake", 0.0)) >= FRY_BASKET_SHAKE_NEED:
+			fryer_baskets[fryer_held_index] = data
+			_finish_fryer_basket(fryer_held_index)
+			return
+	data["state"] = state
+	fryer_baskets[fryer_held_index] = data
+	_refresh_fryer_basket_visual(fryer_held_index)
+	## Small carried-basket tilt from motion.
+	root.rotation_degrees.y = clampf(-_fryer_vel.x * 12.0, -10.0, 10.0)
+	if prev.distance_to(root.global_position) > 0.02:
+		root.rotation_degrees.x = clampf(root.rotation_degrees.x + _fryer_vel.z * 3.0, -32.0, 10.0)
+
+
+func _release_fryer_basket() -> void:
+	if fryer_held_index < 0 or fryer_held_index >= fryer_baskets.size():
+		fryer_held_index = -1
+		return
+	var idx := fryer_held_index
+	fryer_held_index = -1
+	_fryer_hold_offset = Vector3.ZERO
+	var data: Dictionary = fryer_baskets[idx]
+	var root := data.get("root") as Node3D
+	var area := data.get("area") as Area3D
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = true
+	if root != null and is_instance_valid(root):
+		if game_audio and game_audio.has_method("set_fryer_oil"):
+			game_audio.set_fryer_oil(false)
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(root, "global_position", data.get("home", root.global_position), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(root, "rotation_degrees", data.get("home_rot", root.rotation_degrees), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_refresh_fryer_basket_visual(idx)
+
+
+func _finish_fryer_basket(index: int) -> void:
+	if index < 0 or index >= fryer_baskets.size():
+		return
+	_add_ready_fries_local(2)
+	if mp_enabled and not _mp_applying:
+		if NetManager.is_host():
+			_mp_broadcast_economy()
+		else:
+			mp_add_fries_ready.rpc_id(1, 2)
+	var data: Dictionary = fryer_baskets[index]
+	data["state"] = "empty"
+	data["cook"] = 0.0
+	data["shake"] = 0.0
+	fryer_baskets[index] = data
+	_release_fryer_basket()
+	_flash("Two fries orders ready!", Color("FFD54F"))
+	call_deferred("_try_auto_serve")
+
+
+func _add_ready_fries_local(amount: int) -> void:
+	fryer_ready_servings = maxi(0, fryer_ready_servings + amount)
+	_refresh_ready_fries_visuals()
+	_refresh_ticket_checkmarks()
+	_update_hud()
+
+
+func _update_held_fries_pack(delta: float) -> void:
+	if not fries_pack_held or fries_pack_root == null or not is_instance_valid(fries_pack_root):
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var seat := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.20)
+	seat.y += 0.09
+	fries_pack_root.global_position = fries_pack_root.global_position.lerp(seat, clampf(delta * 16.0, 0.0, 1.0))
+	_fries_pack_vel = (fries_pack_root.global_position - _fries_pack_prev_pos) / maxf(delta, 0.001)
+	_fries_pack_prev_pos = fries_pack_root.global_position
+	fries_pack_root.rotation_degrees.y = clampf(-_fries_pack_vel.x * 10.0, -12.0, 12.0)
+	fries_pack_root.rotation_degrees.z = clampf(_fries_pack_vel.x * 9.0, -10.0, 10.0)
+	fries_pack_root.rotation_degrees.x = clampf(-8.0 + _fries_pack_vel.z * 4.0, -18.0, 8.0)
+
+
+func _fries_drop_customer(screen_pos: Vector2) -> Node3D:
+	if camera == null:
+		return null
+	var best: Node3D = null
+	var best_d := 150.0
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_waiting")) or bool(c.get("is_leaving")):
+			continue
+		if not GameDataScript.wants_fries(c.order) or _customer_fries_handed(c):
+			continue
+		var mouth := _customer_mouth_screen(c)
+		var d := mouth.distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+func _release_fries_pack(screen_pos: Vector2) -> void:
+	if not fries_pack_held:
+		return
+	var cust := _fries_drop_customer(screen_pos)
+	if cust != null and is_instance_valid(cust):
+		_serve_held_fries_pack(cust)
+		return
+	fries_pack_held = false
+	if fries_pack_root != null and is_instance_valid(fries_pack_root):
+		var root := fries_pack_root
+		fries_pack_root = null
+		var end := fryer_ready_root.global_position + Vector3(0.02, 0.11, 0.0) if fryer_ready_root != null and is_instance_valid(fryer_ready_root) else root.global_position
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(root, "global_position", end, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(root, "scale", Vector3(0.85, 0.85, 0.85), 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tw.chain().tween_callback(func() -> void:
+			if root != null and is_instance_valid(root):
+				root.queue_free()
+		)
+	else:
+		fries_pack_root = null
+	fryer_ready_servings = maxi(0, fryer_ready_servings + 1)
+	_refresh_ready_fries_visuals()
+	_refresh_ticket_checkmarks()
+	_update_hud()
+
+
+func _serve_held_fries_pack(customer: Node3D) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	fries_pack_held = false
+	var served_root := fries_pack_root
+	fries_pack_root = null
+	_mark_customer_fries_handed(customer, true)
+	_refresh_ticket_checkmarks()
+	_highlight_tickets()
+	if game_audio and game_audio.has_method("play_serve_whoosh"):
+		game_audio.play_serve_whoosh()
+	if served_root != null and is_instance_valid(served_root):
+		var target := customer.global_position + Vector3(0.0, 0.46, 0.05)
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(served_root, "global_position", target, 0.28).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(served_root, "scale", Vector3(0.35, 0.35, 0.35), 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(served_root, "rotation_degrees", Vector3(-20.0, 18.0, 0.0), 0.28).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.chain().tween_callback(func() -> void:
+			if customer != null and is_instance_valid(customer) and customer.has_method("chomp_burger"):
+				customer.chomp_burger()
+			if served_root != null and is_instance_valid(served_root):
+				served_root.queue_free()
+		)
+	if GameDataScript.is_fries_only_order(customer.order):
+		if mp_enabled and not _mp_applying:
+			var cid_fries := _customer_net_id(customer)
+			mp_serve.rpc(cid_fries, -3)
+		else:
+			_complete_fries_only_serve(customer)
+	else:
+		call_deferred("_try_auto_serve")
+
+
 func _build_icecream_machine() -> void:
 	if icecream_root != null and is_instance_valid(icecream_root):
 		icecream_root.queue_free()
@@ -12285,6 +13241,8 @@ func _ray_hits_icecream_cone(screen_pos: Vector2) -> bool:
 
 
 func _ray_hits_icecream_rack(screen_pos: Vector2) -> bool:
+	if not _owns_icecream_machine():
+		return false
 	if icecream_root == null or not is_instance_valid(icecream_root):
 		return false
 	var rack := icecream_root.get_node_or_null("ConeRack/ConeRackGrab") as Area3D
@@ -12292,6 +13250,8 @@ func _ray_hits_icecream_rack(screen_pos: Vector2) -> bool:
 
 
 func _icecream_click_should_win(screen_pos: Vector2) -> bool:
+	if not _owns_icecream_machine():
+		return false
 	## Prefer cone / nest grabs over neighboring soda tanks and cup radii.
 	if icecream_cone_held:
 		return false
@@ -12314,6 +13274,9 @@ func _icecream_click_should_win(screen_pos: Vector2) -> bool:
 
 func _begin_icecream_cone_hold() -> bool:
 	if not playing or icecream_cone_held:
+		return false
+	if not _owns_icecream_machine():
+		_flash("Buy the ice cream machine on BizPhone first", Color("FFE082"))
 		return false
 	if _icecream_grab_lockout > 0.0:
 		return false
@@ -12601,7 +13564,7 @@ func _icecream_sparkle_pos(t: float, phase: float) -> Vector3:
 		y = 0.023 + y_t * (ICECREAM_SWIRL_H - 0.023)
 	var radial := Vector3(cos(angle), 0.0, sin(angle)).normalized()
 	var height_lift := lerpf(-0.18, 0.52, fposmod(phase * 0.71, 1.0))
-	return radial * (path_r + tube_r * 0.82) + Vector3.UP * (y + tube_r * height_lift)
+	return radial * (path_r + tube_r * 1.06) + Vector3.UP * (y + tube_r * height_lift)
 
 
 func _ensure_icecream_sparkles(swirl_root: Node3D) -> Node3D:
@@ -12619,11 +13582,13 @@ func _ensure_icecream_sparkles(swirl_root: Node3D) -> Node3D:
 		bit.mesh = sparkle_mesh
 		bit.material_override = _make_icecream_sparkle_mat()
 		bit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		var t := 0.18 + (float(i) + 0.2) / float(ICECREAM_SPARKLE_COUNT) * 0.74
-		var phase := float(i) * 2.17 + 0.37
+		var n := (float(i) + 0.2) / float(ICECREAM_SPARKLE_COUNT)
+		## Bias toward the lower, thicker corkscrew rings where tiny highlights get buried.
+		var t := 0.055 + pow(n, 1.75) * 0.86
+		var phase := float(i) * 2.47 + 0.37
 		bit.set_meta("spark_t", t)
 		bit.set_meta("spark_phase", phase)
-		bit.set_meta("spark_size", 0.0022 + fposmod(float(i) * 0.331, 1.0) * 0.0019)
+		bit.set_meta("spark_size", 0.00125 + fposmod(float(i) * 0.331, 1.0) * 0.00135)
 		bit.position = _icecream_sparkle_pos(t, phase)
 		bit.visible = false
 		holder.add_child(bit)
@@ -12641,7 +13606,7 @@ func _update_icecream_sparkles_for(swirl_root: Node3D, fill_amount: float, motio
 		if bit == null or not is_instance_valid(bit):
 			continue
 		var t := float(bit.get_meta("spark_t", 1.0))
-		bit.visible = fill >= t and fill > 0.20
+		bit.visible = fill >= t and fill > 0.08
 		if not bit.visible:
 			continue
 		var phase := float(bit.get_meta("spark_phase", 0.0))
@@ -15462,6 +16427,8 @@ func _refresh_soda_flavor_lights() -> void:
 
 
 func _cup_click_should_win(screen_pos: Vector2) -> bool:
+	if not _owns_soda_machine():
+		return false
 	## Prefer grabbing/moving a cup over flavor pads — but never over a syrup jug.
 	if cup_held:
 		return false
@@ -15481,6 +16448,8 @@ func _cup_click_should_win(screen_pos: Vector2) -> bool:
 
 
 func _soda_flavor_under_cursor(screen_pos: Vector2) -> bool:
+	if not _owns_soda_machine():
+		return false
 	return _soda_flavor_id_at(screen_pos) != ""
 
 
@@ -15523,6 +16492,8 @@ func _soda_flavor_id_at(screen_pos: Vector2) -> String:
 
 
 func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
+	if not _owns_soda_machine():
+		return false
 	if camera == null or soda_flavor_areas.is_empty():
 		return false
 	var fid := _soda_flavor_id_at(screen_pos)
@@ -15545,6 +16516,8 @@ func _set_soda_flavor(fid: String) -> void:
 
 
 func _cursor_near_cup_rack(screen_pos: Vector2) -> bool:
+	if not _owns_soda_machine():
+		return false
 	## Take a fresh cup from the left CUPS peg (not the drip tray / cola jug).
 	if camera == null or cup_home == Vector3.ZERO:
 		return false
@@ -15554,6 +16527,8 @@ func _cursor_near_cup_rack(screen_pos: Vector2) -> bool:
 
 
 func _cup_rack_ray_hit(screen_pos: Vector2) -> bool:
+	if not _owns_soda_machine():
+		return false
 	if camera == null:
 		return false
 	var from := camera.project_ray_origin(screen_pos)
@@ -15571,6 +16546,9 @@ func _cup_rack_ray_hit(screen_pos: Vector2) -> bool:
 
 func _begin_cup_hold() -> bool:
 	if not playing or cup_held:
+		return false
+	if not _owns_soda_machine():
+		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null:
@@ -17417,6 +18395,16 @@ func _mark_customer_icecream_handed(customer: Node3D, handed: bool = true) -> vo
 	customer.set_meta("icecream_handed", handed)
 
 
+func _customer_fries_handed(customer: Node3D) -> bool:
+	return customer != null and is_instance_valid(customer) and bool(customer.get_meta("fries_handed", false))
+
+
+func _mark_customer_fries_handed(customer: Node3D, handed: bool = true) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	customer.set_meta("fries_handed", handed)
+
+
 func _customer_wants_icecream(customer: Node3D) -> bool:
 	return customer != null and is_instance_valid(customer) and GameDataScript.wants_icecream(customer.order)
 
@@ -19164,6 +20152,12 @@ func _buy_supply_local(id: String) -> void:
 		_flash("Already ordered — cat's on the way", Color("FFE082"))
 		return
 	var is_syrup := _is_syrup_supply(id)
+	if is_syrup and not _owns_soda_machine():
+		_flash("Buy the soda machine first", Color("FFE082"))
+		return
+	if (not is_syrup) and int(supply_stock.get(id, 0)) >= _ingredient_stock_cap(id):
+		_flash("Fridge full — buy storage or use some stock", Color("FFE082"))
+		return
 	var pack := 1 if is_syrup else SUPPLY_BUY_PACK
 	var unit := _supply_buy_unit_cost(id)
 	var cost := unit * float(pack if not is_syrup else SUPPLY_BUY_PACK)
@@ -19351,7 +20345,7 @@ func _credit_supply_delivery(id: String, pack: int, kind: String) -> void:
 		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		_flash("%s topped up!" % label, Color("A5D6A7"))
 	else:
-		supply_stock[id] = int(supply_stock.get(id, 0)) + pack
+		supply_stock[id] = mini(_ingredient_stock_cap(id), int(supply_stock.get(id, 0)) + pack)
 		supply_fresh[id] = SUPPLY_FRESH_MAX
 		var label2 := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		_flash("Restocked %s (+%d)" % [label2, pack], Color("A5D6A7"))
@@ -19487,13 +20481,14 @@ func _stock_bar_color(stock: int, cap: int) -> Color:
 
 
 func _ingredient_stock_cap(id: String) -> int:
+	var mult := _storage_capacity_mult()
 	match id:
 		"bun_bottom", "bun_top":
-			return 28
+			return 28 * mult
 		"patty":
-			return 22
+			return 22 * mult
 		_:
-			return 16
+			return 16 * mult
 
 
 func _refresh_ingredient_stock_bars() -> void:
@@ -19533,6 +20528,9 @@ func _maybe_record_social_review(
 	## Host/solo: ~70% of customers leave a visible social post right away.
 	if mp_enabled and not NetManager.is_host():
 		return
+	if not _bts_review_for_customer(customer).is_empty():
+		_commit_social_review(stars, kind, tip, station_index, customer)
+		return
 	if randf() >= SOCIAL_REVIEW_CHANCE:
 		return
 	_commit_social_review(stars, kind, tip, station_index, customer)
@@ -19569,6 +20567,10 @@ func _commit_social_review(
 		]
 		who = cat_names[randi() % cat_names.size()]
 	var text := SocialReviewsScript.generate(stars, kind, tip)
+	var bts_review := _bts_review_for_customer(customer)
+	if not bts_review.is_empty():
+		who = str(bts_review.get("who", who))
+		text = str(bts_review.get("text", text))
 	var pic: Texture2D = null
 	## Cat burnt-triple posts always attach the burger photo as evidence.
 	var force_pic := kind == "cat_burnt"
@@ -19590,6 +20592,15 @@ func _commit_social_review(
 			mp_customer_review_stars.rpc(nid, stars)
 		## Absolute feed replace so guests never show stars with an empty FEED.
 		_mp_broadcast_social_feed()
+
+
+func _bts_review_for_customer(customer: Node3D) -> Dictionary:
+	if customer == null or not is_instance_valid(customer):
+		return {}
+	var skin_idx := int(customer.get("skin_idx"))
+	if not BTS_REVIEW_BY_SKIN.has(skin_idx):
+		return {}
+	return BTS_REVIEW_BY_SKIN[skin_idx] as Dictionary
 
 
 func _show_customer_review_stars(customer: Node3D, stars: float) -> void:
@@ -19882,6 +20893,7 @@ func _refresh_phone_ui() -> void:
 		_refresh_bun_inventory_piles()
 		return
 	_clear_phone_box_children(phone_inventory_box)
+	_add_phone_shop_section(phone_inventory_box)
 	for id in SUPPLY_IDS:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -19955,72 +20967,73 @@ func _refresh_phone_ui() -> void:
 		row.add_child(buy)
 
 	## Syrup tanks — volume % + order refill (cat delivery).
-	for sid2 in SYRUP_SUPPLY_IDS:
-		var fid := _flavor_from_syrup_id(sid2)
-		var row2 := HBoxContainer.new()
-		row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row2.add_theme_constant_override("separation", 3)
-		row2.custom_minimum_size = Vector2(0, 18)
-		phone_inventory_box.add_child(row2)
+	if _owns_soda_machine():
+		for sid2 in SYRUP_SUPPLY_IDS:
+			var fid := _flavor_from_syrup_id(sid2)
+			var row2 := HBoxContainer.new()
+			row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row2.add_theme_constant_override("separation", 3)
+			row2.custom_minimum_size = Vector2(0, 18)
+			phone_inventory_box.add_child(row2)
 
-		var name2 := Label.new()
-		var short2 := str(GameDataScript.INGREDIENT_LABELS.get(sid2, sid2))
-		if short2.length() > 10:
-			short2 = short2.substr(0, 9) + "…"
-		name2.text = short2
-		name2.custom_minimum_size = Vector2(40, 0)
-		name2.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		name2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		name2.clip_text = true
-		UiFontsScript.apply_label(name2, false, 8)
-		name2.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
-		row2.add_child(name2)
+			var name2 := Label.new()
+			var short2 := str(GameDataScript.INGREDIENT_LABELS.get(sid2, sid2))
+			if short2.length() > 10:
+				short2 = short2.substr(0, 9) + "…"
+			name2.text = short2
+			name2.custom_minimum_size = Vector2(40, 0)
+			name2.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			name2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			name2.clip_text = true
+			UiFontsScript.apply_label(name2, false, 8)
+			name2.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+			row2.add_child(name2)
 
-		var fill_r := _soda_tank_amount(fid)
-		var pct := Label.new()
-		pct.text = "%d%%" % int(round(fill_r * 100.0))
-		pct.custom_minimum_size = Vector2(22, 0)
-		pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		pct.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		UiFontsScript.apply_label(pct, true, 8)
-		pct.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35) if fill_r < SODA_TANK_LOW_WARN else Color(0.7, 0.9, 0.75))
-		row2.add_child(pct)
+			var fill_r := _soda_tank_amount(fid)
+			var pct := Label.new()
+			pct.text = "%d%%" % int(round(fill_r * 100.0))
+			pct.custom_minimum_size = Vector2(22, 0)
+			pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			pct.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			UiFontsScript.apply_label(pct, true, 8)
+			pct.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35) if fill_r < SODA_TANK_LOW_WARN else Color(0.7, 0.9, 0.75))
+			row2.add_child(pct)
 
-		var bar2 := ProgressBar.new()
-		bar2.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bar2.custom_minimum_size = Vector2(12, 5)
-		bar2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		bar2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		bar2.max_value = 1.0
-		bar2.value = fill_r
-		bar2.show_percentage = false
-		var bar2_bg := StyleBoxFlat.new()
-		bar2_bg.bg_color = Color(0.10, 0.12, 0.16, 0.95)
-		bar2_bg.set_corner_radius_all(2)
-		var bar2_fill := StyleBoxFlat.new()
-		var tank_col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.7, 0.4, 0.2))
-		bar2_fill.bg_color = tank_col
-		bar2_fill.set_corner_radius_all(2)
-		bar2.add_theme_stylebox_override("background", bar2_bg)
-		bar2.add_theme_stylebox_override("fill", bar2_fill)
-		row2.add_child(bar2)
+			var bar2 := ProgressBar.new()
+			bar2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			bar2.custom_minimum_size = Vector2(12, 5)
+			bar2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			bar2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			bar2.max_value = 1.0
+			bar2.value = fill_r
+			bar2.show_percentage = false
+			var bar2_bg := StyleBoxFlat.new()
+			bar2_bg.bg_color = Color(0.10, 0.12, 0.16, 0.95)
+			bar2_bg.set_corner_radius_all(2)
+			var bar2_fill := StyleBoxFlat.new()
+			var tank_col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.7, 0.4, 0.2))
+			bar2_fill.bg_color = tank_col
+			bar2_fill.set_corner_radius_all(2)
+			bar2.add_theme_stylebox_override("background", bar2_bg)
+			bar2.add_theme_stylebox_override("fill", bar2_fill)
+			row2.add_child(bar2)
 
-		var syrup_cost: float = _supply_buy_unit_cost(sid2) * float(SUPPLY_BUY_PACK)
-		var buy2 := Button.new()
-		var pend2 := _supply_order_pending(sid2)
-		buy2.text = "…" if pend2 else "Buy"
-		buy2.disabled = pend2
-		buy2.tooltip_text = "Order syrup refill for %s · cat in %ds" % [_format_money(syrup_cost), int(SUPPLY_ORDER_WAIT)]
-		if pend2:
-			buy2.tooltip_text = "Cat delivering syrup…"
-		buy2.custom_minimum_size = Vector2(28, 16)
-		buy2.focus_mode = Control.FOCUS_NONE
-		UiFontsScript.apply_button(buy2, true, 7)
-		_style_phone_buy_button(buy2)
-		var syrup_id := sid2
-		if not pend2:
-			buy2.pressed.connect(func(): _buy_supply(syrup_id))
-		row2.add_child(buy2)
+			var syrup_cost: float = _supply_buy_unit_cost(sid2) * float(SUPPLY_BUY_PACK)
+			var buy2 := Button.new()
+			var pend2 := _supply_order_pending(sid2)
+			buy2.text = "…" if pend2 else "Buy"
+			buy2.disabled = pend2
+			buy2.tooltip_text = "Order syrup refill for %s · cat in %ds" % [_format_money(syrup_cost), int(SUPPLY_ORDER_WAIT)]
+			if pend2:
+				buy2.tooltip_text = "Cat delivering syrup…"
+			buy2.custom_minimum_size = Vector2(28, 16)
+			buy2.focus_mode = Control.FOCUS_NONE
+			UiFontsScript.apply_button(buy2, true, 7)
+			_style_phone_buy_button(buy2)
+			var syrup_id := sid2
+			if not pend2:
+				buy2.pressed.connect(func(): _buy_supply(syrup_id))
+			row2.add_child(buy2)
 	_refresh_cheese_piles()
 	_refresh_bun_inventory_piles()
 
@@ -20083,6 +21096,211 @@ func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 	sb.content_margin_top = 5
 	sb.content_margin_bottom = 5
 	return sb
+
+
+func _shop_item_cost(id: String) -> float:
+	match id:
+		SHOP_SODA_MACHINE:
+			return SHOP_SODA_MACHINE_COST
+		SHOP_ICECREAM_MACHINE:
+			return SHOP_ICECREAM_MACHINE_COST
+		SHOP_FRYER_MACHINE:
+			return SHOP_FRYER_MACHINE_COST
+		SHOP_FRIDGE_UPGRADE:
+			return SHOP_FRIDGE_UPGRADE_COST
+		_:
+			return 0.0
+
+
+func _shop_item_label(id: String) -> String:
+	match id:
+		SHOP_SODA_MACHINE:
+			return "Soda Machine"
+		SHOP_ICECREAM_MACHINE:
+			return "Ice Cream Machine"
+		SHOP_FRYER_MACHINE:
+			return "French Fryer"
+		SHOP_FRIDGE_UPGRADE:
+			return "Bigger Fridge"
+		_:
+			return id
+
+
+func _shop_item_note(id: String) -> String:
+	match id:
+		SHOP_SODA_MACHINE:
+			return "Unlocks soda orders"
+		SHOP_ICECREAM_MACHINE:
+			return "Unlocks ice cream orders"
+		SHOP_FRYER_MACHINE:
+			return "Unlocks fries orders"
+		SHOP_FRIDGE_UPGRADE:
+			return "Doubles storage"
+		_:
+			return ""
+
+
+func _owns_soda_machine() -> bool:
+	return bool(owned_machines.get(SHOP_SODA_MACHINE, false))
+
+
+func _owns_icecream_machine() -> bool:
+	return bool(owned_machines.get(SHOP_ICECREAM_MACHINE, false))
+
+
+func _owns_fryer_machine() -> bool:
+	return bool(owned_machines.get(SHOP_FRYER_MACHINE, false))
+
+
+func _owns_fridge_upgrade() -> bool:
+	return bool(owned_machines.get(SHOP_FRIDGE_UPGRADE, false))
+
+
+func _storage_capacity_mult() -> int:
+	return 2 if _owns_fridge_upgrade() else 1
+
+
+func _reset_shop_unlocks() -> void:
+	owned_machines[SHOP_SODA_MACHINE] = false
+	owned_machines[SHOP_ICECREAM_MACHINE] = false
+	owned_machines[SHOP_FRYER_MACHINE] = false
+	owned_machines[SHOP_FRIDGE_UPGRADE] = false
+	_clear_all_drink_cups()
+	_reset_icecream_cone_to_home()
+	_reset_fryer_state(true)
+	_apply_machine_unlock_visibility()
+
+
+func _apply_machine_unlock_visibility() -> void:
+	var soda_on := _owns_soda_machine()
+	if soda_root != null and is_instance_valid(soda_root):
+		soda_root.visible = soda_on
+		soda_root.process_mode = Node.PROCESS_MODE_INHERIT if soda_on else Node.PROCESS_MODE_DISABLED
+	var ice_on := _owns_icecream_machine()
+	if icecream_root != null and is_instance_valid(icecream_root):
+		icecream_root.visible = ice_on
+		icecream_root.process_mode = Node.PROCESS_MODE_INHERIT if ice_on else Node.PROCESS_MODE_DISABLED
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root) and _icecream_cone_is_shelved():
+		icecream_cone_root.visible = ice_on
+		if icecream_cone_area != null and is_instance_valid(icecream_cone_area):
+			icecream_cone_area.input_ray_pickable = ice_on
+	var fryer_on := _owns_fryer_machine()
+	if fryer_root != null and is_instance_valid(fryer_root):
+		fryer_root.visible = fryer_on
+		fryer_root.process_mode = Node.PROCESS_MODE_INHERIT if fryer_on else Node.PROCESS_MODE_DISABLED
+
+
+func _add_phone_shop_section(parent: VBoxContainer) -> void:
+	var panel := PanelContainer.new()
+	panel.name = "EquipmentShop"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("FFD54F")))
+	parent.add_child(panel)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 3)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(v)
+
+	var title := Label.new()
+	title.text = "EQUIPMENT"
+	UiFontsScript.apply_label(title, true, 9)
+	title.add_theme_color_override("font_color", Color("FFD54F"))
+	v.add_child(title)
+
+	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE]:
+		_add_phone_shop_item(v, id)
+
+
+func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 4)
+	row.custom_minimum_size = Vector2(0, 22)
+	parent.add_child(row)
+
+	var copy := VBoxContainer.new()
+	copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	copy.add_theme_constant_override("separation", 0)
+	copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(copy)
+
+	var name_lab := Label.new()
+	name_lab.text = _shop_item_label(id)
+	name_lab.clip_text = true
+	name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	UiFontsScript.apply_label(name_lab, true, 8)
+	name_lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+	copy.add_child(name_lab)
+
+	var note_lab := Label.new()
+	note_lab.text = _shop_item_note(id)
+	note_lab.clip_text = true
+	note_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	UiFontsScript.apply_label(note_lab, false, 7)
+	note_lab.add_theme_color_override("font_color", Color(0.58, 0.66, 0.76))
+	copy.add_child(note_lab)
+
+	var owned := bool(owned_machines.get(id, false))
+	var buy := Button.new()
+	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
+	buy.disabled = owned or not playing
+	buy.custom_minimum_size = Vector2(48, 18)
+	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
+	buy.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(buy, true, 7)
+	_style_phone_buy_button(buy)
+	if owned:
+		buy.tooltip_text = "Already installed"
+	elif not playing:
+		buy.tooltip_text = "Open the truck first"
+	else:
+		buy.tooltip_text = "Buy %s" % _shop_item_label(id)
+		var sid := id
+		buy.pressed.connect(func(): _buy_shop_item(sid))
+	row.add_child(buy)
+
+
+func _buy_shop_item(id: String) -> void:
+	if not playing:
+		return
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE].has(id):
+		return
+	if bool(owned_machines.get(id, false)):
+		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
+		return
+	var cost := _shop_item_cost(id)
+	if money + 0.001 < cost:
+		_flash("Need %s for %s" % [_format_money(cost), _shop_item_label(id)], Color("EF5350"))
+		return
+	if mp_enabled and NetManager.is_online() and not NetManager.is_host():
+		mp_buy_shop_item.rpc_id(1, id)
+		return
+	_buy_shop_item_local(id)
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
+
+
+func _buy_shop_item_local(id: String) -> void:
+	if not playing:
+		return
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE].has(id):
+		return
+	if bool(owned_machines.get(id, false)):
+		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
+		return
+	var cost := _shop_item_cost(id)
+	if money + 0.001 < cost:
+		_flash("Need %s for %s" % [_format_money(cost), _shop_item_label(id)], Color("EF5350"))
+		return
+	money -= cost
+	owned_machines[id] = true
+	_apply_machine_unlock_visibility()
+	_update_hud()
+	_refresh_phone_ui()
+	_refresh_ingredient_stock_bars()
+	_flash("%s installed!" % _shop_item_label(id), Color("A5D6A7"))
+	_sfx_click()
 
 
 func _find_social_post_index(post_id: int) -> int:
@@ -20699,6 +21917,1136 @@ func _stop_intro_title_music() -> void:
 		return
 	if intro_music_player.playing:
 		intro_music_player.stop()
+
+
+func _setup_bts_day_music() -> void:
+	if bts_day_music_player != null and is_instance_valid(bts_day_music_player):
+		return
+	var stream := load(BTS_DAY_START_MUSIC_PATH)
+	if stream == null:
+		push_warning("BTS day music missing: %s" % BTS_DAY_START_MUSIC_PATH)
+		return
+	if stream is AudioStreamMP3:
+		stream.loop = false
+	bts_day_music_player = AudioStreamPlayer.new()
+	bts_day_music_player.name = "BTSDayStartMusic"
+	bts_day_music_player.bus = "Master"
+	bts_day_music_player.stream = stream
+	bts_day_music_player.volume_db = -5.5
+	add_child(bts_day_music_player)
+
+
+func _stop_bts_day_music() -> void:
+	if bts_day_music_player == null or not is_instance_valid(bts_day_music_player):
+		return
+	if bts_day_music_player.playing:
+		bts_day_music_player.stop()
+
+
+func _ensure_bts_day_intro_label() -> void:
+	if bts_day_intro_label != null and is_instance_valid(bts_day_intro_label):
+		return
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root == null:
+		return
+	var lab := Label.new()
+	lab.name = "BTSDayIntroLabel"
+	lab.text = "We are BTS and we love you."
+	lab.visible = false
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lab.z_index = 90
+	lab.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lab.add_theme_color_override("font_color", Color("FFF176"))
+	lab.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	lab.add_theme_constant_override("outline_size", 8)
+	UiFontsScript.apply_label(lab, true, 34)
+	ui_root.add_child(lab)
+	bts_day_intro_label = lab
+
+
+func _begin_bts_day1_cat_announcement() -> void:
+	if not _bts_day1_flow_enabled() or _bts_day1_announcement_done:
+		return
+	_bts_day1_announcement_done = true
+	_show_bts_day1_cat_announcement()
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		mp_bts_day1_announcement.rpc()
+
+
+func _show_bts_day1_cat_announcement() -> void:
+	_flash("Oh Lordie There Are Special People In Town", Color("FFF176"), 5.5)
+	if window_cat != null and is_instance_valid(window_cat):
+		if window_cat.has_method("special_people_peek"):
+			window_cat.call("special_people_peek", 5.5)
+		elif window_cat.has_method("pet"):
+			window_cat.call("pet", true)
+
+
+func _show_bts_love_milla_message() -> void:
+	_flash("Love you Milla", Color("FFF176"), 7.0)
+
+
+func _finish_bts_day_intro() -> void:
+	_bts_day1_performance_done = true
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		mp_bts_intro_state.rpc(false, _bts_day_intro_t, _bts_day1_queue_i)
+	_clear_bts_day_intro(true)
+	_show_bts_love_milla_message()
+	spawn_timer = 0.2
+
+
+func _begin_bts_day_intro() -> void:
+	_clear_bts_day_intro(false)
+	if not BTS_SPECIAL_GUESTS_ENABLED or day != 1:
+		_start_radio_fade_in()
+		return
+	_setup_bts_day_music()
+	_bts_day_intro_active = true
+	_bts_day_intro_t = 0.0
+	_bts_day_intro_song_started = false
+	_bts_day_intro_swap_t = 0.0
+	_bts_day_intro_sync_t = 0.0
+	_bts_reviews_posted = false
+	spawn_timer = 9999.0
+	if radio != null:
+		radio.set_powered(false)
+	_set_bts_intro_banner_text(BTS_DAY_INTRO_FACTS[0])
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		mp_bts_intro_state.rpc(true, _bts_day_intro_t, _bts_day1_queue_i)
+
+
+func _clear_bts_day_intro(start_radio: bool = true) -> void:
+	_bts_day_intro_active = false
+	_bts_day_intro_t = 0.0
+	_bts_day_intro_song_started = false
+	_bts_day_intro_swap_t = 0.0
+	_bts_day_intro_sync_t = 0.0
+	_bts_reviews_posted = false
+	bts_lightstick_held_index = -1
+	_stop_bts_day_music()
+	if bts_day_intro_label != null and is_instance_valid(bts_day_intro_label):
+		bts_day_intro_label.visible = false
+	if flash_label != null and BTS_DAY_INTRO_FACTS.has(flash_label.text):
+		if _tutorial_text != "":
+			_apply_tutorial_hint_visibility()
+		else:
+			flash_label.visible = false
+			flash_label.modulate.a = 1.0
+	if bts_day_intro_root != null and is_instance_valid(bts_day_intro_root):
+		bts_day_intro_root.queue_free()
+	bts_day_intro_root = null
+	_bts_day_intro_cat = null
+	_bts_day_intro_cat_hearts = null
+	_bts_day_intro_cat_lightstick = null
+	_bts_day_intro_cat_book = null
+	_bts_day_intro_cat_heart_t = 0.0
+	if bts_day_intro_lights_root != null and is_instance_valid(bts_day_intro_lights_root):
+		bts_day_intro_lights_root.queue_free()
+	bts_day_intro_lights_root = null
+	_bts_day_intro_cards.clear()
+	_bts_day_intro_crowd.clear()
+	for data in bts_lightsticks:
+		if typeof(data) != TYPE_DICTIONARY:
+			continue
+		var stick := (data as Dictionary).get("root") as Node3D
+		if stick != null and is_instance_valid(stick):
+			stick.queue_free()
+	bts_lightsticks.clear()
+	if start_radio and playing:
+		_start_radio_fade_in()
+
+
+func _set_bts_intro_banner_text(text: String) -> void:
+	if flash_label == null:
+		return
+	if _flash_tween != null and _flash_tween.is_running():
+		_flash_tween.kill()
+		_flash_tween = null
+	flash_label.text = text
+	flash_label.add_theme_color_override("font_color", Color("FFF176"))
+	flash_label.visible = true
+	flash_label.modulate.a = 1.0
+	_layout_flash_label()
+
+
+func _post_bts_performance_reviews() -> void:
+	if _bts_reviews_posted:
+		return
+	_bts_reviews_posted = true
+	if mp_enabled and not NetManager.is_host():
+		return
+	for post in BTS_REVIEW_POSTS:
+		if typeof(post) != TYPE_DICTIONARY:
+			continue
+		var who := str((post as Dictionary).get("who", "BTS"))
+		var text := str((post as Dictionary).get("text", "Milla made this truck feel lovely."))
+		_apply_social_review(5.0, who, text)
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		_mp_broadcast_economy()
+		_mp_broadcast_social_feed()
+
+
+func _spawn_bts_day_intro_lights() -> void:
+	if world == null:
+		return
+	if bts_day_intro_lights_root != null and is_instance_valid(bts_day_intro_lights_root):
+		return
+	bts_day_intro_lights_root = Node3D.new()
+	bts_day_intro_lights_root.name = "BTSDayPerformanceLights"
+	world.add_child(bts_day_intro_lights_root)
+	var specs := [
+		{"pos": Vector3(-2.7, 2.6, 0.40), "color": Color("FF5FA2"), "energy": 0.85},
+		{"pos": Vector3(0.0, 2.75, 0.70), "color": Color("7CFFCB"), "energy": 0.70},
+		{"pos": Vector3(2.7, 2.6, 0.40), "color": Color("8AA8FF"), "energy": 0.85},
+		{"pos": Vector3(-0.9, 1.45, 1.05), "color": Color("FFD166"), "energy": 0.46},
+		{"pos": Vector3(1.0, 1.45, 1.05), "color": Color("CE93D8"), "energy": 0.46},
+	]
+	for i in specs.size():
+		var spec: Dictionary = specs[i]
+		var l := OmniLight3D.new()
+		l.name = "BTSLight%d" % i
+		l.position = spec["pos"]
+		l.light_color = spec["color"]
+		l.light_energy = float(spec["energy"])
+		l.omni_range = 5.2
+		l.shadow_enabled = false
+		bts_day_intro_lights_root.add_child(l)
+
+
+func _update_bts_day_intro_lights(dance_t: float) -> void:
+	if bts_day_intro_lights_root == null or not is_instance_valid(bts_day_intro_lights_root):
+		return
+	for i in bts_day_intro_lights_root.get_child_count():
+		var l := bts_day_intro_lights_root.get_child(i) as OmniLight3D
+		if l == null:
+			continue
+		l.light_energy = maxf(0.15, l.light_energy * 0.92 + (0.45 + sin(dance_t * (2.1 + float(i) * 0.27) + float(i)) * 0.22) * 0.08)
+		l.position.x += sin(dance_t * 1.4 + float(i)) * 0.0018
+
+
+func _spawn_bts_lightsticks() -> void:
+	if not bts_lightsticks.is_empty():
+		return
+	_ensure_bts_day_intro_root()
+	if bts_day_intro_root == null or not is_instance_valid(bts_day_intro_root):
+		return
+	var spots := [
+		Vector3(GRILL_CENTER_X - 0.23, GRILL_SURFACE_Y + 0.085, GRILL_SURFACE_Z + 0.02),
+		Vector3(GRILL_CENTER_X + 0.23, GRILL_SURFACE_Y + 0.085, GRILL_SURFACE_Z + 0.02),
+	]
+	for i in 2:
+		var root := _make_bts_lightstick_node(i)
+		root.global_position = spots[i]
+		root.global_rotation_degrees = Vector3(78.0, -18.0 + float(i) * 34.0, 0.0)
+		world.add_child(root)
+		bts_lightsticks.append({
+			"root": root,
+			"area": root.get_node_or_null("Grab") as Area3D,
+			"owner": 0,
+			"home": root.global_position,
+			"rot": root.global_rotation_degrees,
+		})
+		_set_bts_lightstick_glow(i, false)
+
+
+func _make_bts_lightstick_node(index: int) -> Node3D:
+	var root := Node3D.new()
+	root.name = "BTSLightstick%d" % index
+	root.scale = Vector3.ONE * 0.50
+	var handle_mat := _make_basic_mat(Color(0.015, 0.014, 0.017), 0.2, 0.36)
+	var trim_mat := _make_basic_mat(Color(0.10, 0.09, 0.13), 0.35, 0.22)
+	var globe_mat := StandardMaterial3D.new()
+	globe_mat.albedo_color = Color(1.0, 0.98, 0.94, 0.92)
+	globe_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	globe_mat.roughness = 0.14
+	globe_mat.metallic = 0.0
+	globe_mat.emission_enabled = true
+	globe_mat.emission = Color(0.55, 0.32, 1.0)
+	globe_mat.emission_energy_multiplier = 0.0
+	globe_mat.no_depth_test = true
+	globe_mat.render_priority = 24
+	globe_mat.set_meta("base_emission", 0.0)
+	var handle := MeshInstance3D.new()
+	handle.name = "Handle"
+	var cyl := CylinderMesh.new()
+	cyl.height = 0.34
+	cyl.top_radius = 0.035
+	cyl.bottom_radius = 0.042
+	cyl.radial_segments = 18
+	handle.mesh = cyl
+	handle.position = Vector3(0.0, -0.14, 0.0)
+	handle.material_override = handle_mat
+	handle.sorting_offset = 55.0
+	root.add_child(handle)
+	var cap := MeshInstance3D.new()
+	cap.name = "Collar"
+	var cap_mesh := CylinderMesh.new()
+	cap_mesh.height = 0.035
+	cap_mesh.top_radius = 0.047
+	cap_mesh.bottom_radius = 0.047
+	cap_mesh.radial_segments = 18
+	cap.mesh = cap_mesh
+	cap.position = Vector3(0.0, 0.045, 0.0)
+	cap.material_override = trim_mat
+	cap.sorting_offset = 55.0
+	root.add_child(cap)
+	var globe := MeshInstance3D.new()
+	globe.name = "GlowSphere"
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.095
+	sphere.height = 0.19
+	sphere.radial_segments = 24
+	sphere.rings = 12
+	globe.mesh = sphere
+	globe.position = Vector3(0.0, 0.155, 0.0)
+	globe.material_override = globe_mat
+	globe.sorting_offset = 80.0
+	root.add_child(globe)
+	for x in [-0.032, 0.032]:
+		var bar := MeshInstance3D.new()
+		bar.name = "LogoBar"
+		var box := BoxMesh.new()
+		box.size = Vector3(0.022, 0.105, 0.010)
+		bar.mesh = box
+		bar.position = Vector3(x, 0.155, -0.090)
+		bar.rotation_degrees.z = -13.0
+		var bar_mat := _make_basic_mat(Color(0.98, 0.96, 1.0), 0.0, 0.30)
+		bar_mat.no_depth_test = true
+		bar_mat.render_priority = 25
+		bar.material_override = bar_mat
+		bar.sorting_offset = 82.0
+		root.add_child(bar)
+	var string_mat := _make_basic_mat(Color(0.005, 0.004, 0.006), 0.0, 0.62)
+	for sx in [-0.012, 0.012]:
+		var cord := MeshInstance3D.new()
+		cord.name = "BottomString"
+		var cord_mesh := CylinderMesh.new()
+		cord_mesh.height = 0.16
+		cord_mesh.top_radius = 0.004
+		cord_mesh.bottom_radius = 0.004
+		cord_mesh.radial_segments = 6
+		cord.mesh = cord_mesh
+		cord.position = Vector3(sx, -0.39, 0.0)
+		cord.rotation_degrees.z = sx * 220.0
+		cord.material_override = string_mat
+		cord.sorting_offset = 54.0
+		root.add_child(cord)
+	var light := OmniLight3D.new()
+	light.name = "GlowLight"
+	light.position = globe.position
+	light.light_color = Color(0.58, 0.35, 1.0)
+	light.light_energy = 0.0
+	light.omni_range = 1.8
+	light.shadow_enabled = false
+	root.add_child(light)
+	var area := Area3D.new()
+	area.name = "Grab"
+	area.collision_layer = BTS_LIGHTSTICK_COLLISION_LAYER
+	area.collision_mask = 0
+	area.input_ray_pickable = true
+	var shape := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = 0.13
+	capsule.height = 0.58
+	shape.shape = capsule
+	shape.position = Vector3(0.0, -0.05, 0.0)
+	area.add_child(shape)
+	root.add_child(area)
+	return root
+
+
+func _set_bts_lightstick_glow(index: int, bright: bool) -> void:
+	if index < 0 or index >= bts_lightsticks.size():
+		return
+	var data: Dictionary = bts_lightsticks[index]
+	var root := data.get("root") as Node3D
+	_set_bts_lightstick_glow_node(root, bright)
+
+
+func _set_bts_lightstick_glow_node(root: Node3D, bright: bool) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	var globe := root.get_node_or_null("GlowSphere") as MeshInstance3D
+	if globe != null:
+		var mat := globe.material_override as StandardMaterial3D
+		if mat != null:
+			mat.emission_energy_multiplier = 1.75 if bright else 0.0
+			mat.albedo_color = Color(0.78, 0.54, 1.0, 0.86) if bright else Color(1.0, 0.98, 0.94, 0.92)
+	var light := root.get_node_or_null("GlowLight") as OmniLight3D
+	if light != null:
+		light.light_energy = 1.15 if bright else 0.0
+
+
+func _update_bts_lightsticks(_dance_t: float, _delta: float) -> void:
+	for i in bts_lightsticks.size():
+		var data: Dictionary = bts_lightsticks[i]
+		var root := data.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var owner := int(data.get("owner", 0))
+		var held := owner != 0
+		_set_bts_lightstick_glow(i, _bts_day_intro_song_started or held)
+		if owner == 0 and root.global_position.y < GRILL_SURFACE_Y + 0.06:
+			root.global_position.y = GRILL_SURFACE_Y + 0.06
+
+
+func _try_bts_lightstick_click(screen_pos: Vector2) -> bool:
+	if not _bts_day_intro_active:
+		return false
+	if bts_lightstick_held_index >= 0:
+		return false
+	if spatula_patty != null or cup_held or icecream_cone_held or brush_held or oil_held \
+			or shaker_held or ext_held or glock_held or sale_held or fryer_held_index >= 0 or fries_pack_held:
+		return false
+	var best := -1
+	var best_d := 58.0
+	for i in bts_lightsticks.size():
+		var data: Dictionary = bts_lightsticks[i]
+		if int(data.get("owner", 0)) != 0:
+			continue
+		var root := data.get("root") as Node3D
+		if root == null or not is_instance_valid(root) or camera == null:
+			continue
+		var d := screen_pos.distance_to(camera.unproject_position(root.global_position + Vector3(0, 0.08, 0)))
+		if d < best_d:
+			best_d = d
+			best = i
+	if best < 0:
+		for i in bts_lightsticks.size():
+			var data2: Dictionary = bts_lightsticks[i]
+			if int(data2.get("owner", 0)) != 0:
+				continue
+			var area := data2.get("area") as Area3D
+			if _ray_hits_tool(screen_pos, BTS_LIGHTSTICK_COLLISION_LAYER, area):
+				best = i
+				break
+	if best < 0:
+		return false
+	_begin_bts_lightstick_hold(best)
+	return true
+
+
+func _begin_bts_lightstick_hold(index: int) -> void:
+	if index < 0 or index >= bts_lightsticks.size():
+		return
+	var owner := NetManager.my_id() if mp_enabled else 1
+	bts_lightstick_held_index = index
+	_bts_lightstick_prev_mouse = get_viewport().get_mouse_position()
+	_set_bts_lightstick_owner(index, owner)
+	_update_held_bts_lightstick(0.016)
+	if game_audio:
+		game_audio.play_click()
+	if mp_enabled and NetManager.is_online():
+		var root := (bts_lightsticks[index] as Dictionary).get("root") as Node3D
+		if root != null and is_instance_valid(root):
+			mp_bts_lightstick_state.rpc(index, owner, root.global_position.x, root.global_position.y, root.global_position.z, root.global_rotation_degrees.x, root.global_rotation_degrees.y, root.global_rotation_degrees.z)
+
+
+func _set_bts_lightstick_owner(index: int, owner: int) -> void:
+	if index < 0 or index >= bts_lightsticks.size():
+		return
+	var data: Dictionary = bts_lightsticks[index]
+	data["owner"] = owner
+	var area := data.get("area") as Area3D
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = owner == 0
+	bts_lightsticks[index] = data
+
+
+func _update_held_bts_lightstick(delta: float) -> void:
+	if bts_lightstick_held_index < 0 or bts_lightstick_held_index >= bts_lightsticks.size():
+		return
+	var data: Dictionary = bts_lightsticks[bts_lightstick_held_index]
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		bts_lightstick_held_index = -1
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var dt := maxf(delta, 0.001)
+	var vel := (mouse - _bts_lightstick_prev_mouse) / dt
+	_bts_lightstick_prev_mouse = mouse
+	var hit := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.38)
+	root.global_position = root.global_position.lerp(hit, clampf(delta * 18.0, 0.0, 1.0))
+	root.global_rotation_degrees = Vector3(12.0 + sin(Time.get_ticks_msec() * 0.010) * 4.0, 16.0, clampf(-vel.x * 0.006, -12.0, 12.0))
+	_set_bts_lightstick_glow(bts_lightstick_held_index, true)
+	if mp_enabled and NetManager.is_online():
+		mp_bts_lightstick_pose.rpc(
+			bts_lightstick_held_index,
+			root.global_position.x,
+			root.global_position.y,
+			root.global_position.z,
+			root.global_rotation_degrees.x,
+			root.global_rotation_degrees.y,
+			root.global_rotation_degrees.z
+		)
+
+
+func _release_bts_lightstick() -> void:
+	if bts_lightstick_held_index < 0 or bts_lightstick_held_index >= bts_lightsticks.size():
+		bts_lightstick_held_index = -1
+		return
+	var index := bts_lightstick_held_index
+	bts_lightstick_held_index = -1
+	var data: Dictionary = bts_lightsticks[index]
+	var root := data.get("root") as Node3D
+	if root != null and is_instance_valid(root):
+		var hit := _grill_plane_from_screen(get_viewport().get_mouse_position())
+		if hit == Vector3.ZERO:
+			hit = root.global_position
+			hit.y = GRILL_SURFACE_Y + 0.075
+		hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+		hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.36, GRILL_SURFACE_Z + GRILL_DEPTH * 0.34)
+		root.global_position = hit + Vector3(0.0, 0.075, 0.0)
+		root.global_rotation_degrees = Vector3(78.0, root.global_rotation_degrees.y, 0.0)
+		data["home"] = root.global_position
+		data["rot"] = root.global_rotation_degrees
+	bts_lightsticks[index] = data
+	_set_bts_lightstick_owner(index, 0)
+	if mp_enabled and NetManager.is_online() and root != null and is_instance_valid(root):
+		mp_bts_lightstick_state.rpc(index, 0, root.global_position.x, root.global_position.y, root.global_position.z, root.global_rotation_degrees.x, root.global_rotation_degrees.y, root.global_rotation_degrees.z)
+
+
+func _ensure_bts_day_intro_root() -> void:
+	if world == null or (bts_day_intro_root != null and is_instance_valid(bts_day_intro_root)):
+		return
+	bts_day_intro_root = Node3D.new()
+	bts_day_intro_root.name = "BTSDayIntroLineup"
+	world.add_child(bts_day_intro_root)
+
+
+func _spawn_bts_day_intro_crowd() -> void:
+	_ensure_bts_day_intro_root()
+	if bts_day_intro_root == null or not is_instance_valid(bts_day_intro_root) or not _bts_day_intro_crowd.is_empty():
+		return
+	var slots := _bts_intro_crowd_slots()
+	for i in BTS_DAY_INTRO_CROWD_SKINS.size():
+		var skin_idx := int(BTS_DAY_INTRO_CROWD_SKINS[i])
+		var cust := CustomerScript.new()
+		cust.name = "BTSCrowdDancer%d" % i
+		cust.setup(_plain_burger_order(), Color(0.85, 0.55, 0.38), 999.0, 0, skin_idx, i % 3, -1)
+		cust.mp_host_driven = true
+		cust.set_queue_timer_active(false)
+		bts_day_intro_root.add_child(cust)
+		cust.is_waiting = true
+		cust.position = Vector3(slots[i].x, slots[i].y - 0.45, slots[i].z + 0.35)
+		cust.target_x = slots[i].x
+		cust.rotation_degrees = Vector3(0.0, CustomerScript.FACE_TRUCK_YAW, 0.0)
+		var dancer_scale := 0.75 + float((i * 3) % 5) * 0.022
+		cust.scale = Vector3.ONE * dancer_scale
+		_bts_day_intro_crowd.append({
+			"node": cust,
+			"target": slots[i],
+			"phase": float(i) * 1.37,
+			"scale": dancer_scale,
+			"reveal": float(i) * 1.35,
+		})
+
+
+func _bts_intro_crowd_slots() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	var count := maxi(1, BTS_DAY_INTRO_CROWD_SKINS.size())
+	var left := -2.34
+	var step := 4.68 / float(maxi(1, count - 1))
+	for i in count:
+		var row_y := 1.28 + (0.10 if i % 2 == 0 else 0.00)
+		var row_z := 2.99 + (0.10 if i % 2 == 0 else 0.22)
+		out.append(Vector3(left + step * float(i), row_y, row_z))
+	return out
+
+
+func _bts_intro_cat_stage_pos(t: float = 0.0) -> Vector3:
+	var board := _cutting_board_world_center()
+	return board + Vector3(
+		-0.12 + sin(t * 1.1) * 0.06,
+		CUTTING_BOARD_SIZE.y * 0.5 + 0.13 + absf(sin(t * 4.0)) * 0.10,
+		-0.02 + sin(t * 1.7) * 0.035
+	)
+
+
+func _spawn_bts_day_intro_cat() -> void:
+	_ensure_bts_day_intro_root()
+	if bts_day_intro_root == null or not is_instance_valid(bts_day_intro_root):
+		return
+	if _bts_day_intro_cat != null and is_instance_valid(_bts_day_intro_cat):
+		return
+	if not ResourceLoader.exists(WindowCatScript.SCENE_PATH):
+		return
+	var packed := load(WindowCatScript.SCENE_PATH) as PackedScene
+	if packed == null:
+		return
+	var cat := packed.instantiate() as Node3D
+	if cat == null:
+		return
+	cat.name = "BTSDanceCat"
+	cat.position = _bts_intro_cat_stage_pos(0.0)
+	cat.rotation_degrees = Vector3(0.0, WindowCatScript.FACE_COOK_YAW, 0.0)
+	cat.scale = Vector3.ONE * (WindowCatScript.MESH_SCALE * 0.44)
+	_retint_bts_cat_black(cat)
+	bts_day_intro_root.add_child(cat)
+	_bts_day_intro_cat = cat
+	_bts_day_intro_cat_hearts = _make_bts_cat_hearts()
+	cat.add_child(_bts_day_intro_cat_hearts)
+	_bts_day_intro_cat_lightstick = _make_bts_lightstick_node(77)
+	_bts_day_intro_cat_lightstick.name = "BTSCatArmyBomb"
+	_bts_day_intro_cat_lightstick.scale = Vector3.ONE * 0.34
+	var grab := _bts_day_intro_cat_lightstick.get_node_or_null("Grab")
+	if grab != null:
+		grab.queue_free()
+	bts_day_intro_root.add_child(_bts_day_intro_cat_lightstick)
+	_set_bts_lightstick_glow_node(_bts_day_intro_cat_lightstick, true)
+	_bts_day_intro_cat_book = _make_bts_cat_book_node()
+	bts_day_intro_root.add_child(_bts_day_intro_cat_book)
+
+
+func _retint_bts_cat_black(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var is_eye := str(mi.name).to_lower().contains("eye")
+		var surf_count := 0
+		if mi.mesh != null:
+			surf_count = mi.mesh.get_surface_count()
+		if surf_count <= 0:
+			surf_count = maxi(1, mi.get_surface_override_material_count())
+		for si in surf_count:
+			var base: Material = mi.get_active_material(si) if mi.mesh != null and si < mi.mesh.get_surface_count() else null
+			if base == null:
+				base = mi.material_override
+			var sm: StandardMaterial3D = (base as StandardMaterial3D).duplicate() as StandardMaterial3D if base is StandardMaterial3D else StandardMaterial3D.new()
+			sm.albedo_texture = null
+			if is_eye:
+				var yellow := si == 0
+				sm.albedo_color = Color(0.96, 0.78, 0.12) if yellow else Color(0.035, 0.030, 0.026)
+				sm.metallic = 0.0
+				sm.roughness = 0.34
+				sm.clearcoat_enabled = true
+				sm.clearcoat = 0.28
+			else:
+				sm.albedo_color = Color(0.012, 0.011, 0.012)
+				sm.metallic = 0.0
+				sm.roughness = 0.92
+				sm.clearcoat_enabled = false
+				sm.clearcoat = 0.0
+			if mi.mesh != null and si < mi.mesh.get_surface_count():
+				mi.set_surface_override_material(si, sm)
+			else:
+				mi.material_override = sm
+	for child in node.get_children():
+		_retint_bts_cat_black(child)
+
+
+func _add_bts_cat_face_overlays(cat: Node3D) -> void:
+	if cat == null:
+		return
+	var root := Node3D.new()
+	root.name = "BTSPerformanceCatFaceFix"
+	cat.add_child(root)
+	var ring_mat := _make_basic_mat(Color(0.98, 0.80, 0.16), 0.0, 0.42)
+	var pupil_mat := _make_basic_mat(Color(0.020, 0.018, 0.016), 0.0, 0.64)
+	for x in [-0.105, 0.105]:
+		var ring := MeshInstance3D.new()
+		ring.name = "EyeGold"
+		var ring_mesh := CylinderMesh.new()
+		ring_mesh.height = 0.010
+		ring_mesh.top_radius = 0.043
+		ring_mesh.bottom_radius = 0.043
+		ring_mesh.radial_segments = 28
+		ring.mesh = ring_mesh
+		ring.position = Vector3(x, 0.360, 0.192)
+		ring.rotation_degrees.x = 90.0
+		ring.material_override = ring_mat
+		root.add_child(ring)
+		var pupil := MeshInstance3D.new()
+		pupil.name = "EyePupil"
+		var pupil_mesh := CylinderMesh.new()
+		pupil_mesh.height = 0.012
+		pupil_mesh.top_radius = 0.030
+		pupil_mesh.bottom_radius = 0.030
+		pupil_mesh.radial_segments = 24
+		pupil.mesh = pupil_mesh
+		pupil.position = ring.position + Vector3(0.0, 0.0, 0.004)
+		pupil.rotation_degrees.x = 90.0
+		pupil.material_override = pupil_mat
+		root.add_child(pupil)
+
+
+func _make_bts_cat_book_node() -> Node3D:
+	var root := Node3D.new()
+	root.name = "BTSCatBook"
+	var cover_mat := _make_basic_mat(Color(0.035, 0.055, 0.105), 0.0, 0.70)
+	var edge_mat := _make_basic_mat(Color(0.62, 0.72, 0.80), 0.0, 0.64)
+	var book := MeshInstance3D.new()
+	book.name = "Cover"
+	var book_mesh := BoxMesh.new()
+	book_mesh.size = Vector3(0.15, 0.205, 0.020)
+	book.mesh = book_mesh
+	book.material_override = cover_mat
+	root.add_child(book)
+	var cover_tex := load(BTS_CAT_BOOK_COVER_PATH) as Texture2D
+	if cover_tex != null:
+		var front := MeshInstance3D.new()
+		front.name = "CoverImage"
+		var front_mesh := QuadMesh.new()
+		front_mesh.size = Vector2(0.15, 0.205)
+		front.mesh = front_mesh
+		front.position = Vector3(0.0, 0.0, -0.012)
+		var front_mat := StandardMaterial3D.new()
+		front_mat.albedo_texture = cover_tex
+		front_mat.albedo_color = Color.WHITE
+		front_mat.roughness = 0.58
+		front_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		front.material_override = front_mat
+		root.add_child(front)
+	var pages := MeshInstance3D.new()
+	pages.name = "PageEdge"
+	var pages_mesh := BoxMesh.new()
+	pages_mesh.size = Vector3(0.132, 0.012, 0.024)
+	pages.mesh = pages_mesh
+	pages.position = Vector3(0.0, -0.094, 0.002)
+	pages.material_override = edge_mat
+	root.add_child(pages)
+	root.scale = Vector3.ONE * 1.08
+	return root
+
+
+func _make_bts_cat_hearts() -> GPUParticles3D:
+	var hearts := GPUParticles3D.new()
+	hearts.name = "BTSCatLoveHearts"
+	hearts.amount = 24
+	hearts.lifetime = 1.25
+	hearts.one_shot = true
+	hearts.explosiveness = 0.72
+	hearts.randomness = 0.55
+	hearts.emitting = false
+	hearts.position = Vector3(0.0, 0.62, 0.06)
+	hearts.visibility_aabb = AABB(Vector3(-1.5, -0.2, -1.5), Vector3(3, 3, 3))
+	hearts.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := ParticleProcessMaterial.new()
+	mat.direction = Vector3(0, 1, 0)
+	mat.spread = 48.0
+	mat.initial_velocity_min = 0.55
+	mat.initial_velocity_max = 1.55
+	mat.gravity = Vector3(0, 0.30, 0)
+	mat.damping_min = 0.35
+	mat.damping_max = 1.05
+	mat.scale_min = 0.55
+	mat.scale_max = 1.10
+	mat.color = Color(1.0, 0.30, 0.44, 1.0)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.75, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.55, 0.65, 0.0),
+		Color(1.0, 0.20, 0.38, 1.0),
+		Color(1.0, 0.48, 0.65, 0.9),
+		Color(1.0, 0.75, 0.86, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = grad
+	mat.color_ramp = ramp
+	hearts.process_material = mat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.10, 0.10)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.albedo_color = Color.WHITE
+	draw.albedo_texture = _make_bts_heart_texture()
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.vertex_color_use_as_albedo = true
+	quad.material = draw
+	hearts.draw_pass_1 = quad
+	return hearts
+
+
+func _make_bts_heart_texture() -> ImageTexture:
+	const S := 64
+	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for y in S:
+		for x in S:
+			var u := (float(x) + 0.5) / float(S) * 2.0 - 1.0
+			var v := 1.0 - (float(y) + 0.5) / float(S) * 2.0
+			var hx := u * 1.15
+			var hy := v * 1.15 - 0.12
+			var a := hx * hx + hy * hy - 1.0
+			if a * a * a - hx * hx * hy * hy * hy < 0.0:
+				img.set_pixel(x, y, Color.WHITE)
+	return ImageTexture.create_from_image(img)
+
+
+func _update_bts_day_intro_cat(t: float, delta: float) -> void:
+	_spawn_bts_day_intro_cat()
+	if _bts_day_intro_cat == null or not is_instance_valid(_bts_day_intro_cat):
+		return
+	var target := _bts_intro_cat_stage_pos(t)
+	_bts_day_intro_cat.position = _bts_day_intro_cat.position.lerp(target, clampf(delta * 5.5, 0.0, 1.0))
+	_bts_day_intro_cat.rotation_degrees = Vector3(
+		sin(t * 4.1) * 5.0,
+		WindowCatScript.FACE_COOK_YAW + sin(t * 2.8) * 11.0,
+		sin(t * 5.3) * 7.0
+	)
+	var bounce_scale := WindowCatScript.MESH_SCALE * (0.44 + absf(sin(t * 4.0)) * 0.030)
+	_bts_day_intro_cat.scale = Vector3(bounce_scale * 1.06, bounce_scale, bounce_scale)
+	if _bts_day_intro_cat_lightstick != null and is_instance_valid(_bts_day_intro_cat_lightstick):
+		var stick_pos := _bts_day_intro_cat.position + Vector3(0.02 + sin(t * 2.4) * 0.020, 0.23 + absf(sin(t * 4.0)) * 0.030, -0.02)
+		_bts_day_intro_cat_lightstick.position = _bts_day_intro_cat_lightstick.position.lerp(stick_pos, clampf(delta * 7.0, 0.0, 1.0))
+		_bts_day_intro_cat_lightstick.rotation_degrees = Vector3(2.0 + sin(t * 5.0) * 4.0, WindowCatScript.FACE_COOK_YAW - 14.0, -8.0 + sin(t * 3.6) * 6.0)
+		_set_bts_lightstick_glow_node(_bts_day_intro_cat_lightstick, true)
+	if _bts_day_intro_cat_book != null and is_instance_valid(_bts_day_intro_cat_book):
+		var book_pos := _bts_day_intro_cat.position + Vector3(-0.09 + sin(t * 2.0) * 0.016, 0.20 + absf(sin(t * 4.0)) * 0.028, -0.045)
+		_bts_day_intro_cat_book.position = _bts_day_intro_cat_book.position.lerp(book_pos, clampf(delta * 7.0, 0.0, 1.0))
+		_bts_day_intro_cat_book.rotation_degrees = Vector3(12.0 + sin(t * 3.6) * 3.0, WindowCatScript.FACE_COOK_YAW + 12.0, 10.0 + sin(t * 4.4) * 3.0)
+	_bts_day_intro_cat_heart_t -= delta
+	if _bts_day_intro_cat_heart_t <= 0.0 and _bts_day_intro_cat_hearts != null and is_instance_valid(_bts_day_intro_cat_hearts):
+		_bts_day_intro_cat_heart_t = randf_range(0.70, 1.15)
+		_bts_day_intro_cat_hearts.restart()
+		_bts_day_intro_cat_hearts.emitting = true
+
+
+func _update_bts_day_intro_crowd(dance_t: float, delta: float) -> void:
+	_spawn_bts_day_intro_crowd()
+	for i in _bts_day_intro_crowd.size():
+		var data: Dictionary = _bts_day_intro_crowd[i]
+		var cust := data.get("node") as Node3D
+		if cust == null or not is_instance_valid(cust):
+			continue
+		var target: Vector3 = data.get("target", cust.position)
+		var phase := float(data.get("phase", 0.0))
+		var reveal := float(data.get("reveal", 0.0))
+		var appear := clampf((dance_t - reveal) / 1.0, 0.0, 1.0)
+		cust.visible = appear > 0.01
+		var side := -1.0 if i % 2 == 0 else 1.0
+		var entrance := Vector3(side * (0.65 + float(i % 3) * 0.10), -0.35, 0.28)
+		var base := target + entrance * (1.0 - appear)
+		var bob := absf(sin(dance_t * 4.8 + phase)) * 0.11 * appear
+		var sway := sin(dance_t * 2.7 + phase) * 0.055 * appear
+		cust.position = cust.position.lerp(base + Vector3(sway, bob, 0.0), clampf(delta * 4.8, 0.0, 1.0))
+		cust.rotation_degrees = Vector3(0.0, CustomerScript.FACE_TRUCK_YAW + sin(dance_t * 3.0 + phase) * 9.0 * appear, sin(dance_t * 4.6 + phase) * 4.0 * appear)
+		var s := float(data.get("scale", 1.0)) * (0.92 + bob * 1.0) * appear
+		cust.scale = Vector3(s, s, s)
+		_bts_day_intro_crowd[i] = data
+
+
+func _spawn_bts_day_intro_cards() -> void:
+	_ensure_bts_day_intro_root()
+	if bts_day_intro_root == null or not is_instance_valid(bts_day_intro_root) or not _bts_day_intro_cards.is_empty():
+		return
+	_bts_day_intro_cards.clear()
+	var slots := _bts_intro_slots()
+	for i in BTS_DAY1_SKIN_QUEUE.size():
+		var skin_idx := int(BTS_DAY1_SKIN_QUEUE[i])
+		if skin_idx < 0 or skin_idx >= CustomerScript.CHAR_SKINS.size():
+			continue
+		var tex := load(str(CustomerScript.CHAR_SKINS[skin_idx])) as Texture2D
+		if tex == null:
+			continue
+		var card := MeshInstance3D.new()
+		card.name = "BTSIntroMember%d" % i
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.58, 0.88)
+		card.mesh = quad
+		card.position = Vector3(slots[i].x, slots[i].y - 0.45, slots[i].z + 0.28)
+		card.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+		card.sorting_offset = 38.0 + float(i)
+		var mat := StandardMaterial3D.new()
+		mat.albedo_texture = tex
+		mat.albedo_color = Color.WHITE
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.alpha_scissor_threshold = 0.035
+		mat.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
+		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.roughness = 0.68
+		card.material_override = mat
+		bts_day_intro_root.add_child(card)
+		_bts_day_intro_cards.append({
+			"node": card,
+			"slot": i,
+			"target": slots[i],
+			"phase": float(i) * 0.91,
+			"scale": (0.96 + float((i * 5) % 4) * 0.025) * _bts_intro_member_scale(skin_idx),
+		})
+
+
+func _bts_intro_member_scale(skin_idx: int) -> float:
+	var mul := 1.0
+	if skin_idx == CustomerScript.JUNG_SKIN_IDX:
+		mul *= BTS_DAY_INTRO_JUNGKOOK_SCALE
+	elif skin_idx == CustomerScript.JHOPE_SKIN_IDX:
+		mul *= BTS_DAY_INTRO_JHOPE_SCALE
+	elif skin_idx == CustomerScript.SUGA_SKIN_IDX:
+		mul *= BTS_DAY_INTRO_SUGA_SCALE
+	return mul
+
+
+func _bts_intro_slots() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	var count := maxi(1, BTS_DAY1_SKIN_QUEUE.size())
+	var left := -2.00
+	var step := 4.00 / float(maxi(1, count - 1))
+	for i in count:
+		var row_y := 1.34 + (0.10 if i % 2 == 0 else -0.02)
+		var row_z := 1.52 + (0.10 if i % 2 == 0 else -0.04)
+		out.append(Vector3(left + step * float(i), row_y, row_z))
+	return out
+
+
+func _swap_bts_intro_pair() -> void:
+	var slots := _bts_intro_slots()
+	if slots.size() < 2 or _bts_day_intro_cards.size() < 2:
+		return
+	var a := randi() % _bts_day_intro_cards.size()
+	var data_a: Dictionary = _bts_day_intro_cards[a]
+	var slot_a := int(data_a.get("slot", a))
+	var dir := -1
+	if randf() >= 0.5:
+		dir = 1
+	var slot_b := clampi(slot_a + dir, 0, slots.size() - 1)
+	if slot_b == slot_a:
+		slot_b = clampi(slot_a - dir, 0, slots.size() - 1)
+	if slot_b == slot_a:
+		return
+	var b := -1
+	for j in _bts_day_intro_cards.size():
+		var probe: Dictionary = _bts_day_intro_cards[j]
+		if int(probe.get("slot", j)) == slot_b:
+			b = j
+			break
+	if b < 0 or b == a:
+		return
+	_apply_bts_intro_slot_swap(slot_a, slot_b)
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		mp_bts_intro_swap.rpc(slot_a, slot_b)
+
+
+func _apply_bts_intro_slot_swap(slot_a: int, slot_b: int) -> void:
+	var slots := _bts_intro_slots()
+	if slots.size() < 2 or _bts_day_intro_cards.size() < 2:
+		return
+	var a := -1
+	var b := -1
+	for j in _bts_day_intro_cards.size():
+		var probe: Dictionary = _bts_day_intro_cards[j]
+		var slot_j := int(probe.get("slot", j))
+		if slot_j == slot_a:
+			a = j
+		elif slot_j == slot_b:
+			b = j
+	if a < 0 or b < 0 or a == b:
+		return
+	var data_a: Dictionary = _bts_day_intro_cards[a]
+	var data_b: Dictionary = _bts_day_intro_cards[b]
+	data_a["slot"] = slot_b
+	data_a["target"] = slots[slot_b % slots.size()]
+	data_a["swap_t"] = 0.0
+	data_a["swap_dir"] = 1.0
+	data_b["slot"] = slot_a
+	data_b["target"] = slots[slot_a % slots.size()]
+	data_b["swap_t"] = 0.0
+	data_b["swap_dir"] = -1.0
+	_bts_day_intro_cards[a] = data_a
+	_bts_day_intro_cards[b] = data_b
+
+
+func _update_bts_day_intro(delta: float) -> void:
+	if not _bts_day_intro_active:
+		return
+	_bts_day_intro_t += delta
+	if _bts_day_intro_t < BTS_DAY_INTRO_TEXT_SEC:
+		_set_bts_intro_banner_text(BTS_DAY_INTRO_FACTS[0])
+		if mp_enabled and NetManager.is_host() and NetManager.is_online():
+			_bts_day_intro_sync_t += delta
+			if _bts_day_intro_sync_t >= 0.5:
+				_bts_day_intro_sync_t = 0.0
+				mp_bts_intro_state.rpc(true, _bts_day_intro_t, _bts_day1_queue_i)
+		return
+	if not _bts_day_intro_song_started:
+		_bts_day_intro_song_started = true
+		_spawn_bts_day_intro_cards()
+		_spawn_bts_day_intro_lights()
+		_spawn_bts_lightsticks()
+		_post_bts_performance_reviews()
+		if bts_day_music_player != null and is_instance_valid(bts_day_music_player):
+			bts_day_music_player.play(BTS_DAY_MUSIC_START_SEC)
+	var dance_t := _bts_day_intro_t - BTS_DAY_INTRO_TEXT_SEC
+	var fact_i := int(floor(dance_t / 3.4)) % maxi(1, BTS_DAY_INTRO_FACTS.size())
+	_set_bts_intro_banner_text(BTS_DAY_INTRO_FACTS[fact_i])
+	_update_bts_day_intro_lights(dance_t)
+	_update_bts_lightsticks(dance_t, delta)
+	_update_bts_day_intro_cat(dance_t, delta)
+	_update_bts_day_intro_crowd(dance_t, delta)
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		_bts_day_intro_sync_t += delta
+		if _bts_day_intro_sync_t >= 0.75:
+			_bts_day_intro_sync_t = 0.0
+			mp_bts_intro_state.rpc(true, _bts_day_intro_t, _bts_day1_queue_i)
+	if not mp_enabled or NetManager.is_host():
+		_bts_day_intro_swap_t -= delta
+		if _bts_day_intro_swap_t <= 0.0:
+			_bts_day_intro_swap_t = randf_range(3.2, 5.5)
+			_swap_bts_intro_pair()
+	for i in _bts_day_intro_cards.size():
+		var data: Dictionary = _bts_day_intro_cards[i]
+		var card := data.get("node") as Node3D
+		if card == null or not is_instance_valid(card):
+			continue
+		var target: Vector3 = data.get("target", card.position)
+		var phase := float(data.get("phase", 0.0))
+		var bob := sin(dance_t * 7.0 + phase) * 0.055
+		var sway := sin(dance_t * 3.3 + phase * 0.7) * 0.035
+		var swap_lift := 0.0
+		var swap_depth := 0.0
+		if data.has("swap_t"):
+			var swap_t := minf(float(data.get("swap_t", 0.0)) + delta, BTS_DAY_INTRO_SWAP_DUR)
+			var swap_u := clampf(swap_t / BTS_DAY_INTRO_SWAP_DUR, 0.0, 1.0)
+			var swap_arc := sin(swap_u * PI)
+			swap_lift = swap_arc * 0.13
+			swap_depth = swap_arc * 0.11 * float(data.get("swap_dir", 1.0))
+			if swap_t >= BTS_DAY_INTRO_SWAP_DUR:
+				data.erase("swap_t")
+				data.erase("swap_dir")
+			else:
+				data["swap_t"] = swap_t
+		var desired := target + Vector3(sway, bob + swap_lift, swap_depth)
+		card.position = card.position.lerp(desired, clampf(delta * 3.6, 0.0, 1.0))
+		card.rotation_degrees.z = sin(dance_t * 5.2 + phase) * 4.0
+		var mesh_card := card as MeshInstance3D
+		if mesh_card != null:
+			mesh_card.sorting_offset = 38.0 + float(i) + swap_depth * 60.0
+		var s := float(data.get("scale", 1.0)) * BTS_DAY_INTRO_DANCE_SCALE * (1.0 + sin(dance_t * 8.0 + phase) * 0.035)
+		card.scale = Vector3(s, s, s)
+		_bts_day_intro_cards[i] = data
+	var music_done := false
+	if bts_day_music_player != null and is_instance_valid(bts_day_music_player):
+		music_done = dance_t > 1.0 and not bts_day_music_player.playing
+	else:
+		music_done = dance_t >= BTS_DAY_INTRO_FALLBACK_DANCE_SEC
+	if music_done:
+		_finish_bts_day_intro()
+
+
+func _apply_bts_day_intro_sync(host_t: float, host_queue_i: int) -> void:
+	if not BTS_SPECIAL_GUESTS_ENABLED or day != 1:
+		return
+	if not _bts_day_intro_active:
+		_clear_bts_day_intro(false)
+		_setup_bts_day_music()
+		_bts_day_intro_active = true
+		_bts_day_intro_t = maxf(0.0, host_t)
+		_bts_day_intro_song_started = false
+		_bts_day_intro_swap_t = 0.0
+		_bts_day_intro_sync_t = 0.0
+		spawn_timer = 9999.0
+		if radio != null:
+			radio.set_powered(false)
+	else:
+		if absf(_bts_day_intro_t - host_t) > 0.75:
+			_bts_day_intro_t = maxf(0.0, host_t)
+		else:
+			_bts_day_intro_t = maxf(_bts_day_intro_t, host_t)
+	_bts_day1_queue_i = maxi(_bts_day1_queue_i, host_queue_i)
+	_bts_day1_regular_spawned = maxi(_bts_day1_regular_spawned, BTS_DAY1_REGULAR_BEFORE)
+	if _bts_day_intro_t < BTS_DAY_INTRO_TEXT_SEC:
+		_set_bts_intro_banner_text(BTS_DAY_INTRO_FACTS[0])
+		return
+	_spawn_bts_day_intro_cards()
+	_spawn_bts_day_intro_lights()
+	_spawn_bts_lightsticks()
+	_spawn_bts_day_intro_cat()
+	_spawn_bts_day_intro_crowd()
+	var song_pos := BTS_DAY_MUSIC_START_SEC + maxf(0.0, _bts_day_intro_t - BTS_DAY_INTRO_TEXT_SEC)
+	if bts_day_music_player != null and is_instance_valid(bts_day_music_player):
+		if not bts_day_music_player.playing:
+			bts_day_music_player.play(song_pos)
+		elif absf(bts_day_music_player.get_playback_position() - song_pos) > 1.25:
+			bts_day_music_player.play(song_pos)
+	_bts_day_intro_song_started = true
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_bts_intro_state(active: bool, host_t: float, host_queue_i: int) -> void:
+	if NetManager.is_host():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid != 1:
+		return
+	if active:
+		_apply_bts_day_intro_sync(host_t, host_queue_i)
+	else:
+		_bts_day1_queue_i = maxi(_bts_day1_queue_i, host_queue_i)
+		_bts_day1_regular_spawned = maxi(_bts_day1_regular_spawned, BTS_DAY1_REGULAR_BEFORE)
+		_bts_day1_performance_done = true
+		_clear_bts_day_intro(true)
+		_show_bts_love_milla_message()
+		spawn_timer = 0.2
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_bts_day1_announcement() -> void:
+	if NetManager.is_host():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid != 1:
+		return
+	_bts_day1_announcement_done = true
+	_show_bts_day1_cat_announcement()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_bts_intro_swap(slot_a: int, slot_b: int) -> void:
+	if NetManager.is_host():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid != 1:
+		return
+	_spawn_bts_day_intro_cards()
+	_apply_bts_intro_slot_swap(slot_a, slot_b)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_bts_lightstick_state(index: int, owner: int, x: float, y: float, z: float, rx: float, ry: float, rz: float) -> void:
+	if not _bts_day_intro_active:
+		return
+	_spawn_bts_lightsticks()
+	if index < 0 or index >= bts_lightsticks.size():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	var claimed_owner := int(owner)
+	if sid > 0 and claimed_owner != 0:
+		claimed_owner = sid
+	if bts_lightstick_held_index == index and claimed_owner != NetManager.my_id():
+		bts_lightstick_held_index = -1
+	_set_bts_lightstick_owner(index, claimed_owner)
+	var data: Dictionary = bts_lightsticks[index]
+	var root := data.get("root") as Node3D
+	if root != null and is_instance_valid(root):
+		root.global_position = Vector3(x, y, z)
+		root.global_rotation_degrees = Vector3(rx, ry, rz)
+	_set_bts_lightstick_glow(index, _bts_day_intro_song_started or claimed_owner != 0)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_bts_lightstick_pose(index: int, x: float, y: float, z: float, rx: float, ry: float, rz: float) -> void:
+	if not _bts_day_intro_active:
+		return
+	_spawn_bts_lightsticks()
+	if index < 0 or index >= bts_lightsticks.size():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	var data: Dictionary = bts_lightsticks[index]
+	if int(data.get("owner", 0)) == 0:
+		data["owner"] = sid
+		bts_lightsticks[index] = data
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	root.global_position = Vector3(x, y, z)
+	root.global_rotation_degrees = Vector3(rx, ry, rz)
+	_set_bts_lightstick_glow(index, true)
 
 
 func _sfx_click() -> void:
@@ -22839,8 +25187,101 @@ func _sync_combat_audio() -> void:
 		radio.set_combat_silence(mute_radio)
 
 
+func _next_customer_skin_idx() -> int:
+	var skin_count := CustomerScript.CHAR_SKINS.size()
+	if skin_count <= 0:
+		return 0
+	if _customer_skin_bag.is_empty():
+		for i in range(skin_count):
+			if CustomerScript.BTS_SKIN_IDXS.has(i):
+				continue
+			_customer_skin_bag.append(i)
+		if _customer_skin_bag.is_empty():
+			_customer_skin_bag.append(0)
+		_customer_skin_bag.shuffle()
+	return int(_customer_skin_bag.pop_back())
+
+
+func _plain_burger_order() -> Array[String]:
+	return ["bun_bottom", "patty", "bun_top"] as Array[String]
+
+
+func _everything_burger_order() -> Array[String]:
+	var order: Array[String] = ["bun_bottom", "patty"]
+	order.append_array(GameDataScript.sort_toppings(GameDataScript.EXTRA_TOPPINGS))
+	order.append("bun_top")
+	return order
+
+
+func _reset_bts_day1_flow() -> void:
+	_bts_day1_queue_i = 0
+	_bts_day1_regular_spawned = 0
+	_bts_day1_performance_done = false
+	_bts_day1_announcement_done = false
+
+
+func _bts_day1_flow_enabled() -> bool:
+	return BTS_SPECIAL_GUESTS_ENABLED and day == 1
+
+
+func _bts_day1_sequence_complete() -> bool:
+	return _bts_day1_flow_enabled() \
+		and _bts_day1_regular_spawned >= BTS_DAY1_REGULAR_BEFORE \
+		and _bts_day1_queue_i >= BTS_DAY1_SKIN_QUEUE.size()
+
+
+func _bts_day1_needs_sequence_customers() -> bool:
+	return _bts_day1_flow_enabled() \
+		and not _bts_day1_performance_done \
+		and not _bts_day_intro_active \
+		and (_bts_day1_regular_spawned < BTS_DAY1_REGULAR_BEFORE \
+			or _bts_day1_queue_i < BTS_DAY1_SKIN_QUEUE.size())
+
+
+func _bts_day1_blocks_day_end() -> bool:
+	return _bts_day1_flow_enabled() \
+		and not _bts_day1_performance_done \
+		and (_bts_day_intro_active or _bts_day1_needs_sequence_customers() or _bts_day1_sequence_complete())
+
+
+func _maybe_begin_bts_day1_performance() -> bool:
+	if not _bts_day1_flow_enabled() or _bts_day_intro_active or _bts_day1_performance_done:
+		return false
+	if not _bts_day1_sequence_complete():
+		return false
+	if not customers.is_empty():
+		return false
+	if mp_enabled and not NetManager.is_host():
+		return false
+	_begin_bts_day_intro()
+	return true
+
+
+func _next_bts_day1_skin_idx() -> int:
+	if not BTS_SPECIAL_GUESTS_ENABLED or day != 1:
+		return -1
+	if _bts_day1_performance_done:
+		return -1
+	if _bts_day1_regular_spawned < BTS_DAY1_REGULAR_BEFORE:
+		_bts_day1_regular_spawned += 1
+		return -1
+	if _bts_day1_queue_i < 0 or _bts_day1_queue_i >= BTS_DAY1_SKIN_QUEUE.size():
+		return -1
+	var idx := int(BTS_DAY1_SKIN_QUEUE[_bts_day1_queue_i])
+	_bts_day1_queue_i += 1
+	return idx
+
+
 func _spawn_customer() -> void:
-	var order: Array[String] = GameDataScript.generate_order(difficulty)
+	if _maybe_begin_bts_day1_performance():
+		return
+	if _bts_day1_flow_enabled() and not _bts_day1_performance_done and _bts_day1_sequence_complete():
+		return
+	var skin_idx := _next_bts_day1_skin_idx()
+	var is_bts_guest := skin_idx >= 0
+	var order: Array[String] = _everything_burger_order() if is_bts_guest else GameDataScript.generate_order(
+		difficulty, _owns_soda_machine(), _owns_icecream_machine(), _owns_fryer_machine()
+	)
 	var color: Color = GameDataScript.CUSTOMER_COLORS[randi() % GameDataScript.CUSTOMER_COLORS.size()]
 	var patience := lerpf(62.0, 30.0, difficulty) + randf_range(-3, 5)
 	if day == 1:
@@ -22851,8 +25292,16 @@ func _spawn_customer() -> void:
 	elif day == 3:
 		patience += 10.0
 	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
-	var skin_idx := randi() % CustomerScript.CHAR_SKINS.size()
-	var face_style := randi() % 3
+	if not is_bts_guest:
+		skin_idx = _next_customer_skin_idx()
+	var face_style := 0 if is_bts_guest else randi() % 3
+	var jin_fact_idx := -1
+	if skin_idx == CustomerScript.JIN_SKIN_IDX and not CustomerScript.JIN_FACTS.is_empty():
+		jin_fact_idx = randi() % CustomerScript.JIN_FACTS.size()
+	elif skin_idx == CustomerScript.JIMIN_SKIN_IDX and not CustomerScript.JIMIN_FACTS.is_empty():
+		jin_fact_idx = randi() % CustomerScript.JIMIN_FACTS.size()
+	if is_bts_guest:
+		patience += 25.0
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -22863,10 +25312,10 @@ func _spawn_customer() -> void:
 			order_packed.append(str(o))
 		if NetManager.is_host():
 			mp_spawn_customer.rpc(
-				nid, order_packed, color.r, color.g, color.b, patience, lane, skin_idx, face_style
+				nid, order_packed, color.r, color.g, color.b, patience, lane, skin_idx, face_style, false, jin_fact_idx
 			)
 			return
-	_spawn_customer_local(order, color, patience, lane, -1, skin_idx, face_style)
+	_spawn_customer_local(order, color, patience, lane, -1, skin_idx, face_style, false, jin_fact_idx)
 
 
 func _spawn_customer_local(
@@ -22877,15 +25326,17 @@ func _spawn_customer_local(
 	net_id: int = -1,
 	skin_idx: int = -1,
 	face_style: int = -1,
-	disguise_cat: bool = false
+	disguise_cat: bool = false,
+	jin_fact_idx: int = -1
 ) -> void:
 	var typed_order: Array[String] = []
 	for o in order:
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
-	c.setup(typed_order, color, patience, lane, skin_idx, face_style)
+	c.setup(typed_order, color, patience, lane, skin_idx, face_style, jin_fact_idx)
 	c.set_meta("soda_handed", false)
 	c.set_meta("icecream_handed", false)
+	c.set_meta("fries_handed", false)
 	## Guest customers are puppets — host owns patience expiry + leave.
 	if mp_enabled and not NetManager.is_host():
 		c.mp_host_driven = true
@@ -22929,6 +25380,10 @@ func _on_customer_arrived(customer: Node3D) -> void:
 	if selected_customer == null:
 		selected_customer = customer
 		_highlight_tickets()
+	if customer != null and bool(customer.get("is_bts_guest")):
+		var bts_fact := str(customer.get("chatter"))
+		if bts_fact != "":
+			_flash(bts_fact, Color("FFF176"), 5.5)
 
 
 func _queue_customer_dialogue(_customer: Node3D) -> void:
@@ -23116,6 +25571,10 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		else:
 			_maybe_record_social_review(1.0, "angry", 0, -1, customer)
 		_spend(2.0, "Customer left angry! -$2.00", Color("EF5350"))
+	if not mp_enabled or NetManager.is_host():
+		if bool(customer.get("is_bts_guest")) and _bts_day1_needs_sequence_customers():
+			spawn_timer = minf(spawn_timer, 0.12)
+		_maybe_begin_bts_day1_performance()
 
 
 func _reposition_customers() -> void:
@@ -23336,6 +25795,7 @@ func _ticket_line_specs(order: Array) -> Array:
 	var burger: Array = GameDataScript.order_burger_items(order)
 	var sodas: Array = GameDataScript.order_soda_ids(order)
 	var wants_icecream := GameDataScript.wants_icecream(order)
+	var wants_fries := GameDataScript.wants_fries(order)
 	var patty_count := 0
 	for item in burger:
 		if item == "patty":
@@ -23359,6 +25819,8 @@ func _ticket_line_specs(order: Array) -> Array:
 		lines.append({"id": str(sid), "label": soda_lab})
 	if wants_icecream:
 		lines.append({"id": "icecream", "label": "ICE CREAM"})
+	if wants_fries:
+		lines.append({"id": "fries", "label": "FRIES"})
 	if lines.is_empty():
 		lines.append({"id": "burger", "label": "BURGER"})
 	return lines
@@ -23372,6 +25834,8 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 		return _customer_can_claim_soda(customer, line_id)
 	if line_id == "icecream":
 		return _customer_icecream_handed(customer)
+	if line_id == "fries":
+		return _fries_ready_for_order(customer.order if customer != null and is_instance_valid(customer) else [], customer)
 	match line_id:
 		"triple_patty":
 			var n3 := 0
@@ -23418,8 +25882,59 @@ func _icecream_ready_for_order(order: Array, customer: Node3D = null) -> bool:
 	return _customer_icecream_handed(customer)
 
 
+func _fries_ready_for_order(order: Array, customer: Node3D = null) -> bool:
+	if not GameDataScript.wants_fries(order):
+		return true
+	if _customer_fries_handed(customer):
+		return true
+	return _customer_can_claim_fries(customer)
+
+
+func _customer_can_claim_fries(customer: Node3D = null) -> bool:
+	if fryer_ready_servings <= 0:
+		return false
+	if customer == null or not is_instance_valid(customer):
+		return fryer_ready_servings > 0
+	var claim_idx := 0
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if not bool(c.get("is_waiting")) or bool(c.get("is_leaving")):
+			continue
+		if not GameDataScript.wants_fries(c.order) or _customer_fries_handed(c):
+			continue
+		if c == customer:
+			return fryer_ready_servings > claim_idx
+		claim_idx += 1
+	return fryer_ready_servings > 0
+
+
 func _sides_ready_for_order(order: Array, customer: Node3D = null) -> bool:
-	return _cup_ready_for_order(order, customer) and _icecream_ready_for_order(order, customer)
+	return _cup_ready_for_order(order, customer) \
+		and _icecream_ready_for_order(order, customer) \
+		and _fries_ready_for_order(order, customer)
+
+
+func _consume_fries_for_serve(for_customer: Node3D = null) -> bool:
+	var cust: Node3D = for_customer
+	if cust == null or not is_instance_valid(cust):
+		cust = selected_customer
+	if cust == null or not is_instance_valid(cust):
+		return false
+	if not GameDataScript.wants_fries(cust.order):
+		return true
+	if _customer_fries_handed(cust):
+		return true
+	if not _customer_can_claim_fries(cust):
+		return false
+	if not (mp_enabled and not NetManager.is_host()):
+		fryer_ready_servings = maxi(0, fryer_ready_servings - 1)
+	_mark_customer_fries_handed(cust, true)
+	_refresh_ready_fries_visuals()
+	_refresh_ticket_checkmarks()
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
+	return true
 
 
 func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
@@ -27630,6 +30145,9 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 			and not _customer_soda_handed(cust):
 		_consume_cup_for_serve(cust)
 	_mark_customer_soda_handed(cust, false)
+	if GameDataScript.wants_fries(cust.order) and not _customer_fries_handed(cust):
+		_consume_fries_for_serve(cust)
+	_mark_customer_fries_handed(cust, false)
 	_clear_station(station_index)
 	_update_hud()
 	_mp_serve_sync = false
@@ -27643,6 +30161,9 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 func _serve_reject_hint(order: Array, station_index: int) -> void:
 	if GameDataScript.is_soda_only_order(order):
 		_flash("Pour the soda, then Serve", Color("FF8A65"))
+		return
+	if GameDataScript.is_fries_only_order(order):
+		_flash("Cook fries, then Serve", Color("FF8A65"))
 		return
 	if station_index < 0 or station_index >= STATION_COUNT:
 		_flash("Build the burger on Build, then Serve", Color("EF5350"))
@@ -27690,6 +30211,12 @@ func _on_serve() -> void:
 			_flash("Make the ice cream cone first", Color("FFF3B0"))
 		_update_hud()
 		return
+	if not _fries_ready_for_order(order, cust):
+		combo = 0
+		if not _auto_serving:
+			_flash("Cook fries in the fryer first", Color("FFD54F"))
+		_update_hud()
+		return
 	## Drink-only — hand off the cup with no burger station.
 	if GameDataScript.is_soda_only_order(order):
 		if mp_enabled and not _mp_applying:
@@ -27697,6 +30224,13 @@ func _on_serve() -> void:
 			mp_serve.rpc(cid, -2) ## -2 = soda-only serve
 			return
 		_begin_soda_only_serve(cust)
+		return
+	if GameDataScript.is_fries_only_order(order):
+		if mp_enabled and not _mp_applying:
+			var cid_fries := _customer_net_id(cust)
+			mp_serve.rpc(cid_fries, -3) ## -3 = fries-only serve
+			return
+		_begin_fries_only_serve(cust)
 		return
 	var station_index := _find_perfect_station_for(order)
 	if station_index < 0:
@@ -27759,6 +30293,108 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 	_flash("+%s  %s up!" % [_format_money(float(payout)), soda_lab], Color("80DEEA"))
 	if not guest_mp:
 		_maybe_record_social_review(4.2, "good", int(pay.get("tip", 0)), -1, cust)
+	if cust.has_method("complete_serve"):
+		cust.complete_serve(payout)
+	elif cust.has_method("leave_happy"):
+		cust.leave_happy()
+		_on_customer_left(cust, false)
+	if selected_customer == cust:
+		selected_customer = null
+	_highlight_tickets()
+	_update_hud()
+	_refresh_ticket_checkmarks()
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+		_mp_broadcast_social_feed()
+
+
+func _begin_fries_only_serve(customer: Node3D) -> void:
+	if not playing or customer == null or not is_instance_valid(customer) or not customer.is_waiting:
+		return
+	if _serve_fly_busy:
+		return
+	selected_customer = customer
+	_highlight_tickets()
+	if customer.dialogue_open:
+		customer.dialogue_open = false
+	if game_audio and game_audio.has_method("play_order_up"):
+		game_audio.play_order_up()
+	var cust: Node3D = customer
+	_play_fries_fly_to_mouth(cust, func() -> void: _complete_fries_only_serve(cust))
+
+
+func _play_fries_fly_to_mouth(customer: Node3D, done: Callable) -> void:
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root == null or customer == null or not is_instance_valid(customer):
+		done.call()
+		return
+	_serve_fly_busy = true
+	_serve_fly_watch = 0.0
+	var pack := Control.new()
+	pack.name = "FriesServeFly"
+	pack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pack.size = Vector2(58, 58)
+	pack.pivot_offset = pack.size * 0.5
+	pack.z_index = 260
+	ui_root.add_child(pack)
+	var carton := ColorRect.new()
+	carton.color = Color("D32F2F")
+	carton.position = Vector2(10, 24)
+	carton.size = Vector2(38, 28)
+	carton.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pack.add_child(carton)
+	for i in 7:
+		var fry := ColorRect.new()
+		fry.color = Color("FFD54F")
+		fry.size = Vector2(5, randf_range(24.0, 34.0))
+		fry.position = Vector2(13 + i * 5, randf_range(2.0, 12.0))
+		fry.rotation = deg_to_rad(randf_range(-12.0, 12.0))
+		fry.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		pack.add_child(fry)
+	var start: Vector2 = get_viewport().get_visible_rect().size * 0.5
+	if fryer_ready_root != null and is_instance_valid(fryer_ready_root) and camera != null:
+		start = camera.unproject_position(fryer_ready_root.global_position + Vector3(0.05, 0.10, 0.0))
+	var end := _customer_mouth_screen(customer)
+	pack.global_position = start - pack.size * 0.5
+	pack.scale = Vector2(0.72, 0.72)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(pack, "global_position", end - pack.size * 0.5, 0.38).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(pack, "scale", Vector2(0.42, 0.42), 0.38).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(pack, "rotation", deg_to_rad(18.0), 0.38).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.chain().tween_callback(func() -> void:
+		if customer != null and is_instance_valid(customer) and customer.has_method("chomp_burger"):
+			customer.chomp_burger()
+		if pack != null and is_instance_valid(pack):
+			pack.queue_free()
+		_serve_fly_busy = false
+		done.call()
+	)
+
+
+func _complete_fries_only_serve(customer: Node3D = null) -> void:
+	var cust: Node3D = customer
+	if cust == null or not is_instance_valid(cust):
+		cust = selected_customer
+	if cust == null or not is_instance_valid(cust):
+		return
+	selected_customer = cust
+	var guest_mp := mp_enabled and not NetManager.is_host()
+	var pay: Dictionary = cust.receive_burger([], 1.0, combo, cust.patience_ratio(), 1.0, true)
+	var payout: int = int(pay.get("total", 0))
+	if payout <= 0 and not guest_mp:
+		payout = maxi(3, int(cust.order_value))
+	if cust.has_method("stop_order_clock"):
+		cust.stop_order_clock()
+	if _consume_fries_for_serve(cust) and payout > 0 and not guest_mp:
+		money += payout
+		total_served += 1
+		combo += 1
+		perfect_serves += 1
+	_flash("+%s  FRIES up!" % _format_money(float(payout)), Color("FFD54F"))
+	if not guest_mp:
+		_maybe_record_social_review(4.1, "good", int(pay.get("tip", 0)), -1, cust)
 	if cust.has_method("complete_serve"):
 		cust.complete_serve(payout)
 	elif cust.has_method("leave_happy"):
@@ -27984,6 +30620,8 @@ func _tutorial_hint_should_show() -> bool:
 
 
 func _apply_tutorial_hint_visibility() -> void:
+	if _bts_day_intro_active:
+		return
 	if flash_label == null or _tutorial_text == "":
 		return
 	flash_label.text = _tutorial_text
@@ -28005,8 +30643,10 @@ func _update_tutorial_hint_cycle(delta: float) -> void:
 		_apply_tutorial_hint_visibility()
 
 
-func _flash(text: String, color: Color) -> void:
+func _flash(text: String, color: Color, hold_sec: float = 1.1) -> void:
 	if flash_label == null:
+		return
+	if _bts_day_intro_active:
 		return
 	flash_label.text = text
 	flash_label.add_theme_color_override("font_color", color)
@@ -28016,7 +30656,7 @@ func _flash(text: String, color: Color) -> void:
 	if _flash_tween != null and is_instance_valid(_flash_tween):
 		_flash_tween.kill()
 	_flash_tween = create_tween()
-	_flash_tween.tween_interval(1.1)
+	_flash_tween.tween_interval(hold_sec)
 	_flash_tween.tween_property(flash_label, "modulate:a", 0.0, 0.4)
 	_flash_tween.tween_callback(func():
 		_flash_tween = null
@@ -28837,7 +31477,13 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		_mp_next_customer_net_id,
 		day,
 		day_time,
-		grill_on
+		grill_on,
+		_bts_day_intro_active,
+		_bts_day_intro_t,
+		_bts_day1_queue_i,
+		_bts_day1_regular_spawned,
+		_bts_day1_performance_done,
+		_bts_day1_announcement_done
 	)
 	_mp_broadcast_economy()
 	## Match burner so guests can place meat immediately.
@@ -29000,6 +31646,23 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			rkind = "patty"
 		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, rkind)
 		mp_residue_amt.rpc_id(peer_id, ri, float(grill_residue[ri]))
+	if _bts_day_intro_active:
+		for li in bts_lightsticks.size():
+			var data: Dictionary = bts_lightsticks[li]
+			var root := data.get("root") as Node3D
+			if root == null or not is_instance_valid(root):
+				continue
+			mp_bts_lightstick_state.rpc_id(
+				peer_id,
+				li,
+				int(data.get("owner", 0)),
+				root.global_position.x,
+				root.global_position.y,
+				root.global_position.z,
+				root.global_rotation_degrees.x,
+				root.global_rotation_degrees.y,
+				root.global_rotation_degrees.z
+			)
 
 
 func _mp_send_social_feed_to(peer_id: int) -> void:
@@ -29082,7 +31745,13 @@ func mp_bootstrap_meta(
 	next_cust_id: int,
 	d: int,
 	dtime: float,
-	burner_on: bool = false
+	burner_on: bool = false,
+	bts_active: bool = false,
+	bts_t: float = 0.0,
+	bts_queue_i: int = 0,
+	bts_regular_spawned: int = 0,
+	bts_performance_done: bool = false,
+	bts_announcement_done: bool = false
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -29093,6 +31762,14 @@ func mp_bootstrap_meta(
 	_mp_applying = true
 	_set_grill_on(burner_on)
 	_mp_applying = false
+	_bts_day1_queue_i = maxi(_bts_day1_queue_i, bts_queue_i)
+	_bts_day1_regular_spawned = maxi(_bts_day1_regular_spawned, bts_regular_spawned)
+	_bts_day1_performance_done = _bts_day1_performance_done or bts_performance_done
+	_bts_day1_announcement_done = _bts_day1_announcement_done or bts_announcement_done
+	if bts_active:
+		_apply_bts_day_intro_sync(bts_t, bts_queue_i)
+	else:
+		_clear_bts_day_intro(false)
 	_update_hud()
 	## Push any drinks we already parked so the host sees our idle tray/steel.
 	call_deferred("_mp_broadcast_local_idle_drinks")
@@ -29569,6 +32246,8 @@ func _mp_update_cursors(delta: float) -> void:
 				tool = 6
 			elif cup_held:
 				tool = 7
+			elif bts_lightstick_held_index >= 0:
+				tool = 8
 			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
 
 
@@ -29904,6 +32583,11 @@ func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
 		_begin_soda_only_serve(cust if cust != null else selected_customer)
 		_mp_applying = false
 		return
+	if station_index == -3:
+		## Fries-only hand-off (no Build station).
+		_begin_fries_only_serve(cust if cust != null else selected_customer)
+		_mp_applying = false
+		return
 	if station_index >= 0 and station_index < STATION_COUNT:
 		active_station = station_index
 	## Force path: don't re-validate Build — initiator already had a perfect match.
@@ -29973,7 +32657,8 @@ func mp_spawn_customer(
 	lane: int,
 	skin_idx: int = -1,
 	face_style: int = -1,
-	disguise_cat: bool = false
+	disguise_cat: bool = false,
+	jin_fact_idx: int = -1
 ) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if mp_enabled and not NetManager.is_host() and sid != 1:
@@ -29981,7 +32666,9 @@ func mp_spawn_customer(
 	if net_id >= 0 and _customer_by_net_id(net_id) != null:
 		return
 	_mp_applying = true
-	_spawn_customer_local(order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat)
+	_spawn_customer_local(
+		order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat, jin_fact_idx
+	)
 	_mp_applying = false
 
 
@@ -30544,6 +33231,10 @@ func _mp_broadcast_economy() -> void:
 	for fid in SODA_FLAVORS:
 		tank_ids.append(str(fid))
 		tank_vals.append(float(soda_tank_fill.get(fid, 1.0)))
+	var shop_ids: Array = [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE]
+	var shop_vals: Array = []
+	for sid in shop_ids:
+		shop_vals.append(bool(owned_machines.get(str(sid), false)))
 	mp_sync_economy.rpc(
 		money,
 		combo,
@@ -30557,7 +33248,10 @@ func _mp_broadcast_economy() -> void:
 		stock_vals,
 		fresh_vals,
 		tank_ids,
-		tank_vals
+		tank_vals,
+		shop_ids,
+		shop_vals,
+		fryer_ready_servings
 	)
 
 
@@ -30575,7 +33269,10 @@ func mp_sync_economy(
 	stock_vals: Array,
 	fresh_vals: Array,
 	tank_ids: Array = [],
-	tank_vals: Array = []
+	tank_vals: Array = [],
+	shop_ids: Array = [],
+	shop_vals: Array = [],
+	fry_servings: int = -1
 ) -> void:
 	## Guest applies host world economy as absolute truth.
 	if NetManager.is_host():
@@ -30598,9 +33295,35 @@ func mp_sync_economy(
 		var fid := str(tank_ids[ti])
 		var fill := float(tank_vals[ti]) if ti < tank_vals.size() else 1.0
 		_set_soda_tank_visual_level(fid, fill)
+	for si in shop_ids.size():
+		var shop_id := str(shop_ids[si])
+		if owned_machines.has(shop_id):
+			owned_machines[shop_id] = bool(shop_vals[si]) if si < shop_vals.size() else false
+	if fry_servings >= 0:
+		fryer_ready_servings = maxi(0, fry_servings)
+		_refresh_ready_fries_visuals()
+	_apply_machine_unlock_visibility()
 	_update_hud()
 	_refresh_phone_ui()
 	_refresh_ingredient_stock_bars()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_buy_shop_item(id: String) -> void:
+	if not NetManager.is_host():
+		return
+	_mp_applying = true
+	_buy_shop_item_local(id)
+	_mp_applying = false
+	_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_add_fries_ready(amount: int) -> void:
+	if not NetManager.is_host():
+		return
+	_add_ready_fries_local(maxi(0, amount))
+	_mp_broadcast_economy()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -30724,6 +33447,7 @@ func _mp_broadcast_customers() -> void:
 	var clocks: Array = []
 	var sodas_handed: Array = []
 	var icecreams_handed: Array = []
+	var fries_handed: Array = []
 	var yaws: Array = []
 	for c in customers:
 		if c == null or not is_instance_valid(c):
@@ -30740,8 +33464,9 @@ func _mp_broadcast_customers() -> void:
 		clocks.append(float(c.get("order_elapsed_sec")) if "order_elapsed_sec" in c else 0.0)
 		sodas_handed.append(_customer_soda_handed(c))
 		icecreams_handed.append(_customer_icecream_handed(c))
+		fries_handed.append(_customer_fries_handed(c))
 		yaws.append(float(c.rotation_degrees.y))
-	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws)
+	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -30755,7 +33480,8 @@ func mp_sync_customers(
 	clocks: Array,
 	sodas_handed: Array = [],
 	icecreams_handed: Array = [],
-	yaws: Array = []
+	yaws: Array = [],
+	fries_handed: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -30777,6 +33503,8 @@ func mp_sync_customers(
 			_mark_customer_soda_handed(c, bool(sodas_handed[i]))
 		if i < icecreams_handed.size():
 			_mark_customer_icecream_handed(c, bool(icecreams_handed[i]))
+		if i < fries_handed.size():
+			_mark_customer_fries_handed(c, bool(fries_handed[i]))
 		if i < xs.size():
 			c.global_position.x = float(xs[i])
 			c.target_x = float(xs[i])

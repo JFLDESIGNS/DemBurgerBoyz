@@ -671,6 +671,22 @@ func request_delivery_peek(hold_sec: float = 5.5) -> void:
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 
 
+func special_people_peek(hold_sec: float = 5.5) -> void:
+	if not enabled or _visual == null:
+		return
+	_clear_mouth_burger()
+	_patty_eat_wide = 0.0
+	_peek_override_sec = maxf(hold_sec, 4.0)
+	_delivery_peek_active = false
+	_state = "peek"
+	_timer = _peek_override_sec
+	visible = true
+	position = Vector3(_home_x(), _shown_y(), _home_z())
+	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
+	_treat_arm = 2.2
+	_burst_hearts()
+
+
 func is_interactable() -> bool:
 	return enabled and visible and (_state == "peek" or _state == "rising")
 
