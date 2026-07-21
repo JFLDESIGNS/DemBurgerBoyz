@@ -1,6 +1,7 @@
-[gd_scene load_steps=4 format=3 uid="uid://foodtruckflip3d01"]
+[gd_scene load_steps=5 format=3 uid="uid://foodtruckflip3d01"]
 
 [ext_resource type="Script" path="res://scripts/game.gd" id="1_game"]
+[ext_resource type="FontFile" path="res://assets/fonts/LuckiestGuy-Regular.ttf" id="2_luckiest"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ticket"]
 bg_color = Color(0.12, 0.14, 0.18, 0.88)
@@ -264,9 +265,10 @@ horizontal_alignment = 1
 [node name="Blurb" type="Label" parent="UI/Root/StartOverlay/StartCenter"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.92, 0.94, 0.98, 1)
-theme_override_font_sizes/font_size = 15
-text = "Flip burgers, sling fries, pour sodas, and keep the line smiling.
-Welcome to Burger Pals: tiny truck, big chaos, perfect cheese."
+theme_override_constants/outline_size = 0
+theme_override_fonts/font = ExtResource("2_luckiest")
+theme_override_font_sizes/font_size = 20
+text = "Flip burgers. Sling fries. Keep smiling."
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -275,6 +277,8 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(240, 56)
 layout_mode = 2
 size_flags_horizontal = 4
+theme_override_constants/outline_size = 0
+theme_override_fonts/font = ExtResource("2_luckiest")
 theme_override_font_sizes/font_size = 22
 text = "OPEN THE TRUCK"
 

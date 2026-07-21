@@ -1100,6 +1100,9 @@ const FRYER_BASKET_HOME_TILT := -4.0
 const FRYER_BASKET_FRY_TILT := -5.0
 ## Finished packs clear of the right pit (tracks pit seat).
 const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
+const FRIES_HOLD_PACK_Y := 0.108
+const FRIES_HOLD_PACK_SPACING_X := 0.16
+const FRIES_HOLD_PACK_SPACING_Z := 0.14
 const FRYER_BASKET_HOME_Y := 0.159 ## was 0.235; tracks the lower pit
 const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
 const FRIES_PACK_TARGET_H := 0.167 ## ~15% bigger than prior 0.145 pack height
@@ -1728,7 +1731,7 @@ func _setup_start_logo() -> void:
 		title.visible = false
 	if start_logo != null and is_instance_valid(start_logo):
 		_stop_logo_hover()
-		start_logo.position.y = 8.0
+		start_logo.position.y = 38.0
 		return
 	if not ResourceLoader.exists(LOGO_TEX_PATH):
 		if title:
@@ -1744,7 +1747,8 @@ func _setup_start_logo() -> void:
 	start_logo_wrap.name = "BurgerPalsLogoWrap"
 	start_logo_wrap.custom_minimum_size = Vector2(260, 344)
 	start_logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	start_logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	start_logo_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
+	start_logo_wrap.gui_input.connect(_on_start_logo_gui_input)
 	center.add_child(start_logo_wrap)
 	center.move_child(start_logo_wrap, 0)
 
@@ -1755,8 +1759,9 @@ func _setup_start_logo() -> void:
 	start_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	start_logo.custom_minimum_size = Vector2(220, 220)
 	start_logo.size = Vector2(220, 220)
-	start_logo.position = Vector2(20, 8)
-	start_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	start_logo.position = Vector2(20, 38)
+	start_logo.mouse_filter = Control.MOUSE_FILTER_STOP
+	start_logo.gui_input.connect(_on_start_logo_gui_input)
 	start_logo_wrap.add_child(start_logo)
 	_setup_start_patty_preview()
 	## Tall enough for logo + blurb + Solo + Multiplayer.
@@ -1830,13 +1835,49 @@ func _start_logo_hover() -> void:
 	## Hover disabled — keep logo still on the home screen.
 	_stop_logo_hover()
 	if start_logo != null and is_instance_valid(start_logo):
-		start_logo.position.y = 8.0
+		start_logo.position = Vector2(20, 38)
+		start_logo.rotation = 0.0
+		start_logo.scale = Vector2.ONE
+	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
+		start_patty_preview_wrap.position = Vector2(5, 188)
 
 
 func _stop_logo_hover() -> void:
 	if start_logo_tween != null and is_instance_valid(start_logo_tween):
 		start_logo_tween.kill()
 		start_logo_tween = null
+
+
+func _bounce_start_logo() -> void:
+	if start_logo == null or not is_instance_valid(start_logo):
+		return
+	_stop_logo_hover()
+	start_logo.pivot_offset = start_logo.size * 0.5
+	start_logo.position = Vector2(20, 38)
+	start_logo.rotation = 0.0
+	start_logo.scale = Vector2.ONE
+	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
+		start_patty_preview_wrap.position = Vector2(5, 188)
+	start_logo_tween = create_tween()
+	start_logo_tween.set_parallel(true)
+	start_logo_tween.tween_property(start_logo, "position", Vector2(20, 0), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(start_logo, "scale", Vector2(1.08, 0.94), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(start_logo, "rotation", deg_to_rad(-3.5), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
+		start_logo_tween.tween_property(start_patty_preview_wrap, "position", Vector2(5, 150), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	start_logo_tween.chain().set_parallel(true)
+	start_logo_tween.tween_property(start_logo, "position", Vector2(20, 38), 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(start_logo, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(start_logo, "rotation", 0.0, 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
+		start_logo_tween.tween_property(start_patty_preview_wrap, "position", Vector2(5, 188), 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+
+
+func _on_start_logo_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_bounce_start_logo()
+		_play_burgerpals_voice()
+		get_viewport().set_input_as_handled()
 
 
 func _setup_stations_data() -> void:
@@ -4281,6 +4322,117 @@ func _patty_blocked_at(world_pos: Vector3, ignore_idx: int = -1) -> bool:
 	return false
 
 
+func _patty_place_bounds_with_hold() -> Rect2:
+	var b := _grill_place_bounds()
+	var warm := _warmer_place_bounds()
+	var min_x := minf(b.position.x, warm.position.x)
+	var max_x := maxf(b.end.x, warm.end.x)
+	var min_z := minf(b.position.y, warm.position.y)
+	var max_z := maxf(b.end.y, warm.end.y)
+	return Rect2(min_x, min_z, maxf(0.05, max_x - min_x), maxf(0.05, max_z - min_z))
+
+
+func _move_patty_to(index: int, patty: Area3D, pos: Vector3, send_mp: bool = true) -> void:
+	if patty == null or not is_instance_valid(patty):
+		return
+	patty._rest_x = pos.x
+	patty._rest_z = pos.z
+	patty.position.x = pos.x
+	patty.position.z = pos.z
+	patty.position.y = patty.base_y
+	if index >= 0 and index < slot_positions.size():
+		slot_positions[index] = Vector3(pos.x, GRILL_SURFACE_Y, pos.z)
+	patty.heat_mul = _warmer_heat_mul(patty.position) * _oil_heat_mul(patty.position)
+	if patty.has_method("refresh_cook_visuals"):
+		patty.refresh_cook_visuals()
+	if send_mp and mp_enabled and NetManager.is_host():
+		_mp_send_patty_pose(patty, false)
+
+
+func _try_shove_patty(index: int, patty: Area3D, push_dir: Vector2, push_len: float, ignore_idx: int = -1, send_mp: bool = true) -> bool:
+	if patty == null or not is_instance_valid(patty) or patty.is_held:
+		return false
+	if push_dir.length_squared() <= 0.000001 or push_len <= 0.0:
+		return false
+	var dir := push_dir.normalized()
+	var b := _patty_place_bounds_with_hold()
+	var nx := clampf(float(patty.position.x) + dir.x * push_len, b.position.x, b.end.x)
+	var nz := clampf(float(patty.position.z) + dir.y * push_len, b.position.y, b.end.y)
+	var try := Vector3(nx, GRILL_SURFACE_Y, nz)
+	var block_ignore := index if index >= 0 else ignore_idx
+	if _patty_blocked_at(try, block_ignore):
+		var try_x := Vector3(nx, GRILL_SURFACE_Y, patty.position.z)
+		var try_z := Vector3(patty.position.x, GRILL_SURFACE_Y, nz)
+		if not _patty_blocked_at(try_x, block_ignore):
+			try = try_x
+		elif not _patty_blocked_at(try_z, block_ignore):
+			try = try_z
+		else:
+			return false
+	_move_patty_to(index, patty, try, send_mp)
+	return true
+
+
+func _try_push_roomba_from_patty(patty_pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	if not _owns_grill_roomba() or grill_roomba_held:
+		return
+	if moved <= 0.0001:
+		return
+	var roomba_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
+	var patty_xz := Vector2(patty_pos.x, patty_pos.z)
+	var d := roomba_xz.distance_to(patty_xz)
+	var touch_r := ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.86
+	if d > touch_r:
+		return
+	var dir := move_xz.normalized() if move_xz.length_squared() > 0.000001 else (roomba_xz - patty_xz).normalized()
+	if dir.length_squared() <= 0.000001:
+		dir = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading))
+	var push := maxf(moved * 0.9, touch_r - d + 0.004)
+	var b := _roomba_place_bounds()
+	var next_xz := Vector2(
+		clampf(roomba_xz.x + dir.x * push, b.position.x, b.end.x),
+		clampf(roomba_xz.y + dir.y * push, b.position.y, b.end.y)
+	)
+	grill_roomba_root.global_position = Vector3(next_xz.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, next_xz.y)
+	grill_roomba_heading = dir.angle()
+	grill_roomba_turn_goal = grill_roomba_heading
+	grill_roomba_reaim_t = 0.24
+	grill_roomba_stuck_t = 0.0
+	grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading) + 180.0
+
+
+func _push_neighbors_from_drag(target: Vector3, move_xz: Vector2, moved: float, ignore_idx: int) -> bool:
+	if moved <= 0.0001:
+		return true
+	var changed := true
+	var any_blocked := false
+	var passes := 0
+	while changed and passes < 3:
+		changed = false
+		passes += 1
+		for i in GRILL_SLOTS:
+			if i == ignore_idx:
+				continue
+			var p = grill[i]
+			if p == null or not is_instance_valid(p) or p.is_held:
+				continue
+			var d := Vector2(target.x - p.position.x, target.z - p.position.z).length()
+			if d >= PATTY_MIN_SEP:
+				continue
+			var away := Vector2(p.position.x - target.x, p.position.z - target.z)
+			if away.length_squared() <= 0.000001:
+				away = move_xz
+			var push_len := maxf(moved * 0.92, PATTY_MIN_SEP - d + 0.006)
+			if _try_shove_patty(i, p, away + move_xz * 0.35, push_len, ignore_idx, true):
+				changed = true
+			else:
+				any_blocked = true
+	_try_push_roomba_from_patty(target, move_xz, moved)
+	return not any_blocked or not _patty_blocked_at(target, ignore_idx)
+
+
 func _make_slot_residue(index: int) -> void:
 	## Placeholder so legacy arrays stay sized; real bits spawn per scoop.
 	var residue := MeshInstance3D.new()
@@ -5440,6 +5592,10 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 	var z := clampf(hit.z, bounds.position.y, bounds.end.y)
 	var target := Vector3(x, GRILL_SURFACE_Y, z)
 	var ignore_idx: int = dragging_patty.slot_index
+	var intended_move := Vector2(target.x - drag_last_xz.x, target.z - drag_last_xz.y)
+	var intended_moved := intended_move.length()
+	if intended_moved > 0.0001:
+		_push_neighbors_from_drag(target, intended_move, intended_moved, ignore_idx)
 	if _patty_blocked_at(target, ignore_idx):
 		var from := drag_last_xz
 		var delta_xz := Vector2(x - from.x, z - from.y)
@@ -6751,31 +6907,7 @@ func _roomba_push_patty(index: int, patty: Area3D, roomba_xz: Vector2) -> bool:
 	away = away.normalized()
 	var side:= Vector2( - away.y, away.x) * (0.35 if randf() < 0.5 else -0.35)
 	var push_dir:= (away + side).normalized()
-	var b:= _grill_place_bounds()
-	var nx:= clampf(float(patty.position.x) + push_dir.x * ROOMBA_PATTY_PUSH, b.position.x, b.end.x)
-	var nz:= clampf(float(patty.position.z) + push_dir.y * ROOMBA_PATTY_PUSH, b.position.y, b.end.y)
-	var try:= Vector3(nx, GRILL_SURFACE_Y, nz)
-	if _patty_blocked_at(try, index):
-		var try_x:= Vector3(nx, GRILL_SURFACE_Y, patty.position.z)
-		var try_z:= Vector3(patty.position.x, GRILL_SURFACE_Y, nz)
-		if not _patty_blocked_at(try_x, index):
-			try = try_x
-		elif not _patty_blocked_at(try_z, index):
-			try = try_z
-		else:
-			return false
-	patty._rest_x = try.x
-	patty._rest_z = try.z
-	patty.position.x = try.x
-	patty.position.z = try.z
-	patty.position.y = patty.base_y
-	if index >= 0 and index < slot_positions.size():
-		slot_positions[index] = Vector3(try.x, GRILL_SURFACE_Y, try.z)
-	if patty.has_method("refresh_cook_visuals"):
-		patty.refresh_cook_visuals()
-	if mp_enabled and NetManager.is_host():
-		_mp_send_patty_pose(patty, false)
-	return true
+	return _try_shove_patty(index, patty, push_dir, ROOMBA_PATTY_PUSH, index, true)
 
 
 func _roomba_clamp_xz_to_bounds(xz: Vector2) -> Vector2:
@@ -13359,7 +13491,10 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 func _build_fryer_machine() -> void:
 	if fryer_root != null and is_instance_valid(fryer_root):
 		fryer_root.queue_free()
+	if fryer_ready_root != null and is_instance_valid(fryer_ready_root):
+		fryer_ready_root.queue_free()
 	fryer_root = null
+	fryer_ready_root = null
 	fryer_label = null
 	fryer_baskets.clear()
 	fryer_oil_bubbles.clear()
@@ -13407,9 +13542,8 @@ func _build_fryer_machine() -> void:
 	call_deferred("_nudge_fryer_hint_down")
 
 	fryer_ready_root = Node3D.new()
-	fryer_ready_root.name = "ReadyFries"
-	fryer_ready_root.position = FRYER_READY_LOCAL
-	root.add_child(fryer_ready_root)
+	fryer_ready_root.name = "ReadyFriesHoldArea"
+	world.add_child(fryer_ready_root)
 
 	_create_fryer_basket(0, Vector3(_fryer_tub_local_x(0), FRYER_BASKET_HOME_Y, FRYER_OIL_LOCAL.z - 0.04))
 	_create_fryer_basket(1, Vector3(_fryer_tub_local_x(1), FRYER_BASKET_HOME_Y, FRYER_OIL_LOCAL.z - 0.04))
@@ -14034,6 +14168,17 @@ func _update_ready_fries_pack_sparkles(delta: float) -> void:
 			_update_fries_pack_sparkles(child as Node3D, 0.18)
 
 
+func _ready_fries_slot_world(i: int) -> Vector3:
+	var b := _warmer_place_bounds()
+	var col := i % 3
+	var row := i / 3
+	var x := b.position.x + 0.14 + float(col) * FRIES_HOLD_PACK_SPACING_X
+	var z := b.position.y + 0.17 + float(row) * FRIES_HOLD_PACK_SPACING_Z
+	x = clampf(x, b.position.x + 0.08, b.end.x - 0.08)
+	z = clampf(z, b.position.y + 0.10, b.end.y - 0.10)
+	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z)
+
+
 func _refresh_ready_fries_visuals() -> void:
 	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
 		return
@@ -14043,9 +14188,10 @@ func _refresh_ready_fries_visuals() -> void:
 	for i in count:
 		var pack := Node3D.new()
 		pack.name = "ReadyFries%d" % i
-		## Stack packs toward the tubs (local −X) so they don't hang off the right edge.
-		pack.position = Vector3(-float(i % 3) * 0.15, float(i / 3) * 0.09, 0.0)
 		fryer_ready_root.add_child(pack)
+		pack.global_position = _ready_fries_slot_world(i)
+		pack.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
+		pack.scale = Vector3(0.92, 0.92, 0.92)
 		_populate_fry_pack(pack)
 		var area := Area3D.new()
 		area.name = "ReadyFriesGrab"
@@ -14207,8 +14353,7 @@ func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
 	var best_d := 64.0
 	var count := mini(fryer_ready_servings, 6)
 	for i in count:
-		var local := Vector3(-float(i % 3) * 0.15, float(i / 3) * 0.09, 0.0)
-		var sp := camera.unproject_position(fryer_ready_root.to_global(local + Vector3(0.0, 0.10, 0.0)))
+		var sp := camera.unproject_position(_ready_fries_slot_world(i) + Vector3(0.0, 0.10, 0.0))
 		best_d = minf(best_d, sp.distance_to(screen_pos))
 	return best_d < 64.0
 
@@ -14236,7 +14381,7 @@ func _begin_fries_pack_hold() -> bool:
 	world.add_child(fries_pack_root)
 	var start := Vector3.ZERO
 	if fryer_ready_root != null and is_instance_valid(fryer_ready_root):
-		start = fryer_ready_root.global_position + Vector3(0.02, 0.10, 0.0)
+		start = _ready_fries_slot_world(maxi(0, mini(fryer_ready_servings, 5)))
 	fries_pack_root.global_position = start
 	fries_pack_root.scale = Vector3(1.18, 1.18, 1.18)
 	fries_pack_root.rotation_degrees = Vector3(-4.0, 0.0, 0.0) ## logo side toward cook/camera
@@ -14834,7 +14979,7 @@ func _release_fries_pack(screen_pos: Vector2) -> void:
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
 		var root := fries_pack_root
 		fries_pack_root = null
-		var end := fryer_ready_root.global_position + Vector3(0.02, 0.11, 0.0) if fryer_ready_root != null and is_instance_valid(fryer_ready_root) else root.global_position
+		var end := _ready_fries_slot_world(mini(fryer_ready_servings, 5)) if fryer_ready_root != null and is_instance_valid(fryer_ready_root) else root.global_position
 		var tw := create_tween()
 		tw.set_parallel(true)
 		tw.tween_property(root, "global_position", end, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
@@ -15110,6 +15255,10 @@ func _spawn_and_bind_empty_icecream_cone() -> void:
 	icecream_cone_root.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
 	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
 	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
+	var ice_on := _owns_icecream_machine()
+	icecream_cone_root.visible = ice_on
+	if icecream_cone_area != null:
+		icecream_cone_area.input_ray_pickable = ice_on
 	icecream_cone_fill = 0.0
 	_reset_icecream_swirl_motion()
 	_refresh_icecream_cone_visuals()
@@ -15127,13 +15276,14 @@ func _reset_icecream_cone_to_home() -> void:
 	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		_spawn_and_bind_empty_icecream_cone()
 		return
-	icecream_cone_root.visible = true
+	var ice_on := _owns_icecream_machine()
+	icecream_cone_root.visible = ice_on
 	icecream_cone_root.global_position = icecream_cone_home
 	icecream_cone_root.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
 	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
 	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
 	if icecream_cone_area != null:
-		icecream_cone_area.input_ray_pickable = true
+		icecream_cone_area.input_ray_pickable = ice_on
 	_reset_icecream_swirl_motion()
 	_refresh_icecream_cone_visuals()
 
@@ -23305,14 +23455,18 @@ func _apply_machine_unlock_visibility() -> void:
 	if icecream_root != null and is_instance_valid(icecream_root):
 		icecream_root.visible = ice_on
 		icecream_root.process_mode = Node.PROCESS_MODE_INHERIT if ice_on else Node.PROCESS_MODE_DISABLED
-	if icecream_cone_root != null and is_instance_valid(icecream_cone_root) and _icecream_cone_is_shelved():
-		icecream_cone_root.visible = ice_on
-		if icecream_cone_area != null and is_instance_valid(icecream_cone_area):
-			icecream_cone_area.input_ray_pickable = ice_on
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root):
+		if _icecream_cone_is_shelved() or (not ice_on and not icecream_cone_held and not bool(icecream_cone_root.get_meta("on_steel", false))):
+			icecream_cone_root.visible = ice_on
+			if icecream_cone_area != null and is_instance_valid(icecream_cone_area):
+				icecream_cone_area.input_ray_pickable = ice_on
 	var fryer_on := _owns_fryer_machine()
 	if fryer_root != null and is_instance_valid(fryer_root):
 		fryer_root.visible = fryer_on
 		fryer_root.process_mode = Node.PROCESS_MODE_INHERIT if fryer_on else Node.PROCESS_MODE_DISABLED
+	if fryer_ready_root != null and is_instance_valid(fryer_ready_root):
+		fryer_ready_root.visible = fryer_on
+		fryer_ready_root.process_mode = Node.PROCESS_MODE_INHERIT if fryer_on else Node.PROCESS_MODE_DISABLED
 	var roomba_on := _owns_grill_roomba()
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
 		grill_roomba_root.visible = roomba_on
@@ -24075,7 +24229,9 @@ func _play_burgerpals_startup_sound() -> void:
 
 func _play_burgerpals_voice() -> void:
 	if burgerpals_startup_player != null and is_instance_valid(burgerpals_startup_player):
-		burgerpals_startup_player.play()
+		if burgerpals_startup_player.playing:
+			burgerpals_startup_player.stop()
+		burgerpals_startup_player.play(0.0)
 
 
 func _setup_intro_title_music() -> void:
@@ -32662,7 +32818,7 @@ func _play_fries_fly_to_mouth(customer: Node3D, done: Callable) -> void:
 		pack.add_child(fry)
 	var start: Vector2 = get_viewport().get_visible_rect().size * 0.5
 	if fryer_ready_root != null and is_instance_valid(fryer_ready_root) and camera != null:
-		start = camera.unproject_position(fryer_ready_root.global_position + Vector3(0.05, 0.10, 0.0))
+		start = camera.unproject_position(_ready_fries_slot_world(0) + Vector3(0.05, 0.10, 0.0))
 	var end := _customer_mouth_screen(customer)
 	pack.global_position = start - pack.size * 0.5
 	pack.scale = Vector2(0.72, 0.72)
@@ -33016,7 +33172,7 @@ func _setup_start_menu_chrome() -> void:
 	style.border_color = Color(1.0, 0.88, 0.55, 0.18)
 	style.content_margin_left = 28
 	style.content_margin_right = 28
-	style.content_margin_top = 66 ## room for logo overlap
+	style.content_margin_top = 36 ## room for logo overlap
 	style.content_margin_bottom = 24
 	style.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
 	style.shadow_size = 16
@@ -33048,10 +33204,11 @@ func _setup_start_menu_chrome() -> void:
 	if blurb != null and is_instance_valid(blurb):
 		blurb.reparent(card_col)
 		blurb.add_theme_color_override("font_color", Color(0.96, 0.97, 1.0, 0.98))
-		blurb.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.88))
-		blurb.add_theme_constant_override("outline_size", 4)
 		if blurb is Label:
 			var blurb_label := blurb as Label
+			blurb_label.text = "Flip burgers. Sling fries. Keep smiling."
+			UiFontsScript.apply_luckiest_label(blurb_label, 20)
+			blurb_label.add_theme_constant_override("outline_size", 0)
 			blurb_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			blurb_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			blurb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -33089,24 +33246,24 @@ func _setup_multiplayer_ui() -> void:
 		center.remove_child(start_btn)
 		start_mode_row.add_child(start_btn)
 		start_btn.custom_minimum_size = Vector2(238, 58)
-		UiFontsScript.apply_button(start_btn, true, 22)
+		UiFontsScript.apply_luckiest_button(start_btn, 22)
 		start_btn.add_theme_color_override("font_color", Color(0.96, 0.97, 1.0, 1.0))
-		start_btn.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
-		start_btn.add_theme_constant_override("outline_size", 4)
+		start_btn.add_theme_constant_override("outline_size", 0)
 		var solo_normal := StyleBoxFlat.new()
 		solo_normal.bg_color = Color(0.055, 0.06, 0.07, 0.98)
 		solo_normal.set_corner_radius_all(9)
-		solo_normal.set_border_width_all(1)
-		solo_normal.border_color = Color(1.0, 1.0, 1.0, 0.10)
+		solo_normal.set_border_width_all(2)
+		solo_normal.border_color = Color(0.74, 0.80, 0.92, 0.42)
 		solo_normal.content_margin_left = 18
 		solo_normal.content_margin_right = 18
-		solo_normal.content_margin_top = 10
-		solo_normal.content_margin_bottom = 10
+		solo_normal.content_margin_top = 15
+		solo_normal.content_margin_bottom = 7
 		var solo_hover := solo_normal.duplicate() as StyleBoxFlat
 		solo_hover.bg_color = Color(0.10, 0.11, 0.13, 1.0)
-		solo_hover.border_color = Color(1.0, 0.82, 0.36, 0.35)
+		solo_hover.border_color = Color(1.0, 0.84, 0.36, 0.72)
 		var solo_pressed := solo_normal.duplicate() as StyleBoxFlat
 		solo_pressed.bg_color = Color(0.035, 0.04, 0.05, 1.0)
+		solo_pressed.border_color = Color(0.58, 0.64, 0.74, 0.55)
 		start_btn.add_theme_stylebox_override("normal", solo_normal)
 		start_btn.add_theme_stylebox_override("hover", solo_hover)
 		start_btn.add_theme_stylebox_override("pressed", solo_pressed)
@@ -33116,25 +33273,28 @@ func _setup_multiplayer_ui() -> void:
 	multiplayer_btn.text = "MULTIPLAYER"
 	multiplayer_btn.custom_minimum_size = Vector2(238, 58)
 	multiplayer_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	UiFontsScript.apply_button(multiplayer_btn, true, 22)
+	UiFontsScript.apply_luckiest_button(multiplayer_btn, 22)
 	## Warm accent so it reads as a second primary CTA.
 	var mp_normal := StyleBoxFlat.new()
 	mp_normal.bg_color = Color(0.85, 0.45, 0.12, 0.95)
 	mp_normal.set_corner_radius_all(10)
+	mp_normal.set_border_width_all(2)
+	mp_normal.border_color = Color(0.72, 0.18, 0.02, 0.88)
 	mp_normal.content_margin_left = 16
 	mp_normal.content_margin_right = 16
-	mp_normal.content_margin_top = 10
-	mp_normal.content_margin_bottom = 10
+	mp_normal.content_margin_top = 15
+	mp_normal.content_margin_bottom = 7
 	var mp_hover := mp_normal.duplicate() as StyleBoxFlat
 	mp_hover.bg_color = Color(1.0, 0.55, 0.18, 1.0)
+	mp_hover.border_color = Color(0.9, 0.22, 0.03, 0.95)
 	var mp_pressed := mp_normal.duplicate() as StyleBoxFlat
 	mp_pressed.bg_color = Color(0.7, 0.35, 0.08, 1.0)
+	mp_pressed.border_color = Color(0.55, 0.10, 0.01, 0.95)
 	multiplayer_btn.add_theme_stylebox_override("normal", mp_normal)
 	multiplayer_btn.add_theme_stylebox_override("hover", mp_hover)
 	multiplayer_btn.add_theme_stylebox_override("pressed", mp_pressed)
 	multiplayer_btn.add_theme_color_override("font_color", Color(1, 1, 1, 1))
-	multiplayer_btn.add_theme_color_override("font_outline_color", Color(0.35, 0.12, 0.02, 0.75))
-	multiplayer_btn.add_theme_constant_override("outline_size", 3)
+	multiplayer_btn.add_theme_constant_override("outline_size", 0)
 	start_mode_row.add_child(multiplayer_btn)
 
 	center.add_child(start_mode_row)

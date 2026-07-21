@@ -5,6 +5,7 @@ const TITLE_PATH := "res://assets/fonts/Fredoka-Bold.ttf"
 const TITLE_SEMI_PATH := "res://assets/fonts/Fredoka-SemiBold.ttf"
 const BODY_PATH := "res://assets/fonts/Nunito-Bold.ttf"
 const BODY_HEAVY_PATH := "res://assets/fonts/Nunito-ExtraBold.ttf"
+const LUCKIEST_PATH := "res://assets/fonts/LuckiestGuy-Regular.ttf"
 ## Amatic SC — tall casual caps (legacy / Label3D accents).
 const HAND_PATH := "res://assets/fonts/AmaticSC-Bold.ttf"
 ## Caveat — real pen handwriting for order tickets.
@@ -14,6 +15,7 @@ static var title: Font
 static var title_semi: Font
 static var body: Font
 static var body_heavy: Font
+static var luckiest: Font
 static var handwritten: Font
 static var ticket_hand: Font
 ## Dedicated 3D font — grayscale AA, no mipmaps (LCD/mips = black glyph boxes).
@@ -28,6 +30,7 @@ static func ensure_loaded() -> void:
 	title_semi = _load_clean(TITLE_SEMI_PATH)
 	body = _load_clean(BODY_PATH)
 	body_heavy = _load_clean(BODY_HEAVY_PATH)
+	luckiest = _load_clean(LUCKIEST_PATH)
 	handwritten = _load_clean(HAND_PATH)
 	ticket_hand = _load_clean(TICKET_HAND_PATH)
 	label3d_font = _load_label3d(BODY_HEAVY_PATH)
@@ -101,6 +104,22 @@ static func apply_button(btn: Button, use_title: bool = true, size: int = -1) ->
 	var f: Font = title_semi if use_title else body
 	if f:
 		btn.add_theme_font_override("font", f)
+	if size > 0:
+		btn.add_theme_font_size_override("font_size", size)
+
+
+static func apply_luckiest_label(label: Label, size: int = -1) -> void:
+	ensure_loaded()
+	if luckiest:
+		label.add_theme_font_override("font", luckiest)
+	if size > 0:
+		label.add_theme_font_size_override("font_size", size)
+
+
+static func apply_luckiest_button(btn: Button, size: int = -1) -> void:
+	ensure_loaded()
+	if luckiest:
+		btn.add_theme_font_override("font", luckiest)
 	if size > 0:
 		btn.add_theme_font_size_override("font_size", size)
 
