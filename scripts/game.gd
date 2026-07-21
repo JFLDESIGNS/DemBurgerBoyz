@@ -23207,12 +23207,21 @@ func _setup_burgerpals_startup_sound() -> void:
 	burgerpals_startup_player.name = "BurgerPalsStartupSound"
 	burgerpals_startup_player.bus = "Master"
 	burgerpals_startup_player.stream = stream
-	burgerpals_startup_player.volume_db = -1.0 + linear_to_db(1.5) ## 50% louder
+	## 2× louder than the 4-note jingle (jingle uses ~0.55 linear gain).
+	burgerpals_startup_player.volume_db = linear_to_db(1.10)
 	add_child(burgerpals_startup_player)
-	get_tree().create_timer(3.0).timeout.connect(_play_burgerpals_startup_sound)
+	get_tree().create_timer(1.7).timeout.connect(_play_burgerpals_startup_sound)
 
 
 func _play_burgerpals_startup_sound() -> void:
+	## Little happy 4-note tune, then the Burger Pals VO.
+	var jingle_sec := 0.72
+	if game_audio != null and game_audio.has_method("play_happy_four_note"):
+		jingle_sec = float(game_audio.play_happy_four_note())
+	get_tree().create_timer(maxf(0.55, jingle_sec)).timeout.connect(_play_burgerpals_voice)
+
+
+func _play_burgerpals_voice() -> void:
 	if burgerpals_startup_player != null and is_instance_valid(burgerpals_startup_player):
 		burgerpals_startup_player.play()
 
@@ -23232,6 +23241,13 @@ func _setup_intro_title_music() -> void:
 	intro_music_player.stream = stream
 	intro_music_player.volume_db = -9.5
 	add_child(intro_music_player)
+	## Hold the jazz until the Godot boot logo is gone.
+	get_tree().create_timer(1.0).timeout.connect(_start_intro_title_music)
+
+
+func _start_intro_title_music() -> void:
+	if intro_music_player == null or not is_instance_valid(intro_music_player):
+		return
 	if start_overlay == null or start_overlay.visible:
 		intro_music_player.play()
 

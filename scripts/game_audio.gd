@@ -683,6 +683,20 @@ func play_scale_jingle() -> void:
 	_play_cached("scale_jingle", _make_scale_jingle, 0.0, 0.32)
 
 
+func play_happy_four_note() -> float:
+	## Short major-arpeggio sting (C–E–G–C) before the Burger Pals VO.
+	var step := 0.125
+	var hold := 0.20
+	var tail := 0.12
+	_play_cached(
+		"happy_four_note",
+		func(): return _make_arpeggio_tune([60, 64, 67, 72], step, hold, tail, true),
+		1.0,
+		0.55
+	)
+	return step * 3.0 + hold + tail
+
+
 func play_click() -> void:
 	_play_cached("ui_click", _make_click, 1.0, 0.85)
 
