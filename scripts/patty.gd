@@ -87,6 +87,30 @@ var _done_jump_tw: Tween = null
 var _cook_img: Image
 var _cook_tex: ImageTexture
 static var _steam_tex: ImageTexture
+## Soft smoke plume on finished (scoop-ready) burgers — not on flip.
+var _flip_smoke: Node3D = null
+static var _flip_smoke_mat: Material = null
+var _smoke_fade: float = 0.0 ## 0..1 opacity multiplier
+var _smoke_still_t: float = 0.0
+var _smoke_last_pos: Vector3 = Vector3.ZERO
+var _smoke_bob_phase: float = 0.0
+var _smoke_base_y: float = 0.018
+const FLIP_SMOKE_SCENE := "res://models/smokecyl/smoke2.fbx"
+const FLIP_SMOKE_ALPHA := "res://models/smokecyl/alpha2.png"
+const FLIP_SMOKE_BASE := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
+const FLIP_SMOKE_HEIGHT := 0.557
+const FLIP_SMOKE_DIAMETER := 0.237
+const FLIP_SMOKE_SPIN_DEG := -72.0
+const FLIP_SMOKE_OVERALL_ALPHA := 0.030
+const FLIP_SMOKE_ALPHA_BOOST := 0.65
+const FLIP_SMOKE_FADE_START := 0.14
+const FLIP_SMOKE_FADE_STRENGTH := 2.4
+const FLIP_SMOKE_MOVE_EPS := 0.003
+const FLIP_SMOKE_FADE_SEC := 0.2 ## fade out while moving
+const FLIP_SMOKE_SETTLE_SEC := 0.5 ## wait after stop before fade-in
+const FLIP_SMOKE_FADE_IN_SEC := 0.5 ## 0 → normal opacity after settle
+const FLIP_SMOKE_BOB_AMP := 0.008
+const FLIP_SMOKE_BOB_HZ := 0.675
 ## Frost textures are unique per patty (not shared).
 
 ## Color beat: frost melt → light red → rich red → brown → black
@@ -351,6 +375,7 @@ func reset_for_grill_spawn(
 		_top_bubbles.emitting = false
 	if _steam:
 		_steam.emitting = false
+	_clear_flip_smoke()
 	_update_cook_gradient()
 	_update_frost_visual()
 	_update_sear_disc()
@@ -652,12 +677,17 @@ func apply_mp_state(
 	else:
 		seasoning = clampf(p_season, 0.0, 1.0)
 	refresh_cook_visuals()
+	if can_scoop():
+		_ensure_flip_smoke()
+	else:
+		_clear_flip_smoke()
 	if warm_hold_time > 0.0 or heat_mul <= 0.001:
 		_set_hold_meter_visible(flipped_once and can_scoop())
 		_refresh_hold_meter()
 
 
 func _process(delta: float) -> void:
+	_update_flip_smoke(delta)
 	var cooking := heating and not is_held
 	if _bubbles:
 		_bubbles.emitting = cooking
@@ -1503,6 +1533,154 @@ func flip() -> bool:
 	tw.tween_property(self, "scale:x", 1.0, 0.12)
 	flipped.emit()
 	return true
+
+
+func _get_flip_smoke_material() -> Material:
+	if _flip_smoke_mat != null and is_instance_valid(_flip_smoke_mat):
+		return _flip_smoke_mat
+	var mat := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_prepass_alpha, shadows_disabled, ambient_light_disabled;
+
+uniform sampler2D base_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D alpha_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform vec4 tint_color : source_color = vec4(1.0, 1.0, 1.0, 0.030);
+uniform float alpha_boost : hint_range(0.0, 4.0) = 0.65;
+uniform float height_fade_start : hint_range(0.0, 1.0) = 0.14;
+uniform float height_fade_strength : hint_range(1.0, 5.0) = 2.4;
+instance uniform float opacity_mul : hint_range(0.0, 1.0) = 1.0;
+
+varying float height01;
+
+void vertex() {
+	height01 = clamp(VERTEX.y * 0.5 + 0.5, 0.0, 1.0);
+}
+
+void fragment() {
+	vec4 base = texture(base_tex, UV);
+	float mask = texture(alpha_tex, UV).r;
+	float t = smoothstep(height_fade_start, 1.0, height01);
+	float height_alpha = pow(1.0 - t, height_fade_strength);
+	vec3 col = base.rgb * tint_color.rgb;
+	ALBEDO = col;
+	EMISSION = col;
+	ALPHA = clamp(mask * alpha_boost * tint_color.a * height_alpha * opacity_mul, 0.0, 1.0);
+}
+"""
+	mat.shader = shader
+	mat.render_priority = 8
+	if ResourceLoader.exists(FLIP_SMOKE_BASE):
+		var base_tex := load(FLIP_SMOKE_BASE) as Texture2D
+		if base_tex != null:
+			mat.set_shader_parameter("base_tex", base_tex)
+	if ResourceLoader.exists(FLIP_SMOKE_ALPHA):
+		var alpha_tex := load(FLIP_SMOKE_ALPHA) as Texture2D
+		if alpha_tex != null:
+			mat.set_shader_parameter("alpha_tex", alpha_tex)
+	mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, FLIP_SMOKE_OVERALL_ALPHA))
+	mat.set_shader_parameter("alpha_boost", FLIP_SMOKE_ALPHA_BOOST)
+	mat.set_shader_parameter("height_fade_start", FLIP_SMOKE_FADE_START)
+	mat.set_shader_parameter("height_fade_strength", FLIP_SMOKE_FADE_STRENGTH)
+	_flip_smoke_mat = mat
+	return mat
+
+
+func _clear_flip_smoke() -> void:
+	if _flip_smoke != null and is_instance_valid(_flip_smoke):
+		_flip_smoke.queue_free()
+	_flip_smoke = null
+	_smoke_fade = 0.0
+	_smoke_still_t = 0.0
+
+
+func _ensure_flip_smoke() -> void:
+	if _flip_smoke != null and is_instance_valid(_flip_smoke):
+		return
+	if not ResourceLoader.exists(FLIP_SMOKE_SCENE):
+		return
+	var packed := load(FLIP_SMOKE_SCENE) as PackedScene
+	if packed == null:
+		return
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	var holder := Node3D.new()
+	holder.name = "FlipSmoke"
+	holder.position = Vector3(0.0, _smoke_base_y, 0.0)
+	add_child(holder)
+	visual.name = "Smoke2Mesh"
+	holder.add_child(visual)
+	var mat := _get_flip_smoke_material()
+	var stack: Array[Node] = [visual]
+	while not stack.is_empty():
+		var node := stack.pop_back() as Node
+		if node is MeshInstance3D:
+			var mi := node as MeshInstance3D
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mi.material_override = mat
+			mi.ignore_occlusion_culling = true
+			mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+			mi.render_priority = 8
+			mi.set_instance_shader_parameter("opacity_mul", 0.0)
+		for child in node.get_children():
+			stack.append(child)
+	var s_h := FLIP_SMOKE_HEIGHT / 2.0
+	var s_w := FLIP_SMOKE_DIAMETER / 1.0
+	visual.scale = Vector3(s_w, s_h, s_w)
+	visual.position = Vector3(0.0, FLIP_SMOKE_HEIGHT * 0.5, 0.0)
+	_flip_smoke = holder
+	_smoke_fade = 0.0
+	_smoke_still_t = 0.0
+	_smoke_last_pos = global_position
+	_smoke_bob_phase = randf() * TAU
+
+
+func _set_flip_smoke_opacity_mul(mul: float) -> void:
+	if _flip_smoke == null or not is_instance_valid(_flip_smoke):
+		return
+	var stack: Array[Node] = [_flip_smoke]
+	while not stack.is_empty():
+		var node := stack.pop_back() as Node
+		if node is MeshInstance3D:
+			(node as MeshInstance3D).set_instance_shader_parameter("opacity_mul", mul)
+		for child in node.get_children():
+			stack.append(child)
+
+
+func _update_flip_smoke(delta: float) -> void:
+	## Finished burgers only (scoop-ready) — never on a fresh flip.
+	if not can_scoop():
+		_clear_flip_smoke()
+		return
+	_ensure_flip_smoke()
+	if _flip_smoke == null or not is_instance_valid(_flip_smoke):
+		return
+
+	var pos := global_position
+	var moving := is_held or pos.distance_to(_smoke_last_pos) > FLIP_SMOKE_MOVE_EPS
+	_smoke_last_pos = pos
+	if moving:
+		_smoke_still_t = 0.0
+		_smoke_fade = move_toward(_smoke_fade, 0.0, delta / FLIP_SMOKE_FADE_SEC)
+	else:
+		_smoke_still_t += delta
+		if _smoke_still_t >= FLIP_SMOKE_SETTLE_SEC:
+			## After settle: ease from fully clear up to normal (OVERALL_ALPHA).
+			_smoke_fade = move_toward(_smoke_fade, 1.0, delta / FLIP_SMOKE_FADE_IN_SEC)
+		else:
+			## Still in the post-move settle window — keep faded out.
+			_smoke_fade = move_toward(_smoke_fade, 0.0, delta / FLIP_SMOKE_FADE_SEC)
+
+	_set_flip_smoke_opacity_mul(_smoke_fade)
+	_flip_smoke.visible = _smoke_fade > 0.01
+	if _smoke_fade <= 0.01:
+		return
+
+	_flip_smoke.rotate_y(deg_to_rad(FLIP_SMOKE_SPIN_DEG * delta))
+	_smoke_bob_phase += delta * TAU * FLIP_SMOKE_BOB_HZ
+	_flip_smoke.position.y = _smoke_base_y + sin(_smoke_bob_phase) * FLIP_SMOKE_BOB_AMP
 
 
 func smash() -> void:

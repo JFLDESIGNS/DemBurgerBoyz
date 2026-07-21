@@ -47,6 +47,14 @@ var _shake_on: bool = false
 var _shake_lp := 0.0
 var _shake_phase := 0.0
 var _shake_tick := 0.0
+## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
+var _fries_shake_player: AudioStreamPlayer
+var _fries_shake_gen: AudioStreamGenerator
+var _fries_shake_on: bool = false
+var _fries_shake_intensity: float = 0.0
+var _fries_shake_lp := 0.0
+var _fries_shake_phase := 0.0
+var _fries_shake_tick := 0.0
 ## Live fry filters / pop state (never loops).
 var _sz_mid := 0.0
 var _sz_mid2 := 0.0
@@ -144,6 +152,15 @@ func _ready() -> void:
 	_shake_player.stream = _shake_gen
 	_shake_player.volume_db = -80.0
 	add_child(_shake_player)
+	## Fries pack shake while carrying a serving.
+	_fries_shake_gen = AudioStreamGenerator.new()
+	_fries_shake_gen.mix_rate = MIX_RATE
+	_fries_shake_gen.buffer_length = 0.12
+	_fries_shake_player = AudioStreamPlayer.new()
+	_fries_shake_player.bus = "Master"
+	_fries_shake_player.stream = _fries_shake_gen
+	_fries_shake_player.volume_db = -80.0
+	add_child(_fries_shake_player)
 	## Soda fountain dispenser hiss / carbonation rush.
 	_soda_gen = AudioStreamGenerator.new()
 	_soda_gen.mix_rate = MIX_RATE
@@ -274,6 +291,12 @@ func _process(delta: float) -> void:
 			while shp.get_frames_available() > 0:
 				var shs := _next_shaker_rattle_sample()
 				shp.push_frame(Vector2(shs, shs))
+	if _fries_shake_on and _fries_shake_player != null and _fries_shake_player.playing:
+		var fsp := _fries_shake_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if fsp != null:
+			while fsp.get_frames_available() > 0:
+				var fss := _next_fries_shake_sample()
+				fsp.push_frame(Vector2(fss, fss))
 	if _soda_on and _soda_player != null and _soda_player.playing:
 		var sop := _soda_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if sop != null:
@@ -403,6 +426,23 @@ func set_shaker_rattle(active: bool) -> void:
 		if _shake_player.playing:
 			_shake_player.stop()
 		_shake_player.volume_db = -80.0
+
+
+func set_fries_shake(active: bool, intensity: float = 1.0) -> void:
+	## Paper cup + salt-crystal rattle while whipping a fries pack.
+	if _fries_shake_player == null:
+		return
+	_fries_shake_intensity = clampf(intensity, 0.0, 1.0)
+	if active and _fries_shake_intensity > 0.05:
+		_fries_shake_on = true
+		_fries_shake_player.volume_db = lerpf(-34.0, -22.0, _fries_shake_intensity)
+		if not _fries_shake_player.playing:
+			_fries_shake_player.play()
+	else:
+		_fries_shake_on = false
+		if _fries_shake_player.playing:
+			_fries_shake_player.stop()
+		_fries_shake_player.volume_db = -80.0
 
 
 func set_soda_pour(active: bool) -> void:
@@ -551,6 +591,23 @@ func _next_shaker_rattle_sample() -> float:
 	if pulse > 0.9 and randf() < 0.025:
 		tap = (randf() * 2.0 - 1.0) * 0.12
 	return clampf((grain * 0.22 + tap) * pulse, -1.0, 1.0)
+
+
+func _next_fries_shake_sample() -> float:
+	## Soft paper-cup rustle + tiny crystal ticks while the pack is whipped.
+	_fries_shake_tick += 1.0 / float(MIX_RATE)
+	var shake_hz := 6.4 + sin(_fries_shake_tick * 2.6) * 1.15
+	_fries_shake_phase += shake_hz / float(MIX_RATE)
+	var pulse := maxf(0.0, sin(_fries_shake_phase * TAU))
+	pulse = pow(pulse, 0.38)
+	var white := randf() * 2.0 - 1.0
+	_fries_shake_lp = _fries_shake_lp * 0.68 + white * 0.32
+	var paper := (white - _fries_shake_lp) * 0.42 + _fries_shake_lp * 0.06
+	var crystal := 0.0
+	if pulse > 0.82 and randf() < 0.045 * lerpf(0.55, 1.0, _fries_shake_intensity):
+		crystal = (randf() * 2.0 - 1.0) * 0.16
+	var gain := lerpf(0.55, 1.0, _fries_shake_intensity)
+	return clampf((paper * 0.20 + crystal) * pulse * gain, -1.0, 1.0)
 
 
 func _next_ext_spray_sample() -> float:

@@ -11,8 +11,11 @@ const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22
 const SMOKE2_SCENE_PATH := "res://models/smokecyl/smoke2.fbx"
 const SMOKE2_ALPHA_TEX_PATH := "res://models/smokecyl/alpha2.png"
-const SMOKE2_PREVIEW_HEIGHT := 0.40
-const SMOKE2_PREVIEW_WIDTH := 0.36
+const SMOKE2_BASECOLOR_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
+const SMOKE2_PREVIEW_HEIGHT := 0.55
+const SMOKE2_PREVIEW_WIDTH := 0.42
+const SMOKE2_PREVIEW_LIFT := 0.28
+const SMOKE2_DEBUG_OUTLINE := true
 const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.055, 0.28)
 const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
@@ -308,40 +311,93 @@ func _build_cutting_board(parent: Node3D) -> void:
 	_build_smoke2_cutting_board_preview(root)
 
 
-func _make_smoke2_preview_material() -> Material:
+func _make_smoke2_preview_material(invert_normals: bool = false) -> Material:
 	var mat := ShaderMaterial.new()
 	var shader := Shader.new()
+	var cull_mode := "cull_front" if invert_normals else "cull_back"
 	shader.code = """
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_prepass_alpha;
+render_mode blend_mix, %s, depth_draw_always, specular_disabled;
 
 uniform sampler2D alpha_tex : source_color, filter_linear_mipmap, repeat_enable;
-uniform vec4 tint_color : source_color = vec4(1.0, 1.0, 1.0, 0.5);
+uniform sampler2D base_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform vec4 tint_color : source_color = vec4(0.92, 0.94, 0.98, 0.85);
+uniform float alpha_boost : hint_range(0.0, 4.0) = 1.75;
+uniform float alpha_floor : hint_range(0.0, 1.0) = 0.18;
+uniform bool invert_normals = false;
+
+void vertex() {
+	if (invert_normals) {
+		NORMAL = -NORMAL;
+	}
+}
 
 void fragment() {
-	float alpha_mask = texture(alpha_tex, UV).r;
-	ALBEDO = tint_color.rgb;
-	ALPHA = alpha_mask * tint_color.a;
-	ROUGHNESS = 0.68;
+	vec3 base = texture(base_tex, UV).rgb;
+	float mask = texture(alpha_tex, UV).r;
+	float a = clamp(mask * alpha_boost * tint_color.a, alpha_floor, 1.0);
+	ALBEDO = mix(tint_color.rgb, base, 0.55);
+	ALPHA = a;
+	ROUGHNESS = 0.72;
 	METALLIC = 0.0;
 }
-"""
+""" % cull_mode
 	mat.shader = shader
+	mat.render_priority = 10
 	if ResourceLoader.exists(SMOKE2_ALPHA_TEX_PATH):
 		var alpha_tex := load(SMOKE2_ALPHA_TEX_PATH) as Texture2D
 		if alpha_tex != null:
 			mat.set_shader_parameter("alpha_tex", alpha_tex)
-	mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 0.5))
+	if ResourceLoader.exists(SMOKE2_BASECOLOR_TEX_PATH):
+		var base_tex := load(SMOKE2_BASECOLOR_TEX_PATH) as Texture2D
+		if base_tex != null:
+			mat.set_shader_parameter("base_tex", base_tex)
+	mat.set_shader_parameter("tint_color", Color(0.92, 0.94, 0.98, 0.85))
+	mat.set_shader_parameter("alpha_boost", 1.75)
+	mat.set_shader_parameter("alpha_floor", 0.18)
+	mat.set_shader_parameter("invert_normals", invert_normals)
 	return mat
 
 
-func _apply_smoke2_preview_materials(node: Node, mat: Material) -> void:
+func _make_smoke2_debug_outline_material() -> Material:
+	var mat := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_test_disabled, shadows_disabled, ambient_light_disabled;
+
+uniform vec4 outline_color : source_color = vec4(1.0, 0.05, 0.05, 1.0);
+uniform float inflate : hint_range(0.0, 0.2) = 0.035;
+
+void vertex() {
+	VERTEX += NORMAL * inflate;
+}
+
+void fragment() {
+	ALBEDO = outline_color.rgb;
+	ALPHA = outline_color.a;
+}
+"""
+	mat.shader = shader
+	mat.render_priority = 127
+	mat.set_shader_parameter("outline_color", Color(1.0, 0.05, 0.05, 1.0))
+	mat.set_shader_parameter("inflate", 0.04)
+	return mat
+
+
+func _apply_smoke2_preview_materials(node: Node, mat: Material, outline_mat: Material = null) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.material_override = mat
+		mi.ignore_occlusion_culling = true
+		if outline_mat != null:
+			mi.material_overlay = outline_mat
+			mi.render_priority = 127
+		else:
+			mi.render_priority = 10
 	for child in node.get_children():
-		_apply_smoke2_preview_materials(child, mat)
+		_apply_smoke2_preview_materials(child, mat, outline_mat)
 
 
 func _combined_mesh_aabb_local(root: Node3D) -> AABB:
@@ -364,7 +420,7 @@ func _combined_mesh_aabb_local(root: Node3D) -> AABB:
 					bounds = bounds.expand(p)
 		for child in node.get_children():
 			stack.append(child)
-	return bounds if has_bounds else AABB(Vector3.ZERO, Vector3.ONE)
+	return bounds if has_bounds else AABB(Vector3(-0.5, -1.0, -0.5), Vector3(1.0, 2.0, 1.0))
 
 
 func _build_smoke2_cutting_board_preview(board_root: Node3D) -> void:
@@ -373,10 +429,12 @@ func _build_smoke2_cutting_board_preview(board_root: Node3D) -> void:
 	var packed := load(SMOKE2_SCENE_PATH) as PackedScene
 	if packed == null:
 		return
-	var mat := _make_smoke2_preview_material()
+	var mat_n := _make_smoke2_preview_material(false)
+	var mat_i := _make_smoke2_preview_material(true)
+	var outline := _make_smoke2_debug_outline_material() if SMOKE2_DEBUG_OUTLINE else null
 	for data in [
-		{"name": "Smoke2PreviewA", "pos": Vector3(-0.13, CUTTING_BOARD_SIZE.y * 0.5 + 0.006, -0.05), "yaw": 180.0, "height": 0.42},
-		{"name": "Smoke2PreviewB", "pos": Vector3(0.14, CUTTING_BOARD_SIZE.y * 0.5 + 0.006, 0.08), "yaw": 205.0, "height": 0.38},
+		{"name": "Smoke2_Normal", "pos": Vector3(-0.16, CUTTING_BOARD_SIZE.y * 0.5, -0.02), "yaw": 180.0, "inv": false},
+		{"name": "Smoke2_Inverted", "pos": Vector3(0.16, CUTTING_BOARD_SIZE.y * 0.5, 0.06), "yaw": 205.0, "inv": true},
 	]:
 		var visual := packed.instantiate() as Node3D
 		if visual == null:
@@ -388,14 +446,28 @@ func _build_smoke2_cutting_board_preview(board_root: Node3D) -> void:
 		board_root.add_child(holder)
 		visual.name = "Smoke2Mesh"
 		holder.add_child(visual)
-		_apply_smoke2_preview_materials(visual, mat)
+		var mat: Material = mat_i if bool(data["inv"]) else mat_n
+		_apply_smoke2_preview_materials(visual, mat, outline)
 		var bounds := _combined_mesh_aabb_local(visual)
 		var height := maxf(bounds.size.y, 0.001)
 		var widest := maxf(maxf(bounds.size.x, bounds.size.z), 0.001)
-		var s := minf(float(data["height"]) / height, SMOKE2_PREVIEW_WIDTH / widest)
+		var s := minf(SMOKE2_PREVIEW_HEIGHT / height, SMOKE2_PREVIEW_WIDTH / widest)
 		visual.scale = Vector3.ONE * s
-		visual.position -= bounds.get_center() * s
-		visual.position.y += -bounds.position.y * s + 0.004
+		visual.position = Vector3.ZERO
+		visual.position -= Vector3(bounds.get_center().x, 0.0, bounds.get_center().z) * s
+		visual.position.y = -bounds.position.y * s + SMOKE2_PREVIEW_LIFT
+		var tag := Label3D.new()
+		tag.name = "Smoke2DebugTag"
+		tag.text = str(data["name"])
+		tag.font_size = 42
+		tag.pixel_size = 0.0022
+		tag.modulate = Color(1.0, 0.15, 0.1, 1.0)
+		tag.outline_size = 8
+		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		tag.no_depth_test = true
+		tag.render_priority = 127
+		tag.position = Vector3(0.0, SMOKE2_PREVIEW_HEIGHT + SMOKE2_PREVIEW_LIFT + 0.08, 0.0)
+		holder.add_child(tag)
 		_assign_owner_recursive(holder)
 
 

@@ -265,8 +265,8 @@ horizontal_alignment = 1
 layout_mode = 2
 theme_override_colors/font_color = Color(0.92, 0.94, 0.98, 1)
 theme_override_font_sizes/font_size = 15
-text = "Inside the truck: FULL · 1/2 · HOLD heat zones (HOLD keeps meat warm 5 min),
-build on one board, serve customers. Close the window for a short break."
+text = "Flip burgers, sling fries, pour sodas, and keep the line smiling.
+Welcome to Burger Pals: tiny truck, big chaos, perfect cheese."
 horizontal_alignment = 1
 autowrap_mode = 3
 

@@ -91,6 +91,7 @@ const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
+const BURGERPALS_STARTUP_SOUND_PATH := "res://sounds/burgerpals.wav"
 const BTS_CAT_BOOK_COVER_PATH := "res://assets/decal/magic_breaking_book.png"
 ## Hotkeys 1-7 match strip toppings (tomato → mustard). Cheese is grabbed from the board wheel.
 ## Bottom bar left→right: tomato … mustard, then Serve on the right.
@@ -105,7 +106,7 @@ const COST_OIL_USE := 0.0 ## Stocked tools are free to use
 const COST_SEASON_USE := 0.0
 const COST_INGREDIENT := 0.25 ## Phone restock unit baseline (using fridge stock is free)
 const COST_BACON := 0.50
-const START_MONEY := 200.0
+const START_MONEY := 1000.0
 const SHOP_SODA_MACHINE := "soda_machine"
 const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
@@ -299,6 +300,11 @@ var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel
 const RESIDUE_CHUNK_COUNT := 6 ## Extra flecks on top of the burnt disc.
+## Sit-time crust roll when scooping off a pad.
+const RESIDUE_SIT_CHANCE_SEC := 20.0 ## > this → 50% chance of leaving a spot
+const RESIDUE_SIT_ALWAYS_SEC := 30.0 ## > this → always leave a spot
+const RESIDUE_SIT_CHANCE := 0.50
+const RESIDUE_MIN_LEAVE_AMT := 0.12 ## below this, leave the steel clean
 ## Filthy grill — need nearly a full flat-top of heavy crust before walkouts.
 const CRUST_GROSS_COUNT := 9 ## was 5 — allow lots of grime before the line freaks out
 const CRUST_GROSS_MIN_AMT := 0.72 ## was 0.45 — half-scraped piles no longer count as "big"
@@ -602,6 +608,8 @@ var _icecream_swirl_tilt: Vector2 = Vector2.ZERO
 var _icecream_swirl_scale: Vector3 = Vector3.ONE
 var _icecream_spin_phase: float = 0.0
 var _icecream_sparkle_phase: float = 0.0
+var _fries_sparkle_phase: float = 0.0
+var _fries_fry_shake_phase: float = 0.0
 var _icecream_grab_lockout: float = 0.0
 var _icecream_auto_hand_token: int = 0
 const ICECREAM_AUTO_HAND_DELAY := 0.5
@@ -610,6 +618,7 @@ var burnt_icecream_cone_root: Node3D = null
 var burnt_icecream_cone_puddle: Node3D = null
 ## Fryer machine — unlockable phone equipment.
 var fryer_root: Node3D = null
+var fryer_label: Label3D = null
 var fryer_baskets: Array = []
 var fryer_held_index: int = -1
 var fryer_ready_servings: int = 0
@@ -622,6 +631,19 @@ var fries_pack_held: bool = false
 var fries_pack_root: Node3D = null
 var _fries_pack_prev_pos: Vector3 = Vector3.ZERO
 var _fries_pack_vel: Vector3 = Vector3.ZERO
+var _fries_pack_mouse_prev: Vector2 = Vector2.ZERO
+var _fries_spill_cd: float = 0.0
+var grill_spilled_fries: Array = [] ## single fries dropped on steel {root, mat, smoke, age, fired, half_h}
+var spilled_fry_held: bool = false
+var spilled_fry_held_idx: int = -1 ## index into grill_spilled_fries while carrying
+const FRIES_SPILL_SPEED := 2.35 ## whip the pack this hard over the grill → fries fly out
+const FRIES_SPILL_COOLDOWN := 0.32
+const FRIES_GRILL_WAIT_SEC := 3.0 ## sit golden before charring starts
+const FRIES_GRILL_BLACK_SEC := 3.0 ## golden → black over this window, then fire
+const FRIES_LOGO_DROP_Y := 0.02286 ## 0.9 inches below mid-band (was 1.2", then +0.3" up)
+const FRIES_FRY_SHAKE_DEG := 9.5 ## fries pile wobble amplitude (container stays still)
+const FRIES_FRY_SHAKE_HZ := 3.6
+const FRIES_SPILL_SIT_Y := 0.017 ## ~half-inch lift so sticks don't clip the steel
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -679,6 +701,7 @@ var supply_fresh: Dictionary = {}
 var game_audio: Node = null
 var intro_music_player: AudioStreamPlayer = null
 var bts_day_music_player: AudioStreamPlayer = null
+var burgerpals_startup_player: AudioStreamPlayer = null
 var bts_day_intro_label: Label = null
 var bts_day_intro_root: Node3D = null
 var bts_day_intro_lights_root: Node3D = null
@@ -848,12 +871,25 @@ const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
 const SMOKE2_SCENE_PATH := "res://models/smokecyl/smoke2.fbx"
 const SMOKE2_ALPHA_TEX_PATH := "res://models/smokecyl/alpha2.png"
-const SMOKE2_PREVIEW_HEIGHT := 0.40
-const SMOKE2_PREVIEW_WIDTH := 0.36
+const SMOKE2_BASECOLOR_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
+## Match fire extinguisher in-world size, −20% overall, +20% height, +12% diameter.
+const SMOKE2_TARGET_HEIGHT := 0.557 ## 0.464 * 1.2
+const SMOKE2_TARGET_DIAMETER := 0.237 ## 0.215 * 1.10
+const SMOKE2_DEBUG_OUTLINE := false ## placement confirmed — show smoke + alpha only
+## Clockwise from above (negative Y).
+const SMOKE2_SPIN_DEG_PER_SEC := -72.0
+## Overall opacity — softer wisps.
+const SMOKE2_OVERALL_ALPHA := 0.05
+const SMOKE2_ALPHA_BOOST := 0.75
+## Height where top fade begins (0=bottom, 1=top). Lower = clear zone reaches further down.
+const SMOKE2_HEIGHT_FADE_START := 0.14
+## >1 pulls alpha down harder through the fade band.
+const SMOKE2_HEIGHT_FADE_STRENGTH := 2.4
 ## Cheese slice piles on the counter — height tracks fridge stock (no wheel).
 const CHEESE_STATION_COLLISION_LAYER := 8192
 ## +8″ camera-left from prior (-0.06 → +0.143). Camera-left = world +X.
-const CHEESE_STATION_OFFSET := Vector3(0.143, 0.0, 0.38)
+## −4″ toward the cook from the old deep seat (z 0.38 → 0.278).
+const CHEESE_STATION_OFFSET := Vector3(0.143, 0.0, 0.278)
 const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
 ## Screen grab must be tight — generous radius stole grill scoop/drag clicks.
 const CHEESE_STATION_SCREEN_PX := 40.0
@@ -995,20 +1031,39 @@ const ICECREAM_FILL_ORBIT_R := 0.012
 const ICECREAM_FILL_ORBIT_Z_R := 0.009
 const ICECREAM_SWIRL_FAST_SQUASH_MAX := 0.15
 const ICECREAM_SPARKLE_COUNT := 28
+const FRIES_SPARKLE_COUNT := 36
 const ICECREAM_GRILL_MELT_SEC := 5.0
 const ICECREAM_GRILL_FIRE_SEC := 6.0
 const ICECREAM_PUDDLE_R := 0.105
-## Test placement: fryer on the left side of the service window, nudged away
-## from the player so the cheese stack and board stay grabbable.
-const FRYER_STATION_POS := Vector3(1.18, 1.207, 0.87)
+## Fryer on the left counter — left seat kept; +1ft away from the cook.
+## Camera-left = world +X · local +Z faces the cook with yaw 180.
+const FRYER_STATION_POS := Vector3(1.35, 1.105, 1.33) ## +1ft more away from cook (was 1.025)
 const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const FRYER_COLLISION_LAYER := 32768
 const FRY_BASKET_COOK_SEC := 5.0
+const FRYER_DONE_POP_Y := 0.18 ## lift above oil surface when cook finishes
+const FRYER_HINT_SCREEN_NUDGE := Vector2(0.0, 30.0)
 const FRY_BASKET_SHAKE_NEED := 0.72
-const FRYER_OIL_LOCAL := Vector3(0.0, 0.020, 0.16)
-const FRYER_TUB_X := 0.20
+## Smoke cylinders under a dunked basket — ~15% larger than burger flip smoke.
+const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
+const FRYER_SMOKE_DIAMETER := 0.273 ## 0.237 * 1.15
+const FRYER_SMOKE_SPIN_DEG := -72.0
+## Match finished container fries (was pale yellow potato).
+const FRYER_FRY_COLOR := Color(0.96, 0.68, 0.16)
+const FRYER_FRY_COOKED_COLOR := Color(0.88, 0.52, 0.10)
+## Local −X = camera-left · higher Z = closer to the cook.
+const FRYER_OIL_LOCAL := Vector3(-0.12, -0.056, 0.52)
+const FRYER_TUB_X := 0.22
 const FRYER_OIL_RADIUS := 0.20
 const FRYER_BASKET_HOLD_Y := 0.18
+## Basket rest / fry angle — stay mostly upright in the oil.
+const FRYER_BASKET_HOME_TILT := -4.0
+const FRYER_BASKET_FRY_TILT := -5.0
+## Finished packs clear of the right pit (tracks pit seat).
+const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
+const FRYER_BASKET_HOME_Y := 0.159 ## was 0.235; tracks the lower pit
+const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
+const FRIES_PACK_TARGET_H := 0.167 ## ~15% bigger than prior 0.145 pack height
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
 const CUP_FOLLOW_RATE := 15.0 ## hand follow (empty); full drinks feel heavier
@@ -1303,6 +1358,7 @@ func _ready() -> void:
 	_layout_top_bar_hud()
 	_setup_game_audio()
 	_setup_intro_title_music()
+	_setup_burgerpals_startup_sound()
 	_build_dialogue_ui()
 	## Hint sits under order tickets; flash stays on top.
 	## Empty rail must IGNORE — it covers the hanging tools (oil/scraper/season).
@@ -1947,9 +2003,16 @@ func _process(delta: float) -> void:
 		_update_held_fryer_basket(delta)
 	if fries_pack_held:
 		_update_held_fries_pack(delta)
+	if spilled_fry_held:
+		_update_held_spilled_fry(delta)
+	_update_grill_spilled_fries(delta)
 	if bts_lightstick_held_index >= 0:
 		_update_held_bts_lightstick(delta)
 	_update_fryer_oil_bubbles(delta)
+	_update_fryer_basket_smoke(delta)
+	_update_ready_fries_pack_shakes(delta)
+	_update_ready_fries_pack_sparkles(delta)
+	_refresh_fryer_hint_label()
 	## Parked tray drinks keep dying their foam head down.
 	_update_parked_cups_foam(delta)
 	if ext_held:
@@ -1970,6 +2033,7 @@ func _process(delta: float) -> void:
 	_update_soda_char_spots(delta)
 	_update_melting_cups(delta)
 	_update_melting_icecreams(delta)
+	_update_smoke2_grill_spin(delta)
 	_update_grill_fire(delta)
 	_update_ext_powder_blobs(delta)
 	if not tickets.is_empty():
@@ -2466,6 +2530,10 @@ func _input(event: InputEvent) -> void:
 			_release_fries_pack(event.position)
 			get_viewport().set_input_as_handled()
 			return
+		if spilled_fry_held:
+			_release_spilled_fry(event.position)
+			get_viewport().set_input_as_handled()
+			return
 		if bts_lightstick_held_index >= 0:
 			_release_bts_lightstick()
 			get_viewport().set_input_as_handled()
@@ -2490,6 +2558,9 @@ func _input(event: InputEvent) -> void:
 			if _try_ready_fries_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
+			if _try_grab_spilled_fry(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _try_bts_lightstick_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
@@ -2507,7 +2578,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if fryer_held_index >= 0 or fries_pack_held or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
+			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -2564,6 +2635,10 @@ func _input(event: InputEvent) -> void:
 			return
 		if fries_pack_held:
 			_release_fries_pack(event.position)
+			get_viewport().set_input_as_handled()
+			return
+		if spilled_fry_held:
+			_release_spilled_fry(event.position)
 			get_viewport().set_input_as_handled()
 			return
 		if bts_lightstick_held_index >= 0:
@@ -6026,35 +6101,74 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	call_deferred("_try_auto_serve")
 
 
+func _patty_grill_sit_seconds(patty: Area3D) -> float:
+	## How long this burger has sat on the steel (both cook sides + warm hold).
+	## Synced cook/hold fields keep host + guest on the same chance band.
+	if patty == null or not is_instance_valid(patty):
+		return 0.0
+	var cook_sit := 0.0
+	if bool(patty.flipped_once):
+		cook_sit = maxf(0.0, float(patty.first_side_time) + float(patty.cook_time))
+	else:
+		cook_sit = maxf(0.0, float(patty.cook_time))
+	var hold_sit := maxf(0.0, float(patty.warm_hold_time))
+	return cook_sit + hold_sit
+
+
+func _patty_should_leave_residue(patty: Area3D) -> bool:
+	## ≤20s clean · >20s 50% · >30s always. Roll once on the scooping peer.
+	var sit := _patty_grill_sit_seconds(patty)
+	if sit <= RESIDUE_SIT_CHANCE_SEC:
+		return false
+	if sit > RESIDUE_SIT_ALWAYS_SEC:
+		return true
+	return randf() < RESIDUE_SIT_CHANCE
+
+
 func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> void:
 	if patty != null and _is_bun_toast(patty):
 		return
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
+	## Scooping peer rolls; partners only see leave via RPC (same spot / amount).
+	if not _patty_should_leave_residue(patty):
+		return
+	var amt := 1.0
 	var at := Vector3(patty._rest_x, GRILL_SURFACE_Y + 0.028, patty._rest_z) if patty else slot_positions[slot] + Vector3(0, 0.028, 0)
 	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, at.x, at.z, announce, "patty")
+		mp_residue_leave.rpc(slot, at.x, at.z, announce, "patty", amt)
 		return
-	_leave_grill_residue_local(slot, at, announce, "patty")
+	_leave_grill_residue_local(slot, at, announce, "patty", amt)
 
 
 func _leave_grill_residue_local(
-	slot: int, at: Vector3, announce: bool = true, kind: String = "patty"
+	slot: int, at: Vector3, announce: bool = true, kind: String = "patty", amt: float = 1.0
 ) -> void:
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
-	grill_residue[slot] = 1.0
+	amt = clampf(amt, 0.0, 1.0)
+	if amt < RESIDUE_MIN_LEAVE_AMT and kind == "patty":
+		return
+	## Keep the heavier pile if this pad already had crust.
+	var prev := float(grill_residue[slot]) if slot < grill_residue.size() else 0.0
+	grill_residue[slot] = maxf(prev, amt)
 	if slot < grill_residue_kind.size():
 		grill_residue_kind[slot] = kind
 	if slot < brush_swipe_travel.size():
 		brush_swipe_travel[slot] = 0.0
 	if slot < brush_swipe_cool.size():
 		brush_swipe_cool[slot] = 0.0
-	_spawn_residue_chunks(slot, at, kind)
+	## Rebuild chunks when empty or when this leave is meaningfully heavier.
+	var need_spawn := prev <= 0.04 or amt >= prev + 0.08 or kind == "cup"
+	if need_spawn:
+		_spawn_residue_chunks(slot, at, kind)
+	elif slot < grill_residue_centers.size():
+		grill_residue_centers[slot] = at
 	if slot < grill_residue_meshes.size() and is_instance_valid(grill_residue_meshes[slot]):
 		grill_residue_meshes[slot].position = at
 		grill_residue_meshes[slot].visible = false
-	if announce:
+	_refresh_residue_visual(slot)
+	if announce and float(grill_residue[slot]) >= 0.45:
 		if kind == "cup":
 			_flash("Charred cup stuck on the grill — scrape it off", Color("BCAAA4"))
 		else:
@@ -6170,9 +6284,9 @@ func _leave_cup_char_residue(at: Vector3) -> void:
 		return
 	var sit := Vector3(at.x, GRILL_SURFACE_Y + 0.028, at.z)
 	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, sit.x, sit.z, true, "cup")
+		mp_residue_leave.rpc(slot, sit.x, sit.z, true, "cup", 1.0)
 		return
-	_leave_grill_residue_local(slot, sit, true, "cup")
+	_leave_grill_residue_local(slot, sit, true, "cup", 1.0)
 
 
 func _refresh_residue_visual(slot: int) -> void:
@@ -11307,6 +11421,7 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool
 	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28, false) or hit_any
 	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3, true) or hit_any
 	hit_any = _scrape_burnt_icecreams(pos, move_xz, moved) or hit_any
+	hit_any = _scrape_grill_spilled_fries(pos, move_xz, moved) or hit_any
 	## Char blotches — swipe to fling away.
 	var ci := 0
 	while ci < soda_char_spots.size():
@@ -11690,6 +11805,7 @@ func _clear_all_patty() -> void:
 		if i < slot_areas.size() and is_instance_valid(slot_areas[i]):
 			slot_areas[i].input_ray_pickable = true
 	_clear_all_residue()
+	_clear_grill_spilled_fries()
 	call_deferred("_ensure_patty_spawn_pool")
 
 
@@ -12359,25 +12475,32 @@ func _add_mesh_rod(parent: Node3D, name: String, length: float, radius: float, p
 func _fryer_oil_local_for_index(index: int = -1) -> Vector3:
 	var p := FRYER_OIL_LOCAL
 	if index == 0:
-		p.x = -FRYER_TUB_X
+		p.x = FRYER_OIL_LOCAL.x - FRYER_TUB_X
 	elif index == 1:
-		p.x = FRYER_TUB_X
+		p.x = FRYER_OIL_LOCAL.x + FRYER_TUB_X
 	return p
 
 
+func _fryer_tub_local_x(index: int) -> float:
+	return FRYER_OIL_LOCAL.x + (-FRYER_TUB_X if index == 0 else FRYER_TUB_X)
+
+
 func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material, oil_mat: Material) -> void:
+	## Recessed oil well — thin rim, no chunky U-block side walls.
 	var tub := Node3D.new()
 	tub.name = "OilTub%d" % index
 	tub.position = Vector3(x, 0.0, 0.0)
 	parent.add_child(tub)
-	var well_mat := _make_soda_metal_mat(Color(0.46, 0.47, 0.45), 0.82, 0.22)
+	var rim_mat := _make_soda_metal_mat(Color(0.42, 0.43, 0.41), 0.88, 0.20)
 	var oil_y := FRYER_OIL_LOCAL.y
-	_add_mesh_box(tub, "BackWall", Vector3(0.30, 0.070, 0.018), Vector3(0.0, oil_y + 0.040, FRYER_OIL_LOCAL.z - 0.125), well_mat)
-	_add_mesh_box(tub, "FrontLowLip", Vector3(0.30, 0.020, 0.018), Vector3(0.0, oil_y + 0.014, FRYER_OIL_LOCAL.z + 0.125), well_mat)
-	_add_mesh_box(tub, "LeftWall", Vector3(0.018, 0.070, 0.25), Vector3(-0.140, oil_y + 0.040, FRYER_OIL_LOCAL.z), well_mat)
-	_add_mesh_box(tub, "RightWall", Vector3(0.018, 0.070, 0.25), Vector3(0.140, oil_y + 0.040, FRYER_OIL_LOCAL.z), well_mat)
-	_add_mesh_box(tub, "TubBottom", Vector3(0.30, 0.024, 0.260), Vector3(0.0, oil_y - 0.075, FRYER_OIL_LOCAL.z), steel_mat)
-	_add_mesh_box(tub, "OilLiquid", Vector3(0.255, 0.014, 0.225), Vector3(0.0, FRYER_OIL_LOCAL.y, FRYER_OIL_LOCAL.z), oil_mat)
+	var oz := FRYER_OIL_LOCAL.z
+	## Floor + oil sit in a shallow cut; rim is a low steel lip only.
+	_add_mesh_box(tub, "TubBottom", Vector3(0.28, 0.018, 0.24), Vector3(0.0, oil_y - 0.055, oz), steel_mat)
+	_add_mesh_box(tub, "OilLiquid", Vector3(0.24, 0.012, 0.205), Vector3(0.0, oil_y, oz), oil_mat)
+	_add_mesh_box(tub, "RimBack", Vector3(0.30, 0.022, 0.012), Vector3(0.0, oil_y + 0.012, oz - 0.118), rim_mat)
+	_add_mesh_box(tub, "RimFront", Vector3(0.30, 0.016, 0.012), Vector3(0.0, oil_y + 0.008, oz + 0.118), rim_mat)
+	_add_mesh_box(tub, "RimLeft", Vector3(0.012, 0.022, 0.24), Vector3(-0.144, oil_y + 0.012, oz), rim_mat)
+	_add_mesh_box(tub, "RimRight", Vector3(0.012, 0.022, 0.24), Vector3(0.144, oil_y + 0.012, oz), rim_mat)
 	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
 	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	bubble_mat.emission_enabled = true
@@ -12395,9 +12518,9 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		bubble.mesh = mesh
 		bubble.material_override = bubble_mat
 		bubble.position = Vector3(
-			randf_range(-0.105, 0.105),
+			randf_range(-0.095, 0.095),
 			FRYER_OIL_LOCAL.y - r * 0.05 + randf_range(-0.002, 0.004),
-			FRYER_OIL_LOCAL.z + randf_range(-0.085, 0.085)
+			FRYER_OIL_LOCAL.z + randf_range(-0.075, 0.075)
 		)
 		bubble.set_meta("home", bubble.position)
 		bubble.set_meta("phase", randf_range(0.0, TAU))
@@ -12410,6 +12533,7 @@ func _build_fryer_machine() -> void:
 	if fryer_root != null and is_instance_valid(fryer_root):
 		fryer_root.queue_free()
 	fryer_root = null
+	fryer_label = null
 	fryer_baskets.clear()
 	fryer_oil_bubbles.clear()
 	fryer_held_index = -1
@@ -12430,27 +12554,38 @@ func _build_fryer_machine() -> void:
 	oil_mat.emission = Color(1.0, 0.67, 0.08)
 	oil_mat.emission_energy_multiplier = 0.26
 
-	_build_fryer_tub(root, 0, -FRYER_TUB_X, steel_mat, oil_mat)
-	_build_fryer_tub(root, 1, FRYER_TUB_X, steel_mat, oil_mat)
-	_add_mesh_box(root, "FrontLip", Vector3(0.82, 0.04, 0.045), Vector3(0.0, 0.020, 0.38), steel_mat)
+	_build_fryer_tub(root, 0, _fryer_tub_local_x(0), steel_mat, oil_mat)
+	_build_fryer_tub(root, 1, _fryer_tub_local_x(1), steel_mat, oil_mat)
+	## Flat pad for finished packs — not another wall frame.
+	_add_mesh_box(
+		root,
+		"ReadyShelf",
+		Vector3(0.28, 0.016, 0.18),
+		FRYER_READY_LOCAL + Vector3(-0.06, -0.012, 0.0),
+		steel_mat
+	)
 
 	var label := Label3D.new()
-	label.text = "FRYER"
-	label.position = Vector3(0.0, 0.205, 0.27)
-	label.font_size = 34
-	label.pixel_size = 0.00125
+	label.name = "FryerHint"
+	label.text = "click basket to add potatoes"
+	label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
+	label.font_size = 22
+	label.pixel_size = 0.00115
 	label.modulate = Color(1.0, 0.76, 0.28)
 	label.outline_size = 5
 	label.outline_modulate = Color(0, 0, 0, 0.78)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(label)
+	fryer_label = label
+	call_deferred("_nudge_fryer_hint_down")
 
 	fryer_ready_root = Node3D.new()
 	fryer_ready_root.name = "ReadyFries"
-	fryer_ready_root.position = Vector3(-0.28, 0.055, 0.43)
+	fryer_ready_root.position = FRYER_READY_LOCAL
 	root.add_child(fryer_ready_root)
 
-	_create_fryer_basket(0, Vector3(-0.20, 0.235, 0.10))
-	_create_fryer_basket(1, Vector3(0.20, 0.235, 0.10))
+	_create_fryer_basket(0, Vector3(_fryer_tub_local_x(0), FRYER_BASKET_HOME_Y, FRYER_OIL_LOCAL.z - 0.04))
+	_create_fryer_basket(1, Vector3(_fryer_tub_local_x(1), FRYER_BASKET_HOME_Y, FRYER_OIL_LOCAL.z - 0.04))
 	_refresh_ready_fries_visuals()
 
 
@@ -12460,7 +12595,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	var basket := Node3D.new()
 	basket.name = "FryBasket%d" % index
 	basket.position = local_pos
-	basket.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	basket.rotation_degrees = Vector3(FRYER_BASKET_HOME_TILT, 0.0, 0.0)
 	fryer_root.add_child(basket)
 
 	var metal := _make_soda_metal_mat(Color(0.52, 0.54, 0.56), 0.96, 0.24)
@@ -12493,7 +12628,11 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	var fries_root := Node3D.new()
 	fries_root.name = "Potatoes"
 	basket.add_child(fries_root)
-	var raw_mat := _make_basic_mat(Color(0.96, 0.82, 0.42), 0.0, 0.62)
+	var raw_mat := _make_basic_mat(FRYER_FRY_COLOR, 0.0, 1.0)
+	raw_mat.metallic = 0.0
+	raw_mat.roughness = 1.0
+	raw_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	raw_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
 	for i in 26:
 		var fry := _add_mesh_box(
 			fries_root,
@@ -12504,6 +12643,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 		)
 		fry.rotation_degrees = Vector3(randf_range(-10.0, 10.0), randf_range(0.0, 180.0), randf_range(-14.0, 14.0))
 	fries_root.visible = false
+	_ensure_fryer_basket_smoke(basket)
 
 	var area := Area3D.new()
 	area.name = "FryBasketGrab"
@@ -12524,10 +12664,44 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 		"state": "empty",
 		"cook": 0.0,
 		"shake": 0.0,
+		"smoke_after": 0.0,
 		"remote_peer": 0,
 		"home": basket.global_position,
 		"home_rot": basket.rotation_degrees,
 	})
+
+
+func _nudge_fryer_hint_down() -> void:
+	if fryer_label != null and is_instance_valid(fryer_label):
+		_nudge_label3d_on_screen(fryer_label, FRYER_HINT_SCREEN_NUDGE)
+
+
+func _refresh_fryer_hint_label() -> void:
+	if fryer_label == null or not is_instance_valid(fryer_label):
+		return
+	## Prefer the most useful next step across both baskets.
+	var has_done := false
+	var has_cooking := false
+	var has_raw := false
+	for data in fryer_baskets:
+		if typeof(data) != TYPE_DICTIONARY:
+			continue
+		var st := str(data.get("state", "empty"))
+		if st == "done":
+			has_done = true
+		elif st == "cooking":
+			has_cooking = true
+		elif st == "raw":
+			has_raw = true
+	var next := "click basket to add potatoes"
+	if has_done:
+		next = "shake basket to finish"
+	elif has_cooking:
+		next = "cooking fries..."
+	elif has_raw:
+		next = "dip basket in oil to cook"
+	if fryer_label.text != next:
+		fryer_label.text = next
 
 
 func _refresh_fryer_basket_visual(index: int) -> void:
@@ -12548,117 +12722,480 @@ func _refresh_fryer_basket_visual(index: int) -> void:
 				continue
 			var mat := mi.material_override as StandardMaterial3D
 			if mat != null:
-				mat.albedo_color = Color(0.92, 0.72, 0.34).lerp(Color(0.92, 0.48, 0.10), cooked_t)
+				mat.albedo_color = FRYER_FRY_COLOR.lerp(FRYER_FRY_COOKED_COLOR, cooked_t)
+	_set_fryer_basket_smoke_active(root, state == "cooking" or float(data.get("smoke_after", 0.0)) > 0.0)
 	var area := data.get("area") as Area3D
 	if area != null and is_instance_valid(area):
 		area.input_ray_pickable = fryer_held_index != index and int(data.get("remote_peer", 0)) == 0
+	_refresh_fryer_hint_label()
 
 
-func _add_fry_cup_logo(parent: Node3D) -> void:
+func _ensure_fryer_basket_smoke(basket: Node3D) -> Node3D:
+	if basket == null or not is_instance_valid(basket):
+		return null
+	var holder := basket.get_node_or_null("FryBasketSmoke") as Node3D
+	if holder != null and is_instance_valid(holder):
+		return holder
+	if not ResourceLoader.exists(SMOKE2_SCENE_PATH):
+		return null
+	var packed := load(SMOKE2_SCENE_PATH) as PackedScene
+	if packed == null:
+		return null
+	holder = Node3D.new()
+	holder.name = "FryBasketSmoke"
+	## Sit under the wire basket floor so plumes rise through the fries.
+	holder.position = Vector3(0.0, 0.0, 0.0)
+	holder.visible = false
+	basket.add_child(holder)
+	var smoke_mat := _make_smoke2_grill_material(false)
+	## Match burger plume softness a bit more than the debug grill props.
+	if smoke_mat is ShaderMaterial:
+		(smoke_mat as ShaderMaterial).set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 0.045))
+		(smoke_mat as ShaderMaterial).set_shader_parameter("alpha_boost", 0.85)
+	var offsets := [Vector3(-0.055, 0.0, 0.0), Vector3(0.055, 0.0, 0.0)]
+	for i in offsets.size():
+		var visual := packed.instantiate() as Node3D
+		if visual == null:
+			continue
+		var cyl := Node3D.new()
+		cyl.name = "FrySmoke_%d" % i
+		cyl.position = offsets[i]
+		cyl.set_meta("fryer_smoke_spin", true)
+		cyl.set_meta("fryer_smoke_bob", randf() * TAU)
+		holder.add_child(cyl)
+		visual.name = "Smoke2Mesh"
+		cyl.add_child(visual)
+		_apply_smoke2_materials_recursive(visual, smoke_mat)
+		var s_h := FRYER_SMOKE_HEIGHT / 2.0
+		var s_w := FRYER_SMOKE_DIAMETER / 1.0
+		visual.scale = Vector3(s_w, s_h, s_w)
+		visual.position = Vector3(0.0, FRYER_SMOKE_HEIGHT * 0.5, 0.0)
+	return holder
+
+
+func _set_fryer_basket_smoke_active(basket: Node3D, active: bool) -> void:
+	var holder := _ensure_fryer_basket_smoke(basket)
+	if holder == null:
+		return
+	holder.visible = active
+
+
+func _set_fryer_basket_smoke_fade(basket: Node3D, fade: float) -> void:
+	var holder := _ensure_fryer_basket_smoke(basket)
+	if holder == null:
+		return
+	fade = clampf(fade, 0.0, 1.0)
+	var stack: Array[Node] = [holder]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for child in node.get_children():
+			stack.append(child)
+		var mi := node as MeshInstance3D
+		if mi == null:
+			continue
+		var mat := mi.material_override as ShaderMaterial
+		if mat != null:
+			mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 0.045 * fade))
+			mat.set_shader_parameter("alpha_boost", 0.85 * fade)
+
+
+func _update_fryer_basket_smoke(delta: float) -> void:
+	for idx in fryer_baskets.size():
+		var data: Dictionary = fryer_baskets[idx]
+		if typeof(data) != TYPE_DICTIONARY:
+			continue
+		var root := data.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var state := str(data.get("state", "empty"))
+		var after := float(data.get("smoke_after", 0.0))
+		if state != "cooking" and after > 0.0:
+			after = maxf(0.0, after - delta)
+			data["smoke_after"] = after
+			fryer_baskets[idx] = data
+		var active := state == "cooking" or after > 0.0
+		_set_fryer_basket_smoke_active(root, active)
+		if active:
+			var fade := 1.0 if state == "cooking" or after > 5.0 else clampf(after / 5.0, 0.0, 1.0)
+			_set_fryer_basket_smoke_fade(root, fade)
+		var holder := root.get_node_or_null("FryBasketSmoke") as Node3D
+		if holder == null or not is_instance_valid(holder) or not holder.visible:
+			continue
+		for child in holder.get_children():
+			var cyl := child as Node3D
+			if cyl == null or not bool(cyl.get_meta("fryer_smoke_spin", false)):
+				continue
+			cyl.rotate_y(deg_to_rad(FRYER_SMOKE_SPIN_DEG * delta))
+			var bob := float(cyl.get_meta("fryer_smoke_bob", 0.0)) + delta * TAU * 0.675
+			cyl.set_meta("fryer_smoke_bob", bob)
+			cyl.position.y = sin(bob) * 0.008
+
+
+func _collect_mesh_aabbs(node: Node, parent_xf: Transform3D, boxes: Array) -> void:
+	var xf := parent_xf
+	if node is Node3D:
+		xf = parent_xf * (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh != null:
+			boxes.append(xf * mi.mesh.get_aabb())
+	for c in node.get_children():
+		_collect_mesh_aabbs(c, xf, boxes)
+
+
+func _mesh_aabb_in_node_space(root: Node3D) -> AABB:
+	var boxes: Array = []
+	_collect_mesh_aabbs(root, Transform3D.IDENTITY, boxes)
+	if boxes.is_empty():
+		return AABB(Vector3(-0.05, 0.0, -0.05), Vector3(0.1, 0.12, 0.1))
+	var out: AABB = boxes[0]
+	for i in range(1, boxes.size()):
+		out = out.merge(boxes[i])
+	return out
+
+
+func _make_cylinder_label_mesh(
+	radius: float,
+	label_h: float,
+	center_y: float,
+	center_xz: Vector2,
+	arc: float,
+	segs: int,
+	rings: int,
+	lift: float
+) -> ArrayMesh:
+	## Partial cylinder strip wrapping a cup/container — UV maps a logo across the arc.
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	## −Z is cook/camera facing; arc fans left/right around that nose.
+	var start_ang := -PI * 0.5 - arc * 0.5
+	var r := radius + lift
+	for y_i in range(rings + 1):
+		var v := float(y_i) / float(rings)
+		var y := center_y + (v - 0.5) * label_h
+		for x_i in range(segs + 1):
+			var u := float(x_i) / float(segs)
+			var ang := start_ang + u * arc
+			var radial := Vector3(cos(ang), 0.0, sin(ang))
+			verts.append(Vector3(
+				center_xz.x + radial.x * r,
+				y,
+				center_xz.y + radial.z * r
+			))
+			norms.append(radial)
+			uvs.append(Vector2(1.0 - u, 1.0 - v))
+	for y_i in rings:
+		for x_i in segs:
+			var i0 := y_i * (segs + 1) + x_i
+			var i1 := i0 + 1
+			var i2 := (y_i + 1) * (segs + 1) + x_i
+			var i3 := i2 + 1
+			indices.append_array([i0, i2, i1, i1, i2, i3])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
+	## Burger Pals mark wrapped around the cook-facing side of the fry cup.
 	if not ResourceLoader.exists(LOGO_TEX_PATH):
 		return
 	var tex := load(LOGO_TEX_PATH) as Texture2D
 	if tex == null:
 		return
-	var tex_w := maxf(1.0, float(tex.get_width()))
-	var tex_h := maxf(1.0, float(tex.get_height()))
-	for i in 3:
-		var logo := MeshInstance3D.new()
-		logo.name = "BurgerPalsFriesLogo%d" % i
-		var quad := QuadMesh.new()
-		quad.size = Vector2(0.026, 0.042)
-		logo.mesh = quad
-		var angle := lerpf(-0.36, 0.36, float(i) / 2.0)
-		var radius := 0.049
-		logo.position = Vector3(sin(angle) * radius, 0.055, cos(angle) * radius + 0.001)
-		logo.rotation_degrees.y = rad_to_deg(angle)
-		logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		var atlas := AtlasTexture.new()
-		atlas.atlas = tex
-		atlas.region = Rect2(tex_w * float(i) / 3.0, 0.0, tex_w / 3.0, tex_h)
-		var mat := StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-		mat.albedo_texture = atlas
-		mat.albedo_color = Color(1.0, 1.0, 1.0, 0.94)
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat.no_depth_test = false
-		mat.render_priority = 2
-		logo.material_override = mat
-		parent.add_child(logo)
-
-
-func _add_fry_piece_to_pack(
-	pack: Node3D,
-	fry_mat: Material,
-	name: String,
-	angle: float,
-	radius: float,
-	height: float,
-	tilt_deg: float,
-	thick: float = 0.0085
-) -> void:
-	var x := sin(angle) * radius
-	var z := cos(angle) * radius * 0.82
-	var fry := _add_mesh_box(
-		pack,
-		name,
-		Vector3(thick * randf_range(0.86, 1.18), height, thick * randf_range(0.86, 1.18)),
-		Vector3(x, 0.094 + height * 0.38 + randf_range(-0.003, 0.007), z),
-		fry_mat
+	## AABB is already in pack space (includes holder scale + seat offset).
+	var aabb := _mesh_aabb_in_node_space(model_holder)
+	var cx := aabb.position.x + aabb.size.x * 0.5
+	var cz := aabb.position.z + aabb.size.z * 0.5
+	var radius := maxf(aabb.size.x, aabb.size.z) * 0.5
+	var label_h := clampf(aabb.size.y * 0.28, 0.048, 0.070)
+	var center_y := aabb.position.y + aabb.size.y * 0.40 - FRIES_LOGO_DROP_Y
+	var logo := MeshInstance3D.new()
+	logo.name = "BurgerPalsFriesLogo"
+	## Wrap ~70° of the cylinder so the mark hugs the cup instead of sitting flat.
+	logo.mesh = _make_cylinder_label_mesh(
+		radius,
+		label_h,
+		center_y,
+		Vector2(cx, cz),
+		1.22,
+		18,
+		4,
+		0.0018
 	)
-	fry.rotation_degrees = Vector3(
-		tilt_deg * cos(angle) + randf_range(-1.2, 1.2),
-		rad_to_deg(angle) + randf_range(-6.0, 6.0),
-		-tilt_deg * sin(angle) + randf_range(-1.2, 1.2)
+	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.80) ## 20% transparent
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = 8
+	logo.material_override = mat
+	pack.add_child(logo)
+
+
+func _setup_fries_pack_shake_root(model: Node3D) -> void:
+	## Isolate fry meshes under a wobble pivot — container stays rock-steady.
+	if model == null or not is_instance_valid(model):
+		return
+	if model.get_node_or_null("FriesShakeRoot") != null:
+		return
+	var shake := Node3D.new()
+	shake.name = "FriesShakeRoot"
+	model.add_child(shake)
+	var fry_nodes: Array[Node] = []
+	var stack: Array[Node] = [model]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for c in node.get_children():
+			if c == shake:
+				continue
+			stack.append(c)
+		if not (node is MeshInstance3D):
+			continue
+		var mi := node as MeshInstance3D
+		var n := String(mi.name).to_lower()
+		if n.contains("container") or n.contains("cup") or n.contains("basket") or n.contains("bucket"):
+			continue
+		## fries.fbx: MeshInstance3D named "fries"; also honor paint meta / tall piles.
+		var is_fry := n == "fries" or n.contains("fri") or bool(mi.get_meta("fry_mesh", false))
+		if not is_fry and mi.mesh != null:
+			var aabb := mi.mesh.get_aabb()
+			is_fry = aabb.size.y >= maxf(aabb.size.x, aabb.size.z) * 0.85
+		if is_fry:
+			fry_nodes.append(mi)
+	## Fallback: if naming failed, shake every non-container mesh.
+	if fry_nodes.is_empty():
+		stack = [model]
+		while not stack.is_empty():
+			var node2: Node = stack.pop_back()
+			for c2 in node2.get_children():
+				if c2 == shake:
+					continue
+				stack.append(c2)
+			if not (node2 is MeshInstance3D):
+				continue
+			var mi2b := node2 as MeshInstance3D
+			var n2 := String(mi2b.name).to_lower()
+			if n2.contains("container") or n2.contains("cup") or n2.contains("basket") or n2.contains("bucket"):
+				continue
+			fry_nodes.append(mi2b)
+	for mi2 in fry_nodes:
+		var parent := mi2.get_parent()
+		if parent == null or parent == shake:
+			continue
+		## Keep world pose when moving under the shake pivot (nested FBX bones/nodes).
+		var gxf: Transform3D = mi2.global_transform
+		parent.remove_child(mi2)
+		shake.add_child(mi2)
+		mi2.global_transform = gxf
+
+
+func _update_fries_pack_fry_shake(pack: Node3D, phase: float, amount: float = 1.0) -> void:
+	if pack == null or not is_instance_valid(pack):
+		return
+	var shake := pack.find_child("FriesShakeRoot", true, false) as Node3D
+	if shake == null or not is_instance_valid(shake):
+		return
+	amount = clampf(amount, 0.0, 1.0)
+	var wave := sin(phase * TAU)
+	shake.rotation_degrees = Vector3(
+		wave * FRIES_FRY_SHAKE_DEG * 0.45 * amount,
+		wave * FRIES_FRY_SHAKE_DEG * 0.22 * amount,
+		wave * FRIES_FRY_SHAKE_DEG * amount
 	)
 
 
 func _populate_fry_pack(pack: Node3D) -> void:
-	var cup_mat := _make_basic_mat(Color(0.82, 0.05, 0.035), 0.0, 0.36)
-	var rim_mat := _make_basic_mat(Color(1.0, 0.82, 0.24), 0.0, 0.32)
-	var fry_mat := _make_basic_mat(Color(0.96, 0.58, 0.12), 0.0, 0.54)
-	var cup := MeshInstance3D.new()
-	cup.name = "RedFryCup"
-	var cup_mesh := CylinderMesh.new()
-	cup_mesh.height = 0.095
-	cup_mesh.top_radius = 0.048
-	cup_mesh.bottom_radius = 0.034
-	cup_mesh.radial_segments = 24
-	cup.mesh = cup_mesh
-	cup.position = Vector3(0.0, 0.048, 0.0)
-	cup.material_override = cup_mat
-	pack.add_child(cup)
-	var rim := MeshInstance3D.new()
-	rim.name = "CupGoldRim"
-	var rim_mesh := TorusMesh.new()
-	rim_mesh.inner_radius = 0.045
-	rim_mesh.outer_radius = 0.050
-	rim_mesh.ring_segments = 24
-	rim_mesh.rings = 6
-	rim.mesh = rim_mesh
-	rim.position = Vector3(0.0, 0.098, 0.0)
-	rim.material_override = rim_mat
-	pack.add_child(rim)
-	_add_fry_cup_logo(pack)
-	for f in 10:
-		var ang := TAU * float(f) / 10.0
-		_add_fry_piece_to_pack(pack, fry_mat, "HotOuterFry%d" % f, ang, 0.039, randf_range(0.083, 0.112), randf_range(11.0, 17.0), 0.0085)
-	for f in 6:
-		var ang2 := TAU * float(f) / 6.0 + TAU / 12.0
-		_add_fry_piece_to_pack(pack, fry_mat, "HotInnerFry%d" % f, ang2, 0.023, randf_range(0.075, 0.102), randf_range(6.0, 11.0), 0.0082)
-	for f in 5:
-		_add_fry_piece_to_pack(
-			pack,
-			fry_mat,
-			"HotLooseFry%d" % f,
-			randf_range(0.0, TAU),
-			randf_range(0.003, 0.025),
-			randf_range(0.064, 0.092),
-			randf_range(2.0, 9.0),
-			0.0080
+	## Finished servings use the authored fries.fbx cup + fries, scaled to truck size.
+	if not ResourceLoader.exists(FRIES_PACK_SCENE):
+		_flash("Missing fries model", Color("EF5350"))
+		return
+	var packed := load(FRIES_PACK_SCENE) as PackedScene
+	if packed == null:
+		return
+	var model := packed.instantiate() as Node3D
+	if model == null:
+		return
+	## Drop editor animation player — packs are static props.
+	var anim := model.get_node_or_null("AnimationPlayer")
+	if anim != null:
+		anim.queue_free()
+	var holder := Node3D.new()
+	holder.name = "FriesModel"
+	pack.add_child(holder)
+	holder.add_child(model)
+	_paint_fries_pack_meshes(model)
+	_setup_fries_pack_shake_root(model)
+	var raw := _mesh_aabb_in_node_space(holder)
+	var h := maxf(0.001, raw.size.y)
+	var s := FRIES_PACK_TARGET_H / h
+	holder.scale = Vector3(s, s, s)
+	var fit := _mesh_aabb_in_node_space(holder)
+	## Sit the cup on the shelf / hand plane, centered in XZ.
+	holder.position = Vector3(
+		-(fit.position.x + fit.size.x * 0.5),
+		-fit.position.y,
+		-(fit.position.z + fit.size.z * 0.5)
+	)
+	_add_fry_container_logo(pack, holder)
+	_ensure_fries_pack_sparkles(pack)
+
+
+func _make_fries_sparkle_mat() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.92)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 1.0, 0.95)
+	mat.emission_energy_multiplier = 1.35
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 12
+	return mat
+
+
+func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
+	if pack == null or not is_instance_valid(pack):
+		return null
+	## Ride with the fry pile so salt shakes with the sticks, not the cup.
+	var shake := pack.find_child("FriesShakeRoot", true, false) as Node3D
+	var attach: Node3D = shake if shake != null and is_instance_valid(shake) else pack
+	var holder := attach.get_node_or_null("FriesSaltSparkles") as Node3D
+	if holder != null and is_instance_valid(holder):
+		return holder
+	## Clear any old pack-level salt from earlier builds.
+	var old := pack.get_node_or_null("FriesSaltSparkles") as Node3D
+	if old != null and is_instance_valid(old) and old != holder:
+		old.queue_free()
+	holder = Node3D.new()
+	holder.name = "FriesSaltSparkles"
+	attach.add_child(holder)
+	var aabb := _mesh_aabb_in_node_space(attach)
+	var cx := aabb.position.x + aabb.size.x * 0.5
+	var cy := aabb.position.y + aabb.size.y * 0.88
+	var cz := aabb.position.z + aabb.size.z * 0.5
+	var sparkle_mesh := BoxMesh.new()
+	sparkle_mesh.size = Vector3.ONE
+	for i in range(FRIES_SPARKLE_COUNT):
+		var bit := MeshInstance3D.new()
+		bit.name = "FriesSparkle_%02d" % i
+		bit.mesh = sparkle_mesh
+		bit.material_override = _make_fries_sparkle_mat()
+		bit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var ang := float(i) * 2.399963
+		var rad := 0.010 + fposmod(float(i) * 0.17, 1.0) * maxf(aabb.size.x, aabb.size.z) * 0.28
+		var y_off := -0.006 + fposmod(float(i) * 0.29, 1.0) * 0.028
+		bit.position = Vector3(
+			cx + cos(ang) * rad,
+			cy + y_off,
+			cz + sin(ang) * rad * 0.85
 		)
+		## White salt crystals — large enough to read on the golden fries.
+		bit.set_meta("spark_size", 0.0085 + fposmod(float(i) * 0.41, 1.0) * 0.0075)
+		bit.set_meta("spark_phase", float(i) * 1.73 + 0.21)
+		bit.rotation_degrees = Vector3(randf_range(10.0, 55.0), randf_range(0.0, 180.0), randf_range(10.0, 50.0))
+		bit.visible = true
+		bit.scale = Vector3.ONE * float(bit.get_meta("spark_size", 0.01))
+		holder.add_child(bit)
+	return holder
+
+
+func _update_fries_pack_sparkles(pack: Node3D, motion: float) -> void:
+	if pack == null or not is_instance_valid(pack):
+		return
+	var holder := _ensure_fries_pack_sparkles(pack)
+	if holder == null:
+		return
+	var drive := clampf(motion, 0.0, 1.0)
+	for child in holder.get_children():
+		var bit := child as MeshInstance3D
+		if bit == null or not is_instance_valid(bit):
+			continue
+		var phase := float(bit.get_meta("spark_phase", 0.0))
+		## Always visible salt; motion just brightens / twinkles.
+		var blink := 0.55 + 0.45 * sin(_fries_sparkle_phase * (3.1 + phase * 0.07) + phase)
+		bit.visible = true
+		var size := float(bit.get_meta("spark_size", 0.01)) \
+			* lerpf(0.9, 1.35, blink) \
+			* lerpf(1.0, 1.3, drive)
+		bit.scale = Vector3.ONE * size
+		var mat := bit.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_color = Color(1.0, 1.0, 1.0, lerpf(0.75, 1.0, blink))
+			mat.emission_energy_multiplier = lerpf(0.9, 1.8, blink) * lerpf(1.0, 1.35, drive)
+
+
+func _paint_fries_pack_meshes(model: Node3D) -> void:
+	## FBX ships untextured grey — paint cup red, fries golden.
+	var cup_mat := _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
+	var fry_mat := _make_basic_mat(Color(0.96, 0.68, 0.16), 0.0, 0.92)
+	fry_mat.metallic = 0.0
+	fry_mat.roughness = 1.0
+	fry_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	fry_mat.emission_enabled = true
+	fry_mat.emission = Color(1.0, 0.82, 0.18) ## yellow-golden glow
+	fry_mat.emission_energy_multiplier = 0.20
+	fry_mat.clearcoat_enabled = false
+	fry_mat.rim_enabled = false
+	fry_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
+	var stack: Array[Node] = [model]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for c in node.get_children():
+			stack.append(c)
+		if not (node is MeshInstance3D):
+			continue
+		var mi := node as MeshInstance3D
+		var n := String(mi.name).to_lower()
+		if n.contains("container") or n.contains("cup") or n.contains("basket") or n.contains("bucket"):
+			mi.material_override = cup_mat
+			mi.set_meta("fry_mesh", false)
+		elif n.contains("fri") or n == "fries":
+			mi.material_override = fry_mat
+			mi.set_meta("fry_mesh", true)
+		else:
+			## Fallback: taller-than-wide meshes read as fries pile; else cup.
+			var aabb := mi.mesh.get_aabb() if mi.mesh != null else AABB()
+			if aabb.size.y >= maxf(aabb.size.x, aabb.size.z) * 0.85:
+				mi.material_override = fry_mat
+				mi.set_meta("fry_mesh", true)
+			else:
+				mi.material_override = cup_mat
+				mi.set_meta("fry_mesh", false)
+
+
+func _update_ready_fries_pack_shakes(delta: float) -> void:
+	## Shelf packs stay still; only the held pack shakes from hand movement.
+	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
+		return
+	for child in fryer_ready_root.get_children():
+		if child is Node3D:
+			_update_fries_pack_fry_shake(child as Node3D, 0.0, 0.0)
+
+
+func _update_ready_fries_pack_sparkles(delta: float) -> void:
+	## Idle salt shimmer on shelf packs so salt reads even before you pick them up.
+	if fries_pack_held:
+		return
+	_fries_sparkle_phase = fposmod(_fries_sparkle_phase + delta * 2.1, TAU)
+	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
+		return
+	for child in fryer_ready_root.get_children():
+		if child is Node3D:
+			_update_fries_pack_sparkles(child as Node3D, 0.18)
 
 
 func _refresh_ready_fries_visuals() -> void:
@@ -12670,7 +13207,8 @@ func _refresh_ready_fries_visuals() -> void:
 	for i in count:
 		var pack := Node3D.new()
 		pack.name = "ReadyFries%d" % i
-		pack.position = Vector3(float(i % 3) * 0.12, float(i / 3) * 0.065, 0.0)
+		## Stack packs toward the tubs (local −X) so they don't hang off the right edge.
+		pack.position = Vector3(-float(i % 3) * 0.15, float(i / 3) * 0.09, 0.0)
 		fryer_ready_root.add_child(pack)
 		_populate_fry_pack(pack)
 		var area := Area3D.new()
@@ -12680,9 +13218,9 @@ func _refresh_ready_fries_visuals() -> void:
 		area.collision_mask = 0
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = Vector3(0.16, 0.20, 0.16)
+		box.size = Vector3(0.18, 0.23, 0.18)
 		shape.shape = box
-		shape.position = Vector3(0.0, 0.085, 0.0)
+		shape.position = Vector3(0.0, 0.095, 0.0)
 		area.add_child(shape)
 		pack.add_child(area)
 
@@ -12693,6 +13231,9 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 	_fryer_vel = Vector3.ZERO
 	_fryer_hold_offset = Vector3.ZERO
 	fries_pack_held = false
+	_fries_spill_cd = 0.0
+	if game_audio and game_audio.has_method("set_fries_shake"):
+		game_audio.set_fries_shake(false)
 	if mp_enabled and NetManager.is_online():
 		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
@@ -12700,6 +13241,7 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 	fries_pack_root = null
 	_fries_pack_prev_pos = Vector3.ZERO
 	_fries_pack_vel = Vector3.ZERO
+	_clear_grill_spilled_fries()
 	for i in fryer_baskets.size():
 		var data: Dictionary = fryer_baskets[i]
 		var root := data.get("root") as Node3D
@@ -12709,6 +13251,7 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 		data["state"] = "empty"
 		data["cook"] = 0.0
 		data["shake"] = 0.0
+		data["smoke_after"] = 0.0
 		data["remote_peer"] = 0
 		fryer_baskets[i] = data
 		_refresh_fryer_basket_visual(i)
@@ -12828,10 +13371,10 @@ func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
 	var best_d := 64.0
 	var count := mini(fryer_ready_servings, 6)
 	for i in count:
-		var local := Vector3(float(i % 3) * 0.12, float(i / 3) * 0.065, 0.0)
+		var local := Vector3(-float(i % 3) * 0.15, float(i / 3) * 0.09, 0.0)
 		var sp := camera.unproject_position(fryer_ready_root.to_global(local + Vector3(0.0, 0.10, 0.0)))
 		best_d = minf(best_d, sp.distance_to(screen_pos))
-	return best_d < 58.0
+	return best_d < 64.0
 
 
 func _try_ready_fries_click(screen_pos: Vector2) -> bool:
@@ -12845,7 +13388,7 @@ func _begin_fries_pack_hold() -> bool:
 		return false
 	if fryer_held_index >= 0 or spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null \
-			or cup_held or icecream_cone_held or burnt_icecream_cone_held or fries_pack_held:
+			or cup_held or icecream_cone_held or burnt_icecream_cone_held or fries_pack_held or spilled_fry_held:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	fryer_ready_servings = maxi(0, fryer_ready_servings - 1)
@@ -12860,9 +13403,13 @@ func _begin_fries_pack_hold() -> bool:
 		start = fryer_ready_root.global_position + Vector3(0.02, 0.10, 0.0)
 	fries_pack_root.global_position = start
 	fries_pack_root.scale = Vector3(1.18, 1.18, 1.18)
+	fries_pack_root.rotation_degrees = Vector3(-4.0, 0.0, 0.0) ## logo side toward cook/camera
 	_populate_fry_pack(fries_pack_root)
 	_fries_pack_prev_pos = fries_pack_root.global_position
 	_fries_pack_vel = Vector3.ZERO
+	_fries_pack_mouse_prev = get_viewport().get_mouse_position()
+	if mp_enabled and NetManager.is_online():
+		mp_tool_pose.rpc(9, true, fries_pack_root.global_position.x, fries_pack_root.global_position.y, fries_pack_root.global_position.z, true, fries_pack_root.rotation_degrees.x, fries_pack_root.rotation_degrees.y, fries_pack_root.rotation_degrees.z)
 	if game_audio:
 		if game_audio.has_method("play_rack_take"):
 			game_audio.play_rack_take()
@@ -12922,6 +13469,7 @@ func _update_held_fryer_basket(delta: float) -> void:
 	seat += _fryer_hold_offset
 	_fryer_hold_offset = _fryer_hold_offset.lerp(Vector3.ZERO, clampf(delta * 3.0, 0.0, 1.0))
 	var oil_lock := 0.0
+	var state_now := str(data.get("state", "empty"))
 	if oil != Vector3.ZERO:
 		var oil_screen := Vector2.ZERO
 		var screen_delta := Vector2.ZERO
@@ -12939,6 +13487,9 @@ func _update_held_fryer_basket(delta: float) -> void:
 		seat.x = oil.x + wiggle_x
 		seat.z = oil.z + wiggle_z
 		seat.y = lerpf(oil.y + 0.255, oil.y - 0.105, dunk_depth)
+		## Finished baskets pop up — don't let the dunk rail shove them back under.
+		if state_now == "done" or float(data.get("pop_t", 0.0)) > 0.0:
+			seat.y = maxf(seat.y, oil.y + FRYER_DONE_POP_Y)
 		oil_lock = maxf(oil_lock, dunk_depth)
 	var prev := root.global_position
 	root.global_position = root.global_position.lerp(seat, clampf(delta * 14.0, 0.0, 1.0))
@@ -12952,11 +13503,18 @@ func _update_held_fryer_basket(delta: float) -> void:
 			game_audio.set_fryer_oil(true, 1.0)
 		state = "cooking"
 		data["cook"] = minf(FRY_BASKET_COOK_SEC, float(data.get("cook", 0.0)) + delta)
+		data["state"] = state
 		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.105, clampf(delta * 12.0, 0.0, 1.0))
-		root.rotation_degrees.x = lerpf(root.rotation_degrees.x, -26.0, clampf(delta * 8.0, 0.0, 1.0))
+		## Stay nearly upright in the pit — no deep handle tilt.
+		root.rotation_degrees.x = lerpf(root.rotation_degrees.x, FRYER_BASKET_FRY_TILT, clampf(delta * 10.0, 0.0, 1.0))
+		root.rotation_degrees.y = lerpf(root.rotation_degrees.y, 0.0, clampf(delta * 10.0, 0.0, 1.0))
+		root.rotation_degrees.z = lerpf(root.rotation_degrees.z, 0.0, clampf(delta * 10.0, 0.0, 1.0))
 		if float(data["cook"]) >= FRY_BASKET_COOK_SEC:
 			state = "done"
 			data["shake"] = 0.0
+			data["pop_t"] = 0.55
+			## Snap the basket up out of the oil so it's obvious they're done.
+			root.global_position.y = oil.y + FRYER_DONE_POP_Y
 			if game_audio and game_audio.has_method("set_fryer_oil"):
 				game_audio.set_fryer_oil(false)
 			_flash("Fries ready — shake basket!", Color("FFD54F"))
@@ -12965,6 +13523,12 @@ func _update_held_fryer_basket(delta: float) -> void:
 			game_audio.set_fryer_oil(false)
 		state = "raw"
 	elif state == "done":
+		var pop_t := float(data.get("pop_t", 0.0))
+		if pop_t > 0.0 and oil != Vector3.ZERO:
+			data["pop_t"] = maxf(0.0, pop_t - delta)
+			## Spring up a little, then settle above the oil for shaking.
+			var pop_target := oil.y + FRYER_DONE_POP_Y + sin((0.55 - pop_t) * TAU * 1.6) * 0.035
+			root.global_position.y = lerpf(root.global_position.y, pop_target, clampf(delta * 16.0, 0.0, 1.0))
 		var shake_speed := maxf(Vector2(_fryer_vel.x, _fryer_vel.z).length(), absf(_fryer_vel.y) * 0.45)
 		if shake_speed > 0.20:
 			data["shake"] = float(data.get("shake", 0.0)) + delta * shake_speed
@@ -12976,10 +13540,11 @@ func _update_held_fryer_basket(delta: float) -> void:
 	data["state"] = state
 	fryer_baskets[fryer_held_index] = data
 	_refresh_fryer_basket_visual(fryer_held_index)
-	## Small carried-basket tilt from motion.
-	root.rotation_degrees.y = clampf(-_fryer_vel.x * 12.0, -10.0, 10.0)
-	if prev.distance_to(root.global_position) > 0.02:
-		root.rotation_degrees.x = clampf(root.rotation_degrees.x + _fryer_vel.z * 3.0, -32.0, 10.0)
+	## Carry tilt only when not planted in the oil.
+	if not ((state == "cooking" or state == "raw") and in_oil):
+		root.rotation_degrees.y = clampf(-_fryer_vel.x * 12.0, -10.0, 10.0)
+		if prev.distance_to(root.global_position) > 0.02:
+			root.rotation_degrees.x = clampf(root.rotation_degrees.x + _fryer_vel.z * 3.0, -18.0, 10.0)
 
 
 func _release_fryer_basket() -> void:
@@ -13019,6 +13584,7 @@ func _finish_fryer_basket(index: int) -> void:
 	data["state"] = "empty"
 	data["cook"] = 0.0
 	data["shake"] = 0.0
+	data["smoke_after"] = 10.0
 	fryer_baskets[index] = data
 	_release_fryer_basket()
 	_flash("Two fries orders ready!", Color("FFD54F"))
@@ -13041,9 +13607,356 @@ func _update_held_fries_pack(delta: float) -> void:
 	fries_pack_root.global_position = fries_pack_root.global_position.lerp(seat, clampf(delta * 16.0, 0.0, 1.0))
 	_fries_pack_vel = (fries_pack_root.global_position - _fries_pack_prev_pos) / maxf(delta, 0.001)
 	_fries_pack_prev_pos = fries_pack_root.global_position
-	fries_pack_root.rotation_degrees.y = clampf(-_fries_pack_vel.x * 10.0, -12.0, 12.0)
-	fries_pack_root.rotation_degrees.z = clampf(_fries_pack_vel.x * 9.0, -10.0, 10.0)
-	fries_pack_root.rotation_degrees.x = clampf(-8.0 + _fries_pack_vel.z * 4.0, -18.0, 8.0)
+	## Keep the Burger Pals face toward the cook/camera; tip slightly while carrying.
+	fries_pack_root.rotation_degrees.y = 0.0
+	fries_pack_root.rotation_degrees.z = clampf(_fries_pack_vel.x * 6.0, -8.0, 8.0)
+	fries_pack_root.rotation_degrees.x = clampf(-4.0 + _fries_pack_vel.z * 3.0, -10.0, 4.0)
+	## Whip too fast over the steel → fries tumble out onto the grill.
+	_fries_spill_cd = maxf(0.0, _fries_spill_cd - delta)
+	var speed := _fries_pack_vel.length()
+	## World vel is damped by the carry lerp — drive shake from mouse speed too.
+	var mouse_delta := mouse.distance_to(_fries_pack_mouse_prev)
+	var mouse_spd := mouse_delta / maxf(delta, 0.001)
+	_fries_pack_mouse_prev = mouse
+	var motion := maxf(
+		smoothstep(0.12, 0.95, speed),
+		smoothstep(60.0, 780.0, mouse_spd)
+	)
+	if mouse_delta > 1.5:
+		motion = maxf(motion, 0.42)
+	_fries_sparkle_phase = fposmod(_fries_sparkle_phase + delta * (2.4 + motion * 3.2), TAU)
+	if motion > 0.02:
+		_fries_fry_shake_phase = fposmod(_fries_fry_shake_phase + delta * FRIES_FRY_SHAKE_HZ * lerpf(0.75, 1.85, motion), 1.0)
+	_update_fries_pack_fry_shake(fries_pack_root, _fries_fry_shake_phase, motion)
+	_update_fries_pack_sparkles(fries_pack_root, motion)
+	if game_audio and game_audio.has_method("set_fries_shake"):
+		game_audio.set_fries_shake(motion > 0.08, motion)
+	if _fries_spill_cd <= 0.0 and speed >= FRIES_SPILL_SPEED \
+			and _is_on_grill_surface(fries_pack_root.global_position) \
+			and not _is_in_warmer_zone(fries_pack_root.global_position):
+		_fries_spill_cd = FRIES_SPILL_COOLDOWN
+		_spill_fry_onto_grill(fries_pack_root.global_position, _fries_pack_vel)
+
+
+func _spill_fry_onto_grill(from: Vector3, vel: Vector3) -> void:
+	var push := vel
+	if push.length_squared() < 0.0001:
+		push = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
+	var land := from + push.normalized() * randf_range(0.04, 0.12)
+	land.x += randf_range(-0.05, 0.05)
+	land.z += randf_range(-0.05, 0.05)
+	land.x = clampf(land.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+	land.z = clampf(land.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	land.y = GRILL_SURFACE_Y ## spawn places the stick above steel using fry height
+	var yaw := randf() * 360.0
+	if mp_enabled and not _mp_applying:
+		mp_fry_spill.rpc(from.x, from.y, from.z, land.x, land.z, yaw)
+		return
+	_spawn_spilled_fry_local(land, yaw, from)
+
+
+func _spawn_spilled_fry_local(land: Vector3, yaw_deg: float, start: Vector3 = Vector3.INF) -> void:
+	if world == null and grill_root == null:
+		return
+	var parent: Node = world if world != null else grill_root
+	var fry := MeshInstance3D.new()
+	fry.name = "SpilledFry"
+	## Small fry-stick rectangles — long, flat, readable on the steel.
+	var w := randf_range(0.018, 0.026)
+	var h := randf_range(0.012, 0.016)
+	var length := randf_range(0.085, 0.115)
+	var box := BoxMesh.new()
+	box.size = Vector3(w, h, length)
+	fry.mesh = box
+	var mat := _make_basic_mat(Color(0.96, 0.68, 0.16), 0.0, 1.0)
+	mat.metallic = 0.0
+	mat.roughness = 1.0
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.82, 0.18)
+	mat.emission_energy_multiplier = 0.20
+	fry.material_override = mat
+	parent.add_child(fry)
+	## Sit on top of the steel (mesh is centered) — don't clip through.
+	land.y = GRILL_SURFACE_Y + h * 0.5 + FRIES_SPILL_SIT_Y
+	if start.is_finite():
+		fry.global_position = start
+		var hop := create_tween()
+		hop.set_parallel(true)
+		var mid := start.lerp(land, 0.52)
+		mid.y = maxf(start.y, land.y) + 0.055
+		hop.tween_property(fry, "global_position", mid, 0.09).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		hop.chain().tween_property(fry, "global_position", land, 0.13).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	else:
+		fry.global_position = land
+	## Flat on the plate — yaw only, tiny roll so they don't look stamped.
+	fry.rotation_degrees = Vector3(0.0, yaw_deg, randf_range(-12.0, 12.0))
+	var smoke := _make_surface_burn_smoke(0.05)
+	fry.add_child(smoke)
+	## Clickable grab pad so loose fries can be picked back up.
+	var area := Area3D.new()
+	area.name = "SpilledFryGrab"
+	area.input_ray_pickable = true
+	area.collision_layer = 1
+	area.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var grab := BoxShape3D.new()
+	grab.size = Vector3(maxf(w, 0.06), maxf(h, 0.04), maxf(length, 0.10))
+	shape.shape = grab
+	area.add_child(shape)
+	fry.add_child(area)
+	grill_spilled_fries.append({
+		"root": fry,
+		"mat": mat,
+		"smoke": smoke,
+		"age": 0.0,
+		"fired": false,
+		"half_h": h * 0.5,
+		"held": false,
+	})
+	if game_audio and game_audio.has_method("play_click"):
+		game_audio.play_click()
+
+
+func _update_grill_spilled_fries(delta: float) -> void:
+	var i := 0
+	while i < grill_spilled_fries.size():
+		var item: Dictionary = grill_spilled_fries[i]
+		var root := item.get("root") as MeshInstance3D
+		if root == null or not is_instance_valid(root):
+			grill_spilled_fries.remove_at(i)
+			if spilled_fry_held and spilled_fry_held_idx == i:
+				spilled_fry_held = false
+				spilled_fry_held_idx = -1
+			elif spilled_fry_held and spilled_fry_held_idx > i:
+				spilled_fry_held_idx -= 1
+			continue
+		if bool(item.get("held", false)):
+			i += 1
+			continue
+		## Only cook/char while the flat-top is hot.
+		if grill_on:
+			item["age"] = float(item.get("age", 0.0)) + delta
+		var age := float(item.get("age", 0.0))
+		var mat := item.get("mat") as StandardMaterial3D
+		if mat == null:
+			mat = root.material_override as StandardMaterial3D
+		var smoke = item.get("smoke")
+		if age < FRIES_GRILL_WAIT_SEC:
+			## Still golden — quiet sizzle once the steel is hot.
+			if smoke != null and is_instance_valid(smoke):
+				smoke.emitting = grill_on and age > 0.8
+				smoke.amount_ratio = 0.12 if grill_on else 0.0
+		else:
+			var burn := clampf((age - FRIES_GRILL_WAIT_SEC) / FRIES_GRILL_BLACK_SEC, 0.0, 1.0)
+			if mat != null:
+				var golden := Color(0.96, 0.68, 0.16)
+				var black := Color(0.04, 0.03, 0.02)
+				var t := smoothstep(0.0, 1.0, burn)
+				mat.albedo_color = golden.lerp(black, t)
+				mat.roughness = lerpf(1.0, 0.95, burn)
+				mat.emission_enabled = burn < 0.92
+				mat.emission = Color(1.0, 0.82, 0.18).lerp(Color(0.08, 0.04, 0.02), t)
+				mat.emission_energy_multiplier = lerpf(0.20, 0.0, t)
+			if smoke != null and is_instance_valid(smoke):
+				smoke.emitting = grill_on
+				smoke.amount_ratio = clampf(0.2 + burn * 0.65, 0.0, 0.85)
+			if burn >= 1.0 and not bool(item.get("fired", false)) and grill_on:
+				item["fired"] = true
+				_start_grill_fire(root.global_position)
+				_flash("Loose fries caught fire!", Color("FF7043"))
+		grill_spilled_fries[i] = item
+		i += 1
+
+
+func _scrape_grill_spilled_fries(pos: Vector3, move_xz: Vector2, moved: float) -> bool:
+	var hit_any := false
+	var i := 0
+	while i < grill_spilled_fries.size():
+		var item: Dictionary = grill_spilled_fries[i]
+		if bool(item.get("held", false)):
+			i += 1
+			continue
+		var root := item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			grill_spilled_fries.remove_at(i)
+			continue
+		var d := Vector2(pos.x - root.global_position.x, pos.z - root.global_position.z).length()
+		if d < 0.34 and moved > 0.001:
+			hit_any = true
+			var dir := move_xz.normalized() if move_xz.length_squared() > 0.0001 \
+				else Vector2(randf_range(-1, 1), randf_range(-1, 1)).normalized()
+			var fly := root.global_position + Vector3(dir.x, 0.0, dir.y) * (0.1 + randf() * 0.12)
+			fly.y += 0.05
+			var tw := create_tween()
+			tw.set_parallel(true)
+			tw.tween_property(root, "global_position", fly, 0.16)
+			tw.tween_property(root, "scale", Vector3(0.05, 0.05, 0.05), 0.16)
+			tw.chain().tween_callback(root.queue_free)
+			grill_spilled_fries.remove_at(i)
+			if spilled_fry_held and spilled_fry_held_idx > i:
+				spilled_fry_held_idx -= 1
+			continue
+		i += 1
+	return hit_any
+
+
+func _clear_grill_spilled_fries() -> void:
+	spilled_fry_held = false
+	spilled_fry_held_idx = -1
+	for item in grill_spilled_fries:
+		var root = item.get("root") if typeof(item) == TYPE_DICTIONARY else null
+		if root != null and is_instance_valid(root):
+			root.queue_free()
+	grill_spilled_fries.clear()
+
+
+func _spilled_fry_screen_pos(root: Node3D) -> Vector2:
+	if camera == null or root == null or not is_instance_valid(root):
+		return Vector2(-9999.0, -9999.0)
+	return camera.unproject_position(root.global_position)
+
+
+func _find_spilled_fry_under_cursor(screen_pos: Vector2) -> int:
+	if camera == null:
+		return -1
+	var best_i := -1
+	var best_d := 52.0
+	for i in grill_spilled_fries.size():
+		var item: Dictionary = grill_spilled_fries[i]
+		if bool(item.get("held", false)):
+			continue
+		var root := item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var d := _spilled_fry_screen_pos(root).distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			best_i = i
+	return best_i
+
+
+func _try_grab_spilled_fry(screen_pos: Vector2) -> bool:
+	if spilled_fry_held or fries_pack_held or fryer_held_index >= 0:
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null \
+			or cup_held or icecream_cone_held or burnt_icecream_cone_held:
+		return false
+	var idx := _find_spilled_fry_under_cursor(screen_pos)
+	if idx < 0:
+		return false
+	var item: Dictionary = grill_spilled_fries[idx]
+	var root := item.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return false
+	item["held"] = true
+	grill_spilled_fries[idx] = item
+	spilled_fry_held = true
+	spilled_fry_held_idx = idx
+	var smoke = item.get("smoke")
+	if smoke != null and is_instance_valid(smoke):
+		smoke.emitting = false
+	if game_audio and game_audio.has_method("play_click"):
+		game_audio.play_click()
+	return true
+
+
+func _update_held_spilled_fry(delta: float) -> void:
+	if not spilled_fry_held:
+		return
+	if spilled_fry_held_idx < 0 or spilled_fry_held_idx >= grill_spilled_fries.size():
+		spilled_fry_held = false
+		spilled_fry_held_idx = -1
+		return
+	var item: Dictionary = grill_spilled_fries[spilled_fry_held_idx]
+	var root := item.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		spilled_fry_held = false
+		spilled_fry_held_idx = -1
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var seat := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.16)
+	seat.y += 0.04
+	root.global_position = root.global_position.lerp(seat, clampf(delta * 18.0, 0.0, 1.0))
+	root.rotation_degrees.x = lerpf(root.rotation_degrees.x, -25.0, clampf(delta * 10.0, 0.0, 1.0))
+
+
+func _release_spilled_fry(screen_pos: Vector2) -> void:
+	if not spilled_fry_held:
+		return
+	if spilled_fry_held_idx < 0 or spilled_fry_held_idx >= grill_spilled_fries.size():
+		spilled_fry_held = false
+		spilled_fry_held_idx = -1
+		return
+	var item: Dictionary = grill_spilled_fries[spilled_fry_held_idx]
+	var root := item.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		grill_spilled_fries.remove_at(spilled_fry_held_idx)
+		spilled_fry_held = false
+		spilled_fry_held_idx = -1
+		return
+	if _is_over_garbage(screen_pos):
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(root, "global_position", _garbage_lerp_target_world(), 0.16)
+		tw.tween_property(root, "scale", Vector3(0.05, 0.05, 0.05), 0.16)
+		tw.chain().tween_callback(root.queue_free)
+		grill_spilled_fries.remove_at(spilled_fry_held_idx)
+		spilled_fry_held = false
+		spilled_fry_held_idx = -1
+		if game_audio and game_audio.has_method("play_trash"):
+			game_audio.play_trash()
+		_flash("Trashed fry", Color("FFAB91"))
+		return
+	## Drop back onto the steel under the cursor.
+	var land := _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y)
+	if not _is_on_grill_surface(land):
+		land = root.global_position
+	land.x = clampf(land.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+	land.z = clampf(land.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	var half_h := float(item.get("half_h", 0.008))
+	land.y = GRILL_SURFACE_Y + half_h + FRIES_SPILL_SIT_Y
+	root.global_position = land
+	root.rotation_degrees.x = 0.0
+	item["held"] = false
+	grill_spilled_fries[spilled_fry_held_idx] = item
+	spilled_fry_held = false
+	spilled_fry_held_idx = -1
+	if game_audio and game_audio.has_method("play_click"):
+		game_audio.play_click()
+
+
+func _trash_held_fries_pack() -> void:
+	if not fries_pack_held:
+		return
+	fries_pack_held = false
+	_fries_spill_cd = 0.0
+	if game_audio and game_audio.has_method("set_fries_shake"):
+		game_audio.set_fries_shake(false)
+	if mp_enabled and NetManager.is_online():
+		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
+	if fries_pack_root != null and is_instance_valid(fries_pack_root):
+		var root := fries_pack_root
+		fries_pack_root = null
+		var target := _garbage_lerp_target_world()
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(root, "global_position", target, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(root, "scale", Vector3(0.2, 0.2, 0.2), 0.18)
+		tw.tween_property(root, "rotation_degrees", root.rotation_degrees + Vector3(40.0, 90.0, 20.0), 0.18)
+		tw.chain().tween_callback(func() -> void:
+			if root != null and is_instance_valid(root):
+				root.queue_free()
+		)
+	else:
+		fries_pack_root = null
+	if game_audio and game_audio.has_method("play_trash"):
+		game_audio.play_trash()
+	_flash("Trashed fries", Color("FFAB91"))
+	_refresh_ticket_checkmarks()
+	_update_hud()
 
 
 func _fries_drop_customer(screen_pos: Vector2) -> Node3D:
@@ -13069,11 +13982,17 @@ func _fries_drop_customer(screen_pos: Vector2) -> Node3D:
 func _release_fries_pack(screen_pos: Vector2) -> void:
 	if not fries_pack_held:
 		return
+	if game_audio and game_audio.has_method("set_fries_shake"):
+		game_audio.set_fries_shake(false)
+	if _is_over_garbage(screen_pos):
+		_trash_held_fries_pack()
+		return
 	var cust := _fries_drop_customer(screen_pos)
 	if cust != null and is_instance_valid(cust):
 		_serve_held_fries_pack(cust)
 		return
 	fries_pack_held = false
+	_fries_spill_cd = 0.0
 	if mp_enabled and NetManager.is_online():
 		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
@@ -13714,8 +14633,9 @@ func _icecream_sparkle_pos(t: float, phase: float) -> Vector3:
 	if turns_done > 1.0:
 		y = 0.023 + y_t * (ICECREAM_SWIRL_H - 0.023)
 	var radial := Vector3(cos(angle), 0.0, sin(angle)).normalized()
-	var height_lift := lerpf(-0.18, 0.52, fposmod(phase * 0.71, 1.0))
-	return radial * (path_r + tube_r * 1.06) + Vector3.UP * (y + tube_r * height_lift)
+	## Keep crystals tight to the soft-serve surface (was farther out).
+	var height_lift := lerpf(-0.08, 0.22, fposmod(phase * 0.71, 1.0))
+	return radial * (path_r + tube_r * 0.42) + Vector3.UP * (y + tube_r * height_lift)
 
 
 func _ensure_icecream_sparkles(swirl_root: Node3D) -> Node3D:
@@ -13739,7 +14659,8 @@ func _ensure_icecream_sparkles(swirl_root: Node3D) -> Node3D:
 		var phase := float(i) * 2.47 + 0.37
 		bit.set_meta("spark_t", t)
 		bit.set_meta("spark_phase", phase)
-		bit.set_meta("spark_size", 0.00125 + fposmod(float(i) * 0.331, 1.0) * 0.00135)
+		## Smaller crystal chips hugging the swirl body.
+		bit.set_meta("spark_size", 0.00055 + fposmod(float(i) * 0.331, 1.0) * 0.00065)
 		bit.position = _icecream_sparkle_pos(t, phase)
 		bit.visible = false
 		holder.add_child(bit)
@@ -13761,9 +14682,11 @@ func _update_icecream_sparkles_for(swirl_root: Node3D, fill_amount: float, motio
 		if not bit.visible:
 			continue
 		var phase := float(bit.get_meta("spark_phase", 0.0))
+		bit.position = _icecream_sparkle_pos(t, phase)
 		var blink := 0.5 + 0.5 * sin(_icecream_sparkle_phase * (2.2 + phase * 0.05) + phase)
 		var glow := lerpf(0.28, 1.0, blink) * lerpf(0.55, 1.0, drive)
-		var size := float(bit.get_meta("spark_size", 0.003)) * lerpf(0.72, 1.2, blink)
+		## Cap scale so older cones with larger metas still read tiny.
+		var size := minf(float(bit.get_meta("spark_size", 0.001)) , 0.00135) * lerpf(0.72, 1.15, blink)
 		bit.scale = Vector3.ONE * size
 		var mat := bit.material_override as StandardMaterial3D
 		if mat != null:
@@ -16777,17 +17700,40 @@ func _cup_rack_seat_global() -> Vector3:
 	return cup_home
 
 
+func _cup_soda_face_dir() -> Vector3:
+	## Cook-facing direction of the soda cabinet (local +Z with yaw 180).
+	if soda_root != null and is_instance_valid(soda_root):
+		return soda_root.global_transform.basis.z.normalized()
+	return Vector3(0.0, 0.0, -1.0)
+
+
+func _cup_rack_front_grab_pos() -> Vector3:
+	## Appear ~1ft toward the player from the CUPS tube — clear of machine colliders.
+	const FRONT_M := 0.30 ## ~1 foot
+	var seat := _cup_rack_seat_global()
+	if seat == Vector3.ZERO and soda_root != null and is_instance_valid(soda_root):
+		seat = soda_root.global_position
+	var face := _cup_soda_face_dir()
+	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	var pos := seat + face * FRONT_M
+	pos.y = hold_y
+	return pos
+
+
 func _start_cup_draw_from_rack() -> void:
-	## Seat the cup in the nest, then arc it into the hand.
+	## Seat appears already out front of the machine, then arcs into the hand.
 	if cup_root == null or not is_instance_valid(cup_root):
 		cup_drawing = false
 		return
 	cup_home = _cup_rack_seat_global()
-	_cup_draw_from = cup_home if cup_home != Vector3.ZERO else cup_root.global_position
+	_cup_draw_from = _cup_rack_front_grab_pos()
 	cup_root.global_position = _cup_draw_from
 	cup_root.rotation_degrees = cup_home_rot
-	cup_root.scale = Vector3(0.88, 0.88, 0.88)
+	cup_root.scale = Vector3(0.92, 0.92, 0.92)
 	_cup_prev_pos = _cup_draw_from
+	_cup_vel = Vector3.ZERO
+	## Avoidance fights nest→hand pulls — keep it off until the draw finishes.
+	_cup_machine_contact_grace = CUP_DRAW_DUR + 0.18
 	cup_drawing = true
 	_cup_draw_t = 0.0
 
@@ -16801,45 +17747,42 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 	## Smoothstep then ease-out so it pops free, then settles into the hand.
 	var s := u * u * (3.0 - 2.0 * u)
 	var e := 1.0 - pow(1.0 - s, 2.2)
-	## Soda face is local +Z; with yaw 180 that is toward the cook — never world +Z (behind the cabinet).
-	var face := Vector3(0.0, 0.0, -1.0)
-	if soda_root != null and is_instance_valid(soda_root):
-		face = soda_root.global_transform.basis.z.normalized()
+	var face := _cup_soda_face_dir()
 	var hand := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
-	var draw_target := _cup_draw_from + face * 0.34 + Vector3(-0.08, -0.22, 0.0)
+	## Stay on the cook side of the fountain — never feed avoidance mid-draw.
+	var draw_target := _cup_draw_from + face * 0.08 + Vector3(0.0, -0.02, 0.0)
 	if hand != Vector3.ZERO:
-		draw_target = draw_target.lerp(hand + face * 0.10 + Vector3(0.0, -0.04, 0.0), 0.58)
-	draw_target = _resolve_cup_against_soda(draw_target)
+		draw_target = _cup_draw_from.lerp(hand, 0.72)
+		## Keep a little forward of the cabinet even if the cursor hugs the tanks.
+		var seat_front := _cup_rack_front_grab_pos()
+		var to_front := (draw_target - seat_front).dot(face)
+		if to_front < 0.0:
+			draw_target += face * (-to_front)
 	var seat := draw_target
-	if seat == Vector3.ZERO:
-		seat = _cup_draw_from + face * 0.18 + Vector3(0.0, 0.10, 0.0)
-	## Quadratic arc: lift out of the open tube face, then into the cursor.
-	var mid := _cup_draw_from.lerp(seat, 0.45)
-	mid += face * 0.22 + Vector3(0.0, 0.06, 0.0)
+	## Short arc from the front hold into the cursor.
+	var mid := _cup_draw_from.lerp(seat, 0.45) + face * 0.06 + Vector3(0.0, 0.05, 0.0)
 	var omt := 1.0 - e
 	var pos := omt * omt * _cup_draw_from + 2.0 * omt * e * mid + e * e * seat
 	var prev := cup_root.global_position
-	## Don't resolve soda colliders during the draw — that shoved the cup behind the machine.
 	cup_root.global_position = pos
 	if delta > 0.0001:
 		_cup_vel = (cup_root.global_position - prev) / delta
 	_cup_prev_pos = cup_root.global_position
-	var spin := sin(e * PI) * 28.0
+	var spin := sin(e * PI) * 22.0
 	cup_root.rotation_degrees = Vector3(
-		lerpf(0.0, -8.0, e) + sin(e * TAU) * 6.0,
+		lerpf(0.0, -8.0, e) + sin(e * TAU) * 4.0,
 		lerpf(cup_home_rot.y, 12.0, e) + spin,
-		sin(e * PI * 1.5) * 10.0
+		sin(e * PI * 1.5) * 8.0
 	)
-	var sc := lerpf(0.88, 1.0, e)
+	var sc := lerpf(0.92, 1.0, e)
 	cup_root.scale = Vector3(sc, sc, sc)
 	if u >= 1.0:
 		cup_drawing = false
 		cup_root.scale = Vector3.ONE
 		_cup_tilt = Vector2.ZERO
-		## Soft collide once settled in-hand so it doesn't rest inside metal.
-		cup_root.global_position = _resolve_cup_against_soda(cup_root.global_position)
+		## Stay where the hand settled — do not resolve back into/behind the cabinet.
 		_cup_prev_pos = cup_root.global_position
-
+		_cup_machine_contact_grace = maxf(_cup_machine_contact_grace, 0.20)
 
 func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	## Plane tracking at cup height (like other tools) — keeps the cursor on-screen.
@@ -16984,12 +17927,14 @@ func _update_held_cup(delta: float) -> void:
 	var can_reach_customer := cup_soda_fill >= 0.82 and cup_flavor != "" \
 		and _find_waiting_customer_at_mouth(get_viewport().get_mouse_position(), CUP_MOUTH_HAND_PX) != null
 	var can_use_fill_bay := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
-	var before_resolve := cup_root.global_position
-	cup_root.global_position = _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
-	if not can_use_fill_bay and cup_root.global_position.distance_to(before_resolve) > 0.004:
-		_cup_machine_contact_grace = 0.22
-		_cup_vel *= 0.15
-		_cup_prev_pos = cup_root.global_position
+	## Fresh rack grab grace: skip avoidance so it can't yank the cup behind the fountain.
+	if _cup_machine_contact_grace <= 0.0 or can_reach_customer or can_use_fill_bay:
+		var before_resolve := cup_root.global_position
+		cup_root.global_position = _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
+		if not can_use_fill_bay and cup_root.global_position.distance_to(before_resolve) > 0.004:
+			_cup_machine_contact_grace = 0.22
+			_cup_vel *= 0.15
+			_cup_prev_pos = cup_root.global_position
 	cup_root.rotation_degrees = Vector3(
 		-8.0 + _cup_tilt.y,
 		12.0,
@@ -17057,7 +18002,8 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 				else:
 					resolved.y -= oy
 			else:
-				resolved.z += oz if d.z >= 0.0 else -oz
+				## Always eject toward the cook face (local +Z) — never shove behind the cabinet.
+				resolved.z = bp.z + bh.z + cup_half.z + 0.004
 			moved = true
 		if not moved:
 			break
@@ -19526,121 +20472,156 @@ func _build_cutting_board_prop() -> void:
 	root.add_child(groove)
 	grill_root.add_child(root)
 	build_cutting_board = root
-	_build_smoke2_cutting_board_preview()
 	_build_board_hint_label()
 
 
-func _make_smoke2_preview_material() -> Material:
+func _make_smoke2_grill_material(invert_normals: bool = false) -> Material:
+	## Unshaded emissive smoke; alpha2 mask; double-sided; top fades out by height.
 	var mat := ShaderMaterial.new()
 	var shader := Shader.new()
 	shader.code = """
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_prepass_alpha;
+render_mode unshaded, blend_mix, cull_disabled, depth_prepass_alpha, shadows_disabled, ambient_light_disabled;
 
+uniform sampler2D base_tex : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D alpha_tex : source_color, filter_linear_mipmap, repeat_enable;
 uniform vec4 tint_color : source_color = vec4(1.0, 1.0, 1.0, 0.5);
+uniform float alpha_boost : hint_range(0.0, 4.0) = 1.35;
+uniform float height_fade_start : hint_range(0.0, 1.0) = 0.14;
+uniform float height_fade_strength : hint_range(1.0, 5.0) = 2.4;
+uniform bool invert_normals = false;
+
+varying float height01;
+
+void vertex() {
+	if (invert_normals) {
+		NORMAL = -NORMAL;
+	}
+	// smoke2.fbx unit cylinder spans y=-1..+1 — map to 0 (bottom) .. 1 (top).
+	height01 = clamp(VERTEX.y * 0.5 + 0.5, 0.0, 1.0);
+}
 
 void fragment() {
-	float alpha_mask = texture(alpha_tex, UV).r;
-	ALBEDO = tint_color.rgb;
-	ALPHA = alpha_mask * tint_color.a;
-	ROUGHNESS = 0.68;
-	METALLIC = 0.0;
+	vec4 base = texture(base_tex, UV);
+	float mask = texture(alpha_tex, UV).r;
+	// Fade starts low on the shaft; strength > 1 makes the top drop off harder.
+	float t = smoothstep(height_fade_start, 1.0, height01);
+	float height_alpha = pow(1.0 - t, height_fade_strength);
+	vec3 col = base.rgb * tint_color.rgb;
+	ALBEDO = col;
+	EMISSION = col;
+	ALPHA = clamp(mask * alpha_boost * tint_color.a * height_alpha, 0.0, 1.0);
 }
 """
 	mat.shader = shader
+	mat.render_priority = 8
+	if ResourceLoader.exists(SMOKE2_BASECOLOR_TEX_PATH):
+		var base_tex := load(SMOKE2_BASECOLOR_TEX_PATH) as Texture2D
+		if base_tex != null:
+			mat.set_shader_parameter("base_tex", base_tex)
 	if ResourceLoader.exists(SMOKE2_ALPHA_TEX_PATH):
 		var alpha_tex := load(SMOKE2_ALPHA_TEX_PATH) as Texture2D
 		if alpha_tex != null:
 			mat.set_shader_parameter("alpha_tex", alpha_tex)
-	mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 0.5))
+	mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, SMOKE2_OVERALL_ALPHA))
+	mat.set_shader_parameter("alpha_boost", SMOKE2_ALPHA_BOOST)
+	mat.set_shader_parameter("height_fade_start", SMOKE2_HEIGHT_FADE_START)
+	mat.set_shader_parameter("height_fade_strength", SMOKE2_HEIGHT_FADE_STRENGTH)
+	mat.set_shader_parameter("invert_normals", invert_normals)
 	return mat
 
 
-func _apply_smoke2_preview_materials(node: Node, mat: Material) -> void:
+func _apply_smoke2_materials_recursive(node: Node, mat: Material) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.material_override = mat
-		mi.transparency = 0.0
 		mi.ignore_occlusion_culling = true
+		mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	for child in node.get_children():
-		_apply_smoke2_preview_materials(child, mat)
+		_apply_smoke2_materials_recursive(child, mat)
 
 
-func _combined_mesh_aabb_local(root: Node3D) -> AABB:
-	var has_bounds := false
-	var bounds := AABB()
-	var inv := root.global_transform.affine_inverse()
-	var stack: Array[Node] = [root]
-	while not stack.is_empty():
-		var node := stack.pop_back() as Node
-		if node is MeshInstance3D:
-			var mi := node as MeshInstance3D
-			var rel := inv * mi.global_transform
-			var aabb := mi.get_aabb()
-			for i in 8:
-				var p := rel * aabb.get_endpoint(i)
-				if not has_bounds:
-					bounds = AABB(p, Vector3.ZERO)
-					has_bounds = true
-				else:
-					bounds = bounds.expand(p)
-		for child in node.get_children():
-			stack.append(child)
-	return bounds if has_bounds else AABB(Vector3.ZERO, Vector3.ONE)
+func _fit_smoke2_to_ext_size(visual: Node3D) -> float:
+	## smoke2.fbx unit cylinder: h=2, d=1. Non-uniform so height can stretch without widening.
+	var s_h := SMOKE2_TARGET_HEIGHT / 2.0
+	var s_w := SMOKE2_TARGET_DIAMETER / 1.0
+	visual.scale = Vector3(s_w, s_h, s_w)
+	## Mesh spans y=-1..+1; put bottom on the holder origin.
+	visual.position = Vector3(0.0, SMOKE2_TARGET_HEIGHT * 0.5, 0.0)
+	return s_h
 
 
-func _fit_smoke2_preview(holder: Node3D, visual: Node3D, target_height: float, target_width: float) -> void:
-	var bounds := _combined_mesh_aabb_local(visual)
-	var height := maxf(bounds.size.y, 0.001)
-	var widest := maxf(maxf(bounds.size.x, bounds.size.z), 0.001)
-	var scale_by_h := target_height / height
-	var scale_by_w := target_width / widest
-	var s := minf(scale_by_h, scale_by_w)
-	visual.scale = Vector3.ONE * s
-	visual.position -= bounds.get_center() * s
-	visual.position.y += -bounds.position.y * s + 0.004
-
-
-func _add_smoke2_preview_instance(parent: Node3D, packed: PackedScene, mat: Material, name: String, local_pos: Vector3, yaw: float, target_height: float = SMOKE2_PREVIEW_HEIGHT) -> void:
+func _add_smoke2_grill_instance(
+	parent: Node3D,
+	packed: PackedScene,
+	smoke_mat: Material,
+	name: String,
+	grill_pos: Vector3,
+	yaw: float
+) -> void:
+	if packed == null:
+		return
 	var visual := packed.instantiate() as Node3D
 	if visual == null:
 		return
 	var holder := Node3D.new()
 	holder.name = name
-	holder.position = local_pos
+	## Sit on the flat-top — Y is steel surface; mesh bottom rests there.
+	holder.position = Vector3(grill_pos.x, GRILL_SURFACE_Y, grill_pos.z)
 	holder.rotation_degrees = Vector3(0.0, yaw, 0.0)
+	holder.set_meta("smoke2_spin", true)
 	parent.add_child(holder)
 	visual.name = "Smoke2Mesh"
 	holder.add_child(visual)
-	_apply_smoke2_preview_materials(visual, mat)
-	_fit_smoke2_preview(holder, visual, target_height, SMOKE2_PREVIEW_WIDTH)
+	_apply_smoke2_materials_recursive(visual, smoke_mat)
+	_fit_smoke2_to_ext_size(visual)
 
 
-func _build_smoke2_cutting_board_preview() -> void:
+func _update_smoke2_grill_spin(delta: float) -> void:
+	if smoke2_cutting_board_prop == null or not is_instance_valid(smoke2_cutting_board_prop):
+		return
+	## +Y = counter-clockwise when viewed from above.
+	var step := SMOKE2_SPIN_DEG_PER_SEC * delta
+	for child in smoke2_cutting_board_prop.get_children():
+		if child is Node3D and bool((child as Node3D).get_meta("smoke2_spin", false)):
+			(child as Node3D).rotate_y(deg_to_rad(step))
+
+
+func _build_smoke2_grill_props() -> void:
+	## Two fire-ext-sized smoke cylinders ON THE GRILL: normal + inverted normals.
 	if smoke2_cutting_board_prop != null and is_instance_valid(smoke2_cutting_board_prop):
 		smoke2_cutting_board_prop.queue_free()
 	smoke2_cutting_board_prop = null
-	if build_cutting_board == null or not is_instance_valid(build_cutting_board):
+	var parent_root: Node3D = grill_root if grill_root != null and is_instance_valid(grill_root) else world
+	if parent_root == null or not is_instance_valid(parent_root):
+		push_warning("Smoke2: grill/world missing")
 		return
-	if not FileAccess.file_exists(SMOKE2_SCENE_PATH):
+	if not ResourceLoader.exists(SMOKE2_SCENE_PATH):
 		push_warning("Smoke2 model missing: %s" % SMOKE2_SCENE_PATH)
 		return
 	var packed := load(SMOKE2_SCENE_PATH) as PackedScene
 	if packed == null:
 		push_warning("Smoke2 scene failed to load")
 		return
+
 	var group := Node3D.new()
-	group.name = "Smoke2PreviewGroup"
-	grill_root.add_child(group)
+	group.name = "Smoke2GrillProps"
+	parent_root.add_child(group)
 	smoke2_cutting_board_prop = group
-	var mat := _make_smoke2_preview_material()
-	var board_base := build_cutting_board.global_position + Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.006, 0.0)
-	_add_smoke2_preview_instance(group, packed, mat, "Smoke2BoardA", board_base + Vector3(-0.12, 0.0, -0.04), 180.0, 0.42)
-	_add_smoke2_preview_instance(group, packed, mat, "Smoke2BoardB", board_base + Vector3(0.13, 0.0, 0.07), 205.0, 0.38)
-	_add_smoke2_preview_instance(group, packed, mat, "Smoke2GrillA", Vector3(GRILL_CENTER_X - 0.24, GRILL_SURFACE_Y + PATTY_SIT_Y, GRILL_SURFACE_Z - 0.20), 165.0, 0.40)
-	_add_smoke2_preview_instance(group, packed, mat, "Smoke2GrillB", Vector3(GRILL_CENTER_X + 0.28, GRILL_SURFACE_Y + PATTY_SIT_Y, GRILL_SURFACE_Z + 0.10), 215.0, 0.40)
+
+	var mat_n := _make_smoke2_grill_material(false)
+	var mat_i := _make_smoke2_grill_material(true)
+
+	_add_smoke2_grill_instance(
+		group, packed, mat_n, "Smoke2_Normal",
+		Vector3(GRILL_CENTER_X - 0.32, GRILL_SURFACE_Y, GRILL_SURFACE_Z - 0.05), 0.0
+	)
+	_add_smoke2_grill_instance(
+		group, packed, mat_i, "Smoke2_Inverted",
+		Vector3(GRILL_CENTER_X + 0.32, GRILL_SURFACE_Y, GRILL_SURFACE_Z + 0.08), 25.0
+	)
+	print("[Smoke2] smoke+alpha on grill · double-sided · 50%% transparent · CCW spin")
 
 
 func _build_board_hint_label() -> void:
@@ -20419,7 +21400,8 @@ func _buy_supply_local(id: String) -> void:
 		"seq": _supply_order_seq,
 	})
 	_update_hud()
-	_refresh_phone_ui()
+	## Defer — phone rebuild frees this Buy button mid-pressed.
+	call_deferred("_refresh_phone_ui")
 	_refresh_ingredient_stock_bars()
 	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 	_flash("Ordered %s — cat delivery in %ds" % [label, int(SUPPLY_ORDER_WAIT)], Color("A5D6A7"))
@@ -21430,16 +22412,8 @@ func _shop_item_note(id: String) -> String:
 			return ""
 
 
-func _shop_item_block_reason(id: String) -> String:
-	match id:
-		SHOP_SODA_MACHINE:
-			if _owns_fryer_machine():
-				return "Fryer already uses this counter slot"
-		SHOP_FRYER_MACHINE:
-			if _owns_soda_machine():
-				return "Soda machine already uses this counter slot"
-		_:
-			pass
+func _shop_item_block_reason(_id: String) -> String:
+	## No exclusive counter lock — soda + fryer can both be owned.
 	return ""
 
 
@@ -21563,7 +22537,8 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	else:
 		buy.tooltip_text = "Buy %s" % _shop_item_label(id)
 		var sid := id
-		buy.pressed.connect(func(): _buy_shop_item(sid))
+		## Deferred so the press stack finishes before the phone UI frees this button.
+		buy.pressed.connect(func(): call_deferred("_buy_shop_item", sid))
 	row.add_child(buy)
 
 
@@ -21611,7 +22586,8 @@ func _buy_shop_item_local(id: String) -> void:
 	owned_machines[id] = true
 	_apply_machine_unlock_visibility()
 	_update_hud()
-	_refresh_phone_ui()
+	## Defer — rebuilding the phone frees the Buy button mid-pressed and hard-crashes.
+	call_deferred("_refresh_phone_ui")
 	_refresh_ingredient_stock_bars()
 	_flash("%s installed!" % _shop_item_label(id), Color("A5D6A7"))
 	_sfx_click()
@@ -22218,6 +23194,27 @@ func _setup_game_audio() -> void:
 	game_audio = GameAudioScript.new()
 	game_audio.name = "GameAudio"
 	add_child(game_audio)
+
+
+func _setup_burgerpals_startup_sound() -> void:
+	if burgerpals_startup_player != null and is_instance_valid(burgerpals_startup_player):
+		return
+	var stream := load(BURGERPALS_STARTUP_SOUND_PATH)
+	if stream == null:
+		push_warning("Burger Pals startup sound missing: %s" % BURGERPALS_STARTUP_SOUND_PATH)
+		return
+	burgerpals_startup_player = AudioStreamPlayer.new()
+	burgerpals_startup_player.name = "BurgerPalsStartupSound"
+	burgerpals_startup_player.bus = "Master"
+	burgerpals_startup_player.stream = stream
+	burgerpals_startup_player.volume_db = -1.0 + linear_to_db(1.5) ## 50% louder
+	add_child(burgerpals_startup_player)
+	get_tree().create_timer(3.0).timeout.connect(_play_burgerpals_startup_sound)
+
+
+func _play_burgerpals_startup_sound() -> void:
+	if burgerpals_startup_player != null and is_instance_valid(burgerpals_startup_player):
+		burgerpals_startup_player.play()
 
 
 func _setup_intro_title_music() -> void:
@@ -32043,7 +33040,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		var rkind := str(grill_residue_kind[ri]) if ri < grill_residue_kind.size() else "patty"
 		if rkind == "":
 			rkind = "patty"
-		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, rkind)
+		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, rkind, float(grill_residue[ri]))
 		mp_residue_amt.rpc_id(peer_id, ri, float(grill_residue[ri]))
 	if _bts_day_intro_active:
 		for li in bts_lightsticks.size():
@@ -32275,6 +33272,7 @@ func _mp_send_fryer_basket_state(index: int, settle_home: bool = true) -> void:
 		_fryer_state_to_code(str(data.get("state", "empty"))),
 		float(data.get("cook", 0.0)),
 		float(data.get("shake", 0.0)),
+		float(data.get("smoke_after", 0.0)),
 		settle_home
 	)
 
@@ -32762,7 +33760,7 @@ func mp_fryer_basket_pose(
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: float, settle_home: bool = true) -> void:
+func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: float, smoke_after: float = 0.0, settle_home: bool = true) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -32777,6 +33775,7 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 	data["state"] = _fryer_code_to_state(state_code)
 	data["cook"] = clampf(cook, 0.0, FRY_BASKET_COOK_SEC)
 	data["shake"] = maxf(0.0, shake)
+	data["smoke_after"] = clampf(smoke_after, 0.0, 10.0)
 	data["remote_peer"] = 0
 	fryer_baskets[index] = data
 	_refresh_fryer_basket_visual(index)
@@ -32785,6 +33784,14 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 		tw.set_parallel(true)
 		tw.tween_property(root, "global_position", data.get("home", root.global_position), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 		tw.tween_property(root, "rotation_degrees", data.get("home_rot", root.rotation_degrees), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_fry_spill(sx: float, sy: float, sz: float, x: float, z: float, yaw: float) -> void:
+	## Partner (or self via call_local) dropped a loose fry onto the steel.
+	_mp_applying = true
+	_spawn_spilled_fry_local(Vector3(x, GRILL_SURFACE_Y, z), yaw, Vector3(sx, sy, sz))
+	_mp_applying = false
 
 
 func _mp_update_cursors(delta: float) -> void:
@@ -35011,9 +36018,11 @@ func mp_grill_fire_end() -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_residue_leave(slot: int, x: float, z: float, announce: bool, kind: String = "patty") -> void:
+func mp_residue_leave(
+	slot: int, x: float, z: float, announce: bool, kind: String = "patty", amt: float = 1.0
+) -> void:
 	_mp_applying = true
-	_leave_grill_residue_local(slot, Vector3(x, GRILL_SURFACE_Y + 0.028, z), announce, kind)
+	_leave_grill_residue_local(slot, Vector3(x, GRILL_SURFACE_Y + 0.028, z), announce, kind, amt)
 	_mp_applying = false
 
 
@@ -35024,7 +36033,7 @@ func mp_cup_residue_place(slot: int, x: float, z: float) -> void:
 		return
 	_mp_applying = true
 	_clear_residue_near(x, z, 0.45)
-	_leave_grill_residue_local(slot, Vector3(x, GRILL_SURFACE_Y + 0.027, z), false, "cup")
+	_leave_grill_residue_local(slot, Vector3(x, GRILL_SURFACE_Y + 0.027, z), false, "cup", 1.0)
 	_mp_applying = false
 
 
