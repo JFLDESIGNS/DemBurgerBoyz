@@ -272,6 +272,10 @@ static var _walk_lib: AnimationLibrary = null
 
 ## When true (co-op guest), patience/order clock are driven by host sync — not local timers.
 var mp_host_driven: bool = false
+var _mp_target_pos: Vector3 = Vector3.ZERO
+var _mp_target_yaw: float = FACE_TRUCK_YAW
+var _mp_target_valid: bool = false
+var _mp_snap_initialized: bool = false
 
 
 func setup(
@@ -1277,9 +1281,17 @@ func _process(delta: float) -> void:
 func _update_host_driven_pose(delta: float) -> void:
 	## Multiplayer guests receive position/ticket state from the host; avoid local
 	## arrival-turn code fighting that snapshot and spinning remote customers.
+	if _mp_target_valid:
+		var rate: float = 16.0 if is_waiting else 9.5
+		var t: float = clampf(delta * rate, 0.0, 1.0)
+		global_position.x = lerpf(global_position.x, _mp_target_pos.x, t)
+		global_position.z = lerpf(global_position.z, _mp_target_pos.z, t)
+		var yaw_t: float = clampf(delta * 12.0, 0.0, 1.0)
+		rotation_degrees.y = rad_to_deg(lerp_angle(deg_to_rad(rotation_degrees.y), deg_to_rad(_mp_target_yaw), yaw_t))
 	global_position.y = STAND_Y
 	if is_waiting:
-		rotation_degrees.y = FACE_TRUCK_YAW
+		if not _mp_target_valid:
+			rotation_degrees.y = FACE_TRUCK_YAW
 		if _eating:
 			_play_anim("idle")
 			if _anim_player:
@@ -1297,10 +1309,22 @@ func _update_host_driven_pose(delta: float) -> void:
 				_clear_antsy_wait_pose()
 		_animate_expression(delta)
 		return
-	rotation_degrees.y = WALK_PLUS_X_YAW
+	if not _mp_target_valid:
+		rotation_degrees.y = WALK_PLUS_X_YAW
 	_play_anim("walk")
 	_apply_bobble(true)
 	_animate_expression(delta)
+
+
+func apply_host_snapshot(pos: Vector3, yaw: float, snap: bool = false) -> void:
+	mp_host_driven = true
+	_mp_target_pos = Vector3(pos.x, STAND_Y, pos.z)
+	_mp_target_yaw = yaw
+	_mp_target_valid = true
+	if snap or not _mp_snap_initialized:
+		global_position = _mp_target_pos
+		rotation_degrees.y = _mp_target_yaw
+		_mp_snap_initialized = true
 
 
 func start_order_clock(reset_elapsed: bool = true) -> void:

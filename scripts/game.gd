@@ -1214,6 +1214,7 @@ var _mp_residue_sync_cool: float = 0.0
 var _mp_ext_sync_cool: float = 0.0
 var _mp_season_sync_cool: float = 0.0
 var _mp_tool_pose_cool: float = 0.0
+var _mp_fryer_basket_pose_cool: float = 0.0
 var _serve_fly_watch: float = 0.0
 ## peer_id -> ghost Node3D so partners see held tools in-hand
 var _mp_remote_oil: Dictionary = {}
@@ -2071,11 +2072,14 @@ func _process(delta: float) -> void:
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
 		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
 		_mp_tool_pose_cool = maxf(0.0, _mp_tool_pose_cool - delta)
+		_mp_fryer_basket_pose_cool = maxf(0.0, _mp_fryer_basket_pose_cool - delta)
 		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
 		_mp_icecream_pose_cool = maxf(0.0, _mp_icecream_pose_cool - delta)
 		_mp_slick_sync_cool = maxf(0.0, _mp_slick_sync_cool - delta)
 		if oil_held or shaker_held or ext_held or glock_held or brush_held:
 			_mp_send_held_tool_pose(false)
+		if fryer_held_index >= 0:
+			_mp_send_fryer_basket_pose(false, true, fryer_held_index)
 		if cup_held:
 			_mp_send_held_cup_pose(false)
 		if icecream_cone_held:
@@ -12520,6 +12524,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 		"state": "empty",
 		"cook": 0.0,
 		"shake": 0.0,
+		"remote_peer": 0,
 		"home": basket.global_position,
 		"home_rot": basket.rotation_degrees,
 	})
@@ -12546,7 +12551,7 @@ func _refresh_fryer_basket_visual(index: int) -> void:
 				mat.albedo_color = Color(0.92, 0.72, 0.34).lerp(Color(0.92, 0.48, 0.10), cooked_t)
 	var area := data.get("area") as Area3D
 	if area != null and is_instance_valid(area):
-		area.input_ray_pickable = fryer_held_index != index
+		area.input_ray_pickable = fryer_held_index != index and int(data.get("remote_peer", 0)) == 0
 
 
 func _add_fry_cup_logo(parent: Node3D) -> void:
@@ -12704,8 +12709,12 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 		data["state"] = "empty"
 		data["cook"] = 0.0
 		data["shake"] = 0.0
+		data["remote_peer"] = 0
 		fryer_baskets[i] = data
 		_refresh_fryer_basket_visual(i)
+		if mp_enabled and NetManager.is_online():
+			_mp_send_fryer_basket_pose(true, false, i)
+			_mp_send_fryer_basket_state(i, true)
 	if clear_servings:
 		fryer_ready_servings = 0
 	_refresh_ready_fries_visuals()
@@ -12753,6 +12762,8 @@ func _fryer_basket_index_at(screen_pos: Vector2) -> int:
 		var hit_area := hit["collider"] as Area3D
 		for i in fryer_baskets.size():
 			var data: Dictionary = fryer_baskets[i]
+			if int(data.get("remote_peer", 0)) != 0:
+				continue
 			if data.get("area") == hit_area:
 				return i
 	## Tiny wire baskets can be fussy to ray-hit; screen fallback keeps clicks friendly.
@@ -12760,6 +12771,8 @@ func _fryer_basket_index_at(screen_pos: Vector2) -> int:
 	var best_d := 54.0
 	for i in fryer_baskets.size():
 		var data2: Dictionary = fryer_baskets[i]
+		if int(data2.get("remote_peer", 0)) != 0:
+			continue
 		var root := data2.get("root") as Node3D
 		if root == null or not is_instance_valid(root):
 			continue
@@ -12778,6 +12791,8 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 	if idx >= fryer_baskets.size():
 		return false
 	var data: Dictionary = fryer_baskets[idx]
+	if int(data.get("remote_peer", 0)) != 0:
+		return true
 	var state := str(data.get("state", "empty"))
 	if state == "empty":
 		data["state"] = "raw"
@@ -12785,6 +12800,8 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 		data["shake"] = 0.0
 		fryer_baskets[idx] = data
 		_refresh_fryer_basket_visual(idx)
+		_mp_send_fryer_basket_pose(true, false, idx)
+		_mp_send_fryer_basket_state(idx, true)
 		_flash("Potatoes loaded — dunk the basket", Color("FFE082"))
 		if game_audio:
 			game_audio.play_click()
@@ -12885,6 +12902,7 @@ func _begin_fryer_basket_hold(index: int) -> bool:
 		_flash("Hold in oil for 5 seconds", Color("FFE082"))
 	if game_audio:
 		game_audio.play_click()
+	_mp_send_fryer_basket_pose(true, true, index)
 	return true
 
 
@@ -12974,6 +12992,8 @@ func _release_fryer_basket() -> void:
 	var data: Dictionary = fryer_baskets[idx]
 	var root := data.get("root") as Node3D
 	var area := data.get("area") as Area3D
+	_mp_send_fryer_basket_pose(true, false, idx)
+	_mp_send_fryer_basket_state(idx, true)
 	if area != null and is_instance_valid(area):
 		area.input_ray_pickable = true
 	if root != null and is_instance_valid(root):
@@ -32190,6 +32210,75 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 		mp_tool_pose.rpc(9, true, fp.x, fp.y, fp.z, true, fr.x, fr.y, fr.z)
 
 
+func _fryer_state_to_code(state: String) -> int:
+	match state:
+		"raw":
+			return 1
+		"cooking":
+			return 2
+		"done":
+			return 3
+		_:
+			return 0
+
+
+func _fryer_code_to_state(code: int) -> String:
+	match code:
+		1:
+			return "raw"
+		2:
+			return "cooking"
+		3:
+			return "done"
+		_:
+			return "empty"
+
+
+func _mp_send_fryer_basket_pose(force: bool = false, active: bool = true, index: int = -1) -> void:
+	## Finished fries already use kind 9 in the tool stream; baskets need their
+	## own state/pose so the shared fryer visibly cooks and shakes in co-op.
+	if not mp_enabled or not NetManager.is_online():
+		return
+	if not force and _mp_fryer_basket_pose_cool > 0.0:
+		return
+	if index < 0:
+		index = fryer_held_index
+	if index < 0 or index >= fryer_baskets.size():
+		return
+	_mp_fryer_basket_pose_cool = 0.04
+	var data: Dictionary = fryer_baskets[index]
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	var p: Vector3 = root.global_position
+	var r: Vector3 = root.global_rotation_degrees
+	var state_code: int = _fryer_state_to_code(str(data.get("state", "empty")))
+	mp_fryer_basket_pose.rpc(
+		index,
+		active,
+		state_code,
+		float(data.get("cook", 0.0)),
+		float(data.get("shake", 0.0)),
+		p.x, p.y, p.z,
+		r.x, r.y, r.z
+	)
+
+
+func _mp_send_fryer_basket_state(index: int, settle_home: bool = true) -> void:
+	if not mp_enabled or not NetManager.is_online():
+		return
+	if index < 0 or index >= fryer_baskets.size():
+		return
+	var data: Dictionary = fryer_baskets[index]
+	mp_fryer_basket_state.rpc(
+		index,
+		_fryer_state_to_code(str(data.get("state", "empty"))),
+		float(data.get("cook", 0.0)),
+		float(data.get("shake", 0.0)),
+		settle_home
+	)
+
+
 func _mp_send_held_cup_pose(force: bool = false) -> void:
 	## Stream held drink so partners see pour / carry (fill + flavor included).
 	if not mp_enabled or not NetManager.is_online():
@@ -32628,6 +32717,74 @@ func mp_tool_pose(
 			fries.scale = Vector3(1.18, 1.18, 1.18)
 		_:
 			pass
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_fryer_basket_pose(
+	index: int,
+	active: bool,
+	state_code: int,
+	cook: float,
+	shake: float,
+	x: float,
+	y: float,
+	z: float,
+	rx: float,
+	ry: float,
+	rz: float
+) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	if index < 0 or index >= fryer_baskets.size():
+		return
+	var data: Dictionary = fryer_baskets[index]
+	if fryer_held_index == index:
+		## Local hand wins if both players race for the same basket.
+		return
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	data["state"] = _fryer_code_to_state(state_code)
+	data["cook"] = clampf(cook, 0.0, FRY_BASKET_COOK_SEC)
+	data["shake"] = maxf(0.0, shake)
+	data["remote_peer"] = sid if active else 0
+	fryer_baskets[index] = data
+	_refresh_fryer_basket_visual(index)
+	if active:
+		root.global_position = Vector3(x, y, z)
+		root.global_rotation_degrees = Vector3(rx, ry, rz)
+		return
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(root, "global_position", data.get("home", root.global_position), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(root, "rotation_degrees", data.get("home_rot", root.rotation_degrees), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: float, settle_home: bool = true) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	if index < 0 or index >= fryer_baskets.size():
+		return
+	if fryer_held_index == index:
+		return
+	var data: Dictionary = fryer_baskets[index]
+	var root := data.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	data["state"] = _fryer_code_to_state(state_code)
+	data["cook"] = clampf(cook, 0.0, FRY_BASKET_COOK_SEC)
+	data["shake"] = maxf(0.0, shake)
+	data["remote_peer"] = 0
+	fryer_baskets[index] = data
+	_refresh_fryer_basket_visual(index)
+	if settle_home:
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(root, "global_position", data.get("home", root.global_position), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(root, "rotation_degrees", data.get("home_rot", root.rotation_degrees), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
 func _mp_update_cursors(delta: float) -> void:
@@ -33962,6 +34119,7 @@ func mp_sync_customers(
 	if NetManager.is_host():
 		return
 	var seen: Dictionary = {}
+	var ticket_structure_changed: bool = false
 	for i in ids.size():
 		var nid := int(ids[i])
 		seen[nid] = true
@@ -33981,13 +34139,21 @@ func mp_sync_customers(
 			_mark_customer_icecream_handed(c, bool(icecreams_handed[i]))
 		if i < fries_handed.size():
 			_mark_customer_fries_handed(c, bool(fries_handed[i]))
+		var snap_pos: Vector3 = c.global_position
 		if i < xs.size():
-			c.global_position.x = float(xs[i])
+			snap_pos.x = float(xs[i])
 			c.target_x = float(xs[i])
 		if i < zs.size():
-			c.global_position.z = float(zs[i])
+			snap_pos.z = float(zs[i])
+		var snap_yaw: float = float(c.rotation_degrees.y)
 		if i < yaws.size():
-			c.rotation_degrees.y = float(yaws[i])
+			snap_yaw = float(yaws[i])
+		if c.has_method("apply_host_snapshot"):
+			c.apply_host_snapshot(snap_pos, snap_yaw)
+		else:
+			c.global_position.x = snap_pos.x
+			c.global_position.z = snap_pos.z
+			c.rotation_degrees.y = snap_yaw
 		var host_waiting := bool(waits[i]) if i < waits.size() else false
 		var host_leaving := bool(leaves[i]) if i < leaves.size() else false
 		## Host already dismissed them — clear our ticket even if serve FX lagged.
@@ -34008,6 +34174,7 @@ func mp_sync_customers(
 			## Host is still syncing the body (walking in/out), but the order slip is gone.
 			if tickets.has(c):
 				_remove_ticket(c)
+				ticket_structure_changed = true
 			c.is_waiting = false
 			if selected_customer == c:
 				selected_customer = null
@@ -34019,6 +34186,7 @@ func mp_sync_customers(
 				c.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
 			if not tickets.has(c):
 				_create_ticket(c)
+				ticket_structure_changed = true
 	## Drop ghosts the host no longer has.
 	for c in customers.duplicate():
 		if c == null or not is_instance_valid(c):
@@ -34028,12 +34196,16 @@ func mp_sync_customers(
 			if not bool(c.get("is_leaving")) and c.has_method("leave_happy"):
 				c.leave_happy()
 			_customer_leave_apply(c, false)
+			ticket_structure_changed = true
 		elif nid2 < 0 and bool(c.get("is_disguise_cat")):
 			_customer_leave_apply(c, false)
+			ticket_structure_changed = true
 	_mp_cull_stale_tickets(seen)
-	## Keep ticket patience chips in sync with host values.
-	_refresh_customer_queue_timers()
+	## Patience fill is cheap to repaint; avoid the heavier queue timer/layout pass
+	## unless tickets were actually created or removed by the host snapshot.
 	_refresh_ticket_patience_bars()
+	if ticket_structure_changed:
+		_refresh_customer_queue_timers()
 
 
 @rpc("any_peer", "call_local", "reliable")
