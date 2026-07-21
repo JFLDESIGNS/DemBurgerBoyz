@@ -156,17 +156,9 @@ var difficulty: float = 0.0
 var spawn_timer: float = 2.0
 var customers: Array = []
 var _customer_skin_bag: Array[int] = []
-const BTS_SPECIAL_GUESTS_ENABLED := true
+const BTS_SPECIAL_GUESTS_ENABLED := false
 const BTS_DAY1_REGULAR_BEFORE := 2
-const BTS_DAY1_SKIN_QUEUE: Array[int] = [
-	CustomerScript.JIN_SKIN_IDX,
-	CustomerScript.JIMIN_SKIN_IDX,
-	CustomerScript.V_SKIN_IDX,
-	CustomerScript.JHOPE_SKIN_IDX,
-	CustomerScript.JUNG_SKIN_IDX,
-	CustomerScript.RM_SKIN_IDX,
-	CustomerScript.SUGA_SKIN_IDX,
-]
+const BTS_DAY1_SKIN_QUEUE: Array[int] = []
 var _bts_day1_queue_i: int = 0
 var _bts_day1_regular_spawned: int = 0
 var _bts_day1_performance_done: bool = false
@@ -902,7 +894,7 @@ const BUILD_GFX_KEYS: Array[String] = BUILD_ZONE_GFX_KEYS + PREP_GFX_KEYS + STRI
 const BUILD_DEBUG_OUTLINE_COLOR := Color(1.0, 0.1, 0.1, 0.95)
 const GRILL_POWER_ROW_BOTTOM := 112.0 ## px above screen bottom — centered on grill
 const GRILL_POWER_ROW_WIDTH := 214.0 ## burner + gap + garbage (~20% smaller)
-## Kenney / Sketchfab truck radio — replaces procedural CabRadio mesh.
+## Wall cab radio prop. Keep this procedural so no extra 3D radio model ships.
 const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
 const RADIO_TEX_ALBEDO := "res://models/RADIO/textures/RADIO_SCETC_FAB_albedo.tga.png"
 const RADIO_TEX_NORMAL := "res://models/RADIO/textures/RADIO_SCETC_FAB_normal.tga.png"
@@ -1004,7 +996,7 @@ const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const FRYER_COLLISION_LAYER := 32768
 const FRY_BASKET_COOK_SEC := 5.0
 const FRY_BASKET_SHAKE_NEED := 1.25
-const FRYER_OIL_LOCAL := Vector3(0.0, 0.165, 0.16)
+const FRYER_OIL_LOCAL := Vector3(0.0, 0.105, 0.16)
 const FRYER_TUB_X := 0.20
 const FRYER_OIL_RADIUS := 0.20
 const FRYER_BASKET_HOLD_Y := 0.18
@@ -1199,6 +1191,9 @@ var _mp_code_join_btn: Button = null
 var _mp_host_addr_label: Label = null
 var _mp_remote_cursors: Dictionary = {} ## peer_id -> Control
 var _mp_cursor_layer: Control = null
+var _cursor_tex_normal: Texture2D = null
+var _cursor_tex_click: Texture2D = null
+var _cursor_click_t: float = 0.0
 var _mp_next_customer_net_id: int = 1
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
@@ -1487,6 +1482,16 @@ func _setup_glove_cursor() -> void:
 	var tex: Texture2D = load("res://assets/ui/cursor_glove.png") as Texture2D
 	if tex == null:
 		return
+	_cursor_tex_normal = tex
+	var img := tex.get_image()
+	if img != null:
+		var click_img := img.duplicate()
+		var small_size := Vector2i(
+			maxi(4, int(round(float(click_img.get_width()) * 0.74))),
+			maxi(4, int(round(float(click_img.get_height()) * 0.74)))
+		)
+		click_img.resize(small_size.x, small_size.y, Image.INTERPOLATE_LANCZOS)
+		_cursor_tex_click = ImageTexture.create_from_image(click_img)
 	## Hotspot at the pointing fingertip (upper-left of the glove art).
 	var tip := Vector2(0, 3)
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_ARROW, tip)
@@ -1495,6 +1500,36 @@ func _setup_glove_cursor() -> void:
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_DRAG, tip)
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_CAN_DROP, tip)
 	Input.set_custom_mouse_cursor(tex, Input.CURSOR_FORBIDDEN, tip)
+
+
+func _set_glove_cursor_texture(tex: Texture2D) -> void:
+	if tex == null:
+		return
+	var tip := Vector2(0, 3)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_ARROW, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_POINTING_HAND, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_MOVE, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_DRAG, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_CAN_DROP, tip)
+	Input.set_custom_mouse_cursor(tex, Input.CURSOR_FORBIDDEN, tip)
+
+
+func _pulse_cursor_click(screen_pos: Vector2) -> void:
+	if _cursor_tex_click != null:
+		_set_glove_cursor_texture(_cursor_tex_click)
+		_cursor_click_t = 0.16
+	if mp_enabled and NetManager.is_online():
+		var vp := get_viewport().get_visible_rect().size
+		if vp.x > 1.0 and vp.y > 1.0:
+			mp_cursor_click.rpc(screen_pos.x / vp.x, screen_pos.y / vp.y)
+
+
+func _update_local_cursor_click(delta: float) -> void:
+	if _cursor_click_t <= 0.0:
+		return
+	_cursor_click_t -= delta
+	if _cursor_click_t <= 0.0 and _cursor_tex_normal != null:
+		_set_glove_cursor_texture(_cursor_tex_normal)
 
 
 func _style_static_labels() -> void:
@@ -1832,6 +1867,7 @@ func _restart() -> void:
 
 func _process(delta: float) -> void:
 	_mp_update_cursors(delta)
+	_update_local_cursor_click(delta)
 	_update_phone_scroll_inertia(delta)
 	_update_keyboard_cook_shortcuts(delta)
 	_update_air_motes(delta)
@@ -2269,6 +2305,9 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not playing:
 		return
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_MIDDLE:
+			_pulse_cursor_click(event.position)
 	## Options owns the mouse — never let kitchen grabs see clicks while it's open.
 	if options_menu_open:
 		if event is InputEventKey and event.pressed and not event.echo:
@@ -2429,6 +2468,8 @@ func _input(event: InputEvent) -> void:
 				if _begin_cup_hold():
 					get_viewport().set_input_as_handled()
 					return
+			if _ui_blocks_world_click(event.position):
+				return
 			if _try_fryer_basket_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
@@ -2437,8 +2478,6 @@ func _input(event: InputEvent) -> void:
 				return
 			if _try_bts_lightstick_click(event.position):
 				get_viewport().set_input_as_handled()
-				return
-			if _ui_blocks_world_click(event.position):
 				return
 			if cheese_held:
 				## Place handled in unhandled — don't grab tools mid-hold.
@@ -6588,7 +6627,10 @@ func _try_disguise_cat_click(screen_pos: Vector2) -> bool:
 	if mp_enabled and not _mp_applying:
 		var nid := _customer_net_id(cust)
 		if nid >= 0:
-			mp_disguise_cat_unmask.rpc(nid)
+			if NetManager.is_host():
+				mp_disguise_cat_unmask(nid)
+			else:
+				mp_disguise_cat_unmask.rpc_id(1, nid)
 			return true
 	_unmask_disguise_cat(cust)
 	return true
@@ -6601,7 +6643,19 @@ func _bribe_disguise_cat_with_patty(cust: Node3D) -> void:
 		var nid := _customer_net_id(cust)
 		var pnid := int(spatula_patty.get("net_id")) if spatula_patty != null else -1
 		if nid >= 0:
-			mp_disguise_cat_bribe.rpc(nid, "patty", pnid)
+			if NetManager.is_host():
+				mp_disguise_cat_bribe(nid, "patty", pnid)
+			else:
+				mp_disguise_cat_bribe.rpc_id(1, nid, "patty", pnid)
+				if spatula_patty != null and is_instance_valid(spatula_patty):
+					var local_patty = spatula_patty
+					spatula_patty = null
+					spatula_owner_id = 0
+					spatula_from_build = false
+					spatula_lmb_held = false
+					_refresh_spatula_ui()
+					if is_instance_valid(local_patty):
+						local_patty.queue_free()
 			return
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		var patty = spatula_patty
@@ -6623,7 +6677,12 @@ func _bribe_disguise_cat_ingredient(cust: Node3D, id: String) -> void:
 	if mp_enabled and not _mp_applying:
 		var nid := _customer_net_id(cust)
 		if nid >= 0:
-			mp_disguise_cat_bribe.rpc(nid, id, -1)
+			if NetManager.is_host():
+				mp_disguise_cat_bribe(nid, id, -1)
+			else:
+				mp_disguise_cat_bribe.rpc_id(1, nid, id, -1)
+				if id == "cheese":
+					_clear_cheese_hold_after_use()
 			return
 	if id == "cheese":
 		_clear_cheese_hold_after_use()
@@ -12274,11 +12333,12 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 	tub.position = Vector3(x, 0.0, 0.0)
 	parent.add_child(tub)
 	var well_mat := _make_basic_mat(Color(0.035, 0.030, 0.024), 0.0, 0.7)
-	_add_mesh_box(tub, "BackWall", Vector3(0.30, 0.105, 0.018), Vector3(0.0, 0.205, FRYER_OIL_LOCAL.z - 0.125), well_mat)
-	_add_mesh_box(tub, "FrontLowLip", Vector3(0.30, 0.024, 0.018), Vector3(0.0, 0.165, FRYER_OIL_LOCAL.z + 0.125), well_mat)
-	_add_mesh_box(tub, "LeftWall", Vector3(0.018, 0.105, 0.25), Vector3(-0.140, 0.205, FRYER_OIL_LOCAL.z), well_mat)
-	_add_mesh_box(tub, "RightWall", Vector3(0.018, 0.105, 0.25), Vector3(0.140, 0.205, FRYER_OIL_LOCAL.z), well_mat)
-	_add_mesh_box(tub, "TubBottom", Vector3(0.30, 0.024, 0.260), Vector3(0.0, 0.115, FRYER_OIL_LOCAL.z), steel_mat)
+	var oil_y := FRYER_OIL_LOCAL.y
+	_add_mesh_box(tub, "BackWall", Vector3(0.30, 0.095, 0.018), Vector3(0.0, oil_y + 0.052, FRYER_OIL_LOCAL.z - 0.125), well_mat)
+	_add_mesh_box(tub, "FrontLowLip", Vector3(0.30, 0.020, 0.018), Vector3(0.0, oil_y + 0.016, FRYER_OIL_LOCAL.z + 0.125), well_mat)
+	_add_mesh_box(tub, "LeftWall", Vector3(0.018, 0.095, 0.25), Vector3(-0.140, oil_y + 0.052, FRYER_OIL_LOCAL.z), well_mat)
+	_add_mesh_box(tub, "RightWall", Vector3(0.018, 0.095, 0.25), Vector3(0.140, oil_y + 0.052, FRYER_OIL_LOCAL.z), well_mat)
+	_add_mesh_box(tub, "TubBottom", Vector3(0.30, 0.024, 0.260), Vector3(0.0, oil_y - 0.060, FRYER_OIL_LOCAL.z), steel_mat)
 	_add_mesh_box(tub, "OilLiquid", Vector3(0.255, 0.014, 0.225), Vector3(0.0, FRYER_OIL_LOCAL.y, FRYER_OIL_LOCAL.z), oil_mat)
 	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
 	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -12289,7 +12349,7 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		var bubble := MeshInstance3D.new()
 		bubble.name = "OilBubble%d" % i
 		var mesh := SphereMesh.new()
-		var r := randf_range(0.020, 0.044)
+		var r := randf_range(0.010, 0.024)
 		mesh.radius = r
 		mesh.height = r * 2.0
 		mesh.radial_segments = 12
@@ -12298,12 +12358,12 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		bubble.material_override = bubble_mat
 		bubble.position = Vector3(
 			randf_range(-0.105, 0.105),
-			FRYER_OIL_LOCAL.y + 0.010 + randf_range(0.0, 0.012),
+			FRYER_OIL_LOCAL.y - r * 0.18 + randf_range(-0.002, 0.003),
 			FRYER_OIL_LOCAL.z + randf_range(-0.085, 0.085)
 		)
 		bubble.set_meta("home", bubble.position)
 		bubble.set_meta("phase", randf_range(0.0, TAU))
-		bubble.set_meta("rise", randf_range(0.010, 0.035))
+		bubble.set_meta("rise", randf_range(0.003, 0.010))
 		tub.add_child(bubble)
 		fryer_oil_bubbles.append(bubble)
 
@@ -12325,7 +12385,6 @@ func _build_fryer_machine() -> void:
 	world.add_child(root)
 	fryer_root = root
 
-	var body_mat := _make_soda_metal_mat(Color(0.16, 0.16, 0.15), 0.86, 0.30)
 	var steel_mat := _make_soda_metal_mat(Color(0.60, 0.61, 0.58), 0.92, 0.18)
 	var oil_mat := _make_basic_mat(Color(1.0, 0.76, 0.06, 0.90), 0.0, 0.16)
 	oil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -12333,14 +12392,13 @@ func _build_fryer_machine() -> void:
 	oil_mat.emission = Color(1.0, 0.67, 0.08)
 	oil_mat.emission_energy_multiplier = 0.26
 
-	_add_mesh_box(root, "FryerCabinet", Vector3(0.84, 0.18, 0.42), Vector3(0.0, 0.095, 0.0), body_mat)
 	_build_fryer_tub(root, 0, -FRYER_TUB_X, steel_mat, oil_mat)
 	_build_fryer_tub(root, 1, FRYER_TUB_X, steel_mat, oil_mat)
 	_add_mesh_box(root, "FrontLip", Vector3(0.82, 0.04, 0.045), Vector3(0.0, 0.070, 0.38), steel_mat)
 
 	var label := Label3D.new()
 	label.text = "FRYER"
-	label.position = Vector3(0.0, 0.250, 0.27)
+	label.position = Vector3(0.0, 0.205, 0.27)
 	label.font_size = 34
 	label.pixel_size = 0.00125
 	label.modulate = Color(1.0, 0.76, 0.28)
@@ -12350,11 +12408,11 @@ func _build_fryer_machine() -> void:
 
 	fryer_ready_root = Node3D.new()
 	fryer_ready_root.name = "ReadyFries"
-	fryer_ready_root.position = Vector3(-0.28, 0.12, 0.43)
+	fryer_ready_root.position = Vector3(-0.28, 0.10, 0.43)
 	root.add_child(fryer_ready_root)
 
-	_create_fryer_basket(0, Vector3(-0.20, 0.35, 0.10))
-	_create_fryer_basket(1, Vector3(0.20, 0.35, 0.10))
+	_create_fryer_basket(0, Vector3(-0.20, 0.305, 0.10))
+	_create_fryer_basket(1, Vector3(0.20, 0.305, 0.10))
 	_refresh_ready_fries_visuals()
 
 
@@ -12370,27 +12428,27 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	var metal := _make_soda_metal_mat(Color(0.52, 0.54, 0.56), 0.96, 0.24)
 	var dark := _make_soda_metal_mat(Color(0.10, 0.09, 0.08), 0.7, 0.36)
 	## Basket is mostly wire rods: open sides + visible grid, with a thicker rim for readability.
-	_add_mesh_rod(basket, "BackRim", 0.27, 0.006, Vector3(0.0, 0.135, -0.090), "x", metal)
-	_add_mesh_rod(basket, "FrontRim", 0.27, 0.006, Vector3(0.0, 0.130, 0.090), "x", metal)
-	_add_mesh_rod(basket, "LeftRim", 0.19, 0.006, Vector3(-0.135, 0.132, 0.0), "z", metal)
-	_add_mesh_rod(basket, "RightRim", 0.19, 0.006, Vector3(0.135, 0.132, 0.0), "z", metal)
+	_add_mesh_rod(basket, "BackRim", 0.27, 0.006, Vector3(0.0, 0.165, -0.090), "x", metal)
+	_add_mesh_rod(basket, "FrontRim", 0.27, 0.006, Vector3(0.0, 0.160, 0.090), "x", metal)
+	_add_mesh_rod(basket, "LeftRim", 0.19, 0.006, Vector3(-0.135, 0.162, 0.0), "z", metal)
+	_add_mesh_rod(basket, "RightRim", 0.19, 0.006, Vector3(0.135, 0.162, 0.0), "z", metal)
 	for sx in [-0.135, 0.135]:
 		for sz in [-0.090, 0.090]:
-			_add_mesh_rod(basket, "CornerWire", 0.135, 0.0045, Vector3(sx, 0.065, sz), "y", metal)
+			_add_mesh_rod(basket, "CornerWire", 0.165, 0.0045, Vector3(sx, 0.080, sz), "y", metal)
 	for z in [-0.070, -0.035, 0.0, 0.035, 0.070]:
 		_add_mesh_rod(basket, "BottomWireX", 0.25, 0.0032, Vector3(0.0, 0.005, z), "x", metal)
 	for x in [-0.100, -0.050, 0.0, 0.050, 0.100]:
 		_add_mesh_rod(basket, "BottomWireZ", 0.17, 0.0032, Vector3(x, 0.007, 0.0), "z", metal)
-	for y in [0.035, 0.070, 0.105]:
+	for y in [0.035, 0.073, 0.111, 0.149]:
 		_add_mesh_rod(basket, "FrontWire", 0.25, 0.0033, Vector3(0.0, y, 0.090), "x", metal)
 		_add_mesh_rod(basket, "BackWire", 0.25, 0.0033, Vector3(0.0, y, -0.090), "x", metal)
 		_add_mesh_rod(basket, "LeftWire", 0.17, 0.0033, Vector3(-0.135, y, 0.0), "z", metal)
 		_add_mesh_rod(basket, "RightWire", 0.17, 0.0033, Vector3(0.135, y, 0.0), "z", metal)
 	for x2 in [-0.080, -0.040, 0.0, 0.040, 0.080]:
-		_add_mesh_rod(basket, "FrontVerticalWire", 0.118, 0.0028, Vector3(x2, 0.068, 0.091), "y", metal)
-		_add_mesh_rod(basket, "BackVerticalWire", 0.118, 0.0028, Vector3(x2, 0.068, -0.091), "y", metal)
-	_add_mesh_box(basket, "BasketHandle", Vector3(0.05, 0.035, 0.22), Vector3(0.0, 0.050, 0.22), dark)
-	_add_mesh_box(basket, "BasketHandleGrip", Vector3(0.16, 0.045, 0.045), Vector3(0.0, 0.050, 0.34), dark)
+		_add_mesh_rod(basket, "FrontVerticalWire", 0.148, 0.0028, Vector3(x2, 0.083, 0.091), "y", metal)
+		_add_mesh_rod(basket, "BackVerticalWire", 0.148, 0.0028, Vector3(x2, 0.083, -0.091), "y", metal)
+	_add_mesh_box(basket, "BasketHandle", Vector3(0.05, 0.035, 0.22), Vector3(0.0, 0.080, 0.22), dark)
+	_add_mesh_box(basket, "BasketHandleGrip", Vector3(0.16, 0.045, 0.045), Vector3(0.0, 0.080, 0.34), dark)
 
 	var fries_root := Node3D.new()
 	fries_root.name = "Potatoes"
@@ -12414,9 +12472,9 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	area.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.34, 0.28, 0.36)
+	box.size = Vector3(0.34, 0.34, 0.36)
 	shape.shape = box
-	shape.position = Vector3(0.0, 0.085, 0.08)
+	shape.position = Vector3(0.0, 0.105, 0.08)
 	area.add_child(shape)
 	basket.add_child(area)
 
@@ -12604,7 +12662,7 @@ func _update_fryer_oil_bubbles(delta: float) -> void:
 		var rise := float(bubble.get_meta("rise", 0.02))
 		var pulse := 0.5 + 0.5 * sin(t * 3.3 + phase)
 		bubble.position = home + Vector3(0.0, pulse * rise, 0.0)
-		var s := 0.78 + pulse * 0.45
+		var s := 0.68 + pulse * 0.22
 		bubble.scale = Vector3(s, s * 0.65, s)
 		var mat := bubble.material_override as StandardMaterial3D
 		if mat != null:
@@ -12745,9 +12803,11 @@ func _begin_fryer_basket_hold(index: int) -> bool:
 	if root != null and is_instance_valid(root):
 		_fryer_prev_pos = root.global_position
 		var oil := _fryer_oil_global(index)
-		var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), oil.y + 0.20 if oil != Vector3.ZERO else GRILL_SURFACE_Y + FRYER_BASKET_HOLD_Y)
-		_fryer_hold_offset = root.global_position - seat
-		_fryer_hold_offset = _fryer_hold_offset.limit_length(0.18)
+		if oil != Vector3.ZERO:
+			_fryer_hold_offset = Vector3.ZERO
+		else:
+			var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + FRYER_BASKET_HOLD_Y)
+			_fryer_hold_offset = (root.global_position - seat).limit_length(0.18)
 		root.rotation_degrees = Vector3(-12.0, 0.0, 0.0)
 	_fryer_vel = Vector3.ZERO
 	if str(data.get("state", "raw")) == "done":
@@ -12776,34 +12836,36 @@ func _update_held_fryer_basket(delta: float) -> void:
 	_fryer_hold_offset = _fryer_hold_offset.lerp(Vector3.ZERO, clampf(delta * 3.0, 0.0, 1.0))
 	var oil_lock := 0.0
 	if oil != Vector3.ZERO:
-		seat.x = clampf(seat.x, oil.x - 0.62, oil.x + 0.62)
-		seat.z = clampf(seat.z, oil.z - 0.38, oil.z + 0.46)
-		var screen_lock := 0.0
+		var oil_screen := Vector2.ZERO
+		var screen_delta := Vector2.ZERO
 		if camera != null:
-			var oil_screen := camera.unproject_position(oil + Vector3(0.0, 0.06, 0.0))
-			screen_lock = clampf(1.0 - mouse.distance_to(oil_screen) / 185.0, 0.0, 1.0)
-		var pre_dunk_dist := Vector2(seat.x - oil.x, seat.z - oil.z).length()
-		var world_lock := clampf(1.0 - pre_dunk_dist / (FRYER_OIL_RADIUS * 1.55), 0.0, 1.0)
-		oil_lock = maxf(screen_lock, world_lock)
-		if oil_lock > 0.05:
-			var pull := clampf(oil_lock * 1.25, 0.0, 1.0)
-			seat.x = lerpf(seat.x, oil.x, pull)
-			seat.z = lerpf(seat.z, oil.z, pull)
-		var dunk_y := oil.y - 0.115
-		seat.y = lerpf(oil.y + 0.22, dunk_y, oil_lock)
+			oil_screen = camera.unproject_position(oil + Vector3(0.0, 0.08, 0.0))
+			screen_delta = mouse - oil_screen
+			oil_lock = clampf(1.0 - absf(screen_delta.x) / 230.0, 0.0, 1.0)
+		else:
+			oil_lock = 1.0
+		## Fry baskets live on rails above their tub: mostly up/down, with a tiny
+		## cursor wiggle so it still feels handheld.
+		var wiggle_x := clampf(screen_delta.x * 0.00042, -0.050, 0.050)
+		var wiggle_z := clampf(screen_delta.y * 0.00020, -0.030, 0.030)
+		var dunk_depth := clampf((screen_delta.y + 50.0) / 190.0, 0.0, 1.0)
+		seat.x = oil.x + wiggle_x
+		seat.z = oil.z + wiggle_z
+		seat.y = lerpf(oil.y + 0.255, oil.y - 0.175, dunk_depth)
+		oil_lock = maxf(oil_lock, dunk_depth)
 	var prev := root.global_position
-	root.global_position = root.global_position.lerp(seat, clampf(delta * 12.0, 0.0, 1.0))
+	root.global_position = root.global_position.lerp(seat, clampf(delta * 14.0, 0.0, 1.0))
 	_fryer_vel = (root.global_position - _fryer_prev_pos) / maxf(delta, 0.001)
 	_fryer_prev_pos = root.global_position
 	var state := str(data.get("state", "empty"))
 	var oil_dist := Vector2(root.global_position.x - oil.x, root.global_position.z - oil.z).length()
-	var in_oil := oil != Vector3.ZERO and (oil_lock > 0.72 or oil_dist <= FRYER_OIL_RADIUS * 0.86) and root.global_position.y <= oil.y - 0.050
+	var in_oil := oil != Vector3.ZERO and oil_dist <= FRYER_OIL_RADIUS * 0.65 and root.global_position.y <= oil.y - 0.070
 	if (state == "raw" or state == "cooking") and in_oil:
 		if state != "cooking" and game_audio and game_audio.has_method("set_fryer_oil"):
 			game_audio.set_fryer_oil(true, 1.0)
 		state = "cooking"
 		data["cook"] = minf(FRY_BASKET_COOK_SEC, float(data.get("cook", 0.0)) + delta)
-		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.115, clampf(delta * 12.0, 0.0, 1.0))
+		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.175, clampf(delta * 12.0, 0.0, 1.0))
 		root.rotation_degrees.x = lerpf(root.rotation_degrees.x, -26.0, clampf(delta * 8.0, 0.0, 1.0))
 		if float(data["cook"]) >= FRY_BASKET_COOK_SEC:
 			state = "done"
@@ -12816,9 +12878,9 @@ func _update_held_fryer_basket(delta: float) -> void:
 			game_audio.set_fryer_oil(false)
 		state = "raw"
 	elif state == "done":
-		var lateral_speed := Vector2(_fryer_vel.x, _fryer_vel.z).length()
-		if lateral_speed > 0.42:
-			data["shake"] = float(data.get("shake", 0.0)) + delta * lateral_speed
+		var shake_speed := maxf(Vector2(_fryer_vel.x, _fryer_vel.z).length(), absf(_fryer_vel.y) * 0.45)
+		if shake_speed > 0.20:
+			data["shake"] = float(data.get("shake", 0.0)) + delta * shake_speed
 			root.rotation_degrees.z = sin(Time.get_ticks_msec() * 0.035) * 8.0
 		if float(data.get("shake", 0.0)) >= FRY_BASKET_SHAKE_NEED:
 			fryer_baskets[fryer_held_index] = data
@@ -12968,11 +13030,7 @@ func _serve_held_fries_pack(customer: Node3D) -> void:
 				served_root.queue_free()
 		)
 	if GameDataScript.is_fries_only_order(customer.order):
-		if mp_enabled and not _mp_applying:
-			var cid_fries := _customer_net_id(customer)
-			mp_serve.rpc(cid_fries, -3)
-		else:
-			_complete_fries_only_serve(customer)
+		_submit_serve_request(customer, -3)
 	else:
 		call_deferred("_try_auto_serve")
 
@@ -13883,12 +13941,7 @@ func _try_hand_held_icecream_to_customer(
 	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
 		return false
 	if _customer_wants_icecream(cust) and not _customer_icecream_handed(cust):
-		if mp_enabled and not _mp_applying:
-			var cid := _customer_net_id(cust)
-			if cid >= 0:
-				mp_icecream_hand.rpc(cid)
-				return true
-		_begin_icecream_customer_hand(cust)
+		_submit_icecream_hand_request(cust)
 		return true
 	if auto_only:
 		return false
@@ -18444,18 +18497,13 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 		_cup_pouring = false
 		if mp_enabled:
 			_mp_send_held_cup_pose(true)
-		if mp_enabled and not _mp_applying:
-			var cid := _customer_net_id(cust)
-			mp_serve.rpc(cid, -2)
-			return true
-		_begin_soda_only_serve(cust)
+		_submit_serve_request(cust, -2)
 		return true
 	## Burger + soda: hand the drink now, keep cooking the burger.
 	if mp_enabled and not _mp_applying:
-		var cid2 := _customer_net_id(cust)
 		var lab0: String = str(GameDataScript.INGREDIENT_LABELS.get("soda_%s" % cup_flavor, cup_flavor)).to_upper()
 		_flash("%s handed early — finish the burger!" % lab0, Color("80DEEA"))
-		mp_drink_hand.rpc(cid2, cup_flavor)
+		_submit_drink_hand_request(cust, cup_flavor)
 		return true
 	_begin_early_drink_hand(cust, cup_flavor)
 	return true
@@ -18481,17 +18529,9 @@ func _try_auto_hand_finished_soda() -> void:
 			if game_audio and game_audio.has_method("set_ice_grind"):
 				game_audio.set_ice_grind(false)
 			_cup_pouring = false
-			if mp_enabled and not _mp_applying:
-				var cid := _customer_net_id(cust)
-				mp_serve.rpc(cid, -2)
-				return
-			_begin_soda_only_serve(cust)
+			_submit_serve_request(cust, -2)
 		else:
-			if mp_enabled and not _mp_applying:
-				var cid2 := _customer_net_id(cust)
-				mp_drink_hand.rpc(cid2, cup_flavor)
-				return
-			_begin_early_drink_hand(cust, cup_flavor)
+			_submit_drink_hand_request(cust, cup_flavor)
 
 
 func _find_waiting_customer_for_soda_flavor(flavor: String) -> Node3D:
@@ -19784,14 +19824,7 @@ func _build_truck_radio_prop() -> void:
 	radio_dial_mesh = null
 	radio_light_mat = null
 
-	var mesh: Mesh = null
-	if ResourceLoader.exists(RADIO_MESH_PATH):
-		mesh = load(RADIO_MESH_PATH) as Mesh
-	if mesh != null and mesh.get_surface_count() > 0:
-		_build_truck_radio_from_mesh(mesh)
-	else:
-		push_warning("Radio OBJ unavailable — using dash radio fallback mesh")
-		_build_truck_radio_procedural()
+	_build_truck_radio_procedural()
 
 
 func _build_truck_radio_from_mesh(mesh: Mesh) -> void:
@@ -21140,6 +21173,19 @@ func _shop_item_note(id: String) -> String:
 			return ""
 
 
+func _shop_item_block_reason(id: String) -> String:
+	match id:
+		SHOP_SODA_MACHINE:
+			if _owns_fryer_machine():
+				return "Fryer already uses this counter slot"
+		SHOP_FRYER_MACHINE:
+			if _owns_soda_machine():
+				return "Soda machine already uses this counter slot"
+		_:
+			pass
+	return ""
+
+
 func _owns_soda_machine() -> bool:
 	return bool(owned_machines.get(SHOP_SODA_MACHINE, false))
 
@@ -21242,9 +21288,10 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	copy.add_child(note_lab)
 
 	var owned := bool(owned_machines.get(id, false))
+	var blocked := _shop_item_block_reason(id)
 	var buy := Button.new()
 	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
-	buy.disabled = owned or not playing
+	buy.disabled = owned or not playing or blocked != ""
 	buy.custom_minimum_size = Vector2(48, 18)
 	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 	buy.focus_mode = Control.FOCUS_NONE
@@ -21252,6 +21299,8 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	_style_phone_buy_button(buy)
 	if owned:
 		buy.tooltip_text = "Already installed"
+	elif blocked != "":
+		buy.tooltip_text = blocked
 	elif not playing:
 		buy.tooltip_text = "Open the truck first"
 	else:
@@ -21268,6 +21317,10 @@ func _buy_shop_item(id: String) -> void:
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
+		return
+	var blocked := _shop_item_block_reason(id)
+	if blocked != "":
+		_flash(blocked, Color("FFCC80"))
 		return
 	var cost := _shop_item_cost(id)
 	if money + 0.001 < cost:
@@ -21288,6 +21341,10 @@ func _buy_shop_item_local(id: String) -> void:
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
+		return
+	var blocked := _shop_item_block_reason(id)
+	if blocked != "":
+		_flash(blocked, Color("FFCC80"))
 		return
 	var cost := _shop_item_cost(id)
 	if money + 0.001 < cost:
@@ -29007,6 +29064,94 @@ func _refresh_spatula_ui() -> void:
 				else Control.MOUSE_FILTER_IGNORE
 		_refresh_station(i)
 
+
+func _submit_serve_request(cust: Node3D, station_index: int) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if mp_enabled and not _mp_applying:
+		var cid := _customer_net_id(cust)
+		if NetManager.is_host():
+			mp_serve(cid, station_index)
+		elif cid >= 0:
+			mp_serve.rpc_id(1, cid, station_index)
+		return
+	if station_index == -2:
+		_begin_soda_only_serve(cust)
+	elif station_index == -3:
+		_begin_fries_only_serve(cust)
+	else:
+		_begin_serve_at(cust, station_index, false)
+
+
+func _submit_drink_hand_request(cust: Node3D, flavor: String) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if mp_enabled and not _mp_applying:
+		var cid := _customer_net_id(cust)
+		if NetManager.is_host():
+			mp_drink_hand(cid, flavor)
+		elif cid >= 0:
+			mp_drink_hand.rpc_id(1, cid, flavor)
+			_clear_local_held_cup_after_remote_hand()
+		return
+	_begin_early_drink_hand(cust, flavor)
+
+
+func _clear_local_held_cup_after_remote_hand() -> void:
+	cup_held = false
+	_hide_soda_stream()
+	if game_audio and game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(false)
+	_cup_pouring = false
+	_cup_vel = Vector3.ZERO
+	_cup_slosh = Vector2.ZERO
+	_cup_tilt = Vector2.ZERO
+	if mp_enabled:
+		_mp_send_held_cup_pose(true)
+	if cup_root != null and is_instance_valid(cup_root):
+		cup_root.queue_free()
+	cup_root = null
+	_clear_cup_refs()
+	cup_flavor = ""
+	cup_soda_fill = 0.0
+	cup_ice_fill = 0.0
+	_cup_fizz = 0.0
+	_cup_foam_linger = 0.0
+	_cup_pour_white = 0.0
+	_spawn_and_bind_empty_cup()
+	_refresh_ticket_checkmarks()
+
+
+func _submit_icecream_hand_request(cust: Node3D) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if mp_enabled and not _mp_applying:
+		var cid := _customer_net_id(cust)
+		if NetManager.is_host():
+			mp_icecream_hand(cid)
+		elif cid >= 0:
+			mp_icecream_hand.rpc_id(1, cid)
+			_clear_local_held_icecream_after_remote_hand()
+		return
+	_begin_icecream_customer_hand(cust)
+
+
+func _clear_local_held_icecream_after_remote_hand() -> void:
+	_cancel_auto_hand_finished_icecream()
+	icecream_cone_held = false
+	_hide_icecream_stream()
+	if mp_enabled:
+		_mp_send_held_icecream_pose(true)
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root):
+		icecream_cone_root.queue_free()
+	icecream_cone_root = null
+	icecream_cone_area = null
+	icecream_swirl_root = null
+	icecream_cone_fill = 0.0
+	_spawn_and_bind_empty_icecream_cone()
+	_refresh_ticket_checkmarks()
+
+
 func _try_auto_serve() -> void:
 	## Hand off as soon as a station matches a waiting ticket perfectly.
 	if not playing or _auto_serving or _serve_fly_busy:
@@ -29045,11 +29190,7 @@ func _try_auto_serve() -> void:
 		active_station = si
 		_highlight_tickets()
 		_highlight_active_station()
-		if mp_enabled and not _mp_applying:
-			var cid := _customer_net_id(cust)
-			mp_serve.rpc(cid, si)
-		else:
-			_begin_serve_at(cust, si, false)
+		_submit_serve_request(cust, si)
 		if not _serve_fly_busy:
 			_auto_serving = false
 		return
@@ -30219,18 +30360,10 @@ func _on_serve() -> void:
 		return
 	## Drink-only — hand off the cup with no burger station.
 	if GameDataScript.is_soda_only_order(order):
-		if mp_enabled and not _mp_applying:
-			var cid := _customer_net_id(cust)
-			mp_serve.rpc(cid, -2) ## -2 = soda-only serve
-			return
-		_begin_soda_only_serve(cust)
+		_submit_serve_request(cust, -2) ## -2 = soda-only serve
 		return
 	if GameDataScript.is_fries_only_order(order):
-		if mp_enabled and not _mp_applying:
-			var cid_fries := _customer_net_id(cust)
-			mp_serve.rpc(cid_fries, -3) ## -3 = fries-only serve
-			return
-		_begin_fries_only_serve(cust)
+		_submit_serve_request(cust, -3) ## -3 = fries-only serve
 		return
 	var station_index := _find_perfect_station_for(order)
 	if station_index < 0:
@@ -30239,11 +30372,7 @@ func _on_serve() -> void:
 			_serve_reject_hint(order, _find_station_for_order(order))
 		_update_hud()
 		return
-	if mp_enabled and not _mp_applying:
-		var cid2 := _customer_net_id(cust)
-		mp_serve.rpc(cid2, station_index)
-		return
-	_begin_serve_at(cust, station_index, false)
+	_submit_serve_request(cust, station_index)
 
 
 func _begin_soda_only_serve(customer: Node3D) -> void:
@@ -32218,6 +32347,7 @@ func mp_tool_pose(
 
 
 func _mp_update_cursors(delta: float) -> void:
+	_mp_update_remote_cursor_pulses(delta)
 	if not mp_enabled or not NetManager.is_online():
 		for k in _mp_remote_cursors.keys():
 			var node: Control = _mp_remote_cursors[k]
@@ -32249,6 +32379,25 @@ func _mp_update_cursors(delta: float) -> void:
 			elif bts_lightstick_held_index >= 0:
 				tool = 8
 			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
+
+
+func _mp_update_remote_cursor_pulses(delta: float) -> void:
+	for k in _mp_remote_cursors.keys():
+		var wrap: Control = _mp_remote_cursors[k]
+		if wrap == null or not is_instance_valid(wrap):
+			continue
+		var icon := wrap.get_node_or_null("Icon") as TextureRect
+		if icon == null:
+			continue
+		var t := float(wrap.get_meta("click_t", 0.0))
+		if t <= 0.0:
+			icon.scale = Vector2.ONE
+			continue
+		t = maxf(0.0, t - delta)
+		wrap.set_meta("click_t", t)
+		var u := 1.0 - (t / 0.18)
+		var s := 1.0 - 0.28 * sin(clampf(u, 0.0, 1.0) * PI)
+		icon.scale = Vector2(s, s)
 
 
 func _mp_ensure_remote_cursor(peer_id: int) -> Control:
@@ -32399,6 +32548,18 @@ func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 			icon.modulate = col.lightened(0.25)
 		else:
 			icon.modulate = col
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_cursor_click(nx: float, ny: float) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	var wrap := _mp_ensure_remote_cursor(sid)
+	wrap.visible = true
+	var vp := get_viewport().get_visible_rect().size
+	wrap.position = Vector2(nx * vp.x, ny * vp.y) - Vector2(0, 3)
+	wrap.set_meta("click_t", 0.18)
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -32572,6 +32733,8 @@ func mp_drop_to_build(net_id: int, index: int) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
+	if mp_enabled and not NetManager.is_host():
+		return
 	_mp_serve_sync = true
 	_mp_applying = true
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
@@ -32603,6 +32766,8 @@ func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func mp_drink_hand(cust_net_id: int, flavor: String) -> void:
 	## Early drink hand-off to a waiting customer (burger may still be cooking).
+	if mp_enabled and not NetManager.is_host():
+		return
 	_mp_applying = true
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
 	if cust != null and is_instance_valid(cust):
@@ -32613,6 +32778,8 @@ func mp_drink_hand(cust_net_id: int, flavor: String) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func mp_icecream_hand(cust_net_id: int) -> void:
 	## Early / ice-cream-only hand-off; host owns the order close, peers share the toss.
+	if mp_enabled and not NetManager.is_host():
+		return
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
 	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
 		return
@@ -32674,15 +32841,23 @@ func mp_spawn_customer(
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_disguise_cat_unmask(net_id: int) -> void:
+	if mp_enabled and not NetManager.is_host():
+		return
 	_mp_applying = true
 	var c = _customer_by_net_id(net_id)
 	if c != null and is_instance_valid(c) and bool(c.get("is_disguise_cat")):
 		_unmask_disguise_cat(c)
 	_mp_applying = false
+	if NetManager.is_host():
+		mp_customer_leave.rpc(net_id, false)
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
 
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) -> void:
+	if mp_enabled and not NetManager.is_host():
+		return
 	_mp_applying = true
 	var c = _customer_by_net_id(net_id)
 	if c == null or not is_instance_valid(c) or not bool(c.get("is_disguise_cat")):
@@ -32716,6 +32891,10 @@ func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) ->
 		if c.has_method("disguise_bribe_leave"):
 			c.disguise_bribe_leave()
 	_mp_applying = false
+	if NetManager.is_host():
+		mp_customer_leave.rpc(net_id, false)
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
 
 
 @rpc("any_peer", "call_local", "reliable")

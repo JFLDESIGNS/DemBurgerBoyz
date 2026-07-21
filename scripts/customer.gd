@@ -24,13 +24,6 @@ const CHAR_SKINS: Array[String] = [
 	"res://models/characters/Skins/criminalMaleA copy 2.png",
 	"res://models/characters/Skins/cyborgFemaleA.png",
 	"res://models/characters/Skins/skaterMaleA copy 2.png",
-	JIN_SKIN_PATH,
-	JIMIN_SKIN_PATH,
-	V_SKIN_PATH,
-	JHOPE_SKIN_PATH,
-	JUNG_SKIN_PATH,
-	RM_SKIN_PATH,
-	SUGA_SKIN_PATH,
 ]
 const JIN_SKIN_IDX := 7
 const JIMIN_SKIN_IDX := 8
@@ -39,15 +32,7 @@ const JHOPE_SKIN_IDX := 10
 const JUNG_SKIN_IDX := 11
 const RM_SKIN_IDX := 12
 const SUGA_SKIN_IDX := 13
-const BTS_SKIN_IDXS: Array[int] = [
-	JIN_SKIN_IDX,
-	JIMIN_SKIN_IDX,
-	V_SKIN_IDX,
-	JHOPE_SKIN_IDX,
-	JUNG_SKIN_IDX,
-	RM_SKIN_IDX,
-	SUGA_SKIN_IDX,
-]
+const BTS_SKIN_IDXS: Array[int] = []
 const JIN_FACTS: Array[String] = [
 	"Jin fact: My real name is Kim Seok-jin.",
 	"Jin fact: I was born on December 4, 1992.",
@@ -313,15 +298,10 @@ func setup(
 	else:
 		self.skin_idx = randi() % CHAR_SKINS.size()
 		_skin_path = CHAR_SKINS[self.skin_idx]
-	is_jin_guest = self.skin_idx == JIN_SKIN_IDX
-	is_jimin_guest = self.skin_idx == JIMIN_SKIN_IDX
-	is_bts_guest = BTS_SKIN_IDXS.has(self.skin_idx)
-	if is_jin_guest:
-		_apply_jin_guest_fact(jin_fact_idx)
-	elif is_jimin_guest:
-		_apply_jimin_guest_fact(jin_fact_idx)
-	else:
-		speech = _make_speech()
+	is_jin_guest = false
+	is_jimin_guest = false
+	is_bts_guest = false
+	speech = _make_speech()
 
 
 static func lane_x_for(lane_i: int) -> float:
@@ -638,8 +618,6 @@ func _build() -> void:
 
 
 func _try_attach_toon_character() -> bool:
-	if is_bts_guest:
-		return _build_bts_portrait_card()
 	if _char_scene == null:
 		if not ResourceLoader.exists(CHAR_SCENE_PATH):
 			return false
