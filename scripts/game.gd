@@ -1,4 +1,4 @@
-﻿## 3D food-truck burger game - cook from inside, looking out the window.
+## 3D food-truck burger game - cook from inside, looking out the window.
 extends Node3D
 
 const GRILL_SLOTS := 10
@@ -110,10 +110,12 @@ const START_MONEY := 1000.0
 const SHOP_SODA_MACHINE := "soda_machine"
 const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
+const SHOP_GRILL_ROOMBA := "grill_roomba"
 const SHOP_FRIDGE_UPGRADE := "fridge_upgrade"
 const SHOP_SODA_MACHINE_COST := 300.0
 const SHOP_ICECREAM_MACHINE_COST := 500.0
 const SHOP_FRYER_MACHINE_COST := 100.0
+const SHOP_GRILL_ROOMBA_COST := 250.0
 const SHOP_FRIDGE_UPGRADE_COST := 400.0
 const BACON_PATIENCE_RESTORE := 0.10
 const BACON_MOUTH_PICK_PX := 130.0
@@ -412,6 +414,7 @@ const GLOCK_HOLD_DROP := 0.10 ## Nudge lower while tracking the cursor.
 const GLOCK_AIM_REACH := 30.0
 const GLOCK_COLLISION_LAYER := 256
 const BTS_LIGHTSTICK_COLLISION_LAYER := 65536
+const ROOMBA_COLLISION_LAYER := 131072
 const GLOCK_FIRE_COOLDOWN := 0.10
 const GLOCK_MESH_SCALE := 1.755 ## ~30% larger on the wall mount.
 const GLOCK_MUZZLE_LOCAL := Vector3(0.0, 0.015, 0.12)
@@ -543,6 +546,7 @@ var owned_machines: Dictionary = {
 	SHOP_SODA_MACHINE: false,
 	SHOP_ICECREAM_MACHINE: false,
 	SHOP_FRYER_MACHINE: false,
+	SHOP_GRILL_ROOMBA: false,
 	SHOP_FRIDGE_UPGRADE: false,
 }
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
@@ -651,6 +655,37 @@ var _air_mote_vel: PackedVector3Array = PackedVector3Array()
 var _air_mote_phase: PackedFloat32Array = PackedFloat32Array()
 var _air_push_prev: Vector3 = Vector3.ZERO
 var _air_push_have: bool = false
+var grill_roomba_root: Node3D = null
+var grill_roomba_body_mat: StandardMaterial3D = null
+var grill_roomba_led_mat: StandardMaterial3D = null
+var grill_roomba_bristles: Array = []
+var grill_roomba_area: Area3D = null
+var grill_roomba_vel: Vector2 = Vector2.ZERO
+var grill_roomba_heading: float = 0.0
+var grill_roomba_turn_goal: float = 0.0
+var grill_roomba_held: bool = false
+var grill_roomba_hold_wobble: float = 0.0
+var grill_roomba_bump_t: float = 0.0
+var grill_roomba_back_t: float = 0.0
+var grill_roomba_reaim_t: float = 0.0
+var grill_roomba_sync_t: float = 0.0
+var grill_roomba_foam_cd: float = 0.0
+var grill_roomba_stuck_t: float = 0.0
+var grill_roomba_escape_t: float = 0.0
+var grill_roomba_last_xz: Vector2 = Vector2.ZERO
+const ROOMBA_RADIUS := 0.105
+const ROOMBA_HEIGHT := 0.047
+const ROOMBA_SIT_Y := 0.082
+const ROOMBA_SPEED := 0.18
+const ROOMBA_SEEK_SPEED := 0.22
+const ROOMBA_TURN_RATE := 1.45
+const ROOMBA_MAX_TURN_RATE := 1.05
+const ROOMBA_CLEAN_RADIUS := 0.14
+const ROOMBA_CLEAN_RATE := 1.15
+const ROOMBA_BOUNCE_BACK_SEC := 0.32
+const ROOMBA_SYNC_INTERVAL := 0.24
+const ROOMBA_UNSTUCK_SEC := 0.48
+const ROOMBA_PATTY_PUSH := 0.018
 const AIR_MOTE_COUNT := 56
 const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
 const AIR_MOTE_BOUNDS_MAX := Vector3(2.35, 2.35, 1.25)
@@ -777,6 +812,10 @@ var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
+var patty_reflection_height_offset: float = -0.05
+var patty_reflection_opacity: float = 0.28
+var patty_reflection_fade_height: float = 0.04
+var patty_reflection_fade_opacity: float = 0.04
 var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitboxes)
 var options_root: Control = null
 var options_panel: PanelContainer = null
@@ -1149,6 +1188,10 @@ const GFX_DEFAULTS := {
 	"heat_warp_speed": 1.65,
 	"heat_warp_strength": 0.006,
 	"heat_warp_tight": 1.45,
+	"patty_reflect_y": -0.05,
+	"patty_reflect_opacity": 0.28,
+	"patty_reflect_fade_height": 0.04,
+	"patty_reflect_fade_opacity": 0.04,
 	"bg_y": STREET_MATTE_DEFAULT_Y,
 	"bg_scale": 1.0,
 	"sale_x": FIRST_SALE_DEFAULT_X,
@@ -1438,6 +1481,7 @@ func _ensure_patty_spawn_pool() -> void:
 		warm.position = Vector3(999.0, -999.0, 999.0)
 		warm.set_meta("patty_pool", true)
 		patties_root.add_child(warm)
+		_apply_patty_reflection_to_patty(warm)
 		_patty_spawn_pool.append(warm)
 		await get_tree().process_frame
 
@@ -2012,6 +2056,7 @@ func _process(delta: float) -> void:
 	_update_fryer_basket_smoke(delta)
 	_update_ready_fries_pack_shakes(delta)
 	_update_ready_fries_pack_sparkles(delta)
+	_update_grill_roomba(delta)
 	_refresh_fryer_hint_label()
 	## Parked tray drinks keep dying their foam head down.
 	_update_parked_cups_foam(delta)
@@ -2534,6 +2579,10 @@ func _input(event: InputEvent) -> void:
 			_release_spilled_fry(event.position)
 			get_viewport().set_input_as_handled()
 			return
+		if grill_roomba_held:
+			_release_grill_roomba()
+			get_viewport().set_input_as_handled()
+			return
 		if bts_lightstick_held_index >= 0:
 			_release_bts_lightstick()
 			get_viewport().set_input_as_handled()
@@ -2561,6 +2610,9 @@ func _input(event: InputEvent) -> void:
 			if _try_grab_spilled_fry(event.position):
 				get_viewport().set_input_as_handled()
 				return
+			if _try_grab_grill_roomba(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _try_bts_lightstick_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
@@ -2578,7 +2630,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
+			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -2639,6 +2691,10 @@ func _input(event: InputEvent) -> void:
 			return
 		if spilled_fry_held:
 			_release_spilled_fry(event.position)
+			get_viewport().set_input_as_handled()
+			return
+		if grill_roomba_held:
+			_release_grill_roomba()
 			get_viewport().set_input_as_handled()
 			return
 		if bts_lightstick_held_index >= 0:
@@ -3715,6 +3771,7 @@ func _build_3d_world() -> void:
 	_build_cheese_station_prop()
 	_build_wire_brush()
 	_build_oil_bottle()
+	_build_grill_roomba()
 	_build_meat_warmer()
 	_build_truck_radio_prop()
 	_build_season_shaker()
@@ -5255,6 +5312,7 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 		p._rest_z = z
 	if p.get_parent() == null:
 		patties_root.add_child(p)
+	_apply_patty_reflection_to_patty(p)
 	grill[idx] = p
 	slot_positions[idx] = Vector3(x, GRILL_SURFACE_Y, z)
 	p.scale = Vector3(0.7, 0.7, 0.7)
@@ -6318,6 +6376,771 @@ func _refresh_residue_visual(slot: int) -> void:
 			var base_a := 0.9 if c.r < 0.15 else (0.85 if c.r < 0.28 else 0.8)
 			c.a = base_a * alpha_mul
 		mat.albedo_color = c
+
+
+func _build_grill_roomba() -> void:
+	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+		grill_roomba_root.queue_free()
+	grill_roomba_root = Node3D.new()
+	grill_roomba_root.name = "GrillCleaningRoomba"
+	grill_roomba_root.visible = false
+	world.add_child(grill_roomba_root)
+	_reset_grill_roomba()
+
+	grill_roomba_body_mat = _make_basic_mat(Color(0.015, 0.018, 0.022), 0.78, 0.28)
+	grill_roomba_led_mat = _make_basic_mat(Color(0.18, 1.0, 0.24), 0.0, 0.22)
+	grill_roomba_led_mat.emission_enabled = true
+	grill_roomba_led_mat.emission = Color(0.08, 1.0, 0.18)
+	grill_roomba_led_mat.emission_energy_multiplier = 1.85
+
+	var body:= MeshInstance3D.new()
+	body.name = "BlackMetalPuck"
+	var body_mesh:= CylinderMesh.new()
+	body_mesh.top_radius = ROOMBA_RADIUS
+	body_mesh.bottom_radius = ROOMBA_RADIUS * 1.04
+	body_mesh.height = ROOMBA_HEIGHT
+	body_mesh.radial_segments = 48
+	body.mesh = body_mesh
+	body.material_override = grill_roomba_body_mat
+	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	grill_roomba_root.add_child(body)
+
+	var bumper:= MeshInstance3D.new()
+	bumper.name = "RubberBumper"
+	var bumper_mesh:= TorusMesh.new()
+	bumper_mesh.inner_radius = ROOMBA_RADIUS * 0.86
+	bumper_mesh.outer_radius = ROOMBA_RADIUS * 1.03
+	bumper_mesh.ring_segments = 56
+	bumper.mesh = bumper_mesh
+	bumper.position.y = - ROOMBA_HEIGHT * 0.33
+	bumper.material_override = _make_basic_mat(Color(0.005, 0.006, 0.008), 0.1, 0.62)
+	grill_roomba_root.add_child(bumper)
+
+	var face_panel_mat:= _make_basic_mat(Color(0.002, 0.004, 0.004), 0.92, 0.06)
+	face_panel_mat.clearcoat_enabled = true
+	face_panel_mat.clearcoat = 0.35
+	face_panel_mat.clearcoat_roughness = 0.46
+	var face_panel:= MeshInstance3D.new()
+	face_panel.name = "GlossyLedDisc"
+	var face_mesh:= CylinderMesh.new()
+	face_mesh.top_radius = ROOMBA_RADIUS * 0.91
+	face_mesh.bottom_radius = ROOMBA_RADIUS * 0.86
+	face_mesh.height = 0.012
+	face_mesh.radial_segments = 56
+	face_panel.mesh = face_mesh
+	face_panel.position = Vector3(0.0, ROOMBA_HEIGHT * 0.62, 0.0)
+	face_panel.material_override = face_panel_mat
+	grill_roomba_root.add_child(face_panel)
+
+	_add_roomba_pixel_smile(grill_roomba_root)
+
+	var side_led_mat:= _make_basic_mat(Color(1.0, 0.08, 0.04), 0.0, 0.18)
+	side_led_mat.emission_enabled = true
+	side_led_mat.emission = Color(1.0, 0.04, 0.02)
+	side_led_mat.emission_energy_multiplier = 1.35
+	var side_led:= MeshInstance3D.new()
+	side_led.name = "RedSideLed"
+	var side_led_mesh:= SphereMesh.new()
+	side_led_mesh.radius = ROOMBA_RADIUS * 0.105
+	side_led_mesh.height = ROOMBA_RADIUS * 0.15
+	side_led_mesh.radial_segments = 14
+	side_led.mesh = side_led_mesh
+	side_led.position = Vector3(ROOMBA_RADIUS * 0.84, ROOMBA_HEIGHT * 0.22, - ROOMBA_RADIUS * 0.35)
+	side_led.material_override = side_led_mat
+	grill_roomba_root.add_child(side_led)
+
+	grill_roomba_bristles.clear()
+	for ring_i in 2:
+		var bristle_root:= Node3D.new()
+		bristle_root.name = "RotatingBristles%d" % ring_i
+		bristle_root.position.y = - ROOMBA_HEIGHT * 0.58
+		grill_roomba_root.add_child(bristle_root)
+		grill_roomba_bristles.append(bristle_root)
+		var count:= 9 if ring_i == 0 else 7
+		var radius:= ROOMBA_RADIUS * (0.62 if ring_i == 0 else 0.34)
+		for bi in count:
+			var arm:= MeshInstance3D.new()
+			var arm_mesh:= BoxMesh.new()
+			arm_mesh.size = Vector3(0.008, 0.01, 0.07 if ring_i == 0 else 0.052)
+			arm.mesh = arm_mesh
+			var a:= TAU * float(bi) / float(count)
+			arm.position = Vector3(cos(a) * radius, 0.0, sin(a) * radius)
+			arm.rotation_degrees.y = rad_to_deg( - a)
+			arm.material_override = _make_basic_mat(Color(0.015, 0.018, 0.02), 0.2, 0.75)
+			bristle_root.add_child(arm)
+	grill_roomba_area = Area3D.new()
+	grill_roomba_area.name = "RoombaGrab"
+	grill_roomba_area.collision_layer = ROOMBA_COLLISION_LAYER
+	grill_roomba_area.collision_mask = 0
+	grill_roomba_area.input_ray_pickable = true
+	var grab_shape:= CollisionShape3D.new()
+	var grab_cyl:= CylinderShape3D.new()
+	grab_cyl.radius = ROOMBA_RADIUS * 1.12
+	grab_cyl.height = ROOMBA_HEIGHT * 1.9
+	grab_shape.shape = grab_cyl
+	grab_shape.position = Vector3(0.0, 0.0, 0.0)
+	grill_roomba_area.add_child(grab_shape)
+	grill_roomba_root.add_child(grill_roomba_area)
+	_apply_machine_unlock_visibility()
+
+
+func _add_roomba_pixel_smile(parent: Node3D) -> void:
+	var mat:= StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.38, 1.0, 0.16, 1.0)
+	mat.emission_enabled = true
+	mat.emission = Color(0.3, 1.0, 0.08)
+	mat.emission_energy_multiplier = 3.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 18
+	var pixel_mesh:= BoxMesh.new()
+	pixel_mesh.size = Vector3(0.018, 0.009, 0.018)
+	var pixels:= [
+		Vector2(-2.0, -2.0), Vector2(2.0, -2.0), 
+		Vector2(-3.0, 1.0), Vector2(-2.0, 2.0), Vector2(-1.0, 2.6), 
+		Vector2(0.0, 2.8), 
+		Vector2(1.0, 2.6), Vector2(2.0, 2.0), Vector2(3.0, 1.0), 
+	]
+	var root:= Node3D.new()
+	root.name = "PixelLedSmile"
+	root.position = Vector3(0.0, ROOMBA_HEIGHT * 0.72, - ROOMBA_RADIUS * 0.015)
+	parent.add_child(root)
+	var spacing:= 0.022
+	for i in range(pixels.size()):
+		var p: Vector2 = pixels[i]
+		var px:= MeshInstance3D.new()
+		px.name = "SmilePixel_%02d" % i
+		px.mesh = pixel_mesh
+		px.material_override = mat
+		px.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		px.position = Vector3(p.x * spacing, 0.0, p.y * spacing)
+		root.add_child(px)
+
+
+func _reset_grill_roomba() -> void:
+	grill_roomba_heading = deg_to_rad(-35.0)
+	grill_roomba_turn_goal = grill_roomba_heading
+	grill_roomba_held = false
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(false)
+	grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * ROOMBA_SPEED
+	grill_roomba_bump_t = 0.0
+	grill_roomba_back_t = 0.0
+	grill_roomba_reaim_t = 0.0
+	grill_roomba_sync_t = 0.0
+	grill_roomba_foam_cd = 0.0
+	grill_roomba_stuck_t = 0.0
+	grill_roomba_escape_t = 0.0
+	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+		grill_roomba_root.global_position = _roomba_idle_corner_target()
+		grill_roomba_root.rotation_degrees = Vector3(0.0, rad_to_deg(grill_roomba_heading) + 180.0, 0.0)
+		grill_roomba_last_xz = Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
+
+
+func _update_grill_roomba(delta: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	if not _owns_grill_roomba() or not playing:
+		grill_roomba_root.visible = false
+		if grill_roomba_held:
+			_release_grill_roomba()
+		return
+	grill_roomba_root.visible = true
+	if grill_roomba_held:
+		_update_held_grill_roomba(delta)
+		return
+	grill_roomba_foam_cd = maxf(0.0, grill_roomba_foam_cd - delta)
+	_update_grill_roomba_bristles(delta, grill_roomba_vel.length())
+	if mp_enabled and not NetManager.is_host():
+		return
+	var old_pos:= grill_roomba_root.global_position
+	var old_xz:= Vector2(old_pos.x, old_pos.z)
+	grill_roomba_escape_t = maxf(0.0, grill_roomba_escape_t - delta)
+	var target:= _roomba_dirty_target(old_xz)
+	var desired_heading:= grill_roomba_turn_goal
+	var has_dirt:= target.is_finite()
+	var seeking:= has_dirt
+	var parking:= not has_dirt
+	if not has_dirt:
+		target = _roomba_idle_corner_target()
+	grill_roomba_reaim_t = maxf(0.0, grill_roomba_reaim_t - delta)
+	var to_target:= Vector2(target.x - old_pos.x, target.z - old_pos.z)
+	if not has_dirt and to_target.length() <= 0.055:
+		grill_roomba_vel = Vector2.ZERO
+		grill_roomba_turn_goal = deg_to_rad(-35.0)
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+		grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading) + 180.0
+		return
+	if grill_roomba_reaim_t <= 0.0:
+		grill_roomba_turn_goal = to_target.angle() if parking else _roomba_heading_to_target(to_target)
+		desired_heading = grill_roomba_turn_goal
+		grill_roomba_reaim_t = 0.55 if has_dirt else 0.45
+	if grill_roomba_back_t > 0.0:
+		grill_roomba_back_t = maxf(0.0, grill_roomba_back_t - delta)
+		desired_heading = grill_roomba_heading
+		grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * - ROOMBA_SPEED * 0.55
+	else:
+		if grill_roomba_escape_t > 0.0:
+			desired_heading = grill_roomba_turn_goal
+		else:
+			desired_heading = _roomba_wall_safe_heading(old_xz, desired_heading, Vector2(target.x, target.z))
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, desired_heading, delta)
+		var speed:= ROOMBA_SEEK_SPEED if seeking else ROOMBA_SPEED * 0.95
+		if grill_roomba_escape_t > 0.0:
+			speed = ROOMBA_SEEK_SPEED * 1.15
+		grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * speed
+	var new_xz:= old_xz + grill_roomba_vel * delta
+	var bounced:= _roomba_apply_bounds_and_bump(new_xz)
+	if bounced:
+		new_xz = _roomba_clamp_xz_to_bounds(new_xz)
+		if new_xz.distance_to(old_xz) < 0.002:
+			new_xz = old_xz
+		_roomba_bump_turn()
+	var new_pos:= Vector3(new_xz.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, new_xz.y)
+	grill_roomba_root.global_position = new_pos
+	grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading) + 180.0
+	var move:= Vector2(new_pos.x - old_pos.x, new_pos.z - old_pos.z)
+	var moved:= move.length()
+	if moved > 0.0001:
+		_roomba_clean_at(new_pos, move, maxf(moved, delta * 0.035), delta)
+	_roomba_update_stuck(delta, old_xz, new_xz, target)
+	if grill_on_fire:
+		_roomba_spray_fire(new_pos, delta)
+	grill_roomba_sync_t = maxf(0.0, grill_roomba_sync_t - delta)
+	if mp_enabled and NetManager.is_host() and grill_roomba_sync_t <= 0.0:
+		grill_roomba_sync_t = ROOMBA_SYNC_INTERVAL
+		mp_roomba_pose.rpc(new_pos.x, new_pos.y, new_pos.z, grill_roomba_root.rotation_degrees.y, grill_roomba_bump_t)
+
+
+func _update_held_grill_roomba(delta: float) -> void:
+	grill_roomba_hold_wobble = fposmod(grill_roomba_hold_wobble + delta * 13.5, TAU)
+	var mouse:= get_viewport().get_mouse_position()
+	var target:= _grill_plane_from_screen(mouse)
+	var b:= _roomba_place_bounds()
+	target.x = clampf(target.x, b.position.x, b.end.x)
+	target.z = clampf(target.z, b.position.y, b.end.y)
+	target.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y + 0.335
+	target.x += sin(grill_roomba_hold_wobble * 2.1) * 0.008
+	target.z += cos(grill_roomba_hold_wobble * 1.7) * 0.007
+	var old_pos:= grill_roomba_root.global_position
+	grill_roomba_root.global_position = old_pos.lerp(target, clampf(delta * 18.0, 0.0, 1.0))
+	var move:= Vector2(grill_roomba_root.global_position.x - old_pos.x, grill_roomba_root.global_position.z - old_pos.z)
+	if move.length() > 0.001:
+		grill_roomba_turn_goal = move.angle()
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+	grill_roomba_root.rotation_degrees = Vector3(
+		-15.0 + sin(grill_roomba_hold_wobble * 2.4) * 3.0, 
+		rad_to_deg(grill_roomba_heading) + 180.0, 
+		cos(grill_roomba_hold_wobble * 2.0) * 3.5
+	)
+	_update_grill_roomba_bristles(delta, move.length() / maxf(delta, 0.001))
+	if mp_enabled:
+		mp_roomba_pose.rpc(grill_roomba_root.global_position.x, grill_roomba_root.global_position.y, grill_roomba_root.global_position.z, grill_roomba_root.rotation_degrees.y, grill_roomba_bump_t)
+
+
+func _update_grill_roomba_bristles(delta: float, speed: float) -> void:
+	var spin:= (8.0 + speed * 32.0) * delta
+	for i in grill_roomba_bristles.size():
+		var br:= grill_roomba_bristles[i] as Node3D
+		if br != null and is_instance_valid(br):
+			br.rotation_degrees.y += rad_to_deg(spin) * (1.0 if i % 2 == 0 else -1.35)
+
+
+func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
+	if grill_roomba_held or grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return false
+	if not _owns_grill_roomba() or camera == null:
+		return false
+	if spatula_patty != null or cup_held or icecream_cone_held or burnt_icecream_cone_held\
+	or fryer_held_index >= 0 or fries_pack_held or spilled_fry_held\
+	or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held\
+	or dragging_patty != null or bts_lightstick_held_index >= 0:
+		return false
+	var near:= screen_pos.distance_to(camera.unproject_position(grill_roomba_root.global_position + Vector3(0.0, 0.045, 0.0))) <= 64.0
+	if not near and not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
+		return false
+	grill_roomba_held = true
+	grill_roomba_hold_wobble = randf() * TAU
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_back_t = 0.0
+	grill_roomba_reaim_t = 0.0
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(true)
+	return true
+
+
+func _release_grill_roomba() -> void:
+	if not grill_roomba_held:
+		return
+	grill_roomba_held = false
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(false)
+	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+		var p:= grill_roomba_root.global_position
+		var b:= _roomba_place_bounds()
+		p.x = clampf(p.x, b.position.x, b.end.x)
+		p.z = clampf(p.z, b.position.y, b.end.y)
+		p.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y
+		grill_roomba_root.global_position = p
+		grill_roomba_root.rotation_degrees.x = 0.0
+		grill_roomba_root.rotation_degrees.z = 0.0
+	grill_roomba_turn_goal = grill_roomba_heading
+	grill_roomba_reaim_t = 0.2
+
+
+func _roomba_apply_bounds_and_bump(xz: Vector2) -> bool:
+	var b:= _roomba_place_bounds()
+	if xz.x < b.position.x or xz.x > b.end.x or xz.y < b.position.y or xz.y > b.end.y:
+		return true
+	for i in range(grill.size()):
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
+			continue
+		var pp: Vector3 = p.position
+		var d:= Vector2(xz.x - pp.x, xz.y - pp.z)
+		if d.length() < ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.78:
+			return not _roomba_push_patty(i, p, xz)
+	return false
+
+
+func _roomba_bump_turn() -> void:
+	grill_roomba_back_t = ROOMBA_BOUNCE_BACK_SEC
+	grill_roomba_reaim_t = 0.18
+	grill_roomba_bump_t = 0.28
+	var turn:= deg_to_rad(randf_range(35.0, 70.0))
+	if randf() < 0.5:
+		turn = - turn
+	grill_roomba_turn_goal = grill_roomba_heading + PI + turn
+	if grill_roomba_led_mat != null:
+		grill_roomba_led_mat.emission = Color(0.16, 1.0, 0.22)
+
+
+func _roomba_snap_heading(angle: float) -> float:
+	var step:= PI * 0.25
+	return fposmod(round(angle / step) * step, TAU)
+
+
+func _roomba_smooth_heading(current: float, target: float, delta: float) -> float:
+	var diff:= wrapf(target - current, - PI, PI)
+	var max_step:= ROOMBA_MAX_TURN_RATE * delta
+	var step:= clampf(diff * clampf(delta * ROOMBA_TURN_RATE, 0.0, 1.0), - max_step, max_step)
+	return current + step
+
+
+func _roomba_heading_to_target(to_target: Vector2) -> float:
+	if to_target.length_squared() <= 0.0001:
+		return grill_roomba_turn_goal
+	if grill_roomba_escape_t <= 0.0:
+		return to_target.angle()
+	var ax:= absf(to_target.x)
+	var az:= absf(to_target.y)
+	if ax > az * 1.25:
+		return 0.0 if to_target.x >= 0.0 else PI
+	if az > ax * 1.25:
+		return PI * 0.5 if to_target.y >= 0.0 else - PI * 0.5
+	return to_target.angle()
+
+
+func _roomba_push_patty(index: int, patty: Area3D, roomba_xz: Vector2) -> bool:
+	if patty == null or not is_instance_valid(patty) or bool(patty.get("is_held")):
+		return false
+	var pp:= Vector2(float(patty.position.x), float(patty.position.z))
+	var away:= pp - roomba_xz
+	if away.length_squared() < 0.0001:
+		away = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading))
+	away = away.normalized()
+	var side:= Vector2( - away.y, away.x) * (0.35 if randf() < 0.5 else -0.35)
+	var push_dir:= (away + side).normalized()
+	var b:= _grill_place_bounds()
+	var nx:= clampf(float(patty.position.x) + push_dir.x * ROOMBA_PATTY_PUSH, b.position.x, b.end.x)
+	var nz:= clampf(float(patty.position.z) + push_dir.y * ROOMBA_PATTY_PUSH, b.position.y, b.end.y)
+	var try:= Vector3(nx, GRILL_SURFACE_Y, nz)
+	if _patty_blocked_at(try, index):
+		var try_x:= Vector3(nx, GRILL_SURFACE_Y, patty.position.z)
+		var try_z:= Vector3(patty.position.x, GRILL_SURFACE_Y, nz)
+		if not _patty_blocked_at(try_x, index):
+			try = try_x
+		elif not _patty_blocked_at(try_z, index):
+			try = try_z
+		else:
+			return false
+	patty._rest_x = try.x
+	patty._rest_z = try.z
+	patty.position.x = try.x
+	patty.position.z = try.z
+	patty.position.y = patty.base_y
+	if index >= 0 and index < slot_positions.size():
+		slot_positions[index] = Vector3(try.x, GRILL_SURFACE_Y, try.z)
+	if patty.has_method("refresh_cook_visuals"):
+		patty.refresh_cook_visuals()
+	if mp_enabled and NetManager.is_host():
+		_mp_send_patty_pose(patty, false)
+	return true
+
+
+func _roomba_clamp_xz_to_bounds(xz: Vector2) -> Vector2:
+	var b:= _roomba_place_bounds()
+	return Vector2(clampf(xz.x, b.position.x, b.end.x), clampf(xz.y, b.position.y, b.end.y))
+
+
+func _roomba_update_stuck(delta: float, old_xz: Vector2, new_xz: Vector2, target: Vector3) -> void:
+	var moved:= new_xz.distance_to(old_xz)
+	var wants_move:= target.is_finite() or new_xz.distance_to(Vector2(_roomba_idle_corner_target().x, _roomba_idle_corner_target().z)) > 0.06
+	if wants_move and moved < 0.0025 and grill_roomba_vel.length() > 0.03:
+		grill_roomba_stuck_t += delta
+	else:
+		grill_roomba_stuck_t = maxf(0.0, grill_roomba_stuck_t - delta * 1.8)
+	if grill_roomba_stuck_t < ROOMBA_UNSTUCK_SEC:
+		return
+	grill_roomba_stuck_t = 0.0
+	grill_roomba_escape_t = 0.85
+	var b:= _roomba_place_bounds()
+	var center:= Vector2((b.position.x + b.end.x) * 0.5, (b.position.y + b.end.y) * 0.5)
+	var goal:= Vector2(target.x, target.z) if target.is_finite() else center
+	var to_goal:= goal - new_xz
+	var to_center:= center - new_xz
+	var basis:= to_goal if to_goal.length_squared() > 0.0025 else to_center
+	if basis.length_squared() <= 0.0001:
+		basis = Vector2(cos(grill_roomba_heading + PI * 0.75), sin(grill_roomba_heading + PI * 0.75))
+	var escape:= basis.angle() + deg_to_rad(randf_range(-35.0, 35.0))
+	grill_roomba_turn_goal = escape
+	grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, escape, 0.35)
+	grill_roomba_reaim_t = 0.0
+	grill_roomba_back_t = 0.0
+
+
+func _roomba_wall_safe_heading(pos: Vector2, heading: float, target: Vector2) -> float:
+	var b:= _roomba_place_bounds()
+	var dir:= Vector2(cos(heading), sin(heading))
+	var ahead:= pos + dir * (ROOMBA_RADIUS * 2.1)
+	var near_left:= pos.x <= b.position.x + ROOMBA_RADIUS * 1.2
+	var near_right:= pos.x >= b.end.x - ROOMBA_RADIUS * 1.2
+	var near_top:= pos.y <= b.position.y + ROOMBA_RADIUS * 1.2
+	var near_bottom:= pos.y >= b.end.y - ROOMBA_RADIUS * 1.2
+	if b.has_point(ahead) and not near_left and not near_right and not near_top and not near_bottom:
+		return heading
+	var dx:= target.x - pos.x
+	var dz:= target.y - pos.y
+	if (near_left or near_right) and absf(dz) > 0.025:
+		return PI * 0.5 if dz >= 0.0 else - PI * 0.5
+	if (near_top or near_bottom) and absf(dx) > 0.025:
+		return 0.0 if dx >= 0.0 else PI
+
+	if ahead.x < b.position.x or ahead.x > b.end.x:
+		return PI * 0.5 if dz >= 0.0 else - PI * 0.5
+	if ahead.y < b.position.y or ahead.y > b.end.y:
+		return 0.0 if dx >= 0.0 else PI
+	return heading + PI * 0.5
+
+
+func _roomba_place_bounds() -> Rect2:
+	var b:= _grill_place_bounds()
+	var inset:= ROOMBA_RADIUS * 0.8
+	return Rect2(
+		b.position.x + inset, 
+		b.position.y + inset, 
+		maxf(0.05, b.size.x - inset * 2.0), 
+		maxf(0.05, b.size.y - inset * 2.0)
+	)
+
+
+func _roomba_dirty_target(from_xz: Vector2) -> Vector3:
+	var best:= Vector3.INF
+	var best_score:= INF
+	if grill_on_fire:
+		var fire_target:= _roomba_fire_target()
+		if fire_target.is_finite():
+			return fire_target
+	for i in GRILL_SLOTS:
+		if i >= grill_residue.size() or float(grill_residue[i]) <= 0.04:
+			continue
+		var c: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
+		var d:= from_xz.distance_to(Vector2(c.x, c.z))
+		var kind:= str(grill_residue_kind[i]) if i < grill_residue_kind.size() else "patty"
+		var kind_bias:= 0.18 if kind == "cup" else 0.1
+		var score:= d - float(grill_residue[i]) * 0.22 - kind_bias
+		if score < best_score:
+			best_score = score
+			best = c
+	best = _roomba_nearest_mesh_target(oil_slicks, from_xz, best, best_score)
+	if best.is_finite():
+		best_score = from_xz.distance_to(Vector2(best.x, best.z))
+	best = _roomba_nearest_mesh_target(soda_slicks, from_xz, best, best_score)
+	if best.is_finite():
+		best_score = from_xz.distance_to(Vector2(best.x, best.z))
+	best = _roomba_nearest_mesh_target(soda_char_spots, from_xz, best, best_score)
+	if best.is_finite():
+		best_score = from_xz.distance_to(Vector2(best.x, best.z))
+	best = _roomba_nearest_cup_melt_target(from_xz, best, best_score)
+	if best.is_finite():
+		best_score = from_xz.distance_to(Vector2(best.x, best.z))
+	best = _roomba_nearest_spilled_fry_target(from_xz, best, best_score)
+	if best.is_finite():
+		best_score = from_xz.distance_to(Vector2(best.x, best.z))
+	for item in melting_icecreams:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		if not bool(item.get("charred", false)) and not bool(item.get("fired", false)):
+			continue
+		var puddle = item.get("puddle")
+		if puddle == null or not is_instance_valid(puddle):
+			continue
+		var p:= (puddle as Node3D).global_position
+		var d:= from_xz.distance_to(Vector2(p.x, p.z))
+		if d < best_score:
+			best_score = d
+			best = p
+	return best
+
+
+func _roomba_fire_target() -> Vector3:
+	if not grill_on_fire:
+		return Vector3.INF
+	var b:= _oil_fire_bounds()
+	var center: Vector3 = b.get("center", Vector3.INF)
+	if not center.is_finite():
+		return Vector3.INF
+	center.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y
+	return center
+
+
+func _roomba_idle_corner_target() -> Vector3:
+	var b:= _roomba_place_bounds()
+	return Vector3(
+		b.end.x - 0.012, 
+		GRILL_SURFACE_Y + ROOMBA_SIT_Y, 
+		b.position.y + 0.012
+	)
+
+
+func _roomba_nearest_mesh_target(arr: Array, from_xz: Vector2, current: Vector3, current_score: float) -> Vector3:
+	var best:= current
+	var best_score:= current_score
+	for item in arr:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			continue
+		var p: Vector3 = (mesh as Node3D).global_position
+		var d:= from_xz.distance_to(Vector2(p.x, p.z))
+		if d < best_score:
+			best_score = d
+			best = p
+	return best
+
+
+func _roomba_nearest_cup_melt_target(from_xz: Vector2, current: Vector3, current_score: float) -> Vector3:
+	var best:= current
+	var best_score:= current_score
+	for item in melting_cups:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var root:= item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var phase:= str(item.get("phase", ""))
+		if phase == "rescue":
+			continue
+		var p:= root.global_position
+		var d:= from_xz.distance_to(Vector2(p.x, p.z))
+		var score:= d - 0.22
+		if score < best_score:
+			best_score = score
+			best = p
+	return best
+
+
+func _roomba_nearest_spilled_fry_target(from_xz: Vector2, current: Vector3, current_score: float) -> Vector3:
+	var best:= current
+	var best_score:= current_score
+	for item in grill_spilled_fries:
+		if typeof(item) != TYPE_DICTIONARY or bool(item.get("held", false)):
+			continue
+		var root:= item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var p:= root.global_position
+		var d:= from_xz.distance_to(Vector2(p.x, p.z))
+		var score:= d - 0.12
+		if score < best_score:
+			best_score = score
+			best = p
+	return best
+
+
+func _roomba_clean_at(pos: Vector3, move_xz: Vector2, moved: float, delta: float) -> void:
+	for i in GRILL_SLOTS:
+		if i >= grill_residue.size() or float(grill_residue[i]) <= 0.04:
+			continue
+		var center: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
+		var dist:= Vector2(pos.x - center.x, pos.z - center.z).length()
+		if dist > ROOMBA_CLEAN_RADIUS:
+			continue
+		if dist <= ROOMBA_RADIUS * 0.58 and float(grill_residue[i]) <= 0.18:
+			_scrape_finish_clean(i)
+			continue
+		grill_residue[i] = maxf(0.0, float(grill_residue[i]) - delta * ROOMBA_CLEAN_RATE)
+		_refresh_residue_visual(i)
+		if randf() < 0.18:
+			_scrape_residue_hit(i, move_xz)
+			if mp_enabled and not _mp_applying:
+				mp_residue_chip.rpc(i, move_xz.x, move_xz.y, center.x, center.z)
+		if mp_enabled and not _mp_applying and _mp_residue_sync_cool <= 0.0:
+			_mp_residue_sync_cool = 0.12
+			mp_residue_amt.rpc(i, float(grill_residue[i]), center.x, center.z)
+		if float(grill_residue[i]) <= 0.04:
+			_scrape_finish_clean(i)
+	_roomba_clean_liquids_and_debris(pos, move_xz, moved, delta)
+
+
+func _roomba_clean_liquids_and_debris(pos: Vector3, move_xz: Vector2, moved: float, delta: float) -> void:
+	if moved <= 0.0004:
+		return
+	var tight_moved:= minf(moved * 0.55 + delta * 0.014, 0.018)
+	_scrape_slick_array(oil_slicks, pos, move_xz, tight_moved, ROOMBA_CLEAN_RADIUS * 0.42, false)
+	_scrape_slick_array(soda_slicks, pos, move_xz, tight_moved, ROOMBA_CLEAN_RADIUS * 0.42, true)
+	_roomba_clean_soda_char(pos, move_xz, tight_moved)
+	_roomba_clean_melting_cups(pos, move_xz, tight_moved)
+	_scrape_burnt_icecreams(pos, move_xz, tight_moved)
+	_roomba_clean_spilled_fries(pos, move_xz, tight_moved)
+
+
+func _roomba_clean_soda_char(pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	var ci:= 0
+	while ci < soda_char_spots.size():
+		var item: Dictionary = soda_char_spots[ci]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			soda_char_spots.remove_at(ci)
+			continue
+		var d:= Vector2(pos.x - mesh.position.x, pos.z - mesh.position.z).length()
+		if d > ROOMBA_CLEAN_RADIUS:
+			ci += 1
+			continue
+		var scrape:= clampf(float(item.get("roomba_scrape", 1.0)), 0.0, 1.0)
+		scrape -= moved * 7.0
+		item["roomba_scrape"] = scrape
+		mesh.scale = mesh.scale.lerp(Vector3(0.18, 1.0, 0.18), moved * 6.0)
+		if scrape > 0.0:
+			soda_char_spots[ci] = item
+			ci += 1
+			continue
+		var cx:= float(mesh.position.x)
+		var cz:= float(mesh.position.z)
+		mesh.queue_free()
+		soda_char_spots.remove_at(ci)
+		if mp_enabled and not _mp_applying:
+			mp_soda_char_clear.rpc(cx, cz)
+
+
+func _roomba_clean_melting_cups(pos: Vector3, _move_xz: Vector2, moved: float) -> void:
+	var i:= 0
+	while i < melting_cups.size():
+		var item: Dictionary = melting_cups[i]
+		var root:= item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			melting_cups.remove_at(i)
+			continue
+		if str(item.get("phase", "")) == "rescue":
+			i += 1
+			continue
+		var d:= Vector2(pos.x - root.global_position.x, pos.z - root.global_position.z).length()
+		if d > ROOMBA_CLEAN_RADIUS:
+			i += 1
+			continue
+		var scrape:= clampf(float(item.get("roomba_scrape", 1.0)), 0.0, 1.0)
+		scrape -= moved * 5.2
+		item["roomba_scrape"] = scrape
+		root.scale = root.scale.lerp(Vector3(0.28, 0.1, 0.28), moved * 5.0)
+		if scrape > 0.0:
+			melting_cups[i] = item
+			i += 1
+			continue
+		var rp:= root.global_position
+		var smoke = item.get("smoke")
+		if smoke != null and is_instance_valid(smoke):
+			smoke.queue_free()
+		var bubbles = item.get("bubbles")
+		if bubbles != null and is_instance_valid(bubbles):
+			bubbles.queue_free()
+		var crust = item.get("crust_root")
+		if crust != null and is_instance_valid(crust):
+			crust.queue_free()
+		root.queue_free()
+		melting_cups.remove_at(i)
+		_stop_cup_burn_hiss_if_idle()
+		if mp_enabled and not _mp_applying:
+			mp_cup_melt_remove.rpc(int(item.get("cup_net_id", -1)), rp.x, rp.z)
+
+
+func _roomba_clean_spilled_fries(pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	var i:= 0
+	while i < grill_spilled_fries.size():
+		var item: Dictionary = grill_spilled_fries[i]
+		if bool(item.get("held", false)):
+			i += 1
+			continue
+		var root:= item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			grill_spilled_fries.remove_at(i)
+			continue
+		var d:= Vector2(pos.x - root.global_position.x, pos.z - root.global_position.z).length()
+		if d > ROOMBA_CLEAN_RADIUS:
+			i += 1
+			continue
+		var scrape:= clampf(float(item.get("roomba_scrape", 1.0)), 0.0, 1.0)
+		scrape -= moved * 7.5
+		item["roomba_scrape"] = scrape
+		if scrape > 0.0:
+			grill_spilled_fries[i] = item
+			i += 1
+			continue
+		var p:= root.global_position
+		var dir:= move_xz.normalized() if move_xz.length_squared() > 0.0001 else Vector2(1.0, 0.0)
+		root.global_position = p + Vector3(dir.x, 0.025, dir.y) * 0.035
+		root.queue_free()
+		grill_spilled_fries.remove_at(i)
+
+
+func _roomba_spray_fire(pos: Vector3, delta: float) -> void:
+	if not grill_on_fire:
+		return
+	var target:= _roomba_fire_target()
+	if not target.is_finite():
+		return
+	var d:= Vector2(pos.x - target.x, pos.z - target.z).length()
+	if d > ROOMBA_CLEAN_RADIUS * 1.8 and not _is_in_fire_zone(pos):
+		return
+	grill_roomba_foam_cd = maxf(0.0, grill_roomba_foam_cd - delta)
+	if grill_roomba_foam_cd <= 0.0:
+		grill_roomba_foam_cd = 0.1
+		for _i in 2:
+			_spawn_ext_powder_blob(Vector3(
+				lerpf(pos.x, target.x, 0.45) + randf_range(-0.035, 0.035), 
+				GRILL_SURFACE_Y, 
+				lerpf(pos.z, target.z, 0.45) + randf_range(-0.035, 0.035)
+			))
+	if not _fire_killed_by_powder:
+		_fire_killed_by_powder = true
+		_set_fire_fx_emitting(false)
+	fire_health = maxf(0.0, fire_health - delta * 0.42)
+	if fire_health <= 0.0:
+		_extinguish_grill_fire()
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_roomba_pose(x: float, y: float, z: float, yaw: float, bump: float = 0.0) -> void:
+	if NetManager.is_host():
+		return
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	grill_roomba_root.visible = _owns_grill_roomba()
+	grill_roomba_root.global_position = grill_roomba_root.global_position.lerp(Vector3(x, y, z), 0.32)
+	var smooth_yaw:= lerp_angle(deg_to_rad(grill_roomba_root.rotation_degrees.y), deg_to_rad(yaw), 0.18)
+	grill_roomba_root.rotation_degrees.y = rad_to_deg(smooth_yaw)
+	grill_roomba_vel = Vector2(cos(deg_to_rad(yaw - 180.0)), sin(deg_to_rad(yaw - 180.0))) * ROOMBA_SPEED
+	grill_roomba_bump_t = maxf(grill_roomba_bump_t, bump)
 
 
 func _build_heat_warp_plane(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
@@ -11154,6 +11977,10 @@ func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float, zone_w
 	mat.roughness = roughness
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	## Patty reflections are a deliberate transparent overlay on top of this
+	## cooker surface. Do not let the grill panels fill the depth buffer and
+	## hide that fake copy before the transparent pass draws.
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.emission_enabled = emit > 0.01
 	mat.emission = Color(1.0, 0.45, 0.12).lerp(albedo, 0.35)
 	mat.emission_energy_multiplier = emit * 1.15
@@ -13058,12 +13885,13 @@ func _make_fries_sparkle_mat() -> StandardMaterial3D:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.92)
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.95)
 	mat.emission_enabled = true
 	mat.emission = Color(1.0, 1.0, 0.95)
-	mat.emission_energy_multiplier = 1.35
+	mat.emission_energy_multiplier = 1.5
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.render_priority = 12
+	mat.no_depth_test = true
+	mat.render_priority = 15
 	return mat
 
 
@@ -13083,6 +13911,8 @@ func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
 	holder = Node3D.new()
 	holder.name = "FriesSaltSparkles"
 	attach.add_child(holder)
+	var pack_mat := _make_fries_sparkle_mat()
+	holder.set_meta("pack_mat", pack_mat)
 	var aabb := _mesh_aabb_in_node_space(attach)
 	var cx := aabb.position.x + aabb.size.x * 0.5
 	var cy := aabb.position.y + aabb.size.y * 0.88
@@ -13093,11 +13923,12 @@ func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
 		var bit := MeshInstance3D.new()
 		bit.name = "FriesSparkle_%02d" % i
 		bit.mesh = sparkle_mesh
-		bit.material_override = _make_fries_sparkle_mat()
+		bit.material_override = pack_mat
 		bit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		bit.sorting_offset = 12.0
 		var ang := float(i) * 2.399963
 		var rad := 0.010 + fposmod(float(i) * 0.17, 1.0) * maxf(aabb.size.x, aabb.size.z) * 0.28
-		var y_off := -0.006 + fposmod(float(i) * 0.29, 1.0) * 0.028
+		var y_off := -0.004 + fposmod(float(i) * 0.29, 1.0) * 0.028
 		bit.position = Vector3(
 			cx + cos(ang) * rad,
 			cy + y_off,
@@ -13120,6 +13951,9 @@ func _update_fries_pack_sparkles(pack: Node3D, motion: float) -> void:
 	if holder == null:
 		return
 	var drive := clampf(motion, 0.0, 1.0)
+	var pack_mat := holder.get_meta("pack_mat", null) as StandardMaterial3D
+	var blink_sum := 0.0
+	var count := 0
 	for child in holder.get_children():
 		var bit := child as MeshInstance3D
 		if bit == null or not is_instance_valid(bit):
@@ -13127,15 +13961,17 @@ func _update_fries_pack_sparkles(pack: Node3D, motion: float) -> void:
 		var phase := float(bit.get_meta("spark_phase", 0.0))
 		## Always visible salt; motion just brightens / twinkles.
 		var blink := 0.55 + 0.45 * sin(_fries_sparkle_phase * (3.1 + phase * 0.07) + phase)
+		blink_sum += blink
+		count += 1
 		bit.visible = true
 		var size := float(bit.get_meta("spark_size", 0.01)) \
 			* lerpf(0.9, 1.35, blink) \
 			* lerpf(1.0, 1.3, drive)
 		bit.scale = Vector3.ONE * size
-		var mat := bit.material_override as StandardMaterial3D
-		if mat != null:
-			mat.albedo_color = Color(1.0, 1.0, 1.0, lerpf(0.75, 1.0, blink))
-			mat.emission_energy_multiplier = lerpf(0.9, 1.8, blink) * lerpf(1.0, 1.35, drive)
+	if pack_mat != null and count > 0:
+		var avg_blink := blink_sum / float(count)
+		pack_mat.albedo_color = Color(1.0, 1.0, 1.0, lerpf(0.80, 1.0, avg_blink))
+		pack_mat.emission_energy_multiplier = lerpf(1.2, 2.2, avg_blink) * lerpf(1.0, 1.4, drive)
 
 
 func _paint_fries_pack_meshes(model: Node3D) -> void:
@@ -22378,6 +23214,8 @@ func _shop_item_cost(id: String) -> float:
 			return SHOP_ICECREAM_MACHINE_COST
 		SHOP_FRYER_MACHINE:
 			return SHOP_FRYER_MACHINE_COST
+		SHOP_GRILL_ROOMBA:
+			return SHOP_GRILL_ROOMBA_COST
 		SHOP_FRIDGE_UPGRADE:
 			return SHOP_FRIDGE_UPGRADE_COST
 		_:
@@ -22392,6 +23230,8 @@ func _shop_item_label(id: String) -> String:
 			return "Ice Cream Machine"
 		SHOP_FRYER_MACHINE:
 			return "French Fryer"
+		SHOP_GRILL_ROOMBA:
+			return "Grill Roomba"
 		SHOP_FRIDGE_UPGRADE:
 			return "Bigger Fridge"
 		_:
@@ -22406,6 +23246,8 @@ func _shop_item_note(id: String) -> String:
 			return "Unlocks ice cream orders"
 		SHOP_FRYER_MACHINE:
 			return "Unlocks fries orders"
+		SHOP_GRILL_ROOMBA:
+			return "Auto-cleans dirty grill spots"
 		SHOP_FRIDGE_UPGRADE:
 			return "Doubles storage"
 		_:
@@ -22429,6 +23271,10 @@ func _owns_fryer_machine() -> bool:
 	return bool(owned_machines.get(SHOP_FRYER_MACHINE, false))
 
 
+func _owns_grill_roomba() -> bool:
+	return bool(owned_machines.get(SHOP_GRILL_ROOMBA, false))
+
+
 func _owns_fridge_upgrade() -> bool:
 	return bool(owned_machines.get(SHOP_FRIDGE_UPGRADE, false))
 
@@ -22441,10 +23287,12 @@ func _reset_shop_unlocks() -> void:
 	owned_machines[SHOP_SODA_MACHINE] = false
 	owned_machines[SHOP_ICECREAM_MACHINE] = false
 	owned_machines[SHOP_FRYER_MACHINE] = false
+	owned_machines[SHOP_GRILL_ROOMBA] = false
 	owned_machines[SHOP_FRIDGE_UPGRADE] = false
 	_clear_all_drink_cups()
 	_reset_icecream_cone_to_home()
 	_reset_fryer_state(true)
+	_reset_grill_roomba()
 	_apply_machine_unlock_visibility()
 
 
@@ -22465,6 +23313,10 @@ func _apply_machine_unlock_visibility() -> void:
 	if fryer_root != null and is_instance_valid(fryer_root):
 		fryer_root.visible = fryer_on
 		fryer_root.process_mode = Node.PROCESS_MODE_INHERIT if fryer_on else Node.PROCESS_MODE_DISABLED
+	var roomba_on := _owns_grill_roomba()
+	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+		grill_roomba_root.visible = roomba_on
+		grill_roomba_root.process_mode = Node.PROCESS_MODE_INHERIT if roomba_on else Node.PROCESS_MODE_DISABLED
 
 
 func _add_phone_shop_section(parent: VBoxContainer) -> void:
@@ -22485,7 +23337,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	v.add_child(title)
 
-	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE]:
+	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE]:
 		_add_phone_shop_item(v, id)
 
 
@@ -22545,7 +23397,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 func _buy_shop_item(id: String) -> void:
 	if not playing:
 		return
-	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE].has(id):
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE].has(id):
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
@@ -22569,7 +23421,7 @@ func _buy_shop_item(id: String) -> void:
 func _buy_shop_item_local(id: String) -> void:
 	if not playing:
 		return
-	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE].has(id):
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE].has(id):
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
@@ -24721,6 +25573,12 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "heat_warp_strength", "Warp Strength", 0.0, 0.03, 0.0005)
 	_gfx_add_slider(list, "heat_warp_tight", "Warp Tightness", 0.5, 2.2, 0.05)
 
+	_gfx_add_section(list, "PATTY REFLECTION")
+	_gfx_add_slider(list, "patty_reflect_y", "Reflect Height", -0.08, 0.08, 0.001)
+	_gfx_add_slider(list, "patty_reflect_opacity", "Reflect Opacity", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "patty_reflect_fade_height", "Reflect Fade Height", 0.002, 0.12, 0.001)
+	_gfx_add_slider(list, "patty_reflect_fade_opacity", "Reflect Bottom Fade", 0.0, 1.0, 0.01)
+
 	_gfx_add_section(list, "WINDOW BG")
 	_gfx_add_slider(list, "bg_y", "BG Height", 0.2, 4.5, 0.02)
 	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
@@ -25570,6 +26428,32 @@ func _apply_burner_strip_settings(s: Dictionary) -> void:
 		sl.light_size = size
 
 
+func _apply_patty_reflection_settings(s: Dictionary) -> void:
+	patty_reflection_height_offset = float(s.get("patty_reflect_y", GFX_DEFAULTS["patty_reflect_y"]))
+	patty_reflection_opacity = float(s.get("patty_reflect_opacity", GFX_DEFAULTS["patty_reflect_opacity"]))
+	patty_reflection_fade_height = float(s.get("patty_reflect_fade_height", GFX_DEFAULTS["patty_reflect_fade_height"]))
+	patty_reflection_fade_opacity = float(s.get("patty_reflect_fade_opacity", GFX_DEFAULTS["patty_reflect_fade_opacity"]))
+	for p in grill:
+		_apply_patty_reflection_to_patty(p)
+	for p in _patty_spawn_pool:
+		_apply_patty_reflection_to_patty(p)
+	if patties_root != null and is_instance_valid(patties_root):
+		for child in patties_root.get_children():
+			_apply_patty_reflection_to_patty(child)
+
+
+func _apply_patty_reflection_to_patty(p) -> void:
+	if p == null or not is_instance_valid(p):
+		return
+	if p.has_method("set_grill_reflection_tuning"):
+		p.set_grill_reflection_tuning(
+			patty_reflection_height_offset,
+			patty_reflection_opacity,
+			patty_reflection_fade_height,
+			patty_reflection_fade_opacity
+		)
+
+
 func _apply_graphics_settings(s: Dictionary) -> void:
 	if gfx_env != null:
 		gfx_env.glow_enabled = bool(s.get("glow_on", true))
@@ -25595,6 +26479,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
 	_apply_heat_warp_settings(s)
+	_apply_patty_reflection_settings(s)
 	_apply_street_matte_settings(s)
 	_apply_first_sale_decal_settings(s)
 	_apply_menu_board_decal_settings(s)
@@ -26018,6 +26903,17 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_title_y", GFX_DEFAULTS["bz_title_y"])
 		cfg.set_value("gfx", "bz_title_x", GFX_DEFAULTS["bz_title_x"])
 		cfg.set_value("gfx", "gfx_bz_title_nudge_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Tuned patty reflection from in-game GFX: visible over cooker, soft under patty.
+	if not cfg.has_section_key("gfx", "gfx_patty_reflect_v1"):
+		for key in [
+			"patty_reflect_y",
+			"patty_reflect_opacity",
+			"patty_reflect_fade_height",
+			"patty_reflect_fade_opacity",
+		]:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "gfx_patty_reflect_v1", true)
 		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
@@ -34887,7 +35783,13 @@ func _mp_broadcast_economy() -> void:
 	for fid in SODA_FLAVORS:
 		tank_ids.append(str(fid))
 		tank_vals.append(float(soda_tank_fill.get(fid, 1.0)))
-	var shop_ids: Array = [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_FRIDGE_UPGRADE]
+	var shop_ids: Array = [
+		SHOP_SODA_MACHINE,
+		SHOP_ICECREAM_MACHINE,
+		SHOP_FRYER_MACHINE,
+		SHOP_GRILL_ROOMBA,
+		SHOP_FRIDGE_UPGRADE,
+	]
 	var shop_vals: Array = []
 	for sid in shop_ids:
 		shop_vals.append(bool(owned_machines.get(str(sid), false)))

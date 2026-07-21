@@ -70,6 +70,9 @@ var _sz_sample_i := 0
 var _slide_player: AudioStreamPlayer
 var _slide_gain: float = 0.0
 var _slide_target: float = 0.0
+var _roomba_drive_player: AudioStreamPlayer
+var _roomba_drive_gain: float = 0.0
+var _roomba_drive_target: float = 0.0
 ## Hot oil on a lit grill — loud fry burst, then a soft 2s die-out.
 var _hot_oil_full_left: float = 0.0
 var _hot_oil_fade_left: float = 0.0
@@ -201,6 +204,12 @@ func _ready() -> void:
 	_slide_player.stream = _make_slide_scrape()
 	_slide_player.volume_db = -80.0
 	add_child(_slide_player)
+	_roomba_drive_player = AudioStreamPlayer.new()
+	_roomba_drive_player.name = "RoombaDrive"
+	_roomba_drive_player.bus = "Master"
+	_roomba_drive_player.stream = _make_roomba_drive()
+	_roomba_drive_player.volume_db = -80.0
+	add_child(_roomba_drive_player)
 	set_process(true)
 
 
@@ -218,6 +227,17 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
+	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
+	if _roomba_drive_player:
+		if _roomba_drive_gain > 0.01:
+			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.23, 0.01, 0.8))
+			_roomba_drive_player.pitch_scale = 0.95 + _roomba_drive_gain * 0.32
+			if not _roomba_drive_player.playing:
+				_roomba_drive_player.play()
+		elif _roomba_drive_player.playing:
+			_roomba_drive_player.stop()
+			_roomba_drive_player.volume_db = -80.0
+			_roomba_drive_player.pitch_scale = 1.0
 	## Hot oil on lit steel — loud fry for the full window, then a 2s die-out.
 	var oil_active := _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0
 	var oil_fade_t := 1.0 ## 1 = full blast, 0 = silent
@@ -435,7 +455,7 @@ func set_fries_shake(active: bool, intensity: float = 1.0) -> void:
 	_fries_shake_intensity = clampf(intensity, 0.0, 1.0)
 	if active and _fries_shake_intensity > 0.05:
 		_fries_shake_on = true
-		_fries_shake_player.volume_db = lerpf(-34.0, -22.0, _fries_shake_intensity)
+		_fries_shake_player.volume_db = lerpf(-40.0, -28.0, _fries_shake_intensity)
 		if not _fries_shake_player.playing:
 			_fries_shake_player.play()
 	else:
@@ -596,7 +616,7 @@ func _next_shaker_rattle_sample() -> float:
 func _next_fries_shake_sample() -> float:
 	## Soft paper-cup rustle + tiny crystal ticks while the pack is whipped.
 	_fries_shake_tick += 1.0 / float(MIX_RATE)
-	var shake_hz := 6.4 + sin(_fries_shake_tick * 2.6) * 1.15
+	var shake_hz := 4.2 + sin(_fries_shake_tick * 2.0) * 0.65
 	_fries_shake_phase += shake_hz / float(MIX_RATE)
 	var pulse := maxf(0.0, sin(_fries_shake_phase * TAU))
 	pulse = pow(pulse, 0.38)
@@ -604,10 +624,10 @@ func _next_fries_shake_sample() -> float:
 	_fries_shake_lp = _fries_shake_lp * 0.68 + white * 0.32
 	var paper := (white - _fries_shake_lp) * 0.42 + _fries_shake_lp * 0.06
 	var crystal := 0.0
-	if pulse > 0.82 and randf() < 0.045 * lerpf(0.55, 1.0, _fries_shake_intensity):
-		crystal = (randf() * 2.0 - 1.0) * 0.16
-	var gain := lerpf(0.55, 1.0, _fries_shake_intensity)
-	return clampf((paper * 0.20 + crystal) * pulse * gain, -1.0, 1.0)
+	if pulse > 0.86 and randf() < 0.026 * lerpf(0.45, 0.9, _fries_shake_intensity):
+		crystal = (randf() * 2.0 - 1.0) * 0.09
+	var gain := lerpf(0.38, 0.74, _fries_shake_intensity)
+	return clampf((paper * 0.15 + crystal) * pulse * gain, -1.0, 1.0)
 
 
 func _next_ext_spray_sample() -> float:
@@ -811,6 +831,8 @@ func play_cat_purr() -> void:
 const WAWA_PATH := "res://sounds/wawawa.ogg"
 const GROBBLE_CLIP_SEC := 3.0
 const GROBBLE_FADE_IN_SEC := 0.3
+var _roomba_wawawa_player: AudioStreamPlayer = null
+var _roomba_wawawa_on: bool = false
 const GROBBLE_PITCH := 1.293 ## prior 1.22 × +6%
 
 func play_customer_grobble(impatience: float = 0.5) -> void:
@@ -853,6 +875,66 @@ func play_customer_grobble(impatience: float = 0.5) -> void:
 
 func play_gunshot() -> void:
 	_play_cached("gunshot_%d" % (randi() % 4), _make_gunshot, 0.92 + randf() * 0.16, 1.15)
+
+
+func set_roomba_wawawa(active: bool) -> void:
+	_roomba_wawawa_on = active
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if _roomba_wawawa_player == null:
+		var loaded: AudioStream = load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_roomba_wawawa_player = AudioStreamPlayer.new()
+		_roomba_wawawa_player.name = "RoombaWawawa"
+		_roomba_wawawa_player.bus = "Master"
+		_roomba_wawawa_player.stream = loaded
+		add_child(_roomba_wawawa_player)
+		_roomba_wawawa_player.finished.connect(func():
+			if _roomba_wawawa_on and _roomba_wawawa_player != null and is_instance_valid(_roomba_wawawa_player):
+				_roomba_wawawa_player.play(0.0)
+		)
+	_roomba_wawawa_player.pitch_scale = 1.78
+	_roomba_wawawa_player.volume_db = 2.5
+	if active:
+		if not _roomba_wawawa_player.playing:
+			_roomba_wawawa_player.play(0.0)
+	else:
+		if _roomba_wawawa_player.playing:
+			_roomba_wawawa_player.stop()
+
+
+func play_roomba_wawa_chirp() -> void:
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if not _cache.has("roomba_wawa_chirp"):
+		var loaded: AudioStream = load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_cache["roomba_wawa_chirp"] = loaded
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache["roomba_wawa_chirp"]
+	p.pitch_scale = 1.85 + randf() * 0.18
+	p.volume_db = linear_to_db(0.72)
+	p.play(randf_range(0.0, 0.65))
+	var tree := get_tree()
+	if tree != null:
+		tree.create_timer(0.28 + randf() * 0.18).timeout.connect(func():
+			if p != null and is_instance_valid(p):
+				p.stop()
+		)
+
+
+func play_roomba_done_beep() -> void:
+	_play_cached("roomba_done_beep", _make_roomba_done_beep, 1.0, 0.86)
+
+
+func set_roomba_drive(moving: bool, speed: float = 0.0) -> void:
+	if moving:
+		_roomba_drive_target = clampf(0.18 + speed * 2.2, 0.18, 0.7)
+	else:
+		_roomba_drive_target = 0.0
 
 
 const COMBAT_THEME_PATH := "res://assets/music/double_agent.mp3"
@@ -1140,6 +1222,22 @@ func _make_click() -> AudioStreamWAV:
 		var env := exp(-t * 70.0)
 		var wave := sin(t * 1800.0 * TAU) * 0.55 + (randf() * 2.0 - 1.0) * 0.15
 		_write_s16(pcm, i, int(wave * env * 16000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_roomba_done_beep() -> AudioStreamWAV:
+	var n := int(MIX_RATE * 0.24)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var note_a := clampf(t / 0.008, 0.0, 1.0) * exp(-t * 16.0)
+		var t2 := maxf(0.0, t - 0.092)
+		var note_b := clampf(t2 / 0.006, 0.0, 1.0) * exp(-t2 * 20.0)
+		var wave := sin(t * 1320.0 * TAU) * note_a * 0.72
+		wave += sin(t2 * 1760.0 * TAU) * note_b * 0.62
+		wave += sin(t * 2640.0 * TAU) * note_a * 0.10
+		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 13500.0))
 	return _wav_from_pcm(pcm, false)
 
 
@@ -1487,6 +1585,30 @@ func _make_slide_scrape() -> AudioStreamWAV:
 		elif t > 0.28 - fade:
 			edge = (0.28 - t) / fade
 		_write_s16(pcm, i, int(clampf(sample * edge, -1.0, 1.0) * 10000.0))
+	return _wav_from_pcm(pcm, true)
+
+
+func _make_roomba_drive() -> AudioStreamWAV:
+	var n := int(MIX_RATE * 0.34)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	var phase := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.88 + white * 0.12
+		phase += (55.0 + sin(t * TAU * 3.0) * 5.0) / float(MIX_RATE)
+		var motor := sin(phase * TAU) * 0.24 + sin(phase * TAU * 2.0) * 0.08
+		var tick := sin(t * TAU * 18.0) * 0.025
+		var sample := motor + lp * 0.16 + tick
+		var edge := 1.0
+		var fade := 0.018
+		if t < fade:
+			edge = t / fade
+		elif t > 0.34 - fade:
+			edge = (0.34 - t) / fade
+		_write_s16(pcm, i, int(clampf(sample * edge, -1.0, 1.0) * 10500.0))
 	return _wav_from_pcm(pcm, true)
 
 

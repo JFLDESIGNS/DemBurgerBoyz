@@ -65,6 +65,18 @@ var _sear_disc: MeshInstance3D
 var _sear_mat: StandardMaterial3D
 var _meat_top: MeshInstance3D
 var _meat_top_mat: StandardMaterial3D
+var _reflection_root: Node3D = null
+var _reflection_side: MeshInstance3D = null
+var _reflection_top: MeshInstance3D = null
+var _reflection_sear: MeshInstance3D = null
+var _reflection_side_mat: ShaderMaterial = null
+var _reflection_top_mat: StandardMaterial3D = null
+var _reflection_sear_mat: StandardMaterial3D = null
+var _reflection_allowed: bool = true
+var _reflection_height_offset: float = 0.0
+var _reflection_alpha: float = REFLECTION_ALPHA
+var _reflection_fade_height: float = REFLECTION_HEIGHT
+var _reflection_fade_opacity: float = 0.0
 var _hint: Label3D
 var _hint_mode: String = "" ## "", cooking, flip, scoop, hold
 var _hint_age: float = 0.0
@@ -126,6 +138,32 @@ const BUBBLE_LEAD := 4.0 ## top grease bubbles start this many seconds before fl
 const HINT_SCALE_FOCUS := 1.0 ## Former "small" size — max when hovered.
 const HINT_SCALE_DIM := 0.55 ## Shrink when the cursor isn't on this patty.
 const HINT_SCALE_COOKING := 0.38 ## Status-only (COOKING…) stays quieter than flip/scoop.
+const REFLECTION_ALPHA := 0.40
+const REFLECTION_SURFACE_LOCAL_Y := 0.001
+const REFLECTION_HEIGHT := 0.045
+const REFLECTION_PRIORITY := 7
+const PATTY_BODY_PRIORITY := 20
+const PATTY_OVERLAY_PRIORITY := PATTY_BODY_PRIORITY + 8
+const REFLECTION_SHADER_CODE := """
+shader_type spatial;
+render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, unshaded;
+
+uniform vec4 tint : source_color = vec4(0.45, 0.2, 0.14, 0.4);
+uniform float min_y = -0.0225;
+uniform float max_y = 0.0225;
+uniform float fade_opacity = 0.0;
+varying float local_y;
+
+void vertex() {
+	local_y = VERTEX.y;
+}
+
+void fragment() {
+	float h = clamp((local_y - min_y) / max(max_y - min_y, 0.0001), 0.0, 1.0);
+	ALBEDO = tint.rgb;
+	ALPHA = tint.a * mix(1.0, fade_opacity, h);
+}
+"""
 
 
 func _ready() -> void:
@@ -159,6 +197,7 @@ func _ready() -> void:
 	## Unshaded + vertical cook gradient (bottom sears first, top stays raw/frosty).
 	_mat = StandardMaterial3D.new()
 	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	_mat.metallic = 0.0
 	_mat.roughness = 1.0
@@ -168,6 +207,8 @@ func _ready() -> void:
 	_mat.albedo_color = Color.WHITE
 	_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	_mat.emission_enabled = false
+	_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_mat.render_priority = PATTY_BODY_PRIORITY
 	_mesh.material_override = _mat
 	add_child(_mesh)
 
@@ -177,9 +218,11 @@ func _ready() -> void:
 	_meat_top.position = Vector3(0, 0.0232, 0)
 	_meat_top_mat = StandardMaterial3D.new()
 	_meat_top_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_meat_top_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_meat_top_mat.albedo_color = Color(0.78, 0.38, 0.40)
 	_meat_top_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_meat_top_mat.render_priority = 0
+	_meat_top_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_meat_top_mat.render_priority = PATTY_BODY_PRIORITY + 1
 	_meat_top.material_override = _meat_top_mat
 	_mesh.add_child(_meat_top)
 
@@ -193,7 +236,10 @@ func _ready() -> void:
 	under.position = Vector3(0, -0.018, 0)
 	_under_mat = StandardMaterial3D.new()
 	_under_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_under_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_under_mat.albedo_color = Color(0.35, 0.12, 0.14)
+	_under_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_under_mat.render_priority = PATTY_BODY_PRIORITY
 	under.material_override = _under_mat
 	_mesh.add_child(under)
 
@@ -209,12 +255,14 @@ func _ready() -> void:
 	_sear_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_sear_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	_sear_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_sear_mat.render_priority = 3
+	_sear_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_sear_mat.render_priority = PATTY_BODY_PRIORITY + 2
 	_sear_mat.albedo_texture = _make_sear_spot_texture()
 	_sear_mat.albedo_color = Color(1, 1, 1, 0.0)
 	_sear_disc.material_override = _sear_mat
 	_sear_disc.rotation_degrees.y = randf() * 360.0
 	_mesh.add_child(_sear_disc)
+	_build_reflection_visual()
 
 	## Icy shell on the sides — tube only (no caps) so top face never gets polar UVs.
 	var frost_tex := _make_frost_texture(randi())
@@ -232,7 +280,8 @@ func _ready() -> void:
 	_frost_mat.albedo_color = Color(1, 1, 1, 1)
 	_frost_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	_frost_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_frost_mat.render_priority = 1
+	_frost_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_frost_mat.render_priority = PATTY_BODY_PRIORITY + 3
 	_frost.material_override = _frost_mat
 	_frost.scale = Vector3(1.0, 1.0, 1.0)
 	_frost.rotation_degrees.y = randf() * 360.0
@@ -247,7 +296,8 @@ func _ready() -> void:
 	_frost_haze_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_frost_haze_mat.albedo_color = Color(0.92, 0.95, 1.0, 0.105)
 	_frost_haze_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_frost_haze_mat.render_priority = 1
+	_frost_haze_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_frost_haze_mat.render_priority = PATTY_BODY_PRIORITY + 3
 	_frost_haze.material_override = _frost_haze_mat
 	_mesh.add_child(_frost_haze)
 
@@ -264,7 +314,8 @@ func _ready() -> void:
 	_frost_top_mat.uv1_scale = Vector3(1.1 + randf() * 0.6, 1.1 + randf() * 0.6, 1.0)
 	_frost_top_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	_frost_top_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_frost_top_mat.render_priority = 2
+	_frost_top_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_frost_top_mat.render_priority = PATTY_BODY_PRIORITY + 4
 	_frost_top.material_override = _frost_top_mat
 	_frost_top.rotation_degrees.y = randf() * 360.0
 	_mesh.add_child(_frost_top)
@@ -289,6 +340,8 @@ func _ready() -> void:
 		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fmat.albedo_color = Color(0.92 + randf() * 0.08, 0.96 + randf() * 0.04, 1.0, 0.14 + randf() * 0.14)
+		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		fmat.render_priority = PATTY_BODY_PRIORITY + 5
 		fleck.material_override = fmat
 		_frost_top.add_child(fleck)
 
@@ -307,6 +360,124 @@ func _ready() -> void:
 	_setup_cook_fx()
 	_update_cook_gradient()
 	_update_frost_visual()
+
+
+func _build_reflection_visual() -> void:
+	if _reflection_root != null and is_instance_valid(_reflection_root):
+		return
+	_reflection_root = Node3D.new()
+	_reflection_root.name = "PattyReflection"
+	_reflection_root.position = Vector3(0.0, REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset, 0.0)
+	_reflection_root.scale = Vector3(1.08, -0.82, 1.08)
+	add_child(_reflection_root)
+
+	var sh := Shader.new()
+	sh.code = REFLECTION_SHADER_CODE
+	_reflection_side_mat = ShaderMaterial.new()
+	_reflection_side_mat.shader = sh
+	_reflection_side_mat.render_priority = REFLECTION_PRIORITY
+	_reflection_side_mat.set_shader_parameter("min_y", -_reflection_fade_height * 0.5)
+	_reflection_side_mat.set_shader_parameter("max_y", _reflection_fade_height * 0.5)
+	_reflection_side_mat.set_shader_parameter("fade_opacity", _reflection_fade_opacity)
+
+	_reflection_side = MeshInstance3D.new()
+	_reflection_side.name = "ReflectedPattySide"
+	var disk := CylinderMesh.new()
+	disk.top_radius = 0.105
+	disk.bottom_radius = 0.11
+	disk.height = REFLECTION_HEIGHT
+	disk.radial_segments = 28
+	_reflection_side.mesh = disk
+	_reflection_side.material_override = _reflection_side_mat
+	_reflection_side.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reflection_side.sorting_offset = 1.0
+	_reflection_root.add_child(_reflection_side)
+
+	_reflection_top = MeshInstance3D.new()
+	_reflection_top.name = "ReflectedPattyTop"
+	_reflection_top.mesh = _make_planar_disc_mesh(0.106, 28)
+	_reflection_top.position.y = REFLECTION_HEIGHT * 0.505
+	_reflection_top_mat = StandardMaterial3D.new()
+	_reflection_top_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_reflection_top_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_reflection_top_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_reflection_top_mat.no_depth_test = true
+	_reflection_top_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_reflection_top_mat.render_priority = REFLECTION_PRIORITY
+	_reflection_top.material_override = _reflection_top_mat
+	_reflection_top.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reflection_top.sorting_offset = 1.0
+	_reflection_root.add_child(_reflection_top)
+
+	_reflection_sear = MeshInstance3D.new()
+	_reflection_sear.name = "ReflectedSear"
+	_reflection_sear.mesh = _make_planar_disc_mesh(0.107, 28)
+	_reflection_sear.position.y = REFLECTION_HEIGHT * 0.52
+	_reflection_sear.rotation_degrees.y = _sear_disc.rotation_degrees.y if _sear_disc != null else 0.0
+	_reflection_sear_mat = StandardMaterial3D.new()
+	_reflection_sear_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_reflection_sear_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_reflection_sear_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	_reflection_sear_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_reflection_sear_mat.no_depth_test = true
+	_reflection_sear_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_reflection_sear_mat.render_priority = REFLECTION_PRIORITY + 1
+	if _sear_mat != null:
+		_reflection_sear_mat.albedo_texture = _sear_mat.albedo_texture
+	_reflection_sear.material_override = _reflection_sear_mat
+	_reflection_sear.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reflection_sear.sorting_offset = 1.1
+	_reflection_root.add_child(_reflection_sear)
+	_update_reflection_visual()
+
+
+func set_grill_reflection_enabled(enabled: bool) -> void:
+	_reflection_allowed = enabled
+	_update_reflection_visual()
+
+
+func set_grill_reflection_height_offset(offset: float) -> void:
+	_reflection_height_offset = offset
+	if _reflection_root != null and is_instance_valid(_reflection_root):
+		_reflection_root.position.y = REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset
+	_update_reflection_visual()
+
+
+func set_grill_reflection_tuning(offset: float, alpha: float, fade_height: float, fade_opacity: float) -> void:
+	_reflection_height_offset = offset
+	_reflection_alpha = clampf(alpha, 0.0, 1.0)
+	_reflection_fade_height = clampf(fade_height, 0.002, 0.12)
+	_reflection_fade_opacity = clampf(fade_opacity, 0.0, 1.0)
+	if _reflection_root != null and is_instance_valid(_reflection_root):
+		_reflection_root.position.y = REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset
+	if _reflection_side_mat != null:
+		_reflection_side_mat.set_shader_parameter("min_y", -_reflection_fade_height * 0.5)
+		_reflection_side_mat.set_shader_parameter("max_y", _reflection_fade_height * 0.5)
+		_reflection_side_mat.set_shader_parameter("fade_opacity", _reflection_fade_opacity)
+	_update_reflection_visual()
+
+
+func _update_reflection_visual() -> void:
+	if _reflection_root == null or not is_instance_valid(_reflection_root):
+		return
+	var resting := _reflection_allowed and visible and not is_held and slot_index >= 0 and absf(position.y - base_y) <= 0.08
+	_reflection_root.visible = resting
+	if not resting:
+		return
+	var side_col := color_at_cook_time(cook_time)
+	if flipped_once:
+		side_col = color_at_cook_time(maxf(first_side_time - HEAT_LAG * 0.5, cook_time - HEAT_LAG * 0.5))
+	side_col = side_col.darkened(0.18)
+	if _reflection_side_mat != null:
+		_reflection_side_mat.set_shader_parameter("tint", Color(side_col.r, side_col.g, side_col.b, _reflection_alpha))
+	if _reflection_top_mat != null:
+		var top_col := get_patty_color().darkened(0.1)
+		_reflection_top_mat.albedo_color = Color(top_col.r, top_col.g, top_col.b, _reflection_alpha * 0.42)
+	if _reflection_sear != null:
+		_reflection_sear.visible = flipped_once
+	if _reflection_sear_mat != null:
+		var cook_w := clampf((first_side_time - 10.0) / 14.0, 0.4, 1.0)
+		_reflection_sear_mat.albedo_color = Color(1, 1, 1, _reflection_alpha * 0.36 * cook_w)
 
 
 func reset_for_grill_spawn(
@@ -382,6 +553,9 @@ func reset_for_grill_spawn(
 	_update_meat_top()
 	if _under_mat:
 		_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+	if _reflection_root != null and is_instance_valid(_reflection_root):
+		_reflection_root.position.y = REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset
+	_update_reflection_visual()
 
 
 func _setup_cook_fx() -> void:
@@ -626,6 +800,7 @@ func refresh_cook_visuals() -> void:
 	if has_cheese:
 		_update_cheese_visual()
 	_update_ready_cues()
+	_update_reflection_visual()
 
 
 func apply_mp_state(
@@ -684,6 +859,7 @@ func apply_mp_state(
 	if warm_hold_time > 0.0 or heat_mul <= 0.001:
 		_set_hold_meter_visible(flipped_once and can_scoop())
 		_refresh_hold_meter()
+	_update_reflection_visual()
 
 
 func _process(delta: float) -> void:
@@ -721,6 +897,7 @@ func _process(delta: float) -> void:
 		if _hint:
 			_hint.visible = false
 		_set_hold_meter_visible(false)
+		_update_reflection_visual()
 		return
 	if heating and not mp_puppet:
 		var rate := (1.0 + smash_bonus) * heat_mul
@@ -733,6 +910,7 @@ func _process(delta: float) -> void:
 	_update_frost_visual()
 	_update_sear_disc()
 	_update_meat_top()
+	_update_reflection_visual()
 	if _under_mat:
 		## Face on the grill: raw underside after flip, seared contact before.
 		if flipped_once:
@@ -751,6 +929,7 @@ func _process(delta: float) -> void:
 		if _hint:
 			_hint.visible = false
 		_set_hold_meter_visible(false)
+		_update_reflection_visual()
 		return
 
 	if can_flip():
@@ -849,7 +1028,7 @@ func _ensure_hold_meter() -> void:
 	_hold_meter_mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
 	_hold_meter_mat.no_depth_test = true
 	_hold_meter_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_hold_meter_mat.render_priority = 18
+	_hold_meter_mat.render_priority = PATTY_OVERLAY_PRIORITY
 	_hold_meter.material_override = _hold_meter_mat
 	_hold_meter.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_hold_meter.visible = false
@@ -1622,7 +1801,9 @@ func _ensure_flip_smoke() -> void:
 			mi.material_override = mat
 			mi.ignore_occlusion_culling = true
 			mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-			mi.render_priority = 8
+			mi.sorting_offset = 8.0
+			if mat != null:
+				mat.render_priority = 8
 			mi.set_instance_shader_parameter("opacity_mul", 0.0)
 		for child in node.get_children():
 			stack.append(child)
@@ -1774,10 +1955,15 @@ func _spawn_season_fleck() -> void:
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fmat.no_depth_test = true
+	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fmat.render_priority = PATTY_OVERLAY_PRIORITY + 1
 	## Dark pepper / spice flecks.
 	var shade := 0.08 + randf() * 0.14
 	fmat.albedo_color = Color(shade, shade * 0.75, shade * 0.55, 0.75 + randf() * 0.2)
 	fleck.material_override = fmat
+	fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fleck.sorting_offset = 2.0
 	_season_root.add_child(fleck)
 	_season_fleck_count += 1
 
