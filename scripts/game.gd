@@ -847,8 +847,7 @@ const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from
 const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
 const SMOKE2_SCENE_PATH := "res://models/smokecyl/smoke2.fbx"
-const SMOKE2_BASE_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
-const SMOKE2_NORMAL_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_Normal.png"
+const SMOKE2_ALPHA_TEX_PATH := "res://models/smokecyl/alpha2.png"
 const SMOKE2_PREVIEW_HEIGHT := 0.40
 const SMOKE2_PREVIEW_WIDTH := 0.36
 ## Cheese slice piles on the counter — height tracks fridge stock (no wheel).
@@ -19511,25 +19510,30 @@ func _build_cutting_board_prop() -> void:
 	_build_board_hint_label()
 
 
-func _make_smoke2_preview_material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.disable_receive_shadows = true
-	mat.roughness = 0.62
-	mat.metallic = 0.0
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	if ResourceLoader.exists(SMOKE2_BASE_TEX_PATH):
-		var base_tex := load(SMOKE2_BASE_TEX_PATH) as Texture2D
-		if base_tex != null:
-			mat.albedo_texture = base_tex
-	if ResourceLoader.exists(SMOKE2_NORMAL_TEX_PATH):
-		var norm_tex := load(SMOKE2_NORMAL_TEX_PATH) as Texture2D
-		if norm_tex != null:
-			mat.normal_enabled = true
-			mat.normal_texture = norm_tex
+func _make_smoke2_preview_material() -> Material:
+	var mat := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode blend_mix, cull_disabled, depth_prepass_alpha;
+
+uniform sampler2D alpha_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform vec4 tint_color : source_color = vec4(1.0, 1.0, 1.0, 0.5);
+
+void fragment() {
+	float alpha_mask = texture(alpha_tex, UV).r;
+	ALBEDO = tint_color.rgb;
+	ALPHA = alpha_mask * tint_color.a;
+	ROUGHNESS = 0.68;
+	METALLIC = 0.0;
+}
+"""
+	mat.shader = shader
+	if ResourceLoader.exists(SMOKE2_ALPHA_TEX_PATH):
+		var alpha_tex := load(SMOKE2_ALPHA_TEX_PATH) as Texture2D
+		if alpha_tex != null:
+			mat.set_shader_parameter("alpha_tex", alpha_tex)
+	mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 0.5))
 	return mat
 
 
