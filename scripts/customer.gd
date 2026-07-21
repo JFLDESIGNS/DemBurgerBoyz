@@ -2697,6 +2697,47 @@ func _build_disguise_top_hat() -> void:
 	_disguise_hat_root.add_child(band)
 
 
+func drop_disguise_props() -> void:
+	## Busted once: props fall off, but the cat can still be fed or clicked again.
+	if not is_disguise_cat:
+		return
+	if _mustache_root != null and is_instance_valid(_mustache_root):
+		var m := _mustache_root
+		_mustache_root = null
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(m, "position", m.position + Vector3(0.25, -1.1, 0.35), 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(m, "rotation_degrees", Vector3(95.0, 50.0, -30.0), 0.55)
+		tw.chain().tween_callback(func() -> void:
+			if is_instance_valid(m):
+				m.queue_free()
+		)
+	if _disguise_hat_root != null and is_instance_valid(_disguise_hat_root):
+		var h := _disguise_hat_root
+		_disguise_hat_root = null
+		var hat_tw := create_tween()
+		hat_tw.set_parallel(true)
+		hat_tw.tween_property(h, "position", h.position + Vector3(-0.22, -1.0, 0.28), 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		hat_tw.tween_property(h, "rotation_degrees", Vector3(120.0, -35.0, 45.0), 0.55)
+		hat_tw.chain().tween_callback(func() -> void:
+			if is_instance_valid(h):
+				h.queue_free()
+		)
+	if _bubble:
+		_bubble.text = "MEOW?!"
+		_bubble.visible = true
+		_bubble.modulate = Color(1.0, 0.45, 0.4)
+
+
+func disguise_meow() -> void:
+	if not is_disguise_cat or is_leaving:
+		return
+	if _bubble:
+		_bubble.text = "MEOW MEOW"
+		_bubble.visible = true
+		_bubble.modulate = Color(1.0, 0.88, 0.96)
+
+
 func drop_mustache_and_flee() -> void:
 	## Clicked the freeloader — mustache falls off, busted, runs.
 	if not is_disguise_cat or is_leaving:

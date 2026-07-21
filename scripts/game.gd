@@ -495,6 +495,7 @@ var _social_post_seq: int = 0
 var _phone_reply_open_id: int = -1
 var _phone_reply_show_custom: bool = false
 var _phone_reply_custom_draft: String = ""
+var _phone_feed_show_all: bool = false
 ## Keyboard cook shortcuts (mouse ways still work).
 const KB_C_HOLD_FOR_COLA := 0.28
 const KB_SCRAPE_TOTAL_SEC := 5.0
@@ -664,7 +665,8 @@ var social_reviews: Array = []
 var day_social_reviews: Array = []
 var day_social_rating_sum: float = 0.0
 const SOCIAL_REVIEW_CHANCE := 0.70
-const SOCIAL_FEED_MAX := 10
+const SOCIAL_FEED_MAX := 200
+const SOCIAL_FEED_RECENT_VISIBLE := 5
 ## Roughly 1 in 8 posts attach a 2D snapshot of the Build burger.
 const SOCIAL_REVIEW_PIC_CHANCE := 0.125
 const SOCIAL_REVIEWER_NAMES: Array[String] = [
@@ -995,8 +997,8 @@ const FRYER_STATION_POS := SODA_STATION_POS
 const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const FRYER_COLLISION_LAYER := 32768
 const FRY_BASKET_COOK_SEC := 5.0
-const FRY_BASKET_SHAKE_NEED := 1.25
-const FRYER_OIL_LOCAL := Vector3(0.0, 0.105, 0.16)
+const FRY_BASKET_SHAKE_NEED := 0.72
+const FRYER_OIL_LOCAL := Vector3(0.0, 0.020, 0.16)
 const FRYER_TUB_X := 0.20
 const FRYER_OIL_RADIUS := 0.20
 const FRYER_BASKET_HOLD_Y := 0.18
@@ -1214,6 +1216,7 @@ var _mp_remote_glock: Dictionary = {}
 var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
 var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
 var _mp_remote_icecreams: Dictionary = {} ## peer_id -> soft-serve cone ghost while held
+var _mp_remote_fries: Dictionary = {} ## peer_id -> fries cup ghost while held
 var _mp_steel_icecreams: Dictionary = {} ## cone_net_id -> partner cold-steel sit mirror
 var _mp_cup_pose_cool: float = 0.0
 var _mp_icecream_pose_cool: float = 0.0
@@ -6695,14 +6698,38 @@ func _bribe_disguise_cat_ingredient(cust: Node3D, id: String) -> void:
 		cust.disguise_bribe_leave()
 
 
-func _unmask_disguise_cat(cust: Node3D) -> void:
+func _apply_disguise_cat_click_stage(cust: Node3D, stage: int) -> void:
 	if cust == null or not is_instance_valid(cust):
 		return
-	_flash("Busted! Fake mustache — it's the CAT!", Color("FF8A80"))
-	if game_audio and game_audio.has_method("play_cat_meow"):
-		game_audio.play_cat_meow()
-	if cust.has_method("drop_mustache_and_flee"):
-		cust.drop_mustache_and_flee()
+	stage = clampi(stage, 1, 3)
+	cust.set_meta("disguise_click_stage", stage)
+	if stage == 1:
+		_flash("Busted! Fake mustache — it's the CAT!", Color("FF8A80"))
+		if game_audio and game_audio.has_method("play_cat_meow"):
+			game_audio.play_cat_meow()
+		if cust.has_method("drop_disguise_props"):
+			cust.drop_disguise_props()
+	elif stage == 2:
+		_flash("MEOW MEOW", Color("FFF59D"))
+		if game_audio and game_audio.has_method("play_cat_meow"):
+			game_audio.play_cat_meow()
+		if cust.has_method("disguise_meow"):
+			cust.disguise_meow()
+	else:
+		_flash("Mustache cat retreats!", Color("CE93D8"))
+		if game_audio and game_audio.has_method("play_cat_meow"):
+			game_audio.play_cat_meow()
+		if cust.has_method("drop_mustache_and_flee"):
+			cust.drop_mustache_and_flee()
+
+
+func _unmask_disguise_cat(cust: Node3D) -> bool:
+	if cust == null or not is_instance_valid(cust):
+		return false
+	var stage := int(cust.get_meta("disguise_click_stage", 0)) + 1
+	stage = clampi(stage, 1, 3)
+	_apply_disguise_cat_click_stage(cust, stage)
+	return stage >= 3
 
 
 func _feed_window_cat_patty() -> void:
@@ -12332,13 +12359,13 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 	tub.name = "OilTub%d" % index
 	tub.position = Vector3(x, 0.0, 0.0)
 	parent.add_child(tub)
-	var well_mat := _make_basic_mat(Color(0.035, 0.030, 0.024), 0.0, 0.7)
+	var well_mat := _make_soda_metal_mat(Color(0.46, 0.47, 0.45), 0.82, 0.22)
 	var oil_y := FRYER_OIL_LOCAL.y
-	_add_mesh_box(tub, "BackWall", Vector3(0.30, 0.095, 0.018), Vector3(0.0, oil_y + 0.052, FRYER_OIL_LOCAL.z - 0.125), well_mat)
-	_add_mesh_box(tub, "FrontLowLip", Vector3(0.30, 0.020, 0.018), Vector3(0.0, oil_y + 0.016, FRYER_OIL_LOCAL.z + 0.125), well_mat)
-	_add_mesh_box(tub, "LeftWall", Vector3(0.018, 0.095, 0.25), Vector3(-0.140, oil_y + 0.052, FRYER_OIL_LOCAL.z), well_mat)
-	_add_mesh_box(tub, "RightWall", Vector3(0.018, 0.095, 0.25), Vector3(0.140, oil_y + 0.052, FRYER_OIL_LOCAL.z), well_mat)
-	_add_mesh_box(tub, "TubBottom", Vector3(0.30, 0.024, 0.260), Vector3(0.0, oil_y - 0.060, FRYER_OIL_LOCAL.z), steel_mat)
+	_add_mesh_box(tub, "BackWall", Vector3(0.30, 0.070, 0.018), Vector3(0.0, oil_y + 0.040, FRYER_OIL_LOCAL.z - 0.125), well_mat)
+	_add_mesh_box(tub, "FrontLowLip", Vector3(0.30, 0.020, 0.018), Vector3(0.0, oil_y + 0.014, FRYER_OIL_LOCAL.z + 0.125), well_mat)
+	_add_mesh_box(tub, "LeftWall", Vector3(0.018, 0.070, 0.25), Vector3(-0.140, oil_y + 0.040, FRYER_OIL_LOCAL.z), well_mat)
+	_add_mesh_box(tub, "RightWall", Vector3(0.018, 0.070, 0.25), Vector3(0.140, oil_y + 0.040, FRYER_OIL_LOCAL.z), well_mat)
+	_add_mesh_box(tub, "TubBottom", Vector3(0.30, 0.024, 0.260), Vector3(0.0, oil_y - 0.075, FRYER_OIL_LOCAL.z), steel_mat)
 	_add_mesh_box(tub, "OilLiquid", Vector3(0.255, 0.014, 0.225), Vector3(0.0, FRYER_OIL_LOCAL.y, FRYER_OIL_LOCAL.z), oil_mat)
 	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
 	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -12349,7 +12376,7 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		var bubble := MeshInstance3D.new()
 		bubble.name = "OilBubble%d" % i
 		var mesh := SphereMesh.new()
-		var r := randf_range(0.010, 0.024)
+		var r := randf_range(0.017, 0.033)
 		mesh.radius = r
 		mesh.height = r * 2.0
 		mesh.radial_segments = 12
@@ -12358,12 +12385,12 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		bubble.material_override = bubble_mat
 		bubble.position = Vector3(
 			randf_range(-0.105, 0.105),
-			FRYER_OIL_LOCAL.y - r * 0.18 + randf_range(-0.002, 0.003),
+			FRYER_OIL_LOCAL.y - r * 0.05 + randf_range(-0.002, 0.004),
 			FRYER_OIL_LOCAL.z + randf_range(-0.085, 0.085)
 		)
 		bubble.set_meta("home", bubble.position)
 		bubble.set_meta("phase", randf_range(0.0, TAU))
-		bubble.set_meta("rise", randf_range(0.003, 0.010))
+		bubble.set_meta("rise", randf_range(0.004, 0.012))
 		tub.add_child(bubble)
 		fryer_oil_bubbles.append(bubble)
 
@@ -12394,7 +12421,7 @@ func _build_fryer_machine() -> void:
 
 	_build_fryer_tub(root, 0, -FRYER_TUB_X, steel_mat, oil_mat)
 	_build_fryer_tub(root, 1, FRYER_TUB_X, steel_mat, oil_mat)
-	_add_mesh_box(root, "FrontLip", Vector3(0.82, 0.04, 0.045), Vector3(0.0, 0.070, 0.38), steel_mat)
+	_add_mesh_box(root, "FrontLip", Vector3(0.82, 0.04, 0.045), Vector3(0.0, 0.020, 0.38), steel_mat)
 
 	var label := Label3D.new()
 	label.text = "FRYER"
@@ -12408,11 +12435,11 @@ func _build_fryer_machine() -> void:
 
 	fryer_ready_root = Node3D.new()
 	fryer_ready_root.name = "ReadyFries"
-	fryer_ready_root.position = Vector3(-0.28, 0.10, 0.43)
+	fryer_ready_root.position = Vector3(-0.28, 0.055, 0.43)
 	root.add_child(fryer_ready_root)
 
-	_create_fryer_basket(0, Vector3(-0.20, 0.305, 0.10))
-	_create_fryer_basket(1, Vector3(0.20, 0.305, 0.10))
+	_create_fryer_basket(0, Vector3(-0.20, 0.235, 0.10))
+	_create_fryer_basket(1, Vector3(0.20, 0.235, 0.10))
 	_refresh_ready_fries_visuals()
 
 
@@ -12447,8 +12474,10 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	for x2 in [-0.080, -0.040, 0.0, 0.040, 0.080]:
 		_add_mesh_rod(basket, "FrontVerticalWire", 0.148, 0.0028, Vector3(x2, 0.083, 0.091), "y", metal)
 		_add_mesh_rod(basket, "BackVerticalWire", 0.148, 0.0028, Vector3(x2, 0.083, -0.091), "y", metal)
-	_add_mesh_box(basket, "BasketHandle", Vector3(0.05, 0.035, 0.22), Vector3(0.0, 0.080, 0.22), dark)
-	_add_mesh_box(basket, "BasketHandleGrip", Vector3(0.16, 0.045, 0.045), Vector3(0.0, 0.080, 0.34), dark)
+	_add_mesh_rod(basket, "HandleLeftRail", 0.24, 0.006, Vector3(-0.046, 0.165, 0.220), "z", dark)
+	_add_mesh_rod(basket, "HandleRightRail", 0.24, 0.006, Vector3(0.046, 0.165, 0.220), "z", dark)
+	_add_mesh_rod(basket, "HandleGrip", 0.17, 0.012, Vector3(0.0, 0.170, 0.350), "x", dark)
+	_add_mesh_box(basket, "HandleBridge", Vector3(0.120, 0.018, 0.034), Vector3(0.0, 0.160, 0.250), dark)
 
 	var fries_root := Node3D.new()
 	fries_root.name = "Potatoes"
@@ -12507,7 +12536,7 @@ func _refresh_fryer_basket_visual(index: int) -> void:
 				continue
 			var mat := mi.material_override as StandardMaterial3D
 			if mat != null:
-				mat.albedo_color = Color(0.92, 0.72, 0.34).lerp(Color(1.0, 0.82, 0.20), cooked_t)
+				mat.albedo_color = Color(0.92, 0.72, 0.34).lerp(Color(0.92, 0.48, 0.10), cooked_t)
 	var area := data.get("area") as Area3D
 	if area != null and is_instance_valid(area):
 		area.input_ray_pickable = fryer_held_index != index
@@ -12519,30 +12548,65 @@ func _add_fry_cup_logo(parent: Node3D) -> void:
 	var tex := load(LOGO_TEX_PATH) as Texture2D
 	if tex == null:
 		return
-	var logo := MeshInstance3D.new()
-	logo.name = "BurgerPalsFriesLogo"
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.070, 0.042)
-	logo.mesh = quad
-	logo.position = Vector3(0.0, 0.055, 0.047)
-	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	mat.albedo_texture = tex
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.94)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = true
-	mat.render_priority = 3
-	logo.material_override = mat
-	parent.add_child(logo)
+	var tex_w := maxf(1.0, float(tex.get_width()))
+	var tex_h := maxf(1.0, float(tex.get_height()))
+	for i in 3:
+		var logo := MeshInstance3D.new()
+		logo.name = "BurgerPalsFriesLogo%d" % i
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.026, 0.042)
+		logo.mesh = quad
+		var angle := lerpf(-0.36, 0.36, float(i) / 2.0)
+		var radius := 0.049
+		logo.position = Vector3(sin(angle) * radius, 0.055, cos(angle) * radius + 0.001)
+		logo.rotation_degrees.y = rad_to_deg(angle)
+		logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var atlas := AtlasTexture.new()
+		atlas.atlas = tex
+		atlas.region = Rect2(tex_w * float(i) / 3.0, 0.0, tex_w / 3.0, tex_h)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+		mat.albedo_texture = atlas
+		mat.albedo_color = Color(1.0, 1.0, 1.0, 0.94)
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.no_depth_test = false
+		mat.render_priority = 2
+		logo.material_override = mat
+		parent.add_child(logo)
+
+
+func _add_fry_piece_to_pack(
+	pack: Node3D,
+	fry_mat: Material,
+	name: String,
+	angle: float,
+	radius: float,
+	height: float,
+	tilt_deg: float,
+	thick: float = 0.0085
+) -> void:
+	var x := sin(angle) * radius
+	var z := cos(angle) * radius * 0.82
+	var fry := _add_mesh_box(
+		pack,
+		name,
+		Vector3(thick * randf_range(0.86, 1.18), height, thick * randf_range(0.86, 1.18)),
+		Vector3(x, 0.094 + height * 0.38 + randf_range(-0.003, 0.007), z),
+		fry_mat
+	)
+	fry.rotation_degrees = Vector3(
+		tilt_deg * cos(angle) + randf_range(-1.2, 1.2),
+		rad_to_deg(angle) + randf_range(-6.0, 6.0),
+		-tilt_deg * sin(angle) + randf_range(-1.2, 1.2)
+	)
 
 
 func _populate_fry_pack(pack: Node3D) -> void:
 	var cup_mat := _make_basic_mat(Color(0.82, 0.05, 0.035), 0.0, 0.36)
 	var rim_mat := _make_basic_mat(Color(1.0, 0.82, 0.24), 0.0, 0.32)
-	var fry_mat := _make_basic_mat(Color(1.0, 0.78, 0.16), 0.0, 0.58)
+	var fry_mat := _make_basic_mat(Color(0.96, 0.58, 0.12), 0.0, 0.54)
 	var cup := MeshInstance3D.new()
 	cup.name = "RedFryCup"
 	var cup_mesh := CylinderMesh.new()
@@ -12566,26 +12630,22 @@ func _populate_fry_pack(pack: Node3D) -> void:
 	rim.material_override = rim_mat
 	pack.add_child(rim)
 	_add_fry_cup_logo(pack)
-	for f in 28:
-		var ring_t := float(f) / 28.0
-		var ang := ring_t * TAU * 2.35 + randf_range(-0.10, 0.10)
-		var outer := f >= 10
-		var radius := randf_range(0.010, 0.024) if not outer else randf_range(0.022, 0.041)
-		var x := cos(ang) * radius
-		var z := sin(ang) * radius * 0.78
-		var height := randf_range(0.102, 0.158)
-		var outward_tilt := randf_range(2.0, 6.0) if not outer else randf_range(7.0, 15.0)
-		var fry := _add_mesh_box(
+	for f in 10:
+		var ang := TAU * float(f) / 10.0
+		_add_fry_piece_to_pack(pack, fry_mat, "HotOuterFry%d" % f, ang, 0.039, randf_range(0.083, 0.112), randf_range(11.0, 17.0), 0.0085)
+	for f in 6:
+		var ang2 := TAU * float(f) / 6.0 + TAU / 12.0
+		_add_fry_piece_to_pack(pack, fry_mat, "HotInnerFry%d" % f, ang2, 0.023, randf_range(0.075, 0.102), randf_range(6.0, 11.0), 0.0082)
+	for f in 5:
+		_add_fry_piece_to_pack(
 			pack,
-			"HotFry%d" % f,
-			Vector3(randf_range(0.007, 0.011), height, randf_range(0.007, 0.011)),
-			Vector3(x, 0.128 + height * 0.12 + randf_range(-0.006, 0.010), z),
-			fry_mat
-		)
-		fry.rotation_degrees = Vector3(
-			-sin(ang) * outward_tilt + randf_range(-1.5, 1.5),
-			rad_to_deg(ang) + randf_range(-4.0, 4.0),
-			cos(ang) * outward_tilt + randf_range(-1.5, 1.5)
+			fry_mat,
+			"HotLooseFry%d" % f,
+			randf_range(0.0, TAU),
+			randf_range(0.003, 0.025),
+			randf_range(0.064, 0.092),
+			randf_range(2.0, 9.0),
+			0.0080
 		)
 
 
@@ -12621,6 +12681,8 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 	_fryer_vel = Vector3.ZERO
 	_fryer_hold_offset = Vector3.ZERO
 	fries_pack_held = false
+	if mp_enabled and NetManager.is_online():
+		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
 		fries_pack_root.queue_free()
 	fries_pack_root = null
@@ -12985,6 +13047,8 @@ func _release_fries_pack(screen_pos: Vector2) -> void:
 		_serve_held_fries_pack(cust)
 		return
 	fries_pack_held = false
+	if mp_enabled and NetManager.is_online():
+		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
 		var root := fries_pack_root
 		fries_pack_root = null
@@ -13009,6 +13073,8 @@ func _serve_held_fries_pack(customer: Node3D) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
 	fries_pack_held = false
+	if mp_enabled and NetManager.is_online():
+		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 	var served_root := fries_pack_root
 	fries_pack_root = null
 	_mark_customer_fries_handed(customer, true)
@@ -20122,6 +20188,7 @@ func _reset_supplies(reset_social_history: bool = true) -> void:
 	_phone_reply_open_id = -1
 	_phone_reply_show_custom = false
 	_phone_reply_custom_draft = ""
+	_phone_feed_show_all = false
 	supply_stock.clear()
 	supply_fresh.clear()
 	supply_orders.clear()
@@ -20582,6 +20649,53 @@ func _force_record_social_review(
 	_commit_social_review(stars, kind, tip, station_index, customer)
 
 
+func _review_order_phrase(customer: Node3D) -> String:
+	if customer == null or not is_instance_valid(customer):
+		return ""
+	var raw_order = customer.get("order")
+	if typeof(raw_order) != TYPE_ARRAY:
+		return ""
+	var order: Array = raw_order
+	if order.is_empty():
+		return ""
+	var patty_count := 0
+	var toppings: PackedStringArray = PackedStringArray()
+	var sides: PackedStringArray = PackedStringArray()
+	for item in order:
+		var id := str(item)
+		match id:
+			"bun_bottom", "bun_top":
+				pass
+			"patty":
+				patty_count += 1
+			"soda_cola", "soda_lemon_lime", "soda_orange", "icecream", "fries":
+				sides.append(str(GameDataScript.INGREDIENT_LABELS.get(id, id)).to_lower())
+			_:
+				toppings.append(str(GameDataScript.INGREDIENT_LABELS.get(id, id)).to_lower())
+	var bits: PackedStringArray = PackedStringArray()
+	if patty_count > 0:
+		var patty_word := "plain burger"
+		if patty_count == 2:
+			patty_word = "double patty burger"
+		elif patty_count >= 3:
+			patty_word = "triple patty burger"
+		if not toppings.is_empty():
+			patty_word += " with " + ", ".join(toppings)
+		bits.append(patty_word)
+	for side in sides:
+		bits.append(side)
+	return ", ".join(bits)
+
+
+func _append_order_to_review(text: String, order_phrase: String) -> String:
+	var t := text.strip_edges()
+	if order_phrase == "":
+		return t
+	if t == "":
+		return "I ordered %s." % order_phrase
+	return "%s I ordered %s." % [t, order_phrase]
+
+
 func _commit_social_review(
 	stars: float,
 	kind: String,
@@ -20604,6 +20718,8 @@ func _commit_social_review(
 	if not bts_review.is_empty():
 		who = str(bts_review.get("who", who))
 		text = str(bts_review.get("text", text))
+	else:
+		text = _append_order_to_review(text, _review_order_phrase(customer))
 	var pic: Texture2D = null
 	## Cat burnt-triple posts always attach the burger photo as evidence.
 	var force_pic := kind == "cat_burnt"
@@ -21464,7 +21580,20 @@ func _refresh_phone_feed() -> void:
 		empty.add_theme_color_override("font_color", Color(0.48, 0.55, 0.64))
 		phone_feed_box.add_child(empty)
 		return
-	for post_i in social_reviews.size():
+	if social_reviews.size() > SOCIAL_FEED_RECENT_VISIBLE:
+		var toggle := Button.new()
+		toggle.focus_mode = Control.FOCUS_NONE
+		toggle.custom_minimum_size = Vector2(0, 17)
+		toggle.text = "Show recent 5" if _phone_feed_show_all else "Show all %d" % social_reviews.size()
+		UiFontsScript.apply_button(toggle, true, 7)
+		_style_phone_reply_button(toggle, Color("FFD54F"))
+		toggle.pressed.connect(func():
+			_phone_feed_show_all = not _phone_feed_show_all
+			_refresh_phone_feed()
+		)
+		phone_feed_box.add_child(toggle)
+	var visible_count := social_reviews.size() if _phone_feed_show_all else mini(social_reviews.size(), SOCIAL_FEED_RECENT_VISIBLE)
+	for post_i in visible_count:
 		var post = social_reviews[post_i]
 		if typeof(post) != TYPE_DICTIONARY:
 			continue
@@ -31934,6 +32063,10 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 		var gp: Vector3 = glock_root.global_position
 		var gr: Vector3 = glock_root.global_rotation_degrees
 		mp_tool_pose.rpc(6, true, gp.x, gp.y, gp.z, true, gr.x, gr.y, gr.z)
+	elif fries_pack_held and fries_pack_root != null and is_instance_valid(fries_pack_root):
+		var fp: Vector3 = fries_pack_root.global_position
+		var fr: Vector3 = fries_pack_root.global_rotation_degrees
+		mp_tool_pose.rpc(9, true, fp.x, fp.y, fp.z, true, fr.x, fr.y, fr.z)
 
 
 func _mp_send_held_cup_pose(force: bool = false) -> void:
@@ -32032,6 +32165,24 @@ func _mp_ensure_remote_brush(peer_id: int) -> Node3D:
 	return _mp_ensure_remote_tool(_mp_remote_brush, peer_id, brush_root, "RemoteBrush")
 
 
+func _mp_ensure_remote_fries(peer_id: int) -> Node3D:
+	if _mp_remote_fries.has(peer_id):
+		var existing: Node3D = _mp_remote_fries[peer_id]
+		if existing != null and is_instance_valid(existing):
+			return existing
+	if world == null:
+		return null
+	var ghost := Node3D.new()
+	ghost.name = "RemoteFries_%d" % peer_id
+	_populate_fry_pack(ghost)
+	_mp_strip_tool_pickable(ghost)
+	ghost.visible = false
+	ghost.scale = Vector3(1.18, 1.18, 1.18)
+	world.add_child(ghost)
+	_mp_remote_fries[peer_id] = ghost
+	return ghost
+
+
 func _mp_set_remote_tool_fx(root: Node3D, fx_name: String, emitting: bool) -> void:
 	if root == null:
 		return
@@ -32083,6 +32234,10 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		if ice != null and is_instance_valid(ice):
 			ice.visible = false
 			_mp_set_remote_icecream_stream(ice, false)
+	if except_kind != 9 and _mp_remote_fries.has(peer_id):
+		var fries: Node3D = _mp_remote_fries[peer_id]
+		if fries != null and is_instance_valid(fries):
+			fries.visible = false
 
 
 func _mp_ensure_remote_cup(peer_id: int) -> Node3D:
@@ -32289,7 +32444,7 @@ func mp_tool_pose(
 	ry: float = 0.0,
 	rz: float = 0.0
 ) -> void:
-	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock
+	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock · 9 fries
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -32342,6 +32497,14 @@ func mp_tool_pose(
 			glock.global_position = pos
 			glock.global_rotation_degrees = rot
 			_mp_set_remote_glock_laser(glock, true)
+		9:
+			var fries := _mp_ensure_remote_fries(sid)
+			if fries == null:
+				return
+			fries.visible = true
+			fries.global_position = pos
+			fries.global_rotation_degrees = rot
+			fries.scale = Vector3(1.18, 1.18, 1.18)
 		_:
 			pass
 
@@ -32378,6 +32541,8 @@ func _mp_update_cursors(delta: float) -> void:
 				tool = 7
 			elif bts_lightstick_held_index >= 0:
 				tool = 8
+			elif fries_pack_held:
+				tool = 9
 			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
 
 
@@ -32844,14 +33009,25 @@ func mp_disguise_cat_unmask(net_id: int) -> void:
 	if mp_enabled and not NetManager.is_host():
 		return
 	_mp_applying = true
+	var leave_now := false
 	var c = _customer_by_net_id(net_id)
 	if c != null and is_instance_valid(c) and bool(c.get("is_disguise_cat")):
-		_unmask_disguise_cat(c)
+		leave_now = _unmask_disguise_cat(c)
+		mp_disguise_cat_stage.rpc(net_id, int(c.get_meta("disguise_click_stage", 0)))
 	_mp_applying = false
-	if NetManager.is_host():
+	if NetManager.is_host() and leave_now:
 		mp_customer_leave.rpc(net_id, false)
 		_mp_broadcast_economy()
 		_mp_broadcast_customers()
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_disguise_cat_stage(net_id: int, stage: int) -> void:
+	if NetManager.is_host():
+		return
+	var c = _customer_by_net_id(net_id)
+	if c != null and is_instance_valid(c) and bool(c.get("is_disguise_cat")):
+		_apply_disguise_cat_click_stage(c, stage)
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -33699,6 +33875,14 @@ func mp_sync_customers(
 				c.leave_happy()
 			_customer_leave_apply(c, false)
 			continue
+		if bool(c.is_leaving):
+			## Host still has this customer, so undo any client-only walkoff caused by
+			## local FX/timer drift and let host state drive the line.
+			c.is_leaving = false
+			c.set("_leave_fade_active", false)
+			c.set("_leave_fade_wait_for_turn", false)
+			if c.has_method("_apply_leave_fade_alpha"):
+				c._apply_leave_fade_alpha(1.0)
 		if not host_waiting:
 			## Host is still syncing the body (walking in/out), but the order slip is gone.
 			if tickets.has(c):
