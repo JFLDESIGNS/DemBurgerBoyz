@@ -776,6 +776,7 @@ var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
+var smoke2_cutting_board_prop: Node3D = null
 var build_board_hint_label: Label3D = null
 var cheese_station_root: Node3D = null
 var cheese_station_area: Area3D = null
@@ -845,6 +846,11 @@ const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from the window)
 const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
+const SMOKE2_SCENE_PATH := "res://models/smokecyl/smoke2.fbx"
+const SMOKE2_BASE_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
+const SMOKE2_NORMAL_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_Normal.png"
+const SMOKE2_PREVIEW_HEIGHT := 0.40
+const SMOKE2_PREVIEW_WIDTH := 0.36
 ## Cheese slice piles on the counter — height tracks fridge stock (no wheel).
 const CHEESE_STATION_COLLISION_LAYER := 8192
 ## +8″ camera-left from prior (-0.06 → +0.143). Camera-left = world +X.
@@ -993,7 +999,9 @@ const ICECREAM_SPARKLE_COUNT := 28
 const ICECREAM_GRILL_MELT_SEC := 5.0
 const ICECREAM_GRILL_FIRE_SEC := 6.0
 const ICECREAM_PUDDLE_R := 0.105
-const FRYER_STATION_POS := SODA_STATION_POS
+## Test placement: fryer on the left side of the service window, nudged away
+## from the player so the cheese stack and board stay grabbable.
+const FRYER_STATION_POS := Vector3(1.18, 1.207, 0.87)
 const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const FRYER_COLLISION_LAYER := 32768
 const FRY_BASKET_COOK_SEC := 5.0
@@ -12913,7 +12921,7 @@ func _update_held_fryer_basket(delta: float) -> void:
 		var dunk_depth := clampf((screen_delta.y + 50.0) / 190.0, 0.0, 1.0)
 		seat.x = oil.x + wiggle_x
 		seat.z = oil.z + wiggle_z
-		seat.y = lerpf(oil.y + 0.255, oil.y - 0.175, dunk_depth)
+		seat.y = lerpf(oil.y + 0.255, oil.y - 0.105, dunk_depth)
 		oil_lock = maxf(oil_lock, dunk_depth)
 	var prev := root.global_position
 	root.global_position = root.global_position.lerp(seat, clampf(delta * 14.0, 0.0, 1.0))
@@ -12921,13 +12929,13 @@ func _update_held_fryer_basket(delta: float) -> void:
 	_fryer_prev_pos = root.global_position
 	var state := str(data.get("state", "empty"))
 	var oil_dist := Vector2(root.global_position.x - oil.x, root.global_position.z - oil.z).length()
-	var in_oil := oil != Vector3.ZERO and oil_dist <= FRYER_OIL_RADIUS * 0.65 and root.global_position.y <= oil.y - 0.070
+	var in_oil := oil != Vector3.ZERO and oil_dist <= FRYER_OIL_RADIUS * 0.65 and root.global_position.y <= oil.y - 0.040
 	if (state == "raw" or state == "cooking") and in_oil:
 		if state != "cooking" and game_audio and game_audio.has_method("set_fryer_oil"):
 			game_audio.set_fryer_oil(true, 1.0)
 		state = "cooking"
 		data["cook"] = minf(FRY_BASKET_COOK_SEC, float(data.get("cook", 0.0)) + delta)
-		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.175, clampf(delta * 12.0, 0.0, 1.0))
+		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.105, clampf(delta * 12.0, 0.0, 1.0))
 		root.rotation_degrees.x = lerpf(root.rotation_degrees.x, -26.0, clampf(delta * 8.0, 0.0, 1.0))
 		if float(data["cook"]) >= FRY_BASKET_COOK_SEC:
 			state = "done"
@@ -19499,7 +19507,116 @@ func _build_cutting_board_prop() -> void:
 	root.add_child(groove)
 	grill_root.add_child(root)
 	build_cutting_board = root
+	_build_smoke2_cutting_board_preview()
 	_build_board_hint_label()
+
+
+func _make_smoke2_preview_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.disable_receive_shadows = true
+	mat.roughness = 0.62
+	mat.metallic = 0.0
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	if ResourceLoader.exists(SMOKE2_BASE_TEX_PATH):
+		var base_tex := load(SMOKE2_BASE_TEX_PATH) as Texture2D
+		if base_tex != null:
+			mat.albedo_texture = base_tex
+	if ResourceLoader.exists(SMOKE2_NORMAL_TEX_PATH):
+		var norm_tex := load(SMOKE2_NORMAL_TEX_PATH) as Texture2D
+		if norm_tex != null:
+			mat.normal_enabled = true
+			mat.normal_texture = norm_tex
+	return mat
+
+
+func _apply_smoke2_preview_materials(node: Node, mat: Material) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.material_override = mat
+		mi.transparency = 0.0
+		mi.ignore_occlusion_culling = true
+	for child in node.get_children():
+		_apply_smoke2_preview_materials(child, mat)
+
+
+func _combined_mesh_aabb_local(root: Node3D) -> AABB:
+	var has_bounds := false
+	var bounds := AABB()
+	var inv := root.global_transform.affine_inverse()
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var node := stack.pop_back() as Node
+		if node is MeshInstance3D:
+			var mi := node as MeshInstance3D
+			var rel := inv * mi.global_transform
+			var aabb := mi.get_aabb()
+			for i in 8:
+				var p := rel * aabb.get_endpoint(i)
+				if not has_bounds:
+					bounds = AABB(p, Vector3.ZERO)
+					has_bounds = true
+				else:
+					bounds = bounds.expand(p)
+		for child in node.get_children():
+			stack.append(child)
+	return bounds if has_bounds else AABB(Vector3.ZERO, Vector3.ONE)
+
+
+func _fit_smoke2_preview(holder: Node3D, visual: Node3D, target_height: float, target_width: float) -> void:
+	var bounds := _combined_mesh_aabb_local(visual)
+	var height := maxf(bounds.size.y, 0.001)
+	var widest := maxf(maxf(bounds.size.x, bounds.size.z), 0.001)
+	var scale_by_h := target_height / height
+	var scale_by_w := target_width / widest
+	var s := minf(scale_by_h, scale_by_w)
+	visual.scale = Vector3.ONE * s
+	visual.position -= bounds.get_center() * s
+	visual.position.y += -bounds.position.y * s + 0.004
+
+
+func _add_smoke2_preview_instance(parent: Node3D, packed: PackedScene, mat: Material, name: String, local_pos: Vector3, yaw: float, target_height: float = SMOKE2_PREVIEW_HEIGHT) -> void:
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	var holder := Node3D.new()
+	holder.name = name
+	holder.position = local_pos
+	holder.rotation_degrees = Vector3(0.0, yaw, 0.0)
+	parent.add_child(holder)
+	visual.name = "Smoke2Mesh"
+	holder.add_child(visual)
+	_apply_smoke2_preview_materials(visual, mat)
+	_fit_smoke2_preview(holder, visual, target_height, SMOKE2_PREVIEW_WIDTH)
+
+
+func _build_smoke2_cutting_board_preview() -> void:
+	if smoke2_cutting_board_prop != null and is_instance_valid(smoke2_cutting_board_prop):
+		smoke2_cutting_board_prop.queue_free()
+	smoke2_cutting_board_prop = null
+	if build_cutting_board == null or not is_instance_valid(build_cutting_board):
+		return
+	if not FileAccess.file_exists(SMOKE2_SCENE_PATH):
+		push_warning("Smoke2 model missing: %s" % SMOKE2_SCENE_PATH)
+		return
+	var packed := load(SMOKE2_SCENE_PATH) as PackedScene
+	if packed == null:
+		push_warning("Smoke2 scene failed to load")
+		return
+	var group := Node3D.new()
+	group.name = "Smoke2PreviewGroup"
+	grill_root.add_child(group)
+	smoke2_cutting_board_prop = group
+	var mat := _make_smoke2_preview_material()
+	var board_base := build_cutting_board.global_position + Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.006, 0.0)
+	_add_smoke2_preview_instance(group, packed, mat, "Smoke2BoardA", board_base + Vector3(-0.12, 0.0, -0.04), 180.0, 0.42)
+	_add_smoke2_preview_instance(group, packed, mat, "Smoke2BoardB", board_base + Vector3(0.13, 0.0, 0.07), 205.0, 0.38)
+	_add_smoke2_preview_instance(group, packed, mat, "Smoke2GrillA", Vector3(GRILL_CENTER_X - 0.24, GRILL_SURFACE_Y + PATTY_SIT_Y, GRILL_SURFACE_Z - 0.20), 165.0, 0.40)
+	_add_smoke2_preview_instance(group, packed, mat, "Smoke2GrillB", Vector3(GRILL_CENTER_X + 0.28, GRILL_SURFACE_Y + PATTY_SIT_Y, GRILL_SURFACE_Z + 0.10), 215.0, 0.40)
 
 
 func _build_board_hint_label() -> void:

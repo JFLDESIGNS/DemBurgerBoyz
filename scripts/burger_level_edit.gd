@@ -9,6 +9,11 @@ const GRILL_DEPTH := 0.95
 const CUTTING_BOARD_SIZE := Vector3(0.48, 0.038, 0.44)
 const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22
+const SMOKE2_SCENE_PATH := "res://models/smokecyl/smoke2.fbx"
+const SMOKE2_BASE_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
+const SMOKE2_NORMAL_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_Normal.png"
+const SMOKE2_PREVIEW_HEIGHT := 0.40
+const SMOKE2_PREVIEW_WIDTH := 0.36
 const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.055, 0.28)
 const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
@@ -301,6 +306,92 @@ func _build_cutting_board(parent: Node3D) -> void:
 	_add_box(root, "BoardRim", CUTTING_BOARD_SIZE + Vector3(0.05, -0.024, 0.05), Vector3(0.0, -0.025, 0.0), rim_mat)
 	_add_box(root, "BoardSlab", CUTTING_BOARD_SIZE, Vector3.ZERO, wood_mat)
 	_add_box(root, "BoardGroove", Vector3(CUTTING_BOARD_SIZE.x * 0.82, 0.006, CUTTING_BOARD_SIZE.z * 0.78), Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 - 0.004, 0.0), groove_mat)
+	_build_smoke2_cutting_board_preview(root)
+
+
+func _make_smoke2_preview_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.disable_receive_shadows = true
+	mat.roughness = 0.62
+	mat.albedo_color = Color.WHITE
+	if ResourceLoader.exists(SMOKE2_BASE_TEX_PATH):
+		var base_tex := load(SMOKE2_BASE_TEX_PATH) as Texture2D
+		if base_tex != null:
+			mat.albedo_texture = base_tex
+	if ResourceLoader.exists(SMOKE2_NORMAL_TEX_PATH):
+		var norm_tex := load(SMOKE2_NORMAL_TEX_PATH) as Texture2D
+		if norm_tex != null:
+			mat.normal_enabled = true
+			mat.normal_texture = norm_tex
+	return mat
+
+
+func _apply_smoke2_preview_materials(node: Node, mat: Material) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.material_override = mat
+	for child in node.get_children():
+		_apply_smoke2_preview_materials(child, mat)
+
+
+func _combined_mesh_aabb_local(root: Node3D) -> AABB:
+	var has_bounds := false
+	var bounds := AABB()
+	var inv := root.global_transform.affine_inverse()
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var node := stack.pop_back() as Node
+		if node is MeshInstance3D:
+			var mi := node as MeshInstance3D
+			var rel := inv * mi.global_transform
+			var aabb := mi.get_aabb()
+			for i in 8:
+				var p := rel * aabb.get_endpoint(i)
+				if not has_bounds:
+					bounds = AABB(p, Vector3.ZERO)
+					has_bounds = true
+				else:
+					bounds = bounds.expand(p)
+		for child in node.get_children():
+			stack.append(child)
+	return bounds if has_bounds else AABB(Vector3.ZERO, Vector3.ONE)
+
+
+func _build_smoke2_cutting_board_preview(board_root: Node3D) -> void:
+	if not FileAccess.file_exists(SMOKE2_SCENE_PATH):
+		return
+	var packed := load(SMOKE2_SCENE_PATH) as PackedScene
+	if packed == null:
+		return
+	var mat := _make_smoke2_preview_material()
+	for data in [
+		{"name": "Smoke2PreviewA", "pos": Vector3(-0.13, CUTTING_BOARD_SIZE.y * 0.5 + 0.006, -0.05), "yaw": 180.0, "height": 0.42},
+		{"name": "Smoke2PreviewB", "pos": Vector3(0.14, CUTTING_BOARD_SIZE.y * 0.5 + 0.006, 0.08), "yaw": 205.0, "height": 0.38},
+	]:
+		var visual := packed.instantiate() as Node3D
+		if visual == null:
+			continue
+		var holder := Node3D.new()
+		holder.name = str(data["name"])
+		holder.position = data["pos"]
+		holder.rotation_degrees = Vector3(0.0, float(data["yaw"]), 0.0)
+		board_root.add_child(holder)
+		visual.name = "Smoke2Mesh"
+		holder.add_child(visual)
+		_apply_smoke2_preview_materials(visual, mat)
+		var bounds := _combined_mesh_aabb_local(visual)
+		var height := maxf(bounds.size.y, 0.001)
+		var widest := maxf(maxf(bounds.size.x, bounds.size.z), 0.001)
+		var s := minf(float(data["height"]) / height, SMOKE2_PREVIEW_WIDTH / widest)
+		visual.scale = Vector3.ONE * s
+		visual.position -= bounds.get_center() * s
+		visual.position.y += -bounds.position.y * s + 0.004
+		_assign_owner_recursive(holder)
 
 
 func _build_cheese_station(parent: Node3D) -> void:
