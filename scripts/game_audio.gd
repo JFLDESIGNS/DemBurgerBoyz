@@ -230,7 +230,7 @@ func _process(delta: float) -> void:
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
-			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.78, 0.03, 1.0))
+			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.46, 0.018, 1.0))
 			_roomba_drive_player.pitch_scale = 1.42 + _roomba_drive_gain * 0.58
 			if not _roomba_drive_player.playing:
 				_roomba_drive_player.play()
@@ -895,7 +895,7 @@ func set_roomba_wawawa(active: bool) -> void:
 				_roomba_wawawa_player.play(0.0)
 		)
 	_roomba_wawawa_player.pitch_scale = 1.93
-	_roomba_wawawa_player.volume_db = 4.0
+	_roomba_wawawa_player.volume_db = 1.0
 	if active:
 		if not _roomba_wawawa_player.playing:
 			_roomba_wawawa_player.play(0.0)
@@ -916,7 +916,7 @@ func play_roomba_wawa_chirp() -> void:
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache["roomba_wawa_chirp"]
 	p.pitch_scale = 1.96 + randf() * 0.16
-	p.volume_db = linear_to_db(0.86)
+	p.volume_db = linear_to_db(0.56)
 	p.play(randf_range(0.0, 0.65))
 	var tree := get_tree()
 	if tree != null:
@@ -932,7 +932,7 @@ func play_roomba_done_beep() -> void:
 
 func set_roomba_drive(moving: bool, speed: float = 0.0) -> void:
 	if moving:
-		_roomba_drive_target = clampf(0.36 + speed * 3.2, 0.36, 0.95)
+		_roomba_drive_target = clampf(0.24 + speed * 2.1, 0.24, 0.72)
 	else:
 		_roomba_drive_target = 0.0
 

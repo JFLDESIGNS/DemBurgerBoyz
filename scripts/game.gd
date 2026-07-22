@@ -723,8 +723,8 @@ const ROOMBA_TRANSPORT_SPEED := 0.34
 const ROOMBA_PATTY_TASK_REAIM := 0.075
 const ROOMBA_TASK_TIMEOUT_SEC := 20.0
 const ROOMBA_SIDE_INSET := 0.162 ## Body center inset; loosened ~4 inches so spatula can reach side-edge patties.
-const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset.
-const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Keep bot ~5 inches farther off the far/window edge only.
+const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset; keep this loose so the bot can reach patties by the player.
+const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Far/window edge inset; keeps the bot out of the top strip of the grill.
 const AIR_MOTE_COUNT := 56
 const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
 const AIR_MOTE_BOUNDS_MAX := Vector3(2.35, 2.35, 1.25)
@@ -7030,7 +7030,7 @@ func _update_grill_roomba(delta: float) -> void:
 		grill_roomba_vel = Vector2.ZERO
 		var face_patty = grill_roomba_scoop_patty if scooping else grill_roomba_task_patty
 		if face_patty != null and is_instance_valid(face_patty):
-			grill_roomba_turn_goal = _roomba_heading_to_patty(face_patty, old_xz)
+			grill_roomba_turn_goal = _roomba_heading_for_patty_square_up(face_patty, old_xz, grill_roomba_task_dir)
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
 		if face_patty != null and is_instance_valid(face_patty) and _roomba_heading_aligned(grill_roomba_heading, grill_roomba_turn_goal) and not _roomba_spatula_overlaps_patty(face_patty):
 			grill_roomba_vel = _roomba_square_up_nudge(face_patty, old_xz)
@@ -7291,6 +7291,36 @@ func _roomba_heading_to_patty(patty: Area3D, body_xz: Vector2) -> float:
 		return grill_roomba_turn_goal
 	var patty_xz := Vector2(float(patty.position.x), float(patty.position.z))
 	return (patty_xz - body_xz).angle()
+
+
+func _roomba_heading_for_patty_square_up(patty: Area3D, body_xz: Vector2, approach_dir: Vector2) -> float:
+	if patty == null or not is_instance_valid(patty):
+		return grill_roomba_turn_goal
+	var patty_xz := Vector2(float(patty.position.x), float(patty.position.z))
+	var lane_dir := approach_dir.normalized() if approach_dir.length_squared() > 0.0001 else (patty_xz - body_xz).normalized()
+	if lane_dir.length_squared() <= 0.0001:
+		lane_dir = _roomba_forward_xz()
+	var to_patty := patty_xz - body_xz
+	var lane_angle: float = lane_dir.angle()
+	var target_angle: float = to_patty.angle() if to_patty.length_squared() > 0.0001 else lane_angle
+	var base_angles: Array[float] = [lane_angle, target_angle, grill_roomba_heading]
+	var best_heading: float = lane_angle
+	var best_score: float = INF
+	for base in base_angles:
+		for offset in [-0.34, -0.22, -0.12, 0.0, 0.12, 0.22, 0.34]:
+			var heading := wrapf(float(base) + float(offset), -PI, PI)
+			var forward := Vector2(cos(heading), sin(heading))
+			var contact := body_xz + forward * ROOMBA_SPATULA_CONTACT_REACH
+			var center := body_xz + forward * ROOMBA_SPATULA_REACH
+			var contact_d := contact.distance_to(patty_xz)
+			var center_d := center.distance_to(patty_xz)
+			var lane_penalty := absf(wrapf(heading - lane_dir.angle(), -PI, PI)) * 0.035
+			var turn_penalty := absf(wrapf(heading - grill_roomba_heading, -PI, PI)) * 0.015
+			var score := minf(contact_d, center_d * 0.86) + lane_penalty + turn_penalty
+			if score < best_score:
+				best_score = score
+				best_heading = heading
+	return best_heading
 
 
 func _roomba_heading_aligned(current: float, target: float, tolerance: float = 0.16) -> bool:
@@ -7947,7 +7977,7 @@ func _roomba_place_bounds() -> Rect2:
 	)
 	return Rect2(
 		b.position.x + ROOMBA_SIDE_INSET, 
-		b.position.y + ROOMBA_TOP_DEPTH_INSET, 
+		b.position.y + ROOMBA_DEPTH_INSET, 
 		maxf(0.05, b.size.x - ROOMBA_SIDE_INSET * 2.0), 
 		maxf(0.05, b.size.y - ROOMBA_TOP_DEPTH_INSET - ROOMBA_DEPTH_INSET)
 	)
