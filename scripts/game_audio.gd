@@ -230,7 +230,7 @@ func _process(delta: float) -> void:
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
-			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.46, 0.018, 1.0))
+			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.115, 0.006, 1.0))
 			_roomba_drive_player.pitch_scale = 1.42 + _roomba_drive_gain * 0.58
 			if not _roomba_drive_player.playing:
 				_roomba_drive_player.play()
@@ -932,7 +932,7 @@ func play_roomba_done_beep() -> void:
 
 func set_roomba_drive(moving: bool, speed: float = 0.0) -> void:
 	if moving:
-		_roomba_drive_target = clampf(0.24 + speed * 2.1, 0.24, 0.72)
+		_roomba_drive_target = clampf(0.11 + speed * 0.82, 0.11, 0.29)
 	else:
 		_roomba_drive_target = 0.0
 

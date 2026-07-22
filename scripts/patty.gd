@@ -1989,6 +1989,10 @@ func _build_cheese_slice() -> void:
 	_cheese_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_cheese_mat.albedo_color = Color(1.0, 0.82, 0.26)
 	_cheese_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_cheese_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_cheese_mat.no_depth_test = true
+	_cheese_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_cheese_mat.render_priority = PATTY_OVERLAY_PRIORITY + 4
 
 	## Cross bars only — corners are separate flaps (no double-corner look).
 	var half := 0.084
