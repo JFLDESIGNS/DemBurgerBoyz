@@ -37,7 +37,7 @@ const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## Patty must sit fully on the steel — reject clicks near the rim.
 const PATTY_FIT_RADIUS := 0.10
-const PATTY_MIN_SEP := 0.19
+const PATTY_MIN_SEP := 0.205
 ## Screen + world grab radius — generous so cheese / scoop clicks land reliably.
 const PATTY_PICK_WORLD := 0.42
 const PATTY_PICK_MIN_PX := 62.0
@@ -645,9 +645,15 @@ const FRIES_SPILL_COOLDOWN := 0.32
 const FRIES_GRILL_WAIT_SEC := 3.0 ## sit golden before charring starts
 const FRIES_GRILL_BLACK_SEC := 3.0 ## golden → black over this window, then fire
 const FRIES_LOGO_DROP_Y := 0.02286 ## 0.9 inches below mid-band (was 1.2", then +0.3" up)
-const FRIES_FRY_SHAKE_DEG := 9.5 ## fries pile wobble amplitude (container stays still)
-const FRIES_FRY_SHAKE_HZ := 3.6
+const FRIES_FRY_SHAKE_DEG := 3.8 ## fries pile wobble amplitude (container stays still)
+const FRIES_FRY_SHAKE_HZ := 2.25
 const FRIES_SPILL_SIT_Y := 0.017 ## ~half-inch lift so sticks don't clip the steel
+const FRIES_HOLD_MAX_PACKS := 4
+const FRIES_HOLD_PUSH_RADIUS := 0.13
+const FRIES_HOLD_PUSH_STEP := 0.018
+const FRIES_HOLD_LEFT_COLUMN_NUDGE_X := 0.254 ## 10 inches of extra horizontal clearance.
+const FRIES_HOLD_RIGHT_COLUMN_NUDGE_X := 0.064 ## Split the right side a little too.
+const FRIES_HOLD_CAMERA_LEFT_NUDGE_X := 0.102 ## 4 inches camera-left for the whole fry group.
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -658,6 +664,9 @@ var _air_push_have: bool = false
 var grill_roomba_root: Node3D = null
 var grill_roomba_body_mat: StandardMaterial3D = null
 var grill_roomba_led_mat: StandardMaterial3D = null
+var grill_roomba_face_root: Node3D = null
+var grill_roomba_face_pixels: Array = []
+var grill_roomba_face_state: String = ""
 var grill_roomba_bristles: Array = []
 var grill_roomba_area: Area3D = null
 var grill_roomba_vel: Vector2 = Vector2.ZERO
@@ -673,19 +682,49 @@ var grill_roomba_foam_cd: float = 0.0
 var grill_roomba_stuck_t: float = 0.0
 var grill_roomba_escape_t: float = 0.0
 var grill_roomba_last_xz: Vector2 = Vector2.ZERO
-const ROOMBA_RADIUS := 0.105
-const ROOMBA_HEIGHT := 0.047
-const ROOMBA_SIT_Y := 0.082
+var grill_roomba_carry_patty: Area3D = null
+var grill_roomba_carry_slot: int = -1
+var grill_roomba_carry_target: Vector3 = Vector3.INF
+var grill_roomba_fake_patty: Node3D = null
+var grill_roomba_scoop_patty: Area3D = null
+var grill_roomba_scoop_slot: int = -1
+var grill_roomba_scoop_hold_t: float = 0.0
+var grill_roomba_task_patty: Area3D = null
+var grill_roomba_task_slot: int = -1
+var grill_roomba_task_dir: Vector2 = Vector2.ZERO
+var grill_roomba_task_t: float = 0.0
+var grill_roomba_was_tasking: bool = false
+var grill_roomba_chirp_cd: float = 0.0
+const ROOMBA_RADIUS := 0.098
+const ROOMBA_HEIGHT := 0.036
+const ROOMBA_SIT_Y := 0.071
 const ROOMBA_SPEED := 0.18
 const ROOMBA_SEEK_SPEED := 0.22
-const ROOMBA_TURN_RATE := 1.45
-const ROOMBA_MAX_TURN_RATE := 1.05
+const ROOMBA_TURN_RATE := 2.65
+const ROOMBA_MAX_TURN_RATE := 2.35
 const ROOMBA_CLEAN_RADIUS := 0.14
+const ROOMBA_CLEAN_CORE_RADIUS := 0.102
+const ROOMBA_CLEAN_EDGE_RADIUS := 0.172
 const ROOMBA_CLEAN_RATE := 1.15
+const ROOMBA_CLEAN_TARGET_REACH := 0.078
 const ROOMBA_BOUNCE_BACK_SEC := 0.32
 const ROOMBA_SYNC_INTERVAL := 0.24
 const ROOMBA_UNSTUCK_SEC := 0.48
-const ROOMBA_PATTY_PUSH := 0.018
+const ROOMBA_PATTY_PUSH := 0.028
+const ROOMBA_SPATULA_REACH := 0.175
+const ROOMBA_SPATULA_CONTACT_REACH := 0.145
+const ROOMBA_SPATULA_CARRY_REACH := 0.215
+const ROOMBA_SPATULA_CARRY_SIDE := -0.044
+const ROOMBA_SPATULA_CARRY_LIFT := 0.043
+const ROOMBA_SPATULA_SCOOP_RADIUS := 0.082
+const ROOMBA_SPATULA_TRUE_OVERLAP_RADIUS := 0.072
+const ROOMBA_SPATULA_SCOOP_HOLD_SEC := 0.14
+const ROOMBA_TRANSPORT_SPEED := 0.34
+const ROOMBA_PATTY_TASK_REAIM := 0.075
+const ROOMBA_TASK_TIMEOUT_SEC := 20.0
+const ROOMBA_SIDE_INSET := 0.162 ## Body center inset; loosened ~4 inches so spatula can reach side-edge patties.
+const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset.
+const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Keep bot ~5 inches farther off the far/window edge only.
 const AIR_MOTE_COUNT := 56
 const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
 const AIR_MOTE_BOUNDS_MAX := Vector3(2.35, 2.35, 1.25)
@@ -858,6 +897,7 @@ var burger_pals_decal: MeshInstance3D = null
 var wall_paper_decals: Node3D = null
 var start_logo: TextureRect = null
 var start_logo_wrap: Control = null
+var start_logo_motion: Control = null
 var start_logo_tween: Tween = null
 var start_patty_preview_wrap: SubViewportContainer = null
 var start_patty_preview_vp: SubViewport = null
@@ -1082,7 +1122,7 @@ const FRYER_COLLISION_LAYER := 32768
 const FRY_BASKET_COOK_SEC := 5.0
 const FRYER_DONE_POP_Y := 0.18 ## lift above oil surface when cook finishes
 const FRYER_HINT_SCREEN_NUDGE := Vector2(0.0, 30.0)
-const FRY_BASKET_SHAKE_NEED := 0.72
+const FRY_BASKET_SHAKE_NEED := 1.5
 ## Smoke cylinders under a dunked basket — ~15% larger than burger flip smoke.
 const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
 const FRYER_SMOKE_DIAMETER := 0.273 ## 0.237 * 1.15
@@ -1731,7 +1771,13 @@ func _setup_start_logo() -> void:
 		title.visible = false
 	if start_logo != null and is_instance_valid(start_logo):
 		_stop_logo_hover()
-		start_logo.position.y = 38.0
+		if start_logo_motion != null and is_instance_valid(start_logo_motion):
+			start_logo_motion.position = Vector2.ZERO
+			start_logo_motion.rotation = 0.0
+			start_logo_motion.scale = Vector2.ONE
+		start_logo.position = Vector2(20, 38)
+		start_logo.rotation = 0.0
+		start_logo.scale = Vector2.ONE
 		return
 	if not ResourceLoader.exists(LOGO_TEX_PATH):
 		if title:
@@ -1752,6 +1798,13 @@ func _setup_start_logo() -> void:
 	center.add_child(start_logo_wrap)
 	center.move_child(start_logo_wrap, 0)
 
+	start_logo_motion = Control.new()
+	start_logo_motion.name = "StartLogoMotion"
+	start_logo_motion.custom_minimum_size = Vector2(260, 344)
+	start_logo_motion.size = Vector2(260, 344)
+	start_logo_motion.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	start_logo_wrap.add_child(start_logo_motion)
+
 	start_logo = TextureRect.new()
 	start_logo.name = "BurgerPalsLogo"
 	start_logo.texture = tex
@@ -1762,7 +1815,7 @@ func _setup_start_logo() -> void:
 	start_logo.position = Vector2(20, 38)
 	start_logo.mouse_filter = Control.MOUSE_FILTER_STOP
 	start_logo.gui_input.connect(_on_start_logo_gui_input)
-	start_logo_wrap.add_child(start_logo)
+	start_logo_motion.add_child(start_logo)
 	_setup_start_patty_preview()
 	## Tall enough for logo + blurb + Solo + Multiplayer.
 	center.offset_top = -390.0
@@ -1785,7 +1838,8 @@ func _setup_start_patty_preview() -> void:
 	start_patty_preview_wrap.stretch = true
 	start_patty_preview_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	start_patty_preview_wrap.modulate.a = 0.98
-	start_logo_wrap.add_child(start_patty_preview_wrap)
+	var preview_parent := start_logo_motion if start_logo_motion != null and is_instance_valid(start_logo_motion) else start_logo_wrap
+	preview_parent.add_child(start_patty_preview_wrap)
 	start_patty_preview_wrap.z_index = 8
 
 	start_patty_preview_vp = SubViewport.new()
@@ -1834,6 +1888,10 @@ func _setup_start_patty_preview() -> void:
 func _start_logo_hover() -> void:
 	## Hover disabled — keep logo still on the home screen.
 	_stop_logo_hover()
+	if start_logo_motion != null and is_instance_valid(start_logo_motion):
+		start_logo_motion.position = Vector2.ZERO
+		start_logo_motion.rotation = 0.0
+		start_logo_motion.scale = Vector2.ONE
 	if start_logo != null and is_instance_valid(start_logo):
 		start_logo.position = Vector2(20, 38)
 		start_logo.rotation = 0.0
@@ -1849,28 +1907,31 @@ func _stop_logo_hover() -> void:
 
 
 func _bounce_start_logo() -> void:
-	if start_logo == null or not is_instance_valid(start_logo):
+	var mover := start_logo_motion
+	if mover == null or not is_instance_valid(mover):
+		mover = start_logo
+	if mover == null or not is_instance_valid(mover):
 		return
 	_stop_logo_hover()
-	start_logo.pivot_offset = start_logo.size * 0.5
-	start_logo.position = Vector2(20, 38)
-	start_logo.rotation = 0.0
-	start_logo.scale = Vector2.ONE
+	mover.pivot_offset = Vector2(130, 172)
+	mover.position = Vector2.ZERO
+	mover.rotation = 0.0
+	mover.scale = Vector2.ONE
+	if start_logo != null and is_instance_valid(start_logo):
+		start_logo.position = Vector2(20, 38)
+		start_logo.rotation = 0.0
+		start_logo.scale = Vector2.ONE
 	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
 		start_patty_preview_wrap.position = Vector2(5, 188)
 	start_logo_tween = create_tween()
 	start_logo_tween.set_parallel(true)
-	start_logo_tween.tween_property(start_logo, "position", Vector2(20, 0), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(start_logo, "scale", Vector2(1.08, 0.94), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(start_logo, "rotation", deg_to_rad(-3.5), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
-		start_logo_tween.tween_property(start_patty_preview_wrap, "position", Vector2(5, 150), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(mover, "position", Vector2(0, -46), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(mover, "scale", Vector2(1.08, 0.94), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(mover, "rotation", deg_to_rad(-3.5), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	start_logo_tween.chain().set_parallel(true)
-	start_logo_tween.tween_property(start_logo, "position", Vector2(20, 38), 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(start_logo, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(start_logo, "rotation", 0.0, 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
-		start_logo_tween.tween_property(start_patty_preview_wrap, "position", Vector2(5, 188), 0.22).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(mover, "position", Vector2.ZERO, 0.26).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(mover, "scale", Vector2.ONE, 0.26).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	start_logo_tween.tween_property(mover, "rotation", 0.0, 0.26).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
 
 
 func _on_start_logo_gui_input(event: InputEvent) -> void:
@@ -4383,7 +4444,7 @@ func _try_push_roomba_from_patty(patty_pos: Vector3, move_xz: Vector2, moved: fl
 	var roomba_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 	var patty_xz := Vector2(patty_pos.x, patty_pos.z)
 	var d := roomba_xz.distance_to(patty_xz)
-	var touch_r := ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.86
+	var touch_r := ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.98
 	if d > touch_r:
 		return
 	var dir := move_xz.normalized() if move_xz.length_squared() > 0.000001 else (roomba_xz - patty_xz).normalized()
@@ -4400,7 +4461,28 @@ func _try_push_roomba_from_patty(patty_pos: Vector3, move_xz: Vector2, moved: fl
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_reaim_t = 0.24
 	grill_roomba_stuck_t = 0.0
-	grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading) + 180.0
+	grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading)
+
+
+func _try_push_ready_fries_from_xz(source: Vector3, move_xz: Vector2, moved: float) -> void:
+	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root) or moved <= 0.0001:
+		return
+	var dir:= move_xz.normalized() if move_xz.length_squared() > 0.000001 else Vector2(1.0, 0.0)
+	var b:= _warmer_place_bounds()
+	for child in fryer_ready_root.get_children():
+		var pack:= child as Node3D
+		if pack == null or not is_instance_valid(pack):
+			continue
+		var d:= Vector2(pack.global_position.x - source.x, pack.global_position.z - source.z)
+		if d.length() > FRIES_HOLD_PUSH_RADIUS:
+			continue
+		var away:= d.normalized() if d.length_squared() > 0.0001 else dir
+		var push:= maxf(moved * 0.85, FRIES_HOLD_PUSH_STEP)
+		var next:= pack.global_position
+		next.x = clampf(next.x + (away.x + dir.x * 0.35) * push, b.position.x, b.end.x)
+		next.z = clampf(next.z + (away.y + dir.y * 0.35) * push, b.position.y, b.end.y)
+		next.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
+		pack.global_position = pack.global_position.lerp(next, 0.82)
 
 
 func _push_neighbors_from_drag(target: Vector3, move_xz: Vector2, moved: float, ignore_idx: int) -> bool:
@@ -4430,6 +4512,7 @@ func _push_neighbors_from_drag(target: Vector3, move_xz: Vector2, moved: float, 
 			else:
 				any_blocked = true
 	_try_push_roomba_from_patty(target, move_xz, moved)
+	_try_push_ready_fries_from_xz(target, move_xz, moved)
 	return not any_blocked or not _patty_blocked_at(target, ignore_idx)
 
 
@@ -5367,6 +5450,56 @@ func _find_closest_patty_place(desired: Vector3) -> Vector3:
 				lerpf(cook.position.y, cook.end.y, v)
 			)
 			if _patty_blocked_at(try2):
+				continue
+			var d2b := Vector2(try2.x - desired.x, try2.z - desired.z).length_squared()
+			if d2b < best_d2:
+				best_d2 = d2b
+				best = try2
+	return best
+
+
+func _find_closest_open_patty_place_in_rect(desired: Vector3, bounds: Rect2, ignore_idx: int = -1) -> Vector3:
+	if bounds.size.x < 0.05 or bounds.size.y < 0.05:
+		return Vector3.ZERO
+	var aim := Vector3(
+		clampf(desired.x, bounds.position.x, bounds.end.x),
+		GRILL_SURFACE_Y,
+		clampf(desired.z, bounds.position.y, bounds.end.y)
+	)
+	if not _patty_blocked_at(aim, ignore_idx):
+		return aim
+	var best := Vector3.ZERO
+	var best_d2 := INF
+	for ring_i in 26:
+		var ring := 0.03 + float(ring_i) * 0.035
+		var segs := mini(30, 12 + ring_i * 2)
+		for seg in segs:
+			var ang := float(seg) / float(segs) * TAU
+			var try := Vector3(
+				clampf(aim.x + cos(ang) * ring, bounds.position.x, bounds.end.x),
+				GRILL_SURFACE_Y,
+				clampf(aim.z + sin(ang) * ring, bounds.position.y, bounds.end.y)
+			)
+			if _patty_blocked_at(try, ignore_idx):
+				continue
+			var d2 := Vector2(try.x - desired.x, try.z - desired.z).length_squared()
+			if d2 < best_d2:
+				best_d2 = d2
+				best = try
+		if best != Vector3.ZERO and ring > 0.18:
+			return best
+	var gx := 7
+	var gz := 7
+	for ix in gx:
+		for iz in gz:
+			var u := (float(ix) + 0.5) / float(gx)
+			var v := (float(iz) + 0.5) / float(gz)
+			var try2 := Vector3(
+				lerpf(bounds.position.x, bounds.end.x, u),
+				GRILL_SURFACE_Y,
+				lerpf(bounds.position.y, bounds.end.y, v)
+			)
+			if _patty_blocked_at(try2, ignore_idx):
 				continue
 			var d2b := Vector2(try2.x - desired.x, try2.z - desired.z).length_squared()
 			if d2b < best_d2:
@@ -6605,6 +6738,8 @@ func _build_grill_roomba() -> void:
 	side_led.material_override = side_led_mat
 	grill_roomba_root.add_child(side_led)
 
+	_add_roomba_front_spatula(grill_roomba_root)
+
 	grill_roomba_bristles.clear()
 	for ring_i in 2:
 		var bristle_root:= Node3D.new()
@@ -6641,6 +6776,7 @@ func _build_grill_roomba() -> void:
 
 
 func _add_roomba_pixel_smile(parent: Node3D) -> void:
+	grill_roomba_face_pixels.clear()
 	var mat:= StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color(0.38, 1.0, 0.16, 1.0)
@@ -6650,27 +6786,108 @@ func _add_roomba_pixel_smile(parent: Node3D) -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.render_priority = 18
 	var pixel_mesh:= BoxMesh.new()
-	pixel_mesh.size = Vector3(0.018, 0.009, 0.018)
-	var pixels:= [
-		Vector2(-2.0, -2.0), Vector2(2.0, -2.0), 
-		Vector2(-3.0, 1.0), Vector2(-2.0, 2.0), Vector2(-1.0, 2.6), 
-		Vector2(0.0, 2.8), 
-		Vector2(1.0, 2.6), Vector2(2.0, 2.0), Vector2(3.0, 1.0), 
-	]
+	pixel_mesh.size = Vector3(0.0115, 0.007, 0.0115)
 	var root:= Node3D.new()
 	root.name = "PixelLedSmile"
 	root.position = Vector3(0.0, ROOMBA_HEIGHT * 0.72, - ROOMBA_RADIUS * 0.015)
+	root.rotation_degrees.y = 112.5 ## Local +Z (mouth bottom) points toward the red LED/front.
 	parent.add_child(root)
-	var spacing:= 0.022
-	for i in range(pixels.size()):
-		var p: Vector2 = pixels[i]
+	grill_roomba_face_root = root
+	for i in range(18):
 		var px:= MeshInstance3D.new()
 		px.name = "SmilePixel_%02d" % i
 		px.mesh = pixel_mesh
 		px.material_override = mat
 		px.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		px.position = Vector3(p.x * spacing, 0.0, p.y * spacing)
 		root.add_child(px)
+		grill_roomba_face_pixels.append(px)
+	_set_roomba_face("neutral")
+
+
+func _add_roomba_front_spatula(parent: Node3D) -> void:
+	var spat_root:= Node3D.new()
+	spat_root.name = "RoombaFrontSpatula"
+	spat_root.position = Vector3(ROOMBA_RADIUS * 1.01, -ROOMBA_HEIGHT * 0.44, -ROOMBA_RADIUS * 0.42)
+	spat_root.rotation_degrees.y = 112.5
+	parent.add_child(spat_root)
+
+	var blade_mat:= _make_basic_mat(Color(0.74, 0.80, 0.82), 0.38, 0.24)
+	var handle_mat:= _make_basic_mat(Color(0.08, 0.09, 0.095), 0.28, 0.42)
+	var blade:= MeshInstance3D.new()
+	blade.name = "SpatulaBlade"
+	var blade_mesh:= BoxMesh.new()
+	blade_mesh.size = Vector3(ROOMBA_RADIUS * 0.66, 0.0035, ROOMBA_RADIUS * 0.62)
+	blade.mesh = blade_mesh
+	blade.position = Vector3(0.0, -0.007, ROOMBA_RADIUS * 0.29)
+	blade.material_override = blade_mat
+	blade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	spat_root.add_child(blade)
+
+	for i in 3:
+		var hole:= MeshInstance3D.new()
+		hole.name = "SpatulaHole_%d" % i
+		var hole_mesh:= CylinderMesh.new()
+		hole_mesh.top_radius = 0.006
+		hole_mesh.bottom_radius = 0.006
+		hole_mesh.height = 0.0025
+		hole_mesh.radial_segments = 12
+		hole.mesh = hole_mesh
+		hole.rotation_degrees.x = 90.0
+		hole.position = Vector3((float(i) - 1.0) * 0.018, 0.0002, ROOMBA_RADIUS * 0.29)
+		hole.material_override = grill_roomba_body_mat if grill_roomba_body_mat != null else handle_mat
+		hole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		spat_root.add_child(hole)
+
+	var handle:= MeshInstance3D.new()
+	handle.name = "SpatulaShortHandle"
+	var handle_mesh:= BoxMesh.new()
+	handle_mesh.size = Vector3(0.011, 0.007, ROOMBA_RADIUS * 0.36)
+	handle.mesh = handle_mesh
+	handle.position = Vector3(0.0, -0.002, -ROOMBA_RADIUS * 0.08)
+	handle.material_override = handle_mat
+	handle.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	spat_root.add_child(handle)
+
+
+func _roomba_face_pixels_for(state: String) -> Array:
+	match state:
+		"happy":
+			return [
+				Vector2(-1.6, -1.5), Vector2(1.6, -1.5),
+				Vector2(-2.4, 0.7), Vector2(-1.6, 1.4), Vector2(-0.8, 1.8),
+				Vector2(0.0, 1.95), Vector2(0.8, 1.8), Vector2(1.6, 1.4), Vector2(2.4, 0.7),
+			]
+		"sad":
+			return [
+				Vector2(-1.6, -1.5), Vector2(1.6, -1.5),
+				Vector2(-2.2, 2.0), Vector2(-1.2, 1.3), Vector2(0.0, 1.05),
+				Vector2(1.2, 1.3), Vector2(2.2, 2.0),
+			]
+		_:
+			return [
+				Vector2(-1.45, -1.45), Vector2(1.45, -1.45),
+				Vector2(-1.7, 1.2), Vector2(-0.85, 1.45), Vector2(0.0, 1.55),
+				Vector2(0.85, 1.45), Vector2(1.7, 1.2),
+			]
+
+
+func _set_roomba_face(state: String) -> void:
+	if grill_roomba_face_root == null or not is_instance_valid(grill_roomba_face_root):
+		return
+	if state == grill_roomba_face_state:
+		return
+	grill_roomba_face_state = state
+	var pixels:= _roomba_face_pixels_for(state)
+	var spacing:= 0.016
+	for i in range(grill_roomba_face_pixels.size()):
+		var px:= grill_roomba_face_pixels[i] as MeshInstance3D
+		if px == null or not is_instance_valid(px):
+			continue
+		var on:= i < pixels.size()
+		px.visible = on
+		if on:
+			var p: Vector2 = pixels[i]
+			px.position = Vector3(p.x * spacing, 0.0, p.y * spacing)
 
 
 func _reset_grill_roomba() -> void:
@@ -6687,9 +6904,26 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_foam_cd = 0.0
 	grill_roomba_stuck_t = 0.0
 	grill_roomba_escape_t = 0.0
+	grill_roomba_carry_patty = null
+	grill_roomba_carry_slot = -1
+	grill_roomba_carry_target = Vector3.INF
+	if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+		grill_roomba_fake_patty.queue_free()
+	grill_roomba_fake_patty = null
+	grill_roomba_scoop_patty = null
+	grill_roomba_scoop_slot = -1
+	grill_roomba_scoop_hold_t = 0.0
+	grill_roomba_task_patty = null
+	grill_roomba_task_slot = -1
+	grill_roomba_task_dir = Vector2.ZERO
+	grill_roomba_task_t = 0.0
+	grill_roomba_was_tasking = false
+	grill_roomba_chirp_cd = randf_range(2.0, 4.0)
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(false)
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
 		grill_roomba_root.global_position = _roomba_idle_corner_target()
-		grill_roomba_root.rotation_degrees = Vector3(0.0, rad_to_deg(grill_roomba_heading) + 180.0, 0.0)
+		grill_roomba_root.rotation_degrees = Vector3(0.0, rad_to_deg(grill_roomba_heading), 0.0)
 		grill_roomba_last_xz = Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 
 
@@ -6700,9 +6934,14 @@ func _update_grill_roomba(delta: float) -> void:
 		grill_roomba_root.visible = false
 		if grill_roomba_held:
 			_release_grill_roomba()
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(false)
 		return
 	grill_roomba_root.visible = true
 	if grill_roomba_held:
+		_set_roomba_face("sad")
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(false)
 		_update_held_grill_roomba(delta)
 		return
 	grill_roomba_foam_cd = maxf(0.0, grill_roomba_foam_cd - delta)
@@ -6712,26 +6951,91 @@ func _update_grill_roomba(delta: float) -> void:
 	var old_pos:= grill_roomba_root.global_position
 	var old_xz:= Vector2(old_pos.x, old_pos.z)
 	grill_roomba_escape_t = maxf(0.0, grill_roomba_escape_t - delta)
+	_roomba_update_carried_patty()
+	_roomba_update_scoop_hold(delta)
+	var carrying:= grill_roomba_carry_patty != null and is_instance_valid(grill_roomba_carry_patty)
+	var scooping:= grill_roomba_scoop_patty != null and is_instance_valid(grill_roomba_scoop_patty)
+	if not carrying and not scooping:
+		_roomba_select_patty_task(old_xz)
+	var tasking:= grill_roomba_task_patty != null and is_instance_valid(grill_roomba_task_patty)
 	var target:= _roomba_dirty_target(old_xz)
 	var desired_heading:= grill_roomba_turn_goal
 	var has_dirt:= target.is_finite()
-	var seeking:= has_dirt
+	var has_patty_task:= carrying or scooping or tasking
+	grill_roomba_task_t = grill_roomba_task_t + delta if has_patty_task else 0.0
+	if grill_roomba_task_t > ROOMBA_TASK_TIMEOUT_SEC:
+		_roomba_reconsider_stuck_patty_task()
+		carrying = grill_roomba_carry_patty != null and is_instance_valid(grill_roomba_carry_patty)
+		scooping = grill_roomba_scoop_patty != null and is_instance_valid(grill_roomba_scoop_patty)
+		tasking = grill_roomba_task_patty != null and is_instance_valid(grill_roomba_task_patty)
+		has_patty_task = carrying or scooping or tasking
+		grill_roomba_task_t = 0.0
+	var seeking:= has_dirt or has_patty_task
 	var parking:= not has_dirt
-	if not has_dirt:
+	var scoop_locked:= false
+	var square_up_locked:= false
+	var path_ignore_patty: Area3D = null
+	if carrying:
+		target = _roomba_transport_target()
+		if not target.is_finite():
+			target = _roomba_idle_corner_target()
+	elif scooping:
+		path_ignore_patty = grill_roomba_scoop_patty
+		target = _roomba_spatula_approach_for_patty(grill_roomba_scoop_patty.position, grill_roomba_task_dir)
+		var blade:= _roomba_spatula_contact_xz()
+		var patty_xz:= Vector2(float(grill_roomba_scoop_patty.position.x), float(grill_roomba_scoop_patty.position.z))
+		scoop_locked = blade.distance_to(patty_xz) <= ROOMBA_SPATULA_SCOOP_RADIUS
+		square_up_locked = not scoop_locked and _roomba_should_square_up_to_patty(grill_roomba_scoop_patty, old_xz, target)
+	elif tasking:
+		path_ignore_patty = grill_roomba_task_patty
+		target = _roomba_spatula_approach_for_patty(grill_roomba_task_patty.position, grill_roomba_task_dir)
+		square_up_locked = _roomba_should_square_up_to_patty(grill_roomba_task_patty, old_xz, target)
+	elif not has_dirt:
 		target = _roomba_idle_corner_target()
+	_set_roomba_face("happy" if has_dirt or has_patty_task or grill_on_fire else "neutral")
+	var tasking_now:= has_dirt or has_patty_task or grill_on_fire
+	if grill_roomba_was_tasking and not tasking_now:
+		if game_audio and game_audio.has_method("play_roomba_done_beep"):
+			game_audio.play_roomba_done_beep()
+	grill_roomba_was_tasking = tasking_now
+	if tasking_now:
+		grill_roomba_chirp_cd = maxf(0.0, grill_roomba_chirp_cd - delta)
+		if grill_roomba_chirp_cd <= 0.0:
+			grill_roomba_chirp_cd = randf_range(3.8, 7.5)
+			if game_audio and game_audio.has_method("play_roomba_wawa_chirp"):
+				game_audio.play_roomba_wawa_chirp()
 	grill_roomba_reaim_t = maxf(0.0, grill_roomba_reaim_t - delta)
 	var to_target:= Vector2(target.x - old_pos.x, target.z - old_pos.z)
-	if not has_dirt and to_target.length() <= 0.055:
+	if not has_dirt and not has_patty_task and to_target.length() <= 0.055:
 		grill_roomba_vel = Vector2.ZERO
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(false)
+		_set_roomba_face("neutral")
 		grill_roomba_turn_goal = deg_to_rad(-35.0)
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
-		grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading) + 180.0
+		grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading)
 		return
 	if grill_roomba_reaim_t <= 0.0:
-		grill_roomba_turn_goal = to_target.angle() if parking else _roomba_heading_to_target(to_target)
+		if has_patty_task:
+			grill_roomba_turn_goal = to_target.angle()
+		else:
+			grill_roomba_turn_goal = to_target.angle() if parking else _roomba_heading_to_target(to_target)
 		desired_heading = grill_roomba_turn_goal
-		grill_roomba_reaim_t = 0.55 if has_dirt else 0.45
-	if grill_roomba_back_t > 0.0:
+		grill_roomba_reaim_t = ROOMBA_PATTY_TASK_REAIM if has_patty_task else (0.55 if has_dirt else 0.45)
+	if scoop_locked:
+		grill_roomba_vel = Vector2.ZERO
+		grill_roomba_turn_goal = Vector2(grill_roomba_scoop_patty.position.x - old_pos.x, grill_roomba_scoop_patty.position.z - old_pos.z).angle()
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+	elif square_up_locked:
+		grill_roomba_vel = Vector2.ZERO
+		var face_patty = grill_roomba_scoop_patty if scooping else grill_roomba_task_patty
+		if face_patty != null and is_instance_valid(face_patty):
+			grill_roomba_turn_goal = _roomba_heading_to_patty(face_patty, old_xz)
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+		if face_patty != null and is_instance_valid(face_patty) and _roomba_heading_aligned(grill_roomba_heading, grill_roomba_turn_goal) and not _roomba_spatula_overlaps_patty(face_patty):
+			grill_roomba_vel = _roomba_square_up_nudge(face_patty, old_xz)
+		grill_roomba_reaim_t = 0.0
+	elif grill_roomba_back_t > 0.0:
 		grill_roomba_back_t = maxf(0.0, grill_roomba_back_t - delta)
 		desired_heading = grill_roomba_heading
 		grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * - ROOMBA_SPEED * 0.55
@@ -6740,8 +7044,10 @@ func _update_grill_roomba(delta: float) -> void:
 			desired_heading = grill_roomba_turn_goal
 		else:
 			desired_heading = _roomba_wall_safe_heading(old_xz, desired_heading, Vector2(target.x, target.z))
+			if not carrying:
+				desired_heading = _roomba_patty_safe_heading(old_xz, desired_heading, Vector2(target.x, target.z), path_ignore_patty)
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, desired_heading, delta)
-		var speed:= ROOMBA_SEEK_SPEED if seeking else ROOMBA_SPEED * 0.95
+		var speed:= ROOMBA_TRANSPORT_SPEED if has_patty_task else (ROOMBA_SEEK_SPEED if seeking else ROOMBA_SPEED * 0.95)
 		if grill_roomba_escape_t > 0.0:
 			speed = ROOMBA_SEEK_SPEED * 1.15
 		grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * speed
@@ -6749,16 +7055,27 @@ func _update_grill_roomba(delta: float) -> void:
 	var bounced:= _roomba_apply_bounds_and_bump(new_xz)
 	if bounced:
 		new_xz = _roomba_clamp_xz_to_bounds(new_xz)
-		if new_xz.distance_to(old_xz) < 0.002:
+		if _roomba_body_hits_patty(new_xz):
+			new_xz = old_xz
+			grill_roomba_vel = Vector2.ZERO
+		elif new_xz.distance_to(old_xz) < 0.002:
 			new_xz = old_xz
 		_roomba_bump_turn()
 	var new_pos:= Vector3(new_xz.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, new_xz.y)
 	grill_roomba_root.global_position = new_pos
-	grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading) + 180.0
+	grill_roomba_root.rotation_degrees.y = rad_to_deg(grill_roomba_heading)
+	_roomba_update_carried_patty()
 	var move:= Vector2(new_pos.x - old_pos.x, new_pos.z - old_pos.z)
 	var moved:= move.length()
 	if moved > 0.0001:
 		_roomba_clean_at(new_pos, move, maxf(moved, delta * 0.035), delta)
+		_try_push_ready_fries_from_xz(new_pos, move, moved)
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(moved > 0.001 and not grill_roomba_held, grill_roomba_vel.length())
+	if carrying:
+		_roomba_try_drop_carried_patty()
+	elif tasking:
+		_roomba_try_scoop_cooked_patty()
 	_roomba_update_stuck(delta, old_xz, new_xz, target)
 	if grill_on_fire:
 		_roomba_spray_fire(new_pos, delta)
@@ -6775,7 +7092,7 @@ func _update_held_grill_roomba(delta: float) -> void:
 	var b:= _roomba_place_bounds()
 	target.x = clampf(target.x, b.position.x, b.end.x)
 	target.z = clampf(target.z, b.position.y, b.end.y)
-	target.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y + 0.335
+	target.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y + 0.170
 	target.x += sin(grill_roomba_hold_wobble * 2.1) * 0.008
 	target.z += cos(grill_roomba_hold_wobble * 1.7) * 0.007
 	var old_pos:= grill_roomba_root.global_position
@@ -6786,7 +7103,7 @@ func _update_held_grill_roomba(delta: float) -> void:
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
 	grill_roomba_root.rotation_degrees = Vector3(
 		-15.0 + sin(grill_roomba_hold_wobble * 2.4) * 3.0, 
-		rad_to_deg(grill_roomba_heading) + 180.0, 
+		rad_to_deg(grill_roomba_heading), 
 		cos(grill_roomba_hold_wobble * 2.0) * 3.5
 	)
 	_update_grill_roomba_bristles(delta, move.length() / maxf(delta, 0.001))
@@ -6815,7 +7132,9 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	var near:= screen_pos.distance_to(camera.unproject_position(grill_roomba_root.global_position + Vector3(0.0, 0.045, 0.0))) <= 64.0
 	if not near and not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
 		return false
+	_roomba_drop_carried_patty_in_place()
 	grill_roomba_held = true
+	_set_roomba_face("sad")
 	grill_roomba_hold_wobble = randf() * TAU
 	grill_roomba_vel = Vector2.ZERO
 	grill_roomba_back_t = 0.0
@@ -6829,8 +7148,11 @@ func _release_grill_roomba() -> void:
 	if not grill_roomba_held:
 		return
 	grill_roomba_held = false
+	_set_roomba_face("neutral")
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(false)
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
 		var p:= grill_roomba_root.global_position
 		var b:= _roomba_place_bounds()
@@ -6852,11 +7174,74 @@ func _roomba_apply_bounds_and_bump(xz: Vector2) -> bool:
 		var p = grill[i]
 		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
 			continue
+		if p == grill_roomba_carry_patty:
+			continue
 		var pp: Vector3 = p.position
 		var d:= Vector2(xz.x - pp.x, xz.y - pp.z)
-		if d.length() < ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.78:
-			return not _roomba_push_patty(i, p, xz)
+		var touch_r := ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.98
+		if d.length() < touch_r:
+			_roomba_push_patty(i, p, xz)
+			return true
 	return false
+
+
+func _roomba_body_hits_patty(xz: Vector2, extra: float = 0.0) -> bool:
+	for i in range(grill.size()):
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
+			continue
+		if p == grill_roomba_carry_patty:
+			continue
+		var pp: Vector3 = p.position
+		var d:= Vector2(xz.x - pp.x, xz.y - pp.z).length()
+		if d < ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.98 + extra:
+			return true
+	return false
+
+
+func _roomba_body_hits_patty_except_target(xz: Vector2, target_patty: Area3D = null, extra: float = 0.0) -> bool:
+	for i in range(grill.size()):
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
+			continue
+		if p == grill_roomba_carry_patty or p == target_patty:
+			continue
+		var pp: Vector3 = p.position
+		var d:= Vector2(xz.x - pp.x, xz.y - pp.z).length()
+		if d < ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.04 + extra:
+			return true
+	return false
+
+
+func _roomba_patty_safe_heading(pos: Vector2, heading: float, target: Vector2, target_patty: Area3D = null) -> float:
+	var dir:= Vector2(cos(heading), sin(heading))
+	var probe:= pos + dir * (ROOMBA_RADIUS * 1.25)
+	if not _roomba_body_hits_patty_except_target(probe, target_patty, 0.01):
+		return heading
+	var best_heading:= heading
+	var best_score:= INF
+	var to_goal:= (target - pos).normalized() if target.distance_squared_to(pos) > 0.0001 else dir
+	var offsets:= [
+		deg_to_rad(28.0),
+		deg_to_rad(-28.0),
+		deg_to_rad(48.0),
+		deg_to_rad(-48.0),
+		deg_to_rad(72.0),
+		deg_to_rad(-72.0),
+	]
+	for off in offsets:
+		var h: float = heading + float(off)
+		var cand_dir:= Vector2(cos(h), sin(h))
+		var cand:= pos + cand_dir * (ROOMBA_RADIUS * 1.55)
+		if _roomba_body_hits_patty_except_target(cand, target_patty, 0.008):
+			continue
+		var score:= absf(wrapf(h - to_goal.angle(), -PI, PI)) + cand.distance_to(target) * 0.35
+		if score < best_score:
+			best_score = score
+			best_heading = h
+	if best_score < INF:
+		return best_heading
+	return heading + PI * 0.55
 
 
 func _roomba_bump_turn() -> void:
@@ -6897,6 +7282,592 @@ func _roomba_heading_to_target(to_target: Vector2) -> float:
 	return to_target.angle()
 
 
+func _roomba_forward_xz() -> Vector2:
+	return Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading))
+
+
+func _roomba_heading_to_patty(patty: Area3D, body_xz: Vector2) -> float:
+	if patty == null or not is_instance_valid(patty):
+		return grill_roomba_turn_goal
+	var patty_xz := Vector2(float(patty.position.x), float(patty.position.z))
+	return (patty_xz - body_xz).angle()
+
+
+func _roomba_heading_aligned(current: float, target: float, tolerance: float = 0.16) -> bool:
+	return absf(wrapf(target - current, -PI, PI)) <= tolerance
+
+
+func _roomba_should_square_up_to_patty(patty: Area3D, body_xz: Vector2, approach: Vector3) -> bool:
+	if patty == null or not is_instance_valid(patty):
+		return false
+	if _roomba_spatula_overlaps_patty(patty):
+		return false
+	var patty_xz := Vector2(float(patty.position.x), float(patty.position.z))
+	if body_xz.distance_to(Vector2(approach.x, approach.z)) <= 0.065:
+		return true
+	return body_xz.distance_to(patty_xz) <= ROOMBA_SPATULA_CARRY_REACH + PATTY_FIT_RADIUS * 0.78
+
+
+func _roomba_square_up_nudge(patty: Area3D, body_xz: Vector2) -> Vector2:
+	if patty == null or not is_instance_valid(patty):
+		return Vector2.ZERO
+	var patty_xz := Vector2(float(patty.position.x), float(patty.position.z))
+	var body_d := body_xz.distance_to(patty_xz)
+	var forward := _roomba_forward_xz()
+	if body_d < ROOMBA_SPATULA_CONTACT_REACH * 0.82:
+		return -forward * ROOMBA_SPEED * 0.22
+	if body_d > ROOMBA_SPATULA_REACH:
+		return forward * ROOMBA_SPEED * 0.34
+	return Vector2.ZERO
+
+
+func _roomba_spatula_center_xz() -> Vector2:
+	var p:= grill_roomba_root.global_position if grill_roomba_root != null else Vector3.ZERO
+	return Vector2(p.x, p.z) + _roomba_forward_xz() * ROOMBA_SPATULA_REACH
+
+
+func _roomba_spatula_contact_xz() -> Vector2:
+	var p:= grill_roomba_root.global_position if grill_roomba_root != null else Vector3.ZERO
+	return Vector2(p.x, p.z) + _roomba_forward_xz() * ROOMBA_SPATULA_CONTACT_REACH
+
+
+func _roomba_spatula_overlaps_patty(patty: Area3D) -> bool:
+	if patty == null or not is_instance_valid(patty):
+		return false
+	var patty_xz:= Vector2(float(patty.position.x), float(patty.position.z))
+	var blade_contact:= _roomba_spatula_contact_xz()
+	var blade_center:= _roomba_spatula_center_xz()
+	return blade_contact.distance_to(patty_xz) <= ROOMBA_SPATULA_TRUE_OVERLAP_RADIUS \
+		or blade_center.distance_to(patty_xz) <= PATTY_FIT_RADIUS * 0.86
+
+
+func _roomba_carry_world_pos() -> Vector3:
+	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+		return grill_roomba_root.global_transform * _roomba_carry_local_pos()
+	var center:= _roomba_spatula_center_xz()
+	return Vector3(center.x, GRILL_SURFACE_Y + PATTY_SIT_Y + ROOMBA_SPATULA_CARRY_LIFT, center.y)
+
+
+func _roomba_carry_local_pos() -> Vector3:
+	return Vector3(
+		ROOMBA_SPATULA_CARRY_REACH,
+		PATTY_SIT_Y + ROOMBA_SPATULA_CARRY_LIFT - ROOMBA_SIT_Y,
+		ROOMBA_SPATULA_CARRY_SIDE
+	)
+
+
+func _roomba_carry_rotation_degrees() -> Vector3:
+	return Vector3(0.0, rad_to_deg(grill_roomba_heading), 0.0)
+
+
+func _roomba_is_smoke_visual_node(node: Node) -> bool:
+	var n := String(node.name).to_lower()
+	if n.contains("smoke") or n.contains("steam") or n.contains("particle") or n.contains("reflect"):
+		return true
+	var parent := node.get_parent()
+	while parent != null:
+		var pn := String(parent.name).to_lower()
+		if pn.contains("smoke") or pn.contains("steam") or pn.contains("particle") or pn.contains("reflect"):
+			return true
+		parent = parent.get_parent()
+	return false
+
+
+func _roomba_copy_patty_visuals(src: Node, dst_parent: Node3D, root_xf: Transform3D) -> int:
+	if _roomba_is_smoke_visual_node(src):
+		return 0
+	var copied := 0
+	for child in src.get_children():
+		if _roomba_is_smoke_visual_node(child):
+			continue
+		if child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			if mi.mesh != null and mi.visible:
+				var clone := MeshInstance3D.new()
+				clone.name = "Carry_%s" % String(mi.name)
+				clone.mesh = mi.mesh
+				clone.transform = root_xf.affine_inverse() * mi.global_transform
+				clone.scale *= Vector3(1.0, 1.0, 1.0)
+				clone.material_override = mi.material_override
+				for s in mi.mesh.get_surface_count():
+					var surf_mat := mi.get_surface_override_material(s)
+					if surf_mat != null:
+						clone.set_surface_override_material(s, surf_mat)
+				clone.cast_shadow = mi.cast_shadow
+				dst_parent.add_child(clone)
+				copied += 1
+		if child.get_child_count() > 0:
+			copied += _roomba_copy_patty_visuals(child, dst_parent, root_xf)
+	return copied
+
+
+func _roomba_add_fallback_fake_patty(fake: Node3D, real_patty: Area3D) -> void:
+	var meat:= MeshInstance3D.new()
+	meat.name = "FakePattyDisc"
+	var mesh:= CylinderMesh.new()
+	mesh.top_radius = PATTY_FIT_RADIUS * 0.94
+	mesh.bottom_radius = PATTY_FIT_RADIUS * 0.98
+	mesh.height = 0.048
+	mesh.radial_segments = 40
+	meat.mesh = mesh
+	var col:= Color(0.30, 0.13, 0.07)
+	if real_patty != null and is_instance_valid(real_patty) and real_patty.has_method("get_patty_color"):
+		col = real_patty.get_patty_color()
+	var mat:= _make_basic_mat(col, 0.0, 0.82)
+	mat.render_priority = 24
+	meat.material_override = mat
+	meat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	fake.add_child(meat)
+
+
+func _roomba_make_fake_patty_from(real_patty: Area3D) -> Node3D:
+	var fake:= Node3D.new()
+	fake.name = "RoombaFakeCarryPatty"
+	world.add_child(fake)
+	var carry_pos := _roomba_carry_world_pos()
+	if real_patty != null and is_instance_valid(real_patty):
+		fake.global_position = real_patty.global_position + Vector3(0.0, ROOMBA_SPATULA_CARRY_LIFT, 0.0)
+	else:
+		fake.global_position = carry_pos
+	fake.rotation_degrees = _roomba_carry_rotation_degrees()
+	var copied := 0
+	if real_patty != null and is_instance_valid(real_patty):
+		copied = _roomba_copy_patty_visuals(real_patty, fake, real_patty.global_transform)
+	if copied <= 0:
+		_roomba_add_fallback_fake_patty(fake, real_patty)
+	fake.set_meta("roomba_carry_animating", true)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(fake, "global_position", carry_pos, 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(fake, "rotation_degrees", _roomba_carry_rotation_degrees(), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_callback(func() -> void:
+		if fake != null and is_instance_valid(fake):
+			fake.set_meta("roomba_carry_animating", false)
+			fake.global_position = _roomba_carry_world_pos()
+			fake.rotation_degrees = _roomba_carry_rotation_degrees()
+	)
+	return fake
+
+
+func _roomba_update_carried_patty() -> void:
+	if grill_roomba_carry_patty == null:
+		if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+			grill_roomba_fake_patty.queue_free()
+		grill_roomba_fake_patty = null
+		return
+	if not is_instance_valid(grill_roomba_carry_patty):
+		grill_roomba_carry_patty = null
+		grill_roomba_carry_slot = -1
+		grill_roomba_carry_target = Vector3.INF
+		if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+			grill_roomba_fake_patty.queue_free()
+		grill_roomba_fake_patty = null
+		return
+	var p:= _roomba_carry_world_pos()
+	grill_roomba_carry_patty.visible = false
+	if grill_roomba_fake_patty == null or not is_instance_valid(grill_roomba_fake_patty):
+		grill_roomba_fake_patty = _roomba_make_fake_patty_from(grill_roomba_carry_patty)
+	if not bool(grill_roomba_fake_patty.get_meta("roomba_carry_animating", false)):
+		var old_fake_pos := grill_roomba_fake_patty.global_position
+		grill_roomba_fake_patty.global_position = p
+		grill_roomba_fake_patty.rotation_degrees = _roomba_carry_rotation_degrees()
+		_roomba_push_patties_from_carried_fake(old_fake_pos, grill_roomba_fake_patty.global_position)
+
+
+func _roomba_drop_carried_patty_in_place() -> void:
+	if grill_roomba_carry_patty == null or not is_instance_valid(grill_roomba_carry_patty):
+		grill_roomba_carry_patty = null
+		grill_roomba_carry_slot = -1
+		grill_roomba_carry_target = Vector3.INF
+		if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+			grill_roomba_fake_patty.queue_free()
+		grill_roomba_fake_patty = null
+		return
+	var patty:= grill_roomba_carry_patty
+	var idx:= grill_roomba_carry_slot
+	if idx < 0 or idx >= GRILL_SLOTS or (grill[idx] != null and grill[idx] != patty):
+		idx = _first_empty_slot()
+	if idx < 0:
+		return
+	var b:= _patty_place_bounds_with_hold()
+	var carry_pos:= _roomba_carry_world_pos()
+	var pos:= Vector3(
+		clampf(carry_pos.x, b.position.x, b.end.x),
+		GRILL_SURFACE_Y,
+		clampf(carry_pos.z, b.position.y, b.end.y)
+	)
+	if _patty_blocked_at(pos, idx):
+		for r in [0.04, 0.075, 0.11, 0.15]:
+			for dir in [Vector2(1.0, 0.0), Vector2(-1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, -1.0), Vector2(0.707, 0.707), Vector2(-0.707, 0.707), Vector2(0.707, -0.707), Vector2(-0.707, -0.707)]:
+				var c:= Vector3(
+					clampf(pos.x + dir.x * r, b.position.x, b.end.x),
+					GRILL_SURFACE_Y,
+					clampf(pos.z + dir.y * r, b.position.y, b.end.y)
+				)
+				if not _patty_blocked_at(c, idx):
+					pos = c
+					break
+			if not _patty_blocked_at(pos, idx):
+				break
+	if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+		grill_roomba_fake_patty.queue_free()
+	grill_roomba_fake_patty = null
+	grill_roomba_carry_patty = null
+	grill_roomba_carry_slot = -1
+	grill_roomba_carry_target = Vector3.INF
+	grill_roomba_scoop_patty = null
+	grill_roomba_scoop_slot = -1
+	grill_roomba_scoop_hold_t = 0.0
+	patty.is_held = false
+	patty.visible = true
+	patty.rotation_degrees = Vector3.ZERO
+	patty.slot_index = idx
+	patty.heating = grill_on and not _is_in_warmer_zone(pos)
+	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+	grill[idx] = patty
+	_move_patty_to(idx, patty, pos, true)
+
+
+func _roomba_update_scoop_hold(delta: float) -> void:
+	if grill_roomba_scoop_patty == null:
+		grill_roomba_scoop_hold_t = 0.0
+		return
+	if not is_instance_valid(grill_roomba_scoop_patty) or bool(grill_roomba_scoop_patty.get("is_held")):
+		grill_roomba_scoop_patty = null
+		grill_roomba_scoop_slot = -1
+		grill_roomba_scoop_hold_t = 0.0
+		return
+	var blade:= _roomba_spatula_contact_xz()
+	var patty_xz:= Vector2(float(grill_roomba_scoop_patty.position.x), float(grill_roomba_scoop_patty.position.z))
+	if not _roomba_spatula_overlaps_patty(grill_roomba_scoop_patty):
+		grill_roomba_scoop_hold_t = 0.0
+		return
+	grill_roomba_scoop_hold_t += delta
+	grill_roomba_vel = Vector2.ZERO
+	if grill_roomba_scoop_hold_t < ROOMBA_SPATULA_SCOOP_HOLD_SEC:
+		return
+	_roomba_commit_scoop_patty(grill_roomba_scoop_patty, grill_roomba_scoop_slot)
+
+
+func _roomba_push_patties_from_carried_fake(old_pos: Vector3, new_pos: Vector3) -> void:
+	var fake_xz:= Vector2(new_pos.x, new_pos.z)
+	var move_xz:= Vector2(new_pos.x - old_pos.x, new_pos.z - old_pos.z)
+	var fallback_dir:= _roomba_forward_xz()
+	for i in range(grill.size()):
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
+			continue
+		if p == grill_roomba_carry_patty:
+			continue
+		var patty_xz:= Vector2(float(p.position.x), float(p.position.z))
+		var delta:= patty_xz - fake_xz
+		var touch_r:= PATTY_FIT_RADIUS * 1.92
+		if delta.length() >= touch_r:
+			continue
+		var push_dir:= delta.normalized() if delta.length_squared() > 0.0001 else fallback_dir
+		if move_xz.length_squared() > 0.000001:
+			push_dir = (push_dir + move_xz.normalized() * 0.65).normalized()
+		var push_len:= maxf(ROOMBA_PATTY_PUSH * 0.8, touch_r - delta.length() + 0.01)
+		_try_shove_patty(i, p, push_dir, push_len, i, true)
+
+
+func _roomba_commit_scoop_patty(patty: Area3D, slot: int) -> void:
+	grill_roomba_scoop_patty = null
+	grill_roomba_scoop_slot = -1
+	grill_roomba_scoop_hold_t = 0.0
+	if grill_roomba_carry_patty != null and is_instance_valid(grill_roomba_carry_patty):
+		return
+	if patty == null or not is_instance_valid(patty):
+		return
+	grill_roomba_carry_patty = patty
+	grill_roomba_carry_slot = slot
+	grill_roomba_carry_target = Vector3.INF
+	grill_roomba_task_patty = null
+	grill_roomba_task_slot = -1
+	grill_roomba_task_dir = Vector2.ZERO
+	if slot >= 0 and slot < grill.size() and grill[slot] == patty:
+		grill[slot] = null
+	patty.is_held = true
+	patty.heating = false
+	patty.visible = false
+	_roomba_update_carried_patty()
+	if game_audio and game_audio.has_method("play_click"):
+		game_audio.play_click()
+
+
+func _roomba_cooked_patty_target(from_xz: Vector2) -> Vector3:
+	var best:= Vector3.INF
+	var best_score:= INF
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
+			continue
+		if _is_in_warmer_zone(p.position):
+			continue
+		if not p.has_method("can_scoop") or not p.can_scoop():
+			continue
+		var pxz:= Vector2(float(p.position.x), float(p.position.z))
+		var score:= from_xz.distance_to(pxz)
+		if score < best_score:
+			best_score = score
+			best = p.position
+	return best
+
+
+func _roomba_select_patty_task(from_xz: Vector2) -> void:
+	var best_i:= -1
+	var best_score:= INF
+	var best_dir:= Vector2.ZERO
+	var current_i := grill_roomba_task_slot if grill_roomba_task_patty != null and is_instance_valid(grill_roomba_task_patty) else -1
+	var current_score := INF
+	var current_dir := Vector2.ZERO
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or bool(p.get("is_held")):
+			continue
+		if _is_in_warmer_zone(p.position):
+			continue
+		if not p.has_method("can_scoop") or not p.can_scoop():
+			continue
+		var pick := _roomba_score_patty_task(i, p, from_xz)
+		var score := float(pick["score"])
+		if i == current_i:
+			current_score = score
+			current_dir = pick["dir"]
+		if score < best_score:
+			best_score = score
+			best_i = i
+			best_dir = pick["dir"]
+	if current_i >= 0 and current_score < INF and current_score <= best_score + 0.24:
+		best_i = current_i
+		best_dir = current_dir
+	if best_i < 0:
+		grill_roomba_task_patty = null
+		grill_roomba_task_slot = -1
+		grill_roomba_task_dir = Vector2.ZERO
+		return
+	var patty = grill[best_i]
+	if patty == null or not is_instance_valid(patty):
+		return
+	grill_roomba_task_patty = patty
+	grill_roomba_task_slot = best_i
+	grill_roomba_task_dir = best_dir.normalized() if best_dir.length_squared() > 0.0001 else _roomba_forward_xz()
+
+
+func _roomba_score_patty_task(index: int, patty: Area3D, from_xz: Vector2) -> Dictionary:
+	var patty_xz:= Vector2(float(patty.position.x), float(patty.position.z))
+	var dirs:= [
+		Vector2(1.0, 0.0),
+		Vector2(-1.0, 0.0),
+		Vector2(0.0, 1.0),
+		Vector2(0.0, -1.0),
+	]
+	var best_score:= INF
+	var best_dir:= _roomba_forward_xz()
+	for dir: Vector2 in dirs:
+		var approach:= _roomba_spatula_approach_for_patty(patty.position, dir)
+		var approach_xz:= Vector2(approach.x, approach.z)
+		var wanted_gap:= maxf(ROOMBA_SPATULA_CONTACT_REACH, ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.08)
+		var unclamped: Vector2 = patty_xz - dir * wanted_gap
+		var clamp_penalty:= approach_xz.distance_to(unclamped) * 3.0
+		var blocked_penalty:= 0.0
+		for j in GRILL_SLOTS:
+			if j == index:
+				continue
+			var other = grill[j]
+			if other == null or not is_instance_valid(other) or bool(other.get("is_held")):
+				continue
+			var od:= approach_xz.distance_to(Vector2(float(other.position.x), float(other.position.z)))
+			if od < ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.08:
+				blocked_penalty += 0.9 + (ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.08 - od) * 3.0
+		var turn_penalty:= absf(wrapf(dir.angle() - grill_roomba_heading, -PI, PI)) * 0.025
+		var score:= from_xz.distance_to(approach_xz) + patty_xz.distance_to(from_xz) * 0.18 + clamp_penalty + blocked_penalty + turn_penalty
+		if score < best_score:
+			best_score = score
+			best_dir = dir
+	return {"score": best_score, "dir": best_dir}
+
+
+func _roomba_spatula_approach_for_patty(patty_pos: Vector3, approach_dir: Vector2) -> Vector3:
+	var patty_xz:= Vector2(patty_pos.x, patty_pos.z)
+	var dir:= approach_dir.normalized() if approach_dir.length_squared() > 0.0001 else _roomba_forward_xz()
+	var body_gap:= maxf(ROOMBA_SPATULA_CONTACT_REACH, ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.08)
+	var body_xz:= patty_xz - dir * body_gap
+	body_xz = _roomba_clamp_xz_to_bounds(body_xz)
+	return Vector3(body_xz.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, body_xz.y)
+
+
+func _roomba_transport_target() -> Vector3:
+	if grill_roomba_carry_target.is_finite():
+		var target_bounds:= _warmer_place_bounds() if _warmer_rect().has_point(Vector2(grill_roomba_carry_target.x, grill_roomba_carry_target.z)) else _cook_place_bounds()
+		var snapped:= _find_closest_open_patty_place_in_rect(grill_roomba_carry_target, target_bounds, grill_roomba_carry_slot)
+		if snapped != Vector3.ZERO:
+			grill_roomba_carry_target = snapped
+			return grill_roomba_carry_target
+	var pick:= _roomba_find_warmer_drop()
+	if pick.has("pos"):
+		grill_roomba_carry_target = pick["pos"]
+		return grill_roomba_carry_target
+	var fallback:= _roomba_find_fallback_cook_drop()
+	if fallback != Vector3.ZERO:
+		grill_roomba_carry_target = fallback
+		return grill_roomba_carry_target
+	grill_roomba_carry_target = Vector3.INF
+	return grill_roomba_carry_target
+
+
+func _roomba_find_warmer_drop() -> Dictionary:
+	var b:= _warmer_place_bounds()
+	var carry_pos:= _roomba_carry_world_pos()
+	var xs:= [
+		b.position.x + b.size.x * 0.22,
+		b.position.x + b.size.x * 0.50,
+		b.position.x + b.size.x * 0.78,
+	]
+	var zs:= [
+		b.position.y + b.size.y * 0.22,
+		b.position.y + b.size.y * 0.50,
+		b.position.y + b.size.y * 0.78,
+	]
+	var best:= Vector3.INF
+	var best_score:= INF
+	for x in xs:
+		for z in zs:
+			var c:= Vector3(clampf(x, b.position.x, b.end.x), GRILL_SURFACE_Y, clampf(z, b.position.y, b.end.y))
+			c = _find_closest_open_patty_place_in_rect(c, b, grill_roomba_carry_slot)
+			if c == Vector3.ZERO:
+				continue
+			var edge_penalty:= 0.0
+			edge_penalty += maxf(0.0, 0.035 - absf(c.x - b.position.x))
+			edge_penalty += maxf(0.0, 0.035 - absf(c.x - b.end.x))
+			edge_penalty += maxf(0.0, 0.035 - absf(c.z - b.position.y))
+			edge_penalty += maxf(0.0, 0.035 - absf(c.z - b.end.y))
+			var score:= Vector2(carry_pos.x - c.x, carry_pos.z - c.z).length() + edge_penalty * 6.0
+			if score < best_score:
+				best_score = score
+				best = c
+	if best.is_finite():
+		return {"pos": best}
+	return {}
+
+
+func _roomba_half_cook_drop_bounds() -> Rect2:
+	for z in _grill_zone_bands():
+		if str(z["id"]) == "half":
+			var inset:= PATTY_FIT_RADIUS * 0.24
+			var x0:= float(z["x0"]) + inset
+			var x1:= float(z["x1"]) - inset
+			var z0:= GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + inset
+			var z1:= GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - inset
+			return Rect2(x0, z0, maxf(0.05, x1 - x0), maxf(0.05, z1 - z0))
+	return _cook_place_bounds()
+
+
+func _roomba_find_fallback_cook_drop() -> Vector3:
+	var carry_pos:= _roomba_carry_world_pos()
+	var half_bounds:= _roomba_half_cook_drop_bounds()
+	var pos:= _find_closest_open_patty_place_in_rect(carry_pos, half_bounds, grill_roomba_carry_slot)
+	if pos != Vector3.ZERO:
+		return pos
+	return _find_closest_open_patty_place_in_rect(carry_pos, _cook_place_bounds(), grill_roomba_carry_slot)
+
+
+func _roomba_reconsider_stuck_patty_task() -> void:
+	if grill_roomba_carry_patty != null and is_instance_valid(grill_roomba_carry_patty):
+		var fallback:= _roomba_find_fallback_cook_drop()
+		if fallback != Vector3.ZERO:
+			grill_roomba_carry_target = fallback
+		return
+	grill_roomba_scoop_patty = null
+	grill_roomba_scoop_slot = -1
+	grill_roomba_scoop_hold_t = 0.0
+	grill_roomba_task_patty = null
+	grill_roomba_task_slot = -1
+	grill_roomba_task_dir = Vector2.ZERO
+	grill_roomba_reaim_t = 0.0
+
+
+func _roomba_try_scoop_cooked_patty() -> void:
+	if grill_roomba_carry_patty != null or grill_roomba_scoop_patty != null:
+		return
+	if grill_roomba_task_patty == null or not is_instance_valid(grill_roomba_task_patty):
+		grill_roomba_task_patty = null
+		grill_roomba_task_slot = -1
+		return
+	var blade:= _roomba_spatula_contact_xz()
+	var patty = grill_roomba_task_patty
+	var d:= blade.distance_to(Vector2(float(patty.position.x), float(patty.position.z)))
+	var body_d:= Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z).distance_to(Vector2(float(patty.position.x), float(patty.position.z)))
+	if d > ROOMBA_SPATULA_SCOOP_RADIUS or not _roomba_spatula_overlaps_patty(patty):
+		return
+	if body_d <= ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.62:
+		_roomba_push_patty(grill_roomba_task_slot, patty, Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z))
+	grill_roomba_scoop_patty = patty
+	grill_roomba_scoop_slot = grill_roomba_task_slot
+	grill_roomba_scoop_hold_t = ROOMBA_SPATULA_SCOOP_HOLD_SEC * 0.25
+	grill_roomba_vel = Vector2.ZERO
+
+
+func _roomba_try_drop_carried_patty() -> void:
+	if grill_roomba_carry_patty == null or not is_instance_valid(grill_roomba_carry_patty):
+		grill_roomba_carry_patty = null
+		return
+	var target:= _roomba_transport_target()
+	var carry_pos:= _roomba_carry_world_pos()
+	if Vector2(carry_pos.x, carry_pos.z).distance_to(Vector2(target.x, target.z)) > 0.065:
+		return
+	var idx:= grill_roomba_carry_slot
+	if idx < 0 or idx >= GRILL_SLOTS or grill[idx] != null:
+		idx = _first_empty_slot()
+	if idx < 0:
+		return
+	var to_warmer:= _warmer_rect().has_point(Vector2(target.x, target.z))
+	var pos:= _find_closest_open_patty_place_in_rect(target, _warmer_place_bounds(), idx) if to_warmer else _find_closest_open_patty_place_in_rect(target, _cook_place_bounds(), idx)
+	if pos == Vector3.ZERO:
+		pos = _roomba_find_fallback_cook_drop()
+		if pos == Vector3.ZERO:
+			grill_roomba_carry_target = Vector3.INF
+			return
+	var patty:= grill_roomba_carry_patty
+	var fake:= grill_roomba_fake_patty
+	grill_roomba_fake_patty = null
+	grill_roomba_carry_patty = null
+	grill_roomba_carry_slot = -1
+	grill_roomba_carry_target = Vector3.INF
+	grill_roomba_task_patty = null
+	grill_roomba_task_slot = -1
+	grill_roomba_task_dir = Vector2.ZERO
+	if _is_in_warmer_zone(pos):
+		_place_spatula_on_warmer_local(idx, pos, patty)
+	else:
+		patty.is_held = false
+		patty.visible = true
+		patty.rotation_degrees = Vector3.ZERO
+		patty.slot_index = idx
+		patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+		patty.heating = grill_on
+		patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
+		grill[idx] = patty
+		_move_patty_to(idx, patty, pos, true)
+	if fake != null and is_instance_valid(fake):
+		patty.visible = false
+		fake.set_meta("roomba_carry_animating", true)
+		var drop_pos := Vector3(pos.x, GRILL_SURFACE_Y + PATTY_SIT_Y + 0.016, pos.z)
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(fake, "global_position", drop_pos, 0.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(fake, "rotation_degrees", Vector3(76.0, rad_to_deg(grill_roomba_heading), 0.0), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN_OUT)
+		tw.chain().tween_callback(func() -> void:
+			if patty != null and is_instance_valid(patty):
+				patty.visible = true
+				patty.rotation_degrees = Vector3.ZERO
+				if patty.has_method("refresh_cook_visuals"):
+					patty.refresh_cook_visuals()
+			if fake != null and is_instance_valid(fake):
+				fake.queue_free()
+		)
+
+
 func _roomba_push_patty(index: int, patty: Area3D, roomba_xz: Vector2) -> bool:
 	if patty == null or not is_instance_valid(patty) or bool(patty.get("is_held")):
 		return false
@@ -6907,7 +7878,9 @@ func _roomba_push_patty(index: int, patty: Area3D, roomba_xz: Vector2) -> bool:
 	away = away.normalized()
 	var side:= Vector2( - away.y, away.x) * (0.35 if randf() < 0.5 else -0.35)
 	var push_dir:= (away + side).normalized()
-	return _try_shove_patty(index, patty, push_dir, ROOMBA_PATTY_PUSH, index, true)
+	var overlap := maxf(0.0, ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.02 - pp.distance_to(roomba_xz))
+	var push_len := maxf(ROOMBA_PATTY_PUSH, overlap + 0.018)
+	return _try_shove_patty(index, patty, push_dir, push_len, index, true)
 
 
 func _roomba_clamp_xz_to_bounds(xz: Vector2) -> Vector2:
@@ -6966,14 +7939,71 @@ func _roomba_wall_safe_heading(pos: Vector2, heading: float, target: Vector2) ->
 
 
 func _roomba_place_bounds() -> Rect2:
-	var b:= _grill_place_bounds()
-	var inset:= ROOMBA_RADIUS * 0.8
-	return Rect2(
-		b.position.x + inset, 
-		b.position.y + inset, 
-		maxf(0.05, b.size.x - inset * 2.0), 
-		maxf(0.05, b.size.y - inset * 2.0)
+	var b:= Rect2(
+		GRILL_CENTER_X - GRILL_WIDTH * 0.5,
+		GRILL_SURFACE_Z - GRILL_DEPTH * 0.5,
+		GRILL_WIDTH,
+		GRILL_DEPTH
 	)
+	return Rect2(
+		b.position.x + ROOMBA_SIDE_INSET, 
+		b.position.y + ROOMBA_TOP_DEPTH_INSET, 
+		maxf(0.05, b.size.x - ROOMBA_SIDE_INSET * 2.0), 
+		maxf(0.05, b.size.y - ROOMBA_TOP_DEPTH_INSET - ROOMBA_DEPTH_INSET)
+	)
+
+
+func _roomba_center_to_surface_edge_distance(xz: Vector2) -> float:
+	var edge:= Rect2(
+		GRILL_CENTER_X - GRILL_WIDTH * 0.5,
+		GRILL_SURFACE_Z - GRILL_DEPTH * 0.5,
+		GRILL_WIDTH,
+		GRILL_DEPTH
+	)
+	var dx:= minf(absf(xz.x - edge.position.x), absf(edge.end.x - xz.x))
+	var dz:= minf(absf(xz.y - edge.position.y), absf(edge.end.y - xz.y))
+	return minf(dx, dz)
+
+
+func _roomba_reachable_clean_target(dirty_pos: Vector3, from_xz: Vector2) -> Vector3:
+	var b:= _roomba_place_bounds()
+	var dirty_xz:= Vector2(dirty_pos.x, dirty_pos.z)
+	var home:= Vector2(
+		clampf(dirty_xz.x, b.position.x, b.end.x),
+		clampf(dirty_xz.y, b.position.y, b.end.y)
+	)
+	var to_dirty:= (dirty_xz - from_xz).normalized() if dirty_xz.distance_squared_to(from_xz) > 0.0001 else _roomba_forward_xz()
+	var dirs:= [
+		Vector2.ZERO,
+		to_dirty,
+		-to_dirty,
+		Vector2(-to_dirty.y, to_dirty.x),
+		Vector2(to_dirty.y, -to_dirty.x),
+		Vector2(1.0, 0.0),
+		Vector2(-1.0, 0.0),
+		Vector2(0.0, 1.0),
+		Vector2(0.0, -1.0),
+	]
+	var best:= home
+	var best_score:= INF
+	for d in dirs:
+		var dir: Vector2 = d
+		var cand:= home
+		if dir.length_squared() > 0.0001:
+			cand = dirty_xz - dir.normalized() * ROOMBA_CLEAN_TARGET_REACH
+			cand.x = clampf(cand.x, b.position.x, b.end.x)
+			cand.y = clampf(cand.y, b.position.y, b.end.y)
+		var approx_clean_dist:= dirty_xz.distance_to(cand)
+		if approx_clean_dist > ROOMBA_CLEAN_EDGE_RADIUS + 0.025:
+			continue
+		var edge_bonus:= 0.045 if _roomba_center_to_surface_edge_distance(dirty_xz) < 0.055 else 0.0
+		var score:= from_xz.distance_to(cand) + approx_clean_dist * 2.35 - edge_bonus
+		if _roomba_body_hits_patty_except_target(cand, null, -0.01):
+			score += 0.45
+		if score < best_score:
+			best_score = score
+			best = cand
+	return Vector3(best.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, best.y)
 
 
 func _roomba_dirty_target(from_xz: Vector2) -> Vector3:
@@ -6987,13 +8017,14 @@ func _roomba_dirty_target(from_xz: Vector2) -> Vector3:
 		if i >= grill_residue.size() or float(grill_residue[i]) <= 0.04:
 			continue
 		var c: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
-		var d:= from_xz.distance_to(Vector2(c.x, c.z))
+		var reachable:= _roomba_reachable_clean_target(c, from_xz)
+		var d:= from_xz.distance_to(Vector2(reachable.x, reachable.z))
 		var kind:= str(grill_residue_kind[i]) if i < grill_residue_kind.size() else "patty"
-		var kind_bias:= 0.18 if kind == "cup" else 0.1
-		var score:= d - float(grill_residue[i]) * 0.22 - kind_bias
+		var kind_bias:= 0.24 if kind == "cup" else 0.16
+		var score:= d - float(grill_residue[i]) * 0.28 - kind_bias
 		if score < best_score:
 			best_score = score
-			best = c
+			best = reachable
 	best = _roomba_nearest_mesh_target(oil_slicks, from_xz, best, best_score)
 	if best.is_finite():
 		best_score = from_xz.distance_to(Vector2(best.x, best.z))
@@ -7018,10 +8049,11 @@ func _roomba_dirty_target(from_xz: Vector2) -> Vector3:
 		if puddle == null or not is_instance_valid(puddle):
 			continue
 		var p:= (puddle as Node3D).global_position
-		var d:= from_xz.distance_to(Vector2(p.x, p.z))
+		var reachable:= _roomba_reachable_clean_target(p, from_xz)
+		var d:= from_xz.distance_to(Vector2(reachable.x, reachable.z))
 		if d < best_score:
 			best_score = d
-			best = p
+			best = reachable
 	return best
 
 
@@ -7039,7 +8071,7 @@ func _roomba_fire_target() -> Vector3:
 func _roomba_idle_corner_target() -> Vector3:
 	var b:= _roomba_place_bounds()
 	return Vector3(
-		b.end.x - 0.012, 
+		b.position.x + 0.012, 
 		GRILL_SURFACE_Y + ROOMBA_SIT_Y, 
 		b.position.y + 0.012
 	)
@@ -7055,10 +8087,12 @@ func _roomba_nearest_mesh_target(arr: Array, from_xz: Vector2, current: Vector3,
 		if mesh == null or not is_instance_valid(mesh):
 			continue
 		var p: Vector3 = (mesh as Node3D).global_position
-		var d:= from_xz.distance_to(Vector2(p.x, p.z))
-		if d < best_score:
-			best_score = d
-			best = p
+		var reachable:= _roomba_reachable_clean_target(p, from_xz)
+		var d:= from_xz.distance_to(Vector2(reachable.x, reachable.z))
+		var score:= d - 0.08
+		if score < best_score:
+			best_score = score
+			best = reachable
 	return best
 
 
@@ -7075,11 +8109,12 @@ func _roomba_nearest_cup_melt_target(from_xz: Vector2, current: Vector3, current
 		if phase == "rescue":
 			continue
 		var p:= root.global_position
-		var d:= from_xz.distance_to(Vector2(p.x, p.z))
+		var reachable:= _roomba_reachable_clean_target(p, from_xz)
+		var d:= from_xz.distance_to(Vector2(reachable.x, reachable.z))
 		var score:= d - 0.22
 		if score < best_score:
 			best_score = score
-			best = p
+			best = reachable
 	return best
 
 
@@ -7093,11 +8128,32 @@ func _roomba_nearest_spilled_fry_target(from_xz: Vector2, current: Vector3, curr
 		if root == null or not is_instance_valid(root):
 			continue
 		var p:= root.global_position
-		var d:= from_xz.distance_to(Vector2(p.x, p.z))
-		var score:= d - 0.12
+		var reachable:= _roomba_reachable_clean_target(p, from_xz)
+		var d:= from_xz.distance_to(Vector2(reachable.x, reachable.z))
+		var score:= d - 0.22
 		if score < best_score:
 			best_score = score
-			best = p
+			best = reachable
+	return best
+
+
+func _roomba_clean_sample_points(pos: Vector3) -> Array[Vector2]:
+	var center:= Vector2(pos.x, pos.z)
+	var fwd:= _roomba_forward_xz()
+	var side:= Vector2(-fwd.y, fwd.x)
+	return [
+		center,
+		center + fwd * (ROOMBA_RADIUS * 0.62),
+		center + fwd * (ROOMBA_RADIUS * 1.05),
+		center + side * (ROOMBA_RADIUS * 0.52),
+		center - side * (ROOMBA_RADIUS * 0.52),
+	]
+
+
+func _roomba_clean_distance_to_xz(pos: Vector3, target_xz: Vector2) -> float:
+	var best:= INF
+	for sample in _roomba_clean_sample_points(pos):
+		best = minf(best, (sample as Vector2).distance_to(target_xz))
 	return best
 
 
@@ -7106,13 +8162,16 @@ func _roomba_clean_at(pos: Vector3, move_xz: Vector2, moved: float, delta: float
 		if i >= grill_residue.size() or float(grill_residue[i]) <= 0.04:
 			continue
 		var center: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
-		var dist:= Vector2(pos.x - center.x, pos.z - center.z).length()
-		if dist > ROOMBA_CLEAN_RADIUS:
+		var dist:= _roomba_clean_distance_to_xz(pos, Vector2(center.x, center.z))
+		if dist > ROOMBA_CLEAN_EDGE_RADIUS:
 			continue
-		if dist <= ROOMBA_RADIUS * 0.58 and float(grill_residue[i]) <= 0.18:
+		if dist <= ROOMBA_CLEAN_CORE_RADIUS * 0.84 and float(grill_residue[i]) <= 0.18:
 			_scrape_finish_clean(i)
 			continue
-		grill_residue[i] = maxf(0.0, float(grill_residue[i]) - delta * ROOMBA_CLEAN_RATE)
+		var over_amt := 1.0 - clampf(dist / ROOMBA_CLEAN_EDGE_RADIUS, 0.0, 1.0)
+		var core_bonus := 1.0 - clampf(dist / ROOMBA_CLEAN_CORE_RADIUS, 0.0, 1.0)
+		var clean_rate := ROOMBA_CLEAN_RATE * lerpf(0.32, 1.45, maxf(over_amt, core_bonus))
+		grill_residue[i] = maxf(0.0, float(grill_residue[i]) - delta * clean_rate)
 		_refresh_residue_visual(i)
 		if randf() < 0.18:
 			_scrape_residue_hit(i, move_xz)
@@ -7127,11 +8186,13 @@ func _roomba_clean_at(pos: Vector3, move_xz: Vector2, moved: float, delta: float
 
 
 func _roomba_clean_liquids_and_debris(pos: Vector3, move_xz: Vector2, moved: float, delta: float) -> void:
-	if moved <= 0.0004:
-		return
-	var tight_moved:= minf(moved * 0.55 + delta * 0.014, 0.018)
-	_scrape_slick_array(oil_slicks, pos, move_xz, tight_moved, ROOMBA_CLEAN_RADIUS * 0.42, false)
-	_scrape_slick_array(soda_slicks, pos, move_xz, tight_moved, ROOMBA_CLEAN_RADIUS * 0.42, true)
+	var effective_moved:= maxf(moved, delta * 0.012)
+	var tight_moved:= minf(effective_moved * 0.82 + delta * 0.02, 0.026)
+	for sample in _roomba_clean_sample_points(pos):
+		var sp: Vector2 = sample
+		var sample_pos:= Vector3(sp.x, pos.y, sp.y)
+		_scrape_slick_array(oil_slicks, sample_pos, move_xz, tight_moved * 0.72, ROOMBA_CLEAN_CORE_RADIUS * 0.9, false)
+		_scrape_slick_array(soda_slicks, sample_pos, move_xz, tight_moved * 0.72, ROOMBA_CLEAN_CORE_RADIUS * 0.9, true)
 	_roomba_clean_soda_char(pos, move_xz, tight_moved)
 	_roomba_clean_melting_cups(pos, move_xz, tight_moved)
 	_scrape_burnt_icecreams(pos, move_xz, tight_moved)
@@ -7146,8 +8207,9 @@ func _roomba_clean_soda_char(pos: Vector3, move_xz: Vector2, moved: float) -> vo
 		if mesh == null or not is_instance_valid(mesh):
 			soda_char_spots.remove_at(ci)
 			continue
-		var d:= Vector2(pos.x - mesh.position.x, pos.z - mesh.position.z).length()
-		if d > ROOMBA_CLEAN_RADIUS:
+		var mp: Vector3 = (mesh as Node3D).global_position
+		var d:= _roomba_clean_distance_to_xz(pos, Vector2(mp.x, mp.z))
+		if d > ROOMBA_CLEAN_CORE_RADIUS:
 			ci += 1
 			continue
 		var scrape:= clampf(float(item.get("roomba_scrape", 1.0)), 0.0, 1.0)
@@ -7158,8 +8220,8 @@ func _roomba_clean_soda_char(pos: Vector3, move_xz: Vector2, moved: float) -> vo
 			soda_char_spots[ci] = item
 			ci += 1
 			continue
-		var cx:= float(mesh.position.x)
-		var cz:= float(mesh.position.z)
+		var cx:= float(mp.x)
+		var cz:= float(mp.z)
 		mesh.queue_free()
 		soda_char_spots.remove_at(ci)
 		if mp_enabled and not _mp_applying:
@@ -7177,8 +8239,8 @@ func _roomba_clean_melting_cups(pos: Vector3, _move_xz: Vector2, moved: float) -
 		if str(item.get("phase", "")) == "rescue":
 			i += 1
 			continue
-		var d:= Vector2(pos.x - root.global_position.x, pos.z - root.global_position.z).length()
-		if d > ROOMBA_CLEAN_RADIUS:
+		var d:= _roomba_clean_distance_to_xz(pos, Vector2(root.global_position.x, root.global_position.z))
+		if d > ROOMBA_CLEAN_CORE_RADIUS:
 			i += 1
 			continue
 		var scrape:= clampf(float(item.get("roomba_scrape", 1.0)), 0.0, 1.0)
@@ -7217,8 +8279,8 @@ func _roomba_clean_spilled_fries(pos: Vector3, move_xz: Vector2, moved: float) -
 		if root == null or not is_instance_valid(root):
 			grill_spilled_fries.remove_at(i)
 			continue
-		var d:= Vector2(pos.x - root.global_position.x, pos.z - root.global_position.z).length()
-		if d > ROOMBA_CLEAN_RADIUS:
+		var d:= _roomba_clean_distance_to_xz(pos, Vector2(root.global_position.x, root.global_position.z))
+		if d > ROOMBA_CLEAN_CORE_RADIUS:
 			i += 1
 			continue
 		var scrape:= clampf(float(item.get("roomba_scrape", 1.0)), 0.0, 1.0)
@@ -7271,7 +8333,7 @@ func mp_roomba_pose(x: float, y: float, z: float, yaw: float, bump: float = 0.0)
 	grill_roomba_root.global_position = grill_roomba_root.global_position.lerp(Vector3(x, y, z), 0.32)
 	var smooth_yaw:= lerp_angle(deg_to_rad(grill_roomba_root.rotation_degrees.y), deg_to_rad(yaw), 0.18)
 	grill_roomba_root.rotation_degrees.y = rad_to_deg(smooth_yaw)
-	grill_roomba_vel = Vector2(cos(deg_to_rad(yaw - 180.0)), sin(deg_to_rad(yaw - 180.0))) * ROOMBA_SPEED
+	grill_roomba_vel = Vector2(cos(deg_to_rad(yaw)), sin(deg_to_rad(yaw))) * ROOMBA_SPEED
 	grill_roomba_bump_t = maxf(grill_roomba_bump_t, bump)
 
 
@@ -12389,7 +13451,8 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float) -> bool
 		if mesh == null or not is_instance_valid(mesh):
 			soda_char_spots.remove_at(ci)
 			continue
-		var d := Vector2(pos.x - mesh.position.x, pos.z - mesh.position.z).length()
+		var mp: Vector3 = (mesh as Node3D).global_position
+		var d := Vector2(pos.x - mp.x, pos.z - mp.z).length()
 		if d < 0.32 and moved > 0.001:
 			hit_any = true
 			var cx := float(mesh.position.x)
@@ -12474,7 +13537,8 @@ func _scrape_slick_array(
 			continue
 		var scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
 		var rad := float(item.get("radius", 0.05)) * scrape
-		var d := Vector2(pos.x - mesh.position.x, pos.z - mesh.position.z).length()
+		var mp: Vector3 = (mesh as Node3D).global_position
+		var d := Vector2(pos.x - mp.x, pos.z - mp.z).length()
 		if d > reach + rad:
 			i += 1
 			continue
@@ -13531,7 +14595,7 @@ func _build_fryer_machine() -> void:
 	label.name = "FryerHint"
 	label.text = "click basket to add potatoes"
 	label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
-	label.font_size = 22
+	label.font_size = 44
 	label.pixel_size = 0.00115
 	label.modulate = Color(1.0, 0.76, 0.28)
 	label.outline_size = 5
@@ -13815,6 +14879,35 @@ func _mesh_aabb_in_node_space(root: Node3D) -> AABB:
 	return out
 
 
+func _collect_named_mesh_aabbs(node: Node, parent_xf: Transform3D, terms: Array[String], boxes: Array) -> void:
+	var xf := parent_xf
+	if node is Node3D:
+		xf = parent_xf * (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var n := String(mi.name).to_lower()
+		var matched := false
+		for term in terms:
+			if n.contains(term):
+				matched = true
+				break
+		if matched and mi.mesh != null:
+			boxes.append(xf * mi.mesh.get_aabb())
+	for c in node.get_children():
+		_collect_named_mesh_aabbs(c, xf, terms, boxes)
+
+
+func _named_mesh_aabb_in_node_space(root: Node3D, terms: Array[String], fallback: AABB) -> AABB:
+	var boxes: Array = []
+	_collect_named_mesh_aabbs(root, Transform3D.IDENTITY, terms, boxes)
+	if boxes.is_empty():
+		return fallback
+	var out: AABB = boxes[0]
+	for i in range(1, boxes.size()):
+		out = out.merge(boxes[i])
+	return out
+
+
 func _make_cylinder_label_mesh(
 	radius: float,
 	label_h: float,
@@ -13873,7 +14966,12 @@ func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
 	if tex == null:
 		return
 	## AABB is already in pack space (includes holder scale + seat offset).
-	var aabb := _mesh_aabb_in_node_space(model_holder)
+	var full_aabb := _mesh_aabb_in_node_space(model_holder)
+	var aabb := _named_mesh_aabb_in_node_space(
+		model_holder,
+		["container", "cup", "basket", "bucket"],
+		full_aabb
+	)
 	var cx := aabb.position.x + aabb.size.x * 0.5
 	var cz := aabb.position.z + aabb.size.z * 0.5
 	var radius := maxf(aabb.size.x, aabb.size.z) * 0.5
@@ -13890,18 +14988,22 @@ func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
 		1.22,
 		18,
 		4,
-		0.0018
+		0.00035
 	)
 	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
 	mat.albedo_texture = tex
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.80) ## 20% transparent
+	mat.albedo_color = Color(0.82, 0.74, 0.68, 0.66)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	mat.render_priority = 8
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	mat.roughness = 0.64
+	mat.metallic = 0.0
+	mat.clearcoat_enabled = false
+	mat.rim_enabled = false
+	mat.render_priority = 5
 	logo.material_override = mat
 	pack.add_child(logo)
 
@@ -13972,9 +15074,9 @@ func _update_fries_pack_fry_shake(pack: Node3D, phase: float, amount: float = 1.
 	amount = clampf(amount, 0.0, 1.0)
 	var wave := sin(phase * TAU)
 	shake.rotation_degrees = Vector3(
-		wave * FRIES_FRY_SHAKE_DEG * 0.45 * amount,
-		wave * FRIES_FRY_SHAKE_DEG * 0.22 * amount,
-		wave * FRIES_FRY_SHAKE_DEG * amount
+		wave * FRIES_FRY_SHAKE_DEG * 0.28 * amount,
+		wave * FRIES_FRY_SHAKE_DEG * 0.14 * amount,
+		wave * FRIES_FRY_SHAKE_DEG * 0.48 * amount
 	)
 
 
@@ -14170,12 +15272,22 @@ func _update_ready_fries_pack_sparkles(delta: float) -> void:
 
 func _ready_fries_slot_world(i: int) -> Vector3:
 	var b := _warmer_place_bounds()
-	var col := i % 3
-	var row := i / 3
-	var x := b.position.x + 0.14 + float(col) * FRIES_HOLD_PACK_SPACING_X
-	var z := b.position.y + 0.17 + float(row) * FRIES_HOLD_PACK_SPACING_Z
-	x = clampf(x, b.position.x + 0.08, b.end.x - 0.08)
-	z = clampf(z, b.position.y + 0.10, b.end.y - 0.10)
+	var in_x := 0.055
+	var in_z := 0.055
+	var slots := [
+		Vector2(0.28, 0.40),
+		Vector2(0.72, 0.40),
+		Vector2(0.28, 0.60),
+		Vector2(0.72, 0.60),
+	]
+	var s: Vector2 = slots[clampi(i, 0, slots.size() - 1)]
+	var x := lerpf(b.position.x + in_x, b.end.x - in_x, s.x)
+	if i == 0 or i == 2:
+		x = maxf(b.position.x + in_x, x - FRIES_HOLD_LEFT_COLUMN_NUDGE_X)
+	else:
+		x = minf(b.end.x - in_x, x + FRIES_HOLD_RIGHT_COLUMN_NUDGE_X)
+	x = clampf(x + FRIES_HOLD_CAMERA_LEFT_NUDGE_X, b.position.x + in_x, b.end.x - in_x)
+	var z := lerpf(b.position.y + in_z, b.end.y - in_z, s.y)
 	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z)
 
 
@@ -14184,7 +15296,7 @@ func _refresh_ready_fries_visuals() -> void:
 		return
 	for child in fryer_ready_root.get_children():
 		child.queue_free()
-	var count := mini(fryer_ready_servings, 6)
+	var count := mini(fryer_ready_servings, FRIES_HOLD_MAX_PACKS)
 	for i in count:
 		var pack := Node3D.new()
 		pack.name = "ReadyFries%d" % i
@@ -14351,7 +15463,7 @@ func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
 				return true
 			node = node.get_parent()
 	var best_d := 64.0
-	var count := mini(fryer_ready_servings, 6)
+	var count := mini(fryer_ready_servings, FRIES_HOLD_MAX_PACKS)
 	for i in count:
 		var sp := camera.unproject_position(_ready_fries_slot_world(i) + Vector3(0.0, 0.10, 0.0))
 		best_d = minf(best_d, sp.distance_to(screen_pos))
@@ -14381,7 +15493,7 @@ func _begin_fries_pack_hold() -> bool:
 	world.add_child(fries_pack_root)
 	var start := Vector3.ZERO
 	if fryer_ready_root != null and is_instance_valid(fryer_ready_root):
-		start = _ready_fries_slot_world(maxi(0, mini(fryer_ready_servings, 5)))
+		start = _ready_fries_slot_world(maxi(0, mini(fryer_ready_servings, FRIES_HOLD_MAX_PACKS - 1)))
 	fries_pack_root.global_position = start
 	fries_pack_root.scale = Vector3(1.18, 1.18, 1.18)
 	fries_pack_root.rotation_degrees = Vector3(-4.0, 0.0, 0.0) ## logo side toward cook/camera
@@ -14511,9 +15623,11 @@ func _update_held_fryer_basket(delta: float) -> void:
 			var pop_target := oil.y + FRYER_DONE_POP_Y + sin((0.55 - pop_t) * TAU * 1.6) * 0.035
 			root.global_position.y = lerpf(root.global_position.y, pop_target, clampf(delta * 16.0, 0.0, 1.0))
 		var shake_speed := maxf(Vector2(_fryer_vel.x, _fryer_vel.z).length(), absf(_fryer_vel.y) * 0.45)
-		if shake_speed > 0.20:
-			data["shake"] = float(data.get("shake", 0.0)) + delta * shake_speed
+		if shake_speed > 0.08:
+			data["shake"] = float(data.get("shake", 0.0)) + delta
 			root.rotation_degrees.z = sin(Time.get_ticks_msec() * 0.035) * 8.0
+		else:
+			data["shake"] = maxf(0.0, float(data.get("shake", 0.0)) - delta * 0.08)
 		if float(data.get("shake", 0.0)) >= FRY_BASKET_SHAKE_NEED:
 			fryer_baskets[fryer_held_index] = data
 			_finish_fryer_basket(fryer_held_index)
@@ -14979,7 +16093,7 @@ func _release_fries_pack(screen_pos: Vector2) -> void:
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
 		var root := fries_pack_root
 		fries_pack_root = null
-		var end := _ready_fries_slot_world(mini(fryer_ready_servings, 5)) if fryer_ready_root != null and is_instance_valid(fryer_ready_root) else root.global_position
+		var end := _ready_fries_slot_world(mini(fryer_ready_servings, FRIES_HOLD_MAX_PACKS - 1)) if fryer_ready_root != null and is_instance_valid(fryer_ready_root) else root.global_position
 		var tw := create_tween()
 		tw.set_parallel(true)
 		tw.tween_property(root, "global_position", end, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)

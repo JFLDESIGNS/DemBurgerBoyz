@@ -230,8 +230,8 @@ func _process(delta: float) -> void:
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
-			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.23, 0.01, 0.8))
-			_roomba_drive_player.pitch_scale = 0.95 + _roomba_drive_gain * 0.32
+			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.78, 0.03, 1.0))
+			_roomba_drive_player.pitch_scale = 1.42 + _roomba_drive_gain * 0.58
 			if not _roomba_drive_player.playing:
 				_roomba_drive_player.play()
 		elif _roomba_drive_player.playing:
@@ -894,8 +894,8 @@ func set_roomba_wawawa(active: bool) -> void:
 			if _roomba_wawawa_on and _roomba_wawawa_player != null and is_instance_valid(_roomba_wawawa_player):
 				_roomba_wawawa_player.play(0.0)
 		)
-	_roomba_wawawa_player.pitch_scale = 1.78
-	_roomba_wawawa_player.volume_db = 2.5
+	_roomba_wawawa_player.pitch_scale = 1.93
+	_roomba_wawawa_player.volume_db = 4.0
 	if active:
 		if not _roomba_wawawa_player.playing:
 			_roomba_wawawa_player.play(0.0)
@@ -915,8 +915,8 @@ func play_roomba_wawa_chirp() -> void:
 	var p: AudioStreamPlayer = _players[_player_i]
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache["roomba_wawa_chirp"]
-	p.pitch_scale = 1.85 + randf() * 0.18
-	p.volume_db = linear_to_db(0.72)
+	p.pitch_scale = 1.96 + randf() * 0.16
+	p.volume_db = linear_to_db(0.86)
 	p.play(randf_range(0.0, 0.65))
 	var tree := get_tree()
 	if tree != null:
@@ -932,7 +932,7 @@ func play_roomba_done_beep() -> void:
 
 func set_roomba_drive(moving: bool, speed: float = 0.0) -> void:
 	if moving:
-		_roomba_drive_target = clampf(0.18 + speed * 2.2, 0.18, 0.7)
+		_roomba_drive_target = clampf(0.36 + speed * 3.2, 0.36, 0.95)
 	else:
 		_roomba_drive_target = 0.0
 
@@ -1594,21 +1594,25 @@ func _make_roomba_drive() -> AudioStreamWAV:
 	pcm.resize(n * 2)
 	var lp := 0.0
 	var phase := 0.0
+	var whine_phase := 0.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
 		var white := randf() * 2.0 - 1.0
-		lp = lp * 0.88 + white * 0.12
-		phase += (55.0 + sin(t * TAU * 3.0) * 5.0) / float(MIX_RATE)
-		var motor := sin(phase * TAU) * 0.24 + sin(phase * TAU * 2.0) * 0.08
-		var tick := sin(t * TAU * 18.0) * 0.025
-		var sample := motor + lp * 0.16 + tick
+		lp = lp * 0.72 + white * 0.28
+		var wobble := sin(t * TAU * 7.0) * 18.0
+		phase += (118.0 + wobble) / float(MIX_RATE)
+		whine_phase += (520.0 + sin(t * TAU * 11.0) * 42.0) / float(MIX_RATE)
+		var motor := sin(phase * TAU) * 0.16 + sin(phase * TAU * 2.0) * 0.07
+		var servo := sin(whine_phase * TAU) * 0.18 + sin(whine_phase * TAU * 1.51) * 0.07
+		var chatter := sin(t * TAU * 38.0) * 0.045
+		var sample := motor + servo + lp * 0.07 + chatter
 		var edge := 1.0
 		var fade := 0.018
 		if t < fade:
 			edge = t / fade
 		elif t > 0.34 - fade:
 			edge = (0.34 - t) / fade
-		_write_s16(pcm, i, int(clampf(sample * edge, -1.0, 1.0) * 10500.0))
+		_write_s16(pcm, i, int(clampf(sample * edge, -1.0, 1.0) * 13500.0))
 	return _wav_from_pcm(pcm, true)
 
 

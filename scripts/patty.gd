@@ -141,12 +141,12 @@ const HINT_SCALE_COOKING := 0.38 ## Status-only (COOKING…) stays quieter than 
 const REFLECTION_ALPHA := 0.40
 const REFLECTION_SURFACE_LOCAL_Y := 0.001
 const REFLECTION_HEIGHT := 0.045
-const REFLECTION_PRIORITY := 7
+const REFLECTION_PRIORITY := 6
 const PATTY_BODY_PRIORITY := 20
 const PATTY_OVERLAY_PRIORITY := PATTY_BODY_PRIORITY + 8
 const REFLECTION_SHADER_CODE := """
 shader_type spatial;
-render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, unshaded;
+render_mode blend_mix, depth_draw_never, cull_disabled, unshaded;
 
 uniform vec4 tint : source_color = vec4(0.45, 0.2, 0.14, 0.4);
 uniform float min_y = -0.0225;
@@ -401,7 +401,7 @@ func _build_reflection_visual() -> void:
 	_reflection_top_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_reflection_top_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_reflection_top_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_reflection_top_mat.no_depth_test = true
+	_reflection_top_mat.no_depth_test = false
 	_reflection_top_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	_reflection_top_mat.render_priority = REFLECTION_PRIORITY
 	_reflection_top.material_override = _reflection_top_mat
@@ -419,7 +419,7 @@ func _build_reflection_visual() -> void:
 	_reflection_sear_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_reflection_sear_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	_reflection_sear_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_reflection_sear_mat.no_depth_test = true
+	_reflection_sear_mat.no_depth_test = false
 	_reflection_sear_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	_reflection_sear_mat.render_priority = REFLECTION_PRIORITY + 1
 	if _sear_mat != null:
