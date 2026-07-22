@@ -73,6 +73,7 @@ var _slide_target: float = 0.0
 var _roomba_drive_player: AudioStreamPlayer
 var _roomba_drive_gain: float = 0.0
 var _roomba_drive_target: float = 0.0
+var _roomba_drive_volume_scale: float = 1.0
 ## Hot oil on a lit grill — loud fry burst, then a soft 2s die-out.
 var _hot_oil_full_left: float = 0.0
 var _hot_oil_fade_left: float = 0.0
@@ -230,7 +231,8 @@ func _process(delta: float) -> void:
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
-			_roomba_drive_player.volume_db = linear_to_db(clampf(_roomba_drive_gain * 0.115, 0.006, 1.0))
+			var drive_linear := clampf(_roomba_drive_gain * 0.32 * _roomba_drive_volume_scale, 0.0001, 1.4)
+			_roomba_drive_player.volume_db = linear_to_db(drive_linear)
 			_roomba_drive_player.pitch_scale = 1.42 + _roomba_drive_gain * 0.58
 			if not _roomba_drive_player.playing:
 				_roomba_drive_player.play()
@@ -932,9 +934,15 @@ func play_roomba_done_beep() -> void:
 
 func set_roomba_drive(moving: bool, speed: float = 0.0) -> void:
 	if moving:
-		_roomba_drive_target = clampf(0.11 + speed * 0.82, 0.11, 0.29)
+		_roomba_drive_target = clampf(0.22 + speed * 1.35, 0.22, 0.56)
 	else:
 		_roomba_drive_target = 0.0
+
+
+func set_roomba_drive_volume_scale(scale: float) -> void:
+	_roomba_drive_volume_scale = clampf(scale, 0.0, 2.5)
+	if _roomba_drive_volume_scale <= 0.001 and _roomba_drive_player != null:
+		_roomba_drive_player.volume_db = -80.0
 
 
 const COMBAT_THEME_PATH := "res://assets/music/double_agent.mp3"

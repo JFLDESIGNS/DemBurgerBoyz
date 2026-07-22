@@ -697,6 +697,10 @@ var grill_roomba_task_dir: Vector2 = Vector2.ZERO
 var grill_roomba_task_t: float = 0.0
 var grill_roomba_was_tasking: bool = false
 var grill_roomba_chirp_cd: float = 0.0
+var grill_roomba_bump_sensor: String = ""
+var grill_roomba_sensor_mats: Dictionary = {}
+var grill_roomba_sensor_hits: Dictionary = {}
+var grill_roomba_sensor_patty: Area3D = null
 const ROOMBA_RADIUS := 0.098
 const ROOMBA_HEIGHT := 0.036
 const ROOMBA_SIT_Y := 0.071
@@ -720,13 +724,14 @@ const ROOMBA_SPATULA_CARRY_SIDE := -0.044
 const ROOMBA_SPATULA_CARRY_LIFT := 0.043
 const ROOMBA_SPATULA_SCOOP_RADIUS := 0.082
 const ROOMBA_SPATULA_TRUE_OVERLAP_RADIUS := 0.072
-const ROOMBA_SPATULA_SCOOP_HOLD_SEC := 0.14
+const ROOMBA_SPATULA_SCOOP_HOLD_SEC := 0.34
 const ROOMBA_SPATULA_VISUAL_YAW_OFFSET := -0.392699 ## Spatula is mounted 22.5 deg off the body heading.
 const ROOMBA_SPATULA_HINGE_UP_DEG := -78.0
 const ROOMBA_SPATULA_HINGE_DOWN_DEG := 0.0
 const ROOMBA_TRANSPORT_SPEED := 0.34
 const ROOMBA_PATTY_TASK_REAIM := 0.075
 const ROOMBA_TASK_TIMEOUT_SEC := 20.0
+const ROOMBA_SENSOR_DEBUG_ON := true
 const ROOMBA_SIDE_INSET := 0.162 ## Body center inset; loosened ~4 inches so spatula can reach side-edge patties.
 const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset; keep this loose so the bot can reach patties by the player.
 const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Far/window edge inset; keeps the bot out of the top strip of the grill.
@@ -1240,6 +1245,7 @@ const GFX_DEFAULTS := {
 	"patty_reflect_opacity": 0.28,
 	"patty_reflect_fade_height": 0.04,
 	"patty_reflect_fade_opacity": 0.04,
+	"roomba_drive_volume": 1.0,
 	"bg_y": STREET_MATTE_DEFAULT_Y,
 	"bg_scale": 1.0,
 	"sale_x": FIRST_SALE_DEFAULT_X,
@@ -6745,6 +6751,7 @@ func _build_grill_roomba() -> void:
 	grill_roomba_root.add_child(side_led)
 
 	_add_roomba_front_spatula(grill_roomba_root)
+	_add_roomba_debug_sensors(grill_roomba_root)
 
 	grill_roomba_bristles.clear()
 	for ring_i in 2:
@@ -6819,8 +6826,11 @@ func _add_roomba_front_spatula(parent: Node3D) -> void:
 	parent.add_child(spat_root)
 	grill_roomba_spatula_root = spat_root
 
-	var blade_mat:= _make_basic_mat(Color(0.74, 0.80, 0.82), 0.38, 0.24)
-	var handle_mat:= _make_basic_mat(Color(0.08, 0.09, 0.095), 0.28, 0.42)
+	var blade_mat:= _make_basic_mat(Color(0.025, 0.028, 0.032), 0.68, 0.18)
+	blade_mat.clearcoat_enabled = true
+	blade_mat.clearcoat = 0.42
+	blade_mat.clearcoat_roughness = 0.24
+	var handle_mat:= _make_basic_mat(Color(0.012, 0.014, 0.017), 0.48, 0.28)
 	var blade:= MeshInstance3D.new()
 	blade.name = "SpatulaBlade"
 	var blade_mesh:= BoxMesh.new()
@@ -6840,6 +6850,43 @@ func _add_roomba_front_spatula(parent: Node3D) -> void:
 	handle.material_override = handle_mat
 	handle.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	spat_root.add_child(handle)
+
+
+func _add_roomba_debug_sensors(parent: Node3D) -> void:
+	grill_roomba_sensor_mats.clear()
+	grill_roomba_sensor_hits = {"left": false, "right": false, "back": false}
+	var specs := {
+		"left": {
+			"pos": Vector3(ROOMBA_RADIUS * 0.04, -ROOMBA_HEIGHT * 0.08, -ROOMBA_RADIUS * 1.035),
+			"size": Vector3(ROOMBA_RADIUS * 0.46, 0.004, ROOMBA_RADIUS * 0.16)
+		},
+		"right": {
+			"pos": Vector3(ROOMBA_RADIUS * 0.04, -ROOMBA_HEIGHT * 0.08, ROOMBA_RADIUS * 1.035),
+			"size": Vector3(ROOMBA_RADIUS * 0.46, 0.004, ROOMBA_RADIUS * 0.16)
+		},
+		"back": {
+			"pos": Vector3(-ROOMBA_RADIUS * 0.95, -ROOMBA_HEIGHT * 0.08, 0.0),
+			"size": Vector3(ROOMBA_RADIUS * 0.16, 0.004, ROOMBA_RADIUS * 0.58)
+		}
+	}
+	for name in specs.keys():
+		var data: Dictionary = specs[name]
+		var mat := _make_basic_mat(Color(0.005, 0.018, 0.010, 0.42), 0.0, 0.7)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.emission_enabled = true
+		mat.emission = Color(0.0, 0.018, 0.006)
+		mat.emission_energy_multiplier = 0.18
+		grill_roomba_sensor_mats[name] = mat
+		var pad := MeshInstance3D.new()
+		pad.name = "DebugBurgerSensor_%s" % name.capitalize()
+		var mesh := BoxMesh.new()
+		mesh.size = data["size"]
+		pad.mesh = mesh
+		pad.position = data["pos"]
+		pad.material_override = mat
+		pad.visible = ROOMBA_SENSOR_DEBUG_ON
+		pad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(pad)
 
 
 func _roomba_face_pixels_for(state: String) -> Array:
@@ -6912,6 +6959,9 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_task_t = 0.0
 	grill_roomba_was_tasking = false
 	grill_roomba_chirp_cd = randf_range(2.0, 4.0)
+	grill_roomba_bump_sensor = ""
+	grill_roomba_sensor_hits = {"left": false, "right": false, "back": false}
+	grill_roomba_sensor_patty = null
 	if game_audio and game_audio.has_method("set_roomba_drive"):
 		game_audio.set_roomba_drive(false)
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
@@ -6944,6 +6994,7 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	var old_pos:= grill_roomba_root.global_position
 	var old_xz:= Vector2(old_pos.x, old_pos.z)
+	var old_heading := grill_roomba_heading
 	grill_roomba_escape_t = maxf(0.0, grill_roomba_escape_t - delta)
 	_roomba_update_carried_patty()
 	_roomba_update_scoop_hold(delta)
@@ -6970,16 +7021,20 @@ func _update_grill_roomba(delta: float) -> void:
 	var scoop_locked:= false
 	var square_up_locked:= false
 	var path_ignore_patty: Area3D = null
+	var carry_drop_target := Vector3.INF
 	if carrying:
-		target = _roomba_transport_target()
-		if not target.is_finite():
+		var drop_target := _roomba_transport_target()
+		if not drop_target.is_finite():
 			target = _roomba_idle_corner_target()
+		else:
+			carry_drop_target = drop_target
+			target = _roomba_body_target_for_carry_drop(drop_target)
 	elif scooping:
 		path_ignore_patty = grill_roomba_scoop_patty
 		target = _roomba_spatula_approach_for_patty(grill_roomba_scoop_patty.position, grill_roomba_task_dir)
 		var blade:= _roomba_spatula_contact_xz()
 		var patty_xz:= Vector2(float(grill_roomba_scoop_patty.position.x), float(grill_roomba_scoop_patty.position.z))
-		scoop_locked = blade.distance_to(patty_xz) <= ROOMBA_SPATULA_SCOOP_RADIUS
+		scoop_locked = blade.distance_to(patty_xz) <= ROOMBA_SPATULA_SCOOP_RADIUS and _roomba_spatula_plate_overlaps_patty(grill_roomba_scoop_patty)
 		square_up_locked = not scoop_locked and _roomba_should_square_up_to_patty(grill_roomba_scoop_patty, old_xz, target)
 	elif tasking:
 		path_ignore_patty = grill_roomba_task_patty
@@ -7012,12 +7067,19 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	if grill_roomba_reaim_t <= 0.0:
 		if has_patty_task:
-			grill_roomba_turn_goal = to_target.angle()
+			grill_roomba_turn_goal = to_target.angle() - ROOMBA_SPATULA_VISUAL_YAW_OFFSET
 		else:
 			grill_roomba_turn_goal = to_target.angle() if parking else _roomba_heading_to_target(to_target)
 		desired_heading = grill_roomba_turn_goal
 		grill_roomba_reaim_t = ROOMBA_PATTY_TASK_REAIM if has_patty_task else (0.55 if has_dirt else 0.45)
-	if scoop_locked:
+	if carrying and carry_drop_target.is_finite() and old_xz.distance_to(Vector2(target.x, target.z)) <= 0.06:
+		grill_roomba_vel = Vector2.ZERO
+		var face_drop := Vector2(carry_drop_target.x - old_pos.x, carry_drop_target.z - old_pos.z)
+		if face_drop.length_squared() > 0.0001:
+			grill_roomba_turn_goal = face_drop.angle() - ROOMBA_SPATULA_VISUAL_YAW_OFFSET
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+		grill_roomba_reaim_t = 0.0
+	elif scoop_locked:
 		grill_roomba_vel = Vector2.ZERO
 		grill_roomba_turn_goal = _roomba_heading_for_patty_square_up(grill_roomba_scoop_patty, old_xz, grill_roomba_task_dir)
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
@@ -7025,9 +7087,12 @@ func _update_grill_roomba(delta: float) -> void:
 		grill_roomba_vel = Vector2.ZERO
 		var face_patty = grill_roomba_scoop_patty if scooping else grill_roomba_task_patty
 		if face_patty != null and is_instance_valid(face_patty):
-			grill_roomba_turn_goal = _roomba_heading_for_patty_square_up(face_patty, old_xz, grill_roomba_task_dir)
+			if grill_roomba_sensor_patty == face_patty and grill_roomba_bump_sensor != "":
+				grill_roomba_turn_goal = _roomba_sensor_turn_heading(grill_roomba_bump_sensor, face_patty)
+			else:
+				grill_roomba_turn_goal = _roomba_heading_for_patty_square_up(face_patty, old_xz, grill_roomba_task_dir)
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
-		if face_patty != null and is_instance_valid(face_patty) and _roomba_heading_aligned(grill_roomba_heading, grill_roomba_turn_goal) and not _roomba_spatula_overlaps_patty(face_patty):
+		if face_patty != null and is_instance_valid(face_patty) and _roomba_heading_aligned(grill_roomba_heading, grill_roomba_turn_goal) and not _roomba_spatula_plate_overlaps_patty(face_patty):
 			grill_roomba_vel = _roomba_square_up_nudge(face_patty, old_xz)
 		grill_roomba_reaim_t = 0.0
 	elif grill_roomba_back_t > 0.0:
@@ -7047,8 +7112,10 @@ func _update_grill_roomba(delta: float) -> void:
 			speed = ROOMBA_SEEK_SPEED * 1.15
 			if not _roomba_heading_aligned(grill_roomba_heading, desired_heading, 0.18):
 				speed = 0.0
-		grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * speed
+		var drive_dir := _roomba_spatula_forward_xz() if has_patty_task else Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading))
+		grill_roomba_vel = drive_dir * speed
 	var new_xz:= old_xz + grill_roomba_vel * delta
+	_roomba_clear_debug_sensor_hits()
 	var bounced:= _roomba_apply_bounds_and_bump(new_xz)
 	if bounced:
 		new_xz = _roomba_clamp_xz_to_bounds(new_xz)
@@ -7068,11 +7135,15 @@ func _update_grill_roomba(delta: float) -> void:
 		_roomba_clean_at(new_pos, move, maxf(moved, delta * 0.035), delta)
 		_try_push_ready_fries_from_xz(new_pos, move, moved)
 	if game_audio and game_audio.has_method("set_roomba_drive"):
-		game_audio.set_roomba_drive(moved > 0.001 and not grill_roomba_held, grill_roomba_vel.length())
+		var turned := absf(wrapf(grill_roomba_heading - old_heading, -PI, PI))
+		var drive_active := not grill_roomba_held and (moved > 0.00035 or turned > 0.0015 or (tasking_now and has_patty_task))
+		var audio_speed := maxf(grill_roomba_vel.length(), turned * 0.9)
+		game_audio.set_roomba_drive(drive_active, audio_speed)
 	if carrying:
 		_roomba_try_drop_carried_patty()
 	elif tasking:
 		_roomba_try_scoop_cooked_patty()
+	_roomba_update_debug_sensor_colors()
 	_roomba_update_stuck(delta, old_xz, new_xz, target)
 	if grill_on_fire:
 		_roomba_spray_fire(new_pos, delta)
@@ -7121,14 +7192,15 @@ func _update_roomba_spatula_hinge(active: bool, delta: float) -> void:
 		return
 	var target := ROOMBA_SPATULA_HINGE_DOWN_DEG if active else ROOMBA_SPATULA_HINGE_UP_DEG
 	var r := grill_roomba_spatula_root.rotation_degrees
-	r.x = move_toward(r.x, target, delta * 180.0)
+	var speed := 118.0 if active else 86.0
+	r.x = move_toward(r.x, target, delta * speed)
 	grill_roomba_spatula_root.rotation_degrees = r
 
 
 func _roomba_spatula_is_down() -> bool:
 	if grill_roomba_spatula_root == null or not is_instance_valid(grill_roomba_spatula_root):
 		return true
-	return absf(grill_roomba_spatula_root.rotation_degrees.x - ROOMBA_SPATULA_HINGE_DOWN_DEG) <= 5.0
+	return absf(grill_roomba_spatula_root.rotation_degrees.x - ROOMBA_SPATULA_HINGE_DOWN_DEG) <= 2.0
 
 
 func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
@@ -7182,6 +7254,7 @@ func _roomba_apply_bounds_and_bump(xz: Vector2) -> bool:
 	var b:= _roomba_place_bounds()
 	if xz.x < b.position.x or xz.x > b.end.x or xz.y < b.position.y or xz.y > b.end.y:
 		grill_roomba_bump_normal = Vector2.ZERO
+		grill_roomba_bump_sensor = ""
 		if xz.x < b.position.x:
 			grill_roomba_bump_normal.x += 1.0
 		elif xz.x > b.end.x:
@@ -7203,6 +7276,9 @@ func _roomba_apply_bounds_and_bump(xz: Vector2) -> bool:
 		var d:= Vector2(xz.x - pp.x, xz.y - pp.z)
 		var touch_r := ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.98
 		if d.length() < touch_r:
+			var sensor := _roomba_sensor_for_patty_hit(xz, Vector2(pp.x, pp.z))
+			_roomba_set_debug_sensor_hit(sensor, true, p)
+			grill_roomba_bump_sensor = sensor
 			grill_roomba_bump_normal = d.normalized() if d.length_squared() > 0.0001 else -_roomba_forward_xz()
 			_roomba_push_patty(i, p, xz)
 			return true
@@ -7235,6 +7311,64 @@ func _roomba_body_hits_patty_except_target(xz: Vector2, target_patty: Area3D = n
 		if d < ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.04 + extra:
 			return true
 	return false
+
+
+func _roomba_clear_debug_sensor_hits() -> void:
+	grill_roomba_sensor_hits = {"left": false, "right": false, "back": false}
+	grill_roomba_sensor_patty = null
+
+
+func _roomba_set_debug_sensor_hit(sensor: String, hit: bool, patty: Area3D = null) -> void:
+	if sensor == "left" or sensor == "right" or sensor == "back":
+		grill_roomba_sensor_hits = {"left": false, "right": false, "back": false}
+		grill_roomba_sensor_hits[sensor] = hit
+		grill_roomba_sensor_patty = patty if hit else null
+
+
+func _roomba_update_debug_sensor_colors() -> void:
+	for key in ["left", "right", "back"]:
+		var mat := grill_roomba_sensor_mats.get(key, null) as StandardMaterial3D
+		if mat == null:
+			continue
+		var hit := bool(grill_roomba_sensor_hits.get(key, false))
+		if hit:
+			mat.albedo_color = Color(0.10, 1.0, 0.24, 0.92)
+			mat.emission = Color(0.08, 1.0, 0.16)
+			mat.emission_energy_multiplier = 2.8
+		else:
+			mat.albedo_color = Color(0.005, 0.018, 0.010, 0.42)
+			mat.emission = Color(0.0, 0.018, 0.006)
+			mat.emission_energy_multiplier = 0.18
+
+
+func _roomba_sensor_for_patty_hit(roomba_xz: Vector2, patty_xz: Vector2) -> String:
+	var rel := patty_xz - roomba_xz
+	if rel.length_squared() <= 0.0001:
+		return "back"
+	var fwd := _roomba_spatula_forward_xz()
+	var side := Vector2(-fwd.y, fwd.x)
+	var front_dot := rel.normalized().dot(fwd)
+	var side_dot := rel.normalized().dot(side)
+	if front_dot < -0.42 and absf(side_dot) <= 0.58:
+		return "back"
+	if absf(side_dot) > absf(front_dot) * 0.82 and absf(side_dot) >= 0.34:
+		return "left" if side_dot > 0.0 else "right"
+	if front_dot < -0.18:
+		return "back"
+	return ""
+
+
+func _roomba_sensor_turn_heading(sensor: String, patty: Area3D = null) -> float:
+	if patty != null and is_instance_valid(patty):
+		var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
+		return _roomba_heading_for_patty_square_up(patty, body_xz, grill_roomba_task_dir)
+	if sensor == "left":
+		return wrapf(grill_roomba_heading + PI * 0.5, -PI, PI)
+	if sensor == "right":
+		return wrapf(grill_roomba_heading - PI * 0.5, -PI, PI)
+	if sensor == "back":
+		return wrapf(grill_roomba_heading + PI, -PI, PI)
+	return _roomba_best_escape_heading(Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z), Vector2.INF)
 
 
 func _roomba_patty_safe_heading(pos: Vector2, heading: float, target: Vector2, target_patty: Area3D = null) -> float:
@@ -7274,7 +7408,19 @@ func _roomba_bump_turn(pos: Vector2, target: Vector2) -> void:
 	grill_roomba_reaim_t = 0.0
 	grill_roomba_bump_t = 0.28
 	grill_roomba_vel = Vector2.ZERO
-	grill_roomba_turn_goal = _roomba_best_escape_heading(pos, target)
+	if grill_roomba_bump_sensor == "left":
+		grill_roomba_turn_goal = wrapf(grill_roomba_heading + PI * 0.5, -PI, PI)
+	elif grill_roomba_bump_sensor == "right":
+		grill_roomba_turn_goal = wrapf(grill_roomba_heading - PI * 0.5, -PI, PI)
+	elif grill_roomba_bump_sensor == "back":
+		grill_roomba_turn_goal = wrapf(grill_roomba_heading + PI, -PI, PI)
+	else:
+		grill_roomba_turn_goal = _roomba_best_escape_heading(pos, target)
+	if grill_roomba_sensor_patty != null and is_instance_valid(grill_roomba_sensor_patty) \
+			and (grill_roomba_bump_sensor == "left" or grill_roomba_bump_sensor == "right" or grill_roomba_bump_sensor == "back"):
+		grill_roomba_task_patty = grill_roomba_sensor_patty
+		grill_roomba_task_slot = grill.find(grill_roomba_sensor_patty)
+		grill_roomba_task_dir = _roomba_spatula_forward_xz()
 	if grill_roomba_led_mat != null:
 		grill_roomba_led_mat.emission = Color(0.16, 1.0, 0.22)
 
@@ -7457,6 +7603,33 @@ func _roomba_spatula_overlaps_patty(patty: Area3D) -> bool:
 	var blade_center:= _roomba_spatula_center_xz()
 	return blade_contact.distance_to(patty_xz) <= ROOMBA_SPATULA_TRUE_OVERLAP_RADIUS \
 		or blade_center.distance_to(patty_xz) <= PATTY_FIT_RADIUS * 0.86
+
+
+func _roomba_spatula_plate_overlaps_patty(patty: Area3D) -> bool:
+	if patty == null or not is_instance_valid(patty):
+		return false
+	var patty_xz := Vector2(float(patty.position.x), float(patty.position.z))
+	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
+	var forward := _roomba_spatula_forward_xz()
+	var to_patty := patty_xz - body_xz
+	if to_patty.length_squared() > 0.0001 and forward.dot(to_patty.normalized()) < 0.30:
+		return false
+	var a := body_xz + forward * (ROOMBA_SPATULA_CONTACT_REACH * 0.88)
+	var b := body_xz + forward * (ROOMBA_SPATULA_REACH + PATTY_FIT_RADIUS * 0.30)
+	var ab := b - a
+	var t := clampf((patty_xz - a).dot(ab) / maxf(ab.length_squared(), 0.00001), 0.0, 1.0)
+	var closest := a + ab * t
+	return closest.distance_to(patty_xz) <= PATTY_FIT_RADIUS * 0.58
+
+
+func _roomba_spatula_ready_for_scoop(patty: Area3D, body_xz: Vector2) -> bool:
+	if patty == null or not is_instance_valid(patty):
+		return false
+	var desired := _roomba_heading_for_patty_square_up(patty, body_xz, grill_roomba_task_dir)
+	return _roomba_spatula_is_down() \
+		and _roomba_heading_aligned(grill_roomba_heading, desired, 0.12) \
+		and _roomba_spatula_plate_overlaps_patty(patty) \
+		and _roomba_spatula_faces_patty(patty, body_xz, 0.72)
 
 
 func _roomba_carry_world_pos() -> Vector3:
@@ -7656,9 +7829,7 @@ func _roomba_update_scoop_hold(delta: float) -> void:
 		grill_roomba_scoop_hold_t = 0.0
 		return
 	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
-	if not _roomba_spatula_is_down() \
-			or not _roomba_spatula_overlaps_patty(grill_roomba_scoop_patty) \
-			or not _roomba_spatula_faces_patty(grill_roomba_scoop_patty, body_xz, 0.48):
+	if not _roomba_spatula_ready_for_scoop(grill_roomba_scoop_patty, body_xz):
 		grill_roomba_scoop_hold_t = maxf(0.0, grill_roomba_scoop_hold_t - delta * 1.8)
 		return
 	grill_roomba_scoop_hold_t += delta
@@ -7810,10 +7981,24 @@ func _roomba_score_patty_task(index: int, patty: Area3D, from_xz: Vector2) -> Di
 func _roomba_spatula_approach_for_patty(patty_pos: Vector3, approach_dir: Vector2) -> Vector3:
 	var patty_xz:= Vector2(patty_pos.x, patty_pos.z)
 	var dir:= approach_dir.normalized() if approach_dir.length_squared() > 0.0001 else _roomba_forward_xz()
-	var body_gap:= maxf(ROOMBA_SPATULA_CONTACT_REACH, ROOMBA_RADIUS + PATTY_FIT_RADIUS * 1.08)
+	var body_gap:= maxf(ROOMBA_SPATULA_CONTACT_REACH * 0.98, ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.92)
 	var body_xz:= patty_xz - dir * body_gap
 	body_xz = _roomba_clamp_xz_to_bounds(body_xz)
 	return Vector3(body_xz.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, body_xz.y)
+
+
+func _roomba_body_target_for_carry_drop(drop_pos: Vector3) -> Vector3:
+	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
+	var drop_xz := Vector2(drop_pos.x, drop_pos.z)
+	if _warmer_rect().has_point(drop_xz):
+		var warm := _warmer_rect()
+		var launch := Vector2(warm.end.x + ROOMBA_RADIUS * 1.12, drop_xz.y)
+		launch = _roomba_clamp_xz_to_bounds(launch)
+		return Vector3(launch.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, launch.y)
+	var dir := (drop_xz - body_xz).normalized() if drop_xz.distance_squared_to(body_xz) > 0.0001 else _roomba_spatula_forward_xz()
+	var wanted := drop_xz - dir * ROOMBA_SPATULA_CARRY_REACH
+	wanted = _roomba_clamp_xz_to_bounds(wanted)
+	return Vector3(wanted.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, wanted.y)
 
 
 func _roomba_transport_target() -> Vector3:
@@ -7919,14 +8104,13 @@ func _roomba_try_scoop_cooked_patty() -> void:
 	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 	var body_d:= body_xz.distance_to(Vector2(float(patty.position.x), float(patty.position.z)))
 	if d > ROOMBA_SPATULA_SCOOP_RADIUS \
-			or not _roomba_spatula_overlaps_patty(patty) \
-			or not _roomba_spatula_faces_patty(patty, body_xz, 0.48):
+			or not _roomba_spatula_ready_for_scoop(patty, body_xz):
 		return
 	if body_d <= ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.62:
 		_roomba_push_patty(grill_roomba_task_slot, patty, Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z))
 	grill_roomba_scoop_patty = patty
 	grill_roomba_scoop_slot = grill_roomba_task_slot
-	grill_roomba_scoop_hold_t = ROOMBA_SPATULA_SCOOP_HOLD_SEC * 0.25
+	grill_roomba_scoop_hold_t = 0.0
 	grill_roomba_vel = Vector2.ZERO
 
 
@@ -7936,14 +8120,25 @@ func _roomba_try_drop_carried_patty() -> void:
 		return
 	var target:= _roomba_transport_target()
 	var carry_pos:= _roomba_carry_world_pos()
-	if Vector2(carry_pos.x, carry_pos.z).distance_to(Vector2(target.x, target.z)) > 0.065:
+	var target_xz := Vector2(target.x, target.z)
+	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
+	var to_warmer:= _warmer_rect().has_point(target_xz)
+	var carry_dist := Vector2(carry_pos.x, carry_pos.z).distance_to(Vector2(target.x, target.z))
+	var body_dist := body_xz.distance_to(target_xz)
+	var launch_target := _roomba_body_target_for_carry_drop(target)
+	var launch_dist := body_xz.distance_to(Vector2(launch_target.x, launch_target.z))
+	var face_drop := target_xz - body_xz
+	var throw_aligned := face_drop.length_squared() <= 0.0001 \
+		or _roomba_heading_aligned(grill_roomba_heading, face_drop.angle() - ROOMBA_SPATULA_VISUAL_YAW_OFFSET, 0.34)
+	var can_throw_from_edge := to_warmer and launch_dist <= 0.075 and throw_aligned
+	var body_in_target_zone := _cook_place_bounds().has_point(body_xz)
+	if carry_dist > 0.078 and not can_throw_from_edge and not (not to_warmer and body_in_target_zone and body_dist <= ROOMBA_SPATULA_CARRY_REACH + 0.11):
 		return
 	var idx:= grill_roomba_carry_slot
 	if idx < 0 or idx >= GRILL_SLOTS or grill[idx] != null:
 		idx = _first_empty_slot()
 	if idx < 0:
 		return
-	var to_warmer:= _warmer_rect().has_point(Vector2(target.x, target.z))
 	var pos:= _find_closest_open_patty_place_in_rect(target, _warmer_place_bounds(), idx) if to_warmer else _find_closest_open_patty_place_in_rect(target, _cook_place_bounds(), idx)
 	if pos == Vector3.ZERO:
 		pos = _roomba_find_fallback_cook_drop()
@@ -25436,6 +25631,7 @@ func _setup_game_audio() -> void:
 	game_audio = GameAudioScript.new()
 	game_audio.name = "GameAudio"
 	add_child(game_audio)
+	_apply_roomba_audio_settings(_read_graphics_from_ui())
 
 
 func _setup_burgerpals_startup_sound() -> void:
@@ -26971,6 +27167,9 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "patty_reflect_fade_height", "Reflect Fade Height", 0.002, 0.12, 0.001)
 	_gfx_add_slider(list, "patty_reflect_fade_opacity", "Reflect Bottom Fade", 0.0, 1.0, 0.01)
 
+	_gfx_add_section(list, "ROOMBA")
+	_gfx_add_slider(list, "roomba_drive_volume", "Drive Sound", 0.0, 2.0, 0.01)
+
 	_gfx_add_section(list, "WINDOW BG")
 	_gfx_add_slider(list, "bg_y", "BG Height", 0.2, 4.5, 0.02)
 	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
@@ -27877,6 +28076,12 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_menu_board_decal_settings(s)
 	_apply_burner_strip_settings(s)
 	_apply_build_zone_settings(s)
+	_apply_roomba_audio_settings(s)
+
+
+func _apply_roomba_audio_settings(s: Dictionary) -> void:
+	if game_audio != null and game_audio.has_method("set_roomba_drive_volume_scale"):
+		game_audio.set_roomba_drive_volume_scale(float(s.get("roomba_drive_volume", GFX_DEFAULTS["roomba_drive_volume"])))
 
 
 func _apply_prep_ui_overlay_layout() -> void:

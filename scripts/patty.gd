@@ -1955,15 +1955,15 @@ func _spawn_season_fleck() -> void:
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fmat.no_depth_test = true
-	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	fmat.render_priority = PATTY_OVERLAY_PRIORITY + 1
+	fmat.no_depth_test = false
+	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	fmat.render_priority = PATTY_BODY_PRIORITY + 1
 	## Dark pepper / spice flecks.
 	var shade := 0.08 + randf() * 0.14
 	fmat.albedo_color = Color(shade, shade * 0.75, shade * 0.55, 0.75 + randf() * 0.2)
 	fleck.material_override = fmat
 	fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	fleck.sorting_offset = 2.0
+	fleck.sorting_offset = 0.0
 	_season_root.add_child(fleck)
 	_season_fleck_count += 1
 
