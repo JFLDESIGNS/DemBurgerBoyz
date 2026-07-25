@@ -6157,6 +6157,8 @@ func _build_flat_top_grill() -> void:
 
 	## Soft specular band on top of the tiled steel (fake shine accent).
 	_add_grill_shine(surface, Vector3(0, 0.024, 0), GRILL_WIDTH * 0.98, GRILL_DEPTH * 0.42)
+	## Aged oil/water splotches + chunky noisy stainless vignette (very subtle).
+	_add_grill_seasoning_overlay(surface)
 	_refresh_grill_piano_sections()
 
 	## Spill omnis kept off — bloom made them look like hot orbs.
@@ -17765,6 +17767,38 @@ func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: f
 	mat.render_priority = 2
 	shine.material_override = mat
 	parent.add_child(shine)
+
+
+func _add_grill_seasoning_overlay(parent: Node3D) -> void:
+	## Full-top film: noisy edge vignette + large muted oil/water rainbow splotches.
+	if parent == null or not is_instance_valid(parent):
+		return
+	var overlay := MeshInstance3D.new()
+	overlay.name = "GrillSeasoning"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(GRILL_WIDTH * 0.985, GRILL_DEPTH * 0.985)
+	overlay.mesh = plane
+	## Sit just above zone panel tops (half-height 0.0225) under shine / heat glow.
+	overlay.position = Vector3(0.0, 0.0232, 0.0)
+	overlay.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	overlay.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	var shader := load("res://shaders/grill_seasoning.gdshader") as Shader
+	if shader == null:
+		overlay.queue_free()
+		return
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.render_priority = 1
+	mat.set_shader_parameter("vignette_strength", 0.18)
+	mat.set_shader_parameter("vignette_softness", 0.72)
+	mat.set_shader_parameter("vignette_noise", 0.58)
+	mat.set_shader_parameter("splotch_strength", 0.14)
+	mat.set_shader_parameter("splotch_scale", 2.2)
+	mat.set_shader_parameter("splotch_threshold", 0.64)
+	mat.set_shader_parameter("oil_chroma", 0.38)
+	mat.set_shader_parameter("grain_amount", 0.09)
+	overlay.material_override = mat
+	parent.add_child(overlay)
 
 
 func _make_grill_shine_texture() -> ImageTexture:
