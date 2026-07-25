@@ -26508,15 +26508,15 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 			_refresh_cup_ice_stack()
 		)
 		return
-	## Overflow — some cubes fling onto the grill; rest scatter on the tray/counter.
-	var to_grill := randf() < 0.40
+	## Overflow — fewer cubes hit the grill; rest scatter on the tray/counter.
+	var to_grill := randf() < 0.18
 	var land_y := SODA_STATION_POS.y + 0.10
 	if cup_rest != Vector3.ZERO:
 		land_y = cup_rest.y + 0.002
 	var end: Vector3
 	var mid: Vector3
-	## BoxMesh is centered — sit the cube one full height above the steel so it stays visible.
-	var grill_land_y := GRILL_SURFACE_Y + s
+	## BoxMesh is centered — sit ~2 cube heights above steel so they read clearly.
+	var grill_land_y := GRILL_SURFACE_Y + s * 2.0 + 0.012
 	if to_grill:
 		var cook := _cook_place_bounds()
 		var gx := GRILL_CENTER_X + randf_range(-GRILL_WIDTH * 0.32, GRILL_WIDTH * 0.32)
@@ -26591,8 +26591,14 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 		tw2.tween_property(cube, "global_position:y", GRILL_SURFACE_Y + s * gone.y * 0.5, 0.35) \
 				.set_trans(Tween.TRANS_SINE)
 		tw2.chain().tween_callback(func() -> void:
+			var spot_at := Vector3.ZERO
 			if is_instance_valid(cube):
+				spot_at = cube.global_position
 				cube.queue_free()
+			elif end != Vector3.ZERO:
+				spot_at = end
+			if spot_at != Vector3.ZERO:
+				_spawn_ice_melt_water_spot(spot_at)
 		)
 	else:
 		## Linger on the counter, then melt away.
@@ -27065,6 +27071,57 @@ func _refresh_cup_ice_stack() -> void:
 			if child is MeshInstance3D:
 				(child as MeshInstance3D).material_override = _make_ice_cube_material()
 	_layout_cup_ice_cubes(want)
+
+
+func _spawn_ice_melt_water_spot(at: Vector3) -> void:
+	## Shiny clear melt puddle left on the steel after a grill ice cube vanishes.
+	if grill_root == null or not is_instance_valid(grill_root):
+		return
+	if not _is_on_grill_surface(at):
+		return
+	var slick := MeshInstance3D.new()
+	slick.name = "IceMeltWater"
+	var plane := PlaneMesh.new()
+	var rad := randf_range(0.028, 0.048)
+	plane.size = Vector2(rad * 2.2, rad * 2.2)
+	slick.mesh = plane
+	slick.position = Vector3(at.x, GRILL_SURFACE_Y + OIL_SIT_Y, at.z)
+	slick.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
+	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	slick.sorting_offset = 3.4
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = _get_oil_blob_texture()
+	## Clear wet shine — water, not soda syrup.
+	mat.albedo_color = Color(0.72, 0.88, 1.0, 0.55)
+	mat.metallic = 0.92
+	mat.roughness = 0.04
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 1.0
+	mat.clearcoat_roughness = 0.03
+	mat.emission_enabled = true
+	mat.emission = Color(0.55, 0.75, 0.95)
+	mat.emission_energy_multiplier = 0.22
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 5
+	slick.material_override = mat
+	grill_root.add_child(slick)
+	## Spread slightly, linger, then evaporate.
+	slick.scale = Vector3(0.35, 1.0, 0.35)
+	var life := randf_range(6.5, 11.0)
+	var tw := create_tween()
+	tw.tween_property(slick, "scale", Vector3(1.0, 1.0, 1.0), 0.45) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(life)
+	tw.tween_property(mat, "albedo_color:a", 0.0, 1.4).set_trans(Tween.TRANS_SINE)
+	tw.parallel().tween_property(mat, "emission_energy_multiplier", 0.0, 1.4)
+	tw.parallel().tween_property(slick, "scale", Vector3(1.25, 1.0, 1.25), 1.4)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(slick):
+			slick.queue_free()
+	)
 
 
 func _make_ice_cube_material() -> StandardMaterial3D:
