@@ -287,11 +287,12 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 const HAND_SPATULA_PULL_FLIP_DY := 62.0 ## Min screen-px down (was 96 — shorter pull to flip)
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
-const SPATULA_JUGGLE_DUR := 0.82
-const SPATULA_JUGGLE_PEAK := 0.52 ## meters above the start height at mid-arc
+const SPATULA_JUGGLE_DUR := 1.05
+const SPATULA_JUGGLE_PEAK := 0.64 ## clear rise so the fall reads (not a mid-air teleport)
+const SPATULA_JUGGLE_APEX_T := 0.38 ## earlier apex → longer visible descent
 const SPATULA_JUGGLE_CATCH_R := 0.145 ## tip↔burger XZ catch radius
-const SPATULA_JUGGLE_CATCH_Y := 0.16 ## vertical catch window
-const SPATULA_JUGGLE_CATCH_START_T := 0.16 ## don't instant re-catch on launch
+const SPATULA_JUGGLE_CATCH_Y := 0.18 ## vertical catch window
+const SPATULA_JUGGLE_CATCH_START_T := 0.18 ## don't instant re-catch on launch
 ## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
 ## One notch jumps a full step; wheel factor can stack notches (feels snappier).
 const HAND_SPATULA_ROLL_STEP := 45.0
@@ -8770,6 +8771,28 @@ func _start_spatula_juggle_toss() -> bool:
 	return true
 
 
+func _juggle_height_mul(t: float) -> float:
+	## Asymmetric arc: punchy rise, then accelerating fall (reads as a real toss).
+	t = clampf(t, 0.0, 1.0)
+	var apex := SPATULA_JUGGLE_APEX_T
+	if t <= apex:
+		var u := t / maxf(apex, 0.001)
+		## Ease-out up — fast leave the spatula, soft into the peak.
+		return 1.0 - (1.0 - u) * (1.0 - u)
+	var d := (t - apex) / maxf(1.0 - apex, 0.001)
+	## Ease-in down — starts gentle, then accelerates into the steel (no teleport).
+	return 1.0 - d * d * d
+
+
+func _juggle_flip_progress(t: float) -> float:
+	## Exact 0→1 (=720°) with slow-fast-slow so the spin isn't constant-speed.
+	t = clampf(t, 0.0, 1.0)
+	## Quintic ease-in-out — soft leave, whip mid-air, settle into the start pose.
+	if t < 0.5:
+		return 16.0 * t * t * t * t * t
+	return 1.0 - pow(-2.0 * t + 2.0, 5.0) * 0.5
+
+
 func _update_spatula_juggle(delta: float) -> void:
 	if spatula_juggle_patty == null:
 		return
@@ -8779,24 +8802,30 @@ func _update_spatula_juggle(delta: float) -> void:
 		return
 	spatula_juggle_t += delta
 	var t := clampf(spatula_juggle_t / SPATULA_JUGGLE_DUR, 0.0, 1.0)
-	## Ease the flight so the apex hangs a beat for the catch window.
-	var u := t * t * (3.0 - 2.0 * t)
-	var xz: Vector3 = spatula_juggle_start.lerp(spatula_juggle_end, u)
-	var base_y := lerpf(spatula_juggle_start.y, spatula_juggle_end.y, u)
-	var y := base_y + 4.0 * t * (1.0 - t) * SPATULA_JUGGLE_PEAK
+	## Soft XZ drift; height uses its own rise/fall curve so descent stays visible.
+	var xz_t := t * t * (3.0 - 2.0 * t)
+	var xz: Vector3 = spatula_juggle_start.lerp(spatula_juggle_end, xz_t)
+	var base_y := lerpf(spatula_juggle_start.y, spatula_juggle_end.y, t)
+	var y := base_y + SPATULA_JUGGLE_PEAK * _juggle_height_mul(t)
 	patty.global_position = Vector3(xz.x, y, xz.z)
-	## Two full flips through the air (720° pitch).
-	var flip_deg := 720.0 * t
+	## Exactly two flips (720°) — ends at the same orientation it left with.
+	var flip_p := _juggle_flip_progress(t)
+	var flip_deg := 720.0 * flip_p
+	## Tiny mid-air wobble that returns to 0 at both ends (keeps finish flush).
+	var wobble := sin(t * PI)
 	patty.rotation_degrees = Vector3(
 		spatula_juggle_base_rot.x + flip_deg,
-		spatula_juggle_base_rot.y + sin(t * TAU) * 12.0,
-		spatula_juggle_base_rot.z + sin(t * TAU * 2.0) * 8.0
+		spatula_juggle_base_rot.y + wobble * 6.0 * sin(t * TAU),
+		spatula_juggle_base_rot.z + wobble * 4.0 * sin(t * PI * 2.0)
 	)
 	## Catch window — spatula tip near the flying burger.
-	if t >= SPATULA_JUGGLE_CATCH_START_T and t < 0.97:
+	if t >= SPATULA_JUGGLE_CATCH_START_T and t < 0.98:
 		if _try_catch_spatula_juggle():
 			return
 	if t >= 1.0:
+		## Snap to exact start orientation (2 clean flips) before land settle.
+		patty.rotation_degrees = spatula_juggle_base_rot
+		patty.global_position = spatula_juggle_end
 		_land_spatula_juggle()
 
 
