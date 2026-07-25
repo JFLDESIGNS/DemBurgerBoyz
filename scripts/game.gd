@@ -1162,6 +1162,7 @@ var options_hidden_tree_light_labs: Dictionary = {} ## key -> Label
 var room_tone_hz: float = 174.0
 var room_tone_volume: float = 0.0 ## Off by default — opt-in from Hidden menu; never replaces kitchen SFX
 var outdoor_ambience_volume: float = 0.35 ## Forest birdsong bed — Hidden menu control
+const OUTDOOR_AMBIENCE_VOL_MAX := 3.0 ## Slider / gain ceiling (was 1.0 — too quiet at max)
 const ROOM_TONE_FREQS: Array[float] = [174.0, 285.0, 396.0]
 const AUDIO_ROOM_TONE_HZ_KEY := "room_tone_hz"
 const AUDIO_ROOM_TONE_VOL_KEY := "room_tone_volume"
@@ -33236,13 +33237,13 @@ func _build_options_menu() -> void:
 
 	options_hidden_outdoor_ambience_vol = HSlider.new()
 	options_hidden_outdoor_ambience_vol.min_value = 0.0
-	options_hidden_outdoor_ambience_vol.max_value = 1.0
+	options_hidden_outdoor_ambience_vol.max_value = OUTDOOR_AMBIENCE_VOL_MAX
 	options_hidden_outdoor_ambience_vol.step = 0.01
 	options_hidden_outdoor_ambience_vol.value = outdoor_ambience_volume
 	options_hidden_outdoor_ambience_vol.custom_minimum_size = Vector2(0, 28)
 	options_hidden_outdoor_ambience_vol.focus_mode = Control.FOCUS_ALL
 	options_hidden_outdoor_ambience_vol.value_changed.connect(func(val: float):
-		outdoor_ambience_volume = clampf(val, 0.0, 1.0)
+		outdoor_ambience_volume = clampf(val, 0.0, OUTDOOR_AMBIENCE_VOL_MAX)
 		if options_hidden_outdoor_ambience_vol_lab != null:
 			options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 		_apply_outdoor_ambience_settings()
@@ -34545,7 +34546,7 @@ func _load_audio_settings() -> void:
 	if cfg.has_section_key("audio", AUDIO_ROOM_TONE_VOL_KEY):
 		room_tone_volume = clampf(float(cfg.get_value("audio", AUDIO_ROOM_TONE_VOL_KEY)), 0.0, 1.0)
 	if cfg.has_section_key("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY):
-		outdoor_ambience_volume = clampf(float(cfg.get_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY)), 0.0, 1.0)
+		outdoor_ambience_volume = clampf(float(cfg.get_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY)), 0.0, OUTDOOR_AMBIENCE_VOL_MAX)
 	## Snap to nearest allowed Solfeggio bed.
 	var best := float(ROOM_TONE_FREQS[0])
 	var best_d := 9999.0

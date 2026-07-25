@@ -489,8 +489,8 @@ func silence_continuous_beds(mute_room_tone: bool = true) -> void:
 
 
 func set_outdoor_ambience(volume_linear: float) -> void:
-	## Looping forest birdsong bed. volume_linear 0 = off.
-	_outdoor_ambience_vol = clampf(volume_linear, 0.0, 1.0)
+	## Looping forest birdsong bed. volume_linear 0 = off; up to 3.0 for a loud bed.
+	_outdoor_ambience_vol = clampf(volume_linear, 0.0, 3.0)
 	_outdoor_ambience_muted = false
 	if _outdoor_ambience_player == null:
 		return
@@ -513,8 +513,8 @@ func set_outdoor_ambience(volume_linear: float) -> void:
 			(stream as AudioStreamMP3).loop = true
 		_outdoor_ambience_player.stream = stream
 	_outdoor_ambience_on = true
-	## Slider 1.0 ≈ −6 dB bed — present behind kitchen SFX.
-	var linear := clampf(_outdoor_ambience_vol * 0.5, 0.0008, 0.5)
+	## Slider 1.0 ≈ −6 dB; slider 3.0 ≈ 3× that ceiling (linear 1.5).
+	var linear := clampf(_outdoor_ambience_vol * 0.5, 0.0008, 1.5)
 	_outdoor_ambience_player.volume_db = linear_to_db(linear)
 	if not _outdoor_ambience_player.playing:
 		_outdoor_ambience_player.play()
