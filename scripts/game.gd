@@ -459,6 +459,9 @@ const RESIDUE_SIT_CHANCE := 0.80
 const RESIDUE_MIN_LEAVE_AMT := 0.12 ## below this, leave the steel clean
 ## Cooking on oil this long → always leave crust (mid-cook or scoop).
 const RESIDUE_OIL_COOK_SEC := 2.0
+## Each oil puddle / speck rolls this chance to leave scrapable black crust when it burns off.
+const OIL_RESIDUE_LEAVE_CHANCE := 0.50
+const OIL_RESIDUE_MERGE_R := 0.05 ## Only merge crust if speck is almost on top of an existing oil stain
 ## Filthy grill — need nearly a full flat-top of heavy crust before walkouts.
 const CRUST_GROSS_COUNT := 9 ## was 5 — allow lots of grime before the line freaks out
 const CRUST_GROSS_MIN_AMT := 0.72 ## was 0.45 — half-scraped piles no longer count as "big"
@@ -6723,12 +6726,12 @@ func _spawn_residue_chunks(slot: int, at: Vector3, kind: String = "patty") -> vo
 func _spawn_oil_crust_chunks(slot: int, at: Vector3) -> void:
 	## Flat black burned-oil stain — scrapable, no burger debris chunks.
 	var rng := RandomNumberGenerator.new()
-	rng.seed = slot * 1201 + int(at.x * 1300.0) + int(at.z * 970.0)
+	rng.seed = slot * 1201 + int(at.x * 1300.0) + int(at.z * 970.0) + Time.get_ticks_msec()
 	var chunks: Array = []
 	var disc := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	## Match oil puddle footprint (~half burger cook-spot size).
-	var disc_d := 0.11 + rng.randf() * 0.05
+	## Match oil puddle footprint so each speck reads on the steel.
+	var disc_d := 0.13 + rng.randf() * 0.06
 	plane.size = Vector2(disc_d, disc_d)
 	disc.mesh = plane
 	disc.position = at + Vector3(0, 0.0018, 0)
@@ -6740,12 +6743,12 @@ func _spawn_oil_crust_chunks(slot: int, at: Vector3) -> void:
 	dmat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	dmat.albedo_texture = _get_oil_blob_texture()
 	## Charred black grease film.
-	dmat.albedo_color = Color(0.07, 0.045, 0.03, 0.92)
+	dmat.albedo_color = Color(0.06, 0.035, 0.02, 0.96)
 	disc.material_override = dmat
 	grill_root.add_child(disc)
 	chunks.append(disc)
 	## A couple of thin scorched speckles — not chunky burger bits.
-	var n := 2 + rng.randi_range(0, 2)
+	var n := 3 + rng.randi_range(0, 2)
 	for _i in n:
 		var bit := MeshInstance3D.new()
 		var plane2 := PlaneMesh.new()
@@ -14729,7 +14732,7 @@ func _end_oil_trail_fire_burnout() -> void:
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
-	## Only flaming puddles become scrape crust — idle oil stays / clears without debris.
+	## Flaming puddles each roll for scrape crust; unburned oil stays wet.
 	var keep: Array = []
 	for item in oil_slicks:
 		var mesh = item.get("mesh")
@@ -14745,13 +14748,45 @@ func _end_oil_trail_fire_burnout() -> void:
 	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
 
 
+func _find_residue_slot_for_oil(at: Vector3) -> int:
+	## Prefer a free pad so each speck can leave its own crust; only merge if almost overlapping.
+	var best_free := -1
+	var best_oil := -1
+	var best_oil_d := OIL_RESIDUE_MERGE_R
+	var nearest_oil := -1
+	var nearest_oil_d := 0.28
+	for i in GRILL_SLOTS:
+		var amt := float(grill_residue[i]) if i < grill_residue.size() else 0.0
+		if amt > 0.04 and i < grill_residue_centers.size():
+			var c: Vector3 = grill_residue_centers[i]
+			var d := Vector2(c.x, c.z).distance_to(Vector2(at.x, at.z))
+			var kind := str(grill_residue_kind[i]) if i < grill_residue_kind.size() else ""
+			if kind == "oil":
+				if d <= best_oil_d:
+					best_oil_d = d
+					best_oil = i
+				if d < nearest_oil_d:
+					nearest_oil_d = d
+					nearest_oil = i
+		elif amt <= 0.04 and best_free < 0:
+			best_free = i
+	if best_oil >= 0:
+		return best_oil
+	if best_free >= 0:
+		return best_free
+	## Pads full — stack onto the nearest oil crust so the speck still leaves a mark.
+	return nearest_oil
+
+
 func _leave_oil_burn_residue_at(pos: Vector3, radius: float) -> void:
-	## Scrapable black oil film — not burger cook-spot debris chunks.
+	## Each oil speck: 50% chance of scrapable black film (not burger debris chunks).
+	if randf() >= OIL_RESIDUE_LEAVE_CHANCE:
+		return
 	var at := Vector3(pos.x, GRILL_SURFACE_Y + 0.028, pos.z)
-	var slot := _find_residue_slot_for_spot(at)
+	var slot := _find_residue_slot_for_oil(at)
 	if slot < 0:
 		return
-	var amt := clampf(0.55 + radius * 3.2, 0.55, 0.92)
+	var amt := clampf(0.62 + radius * 3.8, 0.62, 1.0)
 	if mp_enabled and not _mp_applying:
 		mp_residue_leave.rpc(slot, at.x, at.z, false, "oil", amt)
 		return
@@ -14949,11 +14984,9 @@ func _update_oil_slicks(delta: float) -> void:
 		var age := float(item["age"])
 		var lit := _oil_slick_is_lit(item)
 		if mesh == null or not is_instance_valid(mesh) or age >= life:
-			## Oil cooks off → flat black scrape crust (oil kind, not burger chunks).
+			## Each speck rolls 50% to leave black oil crust when it finishes cooking off.
 			if mesh != null and is_instance_valid(mesh):
-				var burn_done := clampf(age / maxf(life, 0.001), 0.0, 1.0)
-				if lit or bool(item.get("on_fire", false)) or burn_done >= 0.55:
-					_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
+				_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
 				mesh.queue_free()
 			oil_slicks.remove_at(i)
 			continue
