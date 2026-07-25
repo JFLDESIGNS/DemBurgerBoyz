@@ -1517,7 +1517,7 @@ const FRIES_HOLD_PACK_Y := 0.108
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14, anchored toward the window.
 const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
 const FRIES_HOLD_PACK_SPACING_Z := 0.0384 ## 0.14 − 4"
-const FRIES_HOLD_AWAY_FROM_PLAYER := 0.2286 ## 9" toward window / top of grill
+const FRIES_HOLD_AWAY_FROM_PLAYER := 0.5334 ## ~21" toward window (prior 9" got clamped; +1ft further from cook)
 const FRYER_BASKET_HOME_Y := 0.159 ## was 0.235; tracks the lower pit
 const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
 const FRIES_PACK_TARGET_H := 0.167 ## ~15% bigger than prior 0.145 pack height
@@ -6580,6 +6580,7 @@ func _try_push_ready_fries_from_xz(source: Vector3, move_xz: Vector2, moved: flo
 		return
 	var dir:= move_xz.normalized() if move_xz.length_squared() > 0.000001 else Vector2(1.0, 0.0)
 	var b:= _warmer_place_bounds()
+	var z_lo := b.position.y - 0.32
 	for child in fryer_ready_root.get_children():
 		var pack:= child as Node3D
 		if pack == null or not is_instance_valid(pack):
@@ -6591,7 +6592,7 @@ func _try_push_ready_fries_from_xz(source: Vector3, move_xz: Vector2, moved: flo
 		var push:= maxf(moved * 0.85, FRIES_HOLD_PUSH_STEP)
 		var next:= pack.global_position
 		next.x = clampf(next.x + (away.x + dir.x * 0.35) * push, b.position.x, b.end.x)
-		next.z = clampf(next.z + (away.y + dir.y * 0.35) * push, b.position.y, b.end.y)
+		next.z = clampf(next.z + (away.y + dir.y * 0.35) * push, z_lo, b.end.y)
 		next.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
 		pack.global_position = pack.global_position.lerp(next, 0.82)
 
@@ -20711,10 +20712,11 @@ func _ready_fries_slot_world(i: int) -> Vector3:
 	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
 	var cx := (b.position.x + b.end.x) * 0.5
 	var x := cx + (float(col) - 0.5) * FRIES_HOLD_PACK_SPACING_X
-	## Rect2.y = window-side Z; sit near the top, then nudge another 9" away from player.
+	## Rect2.y = window-side Z; allow past HOLD inset so the away nudge actually sticks.
+	var z_lo := b.position.y - 0.32 ## ~1ft past place-bounds toward the window
 	var z := b.position.y + 0.05 + float(row) * FRIES_HOLD_PACK_SPACING_Z - FRIES_HOLD_AWAY_FROM_PLAYER
 	x = clampf(x, b.position.x, b.end.x)
-	z = clampf(z, b.position.y, b.end.y)
+	z = clampf(z, z_lo, b.end.y)
 	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z)
 
 
@@ -20723,6 +20725,7 @@ func _separate_ready_fries_packs() -> void:
 	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
 		return
 	var b := _warmer_place_bounds()
+	var z_lo := b.position.y - 0.32
 	var packs: Array[Node3D] = []
 	for child in fryer_ready_root.get_children():
 		if child is Node3D:
@@ -20739,9 +20742,9 @@ func _separate_ready_fries_packs() -> void:
 				var push := (FRIES_HOLD_MIN_SEP - dist) * 0.5 + 0.002
 				var away := d.normalized() if dist > 0.0001 else Vector2(1.0 if (a_i % 2) == 0 else -1.0, 0.0)
 				a.global_position.x = clampf(a.global_position.x + away.x * push, b.position.x, b.end.x)
-				a.global_position.z = clampf(a.global_position.z + away.y * push, b.position.y, b.end.y)
+				a.global_position.z = clampf(a.global_position.z + away.y * push, z_lo, b.end.y)
 				bb.global_position.x = clampf(bb.global_position.x - away.x * push, b.position.x, b.end.x)
-				bb.global_position.z = clampf(bb.global_position.z - away.y * push, b.position.y, b.end.y)
+				bb.global_position.z = clampf(bb.global_position.z - away.y * push, z_lo, b.end.y)
 				a.global_position.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
 				bb.global_position.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
 
