@@ -249,6 +249,9 @@ const HAND_SPATULA_AWAY_BIAS := 0.12
 var grill_piano_root: Node3D = null
 var grill_surface_node: Node3D = null ## Flat-top Area3D — host for optional tap-pad outlines
 var grill_piano_debug_outline: bool = false ## GFX / hidden-menu toggle; off by default
+var grill_piano_cell_meshes: Array = [] ## MeshInstance3D — 12 cook piano pads
+var grill_drum_pad_meshes: Array = [] ## MeshInstance3D — 5 HOLD drum pads
+var _grill_tap_flash_tweens: Dictionary = {} ## instance_id -> Tween
 ## Center of grill: flat + straight-on (handle toward cook, blade toward window).
 const HAND_SPATULA_EMPTY_ROT := Vector3(-12.0, 0.0, 0.0)
 const HAND_SPATULA_CARRY_ROT := Vector3(-8.0, 0.0, 0.0)
@@ -4778,6 +4781,7 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 	## Cook steel → 12 piano notes; HOLD → drums / hats by spatula tilt.
 	if game_audio == null or world_pos == Vector3.ZERO:
 		return
+	_flash_grill_tap_pad(world_pos)
 	var zone := _grill_zone_at(world_pos)
 	if str(zone.get("id", "")) == "hold":
 		if game_audio.has_method("play_spatula_drum"):
@@ -5364,6 +5368,12 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 
 func _refresh_grill_piano_sections() -> void:
 	## Optional debug boxes — only when enabled from the hidden / GFX menu.
+	for tw in _grill_tap_flash_tweens.values():
+		if tw != null and is_instance_valid(tw):
+			tw.kill()
+	_grill_tap_flash_tweens.clear()
+	grill_piano_cell_meshes.clear()
+	grill_drum_pad_meshes.clear()
 	if grill_piano_root != null and is_instance_valid(grill_piano_root):
 		grill_piano_root.queue_free()
 	grill_piano_root = null
@@ -5382,6 +5392,8 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	root.name = "GrillTapSections"
 	parent.add_child(root)
 	grill_piano_root = root
+	grill_piano_cell_meshes.clear()
+	grill_drum_pad_meshes.clear()
 	var y := 0.031 ## Sit just above the steel panels / shine.
 	var half_d := GRILL_DEPTH * 0.5
 	var line_w := 0.007
@@ -5397,9 +5409,11 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		var t := float(i) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
 		var fill := Color(1.0, lerpf(0.55, 0.85, t), lerpf(0.15, 0.35, t), 0.14)
 		var lx := cook_x0 + (float(i) + 0.5) * cell_w
-		_add_grill_tap_debug_box(
+		var cell := _add_grill_tap_debug_box(
 			root, fill, Vector3(lx, y, 0.0), Vector3(cell_w * 0.92, box_h, GRILL_DEPTH * 0.96)
 		)
+		cell.name = "PianoCell%d" % i
+		grill_piano_cell_meshes.append(cell)
 	var piano_line := _make_grill_tap_debug_mat(Color(1.0, 0.82, 0.28, 0.55))
 	## Cook-zone outer frame + vertical key dividers.
 	_add_grill_piano_bar(root, piano_line, Vector3((cook_x0 + cook_x1) * 0.5, y + 0.001, -half_d), Vector3(cook_w + line_w, line_h, line_w))
@@ -5422,9 +5436,11 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		var u := float(j) / float(maxi(GRILL_HOLD_DRUM_PADS - 1, 1))
 		var fill_d := Color(lerpf(0.25, 0.55, u), lerpf(0.7, 0.95, u), 1.0, 0.16)
 		var lz := -half_d + (float(j) + 0.5) * pad_d
-		_add_grill_tap_debug_box(
+		var pad := _add_grill_tap_debug_box(
 			root, fill_d, Vector3(hold_cx, y, lz), Vector3(hold_w * 0.92, box_h, pad_d * 0.9)
 		)
+		pad.name = "DrumPad%d" % j
+		grill_drum_pad_meshes.append(pad)
 	var drum_line := _make_grill_tap_debug_mat(Color(0.45, 0.85, 1.0, 0.65))
 	_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, -half_d), Vector3(hold_w + line_w, line_h, line_w))
 	_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, half_d), Vector3(hold_w + line_w, line_h, line_w))
@@ -5433,6 +5449,61 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	for j in GRILL_HOLD_DRUM_PADS + 1:
 		var lz := -half_d + float(j) * pad_d
 		_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, lz), Vector3(hold_w + line_w, line_h, line_w))
+
+
+func _flash_grill_tap_pad(world_pos: Vector3) -> void:
+	## Pop the debug cell under the spatula hit (piano strip or HOLD drum).
+	if not grill_piano_debug_outline or world_pos == Vector3.ZERO:
+		return
+	var zone := _grill_zone_at(world_pos)
+	var mi: MeshInstance3D = null
+	var hot := Color(1.0, 0.92, 0.35, 0.82)
+	if str(zone.get("id", "")) == "hold":
+		var pad_i := _grill_hold_drum_pad_at(world_pos)
+		if pad_i < 0 or pad_i >= grill_drum_pad_meshes.size():
+			return
+		mi = grill_drum_pad_meshes[pad_i] as MeshInstance3D
+		hot = Color(0.55, 0.95, 1.0, 0.85)
+	else:
+		## Cook / half / full — map to piano section if on cook steel.
+		if not _is_on_grill_surface(world_pos):
+			return
+		var sec := _grill_piano_section_at(world_pos)
+		if sec < 0 or sec >= grill_piano_cell_meshes.size():
+			return
+		mi = grill_piano_cell_meshes[sec] as MeshInstance3D
+		var t := float(sec) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
+		hot = Color(1.0, lerpf(0.75, 0.95, t), lerpf(0.25, 0.55, t), 0.82)
+	_flash_grill_tap_mesh(mi, hot)
+
+
+func _flash_grill_tap_mesh(mi: MeshInstance3D, hot: Color) -> void:
+	if mi == null or not is_instance_valid(mi):
+		return
+	var mat := mi.material_override as StandardMaterial3D
+	if mat == null:
+		return
+	var base: Color = mi.get_meta("tap_base_col", mat.albedo_color)
+	var id := mi.get_instance_id()
+	if _grill_tap_flash_tweens.has(id):
+		var old: Tween = _grill_tap_flash_tweens[id]
+		if old != null and is_instance_valid(old):
+			old.kill()
+		_grill_tap_flash_tweens.erase(id)
+	mat.albedo_color = hot
+	mat.emission_enabled = true
+	mat.emission = Color(hot.r, hot.g, hot.b)
+	mat.emission_energy_multiplier = 2.4
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(mat, "albedo_color", base, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(mat, "emission_energy_multiplier", 0.0, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_callback(func() -> void:
+		if is_instance_valid(mat):
+			mat.emission_enabled = false
+		_grill_tap_flash_tweens.erase(id)
+	)
+	_grill_tap_flash_tweens[id] = tw
 
 
 func _make_grill_tap_debug_mat(col: Color) -> StandardMaterial3D:
@@ -5447,15 +5518,17 @@ func _make_grill_tap_debug_mat(col: Color) -> StandardMaterial3D:
 	return mat
 
 
-func _add_grill_tap_debug_box(parent: Node3D, col: Color, local_pos: Vector3, size: Vector3) -> void:
+func _add_grill_tap_debug_box(parent: Node3D, col: Color, local_pos: Vector3, size: Vector3) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = size
 	mi.mesh = box
 	mi.position = local_pos
 	mi.material_override = _make_grill_tap_debug_mat(col)
+	mi.set_meta("tap_base_col", col)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
+	return mi
 
 
 func _add_grill_piano_bar(parent: Node3D, mat: Material, local_pos: Vector3, size: Vector3) -> void:
