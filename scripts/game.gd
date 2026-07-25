@@ -336,9 +336,12 @@ const CHEESE_STRING_BREAK_DIST := 0.52
 const CHEESE_STRING_KILL_DIST := 0.72
 const CHEESE_STRING_STRANDS := 3
 const CHEESE_STRING_BREAK_SEC := 0.28
-const CHEESE_STRING_MIN_LIFT := 0.060 ## Above on-burger tip clearance (~0.05); strands stay 0 until lift-off
+const CHEESE_STRING_AUTO_DETACH_SEC := 2.0 ## Snap off even if spatula sits still
+## Tip attaches under the blade face (~1" below prior tip) so strands don't stick over the rim.
+const CHEESE_STRING_TIP_DROP := 0.0254
+const CHEESE_STRING_MIN_LIFT := 0.035 ## Matches lower under-blade attach
 const CHEESE_STRING_REVEAL_SPAN := 0.040 ## Blend 0→full strand height over this extra lift
-const CHEESE_STRING_PULL_LIFT := 0.055 ## Extra tip lift once strands are already revealing
+const CHEESE_STRING_PULL_LIFT := 0.055 ## Fallback tip when spatula pose is missing
 var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
@@ -17976,11 +17979,7 @@ func _try_begin_cheese_pull_on_patty(patty: Area3D) -> bool:
 		var cheese_base: Vector3 = patty.cheese_anchor_world() if patty.has_method("cheese_anchor_world") \
 			else patty.global_position + Vector3(0, 0.028, 0)
 		tip = cheese_base + Vector3(0.0, CHEESE_STRING_PULL_LIFT, 0.04)
-	else:
-		var cheese_y := tip.y
-		if patty.has_method("cheese_anchor_world"):
-			cheese_y = patty.cheese_anchor_world().y
-		tip.y = maxf(tip.y, cheese_y + CHEESE_STRING_PULL_LIFT)
+	## Keep the under-blade tip — don't invent extra height over the rim.
 	cheese_pull_patty = patty
 	if not _cheese_string_exists_for(patty):
 		_spawn_cheese_strings(patty, tip)
@@ -18038,6 +18037,14 @@ func _clear_cheese_strings_for_patty(patty: Area3D) -> void:
 		cheese_pull_patty = null
 
 
+func _cheese_string_color(patty: Area3D) -> Color:
+	## Yellower than the melt square — less cooked-orange on the pull strands.
+	var col := Color(1.0, 0.93, 0.38)
+	if patty != null and is_instance_valid(patty) and patty.has_method("cheese_color"):
+		col = patty.cheese_color().lerp(Color(1.0, 0.96, 0.42), 0.55)
+	return col
+
+
 func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
 	## Stretchy melt strands stuck between cheese and the spatula tip.
 	if world == null or patty == null:
@@ -18048,9 +18055,7 @@ func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
 	var mis: Array = []
 	var mats: Array = []
 	var offs: Array = [] ## per-strand cheese + tip lateral offsets
-	var col := Color(1.0, 0.82, 0.26)
-	if patty.has_method("cheese_color"):
-		col = patty.cheese_color()
+	var col := _cheese_string_color(patty)
 	for s in CHEESE_STRING_STRANDS:
 		var mi := MeshInstance3D.new()
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -18068,12 +18073,21 @@ func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
 		root.add_child(mi)
 		mis.append(mi)
 		mats.append(mat)
-		## Fan attach points across the melt square → tip.
+		## Fan attach points across the melt square → under-blade tip.
 		var u := (float(s) / float(maxi(CHEESE_STRING_STRANDS - 1, 1))) * 2.0 - 1.0
+		## Mix thin + thicker strands (middle often chunkier).
+		var width_mul := 1.15
+		if s == 1:
+			width_mul = 1.85
+		elif s == 0:
+			width_mul = 1.35
+		else:
+			width_mul = 1.55
 		offs.append({
 			"cheese": Vector3(u * 0.045, randf_range(-0.002, 0.006), (1.0 - absf(u)) * randf_range(-0.03, 0.03)),
-			"tip": Vector3(u * 0.028, randf_range(0.0, 0.012), randf_range(-0.02, 0.02)),
+			"tip": Vector3(u * 0.028, randf_range(-0.016, -0.004), randf_range(-0.02, 0.02)),
 			"phase": randf() * TAU,
+			"width": width_mul,
 		})
 	_cheese_strings.append({
 		"root": root,
@@ -18084,19 +18098,21 @@ func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
 		"phase": randf() * TAU,
 		"breaking": false,
 		"break_t": 0.0,
+		"alive_t": 0.0,
 		"tip_cache": tip_pos,
 	})
 
 
 func _spatula_tip_world_for_cheese() -> Vector3:
-	## Best-effort tip while scraping / hovering the spatula.
+	## Under-blade latch point — ~1" below the tip so strands terminate under the rim.
 	if hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible:
+		var basis := hand_spatula_root.global_transform.basis
 		return hand_spatula_root.global_position \
-			+ hand_spatula_root.global_transform.basis * HAND_SPATULA_TIP_OFFSET
+			+ basis * (HAND_SPATULA_TIP_OFFSET + Vector3(0.0, -CHEESE_STRING_TIP_DROP, 0.0))
 	var mouse := get_viewport().get_mouse_position()
 	var hit := _grill_plane_from_screen(mouse)
 	if hit != Vector3.ZERO:
-		hit.y = GRILL_SURFACE_Y + HAND_SPATULA_HOLD_Y
+		hit.y = GRILL_SURFACE_Y + HAND_SPATULA_HOLD_Y - CHEESE_STRING_TIP_DROP
 		return hit
 	return Vector3.ZERO
 
@@ -18171,14 +18187,12 @@ func _update_cheese_strings(delta: float) -> void:
 			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
 		## Active pull: RMB latch, or LMB hold/slide on the melt.
 		var pull_active: bool = cheese_pull_patty == patty or patty == dragging_patty
-		## Use real tip height first — never invent lift while the blade sits on the melt.
+		## Real under-blade tip height only — never invent lift over the rim.
 		var raw_lift := tip.y - cheese_base.y
 		var reveal := clampf((raw_lift - CHEESE_STRING_MIN_LIFT) / maxf(CHEESE_STRING_REVEAL_SPAN, 0.001), 0.0, 1.0)
 		reveal = reveal * reveal * (3.0 - 2.0 * reveal) ## smoothstep
-		if pull_active and reveal > 0.05:
-			## Only boost tip once the spatula has actually lifted off.
-			tip.y = maxf(tip.y, lerpf(tip.y, cheese_base.y + CHEESE_STRING_PULL_LIFT, reveal))
 		item["tip_cache"] = tip
+		item["alive_t"] = float(item.get("alive_t", 0.0)) + delta
 		var dist := cheese_base.distance_to(tip)
 		var mis: Array = item.get("mis", [])
 		## Spatula on the burger → scale strands to 0 (hidden) until lift-off.
@@ -18186,13 +18200,20 @@ func _update_cheese_strings(delta: float) -> void:
 			for mi0 in mis:
 				if mi0 != null and is_instance_valid(mi0):
 					(mi0 as MeshInstance3D).visible = false
-			keep.append(item)
+			## Parked tip still times out after 2s.
+			if float(item["alive_t"]) >= CHEESE_STRING_AUTO_DETACH_SEC:
+				if cheese_pull_patty == patty:
+					cheese_pull_patty = null
+				_free_cheese_string_item(item)
+			else:
+				keep.append(item)
 			continue
 		var breaking := bool(item.get("breaking", false))
-		## Pull too far / spatula gone → snap & shrink away.
+		## Pull too far / spatula gone / timed out → snap & shrink away.
 		if not breaking:
 			var hold_active: bool = spatula_grill_hold or pull_active
-			if dist >= CHEESE_STRING_KILL_DIST \
+			if float(item["alive_t"]) >= CHEESE_STRING_AUTO_DETACH_SEC \
+					or dist >= CHEESE_STRING_KILL_DIST \
 					or (not hold_active and dist > CHEESE_STRING_BREAK_DIST * 0.85) \
 					or dist >= CHEESE_STRING_BREAK_DIST:
 				item["breaking"] = true
@@ -18211,11 +18232,9 @@ func _update_cheese_strings(delta: float) -> void:
 			break_u = break_u * break_u
 		var stretch_u := clampf(dist / CHEESE_STRING_BREAK_DIST, 0.0, 1.35)
 		var sag := lerpf(0.014, 0.062, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u) * reveal
-		## Thicker strands (~2× prior); also scale with reveal so flat contact reads as 0 height.
-		var half_w := lerpf(0.010, 0.0034, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85) * reveal
-		var col := Color(1.0, 0.82, 0.26)
-		if patty.has_method("cheese_color"):
-			col = patty.cheese_color()
+		## Base thickness + per-strand width mul (some chunkier than others).
+		var half_w_base := lerpf(0.013, 0.0048, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85) * reveal
+		var col := _cheese_string_color(patty)
 		col.a = lerpf(0.95, 0.0, break_u) * reveal
 		var mats: Array = item.get("mats", [])
 		var offs: Array = item.get("offs", [])
@@ -18229,6 +18248,7 @@ func _update_cheese_strings(delta: float) -> void:
 			var od: Dictionary = offs[s] if s < offs.size() else {}
 			var c_off: Vector3 = od.get("cheese", Vector3.ZERO)
 			var t_off: Vector3 = od.get("tip", Vector3.ZERO)
+			var half_w := half_w_base * float(od.get("width", 1.0))
 			var wobble := sin(phase0 + float(od.get("phase", 0.0))) * 0.004 * (1.0 - break_u) * reveal
 			var a := cheese_base + c_off + Vector3(wobble, 0.0, -wobble * 0.6)
 			## Collapse tip end down onto the cheese while reveal is small (vertical scale → 0).
