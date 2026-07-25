@@ -14551,15 +14551,12 @@ func _end_oil_trail_fire_burnout() -> void:
 	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
 	## Convert burned grease into scrape-off residue, then clear the wet oil.
-	var keep: Array = []
 	for item in oil_slicks:
 		var mesh = item.get("mesh")
 		if mesh != null and is_instance_valid(mesh):
 			_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
 			mesh.queue_free()
-		else:
-			keep.append(item)
-	oil_slicks = keep
+	oil_slicks.clear()
 	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
 
 
