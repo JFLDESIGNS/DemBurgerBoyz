@@ -460,6 +460,12 @@ var oil_home: Vector3 = Vector3(1.166, 2.12, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_pour_hold_t: float = 0.0 ## Seconds continuously pouring while held.
+## Scroll-wheel tip while LMB held: 1 = pouring · 0 = upright (no pour).
+var oil_pour_tilt: float = 1.0
+const OIL_POUR_PITCH := 180.0 ## Tip-down pour pose
+const OIL_UPRIGHT_PITCH := 22.0 ## Mouth up — grease stays in the bottle
+const OIL_POUR_ACTIVE_TILT := 0.55 ## Must be tipped past this to stream
+const OIL_POUR_TILT_STEP := 0.34
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var soda_slicks: Array = [] ## soda puddles on steel — oil-like, soda-colored
 var soda_char_spots: Array = [] ## burnt black marks left after soda cooks off
@@ -2742,6 +2748,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				burgerpack_held_pitch = fposmod(burgerpack_held_pitch + step, 360.0)
 			get_viewport().set_input_as_handled()
 			return
+		## Oil bottle: scroll tips it — upright stops the pour while still holding LMB.
+		if oil_held:
+			var oil_dir := 1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
+			_nudge_oil_pour_tilt(oil_dir)
+			get_viewport().set_input_as_handled()
+			return
 		## Spatula: scroll up/down rolls ±45° then ±90°; piano ting shifts with roll.
 		if _should_show_hand_spatula(event.position) \
 				or (hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible) \
@@ -3708,7 +3720,8 @@ func _kb_begin_oil_quiet() -> bool:
 	oil_held = true
 	oil_last_draw = Vector3.ZERO
 	oil_pour_hold_t = 0.0
-	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	oil_pour_tilt = 1.0
+	oil_root.rotation_degrees = Vector3(OIL_POUR_PITCH, 0.0, 0.0)
 	if oil_area:
 		oil_area.input_ray_pickable = false
 	if not _kb_oil_started:
@@ -12896,11 +12909,39 @@ func _nearest_patty_near(world_pos: Vector3, max_dist: float):
 	return best
 
 
+func _nudge_oil_pour_tilt(dir: float) -> void:
+	## Scroll up → tip to pour · scroll down → upright (stop stream, keep hold).
+	if dir == 0.0:
+		return
+	var was_pouring := _oil_is_pouring()
+	oil_pour_tilt = clampf(oil_pour_tilt + dir * OIL_POUR_TILT_STEP, 0.0, 1.0)
+	if was_pouring and not _oil_is_pouring():
+		oil_last_draw = Vector3.ZERO
+		oil_pour_hold_t = 0.0
+		if oil_particles:
+			oil_particles.emitting = false
+		_flash("Bottle upright — scroll up to pour again", Color("FFE082"))
+	elif not was_pouring and _oil_is_pouring():
+		oil_last_draw = Vector3.ZERO
+		_flash("Pouring — scroll down to stop", Color("FFE082"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
+
+
+func _oil_is_pouring() -> bool:
+	return oil_pour_tilt >= OIL_POUR_ACTIVE_TILT
+
+
+func _oil_held_pitch() -> float:
+	return lerpf(OIL_UPRIGHT_PITCH, OIL_POUR_PITCH, oil_pour_tilt)
+
+
 func _update_held_oil(delta: float) -> void:
 	if oil_root == null or camera == null:
 		return
 	if _kb_force_oil_pos != Vector3.ZERO:
 		## Keyboard FULL-zone oil cycle owns the bottle this frame.
+		oil_pour_tilt = 1.0
 		oil_pour_hold_t += delta
 		if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
 			_flash("Grease held too long on a hot grill!", Color("FF5252"))
@@ -12914,10 +12955,16 @@ func _update_held_oil(delta: float) -> void:
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.04, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.04)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.04, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.04)
 	oil_root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + OIL_POUR_HEIGHT, hit.z)
-	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	oil_root.rotation_degrees = Vector3(_oil_held_pitch(), 0.0, 0.0)
+	var pouring := _oil_is_pouring()
 	if oil_particles:
-		oil_particles.emitting = true
+		oil_particles.emitting = pouring
 		oil_particles.position = Vector3(0, 0.12, 0)
+	if not pouring:
+		## Still holding LMB — just not tipped enough to stream.
+		oil_pour_hold_t = 0.0
+		oil_last_draw = Vector3.ZERO
+		return
 	## Holding grease down on a lit grill too long → grease fire.
 	oil_pour_hold_t += delta
 	if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
@@ -15689,7 +15736,8 @@ func _begin_oil_hold() -> bool:
 	oil_held = true
 	oil_last_draw = Vector3.ZERO
 	oil_pour_hold_t = 0.0
-	oil_root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	oil_pour_tilt = 1.0
+	oil_root.rotation_degrees = Vector3(OIL_POUR_PITCH, 0.0, 0.0)
 	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + OIL_POUR_HEIGHT)
 	if seat != Vector3.ZERO:
 		oil_root.global_position = seat
@@ -15698,7 +15746,7 @@ func _begin_oil_hold() -> bool:
 	if game_audio:
 		game_audio.play_click()
 	_spend(COST_OIL_USE)
-	_flash("Oil tipped — drag to draw on the grill", Color("FFE082"))
+	_flash("Oil tipped — scroll down to stop pour, keep holding", Color("FFE082"))
 	if mp_enabled:
 		_mp_send_held_tool_pose(true)
 	return true
@@ -15736,6 +15784,7 @@ func _release_oil_bottle() -> void:
 	oil_held = false
 	oil_last_draw = Vector3.ZERO
 	oil_pour_hold_t = 0.0
+	oil_pour_tilt = 1.0
 	if oil_particles:
 		oil_particles.emitting = false
 	if oil_area:
@@ -15761,6 +15810,7 @@ func _reset_oil_bottle() -> void:
 	oil_spray_cool = 0.0
 	oil_last_draw = Vector3.ZERO
 	oil_pour_hold_t = 0.0
+	oil_pour_tilt = 1.0
 	if oil_particles:
 		oil_particles.emitting = false
 	if oil_root:
