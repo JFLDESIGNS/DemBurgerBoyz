@@ -36440,16 +36440,16 @@ func _build_ingredient_legend() -> void:
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
 
-		## Hover overlay: flat 2D keycap illustration perched on the topping top.
+		## Hover overlay: KEYIMAGE.png keycap perched on the topping top.
 		var keycap_host := Control.new()
 		keycap_host.name = "KeycapHost"
 		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		keycap_host.z_index = 8
 		keycap_host.set_anchors_preset(Control.PRESET_CENTER_TOP)
-		keycap_host.offset_left = -17.0
-		keycap_host.offset_right = 17.0
+		keycap_host.offset_left = -18.0
+		keycap_host.offset_right = 18.0
 		## Mostly above the cell so it reads on the top edge of the ingredient.
-		keycap_host.offset_top = -26.0
+		keycap_host.offset_top = -28.0
 		keycap_host.offset_bottom = 6.0
 		var keycap_view := _make_strip_hotkey_keycap(HOTKEY_LABELS[hi])
 		keycap_view.name = "KeycapView"
@@ -36500,37 +36500,63 @@ func _build_ingredient_legend() -> void:
 	call_deferred("_refresh_ingredient_stock_bars")
 
 
+const STRIP_KEYCAP_TEX_PATH := "res://IMAGES/KEYIMAGE.png"
+var _strip_keycap_tex: Texture2D = null
+
+
+func _get_strip_keycap_texture() -> Texture2D:
+	## IMAGES/KEYIMAGE.png — blank keycap art for strip hotkey hover badges.
+	if _strip_keycap_tex != null:
+		return _strip_keycap_tex
+	if not ResourceLoader.exists(STRIP_KEYCAP_TEX_PATH):
+		return null
+	var src := load(STRIP_KEYCAP_TEX_PATH) as Texture2D
+	if src == null:
+		return null
+	var img := src.get_image()
+	if img == null:
+		_strip_keycap_tex = src
+		return src
+	## Punch the solid black plate to alpha so only the key shows on the strip.
+	img.convert(Image.FORMAT_RGBA8)
+	for y in img.get_height():
+		for x in img.get_width():
+			var c := img.get_pixel(x, y)
+			if c.r < 0.08 and c.g < 0.08 and c.b < 0.08:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+	_strip_keycap_tex = ImageTexture.create_from_image(img)
+	return _strip_keycap_tex
+
+
 func _make_strip_hotkey_keycap(digit: String) -> Control:
-	## Flat 2D keycap illustration (UI icon look — not a 3D mesh / SubViewport).
+	## Little keycap badge from IMAGES/KEYIMAGE.png with the hotkey digit on top.
 	var root := Control.new()
-	root.name = "Keycap2D"
+	root.name = "KeycapImage"
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-	## Outer key silhouette.
-	var face := Panel.new()
-	face.name = "Face"
-	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var face_sb := StyleBoxFlat.new()
-	face_sb.bg_color = Color(0.93, 0.94, 0.97)
-	face_sb.set_corner_radius_all(6)
-	face_sb.border_color = Color(0.28, 0.30, 0.34)
-	face_sb.set_border_width_all(2)
-	face.add_theme_stylebox_override("panel", face_sb)
-	root.add_child(face)
-
-	## Thin highlight band — reads as a drawn key, not extruded plastic.
-	var gloss := ColorRect.new()
-	gloss.name = "Gloss"
-	gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	gloss.color = Color(1.0, 1.0, 1.0, 0.55)
-	gloss.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	gloss.offset_left = 4.0
-	gloss.offset_right = -4.0
-	gloss.offset_top = 3.0
-	gloss.offset_bottom = 7.0
-	face.add_child(gloss)
+	var tex := _get_strip_keycap_texture()
+	if tex != null:
+		var icon := TextureRect.new()
+		icon.name = "Art"
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.texture = tex
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		root.add_child(icon)
+	else:
+		## Fallback silhouette if the image is missing from the pack.
+		var face := Panel.new()
+		face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var face_sb := StyleBoxFlat.new()
+		face_sb.bg_color = Color(0.93, 0.94, 0.97)
+		face_sb.set_corner_radius_all(6)
+		face_sb.border_color = Color(0.28, 0.30, 0.34)
+		face_sb.set_border_width_all(2)
+		face.add_theme_stylebox_override("panel", face_sb)
+		root.add_child(face)
 
 	var lab := Label.new()
 	lab.name = "Digit"
@@ -36539,12 +36565,12 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	lab.offset_top = 1.0
-	UiFontsScript.apply_label(lab, true, 16)
+	lab.offset_top = -1.0
+	UiFontsScript.apply_label(lab, true, 15)
 	lab.add_theme_color_override("font_color", Color(0.12, 0.13, 0.16))
-	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.35))
+	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.45))
 	lab.add_theme_constant_override("outline_size", 1)
-	face.add_child(lab)
+	root.add_child(lab)
 	return root
 
 
