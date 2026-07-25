@@ -28135,18 +28135,26 @@ func _refresh_ingredient_stock_bars() -> void:
 			continue
 		var stock_bar := btn.get_node_or_null("Stack/StockBar") as Control
 		var fill := btn.get_node_or_null("Stack/StockBar/Fill") as ColorRect
-		if stock_bar == null or fill == null:
-			continue
+		var icon := btn.get_node_or_null("Stack/IconMargin/StripIcon") as TextureRect
 		var stock := int(supply_stock.get(id, 0))
 		var cap: int = maxi(1, _ingredient_stock_cap(str(id)))
 		var stock_ratio := clampf(float(stock) / float(cap), 0.0, 1.0)
-		stock_bar.custom_minimum_size = Vector2(46, 3)
-		stock_bar.size.y = 3.0
-		var width := stock_bar.size.x
-		if width < 2.0:
-			width = stock_bar.custom_minimum_size.x
-		fill.offset_right = width * stock_ratio
-		fill.color = _stock_bar_color(stock, cap)
+		if stock_bar != null and fill != null:
+			stock_bar.custom_minimum_size = Vector2(46, 3)
+			stock_bar.size.y = 3.0
+			var width := stock_bar.size.x
+			if width < 2.0:
+				width = stock_bar.custom_minimum_size.x
+			fill.offset_right = width * stock_ratio
+			fill.color = _stock_bar_color(stock, cap)
+		## Low stock: darken icon 30%. Empty: ghost the 2D sprite.
+		if icon != null and is_instance_valid(icon):
+			if stock <= 0:
+				icon.modulate = Color(0.72, 0.72, 0.72, 0.28)
+			elif stock_ratio <= 0.25:
+				icon.modulate = Color(0.7, 0.7, 0.7, 1.0)
+			else:
+				icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		btn.tooltip_text = "%s\nStock: %d" % [btn.tooltip_text.get_slice("\n", 0), stock]
 
 
