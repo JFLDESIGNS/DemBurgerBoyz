@@ -1179,8 +1179,12 @@ var tree_light_off_x: float = 0.55
 var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.65
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
+const TREE_WIND_CFG_SECTION := "tree_wind"
 const TREE_CLICK_COLLISION_LAYER := 262144
 const TREE_SHAKE_DEG := 1.45 ## soft pendulum lean (was 2.4)
+## Leaf wind — Hidden menu (strength + world yaw direction).
+var tree_wind_strength: float = 1.85 ## default readable sway
+var tree_wind_dir_deg: float = 40.0 ## 0° = +X, 90° = +Z
 const TREE_APPLE_CHANCE := 0.20
 const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
 const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
@@ -18367,6 +18371,7 @@ func _build_outdoor_street() -> void:
 	tree_front_node = null
 	tree_birch_node = null
 	_load_tree_light_settings()
+	_load_tree_wind_settings()
 	_load_tree_xform_settings()
 	var outdoor := Node3D.new()
 	outdoor.name = "OutdoorStreet"
@@ -18460,7 +18465,7 @@ func _build_outdoor_front_tree(parent: Node3D) -> void:
 	parent.add_child(tree)
 	tree_front_node = tree
 	_apply_outdoor_tree_xforms()
-	_dress_outdoor_tree_foliage(tree, 0.7, 0.62)
+	_dress_outdoor_tree_foliage(tree, 0.7, 1.05)
 	_add_tree_fill_light(parent, tree)
 	_setup_outdoor_tree_interact(tree)
 
@@ -18485,7 +18490,7 @@ func _build_outdoor_birch_tree(parent: Node3D) -> void:
 	parent.add_child(tree)
 	tree_birch_node = tree
 	_apply_outdoor_tree_xforms()
-	_dress_outdoor_tree_foliage(tree, 2.4, 0.48)
+	_dress_outdoor_tree_foliage(tree, 2.4, 0.88)
 	_add_tree_fill_light(parent, tree)
 	_setup_outdoor_tree_interact(tree)
 
@@ -18530,7 +18535,9 @@ func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: 
 			sm.set_shader_parameter("alpha_scissor", scissor)
 			sm.set_shader_parameter("sway_seed", sway_seed + float(s) * 0.37)
 			sm.set_shader_parameter("sway_strength", sway_strength)
-			sm.set_shader_parameter("sway_speed", 1.45)
+			sm.set_shader_parameter("sway_speed", 1.65)
+			sm.set_shader_parameter("wind_strength", tree_wind_strength)
+			sm.set_shader_parameter("wind_dir_deg", tree_wind_dir_deg)
 			sm.set_shader_parameter("sway_y_min", mesh_aabb.position.y + mesh_aabb.size.y * 0.18)
 			sm.set_shader_parameter("sway_y_max", mesh_aabb.position.y + mesh_aabb.size.y * 0.98)
 			## Leaf SSS −20% vs prior glow.
@@ -18659,11 +18666,11 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	area.monitorable = true
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Tight bark trunk only — leave canopy out of the pick volume.
+	## Trunk + a bit of lower canopy — clickable without covering the grill.
 	box.size = Vector3(
-		clampf(aabb.size.x * 0.88, 0.28, 1.35),
-		clampf(aabb.size.y * 0.92, 1.2, 7.5),
-		clampf(aabb.size.z * 0.88, 0.28, 1.35)
+		clampf(aabb.size.x * 1.2, 0.55, 2.4),
+		clampf(aabb.size.y * 0.96, 1.8, 9.0),
+		clampf(aabb.size.z * 1.2, 0.55, 2.4)
 	)
 	col.shape = box
 	col.position = aabb.get_center()
@@ -18688,15 +18695,11 @@ func _outdoor_tree_point_on_bark(tree: Node3D, world_pos: Vector3) -> bool:
 
 
 func _grill_blocks_tree_click(screen_pos: Vector2) -> bool:
-	## Aiming at / near the flat-top — spatula owns the click, never the tree.
-	if _should_show_hand_spatula(screen_pos) or spatula_grill_hold or dragging_patty != null:
+	## Active grill work owns the click — not a fat spatula magnet over the yard.
+	if spatula_grill_hold or dragging_patty != null:
 		return true
-	var hit := _grill_plane_from_screen(screen_pos)
-	if hit == Vector3.ZERO:
-		return false
-	## Fat pad so canopy behind the steel can't steal slide / place / scrape.
-	return absf(hit.x - GRILL_CENTER_X) <= GRILL_WIDTH * 0.5 + 0.40 \
-		and absf(hit.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.5 + 0.55
+	## Only the actual steel surface. Trees outside the plate stay clickable.
+	return _is_grill_screen_point(screen_pos)
 
 
 func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
@@ -18705,7 +18708,7 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
 			or sale_held or cup_held or spatula_patty != null or dragging_patty != null:
 		return false
-	## Never steal grill / spatula clicks — bark only outside the steel aim.
+	## Don't steal real steel clicks — outdoor trees beyond the plate are fair game.
 	if _grill_blocks_tree_click(screen_pos):
 		return false
 	var space := world.get_world_3d().direct_space_state
@@ -18713,10 +18716,10 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 		return false
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
-	## If the steel plane is in front of the tree hit, grill wins.
+	## If the steel plane is clearly in front of the tree hit, grill wins.
 	var grill_hit := _grill_plane_from_screen(screen_pos)
 	var grill_dist := INF
-	if grill_hit != Vector3.ZERO and _is_near_grill_for_place(grill_hit):
+	if grill_hit != Vector3.ZERO and _is_on_grill_surface(grill_hit):
 		grill_dist = from.distance_to(grill_hit)
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 48.0)
 	q.collision_mask = TREE_CLICK_COLLISION_LAYER
@@ -18737,8 +18740,7 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 		tree = collider.get_parent() as Node3D
 	if tree == null or not outdoor_shake_trees.has(tree):
 		return false
-	if not _outdoor_tree_point_on_bark(tree, hit_pos):
-		return false
+	## TreeClickArea is already trunk-sized — don't require a second bark mesh hit.
 	_shake_outdoor_tree(tree)
 	return true
 
@@ -18979,6 +18981,55 @@ func _save_tree_light_settings() -> void:
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_y", tree_light_off_y)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_z", tree_light_off_z)
 	cfg.save(GFX_CFG_PATH)
+
+
+func _load_tree_wind_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(TREE_WIND_CFG_SECTION):
+		return
+	tree_wind_strength = clampf(float(cfg.get_value(TREE_WIND_CFG_SECTION, "strength", tree_wind_strength)), 0.0, 4.0)
+	tree_wind_dir_deg = fposmod(float(cfg.get_value(TREE_WIND_CFG_SECTION, "dir_deg", tree_wind_dir_deg)), 360.0)
+
+
+func _save_tree_wind_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(TREE_WIND_CFG_SECTION, "strength", tree_wind_strength)
+	cfg.set_value(TREE_WIND_CFG_SECTION, "dir_deg", tree_wind_dir_deg)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_tree_wind_settings() -> void:
+	## Push Hidden wind values into every dressed leaf material.
+	for tree in outdoor_shake_trees:
+		if tree == null or not is_instance_valid(tree):
+			continue
+		for n in tree.find_children("*", "MeshInstance3D", true, false):
+			var mi := n as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			for s in mi.mesh.get_surface_count():
+				var mat := mi.get_surface_override_material(s)
+				if mat is ShaderMaterial:
+					var sm := mat as ShaderMaterial
+					if sm.shader != null and String(sm.shader.resource_path).findn("tree_foliage") >= 0:
+						sm.set_shader_parameter("wind_strength", tree_wind_strength)
+						sm.set_shader_parameter("wind_dir_deg", tree_wind_dir_deg)
+
+
+func _sync_tree_wind_hidden_ui() -> void:
+	var vals := {
+		"wind": tree_wind_strength,
+		"wind_dir": tree_wind_dir_deg,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			var v := float(vals[key])
+			options_hidden_tree_light_labs[key].text = ("%.1f°" % v) if key == "wind_dir" else ("%.2f" % v)
 
 
 func _apply_outdoor_tree_xforms() -> void:
@@ -33368,6 +33419,26 @@ func _build_options_menu() -> void:
 		func(): return tree_light_off_z,
 		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
 
+	var wind_lab := Label.new()
+	wind_lab.text = "TREE WIND"
+	UiFontsScript.apply_label(wind_lab, true, 13)
+	wind_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(wind_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "wind", "Wind Strength", 0.0, 4.0, 0.05,
+		func(): return tree_wind_strength,
+		func(v: float):
+			tree_wind_strength = clampf(v, 0.0, 4.0)
+			_apply_tree_wind_settings()
+			_save_tree_wind_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "wind_dir", "Wind Direction °", 0.0, 360.0, 1.0,
+		func(): return tree_wind_dir_deg,
+		func(v: float):
+			tree_wind_dir_deg = fposmod(v, 360.0)
+			_apply_tree_wind_settings()
+			_save_tree_wind_settings()
+	, true)
+
 	var tree_xf_lab := Label.new()
 	tree_xf_lab.text = "TREE POSITION / ROTATION"
 	UiFontsScript.apply_label(tree_xf_lab, true, 13)
@@ -33613,6 +33684,7 @@ func _try_unlock_hidden_options() -> void:
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 			_sync_tree_light_hidden_ui()
+			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
 			_sync_icecream_station_hidden_ui()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):

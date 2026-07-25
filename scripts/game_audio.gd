@@ -1282,9 +1282,9 @@ func play_roomba_done_beep() -> void:
 
 
 func play_roomba_body_tap() -> void:
-	## Soft plastic shell tap — not metal spatula ting.
+	## Hard plastic shell click — not a drum thud or metal ting.
 	_play_cached(
-		"roomba_body_tap_%d" % (randi() % 3),
+		"roomba_plastic_tap_%d" % (randi() % 3),
 		_make_roomba_body_tap,
 		0.94 + randf() * 0.12,
 		0.78
@@ -1658,18 +1658,22 @@ func _make_roomba_done_beep() -> AudioStreamWAV:
 
 
 func _make_roomba_body_tap() -> AudioStreamWAV:
-	## Hollow plastic knock — dull mid thud, no bright steel partials.
-	var n := int(MIX_RATE * 0.11)
+	## Hard ABS/plastic click — short bright shell tick, not a low drum thud.
+	var n := int(MIX_RATE * 0.065)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
-	var f0 := 210.0 + randf() * 40.0
+	var f0 := 980.0 + randf() * 220.0
+	var f1 := 1680.0 + randf() * 260.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var env := clampf(t / 0.004, 0.0, 1.0) * exp(-t * 28.0)
-		var body := sin(t * f0 * TAU) * 0.7 + sin(t * f0 * 1.7 * TAU) * 0.22 * exp(-t * 40.0)
-		var shell := sin(t * (480.0 + randf() * 60.0) * TAU) * exp(-t * 55.0) * 0.16
-		var grit := (randf() * 2.0 - 1.0) * exp(-t * 90.0) * 0.05
-		_write_s16(pcm, i, int(clampf((body + shell + grit) * env, -1.0, 1.0) * 14000.0))
+		var attack := clampf(t / 0.0012, 0.0, 1.0)
+		var env := attack * exp(-t * 62.0)
+		var click := (randf() * 2.0 - 1.0) * exp(-t * 140.0) * 0.55
+		var shell := sin(t * f0 * TAU) * exp(-t * 48.0) * 0.42
+		var ring := sin(t * f1 * TAU) * exp(-t * 70.0) * 0.22
+		## Tiny mid body only — keep it plastic, not kick-drum.
+		var body := sin(t * 340.0 * TAU) * exp(-t * 85.0) * 0.08
+		_write_s16(pcm, i, int(clampf((click + shell + ring + body) * env, -1.0, 1.0) * 15500.0))
 	return _wav_from_pcm(pcm, false)
 
 
