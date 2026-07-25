@@ -1060,6 +1060,17 @@ var _cup_surface_wobble: float = 0.0 ## brief pour / splash kick on the disc
 var _cup_spout_lock: Node3D = null
 var _cup_spout_unlock_grace: float = 0.0
 var _cup_machine_contact_grace: float = 0.0
+## Flippy-cup toss (RMB hold / release while carrying a scooped cup).
+var _cup_flip_charging: bool = false
+var _cup_flip_hold_t: float = 0.0
+var _cup_flip_air: bool = false
+var _cup_flip_t: float = 0.0
+var _cup_flip_start: Vector3 = Vector3.ZERO
+var _cup_flip_end: Vector3 = Vector3.ZERO
+var _cup_flip_pitch_total: float = 0.0
+var _cup_flip_base_rot: Vector3 = Vector3.ZERO
+var _cup_flip_land_lid: bool = false
+var _cup_flip_land_side: bool = false
 var _cup_fizz: float = 0.0 ## 0–1 foam head; spikes on pour, fades after
 var _cup_fizz_peak: bool = false ## hit a strong head this pour cycle
 var _cup_fizz_poof: float = 0.0 ## 0–1 end-of-life poof out the top
@@ -1593,10 +1604,18 @@ const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
 ## Soft-lock fill lift uses runtime `cup_fill_extra_y` (Hidden menu).
-const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
-const CUP_FILL_ACQUIRE := 0.20
-const CUP_FILL_RELEASE := 0.30
-const CUP_FILL_TIGHT := 0.04
+## Keep seat helpful under the stream, but easy to yank free and place elsewhere.
+const CUP_FILL_LOCK_PULL := 0.68 ## was 0.97 — firm center, soft at the edge
+const CUP_FILL_ACQUIRE := 0.14
+const CUP_FILL_RELEASE := 0.11 ## ~4" pull breaks lock (was 0.30 — felt glued)
+const CUP_FILL_TIGHT := 0.035
+const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk away
+## Flippy-cup: RMB hold → release pitches forward; 0.5s = perfect 180° rim-down.
+const CUP_FLIP_PERFECT_HOLD := 0.5
+const CUP_FLIP_MIN_HOLD := 0.08
+const CUP_FLIP_DUR := 0.52
+const CUP_FLIP_PEAK := 0.26
+const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.0s, …)
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
 const CUP_TILT_FROM_VEL := 24.0 ## degrees per m/s — was 48; much less tip while moving
@@ -3211,6 +3230,12 @@ func _input(event: InputEvent) -> void:
 				if _start_spatula_juggle_toss():
 					get_viewport().set_input_as_handled()
 					return
+			## Held cup → charge flippy-cup toss (release timing sets pitch).
+			if cup_held and not _cup_flip_air and not cup_drawing:
+				_cup_flip_charging = true
+				_cup_flip_hold_t = 0.0
+				get_viewport().set_input_as_handled()
+				return
 			if cheese_held:
 				_cancel_cheese_hold()
 				get_viewport().set_input_as_handled()
@@ -3232,6 +3257,10 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 		else:
+			if _cup_flip_charging:
+				_release_cup_flip_charge()
+				get_viewport().set_input_as_handled()
+				return
 			if ext_spraying:
 				ext_spraying = false
 				if ext_powder:
@@ -16366,6 +16395,8 @@ func _begin_cup_melt_on_grill() -> void:
 	var melt_nid := int(cup_root.get_meta("cup_net_id", -1)) if cup_root != null else -1
 	cup_held = false
 	cup_drawing = false
+	_cup_flip_air = false
+	_cup_flip_charging = false
 	_hide_soda_stream()
 	if game_audio and game_audio.has_method("set_ice_grind"):
 		game_audio.set_ice_grind(false)
@@ -16394,9 +16425,22 @@ func _begin_cup_melt_local(
 		return
 	if root.get_parent() != world:
 		root.reparent(world, true)
-	root.global_position = Vector3(drop_pos.x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, drop_pos.z)
-	## Sit flat on the steel — only spin yaw (held lean / random tip looked broken).
-	root.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
+	var lid_down := bool(root.get_meta("lid_down", false))
+	var on_side := bool(root.get_meta("on_side", false))
+	var sit_y := GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
+	if lid_down:
+		sit_y = GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
+	elif on_side:
+		sit_y = GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
+	root.global_position = Vector3(drop_pos.x, sit_y, drop_pos.z)
+	## Keep flippy-cup land pose when melting; otherwise sit flat with random yaw.
+	var yaw := root.rotation_degrees.y if (lid_down or on_side) else randf() * 360.0
+	if lid_down:
+		root.rotation_degrees = Vector3(180.0, yaw, 0.0)
+	elif on_side:
+		root.rotation_degrees = Vector3(90.0, yaw, 0.0)
+	else:
+		root.rotation_degrees = Vector3(0.0, yaw, 0.0)
 	root.scale = Vector3.ONE
 	root.visible = true
 	## Clear any held-cup slosh so liquid doesn't stay tipped after the drop.
@@ -16416,6 +16460,8 @@ func _begin_cup_melt_local(
 	root.set_meta("pour_white", 0.0)
 	root.set_meta("on_steel", true)
 	root.set_meta("steel_hold", false)
+	root.set_meta("lid_down", lid_down)
+	root.set_meta("on_side", on_side)
 	var rescue_area := root.get_node_or_null("CupGrab") as Area3D
 	if rescue_area != null:
 		rescue_area.input_ray_pickable = true
@@ -16468,7 +16514,10 @@ func _begin_cup_melt_local(
 		"burn_started": false,
 		"crust_root": null,
 		"remote": is_remote,
+		"lid_down": lid_down,
+		"on_side": on_side,
 	})
+	melting_cups[melting_cups.size() - 1]["base_y"] = sit_y
 	if has_liquid:
 		if not is_remote:
 			_flash("Grab it quick — cup on the hot grill!", Color("FFE082"))
@@ -25133,6 +25182,8 @@ func _promote_cup_to_active(root: Node3D) -> void:
 	root.set_meta("on_steel", false)
 	root.set_meta("steel_hold", false)
 	root.set_meta("mp_mirror", false)
+	root.set_meta("lid_down", false)
+	root.set_meta("on_side", false)
 	if cup_root != null and cup_root != root and is_instance_valid(cup_root):
 		## Stash the previous working cup empty on the rack if somehow replaced.
 		if cup_soda_fill < 0.05:
@@ -26167,6 +26218,13 @@ func _begin_cup_hold() -> bool:
 		if draw_from_stack or near_home:
 			draw_from_stack = true
 	cup_held = true
+	_cup_flip_air = false
+	_cup_flip_charging = false
+	_cup_flip_hold_t = 0.0
+	if cup_root.has_meta("lid_down"):
+		cup_root.set_meta("lid_down", false)
+	if cup_root.has_meta("on_side"):
+		cup_root.set_meta("on_side", false)
 	_clear_tray_slot(cup_root)
 	_cup_prev_pos = cup_root.global_position
 	_cup_vel = Vector3.ZERO
@@ -26331,7 +26389,7 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 
 
 func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
-	## Soft-attach under the pour tip; keep lock until the cursor clearly leaves.
+	## Soft-attach under the pour tip — helpful seat, short leash, easy yank-away.
 	var candidates: Array[Node3D] = []
 	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
 		candidates.append(soda_spout_marker)
@@ -26345,22 +26403,29 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 			_cup_prev_pos = cup_root.global_position
 		return hit
 
+	## Just broke free — follow the hand only so you can place the cup elsewhere.
+	if _cup_spout_unlock_grace > 0.0:
+		_cup_spout_lock = null
+		return hit
+
 	var locked_valid := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
 	if locked_valid:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
 		if locked_d <= CUP_FILL_RELEASE:
-			## Firm under-stream seat — XZ snaps to tip, Y eases onto fill height.
+			## Center is firm; edge pull fades hard so a short drag frees the cup.
 			var tight := clampf(1.0 - locked_d / CUP_FILL_RELEASE, 0.0, 1.0)
-			var pull_xz := lerpf(0.88, CUP_FILL_LOCK_PULL, tight * tight)
+			var pull_xz := lerpf(0.22, CUP_FILL_LOCK_PULL, tight * tight)
 			if locked_d <= CUP_FILL_TIGHT:
 				pull_xz = CUP_FILL_LOCK_PULL
 			var out := hit
 			out.x = lerpf(hit.x, locked_target.x, pull_xz)
 			out.z = lerpf(hit.z, locked_target.z, pull_xz)
-			out.y = lerpf(hit.y, locked_target.y, lerpf(0.55, 0.92, tight))
+			out.y = lerpf(hit.y, locked_target.y, lerpf(0.35, 0.85, tight))
 			return out
 		_cup_spout_lock = null
+		_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
+		return hit
 
 	var best_node: Node3D = null
 	var best_target := Vector3.ZERO
@@ -26379,9 +26444,9 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0)
 	pull = pull * pull
 	var out2 := hit
-	out2.x = lerpf(hit.x, best_target.x, pull * 0.72)
-	out2.z = lerpf(hit.z, best_target.z, pull * 0.72)
-	out2.y = lerpf(hold_y, best_target.y, pull * 0.55)
+	out2.x = lerpf(hit.x, best_target.x, pull * 0.42)
+	out2.z = lerpf(hit.z, best_target.z, pull * 0.42)
+	out2.y = lerpf(hold_y, best_target.y, pull * 0.40)
 	return out2
 
 
@@ -26432,8 +26497,13 @@ func _cup_fill_spout_nearby() -> Node3D:
 func _update_held_cup(delta: float) -> void:
 	if cup_root == null or camera == null:
 		return
+	if _cup_flip_air:
+		_update_cup_rim_flip(delta)
+		return
 	_cup_spout_unlock_grace = maxf(0.0, _cup_spout_unlock_grace - delta)
 	_cup_machine_contact_grace = maxf(0.0, _cup_machine_contact_grace - delta)
+	if _cup_flip_charging:
+		_cup_flip_hold_t = minf(_cup_flip_hold_t + delta, CUP_FLIP_PERFECT_HOLD * 4.0)
 	if cup_drawing:
 		_update_cup_draw_from_rack(delta)
 		_update_cup_slosh(delta)
@@ -26449,10 +26519,13 @@ func _update_held_cup(delta: float) -> void:
 		seat = _kb_force_cup_seat
 	else:
 		seat = _cup_hold_point_from_screen(get_viewport().get_mouse_position())
-	## Soft-lock updates `_cup_spout_lock` above — evaluate fill bay AFTER that (was stale).
-	var fill_tip := _cup_spout_lock if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) \
-			else _cup_fill_spout_nearby()
-	var can_use_fill_bay := fill_tip != null and is_instance_valid(fill_tip)
+	## Soft-lock updates `_cup_spout_lock` above — only plant/spring while locked or pouring.
+	## Nearby alone must NOT trap the cup (that made yank-away feel glued).
+	var locked_tip := _cup_spout_lock if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) else null
+	var fill_tip: Node3D = locked_tip
+	var can_use_fill_bay := (locked_tip != null) or _cup_pouring
+	if can_use_fill_bay and fill_tip == null:
+		fill_tip = _cup_fill_spout_nearby()
 	## Invisible wall on the aim target — stops chase→shove glitching into the cabinet.
 	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay:
 		seat = _resolve_cup_against_soda(seat, false)
@@ -26530,7 +26603,7 @@ func _update_held_cup(delta: float) -> void:
 				_cup_machine_contact_grace = 0.22
 				_cup_vel *= 0.12
 				_cup_prev_pos = cup_root.global_position
-	## Pin height: under a spout / pouring → drip deck. Otherwise carry plane.
+	## Pin height: locked / pouring → drip deck. Otherwise carry plane.
 	if can_use_fill_bay:
 		cup_root.global_position.y = _cup_deck_fill_y()
 	else:
@@ -26539,15 +26612,19 @@ func _update_held_cup(delta: float) -> void:
 			anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
 		cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
 		cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
+	## Flippy-cup wind-up: tip forward with RMB hold (0.5s ≈ ready for a clean 180°).
+	var flip_wind := 0.0
+	if _cup_flip_charging:
+		flip_wind = clampf(_cup_flip_hold_t / CUP_FLIP_PERFECT_HOLD, 0.0, 2.0) * 28.0
 	cup_root.rotation_degrees = Vector3(
-		-6.0 + _cup_tilt.y,
+		-6.0 + _cup_tilt.y + flip_wind,
 		10.0,
 		_cup_tilt.x
 	)
 	_update_cup_slosh(delta)
 	_try_fill_cup_at_spouts(delta)
-	## After pour starts, keep the cup planted on the grate even if soft-lock blips.
-	if can_use_fill_bay or _cup_pouring or _cup_fill_spout_nearby() != null:
+	## Only force deck Y while actually locked / pouring — never because a spout is merely nearby.
+	if can_use_fill_bay or _cup_pouring:
 		cup_root.global_position.y = _cup_deck_fill_y()
 	## After spout sets _cup_pouring — drive the pour-white fade.
 	_update_cup_pour_white(delta)
@@ -28072,8 +28149,142 @@ func _update_cup_ice_bob(_delta: float) -> void:
 		)
 
 
+func _release_cup_flip_charge() -> void:
+	## RMB release — hold duration sets pitch (0.5s = perfect 180° rim-down).
+	if not _cup_flip_charging:
+		return
+	var hold := _cup_flip_hold_t
+	_cup_flip_charging = false
+	_cup_flip_hold_t = 0.0
+	if hold < CUP_FLIP_MIN_HOLD or not cup_held or _cup_flip_air:
+		return
+	if cup_root == null or not is_instance_valid(cup_root) or cup_drawing:
+		return
+	_start_cup_rim_flip(hold)
+
+
+func _start_cup_rim_flip(hold_sec: float) -> void:
+	## Flippy-cup pitch: turns = hold/0.5; integer turns land rim-down (0.5s, 1.0s, …).
+	if cup_root == null or not is_instance_valid(cup_root):
+		return
+	var turns := clampf(hold_sec / CUP_FLIP_PERFECT_HOLD, 0.0, 4.0)
+	var nearest := roundf(turns)
+	var err := absf(turns - nearest)
+	## Integer turns (0.5s, 1.0s, 1.5s…) → rim/lid down. Half turns (0.25s…) → on its side.
+	_cup_flip_land_lid = nearest >= 1.0 and err <= CUP_FLIP_PERFECT_WINDOW
+	var half_err := absf(turns - floorf(turns) - 0.5)
+	_cup_flip_land_side = (not _cup_flip_land_lid) and half_err <= 0.18
+	## Pitch so perfect beats always finish rim-down (1.0s = 540° = full spin + 180°).
+	if _cup_flip_land_lid:
+		_cup_flip_pitch_total = 180.0 + (nearest - 1.0) * 360.0
+	elif _cup_flip_land_side:
+		_cup_flip_pitch_total = 90.0 + floorf(turns) * 180.0
+	else:
+		_cup_flip_pitch_total = turns * 180.0
+	_cup_flip_base_rot = cup_root.rotation_degrees
+	_cup_flip_start = cup_root.global_position
+	var mouse := get_viewport().get_mouse_position()
+	var aim := _grill_plane_from_screen(mouse)
+	if aim == Vector3.ZERO or not _is_near_grill_for_place(aim):
+		aim = Vector3(_cup_flip_start.x, GRILL_SURFACE_Y, _cup_flip_start.z)
+		if not _is_on_grill_surface(aim) and not _is_near_grill_for_place(aim):
+			## Off-grill toss — still flip in place toward steel center so it can land.
+			aim = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+	aim.x = clampf(aim.x, GRILL_CENTER_X - GRILL_WIDTH * 0.46, GRILL_CENTER_X + GRILL_WIDTH * 0.46)
+	aim.z = clampf(aim.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.46, GRILL_SURFACE_Z + GRILL_DEPTH * 0.46)
+	var land_y := GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
+	if _cup_flip_land_lid:
+		## Origin is cup bottom — after 180° pitch the rim sits on the steel.
+		land_y = GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
+	elif _cup_flip_land_side:
+		land_y = GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
+	_cup_flip_end = Vector3(aim.x, land_y, aim.z)
+	_cup_spout_lock = null
+	_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
+	_cup_pouring = false
+	_hide_soda_stream()
+	if game_audio and game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(false)
+	_cup_flip_air = true
+	_cup_flip_t = 0.0
+	if game_audio:
+		game_audio.play_scoop()
+	if _cup_flip_land_lid:
+		_flash("Rim flip!", Color("FFE082"))
+	elif _cup_flip_land_side:
+		_flash("Half flip", Color("FFCC80"))
+
+
+func _update_cup_rim_flip(delta: float) -> void:
+	if not _cup_flip_air or cup_root == null or not is_instance_valid(cup_root):
+		_cup_flip_air = false
+		return
+	_cup_flip_t += delta
+	var t := clampf(_cup_flip_t / CUP_FLIP_DUR, 0.0, 1.0)
+	var xz_t := t * t * (3.0 - 2.0 * t)
+	var xz: Vector3 = _cup_flip_start.lerp(_cup_flip_end, xz_t)
+	var base_y := lerpf(_cup_flip_start.y, _cup_flip_end.y, t)
+	## Punchy rise, then settle — reads like a tabletop flippy-cup toss.
+	var arc := sin(t * PI)
+	var y := base_y + CUP_FLIP_PEAK * arc
+	cup_root.global_position = Vector3(xz.x, y, xz.z)
+	## Pitch forward over the arc (0.5s hold → 180°, 0.25s → 90°, 1.0s → 360°).
+	var spin := _cup_flip_pitch_total * (t * t * (3.0 - 2.0 * t))
+	cup_root.rotation_degrees = Vector3(
+		_cup_flip_base_rot.x + spin,
+		_cup_flip_base_rot.y,
+		_cup_flip_base_rot.z * (1.0 - t)
+	)
+	_update_cup_slosh(delta)
+	_update_cup_pour_white(delta)
+	if t < 1.0:
+		return
+	_finish_cup_rim_flip()
+
+
+func _finish_cup_rim_flip() -> void:
+	_cup_flip_air = false
+	_cup_flip_charging = false
+	_cup_flip_hold_t = 0.0
+	if cup_root == null or not is_instance_valid(cup_root):
+		cup_held = false
+		return
+	var yaw := _cup_flip_base_rot.y
+	if _cup_flip_land_lid:
+		cup_root.rotation_degrees = Vector3(180.0, yaw, 0.0)
+		cup_root.global_position = Vector3(_cup_flip_end.x, _cup_flip_end.y, _cup_flip_end.z)
+		cup_root.set_meta("lid_down", true)
+		cup_root.set_meta("on_side", false)
+	elif _cup_flip_land_side:
+		cup_root.rotation_degrees = Vector3(90.0, yaw, 0.0)
+		cup_root.global_position = Vector3(_cup_flip_end.x, _cup_flip_end.y, _cup_flip_end.z)
+		cup_root.set_meta("lid_down", false)
+		cup_root.set_meta("on_side", true)
+	else:
+		cup_root.rotation_degrees = _cup_presented_rotation(cup_root)
+		cup_root.global_position = Vector3(
+			_cup_flip_end.x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, _cup_flip_end.z
+		)
+		cup_root.set_meta("lid_down", false)
+		cup_root.set_meta("on_side", false)
+	_cup_tilt = Vector2.ZERO
+	_cup_vel = Vector3.ZERO
+	## Same park / melt rules as a normal put-down on steel.
+	if _is_in_warmer_zone(cup_root.global_position) or not grill_on:
+		_place_cup_on_steel()
+		return
+	if _is_on_grill_surface(cup_root.global_position):
+		_begin_cup_melt_on_grill()
+		return
+	_place_cup_on_steel()
+
+
 func _put_cup_down() -> void:
 	## Release LMB / Esc — trash, hand to customer face, melt on hot cook zone, or park.
+	_cup_flip_charging = false
+	_cup_flip_hold_t = 0.0
+	if _cup_flip_air:
+		return
 	if cup_held and _is_over_garbage(get_viewport().get_mouse_position()):
 		_trash_held_cup()
 		return
@@ -28393,13 +28604,22 @@ func _place_cup_on_steel() -> void:
 	if _steel_parked_count() >= 6:
 		_flash("Grill's crowded — pick a drink up first", Color("FFCC80"))
 		return
+	var lid_down := bool(cup_root.get_meta("lid_down", false))
+	var on_side := bool(cup_root.get_meta("on_side", false))
 	var drop := cup_root.global_position
 	drop.x = clampf(drop.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
 	drop.z = clampf(drop.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
-	drop.y = GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
+	if lid_down:
+		drop.y = GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
+	elif on_side:
+		drop.y = GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
+	else:
+		drop.y = GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
 	var on_hold := _is_in_warmer_zone(drop)
 	cup_held = false
 	cup_drawing = false
+	_cup_flip_air = false
+	_cup_flip_charging = false
 	cup_root.scale = Vector3.ONE
 	_hide_soda_stream()
 	if game_audio and game_audio.has_method("set_ice_grind"):
@@ -28425,6 +28645,8 @@ func _place_cup_on_steel() -> void:
 	var stashed := cup_root
 	stashed.set_meta("on_steel", true)
 	stashed.set_meta("steel_hold", on_hold)
+	stashed.set_meta("lid_down", lid_down)
+	stashed.set_meta("on_side", on_side)
 	_clear_tray_slot(stashed)
 	## Fresh 30s foam fade clock the moment the drink sits idle.
 	if float(stashed.get_meta("soda_fill", 0.0)) > 0.08:
@@ -28434,7 +28656,13 @@ func _place_cup_on_steel() -> void:
 		stashed.set_meta("fizz_poofing", false)
 		stashed.set_meta("fizz_poof", 0.0)
 	stashed.global_position = drop
-	stashed.rotation_degrees = _cup_presented_rotation(stashed)
+	var yaw := stashed.rotation_degrees.y
+	if lid_down:
+		stashed.rotation_degrees = Vector3(180.0, yaw, 0.0)
+	elif on_side:
+		stashed.rotation_degrees = Vector3(90.0, yaw, 0.0)
+	else:
+		stashed.rotation_degrees = _cup_presented_rotation(stashed)
 	if cup_area != null and is_instance_valid(cup_area):
 		cup_area.input_ray_pickable = true
 	## Detach grab area ref before clearing active cup.
