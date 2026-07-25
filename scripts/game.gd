@@ -1537,7 +1537,7 @@ const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
 ## Soft-lock fill lift only — parked tray cups use the bare drip-deck Y (no float).
-const CUP_FILL_EXTRA_Y := 0.2032 ## ~8" above park deck while filling (+1" vs prior)
+const CUP_FILL_EXTRA_Y := 0.0508 ## ~2" above park deck while filling (−6" vs prior)
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
 const CUP_FILL_RELEASE := 0.30
