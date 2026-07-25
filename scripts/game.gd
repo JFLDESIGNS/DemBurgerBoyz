@@ -1444,7 +1444,15 @@ const SODA_FLAVOR_COLORS: Dictionary = {
 const SODA_FLAVOR_WARM: Dictionary = {
 	"orange": Color(1.0, 0.54, 0.06),
 }
-const CUP_HOLD_HEIGHT := 0.0908 ## +2" carry/pull plane so first fill isn't clamped too low
+const INCH_TO_M := 0.0254
+## Carry / first-pull plane above grill steel. Tunable in Hidden → SODA CUP HEIGHTS.
+const CUP_HOLD_HEIGHT_DEFAULT := 0.1416 ## ~5.6" (+2" vs prior) so spout acquire isn't clamped low
+## Soft-lock fill seat offset above drip-tray park. Tunable in Hidden menu.
+## Prior tip-relative seat sat ~6" above the tray; default 0 sits on the drip deck.
+const CUP_FILL_EXTRA_Y_DEFAULT := 0.0
+var cup_hold_height: float = CUP_HOLD_HEIGHT_DEFAULT
+var cup_fill_extra_y: float = CUP_FILL_EXTRA_Y_DEFAULT
+const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
 ## Cup mesh ~10% smaller than the original fountain cups.
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
@@ -1536,8 +1544,7 @@ const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without te
 const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
-## Soft-lock fill lift only — parked tray cups use the bare drip-deck Y (no float).
-const CUP_FILL_EXTRA_Y := 0.0508 ## ~2" above park deck while filling (−6" vs prior)
+## Soft-lock fill lift uses runtime `cup_fill_extra_y` (Hidden menu).
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
 const CUP_FILL_RELEASE := 0.30
@@ -19155,6 +19162,37 @@ func _save_icecream_station_settings() -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
+func _load_soda_cup_height_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if cfg.has_section_key(SODA_CUP_HEIGHT_CFG_SECTION, "hold_in"):
+		cup_hold_height = clampf(float(cfg.get_value(SODA_CUP_HEIGHT_CFG_SECTION, "hold_in")), 0.0, 12.0) * INCH_TO_M
+	if cfg.has_section_key(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in"):
+		cup_fill_extra_y = clampf(float(cfg.get_value(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in")), -8.0, 12.0) * INCH_TO_M
+
+
+func _save_soda_cup_height_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(SODA_CUP_HEIGHT_CFG_SECTION, "hold_in", cup_hold_height / INCH_TO_M)
+	cfg.set_value(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in", cup_fill_extra_y / INCH_TO_M)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_soda_cup_height_hidden_ui() -> void:
+	var vals := {
+		"cup_pull_in": cup_hold_height / INCH_TO_M,
+		"cup_fill_in": cup_fill_extra_y / INCH_TO_M,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
+
 func _sync_icecream_station_hidden_ui() -> void:
 	if options_hidden_icecream_pos_slider != null and is_instance_valid(options_hidden_icecream_pos_slider):
 		options_hidden_icecream_pos_slider.set_value_no_signal(icecream_cam_right_ft)
@@ -19489,6 +19527,7 @@ func _build_menu_board_decal() -> void:
 
 func _build_soda_station() -> void:
 	## Compact fountain (~½ old height) with clear flavor tanks on top.
+	_load_soda_cup_height_settings()
 	if soda_root != null and is_instance_valid(soda_root):
 		soda_root.queue_free()
 	soda_root = null
@@ -19623,7 +19662,7 @@ func _build_soda_station() -> void:
 	_add_soda_spout_marker_only(root, false)
 	_sync_soda_spout_to_flavor()
 
-	## Park cups on the drip ledge — deck height only (fill soft-lock adds CUP_FILL_EXTRA_Y).
+	## Park cups on the drip ledge — deck height only (fill soft-lock adds cup_fill_extra_y).
 	cup_rest = root.to_global(Vector3(
 		CUP_TRAY_FIRST_X * 0.72,
 		0.075 * SODA_FOUNTAIN_SCALE,
@@ -22078,7 +22117,7 @@ func _begin_icecream_cone_hold() -> bool:
 func _icecream_cone_hold_point(screen_pos: Vector2) -> Vector3:
 	if camera == null:
 		return Vector3.ZERO
-	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT_DEFAULT
 	var tip := icecream_spout_marker.global_position if icecream_spout_marker != null and is_instance_valid(icecream_spout_marker) else Vector3.ZERO
 	if tip != Vector3.ZERO:
 		hold_y = maxf(hold_y, tip.y - ICECREAM_CONE_H - 0.045 - ICECREAM_CONE_FILL_DROP)
@@ -25639,7 +25678,7 @@ func _cup_rack_front_grab_pos() -> Vector3:
 	if seat == Vector3.ZERO and soda_root != null and is_instance_valid(soda_root):
 		seat = soda_root.global_position
 	var face := _cup_soda_face_dir()
-	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	var hold_y := GRILL_SURFACE_Y + cup_hold_height
 	var pos := seat + face * FRONT_M
 	pos.y = hold_y
 	## Stay on the cook side of the invisible soda wall.
@@ -25722,7 +25761,7 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	## Plane tracking at cup height (like other tools) — keeps the cursor on-screen.
 	if camera == null:
 		return Vector3.ZERO
-	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	var hold_y := GRILL_SURFACE_Y + cup_hold_height
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
 	var hit := Vector3.ZERO
@@ -25797,14 +25836,13 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
-	## Soft-lock fill seat under the stream — raised above the park deck, not the park height.
+	## Soft-lock fill seat under the stream — tray park + Hidden `cup_fill_extra_y`.
 	var tip_p := tip.global_position
-	var tip_seat := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + CUP_FILL_EXTRA_Y
+	var tip_seat := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + cup_fill_extra_y
 	var fill_y := tip_seat
 	if soda_root != null and is_instance_valid(soda_root) and cup_rest != Vector3.ZERO:
-		fill_y = cup_rest.y + CUP_FILL_EXTRA_Y
-	## Prefer the higher of tray-lift vs tip-relative so the cup clears the machine floor.
-	fill_y = maxf(fill_y, tip_seat)
+		## Tray-relative seat so the Hidden fill slider lands on the drip deck, not tip height.
+		fill_y = cup_rest.y + cup_fill_extra_y
 	return Vector3(tip_p.x, fill_y, tip_p.z)
 
 
@@ -25899,7 +25937,7 @@ func _update_held_cup(delta: float) -> void:
 			if can_use_fill_bay:
 				cup_root.global_position.y = keep_y2
 	## Pin height near the fill soft-lock / tray hold plane so the cup can't float up.
-	var anchor_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	var anchor_y := GRILL_SURFACE_Y + cup_hold_height
 	if can_use_fill_bay and _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
 		## Hard lock while filling — no −0.03 sink that clips through the drip deck.
 		anchor_y = _cup_target_for_spout(_cup_spout_lock).y
@@ -25907,8 +25945,21 @@ func _update_held_cup(delta: float) -> void:
 	else:
 		if cup_rest != Vector3.ZERO:
 			anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
-		cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
-		cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
+		var want_y := anchor_y
+		var y_lo := anchor_y - 0.03
+		var y_hi := anchor_y + 0.08
+		## First pull: while magneting under a spout, follow that fill seat (don't clamp low).
+		for tip in [soda_spout_marker, ice_spout_marker]:
+			if tip == null or not is_instance_valid(tip):
+				continue
+			var tpos := _cup_target_for_spout(tip)
+			var d := Vector2(cup_root.global_position.x - tpos.x, cup_root.global_position.z - tpos.z).length()
+			if d <= CUP_MAGNET_RADIUS:
+				want_y = tpos.y
+				y_lo = minf(y_lo, tpos.y - 0.02)
+				y_hi = maxf(y_hi, tpos.y + 0.02)
+		cup_root.global_position.y = lerpf(cup_root.global_position.y, want_y, clampf(delta * 16.0, 0.0, 1.0))
+		cup_root.global_position.y = clampf(cup_root.global_position.y, y_lo, y_hi)
 	cup_root.rotation_degrees = Vector3(
 		-6.0 + _cup_tilt.y,
 		10.0,
@@ -33567,6 +33618,24 @@ func _build_options_menu() -> void:
 		_save_icecream_station_settings()
 	)
 	options_hidden_room_tone_box.add_child(options_hidden_icecream_pos_slider)
+
+	var soda_h_lab := Label.new()
+	soda_h_lab.text = "SODA CUP HEIGHTS"
+	UiFontsScript.apply_label(soda_h_lab, true, 13)
+	soda_h_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(soda_h_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_pull_in", "First Pull Height (in)", 0.0, 12.0, 0.25,
+		func(): return cup_hold_height / INCH_TO_M,
+		func(v: float):
+			cup_hold_height = clampf(v, 0.0, 12.0) * INCH_TO_M
+			_save_soda_cup_height_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_fill_in", "Fill Seat Above Tray (in)", -8.0, 12.0, 0.25,
+		func(): return cup_fill_extra_y / INCH_TO_M,
+		func(v: float):
+			cup_fill_extra_y = clampf(v, -8.0, 12.0) * INCH_TO_M
+			_save_soda_cup_height_settings()
+	)
 
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
