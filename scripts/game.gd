@@ -1532,6 +1532,7 @@ const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without te
 const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
+const CUP_FILL_EXTRA_Y := 0.0762 ## +3" while filling under the spout
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
 const CUP_FILL_RELEASE := 0.30
