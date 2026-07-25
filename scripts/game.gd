@@ -110,6 +110,8 @@ const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
+const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
+const LocationMapUIScript := preload("res://scripts/location_map_ui.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
 const BURGERPALS_STARTUP_SOUND_PATH := "res://sounds/burgerpals.wav"
@@ -464,6 +466,12 @@ var oil_held: bool = false
 var oil_root: Node3D = null
 var oil_area: Area3D = null
 var oil_particles: GPUParticles3D = null
+var oil_stream_mesh: MeshInstance3D = null
+var oil_stream_mat: StandardMaterial3D = null
+var oil_stream_fx: GPUParticles3D = null
+var oil_aim_marker: MeshInstance3D = null
+var oil_aim_mat: StandardMaterial3D = null
+var oil_stream_phase: float = 0.0
 var oil_home: Vector3 = Vector3(1.166, 2.12, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
@@ -474,6 +482,7 @@ const OIL_POUR_PITCH := 180.0 ## Tip-down pour pose
 const OIL_UPRIGHT_PITCH := 22.0 ## Mouth up — grease stays in the bottle
 const OIL_POUR_ACTIVE_TILT := 0.55 ## Must be tipped past this to stream
 const OIL_POUR_TILT_STEP := 0.34
+const OIL_NOZZLE_LOCAL := Vector3(0.0, 0.13, 0.0)
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var soda_slicks: Array = [] ## soda puddles on steel — oil-like, soda-colored
 var soda_char_spots: Array = [] ## burnt black marks left after soda cooks off
@@ -1636,6 +1645,13 @@ var _burger_assets_warmed: bool = false
 const PATTY_PREWARM_POOL_SIZE := 3
 var _patty_spawn_pool: Array = []
 
+## Food-truck city parking (map UI now; customer/bg swap wired later).
+const LOCATION_CFG_PATH := "user://truck_location.cfg"
+var current_location_id: String = TruckLocationsScript.DEFAULT_ID
+var _location_map_layer: CanvasLayer = null
+var _location_map_ui: Control = null
+var location_map_btn: Button = null ## start-screen CTA
+
 
 func _ready() -> void:
 	randomize()
@@ -1697,6 +1713,7 @@ func _ready() -> void:
 	_build_master_volume_ui()
 	_build_graphics_ui()
 	_build_options_menu()
+	_setup_location_map_ui()
 	_layout_top_bar_hud()
 	_setup_game_audio()
 	_setup_intro_title_music()
@@ -3142,6 +3159,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
+			_location_map_ui.close()
+			get_viewport().set_input_as_handled()
+			return
 		if cup_held:
 			_put_cup_down()
 			get_viewport().set_input_as_handled()
@@ -12967,9 +12988,11 @@ func _nudge_oil_pour_tilt(dir: float) -> void:
 		oil_pour_hold_t = 0.0
 		if oil_particles:
 			oil_particles.emitting = false
+		_hide_oil_stream()
 		_flash("Bottle upright — scroll up to pour again", Color("FFE082"))
 	elif not was_pouring and _oil_is_pouring():
 		oil_last_draw = Vector3.ZERO
+		_set_oil_aim_marker(false, Vector3.ZERO)
 		_flash("Pouring — scroll down to stop", Color("FFE082"))
 	if mp_enabled:
 		_mp_send_held_tool_pose(true)
@@ -12986,10 +13009,14 @@ func _oil_held_pitch() -> float:
 func _update_held_oil(delta: float) -> void:
 	if oil_root == null or camera == null:
 		return
+	oil_stream_phase += delta * 9.0
 	if _kb_force_oil_pos != Vector3.ZERO:
 		## Keyboard FULL-zone oil cycle owns the bottle this frame.
 		oil_pour_tilt = 1.0
 		oil_pour_hold_t += delta
+		var kb_land := Vector3(_kb_force_oil_pos.x, GRILL_SURFACE_Y + OIL_SIT_Y, _kb_force_oil_pos.z)
+		_set_oil_aim_marker(false, kb_land)
+		_update_oil_stream(_oil_nozzle_world(), kb_land)
 		if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
 			_flash("Grease held too long on a hot grill!", Color("FF5252"))
 			_start_grill_fire(_kb_force_oil_pos)
@@ -13004,21 +13031,25 @@ func _update_held_oil(delta: float) -> void:
 	oil_root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + OIL_POUR_HEIGHT, hit.z)
 	oil_root.rotation_degrees = Vector3(_oil_held_pitch(), 0.0, 0.0)
 	var pouring := _oil_is_pouring()
+	var cur := Vector3(hit.x, GRILL_SURFACE_Y + OIL_SIT_Y, hit.z)
 	if oil_particles:
 		oil_particles.emitting = pouring
-		oil_particles.position = Vector3(0, 0.12, 0)
+		oil_particles.position = OIL_NOZZLE_LOCAL
 	if not pouring:
 		## Still holding LMB — just not tipped enough to stream.
 		oil_pour_hold_t = 0.0
 		oil_last_draw = Vector3.ZERO
+		_hide_oil_stream()
+		_set_oil_aim_marker(true, cur)
 		return
+	_set_oil_aim_marker(false, cur)
+	_update_oil_stream(_oil_nozzle_world(), cur)
 	## Holding grease down on a lit grill too long → grease fire.
 	oil_pour_hold_t += delta
 	if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
 		_flash("Grease held too long on a hot grill!", Color("FF5252"))
 		_start_grill_fire(hit)
 		return
-	var cur := Vector3(hit.x, GRILL_SURFACE_Y + OIL_SIT_Y, hit.z)
 	if oil_last_draw == Vector3.ZERO:
 		oil_last_draw = cur
 		_spawn_oil_slick(cur, 0.055)
@@ -15852,41 +15883,209 @@ func _build_oil_bottle() -> void:
 	tip.material_override = tmat
 	oil_root.add_child(tip)
 
+	## Soft tip drips — main look is the transparent soft-serve ribbon.
 	oil_particles = GPUParticles3D.new()
 	oil_particles.name = "OilParticles"
-	oil_particles.amount = 56
-	oil_particles.lifetime = 0.55
-	oil_particles.explosiveness = 0.05
-	oil_particles.randomness = 0.45
+	oil_particles.amount = 20
+	oil_particles.lifetime = 0.42
+	oil_particles.explosiveness = 0.06
+	oil_particles.randomness = 0.38
 	oil_particles.emitting = false
-	## Tip sits at local +Y; bottle flips 180 when pouring so that becomes world −Y.
-	oil_particles.position = Vector3(0, 0.13, 0)
+	oil_particles.position = OIL_NOZZLE_LOCAL
 	var op := ParticleProcessMaterial.new()
 	op.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	op.emission_sphere_radius = 0.006
-	## Local +Y out the nozzle — with the held 180° flip that shoots toward the steel.
+	op.emission_sphere_radius = 0.012
 	op.direction = Vector3(0, 1, 0)
-	op.spread = 12.0
-	op.initial_velocity_min = 0.75
-	op.initial_velocity_max = 1.35
-	## World-space gravity must pull down (negative Y), not up into the bottle.
-	op.gravity = Vector3(0, -9.8, 0)
-	op.scale_min = 0.35
-	op.scale_max = 0.9
-	op.color = Color(1.0, 0.88, 0.35, 0.8)
+	op.spread = 22.0
+	op.initial_velocity_min = 0.04
+	op.initial_velocity_max = 0.16
+	op.gravity = Vector3(0, -1.1, 0)
+	op.scale_min = 0.4
+	op.scale_max = 0.95
+	op.color = Color(1.0, 0.86, 0.32, 0.55)
 	oil_particles.process_material = op
 	var odrop := SphereMesh.new()
 	odrop.radius = 0.007
-	odrop.height = 0.014
-	odrop.radial_segments = 6
-	odrop.rings = 3
+	odrop.height = 0.011
+	odrop.radial_segments = 8
+	odrop.rings = 4
 	var odraw := StandardMaterial3D.new()
-	odraw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	odraw.albedo_color = Color(1.0, 0.85, 0.3, 0.75)
+	odraw.albedo_color = Color(0.98, 0.82, 0.28, 0.42)
 	odraw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	odraw.roughness = 0.18
+	odraw.metallic = 0.04
+	odraw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	oil_particles.draw_pass_1 = odrop
 	oil_particles.material_override = odraw
 	oil_root.add_child(oil_particles)
+	_build_oil_stream_fx()
+
+
+func _build_oil_stream_fx() -> void:
+	## Soft-serve-style grease ribbon + landing droplets + upright aim ring.
+	oil_stream_mesh = MeshInstance3D.new()
+	oil_stream_mesh.name = "OilSoftServeRibbon"
+	oil_stream_mesh.mesh = ArrayMesh.new()
+	oil_stream_mat = StandardMaterial3D.new()
+	oil_stream_mat.albedo_color = Color(0.96, 0.78, 0.22, 0.38)
+	oil_stream_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	oil_stream_mat.roughness = 0.16
+	oil_stream_mat.metallic = 0.05
+	oil_stream_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	oil_stream_mat.emission_enabled = true
+	oil_stream_mat.emission = Color(1.0, 0.78, 0.22)
+	oil_stream_mat.emission_energy_multiplier = 0.12
+	oil_stream_mesh.material_override = oil_stream_mat
+	oil_stream_mesh.visible = false
+	oil_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(oil_stream_mesh)
+
+	oil_stream_fx = GPUParticles3D.new()
+	oil_stream_fx.name = "OilSoftServeDroplets"
+	oil_stream_fx.amount = 16
+	oil_stream_fx.lifetime = 0.4
+	oil_stream_fx.emitting = false
+	oil_stream_fx.explosiveness = 0.08
+	oil_stream_fx.randomness = 0.35
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = 0.016
+	pmat.direction = Vector3(0, -1, 0)
+	pmat.spread = 26.0
+	pmat.initial_velocity_min = 0.02
+	pmat.initial_velocity_max = 0.1
+	pmat.gravity = Vector3(0, -0.4, 0)
+	pmat.scale_min = 0.35
+	pmat.scale_max = 0.85
+	pmat.color = Color(1.0, 0.86, 0.3, 0.5)
+	oil_stream_fx.process_material = pmat
+	var drop_mesh := SphereMesh.new()
+	drop_mesh.radius = 0.007
+	drop_mesh.height = 0.01
+	oil_stream_fx.draw_pass_1 = drop_mesh
+	oil_stream_fx.material_override = oil_stream_mat
+	world.add_child(oil_stream_fx)
+
+	oil_aim_marker = MeshInstance3D.new()
+	oil_aim_marker.name = "OilAimMarker"
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.026
+	ring.outer_radius = 0.034
+	ring.rings = 18
+	ring.ring_segments = 10
+	oil_aim_marker.mesh = ring
+	oil_aim_mat = StandardMaterial3D.new()
+	oil_aim_mat.albedo_color = Color(1.0, 0.84, 0.28, 0.16)
+	oil_aim_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	oil_aim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	oil_aim_mat.emission_enabled = true
+	oil_aim_mat.emission = Color(1.0, 0.82, 0.26)
+	oil_aim_mat.emission_energy_multiplier = 0.07
+	oil_aim_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	oil_aim_marker.material_override = oil_aim_mat
+	oil_aim_marker.visible = false
+	oil_aim_marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(oil_aim_marker)
+
+
+func _oil_nozzle_world() -> Vector3:
+	if oil_root == null or not is_instance_valid(oil_root):
+		return Vector3.ZERO
+	return oil_root.to_global(OIL_NOZZLE_LOCAL)
+
+
+func _update_oil_stream(from_tip: Vector3, to_grill: Vector3) -> void:
+	if oil_stream_mesh == null:
+		return
+	oil_stream_mesh.visible = true
+	oil_stream_mesh.global_position = from_tip
+	oil_stream_mesh.global_basis = Basis.IDENTITY
+	oil_stream_mesh.mesh = _make_oil_stream_curve_mesh(from_tip, to_grill)
+	oil_stream_mesh.rotation_degrees = Vector3.ZERO
+	if oil_stream_fx != null:
+		oil_stream_fx.global_position = to_grill + Vector3(0.0, 0.014, 0.0)
+		oil_stream_fx.emitting = true
+
+
+func _make_oil_stream_curve_mesh(from_tip: Vector3, to_grill: Vector3) -> ArrayMesh:
+	## Same soft-serve ribbon idea as ice cream — thinner + transparent amber.
+	var mesh := ArrayMesh.new()
+	var rel_end := to_grill - from_tip
+	var drop := clampf(from_tip.y - to_grill.y, 0.08, 0.55)
+	var lateral := Vector3(rel_end.x, 0.0, rel_end.z)
+	var p0 := Vector3.ZERO
+	var p1 := lateral * 0.22 + Vector3(0.0, -drop * 0.52, 0.0)
+	var p2 := rel_end
+	var rings := 14
+	var segs := 12
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for i in range(rings + 1):
+		var t := float(i) / float(rings)
+		var omt := 1.0 - t
+		var center := omt * omt * p0 + 2.0 * omt * t * p1 + t * t * p2
+		var tangent := (2.0 * omt * (p1 - p0) + 2.0 * t * (p2 - p1)).normalized()
+		if tangent.length() <= 0.001:
+			tangent = Vector3.DOWN
+		var side := tangent.cross(Vector3.UP)
+		if side.length() <= 0.001:
+			side = Vector3.RIGHT
+		side = side.normalized()
+		var up := side.cross(tangent).normalized()
+		var radius := lerpf(
+			0.0105 + sin(oil_stream_phase) * 0.001,
+			0.0048 + cos(oil_stream_phase * 1.25) * 0.0006,
+			t
+		)
+		for j in range(segs):
+			var a := (float(j) / float(segs)) * TAU
+			var normal := (side * cos(a) + up * sin(a)).normalized()
+			verts.append(center + normal * radius)
+			normals.append(normal)
+			uvs.append(Vector2(float(j) / float(segs), t))
+	for i in range(rings):
+		for j in range(segs):
+			var a0 := i * segs + j
+			var b0 := i * segs + ((j + 1) % segs)
+			var c0 := (i + 1) * segs + j
+			var d0 := (i + 1) * segs + ((j + 1) % segs)
+			indices.append(a0)
+			indices.append(b0)
+			indices.append(c0)
+			indices.append(b0)
+			indices.append(d0)
+			indices.append(c0)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _hide_oil_stream() -> void:
+	if oil_stream_mesh != null and is_instance_valid(oil_stream_mesh):
+		oil_stream_mesh.visible = false
+	if oil_stream_fx != null and is_instance_valid(oil_stream_fx):
+		oil_stream_fx.emitting = false
+
+
+func _set_oil_aim_marker(show: bool, land: Vector3) -> void:
+	if oil_aim_marker == null or not is_instance_valid(oil_aim_marker):
+		return
+	if not show or land == Vector3.ZERO:
+		oil_aim_marker.visible = false
+		return
+	oil_aim_marker.visible = true
+	oil_aim_marker.global_position = Vector3(land.x, GRILL_SURFACE_Y + OIL_SIT_Y + 0.004, land.z)
+	oil_aim_marker.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+	## Gentle breathe so it’s readable without looking like a UI ring.
+	var pulse := 1.0 + sin(oil_stream_phase * 0.65) * 0.04
+	oil_aim_marker.scale = Vector3(pulse, pulse, pulse)
 
 
 func _try_grab_oil(screen_pos: Vector2) -> bool:
@@ -15961,6 +16160,8 @@ func _release_oil_bottle() -> void:
 	oil_pour_tilt = 1.0
 	if oil_particles:
 		oil_particles.emitting = false
+	_hide_oil_stream()
+	_set_oil_aim_marker(false, Vector3.ZERO)
 	if oil_area:
 		oil_area.input_ray_pickable = false
 	_tween_tool_to_wall(
@@ -15987,6 +16188,8 @@ func _reset_oil_bottle() -> void:
 	oil_pour_tilt = 1.0
 	if oil_particles:
 		oil_particles.emitting = false
+	_hide_oil_stream()
+	_set_oil_aim_marker(false, Vector3.ZERO)
 	if oil_root:
 		oil_root.position = oil_home
 		oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
@@ -31187,6 +31390,9 @@ func _build_options_menu() -> void:
 	_options_add_btn(general, "Resume", func():
 		_set_options_menu_open(false)
 	)
+	_options_add_btn(general, "Change Location", func():
+		_open_location_map()
+	)
 	_options_add_btn(general, "Restart Day", func():
 		_options_restart_day()
 	)
@@ -38478,8 +38684,8 @@ func _setup_start_menu_chrome() -> void:
 	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
 	if center == null:
 		return
-	center.offset_top = -390.0
-	center.offset_bottom = 210.0
+	center.offset_top = -420.0
+	center.offset_bottom = 240.0
 	if center.get_node_or_null("StartMenuCard") != null:
 		return
 
@@ -38542,6 +38748,109 @@ func _setup_start_menu_chrome() -> void:
 	var title := center.get_node_or_null("Title") as Control
 	if title != null:
 		center.move_child(title, center.get_child_count() - 1)
+
+
+func _setup_location_map_ui() -> void:
+	_load_truck_location()
+	if _location_map_layer != null and is_instance_valid(_location_map_layer):
+		return
+	_location_map_layer = CanvasLayer.new()
+	_location_map_layer.name = "LocationMapLayer"
+	_location_map_layer.layer = 110
+	_location_map_layer.visible = false
+	add_child(_location_map_layer)
+	_location_map_ui = LocationMapUIScript.new()
+	_location_map_ui.name = "LocationMapUI"
+	_location_map_ui.visible = false
+	_location_map_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_location_map_ui.process_mode = Node.PROCESS_MODE_ALWAYS
+	_location_map_layer.add_child(_location_map_ui)
+	_location_map_ui.location_confirmed.connect(_on_location_confirmed)
+	_location_map_ui.closed.connect(func():
+		if _location_map_layer != null:
+			_location_map_layer.visible = false
+	)
+
+
+func _setup_start_location_button() -> void:
+	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
+	if card_col == null:
+		return
+	if card_col.get_node_or_null("ChangeLocationButton") != null:
+		return
+	location_map_btn = Button.new()
+	location_map_btn.name = "ChangeLocationButton"
+	location_map_btn.text = "CHANGE LOCATION"
+	location_map_btn.custom_minimum_size = Vector2(0, 46)
+	location_map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	location_map_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(location_map_btn, 18)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.055, 0.06, 0.07, 0.98)
+	normal.set_corner_radius_all(9)
+	normal.set_border_width_all(2)
+	normal.border_color = Color(0.42, 0.82, 0.48, 0.55)
+	normal.content_margin_left = 16
+	normal.content_margin_right = 16
+	normal.content_margin_top = 12
+	normal.content_margin_bottom = 6
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.10, 0.12, 0.11, 1.0)
+	hover.border_color = Color(0.55, 0.92, 0.58, 0.85)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(0.035, 0.04, 0.05, 1.0)
+	location_map_btn.add_theme_stylebox_override("normal", normal)
+	location_map_btn.add_theme_stylebox_override("hover", hover)
+	location_map_btn.add_theme_stylebox_override("pressed", pressed)
+	location_map_btn.add_theme_color_override("font_color", Color(0.92, 0.98, 0.92, 1.0))
+	location_map_btn.add_theme_constant_override("outline_size", 0)
+	location_map_btn.pressed.connect(func():
+		_sfx_click()
+		_open_location_map()
+	)
+	card_col.add_child(location_map_btn)
+	## Sit under the solo/multiplayer row.
+	var mode_row := card_col.get_node_or_null("StartModeRow")
+	if mode_row != null:
+		card_col.move_child(location_map_btn, mode_row.get_index() + 1)
+
+
+func _open_location_map() -> void:
+	if _location_map_ui == null or not is_instance_valid(_location_map_ui):
+		_setup_location_map_ui()
+	if options_menu_open:
+		_set_options_menu_open(false)
+	if _location_map_layer != null:
+		_location_map_layer.visible = true
+	_location_map_ui.open(current_location_id)
+
+
+func _on_location_confirmed(location_id: String) -> void:
+	current_location_id = location_id
+	_save_truck_location()
+	## Customer spawn/patience + street matte swap hook up later via TruckLocationsScript.stats_for / background_path.
+	var loc_name: String = TruckLocationsScript.display_name(location_id)
+	var tier: String = TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(location_id))
+	_flash("Parked at %s (%s)" % [loc_name, tier], TruckLocationsScript.tier_color(TruckLocationsScript.tier_of(location_id)))
+
+
+func _load_truck_location() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(LOCATION_CFG_PATH) != OK:
+		current_location_id = TruckLocationsScript.DEFAULT_ID
+		return
+	var id := str(cfg.get_value("truck", "location_id", TruckLocationsScript.DEFAULT_ID))
+	## Validate against known spots.
+	if str(TruckLocationsScript.get_by_id(id).get("id", "")) == id:
+		current_location_id = id
+	else:
+		current_location_id = TruckLocationsScript.DEFAULT_ID
+
+
+func _save_truck_location() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("truck", "location_id", current_location_id)
+	cfg.save(LOCATION_CFG_PATH)
 
 
 # Multiplayer co-op (P2P via NetManager)
@@ -38635,6 +38944,7 @@ func _setup_multiplayer_ui() -> void:
 	)
 
 	_setup_start_menu_chrome()
+	_setup_start_location_button()
 
 	_mp_lobby_root = Control.new()
 	_mp_lobby_root.name = "MpLobby"
