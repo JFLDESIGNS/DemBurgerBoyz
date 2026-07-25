@@ -1452,8 +1452,8 @@ const CUP_FILL_EXTRA_Y_DEFAULT := 0.0
 var cup_hold_height: float = CUP_HOLD_HEIGHT_DEFAULT
 var cup_fill_extra_y: float = CUP_FILL_EXTRA_Y_DEFAULT
 const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
-## Local Y of cup bottom on the drip grate (must match drip-floor collider top).
-const CUP_TRAY_DECK_LOCAL_Y := 0.01 * SODA_FOUNTAIN_SCALE
+## Local Y of cup bottom on the visible drip ledge (was 0.01*s — clipped through the tray).
+const CUP_TRAY_DECK_LOCAL_Y := 0.08 * SODA_FOUNTAIN_SCALE
 ## Cup mesh ~10% smaller than the original fountain cups.
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
@@ -19689,8 +19689,8 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.35 * s, 0.14 * s), "h": Vector3(0.17 * s, 0.16 * s, 0.08 * s)}, ## dispenser face
 		{"p": Vector3(0.0, 0.55 * s, 0.05 * s), "h": Vector3(0.16 * s, 0.12 * s, 0.10 * s)}, ## banner / top
 		{"p": Vector3(-0.38, 0.85, 0.12), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser
-		## Drip grate — top = CUP_TRAY_DECK_LOCAL_Y so fill/park sit on the visible ledge (not mid-air).
-		{"p": Vector3(0.0, 0.0, 0.10 * s), "h": Vector3(0.18 * s, CUP_TRAY_DECK_LOCAL_Y, 0.22 * s), "floor": true},
+		## Drip grate — top aligns with CUP_TRAY_DECK_LOCAL_Y (cup bottom on the ledge).
+		{"p": Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y * 0.5, 0.10 * s), "h": Vector3(0.18 * s, CUP_TRAY_DECK_LOCAL_Y * 0.5, 0.22 * s), "floor": true},
 	]
 
 
@@ -36466,7 +36466,7 @@ func _build_ingredient_legend() -> void:
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
 
-		## Keycap PNG + digit at the top of each topping (always visible).
+		## Keycap PNG + digit — only while hovering this topping.
 		var keycap_host := Control.new()
 		keycap_host.name = "KeycapHost"
 		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -36478,9 +36478,17 @@ func _build_ingredient_legend() -> void:
 		keycap_host.offset_bottom = 10.0
 		var keycap_view := _make_strip_hotkey_keycap(HOTKEY_LABELS[hi])
 		keycap_view.name = "KeycapView"
-		keycap_view.visible = true
+		keycap_view.visible = false
 		keycap_host.add_child(keycap_view)
 		tbtn.add_child(keycap_host)
+		tbtn.mouse_entered.connect(func():
+			if is_instance_valid(keycap_view):
+				keycap_view.visible = true
+		)
+		tbtn.mouse_exited.connect(func():
+			if is_instance_valid(keycap_view):
+				keycap_view.visible = false
+		)
 
 		var capture: String = id
 		tbtn.pressed.connect(func():
@@ -36556,6 +36564,7 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 		icon.name = "Art"
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.texture = tex
+		icon.modulate = Color(1.2, 1.2, 1.2, 1.0) ## +20% brighter
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -36565,7 +36574,7 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 		face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		var face_sb := StyleBoxFlat.new()
-		face_sb.bg_color = Color(0.93, 0.94, 0.97)
+		face_sb.bg_color = Color(0.96, 0.97, 1.0)
 		face_sb.set_corner_radius_all(6)
 		face_sb.border_color = Color(0.28, 0.30, 0.34)
 		face_sb.set_border_width_all(2)
@@ -36580,7 +36589,7 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	lab.offset_top = -1.0
-	UiFontsScript.apply_label(lab, true, 14)
+	UiFontsScript.apply_label(lab, true, 12) ## slightly smaller on the key
 	lab.add_theme_color_override("font_color", Color(0.10, 0.11, 0.14))
 	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.55))
 	lab.add_theme_constant_override("outline_size", 2)
