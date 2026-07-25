@@ -26208,6 +26208,9 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 				_spawn_flying_ice_cube(ice_tip, rim, true)
 		if before_i < CUP_ICE_FULL and cup_ice_fill >= CUP_ICE_FULL:
 			_flash("Ice packed — keep holding, it spills!", Color("B3E5FC"))
+			## Overfill fry bed — cubes start flying; hot steel reads immediately.
+			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
+				game_audio.trigger_hot_oil(1.6)
 		elif before_i < 1.7 and cup_ice_fill >= 1.7:
 			_flash("Ice everywhere!", Color("81D4FA"))
 	var was_pouring := _cup_pouring
@@ -26427,24 +26430,43 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 			_refresh_cup_ice_stack()
 		)
 		return
-	## Overflow — fling cubes all over the counter / tray, then leave them a while.
-	var ang := randf() * TAU
-	var dist := randf_range(0.18, 0.55)
+	## Overflow — some cubes fling onto the grill; rest scatter on the tray/counter.
+	var to_grill := randf() < 0.40
 	var land_y := SODA_STATION_POS.y + 0.10
 	if cup_rest != Vector3.ZERO:
 		land_y = cup_rest.y + 0.002
-	var mid := Vector3(
-		from_tip.x + cos(ang) * dist * 0.55,
-		from_tip.y + randf_range(0.06, 0.16),
-		from_tip.z + sin(ang) * dist * 0.55
-	)
-	var end := Vector3(
-		from_tip.x + cos(ang) * dist + randf_range(-0.06, 0.06),
-		land_y,
-		from_tip.z + sin(ang) * dist + randf_range(-0.08, 0.12)
-	)
-	var up_t := randf_range(0.14, 0.2)
-	var down_t := randf_range(0.18, 0.28)
+	var end: Vector3
+	var mid: Vector3
+	if to_grill:
+		var cook := _cook_place_bounds()
+		var gx := GRILL_CENTER_X + randf_range(-GRILL_WIDTH * 0.32, GRILL_WIDTH * 0.32)
+		var gz := GRILL_SURFACE_Z + randf_range(-GRILL_DEPTH * 0.32, GRILL_DEPTH * 0.28)
+		if cook.size.x > 0.05 and cook.size.y > 0.05:
+			gx = clampf(gx, cook.position.x, cook.end.x)
+			gz = clampf(gz, cook.position.y, cook.end.y)
+		land_y = GRILL_SURFACE_Y + 0.011
+		end = Vector3(gx, land_y, gz)
+		## Arc toward the steel from the fountain.
+		mid = Vector3(
+			lerpf(from_tip.x, end.x, 0.45) + randf_range(-0.08, 0.08),
+			maxf(from_tip.y, end.y) + randf_range(0.14, 0.28),
+			lerpf(from_tip.z, end.z, 0.45) + randf_range(-0.06, 0.06)
+		)
+	else:
+		var ang := randf() * TAU
+		var dist := randf_range(0.18, 0.55)
+		mid = Vector3(
+			from_tip.x + cos(ang) * dist * 0.55,
+			from_tip.y + randf_range(0.06, 0.16),
+			from_tip.z + sin(ang) * dist * 0.55
+		)
+		end = Vector3(
+			from_tip.x + cos(ang) * dist + randf_range(-0.06, 0.06),
+			land_y,
+			from_tip.z + sin(ang) * dist + randf_range(-0.08, 0.12)
+		)
+	var up_t := randf_range(0.14, 0.22) if to_grill else randf_range(0.14, 0.2)
+	var down_t := randf_range(0.22, 0.34) if to_grill else randf_range(0.18, 0.28)
 	var tw2 := create_tween()
 	tw2.set_parallel(true)
 	tw2.tween_property(cube, "global_position", mid, up_t) \
@@ -26457,16 +26479,43 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 	tw2.tween_property(cube, "rotation_degrees",
 			cube.rotation_degrees + Vector3(randf_range(90, 200), randf_range(100, 240), randf_range(90, 200)), down_t)
 	tw2.chain().tween_callback(func() -> void:
-		if game_audio and game_audio.has_method("play_ice_tink") and randf() < 0.7:
+		if not is_instance_valid(cube):
+			return
+		if to_grill:
+			## Flat on the steel — fry hiss when the burner is hot.
+			cube.rotation_degrees = Vector3(
+				randf_range(-8.0, 8.0),
+				randf_range(0.0, 360.0),
+				randf_range(-8.0, 8.0)
+			)
+			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
+				## Extends the overfill fry bed; hit only fires on a fresh burst.
+				game_audio.trigger_hot_oil(0.75)
+		elif game_audio and game_audio.has_method("play_ice_tink") and randf() < 0.7:
 			game_audio.play_ice_tink()
 	)
-	## Linger on the counter, then melt away.
-	tw2.tween_interval(randf_range(3.5, 7.0))
-	tw2.tween_property(cube, "scale", Vector3.ONE * 0.15, 0.55).set_trans(Tween.TRANS_SINE)
-	tw2.tween_callback(func() -> void:
-		if is_instance_valid(cube):
-			cube.queue_free()
-	)
+	if to_grill:
+		## Hot steel: puddle flat (shrink Y). Cold: slow vertical melt.
+		var melt_t := randf_range(1.8, 3.2) if grill_on else randf_range(4.5, 7.0)
+		tw2.tween_interval(0.04)
+		var flat := Vector3(1.25, 0.06, 1.25) if grill_on else Vector3(1.05, 0.12, 1.05)
+		tw2.set_parallel(true)
+		tw2.tween_property(cube, "scale", flat, melt_t).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tw2.tween_property(cube, "global_position:y", GRILL_SURFACE_Y + 0.003, melt_t) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tw2.chain().tween_property(cube, "scale", Vector3(1.4, 0.02, 1.4), 0.35).set_trans(Tween.TRANS_SINE)
+		tw2.tween_callback(func() -> void:
+			if is_instance_valid(cube):
+				cube.queue_free()
+		)
+	else:
+		## Linger on the counter, then melt away.
+		tw2.tween_interval(randf_range(3.5, 7.0))
+		tw2.tween_property(cube, "scale", Vector3(1.0, 0.12, 1.0) * 0.2, 0.55).set_trans(Tween.TRANS_SINE)
+		tw2.tween_callback(func() -> void:
+			if is_instance_valid(cube):
+				cube.queue_free()
+		)
 
 
 func _refresh_cup_visuals() -> void:
