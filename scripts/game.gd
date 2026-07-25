@@ -4768,8 +4768,8 @@ func _spatula_play_ting_bit(bit: int) -> void:
 	if (_spatula_ting_bits & bit) != 0:
 		return
 	_spatula_ting_bits |= bit
-	## Flat blade a bit quieter; ±45° / ±90° keep full tap volume.
-	var ting_vol := 0.8 if absf(_spatula_user_roll) < 22.5 else 1.0
+	## Flat blade quieter (−30% from prior 0.8); ±45° / ±90° keep full tap volume.
+	var ting_vol := 0.56 if absf(_spatula_user_roll) < 22.5 else 1.0
 	_play_grill_tap_at(_spatula_slap_contact, ting_vol)
 	## White expanding stroke on the steel under the hit.
 	_spawn_spatula_tap_ring(_spatula_slap_contact)
