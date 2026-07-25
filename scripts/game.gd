@@ -562,6 +562,10 @@ var _fire_flicker_t: float = 0.0
 ## Edge-spatula oil trail blaze — spreads speck → speck from the tap.
 var _oil_fire_trail_mode: bool = false
 var _oil_fire_spread_cool: float = 0.0
+## Timed grease fire: full blaze, then ramp out, then crust rolls.
+var _oil_fire_age: float = 0.0
+const OIL_FIRE_FULL_SEC := 5.0
+const OIL_FIRE_RAMP_SEC := 3.0
 const OIL_EDGE_IGNITE_RADIUS := 0.28 ## Tip must land near a puddle (forgiving)
 const OIL_FIRE_SPREAD_RADIUS := 0.155 ## Neighbor speck catch distance
 const OIL_FIRE_SPREAD_SEC := 0.24 ## Slower hop along the trail
@@ -11599,8 +11603,8 @@ func _update_heat_warp(_delta: float) -> void:
 				warp_strength = maxf(warp_strength, 0.006)
 		var oil_heat := _hot_oil_warp_ratio()
 		if grill_on_fire:
-			## Flaming grease always hits the same full heat-wave as max hot-oil cook.
-			oil_heat = maxf(oil_heat, 1.0)
+			## Flaming grease hits full hot-oil shimmer, then fades with the fire ramp.
+			oil_heat = maxf(oil_heat, 1.0) * _oil_fire_intensity()
 		if oil_heat > 0.0:
 			heat = maxf(heat, lerpf(0.42, 0.94, oil_heat))
 			warp_strength = maxf(warp_strength, lerpf(0.007, 0.014, oil_heat))
@@ -13779,6 +13783,7 @@ func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO, allow_cold: bool = 
 		return
 	grill_on_fire = true
 	fire_health = 1.0
+	_oil_fire_age = 0.0
 	_oil_fire_warned = true
 	_fire_killed_by_powder = false
 	oil_pour_hold_t = 0.0
@@ -13800,6 +13805,7 @@ func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO, allow_cold: bool = 
 			oil_slicks[seed_i] = seed
 	_sync_fire_to_oil_area()
 	_set_fire_fx_emitting(true)
+	_apply_fire_fx_intensity(1.0)
 	## Char only patties sitting in the burning section.
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -14060,6 +14066,29 @@ func _set_fire_fx_emitting(on: bool) -> void:
 	for sys in [fire_particles, fire_particles_red, fire_embers, fire_smoke]:
 		if sys != null and is_instance_valid(sys):
 			sys.emitting = on
+			if on:
+				sys.amount_ratio = 1.0
+			else:
+				sys.amount_ratio = 0.0
+
+
+func _oil_fire_intensity() -> float:
+	## 1.0 for OIL_FIRE_FULL_SEC, then linear fade across OIL_FIRE_RAMP_SEC.
+	if not grill_on_fire or _fire_killed_by_powder:
+		return 0.0
+	if _oil_fire_age <= OIL_FIRE_FULL_SEC:
+		return 1.0
+	var t := (_oil_fire_age - OIL_FIRE_FULL_SEC) / maxf(0.001, OIL_FIRE_RAMP_SEC)
+	return clampf(1.0 - t, 0.0, 1.0)
+
+
+func _apply_fire_fx_intensity(intensity: float) -> void:
+	var on := intensity > 0.02
+	for sys in [fire_particles, fire_particles_red, fire_embers, fire_smoke]:
+		if sys == null or not is_instance_valid(sys):
+			continue
+		sys.amount_ratio = clampf(intensity, 0.0, 1.0)
+		sys.emitting = on
 
 
 func _ensure_grill_fire_fx() -> void:
@@ -14417,20 +14446,21 @@ func _tick_oil_burn_noise_texture(delta: float) -> ImageTexture:
 	return _oil_burn_tex
 
 
-func _set_oil_slick_burn_visual(item: Dictionary, lit: bool, burn_tex: ImageTexture, t: float) -> void:
+func _set_oil_slick_burn_visual(item: Dictionary, lit: bool, burn_tex: ImageTexture, t: float, intensity: float = 1.0) -> void:
 	var m = item.get("mesh")
 	if m == null or not is_instance_valid(m):
 		return
 	var mat := m.material_override as StandardMaterial3D
 	if mat == null:
 		return
-	if lit and burn_tex != null:
+	var glow := lit and burn_tex != null and intensity > 0.02
+	if glow:
 		mat.albedo_texture = burn_tex
 		item["burn_tex"] = true
 		var pulse := 0.55 + 0.45 * sin(t * 9.0 + float(m.get_instance_id() % 7))
 		mat.emission_enabled = true
 		mat.emission = Color(1.0, 0.35, 0.05)
-		mat.emission_energy_multiplier = 1.2 + pulse * 2.4
+		mat.emission_energy_multiplier = (1.2 + pulse * 2.4) * intensity
 		mat.albedo_color = Color(1.0, 0.55, 0.22, 0.92)
 	else:
 		if bool(item.get("burn_tex", false)):
@@ -14454,7 +14484,11 @@ func _update_grill_fire(delta: float) -> void:
 				p.heat_mul = maxf(float(p.heat_mul), 1.35)
 				p.cook_time += delta * 2.8
 		return
-	_update_oil_trail_fire_spread(delta)
+	_oil_fire_age += delta
+	var intensity := _oil_fire_intensity()
+	## Full blaze can still hop; once ramping down, stop spreading.
+	if intensity >= 0.999:
+		_update_oil_trail_fire_spread(delta)
 	## Trail blaze dies out once the grease that was feeding it is gone.
 	if _oil_fire_trail_mode:
 		var any_lit := false
@@ -14465,7 +14499,12 @@ func _update_grill_fire(delta: float) -> void:
 		if not any_lit:
 			_end_oil_trail_fire_burnout()
 			return
+	## Timed burnout: 5s full + 3s ramp → burnt crisps.
+	if _oil_fire_age >= OIL_FIRE_FULL_SEC + OIL_FIRE_RAMP_SEC:
+		_end_oil_trail_fire_burnout()
+		return
 	_sync_fire_to_oil_area()
+	_apply_fire_fx_intensity(intensity)
 	_fire_flicker_t += delta
 	var t := Time.get_ticks_msec() * 0.001
 	var burn_tex := _tick_oil_burn_noise_texture(delta)
@@ -14476,14 +14515,15 @@ func _update_grill_fire(delta: float) -> void:
 			continue
 		var lit := bool(item.get("on_fire", false)) \
 			if _oil_fire_trail_mode else _is_in_fire_zone(m.position)
-		_set_oil_slick_burn_visual(item, lit, burn_tex, t)
-	## Keep cooking meat only in the blaze section.
+		_set_oil_slick_burn_visual(item, lit, burn_tex, t, intensity)
+	## Keep cooking meat only in the blaze section (weaker as flames die).
+	var cook_mul := lerpf(0.35, 1.0, intensity)
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p != null and is_instance_valid(p) and _is_in_fire_zone(p.position):
 			p.heating = true
-			p.heat_mul = maxf(float(p.heat_mul), 1.35)
-			p.cook_time += delta * 2.8
+			p.heat_mul = maxf(float(p.heat_mul), 1.35 * cook_mul)
+			p.cook_time += delta * 2.8 * cook_mul
 
 
 func _ensure_ext_powder_collision() -> void:
@@ -14752,26 +14792,36 @@ func _end_oil_trail_fire_burnout() -> void:
 	## Grease finished burning on its own — snuff flames, leave scrapable crust.
 	if not grill_on_fire:
 		return
+	## Snapshot burning oil before clearing fire state (zone lit needs grill_on_fire).
+	var burning_ids: Dictionary = {}
+	for i in oil_slicks.size():
+		var it: Dictionary = oil_slicks[i]
+		if bool(it.get("crust", false)):
+			continue
+		if _oil_slick_is_lit(it):
+			burning_ids[i] = true
 	grill_on_fire = false
 	fire_health = 0.0
 	fire_zone_id = ""
 	_fire_killed_by_powder = false
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
+	_oil_fire_age = 0.0
 	_set_fire_fx_emitting(false)
-	## Flaming puddles each roll 25% to stay as matte black crust (same drip shape).
+	## Burning puddles each roll 25% to stay as matte black crust (same drip shape).
 	var keep: Array = []
-	for item in oil_slicks:
+	for i in oil_slicks.size():
+		var item: Dictionary = oil_slicks[i]
 		var mesh = item.get("mesh")
-		var was_lit := bool(item.get("on_fire", false))
-		if mesh != null and is_instance_valid(mesh) and was_lit:
+		var was_burning := burning_ids.has(i)
+		if mesh != null and is_instance_valid(mesh) and was_burning:
 			if _try_convert_oil_slick_to_crust(item, OIL_FIRE_RESIDUE_LEAVE_CHANCE):
 				keep.append(item)
 			else:
 				mesh.queue_free()
 		elif mesh != null and is_instance_valid(mesh):
 			item["on_fire"] = false
-			_set_oil_slick_burn_visual(item, false, null, 0.0)
+			_set_oil_slick_burn_visual(item, false, null, 0.0, 0.0)
 			keep.append(item)
 	oil_slicks = keep
 	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
@@ -14835,6 +14885,7 @@ func _extinguish_grill_fire_local() -> void:
 	_fire_killed_by_powder = false
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
+	_oil_fire_age = 0.0
 	_set_fire_fx_emitting(false)
 	## Smother the oil puddles too — powder mess.
 	_clear_oil_slicks()
@@ -14866,6 +14917,7 @@ func _clear_grill_fire() -> void:
 	_fire_killed_by_powder = false
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
+	_oil_fire_age = 0.0
 	ext_spraying = false
 	_set_fire_fx_emitting(false)
 	_clear_ext_powder_blobs()
@@ -15017,12 +15069,19 @@ func _update_oil_slicks(delta: float) -> void:
 			oil_slicks[i] = item
 			i += 1
 			continue
+		var lit := _oil_slick_is_lit(item)
+		## Timed grease fire owns the burn clock — hold puddles until 5s+3s burnout.
+		if lit and grill_on_fire and not _fire_killed_by_powder:
+			var scrape_hold := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
+			mesh.scale = Vector3(scrape_hold, 1.0, scrape_hold)
+			oil_slicks[i] = item
+			i += 1
+			continue
 		## Flaming grease cooks off much faster than idle puddles.
-		var rate := burn_rate * (2.55 if _oil_slick_is_lit(item) else 1.0)
+		var rate := burn_rate * (2.55 if lit else 1.0)
 		item["age"] = float(item["age"]) + delta * rate
 		var life := float(item["life"])
 		var age := float(item["age"])
-		var lit := _oil_slick_is_lit(item)
 		if age >= life:
 			## Lit fire: 25% crust. Normal cook-off: 50%.
 			var leave_p := OIL_FIRE_RESIDUE_LEAVE_CHANCE if lit else OIL_RESIDUE_LEAVE_CHANCE
