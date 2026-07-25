@@ -5463,7 +5463,9 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	var cook_x1 := cook.y - GRILL_CENTER_X
 	var cook_w := maxf(0.05, cook_x1 - cook_x0)
 	var cell_w := cook_w / float(GRILL_PIANO_SECTIONS)
-	## Warm fill for each piano key + note name label.
+	## Warm fill for each piano key + note name label (big, low on the steel, cook-side).
+	var label_y := y + 0.010 ## Just above the pad fill — close to the grill surface
+	var label_z := half_d * 0.32 ## Toward the cook / player
 	for i in GRILL_PIANO_SECTIONS:
 		var t := float(i) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
 		var fill := Color(1.0, lerpf(0.55, 0.85, t), lerpf(0.15, 0.35, t), 0.14)
@@ -5473,7 +5475,7 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		)
 		cell.name = "PianoCell%d" % i
 		grill_piano_cell_meshes.append(cell)
-		var note_lab := _make_grill_tap_note_label(root, Vector3(lx, y + 0.045, 0.0), "—")
+		var note_lab := _make_grill_tap_note_label(root, Vector3(lx, label_y, label_z), "—")
 		note_lab.name = "PianoNote%d" % i
 		grill_piano_note_labels.append(note_lab)
 	var piano_line := _make_grill_tap_debug_mat(Color(1.0, 0.82, 0.28, 0.55))
@@ -5487,10 +5489,10 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		_add_grill_piano_bar(root, piano_line, Vector3(lx, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
 	## Active key banner (updates with spatula roll).
 	grill_piano_key_label = _make_grill_tap_note_label(
-		root, Vector3((cook_x0 + cook_x1) * 0.5, y + 0.08, -half_d * 0.15), "KEY C"
+		root, Vector3((cook_x0 + cook_x1) * 0.5, label_y + 0.012, label_z), "KEY C"
 	)
 	grill_piano_key_label.name = "PianoKeyBanner"
-	UiFontsScript.apply_label3d(grill_piano_key_label, true, 42, 0.018)
+	UiFontsScript.apply_label3d(grill_piano_key_label, true, 126, 0.054)
 	grill_piano_key_label.modulate = Color(1.0, 0.92, 0.45, 1.0)
 	## HOLD — five drum pads stacked along depth (Z).
 	var hold := _grill_hold_band()
@@ -5511,7 +5513,7 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		)
 		pad.name = "DrumPad%d" % j
 		grill_drum_pad_meshes.append(pad)
-		var drum_lab := _make_grill_tap_note_label(root, Vector3(hold_cx, y + 0.045, lz), "—")
+		var drum_lab := _make_grill_tap_note_label(root, Vector3(hold_cx, label_y, lz), "—")
 		drum_lab.name = "DrumNote%d" % j
 		grill_drum_note_labels.append(drum_lab)
 	var drum_line := _make_grill_tap_debug_mat(Color(0.45, 0.85, 1.0, 0.65))
