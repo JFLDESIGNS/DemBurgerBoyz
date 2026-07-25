@@ -36,11 +36,15 @@ const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the righ
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
-## Keep strips near the natural tinggrill pitch — far pitch-shifts get thin / quiet.
+## Base sample is tinggrill.wav @ C5; strips play C–A left→right, then repeat.
 const GRILL_PIANO_SECTIONS := 12
-const GRILL_PIANO_BASE_MIDI := 72 ## C5 — unpitched tinggrill.wav
-const GRILL_PIANO_MIDI_LO := 69 ## A4 — cook −X / low
-const GRILL_PIANO_MIDI_HI := 75 ## D♯5 — cook +X / high
+const GRILL_PIANO_BASE_MIDI := 72 ## C5 — natural pitch of tinggrill.wav
+## Semitone steps from C: C D E F G A (repeats across the 12 strips).
+const GRILL_PIANO_SCALE_SEMIS := [0, 2, 4, 5, 7, 9]
+## Spatula roll changes key (transpose the whole C–A pattern).
+const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
+const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
+const GRILL_PIANO_KEY_90 := 7 ## ±90° → G
 ## HOLD pad — 5 drum hits stacked along grill depth (window ↔ cook).
 const GRILL_HOLD_DRUM_PADS := 5
 ## Patty must sit fully on the steel — reject clicks near the rim.
@@ -4457,13 +4461,16 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 
 
 func _spatula_roll_midi_offset() -> int:
-	## Roll angle shifts the grill-strip ting (same on both sides):
-	##   0°        → a little lower than the strip
-	##  ±45° / ±90° → strip pitch (no extra shift)
+	## Scroll-tilt changes the piano key for every strip (same on both sides):
+	##   0°   → C
+	##  ±45°  → F
+	##  ±90°  → G
 	var mag := absf(_spatula_user_roll)
-	if mag >= 22.5:
-		return 0 ## angled blade — same sound at 45° and 90°
-	return -3 ## flat on steel — mild drop (was −7 and buried left-side taps)
+	if mag >= HAND_SPATULA_ROLL_MAX - 0.5:
+		return GRILL_PIANO_KEY_90
+	if mag >= HAND_SPATULA_ROLL_STEP * 0.5:
+		return GRILL_PIANO_KEY_45
+	return GRILL_PIANO_KEY_FLAT
 
 
 func _spatula_spin_curve(t: float) -> float:
@@ -5119,14 +5126,13 @@ func _grill_piano_section_at(world_pos: Vector3) -> int:
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
-	## Spread 12 strips across cook steel around C5 so every tap stays audible.
+	## Left→right (screen): C D E F G A, then repeat for the remaining 6 strips.
+	## +X is screen-left on this camera, so high section index = visual left = C.
 	var sec := _grill_piano_section_at(world_pos)
-	var t := float(sec) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
-	return clampi(
-		int(round(lerpf(float(GRILL_PIANO_MIDI_LO), float(GRILL_PIANO_MIDI_HI), t))),
-		GRILL_PIANO_MIDI_LO,
-		GRILL_PIANO_MIDI_HI
-	)
+	var from_left := (GRILL_PIANO_SECTIONS - 1) - sec
+	var scale_n := GRILL_PIANO_SCALE_SEMIS.size()
+	var deg: int = int(GRILL_PIANO_SCALE_SEMIS[posmod(from_left, scale_n)])
+	return GRILL_PIANO_BASE_MIDI + deg
 
 
 func _grill_hold_drum_pad_at(world_pos: Vector3) -> int:
