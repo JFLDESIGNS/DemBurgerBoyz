@@ -36567,7 +36567,7 @@ func _create_ticket(customer: Node3D) -> void:
 	## Wrap owns layout size so non-selected slips can shrink without layout gaps.
 	var wrap := Control.new()
 	wrap.name = "TicketWrap"
-	wrap.custom_minimum_size = Vector2(164, 0)
+	wrap.custom_minimum_size = Vector2(TICKET_BASE_W, 0)
 	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 	wrap.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	wrap.gui_input.connect(func(event: InputEvent):
@@ -36578,14 +36578,14 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var note := PanelContainer.new()
 	note.name = "TicketNote"
-	note.custom_minimum_size = Vector2(164, 0)
+	note.custom_minimum_size = Vector2(TICKET_BASE_W, 0)
 	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	## Mild crooked pin — selected slip is almost upright.
 	var rot_seed := _customer_net_id(customer)
 	if rot_seed < 0:
 		rot_seed = customer.get_instance_id()
 	note.rotation_degrees = float((rot_seed * 37) % 100) / 100.0 * 4.0 - 2.0
-	note.pivot_offset = Vector2(82, 8)
+	note.pivot_offset = Vector2(TICKET_BASE_W * 0.5, 8)
 	wrap.set_meta("paper_rot", note.rotation_degrees)
 	wrap.set_meta("ticket_note", note)
 	## Outer shell: drop shadow + border (StyleBoxTexture can't cast shadows).
@@ -36714,7 +36714,7 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var bottom_pad := Control.new()
 	bottom_pad.name = "TicketBottomPad"
-	bottom_pad.custom_minimum_size = Vector2(0, 30)
+	bottom_pad.custom_minimum_size = Vector2(0, 15)
 	bottom_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(bottom_pad)
 
@@ -36726,7 +36726,7 @@ func _create_ticket(customer: Node3D) -> void:
 	_refresh_customer_queue_timers()
 
 
-const TICKET_BASE_W := 164.0
+const TICKET_BASE_W := 139.0 ## was 164; −15% width
 const TICKET_SMALL_SCALE := 0.70
 
 
