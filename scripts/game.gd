@@ -1532,7 +1532,7 @@ const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without te
 const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
-const CUP_FILL_EXTRA_Y := 0.0762 ## +3" while filling under the spout
+const CUP_FILL_EXTRA_Y := 0.0762 ## +3" drip-deck seat so the cup sits on top, not through it
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
 const CUP_FILL_RELEASE := 0.30
@@ -19567,8 +19567,12 @@ func _build_soda_station() -> void:
 	_add_soda_spout_marker_only(root, false)
 	_sync_soda_spout_to_flavor()
 
-	## Park cups on the drip ledge in front of the nozzles.
-	cup_rest = root.to_global(Vector3(CUP_TRAY_FIRST_X * 0.72, 0.075 * SODA_FOUNTAIN_SCALE, 0.42))
+	## Park cups on the drip ledge in front of the nozzles (+3" so bottoms clear the deck).
+	cup_rest = root.to_global(Vector3(
+		CUP_TRAY_FIRST_X * 0.72,
+		0.075 * SODA_FOUNTAIN_SCALE + CUP_FILL_EXTRA_Y,
+		0.42
+	))
 	cup_rest_rot = Vector3.ZERO
 
 	var lamp := OmniLight3D.new()
@@ -23800,7 +23804,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = rack.to_global(stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, 0.138, 0.54))
+		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, 0.138 + CUP_FILL_EXTRA_Y, 0.54))
 		cup_rest_rot = Vector3.ZERO
 	_spawn_and_bind_empty_cup()
 
@@ -24217,7 +24221,7 @@ func _tray_slot_local(slot: int) -> Vector3:
 	## local -X is screen-left with soda yaw 180. Slots stay fixed once assigned.
 	var lx := CUP_TRAY_FIRST_X + float(clampi(slot, 0, CUP_MAX - 1)) * CUP_TRAY_SPACING
 	lx = clampf(lx, CUP_TRAY_FIRST_X, 0.28)
-	return Vector3(lx, 0.148, 0.54)
+	return Vector3(lx, 0.148 + CUP_FILL_EXTRA_Y, 0.54)
 
 
 func _tray_slot_taken(slot: int, ignore: Node3D = null) -> bool:
@@ -25737,15 +25741,12 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
-	## Directly under the pour stream — same XZ as the tip, rim just below.
+	## Directly under the pour stream — same XZ as the tip, seated on the drip deck.
 	var tip_p := tip.global_position
-	var fill_y := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP
-	## Prefer tray deck under the nozzle when the fountain is present.
+	var fill_y := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + CUP_FILL_EXTRA_Y
+	## Hold-LMB fill snap locks to the raised deck — never clamp back through the machine.
 	if soda_root != null and is_instance_valid(soda_root) and cup_rest != Vector3.ZERO:
-		fill_y = minf(fill_y, cup_rest.y + 0.01)
-	## Raise the drink while filling — still keep a tiny gap under the tip.
-	fill_y += CUP_FILL_EXTRA_Y
-	fill_y = minf(fill_y, tip_p.y - CUP_SHELL_H - 0.008)
+		fill_y = cup_rest.y + 0.01
 	return Vector3(tip_p.x, fill_y, tip_p.z)
 
 
