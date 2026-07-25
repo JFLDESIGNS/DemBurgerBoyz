@@ -370,61 +370,29 @@ func _make_heart_texture() -> ImageTexture:
 
 
 func _build_mouth_burger() -> void:
+	## Grill steal / patty feed — bare cooked patty only (no full stacked burger).
 	_clear_mouth_burger()
 	_mouth_burger = Node3D.new()
-	_mouth_burger.name = "MouthBurger"
+	_mouth_burger.name = "MouthPatty"
 	## Sit in the muzzle — toward the cook (local +Z after mesh facing).
 	_mouth_burger.position = Vector3(0.0, 0.34, 0.22)
 	_mouth_burger.rotation_degrees = Vector3(-12.0, 0.0, 8.0)
-	_mouth_burger.scale = Vector3(0.55, 0.55, 0.55)
+	_mouth_burger.scale = Vector3(0.78, 0.78, 0.78) ## bigger than prior full-burger 0.55
 	add_child(_mouth_burger)
-
-	var bot := _burger_bun_mesh(Color(0.78, 0.52, 0.28), 0.11, 0.045)
-	bot.position = Vector3(0, 0.0, 0)
-	_mouth_burger.add_child(bot)
 
 	var meat := MeshInstance3D.new()
 	var disk := CylinderMesh.new()
-	disk.top_radius = 0.095
-	disk.bottom_radius = 0.095
-	disk.height = 0.028
-	disk.radial_segments = 18
+	disk.top_radius = 0.118
+	disk.bottom_radius = 0.122
+	disk.height = 0.042
+	disk.radial_segments = 22
 	meat.mesh = disk
-	meat.position = Vector3(0, 0.038, 0)
+	meat.position = Vector3(0, 0.02, 0)
 	var meat_mat := StandardMaterial3D.new()
-	meat_mat.albedo_color = Color(0.28, 0.14, 0.08)
-	meat_mat.roughness = 0.85
+	meat_mat.albedo_color = Color(0.30, 0.14, 0.07)
+	meat_mat.roughness = 0.88
 	meat.material_override = meat_mat
 	_mouth_burger.add_child(meat)
-
-	var cheese := MeshInstance3D.new()
-	var cbox := BoxMesh.new()
-	cbox.size = Vector3(0.18, 0.012, 0.18)
-	cheese.mesh = cbox
-	cheese.position = Vector3(0, 0.055, 0)
-	cheese.rotation_degrees = Vector3(0, 18, 0)
-	var ch_mat := StandardMaterial3D.new()
-	ch_mat.albedo_color = Color(1.0, 0.82, 0.22)
-	ch_mat.roughness = 0.55
-	cheese.material_override = ch_mat
-	_mouth_burger.add_child(cheese)
-
-	var top := _burger_bun_mesh(Color(0.86, 0.58, 0.3), 0.112, 0.055)
-	top.position = Vector3(0, 0.088, 0)
-	_mouth_burger.add_child(top)
-
-	## Sesame flecks on the top bun.
-	for i in 5:
-		var seed := MeshInstance3D.new()
-		var s := SphereMesh.new()
-		s.radius = 0.008
-		s.height = 0.016
-		seed.mesh = s
-		seed.position = Vector3(randf_range(-0.06, 0.06), 0.118, randf_range(-0.05, 0.05))
-		var sm := StandardMaterial3D.new()
-		sm.albedo_color = Color(0.95, 0.9, 0.75)
-		seed.material_override = sm
-		_mouth_burger.add_child(seed)
 
 
 func _burger_bun_mesh(color: Color, radius: float, height: float) -> MeshInstance3D:

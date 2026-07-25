@@ -276,7 +276,7 @@ const HAND_SPATULA_FLOURISH_DUR := 0.506 ## Rise+flip (−15% vs 0.595)
 const HAND_SPATULA_BURGER_FLIP_DUR := 0.272 ## −15% vs 0.32
 const HAND_SPATULA_BURGER_FLIP_PITCH := -20.0 ## Degrees toward cook from hold pose
 const HAND_SPATULA_BURGER_FLIP_DROP := 0.0254 ## 1" closer to the steel during the flip
-const HAND_SPATULA_SLAP_CLEAR := 0.085 ## ~3.3" above steel — tip stays above the plate
+const HAND_SPATULA_SLAP_CLEAR := 0.09262 ## ~3.6" above steel (+0.3" vs prior 0.085)
 const HAND_SPATULA_SLAP_FWD_PITCH := 12.0 ## +X tips blade toward steel
 ## Drag slide: under the burger — raised 1.5" so the blade clears the patty (was clipping at +1").
 const HAND_SPATULA_DRAG_CLEAR := HAND_SPATULA_SLAP_CLEAR + 0.0254 + 0.0127
@@ -284,7 +284,8 @@ const HAND_SPATULA_DRAG_CLEAR := HAND_SPATULA_SLAP_CLEAR + 0.0254 + 0.0127
 const HAND_SPATULA_HOLD_SLIDE_CLEAR := HAND_SPATULA_SLAP_CLEAR
 const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/falling
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
-const HAND_SPATULA_PULL_FLIP_DY := 48.0 ## Min screen-px down from press
+const HAND_SPATULA_PULL_FLIP_DY := 96.0 ## Min screen-px down (was 48 — too easy while scraping)
+const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
 ## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
 ## One notch jumps a full step; wheel factor can stack notches (feels snappier).
 const HAND_SPATULA_ROLL_STEP := 45.0
@@ -981,7 +982,7 @@ const ROOMBA_BUMP_MOVE_MUL := 0.22
 const ROOMBA_PICKUP_SAD_SEC := 0.7
 const ROOMBA_POKE_SAD_SEC := 1.0 ## Unsmiley after RMB tap
 const ROOMBA_POKE_PAUSE_SEC := 0.3 ## Freeze tasks briefly, then resume
-const ROOMBA_POKE_EXTRA_Y := 0.0127 ## 0.5" higher tip than burger smash
+const ROOMBA_POKE_EXTRA_Y := 0.02032 ## 0.8" higher tip than grill slap clear (+0.3" vs prior 0.5")
 const ROOMBA_SPATULA_REACH := 0.175
 const ROOMBA_SPATULA_CONTACT_REACH := 0.145
 const ROOMBA_SPATULA_CARRY_REACH := 0.215
@@ -4748,7 +4749,11 @@ func _try_spatula_pull_flip_gesture(mouse: Vector2) -> void:
 	var dy := mouse.y - spatula_grill_hold_press_mouse.y
 	if dy < HAND_SPATULA_PULL_FLIP_DY:
 		return
-	## Off the grill toward us — not a sideways scrape on the steel.
+	## Mostly vertical pull — sideways scrapes shouldn't fire the flip.
+	var dx := absf(mouse.x - spatula_grill_hold_press_mouse.x)
+	if dx > dy * HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO:
+		return
+	## Off the grill toward us — not a scrape still aimed at the steel.
 	if _is_grill_screen_point(mouse):
 		return
 	_spatula_pull_flip_done = true
@@ -7815,8 +7820,8 @@ func _try_place_patty_at(world_pos: Vector3) -> void:
 	_spawn_patty_at(idx, place_pos)
 
 
-func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0) -> void:
-	## Burger / ice-ball / bot poke: slow spatula press (no piano ting).
+func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0, dur: float = -1.0) -> void:
+	## Burger / ice-ball: slow press. Bot poke passes slap dur to match grill taps.
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		return
 	if _spatula_anim_kind == 3:
@@ -7833,7 +7838,7 @@ func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0)
 	_spatula_tap_press_mouse = get_viewport().get_mouse_position()
 	_spatula_anim_kind = 1
 	_spatula_anim_t = 0.0001
-	_spatula_anim_dur = HAND_SPATULA_PLACE_SMASH_DUR
+	_spatula_anim_dur = HAND_SPATULA_PLACE_SMASH_DUR if dur < 0.0 else dur
 
 
 func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
@@ -9815,7 +9820,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 
 
 func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
-	## Right-click tap — same spatula smoosh as burger (0.5" higher), plastic tap, unsmiley.
+	## Right-click tap — same snappy slap speed as grill ting, tip a bit higher.
 	if grill_roomba_held or grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
 		return false
 	if not _owns_grill_roomba() or camera == null:
@@ -9831,7 +9836,11 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 		GRILL_SURFACE_Y,
 		grill_roomba_root.global_position.z
 	)
-	_start_spatula_place_squash_at(poke_at, HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y)
+	_start_spatula_place_squash_at(
+		poke_at,
+		HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y,
+		HAND_SPATULA_SLAP_DUR
+	)
 	grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
 	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
 	grill_roomba_vel = Vector2.ZERO
@@ -18560,8 +18569,36 @@ func _ensure_tree_bark_diffuse(mi: MeshInstance3D, surface: int, src: Material) 
 	mi.set_surface_override_material(surface, bark)
 
 
+func _tree_mesh_is_bark(mi: MeshInstance3D) -> bool:
+	## Trunk / wood only — canopy leaves never own click / shake.
+	if mi == null or mi.mesh == null:
+		return false
+	var n := String(mi.name)
+	if n.begins_with("LeafShadow") or n.findn("leaf") >= 0 or n.findn("foliage") >= 0:
+		return false
+	if n.findn("bark") >= 0 or n.findn("trunk") >= 0 or n.findn("wood") >= 0:
+		return true
+	## Surface materials: any leaf → not bark-only; bark texture → bark.
+	var saw_bark := false
+	for s in mi.mesh.get_surface_count():
+		var src: Material = mi.get_active_material(s)
+		if _tree_surface_is_leaf(src):
+			return false
+		if src != null:
+			var label := String(src.resource_name)
+			if label.findn("bark") >= 0 or label.findn("trunk") >= 0:
+				saw_bark = true
+			if src is BaseMaterial3D:
+				var tex := (src as BaseMaterial3D).albedo_texture
+				if tex != null:
+					var path := String(tex.resource_path)
+					if path.findn("bark") >= 0 or path.findn("trunk") >= 0:
+						saw_bark = true
+	return saw_bark
+
+
 func _setup_outdoor_tree_interact(tree: Node3D) -> void:
-	## Clickable volume for shake + occasional apple drop. Pivot = tree origin (ground).
+	## Bark-only click volume — canopy must never cover the grill.
 	if tree == null or not is_instance_valid(tree):
 		return
 	outdoor_shake_trees.append(tree)
@@ -18570,7 +18607,7 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	var have := false
 	for n in tree.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
-		if mi == null or mi.mesh == null or String(mi.name).begins_with("LeafShadow"):
+		if mi == null or not _tree_mesh_is_bark(mi):
 			continue
 		## Approximate AABB in tree space from mesh AABB corners.
 		var xf_aabb := mi.get_aabb()
@@ -18589,7 +18626,8 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 			else:
 				aabb = aabb.expand(p)
 	if not have:
-		aabb = AABB(Vector3(-1.5, 0.0, -1.5), Vector3(3.0, 8.0, 3.0))
+		## Fallback thin trunk — never a canopy-sized magnet.
+		aabb = AABB(Vector3(-0.35, 0.0, -0.35), Vector3(0.7, 4.5, 0.7))
 	var area := Area3D.new()
 	area.name = "TreeClickArea"
 	area.collision_layer = TREE_CLICK_COLLISION_LAYER
@@ -18599,11 +18637,11 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	area.monitorable = true
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Tight to the mesh AABB — no fat magnet over the grill / sky.
+	## Tight bark trunk only — leave canopy out of the pick volume.
 	box.size = Vector3(
-		maxf(aabb.size.x * 0.92, 0.45),
-		maxf(aabb.size.y * 0.96, 1.4),
-		maxf(aabb.size.z * 0.92, 0.45)
+		clampf(aabb.size.x * 0.88, 0.28, 1.35),
+		clampf(aabb.size.y * 0.92, 1.2, 7.5),
+		clampf(aabb.size.z * 0.88, 0.28, 1.35)
 	)
 	col.shape = box
 	col.position = aabb.get_center()
@@ -18612,19 +18650,31 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	area.set_meta("shake_tree", tree)
 
 
-func _outdoor_tree_point_on_model(tree: Node3D, world_pos: Vector3) -> bool:
-	## Ray hit must land on / very near an actual mesh (not empty box volume).
+func _outdoor_tree_point_on_bark(tree: Node3D, world_pos: Vector3) -> bool:
+	## Hit must land on bark mesh — leaves / empty click-box never count.
 	if tree == null or not is_instance_valid(tree):
 		return false
 	for n in tree.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
-		if mi == null or mi.mesh == null or String(mi.name).begins_with("LeafShadow"):
+		if mi == null or not _tree_mesh_is_bark(mi):
 			continue
 		var local := mi.to_local(world_pos)
-		var a := mi.get_aabb().grow(0.08)
+		var a := mi.get_aabb().grow(0.04)
 		if a.has_point(local):
 			return true
 	return false
+
+
+func _grill_blocks_tree_click(screen_pos: Vector2) -> bool:
+	## Aiming at / near the flat-top — spatula owns the click, never the tree.
+	if _should_show_hand_spatula(screen_pos) or spatula_grill_hold or dragging_patty != null:
+		return true
+	var hit := _grill_plane_from_screen(screen_pos)
+	if hit == Vector3.ZERO:
+		return false
+	## Fat pad so canopy behind the steel can't steal slide / place / scrape.
+	return absf(hit.x - GRILL_CENTER_X) <= GRILL_WIDTH * 0.5 + 0.40 \
+		and absf(hit.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.5 + 0.55
 
 
 func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
@@ -18633,20 +18683,29 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
 			or sale_held or cup_held or spatula_patty != null or dragging_patty != null:
 		return false
-	## Never steal grill clicks — spatula / place / scrape own the steel.
-	if _is_grill_screen_point(screen_pos) or _should_show_hand_spatula(screen_pos):
+	## Never steal grill / spatula clicks — bark only outside the steel aim.
+	if _grill_blocks_tree_click(screen_pos):
 		return false
 	var space := world.get_world_3d().direct_space_state
 	if space == null:
 		return false
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
+	## If the steel plane is in front of the tree hit, grill wins.
+	var grill_hit := _grill_plane_from_screen(screen_pos)
+	var grill_dist := INF
+	if grill_hit != Vector3.ZERO and _is_near_grill_for_place(grill_hit):
+		grill_dist = from.distance_to(grill_hit)
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 48.0)
 	q.collision_mask = TREE_CLICK_COLLISION_LAYER
 	q.collide_with_areas = true
 	q.collide_with_bodies = false
 	var hit := space.intersect_ray(q)
 	if hit.is_empty():
+		return false
+	var hit_pos: Vector3 = hit.get("position", Vector3.ZERO)
+	var tree_dist := from.distance_to(hit_pos)
+	if tree_dist >= grill_dist - 0.02:
 		return false
 	var collider = hit.get("collider")
 	if collider == null or not is_instance_valid(collider):
@@ -18656,8 +18715,7 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 		tree = collider.get_parent() as Node3D
 	if tree == null or not outdoor_shake_trees.has(tree):
 		return false
-	var hit_pos: Vector3 = hit.get("position", Vector3.ZERO)
-	if not _outdoor_tree_point_on_model(tree, hit_pos):
+	if not _outdoor_tree_point_on_bark(tree, hit_pos):
 		return false
 	_shake_outdoor_tree(tree)
 	return true
