@@ -41,6 +41,8 @@ var spot_dwell_t: float = 0.0
 var spot_dwell_xz: Vector2 = Vector2(INF, INF)
 var spot_residue_rolled: bool = false
 var spot_residue_spawned: bool = false ## already left a stain at this dwell
+## Seconds cooking on an oil puddle — ≥2s always leaves crust.
+var oil_cook_t: float = 0.0
 ## Cheese slice melting on the grill.
 var has_cheese: bool = false
 var cheese_melt: float = 0.0 ## 0..1 over CHEESE_MELT_TIME
@@ -442,6 +444,7 @@ func reset_for_grill_spawn(
 	spot_dwell_xz = Vector2(p_world_pos.x, p_world_pos.z)
 	spot_residue_rolled = false
 	spot_residue_spawned = false
+	oil_cook_t = 0.0
 	_sizzle = randf() * TAU
 	_announced_flip = false
 	_announced_scoop = false
