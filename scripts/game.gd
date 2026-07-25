@@ -8365,7 +8365,7 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	## Liquids: very tight tip hit (brush keeps the wider scrape).
 	if moved >= SPATULA_SCRAPE_MIN_MOVE and _scrape_grill_liquids(tip_pos, move_xz, moved, 0.22):
 		scraping = true
-	## Tip shove — push burgers aside without attaching them to the spatula.
+	## Flat blade: light hop + reset crust dwell. Tilted: shove burgers aside.
 	if moved >= SPATULA_SCRAPE_MIN_MOVE:
 		_spatula_nudge_patties(tip_pos, move_xz, moved)
 	## Scrape bed + tings whenever LMB-dragging the spatula on the steel; louder on debris.
@@ -16300,12 +16300,47 @@ func _mp_apply_soda_char_clear(x: float, z: float) -> void:
 
 
 func _spatula_nudge_patties(tip_pos: Vector3, move_xz: Vector2, moved: float) -> void:
-	## Spatula tip pushes burgers while LMB-held — never attaches / drags them.
+	## Flat blade pops meat in place; angled blade shoves it around the steel.
+	if absf(_spatula_user_roll) < HAND_SPATULA_ROLL_STEP * 0.5:
+		_spatula_flat_pop_patties(tip_pos)
+		return
 	_nudge_grill_patties(
 		tip_pos, move_xz, moved,
 		SPATULA_PATTY_PUSH_RADIUS, SPATULA_PATTY_PUSH_SCALE, SPATULA_PATTY_PUSH_MAX,
 		0.22
 	)
+
+
+func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
+	## Slide the flat spatula past a burger → slight hop + reset crust leave timer.
+	const POP_R := SPATULA_PATTY_PUSH_RADIUS * 1.05
+	const POP_COOL_MS := 420
+	const POP_PEAK := 0.034 ## ~1.3" hop
+	var now := Time.get_ticks_msec()
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p) or p.is_held:
+			continue
+		if p == dragging_patty or p == flicking_patty:
+			continue
+		if bool(p.get("place_morphing")) and not bool(p.get("place_ball_waiting")):
+			continue
+		var d := Vector2(tip_pos.x - p.position.x, tip_pos.z - p.position.z).length()
+		var use_r := POP_R * (1.25 if _patty_is_flip_ready(p) else 1.0)
+		if d > use_r:
+			continue
+		var last := int(p.get_meta("spatula_flat_pop_ms", 0))
+		if now - last < POP_COOL_MS:
+			continue
+		p.set_meta("spatula_flat_pop_ms", now)
+		## Restart the same-spot crust clock (another ~10s before leave chance).
+		p.spot_dwell_t = 0.0
+		p.spot_dwell_xz = Vector2(float(p._rest_x), float(p._rest_z))
+		p.spot_residue_rolled = false
+		if p.has_method("_play_done_jump"):
+			p._play_done_jump(POP_PEAK)
+		if game_audio and game_audio.has_method("play_grease_pop"):
+			game_audio.play_grease_pop(false)
 
 
 func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
