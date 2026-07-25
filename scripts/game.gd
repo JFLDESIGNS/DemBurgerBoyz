@@ -1181,6 +1181,7 @@ var tree_light_off_z: float = 0.65
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_WIND_CFG_SECTION := "tree_wind"
 const TREE_CLICK_COLLISION_LAYER := 262144
+const CUSTOMER_WAWA_COLLISION_LAYER := 524288 ## torso/head Area3D on each guest
 const TREE_SHAKE_DEG := 1.45 ## soft pendulum lean (was 2.4)
 ## Leaf wind — Hidden menu (strength + world yaw direction).
 var tree_wind_strength: float = 1.85 ## default readable sway
@@ -39660,43 +39661,41 @@ func _find_waiting_customer_at_mouth(screen_pos: Vector2, max_px: float = -1.0) 
 	return best
 
 
-func _find_customer_under_click(screen_pos: Vector2) -> Node3D:
-	## Generous head/torso pick — click a guest through the window.
-	if camera == null or customers_root == null:
-		return null
-	var best: Node3D = null
-	var best_d := 130.0
-	for c in customers_root.get_children():
-		if c == null or not is_instance_valid(c):
-			continue
-		if bool(c.get("is_leaving")) or bool(c.get("is_ragdoll")):
-			continue
-		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
-		if camera.is_position_behind(torso):
-			continue
-		var head: Vector3 = c.global_position + Vector3(0.0, 1.22, 0.0)
-		var face: Vector3 = c.global_position + Vector3(0.0, 1.38, 0.06)
-		if c.has_method("mouth_global"):
-			face = c.mouth_global()
-		var d := mini(
-			screen_pos.distance_to(camera.unproject_position(head)),
-			mini(
-				screen_pos.distance_to(camera.unproject_position(face)),
-				screen_pos.distance_to(camera.unproject_position(torso))
-			)
-		)
-		if d < best_d:
-			best_d = d
-			best = c
-	return best
-
-
 func _try_customer_wawa_click(screen_pos: Vector2) -> bool:
-	## LMB on a customer → restartable wawawa + bobble (never stacks on spam-click).
-	if not playing:
+	## Ray into each guest's torso/head Area3D — never a fat screen pick over the grill.
+	if not playing or camera == null or world == null:
 		return false
-	var cust := _find_customer_under_click(screen_pos)
-	if cust == null:
+	## Grill steel / spatula zone always wins over outdoor guests.
+	if _is_grill_screen_point(screen_pos) or _should_show_hand_spatula(screen_pos):
+		return false
+	var space := world.get_world_3d().direct_space_state
+	if space == null:
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var grill_hit := _grill_plane_from_screen(screen_pos)
+	var grill_dist := INF
+	if grill_hit != Vector3.ZERO and _is_on_grill_surface(grill_hit):
+		grill_dist = from.distance_to(grill_hit)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 48.0)
+	q.collision_mask = CUSTOMER_WAWA_COLLISION_LAYER
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return false
+	var hit_pos: Vector3 = hit.get("position", Vector3.ZERO)
+	if from.distance_to(hit_pos) >= grill_dist - 0.02:
+		return false
+	var collider = hit.get("collider")
+	if collider == null or not is_instance_valid(collider):
+		return false
+	var cust: Node3D = collider.get_meta("wawa_customer", null) as Node3D
+	if cust == null or not is_instance_valid(cust):
+		cust = collider.get_parent() as Node3D
+	if cust == null or not is_instance_valid(cust):
+		return false
+	if bool(cust.get("is_leaving")) or bool(cust.get("is_ragdoll")):
 		return false
 	var impatience := 0.5
 	if cust.has_method("patience_ratio"):

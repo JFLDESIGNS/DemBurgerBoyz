@@ -99,6 +99,8 @@ const JIMIN_FACTS: Array[String] = [
 ]
 ## Shrink so face + torso sit in the service window (not cropped by the lintel).
 const CHAR_SCALE := 0.552 ## ~15% larger than 0.48
+## Must match game.gd CUSTOMER_WAWA_COLLISION_LAYER — torso/head click only.
+const WAWA_CLICK_LAYER := 524288
 ## Sidewalk stand height — feet on pavement (was floating ~1 ft at 0.22).
 const STAND_Y := -0.02
 ## Stay nearer the camera than the street matte (game.gd STREET_MATTE_BASE_Z ≈ 11.5).
@@ -199,6 +201,7 @@ var _antsy_active: bool = false
 var _antsy_hands_up_active: bool = false
 var _grobble_cd: float = 0.0
 var _click_bobble_t: float = 0.0
+var _wawa_click_area: Area3D = null
 const CLICK_BOBBLE_SEC := 0.62
 const CLICK_BOBBLE_PHASE_SPEED := 10.5
 var _mood: String = "happy"
@@ -622,6 +625,30 @@ func _build() -> void:
 	_bar_root = null
 	_bar_bg = null
 	_bar_fill = null
+	_setup_wawa_click_volume()
+
+
+func _setup_wawa_click_volume() -> void:
+	## Separate torso/head trigger — legs / empty space around them never steal grill clicks.
+	if _wawa_click_area != null and is_instance_valid(_wawa_click_area):
+		return
+	_wawa_click_area = Area3D.new()
+	_wawa_click_area.name = "WawaClickArea"
+	_wawa_click_area.collision_layer = WAWA_CLICK_LAYER
+	_wawa_click_area.collision_mask = 0
+	_wawa_click_area.input_ray_pickable = true
+	_wawa_click_area.monitoring = false
+	_wawa_click_area.monitorable = true
+	_wawa_click_area.set_meta("wawa_customer", self)
+	var col := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	## Chest through crown (not pelvis/legs).
+	capsule.radius = 0.26
+	capsule.height = 0.88
+	col.shape = capsule
+	col.position = Vector3(0.0, 1.08, 0.06)
+	_wawa_click_area.add_child(col)
+	add_child(_wawa_click_area)
 
 
 func _try_attach_toon_character() -> bool:
