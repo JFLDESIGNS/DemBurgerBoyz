@@ -840,7 +840,7 @@ var cup_held: bool = false
 var cup_drawing: bool = false ## true while lerping a fresh cup out of the stack
 var _cup_draw_t: float = 0.0
 var _cup_draw_from: Vector3 = Vector3.ZERO
-const CUP_DRAW_DUR := 0.46 ## Slightly longer rack→hand ease (less jumpy)
+const CUP_DRAW_DUR := 0.62 ## Nest → hand pull; long enough to read the lerp
 var cup_home: Vector3 = Vector3.ZERO ## rack spawn (spare grab)
 var cup_home_rot: Vector3 = Vector3.ZERO
 var cup_rest: Vector3 = Vector3.ZERO ## drip-tray park when you release
@@ -3390,8 +3390,8 @@ func _input(event: InputEvent) -> void:
 			if _try_open_closed_sign_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
-			## Top CUPS stack overlaps HUD chrome on screen; rack clicks still need to pull a cup.
-			if not cup_held and (_cursor_near_cup_rack(event.position) or _cup_rack_ray_hit(event.position)):
+			## CUPS nest — only grab when the cursor ray actually hits the rack volume.
+			if not cup_held and _cup_rack_ray_hit(event.position):
 				if _begin_cup_hold():
 					get_viewport().set_input_as_handled()
 					return
@@ -13671,6 +13671,11 @@ func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 	if _ui_blocks_world_click(screen_pos):
 		return false
+	## Cups / soft-serve: ray under cursor only — checked before loose tool radii.
+	if not cup_held and _ray_hits_any_cup(screen_pos):
+		return _begin_cup_hold()
+	if not icecream_cone_held and _ray_hits_icecream_cone(screen_pos):
+		return _begin_icecream_cone_hold()
 	## Prefer the nearest hanging tool by screen distance, then ray as fallback.
 	var best := ""
 	var best_d := 110.0
@@ -13713,34 +13718,6 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 		if gd < best_d:
 			best_d = gd
 			best = "glock"
-	if cup_root != null and camera != null and not cup_held:
-		var cd := screen_pos.distance_to(camera.unproject_position(cup_root.global_position + Vector3(0, 0.04, 0)))
-		if cd < best_d:
-			best_d = cd
-			best = "cup"
-	if icecream_cone_root != null and camera != null and not icecream_cone_held:
-		var id := screen_pos.distance_to(camera.unproject_position(icecream_cone_root.global_position + Vector3(0, 0.12, 0)))
-		if id < best_d:
-			best_d = id
-			best = "icecream"
-	for pc in parked_cups:
-		if pc == null or not is_instance_valid(pc) or camera == null:
-			continue
-		var pd := screen_pos.distance_to(camera.unproject_position(pc.global_position + Vector3(0, 0.04, 0)))
-		if pd < best_d:
-			best_d = pd
-			best = "cup"
-	## Empty cups from the left holder — always pickable even when no cup_root yet.
-	if camera != null and cup_home != Vector3.ZERO and not cup_held:
-		var rd := screen_pos.distance_to(camera.unproject_position(cup_home + Vector3(0.0, 0.20, 0.0)))
-		if rd < best_d:
-			best_d = rd
-			best = "cup"
-	if camera != null and icecream_cone_home != Vector3.ZERO and not icecream_cone_held:
-		var ice_rd := screen_pos.distance_to(camera.unproject_position(icecream_cone_home + Vector3(0.0, 0.12, 0.0)))
-		if ice_rd < best_d:
-			best_d = ice_rd
-			best = "icecream"
 	if best == "" or best_d > 110.0:
 		if _ray_hits_tool(screen_pos, SALE_COLLISION_LAYER, sale_area):
 			best = "sale"
@@ -13754,10 +13731,6 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			best = "ext"
 		elif not _sale_covers_glock() and _ray_hits_tool(screen_pos, GLOCK_COLLISION_LAYER, glock_area):
 			best = "glock"
-		elif _ray_hits_any_cup(screen_pos):
-			best = "cup"
-		elif _ray_hits_icecream_cone(screen_pos):
-			best = "icecream"
 		else:
 			return false
 	match best:
@@ -13774,16 +13747,12 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			return _begin_fire_ext_hold()
 		"glock":
 			return _begin_glock_hold()
-		"cup":
-			return _begin_cup_hold()
-		"icecream":
-			return _begin_icecream_cone_hold()
 	return false
 
 
 func _ray_hits_any_cup(screen_pos: Vector2) -> bool:
-	## Empty rack peg counts so players can take a fresh cup after parking a drink.
-	if _cursor_near_cup_rack(screen_pos) or _cup_rack_ray_hit(screen_pos):
+	## Fresh cup from the nest — ray must hit CupRackGrab (no loose screen radius).
+	if _cup_rack_ray_hit(screen_pos):
 		return true
 	if _ray_hits_tool(screen_pos, CUP_COLLISION_LAYER, cup_area):
 		return true
@@ -22709,24 +22678,10 @@ func _ray_hits_icecream_rack(screen_pos: Vector2) -> bool:
 func _icecream_click_should_win(screen_pos: Vector2) -> bool:
 	if not _owns_icecream_machine():
 		return false
-	## Prefer cone / nest grabs over neighboring soda tanks and cup radii.
+	## Prefer cone / nest grabs over neighboring soda tanks — ray under cursor only.
 	if icecream_cone_held:
 		return false
-	if _ray_hits_icecream_cone(screen_pos):
-		return true
-	if camera == null:
-		return false
-	if icecream_cone_root != null and is_instance_valid(icecream_cone_root):
-		var tip := icecream_cone_root.global_position + Vector3(0.0, 0.12, 0.0)
-		if not camera.is_position_behind(tip) \
-				and screen_pos.distance_to(camera.unproject_position(tip)) <= ICECREAM_GRAB_SCREEN_PX:
-			return true
-	if icecream_cone_home != Vector3.ZERO:
-		var home := icecream_cone_home + Vector3(0.0, 0.12, 0.0)
-		if not camera.is_position_behind(home) \
-				and screen_pos.distance_to(camera.unproject_position(home)) <= ICECREAM_GRAB_SCREEN_PX:
-			return true
-	return false
+	return _ray_hits_icecream_cone(screen_pos)
 
 
 func _begin_icecream_cone_hold() -> bool:
@@ -25176,31 +25131,12 @@ func _try_rescue_melting_cup(root: Node3D) -> bool:
 
 
 func _nearest_cup_at_screen(screen_pos: Vector2) -> Node3D:
+	## Prefer a real CupGrab / rack ray under the cursor — no fat screen radius.
 	if camera == null:
 		return null
-	var best: Node3D = null
-	var best_d := 96.0
-	var candidates: Array = []
-	if cup_root != null and is_instance_valid(cup_root) and not cup_held:
-		candidates.append(cup_root)
-	for c in parked_cups:
-		if c != null and is_instance_valid(c):
-			candidates.append(c)
-	for item in melting_cups:
-		if typeof(item) != TYPE_DICTIONARY or str(item.get("phase", "")) != "rescue":
-			continue
-		var rescue_root: Node3D = item.get("root") as Node3D
-		if rescue_root != null and is_instance_valid(rescue_root):
-			candidates.append(rescue_root)
-	for c in candidates:
-		var d := screen_pos.distance_to(camera.unproject_position(c.global_position + Vector3(0, 0.04, 0)))
-		if d < best_d:
-			best_d = d
-			best = c
-	if best != null:
-		return best
-	## Ray fallback across all grab areas.
-	if camera == null:
+	if _cup_rack_ray_hit(screen_pos):
+		if cup_root != null and is_instance_valid(cup_root) and not cup_held:
+			return cup_root
 		return null
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
@@ -26091,14 +26027,10 @@ func _cup_click_should_win(screen_pos: Vector2) -> bool:
 	## Cola / lime / orange tanks always beat the CUPS rack steal radius.
 	if _soda_flavor_under_cursor(screen_pos):
 		return false
+	## Ray under cursor only — no loose screen-proximity steal.
 	if _cup_rack_ray_hit(screen_pos):
 		return true
-	## Soft screen proximity for the nest — keep tight so tanks stay clickable.
-	if _cursor_near_cup_rack(screen_pos):
-		return true
 	if _ray_hits_any_cup(screen_pos):
-		return true
-	if _nearest_cup_at_screen(screen_pos) != null:
 		return true
 	return false
 
@@ -26240,8 +26172,8 @@ func _begin_cup_hold() -> bool:
 		return false
 	var mouse := get_viewport().get_mouse_position()
 	var target := _nearest_cup_at_screen(mouse)
-	## Prefer taking from the CUPS holder when clicking the rack (even if a tray cup is nearer).
-	var from_rack := _cursor_near_cup_rack(mouse) or _cup_rack_ray_hit(mouse)
+	## Prefer taking from the CUPS holder when the ray hits the rack (even if a tray cup is nearer).
+	var from_rack := _cup_rack_ray_hit(mouse)
 	var draw_from_stack := false
 	if target == null or (from_rack and (cup_root == null or not is_instance_valid(cup_root))):
 		if _tray_parked_count() >= CUP_MAX and (cup_root == null or not is_instance_valid(cup_root)):
@@ -26345,19 +26277,19 @@ func _cup_rack_front_grab_pos() -> Vector3:
 
 
 func _start_cup_draw_from_rack() -> void:
-	## Seat appears already out front of the machine, then arcs into the hand.
+	## Start nested in the CUPS holder, then arc out into the hand (no teleport).
 	if cup_root == null or not is_instance_valid(cup_root):
 		cup_drawing = false
 		return
 	cup_home = _cup_rack_seat_global()
-	_cup_draw_from = _cup_rack_front_grab_pos()
+	_cup_draw_from = cup_home if cup_home != Vector3.ZERO else cup_root.global_position
 	cup_root.global_position = _cup_draw_from
 	cup_root.rotation_degrees = cup_home_rot
-	cup_root.scale = Vector3(0.92, 0.92, 0.92)
+	cup_root.scale = Vector3(0.86, 0.86, 0.86)
 	_cup_prev_pos = _cup_draw_from
 	_cup_vel = Vector3.ZERO
 	## Avoidance fights nest→hand pulls — keep it off until the draw finishes.
-	_cup_machine_contact_grace = CUP_DRAW_DUR + 0.18
+	_cup_machine_contact_grace = CUP_DRAW_DUR + 0.22
 	cup_drawing = true
 	_cup_draw_t = 0.0
 
@@ -26368,43 +26300,50 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		return
 	_cup_draw_t += delta
 	var u := clampf(_cup_draw_t / CUP_DRAW_DUR, 0.0, 1.0)
-	## Smoothstep → stronger ease-out so the hand catch feels soft, not snappy.
+	## Smoothstep → ease-out so the hand catch feels soft.
 	var s := u * u * (3.0 - 2.0 * u)
-	var e := 1.0 - pow(1.0 - s, 2.8)
+	var e := 1.0 - pow(1.0 - s, 2.4)
 	var face := _cup_soda_face_dir()
 	var hand := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
-	## Stay on the cook side of the fountain — never feed avoidance mid-draw.
-	var draw_target := _cup_draw_from + face * 0.06 + Vector3(0.0, -0.01, 0.0)
+	var front := _cup_rack_front_grab_pos()
+	var end := front
 	if hand != Vector3.ZERO:
-		draw_target = _cup_draw_from.lerp(hand, 0.78)
+		end = hand
 		## Keep ahead of the invisible wall even if the cursor hugs the tanks.
-		var seat_front := _cup_rack_front_grab_pos()
-		var to_front := (draw_target - seat_front).dot(face)
+		var to_front := (end - front).dot(face)
 		if to_front < 0.0:
-			draw_target += face * (-to_front)
-		draw_target = _clamp_cup_to_machine_front(
-			draw_target, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+			end += face * (-to_front)
+		end = _clamp_cup_to_machine_front(
+			end, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
 		)
-	var seat := draw_target
-	## Soft arc from the front hold into the cursor (lower apex = less hop).
-	var mid := _cup_draw_from.lerp(seat, 0.5) + face * 0.04 + Vector3(0.0, 0.028, 0.0)
-	var omt := 1.0 - e
-	var pos := omt * omt * _cup_draw_from + 2.0 * omt * e * mid + e * e * seat
+	## Two-stage path: nest → cook-side front, then front → hand.
+	var pos: Vector3
+	if e < 0.42:
+		var t := clampf(e / 0.42, 0.0, 1.0)
+		t = t * t * (3.0 - 2.0 * t)
+		var mid := _cup_draw_from.lerp(front, 0.55) + face * 0.06 + Vector3(0.0, 0.075, 0.0)
+		var omt := 1.0 - t
+		pos = omt * omt * _cup_draw_from + 2.0 * omt * t * mid + t * t * front
+	else:
+		var t := clampf((e - 0.42) / 0.58, 0.0, 1.0)
+		t = t * t * (3.0 - 2.0 * t)
+		var mid := front.lerp(end, 0.5) + face * 0.04 + Vector3(0.0, 0.038, 0.0)
+		var omt := 1.0 - t
+		pos = omt * omt * front + 2.0 * omt * t * mid + t * t * end
 	var prev := cup_root.global_position
-	## Blend toward the bezier so mid-draw never jumps a full frame.
-	var draw_follow := clampf(delta * 14.0, 0.0, 1.0)
+	## Blend toward the path so mid-draw never jumps a full frame.
+	var draw_follow := clampf(delta * 16.0, 0.0, 1.0)
 	draw_follow = draw_follow * draw_follow * (3.0 - 2.0 * draw_follow)
 	cup_root.global_position = prev.lerp(pos, draw_follow)
 	if delta > 0.0001:
 		_cup_vel = (cup_root.global_position - prev) / delta
 	_cup_prev_pos = cup_root.global_position
-	## Mild orient only — old spin read as glitchy against the cabinet.
 	cup_root.rotation_degrees = Vector3(
-		lerpf(0.0, -6.0, e),
+		lerpf(0.0, -8.0, e),
 		lerpf(cup_home_rot.y, 10.0, e),
-		sin(e * PI) * 3.0
+		sin(e * PI) * 4.0
 	)
-	var sc := lerpf(0.94, 1.0, e)
+	var sc := lerpf(0.86, 1.0, e)
 	cup_root.scale = Vector3(sc, sc, sc)
 	if u >= 1.0:
 		cup_drawing = false
