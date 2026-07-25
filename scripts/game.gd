@@ -783,7 +783,7 @@ var cup_held: bool = false
 var cup_drawing: bool = false ## true while lerping a fresh cup out of the stack
 var _cup_draw_t: float = 0.0
 var _cup_draw_from: Vector3 = Vector3.ZERO
-const CUP_DRAW_DUR := 0.34
+const CUP_DRAW_DUR := 0.46 ## Slightly longer rack→hand ease (less jumpy)
 var cup_home: Vector3 = Vector3.ZERO ## rack spawn (spare grab)
 var cup_home_rot: Vector3 = Vector3.ZERO
 var cup_rest: Vector3 = Vector3.ZERO ## drip-tray park when you release
@@ -1435,23 +1435,32 @@ const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
 const FRIES_PACK_TARGET_H := 0.167 ## ~15% bigger than prior 0.145 pack height
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
-const CUP_FOLLOW_RATE := 15.0 ## hand follow (empty); full drinks feel heavier
+const CUP_FOLLOW_RATE := 8.5 ## hand follow (empty); full drinks feel heavier — eased vs prior 15
+const CUP_FOLLOW_MAX_SPEED := 1.55 ## m/s cap so cursor flicks don't teleport the cup
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
-const CUP_TILT_FROM_VEL := 48.0 ## degrees per m/s — shake banks the cup
-const CUP_TILT_FOLLOW := 12.0 ## how fast lean catches hand motion
-const CUP_TILT_SETTLE := 5.5 ## upright recover when still
-const CUP_TILT_MAX := 68.0
+const CUP_TILT_FROM_VEL := 24.0 ## degrees per m/s — was 48; much less tip while moving
+const CUP_TILT_FOLLOW := 7.5 ## how fast lean catches hand motion
+const CUP_TILT_SETTLE := 6.5 ## upright recover when still
+const CUP_TILT_MAX := 36.0 ## was 68 — harder to tip into a spill
 const CUP_LIQUID_ROCK_MAX := 22.0 ## liquid tip inside the shell
 const CUP_SURFACE_SLOSH_MUL := 1.15 ## free-surface chase on hand motion
 const CUP_SURFACE_SPIN_MUL := 0.0
 const CUP_FOAM_ROCK_MAX := 52.0 ## enough to counter-bank toward world-level
 const CUP_SURFACE_LEVEL_FOLLOW := 0.78 ## how hard the top plane seeks world-flat
-const CUP_SPLASH_SPEED := 2.15
+const CUP_SPLASH_SPEED := 2.75 ## was 2.15 — need more speed before splash loss
 const CUP_LIQUID_CALM_SPEED := 0.65 ## below this the pop surface stays still
 const CUP_LIQUID_WILD_SPEED := 1.90 ## full ripple / wave above this
-const CUP_TILT_VEL_DEADZONE := 0.12 ## ignore tiny hand noise for bank/slosh
+const CUP_TILT_VEL_DEADZONE := 0.22 ## ignore tiny hand noise for bank/slosh
 const CUP_SPLASH_LOSS := 0.07
+const CUP_SPLASH_LEAN := 34.0 ## was 26 — lean further before spilling
+## Invisible front wall (soda local +Z toward cook). Allows under-nozzle bay (~0.30) but blocks behind cabinet.
+const CUP_SODA_FRONT_Z := 0.18
+const CUP_SODA_FRONT_HALF_X := 0.58
+const CUP_SODA_FRONT_HEIGHT := 1.30
+const CUP_ICECREAM_FRONT_Z := 0.215
+const CUP_ICECREAM_FRONT_HALF_X := 0.184
+const CUP_ICECREAM_FRONT_HEIGHT := 0.78
 const CUP_HOT_GRILL_RESCUE_SEC := 1.0
 const CUP_HOT_GRILL_HISS_WARN_SEC := 0.5
 const CUP_SPOUT_HORIZ := 0.18
@@ -24205,8 +24214,8 @@ func _cup_soda_face_dir() -> Vector3:
 
 
 func _cup_rack_front_grab_pos() -> Vector3:
-	## Appear ~1ft toward the player from the CUPS tube — clear of machine colliders.
-	const FRONT_M := 0.30 ## ~1 foot
+	## Appear well toward the cook from the CUPS tube — clear of machine / no dig-in.
+	const FRONT_M := 0.52 ## ~1.7 ft — closer to player than the old 0.30 seat
 	var seat := _cup_rack_seat_global()
 	if seat == Vector3.ZERO and soda_root != null and is_instance_valid(soda_root):
 		seat = soda_root.global_position
@@ -24214,6 +24223,8 @@ func _cup_rack_front_grab_pos() -> Vector3:
 	var hold_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
 	var pos := seat + face * FRONT_M
 	pos.y = hold_y
+	## Stay on the cook side of the invisible soda wall.
+	pos = _clamp_cup_to_machine_front(pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z)
 	return pos
 
 
@@ -24241,37 +24252,43 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		return
 	_cup_draw_t += delta
 	var u := clampf(_cup_draw_t / CUP_DRAW_DUR, 0.0, 1.0)
-	## Smoothstep then ease-out so it pops free, then settles into the hand.
+	## Smoothstep → stronger ease-out so the hand catch feels soft, not snappy.
 	var s := u * u * (3.0 - 2.0 * u)
-	var e := 1.0 - pow(1.0 - s, 2.2)
+	var e := 1.0 - pow(1.0 - s, 2.8)
 	var face := _cup_soda_face_dir()
 	var hand := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	## Stay on the cook side of the fountain — never feed avoidance mid-draw.
-	var draw_target := _cup_draw_from + face * 0.08 + Vector3(0.0, -0.02, 0.0)
+	var draw_target := _cup_draw_from + face * 0.06 + Vector3(0.0, -0.01, 0.0)
 	if hand != Vector3.ZERO:
-		draw_target = _cup_draw_from.lerp(hand, 0.72)
-		## Keep a little forward of the cabinet even if the cursor hugs the tanks.
+		draw_target = _cup_draw_from.lerp(hand, 0.78)
+		## Keep ahead of the invisible wall even if the cursor hugs the tanks.
 		var seat_front := _cup_rack_front_grab_pos()
 		var to_front := (draw_target - seat_front).dot(face)
 		if to_front < 0.0:
 			draw_target += face * (-to_front)
+		draw_target = _clamp_cup_to_machine_front(
+			draw_target, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+		)
 	var seat := draw_target
-	## Short arc from the front hold into the cursor.
-	var mid := _cup_draw_from.lerp(seat, 0.45) + face * 0.06 + Vector3(0.0, 0.05, 0.0)
+	## Soft arc from the front hold into the cursor (lower apex = less hop).
+	var mid := _cup_draw_from.lerp(seat, 0.5) + face * 0.04 + Vector3(0.0, 0.028, 0.0)
 	var omt := 1.0 - e
 	var pos := omt * omt * _cup_draw_from + 2.0 * omt * e * mid + e * e * seat
 	var prev := cup_root.global_position
-	cup_root.global_position = pos
+	## Blend toward the bezier so mid-draw never jumps a full frame.
+	var draw_follow := clampf(delta * 14.0, 0.0, 1.0)
+	draw_follow = draw_follow * draw_follow * (3.0 - 2.0 * draw_follow)
+	cup_root.global_position = prev.lerp(pos, draw_follow)
 	if delta > 0.0001:
 		_cup_vel = (cup_root.global_position - prev) / delta
 	_cup_prev_pos = cup_root.global_position
-	var spin := sin(e * PI) * 22.0
+	## Mild orient only — old spin read as glitchy against the cabinet.
 	cup_root.rotation_degrees = Vector3(
-		lerpf(0.0, -8.0, e) + sin(e * TAU) * 4.0,
-		lerpf(cup_home_rot.y, 12.0, e) + spin,
-		sin(e * PI * 1.5) * 8.0
+		lerpf(0.0, -6.0, e),
+		lerpf(cup_home_rot.y, 10.0, e),
+		sin(e * PI) * 3.0
 	)
-	var sc := lerpf(0.92, 1.0, e)
+	var sc := lerpf(0.94, 1.0, e)
 	cup_root.scale = Vector3(sc, sc, sc)
 	if u >= 1.0:
 		cup_drawing = false
@@ -24279,7 +24296,8 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		_cup_tilt = Vector2.ZERO
 		## Stay where the hand settled — do not resolve back into/behind the cabinet.
 		_cup_prev_pos = cup_root.global_position
-		_cup_machine_contact_grace = maxf(_cup_machine_contact_grace, 0.20)
+		_cup_vel = Vector3.ZERO
+		_cup_machine_contact_grace = maxf(_cup_machine_contact_grace, 0.35)
 
 func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	## Plane tracking at cup height (like other tools) — keeps the cursor on-screen.
@@ -24381,21 +24399,32 @@ func _update_held_cup(delta: float) -> void:
 		if mp_enabled:
 			_mp_send_held_cup_pose(false)
 		return
+	var can_reach_customer := cup_soda_fill >= 0.82 and cup_flavor != "" \
+		and _find_waiting_customer_at_mouth(get_viewport().get_mouse_position(), CUP_MOUTH_HAND_PX) != null
+	var can_use_fill_bay := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
 	var seat := Vector3.ZERO
 	if _kb_force_cup_seat != Vector3.ZERO:
 		seat = _kb_force_cup_seat
 	else:
 		seat = _cup_hold_point_from_screen(get_viewport().get_mouse_position())
+	## Invisible wall on the aim target — stops chase→shove glitching into the cabinet.
+	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay:
+		seat = _resolve_cup_against_soda(seat, false)
 	if seat != Vector3.ZERO:
 		var prev := cup_root.global_position
 		## Weight: fuller drinks lag the cursor a bit — empties stay snappy.
-		var heavy := lerpf(1.0, 0.58, clampf(cup_soda_fill, 0.0, 1.0))
+		var heavy := lerpf(1.0, 0.55, clampf(cup_soda_fill, 0.0, 1.0))
 		var follow := clampf(delta * CUP_FOLLOW_RATE * heavy, 0.0, 1.0)
 		if _cup_spout_unlock_grace > 0.0:
 			follow *= 0.42
-		## Soft ease-out so motion isn't robotic.
-		follow = follow * (2.0 - follow)
-		cup_root.global_position = prev.lerp(seat, follow)
+		## Smoothstep ease so motion eases in/out instead of hard lerps.
+		follow = follow * follow * (3.0 - 2.0 * follow)
+		var desired := prev.lerp(seat, follow)
+		var step := desired - prev
+		var max_step := CUP_FOLLOW_MAX_SPEED * delta
+		if step.length() > max_step and max_step > 0.0001:
+			desired = prev + step.normalized() * max_step
+		cup_root.global_position = desired
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 			if _cup_spout_unlock_grace > 0.0:
@@ -24408,7 +24437,7 @@ func _update_held_cup(delta: float) -> void:
 	var target_tilt := horiz * CUP_TILT_FROM_VEL
 	if target_tilt.length() > CUP_TILT_MAX:
 		target_tilt = target_tilt.normalized() * CUP_TILT_MAX
-	var tilt_rate := CUP_TILT_FOLLOW if horiz.length() > 0.06 else CUP_TILT_SETTLE
+	var tilt_rate := CUP_TILT_FOLLOW if horiz.length() > 0.08 else CUP_TILT_SETTLE
 	_cup_tilt = _cup_tilt.lerp(target_tilt, clampf(delta * tilt_rate, 0.0, 1.0))
 	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
 		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
@@ -24420,21 +24449,23 @@ func _update_held_cup(delta: float) -> void:
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
 	## Tip lifts the base so a leaned cup doesn't dig through the drip tray.
 	var tip_amt := (absf(_cup_tilt.x) + absf(_cup_tilt.y)) / maxf(CUP_TILT_MAX, 1.0)
-	cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.95)
-	var can_reach_customer := cup_soda_fill >= 0.82 and cup_flavor != "" \
-		and _find_waiting_customer_at_mouth(get_viewport().get_mouse_position(), CUP_MOUTH_HAND_PX) != null
-	var can_use_fill_bay := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
-	## Fresh rack grab grace: skip avoidance so it can't yank the cup behind the fountain.
+	cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.55)
+	## Soft wall resolve — ease corrections so it doesn't stutter on the metal.
 	if _cup_machine_contact_grace <= 0.0 or can_reach_customer or can_use_fill_bay:
 		var before_resolve := cup_root.global_position
-		cup_root.global_position = _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
-		if not can_use_fill_bay and cup_root.global_position.distance_to(before_resolve) > 0.004:
-			_cup_machine_contact_grace = 0.22
-			_cup_vel *= 0.15
-			_cup_prev_pos = cup_root.global_position
+		var resolved := _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
+		if not can_use_fill_bay and not can_reach_customer:
+			var push := clampf(delta * 16.0, 0.0, 1.0)
+			cup_root.global_position = before_resolve.lerp(resolved, push)
+			if before_resolve.distance_to(resolved) > 0.006:
+				_cup_machine_contact_grace = 0.16
+				_cup_vel *= 0.2
+				_cup_prev_pos = cup_root.global_position
+		else:
+			cup_root.global_position = resolved
 	cup_root.rotation_degrees = Vector3(
-		-8.0 + _cup_tilt.y,
-		12.0,
+		-6.0 + _cup_tilt.y,
+		10.0,
 		_cup_tilt.x
 	)
 	_update_cup_slosh(delta)
@@ -24458,8 +24489,12 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 	## Keep hand-held cups on the cook-facing side of the soda / soft-serve machines.
 	if allow_customer_reach:
 		return world_pos
-	var clamped := _clamp_cup_to_machine_front(world_pos, soda_root, 0.54, 1.24, 0.37)
-	clamped = _clamp_cup_to_machine_front(clamped, icecream_root, 0.184, 0.78, 0.215)
+	var clamped := _clamp_cup_to_machine_front(
+		world_pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+	)
+	clamped = _clamp_cup_to_machine_front(
+		clamped, icecream_root, CUP_ICECREAM_FRONT_HALF_X, CUP_ICECREAM_FRONT_HEIGHT, CUP_ICECREAM_FRONT_Z
+	)
 	if soda_root == null or not is_instance_valid(soda_root) or soda_colliders.is_empty():
 		return clamped
 	## Match the real plastic shell (old half-size was too small → dig-ins).
@@ -24506,8 +24541,12 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 			break
 	var out_center: Vector3 = soda_root.global_transform * resolved
 	var out := out_center - Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
-	out = _clamp_cup_to_machine_front(out, soda_root, 0.54, 1.24, 0.37)
-	out = _clamp_cup_to_machine_front(out, icecream_root, 0.184, 0.78, 0.215)
+	out = _clamp_cup_to_machine_front(
+		out, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+	)
+	out = _clamp_cup_to_machine_front(
+		out, icecream_root, CUP_ICECREAM_FRONT_HALF_X, CUP_ICECREAM_FRONT_HEIGHT, CUP_ICECREAM_FRONT_Z
+	)
 	return out
 
 
@@ -24518,13 +24557,15 @@ func _clamp_cup_to_machine_front(
 	height: float,
 	front_z: float
 ) -> Vector3:
+	## Invisible wall: keep cups on the cook-facing side of the machine width band.
 	if machine == null or not is_instance_valid(machine):
 		return world_pos
 	var cup_center_world := world_pos + Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	var local := machine.to_local(cup_center_world)
 	var cup_r := CUP_SHELL_TOP_R + 0.018
 	var in_width := absf(local.x) <= half_x + cup_r
-	var in_height := local.y >= -0.06 and local.y <= height
+	## Tall band so you can't slip the cup up/over behind the tanks.
+	var in_height := local.y >= -0.12 and local.y <= height + 0.2
 	if in_width and in_height:
 		local.z = maxf(local.z, front_z + cup_r)
 	var out_center := machine.to_global(local)
@@ -24592,7 +24633,7 @@ func _update_cup_slosh(delta: float) -> void:
 	var lean := maxf(_cup_surface_slosh.length(), _cup_tilt.length())
 	if cup_soda_fill > 0.05 and _cup_splash_cd <= 0.0 and _cup_spout_unlock_grace <= 0.0 \
 			and _cup_machine_contact_grace <= 0.0 \
-			and (speed > CUP_SPLASH_SPEED or lean > 26.0):
+			and (speed > CUP_SPLASH_SPEED or lean > CUP_SPLASH_LEAN):
 		_cup_splash_cd = 0.22
 		_cup_surface_wobble = 1.0
 		var loss := CUP_SPLASH_LOSS * (1.0 + clampf((speed - CUP_SPLASH_SPEED) * 0.35, 0.0, 1.5))
