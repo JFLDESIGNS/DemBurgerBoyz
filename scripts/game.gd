@@ -498,6 +498,8 @@ var fire_particles: GPUParticles3D = null
 var fire_particles_red: GPUParticles3D = null
 var fire_embers: GPUParticles3D = null
 var fire_smoke: GPUParticles3D = null
+var _fire_emit_tex: ImageTexture = null ## RGBF emission points along lit oil path
+var _fire_smoke_emit_tex: ImageTexture = null ## Thinned path samples for smoke
 var _oil_fire_warned: bool = false
 var _fire_flicker_t: float = 0.0
 ## Edge-spatula oil trail blaze — spreads speck → speck from the tap.
@@ -506,6 +508,11 @@ var _oil_fire_spread_cool: float = 0.0
 const OIL_EDGE_IGNITE_RADIUS := 0.28 ## Tip must land near a puddle (forgiving)
 const OIL_FIRE_SPREAD_RADIUS := 0.155 ## Neighbor speck catch distance
 const OIL_FIRE_SPREAD_SEC := 0.24 ## Slower hop along the trail
+## Flame spawn samples along the oil polyline (not a fill box).
+const FIRE_PATH_SPACING := 0.028 ## meters between spline samples
+const FIRE_PATH_LINK_MAX := 0.195 ## don't bridge gaps wider than spread
+const FIRE_PATH_MAX_POINTS := 220
+const FIRE_PATH_JITTER := 0.007 ## tiny sideways scatter on the path
 var _spatula_sparks: Array = [] ## short-lived edge-spark FX
 ## Fire extinguisher — hang-mounted left of the tools; hold LMB to carry.
 var ext_held: bool = false
@@ -13305,44 +13312,166 @@ func _oil_fire_bounds() -> Dictionary:
 	}
 
 
+func _collect_burning_oil_anchors() -> Array:
+	## Lit grease puddles in pour order (array index) — that IS the oil path.
+	var anchors: Array = []
+	if _oil_fire_trail_mode:
+		for i in oil_slicks.size():
+			var item: Dictionary = oil_slicks[i]
+			if not bool(item.get("on_fire", false)):
+				continue
+			var m = item.get("mesh")
+			if m == null or not is_instance_valid(m):
+				continue
+			anchors.append({
+				"pos": Vector3(m.position.x, 0.0, m.position.z),
+				"rad": float(item.get("radius", 0.04)),
+				"idx": i,
+			})
+	else:
+		var zone := _fire_zone_dict()
+		if zone.is_empty():
+			zone = _pick_fire_start_zone()
+			fire_zone_id = str(zone.get("id", "full"))
+		var x0 := float(zone.get("x0", GRILL_CENTER_X - 0.3))
+		var x1 := float(zone.get("x1", GRILL_CENTER_X + 0.3))
+		for i in oil_slicks.size():
+			var item2: Dictionary = oil_slicks[i]
+			var m2 = item2.get("mesh")
+			if m2 == null or not is_instance_valid(m2):
+				continue
+			var p2: Vector3 = m2.position
+			if p2.x < x0 - 0.02 or p2.x > x1 + 0.02:
+				continue
+			anchors.append({
+				"pos": Vector3(p2.x, 0.0, p2.z),
+				"rad": float(item2.get("radius", 0.04)),
+				"idx": i,
+			})
+	anchors.sort_custom(func(a, b): return int(a["idx"]) < int(b["idx"]))
+	return anchors
+
+
+func _append_fire_path_point(out: PackedVector3Array, p: Vector3, jitter: bool = true) -> void:
+	if jitter and FIRE_PATH_JITTER > 0.0:
+		var jx := randf_range(-FIRE_PATH_JITTER, FIRE_PATH_JITTER)
+		var jz := randf_range(-FIRE_PATH_JITTER, FIRE_PATH_JITTER)
+		out.append(Vector3(p.x + jx, 0.0, p.z + jz))
+	else:
+		out.append(Vector3(p.x, 0.0, p.z))
+
+
+func _build_oil_fire_path_points() -> PackedVector3Array:
+	## Densify the oil polyline into emission samples — flames follow the grease.
+	var anchors := _collect_burning_oil_anchors()
+	var out := PackedVector3Array()
+	if anchors.is_empty():
+		return out
+	var prev_pos: Vector3 = anchors[0]["pos"]
+	for i in anchors.size():
+		var a: Dictionary = anchors[i]
+		var pos: Vector3 = a["pos"]
+		var rad: float = maxf(0.02, float(a["rad"]))
+		if i > 0:
+			var gap := Vector2(pos.x - prev_pos.x, pos.z - prev_pos.z).length()
+			## Only spline along connected trail segments — never bridge empty steel.
+			if gap > 0.012 and gap <= FIRE_PATH_LINK_MAX:
+				var steps := maxi(1, int(floor(gap / FIRE_PATH_SPACING)))
+				var tang := Vector2(pos.x - prev_pos.x, pos.z - prev_pos.z).normalized()
+				var perp := Vector2(-tang.y, tang.x)
+				for s in range(1, steps):
+					var u := float(s) / float(steps)
+					var mid := prev_pos.lerp(pos, u)
+					## Slight width so a fat puddle isn't a single-pixel wire of fire.
+					var side := perp * randf_range(-rad * 0.35, rad * 0.35)
+					_append_fire_path_point(out, mid + Vector3(side.x, 0.0, side.y), false)
+		## Puddle body: center + a couple rim samples.
+		_append_fire_path_point(out, pos, true)
+		if rad > 0.03:
+			var ang0 := randf() * TAU
+			for k in 2:
+				var ang := ang0 + float(k) * (TAU * 0.5)
+				var rim := Vector3(cos(ang) * rad * 0.45, 0.0, sin(ang) * rad * 0.45)
+				_append_fire_path_point(out, pos + rim, false)
+		prev_pos = pos
+	## Cap / downsample so the emission texture stays small.
+	if out.size() > FIRE_PATH_MAX_POINTS:
+		var trimmed := PackedVector3Array()
+		var step := float(out.size()) / float(FIRE_PATH_MAX_POINTS)
+		var t := 0.0
+		while trimmed.size() < FIRE_PATH_MAX_POINTS and int(t) < out.size():
+			trimmed.append(out[int(t)])
+			t += step
+		out = trimmed
+	return out
+
+
+func _make_fire_emission_point_texture(points: PackedVector3Array, into: ImageTexture) -> ImageTexture:
+	## Godot samples emission positions from an RGBF image (xyz per pixel).
+	var n := maxi(1, points.size())
+	var img := Image.create(n, 1, false, Image.FORMAT_RGBF)
+	if points.is_empty():
+		img.set_pixel(0, 0, Color(0, 0, 0))
+	else:
+		for i in points.size():
+			var p: Vector3 = points[i]
+			img.set_pixel(i, 0, Color(p.x, p.y, p.z))
+	## Recreate when length changes — set_image alone won't resize the GPU texture.
+	if into == null or into.get_width() != n or into.get_height() != 1:
+		return ImageTexture.create_from_image(img)
+	into.set_image(img)
+	return into
+
+
+func _apply_fire_emission_points(sys: GPUParticles3D, tex: ImageTexture, point_count: int, amount: int, spread_deg: float) -> void:
+	if sys == null or not is_instance_valid(sys):
+		return
+	var pmat := sys.process_material as ParticleProcessMaterial
+	if pmat == null:
+		return
+	var n := maxi(1, point_count)
+	sys.amount = maxi(1, amount)
+	if tex == null or point_count <= 0:
+		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		pmat.emission_box_extents = Vector3(FIRE_EMIT_MIN_HALF, 0.002, FIRE_EMIT_MIN_HALF)
+		pmat.spread = spread_deg
+		return
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_POINTS
+	pmat.emission_point_texture = tex
+	pmat.emission_point_count = n
+	pmat.spread = spread_deg
+
+
 func _sync_fire_to_oil_area() -> void:
+	## Spawn flame triangles on the oil path (point samples), not inside a random box.
 	if fire_root == null or not is_instance_valid(fire_root):
 		return
-	var b := _oil_fire_bounds()
-	var center: Vector3 = b["center"]
-	var half: Vector3 = b["half"]
-	var lit := maxi(1, int(b.get("lit", 1)))
-	## Fire lives in grill_root local space — slick positions are already local.
-	fire_root.position = center
-	## Particle count scales with how much grease is actually lit.
-	var flame_n := clampi(7 + lit * 2, 7, 40)
-	var red_n := clampi(4 + lit, 4, 22)
-	var ember_n := clampi(3 + lit / 2, 3, 12)
-	var smoke_n := clampi(5 + lit, 5, 20)
-	if fire_particles != null and is_instance_valid(fire_particles):
-		fire_particles.amount = flame_n
-	if fire_particles_red != null and is_instance_valid(fire_particles_red):
-		fire_particles_red.amount = red_n
-	if fire_embers != null and is_instance_valid(fire_embers):
-		fire_embers.amount = ember_n
-	if fire_smoke != null and is_instance_valid(fire_smoke):
-		fire_smoke.amount = smoke_n
-	for sys in [fire_particles, fire_particles_red, fire_embers]:
-		if sys == null or not is_instance_valid(sys):
-			continue
-		var pmat := sys.process_material as ParticleProcessMaterial
-		if pmat == null:
-			continue
-		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-		## Emit on the grease footprint only (+ tiny jitter).
-		pmat.emission_box_extents = Vector3(half.x * 1.05, 0.002, half.z * 1.05)
-		pmat.spread = 7.0
-	if fire_smoke != null and is_instance_valid(fire_smoke):
-		var sm := fire_smoke.process_material as ParticleProcessMaterial
-		if sm != null:
-			sm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-			sm.emission_box_extents = Vector3(half.x * 0.7, 0.003, half.z * 0.7)
-			sm.spread = 10.0
+	## Root stays at grill origin so emission xyz match oil mesh XZ directly.
+	fire_root.position = Vector3(0.0, GRILL_SURFACE_Y + 0.008, 0.0)
+	var path := _build_oil_fire_path_points()
+	var lit := path.size()
+	if lit <= 0:
+		## Fallback: tiny ember at bounds center if oil just vanished mid-frame.
+		var b := _oil_fire_bounds()
+		var c: Vector3 = b["center"]
+		path = PackedVector3Array([Vector3(c.x, 0.0, c.z)])
+		lit = 1
+	_fire_emit_tex = _make_fire_emission_point_texture(path, _fire_emit_tex)
+	## Density follows path length — short oil line = few flames; long trail = more.
+	var flame_n := clampi(6 + lit / 3, 8, 48)
+	var red_n := clampi(3 + lit / 5, 4, 24)
+	var ember_n := clampi(2 + lit / 8, 3, 14)
+	var smoke_n := clampi(4 + lit / 6, 5, 22)
+	_apply_fire_emission_points(fire_particles, _fire_emit_tex, lit, flame_n, 5.0)
+	_apply_fire_emission_points(fire_particles_red, _fire_emit_tex, lit, red_n, 6.0)
+	_apply_fire_emission_points(fire_embers, _fire_emit_tex, lit, ember_n, 10.0)
+	## Smoke lifts from the same trail (thinned samples, separate texture).
+	var smoke_pts := PackedVector3Array()
+	var stride := maxi(1, int(ceil(float(lit) / 40.0)))
+	for i in range(0, lit, stride):
+		smoke_pts.append(path[i])
+	_fire_smoke_emit_tex = _make_fire_emission_point_texture(smoke_pts, _fire_smoke_emit_tex)
+	_apply_fire_emission_points(fire_smoke, _fire_smoke_emit_tex, smoke_pts.size(), smoke_n, 9.0)
 
 
 func _set_fire_fx_emitting(on: bool) -> void:
@@ -13360,10 +13489,12 @@ func _ensure_grill_fire_fx() -> void:
 	fire_particles_red = null
 	fire_embers = null
 	fire_smoke = null
+	_fire_emit_tex = null
+	_fire_smoke_emit_tex = null
 	fire_root = Node3D.new()
 	fire_root.name = "GreaseFire"
-	## Sit on the steel — no real lights; triangles carry the blaze.
-	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.008, GRILL_SURFACE_Z)
+	## Origin-aligned with grill local space so path emission xyz = oil XZ.
+	fire_root.position = Vector3(0.0, GRILL_SURFACE_Y + 0.008, 0.0)
 	grill_root.add_child(fire_root)
 
 	## Compact flame triangles — amount scales up in _sync_fire_to_oil_area.
@@ -13423,15 +13554,16 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	## Above grill shine (2) / heat glow (6) / oil smoke (12).
 	fx.sorting_offset = 9.0
 	var pmat := ParticleProcessMaterial.new()
+	## Default box until _sync_fire_to_oil_area installs the oil-path point texture.
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.04, 0.002, 0.04)
+	pmat.emission_box_extents = Vector3(0.03, 0.002, 0.03)
 	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 6.0 if not redder else 8.0
+	pmat.spread = 4.0 if not redder else 5.0
 	pmat.initial_velocity_min = vel_min
 	pmat.initial_velocity_max = vel_max
-	pmat.gravity = Vector3(0, 1.5, 0)
-	pmat.damping_min = 0.7
-	pmat.damping_max = 1.5
+	pmat.gravity = Vector3(0, 1.35, 0)
+	pmat.damping_min = 0.9
+	pmat.damping_max = 1.8
 	pmat.scale_min = 0.55 if not redder else 0.5
 	pmat.scale_max = 0.95 if not redder else 0.88
 	pmat.color = Color(1.0, 0.22, 0.05, 1.0) if redder else Color(1.0, 0.42, 0.08, 1.0)
@@ -14071,6 +14203,8 @@ func _clear_grill_fire() -> void:
 	fire_particles_red = null
 	fire_embers = null
 	fire_smoke = null
+	_fire_emit_tex = null
+	_fire_smoke_emit_tex = null
 
 
 func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:
