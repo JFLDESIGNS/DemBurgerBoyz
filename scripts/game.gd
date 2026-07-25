@@ -591,6 +591,11 @@ const BRUSH_PATTY_PUSH_MAX := 0.072
 const SPATULA_PATTY_PUSH_RADIUS := 0.22
 const SPATULA_PATTY_PUSH_SCALE := 1.45
 const SPATULA_PATTY_PUSH_MAX := 0.09
+## Sideways blade shove — wider / stronger so tilted slides feel useful.
+const SPATULA_TILT_PUSH_RADIUS_MUL := 1.4
+const SPATULA_TILT_PUSH_SCALE_MUL := 1.7
+const SPATULA_TILT_PUSH_MAX_MUL := 1.85
+const SPATULA_EDGE_PUSH_EXTRA_MUL := 1.2 ## ±90° gets a little more
 ## Click-drag to slide patties on the flat-top (legacy / non-spatula path).
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
@@ -853,6 +858,7 @@ var grill_roomba_heading: float = 0.0
 var grill_roomba_turn_goal: float = 0.0
 var grill_roomba_held: bool = false
 var grill_roomba_hold_wobble: float = 0.0
+var grill_roomba_sad_hold_t: float = 0.0 ## Pickup sad face timer → neutral
 var grill_roomba_bump_t: float = 0.0
 var grill_roomba_back_t: float = 0.0
 var grill_roomba_reaim_t: float = 0.0
@@ -910,6 +916,10 @@ const ROOMBA_BOUNCE_BACK_SEC := 0.32
 const ROOMBA_SYNC_INTERVAL := 0.24
 const ROOMBA_UNSTUCK_SEC := 0.48
 const ROOMBA_PATTY_PUSH := 0.028
+## Tool / burger bumps — tiny nudge then stop (not a long shove).
+const ROOMBA_BUMP_PUSH_MAX := 0.011
+const ROOMBA_BUMP_MOVE_MUL := 0.22
+const ROOMBA_PICKUP_SAD_SEC := 0.7
 const ROOMBA_SPATULA_REACH := 0.175
 const ROOMBA_SPATULA_CONTACT_REACH := 0.145
 const ROOMBA_SPATULA_CARRY_REACH := 0.215
@@ -6148,6 +6158,11 @@ func _try_shove_patty(index: int, patty: Area3D, push_dir: Vector2, push_len: fl
 
 
 func _try_push_roomba_from_patty(patty_pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	## Burger / spatula bumps — short tap, not a long slide across the steel.
+	_nudge_roomba_from_xz(Vector2(patty_pos.x, patty_pos.z), move_xz, moved, ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.98)
+
+
+func _nudge_roomba_from_xz(from_xz: Vector2, move_xz: Vector2, moved: float, touch_r: float) -> void:
 	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
 		return
 	if not _owns_grill_roomba() or grill_roomba_held:
@@ -6155,26 +6170,27 @@ func _try_push_roomba_from_patty(patty_pos: Vector3, move_xz: Vector2, moved: fl
 	if moved <= 0.0001:
 		return
 	var roomba_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
-	var patty_xz := Vector2(patty_pos.x, patty_pos.z)
-	var d := roomba_xz.distance_to(patty_xz)
-	var touch_r := ROOMBA_RADIUS + PATTY_FIT_RADIUS * 0.98
+	var d := roomba_xz.distance_to(from_xz)
 	if d > touch_r:
 		return
-	var dir := move_xz.normalized() if move_xz.length_squared() > 0.000001 else (roomba_xz - patty_xz).normalized()
+	var dir := move_xz.normalized() if move_xz.length_squared() > 0.000001 else (roomba_xz - from_xz).normalized()
 	if dir.length_squared() <= 0.000001:
 		dir = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading))
-	var push := maxf(moved * 0.9, touch_r - d + 0.004)
+	## Tiny bump + soft separation if overlapping — then stop.
+	var overlap := maxf(0.0, touch_r - d)
+	var push := clampf(moved * ROOMBA_BUMP_MOVE_MUL + overlap * 0.12, 0.0, ROOMBA_BUMP_PUSH_MAX)
+	if push <= 0.0005:
+		return
 	var b := _roomba_place_bounds()
 	var next_xz := Vector2(
 		clampf(roomba_xz.x + dir.x * push, b.position.x, b.end.x),
 		clampf(roomba_xz.y + dir.y * push, b.position.y, b.end.y)
 	)
 	grill_roomba_root.global_position = Vector3(next_xz.x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, next_xz.y)
-	grill_roomba_heading = dir.angle()
-	grill_roomba_turn_goal = grill_roomba_heading
-	grill_roomba_reaim_t = 0.24
+	## Don't spin him to face the shove — just a light reaim pause.
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_reaim_t = maxf(grill_roomba_reaim_t, 0.12)
 	grill_roomba_stuck_t = 0.0
-	grill_roomba_root.rotation_degrees.y = _roomba_visual_yaw_degrees()
 
 
 func _try_push_ready_fries_from_xz(source: Vector3, move_xz: Vector2, moved: float) -> void:
@@ -8468,6 +8484,8 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	## Flat blade: light hop + reset crust dwell. Tilted: shove burgers aside.
 	if moved >= SPATULA_SCRAPE_MIN_MOVE:
 		_spatula_nudge_patties(tip_pos, move_xz, moved)
+		## Spatula tip can tap the bot a little — not shove him across the grill.
+		_nudge_roomba_from_xz(Vector2(tip_pos.x, tip_pos.z), move_xz, moved, ROOMBA_RADIUS + 0.06)
 	## Scrape bed + tings whenever LMB-dragging the spatula on the steel; louder on debris.
 	var moving_scrape := moved >= SPATULA_SCRAPE_MIN_MOVE and dragging_patty == null
 	if game_audio and dragging_patty == null:
@@ -8947,6 +8965,7 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_heading = deg_to_rad(-35.0)
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_held = false
+	grill_roomba_sad_hold_t = 0.0
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
 	grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * ROOMBA_SPEED
@@ -9006,7 +9025,9 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	grill_roomba_root.visible = true
 	if grill_roomba_held:
-		_set_roomba_face("sad")
+		## Sad briefly on pickup, then neutral while still carried.
+		grill_roomba_sad_hold_t = maxf(0.0, grill_roomba_sad_hold_t - delta)
+		_set_roomba_face("sad" if grill_roomba_sad_hold_t > 0.0 else "neutral")
 		if game_audio and game_audio.has_method("set_roomba_drive"):
 			game_audio.set_roomba_drive(false)
 		_update_roomba_spatula_hinge(false, delta)
@@ -9274,6 +9295,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	grill_roomba_held = true
 	grill_roomba_ledge_phase = "" ## Picking it up rescues the ledge gag.
 	grill_roomba_ledge_wobble = 0.0
+	grill_roomba_sad_hold_t = ROOMBA_PICKUP_SAD_SEC
 	_set_roomba_face("sad")
 	grill_roomba_hold_wobble = randf() * TAU
 	grill_roomba_vel = Vector2.ZERO
@@ -9290,6 +9312,7 @@ func _release_grill_roomba() -> void:
 	grill_roomba_held = false
 	grill_roomba_ledge_phase = ""
 	grill_roomba_ledge_wobble = 0.0
+	grill_roomba_sad_hold_t = 0.0
 	_set_roomba_face("neutral")
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
@@ -16746,11 +16769,15 @@ func _spatula_nudge_patties(tip_pos: Vector3, move_xz: Vector2, moved: float) ->
 		_spatula_flat_pop_patties(tip_pos)
 		_try_attach_cheese_strings_near_tip(tip_pos)
 		return
-	_nudge_grill_patties(
-		tip_pos, move_xz, moved,
-		SPATULA_PATTY_PUSH_RADIUS, SPATULA_PATTY_PUSH_SCALE, SPATULA_PATTY_PUSH_MAX,
-		0.22
-	)
+	## Sideways / edge blade — wider catch + stronger slide.
+	var r := SPATULA_PATTY_PUSH_RADIUS * SPATULA_TILT_PUSH_RADIUS_MUL
+	var sc := SPATULA_PATTY_PUSH_SCALE * SPATULA_TILT_PUSH_SCALE_MUL
+	var pmax := SPATULA_PATTY_PUSH_MAX * SPATULA_TILT_PUSH_MAX_MUL
+	if absf(_spatula_user_roll) >= HAND_SPATULA_ROLL_MAX - 0.5:
+		r *= SPATULA_EDGE_PUSH_EXTRA_MUL
+		sc *= SPATULA_EDGE_PUSH_EXTRA_MUL
+		pmax *= SPATULA_EDGE_PUSH_EXTRA_MUL
+	_nudge_grill_patties(tip_pos, move_xz, moved, r, sc, pmax, 0.28)
 	_try_attach_cheese_strings_near_tip(tip_pos)
 
 

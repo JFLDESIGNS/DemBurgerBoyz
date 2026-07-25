@@ -2200,8 +2200,12 @@ func _ensure_season_root() -> void:
 		return
 	_season_root = Node3D.new()
 	_season_root.name = "Seasoning"
-	_season_root.position = Vector3(0, 0.026, 0)
-	add_child(_season_root)
+	## Mesh-local on the meat top so PATTY_SIZE_SCALE keeps flecks on the beef.
+	_season_root.position = Vector3(0.0, 0.0235, 0.0)
+	if _mesh != null and is_instance_valid(_mesh):
+		_mesh.add_child(_season_root)
+	else:
+		add_child(_season_root)
 
 
 func _spawn_season_fleck() -> void:
@@ -2214,8 +2218,9 @@ func _spawn_season_fleck() -> void:
 	fm.size = Vector3(s * (0.5 + randf()), 0.0018 + randf() * 0.0014, s * (0.4 + randf() * 0.8))
 	fleck.mesh = fm
 	var ang := randf() * TAU
-	var rad := sqrt(randf()) * 0.095
-	fleck.position = Vector3(cos(ang) * rad, 0.001 + randf() * 0.002, sin(ang) * rad)
+	## Stay inside the scaled meat disc (mesh-local radius ~0.105).
+	var rad := sqrt(randf()) * 0.088
+	fleck.position = Vector3(cos(ang) * rad, 0.0008 + randf() * 0.0016, sin(ang) * rad)
 	fleck.rotation_degrees = Vector3(randf() * 25.0 - 12.0, rad_to_deg(ang) + randf() * 40.0, randf() * 30.0 - 15.0)
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
