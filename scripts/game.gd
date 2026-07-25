@@ -290,9 +290,12 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 const HAND_SPATULA_PULL_FLIP_DY := 62.0 ## Min screen-px down (was 96 — shorter pull to flip)
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
-const SPATULA_JUGGLE_DUR := 1.05
+const SPATULA_JUGGLE_DUR := 1.15
 const SPATULA_JUGGLE_PEAK := 0.64 ## clear rise so the fall reads (not a mid-air teleport)
 const SPATULA_JUGGLE_APEX_T := 0.38 ## earlier apex → longer visible descent
+## Flip window: start on the rise, finish on the descent (not bunched at the apex).
+const SPATULA_JUGGLE_FLIP_START_T := 0.05
+const SPATULA_JUGGLE_FLIP_END_T := 0.86
 const SPATULA_JUGGLE_CATCH_R := 0.145 ## tip↔burger XZ catch radius
 const SPATULA_JUGGLE_CATCH_Y := 0.18 ## vertical catch window
 const SPATULA_JUGGLE_CATCH_START_T := 0.18 ## don't instant re-catch on launch
@@ -8800,12 +8803,30 @@ func _juggle_height_mul(t: float) -> float:
 
 
 func _juggle_flip_progress(t: float) -> float:
-	## Exact 0→1 (=720°) with slow-fast-slow so the spin isn't constant-speed.
+	## Exact 0→1 (=720°). First flip on the rise, second on the descent.
 	t = clampf(t, 0.0, 1.0)
-	## Quintic ease-in-out — soft leave, whip mid-air, settle into the start pose.
-	if t < 0.5:
-		return 16.0 * t * t * t * t * t
-	return 1.0 - pow(-2.0 * t + 2.0, 5.0) * 0.5
+	var t0 := SPATULA_JUGGLE_FLIP_START_T
+	var t1 := SPATULA_JUGGLE_FLIP_END_T
+	if t <= t0:
+		return 0.0
+	if t >= t1:
+		return 1.0
+	var u := (t - t0) / maxf(t1 - t0, 0.001)
+	## Apex splits the two flips — not a mid-arc whip of both at once.
+	var apex_u := clampf(
+		(SPATULA_JUGGLE_APEX_T - t0) / maxf(t1 - t0, 0.001),
+		0.28,
+		0.52
+	)
+	if u <= apex_u:
+		## Rise: first 360° — ease-out so spin starts right off the blade.
+		var r := u / maxf(apex_u, 0.001)
+		var eased := 1.0 - (1.0 - r) * (1.0 - r)
+		return 0.5 * eased
+	## Descent: second 360° — ease-in so it settles before landing.
+	var d := (u - apex_u) / maxf(1.0 - apex_u, 0.001)
+	var eased2 := d * d
+	return 0.5 + 0.5 * eased2
 
 
 func _update_spatula_juggle(delta: float) -> void:
