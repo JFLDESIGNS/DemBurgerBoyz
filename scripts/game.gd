@@ -718,7 +718,7 @@ const BUILD_DROP_GRILL_PAD_PX := 110.0
 const SPATULA_HOVER_Y := 0.12
 const SPATULA_HOVER_BOB := 0.012
 ## −Z toward the cook — seats the burger on the blade instead of the tip (~6").
-const SPATULA_CARRY_COOK_OFFSET := 0.1528
+const SPATULA_CARRY_COOK_OFFSET := 0.1274 ## was 0.1528; burger +1" toward tip / away from handle
 ## Pitch held burger top toward the cook / camera.
 const SPATULA_CARRY_PITCH := -15.0
 
@@ -5470,11 +5470,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		if _spatula_fx_t >= 0.0:
 			_tick_spatula_flip_fx(delta)
 		return
-	if carrying and not animating and not dragging and not grill_hold:
-		## Tip stays at the cursor aim; burger sits closer to the cook on the blade.
-		tip_target = spatula_patty.global_position
-		tip_target.y = spatula_patty.global_position.y - 0.028
-		tip_target.z += SPATULA_CARRY_COOK_OFFSET
+	## Carrying: tip follows the cursor (same as empty). Burger seats on the blade after pose.
 	var tip := sin(Time.get_ticks_msec() * 0.012) * 0.8
 	var rot := HAND_SPATULA_CARRY_ROT if carrying else HAND_SPATULA_EMPTY_ROT
 	var pitch := rot.x + tip
@@ -5608,6 +5604,30 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var pivot_basis := Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
 	var pivot_world := pivot_basis * pivot_local
 	hand_spatula_root.global_position = tip_target - pivot_world
+	## Scooped burger rides the blade — same yaw/roll as the spatula (no visual offset).
+	if carrying and not dragging:
+		_seat_held_patty_on_spatula()
+
+
+func _seat_held_patty_on_spatula() -> void:
+	## Lock scooped meat to spatula local seat so side-of-grill yaw stays flush.
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return
+	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
+		return
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
+		return
+	if flicking_patty == spatula_patty or spatula_juggle_patty != null:
+		return
+	var bob := sin(Time.get_ticks_msec() * 0.007) * SPATULA_HOVER_BOB
+	## Tip is +Z; seat back toward the handle by the carry offset (already −1" vs prior).
+	var seat_local := Vector3(
+		0.0,
+		HAND_SPATULA_TIP_OFFSET.y + 0.028 + bob,
+		HAND_SPATULA_TIP_OFFSET.z - SPATULA_CARRY_COOK_OFFSET
+	)
+	spatula_patty.global_position = hand_spatula_root.to_global(seat_local)
+	spatula_patty.global_basis = hand_spatula_root.global_basis
 
 
 func _refresh_grill_piano_sections() -> void:
@@ -8488,6 +8508,7 @@ func _pickup_patty(patty: Area3D) -> void:
 
 
 func _update_held_spatula_patty(delta: float = 0.016) -> void:
+	## Track flick velocity only — world pose is seated on the spatula blade after it updates.
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		spatula_patty = null
 		spatula_owner_id = 0
@@ -8503,27 +8524,6 @@ func _update_held_spatula_patty(delta: float = 0.016) -> void:
 	spatula_vel_screen = spatula_vel_screen.lerp(instant, clampf(dt * 16.0, 0.0, 1.0))
 	spatula_carry_travel += mouse.distance_to(spatula_last_mouse)
 	spatula_last_mouse = mouse
-	var hit := _grill_plane_from_screen(mouse)
-	if hit == Vector3.ZERO and camera != null:
-		## Off-plane fallback: keep it in front of the camera.
-		var from := camera.project_ray_origin(mouse)
-		var dir := camera.project_ray_normal(mouse)
-		hit = from + dir * 1.35
-		hit.y = maxf(hit.y, GRILL_SURFACE_Y + SPATULA_HOVER_Y)
-	if hit == Vector3.ZERO:
-		return
-	## Soft clamp so it stays near the flat-top / HOLD strip while aiming.
-	var pad := 0.35
-	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 - pad, GRILL_CENTER_X + GRILL_WIDTH * 0.5 + pad)
-	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 - pad, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 + pad)
-	var bob := sin(Time.get_ticks_msec() * 0.007) * SPATULA_HOVER_BOB
-	hit.y = GRILL_SURFACE_Y + PATTY_SIT_Y + SPATULA_HOVER_Y + bob
-	## Sit closer to the cook so the burger rests on the blade, not the tip.
-	hit.z -= SPATULA_CARRY_COOK_OFFSET
-	spatula_patty.global_position = hit
-	## Pitch top toward us; slight roll toward move direction so it feels carried.
-	var tip := clampf(spatula_vel_screen.x * 0.008, -18.0, 18.0)
-	spatula_patty.rotation_degrees = Vector3(SPATULA_CARRY_PITCH, 0.0, tip)
 
 
 func _handle_spatula_click(screen_pos: Vector2) -> bool:
