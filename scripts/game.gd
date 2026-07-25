@@ -7907,8 +7907,8 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 		_smear_oil_along(Vector3(target.x, GRILL_SURFACE_Y + OIL_SIT_Y, target.z), move_vec, moved)
 		if game_audio and randf() < 0.55:
 			if game_audio.has_method("play_smash_sizzle") and randf() < 0.35:
-				## Wet juice hiss accents while sliding through grease (half smash volume).
-				game_audio.play_smash_sizzle(0.5)
+				## Wet juice hiss accents while sliding through grease (−24% vs half smash).
+				game_audio.play_smash_sizzle(0.38)
 			elif randf() < 0.5:
 				game_audio.play_grease_pop()
 			if randf() < 0.3:

@@ -88,6 +88,8 @@ var _oil_slide_player: AudioStreamPlayer
 var _oil_slide_gain: float = 0.0
 var _oil_slide_target: float = 0.0
 var _oil_slide_pop_cd: float = 0.0
+## 24% quieter burger-slide stack (metal + oil bed + accents).
+const BURGER_SLIDE_VOL_MUL := 0.76
 var _roomba_drive_player: AudioStreamPlayer
 var _roomba_drive_gain: float = 0.0
 var _roomba_drive_target: float = 0.0
@@ -274,6 +276,9 @@ func _process(delta: float) -> void:
 			var slide_mul := 1.0
 			if _scrape_move_on:
 				slide_mul = 4.0 if _scrape_debris_boost else 2.0
+			elif _oil_slide_gain > 0.01:
+				## Burger drag layers metal + oil — keep the scrape bed quieter too.
+				slide_mul = BURGER_SLIDE_VOL_MUL
 			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.38 * slide_mul, 0.02, 1.0))
 			_slide_player.pitch_scale = 1.15 + _slide_gain * 0.2
 			if not _slide_player.playing:
@@ -282,12 +287,12 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
-	## Burger spatula-slide: wet oil squish bed + hiss pops (half prior volume).
+	## Burger spatula-slide: wet oil squish bed + hiss pops (−24% vs prior).
 	var oil_fade := 8.0 if _oil_slide_target > _oil_slide_gain else 4.0
 	_oil_slide_gain = move_toward(_oil_slide_gain, _oil_slide_target, delta * oil_fade)
 	if _oil_slide_player:
 		if _oil_slide_gain > 0.01:
-			_oil_slide_player.volume_db = linear_to_db(clampf(_oil_slide_gain * 0.31, 0.02, 0.5))
+			_oil_slide_player.volume_db = linear_to_db(clampf(_oil_slide_gain * 0.31 * BURGER_SLIDE_VOL_MUL, 0.02, 0.38))
 			_oil_slide_player.pitch_scale = 0.92 + _oil_slide_gain * 0.18
 			if not _oil_slide_player.playing:
 				_oil_slide_player.play()
@@ -300,7 +305,7 @@ func _process(delta: float) -> void:
 						"slide_squish_hiss_%d" % (randi() % 4),
 						_make_smash_hiss,
 						0.88 + randf() * 0.2,
-						0.21 + _oil_slide_gain * 0.175
+						(0.21 + _oil_slide_gain * 0.175) * BURGER_SLIDE_VOL_MUL
 					)
 				_oil_slide_pop_cd = lerpf(0.14, 0.055, clampf(_oil_slide_gain, 0.0, 1.0)) + randf() * 0.03
 		elif _oil_slide_player.playing:
