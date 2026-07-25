@@ -647,15 +647,19 @@ const GLOCK_REAR_SIGHT_R := 0.0048
 const BRUSH_PATTY_PUSH_RADIUS := 0.38
 const BRUSH_PATTY_PUSH_SCALE := 1.15
 const BRUSH_PATTY_PUSH_MAX := 0.072
-## Spatula tip shoves burgers while LMB-held on the grill (never attaches / drags).
-const SPATULA_PATTY_PUSH_RADIUS := 0.22
-const SPATULA_PATTY_PUSH_SCALE := 1.45
-const SPATULA_PATTY_PUSH_MAX := 0.09
-## Sideways blade shove — wider / stronger so tilted slides feel useful.
-const SPATULA_TILT_PUSH_RADIUS_MUL := 1.4
-const SPATULA_TILT_PUSH_SCALE_MUL := 1.7
-const SPATULA_TILT_PUSH_MAX_MUL := 1.85
-const SPATULA_EDGE_PUSH_EXTRA_MUL := 1.2 ## ±90° gets a little more
+## Spatula blade samples shove burgers (not a fat tip magnet).
+const SPATULA_BLADE_HALF_W := 0.052 ## local ±X across the blade face
+const SPATULA_PATTY_PUSH_RADIUS := 0.078 ## contact distance to nearest blade sample
+const SPATULA_PATTY_PUSH_SCALE := 2.35 ## snappy response once overlapping
+const SPATULA_PATTY_PUSH_MAX := 0.12
+## Tilted blade — slightly wider / stronger, still sample-based.
+const SPATULA_TILT_PUSH_RADIUS_MUL := 1.18
+const SPATULA_TILT_PUSH_SCALE_MUL := 1.35
+const SPATULA_TILT_PUSH_MAX_MUL := 1.45
+const SPATULA_EDGE_PUSH_EXTRA_MUL := 1.12 ## ±90° gets a little more
+const SPATULA_CUP_PUSH_RADIUS := 0.095
+const SPATULA_CUP_PUSH_SCALE := 2.1
+const SPATULA_CUP_PUSH_MAX := 0.11
 ## Click-drag to slide patties on the flat-top (legacy / non-spatula path).
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
@@ -1213,7 +1217,7 @@ var options_hidden_tree_select: OptionButton = null
 var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
 const TREE_XFORM_CFG_SECTION := "tree_xform"
 ## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
-var icecream_cam_right_ft: float = 1.5
+var icecream_cam_right_ft: float = 2.1667 ## was 1.5; +8" camera-right
 const FT_TO_M := 0.3048
 const ICECREAM_POS_CFG_SECTION := "icecream_station"
 var options_hidden_icecream_pos_slider: HSlider = null
@@ -9020,7 +9024,7 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	## Liquids: very tight tip hit (brush keeps the wider scrape).
 	if moved >= SPATULA_SCRAPE_MIN_MOVE and _scrape_grill_liquids(tip_pos, move_xz, moved, 0.22):
 		scraping = true
-	## Flat blade: light hop + reset crust dwell. Tilted: shove burgers aside.
+	## Blade samples shove patties / cups / fries; flat still gets a light hop.
 	if moved >= SPATULA_SCRAPE_MIN_MOVE:
 		_spatula_nudge_patties(tip_pos, move_xz, moved)
 		## Spatula tip can tap the bot a little — not shove him across the grill.
@@ -17861,22 +17865,66 @@ func _mp_apply_soda_char_clear(x: float, z: float) -> void:
 	soda_char_spots.remove_at(best)
 
 
+func _spatula_blade_sample_xz() -> Array:
+	## World XZ samples across the metal blade — this is the real push collider.
+	var samples: Array = []
+	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
+		return samples
+	var basis := hand_spatula_root.global_transform.basis
+	var tip := hand_spatula_root.global_position + basis * HAND_SPATULA_TIP_OFFSET
+	var mid := hand_spatula_root.global_position + basis * HAND_SPATULA_MID_OFFSET
+	for ti in 4:
+		var t := float(ti) / 3.0
+		var along: Vector3 = tip.lerp(mid, t)
+		var half_w := SPATULA_BLADE_HALF_W * lerpf(1.0, 0.78, t)
+		for sx in [-1.0, -0.35, 0.35, 1.0]:
+			var p: Vector3 = along + basis * Vector3(sx * half_w, 0.0, 0.0)
+			samples.append(Vector2(p.x, p.z))
+	return samples
+
+
+func _nearest_spatula_blade_xz(world_xz: Vector2) -> Dictionary:
+	## {d, sample} — distance to closest blade sample.
+	var best_d := 1.0e9
+	var best_s := world_xz
+	var samples := _spatula_blade_sample_xz()
+	if samples.is_empty():
+		return {"d": best_d, "sample": best_s}
+	for s in samples:
+		var sv: Vector2 = s
+		var d := world_xz.distance_to(sv)
+		if d < best_d:
+			best_d = d
+			best_s = sv
+	return {"d": best_d, "sample": best_s}
+
+
 func _spatula_nudge_patties(tip_pos: Vector3, move_xz: Vector2, moved: float) -> void:
-	## Flat blade pops meat in place; angled blade shoves it around the steel.
+	## Flat blade still hops meat; shove always uses the blade samples (not a tip orb).
 	if absf(_spatula_user_roll) < HAND_SPATULA_ROLL_STEP * 0.5:
 		_spatula_flat_pop_patties(tip_pos)
-		_try_attach_cheese_strings_near_tip(tip_pos)
-		return
-	## Sideways / edge blade — wider catch + stronger slide.
-	var r := SPATULA_PATTY_PUSH_RADIUS * SPATULA_TILT_PUSH_RADIUS_MUL
-	var sc := SPATULA_PATTY_PUSH_SCALE * SPATULA_TILT_PUSH_SCALE_MUL
-	var pmax := SPATULA_PATTY_PUSH_MAX * SPATULA_TILT_PUSH_MAX_MUL
-	if absf(_spatula_user_roll) >= HAND_SPATULA_ROLL_MAX - 0.5:
-		r *= SPATULA_EDGE_PUSH_EXTRA_MUL
-		sc *= SPATULA_EDGE_PUSH_EXTRA_MUL
-		pmax *= SPATULA_EDGE_PUSH_EXTRA_MUL
+	var r := SPATULA_PATTY_PUSH_RADIUS
+	var sc := SPATULA_PATTY_PUSH_SCALE
+	var pmax := SPATULA_PATTY_PUSH_MAX
+	if absf(_spatula_user_roll) >= HAND_SPATULA_ROLL_STEP * 0.5:
+		r *= SPATULA_TILT_PUSH_RADIUS_MUL
+		sc *= SPATULA_TILT_PUSH_SCALE_MUL
+		pmax *= SPATULA_TILT_PUSH_MAX_MUL
+		if absf(_spatula_user_roll) >= HAND_SPATULA_ROLL_MAX - 0.5:
+			r *= SPATULA_EDGE_PUSH_EXTRA_MUL
+			sc *= SPATULA_EDGE_PUSH_EXTRA_MUL
+			pmax *= SPATULA_EDGE_PUSH_EXTRA_MUL
 	_nudge_grill_patties(tip_pos, move_xz, moved, r, sc, pmax, 0.28)
+	_spatula_nudge_loose_grill_props(tip_pos, move_xz, moved)
 	_try_attach_cheese_strings_near_tip(tip_pos)
+
+
+func _spatula_nudge_loose_grill_props(tip_pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	## Cups / fries on the steel slide from the same blade samples.
+	_try_push_ready_fries_from_spatula(move_xz, moved)
+	_try_push_parked_steel_cups_from_spatula(move_xz, moved)
+	_try_push_melting_cups_from_spatula(move_xz, moved)
+	_try_push_melting_icecream_from_spatula(move_xz, moved)
 
 
 func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
@@ -17893,8 +17941,11 @@ func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
 			continue
 		if bool(p.get("place_morphing")) and not bool(p.get("place_ball_waiting")):
 			continue
-		var d := Vector2(tip_pos.x - p.position.x, tip_pos.z - p.position.z).length()
-		var use_r := POP_R * (1.25 if _patty_is_flip_ready(p) else 1.0)
+		var hit := _nearest_spatula_blade_xz(Vector2(p.position.x, p.position.z))
+		var d: float = float(hit.get("d", 1.0e9))
+		if d > 1.0e8:
+			d = Vector2(tip_pos.x - p.position.x, tip_pos.z - p.position.z).length()
+		var use_r := POP_R * (1.12 if _patty_is_flip_ready(p) else 1.0)
 		if d > use_r:
 			continue
 		var last := int(p.get_meta("spatula_flat_pop_ms", 0))
@@ -17941,6 +17992,7 @@ func _nudge_grill_patties(
 	var max_x := maxf(bounds.end.x, warm.end.x)
 	var min_z := minf(bounds.position.y, warm.position.y)
 	var max_z := maxf(bounds.end.y, warm.end.y)
+	var blade := _spatula_blade_sample_xz()
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p == null or not is_instance_valid(p) or p.is_held:
@@ -17950,23 +18002,32 @@ func _nudge_grill_patties(
 		## Mid-squash only — waiting ice balls can be tip-pushed like patties.
 		if bool(p.get("place_morphing")) and not bool(p.get("place_ball_waiting")):
 			continue
-		## FLIP-ready meat gets a wider / stronger tip shove so it stays easy to move.
+		## FLIP-ready meat gets a slightly wider catch so it stays easy to move.
 		var flip_ready := _patty_is_flip_ready(p)
-		var use_r := radius * (1.35 if flip_ready else 1.0)
-		var d := Vector2(tool_pos.x - p.position.x, tool_pos.z - p.position.z).length()
+		var use_r := radius * (1.18 if flip_ready else 1.0)
+		var patty_xz := Vector2(p.position.x, p.position.z)
+		var hit := _nearest_spatula_blade_xz(patty_xz)
+		## Fallback to tip if spatula mesh samples aren't ready yet.
+		var d: float = float(hit.get("d", 1.0e9))
+		var sample: Vector2 = hit.get("sample", Vector2(tool_pos.x, tool_pos.z))
+		if blade.is_empty():
+			d = patty_xz.distance_to(Vector2(tool_pos.x, tool_pos.z))
+			sample = Vector2(tool_pos.x, tool_pos.z)
 		if d > use_r:
 			continue
+		## Tight falloff — only the overlapping blade edge shoves hard.
 		var falloff := 1.0 - d / use_r
-		falloff = 0.25 + falloff * falloff * 0.75
+		falloff = 0.45 + falloff * falloff * 0.55
 		if flip_ready:
-			falloff = minf(1.0, falloff * 1.25)
-		var side := Vector2(-dir.y, dir.x)
-		var away := Vector2(p.position.x - tool_pos.x, p.position.z - tool_pos.z)
+			falloff = minf(1.0, falloff * 1.15)
+		var away := patty_xz - sample
 		if away.length_squared() > 0.0001:
 			away = away.normalized()
-			side *= signf(side.dot(away)) if absf(side.dot(away)) > 0.05 else 1.0
-		var blended_dir := (dir + side * 0.32).normalized()
-		var push := push_len * (1.2 if flip_ready else 1.0)
+		else:
+			away = dir
+		## Mostly away from the contacting blade edge, with swipe direction bias.
+		var blended_dir := (away * 0.72 + dir * 0.55).normalized()
+		var push := push_len * (1.15 if flip_ready else 1.0)
 		var nx: float = float(p.position.x) + blended_dir.x * push * falloff
 		var nz: float = float(p.position.z) + blended_dir.y * push * falloff
 		nx = clampf(nx, min_x, max_x)
@@ -17993,6 +18054,111 @@ func _nudge_grill_patties(
 			game_audio.play_grease_pop()
 		if moved > 0.004:
 			_try_attach_cheese_strings_to_patty(p, tool_pos)
+
+
+func _try_push_ready_fries_from_spatula(move_xz: Vector2, moved: float) -> void:
+	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root) or moved <= 0.0001:
+		return
+	var dir := move_xz.normalized() if move_xz.length_squared() > 0.000001 else Vector2(1.0, 0.0)
+	var b := _warmer_place_bounds()
+	var z_hi := b.end.y + FRIES_HOLD_FAR_NUDGE
+	for child in fryer_ready_root.get_children():
+		var pack := child as Node3D
+		if pack == null or not is_instance_valid(pack):
+			continue
+		var pxz := Vector2(pack.global_position.x, pack.global_position.z)
+		var hit := _nearest_spatula_blade_xz(pxz)
+		if float(hit.get("d", 1.0e9)) > FRIES_HOLD_PUSH_RADIUS * 1.15:
+			continue
+		var sample: Vector2 = hit.get("sample", pxz)
+		var away := (pxz - sample).normalized() if pxz.distance_squared_to(sample) > 0.0001 else dir
+		var push := clampf(moved * 1.35, FRIES_HOLD_PUSH_STEP, SPATULA_CUP_PUSH_MAX)
+		var next := pack.global_position
+		next.x = clampf(next.x + (away.x * 0.7 + dir.x * 0.5) * push, b.position.x, b.end.x)
+		next.z = clampf(next.z + (away.y * 0.7 + dir.y * 0.5) * push, b.position.y, z_hi)
+		next.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
+		pack.global_position = pack.global_position.lerp(next, 0.9)
+
+
+func _spatula_push_node_xz(root: Node3D, move_xz: Vector2, moved: float, radius: float) -> bool:
+	## Shared blade-edge shove for cups / cones sitting on the flat-top.
+	if root == null or not is_instance_valid(root) or moved <= 0.0001:
+		return false
+	var dir := move_xz.normalized() if move_xz.length_squared() > 0.000001 else Vector2(1.0, 0.0)
+	var bounds := _grill_place_bounds()
+	var warm := _warmer_place_bounds()
+	var min_x := minf(bounds.position.x, warm.position.x)
+	var max_x := maxf(bounds.end.x, warm.end.x)
+	var min_z := minf(bounds.position.y, warm.position.y)
+	var max_z := maxf(bounds.end.y, warm.end.y)
+	var push := clampf(moved * SPATULA_CUP_PUSH_SCALE, 0.0, SPATULA_CUP_PUSH_MAX)
+	var cxz := Vector2(root.global_position.x, root.global_position.z)
+	var hit := _nearest_spatula_blade_xz(cxz)
+	var d: float = float(hit.get("d", 1.0e9))
+	if d > radius:
+		return false
+	var sample: Vector2 = hit.get("sample", cxz)
+	var away := (cxz - sample).normalized() if cxz.distance_squared_to(sample) > 0.0001 else dir
+	var falloff := 1.0 - d / radius
+	falloff = 0.4 + falloff * falloff * 0.6
+	var blended := (away * 0.7 + dir * 0.55).normalized()
+	var next := root.global_position
+	next.x = clampf(next.x + blended.x * push * falloff, min_x, max_x)
+	next.z = clampf(next.z + blended.y * push * falloff, min_z, max_z)
+	root.global_position = next
+	return true
+
+
+func _try_push_parked_steel_cups_from_spatula(move_xz: Vector2, moved: float) -> void:
+	## Cold-steel / HOLD drinks — skate them with the blade edge.
+	if parked_cups.is_empty() or moved <= 0.0001:
+		return
+	for c in parked_cups:
+		var root := c as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		if not bool(root.get_meta("on_steel", false)):
+			continue
+		_spatula_push_node_xz(root, move_xz, moved, SPATULA_CUP_PUSH_RADIUS)
+
+
+func _try_push_melting_cups_from_spatula(move_xz: Vector2, moved: float) -> void:
+	if melting_cups.is_empty() or moved <= 0.0001:
+		return
+	for i in melting_cups.size():
+		var item: Dictionary = melting_cups[i]
+		var root: Node3D = item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		## Charred stuck crust scrapes off — don't skate it around forever.
+		if str(item.get("phase", "")) == "crust":
+			continue
+		if not _spatula_push_node_xz(root, move_xz, moved, SPATULA_CUP_PUSH_RADIUS):
+			continue
+		var next := root.global_position
+		## Keep burn FX under the cup.
+		var smoke = item.get("smoke")
+		var bubbles = item.get("bubbles")
+		if smoke != null and is_instance_valid(smoke):
+			(smoke as Node3D).global_position = Vector3(next.x, GRILL_SURFACE_Y + 0.03, next.z)
+		if bubbles != null and is_instance_valid(bubbles):
+			(bubbles as Node3D).global_position = Vector3(next.x, GRILL_SURFACE_Y + 0.012, next.z)
+
+
+func _try_push_melting_icecream_from_spatula(move_xz: Vector2, moved: float) -> void:
+	if melting_icecreams.is_empty() or moved <= 0.0001:
+		return
+	for item in melting_icecreams:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var root: Node3D = item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		_spatula_push_node_xz(root, move_xz, moved, SPATULA_CUP_PUSH_RADIUS * 1.1)
+	## Cold-steel soft-serve sits too.
+	if icecream_cone_root != null and is_instance_valid(icecream_cone_root) and not icecream_cone_held:
+		if bool(icecream_cone_root.get_meta("on_steel", false)):
+			_spatula_push_node_xz(icecream_cone_root, move_xz, moved, SPATULA_CUP_PUSH_RADIUS * 1.1)
 
 
 func _patty_can_cheese_string(patty: Area3D) -> bool:
@@ -19238,7 +19404,11 @@ func _load_icecream_station_settings() -> void:
 	if cfg.load(GFX_CFG_PATH) != OK:
 		return
 	if cfg.has_section_key(ICECREAM_POS_CFG_SECTION, "cam_right_ft"):
-		icecream_cam_right_ft = clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft")), -4.0, 8.0)
+		var v := float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft"))
+		## Migrate prior default 1.5 → +8" camera-right.
+		if absf(v - 1.5) < 0.02:
+			v = 2.1667
+		icecream_cam_right_ft = clampf(v, -4.0, 8.0)
 
 
 func _save_icecream_station_settings() -> void:
@@ -21972,17 +22142,20 @@ func _build_icecream_machine() -> void:
 	root.add_child(nozzle)
 
 	## Cone nest on the camera-right side of the machine (local +X with yaw 180).
+	## Same size as the grab cone (cup-nest style) — no undersized deco cones.
 	var cone_rack := Node3D.new()
 	cone_rack.name = "ConeRack"
 	cone_rack.position = Vector3(0.34, 0.373, 0.32)
 	root.add_child(cone_rack)
-	for i in 4:
+	var cone_nest_step := 0.015
+	for i in 3:
 		var deco := _create_icecream_cone_node(false)
-		deco.position = Vector3(0.0, float(i) * 0.024, -float(i) * 0.010)
-		deco.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
-		deco.scale = Vector3(0.72, 0.72, 0.72)
+		## Nested behind / slightly above the grab cone so the stack reads as one nest.
+		deco.position = Vector3(0.0, float(i + 1) * cone_nest_step, -float(i + 1) * 0.005)
+		deco.rotation_degrees = Vector3(-10.0, 8.0 + float(i) * 2.5, 0.0)
 		cone_rack.add_child(deco)
-	icecream_cone_home = cone_rack.to_global(Vector3(0.0, 0.02, 0.0))
+	## Grab cone sits at the front/bottom of the nest — same pose as deco cones.
+	icecream_cone_home = cone_rack.to_global(Vector3.ZERO)
 	icecream_cone_rest = root.to_global(Vector3(0.0, 0.12, 0.42))
 
 	var rack_area := Area3D.new()
@@ -21992,8 +22165,9 @@ func _build_icecream_machine() -> void:
 	rack_area.collision_mask = 0
 	var rack_shape := CollisionShape3D.new()
 	var rack_box := BoxShape3D.new()
-	rack_box.size = Vector3(0.16, 0.18, 0.16)
+	rack_box.size = Vector3(0.14, 0.20, 0.14)
 	rack_shape.shape = rack_box
+	rack_shape.position = Vector3(0.0, 0.06, -0.01)
 	rack_area.add_child(rack_shape)
 	cone_rack.add_child(rack_area)
 
