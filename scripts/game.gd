@@ -1024,6 +1024,8 @@ var _godray_base_alpha: PackedFloat32Array = PackedFloat32Array()
 var _godray_phase: PackedFloat32Array = PackedFloat32Array()
 var _cup_ice_spawn_cd: float = 0.0
 var _cup_soda_overfill_spill_cd: float = 0.0
+var _cup_soda_overfill_drop_cd: float = 0.0
+var _soda_overfill_cascade_meshes: Array = [] ## thin rim→deck pour ribbons while overfilling
 var _cup_prev_pos: Vector3 = Vector3.ZERO
 var _cup_vel: Vector3 = Vector3.ZERO
 var _cup_slosh: Vector2 = Vector2.ZERO ## x = tilt Z, y = tilt X (degrees)
@@ -19792,6 +19794,11 @@ func _build_soda_station() -> void:
 		soda_stream_mesh.queue_free()
 	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
 		soda_stream_bubbles.queue_free()
+	for m in _soda_overfill_cascade_meshes:
+		var mi := m as MeshInstance3D
+		if mi != null and is_instance_valid(mi):
+			mi.queue_free()
+	_soda_overfill_cascade_meshes.clear()
 	soda_stream_mesh = null
 	soda_stream_mat = null
 	soda_stream_bubbles = null
@@ -19829,8 +19836,11 @@ func _build_soda_station() -> void:
 	soda_stream_mesh = null
 	soda_stream_mat = null
 	soda_stream_bubbles = null
+	_soda_overfill_cascade_meshes.clear()
 	_serve_cup_node = null
 	_cup_ice_spawn_cd = 0.0
+	_cup_soda_overfill_spill_cd = 0.0
+	_cup_soda_overfill_drop_cd = 0.0
 	_cup_prev_pos = Vector3.ZERO
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
@@ -26487,43 +26497,169 @@ func _spawn_cup_splash_drops() -> void:
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
 
 
+func _ensure_soda_overfill_cascades(count: int = 3) -> void:
+	## Persistent thin pour ribbons off the rim (cup fills on the drip tray, not the grill).
+	while _soda_overfill_cascade_meshes.size() < count:
+		var mi := MeshInstance3D.new()
+		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.007
+		cyl.bottom_radius = 0.012
+		cyl.height = 0.12
+		cyl.cap_top = false
+		cyl.cap_bottom = false
+		mi.mesh = cyl
+		mi.material_override = _make_soda_stream_material()
+		mi.visible = false
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_boost_cup_draw_order(mi)
+		world.add_child(mi)
+		_soda_overfill_cascade_meshes.append(mi)
+
+
+func _hide_soda_overfill_cascades() -> void:
+	for m in _soda_overfill_cascade_meshes:
+		var mi := m as MeshInstance3D
+		if mi != null and is_instance_valid(mi):
+			mi.visible = false
+
+
+func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
+	## 3 soda-colored ribbons spilling off the lip down onto the drip deck.
+	if cup_root == null or world == null:
+		return
+	_ensure_soda_overfill_cascades(3)
+	var deck_y := _cup_deck_fill_y()
+	var t := Time.get_ticks_msec() * 0.001
+	var col: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
+	col.a = 0.90
+	for i in _soda_overfill_cascade_meshes.size():
+		var mi := _soda_overfill_cascade_meshes[i] as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			continue
+		## Spread around the rim, biased camera-forward / cook-side so you can see them.
+		var ang := TAU * float(i) / float(_soda_overfill_cascade_meshes.size()) + t * 0.55 + float(i) * 0.35
+		var outward := Vector3(sin(ang), 0.0, cos(ang) * 0.65 + 0.45).normalized()
+		var lip := rim + outward * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.004, 0.0)
+		var land := lip + outward * lerpf(0.05, 0.11, 0.5 + 0.5 * sin(t * 3.2 + float(i)))
+		land.y = deck_y + 0.006
+		var mid := (lip + land) * 0.5
+		var along := land - lip
+		var len := maxf(along.length(), 0.04)
+		mi.visible = true
+		mi.global_position = mid
+		## Cylinder default is Y-up — aim it along the pour.
+		var y_axis := along / len
+		var x_axis := y_axis.cross(Vector3.FORWARD)
+		if x_axis.length_squared() < 0.0001:
+			x_axis = y_axis.cross(Vector3.RIGHT)
+		x_axis = x_axis.normalized()
+		var z_axis := x_axis.cross(y_axis).normalized()
+		mi.global_transform = Transform3D(Basis(x_axis, y_axis, z_axis).orthonormalized(), mid)
+		var cyl := mi.mesh as CylinderMesh
+		if cyl:
+			cyl.height = len
+			cyl.top_radius = 0.006 + 0.002 * sin(t * 8.0 + float(i))
+			cyl.bottom_radius = 0.011 + 0.003 * sin(t * 6.5 + float(i) * 1.3)
+		var mat := mi.material_override as ShaderMaterial
+		if mat:
+			mat.set_shader_parameter("soda_color", col)
+			mat.set_shader_parameter("foam_color", Color(0.97, 0.97, 0.98, 0.95))
+			mat.set_shader_parameter("foam_frac", 0.32)
+			mat.set_shader_parameter("half_h", len * 0.5)
+	## Keep lint happy — cascades use wall-clock wobble, not frame delta.
+	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
+
+
+func _spawn_soda_overfill_drops(rim: Vector3, flavor: String) -> void:
+	## Chunks of soda pouring off the lip onto the drip deck (and grill if they reach it).
+	if cup_root == null or world == null or flavor == "":
+		return
+	var col: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
+	col.a = 0.88
+	var deck_y := _cup_deck_fill_y()
+	for i in 4:
+		var drop := MeshInstance3D.new()
+		var sph := SphereMesh.new()
+		sph.radius = randf_range(0.007, 0.014)
+		sph.height = sph.radius * 2.0
+		drop.mesh = sph
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = col
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.emission_enabled = true
+		mat.emission = Color(col.r, col.g, col.b) * 0.35
+		mat.emission_energy_multiplier = 0.4
+		drop.material_override = mat
+		drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		world.add_child(drop)
+		var ang := randf() * TAU
+		var outward := Vector3(sin(ang), 0.0, cos(ang) * 0.55 + 0.5).normalized()
+		drop.global_position = rim + outward * (CUP_SHELL_TOP_R * 0.85) + Vector3(0.0, 0.01, 0.0)
+		var end_p := drop.global_position + outward * randf_range(0.06, 0.14) \
+			+ Vector3(randf_range(-0.02, 0.02), 0.0, randf_range(-0.02, 0.02))
+		end_p.y = deck_y + 0.004
+		## If it arcs onto hot steel, leave a shiny soda puddle.
+		var grill_land := Vector3(end_p.x, GRILL_SURFACE_Y + OIL_SIT_Y, end_p.z)
+		if _is_on_grill_surface(grill_land):
+			var delay := randf_range(0.10, 0.22)
+			var puddle_pos := grill_land + Vector3(randf_range(-0.02, 0.02), 0.0, randf_range(-0.02, 0.02))
+			var flav := flavor
+			get_tree().create_timer(delay).timeout.connect(func() -> void:
+				_spawn_soda_slick(puddle_pos, 0.028 + randf() * 0.025, flav)
+			)
+		var life := randf_range(0.22, 0.38)
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(drop, "global_position", end_p, life).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(drop, "scale", Vector3.ONE * 0.15, life)
+		tw.chain().tween_callback(drop.queue_free)
+
+
 func _emit_soda_overfill_spill(rim: Vector3, flavor: String, amount: float, delta: float) -> void:
-	## Foamy overflow from a full cup — shiny soda slicks can land on the grill.
+	## Full cup still under the nozzle → foam + visible liquid streams off the rim.
 	if cup_root == null:
 		return
 	_cup_soda_overfill_spill_cd = maxf(0.0, _cup_soda_overfill_spill_cd - delta)
+	## Cascading soda ribbons down the lip onto the drip deck.
+	_update_soda_overfill_cascades(rim, flavor, delta)
 	## Foam burst at the rim (reuse stream splash bubbles).
 	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
-		soda_stream_bubbles.global_position = rim + Vector3(0.0, 0.01, 0.02)
+		soda_stream_bubbles.global_position = rim + Vector3(0.0, 0.012, 0.02)
 		soda_stream_bubbles.emitting = true
-		soda_stream_bubbles.amount = 28
+		soda_stream_bubbles.amount = 40
+		soda_stream_bubbles.amount_ratio = 1.0
 		var em := soda_stream_bubbles.process_material as ParticleProcessMaterial
 		if em:
-			em.direction = Vector3(randf_range(-0.35, 0.35), 0.55, randf_range(0.2, 0.85))
-			em.spread = 55.0
-			em.initial_velocity_min = 0.22
-			em.initial_velocity_max = 0.55
-			em.gravity = Vector3(0.0, -1.8, 0.0)
+			em.direction = Vector3(randf_range(-0.45, 0.45), 0.65, randf_range(0.15, 0.9))
+			em.spread = 70.0
+			em.initial_velocity_min = 0.28
+			em.initial_velocity_max = 0.70
+			em.gravity = Vector3(0.0, -2.2, 0.0)
 			var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.9, 0.9, 0.95))
 			em.color = Color(
-				lerpf(0.95, pop.r, 0.35),
-				lerpf(0.97, pop.g, 0.35),
-				lerpf(1.0, pop.b, 0.35),
-				0.85
+				lerpf(0.95, pop.r, 0.4),
+				lerpf(0.97, pop.g, 0.4),
+				lerpf(1.0, pop.b, 0.4),
+				0.9
 			)
-	## Periodic shiny soda puddles — same behavior as regular pop spill.
+	## Chunks of soda pouring off the lip.
+	if _cup_soda_overfill_drop_cd <= 0.0:
+		_cup_soda_overfill_drop_cd = randf_range(0.05, 0.10)
+		_spawn_soda_overfill_drops(rim, flavor)
+	## Periodic shiny soda puddles when overflow reaches the flat-top.
 	if _cup_soda_overfill_spill_cd > 0.0:
 		return
 	_cup_soda_overfill_spill_cd = randf_range(0.08, 0.16)
-	var spill_dir := Vector3(randf_range(-0.12, 0.12), 0.0, randf_range(0.06, 0.22))
+	var spill_dir := Vector3(randf_range(-0.14, 0.14), 0.0, randf_range(0.08, 0.28))
 	var land := rim + spill_dir
 	land.y = GRILL_SURFACE_Y
 	if not _is_on_grill_surface(land):
-		## Prefer cook-side of the tray; fall back near the cup.
 		land = Vector3(
-			cup_root.global_position.x + randf_range(-0.08, 0.08),
+			cup_root.global_position.x + randf_range(-0.10, 0.10),
 			GRILL_SURFACE_Y,
-			cup_root.global_position.z + randf_range(0.05, 0.18)
+			cup_root.global_position.z + randf_range(0.08, 0.26)
 		)
 	if _is_on_grill_surface(land):
 		_spawn_soda_slick(land, 0.035 + amount * 2.2 + randf() * 0.02, flavor)
@@ -26800,6 +26936,7 @@ func _hide_soda_stream() -> void:
 	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
 		soda_stream_bubbles.emitting = false
 		soda_stream_bubbles.amount_ratio = 0.0
+	_hide_soda_overfill_cascades()
 	if game_audio and game_audio.has_method("set_soda_pour"):
 		game_audio.set_soda_pour(false)
 
