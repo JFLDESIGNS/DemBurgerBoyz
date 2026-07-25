@@ -3027,14 +3027,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _try_poke_grill_roomba(event.position):
 				get_viewport().set_input_as_handled()
 				return
-			## Finished melt → cheese pull on the spatula; otherwise smash / place.
+			## Smash (spatula press) — cheese strings latch from tip contact on melts.
 			var smash_target = _pick_patty_for_smash(event.position)
 			if smash_target != null:
-				if _try_begin_cheese_pull_on_patty(smash_target):
-					get_viewport().set_input_as_handled()
-				else:
-					_smash_grill_patty(smash_target)
-					get_viewport().set_input_as_handled()
+				_smash_grill_patty(smash_target)
+				## Contact press on a finished melt also starts the cheese pull.
+				_try_begin_cheese_pull_on_patty(smash_target)
+				get_viewport().set_input_as_handled()
 			else:
 				_try_grill_raycast(event.position, true)
 
@@ -7556,7 +7555,8 @@ func _smash_grill_patty(patty: Area3D) -> void:
 	## Mid ice-ball squash — ignore; waiting ball → slow spatula smash.
 	if bool(patty.get("place_morphing")) and not waiting_ball:
 		return
-	if waiting_ball and not _mp_applying:
+	## Same lowered spatula press used for ice-ball place smash (cooked burgers too).
+	if not _mp_applying:
 		_start_spatula_place_squash_at(Vector3(float(patty._rest_x), GRILL_SURFACE_Y, float(patty._rest_z)))
 	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
 		mp_patty_smash.rpc(int(patty.net_id))
@@ -14665,13 +14665,19 @@ func _end_oil_trail_fire_burnout() -> void:
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
-	## Convert burned grease into scrape-off residue, then clear the wet oil.
+	## Only flaming puddles become scrape crust — idle oil stays / clears without debris.
+	var keep: Array = []
 	for item in oil_slicks:
 		var mesh = item.get("mesh")
-		if mesh != null and is_instance_valid(mesh):
+		var was_lit := bool(item.get("on_fire", false))
+		if mesh != null and is_instance_valid(mesh) and was_lit:
 			_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
 			mesh.queue_free()
-	oil_slicks.clear()
+		elif mesh != null and is_instance_valid(mesh):
+			item["on_fire"] = false
+			_set_oil_slick_burn_visual(item, false, null, 0.0)
+			keep.append(item)
+	oil_slicks = keep
 	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
 
 
@@ -14879,10 +14885,9 @@ func _update_oil_slicks(delta: float) -> void:
 		var age := float(item["age"])
 		var lit := _oil_slick_is_lit(item)
 		if mesh == null or not is_instance_valid(mesh) or age >= life:
-			## Burning / heavily cooked grease leaves scrapable crust behind.
+			## Only actual fire leaves crust — normal oil cook-off must not spawn debris.
 			if mesh != null and is_instance_valid(mesh):
-				var burn_done := clampf(age / maxf(life, 0.001), 0.0, 1.0)
-				if lit or burn_done >= 0.55 or bool(item.get("on_fire", false)):
+				if lit or bool(item.get("on_fire", false)):
 					_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
 				mesh.queue_free()
 			oil_slicks.remove_at(i)
