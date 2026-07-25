@@ -71,6 +71,16 @@ var _fries_shake_intensity: float = 0.0
 var _fries_shake_lp := 0.0
 var _fries_shake_phase := 0.0
 var _fries_shake_tick := 0.0
+## Outdoor tree leaf rustle — seasoning-like shake, a bit louder; pitch follows mouse.
+var _tree_leaf_player: AudioStreamPlayer
+var _tree_leaf_gen: AudioStreamGenerator
+var _tree_leaf_on: bool = false
+var _tree_leaf_intensity: float = 0.0
+var _tree_leaf_pitch: float = 1.0
+var _tree_leaf_lp := 0.0
+var _tree_leaf_phase := 0.0
+var _tree_leaf_tick := 0.0
+const TREE_LEAF_SHAKE_DB := -13.5 ## ~+4 dB vs seasoning rattle (-17.5)
 ## Live fry filters / pop state (never loops).
 var _sz_mid := 0.0
 var _sz_mid2 := 0.0
@@ -209,6 +219,15 @@ func _ready() -> void:
 	_fries_shake_player.stream = _fries_shake_gen
 	_fries_shake_player.volume_db = -80.0
 	add_child(_fries_shake_player)
+	## Live outdoor tree leaf rustle (hold-shake).
+	_tree_leaf_gen = AudioStreamGenerator.new()
+	_tree_leaf_gen.mix_rate = MIX_RATE
+	_tree_leaf_gen.buffer_length = 0.12
+	_tree_leaf_player = AudioStreamPlayer.new()
+	_tree_leaf_player.bus = "Master"
+	_tree_leaf_player.stream = _tree_leaf_gen
+	_tree_leaf_player.volume_db = -80.0
+	add_child(_tree_leaf_player)
 	## Soda fountain dispenser hiss / carbonation rush.
 	_soda_gen = AudioStreamGenerator.new()
 	_soda_gen.mix_rate = MIX_RATE
@@ -425,6 +444,12 @@ func _process(delta: float) -> void:
 			while fsp.get_frames_available() > 0:
 				var fss := _next_fries_shake_sample()
 				fsp.push_frame(Vector2(fss, fss))
+	if _tree_leaf_on and _tree_leaf_player != null and _tree_leaf_player.playing:
+		var tlp := _tree_leaf_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if tlp != null:
+			while tlp.get_frames_available() > 0:
+				var tls := _next_tree_leaf_shake_sample()
+				tlp.push_frame(Vector2(tls, tls))
 	if _soda_on and _soda_player != null and _soda_player.playing:
 		var sop := _soda_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if sop != null:
@@ -951,6 +976,23 @@ func _next_fries_shake_sample() -> float:
 	return clampf((paper * 0.15 + crystal) * pulse * gain, -1.0, 1.0)
 
 
+func _next_tree_leaf_shake_sample() -> float:
+	## Seasoning-cousin rustle — airier / brighter leaf grain, a touch louder.
+	_tree_leaf_tick += 1.0 / float(MIX_RATE)
+	var shake_hz := 6.4 + sin(_tree_leaf_tick * 2.4) * 1.15
+	_tree_leaf_phase += shake_hz / float(MIX_RATE)
+	var pulse := maxf(0.0, sin(_tree_leaf_phase * TAU))
+	pulse = pow(pulse, 0.40)
+	var white := randf() * 2.0 - 1.0
+	_tree_leaf_lp = _tree_leaf_lp * 0.62 + white * 0.38
+	var leaf := (white - _tree_leaf_lp) * 0.48 + _tree_leaf_lp * 0.05
+	var flick := 0.0
+	if pulse > 0.88 and randf() < 0.034 * lerpf(0.5, 1.0, _tree_leaf_intensity):
+		flick = (randf() * 2.0 - 1.0) * 0.14
+	var gain := lerpf(0.55, 1.05, _tree_leaf_intensity)
+	return clampf((leaf * 0.28 + flick) * pulse * gain, -1.0, 1.0)
+
+
 func _next_ext_spray_sample() -> float:
 	## Harsh mid/high static — pressurized powder blast, not a soft gas hiss.
 	var white := randf() * 2.0 - 1.0
@@ -1081,6 +1123,51 @@ func play_rack_take() -> void:
 func play_tree_thud() -> void:
 	## Soft wood trunk hit when shaking a street tree.
 	_play_cached("tree_thud_%d" % (randi() % 3), _make_tree_thud, 0.88 + randf() * 0.14, 0.78)
+
+
+func play_tree_leaf_tap() -> void:
+	## One-shot leaf rustle on a single tree click — seasoning-like, a bit louder.
+	_play_cached(
+		"tree_leaf_tap_v1_%d" % (randi() % 3),
+		_make_tree_leaf_tap,
+		0.94 + randf() * 0.12,
+		1.05
+	)
+
+
+func set_tree_leaf_shake(active: bool, intensity: float = 1.0) -> void:
+	## Continuous leaf shake while holding LMB and moving the mouse on a tree.
+	if _tree_leaf_player == null:
+		return
+	_tree_leaf_intensity = clampf(intensity, 0.0, 1.5)
+	if active and _tree_leaf_intensity > 0.04:
+		_tree_leaf_on = true
+		var linear := db_to_linear(TREE_LEAF_SHAKE_DB) * lerpf(0.45, 1.15, _tree_leaf_intensity)
+		_tree_leaf_player.volume_db = linear_to_db(clampf(linear, 0.02, 1.2))
+		_tree_leaf_player.pitch_scale = _tree_leaf_pitch
+		if not _tree_leaf_player.playing:
+			_tree_leaf_player.play()
+	else:
+		_tree_leaf_on = false
+		_tree_leaf_intensity = 0.0
+		if _tree_leaf_player.playing:
+			_tree_leaf_player.stop()
+		_tree_leaf_player.volume_db = -80.0
+		_tree_leaf_player.pitch_scale = 1.0
+		_tree_leaf_pitch = 1.0
+
+
+func set_tree_leaf_shake_motion(mouse_delta: Vector2) -> void:
+	## Tone follows shake direction — L/R and U/D each pull pitch.
+	if mouse_delta.length_squared() < 0.0001:
+		return
+	var nx := clampf(mouse_delta.x / 28.0, -1.0, 1.0)
+	var ny := clampf(mouse_delta.y / 28.0, -1.0, 1.0)
+	## Right / up → brighter; left / down → darker.
+	var target := 1.0 + nx * 0.26 - ny * 0.22
+	_tree_leaf_pitch = lerpf(_tree_leaf_pitch, clampf(target, 0.76, 1.38), 0.42)
+	if _tree_leaf_player != null and _tree_leaf_on:
+		_tree_leaf_player.pitch_scale = _tree_leaf_pitch
 
 
 func play_stove_light() -> void:
@@ -1860,6 +1947,27 @@ func _make_tree_thud() -> AudioStreamWAV:
 		var wood := sin(t * 210.0 * TAU) * exp(-t * 22.0) * 0.22
 		var grit := (randf() * 2.0 - 1.0) * exp(-t * 55.0) * 0.06
 		_write_s16(pcm, i, int(clampf((body + wood + grit) * env, -1.0, 1.0) * 15500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_tree_leaf_tap() -> AudioStreamWAV:
+	## Short leaf rustle burst — seasoning-rattle cousin, brighter and a bit louder.
+	var n := int(MIX_RATE * 0.20)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := clampf(t / 0.008, 0.0, 1.0) * exp(-t * 16.0)
+		var pulse := maxf(0.0, sin(t * 28.0 * TAU))
+		pulse = pow(pulse, 0.42)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.60 + white * 0.40
+		var leaf := (white - lp) * 0.55 + lp * 0.04
+		var flick := 0.0
+		if pulse > 0.82 and randf() < 0.05:
+			flick = (randf() * 2.0 - 1.0) * 0.18
+		_write_s16(pcm, i, int(clampf((leaf * 0.32 + flick) * pulse * env, -1.0, 1.0) * 17500.0))
 	return _wav_from_pcm(pcm, false)
 
 

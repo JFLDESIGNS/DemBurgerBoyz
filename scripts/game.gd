@@ -1252,6 +1252,10 @@ const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
 const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
 const TREE_APPLE_SIDE_VAR_FT := 1.1 ## ± variance on that offset
 var outdoor_shake_trees: Array = [] ## Node3D roots that can shake on click
+var _tree_shake_held: Node3D = null ## LMB-held outdoor tree for continuous leaf shake
+var _tree_shake_prev_mouse: Vector2 = Vector2.ZERO
+var _tree_shake_vel: Vector2 = Vector2.ZERO
+var _tree_hold_lean: Vector3 = Vector3.ZERO
 const TREE_FRONT_DEFAULT_POS := Vector3(-4.33, 0.0, 5.36)
 const TREE_FRONT_DEFAULT_YAW := -5.0 ## prior −25° + 20°
 const TREE_BIRCH_DEFAULT_POS := Vector3(3.92, 0.0, 3.05)
@@ -2688,6 +2692,7 @@ func _process(delta: float) -> void:
 	_update_cheese_strings(delta)
 	if shaker_held:
 		_update_held_shaker(delta)
+	_update_tree_shake_hold(delta)
 	if oil_held:
 		_update_held_oil(delta)
 	elif oil_root != null:
@@ -3300,6 +3305,8 @@ func _input(event: InputEvent) -> void:
 				return
 	## Sliding a patty / oil / shaker: release ends hold and returns tools home.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		if _tree_shake_held != null:
+			_release_tree_shake_hold()
 		if burnt_icecream_cone_held:
 			_release_burnt_icecream_cone_to_garbage()
 			get_viewport().set_input_as_handled()
@@ -19356,8 +19363,70 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 	if tree == null or not outdoor_shake_trees.has(tree):
 		return false
 	## TreeClickArea is already trunk-sized — don't require a second bark mesh hit.
-	_shake_outdoor_tree(tree)
+	_begin_tree_shake_hold(tree, screen_pos)
 	return true
+
+
+func _begin_tree_shake_hold(tree: Node3D, screen_pos: Vector2) -> void:
+	## Press: thud + one leaf rustle. Hold+move: continuous leaf shake with pitch.
+	_tree_shake_held = tree
+	_tree_shake_prev_mouse = screen_pos
+	_tree_shake_vel = Vector2.ZERO
+	_tree_hold_lean = Vector3.ZERO
+	_shake_outdoor_tree(tree)
+	if game_audio != null and game_audio.has_method("play_tree_leaf_tap"):
+		game_audio.play_tree_leaf_tap()
+
+
+func _release_tree_shake_hold() -> void:
+	if game_audio != null and game_audio.has_method("set_tree_leaf_shake"):
+		game_audio.set_tree_leaf_shake(false)
+	var tree := _tree_shake_held
+	_tree_shake_held = null
+	_tree_shake_vel = Vector2.ZERO
+	_tree_hold_lean = Vector3.ZERO
+	## Settle any hold-lean back to the stored base (or current if no tween).
+	if tree != null and is_instance_valid(tree) and not bool(tree.get_meta("tree_shaking", false)):
+		var base: Vector3 = tree.get_meta("tree_base_rot", tree.rotation_degrees)
+		tree.rotation_degrees = base
+
+
+func _update_tree_shake_hold(delta: float) -> void:
+	if _tree_shake_held == null:
+		return
+	if not is_instance_valid(_tree_shake_held):
+		_release_tree_shake_hold()
+		return
+	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_release_tree_shake_hold()
+		return
+	var mouse := get_viewport().get_mouse_position()
+	var dmouse := mouse - _tree_shake_prev_mouse
+	_tree_shake_prev_mouse = mouse
+	var spd := dmouse.length() / maxf(delta, 0.0001)
+	_tree_shake_vel = _tree_shake_vel.lerp(dmouse, clampf(delta * 14.0, 0.0, 1.0))
+	var intensity := clampf((spd - 55.0) / 520.0, 0.0, 1.0)
+	if intensity > 0.05 and game_audio != null:
+		if game_audio.has_method("set_tree_leaf_shake"):
+			game_audio.set_tree_leaf_shake(true, intensity)
+		if game_audio.has_method("set_tree_leaf_shake_motion"):
+			game_audio.set_tree_leaf_shake_motion(dmouse)
+		## Soft live lean while whipping the canopy (don't fight the one-shot tween hard).
+		if not bool(_tree_shake_held.get_meta("tree_shaking", false)):
+			var base: Vector3 = _tree_shake_held.get_meta("tree_base_rot", _tree_shake_held.rotation_degrees)
+			var target_lean := Vector3(
+				clampf(_tree_shake_vel.y * 0.035, -2.2, 2.2),
+				clampf(_tree_shake_vel.x * 0.012, -0.8, 0.8),
+				clampf(-_tree_shake_vel.x * 0.035, -2.2, 2.2)
+			)
+			_tree_hold_lean = _tree_hold_lean.lerp(target_lean, clampf(delta * 10.0, 0.0, 1.0))
+			_tree_shake_held.rotation_degrees = base + _tree_hold_lean
+	elif game_audio != null and game_audio.has_method("set_tree_leaf_shake"):
+		game_audio.set_tree_leaf_shake(false)
+		if not bool(_tree_shake_held.get_meta("tree_shaking", false)):
+			var base2: Vector3 = _tree_shake_held.get_meta("tree_base_rot", _tree_shake_held.rotation_degrees)
+			_tree_hold_lean = _tree_hold_lean.lerp(Vector3.ZERO, clampf(delta * 8.0, 0.0, 1.0))
+			_tree_shake_held.rotation_degrees = base2 + _tree_hold_lean
 
 
 func _shake_outdoor_tree(tree: Node3D) -> void:
