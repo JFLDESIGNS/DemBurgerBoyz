@@ -3,16 +3,16 @@ render_mode blend_mix, depth_draw_opaque, cull_disabled, diffuse_burley, specula
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
 uniform float alpha_scissor : hint_range(0.0, 1.0) = 0.42;
-uniform float albedo_boost : hint_range(0.5, 3.0) = 1.45;
+uniform float albedo_boost : hint_range(0.5, 3.0) = 1.38;
 uniform float sway_strength : hint_range(0.0, 3.0) = 0.55;
 uniform float sway_speed : hint_range(0.0, 5.0) = 1.45;
 uniform float sway_seed = 0.0;
 uniform float sway_y_min = 2.0;
 uniform float sway_y_max = 20.0;
-uniform vec3 sss_color : source_color = vec3(0.62, 1.0, 0.32);
-uniform float sss_emissive : hint_range(0.0, 4.0) = 0.95;
-uniform float sss_rim : hint_range(0.0, 4.0) = 1.15;
-uniform float sss_base : hint_range(0.0, 2.0) = 0.42;
+uniform vec3 sss_color : source_color = vec3(0.58, 0.95, 0.30);
+uniform float sss_emissive : hint_range(0.0, 4.0) = 0.76; /* −20% vs prior 0.95 */
+uniform float sss_rim : hint_range(0.0, 4.0) = 0.92;
+uniform float sss_base : hint_range(0.0, 2.0) = 0.336;
 uniform float roughness_val : hint_range(0.0, 1.0) = 0.82;
 
 void vertex() {

@@ -1155,6 +1155,17 @@ var tree_light_off_x: float = 0.55
 var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.65
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
+const TREE_CLICK_COLLISION_LAYER := 262144
+const TREE_SHAKE_DEG := 5.5
+const TREE_APPLE_CHANCE := 0.20
+const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
+var outdoor_shake_trees: Array = [] ## Node3D roots that can shake on click
+## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
+var icecream_cam_right_ft: float = 1.5
+const FT_TO_M := 0.3048
+const ICECREAM_POS_CFG_SECTION := "icecream_station"
+var options_hidden_icecream_pos_slider: HSlider = null
+var options_hidden_icecream_pos_lab: Label = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -1406,7 +1417,7 @@ const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
 const CUP_ICE_STACK_MAX := 36
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
-## Soft-serve — camera-left toward the fire extinguisher (same depth/height; +4ft from prior 0.86).
+## Soft-serve base seat (pre camera-right offset). Offset applied via icecream_cam_right_ft.
 const ICECREAM_STATION_POS := Vector3(2.079, 1.19, 0.647)
 const ICECREAM_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const ICECREAM_CONE_COLLISION_LAYER := 16384
@@ -2982,6 +2993,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					spatula_grill_hold_on_meat = false
 					_spatula_pull_flip_done = false
 					_begin_hand_spatula_combo(event.position)
+				get_viewport().set_input_as_handled()
+				return
+			## Outside the steel — shake a street tree (optional apple drop).
+			if _try_click_outdoor_tree(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			## No spatula (other tools / off-grill) — legacy grill pick / drag.
@@ -17950,6 +17965,7 @@ func _build_checkered_floor() -> void:
 ## Painted street outside the service window + invisible walk collider for NPCs.
 func _build_outdoor_street() -> void:
 	tree_fill_entries.clear()
+	outdoor_shake_trees.clear()
 	_load_tree_light_settings()
 	var outdoor := Node3D.new()
 	outdoor.name = "OutdoorStreet"
@@ -18047,6 +18063,7 @@ func _build_outdoor_front_tree(parent: Node3D) -> void:
 	parent.add_child(tree)
 	_dress_outdoor_tree_foliage(tree, 0.7, 0.62)
 	_add_tree_fill_light(parent, tree)
+	_setup_outdoor_tree_interact(tree)
 
 
 func _build_outdoor_birch_tree(parent: Node3D) -> void:
@@ -18072,10 +18089,11 @@ func _build_outdoor_birch_tree(parent: Node3D) -> void:
 	parent.add_child(tree)
 	_dress_outdoor_tree_foliage(tree, 2.4, 0.48)
 	_add_tree_fill_light(parent, tree)
+	_setup_outdoor_tree_interact(tree)
 
 
 func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: float) -> void:
-	## Leaf sway + fake SSS emissive, plus tiny shadow-only canopy blockers for leaf mottling.
+	## Leaf sway + fake SSS (leaves only). Bark stays diffuse — no foliage emission.
 	if tree == null or not is_instance_valid(tree):
 		return
 	if not ResourceLoader.exists(TREE_FOLIAGE_SHADER_PATH):
@@ -18098,6 +18116,7 @@ func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: 
 		for s in mi.mesh.get_surface_count():
 			var src: Material = mi.get_active_material(s)
 			if not _tree_surface_is_leaf(src):
+				_ensure_tree_bark_diffuse(mi, s, src)
 				continue
 			var albedo: Texture2D = null
 			var scissor := 0.42
@@ -18116,11 +18135,12 @@ func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: 
 			sm.set_shader_parameter("sway_speed", 1.45)
 			sm.set_shader_parameter("sway_y_min", mesh_aabb.position.y + mesh_aabb.size.y * 0.18)
 			sm.set_shader_parameter("sway_y_max", mesh_aabb.position.y + mesh_aabb.size.y * 0.98)
-			sm.set_shader_parameter("sss_color", Color(0.62, 1.0, 0.32))
-			sm.set_shader_parameter("sss_emissive", 0.95)
-			sm.set_shader_parameter("sss_rim", 1.15)
-			sm.set_shader_parameter("sss_base", 0.42)
-			sm.set_shader_parameter("albedo_boost", 1.45)
+			## Leaf SSS −20% vs prior glow.
+			sm.set_shader_parameter("sss_color", Color(0.58, 0.95, 0.30))
+			sm.set_shader_parameter("sss_emissive", 0.76)
+			sm.set_shader_parameter("sss_rim", 0.92)
+			sm.set_shader_parameter("sss_base", 0.336)
+			sm.set_shader_parameter("albedo_boost", 1.38)
 			mi.set_surface_override_material(s, sm)
 			if not have_canopy:
 				canopy = mesh_aabb
@@ -18132,20 +18152,228 @@ func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: 
 
 
 func _tree_surface_is_leaf(mat: Material) -> bool:
+	## Strict leaf match only — never treat bark / opaque wood as foliage SSS.
 	if mat == null:
 		return false
 	var label := String(mat.resource_name)
+	if label.findn("bark") >= 0:
+		return false
 	if label.findn("leaf") >= 0:
 		return true
 	if mat is BaseMaterial3D:
 		var bm := mat as BaseMaterial3D
 		if bm.albedo_texture != null:
 			var path := String(bm.albedo_texture.resource_path)
+			if path.findn("bark") >= 0:
+				return false
 			if path.findn("leaf") >= 0:
 				return true
-		if bm.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+		## Alpha-cutout cards without bark/leaf names still count as foliage.
+		if bm.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR \
+				or bm.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_HASH:
 			return true
 	return false
+
+
+func _ensure_tree_bark_diffuse(mi: MeshInstance3D, surface: int, src: Material) -> void:
+	## Keep trunk as normal diffuse bark — strip any accidental emission / foliage override.
+	if mi == null:
+		return
+	var bark: BaseMaterial3D = null
+	if src is BaseMaterial3D:
+		bark = (src as BaseMaterial3D).duplicate() as BaseMaterial3D
+	else:
+		bark = StandardMaterial3D.new()
+		bark.albedo_color = Color(0.42, 0.28, 0.16)
+	bark.emission_enabled = false
+	bark.emission_energy_multiplier = 0.0
+	bark.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	bark.roughness = maxf(bark.roughness, 0.78)
+	bark.metallic = minf(bark.metallic, 0.08)
+	mi.set_surface_override_material(surface, bark)
+
+
+func _setup_outdoor_tree_interact(tree: Node3D) -> void:
+	## Clickable volume for shake + occasional apple drop. Pivot = tree origin (ground).
+	if tree == null or not is_instance_valid(tree):
+		return
+	outdoor_shake_trees.append(tree)
+	tree.set_meta("tree_base_rot", tree.rotation_degrees)
+	var aabb := AABB()
+	var have := false
+	for n in tree.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null or String(mi.name).begins_with("LeafShadow"):
+			continue
+		## Approximate AABB in tree space from mesh AABB corners.
+		var xf_aabb := mi.get_aabb()
+		var corners: Array[Vector3] = [
+			Vector3(xf_aabb.position.x, xf_aabb.position.y, xf_aabb.position.z),
+			Vector3(xf_aabb.end.x, xf_aabb.position.y, xf_aabb.position.z),
+			Vector3(xf_aabb.position.x, xf_aabb.end.y, xf_aabb.position.z),
+			Vector3(xf_aabb.position.x, xf_aabb.position.y, xf_aabb.end.z),
+			Vector3(xf_aabb.end.x, xf_aabb.end.y, xf_aabb.end.z),
+		]
+		for c in corners:
+			var p: Vector3 = tree.to_local(mi.to_global(c))
+			if not have:
+				aabb = AABB(p, Vector3.ZERO)
+				have = true
+			else:
+				aabb = aabb.expand(p)
+	if not have:
+		aabb = AABB(Vector3(-1.5, 0.0, -1.5), Vector3(3.0, 8.0, 3.0))
+	var area := Area3D.new()
+	area.name = "TreeClickArea"
+	area.collision_layer = TREE_CLICK_COLLISION_LAYER
+	area.collision_mask = 0
+	area.input_ray_pickable = true
+	area.monitoring = false
+	area.monitorable = true
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(
+		maxf(aabb.size.x * 1.15, 1.2),
+		maxf(aabb.size.y * 1.05, 2.5),
+		maxf(aabb.size.z * 1.15, 1.2)
+	)
+	col.shape = box
+	col.position = aabb.get_center()
+	area.add_child(col)
+	tree.add_child(area)
+	area.set_meta("shake_tree", tree)
+
+
+func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
+	if not playing or camera == null or world == null:
+		return false
+	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
+			or sale_held or cup_held or spatula_patty != null or dragging_patty != null:
+		return false
+	var space := world.get_world_3d().direct_space_state
+	if space == null:
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 48.0)
+	q.collision_mask = TREE_CLICK_COLLISION_LAYER
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return false
+	var collider = hit.get("collider")
+	if collider == null or not is_instance_valid(collider):
+		return false
+	var tree: Node3D = collider.get_meta("shake_tree", null) as Node3D
+	if tree == null or not is_instance_valid(tree):
+		tree = collider.get_parent() as Node3D
+	if tree == null or not outdoor_shake_trees.has(tree):
+		return false
+	_shake_outdoor_tree(tree)
+	return true
+
+
+func _shake_outdoor_tree(tree: Node3D) -> void:
+	## Subtle multi-axis wobble anchored at the ground (tree origin).
+	if tree == null or not is_instance_valid(tree):
+		return
+	if tree.has_meta("tree_shake_tw"):
+		var old = tree.get_meta("tree_shake_tw")
+		if old != null and is_instance_valid(old):
+			old.kill()
+	var base: Vector3 = tree.get_meta("tree_base_rot", tree.rotation_degrees)
+	tree.set_meta("tree_base_rot", base)
+	var amp := TREE_SHAKE_DEG
+	var kick := Vector3(
+		randf_range(-amp, amp),
+		randf_range(-amp * 0.35, amp * 0.35),
+		randf_range(-amp, amp)
+	)
+	var kick2 := Vector3(
+		randf_range(-amp * 0.7, amp * 0.7),
+		randf_range(-amp * 0.25, amp * 0.25),
+		randf_range(-amp * 0.7, amp * 0.7)
+	)
+	var tw := create_tween()
+	tree.set_meta("tree_shake_tw", tw)
+	tw.tween_property(tree, "rotation_degrees", base + kick, 0.07) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(tree, "rotation_degrees", base + kick2, 0.10) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(tree, "rotation_degrees", base + kick * -0.45, 0.10) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(tree, "rotation_degrees", base, 0.16) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	if randf() < TREE_APPLE_CHANCE:
+		_spawn_tree_apple(tree)
+
+
+func _spawn_tree_apple(tree: Node3D) -> void:
+	## Small red sphere (~meatball) drops from the canopy with a little toss.
+	if tree == null or not is_instance_valid(tree) or world == null:
+		return
+	var canopy_y := 2.4
+	for n in tree.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null or String(mi.name).begins_with("LeafShadow"):
+			continue
+		var top := tree.to_local(mi.to_global(mi.get_aabb().position + mi.get_aabb().size * Vector3(0.5, 1.0, 0.5)))
+		canopy_y = maxf(canopy_y, top.y * 0.72)
+	var local_spawn := Vector3(
+		randf_range(-0.35, 0.35),
+		canopy_y,
+		randf_range(-0.35, 0.35)
+	)
+	var spawn := tree.to_global(local_spawn)
+	var body := RigidBody3D.new()
+	body.name = "TreeApple"
+	body.position = spawn
+	body.gravity_scale = 1.15
+	body.linear_damp = 0.15
+	body.angular_damp = 0.4
+	body.collision_layer = 0
+	body.collision_mask = 1 ## bounce on default world / ground if present
+	var col := CollisionShape3D.new()
+	var sphere_shape := SphereShape3D.new()
+	sphere_shape.radius = TREE_APPLE_RADIUS
+	col.shape = sphere_shape
+	body.add_child(col)
+	var mesh_i := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = TREE_APPLE_RADIUS
+	sphere.height = TREE_APPLE_RADIUS * 2.0
+	sphere.radial_segments = 14
+	sphere.rings = 8
+	mesh_i.mesh = sphere
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.albedo_color = Color(0.86, 0.12, 0.10)
+	mat.roughness = 0.55
+	mat.metallic = 0.0
+	## Tiny sheen — not bark SSS, just a crisp apple read.
+	mat.emission_enabled = true
+	mat.emission = Color(0.55, 0.08, 0.05)
+	mat.emission_energy_multiplier = 0.18
+	mesh_i.material_override = mat
+	mesh_i.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	body.add_child(mesh_i)
+	world.add_child(body)
+	body.linear_velocity = Vector3(
+		randf_range(-0.55, 0.55),
+		randf_range(0.35, 1.1),
+		randf_range(-0.35, 0.75)
+	)
+	body.angular_velocity = Vector3(
+		randf_range(-6.0, 6.0),
+		randf_range(-4.0, 4.0),
+		randf_range(-6.0, 6.0)
+	)
+	## Clean up after it has had time to roll away.
+	get_tree().create_timer(8.0).timeout.connect(func():
+		if body != null and is_instance_valid(body):
+			body.queue_free()
+	)
 
 
 func _add_tree_canopy_shadow_blockers(host: MeshInstance3D, canopy: AABB, seed_v: float) -> void:
@@ -18269,6 +18497,38 @@ func _save_tree_light_settings() -> void:
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_y", tree_light_off_y)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_z", tree_light_off_z)
 	cfg.save(GFX_CFG_PATH)
+
+
+func _icecream_station_world_pos() -> Vector3:
+	## Camera looks +Z out the window → camera-right is world −X.
+	return ICECREAM_STATION_POS + Vector3(-icecream_cam_right_ft * FT_TO_M, 0.0, 0.0)
+
+
+func _apply_icecream_station_position() -> void:
+	if icecream_root != null and is_instance_valid(icecream_root):
+		icecream_root.position = _icecream_station_world_pos()
+
+
+func _load_icecream_station_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if cfg.has_section_key(ICECREAM_POS_CFG_SECTION, "cam_right_ft"):
+		icecream_cam_right_ft = clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft")), -4.0, 8.0)
+
+
+func _save_icecream_station_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft", icecream_cam_right_ft)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_icecream_station_hidden_ui() -> void:
+	if options_hidden_icecream_pos_slider != null and is_instance_valid(options_hidden_icecream_pos_slider):
+		options_hidden_icecream_pos_slider.set_value_no_signal(icecream_cam_right_ft)
+	if options_hidden_icecream_pos_lab != null and is_instance_valid(options_hidden_icecream_pos_lab):
+		options_hidden_icecream_pos_lab.text = "%.2f ft" % icecream_cam_right_ft
 
 
 func _sync_tree_light_hidden_ui() -> void:
@@ -20848,9 +21108,10 @@ func _build_icecream_machine() -> void:
 	icecream_cone_held = false
 	icecream_cone_fill = 0.0
 
+	_load_icecream_station_settings()
 	var root := Node3D.new()
 	root.name = "SoftServeStation"
-	root.position = ICECREAM_STATION_POS
+	root.position = _icecream_station_world_pos()
 	root.rotation_degrees = ICECREAM_STATION_ROT
 	world.add_child(root)
 	icecream_root = root
@@ -32432,6 +32693,45 @@ func _build_options_menu() -> void:
 		func(): return tree_light_off_z,
 		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
 
+	var ice_lab := Label.new()
+	ice_lab.text = "SOFT SERVE POSITION"
+	UiFontsScript.apply_label(ice_lab, true, 13)
+	ice_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(ice_lab)
+
+	var ice_row := HBoxContainer.new()
+	ice_row.add_theme_constant_override("separation", 10)
+	options_hidden_room_tone_box.add_child(ice_row)
+	var ice_name := Label.new()
+	ice_name.text = "Camera-Right Offset"
+	ice_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(ice_name, false, 12)
+	ice_name.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
+	ice_row.add_child(ice_name)
+	options_hidden_icecream_pos_lab = Label.new()
+	options_hidden_icecream_pos_lab.custom_minimum_size = Vector2(56, 0)
+	options_hidden_icecream_pos_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(options_hidden_icecream_pos_lab, false, 12)
+	options_hidden_icecream_pos_lab.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	options_hidden_icecream_pos_lab.text = "%.2f ft" % icecream_cam_right_ft
+	ice_row.add_child(options_hidden_icecream_pos_lab)
+
+	options_hidden_icecream_pos_slider = HSlider.new()
+	options_hidden_icecream_pos_slider.min_value = -4.0
+	options_hidden_icecream_pos_slider.max_value = 8.0
+	options_hidden_icecream_pos_slider.step = 0.05
+	options_hidden_icecream_pos_slider.value = icecream_cam_right_ft
+	options_hidden_icecream_pos_slider.custom_minimum_size = Vector2(0, 28)
+	options_hidden_icecream_pos_slider.focus_mode = Control.FOCUS_ALL
+	options_hidden_icecream_pos_slider.value_changed.connect(func(val: float):
+		icecream_cam_right_ft = clampf(val, -4.0, 8.0)
+		if options_hidden_icecream_pos_lab != null:
+			options_hidden_icecream_pos_lab.text = "%.2f ft" % icecream_cam_right_ft
+		_apply_icecream_station_position()
+		_save_icecream_station_settings()
+	)
+	options_hidden_room_tone_box.add_child(options_hidden_icecream_pos_slider)
+
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
 	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -32606,6 +32906,7 @@ func _try_unlock_hidden_options() -> void:
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 			_sync_tree_light_hidden_ui()
+			_sync_icecream_station_hidden_ui()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
 		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
