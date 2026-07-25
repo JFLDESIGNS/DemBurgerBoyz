@@ -5137,12 +5137,13 @@ func _update_spatula_piano_slide(tip_pos: Vector3, scraping_debris: bool = false
 	var moving := moved >= SPATULA_SCRAPE_MIN_MOVE * 0.35
 	if moving:
 		_spatula_piano_gliss_armed = true
-	## Sounded C-major pitch (no tinggrill sample compensation — synth plays true Hz).
-	var midi_f := _grill_piano_sounding_at_f(cur_f) + float(_spatula_roll_midi_offset())
+	## Request MIDI = sounded + sample comp (same as taps — gliss uses tinggrill).
+	var midi_f := _grill_piano_sounding_at_f(cur_f) + float(GRILL_PIANO_SAMPLE_COMP) \
+		+ float(_spatula_roll_midi_offset())
 	var tap_vol := 0.92 if absf(_spatula_user_roll) < 22.5 else 1.68
 	var slide_vol := tap_vol * 0.5
 	if game_audio != null and game_audio.has_method("set_spatula_gliss"):
-		## Once armed, sustain + track tip until release / debris / leave cook.
+		## Once armed, tinggrill pitch-glides with the tip until release / debris.
 		game_audio.set_spatula_gliss(_spatula_piano_gliss_armed, midi_f, slide_vol)
 
 

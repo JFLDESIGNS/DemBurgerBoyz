@@ -26,19 +26,17 @@ var _player_i: int = 0
 var _ting_players: Array[AudioStreamPlayer] = []
 var _ting_player_i: int = 0
 const TING_POOL := 8
-## Flourish gliss — live additive portamento (true continuous pitch, not sample taps).
-var _gliss_player: AudioStreamPlayer
-var _gliss_gen: AudioStreamGenerator
+## Flourish gliss — same tinggrill sample, pitch-bent + soft overlaps (not a synth).
+var _gliss_players: Array[AudioStreamPlayer] = []
+var _gliss_player_i: int = 0
+const GLISS_POOL := 4
 var _gliss_on: bool = false
-var _gliss_midi: float = 60.0
-var _gliss_hz: float = 261.63
-var _gliss_hz_smooth: float = 261.63
+var _gliss_midi: float = 72.0 ## request MIDI (includes tinggrill sample comp)
+var _gliss_midi_smooth: float = 72.0
 var _gliss_vol: float = 0.0
 var _gliss_vol_target: float = 0.0
-var _gliss_phase: float = 0.0
-var _gliss_phase2: float = 0.0
-var _gliss_phase3: float = 0.0
-var _gliss_lp: float = 0.0
+var _gliss_retrigger: float = 0.0
+const GLISS_RETRIGGER := 0.05
 var _cache: Dictionary = {} ## key -> AudioStreamWAV
 var _sizzle_player: AudioStreamPlayer
 var _sizzle_gen: AudioStreamGenerator
@@ -177,16 +175,13 @@ func _ready() -> void:
 		tp.volume_db = -80.0
 		add_child(tp)
 		_ting_players.append(tp)
-	## Live additive glissando — continuous Hz sweep while spatula flourishes.
-	_gliss_gen = AudioStreamGenerator.new()
-	_gliss_gen.mix_rate = MIX_RATE
-	_gliss_gen.buffer_length = 0.12
-	_gliss_player = AudioStreamPlayer.new()
-	_gliss_player.name = "SpatulaGliss"
-	_gliss_player.bus = "Master"
-	_gliss_player.stream = _gliss_gen
-	_gliss_player.volume_db = -80.0
-	add_child(_gliss_player)
+	for i in GLISS_POOL:
+		var gp := AudioStreamPlayer.new()
+		gp.name = "SpatulaGliss_%d" % i
+		gp.bus = "Master"
+		gp.volume_db = -80.0
+		add_child(gp)
+		_gliss_players.append(gp)
 	## Live procedural sizzle — no looping WAV (avoids ocean-loop feel).
 	_sizzle_gen = AudioStreamGenerator.new()
 	_sizzle_gen.mix_rate = MIX_RATE
@@ -354,7 +349,6 @@ func _process(delta: float) -> void:
 			_oil_slide_pop_cd = 0.0
 	_tick_scrape_tings(delta)
 	_tick_spatula_gliss(delta)
-	_fill_spatula_gliss_buffer()
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
@@ -492,7 +486,6 @@ func _process(delta: float) -> void:
 	_stop_generator_if_orphaned(_ice_player, _ice_on)
 	_stop_generator_if_orphaned(_softserve_player, _softserve_on)
 	_stop_generator_if_orphaned(_fryer_player, _fryer_on)
-	_stop_generator_if_orphaned(_gliss_player, _gliss_vol > 0.01 or _gliss_on)
 	_stop_generator_if_orphaned(_room_tone_player, _room_tone_on and not _room_tone_muted)
 
 
@@ -1143,84 +1136,80 @@ func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	p.play()
 
 
-func set_spatula_gliss(active: bool, midi: float = 60.0, volume_scale: float = 0.5) -> void:
-	## True portamento glissando — continuous Hz sweep (sounded MIDI, not sample-comp).
+func set_spatula_gliss(active: bool, midi: float = 72.0, volume_scale: float = 0.5) -> void:
+	## Flourish uses tinggrill itself — pitch glides; soft overlaps keep it connected.
 	if active:
 		var was := _gliss_on
 		_gliss_on = true
-		_gliss_midi = clampf(midi, 48.0, 88.0)
-		_gliss_hz = 440.0 * pow(2.0, (_gliss_midi - 69.0) / 12.0)
-		## Half of a normal tap; synth body needs a touch more linear gain.
-		_gliss_vol_target = clampf(volume_scale, 0.0, 1.5) * 0.85
+		_gliss_midi = clampf(midi, 48.0, 96.0)
+		_gliss_vol_target = clampf(volume_scale, 0.0, 1.5)
 		if not was:
-			_gliss_hz_smooth = _gliss_hz
-			_gliss_phase = 0.0
-			_gliss_phase2 = 0.0
-			_gliss_phase3 = 0.0
-			_gliss_lp = 0.0
-			if _gliss_player != null:
-				_gliss_player.volume_db = linear_to_db(0.55)
-				if not _gliss_player.playing:
-					_gliss_player.play()
+			_gliss_midi_smooth = _gliss_midi
+			_gliss_retrigger = 0.0
+			_fire_gliss_ting(true)
 	else:
 		_gliss_on = false
 		_gliss_vol_target = 0.0
 
 
+func _tinggrill_stream() -> AudioStream:
+	if not _cache.has("tinggrill"):
+		var loaded: AudioStream = _load_tinggrill_stream()
+		if loaded == null:
+			loaded = _make_spatula_ting_note(72)
+		_cache["tinggrill"] = loaded
+	return _cache["tinggrill"]
+
+
+func _gliss_ting_gain(midi: float, volume_scale: float) -> float:
+	## Same compensation curve as play_spatula_ting, quieter for overlapping glide.
+	var semis := clampf(midi - 72.0, -24.0, 16.0)
+	var away := absf(semis)
+	var pitch_boost := 1.0 + away * (0.14 if semis < 0.0 else 0.05)
+	if away > 0.001:
+		pitch_boost *= 1.2
+	return 1.75 * pitch_boost * maxf(0.0, volume_scale) * 0.62
+
+
+func _fire_gliss_ting(soft_attack: bool = false) -> void:
+	if _gliss_players.is_empty():
+		return
+	var p: AudioStreamPlayer = _gliss_players[_gliss_player_i]
+	_gliss_player_i = (_gliss_player_i + 1) % _gliss_players.size()
+	p.stream = _tinggrill_stream()
+	var semis := clampf(_gliss_midi_smooth - 72.0, -24.0, 16.0)
+	p.pitch_scale = pow(2.0, semis / 12.0)
+	var gain := _gliss_ting_gain(_gliss_midi_smooth, maxf(_gliss_vol, _gliss_vol_target))
+	## Skip the hard tip so overlaps read as a scrape-glide, not new taps.
+	p.volume_db = linear_to_db(clampf(gain * (0.7 if soft_attack else 0.85), 0.05, 2.4))
+	p.play(0.012)
+
+
 func _tick_spatula_gliss(delta: float) -> void:
-	## Smooth attack/release + exponential Hz follow (musical portamento).
 	var fade_up := _gliss_vol_target > _gliss_vol
-	_gliss_vol = move_toward(_gliss_vol, _gliss_vol_target, delta * (14.0 if fade_up else 5.5))
-	## Fast enough to track a swipe, slow enough to hear the slide between degrees.
-	var follow := 1.0 - exp(-delta * 18.0)
-	_gliss_hz_smooth = lerpf(_gliss_hz_smooth, _gliss_hz, follow)
-	if _gliss_player != null:
-		if _gliss_vol > 0.01:
-			_gliss_player.volume_db = linear_to_db(clampf(0.42 + _gliss_vol * 0.35, 0.08, 0.9))
-			if not _gliss_player.playing:
-				_gliss_player.play()
-		elif not _gliss_on:
-			if _gliss_player.playing:
-				_gliss_player.stop()
-			_gliss_player.volume_db = -80.0
-
-
-func _fill_spatula_gliss_buffer() -> void:
-	if _gliss_player == null or not _gliss_player.playing:
-		return
-	if _gliss_vol <= 0.001 and not _gliss_on:
-		return
-	var playback := _gliss_player.get_stream_playback() as AudioStreamGeneratorPlayback
-	if playback == null:
-		return
-	while playback.get_frames_available() > 0:
-		playback.push_frame(Vector2.ONE * _next_gliss_sample())
-
-
-func _next_gliss_sample() -> float:
-	## Bright steel-harp portamento: fundamental + odd-leaning partials, phase-continuous.
-	var hz := clampf(_gliss_hz_smooth, 65.0, 1400.0)
-	var inc := hz / float(MIX_RATE)
-	_gliss_phase = fposmod(_gliss_phase + inc, 1.0)
-	_gliss_phase2 = fposmod(_gliss_phase2 + inc * 2.005, 1.0) ## slight chorus detune
-	_gliss_phase3 = fposmod(_gliss_phase3 + inc * 3.0, 1.0)
-	var p1 := _gliss_phase * TAU
-	var p2 := _gliss_phase2 * TAU
-	var p3 := _gliss_phase3 * TAU
-	## Soft additive string/bell body — reads as a real glide, not a sine beep.
-	var s := sin(p1) * 0.52
-	s += sin(p2) * 0.28
-	s += sin(p3) * 0.14
-	s += sin(p1 * 4.0) * 0.07
-	s += sin(p1 * 5.0) * 0.045
-	s += sin(p1 * 6.0) * 0.025
-	## Tiny steel grit, heavily filtered so it shimmers without crackle.
-	var grit := (randf() * 2.0 - 1.0) * 0.04
-	_gliss_lp = _gliss_lp * 0.92 + grit * 0.08
-	s += _gliss_lp * 0.55
-	## Soft saturation keeps peaks musical when harmonics stack.
-	s = tanh(s * 1.15)
-	return clampf(s * _gliss_vol * 0.55, -1.0, 1.0)
+	_gliss_vol = move_toward(_gliss_vol, _gliss_vol_target, delta * (12.0 if fade_up else 6.0))
+	## Pitch follows tip — this is the glissando, using the real ting sample.
+	var follow := 1.0 - exp(-delta * 22.0)
+	_gliss_midi_smooth = lerpf(_gliss_midi_smooth, _gliss_midi, follow)
+	var semis := clampf(_gliss_midi_smooth - 72.0, -24.0, 16.0)
+	var pitch := pow(2.0, semis / 12.0)
+	var gain := _gliss_ting_gain(_gliss_midi_smooth, _gliss_vol)
+	var vol_db := linear_to_db(clampf(gain * 0.85, 0.05, 2.4)) if _gliss_vol > 0.01 else -80.0
+	for p in _gliss_players:
+		if p == null or not is_instance_valid(p) or not p.playing:
+			continue
+		p.pitch_scale = pitch
+		p.volume_db = vol_db
+	if _gliss_on and _gliss_vol > 0.01:
+		_gliss_retrigger = maxf(0.0, _gliss_retrigger - delta)
+		if _gliss_retrigger <= 0.0:
+			_fire_gliss_ting(false)
+			_gliss_retrigger = GLISS_RETRIGGER + randf_range(-0.008, 0.012)
+	elif _gliss_vol <= 0.01 and not _gliss_on:
+		for p2 in _gliss_players:
+			if p2 != null and is_instance_valid(p2) and p2.playing:
+				p2.stop()
+				p2.volume_db = -80.0
 
 
 func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) -> void:
