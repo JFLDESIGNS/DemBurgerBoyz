@@ -457,8 +457,10 @@ const RESIDUE_SIT_CHANCE_SEC := 10.0
 const RESIDUE_SIT_ALWAYS_SEC := 9999.0 ## unused — stay at 80% after threshold
 const RESIDUE_SIT_CHANCE := 0.80
 const RESIDUE_MIN_LEAVE_AMT := 0.12 ## below this, leave the steel clean
-## Cooking on oil this long → always leave crust (mid-cook or scoop).
+## Cooking on oil this long → leave one crust (mid-cook or scoop). Once only.
 const RESIDUE_OIL_COOK_SEC := 2.0
+## After the oil crust, another leave needs this long on the same cook spot.
+const RESIDUE_OIL_AGAIN_SPOT_SEC := 6.0
 ## Each oil puddle / speck rolls this chance to leave scrapable black crust when it burns off.
 const OIL_RESIDUE_LEAVE_CHANCE := 0.50
 ## Lit / flaming oil uses a lower leave rate when the fire cooks it off.
@@ -8766,11 +8768,16 @@ func _patty_grill_sit_seconds(patty: Area3D) -> float:
 
 
 func _patty_should_leave_residue(patty: Area3D) -> bool:
-	## ≤10s clean · >10s 80% chance · oil ≥2s always. Skip if already stained here.
+	## Oil ≥2s → one crust once. After that (or non-oil): sit rules / 6s re-spot.
 	if patty != null and bool(patty.get("spot_residue_spawned")):
 		return false
-	if patty != null and float(patty.get("oil_cook_t")) >= RESIDUE_OIL_COOK_SEC:
+	if patty != null \
+			and float(patty.get("oil_cook_t")) >= RESIDUE_OIL_COOK_SEC \
+			and not bool(patty.get("oil_crust_left")):
 		return true
+	## Already used the oil crust — need a fresh 6s dwell on this cook spot.
+	if patty != null and bool(patty.get("oil_crust_left")):
+		return float(patty.get("spot_dwell_t")) >= RESIDUE_OIL_AGAIN_SPOT_SEC
 	var sit := _patty_grill_sit_seconds(patty)
 	if sit <= RESIDUE_SIT_CHANCE_SEC:
 		return false
@@ -8796,7 +8803,16 @@ func _update_patty_oil_cook_time(patty: Area3D, delta: float) -> void:
 	patty.oil_cook_t = float(patty.oil_cook_t) + delta
 
 
-func _spawn_patty_cook_residue_now(patty: Area3D) -> void:
+func _mark_patty_residue_left(patty: Area3D, from_oil: bool) -> void:
+	if patty == null or not is_instance_valid(patty):
+		return
+	patty.spot_residue_spawned = true
+	patty.spot_residue_rolled = true
+	if from_oil or float(patty.get("oil_cook_t")) >= RESIDUE_OIL_COOK_SEC:
+		patty.oil_crust_left = true
+
+
+func _spawn_patty_cook_residue_now(patty: Area3D, from_oil: bool = false) -> void:
 	## Drop a stain under the burger right now (oil fry / spot dwell).
 	if patty == null or not is_instance_valid(patty):
 		return
@@ -8807,8 +8823,7 @@ func _spawn_patty_cook_residue_now(patty: Area3D) -> void:
 	var slot := _find_residue_slot_for_spot(at)
 	if slot < 0:
 		return
-	patty.spot_residue_spawned = true
-	patty.spot_residue_rolled = true
+	_mark_patty_residue_left(patty, from_oil)
 	if mp_enabled and not _mp_applying:
 		mp_residue_leave.rpc(slot, at.x, at.z, false, "patty", 1.0)
 		return
@@ -8816,7 +8831,7 @@ func _spawn_patty_cook_residue_now(patty: Area3D) -> void:
 
 
 func _update_patty_cook_spot_residue(patty: Area3D, delta: float) -> void:
-	## Oil ≥2s → always crust. Else same XZ for 10s → 80% chance.
+	## Oil ≥2s → one crust once. Later: same spot ≥6s for another. Non-oil: 10s / 80%.
 	if patty == null or not is_instance_valid(patty):
 		return
 	if _is_bun_toast(patty) or patty.is_held or patty == spatula_patty:
@@ -8825,9 +8840,11 @@ func _update_patty_cook_spot_residue(patty: Area3D, delta: float) -> void:
 		return
 	if mp_enabled and patty.mp_puppet:
 		return
-	## Oil fry past the threshold — guaranteed leave-behind under the meat.
-	if float(patty.get("oil_cook_t")) >= RESIDUE_OIL_COOK_SEC and not bool(patty.spot_residue_spawned):
-		_spawn_patty_cook_residue_now(patty)
+	## One-time oil fry crust under the meat.
+	if float(patty.get("oil_cook_t")) >= RESIDUE_OIL_COOK_SEC \
+			and not bool(patty.get("oil_crust_left")) \
+			and not bool(patty.spot_residue_spawned):
+		_spawn_patty_cook_residue_now(patty, true)
 		return
 	var xz := Vector2(float(patty._rest_x), float(patty._rest_z))
 	var prev: Vector2 = patty.spot_dwell_xz
@@ -8835,20 +8852,28 @@ func _update_patty_cook_spot_residue(patty: Area3D, delta: float) -> void:
 		patty.spot_dwell_xz = xz
 		patty.spot_dwell_t = 0.0
 		patty.spot_residue_rolled = false
-		## Keep oil-forced stains; only clear spot-dwell rolls on move.
-		if float(patty.get("oil_cook_t")) < RESIDUE_OIL_COOK_SEC:
-			patty.spot_residue_spawned = false
+		## New cook spot can earn another crust after the dwell gate.
+		patty.spot_residue_spawned = false
 		return
 	## Only accumulate while the burner is actually cooking this pad.
 	if not grill_on or float(patty.heat_mul) <= 0.01:
 		return
 	patty.spot_dwell_t = float(patty.spot_dwell_t) + delta
-	if float(patty.spot_dwell_t) < RESIDUE_COOK_SPOT_SEC or bool(patty.spot_residue_rolled):
+	if bool(patty.spot_residue_rolled) or bool(patty.spot_residue_spawned):
+		return
+	## Oil burgers already left their oil crust — next leave needs 6s on this spot.
+	if bool(patty.get("oil_crust_left")):
+		if float(patty.spot_dwell_t) < RESIDUE_OIL_AGAIN_SPOT_SEC:
+			return
+		patty.spot_residue_rolled = true
+		_spawn_patty_cook_residue_now(patty, false)
+		return
+	if float(patty.spot_dwell_t) < RESIDUE_COOK_SPOT_SEC:
 		return
 	patty.spot_residue_rolled = true
 	if randf() >= RESIDUE_COOK_SPOT_CHANCE:
 		return
-	_spawn_patty_cook_residue_now(patty)
+	_spawn_patty_cook_residue_now(patty, false)
 
 
 func _find_residue_slot_for_spot(at: Vector3) -> int:
@@ -8960,6 +8985,10 @@ func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> vo
 	## Scooping peer rolls; partners only see leave via RPC (same spot / amount).
 	if not _patty_should_leave_residue(patty):
 		return
+	var from_oil := patty != null \
+		and float(patty.get("oil_cook_t")) >= RESIDUE_OIL_COOK_SEC \
+		and not bool(patty.get("oil_crust_left"))
+	_mark_patty_residue_left(patty, from_oil)
 	var amt := 1.0
 	var at := Vector3(patty._rest_x, GRILL_SURFACE_Y + 0.030, patty._rest_z) if patty else slot_positions[slot] + Vector3(0, 0.030, 0)
 	## Prefer a free / matching residue pad so mid-cook stains stay put.
@@ -37662,6 +37691,11 @@ func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> v
 	patty.position = Vector3(pos.x, patty.base_y, pos.z)
 	patty._rest_x = pos.x
 	patty._rest_z = pos.z
+	## Fresh cook-spot clock so a re-drop can't instantly leave another crust.
+	patty.spot_dwell_t = 0.0
+	patty.spot_dwell_xz = Vector2(pos.x, pos.z)
+	patty.spot_residue_rolled = false
+	patty.spot_residue_spawned = false
 	if patty.get_parent() == null:
 		patties_root.add_child(patty)
 	grill[idx] = patty
