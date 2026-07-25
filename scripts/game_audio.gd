@@ -138,6 +138,11 @@ var _room_tone_hz: float = 174.0
 var _room_tone_vol: float = 0.0
 var _room_tone_phase: float = 0.0
 var _room_tone_muted: bool = false ## true during particle prewarm — no beds / no underrun hiss
+const OUTDOOR_AMBIENCE_PATH := "res://sounds/outdoor_forest_ambience.ogg"
+var _outdoor_ambience_player: AudioStreamPlayer = null
+var _outdoor_ambience_vol: float = 0.0
+var _outdoor_ambience_on: bool = false
+var _outdoor_ambience_muted: bool = false
 
 
 func _ready() -> void:
@@ -263,6 +268,11 @@ func _ready() -> void:
 	_room_tone_player.stream = _room_tone_gen
 	_room_tone_player.volume_db = -80.0
 	add_child(_room_tone_player)
+	_outdoor_ambience_player = AudioStreamPlayer.new()
+	_outdoor_ambience_player.name = "OutdoorAmbience"
+	_outdoor_ambience_player.bus = "Master"
+	_outdoor_ambience_player.volume_db = -80.0
+	add_child(_outdoor_ambience_player)
 	set_process(true)
 
 
@@ -467,8 +477,47 @@ func silence_continuous_beds(mute_room_tone: bool = true) -> void:
 			if _room_tone_player.playing:
 				_room_tone_player.stop()
 			_room_tone_player.volume_db = -80.0
+		_outdoor_ambience_muted = true
+		_outdoor_ambience_on = false
+		if _outdoor_ambience_player != null and is_instance_valid(_outdoor_ambience_player):
+			if _outdoor_ambience_player.playing:
+				_outdoor_ambience_player.stop()
+			_outdoor_ambience_player.volume_db = -80.0
 	else:
 		_room_tone_muted = false
+		_outdoor_ambience_muted = false
+
+
+func set_outdoor_ambience(volume_linear: float) -> void:
+	## Looping forest birdsong bed. volume_linear 0 = off.
+	_outdoor_ambience_vol = clampf(volume_linear, 0.0, 1.0)
+	_outdoor_ambience_muted = false
+	if _outdoor_ambience_player == null:
+		return
+	if _outdoor_ambience_vol <= 0.001:
+		_outdoor_ambience_on = false
+		if _outdoor_ambience_player.playing:
+			_outdoor_ambience_player.stop()
+		_outdoor_ambience_player.volume_db = -80.0
+		return
+	if _outdoor_ambience_player.stream == null:
+		if not ResourceLoader.exists(OUTDOOR_AMBIENCE_PATH):
+			push_warning("Outdoor ambience missing: %s" % OUTDOOR_AMBIENCE_PATH)
+			return
+		var stream: AudioStream = load(OUTDOOR_AMBIENCE_PATH) as AudioStream
+		if stream == null:
+			return
+		if stream is AudioStreamOggVorbis:
+			(stream as AudioStreamOggVorbis).loop = true
+		elif stream is AudioStreamMP3:
+			(stream as AudioStreamMP3).loop = true
+		_outdoor_ambience_player.stream = stream
+	_outdoor_ambience_on = true
+	## Slider 1.0 ≈ −6 dB bed — present behind kitchen SFX.
+	var linear := clampf(_outdoor_ambience_vol * 0.5, 0.0008, 0.5)
+	_outdoor_ambience_player.volume_db = linear_to_db(linear)
+	if not _outdoor_ambience_player.playing:
+		_outdoor_ambience_player.play()
 
 
 func set_room_tone(hz: float, volume_linear: float) -> void:
@@ -1077,29 +1126,32 @@ func play_error() -> void:
 	_play_cached("error_buzz", _make_error, 0.0, 0.55)
 
 
-func play_grease_pop(loud: bool = false) -> void:
+func play_grease_pop(loud: bool = false, volume_scale: float = 1.0) -> void:
 	## Fast fry crackle — same family as the grill sizzle pops, a bit quicker.
 	var key := "grease_pop_f_%d" % (randi() % 8)
 	var gain := (0.55 + randf() * 0.25) if loud else (0.2 + randf() * 0.12)
+	gain *= clampf(volume_scale, 0.0, 1.5)
 	var pitch := (0.95 + randf() * 0.55) if loud else (1.15 + randf() * 0.45)
 	_play_cached(key, _make_grease_pop, pitch, gain)
 
 
+const SMASH_SIZZLE_VOL_MUL := 0.8 ## Place / smoosh bed — 20% quieter than prior.
+
 func play_smash_sizzle(volume_scale: float = 1.0) -> void:
 	## Press juice hiss + a few grease pops when you smash a patty.
-	var vol := clampf(volume_scale, 0.0, 1.5)
+	var vol := clampf(volume_scale, 0.0, 1.5) * SMASH_SIZZLE_VOL_MUL
 	_play_cached("smash_hiss_%d" % (randi() % 4), _make_smash_hiss, 0.92 + randf() * 0.16, 0.85 * vol)
-	if vol >= 0.75:
-		play_grease_pop(true)
+	if vol >= 0.75 * SMASH_SIZZLE_VOL_MUL:
+		play_grease_pop(true, SMASH_SIZZLE_VOL_MUL)
 		var tree := get_tree()
 		if tree == null:
 			return
-		tree.create_timer(0.04).timeout.connect(func(): play_grease_pop(true))
-		tree.create_timer(0.09).timeout.connect(func(): play_grease_pop(false))
-		tree.create_timer(0.15).timeout.connect(func(): play_grease_pop(true))
+		tree.create_timer(0.04).timeout.connect(func(): play_grease_pop(true, SMASH_SIZZLE_VOL_MUL))
+		tree.create_timer(0.09).timeout.connect(func(): play_grease_pop(false, SMASH_SIZZLE_VOL_MUL))
+		tree.create_timer(0.15).timeout.connect(func(): play_grease_pop(true, SMASH_SIZZLE_VOL_MUL))
 	else:
 		## Half-volume slide smoosh — one quiet pop, no cluster.
-		play_grease_pop(false)
+		play_grease_pop(false, SMASH_SIZZLE_VOL_MUL)
 
 
 func play_cat_meow() -> void:

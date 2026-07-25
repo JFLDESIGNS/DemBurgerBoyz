@@ -1132,12 +1132,16 @@ var options_hidden_room_tone_box: VBoxContainer = null
 var options_hidden_room_tone_option: OptionButton = null
 var options_hidden_room_tone_vol: HSlider = null
 var options_hidden_room_tone_vol_lab: Label = null
+var options_hidden_outdoor_ambience_vol: HSlider = null
+var options_hidden_outdoor_ambience_vol_lab: Label = null
 ## Soft Solfeggio-ish room beds (Hz). Default 174, quiet.
 var room_tone_hz: float = 174.0
 var room_tone_volume: float = 0.0 ## Off by default — opt-in from Hidden menu; never replaces kitchen SFX
+var outdoor_ambience_volume: float = 0.35 ## Forest birdsong bed — Hidden menu control
 const ROOM_TONE_FREQS: Array[float] = [174.0, 285.0, 396.0]
 const AUDIO_ROOM_TONE_HZ_KEY := "room_tone_hz"
 const AUDIO_ROOM_TONE_VOL_KEY := "room_tone_volume"
+const AUDIO_OUTDOOR_AMBIENCE_VOL_KEY := "outdoor_ambience_volume"
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -32084,6 +32088,47 @@ func _build_options_menu() -> void:
 	if options_hidden_room_tone_vol_lab != null:
 		options_hidden_room_tone_vol_lab.text = "%.2f" % room_tone_volume
 
+	var amb_lab := Label.new()
+	amb_lab.text = "OUTDOOR AMBIENCE"
+	UiFontsScript.apply_label(amb_lab, true, 13)
+	amb_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(amb_lab)
+
+	var amb_vol_row := HBoxContainer.new()
+	amb_vol_row.add_theme_constant_override("separation", 10)
+	options_hidden_room_tone_box.add_child(amb_vol_row)
+	var amb_vol_name := Label.new()
+	amb_vol_name.text = "Ambience Volume"
+	amb_vol_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(amb_vol_name, false, 12)
+	amb_vol_name.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
+	amb_vol_row.add_child(amb_vol_name)
+	options_hidden_outdoor_ambience_vol_lab = Label.new()
+	options_hidden_outdoor_ambience_vol_lab.name = "Val"
+	options_hidden_outdoor_ambience_vol_lab.custom_minimum_size = Vector2(44, 0)
+	options_hidden_outdoor_ambience_vol_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(options_hidden_outdoor_ambience_vol_lab, false, 12)
+	options_hidden_outdoor_ambience_vol_lab.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	amb_vol_row.add_child(options_hidden_outdoor_ambience_vol_lab)
+
+	options_hidden_outdoor_ambience_vol = HSlider.new()
+	options_hidden_outdoor_ambience_vol.min_value = 0.0
+	options_hidden_outdoor_ambience_vol.max_value = 1.0
+	options_hidden_outdoor_ambience_vol.step = 0.01
+	options_hidden_outdoor_ambience_vol.value = outdoor_ambience_volume
+	options_hidden_outdoor_ambience_vol.custom_minimum_size = Vector2(0, 28)
+	options_hidden_outdoor_ambience_vol.focus_mode = Control.FOCUS_ALL
+	options_hidden_outdoor_ambience_vol.value_changed.connect(func(val: float):
+		outdoor_ambience_volume = clampf(val, 0.0, 1.0)
+		if options_hidden_outdoor_ambience_vol_lab != null:
+			options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
+		_apply_outdoor_ambience_settings()
+		_save_audio_settings()
+	)
+	options_hidden_room_tone_box.add_child(options_hidden_outdoor_ambience_vol)
+	if options_hidden_outdoor_ambience_vol_lab != null:
+		options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
+
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
 	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -32253,6 +32298,10 @@ func _try_unlock_hidden_options() -> void:
 				options_hidden_room_tone_vol.set_value_no_signal(room_tone_volume)
 			if options_hidden_room_tone_vol_lab != null:
 				options_hidden_room_tone_vol_lab.text = "%.2f" % room_tone_volume
+			if options_hidden_outdoor_ambience_vol != null:
+				options_hidden_outdoor_ambience_vol.set_value_no_signal(outdoor_ambience_volume)
+			if options_hidden_outdoor_ambience_vol_lab != null:
+				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
 		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
@@ -32278,6 +32327,14 @@ func _apply_room_tone_settings() -> void:
 		return
 	if game_audio.has_method("set_room_tone"):
 		game_audio.set_room_tone(room_tone_hz, room_tone_volume)
+	_apply_outdoor_ambience_settings()
+
+
+func _apply_outdoor_ambience_settings() -> void:
+	if game_audio == null:
+		return
+	if game_audio.has_method("set_outdoor_ambience"):
+		game_audio.set_outdoor_ambience(outdoor_ambience_volume)
 
 
 func _toggle_options_menu() -> void:
@@ -33265,6 +33322,8 @@ func _load_audio_settings() -> void:
 		room_tone_hz = float(cfg.get_value("audio", AUDIO_ROOM_TONE_HZ_KEY))
 	if cfg.has_section_key("audio", AUDIO_ROOM_TONE_VOL_KEY):
 		room_tone_volume = clampf(float(cfg.get_value("audio", AUDIO_ROOM_TONE_VOL_KEY)), 0.0, 1.0)
+	if cfg.has_section_key("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY):
+		outdoor_ambience_volume = clampf(float(cfg.get_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY)), 0.0, 1.0)
 	## Snap to nearest allowed Solfeggio bed.
 	var best := float(ROOM_TONE_FREQS[0])
 	var best_d := 9999.0
@@ -33283,6 +33342,7 @@ func _save_audio_settings() -> void:
 	cfg.set_value("audio", AUDIO_MASTER_KEY, master_volume_linear)
 	cfg.set_value("audio", AUDIO_ROOM_TONE_HZ_KEY, room_tone_hz)
 	cfg.set_value("audio", AUDIO_ROOM_TONE_VOL_KEY, room_tone_volume)
+	cfg.set_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY, outdoor_ambience_volume)
 	cfg.save(AUDIO_CFG_PATH)
 
 
