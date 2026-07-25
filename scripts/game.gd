@@ -26417,9 +26417,9 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 					pouring_soda = true
 					_cup_fizz = minf(1.0, _cup_fizz + delta * 2.4)
 					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.95)
-					var rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.98, 0.0)
-					_update_soda_stream(soda_tip, rim, cup_flavor)
-					_emit_soda_overfill_spill(rim, cup_flavor, spilled, delta)
+					var spill_rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.98, 0.0)
+					_update_soda_stream(soda_tip, spill_rim, cup_flavor)
+					_emit_soda_overfill_spill(spill_rim, cup_flavor, spilled, delta)
 				elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 					_hide_soda_stream()
