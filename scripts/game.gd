@@ -335,8 +335,9 @@ const CHEESE_STRING_BREAK_DIST := 0.52
 const CHEESE_STRING_KILL_DIST := 0.72
 const CHEESE_STRING_STRANDS := 3
 const CHEESE_STRING_BREAK_SEC := 0.28
-const CHEESE_STRING_MIN_LIFT := 0.012 ## Show strands with a small tip lift
-const CHEESE_STRING_PULL_LIFT := 0.055 ## Extra tip lift while RMB cheese-pull is active
+const CHEESE_STRING_MIN_LIFT := 0.060 ## Above on-burger tip clearance (~0.05); strands stay 0 until lift-off
+const CHEESE_STRING_REVEAL_SPAN := 0.040 ## Blend 0→full strand height over this extra lift
+const CHEESE_STRING_PULL_LIFT := 0.055 ## Extra tip lift once strands are already revealing
 var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
@@ -17941,15 +17942,18 @@ func _update_cheese_strings(delta: float) -> void:
 			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
 		## Active pull: RMB latch, or LMB hold/slide on the melt.
 		var pull_active: bool = cheese_pull_patty == patty or patty == dragging_patty
-		if pull_active:
-			tip.y = maxf(tip.y, cheese_base.y + CHEESE_STRING_PULL_LIFT)
+		## Use real tip height first — never invent lift while the blade sits on the melt.
+		var raw_lift := tip.y - cheese_base.y
+		var reveal := clampf((raw_lift - CHEESE_STRING_MIN_LIFT) / maxf(CHEESE_STRING_REVEAL_SPAN, 0.001), 0.0, 1.0)
+		reveal = reveal * reveal * (3.0 - 2.0 * reveal) ## smoothstep
+		if pull_active and reveal > 0.05:
+			## Only boost tip once the spatula has actually lifted off.
+			tip.y = maxf(tip.y, lerpf(tip.y, cheese_base.y + CHEESE_STRING_PULL_LIFT, reveal))
 		item["tip_cache"] = tip
 		var dist := cheese_base.distance_to(tip)
-		var lift := tip.y - cheese_base.y
 		var mis: Array = item.get("mis", [])
-		## Hide only when tip is truly flat on the melt (still show during a pull).
-		var flat_contact: bool = lift < CHEESE_STRING_MIN_LIFT and not pull_active
-		if flat_contact and not bool(item.get("breaking", false)):
+		## Spatula on the burger → scale strands to 0 (hidden) until lift-off.
+		if reveal <= 0.001 and not bool(item.get("breaking", false)):
 			for mi0 in mis:
 				if mi0 != null and is_instance_valid(mi0):
 					(mi0 as MeshInstance3D).visible = false
@@ -17977,13 +17981,13 @@ func _update_cheese_strings(delta: float) -> void:
 			break_u = clampf(float(item["break_t"]) / CHEESE_STRING_BREAK_SEC, 0.0, 1.0)
 			break_u = break_u * break_u
 		var stretch_u := clampf(dist / CHEESE_STRING_BREAK_DIST, 0.0, 1.35)
-		var sag := lerpf(0.014, 0.062, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u)
-		## Thicker strands (~2× prior).
-		var half_w := lerpf(0.010, 0.0034, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85)
+		var sag := lerpf(0.014, 0.062, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u) * reveal
+		## Thicker strands (~2× prior); also scale with reveal so flat contact reads as 0 height.
+		var half_w := lerpf(0.010, 0.0034, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85) * reveal
 		var col := Color(1.0, 0.82, 0.26)
 		if patty.has_method("cheese_color"):
 			col = patty.cheese_color()
-		col.a = lerpf(0.95, 0.0, break_u)
+		col.a = lerpf(0.95, 0.0, break_u) * reveal
 		var mats: Array = item.get("mats", [])
 		var offs: Array = item.get("offs", [])
 		var phase0 := float(item.get("phase", 0.0)) + delta * 6.0
@@ -17992,13 +17996,15 @@ func _update_cheese_strings(delta: float) -> void:
 			var mi: MeshInstance3D = mis[s]
 			if mi == null or not is_instance_valid(mi):
 				continue
-			mi.visible = true
+			mi.visible = reveal > 0.02
 			var od: Dictionary = offs[s] if s < offs.size() else {}
 			var c_off: Vector3 = od.get("cheese", Vector3.ZERO)
 			var t_off: Vector3 = od.get("tip", Vector3.ZERO)
-			var wobble := sin(phase0 + float(od.get("phase", 0.0))) * 0.004 * (1.0 - break_u)
+			var wobble := sin(phase0 + float(od.get("phase", 0.0))) * 0.004 * (1.0 - break_u) * reveal
 			var a := cheese_base + c_off + Vector3(wobble, 0.0, -wobble * 0.6)
-			var b := tip + t_off
+			## Collapse tip end down onto the cheese while reveal is small (vertical scale → 0).
+			var b_full := tip + t_off
+			var b := Vector3(b_full.x, lerpf(a.y, b_full.y, reveal), b_full.z)
 			## Breaking: retract tip end back toward the cheese (string snaps short).
 			if breaking:
 				b = a.lerp(b, 1.0 - break_u)
