@@ -5535,11 +5535,12 @@ func _make_grill_tap_note_label(parent: Node3D, local_pos: Vector3, text: String
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.modulate = Color(1.0, 0.95, 0.75, 1.0)
-	lab.outline_size = 8
+	lab.outline_size = 12
 	lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.85)
 	lab.no_depth_test = true
 	lab.render_priority = 12
-	UiFontsScript.apply_label3d(lab, true, 28, 0.012)
+	## ~3× prior size (was 28 / 0.012).
+	UiFontsScript.apply_label3d(lab, true, 84, 0.036)
 	parent.add_child(lab)
 	return lab
 
