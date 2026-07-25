@@ -26933,8 +26933,10 @@ func _build_board_hint_label() -> void:
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.no_depth_test = true
 	lab.fixed_size = true
-	## Smaller Luckiest Guy — was font 18 / pixel 0.0016.
-	UiFontsScript.apply_luckiest_label3d(lab, 13, 0.018, 3)
+	## No Label3D outline — it draws a second ghosted glyph pass with this font.
+	UiFontsScript.apply_luckiest_label3d(lab, 13, 0.018, 0)
+	lab.outline_size = 0
+	lab.outline_modulate = Color(0, 0, 0, 0)
 	lab.position = Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.05)
 	lab.visible = true
 	build_cutting_board.add_child(lab)
