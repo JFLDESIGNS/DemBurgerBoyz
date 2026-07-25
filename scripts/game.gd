@@ -1452,8 +1452,8 @@ const CUP_FILL_EXTRA_Y_DEFAULT := 0.0
 var cup_hold_height: float = CUP_HOLD_HEIGHT_DEFAULT
 var cup_fill_extra_y: float = CUP_FILL_EXTRA_Y_DEFAULT
 const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
-## Local Y of the drip-grate top (matches soda drip-floor collider top: 0.04s + 0.03s).
-const CUP_TRAY_DECK_LOCAL_Y := 0.07 * SODA_FOUNTAIN_SCALE
+## Local Y of the drip-grate seat — below the old mid-air float (~3" under floor-collider top).
+const CUP_TRAY_DECK_LOCAL_Y := 0.02 * SODA_FOUNTAIN_SCALE
 ## Cup mesh ~10% smaller than the original fountain cups.
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
@@ -36467,7 +36467,7 @@ func _build_ingredient_legend() -> void:
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
 
-		## Hover overlay: KEYIMAGE.png keycap perched on the topping top.
+		## Hover overlay: assets/ui/keycap.png perched on the topping top.
 		var keycap_host := Control.new()
 		keycap_host.name = "KeycapHost"
 		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -36527,23 +36527,34 @@ func _build_ingredient_legend() -> void:
 	call_deferred("_refresh_ingredient_stock_bars")
 
 
-const STRIP_KEYCAP_TEX_PATH := "res://IMAGES/KEYIMAGE.png"
+const STRIP_KEYCAP_TEX_PATHS: Array[String] = [
+	"res://assets/ui/keycap.png",
+	"res://IMAGES/KEYCAP.png",
+	"res://IMAGES/KEYIMAGE.png",
+]
 var _strip_keycap_tex: Texture2D = null
 
 
 func _get_strip_keycap_texture() -> Texture2D:
-	## IMAGES/KEYIMAGE.png — blank keycap art for strip hotkey hover badges.
+	## Blank keycap art (assets/ui/keycap.png) for strip hotkey hover badges.
 	if _strip_keycap_tex != null:
 		return _strip_keycap_tex
-	if not ResourceLoader.exists(STRIP_KEYCAP_TEX_PATH):
-		return null
-	var src := load(STRIP_KEYCAP_TEX_PATH) as Texture2D
-	if src == null:
-		return null
-	var img := src.get_image()
+	var img: Image = null
+	for path in STRIP_KEYCAP_TEX_PATHS:
+		if ResourceLoader.exists(path):
+			var src := load(path) as Texture2D
+			if src != null:
+				img = src.get_image()
+				if img != null:
+					break
+		## Raw PNG fallback for exports that pack the file without a texture import.
+		if FileAccess.file_exists(path):
+			var loaded := Image.new()
+			if loaded.load(path) == OK:
+				img = loaded
+				break
 	if img == null:
-		_strip_keycap_tex = src
-		return src
+		return null
 	## Punch the solid black plate to alpha so only the key shows on the strip.
 	img.convert(Image.FORMAT_RGBA8)
 	for y in img.get_height():
@@ -36556,7 +36567,7 @@ func _get_strip_keycap_texture() -> Texture2D:
 
 
 func _make_strip_hotkey_keycap(digit: String) -> Control:
-	## Little keycap badge from IMAGES/KEYIMAGE.png with the hotkey digit on top.
+	## Little keycap badge from assets/ui/keycap.png with the hotkey digit on top.
 	var root := Control.new()
 	root.name = "KeycapImage"
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
