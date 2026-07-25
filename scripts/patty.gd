@@ -22,6 +22,7 @@ var cook_time: float = 0.0
 var flipped_once: bool = false
 var first_side_time: float = 0.0 ## cook progress locked in when flipped
 var is_held: bool = false
+var is_slide_drag: bool = false ## True while spatula-sliding on the steel (hide status ring)
 var smash_bonus: float = 0.0
 var slot_index: int = -1
 ## Multiplayer identity — assigned when spawned in a co-op session.
@@ -840,6 +841,13 @@ func _process(delta: float) -> void:
 			_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.2)
 		else:
 			_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+
+	if is_slide_drag:
+		## Spatula slide — keep cooking visuals, hide status ring / tip text.
+		if _hint:
+			_hint.visible = false
+		_set_hold_meter_visible(false)
+		return
 
 	var on_hold := warm_hold_time > 0.0 or heat_mul <= 0.001
 	## Freshness disc only on finished meat parked in HOLD — never while still cooking.

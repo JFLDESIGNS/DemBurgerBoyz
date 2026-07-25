@@ -334,6 +334,7 @@ const CHEESE_STRING_BREAK_DIST := 0.42
 const CHEESE_STRING_KILL_DIST := 0.58
 const CHEESE_STRING_STRANDS := 3
 const CHEESE_STRING_BREAK_SEC := 0.28
+const CHEESE_STRING_MIN_LIFT := 0.038 ## Hide while tip is flat on the melt; show on lift
 var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
@@ -5327,9 +5328,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		pitch = HAND_SPATULA_EMPTY_ROT.x + HAND_SPATULA_SLAP_FWD_PITCH
 		roll = 0.0
 		pivot_local = HAND_SPATULA_TIP_OFFSET
-		## Cheese strings from melt → blade while you slide a cheesed burger.
-		_try_attach_cheese_strings_to_patty(dragging_patty, tip_target)
-		_try_attach_cheese_strings_near_tip(tip_target)
+		## No cheese strings while the blade is flat under a sliding burger.
 		## Pull-flip spin / burger pitch can keep going while we drag.
 		if _spatula_anim_kind == 3 or _spatula_anim_kind == 4:
 			_spatula_anim_t += delta
@@ -7813,6 +7812,10 @@ func _begin_patty_drag_local(patty: Area3D) -> void:
 	if patty == null or not is_instance_valid(patty):
 		return
 	dragging_patty = patty
+	if "is_slide_drag" in patty:
+		patty.is_slide_drag = true
+	if patty.has_method("_set_hold_meter_visible"):
+		patty._set_hold_meter_visible(false)
 	drag_start_mouse = get_viewport().get_mouse_position()
 	drag_last_mouse = drag_start_mouse
 	drag_vel_screen = Vector2.ZERO
@@ -7945,6 +7948,8 @@ func _end_patty_drag() -> void:
 	drag_owner_id = 0
 	drag_did_move = false
 	drag_vel_screen = Vector2.ZERO
+	if is_instance_valid(patty) and "is_slide_drag" in patty:
+		patty.is_slide_drag = false
 	if game_audio:
 		game_audio.set_slide_moving(false)
 		if game_audio.has_method("set_burger_slide_oil"):
@@ -17566,6 +17571,9 @@ func _try_attach_cheese_strings_near_tip(tip_pos: Vector3) -> void:
 func _try_attach_cheese_strings_to_patty(patty: Area3D, tip_pos: Vector3) -> void:
 	if not _patty_can_cheese_string(patty):
 		return
+	## Flat under a sliding burger — latch later on a real tip lift instead.
+	if patty == dragging_patty:
+		return
 	if _cheese_string_exists_for(patty):
 		return
 	var d := Vector2(tip_pos.x - patty.position.x, tip_pos.z - patty.position.z).length()
@@ -17706,11 +17714,21 @@ func _update_cheese_strings(delta: float) -> void:
 			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
 		item["tip_cache"] = tip
 		var dist := cheese_base.distance_to(tip)
+		var lift := tip.y - cheese_base.y
+		var mis: Array = item.get("mis", [])
+		## Flat on the melt / sliding under the burger — hide strands until a real lift.
+		var flat_contact := lift < CHEESE_STRING_MIN_LIFT or patty == dragging_patty
+		if flat_contact and not bool(item.get("breaking", false)):
+			for mi0 in mis:
+				if mi0 != null and is_instance_valid(mi0):
+					(mi0 as MeshInstance3D).visible = false
+			keep.append(item)
+			continue
 		var breaking := bool(item.get("breaking", false))
 		## Pull too far / spatula gone → snap & shrink away.
 		if not breaking:
 			if dist >= CHEESE_STRING_KILL_DIST \
-					or (not spatula_grill_hold and dist > CHEESE_STRING_BREAK_DIST * 0.85) \
+					or (not spatula_grill_hold and patty != dragging_patty and dist > CHEESE_STRING_BREAK_DIST * 0.85) \
 					or dist >= CHEESE_STRING_BREAK_DIST:
 				item["breaking"] = true
 				breaking = true
@@ -17725,13 +17743,13 @@ func _update_cheese_strings(delta: float) -> void:
 			break_u = clampf(float(item["break_t"]) / CHEESE_STRING_BREAK_SEC, 0.0, 1.0)
 			break_u = break_u * break_u
 		var stretch_u := clampf(dist / CHEESE_STRING_BREAK_DIST, 0.0, 1.35)
-		var sag := lerpf(0.012, 0.055, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u)
-		var half_w := lerpf(0.0048, 0.0016, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85)
+		var sag := lerpf(0.014, 0.062, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u)
+		## Thicker strands (~2× prior).
+		var half_w := lerpf(0.010, 0.0034, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85)
 		var col := Color(1.0, 0.82, 0.26)
 		if patty.has_method("cheese_color"):
 			col = patty.cheese_color()
-		col.a = lerpf(0.92, 0.0, break_u)
-		var mis: Array = item.get("mis", [])
+		col.a = lerpf(0.95, 0.0, break_u)
 		var mats: Array = item.get("mats", [])
 		var offs: Array = item.get("offs", [])
 		var phase0 := float(item.get("phase", 0.0)) + delta * 6.0
@@ -17740,6 +17758,7 @@ func _update_cheese_strings(delta: float) -> void:
 			var mi: MeshInstance3D = mis[s]
 			if mi == null or not is_instance_valid(mi):
 				continue
+			mi.visible = true
 			var od: Dictionary = offs[s] if s < offs.size() else {}
 			var c_off: Vector3 = od.get("cheese", Vector3.ZERO)
 			var t_off: Vector3 = od.get("tip", Vector3.ZERO)
