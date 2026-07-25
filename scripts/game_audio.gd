@@ -26,6 +26,17 @@ var _player_i: int = 0
 var _ting_players: Array[AudioStreamPlayer] = []
 var _ting_player_i: int = 0
 const TING_POOL := 8
+## Flourish gliss — overlapping soft voices + pitch glide (not discrete taps).
+var _gliss_players: Array[AudioStreamPlayer] = []
+var _gliss_player_i: int = 0
+const GLISS_POOL := 3
+var _gliss_on: bool = false
+var _gliss_midi: float = 72.0
+var _gliss_midi_smooth: float = 72.0
+var _gliss_vol: float = 0.0
+var _gliss_vol_target: float = 0.0
+var _gliss_retrigger: float = 0.0
+const GLISS_RETRIGGER := 0.065
 var _cache: Dictionary = {} ## key -> AudioStreamWAV
 var _sizzle_player: AudioStreamPlayer
 var _sizzle_gen: AudioStreamGenerator
@@ -164,6 +175,13 @@ func _ready() -> void:
 		tp.volume_db = -80.0
 		add_child(tp)
 		_ting_players.append(tp)
+	for i in GLISS_POOL:
+		var gp := AudioStreamPlayer.new()
+		gp.name = "SpatulaGliss_%d" % i
+		gp.bus = "Master"
+		gp.volume_db = -80.0
+		add_child(gp)
+		_gliss_players.append(gp)
 	## Live procedural sizzle — no looping WAV (avoids ocean-loop feel).
 	_sizzle_gen = AudioStreamGenerator.new()
 	_sizzle_gen.mix_rate = MIX_RATE
@@ -330,6 +348,7 @@ func _process(delta: float) -> void:
 			_oil_slide_player.pitch_scale = 1.0
 			_oil_slide_pop_cd = 0.0
 	_tick_scrape_tings(delta)
+	_tick_spatula_gliss(delta)
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
@@ -1115,6 +1134,86 @@ func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	var gain := base_gain * pitch_boost * maxf(0.0, volume_scale)
 	p.volume_db = linear_to_db(clampf(gain, 0.05, 3.5))
 	p.play()
+
+
+func set_spatula_gliss(active: bool, midi: float = 72.0, volume_scale: float = 0.5) -> void:
+	## Continuous flourish glide — pitch slides between notes (not discrete taps).
+	if active:
+		var was := _gliss_on
+		_gliss_on = true
+		_gliss_midi = clampf(midi, 48.0, 88.0)
+		_gliss_vol_target = clampf(volume_scale, 0.0, 1.5)
+		if not was:
+			_gliss_midi_smooth = _gliss_midi
+			_gliss_retrigger = 0.0
+			_fire_gliss_voice(true)
+	else:
+		_gliss_on = false
+		_gliss_vol_target = 0.0
+
+
+func _tinggrill_stream() -> AudioStream:
+	if not _cache.has("tinggrill"):
+		var loaded: AudioStream = _load_tinggrill_stream()
+		if loaded == null:
+			loaded = _make_spatula_ting_note(72)
+		_cache["tinggrill"] = loaded
+	return _cache["tinggrill"]
+
+
+func _gliss_pitch_scale(midi: float) -> float:
+	var semis := clampf(midi - 72.0, -24.0, 16.0)
+	return pow(2.0, semis / 12.0)
+
+
+func _gliss_gain_for(midi: float, volume_scale: float) -> float:
+	var semis := clampf(midi - 72.0, -24.0, 16.0)
+	var away := absf(semis)
+	var pitch_boost := 1.0 + away * (0.14 if semis < 0.0 else 0.05)
+	if away > 0.001:
+		pitch_boost *= 1.15
+	## Softer than a tap — connected glide bed.
+	return 1.15 * pitch_boost * maxf(0.0, volume_scale)
+
+
+func _fire_gliss_voice(soft_attack: bool = false) -> void:
+	if _gliss_players.is_empty():
+		return
+	var p: AudioStreamPlayer = _gliss_players[_gliss_player_i]
+	_gliss_player_i = (_gliss_player_i + 1) % _gliss_players.size()
+	p.stream = _tinggrill_stream()
+	p.pitch_scale = _gliss_pitch_scale(_gliss_midi_smooth)
+	var gain := _gliss_gain_for(_gliss_midi_smooth, maxf(_gliss_vol, _gliss_vol_target))
+	## Skip the hard tip transient so retriggers read as a slide, not taps.
+	p.volume_db = linear_to_db(clampf(gain * (0.55 if soft_attack else 0.72), 0.04, 2.2))
+	p.play(0.018)
+
+
+func _tick_spatula_gliss(delta: float) -> void:
+	var fade_up := _gliss_vol_target > _gliss_vol
+	_gliss_vol = move_toward(_gliss_vol, _gliss_vol_target, delta * (10.0 if fade_up else 6.0))
+	## Follow tip pitch quickly so the glide tracks the spatula.
+	var follow := 1.0 - exp(-delta * 26.0)
+	_gliss_midi_smooth = lerpf(_gliss_midi_smooth, _gliss_midi, follow)
+	var pitch := _gliss_pitch_scale(_gliss_midi_smooth)
+	var gain := _gliss_gain_for(_gliss_midi_smooth, _gliss_vol)
+	var vol_db := linear_to_db(clampf(gain * 0.72, 0.04, 2.2)) if _gliss_vol > 0.01 else -80.0
+	for p in _gliss_players:
+		if p == null or not is_instance_valid(p):
+			continue
+		if p.playing:
+			p.pitch_scale = pitch
+			p.volume_db = vol_db
+	if _gliss_on and _gliss_vol > 0.01:
+		_gliss_retrigger = maxf(0.0, _gliss_retrigger - delta)
+		if _gliss_retrigger <= 0.0:
+			_fire_gliss_voice(false)
+			_gliss_retrigger = GLISS_RETRIGGER + randf_range(-0.01, 0.02)
+	elif _gliss_vol <= 0.01 and not _gliss_on:
+		for p2 in _gliss_players:
+			if p2 != null and is_instance_valid(p2) and p2.playing:
+				p2.stop()
+				p2.volume_db = -80.0
 
 
 func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) -> void:
