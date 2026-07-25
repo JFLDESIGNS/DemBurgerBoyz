@@ -877,7 +877,7 @@ const FRIES_HOLD_MAX_PACKS := 4
 const FRIES_HOLD_PUSH_RADIUS := 0.13
 const FRIES_HOLD_PUSH_STEP := 0.018
 const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the strip.
-const FRIES_HOLD_MIN_SEP := 0.15 ## Center-to-center; keep packs out of each other.
+const FRIES_HOLD_MIN_SEP := 0.052 ## Matches tighter HOLD pack spacing.
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -1388,8 +1388,8 @@ const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
 const CUP_ICE_STACK_MAX := 36
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
-## Soft-serve — camera-left of the soda fountain (world +X of soda) so tank/cup hits don't eat cone clicks.
-const ICECREAM_STATION_POS := Vector3(-0.86, 1.19, 0.647)
+## Soft-serve — camera-left of the service window (same depth as before; mirrored off soda side).
+const ICECREAM_STATION_POS := Vector3(0.86, 1.19, 0.647)
 const ICECREAM_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const ICECREAM_CONE_COLLISION_LAYER := 16384
 const ICECREAM_CONE_H := 0.151
@@ -1448,8 +1448,10 @@ const FRYER_BASKET_FRY_TILT := -5.0
 ## Finished packs clear of the right pit (tracks pit seat).
 const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
 const FRIES_HOLD_PACK_Y := 0.108
-const FRIES_HOLD_PACK_SPACING_X := 0.16
-const FRIES_HOLD_PACK_SPACING_Z := 0.14
+## HOLD pack grid — 4" tighter than prior 0.16 / 0.14, anchored toward the window.
+const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
+const FRIES_HOLD_PACK_SPACING_Z := 0.0384 ## 0.14 − 4"
+const FRIES_HOLD_AWAY_FROM_PLAYER := 0.2286 ## 9" toward window / top of grill
 const FRYER_BASKET_HOME_Y := 0.159 ## was 0.235; tracks the lower pit
 const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
 const FRIES_PACK_TARGET_H := 0.167 ## ~15% bigger than prior 0.145 pack height
@@ -19604,14 +19606,16 @@ func _update_ready_fries_pack_sparkles(delta: float) -> void:
 
 
 func _ready_fries_slot_world(i: int) -> Vector3:
-	## 2×2 corners of the HOLD band — no giant X nudges (those clamped packs on top of each other).
+	## Tight 2×2 on the window/top edge of HOLD — away from the cook.
 	var b := _warmer_place_bounds()
 	var col := clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) % 2
 	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
-	var u := 0.16 if col == 0 else 0.84
-	var v := 0.20 if row == 0 else 0.80
-	var x := lerpf(b.position.x, b.end.x, u)
-	var z := lerpf(b.position.y, b.end.y, v)
+	var cx := (b.position.x + b.end.x) * 0.5
+	var x := cx + (float(col) - 0.5) * FRIES_HOLD_PACK_SPACING_X
+	## Rect2.y = window-side Z; sit near the top, then nudge another 9" away from player.
+	var z := b.position.y + 0.05 + float(row) * FRIES_HOLD_PACK_SPACING_Z - FRIES_HOLD_AWAY_FROM_PLAYER
+	x = clampf(x, b.position.x, b.end.x)
+	z = clampf(z, b.position.y, b.end.y)
 	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z)
 
 
@@ -20598,10 +20602,10 @@ func _build_icecream_machine() -> void:
 	nozzle.material_override = _make_soda_metal_mat(Color(0.88, 0.90, 0.94), 0.96, 0.1)
 	root.add_child(nozzle)
 
-	## Cone nest on the center-facing side (away from the soda tanks).
+	## Cone nest on the camera-right side of the machine (local +X with yaw 180).
 	var cone_rack := Node3D.new()
 	cone_rack.name = "ConeRack"
-	cone_rack.position = Vector3(-0.34, 0.373, 0.32)
+	cone_rack.position = Vector3(0.34, 0.373, 0.32)
 	root.add_child(cone_rack)
 	for i in 4:
 		var deco := _create_icecream_cone_node(false)
