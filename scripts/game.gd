@@ -1262,6 +1262,7 @@ var cheese_stack_top: MeshInstance3D = null ## Hidden while a slice is in hand
 var cheese_pile_slices: Array = [] ## MeshInstance3D slots — visibility tracks fridge stock
 const CHEESE_PILE_MAX_EACH := 10 ## visual cap per pile (20 total)
 var bun_pile_root: Node3D = null
+var bun_pile_area: Area3D = null ## Click volume over the 3D bun towers
 var bun_pile_stacks: Array = [] ## Pair roots (bottom+top); visibility tracks stock
 const BUN_PILE_TOWER_COUNT := 2 ## two towers on the board side (away from grill)
 const BUN_PILE_PAIRS_PER_TOWER := 2 ## double-stack each = 4 bun sets total
@@ -1277,6 +1278,8 @@ const BUN_PAIR_STACK_Y := 0.074
 ## Nudged +2.5" (0.0635m) away from the grill vs cheese-swap layout.
 const BUN_PILE_BASE := Vector3(-0.0065, -0.076, 0.145)
 const BUN_PILE_SPACING_X := 0.15
+const BUN_PILE_JUMP_Y := 0.0508 ## 2" hop on click
+const BUN_PILE_SCREEN_PX := 48.0
 var bun_pile_anchors: Dictionary = {} ## bun id -> Node3D (fly-to-build start)
 var _cheese_returning: bool = false
 var _cheese_return_t: float = 0.0
@@ -3317,6 +3320,10 @@ func _input(event: InputEvent) -> void:
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			## 3D bun towers (board-side) — thud + hop before cheese / UI steal the click.
+			if _try_bun_pile_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			## Cheese wheel sits under the Build column — grab before UI blocks world picks.
 			if not cheese_held and _try_cheese_station_click(event.position):
 				get_viewport().set_input_as_handled()
@@ -29749,6 +29756,7 @@ func _build_cheese_station_prop() -> void:
 	cheese_stack_top = null
 	cheese_pile_slices.clear()
 	bun_pile_root = null
+	bun_pile_area = null
 	bun_pile_stacks.clear()
 	bun_pile_anchors.clear()
 	if grill_root == null:
@@ -29908,6 +29916,21 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	bun_pile_root.add_child(home)
 	bun_pile_anchors["bun_bottom"] = home
 	bun_pile_anchors["bun_top"] = home
+	## Click volume covering both towers (same layer as cheese; distinguished by collider).
+	var area := Area3D.new()
+	area.name = "BunPileGrab"
+	area.collision_layer = CHEESE_STATION_COLLISION_LAYER
+	area.collision_mask = 0
+	area.monitoring = false
+	area.monitorable = true
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(BUN_PILE_SPACING_X + 0.16, 0.22, 0.18)
+	cs.shape = box
+	cs.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * 0.5, 0.10, 0.0)
+	area.add_child(cs)
+	bun_pile_root.add_child(area)
+	bun_pile_area = area
 
 
 func _bun_visual_pair_count() -> int:
@@ -29950,13 +29973,86 @@ func _bun_pile_home_world(id: String) -> Vector3:
 	return _cheese_stack_home_world() + Vector3(0.0, 0.02, 0.18)
 
 
+func _top_visible_bun_pair() -> Node3D:
+	var show_n := _bun_visual_pair_count()
+	if show_n <= 0 or show_n > bun_pile_stacks.size():
+		return null
+	var pair: Node3D = bun_pile_stacks[show_n - 1]
+	if pair == null or not is_instance_valid(pair) or not pair.visible:
+		return null
+	return pair
+
+
+func _bounce_top_bun_pile() -> void:
+	## Hop the top 3D bun pair ~2" up, then settle back.
+	var pair := _top_visible_bun_pair()
+	if pair == null:
+		return
+	if bool(pair.get_meta("bun_jumping", false)):
+		return
+	pair.set_meta("bun_jumping", true)
+	var base_y := pair.position.y
+	var tw := create_tween()
+	tw.tween_property(pair, "position:y", base_y + BUN_PILE_JUMP_Y, 0.10) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(pair, "position:y", base_y, 0.16) \
+		.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func():
+		if pair != null and is_instance_valid(pair):
+			pair.position.y = base_y
+			pair.set_meta("bun_jumping", false)
+	)
+
+
+func _bun_pile_under_cursor(screen_pos: Vector2) -> bool:
+	if camera == null or bun_pile_area == null or not is_instance_valid(bun_pile_area):
+		return false
+	if _pick_patty_at_screen(screen_pos) != null:
+		return false
+	var plane := _grill_plane_from_screen(screen_pos)
+	if plane != Vector3.ZERO and _is_on_grill_surface(plane):
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * 20.0)
+	q.collide_with_areas = true
+	q.collide_with_bodies = false
+	q.collision_mask = CHEESE_STATION_COLLISION_LAYER
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if not hit.is_empty() and hit.get("collider") == bun_pile_area:
+		return true
+	var anchor := _bun_pile_home_world("bun_top")
+	if camera.is_position_behind(anchor):
+		return false
+	return screen_pos.distance_to(camera.unproject_position(anchor)) < BUN_PILE_SCREEN_PX
+
+
+func _try_bun_pile_click(screen_pos: Vector2) -> bool:
+	## Click the 3D bun towers → thud + hop + send a crown to Build.
+	if not playing:
+		return false
+	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+		return false
+	if cheese_held or spatula_patty != null or dragging_patty != null or cup_held:
+		return false
+	if not _bun_pile_under_cursor(screen_pos):
+		return false
+	if _bun_visual_pair_count() <= 0 or int(supply_stock.get("bun_top", 0)) <= 0:
+		_flash("Out of buns — restock on phone!", Color("EF5350"))
+		return true
+	## Bounce + thud come from `_pulse_ingredient_feedback` inside `_add_ingredient`.
+	_add_ingredient("bun_top")
+	return true
+
+
 func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAFT) -> void:
 	if world == null or camera == null:
 		return
 	if id != "bun_bottom" and id != "bun_top":
 		return
-	## Soft hollow body thud as the 3D pile peels a bun toward Build.
-	if game_audio != null and game_audio.has_method("play_bun_thud"):
+	## Peel feedback — hop the tower; bottom-auto also thuds (strip already thudded via pulse).
+	_bounce_top_bun_pile()
+	if id == "bun_bottom" and game_audio != null and game_audio.has_method("play_bun_thud"):
 		game_audio.play_bun_thud()
 	var start := _bun_pile_home_world(id)
 	var end := _cutting_board_world_center() + Vector3(-0.03, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.02)
@@ -37531,6 +37627,9 @@ func _shake_ingredient_button(btn: Control) -> void:
 func _pulse_ingredient_feedback(id: String) -> void:
 	if ingredient_buttons.has(id):
 		_shake_ingredient_button(ingredient_buttons[id])
+	## Strip / pile bun click — hop the 3D tower with the thud.
+	if id == "bun_top" or id == "bun_bottom":
+		_bounce_top_bun_pile()
 	if game_audio:
 		game_audio.play_ingredient(id)
 

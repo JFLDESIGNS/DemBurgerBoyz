@@ -1014,8 +1014,9 @@ func _next_sizzle_sample(bed_gain: float, pop_boost: float) -> float:
 
 
 func play_ingredient(id: String) -> void:
-	## Buns use the 3D pile thud in `_animate_bun_to_build_station` instead.
+	## Buns get the hollow body thud (same as clicking the 3D pile).
 	if id == "bun_top" or id == "bun_bottom":
+		play_bun_thud()
 		return
 	var midi: int = int(INGREDIENT_MIDI.get(id, 60))
 	## Soft quiet tap — stays under sizzle / radio / grade stingers.
@@ -1024,7 +1025,8 @@ func play_ingredient(id: String) -> void:
 
 func play_bun_thud() -> void:
 	## Medium bassy body knock — lighter / hollower than the street-tree thud.
-	_play_cached("bun_thud_%d" % (randi() % 3), _make_bun_thud, 0.96 + randf() * 0.12, 0.52)
+	## v3 keys force a rebuild of the louder sample; gain near tree level.
+	_play_cached("bun_thud_v3_%d" % (randi() % 3), _make_bun_thud, 0.94 + randf() * 0.12, 1.35)
 
 
 func play_scale_jingle() -> void:
@@ -1823,20 +1825,20 @@ func _make_tree_thud() -> AudioStreamWAV:
 
 
 func _make_bun_thud() -> AudioStreamWAV:
-	## Tree-cousin knock — shorter, lighter, hollow soft-bread cavity.
-	var n := int(MIX_RATE * 0.16)
+	## Tree-cousin knock — shorter, lighter, hollow soft-bread cavity (louder body).
+	var n := int(MIX_RATE * 0.17)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var env := clampf(t / 0.006, 0.0, 1.0) * exp(-t * 16.0)
+		var env := clampf(t / 0.005, 0.0, 1.0) * exp(-t * 14.5)
 		## Mid-bass body (lighter than tree 72 Hz).
-		var body := sin(t * 98.0 * TAU) * 0.62 + sin(t * 148.0 * TAU) * 0.24
+		var body := sin(t * 96.0 * TAU) * 0.78 + sin(t * 148.0 * TAU) * 0.30
 		## Hollow airy shell — soft cavity resonance, decays faster.
-		var hollow := sin(t * 265.0 * TAU) * exp(-t * 28.0) * 0.32
-		hollow += sin(t * 390.0 * TAU) * exp(-t * 40.0) * 0.12
-		var crumb := (randf() * 2.0 - 1.0) * exp(-t * 70.0) * 0.035
-		_write_s16(pcm, i, int(clampf((body + hollow + crumb) * env, -1.0, 1.0) * 12800.0))
+		var hollow := sin(t * 255.0 * TAU) * exp(-t * 26.0) * 0.38
+		hollow += sin(t * 380.0 * TAU) * exp(-t * 38.0) * 0.14
+		var crumb := (randf() * 2.0 - 1.0) * exp(-t * 65.0) * 0.04
+		_write_s16(pcm, i, int(clampf((body + hollow + crumb) * env, -1.0, 1.0) * 19000.0))
 	return _wav_from_pcm(pcm, false)
 
 
