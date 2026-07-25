@@ -25865,10 +25865,13 @@ func _cup_fill_spout_nearby() -> Node3D:
 		return null
 	var best: Node3D = null
 	var best_d := CUP_MAGNET_RADIUS
-	for tip in [soda_spout_marker, ice_spout_marker]:
-		if tip == null or not is_instance_valid(tip):
-			continue
-		var tpos := tip.global_position
+	var tips: Array[Node3D] = []
+	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
+		tips.append(soda_spout_marker)
+	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
+		tips.append(ice_spout_marker)
+	for tip in tips:
+		var tpos: Vector3 = tip.global_position
 		var d := Vector2(cup_root.global_position.x - tpos.x, cup_root.global_position.z - tpos.z).length()
 		if d < best_d:
 			best_d = d
