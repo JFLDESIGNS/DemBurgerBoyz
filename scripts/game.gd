@@ -15900,40 +15900,24 @@ func _build_oil_bottle() -> void:
 	fcyl.top_radius = OIL_LIQUID_UPRIGHT_TOP_R
 	fcyl.bottom_radius = OIL_LIQUID_UPRIGHT_BOT_R
 	fcyl.height = OIL_LIQUID_UPRIGHT_H
+	fcyl.radial_segments = 24
+	fcyl.rings = 1
 	fcyl.cap_top = true
 	fcyl.cap_bottom = true
 	oil_liquid_mesh.mesh = fcyl
 	## Bottle mesh centers ~y 0.04 (h 0.12); fill that volume with a thin shell gap.
 	oil_liquid_mesh.position = Vector3(0.0, -0.015 + OIL_LIQUID_UPRIGHT_H * 0.5, 0.0)
 	var fmat := StandardMaterial3D.new()
-	fmat.albedo_color = Color(0.78, 0.66, 0.28, 0.78)
+	## Nearly opaque body so tip-pour reads as one grease volume (not see-through discs).
+	fmat.albedo_color = Color(0.72, 0.58, 0.22, 0.94)
 	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fmat.roughness = 0.28
-	fmat.metallic = 0.08
-	fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	fmat.roughness = 0.42
+	fmat.metallic = 0.05
+	fmat.cull_mode = BaseMaterial3D.CULL_BACK
 	oil_liquid_mesh.material_override = fmat
 	oil_liquid_pivot.add_child(oil_liquid_mesh)
 
-	oil_surface_pivot = Node3D.new()
-	oil_surface_pivot.name = "OilSurfacePivot"
-	oil_surface_pivot.position = Vector3(0.0, -0.015 + OIL_LIQUID_UPRIGHT_H, 0.0)
-	oil_liquid_pivot.add_child(oil_surface_pivot)
-
-	oil_surface_mesh = MeshInstance3D.new()
-	oil_surface_mesh.name = "OilSurface"
-	var splane := PlaneMesh.new()
-	splane.size = Vector2(OIL_LIQUID_UPRIGHT_TOP_R * 2.05, OIL_LIQUID_UPRIGHT_TOP_R * 2.05)
-	splane.subdivide_width = 8
-	splane.subdivide_depth = 8
-	oil_surface_mesh.mesh = splane
-	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(0.9, 0.78, 0.38, 0.55)
-	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smat.roughness = 0.12
-	smat.metallic = 0.12
-	smat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	oil_surface_mesh.material_override = smat
-	oil_surface_pivot.add_child(oil_surface_mesh)
+	## No free-surface plane — subdivided transparent discs stacked when tipped.
 
 	var tip := MeshInstance3D.new()
 	var tmesh := CylinderMesh.new()
@@ -16017,7 +16001,8 @@ func _update_oil_liquid(delta: float) -> void:
 	## Upright rests on bottle floor; pour packs against tip from below (no clip).
 	var bottom_y := lerpf(-0.015, OIL_LIQUID_MAX_TOP_Y - h, pour_t)
 	var center_y := bottom_y + h * 0.5
-	var slosh_mul := lerpf(1.0, 0.22, pour_t)
+	## Kill tip-slosh while pouring — keeps one solid plug instead of wobbling discs.
+	var slosh_mul := lerpf(1.0, 0.05, pour_t)
 	oil_liquid_pivot.position = Vector3.ZERO
 	oil_liquid_pivot.rotation_degrees = Vector3(
 		clampf(oil_liquid_slosh.y * 0.26 * slosh_mul, -10.0, 10.0),
@@ -16030,32 +16015,13 @@ func _update_oil_liquid(delta: float) -> void:
 			cyl = CylinderMesh.new()
 			cyl.cap_top = true
 			cyl.cap_bottom = true
+			cyl.radial_segments = 24
+			cyl.rings = 1
 			oil_liquid_mesh.mesh = cyl
 		cyl.height = h
 		cyl.bottom_radius = bot_r
 		cyl.top_radius = top_r
 		oil_liquid_mesh.position = Vector3(0.0, center_y, 0.0)
-	if oil_surface_pivot != null and is_instance_valid(oil_surface_pivot):
-		## Free surface: top of fill upright; body-side of the tip pool while pouring.
-		var surf_y := lerpf(bottom_y + h, bottom_y + 0.001, pour_t)
-		oil_surface_pivot.position = Vector3(
-			clampf(oil_liquid_slosh.x * 0.00035 * slosh_mul, -0.008, 0.008),
-			surf_y,
-			clampf(-oil_liquid_slosh.y * 0.00035 * slosh_mul, -0.008, 0.008)
-		)
-		var pitch := oil_root.rotation_degrees.x
-		## Don't counter a full 180° pour — that shoved the disc through the tip.
-		var level := lerpf(-pitch * 0.75, 0.0, pour_t)
-		oil_surface_pivot.rotation_degrees = Vector3(
-			clampf(level + oil_liquid_slosh.y * 0.18 * slosh_mul, -22.0, 22.0),
-			0.0,
-			clampf(oil_liquid_slosh.x * 0.18 * slosh_mul, -14.0, 14.0)
-		)
-		if oil_surface_mesh != null and is_instance_valid(oil_surface_mesh):
-			var plane := oil_surface_mesh.mesh as PlaneMesh
-			if plane != null:
-				var sr := lerpf(top_r, bot_r, pour_t) * 2.05
-				plane.size = Vector2(sr, sr)
 
 
 func _build_oil_stream_fx() -> void:
@@ -16659,10 +16625,11 @@ func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: f
 	mat.disable_receive_shadows = true
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.albedo_texture = _make_grill_shine_texture()
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.06)
+	## 12% less transparent than prior alpha 0.06 → ~0.173
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.1728)
 	mat.emission_enabled = true
 	mat.emission = Color(0.95, 0.97, 1.0)
-	mat.emission_energy_multiplier = 0.14
+	mat.emission_energy_multiplier = 0.16
 	mat.render_priority = 2
 	shine.material_override = mat
 	parent.add_child(shine)
