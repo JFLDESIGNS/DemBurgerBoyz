@@ -1117,7 +1117,7 @@ var cheese_pile_slices: Array = [] ## MeshInstance3D slots — visibility tracks
 const CHEESE_PILE_MAX_EACH := 10 ## visual cap per pile (20 total)
 var bun_pile_root: Node3D = null
 var bun_pile_stacks: Array = [] ## Pair roots (bottom+top); visibility tracks stock
-const BUN_PILE_TOWER_COUNT := 2 ## two towers left of cheese
+const BUN_PILE_TOWER_COUNT := 2 ## two towers on the board side (away from grill)
 const BUN_PILE_PAIRS_PER_TOWER := 2 ## double-stack each = 4 bun sets total
 const BUN_PILE_PAIR_SLOTS := BUN_PILE_TOWER_COUNT * BUN_PILE_PAIRS_PER_TOWER
 const BUN_PILE_SCALE := 0.85 ## Same scale as burgerpack preview props
@@ -1127,9 +1127,9 @@ const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb
 const BUN_PAIR_TOP_Y := 0.039
 ## Vertical step for the second pair on a tower.
 const BUN_PAIR_STACK_Y := 0.074
-## Left of cheese piles (cheese ~x −0.07 / +0.08, z ~0.14).
-const BUN_PILE_BASE := Vector3(-0.34, -0.076, 0.145)
-const BUN_PILE_SPACING_X := 0.155
+## Board-side of cheese (cheese sits nearer the grill at ~x −0.34 / −0.18).
+const BUN_PILE_BASE := Vector3(-0.07, -0.076, 0.145)
+const BUN_PILE_SPACING_X := 0.15
 var bun_pile_anchors: Dictionary = {} ## bun id -> Node3D (fly-to-build start)
 var _cheese_returning: bool = false
 var _cheese_return_t: float = 0.0
@@ -27095,14 +27095,14 @@ func _build_cheese_station_prop() -> void:
 	var slice_thick := 0.013
 	var slice_step := 0.0145
 	var slice_w := 0.118
-	## Two piles side-by-side, planted on the counter, back from the cook.
+	## Two piles nearer the grill; buns sit on the board side (higher local X).
 	var pile_defs := [
-		{"name": "CheesePileA", "pos": Vector3(-0.07, slice_thick * 0.5 - 0.076, 0.14), "yaw": -8.0},
-		{"name": "CheesePileB", "pos": Vector3(0.08, slice_thick * 0.5 - 0.076, 0.15), "yaw": 11.0},
+		{"name": "CheesePileA", "pos": Vector3(-0.34, slice_thick * 0.5 - 0.076, 0.14), "yaw": -8.0},
+		{"name": "CheesePileB", "pos": Vector3(-0.185, slice_thick * 0.5 - 0.076, 0.15), "yaw": 11.0},
 	]
 	var mid := Node3D.new()
 	mid.name = "CheesePileMid"
-	mid.position = Vector3(0.005, slice_thick * 0.5 - 0.076, 0.145)
+	mid.position = Vector3(-0.262, slice_thick * 0.5 - 0.076, 0.145)
 	root.add_child(mid)
 	cheese_stack_anchor = mid
 	for pi in pile_defs.size():
