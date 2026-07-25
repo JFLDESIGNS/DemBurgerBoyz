@@ -40,13 +40,17 @@ var _spray_lp := 0.0
 var _spray_bp := 0.0
 var _spray_tick := 0.0
 var _spray_flutter := 1.0
-## Seasoning shaker — rhythmic rattle while shaking over patties.
+## Seasoning shaker — rhythmic rattle while shaking over patties / scraping debris.
 var _shake_player: AudioStreamPlayer
 var _shake_gen: AudioStreamGenerator
 var _shake_on: bool = false
+var _shake_season_on: bool = false
+var _shake_scrape_on: bool = false
 var _shake_lp := 0.0
 var _shake_phase := 0.0
 var _shake_tick := 0.0
+## Was -27 dB; ×3 linear ≈ +9.5 dB.
+const SHAKER_RATTLE_DB := -17.5
 ## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
 var _fries_shake_player: AudioStreamPlayer
 var _fries_shake_gen: AudioStreamGenerator
@@ -436,11 +440,23 @@ func set_ext_spray(active: bool) -> void:
 
 func set_shaker_rattle(active: bool) -> void:
 	## Plastic shaker rattle + salt sprinkle while held over a patty.
+	_shake_season_on = active
+	_sync_shaker_rattle()
+
+
+func set_scrape_debris_rattle(active: bool) -> void:
+	## Same seasoning rattle while scraping stuck-on grill debris.
+	_shake_scrape_on = active
+	_sync_shaker_rattle()
+
+
+func _sync_shaker_rattle() -> void:
 	if _shake_player == null:
 		return
+	var active := _shake_season_on or _shake_scrape_on
 	if active:
 		_shake_on = true
-		_shake_player.volume_db = -27.0
+		_shake_player.volume_db = SHAKER_RATTLE_DB
 		if not _shake_player.playing:
 			_shake_player.play()
 	else:
@@ -777,6 +793,9 @@ func play_spatula_ting(midi: int = 72) -> void:
 	## ~12% louder per semitone away from the natural sample (stronger when pitched down).
 	var away := absf(semis)
 	var pitch_boost := 1.0 + away * (0.16 if semis < 0.0 else 0.10)
+	## Side / pitched strip taps — +40% so left/right steel hits stay present.
+	if away > 0.001:
+		pitch_boost *= 1.4
 	p.volume_db = linear_to_db(base_gain * pitch_boost)
 	p.play()
 
@@ -937,7 +956,7 @@ func set_roomba_wawawa(active: bool) -> void:
 			if _roomba_wawawa_on and _roomba_wawawa_player != null and is_instance_valid(_roomba_wawawa_player):
 				_roomba_wawawa_player.play(0.0)
 		)
-	_roomba_wawawa_player.pitch_scale = 1.93
+	_roomba_wawawa_player.pitch_scale = 2.18 ## a bit higher than prior 1.93
 	_roomba_wawawa_player.volume_db = 1.0
 	if active:
 		if not _roomba_wawawa_player.playing:
