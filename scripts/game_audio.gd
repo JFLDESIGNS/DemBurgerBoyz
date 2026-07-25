@@ -1066,7 +1066,7 @@ func play_scoop() -> void:
 
 func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	## tinggrill.wav — labeled C5 / MIDI 72 but reads ~3 semis flat (≈A4).
-	## Grill flat taps request MIDI so the heard range is C3→B4 across the strips.
+	## Grill flat taps: chromatic C3→B3 (request MIDI = sounded + 3).
 	if _ting_players.is_empty():
 		return
 	var semis := float(midi - 72)
@@ -1078,7 +1078,7 @@ func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	var p: AudioStreamPlayer = _ting_players[_ting_player_i]
 	_ting_player_i = (_ting_player_i + 1) % _ting_players.size()
 	p.stream = _cache["tinggrill"]
-	## Allow C3…key-transposed B4 (+ roll); clamp only wild HOLD/scrape callers.
+	## Allow C3…key-transposed B3 (+ roll); clamp only wild HOLD/scrape callers.
 	semis = clampf(semis, -24.0, 16.0)
 	p.pitch_scale = pow(2.0, semis / 12.0)
 	var base_gain := 1.75

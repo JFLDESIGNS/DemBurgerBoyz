@@ -37,10 +37,9 @@ const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
 ## tinggrill.wav reads ~3 semis flat of C5, so request MIDI = sounded + SAMPLE_COMP.
-## Flat taps span sounded C3→B4 across the 12 strips (was sounded A3→G#4).
+## Flat taps: full chromatic octave C3→B3 (C C# D D# E F F# G G# A A# B).
 const GRILL_PIANO_SECTIONS := 12
 const GRILL_PIANO_SOUND_LOW := 48 ## C3 — leftmost strip (what you hear)
-const GRILL_PIANO_SOUND_HIGH := 71 ## B4 — rightmost strip (what you hear)
 const GRILL_PIANO_SAMPLE_COMP := 3 ## tinggrill ~A4; play MIDI = sounded + 3
 const GRILL_PIANO_LEFT_MIDI := GRILL_PIANO_SOUND_LOW + GRILL_PIANO_SAMPLE_COMP ## request MIDI for C3
 ## Spatula roll changes key (transpose the whole run).
@@ -5380,12 +5379,9 @@ func _grill_piano_strip_index_from_left(world_pos: Vector3) -> int:
 
 
 func _grill_piano_sounding_at_index(from_left: int) -> int:
-	## Heard pitch for strip index (C3→B4 spaced across 12 pads).
+	## Heard pitch: chromatic C3→B3 — one strip per semitone.
 	var i := clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
-	if GRILL_PIANO_SECTIONS <= 1:
-		return GRILL_PIANO_SOUND_LOW
-	var span := float(GRILL_PIANO_SOUND_HIGH - GRILL_PIANO_SOUND_LOW)
-	return GRILL_PIANO_SOUND_LOW + int(round(float(i) * span / float(GRILL_PIANO_SECTIONS - 1)))
+	return GRILL_PIANO_SOUND_LOW + i
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
