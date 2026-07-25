@@ -5,7 +5,7 @@ const GRILL_SLOTS := 10
 const STATION_COUNT := 1
 const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
-const STATION_BURGER_SCALE := 1.18 ## wider stack so the build reads on the board
+const STATION_BURGER_SCALE := 0.944 ## 20% smaller than 1.18; proportions unchanged
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
 const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
@@ -919,6 +919,7 @@ var grill_roomba_held: bool = false
 var grill_roomba_hold_wobble: float = 0.0
 var grill_roomba_sad_hold_t: float = 0.0 ## Pickup / poke sad face timer → neutral
 var grill_roomba_poke_pause_t: float = 0.0 ## Brief stun after RMB poke
+var grill_roomba_poke_wawawa: bool = false ## RMB head-tap started a timed wawawa cry
 var grill_roomba_bump_t: float = 0.0
 var grill_roomba_back_t: float = 0.0
 var grill_roomba_reaim_t: float = 0.0
@@ -5390,13 +5391,17 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var hold_y := GRILL_SURFACE_Y + (HAND_SPATULA_CARRY_Y if carrying else HAND_SPATULA_HOLD_Y)
 	var tip_target := _hand_spatula_tip_from_screen(mouse, hold_y)
 	## Tap pose cancels as soon as aim leaves the hit cell — ting still plays there.
-	## Slow ice-ball smash press stays locked (don't abort mid-press).
-	var place_smash_press := _spatula_anim_kind == 1 and _spatula_anim_dur >= HAND_SPATULA_PLACE_SMASH_DUR * 0.9
-	if (_spatula_anim_kind == 1 or _spatula_anim_kind == 2) and not place_smash_press \
+	## Place-squash / bot poke (mute ting) stay locked even at slap speed — don't abort mid-press.
+	var locked_press := _spatula_anim_kind == 1 and (
+		_spatula_mute_ting or _spatula_anim_dur >= HAND_SPATULA_PLACE_SMASH_DUR * 0.9
+	)
+	if (_spatula_anim_kind == 1 or _spatula_anim_kind == 2) and not locked_press \
 			and _spatula_tap_aim_moved(mouse, tip_target):
 		_spatula_cancel_tap_keep_ting()
 		animating = false
+	## Active tap / smash / flip use their own anchors — don't bail if cursor ray misses the steel.
 	if tip_target == Vector3.ZERO and not dragging and not grill_hold \
+			and _spatula_anim_kind != 1 and _spatula_anim_kind != 2 \
 			and _spatula_anim_kind != 3 and _spatula_anim_kind != 4:
 		if _spatula_fx_t >= 0.0:
 			_tick_spatula_flip_fx(delta)
@@ -9460,6 +9465,7 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_held = false
 	grill_roomba_sad_hold_t = 0.0
 	grill_roomba_poke_pause_t = 0.0
+	grill_roomba_poke_wawawa = false
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
 	grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * ROOMBA_SPEED
@@ -9537,6 +9543,11 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	## RMB poke — unsmiley + brief freeze, then resume the current task.
 	grill_roomba_sad_hold_t = maxf(0.0, grill_roomba_sad_hold_t - delta)
+	## Head-tap wawawa ends with the sad face (don't kill pickup / ledge cry).
+	if grill_roomba_poke_wawawa and grill_roomba_sad_hold_t <= 0.0:
+		grill_roomba_poke_wawawa = false
+		if grill_roomba_ledge_phase != "stuck" and game_audio and game_audio.has_method("set_roomba_wawawa"):
+			game_audio.set_roomba_wawawa(false)
 	if grill_roomba_poke_pause_t > 0.0:
 		grill_roomba_poke_pause_t = maxf(0.0, grill_roomba_poke_pause_t - delta)
 		grill_roomba_vel = Vector2.ZERO
@@ -9808,6 +9819,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	grill_roomba_ledge_phase = "" ## Picking it up rescues the ledge gag.
 	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_poke_pause_t = 0.0
+	grill_roomba_poke_wawawa = false ## Held cry owns wawawa until drop.
 	grill_roomba_sad_hold_t = ROOMBA_PICKUP_SAD_SEC
 	_set_roomba_face("sad")
 	grill_roomba_hold_wobble = randf() * TAU
@@ -9843,11 +9855,15 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 	)
 	grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
 	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
+	grill_roomba_poke_wawawa = true
 	grill_roomba_vel = Vector2.ZERO
 	grill_roomba_back_t = 0.0
 	_set_roomba_face("sad")
 	if game_audio and game_audio.has_method("set_roomba_drive"):
 		game_audio.set_roomba_drive(false)
+	## Same distressed wawawa as pickup / ledge — for the sad beat.
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(true)
 	## Plastic body tap — not metal spatula ting (muted on the smash anim).
 	if game_audio and game_audio.has_method("play_roomba_body_tap"):
 		game_audio.play_roomba_body_tap()
@@ -9861,6 +9877,7 @@ func _release_grill_roomba() -> void:
 	grill_roomba_ledge_phase = ""
 	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_sad_hold_t = 0.0
+	grill_roomba_poke_wawawa = false
 	_set_roomba_face("neutral")
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
