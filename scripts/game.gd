@@ -1127,8 +1127,9 @@ const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb
 const BUN_PAIR_TOP_Y := 0.039
 ## Vertical step for the second pair on a tower.
 const BUN_PAIR_STACK_Y := 0.074
-## Board-side of cheese (cheese sits nearer the grill at ~x −0.34 / −0.18).
-const BUN_PILE_BASE := Vector3(-0.07, -0.076, 0.145)
+## Board-side of cheese (cheese nearer grill); +X = further from grill.
+## Nudged +2.5" (0.0635m) away from the grill vs cheese-swap layout.
+const BUN_PILE_BASE := Vector3(-0.0065, -0.076, 0.145)
 const BUN_PILE_SPACING_X := 0.15
 var bun_pile_anchors: Dictionary = {} ## bun id -> Node3D (fly-to-build start)
 var _cheese_returning: bool = false
