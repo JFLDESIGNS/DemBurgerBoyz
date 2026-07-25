@@ -36,13 +36,16 @@ const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the righ
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
-## Base sample is tinggrill.wav @ C5 — map strips to C5→B5 so we never octave-dump the WAV.
+## Base sample is tinggrill.wav @ C5; strips map C4→B4 (one octave below sample).
 const GRILL_PIANO_SECTIONS := 12
-const GRILL_PIANO_LEFT_MIDI := 72 ## C5 — leftmost strip (screen-left); matches tinggrill.wav
+const GRILL_PIANO_LEFT_MIDI := 60 ## C4 — leftmost strip (screen-left)
 ## Spatula roll changes key (transpose the whole C→B run).
 const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
 const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
 const GRILL_PIANO_KEY_90 := 7 ## ±90° → G
+const GRILL_PIANO_NOTE_NAMES: Array[String] = [
+	"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+]
 ## HOLD pad — 5 drum hits stacked along grill depth (window ↔ cook).
 const GRILL_HOLD_DRUM_PADS := 5
 ## Patty must sit fully on the steel — reject clicks near the rim.
@@ -251,6 +254,9 @@ var grill_surface_node: Node3D = null ## Flat-top Area3D — host for optional t
 var grill_piano_debug_outline: bool = false ## GFX / hidden-menu toggle; off by default
 var grill_piano_cell_meshes: Array = [] ## MeshInstance3D — 12 cook piano pads
 var grill_drum_pad_meshes: Array = [] ## MeshInstance3D — 5 HOLD drum pads
+var grill_piano_note_labels: Array = [] ## Label3D — note names on piano pads
+var grill_drum_note_labels: Array = [] ## Label3D — drum/hat names on HOLD pads
+var grill_piano_key_label: Label3D = null ## Current spatula key (C / F / G)
 var _grill_tap_flash_tweens: Dictionary = {} ## instance_id -> Tween
 ## Center of grill: flat + straight-on (handle toward cook, blade toward window).
 const HAND_SPATULA_EMPTY_ROT := Vector3(-12.0, 0.0, 0.0)
@@ -4478,6 +4484,8 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 	## Snap so leftover 30° steps from older builds clean up.
 	next = snappedf(next, HAND_SPATULA_ROLL_STEP)
 	_spatula_user_roll = clampf(next, -HAND_SPATULA_ROLL_MAX, HAND_SPATULA_ROLL_MAX)
+	## Debug note labels follow the active key / HOLD voice.
+	_refresh_grill_piano_note_labels()
 
 
 func _spatula_roll_midi_offset() -> int:
@@ -4491,6 +4499,32 @@ func _spatula_roll_midi_offset() -> int:
 	if mag >= HAND_SPATULA_ROLL_STEP * 0.5:
 		return GRILL_PIANO_KEY_45
 	return GRILL_PIANO_KEY_FLAT
+
+
+func _spatula_roll_key_name() -> String:
+	match _spatula_roll_midi_offset():
+		GRILL_PIANO_KEY_90:
+			return "G"
+		GRILL_PIANO_KEY_45:
+			return "F"
+		_:
+			return "C"
+
+
+func _spatula_hold_voice_name() -> String:
+	## HOLD pads: flat = drum · ±45° = closed hat · ±90° = open hat.
+	var mag := absf(_spatula_user_roll)
+	if mag >= HAND_SPATULA_ROLL_MAX - 0.5:
+		return "OHAT"
+	if mag >= HAND_SPATULA_ROLL_STEP * 0.5:
+		return "CHAT"
+	return "DRUM"
+
+
+func _midi_to_note_name(midi: int) -> String:
+	var pc := posmod(midi, 12)
+	var oct := int(floor(float(midi) / 12.0)) - 1
+	return "%s%d" % [GRILL_PIANO_NOTE_NAMES[pc], oct]
 
 
 func _spatula_spin_curve(t: float) -> float:
@@ -5147,8 +5181,8 @@ func _grill_piano_section_at(world_pos: Vector3) -> int:
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
-	## Left→right (screen): chromatic C5→B5 across all 12 strips.
-	## +X is screen-left on this camera, so high section index = visual left = C5.
+	## Left→right (screen): chromatic C4→B4 across all 12 strips.
+	## +X is screen-left on this camera, so high section index = visual left = C4.
 	var sec := _grill_piano_section_at(world_pos)
 	var from_left := (GRILL_PIANO_SECTIONS - 1) - sec
 	return GRILL_PIANO_LEFT_MIDI + clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
@@ -5393,6 +5427,9 @@ func _refresh_grill_piano_sections() -> void:
 	_grill_tap_flash_tweens.clear()
 	grill_piano_cell_meshes.clear()
 	grill_drum_pad_meshes.clear()
+	grill_piano_note_labels.clear()
+	grill_drum_note_labels.clear()
+	grill_piano_key_label = null
 	if grill_piano_root != null and is_instance_valid(grill_piano_root):
 		grill_piano_root.queue_free()
 	grill_piano_root = null
@@ -5404,7 +5441,7 @@ func _refresh_grill_piano_sections() -> void:
 
 
 func _build_grill_piano_sections(parent: Node3D) -> void:
-	## Debug: 12 cook-zone piano cells + 5 HOLD drum pads (depth-stacked).
+	## Debug: 12 cook-zone piano cells + 5 HOLD drum pads (depth-stacked) + note labels.
 	if parent == null:
 		return
 	var root := Node3D.new()
@@ -5413,6 +5450,9 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	grill_piano_root = root
 	grill_piano_cell_meshes.clear()
 	grill_drum_pad_meshes.clear()
+	grill_piano_note_labels.clear()
+	grill_drum_note_labels.clear()
+	grill_piano_key_label = null
 	var y := 0.031 ## Sit just above the steel panels / shine.
 	var half_d := GRILL_DEPTH * 0.5
 	var line_w := 0.007
@@ -5423,7 +5463,7 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	var cook_x1 := cook.y - GRILL_CENTER_X
 	var cook_w := maxf(0.05, cook_x1 - cook_x0)
 	var cell_w := cook_w / float(GRILL_PIANO_SECTIONS)
-	## Warm fill for each piano key.
+	## Warm fill for each piano key + note name label.
 	for i in GRILL_PIANO_SECTIONS:
 		var t := float(i) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
 		var fill := Color(1.0, lerpf(0.55, 0.85, t), lerpf(0.15, 0.35, t), 0.14)
@@ -5433,6 +5473,9 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		)
 		cell.name = "PianoCell%d" % i
 		grill_piano_cell_meshes.append(cell)
+		var note_lab := _make_grill_tap_note_label(root, Vector3(lx, y + 0.045, 0.0), "—")
+		note_lab.name = "PianoNote%d" % i
+		grill_piano_note_labels.append(note_lab)
 	var piano_line := _make_grill_tap_debug_mat(Color(1.0, 0.82, 0.28, 0.55))
 	## Cook-zone outer frame + vertical key dividers.
 	_add_grill_piano_bar(root, piano_line, Vector3((cook_x0 + cook_x1) * 0.5, y + 0.001, -half_d), Vector3(cook_w + line_w, line_h, line_w))
@@ -5442,9 +5485,17 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	for i in GRILL_PIANO_SECTIONS + 1:
 		var lx := cook_x0 + float(i) * cell_w
 		_add_grill_piano_bar(root, piano_line, Vector3(lx, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
+	## Active key banner (updates with spatula roll).
+	grill_piano_key_label = _make_grill_tap_note_label(
+		root, Vector3((cook_x0 + cook_x1) * 0.5, y + 0.08, -half_d * 0.15), "KEY C"
+	)
+	grill_piano_key_label.name = "PianoKeyBanner"
+	UiFontsScript.apply_label3d(grill_piano_key_label, true, 42, 0.018)
+	grill_piano_key_label.modulate = Color(1.0, 0.92, 0.45, 1.0)
 	## HOLD — five drum pads stacked along depth (Z).
 	var hold := _grill_hold_band()
 	if hold.is_empty():
+		_refresh_grill_piano_note_labels()
 		return
 	var hold_x0 := float(hold["x0"]) - GRILL_CENTER_X
 	var hold_x1 := float(hold["x1"]) - GRILL_CENTER_X
@@ -5460,6 +5511,9 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 		)
 		pad.name = "DrumPad%d" % j
 		grill_drum_pad_meshes.append(pad)
+		var drum_lab := _make_grill_tap_note_label(root, Vector3(hold_cx, y + 0.045, lz), "—")
+		drum_lab.name = "DrumNote%d" % j
+		grill_drum_note_labels.append(drum_lab)
 	var drum_line := _make_grill_tap_debug_mat(Color(0.45, 0.85, 1.0, 0.65))
 	_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, -half_d), Vector3(hold_w + line_w, line_h, line_w))
 	_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, half_d), Vector3(hold_w + line_w, line_h, line_w))
@@ -5468,6 +5522,54 @@ func _build_grill_piano_sections(parent: Node3D) -> void:
 	for j in GRILL_HOLD_DRUM_PADS + 1:
 		var lz := -half_d + float(j) * pad_d
 		_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, lz), Vector3(hold_w + line_w, line_h, line_w))
+	_refresh_grill_piano_note_labels()
+
+
+func _make_grill_tap_note_label(parent: Node3D, local_pos: Vector3, text: String) -> Label3D:
+	var lab := Label3D.new()
+	lab.text = text
+	lab.position = local_pos
+	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lab.modulate = Color(1.0, 0.95, 0.75, 1.0)
+	lab.outline_size = 8
+	lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.85)
+	lab.no_depth_test = true
+	lab.render_priority = 12
+	UiFontsScript.apply_label3d(lab, true, 28, 0.012)
+	parent.add_child(lab)
+	return lab
+
+
+func _refresh_grill_piano_note_labels() -> void:
+	## Keep note / HOLD voice text in sync with spatula roll (C / F / G · drum / hats).
+	if not grill_piano_debug_outline:
+		return
+	var key_off := _spatula_roll_midi_offset()
+	var key_name := _spatula_roll_key_name()
+	if grill_piano_key_label != null and is_instance_valid(grill_piano_key_label):
+		var tilt := "flat"
+		if key_off == GRILL_PIANO_KEY_45:
+			tilt = "±45°"
+		elif key_off == GRILL_PIANO_KEY_90:
+			tilt = "±90°"
+		grill_piano_key_label.text = "KEY %s  (%s)" % [key_name, tilt]
+	for i in grill_piano_note_labels.size():
+		var lab: Label3D = grill_piano_note_labels[i] as Label3D
+		if lab == null or not is_instance_valid(lab):
+			continue
+		## Cell i=0 is world −X (screen-right / B); high i is screen-left / C.
+		var from_left := (GRILL_PIANO_SECTIONS - 1) - i
+		var midi := GRILL_PIANO_LEFT_MIDI + clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1) + key_off
+		lab.text = _midi_to_note_name(midi)
+	var voice := _spatula_hold_voice_name()
+	for j in grill_drum_note_labels.size():
+		var dlab: Label3D = grill_drum_note_labels[j] as Label3D
+		if dlab == null or not is_instance_valid(dlab):
+			continue
+		## Pad 0 = window side, pad 4 = cook edge.
+		dlab.text = "%s%d" % [voice, j + 1]
 
 
 func _flash_grill_tap_pad(world_pos: Vector3) -> void:
