@@ -513,6 +513,9 @@ var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
 var shaker_home: Vector3 = Vector3(1.526, 2.0384, 1.12) ## −4" from prior 2.14
 var shaker_season_cool: float = 0.0
+var _shaker_hold_t: float = 0.0 ## seconds held; short tap → hi-hat crash
+var _shaker_did_season: bool = false
+const SHAKER_TAP_CRASH_SEC := 0.28 ## release sooner than this = tap crash
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
 var oil_root: Node3D = null
@@ -13820,6 +13823,8 @@ func _begin_shaker_hold() -> void:
 	if shaker_held:
 		return
 	shaker_held = true
+	_shaker_hold_t = 0.0
+	_shaker_did_season = false
 	if shaker_root:
 		shaker_root.visible = true
 		shaker_root.scale = SHAKER_ROOT_SCALE
@@ -13839,9 +13844,14 @@ func _begin_shaker_hold() -> void:
 
 
 func _cancel_shaker_hold() -> void:
+	var was_tap := _shaker_hold_t < SHAKER_TAP_CRASH_SEC and not _shaker_did_season
 	shaker_held = false
+	_shaker_hold_t = 0.0
+	_shaker_did_season = false
 	if game_audio:
 		game_audio.set_shaker_rattle(false)
+		if was_tap and game_audio.has_method("play_shaker_tap_crash"):
+			game_audio.play_shaker_tap_crash()
 	if shaker_particles:
 		shaker_particles.emitting = false
 	if shaker_root:
@@ -13864,6 +13874,8 @@ func _cancel_shaker_hold() -> void:
 
 func _cancel_shaker_hold_silent() -> void:
 	shaker_held = false
+	_shaker_hold_t = 0.0
+	_shaker_did_season = false
 	if game_audio:
 		game_audio.set_shaker_rattle(false)
 	if shaker_particles:
@@ -13882,6 +13894,7 @@ func _cancel_shaker_hold_silent() -> void:
 func _update_held_shaker(_delta: float) -> void:
 	if shaker_root == null or camera == null:
 		return
+	_shaker_hold_t += _delta
 	shaker_season_cool = maxf(0.0, shaker_season_cool - _delta)
 	var mouse := get_viewport().get_mouse_position()
 	## Drag like before: track the grill plane. Pickup snap still uses _tool_hold_point.
@@ -13901,6 +13914,7 @@ func _update_held_shaker(_delta: float) -> void:
 		game_audio.set_shaker_rattle(over_beef)
 	if over_beef and shaker_season_cool <= 0.0:
 		shaker_season_cool = 0.05
+		_shaker_did_season = true
 		if mp_enabled and not _mp_applying and int(target.get("net_id")) >= 0:
 			if _mp_season_sync_cool <= 0.0:
 				_mp_season_sync_cool = 0.05

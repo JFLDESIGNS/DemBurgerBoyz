@@ -1104,6 +1104,16 @@ func play_click() -> void:
 	_play_cached("ui_click", _make_click, 1.0, 0.85)
 
 
+func play_shaker_tap_crash() -> void:
+	## Quick seasoning grab without holding — bright high-hat crash.
+	_play_cached(
+		"shaker_tap_crash_v1_%d" % (randi() % 3),
+		_make_shaker_tap_crash,
+		0.98 + randf() * 0.08,
+		0.92
+	)
+
+
 func play_cup_plastic_tap(volume_scale: float = 1.0) -> void:
 	## Dull Solo-cup plastic hit on steel — soft mid thud, almost no sparkle.
 	var g := clampf(volume_scale, 0.15, 1.35)
@@ -2213,6 +2223,34 @@ func _make_hold_hihat(pad: int, open_hat: bool) -> AudioStreamWAV:
 			sizzle = (rng.randf() * 2.0 - 1.0) * 0.18 * exp(-t * 12.0)
 		var wave := (air * 0.85 + ring + chick + sizzle) * env
 		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 22000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_shaker_tap_crash() -> AudioStreamWAV:
+	## Higher bright hat crash — seasoning tap without holding to season.
+	var n := int(MIX_RATE * 0.34)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 18440 + randi() % 97
+	var hp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		## Fast attack, washier sustain than a closed hat.
+		var env := clampf(t / 0.0012, 0.0, 1.0) * exp(-t * 9.5)
+		var nse := rng.randf() * 2.0 - 1.0
+		hp = lerpf(hp, nse, 0.62)
+		var air := (nse - hp) * 0.78
+		var ring := (
+			sin(t * 9800.0 * TAU) * 0.20
+			+ sin(t * 12800.0 * TAU) * 0.14
+			+ sin(t * 7600.0 * TAU) * 0.12
+			+ sin(t * 5400.0 * TAU) * 0.08 * exp(-t * 22.0)
+		)
+		var crash_body := sin(t * 280.0 * TAU) * 0.06 * exp(-t * 28.0)
+		var sizzle := (rng.randf() * 2.0 - 1.0) * 0.28 * exp(-t * 7.5)
+		var wave := (air * 0.9 + ring + crash_body + sizzle) * env
+		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 23500.0))
 	return _wav_from_pcm(pcm, false)
 
 
