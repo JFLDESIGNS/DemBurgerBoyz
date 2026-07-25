@@ -1156,12 +1156,25 @@ var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.65
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_CLICK_COLLISION_LAYER := 262144
-const TREE_SHAKE_DEG := 3.85 ## was 5.5; −30%
+const TREE_SHAKE_DEG := 2.4 ## subtler pendulum lean
 const TREE_APPLE_CHANCE := 0.20
 const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
 const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
 const TREE_APPLE_SIDE_VAR_FT := 1.1 ## ± variance on that offset
 var outdoor_shake_trees: Array = [] ## Node3D roots that can shake on click
+const TREE_FRONT_DEFAULT_POS := Vector3(-4.33, 0.0, 5.36)
+const TREE_FRONT_DEFAULT_YAW := -5.0 ## prior −25° + 20°
+const TREE_BIRCH_DEFAULT_POS := Vector3(3.92, 0.0, 3.05)
+const TREE_BIRCH_DEFAULT_YAW := 55.0 ## prior 35° + 20°
+var tree_front_node: Node3D = null
+var tree_birch_node: Node3D = null
+var tree_front_pos: Vector3 = TREE_FRONT_DEFAULT_POS
+var tree_front_yaw: float = TREE_FRONT_DEFAULT_YAW
+var tree_birch_pos: Vector3 = TREE_BIRCH_DEFAULT_POS
+var tree_birch_yaw: float = TREE_BIRCH_DEFAULT_YAW
+var options_hidden_tree_select: OptionButton = null
+var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
+const TREE_XFORM_CFG_SECTION := "tree_xform"
 ## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
 var icecream_cam_right_ft: float = 1.5
 const FT_TO_M := 0.3048
@@ -17968,7 +17981,10 @@ func _build_checkered_floor() -> void:
 func _build_outdoor_street() -> void:
 	tree_fill_entries.clear()
 	outdoor_shake_trees.clear()
+	tree_front_node = null
+	tree_birch_node = null
 	_load_tree_light_settings()
+	_load_tree_xform_settings()
 	var outdoor := Node3D.new()
 	outdoor.name = "OutdoorStreet"
 	world.add_child(outdoor)
@@ -18058,11 +18074,9 @@ func _build_outdoor_front_tree(parent: Node3D) -> void:
 	## Authored mesh is huge (~24m); shrink to a street-tree size (~20 ft).
 	const TREE_SCALE := 0.26
 	tree.scale = Vector3.ONE * TREE_SCALE
-	## Camera looks +Z out the window; customers wait near z=2.25 — plant past them.
-	## ~11 ft out (+Z) and ~18 ft screen-right (−X when facing the street).
-	tree.position = Vector3(-4.33, 0.0, 5.36)
-	tree.rotation_degrees = Vector3(0.0, -25.0, 0.0)
 	parent.add_child(tree)
+	tree_front_node = tree
+	_apply_outdoor_tree_xforms()
 	_dress_outdoor_tree_foliage(tree, 0.7, 0.62)
 	_add_tree_fill_light(parent, tree)
 	_setup_outdoor_tree_interact(tree)
@@ -18085,10 +18099,9 @@ func _build_outdoor_birch_tree(parent: Node3D) -> void:
 	## Medium birch — street scale.
 	const TREE_SCALE := 0.34
 	tree.scale = Vector3.ONE * TREE_SCALE
-	## Player ~ (0, 0, -1.62); 20 ft ≈ 6.1 m at ~40° left of forward (+Z).
-	tree.position = Vector3(3.92, 0.0, 3.05)
-	tree.rotation_degrees = Vector3(0.0, 35.0, 0.0)
 	parent.add_child(tree)
+	tree_birch_node = tree
+	_apply_outdoor_tree_xforms()
 	_dress_outdoor_tree_foliage(tree, 2.4, 0.48)
 	_add_tree_fill_light(parent, tree)
 	_setup_outdoor_tree_interact(tree)
@@ -18285,27 +18298,31 @@ func _shake_outdoor_tree(tree: Node3D) -> void:
 	var base: Vector3 = tree.get_meta("tree_base_rot", tree.rotation_degrees)
 	tree.set_meta("tree_base_rot", base)
 	tree.rotation_degrees = base
+	if game_audio != null and game_audio.has_method("play_tree_thud"):
+		game_audio.play_tree_thud()
+	elif game_audio != null and game_audio.has_method("play_rack_take"):
+		game_audio.play_rack_take()
 	var amp := TREE_SHAKE_DEG
 	## One lean direction, then decay back through the opposite side (pendulum).
-	var lean_x := randf_range(0.65, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
-	var lean_z := randf_range(0.65, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
-	var lean_y := randf_range(-0.22, 0.22)
+	var lean_x := randf_range(0.7, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
+	var lean_z := randf_range(0.7, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
+	var lean_y := randf_range(-0.12, 0.12)
 	var a1 := Vector3(amp * lean_x, amp * lean_y, amp * lean_z)
-	var a2 := a1 * -0.70
-	var a3 := a1 * 0.36
-	var a4 := a1 * -0.14
+	var a2 := a1 * -0.62
+	var a3 := a1 * 0.28
+	var a4 := a1 * -0.10
 	tree.set_meta("tree_shaking", true)
 	var tw := create_tween()
 	tree.set_meta("tree_shake_tw", tw)
-	tw.tween_property(tree, "rotation_degrees", base + a1, 0.15) \
+	tw.tween_property(tree, "rotation_degrees", base + a1, 0.18) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(tree, "rotation_degrees", base + a2, 0.20) \
+	tw.tween_property(tree, "rotation_degrees", base + a2, 0.24) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(tree, "rotation_degrees", base + a3, 0.18) \
+	tw.tween_property(tree, "rotation_degrees", base + a3, 0.22) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(tree, "rotation_degrees", base + a4, 0.16) \
+	tw.tween_property(tree, "rotation_degrees", base + a4, 0.20) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(tree, "rotation_degrees", base, 0.22) \
+	tw.tween_property(tree, "rotation_degrees", base, 0.28) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tw.finished.connect(func():
 		if tree != null and is_instance_valid(tree):
@@ -18510,6 +18527,103 @@ func _save_tree_light_settings() -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
+func _apply_outdoor_tree_xforms() -> void:
+	if tree_front_node != null and is_instance_valid(tree_front_node):
+		if not bool(tree_front_node.get_meta("tree_shaking", false)):
+			tree_front_node.position = tree_front_pos
+			tree_front_node.rotation_degrees = Vector3(0.0, tree_front_yaw, 0.0)
+			tree_front_node.set_meta("tree_base_rot", Vector3(0.0, tree_front_yaw, 0.0))
+	if tree_birch_node != null and is_instance_valid(tree_birch_node):
+		if not bool(tree_birch_node.get_meta("tree_shaking", false)):
+			tree_birch_node.position = tree_birch_pos
+			tree_birch_node.rotation_degrees = Vector3(0.0, tree_birch_yaw, 0.0)
+			tree_birch_node.set_meta("tree_base_rot", Vector3(0.0, tree_birch_yaw, 0.0))
+	## Keep fill lights glued to the moved trunks.
+	_apply_tree_fill_light_settings()
+
+
+func _load_tree_xform_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(TREE_XFORM_CFG_SECTION):
+		return
+	tree_front_pos = Vector3(
+		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "front_x", tree_front_pos.x)),
+		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "front_y", tree_front_pos.y)),
+		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "front_z", tree_front_pos.z))
+	)
+	tree_front_yaw = float(cfg.get_value(TREE_XFORM_CFG_SECTION, "front_yaw", tree_front_yaw))
+	tree_birch_pos = Vector3(
+		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_x", tree_birch_pos.x)),
+		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_y", tree_birch_pos.y)),
+		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_z", tree_birch_pos.z))
+	)
+	tree_birch_yaw = float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_yaw", tree_birch_yaw))
+
+
+func _save_tree_xform_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "front_x", tree_front_pos.x)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "front_y", tree_front_pos.y)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "front_z", tree_front_pos.z)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "front_yaw", tree_front_yaw)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "birch_x", tree_birch_pos.x)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "birch_y", tree_birch_pos.y)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "birch_z", tree_birch_pos.z)
+	cfg.set_value(TREE_XFORM_CFG_SECTION, "birch_yaw", tree_birch_yaw)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _hidden_tree_edit_pos() -> Vector3:
+	return tree_front_pos if options_hidden_tree_edit_idx == 0 else tree_birch_pos
+
+
+func _hidden_tree_edit_yaw() -> float:
+	return tree_front_yaw if options_hidden_tree_edit_idx == 0 else tree_birch_yaw
+
+
+func _hidden_set_tree_edit_pos_axis(axis: String, val: float) -> void:
+	var p := _hidden_tree_edit_pos()
+	match axis:
+		"x":
+			p.x = val
+		"y":
+			p.y = val
+		"z":
+			p.z = val
+	if options_hidden_tree_edit_idx == 0:
+		tree_front_pos = p
+	else:
+		tree_birch_pos = p
+	_apply_outdoor_tree_xforms()
+	_save_tree_xform_settings()
+
+
+func _hidden_set_tree_edit_yaw(val: float) -> void:
+	if options_hidden_tree_edit_idx == 0:
+		tree_front_yaw = val
+	else:
+		tree_birch_yaw = val
+	_apply_outdoor_tree_xforms()
+	_save_tree_xform_settings()
+
+
+func _sync_tree_xform_hidden_ui() -> void:
+	if options_hidden_tree_select != null and is_instance_valid(options_hidden_tree_select):
+		options_hidden_tree_select.select(options_hidden_tree_edit_idx)
+	var p := _hidden_tree_edit_pos()
+	var yaw := _hidden_tree_edit_yaw()
+	var vals := {"tx": p.x, "ty": p.y, "tz": p.z, "tyaw": yaw}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			var fmt := "%.1f°" if key == "tyaw" else "%.2f"
+			options_hidden_tree_light_labs[key].text = fmt % float(vals[key])
+
+
 func _icecream_station_world_pos() -> Vector3:
 	## Camera looks +Z out the window → camera-right is world −X.
 	return ICECREAM_STATION_POS + Vector3(-icecream_cam_right_ft * FT_TO_M, 0.0, 0.0)
@@ -18559,6 +18673,18 @@ func _sync_tree_light_hidden_ui() -> void:
 
 
 func _hidden_add_tree_light_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, setter: Callable) -> void:
+	_hidden_add_labeled_slider(parent, key, label_text, min_v, max_v, step, getter, func(val: float):
+		setter.call(val)
+		_apply_tree_fill_light_settings()
+		_save_tree_light_settings()
+	)
+
+
+func _hidden_add_tree_xform_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, setter: Callable) -> void:
+	_hidden_add_labeled_slider(parent, key, label_text, min_v, max_v, step, getter, setter, key == "tyaw")
+
+
+func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	parent.add_child(row)
@@ -18569,24 +18695,24 @@ func _hidden_add_tree_light_slider(parent: Control, key: String, label_text: Str
 	name_lab.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
 	row.add_child(name_lab)
 	var val_lab := Label.new()
-	val_lab.custom_minimum_size = Vector2(44, 0)
+	val_lab.custom_minimum_size = Vector2(52, 0)
 	val_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	UiFontsScript.apply_label(val_lab, false, 12)
 	val_lab.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
-	val_lab.text = "%.2f" % float(getter.call())
+	var cur := float(getter.call())
+	val_lab.text = ("%.1f°" % cur) if degrees_fmt else ("%.2f" % cur)
 	row.add_child(val_lab)
 	var slider := HSlider.new()
 	slider.min_value = min_v
 	slider.max_value = max_v
 	slider.step = step
-	slider.value = float(getter.call())
+	slider.value = cur
 	slider.custom_minimum_size = Vector2(0, 28)
 	slider.focus_mode = Control.FOCUS_ALL
 	slider.value_changed.connect(func(val: float):
-		setter.call(val)
-		val_lab.text = "%.2f" % float(getter.call())
-		_apply_tree_fill_light_settings()
-		_save_tree_light_settings()
+		on_change.call(val)
+		var shown := float(getter.call())
+		val_lab.text = ("%.1f°" % shown) if degrees_fmt else ("%.2f" % shown)
 	)
 	parent.add_child(slider)
 	options_hidden_tree_light_sliders[key] = slider
@@ -32738,6 +32864,38 @@ func _build_options_menu() -> void:
 		func(): return tree_light_off_z,
 		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
 
+	var tree_xf_lab := Label.new()
+	tree_xf_lab.text = "TREE POSITION / ROTATION"
+	UiFontsScript.apply_label(tree_xf_lab, true, 13)
+	tree_xf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(tree_xf_lab)
+
+	options_hidden_tree_select = OptionButton.new()
+	options_hidden_tree_select.custom_minimum_size = Vector2(0, 36)
+	options_hidden_tree_select.focus_mode = Control.FOCUS_ALL
+	options_hidden_tree_select.add_item("Large Tree")
+	options_hidden_tree_select.add_item("Birch Tree")
+	options_hidden_tree_select.select(options_hidden_tree_edit_idx)
+	options_hidden_tree_select.item_selected.connect(func(idx: int):
+		options_hidden_tree_edit_idx = clampi(idx, 0, 1)
+		_sync_tree_xform_hidden_ui()
+		_sfx_click()
+	)
+	options_hidden_room_tone_box.add_child(options_hidden_tree_select)
+
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tx", "Position X", -12.0, 12.0, 0.05,
+		func(): return _hidden_tree_edit_pos().x,
+		func(v: float): _hidden_set_tree_edit_pos_axis("x", clampf(v, -12.0, 12.0)))
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "ty", "Position Y", -2.0, 6.0, 0.05,
+		func(): return _hidden_tree_edit_pos().y,
+		func(v: float): _hidden_set_tree_edit_pos_axis("y", clampf(v, -2.0, 6.0)))
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tz", "Position Z", -2.0, 16.0, 0.05,
+		func(): return _hidden_tree_edit_pos().z,
+		func(v: float): _hidden_set_tree_edit_pos_axis("z", clampf(v, -2.0, 16.0)))
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tyaw", "Yaw °", -180.0, 180.0, 1.0,
+		func(): return _hidden_tree_edit_yaw(),
+		func(v: float): _hidden_set_tree_edit_yaw(clampf(v, -180.0, 180.0)))
+
 	var ice_lab := Label.new()
 	ice_lab.text = "SOFT SERVE POSITION"
 	UiFontsScript.apply_label(ice_lab, true, 13)
@@ -32951,6 +33109,7 @@ func _try_unlock_hidden_options() -> void:
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 			_sync_tree_light_hidden_ui()
+			_sync_tree_xform_hidden_ui()
 			_sync_icecream_station_hidden_ui()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"

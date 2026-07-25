@@ -977,6 +977,11 @@ func play_rack_take() -> void:
 	_play_cached("rack_take_thud", _make_rack_take_thud, 0.96 + randf() * 0.08, 0.62)
 
 
+func play_tree_thud() -> void:
+	## Soft wood trunk hit when shaking a street tree.
+	_play_cached("tree_thud_%d" % (randi() % 3), _make_tree_thud, 0.88 + randf() * 0.14, 0.78)
+
+
 func play_stove_light() -> void:
 	## Gas-stove ignite when the burner comes on.
 	if not _cache.has("stove_light"):
@@ -1642,6 +1647,21 @@ func _make_rack_take_thud() -> AudioStreamWAV:
 		var tick := sin(t * 1120.0 * TAU) * 0.12 + (randf() * 2.0 - 1.0) * 0.035
 		var sample := bump * bump_env + tick * tick_env
 		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 12500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_tree_thud() -> AudioStreamWAV:
+	## Low woody trunk knock — denser / longer than rack take.
+	var n := int(MIX_RATE * 0.22)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := clampf(t / 0.008, 0.0, 1.0) * exp(-t * 11.5)
+		var body := sin(t * 72.0 * TAU) * 0.78 + sin(t * 118.0 * TAU) * 0.28
+		var wood := sin(t * 210.0 * TAU) * exp(-t * 22.0) * 0.22
+		var grit := (randf() * 2.0 - 1.0) * exp(-t * 55.0) * 0.06
+		_write_s16(pcm, i, int(clampf((body + wood + grit) * env, -1.0, 1.0) * 15500.0))
 	return _wav_from_pcm(pcm, false)
 
 
