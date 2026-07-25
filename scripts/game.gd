@@ -472,17 +472,23 @@ var oil_stream_fx: GPUParticles3D = null
 var oil_aim_marker: MeshInstance3D = null
 var oil_aim_mat: StandardMaterial3D = null
 var oil_stream_phase: float = 0.0
+var oil_liquid_pivot: Node3D = null
+var oil_surface_pivot: Node3D = null
+var oil_liquid_slosh: Vector2 = Vector2.ZERO
+var oil_prev_pos: Vector3 = Vector3.ZERO
+var oil_hand_vel: Vector2 = Vector2.ZERO ## xz hand speed for liquid rock
 var oil_home: Vector3 = Vector3(1.166, 2.12, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_pour_hold_t: float = 0.0 ## Seconds continuously pouring while held.
-## Scroll-wheel tip while LMB held: 1 = pouring · 0 = upright (no pour).
+## Scroll toggles pour: 1 = pouring (default) · 0 = upright (no pour).
 var oil_pour_tilt: float = 1.0
 const OIL_POUR_PITCH := 180.0 ## Tip-down pour pose
 const OIL_UPRIGHT_PITCH := 22.0 ## Mouth up — grease stays in the bottle
-const OIL_POUR_ACTIVE_TILT := 0.55 ## Must be tipped past this to stream
-const OIL_POUR_TILT_STEP := 0.34
+const OIL_POUR_ACTIVE_TILT := 0.5 ## Binary pour threshold (tilt is only 0 or 1)
 const OIL_NOZZLE_LOCAL := Vector3(0.0, 0.13, 0.0)
+const OIL_STREAM_DRAW_PRIO := 12
+const OIL_SLICK_DRAW_PRIO := 1
 var oil_slicks: Array = [] ## {mesh, age, life, radius}
 var soda_slicks: Array = [] ## soda puddles on steel — oil-like, soda-colored
 var soda_char_spots: Array = [] ## burnt black marks left after soda cooks off
@@ -2792,10 +2798,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				burgerpack_held_pitch = fposmod(burgerpack_held_pitch + step, 360.0)
 			get_viewport().set_input_as_handled()
 			return
-		## Oil bottle: scroll tips it — upright stops the pour while still holding LMB.
+		## Oil bottle: any scroll tick toggles pour on/off (starts on).
 		if oil_held:
-			var oil_dir := 1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
-			_nudge_oil_pour_tilt(oil_dir)
+			_nudge_oil_pour_tilt(1.0)
 			get_viewport().set_input_as_handled()
 			return
 		## Spatula: scroll up/down rolls ±45° then ±90°; piano ting shifts with roll.
@@ -12978,23 +12983,23 @@ func _nearest_patty_near(world_pos: Vector3, max_dist: float):
 	return best
 
 
-func _nudge_oil_pour_tilt(dir: float) -> void:
-	## Scroll up → tip to pour · scroll down → upright (stop stream, keep hold).
-	if dir == 0.0:
+func _nudge_oil_pour_tilt(_dir: float) -> void:
+	## Any scroll movement flips between pour / upright (two states only).
+	if _dir == 0.0:
 		return
 	var was_pouring := _oil_is_pouring()
-	oil_pour_tilt = clampf(oil_pour_tilt + dir * OIL_POUR_TILT_STEP, 0.0, 1.0)
-	if was_pouring and not _oil_is_pouring():
+	oil_pour_tilt = 0.0 if was_pouring else 1.0
+	if was_pouring:
 		oil_last_draw = Vector3.ZERO
 		oil_pour_hold_t = 0.0
 		if oil_particles:
 			oil_particles.emitting = false
 		_hide_oil_stream()
-		_flash("Bottle upright — scroll up to pour again", Color("FFE082"))
-	elif not was_pouring and _oil_is_pouring():
+		_flash("Oil off — scroll to pour", Color("FFE082"))
+	else:
 		oil_last_draw = Vector3.ZERO
 		_set_oil_aim_marker(false, Vector3.ZERO)
-		_flash("Pouring — scroll down to stop", Color("FFE082"))
+		_flash("Oil on — scroll to stop", Color("FFE082"))
 	if mp_enabled:
 		_mp_send_held_tool_pose(true)
 
@@ -13004,7 +13009,7 @@ func _oil_is_pouring() -> bool:
 
 
 func _oil_held_pitch() -> float:
-	return lerpf(OIL_UPRIGHT_PITCH, OIL_POUR_PITCH, oil_pour_tilt)
+	return OIL_POUR_PITCH if _oil_is_pouring() else OIL_UPRIGHT_PITCH
 
 
 func _update_held_oil(delta: float) -> void:
@@ -13017,7 +13022,8 @@ func _update_held_oil(delta: float) -> void:
 		oil_pour_hold_t += delta
 		var kb_land := Vector3(_kb_force_oil_pos.x, GRILL_SURFACE_Y + OIL_SIT_Y, _kb_force_oil_pos.z)
 		_set_oil_aim_marker(false, kb_land)
-		_update_oil_stream(_oil_nozzle_world(), kb_land)
+		_update_oil_stream(_oil_nozzle_world(), kb_land + Vector3(0.0, 0.016, 0.0))
+		_update_oil_liquid(delta)
 		if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
 			_flash("Grease held too long on a hot grill!", Color("FF5252"))
 			_start_grill_fire(_kb_force_oil_pos)
@@ -13031,20 +13037,23 @@ func _update_held_oil(delta: float) -> void:
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.04, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.04)
 	oil_root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + OIL_POUR_HEIGHT, hit.z)
 	oil_root.rotation_degrees = Vector3(_oil_held_pitch(), 0.0, 0.0)
+	_update_oil_liquid(delta)
 	var pouring := _oil_is_pouring()
 	var cur := Vector3(hit.x, GRILL_SURFACE_Y + OIL_SIT_Y, hit.z)
+	## Stream lands slightly above puddles so grease spots never paint over it.
+	var stream_end := cur + Vector3(0.0, 0.016, 0.0)
 	if oil_particles:
 		oil_particles.emitting = pouring
 		oil_particles.position = OIL_NOZZLE_LOCAL
 	if not pouring:
-		## Still holding LMB — just not tipped enough to stream.
+		## Still holding LMB — upright / pour toggled off.
 		oil_pour_hold_t = 0.0
 		oil_last_draw = Vector3.ZERO
 		_hide_oil_stream()
 		_set_oil_aim_marker(true, cur)
 		return
 	_set_oil_aim_marker(false, cur)
-	_update_oil_stream(_oil_nozzle_world(), cur)
+	_update_oil_stream(_oil_nozzle_world(), stream_end)
 	## Holding grease down on a lit grill too long → grease fire.
 	oil_pour_hold_t += delta
 	if grill_on and not grill_on_fire and oil_pour_hold_t >= OIL_POUR_FIRE_SEC:
@@ -13122,8 +13131,8 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + OIL_SIT_Y, pos.z)
 	slick.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
 	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	## Draw above grill shine (prio 2); smoke still sits higher (12).
-	slick.sorting_offset = 3.0
+	## Keep puddles under the pour stream (stream uses OIL_STREAM_DRAW_PRIO).
+	slick.sorting_offset = 0.4
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -13137,8 +13146,7 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 	mat.clearcoat_roughness = 0.06
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	## Above shine (2), under heat glow (6) / oil smoke (12).
-	mat.render_priority = 4
+	mat.render_priority = OIL_SLICK_DRAW_PRIO
 	slick.material_override = mat
 	grill_root.add_child(slick)
 	var smoke := _make_oil_burn_smoke(rad)
@@ -15850,26 +15858,59 @@ func _build_oil_bottle() -> void:
 	bottle.mesh = bcyl
 	bottle.position = Vector3(0, 0.04, 0)
 	var bmat := StandardMaterial3D.new()
-	bmat.albedo_color = Color(0.98, 0.9, 0.35, 0.78)
+	bmat.albedo_color = Color(0.98, 0.9, 0.35, 0.55)
 	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bmat.roughness = 0.25
+	bmat.roughness = 0.22
 	bmat.metallic = 0.05
+	bmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	bottle.material_override = bmat
 	oil_root.add_child(bottle)
 
+	## Dynamic grease body (pop-style rock + free surface).
+	oil_liquid_pivot = Node3D.new()
+	oil_liquid_pivot.name = "OilLiquidPivot"
+	oil_liquid_pivot.position = Vector3(0.0, 0.0, 0.0)
+	oil_root.add_child(oil_liquid_pivot)
+
 	var fill := MeshInstance3D.new()
+	fill.name = "OilLiquid"
 	var fcyl := CylinderMesh.new()
 	fcyl.top_radius = 0.022
 	fcyl.bottom_radius = 0.026
-	fcyl.height = 0.08
+	fcyl.height = 0.078
+	fcyl.cap_top = true
+	fcyl.cap_bottom = true
 	fill.mesh = fcyl
-	fill.position = Vector3(0, 0.02, 0)
+	fill.position = Vector3(0.0, 0.039, 0.0)
 	var fmat := StandardMaterial3D.new()
-	fmat.albedo_color = Color(0.92, 0.78, 0.2, 0.85)
+	fmat.albedo_color = Color(0.78, 0.66, 0.28, 0.72)
 	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fmat.roughness = 0.4
+	fmat.roughness = 0.28
+	fmat.metallic = 0.08
+	fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	fill.material_override = fmat
-	oil_root.add_child(fill)
+	oil_liquid_pivot.add_child(fill)
+
+	oil_surface_pivot = Node3D.new()
+	oil_surface_pivot.name = "OilSurfacePivot"
+	oil_surface_pivot.position = Vector3(0.0, 0.078, 0.0)
+	oil_liquid_pivot.add_child(oil_surface_pivot)
+
+	var surf := MeshInstance3D.new()
+	surf.name = "OilSurface"
+	var splane := PlaneMesh.new()
+	splane.size = Vector2(0.046, 0.046)
+	splane.subdivide_width = 8
+	splane.subdivide_depth = 8
+	surf.mesh = splane
+	var smat := StandardMaterial3D.new()
+	smat.albedo_color = Color(0.9, 0.78, 0.38, 0.55)
+	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smat.roughness = 0.12
+	smat.metallic = 0.12
+	smat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	surf.material_override = smat
+	oil_surface_pivot.add_child(surf)
 
 	var tip := MeshInstance3D.new()
 	var tmesh := CylinderMesh.new()
@@ -15887,39 +15928,82 @@ func _build_oil_bottle() -> void:
 	## Soft tip drips — main look is the transparent soft-serve ribbon.
 	oil_particles = GPUParticles3D.new()
 	oil_particles.name = "OilParticles"
-	oil_particles.amount = 20
-	oil_particles.lifetime = 0.42
+	oil_particles.amount = 14
+	oil_particles.lifetime = 0.38
 	oil_particles.explosiveness = 0.06
 	oil_particles.randomness = 0.38
 	oil_particles.emitting = false
 	oil_particles.position = OIL_NOZZLE_LOCAL
+	oil_particles.sorting_offset = float(OIL_STREAM_DRAW_PRIO)
 	var op := ParticleProcessMaterial.new()
 	op.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	op.emission_sphere_radius = 0.012
+	op.emission_sphere_radius = 0.01
 	op.direction = Vector3(0, 1, 0)
-	op.spread = 22.0
-	op.initial_velocity_min = 0.04
-	op.initial_velocity_max = 0.16
-	op.gravity = Vector3(0, -1.1, 0)
-	op.scale_min = 0.4
-	op.scale_max = 0.95
-	op.color = Color(1.0, 0.86, 0.32, 0.55)
+	op.spread = 18.0
+	op.initial_velocity_min = 0.03
+	op.initial_velocity_max = 0.12
+	op.gravity = Vector3(0, -0.9, 0)
+	op.scale_min = 0.35
+	op.scale_max = 0.75
+	op.color = Color(0.82, 0.72, 0.42, 0.28)
 	oil_particles.process_material = op
 	var odrop := SphereMesh.new()
-	odrop.radius = 0.007
-	odrop.height = 0.011
+	odrop.radius = 0.006
+	odrop.height = 0.009
 	odrop.radial_segments = 8
 	odrop.rings = 4
 	var odraw := StandardMaterial3D.new()
-	odraw.albedo_color = Color(0.98, 0.82, 0.28, 0.42)
+	odraw.albedo_color = Color(0.82, 0.72, 0.42, 0.24)
 	odraw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	odraw.roughness = 0.18
+	odraw.roughness = 0.2
 	odraw.metallic = 0.04
 	odraw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	odraw.render_priority = OIL_STREAM_DRAW_PRIO
 	oil_particles.draw_pass_1 = odrop
 	oil_particles.material_override = odraw
 	oil_root.add_child(oil_particles)
+	oil_prev_pos = oil_root.global_position
+	oil_liquid_slosh = Vector2.ZERO
+	oil_hand_vel = Vector2.ZERO
 	_build_oil_stream_fx()
+
+
+func _update_oil_liquid(delta: float) -> void:
+	## Pop-style grease: rocks with hand motion, free surface seeks level, shifts to tip when pouring.
+	if oil_root == null or oil_liquid_pivot == null or not is_instance_valid(oil_liquid_pivot):
+		return
+	var pos := oil_root.global_position
+	var inv_dt := 1.0 / maxf(delta, 0.0001)
+	var raw := Vector2((pos.x - oil_prev_pos.x) * inv_dt, (pos.z - oil_prev_pos.z) * inv_dt)
+	oil_prev_pos = pos
+	oil_hand_vel = oil_hand_vel.lerp(raw, clampf(delta * 10.0, 0.0, 1.0))
+	var target := Vector2(
+		clampf(oil_hand_vel.x * 2.8, -38.0, 38.0),
+		clampf(oil_hand_vel.y * 2.8, -38.0, 38.0)
+	)
+	oil_liquid_slosh = oil_liquid_slosh.lerp(target, clampf(delta * 11.0, 0.0, 1.0))
+	oil_liquid_slosh = oil_liquid_slosh.lerp(Vector2.ZERO, clampf(delta * 3.2, 0.0, 1.0))
+	var pour_t := clampf(oil_pour_tilt, 0.0, 1.0)
+	## Mass slides toward the nozzle when tipped to pour.
+	oil_liquid_pivot.position = Vector3(0.0, lerpf(0.0, 0.055, pour_t), 0.0)
+	oil_liquid_pivot.rotation_degrees = Vector3(
+		clampf(oil_liquid_slosh.y * 0.32, -14.0, 14.0),
+		0.0,
+		clampf(-oil_liquid_slosh.x * 0.32, -14.0, 14.0)
+	)
+	if oil_surface_pivot != null and is_instance_valid(oil_surface_pivot):
+		var pitch := oil_root.rotation_degrees.x
+		## Counter bottle pitch so the meniscus stays roughly world-flat, plus motion waves.
+		oil_surface_pivot.rotation_degrees = Vector3(
+			clampf(-pitch * 0.92 + oil_liquid_slosh.y * 0.28, -55.0, 55.0),
+			0.0,
+			clampf(oil_liquid_slosh.x * 0.28, -22.0, 22.0)
+		)
+		oil_surface_pivot.position = Vector3(
+			clampf(oil_liquid_slosh.x * 0.00045, -0.01, 0.01),
+			lerpf(0.078, 0.04, pour_t),
+			clampf(-oil_liquid_slosh.y * 0.00045, -0.01, 0.01)
+		)
 
 
 func _build_oil_stream_fx() -> void:
@@ -15928,41 +16012,45 @@ func _build_oil_stream_fx() -> void:
 	oil_stream_mesh.name = "OilSoftServeRibbon"
 	oil_stream_mesh.mesh = ArrayMesh.new()
 	oil_stream_mat = StandardMaterial3D.new()
-	oil_stream_mat.albedo_color = Color(0.96, 0.78, 0.22, 0.38)
+	## Paler / more see-through than the old saturated yellow.
+	oil_stream_mat.albedo_color = Color(0.78, 0.7, 0.45, 0.2)
 	oil_stream_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	oil_stream_mat.roughness = 0.16
-	oil_stream_mat.metallic = 0.05
+	oil_stream_mat.roughness = 0.2
+	oil_stream_mat.metallic = 0.04
 	oil_stream_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	oil_stream_mat.emission_enabled = true
-	oil_stream_mat.emission = Color(1.0, 0.78, 0.22)
-	oil_stream_mat.emission_energy_multiplier = 0.12
+	oil_stream_mat.emission = Color(0.85, 0.72, 0.4)
+	oil_stream_mat.emission_energy_multiplier = 0.05
+	oil_stream_mat.render_priority = OIL_STREAM_DRAW_PRIO
 	oil_stream_mesh.material_override = oil_stream_mat
 	oil_stream_mesh.visible = false
 	oil_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	oil_stream_mesh.sorting_offset = float(OIL_STREAM_DRAW_PRIO)
 	world.add_child(oil_stream_mesh)
 
 	oil_stream_fx = GPUParticles3D.new()
 	oil_stream_fx.name = "OilSoftServeDroplets"
-	oil_stream_fx.amount = 16
-	oil_stream_fx.lifetime = 0.4
+	oil_stream_fx.amount = 12
+	oil_stream_fx.lifetime = 0.36
 	oil_stream_fx.emitting = false
 	oil_stream_fx.explosiveness = 0.08
 	oil_stream_fx.randomness = 0.35
+	oil_stream_fx.sorting_offset = float(OIL_STREAM_DRAW_PRIO)
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pmat.emission_sphere_radius = 0.016
+	pmat.emission_sphere_radius = 0.014
 	pmat.direction = Vector3(0, -1, 0)
-	pmat.spread = 26.0
-	pmat.initial_velocity_min = 0.02
-	pmat.initial_velocity_max = 0.1
-	pmat.gravity = Vector3(0, -0.4, 0)
-	pmat.scale_min = 0.35
-	pmat.scale_max = 0.85
-	pmat.color = Color(1.0, 0.86, 0.3, 0.5)
+	pmat.spread = 22.0
+	pmat.initial_velocity_min = 0.015
+	pmat.initial_velocity_max = 0.08
+	pmat.gravity = Vector3(0, -0.35, 0)
+	pmat.scale_min = 0.3
+	pmat.scale_max = 0.7
+	pmat.color = Color(0.8, 0.7, 0.42, 0.22)
 	oil_stream_fx.process_material = pmat
 	var drop_mesh := SphereMesh.new()
-	drop_mesh.radius = 0.007
-	drop_mesh.height = 0.01
+	drop_mesh.radius = 0.006
+	drop_mesh.height = 0.009
 	oil_stream_fx.draw_pass_1 = drop_mesh
 	oil_stream_fx.material_override = oil_stream_mat
 	world.add_child(oil_stream_fx)
@@ -16111,16 +16199,19 @@ func _begin_oil_hold() -> bool:
 	oil_last_draw = Vector3.ZERO
 	oil_pour_hold_t = 0.0
 	oil_pour_tilt = 1.0
+	oil_liquid_slosh = Vector2.ZERO
+	oil_hand_vel = Vector2.ZERO
 	oil_root.rotation_degrees = Vector3(OIL_POUR_PITCH, 0.0, 0.0)
 	var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + OIL_POUR_HEIGHT)
 	if seat != Vector3.ZERO:
 		oil_root.global_position = seat
+	oil_prev_pos = oil_root.global_position
 	if oil_area:
 		oil_area.input_ray_pickable = false
 	if game_audio:
 		game_audio.play_click()
 	_spend(COST_OIL_USE)
-	_flash("Oil tipped — scroll down to stop pour, keep holding", Color("FFE082"))
+	_flash("Oil on — scroll to toggle pour off", Color("FFE082"))
 	if mp_enabled:
 		_mp_send_held_tool_pose(true)
 	return true
@@ -16159,10 +16250,18 @@ func _release_oil_bottle() -> void:
 	oil_last_draw = Vector3.ZERO
 	oil_pour_hold_t = 0.0
 	oil_pour_tilt = 1.0
+	oil_liquid_slosh = Vector2.ZERO
+	oil_hand_vel = Vector2.ZERO
 	if oil_particles:
 		oil_particles.emitting = false
 	_hide_oil_stream()
 	_set_oil_aim_marker(false, Vector3.ZERO)
+	if oil_liquid_pivot != null and is_instance_valid(oil_liquid_pivot):
+		oil_liquid_pivot.position = Vector3.ZERO
+		oil_liquid_pivot.rotation_degrees = Vector3.ZERO
+	if oil_surface_pivot != null and is_instance_valid(oil_surface_pivot):
+		oil_surface_pivot.position = Vector3(0.0, 0.078, 0.0)
+		oil_surface_pivot.rotation_degrees = Vector3.ZERO
 	if oil_area:
 		oil_area.input_ray_pickable = false
 	_tween_tool_to_wall(
