@@ -332,8 +332,8 @@ var _cheese_strings: Array = [] ## {root, mis, mats, patty, offs, phase, breakin
 var cheese_pull_patty: Area3D = null ## Active cheese-pull target (RMB tap or LMB hold/slide)
 const CHEESE_STRING_MIN_MELT := 0.05 ## Latch pull-strings soon after melt starts
 const CHEESE_STRING_ATTACH_R := 0.48
-const CHEESE_STRING_BREAK_DIST := 0.52
-const CHEESE_STRING_KILL_DIST := 0.72
+const CHEESE_STRING_BREAK_DIST := 0.26 ## was 0.52 — snap at half the old reach
+const CHEESE_STRING_KILL_DIST := 0.36
 const CHEESE_STRING_STRANDS := 3
 const CHEESE_STRING_BREAK_SEC := 0.28
 const CHEESE_STRING_AUTO_DETACH_SEC := 2.0 ## Snap off even if spatula sits still
@@ -18079,11 +18079,11 @@ func _clear_cheese_strings_for_patty(patty: Area3D) -> void:
 
 
 func _cheese_string_color(patty: Area3D) -> Color:
-	## Yellower than the melt square — less cooked-orange on the pull strands.
-	var col := Color(1.0, 0.93, 0.38)
+	## Pull strands — a hair more orange than the melt, +2% sat.
+	var col := Color(1.0, 0.86, 0.30)
 	if patty != null and is_instance_valid(patty) and patty.has_method("cheese_color"):
-		col = patty.cheese_color().lerp(Color(1.0, 0.96, 0.42), 0.55)
-	return col
+		col = patty.cheese_color().lerp(Color(1.0, 0.84, 0.28), 0.42)
+	return Color.from_hsv(col.h, clampf(col.s * 1.02, 0.0, 1.0), col.v, col.a)
 
 
 func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
@@ -18116,14 +18116,10 @@ func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
 		mats.append(mat)
 		## Fan attach points across the melt square → under-blade tip.
 		var u := (float(s) / float(maxi(CHEESE_STRING_STRANDS - 1, 1))) * 2.0 - 1.0
-		## Mix thin + thicker strands (middle often chunkier).
-		var width_mul := 1.15
-		if s == 1:
-			width_mul = 1.85
-		elif s == 0:
-			width_mul = 1.35
-		else:
-			width_mul = 1.55
+		## Two match; one runs thinner.
+		var width_mul := 1.45
+		if s == 2:
+			width_mul = 0.82
 		offs.append({
 			"cheese": Vector3(u * 0.045, randf_range(-0.002, 0.006), (1.0 - absf(u)) * randf_range(-0.03, 0.03)),
 			"tip": Vector3(u * 0.028, randf_range(-0.016, -0.004), randf_range(-0.02, 0.02)),
@@ -18159,13 +18155,22 @@ func _spatula_tip_world_for_cheese() -> Vector3:
 
 
 func _build_cheese_string_mesh(a: Vector3, b: Vector3, sag: float, half_w: float, col: Color) -> ImmediateMesh:
-	## Soft sagging ribbon between cheese and spatula.
-	var mid := (a + b) * 0.5 + Vector3(0.0, -sag, 0.0)
+	## Soft ribbon with two sag folds (not one obvious mid hinge).
+	var span := b - a
+	var side_n := span.cross(Vector3.UP)
+	if side_n.length_squared() < 0.000001:
+		side_n = span.cross(Vector3.RIGHT)
+	side_n = side_n.normalized()
+	## Two elbows at ~1/3 and ~2/3 — slight lateral offset so they don't stack.
+	var fold1 := a.lerp(b, 0.32) + Vector3(0.0, -sag * 0.72, 0.0) + side_n * (sag * 0.08)
+	var fold2 := a.lerp(b, 0.68) + Vector3(0.0, -sag * 0.95, 0.0) - side_n * (sag * 0.06)
 	var points: Array[Vector3] = [
 		a,
-		a.lerp(mid, 0.45),
-		mid,
-		b.lerp(mid, 0.45),
+		a.lerp(fold1, 0.55),
+		fold1,
+		fold1.lerp(fold2, 0.5) + Vector3(0.0, -sag * 0.12, 0.0),
+		fold2,
+		fold2.lerp(b, 0.55),
 		b,
 	]
 	var im := ImmediateMesh.new()
@@ -26666,8 +26671,8 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 		land_y = cup_rest.y + 0.002
 	var end: Vector3
 	var mid: Vector3
-	## BoxMesh is centered — sit ~2 cube heights above steel so they read clearly.
-	var grill_land_y := GRILL_SURFACE_Y + s * 2.0 + 0.012
+	## BoxMesh is centered — sit a hair higher so they don't read sunk into the steel.
+	var grill_land_y := GRILL_SURFACE_Y + s * 2.0 + 0.022
 	if to_grill:
 		var cook := _cook_place_bounds()
 		var gx := GRILL_CENTER_X + randf_range(-GRILL_WIDTH * 0.32, GRILL_WIDTH * 0.32)
