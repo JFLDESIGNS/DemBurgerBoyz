@@ -17721,7 +17721,7 @@ func _update_cheese_strings(delta: float) -> void:
 		var lift := tip.y - cheese_base.y
 		var mis: Array = item.get("mis", [])
 		## Flat on the melt / sliding under the burger — hide strands until a real lift.
-		var flat_contact := lift < CHEESE_STRING_MIN_LIFT or patty == dragging_patty
+		var flat_contact: bool = lift < CHEESE_STRING_MIN_LIFT or patty == dragging_patty
 		if flat_contact and not bool(item.get("breaking", false)):
 			for mi0 in mis:
 				if mi0 != null and is_instance_valid(mi0):
