@@ -1123,7 +1123,7 @@ var options_hidden_room_tone_vol: HSlider = null
 var options_hidden_room_tone_vol_lab: Label = null
 ## Soft Solfeggio-ish room beds (Hz). Default 174, quiet.
 var room_tone_hz: float = 174.0
-var room_tone_volume: float = 0.18
+var room_tone_volume: float = 0.0 ## Off by default — opt-in from Hidden menu; never replaces kitchen SFX
 const ROOM_TONE_FREQS: Array[float] = [174.0, 285.0, 396.0]
 const AUDIO_ROOM_TONE_HZ_KEY := "room_tone_hz"
 const AUDIO_ROOM_TONE_VOL_KEY := "room_tone_volume"
