@@ -14230,14 +14230,17 @@ func _prewarm_grill_fire_fx() -> void:
 	_apply_fire_emission_points(fire_particles_red, _fire_emit_tex, dummy.size(), 6, 6.0)
 	_apply_fire_emission_points(fire_embers, _fire_emit_tex, dummy.size(), 4, 10.0)
 	_apply_fire_emission_points(fire_smoke, _fire_smoke_emit_tex, dummy.size(), 6, 9.0)
-	## One quiet emit burst off the main look (still under the grill) so shaders compile.
-	## Keep the systems silent — particles only, no SFX / generator beds.
+	## Park far off-camera for the compile burst — never flash flames on grill center.
+	## (Title UI 3D cheese/patty preview is separate and stays on-screen.)
+	var home := Vector3(0.0, GRILL_SURFACE_Y + 0.008, 0.0)
+	fire_root.position = Vector3(48.0, -36.0, 48.0)
 	fire_root.visible = true
 	_set_fire_fx_emitting(true)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_set_fire_fx_emitting(false)
+	fire_root.position = home
 	if game_audio != null and game_audio.has_method("silence_continuous_beds"):
 		game_audio.silence_continuous_beds(false)
 	## Restore room tone after the silent compile window.
