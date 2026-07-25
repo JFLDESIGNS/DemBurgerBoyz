@@ -1452,8 +1452,8 @@ const CUP_FILL_EXTRA_Y_DEFAULT := 0.0
 var cup_hold_height: float = CUP_HOLD_HEIGHT_DEFAULT
 var cup_fill_extra_y: float = CUP_FILL_EXTRA_Y_DEFAULT
 const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
-## Local Y of the drip-grate seat — below the old mid-air float (~3" under floor-collider top).
-const CUP_TRAY_DECK_LOCAL_Y := 0.02 * SODA_FOUNTAIN_SCALE
+## Local Y of cup bottom on the drip grate (must match drip-floor collider top).
+const CUP_TRAY_DECK_LOCAL_Y := 0.01 * SODA_FOUNTAIN_SCALE
 ## Cup mesh ~10% smaller than the original fountain cups.
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
@@ -19689,7 +19689,8 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.35 * s, 0.14 * s), "h": Vector3(0.17 * s, 0.16 * s, 0.08 * s)}, ## dispenser face
 		{"p": Vector3(0.0, 0.55 * s, 0.05 * s), "h": Vector3(0.16 * s, 0.12 * s, 0.10 * s)}, ## banner / top
 		{"p": Vector3(-0.38, 0.85, 0.12), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser
-		{"p": Vector3(0.0, 0.04 * s, 0.10 * s), "h": Vector3(0.18 * s, 0.03 * s, 0.22 * s), "floor": true}, ## drip floor
+		## Drip grate — top = CUP_TRAY_DECK_LOCAL_Y so fill/park sit on the visible ledge (not mid-air).
+		{"p": Vector3(0.0, 0.0, 0.10 * s), "h": Vector3(0.18 * s, CUP_TRAY_DECK_LOCAL_Y, 0.22 * s), "floor": true},
 	]
 
 
@@ -25837,12 +25838,13 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 
 func _cup_deck_fill_y() -> float:
-	## Absolute drip-deck fill/park Y (+ Hidden fill offset). Never tip-relative.
-	if cup_rest != Vector3.ZERO:
-		return cup_rest.y + cup_fill_extra_y
+	## Cup-bottom Y on the drip grate (+ Hidden fill offset). Never tip / carry height.
+	var deck := SODA_STATION_POS.y + CUP_TRAY_DECK_LOCAL_Y
 	if soda_root != null and is_instance_valid(soda_root):
-		return soda_root.to_global(Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y, 0.0)).y + cup_fill_extra_y
-	return SODA_STATION_POS.y + CUP_TRAY_DECK_LOCAL_Y + cup_fill_extra_y
+		deck = soda_root.to_global(Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y, 0.0)).y
+	elif cup_rest != Vector3.ZERO:
+		deck = cup_rest.y
+	return deck + cup_fill_extra_y
 
 
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
@@ -25958,12 +25960,12 @@ func _update_held_cup(delta: float) -> void:
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
 	## Soft wall resolve — ease corrections so it doesn't stutter on the metal.
-	if _cup_machine_contact_grace <= 0.0 or can_reach_customer or can_use_fill_bay:
+	## While filling, never let the drip-floor collider re-lift the cup into mid-air.
+	if not can_use_fill_bay and (_cup_machine_contact_grace <= 0.0 or can_reach_customer):
 		var before_resolve := cup_root.global_position
-		var resolved := _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
-		if not can_use_fill_bay and not can_reach_customer:
+		var resolved := _resolve_cup_against_soda(before_resolve, can_reach_customer)
+		if not can_reach_customer:
 			var push := clampf(delta * 16.0, 0.0, 1.0)
-			## Keep Y from the aim seat — resolve only slides XZ away from cabinets.
 			var keep_y := before_resolve.y
 			cup_root.global_position = before_resolve.lerp(resolved, push)
 			cup_root.global_position.y = keep_y
@@ -25971,11 +25973,7 @@ func _update_held_cup(delta: float) -> void:
 				_cup_machine_contact_grace = 0.16
 				_cup_vel *= 0.2
 				_cup_prev_pos = cup_root.global_position
-		else:
-			cup_root.global_position = resolved
-			if can_use_fill_bay:
-				cup_root.global_position.y = _cup_deck_fill_y()
-	## Pin height: under a spout → drip deck. Otherwise carry plane.
+	## Pin height: under a spout / pouring → drip deck. Otherwise carry plane.
 	if can_use_fill_bay:
 		cup_root.global_position.y = _cup_deck_fill_y()
 	else:
@@ -25991,8 +25989,8 @@ func _update_held_cup(delta: float) -> void:
 	)
 	_update_cup_slosh(delta)
 	_try_fill_cup_at_spouts(delta)
-	## Keep deck seat after pour starts (fill can begin before soft-lock was sticky).
-	if _cup_fill_spout_nearby() != null:
+	## After pour starts, keep the cup planted on the grate even if soft-lock blips.
+	if can_use_fill_bay or _cup_pouring or _cup_fill_spout_nearby() != null:
 		cup_root.global_position.y = _cup_deck_fill_y()
 	## After spout sets _cup_pouring — drive the pour-white fade.
 	_update_cup_pour_white(delta)
@@ -36326,6 +36324,7 @@ func _build_ingredient_legend() -> void:
 		child.queue_free()
 	ingredient_buttons.clear()
 	ingredient_legend.add_theme_constant_override("separation", 6)
+	ingredient_legend.clip_contents = false
 
 	## Compact Order-Up bell on the right of the bottom ingredient strip.
 	var serve_btn := Button.new()
@@ -36467,30 +36466,21 @@ func _build_ingredient_legend() -> void:
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
 
-		## Hover overlay: assets/ui/keycap.png perched on the topping top.
+		## Keycap PNG + digit at the top of each topping (always visible).
 		var keycap_host := Control.new()
 		keycap_host.name = "KeycapHost"
 		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		keycap_host.z_index = 8
+		keycap_host.z_index = 20
 		keycap_host.set_anchors_preset(Control.PRESET_CENTER_TOP)
-		keycap_host.offset_left = -18.0
-		keycap_host.offset_right = 18.0
-		## Mostly above the cell so it reads on the top edge of the ingredient.
-		keycap_host.offset_top = -28.0
-		keycap_host.offset_bottom = 6.0
+		keycap_host.offset_left = -16.0
+		keycap_host.offset_right = 16.0
+		keycap_host.offset_top = -22.0
+		keycap_host.offset_bottom = 10.0
 		var keycap_view := _make_strip_hotkey_keycap(HOTKEY_LABELS[hi])
 		keycap_view.name = "KeycapView"
-		keycap_view.visible = false
+		keycap_view.visible = true
 		keycap_host.add_child(keycap_view)
 		tbtn.add_child(keycap_host)
-		tbtn.mouse_entered.connect(func():
-			if is_instance_valid(keycap_view):
-				keycap_view.visible = true
-		)
-		tbtn.mouse_exited.connect(func():
-			if is_instance_valid(keycap_view):
-				keycap_view.visible = false
-		)
 
 		var capture: String = id
 		tbtn.pressed.connect(func():
@@ -36527,43 +36517,7 @@ func _build_ingredient_legend() -> void:
 	call_deferred("_refresh_ingredient_stock_bars")
 
 
-const STRIP_KEYCAP_TEX_PATHS: Array[String] = [
-	"res://assets/ui/keycap.png",
-	"res://IMAGES/KEYCAP.png",
-	"res://IMAGES/KEYIMAGE.png",
-]
-var _strip_keycap_tex: Texture2D = null
-
-
-func _get_strip_keycap_texture() -> Texture2D:
-	## Blank keycap art (assets/ui/keycap.png) for strip hotkey hover badges.
-	if _strip_keycap_tex != null:
-		return _strip_keycap_tex
-	var img: Image = null
-	for path in STRIP_KEYCAP_TEX_PATHS:
-		if ResourceLoader.exists(path):
-			var src := load(path) as Texture2D
-			if src != null:
-				img = src.get_image()
-				if img != null:
-					break
-		## Raw PNG fallback for exports that pack the file without a texture import.
-		if FileAccess.file_exists(path):
-			var loaded := Image.new()
-			if loaded.load(path) == OK:
-				img = loaded
-				break
-	if img == null:
-		return null
-	## Punch the solid black plate to alpha so only the key shows on the strip.
-	img.convert(Image.FORMAT_RGBA8)
-	for y in img.get_height():
-		for x in img.get_width():
-			var c := img.get_pixel(x, y)
-			if c.r < 0.08 and c.g < 0.08 and c.b < 0.08:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-	_strip_keycap_tex = ImageTexture.create_from_image(img)
-	return _strip_keycap_tex
+const STRIP_KEYCAP_TEX := preload("res://assets/ui/keycap.png")
 
 
 func _make_strip_hotkey_keycap(digit: String) -> Control:
@@ -36573,28 +36527,15 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-	var tex := _get_strip_keycap_texture()
-	if tex != null:
-		var icon := TextureRect.new()
-		icon.name = "Art"
-		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		icon.texture = tex
-		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		root.add_child(icon)
-	else:
-		## Fallback silhouette if the image is missing from the pack.
-		var face := Panel.new()
-		face.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var face_sb := StyleBoxFlat.new()
-		face_sb.bg_color = Color(0.93, 0.94, 0.97)
-		face_sb.set_corner_radius_all(6)
-		face_sb.border_color = Color(0.28, 0.30, 0.34)
-		face_sb.set_border_width_all(2)
-		face.add_theme_stylebox_override("panel", face_sb)
-		root.add_child(face)
+	## Use the packed texture directly — get_image() is null in exported builds.
+	var icon := TextureRect.new()
+	icon.name = "Art"
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.texture = STRIP_KEYCAP_TEX
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(icon)
 
 	var lab := Label.new()
 	lab.name = "Digit"
@@ -36604,10 +36545,10 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	lab.offset_top = -1.0
-	UiFontsScript.apply_label(lab, true, 15)
-	lab.add_theme_color_override("font_color", Color(0.12, 0.13, 0.16))
-	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.45))
-	lab.add_theme_constant_override("outline_size", 1)
+	UiFontsScript.apply_label(lab, true, 14)
+	lab.add_theme_color_override("font_color", Color(0.10, 0.11, 0.14))
+	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.55))
+	lab.add_theme_constant_override("outline_size", 2)
 	root.add_child(lab)
 	return root
 
