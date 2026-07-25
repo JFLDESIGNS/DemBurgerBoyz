@@ -461,6 +461,8 @@ const RESIDUE_MIN_LEAVE_AMT := 0.12 ## below this, leave the steel clean
 const RESIDUE_OIL_COOK_SEC := 2.0
 ## Each oil puddle / speck rolls this chance to leave scrapable black crust when it burns off.
 const OIL_RESIDUE_LEAVE_CHANCE := 0.50
+## Lit / flaming oil uses a lower leave rate when the fire cooks it off.
+const OIL_FIRE_RESIDUE_LEAVE_CHANCE := 0.25
 const OIL_RESIDUE_MERGE_R := 0.05 ## Only merge crust if speck is almost on top of an existing oil stain
 ## Filthy grill — need nearly a full flat-top of heavy crust before walkouts.
 const CRUST_GROSS_COUNT := 9 ## was 5 — allow lots of grime before the line freaks out
@@ -11580,20 +11582,25 @@ func _update_heat_warp(_delta: float) -> void:
 		return
 	var heat := 0.0
 	var warp_strength := 0.0
-	if grill_on:
+	## Fire must shimmer even if burners were just killed — same peak as heavy hot oil.
+	if grill_on or grill_on_fire:
 		## Normal heat is subtle; heavy hot oil pushes the shimmer into the stronger greasy look.
-		heat = 0.26
-		warp_strength = 0.0045
-		for i in GRILL_SLOTS:
-			var p = grill[i]
-			if p == null or not is_instance_valid(p) or p.is_held:
-				continue
-			if not p.heating:
-				continue
-			var cook_t := clampf(float(p.cook_time) / 9.0, 0.2, 1.0)
-			heat = maxf(heat, 0.34 + cook_t * 0.16 * clampf(float(p.heat_mul), 0.2, 1.0))
-			warp_strength = maxf(warp_strength, 0.006)
+		if grill_on:
+			heat = 0.26
+			warp_strength = 0.0045
+			for i in GRILL_SLOTS:
+				var p = grill[i]
+				if p == null or not is_instance_valid(p) or p.is_held:
+					continue
+				if not p.heating:
+					continue
+				var cook_t := clampf(float(p.cook_time) / 9.0, 0.2, 1.0)
+				heat = maxf(heat, 0.34 + cook_t * 0.16 * clampf(float(p.heat_mul), 0.2, 1.0))
+				warp_strength = maxf(warp_strength, 0.006)
 		var oil_heat := _hot_oil_warp_ratio()
+		if grill_on_fire:
+			## Flaming grease always hits the same full heat-wave as max hot-oil cook.
+			oil_heat = maxf(oil_heat, 1.0)
 		if oil_heat > 0.0:
 			heat = maxf(heat, lerpf(0.42, 0.94, oil_heat))
 			warp_strength = maxf(warp_strength, lerpf(0.007, 0.014, oil_heat))
@@ -14752,13 +14759,13 @@ func _end_oil_trail_fire_burnout() -> void:
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
-	## Flaming puddles each roll 50% to stay as matte black crust (same drip shape).
+	## Flaming puddles each roll 25% to stay as matte black crust (same drip shape).
 	var keep: Array = []
 	for item in oil_slicks:
 		var mesh = item.get("mesh")
 		var was_lit := bool(item.get("on_fire", false))
 		if mesh != null and is_instance_valid(mesh) and was_lit:
-			if _try_convert_oil_slick_to_crust(item):
+			if _try_convert_oil_slick_to_crust(item, OIL_FIRE_RESIDUE_LEAVE_CHANCE):
 				keep.append(item)
 			else:
 				mesh.queue_free()
@@ -14770,11 +14777,11 @@ func _end_oil_trail_fire_burnout() -> void:
 	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
 
 
-func _try_convert_oil_slick_to_crust(item: Dictionary) -> bool:
-	## 50% keep this exact drip mesh as black diffuse crust; else it vanishes.
+func _try_convert_oil_slick_to_crust(item: Dictionary, leave_chance: float = OIL_RESIDUE_LEAVE_CHANCE) -> bool:
+	## Keep this exact drip mesh as black diffuse crust on a dice roll; else it vanishes.
 	if item.is_empty() or bool(item.get("crust", false)):
 		return bool(item.get("crust", false))
-	if randf() >= OIL_RESIDUE_LEAVE_CHANCE:
+	if randf() >= leave_chance:
 		return false
 	var mesh = item.get("mesh")
 	if mesh == null or not is_instance_valid(mesh):
@@ -15017,8 +15024,9 @@ func _update_oil_slicks(delta: float) -> void:
 		var age := float(item["age"])
 		var lit := _oil_slick_is_lit(item)
 		if age >= life:
-			## 50%: keep this exact drip as black crust. Else remove.
-			if _try_convert_oil_slick_to_crust(item):
+			## Lit fire: 25% crust. Normal cook-off: 50%.
+			var leave_p := OIL_FIRE_RESIDUE_LEAVE_CHANCE if lit else OIL_RESIDUE_LEAVE_CHANCE
+			if _try_convert_oil_slick_to_crust(item, leave_p):
 				item["crust_scale"] = maxf(mesh.scale.x, 0.08)
 				oil_slicks[i] = item
 				i += 1
