@@ -4877,58 +4877,66 @@ func _update_oil_trail_fire_spread(delta: float) -> void:
 
 
 func _spawn_spatula_edge_spark(at: Vector3) -> void:
-	## Tiny metal-on-steel spark when the blade is fully on edge.
+	## Subtle transparent line streaks — metal tip on steel (not chunky dots).
 	var center := Vector3(at.x, GRILL_SURFACE_Y + 0.012, at.z)
 	var root := Node3D.new()
 	root.name = "SpatulaEdgeSpark"
 	root.position = center
 	add_child(root)
 	var fx := GPUParticles3D.new()
-	fx.amount = 10
-	fx.lifetime = 0.18
+	fx.amount = 6
+	fx.lifetime = 0.12
 	fx.one_shot = true
-	fx.explosiveness = 0.95
-	fx.randomness = 0.7
+	fx.explosiveness = 0.92
+	fx.randomness = 0.55
 	fx.emitting = true
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	fx.sorting_offset = 10.0
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pmat.emission_sphere_radius = 0.008
+	pmat.emission_sphere_radius = 0.004
 	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 55.0
-	pmat.initial_velocity_min = 0.55
-	pmat.initial_velocity_max = 1.35
-	pmat.gravity = Vector3(0, -4.5, 0)
-	pmat.damping_min = 1.5
-	pmat.damping_max = 3.0
-	pmat.scale_min = 0.35
-	pmat.scale_max = 0.75
-	pmat.color = Color(1.0, 0.85, 0.45, 1.0)
+	pmat.spread = 38.0
+	pmat.initial_velocity_min = 0.45
+	pmat.initial_velocity_max = 1.05
+	pmat.gravity = Vector3(0, -3.2, 0)
+	pmat.damping_min = 2.0
+	pmat.damping_max = 3.8
+	pmat.scale_min = 0.55
+	pmat.scale_max = 1.05
+	## Stretch streaks along flight direction.
+	pmat.particle_flag_align_y = true
+	pmat.color = Color(1.0, 0.9, 0.55, 0.35)
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.7, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.15, 0.55, 1.0])
 	grad.colors = PackedColorArray([
-		Color(1.0, 0.95, 0.7, 0.0),
-		Color(1.0, 0.85, 0.35, 0.95),
-		Color(1.0, 0.45, 0.12, 0.55),
-		Color(0.4, 0.1, 0.02, 0.0),
+		Color(1.0, 0.96, 0.75, 0.0),
+		Color(1.0, 0.9, 0.5, 0.42),
+		Color(1.0, 0.55, 0.18, 0.18),
+		Color(0.5, 0.15, 0.04, 0.0),
 	])
 	var gtex := GradientTexture1D.new()
 	gtex.gradient = grad
 	pmat.color_ramp = gtex
 	fx.process_material = pmat
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.012, 0.012)
+	## Thin needle along Y — reads as a spark line once aligned to velocity.
+	var streak := CylinderMesh.new()
+	streak.top_radius = 0.00055
+	streak.bottom_radius = 0.0009
+	streak.height = 0.022
+	streak.radial_segments = 4
+	streak.rings = 1
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	draw.albedo_color = Color(1.0, 0.9, 0.5, 0.9)
-	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.albedo_color = Color(1.0, 0.92, 0.55, 0.38)
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.disable_receive_shadows = true
+	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	draw.render_priority = 16
-	fx.draw_pass_1 = quad
+	fx.draw_pass_1 = streak
 	fx.material_override = draw
 	root.add_child(fx)
 	_spatula_sparks.append({"root": root, "t": 0.0001})
