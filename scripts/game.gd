@@ -17789,14 +17789,15 @@ func _add_grill_seasoning_overlay(parent: Node3D) -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
 	mat.render_priority = 1
-	mat.set_shader_parameter("vignette_strength", 0.18)
+	mat.set_shader_parameter("vignette_strength", 0.12)
 	mat.set_shader_parameter("vignette_softness", 0.72)
 	mat.set_shader_parameter("vignette_noise", 0.58)
-	mat.set_shader_parameter("splotch_strength", 0.14)
-	mat.set_shader_parameter("splotch_scale", 2.2)
-	mat.set_shader_parameter("splotch_threshold", 0.64)
-	mat.set_shader_parameter("oil_chroma", 0.38)
-	mat.set_shader_parameter("grain_amount", 0.09)
+	mat.set_shader_parameter("splotch_strength", 0.045)
+	mat.set_shader_parameter("splotch_scale", 1.05)
+	mat.set_shader_parameter("splotch_threshold", 0.57)
+	mat.set_shader_parameter("oil_chroma", 0.16)
+	mat.set_shader_parameter("edge_darken", 0.10)
+	mat.set_shader_parameter("grain_amount", 0.05)
 	overlay.material_override = mat
 	parent.add_child(overlay)
 
