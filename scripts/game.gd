@@ -81,7 +81,7 @@ const PATTY_NEIGHBOR_PUSH_SEP_MUL := 0.42
 const PATTY_NEIGHBOR_DRAG_COUPLE := 0.12
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
-const OIL_SIT_Y := 0.038
+const OIL_SIT_Y := 0.0304 ## was 0.038; −0.3" closer to the steel
 ## Cups sit clear of the 0.045-thick zone panels so the bottom rim stays visible.
 const CUP_STEEL_SIT_Y := 0.052
 ## Too many puddles → warn only (fire needs a sustained pour — see OIL_POUR_FIRE_SEC).
@@ -397,6 +397,8 @@ var brush_area: Area3D = null
 var brush_home: Vector3 = Vector3(1.866, 1.99, 1.12)
 var brush_home_rot := Vector3(-8.0, 18.0, 6.0)
 const BRUSH_HOME_SCALE := Vector3(1.55, 1.55, 1.55)
+## Wall prop off for now — scrape/residue logic + spatula scrub stay active.
+const WALL_SCRAPER_ENABLED := false
 ## Hold height above steel — ~3" extra so the handle clears the grill lip while scraping.
 const BRUSH_HOLD_HEIGHT := 0.141
 ## Held pose — blade tipped on steel, handle toward the cook.
@@ -433,9 +435,12 @@ var cheese_ghost: MeshInstance3D = null
 var cheese_ghost_mat: StandardMaterial3D = null
 var _cheese_hover_patty = null ## Last burger the cheese ghost snapped to
 ## Seasoning shaker — clustered with oil + scraper on the left window beam.
+const SHAKER_MODEL_PATH := "res://models/burgerpack/try2/SM_SpiceShaker.glb"
+const SHAKER_ROOT_SCALE := Vector3(2.15, 2.15, 2.15)
 var shaker_held: bool = false
 var shaker_root: Node3D = null
 var shaker_area: Area3D = null
+var shaker_visual: Node3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
 var shaker_home: Vector3 = Vector3(1.526, 2.14, 1.12)
@@ -480,6 +485,13 @@ var fire_embers: GPUParticles3D = null
 var fire_smoke: GPUParticles3D = null
 var _oil_fire_warned: bool = false
 var _fire_flicker_t: float = 0.0
+## Edge-spatula oil trail blaze — spreads speck → speck from the tap.
+var _oil_fire_trail_mode: bool = false
+var _oil_fire_spread_cool: float = 0.0
+const OIL_EDGE_IGNITE_RADIUS := 0.15 ## Tip must land near a puddle
+const OIL_FIRE_SPREAD_RADIUS := 0.155 ## Neighbor speck catch distance
+const OIL_FIRE_SPREAD_SEC := 0.11 ## Delay between spread hops
+var _spatula_sparks: Array = [] ## short-lived edge-spark FX
 ## Fire extinguisher — hang-mounted left of the tools; hold LMB to carry.
 var ext_held: bool = false
 var ext_root: Node3D = null
@@ -824,6 +836,7 @@ var grill_roomba_ledge_wobble: float = 0.0
 const ROOMBA_LEDGE_DRIVE_SPEED := 0.30
 const ROOMBA_LEDGE_PITCH_DEG := -15.0
 const ROOMBA_LEDGE_OVERHANG_R := 0.5 ## center sits 0.5*R inside cook edge → ~¼ body hangs off
+const ROOMBA_LEDGE_SINK_Y := 0.0381 ## 1.5" lower while teetering on the lip
 var grill_roomba_bump_normal: Vector2 = Vector2.ZERO
 var grill_roomba_last_xz: Vector2 = Vector2.ZERO
 var grill_roomba_carry_patty: Area3D = null
@@ -2923,7 +2936,9 @@ func _input(event: InputEvent) -> void:
 			spatula_grill_hold_on_meat = false
 			_spatula_pull_flip_done = false
 			_spatula_mute_ting = false
-			if game_audio and game_audio.has_method("set_scrape_debris_rattle"):
+			if game_audio and game_audio.has_method("set_grill_scrape"):
+				game_audio.set_grill_scrape(false)
+			elif game_audio and game_audio.has_method("set_scrape_debris_rattle"):
 				game_audio.set_scrape_debris_rattle(false)
 			## Fall through so an active burger drag still ends (tap smash / slide release).
 		if dragging_patty != null:
@@ -3628,7 +3643,9 @@ func _kb_update_scrape(delta: float) -> void:
 	_scrape_grill_liquids(pos, move_xz, moved)
 	if game_audio and game_audio.has_method("set_slide_moving"):
 		game_audio.set_slide_moving(true, 0.85)
-	if game_audio and game_audio.has_method("set_scrape_debris_rattle"):
+	if game_audio and game_audio.has_method("set_grill_scrape"):
+		game_audio.set_grill_scrape(true, true)
+	elif game_audio and game_audio.has_method("set_scrape_debris_rattle"):
 		game_audio.set_scrape_debris_rattle(true)
 	if _kb_s_t >= KB_SCRAPE_TOTAL_SEC:
 		_flash("Grill scraped clean", Color("B0BEC5"))
@@ -4625,9 +4642,13 @@ func _spatula_play_ting_bit(bit: int) -> void:
 	_spatula_ting_bits |= bit
 	if game_audio and game_audio.has_method("play_spatula_ting"):
 		var midi := _grill_piano_midi_at(_spatula_slap_contact) + _spatula_roll_midi_offset()
-		game_audio.play_spatula_ting(midi)
+		## Flat blade a bit quieter; ±45° / ±90° keep full tap volume.
+		var ting_vol := 0.8 if absf(_spatula_user_roll) < 22.5 else 1.0
+		game_audio.play_spatula_ting(midi, ting_vol)
 	## White expanding stroke on the steel under the hit.
 	_spawn_spatula_tap_ring(_spatula_slap_contact)
+	## Edge blade: spark at full tilt; oil trail catches if tip hits grease.
+	_try_spatula_edge_tap_fx(_spatula_slap_contact)
 
 
 func _spawn_spatula_tap_ring(at: Vector3) -> void:
@@ -4677,6 +4698,192 @@ func _tick_spatula_tap_rings(delta: float) -> void:
 		mi.mesh = _build_spatula_circle_mesh(rad, SPATULA_TAP_RING_STROKE)
 		keep.append(ring)
 	_spatula_tap_rings = keep
+
+
+func _try_spatula_edge_tap_fx(at: Vector3) -> void:
+	## Sideways blade on steel: spark at ±90°, ignite grease trails from ±45° up.
+	if at == Vector3.ZERO or not grill_on:
+		return
+	var roll_mag := absf(_spatula_user_roll)
+	if roll_mag < HAND_SPATULA_ROLL_STEP * 0.5:
+		return
+	if roll_mag >= HAND_SPATULA_ROLL_MAX - 0.5:
+		_spawn_spatula_edge_spark(at)
+	var idx := _nearest_oil_slick_index(at, OIL_EDGE_IGNITE_RADIUS)
+	if idx < 0:
+		return
+	_ignite_oil_trail_from_index(idx)
+
+
+func _nearest_oil_slick_index(at: Vector3, max_dist: float) -> int:
+	var best := -1
+	var best_d := max_dist
+	for i in oil_slicks.size():
+		var item: Dictionary = oil_slicks[i]
+		var m = item.get("mesh")
+		if m == null or not is_instance_valid(m):
+			continue
+		var p: Vector3 = m.position
+		var d := Vector2(p.x - at.x, p.z - at.z).length()
+		var rad := float(item.get("radius", 0.04))
+		d = maxf(0.0, d - rad * 0.65)
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _ignite_oil_trail_from_index(idx: int) -> void:
+	if idx < 0 or idx >= oil_slicks.size():
+		return
+	if not grill_on:
+		return
+	var item: Dictionary = oil_slicks[idx]
+	var m = item.get("mesh")
+	if m == null or not is_instance_valid(m):
+		return
+	var origin: Vector3 = m.position
+	var already := bool(item.get("on_fire", false))
+	item["on_fire"] = true
+	oil_slicks[idx] = item
+	if not grill_on_fire:
+		## Fresh blaze from this speck — grows along the trail.
+		_oil_fire_trail_mode = true
+		_oil_fire_spread_cool = OIL_FIRE_SPREAD_SEC
+		_start_grill_fire(origin)
+	elif _oil_fire_trail_mode:
+		_oil_fire_spread_cool = mini(_oil_fire_spread_cool, OIL_FIRE_SPREAD_SEC)
+		_sync_fire_to_oil_area()
+	if already and grill_on_fire:
+		return
+	if game_audio and game_audio.has_method("play_hot_oil_hit"):
+		game_audio.play_hot_oil_hit()
+	elif game_audio and game_audio.has_method("play_grease_pop"):
+		game_audio.play_grease_pop(true)
+
+
+func _update_oil_trail_fire_spread(delta: float) -> void:
+	if not grill_on_fire or not _oil_fire_trail_mode or _fire_killed_by_powder:
+		return
+	_oil_fire_spread_cool = maxf(0.0, _oil_fire_spread_cool - delta)
+	if _oil_fire_spread_cool > 0.0:
+		return
+	_oil_fire_spread_cool = OIL_FIRE_SPREAD_SEC
+	var lit: Array = []
+	for item in oil_slicks:
+		if not bool(item.get("on_fire", false)):
+			continue
+		var m = item.get("mesh")
+		if m != null and is_instance_valid(m):
+			lit.append(m.position)
+	if lit.is_empty():
+		## Pour-started fire with no trail marks — light every slick in the zone once.
+		for i in oil_slicks.size():
+			var it: Dictionary = oil_slicks[i]
+			var mesh = it.get("mesh")
+			if mesh == null or not is_instance_valid(mesh):
+				continue
+			if _is_in_fire_zone(mesh.position):
+				it["on_fire"] = true
+				oil_slicks[i] = it
+				lit.append(mesh.position)
+		if lit.is_empty():
+			return
+	var caught := false
+	for i in oil_slicks.size():
+		var it: Dictionary = oil_slicks[i]
+		if bool(it.get("on_fire", false)):
+			continue
+		var mesh = it.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			continue
+		var p: Vector3 = mesh.position
+		for lp in lit:
+			if Vector2(p.x - lp.x, p.z - lp.z).length() <= OIL_FIRE_SPREAD_RADIUS:
+				it["on_fire"] = true
+				oil_slicks[i] = it
+				caught = true
+				break
+	if caught:
+		_sync_fire_to_oil_area()
+		if game_audio and game_audio.has_method("play_grease_pop"):
+			game_audio.play_grease_pop(false)
+
+
+func _spawn_spatula_edge_spark(at: Vector3) -> void:
+	## Tiny metal-on-steel spark when the blade is fully on edge.
+	var center := Vector3(at.x, GRILL_SURFACE_Y + 0.012, at.z)
+	var root := Node3D.new()
+	root.name = "SpatulaEdgeSpark"
+	root.position = center
+	add_child(root)
+	var fx := GPUParticles3D.new()
+	fx.amount = 10
+	fx.lifetime = 0.18
+	fx.one_shot = true
+	fx.explosiveness = 0.95
+	fx.randomness = 0.7
+	fx.emitting = true
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fx.sorting_offset = 10.0
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = 0.008
+	pmat.direction = Vector3(0, 1, 0)
+	pmat.spread = 55.0
+	pmat.initial_velocity_min = 0.55
+	pmat.initial_velocity_max = 1.35
+	pmat.gravity = Vector3(0, -4.5, 0)
+	pmat.damping_min = 1.5
+	pmat.damping_max = 3.0
+	pmat.scale_min = 0.35
+	pmat.scale_max = 0.75
+	pmat.color = Color(1.0, 0.85, 0.45, 1.0)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.7, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.95, 0.7, 0.0),
+		Color(1.0, 0.85, 0.35, 0.95),
+		Color(1.0, 0.45, 0.12, 0.55),
+		Color(0.4, 0.1, 0.02, 0.0),
+	])
+	var gtex := GradientTexture1D.new()
+	gtex.gradient = grad
+	pmat.color_ramp = gtex
+	fx.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.012, 0.012)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	draw.albedo_color = Color(1.0, 0.9, 0.5, 0.9)
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.disable_receive_shadows = true
+	draw.render_priority = 16
+	fx.draw_pass_1 = quad
+	fx.material_override = draw
+	root.add_child(fx)
+	_spatula_sparks.append({"root": root, "t": 0.0001})
+	if game_audio and game_audio.has_method("play_grease_pop"):
+		game_audio.play_grease_pop(false)
+
+
+func _tick_spatula_edge_sparks(delta: float) -> void:
+	if _spatula_sparks.is_empty():
+		return
+	var keep: Array = []
+	for spark in _spatula_sparks:
+		var t := float(spark["t"]) + delta
+		spark["t"] = t
+		var root: Node = spark.get("root")
+		if t >= 0.28 or root == null or not is_instance_valid(root):
+			if root != null and is_instance_valid(root):
+				root.queue_free()
+			continue
+		keep.append(spark)
+	_spatula_sparks = keep
 
 
 func _spatula_anim_sample(u: float) -> Dictionary:
@@ -4789,6 +4996,7 @@ func _hand_spatula_side_yaw_at(world_pos: Vector3) -> float:
 func _update_hand_spatula_cursor(delta: float) -> void:
 	## Tap rings keep growing even if the spatula leaves the grill.
 	_tick_spatula_tap_rings(delta)
+	_tick_spatula_edge_sparks(delta)
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		_set_cursor_kind("glove")
 		return
@@ -4805,7 +5013,9 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		spatula_grill_hold_on_meat = false
 		_spatula_pull_flip_done = false
 		_spatula_mute_ting = false
-		if game_audio and game_audio.has_method("set_scrape_debris_rattle"):
+		if game_audio and game_audio.has_method("set_grill_scrape"):
+			game_audio.set_grill_scrape(false)
+		elif game_audio and game_audio.has_method("set_scrape_debris_rattle"):
 			game_audio.set_scrape_debris_rattle(false)
 	var show := _should_show_hand_spatula(mouse) or animating or dragging or grill_hold
 	hand_spatula_root.visible = show
@@ -5468,9 +5678,9 @@ func _build_burner_flames() -> void:
 
 	var root := Node3D.new()
 	root.name = "BurnerFlames"
-	## ~12% up from last pass; thickness restored.
-	const TRI_H := 0.043
-	const TRI_W := 0.030
+	## Smaller lip flames so they stay under the apron.
+	const TRI_H := 0.030
+	const TRI_W := 0.021
 	var gap_y := GRILL_SURFACE_Y - 0.045
 	## Under the cook lip, nudged ~2" toward the player (was 3").
 	var gap_z := GRILL_SURFACE_Z - GRILL_DEPTH * 0.48 - 0.051
@@ -8062,14 +8272,18 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	## Tip shove — push burgers aside without attaching them to the spatula.
 	if moved >= SPATULA_SCRAPE_MIN_MOVE:
 		_spatula_nudge_patties(tip_pos, move_xz, moved)
-	if game_audio and game_audio.has_method("set_slide_moving") and dragging_patty == null:
-		if scraping:
+	## Scrape bed + tings whenever LMB-dragging the spatula on the steel; louder on debris.
+	var moving_scrape := moved >= SPATULA_SCRAPE_MIN_MOVE and dragging_patty == null
+	if game_audio and dragging_patty == null:
+		if moving_scrape or scraping:
 			var spd := moved / maxf(delta, 0.001) if moved >= SPATULA_SCRAPE_MIN_MOVE else 0.35
 			game_audio.set_slide_moving(true, clampf(spd * 0.25, 0.3, 1.2))
 		else:
 			game_audio.set_slide_moving(false)
-	if game_audio and game_audio.has_method("set_scrape_debris_rattle"):
-		game_audio.set_scrape_debris_rattle(scraping_debris)
+		if game_audio.has_method("set_grill_scrape"):
+			game_audio.set_grill_scrape(moving_scrape or scraping_debris, scraping_debris)
+		elif game_audio.has_method("set_scrape_debris_rattle"):
+			game_audio.set_scrape_debris_rattle(scraping_debris)
 
 
 func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> void:
@@ -8123,7 +8337,7 @@ func _leave_grill_residue_local(
 		if kind == "cup":
 			_flash("Charred cup stuck on the grill — scrape it off", Color("BCAAA4"))
 		else:
-			_flash("Grease left on the grill — grab the scraper by the window", Color("BCAAA4"))
+			_flash("Grease left on the grill — scrape it with the spatula", Color("BCAAA4"))
 	## Too much crust and the line freaks out.
 	_check_waiting_customers_gross_grill()
 
@@ -8372,8 +8586,9 @@ func _build_grill_roomba() -> void:
 	grill_roomba_area.input_ray_pickable = true
 	var grab_shape:= CollisionShape3D.new()
 	var grab_cyl:= CylinderShape3D.new()
-	grab_cyl.radius = ROOMBA_RADIUS * 1.12
-	grab_cyl.height = ROOMBA_HEIGHT * 1.9
+	## Match the body closely so grab linetrace only hits when the cursor is on the bot.
+	grab_cyl.radius = ROOMBA_RADIUS * 1.02
+	grab_cyl.height = ROOMBA_HEIGHT * 1.35
 	grab_shape.shape = grab_cyl
 	grab_shape.position = Vector3(0.0, 0.0, 0.0)
 	grill_roomba_area.add_child(grab_shape)
@@ -8856,10 +9071,8 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held\
 	or dragging_patty != null or bts_lightstick_held_index >= 0:
 		return false
-	## Ledge gag is easier to grab (hangs off toward the cook).
-	var grab_px := 110.0 if grill_roomba_ledge_phase != "" else 64.0
-	var near:= screen_pos.distance_to(camera.unproject_position(grill_roomba_root.global_position + Vector3(0.0, 0.045, 0.0))) <= grab_px
-	if not near and not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
+	## Strict: cursor linetrace must hit the bot — no fat screen magnet.
+	if not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
 		return false
 	_roomba_drop_carried_patty_in_place()
 	grill_roomba_held = true
@@ -8983,6 +9196,7 @@ func _update_roomba_ledge_drive(delta: float) -> void:
 			game_audio.set_roomba_drive(true, 0.85)
 		return
 	## Arrived — tip and wobble until rescued.
+	hang.y -= ROOMBA_LEDGE_SINK_Y
 	grill_roomba_root.global_position = hang
 	grill_roomba_last_xz = Vector2(hang.x, hang.z)
 	grill_roomba_vel = Vector2.ZERO
@@ -9006,7 +9220,7 @@ func _update_roomba_ledge_stuck(delta: float) -> void:
 	## Stuck jitter — ~⅓ prior shake so it reads stuck, not vibrating apart.
 	base.x += sin(grill_roomba_ledge_wobble * 2.4) * 0.0023
 	base.z += cos(grill_roomba_ledge_wobble * 1.9) * 0.0017
-	base.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y - 0.01 + sin(grill_roomba_ledge_wobble * 3.2) * 0.0013
+	base.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y - ROOMBA_LEDGE_SINK_Y + sin(grill_roomba_ledge_wobble * 3.2) * 0.0013
 	grill_roomba_root.global_position = base
 	grill_roomba_root.rotation_degrees = Vector3(
 		ROOMBA_LEDGE_PITCH_DEG + sin(grill_roomba_ledge_wobble * 3.4) * 1.5,
@@ -9473,16 +9687,39 @@ func _roomba_is_smoke_visual_node(node: Node) -> bool:
 	return false
 
 
-func _roomba_copy_patty_visuals(src: Node, dst_parent: Node3D, root_xf: Transform3D) -> int:
-	if _roomba_is_smoke_visual_node(src):
+func _roomba_is_frozen_ball_visual_node(node: Node) -> bool:
+	## Frozen drop ball stays in the tree after smash — never copy it onto the carry spatula.
+	var n := node
+	while n != null:
+		var nm := String(n.name)
+		if nm == "FrozenDropBall" or nm.to_lower().contains("frozendrop"):
+			return true
+		n = n.get_parent()
+	return false
+
+
+func _roomba_node_effectively_visible(node: Node, ignore_root: Node = null) -> bool:
+	## Walk visibility up the tree, but ignore the carried patty root (it's hidden on purpose).
+	var n := node
+	while n != null:
+		if ignore_root != null and n == ignore_root:
+			return true
+		if n is Node3D and not (n as Node3D).visible:
+			return false
+		n = n.get_parent()
+	return true
+
+
+func _roomba_copy_patty_visuals(src: Node, dst_parent: Node3D, root_xf: Transform3D, visibility_root: Node = null) -> int:
+	if _roomba_is_smoke_visual_node(src) or _roomba_is_frozen_ball_visual_node(src):
 		return 0
 	var copied := 0
 	for child in src.get_children():
-		if _roomba_is_smoke_visual_node(child):
+		if _roomba_is_smoke_visual_node(child) or _roomba_is_frozen_ball_visual_node(child):
 			continue
 		if child is MeshInstance3D:
 			var mi := child as MeshInstance3D
-			if mi.mesh != null and mi.visible:
+			if mi.mesh != null and _roomba_node_effectively_visible(mi, visibility_root):
 				var clone := MeshInstance3D.new()
 				clone.name = "Carry_%s" % String(mi.name)
 				clone.mesh = mi.mesh
@@ -9497,7 +9734,7 @@ func _roomba_copy_patty_visuals(src: Node, dst_parent: Node3D, root_xf: Transfor
 				dst_parent.add_child(clone)
 				copied += 1
 		if child.get_child_count() > 0:
-			copied += _roomba_copy_patty_visuals(child, dst_parent, root_xf)
+			copied += _roomba_copy_patty_visuals(child, dst_parent, root_xf, visibility_root)
 	return copied
 
 
@@ -9532,7 +9769,8 @@ func _roomba_make_fake_patty_from(real_patty: Area3D) -> Node3D:
 	fake.rotation_degrees = Vector3.ZERO
 	var copied := 0
 	if real_patty != null and is_instance_valid(real_patty):
-		copied = _roomba_copy_patty_visuals(real_patty, fake, real_patty.global_transform)
+		## Patty root is hidden while carried — still copy its visible meat meshes.
+		copied = _roomba_copy_patty_visuals(real_patty, fake, real_patty.global_transform, real_patty)
 	if copied <= 0:
 		_roomba_add_fallback_fake_patty(fake, real_patty)
 	fake.set_meta("roomba_carry_animating", true)
@@ -9722,6 +9960,10 @@ func _roomba_commit_scoop_patty(patty: Area3D, slot: int) -> void:
 	patty.is_held = true
 	patty.heating = false
 	patty.visible = false
+	## Keep smash ball hidden so a leftover sphere never rides the spatula.
+	var frozen := patty.get_node_or_null("FrozenDropBall") as Node3D
+	if frozen != null:
+		frozen.visible = false
 	_roomba_update_carried_patty()
 	if game_audio and game_audio.has_method("play_click"):
 		game_audio.play_click()
@@ -12084,15 +12326,31 @@ func _build_wire_brush() -> void:
 	shoulder.material_override = metal
 	brush_root.add_child(shoulder)
 
+	if not WALL_SCRAPER_ENABLED:
+		## Keep scrape/residue systems; hide the hanging prop + wall grab.
+		for child in brush_root.get_children():
+			if child is MeshInstance3D:
+				(child as MeshInstance3D).visible = false
+		if brush_area != null:
+			brush_area.input_ray_pickable = false
+			brush_area.collision_layer = 0
+			brush_area.monitorable = false
+
 
 func _build_season_shaker() -> void:
 	## Seasoning hanging next to the oil bottle on the far-left window beam.
 	shaker_home = Vector3(1.526, 2.14, 1.12)
+	if shaker_root != null and is_instance_valid(shaker_root):
+		shaker_root.queue_free()
+	shaker_root = null
+	shaker_visual = null
+	shaker_area = null
+	shaker_particles = null
 	shaker_root = Node3D.new()
 	shaker_root.name = "SeasonShaker"
 	shaker_root.position = shaker_home
 	shaker_root.rotation_degrees = Vector3(4.0, -10.0, 2.0)
-	shaker_root.scale = Vector3(2.15, 2.15, 2.15)
+	shaker_root.scale = SHAKER_ROOT_SCALE
 	world.add_child(shaker_root)
 
 	shaker_area = Area3D.new()
@@ -12104,38 +12362,49 @@ func _build_season_shaker() -> void:
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
 	## Roomier than the mesh so hanging tools stay easy to click.
-	box.size = Vector3(0.12, 0.2, 0.12)
+	box.size = Vector3(0.14, 0.22, 0.14)
 	shape.shape = box
-	shape.position = Vector3(0, 0.04, 0)
+	shape.position = Vector3(0, 0.05, 0)
 	shaker_area.add_child(shape)
 	shaker_root.add_child(shaker_area)
 
-	var body := MeshInstance3D.new()
-	var bcyl := CylinderMesh.new()
-	bcyl.top_radius = 0.032
-	bcyl.bottom_radius = 0.038
-	bcyl.height = 0.11
-	bcyl.radial_segments = 12
-	body.mesh = bcyl
-	var bmat := StandardMaterial3D.new()
-	bmat.albedo_color = Color(0.55, 0.42, 0.22)
-	bmat.roughness = 0.55
-	body.material_override = bmat
-	shaker_root.add_child(body)
-
-	var cap := MeshInstance3D.new()
-	var cmesh := CylinderMesh.new()
-	cmesh.top_radius = 0.036
-	cmesh.bottom_radius = 0.036
-	cmesh.height = 0.022
-	cap.mesh = cmesh
-	cap.position = Vector3(0, 0.062, 0)
-	var cmat := StandardMaterial3D.new()
-	cmat.albedo_color = Color(0.75, 0.72, 0.68)
-	cmat.metallic = 0.7
-	cmat.roughness = 0.35
-	cap.material_override = cmat
-	shaker_root.add_child(cap)
+	var Pack := preload("res://scripts/burger_pack_models.gd")
+	var visual: Node3D = Pack.instantiate_scene(SHAKER_MODEL_PATH, 1.0)
+	if visual != null:
+		visual.name = "SpiceShakerMesh"
+		## Model sits on +Y from its base — tip at ~0.11 local.
+		visual.position = Vector3(0.0, 0.0, 0.0)
+		visual.rotation_degrees = Vector3.ZERO
+		shaker_root.add_child(visual)
+		shaker_visual = visual
+	else:
+		push_warning("Season shaker model missing: %s" % SHAKER_MODEL_PATH)
+		## Fallback procedural so seasoning still works if the GLB is absent.
+		var body := MeshInstance3D.new()
+		var bcyl := CylinderMesh.new()
+		bcyl.top_radius = 0.032
+		bcyl.bottom_radius = 0.038
+		bcyl.height = 0.11
+		bcyl.radial_segments = 12
+		body.mesh = bcyl
+		var bmat := StandardMaterial3D.new()
+		bmat.albedo_color = Color(0.55, 0.42, 0.22)
+		bmat.roughness = 0.55
+		body.material_override = bmat
+		shaker_root.add_child(body)
+		var cap := MeshInstance3D.new()
+		var cmesh := CylinderMesh.new()
+		cmesh.top_radius = 0.036
+		cmesh.bottom_radius = 0.036
+		cmesh.height = 0.022
+		cap.mesh = cmesh
+		cap.position = Vector3(0, 0.062, 0)
+		var cmat := StandardMaterial3D.new()
+		cmat.albedo_color = Color(0.75, 0.72, 0.68)
+		cmat.metallic = 0.7
+		cmat.roughness = 0.35
+		cap.material_override = cmat
+		shaker_root.add_child(cap)
 
 	shaker_particles = GPUParticles3D.new()
 	shaker_particles.name = "SeasonParticles"
@@ -12144,7 +12413,8 @@ func _build_season_shaker() -> void:
 	shaker_particles.explosiveness = 0.05
 	shaker_particles.randomness = 0.35
 	shaker_particles.emitting = false
-	shaker_particles.position = Vector3(0, 0.07, 0)
+	## Emit from the shaker lid (upright local +Y); tip-down hold flips this over the beef.
+	shaker_particles.position = Vector3(0, 0.105, 0)
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
 	pmat.emission_sphere_radius = 0.01
@@ -12210,14 +12480,14 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 		if sd < best_d:
 			best_d = sd
 			best = "shaker"
-	if brush_root != null and camera != null and not brush_held and not brush_throwing:
+	if WALL_SCRAPER_ENABLED and brush_root != null and camera != null and not brush_held and not brush_throwing:
 		var tip := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
 		var bd := screen_pos.distance_to(camera.unproject_position(tip))
 		if bd < best_d:
 			best_d = bd
 			best = "brush"
 	## Allow grabbing scraper while it's flying home.
-	if brush_root != null and camera != null and not brush_held and brush_throwing:
+	if WALL_SCRAPER_ENABLED and brush_root != null and camera != null and not brush_held and brush_throwing:
 		var tip2 := brush_root.global_position + brush_root.basis * Vector3(0, 0.12, 0)
 		var bd2 := screen_pos.distance_to(camera.unproject_position(tip2))
 		if bd2 < best_d:
@@ -12271,7 +12541,7 @@ func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 			best = "sale"
 		elif _ray_hits_tool(screen_pos, 32, shaker_area):
 			best = "shaker"
-		elif _ray_hits_tool(screen_pos, 8, brush_area):
+		elif WALL_SCRAPER_ENABLED and _ray_hits_tool(screen_pos, 8, brush_area):
 			best = "brush"
 		elif _ray_hits_tool(screen_pos, 16, oil_area):
 			best = "oil"
@@ -12367,7 +12637,7 @@ func _begin_shaker_hold() -> void:
 	shaker_held = true
 	if shaker_root:
 		shaker_root.visible = true
-		shaker_root.scale = Vector3(2.15, 2.15, 2.15)
+		shaker_root.scale = SHAKER_ROOT_SCALE
 		shaker_root.rotation_degrees = Vector3(180.0, 25.0, 0.0)
 		## Instant snap under cursor — no wait for next grill-plane hit.
 		var seat := _tool_hold_point_from_screen(get_viewport().get_mouse_position(), GRILL_SURFACE_Y + SHAKER_POUR_HEIGHT)
@@ -12397,7 +12667,7 @@ func _cancel_shaker_hold() -> void:
 			shaker_root,
 			shaker_home,
 			Vector3(6.0, 25.0, -4.0),
-			Vector3(2.15, 2.15, 2.15),
+			SHAKER_ROOT_SCALE,
 			0.3,
 			func() -> void:
 				if shaker_area != null and is_instance_valid(shaker_area):
@@ -12416,7 +12686,7 @@ func _cancel_shaker_hold_silent() -> void:
 	if shaker_root:
 		shaker_root.position = shaker_home
 		shaker_root.rotation_degrees = Vector3(6.0, 25.0, -4.0)
-		shaker_root.scale = Vector3(2.15, 2.15, 2.15)
+		shaker_root.scale = SHAKER_ROOT_SCALE
 		shaker_root.visible = true
 	if shaker_area:
 		shaker_area.input_ray_pickable = true
@@ -12597,8 +12867,10 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 		"base_a": 0.72,
 		"scrape": 1.0,
 		"boost_heat": true,
+		"on_fire": false,
 	})
-	while oil_slicks.size() > 70:
+	## Cap = trail length budget (2× prior 70) so you can lay a long grease trail.
+	while oil_slicks.size() > 140:
 		var old: Dictionary = oil_slicks.pop_front()
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
@@ -12670,9 +12942,24 @@ func _fire_zone_dict() -> Dictionary:
 
 
 func _is_in_fire_zone(world_pos: Vector3) -> bool:
+	if not grill_on_fire:
+		return false
+	## Trail fire hugs lit grease — meat only chars near burning puddles.
+	if _oil_fire_trail_mode:
+		for item in oil_slicks:
+			if not bool(item.get("on_fire", false)):
+				continue
+			var m = item.get("mesh")
+			if m == null or not is_instance_valid(m):
+				continue
+			var p: Vector3 = m.position
+			var rad := float(item.get("radius", 0.04)) + 0.08
+			if Vector2(world_pos.x - p.x, world_pos.z - p.z).length() <= rad:
+				return true
+		return false
 	var z := _fire_zone_dict()
 	if z.is_empty():
-		return grill_on_fire
+		return true
 	return world_pos.x >= float(z["x0"]) - 0.01 and world_pos.x <= float(z["x1"]) + 0.01 \
 		and absf(world_pos.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.55
 
@@ -12699,12 +12986,22 @@ func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO) -> void:
 	_oil_fire_warned = true
 	_fire_killed_by_powder = false
 	oil_pour_hold_t = 0.0
+	## Trail taps set this before calling start; pour ignition lights the whole band.
+	if not _oil_fire_trail_mode:
+		_oil_fire_spread_cool = 0.0
 	var zone := _pick_fire_start_zone(origin)
 	fire_zone_id = str(zone.get("id", "full"))
 	## Drop the oil bottle so they can grab the extinguisher.
 	if oil_held:
 		_release_oil_bottle()
 	_ensure_grill_fire_fx()
+	if _oil_fire_trail_mode and origin != Vector3.ZERO:
+		## Seed the closest puddle so flames sit on the tapped speck first.
+		var seed_i := _nearest_oil_slick_index(origin, OIL_EDGE_IGNITE_RADIUS * 1.6)
+		if seed_i >= 0:
+			var seed: Dictionary = oil_slicks[seed_i]
+			seed["on_fire"] = true
+			oil_slicks[seed_i] = seed
 	_sync_fire_to_oil_area()
 	_set_fire_fx_emitting(true)
 	## Char only patties sitting in the burning section.
@@ -12724,7 +13021,39 @@ func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO) -> void:
 
 
 func _oil_fire_bounds() -> Dictionary:
-	## Fire lives only inside the heat band where it started.
+	## Trail blaze hugs lit puddles; pour blaze fills the heat band it started in.
+	if _oil_fire_trail_mode:
+		var min_x := INF
+		var max_x := -INF
+		var min_z := INF
+		var max_z := -INF
+		var n_lit := 0
+		for item in oil_slicks:
+			if not bool(item.get("on_fire", false)):
+				continue
+			var m = item.get("mesh")
+			if m == null or not is_instance_valid(m):
+				continue
+			var p: Vector3 = m.position
+			var rad := float(item.get("radius", 0.04))
+			min_x = minf(min_x, p.x - rad)
+			max_x = maxf(max_x, p.x + rad)
+			min_z = minf(min_z, p.z - rad)
+			max_z = maxf(max_z, p.z + rad)
+			n_lit += 1
+		if n_lit > 0:
+			var cx := (min_x + max_x) * 0.5
+			var cz := (min_z + max_z) * 0.5
+			cz = clampf(cz, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
+			var half := Vector3(
+				clampf((max_x - min_x) * 0.5 + 0.04, 0.06, GRILL_WIDTH * 0.48),
+				0.015,
+				clampf((max_z - min_z) * 0.5 + 0.04, 0.06, GRILL_DEPTH * 0.42)
+			)
+			return {
+				"center": Vector3(cx, GRILL_SURFACE_Y + 0.06, cz),
+				"half": half,
+			}
 	var zone := _fire_zone_dict()
 	if zone.is_empty():
 		zone = _pick_fire_start_zone()
@@ -12732,31 +13061,31 @@ func _oil_fire_bounds() -> Dictionary:
 	var x0 := float(zone.get("x0", GRILL_CENTER_X - 0.3))
 	var x1 := float(zone.get("x1", GRILL_CENTER_X + 0.3))
 	var zw := maxf(0.18, float(zone.get("w", 0.4)))
-	var cx := float(zone.get("cx", (x0 + x1) * 0.5))
+	var cx2 := float(zone.get("cx", (x0 + x1) * 0.5))
 	var sum_z := 0.0
 	var n := 0
-	for item in oil_slicks:
-		var m = item.get("mesh")
-		if m == null or not is_instance_valid(m):
+	for item2 in oil_slicks:
+		var m2 = item2.get("mesh")
+		if m2 == null or not is_instance_valid(m2):
 			continue
-		var p: Vector3 = m.position
-		if p.x < x0 - 0.02 or p.x > x1 + 0.02:
+		var p2: Vector3 = m2.position
+		if p2.x < x0 - 0.02 or p2.x > x1 + 0.02:
 			continue
-		sum_z += p.z
+		sum_z += p2.z
 		n += 1
-	var cz := GRILL_SURFACE_Z
+	var cz2 := GRILL_SURFACE_Z
 	if n > 0:
-		cz = sum_z / float(n)
-	cz = clampf(cz, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
+		cz2 = sum_z / float(n)
+	cz2 = clampf(cz2, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
 	## Sit clearly above the steel + shine band so flame bases aren't depth-buried.
-	var center := Vector3(cx, GRILL_SURFACE_Y + 0.08, cz)
+	var center := Vector3(cx2, GRILL_SURFACE_Y + 0.06, cz2)
 	## Tight box — one section only, not the whole flat-top.
-	var half := Vector3(
+	var half2 := Vector3(
 		clampf(zw * 0.42, 0.14, zw * 0.48),
-		0.02,
+		0.015,
 		clampf(GRILL_DEPTH * 0.38, 0.16, GRILL_DEPTH * 0.42)
 	)
-	return {"center": center, "half": half}
+	return {"center": center, "half": half2}
 
 
 func _sync_fire_to_oil_area() -> void:
@@ -12782,13 +13111,13 @@ func _sync_fire_to_oil_area() -> void:
 			sm.emission_box_extents = Vector3(half.x * 0.85, 0.02, half.z * 0.85)
 	## Tight, dim omnis — push falloff hard so only that section glows.
 	if fire_light != null and is_instance_valid(fire_light):
-		fire_light.position = Vector3(0.0, 0.14, 0.0)
-		fire_light.omni_range = clampf(0.55 + half.x * 0.35, 0.55, 0.95)
-		fire_light.omni_attenuation = 3.4
+		fire_light.position = Vector3(0.0, 0.1, 0.0)
+		fire_light.omni_range = clampf(0.38 + half.x * 0.28, 0.35, 0.7)
+		fire_light.omni_attenuation = 3.6
 	if fire_light_rim != null and is_instance_valid(fire_light_rim):
-		fire_light_rim.position = Vector3(0.0, 0.08, 0.0)
-		fire_light_rim.omni_range = clampf(0.4 + half.x * 0.25, 0.4, 0.7)
-		fire_light_rim.omni_attenuation = 3.8
+		fire_light_rim.position = Vector3(0.0, 0.06, 0.0)
+		fire_light_rim.omni_range = clampf(0.28 + half.x * 0.2, 0.28, 0.55)
+		fire_light_rim.omni_attenuation = 4.0
 
 
 func _set_fire_fx_emitting(on: bool) -> void:
@@ -12805,11 +13134,19 @@ func _set_fire_fx_emitting(on: bool) -> void:
 
 
 func _ensure_grill_fire_fx() -> void:
+	## Rebuild so flame-size tweaks always apply on a fresh blaze.
 	if fire_root != null and is_instance_valid(fire_root):
-		return
+		fire_root.queue_free()
+	fire_root = null
+	fire_light = null
+	fire_light_rim = null
+	fire_particles = null
+	fire_particles_red = null
+	fire_embers = null
+	fire_smoke = null
 	fire_root = Node3D.new()
 	fire_root.name = "GreaseFire"
-	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.08, GRILL_SURFACE_Z)
+	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.06, GRILL_SURFACE_Z)
 	grill_root.add_child(fire_root)
 
 	## Soft core light — toned way down so particles read, not a room flood.
@@ -12835,12 +13172,12 @@ func _ensure_grill_fire_fx() -> void:
 	fire_light_rim.visible = false
 	fire_root.add_child(fire_light_rim)
 
-	## Smaller, denser flame triangles so grill fires read hotter without towering over food.
-	fire_particles = _make_fire_flame_particles("Flames", 38, 0.55, Vector2(0.045, 0.092), 0.36, 0.9, false)
+	## Compact flame triangles — short enough to sit under food / spatula.
+	fire_particles = _make_fire_flame_particles("Flames", 34, 0.42, Vector2(0.026, 0.048), 0.22, 0.52, false)
 	fire_root.add_child(fire_particles)
 
 	## Extra red triangle shards mixed into the blaze.
-	fire_particles_red = _make_fire_flame_particles("FlamesRed", 22, 0.5, Vector2(0.039, 0.082), 0.3, 0.78, true)
+	fire_particles_red = _make_fire_flame_particles("FlamesRed", 18, 0.38, Vector2(0.022, 0.042), 0.18, 0.44, true)
 	fire_root.add_child(fire_particles_red)
 
 	fire_embers = _make_fire_ember_particles()
@@ -12900,8 +13237,8 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	pmat.gravity = Vector3(0, 1.9, 0)
 	pmat.damping_min = 0.5
 	pmat.damping_max = 1.2
-	pmat.scale_min = 0.72 if not redder else 0.66
-	pmat.scale_max = 1.34 if not redder else 1.22
+	pmat.scale_min = 0.55 if not redder else 0.5
+	pmat.scale_max = 0.95 if not redder else 0.88
 	pmat.color = Color(1.0, 0.22, 0.05, 1.0) if redder else Color(1.0, 0.42, 0.08, 1.0)
 	var grad := Gradient.new()
 	if redder:
@@ -12944,27 +13281,27 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 func _make_fire_ember_particles() -> GPUParticles3D:
 	var fx := GPUParticles3D.new()
 	fx.name = "Embers"
-	fx.amount = 14
-	fx.lifetime = 0.75
+	fx.amount = 10
+	fx.lifetime = 0.55
 	fx.explosiveness = 0.0
 	fx.randomness = 1.0
 	fx.emitting = false
-	fx.position = Vector3(0, 0.03, 0)
+	fx.position = Vector3(0, 0.02, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 3.5, 2.4))
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	fx.sorting_offset = 9.5
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.24, 0.015, 0.16)
+	pmat.emission_box_extents = Vector3(0.18, 0.01, 0.12)
 	pmat.direction = Vector3(0, 1, 0.1)
 	pmat.spread = 28.0
-	pmat.initial_velocity_min = 0.8
-	pmat.initial_velocity_max = 1.8
+	pmat.initial_velocity_min = 0.45
+	pmat.initial_velocity_max = 1.05
 	pmat.gravity = Vector3(0, 0.5, 0)
 	pmat.damping_min = 0.9
 	pmat.damping_max = 2.0
-	pmat.scale_min = 0.35
-	pmat.scale_max = 0.7
+	pmat.scale_min = 0.25
+	pmat.scale_max = 0.5
 	pmat.color = Color(1.0, 0.5, 0.1, 1.0)
 	var grad := Gradient.new()
 	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.7, 1.0])
@@ -12987,7 +13324,7 @@ func _make_fire_ember_particles() -> GPUParticles3D:
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw.render_priority = 15
 	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	fx.draw_pass_1 = _make_fire_triangle_mesh(0.034, 0.058)
+	fx.draw_pass_1 = _make_fire_triangle_mesh(0.02, 0.034)
 	fx.material_override = draw
 	return fx
 
@@ -12995,27 +13332,27 @@ func _make_fire_ember_particles() -> GPUParticles3D:
 func _make_fire_smoke_particles() -> GPUParticles3D:
 	var fx := GPUParticles3D.new()
 	fx.name = "FireSmoke"
-	fx.amount = 36
-	fx.lifetime = 1.6
+	fx.amount = 22
+	fx.lifetime = 1.15
 	fx.explosiveness = 0.0
 	fx.randomness = 0.7
 	fx.emitting = false
-	fx.position = Vector3(0, 0.08, 0)
+	fx.position = Vector3(0, 0.05, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 4.0, 2.4))
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	fx.sorting_offset = 8.5
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.28, 0.02, 0.18)
+	pmat.emission_box_extents = Vector3(0.2, 0.015, 0.14)
 	pmat.direction = Vector3(0, 1, 0)
 	pmat.spread = 22.0
-	pmat.initial_velocity_min = 0.35
-	pmat.initial_velocity_max = 0.85
+	pmat.initial_velocity_min = 0.22
+	pmat.initial_velocity_max = 0.55
 	pmat.gravity = Vector3(0, 0.55, 0)
 	pmat.damping_min = 0.2
 	pmat.damping_max = 0.6
-	pmat.scale_min = 1.2
-	pmat.scale_max = 2.8
+	pmat.scale_min = 0.75
+	pmat.scale_max = 1.6
 	pmat.color = Color(0.15, 0.12, 0.1, 0.45)
 	var grad := Gradient.new()
 	grad.offsets = PackedFloat32Array([0.0, 0.15, 0.55, 1.0])
@@ -13030,7 +13367,7 @@ func _make_fire_smoke_particles() -> GPUParticles3D:
 	pmat.color_ramp = gtex
 	fx.process_material = pmat
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.14, 0.16)
+	quad.size = Vector2(0.09, 0.1)
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -13059,6 +13396,7 @@ func _update_grill_fire(delta: float) -> void:
 				p.heat_mul = maxf(float(p.heat_mul), 1.35)
 				p.cook_time += delta * 2.8
 		return
+	_update_oil_trail_fire_spread(delta)
 	_sync_fire_to_oil_area()
 	_fire_flicker_t += delta
 	var t := Time.get_ticks_msec() * 0.001
@@ -13076,7 +13414,7 @@ func _update_grill_fire(delta: float) -> void:
 		fire_light_rim.visible = true
 		fire_light_rim.light_energy = FIRE_LIGHT_RIM * (0.75 + flicker * 0.45)
 		fire_light_rim.light_color = Color(0.95, 0.16, 0.03)
-	## Oil puddles glow only under the burning section.
+	## Oil puddles glow when lit (trail) or inside the burn band (pour fire).
 	for item in oil_slicks:
 		var m = item.get("mesh")
 		if m == null or not is_instance_valid(m):
@@ -13084,7 +13422,9 @@ func _update_grill_fire(delta: float) -> void:
 		var mat := m.material_override as StandardMaterial3D
 		if mat == null:
 			continue
-		if not _is_in_fire_zone(m.position):
+		var lit := bool(item.get("on_fire", false)) \
+			if _oil_fire_trail_mode else _is_in_fire_zone(m.position)
+		if not lit:
 			mat.emission_enabled = false
 			continue
 		var pulse := 0.55 + 0.45 * sin(t * 9.0 + float(m.get_instance_id() % 7))
@@ -13379,6 +13719,8 @@ func _extinguish_grill_fire_local() -> void:
 	fire_health = 0.0
 	fire_zone_id = ""
 	_fire_killed_by_powder = false
+	_oil_fire_trail_mode = false
+	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
 	## Smother the oil puddles too — powder mess.
 	_clear_oil_slicks()
@@ -13408,6 +13750,8 @@ func _clear_grill_fire() -> void:
 	fire_zone_id = ""
 	_oil_fire_warned = false
 	_fire_killed_by_powder = false
+	_oil_fire_trail_mode = false
+	_oil_fire_spread_cool = 0.0
 	ext_spraying = false
 	_set_fire_fx_emitting(false)
 	_clear_ext_powder_blobs()
@@ -15571,6 +15915,8 @@ func _clear_warmer() -> void:
 
 
 func _try_grab_brush(screen_pos: Vector2) -> bool:
+	if not WALL_SCRAPER_ENABLED:
+		return false
 	if brush_held or brush_area == null or camera == null:
 		return false
 	if _ui_blocks_world_click(screen_pos):
@@ -15683,12 +16029,16 @@ func _update_held_brush(_delta: float) -> void:
 	## Scrape oil / soda puddles + char blotches off the steel.
 	if moved > 0.0005 and _scrape_grill_liquids(brush_root.global_position, move_xz, moved):
 		scraping = true
+	var brush_moving := moved > 0.0005
 	if game_audio and game_audio.has_method("set_slide_moving"):
-		if scraping:
+		if brush_moving or scraping:
 			game_audio.set_slide_moving(true, clampf(moved / maxf(_delta, 0.001) * 0.25, 0.3, 1.2))
 		else:
 			game_audio.set_slide_moving(false)
-	if game_audio and game_audio.has_method("set_scrape_debris_rattle"):
+	if game_audio and game_audio.has_method("set_grill_scrape"):
+		## Brush: scrape bed while moving on steel; 2× when chewing debris.
+		game_audio.set_grill_scrape(brush_moving or scraping_debris, scraping_debris)
+	elif game_audio and game_audio.has_method("set_scrape_debris_rattle"):
 		game_audio.set_scrape_debris_rattle(scraping_debris)
 
 
@@ -16006,7 +16356,9 @@ func _throw_brush_home() -> void:
 		game_audio.play_click()
 		if game_audio.has_method("set_slide_moving"):
 			game_audio.set_slide_moving(false)
-		if game_audio.has_method("set_scrape_debris_rattle"):
+		if game_audio.has_method("set_grill_scrape"):
+			game_audio.set_grill_scrape(false)
+		elif game_audio.has_method("set_scrape_debris_rattle"):
 			game_audio.set_scrape_debris_rattle(false)
 	if brush_area:
 		brush_area.input_ray_pickable = false
@@ -28204,8 +28556,8 @@ func _setup_burgerpals_startup_sound() -> void:
 	burgerpals_startup_player.name = "BurgerPalsStartupSound"
 	burgerpals_startup_player.bus = "Master"
 	burgerpals_startup_player.stream = stream
-	## 2× louder than the 4-note jingle (jingle uses ~0.55 linear gain).
-	burgerpals_startup_player.volume_db = linear_to_db(1.10)
+	## Startup VO — 30% quieter than prior 1.10 linear gain.
+	burgerpals_startup_player.volume_db = linear_to_db(0.77)
 	add_child(burgerpals_startup_player)
 	get_tree().create_timer(1.7).timeout.connect(_play_burgerpals_startup_sound)
 

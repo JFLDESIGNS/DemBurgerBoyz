@@ -45,12 +45,17 @@ var _shake_player: AudioStreamPlayer
 var _shake_gen: AudioStreamGenerator
 var _shake_on: bool = false
 var _shake_season_on: bool = false
-var _shake_scrape_on: bool = false
+var _scrape_move_on: bool = false ## Spatula/brush scrape bed while moving on steel
+var _scrape_debris_boost: bool = false ## On actual debris — 2× scrape volumes
 var _shake_lp := 0.0
 var _shake_phase := 0.0
 var _shake_tick := 0.0
-## Was -27 dB; ×3 linear ≈ +9.5 dB.
+## Was -27 dB; ×3 linear ≈ +9.5 dB. Debris scrape is another ×2 on top.
 const SHAKER_RATTLE_DB := -17.5
+const SHAKER_SCRAPE_DB := -11.5 ## base grill scrape (same as season bed)
+const SHAKER_SCRAPE_DEBRIS_DB := -5.5 ## SHAKER_SCRAPE_DB + ~6 dB (2× louder)
+var _scrape_ting_cool: float = 0.0
+const SCRAPE_TING_INTERVAL := 0.4
 ## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
 var _fries_shake_player: AudioStreamPlayer
 var _fries_shake_gen: AudioStreamGenerator
@@ -224,7 +229,11 @@ func _process(delta: float) -> void:
 	_slide_gain = move_toward(_slide_gain, _slide_target, delta * fade_spd)
 	if _slide_player:
 		if _slide_gain > 0.01:
-			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.38, 0.02, 1.0))
+			## Moving scrape on steel; debris hits are 2× that bed.
+			var slide_mul := 1.0
+			if _scrape_move_on:
+				slide_mul = 4.0 if _scrape_debris_boost else 2.0
+			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.38 * slide_mul, 0.02, 1.0))
 			_slide_player.pitch_scale = 1.15 + _slide_gain * 0.2
 			if not _slide_player.playing:
 				_slide_player.play()
@@ -232,6 +241,7 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
+	_tick_scrape_tings(delta)
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
@@ -445,18 +455,34 @@ func set_shaker_rattle(active: bool) -> void:
 
 
 func set_scrape_debris_rattle(active: bool) -> void:
-	## Same seasoning rattle while scraping stuck-on grill debris.
-	_shake_scrape_on = active
+	## Compat: debris-only scrape (brush / legacy). Prefer set_grill_scrape.
+	set_grill_scrape(active, active)
+
+
+func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
+	## Scrape bed + soft tings while LMB-dragging the spatula on the flat-top.
+	## on_debris → 2× louder rattle/slide (+ same ting cadence).
+	var was := _scrape_move_on
+	_scrape_move_on = moving
+	_scrape_debris_boost = moving and on_debris
+	if moving and not was:
+		_scrape_ting_cool = randf_range(0.08, 0.22)
+	if not moving:
+		_scrape_ting_cool = 0.0
+		_scrape_debris_boost = false
 	_sync_shaker_rattle()
 
 
 func _sync_shaker_rattle() -> void:
 	if _shake_player == null:
 		return
-	var active := _shake_season_on or _shake_scrape_on
+	var active := _shake_season_on or _scrape_move_on
 	if active:
 		_shake_on = true
-		_shake_player.volume_db = SHAKER_RATTLE_DB
+		if _scrape_move_on:
+			_shake_player.volume_db = SHAKER_SCRAPE_DEBRIS_DB if _scrape_debris_boost else SHAKER_SCRAPE_DB
+		else:
+			_shake_player.volume_db = SHAKER_RATTLE_DB
 		if not _shake_player.playing:
 			_shake_player.play()
 	else:
@@ -464,6 +490,18 @@ func _sync_shaker_rattle() -> void:
 		if _shake_player.playing:
 			_shake_player.stop()
 		_shake_player.volume_db = -80.0
+
+
+func _tick_scrape_tings(delta: float) -> void:
+	## Soft spatula tings while scraping (~0.4s, slight irregularity).
+	if not _scrape_move_on:
+		return
+	_scrape_ting_cool = maxf(0.0, _scrape_ting_cool - delta)
+	if _scrape_ting_cool > 0.0:
+		return
+	_scrape_ting_cool = SCRAPE_TING_INTERVAL + randf_range(-0.10, 0.12)
+	var ting_vol := 0.50 if _scrape_debris_boost else 0.25
+	play_spatula_ting(randi_range(69, 75), ting_vol)
 
 
 func set_fries_shake(active: bool, intensity: float = 1.0) -> void:
@@ -774,7 +812,7 @@ func play_scoop() -> void:
 	_play_cached("scoop", _make_scoop, 0.0, 0.9)
 
 
-func play_spatula_ting(midi: int = 72) -> void:
+func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	## tinggrill.wav — natural pitch is C5 / MIDI 72 (grill center); strips pitch out from there.
 	if _players.is_empty():
 		return
@@ -796,7 +834,7 @@ func play_spatula_ting(midi: int = 72) -> void:
 	## Side / pitched strip taps — +40% so left/right steel hits stay present.
 	if away > 0.001:
 		pitch_boost *= 1.4
-	p.volume_db = linear_to_db(base_gain * pitch_boost)
+	p.volume_db = linear_to_db(base_gain * pitch_boost * maxf(0.0, volume_scale))
 	p.play()
 
 

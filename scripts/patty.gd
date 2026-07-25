@@ -102,7 +102,7 @@ const PATTY_SIZE_SCALE := 0.88 ## ~12% under original; +10% from prior 0.80
 const FROZEN_DROP_SMASH_DELAY := 0.22 ## Wait for spatula to reach the ball
 const FROZEN_DROP_SMASH_SQUASH := 0.55 ## Slow press into the flat patty
 const FROZEN_DROP_SETTLE := 0.28
-const FROZEN_BALL_SCALE := 0.75 * PATTY_SIZE_SCALE ## Tracks overall burger size
+const FROZEN_BALL_SCALE := 0.9 * PATTY_SIZE_SCALE ## Ice ball only (+20%); flat patty stays PATTY_SIZE_SCALE
 const FROZEN_BALL_Y_SQUASH := 0.80 ## 20% flatter than a perfect sphere
 ## Sink only the ice ball into the steel (0.6"); flat patty keeps its normal sit height.
 const FROZEN_BALL_CLIP_Y := 0.01524 * PATTY_SIZE_SCALE
@@ -1902,7 +1902,7 @@ func _ensure_frozen_ball() -> void:
 	## Squashed ice ball — lumpy WPO meat + frost that matches the same lumps.
 	if _frozen_ball != null and is_instance_valid(_frozen_ball):
 		## Rebuild if an older clipped-shell / random-fleck ball was cached.
-		if not bool(_frozen_ball.get_meta("frost_v7", false)):
+		if not bool(_frozen_ball.get_meta("frost_v8", false)):
 			_frozen_ball.queue_free()
 			_frozen_ball = null
 		else:
@@ -1910,7 +1910,7 @@ func _ensure_frozen_ball() -> void:
 	_frozen_ball = Node3D.new()
 	_frozen_ball.name = "FrozenDropBall"
 	_frozen_ball.visible = false
-	_frozen_ball.set_meta("frost_v7", true)
+	_frozen_ball.set_meta("frost_v8", true)
 	_reset_frozen_ball_pose()
 	add_child(_frozen_ball)
 
@@ -2002,9 +2002,10 @@ func _ensure_frozen_ball() -> void:
 		var tangent := normal.cross(Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).normalized()
 		var tilt := Basis(tangent, deg_to_rad(randf_range(-8.0, 8.0)))
 		fleck.transform = Transform3D(tilt * _basis_y_along_normal(normal, twist), normal * r)
-		## Mostly medium; a few noticeably bigger chunks.
+		## Mostly medium; a few noticeably bigger chunks (more transparent).
 		var s_base := 0.50 + randf() * 0.55
-		if randf() > 0.72:
+		var big_chunk := randf() > 0.72
+		if big_chunk:
 			s_base = 1.05 + randf() * 0.75
 		var s := s_base * fleck_scale_comp
 		fleck.scale = Vector3(
@@ -2015,7 +2016,9 @@ func _ensure_frozen_ball() -> void:
 		var fmat := StandardMaterial3D.new()
 		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, 0.28 + randf() * 0.22)
+		## 25% more transparent than prior ice shards (×0.75 alpha).
+		var ice_a := ((0.14 + randf() * 0.12) if big_chunk else (0.28 + randf() * 0.22)) * 0.75
+		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, ice_a)
 		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 		fmat.no_depth_test = false
@@ -2052,6 +2055,9 @@ func play_frozen_drop_appear() -> void:
 	_frozen_ball.visible = true
 	_reset_frozen_ball_pose()
 	sync_interact_collision()
+	var audio := _audio()
+	if audio and audio.has_method("play_smash_sizzle"):
+		audio.play_smash_sizzle()
 
 
 func play_frozen_drop_smash() -> void:
