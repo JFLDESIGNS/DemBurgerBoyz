@@ -13674,7 +13674,10 @@ func _check_oil_fire_risk() -> void:
 	if not grill_on:
 		return
 	## Puddle count only warns — fire requires holding the pour for OIL_POUR_FIRE_SEC.
-	var n := oil_slicks.size()
+	var n := 0
+	for it in oil_slicks:
+		if not bool(it.get("crust", false)):
+			n += 1
 	if n >= OIL_FIRE_WARN_COUNT and not _oil_fire_warned:
 		_oil_fire_warned = true
 		_flash("Lots of oil — keep pouring and it'll catch!", Color("FF8A65"))
@@ -14749,14 +14752,16 @@ func _end_oil_trail_fire_burnout() -> void:
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
-	## Flaming puddles each roll for scrape crust; unburned oil stays wet.
+	## Flaming puddles each roll 50% to stay as matte black crust (same drip shape).
 	var keep: Array = []
 	for item in oil_slicks:
 		var mesh = item.get("mesh")
 		var was_lit := bool(item.get("on_fire", false))
 		if mesh != null and is_instance_valid(mesh) and was_lit:
-			_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
-			mesh.queue_free()
+			if _try_convert_oil_slick_to_crust(item):
+				keep.append(item)
+			else:
+				mesh.queue_free()
 		elif mesh != null and is_instance_valid(mesh):
 			item["on_fire"] = false
 			_set_oil_slick_burn_visual(item, false, null, 0.0)
@@ -14765,49 +14770,44 @@ func _end_oil_trail_fire_burnout() -> void:
 	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
 
 
-func _find_residue_slot_for_oil(at: Vector3) -> int:
-	## Prefer a free pad so each speck can leave its own crust; only merge if almost overlapping.
-	var best_free := -1
-	var best_oil := -1
-	var best_oil_d := OIL_RESIDUE_MERGE_R
-	var nearest_oil := -1
-	var nearest_oil_d := 0.28
-	for i in GRILL_SLOTS:
-		var amt := float(grill_residue[i]) if i < grill_residue.size() else 0.0
-		if amt > 0.04 and i < grill_residue_centers.size():
-			var c: Vector3 = grill_residue_centers[i]
-			var d := Vector2(c.x, c.z).distance_to(Vector2(at.x, at.z))
-			var kind := str(grill_residue_kind[i]) if i < grill_residue_kind.size() else ""
-			if kind == "oil":
-				if d <= best_oil_d:
-					best_oil_d = d
-					best_oil = i
-				if d < nearest_oil_d:
-					nearest_oil_d = d
-					nearest_oil = i
-		elif amt <= 0.04 and best_free < 0:
-			best_free = i
-	if best_oil >= 0:
-		return best_oil
-	if best_free >= 0:
-		return best_free
-	## Pads full — stack onto the nearest oil crust so the speck still leaves a mark.
-	return nearest_oil
-
-
-func _leave_oil_burn_residue_at(pos: Vector3, radius: float) -> void:
-	## Each oil speck: 50% chance of scrapable black film (not burger debris chunks).
+func _try_convert_oil_slick_to_crust(item: Dictionary) -> bool:
+	## 50% keep this exact drip mesh as black diffuse crust; else it vanishes.
+	if item.is_empty() or bool(item.get("crust", false)):
+		return bool(item.get("crust", false))
 	if randf() >= OIL_RESIDUE_LEAVE_CHANCE:
-		return
-	var at := Vector3(pos.x, GRILL_SURFACE_Y + 0.028, pos.z)
-	var slot := _find_residue_slot_for_oil(at)
-	if slot < 0:
-		return
-	var amt := clampf(0.62 + radius * 3.8, 0.62, 1.0)
-	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, at.x, at.z, false, "oil", amt)
-		return
-	_leave_grill_residue_local(slot, at, false, "oil", amt)
+		return false
+	var mesh = item.get("mesh")
+	if mesh == null or not is_instance_valid(mesh):
+		return false
+	item["crust"] = true
+	item["on_fire"] = false
+	item["boost_heat"] = false
+	item["burn_tex"] = false
+	## Freeze cook-off — scrape wear still shrinks via "scrape".
+	item["age"] = 0.0
+	item["life"] = 1.0e9
+	var smoke = item.get("smoke")
+	if smoke != null and is_instance_valid(smoke):
+		smoke.emitting = false
+	var mat := mesh.material_override as StandardMaterial3D
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		mesh.material_override = mat
+	## Same blob silhouette — matte black, no chrome / clearcoat.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = _get_oil_blob_texture()
+	mat.albedo_color = Color(0.035, 0.028, 0.022, 0.94)
+	mat.metallic = 0.0
+	mat.roughness = 1.0
+	mat.clearcoat_enabled = false
+	mat.clearcoat = 0.0
+	mat.emission_enabled = false
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	item["base_a"] = 0.94
+	item["crust_scale"] = maxf(float(mesh.scale.x), 0.08)
+	return true
 
 
 func _extinguish_grill_fire() -> void:
@@ -14958,6 +14958,8 @@ func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
 		return
 	var dir := move_vec.normalized()
 	for item in oil_slicks:
+		if bool(item.get("crust", false)):
+			continue ## Burned crust stays put.
 		var mesh = item.get("mesh")
 		if mesh == null or not is_instance_valid(mesh):
 			continue
@@ -14975,6 +14977,8 @@ func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
 
 
 func _oil_slick_is_lit(item: Dictionary) -> bool:
+	if bool(item.get("crust", false)):
+		return false
 	if not grill_on_fire or _fire_killed_by_powder:
 		return false
 	if bool(item.get("on_fire", false)):
@@ -14993,19 +14997,34 @@ func _update_oil_slicks(delta: float) -> void:
 	var burn_rate := 1.85 if grill_on else 1.0 ## was 1.55 / 0.85
 	while i < oil_slicks.size():
 		var item: Dictionary = oil_slicks[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			oil_slicks.remove_at(i)
+			continue
+		## Already converted drip — keep shape; only spatula scrape wears it down.
+		if bool(item.get("crust", false)):
+			var crust_scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
+			var crust_base := float(item.get("crust_scale", mesh.scale.x))
+			item["crust_scale"] = crust_base
+			mesh.scale = Vector3(crust_base * crust_scrape, 1.0, crust_base * crust_scrape)
+			oil_slicks[i] = item
+			i += 1
+			continue
 		## Flaming grease cooks off much faster than idle puddles.
 		var rate := burn_rate * (2.55 if _oil_slick_is_lit(item) else 1.0)
 		item["age"] = float(item["age"]) + delta * rate
-		var mesh = item.get("mesh")
 		var life := float(item["life"])
 		var age := float(item["age"])
 		var lit := _oil_slick_is_lit(item)
-		if mesh == null or not is_instance_valid(mesh) or age >= life:
-			## Each speck rolls 50% to leave black oil crust when it finishes cooking off.
-			if mesh != null and is_instance_valid(mesh):
-				_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
+		if age >= life:
+			## 50%: keep this exact drip as black crust. Else remove.
+			if _try_convert_oil_slick_to_crust(item):
+				item["crust_scale"] = maxf(mesh.scale.x, 0.08)
+				oil_slicks[i] = item
+				i += 1
+			else:
 				mesh.queue_free()
-			oil_slicks.remove_at(i)
+				oil_slicks.remove_at(i)
 			continue
 		var burn := clampf(age / life, 0.0, 1.0)
 		var mat := mesh.material_override as StandardMaterial3D
