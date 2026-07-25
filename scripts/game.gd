@@ -1379,9 +1379,9 @@ const FRIES_SPARKLE_COUNT := 36
 const ICECREAM_GRILL_MELT_SEC := 5.0
 const ICECREAM_GRILL_FIRE_SEC := 6.0
 const ICECREAM_PUDDLE_R := 0.105
-## Fryer on the left counter — left seat kept; +1ft away from the cook.
-## Camera-left = world +X · local +Z faces the cook with yaw 180.
-const FRYER_STATION_POS := Vector3(1.35, 1.105, 1.33) ## +1ft more away from cook (was 1.025)
+## Fryer on the left counter — camera-left = world +X · local +Z faces cook (yaw 180).
+## Nudged 6" (0.152m) toward grill vs prior 1.35 seat.
+const FRYER_STATION_POS := Vector3(1.198, 1.105, 1.33)
 const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const FRYER_COLLISION_LAYER := 32768
 const BURGERPACK_INSPECT_LAYER := 65536
@@ -18542,7 +18542,7 @@ func _fryer_tub_local_x(_index: int = 0) -> float:
 
 
 func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material, oil_mat: Material) -> void:
-	## Recessed oil well — thin rim, no chunky U-block side walls.
+	## Recessed oil well — slightly larger pit with a clear grease pool.
 	var tub := Node3D.new()
 	tub.name = "OilTub%d" % index
 	tub.position = Vector3(x, 0.0, 0.0)
@@ -18550,19 +18550,19 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 	var rim_mat := _make_soda_metal_mat(Color(0.42, 0.43, 0.41), 0.88, 0.20)
 	var oil_y := FRYER_OIL_LOCAL.y
 	var oz := FRYER_OIL_LOCAL.z
-	## Floor + oil sit in a shallow cut; rim is a low steel lip only.
-	_add_mesh_box(tub, "TubBottom", Vector3(0.28, 0.018, 0.24), Vector3(0.0, oil_y - 0.055, oz), steel_mat)
-	_add_mesh_box(tub, "OilLiquid", Vector3(0.24, 0.012, 0.205), Vector3(0.0, oil_y, oz), oil_mat)
-	_add_mesh_box(tub, "RimBack", Vector3(0.30, 0.022, 0.012), Vector3(0.0, oil_y + 0.012, oz - 0.118), rim_mat)
-	_add_mesh_box(tub, "RimFront", Vector3(0.30, 0.016, 0.012), Vector3(0.0, oil_y + 0.008, oz + 0.118), rim_mat)
-	_add_mesh_box(tub, "RimLeft", Vector3(0.012, 0.022, 0.24), Vector3(-0.144, oil_y + 0.012, oz), rim_mat)
-	_add_mesh_box(tub, "RimRight", Vector3(0.012, 0.022, 0.24), Vector3(0.144, oil_y + 0.012, oz), rim_mat)
+	## ~20% larger footprint than the old cut; thicker oil slab reads as filled.
+	_add_mesh_box(tub, "TubBottom", Vector3(0.34, 0.02, 0.29), Vector3(0.0, oil_y - 0.058, oz), steel_mat)
+	_add_mesh_box(tub, "OilLiquid", Vector3(0.30, 0.02, 0.25), Vector3(0.0, oil_y + 0.002, oz), oil_mat)
+	_add_mesh_box(tub, "RimBack", Vector3(0.36, 0.024, 0.014), Vector3(0.0, oil_y + 0.014, oz - 0.142), rim_mat)
+	_add_mesh_box(tub, "RimFront", Vector3(0.36, 0.018, 0.014), Vector3(0.0, oil_y + 0.01, oz + 0.142), rim_mat)
+	_add_mesh_box(tub, "RimLeft", Vector3(0.014, 0.024, 0.29), Vector3(-0.173, oil_y + 0.014, oz), rim_mat)
+	_add_mesh_box(tub, "RimRight", Vector3(0.014, 0.024, 0.29), Vector3(0.173, oil_y + 0.014, oz), rim_mat)
 	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
 	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	bubble_mat.emission_enabled = true
 	bubble_mat.emission = Color(1.0, 0.78, 0.12)
 	bubble_mat.emission_energy_multiplier = 0.24
-	for i in 7:
+	for i in 9:
 		var bubble := MeshInstance3D.new()
 		bubble.name = "OilBubble%d" % i
 		var mesh := SphereMesh.new()
@@ -18574,9 +18574,9 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		bubble.mesh = mesh
 		bubble.material_override = bubble_mat
 		bubble.position = Vector3(
-			randf_range(-0.095, 0.095),
+			randf_range(-0.12, 0.12),
 			FRYER_OIL_LOCAL.y - r * 0.05 + randf_range(-0.002, 0.004),
-			FRYER_OIL_LOCAL.z + randf_range(-0.075, 0.075)
+			FRYER_OIL_LOCAL.z + randf_range(-0.095, 0.095)
 		)
 		bubble.set_meta("home", bubble.position)
 		bubble.set_meta("phase", randf_range(0.0, TAU))
@@ -18607,21 +18607,16 @@ func _build_fryer_machine() -> void:
 	fryer_root = root
 
 	var steel_mat := _make_soda_metal_mat(Color(0.60, 0.61, 0.58), 0.92, 0.18)
-	var oil_mat := _make_basic_mat(Color(1.0, 0.76, 0.06, 0.90), 0.0, 0.16)
+	var oil_mat := _make_basic_mat(Color(0.92, 0.68, 0.12, 0.92), 0.05, 0.14)
 	oil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	oil_mat.emission_enabled = true
-	oil_mat.emission = Color(1.0, 0.67, 0.08)
-	oil_mat.emission_energy_multiplier = 0.26
+	oil_mat.emission = Color(1.0, 0.62, 0.08)
+	oil_mat.emission_energy_multiplier = 0.34
+	oil_mat.roughness = 0.18
+	oil_mat.metallic = 0.12
 
 	_build_fryer_tub(root, 0, _fryer_tub_local_x(0), steel_mat, oil_mat)
-	## Flat pad for finished packs — not another wall frame.
-	_add_mesh_box(
-		root,
-		"ReadyShelf",
-		Vector3(0.28, 0.016, 0.18),
-		FRYER_READY_LOCAL + Vector3(-0.06, -0.012, 0.0),
-		steel_mat
-	)
+	## Ready fries park on HOLD — no floating shelf pad beside the pit.
 
 	var label := Label3D.new()
 	label.name = "FryerHint"
