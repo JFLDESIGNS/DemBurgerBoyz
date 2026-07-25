@@ -35355,7 +35355,8 @@ func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshIns
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	mat.alpha_scissor_threshold = 0.08
 	mat.albedo_texture = tex
-	mat.albedo_color = Color(1, 1, 1, 1)
+	## 30% darker than full-bright white so the wood doesn't blow out in daylight.
+	mat.albedo_color = Color(0.7, 0.7, 0.7, 1.0)
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	mat.render_priority = 16
