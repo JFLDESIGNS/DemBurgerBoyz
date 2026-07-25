@@ -5072,8 +5072,9 @@ func _play_grill_piano_slide_ting(from_left: int, tip_z: float, volume_scale: fl
 	game_audio.play_spatula_ting(midi, volume_scale)
 
 
-func _update_spatula_piano_slide(tip_pos: Vector3) -> void:
-	## Hold LMB + slide across cook strips (either way) → C-major glissando at ½ tap volume.
+func _update_spatula_piano_slide(tip_pos: Vector3, scraping_debris: bool = false) -> void:
+	## Hold + slide across cook strips → C-major glissando at ½ tap volume.
+	## Actively scraping debris: no flourish — keep original scrape tings / bed.
 	if tip_pos == Vector3.ZERO:
 		_spatula_piano_slide_last_strip = -1
 		if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
@@ -5081,12 +5082,20 @@ func _update_spatula_piano_slide(tip_pos: Vector3) -> void:
 		return
 	var zone := _grill_zone_at(tip_pos)
 	var on_cook := not zone.is_empty() and str(zone.get("id", "")) != "hold"
-	if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
-		## Keep random scrape tings off the piano so the gliss reads clean.
-		game_audio.set_scrape_tings_muted(on_cook)
 	if not on_cook:
 		_spatula_piano_slide_last_strip = -1
+		if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
+			game_audio.set_scrape_tings_muted(false)
 		return
+	if scraping_debris:
+		## Track strip silently so leaving debris doesn't dump a gliss burst.
+		_spatula_piano_slide_last_strip = _grill_piano_strip_index_from_left(tip_pos)
+		if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
+			game_audio.set_scrape_tings_muted(false)
+		return
+	if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
+		## Clean cook steel only — mute random scrape tings so the gliss reads clean.
+		game_audio.set_scrape_tings_muted(true)
 	var cur := _grill_piano_strip_index_from_left(tip_pos)
 	if _spatula_piano_slide_last_strip < 0:
 		_spatula_piano_slide_last_strip = cur
@@ -7095,6 +7104,9 @@ func _scrape_residue_hit(slot: int, swipe_dir: Vector2 = Vector2.ZERO) -> void:
 			game_audio.play_grease_pop()
 		else:
 			game_audio.play_click()
+		## Soft bass thud as flecks let go of the steel.
+		if chipped > 0 and game_audio.has_method("play_debris_bass_pop"):
+			game_audio.play_debris_bass_pop(1.0 if chipped >= 2 else 0.75)
 	if amt <= 0.2 and chipped > 0:
 		_flash("Almost clean — keep swiping", Color("FFE082"))
 
@@ -9274,16 +9286,6 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 		return
 	var prev := spatula_grill_hold_last_xz
 	var cur := Vector2(tip_pos.x, tip_pos.z)
-	if prev.x == INF:
-		spatula_grill_hold_last_xz = cur
-		## Seed glissando strip so the press strip doesn't re-fire as a slide note.
-		_update_spatula_piano_slide(tip_pos)
-		return
-	var move_xz := cur - prev
-	var moved := move_xz.length()
-	spatula_grill_hold_last_xz = cur
-	## Hold + slide screen-right across cook pads → ascending piano gliss (½ vol).
-	_update_spatula_piano_slide(tip_pos)
 	var scraping := false
 	var scraping_debris := false
 	var best_i := -1
@@ -9307,11 +9309,23 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 		elif i < brush_swipe_travel.size():
 			## Not the active tip stain — wipe swipe progress so near-misses don't chip.
 			brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - delta * 0.9)
+	## Tip on a stain counts as debris scrape even before travel wear this frame.
+	if best_i >= 0:
+		scraping_debris = true
+	if prev.x == INF:
+		spatula_grill_hold_last_xz = cur
+		## Seed glissando strip so the press strip doesn't re-fire as a slide note.
+		_update_spatula_piano_slide(tip_pos, scraping_debris)
+		return
+	var move_xz := cur - prev
+	var moved := move_xz.length()
+	spatula_grill_hold_last_xz = cur
+	## Clean cook steel → piano gliss; tip on debris → normal scrape tings only.
+	_update_spatula_piano_slide(tip_pos, scraping_debris)
 	if best_i >= 0:
 		var i := best_i
 		var pad_pos: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else slot_positions[i]
 		scraping = true
-		scraping_debris = true
 		var before := float(grill_residue[i])
 		var side_boost := 1.0
 		if moved >= SPATULA_SCRAPE_MIN_MOVE:

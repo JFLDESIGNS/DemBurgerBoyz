@@ -57,11 +57,13 @@ var _shake_phase := 0.0
 var _shake_tick := 0.0
 ## Was -27 dB; ×3 linear ≈ +9.5 dB. Debris scrape is another ×2 on top.
 const SHAKER_RATTLE_DB := -17.5
-const SHAKER_SCRAPE_DB := -11.5 ## base grill scrape (same as season bed)
-const SHAKER_SCRAPE_DEBRIS_DB := -5.5 ## SHAKER_SCRAPE_DB + ~6 dB (2× louder)
+const SHAKER_SCRAPE_DB := -9.0 ## base grill scrape (~+2.5 dB vs prior)
+const SHAKER_SCRAPE_DEBRIS_DB := -2.5 ## debris scrape bed a little louder
 var _scrape_ting_cool: float = 0.0
-var _scrape_tings_muted: bool = false ## Cook-zone piano gliss takes over spatula tings
+var _scrape_tings_muted: bool = false ## Clean cook-zone piano gliss takes over spatula tings
+var _scrape_bass_pop_cool: float = 0.0 ## Subtle low pops while crust loosens
 const SCRAPE_TING_INTERVAL := 0.4
+const SCRAPE_BASS_POP_INTERVAL := 0.28
 ## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
 var _fries_shake_player: AudioStreamPlayer
 var _fries_shake_gen: AudioStreamGenerator
@@ -288,11 +290,11 @@ func _process(delta: float) -> void:
 			## Moving scrape on steel; debris hits are 2× that bed.
 			var slide_mul := 1.0
 			if _scrape_move_on:
-				slide_mul = 4.0 if _scrape_debris_boost else 2.0
+				slide_mul = 5.0 if _scrape_debris_boost else 2.6
 			elif _oil_slide_gain > 0.01:
 				## Burger drag layers metal + oil — keep the scrape bed quieter too.
 				slide_mul = BURGER_SLIDE_VOL_MUL
-			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.38 * slide_mul, 0.02, 1.0))
+			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.42 * slide_mul, 0.02, 1.15))
 			_slide_player.pitch_scale = (1.15 + _slide_gain * 0.2) * _scrape_dir_pitch
 			if not _slide_player.playing:
 				_slide_player.play()
@@ -692,8 +694,10 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 	_scrape_debris_boost = moving and on_debris
 	if moving and not was:
 		_scrape_ting_cool = randf_range(0.08, 0.22)
+		_scrape_bass_pop_cool = randf_range(0.10, 0.22)
 	if not moving:
 		_scrape_ting_cool = 0.0
+		_scrape_bass_pop_cool = 0.0
 		_scrape_debris_boost = false
 		_scrape_dir_pitch = 1.0
 		_scrape_tings_muted = false
@@ -748,14 +752,28 @@ func _sync_shaker_rattle() -> void:
 
 func _tick_scrape_tings(delta: float) -> void:
 	## Soft spatula tings while scraping (~0.4s, slight irregularity).
+	## Debris also gets subtle bassy fleck-pops while the crust loosens.
+	if _scrape_move_on and _scrape_debris_boost:
+		_scrape_bass_pop_cool = maxf(0.0, _scrape_bass_pop_cool - delta)
+		if _scrape_bass_pop_cool <= 0.0:
+			_scrape_bass_pop_cool = SCRAPE_BASS_POP_INTERVAL + randf_range(-0.08, 0.14)
+			play_debris_bass_pop(0.55 + randf() * 0.25)
 	if not _scrape_move_on or _scrape_tings_muted:
 		return
 	_scrape_ting_cool = maxf(0.0, _scrape_ting_cool - delta)
 	if _scrape_ting_cool > 0.0:
 		return
 	_scrape_ting_cool = SCRAPE_TING_INTERVAL + randf_range(-0.10, 0.12)
-	var ting_vol := 0.50 if _scrape_debris_boost else 0.25
+	var ting_vol := 0.62 if _scrape_debris_boost else 0.32
 	play_spatula_ting(randi_range(69, 75), ting_vol)
+
+
+func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
+	## Subtle low thud — crust fleck letting go under the spatula.
+	var key := "debris_bass_%d" % (randi() % 6)
+	var gain := (0.28 + randf() * 0.14) * clampf(volume_scale, 0.0, 1.5)
+	var pitch := 0.82 + randf() * 0.28
+	_play_cached(key, _make_debris_bass_pop, pitch, gain)
 
 
 func set_fries_shake(active: bool, intensity: float = 1.0) -> void:
@@ -2099,6 +2117,26 @@ func _make_grease_pop() -> AudioStreamWAV:
 		if env > 0.55:
 			crackle += (randf() * 2.0 - 1.0) * 0.25
 		_write_s16(pcm, i, int(clampf((crackle + ping) * env, -1.0, 1.0) * 13000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_debris_bass_pop() -> AudioStreamWAV:
+	## Soft bassy thud — stuck crust peeling loose from the steel.
+	var n := int(MIX_RATE * 0.07)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var fund := 72.0 + randf() * 48.0
+	var body := 140.0 + randf() * 60.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := exp(-t * 38.0)
+		if t < 0.002:
+			env *= t / 0.002
+		var thump := sin(t * fund * TAU) * 0.72
+		thump += sin(t * body * TAU) * 0.28 * exp(-t * 55.0)
+		## Tiny soft noise click so it doesn't read as a pure sine.
+		var grit := (randf() * 2.0 - 1.0) * 0.12 * exp(-t * 90.0)
+		_write_s16(pcm, i, int(clampf((thump + grit) * env, -1.0, 1.0) * 15000.0))
 	return _wav_from_pcm(pcm, false)
 
 
