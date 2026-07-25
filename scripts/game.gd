@@ -269,8 +269,10 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 48.0 ## Min screen-px down from press
 ## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
+## One notch jumps a full step; wheel factor can stack notches (feels snappier).
 const HAND_SPATULA_ROLL_STEP := 45.0
 const HAND_SPATULA_ROLL_MAX := 90.0
+const HAND_SPATULA_ROLL_WHEEL_MULT := 2 ## notches per wheel tick (faster tilt)
 ## Move this far from the tap contact → cancel tap pose (ting still fires at original strip).
 const HAND_SPATULA_TAP_CANCEL_XZ := 0.032
 const HAND_SPATULA_TAP_CANCEL_PX := 10.0
@@ -2735,7 +2737,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				or (hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible) \
 				or spatula_grill_hold or (dragging_patty != null and is_instance_valid(dragging_patty)):
 			var roll_dir := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
-			_nudge_spatula_user_roll(roll_dir)
+			## Faster tilt: two detents per tick (0→90 in one scroll). Shift = fine 45°.
+			var ticks := 1
+			if not event.shift_pressed:
+				ticks = maxi(HAND_SPATULA_ROLL_WHEEL_MULT, maxi(1, int(round(absf(event.factor)))))
+			for _i in ticks:
+				_nudge_spatula_user_roll(roll_dir)
 			get_viewport().set_input_as_handled()
 			return
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -4648,13 +4655,20 @@ func _spatula_play_ting_bit(bit: int) -> void:
 
 
 func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
-	## Cook steel → 12 piano notes; HOLD → 5 depth-stacked drum pads.
+	## Cook steel → 12 piano notes; HOLD → drums / hats by spatula tilt.
 	if game_audio == null or world_pos == Vector3.ZERO:
 		return
 	var zone := _grill_zone_at(world_pos)
 	if str(zone.get("id", "")) == "hold":
 		if game_audio.has_method("play_spatula_drum"):
-			game_audio.play_spatula_drum(_grill_hold_drum_pad_at(world_pos), volume_scale)
+			## Flat = drum · ±45° = closed hi-hat · ±90° = open hat.
+			var voice := 0
+			var roll_mag := absf(_spatula_user_roll)
+			if roll_mag >= HAND_SPATULA_ROLL_MAX - 0.5:
+				voice = 2
+			elif roll_mag >= HAND_SPATULA_ROLL_STEP * 0.5:
+				voice = 1
+			game_audio.play_spatula_drum(_grill_hold_drum_pad_at(world_pos), volume_scale, voice)
 		elif game_audio.has_method("play_spatula_ting"):
 			## Fallback: low pitched ting if drum synth missing.
 			game_audio.play_spatula_ting(55 + _grill_hold_drum_pad_at(world_pos), volume_scale)
