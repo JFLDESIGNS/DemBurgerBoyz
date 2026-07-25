@@ -17996,6 +17996,9 @@ func _build_outdoor_street() -> void:
 	_build_outdoor_birch_tree(outdoor)
 
 
+const TREE_FOLIAGE_SHADER_PATH := "res://shaders/tree_foliage.gdshader"
+
+
 func _build_outdoor_front_tree(parent: Node3D) -> void:
 	## Large tree ~10 ft in front of the cart (outside the service window).
 	const TREE_PATH := "res://models/burgerpack/try2/SM_Tree_Large_01.glb"
@@ -18018,6 +18021,7 @@ func _build_outdoor_front_tree(parent: Node3D) -> void:
 	tree.position = Vector3(-4.33, 0.0, 5.36)
 	tree.rotation_degrees = Vector3(0.0, -25.0, 0.0)
 	parent.add_child(tree)
+	_dress_outdoor_tree_foliage(tree, 0.7, 0.28)
 
 
 func _build_outdoor_birch_tree(parent: Node3D) -> void:
@@ -18041,6 +18045,118 @@ func _build_outdoor_birch_tree(parent: Node3D) -> void:
 	tree.position = Vector3(3.92, 0.0, 3.05)
 	tree.rotation_degrees = Vector3(0.0, 35.0, 0.0)
 	parent.add_child(tree)
+	_dress_outdoor_tree_foliage(tree, 2.4, 0.18)
+
+
+func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: float) -> void:
+	## Leaf sway + fake SSS emissive, plus shadow-only canopy blockers for leaf mottling.
+	if tree == null or not is_instance_valid(tree):
+		return
+	if not ResourceLoader.exists(TREE_FOLIAGE_SHADER_PATH):
+		push_warning("Tree foliage shader missing: %s" % TREE_FOLIAGE_SHADER_PATH)
+		return
+	var foliage_shader := load(TREE_FOLIAGE_SHADER_PATH) as Shader
+	if foliage_shader == null:
+		return
+	var canopy := AABB()
+	var have_canopy := false
+	var mesh_hosts: Array[MeshInstance3D] = []
+	for n in tree.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		mesh_hosts.append(mi)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		var mesh_aabb := mi.get_aabb()
+		for s in mi.mesh.get_surface_count():
+			var src: Material = mi.get_active_material(s)
+			if not _tree_surface_is_leaf(src):
+				continue
+			var albedo: Texture2D = null
+			var scissor := 0.42
+			if src is BaseMaterial3D:
+				var bm := src as BaseMaterial3D
+				albedo = bm.albedo_texture
+				if bm.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR:
+					scissor = bm.alpha_scissor_threshold
+			var sm := ShaderMaterial.new()
+			sm.shader = foliage_shader
+			if albedo != null:
+				sm.set_shader_parameter("albedo_tex", albedo)
+			sm.set_shader_parameter("alpha_scissor", scissor)
+			sm.set_shader_parameter("sway_seed", sway_seed + float(s) * 0.37)
+			sm.set_shader_parameter("sway_strength", sway_strength)
+			sm.set_shader_parameter("sway_y_min", mesh_aabb.position.y + mesh_aabb.size.y * 0.22)
+			sm.set_shader_parameter("sway_y_max", mesh_aabb.position.y + mesh_aabb.size.y * 0.98)
+			sm.set_shader_parameter("sss_color", Color(0.52, 0.95, 0.26))
+			sm.set_shader_parameter("sss_emissive", 0.48)
+			sm.set_shader_parameter("sss_rim", 0.62)
+			sm.set_shader_parameter("albedo_boost", 1.24)
+			mi.set_surface_override_material(s, sm)
+			if not have_canopy:
+				canopy = mesh_aabb
+				have_canopy = true
+			else:
+				canopy = canopy.merge(mesh_aabb)
+	if have_canopy and not mesh_hosts.is_empty():
+		_add_tree_canopy_shadow_blockers(mesh_hosts[0], canopy, sway_seed)
+
+
+func _tree_surface_is_leaf(mat: Material) -> bool:
+	if mat == null:
+		return false
+	var label := String(mat.resource_name)
+	if label.findn("leaf") >= 0:
+		return true
+	if mat is BaseMaterial3D:
+		var bm := mat as BaseMaterial3D
+		if bm.albedo_texture != null:
+			var path := String(bm.albedo_texture.resource_path)
+			if path.findn("leaf") >= 0:
+				return true
+		if bm.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+			return true
+	return false
+
+
+func _add_tree_canopy_shadow_blockers(host: MeshInstance3D, canopy: AABB, seed_v: float) -> void:
+	## Invisible spheres inside the crown — mottled leaf shadows without darkening bark.
+	if host == null or not is_instance_valid(host):
+		return
+	var spans := canopy.size
+	if spans.x < 0.05 or spans.y < 0.05 or spans.z < 0.05:
+		return
+	## Normalized canopy slots (x,y,z in 0..1 of AABB).
+	var slots: Array[Vector3] = [
+		Vector3(0.28, 0.58, 0.32),
+		Vector3(0.62, 0.66, 0.40),
+		Vector3(0.42, 0.78, 0.58),
+		Vector3(0.72, 0.52, 0.62),
+		Vector3(0.35, 0.70, 0.72),
+		Vector3(0.55, 0.84, 0.28),
+		Vector3(0.48, 0.48, 0.48),
+	]
+	var radius := clampf(minf(spans.x, spans.z) * 0.16, 0.35, 2.8)
+	for i in slots.size():
+		var nrm: Vector3 = slots[i]
+		## Mild per-tree jitter so the two trees don't share the same shadow pattern.
+		nrm.x = clampf(nrm.x + sin(seed_v * 1.7 + float(i) * 2.1) * 0.06, 0.12, 0.88)
+		nrm.z = clampf(nrm.z + cos(seed_v * 1.3 + float(i) * 1.6) * 0.06, 0.12, 0.88)
+		var blocker := MeshInstance3D.new()
+		blocker.name = "LeafShadowBlocker_%d" % i
+		var sphere := SphereMesh.new()
+		sphere.radius = radius * (0.72 + 0.18 * float(i % 3))
+		sphere.height = sphere.radius * 2.0
+		sphere.radial_segments = 10
+		sphere.rings = 6
+		blocker.mesh = sphere
+		blocker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		blocker.position = canopy.position + Vector3(
+			spans.x * nrm.x,
+			spans.y * nrm.y,
+			spans.z * nrm.z
+		)
+		host.add_child(blocker)
 
 
 func _build_first_sale_decal() -> void:
