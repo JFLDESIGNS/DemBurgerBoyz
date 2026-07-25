@@ -1797,7 +1797,7 @@ func _ready() -> void:
 func _warm_burger_assets() -> void:
 	## Pay first-use cost on the title screen, not on the first right-click patty spawn.
 	if _burger_assets_warmed:
-		_ensure_patty_spawn_pool()
+		await _ensure_runtime_prewarms()
 		return
 	_burger_assets_warmed = true
 	FoodSpritesScript.get_tex("patty")
@@ -1805,7 +1805,22 @@ func _warm_burger_assets() -> void:
 	FoodSpritesScript.get_tex("bun_top")
 	FoodSpritesScript.patty_tex(GameDataScript.INGREDIENT_COLORS.get("patty", Color(0.45, 0.24, 0.14)), 0.0)
 	FoodSpritesScript.burger_cheese_tex(GameDataScript.INGREDIENT_COLORS.get("patty", Color(0.45, 0.24, 0.14)), 0.0)
-	_ensure_patty_spawn_pool()
+	await _ensure_runtime_prewarms()
+
+
+func _ensure_runtime_prewarms() -> void:
+	## Patties + frozen meatballs + grease-fire particles — menu if possible, else day start.
+	await _ensure_patty_spawn_pool()
+	for p in _patty_spawn_pool:
+		if p != null and is_instance_valid(p) and p.has_method("prewarm_frozen_visuals"):
+			p.prewarm_frozen_visuals()
+	## Draw the offscreen meatballs a couple frames so shaders compile.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	for p2 in _patty_spawn_pool:
+		if p2 != null and is_instance_valid(p2) and p2.has_method("hide_frozen_prewarm"):
+			p2.hide_frozen_prewarm()
+	await _prewarm_grill_fire_fx()
 
 
 func _ensure_patty_spawn_pool() -> void:
@@ -2296,6 +2311,8 @@ func _start_game() -> void:
 	_stop_intro_title_music()
 	start_overlay.visible = false
 	playing = true
+	## Backup if title-screen warm was skipped / still running.
+	call_deferred("_ensure_runtime_prewarms")
 	money = START_MONEY
 	combo = 0
 	day = 1
@@ -10042,20 +10059,21 @@ func _roomba_make_fake_patty_from(real_patty: Area3D) -> Node3D:
 	if copied <= 0:
 		_roomba_add_fallback_fake_patty(fake, real_patty)
 	fake.set_meta("roomba_carry_animating", true)
-	## Little hop from the grill onto the spatula plate.
-	var mid := start.lerp(land, 0.48)
-	mid.y = maxf(start.y, land.y) + 0.10
+	## Pop up off the steel, then settle onto the spatula plate.
+	var mid := start.lerp(land, 0.42)
+	mid.y = maxf(start.y, land.y) + 0.18
 	var land_rot := _roomba_carry_rotation_degrees()
-	var tip_rot := Vector3(-22.0, land_rot.y, 14.0)
+	var tip_rot := Vector3(-28.0, land_rot.y, 18.0)
+	fake.scale = Vector3(0.92, 1.12, 0.92)
 	var hop := create_tween()
 	hop.set_parallel(true)
-	hop.tween_property(fake, "global_position", mid, 0.10).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	hop.tween_property(fake, "rotation_degrees", tip_rot, 0.10).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	hop.tween_property(fake, "scale", Vector3(1.04, 0.92, 1.04), 0.10).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	hop.tween_property(fake, "global_position", mid, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	hop.tween_property(fake, "rotation_degrees", tip_rot, 0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	hop.tween_property(fake, "scale", Vector3(1.08, 0.88, 1.08), 0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	hop.chain().set_parallel(true)
-	hop.tween_property(fake, "global_position", land, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	hop.tween_property(fake, "rotation_degrees", land_rot, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	hop.tween_property(fake, "scale", Vector3.ONE, 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	hop.tween_property(fake, "global_position", land, 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	hop.tween_property(fake, "rotation_degrees", land_rot, 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	hop.tween_property(fake, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	hop.chain().tween_callback(func() -> void:
 		if fake != null and is_instance_valid(fake):
 			fake.set_meta("roomba_carry_animating", false)
@@ -10157,9 +10175,25 @@ func _roomba_update_scoop_hold(delta: float) -> void:
 	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 	if not _roomba_spatula_ready_for_scoop(grill_roomba_scoop_patty, body_xz):
 		grill_roomba_scoop_hold_t = maxf(0.0, grill_roomba_scoop_hold_t - delta * 1.8)
+		## Settle back down if the scoop slips.
+		var base_y := GRILL_SURFACE_Y + PATTY_SIT_Y
+		grill_roomba_scoop_patty.position.y = lerpf(grill_roomba_scoop_patty.position.y, base_y, clampf(delta * 10.0, 0.0, 1.0))
+		grill_roomba_scoop_patty.scale = grill_roomba_scoop_patty.scale.lerp(Vector3.ONE, clampf(delta * 10.0, 0.0, 1.0))
 		return
 	grill_roomba_scoop_hold_t += delta
 	grill_roomba_vel = Vector2.ZERO
+	## Pop the burger up onto the blade while the scoop holds.
+	var lift_t := clampf(grill_roomba_scoop_hold_t / maxf(0.001, ROOMBA_SPATULA_SCOOP_HOLD_SEC), 0.0, 1.0)
+	var ease_t := lift_t * lift_t * (3.0 - 2.0 * lift_t)
+	var sit_y := GRILL_SURFACE_Y + PATTY_SIT_Y
+	var blade_y := _roomba_carry_world_pos().y + 0.02
+	var pop_y := lerpf(sit_y, blade_y, ease_t) + sin(ease_t * PI) * 0.06
+	grill_roomba_scoop_patty.position.y = pop_y
+	grill_roomba_scoop_patty.scale = Vector3(
+		lerpf(1.0, 1.06, ease_t),
+		lerpf(1.0, 0.92, ease_t),
+		lerpf(1.0, 1.06, ease_t)
+	)
 	if grill_roomba_scoop_hold_t < ROOMBA_SPATULA_SCOOP_HOLD_SEC:
 		return
 	_roomba_commit_scoop_patty(grill_roomba_scoop_patty, grill_roomba_scoop_slot)
@@ -10227,6 +10261,7 @@ func _roomba_commit_scoop_patty(patty: Area3D, slot: int) -> void:
 		grill[slot] = null
 	patty.is_held = true
 	patty.heating = false
+	patty.scale = Vector3.ONE
 	patty.visible = false
 	## Keep smash ball hidden so a leftover sphere never rides the spatula.
 	var frozen := patty.get_node_or_null("FrozenDropBall") as Node3D
@@ -13583,7 +13618,13 @@ func _set_fire_fx_emitting(on: bool) -> void:
 
 
 func _ensure_grill_fire_fx() -> void:
-	## Rebuild so flame-size tweaks always apply on a fresh blaze.
+	## Reuse prewarmed systems — rebuilding on first blaze hitch-stutters the frame.
+	if fire_root != null and is_instance_valid(fire_root) \
+			and fire_particles != null and is_instance_valid(fire_particles) \
+			and fire_particles_red != null and is_instance_valid(fire_particles_red) \
+			and fire_embers != null and is_instance_valid(fire_embers) \
+			and fire_smoke != null and is_instance_valid(fire_smoke):
+		return
 	if fire_root != null and is_instance_valid(fire_root):
 		fire_root.queue_free()
 	fire_root = null
@@ -13612,6 +13653,31 @@ func _ensure_grill_fire_fx() -> void:
 
 	fire_smoke = _make_fire_smoke_particles()
 	fire_root.add_child(fire_smoke)
+
+
+func _prewarm_grill_fire_fx() -> void:
+	## Build particle systems + compile GPU pipelines on the title screen.
+	if grill_root == null or not is_instance_valid(grill_root):
+		return
+	_ensure_grill_fire_fx()
+	var dummy := PackedVector3Array([
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(0.05, 0.0, 0.02),
+		Vector3(-0.04, 0.0, -0.03),
+	])
+	_fire_emit_tex = _make_fire_emission_point_texture(dummy, _fire_emit_tex)
+	_fire_smoke_emit_tex = _make_fire_emission_point_texture(dummy, _fire_smoke_emit_tex)
+	_apply_fire_emission_points(fire_particles, _fire_emit_tex, dummy.size(), 10, 5.0)
+	_apply_fire_emission_points(fire_particles_red, _fire_emit_tex, dummy.size(), 6, 6.0)
+	_apply_fire_emission_points(fire_embers, _fire_emit_tex, dummy.size(), 4, 10.0)
+	_apply_fire_emission_points(fire_smoke, _fire_smoke_emit_tex, dummy.size(), 6, 9.0)
+	## One quiet emit burst off the main look (still under the grill) so shaders compile.
+	fire_root.visible = true
+	_set_fire_fx_emitting(true)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_set_fire_fx_emitting(false)
 
 
 func _make_fire_triangle_mesh(w: float, h: float) -> ArrayMesh:
@@ -14298,15 +14364,7 @@ func _clear_grill_fire() -> void:
 	ext_spraying = false
 	_set_fire_fx_emitting(false)
 	_clear_ext_powder_blobs()
-	if fire_root != null and is_instance_valid(fire_root):
-		fire_root.queue_free()
-	fire_root = null
-	fire_particles = null
-	fire_particles_red = null
-	fire_embers = null
-	fire_smoke = null
-	_fire_emit_tex = null
-	_fire_smoke_emit_tex = null
+	## Keep particle nodes alive (prewarmed) — recreating them is the first-fire hitch.
 
 
 func _make_oil_burn_smoke(radius: float) -> GPUParticles3D:

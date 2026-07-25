@@ -1800,16 +1800,16 @@ func smash() -> void:
 	tw.tween_property(self, "scale", Vector3.ONE, 0.1)
 
 
-func _make_frozen_ball_shader(
-	albedo: Color,
-	seed: float,
-	lump_amp: float,
-	tex: Texture2D = null,
-	tex_blend: float = 0.0,
-	opaque: bool = true
-) -> ShaderMaterial:
-	## Unshaded meat/frost with noisy WPO so the ball isn't a perfect sphere.
-	var mat := ShaderMaterial.new()
+## Compiled once — rebuilding this WPO shader every drop was a first-meatball hitch.
+static var _frozen_shader_opaque: Shader = null
+static var _frozen_shader_alpha: Shader = null
+
+
+func _frozen_ball_shader_resource(opaque: bool) -> Shader:
+	if opaque and _frozen_shader_opaque != null:
+		return _frozen_shader_opaque
+	if not opaque and _frozen_shader_alpha != null:
+		return _frozen_shader_alpha
 	var shader := Shader.new()
 	var modes := "unshaded, cull_back, ambient_light_disabled"
 	if opaque:
@@ -1870,7 +1870,24 @@ void fragment() {
 	ALPHA = albedo_color.a * mix(1.0, texc.a, tex_blend);
 }
 """ % modes
-	mat.shader = shader
+	if opaque:
+		_frozen_shader_opaque = shader
+	else:
+		_frozen_shader_alpha = shader
+	return shader
+
+
+func _make_frozen_ball_shader(
+	albedo: Color,
+	seed: float,
+	lump_amp: float,
+	tex: Texture2D = null,
+	tex_blend: float = 0.0,
+	opaque: bool = true
+) -> ShaderMaterial:
+	## Unshaded meat/frost with noisy WPO so the ball isn't a perfect sphere.
+	var mat := ShaderMaterial.new()
+	mat.shader = _frozen_ball_shader_resource(opaque)
 	mat.set_shader_parameter("albedo_color", albedo)
 	mat.set_shader_parameter("lump_amp", lump_amp)
 	mat.set_shader_parameter("lump_freq", 3.6)
@@ -1880,6 +1897,22 @@ void fragment() {
 	if tex != null:
 		mat.set_shader_parameter("albedo_tex", tex)
 	return mat
+
+
+func prewarm_frozen_visuals() -> void:
+	## Build ice-ball meshes/shaders while the patty sits in the offscreen spawn pool.
+	_ensure_frozen_ball()
+	if _frozen_ball != null and is_instance_valid(_frozen_ball):
+		_frozen_ball.visible = true
+		_reset_frozen_ball_pose()
+
+
+func hide_frozen_prewarm() -> void:
+	if _frozen_ball != null and is_instance_valid(_frozen_ball):
+		_frozen_ball.visible = false
+		_reset_frozen_ball_pose()
+	place_ball_waiting = false
+	place_morphing = false
 
 
 func _set_patty_disc_shadow(on: bool) -> void:
