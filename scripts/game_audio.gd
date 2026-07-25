@@ -22,6 +22,10 @@ const INGREDIENT_MIDI := {
 
 var _players: Array[AudioStreamPlayer] = []
 var _player_i: int = 0
+## Dedicated pool for spatula piano / HOLD tings — never shared with one-shot SFX.
+var _ting_players: Array[AudioStreamPlayer] = []
+var _ting_player_i: int = 0
+const TING_POOL := 8
 var _cache: Dictionary = {} ## key -> AudioStreamWAV
 var _sizzle_player: AudioStreamPlayer
 var _sizzle_gen: AudioStreamGenerator
@@ -141,6 +145,13 @@ func _ready() -> void:
 		p.bus = "Master"
 		add_child(p)
 		_players.append(p)
+	for i in TING_POOL:
+		var tp := AudioStreamPlayer.new()
+		tp.name = "SpatulaTing_%d" % i
+		tp.bus = "Master"
+		tp.volume_db = -80.0
+		add_child(tp)
+		_ting_players.append(tp)
 	## Live procedural sizzle — no looping WAV (avoids ocean-loop feel).
 	_sizzle_gen = AudioStreamGenerator.new()
 	_sizzle_gen.mix_rate = MIX_RATE
@@ -968,28 +979,46 @@ func play_scoop() -> void:
 
 
 func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
-	## tinggrill.wav — natural pitch is C5 / MIDI 72 (grill center); strips pitch out from there.
-	if _players.is_empty():
+	## tinggrill.wav — natural pitch is C5 / MIDI 72; strips pitch out from there.
+	## Deep shifts use a synth note so the attack stays bright (WAV pitch-down goes dull/silent).
+	if _ting_players.is_empty():
 		return
-	if not _cache.has("tinggrill"):
-		var stream: AudioStream = _load_tinggrill_stream()
-		if stream == null:
-			stream = _make_spatula_ting_note(midi)
-		_cache["tinggrill"] = stream
-	var p: AudioStreamPlayer = _players[_player_i]
-	_player_i = (_player_i + 1) % _players.size()
-	p.stream = _cache["tinggrill"]
-	## Strips stay near C5; pitch-shifted samples lose energy — boost them back up.
 	var semis := float(midi - 72)
-	p.pitch_scale = pow(2.0, semis / 12.0)
-	var base_gain := 1.35 * 1.25 * 0.8 * 0.85
-	## ~12% louder per semitone away from the natural sample (stronger when pitched down).
+	var use_synth := absf(semis) >= 7.0
+	var stream: AudioStream = null
+	var pitch := 1.0
+	if use_synth:
+		var key := "ting_syn_%d" % midi
+		if not _cache.has(key):
+			_cache[key] = _make_spatula_ting_note(midi)
+		stream = _cache[key]
+		pitch = 1.0
+	else:
+		if not _cache.has("tinggrill"):
+			var loaded: AudioStream = _load_tinggrill_stream()
+			if loaded == null:
+				loaded = _make_spatula_ting_note(72)
+			_cache["tinggrill"] = loaded
+		stream = _cache["tinggrill"]
+		pitch = pow(2.0, semis / 12.0)
+	var p: AudioStreamPlayer = _ting_players[_ting_player_i]
+	_ting_player_i = (_ting_player_i + 1) % _ting_players.size()
+	p.stream = stream
+	p.pitch_scale = pitch
+	## Present on flat taps; still scales with caller volume_scale.
+	var base_gain := 1.75
 	var away := absf(semis)
-	var pitch_boost := 1.0 + away * (0.16 if semis < 0.0 else 0.10)
-	## Side / pitched strip taps — +40% so left/right steel hits stay present.
-	if away > 0.001:
-		pitch_boost *= 1.4
-	p.volume_db = linear_to_db(base_gain * pitch_boost * maxf(0.0, volume_scale))
+	var pitch_boost := 1.0
+	if not use_synth:
+		## Recover energy lost when pitching the WAV down toward C4.
+		pitch_boost = 1.0 + away * (0.20 if semis < 0.0 else 0.10)
+		if away > 0.001:
+			pitch_boost *= 1.35
+	else:
+		## Synth notes already sit at pitch — keep them punchy.
+		pitch_boost = 1.15
+	var gain := base_gain * pitch_boost * maxf(0.0, volume_scale)
+	p.volume_db = linear_to_db(clampf(gain, 0.05, 3.5))
 	p.play()
 
 
