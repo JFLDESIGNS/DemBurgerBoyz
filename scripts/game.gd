@@ -36262,6 +36262,7 @@ func _build_ingredient_legend() -> void:
 	## Horizontal strip of toppings along the bottom (1 tomato → 7 mustard).
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.clip_contents = false ## hover keycaps sit above the strip top edge
 	var panel_sb := StyleBoxFlat.new()
 	panel_sb.bg_color = Color(0.12, 0.13, 0.16, 0.94)
 	panel_sb.set_corner_radius_all(12)
@@ -36370,16 +36371,17 @@ func _build_ingredient_legend() -> void:
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
 
-		## Hover overlay: flat 2D keycap illustration at the top of the topping.
+		## Hover overlay: flat 2D keycap illustration perched on the topping top.
 		var keycap_host := Control.new()
 		keycap_host.name = "KeycapHost"
 		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		keycap_host.z_index = 8
 		keycap_host.set_anchors_preset(Control.PRESET_CENTER_TOP)
-		keycap_host.offset_left = -15.0
-		keycap_host.offset_right = 15.0
-		keycap_host.offset_top = -8.0
-		keycap_host.offset_bottom = 22.0
+		keycap_host.offset_left = -17.0
+		keycap_host.offset_right = 17.0
+		## Mostly above the cell so it reads on the top edge of the ingredient.
+		keycap_host.offset_top = -26.0
+		keycap_host.offset_bottom = 6.0
 		var keycap_view := _make_strip_hotkey_keycap(HOTKEY_LABELS[hi])
 		keycap_view.name = "KeycapView"
 		keycap_view.visible = false
@@ -36430,45 +36432,36 @@ func _build_ingredient_legend() -> void:
 
 
 func _make_strip_hotkey_keycap(digit: String) -> Control:
-	## Flat 2D keycap illustration — shown at the top of a strip topping on hover.
+	## Flat 2D keycap illustration (UI icon look — not a 3D mesh / SubViewport).
 	var root := Control.new()
 	root.name = "Keycap2D"
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-	## Darker base / thickness under the face (classic drawn keycap).
-	var base := Panel.new()
-	base.name = "Base"
-	base.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	base.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	base.offset_top = 4.0
-	var base_sb := StyleBoxFlat.new()
-	base_sb.bg_color = Color(0.42, 0.45, 0.50)
-	base_sb.set_corner_radius_all(7)
-	base_sb.border_color = Color(0.22, 0.24, 0.28)
-	base_sb.set_border_width_all(1)
-	base.add_theme_stylebox_override("panel", base_sb)
-	root.add_child(base)
-
-	## Light face plate with inset lip.
+	## Outer key silhouette.
 	var face := Panel.new()
 	face.name = "Face"
 	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	face.offset_left = 2.0
-	face.offset_right = -2.0
-	face.offset_top = 1.0
-	face.offset_bottom = -6.0
 	var face_sb := StyleBoxFlat.new()
-	face_sb.bg_color = Color(0.94, 0.95, 0.98)
+	face_sb.bg_color = Color(0.93, 0.94, 0.97)
 	face_sb.set_corner_radius_all(6)
-	face_sb.border_color = Color(0.58, 0.62, 0.68)
-	face_sb.set_border_width_all(1)
-	face_sb.shadow_color = Color(0.0, 0.0, 0.0, 0.18)
-	face_sb.shadow_size = 2
-	face_sb.shadow_offset = Vector2(0, 1)
+	face_sb.border_color = Color(0.28, 0.30, 0.34)
+	face_sb.set_border_width_all(2)
 	face.add_theme_stylebox_override("panel", face_sb)
 	root.add_child(face)
+
+	## Thin highlight band — reads as a drawn key, not extruded plastic.
+	var gloss := ColorRect.new()
+	gloss.name = "Gloss"
+	gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gloss.color = Color(1.0, 1.0, 1.0, 0.55)
+	gloss.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	gloss.offset_left = 4.0
+	gloss.offset_right = -4.0
+	gloss.offset_top = 3.0
+	gloss.offset_bottom = 7.0
+	face.add_child(gloss)
 
 	var lab := Label.new()
 	lab.name = "Digit"
@@ -36477,9 +36470,10 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	UiFontsScript.apply_label(lab, true, 15)
-	lab.add_theme_color_override("font_color", Color(0.14, 0.16, 0.20))
-	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.55))
+	lab.offset_top = 1.0
+	UiFontsScript.apply_label(lab, true, 16)
+	lab.add_theme_color_override("font_color", Color(0.12, 0.13, 0.16))
+	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.35))
 	lab.add_theme_constant_override("outline_size", 1)
 	face.add_child(lab)
 	return root
