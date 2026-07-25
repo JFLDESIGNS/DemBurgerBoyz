@@ -973,6 +973,7 @@ const ROOMBA_BUMP_MOVE_MUL := 0.22
 const ROOMBA_PICKUP_SAD_SEC := 0.7
 const ROOMBA_POKE_SAD_SEC := 1.0 ## Unsmiley after RMB tap
 const ROOMBA_POKE_PAUSE_SEC := 0.3 ## Freeze tasks briefly, then resume
+const ROOMBA_POKE_EXTRA_Y := 0.0127 ## 0.5" higher tip than burger smash
 const ROOMBA_SPATULA_REACH := 0.175
 const ROOMBA_SPATULA_CONTACT_REACH := 0.145
 const ROOMBA_SPATULA_CARRY_REACH := 0.215
@@ -3964,6 +3965,9 @@ func _try_grill_right_click(screen_pos: Vector2) -> bool:
 		return false
 	if spatula_patty != null or dragging_patty != null or cheese_held:
 		return false
+	## Chef bot poke before place/smash — same spatula press, plastic tap, unsmiley.
+	if _try_poke_grill_roomba(screen_pos):
+		return true
 	if not _is_grill_screen_point(screen_pos):
 		return false
 	if _ui_blocks_world_click(screen_pos, true):
@@ -3971,6 +3975,7 @@ func _try_grill_right_click(screen_pos: Vector2) -> bool:
 	var smash_target = _pick_patty_for_smash(screen_pos)
 	if smash_target != null:
 		_smash_grill_patty(smash_target)
+		_try_begin_cheese_pull_on_patty(smash_target)
 	else:
 		_try_grill_raycast(screen_pos, true)
 	return true
@@ -7799,14 +7804,15 @@ func _try_place_patty_at(world_pos: Vector3) -> void:
 	_spawn_patty_at(idx, place_pos)
 
 
-func _start_spatula_place_squash_at(world_pos: Vector3) -> void:
-	## Second right-click on ice ball: slow spatula press (no piano ting).
+func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0) -> void:
+	## Burger / ice-ball / bot poke: slow spatula press (no piano ting).
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		return
 	if _spatula_anim_kind == 3:
 		return ## Don't interrupt an uncancellable flip flourish.
+	var clear := HAND_SPATULA_SLAP_CLEAR if tip_clear < 0.0 else tip_clear
 	var mid := Vector3(world_pos.x, GRILL_SURFACE_Y + HAND_SPATULA_HOLD_Y, world_pos.z)
-	var contact := Vector3(world_pos.x, GRILL_SURFACE_Y + HAND_SPATULA_SLAP_CLEAR, world_pos.z)
+	var contact := Vector3(world_pos.x, GRILL_SURFACE_Y + clear, world_pos.z)
 	_spatula_slap_rest_tip = mid
 	_spatula_slap_contact = contact
 	_spatula_slap_rest_rot = Vector3(HAND_SPATULA_EMPTY_ROT.x, 0.0, 0.0)
@@ -9771,13 +9777,23 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 
 
 func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
-	## Right-click tap — plastic body hit, unsmiley, brief pause, then resume task.
+	## Right-click tap — same spatula smoosh as burger (0.5" higher), plastic tap, unsmiley.
 	if grill_roomba_held or grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
 		return false
 	if not _owns_grill_roomba() or camera == null:
 		return false
-	if not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
-		return false
+	var hit_bot := _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area)
+	if not hit_bot:
+		## Forgiving screen magnet — bot is small on the flat-top.
+		var tip := grill_roomba_root.global_position + Vector3(0.0, ROOMBA_HEIGHT * 0.55, 0.0)
+		if screen_pos.distance_to(camera.unproject_position(tip)) > 52.0:
+			return false
+	var poke_at := Vector3(
+		grill_roomba_root.global_position.x,
+		GRILL_SURFACE_Y,
+		grill_roomba_root.global_position.z
+	)
+	_start_spatula_place_squash_at(poke_at, HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y)
 	grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
 	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
 	grill_roomba_vel = Vector2.ZERO
@@ -9785,6 +9801,7 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 	_set_roomba_face("sad")
 	if game_audio and game_audio.has_method("set_roomba_drive"):
 		game_audio.set_roomba_drive(false)
+	## Plastic body tap — not metal spatula ting (muted on the smash anim).
 	if game_audio and game_audio.has_method("play_roomba_body_tap"):
 		game_audio.play_roomba_body_tap()
 	return true
