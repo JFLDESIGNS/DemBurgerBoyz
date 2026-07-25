@@ -7760,14 +7760,19 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 	if game_audio:
 		var speed := moved / dt
 		game_audio.set_slide_moving(true, clampf(speed * 0.35, 0.0, 1.2))
+		if game_audio.has_method("set_burger_slide_oil"):
+			game_audio.set_burger_slide_oil(moved > 0.0004, clampf(speed * 0.4, 0.0, 1.3))
 	drag_pop_accum += moved
 	while drag_pop_accum >= DRAG_POP_DIST:
 		drag_pop_accum -= DRAG_POP_DIST
 		_smear_oil_along(Vector3(target.x, GRILL_SURFACE_Y + OIL_SIT_Y, target.z), move_vec, moved)
-		if game_audio and randf() < 0.45:
-			if randf() < 0.5:
+		if game_audio and randf() < 0.55:
+			if game_audio.has_method("play_smash_sizzle") and randf() < 0.35:
+				## Wet juice hiss accents while sliding through grease.
+				game_audio.play_smash_sizzle()
+			elif randf() < 0.5:
 				game_audio.play_grease_pop()
-			if randf() < 0.25:
+			if randf() < 0.3:
 				game_audio.play_grease_pop()
 
 
@@ -7788,6 +7793,8 @@ func _end_patty_drag() -> void:
 	drag_vel_screen = Vector2.ZERO
 	if game_audio:
 		game_audio.set_slide_moving(false)
+		if game_audio.has_method("set_burger_slide_oil"):
+			game_audio.set_burger_slide_oil(false)
 	if mp_enabled and not _mp_applying and is_instance_valid(patty) and int(patty.get("net_id")) >= 0:
 		mp_release_drag.rpc(int(patty.net_id))
 	if not is_instance_valid(patty):

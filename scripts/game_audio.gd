@@ -79,6 +79,11 @@ var _sz_sample_i := 0
 var _slide_player: AudioStreamPlayer
 var _slide_gain: float = 0.0
 var _slide_target: float = 0.0
+## Wet oil squish + steam hiss while spatula-sliding a burger.
+var _oil_slide_player: AudioStreamPlayer
+var _oil_slide_gain: float = 0.0
+var _oil_slide_target: float = 0.0
+var _oil_slide_pop_cd: float = 0.0
 var _roomba_drive_player: AudioStreamPlayer
 var _roomba_drive_gain: float = 0.0
 var _roomba_drive_target: float = 0.0
@@ -214,6 +219,13 @@ func _ready() -> void:
 	_slide_player.stream = _make_slide_scrape()
 	_slide_player.volume_db = -80.0
 	add_child(_slide_player)
+	## Wet oil squish / steam hiss while sliding a burger with the spatula.
+	_oil_slide_player = AudioStreamPlayer.new()
+	_oil_slide_player.name = "BurgerSlideOil"
+	_oil_slide_player.bus = "Master"
+	_oil_slide_player.stream = _make_burger_slide_oil_loop()
+	_oil_slide_player.volume_db = -80.0
+	add_child(_oil_slide_player)
 	_roomba_drive_player = AudioStreamPlayer.new()
 	_roomba_drive_player.name = "RoombaDrive"
 	_roomba_drive_player.bus = "Master"
@@ -241,6 +253,32 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
+	## Burger spatula-slide: wet oil squish bed + hiss pops.
+	var oil_fade := 8.0 if _oil_slide_target > _oil_slide_gain else 4.0
+	_oil_slide_gain = move_toward(_oil_slide_gain, _oil_slide_target, delta * oil_fade)
+	if _oil_slide_player:
+		if _oil_slide_gain > 0.01:
+			_oil_slide_player.volume_db = linear_to_db(clampf(_oil_slide_gain * 0.62, 0.04, 1.0))
+			_oil_slide_player.pitch_scale = 0.92 + _oil_slide_gain * 0.18
+			if not _oil_slide_player.playing:
+				_oil_slide_player.play()
+			_oil_slide_pop_cd -= delta
+			if _oil_slide_pop_cd <= 0.0:
+				## Squish spit + steam hiss accents while the burger scrapes through grease.
+				play_grease_pop(true)
+				if randf() < 0.55:
+					_play_cached(
+						"slide_squish_hiss_%d" % (randi() % 4),
+						_make_smash_hiss,
+						0.88 + randf() * 0.2,
+						0.42 + _oil_slide_gain * 0.35
+					)
+				_oil_slide_pop_cd = lerpf(0.14, 0.055, clampf(_oil_slide_gain, 0.0, 1.0)) + randf() * 0.03
+		elif _oil_slide_player.playing:
+			_oil_slide_player.stop()
+			_oil_slide_player.volume_db = -80.0
+			_oil_slide_player.pitch_scale = 1.0
+			_oil_slide_pop_cd = 0.0
 	_tick_scrape_tings(delta)
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
@@ -1160,6 +1198,55 @@ func set_slide_moving(moving: bool, speed: float = 0.0) -> void:
 		_slide_target = clampf(0.28 + speed * 1.4, 0.22, 0.7)
 	else:
 		_slide_target = 0.0
+
+
+func set_burger_slide_oil(moving: bool, speed: float = 0.0) -> void:
+	## Spatula dragging a burger — wet oil squish + steam hiss (not dry metal scrape).
+	if moving:
+		_oil_slide_target = clampf(0.38 + speed * 1.15, 0.32, 1.0)
+	else:
+		_oil_slide_target = 0.0
+
+
+func _make_burger_slide_oil_loop() -> AudioStreamWAV:
+	## Looping wet grease squish + steam hiss under a sliding burger.
+	var n := int(MIX_RATE * 0.32)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	var hp := 0.0
+	var mid := 0.0
+	var pop_env := 0.0
+	var pop_tick := 1800.0
+	var next_pop := 0.018
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.72 + white * 0.28
+		mid = mid * 0.45 + white * 0.55
+		hp = white - lp
+		next_pop -= 1.0 / float(MIX_RATE)
+		if pop_env < 0.02 and next_pop <= 0.0:
+			pop_env = 0.45 + randf() * 0.7
+			pop_tick = 1600.0 + randf() * 2200.0
+			next_pop = 0.012 + randf() * 0.045
+		pop_env *= 0.82
+		## Soft steam bed + wet mid squish + bright spit.
+		var hiss := hp * 0.55 + mid * 0.18
+		var squish := lp * 0.42
+		var spit := 0.0
+		if pop_env > 0.02:
+			spit = (randf() * 2.0 - 1.0) * pop_env * 0.38
+			spit += sin(float(i) * pop_tick * TAU / float(MIX_RATE)) * pop_env * 0.16
+		var sample := hiss * 0.7 + squish * 0.55 + spit
+		var edge := 1.0
+		var fade := 0.018
+		if t < fade:
+			edge = t / fade
+		elif t > 0.32 - fade:
+			edge = (0.32 - t) / fade
+		_write_s16(pcm, i, int(clampf(sample * edge, -1.0, 1.0) * 14500.0))
+	return _wav_from_pcm(pcm, true)
 
 
 func _play_cached(key: String, builder: Callable, pitch: float, gain: float) -> void:
