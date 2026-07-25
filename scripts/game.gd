@@ -35,13 +35,15 @@ const GRILL_SURFACE_Z := -0.02 ## farther from cook, closer to window
 const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the right
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
-## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
+## 14 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
 ## tinggrill.wav reads ~3 semis flat of C5, so request MIDI = sounded + SAMPLE_COMP.
-## Flat taps: full chromatic octave C3→B3 (C C# D D# E F F# G G# A A# B).
-const GRILL_PIANO_SECTIONS := 12
+## Flat taps: C major twice — C D E F G A B C D E F G A B (C3→B4).
+const GRILL_PIANO_SECTIONS := 14
 const GRILL_PIANO_SOUND_LOW := 48 ## C3 — leftmost strip (what you hear)
 const GRILL_PIANO_SAMPLE_COMP := 3 ## tinggrill ~A4; play MIDI = sounded + 3
 const GRILL_PIANO_LEFT_MIDI := GRILL_PIANO_SOUND_LOW + GRILL_PIANO_SAMPLE_COMP ## request MIDI for C3
+## Semitone steps of the C major scale (relative to C).
+const GRILL_PIANO_C_MAJOR_STEPS: Array[int] = [0, 2, 4, 5, 7, 9, 11]
 ## Spatula roll changes key (transpose the whole run).
 const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
 const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
@@ -258,7 +260,7 @@ const HAND_SPATULA_AWAY_BIAS := 0.12
 var grill_piano_root: Node3D = null
 var grill_surface_node: Node3D = null ## Flat-top Area3D — host for optional tap-pad outlines
 var grill_piano_debug_outline: bool = false ## GFX / hidden-menu toggle; off by default
-var grill_piano_cell_meshes: Array = [] ## MeshInstance3D — 12 cook piano pads
+var grill_piano_cell_meshes: Array = [] ## MeshInstance3D — cook piano pads
 var grill_drum_pad_meshes: Array = [] ## MeshInstance3D — 5 HOLD drum pads
 var grill_piano_note_labels: Array = [] ## Label3D — note names on piano pads
 var grill_drum_note_labels: Array = [] ## Label3D — drum/hat names on HOLD pads
@@ -5022,7 +5024,7 @@ func _spatula_play_ting_bit(bit: int) -> void:
 
 
 func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
-	## Cook steel → 12 piano notes; HOLD → drums / hats by spatula tilt.
+	## Cook steel → C major piano strips; HOLD → drums / hats by spatula tilt.
 	if game_audio == null or world_pos == Vector3.ZERO:
 		return
 	_flash_grill_tap_pad(world_pos)
@@ -5379,9 +5381,11 @@ func _grill_piano_strip_index_from_left(world_pos: Vector3) -> int:
 
 
 func _grill_piano_sounding_at_index(from_left: int) -> int:
-	## Heard pitch: chromatic C3→B3 — one strip per semitone.
+	## Heard pitch: C major twice — C D E F G A B / C D E F G A B (C3→B4).
 	var i := clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
-	return GRILL_PIANO_SOUND_LOW + i
+	var degree := i % GRILL_PIANO_C_MAJOR_STEPS.size()
+	var octave := i / GRILL_PIANO_C_MAJOR_STEPS.size()
+	return GRILL_PIANO_SOUND_LOW + octave * 12 + GRILL_PIANO_C_MAJOR_STEPS[degree]
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
