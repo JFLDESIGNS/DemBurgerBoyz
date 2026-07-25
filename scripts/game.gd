@@ -6,6 +6,8 @@ const STATION_COUNT := 1
 const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
 const STATION_BURGER_SCALE := 0.944 ## 20% smaller than 1.18; proportions unchanged
+## Uniform UI scale on the BurgerStack host (cutting-board 2D burger only).
+const STATION_BURGER_UI_SCALE := 0.5 ## half size; proportions unchanged
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
 const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
@@ -2453,6 +2455,7 @@ func _setup_stations_data() -> void:
 			"bun_toast": {}, ## bun_bottom / bun_top -> cook_time seconds
 			"panel": null,
 			"preview": null,
+			"preview_host": null, ## BurgerStackHost — half-size UI scale wrapper
 			"title": null,
 			"plate": null,
 			"drop_hint": null,
@@ -35174,6 +35177,7 @@ func _apply_build_zone_settings(s: Dictionary) -> void:
 			if title != null and is_instance_valid(title):
 				title.offset_top = int(_bz("bz_title_y"))
 				title.offset_left = int(_bz("bz_title_x"))
+			_sync_burger_stack_host_pivot(i)
 	_apply_prep_ui_overlay_layout()
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.offset_left = _bz("bz_grill_drop_left")
@@ -37740,6 +37744,15 @@ func _build_station_ui() -> void:
 		grill_blocker.z_index = -1
 		plate_wrap.add_child(grill_blocker)
 
+		## Scale host — shrinks only the 2D burger stack on the cutting board (not buttons).
+		var burger_host := Control.new()
+		burger_host.name = "BurgerStackHost"
+		burger_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		burger_host.z_as_relative = true
+		burger_host.z_index = 1
+		burger_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+		burger_host.scale = Vector2(STATION_BURGER_UI_SCALE, STATION_BURGER_UI_SCALE)
+		plate_wrap.add_child(burger_host)
 		## Absolute stack of floating ingredient sprites (cutting board art removed for now).
 		var burger_stack := Control.new()
 		burger_stack.name = "BurgerStack"
@@ -37747,7 +37760,7 @@ func _build_station_ui() -> void:
 		burger_stack.z_as_relative = true
 		burger_stack.z_index = 1
 		burger_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
-		plate_wrap.add_child(burger_stack)
+		burger_host.add_child(burger_stack)
 
 		var si := i
 		var drop_btn := Button.new()
@@ -37901,6 +37914,7 @@ func _build_station_ui() -> void:
 		stations_row.add_child(panel)
 		stations[i]["panel"] = panel
 		stations[i]["preview"] = burger_stack
+		stations[i]["preview_host"] = burger_host
 		stations[i]["board"] = null
 		stations[i]["title"] = title
 		stations[i]["plate"] = plate_wrap
@@ -39880,6 +39894,8 @@ func _refresh_station(index: int) -> void:
 		drop_btn.visible = spatula_patty != null
 	if index == STATION_CRAFT:
 		_refresh_build_board_hint()
+	## Keep half-size host pivoted on the board seat so the stack shrinks in place.
+	_sync_burger_stack_host_pivot(index)
 
 	if items.is_empty():
 		st["selected_layer"] = -1
@@ -40046,6 +40062,27 @@ func _station_patty_layer_tex(st: Dictionary, pidx: int, with_cheese: bool) -> T
 	if with_cheese:
 		return FoodSpritesScript.burger_cheese_tex(pcolor, char_amt)
 	return FoodSpritesScript.patty_tex(pcolor, char_amt)
+
+
+func _sync_burger_stack_host_pivot(index: int) -> void:
+	## Pivot BurgerStackHost at the board seat so STATION_BURGER_UI_SCALE shrinks in place.
+	if index < 0 or index >= stations.size():
+		return
+	var st: Dictionary = stations[index]
+	var host: Control = st.get("preview_host", null)
+	var plate: Control = st.get("plate", null)
+	if host == null or not is_instance_valid(host):
+		return
+	host.scale = Vector2(STATION_BURGER_UI_SCALE, STATION_BURGER_UI_SCALE)
+	var stage_w := 320.0
+	var stage_h := 240.0
+	if plate != null and is_instance_valid(plate) and plate.size.x > 8.0:
+		stage_w = plate.size.x
+		stage_h = plate.size.y
+	elif plate != null and is_instance_valid(plate):
+		stage_w = maxf(stage_w, plate.custom_minimum_size.x)
+		stage_h = maxf(stage_h, plate.custom_minimum_size.y)
+	host.pivot_offset = Vector2(stage_w * 0.52, stage_h * 0.66)
 
 
 func _station_layer_scale(layer_count: int) -> float:
