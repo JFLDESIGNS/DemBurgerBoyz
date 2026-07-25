@@ -1078,6 +1078,8 @@ var _cup_flip_settle_from_rot: Vector3 = Vector3.ZERO
 var _cup_flip_settle_to_rot: Vector3 = Vector3.ZERO
 var _cup_flip_settle_from_pos: Vector3 = Vector3.ZERO
 var _cup_flip_settle_to_pos: Vector3 = Vector3.ZERO
+var _cup_flip_bounce_prev: float = 0.0
+var _cup_flip_lock_yaw: float = 0.0
 var _cup_fizz: float = 0.0 ## 0–1 foam head; spikes on pour, fades after
 var _cup_fizz_peak: bool = false ## hit a strong head this pour cycle
 var _cup_fizz_poof: float = 0.0 ## 0–1 end-of-life poof out the top
@@ -28217,13 +28219,12 @@ func _cup_flip_land_y_for_pose(pose: String) -> float:
 
 
 func _cup_flip_rot_for_pose(pose: String, yaw: float) -> Vector3:
+	## Pitch/tilt only — no roll or yaw spin on the flip.
 	if pose == "lid":
 		return Vector3(180.0, yaw, 0.0)
 	if pose == "side":
-		## Random left/right tip so side-lands don't all look identical.
-		return Vector3(90.0 if randf() < 0.5 else -90.0, yaw, randf_range(-12.0, 12.0))
-	var presented := _cup_presented_rotation(cup_root)
-	return Vector3(0.0, yaw if yaw != 0.0 else presented.y, 0.0)
+		return Vector3(90.0 if randf() < 0.5 else -90.0, yaw, 0.0)
+	return Vector3(0.0, yaw, 0.0)
 
 
 func _start_cup_rim_flip(hold_sec: float) -> void:
@@ -28260,10 +28261,13 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 	_cup_flip_land_lid = pose == "lid"
 	_cup_flip_land_side = pose == "side"
 	_cup_flip_pitch_total = land_pitch
-	_cup_flip_base_rot = cup_root.rotation_degrees
+	## Freeze yaw/roll — flip is pure forward tilt.
+	_cup_flip_lock_yaw = cup_root.rotation_degrees.y
+	_cup_flip_base_rot = Vector3(cup_root.rotation_degrees.x, _cup_flip_lock_yaw, 0.0)
 	_cup_flip_bobble_phase = randf() * TAU
 	_cup_flip_settle = false
 	_cup_flip_settle_t = 0.0
+	_cup_flip_bounce_prev = 0.0
 	_cup_flip_start = cup_root.global_position
 	var mouse := get_viewport().get_mouse_position()
 	var aim := _grill_plane_from_screen(mouse)
@@ -28304,11 +28308,11 @@ func _begin_cup_flip_settle() -> void:
 	if cup_root == null or not is_instance_valid(cup_root):
 		_cup_flip_air = false
 		return
-	var yaw := _cup_flip_base_rot.y + randf_range(-25.0, 25.0)
 	var pose := "lid" if _cup_flip_land_lid else ("side" if _cup_flip_land_side else "upright")
 	var land_y := _cup_flip_land_y_for_pose(pose)
-	_cup_flip_settle_from_rot = cup_root.rotation_degrees
-	_cup_flip_settle_to_rot = _cup_flip_rot_for_pose(pose, yaw)
+	## Pitch-only from/to — keep locked yaw, zero roll.
+	_cup_flip_settle_from_rot = Vector3(cup_root.rotation_degrees.x, _cup_flip_lock_yaw, 0.0)
+	_cup_flip_settle_to_rot = _cup_flip_rot_for_pose(pose, _cup_flip_lock_yaw)
 	## Start settle from impact on the steel (not mid-air lerp-down) so hops read clean.
 	_cup_flip_settle_from_pos = Vector3(
 		lerpf(cup_root.global_position.x, _cup_flip_end.x, 0.55),
@@ -28322,10 +28326,12 @@ func _begin_cup_flip_settle() -> void:
 	_cup_flip_settle_to_pos.x = clampf(_cup_flip_settle_to_pos.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
 	_cup_flip_settle_to_pos.z = clampf(_cup_flip_settle_to_pos.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
 	cup_root.global_position = _cup_flip_settle_from_pos
+	cup_root.rotation_degrees = _cup_flip_settle_from_rot
 	_cup_flip_settle = true
 	_cup_flip_settle_t = 0.0
-	if game_audio:
-		game_audio.play_click()
+	_cup_flip_bounce_prev = 0.0
+	if game_audio and game_audio.has_method("play_cup_plastic_tap"):
+		game_audio.play_cup_plastic_tap(1.0)
 
 
 func _update_cup_rim_flip(delta: float) -> void:
@@ -28344,20 +28350,21 @@ func _update_cup_rim_flip(delta: float) -> void:
 		## Slight stretch on each hop so contacts feel snappy, not mushy.
 		if bounce < 0.004 and st < 0.92:
 			bounce = 0.0
+		## Dull plastic tap each time a hop hits the steel again.
+		if _cup_flip_bounce_prev > 0.006 and bounce <= 0.004 and st < 0.94:
+			if game_audio and game_audio.has_method("play_cup_plastic_tap"):
+				game_audio.play_cup_plastic_tap(lerpf(0.72, 0.38, st))
+		_cup_flip_bounce_prev = bounce
 		var skid := (1.0 - st)
 		var bob_x := sin(_cup_flip_bobble_phase + st * 14.0) * 0.01 * skid * hop_env
 		var bob_z := cos(_cup_flip_bobble_phase * 1.2 + st * 11.0) * 0.009 * skid * hop_env
 		var xz: Vector3 = _cup_flip_settle_from_pos.lerp(_cup_flip_settle_to_pos, xz_ease)
 		cup_root.global_position = Vector3(xz.x + bob_x, ground_y + bounce, xz.z + bob_z)
-		## Rotation damps into final pose with a soft overshoot on the first hops.
+		## Pitch-only settle — tilt overshoot on hops, yaw/roll stay locked.
 		var rot_ease := 1.0 - pow(1.0 - st, 2.6)
-		var wob := hop_env
-		cup_root.rotation_degrees = _cup_flip_settle_from_rot.lerp(_cup_flip_settle_to_rot, rot_ease) \
-			+ Vector3(
-				sin(st * PI * CUP_FLIP_BOUNCE_HOPS) * 22.0 * wob,
-				cos(st * PI * 2.1) * 14.0 * wob,
-				sin(_cup_flip_bobble_phase + st * 12.0) * 18.0 * wob
-			)
+		var pitch := lerpf(_cup_flip_settle_from_rot.x, _cup_flip_settle_to_rot.x, rot_ease)
+		pitch += sin(st * PI * CUP_FLIP_BOUNCE_HOPS) * 18.0 * hop_env
+		cup_root.rotation_degrees = Vector3(pitch, _cup_flip_lock_yaw, 0.0)
 		_update_cup_slosh(delta)
 		_update_cup_pour_white(delta)
 		if st < 1.0:
@@ -28374,18 +28381,18 @@ func _update_cup_rim_flip(delta: float) -> void:
 	var floor_y := _cup_flip_end.y
 	var launch_lift := maxf(_cup_flip_start.y - floor_y, 0.0) * (1.0 - t)
 	var y := floor_y + launch_lift + CUP_FLIP_PEAK * h_mul
-	## In-air bobble — tumble / wander, stronger near apex.
+	## Position bobble only — rotation is pure forward tilt.
 	var bob := h_mul
 	var bob_x2 := sin(_cup_flip_bobble_phase + t * 14.0) * 0.028 * bob
 	var bob_z2 := cos(_cup_flip_bobble_phase * 0.9 + t * 11.0) * 0.022 * bob
 	cup_root.global_position = Vector3(xz2.x + bob_x2, y, xz2.z + bob_z2)
-	## Spin a bit front-loaded so rotation finishes before impact.
+	## Pitch/tilt only — no roll or yaw during the flip.
 	var spin_t := clampf(t / 0.92, 0.0, 1.0)
 	var spin := _cup_flip_pitch_total * (spin_t * spin_t * (3.0 - 2.0 * spin_t))
 	cup_root.rotation_degrees = Vector3(
-		_cup_flip_base_rot.x + spin + sin(_cup_flip_bobble_phase + t * 12.0) * 18.0 * bob,
-		_cup_flip_base_rot.y + cos(_cup_flip_bobble_phase + t * 8.0) * 24.0 * bob,
-		_cup_flip_base_rot.z * (1.0 - t) + sin(t * TAU * 1.4 + _cup_flip_bobble_phase) * 28.0 * bob
+		_cup_flip_base_rot.x + spin,
+		_cup_flip_lock_yaw,
+		0.0
 	)
 	_update_cup_slosh(delta)
 	_update_cup_pour_white(delta)

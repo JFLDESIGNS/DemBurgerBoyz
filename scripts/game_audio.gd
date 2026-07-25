@@ -1052,6 +1052,17 @@ func play_click() -> void:
 	_play_cached("ui_click", _make_click, 1.0, 0.85)
 
 
+func play_cup_plastic_tap(volume_scale: float = 1.0) -> void:
+	## Dull Solo-cup plastic hit on steel — soft mid thud, almost no sparkle.
+	var g := clampf(volume_scale, 0.15, 1.35)
+	_play_cached(
+		"cup_plastic_tap_v1_%d" % (randi() % 3),
+		_make_cup_plastic_tap,
+		0.94 + randf() * 0.1,
+		0.78 * g
+	)
+
+
 func play_rack_take() -> void:
 	## Pleasant little thud when a cup/cone leaves its holder.
 	_play_cached("rack_take_thud", _make_rack_take_thud, 0.96 + randf() * 0.08, 0.62)
@@ -1791,6 +1802,24 @@ func _make_roomba_body_tap() -> AudioStreamWAV:
 		var ring := sin(t * f1 * TAU) * exp(-t * 110.0) * 0.32
 		var sparkle := sin(t * f2 * TAU) * exp(-t * 145.0) * 0.18
 		_write_s16(pcm, i, int(clampf((click + shell + ring + sparkle) * env, -1.0, 1.0) * 21000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_cup_plastic_tap() -> AudioStreamWAV:
+	## Dull thin plastic on steel — muted mid knock, short hollow shell, no bright click.
+	var n := int(MIX_RATE * 0.09)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var body_f := 210.0 + randf() * 55.0
+	var shell_f := 480.0 + randf() * 90.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var attack := clampf(t / 0.0018, 0.0, 1.0)
+		var env := attack * exp(-t * 38.0)
+		var body := sin(t * body_f * TAU) * 0.62 + sin(t * (body_f * 1.7) * TAU) * 0.22
+		var shell := sin(t * shell_f * TAU) * exp(-t * 52.0) * 0.34
+		var grit := (randf() * 2.0 - 1.0) * exp(-t * 90.0) * 0.08
+		_write_s16(pcm, i, int(clampf((body + shell + grit) * env, -1.0, 1.0) * 15000.0))
 	return _wav_from_pcm(pcm, false)
 
 
