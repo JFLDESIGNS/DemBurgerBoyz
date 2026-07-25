@@ -5073,7 +5073,7 @@ func _play_grill_piano_slide_ting(from_left: int, tip_z: float, volume_scale: fl
 
 
 func _update_spatula_piano_slide(tip_pos: Vector3) -> void:
-	## Hold LMB + slide screen-right across cook strips → C-major glissando at ½ tap volume.
+	## Hold LMB + slide across cook strips (either way) → C-major glissando at ½ tap volume.
 	if tip_pos == Vector3.ZERO:
 		_spatula_piano_slide_last_strip = -1
 		if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
@@ -5091,12 +5091,18 @@ func _update_spatula_piano_slide(tip_pos: Vector3) -> void:
 	if _spatula_piano_slide_last_strip < 0:
 		_spatula_piano_slide_last_strip = cur
 		return
-	if cur > _spatula_piano_slide_last_strip:
-		## Half of a normal flat/side tap ting.
-		var tap_vol := 0.92 if absf(_spatula_user_roll) < 22.5 else 1.68
-		var slide_vol := tap_vol * 0.5
-		for i in range(_spatula_piano_slide_last_strip + 1, cur + 1):
-			_play_grill_piano_slide_ting(i, tip_pos.z, slide_vol)
+	if cur == _spatula_piano_slide_last_strip:
+		return
+	## Half of a normal flat/side tap ting — ascending (right) or descending (left).
+	var tap_vol := 0.92 if absf(_spatula_user_roll) < 22.5 else 1.68
+	var slide_vol := tap_vol * 0.5
+	var step := 1 if cur > _spatula_piano_slide_last_strip else -1
+	var i := _spatula_piano_slide_last_strip + step
+	while true:
+		_play_grill_piano_slide_ting(i, tip_pos.z, slide_vol)
+		if i == cur:
+			break
+		i += step
 	_spatula_piano_slide_last_strip = cur
 
 
