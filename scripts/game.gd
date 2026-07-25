@@ -1071,6 +1071,13 @@ var _cup_flip_pitch_total: float = 0.0
 var _cup_flip_base_rot: Vector3 = Vector3.ZERO
 var _cup_flip_land_lid: bool = false
 var _cup_flip_land_side: bool = false
+var _cup_flip_bobble_phase: float = 0.0
+var _cup_flip_settle: bool = false
+var _cup_flip_settle_t: float = 0.0
+var _cup_flip_settle_from_rot: Vector3 = Vector3.ZERO
+var _cup_flip_settle_to_rot: Vector3 = Vector3.ZERO
+var _cup_flip_settle_from_pos: Vector3 = Vector3.ZERO
+var _cup_flip_settle_to_pos: Vector3 = Vector3.ZERO
 var _cup_fizz: float = 0.0 ## 0–1 foam head; spikes on pour, fades after
 var _cup_fizz_peak: bool = false ## hit a strong head this pour cycle
 var _cup_fizz_poof: float = 0.0 ## 0–1 end-of-life poof out the top
@@ -1617,9 +1624,10 @@ const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk
 ## Flippy-cup: RMB hold → release pitches forward; 0.5s = perfect 180° rim-down.
 const CUP_FLIP_PERFECT_HOLD := 0.5
 const CUP_FLIP_MIN_HOLD := 0.08
-const CUP_FLIP_DUR := 0.52
-const CUP_FLIP_PEAK := 0.26
+const CUP_FLIP_DUR := 0.55
+const CUP_FLIP_PEAK := 0.28
 const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.0s, …)
+const CUP_FLIP_SETTLE_DUR := 0.28 ## bobble / bounce after the arc before it sticks
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
 const CUP_TILT_FROM_VEL := 24.0 ## degrees per m/s — was 48; much less tip while moving
@@ -26629,12 +26637,9 @@ func _update_held_cup(delta: float) -> void:
 			anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
 		cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
 		cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
-	## Flippy-cup wind-up: tip forward with RMB hold (0.5s ≈ ready for a clean 180°).
-	var flip_wind := 0.0
-	if _cup_flip_charging:
-		flip_wind = clampf(_cup_flip_hold_t / CUP_FLIP_PERFECT_HOLD, 0.0, 2.0) * 28.0
+	## Stay normal in-hand while RMB charges — flip only starts on release.
 	cup_root.rotation_degrees = Vector3(
-		-6.0 + _cup_tilt.y + flip_wind,
+		-6.0 + _cup_tilt.y,
 		10.0,
 		_cup_tilt.x
 	)
@@ -28167,7 +28172,7 @@ func _update_cup_ice_bob(_delta: float) -> void:
 
 
 func _release_cup_flip_charge() -> void:
-	## RMB release — hold duration sets pitch (0.5s = perfect 180° rim-down).
+	## RMB release — hold only charges; flip/toss starts here (not while held).
 	if not _cup_flip_charging:
 		return
 	var hold := _cup_flip_hold_t
@@ -28180,42 +28185,93 @@ func _release_cup_flip_charge() -> void:
 	_start_cup_rim_flip(hold)
 
 
+func _cup_flip_pose_from_pitch(pitch_deg: float) -> String:
+	## Snap to nearest stable: upright (0), side (90/270), or rim/lid (180).
+	var a := fposmod(pitch_deg, 360.0)
+	var d0 := minf(a, 360.0 - a)
+	var d90 := absf(a - 90.0)
+	var d180 := absf(a - 180.0)
+	var d270 := absf(a - 270.0)
+	var best := d0
+	var pose := "upright"
+	if d180 < best:
+		best = d180
+		pose = "lid"
+	if d90 < best:
+		best = d90
+		pose = "side"
+	if d270 < best:
+		pose = "side"
+	return pose
+
+
+func _cup_flip_land_y_for_pose(pose: String) -> float:
+	if pose == "lid":
+		return GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
+	if pose == "side":
+		return GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
+	return GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
+
+
+func _cup_flip_rot_for_pose(pose: String, yaw: float) -> Vector3:
+	if pose == "lid":
+		return Vector3(180.0, yaw, 0.0)
+	if pose == "side":
+		## Random left/right tip so side-lands don't all look identical.
+		return Vector3(90.0 if randf() < 0.5 else -90.0, yaw, randf_range(-12.0, 12.0))
+	var presented := _cup_presented_rotation(cup_root)
+	return Vector3(0.0, yaw if yaw != 0.0 else presented.y, 0.0)
+
+
 func _start_cup_rim_flip(hold_sec: float) -> void:
-	## Flippy-cup pitch: turns = hold/0.5; integer turns land rim-down (0.5s, 1.0s, …).
+	## Flippy-cup: release starts the toss. Timing biases rim-down; bobble can still upright it.
 	if cup_root == null or not is_instance_valid(cup_root):
 		return
 	var turns := clampf(hold_sec / CUP_FLIP_PERFECT_HOLD, 0.0, 4.0)
 	var nearest := roundf(turns)
 	var err := absf(turns - nearest)
-	## Integer turns (0.5s, 1.0s, 1.5s…) → rim/lid down. Half turns (0.25s…) → on its side.
-	_cup_flip_land_lid = nearest >= 1.0 and err <= CUP_FLIP_PERFECT_WINDOW
+	var prefer_lid := nearest >= 1.0 and err <= CUP_FLIP_PERFECT_WINDOW
 	var half_err := absf(turns - floorf(turns) - 0.5)
-	_cup_flip_land_side = (not _cup_flip_land_lid) and half_err <= 0.18
-	## Pitch so perfect beats always finish rim-down (1.0s = 540° = full spin + 180°).
-	if _cup_flip_land_lid:
+	var prefer_side := (not prefer_lid) and half_err <= 0.18
+	## Aimed pitch from hold — perfect beats target rim-down (1.0s = 540°).
+	if prefer_lid:
 		_cup_flip_pitch_total = 180.0 + (nearest - 1.0) * 360.0
-	elif _cup_flip_land_side:
+	elif prefer_side:
 		_cup_flip_pitch_total = 90.0 + floorf(turns) * 180.0
 	else:
 		_cup_flip_pitch_total = turns * 180.0
+	## Landing kick — tighter on perfect timing, but weird bounces can still upright it.
+	var quality := clampf(1.0 - err / maxf(CUP_FLIP_PERFECT_WINDOW, 0.001), 0.0, 1.0)
+	if not prefer_lid and not prefer_side:
+		quality *= 0.35
+	var kick := randf_range(-18.0, 18.0) * lerpf(1.8, 0.55, quality)
+	if randf() < lerpf(0.28, 0.12, quality):
+		## Wild table bounce — can tip a near-perfect rim flip upright.
+		kick += randf_range(-110.0, 110.0)
+	var land_pitch := _cup_flip_pitch_total + kick
+	var pose := _cup_flip_pose_from_pitch(land_pitch)
+	## Soft bias: if timing was strong rim-down and kick wasn't wild, keep lid more often.
+	if prefer_lid and quality > 0.75 and absf(kick) < 35.0 and randf() < 0.72:
+		pose = "lid"
+		land_pitch = 180.0 + (nearest - 1.0) * 360.0
+	_cup_flip_land_lid = pose == "lid"
+	_cup_flip_land_side = pose == "side"
+	_cup_flip_pitch_total = land_pitch
 	_cup_flip_base_rot = cup_root.rotation_degrees
+	_cup_flip_bobble_phase = randf() * TAU
+	_cup_flip_settle = false
+	_cup_flip_settle_t = 0.0
 	_cup_flip_start = cup_root.global_position
 	var mouse := get_viewport().get_mouse_position()
 	var aim := _grill_plane_from_screen(mouse)
 	if aim == Vector3.ZERO or not _is_near_grill_for_place(aim):
 		aim = Vector3(_cup_flip_start.x, GRILL_SURFACE_Y, _cup_flip_start.z)
 		if not _is_on_grill_surface(aim) and not _is_near_grill_for_place(aim):
-			## Off-grill toss — still flip in place toward steel center so it can land.
 			aim = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
 	aim.x = clampf(aim.x, GRILL_CENTER_X - GRILL_WIDTH * 0.46, GRILL_CENTER_X + GRILL_WIDTH * 0.46)
 	aim.z = clampf(aim.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.46, GRILL_SURFACE_Z + GRILL_DEPTH * 0.46)
-	var land_y := GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
-	if _cup_flip_land_lid:
-		## Origin is cup bottom — after 180° pitch the rim sits on the steel.
-		land_y = GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
-	elif _cup_flip_land_side:
-		land_y = GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
-	_cup_flip_end = Vector3(aim.x, land_y, aim.z)
+	## Aim a bit high during the arc; settle bounce parks the final sit height.
+	_cup_flip_end = Vector3(aim.x, _cup_flip_land_y_for_pose(pose), aim.z)
 	_cup_spout_lock = null
 	_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
 	_cup_pouring = false
@@ -28226,66 +28282,106 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 	_cup_flip_t = 0.0
 	if game_audio:
 		game_audio.play_scoop()
-	if _cup_flip_land_lid:
-		_flash("Rim flip!", Color("FFE082"))
-	elif _cup_flip_land_side:
-		_flash("Half flip", Color("FFCC80"))
+
+
+func _begin_cup_flip_settle() -> void:
+	## Short bobble bounce into the final pose — can look like a lucky upright tip.
+	if cup_root == null or not is_instance_valid(cup_root):
+		_cup_flip_air = false
+		return
+	var yaw := _cup_flip_base_rot.y + randf_range(-25.0, 25.0)
+	var pose := "lid" if _cup_flip_land_lid else ("side" if _cup_flip_land_side else "upright")
+	_cup_flip_settle_from_rot = cup_root.rotation_degrees
+	_cup_flip_settle_to_rot = _cup_flip_rot_for_pose(pose, yaw)
+	_cup_flip_settle_from_pos = cup_root.global_position
+	_cup_flip_settle_to_pos = Vector3(_cup_flip_end.x, _cup_flip_land_y_for_pose(pose), _cup_flip_end.z)
+	## Tiny lateral skid on bounce.
+	_cup_flip_settle_to_pos.x += randf_range(-0.03, 0.03)
+	_cup_flip_settle_to_pos.z += randf_range(-0.025, 0.025)
+	_cup_flip_settle_to_pos.x = clampf(_cup_flip_settle_to_pos.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+	_cup_flip_settle_to_pos.z = clampf(_cup_flip_settle_to_pos.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	_cup_flip_settle = true
+	_cup_flip_settle_t = 0.0
 
 
 func _update_cup_rim_flip(delta: float) -> void:
 	if not _cup_flip_air or cup_root == null or not is_instance_valid(cup_root):
 		_cup_flip_air = false
+		_cup_flip_settle = false
+		return
+	if _cup_flip_settle:
+		_cup_flip_settle_t += delta
+		var st := clampf(_cup_flip_settle_t / CUP_FLIP_SETTLE_DUR, 0.0, 1.0)
+		var ease := st * st * (3.0 - 2.0 * st)
+		## Two soft bounces while it tips into the final pose.
+		var bounce := absf(sin(st * PI * 2.0)) * (1.0 - st) * 0.055
+		var wob := (1.0 - st)
+		var bob_x := sin(_cup_flip_bobble_phase + st * 22.0) * 0.014 * wob
+		var bob_z := cos(_cup_flip_bobble_phase * 1.3 + st * 18.0) * 0.012 * wob
+		cup_root.global_position = _cup_flip_settle_from_pos.lerp(_cup_flip_settle_to_pos, ease) \
+			+ Vector3(bob_x, bounce, bob_z)
+		cup_root.rotation_degrees = _cup_flip_settle_from_rot.lerp(_cup_flip_settle_to_rot, ease) \
+			+ Vector3(
+				sin(st * PI * 3.0) * 16.0 * wob,
+				cos(st * PI * 2.4) * 12.0 * wob,
+				sin(_cup_flip_bobble_phase + st * 16.0) * 20.0 * wob
+			)
+		_update_cup_slosh(delta)
+		_update_cup_pour_white(delta)
+		if st < 1.0:
+			return
+		_finish_cup_rim_flip()
 		return
 	_cup_flip_t += delta
 	var t := clampf(_cup_flip_t / CUP_FLIP_DUR, 0.0, 1.0)
 	var xz_t := t * t * (3.0 - 2.0 * t)
 	var xz: Vector3 = _cup_flip_start.lerp(_cup_flip_end, xz_t)
 	var base_y := lerpf(_cup_flip_start.y, _cup_flip_end.y, t)
-	## Punchy rise, then settle — reads like a tabletop flippy-cup toss.
 	var arc := sin(t * PI)
-	var y := base_y + CUP_FLIP_PEAK * arc
-	cup_root.global_position = Vector3(xz.x, y, xz.z)
-	## Pitch forward over the arc (0.5s hold → 180°, 0.25s → 90°, 1.0s → 360°).
+	## In-air bobble — cup tumbles / wanders a bit instead of a perfect spin.
+	var bob := arc * arc
+	var bob_x2 := sin(_cup_flip_bobble_phase + t * 16.0) * 0.022 * bob
+	var bob_z2 := cos(_cup_flip_bobble_phase * 0.9 + t * 13.0) * 0.018 * bob
+	var y := base_y + CUP_FLIP_PEAK * arc + sin(t * PI * 2.0) * 0.012 * bob
+	cup_root.global_position = Vector3(xz.x + bob_x2, y, xz.z + bob_z2)
 	var spin := _cup_flip_pitch_total * (t * t * (3.0 - 2.0 * t))
 	cup_root.rotation_degrees = Vector3(
-		_cup_flip_base_rot.x + spin,
-		_cup_flip_base_rot.y,
-		_cup_flip_base_rot.z * (1.0 - t)
+		_cup_flip_base_rot.x + spin + sin(_cup_flip_bobble_phase + t * 14.0) * 22.0 * bob,
+		_cup_flip_base_rot.y + cos(_cup_flip_bobble_phase + t * 9.0) * 28.0 * bob,
+		_cup_flip_base_rot.z * (1.0 - t) + sin(t * TAU * 1.6 + _cup_flip_bobble_phase) * 34.0 * bob
 	)
 	_update_cup_slosh(delta)
 	_update_cup_pour_white(delta)
 	if t < 1.0:
 		return
-	_finish_cup_rim_flip()
+	_begin_cup_flip_settle()
 
 
 func _finish_cup_rim_flip() -> void:
 	_cup_flip_air = false
+	_cup_flip_settle = false
 	_cup_flip_charging = false
 	_cup_flip_hold_t = 0.0
 	if cup_root == null or not is_instance_valid(cup_root):
 		cup_held = false
 		return
-	var yaw := _cup_flip_base_rot.y
-	if _cup_flip_land_lid:
-		cup_root.rotation_degrees = Vector3(180.0, yaw, 0.0)
-		cup_root.global_position = Vector3(_cup_flip_end.x, _cup_flip_end.y, _cup_flip_end.z)
-		cup_root.set_meta("lid_down", true)
-		cup_root.set_meta("on_side", false)
-	elif _cup_flip_land_side:
-		cup_root.rotation_degrees = Vector3(90.0, yaw, 0.0)
-		cup_root.global_position = Vector3(_cup_flip_end.x, _cup_flip_end.y, _cup_flip_end.z)
-		cup_root.set_meta("lid_down", false)
-		cup_root.set_meta("on_side", true)
-	else:
-		cup_root.rotation_degrees = _cup_presented_rotation(cup_root)
-		cup_root.global_position = Vector3(
-			_cup_flip_end.x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, _cup_flip_end.z
-		)
-		cup_root.set_meta("lid_down", false)
-		cup_root.set_meta("on_side", false)
+	var pose := "lid" if _cup_flip_land_lid else ("side" if _cup_flip_land_side else "upright")
+	cup_root.rotation_degrees = _cup_flip_settle_to_rot
+	cup_root.global_position = Vector3(
+		_cup_flip_settle_to_pos.x,
+		_cup_flip_land_y_for_pose(pose),
+		_cup_flip_settle_to_pos.z
+	)
+	cup_root.set_meta("lid_down", pose == "lid")
+	cup_root.set_meta("on_side", pose == "side")
 	_cup_tilt = Vector2.ZERO
 	_cup_vel = Vector3.ZERO
+	if pose == "lid":
+		_flash("Rim flip!", Color("FFE082"))
+	elif pose == "side":
+		_flash("Sideways!", Color("FFCC80"))
+	else:
+		_flash("Upright bounce!", Color("B0BEC5"))
 	## Same park / melt rules as a normal put-down on steel.
 	if _is_in_warmer_zone(cup_root.global_position) or not grill_on:
 		_place_cup_on_steel()
