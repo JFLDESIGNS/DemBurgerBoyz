@@ -18680,14 +18680,16 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	area.monitorable = true
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Trunk + a bit of lower canopy — clickable without covering the grill.
-	box.size = Vector3(
-		clampf(aabb.size.x * 1.2, 0.55, 2.4),
-		clampf(aabb.size.y * 0.96, 1.8, 9.0),
-		clampf(aabb.size.z * 1.2, 0.55, 2.4)
-	)
+	## Bark AABB can sit high on some meshes — pin the click column to the ground
+	## so mid/lower trunk is hittable, not only the crown.
+	var cx := aabb.get_center().x
+	var cz := aabb.get_center().z
+	var y0 := 0.0
+	var y1 := maxf(aabb.end.y, 3.8)
+	var trunk_w := clampf(maxf(aabb.size.x, aabb.size.z) * 1.35, 0.75, 2.8)
+	box.size = Vector3(trunk_w, y1 - y0, trunk_w)
 	col.shape = box
-	col.position = aabb.get_center()
+	col.position = Vector3(cx, (y0 + y1) * 0.5, cz)
 	area.add_child(col)
 	tree.add_child(area)
 	area.set_meta("shake_tree", tree)
@@ -39659,28 +39661,30 @@ func _find_waiting_customer_at_mouth(screen_pos: Vector2, max_px: float = -1.0) 
 
 
 func _find_customer_under_click(screen_pos: Vector2) -> Node3D:
-	## Tall body pick — feet through head (not just the crown).
+	## Generous head/torso pick — click a guest through the window.
 	if camera == null or customers_root == null:
 		return null
 	var best: Node3D = null
-	var best_d := 210.0
-	## World Y offsets along the guest (feet → crown).
-	var sample_ys := [0.12, 0.35, 0.55, 0.75, 0.95, 1.15, 1.35]
+	var best_d := 130.0
 	for c in customers_root.get_children():
 		if c == null or not is_instance_valid(c):
 			continue
 		if bool(c.get("is_leaving")) or bool(c.get("is_ragdoll")):
 			continue
-		var base: Vector3 = c.global_position
-		var mid: Vector3 = base + Vector3(0.0, 0.75, 0.0)
-		if camera.is_position_behind(mid):
+		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
+		if camera.is_position_behind(torso):
 			continue
-		var d := 1.0e9
-		for sy in sample_ys:
-			var wp := base + Vector3(0.0, float(sy), 0.04)
-			d = minf(d, screen_pos.distance_to(camera.unproject_position(wp)))
+		var head: Vector3 = c.global_position + Vector3(0.0, 1.22, 0.0)
+		var face: Vector3 = c.global_position + Vector3(0.0, 1.38, 0.06)
 		if c.has_method("mouth_global"):
-			d = minf(d, screen_pos.distance_to(camera.unproject_position(c.mouth_global())))
+			face = c.mouth_global()
+		var d := mini(
+			screen_pos.distance_to(camera.unproject_position(head)),
+			mini(
+				screen_pos.distance_to(camera.unproject_position(face)),
+				screen_pos.distance_to(camera.unproject_position(torso))
+			)
+		)
 		if d < best_d:
 			best_d = d
 			best = c

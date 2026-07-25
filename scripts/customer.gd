@@ -198,6 +198,9 @@ var _antsy_phase: float = 0.0
 var _antsy_active: bool = false
 var _antsy_hands_up_active: bool = false
 var _grobble_cd: float = 0.0
+var _click_bobble_t: float = 0.0
+const CLICK_BOBBLE_SEC := 0.62
+const CLICK_BOBBLE_PHASE_SPEED := 10.5
 var _mood: String = "happy"
 var _shake_time: float = 0.0
 var _shake_amp: float = 0.0
@@ -1103,7 +1106,11 @@ func _make_speech() -> String:
 
 func _process(delta: float) -> void:
 	_bounce += delta * 3.2
-	_bobble_phase += delta * 2.4
+	var bobble_spd := 2.4
+	if _click_bobble_t > 0.0:
+		_click_bobble_t = maxf(0.0, _click_bobble_t - delta)
+		bobble_spd = CLICK_BOBBLE_PHASE_SPEED
+	_bobble_phase += delta * bobble_spd
 	_expr_t += delta
 	_home_x = target_x
 	_update_powder_blobs(delta)
@@ -1254,7 +1261,7 @@ func _process(delta: float) -> void:
 				_body.rotation_degrees.z = 0.0
 		else:
 			_play_anim("idle")
-			if _should_antsy_wait():
+			if _should_antsy_wait() and _click_bobble_t <= 0.0:
 				_apply_antsy_wait(delta)
 			else:
 				_clear_antsy_wait_pose()
@@ -1303,10 +1310,11 @@ func _update_host_driven_pose(delta: float) -> void:
 				_body.rotation_degrees.z = 0.0
 		else:
 			_play_anim("idle")
-			if _should_antsy_wait():
+			if _should_antsy_wait() and _click_bobble_t <= 0.0:
 				_apply_antsy_wait(delta)
 			else:
 				_clear_antsy_wait_pose()
+				_apply_bobble(false)
 		_animate_expression(delta)
 		return
 	if not _mp_target_valid:
@@ -1443,17 +1451,31 @@ func _refresh_patience_bar() -> void:
 func _apply_bobble(walking: bool) -> void:
 	if _body == null:
 		return
+	var click_s := clampf(_click_bobble_t / CLICK_BOBBLE_SEC, 0.0, 1.0)
 	## Idle skeleton owns the pose — only a light root bob so we don't fight the anim.
 	if _anim_player != null and _anim_player.is_playing():
 		var bob_amp := 0.01 if walking else 0.005
+		bob_amp = lerpf(bob_amp, 0.055, click_s)
 		_body.position.y = _base_body_y + sin(_bobble_phase) * bob_amp
-		_body.rotation_degrees = Vector3.ZERO
+		if click_s > 0.0:
+			_body.rotation_degrees.z = sin(_bobble_phase * 0.85) * lerpf(0.0, 10.0, click_s)
+			_body.rotation_degrees.x = cos(_bobble_phase * 0.7) * lerpf(0.0, 4.0, click_s)
+		else:
+			_body.rotation_degrees = Vector3.ZERO
 		return
 	var bob_amp2 := 0.055 if walking else 0.035
 	var sway := 4.5 if walking else 3.0
+	bob_amp2 = lerpf(bob_amp2, 0.12, click_s)
+	sway = lerpf(sway, 14.0, click_s)
 	_body.position.y = _base_body_y + sin(_bobble_phase) * bob_amp2
 	_body.rotation_degrees.z = sin(_bobble_phase * 0.85) * sway
-	_body.rotation_degrees.x = cos(_bobble_phase * 0.7) * 2.0
+	_body.rotation_degrees.x = cos(_bobble_phase * 0.7) * lerpf(2.0, 5.5, click_s)
+
+
+func bobble_click() -> void:
+	## Restartable click reaction — resets the timer, never stacks amplitude.
+	_click_bobble_t = CLICK_BOBBLE_SEC
+	_bobble_phase = 0.0
 
 
 func _update_wait_grobble(delta: float) -> void:

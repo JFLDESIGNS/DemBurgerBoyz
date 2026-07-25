@@ -1182,8 +1182,12 @@ func play_cat_purr() -> void:
 const WAWA_PATH := "res://sounds/wawawa.ogg"
 const GROBBLE_CLIP_SEC := 3.0
 const GROBBLE_FADE_IN_SEC := 0.3
+const CLICK_WAWA_CLIP_SEC := 1.15
 var _roomba_wawawa_player: AudioStreamPlayer = null
 var _roomba_wawawa_on: bool = false
+var _customer_click_wawa: AudioStreamPlayer = null
+var _customer_click_wawa_tween: Tween = null
+var _customer_click_wawa_stop_at_msec: int = 0
 const GROBBLE_PITCH := 1.293 ## prior 1.22 × +6%
 
 func play_customer_grobble(impatience: float = 0.5) -> void:
@@ -1221,6 +1225,50 @@ func play_customer_grobble(impatience: float = 0.5) -> void:
 		if is_instance_valid(p):
 			p.stop()
 			p.queue_free()
+	)
+
+
+func play_customer_wawa_click(impatience: float = 0.5) -> void:
+	## One reusable player — spam-click restarts instead of stacking voices.
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if not _cache.has("wawawa"):
+		var loaded: AudioStream = load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_cache["wawawa"] = loaded
+	var stream: AudioStream = _cache["wawawa"]
+	var length := stream.get_length()
+	var source_needed := CLICK_WAWA_CLIP_SEC * GROBBLE_PITCH
+	var max_start := maxf(0.0, length - source_needed)
+	var start_at := randf() * max_start if max_start > 0.0 else 0.0
+	var base_gain := lerpf(0.62, 0.82, clampf(impatience, 0.0, 1.0))
+	var gain := base_gain * lerpf(1.0, 1.08, clampf(impatience, 0.0, 1.0))
+	var target_db := linear_to_db(gain)
+	if _customer_click_wawa == null or not is_instance_valid(_customer_click_wawa):
+		_customer_click_wawa = AudioStreamPlayer.new()
+		_customer_click_wawa.name = "CustomerClickWawa"
+		_customer_click_wawa.bus = "Master"
+		add_child(_customer_click_wawa)
+	if _customer_click_wawa_tween != null and is_instance_valid(_customer_click_wawa_tween):
+		_customer_click_wawa_tween.kill()
+	_customer_click_wawa.stream = stream
+	_customer_click_wawa.pitch_scale = GROBBLE_PITCH
+	_customer_click_wawa.volume_db = -80.0
+	_customer_click_wawa.stop()
+	_customer_click_wawa.play(start_at)
+	_customer_click_wawa_tween = create_tween()
+	_customer_click_wawa_tween.tween_property(_customer_click_wawa, "volume_db", target_db, GROBBLE_FADE_IN_SEC)
+	_customer_click_wawa_stop_at_msec = Time.get_ticks_msec() + int(CLICK_WAWA_CLIP_SEC * 1000.0)
+	var stop_token := _customer_click_wawa_stop_at_msec
+	var tree := get_tree()
+	if tree == null:
+		return
+	tree.create_timer(CLICK_WAWA_CLIP_SEC).timeout.connect(func():
+		if stop_token != _customer_click_wawa_stop_at_msec:
+			return
+		if _customer_click_wawa != null and is_instance_valid(_customer_click_wawa):
+			_customer_click_wawa.stop()
 	)
 
 
