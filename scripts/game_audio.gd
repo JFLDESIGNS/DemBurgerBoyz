@@ -677,6 +677,13 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 	if not moving:
 		_scrape_ting_cool = 0.0
 		_scrape_debris_boost = false
+		## Snap the metal slide bed off with scrape — don't leave a stuck loop after LMB up.
+		_slide_target = 0.0
+		_slide_gain = 0.0
+		if _slide_player != null and _slide_player.playing:
+			_slide_player.stop()
+			_slide_player.volume_db = -80.0
+			_slide_player.pitch_scale = 1.0
 	_sync_shaker_rattle()
 
 

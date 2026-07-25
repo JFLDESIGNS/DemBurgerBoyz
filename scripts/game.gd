@@ -3048,6 +3048,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					spatula_grill_hold_last_xz = Vector2.INF
 					spatula_grill_hold_on_meat = false
 					_spatula_pull_flip_done = false
+					_stop_spatula_grill_scrape_audio()
 					_begin_patty_drag(under_burger)
 				else:
 					## Supplement: empty-steel hold scrapes and tip-pushes nearby burgers.
@@ -3198,10 +3199,7 @@ func _input(event: InputEvent) -> void:
 			spatula_grill_hold_on_meat = false
 			_spatula_pull_flip_done = false
 			_spatula_mute_ting = false
-			if game_audio and game_audio.has_method("set_grill_scrape"):
-				game_audio.set_grill_scrape(false)
-			elif game_audio and game_audio.has_method("set_scrape_debris_rattle"):
-				game_audio.set_scrape_debris_rattle(false)
+			_stop_spatula_grill_scrape_audio()
 			## Fall through so an active burger drag still ends (tap smash / slide release).
 		if dragging_patty != null:
 			_end_patty_drag()
@@ -5394,10 +5392,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		spatula_grill_hold_on_meat = false
 		_spatula_pull_flip_done = false
 		_spatula_mute_ting = false
-		if game_audio and game_audio.has_method("set_grill_scrape"):
-			game_audio.set_grill_scrape(false)
-		elif game_audio and game_audio.has_method("set_scrape_debris_rattle"):
-			game_audio.set_scrape_debris_rattle(false)
+		_stop_spatula_grill_scrape_audio()
 	var show := _should_show_hand_spatula(mouse) or animating or dragging or grill_hold
 	hand_spatula_root.visible = show
 	## Keep the glove pointer even while the 3D spatula is out.
@@ -8927,11 +8922,24 @@ func _find_residue_slot_for_spot(at: Vector3) -> int:
 	return best_free
 
 
+func _stop_spatula_grill_scrape_audio() -> void:
+	## Always kill scrape bed + slide loop together — release used to leave slide stuck on.
+	if game_audio == null:
+		return
+	if game_audio.has_method("set_slide_moving"):
+		game_audio.set_slide_moving(false)
+	if game_audio.has_method("set_grill_scrape"):
+		game_audio.set_grill_scrape(false)
+	elif game_audio.has_method("set_scrape_debris_rattle"):
+		game_audio.set_scrape_debris_rattle(false)
+
+
 func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	## Empty-steel spatula hold scrapes residue (not while dragging a burger).
 	## Only the single nearest stain under the tip — never neighboring pads.
 	## Target: ~2 seconds of tip-on-stain to clear a pad.
 	if tip_pos == Vector3.ZERO:
+		_stop_spatula_grill_scrape_audio()
 		return
 	var prev := spatula_grill_hold_last_xz
 	var cur := Vector2(tip_pos.x, tip_pos.z)
