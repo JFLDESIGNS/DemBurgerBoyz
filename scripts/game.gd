@@ -474,7 +474,7 @@ var shaker_area: Area3D = null
 var shaker_visual: Node3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(1.526, 2.14, 1.12)
+var shaker_home: Vector3 = Vector3(1.526, 2.0384, 1.12) ## −4" from prior 2.14
 var shaker_season_cool: float = 0.0
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
@@ -1388,8 +1388,8 @@ const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
 const CUP_ICE_STACK_MAX := 36
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
-## Soft-serve — camera-left of the service window (same depth as before; mirrored off soda side).
-const ICECREAM_STATION_POS := Vector3(0.86, 1.19, 0.647)
+## Soft-serve — camera-left toward the fire extinguisher (same depth/height; +4ft from prior 0.86).
+const ICECREAM_STATION_POS := Vector3(2.079, 1.19, 0.647)
 const ICECREAM_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const ICECREAM_CONE_COLLISION_LAYER := 16384
 const ICECREAM_CONE_H := 0.151
@@ -12878,7 +12878,7 @@ func _build_wire_brush() -> void:
 
 func _build_season_shaker() -> void:
 	## Seasoning hanging next to the oil bottle on the far-left window beam.
-	shaker_home = Vector3(1.526, 2.14, 1.12)
+	shaker_home = Vector3(1.526, 2.0384, 1.12) ## −4" from prior 2.14
 	if shaker_root != null and is_instance_valid(shaker_root):
 		shaker_root.queue_free()
 	shaker_root = null
@@ -14540,7 +14540,7 @@ func _clear_ext_powder_blobs() -> void:
 
 
 func _end_oil_trail_fire_burnout() -> void:
-	## Grease finished burning on its own — snuff flames, leave leftover oil.
+	## Grease finished burning on its own — snuff flames, leave scrapable crust.
 	if not grill_on_fire:
 		return
 	grill_on_fire = false
@@ -14550,10 +14550,30 @@ func _end_oil_trail_fire_burnout() -> void:
 	_oil_fire_trail_mode = false
 	_oil_fire_spread_cool = 0.0
 	_set_fire_fx_emitting(false)
+	## Convert burned grease into scrape-off residue, then clear the wet oil.
+	var keep: Array = []
 	for item in oil_slicks:
-		item["on_fire"] = false
-		_set_oil_slick_burn_visual(item, false, null, 0.0)
-	_flash("Grease burned off the steel.", Color("B0BEC5"))
+		var mesh = item.get("mesh")
+		if mesh != null and is_instance_valid(mesh):
+			_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
+			mesh.queue_free()
+		else:
+			keep.append(item)
+	oil_slicks = keep
+	_flash("Grease burned off — scrape the crust!", Color("B0BEC5"))
+
+
+func _leave_oil_burn_residue_at(pos: Vector3, radius: float) -> void:
+	## Scrapable black crust left after oil cooks / burns off the steel.
+	var at := Vector3(pos.x, GRILL_SURFACE_Y + 0.028, pos.z)
+	var slot := _find_residue_slot_for_spot(at)
+	if slot < 0:
+		return
+	var amt := clampf(0.62 + radius * 3.5, 0.62, 1.0)
+	if mp_enabled and not _mp_applying:
+		mp_residue_leave.rpc(slot, at.x, at.z, false, "patty", amt)
+		return
+	_leave_grill_residue_local(slot, at, false, "patty", amt)
 
 
 func _extinguish_grill_fire() -> void:
@@ -14745,13 +14765,17 @@ func _update_oil_slicks(delta: float) -> void:
 		var mesh = item.get("mesh")
 		var life := float(item["life"])
 		var age := float(item["age"])
+		var lit := _oil_slick_is_lit(item)
 		if mesh == null or not is_instance_valid(mesh) or age >= life:
+			## Burning / heavily cooked grease leaves scrapable crust behind.
 			if mesh != null and is_instance_valid(mesh):
+				var burn_done := clampf(age / maxf(life, 0.001), 0.0, 1.0)
+				if lit or burn_done >= 0.55 or bool(item.get("on_fire", false)):
+					_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
 				mesh.queue_free()
 			oil_slicks.remove_at(i)
 			continue
 		var burn := clampf(age / life, 0.0, 1.0)
-		var lit := _oil_slick_is_lit(item)
 		var mat := mesh.material_override as StandardMaterial3D
 		if mat and not lit:
 			## Lit slicks get color/texture from the fire flicker pass.
