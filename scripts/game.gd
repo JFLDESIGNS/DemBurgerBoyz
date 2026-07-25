@@ -1457,6 +1457,12 @@ const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
 const CUP_FOLLOW_RATE := 8.5 ## hand follow (empty); full drinks feel heavier — eased vs prior 15
 const CUP_FOLLOW_MAX_SPEED := 1.55 ## m/s cap so cursor flicks don't teleport the cup
+## Soft spout attach — seat under nozzle without yanking the cup into the air.
+const CUP_FILL_FOLLOW_RATE := 12.0
+const CUP_FILL_FOLLOW_MAX_SPEED := 1.05
+const CUP_FILL_MAX_HEIGHT := 0.09 ## cup base max above grill while filling
+const CUP_FILL_RIM_GAP := 0.11 ## tip→rim clearance (keeps seat lower)
+const CUP_FILL_FORWARD := 0.07 ## seat toward cook from spout tip (fixes inset offset)
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
 const CUP_TILT_FROM_VEL := 24.0 ## degrees per m/s — was 48; much less tip while moving
@@ -24465,6 +24471,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	var lock_acquire := 0.16
 	var lock_release := 0.24
 	var lock_tight := 0.052
+	var max_y := GRILL_SURFACE_Y + CUP_FILL_MAX_HEIGHT
 	var candidates: Array[Node3D] = []
 	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
 		candidates.append(soda_spout_marker)
@@ -24483,11 +24490,17 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
 		if locked_d <= lock_release:
+			## Soft attach: firm XZ seat under the nozzle, gentler Y so it doesn't hop.
 			var tight := clampf(1.0 - locked_d / lock_release, 0.0, 1.0)
-			var pull := lerpf(0.48, 0.72, tight * tight)
+			var pull_xz := lerpf(0.78, 0.96, tight * tight)
 			if locked_d <= lock_tight:
-				pull = 0.82
-			return hit.lerp(locked_target, pull)
+				pull_xz = 0.98
+			var out := hit
+			out.x = lerpf(hit.x, locked_target.x, pull_xz)
+			out.z = lerpf(hit.z, locked_target.z, pull_xz)
+			out.y = lerpf(hold_y, locked_target.y, lerpf(0.28, 0.62, tight))
+			out.y = minf(out.y, max_y)
+			return out
 		_cup_spout_lock = null
 
 	var best_node: Node3D = null
@@ -24505,16 +24518,26 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	if best_d <= lock_acquire:
 		_cup_spout_lock = best_node
 	var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0)
-	pull = pull * pull * 0.38
-	var out := hit.lerp(best_target, pull)
-	out.y = lerpf(hold_y, best_target.y, pull)
-	return out
+	pull = pull * pull
+	var out2 := hit
+	out2.x = lerpf(hit.x, best_target.x, pull * 0.55)
+	out2.z = lerpf(hit.z, best_target.z, pull * 0.55)
+	out2.y = lerpf(hold_y, best_target.y, pull * 0.32)
+	out2.y = minf(out2.y, max_y)
+	return out2
 
 
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
+	## Fill seat: under the pour tip, nudged toward the cook, height-capped.
 	var tip_p := tip.global_position
-	var fill_y := tip_p.y - CUP_SHELL_H - 0.06 ## rim ~6cm under the pour tip
-	return Vector3(tip_p.x, fill_y, tip_p.z)
+	var face := _cup_soda_face_dir()
+	var fill_y := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP
+	fill_y = minf(fill_y, GRILL_SURFACE_Y + CUP_FILL_MAX_HEIGHT)
+	## Don't seat below the normal hand plane — keeps the lerp from diving.
+	fill_y = maxf(fill_y, GRILL_SURFACE_Y + CUP_HOLD_HEIGHT)
+	var seat := tip_p + face * CUP_FILL_FORWARD
+	seat.y = fill_y
+	return seat
 
 
 func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
@@ -24552,14 +24575,17 @@ func _update_held_cup(delta: float) -> void:
 		var prev := cup_root.global_position
 		## Weight: fuller drinks lag the cursor a bit — empties stay snappy.
 		var heavy := lerpf(1.0, 0.55, clampf(cup_soda_fill, 0.0, 1.0))
-		var follow := clampf(delta * CUP_FOLLOW_RATE * heavy, 0.0, 1.0)
+		var follow_rate := CUP_FILL_FOLLOW_RATE if can_use_fill_bay else CUP_FOLLOW_RATE * heavy
+		var follow := clampf(delta * follow_rate, 0.0, 1.0)
 		if _cup_spout_unlock_grace > 0.0:
 			follow *= 0.42
 		## Smoothstep ease so motion eases in/out instead of hard lerps.
 		follow = follow * follow * (3.0 - 2.0 * follow)
 		var desired := prev.lerp(seat, follow)
+		if can_use_fill_bay:
+			desired.y = minf(desired.y, GRILL_SURFACE_Y + CUP_FILL_MAX_HEIGHT)
 		var step := desired - prev
-		var max_step := CUP_FOLLOW_MAX_SPEED * delta
+		var max_step := (CUP_FILL_FOLLOW_MAX_SPEED if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
 			desired = prev + step.normalized() * max_step
 		cup_root.global_position = desired
@@ -24586,8 +24612,14 @@ func _update_held_cup(delta: float) -> void:
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
 	## Tip lifts the base so a leaned cup doesn't dig through the drip tray.
-	var tip_amt := (absf(_cup_tilt.x) + absf(_cup_tilt.y)) / maxf(CUP_TILT_MAX, 1.0)
-	cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.55)
+	## Skip while filling — that lift was boosting the cup way too high under the spout.
+	if not can_use_fill_bay:
+		var tip_amt := (absf(_cup_tilt.x) + absf(_cup_tilt.y)) / maxf(CUP_TILT_MAX, 1.0)
+		cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.55)
+	else:
+		cup_root.global_position.y = minf(
+			cup_root.global_position.y, GRILL_SURFACE_Y + CUP_FILL_MAX_HEIGHT
+		)
 	## Soft wall resolve — ease corrections so it doesn't stutter on the metal.
 	if _cup_machine_contact_grace <= 0.0 or can_reach_customer or can_use_fill_bay:
 		var before_resolve := cup_root.global_position
