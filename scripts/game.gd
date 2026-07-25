@@ -43,8 +43,8 @@ const GRILL_PIANO_LEFT_MIDI := 60 ## C4 — leftmost strip (screen-left)
 const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
 const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
 const GRILL_PIANO_KEY_90 := 7 ## ±90° → G
-## Display-only: ting sample reads ~3 semis flat vs mapped MIDI (C4 sounds as A3).
-const GRILL_PIANO_LABEL_SEMITONE_OFFSET := -3
+## Display-only: side-tap ting reads ~4 semis sharp vs mapped MIDI (E4 sounds as G#4).
+const GRILL_PIANO_LABEL_SEMITONE_OFFSET := 4
 const GRILL_PIANO_NOTE_NAMES: Array[String] = [
 	"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
 ]
@@ -4504,7 +4504,7 @@ func _spatula_roll_midi_offset() -> int:
 
 
 func _spatula_roll_key_name() -> String:
-	## Banner shows sounding key (mapped C/F/G minus label offset → A/D/E).
+	## Banner shows sounding key (mapped C/F/G + label offset → E/A/B).
 	var mapped := 0
 	match _spatula_roll_midi_offset():
 		GRILL_PIANO_KEY_90:
