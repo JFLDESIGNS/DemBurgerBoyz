@@ -101,6 +101,7 @@ var _hot_oil_fade_left: float = 0.0
 const HOT_OIL_FADE_SEC := 2.0
 var _hot_oil_pop_cd: float = 0.0
 var _hot_oil_was_active: bool = false
+var _hot_oil_volume_mul: float = 1.0 ## 1 = full fry; ice-water spots use 0.5
 ## Fountain soda pour — continuous dispenser static.
 var _soda_player: AudioStreamPlayer
 var _soda_gen: AudioStreamGenerator
@@ -341,6 +342,7 @@ func _process(delta: float) -> void:
 	## Hot oil on lit steel — loud fry for the full window, then a 2s die-out.
 	var oil_active := _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0
 	var oil_fade_t := 1.0 ## 1 = full blast, 0 = silent
+	var vol_mul := clampf(_hot_oil_volume_mul, 0.05, 1.0)
 	if _hot_oil_full_left > 0.0:
 		_hot_oil_full_left = maxf(0.0, _hot_oil_full_left - delta)
 		_hot_oil_was_active = true
@@ -349,15 +351,17 @@ func _process(delta: float) -> void:
 		if _hot_oil_full_left <= 0.0:
 			_hot_oil_fade_left = HOT_OIL_FADE_SEC
 		if _sizzle_player != null:
-			_sizzle_player.volume_db = -3.5
+			_sizzle_player.volume_db = linear_to_db(db_to_linear(-3.5) * vol_mul)
 			if not _sizzle_player.playing:
 				_sizzle_player.play()
 		_hot_oil_pop_cd -= delta
 		if _hot_oil_pop_cd <= 0.0:
-			play_grease_pop(true)
-			if randf() < 0.55:
+			## Soften pop cluster when volume is dialed down (ice water).
+			if vol_mul >= 0.85 or randf() < vol_mul:
 				play_grease_pop(true)
-			_hot_oil_pop_cd = 0.028 + randf() * 0.045
+			if vol_mul >= 0.85 and randf() < 0.55:
+				play_grease_pop(true)
+			_hot_oil_pop_cd = lerpf(0.06, 0.028, vol_mul) + randf() * 0.045
 	elif _hot_oil_fade_left > 0.0:
 		_hot_oil_fade_left = maxf(0.0, _hot_oil_fade_left - delta)
 		_hot_oil_was_active = true
@@ -365,16 +369,18 @@ func _process(delta: float) -> void:
 		oil_fade_t = clampf(_hot_oil_fade_left / HOT_OIL_FADE_SEC, 0.0, 1.0)
 		if _sizzle_player != null:
 			## Soft linear die-out over the fade window.
-			_sizzle_player.volume_db = lerpf(-42.0, -6.0, oil_fade_t)
+			var fade_db := lerpf(-42.0, -6.0, oil_fade_t)
+			_sizzle_player.volume_db = linear_to_db(db_to_linear(fade_db) * vol_mul)
 			if not _sizzle_player.playing:
 				_sizzle_player.play()
 		_hot_oil_pop_cd -= delta
 		if _hot_oil_pop_cd <= 0.0 and oil_fade_t > 0.08:
-			if randf() < oil_fade_t:
+			if randf() < oil_fade_t * vol_mul:
 				play_grease_pop(true)
 			_hot_oil_pop_cd = lerpf(0.14, 0.04, oil_fade_t) + randf() * 0.05
 	elif _hot_oil_was_active:
 		_hot_oil_was_active = false
+		_hot_oil_volume_mul = 1.0
 		if _sizzle_on and _sizzle_player != null:
 			_sizzle_player.volume_db = lerpf(-18.0, -12.0, clampf(_sizzle_intensity, 0.0, 1.0))
 	if _sizzle_on and _sizzle_player != null and _sizzle_player.playing:
@@ -383,15 +389,15 @@ func _process(delta: float) -> void:
 			var t := clampf(_sizzle_intensity, 0.0, 1.0)
 			var oil_mul := 1.0
 			if oil_active:
-				oil_mul = lerpf(1.0, 2.4, oil_fade_t)
+				oil_mul = lerpf(1.0, 2.4, oil_fade_t) * vol_mul
 				t = maxf(t, oil_fade_t)
 			## Quieter static bed (50%); crackles stay full strength.
 			var bed_gain := lerpf(0.06, 0.1, t) * oil_mul
-			var pop_chance_boost := lerpf(1.0, 1.6, t) * lerpf(1.0, 3.2, oil_fade_t if oil_active else 0.0)
+			var pop_chance_boost := lerpf(1.0, 1.6, t) * lerpf(1.0, 3.2, oil_fade_t if oil_active else 0.0) * vol_mul
 			while playback.get_frames_available() > 0:
 				var sample := _next_sizzle_sample(bed_gain, pop_chance_boost)
 				if oil_active:
-					sample = clampf(sample * lerpf(1.0, 1.55, oil_fade_t), -1.0, 1.0)
+					sample = clampf(sample * lerpf(1.0, 1.55, oil_fade_t) * vol_mul, -1.0, 1.0)
 				playback.push_frame(Vector2(sample, sample))
 	if _hiss_on and _hiss_player != null and _hiss_player.playing:
 		var hp := _hiss_player.get_stream_playback() as AudioStreamGeneratorPlayback
@@ -591,15 +597,22 @@ func is_hot_oil_bursting() -> bool:
 	return _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0
 
 
-func trigger_hot_oil(duration: float = 3.0) -> void:
-	## Oil hits a hot grill — loud fry for `duration`, then a 2s soft die-out.
+func trigger_hot_oil(duration: float = 3.0, volume_mul: float = 1.0) -> void:
+	## Oil hits a hot grill — fry for `duration`, then a 2s soft die-out.
+	## `volume_mul` 0.5 = half loud (ice-water spots); full oil keeps 1.0.
 	var starting := _hot_oil_full_left <= 0.05 and _hot_oil_fade_left <= 0.05
+	var v := clampf(volume_mul, 0.05, 1.0)
+	## Never quiet a louder burst already in progress.
+	if _hot_oil_full_left > 0.05 or _hot_oil_fade_left > 0.05:
+		_hot_oil_volume_mul = maxf(_hot_oil_volume_mul, v)
+	else:
+		_hot_oil_volume_mul = v
 	_hot_oil_full_left = maxf(_hot_oil_full_left, duration)
 	_hot_oil_fade_left = 0.0 ## re-hit cancels an in-progress fade
 	_sizzle_on = true
-	_sizzle_intensity = maxf(_sizzle_intensity, 0.95)
+	_sizzle_intensity = maxf(_sizzle_intensity, 0.95 * _hot_oil_volume_mul)
 	if _sizzle_player != null:
-		_sizzle_player.volume_db = -3.5
+		_sizzle_player.volume_db = linear_to_db(db_to_linear(-3.5) * _hot_oil_volume_mul)
 		if not _sizzle_player.playing:
 			_sizzle_player.play()
 	## Kill idle hiss under the burst so the fry reads clearly.
@@ -607,10 +620,12 @@ func trigger_hot_oil(duration: float = 3.0) -> void:
 		_hiss_on = false
 		_hiss_player.stop()
 	if starting:
-		play_hot_oil_hit()
+		if _hot_oil_volume_mul >= 0.85:
+			play_hot_oil_hit()
 		_hot_oil_pop_cd = 0.0
-		## Immediate pop cluster on contact.
-		for _i in 4:
+		## Immediate pop cluster on contact (softer when volume is dialed down).
+		var pops := 4 if _hot_oil_volume_mul >= 0.85 else 2
+		for _i in pops:
 			play_grease_pop(true)
 
 

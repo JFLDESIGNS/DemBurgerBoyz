@@ -866,6 +866,8 @@ var burnt_icecream_cone_puddle: Node3D = null
 ## Fryer machine — unlockable phone equipment.
 var fryer_root: Node3D = null
 var fryer_label: Label3D = null
+var _world_hint_fade_t: float = 0.0
+var ice_melt_water_spots: Array = [] ## {mesh, mat, smoke, age, base_a, rad}
 var fryer_baskets: Array = []
 var fryer_held_index: int = -1
 ## Burgerpack try2 inspect gallery on the grill — pick up props to look at them.
@@ -1359,10 +1361,14 @@ const BUILD_HIT_PAD_RIGHT := 10.0
 const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
 ## Screen nudge on the cutting-board Label3D (+X right, +Y down).
-const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(20.0, 20.0)
+const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(30.0, 20.0) ## was 20,20 — +10px right
 ## Shared Luckiest Guy world hints (DRAG PATTY HERE + fryer) — 1.5× prior board size.
 const WORLD_HINT_FONT_SIZE := 84
 const WORLD_HINT_WORLD_H := 0.0255
+const WORLD_HINT_OUTLINE := 10 ## black stroke
+const WORLD_HINT_ALPHA := 0.70 ## base opacity
+const WORLD_HINT_FADE_MIN := 0.36 ## bottom of soothing breathe
+const WORLD_HINT_FADE_HZ := 0.22 ## slow in/out pulse
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -1526,7 +1532,7 @@ const BURGERPACK_HELD_SCALE := 1.55
 const BURGERPACK_SIT_Y := 0.045 ## Sit on top of steel panels (panel half-height ~0.0225).
 const FRY_BASKET_COOK_SEC := 5.0
 const FRYER_DONE_POP_Y := 0.18 ## lift above oil surface when cook finishes
-const FRYER_HINT_SCREEN_NUDGE := Vector2(0.0, 30.0)
+const FRYER_HINT_SCREEN_NUDGE := Vector2(10.0, 30.0) ## +10px right (was 0,30)
 const FRY_BASKET_SHAKE_NEED := 1.5
 ## Smoke cylinders under a dunked basket — ~15% larger than burger flip smoke.
 const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
@@ -2572,6 +2578,7 @@ func _process(delta: float) -> void:
 		_update_hand_spatula_cursor(delta)
 		return
 	_update_tutorial_hint_cycle(delta)
+	_update_world_hint_fades(delta)
 	## Options / Pause freeze the shift clock / cook sim until Resume / Esc.
 	if options_menu_open or shift_paused:
 		if game_audio:
@@ -2670,6 +2677,7 @@ func _process(delta: float) -> void:
 	_update_oil_slicks(delta)
 	_update_soda_slicks(delta)
 	_update_soda_char_spots(delta)
+	_update_ice_melt_water_spots(delta)
 	_update_melting_cups(delta)
 	_update_melting_icecreams(delta)
 	_update_smoke2_grill_spin(delta)
@@ -15284,6 +15292,17 @@ func _clear_oil_slicks() -> void:
 	_clear_soda_slicks()
 	_clear_soda_char_spots()
 	_clear_melting_cups()
+	_clear_ice_melt_water_spots()
+
+
+func _clear_ice_melt_water_spots() -> void:
+	for item in ice_melt_water_spots:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var mesh = item.get("mesh")
+		if mesh != null and is_instance_valid(mesh):
+			mesh.queue_free()
+	ice_melt_water_spots.clear()
 
 
 func _get_soda_blob_texture() -> ImageTexture:
@@ -20471,17 +20490,13 @@ func _build_fryer_machine() -> void:
 	label.name = "FryerHint"
 	label.text = "click basket to add potatoes"
 	label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
-	label.modulate = Color(1.0, 0.92, 0.22, 1.0)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.fixed_size = true
-	## Match DRAG PATTY HERE — Luckiest Guy, same world size.
-	UiFontsScript.apply_luckiest_label3d(label, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, 0)
-	label.outline_size = 0
-	label.outline_modulate = Color(0, 0, 0, 0)
-	label.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+	## Match DRAG PATTY HERE — Luckiest Guy, stroke, 70% alpha, soft fade.
+	_style_world_hint_label(label)
 	root.add_child(label)
 	fryer_label = label
 	call_deferred("_nudge_fryer_hint_down")
@@ -27563,7 +27578,8 @@ func _spawn_ice_melt_water_spot(at: Vector3) -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_texture = _get_oil_blob_texture()
 	## Clear wet shine — water, not soda syrup.
-	mat.albedo_color = Color(0.72, 0.88, 1.0, 0.55)
+	var base_a := 0.55
+	mat.albedo_color = Color(0.72, 0.88, 1.0, base_a)
 	mat.metallic = 0.92
 	mat.roughness = 0.04
 	mat.clearcoat_enabled = true
@@ -27577,20 +27593,88 @@ func _spawn_ice_melt_water_spot(at: Vector3) -> void:
 	mat.render_priority = 5
 	slick.material_override = mat
 	grill_root.add_child(slick)
-	## Spread slightly, linger, then evaporate.
+	## Subtle steam while it sits / fries on hot steel.
+	var smoke := _make_oil_burn_smoke(rad * 0.85)
+	smoke.amount = 10
+	smoke.lifetime = 1.1
+	smoke.position = Vector3(0.0, 0.04, 0.0)
+	slick.add_child(smoke)
+	smoke.emitting = grill_on
+	smoke.amount_ratio = 0.45 if grill_on else 0.0
+	## Quick settle spread; hot-grill life is driven in _update_ice_melt_water_spots.
 	slick.scale = Vector3(0.35, 1.0, 0.35)
-	var life := randf_range(6.5, 11.0)
 	var tw := create_tween()
-	tw.tween_property(slick, "scale", Vector3(1.0, 1.0, 1.0), 0.45) \
+	tw.tween_property(slick, "scale", Vector3(1.0, 1.0, 1.0), 0.35) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_interval(life)
-	tw.tween_property(mat, "albedo_color:a", 0.0, 1.4).set_trans(Tween.TRANS_SINE)
-	tw.parallel().tween_property(mat, "emission_energy_multiplier", 0.0, 1.4)
-	tw.parallel().tween_property(slick, "scale", Vector3(1.25, 1.0, 1.25), 1.4)
-	tw.tween_callback(func() -> void:
-		if is_instance_valid(slick):
-			slick.queue_free()
-	)
+	ice_melt_water_spots.append({
+		"mesh": slick,
+		"mat": mat,
+		"smoke": smoke,
+		"age": 0.0,
+		"base_a": base_a,
+		"rad": rad,
+		"hot_age": 0.0, ## only advances while grill_on
+	})
+	if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
+		## Quiet fry bed while water burns off (50% volume).
+		game_audio.trigger_hot_oil(3.0, 0.5)
+
+
+func _update_ice_melt_water_spots(delta: float) -> void:
+	## Hot steel: 2s full alpha, then 1s fade to 0. Cold: linger until burner lights.
+	const HOT_FULL_SEC := 2.0
+	const HOT_FADE_SEC := 1.0
+	const HOT_LIFE := HOT_FULL_SEC + HOT_FADE_SEC
+	var any_hot := false
+	var i := 0
+	while i < ice_melt_water_spots.size():
+		var item: Dictionary = ice_melt_water_spots[i]
+		var mesh: MeshInstance3D = item.get("mesh") as MeshInstance3D
+		var mat: StandardMaterial3D = item.get("mat") as StandardMaterial3D
+		var smoke = item.get("smoke")
+		if mesh == null or not is_instance_valid(mesh) or mat == null or not is_instance_valid(mat):
+			if smoke != null and is_instance_valid(smoke):
+				(smoke as Node).queue_free()
+			ice_melt_water_spots.remove_at(i)
+			continue
+		item["age"] = float(item.get("age", 0.0)) + delta
+		if grill_on:
+			any_hot = true
+			var hot_age := float(item.get("hot_age", 0.0)) + delta
+			item["hot_age"] = hot_age
+			var a_mul := 1.0
+			if hot_age > HOT_FULL_SEC:
+				a_mul = 1.0 - clampf((hot_age - HOT_FULL_SEC) / HOT_FADE_SEC, 0.0, 1.0)
+			var base_a := float(item.get("base_a", 0.55))
+			var col := mat.albedo_color
+			col.a = base_a * a_mul
+			mat.albedo_color = col
+			mat.emission_energy_multiplier = 0.22 * a_mul
+			if smoke != null and is_instance_valid(smoke):
+				var sm := smoke as GPUParticles3D
+				sm.emitting = a_mul > 0.05
+				sm.amount_ratio = 0.35 * a_mul
+			if hot_age >= HOT_LIFE:
+				if smoke != null and is_instance_valid(smoke):
+					(smoke as Node).queue_free()
+				mesh.queue_free()
+				ice_melt_water_spots.remove_at(i)
+				continue
+			## Soft shrink as it evaporates in the fade window.
+			if a_mul < 1.0:
+				var s := lerpf(1.0, 1.18, 1.0 - a_mul)
+				mesh.scale = Vector3(s, 1.0, s)
+		else:
+			## Cold steel — keep the shine; no steam / no fry clock.
+			if smoke != null and is_instance_valid(smoke):
+				var sm2 := smoke as GPUParticles3D
+				sm2.emitting = false
+				sm2.amount_ratio = 0.0
+		ice_melt_water_spots[i] = item
+		i += 1
+	## Keep a half-volume fry bed alive while any hot water spots are burning.
+	if any_hot and game_audio and game_audio.has_method("trigger_hot_oil"):
+		game_audio.trigger_hot_oil(0.35, 0.5)
 
 
 func _make_ice_cube_material() -> StandardMaterial3D:
@@ -29338,6 +29422,30 @@ func _build_smoke2_grill_props() -> void:
 	print("[Smoke2] smoke+alpha on grill · double-sided · 50%% transparent · CCW spin")
 
 
+func _style_world_hint_label(lab: Label3D) -> void:
+	## Shared look: Luckiest Guy + black stroke + 70% opacity (fade applied live).
+	UiFontsScript.apply_luckiest_label3d(lab, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, WORLD_HINT_OUTLINE)
+	lab.outline_size = WORLD_HINT_OUTLINE
+	lab.outline_modulate = Color(0.0, 0.0, 0.0, WORLD_HINT_ALPHA)
+	lab.modulate = Color(1.0, 0.92, 0.22, WORLD_HINT_ALPHA)
+	lab.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+
+
+func _update_world_hint_fades(delta: float) -> void:
+	## Soft sine breathe on board + fryer hints — soothing in/out.
+	_world_hint_fade_t += delta
+	var breathe := 0.5 + 0.5 * sin(_world_hint_fade_t * TAU * WORLD_HINT_FADE_HZ)
+	var a := lerpf(WORLD_HINT_FADE_MIN, WORLD_HINT_ALPHA, breathe)
+	for lab in [build_board_hint_label, fryer_label]:
+		var hint := lab as Label3D
+		if hint == null or not is_instance_valid(hint) or not hint.visible:
+			continue
+		var c: Color = hint.modulate
+		c.a = a
+		hint.modulate = c
+		hint.outline_modulate = Color(0.0, 0.0, 0.0, a)
+
+
 func _build_board_hint_label() -> void:
 	if build_board_hint_label != null and is_instance_valid(build_board_hint_label):
 		build_board_hint_label.queue_free()
@@ -29347,17 +29455,12 @@ func _build_board_hint_label() -> void:
 	var lab := Label3D.new()
 	lab.name = "BuildBoardHint"
 	lab.text = BUILD_TITLE_TEXT
-	lab.modulate = Color(1.0, 0.92, 0.22, 1.0)
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.no_depth_test = true
 	lab.fixed_size = true
-	## No outline — Label3D stroke fills counters on chunky fonts.
-	UiFontsScript.apply_luckiest_label3d(lab, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, 0)
-	lab.outline_size = 0
-	lab.outline_modulate = Color(0, 0, 0, 0)
-	lab.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+	_style_world_hint_label(lab)
 	lab.position = Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.05)
 	lab.visible = true
 	build_cutting_board.add_child(lab)
