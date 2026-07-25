@@ -844,7 +844,7 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 		return
 	var p_i := clampi(pad, 0, 4)
 	var v := clampi(voice, 0, 2)
-	var key := "hold_kit_v3_%d_%d" % [v, p_i]
+	var key := "hold_kit_v4_%d_%d" % [v, p_i]
 	if not _cache.has(key):
 		match v:
 			1:
@@ -858,13 +858,13 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	p.stream = _cache[key]
 	p.pitch_scale = 1.0
 	## Flat drums stay under the piano; hats sit a touch brighter.
-	var base_gain := (0.58 if v == 0 else 0.64) * maxf(0.0, volume_scale)
+	var base_gain := (0.55 if v == 0 else 0.62) * maxf(0.0, volume_scale)
 	p.volume_db = linear_to_db(base_gain)
 	p.play()
-	## Soft steel sparkle only on the flat drum body (hats already have metal).
-	if v == 0:
-		var ting_midi := int(round(lerpf(74.0, 68.0, float(p_i) / 4.0)))
-		play_spatula_ting(ting_midi, 0.22 * maxf(0.0, volume_scale))
+	## Louder tin / steel layer so HOLD hits still read as metal spatula on grill.
+	var ting_midi := int(round(lerpf(76.0, 69.0, float(p_i) / 4.0)))
+	var ting_vol := 0.72 if v == 0 else (0.48 if v == 1 else 0.40)
+	play_spatula_ting(ting_midi, ting_vol * maxf(0.0, volume_scale))
 
 
 func _load_tinggrill_stream() -> AudioStream:
@@ -1544,15 +1544,22 @@ func _make_hold_drum(pad: int) -> AudioStreamWAV:
 			var a := t / 0.0014
 			env_body *= a
 			env_click *= a
-		var body := sin(phase) * 0.62 + sin(phase * 1.5) * 0.18 * exp(-t * 20.0)
+		var body := sin(phase) * 0.55 + sin(phase * 1.5) * 0.16 * exp(-t * 20.0)
 		## Beater / stick click — short filtered noise + mid tick.
 		var click := (
-			(rng.randf() * 2.0 - 1.0) * 0.42
-			+ sin(t * lerpf(2600.0, 1800.0, p) * TAU) * 0.28
+			(rng.randf() * 2.0 - 1.0) * 0.38
+			+ sin(t * lerpf(2600.0, 1800.0, p) * TAU) * 0.26
 		) * env_click
 		## Soft sub thump under the body.
-		var sub := sin(t * f_end * 0.5 * TAU) * 0.22 * exp(-t * 8.0)
-		var wave := (body * env_body + click + sub) * 0.92
+		var sub := sin(t * f_end * 0.5 * TAU) * 0.20 * exp(-t * 8.0)
+		## Baked tin clang — spatula-on-steel character mixed into the drum.
+		var f_tin := lerpf(1180.0, 780.0, p)
+		var tin := (
+			sin(t * f_tin * TAU) * 0.28
+			+ sin(t * f_tin * 2.76 * TAU) * 0.18 * exp(-t * 36.0)
+			+ sin(t * f_tin * 5.2 * TAU) * 0.10 * exp(-t * 50.0)
+		) * exp(-t * 26.0)
+		var wave := (body * env_body + click + sub + tin) * 0.90
 		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 23000.0))
 	return _wav_from_pcm(pcm, false)
 

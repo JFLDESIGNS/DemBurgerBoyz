@@ -252,7 +252,7 @@ const HAND_SPATULA_CARRY_ROT := Vector3(-8.0, 0.0, 0.0)
 const HAND_SPATULA_SIDE_YAW := 20.0
 ## LMB slap: dip to steel → ting → ease back up.
 const HAND_SPATULA_SLAP_DUR := 0.153 ## Snappy single tap (−10%)
-const HAND_SPATULA_PLACE_SMASH_DUR := 0.62 ## Slow press when smashing an ice ball into a patty
+const HAND_SPATULA_PLACE_SMASH_DUR := 0.434 ## was 0.62; −30% with ball smash morph
 const HAND_SPATULA_DOUBLE_DUR := 0.34 ## Unused legacy double-tap duration
 const HAND_SPATULA_FLOURISH_DUR := 0.506 ## Rise+flip (−15% vs 0.595)
 ## Burger flip: tip pitch back toward the cook (no spin / whoosh flourish).

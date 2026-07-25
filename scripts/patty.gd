@@ -101,9 +101,9 @@ var _place_morph_tw: Tween = null
 var _shadow_proxy: MeshInstance3D = null ## Flat-patty disc shadow; off while ice ball is up
 ## Overall burger size (mesh + collision + ice ball). 1.0 = original.
 const PATTY_SIZE_SCALE := 0.88 ## ~12% under original; +10% from prior 0.80
-const FROZEN_DROP_SMASH_DELAY := 0.22 ## Wait for spatula to reach the ball
-const FROZEN_DROP_SMASH_SQUASH := 0.55 ## Slow press into the flat patty
-const FROZEN_DROP_SETTLE := 0.28
+const FROZEN_DROP_SMASH_DELAY := 0.154 ## was 0.22; −30% smash wait
+const FROZEN_DROP_SMASH_SQUASH := 0.385 ## was 0.55; −30% press morph
+const FROZEN_DROP_SETTLE := 0.196 ## was 0.28; −30% settle
 const FROZEN_BALL_SCALE := 0.9 * PATTY_SIZE_SCALE ## Ice ball only (+20%); flat patty stays PATTY_SIZE_SCALE
 const FROZEN_BALL_Y_SQUASH := 0.80 ## 20% flatter than a perfect sphere
 ## Sink only the ice ball into the steel (0.6"); flat patty keeps its normal sit height.
@@ -2255,10 +2255,10 @@ func _build_cheese_slice() -> void:
 	_cheese_mat.albedo_color = Color(1.0, 0.82, 0.26)
 	_cheese_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_cheese_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	## Depth-tested (not overlay-on-top) so the hand spatula draws above the slice.
+	## Sit with the meat in depth — not above the spatula (prio 22).
 	_cheese_mat.no_depth_test = false
-	_cheese_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	_cheese_mat.render_priority = PATTY_BODY_PRIORITY + 6
+	_cheese_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	_cheese_mat.render_priority = PATTY_BODY_PRIORITY + 1
 
 	## Cross bars only — corners are separate flaps (no double-corner look).
 	var half := 0.084
