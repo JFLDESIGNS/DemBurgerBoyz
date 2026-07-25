@@ -923,6 +923,9 @@ var grill_roomba_hold_wobble: float = 0.0
 var grill_roomba_sad_hold_t: float = 0.0 ## Pickup / poke sad face timer → neutral
 var grill_roomba_poke_pause_t: float = 0.0 ## Brief stun after RMB poke
 var grill_roomba_poke_wawawa: bool = false ## RMB head-tap started a timed wawawa cry
+var grill_roomba_poke_wobble_t: float = 0.0 ## Small in-place tip wobble after a whack
+var grill_roomba_poke_wobble_phase: float = 0.0
+const ROOMBA_POKE_WOBBLE_SEC := 0.38
 var grill_roomba_bump_t: float = 0.0
 var grill_roomba_back_t: float = 0.0
 var grill_roomba_reaim_t: float = 0.0
@@ -9591,8 +9594,7 @@ func _update_grill_roomba(delta: float) -> void:
 			game_audio.set_roomba_drive(false)
 		_update_roomba_spatula_hinge(false, delta)
 		_update_grill_roomba_bristles(delta, 0.0)
-		if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
-			grill_roomba_root.rotation_degrees.y = _roomba_visual_yaw_degrees()
+		_update_roomba_poke_wobble(delta)
 		return
 	grill_roomba_foam_cd = maxf(0.0, grill_roomba_foam_cd - delta)
 	_update_grill_roomba_bristles(delta, grill_roomba_vel.length())
@@ -9893,6 +9895,12 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 	grill_roomba_poke_wawawa = true
 	grill_roomba_vel = Vector2.ZERO
 	grill_roomba_back_t = 0.0
+	## 50% — tiny tip wobble in place (no slide).
+	if randf() < 0.5:
+		grill_roomba_poke_wobble_t = ROOMBA_POKE_WOBBLE_SEC
+		grill_roomba_poke_wobble_phase = randf() * TAU
+	else:
+		grill_roomba_poke_wobble_t = 0.0
 	_set_roomba_face("sad")
 	if game_audio and game_audio.has_method("set_roomba_drive"):
 		game_audio.set_roomba_drive(false)
@@ -9903,6 +9911,25 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 	if game_audio and game_audio.has_method("play_roomba_body_tap"):
 		game_audio.play_roomba_body_tap()
 	return true
+
+
+func _update_roomba_poke_wobble(delta: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	var yaw := _roomba_visual_yaw_degrees()
+	if grill_roomba_poke_wobble_t <= 0.0:
+		grill_roomba_root.rotation_degrees = Vector3(0.0, yaw, 0.0)
+		return
+	grill_roomba_poke_wobble_t = maxf(0.0, grill_roomba_poke_wobble_t - delta)
+	var u := clampf(grill_roomba_poke_wobble_t / ROOMBA_POKE_WOBBLE_SEC, 0.0, 1.0)
+	## Soft settle — strongest right after the hit.
+	var amp := u * u
+	var t := (1.0 - u) * ROOMBA_POKE_WOBBLE_SEC
+	grill_roomba_root.rotation_degrees = Vector3(
+		sin(grill_roomba_poke_wobble_phase + t * 34.0) * 5.5 * amp,
+		yaw,
+		cos(grill_roomba_poke_wobble_phase * 1.3 + t * 29.0) * 6.2 * amp
+	)
 
 
 func _release_grill_roomba() -> void:

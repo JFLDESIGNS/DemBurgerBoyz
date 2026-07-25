@@ -1337,12 +1337,12 @@ func play_roomba_done_beep() -> void:
 
 
 func play_roomba_body_tap() -> void:
-	## Hard plastic shell click — not a drum thud or metal ting.
+	## Hard plastic shell click — 2× louder + crisper than the old dull tick.
 	_play_cached(
-		"roomba_plastic_tap_%d" % (randi() % 3),
+		"roomba_plastic_tap_v2_%d" % (randi() % 3),
 		_make_roomba_body_tap,
-		0.94 + randf() * 0.12,
-		0.78
+		1.06 + randf() * 0.14,
+		1.5
 	)
 
 
@@ -1713,22 +1713,23 @@ func _make_roomba_done_beep() -> AudioStreamWAV:
 
 
 func _make_roomba_body_tap() -> AudioStreamWAV:
-	## Hard ABS/plastic click — short bright shell tick, not a low drum thud.
-	var n := int(MIX_RATE * 0.065)
+	## Crisp ABS click — snappy HF transient, almost no dull mid thump.
+	var n := int(MIX_RATE * 0.048)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
-	var f0 := 980.0 + randf() * 220.0
-	var f1 := 1680.0 + randf() * 260.0
+	var f0 := 1560.0 + randf() * 280.0
+	var f1 := 2420.0 + randf() * 360.0
+	var f2 := 3180.0 + randf() * 420.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var attack := clampf(t / 0.0012, 0.0, 1.0)
-		var env := attack * exp(-t * 62.0)
-		var click := (randf() * 2.0 - 1.0) * exp(-t * 140.0) * 0.55
-		var shell := sin(t * f0 * TAU) * exp(-t * 48.0) * 0.42
-		var ring := sin(t * f1 * TAU) * exp(-t * 70.0) * 0.22
-		## Tiny mid body only — keep it plastic, not kick-drum.
-		var body := sin(t * 340.0 * TAU) * exp(-t * 85.0) * 0.08
-		_write_s16(pcm, i, int(clampf((click + shell + ring + body) * env, -1.0, 1.0) * 15500.0))
+		var attack := clampf(t / 0.00055, 0.0, 1.0)
+		var env := attack * exp(-t * 95.0)
+		## Sharp noise spike at contact.
+		var click := (randf() * 2.0 - 1.0) * exp(-t * 220.0) * 0.85
+		var shell := sin(t * f0 * TAU) * exp(-t * 78.0) * 0.48
+		var ring := sin(t * f1 * TAU) * exp(-t * 110.0) * 0.32
+		var sparkle := sin(t * f2 * TAU) * exp(-t * 145.0) * 0.18
+		_write_s16(pcm, i, int(clampf((click + shell + ring + sparkle) * env, -1.0, 1.0) * 21000.0))
 	return _wav_from_pcm(pcm, false)
 
 
