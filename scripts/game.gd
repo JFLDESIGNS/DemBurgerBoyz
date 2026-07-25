@@ -8875,7 +8875,7 @@ func _juggle_height_mul(t: float) -> float:
 
 
 func _juggle_flip_progress(t: float) -> float:
-	## Exact 0→1 (=720°). First flip on the rise, second on the descent.
+	## Exact 0→1 (=720°). One continuous spin — both flips the same direction.
 	t = clampf(t, 0.0, 1.0)
 	var t0 := SPATULA_JUGGLE_FLIP_START_T
 	var t1 := SPATULA_JUGGLE_FLIP_END_T
@@ -8884,21 +8884,8 @@ func _juggle_flip_progress(t: float) -> float:
 	if t >= t1:
 		return 1.0
 	var u := (t - t0) / maxf(t1 - t0, 0.001)
-	## Apex splits the two flips — not a mid-arc whip of both at once.
-	var apex_u := clampf(
-		(SPATULA_JUGGLE_APEX_T - t0) / maxf(t1 - t0, 0.001),
-		0.28,
-		0.52
-	)
-	if u <= apex_u:
-		## Rise: first 360° — ease-out so spin starts right off the blade.
-		var r := u / maxf(apex_u, 0.001)
-		var eased := 1.0 - (1.0 - r) * (1.0 - r)
-		return 0.5 * eased
-	## Descent: second 360° — ease-in so it settles before landing.
-	var d := (u - apex_u) / maxf(1.0 - apex_u, 0.001)
-	var eased2 := d * d
-	return 0.5 + 0.5 * eased2
+	## Smoothstep only — no apex pause (that read as flip-one-way then the other).
+	return u * u * (3.0 - 2.0 * u)
 
 
 func _update_spatula_juggle(delta: float) -> void:
@@ -8916,15 +8903,13 @@ func _update_spatula_juggle(delta: float) -> void:
 	var base_y := lerpf(spatula_juggle_start.y, spatula_juggle_end.y, t)
 	var y := base_y + SPATULA_JUGGLE_PEAK * _juggle_height_mul(t)
 	patty.global_position = Vector3(xz.x, y, xz.z)
-	## Exactly two flips (720°) — ends at the same orientation it left with.
+	## Exactly two flips (720°) same direction — pitch only, no yaw/roll wobble.
 	var flip_p := _juggle_flip_progress(t)
 	var flip_deg := 720.0 * flip_p
-	## Tiny mid-air wobble that returns to 0 at both ends (keeps finish flush).
-	var wobble := sin(t * PI)
 	patty.rotation_degrees = Vector3(
 		spatula_juggle_base_rot.x + flip_deg,
-		spatula_juggle_base_rot.y + wobble * 6.0 * sin(t * TAU),
-		spatula_juggle_base_rot.z + wobble * 4.0 * sin(t * PI * 2.0)
+		spatula_juggle_base_rot.y,
+		spatula_juggle_base_rot.z
 	)
 	## Catch window — spatula tip near the flying burger.
 	if t >= SPATULA_JUGGLE_CATCH_START_T and t < 0.98:
