@@ -30472,7 +30472,7 @@ func _bun_pile_under_cursor(screen_pos: Vector2) -> bool:
 
 
 func _try_bun_pile_click(screen_pos: Vector2) -> bool:
-	## Click the 3D bun towers → thud + hop + send a crown to Build.
+	## Click the 3D bun towers → thud + hop only (never spawn a 2D build fly/icon).
 	if not playing:
 		return false
 	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
@@ -30482,15 +30482,15 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 	var pair := _pick_bun_pair_at_screen(screen_pos)
 	if pair == null and not _bun_pile_under_cursor(screen_pos):
 		return false
-	if _bun_visual_pair_count() <= 0 or int(supply_stock.get("bun_top", 0)) <= 0:
+	if _bun_visual_pair_count() <= 0:
 		_flash("Out of buns — restock on phone!", Color("EF5350"))
 		return true
 	if pair == null:
 		pair = _top_visible_bun_pair()
 	if pair != null:
 		_bounce_bun_click_target(pair)
-		_skip_next_bun_bounce = true
-	_add_ingredient("bun_top")
+	if game_audio != null and game_audio.has_method("play_bun_thud"):
+		game_audio.play_bun_thud()
 	return true
 
 
