@@ -853,16 +853,16 @@ const FRIES_SPILL_COOLDOWN := 0.32
 const FRIES_GRILL_WAIT_SEC := 3.0 ## sit golden before charring starts
 const FRIES_GRILL_BLACK_SEC := 3.0 ## golden → black over this window, then fire
 ## Negative = lift. Was +0.9" drop; nudged 2.3" up → net ~1.4" above prior mid-band.
-const FRIES_LOGO_DROP_Y := -0.03556
+## Negative = raise logo; more positive = lower. −0.02286 = prior seat minus 0.5".
+const FRIES_LOGO_DROP_Y := -0.02286
 const FRIES_FRY_SHAKE_DEG := 3.8 ## fries pile wobble amplitude (container stays still)
 const FRIES_FRY_SHAKE_HZ := 2.25
 const FRIES_SPILL_SIT_Y := 0.017 ## ~half-inch lift so sticks don't clip the steel
 const FRIES_HOLD_MAX_PACKS := 4
 const FRIES_HOLD_PUSH_RADIUS := 0.13
 const FRIES_HOLD_PUSH_STEP := 0.018
-const FRIES_HOLD_LEFT_COLUMN_NUDGE_X := 0.254 ## 10 inches of extra horizontal clearance.
-const FRIES_HOLD_RIGHT_COLUMN_NUDGE_X := 0.064 ## Split the right side a little too.
-const FRIES_HOLD_CAMERA_LEFT_NUDGE_X := 0.102 ## 4 inches camera-left for the whole fry group.
+const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the strip.
+const FRIES_HOLD_MIN_SEP := 0.15 ## Center-to-center; keep packs out of each other.
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -19369,24 +19369,43 @@ func _update_ready_fries_pack_sparkles(delta: float) -> void:
 
 
 func _ready_fries_slot_world(i: int) -> Vector3:
+	## 2×2 corners of the HOLD band — no giant X nudges (those clamped packs on top of each other).
 	var b := _warmer_place_bounds()
-	var in_x := 0.055
-	var in_z := 0.055
-	var slots := [
-		Vector2(0.28, 0.40),
-		Vector2(0.72, 0.40),
-		Vector2(0.28, 0.60),
-		Vector2(0.72, 0.60),
-	]
-	var s: Vector2 = slots[clampi(i, 0, slots.size() - 1)]
-	var x := lerpf(b.position.x + in_x, b.end.x - in_x, s.x)
-	if i == 0 or i == 2:
-		x = maxf(b.position.x + in_x, x - FRIES_HOLD_LEFT_COLUMN_NUDGE_X)
-	else:
-		x = minf(b.end.x - in_x, x + FRIES_HOLD_RIGHT_COLUMN_NUDGE_X)
-	x = clampf(x + FRIES_HOLD_CAMERA_LEFT_NUDGE_X, b.position.x + in_x, b.end.x - in_x)
-	var z := lerpf(b.position.y + in_z, b.end.y - in_z, s.y)
+	var col := clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) % 2
+	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
+	var u := 0.16 if col == 0 else 0.84
+	var v := 0.20 if row == 0 else 0.80
+	var x := lerpf(b.position.x, b.end.x, u)
+	var z := lerpf(b.position.y, b.end.y, v)
 	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z)
+
+
+func _separate_ready_fries_packs() -> void:
+	## Push shelf packs apart if anything still shares the same seat.
+	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
+		return
+	var b := _warmer_place_bounds()
+	var packs: Array[Node3D] = []
+	for child in fryer_ready_root.get_children():
+		if child is Node3D:
+			packs.append(child as Node3D)
+	for _pass in 4:
+		for a_i in packs.size():
+			for b_i in range(a_i + 1, packs.size()):
+				var a := packs[a_i]
+				var bb := packs[b_i]
+				var d := Vector2(a.global_position.x - bb.global_position.x, a.global_position.z - bb.global_position.z)
+				var dist := d.length()
+				if dist >= FRIES_HOLD_MIN_SEP:
+					continue
+				var push := (FRIES_HOLD_MIN_SEP - dist) * 0.5 + 0.002
+				var away := d.normalized() if dist > 0.0001 else Vector2(1.0 if (a_i % 2) == 0 else -1.0, 0.0)
+				a.global_position.x = clampf(a.global_position.x + away.x * push, b.position.x, b.end.x)
+				a.global_position.z = clampf(a.global_position.z + away.y * push, b.position.y, b.end.y)
+				bb.global_position.x = clampf(bb.global_position.x - away.x * push, b.position.x, b.end.x)
+				bb.global_position.z = clampf(bb.global_position.z - away.y * push, b.position.y, b.end.y)
+				a.global_position.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
+				bb.global_position.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
 
 
 func _refresh_ready_fries_visuals() -> void:
@@ -19401,7 +19420,8 @@ func _refresh_ready_fries_visuals() -> void:
 		fryer_ready_root.add_child(pack)
 		pack.global_position = _ready_fries_slot_world(i)
 		pack.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
-		pack.scale = Vector3(0.92, 0.92, 0.92)
+		var s := FRIES_HOLD_PACK_SCALE
+		pack.scale = Vector3(s, s, s)
 		_populate_fry_pack(pack)
 		var area := Area3D.new()
 		area.name = "ReadyFriesGrab"
@@ -19410,11 +19430,12 @@ func _refresh_ready_fries_visuals() -> void:
 		area.collision_mask = 0
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = Vector3(0.18, 0.23, 0.18)
+		box.size = Vector3(0.14, 0.20, 0.14)
 		shape.shape = box
-		shape.position = Vector3(0.0, 0.095, 0.0)
+		shape.position = Vector3(0.0, 0.085, 0.0)
 		area.add_child(shape)
 		pack.add_child(area)
+	_separate_ready_fries_packs()
 
 
 func _reset_fryer_state(clear_servings: bool = true) -> void:
@@ -35322,11 +35343,11 @@ func _load_open_closed_sign_texture(path: String) -> Texture2D:
 
 
 func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshInstance3D:
-	## Quad + albedo (reliable hung window art). Cull disabled = readable both sides.
+	## Single-sided quads — double-sided stacked both faces into a ghosted double sign.
 	var mi := MeshInstance3D.new()
 	mi.name = face_name
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.54, 0.54)
+	quad.size = Vector2(0.702, 0.702) ## 30% bigger than 0.54
 	mi.mesh = quad
 	var tex := _load_open_closed_sign_texture(tex_path)
 	var mat := StandardMaterial3D.new()
@@ -35335,7 +35356,7 @@ func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshIns
 	mat.alpha_scissor_threshold = 0.08
 	mat.albedo_texture = tex
 	mat.albedo_color = Color(1, 1, 1, 1)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	mat.render_priority = 16
 	mi.material_override = mat
@@ -35360,21 +35381,21 @@ func _build_open_closed_sign() -> void:
 
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
-	## Old Label3D hang spot — left of opening, into cook view (wall ~z 1.2).
-	root.position = Vector3(-1.08, 1.78, 1.14)
+	## Prior seat + ~40 screen px up (~0.12m at this depth).
+	root.position = Vector3(-1.08, 1.90, 1.14)
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
 
 	## Open face: yaw 180 so +Z local aims at cook (−Z world) when root yaw is OPEN (0°).
 	var open_face := _make_open_closed_sign_face("res://IMAGES/WEAREOPEN.png", "OpenFace")
-	open_face.position = Vector3(0.0, -0.02, -0.004)
+	open_face.position = Vector3(0.0, -0.02, -0.006)
 	open_face.rotation_degrees = Vector3(0.0, 180.0, 0.0)
 	root.add_child(open_face)
 
 	## Closed face: +Z local; faces cook after root flips to CLOSED (180°).
 	var closed := _make_open_closed_sign_face("res://IMAGES/WEARECLOSED.png", "ClosedFace")
-	closed.position = Vector3(0.0, -0.02, 0.004)
+	closed.position = Vector3(0.0, -0.02, 0.006)
 	root.add_child(closed)
 
 	var area := Area3D.new()
