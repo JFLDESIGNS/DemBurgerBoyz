@@ -36,9 +36,9 @@ const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the righ
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
-## Base sample is tinggrill.wav @ C5; strips pitch from C4→B4 left→right (chromatic).
+## Base sample is tinggrill.wav @ C5 — map strips to C5→B5 so we never octave-dump the WAV.
 const GRILL_PIANO_SECTIONS := 12
-const GRILL_PIANO_LEFT_MIDI := 60 ## C4 — leftmost strip (screen-left)
+const GRILL_PIANO_LEFT_MIDI := 72 ## C5 — leftmost strip (screen-left); matches tinggrill.wav
 ## Spatula roll changes key (transpose the whole C→B run).
 const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
 const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
@@ -5147,8 +5147,8 @@ func _grill_piano_section_at(world_pos: Vector3) -> int:
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
-	## Left→right (screen): chromatic C4→B4 across all 12 strips.
-	## +X is screen-left on this camera, so high section index = visual left = C4.
+	## Left→right (screen): chromatic C5→B5 across all 12 strips.
+	## +X is screen-left on this camera, so high section index = visual left = C5.
 	var sec := _grill_piano_section_at(world_pos)
 	var from_left := (GRILL_PIANO_SECTIONS - 1) - sec
 	return GRILL_PIANO_LEFT_MIDI + clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)

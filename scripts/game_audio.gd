@@ -954,44 +954,28 @@ func play_scoop() -> void:
 
 
 func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
-	## tinggrill.wav — natural pitch is C5 / MIDI 72; strips pitch out from there.
-	## Deep shifts use a synth note so the attack stays bright (WAV pitch-down goes dull/silent).
+	## tinggrill.wav — natural pitch is C5 / MIDI 72.
+	## Grill strips are C5→B5 (0…+11 semitones) so we pitch the same sample — never octave-dump.
 	if _ting_players.is_empty():
 		return
 	var semis := float(midi - 72)
-	var use_synth := absf(semis) >= 7.0
-	var stream: AudioStream = null
-	var pitch := 1.0
-	if use_synth:
-		var key := "ting_syn_%d" % midi
-		if not _cache.has(key):
-			_cache[key] = _make_spatula_ting_note(midi)
-		stream = _cache[key]
-		pitch = 1.0
-	else:
-		if not _cache.has("tinggrill"):
-			var loaded: AudioStream = _load_tinggrill_stream()
-			if loaded == null:
-				loaded = _make_spatula_ting_note(72)
-			_cache["tinggrill"] = loaded
-		stream = _cache["tinggrill"]
-		pitch = pow(2.0, semis / 12.0)
+	if not _cache.has("tinggrill"):
+		var loaded: AudioStream = _load_tinggrill_stream()
+		if loaded == null:
+			loaded = _make_spatula_ting_note(72)
+		_cache["tinggrill"] = loaded
 	var p: AudioStreamPlayer = _ting_players[_ting_player_i]
 	_ting_player_i = (_ting_player_i + 1) % _ting_players.size()
-	p.stream = stream
-	p.pitch_scale = pitch
-	## Present on flat taps; still scales with caller volume_scale.
+	p.stream = _cache["tinggrill"]
+	## Clamp extreme shifts (HOLD / scrape callers) so we don't drop multiple octaves.
+	semis = clampf(semis, -5.0, 14.0)
+	p.pitch_scale = pow(2.0, semis / 12.0)
 	var base_gain := 1.75
 	var away := absf(semis)
-	var pitch_boost := 1.0
-	if not use_synth:
-		## Recover energy lost when pitching the WAV down toward C4.
-		pitch_boost = 1.0 + away * (0.20 if semis < 0.0 else 0.10)
-		if away > 0.001:
-			pitch_boost *= 1.35
-	else:
-		## Synth notes already sit at pitch — keep them punchy.
-		pitch_boost = 1.15
+	## Mild recovery when pitched away from the natural C5 sample.
+	var pitch_boost := 1.0 + away * (0.08 if semis < 0.0 else 0.05)
+	if away > 0.001:
+		pitch_boost *= 1.12
 	var gain := base_gain * pitch_boost * maxf(0.0, volume_scale)
 	p.volume_db = linear_to_db(clampf(gain, 0.05, 3.5))
 	p.play()
