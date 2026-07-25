@@ -20,6 +20,7 @@ static var handwritten: Font
 static var ticket_hand: Font
 ## Dedicated 3D font — grayscale AA, no mipmaps (LCD/mips = black glyph boxes).
 static var label3d_font: Font
+static var label3d_luckiest: Font
 static var _loaded: bool = false
 
 
@@ -34,6 +35,7 @@ static func ensure_loaded() -> void:
 	handwritten = _load_clean(HAND_PATH)
 	ticket_hand = _load_clean(TICKET_HAND_PATH)
 	label3d_font = _load_label3d(BODY_HEAVY_PATH)
+	label3d_luckiest = _load_label3d(LUCKIEST_PATH)
 	_loaded = true
 
 
@@ -137,6 +139,28 @@ static func apply_label3d(lab: Label3D, use_title: bool = true, font_size: int =
 	## Default Label3D outline_size is 12 — kill it hard.
 	lab.outline_size = 0
 	lab.outline_modulate = Color(0, 0, 0, 0)
+	lab.shaded = false
+	lab.double_sided = true
+	lab.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	lab.alpha_cut = Label3D.ALPHA_CUT_DISCARD
+	lab.alpha_scissor_threshold = 0.2
+	lab.render_priority = 2
+	lab.outline_render_priority = -8
+
+
+static func apply_luckiest_label3d(lab: Label3D, font_size: int = 48, world_height: float = 0.05, outline: int = 0) -> void:
+	ensure_loaded()
+	var f: Font = label3d_luckiest
+	if f == null:
+		f = luckiest
+	if f == null:
+		f = label3d_font
+	if f:
+		lab.font = f
+	lab.font_size = font_size
+	lab.pixel_size = world_height / float(max(font_size, 1))
+	lab.outline_size = outline
+	lab.outline_modulate = Color(0, 0, 0, 1.0) if outline > 0 else Color(0, 0, 0, 0)
 	lab.shaded = false
 	lab.double_sided = true
 	lab.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR

@@ -1224,7 +1224,8 @@ const BUILD_HIT_PAD_TOP := 28.0 ## was 180 — only a little above the plate
 const BUILD_HIT_PAD_RIGHT := 10.0
 const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
-const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(30.0, 40.0)
+## Screen nudge on the cutting-board Label3D (+X right, +Y down).
+const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(15.0, 10.0)
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -26926,16 +26927,14 @@ func _build_board_hint_label() -> void:
 	var lab := Label3D.new()
 	lab.name = "BuildBoardHint"
 	lab.text = BUILD_TITLE_TEXT
-	lab.font_size = 18
 	lab.modulate = Color(1.0, 0.92, 0.22, 1.0)
-	lab.outline_modulate = Color(0.0, 0.0, 0.0, 1.0)
-	lab.outline_size = 4
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.no_depth_test = true
 	lab.fixed_size = true
-	lab.pixel_size = 0.0016
+	## Smaller Luckiest Guy — was font 18 / pixel 0.0016.
+	UiFontsScript.apply_luckiest_label3d(lab, 13, 0.018, 3)
 	lab.position = Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.05)
 	lab.visible = true
 	build_cutting_board.add_child(lab)
