@@ -1025,8 +1025,18 @@ func play_ingredient(id: String) -> void:
 
 func play_bun_thud() -> void:
 	## Medium bassy body knock — lighter / hollower than the street-tree thud.
-	## v3 keys force a rebuild of the louder sample; gain near tree level.
-	_play_cached("bun_thud_v3_%d" % (randi() % 3), _make_bun_thud, 0.94 + randf() * 0.12, 1.35)
+	## v3 keys force a rebuild of the louder sample; gain −20% from prior 1.35.
+	_play_cached("bun_thud_v3_%d" % (randi() % 3), _make_bun_thud, 0.94 + randf() * 0.12, 1.08)
+
+
+func play_cutting_board_thud() -> void:
+	## Empty Build board tap — denser / quicker / deader than the hollow bun knock.
+	_play_cached(
+		"cutting_board_thud_v1_%d" % (randi() % 3),
+		_make_cutting_board_thud,
+		0.97 + randf() * 0.07,
+		0.68
+	)
 
 
 func play_scale_jingle() -> void:
@@ -1868,6 +1878,22 @@ func _make_bun_thud() -> AudioStreamWAV:
 		hollow += sin(t * 380.0 * TAU) * exp(-t * 38.0) * 0.14
 		var crumb := (randf() * 2.0 - 1.0) * exp(-t * 65.0) * 0.04
 		_write_s16(pcm, i, int(clampf((body + hollow + crumb) * env, -1.0, 1.0) * 19000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_cutting_board_thud() -> AudioStreamWAV:
+	## Short dead wood knock — dense mid body, almost no hollow cavity, quick decay.
+	var n := int(MIX_RATE * 0.078)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := clampf(t / 0.0025, 0.0, 1.0) * exp(-t * 42.0)
+		var body := sin(t * 118.0 * TAU) * 0.82 + sin(t * 188.0 * TAU) * 0.28
+		## Tiny hard shell only — no hollow bun air.
+		var shell := sin(t * 265.0 * TAU) * exp(-t * 70.0) * 0.07
+		var grit := (randf() * 2.0 - 1.0) * exp(-t * 95.0) * 0.045
+		_write_s16(pcm, i, int(clampf((body + shell + grit) * env, -1.0, 1.0) * 15500.0))
 	return _wav_from_pcm(pcm, false)
 
 

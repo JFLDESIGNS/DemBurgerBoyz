@@ -3380,6 +3380,10 @@ func _input(event: InputEvent) -> void:
 			if _try_bun_pile_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
+			## Empty cutting board wood tap (before Build UI steals the click).
+			if _try_cutting_board_thud_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			## Cheese wheel sits under the Build column — grab before UI blocks world picks.
 			if not cheese_held and _try_cheese_station_click(event.position):
 				get_viewport().set_input_as_handled()
@@ -29819,6 +29823,57 @@ func _cutting_board_world_center() -> Vector3:
 	return Vector3(cx, cy, GRILL_SURFACE_Z + CUTTING_BOARD_Z_OFFSET)
 
 
+func _station_cutting_board_is_empty(station_index: int = STATION_CRAFT) -> bool:
+	## No patty / toppings — seeded toast buns alone still count as empty wood.
+	if station_index < 0 or station_index >= stations.size():
+		return true
+	var st: Dictionary = stations[station_index]
+	var patties: Array = st.get("patties", [])
+	if not patties.is_empty():
+		return false
+	for id in st.get("items", []):
+		if str(id) != "bun_bottom" and str(id) != "bun_top":
+			return false
+	return true
+
+
+func _cursor_on_cutting_board(screen_pos: Vector2) -> bool:
+	if camera == null:
+		return false
+	var center := _cutting_board_world_center()
+	var top_y := center.y + CUTTING_BOARD_SIZE.y * 0.5
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	if absf(dir.y) < 0.002:
+		return false
+	var t := (top_y - from.y) / dir.y
+	if t < 0.05:
+		return false
+	var hit := from + dir * t
+	var hx := CUTTING_BOARD_SIZE.x * 0.5 + 0.02
+	var hz := CUTTING_BOARD_SIZE.z * 0.5 + 0.02
+	return absf(hit.x - center.x) <= hx and absf(hit.z - center.z) <= hz
+
+
+func _try_cutting_board_thud_click(screen_pos: Vector2) -> bool:
+	## Left-click empty Build wood → short dead thud (not the hollow bun tap).
+	if not playing:
+		return false
+	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+		return false
+	if cheese_held or spatula_patty != null or dragging_patty != null or cup_held:
+		return false
+	if icecream_cone_held or burnt_icecream_cone_held or fries_pack_held:
+		return false
+	if not _station_cutting_board_is_empty(STATION_CRAFT):
+		return false
+	if not _cursor_on_cutting_board(screen_pos):
+		return false
+	if game_audio != null and game_audio.has_method("play_cutting_board_thud"):
+		game_audio.play_cutting_board_thud()
+	return true
+
+
 func _build_cutting_board_prop() -> void:
 	## Procedural wood block — horizontal like the griddle, no billboard art.
 	if build_cutting_board != null and is_instance_valid(build_cutting_board):
@@ -39761,6 +39816,9 @@ func _on_station_plate_clicked(index: int) -> void:
 	if spatula_patty != null:
 		_drop_spatula_on_station(index)
 	else:
+		if _station_cutting_board_is_empty(index):
+			if game_audio != null and game_audio.has_method("play_cutting_board_thud"):
+				game_audio.play_cutting_board_thud()
 		_flash("Build — drop a patty, then toppings · Serve when ready", Color("FFE082"))
 
 
