@@ -35247,40 +35247,48 @@ func _build_window_pause_ui() -> void:
 
 
 func _load_open_closed_sign_texture(path: String) -> Texture2D:
-	## Load PNG pixels directly so the art always shows (avoids white-box missing remap).
-	## CODING_NOTES: swap these PNGs for proper-alpha versions later (same paths).
+	## Export-safe: read PNG bytes from the PCK (Image.load(res://) fails in exports).
+	## PNGs are forced into the pack via export_presets include_filter.
 	if FileAccess.file_exists(path):
-		var img := Image.new()
-		if img.load(path) == OK:
-			return ImageTexture.create_from_image(img)
-	var tex := load(path) as Texture2D
-	if tex != null:
-		return tex
+		var bytes := FileAccess.get_file_as_bytes(path)
+		if bytes.size() > 0:
+			var img := Image.new()
+			if img.load_png_from_buffer(bytes) == OK:
+				return ImageTexture.create_from_image(img)
+	if ResourceLoader.exists(path):
+		var tex := load(path) as Texture2D
+		if tex != null:
+			return tex
 	push_warning("Open/closed sign texture missing: %s" % path)
 	return null
 
 
-func _make_open_closed_sign_face(tex_path: String, face_name: String) -> Sprite3D:
-	## Double-sided so cook + street both see the art (no white backface).
-	var spr := Sprite3D.new()
-	spr.name = face_name
-	spr.texture = _load_open_closed_sign_texture(tex_path)
-	spr.pixel_size = 0.0021 ## ~0.54m for 256px art
-	spr.shaded = false
-	spr.double_sided = true
-	spr.transparent = true
-	## Keep black bg for now — proper alpha PNGs later (see CODING_NOTES.md).
-	spr.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
-	spr.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	spr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	spr.render_priority = 18
-	spr.sorting_offset = 18.0
-	return spr
+func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshInstance3D:
+	## Quad + albedo (reliable hung window art). Cull disabled = readable both sides.
+	var mi := MeshInstance3D.new()
+	mi.name = face_name
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.54, 0.54)
+	mi.mesh = quad
+	var tex := _load_open_closed_sign_texture(tex_path)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.08
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1, 1, 1, 1)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.render_priority = 16
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.sorting_offset = 16.0
+	return mi
 
 
 func _build_open_closed_sign() -> void:
-	## Hang-sign in the service window under the bunting.
-	## CODING_NOTES: textures are temporary black-bg PNGs — replace with alpha cuts later.
+	## Hang-sign in the left of the service window (same seat as the old text sign).
+	## Camera looks +Z from the cook — open face normal points toward the cook (−Z).
 	if world == null:
 		return
 	if open_closed_sign != null and is_instance_valid(open_closed_sign):
@@ -35294,21 +35302,21 @@ func _build_open_closed_sign() -> void:
 
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
-	## Left of the window opening, under bunting — visible from cook + street.
-	root.position = Vector3(-1.05, 1.72, 1.18)
+	## Old Label3D hang spot — left of opening, into cook view (wall ~z 1.2).
+	root.position = Vector3(-1.08, 1.78, 1.14)
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
 
-	## Open face (+Z) — toward cook when yaw OPEN (0°); double-sided for street.
+	## Open face: yaw 180 so +Z local aims at cook (−Z world) when root yaw is OPEN (0°).
 	var open_face := _make_open_closed_sign_face("res://IMAGES/WEAREOPEN.png", "OpenFace")
-	open_face.position = Vector3(0.0, 0.0, 0.004)
+	open_face.position = Vector3(0.0, -0.02, -0.004)
+	open_face.rotation_degrees = Vector3(0.0, 180.0, 0.0)
 	root.add_child(open_face)
 
-	## Closed face (−Z) — toward cook when yaw CLOSED (180°).
+	## Closed face: +Z local; faces cook after root flips to CLOSED (180°).
 	var closed := _make_open_closed_sign_face("res://IMAGES/WEARECLOSED.png", "ClosedFace")
-	closed.position = Vector3(0.0, 0.0, -0.004)
-	closed.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	closed.position = Vector3(0.0, -0.02, 0.004)
 	root.add_child(closed)
 
 	var area := Area3D.new()
