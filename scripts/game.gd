@@ -35122,8 +35122,24 @@ func _build_window_pause_ui() -> void:
 	window_shutter.add_child(closed_lab)
 
 
+func _make_open_closed_sign_face(tex_path: String, face_name: String) -> Sprite3D:
+	var spr := Sprite3D.new()
+	spr.name = face_name
+	spr.texture = load(tex_path) as Texture2D
+	spr.pixel_size = 0.0019
+	spr.shaded = false
+	spr.double_sided = false
+	spr.transparent = true
+	spr.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	spr.alpha_scissor_threshold = 0.12
+	spr.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	spr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spr.render_priority = 8
+	return spr
+
+
 func _build_open_closed_sign() -> void:
-	## Hang-sign in the left of the service window — open by default; click flips to closed break.
+	## Hang-sign in the left of the service window — art flip (open / closed faces).
 	if world == null:
 		return
 	if open_closed_sign != null and is_instance_valid(open_closed_sign):
@@ -35138,68 +35154,21 @@ func _build_open_closed_sign() -> void:
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
 	## Left of the opening, hanging into the cook's view (wall ~z 1.2).
-	root.position = Vector3(-1.08, 1.78, 1.14)
+	root.position = Vector3(-1.08, 1.82, 1.14)
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
 
-	## Twine / hook stub above the board.
-	var hook := MeshInstance3D.new()
-	var hook_mesh := BoxMesh.new()
-	hook_mesh.size = Vector3(0.012, 0.10, 0.012)
-	hook.mesh = hook_mesh
-	hook.position = Vector3(0.0, 0.20, 0.0)
-	var hook_mat := StandardMaterial3D.new()
-	hook_mat.albedo_color = Color(0.35, 0.28, 0.18)
-	hook_mat.roughness = 0.85
-	hook.material_override = hook_mat
-	hook.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(hook)
-
-	var board := MeshInstance3D.new()
-	board.name = "Board"
-	var box := BoxMesh.new()
-	box.size = Vector3(0.46, 0.32, 0.022)
-	board.mesh = box
-	var board_mat := StandardMaterial3D.new()
-	board_mat.albedo_color = Color(0.78, 0.62, 0.38)
-	board_mat.roughness = 0.72
-	board.material_override = board_mat
-	board.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	board.sorting_offset = 1.0
-	root.add_child(board)
-
-	## Closed face (+Z local) — faces cook when yaw is CLOSED (0°).
-	var closed := Label3D.new()
-	closed.name = "ClosedFace"
-	closed.text = "SORRY\nWE ARE\nCLOSED"
-	closed.position = Vector3(0.0, 0.01, 0.014)
-	closed.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	closed.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	closed.modulate = Color(0.72, 0.12, 0.14)
-	UiFontsScript.apply_label3d(closed, true, 72, 0.055)
-	if UiFontsScript.luckiest != null:
-		closed.font = UiFontsScript._load_label3d(UiFontsScript.LUCKIEST_PATH)
-	closed.outline_size = 8
-	closed.outline_modulate = Color(1.0, 0.95, 0.85, 0.95)
-	closed.render_priority = 8
+	## Closed face (+Z) — faces cook when yaw is CLOSED (180°).
+	var closed := _make_open_closed_sign_face("res://IMAGES/WEARECLOSED.png", "ClosedFace")
+	closed.position = Vector3(0.0, -0.02, 0.003)
 	root.add_child(closed)
 
-	## Open face (−Z local, spun 180°) — cool script; faces cook when yaw is OPEN (180°).
-	var open_lab := Label3D.new()
-	open_lab.name = "OpenFace"
-	open_lab.text = "we are\nopen"
-	open_lab.position = Vector3(0.0, 0.01, -0.014)
-	open_lab.rotation_degrees = Vector3(0.0, 180.0, 0.0)
-	open_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	open_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	open_lab.modulate = Color(0.12, 0.42, 0.28)
-	UiFontsScript.apply_label3d(open_lab, false, 86, 0.062)
-	open_lab.font = UiFontsScript._load_label3d(UiFontsScript.TICKET_HAND_PATH)
-	open_lab.outline_size = 4
-	open_lab.outline_modulate = Color(0.95, 1.0, 0.9, 0.9)
-	open_lab.render_priority = 8
-	root.add_child(open_lab)
+	## Open face (−Z, spun 180°) — faces cook when yaw is OPEN (0°).
+	var open_face := _make_open_closed_sign_face("res://IMAGES/WEAREOPEN.png", "OpenFace")
+	open_face.position = Vector3(0.0, -0.02, -0.003)
+	open_face.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	root.add_child(open_face)
 
 	var area := Area3D.new()
 	area.name = "OpenClosedSignGrab"
@@ -35210,7 +35179,7 @@ func _build_open_closed_sign() -> void:
 	area.input_ray_pickable = true
 	var shape := CollisionShape3D.new()
 	var cbox := BoxShape3D.new()
-	cbox.size = Vector3(0.50, 0.38, 0.08)
+	cbox.size = Vector3(0.52, 0.54, 0.08)
 	shape.shape = cbox
 	area.add_child(shape)
 	root.add_child(area)
