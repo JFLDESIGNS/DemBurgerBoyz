@@ -21179,6 +21179,7 @@ func _build_icecream_machine() -> void:
 	icecream_spout_marker.name = "SoftServeSpoutTip"
 	icecream_spout_marker.position = Vector3(0.0, 0.50, 0.285)
 	root.add_child(icecream_spout_marker)
+	_add_icecream_cone_front_wall(root)
 
 	var nozzle := MeshInstance3D.new()
 	nozzle.name = "SoftServeNozzle"
@@ -21461,12 +21462,40 @@ func _icecream_cone_machine_safe_point(world_pos: Vector3) -> Vector3:
 	if icecream_root == null or not is_instance_valid(icecream_root):
 		return world_pos
 	var local := icecream_root.to_local(world_pos)
-	## Keep the carried cone / serve in front of the cabinet face while still allowing the spout snap.
+	## Keep the carried cone on the cook face — never slip behind (esp. left flank).
 	var serve_radius := lerpf(ICECREAM_CONE_R, 0.076, clampf(icecream_cone_fill, 0.0, 1.0))
 	var min_front_z := 0.225 + serve_radius
-	if absf(local.x) <= 0.173 and local.y <= 0.62:
+	## Wide front band + left wrap (local −X = camera-left of soft-serve).
+	var in_front_band: bool = absf(local.x) <= 0.52 and local.y >= -0.08 and local.y <= 0.98
+	var on_left_flank: bool = local.x <= -0.06 and local.x >= -0.72 and local.y <= 0.98
+	if in_front_band or on_left_flank:
 		local.z = maxf(local.z, min_front_z)
 	return icecream_root.to_global(local)
+
+
+func _add_icecream_cone_front_wall(root: Node3D) -> void:
+	## Invisible collider on the cook face + left wrap so the cone can't poke behind.
+	if root == null:
+		return
+	var wall := StaticBody3D.new()
+	wall.name = "ConeFrontInvisibleWall"
+	wall.collision_layer = 1
+	wall.collision_mask = 0
+	## Main cook-face slab.
+	var face := CollisionShape3D.new()
+	var face_box := BoxShape3D.new()
+	face_box.size = Vector3(0.58, 0.92, 0.07)
+	face.shape = face_box
+	face.position = Vector3(0.0, 0.46, 0.235)
+	wall.add_child(face)
+	## Left-hand wrap (stops sliding around the camera-left edge into the street side).
+	var left := CollisionShape3D.new()
+	var left_box := BoxShape3D.new()
+	left_box.size = Vector3(0.10, 0.92, 0.42)
+	left.shape = left_box
+	left.position = Vector3(-0.30, 0.46, 0.05)
+	wall.add_child(left)
+	root.add_child(wall)
 
 
 func _update_held_icecream_cone(delta: float) -> void:
@@ -21476,7 +21505,9 @@ func _update_held_icecream_cone(delta: float) -> void:
 	var seat := _kb_force_cone_seat
 	if seat == Vector3.ZERO:
 		seat = _icecream_cone_hold_point(get_viewport().get_mouse_position())
-	icecream_cone_root.global_position = prev.lerp(seat, clampf(delta * 12.0, 0.0, 1.0))
+	seat = _icecream_cone_machine_safe_point(seat)
+	var next := prev.lerp(seat, clampf(delta * 12.0, 0.0, 1.0))
+	icecream_cone_root.global_position = _icecream_cone_machine_safe_point(next)
 	if delta > 0.0001:
 		_icecream_vel = (icecream_cone_root.global_position - _icecream_prev_pos) / delta
 	_icecream_prev_pos = icecream_cone_root.global_position
@@ -25199,24 +25230,33 @@ func _update_held_cup(delta: float) -> void:
 		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 12.0, 0.0, 1.0))
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
-	## Tip lifts the base so a leaned cup doesn't dig through the drip tray.
-	## Skip while filling — keep the cup planted under the stream.
-	if not can_use_fill_bay:
-		var tip_amt := (absf(_cup_tilt.x) + absf(_cup_tilt.y)) / maxf(CUP_TILT_MAX, 1.0)
-		cup_root.global_position.y += tip_amt * (CUP_SHELL_BOT_R * 0.55)
 	## Soft wall resolve — ease corrections so it doesn't stutter on the metal.
 	if _cup_machine_contact_grace <= 0.0 or can_reach_customer or can_use_fill_bay:
 		var before_resolve := cup_root.global_position
 		var resolved := _resolve_cup_against_soda(before_resolve, can_reach_customer or can_use_fill_bay)
 		if not can_use_fill_bay and not can_reach_customer:
 			var push := clampf(delta * 16.0, 0.0, 1.0)
+			## Keep Y from the aim seat — resolve only slides XZ away from cabinets.
+			var keep_y := before_resolve.y
 			cup_root.global_position = before_resolve.lerp(resolved, push)
+			cup_root.global_position.y = keep_y
 			if before_resolve.distance_to(resolved) > 0.006:
 				_cup_machine_contact_grace = 0.16
 				_cup_vel *= 0.2
 				_cup_prev_pos = cup_root.global_position
 		else:
+			var keep_y2 := cup_root.global_position.y
 			cup_root.global_position = resolved
+			if can_use_fill_bay:
+				cup_root.global_position.y = keep_y2
+	## Pin height near the fill soft-lock / tray hold plane so the cup can't float up.
+	var anchor_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
+	if can_use_fill_bay and _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
+		anchor_y = _cup_target_for_spout(_cup_spout_lock).y
+	elif cup_rest != Vector3.ZERO:
+		anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
+	cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
+	cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
 	cup_root.rotation_degrees = Vector3(
 		-6.0 + _cup_tilt.y,
 		10.0,
@@ -25278,15 +25318,9 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 					resolved.y = top
 					moved = true
 				continue
-			## Push along the shallowest overlap axis.
-			if ox <= oy and ox <= oz:
+			## Held cups: eject laterally only — vertical pushes were floating the cup to the ceiling.
+			if ox <= oz:
 				resolved.x += ox if d.x >= 0.0 else -ox
-			elif oy <= ox and oy <= oz:
-				## Prefer lifting off metal rather than burying under it.
-				if d.y >= -0.01:
-					resolved.y += oy
-				else:
-					resolved.y -= oy
 			else:
 				## Always eject toward the cook face (local +Z) — never shove behind the cabinet.
 				resolved.z = bp.z + bh.z + cup_half.z + 0.004
