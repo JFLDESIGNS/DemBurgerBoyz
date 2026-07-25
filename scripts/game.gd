@@ -25743,6 +25743,9 @@ func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	## Prefer tray deck under the nozzle when the fountain is present.
 	if soda_root != null and is_instance_valid(soda_root) and cup_rest != Vector3.ZERO:
 		fill_y = minf(fill_y, cup_rest.y + 0.01)
+	## Raise the drink while filling — still keep a tiny gap under the tip.
+	fill_y += CUP_FILL_EXTRA_Y
+	fill_y = minf(fill_y, tip_p.y - CUP_SHELL_H - 0.008)
 	return Vector3(tip_p.x, fill_y, tip_p.z)
 
 
