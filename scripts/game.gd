@@ -36,13 +36,14 @@ const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the righ
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## 12 vertical steel strips — chromatic piano tings on spatula taps.
-## Natural tinggrill sample sits near center; outer strips pitch ±~½ octave.
+## Keep strips near the natural tinggrill pitch — far pitch-shifts get thin / quiet.
 const GRILL_PIANO_SECTIONS := 12
 const GRILL_PIANO_BASE_MIDI := 72 ## C5 — unpitched tinggrill.wav
-const GRILL_PIANO_MIDI0 := GRILL_PIANO_BASE_MIDI - (GRILL_PIANO_SECTIONS / 2) ## 66 / F♯4 left → F5 right
+const GRILL_PIANO_MIDI_LO := 69 ## A4 — left / low strip (was 66, too quiet pitched down)
+const GRILL_PIANO_MIDI_HI := 75 ## D♯5 — right / high strip (was 77, thin pitched up)
 ## Patty must sit fully on the steel — reject clicks near the rim.
-const PATTY_FIT_RADIUS := 0.10
-const PATTY_MIN_SEP := 0.205
+const PATTY_FIT_RADIUS := 0.088 ## Match PATTY_SIZE_SCALE 0.88
+const PATTY_MIN_SEP := 0.180 ## Match smaller→mid patties
 ## Screen + world grab radius — generous so cheese / scoop clicks land reliably.
 const PATTY_PICK_WORLD := 0.42
 const PATTY_PICK_MIN_PX := 62.0
@@ -56,15 +57,28 @@ const CHEESE_PICK_WORLD_EDGE := 0.32
 ## Near-miss drop snaps onto the closest cheesable burger within this radius.
 const CHEESE_SNAP_WORLD := 1.35
 const CHEESE_STICKY_PX := 160.0
-## Smash: hit the visible meat (screen) or the steel disc under it.
-## Tight enough to place beside burgers; loose enough for top-surface clicks.
-const PATTY_SMASH_WORLD := 0.125
-const PATTY_SMASH_MIN_PX := 24.0
-const PATTY_SMASH_PAD_PX := 6.0
-const PATTY_SMASH_MAX_PX := 42.0
-## Sample heights above patty origin — slight lift for cheese, not the hold ring.
-const PATTY_SMASH_Y_LO := 0.02
-const PATTY_SMASH_Y_HI := 0.072
+## Smash: linetrace must hit the patty collision (matched to visual body).
+## Kept as a tiny screen pad only for frozen-ball tops after a ray miss is impossible.
+const PATTY_SMASH_WORLD := 0.092
+const PATTY_SMASH_WORLD_X := 0.092
+const PATTY_SMASH_WORLD_Z := 0.092
+const PATTY_SMASH_MIN_PX := 10.0
+const PATTY_SMASH_PAD_PX := 1.0
+const PATTY_SMASH_MAX_PX := 22.0
+const PATTY_SMASH_SCREEN_X_SCALE := 0.70
+const PATTY_COLLISION_LAYER := 2
+## Flip-ready burgers get a bigger click / push target so other FX don't steal them.
+const PATTY_FLIP_PICK_MUL := 1.75
+const PATTY_FLIP_NEAR_WORLD := 0.28
+## Slide / scoop attach — burger must sit under the cursor (no plane magnet).
+const PATTY_ATTACH_MIN_PX := 28.0
+const PATTY_ATTACH_PAD_PX := 6.0
+const PATTY_ATTACH_WORLD_EDGE := 0.095
+const PATTY_ATTACH_FLIP_MUL := 1.18
+## Dragged burger vs neighbors — other patties keep more weight so they don't ride along.
+const PATTY_NEIGHBOR_PUSH_MOVE_MUL := 0.32
+const PATTY_NEIGHBOR_PUSH_SEP_MUL := 0.42
+const PATTY_NEIGHBOR_DRAG_COUPLE := 0.12
 const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.038
@@ -285,11 +299,12 @@ const SPATULA_RIBBON_ALPHA := 0.30
 const SPATULA_FX_DUR := 1.0 ## Ribbons/circle linger and ease out over 1s
 ## White stroke ring on the steel at each spatula piano tap.
 var _spatula_tap_rings: Array = [] ## {root, mi, mat, t, center}
-const SPATULA_TAP_RING_DUR := 0.40
+const SPATULA_TAP_RING_DUR := 0.28 ## Snappier expand/fade
 const SPATULA_TAP_RING_R0 := 0.016 ## Start tiny
-const SPATULA_TAP_RING_R1 := 0.112 ## ~burger radius
+const SPATULA_TAP_RING_R1 := 0.09 ## ~burger radius (20% smaller patties)
 const SPATULA_TAP_RING_STROKE := 0.007 ## Half-width of the white stroke
-const SPATULA_TAP_RING_ALPHA := 0.425 ## 50% more transparent than prior 0.85
+const SPATULA_TAP_RING_ALPHA := 0.12 ## Very soft white stroke
+const SPATULA_TAP_RING_Y := 0.028 ## Sit above steel / shine (was lowered to 0.014)
 var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
@@ -390,11 +405,14 @@ var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel (brush)
 ## Spatula scrape — tight tip only; much harder than the brush.
-const SPATULA_SCRAPE_RADIUS := 0.055 ## ~2.2" — must be centered on the stain
-const SPATULA_SCRAPE_RATE := 0.16 ## Slow wear; brush stays at RESIDUE_SCRAPE_RATE
-const SPATULA_SWIPE_DIST := 0.30 ## Long deliberate swipe before flecks chip
-const SPATULA_SCRAPE_MIN_MOVE := 0.0025 ## Ignore tiny jitter so near-misses don't erase
+const SPATULA_SCRAPE_RADIUS := 0.072 ## Tip on the stain (slightly more forgiving)
+## ~2s per spot: travel wear + time wear while tip is on the pad.
+const SPATULA_SCRAPE_RATE := 1.35 ## Per meter of tip travel
+const SPATULA_SCRAPE_TIME_RATE := 0.48 ## Per second while tip holds the stain
+const SPATULA_SWIPE_DIST := 0.10 ## Flecks chip with short swipes
+const SPATULA_SCRAPE_MIN_MOVE := 0.0012 ## Tiny moves still count a little
 const RESIDUE_CHUNK_COUNT := 10 ## Extra flecks on top of the burnt disc.
+const RESIDUE_SIZE_SCALE := 0.85 ## Burger leave-behind stain / flecks
 ## Same-spot cook dwell → roll once; 80% chance to drop debris while still cooking.
 const RESIDUE_COOK_SPOT_SEC := 10.0
 const RESIDUE_COOK_SPOT_CHANCE := 0.80
@@ -527,7 +545,11 @@ const GLOCK_REAR_SIGHT_R := 0.0048
 const BRUSH_PATTY_PUSH_RADIUS := 0.38
 const BRUSH_PATTY_PUSH_SCALE := 1.15
 const BRUSH_PATTY_PUSH_MAX := 0.072
-## Click-drag to slide patties on the flat-top.
+## Spatula tip shoves burgers while LMB-held on the grill (never attaches / drags).
+const SPATULA_PATTY_PUSH_RADIUS := 0.22
+const SPATULA_PATTY_PUSH_SCALE := 1.45
+const SPATULA_PATTY_PUSH_MAX := 0.09
+## Click-drag to slide patties on the flat-top (legacy / non-spatula path).
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
 var drag_did_move: bool = false
@@ -542,10 +564,11 @@ var spatula_carry_travel := 0.0
 ## Build-station pickup: hold LMB to carry, release to drop (grill / Build / flick).
 var spatula_from_build: bool = false
 var spatula_lmb_held: bool = false
-## Empty-hand LMB hold over the grill — slide pose 1" lower; drag + scrape enabled.
+## LMB hold over the grill — scrape, push burgers (no attach), pull-flip.
 var spatula_grill_hold: bool = false
 var spatula_grill_hold_press_mouse := Vector2.ZERO
 var spatula_grill_hold_last_xz := Vector2.INF
+var spatula_grill_hold_on_meat: bool = false ## Press started on a tight meat hit
 const DRAG_MOVE_THRESH_PX := 8.0
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
 ## Screen-left flick (negative X) throws a finished patty to Build.
@@ -795,6 +818,12 @@ var grill_roomba_sync_t: float = 0.0
 var grill_roomba_foam_cd: float = 0.0
 var grill_roomba_stuck_t: float = 0.0
 var grill_roomba_escape_t: float = 0.0
+## U-key gag: drive to cook-edge, hang ~¼ off, pitch + wobble until picked up.
+var grill_roomba_ledge_phase: String = "" ## "" | "drive" | "stuck"
+var grill_roomba_ledge_wobble: float = 0.0
+const ROOMBA_LEDGE_DRIVE_SPEED := 0.30
+const ROOMBA_LEDGE_PITCH_DEG := -15.0
+const ROOMBA_LEDGE_OVERHANG_R := 0.5 ## center sits 0.5*R inside cook edge → ~¼ body hangs off
 var grill_roomba_bump_normal: Vector2 = Vector2.ZERO
 var grill_roomba_last_xz: Vector2 = Vector2.ZERO
 var grill_roomba_carry_patty: Area3D = null
@@ -1396,6 +1425,7 @@ const GFX_DEFAULTS := {
 	"contrast": 1.05,
 	"ssao": false,
 	"ssil": false,
+	"shadows": true, ## Cast shadows on by default
 	"sky_energy": 0.34,
 	"heat_warp_on": true,
 	"heat_warp_size": 0.86,
@@ -2295,7 +2325,9 @@ func _process(delta: float) -> void:
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p != null and is_instance_valid(p):
-			p.heating = grill_on
+			## Ice ball / mid-squash must stay cold — otherwise big grease bubbles spawn under it.
+			var ice_ball := bool(p.get("place_ball_waiting")) or bool(p.get("place_morphing"))
+			p.heating = grill_on and not ice_ball
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 			if not _is_bun_toast(p):
 				_update_patty_warm_hold(p, delta)
@@ -2696,6 +2728,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_U or event.physical_keycode == KEY_U:
+			_begin_roomba_ledge_fail()
+			get_viewport().set_input_as_handled()
+			return
 		var ing := _ingredient_from_hotkey(event.keycode)
 		if ing != "":
 			_add_ingredient(ing)
@@ -2735,21 +2771,25 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _try_warmer_click(event.position):
 				return
 			## Left click over spatula grill:
-			## · burger under cursor → slide/drag that burger (no empty-hold pose, no ting)
-			## · empty steel → single piano tap + scrape; pull down off-grill to flip
+			## · burger under cursor → classic slide/drag (attach)
+			## · empty steel → scrape + tip-push burgers; pull down off-grill to flip
 			if _should_show_hand_spatula(event.position):
-				var under_burger = _pick_patty_at_screen(event.position)
+				## Slide / scoop only if the burger is under the cursor — near-miss scrapes instead.
+				var under_burger = _pick_patty_for_slide_or_scoop(event.position)
 				if under_burger != null:
-					## Burger slide mechanic — do not use the empty-grill hold pose.
+					## Old drag-slide — spatula rides with the burger.
 					_spatula_cancel_tap_keep_ting()
 					spatula_grill_hold = false
 					spatula_grill_hold_last_xz = Vector2.INF
+					spatula_grill_hold_on_meat = false
 					_spatula_pull_flip_done = false
-					_try_grill_raycast(event.position, false)
+					_begin_patty_drag(under_burger)
 				else:
+					## Supplement: empty-steel hold scrapes and tip-pushes nearby burgers.
 					spatula_grill_hold = true
 					spatula_grill_hold_press_mouse = event.position
 					spatula_grill_hold_last_xz = Vector2.INF
+					spatula_grill_hold_on_meat = false
 					_spatula_pull_flip_done = false
 					_begin_hand_spatula_combo(event.position)
 				get_viewport().set_input_as_handled()
@@ -2880,7 +2920,9 @@ func _input(event: InputEvent) -> void:
 		if spatula_grill_hold:
 			spatula_grill_hold = false
 			spatula_grill_hold_last_xz = Vector2.INF
+			spatula_grill_hold_on_meat = false
 			_spatula_pull_flip_done = false
+			_spatula_mute_ting = false
 			## Fall through so an active burger drag still ends (tap smash / slide release).
 		if dragging_patty != null:
 			_end_patty_drag()
@@ -4180,15 +4222,16 @@ func _build_hand_spatula() -> void:
 
 
 func _boost_hand_spatula_draw(root: Node3D) -> void:
-	## Cursor tool — always above grill cheese / patty overlays.
+	## Real depth with burgers/cheese — no overlay draw that ignores z.
 	if root == null:
 		return
-	const PRIO := 50 ## Cheese sits at ~PATTY_BODY+6; keep the blade on top.
+	const PRIO := 22 ## Near patty body; depth buffer decides spatula vs meat.
 	for child in root.find_children("*", "MeshInstance3D", true, false):
 		var mi := child as MeshInstance3D
 		if mi == null:
 			continue
-		mi.sorting_offset = 16.0
+		mi.sorting_offset = 0.0
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		var mat := mi.material_override as BaseMaterial3D
 		if mat == null:
 			mat = mi.get_active_material(0) as BaseMaterial3D
@@ -4198,8 +4241,8 @@ func _boost_hand_spatula_draw(root: Node3D) -> void:
 		if dup == null:
 			continue
 		dup.render_priority = PRIO
-		dup.no_depth_test = true
-		dup.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		dup.no_depth_test = false
+		dup.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 		mi.material_override = dup
 
 
@@ -4274,15 +4317,12 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 
 func _spatula_roll_midi_offset() -> int:
 	## Roll angle shifts the grill-strip ting (same on both sides):
-	##   0°   → lower than the strip's natural note
-	##  ±45°  → natural tinggrill pitch (no shift)
-	##  ±90°  → higher / brighter notes
+	##   0°        → a little lower than the strip
+	##  ±45° / ±90° → strip pitch (no extra shift)
 	var mag := absf(_spatula_user_roll)
-	if mag >= 67.5:
-		return 7 ## perfect fifth up — blade on edge
 	if mag >= 22.5:
-		return 0 ## 45° spin — base / normal sound
-	return -7 ## flat on steel — lower version of the base note
+		return 0 ## angled blade — same sound at 45° and 90°
+	return -3 ## flat on steel — mild drop (was −7 and buried left-side taps)
 
 
 func _spatula_spin_curve(t: float) -> float:
@@ -4589,7 +4629,7 @@ func _spatula_play_ting_bit(bit: int) -> void:
 func _spawn_spatula_tap_ring(at: Vector3) -> void:
 	if at == Vector3.ZERO:
 		return
-	var center := Vector3(at.x, GRILL_SURFACE_Y + 0.014, at.z)
+	var center := Vector3(at.x, GRILL_SURFACE_Y + SPATULA_TAP_RING_Y, at.z)
 	var root := Node3D.new()
 	root.name = "SpatulaTapRing"
 	add_child(root)
@@ -4688,14 +4728,17 @@ func _spatula_anim_sample(u: float) -> Dictionary:
 
 
 func _grill_piano_section_at(world_pos: Vector3) -> int:
-	## 0 = left / C4 … 11 = right / B4.
+	## 0 = world −X … 11 = world +X (screen-right → screen-left).
 	var x0 := GRILL_CENTER_X - GRILL_WIDTH * 0.5
 	var u := (world_pos.x - x0) / GRILL_WIDTH
 	return clampi(int(floor(u * float(GRILL_PIANO_SECTIONS))), 0, GRILL_PIANO_SECTIONS - 1)
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
-	return GRILL_PIANO_MIDI0 + _grill_piano_section_at(world_pos)
+	## Spread 12 strips across a tight window around C5 so every tap stays audible.
+	var sec := _grill_piano_section_at(world_pos)
+	var t := float(sec) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
+	return clampi(int(round(lerpf(float(GRILL_PIANO_MIDI_LO), float(GRILL_PIANO_MIDI_HI), t))), GRILL_PIANO_MIDI_LO, GRILL_PIANO_MIDI_HI)
 
 
 func _hand_spatula_tip_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3:
@@ -4755,7 +4798,9 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		## Button released outside our release handler — clear hold state.
 		spatula_grill_hold = false
 		spatula_grill_hold_last_xz = Vector2.INF
+		spatula_grill_hold_on_meat = false
 		_spatula_pull_flip_done = false
+		_spatula_mute_ting = false
 	var show := _should_show_hand_spatula(mouse) or animating or dragging or grill_hold
 	hand_spatula_root.visible = show
 	## Keep the glove pointer even while the 3D spatula is out.
@@ -4971,10 +5016,10 @@ func _add_grill_piano_bar(parent: Node3D, mat: Material, local_pos: Vector3, siz
 
 
 func _setup_world_lighting() -> void:
-	## Outside sun — cooler daylight through the service window.
+	## Outside sun — warm late-day light through the service window (casts shadows).
 	gfx_sun = DirectionalLight3D.new()
 	gfx_sun.name = "Sun"
-	gfx_sun.light_color = Color(1.0, 0.96, 0.88)
+	gfx_sun.light_color = Color(1.0, 0.86, 0.62)
 	gfx_sun.light_energy = 1.55
 	gfx_sun.light_indirect_energy = 1.15
 	gfx_sun.shadow_enabled = true
@@ -4983,13 +5028,16 @@ func _setup_world_lighting() -> void:
 	gfx_sun.rotation_degrees = Vector3(-48.0, 35.0, 8.0)
 	world.add_child(gfx_sun)
 
-	## Soft outdoor bounce so customers aren't harsh-lit.
+	## Warm outdoor key from outside the truck — also casts shadows onto the street / customers.
 	gfx_outside_fill = DirectionalLight3D.new()
-	gfx_outside_fill.name = "OutsideFill"
-	gfx_outside_fill.light_color = Color(0.55, 0.68, 0.95)
-	gfx_outside_fill.light_energy = 0.35
-	gfx_outside_fill.shadow_enabled = false
-	gfx_outside_fill.rotation_degrees = Vector3(-25.0, -140.0, 0.0)
+	gfx_outside_fill.name = "OutsideWarm"
+	gfx_outside_fill.light_color = Color(1.0, 0.72, 0.42)
+	gfx_outside_fill.light_energy = 1.425 ## Was 0.95 — +50% for stronger grill shadows
+	gfx_outside_fill.light_indirect_energy = 0.85
+	gfx_outside_fill.shadow_enabled = true
+	gfx_outside_fill.shadow_blur = 1.45
+	gfx_outside_fill.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	gfx_outside_fill.rotation_degrees = Vector3(-36.0, -155.0, 0.0)
 	world.add_child(gfx_outside_fill)
 
 	## Warm kitchen ceiling fill (inside the truck).
@@ -5003,25 +5051,25 @@ func _setup_world_lighting() -> void:
 	gfx_kitchen.position = Vector3(0.0, 2.45, -0.35)
 	world.add_child(gfx_kitchen)
 
-	## Focused grill work light — specular kick on brushed steel + patty contact shadows.
+	## Focused grill work light — warm cook fill; keep specular modest so shadows read.
 	gfx_grill_lamp = SpotLight3D.new()
 	gfx_grill_lamp.name = "GrillLamp"
-	gfx_grill_lamp.light_color = Color(1.0, 0.94, 0.82)
-	gfx_grill_lamp.light_energy = 1.85
-	gfx_grill_lamp.light_specular = 1.35
-	gfx_grill_lamp.spot_range = 3.4
-	gfx_grill_lamp.spot_angle = 44.0
-	gfx_grill_lamp.spot_attenuation = 0.85
+	gfx_grill_lamp.light_color = Color(1.0, 0.92, 0.78)
+	gfx_grill_lamp.light_energy = 1.4
+	gfx_grill_lamp.light_specular = 0.32
+	gfx_grill_lamp.spot_range = 3.2
+	gfx_grill_lamp.spot_angle = 42.0
+	gfx_grill_lamp.spot_attenuation = 0.9
 	gfx_grill_lamp.shadow_enabled = true
-	gfx_grill_lamp.shadow_blur = 1.0
+	gfx_grill_lamp.shadow_blur = 1.15
 	gfx_grill_lamp.position = Vector3(GRILL_CENTER_X, 2.35, GRILL_SURFACE_Z - 0.15)
 	gfx_grill_lamp.rotation_degrees = Vector3(-72.0, 0.0, 0.0)
 	world.add_child(gfx_grill_lamp)
 
-	## Window wash — daylight spilling onto the counter from outside.
+	## Window wash — warm spill onto the counter from outside.
 	gfx_window_wash = SpotLight3D.new()
 	gfx_window_wash.name = "WindowWash"
-	gfx_window_wash.light_color = Color(0.75, 0.88, 1.0)
+	gfx_window_wash.light_color = Color(1.0, 0.84, 0.62)
 	gfx_window_wash.light_energy = 1.1
 	gfx_window_wash.spot_range = 4.0
 	gfx_window_wash.spot_angle = 50.0
@@ -5042,13 +5090,13 @@ func _setup_world_lighting() -> void:
 	env.tonemap_white = 1.0
 	## Ambient occlusion — contact shadows in the kitchen / under patties.
 	env.ssao_enabled = true
-	env.ssao_radius = 1.15
-	env.ssao_intensity = 1.35
-	env.ssao_power = 1.55
-	env.ssao_horizon = 0.06
+	env.ssao_radius = 1.35
+	env.ssao_intensity = 1.85
+	env.ssao_power = 1.7
+	env.ssao_horizon = 0.04
 	env.ssil_enabled = true
-	env.ssil_intensity = 0.65
-	env.ssil_radius = 1.0
+	env.ssil_intensity = 0.85
+	env.ssil_radius = 1.15
 	env.glow_enabled = true
 	env.glow_intensity = 1.05
 	env.glow_strength = 1.35
@@ -5107,11 +5155,10 @@ func _build_flat_top_grill() -> void:
 	var rim_mat := StandardMaterial3D.new()
 	rim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	rim_mat.albedo_color = Color(0.28, 0.30, 0.33)
-	rim_mat.metallic = 1.0
-	rim_mat.roughness = 0.22
-	rim_mat.clearcoat_enabled = true
-	rim_mat.clearcoat = 0.45
-	rim_mat.clearcoat_roughness = 0.18
+	## Soft painted rim — not chrome, so grill shadows stay readable.
+	rim_mat.metallic = 0.12
+	rim_mat.roughness = 0.62
+	rim_mat.clearcoat_enabled = false
 	rim_mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	rim.material_override = rim_mat
 	surface.add_child(rim)
@@ -5157,7 +5204,7 @@ func _build_flat_top_grill() -> void:
 	if grill_surface_mat == null:
 		grill_surface_mat = _make_grill_zone_metal(Color(0.30, 0.32, 0.36), 0.14, 0.0, GRILL_WIDTH, GRILL_DEPTH)
 
-	## Soft specular band on top of the tiled steel (kept subtle).
+	## Soft specular band on top of the tiled steel (fake shine accent).
 	_add_grill_shine(surface, Vector3(0, 0.024, 0), GRILL_WIDTH * 0.98, GRILL_DEPTH * 0.42)
 	_refresh_grill_piano_sections()
 
@@ -5781,7 +5828,8 @@ func _push_neighbors_from_drag(target: Vector3, move_xz: Vector2, moved: float, 
 	var changed := true
 	var any_blocked := false
 	var passes := 0
-	while changed and passes < 3:
+	## Heavier neighbors: less coupling to the drag, smaller shove per overlap.
+	while changed and passes < 2:
 		changed = false
 		passes += 1
 		for i in GRILL_SLOTS:
@@ -5796,8 +5844,12 @@ func _push_neighbors_from_drag(target: Vector3, move_xz: Vector2, moved: float, 
 			var away := Vector2(p.position.x - target.x, p.position.z - target.z)
 			if away.length_squared() <= 0.000001:
 				away = move_xz
-			var push_len := maxf(moved * 0.92, PATTY_MIN_SEP - d + 0.006)
-			if _try_shove_patty(i, p, away + move_xz * 0.35, push_len, ignore_idx, true):
+			var overlap := PATTY_MIN_SEP - d
+			var push_len := maxf(
+				moved * PATTY_NEIGHBOR_PUSH_MOVE_MUL,
+				overlap * PATTY_NEIGHBOR_PUSH_SEP_MUL + 0.002
+			)
+			if _try_shove_patty(i, p, away + move_xz * PATTY_NEIGHBOR_DRAG_COUPLE, push_len, ignore_idx, true):
 				changed = true
 			else:
 				any_blocked = true
@@ -5841,9 +5893,10 @@ func _spawn_residue_chunks(slot: int, at: Vector3, kind: String = "patty") -> vo
 	var chunks: Array = []
 
 	## Main burnt disc — larger/darker so cook-spot debris reads under the patty.
+	var s := RESIDUE_SIZE_SCALE
 	var disc := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	var disc_d := 0.24 + rng.randf() * 0.04
+	var disc_d := (0.24 + rng.randf() * 0.04) * s
 	plane.size = Vector2(disc_d, disc_d)
 	disc.mesh = plane
 	disc.position = at + Vector3(0, 0.0024, 0)
@@ -5867,18 +5920,18 @@ func _spawn_residue_chunks(slot: int, at: Vector3, kind: String = "patty") -> vo
 		var mesh: Mesh
 		if roll > 0.45:
 			var cyl := CylinderMesh.new()
-			var r := 0.011 + rng.randf() * 0.016
+			var r := (0.011 + rng.randf() * 0.016) * s
 			cyl.top_radius = r * (0.65 + rng.randf() * 0.35)
 			cyl.bottom_radius = r
-			cyl.height = 0.0035 + rng.randf() * 0.004
+			cyl.height = (0.0035 + rng.randf() * 0.004) * s
 			cyl.radial_segments = 8
 			mesh = cyl
 		else:
 			var box := BoxMesh.new()
 			box.size = Vector3(
-				0.014 + rng.randf() * 0.022,
-				0.003 + rng.randf() * 0.0035,
-				0.011 + rng.randf() * 0.018
+				(0.014 + rng.randf() * 0.022) * s,
+				(0.003 + rng.randf() * 0.0035) * s,
+				(0.011 + rng.randf() * 0.018) * s
 			)
 			mesh = box
 		bit.mesh = mesh
@@ -6546,15 +6599,10 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 	if Time.get_ticks_msec() / 1000.0 < grill_ignore_pad_until:
 		return
 	if not place_patty:
-		var picked = _pick_patty_at_screen(get_viewport().get_mouse_position())
+		var picked = _pick_patty_for_slide_or_scoop(get_viewport().get_mouse_position())
 		if picked != null:
 			_begin_patty_drag(picked)
 			return
-		if hit_pos != Vector3.ZERO:
-			var near := _nearest_patty_to(hit_pos, PATTY_PICK_WORLD)
-			if near >= 0:
-				_begin_patty_drag(grill[near])
-				return
 		if grill_on:
 			if _grill_meat_count() == 0:
 				_flash("Right-click where you want the patty", Color("FFCC80"))
@@ -6564,11 +6612,115 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 	_try_place_patty_at(hit_pos)
 
 
+func _grill_patty_from_collider(col: Object) -> Area3D:
+	var n: Node = col as Node
+	while n != null:
+		for p in grill:
+			if p != null and p == n:
+				return p
+		n = n.get_parent()
+	return null
+
+
+func _raycast_patty_at_screen(screen_pos: Vector2) -> Area3D:
+	## True cursor linetrace — smash only counts when the ray hits the meat collision.
+	if camera == null:
+		return null
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	if dir.length_squared() < 0.000001:
+		return null
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 24.0)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	query.collision_mask = PATTY_COLLISION_LAYER
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return null
+	return _grill_patty_from_collider(hit.get("collider"))
+
+
+func _patty_is_flip_ready(patty: Area3D) -> bool:
+	return patty != null and is_instance_valid(patty) and patty.has_method("can_flip") and patty.can_flip()
+
+
+func _pick_flip_ready_patty_forgiving(screen_pos: Vector2) -> Area3D:
+	## Extra-wide grab for FLIP-ready meat so rings/FX/near-misses don't steal the click.
+	## Not used for slide/scoop attach — those require `_pick_patty_for_slide_or_scoop`.
+	if camera == null:
+		return null
+	var best: Area3D = null
+	var best_d := 9999.0
+	var plane_hit := _grill_plane_from_screen(screen_pos)
+	for p in grill:
+		if p == null or not is_instance_valid(p) or p.is_held:
+			continue
+		if not _patty_is_flip_ready(p):
+			continue
+		var lift: Vector3 = p.global_position + Vector3(0, 0.04, 0)
+		if camera.is_position_behind(lift):
+			continue
+		var screen_pt := camera.unproject_position(lift)
+		var pick_px := maxf(
+			PATTY_PICK_MIN_PX * PATTY_FLIP_PICK_MUL,
+			_patty_screen_pick_radius_px(lift, PATTY_PICK_WORLD_EDGE * 1.35, PATTY_PICK_PAD_PX * 1.4)
+		)
+		var screen_d := screen_pos.distance_to(screen_pt)
+		var near := screen_d <= pick_px
+		if not near and plane_hit != Vector3.ZERO:
+			near = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= PATTY_FLIP_NEAR_WORLD
+		if not near:
+			continue
+		if screen_d < best_d:
+			best_d = screen_d
+			best = p
+	return best
+
+
+func _pick_patty_for_slide_or_scoop(screen_pos: Vector2) -> Area3D:
+	## Strict attach: cursor must be on the burger (linetrace or tight screen disc).
+	## Near-miss empty steel scrapes / tip-pushes instead of grabbing a neighbor.
+	if camera == null:
+		return null
+	var blocked := _blocks_grill_pick(screen_pos)
+	var ray := _raycast_patty_at_screen(screen_pos)
+	if ray != null:
+		if blocked and not _patty_is_flip_ready(ray) and not bool(ray.get("place_ball_waiting")):
+			return null
+		return ray
+	var best: Area3D = null
+	var best_d := 9999.0
+	for p in grill:
+		if p == null or not is_instance_valid(p) or p.is_held:
+			continue
+		var flip_ready := _patty_is_flip_ready(p)
+		var waiting_ball := bool(p.get("place_ball_waiting"))
+		if blocked and not flip_ready and not waiting_ball:
+			continue
+		var lift_y := 0.055 if waiting_ball else 0.03
+		var lift: Vector3 = p.global_position + Vector3(0, lift_y, 0)
+		if camera.is_position_behind(lift):
+			continue
+		var screen_pt := camera.unproject_position(lift)
+		var pick_px := maxf(
+			PATTY_ATTACH_MIN_PX,
+			_patty_screen_pick_radius_px(lift, PATTY_ATTACH_WORLD_EDGE, PATTY_ATTACH_PAD_PX)
+		)
+		if flip_ready:
+			pick_px *= PATTY_ATTACH_FLIP_MUL
+		var screen_d := screen_pos.distance_to(screen_pt)
+		if screen_d > pick_px:
+			continue
+		if screen_d < best_d:
+			best_d = screen_d
+			best = p
+	return best
+
+
 func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 	## Prefer the burger under the cursor on screen — not a plane-hit or back-stack neighbor.
-	## max_world < 0 → generous scoop/drag pick; set tighter (e.g. smash) to require a real hit.
-	if _blocks_grill_pick(screen_pos):
-		return null
+	## Flip-ready burgers can click through Build chrome / FX that would otherwise block.
+	var blocked := _blocks_grill_pick(screen_pos)
 	if camera == null:
 		return null
 	var world_lim := PATTY_PICK_WORLD if max_world < 0.0 else max_world
@@ -6577,20 +6729,28 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 	var edge_r := PATTY_PICK_WORLD_EDGE if max_world < 0.0 else max_world
 	var plane_hit := _grill_plane_from_screen(screen_pos)
 	var cam_pos := camera.global_position
-	var candidates: Array = [] ## {p, screen_d, cam_d, in_screen}
+	var candidates: Array = [] ## {p, screen_d, cam_d, in_screen, flip_ready}
 	for p in grill:
 		if p == null or not is_instance_valid(p) or p.is_held:
 			continue
-		var lift: Vector3 = p.global_position + Vector3(0, 0.03, 0)
+		var flip_ready := _patty_is_flip_ready(p)
+		if blocked and not flip_ready:
+			continue
+		## Ice balls sit taller — aim pick at the sphere center, not the grill disc.
+		var lift_y := 0.055 if bool(p.get("place_ball_waiting")) else 0.03
+		var lift: Vector3 = p.global_position + Vector3(0, lift_y, 0)
 		if camera.is_position_behind(lift):
 			continue
 		var screen_pt := camera.unproject_position(lift)
 		var pick_px := maxf(min_px, _patty_screen_pick_radius_px(lift, edge_r, pad_px))
+		if flip_ready:
+			pick_px *= PATTY_FLIP_PICK_MUL
 		var screen_d := screen_pos.distance_to(screen_pt)
 		var in_screen := screen_d <= pick_px
 		var near_plane := false
+		var plane_lim := world_lim * (1.35 if flip_ready else 1.0)
 		if plane_hit != Vector3.ZERO:
-			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= world_lim
+			near_plane = Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() <= plane_lim
 		if not in_screen and not near_plane:
 			continue
 		candidates.append({
@@ -6598,6 +6758,7 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 			"screen_d": screen_d,
 			"cam_d": cam_pos.distance_to(lift),
 			"in_screen": in_screen,
+			"flip_ready": flip_ready,
 		})
 	if candidates.is_empty():
 		return null
@@ -6609,8 +6770,12 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 			break
 	if any_screen:
 		candidates = candidates.filter(func(c): return bool(c["in_screen"]))
-	## Closest on screen wins; ties break toward the front (nearer camera).
+	## Flip-ready wins ties; else closest on screen / nearer camera.
 	candidates.sort_custom(func(a, b):
+		var fa := 0 if bool(a["flip_ready"]) else 1
+		var fb := 0 if bool(b["flip_ready"]) else 1
+		if fa != fb:
+			return fa < fb
 		var sa: float = float(a["screen_d"])
 		var sb: float = float(b["screen_d"])
 		if absf(sa - sb) > 2.5:
@@ -6621,53 +6786,19 @@ func _pick_patty_at_screen(screen_pos: Vector2, max_world: float = -1.0):
 
 
 func _pick_patty_for_smash(screen_pos: Vector2):
-	## Right-click on the burger → smash. Empty steel / near-miss → place.
-	## Screen-space first: clicking the raised top projects past the grill-plane disc.
+	## Right-click smash — linetrace must hit the burger collision under the cursor.
 	if _blocks_grill_pick(screen_pos):
-		return null
+		## Still allow smashing a flip-ready / waiting ball if the ray truly hits it.
+		pass
 	if camera == null:
 		return null
-	var plane_hit := _grill_plane_from_screen(screen_pos)
-	var best = null
-	var best_score := 9999.0
-	for p in grill:
-		if p == null or not is_instance_valid(p) or p.is_held:
-			continue
-		## Tall hit column: meat mid → cheese / hold-ring so top clicks still count.
-		var screen_d := 9999.0
-		var pick_px := PATTY_SMASH_MIN_PX
-		var any_front := false
-		for i in 4:
-			var t := float(i) / 3.0
-			var y := lerpf(PATTY_SMASH_Y_LO, PATTY_SMASH_Y_HI, t)
-			var sample: Vector3 = p.global_position + Vector3(0, y, 0)
-			if camera.is_position_behind(sample):
-				continue
-			any_front = true
-			var screen_pt := camera.unproject_position(sample)
-			var d := screen_pos.distance_to(screen_pt)
-			if d < screen_d:
-				screen_d = d
-				pick_px = clampf(
-					_patty_screen_pick_radius_px(sample, PATTY_SMASH_WORLD, PATTY_SMASH_PAD_PX),
-					PATTY_SMASH_MIN_PX,
-					PATTY_SMASH_MAX_PX
-				)
-		if not any_front:
-			continue
-		var on_meat := screen_d <= pick_px
-		if not on_meat and plane_hit != Vector3.ZERO:
-			var world_d := Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length()
-			on_meat = world_d <= PATTY_SMASH_WORLD
-		if not on_meat:
-			continue
-		var score := screen_d
-		if plane_hit != Vector3.ZERO:
-			score = minf(score, Vector2(plane_hit.x - p.position.x, plane_hit.z - p.position.z).length() * 80.0)
-		if score < best_score:
-			best_score = score
-			best = p
-	return best
+	var hit := _raycast_patty_at_screen(screen_pos)
+	if hit != null:
+		if _blocks_grill_pick(screen_pos) and not _patty_is_flip_ready(hit) \
+				and not bool(hit.get("place_ball_waiting")):
+			return null
+		return hit
+	return null
 
 
 func _smash_grill_patty(patty: Area3D) -> void:
@@ -6966,8 +7097,8 @@ func _spawn_patty_in_slot(idx: int) -> void:
 func _begin_patty_drag(patty: Area3D) -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
-	## Ice ball / mid-squash — no sliding until it's a flat patty.
-	if bool(patty.get("place_morphing")) or bool(patty.get("place_ball_waiting")):
+	## Mid ice-ball squash — no sliding; waiting spheres slide like burgers.
+	if bool(patty.get("place_morphing")) and not bool(patty.get("place_ball_waiting")):
 		return
 	if _is_bun_toast(patty):
 		if BUN_TOAST_ENABLED:
@@ -7145,10 +7276,11 @@ func _end_patty_drag() -> void:
 	if _is_over_garbage(mouse):
 		_trash_single_grill_patty(patty)
 		return
-	## Tap without sliding → squish, then flip / scoop (no grill ting).
+	## Tap without sliding → flip / scoop. Squish only if the press linetraced the meat.
 	if not slid:
-		_smash_grill_patty(patty)
-		_on_patty_clicked(patty) ## Successful flip also runs the spatula flourish.
+		if _raycast_patty_at_screen(drag_start_mouse) == patty:
+			_smash_grill_patty(patty)
+		_on_patty_clicked(patty) ## Flip is intentionally more forgiving than smash.
 		return
 	## Flick left with a finished patty → jump arc onto Build.
 	if _is_flick_to_build(vel, travel) and patty.can_scoop():
@@ -7503,8 +7635,8 @@ func _handle_spatula_click(screen_pos: Vector2) -> bool:
 		return true
 	if _try_warmer_click(screen_pos):
 		return true
-	## Still free to flip another burger on the grill.
-	var other = _pick_patty_at_screen(screen_pos)
+	## Still free to flip / scoop another burger — must be under the cursor.
+	var other = _pick_patty_for_slide_or_scoop(screen_pos)
 	if other != null and other != spatula_patty:
 		_on_patty_clicked(other)
 		return true
@@ -7856,6 +7988,7 @@ func _find_residue_slot_for_spot(at: Vector3) -> int:
 func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	## Empty-steel spatula hold scrapes residue (not while dragging a burger).
 	## Only the single nearest stain under the tip — never neighboring pads.
+	## Target: ~2 seconds of tip-on-stain to clear a pad.
 	if tip_pos == Vector3.ZERO:
 		return
 	var prev := spatula_grill_hold_last_xz
@@ -7866,16 +7999,6 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	var move_xz := cur - prev
 	var moved := move_xz.length()
 	spatula_grill_hold_last_xz = cur
-	if moved < SPATULA_SCRAPE_MIN_MOVE:
-		if game_audio and game_audio.has_method("set_slide_moving") and dragging_patty == null:
-			game_audio.set_slide_moving(false)
-		## Still decay swipe progress when idle so almost-chips don't stick.
-		for i in GRILL_SLOTS:
-			if i < brush_swipe_cool.size():
-				brush_swipe_cool[i] = maxf(0.0, float(brush_swipe_cool[i]) - delta)
-			if i < brush_swipe_travel.size():
-				brush_swipe_travel[i] = maxf(0.0, float(brush_swipe_travel[i]) - delta * 0.8)
-		return
 	var scraping := false
 	var best_i := -1
 	var best_d := SPATULA_SCRAPE_RADIUS
@@ -7899,27 +8022,42 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 		var pad_pos: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else slot_positions[i]
 		scraping = true
 		var before := float(grill_residue[i])
-		grill_residue[i] = maxf(0.0, before - moved * SPATULA_SCRAPE_RATE)
+		var travel_wear := moved * SPATULA_SCRAPE_RATE if moved >= SPATULA_SCRAPE_MIN_MOVE else 0.0
+		var time_wear := delta * SPATULA_SCRAPE_TIME_RATE
+		grill_residue[i] = maxf(0.0, before - travel_wear - time_wear)
 		_refresh_residue_visual(i)
 		if mp_enabled and not _mp_applying and _mp_residue_sync_cool <= 0.0:
 			_mp_residue_sync_cool = 0.09
 			mp_residue_amt.rpc(i, float(grill_residue[i]), pad_pos.x, pad_pos.z)
-		if i < brush_swipe_travel.size():
+		if moved >= SPATULA_SCRAPE_MIN_MOVE and i < brush_swipe_travel.size():
 			brush_swipe_travel[i] = float(brush_swipe_travel[i]) + moved
+		elif i < brush_swipe_travel.size():
+			## Idle on the pad still builds a little swipe progress toward a chip.
+			brush_swipe_travel[i] = float(brush_swipe_travel[i]) + delta * 0.045
 		if float(brush_swipe_cool[i]) <= 0.0 and float(brush_swipe_travel[i]) >= SPATULA_SWIPE_DIST:
 			brush_swipe_travel[i] = 0.0
-			brush_swipe_cool[i] = 0.22
-			_scrape_residue_hit(i, move_xz)
+			brush_swipe_cool[i] = 0.16
+			var chip_dir := move_xz if moved >= SPATULA_SCRAPE_MIN_MOVE else Vector2(1.0, 0.0)
+			_scrape_residue_hit(i, chip_dir)
 			if mp_enabled and not _mp_applying:
-				mp_residue_chip.rpc(i, move_xz.x, move_xz.y, pad_pos.x, pad_pos.z)
+				mp_residue_chip.rpc(i, chip_dir.x, chip_dir.y, pad_pos.x, pad_pos.z)
 		if float(grill_residue[i]) <= 0.04:
 			_scrape_finish_clean(i)
+	else:
+		## Tip off any stain — decay almost-chips.
+		for i2 in GRILL_SLOTS:
+			if i2 < brush_swipe_travel.size():
+				brush_swipe_travel[i2] = maxf(0.0, float(brush_swipe_travel[i2]) - delta * 0.8)
 	## Liquids: very tight tip hit (brush keeps the wider scrape).
-	if moved >= SPATULA_SCRAPE_MIN_MOVE and _scrape_grill_liquids(tip_pos, move_xz, moved, 0.18):
+	if moved >= SPATULA_SCRAPE_MIN_MOVE and _scrape_grill_liquids(tip_pos, move_xz, moved, 0.22):
 		scraping = true
+	## Tip shove — push burgers aside without attaching them to the spatula.
+	if moved >= SPATULA_SCRAPE_MIN_MOVE:
+		_spatula_nudge_patties(tip_pos, move_xz, moved)
 	if game_audio and game_audio.has_method("set_slide_moving") and dragging_patty == null:
 		if scraping:
-			game_audio.set_slide_moving(true, clampf(moved / maxf(delta, 0.001) * 0.25, 0.3, 1.2))
+			var spd := moved / maxf(delta, 0.001) if moved >= SPATULA_SCRAPE_MIN_MOVE else 0.35
+			game_audio.set_slide_moving(true, clampf(spd * 0.25, 0.3, 1.2))
 		else:
 			game_audio.set_slide_moving(false)
 
@@ -8127,7 +8265,7 @@ func _build_grill_roomba() -> void:
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
 		grill_roomba_root.queue_free()
 	grill_roomba_root = Node3D.new()
-	grill_roomba_root.name = "GrillCleaningRoomba"
+	grill_roomba_root.name = "TurbachefRobot"
 	grill_roomba_root.visible = false
 	grill_roomba_spatula_root = null
 	world.add_child(grill_roomba_root)
@@ -8218,7 +8356,7 @@ func _build_grill_roomba() -> void:
 			arm.material_override = _make_basic_mat(Color(0.015, 0.018, 0.02), 0.2, 0.75)
 			bristle_root.add_child(arm)
 	grill_roomba_area = Area3D.new()
-	grill_roomba_area.name = "RoombaGrab"
+	grill_roomba_area.name = "TurbachefGrab"
 	grill_roomba_area.collision_layer = ROOMBA_COLLISION_LAYER
 	grill_roomba_area.collision_mask = 0
 	grill_roomba_area.input_ray_pickable = true
@@ -8398,6 +8536,8 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_foam_cd = 0.0
 	grill_roomba_stuck_t = 0.0
 	grill_roomba_escape_t = 0.0
+	grill_roomba_ledge_phase = ""
+	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_carry_patty = null
 	grill_roomba_carry_slot = -1
 	grill_roomba_carry_target = Vector3.INF
@@ -8437,6 +8577,7 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	if not _owns_grill_roomba() or not playing:
 		grill_roomba_root.visible = false
+		grill_roomba_ledge_phase = ""
 		if grill_roomba_held:
 			_release_grill_roomba()
 		if game_audio and game_audio.has_method("set_roomba_drive"):
@@ -8449,6 +8590,13 @@ func _update_grill_roomba(delta: float) -> void:
 			game_audio.set_roomba_drive(false)
 		_update_roomba_spatula_hinge(false, delta)
 		_update_held_grill_roomba(delta)
+		return
+	## U-key ledge gag — pause normal AI until rescued.
+	if grill_roomba_ledge_phase == "drive":
+		_update_roomba_ledge_drive(delta)
+		return
+	if grill_roomba_ledge_phase == "stuck":
+		_update_roomba_ledge_stuck(delta)
 		return
 	grill_roomba_foam_cd = maxf(0.0, grill_roomba_foam_cd - delta)
 	_update_grill_roomba_bristles(delta, grill_roomba_vel.length())
@@ -8698,11 +8846,15 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held\
 	or dragging_patty != null or bts_lightstick_held_index >= 0:
 		return false
-	var near:= screen_pos.distance_to(camera.unproject_position(grill_roomba_root.global_position + Vector3(0.0, 0.045, 0.0))) <= 64.0
+	## Ledge gag is easier to grab (hangs off toward the cook).
+	var grab_px := 110.0 if grill_roomba_ledge_phase != "" else 64.0
+	var near:= screen_pos.distance_to(camera.unproject_position(grill_roomba_root.global_position + Vector3(0.0, 0.045, 0.0))) <= grab_px
 	if not near and not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
 		return false
 	_roomba_drop_carried_patty_in_place()
 	grill_roomba_held = true
+	grill_roomba_ledge_phase = "" ## Picking it up rescues the ledge gag.
+	grill_roomba_ledge_wobble = 0.0
 	_set_roomba_face("sad")
 	grill_roomba_hold_wobble = randf() * TAU
 	grill_roomba_vel = Vector2.ZERO
@@ -8717,6 +8869,8 @@ func _release_grill_roomba() -> void:
 	if not grill_roomba_held:
 		return
 	grill_roomba_held = false
+	grill_roomba_ledge_phase = ""
+	grill_roomba_ledge_wobble = 0.0
 	_set_roomba_face("neutral")
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
@@ -8733,6 +8887,126 @@ func _release_grill_roomba() -> void:
 		grill_roomba_root.rotation_degrees.z = 0.0
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_reaim_t = 0.2
+	_flash("Turbachef Robot back on the grill", Color("A5D6A7"))
+
+
+func _roomba_cook_edge_z() -> float:
+	## Player / cook side of the flat-top (world −Z).
+	return GRILL_SURFACE_Z - GRILL_DEPTH * 0.5
+
+
+func _roomba_ledge_hang_target() -> Vector3:
+	## Hang ~¼ of the body off the cook edge.
+	var edge_z := _roomba_cook_edge_z()
+	var half_w := GRILL_WIDTH * 0.5 - ROOMBA_RADIUS * 1.05
+	var x := GRILL_CENTER_X
+	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+		x = clampf(grill_roomba_root.global_position.x, GRILL_CENTER_X - half_w, GRILL_CENTER_X + half_w)
+	return Vector3(
+		x,
+		GRILL_SURFACE_Y + ROOMBA_SIT_Y,
+		edge_z + ROOMBA_RADIUS * ROOMBA_LEDGE_OVERHANG_R
+	)
+
+
+func _begin_roomba_ledge_fail() -> void:
+	## U — drive to the near edge, tip off, wobble until the cook picks it up.
+	if not playing:
+		return
+	if not _owns_grill_roomba():
+		_flash("Buy the Turbachef Robot first", Color("FFA726"))
+		return
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	if grill_roomba_held:
+		_flash("Drop the Turbachef Robot first", Color("FFCC80"))
+		return
+	if grill_roomba_ledge_phase == "drive" or grill_roomba_ledge_phase == "stuck":
+		return
+	_roomba_drop_carried_patty_in_place()
+	grill_roomba_scoop_patty = null
+	grill_roomba_scoop_slot = -1
+	grill_roomba_scoop_hold_t = 0.0
+	grill_roomba_task_patty = null
+	grill_roomba_task_slot = -1
+	grill_roomba_task_dir = Vector2.ZERO
+	grill_roomba_task_mode = ""
+	grill_roomba_task_t = 0.0
+	_roomba_clear_bumper_align()
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_back_t = 0.0
+	grill_roomba_bump_t = 0.0
+	grill_roomba_ledge_phase = "drive"
+	grill_roomba_ledge_wobble = 0.0
+	## Face the cook edge (−Z).
+	grill_roomba_turn_goal = Vector2(0.0, -1.0).angle()
+	_set_roomba_face("sad")
+	_flash("Turbachef Robot is stuck — pick it up!", Color("FF8A80"))
+	if game_audio and game_audio.has_method("play_roomba_done_beep"):
+		game_audio.play_roomba_done_beep()
+
+
+func _update_roomba_ledge_drive(delta: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		grill_roomba_ledge_phase = ""
+		return
+	_update_roomba_spatula_hinge(false, delta)
+	var hang := _roomba_ledge_hang_target()
+	var approach := Vector3(hang.x, hang.y, hang.z + ROOMBA_RADIUS * 1.45)
+	var pos := grill_roomba_root.global_position
+	## Approach on-grill first, then creep over the lip.
+	var target := hang if pos.z <= approach.z + 0.02 else approach
+	var to := Vector2(target.x - pos.x, target.z - pos.z)
+	grill_roomba_turn_goal = Vector2(0.0, -1.0).angle()
+	grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+	if to.length() > 0.012:
+		var step := minf(to.length(), ROOMBA_LEDGE_DRIVE_SPEED * delta)
+		var n := to.normalized()
+		pos.x += n.x * step
+		pos.z += n.y * step
+		pos.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y
+		grill_roomba_root.global_position = pos
+		grill_roomba_root.rotation_degrees = Vector3(0.0, _roomba_visual_yaw_degrees(), 0.0)
+		grill_roomba_vel = n * ROOMBA_LEDGE_DRIVE_SPEED
+		_update_grill_roomba_bristles(delta, ROOMBA_LEDGE_DRIVE_SPEED)
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(true, 0.85)
+		return
+	## Arrived — tip and wobble until rescued.
+	grill_roomba_root.global_position = hang
+	grill_roomba_last_xz = Vector2(hang.x, hang.z)
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_ledge_phase = "stuck"
+	grill_roomba_ledge_wobble = randf() * TAU
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(false)
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(true)
+
+
+func _update_roomba_ledge_stuck(delta: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		grill_roomba_ledge_phase = ""
+		return
+	_update_roomba_spatula_hinge(false, delta)
+	_set_roomba_face("sad")
+	grill_roomba_ledge_wobble = fposmod(grill_roomba_ledge_wobble + delta * 11.5, TAU)
+	grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, Vector2(0.0, -1.0).angle(), delta)
+	var base := _roomba_ledge_hang_target()
+	## Stuck jitter — looks like wheels spinning on the lip.
+	base.x += sin(grill_roomba_ledge_wobble * 2.4) * 0.007
+	base.z += cos(grill_roomba_ledge_wobble * 1.9) * 0.005
+	base.y = GRILL_SURFACE_Y + ROOMBA_SIT_Y - 0.01 + sin(grill_roomba_ledge_wobble * 3.2) * 0.004
+	grill_roomba_root.global_position = base
+	grill_roomba_root.rotation_degrees = Vector3(
+		ROOMBA_LEDGE_PITCH_DEG + sin(grill_roomba_ledge_wobble * 3.4) * 4.5,
+		_roomba_visual_yaw_degrees(),
+		cos(grill_roomba_ledge_wobble * 2.7) * 6.0
+	)
+	_update_grill_roomba_bristles(delta, 0.55)
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		## Soft stutter drive while “stuck”.
+		game_audio.set_roomba_drive(true, 0.35 + 0.25 * absf(sin(grill_roomba_ledge_wobble * 2.0)))
 
 
 func _roomba_apply_bounds_and_bump(xz: Vector2) -> bool:
@@ -14873,7 +15147,7 @@ func _grill_zone_bands() -> Array:
 			"mul": ZONE_FULL_MUL,
 			"label": "FULL",
 			"col": Color(0.48, 0.44, 0.40),
-			"rough": 0.08,
+			"rough": 0.48,
 			"emit": 0.10,
 			"glow": 1.0,
 			"lab_col": Color(1.0, 0.82, 0.55, 0.95),
@@ -14884,7 +15158,7 @@ func _grill_zone_bands() -> Array:
 			"mul": ZONE_HALF_MUL,
 			"label": "1/2",
 			"col": Color(0.38, 0.40, 0.42),
-			"rough": 0.11,
+			"rough": 0.52,
 			"emit": 0.04,
 			"glow": 0.42,
 			"lab_col": Color(1.0, 0.9, 0.65, 0.92),
@@ -14895,7 +15169,7 @@ func _grill_zone_bands() -> Array:
 			"mul": ZONE_HOLD_MUL,
 			"label": "HOLD",
 			"col": Color(0.30, 0.32, 0.36),
-			"rough": 0.16,
+			"rough": 0.58,
 			"emit": 0.0,
 			"glow": 0.0,
 			"lab_col": Color(0.75, 0.88, 1.0, 0.95),
@@ -15127,19 +15401,14 @@ func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float, zone_w
 		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	else:
 		mat.albedo_color = albedo
-	## Hot flat-top stainless — mirror-ish with a greasy clearcoat film.
-	mat.metallic = 1.0
-	mat.roughness = clampf(roughness, 0.04, 0.45)
+	## Seasoned flat-top look — barely reflective so cast shadows read clearly.
+	mat.metallic = 0.14
+	mat.roughness = clampf(roughness, 0.40, 0.72)
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_BURLEY
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
-	mat.clearcoat_enabled = true
-	mat.clearcoat = 0.72
-	mat.clearcoat_roughness = clampf(roughness * 0.55, 0.04, 0.2)
-	## Brushed grain stretches highlights along the cook line.
-	mat.anisotropy_enabled = true
-	mat.anisotropy = 0.55
+	mat.clearcoat_enabled = false
+	mat.anisotropy_enabled = false
 	## Write depth so patties / spatula / roomba cast real shadows on the steel.
-	## (Fake patty reflections are disabled — no longer need DEPTH_DRAW_DISABLED.)
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	mat.disable_receive_shadows = false
 	mat.emission_enabled = emit > 0.01
@@ -15155,8 +15424,9 @@ func _add_grill_zone_panel(parent: Node3D, local_pos: Vector3, size: Vector3, ma
 	panel.mesh = mesh
 	panel.position = local_pos
 	panel.material_override = mat
-	## Receive shadows from spatulas / patties; skip casting to avoid self-shadow acne on flat boxes.
+	## Receive only — casting from flat boxes causes self-shadow acne on the top face.
 	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	panel.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	parent.add_child(panel)
 
 
@@ -15177,10 +15447,10 @@ func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: f
 	mat.disable_receive_shadows = true
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.albedo_texture = _make_grill_shine_texture()
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.18)
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.06)
 	mat.emission_enabled = true
 	mat.emission = Color(0.95, 0.97, 1.0)
-	mat.emission_energy_multiplier = 0.45
+	mat.emission_energy_multiplier = 0.14
 	mat.render_priority = 2
 	shine.material_override = mat
 	parent.add_child(shine)
@@ -15621,12 +15891,37 @@ func _mp_apply_soda_char_clear(x: float, z: float) -> void:
 	soda_char_spots.remove_at(best)
 
 
+func _spatula_nudge_patties(tip_pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	## Spatula tip pushes burgers while LMB-held — never attaches / drags them.
+	_nudge_grill_patties(
+		tip_pos, move_xz, moved,
+		SPATULA_PATTY_PUSH_RADIUS, SPATULA_PATTY_PUSH_SCALE, SPATULA_PATTY_PUSH_MAX,
+		0.22
+	)
+
+
 func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
 	## Scraper slides patties a little — not a full drag, just a shove.
+	_nudge_grill_patties(
+		brush_pos, move_xz, moved,
+		BRUSH_PATTY_PUSH_RADIUS, BRUSH_PATTY_PUSH_SCALE, BRUSH_PATTY_PUSH_MAX,
+		0.18
+	)
+
+
+func _nudge_grill_patties(
+	tool_pos: Vector3,
+	move_xz: Vector2,
+	moved: float,
+	radius: float,
+	scale: float,
+	push_max: float,
+	pop_chance: float
+) -> void:
 	if move_xz.length_squared() < 0.0000001:
 		return
 	var dir := move_xz.normalized()
-	var push_len := clampf(moved * BRUSH_PATTY_PUSH_SCALE, 0.0, BRUSH_PATTY_PUSH_MAX)
+	var push_len := clampf(moved * scale, 0.0, push_max)
 	var bounds := _grill_place_bounds()
 	## HOLD strip is also fair game for a nudge.
 	var warm := _warmer_place_bounds()
@@ -15640,19 +15935,28 @@ func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) ->
 			continue
 		if p == dragging_patty or p == flicking_patty:
 			continue
-		var d := Vector2(brush_pos.x - p.position.x, brush_pos.z - p.position.z).length()
-		if d > BRUSH_PATTY_PUSH_RADIUS:
+		## Mid-squash only — waiting ice balls can be tip-pushed like patties.
+		if bool(p.get("place_morphing")) and not bool(p.get("place_ball_waiting")):
 			continue
-		var falloff := 1.0 - d / BRUSH_PATTY_PUSH_RADIUS
+		## FLIP-ready meat gets a wider / stronger tip shove so it stays easy to move.
+		var flip_ready := _patty_is_flip_ready(p)
+		var use_r := radius * (1.35 if flip_ready else 1.0)
+		var d := Vector2(tool_pos.x - p.position.x, tool_pos.z - p.position.z).length()
+		if d > use_r:
+			continue
+		var falloff := 1.0 - d / use_r
 		falloff = 0.25 + falloff * falloff * 0.75
+		if flip_ready:
+			falloff = minf(1.0, falloff * 1.25)
 		var side := Vector2(-dir.y, dir.x)
-		var away := Vector2(p.position.x - brush_pos.x, p.position.z - brush_pos.z)
+		var away := Vector2(p.position.x - tool_pos.x, p.position.z - tool_pos.z)
 		if away.length_squared() > 0.0001:
 			away = away.normalized()
 			side *= signf(side.dot(away)) if absf(side.dot(away)) > 0.05 else 1.0
 		var blended_dir := (dir + side * 0.32).normalized()
-		var nx: float = float(p.position.x) + blended_dir.x * push_len * falloff
-		var nz: float = float(p.position.z) + blended_dir.y * push_len * falloff
+		var push := push_len * (1.2 if flip_ready else 1.0)
+		var nx: float = float(p.position.x) + blended_dir.x * push * falloff
+		var nz: float = float(p.position.z) + blended_dir.y * push * falloff
 		nx = clampf(nx, min_x, max_x)
 		nz = clampf(nz, min_z, max_z)
 		var try := Vector3(nx, GRILL_SURFACE_Y, nz)
@@ -15673,7 +15977,7 @@ func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) ->
 		p.position.y = p.base_y
 		slot_positions[i] = Vector3(try.x, GRILL_SURFACE_Y, try.z)
 		p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
-		if game_audio and moved > 0.012 and randf() < 0.18:
+		if game_audio and moved > 0.012 and randf() < pop_chance:
 			game_audio.play_grease_pop()
 
 
@@ -27051,7 +27355,7 @@ func _shop_item_label(id: String) -> String:
 		SHOP_FRYER_MACHINE:
 			return "French Fryer"
 		SHOP_GRILL_ROOMBA:
-			return "Grill Roomba"
+			return "Turbachef Robot"
 		SHOP_FRIDGE_UPGRADE:
 			return "Bigger Fridge"
 		_:
@@ -29390,6 +29694,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_section(list, "LOOK")
 	_gfx_add_slider(list, "saturation", "Saturation", 0.5, 1.6, 0.01)
 	_gfx_add_slider(list, "contrast", "Contrast", 0.7, 1.5, 0.01)
+	_gfx_add_check(list, "shadows", "Cast Shadows")
 	_gfx_add_check(list, "ssao", "Ambient Occlusion (SSAO)")
 	_gfx_add_check(list, "ssil", "Indirect Light (SSIL)")
 
@@ -29760,6 +30065,7 @@ func _build_options_menu() -> void:
 	graphics.add_theme_constant_override("separation", 8)
 	graphics_tab.add_child(graphics)
 	_options_add_standard_check(graphics, "glow_on", "Glow / Bloom")
+	_options_add_standard_check(graphics, "shadows", "Shadows")
 	_options_add_standard_check(graphics, "heat_warp_on", "Heat Shimmer")
 	options_fullscreen_check = _options_add_display_check(graphics, "Fullscreen", func(on: bool):
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if on else DisplayServer.WINDOW_MODE_WINDOWED)
@@ -30123,6 +30429,9 @@ func _sync_graphics_ui_from_world() -> void:
 						val_lab.text = "%.2f" % float(map[key])
 	if gfx_checks.has("glow_on"):
 		gfx_checks["glow_on"].set_pressed_no_signal(gfx_env.glow_enabled)
+	if gfx_checks.has("shadows"):
+		var sh_on := gfx_sun != null and gfx_sun.shadow_enabled
+		gfx_checks["shadows"].set_pressed_no_signal(sh_on)
 	if gfx_checks.has("ssao"):
 		gfx_checks["ssao"].set_pressed_no_signal(gfx_env.ssao_enabled)
 	if gfx_checks.has("ssil"):
@@ -30316,6 +30625,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 		gfx_window_wash.light_energy = float(s.get("window_wash", 1.1))
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
+	_apply_shadow_settings(s)
 	_apply_heat_warp_settings(s)
 	_apply_patty_reflection_settings(s)
 	_apply_street_matte_settings(s)
@@ -30324,6 +30634,19 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_burner_strip_settings(s)
 	_apply_build_zone_settings(s)
 	_apply_roomba_audio_settings(s)
+
+
+func _apply_shadow_settings(s: Dictionary) -> void:
+	## Shadows on by default — toggled from Options / Advanced Graphics.
+	var on := bool(s.get("shadows", true))
+	if gfx_sun:
+		gfx_sun.shadow_enabled = on
+	if gfx_outside_fill:
+		gfx_outside_fill.shadow_enabled = on
+	if gfx_kitchen:
+		gfx_kitchen.shadow_enabled = on
+	if gfx_grill_lamp:
+		gfx_grill_lamp.shadow_enabled = on
 
 
 func _apply_roomba_audio_settings(s: Dictionary) -> void:
@@ -30765,6 +31088,11 @@ func _load_graphics_settings() -> void:
 			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
 		cfg.set_value("gfx", "gfx_patty_reflect_v1", true)
 		cfg.save(GFX_CFG_PATH)
+	## One-shot: cast shadows on by default (warm outdoor light + grill receive).
+	if not cfg.has_section_key("gfx", "gfx_shadows_v1"):
+		cfg.set_value("gfx", "shadows", true)
+		cfg.set_value("gfx", "gfx_shadows_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -30995,7 +31323,7 @@ func _try_grill_raycast(screen_pos: Vector2, place_patty: bool) -> void:
 	if not place_patty and _blocks_grill_pick(screen_pos):
 		return
 	if not place_patty:
-		var picked = _pick_patty_at_screen(screen_pos)
+		var picked = _pick_patty_for_slide_or_scoop(screen_pos)
 		if picked != null:
 			_begin_patty_drag(picked)
 			return

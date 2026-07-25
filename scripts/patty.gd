@@ -36,6 +36,11 @@ var mp_puppet: bool = false
 var base_y: float = 0.9
 var _rest_x: float = 0.0
 var _rest_z: float = 0.0
+## Same-spot cook dwell — roll once for mid-cook grill residue.
+var spot_dwell_t: float = 0.0
+var spot_dwell_xz: Vector2 = Vector2(INF, INF)
+var spot_residue_rolled: bool = false
+var spot_residue_spawned: bool = false ## already left a stain at this dwell
 ## Cheese slice melting on the grill.
 var has_cheese: bool = false
 var cheese_melt: float = 0.0 ## 0..1 over CHEESE_MELT_TIME
@@ -50,7 +55,9 @@ var _season_fleck_count: int = 0
 const SEASON_MAX_FLECKS := 36
 
 var _mesh: MeshInstance3D
-var _mat: StandardMaterial3D
+var _mat: ShaderMaterial
+var _col_shape: CollisionShape3D = null
+var _col_cyl: CylinderShape3D = null
 var _frost: MeshInstance3D
 var _frost_mat: StandardMaterial3D
 var _frost_top: MeshInstance3D
@@ -60,23 +67,20 @@ var _frost_haze_mat: StandardMaterial3D
 var _frost_uv_off: Vector3 = Vector3.ZERO
 var _frost_uv_base: Vector3 = Vector3(2.2, 1.4, 1.0)
 var _sear_seed: int = 0
+var _patty_shape_seed: float = 1.0
 var _under_mat: StandardMaterial3D
 var _sear_disc: MeshInstance3D
 var _sear_mat: StandardMaterial3D
 var _meat_top: MeshInstance3D
 var _meat_top_mat: StandardMaterial3D
-var _reflection_root: Node3D = null
-var _reflection_side: MeshInstance3D = null
-var _reflection_top: MeshInstance3D = null
-var _reflection_sear: MeshInstance3D = null
-var _reflection_side_mat: ShaderMaterial = null
-var _reflection_top_mat: StandardMaterial3D = null
-var _reflection_sear_mat: StandardMaterial3D = null
-var _reflection_allowed: bool = true
-var _reflection_height_offset: float = 0.0
-var _reflection_alpha: float = REFLECTION_ALPHA
-var _reflection_fade_height: float = REFLECTION_HEIGHT
-var _reflection_fade_opacity: float = 0.0
+## Soft edge bevel + lumpy meat (not a perfect cylinder).
+const PATTY_TOP_R := 0.105
+const PATTY_BOTTOM_R := 0.11
+const PATTY_HEIGHT := 0.045
+const PATTY_BEVEL := 0.0085
+const PATTY_EDGE_WOBBLE := 0.0036 ## Baked radial silhouette noise (meters)
+const PATTY_WPO_AMP := 0.0027 ## Runtime meat lumps
+const PATTY_MESH_SEGS := 36
 var _hint: Label3D
 var _hint_mode: String = "" ## "", cooking, flip, scoop, hold
 var _hint_age: float = 0.0
@@ -96,6 +100,23 @@ var _announced_flip: bool = false
 var _announced_scoop: bool = false
 var _done_jump_y: float = 0.0 ## Extra hop height when scoop-ready
 var _done_jump_tw: Tween = null
+## Right-click place: ice ball sits until a second right-click smash.
+var place_morphing: bool = false ## Ball visible and/or mid-squash
+var place_ball_waiting: bool = false ## Sphere down — waiting for smash click
+var _frozen_ball: Node3D = null
+var _place_morph_tw: Tween = null
+var _shadow_proxy: MeshInstance3D = null ## Flat-patty disc shadow; off while ice ball is up
+## Overall burger size (mesh + collision + ice ball). 1.0 = original.
+const PATTY_SIZE_SCALE := 0.88 ## ~12% under original; +10% from prior 0.80
+const FROZEN_DROP_SMASH_DELAY := 0.22 ## Wait for spatula to reach the ball
+const FROZEN_DROP_SMASH_SQUASH := 0.55 ## Slow press into the flat patty
+const FROZEN_DROP_SETTLE := 0.28
+const FROZEN_BALL_SCALE := 0.75 * PATTY_SIZE_SCALE ## Tracks overall burger size
+const FROZEN_BALL_Y_SQUASH := 0.80 ## 20% flatter than a perfect sphere
+## Sink only the ice ball into the steel (0.6"); flat patty keeps its normal sit height.
+const FROZEN_BALL_CLIP_Y := 0.01524 * PATTY_SIZE_SCALE
+const FROZEN_BALL_HOLD_Y := 0.055 * FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH - FROZEN_BALL_CLIP_Y
+const FROZEN_BALL_LUMP_AMP := 0.016 ## WPO meat lumps (meters at unit sphere)
 var _cook_img: Image
 var _cook_tex: ImageTexture
 static var _steam_tex: ImageTexture
@@ -138,84 +159,70 @@ const BUBBLE_LEAD := 4.0 ## top grease bubbles start this many seconds before fl
 const HINT_SCALE_FOCUS := 1.0 ## Former "small" size — max when hovered.
 const HINT_SCALE_DIM := 0.55 ## Shrink when the cursor isn't on this patty.
 const HINT_SCALE_COOKING := 0.38 ## Status-only (COOKING…) stays quieter than flip/scoop.
-const REFLECTION_ALPHA := 0.40
-const REFLECTION_SURFACE_LOCAL_Y := 0.001
-const REFLECTION_HEIGHT := 0.045
-const REFLECTION_PRIORITY := 6
 const PATTY_BODY_PRIORITY := 20
 const PATTY_OVERLAY_PRIORITY := PATTY_BODY_PRIORITY + 8
-const REFLECTION_SHADER_CODE := """
-shader_type spatial;
-render_mode blend_mix, depth_draw_never, cull_disabled, unshaded;
-
-uniform vec4 tint : source_color = vec4(0.45, 0.2, 0.14, 0.4);
-uniform float min_y = -0.0225;
-uniform float max_y = 0.0225;
-uniform float fade_opacity = 0.0;
-varying float local_y;
-
-void vertex() {
-	local_y = VERTEX.y;
-}
-
-void fragment() {
-	float h = clamp((local_y - min_y) / max(max_y - min_y, 0.0001), 0.0, 1.0);
-	ALBEDO = tint.rgb;
-	ALPHA = tint.a * mix(1.0, fade_opacity, h);
-}
-"""
 
 
 func _ready() -> void:
-	input_ray_pickable = false
+	## Ray-pickable so smash/flip linetraces hit the visual meat body.
+	input_ray_pickable = true
 	monitoring = false
-	monitorable = false
+	monitorable = true
 	collision_layer = 2
 	collision_mask = 0
 	_rest_x = position.x
 	_rest_z = position.z
 	_sizzle = randf() * TAU
 
-	var shape := CollisionShape3D.new()
-	var cyl := CylinderShape3D.new()
-	## Fat hit volume — grab / cheese rays forgive near-misses.
-	cyl.radius = 0.17
-	cyl.height = 0.16
-	shape.shape = cyl
-	add_child(shape)
+	_col_shape = CollisionShape3D.new()
+	_col_cyl = CylinderShape3D.new()
+	_col_shape.shape = _col_cyl
+	add_child(_col_shape)
+	sync_interact_collision()
 
+	_patty_shape_seed = randf() * 1000.0
 	_mesh = MeshInstance3D.new()
 	_mesh.name = "PattyMesh"
-	var disk := CylinderMesh.new()
-	disk.top_radius = 0.105
-	disk.bottom_radius = 0.11
-	disk.height = 0.045
-	disk.radial_segments = 28
-	_mesh.mesh = disk
+	_mesh.mesh = _make_beveled_patty_mesh(
+		PATTY_TOP_R, PATTY_BOTTOM_R, PATTY_HEIGHT, PATTY_BEVEL,
+		PATTY_MESH_SEGS, _patty_shape_seed, PATTY_EDGE_WOBBLE
+	)
 	_mesh.position = Vector3(0, 0, 0)
+	_mesh.scale = Vector3.ONE * PATTY_SIZE_SCALE
 
-	## Unshaded + vertical cook gradient (bottom sears first, top stays raw/frosty).
-	_mat = StandardMaterial3D.new()
-	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	_mat.metallic = 0.0
-	_mat.roughness = 1.0
+	## Unshaded cook gradient + soft WPO meat lumps (beveled body, not a perfect cylinder).
 	_cook_img = Image.create(COOK_TEX_W, COOK_TEX_H, false, Image.FORMAT_RGBA8)
 	_cook_tex = ImageTexture.create_from_image(_cook_img)
-	_mat.albedo_texture = _cook_tex
-	_mat.albedo_color = Color.WHITE
-	_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	_mat.emission_enabled = false
-	_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_mat = _make_patty_body_shader(_cook_tex, _patty_shape_seed, PATTY_WPO_AMP)
 	_mat.render_priority = PATTY_BODY_PRIORITY
 	_mesh.material_override = _mat
+	## Visual meshes are unshaded + no depth — add an opaque proxy so the grill gets a real shadow.
+	_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_mesh)
+	_shadow_proxy = MeshInstance3D.new()
+	_shadow_proxy.mesh = _make_beveled_patty_mesh(
+		PATTY_TOP_R, PATTY_BOTTOM_R * 0.985, PATTY_HEIGHT * 0.9, PATTY_BEVEL * 0.9,
+		28, _patty_shape_seed, PATTY_EDGE_WOBBLE * 0.85
+	)
+	_shadow_proxy.position = Vector3(0, 0, 0)
+	_shadow_proxy.scale = Vector3.ONE * PATTY_SIZE_SCALE
+	_shadow_proxy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	var shadow_mat := StandardMaterial3D.new()
+	shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	shadow_mat.albedo_color = Color(0.05, 0.05, 0.05)
+	shadow_mat.metallic = 0.0
+	shadow_mat.roughness = 1.0
+	shadow_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	_shadow_proxy.material_override = shadow_mat
+	add_child(_shadow_proxy)
 
-	## Flat meat top — hides cylinder-cap polar cook UVs under the frost holes.
+	## Flat meat top — hides body-cap UVs; edge matches the beveled / wobbly silhouette.
 	_meat_top = MeshInstance3D.new()
-	_meat_top.mesh = _make_planar_disc_mesh(0.1045, 28)
-	_meat_top.position = Vector3(0, 0.0232, 0)
+	_meat_top.mesh = _make_planar_disc_mesh(
+		PATTY_TOP_R - PATTY_BEVEL * 0.55, PATTY_MESH_SEGS,
+		_patty_shape_seed, PATTY_EDGE_WOBBLE * 0.9
+	)
+	_meat_top.position = Vector3(0, PATTY_HEIGHT * 0.5 + 0.0007, 0)
 	_meat_top_mat = StandardMaterial3D.new()
 	_meat_top_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_meat_top_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -228,11 +235,10 @@ func _ready() -> void:
 
 	## Darker underside disc for a stronger bottom-heavy meat look.
 	var under := MeshInstance3D.new()
-	var under_disk := CylinderMesh.new()
-	under_disk.top_radius = 0.108
-	under_disk.bottom_radius = 0.112
-	under_disk.height = 0.012
-	under.mesh = under_disk
+	under.mesh = _make_beveled_patty_mesh(
+		PATTY_BOTTOM_R * 0.96, PATTY_BOTTOM_R * 1.01, 0.012, PATTY_BEVEL * 0.55,
+		28, _patty_shape_seed + 17.0, PATTY_EDGE_WOBBLE * 0.75
+	)
 	under.position = Vector3(0, -0.018, 0)
 	_under_mat = StandardMaterial3D.new()
 	_under_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -247,8 +253,11 @@ func _ready() -> void:
 
 	## Dark sear-spot disc — planar UVs so spots stay chunky, not polar.
 	_sear_disc = MeshInstance3D.new()
-	_sear_disc.mesh = _make_planar_disc_mesh(0.106, 28)
-	_sear_disc.position = Vector3(0, 0.0245, 0)
+	_sear_disc.mesh = _make_planar_disc_mesh(
+		PATTY_TOP_R - PATTY_BEVEL * 0.35, PATTY_MESH_SEGS,
+		_patty_shape_seed, PATTY_EDGE_WOBBLE * 0.85
+	)
+	_sear_disc.position = Vector3(0, PATTY_HEIGHT * 0.5 + 0.002, 0)
 	_sear_disc.visible = false
 	_sear_mat = StandardMaterial3D.new()
 	_sear_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -262,7 +271,6 @@ func _ready() -> void:
 	_sear_disc.material_override = _sear_mat
 	_sear_disc.rotation_degrees.y = randf() * 360.0
 	_mesh.add_child(_sear_disc)
-	_build_reflection_visual()
 
 	## Icy shell on the sides — tube only (no caps) so top face never gets polar UVs.
 	var frost_tex := _make_frost_texture(randi())
@@ -289,8 +297,10 @@ func _ready() -> void:
 
 	## Soft even top haze — planar disc (cylinder caps warp textures into polar fans).
 	_frost_haze = MeshInstance3D.new()
-	_frost_haze.mesh = _make_planar_disc_mesh(0.1055, 24)
-	_frost_haze.position = Vector3(0, 0.0235, 0)
+	_frost_haze.mesh = _make_planar_disc_mesh(
+		PATTY_TOP_R - PATTY_BEVEL * 0.4, 28, _patty_shape_seed, PATTY_EDGE_WOBBLE * 0.8
+	)
+	_frost_haze.position = Vector3(0, PATTY_HEIGHT * 0.5 + 0.001, 0)
 	_frost_haze_mat = StandardMaterial3D.new()
 	_frost_haze_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_frost_haze_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -303,8 +313,10 @@ func _ready() -> void:
 
 	## Top-face ice — planar disc so punched frost stays flat, not a starburst.
 	_frost_top = MeshInstance3D.new()
-	_frost_top.mesh = _make_planar_disc_mesh(0.1055, 28)
-	_frost_top.position = Vector3(0, 0.0245, 0)
+	_frost_top.mesh = _make_planar_disc_mesh(
+		PATTY_TOP_R - PATTY_BEVEL * 0.35, PATTY_MESH_SEGS, _patty_shape_seed, PATTY_EDGE_WOBBLE * 0.85
+	)
+	_frost_top.position = Vector3(0, PATTY_HEIGHT * 0.5 + 0.002, 0)
 	_frost_top_mat = StandardMaterial3D.new()
 	_frost_top_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_frost_top_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -362,122 +374,21 @@ func _ready() -> void:
 	_update_frost_visual()
 
 
-func _build_reflection_visual() -> void:
-	if _reflection_root != null and is_instance_valid(_reflection_root):
-		return
-	_reflection_root = Node3D.new()
-	_reflection_root.name = "PattyReflection"
-	_reflection_root.position = Vector3(0.0, REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset, 0.0)
-	_reflection_root.scale = Vector3(1.08, -0.82, 1.08)
-	add_child(_reflection_root)
-
-	var sh := Shader.new()
-	sh.code = REFLECTION_SHADER_CODE
-	_reflection_side_mat = ShaderMaterial.new()
-	_reflection_side_mat.shader = sh
-	_reflection_side_mat.render_priority = REFLECTION_PRIORITY
-	_reflection_side_mat.set_shader_parameter("min_y", -_reflection_fade_height * 0.5)
-	_reflection_side_mat.set_shader_parameter("max_y", _reflection_fade_height * 0.5)
-	_reflection_side_mat.set_shader_parameter("fade_opacity", _reflection_fade_opacity)
-
-	_reflection_side = MeshInstance3D.new()
-	_reflection_side.name = "ReflectedPattySide"
-	var disk := CylinderMesh.new()
-	disk.top_radius = 0.105
-	disk.bottom_radius = 0.11
-	disk.height = REFLECTION_HEIGHT
-	disk.radial_segments = 28
-	_reflection_side.mesh = disk
-	_reflection_side.material_override = _reflection_side_mat
-	_reflection_side.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_reflection_side.sorting_offset = 1.0
-	_reflection_root.add_child(_reflection_side)
-
-	_reflection_top = MeshInstance3D.new()
-	_reflection_top.name = "ReflectedPattyTop"
-	_reflection_top.mesh = _make_planar_disc_mesh(0.106, 28)
-	_reflection_top.position.y = REFLECTION_HEIGHT * 0.505
-	_reflection_top_mat = StandardMaterial3D.new()
-	_reflection_top_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_reflection_top_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_reflection_top_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_reflection_top_mat.no_depth_test = false
-	_reflection_top_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	_reflection_top_mat.render_priority = REFLECTION_PRIORITY
-	_reflection_top.material_override = _reflection_top_mat
-	_reflection_top.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_reflection_top.sorting_offset = 1.0
-	_reflection_root.add_child(_reflection_top)
-
-	_reflection_sear = MeshInstance3D.new()
-	_reflection_sear.name = "ReflectedSear"
-	_reflection_sear.mesh = _make_planar_disc_mesh(0.107, 28)
-	_reflection_sear.position.y = REFLECTION_HEIGHT * 0.52
-	_reflection_sear.rotation_degrees.y = _sear_disc.rotation_degrees.y if _sear_disc != null else 0.0
-	_reflection_sear_mat = StandardMaterial3D.new()
-	_reflection_sear_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_reflection_sear_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_reflection_sear_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	_reflection_sear_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_reflection_sear_mat.no_depth_test = false
-	_reflection_sear_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	_reflection_sear_mat.render_priority = REFLECTION_PRIORITY + 1
-	if _sear_mat != null:
-		_reflection_sear_mat.albedo_texture = _sear_mat.albedo_texture
-	_reflection_sear.material_override = _reflection_sear_mat
-	_reflection_sear.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_reflection_sear.sorting_offset = 1.1
-	_reflection_root.add_child(_reflection_sear)
-	_update_reflection_visual()
+## Fake grill reflections disabled — full code in scripts/backups/patty_fake_reflections_backup.gd.txt
+func set_grill_reflection_enabled(_enabled: bool) -> void:
+	pass
 
 
-func set_grill_reflection_enabled(enabled: bool) -> void:
-	_reflection_allowed = enabled
-	_update_reflection_visual()
+func set_grill_reflection_height_offset(_offset: float) -> void:
+	pass
 
 
-func set_grill_reflection_height_offset(offset: float) -> void:
-	_reflection_height_offset = offset
-	if _reflection_root != null and is_instance_valid(_reflection_root):
-		_reflection_root.position.y = REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset
-	_update_reflection_visual()
-
-
-func set_grill_reflection_tuning(offset: float, alpha: float, fade_height: float, fade_opacity: float) -> void:
-	_reflection_height_offset = offset
-	_reflection_alpha = clampf(alpha, 0.0, 1.0)
-	_reflection_fade_height = clampf(fade_height, 0.002, 0.12)
-	_reflection_fade_opacity = clampf(fade_opacity, 0.0, 1.0)
-	if _reflection_root != null and is_instance_valid(_reflection_root):
-		_reflection_root.position.y = REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset
-	if _reflection_side_mat != null:
-		_reflection_side_mat.set_shader_parameter("min_y", -_reflection_fade_height * 0.5)
-		_reflection_side_mat.set_shader_parameter("max_y", _reflection_fade_height * 0.5)
-		_reflection_side_mat.set_shader_parameter("fade_opacity", _reflection_fade_opacity)
-	_update_reflection_visual()
+func set_grill_reflection_tuning(_offset: float, _alpha: float, _fade_height: float, _fade_opacity: float) -> void:
+	pass
 
 
 func _update_reflection_visual() -> void:
-	if _reflection_root == null or not is_instance_valid(_reflection_root):
-		return
-	var resting := _reflection_allowed and visible and not is_held and slot_index >= 0 and absf(position.y - base_y) <= 0.08
-	_reflection_root.visible = resting
-	if not resting:
-		return
-	var side_col := color_at_cook_time(cook_time)
-	if flipped_once:
-		side_col = color_at_cook_time(maxf(first_side_time - HEAT_LAG * 0.5, cook_time - HEAT_LAG * 0.5))
-	side_col = side_col.darkened(0.18)
-	if _reflection_side_mat != null:
-		_reflection_side_mat.set_shader_parameter("tint", Color(side_col.r, side_col.g, side_col.b, _reflection_alpha))
-	if _reflection_top_mat != null:
-		var top_col := get_patty_color().darkened(0.1)
-		_reflection_top_mat.albedo_color = Color(top_col.r, top_col.g, top_col.b, _reflection_alpha * 0.42)
-	if _reflection_sear != null:
-		_reflection_sear.visible = flipped_once
-	if _reflection_sear_mat != null:
-		var cook_w := clampf((first_side_time - 10.0) / 14.0, 0.4, 1.0)
-		_reflection_sear_mat.albedo_color = Color(1, 1, 1, _reflection_alpha * 0.36 * cook_w)
+	pass
 
 
 func reset_for_grill_spawn(
@@ -491,6 +402,18 @@ func reset_for_grill_spawn(
 	if _done_jump_tw != null and is_instance_valid(_done_jump_tw):
 		_done_jump_tw.kill()
 	_done_jump_tw = null
+	if _place_morph_tw != null and is_instance_valid(_place_morph_tw):
+		_place_morph_tw.kill()
+	_place_morph_tw = null
+	place_morphing = false
+	place_ball_waiting = false
+	if _frozen_ball != null and is_instance_valid(_frozen_ball):
+		_frozen_ball.visible = false
+		_reset_frozen_ball_pose()
+	if _mesh != null and is_instance_valid(_mesh):
+		_mesh.visible = true
+	_set_patty_disc_shadow(true)
+	sync_interact_collision()
 	if has_cheese or (_cheese_root != null and is_instance_valid(_cheese_root)):
 		remove_cheese()
 	if _cheese_root != null and is_instance_valid(_cheese_root):
@@ -520,6 +443,10 @@ func reset_for_grill_spawn(
 	base_y = p_base_y
 	_rest_x = p_world_pos.x
 	_rest_z = p_world_pos.z
+	spot_dwell_t = 0.0
+	spot_dwell_xz = Vector2(p_world_pos.x, p_world_pos.z)
+	spot_residue_rolled = false
+	spot_residue_spawned = false
 	_sizzle = randf() * TAU
 	_announced_flip = false
 	_announced_scoop = false
@@ -553,9 +480,6 @@ func reset_for_grill_spawn(
 	_update_meat_top()
 	if _under_mat:
 		_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
-	if _reflection_root != null and is_instance_valid(_reflection_root):
-		_reflection_root.position.y = REFLECTION_SURFACE_LOCAL_Y + _reflection_height_offset
-	_update_reflection_visual()
 
 
 func _setup_cook_fx() -> void:
@@ -864,7 +788,8 @@ func apply_mp_state(
 
 func _process(delta: float) -> void:
 	_update_flip_smoke(delta)
-	var cooking := heating and not is_held
+	## Frozen sphere / smash morph — no cook FX (mesh is hidden; particles would look like huge balls).
+	var cooking := heating and not is_held and not place_ball_waiting and not place_morphing
 	if _bubbles:
 		_bubbles.emitting = cooking
 	if _top_bubbles:
@@ -937,13 +862,11 @@ func _process(delta: float) -> void:
 		var flip_col := Color("FFEB3B") if is_in_flip_window() else Color("FFCC80")
 		_set_hint_mode("flip", flip_txt, flip_col)
 		_hint.modulate.a = 0.55 + 0.45 * absf(sin(Time.get_ticks_msec() * 0.01))
-	elif flipped_once and has_cheese and cheese_melt < 1.0 and cook_time >= SCOOP_READY:
-		_set_hint_mode("melt", "CHEESE MELTING...", Color("FFE082"))
-		_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.01))
 	elif flipped_once and can_scoop():
 		if on_hold:
 			_set_hint_mode("", "", Color.WHITE)
 		else:
+			## Meat ready — scoop even if cheese is still melting (finishes on Build).
 			_set_hint_mode("scoop", "CLICK TO SCOOP", Color("A5D6A7"))
 			_hint.modulate.a = 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.008))
 	elif flipped_once:
@@ -1015,8 +938,8 @@ func _ensure_hold_meter() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.14, 0.14)
 	_hold_meter.mesh = quad
-	## Just above cheese (~0.0325) so the ring clears melted slices.
-	_hold_meter.position = Vector3(0, 0.052, 0)
+	## Just above cheese (~0.0255) so the ring clears melted slices.
+	_hold_meter.position = Vector3(0, 0.045, 0)
 	_hold_meter.rotation_degrees = Vector3(-90, 0, 0)
 	_hold_meter_img = Image.create(HOLD_METER_PX, HOLD_METER_PX, false, Image.FORMAT_RGBA8)
 	_hold_meter_tex = ImageTexture.create_from_image(_hold_meter_img)
@@ -1250,7 +1173,24 @@ func _make_ice_chunk_mesh(chunk_seed: int) -> ArrayMesh:
 	return mesh
 
 
-func _make_planar_disc_mesh(radius: float, segments: int = 28) -> ArrayMesh:
+func _patty_edge_radius(base_r: float, angle: float, seed: float, wobble: float) -> float:
+	## Soft irregular rim — burger outline, not a perfect circle.
+	if wobble <= 0.00001:
+		return base_r
+	var n := (
+		sin(angle * 3.0 + seed * 0.71) * 0.42
+		+ sin(angle * 5.0 - seed * 1.13) * 0.33
+		+ sin(angle * 7.0 + seed * 0.37) * 0.25
+	)
+	return maxf(0.02, base_r + n * wobble)
+
+
+func _make_planar_disc_mesh(
+	radius: float,
+	segments: int = 28,
+	wobble_seed: float = 0.0,
+	wobble_amp: float = 0.0
+) -> ArrayMesh:
 	## Flat circle with planar UVs (0..1 across XZ) — avoids cylinder-cap polar fans.
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -1261,8 +1201,9 @@ func _make_planar_disc_mesh(radius: float, segments: int = 28) -> ArrayMesh:
 	uvs.append(Vector2(0.5, 0.5))
 	for i in segments:
 		var a := float(i) / float(segments) * TAU
-		var x := cos(a) * radius
-		var z := sin(a) * radius
+		var r := _patty_edge_radius(radius, a, wobble_seed, wobble_amp)
+		var x := cos(a) * r
+		var z := sin(a) * r
 		verts.append(Vector3(x, 0.0, z))
 		normals.append(Vector3.UP)
 		uvs.append(Vector2(x / (radius * 2.0) + 0.5, z / (radius * 2.0) + 0.5))
@@ -1281,6 +1222,170 @@ func _make_planar_disc_mesh(radius: float, segments: int = 28) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
+
+
+func _make_beveled_patty_mesh(
+	top_r: float,
+	bottom_r: float,
+	height: float,
+	bevel: float,
+	segments: int = 36,
+	wobble_seed: float = 1.0,
+	wobble_amp: float = 0.0035
+) -> ArrayMesh:
+	## Burger disc with chamfered rim + soft edge wobble (not a perfect cylinder).
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var y_top := height * 0.5
+	var y_bot := -height * 0.5
+	var bv := clampf(bevel, 0.002, height * 0.42)
+	var top_inner := maxf(0.03, top_r - bv)
+	var bot_inner := maxf(0.03, bottom_r - bv)
+	var y_tb := y_top - bv
+	var y_bb := y_bot + bv
+
+	## Ring layout (outer → center for caps): top face, top bevel, side bot, bottom face.
+	var ring_y := [y_top, y_tb, y_bb, y_bot]
+	var ring_base_r := [top_inner, top_r, bottom_r, bot_inner]
+	var ring_v := [0.04, 0.22, 0.78, 0.96]
+	var ring_start: Array[int] = []
+	for ri in 4:
+		ring_start.append(verts.size())
+		var yy: float = float(ring_y[ri])
+		var br: float = float(ring_base_r[ri])
+		var vv: float = float(ring_v[ri])
+		for i in segments + 1:
+			var t := float(i) / float(segments)
+			var a := t * TAU
+			var rr := _patty_edge_radius(br, a, wobble_seed + float(ri) * 0.17, wobble_amp)
+			var c := cos(a)
+			var s := sin(a)
+			verts.append(Vector3(c * rr, yy, s * rr))
+			var n: Vector3
+			if ri == 0:
+				n = Vector3.UP
+			elif ri == 3:
+				n = Vector3.DOWN
+			elif ri == 1:
+				n = Vector3(c, 0.75, s).normalized()
+			else:
+				n = Vector3(c, -0.35, s).normalized()
+			normals.append(n)
+			uvs.append(Vector2(t, vv))
+	## Side / bevel strips between rings.
+	for ri in 3:
+		var a0: int = int(ring_start[ri])
+		var b0: int = int(ring_start[ri + 1])
+		for i in segments:
+			var i0 := a0 + i
+			var i1 := a0 + i + 1
+			var j0 := b0 + i
+			var j1 := b0 + i + 1
+			indices.append(i0)
+			indices.append(i1)
+			indices.append(j1)
+			indices.append(i0)
+			indices.append(j1)
+			indices.append(j0)
+	## Top face fan.
+	var top_c := verts.size()
+	verts.append(Vector3(0.0, y_top, 0.0))
+	normals.append(Vector3.UP)
+	uvs.append(Vector2(0.5, 0.0))
+	var top0: int = int(ring_start[0])
+	for i in segments:
+		indices.append(top_c)
+		indices.append(top0 + i)
+		indices.append(top0 + i + 1)
+	## Bottom face fan (wound for downward normal).
+	var bot_c := verts.size()
+	verts.append(Vector3(0.0, y_bot, 0.0))
+	normals.append(Vector3.DOWN)
+	uvs.append(Vector2(0.5, 1.0))
+	var bot0: int = int(ring_start[3])
+	for i in segments:
+		indices.append(bot_c)
+		indices.append(bot0 + i + 1)
+		indices.append(bot0 + i)
+
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _make_patty_body_shader(cook_tex: Texture2D, seed: float, lump_amp: float) -> ShaderMaterial:
+	## Unshaded cook map + soft WPO so the meat surface isn't a hard cylinder.
+	var mat := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_back, depth_draw_never, ambient_light_disabled, shadows_disabled;
+
+uniform sampler2D albedo_tex : source_color, filter_linear, hint_default_white;
+uniform vec4 albedo_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float lump_amp = 0.0027;
+uniform float lump_freq = 7.5;
+uniform float seed = 1.0;
+
+float hash31(vec3 p) {
+	return fract(sin(dot(p, vec3(127.1, 311.7, 74.7)) + seed) * 43758.5453123);
+}
+
+float vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float n000 = hash31(i);
+	float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+	float nx00 = mix(n000, n100, f.x);
+	float nx10 = mix(n010, n110, f.x);
+	float nx01 = mix(n001, n101, f.x);
+	float nx11 = mix(n011, n111, f.x);
+	float nxy0 = mix(nx00, nx10, f.y);
+	float nxy1 = mix(nx01, nx11, f.y);
+	return mix(nxy0, nxy1, f.z);
+}
+
+void vertex() {
+	vec3 p = VERTEX * lump_freq + vec3(seed * 0.31, seed * 0.17, seed * 0.53);
+	float n = vnoise(p) * 2.0 - 1.0;
+	n += 0.55 * (vnoise(p * 2.1 + vec3(2.4, 0.8, 1.1)) * 2.0 - 1.0);
+	n += 0.28 * (vnoise(p * 4.2 + vec3(-1.3, 1.7, 0.6)) * 2.0 - 1.0);
+	float rim = smoothstep(0.055, 0.105, length(VERTEX.xz));
+	float top = smoothstep(-0.008, 0.018, VERTEX.y);
+	// Soft meat lumps — stronger on the top face, a little on the rim/bevel.
+	VERTEX += NORMAL * n * lump_amp * (0.45 + 0.55 * rim);
+	VERTEX.y += n * lump_amp * 0.85 * top;
+}
+
+void fragment() {
+	vec4 texc = texture(albedo_tex, UV);
+	vec3 col = texc.rgb * albedo_color.rgb;
+	ALBEDO = col;
+	ALPHA = texc.a * albedo_color.a;
+}
+"""
+	mat.shader = shader
+	mat.set_shader_parameter("albedo_tex", cook_tex)
+	mat.set_shader_parameter("albedo_color", Color.WHITE)
+	mat.set_shader_parameter("lump_amp", lump_amp)
+	mat.set_shader_parameter("lump_freq", 7.5)
+	mat.set_shader_parameter("seed", seed)
+	return mat
 
 
 func _make_tube_mesh(top_r: float, bottom_r: float, height: float, segments: int = 28) -> ArrayMesh:
@@ -1407,7 +1512,7 @@ func _update_frost_visual() -> void:
 		var full_h := 0.046
 		## Collapse upward: keep the top lip fixed, shrink height from below.
 		var height := lerpf(full_h, 0.01, melt)
-		var top_edge := 0.023
+		var top_edge := PATTY_HEIGHT * 0.5 + 0.0005
 		_frost.scale = Vector3(1.0, height / full_h, 1.0)
 		_frost.position = Vector3(0, top_edge - height * 0.5, 0)
 		## Keep UVs stable so ice doesn't "crawl" off the top — only thin out.
@@ -1425,7 +1530,7 @@ func _update_frost_visual() -> void:
 			_frost_haze.visible = false
 		else:
 			_frost_haze.visible = true
-			_frost_haze.position.y = 0.0235
+			_frost_haze.position.y = PATTY_HEIGHT * 0.5 + 0.001
 			_frost_haze_mat.albedo_color = Color(0.92, 0.95, 1.0, haze_a * 0.105)
 
 	if _frost_top == null or _frost_top_mat == null:
@@ -1436,7 +1541,7 @@ func _update_frost_visual() -> void:
 	_frost_top.visible = true
 	var top_melt := 1.0 - top_a
 	_frost_top.scale = Vector3(1.0, 1.0, 1.0)
-	_frost_top.position.y = 0.0245
+	_frost_top.position.y = PATTY_HEIGHT * 0.5 + 0.002
 	## Gently open holes late by scaling UV a little — never wipe the whole face early.
 	_frost_top_mat.uv1_scale = Vector3(
 		lerpf(1.15, 1.35, top_melt),
@@ -1596,7 +1701,7 @@ func _update_sear_disc() -> void:
 	_sear_disc.visible = true
 	var cook_w := clampf((first_side_time - 10.0) / 14.0, 0.4, 1.0)
 	_sear_mat.albedo_color = Color(1, 1, 1, 0.4 + cook_w * 0.28)
-	_sear_disc.position.y = 0.0245
+	_sear_disc.position.y = PATTY_HEIGHT * 0.5 + 0.002
 
 
 func _update_meat_top() -> void:
@@ -1667,11 +1772,8 @@ func can_flip() -> bool:
 
 
 func can_scoop() -> bool:
-	## Only after a flip, and only once the second side has cooked a bit.
-	## Cheese must finish melting before the scoop — even if the meat is done.
+	## After flip + second-side cook. Melting cheese can finish on Build.
 	if not flipped_once or cook_time < SCOOP_READY:
-		return false
-	if has_cheese and cheese_melt < 1.0:
 		return false
 	return true
 
@@ -1708,8 +1810,9 @@ func flip() -> bool:
 	if audio:
 		audio.play_flip()
 	var tw := create_tween()
-	tw.tween_property(self, "scale:x", 0.1, 0.08)
-	tw.tween_property(self, "scale:x", 1.0, 0.12)
+	## 15% faster than prior 0.08 / 0.12 squash.
+	tw.tween_property(self, "scale:x", 0.1, 0.068)
+	tw.tween_property(self, "scale:x", 1.0, 0.102)
 	flipped.emit()
 	return true
 
@@ -1865,6 +1968,12 @@ func _update_flip_smoke(delta: float) -> void:
 
 
 func smash() -> void:
+	## Second right-click on a placed ice ball → slow spatula squash into a patty.
+	if place_ball_waiting:
+		play_frozen_drop_smash()
+		return
+	if place_morphing:
+		return ## Mid-squash — ignore extra clicks.
 	smash_bonus = 1.6
 	var audio := _audio()
 	if audio:
@@ -1873,6 +1982,340 @@ func smash() -> void:
 	var tw := create_tween()
 	tw.tween_property(self, "scale", Vector3(1.16, 0.72, 1.16), 0.05)
 	tw.tween_property(self, "scale", Vector3.ONE, 0.1)
+
+
+func _make_frozen_ball_shader(
+	albedo: Color,
+	seed: float,
+	lump_amp: float,
+	tex: Texture2D = null,
+	tex_blend: float = 0.0,
+	opaque: bool = true
+) -> ShaderMaterial:
+	## Unshaded meat/frost with noisy WPO so the ball isn't a perfect sphere.
+	var mat := ShaderMaterial.new()
+	var shader := Shader.new()
+	var modes := "unshaded, cull_back, ambient_light_disabled"
+	if opaque:
+		modes += ", depth_draw_opaque"
+	else:
+		modes += ", blend_mix, depth_draw_never, shadows_disabled"
+	shader.code = """
+shader_type spatial;
+render_mode %s;
+
+uniform vec4 albedo_color : source_color = vec4(0.78, 0.38, 0.40, 1.0);
+uniform float lump_amp = 0.016;
+uniform float lump_freq = 3.6;
+uniform float seed = 1.0;
+uniform sampler2D albedo_tex : source_color, hint_default_white;
+uniform float tex_blend : hint_range(0.0, 1.0) = 0.0;
+uniform vec2 uv_scale = vec2(1.0, 1.0);
+
+float hash31(vec3 p) {
+	return fract(sin(dot(p, vec3(127.1, 311.7, 74.7)) + seed) * 43758.5453123);
+}
+
+float vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float n000 = hash31(i);
+	float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+	float nx00 = mix(n000, n100, f.x);
+	float nx10 = mix(n010, n110, f.x);
+	float nx01 = mix(n001, n101, f.x);
+	float nx11 = mix(n011, n111, f.x);
+	float nxy0 = mix(nx00, nx10, f.y);
+	float nxy1 = mix(nx01, nx11, f.y);
+	return mix(nxy0, nxy1, f.z);
+}
+
+void vertex() {
+	vec3 p = NORMAL * lump_freq + vec3(seed * 0.37, seed * 0.19, seed * 0.53);
+	float n = vnoise(p) * 2.0 - 1.0;
+	n += 0.55 * (vnoise(p * 2.15 + vec3(3.1, 1.4, 0.7)) * 2.0 - 1.0);
+	n += 0.30 * (vnoise(p * 4.4 + vec3(-1.7, 2.2, 0.9)) * 2.0 - 1.0);
+	// Keep poles from pinching too hard; still irregular overall.
+	float pole = smoothstep(0.92, 0.55, abs(NORMAL.y));
+	VERTEX += NORMAL * n * lump_amp * pole;
+}
+
+void fragment() {
+	vec4 texc = texture(albedo_tex, UV * uv_scale);
+	vec3 col = mix(albedo_color.rgb, texc.rgb * albedo_color.rgb, tex_blend);
+	ALBEDO = col;
+	ALPHA = albedo_color.a * mix(1.0, texc.a, tex_blend);
+}
+""" % modes
+	mat.shader = shader
+	mat.set_shader_parameter("albedo_color", albedo)
+	mat.set_shader_parameter("lump_amp", lump_amp)
+	mat.set_shader_parameter("lump_freq", 3.6)
+	mat.set_shader_parameter("seed", seed)
+	mat.set_shader_parameter("uv_scale", Vector2.ONE)
+	mat.set_shader_parameter("tex_blend", tex_blend)
+	if tex != null:
+		mat.set_shader_parameter("albedo_tex", tex)
+	return mat
+
+
+func _set_patty_disc_shadow(on: bool) -> void:
+	if _shadow_proxy == null or not is_instance_valid(_shadow_proxy):
+		return
+	_shadow_proxy.cast_shadow = (
+		GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if on
+		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	)
+	_shadow_proxy.visible = on
+
+
+func _basis_y_along_normal(normal: Vector3, twist: float) -> Basis:
+	## Local +Y follows the surface normal (ice-chunk tip points out).
+	var up := normal.normalized()
+	var ref := Vector3.RIGHT if absf(up.dot(Vector3.UP)) > 0.92 else Vector3.UP
+	var x_axis := ref.cross(up).normalized()
+	var z_axis := x_axis.cross(up).normalized()
+	return Basis(x_axis, up, z_axis).rotated(up, twist)
+
+
+func _ensure_frozen_ball() -> void:
+	## Squashed ice ball — lumpy WPO meat + frost that matches the same lumps.
+	if _frozen_ball != null and is_instance_valid(_frozen_ball):
+		## Rebuild if an older clipped-shell / random-fleck ball was cached.
+		if not bool(_frozen_ball.get_meta("frost_v7", false)):
+			_frozen_ball.queue_free()
+			_frozen_ball = null
+		else:
+			return
+	_frozen_ball = Node3D.new()
+	_frozen_ball.name = "FrozenDropBall"
+	_frozen_ball.visible = false
+	_frozen_ball.set_meta("frost_v7", true)
+	_reset_frozen_ball_pose()
+	add_child(_frozen_ball)
+
+	var lump_seed := randf() * 1000.0
+	const MEAT_R := 0.092
+
+	## Opaque lumpy meat casts the real ball shadow (disc proxy is off while waiting).
+	var meat := MeshInstance3D.new()
+	var meat_mesh := SphereMesh.new()
+	meat_mesh.radius = MEAT_R
+	meat_mesh.height = MEAT_R * 2.0
+	meat_mesh.radial_segments = 36
+	meat_mesh.rings = 20
+	meat.mesh = meat_mesh
+	var meat_mat := _make_frozen_ball_shader(
+		Color(0.78, 0.38, 0.40, 1.0),
+		lump_seed,
+		FROZEN_BALL_LUMP_AMP,
+		null,
+		0.0,
+		true
+	)
+	meat_mat.render_priority = PATTY_BODY_PRIORITY
+	meat.material_override = meat_mat
+	meat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	_frozen_ball.add_child(meat)
+
+	## Soft underside tint — no WPO (different lumps were the clipped ghost layer).
+	var under := MeshInstance3D.new()
+	var under_mesh := SphereMesh.new()
+	under_mesh.radius = MEAT_R * 1.01
+	under_mesh.height = MEAT_R * 2.02
+	under_mesh.radial_segments = 20
+	under_mesh.rings = 10
+	under.mesh = under_mesh
+	under.scale = Vector3(1.0, 0.55, 1.0)
+	under.position = Vector3(0.0, -0.035, 0.0)
+	var under_mat := StandardMaterial3D.new()
+	under_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	under_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	under_mat.albedo_color = Color(0.35, 0.12, 0.14, 0.55)
+	under_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	under_mat.render_priority = PATTY_BODY_PRIORITY
+	under.material_override = under_mat
+	under.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_frozen_ball.add_child(under)
+
+	var frost_tex: Texture2D = null
+	if _frost_mat != null:
+		frost_tex = _frost_mat.albedo_texture
+	if frost_tex == null:
+		frost_tex = _make_frost_texture(randi())
+
+	## Frost shell — SAME WPO seed/amp as meat so it hugs the lumps (no clipped second ball).
+	var shell := MeshInstance3D.new()
+	var shell_mesh := SphereMesh.new()
+	shell_mesh.radius = MEAT_R + 0.0025
+	shell_mesh.height = (MEAT_R + 0.0025) * 2.0
+	shell_mesh.radial_segments = 36
+	shell_mesh.rings = 20
+	shell.mesh = shell_mesh
+	var shell_mat := _make_frozen_ball_shader(
+		Color(1.0, 1.0, 1.0, 0.38),
+		lump_seed,
+		FROZEN_BALL_LUMP_AMP,
+		frost_tex,
+		0.88,
+		false
+	)
+	## Bigger frost islands (lower UV scale = chunkier noise patches).
+	shell_mat.set_shader_parameter("uv_scale", Vector2(0.55, 0.45))
+	shell_mat.render_priority = PATTY_BODY_PRIORITY + 3
+	shell.material_override = shell_mat
+	shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shell.rotation_degrees.y = randf() * 360.0
+	_frozen_ball.add_child(shell)
+
+	## Ice shards — sit on the surface, +Y aligned to the outward normal.
+	var fleck_scale_comp := 1.35 / maxf(FROZEN_BALL_SCALE, 0.01)
+	for _i in randi_range(7, 11):
+		var fleck := MeshInstance3D.new()
+		fleck.mesh = _make_ice_chunk_mesh(randi())
+		var ang := randf() * TAU
+		var elev := lerpf(0.08, 0.92, pow(randf(), 0.5))
+		var normal := Vector3(cos(ang) * cos(elev), sin(elev), sin(ang) * cos(elev)).normalized()
+		## Brought in tight to the meat (+ WPO bumps still clear most flecks).
+		var r := MEAT_R + 0.0015 + randf() * 0.002
+		var twist := randf() * TAU
+		var tangent := normal.cross(Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).normalized()
+		var tilt := Basis(tangent, deg_to_rad(randf_range(-8.0, 8.0)))
+		fleck.transform = Transform3D(tilt * _basis_y_along_normal(normal, twist), normal * r)
+		## Mostly medium; a few noticeably bigger chunks.
+		var s_base := 0.50 + randf() * 0.55
+		if randf() > 0.72:
+			s_base = 1.05 + randf() * 0.75
+		var s := s_base * fleck_scale_comp
+		fleck.scale = Vector3(
+			s * (0.75 + randf() * 0.55),
+			s * (0.35 + randf() * 0.35), ## flatter into the surface
+			s * (0.75 + randf() * 0.55)
+		)
+		var fmat := StandardMaterial3D.new()
+		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, 0.28 + randf() * 0.22)
+		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		fmat.no_depth_test = false
+		fmat.render_priority = PATTY_BODY_PRIORITY + 8
+		fleck.material_override = fmat
+		fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_frozen_ball.add_child(fleck)
+
+
+func _reset_frozen_ball_pose() -> void:
+	if _frozen_ball == null or not is_instance_valid(_frozen_ball):
+		return
+	## Wider than tall — 20% vertical squash by default.
+	_frozen_ball.scale = Vector3(FROZEN_BALL_SCALE, FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH, FROZEN_BALL_SCALE)
+	_frozen_ball.position = Vector3(0.0, FROZEN_BALL_HOLD_Y, 0.0)
+
+
+func play_frozen_drop_appear() -> void:
+	## First right-click: drop a frozen ice ball (waits for a smash click).
+	_ensure_frozen_ball()
+	if _place_morph_tw != null and is_instance_valid(_place_morph_tw):
+		_place_morph_tw.kill()
+	_place_morph_tw = null
+	place_morphing = true
+	place_ball_waiting = true
+	heating = false ## Don't cook until smashed flat.
+	scale = Vector3.ONE
+	if _mesh != null and is_instance_valid(_mesh):
+		_mesh.visible = false
+	if _hint != null:
+		_hint.visible = false
+	_set_hold_meter_visible(false)
+	_set_patty_disc_shadow(false) ## Ball meat casts its own round/lumpy shadow.
+	_frozen_ball.visible = true
+	_reset_frozen_ball_pose()
+	sync_interact_collision()
+
+
+func play_frozen_drop_smash() -> void:
+	## Second right-click: slow spatula press morphs the ball into the grill patty.
+	if not place_ball_waiting and not place_morphing:
+		return
+	if not place_ball_waiting and _place_morph_tw != null:
+		return ## Already squashing.
+	_ensure_frozen_ball()
+	if _place_morph_tw != null and is_instance_valid(_place_morph_tw):
+		_place_morph_tw.kill()
+	place_ball_waiting = false
+	place_morphing = true
+	if _mesh != null and is_instance_valid(_mesh):
+		_mesh.visible = false
+	_set_patty_disc_shadow(false)
+	_frozen_ball.visible = true
+	_reset_frozen_ball_pose()
+	var smash_scale := Vector3(
+		1.42 * FROZEN_BALL_SCALE,
+		0.16 * FROZEN_BALL_SCALE,
+		1.42 * FROZEN_BALL_SCALE
+	)
+	_place_morph_tw = create_tween()
+	_place_morph_tw.tween_interval(FROZEN_DROP_SMASH_DELAY)
+	_place_morph_tw.tween_callback(_on_frozen_drop_squash_hit)
+	_place_morph_tw.tween_property(_frozen_ball, "scale", smash_scale, FROZEN_DROP_SMASH_SQUASH) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_place_morph_tw.parallel().tween_property(_frozen_ball, "position:y", 0.0, FROZEN_DROP_SMASH_SQUASH) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_place_morph_tw.tween_callback(_finish_frozen_drop_morph)
+
+
+## Legacy name — appear only (smash is a separate right-click).
+func play_frozen_drop_morph() -> void:
+	play_frozen_drop_appear()
+
+
+func _on_frozen_drop_squash_hit() -> void:
+	var audio := _audio()
+	if audio and audio.has_method("play_smash_sizzle"):
+		audio.play_smash_sizzle()
+
+
+func _finish_frozen_drop_morph() -> void:
+	if _frozen_ball != null and is_instance_valid(_frozen_ball):
+		_frozen_ball.visible = false
+		_reset_frozen_ball_pose()
+	if _mesh != null and is_instance_valid(_mesh):
+		_mesh.visible = true
+	_set_patty_disc_shadow(true)
+	place_morphing = false
+	place_ball_waiting = false
+	_place_morph_tw = null
+	heating = true ## Cooking starts once it's a flat patty.
+	sync_interact_collision()
+	## Smash bonus + slower settle bounce into the flat disc.
+	smash_bonus = 1.6
+	scale = Vector3(1.22, 0.58, 1.22)
+	var tw := create_tween()
+	tw.tween_property(self, "scale", Vector3.ONE, FROZEN_DROP_SETTLE) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func sync_interact_collision() -> void:
+	## Keep the Area3D cylinder matched to the visible meat / ice ball.
+	if _col_cyl == null or _col_shape == null:
+		return
+	if place_ball_waiting or (place_morphing and _frozen_ball != null and is_instance_valid(_frozen_ball) and _frozen_ball.visible):
+		_col_cyl.radius = 0.092 * FROZEN_BALL_SCALE * 1.08
+		_col_cyl.height = 0.184 * FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH * 1.08
+		_col_shape.position = Vector3(0.0, FROZEN_BALL_HOLD_Y, 0.0)
+	else:
+		## Visual disc radius ~0.105 * size — slight pad so edge clicks still count.
+		_col_cyl.radius = 0.105 * PATTY_SIZE_SCALE * 1.06
+		_col_cyl.height = 0.085 * PATTY_SIZE_SCALE
+		_col_shape.position = Vector3(0.0, 0.012, 0.0)
 
 
 func add_cheese() -> bool:
@@ -1904,8 +2347,8 @@ func remove_cheese() -> void:
 func get_cheese_seat_global() -> Vector3:
 	## Where a fresh slice sits — matches `_cheese_root` on the meat mesh.
 	if _mesh != null and is_instance_valid(_mesh):
-		return _mesh.global_position + _mesh.global_transform.basis.y.normalized() * 0.028
-	return global_position + Vector3(0, 0.028, 0)
+		return _mesh.global_position + _mesh.global_transform.basis.y.normalized() * 0.0255
+	return global_position + Vector3(0, 0.0255, 0)
 
 
 func get_cheese_seat_basis() -> Basis:
@@ -1978,8 +2421,8 @@ func _build_cheese_slice() -> void:
 	_cheese_flaps.clear()
 	_cheese_root = Node3D.new()
 	_cheese_root.name = "CheeseSlice"
-	## Sit just above the meat top disc; parent to _mesh so sizzle wobble carries it.
-	_cheese_root.position = Vector3(0, 0.0325, 0)
+	## Sit on the meat top disc (top face ~0.023); was 0.0325 and floated above the patty.
+	_cheese_root.position = Vector3(0, 0.0255, 0)
 	if _mesh != null and is_instance_valid(_mesh):
 		_mesh.add_child(_cheese_root)
 	else:
@@ -1990,9 +2433,10 @@ func _build_cheese_slice() -> void:
 	_cheese_mat.albedo_color = Color(1.0, 0.82, 0.26)
 	_cheese_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_cheese_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_cheese_mat.no_depth_test = true
+	## Depth-tested (not overlay-on-top) so the hand spatula draws above the slice.
+	_cheese_mat.no_depth_test = false
 	_cheese_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	_cheese_mat.render_priority = PATTY_OVERLAY_PRIORITY + 4
+	_cheese_mat.render_priority = PATTY_BODY_PRIORITY + 6
 
 	## Cross bars only — corners are separate flaps (no double-corner look).
 	var half := 0.084
@@ -2058,7 +2502,7 @@ func _update_cheese_visual() -> void:
 		var sx: float = item["sx"]
 		var sz: float = item["sz"]
 		pivot.rotation_degrees = Vector3(sz * angle, 0.0, -sx * angle)
-	_cheese_root.position.y = lerpf(0.0325, 0.0305, drape)
+	_cheese_root.position.y = lerpf(0.0255, 0.0240, drape)
 	_cheese_root.scale = Vector3(lerpf(1.0, 1.006, drape), 1.0, lerpf(1.0, 1.006, drape))
 
 

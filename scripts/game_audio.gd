@@ -758,6 +758,41 @@ func play_scoop() -> void:
 	_play_cached("scoop", _make_scoop, 0.0, 0.9)
 
 
+func play_spatula_ting(midi: int = 72) -> void:
+	## tinggrill.wav — natural pitch is C5 / MIDI 72 (grill center); strips pitch out from there.
+	if _players.is_empty():
+		return
+	if not _cache.has("tinggrill"):
+		var stream: AudioStream = _load_tinggrill_stream()
+		if stream == null:
+			stream = _make_spatula_ting_note(midi)
+		_cache["tinggrill"] = stream
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache["tinggrill"]
+	## Strips stay near C5; pitch-shifted samples lose energy — boost them back up.
+	var semis := float(midi - 72)
+	p.pitch_scale = pow(2.0, semis / 12.0)
+	var base_gain := 1.35 * 1.25 * 0.8 * 0.85
+	## ~12% louder per semitone away from the natural sample (stronger when pitched down).
+	var away := absf(semis)
+	var pitch_boost := 1.0 + away * (0.16 if semis < 0.0 else 0.10)
+	p.volume_db = linear_to_db(base_gain * pitch_boost)
+	p.play()
+
+
+func _load_tinggrill_stream() -> AudioStream:
+	const PATH := "res://sounds/tinggrill.wav"
+	if ResourceLoader.exists(PATH):
+		var res := load(PATH)
+		if res is AudioStream:
+			return res
+	## Editor hasn't written .import yet — decode the WAV file directly.
+	if not FileAccess.file_exists(PATH):
+		return null
+	return AudioStreamWAV.load_from_file(PATH)
+
+
 func play_chaching() -> void:
 	## Soft service bell fallback.
 	play_order_up()
@@ -771,6 +806,12 @@ func play_order_up() -> void:
 func play_serve_whoosh() -> void:
 	## Soft air rush as the burger tosses through the window.
 	_play_cached("serve_whoosh", _make_serve_whoosh, 0.0, 0.38)
+
+
+func play_spatula_whoosh() -> void:
+	## Air rush for the spatula flip flourish.
+	## 20% quieter than prior 0.084 gain.
+	_play_cached("spatula_whoosh", _make_spatula_whoosh, 0.0, 0.0672)
 
 
 func play_burger_chomp() -> void:
@@ -1306,6 +1347,23 @@ func _make_serve_whoosh() -> AudioStreamWAV:
 	return _wav_from_pcm(pcm, false)
 
 
+func _make_spatula_whoosh() -> AudioStreamWAV:
+	## Quick air swipe — matches the flourish spin (~0.55s).
+	var dur := 0.42
+	var n := int(MIX_RATE * dur)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var u := t / dur
+		var env := sin(clampf(u, 0.0, 1.0) * PI) * exp(-u * 0.85)
+		var noise := (randf() * 2.0 - 1.0) * 0.62
+		var tone := sin(t * lerpf(520.0, 140.0, u) * TAU) * 0.28
+		var hiss := sin(t * lerpf(1800.0, 600.0, u) * TAU) * (randf() * 0.12)
+		_write_s16(pcm, i, int(clampf((noise + tone + hiss) * env, -1.0, 1.0) * 16500.0))
+	return _wav_from_pcm(pcm, false)
+
+
 func _make_burger_chomp() -> AudioStreamWAV:
 	var n := int(MIX_RATE * 0.16)
 	var pcm := PackedByteArray()
@@ -1344,6 +1402,35 @@ func _make_scoop() -> AudioStreamWAV:
 		var env := exp(-t * 14.0)
 		var wave := sin(t * 140.0 * TAU) * 0.5 + (randf() * 2.0 - 1.0) * exp(-t * 30.0) * 0.25
 		_write_s16(pcm, i, int(wave * env * 17000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_spatula_ting() -> AudioStreamWAV:
+	return _make_spatula_ting_note(84)
+
+
+func _make_spatula_ting_note(midi: int) -> AudioStreamWAV:
+	## Sharp steel ting — bright / short / inharmonic (not a thuddy drum).
+	## Octave up from the strip MIDI so each key still differs but stays crisp.
+	var freq := 440.0 * pow(2.0, float(midi - 69) / 12.0) * 2.0
+	var n := int(MIX_RATE * 0.14)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		## Fast attack, quick decay — triangle / spoon-on-steel feel.
+		var env := exp(-t * 28.0)
+		if t < 0.0012:
+			env *= t / 0.0012
+		var ting := (
+			sin(t * freq * TAU) * 0.38 * exp(-t * 18.0)
+			+ sin(t * freq * 2.76 * TAU) * 0.42 ## inharmonic clang
+			+ sin(t * freq * 5.15 * TAU) * 0.22 * exp(-t * 26.0)
+			+ sin(t * freq * 8.4 * TAU) * 0.12 * exp(-t * 40.0)
+			+ sin(t * freq * 12.1 * TAU) * 0.07 * exp(-t * 55.0)
+		)
+		var spark := (randf() * 2.0 - 1.0) * exp(-t * 120.0) * 0.22
+		_write_s16(pcm, i, int(clampf((ting + spark) * env, -1.0, 1.0) * 26000.0))
 	return _wav_from_pcm(pcm, false)
 
 
