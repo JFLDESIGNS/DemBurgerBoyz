@@ -1445,14 +1445,15 @@ const SODA_FLAVOR_WARM: Dictionary = {
 	"orange": Color(1.0, 0.54, 0.06),
 }
 const INCH_TO_M := 0.0254
-## Carry / first-pull plane above grill steel. Tunable in Hidden → SODA CUP HEIGHTS.
-const CUP_HOLD_HEIGHT_DEFAULT := 0.1416 ## ~5.6" (+2" vs prior) so spout acquire isn't clamped low
-## Soft-lock fill seat offset above drip-tray park. Tunable in Hidden menu.
-## Prior tip-relative seat sat ~6" above the tray; default 0 sits on the drip deck.
+## Carry plane above grill steel (NOT the fill seat). Tunable in Hidden → SODA CUP HEIGHTS.
+const CUP_HOLD_HEIGHT_DEFAULT := 0.0762 ## ~3" — carry only; fill snaps to drip deck
+## Fill / park seat offset above the fountain drip-deck. Tunable in Hidden menu.
 const CUP_FILL_EXTRA_Y_DEFAULT := 0.0
 var cup_hold_height: float = CUP_HOLD_HEIGHT_DEFAULT
 var cup_fill_extra_y: float = CUP_FILL_EXTRA_Y_DEFAULT
 const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
+## Local Y of the drip-grate top (matches soda drip-floor collider top: 0.04s + 0.03s).
+const CUP_TRAY_DECK_LOCAL_Y := 0.07 * SODA_FOUNTAIN_SCALE
 ## Cup mesh ~10% smaller than the original fountain cups.
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
@@ -19662,10 +19663,10 @@ func _build_soda_station() -> void:
 	_add_soda_spout_marker_only(root, false)
 	_sync_soda_spout_to_flavor()
 
-	## Park cups on the drip ledge — deck height only (fill soft-lock adds cup_fill_extra_y).
+	## Park + fill seat on the drip-grate top (not tip-relative mid-air).
 	cup_rest = root.to_global(Vector3(
 		CUP_TRAY_FIRST_X * 0.72,
-		0.075 * SODA_FOUNTAIN_SCALE,
+		CUP_TRAY_DECK_LOCAL_Y,
 		0.42
 	))
 	cup_rest_rot = Vector3.ZERO
@@ -23899,7 +23900,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = rack.to_global(stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, 0.138, 0.54))
+		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, CUP_TRAY_DECK_LOCAL_Y, 0.54))
 		cup_rest_rot = Vector3.ZERO
 	_spawn_and_bind_empty_cup()
 
@@ -24316,7 +24317,7 @@ func _tray_slot_local(slot: int) -> Vector3:
 	## local -X is screen-left with soda yaw 180. Slots stay fixed once assigned.
 	var lx := CUP_TRAY_FIRST_X + float(clampi(slot, 0, CUP_MAX - 1)) * CUP_TRAY_SPACING
 	lx = clampf(lx, CUP_TRAY_FIRST_X, 0.28)
-	return Vector3(lx, 0.148, 0.54)
+	return Vector3(lx, CUP_TRAY_DECK_LOCAL_Y, 0.54)
 
 
 func _tray_slot_taken(slot: int, ignore: Node3D = null) -> bool:
@@ -25835,22 +25836,44 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	return out2
 
 
+func _cup_deck_fill_y() -> float:
+	## Absolute drip-deck fill/park Y (+ Hidden fill offset). Never tip-relative.
+	if cup_rest != Vector3.ZERO:
+		return cup_rest.y + cup_fill_extra_y
+	if soda_root != null and is_instance_valid(soda_root):
+		return soda_root.to_global(Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y, 0.0)).y + cup_fill_extra_y
+	return SODA_STATION_POS.y + CUP_TRAY_DECK_LOCAL_Y + cup_fill_extra_y
+
+
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
-	## Soft-lock fill seat under the stream — tray park + Hidden `cup_fill_extra_y`.
+	## Soft-lock fill seat: XZ under the nozzle, Y on the drip deck (not mid-air).
 	var tip_p := tip.global_position
-	var tip_seat := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + cup_fill_extra_y
-	var fill_y := tip_seat
-	if soda_root != null and is_instance_valid(soda_root) and cup_rest != Vector3.ZERO:
-		## Tray-relative seat so the Hidden fill slider lands on the drip deck, not tip height.
-		fill_y = cup_rest.y + cup_fill_extra_y
-	return Vector3(tip_p.x, fill_y, tip_p.z)
+	return Vector3(tip_p.x, _cup_deck_fill_y(), tip_p.z)
 
 
 func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
 	## Must actually sit under the stream — no free fill from across the counter.
 	var horiz := Vector2(tip.x - rim.x, tip.z - rim.z).length()
 	var vert := absf(tip.y - rim.y)
-	return horiz <= 0.085 and vert <= 0.28
+	## Tall vertical window so a deck-seated cup still catches the pour.
+	return horiz <= 0.085 and vert <= 0.42
+
+
+func _cup_fill_spout_nearby() -> Node3D:
+	## Nearest soda/ice tip by XZ — used to force deck Y on first fill before soft-lock sticks.
+	if cup_root == null or not is_instance_valid(cup_root):
+		return null
+	var best: Node3D = null
+	var best_d := CUP_MAGNET_RADIUS
+	for tip in [soda_spout_marker, ice_spout_marker]:
+		if tip == null or not is_instance_valid(tip):
+			continue
+		var tpos := tip.global_position
+		var d := Vector2(cup_root.global_position.x - tpos.x, cup_root.global_position.z - tpos.z).length()
+		if d < best_d:
+			best_d = d
+			best = tip
+	return best
 
 
 func _update_held_cup(delta: float) -> void:
@@ -25868,12 +25891,15 @@ func _update_held_cup(delta: float) -> void:
 		return
 	var can_reach_customer := cup_soda_fill >= 0.82 and cup_flavor != "" \
 		and _find_waiting_customer_at_mouth(get_viewport().get_mouse_position(), CUP_MOUTH_HAND_PX) != null
-	var can_use_fill_bay := _cup_spout_lock != null and is_instance_valid(_cup_spout_lock)
 	var seat := Vector3.ZERO
 	if _kb_force_cup_seat != Vector3.ZERO:
 		seat = _kb_force_cup_seat
 	else:
 		seat = _cup_hold_point_from_screen(get_viewport().get_mouse_position())
+	## Soft-lock updates `_cup_spout_lock` above — evaluate fill bay AFTER that (was stale).
+	var fill_tip := _cup_spout_lock if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) \
+			else _cup_fill_spout_nearby()
+	var can_use_fill_bay := fill_tip != null and is_instance_valid(fill_tip)
 	## Invisible wall on the aim target — stops chase→shove glitching into the cabinet.
 	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay:
 		seat = _resolve_cup_against_soda(seat, false)
@@ -25886,14 +25912,25 @@ func _update_held_cup(delta: float) -> void:
 		if _cup_spout_unlock_grace > 0.0:
 			follow *= 0.72
 		var desired := prev.lerp(seat, follow)
-		## While locked under a spout, bias hard onto the fill seat so the stream hits the cup.
-		if can_use_fill_bay and _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
-			var fill_seat := _cup_target_for_spout(_cup_spout_lock)
-			desired = desired.lerp(fill_seat, clampf(delta * 28.0, 0.0, 1.0))
+		## While under a spout, bias hard onto the drip-deck fill seat (never carry-plane Y).
+		if can_use_fill_bay and fill_tip != null and is_instance_valid(fill_tip):
+			var fill_seat := _cup_target_for_spout(fill_tip)
+			desired.x = lerpf(desired.x, fill_seat.x, clampf(delta * 28.0, 0.0, 1.0))
+			desired.z = lerpf(desired.z, fill_seat.z, clampf(delta * 28.0, 0.0, 1.0))
+			desired.y = fill_seat.y
 		var step := desired - prev
 		var max_step := (CUP_FILL_FOLLOW_MAX_SPEED if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
-			desired = prev + step.normalized() * max_step
+			## Never rate-limit the drop onto the drip deck — that's the whole point of first fill.
+			if can_use_fill_bay:
+				desired.y = _cup_deck_fill_y()
+				var xz := Vector2(desired.x - prev.x, desired.z - prev.z)
+				if xz.length() > max_step:
+					xz = xz.normalized() * max_step
+					desired.x = prev.x + xz.x
+					desired.z = prev.z + xz.y
+			else:
+				desired = prev + step.normalized() * max_step
 		cup_root.global_position = desired
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
@@ -25909,7 +25946,7 @@ func _update_held_cup(delta: float) -> void:
 		target_tilt = target_tilt.normalized() * CUP_TILT_MAX
 	var tilt_rate := CUP_TILT_FOLLOW if horiz.length() > 0.08 else CUP_TILT_SETTLE
 	_cup_tilt = _cup_tilt.lerp(target_tilt, clampf(delta * tilt_rate, 0.0, 1.0))
-	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
+	if can_use_fill_bay:
 		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
 		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 6.0, 0.0, 1.0))
 	if _cup_machine_contact_grace > 0.0:
@@ -25932,34 +25969,18 @@ func _update_held_cup(delta: float) -> void:
 				_cup_vel *= 0.2
 				_cup_prev_pos = cup_root.global_position
 		else:
-			var keep_y2 := cup_root.global_position.y
 			cup_root.global_position = resolved
 			if can_use_fill_bay:
-				cup_root.global_position.y = keep_y2
-	## Pin height near the fill soft-lock / tray hold plane so the cup can't float up.
-	var anchor_y := GRILL_SURFACE_Y + cup_hold_height
-	if can_use_fill_bay and _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
-		## Hard lock while filling — no −0.03 sink that clips through the drip deck.
-		anchor_y = _cup_target_for_spout(_cup_spout_lock).y
-		cup_root.global_position.y = anchor_y
+				cup_root.global_position.y = _cup_deck_fill_y()
+	## Pin height: under a spout → drip deck. Otherwise carry plane.
+	if can_use_fill_bay:
+		cup_root.global_position.y = _cup_deck_fill_y()
 	else:
+		var anchor_y := GRILL_SURFACE_Y + cup_hold_height
 		if cup_rest != Vector3.ZERO:
 			anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
-		var want_y := anchor_y
-		var y_lo := anchor_y - 0.03
-		var y_hi := anchor_y + 0.08
-		## First pull: while magneting under a spout, follow that fill seat (don't clamp low).
-		for tip in [soda_spout_marker, ice_spout_marker]:
-			if tip == null or not is_instance_valid(tip):
-				continue
-			var tpos := _cup_target_for_spout(tip)
-			var d := Vector2(cup_root.global_position.x - tpos.x, cup_root.global_position.z - tpos.z).length()
-			if d <= CUP_MAGNET_RADIUS:
-				want_y = tpos.y
-				y_lo = minf(y_lo, tpos.y - 0.02)
-				y_hi = maxf(y_hi, tpos.y + 0.02)
-		cup_root.global_position.y = lerpf(cup_root.global_position.y, want_y, clampf(delta * 16.0, 0.0, 1.0))
-		cup_root.global_position.y = clampf(cup_root.global_position.y, y_lo, y_hi)
+		cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
+		cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
 	cup_root.rotation_degrees = Vector3(
 		-6.0 + _cup_tilt.y,
 		10.0,
@@ -25967,6 +25988,9 @@ func _update_held_cup(delta: float) -> void:
 	)
 	_update_cup_slosh(delta)
 	_try_fill_cup_at_spouts(delta)
+	## Keep deck seat after pour starts (fill can begin before soft-lock was sticky).
+	if _cup_fill_spout_nearby() != null:
+		cup_root.global_position.y = _cup_deck_fill_y()
 	## After spout sets _cup_pouring — drive the pour-white fade.
 	_update_cup_pour_white(delta)
 	_update_cup_liquid_bubbles(delta)
@@ -33624,13 +33648,13 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(soda_h_lab, true, 13)
 	soda_h_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	options_hidden_room_tone_box.add_child(soda_h_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_pull_in", "First Pull Height (in)", 0.0, 12.0, 0.25,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_pull_in", "Carry Height (in)", 0.0, 12.0, 0.25,
 		func(): return cup_hold_height / INCH_TO_M,
 		func(v: float):
 			cup_hold_height = clampf(v, 0.0, 12.0) * INCH_TO_M
 			_save_soda_cup_height_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_fill_in", "Fill Seat Above Tray (in)", -8.0, 12.0, 0.25,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_fill_in", "Fill Seat Above Deck (in)", -8.0, 12.0, 0.25,
 		func(): return cup_fill_extra_y / INCH_TO_M,
 		func(v: float):
 			cup_fill_extra_y = clampf(v, -8.0, 12.0) * INCH_TO_M
