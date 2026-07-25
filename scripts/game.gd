@@ -36279,12 +36279,12 @@ func _build_ingredient_legend() -> void:
 	for hi in range(INGREDIENT_HOTKEYS.size()):
 		var id: String = INGREDIENT_HOTKEYS[hi]
 		var tbtn := Button.new()
-		tbtn.custom_minimum_size = Vector2(90, 76)
+		tbtn.custom_minimum_size = Vector2(90, 84)
 		tbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		tbtn.focus_mode = Control.FOCUS_NONE
 		tbtn.flat = true
 		tbtn.clip_contents = true
-		tbtn.tooltip_text = "%s (%s)" % [GameDataScript.INGREDIENT_LABELS[id], HOTKEY_LABELS[hi]]
+		tbtn.tooltip_text = GameDataScript.INGREDIENT_LABELS[id]
 
 		var tsb := StyleBoxFlat.new()
 		tsb.bg_color = strip_bg
@@ -36329,7 +36329,7 @@ func _build_ingredient_legend() -> void:
 		icon_margin.add_child(icon)
 
 		var name_lab := Label.new()
-		name_lab.text = "%s %s" % [GameDataScript.INGREDIENT_LABELS[id], HOTKEY_LABELS[hi]]
+		name_lab.text = GameDataScript.INGREDIENT_LABELS[id]
 		UiFontsScript.apply_label(name_lab, true, 14)
 		name_lab.add_theme_color_override("font_color", Color(1.0, 0.98, 0.92))
 		name_lab.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -36359,6 +36359,30 @@ func _build_ingredient_legend() -> void:
 		stock_fill.anchor_bottom = 1.0
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
+
+		## Hover overlay: 3D keycap with hotkey digit at the top of the topping.
+		var keycap_host := Control.new()
+		keycap_host.name = "KeycapHost"
+		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		keycap_host.z_index = 8
+		keycap_host.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		keycap_host.offset_left = -24.0
+		keycap_host.offset_right = 24.0
+		keycap_host.offset_top = 2.0
+		keycap_host.offset_bottom = 42.0
+		var keycap_view := _make_strip_hotkey_keycap(HOTKEY_LABELS[hi])
+		keycap_view.name = "KeycapView"
+		keycap_view.visible = false
+		keycap_host.add_child(keycap_view)
+		tbtn.add_child(keycap_host)
+		tbtn.mouse_entered.connect(func():
+			if is_instance_valid(keycap_view):
+				keycap_view.visible = true
+		)
+		tbtn.mouse_exited.connect(func():
+			if is_instance_valid(keycap_view):
+				keycap_view.visible = false
+		)
 
 		var capture: String = id
 		tbtn.pressed.connect(func():
@@ -36393,6 +36417,102 @@ func _build_ingredient_legend() -> void:
 		ingredient_buttons[id] = tbtn
 	_refresh_ingredient_stock_bars()
 	call_deferred("_refresh_ingredient_stock_bars")
+
+
+func _make_strip_hotkey_keycap(digit: String) -> Control:
+	## Tiny SubViewport keycap — shown above a strip topping on hover.
+	var wrap := SubViewportContainer.new()
+	wrap.name = "KeycapViewport"
+	wrap.stretch = true
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	wrap.offset_left = 0.0
+	wrap.offset_top = 0.0
+	wrap.offset_right = 0.0
+	wrap.offset_bottom = 0.0
+	var vp := SubViewport.new()
+	vp.name = "KeycapVP"
+	vp.size = Vector2i(96, 104)
+	vp.transparent_bg = true
+	vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	vp.world_3d = World3D.new()
+	wrap.add_child(vp)
+
+	var world := Node3D.new()
+	world.name = "KeycapWorld"
+	vp.add_child(world)
+
+	var key := Node3D.new()
+	key.name = "Key"
+	key.rotation_degrees = Vector3(-28.0, 28.0, 0.0)
+	world.add_child(key)
+
+	var body := MeshInstance3D.new()
+	var body_mesh := BoxMesh.new()
+	body_mesh.size = Vector3(0.78, 0.42, 0.78)
+	body.mesh = body_mesh
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.82, 0.85, 0.90)
+	body_mat.roughness = 0.42
+	body_mat.metallic = 0.08
+	body.material_override = body_mat
+	body.position = Vector3(0.0, 0.0, 0.0)
+	key.add_child(body)
+
+	var top := MeshInstance3D.new()
+	var top_mesh := BoxMesh.new()
+	top_mesh.size = Vector3(0.62, 0.10, 0.62)
+	top.mesh = top_mesh
+	var top_mat := StandardMaterial3D.new()
+	top_mat.albedo_color = Color(0.96, 0.97, 1.0)
+	top_mat.roughness = 0.28
+	top.material_override = top_mat
+	top.position = Vector3(0.0, 0.22, 0.0)
+	key.add_child(top)
+
+	## Soft lip so it reads as a keycap, not a plain cube.
+	var lip := MeshInstance3D.new()
+	var lip_mesh := BoxMesh.new()
+	lip_mesh.size = Vector3(0.86, 0.08, 0.86)
+	lip.mesh = lip_mesh
+	var lip_mat := StandardMaterial3D.new()
+	lip_mat.albedo_color = Color(0.70, 0.73, 0.78)
+	lip_mat.roughness = 0.55
+	lip.material_override = lip_mat
+	lip.position = Vector3(0.0, -0.18, 0.0)
+	key.add_child(lip)
+
+	var num := Label3D.new()
+	num.text = digit
+	num.position = Vector3(0.0, 0.30, 0.02)
+	num.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	num.modulate = Color(0.12, 0.14, 0.18)
+	num.outline_modulate = Color(1.0, 1.0, 1.0, 0.35)
+	num.outline_size = 8
+	UiFontsScript.apply_label3d(num, true, 96, 0.028)
+	key.add_child(num)
+
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.96, 0.9)
+	light.light_energy = 1.35
+	light.omni_range = 3.0
+	light.position = Vector3(0.55, 0.95, 0.75)
+	world.add_child(light)
+
+	var fill := DirectionalLight3D.new()
+	fill.light_color = Color(0.65, 0.75, 1.0)
+	fill.light_energy = 0.45
+	fill.rotation_degrees = Vector3(-40.0, 35.0, 0.0)
+	world.add_child(fill)
+
+	var cam := Camera3D.new()
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	cam.size = 1.35
+	cam.position = Vector3(0.0, 0.55, 1.35)
+	cam.rotation_degrees = Vector3(-22.0, 0.0, 0.0)
+	cam.current = true
+	vp.add_child(cam)
+	return wrap
 
 
 func _shake_ingredient_button(btn: Control) -> void:
