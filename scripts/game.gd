@@ -43,8 +43,10 @@ const GRILL_PIANO_LEFT_MIDI := 60 ## C4 — leftmost strip (screen-left)
 const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
 const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
 const GRILL_PIANO_KEY_90 := 7 ## ±90° → G
-## Display-only: side-tap ting reads ~4 semis sharp vs mapped MIDI (E4 sounds as G#4).
-const GRILL_PIANO_LABEL_SEMITONE_OFFSET := 4
+## Display-only label offsets (MIDI/frequency mapping stays unchanged).
+## Flat blade: C4 sounds as A3. Side blade (±45/±90): E4 sounds as G#4.
+const GRILL_PIANO_LABEL_FLAT_OFFSET := -3
+const GRILL_PIANO_LABEL_SIDE_OFFSET := 4
 const GRILL_PIANO_NOTE_NAMES: Array[String] = [
 	"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
 ]
@@ -4503,8 +4505,15 @@ func _spatula_roll_midi_offset() -> int:
 	return GRILL_PIANO_KEY_FLAT
 
 
+func _grill_piano_label_semitone_offset() -> int:
+	## Flat taps keep −3; side taps (±45° / ±90°) use +4.
+	if _spatula_roll_midi_offset() == GRILL_PIANO_KEY_FLAT:
+		return GRILL_PIANO_LABEL_FLAT_OFFSET
+	return GRILL_PIANO_LABEL_SIDE_OFFSET
+
+
 func _spatula_roll_key_name() -> String:
-	## Banner shows sounding key (mapped C/F/G + label offset → E/A/B).
+	## Banner shows sounding key for the active blade pose.
 	var mapped := 0
 	match _spatula_roll_midi_offset():
 		GRILL_PIANO_KEY_90:
@@ -4513,7 +4522,7 @@ func _spatula_roll_key_name() -> String:
 			mapped = 5 ## F
 		_:
 			mapped = 0 ## C
-	return GRILL_PIANO_NOTE_NAMES[posmod(mapped + GRILL_PIANO_LABEL_SEMITONE_OFFSET, 12)]
+	return GRILL_PIANO_NOTE_NAMES[posmod(mapped + _grill_piano_label_semitone_offset(), 12)]
 
 
 func _spatula_hold_voice_name() -> String:
@@ -5571,7 +5580,7 @@ func _refresh_grill_piano_note_labels() -> void:
 		var from_left := (GRILL_PIANO_SECTIONS - 1) - i
 		var midi := GRILL_PIANO_LEFT_MIDI + clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1) + key_off
 		## Labels follow heard pitch; MIDI/frequency mapping stays unchanged.
-		lab.text = _midi_to_note_name(midi + GRILL_PIANO_LABEL_SEMITONE_OFFSET)
+		lab.text = _midi_to_note_name(midi + _grill_piano_label_semitone_offset())
 	var voice := _spatula_hold_voice_name()
 	for j in grill_drum_note_labels.size():
 		var dlab: Label3D = grill_drum_note_labels[j] as Label3D
