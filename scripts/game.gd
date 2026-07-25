@@ -7645,9 +7645,13 @@ func _smash_grill_patty(patty: Area3D) -> void:
 	## Mid ice-ball squash — ignore; waiting ball → slow spatula smash.
 	if bool(patty.get("place_morphing")) and not waiting_ball:
 		return
-	## Same lowered spatula press used for ice-ball place smash (cooked burgers too).
+	## Ice ball: slow place-smash. Cooked burger: snappy slap (pre–slow-smoosh feel).
 	if not _mp_applying:
-		_start_spatula_place_squash_at(Vector3(float(patty._rest_x), GRILL_SURFACE_Y, float(patty._rest_z)))
+		var smash_at := Vector3(float(patty._rest_x), GRILL_SURFACE_Y, float(patty._rest_z))
+		if waiting_ball:
+			_start_spatula_place_squash_at(smash_at)
+		else:
+			_start_spatula_place_squash_at(smash_at, HAND_SPATULA_SLAP_CLEAR, HAND_SPATULA_SLAP_DUR)
 	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
 		mp_patty_smash.rpc(int(patty.net_id))
 		return
