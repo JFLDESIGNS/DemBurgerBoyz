@@ -3342,6 +3342,9 @@ func _input(event: InputEvent) -> void:
 			if _try_grab_nearest_tool(event.position):
 				get_viewport().set_input_as_handled()
 				return
+			if _try_customer_wawa_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 	## Escape / F10 → Options (or cancel held tools first).
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F10:
@@ -39652,6 +39655,54 @@ func _find_waiting_customer_at_mouth(screen_pos: Vector2, max_px: float = -1.0) 
 			best_d = d
 			best = c
 	return best
+
+
+func _find_customer_under_click(screen_pos: Vector2) -> Node3D:
+	## Generous head/torso pick — click a guest through the window.
+	if camera == null or customers_root == null:
+		return null
+	var best: Node3D = null
+	var best_d := 130.0
+	for c in customers_root.get_children():
+		if c == null or not is_instance_valid(c):
+			continue
+		if bool(c.get("is_leaving")) or bool(c.get("is_ragdoll")):
+			continue
+		var torso: Vector3 = c.global_position + Vector3(0.0, 0.85, 0.0)
+		if camera.is_position_behind(torso):
+			continue
+		var head: Vector3 = c.global_position + Vector3(0.0, 1.22, 0.0)
+		var face: Vector3 = c.global_position + Vector3(0.0, 1.38, 0.06)
+		if c.has_method("mouth_global"):
+			face = c.mouth_global()
+		var d := mini(
+			screen_pos.distance_to(camera.unproject_position(head)),
+			mini(
+				screen_pos.distance_to(camera.unproject_position(face)),
+				screen_pos.distance_to(camera.unproject_position(torso))
+			)
+		)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+func _try_customer_wawa_click(screen_pos: Vector2) -> bool:
+	## LMB on a customer → short pitched wawawa (same clip as impatient grobble).
+	if not playing:
+		return false
+	var cust := _find_customer_under_click(screen_pos)
+	if cust == null:
+		return false
+	var impatience := 0.5
+	if cust.has_method("patience_ratio"):
+		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
+	if game_audio and game_audio.has_method("play_customer_grobble"):
+		game_audio.play_customer_grobble(impatience)
+	if cust.has_method("shake_angry"):
+		cust.call("shake_angry", 0.28, 0.01, 20.0, false)
+	return true
 
 
 func _try_feed_bacon_to_customer(screen_pos: Vector2) -> bool:
