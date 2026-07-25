@@ -11823,7 +11823,7 @@ func _build_fire_extinguisher() -> void:
 	visual.name = "FireExtMesh"
 	visual.position = Vector3.ZERO
 	visual.rotation_degrees = Vector3.ZERO
-	visual.scale = Vector3(0.034, 0.034, 0.034)
+	visual.scale = Vector3(0.0272, 0.0272, 0.0272) ## was 0.034 — 20% smaller
 	var diff: Texture2D = load(DIFF_PATH) as Texture2D if ResourceLoader.exists(DIFF_PATH) else null
 	var norm: Texture2D = load(NORM_PATH) as Texture2D if ResourceLoader.exists(NORM_PATH) else null
 	_apply_fire_ext_materials(visual, diff, norm)
@@ -11839,7 +11839,7 @@ func _build_fire_extinguisher() -> void:
 	ext_area.monitorable = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.32, 0.62, 0.32)
+	box.size = Vector3(0.256, 0.496, 0.256) ## grab pad matches 20% shrink
 	shape.shape = box
 	shape.position = Vector3(0.0, 0.05, 0.0)
 	ext_area.add_child(shape)
