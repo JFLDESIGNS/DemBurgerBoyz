@@ -1248,6 +1248,9 @@ const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
 ## Screen nudge on the cutting-board Label3D (+X right, +Y down).
 const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(20.0, 20.0)
+## Shared Luckiest Guy world hints (DRAG PATTY HERE + fryer) — 1.5× prior board size.
+const WORLD_HINT_FONT_SIZE := 84
+const WORLD_HINT_WORLD_H := 0.0255
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -18661,12 +18664,17 @@ func _build_fryer_machine() -> void:
 	label.name = "FryerHint"
 	label.text = "click basket to add potatoes"
 	label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
-	label.font_size = 44
-	label.pixel_size = 0.00115
-	label.modulate = Color(1.0, 0.76, 0.28)
-	label.outline_size = 5
-	label.outline_modulate = Color(0, 0, 0, 0.78)
+	label.modulate = Color(1.0, 0.92, 0.22, 1.0)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.fixed_size = true
+	## Match DRAG PATTY HERE — Luckiest Guy, same world size.
+	UiFontsScript.apply_luckiest_label3d(label, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, 0)
+	label.outline_size = 0
+	label.outline_modulate = Color(0, 0, 0, 0)
+	label.alpha_cut = Label3D.ALPHA_CUT_DISABLED
 	root.add_child(label)
 	fryer_label = label
 	call_deferred("_nudge_fryer_hint_down")
@@ -27071,9 +27079,8 @@ func _build_board_hint_label() -> void:
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.no_depth_test = true
 	lab.fixed_size = true
-	## High raster size keeps letter holes open; world height keeps it small on screen.
 	## No outline — Label3D stroke fills counters on chunky fonts.
-	UiFontsScript.apply_luckiest_label3d(lab, 56, 0.017, 0)
+	UiFontsScript.apply_luckiest_label3d(lab, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, 0)
 	lab.outline_size = 0
 	lab.outline_modulate = Color(0, 0, 0, 0)
 	lab.alpha_cut = Label3D.ALPHA_CUT_DISABLED
@@ -35272,30 +35279,41 @@ func _build_window_pause_ui() -> void:
 	window_shutter.add_child(closed_lab)
 
 
-func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshInstance3D:
-	## Quad + albedo (more reliable than Sprite3D for hung window art).
-	var mi := MeshInstance3D.new()
-	mi.name = face_name
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.52, 0.52)
-	mi.mesh = quad
-	var tex := load(tex_path) as Texture2D
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	mat.alpha_scissor_threshold = 0.08
-	mat.albedo_texture = tex
-	mat.albedo_color = Color(1, 1, 1, 1)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.render_priority = 16
-	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mi.sorting_offset = 16.0
-	return mi
+func _load_open_closed_sign_texture(path: String) -> Texture2D:
+	## Load PNG pixels directly so the art always shows (avoids white-box missing remap).
+	## CODING_NOTES: swap these PNGs for proper-alpha versions later (same paths).
+	if FileAccess.file_exists(path):
+		var img := Image.new()
+		if img.load(path) == OK:
+			return ImageTexture.create_from_image(img)
+	var tex := load(path) as Texture2D
+	if tex != null:
+		return tex
+	push_warning("Open/closed sign texture missing: %s" % path)
+	return null
+
+
+func _make_open_closed_sign_face(tex_path: String, face_name: String) -> Sprite3D:
+	## Double-sided so cook + street both see the art (no white backface).
+	var spr := Sprite3D.new()
+	spr.name = face_name
+	spr.texture = _load_open_closed_sign_texture(tex_path)
+	spr.pixel_size = 0.0021 ## ~0.54m for 256px art
+	spr.shaded = false
+	spr.double_sided = true
+	spr.transparent = true
+	## Keep black bg for now — proper alpha PNGs later (see CODING_NOTES.md).
+	spr.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	spr.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	spr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spr.render_priority = 18
+	spr.sorting_offset = 18.0
+	return spr
 
 
 func _build_open_closed_sign() -> void:
-	## Hang-sign in the service window — cook looks toward −Z, so +Z faces the cook.
+	## Hang-sign in the service window under the bunting.
+	## CODING_NOTES: textures are temporary black-bg PNGs — replace with alpha cuts later.
 	if world == null:
 		return
 	if open_closed_sign != null and is_instance_valid(open_closed_sign):
@@ -35309,18 +35327,18 @@ func _build_open_closed_sign() -> void:
 
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
-	## Same seat as the old text sign — left of the window opening, into cook view.
+	## Left of the window opening, under bunting — visible from cook + street.
 	root.position = Vector3(-1.05, 1.72, 1.18)
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
 
-	## Open face (+Z) — faces cook when yaw is OPEN (0°).
+	## Open face (+Z) — toward cook when yaw OPEN (0°); double-sided for street.
 	var open_face := _make_open_closed_sign_face("res://IMAGES/WEAREOPEN.png", "OpenFace")
 	open_face.position = Vector3(0.0, 0.0, 0.004)
 	root.add_child(open_face)
 
-	## Closed face (−Z, spun 180°) — faces cook when yaw is CLOSED (180°).
+	## Closed face (−Z) — toward cook when yaw CLOSED (180°).
 	var closed := _make_open_closed_sign_face("res://IMAGES/WEARECLOSED.png", "ClosedFace")
 	closed.position = Vector3(0.0, 0.0, -0.004)
 	closed.rotation_degrees = Vector3(0.0, 180.0, 0.0)
@@ -35335,7 +35353,7 @@ func _build_open_closed_sign() -> void:
 	area.input_ray_pickable = true
 	var shape := CollisionShape3D.new()
 	var cbox := BoxShape3D.new()
-	cbox.size = Vector3(0.56, 0.56, 0.1)
+	cbox.size = Vector3(0.58, 0.58, 0.12)
 	shape.shape = cbox
 	area.add_child(shape)
 	root.add_child(area)
