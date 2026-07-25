@@ -32425,11 +32425,6 @@ func _build_graphics_ui() -> void:
 	gfx_panel.name = "GraphicsPanel"
 	gfx_panel.visible = false
 	gfx_panel.z_index = 95
-	gfx_panel.set_anchors_preset(Control.PRESET_CENTER)
-	gfx_panel.offset_left = -180.0
-	gfx_panel.offset_right = 180.0
-	gfx_panel.offset_top = -280.0
-	gfx_panel.offset_bottom = 280.0
 	gfx_panel.custom_minimum_size = Vector2(340, 0)
 	gfx_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var psb := StyleBoxFlat.new()
@@ -32443,9 +32438,14 @@ func _build_graphics_ui() -> void:
 	psb.content_margin_bottom = 10
 	gfx_panel.add_theme_stylebox_override("panel", psb)
 	ui_root.add_child(gfx_panel)
+	_layout_gfx_panel()
+	var vp_gfx := get_viewport()
+	if vp_gfx != null and not vp_gfx.size_changed.is_connected(_layout_gfx_panel):
+		vp_gfx.size_changed.connect(_layout_gfx_panel)
 
 	var root_v := VBoxContainer.new()
 	root_v.add_theme_constant_override("separation", 6)
+	root_v.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	gfx_panel.add_child(root_v)
 
 	var header := HBoxContainer.new()
@@ -32470,9 +32470,10 @@ func _build_graphics_ui() -> void:
 	header.add_child(close_btn)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 380)
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	root_v.add_child(scroll)
 
 	var list := VBoxContainer.new()
@@ -32723,12 +32724,37 @@ func _set_graphics_menu_open(open: bool) -> void:
 				gfx_panel.reparent(host)
 			host.move_child(gfx_panel, host.get_child_count() - 1)
 		gfx_panel.z_index = 30
-		gfx_panel.set_anchors_preset(Control.PRESET_CENTER)
-		gfx_panel.offset_left = -210.0
-		gfx_panel.offset_right = 210.0
-		gfx_panel.offset_top = -310.0
-		gfx_panel.offset_bottom = 310.0
+		_layout_gfx_panel()
 		_flash("Graphics settings", Color("90CAF9"))
+
+
+const OPTIONS_SCREEN_MARGIN := 30.0 ## Keep options / advanced GFX clear of screen edges
+
+
+func _layout_options_panel() -> void:
+	if options_panel == null or not is_instance_valid(options_panel):
+		return
+	var vr := get_viewport().get_visible_rect().size
+	var half_w := minf(210.0, maxf(160.0, (vr.x - OPTIONS_SCREEN_MARGIN * 2.0) * 0.5))
+	var half_h := maxf(140.0, (vr.y - OPTIONS_SCREEN_MARGIN * 2.0) * 0.5)
+	options_panel.set_anchors_preset(Control.PRESET_CENTER)
+	options_panel.offset_left = -half_w
+	options_panel.offset_right = half_w
+	options_panel.offset_top = -half_h
+	options_panel.offset_bottom = half_h
+
+
+func _layout_gfx_panel() -> void:
+	if gfx_panel == null or not is_instance_valid(gfx_panel):
+		return
+	var vr := get_viewport().get_visible_rect().size
+	var half_w := minf(210.0, maxf(160.0, (vr.x - OPTIONS_SCREEN_MARGIN * 2.0) * 0.5))
+	var half_h := maxf(140.0, (vr.y - OPTIONS_SCREEN_MARGIN * 2.0) * 0.5)
+	gfx_panel.set_anchors_preset(Control.PRESET_CENTER)
+	gfx_panel.offset_left = -half_w
+	gfx_panel.offset_right = half_w
+	gfx_panel.offset_top = -half_h
+	gfx_panel.offset_bottom = half_h
 
 
 func _build_options_menu() -> void:
@@ -32770,11 +32796,6 @@ func _build_options_menu() -> void:
 	options_panel.set_anchors_preset(Control.PRESET_CENTER)
 	options_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	options_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	## Size from content; pin center.
-	options_panel.offset_left = -200.0
-	options_panel.offset_right = 200.0
-	options_panel.offset_top = -320.0
-	options_panel.offset_bottom = 320.0
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color(0.1, 0.11, 0.14, 0.98)
 	psb.border_color = Color(1.0, 0.72, 0.28, 0.95)
@@ -32786,6 +32807,10 @@ func _build_options_menu() -> void:
 	psb.content_margin_bottom = 16
 	options_panel.add_theme_stylebox_override("panel", psb)
 	options_root.add_child(options_panel)
+	_layout_options_panel()
+	var vp_opts := get_viewport()
+	if vp_opts != null and not vp_opts.size_changed.is_connected(_layout_options_panel):
+		vp_opts.size_changed.connect(_layout_options_panel)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
@@ -32809,7 +32834,7 @@ func _build_options_menu() -> void:
 	v.add_child(hint)
 
 	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(0, 420)
+	tabs.custom_minimum_size = Vector2(0, 200)
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tabs.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -32872,9 +32897,17 @@ func _build_options_menu() -> void:
 	graphics_tab.add_theme_constant_override("margin_bottom", 4)
 	tabs.add_child(graphics_tab)
 
+	var graphics_scroll := ScrollContainer.new()
+	graphics_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graphics_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	graphics_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	graphics_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	graphics_tab.add_child(graphics_scroll)
+
 	var graphics := VBoxContainer.new()
+	graphics.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	graphics.add_theme_constant_override("separation", 8)
-	graphics_tab.add_child(graphics)
+	graphics_scroll.add_child(graphics)
 	_options_add_standard_check(graphics, "glow_on", "Glow / Bloom")
 	_options_add_standard_check(graphics, "shadows", "Shadows")
 	_options_add_standard_check(graphics, "heat_warp_on", "Heat Shimmer")
@@ -32899,9 +32932,17 @@ func _build_options_menu() -> void:
 	hidden_tab.add_theme_constant_override("margin_bottom", 4)
 	tabs.add_child(hidden_tab)
 
+	var hidden_scroll := ScrollContainer.new()
+	hidden_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hidden_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	hidden_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	hidden_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	hidden_tab.add_child(hidden_scroll)
+
 	var hidden := VBoxContainer.new()
+	hidden.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hidden.add_theme_constant_override("separation", 10)
-	hidden_tab.add_child(hidden)
+	hidden_scroll.add_child(hidden)
 
 	var hidden_lab := Label.new()
 	hidden_lab.text = "PASSWORD"
@@ -33365,6 +33406,7 @@ func _set_options_menu_open(open: bool) -> void:
 	if not open:
 		_set_graphics_menu_open(false)
 	else:
+		_layout_options_panel()
 		if options_vol_slider != null and is_instance_valid(options_vol_slider):
 			options_vol_slider.set_value_no_signal(master_volume_linear)
 		_refresh_options_graphics_controls()
