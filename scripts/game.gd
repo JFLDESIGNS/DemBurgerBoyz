@@ -36517,7 +36517,30 @@ func _build_ingredient_legend() -> void:
 	call_deferred("_refresh_ingredient_stock_bars")
 
 
-const STRIP_KEYCAP_TEX := preload("res://assets/ui/keycap.png")
+var _strip_keycap_tex: Texture2D = null
+
+
+func _load_strip_keycap_texture() -> Texture2D:
+	## Runtime load — preload breaks if the .import/.ctex isn't generated yet.
+	if _strip_keycap_tex != null:
+		return _strip_keycap_tex
+	const PATHS: Array[String] = [
+		"res://assets/ui/keycap.png",
+		"res://IMAGES/KEYCAP.png",
+		"res://IMAGES/KEYIMAGE.png",
+	]
+	for path in PATHS:
+		if ResourceLoader.exists(path):
+			var loaded := load(path)
+			if loaded is Texture2D:
+				_strip_keycap_tex = loaded as Texture2D
+				return _strip_keycap_tex
+		## Raw PNG path (include_filter) — works when texture import isn't in the pack.
+		var img := Image.new()
+		if img.load(path) == OK:
+			_strip_keycap_tex = ImageTexture.create_from_image(img)
+			return _strip_keycap_tex
+	return null
 
 
 func _make_strip_hotkey_keycap(digit: String) -> Control:
@@ -36527,15 +36550,27 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-	## Use the packed texture directly — get_image() is null in exported builds.
-	var icon := TextureRect.new()
-	icon.name = "Art"
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	icon.texture = STRIP_KEYCAP_TEX
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(icon)
+	var tex := _load_strip_keycap_texture()
+	if tex != null:
+		var icon := TextureRect.new()
+		icon.name = "Art"
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.texture = tex
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		root.add_child(icon)
+	else:
+		var face := Panel.new()
+		face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var face_sb := StyleBoxFlat.new()
+		face_sb.bg_color = Color(0.93, 0.94, 0.97)
+		face_sb.set_corner_radius_all(6)
+		face_sb.border_color = Color(0.28, 0.30, 0.34)
+		face_sb.set_border_width_all(2)
+		face.add_theme_stylebox_override("panel", face_sb)
+		root.add_child(face)
 
 	var lab := Label.new()
 	lab.name = "Digit"
