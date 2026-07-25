@@ -328,13 +328,14 @@ const SPATULA_TAP_RING_ALPHA := 0.12 ## Very soft white stroke
 const SPATULA_TAP_RING_Y := 0.028 ## Sit above steel / shine (was lowered to 0.014)
 ## Melted-cheese stretch strings: patty ↔ spatula tip while sliding.
 var _cheese_strings: Array = [] ## {root, mis, mats, patty, offs, phase, breaking, break_t}
-const CHEESE_STRING_MIN_MELT := 0.12 ## Need a bit of melt before strings pull
-const CHEESE_STRING_ATTACH_R := 0.32
-const CHEESE_STRING_BREAK_DIST := 0.42
-const CHEESE_STRING_KILL_DIST := 0.58
+const CHEESE_STRING_MIN_MELT := 0.05 ## Latch pull-strings soon after melt starts
+const CHEESE_STRING_ATTACH_R := 0.48
+const CHEESE_STRING_BREAK_DIST := 0.52
+const CHEESE_STRING_KILL_DIST := 0.72
 const CHEESE_STRING_STRANDS := 3
 const CHEESE_STRING_BREAK_SEC := 0.28
-const CHEESE_STRING_MIN_LIFT := 0.038 ## Hide while tip is flat on the melt; show on lift
+const CHEESE_STRING_MIN_LIFT := 0.012 ## Show strands with a small tip lift / slide pull
+const CHEESE_STRING_DRAG_LIFT := 0.055 ## Extra tip lift while sliding a melt so pull reads clearly
 var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
@@ -5329,10 +5330,12 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			_spatula_cancel_tap_keep_ting()
 		tip_target = dragging_patty.global_position
 		tip_target.y = GRILL_SURFACE_Y + HAND_SPATULA_DRAG_CLEAR
+		## Melted cheese pull-strings while holding/sliding (tip for strands lifted in update).
+		if _patty_can_cheese_string(dragging_patty):
+			_try_attach_cheese_strings_to_patty(dragging_patty, tip_target)
 		pitch = HAND_SPATULA_EMPTY_ROT.x + HAND_SPATULA_SLAP_FWD_PITCH
 		roll = 0.0
 		pivot_local = HAND_SPATULA_TIP_OFFSET
-		## No cheese strings while the blade is flat under a sliding burger.
 		## Pull-flip spin / burger pitch can keep going while we drag.
 		if _spatula_anim_kind == 3 or _spatula_anim_kind == 4:
 			_spatula_anim_t += delta
@@ -7992,6 +7995,10 @@ func _end_patty_drag() -> void:
 	## Drag onto Build UI / left side of screen → scoop + drop in one motion (if ready).
 	if _is_build_drop_at(mouse):
 		_try_drag_patty_to_station(patty, STATION_CRAFT)
+		return
+	## Slide-hold release → scoop when ready (hold/slide is for cheese pull + move).
+	if patty.flipped_once and patty.can_scoop():
+		_on_patty_clicked(patty)
 		return
 	if _is_in_warmer_zone(patty.position):
 		var left := maxi(0, int(ceil(WARM_HOLD_MAX - float(patty.warm_hold_time))))
@@ -17575,13 +17582,11 @@ func _try_attach_cheese_strings_near_tip(tip_pos: Vector3) -> void:
 func _try_attach_cheese_strings_to_patty(patty: Area3D, tip_pos: Vector3) -> void:
 	if not _patty_can_cheese_string(patty):
 		return
-	## Flat under a sliding burger — latch later on a real tip lift instead.
-	if patty == dragging_patty:
-		return
 	if _cheese_string_exists_for(patty):
 		return
 	var d := Vector2(tip_pos.x - patty.position.x, tip_pos.z - patty.position.z).length()
-	if d > CHEESE_STRING_ATTACH_R * 1.15:
+	## Sliding the burger itself — always in range; tip rides with the patty.
+	if patty != dragging_patty and d > CHEESE_STRING_ATTACH_R * 1.25:
 		return
 	_spawn_cheese_strings(patty, tip_pos)
 
@@ -17716,12 +17721,16 @@ func _update_cheese_strings(delta: float) -> void:
 			else patty.global_position + Vector3(0, 0.028, 0)
 		if tip == Vector3.ZERO:
 			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
+		## While sliding a melt, raise the strand tip so the pull reads above the cheese.
+		if patty == dragging_patty:
+			tip.y = maxf(tip.y, cheese_base.y + CHEESE_STRING_DRAG_LIFT)
 		item["tip_cache"] = tip
 		var dist := cheese_base.distance_to(tip)
 		var lift := tip.y - cheese_base.y
 		var mis: Array = item.get("mis", [])
-		## Flat on the melt / sliding under the burger — hide strands until a real lift.
-		var flat_contact: bool = lift < CHEESE_STRING_MIN_LIFT or patty == dragging_patty
+		## Hide only when tip is truly flat on the melt (still show while sliding a pull).
+		var sliding_pull: bool = patty == dragging_patty
+		var flat_contact: bool = lift < CHEESE_STRING_MIN_LIFT and not sliding_pull
 		if flat_contact and not bool(item.get("breaking", false)):
 			for mi0 in mis:
 				if mi0 != null and is_instance_valid(mi0):
@@ -17731,8 +17740,9 @@ func _update_cheese_strings(delta: float) -> void:
 		var breaking := bool(item.get("breaking", false))
 		## Pull too far / spatula gone → snap & shrink away.
 		if not breaking:
+			var hold_active: bool = spatula_grill_hold or patty == dragging_patty
 			if dist >= CHEESE_STRING_KILL_DIST \
-					or (not spatula_grill_hold and patty != dragging_patty and dist > CHEESE_STRING_BREAK_DIST * 0.85) \
+					or (not hold_active and dist > CHEESE_STRING_BREAK_DIST * 0.85) \
 					or dist >= CHEESE_STRING_BREAK_DIST:
 				item["breaking"] = true
 				breaking = true
