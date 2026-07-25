@@ -1624,10 +1624,13 @@ const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk
 ## Flippy-cup: RMB hold → release pitches forward; 0.5s = perfect 180° rim-down.
 const CUP_FLIP_PERFECT_HOLD := 0.5
 const CUP_FLIP_MIN_HOLD := 0.08
-const CUP_FLIP_DUR := 0.55
-const CUP_FLIP_PEAK := 0.28
+const CUP_FLIP_DUR := 0.78 ## longer air time for the taller toss
+const CUP_FLIP_PEAK := 0.68 ## ~27" apex — clears steel so it doesn't scrape mid-flip
+const CUP_FLIP_APEX_T := 0.36 ## rise / fall split (punchy up, longer fall)
 const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.0s, …)
-const CUP_FLIP_SETTLE_DUR := 0.28 ## bobble / bounce after the arc before it sticks
+const CUP_FLIP_SETTLE_DUR := 0.52 ## bounce settle after impact
+const CUP_FLIP_BOUNCE_H := 0.16 ## first hop height off the steel
+const CUP_FLIP_BOUNCE_HOPS := 3.0
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
 const CUP_TILT_FROM_VEL := 24.0 ## degrees per m/s — was 48; much less tip while moving
@@ -28284,24 +28287,45 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 		game_audio.play_scoop()
 
 
+func _cup_flip_arc_height_mul(t: float) -> float:
+	## Punchy rise to apex, then accelerating fall — stays clear of steel until late.
+	t = clampf(t, 0.0, 1.0)
+	var apex := CUP_FLIP_APEX_T
+	if t <= apex:
+		var u := t / maxf(apex, 0.001)
+		return 1.0 - (1.0 - u) * (1.0 - u)
+	var d := (t - apex) / maxf(1.0 - apex, 0.001)
+	## Ease-in fall so it doesn't tunnel into the grill early.
+	return 1.0 - d * d
+
+
 func _begin_cup_flip_settle() -> void:
-	## Short bobble bounce into the final pose — can look like a lucky upright tip.
+	## Impact on steel, then hop settle into the final pose.
 	if cup_root == null or not is_instance_valid(cup_root):
 		_cup_flip_air = false
 		return
 	var yaw := _cup_flip_base_rot.y + randf_range(-25.0, 25.0)
 	var pose := "lid" if _cup_flip_land_lid else ("side" if _cup_flip_land_side else "upright")
+	var land_y := _cup_flip_land_y_for_pose(pose)
 	_cup_flip_settle_from_rot = cup_root.rotation_degrees
 	_cup_flip_settle_to_rot = _cup_flip_rot_for_pose(pose, yaw)
-	_cup_flip_settle_from_pos = cup_root.global_position
-	_cup_flip_settle_to_pos = Vector3(_cup_flip_end.x, _cup_flip_land_y_for_pose(pose), _cup_flip_end.z)
-	## Tiny lateral skid on bounce.
-	_cup_flip_settle_to_pos.x += randf_range(-0.03, 0.03)
-	_cup_flip_settle_to_pos.z += randf_range(-0.025, 0.025)
+	## Start settle from impact on the steel (not mid-air lerp-down) so hops read clean.
+	_cup_flip_settle_from_pos = Vector3(
+		lerpf(cup_root.global_position.x, _cup_flip_end.x, 0.55),
+		land_y,
+		lerpf(cup_root.global_position.z, _cup_flip_end.z, 0.55)
+	)
+	_cup_flip_settle_to_pos = Vector3(_cup_flip_end.x, land_y, _cup_flip_end.z)
+	## Lateral skid across the hops.
+	_cup_flip_settle_to_pos.x += randf_range(-0.045, 0.045)
+	_cup_flip_settle_to_pos.z += randf_range(-0.035, 0.035)
 	_cup_flip_settle_to_pos.x = clampf(_cup_flip_settle_to_pos.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
 	_cup_flip_settle_to_pos.z = clampf(_cup_flip_settle_to_pos.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	cup_root.global_position = _cup_flip_settle_from_pos
 	_cup_flip_settle = true
 	_cup_flip_settle_t = 0.0
+	if game_audio:
+		game_audio.play_click()
 
 
 func _update_cup_rim_flip(delta: float) -> void:
@@ -28312,19 +28336,27 @@ func _update_cup_rim_flip(delta: float) -> void:
 	if _cup_flip_settle:
 		_cup_flip_settle_t += delta
 		var st := clampf(_cup_flip_settle_t / CUP_FLIP_SETTLE_DUR, 0.0, 1.0)
-		var ease := st * st * (3.0 - 2.0 * st)
-		## Two soft bounces while it tips into the final pose.
-		var bounce := absf(sin(st * PI * 2.0)) * (1.0 - st) * 0.055
-		var wob := (1.0 - st)
-		var bob_x := sin(_cup_flip_bobble_phase + st * 22.0) * 0.014 * wob
-		var bob_z := cos(_cup_flip_bobble_phase * 1.3 + st * 18.0) * 0.012 * wob
-		cup_root.global_position = _cup_flip_settle_from_pos.lerp(_cup_flip_settle_to_pos, ease) \
-			+ Vector3(bob_x, bounce, bob_z)
-		cup_root.rotation_degrees = _cup_flip_settle_from_rot.lerp(_cup_flip_settle_to_rot, ease) \
+		## XZ slides to rest; Y is ground + diminishing hops (never scrapes below steel).
+		var xz_ease := 1.0 - pow(1.0 - st, 2.2)
+		var ground_y := _cup_flip_settle_to_pos.y
+		var hop_env := pow(1.0 - st, 1.45)
+		var bounce := absf(sin(st * PI * CUP_FLIP_BOUNCE_HOPS)) * hop_env * CUP_FLIP_BOUNCE_H
+		## Slight stretch on each hop so contacts feel snappy, not mushy.
+		if bounce < 0.004 and st < 0.92:
+			bounce = 0.0
+		var skid := (1.0 - st)
+		var bob_x := sin(_cup_flip_bobble_phase + st * 14.0) * 0.01 * skid * hop_env
+		var bob_z := cos(_cup_flip_bobble_phase * 1.2 + st * 11.0) * 0.009 * skid * hop_env
+		var xz: Vector3 = _cup_flip_settle_from_pos.lerp(_cup_flip_settle_to_pos, xz_ease)
+		cup_root.global_position = Vector3(xz.x + bob_x, ground_y + bounce, xz.z + bob_z)
+		## Rotation damps into final pose with a soft overshoot on the first hops.
+		var rot_ease := 1.0 - pow(1.0 - st, 2.6)
+		var wob := hop_env
+		cup_root.rotation_degrees = _cup_flip_settle_from_rot.lerp(_cup_flip_settle_to_rot, rot_ease) \
 			+ Vector3(
-				sin(st * PI * 3.0) * 16.0 * wob,
-				cos(st * PI * 2.4) * 12.0 * wob,
-				sin(_cup_flip_bobble_phase + st * 16.0) * 20.0 * wob
+				sin(st * PI * CUP_FLIP_BOUNCE_HOPS) * 22.0 * wob,
+				cos(st * PI * 2.1) * 14.0 * wob,
+				sin(_cup_flip_bobble_phase + st * 12.0) * 18.0 * wob
 			)
 		_update_cup_slosh(delta)
 		_update_cup_pour_white(delta)
@@ -28334,21 +28366,26 @@ func _update_cup_rim_flip(delta: float) -> void:
 		return
 	_cup_flip_t += delta
 	var t := clampf(_cup_flip_t / CUP_FLIP_DUR, 0.0, 1.0)
+	## Soft XZ drift; height uses its own rise/fall so the cup clears the grill.
 	var xz_t := t * t * (3.0 - 2.0 * t)
-	var xz: Vector3 = _cup_flip_start.lerp(_cup_flip_end, xz_t)
-	var base_y := lerpf(_cup_flip_start.y, _cup_flip_end.y, t)
-	var arc := sin(t * PI)
-	## In-air bobble — cup tumbles / wanders a bit instead of a perfect spin.
-	var bob := arc * arc
-	var bob_x2 := sin(_cup_flip_bobble_phase + t * 16.0) * 0.022 * bob
-	var bob_z2 := cos(_cup_flip_bobble_phase * 0.9 + t * 13.0) * 0.018 * bob
-	var y := base_y + CUP_FLIP_PEAK * arc + sin(t * PI * 2.0) * 0.012 * bob
-	cup_root.global_position = Vector3(xz.x + bob_x2, y, xz.z + bob_z2)
-	var spin := _cup_flip_pitch_total * (t * t * (3.0 - 2.0 * t))
+	var xz2: Vector3 = _cup_flip_start.lerp(_cup_flip_end, xz_t)
+	var h_mul := _cup_flip_arc_height_mul(t)
+	## Keep apex relative to the higher of start/land so hold-height tosses still go up.
+	var floor_y := _cup_flip_end.y
+	var launch_lift := maxf(_cup_flip_start.y - floor_y, 0.0) * (1.0 - t)
+	var y := floor_y + launch_lift + CUP_FLIP_PEAK * h_mul
+	## In-air bobble — tumble / wander, stronger near apex.
+	var bob := h_mul
+	var bob_x2 := sin(_cup_flip_bobble_phase + t * 14.0) * 0.028 * bob
+	var bob_z2 := cos(_cup_flip_bobble_phase * 0.9 + t * 11.0) * 0.022 * bob
+	cup_root.global_position = Vector3(xz2.x + bob_x2, y, xz2.z + bob_z2)
+	## Spin a bit front-loaded so rotation finishes before impact.
+	var spin_t := clampf(t / 0.92, 0.0, 1.0)
+	var spin := _cup_flip_pitch_total * (spin_t * spin_t * (3.0 - 2.0 * spin_t))
 	cup_root.rotation_degrees = Vector3(
-		_cup_flip_base_rot.x + spin + sin(_cup_flip_bobble_phase + t * 14.0) * 22.0 * bob,
-		_cup_flip_base_rot.y + cos(_cup_flip_bobble_phase + t * 9.0) * 28.0 * bob,
-		_cup_flip_base_rot.z * (1.0 - t) + sin(t * TAU * 1.6 + _cup_flip_bobble_phase) * 34.0 * bob
+		_cup_flip_base_rot.x + spin + sin(_cup_flip_bobble_phase + t * 12.0) * 18.0 * bob,
+		_cup_flip_base_rot.y + cos(_cup_flip_bobble_phase + t * 8.0) * 24.0 * bob,
+		_cup_flip_base_rot.z * (1.0 - t) + sin(t * TAU * 1.4 + _cup_flip_bobble_phase) * 28.0 * bob
 	)
 	_update_cup_slosh(delta)
 	_update_cup_pour_white(delta)
