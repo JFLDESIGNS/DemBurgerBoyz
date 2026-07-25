@@ -1156,9 +1156,11 @@ var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.65
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_CLICK_COLLISION_LAYER := 262144
-const TREE_SHAKE_DEG := 5.5
+const TREE_SHAKE_DEG := 3.85 ## was 5.5; −30%
 const TREE_APPLE_CHANCE := 0.20
 const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
+const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
+const TREE_APPLE_SIDE_VAR_FT := 1.1 ## ± variance on that offset
 var outdoor_shake_trees: Array = [] ## Node3D roots that can shake on click
 ## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
 var icecream_cam_right_ft: float = 1.5
@@ -18275,57 +18277,66 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 
 
 func _shake_outdoor_tree(tree: Node3D) -> void:
-	## Subtle multi-axis wobble anchored at the ground (tree origin).
+	## Pendulum lean from the ground — finishes settling before another shake can start.
 	if tree == null or not is_instance_valid(tree):
 		return
-	if tree.has_meta("tree_shake_tw"):
-		var old = tree.get_meta("tree_shake_tw")
-		if old != null and is_instance_valid(old):
-			old.kill()
+	if bool(tree.get_meta("tree_shaking", false)):
+		return
 	var base: Vector3 = tree.get_meta("tree_base_rot", tree.rotation_degrees)
 	tree.set_meta("tree_base_rot", base)
+	tree.rotation_degrees = base
 	var amp := TREE_SHAKE_DEG
-	var kick := Vector3(
-		randf_range(-amp, amp),
-		randf_range(-amp * 0.35, amp * 0.35),
-		randf_range(-amp, amp)
-	)
-	var kick2 := Vector3(
-		randf_range(-amp * 0.7, amp * 0.7),
-		randf_range(-amp * 0.25, amp * 0.25),
-		randf_range(-amp * 0.7, amp * 0.7)
-	)
+	## One lean direction, then decay back through the opposite side (pendulum).
+	var lean_x := randf_range(0.65, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
+	var lean_z := randf_range(0.65, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
+	var lean_y := randf_range(-0.22, 0.22)
+	var a1 := Vector3(amp * lean_x, amp * lean_y, amp * lean_z)
+	var a2 := a1 * -0.70
+	var a3 := a1 * 0.36
+	var a4 := a1 * -0.14
+	tree.set_meta("tree_shaking", true)
 	var tw := create_tween()
 	tree.set_meta("tree_shake_tw", tw)
-	tw.tween_property(tree, "rotation_degrees", base + kick, 0.07) \
+	tw.tween_property(tree, "rotation_degrees", base + a1, 0.15) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(tree, "rotation_degrees", base + kick2, 0.10) \
+	tw.tween_property(tree, "rotation_degrees", base + a2, 0.20) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(tree, "rotation_degrees", base + kick * -0.45, 0.10) \
+	tw.tween_property(tree, "rotation_degrees", base + a3, 0.18) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(tree, "rotation_degrees", base, 0.16) \
+	tw.tween_property(tree, "rotation_degrees", base + a4, 0.16) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(tree, "rotation_degrees", base, 0.22) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.finished.connect(func():
+		if tree != null and is_instance_valid(tree):
+			tree.rotation_degrees = base
+			tree.set_meta("tree_shaking", false)
+			if tree.has_meta("tree_shake_tw"):
+				tree.remove_meta("tree_shake_tw")
+	)
 	if randf() < TREE_APPLE_CHANCE:
 		_spawn_tree_apple(tree)
 
 
 func _spawn_tree_apple(tree: Node3D) -> void:
-	## Small red sphere (~meatball) drops from the canopy with a little toss.
+	## Small red sphere (~meatball) drops from canopy ~4ft left/right of trunk.
 	if tree == null or not is_instance_valid(tree) or world == null:
 		return
-	var canopy_y := 2.4
+	var canopy_y := tree.global_position.y + 2.4
 	for n in tree.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
 		if mi == null or mi.mesh == null or String(mi.name).begins_with("LeafShadow"):
 			continue
-		var top := tree.to_local(mi.to_global(mi.get_aabb().position + mi.get_aabb().size * Vector3(0.5, 1.0, 0.5)))
-		canopy_y = maxf(canopy_y, top.y * 0.72)
-	var local_spawn := Vector3(
-		randf_range(-0.35, 0.35),
-		canopy_y,
-		randf_range(-0.35, 0.35)
+		var top_w: Vector3 = mi.to_global(mi.get_aabb().position + mi.get_aabb().size * Vector3(0.5, 0.78, 0.5))
+		canopy_y = maxf(canopy_y, top_w.y)
+	var side := -1.0 if randf() < 0.5 else 1.0
+	var lateral_ft := TREE_APPLE_SIDE_FT + randf_range(-TREE_APPLE_SIDE_VAR_FT, TREE_APPLE_SIDE_VAR_FT)
+	var lateral_m := side * lateral_ft * FT_TO_M
+	var spawn := Vector3(
+		tree.global_position.x + lateral_m,
+		canopy_y + randf_range(-0.12, 0.18),
+		tree.global_position.z + randf_range(-0.55, 0.55)
 	)
-	var spawn := tree.to_global(local_spawn)
 	var body := RigidBody3D.new()
 	body.name = "TreeApple"
 	body.position = spawn
