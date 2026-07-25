@@ -14,11 +14,13 @@ config/name="Food Truck Flip"
 config/description="Cook, flip, stack, and serve burgers from your food truck!"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
+boot_splash/minimum_display_time=2100
 config/icon="res://icon.svg"
 
 [autoload]
 
 NetManager="*res://scripts/net_manager.gd"
+IntroBootMusic="*res://scripts/intro_boot_music.gd"
 
 [display]
 

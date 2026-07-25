@@ -12741,7 +12741,10 @@ func _begin_fire_ext_hold() -> bool:
 		ext_area.input_ray_pickable = false
 	_ensure_ext_powder()
 	if game_audio:
-		game_audio.play_click()
+		if game_audio.has_method("play_ext_pressure_tap"):
+			game_audio.play_ext_pressure_tap()
+		else:
+			game_audio.play_click()
 	if grill_on_fire:
 		_flash("Right-click to spray powder on the fire — or the customers…", Color("FF8A80"))
 	else:
@@ -32955,6 +32958,13 @@ func _play_burgerpals_voice() -> void:
 
 
 func _setup_intro_title_music() -> void:
+	## Autoload starts jazz mid–Godot logo with a 1.5s volume ramp.
+	var boot := get_node_or_null("/root/IntroBootMusic")
+	if boot != null and boot.has_method("ensure_playing_on_title"):
+		boot.ensure_playing_on_title()
+		if boot.get("player") != null and is_instance_valid(boot.player):
+			intro_music_player = boot.player
+			return
 	if intro_music_player != null and is_instance_valid(intro_music_player):
 		return
 	var stream := load(INTRO_MUSIC_PATH)
@@ -32967,20 +32977,31 @@ func _setup_intro_title_music() -> void:
 	intro_music_player.name = "IntroTitleMusic"
 	intro_music_player.bus = "Master"
 	intro_music_player.stream = stream
-	intro_music_player.volume_db = -9.5
+	intro_music_player.volume_db = -80.0
 	add_child(intro_music_player)
-	## Hold the jazz until the Godot boot logo is gone.
-	get_tree().create_timer(1.0).timeout.connect(_start_intro_title_music)
+	## Fallback fade if autoload missed (editor quirks).
+	intro_music_player.play()
+	var tw := create_tween()
+	tw.tween_property(intro_music_player, "volume_db", -9.5, 1.5)\
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
 func _start_intro_title_music() -> void:
 	if intro_music_player == null or not is_instance_valid(intro_music_player):
+		var boot := get_node_or_null("/root/IntroBootMusic")
+		if boot != null and boot.has_method("ensure_playing_on_title"):
+			boot.ensure_playing_on_title()
+			intro_music_player = boot.player
 		return
 	if start_overlay == null or start_overlay.visible:
-		intro_music_player.play()
+		if not intro_music_player.playing:
+			intro_music_player.play()
 
 
 func _stop_intro_title_music() -> void:
+	var boot := get_node_or_null("/root/IntroBootMusic")
+	if boot != null and boot.has_method("stop"):
+		boot.stop()
 	if intro_music_player == null or not is_instance_valid(intro_music_player):
 		return
 	if intro_music_player.playing:

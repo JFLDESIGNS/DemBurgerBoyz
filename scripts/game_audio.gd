@@ -699,6 +699,16 @@ func set_ext_spray(active: bool) -> void:
 		_spray_player.volume_db = -80.0
 
 
+func play_ext_pressure_tap() -> void:
+	## Grab / tap the extinguisher — short pressurized air release.
+	_play_cached(
+		"ext_pressure_tap_v1_%d" % (randi() % 3),
+		_make_ext_pressure_tap,
+		0.94 + randf() * 0.12,
+		0.88
+	)
+
+
 func set_shaker_rattle(active: bool) -> void:
 	## Plastic shaker rattle + salt sprinkle while held over a patty.
 	_shake_season_on = active
@@ -1009,6 +1019,28 @@ func _next_ext_spray_sample() -> float:
 	if randf() < 0.004:
 		rush += (randf() * 2.0 - 1.0) * 0.55
 	return clampf(rush * 0.42 * _spray_flutter, -1.0, 1.0)
+
+
+func _make_ext_pressure_tap() -> AudioStreamWAV:
+	## Short air-pressure hiss when tapping / grabbing the extinguisher.
+	var n := int(MIX_RATE * 0.28)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var lp := 0.0
+	var bp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		## Soft attack then quick decay — valve “pssst”.
+		var env := clampf(t / 0.012, 0.0, 1.0) * exp(-t * 11.0)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.82 + white * 0.18
+		var hp := white - lp
+		bp = bp * 0.58 + hp * 0.42
+		var rush := bp * 0.55 + hp * 0.38 + lp * 0.08
+		## Low pressure thump under the hiss.
+		var thump := sin(t * 95.0 * TAU) * 0.14 * exp(-t * 22.0)
+		_write_s16(pcm, i, int(clampf((rush * 0.55 + thump) * env, -1.0, 1.0) * 17000.0))
+	return _wav_from_pcm(pcm, false)
 
 
 func _next_burner_hiss_sample() -> float:
