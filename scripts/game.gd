@@ -842,7 +842,8 @@ const FRIES_SPILL_SPEED := 2.35 ## whip the pack this hard over the grill → fr
 const FRIES_SPILL_COOLDOWN := 0.32
 const FRIES_GRILL_WAIT_SEC := 3.0 ## sit golden before charring starts
 const FRIES_GRILL_BLACK_SEC := 3.0 ## golden → black over this window, then fire
-const FRIES_LOGO_DROP_Y := 0.02286 ## 0.9 inches below mid-band (was 1.2", then +0.3" up)
+## Negative = lift. Was +0.9" drop; nudged 2.3" up → net ~1.4" above prior mid-band.
+const FRIES_LOGO_DROP_Y := -0.03556
 const FRIES_FRY_SHAKE_DEG := 3.8 ## fries pile wobble amplitude (container stays still)
 const FRIES_FRY_SHAKE_HZ := 2.25
 const FRIES_SPILL_SIT_Y := 0.017 ## ~half-inch lift so sticks don't clip the steel
@@ -35233,24 +35234,30 @@ func _build_window_pause_ui() -> void:
 	window_shutter.add_child(closed_lab)
 
 
-func _make_open_closed_sign_face(tex_path: String, face_name: String) -> Sprite3D:
-	var spr := Sprite3D.new()
-	spr.name = face_name
-	spr.texture = load(tex_path) as Texture2D
-	spr.pixel_size = 0.0019
-	spr.shaded = false
-	spr.double_sided = false
-	spr.transparent = true
-	spr.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
-	spr.alpha_scissor_threshold = 0.12
-	spr.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	spr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	spr.render_priority = 8
-	return spr
+func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshInstance3D:
+	## Quad + albedo (more reliable than Sprite3D for hung window art).
+	var mi := MeshInstance3D.new()
+	mi.name = face_name
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.52, 0.52)
+	mi.mesh = quad
+	var tex := load(tex_path) as Texture2D
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.08
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1, 1, 1, 1)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 16
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.sorting_offset = 16.0
+	return mi
 
 
 func _build_open_closed_sign() -> void:
-	## Hang-sign in the left of the service window — art flip (open / closed faces).
+	## Hang-sign in the service window — cook looks toward −Z, so +Z faces the cook.
 	if world == null:
 		return
 	if open_closed_sign != null and is_instance_valid(open_closed_sign):
@@ -35264,22 +35271,22 @@ func _build_open_closed_sign() -> void:
 
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
-	## Left of the opening, hanging into the cook's view (wall ~z 1.2).
-	root.position = Vector3(-1.08, 1.82, 1.14)
+	## Same seat as the old text sign — left of the window opening, into cook view.
+	root.position = Vector3(-1.05, 1.72, 1.18)
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
 
-	## Closed face (+Z) — faces cook when yaw is CLOSED (180°).
-	var closed := _make_open_closed_sign_face("res://IMAGES/WEARECLOSED.png", "ClosedFace")
-	closed.position = Vector3(0.0, -0.02, 0.003)
-	root.add_child(closed)
-
-	## Open face (−Z, spun 180°) — faces cook when yaw is OPEN (0°).
+	## Open face (+Z) — faces cook when yaw is OPEN (0°).
 	var open_face := _make_open_closed_sign_face("res://IMAGES/WEAREOPEN.png", "OpenFace")
-	open_face.position = Vector3(0.0, -0.02, -0.003)
-	open_face.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	open_face.position = Vector3(0.0, 0.0, 0.004)
 	root.add_child(open_face)
+
+	## Closed face (−Z, spun 180°) — faces cook when yaw is CLOSED (180°).
+	var closed := _make_open_closed_sign_face("res://IMAGES/WEARECLOSED.png", "ClosedFace")
+	closed.position = Vector3(0.0, 0.0, -0.004)
+	closed.rotation_degrees = Vector3(0.0, 180.0, 0.0)
+	root.add_child(closed)
 
 	var area := Area3D.new()
 	area.name = "OpenClosedSignGrab"
@@ -35290,11 +35297,12 @@ func _build_open_closed_sign() -> void:
 	area.input_ray_pickable = true
 	var shape := CollisionShape3D.new()
 	var cbox := BoxShape3D.new()
-	cbox.size = Vector3(0.52, 0.54, 0.08)
+	cbox.size = Vector3(0.56, 0.56, 0.1)
 	shape.shape = cbox
 	area.add_child(shape)
 	root.add_child(area)
 	open_closed_sign_area = area
+	_sync_open_closed_sign(false)
 
 
 func _try_open_closed_sign_click(screen_pos: Vector2) -> bool:
