@@ -1117,6 +1117,16 @@ var options_hidden_unlock_btn: Button = null
 var options_hidden_advanced_btn: Button = null
 var options_hidden_piano_check: CheckButton = null
 var options_hidden_status: Label = null
+var options_hidden_room_tone_box: VBoxContainer = null
+var options_hidden_room_tone_option: OptionButton = null
+var options_hidden_room_tone_vol: HSlider = null
+var options_hidden_room_tone_vol_lab: Label = null
+## Soft Solfeggio-ish room beds (Hz). Default 174, quiet.
+var room_tone_hz: float = 174.0
+var room_tone_volume: float = 0.18
+const ROOM_TONE_FREQS: Array[float] = [174.0, 285.0, 396.0]
+const AUDIO_ROOM_TONE_HZ_KEY := "room_tone_hz"
+const AUDIO_ROOM_TONE_VOL_KEY := "room_tone_volume"
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -13748,8 +13758,11 @@ func _ensure_grill_fire_fx() -> void:
 
 func _prewarm_grill_fire_fx() -> void:
 	## Build particle systems + compile GPU pipelines on the title screen.
+	## Never prewarm audio beds — generator underruns sound like static hiss.
 	if grill_root == null or not is_instance_valid(grill_root):
 		return
+	if game_audio != null and game_audio.has_method("silence_continuous_beds"):
+		game_audio.silence_continuous_beds(true)
 	_ensure_grill_fire_fx()
 	var dummy := PackedVector3Array([
 		Vector3(0.0, 0.0, 0.0),
@@ -13763,12 +13776,17 @@ func _prewarm_grill_fire_fx() -> void:
 	_apply_fire_emission_points(fire_embers, _fire_emit_tex, dummy.size(), 4, 10.0)
 	_apply_fire_emission_points(fire_smoke, _fire_smoke_emit_tex, dummy.size(), 6, 9.0)
 	## One quiet emit burst off the main look (still under the grill) so shaders compile.
+	## Keep the systems silent — particles only, no SFX / generator beds.
 	fire_root.visible = true
 	_set_fire_fx_emitting(true)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_set_fire_fx_emitting(false)
+	if game_audio != null and game_audio.has_method("silence_continuous_beds"):
+		game_audio.silence_continuous_beds(false)
+	## Restore room tone after the silent compile window.
+	_apply_room_tone_settings()
 
 
 func _make_fire_triangle_mesh(w: float, h: float) -> ArrayMesh:
@@ -29848,6 +29866,7 @@ func _setup_game_audio() -> void:
 	game_audio.name = "GameAudio"
 	add_child(game_audio)
 	_apply_roomba_audio_settings(_read_graphics_from_ui())
+	_apply_room_tone_settings()
 
 
 func _setup_burgerpals_startup_sound() -> void:
@@ -31641,8 +31660,8 @@ func _build_options_menu() -> void:
 	## Size from content; pin center.
 	options_panel.offset_left = -200.0
 	options_panel.offset_right = 200.0
-	options_panel.offset_top = -280.0
-	options_panel.offset_bottom = 280.0
+	options_panel.offset_top = -320.0
+	options_panel.offset_bottom = 320.0
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color(0.1, 0.11, 0.14, 0.98)
 	psb.border_color = Color(1.0, 0.72, 0.28, 0.95)
@@ -31677,7 +31696,7 @@ func _build_options_menu() -> void:
 	v.add_child(hint)
 
 	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(0, 360)
+	tabs.custom_minimum_size = Vector2(0, 420)
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tabs.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -31810,6 +31829,68 @@ func _build_options_menu() -> void:
 		_save_graphics_settings(settings)
 	)
 	hidden.add_child(options_hidden_piano_check)
+
+	options_hidden_room_tone_box = VBoxContainer.new()
+	options_hidden_room_tone_box.visible = false
+	options_hidden_room_tone_box.add_theme_constant_override("separation", 8)
+	hidden.add_child(options_hidden_room_tone_box)
+
+	var tone_lab := Label.new()
+	tone_lab.text = "ROOM TONE"
+	UiFontsScript.apply_label(tone_lab, true, 13)
+	tone_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(tone_lab)
+
+	options_hidden_room_tone_option = OptionButton.new()
+	options_hidden_room_tone_option.custom_minimum_size = Vector2(0, 36)
+	options_hidden_room_tone_option.focus_mode = Control.FOCUS_ALL
+	for hz in ROOM_TONE_FREQS:
+		options_hidden_room_tone_option.add_item("%d Hz" % int(hz))
+	_sync_room_tone_option_ui()
+	options_hidden_room_tone_option.item_selected.connect(func(idx: int):
+		if idx < 0 or idx >= ROOM_TONE_FREQS.size():
+			return
+		room_tone_hz = float(ROOM_TONE_FREQS[idx])
+		_apply_room_tone_settings()
+		_save_audio_settings()
+		_sfx_click()
+	)
+	options_hidden_room_tone_box.add_child(options_hidden_room_tone_option)
+
+	var tone_vol_row := HBoxContainer.new()
+	tone_vol_row.add_theme_constant_override("separation", 10)
+	options_hidden_room_tone_box.add_child(tone_vol_row)
+	var tone_vol_name := Label.new()
+	tone_vol_name.text = "Tone Volume"
+	tone_vol_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(tone_vol_name, false, 12)
+	tone_vol_name.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
+	tone_vol_row.add_child(tone_vol_name)
+	options_hidden_room_tone_vol_lab = Label.new()
+	options_hidden_room_tone_vol_lab.name = "Val"
+	options_hidden_room_tone_vol_lab.custom_minimum_size = Vector2(44, 0)
+	options_hidden_room_tone_vol_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(options_hidden_room_tone_vol_lab, false, 12)
+	options_hidden_room_tone_vol_lab.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	tone_vol_row.add_child(options_hidden_room_tone_vol_lab)
+
+	options_hidden_room_tone_vol = HSlider.new()
+	options_hidden_room_tone_vol.min_value = 0.0
+	options_hidden_room_tone_vol.max_value = 1.0
+	options_hidden_room_tone_vol.step = 0.01
+	options_hidden_room_tone_vol.value = room_tone_volume
+	options_hidden_room_tone_vol.custom_minimum_size = Vector2(0, 28)
+	options_hidden_room_tone_vol.focus_mode = Control.FOCUS_ALL
+	options_hidden_room_tone_vol.value_changed.connect(func(val: float):
+		room_tone_volume = clampf(val, 0.0, 1.0)
+		if options_hidden_room_tone_vol_lab != null:
+			options_hidden_room_tone_vol_lab.text = "%.2f" % room_tone_volume
+		_apply_room_tone_settings()
+		_save_audio_settings()
+	)
+	options_hidden_room_tone_box.add_child(options_hidden_room_tone_vol)
+	if options_hidden_room_tone_vol_lab != null:
+		options_hidden_room_tone_vol_lab.text = "%.2f" % room_tone_volume
 
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
@@ -31972,11 +32053,39 @@ func _try_unlock_hidden_options() -> void:
 		options_hidden_piano_check.visible = ok
 		if ok:
 			options_hidden_piano_check.set_pressed_no_signal(grill_piano_debug_outline)
+	if options_hidden_room_tone_box != null and is_instance_valid(options_hidden_room_tone_box):
+		options_hidden_room_tone_box.visible = ok
+		if ok:
+			_sync_room_tone_option_ui()
+			if options_hidden_room_tone_vol != null:
+				options_hidden_room_tone_vol.set_value_no_signal(room_tone_volume)
+			if options_hidden_room_tone_vol_lab != null:
+				options_hidden_room_tone_vol_lab.text = "%.2f" % room_tone_volume
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
 		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
 	if ok and options_hidden_password != null:
 		options_hidden_password.release_focus()
+
+
+func _sync_room_tone_option_ui() -> void:
+	if options_hidden_room_tone_option == null or not is_instance_valid(options_hidden_room_tone_option):
+		return
+	var best := 0
+	var best_d := 9999.0
+	for i in ROOM_TONE_FREQS.size():
+		var d := absf(float(ROOM_TONE_FREQS[i]) - room_tone_hz)
+		if d < best_d:
+			best_d = d
+			best = i
+	options_hidden_room_tone_option.select(best)
+
+
+func _apply_room_tone_settings() -> void:
+	if game_audio == null:
+		return
+	if game_audio.has_method("set_room_tone"):
+		game_audio.set_room_tone(room_tone_hz, room_tone_volume)
 
 
 func _toggle_options_menu() -> void:
@@ -32952,6 +33061,7 @@ func _set_master_volume_linear(v: float, save: bool = true) -> void:
 func _load_audio_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(AUDIO_CFG_PATH) != OK:
+		_apply_room_tone_settings()
 		return
 	if cfg.has_section_key("audio", AUDIO_MASTER_KEY):
 		master_volume_linear = clampf(float(cfg.get_value("audio", AUDIO_MASTER_KEY)), 0.0, 1.0)
@@ -32959,12 +33069,28 @@ func _load_audio_settings() -> void:
 		## Legacy absolute bus linear → remap so old 0.20 ≈ full slider.
 		var old := clampf(float(cfg.get_value("audio", "master")), 0.0, 1.0)
 		master_volume_linear = clampf(old / MASTER_VOL_MAX, 0.0, 1.0)
+	if cfg.has_section_key("audio", AUDIO_ROOM_TONE_HZ_KEY):
+		room_tone_hz = float(cfg.get_value("audio", AUDIO_ROOM_TONE_HZ_KEY))
+	if cfg.has_section_key("audio", AUDIO_ROOM_TONE_VOL_KEY):
+		room_tone_volume = clampf(float(cfg.get_value("audio", AUDIO_ROOM_TONE_VOL_KEY)), 0.0, 1.0)
+	## Snap to nearest allowed Solfeggio bed.
+	var best := float(ROOM_TONE_FREQS[0])
+	var best_d := 9999.0
+	for hz in ROOM_TONE_FREQS:
+		var d := absf(float(hz) - room_tone_hz)
+		if d < best_d:
+			best_d = d
+			best = float(hz)
+	room_tone_hz = best
+	_apply_room_tone_settings()
 
 
 func _save_audio_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(AUDIO_CFG_PATH)
 	cfg.set_value("audio", AUDIO_MASTER_KEY, master_volume_linear)
+	cfg.set_value("audio", AUDIO_ROOM_TONE_HZ_KEY, room_tone_hz)
+	cfg.set_value("audio", AUDIO_ROOM_TONE_VOL_KEY, room_tone_volume)
 	cfg.save(AUDIO_CFG_PATH)
 
 

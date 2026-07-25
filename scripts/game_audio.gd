@@ -124,6 +124,14 @@ var _fryer_pop_env := 0.0
 var _fryer_pop_tick := 2200.0
 var _fryer_next_pop := 0.0
 var _fryer_sample_i := 0
+## Soft continuous room tone (174 / 285 / 396 Hz) — independent of grill/fire FX.
+var _room_tone_player: AudioStreamPlayer
+var _room_tone_gen: AudioStreamGenerator
+var _room_tone_on: bool = false
+var _room_tone_hz: float = 174.0
+var _room_tone_vol: float = 0.0
+var _room_tone_phase: float = 0.0
+var _room_tone_muted: bool = false ## true during particle prewarm — no beds / no underrun hiss
 
 
 func _ready() -> void:
@@ -232,6 +240,16 @@ func _ready() -> void:
 	_roomba_drive_player.stream = _make_roomba_drive()
 	_roomba_drive_player.volume_db = -80.0
 	add_child(_roomba_drive_player)
+	## Soft sine room bed — filled every frame while on (never underrun).
+	_room_tone_gen = AudioStreamGenerator.new()
+	_room_tone_gen.mix_rate = MIX_RATE
+	_room_tone_gen.buffer_length = 0.12
+	_room_tone_player = AudioStreamPlayer.new()
+	_room_tone_player.name = "RoomTone"
+	_room_tone_player.bus = "Master"
+	_room_tone_player.stream = _room_tone_gen
+	_room_tone_player.volume_db = -80.0
+	add_child(_room_tone_player)
 	set_process(true)
 
 
@@ -395,9 +413,108 @@ func _process(delta: float) -> void:
 			while fp.get_frames_available() > 0:
 				var fs := _next_fryer_oil_sample()
 				fp.push_frame(Vector2(fs, fs))
+	## Soft room tone — keep buffer fed whenever playing so we never hiss from underrun.
+	if _room_tone_on and not _room_tone_muted and _room_tone_player != null and _room_tone_player.playing:
+		var rtp := _room_tone_player.get_stream_playback() as AudioStreamGeneratorPlayback
+		if rtp != null:
+			while rtp.get_frames_available() > 0:
+				var rs := _next_room_tone_sample()
+				rtp.push_frame(Vector2(rs, rs))
+	## Safety: a generator left playing without fill = continuous static.
+	_stop_generator_if_orphaned(_sizzle_player, _sizzle_on)
+	_stop_generator_if_orphaned(_hiss_player, _hiss_on)
+	_stop_generator_if_orphaned(_spray_player, _spray_on)
+	_stop_generator_if_orphaned(_shake_player, _shake_on)
+	_stop_generator_if_orphaned(_fries_shake_player, _fries_shake_on)
+	_stop_generator_if_orphaned(_soda_player, _soda_on)
+	_stop_generator_if_orphaned(_ice_player, _ice_on)
+	_stop_generator_if_orphaned(_softserve_player, _softserve_on)
+	_stop_generator_if_orphaned(_fryer_player, _fryer_on)
+	_stop_generator_if_orphaned(_room_tone_player, _room_tone_on and not _room_tone_muted)
 
 
-func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
+func _stop_generator_if_orphaned(player: AudioStreamPlayer, active: bool) -> void:
+	if player == null:
+		return
+	if player.playing and not active:
+		player.stop()
+		player.volume_db = -80.0
+
+
+func silence_continuous_beds(mute_room_tone: bool = true) -> void:
+	## Kill every continuous bed (used during fire FX prewarm so no static hiss leaks).
+	## Does not allocate / play anything — pure stop.
+	_sizzle_on = false
+	_hiss_on = false
+	_spray_on = false
+	_shake_on = false
+	_shake_season_on = false
+	_scrape_move_on = false
+	_fries_shake_on = false
+	_soda_on = false
+	_ice_on = false
+	_softserve_on = false
+	_fryer_on = false
+	_slide_target = 0.0
+	_slide_gain = 0.0
+	_oil_slide_target = 0.0
+	_oil_slide_gain = 0.0
+	_roomba_drive_target = 0.0
+	_roomba_drive_gain = 0.0
+	_hot_oil_full_left = 0.0
+	_hot_oil_fade_left = 0.0
+	_hot_oil_was_active = false
+	for p in [
+		_sizzle_player, _hiss_player, _spray_player, _shake_player, _fries_shake_player,
+		_soda_player, _ice_player, _softserve_player, _fryer_player,
+		_slide_player, _oil_slide_player, _roomba_drive_player,
+	]:
+		if p != null and is_instance_valid(p):
+			if p.playing:
+				p.stop()
+			p.volume_db = -80.0
+	if mute_room_tone:
+		_room_tone_muted = true
+		_room_tone_on = false
+		if _room_tone_player != null and is_instance_valid(_room_tone_player):
+			if _room_tone_player.playing:
+				_room_tone_player.stop()
+			_room_tone_player.volume_db = -80.0
+	else:
+		_room_tone_muted = false
+
+
+func set_room_tone(hz: float, volume_linear: float) -> void:
+	## Soft sine room bed. volume_linear 0 = off; 1 = still a light bed.
+	_room_tone_hz = maxf(20.0, hz)
+	_room_tone_vol = clampf(volume_linear, 0.0, 1.0)
+	_room_tone_muted = false
+	if _room_tone_player == null:
+		return
+	if _room_tone_vol <= 0.001:
+		_room_tone_on = false
+		if _room_tone_player.playing:
+			_room_tone_player.stop()
+		_room_tone_player.volume_db = -80.0
+		return
+	_room_tone_on = true
+	## Cap stays quiet — slider 1.0 ≈ −30 dB, default 0.18 ≈ −45 dB.
+	var linear := clampf(_room_tone_vol * 0.045, 0.0008, 0.05)
+	_room_tone_player.volume_db = linear_to_db(linear)
+	if not _room_tone_player.playing:
+		_room_tone_player.play()
+
+
+func _next_room_tone_sample() -> float:
+	## Soft pure tone + tiny air grain so it reads as room, not a test beep.
+	_room_tone_phase += _room_tone_hz / float(MIX_RATE)
+	if _room_tone_phase >= 1.0:
+		_room_tone_phase -= floorf(_room_tone_phase)
+	var tone := sin(_room_tone_phase * TAU)
+	## Very quiet octave + breath — keeps it from feeling sterile.
+	var air := (randf() * 2.0 - 1.0) * 0.012
+	var soft := sin(_room_tone_phase * TAU * 2.0) * 0.08
+	return clampf(tone * 0.55 + soft + air, -1.0, 1.0)
 	if _sizzle_player == null:
 		return
 	_sizzle_intensity = clampf(intensity, 0.0, 1.0)
