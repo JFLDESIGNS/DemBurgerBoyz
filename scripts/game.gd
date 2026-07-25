@@ -1135,6 +1135,8 @@ var options_hidden_room_tone_vol: HSlider = null
 var options_hidden_room_tone_vol_lab: Label = null
 var options_hidden_outdoor_ambience_vol: HSlider = null
 var options_hidden_outdoor_ambience_vol_lab: Label = null
+var options_hidden_tree_light_sliders: Dictionary = {} ## key -> HSlider
+var options_hidden_tree_light_labs: Dictionary = {} ## key -> Label
 ## Soft Solfeggio-ish room beds (Hz). Default 174, quiet.
 var room_tone_hz: float = 174.0
 var room_tone_volume: float = 0.0 ## Off by default — opt-in from Hidden menu; never replaces kitchen SFX
@@ -1143,6 +1145,16 @@ const ROOM_TONE_FREQS: Array[float] = [174.0, 285.0, 396.0]
 const AUDIO_ROOM_TONE_HZ_KEY := "room_tone_hz"
 const AUDIO_ROOM_TONE_VOL_KEY := "room_tone_volume"
 const AUDIO_OUTDOOR_AMBIENCE_VOL_KEY := "outdoor_ambience_volume"
+## Soft fill lights by outdoor trees (no shadows) — Hidden menu tunable.
+## Each entry: {light, bulb, tree} — light/bulb parented to OutdoorStreet (unscaled).
+var tree_fill_entries: Array = []
+var tree_light_energy: float = 1.55
+var tree_light_range: float = 5.2
+var tree_light_size: float = 0.14 ## Visible bulb radius (meters)
+var tree_light_off_x: float = 0.55
+var tree_light_off_y: float = 2.85
+var tree_light_off_z: float = 0.65
+const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var first_sale_decal: MeshInstance3D = null
@@ -17937,6 +17949,8 @@ func _build_checkered_floor() -> void:
 
 ## Painted street outside the service window + invisible walk collider for NPCs.
 func _build_outdoor_street() -> void:
+	tree_fill_entries.clear()
+	_load_tree_light_settings()
 	var outdoor := Node3D.new()
 	outdoor.name = "OutdoorStreet"
 	world.add_child(outdoor)
@@ -18031,7 +18045,8 @@ func _build_outdoor_front_tree(parent: Node3D) -> void:
 	tree.position = Vector3(-4.33, 0.0, 5.36)
 	tree.rotation_degrees = Vector3(0.0, -25.0, 0.0)
 	parent.add_child(tree)
-	_dress_outdoor_tree_foliage(tree, 0.7, 0.28)
+	_dress_outdoor_tree_foliage(tree, 0.7, 0.62)
+	_add_tree_fill_light(parent, tree)
 
 
 func _build_outdoor_birch_tree(parent: Node3D) -> void:
@@ -18055,11 +18070,12 @@ func _build_outdoor_birch_tree(parent: Node3D) -> void:
 	tree.position = Vector3(3.92, 0.0, 3.05)
 	tree.rotation_degrees = Vector3(0.0, 35.0, 0.0)
 	parent.add_child(tree)
-	_dress_outdoor_tree_foliage(tree, 2.4, 0.18)
+	_dress_outdoor_tree_foliage(tree, 2.4, 0.48)
+	_add_tree_fill_light(parent, tree)
 
 
 func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: float) -> void:
-	## Leaf sway + fake SSS emissive, plus shadow-only canopy blockers for leaf mottling.
+	## Leaf sway + fake SSS emissive, plus tiny shadow-only canopy blockers for leaf mottling.
 	if tree == null or not is_instance_valid(tree):
 		return
 	if not ResourceLoader.exists(TREE_FOLIAGE_SHADER_PATH):
@@ -18075,8 +18091,9 @@ func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: 
 		var mi := n as MeshInstance3D
 		if mi == null or mi.mesh == null:
 			continue
+		## Skip self-shadow cards — dense leaf alpha was dunking the whole crown in shadow.
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mesh_hosts.append(mi)
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		var mesh_aabb := mi.get_aabb()
 		for s in mi.mesh.get_surface_count():
 			var src: Material = mi.get_active_material(s)
@@ -18096,12 +18113,14 @@ func _dress_outdoor_tree_foliage(tree: Node3D, sway_seed: float, sway_strength: 
 			sm.set_shader_parameter("alpha_scissor", scissor)
 			sm.set_shader_parameter("sway_seed", sway_seed + float(s) * 0.37)
 			sm.set_shader_parameter("sway_strength", sway_strength)
-			sm.set_shader_parameter("sway_y_min", mesh_aabb.position.y + mesh_aabb.size.y * 0.22)
+			sm.set_shader_parameter("sway_speed", 1.45)
+			sm.set_shader_parameter("sway_y_min", mesh_aabb.position.y + mesh_aabb.size.y * 0.18)
 			sm.set_shader_parameter("sway_y_max", mesh_aabb.position.y + mesh_aabb.size.y * 0.98)
-			sm.set_shader_parameter("sss_color", Color(0.52, 0.95, 0.26))
-			sm.set_shader_parameter("sss_emissive", 0.48)
-			sm.set_shader_parameter("sss_rim", 0.62)
-			sm.set_shader_parameter("albedo_boost", 1.24)
+			sm.set_shader_parameter("sss_color", Color(0.62, 1.0, 0.32))
+			sm.set_shader_parameter("sss_emissive", 0.95)
+			sm.set_shader_parameter("sss_rim", 1.15)
+			sm.set_shader_parameter("sss_base", 0.42)
+			sm.set_shader_parameter("albedo_boost", 1.45)
 			mi.set_surface_override_material(s, sm)
 			if not have_canopy:
 				canopy = mesh_aabb
@@ -18130,35 +18149,30 @@ func _tree_surface_is_leaf(mat: Material) -> bool:
 
 
 func _add_tree_canopy_shadow_blockers(host: MeshInstance3D, canopy: AABB, seed_v: float) -> void:
-	## Invisible spheres inside the crown — mottled leaf shadows without darkening bark.
+	## Tiny invisible spheres — soft mottling only (not a full canopy blackout).
 	if host == null or not is_instance_valid(host):
 		return
 	var spans := canopy.size
 	if spans.x < 0.05 or spans.y < 0.05 or spans.z < 0.05:
 		return
-	## Normalized canopy slots (x,y,z in 0..1 of AABB).
 	var slots: Array[Vector3] = [
-		Vector3(0.28, 0.58, 0.32),
-		Vector3(0.62, 0.66, 0.40),
-		Vector3(0.42, 0.78, 0.58),
-		Vector3(0.72, 0.52, 0.62),
-		Vector3(0.35, 0.70, 0.72),
-		Vector3(0.55, 0.84, 0.28),
-		Vector3(0.48, 0.48, 0.48),
+		Vector3(0.30, 0.62, 0.34),
+		Vector3(0.66, 0.72, 0.42),
+		Vector3(0.44, 0.80, 0.64),
+		Vector3(0.58, 0.54, 0.56),
 	]
-	var radius := clampf(minf(spans.x, spans.z) * 0.16, 0.35, 2.8)
+	var radius := clampf(minf(spans.x, spans.z) * 0.055, 0.12, 0.85)
 	for i in slots.size():
 		var nrm: Vector3 = slots[i]
-		## Mild per-tree jitter so the two trees don't share the same shadow pattern.
-		nrm.x = clampf(nrm.x + sin(seed_v * 1.7 + float(i) * 2.1) * 0.06, 0.12, 0.88)
-		nrm.z = clampf(nrm.z + cos(seed_v * 1.3 + float(i) * 1.6) * 0.06, 0.12, 0.88)
+		nrm.x = clampf(nrm.x + sin(seed_v * 1.7 + float(i) * 2.1) * 0.05, 0.15, 0.85)
+		nrm.z = clampf(nrm.z + cos(seed_v * 1.3 + float(i) * 1.6) * 0.05, 0.15, 0.85)
 		var blocker := MeshInstance3D.new()
 		blocker.name = "LeafShadowBlocker_%d" % i
 		var sphere := SphereMesh.new()
-		sphere.radius = radius * (0.72 + 0.18 * float(i % 3))
+		sphere.radius = radius * (0.85 + 0.12 * float(i % 3))
 		sphere.height = sphere.radius * 2.0
-		sphere.radial_segments = 10
-		sphere.rings = 6
+		sphere.radial_segments = 8
+		sphere.rings = 4
 		blocker.mesh = sphere
 		blocker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		blocker.position = canopy.position + Vector3(
@@ -18167,6 +18181,145 @@ func _add_tree_canopy_shadow_blockers(host: MeshInstance3D, canopy: AABB, seed_v
 			spans.z * nrm.z
 		)
 		host.add_child(blocker)
+
+
+func _add_tree_fill_light(parent: Node3D, tree: Node3D) -> void:
+	## Soft local key by each tree — no shadows so the crown stays readable.
+	if parent == null or tree == null or not is_instance_valid(tree):
+		return
+	var light := OmniLight3D.new()
+	light.name = "TreeFillLight"
+	light.light_color = Color(1.0, 0.92, 0.72)
+	light.shadow_enabled = false
+	light.light_specular = 0.15
+	light.omni_attenuation = 1.1
+	parent.add_child(light)
+
+	var bulb := MeshInstance3D.new()
+	bulb.name = "TreeFillBulb"
+	var sphere := SphereMesh.new()
+	sphere.radial_segments = 12
+	sphere.rings = 8
+	bulb.mesh = sphere
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.95, 0.7, 0.85)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.9, 0.55)
+	mat.emission_energy_multiplier = 1.8
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bulb.material_override = mat
+	bulb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(bulb)
+	tree_fill_entries.append({"light": light, "bulb": bulb, "tree": tree})
+	_apply_tree_fill_light_settings()
+
+
+func _apply_tree_fill_light_settings() -> void:
+	var off := Vector3(tree_light_off_x, tree_light_off_y, tree_light_off_z)
+	var keep: Array = []
+	for entry in tree_fill_entries:
+		var tree = entry.get("tree")
+		var light = entry.get("light")
+		var bulb = entry.get("bulb")
+		if tree == null or not is_instance_valid(tree) \
+				or light == null or not is_instance_valid(light) \
+				or bulb == null or not is_instance_valid(bulb):
+			continue
+		keep.append(entry)
+		var pos: Vector3 = tree.position + off
+		var ol := light as OmniLight3D
+		ol.light_energy = tree_light_energy
+		ol.omni_range = tree_light_range
+		ol.position = pos
+		ol.shadow_enabled = false
+		var mi := bulb as MeshInstance3D
+		mi.position = pos
+		var mesh := mi.mesh as SphereMesh
+		if mesh != null:
+			mesh.radius = maxf(0.02, tree_light_size)
+			mesh.height = mesh.radius * 2.0
+		var mat := mi.material_override as StandardMaterial3D
+		if mat != null:
+			mat.emission_energy_multiplier = clampf(0.8 + tree_light_energy * 0.7, 0.6, 4.0)
+	tree_fill_entries = keep
+
+
+func _load_tree_light_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(TREE_LIGHTS_CFG_SECTION):
+		return
+	tree_light_energy = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "energy", tree_light_energy)), 0.0, 6.0)
+	tree_light_range = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "range", tree_light_range)), 0.5, 20.0)
+	tree_light_size = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "size", tree_light_size)), 0.02, 1.2)
+	tree_light_off_x = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "off_x", tree_light_off_x)), -8.0, 8.0)
+	tree_light_off_y = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "off_y", tree_light_off_y)), 0.2, 12.0)
+	tree_light_off_z = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "off_z", tree_light_off_z)), -8.0, 8.0)
+
+
+func _save_tree_light_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "energy", tree_light_energy)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "range", tree_light_range)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "size", tree_light_size)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_x", tree_light_off_x)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_y", tree_light_off_y)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_z", tree_light_off_z)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_tree_light_hidden_ui() -> void:
+	var vals := {
+		"energy": tree_light_energy,
+		"range": tree_light_range,
+		"size": tree_light_size,
+		"off_x": tree_light_off_x,
+		"off_y": tree_light_off_y,
+		"off_z": tree_light_off_z,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
+func _hidden_add_tree_light_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, setter: Callable) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var name_lab := Label.new()
+	name_lab.text = label_text
+	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(name_lab, false, 12)
+	name_lab.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
+	row.add_child(name_lab)
+	var val_lab := Label.new()
+	val_lab.custom_minimum_size = Vector2(44, 0)
+	val_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(val_lab, false, 12)
+	val_lab.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	val_lab.text = "%.2f" % float(getter.call())
+	row.add_child(val_lab)
+	var slider := HSlider.new()
+	slider.min_value = min_v
+	slider.max_value = max_v
+	slider.step = step
+	slider.value = float(getter.call())
+	slider.custom_minimum_size = Vector2(0, 28)
+	slider.focus_mode = Control.FOCUS_ALL
+	slider.value_changed.connect(func(val: float):
+		setter.call(val)
+		val_lab.text = "%.2f" % float(getter.call())
+		_apply_tree_fill_light_settings()
+		_save_tree_light_settings()
+	)
+	parent.add_child(slider)
+	options_hidden_tree_light_sliders[key] = slider
+	options_hidden_tree_light_labs[key] = val_lab
 
 
 func _build_first_sale_decal() -> void:
@@ -32255,6 +32408,30 @@ func _build_options_menu() -> void:
 	if options_hidden_outdoor_ambience_vol_lab != null:
 		options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 
+	var tree_lab := Label.new()
+	tree_lab.text = "TREE FILL LIGHTS"
+	UiFontsScript.apply_label(tree_lab, true, 13)
+	tree_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(tree_lab)
+	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "energy", "Brightness", 0.0, 6.0, 0.05,
+		func(): return tree_light_energy,
+		func(v: float): tree_light_energy = clampf(v, 0.0, 6.0))
+	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "range", "Influence Radius", 0.5, 20.0, 0.1,
+		func(): return tree_light_range,
+		func(v: float): tree_light_range = clampf(v, 0.5, 20.0))
+	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "size", "Bulb Size", 0.02, 1.2, 0.01,
+		func(): return tree_light_size,
+		func(v: float): tree_light_size = clampf(v, 0.02, 1.2))
+	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "off_x", "Location X", -8.0, 8.0, 0.05,
+		func(): return tree_light_off_x,
+		func(v: float): tree_light_off_x = clampf(v, -8.0, 8.0))
+	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "off_y", "Location Y", 0.2, 12.0, 0.05,
+		func(): return tree_light_off_y,
+		func(v: float): tree_light_off_y = clampf(v, 0.2, 12.0))
+	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "off_z", "Location Z", -8.0, 8.0, 0.05,
+		func(): return tree_light_off_z,
+		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
+
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
 	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -32428,6 +32605,7 @@ func _try_unlock_hidden_options() -> void:
 				options_hidden_outdoor_ambience_vol.set_value_no_signal(outdoor_ambience_volume)
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
+			_sync_tree_light_hidden_ui()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
 		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
