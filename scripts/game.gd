@@ -1443,7 +1443,7 @@ const CUP_HOLD_HEIGHT := 0.04
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
 const CUP_SHELL_BOT_R := 0.0594
-const CUP_LIQUID_MAX_H := 0.1458
+const CUP_LIQUID_MAX_H := 0.168 ## was 0.1458 — fill sits a bit higher in the cup
 const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
 const CUP_LIQUID_BOT_R := 0.0558
 ## Thin empty sliver under the pop — keep liquid near the plastic floor.
@@ -1523,11 +1523,11 @@ const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
 const FRIES_PACK_TARGET_H := 0.167 ## ~15% bigger than prior 0.145 pack height
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
-const CUP_FOLLOW_RATE := 8.5 ## hand follow (empty); full drinks feel heavier — eased vs prior 15
-const CUP_FOLLOW_MAX_SPEED := 1.55 ## m/s cap so cursor flicks don't teleport the cup
+const CUP_FOLLOW_RATE := 24.0 ## snappy hand follow (was 8.5 — felt laggy)
+const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without teleporting
 ## Soft spout attach — seat under the pour stream (XZ = tip, rim just below).
-const CUP_FILL_FOLLOW_RATE := 16.0
-const CUP_FILL_FOLLOW_MAX_SPEED := 1.85
+const CUP_FILL_FOLLOW_RATE := 28.0
+const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
@@ -25699,19 +25699,17 @@ func _update_held_cup(delta: float) -> void:
 		seat = _resolve_cup_against_soda(seat, false)
 	if seat != Vector3.ZERO:
 		var prev := cup_root.global_position
-		## Weight: fuller drinks lag the cursor a bit — empties stay snappy.
-		var heavy := lerpf(1.0, 0.55, clampf(cup_soda_fill, 0.0, 1.0))
+		## Slight weight when full — keep it responsive (was down to 0.55).
+		var heavy := lerpf(1.0, 0.82, clampf(cup_soda_fill, 0.0, 1.0))
 		var follow_rate := CUP_FILL_FOLLOW_RATE if can_use_fill_bay else CUP_FOLLOW_RATE * heavy
 		var follow := clampf(delta * follow_rate, 0.0, 1.0)
 		if _cup_spout_unlock_grace > 0.0:
-			follow *= 0.42
-		## Smoothstep ease so motion eases in/out instead of hard lerps.
-		follow = follow * follow * (3.0 - 2.0 * follow)
+			follow *= 0.72
 		var desired := prev.lerp(seat, follow)
 		## While locked under a spout, bias hard onto the fill seat so the stream hits the cup.
 		if can_use_fill_bay and _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
 			var fill_seat := _cup_target_for_spout(_cup_spout_lock)
-			desired = desired.lerp(fill_seat, clampf(delta * 22.0, 0.0, 1.0))
+			desired = desired.lerp(fill_seat, clampf(delta * 28.0, 0.0, 1.0))
 		var step := desired - prev
 		var max_step := (CUP_FILL_FOLLOW_MAX_SPEED if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
@@ -25720,7 +25718,7 @@ func _update_held_cup(delta: float) -> void:
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 			if _cup_spout_unlock_grace > 0.0:
-				_cup_vel *= 0.18
+				_cup_vel *= 0.45
 		_cup_prev_pos = cup_root.global_position
 	## Velocity lean: shake left/right tips the cup; stop and it settles upright.
 	var horiz := Vector2(-_cup_vel.x, _cup_vel.z)
