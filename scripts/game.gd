@@ -1116,16 +1116,20 @@ var cheese_stack_top: MeshInstance3D = null ## Hidden while a slice is in hand
 var cheese_pile_slices: Array = [] ## MeshInstance3D slots — visibility tracks fridge stock
 const CHEESE_PILE_MAX_EACH := 10 ## visual cap per pile (20 total)
 var bun_pile_root: Node3D = null
-var bun_pile_stacks: Array = [] ## Node3D stack roots (bottom + top each); visibility tracks stock
-const BUN_PILE_STACK_COUNT := 3 ## 3 pairs = 6 buns total on the counter
+var bun_pile_stacks: Array = [] ## Pair roots (bottom+top); visibility tracks stock
+const BUN_PILE_TOWER_COUNT := 2 ## two towers left of cheese
+const BUN_PILE_PAIRS_PER_TOWER := 2 ## double-stack each = 4 bun sets total
+const BUN_PILE_PAIR_SLOTS := BUN_PILE_TOWER_COUNT * BUN_PILE_PAIRS_PER_TOWER
 const BUN_PILE_SCALE := 0.85 ## Same scale as burgerpack preview props
 const BUN_BOTTOM_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedBottom.glb"
 const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb"
 ## Top sits on the bottom heel (untoasted bottom height ≈ 0.040).
 const BUN_PAIR_TOP_Y := 0.039
-## Behind cheese piles (cheese ~z 0.14); spaced so 0.85-scale buns don't overlap.
-const BUN_PILE_BASE := Vector3(0.005, -0.076, 0.355)
-const BUN_PILE_SPACING_X := 0.195
+## Vertical step for the second pair on a tower.
+const BUN_PAIR_STACK_Y := 0.074
+## Left of cheese piles (cheese ~x −0.07 / +0.08, z ~0.14).
+const BUN_PILE_BASE := Vector3(-0.34, -0.076, 0.145)
+const BUN_PILE_SPACING_X := 0.155
 var bun_pile_anchors: Dictionary = {} ## bun id -> Node3D (fly-to-build start)
 var _cheese_returning: bool = false
 var _cheese_return_t: float = 0.0
@@ -27184,60 +27188,64 @@ func _refresh_cheese_piles() -> void:
 
 
 func _build_bun_inventory_piles(parent: Node3D) -> void:
-	## 3 spaced stacks of untoasted bottom+top behind the cheese — up to 6 buns.
+	## Two towers left of cheese; each is a double stack (2 bottom+top pairs) = 4 sets.
 	bun_pile_root = Node3D.new()
 	bun_pile_root.name = "BunInventoryPiles"
 	parent.add_child(bun_pile_root)
 	bun_pile_stacks.clear()
 	bun_pile_anchors.clear()
 	var Pack := preload("res://scripts/burger_pack_models.gd")
-	var mid_i := float(BUN_PILE_STACK_COUNT - 1) * 0.5
-	for i in BUN_PILE_STACK_COUNT:
-		var stack := Node3D.new()
-		stack.name = "BunStack_%d" % i
-		stack.position = BUN_PILE_BASE + Vector3((float(i) - mid_i) * BUN_PILE_SPACING_X, 0.0, 0.0)
-		## Slight yaw so the row doesn't look stamped.
-		stack.rotation_degrees = Vector3(0.0, float(i) * 7.0 - 7.0, 0.0)
-		bun_pile_root.add_child(stack)
-		var bottom: Node3D = Pack.instantiate_scene(BUN_BOTTOM_PATH, BUN_PILE_SCALE)
-		var top: Node3D = Pack.instantiate_scene(BUN_TOP_PATH, BUN_PILE_SCALE)
-		if bottom == null or top == null:
-			push_warning("Bun inventory models missing")
-			if bottom:
-				bottom.queue_free()
-			if top:
-				top.queue_free()
-			stack.queue_free()
-			continue
-		bottom.name = "Bottom"
-		top.name = "Top"
-		bottom.position = Vector3.ZERO
-		top.position = Vector3(0.0, BUN_PAIR_TOP_Y * BUN_PILE_SCALE, 0.0)
-		stack.add_child(bottom)
-		stack.add_child(top)
-		_burgerpack_boost_draw(bottom)
-		_burgerpack_boost_draw(top)
-		stack.visible = false
-		bun_pile_stacks.append(stack)
-	## Fly-to-build homes — shared row behind cheese.
+	for tower_i in BUN_PILE_TOWER_COUNT:
+		var tower := Node3D.new()
+		tower.name = "BunTower_%d" % tower_i
+		tower.position = BUN_PILE_BASE + Vector3(float(tower_i) * BUN_PILE_SPACING_X, 0.0, 0.0)
+		tower.rotation_degrees = Vector3(0.0, float(tower_i) * 9.0 - 4.0, 0.0)
+		bun_pile_root.add_child(tower)
+		for pair_i in BUN_PILE_PAIRS_PER_TOWER:
+			var pair := Node3D.new()
+			pair.name = "BunPair_%d_%d" % [tower_i, pair_i]
+			pair.position = Vector3(0.0, float(pair_i) * BUN_PAIR_STACK_Y * BUN_PILE_SCALE, 0.0)
+			tower.add_child(pair)
+			var bottom: Node3D = Pack.instantiate_scene(BUN_BOTTOM_PATH, BUN_PILE_SCALE)
+			var top: Node3D = Pack.instantiate_scene(BUN_TOP_PATH, BUN_PILE_SCALE)
+			if bottom == null or top == null:
+				push_warning("Bun inventory models missing")
+				if bottom:
+					bottom.queue_free()
+				if top:
+					top.queue_free()
+				pair.queue_free()
+				continue
+			bottom.name = "Bottom"
+			top.name = "Top"
+			bottom.position = Vector3.ZERO
+			top.position = Vector3(0.0, BUN_PAIR_TOP_Y * BUN_PILE_SCALE, 0.0)
+			pair.add_child(bottom)
+			pair.add_child(top)
+			_burgerpack_boost_draw(bottom)
+			_burgerpack_boost_draw(top)
+			pair.visible = false
+			## Peel order: fill tower0 bottom→top, then tower1 — hide from the end.
+			bun_pile_stacks.append(pair)
+	## Fly-to-build home — between the two towers.
 	var home := Node3D.new()
 	home.name = "BunPileHome"
-	home.position = BUN_PILE_BASE + Vector3(0.0, 0.06, 0.0)
+	home.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * 0.5, 0.08, 0.0)
 	bun_pile_root.add_child(home)
 	bun_pile_anchors["bun_bottom"] = home
 	bun_pile_anchors["bun_top"] = home
 
 
 func _bun_visual_pair_count() -> int:
-	## Whole pairs only — peel stacks off as fridge stock drops (3 visible steps).
+	## Whole pairs only — peel pair-slots as fridge stock drops (4 visible steps).
 	var bottoms := maxi(0, int(supply_stock.get("bun_bottom", 0)))
 	var tops := maxi(0, int(supply_stock.get("bun_top", 0)))
 	var pairs := mini(bottoms, tops)
 	if pairs <= 0:
 		return 0
 	var cap := maxi(1, _ingredient_stock_cap("bun_bottom"))
-	var step := maxi(1, int(ceil(float(cap) / float(BUN_PILE_STACK_COUNT))))
-	return clampi(int(ceil(float(pairs) / float(step))), 0, BUN_PILE_STACK_COUNT)
+	var step := maxi(1, int(ceil(float(cap) / float(BUN_PILE_PAIR_SLOTS))))
+	return clampi(int(ceil(float(pairs) / float(step))), 0, BUN_PILE_PAIR_SLOTS)
 
 
 func _bun_visual_stock_count(id: String) -> int:
