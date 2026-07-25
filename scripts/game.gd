@@ -286,6 +286,12 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 62.0 ## Min screen-px down (was 96 — shorter pull to flip)
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
+## Right-click while scooped → burger jumps off, two flips, land or re-catch.
+const SPATULA_JUGGLE_DUR := 0.82
+const SPATULA_JUGGLE_PEAK := 0.52 ## meters above the start height at mid-arc
+const SPATULA_JUGGLE_CATCH_R := 0.145 ## tip↔burger XZ catch radius
+const SPATULA_JUGGLE_CATCH_Y := 0.16 ## vertical catch window
+const SPATULA_JUGGLE_CATCH_START_T := 0.16 ## don't instant re-catch on launch
 ## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
 ## One notch jumps a full step; wheel factor can stack notches (feels snappier).
 const HAND_SPATULA_ROLL_STEP := 45.0
@@ -307,6 +313,11 @@ var _spatula_mute_ting: bool = false ## Mute piano ting for burger flip/squish i
 var _spatula_tap_press_mouse := Vector2.INF ## Screen pos when the current tap started
 var _spatula_user_roll: float = 0.0 ## Scroll-wheel roll (−90…+90)
 var _spatula_pull_flip_done: bool = false ## One pull-flip per LMB hold
+var spatula_juggle_patty = null ## airborne after right-click toss from scoop
+var spatula_juggle_t: float = 0.0
+var spatula_juggle_start := Vector3.ZERO
+var spatula_juggle_end := Vector3.ZERO
+var spatula_juggle_base_rot := Vector3.ZERO
 ## Flip flourish FX — ribbons + fading circle (can outlive the flip anim).
 var _spatula_ribbon_root: Node3D = null
 var _spatula_ribbon_meshes: Array = [] ## MeshInstance3D × 2
@@ -2612,6 +2623,7 @@ func _process(delta: float) -> void:
 		_update_cheese_ghost(delta)
 	if spatula_patty != null:
 		_update_held_spatula_patty(delta)
+	_update_spatula_juggle(delta)
 	_update_hand_spatula_cursor(delta)
 	_update_cheese_strings(delta)
 	if shaker_held:
@@ -3089,6 +3101,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			## No spatula (other tools / off-grill) — legacy grill pick / drag.
 			_try_grill_raycast(event.position, false)
 		if event.button_index == MOUSE_BUTTON_RIGHT:
+			## Scooped burger → juggle (also handled in _input; keep here as fallback).
+			if spatula_patty != null and is_instance_valid(spatula_patty) \
+					and spatula_juggle_patty == null and flicking_patty == null:
+				if _start_spatula_juggle_toss():
+					get_viewport().set_input_as_handled()
+					return
 			## Chef bot poke beats grill smash / cheese pull under the cursor.
 			if _try_poke_grill_roomba(event.position):
 				get_viewport().set_input_as_handled()
@@ -3173,6 +3191,12 @@ func _input(event: InputEvent) -> void:
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
+			## Scooped burger → juggle toss (2 flips; catch or land on grill).
+			if spatula_patty != null and is_instance_valid(spatula_patty) \
+					and spatula_juggle_patty == null and flicking_patty == null:
+				if _start_spatula_juggle_toss():
+					get_viewport().set_input_as_handled()
+					return
 			if cheese_held:
 				_cancel_cheese_hold()
 				get_viewport().set_input_as_handled()
@@ -4015,7 +4039,7 @@ func _try_grill_right_click(screen_pos: Vector2) -> bool:
 	## Runs in _input (before UI) so Build chrome never eats grill right-clicks.
 	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
 		return false
-	if spatula_patty != null or dragging_patty != null or cheese_held:
+	if spatula_patty != null or spatula_juggle_patty != null or dragging_patty != null or cheese_held:
 		return false
 	## Chef bot poke before place/smash — same spatula press, plastic tap, unsmiley.
 	if _try_poke_grill_roomba(screen_pos):
@@ -4600,6 +4624,9 @@ func _should_show_hand_spatula(screen_pos: Vector2) -> bool:
 		return false
 	## Keep spatula while carrying a scooped patty, even if aim drifts off-steel.
 	if spatula_patty != null:
+		return true
+	## Keep blade out while a juggle is in the air so you can catch it.
+	if spatula_juggle_patty != null:
 		return true
 	return _is_grill_screen_point(screen_pos)
 
@@ -8468,7 +8495,7 @@ func _update_held_spatula_patty(delta: float = 0.016) -> void:
 	## Remote scoop — pose is driven by mp_patty_pose, not local mouse.
 	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id():
 		return
-	if flicking_patty == spatula_patty:
+	if flicking_patty == spatula_patty or spatula_juggle_patty != null:
 		return
 	var mouse := get_viewport().get_mouse_position()
 	var dt := maxf(delta, 0.001)
@@ -8685,6 +8712,161 @@ func _throw_held_patty_to_build() -> void:
 		else:
 			_commit_patty_to_build(patty)
 	)
+
+
+func _spatula_tip_world_pos() -> Vector3:
+	if hand_spatula_root != null and is_instance_valid(hand_spatula_root):
+		return hand_spatula_root.global_position \
+			+ hand_spatula_root.global_transform.basis * HAND_SPATULA_TIP_OFFSET
+	var mouse := get_viewport().get_mouse_position()
+	return _hand_spatula_tip_from_screen(mouse, GRILL_SURFACE_Y + HAND_SPATULA_CARRY_Y)
+
+
+func _start_spatula_juggle_toss() -> bool:
+	## Right-click while scooped → burger pops off, two flips, land or re-catch.
+	if spatula_patty == null or not is_instance_valid(spatula_patty):
+		return false
+	if spatula_juggle_patty != null or flicking_patty != null:
+		return false
+	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
+		return false
+	var patty = spatula_patty
+	spatula_patty = null
+	spatula_owner_id = 0
+	spatula_from_build = false
+	spatula_lmb_held = false
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	patty.is_held = true
+	patty.visible = true
+	patty.heating = false
+	spatula_juggle_patty = patty
+	spatula_juggle_t = 0.0
+	spatula_juggle_start = patty.global_position
+	spatula_juggle_base_rot = patty.rotation_degrees
+	## Land near the cursor on the cook surface (or current XZ if aim is off-grill).
+	var mouse := get_viewport().get_mouse_position()
+	var aim := _grill_plane_from_screen(mouse)
+	if aim == Vector3.ZERO or not _is_near_grill_for_place(aim):
+		aim = Vector3(spatula_juggle_start.x, GRILL_SURFACE_Y, spatula_juggle_start.z)
+	var place := _find_closest_patty_place(aim)
+	if place == Vector3.ZERO:
+		place = Vector3(
+			clampf(aim.x, GRILL_CENTER_X - GRILL_WIDTH * 0.42, GRILL_CENTER_X + GRILL_WIDTH * 0.42),
+			GRILL_SURFACE_Y,
+			clampf(aim.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.42, GRILL_SURFACE_Z + GRILL_DEPTH * 0.42)
+		)
+	## Slight forward hop so it doesn't land straight under the launch.
+	var hop := Vector3(
+		randf_range(-0.04, 0.04),
+		0.0,
+		randf_range(-0.02, 0.06)
+	)
+	spatula_juggle_end = Vector3(place.x + hop.x, GRILL_SURFACE_Y + PATTY_SIT_Y, place.z + hop.z)
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Juggle! Catch it or let it land", Color("FFE082"))
+	return true
+
+
+func _update_spatula_juggle(delta: float) -> void:
+	if spatula_juggle_patty == null:
+		return
+	var patty = spatula_juggle_patty
+	if patty == null or not is_instance_valid(patty):
+		spatula_juggle_patty = null
+		return
+	spatula_juggle_t += delta
+	var t := clampf(spatula_juggle_t / SPATULA_JUGGLE_DUR, 0.0, 1.0)
+	## Ease the flight so the apex hangs a beat for the catch window.
+	var u := t * t * (3.0 - 2.0 * t)
+	var xz: Vector3 = spatula_juggle_start.lerp(spatula_juggle_end, u)
+	var base_y := lerpf(spatula_juggle_start.y, spatula_juggle_end.y, u)
+	var y := base_y + 4.0 * t * (1.0 - t) * SPATULA_JUGGLE_PEAK
+	patty.global_position = Vector3(xz.x, y, xz.z)
+	## Two full flips through the air (720° pitch).
+	var flip_deg := 720.0 * t
+	patty.rotation_degrees = Vector3(
+		spatula_juggle_base_rot.x + flip_deg,
+		spatula_juggle_base_rot.y + sin(t * TAU) * 12.0,
+		spatula_juggle_base_rot.z + sin(t * TAU * 2.0) * 8.0
+	)
+	## Catch window — spatula tip near the flying burger.
+	if t >= SPATULA_JUGGLE_CATCH_START_T and t < 0.97:
+		if _try_catch_spatula_juggle():
+			return
+	if t >= 1.0:
+		_land_spatula_juggle()
+
+
+func _try_catch_spatula_juggle() -> bool:
+	## Scoop the airborne burger back onto the blade.
+	if spatula_juggle_patty == null or spatula_patty != null or flicking_patty != null:
+		return false
+	var patty = spatula_juggle_patty
+	if patty == null or not is_instance_valid(patty):
+		return false
+	var tip := _spatula_tip_world_pos()
+	var d := Vector2(tip.x - patty.global_position.x, tip.z - patty.global_position.z).length()
+	var dy := absf(tip.y - patty.global_position.y)
+	if d > SPATULA_JUGGLE_CATCH_R or dy > SPATULA_JUGGLE_CATCH_Y:
+		return false
+	spatula_juggle_patty = null
+	spatula_juggle_t = 0.0
+	patty.is_held = true
+	patty.visible = true
+	patty.heating = false
+	patty.rotation_degrees = Vector3(SPATULA_CARRY_PITCH, 0.0, 0.0)
+	spatula_patty = patty
+	if mp_enabled:
+		spatula_owner_id = NetManager.my_id()
+		_mp_mark_held(spatula_owner_id, patty)
+	else:
+		spatula_owner_id = 0
+	spatula_last_mouse = get_viewport().get_mouse_position()
+	spatula_vel_screen = Vector2.ZERO
+	spatula_carry_travel = 0.0
+	_refresh_spatula_ui()
+	_update_held_spatula_patty(0.016)
+	if game_audio:
+		game_audio.play_scoop()
+	_flash("Caught!", Color("A5D6A7"))
+	return true
+
+
+func _land_spatula_juggle() -> void:
+	## Missed the catch — slap onto the flat-top.
+	var patty = spatula_juggle_patty
+	spatula_juggle_patty = null
+	spatula_juggle_t = 0.0
+	if patty == null or not is_instance_valid(patty):
+		return
+	var land := Vector3(spatula_juggle_end.x, GRILL_SURFACE_Y, spatula_juggle_end.z)
+	var place := _find_closest_patty_place(land)
+	if place == Vector3.ZERO:
+		place = land
+	var idx := _first_empty_slot()
+	if idx < 0 or _patty_blocked_at(place):
+		## Grill jammed — keep it scooped so it isn't lost.
+		spatula_patty = patty
+		if mp_enabled:
+			spatula_owner_id = NetManager.my_id()
+			_mp_mark_held(spatula_owner_id, patty)
+		else:
+			spatula_owner_id = 0
+		patty.is_held = true
+		patty.rotation_degrees = Vector3(SPATULA_CARRY_PITCH, 0.0, 0.0)
+		_refresh_spatula_ui()
+		_flash("No open spot — still on the spatula", Color("FFA726"))
+		return
+	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
+		## call_local places on all peers.
+		mp_place_spatula.rpc(int(patty.net_id), idx, place.x, place.z)
+		_flash("Landed on the grill!", Color("A5D6A7"))
+		return
+	_place_extracted_patty_on_grill(patty, idx, place)
+	_flash("Landed on the grill!", Color("A5D6A7"))
 
 
 func _throw_held_patty_to_grill() -> void:
@@ -35618,7 +35800,11 @@ func _first_empty_slot() -> int:
 func _clear_spatula() -> void:
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		spatula_patty.queue_free()
+	if spatula_juggle_patty != null and is_instance_valid(spatula_juggle_patty):
+		spatula_juggle_patty.queue_free()
 	spatula_patty = null
+	spatula_juggle_patty = null
+	spatula_juggle_t = 0.0
 	spatula_owner_id = 0
 	spatula_from_build = false
 	spatula_lmb_held = false
