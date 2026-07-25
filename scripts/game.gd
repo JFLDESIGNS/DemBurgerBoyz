@@ -1532,7 +1532,7 @@ const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without te
 const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
-const CUP_FILL_EXTRA_Y := 0.127 ## +5" drip-deck seat (+2" more) so the cup clears the machine floor
+const CUP_FILL_EXTRA_Y := 0.1778 ## +7" drip-deck seat (+2" more) so the cup clears the machine floor
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
 const CUP_FILL_RELEASE := 0.30
@@ -25751,6 +25751,8 @@ func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	## Hold-LMB fill snap locks to the raised deck — never clamp back through the machine.
 	if soda_root != null and is_instance_valid(soda_root) and cup_rest != Vector3.ZERO:
 		fill_y = cup_rest.y + 0.01
+	## Never sit below the spout-relative seat (deck marker can lag the mesh).
+	fill_y = maxf(fill_y, tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + CUP_FILL_EXTRA_Y)
 	return Vector3(tip_p.x, fill_y, tip_p.z)
 
 
@@ -25847,11 +25849,14 @@ func _update_held_cup(delta: float) -> void:
 	## Pin height near the fill soft-lock / tray hold plane so the cup can't float up.
 	var anchor_y := GRILL_SURFACE_Y + CUP_HOLD_HEIGHT
 	if can_use_fill_bay and _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
+		## Hard lock while filling — no −0.03 sink that clips through the drip deck.
 		anchor_y = _cup_target_for_spout(_cup_spout_lock).y
-	elif cup_rest != Vector3.ZERO:
-		anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
-	cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
-	cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
+		cup_root.global_position.y = anchor_y
+	else:
+		if cup_rest != Vector3.ZERO:
+			anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
+		cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
+		cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
 	cup_root.rotation_degrees = Vector3(
 		-6.0 + _cup_tilt.y,
 		10.0,
