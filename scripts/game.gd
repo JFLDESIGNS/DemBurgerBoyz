@@ -36,17 +36,20 @@ const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the righ
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 ## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
-## Base sample is tinggrill.wav @ C5; strips map C4→B4 (one octave below sample).
+## tinggrill.wav reads ~3 semis flat of C5, so request MIDI = sounded + SAMPLE_COMP.
+## Flat taps span sounded C3→B4 across the 12 strips (was sounded A3→G#4).
 const GRILL_PIANO_SECTIONS := 12
-const GRILL_PIANO_LEFT_MIDI := 60 ## C4 — leftmost strip (screen-left)
-## Spatula roll changes key (transpose the whole C→B run).
+const GRILL_PIANO_SOUND_LOW := 48 ## C3 — leftmost strip (what you hear)
+const GRILL_PIANO_SOUND_HIGH := 71 ## B4 — rightmost strip (what you hear)
+const GRILL_PIANO_SAMPLE_COMP := 3 ## tinggrill ~A4; play MIDI = sounded + 3
+const GRILL_PIANO_LEFT_MIDI := GRILL_PIANO_SOUND_LOW + GRILL_PIANO_SAMPLE_COMP ## request MIDI for C3
+## Spatula roll changes key (transpose the whole run).
 const GRILL_PIANO_KEY_FLAT := 0 ## 0° → C
 const GRILL_PIANO_KEY_45 := 5 ## ±45° → F
 const GRILL_PIANO_KEY_90 := 7 ## ±90° → G
-## Display-only label offsets (MIDI/frequency mapping stays unchanged).
-## Flat blade: C4 sounds as A3. Side blade (±45/±90): E4 sounds as G#4.
-const GRILL_PIANO_LABEL_FLAT_OFFSET := -3
-const GRILL_PIANO_LABEL_SIDE_OFFSET := 4
+## Labels show sounded pitch (comp already baked into strip MIDI).
+const GRILL_PIANO_LABEL_FLAT_OFFSET := 0
+const GRILL_PIANO_LABEL_SIDE_OFFSET := 0
 const GRILL_PIANO_NOTE_NAMES: Array[String] = [
 	"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
 ]
@@ -5366,12 +5369,25 @@ func _grill_piano_section_at(world_pos: Vector3) -> int:
 	return clampi(int(floor(u * float(GRILL_PIANO_SECTIONS))), 0, GRILL_PIANO_SECTIONS - 1)
 
 
-func _grill_piano_midi_at(world_pos: Vector3) -> int:
-	## Left→right (screen): chromatic C4→B4 across all 12 strips.
-	## +X is screen-left on this camera, so high section index = visual left = C4.
+func _grill_piano_strip_index_from_left(world_pos: Vector3) -> int:
+	## 0 = screen-left / low note … 11 = screen-right / high note.
+	## +X is screen-left on this camera, so high section index = visual left.
 	var sec := _grill_piano_section_at(world_pos)
-	var from_left := (GRILL_PIANO_SECTIONS - 1) - sec
-	return GRILL_PIANO_LEFT_MIDI + clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
+	return clampi((GRILL_PIANO_SECTIONS - 1) - sec, 0, GRILL_PIANO_SECTIONS - 1)
+
+
+func _grill_piano_sounding_at_index(from_left: int) -> int:
+	## Heard pitch for strip index (C3→B4 spaced across 12 pads).
+	var i := clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
+	if GRILL_PIANO_SECTIONS <= 1:
+		return GRILL_PIANO_SOUND_LOW
+	var span := float(GRILL_PIANO_SOUND_HIGH - GRILL_PIANO_SOUND_LOW)
+	return GRILL_PIANO_SOUND_LOW + int(round(float(i) * span / float(GRILL_PIANO_SECTIONS - 1)))
+
+
+func _grill_piano_midi_at(world_pos: Vector3) -> int:
+	## Sampler MIDI for strip under the tip (compensates tinggrill being ~3 semis flat).
+	return _grill_piano_sounding_at_index(_grill_piano_strip_index_from_left(world_pos)) + GRILL_PIANO_SAMPLE_COMP
 
 
 func _grill_hold_drum_pad_at(world_pos: Vector3) -> int:
@@ -5774,11 +5790,10 @@ func _refresh_grill_piano_note_labels() -> void:
 		var lab: Label3D = grill_piano_note_labels[i] as Label3D
 		if lab == null or not is_instance_valid(lab):
 			continue
-		## Cell i=0 is world −X (screen-right / B); high i is screen-left / C.
+		## Cell i=0 is world −X (screen-right / high); high i is screen-left / C3.
 		var from_left := (GRILL_PIANO_SECTIONS - 1) - i
-		var midi := GRILL_PIANO_LEFT_MIDI + clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1) + key_off
-		## Labels follow heard pitch; MIDI/frequency mapping stays unchanged.
-		lab.text = _midi_to_note_name(midi + _grill_piano_label_semitone_offset())
+		var sounded := _grill_piano_sounding_at_index(from_left) + key_off
+		lab.text = _midi_to_note_name(sounded + _grill_piano_label_semitone_offset())
 	var voice := _spatula_hold_voice_name()
 	for j in grill_drum_note_labels.size():
 		var dlab: Label3D = grill_drum_note_labels[j] as Label3D

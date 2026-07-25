@@ -1065,8 +1065,8 @@ func play_scoop() -> void:
 
 
 func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
-	## tinggrill.wav — natural pitch is C5 / MIDI 72.
-	## Grill strips are C4→B4 (−12…−1 semis); pitch the same sample with energy boost.
+	## tinggrill.wav — labeled C5 / MIDI 72 but reads ~3 semis flat (≈A4).
+	## Grill flat taps request MIDI so the heard range is C3→B4 across the strips.
 	if _ting_players.is_empty():
 		return
 	var semis := float(midi - 72)
@@ -1078,12 +1078,12 @@ func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	var p: AudioStreamPlayer = _ting_players[_ting_player_i]
 	_ting_player_i = (_ting_player_i + 1) % _ting_players.size()
 	p.stream = _cache["tinggrill"]
-	## Allow full C4…key-transposed B4 range; clamp only wild HOLD/scrape callers.
-	semis = clampf(semis, -12.0, 14.0)
+	## Allow C3…key-transposed B4 (+ roll); clamp only wild HOLD/scrape callers.
+	semis = clampf(semis, -24.0, 16.0)
 	p.pitch_scale = pow(2.0, semis / 12.0)
 	var base_gain := 1.75
 	var away := absf(semis)
-	## Stronger recovery when pitching the C5 sample down toward C4.
+	## Stronger recovery when pitching the sample down toward C3.
 	var pitch_boost := 1.0 + away * (0.14 if semis < 0.0 else 0.05)
 	if away > 0.001:
 		pitch_boost *= 1.2
