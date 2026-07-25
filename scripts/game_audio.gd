@@ -138,7 +138,7 @@ var _room_tone_hz: float = 174.0
 var _room_tone_vol: float = 0.0
 var _room_tone_phase: float = 0.0
 var _room_tone_muted: bool = false ## true during particle prewarm — no beds / no underrun hiss
-const OUTDOOR_AMBIENCE_PATH := "res://sounds/outdoor_forest_ambience.ogg"
+const OUTDOOR_AMBIENCE_PATH := "res://sounds/outdoor_forest_ambience.mp3"
 var _outdoor_ambience_player: AudioStreamPlayer = null
 var _outdoor_ambience_vol: float = 0.0
 var _outdoor_ambience_on: bool = false
@@ -488,8 +488,27 @@ func silence_continuous_beds(mute_room_tone: bool = true) -> void:
 		_outdoor_ambience_muted = false
 
 
+func _load_outdoor_ambience_stream() -> AudioStreamMP3:
+	## Load Midlands England birdsong MP3 from disk (avoids broken/missing .import in exports).
+	if not FileAccess.file_exists(OUTDOOR_AMBIENCE_PATH):
+		push_warning("Outdoor ambience missing: %s" % OUTDOOR_AMBIENCE_PATH)
+		return null
+	var f := FileAccess.open(OUTDOOR_AMBIENCE_PATH, FileAccess.READ)
+	if f == null:
+		push_warning("Outdoor ambience open failed: %s" % OUTDOOR_AMBIENCE_PATH)
+		return null
+	var data := f.get_buffer(f.get_length())
+	f.close()
+	if data.is_empty():
+		return null
+	var stream := AudioStreamMP3.new()
+	stream.data = data
+	stream.loop = true
+	return stream
+
+
 func set_outdoor_ambience(volume_linear: float) -> void:
-	## Looping forest birdsong bed. volume_linear 0 = off; up to 3.0 for a loud bed.
+	## Looping Midlands England forest birdsong. volume_linear 0 = off; up to 3.0 loud.
 	_outdoor_ambience_vol = clampf(volume_linear, 0.0, 3.0)
 	_outdoor_ambience_muted = false
 	if _outdoor_ambience_player == null:
@@ -501,16 +520,9 @@ func set_outdoor_ambience(volume_linear: float) -> void:
 		_outdoor_ambience_player.volume_db = -80.0
 		return
 	if _outdoor_ambience_player.stream == null:
-		if not ResourceLoader.exists(OUTDOOR_AMBIENCE_PATH):
-			push_warning("Outdoor ambience missing: %s" % OUTDOOR_AMBIENCE_PATH)
-			return
-		var stream: AudioStream = load(OUTDOOR_AMBIENCE_PATH) as AudioStream
+		var stream := _load_outdoor_ambience_stream()
 		if stream == null:
 			return
-		if stream is AudioStreamOggVorbis:
-			(stream as AudioStreamOggVorbis).loop = true
-		elif stream is AudioStreamMP3:
-			(stream as AudioStreamMP3).loop = true
 		_outdoor_ambience_player.stream = stream
 	_outdoor_ambience_on = true
 	## Slider 1.0 ≈ −6 dB; slider 3.0 ≈ 3× that ceiling (linear 1.5).
