@@ -838,6 +838,23 @@ func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	p.play()
 
 
+func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0) -> void:
+	## HOLD-zone taps — steel ting reshaped into a short drum thump (5 depth pads).
+	if _players.is_empty():
+		return
+	var p_i := clampi(pad, 0, 4)
+	var key := "hold_drum_%d" % p_i
+	if not _cache.has(key):
+		_cache[key] = _make_hold_drum(p_i)
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache[key]
+	p.pitch_scale = 1.0
+	var base_gain := 1.15 * maxf(0.0, volume_scale)
+	p.volume_db = linear_to_db(base_gain)
+	p.play()
+
+
 func _load_tinggrill_stream() -> AudioStream:
 	const PATH := "res://sounds/tinggrill.wav"
 	if ResourceLoader.exists(PATH):
@@ -1488,6 +1505,41 @@ func _make_spatula_ting_note(midi: int) -> AudioStreamWAV:
 		)
 		var spark := (randf() * 2.0 - 1.0) * exp(-t * 120.0) * 0.22
 		_write_s16(pcm, i, int(clampf((ting + spark) * env, -1.0, 1.0) * 26000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_hold_drum(pad: int) -> AudioStreamWAV:
+	## Spatula on HOLD — still a steel hit, but thumpy / drum-like.
+	## pad 0 (window) = higher; pad 4 (cook edge) = lower.
+	var p := clampf(float(pad), 0.0, 4.0) / 4.0
+	var f0 := lerpf(195.0, 88.0, p) ## body fundamental
+	var f_click := lerpf(2200.0, 1400.0, p)
+	var n := int(MIX_RATE * 0.22)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4100 + pad * 17
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		## Punchy attack, longer body than a ting.
+		var env_body := exp(-t * 14.0)
+		var env_click := exp(-t * 55.0)
+		if t < 0.0018:
+			var a := t / 0.0018
+			env_body *= a
+			env_click *= a
+		var body := (
+			sin(t * f0 * TAU) * 0.62
+			+ sin(t * f0 * 1.5 * TAU) * 0.28 * exp(-t * 18.0)
+			+ sin(t * f0 * 2.2 * TAU) * 0.14 * exp(-t * 26.0)
+		)
+		## Soft mid “skin” + short noise thump — drum, not glass ting.
+		var skin := sin(t * f_click * TAU) * 0.18 * env_click
+		var thump := (rng.randf() * 2.0 - 1.0) * exp(-t * 90.0) * 0.35
+		## Tiny leftover steel spark so it still reads as spatula-on-grill.
+		var spark := sin(t * f_click * 1.7 * TAU) * 0.08 * exp(-t * 70.0)
+		var wave := (body * env_body + skin + thump + spark) * 0.95
+		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 25000.0))
 	return _wav_from_pcm(pcm, false)
 
 

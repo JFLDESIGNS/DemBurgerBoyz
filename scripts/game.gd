@@ -35,12 +35,14 @@ const GRILL_SURFACE_Z := -0.02 ## farther from cook, closer to window
 const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the right
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
-## 12 vertical steel strips — chromatic piano tings on spatula taps.
+## 12 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
 ## Keep strips near the natural tinggrill pitch — far pitch-shifts get thin / quiet.
 const GRILL_PIANO_SECTIONS := 12
 const GRILL_PIANO_BASE_MIDI := 72 ## C5 — unpitched tinggrill.wav
-const GRILL_PIANO_MIDI_LO := 69 ## A4 — left / low strip (was 66, too quiet pitched down)
-const GRILL_PIANO_MIDI_HI := 75 ## D♯5 — right / high strip (was 77, thin pitched up)
+const GRILL_PIANO_MIDI_LO := 69 ## A4 — cook −X / low
+const GRILL_PIANO_MIDI_HI := 75 ## D♯5 — cook +X / high
+## HOLD pad — 5 drum hits stacked along grill depth (window ↔ cook).
+const GRILL_HOLD_DRUM_PADS := 5
 ## Patty must sit fully on the steel — reject clicks near the rim.
 const PATTY_FIT_RADIUS := 0.088 ## Match PATTY_SIZE_SCALE 0.88
 const PATTY_MIN_SEP := 0.191 ## Was 0.180; +~0.43" so burgers don't clip into each other
@@ -241,8 +243,8 @@ const HAND_SPATULA_MID_OFFSET := Vector3(0.0, 0.012, 0.099)
 ## Extra push toward the window (+Z) for off-grill aim only.
 const HAND_SPATULA_AWAY_BIAS := 0.12
 var grill_piano_root: Node3D = null
-var grill_surface_node: Node3D = null ## Flat-top Area3D — host for optional piano outlines
-var grill_piano_debug_outline: bool = false ## Hidden-menu toggle; off by default
+var grill_surface_node: Node3D = null ## Flat-top Area3D — host for optional tap-pad outlines
+var grill_piano_debug_outline: bool = false ## GFX / hidden-menu toggle; off by default
 ## Center of grill: flat + straight-on (handle toward cook, blade toward window).
 const HAND_SPATULA_EMPTY_ROT := Vector3(-12.0, 0.0, 0.0)
 const HAND_SPATULA_CARRY_ROT := Vector3(-8.0, 0.0, 0.0)
@@ -472,13 +474,6 @@ var fire_health: float = 0.0
 ## Which heat band the blaze started in (FULL / 1/2 / HOLD) — fire stays there.
 var fire_zone_id: String = ""
 var fire_root: Node3D = null
-var fire_light: OmniLight3D = null
-var fire_light_rim: OmniLight3D = null
-## Real OmniLight energies (~10% of the old values) — particles carry the look.
-const FIRE_LIGHT_CORE := 0.045
-const FIRE_LIGHT_RIM := 0.018
-const FIRE_LIGHT_CORE_SET := 0.055
-const FIRE_LIGHT_RIM_SET := 0.022
 var fire_particles: GPUParticles3D = null
 var fire_particles_red: GPUParticles3D = null
 var fire_embers: GPUParticles3D = null
@@ -490,7 +485,7 @@ var _oil_fire_trail_mode: bool = false
 var _oil_fire_spread_cool: float = 0.0
 const OIL_EDGE_IGNITE_RADIUS := 0.28 ## Tip must land near a puddle (forgiving)
 const OIL_FIRE_SPREAD_RADIUS := 0.155 ## Neighbor speck catch distance
-const OIL_FIRE_SPREAD_SEC := 0.11 ## Delay between spread hops
+const OIL_FIRE_SPREAD_SEC := 0.24 ## Slower hop along the trail
 var _spatula_sparks: Array = [] ## short-lived edge-spark FX
 ## Fire extinguisher — hang-mounted left of the tools; hold LMB to carry.
 var ext_held: bool = false
@@ -4640,15 +4635,30 @@ func _spatula_play_ting_bit(bit: int) -> void:
 	if (_spatula_ting_bits & bit) != 0:
 		return
 	_spatula_ting_bits |= bit
-	if game_audio and game_audio.has_method("play_spatula_ting"):
-		var midi := _grill_piano_midi_at(_spatula_slap_contact) + _spatula_roll_midi_offset()
-		## Flat blade a bit quieter; ±45° / ±90° keep full tap volume.
-		var ting_vol := 0.8 if absf(_spatula_user_roll) < 22.5 else 1.0
-		game_audio.play_spatula_ting(midi, ting_vol)
+	## Flat blade a bit quieter; ±45° / ±90° keep full tap volume.
+	var ting_vol := 0.8 if absf(_spatula_user_roll) < 22.5 else 1.0
+	_play_grill_tap_at(_spatula_slap_contact, ting_vol)
 	## White expanding stroke on the steel under the hit.
 	_spawn_spatula_tap_ring(_spatula_slap_contact)
 	## Edge blade: spark at full tilt; oil trail catches if tip hits grease.
 	_try_spatula_edge_tap_fx(_spatula_slap_contact)
+
+
+func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
+	## Cook steel → 12 piano notes; HOLD → 5 depth-stacked drum pads.
+	if game_audio == null or world_pos == Vector3.ZERO:
+		return
+	var zone := _grill_zone_at(world_pos)
+	if str(zone.get("id", "")) == "hold":
+		if game_audio.has_method("play_spatula_drum"):
+			game_audio.play_spatula_drum(_grill_hold_drum_pad_at(world_pos), volume_scale)
+		elif game_audio.has_method("play_spatula_ting"):
+			## Fallback: low pitched ting if drum synth missing.
+			game_audio.play_spatula_ting(55 + _grill_hold_drum_pad_at(world_pos), volume_scale)
+		return
+	if game_audio.has_method("play_spatula_ting"):
+		var midi := _grill_piano_midi_at(world_pos) + _spatula_roll_midi_offset()
+		game_audio.play_spatula_ting(midi, volume_scale)
 
 
 func _spawn_spatula_tap_ring(at: Vector3) -> void:
@@ -4938,18 +4948,52 @@ func _spatula_anim_sample(u: float) -> Dictionary:
 	return {"anchor": anchor, "pitch": pitch, "yaw": yaw, "roll": roll, "use_mid": use_mid}
 
 
+func _grill_cook_x_bounds() -> Vector2:
+	## World X span of FULL + 1/2 only (HOLD excluded). x = lo (−X), y = hi (+X).
+	var x0 := INF
+	var x1 := -INF
+	for z in _grill_zone_bands():
+		if str(z.get("id", "")) == "hold":
+			continue
+		x0 = minf(x0, float(z["x0"]))
+		x1 = maxf(x1, float(z["x1"]))
+	if x0 == INF:
+		var half_w := GRILL_WIDTH * 0.5
+		return Vector2(GRILL_CENTER_X - half_w, GRILL_CENTER_X + half_w)
+	return Vector2(x0, x1)
+
+
+func _grill_hold_band() -> Dictionary:
+	for z in _grill_zone_bands():
+		if str(z.get("id", "")) == "hold":
+			return z
+	return {}
+
+
 func _grill_piano_section_at(world_pos: Vector3) -> int:
-	## 0 = world −X … 11 = world +X (screen-right → screen-left).
-	var x0 := GRILL_CENTER_X - GRILL_WIDTH * 0.5
-	var u := (world_pos.x - x0) / GRILL_WIDTH
+	## 0…11 across cook zones only (world −X near HOLD → +X FULL / screen-left).
+	var b := _grill_cook_x_bounds()
+	var span := maxf(0.001, b.y - b.x)
+	var u := (world_pos.x - b.x) / span
 	return clampi(int(floor(u * float(GRILL_PIANO_SECTIONS))), 0, GRILL_PIANO_SECTIONS - 1)
 
 
 func _grill_piano_midi_at(world_pos: Vector3) -> int:
-	## Spread 12 strips across a tight window around C5 so every tap stays audible.
+	## Spread 12 strips across cook steel around C5 so every tap stays audible.
 	var sec := _grill_piano_section_at(world_pos)
 	var t := float(sec) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
-	return clampi(int(round(lerpf(float(GRILL_PIANO_MIDI_LO), float(GRILL_PIANO_MIDI_HI), t))), GRILL_PIANO_MIDI_LO, GRILL_PIANO_MIDI_HI)
+	return clampi(
+		int(round(lerpf(float(GRILL_PIANO_MIDI_LO), float(GRILL_PIANO_MIDI_HI), t))),
+		GRILL_PIANO_MIDI_LO,
+		GRILL_PIANO_MIDI_HI
+	)
+
+
+func _grill_hold_drum_pad_at(world_pos: Vector3) -> int:
+	## 0 = window (−Z) … 4 = cook edge (+Z) — five pads stacked in HOLD depth.
+	var z0 := GRILL_SURFACE_Z - GRILL_DEPTH * 0.5
+	var u := (world_pos.z - z0) / maxf(GRILL_DEPTH, 0.001)
+	return clampi(int(floor(u * float(GRILL_HOLD_DRUM_PADS))), 0, GRILL_HOLD_DRUM_PADS - 1)
 
 
 func _hand_spatula_tip_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3:
@@ -5177,7 +5221,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 
 
 func _refresh_grill_piano_sections() -> void:
-	## Optional debug outlines — only when enabled from the hidden menu.
+	## Optional debug boxes — only when enabled from the hidden / GFX menu.
 	if grill_piano_root != null and is_instance_valid(grill_piano_root):
 		grill_piano_root.queue_free()
 	grill_piano_root = null
@@ -5189,35 +5233,87 @@ func _refresh_grill_piano_sections() -> void:
 
 
 func _build_grill_piano_sections(parent: Node3D) -> void:
-	## Black outlines for 12 vertical strips sitting on top of the steel.
+	## Debug: 12 cook-zone piano cells + 5 HOLD drum pads (depth-stacked).
 	if parent == null:
 		return
 	var root := Node3D.new()
-	root.name = "GrillPianoSections"
+	root.name = "GrillTapSections"
 	parent.add_child(root)
 	grill_piano_root = root
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.02, 0.02, 0.02, 0.10) ## 10% opacity debug outlines
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.85
-	mat.metallic = 0.05
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var cell_w := GRILL_WIDTH / float(GRILL_PIANO_SECTIONS)
-	var line_w := 0.0065
-	var line_h := 0.004
-	var y := 0.029 ## Sit just above the steel panels / shine.
+	var y := 0.031 ## Sit just above the steel panels / shine.
 	var half_d := GRILL_DEPTH * 0.5
-	var half_grill_w := GRILL_WIDTH * 0.5
-	## Outer frame (front / back / left / right).
-	_add_grill_piano_bar(root, mat, Vector3(0.0, y, -half_d), Vector3(GRILL_WIDTH + line_w, line_h, line_w))
-	_add_grill_piano_bar(root, mat, Vector3(0.0, y, half_d), Vector3(GRILL_WIDTH + line_w, line_h, line_w))
-	_add_grill_piano_bar(root, mat, Vector3(-half_grill_w, y, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
-	_add_grill_piano_bar(root, mat, Vector3(half_grill_w, y, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
-	## Vertical dividers between the 12 keys.
+	var line_w := 0.007
+	var line_h := 0.0035
+	var box_h := 0.0028
+	var cook := _grill_cook_x_bounds()
+	var cook_x0 := cook.x - GRILL_CENTER_X
+	var cook_x1 := cook.y - GRILL_CENTER_X
+	var cook_w := maxf(0.05, cook_x1 - cook_x0)
+	var cell_w := cook_w / float(GRILL_PIANO_SECTIONS)
+	## Warm fill for each piano key.
+	for i in GRILL_PIANO_SECTIONS:
+		var t := float(i) / float(maxi(GRILL_PIANO_SECTIONS - 1, 1))
+		var fill := Color(1.0, lerpf(0.55, 0.85, t), lerpf(0.15, 0.35, t), 0.14)
+		var lx := cook_x0 + (float(i) + 0.5) * cell_w
+		_add_grill_tap_debug_box(
+			root, fill, Vector3(lx, y, 0.0), Vector3(cell_w * 0.92, box_h, GRILL_DEPTH * 0.96)
+		)
+	var piano_line := _make_grill_tap_debug_mat(Color(1.0, 0.82, 0.28, 0.55))
+	## Cook-zone outer frame + vertical key dividers.
+	_add_grill_piano_bar(root, piano_line, Vector3((cook_x0 + cook_x1) * 0.5, y + 0.001, -half_d), Vector3(cook_w + line_w, line_h, line_w))
+	_add_grill_piano_bar(root, piano_line, Vector3((cook_x0 + cook_x1) * 0.5, y + 0.001, half_d), Vector3(cook_w + line_w, line_h, line_w))
+	_add_grill_piano_bar(root, piano_line, Vector3(cook_x0, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
+	_add_grill_piano_bar(root, piano_line, Vector3(cook_x1, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
 	for i in GRILL_PIANO_SECTIONS + 1:
-		var lx := -half_grill_w + float(i) * cell_w
-		_add_grill_piano_bar(root, mat, Vector3(lx, y, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
+		var lx := cook_x0 + float(i) * cell_w
+		_add_grill_piano_bar(root, piano_line, Vector3(lx, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
+	## HOLD — five drum pads stacked along depth (Z).
+	var hold := _grill_hold_band()
+	if hold.is_empty():
+		return
+	var hold_x0 := float(hold["x0"]) - GRILL_CENTER_X
+	var hold_x1 := float(hold["x1"]) - GRILL_CENTER_X
+	var hold_w := maxf(0.04, hold_x1 - hold_x0)
+	var hold_cx := (hold_x0 + hold_x1) * 0.5
+	var pad_d := GRILL_DEPTH / float(GRILL_HOLD_DRUM_PADS)
+	for j in GRILL_HOLD_DRUM_PADS:
+		var u := float(j) / float(maxi(GRILL_HOLD_DRUM_PADS - 1, 1))
+		var fill_d := Color(lerpf(0.25, 0.55, u), lerpf(0.7, 0.95, u), 1.0, 0.16)
+		var lz := -half_d + (float(j) + 0.5) * pad_d
+		_add_grill_tap_debug_box(
+			root, fill_d, Vector3(hold_cx, y, lz), Vector3(hold_w * 0.92, box_h, pad_d * 0.9)
+		)
+	var drum_line := _make_grill_tap_debug_mat(Color(0.45, 0.85, 1.0, 0.65))
+	_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, -half_d), Vector3(hold_w + line_w, line_h, line_w))
+	_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, half_d), Vector3(hold_w + line_w, line_h, line_w))
+	_add_grill_piano_bar(root, drum_line, Vector3(hold_x0, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
+	_add_grill_piano_bar(root, drum_line, Vector3(hold_x1, y + 0.001, 0.0), Vector3(line_w, line_h, GRILL_DEPTH))
+	for j in GRILL_HOLD_DRUM_PADS + 1:
+		var lz := -half_d + float(j) * pad_d
+		_add_grill_piano_bar(root, drum_line, Vector3(hold_cx, y + 0.001, lz), Vector3(hold_w + line_w, line_h, line_w))
+
+
+func _make_grill_tap_debug_mat(col: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.disable_receive_shadows = true
+	mat.render_priority = 12
+	return mat
+
+
+func _add_grill_tap_debug_box(parent: Node3D, col: Color, local_pos: Vector3, size: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = size
+	mi.mesh = box
+	mi.position = local_pos
+	mi.material_override = _make_grill_tap_debug_mat(col)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
 
 
 func _add_grill_piano_bar(parent: Node3D, mat: Material, local_pos: Vector3, size: Vector3) -> void:
@@ -13047,11 +13143,12 @@ func _oil_fire_bounds() -> Dictionary:
 			cz = clampf(cz, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
 			var half := Vector3(
 				clampf((max_x - min_x) * 0.5 + 0.04, 0.06, GRILL_WIDTH * 0.48),
-				0.015,
+				0.002,
 				clampf((max_z - min_z) * 0.5 + 0.04, 0.06, GRILL_DEPTH * 0.42)
 			)
+			## Emit from steel surface — triangles rise from the grill top.
 			return {
-				"center": Vector3(cx, GRILL_SURFACE_Y + 0.06, cz),
+				"center": Vector3(cx, GRILL_SURFACE_Y + 0.008, cz),
 				"half": half,
 			}
 	var zone := _fire_zone_dict()
@@ -13077,12 +13174,12 @@ func _oil_fire_bounds() -> Dictionary:
 	if n > 0:
 		cz2 = sum_z / float(n)
 	cz2 = clampf(cz2, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
-	## Sit clearly above the steel + shine band so flame bases aren't depth-buried.
-	var center := Vector3(cx2, GRILL_SURFACE_Y + 0.06, cz2)
+	## Thin sheet on the steel — flames spawn at the surface and rise.
+	var center := Vector3(cx2, GRILL_SURFACE_Y + 0.008, cz2)
 	## Tight box — one section only, not the whole flat-top.
 	var half2 := Vector3(
 		clampf(zw * 0.42, 0.14, zw * 0.48),
-		0.015,
+		0.002,
 		clampf(GRILL_DEPTH * 0.38, 0.16, GRILL_DEPTH * 0.42)
 	)
 	return {"center": center, "half": half2}
@@ -13103,34 +13200,19 @@ func _sync_fire_to_oil_area() -> void:
 		if pmat == null:
 			continue
 		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-		pmat.emission_box_extents = half
+		## Keep emission flat on the steel (half.y already thin).
+		pmat.emission_box_extents = Vector3(half.x, 0.002, half.z)
 	if fire_smoke != null and is_instance_valid(fire_smoke):
 		var sm := fire_smoke.process_material as ParticleProcessMaterial
 		if sm != null:
 			sm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-			sm.emission_box_extents = Vector3(half.x * 0.85, 0.02, half.z * 0.85)
-	## Tight, dim omnis — push falloff hard so only that section glows.
-	if fire_light != null and is_instance_valid(fire_light):
-		fire_light.position = Vector3(0.0, 0.1, 0.0)
-		fire_light.omni_range = clampf(0.38 + half.x * 0.28, 0.35, 0.7)
-		fire_light.omni_attenuation = 3.6
-	if fire_light_rim != null and is_instance_valid(fire_light_rim):
-		fire_light_rim.position = Vector3(0.0, 0.06, 0.0)
-		fire_light_rim.omni_range = clampf(0.28 + half.x * 0.2, 0.28, 0.55)
-		fire_light_rim.omni_attenuation = 4.0
+			sm.emission_box_extents = Vector3(half.x * 0.85, 0.004, half.z * 0.85)
 
 
 func _set_fire_fx_emitting(on: bool) -> void:
 	for sys in [fire_particles, fire_particles_red, fire_embers, fire_smoke]:
 		if sys != null and is_instance_valid(sys):
 			sys.emitting = on
-	if fire_light != null and is_instance_valid(fire_light):
-		fire_light.visible = on
-		## ~10% of the old core glow.
-		fire_light.light_energy = FIRE_LIGHT_CORE_SET if on else 0.0
-	if fire_light_rim != null and is_instance_valid(fire_light_rim):
-		fire_light_rim.visible = on
-		fire_light_rim.light_energy = FIRE_LIGHT_RIM_SET if on else 0.0
 
 
 func _ensure_grill_fire_fx() -> void:
@@ -13138,41 +13220,17 @@ func _ensure_grill_fire_fx() -> void:
 	if fire_root != null and is_instance_valid(fire_root):
 		fire_root.queue_free()
 	fire_root = null
-	fire_light = null
-	fire_light_rim = null
 	fire_particles = null
 	fire_particles_red = null
 	fire_embers = null
 	fire_smoke = null
 	fire_root = Node3D.new()
 	fire_root.name = "GreaseFire"
-	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.06, GRILL_SURFACE_Z)
+	## Sit on the steel — no real lights; triangles carry the blaze.
+	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.008, GRILL_SURFACE_Z)
 	grill_root.add_child(fire_root)
 
-	## Soft core light — toned way down so particles read, not a room flood.
-	fire_light = OmniLight3D.new()
-	fire_light.name = "FireCoreLight"
-	fire_light.light_color = Color(1.0, 0.35, 0.08)
-	fire_light.light_energy = 0.0
-	fire_light.omni_range = 1.6
-	fire_light.omni_attenuation = 2.2
-	fire_light.shadow_enabled = false
-	fire_light.position = Vector3(0, 0.18, 0)
-	fire_light.visible = false
-	fire_root.add_child(fire_light)
-
-	fire_light_rim = OmniLight3D.new()
-	fire_light_rim.name = "FireRimLight"
-	fire_light_rim.light_color = Color(0.95, 0.18, 0.04)
-	fire_light_rim.light_energy = 0.0
-	fire_light_rim.omni_range = 1.1
-	fire_light_rim.omni_attenuation = 2.6
-	fire_light_rim.shadow_enabled = false
-	fire_light_rim.position = Vector3(0, 0.1, 0)
-	fire_light_rim.visible = false
-	fire_root.add_child(fire_light_rim)
-
-	## Compact flame triangles — short enough to sit under food / spatula.
+	## Compact flame triangles — spawn at grill top and rise.
 	fire_particles = _make_fire_flame_particles("Flames", 34, 0.42, Vector2(0.026, 0.048), 0.22, 0.52, false)
 	fire_root.add_child(fire_particles)
 
@@ -13188,14 +13246,14 @@ func _ensure_grill_fire_fx() -> void:
 
 
 func _make_fire_triangle_mesh(w: float, h: float) -> ArrayMesh:
-	## Pointy flame shard — tip up, base down (not square quads).
+	## Pointy flame shard — base on the steel (y=0), tip rises up.
 	var mesh := ArrayMesh.new()
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
 	var verts := PackedVector3Array([
-		Vector3(0.0, h * 0.5, 0.0), ## tip
-		Vector3(-w * 0.5, -h * 0.5, 0.0),
-		Vector3(w * 0.5, -h * 0.5, 0.0),
+		Vector3(0.0, h, 0.0), ## tip
+		Vector3(-w * 0.5, 0.0, 0.0),
+		Vector3(w * 0.5, 0.0, 0.0),
 	])
 	var norms := PackedVector3Array([
 		Vector3(0, 0, 1),
@@ -13222,14 +13280,15 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	fx.explosiveness = 0.02
 	fx.randomness = 0.85
 	fx.emitting = false
-	fx.position = Vector3(0, 0.01, 0)
+	## Spawn on the steel; mesh base is at y=0 so flames read as rising off the top.
+	fx.position = Vector3(0, 0.0, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 3.0, 2.4))
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	## Above grill shine (2) / heat glow (6) / oil smoke (12).
 	fx.sorting_offset = 9.0
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.28, 0.015, 0.18)
+	pmat.emission_box_extents = Vector3(0.28, 0.002, 0.18)
 	pmat.direction = Vector3(0, 1, 0)
 	pmat.spread = 14.0 if not redder else 18.0
 	pmat.initial_velocity_min = vel_min
@@ -13269,7 +13328,8 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	draw.albedo_color = Color(1.0, 0.16, 0.04, 0.98) if redder else Color(1.0, 0.4, 0.08, 0.97)
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
-	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	## Keep Y up so the triangle base sits on the steel and tip rises.
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
 	draw.disable_receive_shadows = true
 	draw.render_priority = 14
 	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
@@ -13286,13 +13346,13 @@ func _make_fire_ember_particles() -> GPUParticles3D:
 	fx.explosiveness = 0.0
 	fx.randomness = 1.0
 	fx.emitting = false
-	fx.position = Vector3(0, 0.02, 0)
+	fx.position = Vector3(0, 0.0, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 3.5, 2.4))
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	fx.sorting_offset = 9.5
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.18, 0.01, 0.12)
+	pmat.emission_box_extents = Vector3(0.18, 0.002, 0.12)
 	pmat.direction = Vector3(0, 1, 0.1)
 	pmat.spread = 28.0
 	pmat.initial_velocity_min = 0.45
@@ -13321,7 +13381,7 @@ func _make_fire_ember_particles() -> GPUParticles3D:
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	draw.albedo_color = Color(1.0, 0.5, 0.1, 1.0)
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
-	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
 	draw.render_priority = 15
 	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	fx.draw_pass_1 = _make_fire_triangle_mesh(0.02, 0.034)
@@ -13337,13 +13397,13 @@ func _make_fire_smoke_particles() -> GPUParticles3D:
 	fx.explosiveness = 0.0
 	fx.randomness = 0.7
 	fx.emitting = false
-	fx.position = Vector3(0, 0.05, 0)
+	fx.position = Vector3(0, 0.02, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 4.0, 2.4))
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	fx.sorting_offset = 8.5
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.2, 0.015, 0.14)
+	pmat.emission_box_extents = Vector3(0.2, 0.004, 0.14)
 	pmat.direction = Vector3(0, 1, 0)
 	pmat.spread = 22.0
 	pmat.initial_velocity_min = 0.22
@@ -13400,20 +13460,6 @@ func _update_grill_fire(delta: float) -> void:
 	_sync_fire_to_oil_area()
 	_fire_flicker_t += delta
 	var t := Time.get_ticks_msec() * 0.001
-	## Uneven flicker so the kitchen reads hot and dangerous.
-	var flicker := 0.72 \
-		+ 0.22 * sin(t * 17.3) \
-		+ 0.12 * sin(t * 31.7 + 1.1) \
-		+ 0.08 * sin(t * 53.0 + 0.4) \
-		+ randf() * 0.06
-	if fire_light != null and is_instance_valid(fire_light):
-		fire_light.visible = true
-		fire_light.light_energy = FIRE_LIGHT_CORE * flicker
-		fire_light.light_color = Color(1.0, lerpf(0.28, 0.4, flicker), lerpf(0.04, 0.08, flicker))
-	if fire_light_rim != null and is_instance_valid(fire_light_rim):
-		fire_light_rim.visible = true
-		fire_light_rim.light_energy = FIRE_LIGHT_RIM * (0.75 + flicker * 0.45)
-		fire_light_rim.light_color = Color(0.95, 0.16, 0.03)
 	## Oil puddles glow when lit (trail) or inside the burn band (pour fire).
 	for item in oil_slicks:
 		var m = item.get("mesh")
@@ -13758,8 +13804,6 @@ func _clear_grill_fire() -> void:
 	if fire_root != null and is_instance_valid(fire_root):
 		fire_root.queue_free()
 	fire_root = null
-	fire_light = null
-	fire_light_rim = null
 	fire_particles = null
 	fire_particles_red = null
 	fire_embers = null
@@ -30112,6 +30156,9 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "strip_size", "Strip Size", 0.05, 2.0, 0.01)
 	_gfx_add_slider(list, "strip_width", "Strip Width", 0.2, 1.5, 0.01)
 
+	_gfx_add_section(list, "GRILL TAP PADS")
+	_gfx_add_check(list, "grill_piano_outline", "Show Tap Pads (12 piano cook + 5 HOLD drums)")
+
 	_gfx_add_section(list, "DRAG PATTY HERE")
 	_gfx_add_check(list, "bz_debug_outline", "Show Build Zone Outlines")
 	_gfx_add_slider(list, "bz_row_left", "PANEL Row Left", -40.0, 40.0, 1.0)
@@ -30484,13 +30531,15 @@ func _build_options_menu() -> void:
 	options_hidden_advanced_btn.visible = false
 
 	options_hidden_piano_check = CheckButton.new()
-	options_hidden_piano_check.text = "Show Grill Piano Sections"
+	options_hidden_piano_check.text = "Show Grill Tap Pads (12 piano + 5 HOLD drums)"
 	options_hidden_piano_check.button_pressed = grill_piano_debug_outline
 	options_hidden_piano_check.visible = false
 	UiFontsScript.apply_button(options_hidden_piano_check, false, 13)
 	options_hidden_piano_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
 	options_hidden_piano_check.toggled.connect(func(on: bool):
 		grill_piano_debug_outline = on
+		if gfx_checks.has("grill_piano_outline") and gfx_checks["grill_piano_outline"] != null:
+			gfx_checks["grill_piano_outline"].set_pressed_no_signal(on)
 		_refresh_grill_piano_sections()
 		var settings := _read_graphics_from_ui()
 		settings["grill_piano_outline"] = on
@@ -30761,8 +30810,9 @@ func _read_graphics_from_ui() -> Dictionary:
 		var c: CheckButton = gfx_checks[key]
 		if c != null and is_instance_valid(c):
 			out[key] = c.button_pressed
-	## Hidden-menu toggles live outside gfx_checks — preserve live values.
-	out["grill_piano_outline"] = grill_piano_debug_outline
+	## Hidden-menu mirror — keep in sync if GFX checkbox isn't built yet.
+	if not gfx_checks.has("grill_piano_outline"):
+		out["grill_piano_outline"] = grill_piano_debug_outline
 	return out
 
 
@@ -31085,6 +31135,8 @@ func _apply_build_zone_settings(s: Dictionary) -> void:
 	grill_piano_debug_outline = bool(s.get("grill_piano_outline", GFX_DEFAULTS["grill_piano_outline"]))
 	if options_hidden_piano_check != null and is_instance_valid(options_hidden_piano_check):
 		options_hidden_piano_check.set_pressed_no_signal(grill_piano_debug_outline)
+	if gfx_checks.has("grill_piano_outline") and gfx_checks["grill_piano_outline"] != null:
+		gfx_checks["grill_piano_outline"].set_pressed_no_signal(grill_piano_debug_outline)
 	_refresh_grill_piano_sections()
 
 
