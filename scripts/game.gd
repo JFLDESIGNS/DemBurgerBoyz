@@ -29952,6 +29952,9 @@ func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAF
 		return
 	if id != "bun_bottom" and id != "bun_top":
 		return
+	## Soft hollow body thud as the 3D pile peels a bun toward Build.
+	if game_audio != null and game_audio.has_method("play_bun_thud"):
+		game_audio.play_bun_thud()
 	var start := _bun_pile_home_world(id)
 	var end := _cutting_board_world_center() + Vector3(-0.03, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.02)
 	if station_index >= 0 and station_index < STATION_COUNT:
