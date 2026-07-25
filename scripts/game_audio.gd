@@ -282,25 +282,25 @@ func _process(delta: float) -> void:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
-	## Burger spatula-slide: wet oil squish bed + hiss pops.
+	## Burger spatula-slide: wet oil squish bed + hiss pops (half prior volume).
 	var oil_fade := 8.0 if _oil_slide_target > _oil_slide_gain else 4.0
 	_oil_slide_gain = move_toward(_oil_slide_gain, _oil_slide_target, delta * oil_fade)
 	if _oil_slide_player:
 		if _oil_slide_gain > 0.01:
-			_oil_slide_player.volume_db = linear_to_db(clampf(_oil_slide_gain * 0.62, 0.04, 1.0))
+			_oil_slide_player.volume_db = linear_to_db(clampf(_oil_slide_gain * 0.31, 0.02, 0.5))
 			_oil_slide_player.pitch_scale = 0.92 + _oil_slide_gain * 0.18
 			if not _oil_slide_player.playing:
 				_oil_slide_player.play()
 			_oil_slide_pop_cd -= delta
 			if _oil_slide_pop_cd <= 0.0:
 				## Squish spit + steam hiss accents while the burger scrapes through grease.
-				play_grease_pop(true)
+				play_grease_pop(false)
 				if randf() < 0.55:
 					_play_cached(
 						"slide_squish_hiss_%d" % (randi() % 4),
 						_make_smash_hiss,
 						0.88 + randf() * 0.2,
-						0.42 + _oil_slide_gain * 0.35
+						0.21 + _oil_slide_gain * 0.175
 					)
 				_oil_slide_pop_cd = lerpf(0.14, 0.055, clampf(_oil_slide_gain, 0.0, 1.0)) + randf() * 0.03
 		elif _oil_slide_player.playing:
@@ -1096,16 +1096,21 @@ func play_grease_pop(loud: bool = false) -> void:
 	_play_cached(key, _make_grease_pop, pitch, gain)
 
 
-func play_smash_sizzle() -> void:
+func play_smash_sizzle(volume_scale: float = 1.0) -> void:
 	## Press juice hiss + a few grease pops when you smash a patty.
-	_play_cached("smash_hiss_%d" % (randi() % 4), _make_smash_hiss, 0.92 + randf() * 0.16, 0.85)
-	play_grease_pop(true)
-	var tree := get_tree()
-	if tree == null:
-		return
-	tree.create_timer(0.04).timeout.connect(func(): play_grease_pop(true))
-	tree.create_timer(0.09).timeout.connect(func(): play_grease_pop(false))
-	tree.create_timer(0.15).timeout.connect(func(): play_grease_pop(true))
+	var vol := clampf(volume_scale, 0.0, 1.5)
+	_play_cached("smash_hiss_%d" % (randi() % 4), _make_smash_hiss, 0.92 + randf() * 0.16, 0.85 * vol)
+	if vol >= 0.75:
+		play_grease_pop(true)
+		var tree := get_tree()
+		if tree == null:
+			return
+		tree.create_timer(0.04).timeout.connect(func(): play_grease_pop(true))
+		tree.create_timer(0.09).timeout.connect(func(): play_grease_pop(false))
+		tree.create_timer(0.15).timeout.connect(func(): play_grease_pop(true))
+	else:
+		## Half-volume slide smoosh — one quiet pop, no cluster.
+		play_grease_pop(false)
 
 
 func play_cat_meow() -> void:
