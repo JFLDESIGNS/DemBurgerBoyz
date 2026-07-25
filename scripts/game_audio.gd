@@ -1269,6 +1269,16 @@ func play_roomba_done_beep() -> void:
 	_play_cached("roomba_done_beep", _make_roomba_done_beep, 1.0, 0.86)
 
 
+func play_roomba_body_tap() -> void:
+	## Soft plastic shell tap — not metal spatula ting.
+	_play_cached(
+		"roomba_body_tap_%d" % (randi() % 3),
+		_make_roomba_body_tap,
+		0.94 + randf() * 0.12,
+		0.78
+	)
+
+
 func set_roomba_drive(moving: bool, speed: float = 0.0) -> void:
 	if moving:
 		_roomba_drive_target = clampf(0.22 + speed * 1.35, 0.22, 0.56)
@@ -1632,6 +1642,22 @@ func _make_roomba_done_beep() -> AudioStreamWAV:
 		wave += sin(t2 * 1760.0 * TAU) * note_b * 0.62
 		wave += sin(t * 2640.0 * TAU) * note_a * 0.10
 		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 13500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_roomba_body_tap() -> AudioStreamWAV:
+	## Hollow plastic knock — dull mid thud, no bright steel partials.
+	var n := int(MIX_RATE * 0.11)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var f0 := 210.0 + randf() * 40.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := clampf(t / 0.004, 0.0, 1.0) * exp(-t * 28.0)
+		var body := sin(t * f0 * TAU) * 0.7 + sin(t * f0 * 1.7 * TAU) * 0.22 * exp(-t * 40.0)
+		var shell := sin(t * (480.0 + randf() * 60.0) * TAU) * exp(-t * 55.0) * 0.16
+		var grit := (randf() * 2.0 - 1.0) * exp(-t * 90.0) * 0.05
+		_write_s16(pcm, i, int(clampf((body + shell + grit) * env, -1.0, 1.0) * 14000.0))
 	return _wav_from_pcm(pcm, false)
 
 

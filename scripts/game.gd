@@ -328,7 +328,7 @@ const SPATULA_TAP_RING_ALPHA := 0.12 ## Very soft white stroke
 const SPATULA_TAP_RING_Y := 0.028 ## Sit above steel / shine (was lowered to 0.014)
 ## Melted-cheese stretch strings: patty ↔ spatula tip while sliding.
 var _cheese_strings: Array = [] ## {root, mis, mats, patty, offs, phase, breaking, break_t}
-var cheese_pull_patty: Area3D = null ## Active RMB cheese-pull target (not LMB scoop/slide)
+var cheese_pull_patty: Area3D = null ## Active cheese-pull target (RMB tap or LMB hold/slide)
 const CHEESE_STRING_MIN_MELT := 0.05 ## Latch pull-strings soon after melt starts
 const CHEESE_STRING_ATTACH_R := 0.48
 const CHEESE_STRING_BREAK_DIST := 0.52
@@ -642,6 +642,7 @@ const SPATULA_EDGE_PUSH_EXTRA_MUL := 1.2 ## ±90° gets a little more
 ## Click-drag to slide patties on the flat-top (legacy / non-spatula path).
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
+var drag_press_sec: float = 0.0 ## Wall time when LMB press began (tap vs hold)
 var drag_did_move: bool = false
 var drag_pop_accum: float = 0.0
 var drag_last_xz := Vector2.ZERO
@@ -660,6 +661,7 @@ var spatula_grill_hold_press_mouse := Vector2.ZERO
 var spatula_grill_hold_last_xz := Vector2.INF
 var spatula_grill_hold_on_meat: bool = false ## Press started on a tight meat hit
 const DRAG_MOVE_THRESH_PX := 8.0
+const SCOOP_TAP_MAX_SEC := 0.2 ## Quick tap scoops; hold ≥ this = slide/cheese, no scoop
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
 ## Screen-left flick (negative X) throws a finished patty to Build.
 const FLICK_TO_BUILD_VX := -520.0
@@ -902,7 +904,8 @@ var grill_roomba_heading: float = 0.0
 var grill_roomba_turn_goal: float = 0.0
 var grill_roomba_held: bool = false
 var grill_roomba_hold_wobble: float = 0.0
-var grill_roomba_sad_hold_t: float = 0.0 ## Pickup sad face timer → neutral
+var grill_roomba_sad_hold_t: float = 0.0 ## Pickup / poke sad face timer → neutral
+var grill_roomba_poke_pause_t: float = 0.0 ## Brief stun after RMB poke
 var grill_roomba_bump_t: float = 0.0
 var grill_roomba_back_t: float = 0.0
 var grill_roomba_reaim_t: float = 0.0
@@ -964,6 +967,8 @@ const ROOMBA_PATTY_PUSH := 0.028
 const ROOMBA_BUMP_PUSH_MAX := 0.011
 const ROOMBA_BUMP_MOVE_MUL := 0.22
 const ROOMBA_PICKUP_SAD_SEC := 0.7
+const ROOMBA_POKE_SAD_SEC := 1.0 ## Unsmiley after RMB tap
+const ROOMBA_POKE_PAUSE_SEC := 0.3 ## Freeze tasks briefly, then resume
 const ROOMBA_SPATULA_REACH := 0.175
 const ROOMBA_SPATULA_CONTACT_REACH := 0.145
 const ROOMBA_SPATULA_CARRY_REACH := 0.215
@@ -3018,6 +3023,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			## No spatula (other tools / off-grill) — legacy grill pick / drag.
 			_try_grill_raycast(event.position, false)
 		if event.button_index == MOUSE_BUTTON_RIGHT:
+			## Chef bot poke beats grill smash / cheese pull under the cursor.
+			if _try_poke_grill_roomba(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			## Finished melt → cheese pull on the spatula; otherwise smash / place.
 			var smash_target = _pick_patty_for_smash(event.position)
 			if smash_target != null:
@@ -5376,7 +5385,9 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			_spatula_cancel_tap_keep_ting()
 		tip_target = dragging_patty.global_position
 		tip_target.y = GRILL_SURFACE_Y + HAND_SPATULA_DRAG_CLEAR
-		## Cheese pull is RMB-only — never latch strings while LMB sliding / scooping.
+		## Melted cheese pull-strings while holding/sliding (scoop is quick-tap only).
+		if _patty_can_cheese_string(dragging_patty):
+			_try_attach_cheese_strings_to_patty(dragging_patty, tip_target)
 		pitch = HAND_SPATULA_EMPTY_ROT.x + HAND_SPATULA_SLAP_FWD_PITCH
 		roll = 0.0
 		pivot_local = HAND_SPATULA_TIP_OFFSET
@@ -7868,6 +7879,7 @@ func _begin_patty_drag_local(patty: Area3D) -> void:
 	if patty.has_method("_set_hold_meter_visible"):
 		patty._set_hold_meter_visible(false)
 	drag_start_mouse = get_viewport().get_mouse_position()
+	drag_press_sec = Time.get_ticks_msec() * 0.001
 	drag_last_mouse = drag_start_mouse
 	drag_vel_screen = Vector2.ZERO
 	drag_did_move = false
@@ -7992,6 +8004,8 @@ func _end_patty_drag() -> void:
 		return
 	var patty = dragging_patty
 	var slid := drag_did_move
+	var hold_sec := maxf(0.0, Time.get_ticks_msec() * 0.001 - drag_press_sec)
+	var is_quick_tap := (not slid) and hold_sec < SCOOP_TAP_MAX_SEC
 	var mouse := get_viewport().get_mouse_position()
 	var vel := drag_vel_screen
 	var travel := mouse.distance_to(drag_start_mouse)
@@ -8026,8 +8040,8 @@ func _end_patty_drag() -> void:
 	if _is_over_garbage(mouse):
 		_trash_single_grill_patty(patty)
 		return
-	## Tap without sliding → flip / scoop. Squish only if the press linetraced the meat.
-	if not slid:
+	## Quick tap only → flip / scoop. Hold ≥ 0.2s (or slide) never auto-scoops.
+	if is_quick_tap:
 		if _raycast_patty_at_screen(drag_start_mouse) == patty:
 			_smash_grill_patty(patty)
 		_on_patty_clicked(patty) ## Flip is intentionally more forgiving than smash.
@@ -8040,12 +8054,8 @@ func _end_patty_drag() -> void:
 	if _is_build_drop_at(mouse):
 		_try_drag_patty_to_station(patty, STATION_CRAFT)
 		return
-	## Slide-hold release → scoop when ready (cheese pull is RMB, not scoop release).
-	if patty.flipped_once and patty.can_scoop():
-		_clear_cheese_strings_for_patty(patty)
-		if cheese_pull_patty == patty:
-			cheese_pull_patty = null
-		_on_patty_clicked(patty)
+	## Hold / slide release → cheese pull when ready (burger stays on the steel).
+	if _try_begin_cheese_pull_on_patty(patty):
 		return
 	if _is_in_warmer_zone(patty.position):
 		var left := maxi(0, int(ceil(WARM_HOLD_MAX - float(patty.warm_hold_time))))
@@ -9333,6 +9343,7 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_held = false
 	grill_roomba_sad_hold_t = 0.0
+	grill_roomba_poke_pause_t = 0.0
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
 	grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * ROOMBA_SPEED
@@ -9394,6 +9405,7 @@ func _update_grill_roomba(delta: float) -> void:
 	if grill_roomba_held:
 		## Sad briefly on pickup, then neutral while still carried.
 		grill_roomba_sad_hold_t = maxf(0.0, grill_roomba_sad_hold_t - delta)
+		grill_roomba_poke_pause_t = 0.0
 		_set_roomba_face("sad" if grill_roomba_sad_hold_t > 0.0 else "neutral")
 		if game_audio and game_audio.has_method("set_roomba_drive"):
 			game_audio.set_roomba_drive(false)
@@ -9406,6 +9418,19 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	if grill_roomba_ledge_phase == "stuck":
 		_update_roomba_ledge_stuck(delta)
+		return
+	## RMB poke — unsmiley + brief freeze, then resume the current task.
+	grill_roomba_sad_hold_t = maxf(0.0, grill_roomba_sad_hold_t - delta)
+	if grill_roomba_poke_pause_t > 0.0:
+		grill_roomba_poke_pause_t = maxf(0.0, grill_roomba_poke_pause_t - delta)
+		grill_roomba_vel = Vector2.ZERO
+		_set_roomba_face("sad" if grill_roomba_sad_hold_t > 0.0 else "neutral")
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(false)
+		_update_roomba_spatula_hinge(false, delta)
+		_update_grill_roomba_bristles(delta, 0.0)
+		if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
+			grill_roomba_root.rotation_degrees.y = _roomba_visual_yaw_degrees()
 		return
 	grill_roomba_foam_cd = maxf(0.0, grill_roomba_foam_cd - delta)
 	_update_grill_roomba_bristles(delta, grill_roomba_vel.length())
@@ -9468,7 +9493,10 @@ func _update_grill_roomba(delta: float) -> void:
 		square_up_locked = bumper_aligning or _roomba_should_square_up_to_patty(grill_roomba_task_patty, old_xz, target)
 	elif not has_dirt:
 		target = _roomba_idle_corner_target()
-	_set_roomba_face("happy" if has_dirt or has_patty_task or grill_on_fire else "neutral")
+	if grill_roomba_sad_hold_t > 0.0:
+		_set_roomba_face("sad")
+	else:
+		_set_roomba_face("happy" if has_dirt or has_patty_task or grill_on_fire else "neutral")
 	var tasking_now:= has_dirt or has_patty_task or grill_on_fire
 	if grill_roomba_was_tasking and not tasking_now:
 		if game_audio and game_audio.has_method("play_roomba_done_beep"):
@@ -9486,7 +9514,8 @@ func _update_grill_roomba(delta: float) -> void:
 		grill_roomba_vel = Vector2.ZERO
 		if game_audio and game_audio.has_method("set_roomba_drive"):
 			game_audio.set_roomba_drive(false)
-		_set_roomba_face("neutral")
+		if grill_roomba_sad_hold_t <= 0.0:
+			_set_roomba_face("neutral")
 		grill_roomba_turn_goal = deg_to_rad(-35.0)
 		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
 		grill_roomba_root.rotation_degrees.y = _roomba_visual_yaw_degrees()
@@ -9662,6 +9691,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	grill_roomba_held = true
 	grill_roomba_ledge_phase = "" ## Picking it up rescues the ledge gag.
 	grill_roomba_ledge_wobble = 0.0
+	grill_roomba_poke_pause_t = 0.0
 	grill_roomba_sad_hold_t = ROOMBA_PICKUP_SAD_SEC
 	_set_roomba_face("sad")
 	grill_roomba_hold_wobble = randf() * TAU
@@ -9670,6 +9700,26 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	grill_roomba_reaim_t = 0.0
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(true)
+	return true
+
+
+func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
+	## Right-click tap — plastic body hit, unsmiley, brief pause, then resume task.
+	if grill_roomba_held or grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return false
+	if not _owns_grill_roomba() or camera == null:
+		return false
+	if not _ray_hits_tool(screen_pos, ROOMBA_COLLISION_LAYER, grill_roomba_area):
+		return false
+	grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
+	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_back_t = 0.0
+	_set_roomba_face("sad")
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(false)
+	if game_audio and game_audio.has_method("play_roomba_body_tap"):
+		game_audio.play_roomba_body_tap()
 	return true
 
 
@@ -17611,7 +17661,7 @@ func _patty_can_cheese_string(patty: Area3D) -> bool:
 
 
 func _patty_ready_for_cheese_pull(patty: Area3D) -> bool:
-	## Finished (scoop-ready) melt only — RMB spatula pull.
+	## Finished (scoop-ready) melt — RMB tap or LMB hold/slide release.
 	if not _patty_can_cheese_string(patty):
 		return false
 	if not bool(patty.get("flipped_once")):
@@ -17635,7 +17685,7 @@ func _try_begin_cheese_pull_on_patty(patty: Area3D) -> bool:
 	cheese_pull_patty = patty
 	if not _cheese_string_exists_for(patty):
 		_spawn_cheese_strings(patty, tip)
-	## Tip lift while cheese_pull_patty is set — no slap combo / scoop path.
+	## Tip lift while cheese_pull_patty is set — scoop stays quick-tap only.
 	if game_audio and game_audio.has_method("play_grease_pop"):
 		game_audio.play_grease_pop(false)
 	return true
@@ -17649,7 +17699,7 @@ func _cheese_string_exists_for(patty: Area3D) -> bool:
 
 
 func _try_attach_cheese_strings_near_tip(tip_pos: Vector3) -> void:
-	## Scrape latch only — never while LMB-dragging a scoop/slide.
+	## Scrape latch only — burger-slide attach happens on the drag tip path.
 	if dragging_patty != null:
 		return
 	for i in GRILL_SLOTS:
@@ -17665,17 +17715,13 @@ func _try_attach_cheese_strings_near_tip(tip_pos: Vector3) -> void:
 func _try_attach_cheese_strings_to_patty(patty: Area3D, tip_pos: Vector3) -> void:
 	if not _patty_can_cheese_string(patty):
 		return
-	## Never start a pull from an LMB slide / scoop drag.
-	if patty == dragging_patty:
-		return
-	## Finished scoop-ready melts: cheese pull is RMB tap only.
-	if bool(patty.get("flipped_once")) and patty.has_method("can_scoop") and patty.can_scoop():
-		return
 	if _cheese_string_exists_for(patty):
 		return
-	var d := Vector2(tip_pos.x - patty.position.x, tip_pos.z - patty.position.z).length()
-	if d > CHEESE_STRING_ATTACH_R * 1.25:
-		return
+	## Sliding the burger itself — always in range; tip rides with the patty.
+	if patty != dragging_patty:
+		var d := Vector2(tip_pos.x - patty.position.x, tip_pos.z - patty.position.z).length()
+		if d > CHEESE_STRING_ATTACH_R * 1.25:
+			return
 	_spawn_cheese_strings(patty, tip_pos)
 
 
@@ -17824,15 +17870,15 @@ func _update_cheese_strings(delta: float) -> void:
 			else patty.global_position + Vector3(0, 0.028, 0)
 		if tip == Vector3.ZERO:
 			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
-		## RMB cheese-pull: tip rides a little above the melt so strands read.
-		var pull_active: bool = cheese_pull_patty == patty
+		## Active pull: RMB latch, or LMB hold/slide on the melt.
+		var pull_active: bool = cheese_pull_patty == patty or patty == dragging_patty
 		if pull_active:
 			tip.y = maxf(tip.y, cheese_base.y + CHEESE_STRING_PULL_LIFT)
 		item["tip_cache"] = tip
 		var dist := cheese_base.distance_to(tip)
 		var lift := tip.y - cheese_base.y
 		var mis: Array = item.get("mis", [])
-		## Hide only when tip is truly flat on the melt (still show during RMB pull).
+		## Hide only when tip is truly flat on the melt (still show during a pull).
 		var flat_contact: bool = lift < CHEESE_STRING_MIN_LIFT and not pull_active
 		if flat_contact and not bool(item.get("breaking", false)):
 			for mi0 in mis:
