@@ -700,6 +700,7 @@ var spatula_grill_hold: bool = false
 var spatula_grill_hold_press_mouse := Vector2.ZERO
 var spatula_grill_hold_last_xz := Vector2.INF
 var spatula_grill_hold_on_meat: bool = false ## Press started on a tight meat hit
+var _spatula_piano_slide_last_strip: int = -1 ## Cook-zone glissando strip tracker
 const DRAG_MOVE_THRESH_PX := 8.0
 const SCOOP_TAP_MAX_SEC := 0.2 ## Quick tap scoops; hold ≥ this = slide/cheese, no scoop
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
@@ -3089,6 +3090,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					spatula_grill_hold = false
 					spatula_grill_hold_last_xz = Vector2.INF
 					spatula_grill_hold_on_meat = false
+					_spatula_piano_slide_last_strip = -1
 					_spatula_pull_flip_done = false
 					_stop_spatula_grill_scrape_audio()
 					_begin_patty_drag(under_burger)
@@ -3098,6 +3100,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					spatula_grill_hold_press_mouse = event.position
 					spatula_grill_hold_last_xz = Vector2.INF
 					spatula_grill_hold_on_meat = false
+					_spatula_piano_slide_last_strip = -1
 					_spatula_pull_flip_done = false
 					_begin_hand_spatula_combo(event.position)
 				get_viewport().set_input_as_handled()
@@ -3251,6 +3254,7 @@ func _input(event: InputEvent) -> void:
 			spatula_grill_hold = false
 			spatula_grill_hold_last_xz = Vector2.INF
 			spatula_grill_hold_on_meat = false
+			_spatula_piano_slide_last_strip = -1
 			_spatula_pull_flip_done = false
 			_spatula_mute_ting = false
 			_stop_spatula_grill_scrape_audio()
@@ -5048,6 +5052,54 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 		game_audio.play_spatula_ting(midi, volume_scale)
 
 
+func _grill_piano_world_at_strip(from_left: int, tip_z: float) -> Vector3:
+	## Center of a cook piano strip (screen-left = low notes = high world X).
+	var b := _grill_cook_x_bounds()
+	var i := clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
+	var sec := (GRILL_PIANO_SECTIONS - 1) - i
+	var u := (float(sec) + 0.5) / float(GRILL_PIANO_SECTIONS)
+	return Vector3(lerpf(b.x, b.y, u), GRILL_SURFACE_Y, tip_z)
+
+
+func _play_grill_piano_slide_ting(from_left: int, tip_z: float, volume_scale: float) -> void:
+	## Soft ascending gliss note while holding + sliding screen-right.
+	if game_audio == null or not game_audio.has_method("play_spatula_ting"):
+		return
+	var at := _grill_piano_world_at_strip(from_left, tip_z)
+	_flash_grill_tap_pad(at)
+	var midi := _grill_piano_sounding_at_index(from_left) + GRILL_PIANO_SAMPLE_COMP \
+		+ _spatula_roll_midi_offset()
+	game_audio.play_spatula_ting(midi, volume_scale)
+
+
+func _update_spatula_piano_slide(tip_pos: Vector3) -> void:
+	## Hold LMB + slide screen-right across cook strips → C-major glissando at ½ tap volume.
+	if tip_pos == Vector3.ZERO:
+		_spatula_piano_slide_last_strip = -1
+		if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
+			game_audio.set_scrape_tings_muted(false)
+		return
+	var zone := _grill_zone_at(tip_pos)
+	var on_cook := not zone.is_empty() and str(zone.get("id", "")) != "hold"
+	if game_audio != null and game_audio.has_method("set_scrape_tings_muted"):
+		## Keep random scrape tings off the piano so the gliss reads clean.
+		game_audio.set_scrape_tings_muted(on_cook)
+	if not on_cook:
+		_spatula_piano_slide_last_strip = -1
+		return
+	var cur := _grill_piano_strip_index_from_left(tip_pos)
+	if _spatula_piano_slide_last_strip < 0:
+		_spatula_piano_slide_last_strip = cur
+		return
+	if cur > _spatula_piano_slide_last_strip:
+		## Half of a normal flat/side tap ting.
+		var tap_vol := 0.92 if absf(_spatula_user_roll) < 22.5 else 1.68
+		var slide_vol := tap_vol * 0.5
+		for i in range(_spatula_piano_slide_last_strip + 1, cur + 1):
+			_play_grill_piano_slide_ting(i, tip_pos.z, slide_vol)
+	_spatula_piano_slide_last_strip = cur
+
+
 func _spawn_spatula_tap_ring(at: Vector3) -> void:
 	if at == Vector3.ZERO:
 		return
@@ -5459,6 +5511,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		spatula_grill_hold = false
 		spatula_grill_hold_last_xz = Vector2.INF
 		spatula_grill_hold_on_meat = false
+		_spatula_piano_slide_last_strip = -1
 		_spatula_pull_flip_done = false
 		_spatula_mute_ting = false
 		_stop_spatula_grill_scrape_audio()
@@ -5672,7 +5725,7 @@ func _refresh_grill_piano_sections() -> void:
 
 
 func _build_grill_piano_sections(parent: Node3D) -> void:
-	## Debug: 12 cook-zone piano cells + 5 HOLD drum pads (depth-stacked) + note labels.
+	## Debug: cook-zone piano cells + 5 HOLD drum pads (depth-stacked) + note labels.
 	if parent == null:
 		return
 	var root := Node3D.new()
@@ -9193,10 +9246,13 @@ func _find_residue_slot_for_spot(at: Vector3) -> int:
 
 func _stop_spatula_grill_scrape_audio() -> void:
 	## Always kill scrape bed + slide loop together — release used to leave slide stuck on.
+	_spatula_piano_slide_last_strip = -1
 	if game_audio == null:
 		return
 	if game_audio.has_method("set_slide_moving"):
 		game_audio.set_slide_moving(false)
+	if game_audio.has_method("set_scrape_tings_muted"):
+		game_audio.set_scrape_tings_muted(false)
 	if game_audio.has_method("set_grill_scrape"):
 		game_audio.set_grill_scrape(false)
 	elif game_audio.has_method("set_scrape_debris_rattle"):
@@ -9214,10 +9270,14 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	var cur := Vector2(tip_pos.x, tip_pos.z)
 	if prev.x == INF:
 		spatula_grill_hold_last_xz = cur
+		## Seed glissando strip so the press strip doesn't re-fire as a slide note.
+		_update_spatula_piano_slide(tip_pos)
 		return
 	var move_xz := cur - prev
 	var moved := move_xz.length()
 	spatula_grill_hold_last_xz = cur
+	## Hold + slide screen-right across cook pads → ascending piano gliss (½ vol).
+	_update_spatula_piano_slide(tip_pos)
 	var scraping := false
 	var scraping_debris := false
 	var best_i := -1

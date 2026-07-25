@@ -60,6 +60,7 @@ const SHAKER_RATTLE_DB := -17.5
 const SHAKER_SCRAPE_DB := -11.5 ## base grill scrape (same as season bed)
 const SHAKER_SCRAPE_DEBRIS_DB := -5.5 ## SHAKER_SCRAPE_DB + ~6 dB (2× louder)
 var _scrape_ting_cool: float = 0.0
+var _scrape_tings_muted: bool = false ## Cook-zone piano gliss takes over spatula tings
 const SCRAPE_TING_INTERVAL := 0.4
 ## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
 var _fries_shake_player: AudioStreamPlayer
@@ -695,6 +696,7 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 		_scrape_ting_cool = 0.0
 		_scrape_debris_boost = false
 		_scrape_dir_pitch = 1.0
+		_scrape_tings_muted = false
 		## Snap the metal slide bed off with scrape — don't leave a stuck loop after LMB up.
 		_slide_target = 0.0
 		_slide_gain = 0.0
@@ -703,6 +705,11 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
 	_sync_shaker_rattle()
+
+
+func set_scrape_tings_muted(muted: bool) -> void:
+	## When true, random scrape tings stay off (piano gliss owns the steel).
+	_scrape_tings_muted = muted
 
 
 func set_scrape_direction(dir_xz: Vector2) -> void:
@@ -741,7 +748,7 @@ func _sync_shaker_rattle() -> void:
 
 func _tick_scrape_tings(delta: float) -> void:
 	## Soft spatula tings while scraping (~0.4s, slight irregularity).
-	if not _scrape_move_on:
+	if not _scrape_move_on or _scrape_tings_muted:
 		return
 	_scrape_ting_cool = maxf(0.0, _scrape_ting_cool - delta)
 	if _scrape_ting_cool > 0.0:
