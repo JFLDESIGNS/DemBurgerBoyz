@@ -284,7 +284,7 @@ const HAND_SPATULA_DRAG_CLEAR := HAND_SPATULA_SLAP_CLEAR + 0.0254 + 0.0127
 const HAND_SPATULA_HOLD_SLIDE_CLEAR := HAND_SPATULA_SLAP_CLEAR
 const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/falling
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
-const HAND_SPATULA_PULL_FLIP_DY := 96.0 ## Min screen-px down (was 48 — too easy while scraping)
+const HAND_SPATULA_PULL_FLIP_DY := 62.0 ## Min screen-px down (was 96 — shorter pull to flip)
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
 ## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
 ## One notch jumps a full step; wheel factor can stack notches (feels snappier).
