@@ -473,10 +473,20 @@ var oil_aim_marker: MeshInstance3D = null
 var oil_aim_mat: StandardMaterial3D = null
 var oil_stream_phase: float = 0.0
 var oil_liquid_pivot: Node3D = null
+var oil_liquid_mesh: MeshInstance3D = null
 var oil_surface_pivot: Node3D = null
+var oil_surface_mesh: MeshInstance3D = null
 var oil_liquid_slosh: Vector2 = Vector2.ZERO
 var oil_prev_pos: Vector3 = Vector3.ZERO
 var oil_hand_vel: Vector2 = Vector2.ZERO ## xz hand speed for liquid rock
+## Bottle body ends ~0.095; tip starts above — liquid must stay under this.
+const OIL_LIQUID_MAX_TOP_Y := 0.090
+const OIL_LIQUID_UPRIGHT_H := 0.092
+const OIL_LIQUID_POUR_H := 0.048
+const OIL_LIQUID_UPRIGHT_BOT_R := 0.0315
+const OIL_LIQUID_UPRIGHT_TOP_R := 0.0265
+const OIL_LIQUID_POUR_BOT_R := 0.020
+const OIL_LIQUID_POUR_TOP_R := 0.011
 var oil_home: Vector3 = Vector3(1.166, 2.12, 1.12)
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
@@ -2437,6 +2447,9 @@ func _process(delta: float) -> void:
 		_update_held_shaker(delta)
 	if oil_held:
 		_update_held_oil(delta)
+	elif oil_root != null:
+		## Keep wall-hung bottle liquid settled / full-looking.
+		_update_oil_liquid(delta)
 	if burgerpack_held != null:
 		_update_held_burgerpack_inspect(delta)
 	if cup_held:
@@ -15872,51 +15885,52 @@ func _build_oil_bottle() -> void:
 	bottle.material_override = bmat
 	oil_root.add_child(bottle)
 
-	## Dynamic grease body (pop-style rock + free surface).
+	## Dynamic grease body — fills most of the shell; pools under tip when poured.
 	oil_liquid_pivot = Node3D.new()
 	oil_liquid_pivot.name = "OilLiquidPivot"
-	oil_liquid_pivot.position = Vector3(0.0, 0.0, 0.0)
+	oil_liquid_pivot.position = Vector3.ZERO
 	oil_root.add_child(oil_liquid_pivot)
 
-	var fill := MeshInstance3D.new()
-	fill.name = "OilLiquid"
+	oil_liquid_mesh = MeshInstance3D.new()
+	oil_liquid_mesh.name = "OilLiquid"
 	var fcyl := CylinderMesh.new()
-	fcyl.top_radius = 0.022
-	fcyl.bottom_radius = 0.026
-	fcyl.height = 0.078
+	fcyl.top_radius = OIL_LIQUID_UPRIGHT_TOP_R
+	fcyl.bottom_radius = OIL_LIQUID_UPRIGHT_BOT_R
+	fcyl.height = OIL_LIQUID_UPRIGHT_H
 	fcyl.cap_top = true
 	fcyl.cap_bottom = true
-	fill.mesh = fcyl
-	fill.position = Vector3(0.0, 0.039, 0.0)
+	oil_liquid_mesh.mesh = fcyl
+	## Bottle mesh centers ~y 0.04 (h 0.12); fill that volume with a thin shell gap.
+	oil_liquid_mesh.position = Vector3(0.0, -0.015 + OIL_LIQUID_UPRIGHT_H * 0.5, 0.0)
 	var fmat := StandardMaterial3D.new()
-	fmat.albedo_color = Color(0.78, 0.66, 0.28, 0.72)
+	fmat.albedo_color = Color(0.78, 0.66, 0.28, 0.78)
 	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	fmat.roughness = 0.28
 	fmat.metallic = 0.08
 	fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	fill.material_override = fmat
-	oil_liquid_pivot.add_child(fill)
+	oil_liquid_mesh.material_override = fmat
+	oil_liquid_pivot.add_child(oil_liquid_mesh)
 
 	oil_surface_pivot = Node3D.new()
 	oil_surface_pivot.name = "OilSurfacePivot"
-	oil_surface_pivot.position = Vector3(0.0, 0.078, 0.0)
+	oil_surface_pivot.position = Vector3(0.0, -0.015 + OIL_LIQUID_UPRIGHT_H, 0.0)
 	oil_liquid_pivot.add_child(oil_surface_pivot)
 
-	var surf := MeshInstance3D.new()
-	surf.name = "OilSurface"
+	oil_surface_mesh = MeshInstance3D.new()
+	oil_surface_mesh.name = "OilSurface"
 	var splane := PlaneMesh.new()
-	splane.size = Vector2(0.046, 0.046)
+	splane.size = Vector2(OIL_LIQUID_UPRIGHT_TOP_R * 2.05, OIL_LIQUID_UPRIGHT_TOP_R * 2.05)
 	splane.subdivide_width = 8
 	splane.subdivide_depth = 8
-	surf.mesh = splane
+	oil_surface_mesh.mesh = splane
 	var smat := StandardMaterial3D.new()
 	smat.albedo_color = Color(0.9, 0.78, 0.38, 0.55)
 	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	smat.roughness = 0.12
 	smat.metallic = 0.12
 	smat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	surf.material_override = smat
-	oil_surface_pivot.add_child(surf)
+	oil_surface_mesh.material_override = smat
+	oil_surface_pivot.add_child(oil_surface_mesh)
 
 	var tip := MeshInstance3D.new()
 	var tmesh := CylinderMesh.new()
@@ -15975,41 +15989,70 @@ func _build_oil_bottle() -> void:
 
 
 func _update_oil_liquid(delta: float) -> void:
-	## Pop-style grease: rocks with hand motion, free surface seeks level, shifts to tip when pouring.
+	## Upright: fill almost the whole shell. Pouring: pool under tip (never through nozzle).
 	if oil_root == null or oil_liquid_pivot == null or not is_instance_valid(oil_liquid_pivot):
 		return
 	var pos := oil_root.global_position
 	var inv_dt := 1.0 / maxf(delta, 0.0001)
 	var raw := Vector2((pos.x - oil_prev_pos.x) * inv_dt, (pos.z - oil_prev_pos.z) * inv_dt)
 	oil_prev_pos = pos
-	oil_hand_vel = oil_hand_vel.lerp(raw, clampf(delta * 10.0, 0.0, 1.0))
-	var target := Vector2(
-		clampf(oil_hand_vel.x * 2.8, -38.0, 38.0),
-		clampf(oil_hand_vel.y * 2.8, -38.0, 38.0)
-	)
-	oil_liquid_slosh = oil_liquid_slosh.lerp(target, clampf(delta * 11.0, 0.0, 1.0))
-	oil_liquid_slosh = oil_liquid_slosh.lerp(Vector2.ZERO, clampf(delta * 3.2, 0.0, 1.0))
-	var pour_t := clampf(oil_pour_tilt, 0.0, 1.0)
-	## Mass slides toward the nozzle when tipped to pour.
-	oil_liquid_pivot.position = Vector3(0.0, lerpf(0.0, 0.055, pour_t), 0.0)
+	if oil_held:
+		oil_hand_vel = oil_hand_vel.lerp(raw, clampf(delta * 10.0, 0.0, 1.0))
+		var target := Vector2(
+			clampf(oil_hand_vel.x * 2.8, -38.0, 38.0),
+			clampf(oil_hand_vel.y * 2.8, -38.0, 38.0)
+		)
+		oil_liquid_slosh = oil_liquid_slosh.lerp(target, clampf(delta * 11.0, 0.0, 1.0))
+		oil_liquid_slosh = oil_liquid_slosh.lerp(Vector2.ZERO, clampf(delta * 3.2, 0.0, 1.0))
+	else:
+		oil_hand_vel = oil_hand_vel.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
+		oil_liquid_slosh = oil_liquid_slosh.lerp(Vector2.ZERO, clampf(delta * 6.0, 0.0, 1.0))
+	var pour_t := clampf(oil_pour_tilt, 0.0, 1.0) if oil_held else 0.0
+	var h := lerpf(OIL_LIQUID_UPRIGHT_H, OIL_LIQUID_POUR_H, pour_t)
+	var bot_r := lerpf(OIL_LIQUID_UPRIGHT_BOT_R, OIL_LIQUID_POUR_BOT_R, pour_t)
+	var top_r := lerpf(OIL_LIQUID_UPRIGHT_TOP_R, OIL_LIQUID_POUR_TOP_R, pour_t)
+	## Upright rests on bottle floor; pour packs against tip from below (no clip).
+	var bottom_y := lerpf(-0.015, OIL_LIQUID_MAX_TOP_Y - h, pour_t)
+	var center_y := bottom_y + h * 0.5
+	var slosh_mul := lerpf(1.0, 0.22, pour_t)
+	oil_liquid_pivot.position = Vector3.ZERO
 	oil_liquid_pivot.rotation_degrees = Vector3(
-		clampf(oil_liquid_slosh.y * 0.32, -14.0, 14.0),
+		clampf(oil_liquid_slosh.y * 0.26 * slosh_mul, -10.0, 10.0),
 		0.0,
-		clampf(-oil_liquid_slosh.x * 0.32, -14.0, 14.0)
+		clampf(-oil_liquid_slosh.x * 0.26 * slosh_mul, -10.0, 10.0)
 	)
+	if oil_liquid_mesh != null and is_instance_valid(oil_liquid_mesh):
+		var cyl := oil_liquid_mesh.mesh as CylinderMesh
+		if cyl == null:
+			cyl = CylinderMesh.new()
+			cyl.cap_top = true
+			cyl.cap_bottom = true
+			oil_liquid_mesh.mesh = cyl
+		cyl.height = h
+		cyl.bottom_radius = bot_r
+		cyl.top_radius = top_r
+		oil_liquid_mesh.position = Vector3(0.0, center_y, 0.0)
 	if oil_surface_pivot != null and is_instance_valid(oil_surface_pivot):
-		var pitch := oil_root.rotation_degrees.x
-		## Counter bottle pitch so the meniscus stays roughly world-flat, plus motion waves.
-		oil_surface_pivot.rotation_degrees = Vector3(
-			clampf(-pitch * 0.92 + oil_liquid_slosh.y * 0.28, -55.0, 55.0),
-			0.0,
-			clampf(oil_liquid_slosh.x * 0.28, -22.0, 22.0)
-		)
+		## Free surface: top of fill upright; body-side of the tip pool while pouring.
+		var surf_y := lerpf(bottom_y + h, bottom_y + 0.001, pour_t)
 		oil_surface_pivot.position = Vector3(
-			clampf(oil_liquid_slosh.x * 0.00045, -0.01, 0.01),
-			lerpf(0.078, 0.04, pour_t),
-			clampf(-oil_liquid_slosh.y * 0.00045, -0.01, 0.01)
+			clampf(oil_liquid_slosh.x * 0.00035 * slosh_mul, -0.008, 0.008),
+			surf_y,
+			clampf(-oil_liquid_slosh.y * 0.00035 * slosh_mul, -0.008, 0.008)
 		)
+		var pitch := oil_root.rotation_degrees.x
+		## Don't counter a full 180° pour — that shoved the disc through the tip.
+		var level := lerpf(-pitch * 0.75, 0.0, pour_t)
+		oil_surface_pivot.rotation_degrees = Vector3(
+			clampf(level + oil_liquid_slosh.y * 0.18 * slosh_mul, -22.0, 22.0),
+			0.0,
+			clampf(oil_liquid_slosh.x * 0.18 * slosh_mul, -14.0, 14.0)
+		)
+		if oil_surface_mesh != null and is_instance_valid(oil_surface_mesh):
+			var plane := oil_surface_mesh.mesh as PlaneMesh
+			if plane != null:
+				var sr := lerpf(top_r, bot_r, pour_t) * 2.05
+				plane.size = Vector2(sr, sr)
 
 
 func _build_oil_stream_fx() -> void:
@@ -16262,12 +16305,7 @@ func _release_oil_bottle() -> void:
 		oil_particles.emitting = false
 	_hide_oil_stream()
 	_set_oil_aim_marker(false, Vector3.ZERO)
-	if oil_liquid_pivot != null and is_instance_valid(oil_liquid_pivot):
-		oil_liquid_pivot.position = Vector3.ZERO
-		oil_liquid_pivot.rotation_degrees = Vector3.ZERO
-	if oil_surface_pivot != null and is_instance_valid(oil_surface_pivot):
-		oil_surface_pivot.position = Vector3(0.0, 0.078, 0.0)
-		oil_surface_pivot.rotation_degrees = Vector3.ZERO
+	_update_oil_liquid(0.016) ## settle to upright fill (oil_held already false)
 	if oil_area:
 		oil_area.input_ray_pickable = false
 	_tween_tool_to_wall(
