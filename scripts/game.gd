@@ -1036,6 +1036,8 @@ const SOCIAL_REVIEWER_NAMES: Array[String] = [
 var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
 var game_audio: Node = null
+var _audio_debug_label: Label = null
+var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
 var bts_day_music_player: AudioStreamPlayer = null
 var burgerpals_startup_player: AudioStreamPlayer = null
@@ -2883,6 +2885,13 @@ func _next_spawn_delay() -> float:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	## Audio debug works on title / pause / in-shift.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_9 or event.physical_keycode == KEY_9 \
+				or event.keycode == KEY_KP_9 or event.physical_keycode == KEY_KP_9:
+			_debug_dump_playing_sounds()
+			get_viewport().set_input_as_handled()
+			return
 	## Radio works even on the start screen.
 	if event is InputEventKey and event.pressed and not event.echo and radio:
 		if event.keycode == KEY_BRACKETLEFT:
@@ -40337,6 +40346,69 @@ func _update_tutorial_hint_cycle(delta: float) -> void:
 	_tutorial_hint_cycle_t = fposmod(_tutorial_hint_cycle_t + delta, _tutorial_hint_period())
 	if was_visible != _tutorial_hint_should_show() or flash_label.text != _tutorial_text:
 		_apply_tutorial_hint_visibility()
+
+
+func _debug_dump_playing_sounds() -> void:
+	## Key 9 — on-screen + console list of every playing voice and whether it loops.
+	var report := ""
+	if game_audio != null and game_audio.has_method("debug_playing_sounds_report"):
+		report = str(game_audio.debug_playing_sounds_report(get_tree()))
+	else:
+		report = "GameAudio not ready\n"
+	print("===== AUDIO DEBUG (9) =====\n%s===== END =====" % report)
+	var n_line := 0
+	for line in report.split("\n"):
+		if str(line).begins_with("  "):
+			n_line += 1
+	_flash("Audio debug: %d lines (also printed to console)" % n_line, Color("80DEEA"), 1.6)
+	_show_audio_debug_overlay(report)
+
+
+func _show_audio_debug_overlay(report: String) -> void:
+	if _audio_debug_label == null or not is_instance_valid(_audio_debug_label):
+		_audio_debug_label = Label.new()
+		_audio_debug_label.name = "AudioDebugOverlay"
+		_audio_debug_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_audio_debug_label.z_index = 80
+		_audio_debug_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+		_audio_debug_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_audio_debug_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+		_audio_debug_label.add_theme_font_size_override("font_size", 13)
+		_audio_debug_label.add_theme_color_override("font_color", Color(0.85, 0.98, 1.0, 1.0))
+		_audio_debug_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.92))
+		_audio_debug_label.add_theme_constant_override("outline_size", 4)
+		var plate := StyleBoxFlat.new()
+		plate.bg_color = Color(0.04, 0.06, 0.09, 0.82)
+		plate.set_corner_radius_all(6)
+		plate.content_margin_left = 10
+		plate.content_margin_right = 10
+		plate.content_margin_top = 8
+		plate.content_margin_bottom = 8
+		_audio_debug_label.add_theme_stylebox_override("normal", plate)
+		var ui := get_node_or_null("UI") as CanvasItem
+		if ui != null:
+			ui.add_child(_audio_debug_label)
+		else:
+			add_child(_audio_debug_label)
+	_audio_debug_label.text = report.strip_edges()
+	_audio_debug_label.visible = true
+	_audio_debug_label.modulate.a = 1.0
+	_audio_debug_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_audio_debug_label.offset_left = 12.0
+	_audio_debug_label.offset_top = 12.0
+	_audio_debug_label.offset_right = minf(920.0, get_viewport().get_visible_rect().size.x - 24.0)
+	_audio_debug_label.offset_bottom = minf(620.0, get_viewport().get_visible_rect().size.y - 24.0)
+	if _audio_debug_tween != null and is_instance_valid(_audio_debug_tween):
+		_audio_debug_tween.kill()
+	_audio_debug_tween = create_tween()
+	_audio_debug_tween.tween_interval(10.0)
+	_audio_debug_tween.tween_property(_audio_debug_label, "modulate:a", 0.0, 0.45)
+	_audio_debug_tween.tween_callback(func():
+		_audio_debug_tween = null
+		if _audio_debug_label != null and is_instance_valid(_audio_debug_label):
+			_audio_debug_label.visible = false
+			_audio_debug_label.modulate.a = 1.0
+	)
 
 
 func _flash(text: String, color: Color, hold_sec: float = 1.1) -> void:

@@ -2179,6 +2179,106 @@ func _make_roomba_drive() -> AudioStreamWAV:
 	return _wav_from_pcm(pcm, true)
 
 
+func debug_playing_sounds_report(scene_tree: SceneTree = null) -> String:
+	## Press 9 — list every playing AudioStreamPlayer / 3D voice + loop flag.
+	var tree := scene_tree if scene_tree != null else get_tree()
+	var lines: PackedStringArray = []
+	var n_playing := 0
+	if tree != null and tree.root != null:
+		n_playing = _debug_collect_playing_audio(tree.root, lines)
+	## Intent flags for continuous beds (catch “flag on but silent” / orphaned loops).
+	var beds: PackedStringArray = []
+	_debug_append_bed_flag(beds, "sizzle", _sizzle_on, _sizzle_player)
+	_debug_append_bed_flag(beds, "hiss", _hiss_on, _hiss_player)
+	_debug_append_bed_flag(beds, "spray", _spray_on, _spray_player)
+	_debug_append_bed_flag(beds, "shake/scrape", _shake_on, _shake_player)
+	_debug_append_bed_flag(beds, "fries_shake", _fries_shake_on, _fries_shake_player)
+	_debug_append_bed_flag(beds, "soda", _soda_on, _soda_player)
+	_debug_append_bed_flag(beds, "ice", _ice_on, _ice_player)
+	_debug_append_bed_flag(beds, "softserve", _softserve_on, _softserve_player)
+	_debug_append_bed_flag(beds, "fryer", _fryer_on, _fryer_player)
+	_debug_append_bed_flag(beds, "room_tone", _room_tone_on and not _room_tone_muted, _room_tone_player)
+	_debug_append_bed_flag(beds, "outdoor_ambience", _outdoor_ambience_on and not _outdoor_ambience_muted, _outdoor_ambience_player)
+	_debug_append_bed_flag(beds, "roomba_wawawa", _roomba_wawawa_on, _roomba_wawawa_player)
+	_debug_append_bed_flag(beds, "combat_theme", _combat_theme_on, _combat_player)
+	var slide_on := _slide_target > 0.01 or (_slide_player != null and _slide_player.playing)
+	_debug_append_bed_flag(beds, "burger_slide", slide_on, _slide_player)
+	var oil_slide_on := _oil_slide_target > 0.01 or (_oil_slide_player != null and _oil_slide_player.playing)
+	_debug_append_bed_flag(beds, "oil_slide", oil_slide_on, _oil_slide_player)
+	var roomba_drive_on := _roomba_drive_target > 0.01 or (_roomba_drive_player != null and _roomba_drive_player.playing)
+	_debug_append_bed_flag(beds, "roomba_drive", roomba_drive_on, _roomba_drive_player)
+	var out := "PLAYING VOICES (%d)\n" % n_playing
+	if lines.is_empty():
+		out += "  (none)\n"
+	else:
+		out += "\n".join(lines) + "\n"
+	out += "BED FLAGS\n"
+	if beds.is_empty():
+		out += "  (none active)\n"
+	else:
+		out += "\n".join(beds) + "\n"
+	return out
+
+
+func _debug_append_bed_flag(beds: PackedStringArray, label: String, want_on: bool, player: AudioStreamPlayer) -> void:
+	if not want_on and (player == null or not is_instance_valid(player) or not player.playing):
+		return
+	var playing := player != null and is_instance_valid(player) and player.playing
+	var state := "ON+playing" if want_on and playing else ("ON but silent" if want_on else "playing w/ flag OFF")
+	beds.append("  [%s] %s" % [label, state])
+
+
+func _debug_collect_playing_audio(node: Node, lines: PackedStringArray) -> int:
+	var count := 0
+	if node is AudioStreamPlayer or node is AudioStreamPlayer3D:
+		var p = node
+		if bool(p.playing):
+			count += 1
+			lines.append("  " + _debug_format_audio_player(p))
+	for c in node.get_children():
+		count += _debug_collect_playing_audio(c, lines)
+	return count
+
+
+func _debug_format_audio_player(p: Node) -> String:
+	var stream: AudioStream = p.get("stream") as AudioStream
+	var looping := _debug_stream_is_looping(stream)
+	var kind := "GENERATOR" if stream is AudioStreamGenerator else ("LOOP" if looping else "ONESHOT")
+	var stream_name := "<null>"
+	if stream != null:
+		stream_name = stream.resource_path.get_file() if not stream.resource_path.is_empty() \
+			else stream.get_class()
+	var vol := float(p.get("volume_db"))
+	var pitch := float(p.get("pitch_scale"))
+	var tpos := 0.0
+	if p.has_method("get_playback_position"):
+		tpos = float(p.call("get_playback_position"))
+	var path := str(p.get_path())
+	## Keep path short — show from GameAudio / Radio / root child.
+	var short := path
+	if path.contains("/GameAudio/"):
+		short = "GameAudio/" + path.get_file()
+	elif path.length() > 48:
+		short = "…" + path.substr(path.length() - 46, 46)
+	return "%s | %s | %s | vol=%.1fdB pitch=%.2f t=%.2fs | %s" % [
+		str(p.name), kind, stream_name, vol, pitch, tpos, short
+	]
+
+
+func _debug_stream_is_looping(stream: AudioStream) -> bool:
+	if stream == null:
+		return false
+	if stream is AudioStreamGenerator:
+		return true
+	if stream is AudioStreamWAV:
+		return (stream as AudioStreamWAV).loop_mode != AudioStreamWAV.LOOP_DISABLED
+	if stream is AudioStreamOggVorbis:
+		return bool((stream as AudioStreamOggVorbis).loop)
+	if stream is AudioStreamMP3:
+		return bool((stream as AudioStreamMP3).loop)
+	return false
+
+
 static func _wav_from_pcm(pcm: PackedByteArray, loop: bool) -> AudioStreamWAV:
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
