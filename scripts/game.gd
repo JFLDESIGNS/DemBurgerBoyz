@@ -1225,7 +1225,7 @@ const BUILD_HIT_PAD_RIGHT := 10.0
 const BUILD_HIT_PAD_BOTTOM := 8.0
 const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
 ## Screen nudge on the cutting-board Label3D (+X right, +Y down).
-const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(15.0, 10.0)
+const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(20.0, 20.0)
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -26933,10 +26933,12 @@ func _build_board_hint_label() -> void:
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.no_depth_test = true
 	lab.fixed_size = true
-	## No Label3D outline — it draws a second ghosted glyph pass with this font.
-	UiFontsScript.apply_luckiest_label3d(lab, 13, 0.018, 0)
+	## High raster size keeps letter holes open; world height keeps it small on screen.
+	## No outline — Label3D stroke fills counters on chunky fonts.
+	UiFontsScript.apply_luckiest_label3d(lab, 56, 0.017, 0)
 	lab.outline_size = 0
 	lab.outline_modulate = Color(0, 0, 0, 0)
+	lab.alpha_cut = Label3D.ALPHA_CUT_DISABLED
 	lab.position = Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.05)
 	lab.visible = true
 	build_cutting_board.add_child(lab)
