@@ -1162,7 +1162,7 @@ var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.65
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_CLICK_COLLISION_LAYER := 262144
-const TREE_SHAKE_DEG := 2.4 ## subtler pendulum lean
+const TREE_SHAKE_DEG := 1.45 ## soft pendulum lean (was 2.4)
 const TREE_APPLE_CHANCE := 0.20
 const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
 const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
@@ -6635,6 +6635,9 @@ func _spawn_residue_chunks(slot: int, at: Vector3, kind: String = "patty") -> vo
 	if kind == "cup":
 		_spawn_cup_char_chunks(slot, at)
 		return
+	if kind == "oil":
+		_spawn_oil_crust_chunks(slot, at)
+		return
 	var rng := RandomNumberGenerator.new()
 	rng.seed = slot * 917 + int(at.x * 1000.0) + int(at.z * 1000.0)
 	var chunks: Array = []
@@ -6701,6 +6704,53 @@ func _spawn_residue_chunks(slot: int, at: Vector3, kind: String = "patty") -> vo
 			mat.albedo_color = Color(0.2, 0.09, 0.04, 0.95)
 		else:
 			mat.albedo_color = Color(0.34, 0.15, 0.07, 0.92)
+		bit.material_override = mat
+		grill_root.add_child(bit)
+		chunks.append(bit)
+	grill_residue_chunks[slot] = chunks
+
+
+func _spawn_oil_crust_chunks(slot: int, at: Vector3) -> void:
+	## Flat black burned-oil stain — scrapable, no burger debris chunks.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = slot * 1201 + int(at.x * 1300.0) + int(at.z * 970.0)
+	var chunks: Array = []
+	var disc := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	## Match oil puddle footprint (~half burger cook-spot size).
+	var disc_d := 0.11 + rng.randf() * 0.05
+	plane.size = Vector2(disc_d, disc_d)
+	disc.mesh = plane
+	disc.position = at + Vector3(0, 0.0018, 0)
+	disc.rotation_degrees = Vector3(0, rng.randf() * 360.0, 0)
+	var dmat := StandardMaterial3D.new()
+	dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	dmat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	dmat.albedo_texture = _get_oil_blob_texture()
+	## Charred black grease film.
+	dmat.albedo_color = Color(0.07, 0.045, 0.03, 0.92)
+	disc.material_override = dmat
+	grill_root.add_child(disc)
+	chunks.append(disc)
+	## A couple of thin scorched speckles — not chunky burger bits.
+	var n := 2 + rng.randi_range(0, 2)
+	for _i in n:
+		var bit := MeshInstance3D.new()
+		var plane2 := PlaneMesh.new()
+		var sd := (0.018 + rng.randf() * 0.022)
+		plane2.size = Vector2(sd, sd * (0.7 + rng.randf() * 0.5))
+		bit.mesh = plane2
+		var ang := rng.randf() * TAU
+		var rad := sqrt(rng.randf()) * (disc_d * 0.38)
+		bit.position = at + Vector3(cos(ang) * rad, 0.0022, sin(ang) * rad)
+		bit.rotation_degrees = Vector3(0.0, rng.randf() * 360.0, 0.0)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.albedo_color = Color(0.04, 0.025, 0.015, 0.88)
 		bit.material_override = mat
 		grill_root.add_child(bit)
 		chunks.append(bit)
@@ -8903,10 +8953,11 @@ func _leave_grill_residue_local(
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
 	amt = clampf(amt, 0.0, 1.0)
-	if amt < RESIDUE_MIN_LEAVE_AMT and kind == "patty":
+	if amt < RESIDUE_MIN_LEAVE_AMT and (kind == "patty" or kind == "oil"):
 		return
 	## Keep the heavier pile if this pad already had crust.
 	var prev := float(grill_residue[slot]) if slot < grill_residue.size() else 0.0
+	var prev_kind := str(grill_residue_kind[slot]) if slot < grill_residue_kind.size() else ""
 	grill_residue[slot] = maxf(prev, amt)
 	if slot < grill_residue_kind.size():
 		grill_residue_kind[slot] = kind
@@ -8914,8 +8965,9 @@ func _leave_grill_residue_local(
 		brush_swipe_travel[slot] = 0.0
 	if slot < brush_swipe_cool.size():
 		brush_swipe_cool[slot] = 0.0
-	## Rebuild chunks when empty or when this leave is meaningfully heavier.
-	var need_spawn := prev <= 0.04 or amt >= prev + 0.08 or kind == "cup"
+	## Rebuild chunks when empty, heavier, or kind changes (oil vs burger vs cup).
+	var need_spawn := prev <= 0.04 or amt >= prev + 0.08 or kind == "cup" \
+			or (kind != "" and kind != prev_kind)
 	if need_spawn:
 		_spawn_residue_chunks(slot, at, kind)
 	elif slot < grill_residue_centers.size():
@@ -8927,6 +8979,8 @@ func _leave_grill_residue_local(
 	if announce and float(grill_residue[slot]) >= 0.45:
 		if kind == "cup":
 			_flash("Charred cup stuck on the grill — scrape it off", Color("BCAAA4"))
+		elif kind == "oil":
+			_flash("Burned oil crust — scrape it with the spatula", Color("BCAAA4"))
 		else:
 			_flash("Grease left on the grill — scrape it with the spatula", Color("BCAAA4"))
 	## Too much crust and the line freaks out.
@@ -14682,16 +14736,16 @@ func _end_oil_trail_fire_burnout() -> void:
 
 
 func _leave_oil_burn_residue_at(pos: Vector3, radius: float) -> void:
-	## Scrapable black crust left after oil cooks / burns off the steel.
+	## Scrapable black oil film — not burger cook-spot debris chunks.
 	var at := Vector3(pos.x, GRILL_SURFACE_Y + 0.028, pos.z)
 	var slot := _find_residue_slot_for_spot(at)
 	if slot < 0:
 		return
-	var amt := clampf(0.62 + radius * 3.5, 0.62, 1.0)
+	var amt := clampf(0.55 + radius * 3.2, 0.55, 0.92)
 	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, at.x, at.z, false, "patty", amt)
+		mp_residue_leave.rpc(slot, at.x, at.z, false, "oil", amt)
 		return
-	_leave_grill_residue_local(slot, at, false, "patty", amt)
+	_leave_grill_residue_local(slot, at, false, "oil", amt)
 
 
 func _extinguish_grill_fire() -> void:
@@ -14885,9 +14939,10 @@ func _update_oil_slicks(delta: float) -> void:
 		var age := float(item["age"])
 		var lit := _oil_slick_is_lit(item)
 		if mesh == null or not is_instance_valid(mesh) or age >= life:
-			## Only actual fire leaves crust — normal oil cook-off must not spawn debris.
+			## Oil cooks off → flat black scrape crust (oil kind, not burger chunks).
 			if mesh != null and is_instance_valid(mesh):
-				if lit or bool(item.get("on_fire", false)):
+				var burn_done := clampf(age / maxf(life, 0.001), 0.0, 1.0)
+				if lit or bool(item.get("on_fire", false)) or burn_done >= 0.55:
 					_leave_oil_burn_residue_at(mesh.global_position, float(item.get("radius", 0.04)))
 				mesh.queue_free()
 			oil_slicks.remove_at(i)
@@ -18361,10 +18416,11 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	area.monitorable = true
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
+	## Tight to the mesh AABB — no fat magnet over the grill / sky.
 	box.size = Vector3(
-		maxf(aabb.size.x * 1.15, 1.2),
-		maxf(aabb.size.y * 1.05, 2.5),
-		maxf(aabb.size.z * 1.15, 1.2)
+		maxf(aabb.size.x * 0.92, 0.45),
+		maxf(aabb.size.y * 0.96, 1.4),
+		maxf(aabb.size.z * 0.92, 0.45)
 	)
 	col.shape = box
 	col.position = aabb.get_center()
@@ -18373,11 +18429,29 @@ func _setup_outdoor_tree_interact(tree: Node3D) -> void:
 	area.set_meta("shake_tree", tree)
 
 
+func _outdoor_tree_point_on_model(tree: Node3D, world_pos: Vector3) -> bool:
+	## Ray hit must land on / very near an actual mesh (not empty box volume).
+	if tree == null or not is_instance_valid(tree):
+		return false
+	for n in tree.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null or String(mi.name).begins_with("LeafShadow"):
+			continue
+		var local := mi.to_local(world_pos)
+		var a := mi.get_aabb().grow(0.08)
+		if a.has_point(local):
+			return true
+	return false
+
+
 func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 	if not playing or camera == null or world == null:
 		return false
 	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
 			or sale_held or cup_held or spatula_patty != null or dragging_patty != null:
+		return false
+	## Never steal grill clicks — spatula / place / scrape own the steel.
+	if _is_grill_screen_point(screen_pos) or _should_show_hand_spatula(screen_pos):
 		return false
 	var space := world.get_world_3d().direct_space_state
 	if space == null:
@@ -18398,6 +18472,9 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 	if tree == null or not is_instance_valid(tree):
 		tree = collider.get_parent() as Node3D
 	if tree == null or not outdoor_shake_trees.has(tree):
+		return false
+	var hit_pos: Vector3 = hit.get("position", Vector3.ZERO)
+	if not _outdoor_tree_point_on_model(tree, hit_pos):
 		return false
 	_shake_outdoor_tree(tree)
 	return true
