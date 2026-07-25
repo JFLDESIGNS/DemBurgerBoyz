@@ -467,6 +467,11 @@ var melting_cups: Array = [] ## cups dropped on the grill — melt / smoke / cha
 var melting_icecreams: Array = [] ## cones dropped on hot steel — serve slumps into burnt crust
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
+## Animated noise holes punched through oil while it's on fire.
+var _oil_burn_noise: FastNoiseLite = null
+var _oil_burn_tex: ImageTexture = null
+var _oil_burn_tex_cool: float = 0.0
+const OIL_BURN_TEX_INTERVAL := 0.055
 var _black_smoke_tex: ImageTexture = null
 var _burn_bubble_tex: ImageTexture = null
 var _soda_blob_tex: ImageTexture = null
@@ -13011,12 +13016,13 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 		"mesh": slick,
 		"smoke": smoke,
 		"age": 0.0,
-		"life": 22.0 + randf() * 10.0,
+		"life": 13.0 + randf() * 6.0, ## was 22–32s — cooks off quicker
 		"radius": rad,
 		"base_a": 0.72,
 		"scrape": 1.0,
 		"boost_heat": true,
 		"on_fire": false,
+		"burn_tex": false, ## true while using the animated fire-hole texture
 	})
 	## Cap = trail length budget (2× prior 70) so you can lay a long grease trail.
 	while oil_slicks.size() > 140:
@@ -13495,8 +13501,85 @@ func _make_fire_smoke_particles() -> GPUParticles3D:
 	return fx
 
 
+func _ensure_oil_burn_noise() -> void:
+	if _oil_burn_noise != null:
+		return
+	_oil_burn_noise = FastNoiseLite.new()
+	_oil_burn_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	_oil_burn_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	_oil_burn_noise.fractal_octaves = 3
+	_oil_burn_noise.frequency = 0.085
+	_oil_burn_noise.fractal_gain = 0.5
+
+
+func _tick_oil_burn_noise_texture(delta: float) -> ImageTexture:
+	## Shared animated mask — noise punches holes through burning grease.
+	_oil_burn_tex_cool -= delta
+	if _oil_burn_tex != null and _oil_burn_tex_cool > 0.0:
+		return _oil_burn_tex
+	_oil_burn_tex_cool = OIL_BURN_TEX_INTERVAL
+	_ensure_oil_burn_noise()
+	var base_tex := _get_oil_blob_texture()
+	var base := base_tex.get_image()
+	if base == null:
+		return _oil_burn_tex
+	var w := base.get_width()
+	var h := base.get_height()
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var t := Time.get_ticks_msec() * 0.001
+	## Drift the field so holes crawl / flicker across the puddle.
+	_oil_burn_noise.offset = Vector3(t * 22.0, t * 15.5, t * 9.0)
+	for y in h:
+		for x in w:
+			var c := base.get_pixel(x, y)
+			if c.a <= 0.01:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var nv := _oil_burn_noise.get_noise_2d(float(x), float(y))
+			## Second slower layer so holes open/close instead of just sliding.
+			var nv2 := _oil_burn_noise.get_noise_2d(float(x) * 0.55 + 40.0, float(y) * 0.55 - t * 8.0)
+			var n := nv * 0.65 + nv2 * 0.35
+			## Below threshold → that patch of oil is “burned off” (transparent).
+			var gate := smoothstep(-0.08, 0.22, n)
+			if gate <= 0.02:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			## Hot ember tint on what remains.
+			var hot := Color(0.55, 0.18, 0.04, c.a * gate)
+			var cool := Color(c.r * 1.6, c.g * 0.9, c.b * 0.45, c.a * gate)
+			img.set_pixel(x, y, cool.lerp(hot, clampf(n * 0.55 + 0.35, 0.0, 1.0)))
+	if _oil_burn_tex == null:
+		_oil_burn_tex = ImageTexture.create_from_image(img)
+	else:
+		_oil_burn_tex.set_image(img)
+	return _oil_burn_tex
+
+
+func _set_oil_slick_burn_visual(item: Dictionary, lit: bool, burn_tex: ImageTexture, t: float) -> void:
+	var m = item.get("mesh")
+	if m == null or not is_instance_valid(m):
+		return
+	var mat := m.material_override as StandardMaterial3D
+	if mat == null:
+		return
+	if lit and burn_tex != null:
+		mat.albedo_texture = burn_tex
+		item["burn_tex"] = true
+		var pulse := 0.55 + 0.45 * sin(t * 9.0 + float(m.get_instance_id() % 7))
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.35, 0.05)
+		mat.emission_energy_multiplier = 1.2 + pulse * 2.4
+		mat.albedo_color = Color(1.0, 0.55, 0.22, 0.92)
+	else:
+		if bool(item.get("burn_tex", false)):
+			mat.albedo_texture = _get_oil_blob_texture()
+			item["burn_tex"] = false
+		mat.emission_enabled = false
+
+
 func _update_grill_fire(delta: float) -> void:
 	if not grill_on_fire:
+		## Clear any leftover burn masks if fire just ended mid-frame.
 		return
 	## Powder already snuffed the visible blaze — don't revive flames/lights.
 	if _fire_killed_by_powder:
@@ -13510,27 +13593,28 @@ func _update_grill_fire(delta: float) -> void:
 				p.cook_time += delta * 2.8
 		return
 	_update_oil_trail_fire_spread(delta)
+	## Trail blaze dies out once the grease that was feeding it is gone.
+	if _oil_fire_trail_mode:
+		var any_lit := false
+		for it in oil_slicks:
+			if bool(it.get("on_fire", false)):
+				any_lit = true
+				break
+		if not any_lit:
+			_end_oil_trail_fire_burnout()
+			return
 	_sync_fire_to_oil_area()
 	_fire_flicker_t += delta
 	var t := Time.get_ticks_msec() * 0.001
-	## Oil puddles glow when lit (trail) or inside the burn band (pour fire).
+	var burn_tex := _tick_oil_burn_noise_texture(delta)
+	## Oil puddles glow + noise-hole flicker when lit.
 	for item in oil_slicks:
 		var m = item.get("mesh")
 		if m == null or not is_instance_valid(m):
 			continue
-		var mat := m.material_override as StandardMaterial3D
-		if mat == null:
-			continue
 		var lit := bool(item.get("on_fire", false)) \
 			if _oil_fire_trail_mode else _is_in_fire_zone(m.position)
-		if not lit:
-			mat.emission_enabled = false
-			continue
-		var pulse := 0.55 + 0.45 * sin(t * 9.0 + float(m.get_instance_id() % 7))
-		mat.emission_enabled = true
-		mat.emission = Color(1.0, 0.35, 0.05)
-		mat.emission_energy_multiplier = 1.2 + pulse * 2.4
-		mat.albedo_color = Color(0.35, 0.12, 0.04, 0.85)
+		_set_oil_slick_burn_visual(item, lit, burn_tex, t)
 	## Keep cooking meat only in the blaze section.
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -13802,6 +13886,23 @@ func _clear_ext_powder_blobs() -> void:
 	ext_blob_spawn_cool = 0.0
 
 
+func _end_oil_trail_fire_burnout() -> void:
+	## Grease finished burning on its own — snuff flames, leave leftover oil.
+	if not grill_on_fire:
+		return
+	grill_on_fire = false
+	fire_health = 0.0
+	fire_zone_id = ""
+	_fire_killed_by_powder = false
+	_oil_fire_trail_mode = false
+	_oil_fire_spread_cool = 0.0
+	_set_fire_fx_emitting(false)
+	for item in oil_slicks:
+		item["on_fire"] = false
+		_set_oil_slick_burn_visual(item, false, null, 0.0)
+	_flash("Grease burned off the steel.", Color("B0BEC5"))
+
+
 func _extinguish_grill_fire() -> void:
 	if not grill_on_fire and not _fire_killed_by_powder:
 		return
@@ -13972,13 +14073,28 @@ func _smear_oil_along(pos: Vector3, move_vec: Vector2, moved: float) -> void:
 		mesh.scale = Vector3(s, 1.0, s)
 
 
+func _oil_slick_is_lit(item: Dictionary) -> bool:
+	if not grill_on_fire or _fire_killed_by_powder:
+		return false
+	if bool(item.get("on_fire", false)):
+		return true
+	if _oil_fire_trail_mode:
+		return false
+	var mesh = item.get("mesh")
+	if mesh == null or not is_instance_valid(mesh):
+		return false
+	return _is_in_fire_zone(mesh.position)
+
+
 func _update_oil_slicks(delta: float) -> void:
 	var i := 0
 	## Hot flat-top cooks oil off faster and drives more smoke.
-	var burn_rate := 1.55 if grill_on else 0.85
+	var burn_rate := 1.85 if grill_on else 1.0 ## was 1.55 / 0.85
 	while i < oil_slicks.size():
 		var item: Dictionary = oil_slicks[i]
-		item["age"] = float(item["age"]) + delta * burn_rate
+		## Flaming grease cooks off much faster than idle puddles.
+		var rate := burn_rate * (2.55 if _oil_slick_is_lit(item) else 1.0)
+		item["age"] = float(item["age"]) + delta * rate
 		var mesh = item.get("mesh")
 		var life := float(item["life"])
 		var age := float(item["age"])
@@ -13988,8 +14104,14 @@ func _update_oil_slicks(delta: float) -> void:
 			oil_slicks.remove_at(i)
 			continue
 		var burn := clampf(age / life, 0.0, 1.0)
+		var lit := _oil_slick_is_lit(item)
 		var mat := mesh.material_override as StandardMaterial3D
-		if mat:
+		if mat and not lit:
+			## Lit slicks get color/texture from the fire flicker pass.
+			if bool(item.get("burn_tex", false)):
+				mat.albedo_texture = _get_oil_blob_texture()
+				item["burn_tex"] = false
+				mat.emission_enabled = false
 			var fade := 1.0 - burn
 			fade = smoothstep(0.0, 1.0, fade)
 			var base_a := float(item.get("base_a", 0.9))
@@ -14012,8 +14134,11 @@ func _update_oil_slicks(delta: float) -> void:
 				smoke_amt = smoothstep(0.18, 0.45, burn) * (1.0 - smoothstep(0.88, 1.0, burn))
 				if grill_on:
 					smoke_amt = minf(1.0, smoke_amt * 1.35)
+				if lit:
+					smoke_amt = minf(1.0, smoke_amt * 1.5 + 0.2)
 			smoke.emitting = smoke_amt > 0.04
 			smoke.amount_ratio = smoke_amt
+		oil_slicks[i] = item
 		i += 1
 
 
