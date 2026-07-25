@@ -1536,7 +1536,8 @@ const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without te
 const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
-const CUP_FILL_EXTRA_Y := 0.1778 ## +7" drip-deck seat (+2" more) so the cup clears the machine floor
+## Soft-lock fill lift only — parked tray cups use the bare drip-deck Y (no float).
+const CUP_FILL_EXTRA_Y := 0.2032 ## ~8" above park deck while filling (+1" vs prior)
 const CUP_FILL_LOCK_PULL := 0.97 ## nearly snap XZ under the nozzle while locked
 const CUP_FILL_ACQUIRE := 0.20
 const CUP_FILL_RELEASE := 0.30
@@ -19622,10 +19623,10 @@ func _build_soda_station() -> void:
 	_add_soda_spout_marker_only(root, false)
 	_sync_soda_spout_to_flavor()
 
-	## Park cups on the drip ledge in front of the nozzles (+3" so bottoms clear the deck).
+	## Park cups on the drip ledge — deck height only (fill soft-lock adds CUP_FILL_EXTRA_Y).
 	cup_rest = root.to_global(Vector3(
 		CUP_TRAY_FIRST_X * 0.72,
-		0.075 * SODA_FOUNTAIN_SCALE + CUP_FILL_EXTRA_Y,
+		0.075 * SODA_FOUNTAIN_SCALE,
 		0.42
 	))
 	cup_rest_rot = Vector3.ZERO
@@ -23859,7 +23860,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = rack.to_global(stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, 0.138 + CUP_FILL_EXTRA_Y, 0.54))
+		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, 0.138, 0.54))
 		cup_rest_rot = Vector3.ZERO
 	_spawn_and_bind_empty_cup()
 
@@ -24276,7 +24277,7 @@ func _tray_slot_local(slot: int) -> Vector3:
 	## local -X is screen-left with soda yaw 180. Slots stay fixed once assigned.
 	var lx := CUP_TRAY_FIRST_X + float(clampi(slot, 0, CUP_MAX - 1)) * CUP_TRAY_SPACING
 	lx = clampf(lx, CUP_TRAY_FIRST_X, 0.28)
-	return Vector3(lx, 0.148 + CUP_FILL_EXTRA_Y, 0.54)
+	return Vector3(lx, 0.148, 0.54)
 
 
 func _tray_slot_taken(slot: int, ignore: Node3D = null) -> bool:
@@ -25796,14 +25797,14 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
-	## Directly under the pour stream — same XZ as the tip, seated on the drip deck.
+	## Soft-lock fill seat under the stream — raised above the park deck, not the park height.
 	var tip_p := tip.global_position
-	var fill_y := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + CUP_FILL_EXTRA_Y
-	## Hold-LMB fill snap locks to the raised deck — never clamp back through the machine.
+	var tip_seat := tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + CUP_FILL_EXTRA_Y
+	var fill_y := tip_seat
 	if soda_root != null and is_instance_valid(soda_root) and cup_rest != Vector3.ZERO:
-		fill_y = cup_rest.y + 0.01
-	## Never sit below the spout-relative seat (deck marker can lag the mesh).
-	fill_y = maxf(fill_y, tip_p.y - CUP_SHELL_H - CUP_FILL_RIM_GAP + CUP_FILL_EXTRA_Y)
+		fill_y = cup_rest.y + CUP_FILL_EXTRA_Y
+	## Prefer the higher of tray-lift vs tip-relative so the cup clears the machine floor.
+	fill_y = maxf(fill_y, tip_seat)
 	return Vector3(tip_p.x, fill_y, tip_p.z)
 
 
@@ -26437,6 +26438,8 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 		land_y = cup_rest.y + 0.002
 	var end: Vector3
 	var mid: Vector3
+	## BoxMesh is centered — sit the cube one full height above the steel so it stays visible.
+	var grill_land_y := GRILL_SURFACE_Y + s
 	if to_grill:
 		var cook := _cook_place_bounds()
 		var gx := GRILL_CENTER_X + randf_range(-GRILL_WIDTH * 0.32, GRILL_WIDTH * 0.32)
@@ -26444,7 +26447,7 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 		if cook.size.x > 0.05 and cook.size.y > 0.05:
 			gx = clampf(gx, cook.position.x, cook.end.x)
 			gz = clampf(gz, cook.position.y, cook.end.y)
-		land_y = GRILL_SURFACE_Y + 0.011
+		land_y = grill_land_y
 		end = Vector3(gx, land_y, gz)
 		## Arc toward the steel from the fountain.
 		mid = Vector3(
@@ -26499,12 +26502,18 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 		var melt_t := randf_range(1.8, 3.2) if grill_on else randf_range(4.5, 7.0)
 		tw2.tween_interval(0.04)
 		var flat := Vector3(1.25, 0.06, 1.25) if grill_on else Vector3(1.05, 0.12, 1.05)
+		## Keep center at half the flattened height so it doesn't sink into the steel.
+		var melt_y := GRILL_SURFACE_Y + s * flat.y * 0.5
 		tw2.set_parallel(true)
 		tw2.tween_property(cube, "scale", flat, melt_t).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-		tw2.tween_property(cube, "global_position:y", GRILL_SURFACE_Y + 0.003, melt_t) \
+		tw2.tween_property(cube, "global_position:y", melt_y, melt_t) \
 				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-		tw2.chain().tween_property(cube, "scale", Vector3(1.4, 0.02, 1.4), 0.35).set_trans(Tween.TRANS_SINE)
-		tw2.tween_callback(func() -> void:
+		var gone := Vector3(1.4, 0.02, 1.4)
+		tw2.chain().set_parallel(true)
+		tw2.tween_property(cube, "scale", gone, 0.35).set_trans(Tween.TRANS_SINE)
+		tw2.tween_property(cube, "global_position:y", GRILL_SURFACE_Y + s * gone.y * 0.5, 0.35) \
+				.set_trans(Tween.TRANS_SINE)
+		tw2.chain().tween_callback(func() -> void:
 			if is_instance_valid(cube):
 				cube.queue_free()
 		)
