@@ -9890,7 +9890,6 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 		HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y,
 		HAND_SPATULA_SLAP_DUR
 	)
-	grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
 	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
 	grill_roomba_poke_wawawa = true
 	grill_roomba_vel = Vector2.ZERO
@@ -9899,8 +9898,10 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 	if randf() < 0.5:
 		grill_roomba_poke_wobble_t = ROOMBA_POKE_WOBBLE_SEC
 		grill_roomba_poke_wobble_phase = randf() * TAU
+		grill_roomba_poke_pause_t = maxf(ROOMBA_POKE_PAUSE_SEC, ROOMBA_POKE_WOBBLE_SEC)
 	else:
 		grill_roomba_poke_wobble_t = 0.0
+		grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
 	_set_roomba_face("sad")
 	if game_audio and game_audio.has_method("set_roomba_drive"):
 		game_audio.set_roomba_drive(false)
