@@ -309,6 +309,14 @@ const SPATULA_TAP_RING_R1 := 0.09 ## ~burger radius (20% smaller patties)
 const SPATULA_TAP_RING_STROKE := 0.007 ## Half-width of the white stroke
 const SPATULA_TAP_RING_ALPHA := 0.12 ## Very soft white stroke
 const SPATULA_TAP_RING_Y := 0.028 ## Sit above steel / shine (was lowered to 0.014)
+## Melted-cheese stretch strings: patty ↔ spatula tip while sliding.
+var _cheese_strings: Array = [] ## {root, mis, mats, patty, offs, phase, breaking, break_t}
+const CHEESE_STRING_MIN_MELT := 0.18 ## Need some melt before strings pull
+const CHEESE_STRING_ATTACH_R := 0.26
+const CHEESE_STRING_BREAK_DIST := 0.36
+const CHEESE_STRING_KILL_DIST := 0.52
+const CHEESE_STRING_STRANDS := 3
+const CHEESE_STRING_BREAK_SEC := 0.22
 var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
@@ -2384,6 +2392,7 @@ func _process(delta: float) -> void:
 	if spatula_patty != null:
 		_update_held_spatula_patty(delta)
 	_update_hand_spatula_cursor(delta)
+	_update_cheese_strings(delta)
 	if shaker_held:
 		_update_held_shaker(delta)
 	if oil_held:
@@ -16727,12 +16736,14 @@ func _spatula_nudge_patties(tip_pos: Vector3, move_xz: Vector2, moved: float) ->
 	## Flat blade pops meat in place; angled blade shoves it around the steel.
 	if absf(_spatula_user_roll) < HAND_SPATULA_ROLL_STEP * 0.5:
 		_spatula_flat_pop_patties(tip_pos)
+		_try_attach_cheese_strings_near_tip(tip_pos)
 		return
 	_nudge_grill_patties(
 		tip_pos, move_xz, moved,
 		SPATULA_PATTY_PUSH_RADIUS, SPATULA_PATTY_PUSH_SCALE, SPATULA_PATTY_PUSH_MAX,
 		0.22
 	)
+	_try_attach_cheese_strings_near_tip(tip_pos)
 
 
 func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
@@ -16765,6 +16776,7 @@ func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
 			p._play_done_jump(POP_PEAK)
 		if game_audio and game_audio.has_method("play_grease_pop"):
 			game_audio.play_grease_pop(false)
+		_try_attach_cheese_strings_to_patty(p, tip_pos)
 
 
 func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
@@ -16846,6 +16858,229 @@ func _nudge_grill_patties(
 		p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 		if game_audio and moved > 0.012 and randf() < pop_chance:
 			game_audio.play_grease_pop()
+		if moved > 0.004:
+			_try_attach_cheese_strings_to_patty(p, tool_pos)
+
+
+func _patty_can_cheese_string(patty: Area3D) -> bool:
+	if patty == null or not is_instance_valid(patty):
+		return false
+	if not bool(patty.get("has_cheese")):
+		return false
+	return float(patty.get("cheese_melt")) >= CHEESE_STRING_MIN_MELT
+
+
+func _cheese_string_exists_for(patty: Area3D) -> bool:
+	for item in _cheese_strings:
+		if item.get("patty") == patty and not bool(item.get("breaking", false)):
+			return true
+	return false
+
+
+func _try_attach_cheese_strings_near_tip(tip_pos: Vector3) -> void:
+	for i in GRILL_SLOTS:
+		var p = grill[i]
+		if p == null or not is_instance_valid(p):
+			continue
+		var d := Vector2(tip_pos.x - p.position.x, tip_pos.z - p.position.z).length()
+		if d > CHEESE_STRING_ATTACH_R:
+			continue
+		_try_attach_cheese_strings_to_patty(p, tip_pos)
+
+
+func _try_attach_cheese_strings_to_patty(patty: Area3D, tip_pos: Vector3) -> void:
+	if not _patty_can_cheese_string(patty):
+		return
+	if _cheese_string_exists_for(patty):
+		return
+	var d := Vector2(tip_pos.x - patty.position.x, tip_pos.z - patty.position.z).length()
+	if d > CHEESE_STRING_ATTACH_R * 1.15:
+		return
+	_spawn_cheese_strings(patty, tip_pos)
+
+
+func _spawn_cheese_strings(patty: Area3D, tip_pos: Vector3) -> void:
+	## Stretchy melt strands stuck between cheese and the spatula tip.
+	if world == null or patty == null:
+		return
+	var root := Node3D.new()
+	root.name = "CheeseStrings"
+	world.add_child(root)
+	var mis: Array = []
+	var mats: Array = []
+	var offs: Array = [] ## per-strand cheese + tip lateral offsets
+	var col := Color(1.0, 0.82, 0.26)
+	if patty.has_method("cheese_color"):
+		col = patty.cheese_color()
+	for s in CHEESE_STRING_STRANDS:
+		var mi := MeshInstance3D.new()
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.sorting_offset = 2.0
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.vertex_color_use_as_albedo = true
+		mat.albedo_color = Color(col.r, col.g, col.b, 0.92)
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.no_depth_test = false
+		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		mat.render_priority = 21
+		mi.material_override = mat
+		root.add_child(mi)
+		mis.append(mi)
+		mats.append(mat)
+		## Fan attach points across the melt square → tip.
+		var u := (float(s) / float(maxi(CHEESE_STRING_STRANDS - 1, 1))) * 2.0 - 1.0
+		offs.append({
+			"cheese": Vector3(u * 0.045, randf_range(-0.002, 0.006), (1.0 - absf(u)) * randf_range(-0.03, 0.03)),
+			"tip": Vector3(u * 0.028, randf_range(0.0, 0.012), randf_range(-0.02, 0.02)),
+			"phase": randf() * TAU,
+		})
+	_cheese_strings.append({
+		"root": root,
+		"mis": mis,
+		"mats": mats,
+		"offs": offs,
+		"patty": patty,
+		"phase": randf() * TAU,
+		"breaking": false,
+		"break_t": 0.0,
+		"tip_cache": tip_pos,
+	})
+
+
+func _spatula_tip_world_for_cheese() -> Vector3:
+	## Best-effort tip while scraping / hovering the spatula.
+	if hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible:
+		return hand_spatula_root.global_position \
+			+ hand_spatula_root.global_transform.basis * HAND_SPATULA_TIP_OFFSET
+	var mouse := get_viewport().get_mouse_position()
+	var hit := _grill_plane_from_screen(mouse)
+	if hit != Vector3.ZERO:
+		hit.y = GRILL_SURFACE_Y + HAND_SPATULA_HOLD_Y
+		return hit
+	return Vector3.ZERO
+
+
+func _build_cheese_string_mesh(a: Vector3, b: Vector3, sag: float, half_w: float, col: Color) -> ImmediateMesh:
+	## Soft sagging ribbon between cheese and spatula.
+	var mid := (a + b) * 0.5 + Vector3(0.0, -sag, 0.0)
+	var points: Array[Vector3] = [
+		a,
+		a.lerp(mid, 0.45),
+		mid,
+		b.lerp(mid, 0.45),
+		b,
+	]
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+	for i in points.size():
+		var p: Vector3 = points[i]
+		var tangent := Vector3(0.0, 0.0, 1.0)
+		if i + 1 < points.size():
+			tangent = points[i + 1] - p
+		elif i > 0:
+			tangent = p - points[i - 1]
+		if tangent.length_squared() < 0.000001:
+			tangent = Vector3(0.0, 0.0, 1.0)
+		tangent = tangent.normalized()
+		var side := tangent.cross(Vector3.UP)
+		if side.length_squared() < 0.000001:
+			side = tangent.cross(Vector3.RIGHT)
+		side = side.normalized()
+		## Taper: thicker at cheese, thinner at the tip.
+		var t := float(i) / float(maxi(points.size() - 1, 1))
+		var w := half_w * lerpf(1.15, 0.35, t)
+		var c := Color(col.r, col.g, col.b, col.a * lerpf(1.0, 0.75, t))
+		im.surface_set_color(c)
+		im.surface_add_vertex(p - side * w)
+		im.surface_set_color(c)
+		im.surface_add_vertex(p + side * w)
+	im.surface_end()
+	return im
+
+
+func _free_cheese_string_item(item: Dictionary) -> void:
+	var root = item.get("root")
+	if root != null and is_instance_valid(root):
+		root.queue_free()
+
+
+func _clear_cheese_strings() -> void:
+	for item in _cheese_strings:
+		_free_cheese_string_item(item)
+	_cheese_strings.clear()
+
+
+func _update_cheese_strings(delta: float) -> void:
+	if _cheese_strings.is_empty():
+		return
+	var tip := _spatula_tip_world_for_cheese()
+	var keep: Array = []
+	for item in _cheese_strings:
+		var patty = item.get("patty")
+		var root = item.get("root")
+		if root == null or not is_instance_valid(root) \
+				or patty == null or not is_instance_valid(patty) \
+				or not bool(patty.get("has_cheese")):
+			_free_cheese_string_item(item)
+			continue
+		var cheese_base: Vector3 = patty.cheese_anchor_world() if patty.has_method("cheese_anchor_world") \
+			else patty.global_position + Vector3(0, 0.028, 0)
+		if tip == Vector3.ZERO:
+			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
+		item["tip_cache"] = tip
+		var dist := cheese_base.distance_to(tip)
+		var breaking := bool(item.get("breaking", false))
+		## Pull too far / spatula gone → snap & shrink away.
+		if not breaking:
+			if dist >= CHEESE_STRING_KILL_DIST \
+					or (not spatula_grill_hold and dist > CHEESE_STRING_BREAK_DIST * 0.85) \
+					or dist >= CHEESE_STRING_BREAK_DIST:
+				item["breaking"] = true
+				breaking = true
+				item["break_t"] = 0.0
+		if breaking:
+			item["break_t"] = float(item.get("break_t", 0.0)) + delta
+			if float(item["break_t"]) >= CHEESE_STRING_BREAK_SEC:
+				_free_cheese_string_item(item)
+				continue
+		var break_u := 0.0
+		if breaking:
+			break_u = clampf(float(item["break_t"]) / CHEESE_STRING_BREAK_SEC, 0.0, 1.0)
+			break_u = break_u * break_u
+		var stretch_u := clampf(dist / CHEESE_STRING_BREAK_DIST, 0.0, 1.35)
+		var sag := lerpf(0.012, 0.055, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u)
+		var half_w := lerpf(0.0048, 0.0016, clampf(stretch_u, 0.0, 1.0)) * (1.0 - break_u * 0.85)
+		var col := Color(1.0, 0.82, 0.26)
+		if patty.has_method("cheese_color"):
+			col = patty.cheese_color()
+		col.a = lerpf(0.92, 0.0, break_u)
+		var mis: Array = item.get("mis", [])
+		var mats: Array = item.get("mats", [])
+		var offs: Array = item.get("offs", [])
+		var phase0 := float(item.get("phase", 0.0)) + delta * 6.0
+		item["phase"] = phase0
+		for s in mis.size():
+			var mi: MeshInstance3D = mis[s]
+			if mi == null or not is_instance_valid(mi):
+				continue
+			var od: Dictionary = offs[s] if s < offs.size() else {}
+			var c_off: Vector3 = od.get("cheese", Vector3.ZERO)
+			var t_off: Vector3 = od.get("tip", Vector3.ZERO)
+			var wobble := sin(phase0 + float(od.get("phase", 0.0))) * 0.004 * (1.0 - break_u)
+			var a := cheese_base + c_off + Vector3(wobble, 0.0, -wobble * 0.6)
+			var b := tip + t_off
+			## Breaking: retract tip end back toward the cheese (string snaps short).
+			if breaking:
+				b = a.lerp(b, 1.0 - break_u)
+				sag *= 1.0 - break_u
+			mi.mesh = _build_cheese_string_mesh(a, b, sag, half_w, col)
+			if s < mats.size() and mats[s] != null:
+				var mat: StandardMaterial3D = mats[s]
+				mat.albedo_color = Color(col.r, col.g, col.b, col.a)
+		keep.append(item)
+	_cheese_strings = keep
 
 
 func _throw_brush_home() -> void:
@@ -32268,6 +32503,7 @@ func _clear_spatula() -> void:
 	spatula_lmb_held = false
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
+	_clear_cheese_strings()
 	_refresh_spatula_ui()
 
 

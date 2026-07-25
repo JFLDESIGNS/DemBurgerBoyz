@@ -2237,6 +2237,22 @@ func cheese_ready() -> bool:
 	return has_cheese and cheese_melt >= 1.0
 
 
+func cheese_color() -> Color:
+	## Match the melt art — yellow → cooked orange.
+	var t := clampf(cheese_melt, 0.0, 1.0)
+	var drape := smoothstep(0.12, 0.95, t)
+	drape = drape * drape * (3.0 - 2.0 * drape)
+	return Color(1.0, 0.82, 0.26).lerp(Color(0.96, 0.55, 0.12), drape)
+
+
+func cheese_anchor_world() -> Vector3:
+	## Top of the melt square in world space.
+	var y := 0.028
+	if _cheese_root != null and is_instance_valid(_cheese_root):
+		return _cheese_root.global_position + Vector3(0.0, 0.004, 0.0)
+	return global_position + Vector3(0.0, y, 0.0)
+
+
 func _build_cheese_slice() -> void:
 	if _cheese_root != null and is_instance_valid(_cheese_root):
 		_cheese_root.queue_free()
