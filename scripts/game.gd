@@ -1179,6 +1179,10 @@ var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
+## Fullscreen fake distance-field AO (depth crease darkening) — Hidden / GFX toggle.
+var fake_df_ao_mesh: MeshInstance3D = null
+var fake_df_ao_mat: ShaderMaterial = null
+var _skip_next_bun_bounce: bool = false
 var patty_reflection_height_offset: float = -0.05
 var patty_reflection_opacity: float = 0.28
 var patty_reflection_fade_height: float = 0.04
@@ -1705,7 +1709,17 @@ const GFX_DEFAULTS := {
 	"saturation": 1.03,
 	"contrast": 1.05,
 	"ssao": false,
+	"ssao_radius": 1.35,
+	"ssao_intensity": 1.85,
+	"ssao_power": 1.7,
+	"ssao_horizon": 0.04,
+	"ssao_sharpness": 0.98,
 	"ssil": false,
+	"fake_df_ao": false,
+	"fake_df_ao_radius": 14.0,
+	"fake_df_ao_intensity": 1.15,
+	"fake_df_ao_contrast": 1.65,
+	"fake_df_ao_bias": 0.0012,
 	"shadows": true, ## Cast shadows on by default
 	"sky_energy": 0.34,
 	"heat_warp_on": true,
@@ -6010,12 +6024,14 @@ func _setup_world_lighting() -> void:
 	env.tonemap_exposure = 0.92
 	env.tonemap_white = 1.0
 	## Ambient occlusion — contact shadows in the kitchen / under patties.
-	env.ssao_enabled = true
-	env.ssao_radius = 1.35
-	env.ssao_intensity = 1.85
-	env.ssao_power = 1.7
-	env.ssao_horizon = 0.04
-	env.ssil_enabled = true
+	## Tunable from Hidden / Advanced Graphics (defaults match saved GFX preset).
+	env.ssao_enabled = bool(GFX_DEFAULTS["ssao"])
+	env.ssao_radius = float(GFX_DEFAULTS["ssao_radius"])
+	env.ssao_intensity = float(GFX_DEFAULTS["ssao_intensity"])
+	env.ssao_power = float(GFX_DEFAULTS["ssao_power"])
+	env.ssao_horizon = float(GFX_DEFAULTS["ssao_horizon"])
+	env.ssao_sharpness = float(GFX_DEFAULTS["ssao_sharpness"])
+	env.ssil_enabled = bool(GFX_DEFAULTS["ssil"])
 	env.ssil_intensity = 0.85
 	env.ssil_radius = 1.15
 	env.glow_enabled = true
@@ -6051,6 +6067,7 @@ func _setup_world_lighting() -> void:
 	env.sky_rotation = Vector3(0.0, deg_to_rad(40.0), 0.0)
 	env_node.environment = env
 	add_child(env_node)
+	_build_fake_df_ao_overlay()
 
 
 func _build_flat_top_grill() -> void:
@@ -30115,6 +30132,8 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 			var pair := Node3D.new()
 			pair.name = "BunPair_%d_%d" % [tower_i, pair_i]
 			pair.position = Vector3(0.0, float(pair_i) * BUN_PAIR_STACK_Y * BUN_PILE_SCALE, 0.0)
+			pair.set_meta("tower_i", tower_i)
+			pair.set_meta("pair_i", pair_i) ## 0 = bottom row, 1 = second / top row
 			tower.add_child(pair)
 			var bottom: Node3D = Pack.instantiate_scene(BUN_BOTTOM_PATH, BUN_PILE_SCALE)
 			var top: Node3D = Pack.instantiate_scene(BUN_TOP_PATH, BUN_PILE_SCALE)
@@ -30153,9 +30172,10 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	area.monitorable = true
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(BUN_PILE_SPACING_X + 0.16, 0.22, 0.18)
+	## Tall enough to cover both rows on both towers.
+	box.size = Vector3(BUN_PILE_SPACING_X + 0.18, 0.28, 0.20)
 	cs.shape = box
-	cs.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * 0.5, 0.10, 0.0)
+	cs.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * 0.5, 0.12, 0.0)
 	area.add_child(cs)
 	bun_pile_root.add_child(area)
 	bun_pile_area = area
@@ -30211,10 +30231,9 @@ func _top_visible_bun_pair() -> Node3D:
 	return pair
 
 
-func _bounce_top_bun_pile() -> void:
-	## Hop the top 3D bun pair ~2" up, then settle back.
-	var pair := _top_visible_bun_pair()
-	if pair == null:
+func _bounce_bun_pair(pair: Node3D) -> void:
+	## Hop one 3D bun pair ~2" up, then settle back.
+	if pair == null or not is_instance_valid(pair) or not pair.visible:
 		return
 	if bool(pair.get_meta("bun_jumping", false)):
 		return
@@ -30232,13 +30251,56 @@ func _bounce_top_bun_pile() -> void:
 	)
 
 
+func _bounce_top_bun_pile() -> void:
+	## Strip / peel-order feedback — hop the current top-of-stock pair.
+	_bounce_bun_pair(_top_visible_bun_pair())
+
+
+func _bounce_bun_click_target(pair: Node3D) -> void:
+	## Bottom row → bounce both pairs in that tower. Second row → bounce that pair.
+	if pair == null or not is_instance_valid(pair):
+		return
+	var pair_i := int(pair.get_meta("pair_i", 1))
+	var tower := pair.get_parent() as Node3D
+	if pair_i <= 0 and tower != null and is_instance_valid(tower):
+		for child in tower.get_children():
+			if child is Node3D and (child as Node3D).visible \
+					and str(child.name).begins_with("BunPair"):
+				_bounce_bun_pair(child as Node3D)
+		return
+	_bounce_bun_pair(pair)
+
+
+func _pick_bun_pair_at_screen(screen_pos: Vector2) -> Node3D:
+	## Nearest visible pair under the cursor — every tower / row is independently hoppable.
+	if camera == null:
+		return null
+	var best: Node3D = null
+	var best_d := BUN_PILE_SCREEN_PX * 1.55
+	for pair in bun_pile_stacks:
+		if pair == null or not is_instance_valid(pair) or not pair.visible:
+			continue
+		var center: Vector3 = pair.global_position + Vector3(0.0, 0.028, 0.0)
+		if camera.is_position_behind(center):
+			continue
+		var d := screen_pos.distance_to(camera.unproject_position(center))
+		if d < best_d:
+			best_d = d
+			best = pair
+	return best
+
+
 func _bun_pile_under_cursor(screen_pos: Vector2) -> bool:
-	if camera == null or bun_pile_area == null or not is_instance_valid(bun_pile_area):
+	if camera == null:
 		return false
 	if _pick_patty_at_screen(screen_pos) != null:
 		return false
 	var plane := _grill_plane_from_screen(screen_pos)
 	if plane != Vector3.ZERO and _is_on_grill_surface(plane):
+		return false
+	if _pick_bun_pair_at_screen(screen_pos) != null:
+		return true
+	if bun_pile_area == null or not is_instance_valid(bun_pile_area):
 		return false
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
@@ -30247,12 +30309,7 @@ func _bun_pile_under_cursor(screen_pos: Vector2) -> bool:
 	q.collide_with_bodies = false
 	q.collision_mask = CHEESE_STATION_COLLISION_LAYER
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	if not hit.is_empty() and hit.get("collider") == bun_pile_area:
-		return true
-	var anchor := _bun_pile_home_world("bun_top")
-	if camera.is_position_behind(anchor):
-		return false
-	return screen_pos.distance_to(camera.unproject_position(anchor)) < BUN_PILE_SCREEN_PX
+	return not hit.is_empty() and hit.get("collider") == bun_pile_area
 
 
 func _try_bun_pile_click(screen_pos: Vector2) -> bool:
@@ -30263,48 +30320,27 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 		return false
 	if cheese_held or spatula_patty != null or dragging_patty != null or cup_held:
 		return false
-	if not _bun_pile_under_cursor(screen_pos):
+	var pair := _pick_bun_pair_at_screen(screen_pos)
+	if pair == null and not _bun_pile_under_cursor(screen_pos):
 		return false
 	if _bun_visual_pair_count() <= 0 or int(supply_stock.get("bun_top", 0)) <= 0:
 		_flash("Out of buns — restock on phone!", Color("EF5350"))
 		return true
-	## Bounce + thud come from `_pulse_ingredient_feedback` inside `_add_ingredient`.
+	if pair == null:
+		pair = _top_visible_bun_pair()
+	if pair != null:
+		_bounce_bun_click_target(pair)
+		_skip_next_bun_bounce = true
 	_add_ingredient("bun_top")
 	return true
 
 
 func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAFT) -> void:
-	if world == null or camera == null:
-		return
+	## No 2D fly sprite — hop/thud already play from the pile / strip click.
 	if id != "bun_bottom" and id != "bun_top":
 		return
-	## Peel feedback — hop the tower; bottom-auto also thuds (strip already thudded via pulse).
-	_bounce_top_bun_pile()
 	if id == "bun_bottom" and game_audio != null and game_audio.has_method("play_bun_thud"):
 		game_audio.play_bun_thud()
-	var start := _bun_pile_home_world(id)
-	var end := _cutting_board_world_center() + Vector3(-0.03, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.02)
-	if station_index >= 0 and station_index < STATION_COUNT:
-		end = _cutting_board_world_center() + Vector3(-0.03 + float(station_index - STATION_CRAFT) * 0.06, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.02)
-	var spr := Sprite3D.new()
-	spr.name = "%sFlyToBuild" % id.capitalize()
-	spr.texture = FoodSpritesScript.get_tex(id)
-	spr.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	spr.double_sided = true
-	spr.pixel_size = 0.00175
-	spr.shaded = true
-	spr.modulate = Color(1, 1, 1, 0.98)
-	spr.global_position = start
-	spr.rotation_degrees = Vector3(-66.0, -6.0, 0.0)
-	world.add_child(spr)
-	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(spr, "global_position", end, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(spr, "scale", Vector3(1.12, 1.12, 1.12), 0.14).set_trans(Tween.TRANS_BACK)
-	tw.tween_property(spr, "rotation_degrees:z", 16.0 if id == "bun_top" else -12.0, 0.34)
-	tw.set_parallel(false)
-	tw.tween_property(spr, "modulate:a", 0.0, 0.10)
-	tw.tween_callback(spr.queue_free)
 
 
 func _cheese_stack_home_world() -> Vector3:
@@ -34160,8 +34196,20 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "saturation", "Saturation", 0.5, 1.6, 0.01)
 	_gfx_add_slider(list, "contrast", "Contrast", 0.7, 1.5, 0.01)
 	_gfx_add_check(list, "shadows", "Cast Shadows")
-	_gfx_add_check(list, "ssao", "Ambient Occlusion (SSAO)")
 	_gfx_add_check(list, "ssil", "Indirect Light (SSIL)")
+
+	_gfx_add_section(list, "AMBIENT OCCLUSION")
+	_gfx_add_check(list, "ssao", "SSAO Enabled")
+	_gfx_add_slider(list, "ssao_radius", "SSAO Radius / Size", 0.2, 4.0, 0.01)
+	_gfx_add_slider(list, "ssao_intensity", "SSAO Intensity", 0.0, 4.0, 0.01)
+	_gfx_add_slider(list, "ssao_power", "SSAO Power", 0.2, 4.0, 0.01)
+	_gfx_add_slider(list, "ssao_horizon", "SSAO Horizon", 0.0, 0.25, 0.001)
+	_gfx_add_slider(list, "ssao_sharpness", "SSAO Sharpness", 0.0, 1.0, 0.01)
+	_gfx_add_check(list, "fake_df_ao", "Fake Distance-Field AO")
+	_gfx_add_slider(list, "fake_df_ao_radius", "Fake AO Radius (px)", 2.0, 40.0, 0.5)
+	_gfx_add_slider(list, "fake_df_ao_intensity", "Fake AO Intensity", 0.0, 3.0, 0.01)
+	_gfx_add_slider(list, "fake_df_ao_contrast", "Fake AO Contrast", 0.5, 4.0, 0.01)
+	_gfx_add_slider(list, "fake_df_ao_bias", "Fake AO Bias", 0.0, 0.01, 0.0001)
 
 	_gfx_add_section(list, "HEAT WARP")
 	_gfx_add_check(list, "heat_warp_on", "Heat Shimmer")
@@ -34879,6 +34927,23 @@ func _build_options_menu() -> void:
 			_save_soda_cup_height_settings()
 	)
 
+	var ao_lab := Label.new()
+	ao_lab.text = "AMBIENT OCCLUSION"
+	UiFontsScript.apply_label(ao_lab, true, 13)
+	ao_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(ao_lab)
+	_options_add_standard_check(options_hidden_room_tone_box, "ssao", "SSAO Enabled")
+	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_radius", "SSAO Radius / Size", 0.2, 4.0, 0.01)
+	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_intensity", "SSAO Intensity", 0.0, 4.0, 0.01)
+	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_power", "SSAO Power", 0.2, 4.0, 0.01)
+	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_horizon", "SSAO Horizon", 0.0, 0.25, 0.001)
+	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_sharpness", "SSAO Sharpness", 0.0, 1.0, 0.01)
+	_options_add_standard_check(options_hidden_room_tone_box, "fake_df_ao", "Fake Distance-Field AO")
+	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_radius", "Fake AO Radius (px)", 2.0, 40.0, 0.5)
+	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_intensity", "Fake AO Intensity", 0.0, 3.0, 0.01)
+	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_contrast", "Fake AO Contrast", 0.5, 4.0, 0.01)
+	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_bias", "Fake AO Bias", 0.0, 0.01, 0.0001)
+
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
 	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -35056,6 +35121,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
 			_sync_icecream_station_hidden_ui()
+			_refresh_options_graphics_controls()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
 		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
@@ -35231,6 +35297,30 @@ func _sync_graphics_ui_from_world() -> void:
 		gfx_checks["ssao"].set_pressed_no_signal(gfx_env.ssao_enabled)
 	if gfx_checks.has("ssil"):
 		gfx_checks["ssil"].set_pressed_no_signal(gfx_env.ssil_enabled)
+	var ao_map := {
+		"ssao_radius": gfx_env.ssao_radius,
+		"ssao_intensity": gfx_env.ssao_intensity,
+		"ssao_power": gfx_env.ssao_power,
+		"ssao_horizon": gfx_env.ssao_horizon,
+		"ssao_sharpness": gfx_env.ssao_sharpness,
+	}
+	if fake_df_ao_mat != null:
+		ao_map["fake_df_ao_radius"] = float(fake_df_ao_mat.get_shader_parameter("radius_px"))
+		ao_map["fake_df_ao_intensity"] = float(fake_df_ao_mat.get_shader_parameter("intensity"))
+		ao_map["fake_df_ao_contrast"] = float(fake_df_ao_mat.get_shader_parameter("contrast"))
+		ao_map["fake_df_ao_bias"] = float(fake_df_ao_mat.get_shader_parameter("bias"))
+	for ao_key in ao_map:
+		if gfx_sliders.has(ao_key) and gfx_sliders[ao_key] != null:
+			gfx_sliders[ao_key].set_value_no_signal(float(ao_map[ao_key]))
+			var ao_row: Node = gfx_sliders[ao_key].get_parent()
+			if ao_row and ao_row.get_child_count() > 0:
+				var ao_top = ao_row.get_child(0)
+				var ao_val = ao_top.get_node_or_null("Val") if ao_top else null
+				if ao_val:
+					ao_val.text = "%.2f" % float(ao_map[ao_key])
+	if gfx_checks.has("fake_df_ao"):
+		var fake_on := fake_df_ao_mesh != null and is_instance_valid(fake_df_ao_mesh) and fake_df_ao_mesh.visible
+		gfx_checks["fake_df_ao"].set_pressed_no_signal(fake_on)
 	## Heat warp lives on the grill shader, not the Environment.
 	var hw_map := {
 		"heat_warp_size": float(GFX_DEFAULTS["heat_warp_size"]),
@@ -35408,8 +35498,13 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 		gfx_env.adjustment_enabled = true
 		gfx_env.adjustment_saturation = float(s.get("saturation", 1.06))
 		gfx_env.adjustment_contrast = float(s.get("contrast", 1.04))
-		gfx_env.ssao_enabled = bool(s.get("ssao", true))
-		gfx_env.ssil_enabled = bool(s.get("ssil", true))
+		gfx_env.ssao_enabled = bool(s.get("ssao", GFX_DEFAULTS["ssao"]))
+		gfx_env.ssao_radius = float(s.get("ssao_radius", GFX_DEFAULTS["ssao_radius"]))
+		gfx_env.ssao_intensity = float(s.get("ssao_intensity", GFX_DEFAULTS["ssao_intensity"]))
+		gfx_env.ssao_power = float(s.get("ssao_power", GFX_DEFAULTS["ssao_power"]))
+		gfx_env.ssao_horizon = float(s.get("ssao_horizon", GFX_DEFAULTS["ssao_horizon"]))
+		gfx_env.ssao_sharpness = float(s.get("ssao_sharpness", GFX_DEFAULTS["ssao_sharpness"]))
+		gfx_env.ssil_enabled = bool(s.get("ssil", GFX_DEFAULTS["ssil"]))
 	if gfx_sun:
 		gfx_sun.light_energy = float(s.get("sun", 1.55))
 	if gfx_kitchen:
@@ -35421,6 +35516,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
 	_apply_shadow_settings(s)
+	_apply_fake_df_ao_settings(s)
 	_apply_heat_warp_settings(s)
 	_apply_patty_reflection_settings(s)
 	_apply_street_matte_settings(s)
@@ -35429,6 +35525,48 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_burner_strip_settings(s)
 	_apply_build_zone_settings(s)
 	_apply_roomba_audio_settings(s)
+
+
+func _build_fake_df_ao_overlay() -> void:
+	## Camera-child fullscreen multiply pass — darkens 3D creases only (not HUD).
+	if fake_df_ao_mesh != null and is_instance_valid(fake_df_ao_mesh):
+		return
+	if camera == null or not is_instance_valid(camera):
+		return
+	fake_df_ao_mesh = MeshInstance3D.new()
+	fake_df_ao_mesh.name = "FakeDfAo"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(2.0, 2.0)
+	fake_df_ao_mesh.mesh = quad
+	fake_df_ao_mesh.extra_cull_margin = 16384.0
+	fake_df_ao_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fake_df_ao_mesh.position = Vector3.ZERO
+	var shader := load("res://shaders/fake_df_ao.gdshader") as Shader
+	fake_df_ao_mat = ShaderMaterial.new()
+	if shader != null:
+		fake_df_ao_mat.shader = shader
+		fake_df_ao_mat.set_shader_parameter("intensity", float(GFX_DEFAULTS["fake_df_ao_intensity"]))
+		fake_df_ao_mat.set_shader_parameter("radius_px", float(GFX_DEFAULTS["fake_df_ao_radius"]))
+		fake_df_ao_mat.set_shader_parameter("contrast", float(GFX_DEFAULTS["fake_df_ao_contrast"]))
+		fake_df_ao_mat.set_shader_parameter("bias", float(GFX_DEFAULTS["fake_df_ao_bias"]))
+		fake_df_ao_mesh.material_override = fake_df_ao_mat
+	fake_df_ao_mesh.visible = bool(GFX_DEFAULTS["fake_df_ao"])
+	camera.add_child(fake_df_ao_mesh)
+
+
+func _apply_fake_df_ao_settings(s: Dictionary) -> void:
+	if fake_df_ao_mesh == null or not is_instance_valid(fake_df_ao_mesh):
+		_build_fake_df_ao_overlay()
+	if fake_df_ao_mesh == null or not is_instance_valid(fake_df_ao_mesh):
+		return
+	var on := bool(s.get("fake_df_ao", GFX_DEFAULTS["fake_df_ao"]))
+	fake_df_ao_mesh.visible = on
+	if fake_df_ao_mat == null:
+		return
+	fake_df_ao_mat.set_shader_parameter("intensity", float(s.get("fake_df_ao_intensity", GFX_DEFAULTS["fake_df_ao_intensity"])))
+	fake_df_ao_mat.set_shader_parameter("radius_px", float(s.get("fake_df_ao_radius", GFX_DEFAULTS["fake_df_ao_radius"])))
+	fake_df_ao_mat.set_shader_parameter("contrast", float(s.get("fake_df_ao_contrast", GFX_DEFAULTS["fake_df_ao_contrast"])))
+	fake_df_ao_mat.set_shader_parameter("bias", float(s.get("fake_df_ao_bias", GFX_DEFAULTS["fake_df_ao_bias"])))
 
 
 func _apply_shadow_settings(s: Dictionary) -> void:
@@ -37855,9 +37993,10 @@ func _shake_ingredient_button(btn: Control) -> void:
 func _pulse_ingredient_feedback(id: String) -> void:
 	if ingredient_buttons.has(id):
 		_shake_ingredient_button(ingredient_buttons[id])
-	## Strip / pile bun click — hop the 3D tower with the thud.
-	if id == "bun_top" or id == "bun_bottom":
+	## Strip bun click — hop peel-order top. Pile clicks hop their own target first.
+	if (id == "bun_top" or id == "bun_bottom") and not _skip_next_bun_bounce:
 		_bounce_top_bun_pile()
+	_skip_next_bun_bounce = false
 	if game_audio:
 		game_audio.play_ingredient(id)
 
