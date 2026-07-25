@@ -488,7 +488,7 @@ var _fire_flicker_t: float = 0.0
 ## Edge-spatula oil trail blaze — spreads speck → speck from the tap.
 var _oil_fire_trail_mode: bool = false
 var _oil_fire_spread_cool: float = 0.0
-const OIL_EDGE_IGNITE_RADIUS := 0.15 ## Tip must land near a puddle
+const OIL_EDGE_IGNITE_RADIUS := 0.28 ## Tip must land near a puddle (forgiving)
 const OIL_FIRE_SPREAD_RADIUS := 0.155 ## Neighbor speck catch distance
 const OIL_FIRE_SPREAD_SEC := 0.11 ## Delay between spread hops
 var _spatula_sparks: Array = [] ## short-lived edge-spark FX
@@ -4702,7 +4702,8 @@ func _tick_spatula_tap_rings(delta: float) -> void:
 
 func _try_spatula_edge_tap_fx(at: Vector3) -> void:
 	## Sideways blade on steel: spark at ±90°, ignite grease trails from ±45° up.
-	if at == Vector3.ZERO or not grill_on:
+	## Works with burner on or off — edge strike is the match.
+	if at == Vector3.ZERO:
 		return
 	var roll_mag := absf(_spatula_user_roll)
 	if roll_mag < HAND_SPATULA_ROLL_STEP * 0.5:
@@ -4723,10 +4724,11 @@ func _nearest_oil_slick_index(at: Vector3, max_dist: float) -> int:
 		var m = item.get("mesh")
 		if m == null or not is_instance_valid(m):
 			continue
-		var p: Vector3 = m.position
+		## World XZ — slap contact is world-space.
+		var p: Vector3 = m.global_position
 		var d := Vector2(p.x - at.x, p.z - at.z).length()
 		var rad := float(item.get("radius", 0.04))
-		d = maxf(0.0, d - rad * 0.65)
+		d = maxf(0.0, d - rad * 0.85)
 		if d < best_d:
 			best_d = d
 			best = i
@@ -4736,21 +4738,19 @@ func _nearest_oil_slick_index(at: Vector3, max_dist: float) -> int:
 func _ignite_oil_trail_from_index(idx: int) -> void:
 	if idx < 0 or idx >= oil_slicks.size():
 		return
-	if not grill_on:
-		return
 	var item: Dictionary = oil_slicks[idx]
 	var m = item.get("mesh")
 	if m == null or not is_instance_valid(m):
 		return
-	var origin: Vector3 = m.position
+	var origin: Vector3 = m.global_position
 	var already := bool(item.get("on_fire", false))
 	item["on_fire"] = true
 	oil_slicks[idx] = item
 	if not grill_on_fire:
-		## Fresh blaze from this speck — grows along the trail.
+		## Fresh blaze from this speck — grows along the trail (burner on or off).
 		_oil_fire_trail_mode = true
 		_oil_fire_spread_cool = OIL_FIRE_SPREAD_SEC
-		_start_grill_fire(origin)
+		_start_grill_fire(origin, true)
 	elif _oil_fire_trail_mode:
 		_oil_fire_spread_cool = mini(_oil_fire_spread_cool, OIL_FIRE_SPREAD_SEC)
 		_sync_fire_to_oil_area()
@@ -12964,22 +12964,22 @@ func _is_in_fire_zone(world_pos: Vector3) -> bool:
 		and absf(world_pos.z - GRILL_SURFACE_Z) <= GRILL_DEPTH * 0.55
 
 
-func _start_grill_fire(origin: Vector3 = Vector3.ZERO) -> void:
+func _start_grill_fire(origin: Vector3 = Vector3.ZERO, allow_cold: bool = false) -> void:
 	if grill_on_fire:
 		return
-	## Never flash over on a cold flat-top.
-	if not grill_on:
+	## Pour / auto fires need a hot flat-top; spatula edge-strikes can light cold oil.
+	if not grill_on and not allow_cold:
 		return
 	if mp_enabled and not _mp_applying:
-		mp_grill_fire_start.rpc(origin.x, origin.z)
+		mp_grill_fire_start.rpc(origin.x, origin.z, allow_cold)
 		return
-	_start_grill_fire_local(origin)
+	_start_grill_fire_local(origin, allow_cold)
 
 
-func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO) -> void:
+func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO, allow_cold: bool = false) -> void:
 	if grill_on_fire:
 		return
-	if not grill_on:
+	if not grill_on and not allow_cold:
 		return
 	grill_on_fire = true
 	fire_health = 1.0
@@ -41624,9 +41624,9 @@ func _mp_consume_drink_local(flavor: String, cup_net_id: int = -1) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_grill_fire_start(x: float, z: float) -> void:
+func mp_grill_fire_start(x: float, z: float, allow_cold: bool = false) -> void:
 	_mp_applying = true
-	_start_grill_fire_local(Vector3(x, GRILL_SURFACE_Y, z))
+	_start_grill_fire_local(Vector3(x, GRILL_SURFACE_Y, z), allow_cold)
 	_mp_applying = false
 
 
