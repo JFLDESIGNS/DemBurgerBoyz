@@ -51,6 +51,7 @@ var _shake_on: bool = false
 var _shake_season_on: bool = false
 var _scrape_move_on: bool = false ## Spatula/brush scrape bed while moving on steel
 var _scrape_debris_boost: bool = false ## On actual debris — 2× scrape volumes
+var _scrape_dir_pitch: float = 1.0 ## Sideways scrapes pitch up; depth scrapes pitch down
 var _shake_lp := 0.0
 var _shake_phase := 0.0
 var _shake_tick := 0.0
@@ -290,13 +291,14 @@ func _process(delta: float) -> void:
 				## Burger drag layers metal + oil — keep the scrape bed quieter too.
 				slide_mul = BURGER_SLIDE_VOL_MUL
 			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.38 * slide_mul, 0.02, 1.0))
-			_slide_player.pitch_scale = 1.15 + _slide_gain * 0.2
+			_slide_player.pitch_scale = (1.15 + _slide_gain * 0.2) * _scrape_dir_pitch
 			if not _slide_player.playing:
 				_slide_player.play()
 		elif _slide_player.playing:
 			_slide_player.stop()
 			_slide_player.volume_db = -80.0
 			_slide_player.pitch_scale = 1.0
+			_scrape_dir_pitch = 1.0
 	## Burger spatula-slide: wet oil squish bed + hiss pops (−24% vs prior).
 	var oil_fade := 8.0 if _oil_slide_target > _oil_slide_gain else 4.0
 	_oil_slide_gain = move_toward(_oil_slide_gain, _oil_slide_target, delta * oil_fade)
@@ -677,6 +679,7 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 	if not moving:
 		_scrape_ting_cool = 0.0
 		_scrape_debris_boost = false
+		_scrape_dir_pitch = 1.0
 		## Snap the metal slide bed off with scrape — don't leave a stuck loop after LMB up.
 		_slide_target = 0.0
 		_slide_gain = 0.0
@@ -687,6 +690,18 @@ func set_grill_scrape(moving: bool, on_debris: bool = false) -> void:
 	_sync_shaker_rattle()
 
 
+func set_scrape_direction(dir_xz: Vector2) -> void:
+	## Pitch follows scrape direction — sideways brighter, depth/forward darker.
+	if dir_xz.length_squared() < 0.0000001:
+		return
+	var n := dir_xz.normalized()
+	## n.x = grill left/right, n.y = grill depth (stored Z).
+	var side := absf(n.x)
+	var depth := absf(n.y)
+	var target := lerpf(0.90, 1.28, side) * lerpf(1.0, 0.94, depth)
+	_scrape_dir_pitch = lerpf(_scrape_dir_pitch, target, 0.35)
+
+
 func _sync_shaker_rattle() -> void:
 	if _shake_player == null:
 		return
@@ -695,8 +710,10 @@ func _sync_shaker_rattle() -> void:
 		_shake_on = true
 		if _scrape_move_on:
 			_shake_player.volume_db = SHAKER_SCRAPE_DEBRIS_DB if _scrape_debris_boost else SHAKER_SCRAPE_DB
+			_shake_player.pitch_scale = _scrape_dir_pitch
 		else:
 			_shake_player.volume_db = SHAKER_RATTLE_DB
+			_shake_player.pitch_scale = 1.0
 		if not _shake_player.playing:
 			_shake_player.play()
 	else:
@@ -704,6 +721,7 @@ func _sync_shaker_rattle() -> void:
 		if _shake_player.playing:
 			_shake_player.stop()
 		_shake_player.volume_db = -80.0
+		_shake_player.pitch_scale = 1.0
 
 
 func _tick_scrape_tings(delta: float) -> void:

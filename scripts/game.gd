@@ -443,13 +443,14 @@ var brush_held_rot := Vector3(-96.0, 0.0, 0.0)
 var brush_throwing: bool = false
 const RESIDUE_SWIPE_DIST := 0.07 ## travel needed to chip a fleck cluster
 const RESIDUE_SCRAPE_RATE := 1.35 ## residue cleared per meter of blade travel (brush)
-## Spatula scrape — tight tip only; much harder than the brush.
-const SPATULA_SCRAPE_RADIUS := 0.072 ## Tip on the stain (slightly more forgiving)
+## Spatula scrape — tip hit (X easier than Z so sideways swipe clears debris).
+const SPATULA_SCRAPE_RADIUS := 0.108 ## was 0.072 — wider latch
+const SPATULA_SCRAPE_SIDE_EASE := 0.58 ## <1 shrinks X distance → easier left/right scrapes
 ## ~2s per spot: travel wear + time wear while tip is on the pad.
-const SPATULA_SCRAPE_RATE := 1.35 ## Per meter of tip travel
-const SPATULA_SCRAPE_TIME_RATE := 0.48 ## Per second while tip holds the stain
-const SPATULA_SWIPE_DIST := 0.10 ## Flecks chip with short swipes
-const SPATULA_SCRAPE_MIN_MOVE := 0.0012 ## Tiny moves still count a little
+const SPATULA_SCRAPE_RATE := 1.55 ## Per meter of tip travel
+const SPATULA_SCRAPE_TIME_RATE := 0.55 ## Per second while tip holds the stain
+const SPATULA_SWIPE_DIST := 0.085 ## Flecks chip with short swipes
+const SPATULA_SCRAPE_MIN_MOVE := 0.0010 ## Tiny moves still count a little
 const RESIDUE_CHUNK_COUNT := 10 ## Extra flecks on top of the burnt disc.
 const RESIDUE_SIZE_SCALE := 0.85 ## Burger leave-behind stain / flecks
 ## Same-spot cook dwell → roll once; 80% chance to drop debris while still cooking.
@@ -1018,6 +1019,7 @@ var _godray_meshes: Array = [] ## MeshInstance3D shafts
 var _godray_base_alpha: PackedFloat32Array = PackedFloat32Array()
 var _godray_phase: PackedFloat32Array = PackedFloat32Array()
 var _cup_ice_spawn_cd: float = 0.0
+var _cup_soda_overfill_spill_cd: float = 0.0
 var _cup_prev_pos: Vector3 = Vector3.ZERO
 var _cup_vel: Vector3 = Vector3.ZERO
 var _cup_slosh: Vector2 = Vector2.ZERO ## x = tilt Z, y = tilt X (degrees)
@@ -1475,7 +1477,7 @@ const CUP_FILL_RATE := 0.95
 const CUP_SPOUT_REACH := 0.55
 const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
-const CUP_ICE_STACK_MAX := 36
+const CUP_ICE_STACK_MAX := 48 ## pack to the rim (+ mound when overfilling)
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
 ## Soft-serve base seat (pre camera-right offset). Offset applied via icecream_cam_right_ft.
 const ICECREAM_STATION_POS := Vector3(2.079, 1.19, 0.647)
@@ -1576,8 +1578,8 @@ const CUP_LIQUID_WILD_SPEED := 1.90 ## full ripple / wave above this
 const CUP_TILT_VEL_DEADZONE := 0.22 ## ignore tiny hand noise for bank/slosh
 const CUP_SPLASH_LOSS := 0.07
 const CUP_SPLASH_LEAN := 34.0 ## was 26 — lean further before spilling
-## Invisible front wall (soda local +Z toward cook). Allows under-nozzle bay (~0.30) but blocks behind cabinet.
-const CUP_SODA_FRONT_Z := 0.18
+## Invisible front wall (soda local +Z toward cook). Allows under-nozzle bay but blocks behind cabinet.
+const CUP_SODA_FRONT_Z := 0.2308 ## was 0.18 — +2" toward cook
 const CUP_SODA_FRONT_HALF_X := 0.58
 const CUP_SODA_FRONT_HEIGHT := 1.30
 const CUP_ICECREAM_FRONT_Z := 0.215
@@ -8967,7 +8969,11 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 				brush_swipe_travel[i] = 0.0
 			continue
 		var pad_pos: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else slot_positions[i]
-		var d := Vector2(tip_pos.x - pad_pos.x, tip_pos.z - pad_pos.z).length()
+		## Elliptical tip — sideways (X) scrapes latch easier than depth (Z).
+		var d := Vector2(
+			(tip_pos.x - pad_pos.x) * SPATULA_SCRAPE_SIDE_EASE,
+			tip_pos.z - pad_pos.z
+		).length()
 		if d < best_d:
 			best_d = d
 			best_i = i
@@ -8980,7 +8986,12 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 		scraping = true
 		scraping_debris = true
 		var before := float(grill_residue[i])
-		var travel_wear := moved * SPATULA_SCRAPE_RATE if moved >= SPATULA_SCRAPE_MIN_MOVE else 0.0
+		var side_boost := 1.0
+		if moved >= SPATULA_SCRAPE_MIN_MOVE:
+			var nd := move_xz.normalized()
+			## Extra wear on left/right strokes (the ones that felt dead before).
+			side_boost = lerpf(1.0, 1.45, absf(nd.x))
+		var travel_wear := moved * SPATULA_SCRAPE_RATE * side_boost if moved >= SPATULA_SCRAPE_MIN_MOVE else 0.0
 		var time_wear := delta * SPATULA_SCRAPE_TIME_RATE
 		grill_residue[i] = maxf(0.0, before - travel_wear - time_wear)
 		_refresh_residue_visual(i)
@@ -9020,6 +9031,8 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 		if moving_scrape or scraping:
 			var spd := moved / maxf(delta, 0.001) if moved >= SPATULA_SCRAPE_MIN_MOVE else 0.35
 			game_audio.set_slide_moving(true, clampf(spd * 0.25, 0.3, 1.2))
+			if moving_scrape and game_audio.has_method("set_scrape_direction"):
+				game_audio.set_scrape_direction(move_xz)
 		else:
 			game_audio.set_slide_moving(false)
 		if game_audio.has_method("set_grill_scrape"):
@@ -19751,11 +19764,13 @@ func _build_soda_station() -> void:
 	_refresh_soda_flavor_lights()
 	## Collision hulls in soda_root local space (scaled model bounds).
 	var s := SODA_FOUNTAIN_SCALE
+	## +2" toward cook on face/body hulls so the cup can't dig into the cabinet.
+	var stick := 0.0508
 	soda_colliders = [
-		{"p": Vector3(0.0, 0.33 * s, -0.05 * s), "h": Vector3(0.18 * s, 0.28 * s, 0.18 * s)}, ## body
-		{"p": Vector3(0.0, 0.35 * s, 0.14 * s), "h": Vector3(0.17 * s, 0.16 * s, 0.08 * s)}, ## dispenser face
-		{"p": Vector3(0.0, 0.55 * s, 0.05 * s), "h": Vector3(0.16 * s, 0.12 * s, 0.10 * s)}, ## banner / top
-		{"p": Vector3(-0.38, 0.85, 0.12), "h": Vector3(0.13, 0.28, 0.11)}, ## cup dispenser
+		{"p": Vector3(0.0, 0.33 * s, -0.05 * s + stick * 0.35), "h": Vector3(0.18 * s, 0.28 * s, 0.18 * s + stick * 0.5)}, ## body
+		{"p": Vector3(0.0, 0.35 * s, 0.14 * s + stick * 0.5), "h": Vector3(0.17 * s, 0.16 * s, 0.08 * s + stick * 0.5)}, ## dispenser face
+		{"p": Vector3(0.0, 0.55 * s, 0.05 * s + stick * 0.35), "h": Vector3(0.16 * s, 0.12 * s, 0.10 * s + stick * 0.35)}, ## banner / top
+		{"p": Vector3(-0.38, 0.85, 0.12 + stick * 0.35), "h": Vector3(0.13, 0.28, 0.11 + stick * 0.35)}, ## cup dispenser
 		## Drip grate — top aligns with CUP_TRAY_DECK_LOCAL_Y (cup bottom on the ledge).
 		{"p": Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y * 0.5, 0.10 * s), "h": Vector3(0.18 * s, CUP_TRAY_DECK_LOCAL_Y * 0.5, 0.22 * s), "floor": true},
 	]
@@ -25984,12 +25999,18 @@ func _update_held_cup(delta: float) -> void:
 		if _cup_spout_unlock_grace > 0.0:
 			follow *= 0.72
 		var desired := prev.lerp(seat, follow)
-		## While under a spout, bias hard onto the drip-deck fill seat (never carry-plane Y).
+		## Fill bay: spring toward the deck seat + damp so it can wobble without glitch-fighting.
 		if can_use_fill_bay and fill_tip != null and is_instance_valid(fill_tip):
 			var fill_seat := _cup_target_for_spout(fill_tip)
-			desired.x = lerpf(desired.x, fill_seat.x, clampf(delta * 28.0, 0.0, 1.0))
-			desired.z = lerpf(desired.z, fill_seat.z, clampf(delta * 28.0, 0.0, 1.0))
+			var to_seat := Vector3(fill_seat.x - prev.x, 0.0, fill_seat.z - prev.z)
+			## Soft spring (not a hard snap) — overshoot settles instead of oscillating.
+			desired.x = prev.x + to_seat.x * clampf(delta * 14.0, 0.0, 1.0)
+			desired.z = prev.z + to_seat.z * clampf(delta * 14.0, 0.0, 1.0)
 			desired.y = fill_seat.y
+			## Bleed lateral velocity hard while parked under the nozzle.
+			_cup_vel.x *= clampf(1.0 - delta * 10.0, 0.0, 1.0)
+			_cup_vel.z *= clampf(1.0 - delta * 10.0, 0.0, 1.0)
+			_cup_vel.y = 0.0
 		var step := desired - prev
 		var max_step := (CUP_FILL_FOLLOW_MAX_SPEED if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
@@ -26008,6 +26029,9 @@ func _update_held_cup(delta: float) -> void:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
 			if _cup_spout_unlock_grace > 0.0:
 				_cup_vel *= 0.45
+			if can_use_fill_bay:
+				## Extra damp so seat spring + hand aim don't ping-pong.
+				_cup_vel *= clampf(1.0 - delta * 8.0, 0.35, 1.0)
 		_cup_prev_pos = cup_root.global_position
 	## Velocity lean: shake left/right tips the cup; stop and it settles upright.
 	var horiz := Vector2(-_cup_vel.x, _cup_vel.z)
@@ -26019,26 +26043,26 @@ func _update_held_cup(delta: float) -> void:
 	var tilt_rate := CUP_TILT_FOLLOW if horiz.length() > 0.08 else CUP_TILT_SETTLE
 	_cup_tilt = _cup_tilt.lerp(target_tilt, clampf(delta * tilt_rate, 0.0, 1.0))
 	if can_use_fill_bay:
-		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
-		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 6.0, 0.0, 1.0))
+		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 12.0, 0.0, 1.0))
+		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 14.0, 0.0, 1.0))
 	if _cup_machine_contact_grace > 0.0:
 		_cup_tilt = _cup_tilt.lerp(Vector2.ZERO, clampf(delta * 10.0, 0.0, 1.0))
 		_cup_vel = _cup_vel.lerp(Vector3.ZERO, clampf(delta * 12.0, 0.0, 1.0))
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
 	## Soft wall resolve — ease corrections so it doesn't stutter on the metal.
-	## While filling, never let the drip-floor collider re-lift the cup into mid-air.
-	if not can_use_fill_bay and (_cup_machine_contact_grace <= 0.0 or can_reach_customer):
+	## While filling / recently contacting, skip hard eject (that caused fill-bay glitch).
+	if not can_use_fill_bay and not _cup_pouring and (_cup_machine_contact_grace <= 0.0 or can_reach_customer):
 		var before_resolve := cup_root.global_position
 		var resolved := _resolve_cup_against_soda(before_resolve, can_reach_customer)
 		if not can_reach_customer:
-			var push := clampf(delta * 16.0, 0.0, 1.0)
+			var push := clampf(delta * 10.0, 0.0, 1.0) ## softer than prior 16 — less bounce fight
 			var keep_y := before_resolve.y
 			cup_root.global_position = before_resolve.lerp(resolved, push)
 			cup_root.global_position.y = keep_y
 			if before_resolve.distance_to(resolved) > 0.006:
-				_cup_machine_contact_grace = 0.16
-				_cup_vel *= 0.2
+				_cup_machine_contact_grace = 0.22
+				_cup_vel *= 0.12
 				_cup_prev_pos = cup_root.global_position
 	## Pin height: under a spout / pouring → drip deck. Otherwise carry plane.
 	if can_use_fill_bay:
@@ -26284,6 +26308,50 @@ func _spawn_cup_splash_drops() -> void:
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
 
 
+func _emit_soda_overfill_spill(rim: Vector3, flavor: String, amount: float, delta: float) -> void:
+	## Foamy overflow from a full cup — shiny soda slicks can land on the grill.
+	if cup_root == null:
+		return
+	_cup_soda_overfill_spill_cd = maxf(0.0, _cup_soda_overfill_spill_cd - delta)
+	## Foam burst at the rim (reuse stream splash bubbles).
+	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
+		soda_stream_bubbles.global_position = rim + Vector3(0.0, 0.01, 0.02)
+		soda_stream_bubbles.emitting = true
+		soda_stream_bubbles.amount = 28
+		var em := soda_stream_bubbles.process_material as ParticleProcessMaterial
+		if em:
+			em.direction = Vector3(randf_range(-0.35, 0.35), 0.55, randf_range(0.2, 0.85))
+			em.spread = 55.0
+			em.initial_velocity_min = 0.22
+			em.initial_velocity_max = 0.55
+			em.gravity = Vector3(0.0, -1.8, 0.0)
+			var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.9, 0.9, 0.95))
+			em.color = Color(
+				lerpf(0.95, pop.r, 0.35),
+				lerpf(0.97, pop.g, 0.35),
+				lerpf(1.0, pop.b, 0.35),
+				0.85
+			)
+	## Periodic shiny soda puddles — same behavior as regular pop spill.
+	if _cup_soda_overfill_spill_cd > 0.0:
+		return
+	_cup_soda_overfill_spill_cd = randf_range(0.08, 0.16)
+	var spill_dir := Vector3(randf_range(-0.12, 0.12), 0.0, randf_range(0.06, 0.22))
+	var land := rim + spill_dir
+	land.y = GRILL_SURFACE_Y
+	if not _is_on_grill_surface(land):
+		## Prefer cook-side of the tray; fall back near the cup.
+		land = Vector3(
+			cup_root.global_position.x + randf_range(-0.08, 0.08),
+			GRILL_SURFACE_Y,
+			cup_root.global_position.z + randf_range(0.05, 0.18)
+		)
+	if _is_on_grill_surface(land):
+		_spawn_soda_slick(land, 0.035 + amount * 2.2 + randf() * 0.02, flavor)
+		if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.35:
+			game_audio.trigger_hot_oil(0.55)
+
+
 func _try_fill_cup_at_spouts(delta: float) -> void:
 	if cup_root == null:
 		_hide_soda_stream()
@@ -26316,25 +26384,42 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			_hide_soda_stream()
 		else:
 			cup_flavor = soda_selected_flavor
-			var want := minf(1.0 - cup_soda_fill, CUP_FILL_RATE * delta)
-			var got := _drain_soda_tank(cup_flavor, want)
-			if got > 0.0005:
-				cup_soda_fill = minf(1.0, cup_soda_fill + got)
-				pouring_soda = true
-				_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
-				## Pour all the way to the cup floor (not just the rim).
-				var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
-				_update_soda_stream(soda_tip, cup_floor, cup_flavor)
-				if before < 1.0 and cup_soda_fill >= 1.0:
-					_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
-					_refresh_ticket_checkmarks()
-				if before < 0.82 and cup_soda_fill >= 0.82:
-					call_deferred("_try_auto_hand_finished_soda")
-			elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
-				_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
-				_hide_soda_stream()
+			if cup_soda_fill < 1.0:
+				var want := minf(1.0 - cup_soda_fill, CUP_FILL_RATE * delta)
+				var got := _drain_soda_tank(cup_flavor, want)
+				if got > 0.0005:
+					cup_soda_fill = minf(1.0, cup_soda_fill + got)
+					pouring_soda = true
+					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
+					## Pour all the way to the cup floor (not just the rim).
+					var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
+					_update_soda_stream(soda_tip, cup_floor, cup_flavor)
+					if before < 1.0 and cup_soda_fill >= 1.0:
+						_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
+						_refresh_ticket_checkmarks()
+					if before < 0.82 and cup_soda_fill >= 0.82:
+						call_deferred("_try_auto_hand_finished_soda")
+				elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
+					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
+					_hide_soda_stream()
+				else:
+					_hide_soda_stream()
 			else:
-				_hide_soda_stream()
+				## Full + still under the nozzle → foam spill / shiny soda on the steel.
+				var spill_want := CUP_FILL_RATE * delta * 0.55
+				var spilled := _drain_soda_tank(cup_flavor, spill_want)
+				if spilled > 0.0005:
+					pouring_soda = true
+					_cup_fizz = minf(1.0, _cup_fizz + delta * 2.4)
+					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.95)
+					var rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.98, 0.0)
+					_update_soda_stream(soda_tip, rim, cup_flavor)
+					_emit_soda_overfill_spill(rim, cup_flavor, spilled, delta)
+				elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
+					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
+					_hide_soda_stream()
+				else:
+					_hide_soda_stream()
 	else:
 		_hide_soda_stream()
 	if ice_d < 900.0 and ice_d < soda_d:
@@ -27113,9 +27198,11 @@ func _refresh_cup_ice_stack() -> void:
 		return
 	var want := 0
 	if cup_ice_fill > 0.04:
-		## Pack denser — overflow fill does not add more in-cup cubes.
+		## Pack to the rim — full ice uses the whole stack (was stuck ~mid-cup).
 		var packed := clampf(cup_ice_fill / CUP_ICE_FULL, 0.0, 1.0)
 		want = clampi(int(ceil(packed * float(CUP_ICE_STACK_MAX))), 1, CUP_ICE_STACK_MAX)
+		if cup_ice_fill >= CUP_ICE_FULL:
+			want = CUP_ICE_STACK_MAX
 	var have := cup_ice_root.get_child_count()
 	if have != want:
 		while cup_ice_root.get_child_count() > 0:
@@ -27227,37 +27314,42 @@ func _make_ice_cube_material() -> StandardMaterial3D:
 func _layout_cup_ice_cubes(count: int) -> void:
 	if cup_ice_root == null:
 		return
-	## Fill from cup floor up to near the liquid top — stay inside the soda cylinder.
+	## Fill from cup floor up to the rim (and mound when overfilling).
 	var liquid_top := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
 	var ice_top := liquid_top
+	var fill_u := clampf(cup_ice_fill / CUP_ICE_FULL, 0.0, 1.0)
 	if cup_soda_fill < 0.05:
-		ice_top = lerpf(0.06, CUP_SHELL_H * 0.55, clampf(cup_ice_fill, 0.0, 1.0))
+		## Ice-only: pack to the lip — was capped at ~55% shell height.
+		ice_top = lerpf(0.05, CUP_SHELL_H * 0.97, fill_u)
+		if cup_ice_fill > CUP_ICE_FULL:
+			ice_top = CUP_SHELL_H * 0.97 + clampf(cup_ice_fill - CUP_ICE_FULL, 0.0, 1.2) * 0.045
 	else:
-		## Keep cubes under the liquid surface.
-		ice_top = maxf(0.05, liquid_top - CUP_ICE_CUBE_SIZE * 0.4)
+		## Under soda: ride near the liquid surface; mound when ice overfills.
+		ice_top = maxf(0.05, liquid_top - CUP_ICE_CUBE_SIZE * 0.15)
+		if cup_ice_fill > CUP_ICE_FULL:
+			ice_top = maxf(ice_top, CUP_SHELL_H * 0.92) \
+					+ clampf(cup_ice_fill - CUP_ICE_FULL, 0.0, 1.2) * 0.035
 	var base_y := 0.018 + CUP_ICE_CUBE_SIZE * 0.5
 	var kids := cup_ice_root.get_children()
-	var liquid_h := maxf(0.05, liquid_top)
+	var height_ref := maxf(0.05, ice_top)
 	## Cube half-diagonal (+ tilt pad) so corners never poke past the pop wall.
 	var corner := CUP_ICE_CUBE_SIZE * 0.5 * 1.52
 	var per_layer := 5
-	var layer_h := CUP_ICE_CUBE_SIZE * 0.78
+	var layer_h := CUP_ICE_CUBE_SIZE * 0.72
 	var max_layers := maxi(1, int(ceil((ice_top - base_y) / layer_h)))
 	for i in mini(count, kids.size()):
 		var cube: Node3D = kids[i]
 		var layer := mini(i / per_layer, max_layers - 1)
 		var in_layer := i % per_layer
 		var ang := float(in_layer) * TAU / float(per_layer) + float(layer) * 0.35
-		## Stretch layers so the stack stays under the liquid top.
+		## Stretch layers so the stack climbs the full ice column.
 		var y_span := maxf(0.02, ice_top - base_y)
 		var y := base_y + (float(layer) / float(maxi(max_layers - 1, 1))) * y_span
 		if max_layers <= 1:
 			y = base_y + float(i) * 0.008
 		y = minf(y, ice_top)
-		## Radius of the liquid at this height — clamp every cube to it.
-		var t_y := clampf(y / liquid_h, 0.0, 1.0)
-		if cup_soda_fill < 0.05:
-			t_y = clampf(cup_ice_fill, 0.0, 1.0) * 0.5
+		## Radius of the cup at this height — follow stack height (not a 50% fill clamp).
+		var t_y := clampf(y / height_ref, 0.0, 1.0)
 		var r_at := lerpf(CUP_LIQUID_BOT_R, CUP_LIQUID_TOP_R, t_y)
 		var max_rad := maxf(0.004, r_at - corner - 0.006)
 		var rad := max_rad * (0.12 + 0.72 * (float((in_layer + layer) % 3) / 2.0))
