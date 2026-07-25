@@ -467,11 +467,16 @@ var melting_cups: Array = [] ## cups dropped on the grill — melt / smoke / cha
 var melting_icecreams: Array = [] ## cones dropped on hot steel — serve slumps into burnt crust
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
+var _fire_smoke_tex: ImageTexture = null
 ## Animated noise holes punched through oil while it's on fire.
 var _oil_burn_noise: FastNoiseLite = null
 var _oil_burn_tex: ImageTexture = null
 var _oil_burn_tex_cool: float = 0.0
 const OIL_BURN_TEX_INTERVAL := 0.055
+## Flame emission pad around lit grease — small scatter, not a wall.
+const FIRE_EMIT_PAD := 0.016
+const FIRE_EMIT_MIN_HALF := 0.026
+const FIRE_LINE_THIN_HALF := 0.042 ## short axis of an oil-line blaze
 var _black_smoke_tex: ImageTexture = null
 var _burn_bubble_tex: ImageTexture = null
 var _soda_blob_tex: ImageTexture = null
@@ -13175,14 +13180,25 @@ func _start_grill_fire_local(origin: Vector3 = Vector3.ZERO, allow_cold: bool = 
 	_flash("GREASE FIRE on %s! Grab the extinguisher!" % lab, Color("FF5252"))
 
 
+func _fire_half_from_oil_span(span_x: float, span_z: float) -> Vector3:
+	## Bounds hug the grease footprint — oil lines stay thin, not a flame carpet.
+	var half_x := clampf(span_x + FIRE_EMIT_PAD, FIRE_EMIT_MIN_HALF, GRILL_WIDTH * 0.42)
+	var half_z := clampf(span_z + FIRE_EMIT_PAD, FIRE_EMIT_MIN_HALF, GRILL_DEPTH * 0.30)
+	if span_x > span_z * 1.35:
+		half_z = minf(half_z, FIRE_LINE_THIN_HALF)
+	elif span_z > span_x * 1.35:
+		half_x = minf(half_x, FIRE_LINE_THIN_HALF)
+	return Vector3(half_x, 0.002, half_z)
+
+
 func _oil_fire_bounds() -> Dictionary:
-	## Trail blaze hugs lit puddles; pour blaze fills the heat band it started in.
+	## Flames spawn on lit grease only — never inflate to a whole heat-band wall.
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	var n_lit := 0
 	if _oil_fire_trail_mode:
-		var min_x := INF
-		var max_x := -INF
-		var min_z := INF
-		var max_z := -INF
-		var n_lit := 0
 		for item in oil_slicks:
 			if not bool(item.get("on_fire", false)):
 				continue
@@ -13196,52 +13212,50 @@ func _oil_fire_bounds() -> Dictionary:
 			min_z = minf(min_z, p.z - rad)
 			max_z = maxf(max_z, p.z + rad)
 			n_lit += 1
-		if n_lit > 0:
-			var cx := (min_x + max_x) * 0.5
-			var cz := (min_z + max_z) * 0.5
-			cz = clampf(cz, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
-			var half := Vector3(
-				clampf((max_x - min_x) * 0.5 + 0.04, 0.06, GRILL_WIDTH * 0.48),
-				0.002,
-				clampf((max_z - min_z) * 0.5 + 0.04, 0.06, GRILL_DEPTH * 0.42)
-			)
-			## Emit from steel surface — triangles rise from the grill top.
+	else:
+		## Pour fire: only oil inside the started heat band (not the whole strip).
+		var zone := _fire_zone_dict()
+		if zone.is_empty():
+			zone = _pick_fire_start_zone()
+			fire_zone_id = str(zone.get("id", "full"))
+		var x0 := float(zone.get("x0", GRILL_CENTER_X - 0.3))
+		var x1 := float(zone.get("x1", GRILL_CENTER_X + 0.3))
+		for item2 in oil_slicks:
+			var m2 = item2.get("mesh")
+			if m2 == null or not is_instance_valid(m2):
+				continue
+			var p2: Vector3 = m2.position
+			if p2.x < x0 - 0.02 or p2.x > x1 + 0.02:
+				continue
+			var rad2 := float(item2.get("radius", 0.04))
+			min_x = minf(min_x, p2.x - rad2)
+			max_x = maxf(max_x, p2.x + rad2)
+			min_z = minf(min_z, p2.z - rad2)
+			max_z = maxf(max_z, p2.z + rad2)
+			n_lit += 1
+		if n_lit <= 0:
+			## No puddles left in-band — tiny ember at zone center.
+			var cx0 := float(zone.get("cx", GRILL_CENTER_X))
 			return {
-				"center": Vector3(cx, GRILL_SURFACE_Y + 0.008, cz),
-				"half": half,
+				"center": Vector3(cx0, GRILL_SURFACE_Y + 0.008, GRILL_SURFACE_Z),
+				"half": Vector3(FIRE_EMIT_MIN_HALF, 0.002, FIRE_EMIT_MIN_HALF),
+				"lit": 1,
 			}
-	var zone := _fire_zone_dict()
-	if zone.is_empty():
-		zone = _pick_fire_start_zone()
-		fire_zone_id = str(zone.get("id", "full"))
-	var x0 := float(zone.get("x0", GRILL_CENTER_X - 0.3))
-	var x1 := float(zone.get("x1", GRILL_CENTER_X + 0.3))
-	var zw := maxf(0.18, float(zone.get("w", 0.4)))
-	var cx2 := float(zone.get("cx", (x0 + x1) * 0.5))
-	var sum_z := 0.0
-	var n := 0
-	for item2 in oil_slicks:
-		var m2 = item2.get("mesh")
-		if m2 == null or not is_instance_valid(m2):
-			continue
-		var p2: Vector3 = m2.position
-		if p2.x < x0 - 0.02 or p2.x > x1 + 0.02:
-			continue
-		sum_z += p2.z
-		n += 1
-	var cz2 := GRILL_SURFACE_Z
-	if n > 0:
-		cz2 = sum_z / float(n)
-	cz2 = clampf(cz2, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
-	## Thin sheet on the steel — flames spawn at the surface and rise.
-	var center := Vector3(cx2, GRILL_SURFACE_Y + 0.008, cz2)
-	## Tight box — one section only, not the whole flat-top.
-	var half2 := Vector3(
-		clampf(zw * 0.42, 0.14, zw * 0.48),
-		0.002,
-		clampf(GRILL_DEPTH * 0.38, 0.16, GRILL_DEPTH * 0.42)
-	)
-	return {"center": center, "half": half2}
+	if n_lit <= 0:
+		return {
+			"center": Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.008, GRILL_SURFACE_Z),
+			"half": Vector3(FIRE_EMIT_MIN_HALF, 0.002, FIRE_EMIT_MIN_HALF),
+			"lit": 0,
+		}
+	var cx := (min_x + max_x) * 0.5
+	var cz := (min_z + max_z) * 0.5
+	cz = clampf(cz, GRILL_SURFACE_Z - GRILL_DEPTH * 0.35, GRILL_SURFACE_Z + GRILL_DEPTH * 0.35)
+	var half := _fire_half_from_oil_span((max_x - min_x) * 0.5, (max_z - min_z) * 0.5)
+	return {
+		"center": Vector3(cx, GRILL_SURFACE_Y + 0.008, cz),
+		"half": half,
+		"lit": n_lit,
+	}
 
 
 func _sync_fire_to_oil_area() -> void:
@@ -13250,8 +13264,22 @@ func _sync_fire_to_oil_area() -> void:
 	var b := _oil_fire_bounds()
 	var center: Vector3 = b["center"]
 	var half: Vector3 = b["half"]
+	var lit := maxi(1, int(b.get("lit", 1)))
 	## Fire lives in grill_root local space — slick positions are already local.
 	fire_root.position = center
+	## Particle count scales with how much grease is actually lit.
+	var flame_n := clampi(7 + lit * 2, 7, 40)
+	var red_n := clampi(4 + lit, 4, 22)
+	var ember_n := clampi(3 + lit / 2, 3, 12)
+	var smoke_n := clampi(5 + lit, 5, 20)
+	if fire_particles != null and is_instance_valid(fire_particles):
+		fire_particles.amount = flame_n
+	if fire_particles_red != null and is_instance_valid(fire_particles_red):
+		fire_particles_red.amount = red_n
+	if fire_embers != null and is_instance_valid(fire_embers):
+		fire_embers.amount = ember_n
+	if fire_smoke != null and is_instance_valid(fire_smoke):
+		fire_smoke.amount = smoke_n
 	for sys in [fire_particles, fire_particles_red, fire_embers]:
 		if sys == null or not is_instance_valid(sys):
 			continue
@@ -13259,13 +13287,15 @@ func _sync_fire_to_oil_area() -> void:
 		if pmat == null:
 			continue
 		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-		## Keep emission flat on the steel (half.y already thin).
-		pmat.emission_box_extents = Vector3(half.x, 0.002, half.z)
+		## Emit on the grease footprint only (+ tiny jitter).
+		pmat.emission_box_extents = Vector3(half.x * 1.05, 0.002, half.z * 1.05)
+		pmat.spread = 7.0
 	if fire_smoke != null and is_instance_valid(fire_smoke):
 		var sm := fire_smoke.process_material as ParticleProcessMaterial
 		if sm != null:
 			sm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-			sm.emission_box_extents = Vector3(half.x * 0.85, 0.004, half.z * 0.85)
+			sm.emission_box_extents = Vector3(half.x * 0.7, 0.003, half.z * 0.7)
+			sm.spread = 10.0
 
 
 func _set_fire_fx_emitting(on: bool) -> void:
@@ -13289,12 +13319,12 @@ func _ensure_grill_fire_fx() -> void:
 	fire_root.position = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.008, GRILL_SURFACE_Z)
 	grill_root.add_child(fire_root)
 
-	## Compact flame triangles — spawn at grill top and rise.
-	fire_particles = _make_fire_flame_particles("Flames", 34, 0.42, Vector2(0.026, 0.048), 0.22, 0.52, false)
+	## Compact flame triangles — amount scales up in _sync_fire_to_oil_area.
+	fire_particles = _make_fire_flame_particles("Flames", 12, 0.38, Vector2(0.024, 0.044), 0.18, 0.42, false)
 	fire_root.add_child(fire_particles)
 
 	## Extra red triangle shards mixed into the blaze.
-	fire_particles_red = _make_fire_flame_particles("FlamesRed", 18, 0.38, Vector2(0.022, 0.042), 0.18, 0.44, true)
+	fire_particles_red = _make_fire_flame_particles("FlamesRed", 6, 0.34, Vector2(0.02, 0.038), 0.15, 0.36, true)
 	fire_root.add_child(fire_particles_red)
 
 	fire_embers = _make_fire_ember_particles()
@@ -13347,14 +13377,14 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 	fx.sorting_offset = 9.0
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.28, 0.002, 0.18)
+	pmat.emission_box_extents = Vector3(0.04, 0.002, 0.04)
 	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 14.0 if not redder else 18.0
+	pmat.spread = 6.0 if not redder else 8.0
 	pmat.initial_velocity_min = vel_min
 	pmat.initial_velocity_max = vel_max
-	pmat.gravity = Vector3(0, 1.9, 0)
-	pmat.damping_min = 0.5
-	pmat.damping_max = 1.2
+	pmat.gravity = Vector3(0, 1.5, 0)
+	pmat.damping_min = 0.7
+	pmat.damping_max = 1.5
 	pmat.scale_min = 0.55 if not redder else 0.5
 	pmat.scale_max = 0.95 if not redder else 0.88
 	pmat.color = Color(1.0, 0.22, 0.05, 1.0) if redder else Color(1.0, 0.42, 0.08, 1.0)
@@ -13400,10 +13430,10 @@ func _make_fire_flame_particles(p_name: String, amount: int, life: float, tri_si
 func _make_fire_ember_particles() -> GPUParticles3D:
 	var fx := GPUParticles3D.new()
 	fx.name = "Embers"
-	fx.amount = 10
-	fx.lifetime = 0.55
+	fx.amount = 5
+	fx.lifetime = 0.48
 	fx.explosiveness = 0.0
-	fx.randomness = 1.0
+	fx.randomness = 0.85
 	fx.emitting = false
 	fx.position = Vector3(0, 0.0, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 3.5, 2.4))
@@ -13411,16 +13441,16 @@ func _make_fire_ember_particles() -> GPUParticles3D:
 	fx.sorting_offset = 9.5
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.18, 0.002, 0.12)
-	pmat.direction = Vector3(0, 1, 0.1)
-	pmat.spread = 28.0
-	pmat.initial_velocity_min = 0.45
-	pmat.initial_velocity_max = 1.05
-	pmat.gravity = Vector3(0, 0.5, 0)
-	pmat.damping_min = 0.9
-	pmat.damping_max = 2.0
-	pmat.scale_min = 0.25
-	pmat.scale_max = 0.5
+	pmat.emission_box_extents = Vector3(0.04, 0.002, 0.04)
+	pmat.direction = Vector3(0, 1, 0.05)
+	pmat.spread = 12.0
+	pmat.initial_velocity_min = 0.35
+	pmat.initial_velocity_max = 0.85
+	pmat.gravity = Vector3(0, 0.45, 0)
+	pmat.damping_min = 1.0
+	pmat.damping_max = 2.2
+	pmat.scale_min = 0.22
+	pmat.scale_max = 0.42
 	pmat.color = Color(1.0, 0.5, 0.1, 1.0)
 	var grad := Gradient.new()
 	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.7, 1.0])
@@ -13443,57 +13473,89 @@ func _make_fire_ember_particles() -> GPUParticles3D:
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
 	draw.render_priority = 15
 	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	fx.draw_pass_1 = _make_fire_triangle_mesh(0.02, 0.034)
+	fx.draw_pass_1 = _make_fire_triangle_mesh(0.018, 0.03)
 	fx.material_override = draw
 	return fx
+
+
+func _get_fire_smoke_texture() -> ImageTexture:
+	## Soft dark grease-smoke puff — no hard square edges.
+	if _fire_smoke_tex != null:
+		return _fire_smoke_tex
+	var w := 64
+	var img := Image.create(w, w, false, Image.FORMAT_RGBA8)
+	var mid := float(w - 1) * 0.5
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 902214
+	for y in w:
+		for x in w:
+			var dx := (float(x) - mid) / mid
+			var dy := (float(y) - mid) / mid
+			## Slightly lumpy silhouette so it doesn't read as a perfect disc.
+			var ang := atan2(dy, dx)
+			var r := sqrt(dx * dx + dy * dy) / (0.92 + 0.1 * sin(ang * 3.0 + 0.4))
+			var a := clampf(1.0 - r, 0.0, 1.0)
+			a = pow(a, 2.1) * 0.42
+			## Soft noise breaks up the blob so it feels like smoke, not a sticker.
+			a *= 0.75 + 0.25 * sin(float(x) * 0.55 + float(y) * 0.31)
+			if a < 0.02:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				var warm := 0.08 + rng.randf() * 0.06
+				img.set_pixel(x, y, Color(0.16 + warm, 0.13 + warm * 0.5, 0.11, a))
+	_fire_smoke_tex = ImageTexture.create_from_image(img)
+	return _fire_smoke_tex
 
 
 func _make_fire_smoke_particles() -> GPUParticles3D:
 	var fx := GPUParticles3D.new()
 	fx.name = "FireSmoke"
-	fx.amount = 22
-	fx.lifetime = 1.15
+	fx.amount = 8
+	fx.lifetime = 1.05
 	fx.explosiveness = 0.0
-	fx.randomness = 0.7
+	fx.randomness = 0.55
 	fx.emitting = false
-	fx.position = Vector3(0, 0.02, 0)
+	fx.position = Vector3(0, 0.03, 0)
 	fx.visibility_aabb = AABB(Vector3(-2.0, -0.2, -1.2), Vector3(4.0, 4.0, 2.4))
 	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	fx.sorting_offset = 8.5
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(0.2, 0.004, 0.14)
+	pmat.emission_box_extents = Vector3(0.035, 0.003, 0.035)
 	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 22.0
-	pmat.initial_velocity_min = 0.22
-	pmat.initial_velocity_max = 0.55
-	pmat.gravity = Vector3(0, 0.55, 0)
-	pmat.damping_min = 0.2
-	pmat.damping_max = 0.6
-	pmat.scale_min = 0.75
-	pmat.scale_max = 1.6
-	pmat.color = Color(0.15, 0.12, 0.1, 0.45)
+	pmat.spread = 10.0
+	pmat.initial_velocity_min = 0.14
+	pmat.initial_velocity_max = 0.32
+	pmat.gravity = Vector3(0, 0.28, 0)
+	pmat.damping_min = 0.35
+	pmat.damping_max = 0.8
+	pmat.scale_min = 0.55
+	pmat.scale_max = 1.15
+	pmat.color = Color(0.22, 0.18, 0.15, 0.28)
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.15, 0.55, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.12, 0.45, 0.8, 1.0])
 	grad.colors = PackedColorArray([
-		Color(0.25, 0.18, 0.12, 0.0),
-		Color(0.18, 0.14, 0.12, 0.4),
-		Color(0.12, 0.11, 0.1, 0.22),
-		Color(0.08, 0.08, 0.08, 0.0),
+		Color(0.35, 0.22, 0.12, 0.0),
+		Color(0.22, 0.17, 0.14, 0.28),
+		Color(0.16, 0.14, 0.13, 0.14),
+		Color(0.12, 0.12, 0.12, 0.05),
+		Color(0.1, 0.1, 0.1, 0.0),
 	])
 	var gtex := GradientTexture1D.new()
 	gtex.gradient = grad
 	pmat.color_ramp = gtex
 	fx.process_material = pmat
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.09, 0.1)
+	quad.size = Vector2(0.08, 0.08)
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	draw.albedo_color = Color(0.2, 0.16, 0.14, 0.5)
+	draw.albedo_texture = _get_fire_smoke_texture()
+	draw.albedo_color = Color(0.85, 0.8, 0.75, 0.55)
 	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
 	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.vertex_color_use_as_albedo = true
 	draw.render_priority = 13
 	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	fx.draw_pass_1 = quad
