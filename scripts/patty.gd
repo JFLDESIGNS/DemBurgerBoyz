@@ -109,6 +109,13 @@ const FROZEN_DROP_SMASH_SQUASH := 0.385 ## was 0.55; −30% press morph
 const FROZEN_DROP_SETTLE := 0.196 ## was 0.28; −30% settle
 const FROZEN_BALL_SCALE := 0.9 * PATTY_SIZE_SCALE ## Ice ball only (+20%); flat patty stays PATTY_SIZE_SCALE
 const FROZEN_BALL_Y_SQUASH := 0.80 ## 20% flatter than a perfect sphere
+## Subtle land squash/stretch when the frozen ball hits the steel (Y-driven).
+const FROZEN_LAND_STRETCH_Y := 1.22
+const FROZEN_LAND_SQUASH_Y := 0.68
+const FROZEN_LAND_REBOUND_Y := 1.10
+const FROZEN_LAND_SQUASH_DUR := 0.09
+const FROZEN_LAND_REBOUND_DUR := 0.12
+const FROZEN_LAND_SETTLE_DUR := 0.15
 ## Sink only the ice ball into the steel (0.6"); flat patty keeps its normal sit height.
 const FROZEN_BALL_CLIP_Y := 0.01524 * PATTY_SIZE_SCALE
 const FROZEN_BALL_HOLD_Y := 0.055 * FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH - FROZEN_BALL_CLIP_Y
@@ -2101,10 +2108,39 @@ func play_frozen_drop_appear() -> void:
 	_set_patty_disc_shadow(false) ## Ball meat casts its own round/lumpy shadow.
 	_frozen_ball.visible = true
 	_reset_frozen_ball_pose()
+	_play_frozen_land_squash()
 	sync_interact_collision()
 	var audio := _audio()
 	if audio and audio.has_method("play_smash_sizzle"):
 		audio.play_smash_sizzle()
+
+
+func _play_frozen_land_squash() -> void:
+	## Soft vertical squash & stretch on impact — stretch → squash → rebound → rest.
+	if _frozen_ball == null or not is_instance_valid(_frozen_ball):
+		return
+	var sx := FROZEN_BALL_SCALE
+	var sy := FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH
+	var rest := Vector3(sx, sy, sx)
+	## Slight XZ squeeze/bulge keeps volume while Y does the readable work.
+	var stretch := Vector3(sx * 0.94, sy * FROZEN_LAND_STRETCH_Y, sx * 0.94)
+	var squash := Vector3(sx * 1.10, sy * FROZEN_LAND_SQUASH_Y, sx * 1.10)
+	var rebound := Vector3(sx * 0.97, sy * FROZEN_LAND_REBOUND_Y, sx * 0.97)
+	_frozen_ball.scale = stretch
+	if _place_morph_tw != null and is_instance_valid(_place_morph_tw):
+		_place_morph_tw.kill()
+	_place_morph_tw = create_tween()
+	_place_morph_tw.tween_property(_frozen_ball, "scale", squash, FROZEN_LAND_SQUASH_DUR) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_place_morph_tw.tween_property(_frozen_ball, "scale", rebound, FROZEN_LAND_REBOUND_DUR) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_place_morph_tw.tween_property(_frozen_ball, "scale", rest, FROZEN_LAND_SETTLE_DUR) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_place_morph_tw.tween_callback(func() -> void:
+		_place_morph_tw = null
+		if place_ball_waiting:
+			_reset_frozen_ball_pose()
+	)
 
 
 func play_frozen_drop_smash() -> void:
