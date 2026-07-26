@@ -18133,31 +18133,32 @@ func _make_grill_splash_stainless() -> StandardMaterial3D:
 
 
 func _add_grill_splash_guard(parent: Node3D) -> void:
-	## U-shaped splash wall on the far (−Z / window) edge: ~5" tall, ~4" side returns.
+	## U-shaped splash wall on the far (+Z / window) edge: ~3.25" tall, ~4" side returns.
 	if parent == null or not is_instance_valid(parent):
 		return
-	var h := 5.0 * INCH_TO_M
+	var h := 3.25 * INCH_TO_M
 	var wrap := 4.0 * INCH_TO_M
 	var thick := 0.010
 	var steel_top_y := 0.0225 ## Matches zone panel half-height so the guard sits on the steel.
 	var half_w := GRILL_WIDTH * 0.5
-	var back_z := -GRILL_DEPTH * 0.5
+	## Far lip = window side (+Z). Cook stands on −Z, so this faces away from the player.
+	var far_z := GRILL_DEPTH * 0.5
 	var mat := _make_grill_splash_stainless()
 	var root := Node3D.new()
 	root.name = "GrillSplashGuard"
 	parent.add_child(root)
 
-	## Back wall — full width, sits just behind the far steel lip.
+	## Back wall — full width, just past the far steel lip.
 	var back := MeshInstance3D.new()
 	var back_mesh := BoxMesh.new()
 	back_mesh.size = Vector3(GRILL_WIDTH + thick * 2.0, h, thick)
 	back.mesh = back_mesh
-	back.position = Vector3(0.0, steel_top_y + h * 0.5, back_z - thick * 0.5)
+	back.position = Vector3(0.0, steel_top_y + h * 0.5, far_z + thick * 0.5)
 	back.material_override = mat
 	back.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	root.add_child(back)
 
-	## Side returns — camera-left (+X) and camera-right (−X), extending toward the cook (+Z).
+	## Side returns — camera-left (+X) / camera-right (−X), extending toward the cook (−Z).
 	for side_sign in [-1.0, 1.0]:
 		var side := MeshInstance3D.new()
 		var side_mesh := BoxMesh.new()
@@ -18166,7 +18167,7 @@ func _add_grill_splash_guard(parent: Node3D) -> void:
 		side.position = Vector3(
 			side_sign * (half_w + thick * 0.5),
 			steel_top_y + h * 0.5,
-			back_z + wrap * 0.5
+			far_z - wrap * 0.5
 		)
 		side.material_override = mat
 		side.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
