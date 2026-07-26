@@ -7,7 +7,7 @@ const STATION_CRAFT := 0
 ## Build-board burger art scale (1.0 = prior size).
 const STATION_BURGER_SCALE := 0.944 ## 20% smaller than 1.18; proportions unchanged
 ## Uniform UI scale on the BurgerStack host (cutting-board 2D burger only).
-const STATION_BURGER_UI_SCALE := 0.625 ## was 0.5; +25% larger on the build board
+const STATION_BURGER_UI_SCALE := 0.75 ## was 0.625; +20% larger on the build board
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
 const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
@@ -1474,7 +1474,7 @@ const BUILD_STATIONS_ROW_RIGHT := 0.0
 const BUILD_PANEL_SIZE := Vector2(210, 320)
 const BUILD_ZONE_SIZE := Vector2(210, 280)
 const BUILD_UI_LEFT := 0.0 ## bun stack fills the left Build column
-const BUILD_PLATE_SHIFT_X := 22.0 ## was 12; +10px right
+const BUILD_PLATE_SHIFT_X := 42.0 ## was 22; +20px right
 const BUILD_UI_LIFT_BOTTOM := 8.0 ## column already clears the ingredient strip
 const PREP_UI_PANEL_X := BUILD_UI_LEFT + PREP_UI_BEHIND_X ## panel-left — independent of build zone
 const PREP_UI_PANEL_BOTTOM := BUILD_UI_LIFT_BOTTOM + BUILD_ZONE_SIZE.y - (PREP_UI_BEHIND_Y + PREP_UI_SIZE.y)
@@ -1866,7 +1866,7 @@ const GFX_DEFAULTS := {
 	"bz_plate_w": 0.0, ## 0 = stretch to full Build column / panel width
 	"bz_plate_h": 230.0,
 	"bz_plate_shift": BUILD_PLATE_SHIFT_X,
-	"bz_plate_y": 60.0, ## was 40; +20px down on the cutting board
+	"bz_plate_y": 80.0, ## was 60; +20px down on the cutting board
 	"bz_plate_pad": 8.0,
 	"bz_title_y": 38.0,
 	"bz_title_x": 20.0,
@@ -37384,6 +37384,12 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_plate_shift", GFX_DEFAULTS["bz_plate_shift"])
 		cfg.set_value("gfx", "bz_plate_y", GFX_DEFAULTS["bz_plate_y"])
 		cfg.set_value("gfx", "gfx_bz_burger_nudge_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## +20% host scale (const), +20px right / +20px down.
+	if not cfg.has_section_key("gfx", "gfx_bz_burger_nudge_v2"):
+		cfg.set_value("gfx", "bz_plate_shift", GFX_DEFAULTS["bz_plate_shift"])
+		cfg.set_value("gfx", "bz_plate_y", GFX_DEFAULTS["bz_plate_y"])
+		cfg.set_value("gfx", "gfx_bz_burger_nudge_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	## Tuned patty reflection from in-game GFX: visible over cooker, soft under patty.
 	if not cfg.has_section_key("gfx", "gfx_patty_reflect_v1"):

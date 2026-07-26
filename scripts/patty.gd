@@ -75,6 +75,8 @@ var _sear_seed: int = 0
 var _under_mat: StandardMaterial3D
 var _sear_disc: MeshInstance3D
 var _sear_mat: StandardMaterial3D
+var _grate_disc: MeshInstance3D
+var _grate_mat: StandardMaterial3D
 var _meat_top: MeshInstance3D
 var _meat_top_mat: StandardMaterial3D
 var _hint: Label3D
@@ -283,6 +285,25 @@ func _ready() -> void:
 	_sear_disc.rotation_degrees.y = randf() * 360.0
 	_mesh.add_child(_sear_disc)
 
+	## Subtle vertical grate marks — same gap proportion as grill heat punch-outs.
+	_grate_disc = MeshInstance3D.new()
+	_grate_disc.mesh = _make_planar_disc_mesh(0.1055, 28)
+	_grate_disc.position = Vector3(0, 0.0249, 0)
+	_grate_disc.visible = false
+	_grate_mat = StandardMaterial3D.new()
+	_grate_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_grate_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_grate_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	_grate_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_grate_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_grate_mat.render_priority = PATTY_BODY_PRIORITY + 2
+	_grate_mat.albedo_texture = _make_grate_line_texture()
+	_grate_mat.albedo_color = Color(1, 1, 1, 0.0)
+	_grate_disc.material_override = _grate_mat
+	## Align with sear so spots + lines share one grill orientation.
+	_grate_disc.rotation_degrees.y = _sear_disc.rotation_degrees.y
+	_mesh.add_child(_grate_disc)
+
 	## Icy shell on the sides — tube only (no caps) so top face never gets polar UVs.
 	var frost_tex := _make_frost_texture(randi())
 	_frost = MeshInstance3D.new()
@@ -486,6 +507,7 @@ func reset_for_grill_spawn(
 	_update_cook_gradient()
 	_update_frost_visual()
 	_update_sear_disc()
+	_update_grate_disc()
 	_update_meat_top()
 	if _under_mat:
 		_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
@@ -729,6 +751,7 @@ func refresh_cook_visuals() -> void:
 	_update_cook_gradient()
 	_update_frost_visual()
 	_update_sear_disc()
+	_update_grate_disc()
 	_update_meat_top()
 	if has_cheese:
 		_update_cheese_visual()
@@ -843,6 +866,7 @@ func _process(delta: float) -> void:
 	_update_cook_gradient()
 	_update_frost_visual()
 	_update_sear_disc()
+	_update_grate_disc()
 	_update_meat_top()
 	_update_reflection_visual()
 	if _under_mat:
@@ -1538,6 +1562,55 @@ func _update_sear_disc() -> void:
 	_sear_disc.position.y = 0.0245
 
 
+func _make_grate_line_texture() -> ImageTexture:
+	## Vertical dark bands — same gap_frac / soft edge language as grill heat punch-outs.
+	const BARS := 5 ## matches default grill_heat_bars count across the disc
+	const GAP_FRAC := 0.38 ## same as grill_heat_gap default
+	var w := 128
+	var h := 128
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var mid := float(w - 1) * 0.5
+	for y in h:
+		for x in w:
+			var dx := (float(x) - mid) / mid
+			var dy := (float(y) - mid) / mid
+			var r := sqrt(dx * dx + dy * dy)
+			if r > 0.98:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var edge := clampf(1.0 - smoothstep(0.82, 0.98, r), 0.0, 1.0)
+			var u := float(x) / float(w)
+			## Soft vertical punch bands (heat shader: phase + gap_frac smoothsteps).
+			var phase := fposmod(u * float(BARS), 1.0)
+			var bar_mask := smoothstep(0.0, 0.08, phase) * (1.0 - smoothstep(GAP_FRAC, GAP_FRAC + 0.08, phase))
+			## Dark where heat punches out (low bar_mask).
+			var line := 1.0 - bar_mask
+			## Slight lengthwise noise so lines aren't perfectly crisp.
+			var n := _sear_noise(u * 9.0 + float(_sear_seed % 11), float(y) / float(h) * 14.0)
+			line *= 0.82 + n * 0.28
+			var a := edge * line * 0.34
+			if a < 0.02:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				img.set_pixel(x, y, Color(0.10, 0.05, 0.03, a))
+	return ImageTexture.create_from_image(img)
+
+
+func _update_grate_disc() -> void:
+	if _grate_disc == null or _grate_mat == null:
+		return
+	if not flipped_once:
+		_grate_disc.visible = false
+		return
+	_grate_disc.visible = true
+	## Fade in with sear — subtle overlay, not charcoal stripes.
+	var cook_w := clampf((first_side_time - 8.0) / 16.0, 0.35, 1.0)
+	_grate_mat.albedo_color = Color(1, 1, 1, 0.38 + cook_w * 0.32)
+	_grate_disc.position.y = 0.0249
+	if _sear_disc != null and is_instance_valid(_sear_disc):
+		_grate_disc.rotation_degrees.y = _sear_disc.rotation_degrees.y
+
+
 func _update_meat_top() -> void:
 	if _meat_top == null or _meat_top_mat == null:
 		return
@@ -1633,6 +1706,7 @@ func flip() -> bool:
 	_update_frost_visual()
 	_update_cook_gradient()
 	_update_sear_disc()
+	_update_grate_disc()
 	_update_meat_top()
 	_hint.visible = false
 	_hint_mode = ""
