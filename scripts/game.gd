@@ -390,8 +390,10 @@ const GRILL_GLOW_FADE_SEC := 4.0
 const GRILL_GLOW_BRIGHT_MULT := 1.18
 ## Heat blot size / grate punch — tunable in Hidden (password) options.
 const GRILL_HEAT_CFG_SECTION := "grill_heat"
+const GRILL_HEAT_BARS_MAX := 25
+const GRILL_HEAT_BAR_SPAN := 0.90 ## meters spanned by the Grate Bars count (shared line width)
 var grill_heat_size: float = 1.18 ## Multiplies FULL/½ glow blot size
-var grill_heat_bars: int = 5 ## Vertical grate lines punched through the glow
+var grill_heat_bars: int = 5 ## Vertical grate lines across BAR_SPAN (same width on every spot)
 var grill_heat_gap: float = 0.38 ## Fraction of each bar period with no light (0–0.7)
 var _grill_glow_tween: Tween = null
 var _grill_glow_gen: int = 0
@@ -6355,7 +6357,6 @@ func _build_flat_top_grill() -> void:
 	grill_glow_meshes.clear()
 	grill_surface_node = surface
 	_ensure_grill_steel_texture()
-	var heat_tex := _make_grill_heat_texture()
 	var cook_x0 := 0.0
 	var cook_x1 := 0.0
 	var cook_started := false
@@ -6384,8 +6385,7 @@ func _build_flat_top_grill() -> void:
 				Vector3(local_cx, 0.027, 0),
 				glow_w,
 				glow_d,
-				float(z["glow"]),
-				heat_tex
+				float(z["glow"])
 			)
 
 	if grill_surface_mat == null:
@@ -7757,14 +7757,9 @@ func _set_grill_on(on: bool) -> void:
 			if not is_instance_valid(glow):
 				continue
 			glow.visible = false
-			var gm := glow.material_override as StandardMaterial3D
-			if gm == null:
-				continue
-			# Start fully transparent/quiet; tween both alpha and emission after ignition.
-			var rgb := gm.albedo_color
-			rgb.a = 1.0
-			gm.albedo_color = Color(rgb.r, rgb.g, rgb.b, 0.0)
-			gm.emission_energy_multiplier = 0.0
+			var sm0 := glow.material_override as ShaderMaterial
+			if sm0 != null:
+				sm0.set_shader_parameter("glow_mul", 0.0)
 
 		_grill_glow_tween = create_tween()
 		_grill_glow_tween.tween_interval(GRILL_GLOW_DELAY_SEC)
@@ -7779,26 +7774,14 @@ func _set_grill_on(on: bool) -> void:
 		for glow in grill_glow_meshes:
 			if not is_instance_valid(glow):
 				continue
-			var gm := glow.material_override as StandardMaterial3D
-			if gm == null:
+			var sm := glow.material_override as ShaderMaterial
+			if sm == null:
 				continue
-			var base_alpha := float(glow.get_meta("base_alpha", gm.albedo_color.a))
-			var base_em := float(glow.get_meta("base_emission_energy_multiplier", gm.emission_energy_multiplier))
-			var target_alpha := minf(1.0, base_alpha * GRILL_GLOW_BRIGHT_MULT)
-			var target_em := base_em * GRILL_GLOW_BRIGHT_MULT
-			var rgb := gm.albedo_color
-			rgb.a = 1.0
-			var target_col := Color(rgb.r, rgb.g, rgb.b, target_alpha)
-			_grill_glow_tween.tween_property(
-				gm,
-				"albedo_color",
-				target_col,
-				GRILL_GLOW_FADE_SEC
-			).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-			_grill_glow_tween.tween_property(
-				gm,
-				"emission_energy_multiplier",
-				target_em,
+			var target_mul := float(glow.get_meta("base_glow_mul", 1.0)) * GRILL_GLOW_BRIGHT_MULT
+			_grill_glow_tween.tween_method(
+				_set_grill_heat_glow_mul.bind(sm),
+				0.0,
+				target_mul,
 				GRILL_GLOW_FADE_SEC
 			).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 		_grill_glow_tween.set_parallel(false)
@@ -7807,13 +7790,9 @@ func _set_grill_on(on: bool) -> void:
 			if not is_instance_valid(glow):
 				continue
 			glow.visible = false
-			var gm := glow.material_override as StandardMaterial3D
-			if gm == null:
-				continue
-			var c := gm.albedo_color
-			c.a = 0.0
-			gm.albedo_color = c
-			gm.emission_energy_multiplier = 0.0
+			var sm2 := glow.material_override as ShaderMaterial
+			if sm2 != null:
+				sm2.set_shader_parameter("glow_mul", 0.0)
 
 	for heat in grill_heat_lights:
 		if is_instance_valid(heat):
@@ -12338,75 +12317,55 @@ func _apply_heat_warp_settings(s: Dictionary) -> void:
 		heat_warp_mat.set_shader_parameter("heat", 0.0)
 
 
-func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: float, intensity: float, tex: Texture2D) -> MeshInstance3D:
-	## Flat radial heat blot — additive so it always brightens the steel (screen-like).
+func _set_grill_heat_glow_mul(value: float, mat: ShaderMaterial) -> void:
+	if mat != null:
+		mat.set_shader_parameter("glow_mul", value)
+
+
+func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: float, intensity: float) -> MeshInstance3D:
+	## Flat radial heat blot — additive shader with world-constant grate punch-outs.
 	var glow := MeshInstance3D.new()
 	var glow_mesh := PlaneMesh.new()
-	glow_mesh.size = Vector2(maxf(0.2, width), maxf(0.2, depth))
+	var w := maxf(0.2, width)
+	var d := maxf(0.2, depth)
+	glow_mesh.size = Vector2(w, d)
 	glow.mesh = glow_mesh
 	glow.position = local_pos
 	## Store base size (pre size-slider) so Hidden can retune without rebuilding the grill.
-	glow.set_meta("heat_base_w", maxf(0.2, width) / maxf(grill_heat_size, 0.01))
-	glow.set_meta("heat_base_d", maxf(0.2, depth) / maxf(grill_heat_size, 0.01))
-	var gm := StandardMaterial3D.new()
-	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	gm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	gm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	gm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	gm.albedo_texture = tex
-	gm.albedo_color = Color(1.0, 0.55, 0.18, clampf(0.85 * intensity + 0.2, 0.45, 1.0))
-	gm.emission_enabled = true
-	gm.emission_texture = tex
-	gm.emission = Color(1.0, 0.48, 0.1)
-	gm.emission_energy_multiplier = lerpf(2.2, 4.8, clampf(intensity, 0.0, 1.0))
-	gm.render_priority = 6
-	glow.material_override = gm
+	glow.set_meta("heat_base_w", w / maxf(grill_heat_size, 0.01))
+	glow.set_meta("heat_base_d", d / maxf(grill_heat_size, 0.01))
+	glow.set_meta("heat_intensity", intensity)
+	var shader := load("res://shaders/grill_heat.gdshader") as Shader
+	if shader == null:
+		glow.queue_free()
+		return null
+	var sm := ShaderMaterial.new()
+	sm.shader = shader
+	sm.render_priority = 6
+	sm.set_shader_parameter("plane_width", w)
+	sm.set_shader_parameter("bar_period", _grill_heat_bar_period())
+	sm.set_shader_parameter("gap_frac", clampf(grill_heat_gap, 0.05, 0.72))
+	sm.set_shader_parameter("intensity", clampf(intensity, 0.0, 1.0))
+	sm.set_shader_parameter("glow_mul", 0.0)
+	sm.set_shader_parameter("heat_tint", Vector3(1.0, 0.48, 0.12))
+	glow.material_override = sm
 	glow.visible = false
-	glow.set_meta("base_alpha", gm.albedo_color.a)
-	glow.set_meta("base_emission_energy_multiplier", gm.emission_energy_multiplier)
+	glow.set_meta("base_glow_mul", 1.0)
 	parent.add_child(glow)
 	grill_glow_meshes.append(glow)
 	return glow
 
 
-func _make_grill_heat_texture() -> ImageTexture:
-	## Radial orange heat with vertical grate gaps punched through (alpha = 0 in the gaps).
-	var w := 192
-	var h := 192
-	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
-	var mid := float(w - 1) * 0.5
-	var bars := clampi(grill_heat_bars, 2, 14)
-	var gap := clampf(grill_heat_gap, 0.05, 0.72)
-	for y in h:
-		for x in w:
-			var dx := (float(x) - mid) / mid
-			var dy := (float(y) - mid) / mid
-			var r := sqrt(dx * dx + dy * dy)
-			var core := clampf(1.0 - r / 0.4, 0.0, 1.0)
-			core = pow(core, 1.15)
-			var mid_ring := clampf(1.0 - r / 0.78, 0.0, 1.0)
-			mid_ring = pow(mid_ring, 1.55)
-			var outer := clampf(1.0 - r / 1.0, 0.0, 1.0)
-			outer = pow(outer, 2.2)
-			var a := clampf(core * 0.78 + mid_ring * 0.4 + outer * 0.18, 0.0, 0.92)
-			## Vertical grate: U stripes cut light so steel shows through between bars.
-			var u := float(x) / float(maxi(w - 1, 1))
-			var phase := fposmod(u * float(bars), 1.0)
-			if phase < gap:
-				a = 0.0
-			if a < 0.02 or r > 0.995:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-			else:
-				var hot := Color(1.0, 0.62, 0.22, a)
-				var deep := Color(1.0, 0.28, 0.04, a)
-				img.set_pixel(x, y, deep.lerp(hot, core))
-	return ImageTexture.create_from_image(img)
+func _grill_heat_bar_period() -> float:
+	## Shared physical grate spacing — FULL and ½ spots use the same line width.
+	var bars := clampi(grill_heat_bars, 2, GRILL_HEAT_BARS_MAX)
+	return GRILL_HEAT_BAR_SPAN / float(bars)
 
 
 func _apply_grill_heat_settings() -> void:
 	## Live-retune blot size + grate punch from Hidden options.
-	var tex := _make_grill_heat_texture()
+	var period := _grill_heat_bar_period()
+	var gap := clampf(grill_heat_gap, 0.05, 0.72)
 	for glow in grill_glow_meshes:
 		if glow == null or not is_instance_valid(glow):
 			continue
@@ -12415,16 +12374,21 @@ func _apply_grill_heat_settings() -> void:
 			continue
 		var base_w := float(mi.get_meta("heat_base_w", 0.5))
 		var base_d := float(mi.get_meta("heat_base_d", 0.5))
+		var intensity := float(mi.get_meta("heat_intensity", 1.0))
 		var plane := mi.mesh as PlaneMesh
 		if plane == null:
 			plane = PlaneMesh.new()
 			mi.mesh = plane
-		plane.size = Vector2(maxf(0.2, base_w * grill_heat_size), maxf(0.2, base_d * grill_heat_size))
-		var gm := mi.material_override as StandardMaterial3D
-		if gm == null:
+		var w := maxf(0.2, base_w * grill_heat_size)
+		var d := maxf(0.2, base_d * grill_heat_size)
+		plane.size = Vector2(w, d)
+		var sm := mi.material_override as ShaderMaterial
+		if sm == null:
 			continue
-		gm.albedo_texture = tex
-		gm.emission_texture = tex
+		sm.set_shader_parameter("plane_width", w)
+		sm.set_shader_parameter("bar_period", period)
+		sm.set_shader_parameter("gap_frac", gap)
+		sm.set_shader_parameter("intensity", intensity)
 
 
 func _load_grill_heat_settings() -> void:
@@ -12434,7 +12398,7 @@ func _load_grill_heat_settings() -> void:
 	if not cfg.has_section(GRILL_HEAT_CFG_SECTION):
 		return
 	grill_heat_size = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)), 0.6, 1.8)
-	grill_heat_bars = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)), 2, 14)
+	grill_heat_bars = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)), 2, GRILL_HEAT_BARS_MAX)
 	grill_heat_gap = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)), 0.05, 0.72)
 
 
@@ -35491,10 +35455,10 @@ func _build_options_menu() -> void:
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_bars", "Grate Bars", 2.0, 14.0, 1.0,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_bars", "Grate Bars", 2.0, float(GRILL_HEAT_BARS_MAX), 1.0,
 		func(): return float(grill_heat_bars),
 		func(v: float):
-			grill_heat_bars = clampi(int(round(v)), 2, 14)
+			grill_heat_bars = clampi(int(round(v)), 2, GRILL_HEAT_BARS_MAX)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
