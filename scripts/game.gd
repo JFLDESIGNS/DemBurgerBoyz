@@ -103,10 +103,10 @@ const PATTY_SIT_Y := 0.055
 ## Oil puddles sit above steel (top ~+0.023) but under patties (+0.055).
 const OIL_SIT_Y := 0.0304 ## was 0.038; −0.3" closer to the steel
 ## Cups sit clear of the 0.045-thick zone panels so the bottom rim stays visible.
-const CUP_STEEL_SIT_Y := 0.052
-## Rim-down / side lands need extra lift — former +0.004 sank the lip into the steel.
-const CUP_LID_DOWN_SIT_EXTRA := 0.004 + 0.0127 ## +½″
-const CUP_SIDE_SIT_EXTRA := 0.003 + 0.0127 ## +½″
+const CUP_STEEL_SIT_Y := 0.062 ## was 0.052; +~0.4" so upright cups clear the steel
+## Rim-down / side lands need extra lift — former values still kissed the grill.
+const CUP_LID_DOWN_SIT_EXTRA := 0.004 + 0.0127 + 0.010 ## +extra hair above steel
+const CUP_SIDE_SIT_EXTRA := 0.003 + 0.0127 + 0.010
 ## Too many puddles → warn only (fire needs a sustained pour — see OIL_POUR_FIRE_SEC).
 ## Only ignites while the burner is ON.
 const OIL_FIRE_WARN_COUNT := 40
@@ -1700,13 +1700,13 @@ const CUP_FILL_ACQUIRE := 0.22 ## Easier catch past the cabinet lip
 const CUP_FILL_RELEASE := 0.15
 const CUP_FILL_TIGHT := 0.04
 const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk away
-## Flippy-cup: RMB hold → release pitches forward; 0.5s = perfect 180° rim-down.
+## Flippy-cup: RMB hold → release pitches forward; 0.5s = one 180° rim-down, 1.0s = two flips (540°).
 const CUP_FLIP_PERFECT_HOLD := 0.5
 const CUP_FLIP_MIN_HOLD := 0.08
 const CUP_FLIP_DUR := 0.78 ## longer air time for the taller toss
 const CUP_FLIP_PEAK := 0.34 ## ~13" apex — half the old toss so it doesn't moon the camera
 const CUP_FLIP_APEX_T := 0.36 ## rise / fall split (punchy up, longer fall)
-const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.0s, …)
+const CUP_FLIP_PERFECT_TOL := 0.045 ## only ±this many seconds from 0.5 / 1.0 / … auto-lands lid
 const CUP_FLIP_SETTLE_DUR := 0.52 ## bounce settle after impact
 const CUP_FLIP_BOUNCE_H := 0.16 ## first hop height off the steel
 const CUP_FLIP_BOUNCE_HOPS := 3.0
@@ -29130,39 +29130,34 @@ func _cup_flip_rot_for_pose(pose: String, yaw: float) -> Vector3:
 
 
 func _start_cup_rim_flip(hold_sec: float) -> void:
-	## Flippy-cup: release starts the toss. Timing biases rim-down; bobble can still upright it.
+	## Flippy-cup timing (hold then release):
+	##   0.5s = one full 180° flip → always lands rim/lid down
+	##   1.0s = two flips (540°) → always lands rim/lid down
+	##   0.3s = under-rotated · 0.7s = over-rotated (not auto-wins)
 	if cup_root == null or not is_instance_valid(cup_root):
 		return
-	var turns := clampf(hold_sec / CUP_FLIP_PERFECT_HOLD, 0.0, 4.0)
-	var nearest := roundf(turns)
-	var err := absf(turns - nearest)
-	var prefer_lid := nearest >= 1.0 and err <= CUP_FLIP_PERFECT_WINDOW
-	var half_err := absf(turns - floorf(turns) - 0.5)
-	var prefer_side := (not prefer_lid) and half_err <= 0.18
-	## Aimed pitch from hold — perfect beats target rim-down (1.0s = 540°).
-	if prefer_lid:
-		_cup_flip_pitch_total = 180.0 + (nearest - 1.0) * 360.0
-	elif prefer_side:
-		_cup_flip_pitch_total = 90.0 + floorf(turns) * 180.0
-	else:
-		_cup_flip_pitch_total = turns * 180.0
-	## Landing kick — tighter on perfect timing, but weird bounces can still upright it.
-	var quality := clampf(1.0 - err / maxf(CUP_FLIP_PERFECT_WINDOW, 0.001), 0.0, 1.0)
-	if not prefer_lid and not prefer_side:
-		quality *= 0.35
-	var kick := randf_range(-18.0, 18.0) * lerpf(1.8, 0.55, quality)
-	if randf() < lerpf(0.28, 0.12, quality):
-		## Wild table bounce — can tip a near-perfect rim flip upright.
-		kick += randf_range(-110.0, 110.0)
-	var land_pitch := _cup_flip_pitch_total + kick
-	var pose := _cup_flip_pose_from_pitch(land_pitch)
-	## Soft bias: if timing was strong rim-down and kick wasn't wild, keep lid more often.
-	if prefer_lid and quality > 0.75 and absf(kick) < 35.0 and randf() < 0.72:
+	var hold := maxf(hold_sec, CUP_FLIP_MIN_HOLD)
+	## Continuous spin: 0.5s → 180°, 1.0s → 360° of "flip energy" then +180° for lid landings.
+	## Perfect beats use 180° + (n-1)*360° so 0.5 / 1.0 / 1.5… all finish lid-down.
+	var n := roundi(hold / CUP_FLIP_PERFECT_HOLD)
+	var perfect_t := float(n) * CUP_FLIP_PERFECT_HOLD
+	var perfect := n >= 1 and absf(hold - perfect_t) <= CUP_FLIP_PERFECT_TOL
+	var pitch: float
+	var pose: String
+	if perfect:
+		## n=1 → 180°, n=2 → 540° (two flips), n=3 → 900°, …
+		pitch = 180.0 + float(n - 1) * 360.0
 		pose = "lid"
-		land_pitch = 180.0 + (nearest - 1.0) * 360.0
+	else:
+		## Under / over: pitch tracks hold linearly (0.5s = 180°), no auto-snap to a win.
+		pitch = (hold / CUP_FLIP_PERFECT_HOLD) * 180.0
+		pose = _cup_flip_pose_from_pitch(pitch)
+		## Tiny wobble only when not perfect — never enough to steal a near-miss into a win.
+		pitch += randf_range(-12.0, 12.0)
+		pose = _cup_flip_pose_from_pitch(pitch)
 	_cup_flip_land_lid = pose == "lid"
 	_cup_flip_land_side = pose == "side"
-	_cup_flip_pitch_total = land_pitch
+	_cup_flip_pitch_total = pitch
 	## Freeze yaw/roll — flip is pure forward tilt.
 	_cup_flip_lock_yaw = cup_root.rotation_degrees.y
 	_cup_flip_base_rot = Vector3(cup_root.rotation_degrees.x, _cup_flip_lock_yaw, 0.0)
