@@ -1691,7 +1691,7 @@ func is_in_flip_window() -> bool:
 
 
 func is_in_perfect_announcer_window() -> bool:
-	return can_flip() and cook_time <= FLIP_READY + PERFECT_ANNOUNCER_AFTER_FLIP_READY
+	return is_in_flip_window()
 
 
 func flip() -> bool:

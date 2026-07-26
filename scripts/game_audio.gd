@@ -22,6 +22,9 @@ const INGREDIENT_MIDI := {
 
 var _players: Array[AudioStreamPlayer] = []
 var _player_i: int = 0
+var _announcer_players: Array[AudioStreamPlayer] = []
+var _announcer_player_i: int = 0
+const ANNOUNCER_POOL := 4
 ## Dedicated pool for spatula piano / HOLD tings — never shared with one-shot SFX.
 var _ting_players: Array[AudioStreamPlayer] = []
 var _ting_player_i: int = 0
@@ -174,6 +177,12 @@ func _ready() -> void:
 		p.bus = "Master"
 		add_child(p)
 		_players.append(p)
+	for i in ANNOUNCER_POOL:
+		var ap := AudioStreamPlayer.new()
+		ap.name = "Announcer_%d" % i
+		ap.bus = "Master"
+		add_child(ap)
+		_announcer_players.append(ap)
 	for i in TING_POOL:
 		var tp := AudioStreamPlayer.new()
 		tp.name = "SpatulaTing_%d" % i
@@ -1294,8 +1303,13 @@ func _play_announcer_stream(key: String, path: String, gain: float = 0.65) -> vo
 	var stream := _load_announcer_stream(key, path)
 	if stream == null:
 		return
-	var p: AudioStreamPlayer = _players[_player_i]
-	_player_i = (_player_i + 1) % _players.size()
+	var p: AudioStreamPlayer = _announcer_players[_announcer_player_i] if not _announcer_players.is_empty() else _players[_player_i]
+	if not _announcer_players.is_empty():
+		_announcer_player_i = (_announcer_player_i + 1) % _announcer_players.size()
+	else:
+		_player_i = (_player_i + 1) % _players.size()
+	if p.playing:
+		p.stop()
 	p.stream = stream
 	p.pitch_scale = 1.0
 	p.volume_db = linear_to_db(clampf(gain, 0.05, 1.25))
