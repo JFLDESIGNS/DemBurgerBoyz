@@ -101,6 +101,9 @@ const PATTY_SIT_Y := 0.055
 const OIL_SIT_Y := 0.0304 ## was 0.038; −0.3" closer to the steel
 ## Cups sit clear of the 0.045-thick zone panels so the bottom rim stays visible.
 const CUP_STEEL_SIT_Y := 0.052
+## Rim-down / side lands need extra lift — former +0.004 sank the lip into the steel.
+const CUP_LID_DOWN_SIT_EXTRA := 0.004 + 0.0127 ## +½″
+const CUP_SIDE_SIT_EXTRA := 0.003 + 0.0127 ## +½″
 ## Too many puddles → warn only (fire needs a sustained pour — see OIL_POUR_FIRE_SEC).
 ## Only ignites while the burner is ON.
 const OIL_FIRE_WARN_COUNT := 40
@@ -16504,11 +16507,7 @@ func _begin_cup_melt_local(
 		root.reparent(world, true)
 	var lid_down := bool(root.get_meta("lid_down", false))
 	var on_side := bool(root.get_meta("on_side", false))
-	var sit_y := GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
-	if lid_down:
-		sit_y = GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
-	elif on_side:
-		sit_y = GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
+	var sit_y := _cup_steel_sit_y_for_meta(lid_down, on_side)
 	root.global_position = Vector3(drop_pos.x, sit_y, drop_pos.z)
 	## Keep flippy-cup land pose when melting; otherwise sit flat with random yaw.
 	var yaw := root.rotation_degrees.y if (lid_down or on_side) else randf() * 360.0
@@ -28388,9 +28387,18 @@ func _cup_flip_pose_from_pitch(pitch_deg: float) -> String:
 
 func _cup_flip_land_y_for_pose(pose: String) -> float:
 	if pose == "lid":
-		return GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
+		return GRILL_SURFACE_Y + CUP_SHELL_H + CUP_LID_DOWN_SIT_EXTRA
 	if pose == "side":
-		return GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
+		return GRILL_SURFACE_Y + CUP_SHELL_TOP_R + CUP_SIDE_SIT_EXTRA
+	return GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
+
+
+func _cup_steel_sit_y_for_meta(lid_down: bool, on_side: bool) -> float:
+	## Shared Y for flip land / park / melt so rim-down clears the steel.
+	if lid_down:
+		return GRILL_SURFACE_Y + CUP_SHELL_H + CUP_LID_DOWN_SIT_EXTRA
+	if on_side:
+		return GRILL_SURFACE_Y + CUP_SHELL_TOP_R + CUP_SIDE_SIT_EXTRA
 	return GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
 
 
@@ -28942,12 +28950,7 @@ func _place_cup_on_steel() -> void:
 	var drop := cup_root.global_position
 	drop.x = clampf(drop.x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
 	drop.z = clampf(drop.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
-	if lid_down:
-		drop.y = GRILL_SURFACE_Y + CUP_SHELL_H + 0.004
-	elif on_side:
-		drop.y = GRILL_SURFACE_Y + CUP_SHELL_TOP_R + 0.003
-	else:
-		drop.y = GRILL_SURFACE_Y + CUP_STEEL_SIT_Y
+	drop.y = _cup_steel_sit_y_for_meta(lid_down, on_side)
 	var on_hold := _is_in_warmer_zone(drop)
 	cup_held = false
 	cup_drawing = false
