@@ -406,6 +406,16 @@ var grill_heat_height: float = 0.027 ## Local Y above zone panels
 var grill_heat_tint := Color(0.92, 0.16, 0.04) ## Subtle ember red
 var _grill_heat_cook_x0: float = 0.0 ## World X span of cook steel (for section rebuild)
 var _grill_heat_cook_x1: float = 0.0
+## Real OmniLight wash on the steel when the burner is on — Hidden tunable.
+const GRILL_SURFACE_LIGHT_CFG_SECTION := "grill_surface_light"
+var grill_surface_light: OmniLight3D = null
+var grill_surf_light_energy: float = 0.18 ## "greatness" / intensity — keep subtle
+var grill_surf_light_range: float = 1.15
+var grill_surf_light_height: float = 0.11 ## local Y above steel
+var grill_surf_light_flicker: float = 0.12
+var grill_surf_light_specular: float = 0.35
+var grill_surf_light_color := Color(1.0, 0.38, 0.12) ## soft red-orange
+var _grill_surf_light_phase: float = 0.0
 ## Multicolor oil/water seasoning film — Hidden tunable (v2 = stronger defaults).
 const GRILL_SEASON_CFG_SECTION := "grill_season"
 const GRILL_SEASON_CFG_VERSION := 2
@@ -2762,6 +2772,7 @@ func _process(delta: float) -> void:
 	_update_kitchen_sizzle(delta)
 	_update_heat_warp(delta)
 	_update_burner_flames(delta)
+	_update_grill_surface_light(delta)
 	if dragging_patty != null:
 		_update_patty_drag(delta)
 	if cheese_held or _cheese_returning:
@@ -4663,6 +4674,7 @@ func _build_3d_world() -> void:
 	grill_pad_mats.clear()
 	grill_power_labels.clear()
 	grill_heat_lights.clear()
+	grill_surface_light = null
 	grill_season_mesh = null
 	grill_season_mat = null
 	grill_vig_mesh = null
@@ -4689,6 +4701,7 @@ func _build_3d_world() -> void:
 	_load_grill_heat_settings()
 	_load_grill_season_settings()
 	_load_grill_vignette_settings()
+	_load_grill_surface_light_settings()
 	_build_flat_top_grill()
 	_build_burner_flames()
 	_build_cutting_board_prop()
@@ -6455,14 +6468,8 @@ func _build_flat_top_grill() -> void:
 	_grill_heat_cook_x0 = cook_x0 if cook_started else GRILL_CENTER_X - cook_w * 0.5
 	_grill_heat_cook_x1 = cook_x1 if cook_started else GRILL_CENTER_X + cook_w * 0.5
 	_rebuild_grill_heat_glows(surface)
-	var heat := OmniLight3D.new()
-	heat.light_color = Color(1.0, 0.55, 0.22)
-	heat.light_energy = 0.0
-	heat.visible = false
-	heat.omni_range = 1.0
-	heat.position = Vector3(cook_cx_world - GRILL_CENTER_X, 0.14, 0)
-	surface.add_child(heat)
-	grill_heat_lights.append(heat)
+	## Subtle real Omni wash on the cook steel (not the old unused heat orb).
+	_add_grill_surface_light(surface, cook_cx_world - GRILL_CENTER_X)
 
 	## Heat shimmer / warp over FULL + 1/2 cook bands (not HOLD).
 	_build_heat_warp_plane(
@@ -7864,6 +7871,7 @@ func _set_grill_on(on: bool) -> void:
 	if on:
 		_check_oil_fire_risk()
 	_set_burner_flames_visible(on)
+	_apply_grill_surface_light()
 	_update_kitchen_sizzle()
 	_refresh_grill_ui_button(0)
 	if turning_on:
@@ -12572,6 +12580,109 @@ func _sync_grill_heat_hidden_ui() -> void:
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
 			var v := float(vals[key])
 			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if key == "heat_bars" else ("%.2f" % v)
+
+
+func _add_grill_surface_light(parent: Node3D, local_x: float) -> void:
+	## Very subtle red-orange Omni sitting just above the steel when the burner is on.
+	if parent == null or not is_instance_valid(parent):
+		return
+	if grill_surface_light != null and is_instance_valid(grill_surface_light):
+		grill_surface_light.queue_free()
+	grill_surface_light = null
+	var light := OmniLight3D.new()
+	light.name = "GrillSurfaceLight"
+	light.shadow_enabled = false
+	light.light_volumetric_fog_energy = 0.0
+	light.omni_attenuation = 1.35
+	light.position = Vector3(local_x, grill_surf_light_height, 0.02)
+	parent.add_child(light)
+	grill_surface_light = light
+	_apply_grill_surface_light()
+
+
+func _apply_grill_surface_light() -> void:
+	if grill_surface_light == null or not is_instance_valid(grill_surface_light):
+		return
+	grill_surface_light.light_color = grill_surf_light_color
+	grill_surface_light.omni_range = grill_surf_light_range
+	grill_surface_light.light_specular = grill_surf_light_specular
+	grill_surface_light.position.y = grill_surf_light_height
+	var on := grill_on
+	grill_surface_light.visible = on
+	grill_surface_light.light_energy = grill_surf_light_energy if on else 0.0
+
+
+func _update_grill_surface_light(delta: float) -> void:
+	if grill_surface_light == null or not is_instance_valid(grill_surface_light):
+		return
+	if not grill_on:
+		grill_surface_light.visible = false
+		grill_surface_light.light_energy = 0.0
+		return
+	grill_surface_light.visible = true
+	_grill_surf_light_phase += delta
+	var flick := grill_surf_light_flicker
+	var mul := 1.0
+	if flick > 0.001:
+		var t := _grill_surf_light_phase
+		mul = 1.0 \
+			+ sin(t * 2.1) * 0.55 * flick \
+			+ sin(t * 5.3 + 1.2) * 0.28 * flick \
+			+ sin(t * 9.7 + 0.4) * 0.12 * flick
+		mul = clampf(mul, 1.0 - flick * 0.85, 1.0 + flick * 0.55)
+	grill_surface_light.light_color = grill_surf_light_color
+	grill_surface_light.omni_range = grill_surf_light_range
+	grill_surface_light.light_specular = grill_surf_light_specular
+	grill_surface_light.position.y = grill_surf_light_height
+	grill_surface_light.light_energy = grill_surf_light_energy * mul
+
+
+func _load_grill_surface_light_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(GRILL_SURFACE_LIGHT_CFG_SECTION):
+		return
+	grill_surf_light_energy = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "energy", grill_surf_light_energy)), 0.0, 2.0)
+	grill_surf_light_range = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "range", grill_surf_light_range)), 0.2, 4.0)
+	grill_surf_light_height = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "height", grill_surf_light_height)), 0.02, 0.6)
+	grill_surf_light_flicker = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "flicker", grill_surf_light_flicker)), 0.0, 1.0)
+	grill_surf_light_specular = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "specular", grill_surf_light_specular)), 0.0, 1.0)
+	grill_surf_light_color.r = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "r", grill_surf_light_color.r)), 0.0, 1.0)
+	grill_surf_light_color.g = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "g", grill_surf_light_color.g)), 0.0, 1.0)
+	grill_surf_light_color.b = clampf(float(cfg.get_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "b", grill_surf_light_color.b)), 0.0, 1.0)
+
+
+func _save_grill_surface_light_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "energy", grill_surf_light_energy)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "range", grill_surf_light_range)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "height", grill_surf_light_height)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "flicker", grill_surf_light_flicker)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "specular", grill_surf_light_specular)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "r", grill_surf_light_color.r)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "g", grill_surf_light_color.g)
+	cfg.set_value(GRILL_SURFACE_LIGHT_CFG_SECTION, "b", grill_surf_light_color.b)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_grill_surface_light_hidden_ui() -> void:
+	var vals := {
+		"surf_light_energy": grill_surf_light_energy,
+		"surf_light_range": grill_surf_light_range,
+		"surf_light_height": grill_surf_light_height,
+		"surf_light_flicker": grill_surf_light_flicker,
+		"surf_light_specular": grill_surf_light_specular,
+		"surf_light_r": grill_surf_light_color.r,
+		"surf_light_g": grill_surf_light_color.g,
+		"surf_light_b": grill_surf_light_color.b,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
 
 
 func _make_residue_texture(seed_i: int) -> ImageTexture:
@@ -18138,23 +18249,23 @@ func _add_grill_zone_panel(parent: Node3D, local_pos: Vector3, size: Vector3, ma
 
 
 func _make_grill_splash_stainless() -> StandardMaterial3D:
-	## Brushed stainless — shinier than the seasoned flat-top.
+	## Brushed stainless — shinier / more reflective than the seasoned flat-top.
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	_ensure_grill_steel_texture()
 	if grill_steel_tex != null:
 		mat.albedo_texture = grill_steel_tex
-		mat.albedo_color = Color(0.78, 0.80, 0.84)
+		mat.albedo_color = Color(0.82, 0.84, 0.88)
 		mat.uv1_scale = Vector3(2.4, 0.85, 1.0)
 		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	else:
-		mat.albedo_color = Color(0.72, 0.74, 0.78)
-	mat.metallic = 0.88
-	mat.roughness = 0.32
+		mat.albedo_color = Color(0.76, 0.78, 0.82)
+	mat.metallic = 0.94
+	mat.roughness = 0.18
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	mat.clearcoat_enabled = true
-	mat.clearcoat = 0.22
-	mat.clearcoat_roughness = 0.28
+	mat.clearcoat = 0.42
+	mat.clearcoat_roughness = 0.12
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	return mat
 
@@ -36043,6 +36154,67 @@ func _build_options_menu() -> void:
 			_save_grill_heat_settings()
 	)
 
+	var surf_lab := Label.new()
+	surf_lab.text = "GRILL SURFACE LIGHT (ON)"
+	UiFontsScript.apply_label(surf_lab, true, 13)
+	surf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(surf_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_energy", "Light Greatness", 0.0, 2.0, 0.01,
+		func(): return grill_surf_light_energy,
+		func(v: float):
+			grill_surf_light_energy = clampf(v, 0.0, 2.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_range", "Light Range", 0.2, 4.0, 0.02,
+		func(): return grill_surf_light_range,
+		func(v: float):
+			grill_surf_light_range = clampf(v, 0.2, 4.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_height", "Light Height", 0.02, 0.6, 0.005,
+		func(): return grill_surf_light_height,
+		func(v: float):
+			grill_surf_light_height = clampf(v, 0.02, 0.6)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_flicker", "Light Flicker", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_flicker,
+		func(v: float):
+			grill_surf_light_flicker = clampf(v, 0.0, 1.0)
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_specular", "Light Specular", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_specular,
+		func(v: float):
+			grill_surf_light_specular = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_r", "Light Color R", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_color.r,
+		func(v: float):
+			grill_surf_light_color.r = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_g", "Light Color G", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_color.g,
+		func(v: float):
+			grill_surf_light_color.g = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_b", "Light Color B", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_color.b,
+		func(v: float):
+			grill_surf_light_color.b = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+
 	var season_lab := Label.new()
 	season_lab.text = "GRILL OIL / MULTICOLOR SPOTS"
 	UiFontsScript.apply_label(season_lab, true, 13)
@@ -36526,6 +36698,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
 			_sync_grill_heat_hidden_ui()
+			_sync_grill_surface_light_hidden_ui()
 			_sync_grill_season_hidden_ui()
 			_sync_grill_vignette_hidden_ui()
 			_sync_icecream_station_hidden_ui()
