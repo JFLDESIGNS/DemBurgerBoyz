@@ -416,6 +416,27 @@ var grill_surf_light_flicker: float = 0.12
 var grill_surf_light_specular: float = 0.35
 var grill_surf_light_color := Color(1.0, 0.38, 0.12) ## soft red-orange
 var _grill_surf_light_phase: float = 0.0
+## Service-window sill glass — Hidden tunable.
+const WINDOW_SILL_GLASS_CFG_SECTION := "window_sill_glass"
+var sill_glass_mesh: MeshInstance3D = null
+var sill_glass_mat: ShaderMaterial = null
+var sill_glass_height_in: float = 8.0 ## was 5; +3"
+var sill_glass_thick_in: float = 0.55 ## real thickness, not a paper plane
+var sill_glass_magnify: float = 0.022
+var sill_glass_distort: float = 0.012
+var sill_glass_tint := Color(0.48, 0.06, 0.02)
+var sill_glass_tint_strength: float = 0.58
+var sill_glass_opacity: float = 0.42
+var sill_glass_darken: float = 0.42
+var sill_glass_bottom_darken: float = 0.55
+var sill_glass_reflect: float = 0.28
+var sill_glass_vignette: float = 0.35
+var sill_glass_strip_y: float = 0.72
+var sill_glass_strip_h: float = 0.10
+var sill_glass_strip_opacity: float = 0.85
+var sill_glass_strip_reps: float = 14.0
+var sill_glass_strip_red := Color(0.78, 0.08, 0.05)
+var sill_glass_strip_white := Color(0.92, 0.92, 0.90)
 ## Multicolor oil/water seasoning film — Hidden tunable (v2 = stronger defaults).
 const GRILL_SEASON_CFG_SECTION := "grill_season"
 const GRILL_SEASON_CFG_VERSION := 2
@@ -4702,6 +4723,7 @@ func _build_3d_world() -> void:
 	_load_grill_season_settings()
 	_load_grill_vignette_settings()
 	_load_grill_surface_light_settings()
+	_load_window_sill_glass_settings()
 	_build_flat_top_grill()
 	_build_burner_flames()
 	_build_cutting_board_prop()
@@ -18313,19 +18335,19 @@ func _add_grill_splash_guard(parent: Node3D) -> void:
 
 
 func _add_window_sill_glass() -> void:
-	## Darker orange-red glass across the service WINDOW OPENING only (not truck walls).
-	## Sits in the opening plane so width lines up with the side frames (no grill-parallax stretch).
+	## Thick orange-red glass across the service WINDOW OPENING (not truck walls).
 	if world == null or not is_instance_valid(world):
 		return
-	## Side frames at ±2.4 (0.12 thick) → clear opening ≈ 4.68; slight inset so it sits inside.
+	if sill_glass_mesh != null and is_instance_valid(sill_glass_mesh):
+		sill_glass_mesh.queue_free()
+	sill_glass_mesh = null
+	sill_glass_mat = null
 	const FRAME_X := 2.4
 	const FRAME_HALF_W := 0.06
-	var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08 ## ~4.60, inset from frame faces
-	var h := 5.0 * INCH_TO_M
-	var thick := 0.008
-	## Bottom trim of the opening is centered at y=0.95, h=0.12 → top ≈ 1.01.
+	var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08
+	var h := sill_glass_height_in * INCH_TO_M
+	var thick := maxf(0.004, sill_glass_thick_in * INCH_TO_M)
 	var sill_top_y := 1.01
-	## Just inside the front wall slab (~z 1.35), still past the splash guard.
 	var glass_z := 1.30
 	var glass := MeshInstance3D.new()
 	glass.name = "WindowSillGlass"
@@ -18340,15 +18362,139 @@ func _add_window_sill_glass() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
 	mat.render_priority = 4
-	mat.set_shader_parameter("magnify", 0.018)
-	mat.set_shader_parameter("tint_color", Vector3(0.48, 0.06, 0.02))
-	mat.set_shader_parameter("tint_strength", 0.58)
-	mat.set_shader_parameter("opacity", 0.40) ## a bit more see-through
-	mat.set_shader_parameter("darken", 0.42)
 	glass.material_override = mat
 	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	glass.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	world.add_child(glass)
+	sill_glass_mesh = glass
+	sill_glass_mat = mat
+	_apply_window_sill_glass_settings()
+
+
+func _apply_window_sill_glass_settings() -> void:
+	if sill_glass_mesh != null and is_instance_valid(sill_glass_mesh):
+		var h := sill_glass_height_in * INCH_TO_M
+		var thick := maxf(0.004, sill_glass_thick_in * INCH_TO_M)
+		const FRAME_X := 2.4
+		const FRAME_HALF_W := 0.06
+		var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08
+		var box := sill_glass_mesh.mesh as BoxMesh
+		if box == null:
+			box = BoxMesh.new()
+			sill_glass_mesh.mesh = box
+		box.size = Vector3(opening_w, h, thick)
+		sill_glass_mesh.position.y = 1.01 + h * 0.5
+	if sill_glass_mat == null:
+		return
+	sill_glass_mat.set_shader_parameter("magnify", sill_glass_magnify)
+	sill_glass_mat.set_shader_parameter("distort", sill_glass_distort)
+	sill_glass_mat.set_shader_parameter("tint_color", Vector3(sill_glass_tint.r, sill_glass_tint.g, sill_glass_tint.b))
+	sill_glass_mat.set_shader_parameter("tint_strength", sill_glass_tint_strength)
+	sill_glass_mat.set_shader_parameter("opacity", sill_glass_opacity)
+	sill_glass_mat.set_shader_parameter("darken", sill_glass_darken)
+	sill_glass_mat.set_shader_parameter("bottom_darken", sill_glass_bottom_darken)
+	sill_glass_mat.set_shader_parameter("reflectiveness", sill_glass_reflect)
+	sill_glass_mat.set_shader_parameter("vig_strength", sill_glass_vignette)
+	sill_glass_mat.set_shader_parameter("strip_y", sill_glass_strip_y)
+	sill_glass_mat.set_shader_parameter("strip_h", sill_glass_strip_h)
+	sill_glass_mat.set_shader_parameter("strip_opacity", sill_glass_strip_opacity)
+	sill_glass_mat.set_shader_parameter("strip_reps", sill_glass_strip_reps)
+	sill_glass_mat.set_shader_parameter("strip_red", Vector3(sill_glass_strip_red.r, sill_glass_strip_red.g, sill_glass_strip_red.b))
+	sill_glass_mat.set_shader_parameter("strip_white", Vector3(sill_glass_strip_white.r, sill_glass_strip_white.g, sill_glass_strip_white.b))
+	sill_glass_mat.set_shader_parameter("glass_half_h", maxf(0.001, sill_glass_height_in * INCH_TO_M * 0.5))
+
+
+func _load_window_sill_glass_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(WINDOW_SILL_GLASS_CFG_SECTION):
+		return
+	sill_glass_height_in = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "height_in", sill_glass_height_in)), 2.0, 24.0)
+	sill_glass_thick_in = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "thick_in", sill_glass_thick_in)), 0.05, 3.0)
+	sill_glass_magnify = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "magnify", sill_glass_magnify)), 0.0, 0.12)
+	sill_glass_distort = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "distort", sill_glass_distort)), 0.0, 0.08)
+	sill_glass_tint.r = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_r", sill_glass_tint.r)), 0.0, 1.0)
+	sill_glass_tint.g = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_g", sill_glass_tint.g)), 0.0, 1.0)
+	sill_glass_tint.b = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_b", sill_glass_tint.b)), 0.0, 1.0)
+	sill_glass_tint_strength = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_str", sill_glass_tint_strength)), 0.0, 1.0)
+	sill_glass_opacity = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "opacity", sill_glass_opacity)), 0.0, 1.0)
+	sill_glass_darken = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "darken", sill_glass_darken)), 0.0, 1.0)
+	sill_glass_bottom_darken = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "bottom_darken", sill_glass_bottom_darken)), 0.0, 1.0)
+	sill_glass_reflect = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "reflect", sill_glass_reflect)), 0.0, 1.0)
+	sill_glass_vignette = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "vignette", sill_glass_vignette)), 0.0, 1.0)
+	sill_glass_strip_y = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_y", sill_glass_strip_y)), 0.0, 1.0)
+	sill_glass_strip_h = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_h", sill_glass_strip_h)), 0.01, 0.5)
+	sill_glass_strip_opacity = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_op", sill_glass_strip_opacity)), 0.0, 1.0)
+	sill_glass_strip_reps = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_reps", sill_glass_strip_reps)), 1.0, 40.0)
+	sill_glass_strip_red.r = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_rr", sill_glass_strip_red.r)), 0.0, 1.0)
+	sill_glass_strip_red.g = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_rg", sill_glass_strip_red.g)), 0.0, 1.0)
+	sill_glass_strip_red.b = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_rb", sill_glass_strip_red.b)), 0.0, 1.0)
+	sill_glass_strip_white.r = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wr", sill_glass_strip_white.r)), 0.0, 1.0)
+	sill_glass_strip_white.g = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wg", sill_glass_strip_white.g)), 0.0, 1.0)
+	sill_glass_strip_white.b = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wb", sill_glass_strip_white.b)), 0.0, 1.0)
+
+
+func _save_window_sill_glass_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "height_in", sill_glass_height_in)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "thick_in", sill_glass_thick_in)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "magnify", sill_glass_magnify)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "distort", sill_glass_distort)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_r", sill_glass_tint.r)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_g", sill_glass_tint.g)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_b", sill_glass_tint.b)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "tint_str", sill_glass_tint_strength)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "opacity", sill_glass_opacity)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "darken", sill_glass_darken)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "bottom_darken", sill_glass_bottom_darken)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "reflect", sill_glass_reflect)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "vignette", sill_glass_vignette)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_y", sill_glass_strip_y)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_h", sill_glass_strip_h)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_op", sill_glass_strip_opacity)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_reps", sill_glass_strip_reps)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_rr", sill_glass_strip_red.r)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_rg", sill_glass_strip_red.g)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_rb", sill_glass_strip_red.b)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wr", sill_glass_strip_white.r)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wg", sill_glass_strip_white.g)
+	cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wb", sill_glass_strip_white.b)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_window_sill_glass_hidden_ui() -> void:
+	var vals := {
+		"sill_h": sill_glass_height_in,
+		"sill_thick": sill_glass_thick_in,
+		"sill_magnify": sill_glass_magnify,
+		"sill_distort": sill_glass_distort,
+		"sill_tint_r": sill_glass_tint.r,
+		"sill_tint_g": sill_glass_tint.g,
+		"sill_tint_b": sill_glass_tint.b,
+		"sill_tint_str": sill_glass_tint_strength,
+		"sill_opacity": sill_glass_opacity,
+		"sill_darken": sill_glass_darken,
+		"sill_bot_dark": sill_glass_bottom_darken,
+		"sill_reflect": sill_glass_reflect,
+		"sill_vig": sill_glass_vignette,
+		"sill_strip_y": sill_glass_strip_y,
+		"sill_strip_h": sill_glass_strip_h,
+		"sill_strip_op": sill_glass_strip_opacity,
+		"sill_strip_reps": sill_glass_strip_reps,
+		"sill_strip_rr": sill_glass_strip_red.r,
+		"sill_strip_rg": sill_glass_strip_red.g,
+		"sill_strip_rb": sill_glass_strip_red.b,
+		"sill_strip_wr": sill_glass_strip_white.r,
+		"sill_strip_wg": sill_glass_strip_white.g,
+		"sill_strip_wb": sill_glass_strip_white.b,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
 
 
 func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
@@ -36215,6 +36361,173 @@ func _build_options_menu() -> void:
 			_save_grill_surface_light_settings()
 	)
 
+	var sill_lab := Label.new()
+	sill_lab.text = "WINDOW SILL GLASS"
+	UiFontsScript.apply_label(sill_lab, true, 13)
+	sill_lab.add_theme_color_override("font_color", Color(0.95, 0.72, 0.55))
+	options_hidden_room_tone_box.add_child(sill_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_h", "Glass Height (in)", 2.0, 24.0, 0.25,
+		func(): return sill_glass_height_in,
+		func(v: float):
+			sill_glass_height_in = clampf(v, 2.0, 24.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_thick", "Glass Thickness (in)", 0.05, 3.0, 0.05,
+		func(): return sill_glass_thick_in,
+		func(v: float):
+			sill_glass_thick_in = clampf(v, 0.05, 3.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_opacity", "Glass Opacity", 0.0, 1.0, 0.01,
+		func(): return sill_glass_opacity,
+		func(v: float):
+			sill_glass_opacity = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_r", "Glass Color R", 0.0, 1.0, 0.01,
+		func(): return sill_glass_tint.r,
+		func(v: float):
+			sill_glass_tint.r = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_g", "Glass Color G", 0.0, 1.0, 0.01,
+		func(): return sill_glass_tint.g,
+		func(v: float):
+			sill_glass_tint.g = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_b", "Glass Color B", 0.0, 1.0, 0.01,
+		func(): return sill_glass_tint.b,
+		func(v: float):
+			sill_glass_tint.b = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_str", "Glass Tint Strength", 0.0, 1.0, 0.01,
+		func(): return sill_glass_tint_strength,
+		func(v: float):
+			sill_glass_tint_strength = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_darken", "Glass Darken", 0.0, 1.0, 0.01,
+		func(): return sill_glass_darken,
+		func(v: float):
+			sill_glass_darken = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_bot_dark", "Bottom Darken", 0.0, 1.0, 0.01,
+		func(): return sill_glass_bottom_darken,
+		func(v: float):
+			sill_glass_bottom_darken = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_reflect", "Reflectiveness", 0.0, 1.0, 0.01,
+		func(): return sill_glass_reflect,
+		func(v: float):
+			sill_glass_reflect = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_magnify", "Magnify", 0.0, 0.12, 0.001,
+		func(): return sill_glass_magnify,
+		func(v: float):
+			sill_glass_magnify = clampf(v, 0.0, 0.12)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_distort", "Distorting", 0.0, 0.08, 0.001,
+		func(): return sill_glass_distort,
+		func(v: float):
+			sill_glass_distort = clampf(v, 0.0, 0.08)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_vig", "Vignette", 0.0, 1.0, 0.01,
+		func(): return sill_glass_vignette,
+		func(v: float):
+			sill_glass_vignette = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_y", "Strip Height Pos", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_y,
+		func(v: float):
+			sill_glass_strip_y = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_h", "Strip Band Height", 0.01, 0.5, 0.005,
+		func(): return sill_glass_strip_h,
+		func(v: float):
+			sill_glass_strip_h = clampf(v, 0.01, 0.5)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_op", "Strip Opacity", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_opacity,
+		func(v: float):
+			sill_glass_strip_opacity = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_reps", "Strip Repeats", 1.0, 40.0, 1.0,
+		func(): return sill_glass_strip_reps,
+		func(v: float):
+			sill_glass_strip_reps = clampf(v, 1.0, 40.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_rr", "Strip Red R", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_red.r,
+		func(v: float):
+			sill_glass_strip_red.r = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_rg", "Strip Red G", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_red.g,
+		func(v: float):
+			sill_glass_strip_red.g = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_rb", "Strip Red B", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_red.b,
+		func(v: float):
+			sill_glass_strip_red.b = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_wr", "Strip White R", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_white.r,
+		func(v: float):
+			sill_glass_strip_white.r = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_wg", "Strip White G", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_white.g,
+		func(v: float):
+			sill_glass_strip_white.g = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_wb", "Strip White B", 0.0, 1.0, 0.01,
+		func(): return sill_glass_strip_white.b,
+		func(v: float):
+			sill_glass_strip_white.b = clampf(v, 0.0, 1.0)
+			_apply_window_sill_glass_settings()
+			_save_window_sill_glass_settings()
+	)
+
 	var season_lab := Label.new()
 	season_lab.text = "GRILL OIL / MULTICOLOR SPOTS"
 	UiFontsScript.apply_label(season_lab, true, 13)
@@ -36699,6 +37012,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_xform_hidden_ui()
 			_sync_grill_heat_hidden_ui()
 			_sync_grill_surface_light_hidden_ui()
+			_sync_window_sill_glass_hidden_ui()
 			_sync_grill_season_hidden_ui()
 			_sync_grill_vignette_hidden_ui()
 			_sync_icecream_station_hidden_ui()
