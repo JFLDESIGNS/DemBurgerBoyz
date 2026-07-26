@@ -157,7 +157,7 @@ var is_waiting: bool = false
 var is_leaving: bool = false
 var order_value: int = 8
 var queue_timer_active: bool = true
-## Serve-speed clock — starts when the order ticket appears (not when meat is ready).
+## Serve-speed clock starts when the order ticket appears.
 var order_elapsed_sec: float = 0.0
 var _order_clock_on: bool = false
 const SERVE_WOW_SEC := 3.0
@@ -1307,8 +1307,8 @@ func _process(delta: float) -> void:
 		if queue_timer_active and patience <= 0.0 and not mp_host_driven and not _eating:
 			leave_mad()
 			patience_expired.emit(self)
-	## Ticket clock runs from the moment the slip is pinned until serve / leave.
-	if _order_clock_on and queue_timer_active and not is_leaving and not mp_host_driven:
+	## Ticket stopwatch is independent of patience, so non-front tickets still age.
+	if _order_clock_on and not is_leaving and not mp_host_driven:
 		order_elapsed_sec += delta
 
 
@@ -1375,10 +1375,6 @@ func stop_order_clock() -> void:
 
 func set_queue_timer_active(active: bool) -> void:
 	queue_timer_active = active
-	if active:
-		start_order_clock(false)
-	else:
-		stop_order_clock()
 
 
 func speed_rating(burnt: bool = false) -> Dictionary:

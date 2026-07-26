@@ -1701,7 +1701,7 @@ func flip() -> bool:
 	## Lock in first-side doneness so the new top stays seared and sides keep their tones.
 	first_side_time = cook_time
 	flipped_once = true
-	perfect_flip = is_in_flip_window()
+	perfect_flip = announce_perfect
 	## Fresh timer for the second side (~15s to scoop).
 	cook_time = 0.0
 	_announced_scoop = false
@@ -1723,7 +1723,7 @@ func flip() -> bool:
 	var audio := _audio()
 	if audio:
 		audio.play_flip()
-		if announce_perfect and audio.has_method("play_perfect_announcer"):
+		if perfect_flip and audio.has_method("play_perfect_announcer"):
 			audio.play_perfect_announcer()
 	var tw := create_tween()
 	## 15% faster than prior 0.08 / 0.12 squash.

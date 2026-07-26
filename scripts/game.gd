@@ -3203,8 +3203,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			_clear_active_station()
 	elif event is InputEventKey and event.pressed and not event.echo \
-			and (event.keycode == KEY_EQUAL or event.physical_keycode == KEY_EQUAL \
-			or event.keycode == KEY_KP_EQUAL or event.physical_keycode == KEY_KP_EQUAL):
+			and (event.keycode == KEY_EQUAL or event.physical_keycode == KEY_EQUAL):
 		## = toggles lasso shape tool (draw / manage colored planes).
 		_toggle_lasso_tool()
 		get_viewport().set_input_as_handled()
@@ -3365,7 +3364,7 @@ func _input(event: InputEvent) -> void:
 			if event is InputEventMouseButton or event is InputEventMouseMotion:
 				over_ui = lasso_tool.is_pointer_over_ui(_event_screen_pos(event))
 			if not over_ui:
-				var consumed := lasso_tool.handle_input(event)
+				var consumed: bool = bool(lasso_tool.handle_input(event))
 				## Keep kitchen grabs (spatula / oil / etc.) from stealing world clicks.
 				if consumed or event is InputEventMouseButton or event is InputEventMouseMotion:
 					get_viewport().set_input_as_handled()
@@ -5549,7 +5548,7 @@ func _update_ttt_spatula_scrub(tip_pos: Vector3, delta: float, scraping: bool) -
 		return
 	if not _grill_ttt.has_method("tick_scrub"):
 		return
-	var on_board := scraping and tip_pos != Vector3.ZERO and _grill_ttt.point_on_board(tip_pos)
+	var on_board: bool = scraping and tip_pos != Vector3.ZERO and bool(_grill_ttt.point_on_board(tip_pos))
 	if bool(_grill_ttt.tick_scrub(delta, on_board)):
 		_request_ttt_scrub_clear()
 		return
@@ -24841,6 +24840,8 @@ func _complete_icecream_only_serve(customer: Node3D = null) -> void:
 		payout = maxi(4, int(cust.order_value))
 	if cust.has_method("stop_order_clock"):
 		cust.stop_order_clock()
+	if payout > 0:
+		_play_delivery_time_announcer(cust)
 	if payout > 0 and not guest_mp:
 		money += payout
 		total_served += 1
@@ -39509,11 +39510,6 @@ func _create_ticket(customer: Node3D) -> void:
 	wrap.set_meta("ticket_note", note)
 	## Outer shell: drop shadow + border (StyleBoxTexture can't cast shadows).
 	note.add_theme_stylebox_override("panel", _make_ticket_shell_style(false))
-	## Queue timers start only when this customer becomes first in line.
-	if customer.has_method("start_order_clock"):
-		customer.start_order_clock(false)
-	if customer.has_method("set_queue_timer_active"):
-		customer.set_queue_timer_active(false)
 
 	var paper := PanelContainer.new()
 	paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -39631,15 +39627,30 @@ func _create_ticket(customer: Node3D) -> void:
 		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(lab)
 
+	var timer_label := Label.new()
+	timer_label.name = "TicketSeconds"
+	timer_label.text = "0.0s"
+	timer_label.custom_minimum_size = Vector2(0, 14)
+	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_ticket(timer_label, 13)
+	timer_label.add_theme_color_override("font_color", Color(0.24, 0.17, 0.11, 0.70))
+	v.add_child(timer_label)
+	wrap.set_meta("timer_label", timer_label)
+
 	var bottom_pad := Control.new()
 	bottom_pad.name = "TicketBottomPad"
-	bottom_pad.custom_minimum_size = Vector2(0, 15)
+	bottom_pad.custom_minimum_size = Vector2(0, 4)
 	bottom_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(bottom_pad)
 
 	wrap.add_child(note)
 	ticket_box.add_child(wrap)
 	tickets[customer] = wrap
+	customer.set_meta("ticket_build_clock_stopped", false)
+	if customer.has_method("start_order_clock"):
+		customer.start_order_clock(true)
 	_highlight_tickets()
 	_refresh_ticket_checkmarks()
 	_refresh_customer_queue_timers()
@@ -39886,6 +39897,49 @@ func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	_serve_cup_node = null
 
 
+func _ticket_elapsed_seconds(customer: Node3D) -> float:
+	if customer == null or not is_instance_valid(customer):
+		return 0.0
+	if "order_elapsed_sec" in customer:
+		return maxf(0.0, float(customer.order_elapsed_sec))
+	return 0.0
+
+
+func _update_ticket_seconds_label(wrap: Control, customer: Node3D) -> void:
+	if wrap == null or not is_instance_valid(wrap) or not wrap.has_meta("timer_label"):
+		return
+	var label_node = wrap.get_meta("timer_label")
+	if not (label_node is Label):
+		return
+	var label := label_node as Label
+	if label == null or not is_instance_valid(label):
+		return
+	label.text = "%.1fs" % _ticket_elapsed_seconds(customer)
+	var frozen := bool(customer.get_meta("ticket_build_clock_stopped", false)) if customer != null and is_instance_valid(customer) else false
+	label.add_theme_color_override(
+		"font_color",
+		Color(0.14, 0.38, 0.22, 0.82) if frozen else Color(0.24, 0.17, 0.11, 0.70)
+	)
+
+
+func _maybe_stop_ticket_clock_for_build_complete(customer: Node3D) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	if bool(customer.get_meta("ticket_build_clock_stopped", false)):
+		return
+	var burger_order: Array = GameDataScript.order_burger_items(customer.order)
+	if burger_order.is_empty():
+		return
+	var station_index := _find_perfect_station_for(customer.order)
+	if station_index < 0:
+		return
+	if _station_has_melting_cheese(station_index):
+		return
+	customer.set_meta("ticket_build_clock_stopped", true)
+	if customer.has_method("stop_order_clock"):
+		customer.stop_order_clock()
+
+
 func _refresh_ticket_checkmarks() -> void:
 	## Tick off slip lines as matching ingredients land on Build.
 	var built: Array = []
@@ -39917,6 +39971,7 @@ func _refresh_ticket_checkmarks() -> void:
 					"font_color",
 					Color(0.14, 0.38, 0.22) if done else Color(0.18, 0.12, 0.08)
 				)
+		_maybe_stop_ticket_clock_for_build_complete(cust)
 	_refresh_ticket_patience_bars()
 
 
@@ -39947,6 +40002,7 @@ func _refresh_ticket_patience_bars() -> void:
 			else:
 				fill.bg_color = Color(0.62, 0.28, 0.20, 0.85)
 		bar.visible = bool(cust.get("is_waiting")) and not bool(cust.get("is_leaving"))
+		_update_ticket_seconds_label(wrap, cust)
 
 
 func _make_ticket_shell_style(selected: bool) -> StyleBoxFlat:
@@ -40111,10 +40167,6 @@ func _refresh_customer_queue_timers() -> void:
 		if cust == null or not is_instance_valid(cust):
 			continue
 		var active: bool = cust == front
-		if active and not bool(cust.get_meta("queue_clock_started", false)):
-			cust.set_meta("queue_clock_started", true)
-			if "order_elapsed_sec" in cust:
-				cust.order_elapsed_sec = 0.0
 		if cust.has_method("set_queue_timer_active"):
 			cust.set_queue_timer_active(active)
 
@@ -44310,6 +44362,17 @@ func _spawn_serve_crumb_burst(parent: Control, at: Vector2) -> void:
 		ctw.chain().tween_callback(crumb.queue_free)
 
 
+func _play_delivery_time_announcer(customer: Node3D) -> void:
+	if game_audio == null or not game_audio.has_method("play_delivery_time_announcer"):
+		return
+	if customer == null or not is_instance_valid(customer):
+		return
+	var wait_sec := 0.0
+	if "order_elapsed_sec" in customer:
+		wait_sec = float(customer.order_elapsed_sec)
+	game_audio.play_delivery_time_announcer(wait_sec)
+
+
 func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	var cust: Node3D = customer
 	if cust == null or not is_instance_valid(cust):
@@ -44370,6 +44433,8 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	var cook_bit := "  %s" % cook_r["text"]
 	if cust.has_method("stop_order_clock"):
 		cust.stop_order_clock()
+	if payout > 0:
+		_play_delivery_time_announcer(cust)
 
 	## Mustache cat stiffs you — burger leaves, wallet doesn't.
 	if disguise and payout > 0:
@@ -44575,6 +44640,8 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 		payout = maxi(3, int(cust.order_value))
 	if cust.has_method("stop_order_clock"):
 		cust.stop_order_clock()
+	if payout > 0:
+		_play_delivery_time_announcer(cust)
 	if payout > 0 and not guest_mp:
 		money += payout
 		total_served += 1
@@ -44682,6 +44749,8 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 		payout = maxi(3, int(cust.order_value))
 	if cust.has_method("stop_order_clock"):
 		cust.stop_order_clock()
+	if payout > 0:
+		_play_delivery_time_announcer(cust)
 	if _consume_fries_for_serve(cust) and payout > 0 and not guest_mp:
 		money += payout
 		total_served += 1

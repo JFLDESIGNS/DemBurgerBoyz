@@ -1277,23 +1277,42 @@ func play_flip() -> void:
 	_play_cached("flip", _make_flip, 0.0, 0.28)
 
 
-func play_perfect_announcer() -> void:
-	const PATH := "res://sounds/perfect.wav"
-	if not _cache.has("perfect_announcer"):
+func _load_announcer_stream(key: String, path: String) -> AudioStream:
+	if not _cache.has(key):
 		var stream: AudioStream = null
-		if ResourceLoader.exists(PATH):
-			stream = load(PATH) as AudioStream
-		if stream == null and FileAccess.file_exists(PATH):
-			stream = AudioStreamWAV.load_from_file(PATH)
+		if ResourceLoader.exists(path):
+			stream = load(path) as AudioStream
+		if stream == null and FileAccess.file_exists(path):
+			stream = AudioStreamWAV.load_from_file(path)
 		if stream == null:
-			return
-		_cache["perfect_announcer"] = stream
+			return null
+		_cache[key] = stream
+	return _cache[key] as AudioStream
+
+
+func _play_announcer_stream(key: String, path: String, gain: float = 0.65) -> void:
+	var stream := _load_announcer_stream(key, path)
+	if stream == null:
+		return
 	var p: AudioStreamPlayer = _players[_player_i]
 	_player_i = (_player_i + 1) % _players.size()
-	p.stream = _cache["perfect_announcer"]
+	p.stream = stream
 	p.pitch_scale = 1.0
-	p.volume_db = linear_to_db(0.92)
+	p.volume_db = linear_to_db(clampf(gain, 0.05, 1.25))
 	p.play()
+
+
+func play_perfect_announcer() -> void:
+	_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
+
+
+func play_delivery_time_announcer(wait_sec: float) -> void:
+	if wait_sec < 5.0:
+		_play_announcer_stream("order_perfect_announcer", "res://sounds/perfect.wav", 0.65)
+	elif wait_sec <= 8.0:
+		_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68)
+	elif wait_sec > 15.0:
+		_play_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav", 0.68)
 
 
 func play_ready() -> void:
