@@ -1647,10 +1647,10 @@ const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
 ## Soft-lock fill lift uses runtime `cup_fill_extra_y` (Hidden menu).
 ## Keep seat helpful under the stream, but easy to yank free and place elsewhere.
-const CUP_FILL_LOCK_PULL := 0.68 ## was 0.97 — firm center, soft at the edge
-const CUP_FILL_ACQUIRE := 0.14
-const CUP_FILL_RELEASE := 0.11 ## ~4" pull breaks lock (was 0.30 — felt glued)
-const CUP_FILL_TIGHT := 0.035
+const CUP_FILL_LOCK_PULL := 0.75
+const CUP_FILL_ACQUIRE := 0.22 ## Easier catch past the cabinet lip
+const CUP_FILL_RELEASE := 0.15
+const CUP_FILL_TIGHT := 0.04
 const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk away
 ## Flippy-cup: RMB hold → release pitches forward; 0.5s = perfect 180° rim-down.
 const CUP_FLIP_PERFECT_HOLD := 0.5
@@ -1683,18 +1683,18 @@ const CUP_LIQUID_WILD_SPEED := 1.90 ## full ripple / wave above this
 const CUP_TILT_VEL_DEADZONE := 0.22 ## ignore tiny hand noise for bank/slosh
 const CUP_SPLASH_LOSS := 0.07
 const CUP_SPLASH_LEAN := 34.0 ## was 26 — lean further before spilling
-## Invisible front wall (soda local +Z toward cook). Allows under-nozzle bay but blocks behind cabinet.
-const CUP_SODA_FRONT_Z := 0.2308 ## was 0.18 — +2" toward cook
+## Invisible front wall (soda local +Z toward cook). Keep under-nozzle bay open — old 0.23 blocked soft-lock.
+const CUP_SODA_FRONT_Z := 0.055
 const CUP_SODA_FRONT_HALF_X := 0.58
 const CUP_SODA_FRONT_HEIGHT := 1.30
-const CUP_ICECREAM_FRONT_Z := 0.215
+const CUP_ICECREAM_FRONT_Z := 0.055
 const CUP_ICECREAM_FRONT_HALF_X := 0.184
 const CUP_ICECREAM_FRONT_HEIGHT := 0.78
 const CUP_HOT_GRILL_RESCUE_SEC := 1.0
 const CUP_HOT_GRILL_HISS_WARN_SEC := 0.5
 const CUP_SPOUT_HORIZ := 0.18
 const CUP_SPOUT_VERT := 0.39
-const CUP_MAGNET_RADIUS := 0.18
+const CUP_MAGNET_RADIUS := 0.28
 const CUP_TRAY_MAGNET_RADIUS := 0.26
 const CUP_TRAY_RELEASE_RADIUS := 0.34
 const CUP_TRAY_MAGNET_PULL := 0.16
@@ -24803,20 +24803,20 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 	## Grab cup bottom sits here; decorative nest stacks above it.
 	var stack_base := Vector3(0.0, -0.12, 0.06)
-	var nest_step := 0.0175
-	var spare_count := 3
+	var nest_step := 0.042 ## Tall enough to read as a vertical stack (was 0.0175 ≈ 2 cups)
+	var spare_count := 9
 
 	var tube := MeshInstance3D.new()
 	tube.name = "CupStackCylinder"
 	var tube_mesh := CylinderMesh.new()
 	tube_mesh.top_radius = CUP_SHELL_TOP_R + 0.018
 	tube_mesh.bottom_radius = CUP_SHELL_TOP_R + 0.018
-	tube_mesh.height = 0.70
+	tube_mesh.height = 0.92
 	tube_mesh.radial_segments = 32
 	tube_mesh.cap_top = false
 	tube_mesh.cap_bottom = false
 	tube.mesh = tube_mesh
-	tube.position = Vector3(0.0, 0.18, 0.06)
+	tube.position = Vector3(0.0, 0.28, 0.06)
 	tube.material_override = tube_mat
 	tube.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	rack.add_child(tube)
@@ -25525,8 +25525,9 @@ func _promote_cup_to_active(root: Node3D) -> void:
 	root.set_meta("lid_down", false)
 	root.set_meta("on_side", false)
 	if cup_root != null and cup_root != root and is_instance_valid(cup_root):
-		## Stash the previous working cup empty on the rack if somehow replaced.
-		if cup_soda_fill < 0.05:
+		## Never shove a drink/ice cup back into the CUPS dispenser nest.
+		var prev_used := cup_soda_fill >= 0.05 or cup_ice_fill >= 0.05 or cup_flavor != ""
+		if not prev_used:
 			cup_root.global_position = cup_home
 			cup_root.rotation_degrees = cup_home_rot
 		else:
@@ -26549,7 +26550,7 @@ func _begin_cup_hold() -> bool:
 	if target != cup_root:
 		_promote_cup_to_active(target)
 	## Empty cup sitting in the dispenser — pull it out with a stack-to-hand lerp.
-	if from_rack and cup_soda_fill < 0.05 and cup_home != Vector3.ZERO:
+	if from_rack and cup_soda_fill < 0.05 and cup_ice_fill < 0.05 and cup_flavor == "" and cup_home != Vector3.ZERO:
 		var near_home := cup_root.global_position.distance_to(cup_home) < 0.18
 		if draw_from_stack or near_home:
 			draw_from_stack = true
@@ -26786,11 +26787,27 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 		_cup_spout_lock = best_node
 	var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0)
 	pull = pull * pull
+	## Stronger pre-lock tug so the cup can cross the cabinet lip into the seat.
+	var tug := 0.72 if best_d <= CUP_FILL_ACQUIRE * 1.35 else 0.48
 	var out2 := hit
-	out2.x = lerpf(hit.x, best_target.x, pull * 0.42)
-	out2.z = lerpf(hit.z, best_target.z, pull * 0.42)
-	out2.y = lerpf(hold_y, best_target.y, pull * 0.40)
+	out2.x = lerpf(hit.x, best_target.x, pull * tug)
+	out2.z = lerpf(hit.z, best_target.z, pull * tug)
+	out2.y = lerpf(hold_y, best_target.y, pull * 0.55)
 	return out2
+
+
+func _cup_near_fill_seat(pos: Vector3) -> bool:
+	## True when the cup/aim is in the SODA or ICE soft-lock approach zone.
+	var tips: Array[Node3D] = []
+	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
+		tips.append(soda_spout_marker)
+	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
+		tips.append(ice_spout_marker)
+	for tip in tips:
+		var tpos := _cup_target_for_spout(tip)
+		if Vector2(pos.x - tpos.x, pos.z - tpos.z).length() <= CUP_MAGNET_RADIUS * 1.25:
+			return true
+	return false
 
 
 func _cup_deck_fill_y() -> float:
@@ -26873,7 +26890,9 @@ func _update_held_cup(delta: float) -> void:
 	if can_use_fill_bay and fill_tip == null:
 		fill_tip = _cup_fill_spout_nearby()
 	## Invisible wall on the aim target — stops chase→shove glitching into the cabinet.
-	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay:
+	## Skip near SODA/ICE seats so soft-lock can actually pull under the nozzles.
+	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay \
+			and not _cup_near_fill_seat(seat):
 		seat = _resolve_cup_against_soda(seat, false)
 	if seat != Vector3.ZERO:
 		var prev := cup_root.global_position
@@ -26936,8 +26955,9 @@ func _update_held_cup(delta: float) -> void:
 	_cup_tilt.x = clampf(_cup_tilt.x, -CUP_TILT_MAX, CUP_TILT_MAX)
 	_cup_tilt.y = clampf(_cup_tilt.y, -CUP_TILT_MAX, CUP_TILT_MAX)
 	## Soft wall resolve — ease corrections so it doesn't stutter on the metal.
-	## While filling / recently contacting, skip hard eject (that caused fill-bay glitch).
-	if not can_use_fill_bay and not _cup_pouring and (_cup_machine_contact_grace <= 0.0 or can_reach_customer):
+	## While filling / near a fill seat / recently contacting, skip hard eject (that caused fill-bay glitch).
+	if not can_use_fill_bay and not _cup_pouring and (_cup_machine_contact_grace <= 0.0 or can_reach_customer) \
+			and not _cup_near_fill_seat(cup_root.global_position):
 		var before_resolve := cup_root.global_position
 		var resolved := _resolve_cup_against_soda(before_resolve, can_reach_customer)
 		if not can_reach_customer:
@@ -29619,11 +29639,12 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	if cup_area:
 		cup_area.input_ray_pickable = true
 
-	## Filled drink → stash on tray (up to 3). Grab the next empty from the CUPS rack.
-	if keep_fill and cup_soda_fill >= 0.2:
+	## Filled drink / iced cup → stash on tray (up to 3). Never return used cups to the CUPS nest.
+	var used_cup := keep_fill and (cup_soda_fill >= 0.05 or cup_ice_fill >= 0.05 or cup_flavor != "")
+	if used_cup and (cup_soda_fill >= 0.15 or cup_ice_fill >= 0.08 or cup_flavor != ""):
 		if _tray_parked_count() >= CUP_MAX:
-			## Already max parked — keep this as the working cup on the tray.
-			var park_full := cup_rest if cup_rest != Vector3.ZERO else cup_home
+			## Already max parked — keep this as the working cup on the drip tray (not the rack).
+			var park_full := cup_rest if cup_rest != Vector3.ZERO else _cup_drip_tray_fallback()
 			var park_full_rot := _cup_presented_rotation(cup_root)
 			if cup_root != null and is_instance_valid(cup_root):
 				cup_root.rotation_degrees = park_full_rot
@@ -29671,7 +29692,10 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		call_deferred("_try_auto_serve")
 		return
 
-	var park := cup_rest if cup_rest != Vector3.ZERO else cup_home
+	## Empty cup only — drip tray. Never use the CUPS nest as a put-down for used cups.
+	var park := cup_rest if cup_rest != Vector3.ZERO else _cup_drip_tray_fallback()
+	if used_cup:
+		park = cup_rest if cup_rest != Vector3.ZERO else _cup_drip_tray_fallback()
 	var park_rot := _cup_presented_rotation(cup_root)
 	## Sit upright on the tray surface (no carry lean).
 	if cup_root != null and is_instance_valid(cup_root):
@@ -29689,6 +29713,13 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	if game_audio:
 		game_audio.play_click()
 	_flash("Cup on the drip tray", Color("B0BEC5"))
+
+
+func _cup_drip_tray_fallback() -> Vector3:
+	## Safe put-down when cup_rest isn't ready — never the CUPS dispenser nest.
+	if soda_root != null and is_instance_valid(soda_root):
+		return soda_root.to_global(Vector3(CUP_TRAY_FIRST_X, CUP_TRAY_DECK_LOCAL_Y, 0.54))
+	return cup_home
 
 
 func _return_cup_home(keep_fill: bool = false) -> void:
