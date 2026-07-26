@@ -388,6 +388,11 @@ var grill_glow_root: MeshInstance3D = null
 const GRILL_GLOW_DELAY_SEC := 0.15
 const GRILL_GLOW_FADE_SEC := 4.0
 const GRILL_GLOW_BRIGHT_MULT := 1.18
+## Heat blot size / grate punch — tunable in Hidden (password) options.
+const GRILL_HEAT_CFG_SECTION := "grill_heat"
+var grill_heat_size: float = 1.18 ## Multiplies FULL/½ glow blot size
+var grill_heat_bars: int = 5 ## Vertical grate lines punched through the glow
+var grill_heat_gap: float = 0.38 ## Fraction of each bar period with no light (0–0.7)
 var _grill_glow_tween: Tween = null
 var _grill_glow_gen: int = 0
 ## Little flame triangles under the griddle when the burner is on.
@@ -1649,7 +1654,7 @@ const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk
 const CUP_FLIP_PERFECT_HOLD := 0.5
 const CUP_FLIP_MIN_HOLD := 0.08
 const CUP_FLIP_DUR := 0.78 ## longer air time for the taller toss
-const CUP_FLIP_PEAK := 0.68 ## ~27" apex — clears steel so it doesn't scrape mid-flip
+const CUP_FLIP_PEAK := 0.34 ## ~13" apex — half the old toss so it doesn't moon the camera
 const CUP_FLIP_APEX_T := 0.36 ## rise / fall split (punchy up, longer fall)
 const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.0s, …)
 const CUP_FLIP_SETTLE_DUR := 0.52 ## bounce settle after impact
@@ -4620,6 +4625,7 @@ func _build_3d_world() -> void:
 	burner_strip_root = null
 	burner_strip_cook_w = 0.0
 
+	_load_grill_heat_settings()
 	_build_flat_top_grill()
 	_build_burner_flames()
 	_build_cutting_board_prop()
@@ -6366,12 +6372,13 @@ func _build_flat_top_grill() -> void:
 			else:
 				cook_x0 = minf(cook_x0, float(z["x0"]))
 				cook_x1 = maxf(cook_x1, float(z["x1"]))
-			var glow_w := zw * 0.78
+			var glow_w := zw * 0.92 * grill_heat_size
+			var glow_d := GRILL_DEPTH * 0.82 * grill_heat_size
 			_add_heat_glow(
 				surface,
 				Vector3(local_cx, 0.027, 0),
 				glow_w,
-				GRILL_DEPTH * 0.7,
+				glow_d,
 				float(z["glow"]),
 				heat_tex
 			)
@@ -12333,6 +12340,9 @@ func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: flo
 	glow_mesh.size = Vector2(maxf(0.2, width), maxf(0.2, depth))
 	glow.mesh = glow_mesh
 	glow.position = local_pos
+	## Store base size (pre size-slider) so Hidden can retune without rebuilding the grill.
+	glow.set_meta("heat_base_w", maxf(0.2, width) / maxf(grill_heat_size, 0.01))
+	glow.set_meta("heat_base_d", maxf(0.2, depth) / maxf(grill_heat_size, 0.01))
 	var gm := StandardMaterial3D.new()
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -12356,11 +12366,13 @@ func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: flo
 
 
 func _make_grill_heat_texture() -> ImageTexture:
-	## Brighter radial orange for burner-ON cue.
-	var w := 160
-	var h := 160
+	## Radial orange heat with vertical grate gaps punched through (alpha = 0 in the gaps).
+	var w := 192
+	var h := 192
 	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
 	var mid := float(w - 1) * 0.5
+	var bars := clampi(grill_heat_bars, 2, 14)
+	var gap := clampf(grill_heat_gap, 0.05, 0.72)
 	for y in h:
 		for x in w:
 			var dx := (float(x) - mid) / mid
@@ -12373,6 +12385,11 @@ func _make_grill_heat_texture() -> ImageTexture:
 			var outer := clampf(1.0 - r / 1.0, 0.0, 1.0)
 			outer = pow(outer, 2.2)
 			var a := clampf(core * 0.78 + mid_ring * 0.4 + outer * 0.18, 0.0, 0.92)
+			## Vertical grate: U stripes cut light so steel shows through between bars.
+			var u := float(x) / float(maxi(w - 1, 1))
+			var phase := fposmod(u * float(bars), 1.0)
+			if phase < gap:
+				a = 0.0
 			if a < 0.02 or r > 0.995:
 				img.set_pixel(x, y, Color(0, 0, 0, 0))
 			else:
@@ -12380,6 +12397,63 @@ func _make_grill_heat_texture() -> ImageTexture:
 				var deep := Color(1.0, 0.28, 0.04, a)
 				img.set_pixel(x, y, deep.lerp(hot, core))
 	return ImageTexture.create_from_image(img)
+
+
+func _apply_grill_heat_settings() -> void:
+	## Live-retune blot size + grate punch from Hidden options.
+	var tex := _make_grill_heat_texture()
+	for glow in grill_glow_meshes:
+		if glow == null or not is_instance_valid(glow):
+			continue
+		var mi := glow as MeshInstance3D
+		if mi == null:
+			continue
+		var base_w := float(mi.get_meta("heat_base_w", 0.5))
+		var base_d := float(mi.get_meta("heat_base_d", 0.5))
+		var plane := mi.mesh as PlaneMesh
+		if plane == null:
+			plane = PlaneMesh.new()
+			mi.mesh = plane
+		plane.size = Vector2(maxf(0.2, base_w * grill_heat_size), maxf(0.2, base_d * grill_heat_size))
+		var gm := mi.material_override as StandardMaterial3D
+		if gm == null:
+			continue
+		gm.albedo_texture = tex
+		gm.emission_texture = tex
+
+
+func _load_grill_heat_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(GRILL_HEAT_CFG_SECTION):
+		return
+	grill_heat_size = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)), 0.6, 1.8)
+	grill_heat_bars = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)), 2, 14)
+	grill_heat_gap = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)), 0.05, 0.72)
+
+
+func _save_grill_heat_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)
+	cfg.set_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)
+	cfg.set_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_grill_heat_hidden_ui() -> void:
+	var vals := {
+		"heat_size": grill_heat_size,
+		"heat_bars": float(grill_heat_bars),
+		"heat_gap": grill_heat_gap,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			var v := float(vals[key])
+			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if key == "heat_bars" else ("%.2f" % v)
 
 
 func _make_residue_texture(seed_i: int) -> ImageTexture:
@@ -25085,10 +25159,12 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 	mat.rim_enabled = true
 	mat.rim = 0.28
 	mat.rim_tint = 0.75
-	mat.no_depth_test = true
-	mat.render_priority = CUP_DRAW_PRIORITY + 2
+	## Real depth vs spatula — never float above kitchen tools.
+	mat.no_depth_test = false
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	mat.render_priority = CUP_DRAW_PRIORITY
 	logo.material_override = mat
-	_boost_cup_draw_order(logo)
+	logo.sorting_offset = 0.0
 	root.add_child(logo)
 
 	var gloss := MeshInstance3D.new()
@@ -25106,10 +25182,11 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 	gloss_mat.clearcoat_enabled = true
 	gloss_mat.clearcoat = 1.0
 	gloss_mat.clearcoat_roughness = 0.01
-	gloss_mat.no_depth_test = true
-	gloss_mat.render_priority = CUP_DRAW_PRIORITY + 3
+	gloss_mat.no_depth_test = false
+	gloss_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	gloss_mat.render_priority = CUP_DRAW_PRIORITY
 	gloss.material_override = gloss_mat
-	_boost_cup_draw_order(gloss)
+	gloss.sorting_offset = 0.0
 	root.add_child(gloss)
 
 
@@ -35363,6 +35440,33 @@ func _build_options_menu() -> void:
 		func(): return tree_light_off_z,
 		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
 
+	var heat_lab := Label.new()
+	heat_lab.text = "GRILL HEAT SPOTS"
+	UiFontsScript.apply_label(heat_lab, true, 13)
+	heat_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(heat_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_size", "Heat Spot Size", 0.6, 1.8, 0.02,
+		func(): return grill_heat_size,
+		func(v: float):
+			grill_heat_size = clampf(v, 0.6, 1.8)
+			_apply_grill_heat_settings()
+			_save_grill_heat_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_bars", "Grate Bars", 2.0, 14.0, 1.0,
+		func(): return float(grill_heat_bars),
+		func(v: float):
+			grill_heat_bars = clampi(int(round(v)), 2, 14)
+			_apply_grill_heat_settings()
+			_save_grill_heat_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_gap", "Grate Gap (dark)", 0.05, 0.72, 0.01,
+		func(): return grill_heat_gap,
+		func(v: float):
+			grill_heat_gap = clampf(v, 0.05, 0.72)
+			_apply_grill_heat_settings()
+			_save_grill_heat_settings()
+	)
+
 	var wind_lab := Label.new()
 	wind_lab.text = "TREE WIND"
 	UiFontsScript.apply_label(wind_lab, true, 13)
@@ -35665,6 +35769,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_light_hidden_ui()
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
+			_sync_grill_heat_hidden_ui()
 			_sync_icecream_station_hidden_ui()
 			_refresh_options_graphics_controls()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
