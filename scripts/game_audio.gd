@@ -1277,6 +1277,25 @@ func play_flip() -> void:
 	_play_cached("flip", _make_flip, 0.0, 0.28)
 
 
+func play_perfect_announcer() -> void:
+	const PATH := "res://sounds/perfect.wav"
+	if not _cache.has("perfect_announcer"):
+		var stream: AudioStream = null
+		if ResourceLoader.exists(PATH):
+			stream = load(PATH) as AudioStream
+		if stream == null and FileAccess.file_exists(PATH):
+			stream = AudioStreamWAV.load_from_file(PATH)
+		if stream == null:
+			return
+		_cache["perfect_announcer"] = stream
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = _cache["perfect_announcer"]
+	p.pitch_scale = 1.0
+	p.volume_db = linear_to_db(0.92)
+	p.play()
+
+
 func play_ready() -> void:
 	## Soft “ding” when flip/scoop is ready.
 	_play_cached("ready", _make_ready_ding, 0.0, 0.25)

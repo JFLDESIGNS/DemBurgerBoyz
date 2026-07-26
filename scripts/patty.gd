@@ -16,6 +16,7 @@ const COOK_BURNT := 38.0 ## Slightly more grace before charcoal.
 const FLIP_READY := 15.0
 const FLIP_WINDOW_START := 15.0
 const FLIP_WINDOW_END := 24.0 ## Slightly wider perfect-flip window.
+const PERFECT_ANNOUNCER_AFTER_FLIP_READY := 0.7
 const SCOOP_READY := 15.0 ## second side cook time before scoop
 
 var cook_time: float = 0.0
@@ -1689,9 +1690,14 @@ func is_in_flip_window() -> bool:
 	return not flipped_once and cook_time >= FLIP_WINDOW_START and cook_time <= FLIP_WINDOW_END
 
 
+func is_in_perfect_announcer_window() -> bool:
+	return can_flip() and cook_time <= FLIP_READY + PERFECT_ANNOUNCER_AFTER_FLIP_READY
+
+
 func flip() -> bool:
 	if flipped_once or cook_time < FLIP_READY:
 		return false
+	var announce_perfect := is_in_perfect_announcer_window()
 	## Lock in first-side doneness so the new top stays seared and sides keep their tones.
 	first_side_time = cook_time
 	flipped_once = true
@@ -1717,6 +1723,8 @@ func flip() -> bool:
 	var audio := _audio()
 	if audio:
 		audio.play_flip()
+		if announce_perfect and audio.has_method("play_perfect_announcer"):
+			audio.play_perfect_announcer()
 	var tw := create_tween()
 	## 15% faster than prior 0.08 / 0.12 squash.
 	tw.tween_property(self, "scale:x", 0.1, 0.068)
