@@ -28160,8 +28160,8 @@ func _spawn_cup_splash_drops() -> void:
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
 
 
-func _ensure_soda_overfill_cascades(count: int = 6) -> void:
-	## Persistent pour ribbons: 3 streams × 2 segments (rim→guard, guard→grill bounce).
+func _ensure_soda_overfill_cascades(count: int = 9) -> void:
+	## Persistent pour ribbons: 3 streams × 3 segments (rim→guard bottom→loft→soda-edge grill).
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
@@ -28196,13 +28196,18 @@ func _soda_overfill_cook_forward() -> Vector3:
 	return Vector3(0.0, 0.0, 1.0)
 
 
-func _soda_splash_guard_world_y() -> float:
-	## Mid-height of the stainless splash lip on the far grill edge.
-	return GRILL_SURFACE_Y + 3.25 * INCH_TO_M * 0.55
+func _soda_splash_guard_bottom_y() -> float:
+	## Hit the stainless lip near the steel — not mid-wall / overshoot.
+	return GRILL_SURFACE_Y + 0.55 * INCH_TO_M
 
 
 func _soda_splash_guard_z() -> float:
 	return GRILL_SURFACE_Z + GRILL_DEPTH * 0.5
+
+
+func _soda_grill_near_machine_x() -> float:
+	## Grill edge closest to the soda fountain (world −X / screen-right).
+	return GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.07
 
 
 func _tick_soda_overfill_breaks(delta: float) -> void:
@@ -28223,7 +28228,7 @@ func _place_soda_overfill_ribbon(
 ) -> void:
 	var mid := (lip + land) * 0.5
 	var along := land - lip
-	var len := maxf(along.length(), 0.06)
+	var len := maxf(along.length(), 0.05)
 	mi.visible = true
 	mi.global_position = mid
 	var y_axis := along / len
@@ -28248,10 +28253,10 @@ func _place_soda_overfill_ribbon(
 
 
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Three fat foam streams: rim → splash-guard bounce → grill land.
+	## Three streams: rim → guard BOTTOM → lofted reflect → soda-side grill edge + spot.
 	if cup_root == null or world == null:
 		return
-	_ensure_soda_overfill_cascades(6)
+	_ensure_soda_overfill_cascades(9)
 	_tick_soda_overfill_breaks(delta)
 	var foam_col := Color(0.98, 0.97, 0.94, 0.96)
 	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
@@ -28262,58 +28267,76 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 		0.92
 	)
 	var guard_z := _soda_splash_guard_z()
-	var guard_y := _soda_splash_guard_world_y()
-	## Spread hits across the splash lip facing the soda / cook.
+	var guard_bot_y := _soda_splash_guard_bottom_y()
+	var soda_edge_x := _soda_grill_near_machine_x()
+	## Guard hits clustered on the soda-side half of the lip (near the machine).
 	var guard_xs: Array[float] = [
-		GRILL_CENTER_X - GRILL_WIDTH * 0.30,
-		GRILL_CENTER_X - GRILL_WIDTH * 0.08,
-		GRILL_CENTER_X + GRILL_WIDTH * 0.14,
+		soda_edge_x + 0.04,
+		soda_edge_x + 0.14,
+		soda_edge_x + 0.26,
 	]
 	## Guard face normal points toward the cook (−Z).
 	var guard_n := Vector3(0.0, 0.0, -1.0)
+	var t_ms := Time.get_ticks_msec() * 0.001
 	for i in 3:
-		var mi_a := _soda_overfill_cascade_meshes[i * 2] as MeshInstance3D
-		var mi_b := _soda_overfill_cascade_meshes[i * 2 + 1] as MeshInstance3D
-		if mi_a == null or not is_instance_valid(mi_a) or mi_b == null or not is_instance_valid(mi_b):
+		var mi_a := _soda_overfill_cascade_meshes[i * 3] as MeshInstance3D
+		var mi_b := _soda_overfill_cascade_meshes[i * 3 + 1] as MeshInstance3D
+		var mi_c := _soda_overfill_cascade_meshes[i * 3 + 2] as MeshInstance3D
+		if mi_a == null or not is_instance_valid(mi_a) \
+				or mi_b == null or not is_instance_valid(mi_b) \
+				or mi_c == null or not is_instance_valid(mi_c):
 			continue
 		if not _soda_overfill_flow_on:
 			mi_a.visible = false
 			mi_b.visible = false
+			mi_c.visible = false
 			continue
+		## 1) Strike the stainless near the steel (bottom of the guard).
 		var guard_hit := Vector3(
-			guard_xs[i] + sin(Time.get_ticks_msec() * 0.003 + float(i) * 1.4) * 0.03,
-			guard_y + sin(Time.get_ticks_msec() * 0.005 + float(i)) * 0.012,
-			guard_z - 0.008
+			guard_xs[i] + sin(t_ms * 3.1 + float(i) * 1.7) * 0.018,
+			guard_bot_y + absf(sin(t_ms * 4.2 + float(i))) * 0.010,
+			guard_z - 0.006
 		)
-		## Leave the rim toward the guard (not cook-forward into empty air).
-		var to_guard := (guard_hit - rim)
-		var to_guard_n := to_guard.normalized() if to_guard.length() > 0.001 else Vector3(1.0, 0.0, -0.2).normalized()
-		var lip := rim + to_guard_n * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.008, 0.0)
-		## Reflect off the guard face, then drop onto the steel.
+		var to_guard := guard_hit - rim
+		var to_guard_n := to_guard.normalized() if to_guard.length() > 0.001 \
+				else Vector3(1.0, -0.15, -0.35).normalized()
+		var lip := rim + to_guard_n * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.006, 0.0)
+		## 2) Reflect off the guard — natural bounce toward cook (−Z) with a short loft.
 		var incident := (guard_hit - lip).normalized()
 		var reflected := incident - 2.0 * incident.dot(guard_n) * guard_n
-		reflected.y = minf(reflected.y, -0.15) ## bias down onto the grill
+		## Soften the bounce: mostly off the wall, then fall toward the soda-side steel.
+		reflected = (reflected * 0.55 + Vector3(0.0, 0.0, -1.0) * 0.25 + Vector3(-0.35, 0.0, 0.0) * 0.20).normalized()
+		reflected.y = clampf(reflected.y + 0.22, 0.08, 0.42) ## loft off the lip
 		reflected = reflected.normalized()
-		var bounce_len := lerpf(0.42, 0.62, 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.0035 + float(i) * 1.9))
-		var grill_land := guard_hit + reflected * bounce_len
-		grill_land.y = GRILL_SURFACE_Y + OIL_SIT_Y + 0.006
-		## Keep the bounce on cook steel when possible.
-		var cook := _cook_place_bounds()
-		if cook.size.x > 0.05 and cook.size.y > 0.05:
-			grill_land.x = clampf(grill_land.x, cook.position.x, cook.end.x)
-			grill_land.z = clampf(grill_land.z, cook.position.y, cook.end.y)
-		_place_soda_overfill_ribbon(mi_a, lip, guard_hit, foam_col, foamish, 1.15)
-		_place_soda_overfill_ribbon(mi_b, guard_hit, grill_land, foam_col, foamish, 1.05)
-		## Occasional pop slick where the bounce lands on steel.
-		if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.22:
-			_soda_overfill_long_cd = randf_range(0.45, 0.80)
+		var loft_dist := lerpf(0.10, 0.16, 0.5 + 0.5 * sin(t_ms * 3.6 + float(i) * 2.1))
+		var loft := guard_hit + reflected * loft_dist
+		loft.y = maxf(loft.y, guard_hit.y + 0.025)
+		## 3) Drop onto the grill edge closest to the soda machine.
+		var land_z := GRILL_SURFACE_Z + lerpf(-GRILL_DEPTH * 0.12, GRILL_DEPTH * 0.18, float(i) / 2.0) \
+			+ sin(t_ms * 2.4 + float(i)) * 0.03
+		var grill_land := Vector3(
+			soda_edge_x + lerpf(0.02, 0.10, float(i) / 2.0) + sin(t_ms * 2.8 + float(i) * 0.9) * 0.015,
+			GRILL_SURFACE_Y + OIL_SIT_Y + 0.005,
+			land_z
+		)
+		## Keep the puddle on steel.
+		var half_w := GRILL_WIDTH * 0.5
+		var half_d := GRILL_DEPTH * 0.5
+		grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.02, GRILL_CENTER_X + half_w - 0.02)
+		grill_land.z = clampf(grill_land.z, GRILL_SURFACE_Z - half_d + 0.02, GRILL_SURFACE_Z + half_d - 0.02)
+		_place_soda_overfill_ribbon(mi_a, lip, guard_hit, foam_col, foamish, 1.18)
+		_place_soda_overfill_ribbon(mi_b, guard_hit, loft, foam_col, foamish, 1.08)
+		_place_soda_overfill_ribbon(mi_c, loft, grill_land, foam_col, foamish, 1.00)
+		## Leave a soda spot on the machine-side grill edge.
+		if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.55:
+			_soda_overfill_long_cd = randf_range(0.28, 0.48)
 			_spawn_soda_slick(
-				grill_land + Vector3(randf_range(-0.03, 0.03), 0.0, randf_range(-0.02, 0.03)),
-				0.040 + randf() * 0.028,
+				grill_land + Vector3(randf_range(-0.02, 0.03), 0.0, randf_range(-0.025, 0.025)),
+				0.045 + randf() * 0.03,
 				flavor
 			)
-			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.32:
-				game_audio.trigger_hot_oil(0.5)
+			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.35:
+				game_audio.trigger_hot_oil(0.55)
 	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 
