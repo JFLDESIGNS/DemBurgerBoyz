@@ -129,6 +129,7 @@ const WindowCatScript := preload("res://scripts/window_cat.gd")
 const GameDataScript := preload("res://scripts/game_data.gd")
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
+const LassoToolControllerScript := preload("res://scripts/lasso_tool_controller.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
 const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd")
@@ -1213,6 +1214,7 @@ var _ttt_tap_count: int = 0
 var _ttt_tap_cool: float = 0.0
 const TTT_TAP_WINDOW := 1.15 ## Triple-tap window on HOLD cook pad
 const TTT_COOK_PAD := 0 ## Closest-to-cook HOLD drum pad (world −Z / camera side)
+var _ttt_scrub_flash_cool: float = 0.0 ## Debounce scrub-progress flashes
 ## HOLD tic-tac-toe look — Hidden tunable (T key toggles board).
 const GRILL_TTT_CFG_SECTION := "grill_ttt"
 var ttt_height_in: float = 0.32 ## inches above steel
@@ -1311,6 +1313,7 @@ var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
+var lasso_tool = null ## LassoToolController — colored shape planes editor
 ## Fullscreen fake distance-field AO (depth crease darkening) — Hidden / GFX toggle.
 var fake_df_ao_mesh: MeshInstance3D = null
 var fake_df_ao_mat: ShaderMaterial = null
@@ -1540,7 +1543,9 @@ const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(30.0, 20.0) ## was 20,20 — +10p
 ## Shared Luckiest Guy world hints (DRAG PATTY HERE + fryer) — 1.5× prior board size.
 const WORLD_HINT_FONT_SIZE := 84
 const WORLD_HINT_WORLD_H := 0.0255
-const WORLD_HINT_OUTLINE := 10 ## black stroke
+const WORLD_HINT_OUTLINE := 22 ## black stroke (was 10)
+const WORLD_HINT_RENDER_PRIO := 24 ## Above sill glass (prio 4) so fryer text isn't muted behind it
+const WORLD_HINT_OUTLINE_PRIO := 23
 const WORLD_HINT_ALPHA := 0.70 ## base opacity
 const WORLD_HINT_FADE_MIN := 0.36 ## bottom of soothing breathe
 const WORLD_HINT_FADE_HZ := 0.22 ## slow in/out pulse
@@ -2092,6 +2097,7 @@ func _ready() -> void:
 	_build_master_volume_ui()
 	_build_graphics_ui()
 	_build_options_menu()
+	_setup_lasso_tool()
 	_setup_location_map_ui()
 	_layout_top_bar_hud()
 	_setup_game_audio()
@@ -3188,10 +3194,21 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("serve") or _is_enter_pressed(event):
 		_on_serve()
 	elif event.is_action_pressed("trash"):
+		if lasso_tool != null and lasso_tool.is_active():
+			lasso_tool.delete_selected()
+			get_viewport().set_input_as_handled()
+			return
 		if burgerpack_held != null:
 			_trash_burgerpack_inspect()
 		else:
 			_clear_active_station()
+	elif event is InputEventKey and event.pressed and not event.echo \
+			and (event.keycode == KEY_EQUAL or event.physical_keycode == KEY_EQUAL \
+			or event.keycode == KEY_KP_EQUAL or event.physical_keycode == KEY_KP_EQUAL):
+		## = toggles lasso shape tool (draw / manage colored planes).
+		_toggle_lasso_tool()
+		get_viewport().set_input_as_handled()
+		return
 	elif event is InputEventKey and event.pressed and not event.echo \
 			and (event.keycode == KEY_BACKSPACE or event.physical_keycode == KEY_BACKSPACE):
 		## Backspace = trash selected / top Build layer (same as trash key).
@@ -3200,8 +3217,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			_clear_active_station()
 		get_viewport().set_input_as_handled()
+		return
 	elif event is InputEventMouseButton and event.pressed \
 			and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		if lasso_tool != null and lasso_tool.is_active() and lasso_tool.handle_input(event):
+			get_viewport().set_input_as_handled()
+			return
 		if burgerpack_held != null:
 			## Scroll down = yaw spin; scroll up = tumble forward; Shift reverses.
 			var sense := -1.0 if event.shift_pressed else 1.0
@@ -3337,6 +3358,18 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	if not playing:
 		return
+	## Lasso shape tool owns mouse / hotkeys while active (UI panel still gets GUI events).
+	if lasso_tool != null and lasso_tool.is_active():
+		if event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventKey:
+			var over_ui := false
+			if event is InputEventMouseButton or event is InputEventMouseMotion:
+				over_ui = lasso_tool.is_pointer_over_ui(_event_screen_pos(event))
+			if not over_ui:
+				var consumed := lasso_tool.handle_input(event)
+				## Keep kitchen grabs (spatula / oil / etc.) from stealing world clicks.
+				if consumed or event is InputEventMouseButton or event is InputEventMouseMotion:
+					get_viewport().set_input_as_handled()
+					return
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_MIDDLE:
 			_pulse_cursor_click(event.position)
@@ -4843,6 +4876,8 @@ func _pointer_over_glove_ui(screen_pos: Vector2) -> bool:
 
 
 func _hands_busy_with_other_tool() -> bool:
+	if lasso_tool != null and lasso_tool.is_active():
+		return true
 	return brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held \
 			or sale_held or cup_held or icecream_cone_held or burnt_icecream_cone_held \
 			or fries_pack_held or spilled_fry_held or fryer_held_index >= 0 \
@@ -5340,6 +5375,12 @@ func _update_grill_ttt_hover() -> void:
 		if _grill_ttt.has_method("clear_hover"):
 			_grill_ttt.clear_hover()
 		return
+	## Multiplayer: only ghost your own mark on your turn (host=X, guest=O).
+	var my := _ttt_my_mark()
+	if my > 0 and int(_grill_ttt.get("turn")) != my:
+		if _grill_ttt.has_method("clear_hover"):
+			_grill_ttt.clear_hover()
+		return
 	if camera == null or get_viewport() == null:
 		return
 	var aim := _grill_plane_from_screen(get_viewport().get_mouse_position())
@@ -5376,9 +5417,16 @@ func _hotkey_toggle_grill_ttt() -> void:
 			_grill_ttt.hide_board()
 			_flash("HOLD scratches hidden", Color(0.7, 0.75, 0.8))
 			if mp_enabled and not _mp_applying:
-				mp_ttt_state.rpc(false, _grill_ttt.get_packed_cells() if _grill_ttt.has_method("get_packed_cells") else [], int(_grill_ttt.get("turn")), int(_grill_ttt.get("winner")))
+				_sync_ttt_state_to_peers()
 		return
 	_request_ttt_reveal(false)
+
+
+func _ttt_my_mark() -> int:
+	## Host is always X; guest is always O. Solo play places either on turn.
+	if not mp_enabled:
+		return -1
+	return 1 if NetManager.is_host() else 2
 
 
 func _request_ttt_reveal(reset_first: bool) -> void:
@@ -5401,37 +5449,116 @@ func _apply_ttt_reveal_local(reset_first: bool) -> void:
 
 
 func _request_ttt_move(cell: int) -> void:
-	if mp_enabled and not _mp_applying:
-		mp_ttt_move.rpc(cell)
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
 		return
-	_apply_ttt_move_local(cell)
+	if not bool(_grill_ttt.is_playable()):
+		return
+	var my := _ttt_my_mark()
+	if my > 0 and int(_grill_ttt.get("turn")) != my:
+		_flash("Host is X — wait your turn" if my == 2 else "You're X — wait for O", Color(0.85, 0.75, 0.55))
+		return
+	if mp_enabled and not _mp_applying:
+		mp_ttt_move.rpc(cell, my if my > 0 else int(_grill_ttt.get("turn")))
+		return
+	_apply_ttt_move_local(cell, my)
 
 
-func _apply_ttt_move_local(cell: int) -> void:
+func _apply_ttt_move_local(cell: int, mark: int = -1) -> void:
 	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
 		return
 	if not _grill_ttt.has_method("try_place"):
 		return
-	if not bool(_grill_ttt.try_place(cell)):
+	## Multiplayer: enforce host=X / guest=O even if a peer cheats the RPC.
+	if mp_enabled and mark != 1 and mark != 2:
+		return
+	if mp_enabled and mark > 0 and int(_grill_ttt.get("turn")) != mark:
+		return
+	if not bool(_grill_ttt.try_place(cell, mark)):
 		return
 	var win := int(_grill_ttt.get("winner"))
-	if win == 1:
-		_flash("HOLD scratches: X wins", Color(0.85, 0.9, 1.0))
-	elif win == 2:
-		_flash("HOLD scratches: O wins", Color(0.85, 0.9, 1.0))
+	if win == 1 or win == 2:
+		var streak_reset := false
+		if _grill_ttt.has_method("note_round_winner"):
+			streak_reset = bool(_grill_ttt.note_round_winner(win))
+		var wx := int(_grill_ttt.get("wins_x"))
+		var wo := int(_grill_ttt.get("wins_o"))
+		if win == 1:
+			_flash("HOLD scratches: X wins  (%d–%d)" % [wx, wo], Color(0.85, 0.9, 1.0))
+		else:
+			_flash("HOLD scratches: O wins  (%d–%d)" % [wx, wo], Color(0.85, 0.9, 1.0))
+		if streak_reset:
+			_flash("Tally reset at 10 — fresh scratches", Color(0.95, 0.85, 0.55))
+		if mp_enabled and not _mp_applying:
+			_sync_ttt_state_to_peers()
 	elif win == -1:
 		_flash("HOLD scratches: draw", Color(0.7, 0.75, 0.8))
 
 
 func _ttt_sync_payload() -> Dictionary:
 	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
-		return {"show": false, "cells": [], "turn": 1, "win": 0}
+		return {"show": false, "cells": [], "turn": 1, "win": 0, "wins_x": 0, "wins_o": 0}
 	return {
 		"show": bool(_grill_ttt.get("revealed")),
 		"cells": _grill_ttt.get_packed_cells() if _grill_ttt.has_method("get_packed_cells") else [],
 		"turn": int(_grill_ttt.get("turn")),
 		"win": int(_grill_ttt.get("winner")),
+		"wins_x": int(_grill_ttt.get("wins_x")),
+		"wins_o": int(_grill_ttt.get("wins_o")),
 	}
+
+
+func _sync_ttt_state_to_peers() -> void:
+	if not mp_enabled or _mp_applying:
+		return
+	var ttt := _ttt_sync_payload()
+	mp_ttt_state.rpc(
+		bool(ttt.get("show", false)),
+		ttt.get("cells", []) as Array,
+		int(ttt.get("turn", 1)),
+		int(ttt.get("win", 0)),
+		int(ttt.get("wins_x", 0)),
+		int(ttt.get("wins_o", 0))
+	)
+
+
+func _request_ttt_scrub_clear() -> void:
+	## Spatula scrubbed the board off (~2s).
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if not bool(_grill_ttt.get("revealed")):
+		return
+	if mp_enabled and not _mp_applying:
+		mp_ttt_hide.rpc()
+		return
+	_apply_ttt_hide_local()
+
+
+func _apply_ttt_hide_local() -> void:
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if _grill_ttt.has_method("hide_board"):
+		_grill_ttt.hide_board()
+	_flash("Scratched board scrubbed away", Color(0.75, 0.8, 0.85))
+
+
+func _update_ttt_spatula_scrub(tip_pos: Vector3, delta: float, scraping: bool) -> void:
+	## Hold spatula on the carved board ~2s to wipe tic-tac-toe off the steel.
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if not bool(_grill_ttt.get("revealed")):
+		return
+	if not _grill_ttt.has_method("tick_scrub"):
+		return
+	var on_board := scraping and tip_pos != Vector3.ZERO and _grill_ttt.point_on_board(tip_pos)
+	if bool(_grill_ttt.tick_scrub(delta, on_board)):
+		_request_ttt_scrub_clear()
+		return
+	if on_board and _ttt_scrub_flash_cool <= 0.0:
+		var p := float(_grill_ttt.scrub_progress()) if _grill_ttt.has_method("scrub_progress") else 0.0
+		if p >= 0.45 and p < 0.98:
+			_ttt_scrub_flash_cool = 0.85
+			_flash("Scrubbing scratches…", Color(0.7, 0.78, 0.85))
+	_ttt_scrub_flash_cool = maxf(0.0, _ttt_scrub_flash_cool - delta)
 
 
 func _setup_grill_song_performer() -> void:
@@ -6193,11 +6320,15 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		roll = 0.0
 		pivot_local = HAND_SPATULA_TIP_OFFSET
 		_update_spatula_grill_scrape(tip_target, delta)
+		_update_ttt_spatula_scrub(tip_target, delta, true)
 		## Melted cheese pull-strings while the tip sits on / slides over a cheeseburger.
 		_try_attach_cheese_strings_near_tip(tip_target)
-	elif _spatula_fx_t >= 0.0:
-		## Flip finished — ribbons/circle keep easing out for the rest of the second.
-		_tick_spatula_flip_fx(delta)
+	else:
+		## Not holding on steel — scrub progress decays.
+		_update_ttt_spatula_scrub(Vector3.ZERO, delta, false)
+		if _spatula_fx_t >= 0.0:
+			## Flip finished — ribbons/circle keep easing out for the rest of the second.
+			_tick_spatula_flip_fx(delta)
 	## Scroll-wheel blade roll (±45° / ±90°) on top of anim / hold pose.
 	roll += _spatula_user_roll
 	## Edge yaw from grill X — left CCW, right CW (no side roll).
@@ -28372,7 +28503,9 @@ func _spawn_soda_overfill_drops(rim: Vector3, flavor: String) -> void:
 	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
 	var col := foam_col.lerp(Color(pop.r, pop.g, pop.b, 0.9), 0.22)
 	var deck_y := _cup_deck_fill_y()
-	var forward := _soda_overfill_cook_forward()
+	var floor_y := 0.02
+	var dirs := _soda_overfill_cam_dirs()
+	var card: Array[Vector3] = [dirs["west"], dirs["south"], dirs["east"]]
 	for i in 3:
 		var drop := MeshInstance3D.new()
 		var sph := SphereMesh.new()
@@ -28389,11 +28522,17 @@ func _spawn_soda_overfill_drops(rim: Vector3, flavor: String) -> void:
 		drop.material_override = mat
 		drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		world.add_child(drop)
-		var outward: Vector3 = forward.rotated(Vector3.UP, randf_range(-0.45, 0.45)).normalized()
+		var outward: Vector3 = card[i].rotated(Vector3.UP, randf_range(-0.12, 0.12)).normalized()
 		drop.global_position = rim + outward * (CUP_SHELL_TOP_R * 0.85) + Vector3(0.0, 0.01, 0.0)
-		var end_p := drop.global_position + outward * randf_range(0.06, 0.13) \
+		var end_p := drop.global_position + outward * randf_range(0.10, 0.20) \
 			+ Vector3(randf_range(-0.015, 0.015), 0.0, randf_range(-0.01, 0.02))
-		end_p.y = deck_y + 0.004
+		## West stays near deck/grill height; south→floor; east→right mid drop.
+		if i == 1:
+			end_p.y = floor_y + 0.004
+		elif i == 2:
+			end_p.y = lerpf(deck_y, floor_y, 0.55) + 0.004
+		else:
+			end_p.y = deck_y + 0.004
 		var life := randf_range(0.20, 0.34)
 		var tw := create_tween()
 		tw.set_parallel(true)
@@ -31555,12 +31694,17 @@ func _build_smoke2_grill_props() -> void:
 
 
 func _style_world_hint_label(lab: Label3D) -> void:
-	## Shared look: Luckiest Guy + black stroke + 70% opacity (fade applied live).
+	## Shared look: Luckiest Guy + thick black stroke + 70% opacity (fade applied live).
+	## Draw above window sill glass so fryer / build hints stay readable.
 	UiFontsScript.apply_luckiest_label3d(lab, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, WORLD_HINT_OUTLINE)
 	lab.outline_size = WORLD_HINT_OUTLINE
 	lab.outline_modulate = Color(0.0, 0.0, 0.0, WORLD_HINT_ALPHA)
 	lab.modulate = Color(1.0, 0.92, 0.22, WORLD_HINT_ALPHA)
 	lab.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+	lab.no_depth_test = true
+	lab.render_priority = WORLD_HINT_RENDER_PRIO
+	lab.outline_render_priority = WORLD_HINT_OUTLINE_PRIO
+	lab.sorting_offset = 8.0
 
 
 func _update_world_hint_fades(delta: float) -> void:
@@ -35775,6 +35919,42 @@ func _style_radio_chrome_button(btn: Button) -> void:
 	btn.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))
 	btn.add_theme_color_override("font_hover_color", Color.WHITE)
 	btn.add_theme_color_override("font_pressed_color", Color(0.75, 0.8, 0.86))
+
+
+func _setup_lasso_tool() -> void:
+	var ui_root: Control = get_node_or_null("UI/Root")
+	if ui_root == null or grill_root == null:
+		return
+	lasso_tool = LassoToolControllerScript.new()
+	lasso_tool.name = "LassoTool"
+	add_child(lasso_tool)
+	lasso_tool.setup(self, grill_root, ui_root)
+	lasso_tool.active_changed.connect(func(on: bool):
+		if on:
+			_flash("Lasso tool ON (=) — draw on the grill", Color("FFE082"))
+		else:
+			_flash("Lasso tool OFF", Color("B0BEC5"))
+	)
+
+
+func _toggle_lasso_tool() -> void:
+	if lasso_tool == null:
+		_setup_lasso_tool()
+	if lasso_tool == null:
+		return
+	if not playing:
+		return
+	## Don't open over options / pause.
+	if options_menu_open or shift_paused:
+		return
+	lasso_tool.toggle_active()
+	_sfx_click()
+
+
+func _event_screen_pos(event: InputEvent) -> Vector2:
+	if event is InputEventMouse:
+		return (event as InputEventMouse).position
+	return get_viewport().get_mouse_position()
 
 
 func _build_graphics_ui() -> void:
@@ -45953,7 +46133,9 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		bool(ttt.get("show", false)),
 		ttt.get("cells", []) as Array,
 		int(ttt.get("turn", 1)),
-		int(ttt.get("win", 0))
+		int(ttt.get("win", 0)),
+		int(ttt.get("wins_x", 0)),
+		int(ttt.get("wins_o", 0))
 	)
 	if _bts_day_intro_active:
 		for li in bts_lightsticks.size():
@@ -49053,20 +49235,27 @@ func mp_ttt_reveal(reset_first: bool) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_ttt_move(cell: int) -> void:
+func mp_ttt_move(cell: int, mark: int = -1) -> void:
 	_mp_applying = true
-	_apply_ttt_move_local(cell)
+	_apply_ttt_move_local(cell, mark)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_ttt_hide() -> void:
+	_mp_applying = true
+	_apply_ttt_hide_local()
 	_mp_applying = false
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_ttt_state(show: bool, cells: Array, next_turn: int, win: int) -> void:
-	## Mid-join catch-up for the scratched HOLD board.
+func mp_ttt_state(show: bool, cells: Array, next_turn: int, win: int, wins_x: int = 0, wins_o: int = 0) -> void:
+	## Mid-join catch-up for the scratched HOLD board + tallies.
 	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
 		_setup_grill_ttt()
 	_mp_applying = true
 	if _grill_ttt != null and _grill_ttt.has_method("apply_state"):
-		_grill_ttt.apply_state(cells, next_turn, win, show)
+		_grill_ttt.apply_state(cells, next_turn, win, show, wins_x, wins_o)
 	_mp_applying = false
 
 

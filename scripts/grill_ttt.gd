@@ -26,11 +26,18 @@ var cells: Array[int] = [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
 var turn: int = MARK_X
 var winner: int = EMPTY ## EMPTY = playing, MARK_* = win, -1 = draw
 var revealed: bool = false
+var wins_x: int = 0 ## Host / player 1 — carved tallies below the board
+var wins_o: int = 0 ## Guest / player 2
+const WINS_RESET_AT := 10 ## Best-of streak resets when either side hits 10
+const SCRUB_CLEAR_SEC := 2.0 ## Spatula scrub on the board to wipe it away
 var _hover_cell: int = -1
+var scrub_t: float = 0.0 ## Progress toward scrubbing the board off (0..SCRUB_CLEAR_SEC)
 
 var _grid_mi: MeshInstance3D = null
 var _bevel_mi: MeshInstance3D = null
 var _mark_root: Node3D = null
+var _tally_mi: MeshInstance3D = null
+var _tally_bevel_mi: MeshInstance3D = null
 var _hover_mi: MeshInstance3D = null
 var _hover_bevel_mi: MeshInstance3D = null
 var _mat: StandardMaterial3D = null
@@ -52,6 +59,7 @@ func setup_on_grill(center: Vector3) -> void:
 		_mark_root.name = "Marks"
 		add_child(_mark_root)
 	_ensure_hover_meshes()
+	_rebuild_tallies()
 
 
 func apply_look(cfg: Dictionary) -> void:
@@ -75,6 +83,7 @@ func apply_look(cfg: Dictionary) -> void:
 	_bevel_mat.albedo_color = bevel_color
 	_build_grid()
 	_rebuild_marks()
+	_rebuild_tallies()
 
 
 func _refresh_position() -> void:
@@ -216,26 +225,88 @@ func _noisy_stroke(st: SurfaceTool, a: Vector3, b: Vector3, half_w: float, strok
 func reveal() -> void:
 	revealed = true
 	visible = true
+	scrub_t = 0.0
 	_rebuild_marks()
+	_rebuild_tallies()
 	clear_hover()
 
 
 func hide_board() -> void:
 	revealed = false
 	visible = false
+	scrub_t = 0.0
 	clear_hover()
 
 
 func reset_game() -> void:
 	cells = [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY]
-	turn = MARK_X
+	turn = MARK_X ## Host always opens as X
 	winner = EMPTY
+	scrub_t = 0.0
 	_rebuild_marks()
 	clear_hover()
 
 
 func is_playable() -> bool:
 	return revealed and winner == EMPTY
+
+
+func point_on_board(world: Vector3, pad: float = -1.0) -> bool:
+	## True when a world point sits on / near the carved board (for spatula scrub).
+	if not revealed or world == Vector3.ZERO:
+		return false
+	var local := to_local(world)
+	var h := board_size * 0.5
+	var p := pad if pad >= 0.0 else board_size * 0.12
+	## Include tally strip just below (−Z) so scrubbing tallies also clears.
+	var z_lo := -h - board_size * 0.42 - p
+	var z_hi := h + p
+	return absf(local.x) <= h + p and local.z >= z_lo and local.z <= z_hi
+
+
+func tick_scrub(delta: float, tip_on_board: bool) -> bool:
+	## Accumulate spatula scrub time. Returns true when the board should wipe away.
+	if not revealed:
+		scrub_t = 0.0
+		return false
+	if tip_on_board:
+		scrub_t = minf(SCRUB_CLEAR_SEC, scrub_t + delta)
+	else:
+		scrub_t = maxf(0.0, scrub_t - delta * 1.6)
+	return scrub_t >= SCRUB_CLEAR_SEC
+
+
+func scrub_progress() -> float:
+	return clampf(scrub_t / SCRUB_CLEAR_SEC, 0.0, 1.0)
+
+
+func note_round_winner(mark: int) -> bool:
+	## Record a round win into carved tallies. Returns true if the 10-win streak reset.
+	var reset := false
+	if mark == MARK_X:
+		wins_x = mini(wins_x + 1, WINS_RESET_AT)
+	elif mark == MARK_O:
+		wins_o = mini(wins_o + 1, WINS_RESET_AT)
+	else:
+		return false
+	if wins_x >= WINS_RESET_AT or wins_o >= WINS_RESET_AT:
+		wins_x = 0
+		wins_o = 0
+		reset = true
+	_rebuild_tallies()
+	return reset
+
+
+func set_wins(x_wins: int, o_wins: int) -> void:
+	wins_x = clampi(x_wins, 0, WINS_RESET_AT - 1)
+	wins_o = clampi(o_wins, 0, WINS_RESET_AT - 1)
+	_rebuild_tallies()
+
+
+func reset_scores() -> void:
+	wins_x = 0
+	wins_o = 0
+	_rebuild_tallies()
 
 
 func cell_at_world(world: Vector3) -> int:
@@ -313,7 +384,7 @@ func try_place(cell: int, mark: int = -1) -> bool:
 	return true
 
 
-func apply_state(packed: Array, next_turn: int, win: int, show: bool) -> void:
+func apply_state(packed: Array, next_turn: int, win: int, show: bool, x_wins: int = -1, o_wins: int = -1) -> void:
 	for i in mini(9, packed.size()):
 		cells[i] = int(packed[i])
 	while cells.size() < 9:
@@ -322,7 +393,13 @@ func apply_state(packed: Array, next_turn: int, win: int, show: bool) -> void:
 	winner = win
 	revealed = show
 	visible = show
+	scrub_t = 0.0
+	if x_wins >= 0:
+		wins_x = clampi(x_wins, 0, WINS_RESET_AT)
+	if o_wins >= 0:
+		wins_o = clampi(o_wins, 0, WINS_RESET_AT)
 	_rebuild_marks()
+	_rebuild_tallies()
 
 
 func get_packed_cells() -> Array:
@@ -386,6 +463,84 @@ func _rebuild_marks() -> void:
 		else:
 			bi.mesh = _make_o_mesh(third * 0.30, bevel_scale, 300 + i * 9)
 		_mark_root.add_child(bi)
+
+
+func _rebuild_tallies() -> void:
+	## Two score strips below the board (−Z / toward cook): X left, O right.
+	## Each side = two sets of 5 classic tallies (||||/), reset when either hits 10.
+	_ensure_mats()
+	if _tally_mi != null and is_instance_valid(_tally_mi):
+		_tally_mi.queue_free()
+	if _tally_bevel_mi != null and is_instance_valid(_tally_bevel_mi):
+		_tally_bevel_mi.queue_free()
+	_tally_mi = MeshInstance3D.new()
+	_tally_mi.name = "TallyGroove"
+	_tally_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tally_mi.material_override = _mat
+	_tally_mi.mesh = _make_tally_mesh(1.0, 0.0, 0.0, 500)
+	add_child(_tally_mi)
+	_tally_bevel_mi = MeshInstance3D.new()
+	_tally_bevel_mi.name = "TallyBevel"
+	_tally_bevel_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tally_bevel_mi.material_override = _bevel_mat
+	_tally_bevel_mi.mesh = _make_tally_mesh(bevel_scale, -bevel_y, -bevel_z, 560)
+	add_child(_tally_bevel_mi)
+
+
+func _make_tally_mesh(width_mul: float, y_off: float, z_off: float, seed_add: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := board_size * 0.5
+	var y := 0.001 + y_off
+	## Just below the frame, toward cook (−Z). Row 1 nearer board, row 2 further cook-side.
+	var row1_z := -h - board_size * 0.14 + z_off
+	var row2_z := row1_z - board_size * 0.10
+	var label_arm := board_size * 0.028
+	var lw := mark_w * 0.38 * width_mul
+	## Player 1 (X / host) — left strip, two sets of 5
+	_noisy_stroke(st, Vector3(-h * 0.92 - label_arm, y, row1_z - label_arm), Vector3(-h * 0.92 + label_arm, y, row1_z + label_arm), lw, scratch_seed + seed_add)
+	_noisy_stroke(st, Vector3(-h * 0.92 - label_arm, y, row1_z + label_arm), Vector3(-h * 0.92 + label_arm, y, row1_z - label_arm), lw, scratch_seed + seed_add + 3)
+	_emit_tally_sets(st, Vector3(-h * 0.72, y, row1_z), wins_x, width_mul, scratch_seed + seed_add + 10)
+	_emit_tally_sets(st, Vector3(-h * 0.72, y, row2_z), maxi(0, wins_x - 5), width_mul, scratch_seed + seed_add + 40)
+	## Player 2 (O) — right strip, two sets of 5
+	var o_r := board_size * 0.032
+	for i in 12:
+		var a0 := TAU * float(i) / 12.0
+		var a1 := TAU * float(i + 1) / 12.0
+		var p0 := Vector3(h * 0.92 + cos(a0) * o_r, y, row1_z + sin(a0) * o_r)
+		var p1 := Vector3(h * 0.92 + cos(a1) * o_r, y, row1_z + sin(a1) * o_r)
+		_scratch_line(st, p0, p1, lw * 0.9)
+	_emit_tally_sets(st, Vector3(h * 0.22, y, row1_z), wins_o, width_mul, scratch_seed + seed_add + 70)
+	_emit_tally_sets(st, Vector3(h * 0.22, y, row2_z), maxi(0, wins_o - 5), width_mul, scratch_seed + seed_add + 100)
+	return st.commit()
+
+
+func _emit_tally_sets(st: SurfaceTool, origin: Vector3, count: int, width_mul: float, stroke_seed: int) -> void:
+	## One row of up to 5 classic tally marks starting at origin.
+	var n := clampi(count, 0, 5)
+	if n <= 0:
+		return
+	var tall := board_size * 0.055
+	var gap := board_size * 0.022
+	var half_w := mark_w * 0.42 * width_mul
+	for i in mini(n, 4):
+		var x := origin.x + float(i) * gap
+		_noisy_stroke(
+			st,
+			Vector3(x, origin.y, origin.z - tall * 0.5),
+			Vector3(x, origin.y, origin.z + tall * 0.5),
+			half_w,
+			stroke_seed + i * 5
+		)
+	if n >= 5:
+		## Fifth mark crosses the four.
+		_noisy_stroke(
+			st,
+			Vector3(origin.x - gap * 0.25, origin.y, origin.z + tall * 0.55),
+			Vector3(origin.x + gap * 3.25, origin.y, origin.z - tall * 0.55),
+			half_w * 1.05,
+			stroke_seed + 40
+		)
 
 
 func _make_x_mesh(arm: float, width_mul: float, seed_add: int) -> ArrayMesh:
