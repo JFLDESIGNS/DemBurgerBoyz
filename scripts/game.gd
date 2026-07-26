@@ -27512,14 +27512,14 @@ func _spawn_cup_splash_drops() -> void:
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
 
 
-func _ensure_soda_overfill_cascades(count: int = 3) -> void:
-	## Persistent thin pour ribbons: 0–1 short deck spill, 2 = occasional grill shoot.
+func _ensure_soda_overfill_cascades(count: int = 6) -> void:
+	## Persistent pour ribbons: 3 streams × 2 segments (rim→tray, tray→grill bounce).
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.007
-		cyl.bottom_radius = 0.012
+		cyl.top_radius = 0.006
+		cyl.bottom_radius = 0.013
 		cyl.height = 0.12
 		cyl.cap_top = false
 		cyl.cap_bottom = false
@@ -27554,13 +27554,14 @@ func _tick_soda_overfill_breaks(delta: float) -> void:
 		return
 	_soda_overfill_flow_on = not _soda_overfill_flow_on
 	if _soda_overfill_flow_on:
-		_soda_overfill_flow_t = randf_range(0.28, 0.62)
+		_soda_overfill_flow_t = randf_range(0.45, 0.85)
 	else:
-		_soda_overfill_flow_t = randf_range(0.14, 0.40)
+		_soda_overfill_flow_t = randf_range(0.08, 0.18)
 
 
 func _place_soda_overfill_ribbon(
-		mi: MeshInstance3D, lip: Vector3, land: Vector3, foam_col: Color, soda_tint: Color
+		mi: MeshInstance3D, lip: Vector3, land: Vector3, foam_col: Color, soda_tint: Color,
+		thin: float = 1.0
 ) -> void:
 	var mid := (lip + land) * 0.5
 	var along := land - lip
@@ -27577,8 +27578,8 @@ func _place_soda_overfill_ribbon(
 	var cyl := mi.mesh as CylinderMesh
 	if cyl:
 		cyl.height = len
-		cyl.top_radius = 0.007
-		cyl.bottom_radius = 0.014
+		cyl.top_radius = 0.0055 * thin
+		cyl.bottom_radius = 0.013 * thin
 	var mat := mi.material_override as ShaderMaterial
 	if mat:
 		## Almost all foam — tiny soda tint so flavor still reads.
@@ -27589,10 +27590,10 @@ func _place_soda_overfill_ribbon(
 
 
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Foam-heavy ribbons: short deck spill with breaks, plus rare longer grill shoots.
+	## Three foam streams: rim → drip tray bounce → longer stretch onto the grill.
 	if cup_root == null or world == null:
 		return
-	_ensure_soda_overfill_cascades(3)
+	_ensure_soda_overfill_cascades(6)
 	_tick_soda_overfill_breaks(delta)
 	var deck_y := _cup_deck_fill_y()
 	var foam_col := Color(0.98, 0.97, 0.94, 0.96)
@@ -27604,60 +27605,48 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 		0.92
 	)
 	var forward := _soda_overfill_cook_forward()
-	## Mesh 0–1: normal short streams (fixed left/right of cook-forward) — only while "on".
-	var short_offsets: Array[float] = [-0.32, 0.32]
-	for i in mini(2, _soda_overfill_cascade_meshes.size()):
-		var mi := _soda_overfill_cascade_meshes[i] as MeshInstance3D
-		if mi == null or not is_instance_valid(mi):
+	## Three fixed spray angles toward the cook — always three streams when flowing.
+	var yaw_offsets: Array[float] = [-0.42, 0.0, 0.42]
+	for i in 3:
+		var mi_a := _soda_overfill_cascade_meshes[i * 2] as MeshInstance3D
+		var mi_b := _soda_overfill_cascade_meshes[i * 2 + 1] as MeshInstance3D
+		if mi_a == null or not is_instance_valid(mi_a) or mi_b == null or not is_instance_valid(mi_b):
 			continue
 		if not _soda_overfill_flow_on:
-			mi.visible = false
+			mi_a.visible = false
+			mi_b.visible = false
 			continue
-		var outward: Vector3 = forward.rotated(Vector3.UP, short_offsets[i]).normalized()
-		var lip := rim + outward * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.004, 0.0)
-		var land := lip + outward * lerpf(0.055, 0.10, 0.5 + 0.5 * sin(float(i) * 2.1))
-		land.y = deck_y + 0.006
-		_place_soda_overfill_ribbon(mi, lip, land, foam_col, foamish)
-	## Mesh 2: every ~2s, 50% chance of a longer shoot onto the grill for ~0.5s.
-	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
-	_soda_overfill_long_t = maxf(0.0, _soda_overfill_long_t - delta)
-	var long_mi: MeshInstance3D = null
-	if _soda_overfill_cascade_meshes.size() >= 3:
-		long_mi = _soda_overfill_cascade_meshes[2] as MeshInstance3D
-	if _soda_overfill_long_cd <= 0.0:
-		_soda_overfill_long_cd = 2.0
-		if randf() < 0.5:
-			_soda_overfill_long_t = randf_range(0.40, 0.55)
-			if long_mi != null and is_instance_valid(long_mi):
-				var aim: Vector3 = forward.rotated(Vector3.UP, randf_range(-0.18, 0.18)).normalized()
-				long_mi.set_meta("shoot_dir", aim)
-				long_mi.set_meta("shoot_len", randf_range(0.40, 0.55))
-				long_mi.set_meta("slick_spawned", false)
-	if long_mi != null and is_instance_valid(long_mi):
-		if _soda_overfill_long_t > 0.0:
-			var shoot: Vector3 = long_mi.get_meta("shoot_dir", forward) as Vector3
-			var shoot_len := float(long_mi.get_meta("shoot_len", 0.45))
-			var lip2 := rim + shoot * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.006, 0.0)
-			var land2 := lip2 + shoot * shoot_len
-			var grill_land := Vector3(land2.x, GRILL_SURFACE_Y + OIL_SIT_Y, land2.z)
-			if _is_on_grill_surface(grill_land):
-				land2 = Vector3(grill_land.x, GRILL_SURFACE_Y + 0.01, grill_land.z)
-			else:
-				land2.y = lerpf(deck_y + 0.006, GRILL_SURFACE_Y + 0.01, 0.65)
-			_place_soda_overfill_ribbon(long_mi, lip2, land2, foam_col, foamish)
-			## Lay pop liquid on the steel once per burst.
-			if not bool(long_mi.get_meta("slick_spawned", false)) and _is_on_grill_surface(grill_land):
-				long_mi.set_meta("slick_spawned", true)
-				_spawn_soda_slick(
-					grill_land + Vector3(randf_range(-0.03, 0.03), 0.0, randf_range(-0.02, 0.04)),
-					0.040 + randf() * 0.028,
-					flavor
-				)
-				if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.4:
-					game_audio.trigger_hot_oil(0.5)
+		var outward: Vector3 = forward.rotated(Vector3.UP, yaw_offsets[i]).normalized()
+		## Lip exit + first hit on the drip tray (short hop).
+		var lip := rim + outward * (CUP_SHELL_TOP_R * 0.94) + Vector3(0.0, 0.006, 0.0)
+		var tray_hit := lip + outward * lerpf(0.11, 0.16, float(i) * 0.35) \
+			+ Vector3(0.0, 0.0, 0.02)
+		tray_hit.y = deck_y + 0.004
+		## Reflect: keep cook-forward bias, skim off the tray toward the grill.
+		var bounce_dir := (forward * 0.82 + outward * 0.28).normalized()
+		var bounce_len := lerpf(0.38, 0.52, 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.004 + float(i) * 1.7))
+		var grill_land := tray_hit + bounce_dir * bounce_len
+		grill_land.y = GRILL_SURFACE_Y + 0.012
+		## Stretch the bounce segment if it clears onto cook steel.
+		if _is_on_grill_surface(grill_land) or _is_near_grill_for_place(grill_land):
+			grill_land.y = GRILL_SURFACE_Y + OIL_SIT_Y + 0.004
 		else:
-			long_mi.visible = false
-	## Drop cadence only while the short foam stream is flowing.
+			## Still stretch past the tray even if aim is short of the steel.
+			grill_land = tray_hit + bounce_dir * maxf(bounce_len, 0.34)
+			grill_land.y = lerpf(deck_y + 0.004, GRILL_SURFACE_Y + 0.012, 0.85)
+		_place_soda_overfill_ribbon(mi_a, lip, tray_hit, foam_col, foamish, 1.0)
+		_place_soda_overfill_ribbon(mi_b, tray_hit, grill_land, foam_col, foamish, 0.92)
+		## Occasional pop slick where the bounce lands on steel.
+		if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.18:
+			_soda_overfill_long_cd = randf_range(0.55, 0.95)
+			_spawn_soda_slick(
+				grill_land + Vector3(randf_range(-0.025, 0.025), 0.0, randf_range(-0.02, 0.03)),
+				0.034 + randf() * 0.022,
+				flavor
+			)
+			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.28:
+				game_audio.trigger_hot_oil(0.45)
+	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 
 
