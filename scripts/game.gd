@@ -109,7 +109,7 @@ const CUP_LID_DOWN_SIT_EXTRA := 0.004 + 0.0127 + 0.010 ## +extra hair above stee
 const CUP_SIDE_SIT_EXTRA := 0.003 + 0.0127 + 0.010
 ## Too many puddles → warn only (fire needs a sustained pour — see OIL_POUR_FIRE_SEC).
 ## Only ignites while the burner is ON.
-const OIL_FIRE_WARN_COUNT := 40
+const OIL_FIRE_WARN_COUNT := 160
 ## Continuous grease pour (LMB held) this long on a lit grill → fire.
 const OIL_POUR_FIRE_SEC := 5.0
 ## Held bottle tip-down height above steel (~was 0.14; +12" so it clears the plate).
@@ -696,7 +696,7 @@ const OIL_FIRE_FULL_SEC := 5.0
 const OIL_FIRE_RAMP_SEC := 3.0
 const OIL_EDGE_IGNITE_RADIUS := 0.28 ## Tip must land near a puddle (forgiving)
 const OIL_FIRE_SPREAD_RADIUS := 0.155 ## Neighbor speck catch distance
-const OIL_FIRE_SPREAD_SEC := 0.24 ## Slower hop along the trail
+const OIL_FIRE_SPREAD_SEC := 0.16 ## Faster hop along the trail
 ## Flame spawn samples along the oil polyline (not a fill box).
 const FIRE_PATH_SPACING := 0.028 ## meters between spline samples
 const FIRE_PATH_LINK_MAX := 0.195 ## don't bridge gaps wider than spread
@@ -1050,6 +1050,7 @@ var grill_roomba_vel: Vector2 = Vector2.ZERO
 var grill_roomba_heading: float = 0.0
 var grill_roomba_turn_goal: float = 0.0
 var grill_roomba_held: bool = false
+var grill_roomba_remote_holder_id: int = 0
 var grill_roomba_hold_wobble: float = 0.0
 var grill_roomba_sad_hold_t: float = 0.0 ## Pickup / poke sad face timer → neutral
 var grill_roomba_poke_pause_t: float = 0.0 ## Brief stun after RMB poke
@@ -1111,7 +1112,7 @@ const ROOMBA_CLEAN_EDGE_RADIUS := 0.172
 const ROOMBA_CLEAN_RATE := 1.15
 const ROOMBA_CLEAN_TARGET_REACH := 0.078
 const ROOMBA_BOUNCE_BACK_SEC := 0.32
-const ROOMBA_SYNC_INTERVAL := 0.24
+const ROOMBA_SYNC_INTERVAL := 0.08
 const ROOMBA_UNSTUCK_SEC := 0.48
 const ROOMBA_PATTY_PUSH := 0.028
 ## Tool / burger bumps — tiny nudge then stop (not a long shove).
@@ -1375,6 +1376,7 @@ var tree_light_off_z: float = 0.7
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_WIND_CFG_SECTION := "tree_wind"
 const TREE_CLICK_COLLISION_LAYER := 262144
+const TREE_CLICK_ENABLED := false
 const CUSTOMER_WAWA_COLLISION_LAYER := 524288 ## torso/head Area3D on each guest
 const TREE_SHAKE_DEG := 1.45 ## soft pendulum lean (was 2.4)
 ## Leaf wind — Hidden menu (strength + world yaw direction).
@@ -2995,6 +2997,8 @@ func _process(delta: float) -> void:
 	if mp_enabled and spatula_patty != null and is_instance_valid(spatula_patty):
 		if spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id():
 			_mp_send_patty_pose(spatula_patty, true)
+	if mp_enabled and spatula_juggle_patty != null and is_instance_valid(spatula_juggle_patty):
+		_mp_send_patty_pose(spatula_juggle_patty, true)
 	if mp_enabled and NetManager.is_host() and window_cat != null and is_instance_valid(window_cat):
 		_mp_cat_accum += delta
 		if _mp_cat_accum >= 0.1:
@@ -3010,7 +3014,8 @@ func _process(delta: float) -> void:
 		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
 		_mp_icecream_pose_cool = maxf(0.0, _mp_icecream_pose_cool - delta)
 		_mp_slick_sync_cool = maxf(0.0, _mp_slick_sync_cool - delta)
-		if oil_held or shaker_held or ext_held or glock_held or brush_held:
+		var spatula_visible := hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible
+		if oil_held or shaker_held or ext_held or glock_held or brush_held or fries_pack_held or spatula_visible:
 			_mp_send_held_tool_pose(false)
 		if fryer_held_index >= 0:
 			_mp_send_fryer_basket_pose(false, true, fryer_held_index)
@@ -10530,6 +10535,7 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_heading = deg_to_rad(-35.0)
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_held = false
+	grill_roomba_remote_holder_id = 0
 	grill_roomba_sad_hold_t = 0.0
 	grill_roomba_poke_pause_t = 0.0
 	grill_roomba_poke_wawawa = false
@@ -10592,6 +10598,11 @@ func _update_grill_roomba(delta: float) -> void:
 		return
 	grill_roomba_root.visible = true
 	if grill_roomba_held:
+		if grill_roomba_remote_holder_id != 0:
+			_roomba_update_carried_patty()
+			if game_audio and game_audio.has_method("set_roomba_drive"):
+				game_audio.set_roomba_drive(false)
+			return
 		## Sad briefly on pickup, then neutral while still carried.
 		grill_roomba_sad_hold_t = maxf(0.0, grill_roomba_sad_hold_t - delta)
 		grill_roomba_poke_pause_t = 0.0
@@ -10814,7 +10825,7 @@ func _update_grill_roomba(delta: float) -> void:
 	grill_roomba_sync_t = maxf(0.0, grill_roomba_sync_t - delta)
 	if mp_enabled and NetManager.is_host() and grill_roomba_sync_t <= 0.0:
 		grill_roomba_sync_t = ROOMBA_SYNC_INTERVAL
-		mp_roomba_pose.rpc(new_pos.x, new_pos.y, new_pos.z, grill_roomba_root.rotation_degrees.y, grill_roomba_bump_t)
+		_mp_send_roomba_pose()
 
 
 func _update_held_grill_roomba(delta: float) -> void:
@@ -10840,7 +10851,7 @@ func _update_held_grill_roomba(delta: float) -> void:
 	)
 	_update_grill_roomba_bristles(delta, move.length() / maxf(delta, 0.001))
 	if mp_enabled:
-		mp_roomba_pose.rpc(grill_roomba_root.global_position.x, grill_roomba_root.global_position.y, grill_roomba_root.global_position.z, grill_roomba_root.rotation_degrees.y, grill_roomba_bump_t)
+		_mp_send_roomba_pose()
 
 
 func _update_grill_roomba_bristles(delta: float, speed: float) -> void:
@@ -10882,6 +10893,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 		return false
 	_roomba_drop_carried_patty_in_place()
 	grill_roomba_held = true
+	grill_roomba_remote_holder_id = 0
 	grill_roomba_ledge_phase = "" ## Picking it up rescues the ledge gag.
 	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_poke_pause_t = 0.0
@@ -10940,7 +10952,45 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 	## Plastic body tap — not metal spatula ting (muted on the smash anim).
 	if game_audio and game_audio.has_method("play_roomba_body_tap"):
 		game_audio.play_roomba_body_tap()
+	if mp_enabled and not _mp_applying:
+		mp_roomba_poke.rpc(poke_at.x, poke_at.z)
 	return true
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_roomba_poke(x: float, z: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	_mp_applying = true
+	var poke_at := Vector3(x, GRILL_SURFACE_Y, z)
+	_start_spatula_place_squash_at(
+		poke_at,
+		HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y,
+		HAND_SPATULA_SLAP_DUR
+	)
+	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
+	grill_roomba_poke_wawawa = true
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_back_t = 0.0
+	if randf() < 0.5:
+		grill_roomba_poke_wobble_t = ROOMBA_POKE_WOBBLE_SEC
+		grill_roomba_poke_wobble_phase = randf() * TAU
+		grill_roomba_poke_pause_t = maxf(ROOMBA_POKE_PAUSE_SEC, ROOMBA_POKE_WOBBLE_SEC)
+	else:
+		grill_roomba_poke_wobble_t = 0.0
+		grill_roomba_poke_pause_t = ROOMBA_POKE_PAUSE_SEC
+	_set_roomba_face("sad")
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(false)
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(true)
+	if game_audio and game_audio.has_method("play_roomba_body_tap"):
+		game_audio.play_roomba_body_tap()
+	_mp_applying = false
+	if NetManager.is_host() and sid != 0:
+		mp_roomba_poke.rpc(x, z)
+		_mp_send_roomba_pose()
 
 
 func _update_roomba_poke_wobble(delta: float) -> void:
@@ -10966,6 +11016,7 @@ func _release_grill_roomba() -> void:
 	if not grill_roomba_held:
 		return
 	grill_roomba_held = false
+	grill_roomba_remote_holder_id = 0
 	grill_roomba_ledge_phase = ""
 	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_sad_hold_t = 0.0
@@ -10987,6 +11038,8 @@ func _release_grill_roomba() -> void:
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_reaim_t = 0.2
 	_flash("Turbachef Robot back on the grill", Color("A5D6A7"))
+	if mp_enabled:
+		_mp_send_roomba_pose()
 
 
 func _roomba_cook_edge_z() -> float:
@@ -11700,6 +11753,61 @@ func _roomba_update_carried_patty() -> void:
 		_roomba_push_patties_from_carried_fake(old_fake_pos, grill_roomba_fake_patty.global_position)
 
 
+func _roomba_patty_net_id(patty) -> int:
+	if patty == null or not is_instance_valid(patty):
+		return -1
+	return int(patty.get("net_id"))
+
+
+func _mp_roomba_hinge_x() -> float:
+	if grill_roomba_spatula_root == null or not is_instance_valid(grill_roomba_spatula_root):
+		return ROOMBA_SPATULA_HINGE_UP_DEG
+	return grill_roomba_spatula_root.rotation_degrees.x
+
+
+func _mp_send_roomba_pose() -> void:
+	if not mp_enabled or grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	var p := grill_roomba_root.global_position
+	mp_roomba_pose.rpc(
+		p.x,
+		p.y,
+		p.z,
+		grill_roomba_root.rotation_degrees.y,
+		grill_roomba_bump_t,
+		grill_roomba_face_state,
+		_mp_roomba_hinge_x(),
+		grill_roomba_held,
+		_roomba_patty_net_id(grill_roomba_carry_patty),
+		_roomba_patty_net_id(grill_roomba_scoop_patty)
+	)
+
+
+func _mp_apply_roomba_patty_state(carry_net_id: int, scoop_net_id: int) -> void:
+	var next_carry = _patty_by_net_id(carry_net_id)
+	if carry_net_id >= 0 and next_carry != null and is_instance_valid(next_carry):
+		grill_roomba_carry_patty = next_carry
+		if grill_roomba_carry_slot < 0:
+			grill_roomba_carry_slot = int(next_carry.get("slot_index"))
+		for i in range(grill.size()):
+			if grill[i] == next_carry:
+				grill_roomba_carry_slot = i
+				grill[i] = null
+				break
+		next_carry.is_held = true
+		next_carry.heating = false
+		next_carry.visible = false
+	else:
+		grill_roomba_carry_patty = null
+		grill_roomba_carry_slot = -1
+		grill_roomba_carry_target = Vector3.INF
+	grill_roomba_scoop_patty = _patty_by_net_id(scoop_net_id)
+	if scoop_net_id < 0 or grill_roomba_scoop_patty == null or not is_instance_valid(grill_roomba_scoop_patty):
+		grill_roomba_scoop_patty = null
+		grill_roomba_scoop_slot = -1
+	_roomba_update_carried_patty()
+
+
 func _roomba_drop_carried_patty_in_place() -> void:
 	if grill_roomba_carry_patty == null or not is_instance_valid(grill_roomba_carry_patty):
 		grill_roomba_carry_patty = null
@@ -11861,6 +11969,8 @@ func _roomba_commit_scoop_patty(patty: Area3D, slot: int) -> void:
 	_roomba_update_carried_patty()
 	if game_audio and game_audio.has_method("play_click"):
 		game_audio.play_click()
+	if mp_enabled and NetManager.is_host():
+		_mp_send_roomba_pose()
 
 
 func _roomba_clear_patty_task() -> void:
@@ -12215,6 +12325,8 @@ func _roomba_try_drop_carried_patty() -> void:
 		patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
 		grill[idx] = patty
 		_move_patty_to(idx, patty, pos, true)
+	if mp_enabled and NetManager.is_host() and int(patty.get("net_id")) >= 0:
+		mp_roomba_place_patty.rpc(int(patty.get("net_id")), idx, pos.x, pos.z, _is_in_warmer_zone(pos))
 	if fake != null and is_instance_valid(fake):
 		patty.visible = false
 		fake.set_meta("roomba_carry_animating", true)
@@ -12697,19 +12809,67 @@ func _roomba_spray_fire(pos: Vector3, delta: float) -> void:
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func mp_roomba_pose(x: float, y: float, z: float, yaw: float, bump: float = 0.0) -> void:
-	if NetManager.is_host():
-		return
+func mp_roomba_pose(x: float, y: float, z: float, yaw: float, bump: float = 0.0, face: String = "", hinge_x: float = INF, held: bool = false, carry_net_id: int = -1, scoop_net_id: int = -1) -> void:
 	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
 		return
+	var sid := multiplayer.get_remote_sender_id()
 	grill_roomba_root.visible = _owns_grill_roomba()
-	grill_roomba_root.global_position = grill_roomba_root.global_position.lerp(Vector3(x, y, z), 0.32)
+	var old_pos := grill_roomba_root.global_position
+	var target_pos := Vector3(x, y, z)
+	grill_roomba_root.global_position = target_pos if held else grill_roomba_root.global_position.lerp(target_pos, 0.42)
 	var smooth_yaw:= lerp_angle(deg_to_rad(grill_roomba_root.rotation_degrees.y), deg_to_rad(yaw), 0.18)
 	grill_roomba_root.rotation_degrees.y = rad_to_deg(smooth_yaw)
+	grill_roomba_held = held
+	if NetManager.is_host():
+		grill_roomba_remote_holder_id = sid if held and sid != 0 else 0
+	if not face.is_empty():
+		_set_roomba_face(face)
+	if not is_inf(hinge_x) and grill_roomba_spatula_root != null and is_instance_valid(grill_roomba_spatula_root):
+		var sr := grill_roomba_spatula_root.rotation_degrees
+		sr.x = hinge_x
+		grill_roomba_spatula_root.rotation_degrees = sr
+	_mp_apply_roomba_patty_state(carry_net_id, scoop_net_id)
 	## RPC yaw is Godot visual degrees (= -logic heading). Convert back for XZ motion.
 	var logic_heading:= -deg_to_rad(yaw)
-	grill_roomba_vel = Vector2(cos(logic_heading), sin(logic_heading)) * ROOMBA_SPEED
+	var moved := Vector2(grill_roomba_root.global_position.x - old_pos.x, grill_roomba_root.global_position.z - old_pos.z).length()
+	grill_roomba_vel = Vector2(cos(logic_heading), sin(logic_heading)) * (moved / ROOMBA_SYNC_INTERVAL)
 	grill_roomba_bump_t = maxf(grill_roomba_bump_t, bump)
+	_update_grill_roomba_bristles(ROOMBA_SYNC_INTERVAL, grill_roomba_vel.length())
+	if NetManager.is_host() and sid != 0:
+		mp_roomba_pose.rpc(x, y, z, yaw, bump, face, hinge_x, held, carry_net_id, scoop_net_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_roomba_place_patty(net_id: int, idx: int, x: float, z: float, to_warmer: bool) -> void:
+	var patty = _patty_by_net_id(net_id)
+	if patty == null or not is_instance_valid(patty):
+		return
+	_mp_applying = true
+	if grill_roomba_carry_patty == patty:
+		grill_roomba_carry_patty = null
+		grill_roomba_carry_slot = -1
+		grill_roomba_carry_target = Vector3.INF
+	if grill_roomba_scoop_patty == patty:
+		grill_roomba_scoop_patty = null
+		grill_roomba_scoop_slot = -1
+		grill_roomba_scoop_hold_t = 0.0
+	if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+		grill_roomba_fake_patty.queue_free()
+	grill_roomba_fake_patty = null
+	var pos := Vector3(x, GRILL_SURFACE_Y, z)
+	if to_warmer:
+		_place_spatula_on_warmer_local(idx, pos, patty)
+	else:
+		patty.is_held = false
+		patty.visible = true
+		patty.rotation_degrees = Vector3.ZERO
+		patty.slot_index = idx
+		patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+		patty.heating = grill_on
+		patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
+		grill[idx] = patty
+		_move_patty_to(idx, patty, pos, true)
+	_mp_applying = false
 
 
 func _build_heat_warp_plane(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
@@ -15053,7 +15213,7 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 		"burn_tex": false, ## true while using the animated fire-hole texture
 	})
 	## Cap = trail length budget (2× prior 70) so you can lay a long grease trail.
-	while oil_slicks.size() > 140:
+	while oil_slicks.size() > 560:
 		var old: Dictionary = oil_slicks.pop_front()
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
@@ -20708,6 +20868,8 @@ func _grill_blocks_tree_click(screen_pos: Vector2) -> bool:
 
 
 func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
+	if not TREE_CLICK_ENABLED:
+		return false
 	if not playing or camera == null or world == null:
 		return false
 	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
@@ -38322,6 +38484,12 @@ func _load_graphics_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GFX_CFG_PATH) != OK:
 		return
+	## One-shot: ship the current tuned visual defaults to existing installs.
+	if not cfg.has_section_key("gfx", "gfx_defaults_20260726_v1"):
+		for hk in GFX_DEFAULTS:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_defaults_20260726_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	## One-shot: tuned grill strip light pose / intensity from in-game GFX.
 	if not cfg.has_section_key("gfx", "gfx_strip_v1"):
 		for hk in [
@@ -46409,15 +46577,7 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 	if not force and _mp_tool_pose_cool > 0.0:
 		return
 	_mp_tool_pose_cool = 0.04
-	if hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible:
-		var hp: Vector3 = hand_spatula_root.global_position
-		var hr: Vector3 = hand_spatula_root.global_rotation_degrees
-		mp_tool_pose.rpc(10, true, hp.x, hp.y, hp.z, spatula_patty != null, hr.x, hr.y, hr.z)
-		_mp_spatula_pose_sent = true
-	elif _mp_spatula_pose_sent:
-		mp_tool_pose.rpc(10, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
-		_mp_spatula_pose_sent = false
-	elif brush_held and brush_root != null and is_instance_valid(brush_root):
+	if brush_held and brush_root != null and is_instance_valid(brush_root):
 		var bp: Vector3 = brush_root.global_position
 		var br: Vector3 = brush_root.global_rotation_degrees
 		mp_tool_pose.rpc(3, true, bp.x, bp.y, bp.z, true, br.x, br.y, br.z)
@@ -46444,6 +46604,14 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 		var fp: Vector3 = fries_pack_root.global_position
 		var fr: Vector3 = fries_pack_root.global_rotation_degrees
 		mp_tool_pose.rpc(9, true, fp.x, fp.y, fp.z, true, fr.x, fr.y, fr.z)
+	elif hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible:
+		var hp: Vector3 = hand_spatula_root.global_position
+		var hr: Vector3 = hand_spatula_root.global_rotation_degrees
+		mp_tool_pose.rpc(10, true, hp.x, hp.y, hp.z, spatula_patty != null, hr.x, hr.y, hr.z)
+		_mp_spatula_pose_sent = true
+	elif _mp_spatula_pose_sent:
+		mp_tool_pose.rpc(10, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
+		_mp_spatula_pose_sent = false
 
 
 func _fryer_state_to_code(state: String) -> int:
@@ -46680,15 +46848,6 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		if gl != null and is_instance_valid(gl):
 			gl.visible = false
 			_mp_set_remote_glock_laser(gl, false)
-	if _mp_remote_cups.has(peer_id):
-		var cup: Node3D = _mp_remote_cups[peer_id]
-		if cup != null and is_instance_valid(cup):
-			cup.visible = false
-	if _mp_remote_icecreams.has(peer_id):
-		var ice: Node3D = _mp_remote_icecreams[peer_id]
-		if ice != null and is_instance_valid(ice):
-			ice.visible = false
-			_mp_set_remote_icecream_stream(ice, false)
 	if except_kind != 9 and _mp_remote_fries.has(peer_id):
 		var fries: Node3D = _mp_remote_fries[peer_id]
 		if fries != null and is_instance_valid(fries):
@@ -47156,7 +47315,7 @@ func _mp_send_patty_pose(patty: Area3D, held: bool = false) -> void:
 	var nid := int(patty.get("net_id"))
 	if nid < 0:
 		return
-	mp_patty_pose.rpc(nid, patty.position.x, patty.position.y, patty.position.z, held)
+	mp_patty_pose.rpc(nid, patty.position.x, patty.position.y, patty.position.z, held, patty.rotation_degrees.x, patty.rotation_degrees.y, patty.rotation_degrees.z)
 
 
 func _patty_by_net_id(net_id: int):
@@ -47321,6 +47480,7 @@ func mp_patty_click(net_id: int) -> void:
 		## Partner flip / scoop — never assign to our local spatula.
 		if not p.flipped_once:
 			if p.can_flip():
+				_start_spatula_place_squash_at(p.global_position)
 				p.flip()
 		elif p.can_scoop():
 			_mp_apply_remote_scoop(p, sid)
@@ -47338,7 +47498,7 @@ func mp_patty_smash(net_id: int) -> void:
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> void:
+func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool, rx: float = 0.0, ry: float = 0.0, rz: float = 0.0) -> void:
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
@@ -47348,6 +47508,7 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool) -> voi
 	if spatula_patty == p:
 		return
 	p.position = Vector3(x, y, z)
+	p.rotation_degrees = Vector3(rx, ry, rz)
 	p._rest_x = x
 	p._rest_z = z
 	if held:
