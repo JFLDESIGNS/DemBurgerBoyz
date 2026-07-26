@@ -12368,7 +12368,7 @@ func _set_grill_heat_glow_mul(value: float, mat: ShaderMaterial) -> void:
 
 
 func _rebuild_grill_heat_glows(parent: Node3D = null) -> void:
-	## One centered heat blot over cook steel (HOLD excluded). Size / grate / look stay Hidden-tunable.
+	## One heat blot per cook zone (FULL + ½). HOLD has no glow.
 	var surf: Node3D = parent
 	if surf == null or not is_instance_valid(surf):
 		surf = grill_surface_node
@@ -12385,22 +12385,21 @@ func _rebuild_grill_heat_glows(parent: Node3D = null) -> void:
 			g.queue_free()
 	grill_glow_meshes.clear()
 	grill_glow_root = null
-	var x0 := _grill_heat_cook_x0
-	var x1 := _grill_heat_cook_x1
-	if x1 <= x0 + 0.05:
-		x0 = GRILL_CENTER_X - GRILL_WIDTH * 0.25
-		x1 = GRILL_CENTER_X + GRILL_WIDTH * 0.35
-	var cook_w := maxf(0.25, x1 - x0)
-	var cook_cx := (x0 + x1) * 0.5
-	var base_w := cook_w * 0.72
-	var base_d := GRILL_DEPTH * 0.78
-	_add_heat_glow(
-		surf,
-		Vector3(cook_cx - GRILL_CENTER_X, grill_heat_height, 0.0),
-		base_w * grill_heat_size,
-		base_d * grill_heat_size,
-		1.0
-	)
+	for z in _grill_zone_bands():
+		## HOLD (mul 0) stays dark — only FULL / ½ get a center glow.
+		if float(z.get("mul", 0.0)) <= 0.0:
+			continue
+		var zw := float(z["w"])
+		var local_cx := float(z["cx"]) - GRILL_CENTER_X
+		var glow_w := zw * 0.92 * grill_heat_size
+		var glow_d := GRILL_DEPTH * 0.82 * grill_heat_size
+		_add_heat_glow(
+			surf,
+			Vector3(local_cx, grill_heat_height, 0.0),
+			glow_w,
+			glow_d,
+			float(z.get("glow", 1.0))
+		)
 	grill_glow_root = grill_glow_meshes[0] if not grill_glow_meshes.is_empty() else null
 	if was_lit:
 		var target := old_mul if old_mul > 0.02 else GRILL_GLOW_BRIGHT_MULT
