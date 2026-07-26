@@ -17,7 +17,7 @@ const SMOKE2_PREVIEW_WIDTH := 0.42
 const SMOKE2_PREVIEW_LIFT := 0.28
 const SMOKE2_DEBUG_OUTLINE := true
 const CHEESE_STATION_OFFSET := Vector3(-0.06, 0.055, 0.28)
-const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.52)
+const SODA_STATION_POS := Vector3(-1.55, 0.9276, 0.52) ## was 1.08; −6" (matches game.gd)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 
 var _rebuild_preview := false

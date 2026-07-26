@@ -1581,7 +1581,7 @@ const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
 const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a clap-back
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
-const SODA_STATION_POS := Vector3(-1.55, 1.08, 0.67)
+const SODA_STATION_POS := Vector3(-1.55, 0.9276, 0.67) ## was 1.08; −6"
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const SODA_FOUNTAIN_MODEL_PATH := "res://models/sodamachine/soda_fountain_model.tscn"
 const SODA_FOUNTAIN_EDIT_FBX := "res://models/sodamachine/sodaedit1.fbx"
@@ -28499,6 +28499,8 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 	## Overflow — fewer cubes hit the grill; rest scatter on the tray/counter.
 	var to_grill := randf() < 0.18
 	var land_y := SODA_STATION_POS.y + 0.10
+	if soda_root != null and is_instance_valid(soda_root):
+		land_y = soda_root.global_position.y + 0.10
 	if cup_rest != Vector3.ZERO:
 		land_y = cup_rest.y + 0.002
 	var end: Vector3
