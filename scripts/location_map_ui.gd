@@ -33,10 +33,15 @@ func open(current_id: String) -> void:
 	_selected_id = _parked_id
 	if get_child_count() == 0:
 		_build()
+	## Rebuild art if a prior open failed to load the PNG.
+	if _map_tex_rect != null and _map_tex_rect.texture == null:
+		_map_tex_rect.texture = _load_town_map_texture()
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	_layout_map_and_pins()
 	_refresh_pins()
 	_refresh_detail()
+	call_deferred("_layout_map_and_pins")
 
 
 func close() -> void:
@@ -139,8 +144,10 @@ func _build() -> void:
 	_map_tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_map_tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_map_tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_map_tex_rect.z_index = 0
 	_map_tex_rect.texture = _load_town_map_texture()
+	_map_tex_rect.modulate = Color(1, 1, 1, 1)
 	_map_host.add_child(_map_tex_rect)
 
 	_spawn_pins()
@@ -244,8 +251,13 @@ func _build() -> void:
 	)
 	footer.add_child(back)
 
-	call_deferred("_layout_pins")
+	call_deferred("_layout_map_and_pins")
 	call_deferred("_refresh_detail")
+
+
+func _layout_map_and_pins() -> void:
+	_layout_map_texture()
+	_layout_pins()
 
 
 func _style_primary_btn(btn: Button) -> void:
@@ -326,22 +338,30 @@ func _style_pin(btn: Button, tier: String, selected: bool) -> void:
 
 
 func _load_town_map_texture() -> Texture2D:
-	## Export-safe PNG load (Image.load(res://) is stripped in packs).
-	if ResourceLoader.exists(TOWN_MAP_PATH):
-		var imported: Texture2D = load(TOWN_MAP_PATH) as Texture2D
-		if imported != null:
-			_map_tex_size = imported.get_size()
-			return imported
-	if not FileAccess.file_exists(TOWN_MAP_PATH):
-		return null
-	var bytes := FileAccess.get_file_as_bytes(TOWN_MAP_PATH)
-	if bytes.is_empty():
-		return null
-	var img := Image.new()
-	if img.load_png_from_buffer(bytes) != OK:
-		return null
-	_map_tex_size = Vector2(img.get_width(), img.get_height())
-	return ImageTexture.create_from_image(img)
+	## Export-safe: read image bytes from the PCK first (same as open/closed signs).
+	## Forced into the pack via export_presets include_filter.
+	var paths: Array[String] = [
+		"res://assets/ui/town_map.png",
+		"res://IMAGES/town_map.png",
+	]
+	for path in paths:
+		if FileAccess.file_exists(path):
+			var bytes := FileAccess.get_file_as_bytes(path)
+			if bytes.size() > 64:
+				var img := Image.new()
+				var err := img.load_png_from_buffer(bytes)
+				if err != OK:
+					err = img.load_jpg_from_buffer(bytes)
+				if err == OK:
+					_map_tex_size = Vector2(img.get_width(), img.get_height())
+					return ImageTexture.create_from_image(img)
+		if ResourceLoader.exists(path):
+			var imported: Texture2D = load(path) as Texture2D
+			if imported != null:
+				_map_tex_size = imported.get_size()
+				return imported
+	push_warning("Town map texture missing — pins will sit on empty green")
+	return null
 
 
 func _map_image_rect() -> Rect2:

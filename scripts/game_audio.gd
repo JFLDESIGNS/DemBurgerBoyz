@@ -71,22 +71,23 @@ var _fries_shake_intensity: float = 0.0
 var _fries_shake_lp := 0.0
 var _fries_shake_phase := 0.0
 var _fries_shake_tick := 0.0
-## Outdoor tree leaf breeze — soft filtered bed; direction plays sparse chimes (1 voice).
+## Outdoor tree leaf rustle — leafy bed + quiet direction accents (1 chime voice).
 var _tree_leaf_player: AudioStreamPlayer
 var _tree_leaf_gen: AudioStreamGenerator
 var _tree_leaf_on: bool = false
 var _tree_leaf_intensity: float = 0.0
+var _tree_leaf_bright: float = 0.5 ## 0 dark / 1 bright — follows mouse direction gently
 var _tree_leaf_lp := 0.0
-var _tree_leaf_lp2 := 0.0
+var _tree_leaf_bp := 0.0
 var _tree_leaf_phase := 0.0
 var _tree_leaf_tick := 0.0
 var _tree_chime_player: AudioStreamPlayer = null ## Single voice — never stacks
 var _tree_chime_cool: float = 0.0
 var _tree_chime_dir: int = -1
-const TREE_LEAF_SHAKE_DB := -24.0 ## Soft breeze bed (was scratchy −13.5)
-const TREE_CHIME_COOL := 0.24 ## Min seconds between direction chimes
-## G-major pentatonic leaf tones (MIDI) for 8 mouse-direction sectors.
-const TREE_CHIME_MIDI: Array[int] = [67, 69, 71, 74, 76, 79, 81, 74] ## G A B D E G A D
+const TREE_LEAF_SHAKE_DB := -15.5 ## Clear leafy bed under quiet direction accents
+const TREE_CHIME_COOL := 0.28 ## Min seconds between direction accents
+## Soft leafy tones (MIDI) for 8 mouse-direction sectors — quiet under the rustle.
+const TREE_CHIME_MIDI: Array[int] = [64, 67, 69, 71, 72, 74, 76, 69] ## E G A B C D E A
 ## Live fry filters / pop state (never loops).
 var _sz_mid := 0.0
 var _sz_mid2 := 0.0
@@ -998,21 +999,25 @@ func _next_fries_shake_sample() -> float:
 
 
 func _next_tree_leaf_shake_sample() -> float:
-	## Soft canopy breeze — warm brown-ish noise, almost no scratch grain.
+	## Leaf canopy rustle — dry mid flutter + soft flicks (must read as leaves, not wind or music).
 	_tree_leaf_tick += 1.0 / float(MIX_RATE)
-	var shake_hz := 3.2 + sin(_tree_leaf_tick * 1.1) * 0.45
+	var shake_hz := 6.2 + sin(_tree_leaf_tick * 2.4) * 1.15
 	_tree_leaf_phase += shake_hz / float(MIX_RATE)
-	var pulse := 0.55 + 0.45 * maxf(0.0, sin(_tree_leaf_phase * TAU))
-	pulse = lerpf(0.7, 1.0, pow(pulse, 1.4))
+	var pulse := maxf(0.0, sin(_tree_leaf_phase * TAU))
+	pulse = lerpf(0.42, 1.0, pow(pulse, 0.48))
 	var white := randf() * 2.0 - 1.0
-	## Heavy double low-pass → soft whoosh, not hiss/scratch.
-	_tree_leaf_lp = _tree_leaf_lp * 0.91 + white * 0.09
-	_tree_leaf_lp2 = _tree_leaf_lp2 * 0.88 + _tree_leaf_lp * 0.12
-	var leaf := _tree_leaf_lp2 * 0.85 + _tree_leaf_lp * 0.12
-	## Tiny mid breath only — no sharp flicks.
-	var breath := sin(_tree_leaf_tick * 7.5 * TAU) * _tree_leaf_lp2 * 0.08
-	var gain := lerpf(0.28, 0.62, _tree_leaf_intensity)
-	return clampf((leaf * 0.22 + breath) * pulse * gain, -1.0, 1.0)
+	## Band-pass emphasis in the leafy midrange; brightness only tilts the cut a little.
+	var cut := lerpf(0.70, 0.56, _tree_leaf_bright)
+	_tree_leaf_lp = _tree_leaf_lp * cut + white * (1.0 - cut)
+	var hp := white - _tree_leaf_lp
+	_tree_leaf_bp = _tree_leaf_bp * 0.55 + hp * 0.45
+	var leaf := _tree_leaf_bp * 0.62 + hp * 0.22 + _tree_leaf_lp * 0.05
+	## Soft leaf flicks — sparse dry clicks in the canopy.
+	var flick := 0.0
+	if pulse > 0.78 and randf() < 0.028 * lerpf(0.55, 1.0, _tree_leaf_intensity):
+		flick = (randf() * 2.0 - 1.0) * 0.14
+	var gain := lerpf(0.50, 1.0, _tree_leaf_intensity)
+	return clampf((leaf * 0.34 + flick) * pulse * gain, -1.0, 1.0)
 
 
 func _next_ext_spray_sample() -> float:
@@ -1180,25 +1185,26 @@ func play_tree_thud() -> void:
 
 
 func play_tree_leaf_tap() -> void:
-	## One soft breeze puff on click — no scratch grain.
+	## One leafy rustle puff on click.
 	_play_cached(
-		"tree_leaf_tap_v2_%d" % (randi() % 3),
+		"tree_leaf_tap_v3_%d" % (randi() % 3),
 		_make_tree_leaf_tap,
-		0.96 + randf() * 0.08,
-		0.58
+		0.94 + randf() * 0.10,
+		0.72
 	)
 
 
 func set_tree_leaf_shake(active: bool, intensity: float = 1.0) -> void:
-	## Continuous soft breeze while holding LMB and moving on a tree.
+	## Continuous leaf rustle while holding LMB and moving on a tree.
 	if _tree_leaf_player == null:
 		return
 	_tree_leaf_intensity = clampf(intensity, 0.0, 1.0)
 	if active and _tree_leaf_intensity > 0.06:
 		_tree_leaf_on = true
-		var linear := db_to_linear(TREE_LEAF_SHAKE_DB) * lerpf(0.55, 1.0, _tree_leaf_intensity)
-		_tree_leaf_player.volume_db = linear_to_db(clampf(linear, 0.015, 0.55))
-		_tree_leaf_player.pitch_scale = 1.0 ## Fixed — musical interest is the chime voice
+		var linear := db_to_linear(TREE_LEAF_SHAKE_DB) * lerpf(0.50, 1.05, _tree_leaf_intensity)
+		_tree_leaf_player.volume_db = linear_to_db(clampf(linear, 0.02, 0.85))
+		## Gentle brightness tilt only — keep rustle readable as leaves.
+		_tree_leaf_player.pitch_scale = lerpf(0.94, 1.08, _tree_leaf_bright)
 		if not _tree_leaf_player.playing:
 			_tree_leaf_player.play()
 	else:
@@ -1206,6 +1212,7 @@ func set_tree_leaf_shake(active: bool, intensity: float = 1.0) -> void:
 		_tree_leaf_intensity = 0.0
 		_tree_chime_cool = 0.0
 		_tree_chime_dir = -1
+		_tree_leaf_bright = 0.5
 		if _tree_leaf_player.playing:
 			_tree_leaf_player.stop()
 		_tree_leaf_player.volume_db = -80.0
@@ -1216,20 +1223,23 @@ func set_tree_leaf_shake(active: bool, intensity: float = 1.0) -> void:
 
 
 func set_tree_leaf_shake_motion(mouse_delta: Vector2, delta: float = 0.016) -> void:
-	## Mouse direction → sparse pentatonic leaf chime (single voice, cooldown).
-	## Breeze bed stays fixed-pitch; no warbly pitch modulation.
+	## Direction gently tints the leaf bed + sparse quiet leafy accents (1 voice).
 	_tree_chime_cool = maxf(0.0, _tree_chime_cool - maxf(delta, 0.0))
-	if mouse_delta.length_squared() < 36.0: ## ~6 px — ignore jitter
+	if mouse_delta.length_squared() < 36.0:
 		return
-	if _tree_leaf_intensity < 0.12:
+	if _tree_leaf_intensity < 0.10:
 		return
-	## Screen angle → 8 sectors (0 = right, CCW).
-	var ang := atan2(-mouse_delta.y, mouse_delta.x) ## up is +
+	var nx := clampf(mouse_delta.x / 40.0, -1.0, 1.0)
+	var ny := clampf(-mouse_delta.y / 40.0, -1.0, 1.0) ## up = brighter
+	var target_bright := clampf(0.5 + nx * 0.28 + ny * 0.28, 0.0, 1.0)
+	_tree_leaf_bright = lerpf(_tree_leaf_bright, target_bright, clampf(delta * 8.0, 0.0, 1.0))
+	if _tree_leaf_player != null and _tree_leaf_on:
+		_tree_leaf_player.pitch_scale = lerpf(0.94, 1.08, _tree_leaf_bright)
+	## Screen angle → 8 sectors for the quiet accent.
+	var ang := atan2(-mouse_delta.y, mouse_delta.x)
 	var sector := int(floor((ang + PI) / (TAU / 8.0))) % 8
 	var dir_changed := sector != _tree_chime_dir
 	if not dir_changed and _tree_chime_cool > 0.0:
-		return
-	if not dir_changed and _tree_chime_cool > TREE_CHIME_COOL * 0.35:
 		return
 	_tree_chime_dir = sector
 	_tree_chime_cool = TREE_CHIME_COOL
@@ -2017,58 +2027,67 @@ func _make_tree_thud() -> AudioStreamWAV:
 
 
 func _make_tree_leaf_tap() -> AudioStreamWAV:
-	## Soft canopy puff — warm filtered breeze, no scratch.
-	var n := int(MIX_RATE * 0.22)
+	## Short leafy rustle burst — mid flutter, soft flicks.
+	var n := int(MIX_RATE * 0.20)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	var lp := 0.0
-	var lp2 := 0.0
+	var bp := 0.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var env := clampf(t / 0.018, 0.0, 1.0) * exp(-t * 9.5)
+		var env := clampf(t / 0.010, 0.0, 1.0) * exp(-t * 14.0)
+		var pulse := maxf(0.0, sin(t * 26.0 * TAU))
+		pulse = pow(pulse, 0.48)
 		var white := randf() * 2.0 - 1.0
-		lp = lp * 0.90 + white * 0.10
-		lp2 = lp2 * 0.86 + lp * 0.14
-		var leaf := lp2 * 0.9 + lp * 0.08
-		var tone := sin(t * 220.0 * TAU) * exp(-t * 14.0) * 0.12
-		_write_s16(pcm, i, int(clampf((leaf * 0.20 + tone) * env, -1.0, 1.0) * 12000.0))
+		lp = lp * 0.68 + white * 0.32
+		var hp := white - lp
+		bp = bp * 0.58 + hp * 0.42
+		var leaf := bp * 0.55 + hp * 0.20 + lp * 0.06
+		var flick := 0.0
+		if pulse > 0.80 and randf() < 0.04:
+			flick = (randf() * 2.0 - 1.0) * 0.12
+		_write_s16(pcm, i, int(clampf((leaf * 0.28 + flick) * pulse * env, -1.0, 1.0) * 15500.0))
 	return _wav_from_pcm(pcm, false)
 
 
 func _play_tree_direction_chime(sector: int) -> void:
-	## Soft leaf-chime for compass direction — restarts the one chime player.
+	## Quiet leafy accent for compass direction — under the rustle, never stacks.
 	if _tree_chime_player == null:
 		return
 	var idx := clampi(sector, 0, TREE_CHIME_MIDI.size() - 1)
 	var midi := TREE_CHIME_MIDI[idx]
-	var key := "tree_chime_%d" % midi
+	var key := "tree_leaf_accent_%d" % midi
 	if not _cache.has(key):
 		_cache[key] = _make_tree_leaf_chime(midi)
 	if _tree_chime_player.playing:
 		_tree_chime_player.stop()
 	_tree_chime_player.stream = _cache[key]
 	_tree_chime_player.pitch_scale = 1.0
-	_tree_chime_player.volume_db = linear_to_db(0.28)
+	## Quiet under the rustle bed — musical hint, leaf body.
+	_tree_chime_player.volume_db = linear_to_db(0.07)
 	_tree_chime_player.play()
 
 
 func _make_tree_leaf_chime(midi: int) -> AudioStreamWAV:
-	## Soft bell-ish leaf tone — gentle sine + quiet air, short decay.
+	## Direction accent: mostly leafy noise with a faint pitched shimmer (not a bell).
 	var freq := 440.0 * pow(2.0, float(midi - 69) / 12.0)
-	var n := int(MIX_RATE * 0.38)
+	var n := int(MIX_RATE * 0.22)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	var lp := 0.0
+	var bp := 0.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		var attack := clampf(t / 0.012, 0.0, 1.0)
-		var env := attack * exp(-t * 4.8)
-		var wave := sin(t * freq * TAU) * 0.72
-		wave += sin(t * freq * 2.0 * TAU) * 0.10 * exp(-t * 8.0)
+		var attack := clampf(t / 0.006, 0.0, 1.0)
+		var env := attack * exp(-t * 11.0)
 		var white := randf() * 2.0 - 1.0
-		lp = lp * 0.93 + white * 0.07
-		var air := lp * 0.06 * exp(-t * 10.0)
-		_write_s16(pcm, i, int(clampf((wave + air) * env, -1.0, 1.0) * 11000.0))
+		lp = lp * 0.66 + white * 0.34
+		var hp := white - lp
+		bp = bp * 0.58 + hp * 0.42
+		var rustle := bp * 0.55 + hp * 0.18
+		## Thin shimmer only — keeps the musical compass without losing leaf identity.
+		var shimmer := sin(t * freq * TAU) * 0.16 * exp(-t * 9.0)
+		_write_s16(pcm, i, int(clampf((rustle * 0.72 + shimmer) * env, -1.0, 1.0) * 11000.0))
 	return _wav_from_pcm(pcm, false)
 
 
