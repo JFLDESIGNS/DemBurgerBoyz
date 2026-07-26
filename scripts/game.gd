@@ -125,6 +125,7 @@ const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
+const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd")
 const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
 const LocationMapUIScript := preload("res://scripts/location_map_ui.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
@@ -1111,6 +1112,7 @@ const SOCIAL_REVIEWER_NAMES: Array[String] = [
 var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
 var game_audio: Node = null
+var _grill_song_performer: Node = null
 var _audio_debug_label: Label = null
 var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
@@ -1969,6 +1971,7 @@ func _ready() -> void:
 	_setup_location_map_ui()
 	_layout_top_bar_hud()
 	_setup_game_audio()
+	_setup_grill_song_performer()
 	_setup_intro_title_music()
 	_setup_burgerpals_startup_sound()
 	_build_dialogue_ui()
@@ -3028,7 +3031,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			_debug_dump_playing_sounds()
 			get_viewport().set_input_as_handled()
 			return
-	## Radio works even on the start screen.
+	## Radio works even on the start screen — but in-shift song keys win on [ ] p o.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if playing and _try_grill_song_hotkey(event):
+			get_viewport().set_input_as_handled()
+			return
 	if event is InputEventKey and event.pressed and not event.echo and radio:
 		if event.keycode == KEY_BRACKETLEFT:
 			radio.prev_channel()
@@ -3097,6 +3104,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_U or event.physical_keycode == KEY_U:
 			_begin_roomba_ledge_fail()
+			get_viewport().set_input_as_handled()
+			return
+		if _try_grill_song_hotkey(event):
 			get_viewport().set_input_as_handled()
 			return
 		var ing := _ingredient_from_hotkey(event.keycode)
@@ -3558,6 +3568,9 @@ func _input(event: InputEvent) -> void:
 		var ing := _ingredient_from_hotkey(event.keycode)
 		if ing != "":
 			_add_ingredient(ing)
+			get_viewport().set_input_as_handled()
+			return
+		if _try_grill_song_hotkey(event):
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and _handle_keyboard_cook_key(event):
@@ -5126,6 +5139,52 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 	if game_audio.has_method("play_spatula_ting"):
 		var midi := _grill_piano_midi_at(world_pos) + _spatula_roll_midi_offset()
 		game_audio.play_spatula_ting(midi, volume_scale)
+
+
+func _setup_grill_song_performer() -> void:
+	_grill_song_performer = GrillSongPerformerScript.new()
+	_grill_song_performer.name = "GrillSongPerformer"
+	add_child(_grill_song_performer)
+	if _grill_song_performer.has_method("setup"):
+		_grill_song_performer.setup(self)
+
+
+func _try_grill_song_hotkey(event: InputEventKey) -> bool:
+	if _grill_song_performer == null or not is_instance_valid(_grill_song_performer):
+		return false
+	if not _grill_song_performer.has_method("try_hotkey"):
+		return false
+	return bool(_grill_song_performer.try_hotkey(event))
+
+
+func _grill_song_strip_world(from_left: int) -> Vector3:
+	## Center of a piano strip (from_left 0 = screen-left / low C).
+	var b := _grill_cook_x_bounds()
+	var span := maxf(0.001, b.y - b.x)
+	var cell_w := span / float(GRILL_PIANO_SECTIONS)
+	var i := clampi(from_left, 0, GRILL_PIANO_SECTIONS - 1)
+	var sec := (GRILL_PIANO_SECTIONS - 1) - i
+	var x := b.x + (float(sec) + 0.5) * cell_w
+	return Vector3(x, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+
+
+func _grill_song_drum_world(pad: int) -> Vector3:
+	## Center of a HOLD drum pad (0 = window … 4 = cook).
+	var hold := _grill_hold_band()
+	var x := GRILL_CENTER_X
+	if not hold.is_empty():
+		x = (float(hold["x0"]) + float(hold["x1"])) * 0.5
+	var z0 := GRILL_SURFACE_Z - GRILL_DEPTH * 0.5
+	var pad_d := GRILL_DEPTH / float(GRILL_HOLD_DRUM_PADS)
+	var j := clampi(pad, 0, GRILL_HOLD_DRUM_PADS - 1)
+	var z := z0 + (float(j) + 0.5) * pad_d
+	return Vector3(x, GRILL_SURFACE_Y, z)
+
+
+func _grill_song_tap(world_pos: Vector3, volume_scale: float = 1.0) -> void:
+	## Song performer hit — sound + pad flash + soft ring (no spatula anim).
+	_play_grill_tap_at(world_pos, volume_scale)
+	_spawn_spatula_tap_ring(world_pos)
 
 
 func _spawn_spatula_tap_ring(at: Vector3) -> void:
