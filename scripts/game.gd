@@ -855,7 +855,10 @@ var cup_held: bool = false
 var cup_drawing: bool = false ## true while lerping a fresh cup out of the stack
 var _cup_draw_t: float = 0.0
 var _cup_draw_from: Vector3 = Vector3.ZERO
-const CUP_DRAW_DUR := 0.62 ## Nest → hand pull; long enough to read the lerp
+const CUP_DRAW_DUR := 1.12 ## Nest → hand — slow smooth pull (was 0.62, felt snap/teleport)
+## After a fresh rack grab: keep cups off the cabinet back for this long, then open the fill bay.
+const CUP_GRAB_FRONT_BLOCK_SEC := 0.5
+var _cup_grab_front_block_t: float = 0.0
 var cup_home: Vector3 = Vector3.ZERO ## rack spawn (spare grab)
 var cup_home_rot: Vector3 = Vector3.ZERO
 var cup_rest: Vector3 = Vector3.ZERO ## drip-tray park when you release
@@ -1683,8 +1686,10 @@ const CUP_LIQUID_WILD_SPEED := 1.90 ## full ripple / wave above this
 const CUP_TILT_VEL_DEADZONE := 0.22 ## ignore tiny hand noise for bank/slosh
 const CUP_SPLASH_LOSS := 0.07
 const CUP_SPLASH_LEAN := 34.0 ## was 26 — lean further before spilling
-## Invisible front wall (soda local +Z toward cook). Keep under-nozzle bay open — old 0.23 blocked soft-lock.
+## Invisible front wall (soda local +Z toward cook). Grab window uses a firmer push-out;
+## after CUP_GRAB_FRONT_BLOCK_SEC the fill-bay value lets the cup sit under the nozzles.
 const CUP_SODA_FRONT_Z := 0.055
+const CUP_SODA_FRONT_Z_FILL := -0.10 ## Under-nozzle / drip deck once the grab block expires
 const CUP_SODA_FRONT_HALF_X := 0.58
 const CUP_SODA_FRONT_HEIGHT := 1.30
 const CUP_ICECREAM_FRONT_Z := 0.055
@@ -26592,6 +26597,8 @@ func _begin_cup_hold() -> bool:
 	_cup_splash_cd = 0.0
 	_cup_machine_contact_grace = 0.0
 	_cup_spout_unlock_grace = 0.0
+	if draw_from_stack:
+		_cup_grab_front_block_t = CUP_GRAB_FRONT_BLOCK_SEC
 	if rescued_from_grill:
 		_flash("Saved the cup!", Color("C5E1A5"))
 	## Only reset foam when picking up an empty cup.
@@ -26635,18 +26642,25 @@ func _cup_soda_face_dir() -> Vector3:
 	return Vector3(0.0, 0.0, -1.0)
 
 
+func _cup_soda_front_z() -> float:
+	## Firm wall only during the fresh-grab window; then open the fill bay.
+	if _cup_grab_front_block_t > 0.0:
+		return CUP_SODA_FRONT_Z
+	return CUP_SODA_FRONT_Z_FILL
+
+
 func _cup_rack_front_grab_pos() -> Vector3:
-	## Appear well toward the cook from the CUPS tube — clear of machine / no dig-in.
-	const FRONT_M := 0.52 ## ~1.7 ft — closer to player than the old 0.30 seat
+	## Short cook-side lift out of the tube — hand finishes the pull (no big disconnect hop).
+	const FRONT_M := 0.22
 	var seat := _cup_rack_seat_global()
 	if seat == Vector3.ZERO and soda_root != null and is_instance_valid(soda_root):
 		seat = soda_root.global_position
 	var face := _cup_soda_face_dir()
 	var hold_y := GRILL_SURFACE_Y + cup_hold_height
-	var pos := seat + face * FRONT_M
-	pos.y = hold_y
-	## Stay on the cook side of the invisible soda wall.
-	pos = _clamp_cup_to_machine_front(pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z)
+	var pos := seat + face * FRONT_M + Vector3(0.0, 0.04, 0.0)
+	pos.y = lerpf(seat.y + 0.06, hold_y, 0.55)
+	## Stay on the cook side of the invisible soda wall (grab-block depth).
+	pos = _clamp_cup_to_machine_front(pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, _cup_soda_front_z())
 	return pos
 
 
@@ -26663,7 +26677,8 @@ func _start_cup_draw_from_rack() -> void:
 	_cup_prev_pos = _cup_draw_from
 	_cup_vel = Vector3.ZERO
 	## Avoidance fights nest→hand pulls — keep it off until the draw finishes.
-	_cup_machine_contact_grace = CUP_DRAW_DUR + 0.22
+	_cup_machine_contact_grace = CUP_DRAW_DUR + 0.18
+	_cup_grab_front_block_t = maxf(_cup_grab_front_block_t, CUP_GRAB_FRONT_BLOCK_SEC)
 	cup_drawing = true
 	_cup_draw_t = 0.0
 
@@ -26674,48 +26689,48 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		return
 	_cup_draw_t += delta
 	var u := clampf(_cup_draw_t / CUP_DRAW_DUR, 0.0, 1.0)
-	## Smoothstep → ease-out so the hand catch feels soft.
+	## Slow ease-in-out — reads as a continuous pull, not a hop then snap.
 	var s := u * u * (3.0 - 2.0 * u)
-	var e := 1.0 - pow(1.0 - s, 2.4)
+	var e := s * s * (3.0 - 2.0 * s)
 	var face := _cup_soda_face_dir()
 	var hand := _cup_hold_point_from_screen(get_viewport().get_mouse_position())
 	var front := _cup_rack_front_grab_pos()
 	var end := front
 	if hand != Vector3.ZERO:
 		end = hand
-		## Keep ahead of the invisible wall even if the cursor hugs the tanks.
-		var to_front := (end - front).dot(face)
-		if to_front < 0.0:
-			end += face * (-to_front)
-		end = _clamp_cup_to_machine_front(
-			end, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
-		)
-	## Two-stage path: nest → cook-side front, then front → hand.
-	var pos: Vector3
-	if e < 0.42:
-		var t := clampf(e / 0.42, 0.0, 1.0)
-		t = t * t * (3.0 - 2.0 * t)
-		var mid := _cup_draw_from.lerp(front, 0.55) + face * 0.06 + Vector3(0.0, 0.075, 0.0)
-		var omt := 1.0 - t
-		pos = omt * omt * _cup_draw_from + 2.0 * omt * t * mid + t * t * front
-	else:
-		var t := clampf((e - 0.42) / 0.58, 0.0, 1.0)
-		t = t * t * (3.0 - 2.0 * t)
-		var mid := front.lerp(end, 0.5) + face * 0.04 + Vector3(0.0, 0.038, 0.0)
-		var omt := 1.0 - t
-		pos = omt * omt * front + 2.0 * omt * t * mid + t * t * end
+		## During the fresh-grab block only: keep ahead of the cabinet wall.
+		if _cup_grab_front_block_t > 0.0:
+			var to_front := (end - front).dot(face)
+			if to_front < 0.0:
+				end += face * (-to_front)
+			end = _clamp_cup_to_machine_front(
+				end, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+			)
+		elif not _cup_near_fill_seat(end):
+			## After the block: light front wall only — fill bay stays open.
+			end = _clamp_cup_to_machine_front(
+				end, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z_FILL
+			)
+	## Single smooth cubic: nest → soft mid → hand (tracks cursor the whole way).
+	var mid := _cup_draw_from.lerp(end, 0.42) + face * 0.05 + Vector3(0.0, 0.09, 0.0)
+	var omt := 1.0 - e
+	var pos: Vector3 = omt * omt * _cup_draw_from + 2.0 * omt * e * mid + e * e * end
+	## Early frames bias toward the short front lift so it clears the tube rim.
+	if e < 0.28:
+		var lift_t := clampf(e / 0.28, 0.0, 1.0)
+		lift_t = lift_t * lift_t * (3.0 - 2.0 * lift_t)
+		pos = pos.lerp(front, (1.0 - lift_t) * 0.35)
 	var prev := cup_root.global_position
-	## Blend toward the path so mid-draw never jumps a full frame.
-	var draw_follow := clampf(delta * 16.0, 0.0, 1.0)
-	draw_follow = draw_follow * draw_follow * (3.0 - 2.0 * draw_follow)
+	## Soft chase of the path — lower rate = less rubber-band / disconnect.
+	var draw_follow := clampf(delta * 7.5, 0.0, 1.0)
 	cup_root.global_position = prev.lerp(pos, draw_follow)
 	if delta > 0.0001:
 		_cup_vel = (cup_root.global_position - prev) / delta
 	_cup_prev_pos = cup_root.global_position
 	cup_root.rotation_degrees = Vector3(
-		lerpf(0.0, -8.0, e),
+		lerpf(0.0, -6.0, e),
 		lerpf(cup_home_rot.y, 10.0, e),
-		sin(e * PI) * 4.0
+		sin(e * PI) * 2.5
 	)
 	var sc := lerpf(0.86, 1.0, e)
 	cup_root.scale = Vector3(sc, sc, sc)
@@ -26726,7 +26741,7 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		## Stay where the hand settled — do not resolve back into/behind the cabinet.
 		_cup_prev_pos = cup_root.global_position
 		_cup_vel = Vector3.ZERO
-		_cup_machine_contact_grace = maxf(_cup_machine_contact_grace, 0.35)
+		_cup_machine_contact_grace = maxf(_cup_machine_contact_grace, 0.2)
 
 func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	## Plane tracking at cup height (like other tools) — keeps the cursor on-screen.
@@ -26881,6 +26896,7 @@ func _update_held_cup(delta: float) -> void:
 		return
 	_cup_spout_unlock_grace = maxf(0.0, _cup_spout_unlock_grace - delta)
 	_cup_machine_contact_grace = maxf(0.0, _cup_machine_contact_grace - delta)
+	_cup_grab_front_block_t = maxf(0.0, _cup_grab_front_block_t - delta)
 	if _cup_flip_charging:
 		_cup_flip_hold_t = minf(_cup_flip_hold_t + delta, CUP_FLIP_PERFECT_HOLD * 4.0)
 		_cup_flip_charge_shake_t += delta
@@ -27028,12 +27044,17 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 	## Keep hand-held cups on the cook-facing side of the soda / soft-serve machines.
 	if allow_customer_reach:
 		return world_pos
+	var front_z := _cup_soda_front_z()
 	var clamped := _clamp_cup_to_machine_front(
-		world_pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+		world_pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, front_z
 	)
 	clamped = _clamp_cup_to_machine_front(
 		clamped, icecream_root, CUP_ICECREAM_FRONT_HALF_X, CUP_ICECREAM_FRONT_HEIGHT, CUP_ICECREAM_FRONT_Z
 	)
+	## After the fresh-grab block: skip solid hull shove so soft-lock can seat under the nozzles.
+	## Front wall above still stops deep dig-behind; fill bay uses the relaxed front_z.
+	if _cup_grab_front_block_t <= 0.0:
+		return clamped
 	if soda_root == null or not is_instance_valid(soda_root) or soda_colliders.is_empty():
 		return clamped
 	## Match the real plastic shell (old half-size was too small → dig-ins).
@@ -27075,7 +27096,7 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 	var out_center: Vector3 = soda_root.global_transform * resolved
 	var out := out_center - Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	out = _clamp_cup_to_machine_front(
-		out, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+		out, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, front_z
 	)
 	out = _clamp_cup_to_machine_front(
 		out, icecream_root, CUP_ICECREAM_FRONT_HALF_X, CUP_ICECREAM_FRONT_HEIGHT, CUP_ICECREAM_FRONT_Z
