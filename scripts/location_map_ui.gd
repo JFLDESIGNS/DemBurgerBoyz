@@ -20,15 +20,21 @@ var _status_label: Label = null
 var _map_host: Control = null
 var _map_tex_rect: TextureRect = null
 var _map_tex_size: Vector2 = Vector2(1024, 682)
-var _cat_marker: Control = null ## Black cat silhouette at the parked truck / window
+var _cat_marker: Control = null ## Black circle + ears with white glow; wanders the map
+var _cat_uv: Vector2 = Vector2(0.5, 0.5)
+var _cat_target_uv: Vector2 = Vector2(0.5, 0.5)
+var _cat_wait: float = 0.0
+var _cat_wander_ready: bool = false
 const TOWN_MAP_PATH := "res://assets/ui/town_map.png"
-## Offset from the parked pin so the cat sits on the sill beside the spot.
-const CAT_MAP_UV_OFFSET := Vector2(-0.028, 0.034)
+const CAT_MARKER_SIZE := 40.0
+const CAT_WANDER_SPEED := 0.085 ## UV units per second toward next spot
+const CAT_PAUSE_MIN := 0.55
+const CAT_PAUSE_MAX := 1.8
 
 
 func _ready() -> void:
 	## Built from open() so fonts / theme are ready.
-	pass
+	set_process(false)
 
 
 func open(current_id: String) -> void:
@@ -41,26 +47,35 @@ func open(current_id: String) -> void:
 		_map_tex_rect.texture = _load_town_map_texture()
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	_ensure_cat_wander_start()
 	_layout_map_and_pins()
 	_refresh_pins()
 	_refresh_detail()
 	call_deferred("_layout_map_and_pins")
-
-
-func set_parked_id(location_id: String) -> void:
-	## Co-op parking sync — refresh pin highlight + cat without reopening.
-	_parked_id = location_id if not location_id.is_empty() else TruckLocationsScript.DEFAULT_ID
-	if not visible:
-		return
-	_refresh_pins()
-	_layout_cat_marker()
-	_refresh_detail()
+	set_process(true)
 
 
 func close() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	set_process(false)
 	closed.emit()
+
+
+func set_parked_id(location_id: String) -> void:
+	## Co-op parking sync — refresh pin highlight without reopening.
+	_parked_id = location_id if not location_id.is_empty() else TruckLocationsScript.DEFAULT_ID
+	if not visible:
+		return
+	_refresh_pins()
+	_refresh_detail()
+
+
+func _process(delta: float) -> void:
+	if not visible or _cat_marker == null or not is_instance_valid(_cat_marker):
+		return
+	_tick_cat_wander(delta)
+	_layout_cat_marker()
 
 
 func _build() -> void:
@@ -285,55 +300,135 @@ func _spawn_cat_marker() -> void:
 	tex.texture = _make_black_cat_icon()
 	tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	tex.custom_minimum_size = Vector2(28, 28)
-	tex.size = Vector2(28, 28)
+	tex.custom_minimum_size = Vector2(CAT_MARKER_SIZE, CAT_MARKER_SIZE)
+	tex.size = Vector2(CAT_MARKER_SIZE, CAT_MARKER_SIZE)
 	tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	tex.z_index = 3
-	tex.tooltip_text = "Window cat"
+	tex.z_index = 8
+	tex.tooltip_text = "Street cat"
 	_map_host.add_child(tex)
 	_cat_marker = tex
+	_ensure_cat_wander_start()
 
 
 func _make_black_cat_icon() -> Texture2D:
-	## Tiny procedural black cat silhouette for the map.
-	var s := 32
+	## Readable map pin: soft white glow + black circle head + triangle ears.
+	var s := 64
 	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
-	var black := Color(0.05, 0.05, 0.07, 1.0)
-	## Body
-	for y in range(14, 27):
-		for x in range(8, 24):
-			var cx := (x - 16.0) / 8.0
-			var cy := (y - 20.0) / 6.5
-			if cx * cx + cy * cy <= 1.0:
+	var cx := 32.0
+	var cy := 36.0
+	## Soft white glow behind the cat.
+	for y in s:
+		for x in s:
+			var dx := (float(x) - cx) / 22.0
+			var dy := (float(y) - cy) / 22.0
+			var r2 := dx * dx + dy * dy
+			if r2 <= 1.0:
+				var a := pow(1.0 - r2, 1.35) * 0.92
+				img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a))
+	## Black circle body/head.
+	var black := Color(0.04, 0.04, 0.05, 1.0)
+	for y in s:
+		for x in s:
+			var dx := (float(x) - cx) / 14.5
+			var dy := (float(y) - cy) / 14.5
+			if dx * dx + dy * dy <= 1.0:
 				img.set_pixel(x, y, black)
-	## Head
-	for y in range(6, 18):
-		for x in range(10, 22):
-			var cx := (x - 16.0) / 6.0
-			var cy := (y - 12.0) / 5.5
-			if cx * cx + cy * cy <= 1.0:
-				img.set_pixel(x, y, black)
-	## Ears
-	for y in range(2, 10):
-		for x in range(10, 15):
-			if (x - 10) + (y - 2) * 0.55 < 4.2 and (14 - x) + (y - 2) * 0.2 < 4.5:
-				img.set_pixel(x, y, black)
-		for x in range(17, 22):
-			if (22 - x) + (y - 2) * 0.55 < 4.2 and (x - 17) + (y - 2) * 0.2 < 4.5:
-				img.set_pixel(x, y, black)
-	## Tail curl
-	for i in 10:
-		var t := float(i) / 9.0
-		var tx := int(22.0 + t * 6.0)
-		var ty := int(20.0 - sin(t * PI) * 7.0)
-		for ox in range(-1, 2):
-			for oy in range(-1, 2):
-				var px := tx + ox
-				var py := ty + oy
-				if px >= 0 and px < s and py >= 0 and py < s:
-					img.set_pixel(px, py, black)
+	## Left ear triangle.
+	_fill_ear_triangle(img, Vector2(18, 28), Vector2(26, 28), Vector2(20, 10), black)
+	## Right ear triangle.
+	_fill_ear_triangle(img, Vector2(38, 28), Vector2(46, 28), Vector2(44, 10), black)
+	## Tiny white eye dots so it reads as a face.
+	img.set_pixel(27, 34, Color(0.92, 0.92, 0.95, 1.0))
+	img.set_pixel(28, 34, Color(0.92, 0.92, 0.95, 1.0))
+	img.set_pixel(36, 34, Color(0.92, 0.92, 0.95, 1.0))
+	img.set_pixel(37, 34, Color(0.92, 0.92, 0.95, 1.0))
 	return ImageTexture.create_from_image(img)
+
+
+func _fill_ear_triangle(img: Image, a: Vector2, b: Vector2, tip: Vector2, col: Color) -> void:
+	var min_x := int(floor(minf(a.x, minf(b.x, tip.x))))
+	var max_x := int(ceil(maxf(a.x, maxf(b.x, tip.x))))
+	var min_y := int(floor(minf(a.y, minf(b.y, tip.y))))
+	var max_y := int(ceil(maxf(a.y, maxf(b.y, tip.y))))
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in range(clampi(min_y, 0, h - 1), clampi(max_y, 0, h - 1) + 1):
+		for x in range(clampi(min_x, 0, w - 1), clampi(max_x, 0, w - 1) + 1):
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			if _point_in_triangle(p, a, b, tip):
+				img.set_pixel(x, y, col)
+
+
+func _point_in_triangle(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> bool:
+	var v0 := c - a
+	var v1 := b - a
+	var v2 := p - a
+	var dot00 := v0.dot(v0)
+	var dot01 := v0.dot(v1)
+	var dot02 := v0.dot(v2)
+	var dot11 := v1.dot(v1)
+	var dot12 := v1.dot(v2)
+	var inv := 1.0 / maxf(dot00 * dot11 - dot01 * dot01, 0.00001)
+	var u := (dot11 * dot02 - dot01 * dot12) * inv
+	var v := (dot00 * dot12 - dot01 * dot02) * inv
+	return u >= 0.0 and v >= 0.0 and (u + v) <= 1.0
+
+
+func _ensure_cat_wander_start() -> void:
+	var spots := _cat_wander_uvs()
+	if spots.is_empty():
+		_cat_uv = Vector2(0.5, 0.5)
+		_cat_target_uv = _cat_uv
+		_cat_wander_ready = true
+		return
+	if not _cat_wander_ready:
+		_cat_uv = spots[randi() % spots.size()]
+		_cat_wander_ready = true
+	_pick_next_cat_target(spots)
+	_cat_wait = randf_range(0.15, 0.6)
+
+
+func _cat_wander_uvs() -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	for loc in TruckLocationsScript.all():
+		var uv: Vector2 = loc.get("map", Vector2.ZERO)
+		if uv != Vector2.ZERO:
+			out.append(uv)
+	return out
+
+
+func _pick_next_cat_target(spots: Array[Vector2] = []) -> void:
+	if spots.is_empty():
+		spots = _cat_wander_uvs()
+	if spots.is_empty():
+		_cat_target_uv = _cat_uv
+		return
+	var pick := spots[randi() % spots.size()]
+	## Prefer a different spot so the cat actually travels.
+	var guard := 0
+	while pick.distance_squared_to(_cat_uv) < 0.002 and guard < 8:
+		pick = spots[randi() % spots.size()]
+		guard += 1
+	_cat_target_uv = pick
+
+
+func _tick_cat_wander(delta: float) -> void:
+	if _cat_wait > 0.0:
+		_cat_wait = maxf(0.0, _cat_wait - delta)
+		return
+	var to := _cat_target_uv - _cat_uv
+	var dist := to.length()
+	if dist < 0.008:
+		_cat_uv = _cat_target_uv
+		_cat_wait = randf_range(CAT_PAUSE_MIN, CAT_PAUSE_MAX)
+		_pick_next_cat_target()
+		return
+	var step := CAT_WANDER_SPEED * delta
+	if step >= dist:
+		_cat_uv = _cat_target_uv
+	else:
+		_cat_uv += to.normalized() * step
 
 
 func _layout_cat_marker() -> void:
@@ -342,10 +437,9 @@ func _layout_cat_marker() -> void:
 	var img_r := _map_image_rect()
 	if img_r.size.x < 8.0 or img_r.size.y < 8.0:
 		return
-	var loc := TruckLocationsScript.get_by_id(_parked_id)
-	var uv: Vector2 = loc.get("map", Vector2(0.14, 0.76))
-	uv = Vector2(clampf(uv.x + CAT_MAP_UV_OFFSET.x, 0.02, 0.98), clampf(uv.y + CAT_MAP_UV_OFFSET.y, 0.02, 0.98))
-	var sz := _cat_marker.custom_minimum_size
+	var uv := Vector2(clampf(_cat_uv.x, 0.04, 0.96), clampf(_cat_uv.y, 0.04, 0.96))
+	var sz := Vector2(CAT_MARKER_SIZE, CAT_MARKER_SIZE)
+	_cat_marker.custom_minimum_size = sz
 	_cat_marker.position = img_r.position + Vector2(uv.x * img_r.size.x, uv.y * img_r.size.y) - sz * 0.5
 	_cat_marker.size = sz
 
