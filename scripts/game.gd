@@ -392,24 +392,33 @@ const GRILL_GLOW_BRIGHT_MULT := 1.18
 const GRILL_HEAT_CFG_SECTION := "grill_heat"
 const GRILL_HEAT_BARS_MAX := 25
 const GRILL_HEAT_BAR_SPAN := 0.90 ## meters spanned by the Grate Bars count (shared line width)
-var grill_heat_size: float = 1.05 ## Multiplies FULL/½ glow blot size
+const GRILL_HEAT_SECTIONS_MAX := 12
+var grill_heat_size: float = 1.45 ## Multiplies each glow blot size
+var grill_heat_sections: int = 4 ## Glow blot count across cook steel (FULL+½)
 var grill_heat_bars: int = 5 ## Vertical grate lines across BAR_SPAN (same width on every spot)
 var grill_heat_gap: float = 0.38 ## Fraction of each bar period with no light (0–0.7)
-var grill_heat_opacity: float = 0.78
+var grill_heat_opacity: float = 0.95
 var grill_heat_flicker: float = 0.22
 var grill_heat_wobble: float = 0.18
 var grill_heat_height: float = 0.027 ## Local Y above zone panels
 var grill_heat_tint := Color(0.92, 0.16, 0.04) ## Subtle ember red
-## Multicolor oil/water seasoning film — Hidden tunable.
+var _grill_heat_cook_x0: float = 0.0 ## World X span of cook steel (for section rebuild)
+var _grill_heat_cook_x1: float = 0.0
+## Multicolor oil/water seasoning film — Hidden tunable (v2 = stronger defaults).
 const GRILL_SEASON_CFG_SECTION := "grill_season"
-var grill_season_opacity: float = 0.55
-var grill_season_size: float = 1.05 ## splotch_scale
-var grill_season_reps: float = 1.0 ## uv_repeat — more = denser islands
+const GRILL_SEASON_CFG_VERSION := 2
+var grill_season_opacity: float = 1.45
+var grill_season_size: float = 1.45 ## splotch_scale
+var grill_season_reps: float = 1.35 ## uv_repeat — more = denser islands
 var grill_season_height: float = 0.0232
 var grill_season_off_x: float = 0.0
 var grill_season_off_z: float = 0.0 ## UV Y offset (grill depth)
-var grill_season_chroma: float = 0.32
-var grill_season_strength: float = 0.12 ## splotch body strength
+var grill_season_chroma: float = 0.78
+var grill_season_strength: float = 0.62 ## splotch body strength
+var grill_season_brightness: float = 1.4
+var grill_season_threshold: float = 0.40 ## lower = more islands
+var grill_season_vignette: float = 0.22
+var grill_season_edge: float = 0.30
 var grill_season_mesh: MeshInstance3D = null
 var grill_season_mat: ShaderMaterial = null
 var _grill_glow_tween: Tween = null
@@ -6403,15 +6412,6 @@ func _build_flat_top_grill() -> void:
 			else:
 				cook_x0 = minf(cook_x0, float(z["x0"]))
 				cook_x1 = maxf(cook_x1, float(z["x1"]))
-			var glow_w := zw * 0.92 * grill_heat_size
-			var glow_d := GRILL_DEPTH * 0.82 * grill_heat_size
-			_add_heat_glow(
-				surface,
-				Vector3(local_cx, grill_heat_height, 0),
-				glow_w,
-				glow_d,
-				float(z["glow"])
-			)
 
 	if grill_surface_mat == null:
 		grill_surface_mat = _make_grill_zone_metal(Color(0.30, 0.32, 0.36), 0.14, 0.0, GRILL_WIDTH, GRILL_DEPTH)
@@ -6425,6 +6425,9 @@ func _build_flat_top_grill() -> void:
 	## Spill omnis kept off — bloom made them look like hot orbs.
 	var cook_cx_world := (cook_x0 + cook_x1) * 0.5 if cook_started else GRILL_CENTER_X
 	var cook_w := maxf(0.2, cook_x1 - cook_x0) if cook_started else GRILL_WIDTH * 0.7
+	_grill_heat_cook_x0 = cook_x0 if cook_started else GRILL_CENTER_X - cook_w * 0.5
+	_grill_heat_cook_x1 = cook_x1 if cook_started else GRILL_CENTER_X + cook_w * 0.5
+	_rebuild_grill_heat_glows(surface)
 	var heat := OmniLight3D.new()
 	heat.light_color = Color(1.0, 0.55, 0.22)
 	heat.light_energy = 0.0
@@ -12366,6 +12369,60 @@ func _set_grill_heat_glow_mul(value: float, mat: ShaderMaterial) -> void:
 		mat.set_shader_parameter("glow_mul", value)
 
 
+func _rebuild_grill_heat_glows(parent: Node3D = null) -> void:
+	## Tile N heat blots across cook steel (HOLD excluded). Live-retunable from Hidden.
+	var surf: Node3D = parent
+	if surf == null or not is_instance_valid(surf):
+		surf = grill_surface_node
+	if surf == null or not is_instance_valid(surf):
+		return
+	## Preserve lit state across rebuild.
+	var was_lit := grill_on
+	var old_mul := 0.0
+	for g in grill_glow_meshes:
+		if g != null and is_instance_valid(g):
+			var sm0 := g.material_override as ShaderMaterial
+			if sm0 != null:
+				old_mul = maxf(old_mul, float(sm0.get_shader_parameter("glow_mul")))
+			g.queue_free()
+	grill_glow_meshes.clear()
+	grill_glow_root = null
+	var x0 := _grill_heat_cook_x0
+	var x1 := _grill_heat_cook_x1
+	if x1 <= x0 + 0.05:
+		x0 = GRILL_CENTER_X - GRILL_WIDTH * 0.25
+		x1 = GRILL_CENTER_X + GRILL_WIDTH * 0.35
+	var cook_w := maxf(0.25, x1 - x0)
+	var n := clampi(grill_heat_sections, 2, GRILL_HEAT_SECTIONS_MAX)
+	## Each section gets a blot sized to its cell, then scaled by heat_size.
+	var cell_w := cook_w / float(n)
+	var base_w := cell_w * 1.08
+	var base_d := GRILL_DEPTH * 0.78
+	for i in n:
+		var u := (float(i) + 0.5) / float(n)
+		var world_x := lerpf(x0, x1, u)
+		var local_x := world_x - GRILL_CENTER_X
+		## Stronger glow toward FULL (screen-left / +X), softer near ½.
+		var glow_i := lerpf(1.0, 0.48, u)
+		_add_heat_glow(
+			surf,
+			Vector3(local_x, grill_heat_height, 0.0),
+			base_w * grill_heat_size,
+			base_d * grill_heat_size,
+			glow_i
+		)
+	grill_glow_root = grill_glow_meshes[0] if not grill_glow_meshes.is_empty() else null
+	if was_lit:
+		var target := old_mul if old_mul > 0.02 else GRILL_GLOW_BRIGHT_MULT
+		for glow in grill_glow_meshes:
+			if glow == null or not is_instance_valid(glow):
+				continue
+			glow.visible = true
+			var sm := glow.material_override as ShaderMaterial
+			if sm != null:
+				sm.set_shader_parameter("glow_mul", target * float(glow.get_meta("base_glow_mul", 1.0)))
+
+
 func _add_heat_glow(parent: Node3D, local_pos: Vector3, width: float, depth: float, intensity: float) -> MeshInstance3D:
 	## Flat radial heat blot — additive shader with world-constant grate punch-outs.
 	var glow := MeshInstance3D.new()
@@ -12450,10 +12507,11 @@ func _load_grill_heat_settings() -> void:
 		return
 	if not cfg.has_section(GRILL_HEAT_CFG_SECTION):
 		return
-	grill_heat_size = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)), 0.6, 1.8)
+	grill_heat_size = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)), 0.4, 3.5)
+	grill_heat_sections = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "sections", grill_heat_sections)), 2, GRILL_HEAT_SECTIONS_MAX)
 	grill_heat_bars = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)), 2, GRILL_HEAT_BARS_MAX)
 	grill_heat_gap = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)), 0.05, 0.72)
-	grill_heat_opacity = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "opacity", grill_heat_opacity)), 0.0, 1.5)
+	grill_heat_opacity = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "opacity", grill_heat_opacity)), 0.0, 2.0)
 	grill_heat_flicker = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "flicker", grill_heat_flicker)), 0.0, 1.0)
 	grill_heat_wobble = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "wobble", grill_heat_wobble)), 0.0, 1.0)
 	grill_heat_height = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "height", grill_heat_height)), 0.01, 0.08)
@@ -12466,6 +12524,7 @@ func _save_grill_heat_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(GFX_CFG_PATH)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)
+	cfg.set_value(GRILL_HEAT_CFG_SECTION, "sections", grill_heat_sections)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "opacity", grill_heat_opacity)
@@ -12481,6 +12540,7 @@ func _save_grill_heat_settings() -> void:
 func _sync_grill_heat_hidden_ui() -> void:
 	var vals := {
 		"heat_size": grill_heat_size,
+		"heat_sections": float(grill_heat_sections),
 		"heat_bars": float(grill_heat_bars),
 		"heat_gap": grill_heat_gap,
 		"heat_opacity": grill_heat_opacity,
@@ -12496,7 +12556,8 @@ func _sync_grill_heat_hidden_ui() -> void:
 			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
 			var v := float(vals[key])
-			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if key == "heat_bars" else ("%.2f" % v)
+			var as_int: bool = key == "heat_bars" or key == "heat_sections"
+			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if as_int else ("%.2f" % v)
 
 
 func _make_residue_texture(seed_i: int) -> ImageTexture:
@@ -18131,9 +18192,12 @@ func _apply_grill_season_settings() -> void:
 		return
 	grill_season_mat.set_shader_parameter("splotch_strength", grill_season_strength)
 	grill_season_mat.set_shader_parameter("splotch_scale", grill_season_size)
-	grill_season_mat.set_shader_parameter("splotch_threshold", 0.52)
+	grill_season_mat.set_shader_parameter("splotch_threshold", grill_season_threshold)
 	grill_season_mat.set_shader_parameter("oil_chroma", grill_season_chroma)
 	grill_season_mat.set_shader_parameter("opacity", grill_season_opacity)
+	grill_season_mat.set_shader_parameter("brightness", grill_season_brightness)
+	grill_season_mat.set_shader_parameter("vignette_strength", grill_season_vignette)
+	grill_season_mat.set_shader_parameter("edge_darken", grill_season_edge)
 	grill_season_mat.set_shader_parameter("uv_offset_x", grill_season_off_x)
 	grill_season_mat.set_shader_parameter("uv_offset_y", grill_season_off_z)
 	grill_season_mat.set_shader_parameter("uv_repeat", grill_season_reps)
@@ -18145,19 +18209,38 @@ func _load_grill_season_settings() -> void:
 		return
 	if not cfg.has_section(GRILL_SEASON_CFG_SECTION):
 		return
-	grill_season_opacity = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "opacity", grill_season_opacity)), 0.0, 1.5)
+	var ver := int(cfg.get_value(GRILL_SEASON_CFG_SECTION, "version", 1))
+	## Old saves used near-invisible defaults — bump to the visible v2 preset once.
+	if ver < GRILL_SEASON_CFG_VERSION:
+		grill_season_opacity = 1.45
+		grill_season_size = 1.45
+		grill_season_reps = 1.35
+		grill_season_chroma = 0.78
+		grill_season_strength = 0.62
+		grill_season_brightness = 1.4
+		grill_season_threshold = 0.40
+		grill_season_vignette = 0.22
+		grill_season_edge = 0.30
+		_save_grill_season_settings()
+		return
+	grill_season_opacity = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "opacity", grill_season_opacity)), 0.0, 3.0)
 	grill_season_size = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "size", grill_season_size)), 0.3, 8.0)
 	grill_season_reps = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "reps", grill_season_reps)), 0.25, 4.0)
 	grill_season_height = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "height", grill_season_height)), 0.01, 0.08)
 	grill_season_off_x = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "off_x", grill_season_off_x)), -2.0, 2.0)
 	grill_season_off_z = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "off_z", grill_season_off_z)), -2.0, 2.0)
 	grill_season_chroma = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "chroma", grill_season_chroma)), 0.0, 1.0)
-	grill_season_strength = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "strength", grill_season_strength)), 0.0, 1.0)
+	grill_season_strength = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "strength", grill_season_strength)), 0.0, 1.5)
+	grill_season_brightness = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "brightness", grill_season_brightness)), 0.2, 2.5)
+	grill_season_threshold = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "threshold", grill_season_threshold)), 0.15, 0.95)
+	grill_season_vignette = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "vignette", grill_season_vignette)), 0.0, 1.0)
+	grill_season_edge = clampf(float(cfg.get_value(GRILL_SEASON_CFG_SECTION, "edge", grill_season_edge)), 0.0, 1.0)
 
 
 func _save_grill_season_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(GRILL_SEASON_CFG_SECTION, "version", GRILL_SEASON_CFG_VERSION)
 	cfg.set_value(GRILL_SEASON_CFG_SECTION, "opacity", grill_season_opacity)
 	cfg.set_value(GRILL_SEASON_CFG_SECTION, "size", grill_season_size)
 	cfg.set_value(GRILL_SEASON_CFG_SECTION, "reps", grill_season_reps)
@@ -18166,6 +18249,10 @@ func _save_grill_season_settings() -> void:
 	cfg.set_value(GRILL_SEASON_CFG_SECTION, "off_z", grill_season_off_z)
 	cfg.set_value(GRILL_SEASON_CFG_SECTION, "chroma", grill_season_chroma)
 	cfg.set_value(GRILL_SEASON_CFG_SECTION, "strength", grill_season_strength)
+	cfg.set_value(GRILL_SEASON_CFG_SECTION, "brightness", grill_season_brightness)
+	cfg.set_value(GRILL_SEASON_CFG_SECTION, "threshold", grill_season_threshold)
+	cfg.set_value(GRILL_SEASON_CFG_SECTION, "vignette", grill_season_vignette)
+	cfg.set_value(GRILL_SEASON_CFG_SECTION, "edge", grill_season_edge)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -18179,6 +18266,10 @@ func _sync_grill_season_hidden_ui() -> void:
 		"season_off_z": grill_season_off_z,
 		"season_chroma": grill_season_chroma,
 		"season_strength": grill_season_strength,
+		"season_brightness": grill_season_brightness,
+		"season_threshold": grill_season_threshold,
+		"season_vignette": grill_season_vignette,
+		"season_edge": grill_season_edge,
 	}
 	for key in vals.keys():
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
@@ -35633,11 +35724,18 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(heat_lab, true, 13)
 	heat_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	options_hidden_room_tone_box.add_child(heat_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_size", "Heat Spot Size", 0.6, 1.8, 0.02,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_size", "Heat Spot Size", 0.4, 3.5, 0.05,
 		func(): return grill_heat_size,
 		func(v: float):
-			grill_heat_size = clampf(v, 0.6, 1.8)
+			grill_heat_size = clampf(v, 0.4, 3.5)
 			_apply_grill_heat_settings()
+			_save_grill_heat_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_sections", "Heat Sections", 2.0, float(GRILL_HEAT_SECTIONS_MAX), 1.0,
+		func(): return float(grill_heat_sections),
+		func(v: float):
+			grill_heat_sections = clampi(int(round(v)), 2, GRILL_HEAT_SECTIONS_MAX)
+			_rebuild_grill_heat_glows()
 			_save_grill_heat_settings()
 	)
 	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_bars", "Grate Bars", 2.0, float(GRILL_HEAT_BARS_MAX), 1.0,
@@ -35654,10 +35752,10 @@ func _build_options_menu() -> void:
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_opacity", "Heat Opacity", 0.0, 1.5, 0.02,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_opacity", "Heat Opacity", 0.0, 2.0, 0.02,
 		func(): return grill_heat_opacity,
 		func(v: float):
-			grill_heat_opacity = clampf(v, 0.0, 1.5)
+			grill_heat_opacity = clampf(v, 0.0, 2.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
@@ -35709,17 +35807,24 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(season_lab, true, 13)
 	season_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	options_hidden_room_tone_box.add_child(season_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_opacity", "Spot Opacity", 0.0, 1.5, 0.02,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_opacity", "Spot Opacity", 0.0, 3.0, 0.02,
 		func(): return grill_season_opacity,
 		func(v: float):
-			grill_season_opacity = clampf(v, 0.0, 1.5)
+			grill_season_opacity = clampf(v, 0.0, 3.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_strength", "Spot Strength", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_strength", "Spot Strength", 0.0, 1.5, 0.01,
 		func(): return grill_season_strength,
 		func(v: float):
-			grill_season_strength = clampf(v, 0.0, 1.0)
+			grill_season_strength = clampf(v, 0.0, 1.5)
+			_apply_grill_season_settings()
+			_save_grill_season_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_brightness", "Spot Brightness", 0.2, 2.5, 0.02,
+		func(): return grill_season_brightness,
+		func(v: float):
+			grill_season_brightness = clampf(v, 0.2, 2.5)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
@@ -35734,6 +35839,27 @@ func _build_options_menu() -> void:
 		func(): return grill_season_reps,
 		func(v: float):
 			grill_season_reps = clampf(v, 0.25, 4.0)
+			_apply_grill_season_settings()
+			_save_grill_season_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_threshold", "Spot Coverage", 0.15, 0.95, 0.01,
+		func(): return grill_season_threshold,
+		func(v: float):
+			grill_season_threshold = clampf(v, 0.15, 0.95)
+			_apply_grill_season_settings()
+			_save_grill_season_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_vignette", "Edge Wear", 0.0, 1.0, 0.01,
+		func(): return grill_season_vignette,
+		func(v: float):
+			grill_season_vignette = clampf(v, 0.0, 1.0)
+			_apply_grill_season_settings()
+			_save_grill_season_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_edge", "Spot Rim Dark", 0.0, 1.0, 0.01,
+		func(): return grill_season_edge,
+		func(v: float):
+			grill_season_edge = clampf(v, 0.0, 1.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
