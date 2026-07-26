@@ -1745,11 +1745,11 @@ const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
 ## Soft-lock fill lift uses runtime `cup_fill_extra_y` (Hidden menu).
 ## Keep seat helpful under the stream, but easy to yank free and place elsewhere.
-const CUP_FILL_LOCK_PULL := 0.75
-const CUP_FILL_ACQUIRE := 0.22 ## Easier catch past the cabinet lip
-const CUP_FILL_RELEASE := 0.15
-const CUP_FILL_TIGHT := 0.04
-const CUP_FILL_UNLOCK_GRACE := 0.40 ## after break, no re-magnet so you can walk away
+const CUP_FILL_LOCK_PULL := 0.58
+const CUP_FILL_ACQUIRE := 0.20 ## Easier catch past the cabinet lip
+const CUP_FILL_RELEASE := 0.11 ## Shorter leash — yank free without fighting the magnet
+const CUP_FILL_TIGHT := 0.035
+const CUP_FILL_UNLOCK_GRACE := 0.55 ## after break, no re-magnet so you can walk away
 ## Flippy-cup: RMB hold → release pitches forward; 0.5s = one 180° rim-down, 1.0s = two flips (540°).
 const CUP_FLIP_PERFECT_HOLD := 0.5
 const CUP_FLIP_MIN_HOLD := 0.08
@@ -2827,6 +2827,7 @@ func _process(delta: float) -> void:
 		_update_held_shaker(delta)
 	_update_tree_shake_hold(delta)
 	_tick_ttt_tap_window(delta)
+	_update_grill_ttt_hover()
 	if oil_held:
 		_update_held_oil(delta)
 	elif oil_root != null:
@@ -5287,25 +5288,31 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 
 func _register_hold_ttt_tap(world_pos: Vector3) -> void:
 	## Triple-tap HOLD cook-edge (closest to us) → reveal scratched tic-tac-toe.
-	## Once revealed, taps on cells place X/O for whoever clicks.
+	## Once revealed, taps place X/O using the cursor/hover cell (not a tip offset miss).
 	if world_pos == Vector3.ZERO or _spatula_mute_ting:
 		return
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		return
-	var zone := _grill_zone_at(world_pos)
-	if str(zone.get("id", "")) != "hold":
-		return
-	if _grill_hold_drum_pad_at(world_pos) != TTT_COOK_PAD:
-		return
+	## Prefer the grill under the mouse so the mark matches the ghost preview.
+	var aim := _grill_plane_from_screen(get_viewport().get_mouse_position())
+	if aim == Vector3.ZERO:
+		aim = world_pos
 	if _grill_ttt != null and is_instance_valid(_grill_ttt) and bool(_grill_ttt.get("revealed")):
 		var cell := -1
-		if _grill_ttt.has_method("cell_at_world"):
+		if _grill_ttt.has_method("hover_cell"):
+			cell = int(_grill_ttt.hover_cell())
+		if cell < 0 and _grill_ttt.has_method("cell_at_world"):
+			cell = int(_grill_ttt.cell_at_world(aim))
+		if cell < 0 and _grill_ttt.has_method("cell_at_world"):
 			cell = int(_grill_ttt.cell_at_world(world_pos))
 		if cell >= 0 and bool(_grill_ttt.is_playable()):
 			_request_ttt_move(cell)
 			return
 		## Finished game — triple-tap again to scratch a fresh board.
 		if int(_grill_ttt.get("winner")) != 0:
+			var zone_fin := _grill_zone_at(aim)
+			if str(zone_fin.get("id", "")) != "hold":
+				return
 			_ttt_tap_cool = TTT_TAP_WINDOW
 			_ttt_tap_count += 1
 			if _ttt_tap_count >= 3:
@@ -5313,11 +5320,38 @@ func _register_hold_ttt_tap(world_pos: Vector3) -> void:
 				_request_ttt_reveal(true)
 			return
 		return
+	var zone := _grill_zone_at(aim)
+	if str(zone.get("id", "")) != "hold":
+		return
+	if _grill_hold_drum_pad_at(aim) != TTT_COOK_PAD and _grill_hold_drum_pad_at(world_pos) != TTT_COOK_PAD:
+		return
 	_ttt_tap_cool = TTT_TAP_WINDOW
 	_ttt_tap_count += 1
 	if _ttt_tap_count >= 3:
 		_ttt_tap_count = 0
 		_request_ttt_reveal(false)
+
+
+func _update_grill_ttt_hover() -> void:
+	## Ghost X/O under the cursor while the board is playable.
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if not bool(_grill_ttt.get("revealed")) or not bool(_grill_ttt.is_playable()):
+		if _grill_ttt.has_method("clear_hover"):
+			_grill_ttt.clear_hover()
+		return
+	if camera == null or get_viewport() == null:
+		return
+	var aim := _grill_plane_from_screen(get_viewport().get_mouse_position())
+	if aim == Vector3.ZERO:
+		if _grill_ttt.has_method("clear_hover"):
+			_grill_ttt.clear_hover()
+		return
+	var cell := -1
+	if _grill_ttt.has_method("cell_at_world"):
+		cell = int(_grill_ttt.cell_at_world(aim))
+	if _grill_ttt.has_method("set_hover_cell"):
+		_grill_ttt.set_hover_cell(cell)
 
 
 func _tick_ttt_tap_window(delta: float) -> void:
@@ -27657,20 +27691,21 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	if locked_valid:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
-		if locked_d <= CUP_FILL_RELEASE:
-			## Center is firm; edge pull fades hard so a short drag frees the cup.
-			var tight := clampf(1.0 - locked_d / CUP_FILL_RELEASE, 0.0, 1.0)
-			var pull_xz := lerpf(0.22, CUP_FILL_LOCK_PULL, tight * tight)
-			if locked_d <= CUP_FILL_TIGHT:
-				pull_xz = CUP_FILL_LOCK_PULL
-			var out := hit
-			out.x = lerpf(hit.x, locked_target.x, pull_xz)
-			out.z = lerpf(hit.z, locked_target.z, pull_xz)
-			out.y = lerpf(hit.y, locked_target.y, lerpf(0.35, 0.85, tight))
-			return out
-		_cup_spout_lock = null
-		_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
-		return hit
+		## Hard break if the hand is past the leash — don't keep tugging.
+		if locked_d > CUP_FILL_RELEASE:
+			_cup_spout_lock = null
+			_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
+			return hit
+		## Center is firm; edge pull fades hard so a short drag frees the cup.
+		var tight := clampf(1.0 - locked_d / CUP_FILL_RELEASE, 0.0, 1.0)
+		var pull_xz := lerpf(0.12, CUP_FILL_LOCK_PULL, tight * tight)
+		if locked_d <= CUP_FILL_TIGHT:
+			pull_xz = CUP_FILL_LOCK_PULL
+		var out := hit
+		out.x = lerpf(hit.x, locked_target.x, pull_xz)
+		out.z = lerpf(hit.z, locked_target.z, pull_xz)
+		out.y = lerpf(hit.y, locked_target.y, lerpf(0.20, 0.70, tight))
+		return out
 
 	var best_node: Node3D = null
 	var best_target := Vector3.ZERO
@@ -27805,18 +27840,21 @@ func _update_held_cup(delta: float) -> void:
 		if _cup_spout_unlock_grace > 0.0:
 			follow *= 0.72
 		var desired := prev.lerp(seat, follow)
-		## Fill bay: spring toward the deck seat + damp so it can wobble without glitch-fighting.
+		## Fill bay: follow the soft-lock seat (already fades at the leash edge).
+		## Only plant Y on the drip deck — do NOT re-spring XZ to the nozzle center
+		## (that was gluing the cup so you couldn't yank away).
 		if can_use_fill_bay and fill_tip != null and is_instance_valid(fill_tip):
 			var fill_seat := _cup_target_for_spout(fill_tip)
-			var to_seat := Vector3(fill_seat.x - prev.x, 0.0, fill_seat.z - prev.z)
-			## Soft spring (not a hard snap) — overshoot settles instead of oscillating.
-			desired.x = prev.x + to_seat.x * clampf(delta * 14.0, 0.0, 1.0)
-			desired.z = prev.z + to_seat.z * clampf(delta * 14.0, 0.0, 1.0)
+			desired.x = seat.x
+			desired.z = seat.z
 			desired.y = fill_seat.y
-			## Bleed lateral velocity hard while parked under the nozzle.
-			_cup_vel.x *= clampf(1.0 - delta * 10.0, 0.0, 1.0)
-			_cup_vel.z *= clampf(1.0 - delta * 10.0, 0.0, 1.0)
-			_cup_vel.y = 0.0
+			## If the soft-lock already broke this frame, stop the bay plant.
+			if locked_tip == null and not _cup_pouring:
+				desired = seat
+			else:
+				_cup_vel.x *= clampf(1.0 - delta * 6.0, 0.0, 1.0)
+				_cup_vel.z *= clampf(1.0 - delta * 6.0, 0.0, 1.0)
+				_cup_vel.y = 0.0
 		var step := desired - prev
 		var max_step := (CUP_FILL_FOLLOW_MAX_SPEED if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
@@ -28123,14 +28161,15 @@ func _spawn_cup_splash_drops() -> void:
 
 
 func _ensure_soda_overfill_cascades(count: int = 6) -> void:
-	## Persistent pour ribbons: 3 streams × 2 segments (rim→tray, tray→grill bounce).
+	## Persistent pour ribbons: 3 streams × 2 segments (rim→guard, guard→grill bounce).
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.006
-		cyl.bottom_radius = 0.013
-		cyl.height = 0.12
+		## Chunkier foam hose so all three streams read on camera.
+		cyl.top_radius = 0.016
+		cyl.bottom_radius = 0.032
+		cyl.height = 0.20
 		cyl.cap_top = false
 		cyl.cap_bottom = false
 		mi.mesh = cyl
@@ -28157,16 +28196,25 @@ func _soda_overfill_cook_forward() -> Vector3:
 	return Vector3(0.0, 0.0, 1.0)
 
 
+func _soda_splash_guard_world_y() -> float:
+	## Mid-height of the stainless splash lip on the far grill edge.
+	return GRILL_SURFACE_Y + 3.25 * INCH_TO_M * 0.55
+
+
+func _soda_splash_guard_z() -> float:
+	return GRILL_SURFACE_Z + GRILL_DEPTH * 0.5
+
+
 func _tick_soda_overfill_breaks(delta: float) -> void:
-	## Short on/off bursts so overflow isn't a continuous hose.
+	## Mostly on — short flickers only, so you always see the three streams.
 	_soda_overfill_flow_t = maxf(0.0, _soda_overfill_flow_t - delta)
 	if _soda_overfill_flow_t > 0.0:
 		return
 	_soda_overfill_flow_on = not _soda_overfill_flow_on
 	if _soda_overfill_flow_on:
-		_soda_overfill_flow_t = randf_range(0.45, 0.85)
+		_soda_overfill_flow_t = randf_range(0.85, 1.35)
 	else:
-		_soda_overfill_flow_t = randf_range(0.08, 0.18)
+		_soda_overfill_flow_t = randf_range(0.04, 0.09)
 
 
 func _place_soda_overfill_ribbon(
@@ -28175,7 +28223,7 @@ func _place_soda_overfill_ribbon(
 ) -> void:
 	var mid := (lip + land) * 0.5
 	var along := land - lip
-	var len := maxf(along.length(), 0.04)
+	var len := maxf(along.length(), 0.06)
 	mi.visible = true
 	mi.global_position = mid
 	var y_axis := along / len
@@ -28188,8 +28236,8 @@ func _place_soda_overfill_ribbon(
 	var cyl := mi.mesh as CylinderMesh
 	if cyl:
 		cyl.height = len
-		cyl.top_radius = 0.0055 * thin
-		cyl.bottom_radius = 0.013 * thin
+		cyl.top_radius = 0.014 * thin
+		cyl.bottom_radius = 0.030 * thin
 	var mat := mi.material_override as ShaderMaterial
 	if mat:
 		## Almost all foam — tiny soda tint so flavor still reads.
@@ -28200,12 +28248,11 @@ func _place_soda_overfill_ribbon(
 
 
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Three foam streams: rim → drip tray bounce → longer stretch onto the grill.
+	## Three fat foam streams: rim → splash-guard bounce → grill land.
 	if cup_root == null or world == null:
 		return
 	_ensure_soda_overfill_cascades(6)
 	_tick_soda_overfill_breaks(delta)
-	var deck_y := _cup_deck_fill_y()
 	var foam_col := Color(0.98, 0.97, 0.94, 0.96)
 	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
 	var foamish := Color(
@@ -28214,9 +28261,16 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 		lerpf(foam_col.b, pop.b, 0.18),
 		0.92
 	)
-	var forward := _soda_overfill_cook_forward()
-	## Three fixed spray angles toward the cook — always three streams when flowing.
-	var yaw_offsets: Array[float] = [-0.42, 0.0, 0.42]
+	var guard_z := _soda_splash_guard_z()
+	var guard_y := _soda_splash_guard_world_y()
+	## Spread hits across the splash lip facing the soda / cook.
+	var guard_xs: Array[float] = [
+		GRILL_CENTER_X - GRILL_WIDTH * 0.30,
+		GRILL_CENTER_X - GRILL_WIDTH * 0.08,
+		GRILL_CENTER_X + GRILL_WIDTH * 0.14,
+	]
+	## Guard face normal points toward the cook (−Z).
+	var guard_n := Vector3(0.0, 0.0, -1.0)
 	for i in 3:
 		var mi_a := _soda_overfill_cascade_meshes[i * 2] as MeshInstance3D
 		var mi_b := _soda_overfill_cascade_meshes[i * 2 + 1] as MeshInstance3D
@@ -28226,36 +28280,40 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 			mi_a.visible = false
 			mi_b.visible = false
 			continue
-		var outward: Vector3 = forward.rotated(Vector3.UP, yaw_offsets[i]).normalized()
-		## Lip exit + first hit on the drip tray (short hop).
-		var lip := rim + outward * (CUP_SHELL_TOP_R * 0.94) + Vector3(0.0, 0.006, 0.0)
-		var tray_hit := lip + outward * lerpf(0.11, 0.16, float(i) * 0.35) \
-			+ Vector3(0.0, 0.0, 0.02)
-		tray_hit.y = deck_y + 0.004
-		## Reflect: keep cook-forward bias, skim off the tray toward the grill.
-		var bounce_dir := (forward * 0.82 + outward * 0.28).normalized()
-		var bounce_len := lerpf(0.38, 0.52, 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.004 + float(i) * 1.7))
-		var grill_land := tray_hit + bounce_dir * bounce_len
-		grill_land.y = GRILL_SURFACE_Y + 0.012
-		## Stretch the bounce segment if it clears onto cook steel.
-		if _is_on_grill_surface(grill_land) or _is_near_grill_for_place(grill_land):
-			grill_land.y = GRILL_SURFACE_Y + OIL_SIT_Y + 0.004
-		else:
-			## Still stretch past the tray even if aim is short of the steel.
-			grill_land = tray_hit + bounce_dir * maxf(bounce_len, 0.34)
-			grill_land.y = lerpf(deck_y + 0.004, GRILL_SURFACE_Y + 0.012, 0.85)
-		_place_soda_overfill_ribbon(mi_a, lip, tray_hit, foam_col, foamish, 1.0)
-		_place_soda_overfill_ribbon(mi_b, tray_hit, grill_land, foam_col, foamish, 0.92)
+		var guard_hit := Vector3(
+			guard_xs[i] + sin(Time.get_ticks_msec() * 0.003 + float(i) * 1.4) * 0.03,
+			guard_y + sin(Time.get_ticks_msec() * 0.005 + float(i)) * 0.012,
+			guard_z - 0.008
+		)
+		## Leave the rim toward the guard (not cook-forward into empty air).
+		var to_guard := (guard_hit - rim)
+		var to_guard_n := to_guard.normalized() if to_guard.length() > 0.001 else Vector3(1.0, 0.0, -0.2).normalized()
+		var lip := rim + to_guard_n * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.008, 0.0)
+		## Reflect off the guard face, then drop onto the steel.
+		var incident := (guard_hit - lip).normalized()
+		var reflected := incident - 2.0 * incident.dot(guard_n) * guard_n
+		reflected.y = minf(reflected.y, -0.15) ## bias down onto the grill
+		reflected = reflected.normalized()
+		var bounce_len := lerpf(0.42, 0.62, 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.0035 + float(i) * 1.9))
+		var grill_land := guard_hit + reflected * bounce_len
+		grill_land.y = GRILL_SURFACE_Y + OIL_SIT_Y + 0.006
+		## Keep the bounce on cook steel when possible.
+		var cook := _cook_place_bounds()
+		if cook.size.x > 0.05 and cook.size.y > 0.05:
+			grill_land.x = clampf(grill_land.x, cook.position.x, cook.end.x)
+			grill_land.z = clampf(grill_land.z, cook.position.y, cook.end.y)
+		_place_soda_overfill_ribbon(mi_a, lip, guard_hit, foam_col, foamish, 1.15)
+		_place_soda_overfill_ribbon(mi_b, guard_hit, grill_land, foam_col, foamish, 1.05)
 		## Occasional pop slick where the bounce lands on steel.
-		if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.18:
-			_soda_overfill_long_cd = randf_range(0.55, 0.95)
+		if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.22:
+			_soda_overfill_long_cd = randf_range(0.45, 0.80)
 			_spawn_soda_slick(
-				grill_land + Vector3(randf_range(-0.025, 0.025), 0.0, randf_range(-0.02, 0.03)),
-				0.034 + randf() * 0.022,
+				grill_land + Vector3(randf_range(-0.03, 0.03), 0.0, randf_range(-0.02, 0.03)),
+				0.040 + randf() * 0.028,
 				flavor
 			)
-			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.28:
-				game_audio.trigger_hot_oil(0.45)
+			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.32:
+				game_audio.trigger_hot_oil(0.5)
 	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 

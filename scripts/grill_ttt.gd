@@ -26,12 +26,16 @@ var cells: Array[int] = [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
 var turn: int = MARK_X
 var winner: int = EMPTY ## EMPTY = playing, MARK_* = win, -1 = draw
 var revealed: bool = false
+var _hover_cell: int = -1
 
 var _grid_mi: MeshInstance3D = null
 var _bevel_mi: MeshInstance3D = null
 var _mark_root: Node3D = null
+var _hover_mi: MeshInstance3D = null
+var _hover_bevel_mi: MeshInstance3D = null
 var _mat: StandardMaterial3D = null
 var _bevel_mat: StandardMaterial3D = null
+var _hover_mat: StandardMaterial3D = null
 var _seat: Vector3 = Vector3.ZERO ## Steel center (Y without line_y lift)
 
 
@@ -47,6 +51,7 @@ func setup_on_grill(center: Vector3) -> void:
 		_mark_root = Node3D.new()
 		_mark_root.name = "Marks"
 		add_child(_mark_root)
+	_ensure_hover_meshes()
 
 
 func apply_look(cfg: Dictionary) -> void:
@@ -91,6 +96,35 @@ func _ensure_mats() -> void:
 		_bevel_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		_bevel_mat.render_priority = 7
 	_bevel_mat.albedo_color = bevel_color
+	if _hover_mat == null:
+		_hover_mat = StandardMaterial3D.new()
+		_hover_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_hover_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_hover_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_hover_mat.render_priority = 8
+	_hover_mat.albedo_color = Color(
+		lerpf(scratch_color.r, 0.55, 0.45),
+		lerpf(scratch_color.g, 0.62, 0.45),
+		lerpf(scratch_color.b, 0.72, 0.45),
+		0.55
+	)
+
+
+func _ensure_hover_meshes() -> void:
+	if _hover_mi == null or not is_instance_valid(_hover_mi):
+		_hover_mi = MeshInstance3D.new()
+		_hover_mi.name = "HoverMark"
+		_hover_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_hover_mi.visible = false
+		add_child(_hover_mi)
+	if _hover_bevel_mi == null or not is_instance_valid(_hover_bevel_mi):
+		_hover_bevel_mi = MeshInstance3D.new()
+		_hover_bevel_mi.name = "HoverBevel"
+		_hover_bevel_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_hover_bevel_mi.visible = false
+		add_child(_hover_bevel_mi)
+	_hover_mi.material_override = _hover_mat
+	_hover_bevel_mi.material_override = _bevel_mat
 
 
 func _build_grid() -> void:
@@ -183,11 +217,13 @@ func reveal() -> void:
 	revealed = true
 	visible = true
 	_rebuild_marks()
+	clear_hover()
 
 
 func hide_board() -> void:
 	revealed = false
 	visible = false
+	clear_hover()
 
 
 func reset_game() -> void:
@@ -195,6 +231,7 @@ func reset_game() -> void:
 	turn = MARK_X
 	winner = EMPTY
 	_rebuild_marks()
+	clear_hover()
 
 
 func is_playable() -> bool:
@@ -202,16 +239,62 @@ func is_playable() -> bool:
 
 
 func cell_at_world(world: Vector3) -> int:
-	## Local XZ → cell 0..8, or -1 if outside board.
+	## Local XZ → cell 0..8, or -1 if outside board. Slightly generous pad for tip aim.
 	var local := to_local(world)
 	var h := board_size * 0.5
-	if absf(local.x) > h * 1.02 or absf(local.z) > h * 1.02:
+	var pad := board_size * 0.06
+	if absf(local.x) > h + pad or absf(local.z) > h + pad:
 		return -1
 	var u := clampf((local.x + h) / board_size, 0.0, 0.999)
 	var v := clampf((local.z + h) / board_size, 0.0, 0.999)
 	var col := clampi(int(floor(u * 3.0)), 0, 2)
 	var row := clampi(int(floor(v * 3.0)), 0, 2)
 	return row * 3 + col
+
+
+func cell_center_local(cell: int) -> Vector3:
+	if cell < 0 or cell >= 9:
+		return Vector3.ZERO
+	var h := board_size * 0.5
+	var third := board_size / 3.0
+	var col := cell % 3
+	var row := cell / 3
+	return Vector3(-h + third * (float(col) + 0.5), 0.0014, -h + third * (float(row) + 0.5))
+
+
+func set_hover_cell(cell: int) -> void:
+	## Ghost mark under the spatula / cursor for the next X or O.
+	_ensure_mats()
+	_ensure_hover_meshes()
+	_hover_cell = cell
+	if not revealed or not is_playable() or cell < 0 or cell >= 9 or cells[cell] != EMPTY:
+		_hover_mi.visible = false
+		_hover_bevel_mi.visible = false
+		return
+	var third := board_size / 3.0
+	var center := cell_center_local(cell)
+	_hover_mi.visible = true
+	_hover_bevel_mi.visible = true
+	_hover_mi.position = center
+	_hover_bevel_mi.position = center + Vector3(0.0, -bevel_y, -bevel_z)
+	if turn == MARK_X:
+		_hover_mi.mesh = _make_x_mesh(third * 0.30, 1.0, 900)
+		_hover_bevel_mi.mesh = _make_x_mesh(third * 0.30, bevel_scale, 910)
+	else:
+		_hover_mi.mesh = _make_o_mesh(third * 0.28, 1.0, 920)
+		_hover_bevel_mi.mesh = _make_o_mesh(third * 0.28, bevel_scale, 930)
+
+
+func clear_hover() -> void:
+	_hover_cell = -1
+	if _hover_mi != null and is_instance_valid(_hover_mi):
+		_hover_mi.visible = false
+	if _hover_bevel_mi != null and is_instance_valid(_hover_bevel_mi):
+		_hover_bevel_mi.visible = false
+
+
+func hover_cell() -> int:
+	return _hover_cell
 
 
 func try_place(cell: int, mark: int = -1) -> bool:
@@ -226,6 +309,7 @@ func try_place(cell: int, mark: int = -1) -> bool:
 	turn = MARK_O if m == MARK_X else MARK_X
 	_check_winner()
 	_rebuild_marks()
+	clear_hover()
 	return true
 
 
