@@ -1211,7 +1211,7 @@ var _grill_ttt: Node3D = null ## Scratched-metal tic-tac-toe on HOLD cook edge
 var _ttt_tap_count: int = 0
 var _ttt_tap_cool: float = 0.0
 const TTT_TAP_WINDOW := 1.15 ## Triple-tap window on HOLD cook pad
-const TTT_COOK_PAD := 4 ## Closest-to-cook HOLD drum pad
+const TTT_COOK_PAD := 0 ## Closest-to-cook HOLD drum pad (world −Z / camera side)
 var _audio_debug_label: Label = null
 var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
@@ -5371,7 +5371,11 @@ func _setup_grill_ttt() -> void:
 	_grill_ttt = GrillTttScript.new()
 	add_child(_grill_ttt)
 	if _grill_ttt.has_method("setup_on_grill"):
-		_grill_ttt.setup_on_grill(_grill_song_drum_world(TTT_COOK_PAD))
+		## Near HOLD edge (camera/cook side), not the far window-depth pad.
+		var c := _grill_song_drum_world(TTT_COOK_PAD)
+		c.y = GRILL_SURFACE_Y
+		c.z = _roomba_cook_edge_z() + 0.09 ## inset onto steel so the board sits on the near lip
+		_grill_ttt.setup_on_grill(c)
 	_ttt_tap_count = 0
 	_ttt_tap_cool = 0.0
 

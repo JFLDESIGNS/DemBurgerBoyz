@@ -6,7 +6,7 @@ const MARK_X := 1
 const MARK_O := 2
 
 const BOARD_SIZE := 0.155
-const LINE_Y := 0.0018 ## Sit just above steel so scratches read
+const LINE_Y := 0.008 ## Sit clearly above steel (was buried / z-fought)
 const LINE_W := 0.0042
 const MARK_W := 0.0055
 
@@ -41,7 +41,7 @@ func _ensure_mat() -> void:
 	_mat.albedo_color = Color(0.10, 0.11, 0.13, 0.92)
 	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_mat.render_priority = 2
+	_mat.render_priority = 6
 
 
 func _build_grid() -> void:
@@ -193,7 +193,7 @@ func _rebuild_marks() -> void:
 		var mi := MeshInstance3D.new()
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.material_override = _mat
-		mi.position = Vector3(cx, 0.0004, cz)
+		mi.position = Vector3(cx, 0.0012, cz)
 		if m == MARK_X:
 			mi.mesh = _make_x_mesh(third * 0.32)
 		else:
