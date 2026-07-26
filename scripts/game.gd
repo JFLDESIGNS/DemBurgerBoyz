@@ -425,14 +425,13 @@ var grill_season_mesh: MeshInstance3D = null
 var grill_season_mat: ShaderMaterial = null
 ## Full-grill darkening vignette (cook + HOLD) — Hidden tunable.
 const GRILL_VIGNETTE_CFG_SECTION := "grill_vignette"
-const GRILL_VIGNETTE_CFG_VERSION := 2
+const GRILL_VIGNETTE_CFG_VERSION := 3 ## v3 = restore pre-chunky soft noise (undo v2)
 var grill_vig_darken_a: float = 0.42
 var grill_vig_darken_b: float = 0.58
 var grill_vig_dual: float = 0.55 ## 0 = one darken (A only), 1 = two-tone A/B mix
 var grill_vig_size: float = 0.88
-var grill_vig_noise: float = 0.58
-var grill_vig_noise_scale: float = 4.6
-var grill_vig_feather: float = 0.16 ## 0 = hard chunky noise, 1 = soft feathered
+var grill_vig_noise: float = 0.48
+var grill_vig_noise_scale: float = 4.2
 var grill_vig_choke: float = 0.0
 var grill_vig_opacity: float = 0.78
 var grill_vig_color: float = 0.32
@@ -18437,7 +18436,6 @@ func _apply_grill_vignette_settings() -> void:
 	grill_vig_mat.set_shader_parameter("vig_size", grill_vig_size)
 	grill_vig_mat.set_shader_parameter("vig_noise", grill_vig_noise)
 	grill_vig_mat.set_shader_parameter("vig_choke", grill_vig_choke)
-	grill_vig_mat.set_shader_parameter("noise_feather", grill_vig_feather)
 	grill_vig_mat.set_shader_parameter("opacity", grill_vig_opacity)
 	grill_vig_mat.set_shader_parameter("color_shift", grill_vig_color)
 	grill_vig_mat.set_shader_parameter("spot_amount", grill_vig_spots)
@@ -18458,18 +18456,16 @@ func _load_grill_vignette_settings() -> void:
 	grill_vig_size = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "size", grill_vig_size)), 0.15, 1.6)
 	grill_vig_noise = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "noise", grill_vig_noise)), 0.0, 1.0)
 	grill_vig_noise_scale = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "noise_scale", grill_vig_noise_scale)), 0.5, 12.0)
-	grill_vig_feather = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "feather", grill_vig_feather)), 0.0, 1.0)
 	grill_vig_choke = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "choke", grill_vig_choke)), -0.45, 0.45)
 	grill_vig_opacity = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "opacity", grill_vig_opacity)), 0.0, 2.0)
 	grill_vig_color = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "color", grill_vig_color)), 0.0, 1.0)
 	grill_vig_spots = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "spots", grill_vig_spots)), 0.0, 1.5)
 	grill_vig_spot_scale = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "spot_scale", grill_vig_spot_scale)), 0.3, 6.0)
 	grill_vig_height = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "height", grill_vig_height)), 0.01, 0.08)
-	## v2: chunkier noise + feather control (keeps other tuned values).
+	## Undo chunky v2 noise — restore the softer pre-chunky defaults.
 	if ver < GRILL_VIGNETTE_CFG_VERSION:
-		grill_vig_noise = 0.58
-		grill_vig_noise_scale = 4.6
-		grill_vig_feather = 0.16
+		grill_vig_noise = 0.48
+		grill_vig_noise_scale = 4.2
 		_save_grill_vignette_settings()
 
 
@@ -18483,7 +18479,6 @@ func _save_grill_vignette_settings() -> void:
 	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "size", grill_vig_size)
 	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "noise", grill_vig_noise)
 	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "noise_scale", grill_vig_noise_scale)
-	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "feather", grill_vig_feather)
 	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "choke", grill_vig_choke)
 	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "opacity", grill_vig_opacity)
 	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "color", grill_vig_color)
@@ -18501,7 +18496,6 @@ func _sync_grill_vignette_hidden_ui() -> void:
 		"vig_size": grill_vig_size,
 		"vig_noise": grill_vig_noise,
 		"vig_noise_scale": grill_vig_noise_scale,
-		"vig_feather": grill_vig_feather,
 		"vig_choke": grill_vig_choke,
 		"vig_opacity": grill_vig_opacity,
 		"vig_color": grill_vig_color,
@@ -36195,13 +36189,6 @@ func _build_options_menu() -> void:
 		func(): return grill_vig_noise_scale,
 		func(v: float):
 			grill_vig_noise_scale = clampf(v, 0.5, 12.0)
-			_apply_grill_vignette_settings()
-			_save_grill_vignette_settings()
-	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_feather", "Noise Feather", 0.0, 1.0, 0.01,
-		func(): return grill_vig_feather,
-		func(v: float):
-			grill_vig_feather = clampf(v, 0.0, 1.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
