@@ -24,6 +24,9 @@ const ZONE_FULL_MUL := 1.0
 const ZONE_HALF_MUL := 0.5
 const ZONE_HOLD_MUL := 0.0
 const WARM_HOLD_MAX := 300.0 ## 5 minutes on HOLD before meat goes bad
+## Cooked meat on HOLD: cooking sizzle fades to this level over HOLD_SIZZLE_FADE_SEC.
+const HOLD_SIZZLE_VOL := 0.4
+const HOLD_SIZZLE_FADE_SEC := 5.0
 ## Legacy aliases used by hold-zone helpers.
 const WARMER_WIDTH_FRAC := ZONE_HOLD_FRAC
 const WARMER_COOK_MUL := ZONE_HOLD_MUL
@@ -372,6 +375,7 @@ var _cursor_tex_blank: Texture2D = null
 var _cursor_kind: String = "glove" ## glove | spatula
 var grill_powered: Array = [] ## bool per slot (all share one burner)
 var grill_on: bool = false ## single flat-top burner
+var _hold_sizzle_fade_sec: float = 0.0 ## ages while only cooked meat sits on HOLD
 var grill_glow_meshes: Array = []
 var grill_pad_mats: Array = []
 var grill_power_labels: Array = []
@@ -419,6 +423,23 @@ var grill_season_vignette: float = 0.22
 var grill_season_edge: float = 0.30
 var grill_season_mesh: MeshInstance3D = null
 var grill_season_mat: ShaderMaterial = null
+## Full-grill darkening vignette (cook + HOLD) — Hidden tunable.
+const GRILL_VIGNETTE_CFG_SECTION := "grill_vignette"
+const GRILL_VIGNETTE_CFG_VERSION := 1
+var grill_vig_darken_a: float = 0.42
+var grill_vig_darken_b: float = 0.58
+var grill_vig_dual: float = 0.55 ## 0 = one darken (A only), 1 = two-tone A/B mix
+var grill_vig_size: float = 0.88
+var grill_vig_noise: float = 0.48
+var grill_vig_noise_scale: float = 4.2
+var grill_vig_choke: float = 0.0
+var grill_vig_opacity: float = 0.78
+var grill_vig_color: float = 0.32
+var grill_vig_spots: float = 0.38
+var grill_vig_spot_scale: float = 1.55
+var grill_vig_height: float = 0.0215 ## under oil film so spots sit on top
+var grill_vig_mesh: MeshInstance3D = null
+var grill_vig_mat: ShaderMaterial = null
 var _grill_glow_tween: Tween = null
 var _grill_glow_gen: int = 0
 ## Little flame triangles under the griddle when the burner is on.
@@ -2738,7 +2759,7 @@ func _process(delta: float) -> void:
 	_update_supply_freshness(delta)
 	_update_supply_orders(delta)
 	_update_patty_hint_focus()
-	_update_kitchen_sizzle()
+	_update_kitchen_sizzle(delta)
 	_update_heat_warp(delta)
 	_update_burner_flames(delta)
 	if dragging_patty != null:
@@ -4644,6 +4665,8 @@ func _build_3d_world() -> void:
 	grill_heat_lights.clear()
 	grill_season_mesh = null
 	grill_season_mat = null
+	grill_vig_mesh = null
+	grill_vig_mat = null
 	grill_residue.clear()
 	grill_residue_meshes.clear()
 	grill_residue_mats.clear()
@@ -4665,6 +4688,7 @@ func _build_3d_world() -> void:
 
 	_load_grill_heat_settings()
 	_load_grill_season_settings()
+	_load_grill_vignette_settings()
 	_build_flat_top_grill()
 	_build_burner_flames()
 	_build_cutting_board_prop()
@@ -6418,7 +6442,8 @@ func _build_flat_top_grill() -> void:
 
 	## Soft specular band on top of the tiled steel (fake shine accent).
 	_add_grill_shine(surface, Vector3(0, 0.024, 0), GRILL_WIDTH * 0.98, GRILL_DEPTH * 0.42)
-	## Aged oil/water splotches + chunky noisy stainless vignette (readable, not invisible).
+	## Whole-surface darkening vignette (cook + HOLD), then oil/water spots on top.
+	_add_grill_vignette_overlay(surface)
 	_add_grill_seasoning_overlay(surface)
 	_refresh_grill_piano_sections()
 
@@ -18321,6 +18346,115 @@ func _sync_grill_season_hidden_ui() -> void:
 		"season_threshold": grill_season_threshold,
 		"season_vignette": grill_season_vignette,
 		"season_edge": grill_season_edge,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
+func _add_grill_vignette_overlay(parent: Node3D) -> void:
+	## Single darkening film over the whole flat-top (FULL / ½ / HOLD).
+	if parent == null or not is_instance_valid(parent):
+		return
+	if grill_vig_mesh != null and is_instance_valid(grill_vig_mesh):
+		grill_vig_mesh.queue_free()
+	grill_vig_mesh = null
+	grill_vig_mat = null
+	var overlay := MeshInstance3D.new()
+	overlay.name = "GrillVignette"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(GRILL_WIDTH * 0.992, GRILL_DEPTH * 0.992)
+	overlay.mesh = plane
+	overlay.position = Vector3(0.0, grill_vig_height, 0.0)
+	overlay.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	overlay.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	var shader := load("res://shaders/grill_vignette.gdshader") as Shader
+	if shader == null:
+		overlay.queue_free()
+		return
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.render_priority = 0
+	overlay.material_override = mat
+	parent.add_child(overlay)
+	grill_vig_mesh = overlay
+	grill_vig_mat = mat
+	_apply_grill_vignette_settings()
+
+
+func _apply_grill_vignette_settings() -> void:
+	if grill_vig_mesh != null and is_instance_valid(grill_vig_mesh):
+		grill_vig_mesh.position.y = grill_vig_height
+	if grill_vig_mat == null:
+		return
+	grill_vig_mat.set_shader_parameter("darken_a", grill_vig_darken_a)
+	grill_vig_mat.set_shader_parameter("darken_b", grill_vig_darken_b)
+	grill_vig_mat.set_shader_parameter("dual_blend", grill_vig_dual)
+	grill_vig_mat.set_shader_parameter("vig_size", grill_vig_size)
+	grill_vig_mat.set_shader_parameter("vig_noise", grill_vig_noise)
+	grill_vig_mat.set_shader_parameter("vig_choke", grill_vig_choke)
+	grill_vig_mat.set_shader_parameter("opacity", grill_vig_opacity)
+	grill_vig_mat.set_shader_parameter("color_shift", grill_vig_color)
+	grill_vig_mat.set_shader_parameter("spot_amount", grill_vig_spots)
+	grill_vig_mat.set_shader_parameter("spot_scale", grill_vig_spot_scale)
+	grill_vig_mat.set_shader_parameter("noise_scale", grill_vig_noise_scale)
+
+
+func _load_grill_vignette_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(GRILL_VIGNETTE_CFG_SECTION):
+		return
+	grill_vig_darken_a = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "darken_a", grill_vig_darken_a)), 0.0, 1.0)
+	grill_vig_darken_b = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "darken_b", grill_vig_darken_b)), 0.0, 1.0)
+	grill_vig_dual = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "dual", grill_vig_dual)), 0.0, 1.0)
+	grill_vig_size = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "size", grill_vig_size)), 0.15, 1.6)
+	grill_vig_noise = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "noise", grill_vig_noise)), 0.0, 1.0)
+	grill_vig_noise_scale = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "noise_scale", grill_vig_noise_scale)), 0.5, 12.0)
+	grill_vig_choke = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "choke", grill_vig_choke)), -0.45, 0.45)
+	grill_vig_opacity = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "opacity", grill_vig_opacity)), 0.0, 2.0)
+	grill_vig_color = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "color", grill_vig_color)), 0.0, 1.0)
+	grill_vig_spots = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "spots", grill_vig_spots)), 0.0, 1.5)
+	grill_vig_spot_scale = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "spot_scale", grill_vig_spot_scale)), 0.3, 6.0)
+	grill_vig_height = clampf(float(cfg.get_value(GRILL_VIGNETTE_CFG_SECTION, "height", grill_vig_height)), 0.01, 0.08)
+
+
+func _save_grill_vignette_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "version", GRILL_VIGNETTE_CFG_VERSION)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "darken_a", grill_vig_darken_a)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "darken_b", grill_vig_darken_b)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "dual", grill_vig_dual)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "size", grill_vig_size)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "noise", grill_vig_noise)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "noise_scale", grill_vig_noise_scale)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "choke", grill_vig_choke)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "opacity", grill_vig_opacity)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "color", grill_vig_color)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "spots", grill_vig_spots)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "spot_scale", grill_vig_spot_scale)
+	cfg.set_value(GRILL_VIGNETTE_CFG_SECTION, "height", grill_vig_height)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_grill_vignette_hidden_ui() -> void:
+	var vals := {
+		"vig_darken_a": grill_vig_darken_a,
+		"vig_darken_b": grill_vig_darken_b,
+		"vig_dual": grill_vig_dual,
+		"vig_size": grill_vig_size,
+		"vig_noise": grill_vig_noise,
+		"vig_noise_scale": grill_vig_noise_scale,
+		"vig_choke": grill_vig_choke,
+		"vig_opacity": grill_vig_opacity,
+		"vig_color": grill_vig_color,
+		"vig_spots": grill_vig_spots,
+		"vig_spot_scale": grill_vig_spot_scale,
+		"vig_height": grill_vig_height,
 	}
 	for key in vals.keys():
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
@@ -34818,22 +34952,54 @@ func _sfx_click() -> void:
 		game_audio.play_click()
 
 
-func _update_kitchen_sizzle() -> void:
+func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 	if game_audio == null:
 		return
-	var cooking := false
+	var active_cook := false ## still on a cook zone (FULL / ½)
+	var hold_cooked := false ## finished meat parked on HOLD
 	var heat := 0.0
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p == null or not is_instance_valid(p):
 			continue
-		if p.heating and not p.is_held:
-			cooking = true
+		if not p.heating or p.is_held:
+			continue
+		if _is_bun_toast(p):
+			## Toast still cooks with heat — treat as active cook sound.
+			if float(p.heat_mul) > 0.01:
+				active_cook = true
+				heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.25, 1.0))
+			continue
+		var on_hold: bool = _is_in_warmer_zone(p.position)
+		var cooked: bool = p.has_method("can_scoop") and p.can_scoop()
+		if float(p.heat_mul) > 0.01 and not on_hold:
+			active_cook = true
 			heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.25, 1.0))
+		elif on_hold and cooked:
+			hold_cooked = true
+			heat = maxf(heat, 0.45)
+	var vol_mul := 1.0
+	var cooking := false
+	if active_cook:
+		## Hot zones win — snap fade back so returning meat cooks loud again.
+		_hold_sizzle_fade_sec = 0.0
+		cooking = true
+		vol_mul = 1.0
+	elif hold_cooked:
+		_hold_sizzle_fade_sec = minf(HOLD_SIZZLE_FADE_SEC, _hold_sizzle_fade_sec + maxf(0.0, delta))
+		var t := clampf(_hold_sizzle_fade_sec / HOLD_SIZZLE_FADE_SEC, 0.0, 1.0)
+		vol_mul = lerpf(1.0, HOLD_SIZZLE_VOL, t)
+		cooking = true
+	else:
+		_hold_sizzle_fade_sec = 0.0
 	## Cooking sizzle is louder; empty hot burner keeps a quieter idle hiss.
 	## Hot-oil burst keeps the loud fry going even with no patties.
 	var oil_burst: bool = game_audio.has_method("is_hot_oil_bursting") and bool(game_audio.is_hot_oil_bursting())
-	game_audio.set_sizzle_active(cooking or oil_burst, maxf(heat, 0.95 if oil_burst else 0.0))
+	game_audio.set_sizzle_active(
+		cooking or oil_burst,
+		maxf(heat, 0.95 if oil_burst else 0.0),
+		1.0 if oil_burst else vol_mul
+	)
 	if game_audio.has_method("set_burner_hiss"):
 		game_audio.set_burner_hiss(grill_on and not cooking and not oil_burst)
 
@@ -35925,6 +36091,96 @@ func _build_options_menu() -> void:
 			_save_grill_season_settings()
 	)
 
+	var vig_lab := Label.new()
+	vig_lab.text = "GRILL SURFACE VIGNETTE"
+	UiFontsScript.apply_label(vig_lab, true, 13)
+	vig_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(vig_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_dual", "Two Darkens (0=one / 1=two)", 0.0, 1.0, 0.01,
+		func(): return grill_vig_dual,
+		func(v: float):
+			grill_vig_dual = clampf(v, 0.0, 1.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_darken_a", "Darken A", 0.0, 1.0, 0.01,
+		func(): return grill_vig_darken_a,
+		func(v: float):
+			grill_vig_darken_a = clampf(v, 0.0, 1.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_darken_b", "Darken B", 0.0, 1.0, 0.01,
+		func(): return grill_vig_darken_b,
+		func(v: float):
+			grill_vig_darken_b = clampf(v, 0.0, 1.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_size", "Vignette Size", 0.15, 1.6, 0.01,
+		func(): return grill_vig_size,
+		func(v: float):
+			grill_vig_size = clampf(v, 0.15, 1.6)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_choke", "Vignette Choke", -0.45, 0.45, 0.01,
+		func(): return grill_vig_choke,
+		func(v: float):
+			grill_vig_choke = clampf(v, -0.45, 0.45)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_noise", "Noise Pattern", 0.0, 1.0, 0.01,
+		func(): return grill_vig_noise,
+		func(v: float):
+			grill_vig_noise = clampf(v, 0.0, 1.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_noise_scale", "Noise Scale", 0.5, 12.0, 0.05,
+		func(): return grill_vig_noise_scale,
+		func(v: float):
+			grill_vig_noise_scale = clampf(v, 0.5, 12.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_opacity", "Vignette Opacity", 0.0, 2.0, 0.02,
+		func(): return grill_vig_opacity,
+		func(v: float):
+			grill_vig_opacity = clampf(v, 0.0, 2.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_color", "Color Shift", 0.0, 1.0, 0.01,
+		func(): return grill_vig_color,
+		func(v: float):
+			grill_vig_color = clampf(v, 0.0, 1.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_spots", "Vignette Spots", 0.0, 1.5, 0.02,
+		func(): return grill_vig_spots,
+		func(v: float):
+			grill_vig_spots = clampf(v, 0.0, 1.5)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_spot_scale", "Spot Size", 0.3, 6.0, 0.05,
+		func(): return grill_vig_spot_scale,
+		func(v: float):
+			grill_vig_spot_scale = clampf(v, 0.3, 6.0)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_height", "Vignette Height", 0.01, 0.08, 0.001,
+		func(): return grill_vig_height,
+		func(v: float):
+			grill_vig_height = clampf(v, 0.01, 0.08)
+			_apply_grill_vignette_settings()
+			_save_grill_vignette_settings()
+	)
+
 	var wind_lab := Label.new()
 	wind_lab.text = "TREE WIND"
 	UiFontsScript.apply_label(wind_lab, true, 13)
@@ -36229,6 +36485,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_xform_hidden_ui()
 			_sync_grill_heat_hidden_ui()
 			_sync_grill_season_hidden_ui()
+			_sync_grill_vignette_hidden_ui()
 			_sync_icecream_station_hidden_ui()
 			_refresh_options_graphics_controls()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):

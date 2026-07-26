@@ -31,6 +31,7 @@ var _sizzle_player: AudioStreamPlayer
 var _sizzle_gen: AudioStreamGenerator
 var _sizzle_on: bool = false
 var _sizzle_intensity: float = 0.5
+var _sizzle_volume_mul: float = 1.0 ## 1 = full cook bed; HOLD parks fade toward ~0.4
 var _hiss_player: AudioStreamPlayer
 var _hiss_gen: AudioStreamGenerator
 var _hiss_on: bool = false
@@ -415,7 +416,7 @@ func _process(delta: float) -> void:
 		_hot_oil_was_active = false
 		_hot_oil_volume_mul = 1.0
 		if _sizzle_on and _sizzle_player != null:
-			_sizzle_player.volume_db = lerpf(-18.0, -12.0, clampf(_sizzle_intensity, 0.0, 1.0))
+			_sizzle_player.volume_db = _sizzle_cook_volume_db()
 	if _sizzle_on and _sizzle_player != null and _sizzle_player.playing:
 		var playback := _sizzle_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if playback != null:
@@ -613,21 +614,30 @@ func _next_room_tone_sample() -> float:
 	return clampf(tone * 0.55 + soft + air, -1.0, 1.0)
 
 
-func set_sizzle_active(active: bool, intensity: float = 0.5) -> void:
+func _sizzle_cook_volume_db() -> float:
+	## Cook-bed loudness from intensity, then HOLD / park volume multiplier.
+	var base_db := lerpf(-18.0, -12.0, clampf(_sizzle_intensity, 0.0, 1.0))
+	var mul := clampf(_sizzle_volume_mul, 0.05, 1.0)
+	return linear_to_db(db_to_linear(base_db) * mul)
+
+
+func set_sizzle_active(active: bool, intensity: float = 0.5, volume_mul: float = 1.0) -> void:
 	if _sizzle_player == null:
 		return
 	_sizzle_intensity = clampf(intensity, 0.0, 1.0)
+	_sizzle_volume_mul = clampf(volume_mul, 0.05, 1.0)
 	if _hot_oil_full_left > 0.0 or _hot_oil_fade_left > 0.0:
 		active = true
 		_sizzle_intensity = maxf(_sizzle_intensity, 0.95)
 	if active:
 		_sizzle_on = true
 		if _hot_oil_full_left <= 0.0 and _hot_oil_fade_left <= 0.0:
-			_sizzle_player.volume_db = lerpf(-18.0, -12.0, _sizzle_intensity)
+			_sizzle_player.volume_db = _sizzle_cook_volume_db()
 		if not _sizzle_player.playing:
 			_sizzle_player.play()
 	else:
 		_sizzle_on = false
+		_sizzle_volume_mul = 1.0
 		if _sizzle_player.playing:
 			_sizzle_player.stop()
 
