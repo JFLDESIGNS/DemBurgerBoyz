@@ -1662,9 +1662,9 @@ const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.
 const CUP_FLIP_SETTLE_DUR := 0.52 ## bounce settle after impact
 const CUP_FLIP_BOUNCE_H := 0.16 ## first hop height off the steel
 const CUP_FLIP_BOUNCE_HOPS := 3.0
-## Charge-hold visual: ramp shake 0→max each PERFECT_HOLD window, then reset.
-const CUP_FLIP_CHARGE_SHAKE_POS := 0.014
-const CUP_FLIP_CHARGE_SHAKE_ROT := 9.5
+## Charge-hold visual: soft wobble ramp → few degrees at the 0.5s perfect beat.
+const CUP_FLIP_CHARGE_SHAKE_POS := 0.0012
+const CUP_FLIP_CHARGE_SHAKE_ROT := 2.6 ## Max tilt degrees at peak — subtle build-up, not a rattle
 var _cup_flip_charge_shake_t: float = 0.0 ## phase for charge bobble oscillation
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
@@ -9032,12 +9032,14 @@ func _spatula_tip_world_pos() -> Vector3:
 
 func _start_spatula_juggle_toss() -> bool:
 	## Right-click while scooped → burger pops off, two flips, land or re-catch.
+	## Moving screen-right aims the land into the nearest open HOLD spot.
 	if spatula_patty == null or not is_instance_valid(spatula_patty):
 		return false
 	if spatula_juggle_patty != null or flicking_patty != null:
 		return false
 	if mp_enabled and spatula_owner_id != 0 and spatula_owner_id != NetManager.my_id() and not _mp_applying:
 		return false
+	var toss_to_hold := spatula_vel_screen.x > 90.0 ## px/sec toward screen-right
 	var patty = spatula_patty
 	spatula_patty = null
 	spatula_owner_id = 0
@@ -9053,28 +9055,40 @@ func _start_spatula_juggle_toss() -> bool:
 	spatula_juggle_t = 0.0
 	spatula_juggle_start = patty.global_position
 	spatula_juggle_base_rot = patty.rotation_degrees
-	## Land near the cursor on the cook surface (or current XZ if aim is off-grill).
+	## Land near the cursor on the cook surface (or HOLD when tossing right).
 	var mouse := get_viewport().get_mouse_position()
 	var aim := _grill_plane_from_screen(mouse)
 	if aim == Vector3.ZERO or not _is_near_grill_for_place(aim):
 		aim = Vector3(spatula_juggle_start.x, GRILL_SURFACE_Y, spatula_juggle_start.z)
-	var place := _find_closest_patty_place(aim)
+	var place := Vector3.ZERO
+	if toss_to_hold:
+		place = _find_closest_open_patty_place_in_rect(aim, _warmer_place_bounds())
+		if place == Vector3.ZERO:
+			## Prefer HOLD band center if aim is off the strip.
+			var warm := _warmer_rect()
+			var hold_aim := Vector3(warm.position.x + warm.size.x * 0.5, GRILL_SURFACE_Y, warm.position.y + warm.size.y * 0.5)
+			place = _find_closest_open_patty_place_in_rect(hold_aim, _warmer_place_bounds())
+	if place == Vector3.ZERO:
+		place = _find_closest_patty_place(aim)
 	if place == Vector3.ZERO:
 		place = Vector3(
 			clampf(aim.x, GRILL_CENTER_X - GRILL_WIDTH * 0.42, GRILL_CENTER_X + GRILL_WIDTH * 0.42),
 			GRILL_SURFACE_Y,
 			clampf(aim.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.42, GRILL_SURFACE_Z + GRILL_DEPTH * 0.42)
 		)
-	## Slight forward hop so it doesn't land straight under the launch.
+	## Slight hop — keep HOLD tosses tighter so they don't miss the strip.
 	var hop := Vector3(
-		randf_range(-0.04, 0.04),
+		randf_range(-0.02, 0.02) if toss_to_hold else randf_range(-0.04, 0.04),
 		0.0,
-		randf_range(-0.02, 0.06)
+		randf_range(-0.015, 0.03) if toss_to_hold else randf_range(-0.02, 0.06)
 	)
 	spatula_juggle_end = Vector3(place.x + hop.x, GRILL_SURFACE_Y + PATTY_SIT_Y, place.z + hop.z)
 	if game_audio:
 		game_audio.play_scoop()
-	_flash("Juggle! Catch it or let it land", Color("FFE082"))
+	if toss_to_hold and _is_in_warmer_zone(spatula_juggle_end):
+		_flash("Flip to HOLD!", Color("90CAF9"))
+	else:
+		_flash("Juggle! Catch it or let it land", Color("FFE082"))
 	return true
 
 
@@ -9175,14 +9189,19 @@ func _try_catch_spatula_juggle() -> bool:
 
 
 func _land_spatula_juggle() -> void:
-	## Missed the catch — slap onto the flat-top.
+	## Missed the catch — slap onto the flat-top (or HOLD if that was the toss target).
 	var patty = spatula_juggle_patty
 	spatula_juggle_patty = null
 	spatula_juggle_t = 0.0
 	if patty == null or not is_instance_valid(patty):
 		return
 	var land := Vector3(spatula_juggle_end.x, GRILL_SURFACE_Y, spatula_juggle_end.z)
-	var place := _find_closest_patty_place(land)
+	var place := Vector3.ZERO
+	var to_hold := _is_in_warmer_zone(land)
+	if to_hold:
+		place = _find_closest_open_patty_place_in_rect(land, _warmer_place_bounds())
+	if place == Vector3.ZERO:
+		place = _find_closest_patty_place(land)
 	if place == Vector3.ZERO:
 		place = land
 	var idx := _first_empty_slot()
@@ -9202,10 +9221,10 @@ func _land_spatula_juggle() -> void:
 	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
 		## call_local places on all peers.
 		mp_place_spatula.rpc(int(patty.net_id), idx, place.x, place.z)
-		_flash("Landed on the grill!", Color("A5D6A7"))
+		_flash("Flipped into HOLD!" if to_hold else "Landed on the grill!", Color("90CAF9" if to_hold else "A5D6A7"))
 		return
 	_place_extracted_patty_on_grill(patty, idx, place)
-	_flash("Landed on the grill!", Color("A5D6A7"))
+	_flash("Flipped into HOLD!" if to_hold else "Landed on the grill!", Color("90CAF9" if to_hold else "A5D6A7"))
 
 
 func _throw_held_patty_to_grill() -> void:
@@ -28571,31 +28590,32 @@ func _update_cup_ice_bob(_delta: float) -> void:
 
 
 func _cup_flip_charge_shake_amp() -> float:
-	## Each 0.5s window: near-zero → full shake, then snap back for timing feedback.
+	## Each 0.5s window: near-zero → peak wobble at the perfect beat, then reset.
 	if not _cup_flip_charging:
 		return 0.0
 	var cycle := fposmod(_cup_flip_hold_t, CUP_FLIP_PERFECT_HOLD)
 	var u := clampf(cycle / CUP_FLIP_PERFECT_HOLD, 0.0, 1.0)
-	## Ease-in so early hold barely moves; peak right at the perfect beat.
-	return pow(u, 1.35)
+	## Smooth ease-in — barely moves early, strongest right at 0.5s.
+	return u * u * (3.0 - 2.0 * u)
 
 
 func _apply_cup_flip_charge_shake() -> void:
 	if cup_root == null or not is_instance_valid(cup_root) or not _cup_flip_charging:
 		return
 	var amp := _cup_flip_charge_shake_amp()
-	if amp < 0.01:
+	if amp < 0.02:
 		return
 	var t := _cup_flip_charge_shake_t
+	## Tiny translate — mostly a few degrees of tilt about the cup bottom (root).
 	cup_root.global_position += Vector3(
-		sin(t * 37.0) * CUP_FLIP_CHARGE_SHAKE_POS * amp,
-		absf(sin(t * 49.0)) * CUP_FLIP_CHARGE_SHAKE_POS * 0.6 * amp,
-		cos(t * 31.0) * CUP_FLIP_CHARGE_SHAKE_POS * amp
+		sin(t * 11.0) * CUP_FLIP_CHARGE_SHAKE_POS * amp,
+		0.0,
+		cos(t * 9.5) * CUP_FLIP_CHARGE_SHAKE_POS * amp
 	)
 	cup_root.rotation_degrees += Vector3(
-		sin(t * 28.0) * CUP_FLIP_CHARGE_SHAKE_ROT * amp,
-		cos(t * 19.0) * CUP_FLIP_CHARGE_SHAKE_ROT * 0.4 * amp,
-		sin(t * 24.0) * CUP_FLIP_CHARGE_SHAKE_ROT * amp
+		sin(t * 10.0) * CUP_FLIP_CHARGE_SHAKE_ROT * amp,
+		0.0,
+		cos(t * 8.5) * CUP_FLIP_CHARGE_SHAKE_ROT * 0.85 * amp
 	)
 
 
@@ -28813,13 +28833,9 @@ func _update_cup_rim_flip(delta: float) -> void:
 	## Keep apex relative to the higher of start/land so hold-height tosses still go up.
 	var floor_y := _cup_flip_end.y
 	var launch_lift := maxf(_cup_flip_start.y - floor_y, 0.0) * (1.0 - t)
-	var y := floor_y + launch_lift + CUP_FLIP_PEAK * h_mul
-	## Position bobble only — rotation is pure forward tilt.
-	var bob := h_mul
-	var bob_x2 := sin(_cup_flip_bobble_phase + t * 14.0) * 0.028 * bob
-	var bob_z2 := cos(_cup_flip_bobble_phase * 0.9 + t * 11.0) * 0.022 * bob
-	cup_root.global_position = Vector3(xz2.x + bob_x2, y, xz2.z + bob_z2)
-	## Pitch/tilt only — no roll or yaw during the flip.
+	## Pivot = cup bottom (root origin). Track that point through the arc — no mid-body bob.
+	var pivot := Vector3(xz2.x, floor_y + launch_lift + CUP_FLIP_PEAK * h_mul, xz2.z)
+	## Pitch/tilt only about the bottom — no roll/yaw during the flip.
 	var spin_t := clampf(t / 0.92, 0.0, 1.0)
 	var spin := _cup_flip_pitch_total * (spin_t * spin_t * (3.0 - 2.0 * spin_t))
 	cup_root.rotation_degrees = Vector3(
@@ -28827,6 +28843,7 @@ func _update_cup_rim_flip(delta: float) -> void:
 		_cup_flip_lock_yaw,
 		0.0
 	)
+	cup_root.global_position = pivot
 	_update_cup_slosh(delta)
 	_update_cup_pour_white(delta)
 	if t < 1.0:
