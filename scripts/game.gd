@@ -1660,6 +1660,10 @@ const CUP_FLIP_PERFECT_WINDOW := 0.22 ## turns error for rim-down land (0.5s, 1.
 const CUP_FLIP_SETTLE_DUR := 0.52 ## bounce settle after impact
 const CUP_FLIP_BOUNCE_H := 0.16 ## first hop height off the steel
 const CUP_FLIP_BOUNCE_HOPS := 3.0
+## Charge-hold visual: ramp shake 0→max each PERFECT_HOLD window, then reset.
+const CUP_FLIP_CHARGE_SHAKE_POS := 0.014
+const CUP_FLIP_CHARGE_SHAKE_ROT := 9.5
+var _cup_flip_charge_shake_t: float = 0.0 ## phase for charge bobble oscillation
 const CUP_SLOSH_FOLLOW := 14.0
 const CUP_SLOSH_RETURN := 1.55 ## liquid settle
 const CUP_TILT_FROM_VEL := 24.0 ## degrees per m/s — was 48; much less tip while moving
@@ -3299,6 +3303,7 @@ func _input(event: InputEvent) -> void:
 			if cup_held and not _cup_flip_air and not cup_drawing:
 				_cup_flip_charging = true
 				_cup_flip_hold_t = 0.0
+				_cup_flip_charge_shake_t = 0.0
 				get_viewport().set_input_as_handled()
 				return
 			if cheese_held:
@@ -26878,6 +26883,9 @@ func _update_held_cup(delta: float) -> void:
 	_cup_machine_contact_grace = maxf(0.0, _cup_machine_contact_grace - delta)
 	if _cup_flip_charging:
 		_cup_flip_hold_t = minf(_cup_flip_hold_t + delta, CUP_FLIP_PERFECT_HOLD * 4.0)
+		_cup_flip_charge_shake_t += delta
+	else:
+		_cup_flip_charge_shake_t = 0.0
 	if cup_drawing:
 		_update_cup_draw_from_rack(delta)
 		_update_cup_slosh(delta)
@@ -26992,6 +27000,7 @@ func _update_held_cup(delta: float) -> void:
 		10.0,
 		_cup_tilt.x
 	)
+	_apply_cup_flip_charge_shake()
 	_update_cup_slosh(delta)
 	_try_fill_cup_at_spouts(delta)
 	## Only force deck Y while actually locked / pouring — never because a spout is merely nearby.
@@ -28577,6 +28586,35 @@ func _update_cup_ice_bob(_delta: float) -> void:
 		)
 
 
+func _cup_flip_charge_shake_amp() -> float:
+	## Each 0.5s window: near-zero → full shake, then snap back for timing feedback.
+	if not _cup_flip_charging:
+		return 0.0
+	var cycle := fposmod(_cup_flip_hold_t, CUP_FLIP_PERFECT_HOLD)
+	var u := clampf(cycle / CUP_FLIP_PERFECT_HOLD, 0.0, 1.0)
+	## Ease-in so early hold barely moves; peak right at the perfect beat.
+	return pow(u, 1.35)
+
+
+func _apply_cup_flip_charge_shake() -> void:
+	if cup_root == null or not is_instance_valid(cup_root) or not _cup_flip_charging:
+		return
+	var amp := _cup_flip_charge_shake_amp()
+	if amp < 0.01:
+		return
+	var t := _cup_flip_charge_shake_t
+	cup_root.global_position += Vector3(
+		sin(t * 37.0) * CUP_FLIP_CHARGE_SHAKE_POS * amp,
+		absf(sin(t * 49.0)) * CUP_FLIP_CHARGE_SHAKE_POS * 0.6 * amp,
+		cos(t * 31.0) * CUP_FLIP_CHARGE_SHAKE_POS * amp
+	)
+	cup_root.rotation_degrees += Vector3(
+		sin(t * 28.0) * CUP_FLIP_CHARGE_SHAKE_ROT * amp,
+		cos(t * 19.0) * CUP_FLIP_CHARGE_SHAKE_ROT * 0.4 * amp,
+		sin(t * 24.0) * CUP_FLIP_CHARGE_SHAKE_ROT * amp
+	)
+
+
 func _release_cup_flip_charge() -> void:
 	## RMB release — hold only charges; flip/toss starts here (not while held).
 	if not _cup_flip_charging:
@@ -28584,6 +28622,7 @@ func _release_cup_flip_charge() -> void:
 	var hold := _cup_flip_hold_t
 	_cup_flip_charging = false
 	_cup_flip_hold_t = 0.0
+	_cup_flip_charge_shake_t = 0.0
 	if hold < CUP_FLIP_MIN_HOLD or not cup_held or _cup_flip_air:
 		return
 	if cup_root == null or not is_instance_valid(cup_root) or cup_drawing:
