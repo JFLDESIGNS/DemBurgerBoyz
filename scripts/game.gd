@@ -260,8 +260,8 @@ var hand_spatula_root: Node3D = null
 var hand_spatula_visual: Node3D = null
 const HAND_SPATULA_PATH := "res://models/burgerpack/try2/SM_GrillSpatula.glb"
 const HAND_SPATULA_SCALE := 1.104 ## 0.92 * 1.2 — 20% bigger in-hand
-const HAND_SPATULA_HOLD_Y := 0.197 ## Above steel when empty (~4" higher than prior 0.095).
-const HAND_SPATULA_CARRY_Y := 0.180 ## Under a scooped patty (same +4" lift).
+const HAND_SPATULA_HOLD_Y := 0.1716 ## 1" lower; above steel when empty.
+const HAND_SPATULA_CARRY_Y := 0.1546 ## 1" lower under a scooped patty.
 ## Tip of blade sits on the cursor ray; model extends along +Z from origin.
 const HAND_SPATULA_TIP_OFFSET := Vector3(0.0, 0.024, 0.198)
 ## Blade midpoint — flip/roll pivots here (not the tip).
@@ -291,7 +291,7 @@ const HAND_SPATULA_FLOURISH_DUR := 0.506 ## Rise+flip (−15% vs 0.595)
 const HAND_SPATULA_BURGER_FLIP_DUR := 0.272 ## −15% vs 0.32
 const HAND_SPATULA_BURGER_FLIP_PITCH := -20.0 ## Degrees toward cook from hold pose
 const HAND_SPATULA_BURGER_FLIP_DROP := 0.0254 ## 1" closer to the steel during the flip
-const HAND_SPATULA_SLAP_CLEAR := 0.09262 ## ~3.6" above steel (+0.3" vs prior 0.085)
+const HAND_SPATULA_SLAP_CLEAR := 0.06722 ## 1" lower than prior 0.09262
 const HAND_SPATULA_SLAP_FWD_PITCH := 12.0 ## +X tips blade toward steel
 ## Drag slide: under the burger — raised 1.5" so the blade clears the patty (was clipping at +1").
 const HAND_SPATULA_DRAG_CLEAR := HAND_SPATULA_SLAP_CLEAR + 0.0254 + 0.0127
@@ -299,8 +299,12 @@ const HAND_SPATULA_DRAG_CLEAR := HAND_SPATULA_SLAP_CLEAR + 0.0254 + 0.0127
 const HAND_SPATULA_HOLD_SLIDE_CLEAR := HAND_SPATULA_SLAP_CLEAR
 const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/falling
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
-const HAND_SPATULA_PULL_FLIP_DY := 62.0 ## Min screen-px down (was 96 — shorter pull to flip)
+const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to flip.
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
+const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.021
+const HAND_SPATULA_BALANCE_UNSTABLE := 0.34
+const HAND_SPATULA_BALANCE_DRIFT := 34.0
+const HAND_SPATULA_BALANCE_DAMP := 0.985
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
 const SPATULA_JUGGLE_PEAK := 0.64 ## clear rise so the fall reads (not a mid-air teleport)
@@ -332,6 +336,9 @@ var _spatula_mute_ting: bool = false ## Mute piano ting for burger flip/squish i
 var _spatula_tap_press_mouse := Vector2.INF ## Screen pos when the current tap started
 var _spatula_user_roll: float = 0.0 ## Scroll-wheel roll (−90…+90)
 var _spatula_pull_flip_done: bool = false ## One pull-flip per LMB hold
+var _spatula_balance_active: bool = false ## Middle-click: balance spatula on cursor motion.
+var _spatula_balance_last_mouse := Vector2.INF
+var _spatula_balance_roll_vel: float = 0.0
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -397,12 +404,12 @@ const GRILL_GLOW_BRIGHT_MULT := 1.18
 const GRILL_HEAT_CFG_SECTION := "grill_heat"
 const GRILL_HEAT_BARS_MAX := 25
 const GRILL_HEAT_BAR_SPAN := 0.90 ## meters spanned by the Grate Bars count (shared line width)
-var grill_heat_size: float = 1.45 ## Multiplies the single center glow blot
-var grill_heat_bars: int = 5 ## Vertical grate lines across BAR_SPAN (same width on every spot)
-var grill_heat_gap: float = 0.38 ## Fraction of each bar period with no light (0–0.7)
-var grill_heat_opacity: float = 0.95
-var grill_heat_flicker: float = 0.22
-var grill_heat_wobble: float = 0.18
+var grill_heat_size: float = 2.55 ## Multiplies the single center glow blot
+var grill_heat_bars: int = 25 ## Vertical grate lines across BAR_SPAN (same width on every spot)
+var grill_heat_gap: float = 0.62 ## Fraction of each bar period with no light (0–0.7)
+var grill_heat_opacity: float = 0.72
+var grill_heat_flicker: float = 0.42
+var grill_heat_wobble: float = 0.14
 var grill_heat_height: float = 0.027 ## Local Y above zone panels
 var grill_heat_tint := Color(0.92, 0.16, 0.04) ## Subtle ember red
 var _grill_heat_cook_x0: float = 0.0 ## World X span of cook steel (for section rebuild)
@@ -411,29 +418,29 @@ var _grill_heat_cook_x1: float = 0.0
 ## One Omni centered on each cook glow blot (FULL @ 100%, ½ @ 50%).
 const GRILL_SURFACE_LIGHT_CFG_SECTION := "grill_surface_light"
 var grill_surface_lights: Array = [] ## OmniLight3D
-var grill_surf_light_energy: float = 0.18 ## "greatness" / intensity — keep subtle
-var grill_surf_light_range: float = 0.85 ## Per-zone wash; smaller so FULL / ½ stay distinct
-var grill_surf_light_height: float = 0.11 ## local Y above steel
-var grill_surf_light_flicker: float = 0.12
-var grill_surf_light_specular: float = 0.35
+var grill_surf_light_energy: float = 0.25 ## "greatness" / intensity — keep subtle
+var grill_surf_light_range: float = 0.64 ## Per-zone wash; smaller so FULL / ½ stay distinct
+var grill_surf_light_height: float = 0.13 ## local Y above steel
+var grill_surf_light_flicker: float = 0.23
+var grill_surf_light_specular: float = 0.06
 var grill_surf_light_color := Color(1.0, 0.38, 0.12) ## soft red-orange
 var _grill_surf_light_phase: float = 0.0
 ## Service-window sill glass — Hidden tunable.
 const WINDOW_SILL_GLASS_CFG_SECTION := "window_sill_glass"
 var sill_glass_mesh: MeshInstance3D = null
 var sill_glass_mat: ShaderMaterial = null
-var sill_glass_height_in: float = 8.0 ## was 5; +3"
-var sill_glass_thick_in: float = 0.55 ## real thickness, not a paper plane
-var sill_glass_magnify: float = 0.022
-var sill_glass_distort: float = 0.012
-var sill_glass_tint := Color(0.48, 0.06, 0.02)
-var sill_glass_tint_strength: float = 0.58
-var sill_glass_opacity: float = 0.42
-var sill_glass_darken: float = 0.42
-var sill_glass_bottom_darken: float = 0.55
-var sill_glass_reflect: float = 0.28
-var sill_glass_vignette: float = 0.35
-var sill_glass_strip_y: float = 0.72
+var sill_glass_height_in: float = 6.75
+var sill_glass_thick_in: float = 0.25 ## real thickness, not a paper plane
+var sill_glass_magnify: float = 0.038
+var sill_glass_distort: float = 0.0
+var sill_glass_tint := Color(0.63, 0.36, 0.06)
+var sill_glass_tint_strength: float = 0.09
+var sill_glass_opacity: float = 0.52
+var sill_glass_darken: float = 0.06
+var sill_glass_bottom_darken: float = 1.0
+var sill_glass_reflect: float = 0.76
+var sill_glass_vignette: float = 0.91
+var sill_glass_strip_y: float = 1.0
 var sill_glass_strip_h: float = 0.10
 var sill_glass_strip_opacity: float = 0.85
 var sill_glass_strip_reps: float = 14.0
@@ -442,35 +449,35 @@ var sill_glass_strip_white := Color(0.92, 0.92, 0.90)
 ## Multicolor oil/water seasoning film — Hidden tunable (v2 = stronger defaults).
 const GRILL_SEASON_CFG_SECTION := "grill_season"
 const GRILL_SEASON_CFG_VERSION := 2
-var grill_season_opacity: float = 1.45
-var grill_season_size: float = 1.45 ## splotch_scale
-var grill_season_reps: float = 1.35 ## uv_repeat — more = denser islands
+var grill_season_opacity: float = 0.24
+var grill_season_size: float = 3.0 ## splotch_scale
+var grill_season_reps: float = 2.35 ## uv_repeat — more = denser islands
 var grill_season_height: float = 0.0232
 var grill_season_off_x: float = 0.0
 var grill_season_off_z: float = 0.0 ## UV Y offset (grill depth)
 var grill_season_chroma: float = 0.78
-var grill_season_strength: float = 0.62 ## splotch body strength
-var grill_season_brightness: float = 1.4
-var grill_season_threshold: float = 0.40 ## lower = more islands
-var grill_season_vignette: float = 0.22
-var grill_season_edge: float = 0.30
+var grill_season_strength: float = 0.1 ## splotch body strength
+var grill_season_brightness: float = 0.2
+var grill_season_threshold: float = 0.32 ## lower = more islands
+var grill_season_vignette: float = 0.32
+var grill_season_edge: float = 0.38
 var grill_season_mesh: MeshInstance3D = null
 var grill_season_mat: ShaderMaterial = null
 ## Full-grill darkening vignette (cook + HOLD) — Hidden tunable.
 const GRILL_VIGNETTE_CFG_SECTION := "grill_vignette"
 const GRILL_VIGNETTE_CFG_VERSION := 3 ## v3 = restore pre-chunky soft noise (undo v2)
-var grill_vig_darken_a: float = 0.42
-var grill_vig_darken_b: float = 0.58
-var grill_vig_dual: float = 0.55 ## 0 = one darken (A only), 1 = two-tone A/B mix
-var grill_vig_size: float = 0.88
+var grill_vig_darken_a: float = 0.57
+var grill_vig_darken_b: float = 0.65
+var grill_vig_dual: float = 0.44 ## 0 = one darken (A only), 1 = two-tone A/B mix
+var grill_vig_size: float = 0.54
 var grill_vig_noise: float = 0.48
-var grill_vig_noise_scale: float = 4.2
-var grill_vig_choke: float = 0.0
-var grill_vig_opacity: float = 0.78
-var grill_vig_color: float = 0.32
-var grill_vig_spots: float = 0.38
-var grill_vig_spot_scale: float = 1.55
-var grill_vig_height: float = 0.0215 ## under oil film so spots sit on top
+var grill_vig_noise_scale: float = 9.85
+var grill_vig_choke: float = 0.16
+var grill_vig_opacity: float = 1.18
+var grill_vig_color: float = 0.39
+var grill_vig_spots: float = 1.08
+var grill_vig_spot_scale: float = 2.6
+var grill_vig_height: float = 0.024 ## under oil film so spots sit on top
 var grill_vig_mesh: MeshInstance3D = null
 var grill_vig_mat: ShaderMaterial = null
 var _grill_glow_tween: Tween = null
@@ -601,7 +608,7 @@ var shaker_area: Area3D = null
 var shaker_visual: Node3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(1.526, 2.0384, 1.12) ## −4" from prior 2.14
+var shaker_home: Vector3 = Vector3(1.7292, 2.0384, 1.12) ## +8" camera-left from prior 1.526
 var shaker_season_cool: float = 0.0
 var _shaker_hold_t: float = 0.0 ## seconds held; short tap → hi-hat crash
 var _shaker_did_season: bool = false
@@ -632,7 +639,7 @@ const OIL_LIQUID_UPRIGHT_BOT_R := 0.0315
 const OIL_LIQUID_UPRIGHT_TOP_R := 0.0265
 const OIL_LIQUID_POUR_BOT_R := 0.020
 const OIL_LIQUID_POUR_TOP_R := 0.011
-var oil_home: Vector3 = Vector3(1.166, 2.12, 1.12)
+var oil_home: Vector3 = Vector3(1.3692, 2.12, 1.12) ## +8" camera-left
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_pour_hold_t: float = 0.0 ## Seconds continuously pouring while held.
@@ -763,9 +770,9 @@ const BRUSH_PATTY_PUSH_SCALE := 1.15
 const BRUSH_PATTY_PUSH_MAX := 0.072
 ## Spatula blade samples shove burgers (not a fat tip magnet).
 const SPATULA_BLADE_HALF_W := 0.052 ## local ±X across the blade face
-const SPATULA_PATTY_PUSH_RADIUS := 0.078 ## contact distance to nearest blade sample
-const SPATULA_PATTY_PUSH_SCALE := 2.35 ## snappy response once overlapping
-const SPATULA_PATTY_PUSH_MAX := 0.12
+const SPATULA_PATTY_PUSH_RADIUS := 0.092 ## contact distance to nearest blade sample
+const SPATULA_PATTY_PUSH_SCALE := 3.05 ## snappier real slide once overlapping
+const SPATULA_PATTY_PUSH_MAX := 0.155
 ## Tilted blade — slightly wider / stronger, still sample-based.
 const SPATULA_TILT_PUSH_RADIUS_MUL := 1.18
 const SPATULA_TILT_PUSH_SCALE_MUL := 1.35
@@ -933,9 +940,9 @@ var cup_held: bool = false
 var cup_drawing: bool = false ## true while lerping a fresh cup out of the stack
 var _cup_draw_t: float = 0.0
 var _cup_draw_from: Vector3 = Vector3.ZERO
-const CUP_DRAW_DUR := 1.12 ## Nest → hand — slow smooth pull (was 0.62, felt snap/teleport)
+const CUP_DRAW_DUR := 0.42 ## Nest → hand — fast pull without teleporting.
 ## After a fresh rack grab: keep cups off the cabinet back for this long, then open the fill bay.
-const CUP_GRAB_FRONT_BLOCK_SEC := 0.5
+const CUP_GRAB_FRONT_BLOCK_SEC := 0.28
 var _cup_grab_front_block_t: float = 0.0
 var cup_home: Vector3 = Vector3.ZERO ## rack spawn (spare grab)
 var cup_home_rot: Vector3 = Vector3.ZERO
@@ -1217,22 +1224,22 @@ const TTT_COOK_PAD := 0 ## Closest-to-cook HOLD drum pad (world −Z / camera si
 var _ttt_scrub_flash_cool: float = 0.0 ## Debounce scrub-progress flashes
 ## HOLD tic-tac-toe look — Hidden tunable (T key toggles board).
 const GRILL_TTT_CFG_SECTION := "grill_ttt"
-var ttt_height_in: float = 0.32 ## inches above steel
-var ttt_size_in: float = 6.1 ## board edge length in inches
-var ttt_line_w_in: float = 0.165 ## scratch line thickness (in)
-var ttt_mark_w_in: float = 0.22 ## X/O stroke thickness (in)
+var ttt_height_in: float = 1.35 ## inches above steel
+var ttt_size_in: float = 13.0 ## board edge length in inches
+var ttt_line_w_in: float = 0.06 ## scratch line thickness (in)
+var ttt_mark_w_in: float = 0.11 ## X/O stroke thickness (in)
 var ttt_color := Color(0.10, 0.11, 0.13)
-var ttt_opacity: float = 0.92
-var ttt_off_left_in: float = 0.0 ## + = camera-left (world +X)
-var ttt_off_fwd_in: float = 0.0 ## + = forward into truck / away from cook (world +Z)
-var ttt_noise: float = 0.55
-var ttt_noise_freq: float = 7.0
-var ttt_bevel_y_in: float = 0.063 ## bright lip lower into cut
+var ttt_opacity: float = 0.79
+var ttt_off_left_in: float = 0.3 ## + = camera-left (world +X)
+var ttt_off_fwd_in: float = 4.5 ## + = forward into truck / away from cook (world +Z)
+var ttt_noise: float = 0.9
+var ttt_noise_freq: float = 14.0
+var ttt_bevel_y_in: float = 0.075 ## bright lip lower into cut
 var ttt_bevel_z_in: float = 0.071 ## bright lip closer to cook
-var ttt_bevel_scale: float = 0.88
+var ttt_bevel_scale: float = 0.92
 var ttt_bevel_color := Color(0.72, 0.74, 0.78)
-var ttt_bevel_opacity: float = 0.78
-var ttt_seed: float = 17.0
+var ttt_bevel_opacity: float = 0.83
+var ttt_seed: float = 91.0
 var _audio_debug_label: Label = null
 var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
@@ -1359,20 +1366,20 @@ const AUDIO_OUTDOOR_AMBIENCE_VOL_KEY := "outdoor_ambience_volume"
 ## Soft fill lights by outdoor trees (no shadows) — Hidden menu tunable.
 ## Each entry: {light, bulb, tree} — light/bulb parented to OutdoorStreet (unscaled).
 var tree_fill_entries: Array = []
-var tree_light_energy: float = 1.55
-var tree_light_range: float = 5.2
-var tree_light_size: float = 0.14 ## Visible bulb radius (meters)
-var tree_light_off_x: float = 0.55
-var tree_light_off_y: float = 2.85
-var tree_light_off_z: float = 0.65
+var tree_light_energy: float = 2.7
+var tree_light_range: float = 2.8
+var tree_light_size: float = 0.15 ## Visible bulb radius (meters)
+var tree_light_off_x: float = 0.4
+var tree_light_off_y: float = 2.9
+var tree_light_off_z: float = 0.7
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_WIND_CFG_SECTION := "tree_wind"
 const TREE_CLICK_COLLISION_LAYER := 262144
 const CUSTOMER_WAWA_COLLISION_LAYER := 524288 ## torso/head Area3D on each guest
 const TREE_SHAKE_DEG := 1.45 ## soft pendulum lean (was 2.4)
 ## Leaf wind — Hidden menu (strength + world yaw direction).
-var tree_wind_strength: float = 1.85 ## default readable sway
-var tree_wind_dir_deg: float = 40.0 ## 0° = +X, 90° = +Z
+var tree_wind_strength: float = 3.65 ## default readable sway
+var tree_wind_dir_deg: float = 313.0 ## 0° = +X, 90° = +Z
 const TREE_APPLE_CHANCE := 0.20
 const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
 const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
@@ -1383,7 +1390,7 @@ var _tree_shake_prev_mouse: Vector2 = Vector2.ZERO
 var _tree_shake_vel: Vector2 = Vector2.ZERO
 var _tree_hold_lean: Vector3 = Vector3.ZERO
 const TREE_FRONT_DEFAULT_POS := Vector3(-4.33, 0.0, 5.36)
-const TREE_FRONT_DEFAULT_YAW := -5.0 ## prior −25° + 20°
+const TREE_FRONT_DEFAULT_YAW := 60.0
 const TREE_BIRCH_DEFAULT_POS := Vector3(3.92, 0.0, 3.05)
 const TREE_BIRCH_DEFAULT_YAW := 55.0 ## prior 35° + 20°
 var tree_front_node: Node3D = null
@@ -1656,15 +1663,16 @@ const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
 ## Local Y of cup bottom on the visible drip ledge (was 0.01*s — clipped through the tray).
 ## +2" again — first fill was still sitting too low under the spout.
 const CUP_TRAY_DECK_LOCAL_Y := 0.08 * SODA_FOUNTAIN_SCALE + 0.0508
-## Cup mesh ~10% smaller than the original fountain cups.
-const CUP_SHELL_H := 0.189
-const CUP_SHELL_TOP_R := 0.0738
-const CUP_SHELL_BOT_R := 0.0594
-const CUP_LIQUID_MAX_H := 0.168 ## was 0.1458 — fill sits a bit higher in the cup
-const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
-const CUP_LIQUID_BOT_R := 0.0558
+## Cup mesh 20% smaller; full liquid top lowered by 0.3" from the old fill height.
+const CUP_SHELL_H := 0.1512
+const CUP_SHELL_TOP_R := 0.05904
+const CUP_SHELL_BOT_R := 0.04752
+const CUP_LIQUID_BASE_H := 0.016
+const CUP_LIQUID_MAX_H := 0.12678
+const CUP_LIQUID_TOP_R := 0.05616 ## hug the shell — tiny inset only
+const CUP_LIQUID_BOT_R := 0.04464
 ## Thin empty sliver under the pop — keep liquid near the plastic floor.
-const CUP_LIQUID_FLOOR_Y := 0.008
+const CUP_LIQUID_FLOOR_Y := 0.0064
 const CUP_FILL_RATE := 0.95
 const CUP_SPOUT_REACH := 0.55
 const CUP_ICE_CUBE_INTERVAL := 0.065
@@ -1846,33 +1854,33 @@ const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 0.6)
 const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const GFX_DEFAULTS := {
-	"bloom": 0.18,
-	"glow_intensity": 0.63,
-	"glow_strength": 1.07,
+	"bloom": 0.4,
+	"glow_intensity": 0.09,
+	"glow_strength": 0.42,
 	"glow_threshold": 0.28,
 	"glow_on": true,
-	"exposure": 0.89,
-	"ambient": 0.33,
-	"sun": 1.53,
-	"kitchen": 2.90,
-	"grill_lamp": 1.66,
+	"exposure": 0.73,
+	"ambient": 0.44,
+	"sun": 2.09,
+	"kitchen": 0.81,
+	"grill_lamp": 1.42,
 	"window_wash": 0.97,
-	"saturation": 1.03,
-	"contrast": 1.05,
+	"saturation": 1.07,
+	"contrast": 0.98,
 	"ssao": false,
-	"ssao_radius": 1.35,
-	"ssao_intensity": 1.85,
-	"ssao_power": 1.7,
-	"ssao_horizon": 0.04,
-	"ssao_sharpness": 0.98,
-	"ssil": false,
-	"fake_df_ao": false,
-	"fake_df_ao_radius": 14.0,
-	"fake_df_ao_intensity": 1.15,
-	"fake_df_ao_contrast": 1.65,
+	"ssao_radius": 1.2,
+	"ssao_intensity": 3.09,
+	"ssao_power": 1.57,
+	"ssao_horizon": 0.176,
+	"ssao_sharpness": 0.72,
+	"ssil": true,
+	"fake_df_ao": true,
+	"fake_df_ao_radius": 10.0,
+	"fake_df_ao_intensity": 3.0,
+	"fake_df_ao_contrast": 3.18,
 	"fake_df_ao_bias": 0.0012,
 	"shadows": true, ## Cast shadows on by default
-	"sky_energy": 0.34,
+	"sky_energy": 0.5,
 	"heat_warp_on": true,
 	"heat_warp_size": 0.86,
 	"heat_warp_speed": 1.65,
@@ -1883,16 +1891,16 @@ const GFX_DEFAULTS := {
 	"patty_reflect_fade_height": 0.04,
 	"patty_reflect_fade_opacity": 0.04,
 	"roomba_drive_volume": 1.0,
-	"bg_y": STREET_MATTE_DEFAULT_Y,
-	"bg_scale": 1.0,
-	"sale_x": FIRST_SALE_DEFAULT_X,
-	"sale_y": FIRST_SALE_DEFAULT_Y,
-	"sale_z": FIRST_SALE_DEFAULT_Z,
-	"sale_scale": FIRST_SALE_DEFAULT_SCALE,
-	"menu_x": MENU_BOARD_DEFAULT_X,
-	"menu_y": MENU_BOARD_DEFAULT_Y,
+	"bg_y": 0.52,
+	"bg_scale": 1.28,
+	"sale_x": 0.0,
+	"sale_y": 2.39,
+	"sale_z": 1.18,
+	"sale_scale": 0.44,
+	"menu_x": -2.91,
+	"menu_y": 1.62,
 	"menu_z": MENU_BOARD_DEFAULT_Z,
-	"menu_scale": MENU_BOARD_DEFAULT_SCALE,
+	"menu_scale": 1.15,
 	"menu_yaw": MENU_BOARD_DEFAULT_YAW,
 	## Orange strip under the grill lip (burner on only).
 	"strip_x": 0.05,
@@ -1911,16 +1919,16 @@ const GFX_DEFAULTS := {
 	"bz_row_right": BUILD_STATIONS_ROW_RIGHT,
 	"bz_row_top": 0.0, ## stations_row packs to column bottom (ALIGNMENT_END)
 	"bz_row_bottom": 0.0,
-	"bz_panel_w": BUILD_PANEL_SIZE.x,
-	"bz_panel_h": BUILD_PANEL_SIZE.y,
-	"bz_zone_w": BUILD_ZONE_SIZE.x,
-	"bz_zone_h": BUILD_ZONE_SIZE.y,
+	"bz_panel_w": 210.0,
+	"bz_panel_h": 320.0,
+	"bz_zone_w": 210.0,
+	"bz_zone_h": 280.0,
 	"bz_zone_left": 0.0,
 	"bz_zone_top": 8.0,
 	"bz_lift_bottom": BUILD_UI_LIFT_BOTTOM,
 	"bz_plate_w": 0.0, ## 0 = stretch to full Build column / panel width
 	"bz_plate_h": 230.0,
-	"bz_plate_shift": BUILD_PLATE_SHIFT_X,
+	"bz_plate_shift": 42.0,
 	"bz_plate_y": 80.0, ## was 60; +20px down on the cutting board
 	"bz_plate_pad": 8.0,
 	"bz_title_y": 38.0,
@@ -1943,8 +1951,8 @@ const GFX_DEFAULTS := {
 	"prep_ui_x": 34.0,
 	"prep_ui_top": 343.0,
 	"prep_ui_y": 153.0,
-	"prep_ui_w": 321.6,
-	"prep_ui_h": 215.2,
+	"prep_ui_w": 322.0,
+	"prep_ui_h": 215.0,
 	"prep_img_y": -71.0,
 	"strip_icon_w": 64.0,
 	"strip_icon_h": 44.0,
@@ -2004,6 +2012,7 @@ var _mp_residue_sync_cool: float = 0.0
 var _mp_ext_sync_cool: float = 0.0
 var _mp_season_sync_cool: float = 0.0
 var _mp_tool_pose_cool: float = 0.0
+var _mp_spatula_pose_sent: bool = false
 var _mp_fryer_basket_pose_cool: float = 0.0
 var _serve_fly_watch: float = 0.0
 ## peer_id -> ghost Node3D so partners see held tools in-hand
@@ -2012,6 +2021,7 @@ var _mp_remote_shaker: Dictionary = {}
 var _mp_remote_ext: Dictionary = {}
 var _mp_remote_glock: Dictionary = {}
 var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
+var _mp_remote_spatula: Dictionary = {} ## peer_id -> in-hand grill spatula ghost
 var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
 var _mp_remote_icecreams: Dictionary = {} ## peer_id -> soft-serve cone ghost while held
 var _mp_remote_fries: Dictionary = {} ## peer_id -> fries cup ghost while held
@@ -3372,6 +3382,18 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_MIDDLE:
 			_pulse_cursor_click(event.position)
+		if event.button_index == MOUSE_BUTTON_MIDDLE and (
+				_should_show_hand_spatula(event.position)
+				or (hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible)
+		):
+			_spatula_balance_active = not _spatula_balance_active
+			_spatula_balance_last_mouse = event.position
+			_spatula_balance_roll_vel = 0.0
+			if _spatula_balance_active:
+				_spatula_user_roll = 0.0
+			_refresh_grill_piano_note_labels()
+			get_viewport().set_input_as_handled()
+			return
 	## Options / Pause own the mouse — never let kitchen grabs see clicks while frozen.
 	if options_menu_open or shift_paused:
 		if event is InputEventKey and event.pressed and not event.echo:
@@ -4930,6 +4952,7 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 	## Scroll up → +45° / +90° · scroll down → opposite · snap to those steps.
 	if dir == 0:
 		return
+	_spatula_balance_active = false
 	var next := _spatula_user_roll + float(dir) * HAND_SPATULA_ROLL_STEP
 	## Snap so leftover 30° steps from older builds clean up.
 	next = snappedf(next, HAND_SPATULA_ROLL_STEP)
@@ -4938,17 +4961,35 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 	_refresh_grill_piano_note_labels()
 
 
+func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
+	if not _spatula_balance_active:
+		_spatula_balance_last_mouse = mouse
+		return
+	if _spatula_balance_last_mouse.x == INF:
+		_spatula_balance_last_mouse = mouse
+		return
+	var dx := mouse.x - _spatula_balance_last_mouse.x
+	_spatula_balance_last_mouse = mouse
+	var wobble := sin(Time.get_ticks_msec() * 0.0047) * HAND_SPATULA_BALANCE_DRIFT
+	_spatula_balance_roll_vel += (_spatula_user_roll * HAND_SPATULA_BALANCE_UNSTABLE + wobble) * delta
+	_spatula_balance_roll_vel -= dx * HAND_SPATULA_BALANCE_MOUSE_CORRECT / maxf(delta, 0.001)
+	_spatula_balance_roll_vel *= pow(HAND_SPATULA_BALANCE_DAMP, delta * 60.0)
+	_spatula_user_roll = clampf(
+		_spatula_user_roll + _spatula_balance_roll_vel * delta,
+		-HAND_SPATULA_ROLL_MAX,
+		HAND_SPATULA_ROLL_MAX
+	)
+	if absf(_spatula_user_roll) >= HAND_SPATULA_ROLL_MAX - 0.1:
+		_spatula_balance_roll_vel *= -0.22
+	_refresh_grill_piano_note_labels()
+
+
 func _spatula_roll_midi_offset() -> int:
 	## Scroll-tilt changes the piano key for every strip (same on both sides):
 	##   0°   → C
 	##  ±45°  → F
 	##  ±90°  → G
-	var mag := absf(_spatula_user_roll)
-	if mag >= HAND_SPATULA_ROLL_MAX - 0.5:
-		return GRILL_PIANO_KEY_90
-	if mag >= HAND_SPATULA_ROLL_STEP * 0.5:
-		return GRILL_PIANO_KEY_45
-	return GRILL_PIANO_KEY_FLAT
+	return _spatula_roll_midi_offset_for_roll(_spatula_user_roll)
 
 
 func _grill_piano_label_semitone_offset() -> int:
@@ -5295,17 +5336,18 @@ func _spatula_play_ting_bit(bit: int) -> void:
 	_register_hold_ttt_tap(_spatula_slap_contact)
 
 
-func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
+func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_override: float = INF, send_mp: bool = true) -> void:
 	## Cook steel → C major piano strips; HOLD → drums / hats by spatula tilt.
 	if game_audio == null or world_pos == Vector3.ZERO:
 		return
 	_flash_grill_tap_pad(world_pos)
+	var tap_roll := _spatula_user_roll if roll_override == INF else roll_override
 	var zone := _grill_zone_at(world_pos)
 	if str(zone.get("id", "")) == "hold":
 		if game_audio.has_method("play_spatula_drum"):
 			## Flat = drum · ±45° = closed hi-hat · ±90° = open hat.
 			var voice := 0
-			var roll_mag := absf(_spatula_user_roll)
+			var roll_mag := absf(tap_roll)
 			if roll_mag >= HAND_SPATULA_ROLL_MAX - 0.5:
 				voice = 2
 			elif roll_mag >= HAND_SPATULA_ROLL_STEP * 0.5:
@@ -5314,10 +5356,23 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 		elif game_audio.has_method("play_spatula_ting"):
 			## Fallback: low pitched ting if drum synth missing.
 			game_audio.play_spatula_ting(55 + _grill_hold_drum_pad_at(world_pos), volume_scale)
+		if send_mp and mp_enabled and not _mp_applying:
+			mp_spatula_tap_fx.rpc(world_pos.x, world_pos.z, volume_scale, tap_roll)
 		return
 	if game_audio.has_method("play_spatula_ting"):
-		var midi := _grill_piano_midi_at(world_pos) + _spatula_roll_midi_offset()
+		var midi := _grill_piano_midi_at(world_pos) + _spatula_roll_midi_offset_for_roll(tap_roll)
 		game_audio.play_spatula_ting(midi, volume_scale)
+	if send_mp and mp_enabled and not _mp_applying:
+		mp_spatula_tap_fx.rpc(world_pos.x, world_pos.z, volume_scale, tap_roll)
+
+
+func _spatula_roll_midi_offset_for_roll(roll: float) -> int:
+	var mag := absf(roll)
+	if mag >= HAND_SPATULA_ROLL_MAX - 0.5:
+		return GRILL_PIANO_KEY_90
+	if mag >= HAND_SPATULA_ROLL_STEP * 0.5:
+		return GRILL_PIANO_KEY_45
+	return GRILL_PIANO_KEY_FLAT
 
 
 func _register_hold_ttt_tap(world_pos: Vector3) -> void:
@@ -5462,18 +5517,18 @@ func _request_ttt_move(cell: int) -> void:
 	_apply_ttt_move_local(cell, my)
 
 
-func _apply_ttt_move_local(cell: int, mark: int = -1) -> void:
+func _apply_ttt_move_local(cell: int, mark: int = -1) -> bool:
 	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
-		return
+		return false
 	if not _grill_ttt.has_method("try_place"):
-		return
+		return false
 	## Multiplayer: enforce host=X / guest=O even if a peer cheats the RPC.
 	if mp_enabled and mark != 1 and mark != 2:
-		return
+		return false
 	if mp_enabled and mark > 0 and int(_grill_ttt.get("turn")) != mark:
-		return
+		return false
 	if not bool(_grill_ttt.try_place(cell, mark)):
-		return
+		return false
 	var win := int(_grill_ttt.get("winner"))
 	if win == 1 or win == 2:
 		var streak_reset := false
@@ -5487,10 +5542,9 @@ func _apply_ttt_move_local(cell: int, mark: int = -1) -> void:
 			_flash("HOLD scratches: O wins  (%d–%d)" % [wx, wo], Color(0.85, 0.9, 1.0))
 		if streak_reset:
 			_flash("Tally reset at 10 — fresh scratches", Color(0.95, 0.85, 0.55))
-		if mp_enabled and not _mp_applying:
-			_sync_ttt_state_to_peers()
 	elif win == -1:
 		_flash("HOLD scratches: draw", Color(0.7, 0.75, 0.8))
+	return true
 
 
 func _ttt_sync_payload() -> Dictionary:
@@ -6176,6 +6230,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	## Keep the glove pointer even while the 3D spatula is out.
 	_set_cursor_kind("glove")
 	if not show or camera == null:
+		_spatula_balance_last_mouse = mouse
 		## FX can outlive the spatula pose — keep fading even if aim leaves the grill.
 		if _spatula_fx_t >= 0.0:
 			_tick_spatula_flip_fx(delta)
@@ -6328,6 +6383,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		if _spatula_fx_t >= 0.0:
 			## Flip finished — ribbons/circle keep easing out for the rest of the second.
 			_tick_spatula_flip_fx(delta)
+	_update_spatula_balance(mouse, delta)
 	## Scroll-wheel blade roll (±45° / ±90°) on top of anim / hold pose.
 	roll += _spatula_user_roll
 	## Edge yaw from grill X — left CCW, right CW (no side roll).
@@ -12176,6 +12232,13 @@ func _roomba_try_drop_carried_patty() -> void:
 			if fake != null and is_instance_valid(fake):
 				fake.queue_free()
 		)
+		get_tree().create_timer(0.26).timeout.connect(func() -> void:
+			if patty != null and is_instance_valid(patty):
+				patty.visible = true
+				patty.rotation_degrees = Vector3.ZERO
+				if patty.has_method("refresh_cook_visuals"):
+					patty.refresh_cook_visuals()
+		)
 
 
 func _roomba_push_patty(index: int, patty: Area3D, roomba_xz: Vector2) -> bool:
@@ -12383,7 +12446,7 @@ func _roomba_idle_corner_target() -> Vector3:
 	return Vector3(
 		b.position.x + 0.012, 
 		GRILL_SURFACE_Y + ROOMBA_SIT_Y, 
-		b.position.y + 0.012
+		b.end.y - 0.012
 	)
 
 
@@ -16968,7 +17031,7 @@ func _set_melting_cup_liquid_level(root: Node3D, fill: float, flavor: String = "
 		liq.visible = false
 		return
 	liq.visible = true
-	var h := 0.02 + fill * CUP_LIQUID_MAX_H
+	var h := CUP_LIQUID_BASE_H + fill * CUP_LIQUID_MAX_H
 	var cyl := liq.mesh as CylinderMesh
 	if cyl == null:
 		cyl = CylinderMesh.new()
@@ -20649,6 +20712,13 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 		return false
 	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
 			or sale_held or cup_held or spatula_patty != null or dragging_patty != null:
+		return false
+	## Soda machine/cup targets beat outdoor tree shake when their click volumes overlap.
+	if _owns_soda_machine() and (
+			_cup_rack_ray_hit(screen_pos)
+			or _ray_hits_any_cup(screen_pos)
+			or _soda_flavor_under_cursor(screen_pos)
+	):
 		return false
 	## Don't steal real steel clicks — outdoor trees beyond the plate are fair game.
 	if _grill_blocks_tree_click(screen_pos):
@@ -26083,11 +26153,11 @@ func _create_drink_cup_node() -> Node3D:
 	var liq := CylinderMesh.new()
 	liq.top_radius = CUP_LIQUID_TOP_R
 	liq.bottom_radius = CUP_LIQUID_BOT_R
-	liq.height = 0.02
+	liq.height = CUP_LIQUID_BASE_H
 	liq.cap_top = true
 	liq.cap_bottom = true
 	liquid_mesh.mesh = liq
-	liquid_mesh.position = Vector3(0.0, 0.01, 0.0)
+	liquid_mesh.position = Vector3(0.0, CUP_LIQUID_BASE_H * 0.5, 0.0)
 	liquid_mesh.visible = false
 	liquid_mesh.material_override = _make_soda_liquid_gradient_material(Color(0.28, 0.08, 0.05))
 	_boost_cup_draw_order(liquid_mesh)
@@ -26146,7 +26216,7 @@ func _create_drink_cup_node() -> Node3D:
 	area.monitorable = true
 	var cshape := CollisionShape3D.new()
 	var cbox := BoxShape3D.new()
-	cbox.size = Vector3(0.15, CUP_SHELL_H + 0.04, 0.15)
+	cbox.size = Vector3(CUP_SHELL_TOP_R * 2.05, CUP_SHELL_H + 0.032, CUP_SHELL_TOP_R * 2.05)
 	cshape.shape = cbox
 	cshape.position = Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	area.add_child(cshape)
@@ -27244,7 +27314,7 @@ func _update_cup_liquid_bubbles(delta: float) -> void:
 	## Gentle idle carbonation as long as there's soda in the cup.
 	var idle_fizz := cup_soda_fill > 0.15 and not pouring
 	var float_alive := cup_soda_fill > 0.04 and (active_head or residual or idle_fizz)
-	var liquid_h := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
+	var liquid_h := CUP_LIQUID_BASE_H + cup_soda_fill * CUP_LIQUID_MAX_H
 	var top_r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
 	var bot_r := CUP_LIQUID_BOT_R
 	var max_y := liquid_h * 0.82 ## risers stop under the cream band
@@ -27338,7 +27408,7 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 	var mm := mm_i.multimesh
 	if mm == null:
 		return
-	var liquid_h := 0.02 + fill * CUP_LIQUID_MAX_H
+	var liquid_h := CUP_LIQUID_BASE_H + fill * CUP_LIQUID_MAX_H
 	var top_r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
 	var bot_r := CUP_LIQUID_BOT_R
 	var tsec := Time.get_ticks_msec() * 0.001
@@ -28284,8 +28354,7 @@ func _spawn_cup_splash_drops() -> void:
 		tw.tween_property(drop, "global_position", end_p, life).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tw.tween_property(drop, "scale", Vector3.ONE * 0.2, life)
 		tw.chain().tween_callback(drop.queue_free)
-	if any_grill and grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
-		game_audio.trigger_hot_oil(1.6)
+	if any_grill and grill_on:
 		_flash("Soda on the grill — sizzle!", Color("FFCC80"))
 	## Also puddle under the cup if we're whipping it over hot steel.
 	if _is_on_grill_surface(cup_root.global_position):
@@ -28476,8 +28545,6 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 			0.032 + randf() * 0.02,
 			flavor
 		)
-		if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.28:
-			game_audio.trigger_hot_oil(0.45)
 	## --- SOUTH (toward camera): long curved pour onto the kitchen floor ---
 	var south_lip := rim + south * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
 	var south_land := south_lip + south * (0.26 + 0.02 * sin(t_ms * 2.4)) \
@@ -28998,7 +29065,7 @@ func _refresh_cup_visuals() -> void:
 	if cup_liquid_mesh != null and is_instance_valid(cup_liquid_mesh):
 		if cup_soda_fill > 0.02 and cup_flavor != "":
 			cup_liquid_mesh.visible = true
-			var h := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
+			var h := CUP_LIQUID_BASE_H + cup_soda_fill * CUP_LIQUID_MAX_H
 			var liq := cup_liquid_mesh.mesh as CylinderMesh
 			if liq:
 				liq.height = h
@@ -29617,7 +29684,7 @@ func _layout_cup_ice_cubes(count: int) -> void:
 	if cup_ice_root == null:
 		return
 	## Fill from cup floor up to the rim (and mound when overfilling).
-	var liquid_top := 0.02 + cup_soda_fill * CUP_LIQUID_MAX_H
+	var liquid_top := CUP_LIQUID_BASE_H + cup_soda_fill * CUP_LIQUID_MAX_H
 	var ice_top := liquid_top
 	var fill_u := clampf(cup_ice_fill / CUP_ICE_FULL, 0.0, 1.0)
 	if cup_soda_fill < 0.05:
@@ -46336,13 +46403,21 @@ func mp_bootstrap_meta(
 
 
 func _mp_send_held_tool_pose(force: bool = false) -> void:
-	## Stream held tool world pose so the partner sees oil / scraper / shaker / ext / glock.
+	## Stream held tool world pose so the partner sees oil / scraper / shaker / spatula / ext / glock.
 	if not mp_enabled or not NetManager.is_online():
 		return
 	if not force and _mp_tool_pose_cool > 0.0:
 		return
 	_mp_tool_pose_cool = 0.04
-	if brush_held and brush_root != null and is_instance_valid(brush_root):
+	if hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible:
+		var hp: Vector3 = hand_spatula_root.global_position
+		var hr: Vector3 = hand_spatula_root.global_rotation_degrees
+		mp_tool_pose.rpc(10, true, hp.x, hp.y, hp.z, spatula_patty != null, hr.x, hr.y, hr.z)
+		_mp_spatula_pose_sent = true
+	elif _mp_spatula_pose_sent:
+		mp_tool_pose.rpc(10, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
+		_mp_spatula_pose_sent = false
+	elif brush_held and brush_root != null and is_instance_valid(brush_root):
 		var bp: Vector3 = brush_root.global_position
 		var br: Vector3 = brush_root.global_rotation_degrees
 		mp_tool_pose.rpc(3, true, bp.x, bp.y, bp.z, true, br.x, br.y, br.z)
@@ -46537,6 +46612,10 @@ func _mp_ensure_remote_brush(peer_id: int) -> Node3D:
 	return _mp_ensure_remote_tool(_mp_remote_brush, peer_id, brush_root, "RemoteBrush")
 
 
+func _mp_ensure_remote_spatula(peer_id: int) -> Node3D:
+	return _mp_ensure_remote_tool(_mp_remote_spatula, peer_id, hand_spatula_root, "RemoteSpatula")
+
+
 func _mp_ensure_remote_fries(peer_id: int) -> Node3D:
 	if _mp_remote_fries.has(peer_id):
 		var existing: Node3D = _mp_remote_fries[peer_id]
@@ -46582,6 +46661,10 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		var br: Node3D = _mp_remote_brush[peer_id]
 		if br != null and is_instance_valid(br):
 			br.visible = false
+	if except_kind != 10 and _mp_remote_spatula.has(peer_id):
+		var spat: Node3D = _mp_remote_spatula[peer_id]
+		if spat != null and is_instance_valid(spat):
+			spat.visible = false
 	if except_kind != 4 and _mp_remote_shaker.has(peer_id):
 		var sh: Node3D = _mp_remote_shaker[peer_id]
 		if sh != null and is_instance_valid(sh):
@@ -46704,7 +46787,7 @@ func _mp_apply_remote_cup_fill(root: Node3D, flavor: String, fill: float, ice: f
 	if liq != null:
 		if fill >= 0.02 and flavor != "":
 			liq.visible = true
-			var h := 0.02 + fill * CUP_LIQUID_MAX_H
+			var h := CUP_LIQUID_BASE_H + fill * CUP_LIQUID_MAX_H
 			var cyl := liq.mesh as CylinderMesh
 			if cyl == null:
 				cyl = CylinderMesh.new()
@@ -46816,7 +46899,7 @@ func mp_tool_pose(
 	ry: float = 0.0,
 	rz: float = 0.0
 ) -> void:
-	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock · 9 fries
+	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock · 9 fries · 10 spatula
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -46877,6 +46960,14 @@ func mp_tool_pose(
 			fries.global_position = pos
 			fries.global_rotation_degrees = rot
 			fries.scale = Vector3(1.18, 1.18, 1.18)
+		10:
+			var spatula := _mp_ensure_remote_spatula(sid)
+			if spatula == null:
+				return
+			spatula.visible = true
+			spatula.global_position = pos
+			spatula.global_rotation_degrees = rot
+			spatula.scale = Vector3.ONE
 		_:
 			pass
 
@@ -47095,7 +47186,7 @@ func _mp_cull_orphan_patties(_seen_net_ids: Dictionary = {}) -> void:
 	for gp_live in grill:
 		if gp_live != null and is_instance_valid(gp_live):
 			live_patty_instances[gp_live.get_instance_id()] = true
-	for held_live in [spatula_patty, dragging_patty, flicking_patty]:
+	for held_live in [spatula_patty, dragging_patty, flicking_patty, grill_roomba_carry_patty, grill_roomba_scoop_patty]:
 		if held_live != null and is_instance_valid(held_live):
 			live_patty_instances[held_live.get_instance_id()] = true
 	for st_live in stations:
@@ -49045,7 +49136,7 @@ func _mp_apply_idle_drink_visuals(root: Node3D, flavor: String, fill: float, ice
 	if liq != null:
 		if fill >= 0.02 and flavor != "":
 			liq.visible = true
-			var h := 0.02 + fill * CUP_LIQUID_MAX_H
+			var h := CUP_LIQUID_BASE_H + fill * CUP_LIQUID_MAX_H
 			var cyl := liq.mesh as CylinderMesh
 			if cyl == null:
 				cyl = CylinderMesh.new()
@@ -49298,23 +49389,50 @@ func mp_glock_fire(ix: float, iy: float, iz: float, cust_id: int, do_hit: bool, 
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_ttt_reveal(reset_first: bool) -> void:
+	if mp_enabled and not NetManager.is_host():
+		if multiplayer.get_remote_sender_id() == 1:
+			_mp_applying = true
+			_apply_ttt_reveal_local(reset_first)
+			_mp_applying = false
+		return
 	_mp_applying = true
 	_apply_ttt_reveal_local(reset_first)
 	_mp_applying = false
+	if mp_enabled and NetManager.is_host():
+		_sync_ttt_state_to_peers()
 
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_ttt_move(cell: int, mark: int = -1) -> void:
+	if mp_enabled and not NetManager.is_host():
+		if multiplayer.get_remote_sender_id() == 1:
+			_mp_applying = true
+			_apply_ttt_move_local(cell, mark)
+			_mp_applying = false
+		return
+	if mp_enabled:
+		var sid := multiplayer.get_remote_sender_id()
+		mark = 2 if sid != 0 and sid != multiplayer.get_unique_id() else 1
 	_mp_applying = true
-	_apply_ttt_move_local(cell, mark)
+	var placed := _apply_ttt_move_local(cell, mark)
 	_mp_applying = false
+	if placed and mp_enabled and NetManager.is_host():
+		_sync_ttt_state_to_peers()
 
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_ttt_hide() -> void:
+	if mp_enabled and not NetManager.is_host():
+		if multiplayer.get_remote_sender_id() == 1:
+			_mp_applying = true
+			_apply_ttt_hide_local()
+			_mp_applying = false
+		return
 	_mp_applying = true
 	_apply_ttt_hide_local()
 	_mp_applying = false
+	if mp_enabled and NetManager.is_host():
+		_sync_ttt_state_to_peers()
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -49339,6 +49457,18 @@ func mp_set_location(location_id: String) -> void:
 func mp_grill_song(song_idx: int) -> void:
 	_mp_applying = true
 	_start_grill_song_local(song_idx)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable")
+func mp_spatula_tap_fx(x: float, z: float, volume_scale: float = 1.0, roll: float = 0.0) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	var at := Vector3(x, GRILL_SURFACE_Y, z)
+	_mp_applying = true
+	_play_grill_tap_at(at, clampf(volume_scale, 0.2, 2.0), clampf(roll, -HAND_SPATULA_ROLL_MAX, HAND_SPATULA_ROLL_MAX), false)
+	_spawn_spatula_tap_ring(at)
 	_mp_applying = false
 
 

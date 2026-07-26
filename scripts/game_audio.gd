@@ -425,7 +425,9 @@ func _process(delta: float) -> void:
 		_hot_oil_was_active = false
 		_hot_oil_volume_mul = 1.0
 		if _sizzle_on and _sizzle_player != null:
-			_sizzle_player.volume_db = _sizzle_cook_volume_db()
+			_sizzle_on = false
+			_sizzle_player.stop()
+			_sizzle_player.volume_db = -80.0
 	if _sizzle_on and _sizzle_player != null and _sizzle_player.playing:
 		var playback := _sizzle_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if playback != null:
@@ -688,9 +690,16 @@ func trigger_hot_oil(duration: float = 3.0, volume_mul: float = 1.0) -> void:
 
 
 func stop_hot_oil() -> void:
-	## End a plastic/oil fry burst early (cup finished melting).
+	## End a plastic/oil fry burst early and do not leave the generator hissing.
 	_hot_oil_full_left = 0.0
-	_hot_oil_fade_left = 0.45
+	_hot_oil_fade_left = 0.0
+	_hot_oil_pop_cd = 0.0
+	_hot_oil_was_active = false
+	_hot_oil_volume_mul = 1.0
+	_sizzle_on = false
+	if _sizzle_player != null:
+		_sizzle_player.stop()
+		_sizzle_player.volume_db = -80.0
 
 
 func play_hot_oil_hit() -> void:
