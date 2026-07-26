@@ -6409,8 +6409,8 @@ func _build_flat_top_grill() -> void:
 	surface.add_child(rim)
 	## Far-edge splash guard — stainless back + short side returns (window side / +Z).
 	_add_grill_splash_guard(surface)
-	## Orange-red sill glass just behind the splash wall (further from the cook).
-	_add_grill_window_sill_glass(surface)
+	## Orange-red sill glass in the service opening (world-placed so width matches the hole).
+	_add_window_sill_glass()
 
 	## Heat-zone steel panels — FULL · 1/2 · HOLD (screen-left → right).
 	var bands: Array = _grill_zone_bands()
@@ -18202,26 +18202,27 @@ func _add_grill_splash_guard(parent: Node3D) -> void:
 		root.add_child(side)
 
 
-func _add_grill_window_sill_glass(parent: Node3D) -> void:
-	## Darker orange-red sill glass — full window opening width, ~5" tall,
-	## just past the splash guard with a cheap screen magnify/offset.
-	if parent == null or not is_instance_valid(parent):
+func _add_window_sill_glass() -> void:
+	## Darker orange-red glass across the service WINDOW OPENING only (not truck walls).
+	## Sits in the opening plane so width lines up with the side frames (no grill-parallax stretch).
+	if world == null or not is_instance_valid(world):
 		return
-	var h := 5.0 * INCH_TO_M ## half of the prior 10"
+	## Side frames at ±2.4 (0.12 thick) → clear opening ≈ 4.68; slight inset so it sits inside.
+	const FRAME_X := 2.4
+	const FRAME_HALF_W := 0.06
+	var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08 ## ~4.60, inset from frame faces
+	var h := 5.0 * INCH_TO_M
 	var thick := 0.008
-	var steel_top_y := 0.0225
-	var splash_thick := 0.010
-	var far_z := GRILL_DEPTH * 0.5
-	var glass_z := far_z + splash_thick + 0.028
-	## Service opening between the side frames (~±2.34), matching lintel span.
-	const OPENING_WIDTH := 4.68
+	## Bottom trim of the opening is centered at y=0.95, h=0.12 → top ≈ 1.01.
+	var sill_top_y := 1.01
+	## Just inside the front wall slab (~z 1.35), still past the splash guard.
+	var glass_z := 1.30
 	var glass := MeshInstance3D.new()
-	glass.name = "GrillWindowSillGlass"
+	glass.name = "WindowSillGlass"
 	var mesh := BoxMesh.new()
-	mesh.size = Vector3(OPENING_WIDTH, h, thick)
+	mesh.size = Vector3(opening_w, h, thick)
 	glass.mesh = mesh
-	## Center on world X=0 while parented under the offset grill surface.
-	glass.position = Vector3(-GRILL_CENTER_X, steel_top_y + h * 0.5, glass_z)
+	glass.position = Vector3(0.0, sill_top_y + h * 0.5, glass_z)
 	var shader := load("res://shaders/window_sill_glass.gdshader") as Shader
 	if shader == null:
 		glass.queue_free()
@@ -18229,16 +18230,15 @@ func _add_grill_window_sill_glass(parent: Node3D) -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
 	mat.render_priority = 4
-	mat.set_shader_parameter("magnify", 0.045)
-	mat.set_shader_parameter("offset_amt", 0.012)
-	mat.set_shader_parameter("tint_color", Vector3(0.72, 0.12, 0.04))
-	mat.set_shader_parameter("tint_strength", 0.62)
-	mat.set_shader_parameter("opacity", 0.58)
-	mat.set_shader_parameter("darken", 0.28)
+	mat.set_shader_parameter("magnify", 0.018)
+	mat.set_shader_parameter("tint_color", Vector3(0.48, 0.06, 0.02))
+	mat.set_shader_parameter("tint_strength", 0.58)
+	mat.set_shader_parameter("opacity", 0.40) ## a bit more see-through
+	mat.set_shader_parameter("darken", 0.42)
 	glass.material_override = mat
 	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	glass.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	parent.add_child(glass)
+	world.add_child(glass)
 
 
 func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
