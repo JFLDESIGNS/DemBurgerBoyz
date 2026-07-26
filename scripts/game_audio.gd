@@ -1105,8 +1105,8 @@ func play_ingredient(id: String) -> void:
 		play_bun_thud()
 		return
 	var midi: int = int(INGREDIENT_MIDI.get(id, 60))
-	## Soft quiet tap — stays under sizzle / radio / grade stingers.
-	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.12)
+	## Soft quiet tap — stays under sizzle / radio / grade stingers (+25% vs prior 0.12).
+	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.15)
 
 
 func play_bun_thud() -> void:
