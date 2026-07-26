@@ -1213,6 +1213,14 @@ var _ttt_tap_count: int = 0
 var _ttt_tap_cool: float = 0.0
 const TTT_TAP_WINDOW := 1.15 ## Triple-tap window on HOLD cook pad
 const TTT_COOK_PAD := 0 ## Closest-to-cook HOLD drum pad (world −Z / camera side)
+## HOLD tic-tac-toe look — Hidden tunable (T key toggles board).
+const GRILL_TTT_CFG_SECTION := "grill_ttt"
+var ttt_height_in: float = 0.32 ## inches above steel
+var ttt_size_in: float = 6.1 ## board edge length in inches
+var ttt_line_w_in: float = 0.165 ## scratch line thickness (in)
+var ttt_mark_w_in: float = 0.22 ## X/O stroke thickness (in)
+var ttt_color := Color(0.10, 0.11, 0.13)
+var ttt_opacity: float = 0.92
 var _audio_debug_label: Label = null
 var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
@@ -2078,6 +2086,7 @@ func _ready() -> void:
 	_layout_top_bar_hud()
 	_setup_game_audio()
 	_setup_grill_song_performer()
+	_load_grill_ttt_settings()
 	_setup_grill_ttt()
 	_setup_intro_title_music()
 	_setup_burgerpals_startup_sound()
@@ -3211,6 +3220,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_T or event.physical_keycode == KEY_T:
+			_hotkey_toggle_grill_ttt()
+			get_viewport().set_input_as_handled()
+			return
 		if event.keycode == KEY_U or event.physical_keycode == KEY_U:
 			_begin_roomba_ledge_fail()
 			get_viewport().set_input_as_handled()
@@ -5305,6 +5318,25 @@ func _tick_ttt_tap_window(delta: float) -> void:
 		_ttt_tap_count = 0
 
 
+func _hotkey_toggle_grill_ttt() -> void:
+	## T — show scratched HOLD tic-tac-toe (reset if the last round finished).
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		_setup_grill_ttt()
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if bool(_grill_ttt.get("revealed")):
+		var win := int(_grill_ttt.get("winner"))
+		if win != 0:
+			_request_ttt_reveal(true)
+		elif _grill_ttt.has_method("hide_board"):
+			_grill_ttt.hide_board()
+			_flash("HOLD scratches hidden", Color(0.7, 0.75, 0.8))
+			if mp_enabled and not _mp_applying:
+				mp_ttt_state.rpc(false, _grill_ttt.get_packed_cells() if _grill_ttt.has_method("get_packed_cells") else [], int(_grill_ttt.get("turn")), int(_grill_ttt.get("winner")))
+		return
+	_request_ttt_reveal(false)
+
+
 func _request_ttt_reveal(reset_first: bool) -> void:
 	if mp_enabled and not _mp_applying:
 		mp_ttt_reveal.rpc(reset_first)
@@ -5377,8 +5409,72 @@ func _setup_grill_ttt() -> void:
 		c.y = GRILL_SURFACE_Y
 		c.z = _roomba_cook_edge_z() + 0.09 ## inset onto steel so the board sits on the near lip
 		_grill_ttt.setup_on_grill(c)
+	_apply_grill_ttt_settings()
 	_ttt_tap_count = 0
 	_ttt_tap_cool = 0.0
+
+
+func _apply_grill_ttt_settings() -> void:
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if not _grill_ttt.has_method("apply_look"):
+		return
+	var col := Color(ttt_color.r, ttt_color.g, ttt_color.b, clampf(ttt_opacity, 0.05, 1.0))
+	_grill_ttt.apply_look(
+		ttt_size_in * INCH_TO_M,
+		ttt_height_in * INCH_TO_M,
+		ttt_line_w_in * INCH_TO_M,
+		ttt_mark_w_in * INCH_TO_M,
+		col
+	)
+
+
+func _load_grill_ttt_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(GRILL_TTT_CFG_SECTION):
+		return
+	ttt_height_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "height_in", ttt_height_in)), 0.05, 3.0)
+	ttt_size_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "size_in", ttt_size_in)), 2.0, 14.0)
+	ttt_line_w_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "line_w_in", ttt_line_w_in)), 0.04, 0.6)
+	ttt_mark_w_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "mark_w_in", ttt_mark_w_in)), 0.04, 0.8)
+	ttt_color.r = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "r", ttt_color.r)), 0.0, 1.0)
+	ttt_color.g = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "g", ttt_color.g)), 0.0, 1.0)
+	ttt_color.b = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "b", ttt_color.b)), 0.0, 1.0)
+	ttt_opacity = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "opacity", ttt_opacity)), 0.05, 1.0)
+
+
+func _save_grill_ttt_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "height_in", ttt_height_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "size_in", ttt_size_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "line_w_in", ttt_line_w_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "mark_w_in", ttt_mark_w_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "r", ttt_color.r)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "g", ttt_color.g)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "b", ttt_color.b)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "opacity", ttt_opacity)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_grill_ttt_hidden_ui() -> void:
+	var vals := {
+		"ttt_height": ttt_height_in,
+		"ttt_size": ttt_size_in,
+		"ttt_line_w": ttt_line_w_in,
+		"ttt_mark_w": ttt_mark_w_in,
+		"ttt_r": ttt_color.r,
+		"ttt_g": ttt_color.g,
+		"ttt_b": ttt_color.b,
+		"ttt_opacity": ttt_opacity,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
 
 
 func _try_grill_song_hotkey(event: InputEventKey) -> bool:
@@ -36551,6 +36647,68 @@ func _build_options_menu() -> void:
 			_save_window_sill_glass_settings()
 	)
 
+	var ttt_lab := Label.new()
+	ttt_lab.text = "HOLD TIC-TAC-TOE (T KEY)"
+	UiFontsScript.apply_label(ttt_lab, true, 13)
+	ttt_lab.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
+	options_hidden_room_tone_box.add_child(ttt_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_height", "Board Height (in)", 0.05, 3.0, 0.05,
+		func(): return ttt_height_in,
+		func(v: float):
+			ttt_height_in = clampf(v, 0.05, 3.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_size", "Board Size (in)", 2.0, 14.0, 0.1,
+		func(): return ttt_size_in,
+		func(v: float):
+			ttt_size_in = clampf(v, 2.0, 14.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_line_w", "Line Thickness (in)", 0.04, 0.6, 0.01,
+		func(): return ttt_line_w_in,
+		func(v: float):
+			ttt_line_w_in = clampf(v, 0.04, 0.6)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_mark_w", "Mark Thickness (in)", 0.04, 0.8, 0.01,
+		func(): return ttt_mark_w_in,
+		func(v: float):
+			ttt_mark_w_in = clampf(v, 0.04, 0.8)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_opacity", "Scratch Opacity", 0.05, 1.0, 0.01,
+		func(): return ttt_opacity,
+		func(v: float):
+			ttt_opacity = clampf(v, 0.05, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_r", "Scratch Color R", 0.0, 1.0, 0.01,
+		func(): return ttt_color.r,
+		func(v: float):
+			ttt_color.r = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_g", "Scratch Color G", 0.0, 1.0, 0.01,
+		func(): return ttt_color.g,
+		func(v: float):
+			ttt_color.g = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_b", "Scratch Color B", 0.0, 1.0, 0.01,
+		func(): return ttt_color.b,
+		func(v: float):
+			ttt_color.b = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+
 	var season_lab := Label.new()
 	season_lab.text = "GRILL OIL / MULTICOLOR SPOTS"
 	UiFontsScript.apply_label(season_lab, true, 13)
@@ -37036,6 +37194,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_grill_heat_hidden_ui()
 			_sync_grill_surface_light_hidden_ui()
 			_sync_window_sill_glass_hidden_ui()
+			_sync_grill_ttt_hidden_ui()
 			_sync_grill_season_hidden_ui()
 			_sync_grill_vignette_hidden_ui()
 			_sync_icecream_station_hidden_ui()
