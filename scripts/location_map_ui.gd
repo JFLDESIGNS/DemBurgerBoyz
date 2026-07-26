@@ -20,7 +20,10 @@ var _status_label: Label = null
 var _map_host: Control = null
 var _map_tex_rect: TextureRect = null
 var _map_tex_size: Vector2 = Vector2(1024, 682)
+var _cat_marker: Control = null ## Black cat silhouette at the parked truck / window
 const TOWN_MAP_PATH := "res://assets/ui/town_map.png"
+## Offset from the parked pin so the cat sits on the sill beside the spot.
+const CAT_MAP_UV_OFFSET := Vector2(-0.028, 0.034)
 
 
 func _ready() -> void:
@@ -42,6 +45,16 @@ func open(current_id: String) -> void:
 	_refresh_pins()
 	_refresh_detail()
 	call_deferred("_layout_map_and_pins")
+
+
+func set_parked_id(location_id: String) -> void:
+	## Co-op parking sync — refresh pin highlight + cat without reopening.
+	_parked_id = location_id if not location_id.is_empty() else TruckLocationsScript.DEFAULT_ID
+	if not visible:
+		return
+	_refresh_pins()
+	_layout_cat_marker()
+	_refresh_detail()
 
 
 func close() -> void:
@@ -151,6 +164,7 @@ func _build() -> void:
 	_map_host.add_child(_map_tex_rect)
 
 	_spawn_pins()
+	_spawn_cat_marker()
 
 	## --- Right: detail card ---
 	var detail := VBoxContainer.new()
@@ -258,6 +272,82 @@ func _build() -> void:
 func _layout_map_and_pins() -> void:
 	_layout_map_texture()
 	_layout_pins()
+	_layout_cat_marker()
+
+
+func _spawn_cat_marker() -> void:
+	if _map_host == null:
+		return
+	if _cat_marker != null and is_instance_valid(_cat_marker):
+		_cat_marker.queue_free()
+	var tex := TextureRect.new()
+	tex.name = "CatMapMarker"
+	tex.texture = _make_black_cat_icon()
+	tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tex.custom_minimum_size = Vector2(28, 28)
+	tex.size = Vector2(28, 28)
+	tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tex.z_index = 3
+	tex.tooltip_text = "Window cat"
+	_map_host.add_child(tex)
+	_cat_marker = tex
+
+
+func _make_black_cat_icon() -> Texture2D:
+	## Tiny procedural black cat silhouette for the map.
+	var s := 32
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var black := Color(0.05, 0.05, 0.07, 1.0)
+	## Body
+	for y in range(14, 27):
+		for x in range(8, 24):
+			var cx := (x - 16.0) / 8.0
+			var cy := (y - 20.0) / 6.5
+			if cx * cx + cy * cy <= 1.0:
+				img.set_pixel(x, y, black)
+	## Head
+	for y in range(6, 18):
+		for x in range(10, 22):
+			var cx := (x - 16.0) / 6.0
+			var cy := (y - 12.0) / 5.5
+			if cx * cx + cy * cy <= 1.0:
+				img.set_pixel(x, y, black)
+	## Ears
+	for y in range(2, 10):
+		for x in range(10, 15):
+			if (x - 10) + (y - 2) * 0.55 < 4.2 and (14 - x) + (y - 2) * 0.2 < 4.5:
+				img.set_pixel(x, y, black)
+		for x in range(17, 22):
+			if (22 - x) + (y - 2) * 0.55 < 4.2 and (x - 17) + (y - 2) * 0.2 < 4.5:
+				img.set_pixel(x, y, black)
+	## Tail curl
+	for i in 10:
+		var t := float(i) / 9.0
+		var tx := int(22.0 + t * 6.0)
+		var ty := int(20.0 - sin(t * PI) * 7.0)
+		for ox in range(-1, 2):
+			for oy in range(-1, 2):
+				var px := tx + ox
+				var py := ty + oy
+				if px >= 0 and px < s and py >= 0 and py < s:
+					img.set_pixel(px, py, black)
+	return ImageTexture.create_from_image(img)
+
+
+func _layout_cat_marker() -> void:
+	if _cat_marker == null or _map_host == null:
+		return
+	var img_r := _map_image_rect()
+	if img_r.size.x < 8.0 or img_r.size.y < 8.0:
+		return
+	var loc := TruckLocationsScript.get_by_id(_parked_id)
+	var uv: Vector2 = loc.get("map", Vector2(0.14, 0.76))
+	uv = Vector2(clampf(uv.x + CAT_MAP_UV_OFFSET.x, 0.02, 0.98), clampf(uv.y + CAT_MAP_UV_OFFSET.y, 0.02, 0.98))
+	var sz := _cat_marker.custom_minimum_size
+	_cat_marker.position = img_r.position + Vector2(uv.x * img_r.size.x, uv.y * img_r.size.y) - sz * 0.5
+	_cat_marker.size = sz
 
 
 func _style_primary_btn(btn: Button) -> void:

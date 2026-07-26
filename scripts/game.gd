@@ -129,6 +129,7 @@ const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
 const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd")
+const GrillTttScript := preload("res://scripts/grill_ttt.gd")
 const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
 const LocationMapUIScript := preload("res://scripts/location_map_ui.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
@@ -1120,6 +1121,11 @@ var supply_stock: Dictionary = {}
 var supply_fresh: Dictionary = {}
 var game_audio: Node = null
 var _grill_song_performer: Node = null
+var _grill_ttt: Node3D = null ## Scratched-metal tic-tac-toe on HOLD cook edge
+var _ttt_tap_count: int = 0
+var _ttt_tap_cool: float = 0.0
+const TTT_TAP_WINDOW := 1.15 ## Triple-tap window on HOLD cook pad
+const TTT_COOK_PAD := 4 ## Closest-to-cook HOLD drum pad
 var _audio_debug_label: Label = null
 var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
@@ -1979,6 +1985,7 @@ func _ready() -> void:
 	_layout_top_bar_hud()
 	_setup_game_audio()
 	_setup_grill_song_performer()
+	_setup_grill_ttt()
 	_setup_intro_title_music()
 	_setup_burgerpals_startup_sound()
 	_build_dialogue_ui()
@@ -2706,6 +2713,7 @@ func _process(delta: float) -> void:
 	if shaker_held:
 		_update_held_shaker(delta)
 	_update_tree_shake_hold(delta)
+	_tick_ttt_tap_window(delta)
 	if oil_held:
 		_update_held_oil(delta)
 	elif oil_root != null:
@@ -5121,6 +5129,7 @@ func _spatula_play_ting_bit(bit: int) -> void:
 	_spawn_spatula_tap_ring(_spatula_slap_contact)
 	## Edge blade: spark at full tilt; oil trail catches if tip hits grease.
 	_try_spatula_edge_tap_fx(_spatula_slap_contact)
+	_register_hold_ttt_tap(_spatula_slap_contact)
 
 
 func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
@@ -5148,6 +5157,102 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 		game_audio.play_spatula_ting(midi, volume_scale)
 
 
+func _register_hold_ttt_tap(world_pos: Vector3) -> void:
+	## Triple-tap HOLD cook-edge (closest to us) → reveal scratched tic-tac-toe.
+	## Once revealed, taps on cells place X/O for whoever clicks.
+	if world_pos == Vector3.ZERO or _spatula_mute_ting:
+		return
+	if spatula_patty != null and is_instance_valid(spatula_patty):
+		return
+	var zone := _grill_zone_at(world_pos)
+	if str(zone.get("id", "")) != "hold":
+		return
+	if _grill_hold_drum_pad_at(world_pos) != TTT_COOK_PAD:
+		return
+	if _grill_ttt != null and is_instance_valid(_grill_ttt) and bool(_grill_ttt.get("revealed")):
+		var cell := -1
+		if _grill_ttt.has_method("cell_at_world"):
+			cell = int(_grill_ttt.cell_at_world(world_pos))
+		if cell >= 0 and bool(_grill_ttt.is_playable()):
+			_request_ttt_move(cell)
+			return
+		## Finished game — triple-tap again to scratch a fresh board.
+		if int(_grill_ttt.get("winner")) != 0:
+			_ttt_tap_cool = TTT_TAP_WINDOW
+			_ttt_tap_count += 1
+			if _ttt_tap_count >= 3:
+				_ttt_tap_count = 0
+				_request_ttt_reveal(true)
+			return
+		return
+	_ttt_tap_cool = TTT_TAP_WINDOW
+	_ttt_tap_count += 1
+	if _ttt_tap_count >= 3:
+		_ttt_tap_count = 0
+		_request_ttt_reveal(false)
+
+
+func _tick_ttt_tap_window(delta: float) -> void:
+	if _ttt_tap_cool <= 0.0:
+		return
+	_ttt_tap_cool = maxf(0.0, _ttt_tap_cool - delta)
+	if _ttt_tap_cool <= 0.0:
+		_ttt_tap_count = 0
+
+
+func _request_ttt_reveal(reset_first: bool) -> void:
+	if mp_enabled and not _mp_applying:
+		mp_ttt_reveal.rpc(reset_first)
+		return
+	_apply_ttt_reveal_local(reset_first)
+
+
+func _apply_ttt_reveal_local(reset_first: bool) -> void:
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		_setup_grill_ttt()
+	if reset_first and _grill_ttt.has_method("reset_game"):
+		_grill_ttt.reset_game()
+	elif _grill_ttt.has_method("reset_game") and not bool(_grill_ttt.get("revealed")):
+		_grill_ttt.reset_game()
+	if _grill_ttt.has_method("reveal"):
+		_grill_ttt.reveal()
+	_flash("Scratched tic-tac-toe on the HOLD steel", Color(0.75, 0.82, 0.88))
+
+
+func _request_ttt_move(cell: int) -> void:
+	if mp_enabled and not _mp_applying:
+		mp_ttt_move.rpc(cell)
+		return
+	_apply_ttt_move_local(cell)
+
+
+func _apply_ttt_move_local(cell: int) -> void:
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return
+	if not _grill_ttt.has_method("try_place"):
+		return
+	if not bool(_grill_ttt.try_place(cell)):
+		return
+	var win := int(_grill_ttt.get("winner"))
+	if win == 1:
+		_flash("HOLD scratches: X wins", Color(0.85, 0.9, 1.0))
+	elif win == 2:
+		_flash("HOLD scratches: O wins", Color(0.85, 0.9, 1.0))
+	elif win == -1:
+		_flash("HOLD scratches: draw", Color(0.7, 0.75, 0.8))
+
+
+func _ttt_sync_payload() -> Dictionary:
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		return {"show": false, "cells": [], "turn": 1, "win": 0}
+	return {
+		"show": bool(_grill_ttt.get("revealed")),
+		"cells": _grill_ttt.get_packed_cells() if _grill_ttt.has_method("get_packed_cells") else [],
+		"turn": int(_grill_ttt.get("turn")),
+		"win": int(_grill_ttt.get("winner")),
+	}
+
+
 func _setup_grill_song_performer() -> void:
 	_grill_song_performer = GrillSongPerformerScript.new()
 	_grill_song_performer.name = "GrillSongPerformer"
@@ -5156,12 +5261,51 @@ func _setup_grill_song_performer() -> void:
 		_grill_song_performer.setup(self)
 
 
+func _setup_grill_ttt() -> void:
+	if _grill_ttt != null and is_instance_valid(_grill_ttt):
+		_grill_ttt.queue_free()
+	_grill_ttt = GrillTttScript.new()
+	add_child(_grill_ttt)
+	if _grill_ttt.has_method("setup_on_grill"):
+		_grill_ttt.setup_on_grill(_grill_song_drum_world(TTT_COOK_PAD))
+	_ttt_tap_count = 0
+	_ttt_tap_cool = 0.0
+
+
 func _try_grill_song_hotkey(event: InputEventKey) -> bool:
 	if _grill_song_performer == null or not is_instance_valid(_grill_song_performer):
 		return false
 	if not _grill_song_performer.has_method("try_hotkey"):
 		return false
-	return bool(_grill_song_performer.try_hotkey(event))
+	## Peek which song would start so co-op peers can mirror the hand show.
+	if not event.pressed or event.echo:
+		return false
+	var code := event.keycode
+	if code == KEY_NONE:
+		code = event.physical_keycode
+	var song_idx := -1
+	match code:
+		KEY_BRACKETLEFT:
+			song_idx = 0
+		KEY_P:
+			song_idx = 1
+		KEY_O:
+			song_idx = 2
+		KEY_BRACKETRIGHT:
+			song_idx = 3
+		_:
+			return false
+	if mp_enabled and not _mp_applying:
+		mp_grill_song.rpc(song_idx)
+		return true
+	_start_grill_song_local(song_idx)
+	return true
+
+
+func _start_grill_song_local(song_idx: int) -> void:
+	if _grill_song_performer != null and is_instance_valid(_grill_song_performer) \
+			and _grill_song_performer.has_method("start_song"):
+		_grill_song_performer.start_song(song_idx)
 
 
 func _grill_song_strip_world(from_left: int) -> Vector3:
@@ -19454,6 +19598,11 @@ func _begin_tree_shake_hold(tree: Node3D, screen_pos: Vector2) -> void:
 	_tree_hold_lean = Vector3.ZERO
 	## Visual shake without a second thud SFX — tap covers the click sound.
 	_shake_outdoor_tree(tree, false)
+	## Co-op: partners see the same canopy lean (audio stays local).
+	if mp_enabled and not _mp_applying:
+		var ti := outdoor_shake_trees.find(tree)
+		if ti >= 0:
+			mp_tree_shake.rpc(ti)
 	if game_audio != null and game_audio.has_method("play_tree_leaf_tap"):
 		game_audio.play_tree_leaf_tap()
 
@@ -43076,12 +43225,25 @@ func _open_location_map() -> void:
 
 
 func _on_location_confirmed(location_id: String) -> void:
+	if mp_enabled and not _mp_applying:
+		mp_set_location.rpc(location_id)
+		return
+	_apply_location_local(location_id)
+
+
+func _apply_location_local(location_id: String) -> void:
 	current_location_id = location_id
 	_save_truck_location()
 	## Customer spawn/patience + street matte swap hook up later via TruckLocationsScript.stats_for / background_path.
 	var loc_name: String = TruckLocationsScript.display_name(location_id)
 	var tier: String = TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(location_id))
 	_flash("Parked at %s (%s)" % [loc_name, tier], TruckLocationsScript.tier_color(TruckLocationsScript.tier_of(location_id)))
+	## Keep open map pin + cat marker in sync if the panel is up.
+	if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
+		if _location_map_ui.has_method("set_parked_id"):
+			_location_map_ui.call("set_parked_id", current_location_id)
+		elif _location_map_ui.has_method("open"):
+			_location_map_ui.open(current_location_id)
 
 
 func _load_truck_location() -> void:
@@ -43997,6 +44159,16 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			rkind = "patty"
 		mp_residue_leave.rpc_id(peer_id, ri, rc.x, rc.z, false, rkind, float(grill_residue[ri]))
 		mp_residue_amt.rpc_id(peer_id, ri, float(grill_residue[ri]))
+	## Shared truck parking + scratched HOLD tic-tac-toe for mid-join.
+	mp_set_location.rpc_id(peer_id, current_location_id)
+	var ttt := _ttt_sync_payload()
+	mp_ttt_state.rpc_id(
+		peer_id,
+		bool(ttt.get("show", false)),
+		ttt.get("cells", []) as Array,
+		int(ttt.get("turn", 1)),
+		int(ttt.get("win", 0))
+	)
 	if _bts_day_intro_active:
 		for li in bts_lightsticks.size():
 			var data: Dictionary = bts_lightsticks[li]
@@ -47084,4 +47256,56 @@ func mp_ext_customer_push(net_id: int, zone: String, delta: float) -> void:
 func mp_glock_fire(ix: float, iy: float, iz: float, cust_id: int, do_hit: bool, hostile: bool) -> void:
 	_mp_applying = true
 	_apply_glock_shot(Vector3(ix, iy, iz), cust_id, do_hit, hostile)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_ttt_reveal(reset_first: bool) -> void:
+	_mp_applying = true
+	_apply_ttt_reveal_local(reset_first)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_ttt_move(cell: int) -> void:
+	_mp_applying = true
+	_apply_ttt_move_local(cell)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_ttt_state(show: bool, cells: Array, next_turn: int, win: int) -> void:
+	## Mid-join catch-up for the scratched HOLD board.
+	if _grill_ttt == null or not is_instance_valid(_grill_ttt):
+		_setup_grill_ttt()
+	_mp_applying = true
+	if _grill_ttt != null and _grill_ttt.has_method("apply_state"):
+		_grill_ttt.apply_state(cells, next_turn, win, show)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_set_location(location_id: String) -> void:
+	_mp_applying = true
+	_apply_location_local(location_id)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_grill_song(song_idx: int) -> void:
+	_mp_applying = true
+	_start_grill_song_local(song_idx)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_tree_shake(tree_index: int) -> void:
+	## Partner canopy lean — no extra thud (local player already heard the tap).
+	if tree_index < 0 or tree_index >= outdoor_shake_trees.size():
+		return
+	var tree: Node3D = outdoor_shake_trees[tree_index] as Node3D
+	if tree == null or not is_instance_valid(tree):
+		return
+	_mp_applying = true
+	_shake_outdoor_tree(tree, false)
 	_mp_applying = false
