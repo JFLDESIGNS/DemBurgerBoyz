@@ -1,15 +1,17 @@
 shader_type spatial;
 render_mode blend_mix, unshaded, cull_disabled, depth_draw_never, shadows_disabled, fog_disabled;
 
-// Full flat-top darkening vignette (cook + HOLD). Dual darken tones,
-// noisy chokeable edge, subtle oil-like color shift, optional spots.
+// Full flat-top darkening vignette (cook + HOLD).
+// Edge: chunky solid noise. Inward: dithered smaller chunks.
+// noise_feather = 0 hard cuts, 1 soft feathered blends.
 
 uniform float darken_a : hint_range(0.0, 1.0) = 0.42;
 uniform float darken_b : hint_range(0.0, 1.0) = 0.58;
-uniform float dual_blend : hint_range(0.0, 1.0) = 0.0; // 0 = only A, 1 = full A/B noise mix
-uniform float vig_size : hint_range(0.15, 1.6) = 0.85; // larger = more coverage toward center
-uniform float vig_noise : hint_range(0.0, 1.0) = 0.45;
-uniform float vig_choke : hint_range(-0.45, 0.45) = 0.0; // + = tighter (less area), - = expand
+uniform float dual_blend : hint_range(0.0, 1.0) = 0.0;
+uniform float vig_size : hint_range(0.15, 1.6) = 0.85;
+uniform float vig_noise : hint_range(0.0, 1.0) = 0.55;
+uniform float vig_choke : hint_range(-0.45, 0.45) = 0.0;
+uniform float noise_feather : hint_range(0.0, 1.0) = 0.18; // 0 = chunky hard, 1 = soft feather
 uniform float opacity : hint_range(0.0, 2.0) = 0.72;
 uniform float color_shift : hint_range(0.0, 1.0) = 0.28;
 uniform float spot_amount : hint_range(0.0, 1.5) = 0.35;
@@ -41,12 +43,37 @@ float fbm(vec2 p) {
 	float v = 0.0;
 	float a = 0.5;
 	mat2 m = mat2(vec2(0.8, -0.6), vec2(0.6, 0.8));
-	for (int i = 0; i < 5; i++) {
+	for (int i = 0; i < 4; i++) {
 		v += a * value_noise(p);
 		p = m * p * 2.05;
 		a *= 0.5;
 	}
 	return v;
+}
+
+// Hard cell blocks — optional tiny feather on the cell edge only.
+float chunk_cells(vec2 uv, float cells, float thresh, float feather) {
+	vec2 g = uv * max(cells, 0.5);
+	vec2 id = floor(g);
+	vec2 f = fract(g);
+	float n = hash21(id);
+	// Irregular blob inside each cell (not a soft cloud).
+	float blob = length((f - 0.5) * vec2(1.0, 1.15 + hash21(id + 2.7) * 0.5));
+	float r = 0.22 + n * 0.38;
+	float fw = mix(0.01, 0.22, clamp(feather, 0.0, 1.0));
+	float fill = 1.0 - smoothstep(r - fw, r + fw, blob);
+	float gate = step(thresh, n);
+	return fill * gate;
+}
+
+// Ordered + hash dither for smaller inward flecks.
+float dither_chunks(vec2 uv, float cells, float density) {
+	vec2 g = uv * max(cells, 1.0);
+	vec2 id = floor(g);
+	float n = hash21(id + vec2(9.1, 3.4));
+	float bayer = hash21(floor(uv * cells * 3.7));
+	float dith = mix(n, bayer, 0.45);
+	return step(1.0 - clamp(density, 0.0, 1.0), dith);
 }
 
 float chunky_stain(vec2 uv, float scale) {
@@ -75,7 +102,6 @@ void vertex() {
 void fragment() {
 	vec2 uv = v_uv + vec2(uv_offset_x, uv_offset_y);
 
-	// Rectangular + radial hybrid so HOLD and cook corners all darken.
 	vec2 p = uv * 2.0 - 1.0;
 	p *= vec2(0.94, 1.06);
 	float radial = length(p);
@@ -83,20 +109,44 @@ void fragment() {
 	float edge = mix(radial, box, 0.55);
 
 	float size = max(vig_size, 0.05);
-	float soft_lo = mix(0.55, 0.12, clamp(size, 0.0, 1.0));
-	float soft_hi = mix(1.25, 0.72, clamp(size * 0.85, 0.0, 1.0));
+	// Tighter base falloff — less soft wash before noise breaks it up.
+	float soft_lo = mix(0.62, 0.22, clamp(size, 0.0, 1.0));
+	float soft_hi = mix(1.18, 0.78, clamp(size * 0.85, 0.0, 1.0));
 	soft_lo = clamp(soft_lo + vig_choke, 0.02, 1.4);
-	soft_hi = clamp(soft_hi + vig_choke * 0.65, soft_lo + 0.04, 1.6);
+	soft_hi = clamp(soft_hi + vig_choke * 0.65, soft_lo + 0.03, 1.6);
 
-	float vig_mask = smoothstep(soft_lo, soft_hi, edge);
+	float vig_fall = smoothstep(soft_lo, soft_hi, edge);
+	// How close to the rim (1 = edge, 0 = center).
+	float rim = clamp(vig_fall, 0.0, 1.0);
 
-	float n1 = fbm(uv * noise_scale + vec2(1.7, 3.1));
-	float n2 = fbm(uv * noise_scale * 1.55 + vec2(4.0, -1.2));
-	float npat = mix(n1, n2, 0.45);
-	vig_mask *= mix(1.0 - vig_noise * 0.85, 1.0 + vig_noise * 0.35, npat);
-	vig_mask = clamp(vig_mask, 0.0, 1.0);
+	float feather = clamp(noise_feather, 0.0, 1.0);
+	float namp = clamp(vig_noise, 0.0, 1.0);
+	float nsc = max(noise_scale, 0.5);
 
-	float tone_n = fbm(uv * (noise_scale * 0.65) + 8.2);
+	// Big solid chunks near the edge.
+	float big = chunk_cells(uv, nsc * 1.35, 0.32, feather);
+	float big2 = chunk_cells(uv + vec2(0.17, -0.09), nsc * 0.85, 0.40, feather * 0.85);
+	float chunky = max(big, big2 * 0.85);
+
+	// Smaller dithered flecks further from the edge (toward center of falloff).
+	float inward = 1.0 - rim;
+	float fine = dither_chunks(uv, nsc * 4.8, 0.18 + inward * 0.42 * namp);
+	float fine2 = dither_chunks(uv + vec2(0.31, 0.19), nsc * 7.2, 0.10 + inward * 0.28 * namp);
+	float dither = max(fine, fine2 * 0.7);
+
+	// Rim prefers chunky solids; inward mixes in dithered micro-chunks.
+	float noise_body = mix(dither, chunky, mix(0.35, 0.92, rim));
+	// Optional soft blend amount — only when feather is high.
+	float soft_cloud = fbm(uv * nsc * 0.9 + 2.0);
+	noise_body = mix(noise_body, soft_cloud, feather * 0.35);
+
+	// Harder multiply: noise punches solid holes / islands, not a feathered haze.
+	float punch = mix(1.0 - namp * 0.92, 1.0 + namp * 0.25, noise_body);
+	float vig_mask = clamp(vig_fall * punch, 0.0, 1.0);
+	// Extra solid island lift on the rim so chunks read as dark blotches.
+	vig_mask = clamp(vig_mask + chunky * namp * rim * 0.35, 0.0, 1.0);
+
+	float tone_n = hash21(floor(uv * nsc * 0.7) + 8.2);
 	float darken = mix(darken_a, mix(darken_a, darken_b, tone_n), clamp(dual_blend, 0.0, 1.0));
 
 	float raw = chunky_stain(uv + vec2(0.17, 0.41), spot_scale);
