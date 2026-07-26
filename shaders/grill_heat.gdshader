@@ -4,8 +4,8 @@ render_mode blend_add, unshaded, cull_disabled, depth_draw_never, shadows_disabl
 // Radial heat blot with vertical grate punch-outs at a fixed physical period
 // so FULL and ½ spots share the same line width regardless of blot size.
 
-uniform float plane_width = 1.0; ## meters across UV.x
-uniform float bar_period = 0.12; ## meters per grate cycle (same on every spot)
+uniform float plane_width = 1.0; // meters across UV.x
+uniform float bar_period = 0.12; // meters per grate cycle (same on every spot)
 uniform float gap_frac : hint_range(0.05, 0.72) = 0.38;
 uniform float intensity : hint_range(0.0, 1.0) = 1.0;
 uniform float glow_mul : hint_range(0.0, 1.5) = 1.0;
