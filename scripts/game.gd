@@ -392,9 +392,7 @@ const GRILL_GLOW_BRIGHT_MULT := 1.18
 const GRILL_HEAT_CFG_SECTION := "grill_heat"
 const GRILL_HEAT_BARS_MAX := 25
 const GRILL_HEAT_BAR_SPAN := 0.90 ## meters spanned by the Grate Bars count (shared line width)
-const GRILL_HEAT_SECTIONS_MAX := 12
-var grill_heat_size: float = 1.45 ## Multiplies each glow blot size
-var grill_heat_sections: int = 4 ## Glow blot count across cook steel (FULL+½)
+var grill_heat_size: float = 1.45 ## Multiplies the single center glow blot
 var grill_heat_bars: int = 5 ## Vertical grate lines across BAR_SPAN (same width on every spot)
 var grill_heat_gap: float = 0.38 ## Fraction of each bar period with no light (0–0.7)
 var grill_heat_opacity: float = 0.95
@@ -12370,7 +12368,7 @@ func _set_grill_heat_glow_mul(value: float, mat: ShaderMaterial) -> void:
 
 
 func _rebuild_grill_heat_glows(parent: Node3D = null) -> void:
-	## Tile N heat blots across cook steel (HOLD excluded). Live-retunable from Hidden.
+	## One centered heat blot over cook steel (HOLD excluded). Size / grate / look stay Hidden-tunable.
 	var surf: Node3D = parent
 	if surf == null or not is_instance_valid(surf):
 		surf = grill_surface_node
@@ -12393,24 +12391,16 @@ func _rebuild_grill_heat_glows(parent: Node3D = null) -> void:
 		x0 = GRILL_CENTER_X - GRILL_WIDTH * 0.25
 		x1 = GRILL_CENTER_X + GRILL_WIDTH * 0.35
 	var cook_w := maxf(0.25, x1 - x0)
-	var n := clampi(grill_heat_sections, 2, GRILL_HEAT_SECTIONS_MAX)
-	## Each section gets a blot sized to its cell, then scaled by heat_size.
-	var cell_w := cook_w / float(n)
-	var base_w := cell_w * 1.08
+	var cook_cx := (x0 + x1) * 0.5
+	var base_w := cook_w * 0.72
 	var base_d := GRILL_DEPTH * 0.78
-	for i in n:
-		var u := (float(i) + 0.5) / float(n)
-		var world_x := lerpf(x0, x1, u)
-		var local_x := world_x - GRILL_CENTER_X
-		## Stronger glow toward FULL (screen-left / +X), softer near ½.
-		var glow_i := lerpf(1.0, 0.48, u)
-		_add_heat_glow(
-			surf,
-			Vector3(local_x, grill_heat_height, 0.0),
-			base_w * grill_heat_size,
-			base_d * grill_heat_size,
-			glow_i
-		)
+	_add_heat_glow(
+		surf,
+		Vector3(cook_cx - GRILL_CENTER_X, grill_heat_height, 0.0),
+		base_w * grill_heat_size,
+		base_d * grill_heat_size,
+		1.0
+	)
 	grill_glow_root = grill_glow_meshes[0] if not grill_glow_meshes.is_empty() else null
 	if was_lit:
 		var target := old_mul if old_mul > 0.02 else GRILL_GLOW_BRIGHT_MULT
@@ -12508,7 +12498,6 @@ func _load_grill_heat_settings() -> void:
 	if not cfg.has_section(GRILL_HEAT_CFG_SECTION):
 		return
 	grill_heat_size = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)), 0.4, 3.5)
-	grill_heat_sections = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "sections", grill_heat_sections)), 2, GRILL_HEAT_SECTIONS_MAX)
 	grill_heat_bars = clampi(int(cfg.get_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)), 2, GRILL_HEAT_BARS_MAX)
 	grill_heat_gap = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)), 0.05, 0.72)
 	grill_heat_opacity = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "opacity", grill_heat_opacity)), 0.0, 2.0)
@@ -12524,7 +12513,6 @@ func _save_grill_heat_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(GFX_CFG_PATH)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "size", grill_heat_size)
-	cfg.set_value(GRILL_HEAT_CFG_SECTION, "sections", grill_heat_sections)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "bars", grill_heat_bars)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "gap", grill_heat_gap)
 	cfg.set_value(GRILL_HEAT_CFG_SECTION, "opacity", grill_heat_opacity)
@@ -12540,7 +12528,6 @@ func _save_grill_heat_settings() -> void:
 func _sync_grill_heat_hidden_ui() -> void:
 	var vals := {
 		"heat_size": grill_heat_size,
-		"heat_sections": float(grill_heat_sections),
 		"heat_bars": float(grill_heat_bars),
 		"heat_gap": grill_heat_gap,
 		"heat_opacity": grill_heat_opacity,
@@ -12556,8 +12543,7 @@ func _sync_grill_heat_hidden_ui() -> void:
 			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
 			var v := float(vals[key])
-			var as_int: bool = key == "heat_bars" or key == "heat_sections"
-			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if as_int else ("%.2f" % v)
+			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if key == "heat_bars" else ("%.2f" % v)
 
 
 func _make_residue_texture(seed_i: int) -> ImageTexture:
@@ -35729,13 +35715,6 @@ func _build_options_menu() -> void:
 		func(v: float):
 			grill_heat_size = clampf(v, 0.4, 3.5)
 			_apply_grill_heat_settings()
-			_save_grill_heat_settings()
-	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_sections", "Heat Sections", 2.0, float(GRILL_HEAT_SECTIONS_MAX), 1.0,
-		func(): return float(grill_heat_sections),
-		func(v: float):
-			grill_heat_sections = clampi(int(round(v)), 2, GRILL_HEAT_SECTIONS_MAX)
-			_rebuild_grill_heat_glows()
 			_save_grill_heat_settings()
 	)
 	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_bars", "Grate Bars", 2.0, float(GRILL_HEAT_BARS_MAX), 1.0,
