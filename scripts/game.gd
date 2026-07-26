@@ -18202,44 +18202,42 @@ func _add_grill_splash_guard(parent: Node3D) -> void:
 
 
 func _add_grill_window_sill_glass(parent: Node3D) -> void:
-	## Transparent orange-red glass on the window sill line — just past the splash guard,
-	## further from the cook (+Z), bottom flush with the steel / opening lip (~10" tall).
+	## Darker orange-red sill glass — full window opening width, ~5" tall,
+	## just past the splash guard with a cheap screen magnify/offset.
 	if parent == null or not is_instance_valid(parent):
 		return
-	var h := 10.0 * INCH_TO_M
+	var h := 5.0 * INCH_TO_M ## half of the prior 10"
 	var thick := 0.008
 	var steel_top_y := 0.0225
-	var splash_h := 3.25 * INCH_TO_M
 	var splash_thick := 0.010
 	var far_z := GRILL_DEPTH * 0.5
-	## Sit a little past the splash back wall, toward the street / window.
 	var glass_z := far_z + splash_thick + 0.028
+	## Service opening between the side frames (~±2.34), matching lintel span.
+	const OPENING_WIDTH := 4.68
 	var glass := MeshInstance3D.new()
 	glass.name = "GrillWindowSillGlass"
 	var mesh := BoxMesh.new()
-	## Match splash span so it reads as the bottom of the service opening.
-	mesh.size = Vector3(GRILL_WIDTH + splash_thick * 2.0, h, thick)
+	mesh.size = Vector3(OPENING_WIDTH, h, thick)
 	glass.mesh = mesh
-	glass.position = Vector3(0.0, steel_top_y + h * 0.5, glass_z)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 0.32, 0.10, 0.38) ## orange-red, see-through
-	mat.roughness = 0.06
-	mat.metallic = 0.08
-	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
-	mat.refraction_enabled = false
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.28, 0.08)
-	mat.emission_energy_multiplier = 0.12 ## soft warm tint without glowing solid
+	## Center on world X=0 while parented under the offset grill surface.
+	glass.position = Vector3(-GRILL_CENTER_X, steel_top_y + h * 0.5, glass_z)
+	var shader := load("res://shaders/window_sill_glass.gdshader") as Shader
+	if shader == null:
+		glass.queue_free()
+		return
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.render_priority = 4
+	mat.set_shader_parameter("magnify", 0.045)
+	mat.set_shader_parameter("offset_amt", 0.012)
+	mat.set_shader_parameter("tint_color", Vector3(0.72, 0.12, 0.04))
+	mat.set_shader_parameter("tint_strength", 0.62)
+	mat.set_shader_parameter("opacity", 0.58)
+	mat.set_shader_parameter("darken", 0.28)
 	glass.material_override = mat
 	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	glass.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	parent.add_child(glass)
-	## Keep splash_h referenced so height stays relative to the guard lip if we retune later.
-	glass.set_meta("splash_ref_h", splash_h)
 
 
 func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
