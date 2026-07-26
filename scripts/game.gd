@@ -28160,14 +28160,14 @@ func _spawn_cup_splash_drops() -> void:
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
 
 
-func _ensure_soda_overfill_cascades(count: int = 29) -> void:
-	## Thin arc segments — enough for curved pour threads (not straight chords).
+func _ensure_soda_overfill_cascades(count: int = 33) -> void:
+	## Thin arc segments — enough for three curved camera-cardinal pour threads.
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.0028
-		cyl.bottom_radius = 0.0055
+		cyl.top_radius = 0.0030
+		cyl.bottom_radius = 0.0060
 		cyl.height = 0.06
 		cyl.cap_top = false
 		cyl.cap_bottom = false
@@ -28191,10 +28191,28 @@ func _hide_soda_overfill_cascades() -> void:
 
 
 func _soda_overfill_cook_forward() -> Vector3:
-	## Toward the cook from the fountain (soda root yaw 180 → local +Z ≈ world −Z).
-	if soda_root != null and is_instance_valid(soda_root):
-		return (-soda_root.global_transform.basis.z).normalized()
-	return Vector3(0.0, 0.0, -1.0)
+	## Toward the cook / camera (screen-south). Prefer live camera basis.
+	var dirs := _soda_overfill_cam_dirs()
+	return dirs["south"]
+
+
+func _soda_overfill_cam_dirs() -> Dictionary:
+	## Camera-relative cardinals on the floor plane (player-facing compass).
+	## West = screen-left → grill · South = toward camera → floor · East = screen-right.
+	var west := Vector3(1.0, 0.0, 0.0)
+	var east := Vector3(-1.0, 0.0, 0.0)
+	var south := Vector3(0.0, 0.0, -1.0)
+	if camera != null and is_instance_valid(camera):
+		var bx: Vector3 = camera.global_transform.basis.x
+		var bz: Vector3 = camera.global_transform.basis.z
+		var left := Vector3(-bx.x, 0.0, -bx.z)
+		if left.length_squared() > 0.0001:
+			west = left.normalized()
+			east = (-west)
+		var toward_cam := Vector3(bz.x, 0.0, bz.z)
+		if toward_cam.length_squared() > 0.0001:
+			south = toward_cam.normalized()
+	return {"west": west, "east": east, "south": south}
 
 
 func _soda_grill_near_machine_x() -> float:
@@ -28203,15 +28221,15 @@ func _soda_grill_near_machine_x() -> float:
 
 
 func _tick_soda_overfill_breaks(delta: float) -> void:
-	## Mostly on — short flickers only, so you always see the three streams.
+	## Mostly on — brief flickers only; all three streams share the same on/off window.
 	_soda_overfill_flow_t = maxf(0.0, _soda_overfill_flow_t - delta)
 	if _soda_overfill_flow_t > 0.0:
 		return
 	_soda_overfill_flow_on = not _soda_overfill_flow_on
 	if _soda_overfill_flow_on:
-		_soda_overfill_flow_t = randf_range(0.85, 1.35)
+		_soda_overfill_flow_t = randf_range(1.10, 1.60)
 	else:
-		_soda_overfill_flow_t = randf_range(0.04, 0.09)
+		_soda_overfill_flow_t = randf_range(0.03, 0.07)
 
 
 func _soda_arc_point(a: Vector3, b: Vector3, lift: float, t: float) -> Vector3:
@@ -28240,8 +28258,8 @@ func _place_soda_overfill_ribbon(
 	var cyl := mi.mesh as CylinderMesh
 	if cyl:
 		cyl.height = len
-		cyl.top_radius = 0.0024 * thin
-		cyl.bottom_radius = 0.0050 * thin
+		cyl.top_radius = 0.0028 * thin
+		cyl.bottom_radius = 0.0058 * thin
 	var mat := mi.material_override as ShaderMaterial
 	if mat:
 		mat.set_shader_parameter("soda_color", soda_tint)
@@ -28270,10 +28288,10 @@ func _place_soda_overfill_arc(
 
 
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Curved thin streams: first hit drip tray; only one arcs onto the near grill edge.
+	## Three camera-cardinal streams: west→grill, south→floor, east→right. Only west hits grill.
 	if cup_root == null or world == null:
 		return
-	_ensure_soda_overfill_cascades(29)
+	_ensure_soda_overfill_cascades(33)
 	_tick_soda_overfill_breaks(delta)
 	for m in _soda_overfill_cascade_meshes:
 		var hide_mi := m as MeshInstance3D
@@ -28292,61 +28310,56 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 		_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 		return
 	var deck_y := _cup_deck_fill_y()
-	var forward := _soda_overfill_cook_forward()
-	var right := forward.cross(Vector3.UP)
-	if right.length_squared() < 0.0001:
-		right = Vector3(1.0, 0.0, 0.0)
-	right = right.normalized()
-	var to_grill := right if right.dot(Vector3(1.0, 0.0, 0.0)) > 0.0 else -right
+	var floor_y := 0.02
+	var dirs := _soda_overfill_cam_dirs()
+	var west: Vector3 = dirs["west"]
+	var east: Vector3 = dirs["east"]
+	var south: Vector3 = dirs["south"]
 	var t_ms := Time.get_ticks_msec() * 0.001
-	## 0 = grill-bound, 1 = center tray, 2 = other tray side.
-	var dirs: Array[Vector3] = [
-		(forward * 0.35 + to_grill * 0.85).normalized(),
-		(forward * 0.95 + to_grill * 0.08).normalized(),
-		(forward * 0.40 - to_grill * 0.85).normalized(),
-	]
-	var tray_reach: Array[float] = [0.09, 0.075, 0.09]
-	## Mesh layout: 0-5/6-11/12-17 tray (6), 18-24 grill (7), 25-26/27-28 skim (2).
-	for i in 3:
-		var outward: Vector3 = dirs[i]
-		var wobble := sin(t_ms * 3.4 + float(i) * 1.6) * 0.010
-		var lip := rim + outward * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.004, 0.0)
-		var tray_hit := lip + outward * tray_reach[i] + right * wobble
-		tray_hit.y = deck_y + 0.003
-		## Pour arc down onto the fill tray (bow above the chord).
-		var fall := maxf(0.018, (lip.y - tray_hit.y) * 0.55)
-		_place_soda_overfill_arc(i * 6, 6, lip, tray_hit, fall, foam_col, foamish, 0.70)
-		if i == 0:
-			## Short hop that barely kisses the soda-side grill lip (not deep onto steel).
-			var soda_edge_x := _soda_grill_near_machine_x()
-			var grill_land := Vector3(
-				soda_edge_x + 0.012 + sin(t_ms * 2.6) * 0.006,
-				GRILL_SURFACE_Y + OIL_SIT_Y + 0.004,
-				clampf(tray_hit.z + forward.z * -0.02 + sin(t_ms * 2.1) * 0.02,
-					GRILL_SURFACE_Z - GRILL_DEPTH * 0.35,
-					GRILL_SURFACE_Z + GRILL_DEPTH * 0.20)
-			)
-			var half_w := GRILL_WIDTH * 0.5
-			var half_d := GRILL_DEPTH * 0.5
-			grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.012, GRILL_CENTER_X - half_w + 0.055)
-			grill_land.z = clampf(grill_land.z, GRILL_SURFACE_Z - half_d + 0.02, GRILL_SURFACE_Z + half_d - 0.02)
-			var hop_lift := 0.055 + 0.010 * sin(t_ms * 3.0)
-			_place_soda_overfill_arc(18, 7, tray_hit, grill_land, hop_lift, foam_col, foamish, 0.58)
-			if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.45:
-				_soda_overfill_long_cd = randf_range(0.32, 0.58)
-				_spawn_soda_slick(
-					grill_land + Vector3(randf_range(-0.012, 0.018), 0.0, randf_range(-0.015, 0.015)),
-					0.032 + randf() * 0.02,
-					flavor
-				)
-				if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.28:
-					game_audio.trigger_hot_oil(0.45)
-		else:
-			## Center / other side: short curved skim that stays on the tray.
-			var skim := tray_hit + outward * 0.05
-			skim.y = deck_y + 0.002
-			## Dedicated skim arc segs so the tray pour stays fully curved.
-			_place_soda_overfill_arc(25 + (i - 1) * 2, 2, tray_hit, skim, 0.012, foam_col, foamish, 0.52)
+	## Mesh layout: west 0-7 + grill 8-15 · south 16-24 · east 25-32.
+	## --- WEST (screen-left): drip tray then short hop onto soda-side grill lip only ---
+	var west_lip := rim + west * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
+	var west_tray := west_lip + west * 0.08 + south * (sin(t_ms * 2.8) * 0.012)
+	west_tray.y = deck_y + 0.003
+	var west_fall := maxf(0.018, (west_lip.y - west_tray.y) * 0.55)
+	_place_soda_overfill_arc(0, 8, west_lip, west_tray, west_fall, foam_col, foamish, 0.78)
+	var soda_edge_x := _soda_grill_near_machine_x()
+	var grill_land := Vector3(
+		soda_edge_x + 0.012 + sin(t_ms * 2.6) * 0.006,
+		GRILL_SURFACE_Y + OIL_SIT_Y + 0.004,
+		clampf(west_tray.z + south.z * -0.01 + sin(t_ms * 2.1) * 0.018,
+			GRILL_SURFACE_Z - GRILL_DEPTH * 0.35,
+			GRILL_SURFACE_Z + GRILL_DEPTH * 0.20)
+	)
+	var half_w := GRILL_WIDTH * 0.5
+	var half_d := GRILL_DEPTH * 0.5
+	grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.012, GRILL_CENTER_X - half_w + 0.055)
+	grill_land.z = clampf(grill_land.z, GRILL_SURFACE_Z - half_d + 0.02, GRILL_SURFACE_Z + half_d - 0.02)
+	var hop_lift := 0.055 + 0.010 * sin(t_ms * 3.0)
+	_place_soda_overfill_arc(8, 8, west_tray, grill_land, hop_lift, foam_col, foamish, 0.62)
+	if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.45:
+		_soda_overfill_long_cd = randf_range(0.32, 0.58)
+		_spawn_soda_slick(
+			grill_land + Vector3(randf_range(-0.012, 0.018), 0.0, randf_range(-0.015, 0.015)),
+			0.032 + randf() * 0.02,
+			flavor
+		)
+		if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.28:
+			game_audio.trigger_hot_oil(0.45)
+	## --- SOUTH (toward camera): long curved pour onto the kitchen floor ---
+	var south_lip := rim + south * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
+	var south_land := south_lip + south * (0.26 + 0.02 * sin(t_ms * 2.4)) \
+		+ west * (0.02 * sin(t_ms * 1.9))
+	south_land.y = floor_y + 0.004
+	var south_lift := maxf(0.04, (south_lip.y - south_land.y) * 0.22)
+	_place_soda_overfill_arc(16, 9, south_lip, south_land, south_lift, foam_col, foamish, 0.72)
+	## --- EAST (screen-right): arcs off to the right of the fountain ---
+	var east_lip := rim + east * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
+	var east_land := east_lip + east * (0.20 + 0.015 * sin(t_ms * 2.7)) \
+		+ south * (0.04 + 0.015 * sin(t_ms * 2.0))
+	east_land.y = lerpf(deck_y, floor_y, 0.55) + 0.004
+	var east_lift := maxf(0.03, (east_lip.y - east_land.y) * 0.28)
+	_place_soda_overfill_arc(25, 8, east_lip, east_land, east_lift, foam_col, foamish, 0.72)
 	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 
