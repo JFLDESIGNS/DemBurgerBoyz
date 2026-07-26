@@ -1221,6 +1221,16 @@ var ttt_line_w_in: float = 0.165 ## scratch line thickness (in)
 var ttt_mark_w_in: float = 0.22 ## X/O stroke thickness (in)
 var ttt_color := Color(0.10, 0.11, 0.13)
 var ttt_opacity: float = 0.92
+var ttt_off_left_in: float = 0.0 ## + = camera-left (world +X)
+var ttt_off_fwd_in: float = 0.0 ## + = forward into truck / away from cook (world +Z)
+var ttt_noise: float = 0.55
+var ttt_noise_freq: float = 7.0
+var ttt_bevel_y_in: float = 0.063 ## bright lip lower into cut
+var ttt_bevel_z_in: float = 0.071 ## bright lip closer to cook
+var ttt_bevel_scale: float = 0.88
+var ttt_bevel_color := Color(0.72, 0.74, 0.78)
+var ttt_bevel_opacity: float = 0.78
+var ttt_seed: float = 17.0
 var _audio_debug_label: Label = null
 var _audio_debug_tween: Tween = null
 var intro_music_player: AudioStreamPlayer = null
@@ -5419,14 +5429,22 @@ func _apply_grill_ttt_settings() -> void:
 		return
 	if not _grill_ttt.has_method("apply_look"):
 		return
-	var col := Color(ttt_color.r, ttt_color.g, ttt_color.b, clampf(ttt_opacity, 0.05, 1.0))
-	_grill_ttt.apply_look(
-		ttt_size_in * INCH_TO_M,
-		ttt_height_in * INCH_TO_M,
-		ttt_line_w_in * INCH_TO_M,
-		ttt_mark_w_in * INCH_TO_M,
-		col
-	)
+	_grill_ttt.apply_look({
+		"size": ttt_size_in * INCH_TO_M,
+		"height": ttt_height_in * INCH_TO_M,
+		"line_w": ttt_line_w_in * INCH_TO_M,
+		"mark_w": ttt_mark_w_in * INCH_TO_M,
+		"color": Color(ttt_color.r, ttt_color.g, ttt_color.b, clampf(ttt_opacity, 0.05, 1.0)),
+		"bevel_color": Color(ttt_bevel_color.r, ttt_bevel_color.g, ttt_bevel_color.b, clampf(ttt_bevel_opacity, 0.05, 1.0)),
+		"off_x": ttt_off_left_in * INCH_TO_M,
+		"off_z": ttt_off_fwd_in * INCH_TO_M,
+		"noise": ttt_noise,
+		"noise_freq": ttt_noise_freq,
+		"bevel_y": ttt_bevel_y_in * INCH_TO_M,
+		"bevel_z": ttt_bevel_z_in * INCH_TO_M,
+		"bevel_scale": ttt_bevel_scale,
+		"seed": int(round(ttt_seed)),
+	})
 
 
 func _load_grill_ttt_settings() -> void:
@@ -5443,6 +5461,18 @@ func _load_grill_ttt_settings() -> void:
 	ttt_color.g = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "g", ttt_color.g)), 0.0, 1.0)
 	ttt_color.b = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "b", ttt_color.b)), 0.0, 1.0)
 	ttt_opacity = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "opacity", ttt_opacity)), 0.05, 1.0)
+	ttt_off_left_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "off_left_in", ttt_off_left_in)), -18.0, 18.0)
+	ttt_off_fwd_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "off_fwd_in", ttt_off_fwd_in)), -18.0, 18.0)
+	ttt_noise = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "noise", ttt_noise)), 0.0, 1.0)
+	ttt_noise_freq = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "noise_freq", ttt_noise_freq)), 1.0, 24.0)
+	ttt_bevel_y_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_y_in", ttt_bevel_y_in)), 0.0, 0.4)
+	ttt_bevel_z_in = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_z_in", ttt_bevel_z_in)), 0.0, 0.5)
+	ttt_bevel_scale = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_scale", ttt_bevel_scale)), 0.4, 1.2)
+	ttt_bevel_color.r = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_r", ttt_bevel_color.r)), 0.0, 1.0)
+	ttt_bevel_color.g = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_g", ttt_bevel_color.g)), 0.0, 1.0)
+	ttt_bevel_color.b = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_b", ttt_bevel_color.b)), 0.0, 1.0)
+	ttt_bevel_opacity = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "bevel_op", ttt_bevel_opacity)), 0.05, 1.0)
+	ttt_seed = clampf(float(cfg.get_value(GRILL_TTT_CFG_SECTION, "seed", ttt_seed)), 0.0, 999.0)
 
 
 func _save_grill_ttt_settings() -> void:
@@ -5456,6 +5486,18 @@ func _save_grill_ttt_settings() -> void:
 	cfg.set_value(GRILL_TTT_CFG_SECTION, "g", ttt_color.g)
 	cfg.set_value(GRILL_TTT_CFG_SECTION, "b", ttt_color.b)
 	cfg.set_value(GRILL_TTT_CFG_SECTION, "opacity", ttt_opacity)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "off_left_in", ttt_off_left_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "off_fwd_in", ttt_off_fwd_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "noise", ttt_noise)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "noise_freq", ttt_noise_freq)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_y_in", ttt_bevel_y_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_z_in", ttt_bevel_z_in)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_scale", ttt_bevel_scale)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_r", ttt_bevel_color.r)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_g", ttt_bevel_color.g)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_b", ttt_bevel_color.b)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "bevel_op", ttt_bevel_opacity)
+	cfg.set_value(GRILL_TTT_CFG_SECTION, "seed", ttt_seed)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -5469,6 +5511,18 @@ func _sync_grill_ttt_hidden_ui() -> void:
 		"ttt_g": ttt_color.g,
 		"ttt_b": ttt_color.b,
 		"ttt_opacity": ttt_opacity,
+		"ttt_off_left": ttt_off_left_in,
+		"ttt_off_fwd": ttt_off_fwd_in,
+		"ttt_noise": ttt_noise,
+		"ttt_noise_freq": ttt_noise_freq,
+		"ttt_bevel_y": ttt_bevel_y_in,
+		"ttt_bevel_z": ttt_bevel_z_in,
+		"ttt_bevel_scale": ttt_bevel_scale,
+		"ttt_bevel_r": ttt_bevel_color.r,
+		"ttt_bevel_g": ttt_bevel_color.g,
+		"ttt_bevel_b": ttt_bevel_color.b,
+		"ttt_bevel_op": ttt_bevel_opacity,
+		"ttt_seed": ttt_seed,
 	}
 	for key in vals.keys():
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
@@ -36652,6 +36706,20 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(ttt_lab, true, 13)
 	ttt_lab.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
 	options_hidden_room_tone_box.add_child(ttt_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_off_left", "Move Left / Right (+left)", -18.0, 18.0, 0.1,
+		func(): return ttt_off_left_in,
+		func(v: float):
+			ttt_off_left_in = clampf(v, -18.0, 18.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_off_fwd", "Move Forward / Back (+away)", -18.0, 18.0, 0.1,
+		func(): return ttt_off_fwd_in,
+		func(v: float):
+			ttt_off_fwd_in = clampf(v, -18.0, 18.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
 	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_height", "Board Height (in)", 0.05, 3.0, 0.05,
 		func(): return ttt_height_in,
 		func(v: float):
@@ -36680,31 +36748,101 @@ func _build_options_menu() -> void:
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_opacity", "Scratch Opacity", 0.05, 1.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_noise", "Scratch Noise", 0.0, 1.0, 0.01,
+		func(): return ttt_noise,
+		func(v: float):
+			ttt_noise = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_noise_freq", "Noise Frequency", 1.0, 24.0, 0.5,
+		func(): return ttt_noise_freq,
+		func(v: float):
+			ttt_noise_freq = clampf(v, 1.0, 24.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_seed", "Scratch Seed", 0.0, 999.0, 1.0,
+		func(): return ttt_seed,
+		func(v: float):
+			ttt_seed = clampf(v, 0.0, 999.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_opacity", "Groove Opacity", 0.05, 1.0, 0.01,
 		func(): return ttt_opacity,
 		func(v: float):
 			ttt_opacity = clampf(v, 0.05, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_r", "Scratch Color R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_r", "Groove Color R", 0.0, 1.0, 0.01,
 		func(): return ttt_color.r,
 		func(v: float):
 			ttt_color.r = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_g", "Scratch Color G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_g", "Groove Color G", 0.0, 1.0, 0.01,
 		func(): return ttt_color.g,
 		func(v: float):
 			ttt_color.g = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_b", "Scratch Color B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_b", "Groove Color B", 0.0, 1.0, 0.01,
 		func(): return ttt_color.b,
 		func(v: float):
 			ttt_color.b = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_y", "Bevel Depth (in)", 0.0, 0.4, 0.005,
+		func(): return ttt_bevel_y_in,
+		func(v: float):
+			ttt_bevel_y_in = clampf(v, 0.0, 0.4)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_z", "Bevel Toward Cook (in)", 0.0, 0.5, 0.005,
+		func(): return ttt_bevel_z_in,
+		func(v: float):
+			ttt_bevel_z_in = clampf(v, 0.0, 0.5)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_scale", "Bevel Thickness Scale", 0.4, 1.2, 0.01,
+		func(): return ttt_bevel_scale,
+		func(v: float):
+			ttt_bevel_scale = clampf(v, 0.4, 1.2)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_op", "Bevel Opacity", 0.05, 1.0, 0.01,
+		func(): return ttt_bevel_opacity,
+		func(v: float):
+			ttt_bevel_opacity = clampf(v, 0.05, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_r", "Bevel Color R", 0.0, 1.0, 0.01,
+		func(): return ttt_bevel_color.r,
+		func(v: float):
+			ttt_bevel_color.r = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_g", "Bevel Color G", 0.0, 1.0, 0.01,
+		func(): return ttt_bevel_color.g,
+		func(v: float):
+			ttt_bevel_color.g = clampf(v, 0.0, 1.0)
+			_apply_grill_ttt_settings()
+			_save_grill_ttt_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_b", "Bevel Color B", 0.0, 1.0, 0.01,
+		func(): return ttt_bevel_color.b,
+		func(v: float):
+			ttt_bevel_color.b = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
