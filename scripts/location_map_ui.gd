@@ -18,6 +18,9 @@ var _patience_label: Label = null
 var _park_btn: Button = null
 var _status_label: Label = null
 var _map_host: Control = null
+var _map_tex_rect: TextureRect = null
+var _map_tex_size: Vector2 = Vector2(1024, 682)
+const TOWN_MAP_PATH := "res://assets/ui/town_map.png"
 
 
 func _ready() -> void:
@@ -125,12 +128,20 @@ func _build() -> void:
 	_map_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_map_host.clip_contents = true
 	_map_host.mouse_filter = Control.MOUSE_FILTER_STOP
-	_map_host.draw.connect(_draw_city_map)
 	_map_host.resized.connect(func():
-		_map_host.queue_redraw()
+		_layout_map_texture()
 		_layout_pins()
 	)
 	map_frame.add_child(_map_host)
+
+	_map_tex_rect = TextureRect.new()
+	_map_tex_rect.name = "TownMapArt"
+	_map_tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_map_tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_map_tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_map_tex_rect.z_index = 0
+	_map_tex_rect.texture = _load_town_map_texture()
+	_map_host.add_child(_map_tex_rect)
 
 	_spawn_pins()
 
@@ -289,6 +300,7 @@ func _spawn_pins() -> void:
 		btn.custom_minimum_size = Vector2(22, 22)
 		btn.text = ""
 		btn.tooltip_text = str(loc["name"])
+		btn.z_index = 2
 		var tier := str(loc["tier"])
 		_style_pin(btn, tier, false)
 		btn.pressed.connect(_on_pin_pressed.bind(id))
@@ -313,21 +325,62 @@ func _style_pin(btn: Button, tier: String, selected: bool) -> void:
 	btn.add_theme_stylebox_override("pressed", hover)
 
 
+func _load_town_map_texture() -> Texture2D:
+	## Export-safe PNG load (Image.load(res://) is stripped in packs).
+	if ResourceLoader.exists(TOWN_MAP_PATH):
+		var imported: Texture2D = load(TOWN_MAP_PATH) as Texture2D
+		if imported != null:
+			_map_tex_size = imported.get_size()
+			return imported
+	if not FileAccess.file_exists(TOWN_MAP_PATH):
+		return null
+	var bytes := FileAccess.get_file_as_bytes(TOWN_MAP_PATH)
+	if bytes.is_empty():
+		return null
+	var img := Image.new()
+	if img.load_png_from_buffer(bytes) != OK:
+		return null
+	_map_tex_size = Vector2(img.get_width(), img.get_height())
+	return ImageTexture.create_from_image(img)
+
+
+func _map_image_rect() -> Rect2:
+	## Letterboxed rect where town_map.png actually draws inside _map_host.
+	if _map_host == null:
+		return Rect2()
+	var host := _map_host.size
+	if host.x < 4.0 or host.y < 4.0:
+		return Rect2()
+	var tex := _map_tex_size
+	if tex.x < 1.0 or tex.y < 1.0:
+		tex = Vector2(1024, 682)
+	var scale := minf(host.x / tex.x, host.y / tex.y)
+	var drawn := tex * scale
+	var origin := (host - drawn) * 0.5
+	return Rect2(origin, drawn)
+
+
+func _layout_map_texture() -> void:
+	if _map_tex_rect == null or _map_host == null:
+		return
+	_map_tex_rect.position = Vector2.ZERO
+	_map_tex_rect.size = _map_host.size
+
+
 func _layout_pins() -> void:
 	if _map_host == null:
 		return
-	var sz := _map_host.size
-	if sz.x < 8.0 or sz.y < 8.0:
+	var img_r := _map_image_rect()
+	if img_r.size.x < 8.0 or img_r.size.y < 8.0:
 		return
-	var pad := 18.0
-	var inner := sz - Vector2(pad * 2.0, pad * 2.0)
 	for loc in TruckLocationsScript.all():
 		var id := str(loc["id"])
 		var btn: Button = _pin_buttons.get(id) as Button
 		if btn == null:
 			continue
 		var uv: Vector2 = loc["map"]
-		var pos := Vector2(pad, pad) + Vector2(uv.x * inner.x, uv.y * inner.y) - btn.custom_minimum_size * 0.5
+		var pos := img_r.position + Vector2(uv.x * img_r.size.x, uv.y * img_r.size.y) \
+				- btn.custom_minimum_size * 0.5
 		btn.position = pos
 		btn.size = btn.custom_minimum_size
 
@@ -415,80 +468,3 @@ func _on_park_pressed() -> void:
 	_refresh_detail()
 	location_confirmed.emit(_parked_id)
 	close()
-
-
-func _draw_city_map() -> void:
-	## Procedural top-down city: grass, blocks, roads, water, labels.
-	if _map_host == null:
-		return
-	var s := _map_host.size
-	if s.x < 4.0 or s.y < 4.0:
-		return
-
-	## Base grass / parkland
-	_map_host.draw_rect(Rect2(Vector2.ZERO, s), Color(0.22, 0.38, 0.24), true)
-
-	## Water (river / marina)
-	_map_host.draw_colored_polygon(PackedVector2Array([
-		Vector2(s.x * 0.0, s.y * 0.0),
-		Vector2(s.x * 0.22, s.y * 0.0),
-		Vector2(s.x * 0.10, s.y * 0.28),
-		Vector2(s.x * 0.0, s.y * 0.22),
-	]), Color(0.22, 0.42, 0.58, 0.85))
-
-	## City blocks
-	var blocks: Array[Rect2] = [
-		Rect2(0.28, 0.12, 0.18, 0.16),
-		Rect2(0.50, 0.10, 0.16, 0.14),
-		Rect2(0.70, 0.08, 0.18, 0.18),
-		Rect2(0.34, 0.34, 0.14, 0.14),
-		Rect2(0.52, 0.32, 0.18, 0.16),
-		Rect2(0.74, 0.34, 0.16, 0.14),
-		Rect2(0.30, 0.56, 0.16, 0.14),
-		Rect2(0.50, 0.54, 0.14, 0.16),
-		Rect2(0.68, 0.56, 0.18, 0.14),
-		Rect2(0.36, 0.78, 0.20, 0.12),
-		Rect2(0.62, 0.78, 0.22, 0.12),
-		Rect2(0.08, 0.40, 0.14, 0.18),
-		Rect2(0.10, 0.66, 0.14, 0.16),
-	]
-	for b in blocks:
-		var r := Rect2(b.position * s, b.size * s)
-		_map_host.draw_rect(r, Color(0.32, 0.34, 0.38), true)
-		_map_host.draw_rect(r.grow(-3.0), Color(0.38, 0.40, 0.45), true)
-
-	## Park oval
-	var park_c := Vector2(s.x * 0.18, s.y * 0.82)
-	_map_host.draw_circle(park_c, minf(s.x, s.y) * 0.09, Color(0.28, 0.50, 0.30))
-	_map_host.draw_circle(park_c, minf(s.x, s.y) * 0.055, Color(0.34, 0.58, 0.34))
-
-	## Stadium blob
-	_map_host.draw_circle(Vector2(s.x * 0.82, s.y * 0.16), minf(s.x, s.y) * 0.07, Color(0.45, 0.36, 0.42))
-
-	## Roads (horizontal)
-	var road := Color(0.18, 0.18, 0.20)
-	var lane := Color(0.72, 0.68, 0.35, 0.55)
-	var h_roads: Array[float] = [0.28, 0.48, 0.70]
-	for yf in h_roads:
-		var y := yf * s.y
-		_map_host.draw_rect(Rect2(0.0, y - 7.0, s.x, 14.0), road, true)
-		_map_host.draw_line(Vector2(0.0, y), Vector2(s.x, y), lane, 1.2)
-	## Roads (vertical)
-	var v_roads: Array[float] = [0.26, 0.46, 0.66, 0.86]
-	for xf in v_roads:
-		var x := xf * s.x
-		_map_host.draw_rect(Rect2(x - 7.0, 0.0, 14.0, s.y), road, true)
-		_map_host.draw_line(Vector2(x, 0.0), Vector2(x, s.y), lane, 1.2)
-
-	## Soft district labels
-	_draw_map_label("PARKS", Vector2(s.x * 0.14, s.y * 0.88), Color(0.7, 0.9, 0.7, 0.45))
-	_draw_map_label("DOWNTOWN", Vector2(s.x * 0.52, s.y * 0.40), Color(0.9, 0.88, 0.7, 0.4))
-	_draw_map_label("STADIUM", Vector2(s.x * 0.80, s.y * 0.08), Color(0.95, 0.7, 0.75, 0.4))
-	_draw_map_label("MALL", Vector2(s.x * 0.76, s.y * 0.84), Color(0.85, 0.8, 0.95, 0.4))
-
-
-func _draw_map_label(text: String, pos: Vector2, color: Color) -> void:
-	var font: Font = ThemeDB.fallback_font
-	if UiFontsScript.body != null:
-		font = UiFontsScript.body
-	_map_host.draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)

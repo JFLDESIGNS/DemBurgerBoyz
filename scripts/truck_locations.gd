@@ -35,7 +35,8 @@ const TIER_STATS := {
 	TIER_EXTREME: {"spawn_rate": 2.10, "patience": 0.50, "customer_cap_bonus": 2},
 }
 
-## id, display name, blurb, tier, normalized map UV (0–1), optional bg path for later.
+## id, display name, blurb, tier, normalized map UV (0–1) on town_map.png building footprints.
+## UVs aim at building centers / park fountain — not road asphalt.
 const LOCATIONS: Array[Dictionary] = [
 	## --- Easy (5) ---
 	{
@@ -43,7 +44,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Quiet Park",
 		"blurb": "Shade, joggers, and the occasional picnic. Gentle starter spot.",
 		"tier": TIER_EASY,
-		"map": Vector2(0.16, 0.78),
+		"map": Vector2(0.14, 0.76), ## PARKS fountain
 		"bg": "",
 	},
 	{
@@ -51,7 +52,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Suburb Lane",
 		"blurb": "Cul-de-sac cookouts. Neighbors wander over when they smell the grill.",
 		"tier": TIER_EASY,
-		"map": Vector2(0.12, 0.32),
+		"map": Vector2(0.88, 0.80), ## Bottom-right red-roof house
 		"bg": "",
 	},
 	{
@@ -59,7 +60,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Library Lot",
 		"blurb": "Study-break snacks. Polite line, plenty of time to plate.",
 		"tier": TIER_EASY,
-		"map": Vector2(0.30, 0.52),
+		"map": Vector2(0.16, 0.44), ## Middle-left grey office
 		"bg": "",
 	},
 	{
@@ -67,7 +68,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Community Garden",
 		"blurb": "Gardeners and kids on bikes. Slow afternoon traffic.",
 		"tier": TIER_EASY,
-		"map": Vector2(0.24, 0.90),
+		"map": Vector2(0.20, 0.84), ## Park gazebo / benches
 		"bg": "",
 	},
 	{
@@ -75,7 +76,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Residential Court",
 		"blurb": "Apartment courtyard. Friendly regulars, low pressure.",
 		"tier": TIER_EASY,
-		"map": Vector2(0.08, 0.58),
+		"map": Vector2(0.18, 0.17), ## Top-left patio buildings
 		"bg": "",
 	},
 	## --- Medium (5) ---
@@ -84,7 +85,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Downtown Corner",
 		"blurb": "Sidewalk hustle. Lunch rush keeps you honest.",
 		"tier": TIER_MEDIUM,
-		"map": Vector2(0.48, 0.44),
+		"map": Vector2(0.53, 0.44), ## DOWNTOWN building
 		"bg": "",
 	},
 	{
@@ -92,7 +93,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Office Plaza",
 		"blurb": "Cubicle escapees on the clock. Tickets stack mid-day.",
 		"tier": TIER_MEDIUM,
-		"map": Vector2(0.58, 0.26),
+		"map": Vector2(0.38, 0.16), ## Top mid-left commercial
 		"bg": "",
 	},
 	{
@@ -100,7 +101,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Shopping Strip",
 		"blurb": "Bag bags and window shoppers. Steady flow all shift.",
 		"tier": TIER_MEDIUM,
-		"map": Vector2(0.42, 0.68),
+		"map": Vector2(0.33, 0.79), ## Bottom mid-left red-roof shop
 		"bg": "",
 	},
 	{
@@ -108,7 +109,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Transit Stop",
 		"blurb": "Bus arrivals dump hungry riders. Pace picks up.",
 		"tier": TIER_MEDIUM,
-		"map": Vector2(0.62, 0.56),
+		"map": Vector2(0.80, 0.46), ## Middle-right shops
 		"bg": "",
 	},
 	{
@@ -116,7 +117,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Market Edge",
 		"blurb": "Farmers-market spillover. Crowds pulse in waves.",
 		"tier": TIER_MEDIUM,
-		"map": Vector2(0.36, 0.74),
+		"map": Vector2(0.22, 0.48), ## Pink cafe / bakery
 		"bg": "",
 	},
 	## --- Hard (3) ---
@@ -125,7 +126,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Stadium Tailgate",
 		"blurb": "Pre-game frenzy. Long lines, short tempers.",
 		"tier": TIER_HARD,
-		"map": Vector2(0.78, 0.18),
+		"map": Vector2(0.64, 0.12), ## STADIUM roof
 		"bg": "",
 	},
 	{
@@ -133,7 +134,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Festival Midway",
 		"blurb": "Lights, music, and hungry festival-goers nonstop.",
 		"tier": TIER_HARD,
-		"map": Vector2(0.84, 0.42),
+		"map": Vector2(0.88, 0.17), ## Far top-right brick shops
 		"bg": "",
 	},
 	{
@@ -141,7 +142,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Mall Exterior",
 		"blurb": "Food-court overflow. Everyone wants it yesterday.",
 		"tier": TIER_HARD,
-		"map": Vector2(0.74, 0.72),
+		"map": Vector2(0.68, 0.68), ## MALL building (above parking)
 		"bg": "",
 	},
 	## --- Very hard (2) ---
@@ -150,7 +151,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "City Center Rush",
 		"blurb": "Heart of downtown at peak hour. Wall of tickets.",
 		"tier": TIER_EXTREME,
-		"map": Vector2(0.54, 0.38),
+		"map": Vector2(0.55, 0.42), ## Downtown upper facade
 		"bg": "",
 	},
 	{
@@ -158,7 +159,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"name": "Night Market Peak",
 		"blurb": "Neon chaos. Packed aisle, zero patience.",
 		"tier": TIER_EXTREME,
-		"map": Vector2(0.90, 0.62),
+		"map": Vector2(0.85, 0.42), ## Colorful mid-right block
 		"bg": "",
 	},
 ]

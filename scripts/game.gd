@@ -19444,12 +19444,13 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 
 
 func _begin_tree_shake_hold(tree: Node3D, screen_pos: Vector2) -> void:
-	## Press: thud + one leaf rustle. Hold+move: continuous leaf shake with pitch.
+	## Press: one soft leaf puff + lean anim. Hold+move: breeze bed + sparse direction chimes.
 	_tree_shake_held = tree
 	_tree_shake_prev_mouse = screen_pos
 	_tree_shake_vel = Vector2.ZERO
 	_tree_hold_lean = Vector3.ZERO
-	_shake_outdoor_tree(tree)
+	## Visual shake without a second thud SFX — tap covers the click sound.
+	_shake_outdoor_tree(tree, false)
 	if game_audio != null and game_audio.has_method("play_tree_leaf_tap"):
 		game_audio.play_tree_leaf_tap()
 
@@ -19481,12 +19482,13 @@ func _update_tree_shake_hold(delta: float) -> void:
 	_tree_shake_prev_mouse = mouse
 	var spd := dmouse.length() / maxf(delta, 0.0001)
 	_tree_shake_vel = _tree_shake_vel.lerp(dmouse, clampf(delta * 14.0, 0.0, 1.0))
-	var intensity := clampf((spd - 55.0) / 520.0, 0.0, 1.0)
-	if intensity > 0.05 and game_audio != null:
+	## Need a clearer swipe before the breeze bed starts — cuts idle scratch layering.
+	var intensity := clampf((spd - 90.0) / 480.0, 0.0, 1.0)
+	if intensity > 0.08 and game_audio != null:
 		if game_audio.has_method("set_tree_leaf_shake"):
 			game_audio.set_tree_leaf_shake(true, intensity)
 		if game_audio.has_method("set_tree_leaf_shake_motion"):
-			game_audio.set_tree_leaf_shake_motion(dmouse)
+			game_audio.set_tree_leaf_shake_motion(dmouse, delta)
 		## Soft live lean while whipping the canopy (don't fight the one-shot tween hard).
 		if not bool(_tree_shake_held.get_meta("tree_shaking", false)):
 			var base: Vector3 = _tree_shake_held.get_meta("tree_base_rot", _tree_shake_held.rotation_degrees)
@@ -19505,7 +19507,7 @@ func _update_tree_shake_hold(delta: float) -> void:
 			_tree_shake_held.rotation_degrees = base2 + _tree_hold_lean
 
 
-func _shake_outdoor_tree(tree: Node3D) -> void:
+func _shake_outdoor_tree(tree: Node3D, with_sfx: bool = true) -> void:
 	## Pendulum lean from the ground — finishes settling before another shake can start.
 	if tree == null or not is_instance_valid(tree):
 		return
@@ -19514,10 +19516,11 @@ func _shake_outdoor_tree(tree: Node3D) -> void:
 	var base: Vector3 = tree.get_meta("tree_base_rot", tree.rotation_degrees)
 	tree.set_meta("tree_base_rot", base)
 	tree.rotation_degrees = base
-	if game_audio != null and game_audio.has_method("play_tree_thud"):
-		game_audio.play_tree_thud()
-	elif game_audio != null and game_audio.has_method("play_rack_take"):
-		game_audio.play_rack_take()
+	if with_sfx:
+		if game_audio != null and game_audio.has_method("play_tree_thud"):
+			game_audio.play_tree_thud()
+		elif game_audio != null and game_audio.has_method("play_rack_take"):
+			game_audio.play_rack_take()
 	var amp := TREE_SHAKE_DEG
 	## One lean direction, then decay back through the opposite side (pendulum).
 	var lean_x := randf_range(0.7, 1.0) * (-1.0 if randf() < 0.5 else 1.0)
