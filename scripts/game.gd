@@ -6382,6 +6382,8 @@ func _build_flat_top_grill() -> void:
 	rim_mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	rim.material_override = rim_mat
 	surface.add_child(rim)
+	## Far-edge splash guard — stainless back + short side returns (window side / −Z).
+	_add_grill_splash_guard(surface)
 
 	## Heat-zone steel panels — FULL · 1/2 · HOLD (screen-left → right).
 	var bands: Array = _grill_zone_bands()
@@ -18106,6 +18108,69 @@ func _add_grill_zone_panel(parent: Node3D, local_pos: Vector3, size: Vector3, ma
 	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	panel.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	parent.add_child(panel)
+
+
+func _make_grill_splash_stainless() -> StandardMaterial3D:
+	## Brushed stainless — shinier than the seasoned flat-top.
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	_ensure_grill_steel_texture()
+	if grill_steel_tex != null:
+		mat.albedo_texture = grill_steel_tex
+		mat.albedo_color = Color(0.78, 0.80, 0.84)
+		mat.uv1_scale = Vector3(2.4, 0.85, 1.0)
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	else:
+		mat.albedo_color = Color(0.72, 0.74, 0.78)
+	mat.metallic = 0.88
+	mat.roughness = 0.32
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.22
+	mat.clearcoat_roughness = 0.28
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	return mat
+
+
+func _add_grill_splash_guard(parent: Node3D) -> void:
+	## U-shaped splash wall on the far (−Z / window) edge: ~5" tall, ~4" side returns.
+	if parent == null or not is_instance_valid(parent):
+		return
+	var h := 5.0 * INCH_TO_M
+	var wrap := 4.0 * INCH_TO_M
+	var thick := 0.010
+	var steel_top_y := 0.0225 ## Matches zone panel half-height so the guard sits on the steel.
+	var half_w := GRILL_WIDTH * 0.5
+	var back_z := -GRILL_DEPTH * 0.5
+	var mat := _make_grill_splash_stainless()
+	var root := Node3D.new()
+	root.name = "GrillSplashGuard"
+	parent.add_child(root)
+
+	## Back wall — full width, sits just behind the far steel lip.
+	var back := MeshInstance3D.new()
+	var back_mesh := BoxMesh.new()
+	back_mesh.size = Vector3(GRILL_WIDTH + thick * 2.0, h, thick)
+	back.mesh = back_mesh
+	back.position = Vector3(0.0, steel_top_y + h * 0.5, back_z - thick * 0.5)
+	back.material_override = mat
+	back.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(back)
+
+	## Side returns — camera-left (+X) and camera-right (−X), extending toward the cook (+Z).
+	for side_sign in [-1.0, 1.0]:
+		var side := MeshInstance3D.new()
+		var side_mesh := BoxMesh.new()
+		side_mesh.size = Vector3(thick, h, wrap)
+		side.mesh = side_mesh
+		side.position = Vector3(
+			side_sign * (half_w + thick * 0.5),
+			steel_top_y + h * 0.5,
+			back_z + wrap * 0.5
+		)
+		side.material_override = mat
+		side.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		root.add_child(side)
 
 
 func _add_grill_shine(parent: Node3D, local_pos: Vector3, width: float, depth: float) -> void:
