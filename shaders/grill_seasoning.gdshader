@@ -112,7 +112,7 @@ void fragment() {
 	float grain = (value_noise(uv * 42.0) - 0.5) * grain_amount * max(vig_mask, splat * 0.4);
 	col += grain;
 
-	float alpha = clamp(vig_a + splat_a, 0.0, 0.22);
+	float alpha = clamp(vig_a + splat_a, 0.0, 0.48);
 	ALBEDO = col;
 	ALPHA = alpha;
 }
