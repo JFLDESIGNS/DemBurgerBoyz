@@ -407,10 +407,11 @@ var grill_heat_tint := Color(0.92, 0.16, 0.04) ## Subtle ember red
 var _grill_heat_cook_x0: float = 0.0 ## World X span of cook steel (for section rebuild)
 var _grill_heat_cook_x1: float = 0.0
 ## Real OmniLight wash on the steel when the burner is on — Hidden tunable.
+## One Omni centered on each cook glow blot (FULL @ 100%, ½ @ 50%).
 const GRILL_SURFACE_LIGHT_CFG_SECTION := "grill_surface_light"
-var grill_surface_light: OmniLight3D = null
+var grill_surface_lights: Array = [] ## OmniLight3D
 var grill_surf_light_energy: float = 0.18 ## "greatness" / intensity — keep subtle
-var grill_surf_light_range: float = 1.15
+var grill_surf_light_range: float = 0.85 ## Per-zone wash; smaller so FULL / ½ stay distinct
 var grill_surf_light_height: float = 0.11 ## local Y above steel
 var grill_surf_light_flicker: float = 0.12
 var grill_surf_light_specular: float = 0.35
@@ -4695,7 +4696,7 @@ func _build_3d_world() -> void:
 	grill_pad_mats.clear()
 	grill_power_labels.clear()
 	grill_heat_lights.clear()
-	grill_surface_light = null
+	grill_surface_lights.clear()
 	grill_season_mesh = null
 	grill_season_mat = null
 	grill_vig_mesh = null
@@ -6494,8 +6495,8 @@ func _build_flat_top_grill() -> void:
 	_grill_heat_cook_x0 = cook_x0 if cook_started else GRILL_CENTER_X - cook_w * 0.5
 	_grill_heat_cook_x1 = cook_x1 if cook_started else GRILL_CENTER_X + cook_w * 0.5
 	_rebuild_grill_heat_glows(surface)
-	## Subtle real Omni wash on the cook steel (not the old unused heat orb).
-	_add_grill_surface_light(surface, cook_cx_world - GRILL_CENTER_X)
+	## Real Omni at the center of each glow blot — FULL (100%) + ½ (50%).
+	_add_grill_surface_lights(surface)
 
 	## Heat shimmer / warp over FULL + 1/2 cook bands (not HOLD).
 	_build_heat_warp_plane(
@@ -12608,44 +12609,55 @@ func _sync_grill_heat_hidden_ui() -> void:
 			options_hidden_tree_light_labs[key].text = ("%d" % int(round(v))) if key == "heat_bars" else ("%.2f" % v)
 
 
-func _add_grill_surface_light(parent: Node3D, local_x: float) -> void:
-	## Very subtle red-orange Omni sitting just above the steel when the burner is on.
+func _add_grill_surface_lights(parent: Node3D) -> void:
+	## One Omni centered on each cook-zone heat glow (FULL + ½). HOLD stays dark.
 	if parent == null or not is_instance_valid(parent):
 		return
-	if grill_surface_light != null and is_instance_valid(grill_surface_light):
-		grill_surface_light.queue_free()
-	grill_surface_light = null
-	var light := OmniLight3D.new()
-	light.name = "GrillSurfaceLight"
-	light.shadow_enabled = false
-	light.light_volumetric_fog_energy = 0.0
-	light.omni_attenuation = 1.35
-	light.position = Vector3(local_x, grill_surf_light_height, 0.02)
-	parent.add_child(light)
-	grill_surface_light = light
+	for old in grill_surface_lights:
+		if old != null and is_instance_valid(old):
+			old.queue_free()
+	grill_surface_lights.clear()
+	for z in _grill_zone_bands():
+		var zone_mul := float(z.get("mul", 0.0))
+		if zone_mul <= 0.0:
+			continue
+		var local_cx := float(z["cx"]) - GRILL_CENTER_X
+		var light := OmniLight3D.new()
+		light.name = "GrillSurfaceLight_%s" % str(z.get("id", "cook"))
+		light.shadow_enabled = false
+		light.light_volumetric_fog_energy = 0.0
+		light.omni_attenuation = 1.35
+		## Same XZ as the heat blot center so the real light sits in the glow.
+		light.position = Vector3(local_cx, grill_surf_light_height, 0.0)
+		light.set_meta("zone_mul", zone_mul)
+		parent.add_child(light)
+		grill_surface_lights.append(light)
 	_apply_grill_surface_light()
 
 
 func _apply_grill_surface_light() -> void:
-	if grill_surface_light == null or not is_instance_valid(grill_surface_light):
-		return
-	grill_surface_light.light_color = grill_surf_light_color
-	grill_surface_light.omni_range = grill_surf_light_range
-	grill_surface_light.light_specular = grill_surf_light_specular
-	grill_surface_light.position.y = grill_surf_light_height
 	var on := grill_on
-	grill_surface_light.visible = on
-	grill_surface_light.light_energy = grill_surf_light_energy if on else 0.0
+	for light in grill_surface_lights:
+		if light == null or not is_instance_valid(light):
+			continue
+		var zone_mul := float(light.get_meta("zone_mul", 1.0))
+		light.light_color = grill_surf_light_color
+		light.omni_range = grill_surf_light_range
+		light.light_specular = grill_surf_light_specular
+		light.position.y = grill_surf_light_height
+		light.visible = on
+		light.light_energy = (grill_surf_light_energy * zone_mul) if on else 0.0
 
 
 func _update_grill_surface_light(delta: float) -> void:
-	if grill_surface_light == null or not is_instance_valid(grill_surface_light):
+	if grill_surface_lights.is_empty():
 		return
 	if not grill_on:
-		grill_surface_light.visible = false
-		grill_surface_light.light_energy = 0.0
+		for light in grill_surface_lights:
+			if light != null and is_instance_valid(light):
+				light.visible = false
+				light.light_energy = 0.0
 		return
-	grill_surface_light.visible = true
 	_grill_surf_light_phase += delta
 	var flick := grill_surf_light_flicker
 	var mul := 1.0
@@ -12656,11 +12668,16 @@ func _update_grill_surface_light(delta: float) -> void:
 			+ sin(t * 5.3 + 1.2) * 0.28 * flick \
 			+ sin(t * 9.7 + 0.4) * 0.12 * flick
 		mul = clampf(mul, 1.0 - flick * 0.85, 1.0 + flick * 0.55)
-	grill_surface_light.light_color = grill_surf_light_color
-	grill_surface_light.omni_range = grill_surf_light_range
-	grill_surface_light.light_specular = grill_surf_light_specular
-	grill_surface_light.position.y = grill_surf_light_height
-	grill_surface_light.light_energy = grill_surf_light_energy * mul
+	for light in grill_surface_lights:
+		if light == null or not is_instance_valid(light):
+			continue
+		var zone_mul := float(light.get_meta("zone_mul", 1.0))
+		light.visible = true
+		light.light_color = grill_surf_light_color
+		light.omni_range = grill_surf_light_range
+		light.light_specular = grill_surf_light_specular
+		light.position.y = grill_surf_light_height
+		light.light_energy = grill_surf_light_energy * zone_mul * mul
 
 
 func _load_grill_surface_light_settings() -> void:
