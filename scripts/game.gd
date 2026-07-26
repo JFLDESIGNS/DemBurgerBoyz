@@ -1826,7 +1826,7 @@ const CUP_LIQUID_BUBBLE_RISE_COUNT := 22 ## bottom → top risers in the pop bod
 const CUP_LIQUID_BUBBLE_SIZE := 0.0038 ## idle carbonation pearls (was too tiny)
 const CUP_TRAY_FIRST_X := -0.38 ## camera-left first parked cup spot
 const CUP_TRAY_SPACING := 0.20 ## gap between parked drinks on the drip tray
-const CUP_DRAW_PRIORITY := 10 ## Above grill shine (render_priority 2).
+const CUP_DRAW_PRIORITY := 32 ## Above grill shine / burgers when tray items overlap.
 const SUPPLY_IDS: Array[String] = [
 	"bun_bottom", "patty", "cheese", "lettuce", "tomato", "onion",
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
@@ -26286,6 +26286,8 @@ func _create_drink_cup_node() -> Node3D:
 	floor_mat.emission_enabled = false
 	floor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	floor_mat.cull_mode = BaseMaterial3D.CULL_BACK
+	floor_mat.no_depth_test = true
+	floor_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	floor_mat.render_priority = CUP_DRAW_PRIORITY
 	cup_floor.material_override = floor_mat
 	_boost_cup_draw_order(cup_floor)
@@ -26357,6 +26359,8 @@ func _create_drink_cup_node() -> Node3D:
 	foam_mat.rim_enabled = true
 	foam_mat.rim = 0.35
 	foam_mat.rim_tint = 0.85
+	foam_mat.no_depth_test = true
+	foam_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	foam_mat.render_priority = CUP_DRAW_PRIORITY
 	fizz_mesh.material_override = foam_mat
 	_boost_cup_draw_order(fizz_mesh)
@@ -26417,9 +26421,9 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 	mat.rim_enabled = true
 	mat.rim = 0.28
 	mat.rim_tint = 0.75
-	## Real depth vs spatula — never float above kitchen tools.
-	mat.no_depth_test = false
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	## Foreground tray layer so burgers cannot punch through the cup logo.
+	mat.no_depth_test = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.render_priority = CUP_DRAW_PRIORITY
 	logo.material_override = mat
 	logo.sorting_offset = 0.0
@@ -26440,8 +26444,8 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 	gloss_mat.clearcoat_enabled = true
 	gloss_mat.clearcoat = 1.0
 	gloss_mat.clearcoat_roughness = 0.01
-	gloss_mat.no_depth_test = false
-	gloss_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	gloss_mat.no_depth_test = true
+	gloss_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	gloss_mat.render_priority = CUP_DRAW_PRIORITY
 	gloss.material_override = gloss_mat
 	gloss.sorting_offset = 0.0
@@ -26947,6 +26951,8 @@ func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
 	mat.clearcoat_enabled = true
 	mat.clearcoat = 0.25
 	mat.clearcoat_roughness = 0.08
+	mat.no_depth_test = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.render_priority = CUP_DRAW_PRIORITY
 	return mat
 
