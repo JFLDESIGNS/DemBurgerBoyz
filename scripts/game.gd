@@ -28160,15 +28160,15 @@ func _spawn_cup_splash_drops() -> void:
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
 
 
-func _ensure_soda_overfill_cascades(count: int = 7) -> void:
-	## Thin pour ribbons: 3×(rim→tray) + grill stream gets tray→loft + loft→grill.
+func _ensure_soda_overfill_cascades(count: int = 29) -> void:
+	## Thin arc segments — enough for curved pour threads (not straight chords).
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.0035
-		cyl.bottom_radius = 0.007
-		cyl.height = 0.12
+		cyl.top_radius = 0.0028
+		cyl.bottom_radius = 0.0055
+		cyl.height = 0.06
 		cyl.cap_top = false
 		cyl.cap_bottom = false
 		mi.mesh = cyl
@@ -28214,13 +28214,20 @@ func _tick_soda_overfill_breaks(delta: float) -> void:
 		_soda_overfill_flow_t = randf_range(0.04, 0.09)
 
 
+func _soda_arc_point(a: Vector3, b: Vector3, lift: float, t: float) -> Vector3:
+	## Quadratic-style pour arc — bows above the straight chord.
+	var p := a.lerp(b, t)
+	p.y += lift * 4.0 * t * (1.0 - t)
+	return p
+
+
 func _place_soda_overfill_ribbon(
 		mi: MeshInstance3D, lip: Vector3, land: Vector3, foam_col: Color, soda_tint: Color,
 		thin: float = 1.0
 ) -> void:
 	var mid := (lip + land) * 0.5
 	var along := land - lip
-	var len := maxf(along.length(), 0.035)
+	var len := maxf(along.length(), 0.012)
 	mi.visible = true
 	mi.global_position = mid
 	var y_axis := along / len
@@ -28233,9 +28240,8 @@ func _place_soda_overfill_ribbon(
 	var cyl := mi.mesh as CylinderMesh
 	if cyl:
 		cyl.height = len
-		## Hairline foam threads — much thinner than the old hose.
-		cyl.top_radius = 0.0028 * thin
-		cyl.bottom_radius = 0.0060 * thin
+		cyl.top_radius = 0.0024 * thin
+		cyl.bottom_radius = 0.0050 * thin
 	var mat := mi.material_override as ShaderMaterial
 	if mat:
 		mat.set_shader_parameter("soda_color", soda_tint)
@@ -28244,14 +28250,31 @@ func _place_soda_overfill_ribbon(
 		mat.set_shader_parameter("half_h", len * 0.5)
 
 
+func _place_soda_overfill_arc(
+		start_idx: int, seg_count: int, a: Vector3, b: Vector3, lift: float,
+		foam_col: Color, soda_tint: Color, thin: float = 1.0
+) -> void:
+	## Chain short cylinders along a bowed arc so the pour reads curved.
+	for s in seg_count:
+		var idx := start_idx + s
+		if idx < 0 or idx >= _soda_overfill_cascade_meshes.size():
+			break
+		var mi := _soda_overfill_cascade_meshes[idx] as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			continue
+		var t0 := float(s) / float(seg_count)
+		var t1 := float(s + 1) / float(seg_count)
+		var p0 := _soda_arc_point(a, b, lift, t0)
+		var p1 := _soda_arc_point(a, b, lift, t1)
+		_place_soda_overfill_ribbon(mi, p0, p1, foam_col, soda_tint, thin)
+
+
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Thin streams: first hit the drip/fill tray under the cup.
-	## One continues to the grill; one skims center tray; one the other tray side.
+	## Curved thin streams: first hit drip tray; only one arcs onto the near grill edge.
 	if cup_root == null or world == null:
 		return
-	_ensure_soda_overfill_cascades(7)
+	_ensure_soda_overfill_cascades(29)
 	_tick_soda_overfill_breaks(delta)
-	## Hide extras if we still have older thicker meshes around.
 	for m in _soda_overfill_cascade_meshes:
 		var hide_mi := m as MeshInstance3D
 		if hide_mi != null and is_instance_valid(hide_mi):
@@ -28274,12 +28297,7 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 	if right.length_squared() < 0.0001:
 		right = Vector3(1.0, 0.0, 0.0)
 	right = right.normalized()
-	## Toward grill from soda = world +X (machine sits on −X).
-	var to_grill := Vector3(1.0, 0.0, 0.0)
-	if absf(right.dot(to_grill)) < 0.2:
-		to_grill = right
-	else:
-		to_grill = right if right.dot(Vector3(1.0, 0.0, 0.0)) > 0.0 else -right
+	var to_grill := right if right.dot(Vector3(1.0, 0.0, 0.0)) > 0.0 else -right
 	var t_ms := Time.get_ticks_msec() * 0.001
 	## 0 = grill-bound, 1 = center tray, 2 = other tray side.
 	var dirs: Array[Vector3] = [
@@ -28287,56 +28305,48 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 		(forward * 0.95 + to_grill * 0.08).normalized(),
 		(forward * 0.40 - to_grill * 0.85).normalized(),
 	]
-	var tray_reach: Array[float] = [0.10, 0.08, 0.10]
+	var tray_reach: Array[float] = [0.09, 0.075, 0.09]
+	## Mesh layout: 0-5/6-11/12-17 tray (6), 18-24 grill (7), 25-26/27-28 skim (2).
 	for i in 3:
-		var mi_a := _soda_overfill_cascade_meshes[i] as MeshInstance3D
-		if mi_a == null or not is_instance_valid(mi_a):
-			continue
 		var outward: Vector3 = dirs[i]
-		var wobble := sin(t_ms * 3.4 + float(i) * 1.6) * 0.012
+		var wobble := sin(t_ms * 3.4 + float(i) * 1.6) * 0.010
 		var lip := rim + outward * (CUP_SHELL_TOP_R * 0.92) + Vector3(0.0, 0.004, 0.0)
-		## First bounce: sitting fill / drip tray under the cup (not the grill).
 		var tray_hit := lip + outward * tray_reach[i] + right * wobble
 		tray_hit.y = deck_y + 0.003
-		_place_soda_overfill_ribbon(mi_a, lip, tray_hit, foam_col, foamish, 0.72)
+		## Pour arc down onto the fill tray (bow above the chord).
+		var fall := maxf(0.018, (lip.y - tray_hit.y) * 0.55)
+		_place_soda_overfill_arc(i * 6, 6, lip, tray_hit, fall, foam_col, foamish, 0.70)
 		if i == 0:
-			## Only this stream continues: tray → short loft → soda-side grill edge.
-			var mi_b := _soda_overfill_cascade_meshes[3] as MeshInstance3D
-			var mi_c := _soda_overfill_cascade_meshes[4] as MeshInstance3D
-			if mi_b == null or not is_instance_valid(mi_b) or mi_c == null or not is_instance_valid(mi_c):
-				continue
-			var bounce := (to_grill * 0.75 + forward * 0.15 + Vector3(0.0, 0.55, 0.0)).normalized()
-			var loft := tray_hit + bounce * 0.11
-			loft.y = maxf(deck_y + 0.04, tray_hit.y + 0.028)
+			## Short hop that barely kisses the soda-side grill lip (not deep onto steel).
 			var soda_edge_x := _soda_grill_near_machine_x()
 			var grill_land := Vector3(
-				soda_edge_x + 0.05 + sin(t_ms * 2.6) * 0.012,
+				soda_edge_x + 0.012 + sin(t_ms * 2.6) * 0.006,
 				GRILL_SURFACE_Y + OIL_SIT_Y + 0.004,
-				GRILL_SURFACE_Z + sin(t_ms * 2.1) * 0.04
+				clampf(tray_hit.z + forward.z * -0.02 + sin(t_ms * 2.1) * 0.02,
+					GRILL_SURFACE_Z - GRILL_DEPTH * 0.35,
+					GRILL_SURFACE_Z + GRILL_DEPTH * 0.20)
 			)
 			var half_w := GRILL_WIDTH * 0.5
 			var half_d := GRILL_DEPTH * 0.5
-			grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.02, GRILL_CENTER_X + half_w - 0.02)
+			grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.012, GRILL_CENTER_X - half_w + 0.055)
 			grill_land.z = clampf(grill_land.z, GRILL_SURFACE_Z - half_d + 0.02, GRILL_SURFACE_Z + half_d - 0.02)
-			_place_soda_overfill_ribbon(mi_b, tray_hit, loft, foam_col, foamish, 0.62)
-			_place_soda_overfill_ribbon(mi_c, loft, grill_land, foam_col, foamish, 0.58)
-			if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.50:
-				_soda_overfill_long_cd = randf_range(0.30, 0.55)
+			var hop_lift := 0.055 + 0.010 * sin(t_ms * 3.0)
+			_place_soda_overfill_arc(18, 7, tray_hit, grill_land, hop_lift, foam_col, foamish, 0.58)
+			if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.45:
+				_soda_overfill_long_cd = randf_range(0.32, 0.58)
 				_spawn_soda_slick(
-					grill_land + Vector3(randf_range(-0.02, 0.025), 0.0, randf_range(-0.02, 0.02)),
-					0.040 + randf() * 0.025,
+					grill_land + Vector3(randf_range(-0.012, 0.018), 0.0, randf_range(-0.015, 0.015)),
+					0.032 + randf() * 0.02,
 					flavor
 				)
-				if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.32:
-					game_audio.trigger_hot_oil(0.5)
+				if grill_on and game_audio and game_audio.has_method("trigger_hot_oil") and randf() < 0.28:
+					game_audio.trigger_hot_oil(0.45)
 		else:
-			## Center / other side: short skim that stays on the fill tray.
-			var mi_skim := _soda_overfill_cascade_meshes[4 + i] as MeshInstance3D ## 5, 6
-			if mi_skim == null or not is_instance_valid(mi_skim):
-				continue
-			var skim := tray_hit + outward * 0.055 + Vector3(0.0, 0.0, 0.0)
+			## Center / other side: short curved skim that stays on the tray.
+			var skim := tray_hit + outward * 0.05
 			skim.y = deck_y + 0.002
-			_place_soda_overfill_ribbon(mi_skim, tray_hit, skim, foam_col, foamish, 0.55)
+			## Dedicated skim arc segs so the tray pour stays fully curved.
+			_place_soda_overfill_arc(25 + (i - 1) * 2, 2, tray_hit, skim, 0.012, foam_col, foamish, 0.52)
 	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 
