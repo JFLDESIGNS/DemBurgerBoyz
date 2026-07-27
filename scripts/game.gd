@@ -1022,6 +1022,8 @@ var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
 var _supply_order_seq: int = 0
 var soda_spout_marker: Marker3D = null
 var ice_spout_marker: Marker3D = null
+var soda_spout_markers: Dictionary = {} ## flavor/ice id -> Marker3D fill station tip
+var soda_active_station: String = "" ## station lit by held cup proximity
 var soda_spout_mat: StandardMaterial3D = null ## colored metal nozzle (tracks selected flavor)
 var ice_spout_mat: StandardMaterial3D = null
 var soda_dispense_clips: Array = [] ## {node, rest_pos, rest_rot} nozzle levers (Stick*)
@@ -23398,6 +23400,8 @@ func _build_soda_station() -> void:
 	soda_colliders.clear()
 	soda_spout_marker = null
 	ice_spout_marker = null
+	soda_spout_markers.clear()
+	soda_active_station = ""
 	soda_spout_mat = null
 	soda_dispense_clips.clear()
 	ice_spout_mat = null
@@ -24181,26 +24185,75 @@ func _soda_model_local(model_pos: Vector3) -> Vector3:
 
 func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 	## Pour tip only — nozzles are part of the fountain mesh.
-	var tip := Marker3D.new()
 	if is_soda:
-		tip.name = "SodaSpoutTip"
-		tip.position = _soda_model_local(SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
-		parent.add_child(tip)
-		soda_spout_marker = tip
+		for fid in SODA_FLAVORS:
+			var tip := Marker3D.new()
+			tip.name = "SodaSpoutTip_%s" % fid
+			tip.position = _soda_model_local(SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO)))
+			parent.add_child(tip)
+			soda_spout_markers[fid] = tip
+		soda_spout_marker = soda_spout_markers.get("cola", null)
 		soda_spout_mat = null
 	else:
+		var tip := Marker3D.new()
 		tip.name = "IceSpoutTip"
 		tip.position = _soda_model_local(SODA_MODEL_ICE_SPOUT)
 		parent.add_child(tip)
 		ice_spout_marker = tip
+		soda_spout_markers["ice"] = tip
 		ice_spout_mat = null
 
 
 func _sync_soda_spout_to_flavor() -> void:
-	if soda_spout_marker == null or not is_instance_valid(soda_spout_marker):
+	var marker: Marker3D = soda_spout_markers.get(soda_selected_flavor, null)
+	if marker != null and is_instance_valid(marker):
+		soda_spout_marker = marker
+
+
+func _soda_station_tip_ids() -> Array[String]:
+	return ["cola", "lemon_lime", "orange", "ice"]
+
+
+func _soda_tip_for_station(fid: String) -> Marker3D:
+	var tip: Marker3D = soda_spout_markers.get(fid, null)
+	if tip != null and is_instance_valid(tip):
+		return tip
+	return null
+
+
+func _set_soda_active_station(fid: String) -> void:
+	if fid == soda_active_station:
 		return
-	var local: Vector3 = SODA_MODEL_SPOUT_POS.get(soda_selected_flavor, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
-	soda_spout_marker.position = _soda_model_local(local)
+	soda_active_station = fid
+	if SODA_FLAVORS.has(fid):
+		soda_selected_flavor = fid
+		_sync_soda_spout_to_flavor()
+	_refresh_soda_flavor_lights()
+
+
+func _nearest_soda_station_for_pos(pos: Vector3, max_dist: float) -> Dictionary:
+	var best_id := ""
+	var best_tip: Marker3D = null
+	var best_d := max_dist
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip == null:
+			continue
+		var seat := _cup_target_for_spout(tip)
+		var d := Vector2(pos.x - seat.x, pos.z - seat.z).length()
+		if d < best_d:
+			best_d = d
+			best_id = fid
+			best_tip = tip
+	return {"id": best_id, "tip": best_tip, "dist": best_d}
+
+
+func _update_soda_station_focus_for_cup() -> void:
+	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
+		_set_soda_active_station("")
+		return
+	var near := _nearest_soda_station_for_pos(cup_root.global_position, CUP_MAGNET_RADIUS * 1.35)
+	_set_soda_active_station(str(near.get("id", "")))
 
 
 func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
@@ -29622,7 +29675,8 @@ func _refresh_soda_flavor_lights() -> void:
 		if mat == null:
 			continue
 		var fid := str(key)
-		var selected := fid == soda_selected_flavor or fid == ("pad_%s" % soda_selected_flavor)
+		var lit_id := soda_active_station if soda_active_station != "" else soda_selected_flavor
+		var selected := fid == lit_id or fid == ("pad_%s" % lit_id)
 		if mat is ShaderMaterial:
 			## Jug syrup — brighter warm core when that flavor is armed.
 			var col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.4, 0.2, 0.15))
@@ -29646,7 +29700,8 @@ func _refresh_soda_flavor_lights() -> void:
 		var lab: Label3D = soda_flavor_labels[fid2] as Label3D
 		if lab == null or not is_instance_valid(lab):
 			continue
-		var armed: bool = str(fid2) == soda_selected_flavor
+		var lit_id2 := soda_active_station if soda_active_station != "" else soda_selected_flavor
+		var armed: bool = str(fid2) == lit_id2
 		lab.modulate = Color(1.0, 1.0, 0.75, 1.0) if armed else Color(1, 1, 1, 0.85)
 		lab.outline_size = 4 if armed else 3
 		lab.font_size = 17 if armed else 15
@@ -30192,10 +30247,10 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	## Soft-attach under the pour tip — helpful seat, short leash, easy yank-away.
 	var candidates: Array[Node3D] = []
-	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
-		candidates.append(soda_spout_marker)
-	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
-		candidates.append(ice_spout_marker)
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip != null:
+			candidates.append(tip)
 	if candidates.is_empty():
 		_cup_spout_lock = null
 		_cup_spout_unlock_grace = 0.20
@@ -30257,10 +30312,10 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 func _cup_near_fill_seat(pos: Vector3) -> bool:
 	## True when the cup/aim is in the SODA or ICE soft-lock approach zone.
 	var tips: Array[Node3D] = []
-	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
-		tips.append(soda_spout_marker)
-	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
-		tips.append(ice_spout_marker)
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip != null:
+			tips.append(tip)
 	for tip in tips:
 		var tpos := _cup_target_for_spout(tip)
 		if Vector2(pos.x - tpos.x, pos.z - tpos.z).length() <= CUP_MAGNET_RADIUS * 1.25:
@@ -30299,10 +30354,10 @@ func _cup_fill_spout_nearby() -> Node3D:
 	var best: Node3D = null
 	var best_d := CUP_MAGNET_RADIUS
 	var tips: Array[Node3D] = []
-	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
-		tips.append(soda_spout_marker)
-	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
-		tips.append(ice_spout_marker)
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip != null:
+			tips.append(tip)
 	for tip in tips:
 		var tpos: Vector3 = tip.global_position
 		var d := Vector2(cup_root.global_position.x - tpos.x, cup_root.global_position.z - tpos.z).length()
@@ -30977,30 +31032,37 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		return
 	var rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.95, 0.0)
 	## Pick the nearer nozzle only — soda and ice never fire together.
-	var soda_d := 999.0
-	var ice_d := 999.0
-	var soda_tip := Vector3.ZERO
-	var ice_tip := Vector3.ZERO
-	if soda_spout_marker != null and is_instance_valid(soda_spout_marker):
-		soda_tip = soda_spout_marker.global_position
-		if _cup_under_spout(soda_tip, rim):
-			soda_d = Vector2(soda_tip.x - rim.x, soda_tip.z - rim.z).length()
-	if ice_spout_marker != null and is_instance_valid(ice_spout_marker):
-		ice_tip = ice_spout_marker.global_position
-		if _cup_under_spout(ice_tip, rim):
-			ice_d = Vector2(ice_tip.x - rim.x, ice_tip.z - rim.z).length()
+	var station_id := ""
+	var station_tip := Vector3.ZERO
+	var station_d := 999.0
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip == null:
+			continue
+		var tip_pos := tip.global_position
+		if not _cup_under_spout(tip_pos, rim):
+			continue
+		var d := Vector2(tip_pos.x - rim.x, tip_pos.z - rim.z).length()
+		if d < station_d:
+			station_d = d
+			station_id = fid
+			station_tip = tip_pos
 	var pouring_soda := false
 	var pouring_ice := false
-	if soda_d < 900.0 and soda_d <= ice_d:
+	if station_id != "":
+		_set_soda_active_station(station_id)
+	else:
+		_update_soda_station_focus_for_cup()
+	if station_id != "" and station_id != "ice":
 		var before := cup_soda_fill
-		if cup_flavor != "" and cup_flavor != soda_selected_flavor and cup_soda_fill > 0.05:
+		if cup_flavor != "" and cup_flavor != station_id and cup_soda_fill > 0.05:
 			_flash("Empty / return cup first — wrong flavor", Color("FFAB91"))
 			_hide_soda_stream()
-		elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
+		elif _soda_tank_amount(station_id) <= SODA_TANK_EMPTY:
 			_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 			_hide_soda_stream()
 		else:
-			cup_flavor = soda_selected_flavor
+			cup_flavor = station_id
 			if cup_soda_fill < 1.0:
 				var want := minf(1.0 - cup_soda_fill, CUP_FILL_RATE * delta)
 				var got := _drain_soda_tank(cup_flavor, want)
@@ -31010,13 +31072,13 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
 					## Pour all the way to the cup floor (not just the rim).
 					var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
-					_update_soda_stream(soda_tip, cup_floor, cup_flavor)
+					_update_soda_stream(station_tip, cup_floor, cup_flavor)
 					if before < 1.0 and cup_soda_fill >= 1.0:
 						_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
 						_refresh_ticket_checkmarks()
 					if before < 0.82 and cup_soda_fill >= 0.82:
 						call_deferred("_try_auto_hand_finished_soda")
-				elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
+				elif _soda_tank_amount(station_id) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 					_hide_soda_stream()
 				else:
@@ -31030,16 +31092,16 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 					_cup_fizz = minf(1.0, _cup_fizz + delta * 2.4)
 					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.95)
 					var spill_rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.98, 0.0)
-					_update_soda_stream(soda_tip, spill_rim, cup_flavor)
+					_update_soda_stream(station_tip, spill_rim, cup_flavor)
 					_emit_soda_overfill_spill(spill_rim, cup_flavor, spilled, delta)
-				elif _soda_tank_amount(soda_selected_flavor) <= SODA_TANK_EMPTY:
+				elif _soda_tank_amount(station_id) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 					_hide_soda_stream()
 				else:
 					_hide_soda_stream()
 	else:
 		_hide_soda_stream()
-	if ice_d < 900.0 and ice_d < soda_d:
+	if station_id == "ice":
 		var before_i := cup_ice_fill
 		cup_ice_fill = minf(CUP_ICE_OVERFILL_CAP, cup_ice_fill + CUP_FILL_RATE * delta)
 		pouring_ice = true
@@ -31048,10 +31110,10 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		var interval := CUP_ICE_OVERFILL_INTERVAL if overflowing else CUP_ICE_CUBE_INTERVAL
 		if _cup_ice_spawn_cd <= 0.0:
 			_cup_ice_spawn_cd = interval
-			_spawn_flying_ice_cube(ice_tip, rim, overflowing)
+			_spawn_flying_ice_cube(station_tip, rim, overflowing)
 			## Extra spill burst once the cup is packed.
 			if overflowing and randf() < 0.55:
-				_spawn_flying_ice_cube(ice_tip, rim, true)
+				_spawn_flying_ice_cube(station_tip, rim, true)
 		if before_i < CUP_ICE_FULL and cup_ice_fill >= CUP_ICE_FULL:
 			_flash("Ice packed — keep holding, it spills!", Color("B3E5FC"))
 			## Overfill fry bed — cubes start flying; hot steel reads immediately.
