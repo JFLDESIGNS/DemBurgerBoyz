@@ -307,32 +307,34 @@ const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to 
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
 const HAND_SPATULA_BALANCE_BASE_Y := 0.045
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
-var spatula_balance_mouse_correct: float = 0.024
-var spatula_balance_counter_push: float = 0.046
-var spatula_balance_unstable: float = 6.4
-var spatula_balance_drift: float = 0.0
-var spatula_balance_damp: float = 0.982
+var spatula_balance_mouse_correct: float = 0.044
+var spatula_balance_counter_push: float = 0.142
+var spatula_balance_unstable: float = 16.6
+var spatula_balance_drift: float = -1.9
+var spatula_balance_damp: float = 0.946
 var spatula_balance_max_tilt: float = 80.0
-var spatula_balance_fall_tilt: float = 104.0
+var spatula_balance_fall_tilt: float = 103.0
 var spatula_balance_fall_dur: float = 0.42
 var spatula_balance_ragdoll_dur: float = 1.0
 var spatula_balance_bounce_deg: float = 16.0
 var spatula_balance_bounce_dur: float = 0.10
 var spatula_balance_return_dur: float = 0.2
 var spatula_balance_max_vel: float = 4.8
-var spatula_balance_depth_input: float = 0.88
+var spatula_balance_depth_input: float = 1.87
 var spatula_balance_ragdoll_hold_dur: float = 0.34
-var spatula_balance_body_linear_damp: float = 0.22
-var spatula_balance_body_angular_damp: float = 0.18
-var spatula_balance_floor_bounce: float = 0.16
-var spatula_balance_floor_friction: float = 0.78
-var spatula_balance_fall_gravity: float = 4.9
-var spatula_balance_fall_bounce: float = 0.22
-var spatula_balance_fall_slide_damp: float = 0.62
-var spatula_balance_fall_spin_damp: float = 0.42
+var spatula_balance_body_linear_damp: float = 0.21
+var spatula_balance_body_angular_damp: float = 0.17
+var spatula_balance_floor_bounce: float = 0.23
+var spatula_balance_floor_friction: float = 0.77
+var spatula_balance_fall_gravity: float = 9.9
+var spatula_balance_fall_bounce: float = 0.21
+var spatula_balance_fall_slide_damp: float = 0.61
+var spatula_balance_fall_spin_damp: float = 0.41
 var spatula_balance_floor_slide_damp: float = 0.84
 var spatula_balance_floor_spin_damp: float = 0.78
 var spatula_balance_whoosh_cooldown: float = 0.16
+var spatula_balance_invert_x: bool = false
+var spatula_balance_invert_y: bool = true
 var spatula_balance_screen_nudge := Vector2(0.0, 38.0)
 var _spatula_balance_timer_label: Label3D = null
 var _spatula_balance_timer_t: float = 0.0
@@ -535,8 +537,8 @@ var grill_vig_choke: float = 0.16
 var grill_vig_opacity: float = 1.18
 var grill_vig_color: float = 0.39
 var grill_vig_spots: float = 1.08
-var grill_vig_spot_scale: float = 2.6
-var grill_vig_height: float = 0.024 ## under oil film so spots sit on top
+var grill_vig_spot_scale: float = 2.55
+var grill_vig_height: float = 0.023 ## under oil film so spots sit on top
 var grill_vig_mesh: MeshInstance3D = null
 var grill_vig_mat: ShaderMaterial = null
 var _grill_glow_tween: Tween = null
@@ -581,8 +583,8 @@ var open_closed_sign_busy: bool = false
 var master_vol_row: Control = null
 var master_vol_slider: HSlider = null
 ## Slider 0–1; 1.0 = old ~20% bus level (comfortable game max).
-var master_volume_linear: float = 1.0
-var ingredient_touch_volume: float = 2.6
+var master_volume_linear: float = 0.32
+var ingredient_touch_volume: float = 3.3
 const MASTER_VOL_MAX := 0.20
 const AUDIO_CFG_PATH := "user://audio_settings.cfg"
 const AUDIO_MASTER_KEY := "master_ui"
@@ -983,12 +985,12 @@ var soda_slot_tick_t: float = 0.0
 var soda_slot_pulse_t: float = 0.0
 const SODA_SLOT_CFG_SECTION := "soda_slot"
 const SODA_SLOT_TEX_SIZE := 256
-var soda_slot_icon_size_px: float = 118.0
-var soda_slot_icon_padding_px: float = 18.0
-var soda_slot_icon_offset_px := Vector2.ZERO
-var soda_slot_spin_button_offset_in := Vector3.ZERO
-var soda_slot_spin_text_offset_in := Vector3(-1.0, 0.0, 1.42)
-var soda_slot_spin_text_size: float = 32.0
+var soda_slot_icon_size_px: float = 236.0
+var soda_slot_icon_padding_px: float = 2.0
+var soda_slot_icon_offset_px := Vector2(-96.0, 9.0)
+var soda_slot_spin_button_offset_in := Vector3(-0.1, -0.1, -0.1)
+var soda_slot_spin_text_offset_in := Vector3(-1.4, -0.1, 1.5)
+var soda_slot_spin_text_size: float = 29.0
 const SODA_SLOT_SYMBOLS: Array[String] = ["tomato", "cheese", "bun", "pickle", "bacon", "logo"]
 const SODA_SLOT_SYMBOL_TEXTURES := {
 	"tomato": "res://assets/ingredients/tomato.png",
@@ -1263,7 +1265,7 @@ const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset; keep this loose so 
 const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Far/window edge inset; keeps the bot out of the top strip of the grill.
 const ROOMBA_HOME_CFG_SECTION := "roomba_home"
 const ROOMBA_HOME_CFG_VERSION := 2
-var roomba_home_pos: Vector3 = Vector3(-1.04, 1.23, -0.41)
+var roomba_home_pos: Vector3 = Vector3(-1.05, 1.22, -0.42)
 const AIR_MOTE_COUNT := 56
 const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
 const AIR_MOTE_BOUNDS_MAX := Vector3(2.35, 2.35, 1.25)
@@ -1481,8 +1483,8 @@ var options_hidden_tree_light_sliders: Dictionary = {} ## key -> HSlider
 var options_hidden_tree_light_labs: Dictionary = {} ## key -> Label
 ## Soft Solfeggio-ish room beds (Hz). Default 174, quiet.
 var room_tone_hz: float = 174.0
-var room_tone_volume: float = 0.0 ## Off by default — opt-in from Hidden menu; never replaces kitchen SFX
-var outdoor_ambience_volume: float = 0.35 ## Forest birdsong bed — Hidden menu control
+var room_tone_volume: float = 0.04 ## Quiet Solfeggio bed — Hidden menu control.
+var outdoor_ambience_volume: float = 0.27 ## Forest birdsong bed — Hidden menu control
 const OUTDOOR_AMBIENCE_VOL_MAX := 3.0 ## Slider / gain ceiling (was 1.0 — too quiet at max)
 const ROOM_TONE_FREQS: Array[float] = [174.0, 285.0, 396.0]
 const AUDIO_ROOM_TONE_HZ_KEY := "room_tone_hz"
@@ -1491,11 +1493,11 @@ const AUDIO_OUTDOOR_AMBIENCE_VOL_KEY := "outdoor_ambience_volume"
 ## Soft fill lights by outdoor trees (no shadows) — Hidden menu tunable.
 ## Each entry: {light, bulb, tree} — light/bulb parented to OutdoorStreet (unscaled).
 var tree_fill_entries: Array = []
-var tree_light_energy: float = 2.7
-var tree_light_range: float = 2.8
-var tree_light_size: float = 0.15 ## Visible bulb radius (meters)
-var tree_light_off_x: float = 0.4
-var tree_light_off_y: float = 2.9
+var tree_light_energy: float = 2.65
+var tree_light_range: float = 2.7
+var tree_light_size: float = 0.14 ## Visible bulb radius (meters)
+var tree_light_off_x: float = 0.35
+var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.7
 const TREE_LIGHTS_CFG_SECTION := "tree_lights"
 const TREE_WIND_CFG_SECTION := "tree_wind"
@@ -1504,8 +1506,8 @@ const TREE_CLICK_ENABLED := false
 const CUSTOMER_WAWA_COLLISION_LAYER := 524288 ## torso/head Area3D on each guest
 const TREE_SHAKE_DEG := 1.45 ## soft pendulum lean (was 2.4)
 ## Leaf wind — Hidden menu (strength + world yaw direction).
-var tree_wind_strength: float = 3.65 ## default readable sway
-var tree_wind_dir_deg: float = 313.0 ## 0° = +X, 90° = +Z
+var tree_wind_strength: float = 3.6 ## default readable sway
+var tree_wind_dir_deg: float = 312.0 ## 0° = +X, 90° = +Z
 const TREE_APPLE_CHANCE := 0.20
 const TREE_APPLE_RADIUS := 0.083 ## ~meatball size (0.092 × frozen-ball scale)
 const TREE_APPLE_SIDE_FT := 4.0 ## drop left/right of trunk center
@@ -1515,10 +1517,10 @@ var _tree_shake_held: Node3D = null ## LMB-held outdoor tree for continuous leaf
 var _tree_shake_prev_mouse: Vector2 = Vector2.ZERO
 var _tree_shake_vel: Vector2 = Vector2.ZERO
 var _tree_hold_lean: Vector3 = Vector3.ZERO
-const TREE_FRONT_DEFAULT_POS := Vector3(-4.33, 0.0, 5.36)
+const TREE_FRONT_DEFAULT_POS := Vector3(-4.4, -0.05, 5.36)
 const TREE_FRONT_DEFAULT_YAW := 60.0
-const TREE_BIRCH_DEFAULT_POS := Vector3(3.0056, 0.0, 4.574)
-const TREE_BIRCH_DEFAULT_YAW := 55.0 ## prior 35° + 20°
+const TREE_BIRCH_DEFAULT_POS := Vector3(4.15, -0.6, 0.05)
+const TREE_BIRCH_DEFAULT_YAW := 109.0
 var tree_front_node: Node3D = null
 var tree_birch_node: Node3D = null
 var tree_front_pos: Vector3 = TREE_FRONT_DEFAULT_POS
@@ -1530,16 +1532,16 @@ var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
 const TREE_XFORM_CFG_SECTION := "tree_xform"
 const PROP_OFFSET_CFG_SECTION := "prop_offsets"
 var prop_offsets: Dictionary = {
-	"burger_buns": Vector3.ZERO,
-	"cheese_stack": Vector3.ZERO,
-	"cutting_board": Vector3.ZERO,
-	"seasoning_shaker": Vector3.ZERO,
-	"fire_ext": Vector3.ZERO,
+	"burger_buns": Vector3(0.0, -0.01, 0.0),
+	"cheese_stack": Vector3(-0.01, -0.05, -0.03),
+	"cutting_board": Vector3(0.05, 0.0, 0.0),
+	"seasoning_shaker": Vector3(-0.06, 0.0, 0.0),
+	"fire_ext": Vector3(-0.05, -0.01, -0.01),
 	"oil_bottle": Vector3.ZERO,
-	"open_sign": Vector3.ZERO,
-	"fryer": Vector3.ZERO,
-	"fryer_done": Vector3.ZERO,
-	"big_tree": Vector3.ZERO,
+	"open_sign": Vector3(0.29, 0.0, 0.0),
+	"fryer": Vector3(-0.01, -0.01, 0.0),
+	"fryer_done": Vector3(0.39, 0.0, 0.09),
+	"big_tree": Vector3(-0.01, -0.01, -0.01),
 	"small_tree": Vector3.ZERO,
 }
 var prop_offsets_loaded: bool = false
@@ -1548,14 +1550,14 @@ var screen_zone_overlay_visible: bool = false
 const SCREEN_ZONE_COLS := 5
 const SCREEN_ZONE_ROWS := 6
 ## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
-var icecream_cam_right_ft: float = 1.5
+var icecream_cam_right_ft: float = 1.45
 const FT_TO_M := 0.3048
 const ICECREAM_POS_CFG_SECTION := "icecream_station"
 var options_hidden_icecream_pos_slider: HSlider = null
 var options_hidden_icecream_pos_lab: Label = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
-var street_bg_choice: String = "preview"
+var street_bg_choice: String = "original"
 var street_bg_custom_path: String = ""
 var street_bg_option: OptionButton = null
 var street_bg_custom_edit: LineEdit = null
@@ -1710,7 +1712,7 @@ const FRYER_TUNING_CFG_SECTION := "fryer_tuning"
 var build_hint_screen_nudge := BUILD_BOARD_HINT_SCREEN_NUDGE
 var fryer_hint_screen_nudge := FRYER_HINT_SCREEN_NUDGE
 var build_hint_font_size := float(WORLD_HINT_FONT_SIZE)
-var fryer_hint_font_size := float(WORLD_HINT_FONT_SIZE)
+var fryer_hint_font_size := 58.0
 var build_hint_alpha := WORLD_HINT_ALPHA
 var fryer_hint_alpha := WORLD_HINT_ALPHA
 var fry_basket_cook_sec := FRY_BASKET_COOK_SEC
@@ -1773,7 +1775,7 @@ const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
 const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a clap-back
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
-const SODA_STATION_POS := Vector3(-1.55, 0.9276, 0.67) ## was 1.08; −6"
+const SODA_STATION_POS := Vector3(-1.56, 0.92, 0.98)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const SODA_FOUNTAIN_MODEL_PATH := "res://models/sodamachine/soda_fountain_model.tscn"
 const SODA_FOUNTAIN_EDIT_FBX := "res://models/sodamachine/sodaedit1.fbx"
@@ -1801,49 +1803,49 @@ var soda_station_pos := SODA_STATION_POS
 var soda_station_yaw := 180.0
 var soda_station_scale := SODA_FOUNTAIN_SCALE
 var soda_nozzle_offsets_in: Dictionary = {
-	"cola": Vector3.ZERO,
+	"cola": Vector3(-0.05, -0.05, 0.0),
 	"lemon_lime": Vector3.ZERO,
 	"orange": Vector3.ZERO,
 	"ice": Vector3.ZERO,
 }
 var soda_blocker_half_x := 0.58
 var soda_blocker_height := 1.30
-var soda_blocker_front_z := 0.055
-var soda_blocker_fill_z := -0.10
+var soda_blocker_front_z := 0.05
+var soda_blocker_fill_z := -0.11
 var soda_blocker_debug := false
-var soda_cup_rest_x := -0.2736
-var soda_cup_rest_z := 0.42
+var soda_cup_rest_x := -0.28
+var soda_cup_rest_z := 0.41
 var soda_tray_first_x := -0.38
 var soda_tray_spacing := 0.20
 var soda_tray_magnet_radius := 0.26
 var soda_tray_release_radius := 0.34
-var soda_tray_magnet_pull := 0.16
-var soda_soft_magnet_radius := 0.38
-var soda_soft_acquire := 0.30
-var soda_soft_release := 0.22
-var soda_soft_tight := 0.055
-var soda_soft_pull := 0.72
-var soda_soft_unlock_grace := 0.55
+var soda_tray_magnet_pull := 0.15
+var soda_soft_magnet_radius := 0.27
+var soda_soft_acquire := 0.19
+var soda_soft_release := 0.10
+var soda_soft_tight := 0.03
+var soda_soft_pull := 0.57
+var soda_soft_unlock_grace := 0.54
 var soda_soft_debug := false
 var soda_soft_offsets_in: Dictionary = {
-	"cola": Vector3.ZERO,
+	"cola": Vector3(-0.05, -0.05, -0.05),
 	"lemon_lime": Vector3.ZERO,
 	"orange": Vector3.ZERO,
-	"ice": Vector3.ZERO,
+	"ice": Vector3(0.0, -0.05, -0.05),
 }
 var soda_soft_radius_mult: Dictionary = {
-	"cola": 1.0,
+	"cola": 0.99,
 	"lemon_lime": 1.0,
 	"orange": 1.0,
-	"ice": 1.0,
+	"ice": 0.99,
 }
 var soda_fill_follow_rate := 28.0
 var soda_fill_max_speed := 4.2
-var cup_liquid_top_offset_in := 0.0
+var cup_liquid_top_offset_in := 0.05
 var cup_liquid_radius_scale := 1.0
-var soda_tank_visual_scale := 0.68
-var soda_tank_x_offset_in := 0.0
-var soda_tank_y_offset_in := 21.0
+var soda_tank_visual_scale := 0.53
+var soda_tank_x_offset_in := -0.3
+var soda_tank_y_offset_in := 15.8
 var soda_tank_z_offset_in := -1.6
 const CUP_COLLISION_LAYER := 1024
 const CUP_RACK_COLLISION_LAYER := 2048 ## empty CUPS peg pick volume (must not steal cup rays)
@@ -1931,7 +1933,7 @@ const BURGERPACK_HELD_SCALE := 1.55
 const BURGERPACK_SIT_Y := 0.045 ## Sit on top of steel panels (panel half-height ~0.0225).
 const FRY_BASKET_COOK_SEC := 5.0
 const FRYER_DONE_POP_Y := 0.18 ## lift above oil surface when cook finishes
-const FRYER_HINT_SCREEN_NUDGE := Vector2(-20.0, 30.0) ## 30px camera-left from prior +10px seat.
+const FRYER_HINT_SCREEN_NUDGE := Vector2(-16.0, 29.0)
 const FRY_BASKET_SHAKE_NEED := 1.5
 ## Smoke cylinders under a dunked basket — ~15% larger than burger flip smoke.
 const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
@@ -2054,6 +2056,7 @@ const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
 const STREET_BG_PREVIEW_PATH := "res://assets/bg/street_preview_storefront.png"
+const STREET_BG_BRIGHT_PATH := "res://IMAGES/storefront2.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2083,9 +2086,9 @@ const GFX_DEFAULTS := {
 	"contrast": 0.98,
 	"ssao": false,
 	"ssao_radius": 1.2,
-	"ssao_intensity": 3.09,
+	"ssao_intensity": 3.08,
 	"ssao_power": 1.57,
-	"ssao_horizon": 0.176,
+	"ssao_horizon": 0.25,
 	"ssao_sharpness": 0.72,
 	"ssil": true,
 	"fake_df_ao": true,
@@ -2105,8 +2108,10 @@ const GFX_DEFAULTS := {
 	"patty_reflect_fade_height": 0.04,
 	"patty_reflect_fade_opacity": 0.04,
 	"roomba_drive_volume": 1.0,
-	"bg_y": 0.52,
-	"bg_scale": 1.28,
+	"bg_x": 0.0,
+	"bg_y": 1.08,
+	"bg_z": STREET_MATTE_BASE_Z,
+	"bg_scale": 1.17,
 	"sale_x": 0.0,
 	"sale_y": 2.39,
 	"sale_z": 1.18,
@@ -5794,7 +5799,13 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		if game_audio != null and game_audio.has_method("play_spatula_whoosh"):
 			game_audio.play_spatula_whoosh()
 	var lean := _spatula_balance_tilt
-	var move := Vector2(-mouse_delta.x, -mouse_delta.y * spatula_balance_depth_input)
+	var move_x := -mouse_delta.x
+	var move_y := -mouse_delta.y * spatula_balance_depth_input
+	if spatula_balance_invert_x:
+		move_x = -move_x
+	if spatula_balance_invert_y:
+		move_y = -move_y
+	var move := Vector2(move_x, move_y)
 	if move.length_squared() > 0.01:
 		_spatula_balance_drift_dir = move.normalized()
 		var countering := lean.length_squared() > 0.0001 and move.dot(lean) < 0.0
@@ -22834,6 +22845,8 @@ func _load_spatula_balance_settings() -> void:
 	spatula_balance_floor_slide_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "floor_slide_damp", spatula_balance_floor_slide_damp)), 0.0, 1.5)
 	spatula_balance_floor_spin_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "floor_spin_damp", spatula_balance_floor_spin_damp)), 0.0, 1.5)
 	spatula_balance_whoosh_cooldown = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "whoosh_cooldown", spatula_balance_whoosh_cooldown)), 0.0, 1.0)
+	spatula_balance_invert_x = bool(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "invert_x", spatula_balance_invert_x))
+	spatula_balance_invert_y = bool(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "invert_y", spatula_balance_invert_y))
 	var loaded_offset_y := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y))
 	if absf(loaded_offset_y - 20.0) <= 0.01 or absf(loaded_offset_y - 50.0) <= 0.01:
 		loaded_offset_y = 38.0
@@ -22872,6 +22885,8 @@ func _save_spatula_balance_settings() -> void:
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "floor_slide_damp", spatula_balance_floor_slide_damp)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "floor_spin_damp", spatula_balance_floor_spin_damp)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "whoosh_cooldown", spatula_balance_whoosh_cooldown)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "invert_x", spatula_balance_invert_x)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "invert_y", spatula_balance_invert_y)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "offset_x_px", spatula_balance_screen_nudge.x)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y)
 	cfg.save(GFX_CFG_PATH)
@@ -39252,7 +39267,9 @@ func _build_graphics_ui() -> void:
 
 	_gfx_add_section(list, "WINDOW BG")
 	_gfx_add_background_selector(list)
+	_gfx_add_slider(list, "bg_x", "BG Left / Right", -4.0, 4.0, 0.02)
 	_gfx_add_slider(list, "bg_y", "BG Height", 0.2, 4.5, 0.02)
+	_gfx_add_slider(list, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
 	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
 	_gfx_add_section(list, "FIRST SALE DECAL")
@@ -39885,7 +39902,9 @@ func _build_options_menu() -> void:
 			hidden_debug_box.add_child(debug_control)
 
 	_gfx_add_background_selector(hidden_bg_box)
+	_options_add_standard_slider(hidden_bg_box, "bg_x", "BG Left / Right", -4.0, 4.0, 0.02)
 	_options_add_standard_slider(hidden_bg_box, "bg_y", "BG Height", 0.2, 4.5, 0.02)
+	_options_add_standard_slider(hidden_bg_box, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
 	_options_add_standard_slider(hidden_bg_box, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
 	var tone_lab := Label.new()
@@ -40823,6 +40842,30 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(balance_lab, true, 13)
 	balance_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	hidden_tools_box.add_child(balance_lab)
+	var bal_inv_x := CheckButton.new()
+	bal_inv_x.text = "Invert Left / Right Correction"
+	bal_inv_x.button_pressed = spatula_balance_invert_x
+	bal_inv_x.custom_minimum_size = Vector2(0, 32)
+	bal_inv_x.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(bal_inv_x, false, 12)
+	bal_inv_x.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	bal_inv_x.toggled.connect(func(on: bool):
+		spatula_balance_invert_x = on
+		_save_spatula_balance_settings()
+	)
+	hidden_tools_box.add_child(bal_inv_x)
+	var bal_inv_y := CheckButton.new()
+	bal_inv_y.text = "Invert Forward / Back Correction"
+	bal_inv_y.button_pressed = spatula_balance_invert_y
+	bal_inv_y.custom_minimum_size = Vector2(0, 32)
+	bal_inv_y.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(bal_inv_y, false, 12)
+	bal_inv_y.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	bal_inv_y.toggled.connect(func(on: bool):
+		spatula_balance_invert_y = on
+		_save_spatula_balance_settings()
+	)
+	hidden_tools_box.add_child(bal_inv_y)
 	_hidden_add_labeled_slider(hidden_tools_box, "bal_mouse", "Side Sensitivity", 0.0, 0.16, 0.001,
 		func(): return spatula_balance_mouse_correct,
 		func(v: float):
@@ -42058,6 +42101,8 @@ func _street_background_options() -> Array:
 	]
 	if ResourceLoader.exists(STREET_BG_PREVIEW_PATH):
 		opts.append({"id": "preview", "label": "Storefront Preview", "path": STREET_BG_PREVIEW_PATH})
+	if ResourceLoader.exists(STREET_BG_BRIGHT_PATH):
+		opts.append({"id": "bright", "label": "Bright Village", "path": STREET_BG_BRIGHT_PATH})
 	if street_bg_custom_path != "":
 		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
 	return opts
@@ -42067,6 +42112,8 @@ func _street_background_path_for_choice(choice: String) -> String:
 	match choice:
 		"preview":
 			return STREET_BG_PREVIEW_PATH
+		"bright":
+			return STREET_BG_BRIGHT_PATH
 		"custom":
 			return street_bg_custom_path
 		_:
@@ -42137,8 +42184,10 @@ func _apply_street_matte_settings(s: Dictionary) -> void:
 		return
 	_apply_street_background_texture()
 	var y := float(s.get("bg_y", STREET_MATTE_DEFAULT_Y))
+	var x := float(s.get("bg_x", 0.0))
+	var z := float(s.get("bg_z", STREET_MATTE_BASE_Z))
 	var sc := float(s.get("bg_scale", 1.0))
-	street_matte.position = Vector3(0.0, y, STREET_MATTE_BASE_Z)
+	street_matte.position = Vector3(x, y, z)
 	street_matte.scale = Vector3(sc, sc, 1.0)
 	if street_matte_body != null and is_instance_valid(street_matte_body):
 		street_matte_body.position = street_matte.position

@@ -7,7 +7,7 @@ const TIER_MEDIUM := "medium"
 const TIER_HARD := "hard"
 const TIER_EXTREME := "extreme"
 
-const DEFAULT_ID := "quiet_park"
+const DEFAULT_ID := "night_market_peak"
 
 ## Tier → UI color for pins / badges.
 const TIER_COLORS := {
