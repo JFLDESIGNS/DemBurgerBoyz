@@ -3556,6 +3556,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_debug_dump_playing_sounds()
 			get_viewport().set_input_as_handled()
 			return
+		if event.keycode == KEY_Z or event.physical_keycode == KEY_Z:
+			_set_screen_zone_overlay_visible(not screen_zone_overlay_visible)
+			get_viewport().set_input_as_handled()
+			return
 	## Radio works even on the start screen — but in-shift song keys win on [ ] p o.
 	if event is InputEventKey and event.pressed and not event.echo:
 		if playing and _try_grill_song_hotkey(event):
