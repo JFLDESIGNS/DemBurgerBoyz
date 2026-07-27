@@ -312,9 +312,8 @@ const HAND_SPATULA_BALANCE_FALL_DUR := 0.42
 const HAND_SPATULA_BALANCE_FALL_HOLD := 0.12
 const HAND_SPATULA_BALANCE_MAX_VEL := 4.8
 const HAND_SPATULA_BALANCE_BASE_Y := 0.045
-const HAND_SPATULA_BALANCE_SCREEN_NUDGE := Vector2(0.0, 40.0)
-const HAND_SPATULA_BALANCE_DEPTH_INPUT := 0.42
-const HAND_SPATULA_BALANCE_DEPTH_VISUAL := 0.32
+const HAND_SPATULA_BALANCE_SCREEN_NUDGE := Vector2.ZERO
+const HAND_SPATULA_BALANCE_DEPTH_INPUT := 0.88
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
@@ -5082,6 +5081,31 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_vel = Vector2.ZERO
 
 
+func _spatula_balance_world_basis() -> Basis:
+	if camera == null:
+		return Basis.from_euler(Vector3(deg_to_rad(-90.0), 0.0, 0.0))
+	var cam_basis := camera.global_transform.basis
+	var screen_right := cam_basis.x.normalized()
+	var cam_forward := (-cam_basis.z).normalized()
+	var depth_dir := Vector3(cam_forward.x, 0.0, cam_forward.z)
+	if depth_dir.length_squared() < 0.0001:
+		depth_dir = Vector3.FORWARD
+	depth_dir = depth_dir.normalized()
+	var lean_plane := screen_right * _spatula_balance_tilt.x + depth_dir * _spatula_balance_tilt.y
+	var lean_angle := clampf(lean_plane.length(), 0.0, deg_to_rad(HAND_SPATULA_BALANCE_FALL_TILT))
+	var pole := Vector3.UP
+	if lean_angle > 0.0001:
+		pole = (Vector3.UP * cos(lean_angle) + lean_plane.normalized() * sin(lean_angle)).normalized()
+	var face := cam_basis.z.normalized()
+	face = face - pole * face.dot(pole)
+	if face.length_squared() < 0.0001:
+		face = screen_right.cross(pole)
+	face = face.normalized()
+	var side := face.cross(pole).normalized()
+	face = pole.cross(side).normalized()
+	return Basis(side, face, pole).orthonormalized()
+
+
 func _spatula_roll_midi_offset() -> int:
 	## Scroll-tilt changes the piano key for every strip (same on both sides):
 	##   0°   → C
@@ -6358,6 +6382,8 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var pitch := rot.x + tip
 	var roll := 0.0
 	var pivot_local := HAND_SPATULA_TIP_OFFSET
+	var use_balance_basis := false
+	var balance_basis := Basis.IDENTITY
 	if _spatula_balance_active:
 		_spatula_anim_kind = 0
 		spatula_grill_hold = false
@@ -6380,8 +6406,10 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 				pivot_target = tip_target
 			pivot_target.y = balance_y
 			tip_target = pivot_target
-			pitch = -90.0 + rad_to_deg(_spatula_balance_tilt.y) * HAND_SPATULA_BALANCE_DEPTH_VISUAL
-			roll = rad_to_deg(_spatula_balance_tilt.x)
+			balance_basis = _spatula_balance_world_basis()
+			use_balance_basis = true
+			pitch = 0.0
+			roll = 0.0
 			pivot_local = HAND_SPATULA_BALANCE_PIVOT_OFFSET
 	elif dragging:
 		## Burger slide — spatula rides under the patty. Never scrape/clean while dragging a burger.
@@ -6512,9 +6540,12 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	roll += _spatula_user_roll
 	## Edge yaw from grill X — left CCW, right CW (no side roll).
 	var yaw := 0.0 if _spatula_balance_active else _hand_spatula_side_yaw_at(tip_target)
-	hand_spatula_root.rotation_degrees = Vector3(pitch, yaw, roll)
+	if use_balance_basis:
+		hand_spatula_root.global_basis = balance_basis
+	else:
+		hand_spatula_root.rotation_degrees = Vector3(pitch, yaw, roll)
 	## Pivot: tip for taps, blade mid for the flip flourish.
-	var pivot_basis := Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
+	var pivot_basis := balance_basis if use_balance_basis else Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
 	var pivot_world := pivot_basis * pivot_local
 	hand_spatula_root.global_position = tip_target - pivot_world
 	## Scooped burger rides the blade — same yaw/roll as the spatula (no visual offset).
