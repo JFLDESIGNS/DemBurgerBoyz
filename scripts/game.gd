@@ -374,6 +374,7 @@ var _spatula_balance_fall_visual_vel := Vector3.ZERO
 var _spatula_balance_fall_visual_ang := Vector3.ZERO
 const SPATULA_BALANCE_RAGDOLL_CLEARANCE := 0.0381 ## 1.5" above steel so the fall cannot clip through the grill.
 const SPATULA_BALANCE_FALL_HOLD_DUR := 0.34
+const SPATULA_BALANCE_IMPACT_RETURN_DUR := 0.40
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -6800,7 +6801,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			_update_spatula_balance_visual_fall(target_xform, delta)
 		else:
 			hand_spatula_root.visible = true
-			var rd := maxf(0.05, spatula_balance_return_dur)
+			var rd := maxf(SPATULA_BALANCE_IMPACT_RETURN_DUR, spatula_balance_return_dur)
 			var ru := clampf(_spatula_balance_return_t / rd, 0.0, 1.0)
 			var ease := ru * ru * (3.0 - 2.0 * ru)
 			hand_spatula_root.global_transform = _spatula_balance_return_from.interpolate_with(target_xform, ease)
