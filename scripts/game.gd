@@ -24456,6 +24456,23 @@ func _refresh_soda_slot_machine_visuals() -> void:
 			if ice_mat != null:
 				spin_pad.material_override = ice_mat
 	_apply_soda_slot_layout()
+	_apply_soda_slot_label_visibility()
+
+
+func _apply_soda_slot_label_visibility() -> void:
+	var show_soda_labels := not soda_slot_mode
+	for fid in soda_flavor_labels.keys():
+		var lab: Label3D = soda_flavor_labels[fid] as Label3D
+		if lab != null and is_instance_valid(lab):
+			lab.visible = show_soda_labels
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	for n in soda_root.find_children("*", "Label3D", true, false):
+		var lab2 := n as Label3D
+		if lab2 == null or not is_instance_valid(lab2):
+			continue
+		if lab2.name.begins_with("FlavorLabel") or lab2.name == "TankLabel":
+			lab2.visible = show_soda_labels
 
 
 func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
@@ -30348,10 +30365,13 @@ func _refresh_soda_flavor_lights() -> void:
 		if lab == null or not is_instance_valid(lab):
 			continue
 		var armed: bool = str(fid2) == lit_id
-		lab.visible = true
+		lab.visible = not soda_slot_mode
+		if soda_slot_mode:
+			continue
 		lab.modulate = Color(1.0, 1.0, 0.55, 1.0) if armed else Color(1, 1, 1, 0.95)
 		lab.outline_size = 6 if armed else 4
 		lab.font_size = 18 if armed else 16
+	_apply_soda_slot_label_visibility()
 	## Soda nozzle metal tracks the selected flavor color (legacy procedural spout).
 	if soda_spout_mat != null:
 		var fc: Color = SODA_FLAVOR_COLORS.get(soda_selected_flavor, Color(0.85, 0.22, 0.18))
