@@ -39851,6 +39851,7 @@ func _build_options_menu() -> void:
 	options_hidden_room_tone_box.visible = false
 	options_hidden_room_tone_box.add_theme_constant_override("separation", 8)
 	hidden.add_child(options_hidden_room_tone_box)
+	var hidden_bg_box := _hidden_add_category(options_hidden_room_tone_box, "BACKGROUND IMAGE")
 	var hidden_debug_box := _hidden_add_category(options_hidden_room_tone_box, "DEBUG OVERLAYS")
 	var hidden_audio_box := _hidden_add_category(options_hidden_room_tone_box, "AUDIO")
 	var hidden_grill_box := _hidden_add_category(options_hidden_room_tone_box, "GRILL VISUALS")
@@ -39862,6 +39863,10 @@ func _build_options_menu() -> void:
 		if debug_control != null and is_instance_valid(debug_control):
 			hidden.remove_child(debug_control)
 			hidden_debug_box.add_child(debug_control)
+
+	_gfx_add_background_selector(hidden_bg_box)
+	_options_add_standard_slider(hidden_bg_box, "bg_y", "BG Height", 0.2, 4.5, 0.02)
+	_options_add_standard_slider(hidden_bg_box, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
 	var tone_lab := Label.new()
 	tone_lab.text = "ROOM TONE"
@@ -41429,6 +41434,7 @@ func _try_unlock_hidden_options() -> void:
 				options_hidden_outdoor_ambience_vol.set_value_no_signal(outdoor_ambience_volume)
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
+			_refresh_street_background_option()
 			_sync_tree_light_hidden_ui()
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
