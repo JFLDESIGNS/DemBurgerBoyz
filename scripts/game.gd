@@ -5227,6 +5227,10 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float)
 				_spatula_balance_fall_visual_vel.x *= 0.62
 				_spatula_balance_fall_visual_vel.z *= 0.62
 				_spatula_balance_fall_visual_ang *= 0.42
+				_spatula_balance_returning = true
+				_spatula_balance_return_t = 0.0
+				_spatula_balance_return_from = xf
+				_spatula_balance_fall_hold_started = true
 			else:
 				_spatula_balance_fall_visual_vel.y = 0.0
 				_spatula_balance_fall_visual_vel.x *= 0.84
