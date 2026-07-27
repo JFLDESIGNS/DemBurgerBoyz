@@ -1702,12 +1702,18 @@ const WORLD_HINT_ALPHA := 0.70 ## base opacity
 const WORLD_HINT_FADE_MIN := 0.36 ## bottom of soothing breathe
 const WORLD_HINT_FADE_HZ := 0.22 ## slow in/out pulse
 const WORLD_HINT_CFG_SECTION := "world_hint_text"
+const FRYER_TUNING_CFG_SECTION := "fryer_tuning"
 var build_hint_screen_nudge := BUILD_BOARD_HINT_SCREEN_NUDGE
 var fryer_hint_screen_nudge := FRYER_HINT_SCREEN_NUDGE
 var build_hint_font_size := float(WORLD_HINT_FONT_SIZE)
 var fryer_hint_font_size := float(WORLD_HINT_FONT_SIZE)
 var build_hint_alpha := WORLD_HINT_ALPHA
 var fryer_hint_alpha := WORLD_HINT_ALPHA
+var fry_basket_cook_sec := FRY_BASKET_COOK_SEC
+var fry_basket_shake_need := FRY_BASKET_SHAKE_NEED
+var fry_basket_shake_speed_threshold := 0.08
+var fry_basket_shake_gain := 1.0
+var fry_basket_shake_decay := 0.08
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -2302,6 +2308,7 @@ func _ready() -> void:
 	_load_roomba_home_settings()
 	_load_soda_slot_settings()
 	_load_world_hint_settings()
+	_load_fryer_tuning_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -20088,6 +20095,28 @@ func _save_world_hint_settings() -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
+func _load_fryer_tuning_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	fry_basket_cook_sec = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "cook_sec", fry_basket_cook_sec)), 1.0, 20.0)
+	fry_basket_shake_need = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_need", fry_basket_shake_need)), 0.1, 6.0)
+	fry_basket_shake_speed_threshold = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_speed_threshold", fry_basket_shake_speed_threshold)), 0.0, 0.5)
+	fry_basket_shake_gain = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)), 0.1, 5.0)
+	fry_basket_shake_decay = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)), 0.0, 1.5)
+
+
+func _save_fryer_tuning_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "cook_sec", fry_basket_cook_sec)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_need", fry_basket_shake_need)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_speed_threshold", fry_basket_shake_speed_threshold)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)
+	cfg.save(GFX_CFG_PATH)
+
+
 func _world_hint_alpha_for_label(lab: Label3D) -> float:
 	return fryer_hint_alpha if lab != null and lab.name == "FryerHint" else build_hint_alpha
 
@@ -25245,7 +25274,7 @@ func _refresh_fryer_basket_visual(index: int) -> void:
 	var state := str(data.get("state", "empty"))
 	if fries_root != null:
 		fries_root.visible = state != "empty"
-		var cooked_t := clampf(float(data.get("cook", 0.0)) / FRY_BASKET_COOK_SEC, 0.0, 1.0)
+		var cooked_t := clampf(float(data.get("cook", 0.0)) / maxf(0.001, fry_basket_cook_sec), 0.0, 1.0)
 		for child in fries_root.get_children():
 			var mi := child as MeshInstance3D
 			if mi == null:
@@ -26126,14 +26155,14 @@ func _update_held_fryer_basket(delta: float) -> void:
 		if state != "cooking" and game_audio and game_audio.has_method("set_fryer_oil"):
 			game_audio.set_fryer_oil(true, 1.0)
 		state = "cooking"
-		data["cook"] = minf(FRY_BASKET_COOK_SEC, float(data.get("cook", 0.0)) + delta)
+		data["cook"] = minf(fry_basket_cook_sec, float(data.get("cook", 0.0)) + delta)
 		data["state"] = state
 		root.global_position.y = lerpf(root.global_position.y, oil.y - 0.105, clampf(delta * 12.0, 0.0, 1.0))
 		## Stay nearly upright in the pit — no deep handle tilt.
 		root.rotation_degrees.x = lerpf(root.rotation_degrees.x, FRYER_BASKET_FRY_TILT, clampf(delta * 10.0, 0.0, 1.0))
 		root.rotation_degrees.y = lerpf(root.rotation_degrees.y, 0.0, clampf(delta * 10.0, 0.0, 1.0))
 		root.rotation_degrees.z = lerpf(root.rotation_degrees.z, 0.0, clampf(delta * 10.0, 0.0, 1.0))
-		if float(data["cook"]) >= FRY_BASKET_COOK_SEC:
+		if float(data["cook"]) >= fry_basket_cook_sec:
 			state = "done"
 			data["shake"] = 0.0
 			data["pop_t"] = 0.55
@@ -26154,12 +26183,12 @@ func _update_held_fryer_basket(delta: float) -> void:
 			var pop_target := oil.y + FRYER_DONE_POP_Y + sin((0.55 - pop_t) * TAU * 1.6) * 0.035
 			root.global_position.y = lerpf(root.global_position.y, pop_target, clampf(delta * 16.0, 0.0, 1.0))
 		var shake_speed := maxf(Vector2(_fryer_vel.x, _fryer_vel.z).length(), absf(_fryer_vel.y) * 0.45)
-		if shake_speed > 0.08:
-			data["shake"] = float(data.get("shake", 0.0)) + delta
+		if shake_speed > fry_basket_shake_speed_threshold:
+			data["shake"] = float(data.get("shake", 0.0)) + delta * fry_basket_shake_gain
 			root.rotation_degrees.z = sin(Time.get_ticks_msec() * 0.035) * 8.0
 		else:
-			data["shake"] = maxf(0.0, float(data.get("shake", 0.0)) - delta * 0.08)
-		if float(data.get("shake", 0.0)) >= FRY_BASKET_SHAKE_NEED:
+			data["shake"] = maxf(0.0, float(data.get("shake", 0.0)) - delta * fry_basket_shake_decay)
+		if float(data.get("shake", 0.0)) >= fry_basket_shake_need:
 			fryer_baskets[fryer_held_index] = data
 			_finish_fryer_basket(fryer_held_index)
 			return
@@ -40601,6 +40630,38 @@ func _build_options_menu() -> void:
 	_hidden_add_prop_offset_group(hidden_world_box, "big_tree", "Big Tree Offset")
 	_hidden_add_prop_offset_group(hidden_world_box, "small_tree", "Small Tree Offset")
 
+	_hidden_add_section(hidden_world_box, "FRYER SHAKE / TIMING")
+	_hidden_add_labeled_slider(hidden_world_box, "fry_cook_sec", "Cook Seconds", 1.0, 20.0, 0.1,
+		func(): return fry_basket_cook_sec,
+		func(v: float):
+			fry_basket_cook_sec = clampf(v, 1.0, 20.0)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fry_shake_need", "Shake Needed Sec", 0.1, 6.0, 0.05,
+		func(): return fry_basket_shake_need,
+		func(v: float):
+			fry_basket_shake_need = clampf(v, 0.1, 6.0)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fry_shake_speed", "Shake Speed Needed", 0.0, 0.5, 0.005,
+		func(): return fry_basket_shake_speed_threshold,
+		func(v: float):
+			fry_basket_shake_speed_threshold = clampf(v, 0.0, 0.5)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fry_shake_gain", "Shake Credit Gain", 0.1, 5.0, 0.05,
+		func(): return fry_basket_shake_gain,
+		func(v: float):
+			fry_basket_shake_gain = clampf(v, 0.1, 5.0)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fry_shake_decay", "Shake Credit Decay", 0.0, 1.5, 0.01,
+		func(): return fry_basket_shake_decay,
+		func(v: float):
+			fry_basket_shake_decay = clampf(v, 0.0, 1.5)
+			_save_fryer_tuning_settings()
+	)
+
 	_hidden_add_section(hidden_world_box, "WORLD HINT TEXT")
 	_hidden_add_labeled_slider(hidden_world_box, "fryer_hint_x", "Fryer Hint X px", -240.0, 240.0, 1.0,
 		func(): return fryer_hint_screen_nudge.x,
@@ -50900,7 +50961,7 @@ func mp_fryer_basket_pose(
 	if root == null or not is_instance_valid(root):
 		return
 	data["state"] = _fryer_code_to_state(state_code)
-	data["cook"] = clampf(cook, 0.0, FRY_BASKET_COOK_SEC)
+	data["cook"] = clampf(cook, 0.0, fry_basket_cook_sec)
 	data["shake"] = maxf(0.0, shake)
 	data["remote_peer"] = sid if active else 0
 	fryer_baskets[index] = data
@@ -50929,7 +50990,7 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 	if root == null or not is_instance_valid(root):
 		return
 	data["state"] = _fryer_code_to_state(state_code)
-	data["cook"] = clampf(cook, 0.0, FRY_BASKET_COOK_SEC)
+	data["cook"] = clampf(cook, 0.0, fry_basket_cook_sec)
 	data["shake"] = maxf(0.0, shake)
 	data["smoke_after"] = clampf(smoke_after, 0.0, 10.0)
 	data["remote_peer"] = 0
