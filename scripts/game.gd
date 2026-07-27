@@ -5278,7 +5278,7 @@ func _play_pending_spatula_balance_impact(fallback_pos: Vector3 = Vector3.ZERO) 
 	_spatula_balance_impact_pending = false
 	var impact_pos := fallback_pos
 	if impact_pos == Vector3.ZERO:
-		impact_pos = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_CENTER_Z)
+		impact_pos = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
 	if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
 		var bp := _spatula_balance_ragdoll_body.global_position
 		impact_pos = Vector3(bp.x, GRILL_SURFACE_Y, bp.z)
