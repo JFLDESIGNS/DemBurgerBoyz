@@ -321,7 +321,7 @@ var spatula_balance_bounce_dur: float = 0.10
 var spatula_balance_return_dur: float = 0.2
 var spatula_balance_max_vel: float = 4.8
 var spatula_balance_depth_input: float = 0.88
-var spatula_balance_screen_nudge := Vector2(0.0, 20.0)
+var spatula_balance_screen_nudge := Vector2(0.0, 50.0)
 var _spatula_balance_timer_label: Label3D = null
 var _spatula_balance_timer_t: float = 0.0
 var _spatula_balance_timer_started: bool = false
@@ -22369,9 +22369,12 @@ func _load_spatula_balance_settings() -> void:
 	spatula_balance_return_dur = 0.2 if loaded_return_dur >= 0.95 or absf(loaded_return_dur - 0.32) <= 0.02 else clampf(loaded_return_dur, 0.05, 1.0)
 	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 1.0, 10.0)
 	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.1, 1.4)
+	var loaded_offset_y := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y))
+	if absf(loaded_offset_y - 20.0) <= 0.01:
+		loaded_offset_y = 50.0
 	spatula_balance_screen_nudge = Vector2(
 		clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_x_px", spatula_balance_screen_nudge.x)), -120.0, 120.0),
-		clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y)), -120.0, 120.0)
+		clampf(loaded_offset_y, -120.0, 120.0)
 	)
 
 
