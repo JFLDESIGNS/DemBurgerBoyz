@@ -818,6 +818,8 @@ var spatula_grill_hold_on_meat: bool = false ## Press started on a tight meat hi
 const DRAG_MOVE_THRESH_PX := 8.0
 const SCOOP_TAP_MAX_SEC := 0.2 ## Quick tap scoops; hold ≥ this = slide/cheese, no scoop
 const DRAG_POP_DIST := 0.032 ## denser grease pops while sliding
+const SPATULA_REMOTE_CLINK_R := 0.075
+const SPATULA_REMOTE_CLINK_COOL := 0.28
 ## Screen-left flick (negative X) throws a finished patty to Build.
 const FLICK_TO_BUILD_VX := -520.0
 ## Screen-right flick throws a held patty onto the grill.
@@ -2032,6 +2034,7 @@ var _mp_ext_sync_cool: float = 0.0
 var _mp_season_sync_cool: float = 0.0
 var _mp_tool_pose_cool: float = 0.0
 var _mp_spatula_pose_sent: bool = false
+var _mp_spatula_clink_cool: float = 0.0
 var _mp_fryer_basket_pose_cool: float = 0.0
 var _serve_fly_watch: float = 0.0
 ## peer_id -> ghost Node3D so partners see held tools in-hand
@@ -3034,6 +3037,7 @@ func _process(delta: float) -> void:
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
 		_mp_season_sync_cool = maxf(0.0, _mp_season_sync_cool - delta)
 		_mp_tool_pose_cool = maxf(0.0, _mp_tool_pose_cool - delta)
+		_mp_spatula_clink_cool = maxf(0.0, _mp_spatula_clink_cool - delta)
 		_mp_fryer_basket_pose_cool = maxf(0.0, _mp_fryer_basket_pose_cool - delta)
 		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
 		_mp_icecream_pose_cool = maxf(0.0, _mp_icecream_pose_cool - delta)
@@ -3041,6 +3045,8 @@ func _process(delta: float) -> void:
 		var spatula_visible := hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible
 		if oil_held or shaker_held or ext_held or glock_held or brush_held or fries_pack_held or spatula_visible or _mp_spatula_pose_sent:
 			_mp_send_held_tool_pose(false)
+		if spatula_visible:
+			_check_remote_spatula_clink()
 		if fryer_held_index >= 0:
 			_mp_send_fryer_basket_pose(false, true, fryer_held_index)
 		if cup_held:
@@ -3346,14 +3352,19 @@ func _unhandled_input(event: InputEvent) -> void:
 				## Slide / scoop only if the burger is under the cursor — near-miss scrapes instead.
 				var under_burger = _pick_patty_for_slide_or_scoop(event.position)
 				if under_burger != null:
-					## Old drag-slide — spatula rides with the burger.
+					## Flat blade hops burgers; tilted blade still drag-slides / scoops.
 					_spatula_cancel_tap_keep_ting()
-					spatula_grill_hold = false
+					spatula_grill_hold = absf(_spatula_user_roll) < HAND_SPATULA_ROLL_STEP * 0.5
+					spatula_grill_hold_press_mouse = event.position
 					spatula_grill_hold_last_xz = Vector2.INF
-					spatula_grill_hold_on_meat = false
+					spatula_grill_hold_on_meat = spatula_grill_hold
 					_spatula_pull_flip_done = false
 					_stop_spatula_grill_scrape_audio()
-					_begin_patty_drag(under_burger)
+					if spatula_grill_hold:
+						_begin_hand_spatula_combo(event.position)
+						_spatula_flat_pop_patties(under_burger.global_position)
+					else:
+						_begin_patty_drag(under_burger)
 				else:
 					## Supplement: empty-steel hold scrapes and tip-pushes nearby burgers.
 					spatula_grill_hold = true
@@ -8938,6 +8949,10 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 			game_audio.set_slide_moving(false)
 		return
 	if mp_enabled and drag_owner_id != 0 and drag_owner_id != NetManager.my_id():
+		if game_audio:
+			game_audio.set_slide_moving(false)
+			if game_audio.has_method("set_burger_slide_oil"):
+				game_audio.set_burger_slide_oil(false)
 		return
 	var mouse := get_viewport().get_mouse_position()
 	var dt := maxf(delta, 0.001)
@@ -10106,6 +10121,8 @@ func _stop_spatula_grill_scrape_audio() -> void:
 		return
 	if game_audio.has_method("set_slide_moving"):
 		game_audio.set_slide_moving(false)
+	if game_audio.has_method("set_burger_slide_oil"):
+		game_audio.set_burger_slide_oil(false)
 	if game_audio.has_method("set_grill_scrape"):
 		game_audio.set_grill_scrape(false)
 	elif game_audio.has_method("set_scrape_debris_rattle"):
@@ -20045,6 +20062,54 @@ func _spatula_blade_sample_xz() -> Array:
 	return samples
 
 
+func _spatula_blade_sample_xz_for(root: Node3D) -> Array:
+	var samples: Array = []
+	if root == null or not is_instance_valid(root):
+		return samples
+	var basis := root.global_transform.basis
+	var tip := root.global_position + basis * HAND_SPATULA_TIP_OFFSET
+	var mid := root.global_position + basis * HAND_SPATULA_MID_OFFSET
+	for ti in 4:
+		var t := float(ti) / 3.0
+		var along: Vector3 = tip.lerp(mid, t)
+		var half_w := SPATULA_BLADE_HALF_W * lerpf(1.0, 0.78, t)
+		for sx in [-1.0, -0.35, 0.35, 1.0]:
+			var p: Vector3 = along + basis * Vector3(sx * half_w, 0.0, 0.0)
+			samples.append(Vector2(p.x, p.z))
+	return samples
+
+
+func _play_spatula_clink(at: Vector3, send_mp: bool = true) -> void:
+	if game_audio != null and game_audio.has_method("play_spatula_ting"):
+		game_audio.play_spatula_ting(84, 1.45)
+	if send_mp and mp_enabled and not _mp_applying:
+		mp_spatula_clink_fx.rpc(at.x, at.z)
+
+
+func _check_remote_spatula_clink() -> void:
+	if not mp_enabled or _mp_spatula_clink_cool > 0.0:
+		return
+	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root) or not hand_spatula_root.visible:
+		return
+	var mine := _spatula_blade_sample_xz()
+	if mine.is_empty():
+		return
+	var r2 := SPATULA_REMOTE_CLINK_R * SPATULA_REMOTE_CLINK_R
+	for peer_id in _mp_remote_spatula.keys():
+		var remote := _mp_remote_spatula[peer_id] as Node3D
+		if remote == null or not is_instance_valid(remote) or not remote.visible:
+			continue
+		var theirs := _spatula_blade_sample_xz_for(remote)
+		for a in mine:
+			var av: Vector2 = a
+			for b in theirs:
+				var bv: Vector2 = b
+				if av.distance_squared_to(bv) <= r2:
+					_mp_spatula_clink_cool = SPATULA_REMOTE_CLINK_COOL
+					_play_spatula_clink(Vector3((av.x + bv.x) * 0.5, GRILL_SURFACE_Y, (av.y + bv.y) * 0.5))
+					return
+
+
 func _nearest_spatula_blade_xz(world_xz: Vector2) -> Dictionary:
 	## {d, sample} — distance to closest blade sample.
 	var best_d := 1.0e9
@@ -20065,6 +20130,9 @@ func _spatula_nudge_patties(tip_pos: Vector3, move_xz: Vector2, moved: float) ->
 	## Flat blade still hops meat; shove always uses the blade samples (not a tip orb).
 	if absf(_spatula_user_roll) < HAND_SPATULA_ROLL_STEP * 0.5:
 		_spatula_flat_pop_patties(tip_pos)
+		_spatula_nudge_loose_grill_props(tip_pos, move_xz, moved)
+		_try_attach_cheese_strings_near_tip(tip_pos)
+		return
 	var r := SPATULA_PATTY_PUSH_RADIUS
 	var sc := SPATULA_PATTY_PUSH_SCALE
 	var pmax := SPATULA_PATTY_PUSH_MAX
@@ -20107,6 +20175,8 @@ func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
 		var d: float = float(hit.get("d", 1.0e9))
 		if d > 1.0e8:
 			d = Vector2(tip_pos.x - p.position.x, tip_pos.z - p.position.z).length()
+		else:
+			d = minf(d, Vector2(tip_pos.x - p.position.x, tip_pos.z - p.position.z).length())
 		var use_r := POP_R * (1.12 if _patty_is_flip_ready(p) else 1.0)
 		if d > use_r:
 			continue
@@ -20123,6 +20193,8 @@ func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
 		if game_audio and game_audio.has_method("play_grease_pop"):
 			game_audio.play_grease_pop(false)
 		_try_attach_cheese_strings_to_patty(p, tip_pos)
+		if mp_enabled and not _mp_applying and int(p.get("net_id")) >= 0:
+			mp_spatula_flat_pop.rpc(int(p.net_id), tip_pos.x, tip_pos.z)
 
 
 func _brush_nudge_patties(brush_pos: Vector3, move_xz: Vector2, moved: float) -> void:
@@ -47815,6 +47887,25 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool, rx: fl
 	## Never assign spatula_patty here — each cook keeps their own scoop.
 
 
+@rpc("any_peer", "call_remote", "reliable")
+func mp_spatula_flat_pop(net_id: int, tip_x: float, tip_z: float) -> void:
+	var p = _patty_by_net_id(net_id)
+	if p == null or not is_instance_valid(p):
+		return
+	if p.is_held or p == dragging_patty or p == flicking_patty:
+		return
+	_mp_applying = true
+	p.spot_dwell_t = 0.0
+	p.spot_dwell_xz = Vector2(float(p._rest_x), float(p._rest_z))
+	p.spot_residue_rolled = false
+	if p.has_method("_play_done_jump"):
+		p._play_done_jump(0.034)
+	if game_audio and game_audio.has_method("play_grease_pop"):
+		game_audio.play_grease_pop(false)
+	_try_attach_cheese_strings_to_patty(p, Vector3(tip_x, GRILL_SURFACE_Y + HAND_SPATULA_HOLD_SLIDE_CLEAR, tip_z))
+	_mp_applying = false
+
+
 @rpc("any_peer", "call_local", "reliable")
 func mp_claim_drag(net_id: int) -> void:
 	var p = _patty_by_net_id(net_id)
@@ -49851,7 +49942,8 @@ func mp_glock_fire(ix: float, iy: float, iz: float, cust_id: int, do_hit: bool, 
 @rpc("any_peer", "call_local", "reliable")
 func mp_ttt_reveal(reset_first: bool) -> void:
 	if mp_enabled and not NetManager.is_host():
-		if multiplayer.get_remote_sender_id() == 1:
+		var reveal_sid := multiplayer.get_remote_sender_id()
+		if reveal_sid == 0 or reveal_sid == 1:
 			_mp_applying = true
 			_apply_ttt_reveal_local(reset_first)
 			_mp_applying = false
@@ -49866,7 +49958,10 @@ func mp_ttt_reveal(reset_first: bool) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func mp_ttt_move(cell: int, mark: int = -1) -> void:
 	if mp_enabled and not NetManager.is_host():
-		if multiplayer.get_remote_sender_id() == 1:
+		var move_sid := multiplayer.get_remote_sender_id()
+		if move_sid == 0 or move_sid == 1:
+			if move_sid == 0 and mark != 1 and mark != 2:
+				mark = _ttt_my_mark()
 			_mp_applying = true
 			_apply_ttt_move_local(cell, mark)
 			_mp_applying = false
@@ -49884,7 +49979,8 @@ func mp_ttt_move(cell: int, mark: int = -1) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func mp_ttt_hide() -> void:
 	if mp_enabled and not NetManager.is_host():
-		if multiplayer.get_remote_sender_id() == 1:
+		var hide_sid := multiplayer.get_remote_sender_id()
+		if hide_sid == 0 or hide_sid == 1:
 			_mp_applying = true
 			_apply_ttt_hide_local()
 			_mp_applying = false
@@ -49930,6 +50026,17 @@ func mp_spatula_tap_fx(x: float, z: float, volume_scale: float = 1.0, roll: floa
 	_mp_applying = true
 	_play_grill_tap_at(at, clampf(volume_scale, 0.2, 2.0), clampf(roll, -HAND_SPATULA_ROLL_MAX, HAND_SPATULA_ROLL_MAX), false)
 	_spawn_spatula_tap_ring(at)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable")
+func mp_spatula_clink_fx(x: float, z: float) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0 or sid == multiplayer.get_unique_id():
+		return
+	_mp_applying = true
+	_mp_spatula_clink_cool = SPATULA_REMOTE_CLINK_COOL
+	_play_spatula_clink(Vector3(x, GRILL_SURFACE_Y, z), false)
 	_mp_applying = false
 
 
