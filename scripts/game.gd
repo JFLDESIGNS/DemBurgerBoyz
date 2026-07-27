@@ -38780,6 +38780,36 @@ func _hidden_add_section(parent: Control, text: String) -> Label:
 	return lab
 
 
+func _hidden_add_category(parent: Control, text: String) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.name = text.capitalize().replace(" ", "") + "Group"
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.055, 0.065, 0.085, 0.72)
+	sb.border_color = Color(0.32, 0.42, 0.56, 0.78)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 10
+	panel.add_theme_stylebox_override("panel", sb)
+	parent.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 7)
+	panel.add_child(box)
+
+	var lab := Label.new()
+	lab.text = text
+	UiFontsScript.apply_label(lab, true, 14)
+	lab.add_theme_color_override("font_color", Color(1.0, 0.82, 0.42))
+	lab.add_theme_constant_override("outline_size", 1)
+	box.add_child(lab)
+	return box
+
+
 func _layout_gfx_panel() -> void:
 	if gfx_panel == null or not is_instance_valid(gfx_panel):
 		return
@@ -39036,12 +39066,23 @@ func _build_options_menu() -> void:
 	options_hidden_room_tone_box.visible = false
 	options_hidden_room_tone_box.add_theme_constant_override("separation", 8)
 	hidden.add_child(options_hidden_room_tone_box)
+	var hidden_debug_box := _hidden_add_category(options_hidden_room_tone_box, "DEBUG OVERLAYS")
+	var hidden_audio_box := _hidden_add_category(options_hidden_room_tone_box, "AUDIO")
+	var hidden_grill_box := _hidden_add_category(options_hidden_room_tone_box, "GRILL VISUALS")
+	var hidden_world_box := _hidden_add_category(options_hidden_room_tone_box, "WORLD AND PROP POSITIONS")
+	var hidden_tools_box := _hidden_add_category(options_hidden_room_tone_box, "TOOLS AND MINIGAMES")
+	var hidden_soda_box := _hidden_add_category(options_hidden_room_tone_box, "SODA AND SLOT MACHINE")
+	var hidden_render_box := _hidden_add_category(options_hidden_room_tone_box, "ADVANCED RENDERING")
+	for debug_control in [options_hidden_zone_check, options_hidden_piano_check]:
+		if debug_control != null and is_instance_valid(debug_control):
+			hidden.remove_child(debug_control)
+			hidden_debug_box.add_child(debug_control)
 
 	var tone_lab := Label.new()
 	tone_lab.text = "ROOM TONE"
 	UiFontsScript.apply_label(tone_lab, true, 13)
 	tone_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(tone_lab)
+	hidden_audio_box.add_child(tone_lab)
 
 	options_hidden_room_tone_option = OptionButton.new()
 	options_hidden_room_tone_option.custom_minimum_size = Vector2(0, 36)
@@ -39057,11 +39098,11 @@ func _build_options_menu() -> void:
 		_save_audio_settings()
 		_sfx_click()
 	)
-	options_hidden_room_tone_box.add_child(options_hidden_room_tone_option)
+	hidden_audio_box.add_child(options_hidden_room_tone_option)
 
 	var tone_vol_row := HBoxContainer.new()
 	tone_vol_row.add_theme_constant_override("separation", 10)
-	options_hidden_room_tone_box.add_child(tone_vol_row)
+	hidden_audio_box.add_child(tone_vol_row)
 	var tone_vol_name := Label.new()
 	tone_vol_name.text = "Tone Volume"
 	tone_vol_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -39090,7 +39131,7 @@ func _build_options_menu() -> void:
 		_apply_room_tone_settings()
 		_save_audio_settings()
 	)
-	options_hidden_room_tone_box.add_child(options_hidden_room_tone_vol)
+	hidden_audio_box.add_child(options_hidden_room_tone_vol)
 	if options_hidden_room_tone_vol_lab != null:
 		options_hidden_room_tone_vol_lab.text = "%.2f" % room_tone_volume
 
@@ -39098,11 +39139,11 @@ func _build_options_menu() -> void:
 	amb_lab.text = "OUTDOOR AMBIENCE"
 	UiFontsScript.apply_label(amb_lab, true, 13)
 	amb_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(amb_lab)
+	hidden_audio_box.add_child(amb_lab)
 
 	var amb_vol_row := HBoxContainer.new()
 	amb_vol_row.add_theme_constant_override("separation", 10)
-	options_hidden_room_tone_box.add_child(amb_vol_row)
+	hidden_audio_box.add_child(amb_vol_row)
 	var amb_vol_name := Label.new()
 	amb_vol_name.text = "Ambience Volume"
 	amb_vol_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -39131,7 +39172,7 @@ func _build_options_menu() -> void:
 		_apply_outdoor_ambience_settings()
 		_save_audio_settings()
 	)
-	options_hidden_room_tone_box.add_child(options_hidden_outdoor_ambience_vol)
+	hidden_audio_box.add_child(options_hidden_outdoor_ambience_vol)
 	if options_hidden_outdoor_ambience_vol_lab != null:
 		options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 
@@ -39139,23 +39180,23 @@ func _build_options_menu() -> void:
 	tree_lab.text = "TREE FILL LIGHTS"
 	UiFontsScript.apply_label(tree_lab, true, 13)
 	tree_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(tree_lab)
-	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "energy", "Brightness", 0.0, 6.0, 0.05,
+	hidden_world_box.add_child(tree_lab)
+	_hidden_add_tree_light_slider(hidden_world_box, "energy", "Brightness", 0.0, 6.0, 0.05,
 		func(): return tree_light_energy,
 		func(v: float): tree_light_energy = clampf(v, 0.0, 6.0))
-	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "range", "Influence Radius", 0.5, 20.0, 0.1,
+	_hidden_add_tree_light_slider(hidden_world_box, "range", "Influence Radius", 0.5, 20.0, 0.1,
 		func(): return tree_light_range,
 		func(v: float): tree_light_range = clampf(v, 0.5, 20.0))
-	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "size", "Bulb Size", 0.02, 1.2, 0.01,
+	_hidden_add_tree_light_slider(hidden_world_box, "size", "Bulb Size", 0.02, 1.2, 0.01,
 		func(): return tree_light_size,
 		func(v: float): tree_light_size = clampf(v, 0.02, 1.2))
-	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "off_x", "Location X", -8.0, 8.0, 0.05,
+	_hidden_add_tree_light_slider(hidden_world_box, "off_x", "Location X", -8.0, 8.0, 0.05,
 		func(): return tree_light_off_x,
 		func(v: float): tree_light_off_x = clampf(v, -8.0, 8.0))
-	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "off_y", "Location Y", 0.2, 12.0, 0.05,
+	_hidden_add_tree_light_slider(hidden_world_box, "off_y", "Location Y", 0.2, 12.0, 0.05,
 		func(): return tree_light_off_y,
 		func(v: float): tree_light_off_y = clampf(v, 0.2, 12.0))
-	_hidden_add_tree_light_slider(options_hidden_room_tone_box, "off_z", "Location Z", -8.0, 8.0, 0.05,
+	_hidden_add_tree_light_slider(hidden_world_box, "off_z", "Location Z", -8.0, 8.0, 0.05,
 		func(): return tree_light_off_z,
 		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
 
@@ -39163,71 +39204,71 @@ func _build_options_menu() -> void:
 	heat_lab.text = "GRILL HEAT SPOTS"
 	UiFontsScript.apply_label(heat_lab, true, 13)
 	heat_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(heat_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_size", "Heat Spot Size", 0.4, 3.5, 0.05,
+	hidden_grill_box.add_child(heat_lab)
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_size", "Heat Spot Size", 0.4, 3.5, 0.05,
 		func(): return grill_heat_size,
 		func(v: float):
 			grill_heat_size = clampf(v, 0.4, 3.5)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_bars", "Grate Bars", 2.0, float(GRILL_HEAT_BARS_MAX), 1.0,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_bars", "Grate Bars", 2.0, float(GRILL_HEAT_BARS_MAX), 1.0,
 		func(): return float(grill_heat_bars),
 		func(v: float):
 			grill_heat_bars = clampi(int(round(v)), 2, GRILL_HEAT_BARS_MAX)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_gap", "Grate Gap (dark)", 0.05, 0.72, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_gap", "Grate Gap (dark)", 0.05, 0.72, 0.01,
 		func(): return grill_heat_gap,
 		func(v: float):
 			grill_heat_gap = clampf(v, 0.05, 0.72)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_opacity", "Heat Opacity", 0.0, 2.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_opacity", "Heat Opacity", 0.0, 2.0, 0.02,
 		func(): return grill_heat_opacity,
 		func(v: float):
 			grill_heat_opacity = clampf(v, 0.0, 2.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_flicker", "Heat Flicker", 0.0, 1.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_flicker", "Heat Flicker", 0.0, 1.0, 0.02,
 		func(): return grill_heat_flicker,
 		func(v: float):
 			grill_heat_flicker = clampf(v, 0.0, 1.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_wobble", "Heat Wobble", 0.0, 1.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_wobble", "Heat Wobble", 0.0, 1.0, 0.02,
 		func(): return grill_heat_wobble,
 		func(v: float):
 			grill_heat_wobble = clampf(v, 0.0, 1.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_height", "Heat Height", 0.01, 0.08, 0.001,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_height", "Heat Height", 0.01, 0.08, 0.001,
 		func(): return grill_heat_height,
 		func(v: float):
 			grill_heat_height = clampf(v, 0.01, 0.08)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_r", "Heat Color R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_r", "Heat Color R", 0.0, 1.0, 0.01,
 		func(): return grill_heat_tint.r,
 		func(v: float):
 			grill_heat_tint.r = clampf(v, 0.0, 1.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_g", "Heat Color G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_g", "Heat Color G", 0.0, 1.0, 0.01,
 		func(): return grill_heat_tint.g,
 		func(v: float):
 			grill_heat_tint.g = clampf(v, 0.0, 1.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "heat_b", "Heat Color B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "heat_b", "Heat Color B", 0.0, 1.0, 0.01,
 		func(): return grill_heat_tint.b,
 		func(v: float):
 			grill_heat_tint.b = clampf(v, 0.0, 1.0)
@@ -39239,56 +39280,56 @@ func _build_options_menu() -> void:
 	surf_lab.text = "GRILL SURFACE LIGHT (ON)"
 	UiFontsScript.apply_label(surf_lab, true, 13)
 	surf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(surf_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_energy", "Light Greatness", 0.0, 2.0, 0.01,
+	hidden_grill_box.add_child(surf_lab)
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_energy", "Light Greatness", 0.0, 2.0, 0.01,
 		func(): return grill_surf_light_energy,
 		func(v: float):
 			grill_surf_light_energy = clampf(v, 0.0, 2.0)
 			_apply_grill_surface_light()
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_range", "Light Range", 0.2, 4.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_range", "Light Range", 0.2, 4.0, 0.02,
 		func(): return grill_surf_light_range,
 		func(v: float):
 			grill_surf_light_range = clampf(v, 0.2, 4.0)
 			_apply_grill_surface_light()
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_height", "Light Height", 0.02, 0.6, 0.005,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_height", "Light Height", 0.02, 0.6, 0.005,
 		func(): return grill_surf_light_height,
 		func(v: float):
 			grill_surf_light_height = clampf(v, 0.02, 0.6)
 			_apply_grill_surface_light()
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_flicker", "Light Flicker", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_flicker", "Light Flicker", 0.0, 1.0, 0.01,
 		func(): return grill_surf_light_flicker,
 		func(v: float):
 			grill_surf_light_flicker = clampf(v, 0.0, 1.0)
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_specular", "Light Specular", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_specular", "Light Specular", 0.0, 1.0, 0.01,
 		func(): return grill_surf_light_specular,
 		func(v: float):
 			grill_surf_light_specular = clampf(v, 0.0, 1.0)
 			_apply_grill_surface_light()
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_r", "Light Color R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_r", "Light Color R", 0.0, 1.0, 0.01,
 		func(): return grill_surf_light_color.r,
 		func(v: float):
 			grill_surf_light_color.r = clampf(v, 0.0, 1.0)
 			_apply_grill_surface_light()
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_g", "Light Color G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_g", "Light Color G", 0.0, 1.0, 0.01,
 		func(): return grill_surf_light_color.g,
 		func(v: float):
 			grill_surf_light_color.g = clampf(v, 0.0, 1.0)
 			_apply_grill_surface_light()
 			_save_grill_surface_light_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "surf_light_b", "Light Color B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_b", "Light Color B", 0.0, 1.0, 0.01,
 		func(): return grill_surf_light_color.b,
 		func(v: float):
 			grill_surf_light_color.b = clampf(v, 0.0, 1.0)
@@ -39300,162 +39341,162 @@ func _build_options_menu() -> void:
 	sill_lab.text = "WINDOW SILL GLASS"
 	UiFontsScript.apply_label(sill_lab, true, 13)
 	sill_lab.add_theme_color_override("font_color", Color(0.95, 0.72, 0.55))
-	options_hidden_room_tone_box.add_child(sill_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_h", "Glass Height (in)", 2.0, 24.0, 0.25,
+	hidden_grill_box.add_child(sill_lab)
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_h", "Glass Height (in)", 2.0, 24.0, 0.25,
 		func(): return sill_glass_height_in,
 		func(v: float):
 			sill_glass_height_in = clampf(v, 2.0, 24.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_thick", "Glass Thickness (in)", 0.05, 3.0, 0.05,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_thick", "Glass Thickness (in)", 0.05, 3.0, 0.05,
 		func(): return sill_glass_thick_in,
 		func(v: float):
 			sill_glass_thick_in = clampf(v, 0.05, 3.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_opacity", "Glass Opacity", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_opacity", "Glass Opacity", 0.0, 1.0, 0.01,
 		func(): return sill_glass_opacity,
 		func(v: float):
 			sill_glass_opacity = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_r", "Glass Color R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_tint_r", "Glass Color R", 0.0, 1.0, 0.01,
 		func(): return sill_glass_tint.r,
 		func(v: float):
 			sill_glass_tint.r = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_g", "Glass Color G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_tint_g", "Glass Color G", 0.0, 1.0, 0.01,
 		func(): return sill_glass_tint.g,
 		func(v: float):
 			sill_glass_tint.g = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_b", "Glass Color B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_tint_b", "Glass Color B", 0.0, 1.0, 0.01,
 		func(): return sill_glass_tint.b,
 		func(v: float):
 			sill_glass_tint.b = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_tint_str", "Glass Tint Strength", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_tint_str", "Glass Tint Strength", 0.0, 1.0, 0.01,
 		func(): return sill_glass_tint_strength,
 		func(v: float):
 			sill_glass_tint_strength = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_darken", "Glass Darken", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_darken", "Glass Darken", 0.0, 1.0, 0.01,
 		func(): return sill_glass_darken,
 		func(v: float):
 			sill_glass_darken = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_bot_dark", "Bottom Darken", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_bot_dark", "Bottom Darken", 0.0, 1.0, 0.01,
 		func(): return sill_glass_bottom_darken,
 		func(v: float):
 			sill_glass_bottom_darken = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_reflect", "Reflectiveness", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_reflect", "Reflectiveness", 0.0, 1.0, 0.01,
 		func(): return sill_glass_reflect,
 		func(v: float):
 			sill_glass_reflect = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_magnify", "Magnify", 0.0, 0.12, 0.001,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_magnify", "Magnify", 0.0, 0.12, 0.001,
 		func(): return sill_glass_magnify,
 		func(v: float):
 			sill_glass_magnify = clampf(v, 0.0, 0.12)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_distort", "Distorting", 0.0, 0.08, 0.001,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_distort", "Distorting", 0.0, 0.08, 0.001,
 		func(): return sill_glass_distort,
 		func(v: float):
 			sill_glass_distort = clampf(v, 0.0, 0.08)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_vig", "Vignette", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_vig", "Vignette", 0.0, 1.0, 0.01,
 		func(): return sill_glass_vignette,
 		func(v: float):
 			sill_glass_vignette = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_y", "Strip Height Pos", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_y", "Strip Height Pos", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_y,
 		func(v: float):
 			sill_glass_strip_y = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_h", "Strip Band Height", 0.01, 0.5, 0.005,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_h", "Strip Band Height", 0.01, 0.5, 0.005,
 		func(): return sill_glass_strip_h,
 		func(v: float):
 			sill_glass_strip_h = clampf(v, 0.01, 0.5)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_op", "Strip Opacity", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_op", "Strip Opacity", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_opacity,
 		func(v: float):
 			sill_glass_strip_opacity = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_reps", "Strip Repeats", 1.0, 40.0, 1.0,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_reps", "Strip Repeats", 1.0, 40.0, 1.0,
 		func(): return sill_glass_strip_reps,
 		func(v: float):
 			sill_glass_strip_reps = clampf(v, 1.0, 40.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_rr", "Strip Red R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_rr", "Strip Red R", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_red.r,
 		func(v: float):
 			sill_glass_strip_red.r = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_rg", "Strip Red G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_rg", "Strip Red G", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_red.g,
 		func(v: float):
 			sill_glass_strip_red.g = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_rb", "Strip Red B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_rb", "Strip Red B", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_red.b,
 		func(v: float):
 			sill_glass_strip_red.b = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_wr", "Strip White R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_wr", "Strip White R", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_white.r,
 		func(v: float):
 			sill_glass_strip_white.r = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_wg", "Strip White G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_wg", "Strip White G", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_white.g,
 		func(v: float):
 			sill_glass_strip_white.g = clampf(v, 0.0, 1.0)
 			_apply_window_sill_glass_settings()
 			_save_window_sill_glass_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "sill_strip_wb", "Strip White B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "sill_strip_wb", "Strip White B", 0.0, 1.0, 0.01,
 		func(): return sill_glass_strip_white.b,
 		func(v: float):
 			sill_glass_strip_white.b = clampf(v, 0.0, 1.0)
@@ -39467,141 +39508,141 @@ func _build_options_menu() -> void:
 	ttt_lab.text = "HOLD TIC-TAC-TOE (T KEY)"
 	UiFontsScript.apply_label(ttt_lab, true, 13)
 	ttt_lab.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
-	options_hidden_room_tone_box.add_child(ttt_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_off_left", "Move Left / Right (+left)", -18.0, 18.0, 0.1,
+	hidden_grill_box.add_child(ttt_lab)
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_off_left", "Move Left / Right (+left)", -18.0, 18.0, 0.1,
 		func(): return ttt_off_left_in,
 		func(v: float):
 			ttt_off_left_in = clampf(v, -18.0, 18.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_off_fwd", "Move Forward / Back (+away)", -18.0, 18.0, 0.1,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_off_fwd", "Move Forward / Back (+away)", -18.0, 18.0, 0.1,
 		func(): return ttt_off_fwd_in,
 		func(v: float):
 			ttt_off_fwd_in = clampf(v, -18.0, 18.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_height", "Board Height (in)", 0.05, 3.0, 0.05,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_height", "Board Height (in)", 0.05, 3.0, 0.05,
 		func(): return ttt_height_in,
 		func(v: float):
 			ttt_height_in = clampf(v, 0.05, 3.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_size", "Board Size (in)", 2.0, 14.0, 0.1,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_size", "Board Size (in)", 2.0, 14.0, 0.1,
 		func(): return ttt_size_in,
 		func(v: float):
 			ttt_size_in = clampf(v, 2.0, 14.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_line_w", "Line Thickness (in)", 0.04, 0.6, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_line_w", "Line Thickness (in)", 0.04, 0.6, 0.01,
 		func(): return ttt_line_w_in,
 		func(v: float):
 			ttt_line_w_in = clampf(v, 0.04, 0.6)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_mark_w", "Mark Thickness (in)", 0.04, 0.8, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_mark_w", "Mark Thickness (in)", 0.04, 0.8, 0.01,
 		func(): return ttt_mark_w_in,
 		func(v: float):
 			ttt_mark_w_in = clampf(v, 0.04, 0.8)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_noise", "Scratch Noise", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_noise", "Scratch Noise", 0.0, 1.0, 0.01,
 		func(): return ttt_noise,
 		func(v: float):
 			ttt_noise = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_noise_freq", "Noise Frequency", 1.0, 24.0, 0.5,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_noise_freq", "Noise Frequency", 1.0, 24.0, 0.5,
 		func(): return ttt_noise_freq,
 		func(v: float):
 			ttt_noise_freq = clampf(v, 1.0, 24.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_seed", "Scratch Seed", 0.0, 999.0, 1.0,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_seed", "Scratch Seed", 0.0, 999.0, 1.0,
 		func(): return ttt_seed,
 		func(v: float):
 			ttt_seed = clampf(v, 0.0, 999.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_opacity", "Groove Opacity", 0.05, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_opacity", "Groove Opacity", 0.05, 1.0, 0.01,
 		func(): return ttt_opacity,
 		func(v: float):
 			ttt_opacity = clampf(v, 0.05, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_r", "Groove Color R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_r", "Groove Color R", 0.0, 1.0, 0.01,
 		func(): return ttt_color.r,
 		func(v: float):
 			ttt_color.r = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_g", "Groove Color G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_g", "Groove Color G", 0.0, 1.0, 0.01,
 		func(): return ttt_color.g,
 		func(v: float):
 			ttt_color.g = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_b", "Groove Color B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_b", "Groove Color B", 0.0, 1.0, 0.01,
 		func(): return ttt_color.b,
 		func(v: float):
 			ttt_color.b = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_y", "Bevel Depth (in)", 0.0, 0.4, 0.005,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_y", "Bevel Depth (in)", 0.0, 0.4, 0.005,
 		func(): return ttt_bevel_y_in,
 		func(v: float):
 			ttt_bevel_y_in = clampf(v, 0.0, 0.4)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_z", "Bevel Toward Cook (in)", 0.0, 0.5, 0.005,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_z", "Bevel Toward Cook (in)", 0.0, 0.5, 0.005,
 		func(): return ttt_bevel_z_in,
 		func(v: float):
 			ttt_bevel_z_in = clampf(v, 0.0, 0.5)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_scale", "Bevel Thickness Scale", 0.4, 1.2, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_scale", "Bevel Thickness Scale", 0.4, 1.2, 0.01,
 		func(): return ttt_bevel_scale,
 		func(v: float):
 			ttt_bevel_scale = clampf(v, 0.4, 1.2)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_op", "Bevel Opacity", 0.05, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_op", "Bevel Opacity", 0.05, 1.0, 0.01,
 		func(): return ttt_bevel_opacity,
 		func(v: float):
 			ttt_bevel_opacity = clampf(v, 0.05, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_r", "Bevel Color R", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_r", "Bevel Color R", 0.0, 1.0, 0.01,
 		func(): return ttt_bevel_color.r,
 		func(v: float):
 			ttt_bevel_color.r = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_g", "Bevel Color G", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_g", "Bevel Color G", 0.0, 1.0, 0.01,
 		func(): return ttt_bevel_color.g,
 		func(v: float):
 			ttt_bevel_color.g = clampf(v, 0.0, 1.0)
 			_apply_grill_ttt_settings()
 			_save_grill_ttt_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ttt_bevel_b", "Bevel Color B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "ttt_bevel_b", "Bevel Color B", 0.0, 1.0, 0.01,
 		func(): return ttt_bevel_color.b,
 		func(v: float):
 			ttt_bevel_color.b = clampf(v, 0.0, 1.0)
@@ -39613,85 +39654,85 @@ func _build_options_menu() -> void:
 	season_lab.text = "GRILL OIL / MULTICOLOR SPOTS"
 	UiFontsScript.apply_label(season_lab, true, 13)
 	season_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(season_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_opacity", "Spot Opacity", 0.0, 3.0, 0.02,
+	hidden_grill_box.add_child(season_lab)
+	_hidden_add_labeled_slider(hidden_grill_box, "season_opacity", "Spot Opacity", 0.0, 3.0, 0.02,
 		func(): return grill_season_opacity,
 		func(v: float):
 			grill_season_opacity = clampf(v, 0.0, 3.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_strength", "Spot Strength", 0.0, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_strength", "Spot Strength", 0.0, 1.5, 0.01,
 		func(): return grill_season_strength,
 		func(v: float):
 			grill_season_strength = clampf(v, 0.0, 1.5)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_brightness", "Spot Brightness", 0.2, 2.5, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_brightness", "Spot Brightness", 0.2, 2.5, 0.02,
 		func(): return grill_season_brightness,
 		func(v: float):
 			grill_season_brightness = clampf(v, 0.2, 2.5)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_size", "Spot Size", 0.3, 8.0, 0.05,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_size", "Spot Size", 0.3, 8.0, 0.05,
 		func(): return grill_season_size,
 		func(v: float):
 			grill_season_size = clampf(v, 0.3, 8.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_reps", "Spot Repetitions", 0.25, 4.0, 0.05,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_reps", "Spot Repetitions", 0.25, 4.0, 0.05,
 		func(): return grill_season_reps,
 		func(v: float):
 			grill_season_reps = clampf(v, 0.25, 4.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_threshold", "Spot Coverage", 0.15, 0.95, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_threshold", "Spot Coverage", 0.15, 0.95, 0.01,
 		func(): return grill_season_threshold,
 		func(v: float):
 			grill_season_threshold = clampf(v, 0.15, 0.95)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_vignette", "Edge Wear", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_vignette", "Edge Wear", 0.0, 1.0, 0.01,
 		func(): return grill_season_vignette,
 		func(v: float):
 			grill_season_vignette = clampf(v, 0.0, 1.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_edge", "Spot Rim Dark", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_edge", "Spot Rim Dark", 0.0, 1.0, 0.01,
 		func(): return grill_season_edge,
 		func(v: float):
 			grill_season_edge = clampf(v, 0.0, 1.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_height", "Spot Height", 0.01, 0.08, 0.001,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_height", "Spot Height", 0.01, 0.08, 0.001,
 		func(): return grill_season_height,
 		func(v: float):
 			grill_season_height = clampf(v, 0.01, 0.08)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_off_x", "Spot Location X", -2.0, 2.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_off_x", "Spot Location X", -2.0, 2.0, 0.02,
 		func(): return grill_season_off_x,
 		func(v: float):
 			grill_season_off_x = clampf(v, -2.0, 2.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_off_z", "Spot Location Z", -2.0, 2.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_off_z", "Spot Location Z", -2.0, 2.0, 0.02,
 		func(): return grill_season_off_z,
 		func(v: float):
 			grill_season_off_z = clampf(v, -2.0, 2.0)
 			_apply_grill_season_settings()
 			_save_grill_season_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "season_chroma", "Spot Color Amount", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "season_chroma", "Spot Color Amount", 0.0, 1.0, 0.01,
 		func(): return grill_season_chroma,
 		func(v: float):
 			grill_season_chroma = clampf(v, 0.0, 1.0)
@@ -39703,85 +39744,85 @@ func _build_options_menu() -> void:
 	vig_lab.text = "GRILL SURFACE VIGNETTE"
 	UiFontsScript.apply_label(vig_lab, true, 13)
 	vig_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(vig_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_dual", "Two Darkens (0=one / 1=two)", 0.0, 1.0, 0.01,
+	hidden_grill_box.add_child(vig_lab)
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_dual", "Two Darkens (0=one / 1=two)", 0.0, 1.0, 0.01,
 		func(): return grill_vig_dual,
 		func(v: float):
 			grill_vig_dual = clampf(v, 0.0, 1.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_darken_a", "Darken A", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_darken_a", "Darken A", 0.0, 1.0, 0.01,
 		func(): return grill_vig_darken_a,
 		func(v: float):
 			grill_vig_darken_a = clampf(v, 0.0, 1.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_darken_b", "Darken B", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_darken_b", "Darken B", 0.0, 1.0, 0.01,
 		func(): return grill_vig_darken_b,
 		func(v: float):
 			grill_vig_darken_b = clampf(v, 0.0, 1.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_size", "Vignette Size", 0.15, 1.6, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_size", "Vignette Size", 0.15, 1.6, 0.01,
 		func(): return grill_vig_size,
 		func(v: float):
 			grill_vig_size = clampf(v, 0.15, 1.6)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_choke", "Vignette Choke", -0.45, 0.45, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_choke", "Vignette Choke", -0.45, 0.45, 0.01,
 		func(): return grill_vig_choke,
 		func(v: float):
 			grill_vig_choke = clampf(v, -0.45, 0.45)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_noise", "Noise Pattern", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_noise", "Noise Pattern", 0.0, 1.0, 0.01,
 		func(): return grill_vig_noise,
 		func(v: float):
 			grill_vig_noise = clampf(v, 0.0, 1.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_noise_scale", "Noise Scale", 0.5, 12.0, 0.05,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_noise_scale", "Noise Scale", 0.5, 12.0, 0.05,
 		func(): return grill_vig_noise_scale,
 		func(v: float):
 			grill_vig_noise_scale = clampf(v, 0.5, 12.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_opacity", "Vignette Opacity", 0.0, 2.0, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_opacity", "Vignette Opacity", 0.0, 2.0, 0.02,
 		func(): return grill_vig_opacity,
 		func(v: float):
 			grill_vig_opacity = clampf(v, 0.0, 2.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_color", "Color Shift", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_color", "Color Shift", 0.0, 1.0, 0.01,
 		func(): return grill_vig_color,
 		func(v: float):
 			grill_vig_color = clampf(v, 0.0, 1.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_spots", "Vignette Spots", 0.0, 1.5, 0.02,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_spots", "Vignette Spots", 0.0, 1.5, 0.02,
 		func(): return grill_vig_spots,
 		func(v: float):
 			grill_vig_spots = clampf(v, 0.0, 1.5)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_spot_scale", "Spot Size", 0.3, 6.0, 0.05,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_spot_scale", "Spot Size", 0.3, 6.0, 0.05,
 		func(): return grill_vig_spot_scale,
 		func(v: float):
 			grill_vig_spot_scale = clampf(v, 0.3, 6.0)
 			_apply_grill_vignette_settings()
 			_save_grill_vignette_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "vig_height", "Vignette Height", 0.01, 0.08, 0.001,
+	_hidden_add_labeled_slider(hidden_grill_box, "vig_height", "Vignette Height", 0.01, 0.08, 0.001,
 		func(): return grill_vig_height,
 		func(v: float):
 			grill_vig_height = clampf(v, 0.01, 0.08)
@@ -39793,15 +39834,15 @@ func _build_options_menu() -> void:
 	wind_lab.text = "TREE WIND"
 	UiFontsScript.apply_label(wind_lab, true, 13)
 	wind_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(wind_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "wind", "Wind Strength", 0.0, 4.0, 0.05,
+	hidden_world_box.add_child(wind_lab)
+	_hidden_add_labeled_slider(hidden_world_box, "wind", "Wind Strength", 0.0, 4.0, 0.05,
 		func(): return tree_wind_strength,
 		func(v: float):
 			tree_wind_strength = clampf(v, 0.0, 4.0)
 			_apply_tree_wind_settings()
 			_save_tree_wind_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "wind_dir", "Wind Direction °", 0.0, 360.0, 1.0,
+	_hidden_add_labeled_slider(hidden_world_box, "wind_dir", "Wind Direction °", 0.0, 360.0, 1.0,
 		func(): return tree_wind_dir_deg,
 		func(v: float):
 			tree_wind_dir_deg = fposmod(v, 360.0)
@@ -39813,7 +39854,7 @@ func _build_options_menu() -> void:
 	tree_xf_lab.text = "TREE LOCATION / HEIGHT"
 	UiFontsScript.apply_label(tree_xf_lab, true, 13)
 	tree_xf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(tree_xf_lab)
+	hidden_world_box.add_child(tree_xf_lab)
 
 	options_hidden_tree_select = OptionButton.new()
 	options_hidden_tree_select.custom_minimum_size = Vector2(0, 36)
@@ -39826,37 +39867,37 @@ func _build_options_menu() -> void:
 		_sync_tree_xform_hidden_ui()
 		_sfx_click()
 	)
-	options_hidden_room_tone_box.add_child(options_hidden_tree_select)
+	hidden_world_box.add_child(options_hidden_tree_select)
 
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tx", "Location X", -12.0, 12.0, 0.05,
+	_hidden_add_tree_xform_slider(hidden_world_box, "tx", "Location X", -12.0, 12.0, 0.05,
 		func(): return _hidden_tree_edit_pos().x,
 		func(v: float): _hidden_set_tree_edit_pos_axis("x", clampf(v, -12.0, 12.0)))
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "ty", "Height", -2.0, 6.0, 0.05,
+	_hidden_add_tree_xform_slider(hidden_world_box, "ty", "Height", -2.0, 6.0, 0.05,
 		func(): return _hidden_tree_edit_pos().y,
 		func(v: float): _hidden_set_tree_edit_pos_axis("y", clampf(v, -2.0, 6.0)))
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tz", "Location Z", -2.0, 16.0, 0.05,
+	_hidden_add_tree_xform_slider(hidden_world_box, "tz", "Location Z", -2.0, 16.0, 0.05,
 		func(): return _hidden_tree_edit_pos().z,
 		func(v: float): _hidden_set_tree_edit_pos_axis("z", clampf(v, -2.0, 16.0)))
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tyaw", "Yaw °", -180.0, 180.0, 1.0,
+	_hidden_add_tree_xform_slider(hidden_world_box, "tyaw", "Yaw °", -180.0, 180.0, 1.0,
 		func(): return _hidden_tree_edit_yaw(),
 		func(v: float): _hidden_set_tree_edit_yaw(clampf(v, -180.0, 180.0)))
 
-	_hidden_add_section(options_hidden_room_tone_box, "TURBACHEF ROBOT HOME")
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "roomba_home_x", "Home X", -4.0, 4.0, 0.01,
+	_hidden_add_section(hidden_world_box, "TURBACHEF ROBOT HOME")
+	_hidden_add_labeled_slider(hidden_world_box, "roomba_home_x", "Home X", -4.0, 4.0, 0.01,
 		func(): return roomba_home_pos.x,
 		func(v: float):
 			roomba_home_pos.x = clampf(v, -4.0, 4.0)
 			_save_roomba_home_settings()
 			_apply_roomba_home_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "roomba_home_y", "Home Height", 0.8, 1.8, 0.01,
+	_hidden_add_labeled_slider(hidden_world_box, "roomba_home_y", "Home Height", 0.8, 1.8, 0.01,
 		func(): return roomba_home_pos.y,
 		func(v: float):
 			roomba_home_pos.y = clampf(v, 0.8, 1.8)
 			_save_roomba_home_settings()
 			_apply_roomba_home_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "roomba_home_z", "Home Z", -1.2, 2.2, 0.01,
+	_hidden_add_labeled_slider(hidden_world_box, "roomba_home_z", "Home Z", -1.2, 2.2, 0.01,
 		func(): return roomba_home_pos.z,
 		func(v: float):
 			roomba_home_pos.z = clampf(v, -1.2, 2.2)
@@ -39868,170 +39909,170 @@ func _build_options_menu() -> void:
 	balance_lab.text = "SPATULA BALANCE"
 	UiFontsScript.apply_label(balance_lab, true, 13)
 	balance_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(balance_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_mouse", "Side Sensitivity", 0.0, 0.16, 0.001,
+	hidden_tools_box.add_child(balance_lab)
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_mouse", "Side Sensitivity", 0.0, 0.16, 0.001,
 		func(): return spatula_balance_mouse_correct,
 		func(v: float):
 			spatula_balance_mouse_correct = clampf(v, 0.0, 0.16)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_counter", "Counter Push", 0.0, 0.22, 0.001,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_counter", "Counter Push", 0.0, 0.22, 0.001,
 		func(): return spatula_balance_counter_push,
 		func(v: float):
 			spatula_balance_counter_push = clampf(v, 0.0, 0.22)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_depth", "Forward Input", 0.0, 4.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_depth", "Forward Input", 0.0, 4.0, 0.01,
 		func(): return spatula_balance_depth_input,
 		func(v: float):
 			spatula_balance_depth_input = clampf(v, 0.0, 4.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_unstable", "Fall Force", 0.0, 30.0, 0.1,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_unstable", "Fall Force", 0.0, 30.0, 0.1,
 		func(): return spatula_balance_unstable,
 		func(v: float):
 			spatula_balance_unstable = clampf(v, 0.0, 30.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_drift", "Idle Drift", -8.0, 8.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_drift", "Idle Drift", -8.0, 8.0, 0.01,
 		func(): return spatula_balance_drift,
 		func(v: float):
 			spatula_balance_drift = clampf(v, -8.0, 8.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_damp", "Balance Damping", 0.50, 1.02, 0.001,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_damp", "Balance Damping", 0.50, 1.02, 0.001,
 		func(): return spatula_balance_damp,
 		func(v: float):
 			spatula_balance_damp = clampf(v, 0.50, 1.02)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_tilt", "Max Tilt deg", 10.0, 160.0, 1.0,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_max_tilt", "Max Tilt deg", 10.0, 160.0, 1.0,
 		func(): return spatula_balance_max_tilt,
 		func(v: float):
 			spatula_balance_max_tilt = clampf(v, 10.0, 160.0)
 			_save_spatula_balance_settings()
 	, true)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_tilt", "Fall Tilt deg", 20.0, 179.0, 1.0,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_fall_tilt", "Fall Tilt deg", 20.0, 179.0, 1.0,
 		func(): return spatula_balance_fall_tilt,
 		func(v: float):
 			spatula_balance_fall_tilt = clampf(v, 20.0, 179.0)
 			_save_spatula_balance_settings()
 	, true)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_time", "Fall Time", 0.03, 2.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_fall_time", "Fall Time", 0.03, 2.0, 0.01,
 		func(): return spatula_balance_fall_dur,
 		func(v: float):
 			spatula_balance_fall_dur = clampf(v, 0.03, 2.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_ragdoll_time", "Ragdoll Time", 0.05, 4.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_ragdoll_time", "Ragdoll Time", 0.05, 4.0, 0.01,
 		func(): return spatula_balance_ragdoll_dur,
 		func(v: float):
 			spatula_balance_ragdoll_dur = clampf(v, 0.05, 4.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_hold_time", "Fall Hold Time", 0.0, 3.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_hold_time", "Fall Hold Time", 0.0, 3.0, 0.01,
 		func(): return spatula_balance_ragdoll_hold_dur,
 		func(v: float):
 			spatula_balance_ragdoll_hold_dur = clampf(v, 0.0, 3.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_deg", "Bounce deg", 0.0, 90.0, 1.0,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_bounce_deg", "Bounce deg", 0.0, 90.0, 1.0,
 		func(): return spatula_balance_bounce_deg,
 		func(v: float):
 			spatula_balance_bounce_deg = clampf(v, 0.0, 90.0)
 			_save_spatula_balance_settings()
 	, true)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_time", "Bounce Time", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_bounce_time", "Bounce Time", 0.0, 1.0, 0.01,
 		func(): return spatula_balance_bounce_dur,
 		func(v: float):
 			spatula_balance_bounce_dur = clampf(v, 0.0, 1.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_return_time", "Return Time", 0.02, 3.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_return_time", "Return Time", 0.02, 3.0, 0.01,
 		func(): return spatula_balance_return_dur,
 		func(v: float):
 			spatula_balance_return_dur = clampf(v, 0.02, 3.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_vel", "Max Speed", 0.1, 30.0, 0.1,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_max_vel", "Max Speed", 0.1, 30.0, 0.1,
 		func(): return spatula_balance_max_vel,
 		func(v: float):
 			spatula_balance_max_vel = clampf(v, 0.1, 30.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_body_linear_damp", "Body Linear Damp", 0.0, 8.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_body_linear_damp", "Body Linear Damp", 0.0, 8.0, 0.01,
 		func(): return spatula_balance_body_linear_damp,
 		func(v: float):
 			spatula_balance_body_linear_damp = clampf(v, 0.0, 8.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_body_angular_damp", "Body Angular Damp", 0.0, 8.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_body_angular_damp", "Body Angular Damp", 0.0, 8.0, 0.01,
 		func(): return spatula_balance_body_angular_damp,
 		func(v: float):
 			spatula_balance_body_angular_damp = clampf(v, 0.0, 8.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_bounce", "Floor Bounce", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_floor_bounce", "Floor Bounce", 0.0, 1.0, 0.01,
 		func(): return spatula_balance_floor_bounce,
 		func(v: float):
 			spatula_balance_floor_bounce = clampf(v, 0.0, 1.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_friction", "Floor Friction", 0.0, 2.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_floor_friction", "Floor Friction", 0.0, 2.0, 0.01,
 		func(): return spatula_balance_floor_friction,
 		func(v: float):
 			spatula_balance_floor_friction = clampf(v, 0.0, 2.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_gravity", "Fall Gravity", 0.0, 30.0, 0.1,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_gravity", "Fall Gravity", 0.0, 30.0, 0.1,
 		func(): return spatula_balance_fall_gravity,
 		func(v: float):
 			spatula_balance_fall_gravity = clampf(v, 0.0, 30.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_impact_bounce", "Impact Bounce", 0.0, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_impact_bounce", "Impact Bounce", 0.0, 1.5, 0.01,
 		func(): return spatula_balance_fall_bounce,
 		func(v: float):
 			spatula_balance_fall_bounce = clampf(v, 0.0, 1.5)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_impact_slide_damp", "Impact Slide Damp", 0.0, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_impact_slide_damp", "Impact Slide Damp", 0.0, 1.5, 0.01,
 		func(): return spatula_balance_fall_slide_damp,
 		func(v: float):
 			spatula_balance_fall_slide_damp = clampf(v, 0.0, 1.5)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_impact_spin_damp", "Impact Spin Damp", 0.0, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_impact_spin_damp", "Impact Spin Damp", 0.0, 1.5, 0.01,
 		func(): return spatula_balance_fall_spin_damp,
 		func(v: float):
 			spatula_balance_fall_spin_damp = clampf(v, 0.0, 1.5)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_slide_damp", "Floor Slide Damp", 0.0, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_floor_slide_damp", "Floor Slide Damp", 0.0, 1.5, 0.01,
 		func(): return spatula_balance_floor_slide_damp,
 		func(v: float):
 			spatula_balance_floor_slide_damp = clampf(v, 0.0, 1.5)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_spin_damp", "Floor Spin Damp", 0.0, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_floor_spin_damp", "Floor Spin Damp", 0.0, 1.5, 0.01,
 		func(): return spatula_balance_floor_spin_damp,
 		func(v: float):
 			spatula_balance_floor_spin_damp = clampf(v, 0.0, 1.5)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_whoosh_cd", "Whoosh Cooldown", 0.0, 1.0, 0.01,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_whoosh_cd", "Whoosh Cooldown", 0.0, 1.0, 0.01,
 		func(): return spatula_balance_whoosh_cooldown,
 		func(v: float):
 			spatula_balance_whoosh_cooldown = clampf(v, 0.0, 1.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_off_x", "Cursor Offset X px", -120.0, 120.0, 1.0,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_off_x", "Cursor Offset X px", -120.0, 120.0, 1.0,
 		func(): return spatula_balance_screen_nudge.x,
 		func(v: float):
 			spatula_balance_screen_nudge.x = clampf(v, -120.0, 120.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_off_y", "Cursor Offset Y px", -120.0, 120.0, 1.0,
+	_hidden_add_labeled_slider(hidden_tools_box, "bal_off_y", "Cursor Offset Y px", -120.0, 120.0, 1.0,
 		func(): return spatula_balance_screen_nudge.y,
 		func(v: float):
 			spatula_balance_screen_nudge.y = clampf(v, -120.0, 120.0)
@@ -40042,8 +40083,8 @@ func _build_options_menu() -> void:
 	ing_audio_lab.text = "INGREDIENT AUDIO"
 	UiFontsScript.apply_label(ing_audio_lab, true, 13)
 	ing_audio_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(ing_audio_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ing_touch_vol", "Touch Volume", 0.0, 4.0, 0.05,
+	hidden_audio_box.add_child(ing_audio_lab)
+	_hidden_add_labeled_slider(hidden_audio_box, "ing_touch_vol", "Touch Volume", 0.0, 4.0, 0.05,
 		func(): return ingredient_touch_volume,
 		func(v: float):
 			ingredient_touch_volume = clampf(v, 0.0, 4.0)
@@ -40054,11 +40095,11 @@ func _build_options_menu() -> void:
 	ice_lab.text = "SOFT SERVE POSITION"
 	UiFontsScript.apply_label(ice_lab, true, 13)
 	ice_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(ice_lab)
+	hidden_world_box.add_child(ice_lab)
 
 	var ice_row := HBoxContainer.new()
 	ice_row.add_theme_constant_override("separation", 10)
-	options_hidden_room_tone_box.add_child(ice_row)
+	hidden_world_box.add_child(ice_row)
 	var ice_name := Label.new()
 	ice_name.text = "Camera-Right Offset"
 	ice_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -40087,20 +40128,20 @@ func _build_options_menu() -> void:
 		_apply_icecream_station_position()
 		_save_icecream_station_settings()
 	)
-	options_hidden_room_tone_box.add_child(options_hidden_icecream_pos_slider)
+	hidden_world_box.add_child(options_hidden_icecream_pos_slider)
 
 	var soda_h_lab := Label.new()
 	soda_h_lab.text = "SODA CUP HEIGHTS"
 	UiFontsScript.apply_label(soda_h_lab, true, 13)
 	soda_h_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(soda_h_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_pull_in", "Carry Height (in)", 0.0, 12.0, 0.25,
+	hidden_soda_box.add_child(soda_h_lab)
+	_hidden_add_labeled_slider(hidden_soda_box, "cup_pull_in", "Carry Height (in)", 0.0, 12.0, 0.25,
 		func(): return cup_hold_height / INCH_TO_M,
 		func(v: float):
 			cup_hold_height = clampf(v, 0.0, 12.0) * INCH_TO_M
 			_save_soda_cup_height_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "cup_fill_in", "Fill Seat Above Deck (in)", -8.0, 12.0, 0.25,
+	_hidden_add_labeled_slider(hidden_soda_box, "cup_fill_in", "Fill Seat Above Deck (in)", -8.0, 12.0, 0.25,
 		func(): return cup_fill_extra_y / INCH_TO_M,
 		func(v: float):
 			cup_fill_extra_y = clampf(v, -8.0, 12.0) * INCH_TO_M
@@ -40111,78 +40152,78 @@ func _build_options_menu() -> void:
 	slot_lab.text = "SODA SLOT MACHINE"
 	UiFontsScript.apply_label(slot_lab, true, 13)
 	slot_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(slot_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_size", "Icon Size px", 24.0, 240.0, 1.0,
+	hidden_soda_box.add_child(slot_lab)
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_size", "Icon Size px", 24.0, 240.0, 1.0,
 		func(): return soda_slot_icon_size_px,
 		func(v: float):
 			soda_slot_icon_size_px = clampf(v, 24.0, 240.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed(true)
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_pad", "Icon Padding px", 0.0, 112.0, 1.0,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_pad", "Icon Padding px", 0.0, 112.0, 1.0,
 		func(): return soda_slot_icon_padding_px,
 		func(v: float):
 			soda_slot_icon_padding_px = clampf(v, 0.0, 112.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed(true)
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_x", "Icon X px", -96.0, 96.0, 1.0,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_x", "Icon X px", -96.0, 96.0, 1.0,
 		func(): return soda_slot_icon_offset_px.x,
 		func(v: float):
 			soda_slot_icon_offset_px.x = clampf(v, -96.0, 96.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed(true)
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_y", "Icon Y px", -96.0, 96.0, 1.0,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_y", "Icon Y px", -96.0, 96.0, 1.0,
 		func(): return soda_slot_icon_offset_px.y,
 		func(v: float):
 			soda_slot_icon_offset_px.y = clampf(v, -96.0, 96.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed(true)
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_btn_x", "Button X (in)", -8.0, 8.0, 0.1,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_btn_x", "Button X (in)", -8.0, 8.0, 0.1,
 		func(): return soda_slot_spin_button_offset_in.x,
 		func(v: float):
 			soda_slot_spin_button_offset_in.x = clampf(v, -8.0, 8.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_btn_y", "Button Y (in)", -6.0, 6.0, 0.1,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_btn_y", "Button Y (in)", -6.0, 6.0, 0.1,
 		func(): return soda_slot_spin_button_offset_in.y,
 		func(v: float):
 			soda_slot_spin_button_offset_in.y = clampf(v, -6.0, 6.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_btn_z", "Button Depth (in)", -6.0, 6.0, 0.1,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_btn_z", "Button Depth (in)", -6.0, 6.0, 0.1,
 		func(): return soda_slot_spin_button_offset_in.z,
 		func(v: float):
 			soda_slot_spin_button_offset_in.z = clampf(v, -6.0, 6.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_x", "Text X (in)", -8.0, 8.0, 0.1,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_x", "Text X (in)", -8.0, 8.0, 0.1,
 		func(): return soda_slot_spin_text_offset_in.x,
 		func(v: float):
 			soda_slot_spin_text_offset_in.x = clampf(v, -8.0, 8.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_y", "Text Y (in)", -6.0, 6.0, 0.1,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_y", "Text Y (in)", -6.0, 6.0, 0.1,
 		func(): return soda_slot_spin_text_offset_in.y,
 		func(v: float):
 			soda_slot_spin_text_offset_in.y = clampf(v, -6.0, 6.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_z", "Text Depth (in)", -6.0, 6.0, 0.1,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_z", "Text Depth (in)", -6.0, 6.0, 0.1,
 		func(): return soda_slot_spin_text_offset_in.z,
 		func(v: float):
 			soda_slot_spin_text_offset_in.z = clampf(v, -6.0, 6.0)
 			_save_soda_slot_settings()
 			_apply_soda_slot_settings_changed()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_size", "Text Size", 12.0, 72.0, 1.0,
+	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_size", "Text Size", 12.0, 72.0, 1.0,
 		func(): return soda_slot_spin_text_size,
 		func(v: float):
 			soda_slot_spin_text_size = clampf(v, 12.0, 72.0)
@@ -40194,18 +40235,18 @@ func _build_options_menu() -> void:
 	ao_lab.text = "AMBIENT OCCLUSION"
 	UiFontsScript.apply_label(ao_lab, true, 13)
 	ao_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	options_hidden_room_tone_box.add_child(ao_lab)
-	_options_add_standard_check(options_hidden_room_tone_box, "ssao", "SSAO Enabled")
-	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_radius", "SSAO Radius / Size", 0.2, 4.0, 0.01)
-	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_intensity", "SSAO Intensity", 0.0, 4.0, 0.01)
-	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_power", "SSAO Power", 0.2, 4.0, 0.01)
-	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_horizon", "SSAO Horizon", 0.0, 0.25, 0.001)
-	_options_add_standard_slider(options_hidden_room_tone_box, "ssao_sharpness", "SSAO Sharpness", 0.0, 1.0, 0.01)
-	_options_add_standard_check(options_hidden_room_tone_box, "fake_df_ao", "Fake Distance-Field AO")
-	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_radius", "Fake AO Radius (px)", 2.0, 40.0, 0.5)
-	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_intensity", "Fake AO Intensity", 0.0, 3.0, 0.01)
-	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_contrast", "Fake AO Contrast", 0.5, 4.0, 0.01)
-	_options_add_standard_slider(options_hidden_room_tone_box, "fake_df_ao_bias", "Fake AO Bias", 0.0, 0.01, 0.0001)
+	hidden_render_box.add_child(ao_lab)
+	_options_add_standard_check(hidden_render_box, "ssao", "SSAO Enabled")
+	_options_add_standard_slider(hidden_render_box, "ssao_radius", "SSAO Radius / Size", 0.2, 4.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "ssao_intensity", "SSAO Intensity", 0.0, 4.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "ssao_power", "SSAO Power", 0.2, 4.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "ssao_horizon", "SSAO Horizon", 0.0, 0.25, 0.001)
+	_options_add_standard_slider(hidden_render_box, "ssao_sharpness", "SSAO Sharpness", 0.0, 1.0, 0.01)
+	_options_add_standard_check(hidden_render_box, "fake_df_ao", "Fake Distance-Field AO")
+	_options_add_standard_slider(hidden_render_box, "fake_df_ao_radius", "Fake AO Radius (px)", 2.0, 40.0, 0.5)
+	_options_add_standard_slider(hidden_render_box, "fake_df_ao_intensity", "Fake AO Intensity", 0.0, 3.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "fake_df_ao_contrast", "Fake AO Contrast", 0.5, 4.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "fake_df_ao_bias", "Fake AO Bias", 0.0, 0.01, 0.0001)
 
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
