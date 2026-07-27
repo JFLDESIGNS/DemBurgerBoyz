@@ -1007,6 +1007,8 @@ var slot_camera_base_pos := Vector3(0.0, 1.65, -1.62)
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
 var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
 var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
+var soda_tank_root: Node3D = null
+var soda_tuning_debug_root: Node3D = null
 var _soda_low_warned: Dictionary = {} ## flavor id -> already flashed 25% warning
 const SODA_TANK_LOW_WARN := 0.25 ## Flash once when syrup crosses this level
 const SODA_TANK_EMPTY := 0.02 ## Truly empty — stop pouring
@@ -1762,6 +1764,40 @@ const SODA_MODEL_ICE_SPOUT := Vector3(0.1045, 0.252, -0.159)
 const SODA_CLIP_BACK_M := 0.0254 ## ~1 inch into the cabinet
 const SODA_CLIP_REST_TILT_X := -14.0 ## tip the bottom toward the cook a bit
 const SODA_CLIP_POUR_EXTRA_X := -16.0 ## extra tip while cup is filling
+const SODA_TUNING_CFG_SECTION := "soda_machine_tuning"
+var soda_station_pos := SODA_STATION_POS
+var soda_station_yaw := 180.0
+var soda_station_scale := SODA_FOUNTAIN_SCALE
+var soda_nozzle_offsets_in: Dictionary = {
+	"cola": Vector3.ZERO,
+	"lemon_lime": Vector3.ZERO,
+	"orange": Vector3.ZERO,
+	"ice": Vector3.ZERO,
+}
+var soda_blocker_half_x := 0.58
+var soda_blocker_height := 1.30
+var soda_blocker_front_z := 0.055
+var soda_blocker_fill_z := -0.10
+var soda_blocker_debug := false
+var soda_cup_rest_x := -0.2736
+var soda_cup_rest_z := 0.42
+var soda_tray_first_x := -0.38
+var soda_tray_spacing := 0.20
+var soda_tray_magnet_radius := 0.26
+var soda_tray_release_radius := 0.34
+var soda_tray_magnet_pull := 0.16
+var soda_soft_magnet_radius := 0.28
+var soda_soft_acquire := 0.20
+var soda_soft_release := 0.11
+var soda_soft_tight := 0.035
+var soda_soft_pull := 0.58
+var soda_soft_unlock_grace := 0.55
+var soda_soft_debug := false
+var soda_fill_follow_rate := 28.0
+var soda_fill_max_speed := 4.2
+var soda_tank_visual_scale := 0.68
+var soda_tank_y_offset_in := 5.0
+var soda_tank_z_offset_in := 0.5
 const CUP_COLLISION_LAYER := 1024
 const CUP_RACK_COLLISION_LAYER := 2048 ## empty CUPS peg pick volume (must not steal cup rays)
 const SODA_FLAVOR_COLLISION_LAYER := 4096
@@ -22942,6 +22978,154 @@ func _save_soda_cup_height_settings() -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
+func _load_soda_tuning_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(SODA_TUNING_CFG_SECTION):
+		return
+	soda_station_pos = Vector3(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_z", soda_station_pos.z)), -2.0, 3.0)
+	)
+	soda_station_yaw = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_yaw", soda_station_yaw)), -360.0, 360.0)
+	soda_station_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_scale", soda_station_scale)), 0.5, 3.5)
+	for fid in _soda_station_tip_ids():
+		soda_nozzle_offsets_in[fid] = Vector3(
+			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, (soda_nozzle_offsets_in.get(fid, Vector3.ZERO) as Vector3).x)), -12.0, 12.0),
+			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, (soda_nozzle_offsets_in.get(fid, Vector3.ZERO) as Vector3).y)), -12.0, 12.0),
+			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, (soda_nozzle_offsets_in.get(fid, Vector3.ZERO) as Vector3).z)), -12.0, 12.0)
+		)
+	soda_blocker_half_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_half_x", soda_blocker_half_x)), 0.05, 1.5)
+	soda_blocker_height = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)), 0.05, 2.5)
+	soda_blocker_front_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)), -0.7, 0.7)
+	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), -0.7, 0.7)
+	soda_blocker_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_debug", soda_blocker_debug))
+	soda_cup_rest_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_x", soda_cup_rest_x)), -1.0, 1.0)
+	soda_cup_rest_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)), -0.2, 1.0)
+	soda_tray_first_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_first_x", soda_tray_first_x)), -1.0, 0.7)
+	soda_tray_spacing = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_spacing", soda_tray_spacing)), 0.04, 0.45)
+	soda_tray_magnet_radius = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_magnet_radius", soda_tray_magnet_radius)), 0.02, 0.8)
+	soda_tray_release_radius = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_release_radius", soda_tray_release_radius)), 0.02, 0.9)
+	soda_tray_magnet_pull = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_magnet_pull", soda_tray_magnet_pull)), 0.0, 1.0)
+	soda_soft_magnet_radius = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_radius", soda_soft_magnet_radius)), 0.02, 1.0)
+	soda_soft_acquire = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_acquire", soda_soft_acquire)), 0.01, 0.8)
+	soda_soft_release = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_release", soda_soft_release)), 0.01, 0.8)
+	soda_soft_tight = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_tight", soda_soft_tight)), 0.0, 0.4)
+	soda_soft_pull = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_pull", soda_soft_pull)), 0.0, 1.5)
+	soda_soft_unlock_grace = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", soda_soft_unlock_grace)), 0.0, 3.0)
+	soda_soft_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_debug", soda_soft_debug))
+	soda_fill_follow_rate = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_follow_rate", soda_fill_follow_rate)), 1.0, 80.0)
+	soda_fill_max_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)), 0.2, 12.0)
+	soda_tank_visual_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_scale", soda_tank_visual_scale)), 0.2, 1.4)
+	soda_tank_y_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)), -8.0, 16.0)
+	soda_tank_z_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)), -8.0, 8.0)
+
+
+func _save_soda_tuning_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_z", soda_station_pos.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_yaw", soda_station_yaw)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_scale", soda_station_scale)
+	for fid in _soda_station_tip_ids():
+		var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, off.x)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, off.y)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, off.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_half_x", soda_blocker_half_x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_debug", soda_blocker_debug)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_rest_x", soda_cup_rest_x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tray_first_x", soda_tray_first_x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tray_spacing", soda_tray_spacing)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tray_magnet_radius", soda_tray_magnet_radius)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tray_release_radius", soda_tray_release_radius)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tray_magnet_pull", soda_tray_magnet_pull)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_radius", soda_soft_magnet_radius)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_acquire", soda_soft_acquire)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_release", soda_soft_release)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_tight", soda_soft_tight)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_pull", soda_soft_pull)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", soda_soft_unlock_grace)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_debug", soda_soft_debug)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "fill_follow_rate", soda_fill_follow_rate)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_scale", soda_tank_visual_scale)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
+	if soda_root != null and is_instance_valid(soda_root):
+		soda_root.position = soda_station_pos
+		soda_root.rotation_degrees.y = soda_station_yaw
+		var visual := soda_root.get_node_or_null("FountainModel") as Node3D
+		if visual != null:
+			visual.scale = Vector3.ONE * soda_station_scale
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip == null:
+			continue
+		var base: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+		tip.position = _soda_model_local(base + _soda_nozzle_offset_model(fid))
+	if soda_root != null and is_instance_valid(soda_root):
+		cup_rest = soda_root.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
+		_layout_parked_cups()
+	if rebuild_tanks:
+		_rebuild_soda_tank_visuals()
+	_refresh_soda_tuning_debug_visuals()
+
+
+func _sync_soda_tuning_hidden_ui() -> void:
+	var vals := {
+		"soda_machine_x": soda_station_pos.x,
+		"soda_machine_y": soda_station_pos.y,
+		"soda_machine_z": soda_station_pos.z,
+		"soda_machine_yaw": soda_station_yaw,
+		"soda_machine_scale": soda_station_scale,
+		"soda_block_x": soda_blocker_half_x,
+		"soda_block_h": soda_blocker_height,
+		"soda_block_front": soda_blocker_front_z,
+		"soda_block_fill": soda_blocker_fill_z,
+		"soda_rest_x": soda_cup_rest_x,
+		"soda_rest_z": soda_cup_rest_z,
+		"soda_tray_x": soda_tray_first_x,
+		"soda_tray_spacing": soda_tray_spacing,
+		"soda_tray_mag": soda_tray_magnet_radius,
+		"soda_tray_release": soda_tray_release_radius,
+		"soda_tray_pull": soda_tray_magnet_pull,
+		"soda_soft_radius": soda_soft_magnet_radius,
+		"soda_soft_acquire": soda_soft_acquire,
+		"soda_soft_release": soda_soft_release,
+		"soda_soft_tight": soda_soft_tight,
+		"soda_soft_pull": soda_soft_pull,
+		"soda_soft_grace": soda_soft_unlock_grace,
+		"soda_fill_follow": soda_fill_follow_rate,
+		"soda_fill_speed": soda_fill_max_speed,
+		"soda_tank_scale": soda_tank_visual_scale,
+		"soda_tank_y": soda_tank_y_offset_in,
+		"soda_tank_z": soda_tank_z_offset_in,
+	}
+	for fid in _soda_station_tip_ids():
+		var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
+		vals["%s_nozzle_x" % fid] = off.x
+		vals["%s_nozzle_y" % fid] = off.y
+		vals["%s_nozzle_z" % fid] = off.z
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
 func _sync_soda_cup_height_hidden_ui() -> void:
 	var vals := {
 		"cup_pull_in": cup_hold_height / INCH_TO_M,
@@ -23057,6 +23241,65 @@ func _hidden_add_tree_light_slider(parent: Control, key: String, label_text: Str
 
 func _hidden_add_tree_xform_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, setter: Callable) -> void:
 	_hidden_add_labeled_slider(parent, key, label_text, min_v, max_v, step, getter, setter, key == "tyaw")
+
+
+func _hidden_add_soda_tuning_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, setter: Callable, rebuild_tanks: bool = false, degrees_fmt: bool = false) -> void:
+	_hidden_add_labeled_slider(parent, key, label_text, min_v, max_v, step, getter, func(val: float):
+		setter.call(val)
+		_save_soda_tuning_settings()
+		_apply_soda_tuning_settings_changed(rebuild_tanks)
+	, degrees_fmt)
+
+
+func _hidden_add_soda_debug_check(parent: Control, text: String, getter: Callable, setter: Callable) -> void:
+	var chk := CheckButton.new()
+	chk.text = text
+	chk.button_pressed = bool(getter.call())
+	chk.custom_minimum_size = Vector2(0, 32)
+	chk.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(chk, false, 12)
+	chk.toggled.connect(func(on: bool):
+		setter.call(on)
+		_save_soda_tuning_settings()
+		_refresh_soda_tuning_debug_visuals()
+	)
+	parent.add_child(chk)
+
+
+func _hidden_add_soda_nozzle_group(parent: Control, fid: String, label_prefix: String) -> void:
+	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_x" % fid, "%s Nozzle X (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(): return _soda_nozzle_offset_axis(fid, "x"),
+		func(v: float): _set_soda_nozzle_offset_axis(fid, "x", v), true)
+	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_y" % fid, "%s Nozzle Y (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(): return _soda_nozzle_offset_axis(fid, "y"),
+		func(v: float): _set_soda_nozzle_offset_axis(fid, "y", v), true)
+	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_z" % fid, "%s Nozzle Z (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(): return _soda_nozzle_offset_axis(fid, "z"),
+		func(v: float): _set_soda_nozzle_offset_axis(fid, "z", v), true)
+
+
+func _soda_nozzle_offset_axis(fid: String, axis: String) -> float:
+	var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
+	match axis:
+		"x":
+			return off.x
+		"y":
+			return off.y
+		"z":
+			return off.z
+	return 0.0
+
+
+func _set_soda_nozzle_offset_axis(fid: String, axis: String, val: float) -> void:
+	var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
+	match axis:
+		"x":
+			off.x = clampf(val, -12.0, 12.0)
+		"y":
+			off.y = clampf(val, -12.0, 12.0)
+		"z":
+			off.z = clampf(val, -12.0, 12.0)
+	soda_nozzle_offsets_in[fid] = off
 
 
 func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
@@ -23359,6 +23602,7 @@ func _build_menu_board_decal() -> void:
 func _build_soda_station() -> void:
 	## Compact fountain (~½ old height) with clear flavor tanks on top.
 	_load_soda_cup_height_settings()
+	_load_soda_tuning_settings()
 	if soda_root != null and is_instance_valid(soda_root):
 		soda_root.queue_free()
 	soda_root = null
@@ -23389,6 +23633,9 @@ func _build_soda_station() -> void:
 	if soda_slot_bulb_root != null and is_instance_valid(soda_slot_bulb_root):
 		soda_slot_bulb_root.queue_free()
 	soda_slot_bulb_root = null
+	if soda_tank_root != null and is_instance_valid(soda_tank_root):
+		soda_tank_root.queue_free()
+	soda_tank_root = null
 	soda_slot_bulb_mats.clear()
 	soda_slot_spin_label = null
 	soda_slot_spin_t = 0.0
@@ -23460,8 +23707,8 @@ func _build_soda_station() -> void:
 
 	var root := Node3D.new()
 	root.name = "SodaStation"
-	root.position = SODA_STATION_POS
-	root.rotation_degrees = SODA_STATION_ROT
+	root.position = soda_station_pos
+	root.rotation_degrees = Vector3(0.0, soda_station_yaw, 0.0)
 	world.add_child(root)
 	soda_root = root
 
@@ -23471,7 +23718,7 @@ func _build_soda_station() -> void:
 		visual.name = "FountainModel"
 		## sodaedit face is on local −Z; yaw 180 so logos face the cook (+Z).
 		visual.rotation_degrees.y = 180.0
-		visual.scale = Vector3.ONE * SODA_FOUNTAIN_SCALE
+		visual.scale = Vector3.ONE * soda_station_scale
 		root.add_child(visual)
 		_apply_soda_fountain_textures(visual)
 	else:
@@ -23521,12 +23768,13 @@ func _build_soda_station() -> void:
 	_add_soda_spout_marker_only(root, true)
 	_add_soda_spout_marker_only(root, false)
 	_sync_soda_spout_to_flavor()
+	_rebuild_soda_tank_visuals()
 
 	## Park + fill seat on the drip-grate top (not tip-relative mid-air).
 	cup_rest = root.to_global(Vector3(
-		CUP_TRAY_FIRST_X * 0.72,
+		soda_cup_rest_x,
 		CUP_TRAY_DECK_LOCAL_Y,
-		0.42
+		soda_cup_rest_z
 	))
 	cup_rest_rot = Vector3.ZERO
 
@@ -23538,6 +23786,7 @@ func _build_soda_station() -> void:
 	lamp.shadow_enabled = false
 	lamp.position = Vector3(0.0, 0.85, 0.35)
 	root.add_child(lamp)
+	_refresh_soda_tuning_debug_visuals()
 
 	_build_soda_cup_rack(root)
 	_refresh_soda_flavor_lights()
@@ -23731,6 +23980,7 @@ func _soda_slot_symbol_material(sym: String) -> StandardMaterial3D:
 	mat.emission_energy_multiplier = 0.75
 	mat.albedo_color = Color.WHITE
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.78)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.no_depth_test = false
 	mat.render_priority = 14
@@ -24180,7 +24430,12 @@ func _update_soda_dispense_clips(delta: float, pouring_soda: bool, pouring_ice: 
 func _soda_model_local(model_pos: Vector3) -> Vector3:
 	## sodaedit1 face is on −Z; FountainModel is yawed 180° so face points at the cook.
 	var p := Vector3(-model_pos.x, model_pos.y, -model_pos.z)
-	return p * SODA_FOUNTAIN_SCALE
+	return p * soda_station_scale
+
+
+func _soda_nozzle_offset_model(fid: String) -> Vector3:
+	var off_in: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
+	return off_in * INCH_TO_M / maxf(soda_station_scale, 0.001)
 
 
 func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
@@ -24189,7 +24444,8 @@ func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 		for fid in SODA_FLAVORS:
 			var tip := Marker3D.new()
 			tip.name = "SodaSpoutTip_%s" % fid
-			tip.position = _soda_model_local(SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO)))
+			var base: Vector3 = SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+			tip.position = _soda_model_local(base + _soda_nozzle_offset_model(fid))
 			parent.add_child(tip)
 			soda_spout_markers[fid] = tip
 		soda_spout_marker = soda_spout_markers.get("cola", null)
@@ -24197,7 +24453,7 @@ func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 	else:
 		var tip := Marker3D.new()
 		tip.name = "IceSpoutTip"
-		tip.position = _soda_model_local(SODA_MODEL_ICE_SPOUT)
+		tip.position = _soda_model_local(SODA_MODEL_ICE_SPOUT + _soda_nozzle_offset_model("ice"))
 		parent.add_child(tip)
 		ice_spout_marker = tip
 		soda_spout_markers["ice"] = tip
@@ -24252,8 +24508,87 @@ func _update_soda_station_focus_for_cup() -> void:
 	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
 		_set_soda_active_station("")
 		return
-	var near := _nearest_soda_station_for_pos(cup_root.global_position, CUP_MAGNET_RADIUS * 1.35)
+	var near := _nearest_soda_station_for_pos(cup_root.global_position, soda_soft_magnet_radius * 1.35)
 	_set_soda_active_station(str(near.get("id", "")))
+
+
+func _rebuild_soda_tank_visuals() -> void:
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	if soda_tank_root != null and is_instance_valid(soda_tank_root):
+		soda_tank_root.queue_free()
+	soda_tank_root = Node3D.new()
+	soda_tank_root.name = "FlavorTanks"
+	soda_root.add_child(soda_tank_root)
+	soda_tank_syrup.clear()
+	soda_tank_bubbles.clear()
+	for fid in SODA_FLAVORS:
+		var base: Vector3 = SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+		var pos := _soda_model_local(base + _soda_nozzle_offset_model(fid))
+		pos.y += soda_tank_y_offset_in * INCH_TO_M
+		pos.z += soda_tank_z_offset_in * INCH_TO_M
+		_add_soda_flavor_tank(soda_tank_root, fid, pos)
+		var tank := soda_tank_root.get_node_or_null("Tank_%s" % fid) as Node3D
+		if tank != null:
+			tank.scale = Vector3.ONE * soda_tank_visual_scale
+	_refresh_all_soda_tank_levels()
+	_refresh_soda_tank_bubbles()
+
+
+func _make_soda_debug_mat(col: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = 30
+	return mat
+
+
+func _refresh_soda_tuning_debug_visuals() -> void:
+	if soda_tuning_debug_root != null and is_instance_valid(soda_tuning_debug_root):
+		soda_tuning_debug_root.queue_free()
+	soda_tuning_debug_root = null
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	if not soda_blocker_debug and not soda_soft_debug:
+		return
+	soda_tuning_debug_root = Node3D.new()
+	soda_tuning_debug_root.name = "SodaTuningDebug"
+	soda_root.add_child(soda_tuning_debug_root)
+	if soda_blocker_debug:
+		for spec in [
+			{"name": "FrontBlock", "z": soda_blocker_front_z, "col": Color(1.0, 0.35, 0.12, 0.22)},
+			{"name": "FillBlock", "z": soda_blocker_fill_z, "col": Color(0.25, 0.75, 1.0, 0.18)},
+		]:
+			var box := MeshInstance3D.new()
+			box.name = str(spec["name"])
+			var mesh := BoxMesh.new()
+			mesh.size = Vector3(soda_blocker_half_x * 2.0, soda_blocker_height, 0.018)
+			box.mesh = mesh
+			box.position = Vector3(0.0, soda_blocker_height * 0.5, float(spec["z"]))
+			box.material_override = _make_soda_debug_mat(spec["col"])
+			box.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			soda_tuning_debug_root.add_child(box)
+	if soda_soft_debug:
+		for fid in _soda_station_tip_ids():
+			var tip := _soda_tip_for_station(fid)
+			if tip == null:
+				continue
+			var seat := soda_root.to_local(_cup_target_for_spout(tip))
+			var disc := MeshInstance3D.new()
+			disc.name = "SoftLock_%s" % fid
+			var cyl := CylinderMesh.new()
+			cyl.top_radius = soda_soft_magnet_radius
+			cyl.bottom_radius = soda_soft_magnet_radius
+			cyl.height = 0.006
+			disc.mesh = cyl
+			disc.position = seat
+			disc.material_override = _make_soda_debug_mat(Color(0.7, 1.0, 0.25, 0.20))
+			disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			soda_tuning_debug_root.add_child(disc)
 
 
 func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
@@ -28194,7 +28529,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = rack.to_global(stack_base)
 	cup_home_rot = Vector3.ZERO
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(CUP_TRAY_FIRST_X, CUP_TRAY_DECK_LOCAL_Y, 0.54))
+		cup_rest = station.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
 		cup_rest_rot = Vector3.ZERO
 	_spawn_and_bind_empty_cup()
 
@@ -28456,7 +28791,7 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 		return
 	var logo := MeshInstance3D.new()
 	logo.name = "BurgerPalsCupLogo"
-	logo.mesh = _make_cup_curved_label_mesh(1.462, 0.084, CUP_SHELL_H * 0.54, 16, 4, 0.0024)
+	logo.mesh = _make_cup_curved_label_mesh(1.462, 0.084, CUP_SHELL_H * 0.54, 16, 4, 0.0065)
 	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
@@ -28483,13 +28818,13 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 
 	var gloss := MeshInstance3D.new()
 	gloss.name = "BurgerPalsCupLogoGloss"
-	gloss.mesh = _make_cup_curved_label_mesh(1.343, 0.028, CUP_SHELL_H * 0.64, 14, 2, 0.0028)
+	gloss.mesh = _make_cup_curved_label_mesh(1.343, 0.028, CUP_SHELL_H * 0.64, 14, 2, 0.0075)
 	gloss.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var gloss_mat := StandardMaterial3D.new()
 	gloss_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	gloss_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	gloss_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	gloss_mat.albedo_color = Color(0.82, 0.94, 1.0, 0.14)
+	gloss_mat.albedo_color = Color(0.82, 0.94, 1.0, 0.20)
 	gloss_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	gloss_mat.roughness = 0.03
 	gloss_mat.metallic = 0.0
@@ -28617,8 +28952,8 @@ func _cup_small_display_yaw(root: Node3D = null) -> float:
 
 func _tray_slot_local(slot: int) -> Vector3:
 	## local -X is screen-left with soda yaw 180. Slots stay fixed once assigned.
-	var lx := CUP_TRAY_FIRST_X + float(clampi(slot, 0, CUP_MAX - 1)) * CUP_TRAY_SPACING
-	lx = clampf(lx, CUP_TRAY_FIRST_X, 0.28)
+	var lx := soda_tray_first_x + float(clampi(slot, 0, CUP_MAX - 1)) * soda_tray_spacing
+	lx = clampf(lx, soda_tray_first_x, 0.28)
 	return Vector3(lx, CUP_TRAY_DECK_LOCAL_Y, 0.54)
 
 
@@ -28645,7 +28980,7 @@ func _tray_slot_global(slot: int) -> Vector3:
 	if soda_root != null and is_instance_valid(soda_root):
 		return soda_root.to_global(local)
 	if cup_rest != Vector3.ZERO:
-		return cup_rest + Vector3(float(slot) * CUP_TRAY_SPACING, 0.0, 0.0)
+		return cup_rest + Vector3(float(slot) * soda_tray_spacing, 0.0, 0.0)
 	return cup_home
 
 
@@ -28668,14 +29003,14 @@ func _cup_soft_lock_tray_target(hit: Vector3, hold_y: float) -> Vector3:
 		return hit
 	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
 		return hit
-	var slot := _nearest_free_tray_slot(hit, CUP_TRAY_MAGNET_RADIUS, cup_root)
+	var slot := _nearest_free_tray_slot(hit, soda_tray_magnet_radius, cup_root)
 	if slot < 0:
 		return hit
 	var target := _tray_slot_global(slot)
 	target.y = hold_y
 	var d := Vector2(hit.x - target.x, hit.z - target.z).length()
-	var amt := clampf(1.0 - d / CUP_TRAY_MAGNET_RADIUS, 0.0, 1.0)
-	amt = amt * amt * CUP_TRAY_MAGNET_PULL
+	var amt := clampf(1.0 - d / soda_tray_magnet_radius, 0.0, 1.0)
+	amt = amt * amt * soda_tray_magnet_pull
 	return hit.lerp(target, amt)
 
 
@@ -28692,7 +29027,7 @@ func _assign_free_tray_slot(c: Node3D) -> int:
 func _assign_preferred_or_free_tray_slot(c: Node3D) -> int:
 	if c == null or not is_instance_valid(c):
 		return 0
-	var slot := _nearest_free_tray_slot(c.global_position, CUP_TRAY_RELEASE_RADIUS, c)
+	var slot := _nearest_free_tray_slot(c.global_position, soda_tray_release_radius, c)
 	if slot < 0:
 		slot = int(c.get_meta("tray_slot", -1))
 	if slot < 0 or slot >= CUP_MAX or _tray_slot_taken(slot, c):
@@ -28991,7 +29326,7 @@ func _make_solo_cup_shell_mesh(
 func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
 	## Clear plastic — thin alpha so soda shows through (no Fresnel glow).
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.92, 0.96, 1.0, clampf(alpha, 0.08, 0.65))
+	mat.albedo_color = Color(0.92, 0.96, 1.0, clampf(alpha * 0.65, 0.035, 0.42))
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.roughness = 0.1
 	mat.metallic = 0.0
@@ -29001,7 +29336,7 @@ func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	mat.clearcoat_enabled = true
-	mat.clearcoat = 0.25
+	mat.clearcoat = 0.12
 	mat.clearcoat_roughness = 0.08
 	mat.no_depth_test = true
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
@@ -30123,8 +30458,8 @@ func _cup_soda_face_dir() -> Vector3:
 func _cup_soda_front_z() -> float:
 	## Firm wall only during the fresh-grab window; then open the fill bay.
 	if _cup_grab_front_block_t > 0.0:
-		return CUP_SODA_FRONT_Z
-	return CUP_SODA_FRONT_Z_FILL
+		return soda_blocker_front_z
+	return soda_blocker_fill_z
 
 
 func _cup_rack_front_grab_pos() -> Vector3:
@@ -30138,7 +30473,7 @@ func _cup_rack_front_grab_pos() -> Vector3:
 	var pos := seat + face * FRONT_M + Vector3(0.0, 0.04, 0.0)
 	pos.y = lerpf(seat.y + 0.06, hold_y, 0.55)
 	## Stay on the cook side of the invisible soda wall (grab-block depth).
-	pos = _clamp_cup_to_machine_front(pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, _cup_soda_front_z())
+	pos = _clamp_cup_to_machine_front(pos, soda_root, soda_blocker_half_x, soda_blocker_height, _cup_soda_front_z())
 	return pos
 
 
@@ -30182,12 +30517,12 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 			if to_front < 0.0:
 				end += face * (-to_front)
 			end = _clamp_cup_to_machine_front(
-				end, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z
+				end, soda_root, soda_blocker_half_x, soda_blocker_height, soda_blocker_front_z
 			)
 		elif not _cup_near_fill_seat(end):
 			## After the block: light front wall only — fill bay stays open.
 			end = _clamp_cup_to_machine_front(
-				end, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, CUP_SODA_FRONT_Z_FILL
+				end, soda_root, soda_blocker_half_x, soda_blocker_height, soda_blocker_fill_z
 			)
 	## Single smooth cubic: nest → soft mid → hand (tracks cursor the whole way).
 	var mid := _cup_draw_from.lerp(end, 0.42) + face * 0.05 + Vector3(0.0, 0.09, 0.0)
@@ -30269,15 +30604,15 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
 		## Hard break if the hand is past the leash — don't keep tugging.
-		if locked_d > CUP_FILL_RELEASE:
+		if locked_d > soda_soft_release:
 			_cup_spout_lock = null
-			_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
+			_cup_spout_unlock_grace = soda_soft_unlock_grace
 			return hit
 		## Center is firm; edge pull fades hard so a short drag frees the cup.
-		var tight := clampf(1.0 - locked_d / CUP_FILL_RELEASE, 0.0, 1.0)
-		var pull_xz := lerpf(0.12, CUP_FILL_LOCK_PULL, tight * tight)
-		if locked_d <= CUP_FILL_TIGHT:
-			pull_xz = CUP_FILL_LOCK_PULL
+		var tight := clampf(1.0 - locked_d / soda_soft_release, 0.0, 1.0)
+		var pull_xz := lerpf(0.12, soda_soft_pull, tight * tight)
+		if locked_d <= soda_soft_tight:
+			pull_xz = soda_soft_pull
 		var out := hit
 		out.x = lerpf(hit.x, locked_target.x, pull_xz)
 		out.z = lerpf(hit.z, locked_target.z, pull_xz)
@@ -30286,7 +30621,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 	var best_node: Node3D = null
 	var best_target := Vector3.ZERO
-	var best_d := CUP_MAGNET_RADIUS
+	var best_d := soda_soft_magnet_radius
 	for tip in candidates:
 		var tpos := _cup_target_for_spout(tip)
 		var d := Vector2(hit.x - tpos.x, hit.z - tpos.z).length()
@@ -30296,12 +30631,12 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 			best_target = tpos
 	if best_node == null:
 		return hit
-	if best_d <= CUP_FILL_ACQUIRE:
+	if best_d <= soda_soft_acquire:
 		_cup_spout_lock = best_node
-	var pull := clampf(1.0 - best_d / CUP_MAGNET_RADIUS, 0.0, 1.0)
+	var pull := clampf(1.0 - best_d / soda_soft_magnet_radius, 0.0, 1.0)
 	pull = pull * pull
 	## Stronger pre-lock tug so the cup can cross the cabinet lip into the seat.
-	var tug := 0.72 if best_d <= CUP_FILL_ACQUIRE * 1.35 else 0.48
+	var tug := 0.72 if best_d <= soda_soft_acquire * 1.35 else 0.48
 	var out2 := hit
 	out2.x = lerpf(hit.x, best_target.x, pull * tug)
 	out2.z = lerpf(hit.z, best_target.z, pull * tug)
@@ -30318,14 +30653,14 @@ func _cup_near_fill_seat(pos: Vector3) -> bool:
 			tips.append(tip)
 	for tip in tips:
 		var tpos := _cup_target_for_spout(tip)
-		if Vector2(pos.x - tpos.x, pos.z - tpos.z).length() <= CUP_MAGNET_RADIUS * 1.25:
+		if Vector2(pos.x - tpos.x, pos.z - tpos.z).length() <= soda_soft_magnet_radius * 1.25:
 			return true
 	return false
 
 
 func _cup_deck_fill_y() -> float:
 	## Cup-bottom Y on the drip grate (+ Hidden fill offset). Never tip / carry height.
-	var deck := SODA_STATION_POS.y + CUP_TRAY_DECK_LOCAL_Y
+	var deck := soda_station_pos.y + CUP_TRAY_DECK_LOCAL_Y
 	if soda_root != null and is_instance_valid(soda_root):
 		deck = soda_root.to_global(Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y, 0.0)).y
 	elif cup_rest != Vector3.ZERO:
@@ -30352,7 +30687,7 @@ func _cup_fill_spout_nearby() -> Node3D:
 	if cup_root == null or not is_instance_valid(cup_root):
 		return null
 	var best: Node3D = null
-	var best_d := CUP_MAGNET_RADIUS
+	var best_d := soda_soft_magnet_radius
 	var tips: Array[Node3D] = []
 	for fid in _soda_station_tip_ids():
 		var tip := _soda_tip_for_station(fid)
@@ -30412,7 +30747,7 @@ func _update_held_cup(delta: float) -> void:
 		var prev := cup_root.global_position
 		## Slight weight when full — keep it responsive (was down to 0.55).
 		var heavy := lerpf(1.0, 0.82, clampf(cup_soda_fill, 0.0, 1.0))
-		var follow_rate := CUP_FILL_FOLLOW_RATE if can_use_fill_bay else CUP_FOLLOW_RATE * heavy
+		var follow_rate := soda_fill_follow_rate if can_use_fill_bay else CUP_FOLLOW_RATE * heavy
 		var follow := clampf(delta * follow_rate, 0.0, 1.0)
 		if _cup_spout_unlock_grace > 0.0:
 			follow *= 0.72
@@ -30433,7 +30768,7 @@ func _update_held_cup(delta: float) -> void:
 				_cup_vel.z *= clampf(1.0 - delta * 6.0, 0.0, 1.0)
 				_cup_vel.y = 0.0
 		var step := desired - prev
-		var max_step := (CUP_FILL_FOLLOW_MAX_SPEED if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
+		var max_step := (soda_fill_max_speed if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
 			## Never rate-limit the drop onto the drip deck — that's the whole point of first fill.
 			if can_use_fill_bay:
@@ -30528,7 +30863,7 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 		return world_pos
 	var front_z := _cup_soda_front_z()
 	var clamped := _clamp_cup_to_machine_front(
-		world_pos, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, front_z
+		world_pos, soda_root, soda_blocker_half_x, soda_blocker_height, front_z
 	)
 	clamped = _clamp_cup_to_machine_front(
 		clamped, icecream_root, CUP_ICECREAM_FRONT_HALF_X, CUP_ICECREAM_FRONT_HEIGHT, CUP_ICECREAM_FRONT_Z
@@ -30578,7 +30913,7 @@ func _resolve_cup_against_soda(world_pos: Vector3, allow_customer_reach: bool = 
 	var out_center: Vector3 = soda_root.global_transform * resolved
 	var out := out_center - Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	out = _clamp_cup_to_machine_front(
-		out, soda_root, CUP_SODA_FRONT_HALF_X, CUP_SODA_FRONT_HEIGHT, front_z
+		out, soda_root, soda_blocker_half_x, soda_blocker_height, front_z
 	)
 	out = _clamp_cup_to_machine_front(
 		out, icecream_root, CUP_ICECREAM_FRONT_HALF_X, CUP_ICECREAM_FRONT_HEIGHT, CUP_ICECREAM_FRONT_Z
@@ -32300,7 +32635,7 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 	## Aim a bit high during the arc; settle bounce parks the final sit height.
 	_cup_flip_end = Vector3(aim.x, _cup_flip_land_y_for_pose(pose), aim.z)
 	_cup_spout_lock = null
-	_cup_spout_unlock_grace = CUP_FILL_UNLOCK_GRACE
+	_cup_spout_unlock_grace = soda_soft_unlock_grace
 	_cup_pouring = false
 	_hide_soda_stream()
 	if game_audio and game_audio.has_method("set_ice_grind"):
@@ -33312,7 +33647,7 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 func _cup_drip_tray_fallback() -> Vector3:
 	## Safe put-down when cup_rest isn't ready — never the CUPS dispenser nest.
 	if soda_root != null and is_instance_valid(soda_root):
-		return soda_root.to_global(Vector3(CUP_TRAY_FIRST_X, CUP_TRAY_DECK_LOCAL_Y, 0.54))
+		return soda_root.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
 	return cup_home
 
 
@@ -40216,6 +40551,103 @@ func _build_options_menu() -> void:
 			_save_soda_cup_height_settings()
 	)
 
+	_hidden_add_section(hidden_soda_box, "SODA MACHINE TUNING")
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_x", "Machine X", -4.0, 4.0, 0.01,
+		func(): return soda_station_pos.x,
+		func(v: float): soda_station_pos.x = clampf(v, -4.0, 4.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_y", "Machine Height", 0.0, 2.4, 0.01,
+		func(): return soda_station_pos.y,
+		func(v: float): soda_station_pos.y = clampf(v, 0.0, 2.4))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_z", "Machine Z", -2.0, 3.0, 0.01,
+		func(): return soda_station_pos.z,
+		func(v: float): soda_station_pos.z = clampf(v, -2.0, 3.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_yaw", "Machine Yaw", -360.0, 360.0, 1.0,
+		func(): return soda_station_yaw,
+		func(v: float): soda_station_yaw = clampf(v, -360.0, 360.0), false, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_scale", "Machine Scale", 0.5, 3.5, 0.01,
+		func(): return soda_station_scale,
+		func(v: float): soda_station_scale = clampf(v, 0.5, 3.5), true)
+
+	_hidden_add_section(hidden_soda_box, "SODA FILL NOZZLES")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Cola")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "lemon_lime", "Lime")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "orange", "Orange")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "ice", "Ice")
+
+	_hidden_add_section(hidden_soda_box, "SODA TANK VISUALS")
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_scale", "Tank Size", 0.2, 1.4, 0.01,
+		func(): return soda_tank_visual_scale,
+		func(v: float): soda_tank_visual_scale = clampf(v, 0.2, 1.4), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_y", "Tank Up/Down (in)", -8.0, 16.0, 0.1,
+		func(): return soda_tank_y_offset_in,
+		func(v: float): soda_tank_y_offset_in = clampf(v, -8.0, 16.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_z", "Tank Forward (in)", -8.0, 8.0, 0.1,
+		func(): return soda_tank_z_offset_in,
+		func(v: float): soda_tank_z_offset_in = clampf(v, -8.0, 8.0), true)
+
+	_hidden_add_section(hidden_soda_box, "SODA BLOCKER / CUP REST")
+	_hidden_add_soda_debug_check(hidden_soda_box, "Show Blocker Debug", func(): return soda_blocker_debug, func(on: bool): soda_blocker_debug = on)
+	_hidden_add_soda_debug_check(hidden_soda_box, "Show Soft-Lock Debug", func(): return soda_soft_debug, func(on: bool): soda_soft_debug = on)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_x", "Block Half Width", 0.05, 1.5, 0.01,
+		func(): return soda_blocker_half_x,
+		func(v: float): soda_blocker_half_x = clampf(v, 0.05, 1.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_h", "Block Height", 0.05, 2.5, 0.01,
+		func(): return soda_blocker_height,
+		func(v: float): soda_blocker_height = clampf(v, 0.05, 2.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_front", "Grab Block Z", -0.7, 0.7, 0.01,
+		func(): return soda_blocker_front_z,
+		func(v: float): soda_blocker_front_z = clampf(v, -0.7, 0.7))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_fill", "Fill Block Z", -0.7, 0.7, 0.01,
+		func(): return soda_blocker_fill_z,
+		func(v: float): soda_blocker_fill_z = clampf(v, -0.7, 0.7))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_x", "Cup Rest X", -1.0, 1.0, 0.01,
+		func(): return soda_cup_rest_x,
+		func(v: float): soda_cup_rest_x = clampf(v, -1.0, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_z", "Cup Rest Z", -0.2, 1.0, 0.01,
+		func(): return soda_cup_rest_z,
+		func(v: float): soda_cup_rest_z = clampf(v, -0.2, 1.0))
+
+	_hidden_add_section(hidden_soda_box, "SODA CUP PULL / SOFT LOCK")
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_x", "Tray First X", -1.0, 0.7, 0.01,
+		func(): return soda_tray_first_x,
+		func(v: float): soda_tray_first_x = clampf(v, -1.0, 0.7))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_spacing", "Tray Spacing", 0.04, 0.45, 0.01,
+		func(): return soda_tray_spacing,
+		func(v: float): soda_tray_spacing = clampf(v, 0.04, 0.45))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_mag", "Tray Magnet Radius", 0.02, 0.8, 0.01,
+		func(): return soda_tray_magnet_radius,
+		func(v: float): soda_tray_magnet_radius = clampf(v, 0.02, 0.8))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_release", "Tray Release Radius", 0.02, 0.9, 0.01,
+		func(): return soda_tray_release_radius,
+		func(v: float): soda_tray_release_radius = clampf(v, 0.02, 0.9))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_pull", "Tray Pull", 0.0, 1.0, 0.01,
+		func(): return soda_tray_magnet_pull,
+		func(v: float): soda_tray_magnet_pull = clampf(v, 0.0, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_radius", "Soft-Lock Radius", 0.02, 1.0, 0.01,
+		func(): return soda_soft_magnet_radius,
+		func(v: float): soda_soft_magnet_radius = clampf(v, 0.02, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_acquire", "Soft Acquire", 0.01, 0.8, 0.01,
+		func(): return soda_soft_acquire,
+		func(v: float): soda_soft_acquire = clampf(v, 0.01, 0.8))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_release", "Soft Release", 0.01, 0.8, 0.01,
+		func(): return soda_soft_release,
+		func(v: float): soda_soft_release = clampf(v, 0.01, 0.8))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_tight", "Soft Tight", 0.0, 0.4, 0.005,
+		func(): return soda_soft_tight,
+		func(v: float): soda_soft_tight = clampf(v, 0.0, 0.4))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_pull", "Soft Pull", 0.0, 1.5, 0.01,
+		func(): return soda_soft_pull,
+		func(v: float): soda_soft_pull = clampf(v, 0.0, 1.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_grace", "Unlock Grace", 0.0, 3.0, 0.01,
+		func(): return soda_soft_unlock_grace,
+		func(v: float): soda_soft_unlock_grace = clampf(v, 0.0, 3.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_follow", "Fill Follow Rate", 1.0, 80.0, 0.5,
+		func(): return soda_fill_follow_rate,
+		func(v: float): soda_fill_follow_rate = clampf(v, 1.0, 80.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_speed", "Fill Max Speed", 0.2, 12.0, 0.1,
+		func(): return soda_fill_max_speed,
+		func(v: float): soda_fill_max_speed = clampf(v, 0.2, 12.0))
+
 	var slot_lab := Label.new()
 	slot_lab.text = "SODA SLOT MACHINE"
 	UiFontsScript.apply_label(slot_lab, true, 13)
@@ -40509,6 +40941,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_grill_season_hidden_ui()
 			_sync_grill_vignette_hidden_ui()
 			_sync_icecream_station_hidden_ui()
+			_sync_soda_tuning_hidden_ui()
 			_sync_soda_slot_hidden_ui()
 			_refresh_options_graphics_controls()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
