@@ -321,7 +321,7 @@ var spatula_balance_bounce_dur: float = 0.10
 var spatula_balance_return_dur: float = 0.2
 var spatula_balance_max_vel: float = 4.8
 var spatula_balance_depth_input: float = 0.88
-var spatula_balance_screen_nudge := Vector2(0.0, 50.0)
+var spatula_balance_screen_nudge := Vector2(0.0, 38.0)
 var _spatula_balance_timer_label: Label3D = null
 var _spatula_balance_timer_t: float = 0.0
 var _spatula_balance_timer_started: bool = false
@@ -1147,6 +1147,10 @@ var grill_roomba_poke_pause_t: float = 0.0 ## Brief stun after RMB poke
 var grill_roomba_poke_wawawa: bool = false ## RMB head-tap started a timed wawawa cry
 var grill_roomba_poke_wobble_t: float = 0.0 ## Small in-place tip wobble after a whack
 var grill_roomba_poke_wobble_phase: float = 0.0
+var grill_roomba_home_requested: bool = false
+var grill_roomba_power_off: bool = false
+var grill_roomba_tap_count: int = 0
+var grill_roomba_tap_cool: float = 0.0
 const ROOMBA_POKE_WOBBLE_SEC := 0.38
 var grill_roomba_bump_t: float = 0.0
 var grill_roomba_back_t: float = 0.0
@@ -1211,6 +1215,7 @@ const ROOMBA_BUMP_MOVE_MUL := 0.22
 const ROOMBA_PICKUP_SAD_SEC := 0.7
 const ROOMBA_POKE_SAD_SEC := 1.0 ## Unsmiley after RMB tap
 const ROOMBA_POKE_PAUSE_SEC := 0.3 ## Freeze tasks briefly, then resume
+const ROOMBA_TAP_WINDOW := 0.75
 const ROOMBA_POKE_EXTRA_Y := 0.02032 ## 0.8" higher tip than grill slap clear (+0.3" vs prior 0.5")
 const ROOMBA_SPATULA_REACH := 0.175
 const ROOMBA_SPATULA_CONTACT_REACH := 0.145
@@ -11446,6 +11451,10 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_sad_hold_t = 0.0
 	grill_roomba_poke_pause_t = 0.0
 	grill_roomba_poke_wawawa = false
+	grill_roomba_home_requested = false
+	grill_roomba_power_off = false
+	grill_roomba_tap_count = 0
+	grill_roomba_tap_cool = 0.0
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
 		game_audio.set_roomba_wawawa(false)
 	grill_roomba_vel = Vector2(cos(grill_roomba_heading), sin(grill_roomba_heading)) * ROOMBA_SPEED
@@ -11487,7 +11496,7 @@ func _reset_grill_roomba() -> void:
 	if game_audio and game_audio.has_method("set_roomba_drive"):
 		game_audio.set_roomba_drive(false)
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
-		grill_roomba_root.global_position = _roomba_idle_corner_target()
+		grill_roomba_root.global_position = _roomba_home_target()
 		grill_roomba_root.rotation_degrees = Vector3(0.0, _roomba_visual_yaw_degrees(), 0.0)
 		grill_roomba_last_xz = Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 
@@ -11504,6 +11513,9 @@ func _update_grill_roomba(delta: float) -> void:
 			game_audio.set_roomba_drive(false)
 		return
 	grill_roomba_root.visible = true
+	grill_roomba_tap_cool = maxf(0.0, grill_roomba_tap_cool - delta)
+	if grill_roomba_tap_cool <= 0.0:
+		grill_roomba_tap_count = 0
 	if grill_roomba_held:
 		if grill_roomba_remote_holder_id != 0:
 			grill_roomba_remote_hold_timeout = maxf(0.0, grill_roomba_remote_hold_timeout - delta)
@@ -11556,6 +11568,9 @@ func _update_grill_roomba(delta: float) -> void:
 	_update_grill_roomba_bristles(delta, grill_roomba_vel.length())
 	if mp_enabled and not NetManager.is_host():
 		return
+	if grill_roomba_power_off or grill_roomba_home_requested:
+		_update_roomba_home(delta)
+		return
 	var old_pos:= grill_roomba_root.global_position
 	var old_xz:= Vector2(old_pos.x, old_pos.z)
 	var old_heading := grill_roomba_heading
@@ -11575,6 +11590,9 @@ func _update_grill_roomba(delta: float) -> void:
 	var has_dirt:= target.is_finite()
 	var has_patty_task:= carrying or scooping or tasking
 	var bumper_aligning := _roomba_bumper_align_active()
+	if not has_dirt and not has_patty_task and not grill_on_fire:
+		_update_roomba_home(delta)
+		return
 	grill_roomba_task_t = grill_roomba_task_t + delta if has_patty_task else 0.0
 	if not has_patty_task:
 		grill_roomba_scoop_attempt_t = 0.0
@@ -11770,6 +11788,116 @@ func _update_held_grill_roomba(delta: float) -> void:
 		_mp_send_roomba_pose()
 
 
+func _roomba_home_target() -> Vector3:
+	var x := GRILL_CENTER_X + GRILL_WIDTH * 0.5 + ROOMBA_RADIUS * 3.2
+	var z := GRILL_SURFACE_Z + GRILL_DEPTH * 0.18
+	return Vector3(x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, z)
+
+
+func _roomba_clear_active_work(drop_patty: bool = true) -> void:
+	if drop_patty:
+		_roomba_drop_carried_patty_in_place()
+	else:
+		grill_roomba_carry_patty = null
+		grill_roomba_carry_slot = -1
+		grill_roomba_carry_target = Vector3.INF
+		if grill_roomba_fake_patty != null and is_instance_valid(grill_roomba_fake_patty):
+			grill_roomba_fake_patty.queue_free()
+		grill_roomba_fake_patty = null
+	grill_roomba_scoop_patty = null
+	grill_roomba_scoop_slot = -1
+	grill_roomba_scoop_hold_t = 0.0
+	grill_roomba_task_patty = null
+	grill_roomba_task_slot = -1
+	grill_roomba_task_dir = Vector2.ZERO
+	grill_roomba_task_mode = ""
+	grill_roomba_task_t = 0.0
+	_roomba_clear_bumper_align()
+	grill_roomba_vel = Vector2.ZERO
+	grill_roomba_back_t = 0.0
+	grill_roomba_bump_t = 0.0
+	grill_roomba_escape_t = 0.0
+	grill_roomba_reaim_t = 0.0
+
+
+func _roomba_set_home_mode(power_off: bool) -> void:
+	grill_roomba_home_requested = true
+	grill_roomba_power_off = power_off
+	grill_roomba_ledge_phase = ""
+	grill_roomba_ledge_wobble = 0.0
+	grill_roomba_poke_pause_t = 0.0
+	grill_roomba_poke_wawawa = false
+	grill_roomba_sad_hold_t = 0.0
+	_roomba_clear_active_work(true)
+	_set_roomba_face("sad" if power_off else "neutral")
+	if game_audio and game_audio.has_method("set_roomba_wawawa"):
+		game_audio.set_roomba_wawawa(false)
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(false)
+
+
+func _roomba_resume_from_home() -> void:
+	grill_roomba_home_requested = false
+	grill_roomba_power_off = false
+	grill_roomba_tap_count = 0
+	grill_roomba_tap_cool = 0.0
+	grill_roomba_reaim_t = 0.0
+	grill_roomba_turn_goal = grill_roomba_heading
+	_set_roomba_face("neutral")
+
+
+func _roomba_register_tap_action() -> bool:
+	if grill_roomba_power_off or grill_roomba_home_requested:
+		_roomba_resume_from_home()
+		_flash("Turbachef Robot awake", Color("A5D6A7"))
+		return true
+	grill_roomba_tap_cool = ROOMBA_TAP_WINDOW
+	grill_roomba_tap_count += 1
+	if grill_roomba_tap_count >= 3:
+		grill_roomba_tap_count = 0
+		_roomba_set_home_mode(true)
+		_flash("Turbachef Robot off at home", Color("FFCC80"))
+		return true
+	if grill_roomba_tap_count >= 2:
+		_roomba_set_home_mode(false)
+		_flash("Turbachef Robot going home", Color("A5D6A7"))
+		return true
+	return false
+
+
+func _update_roomba_home(delta: float) -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	_update_roomba_spatula_hinge(false, delta)
+	var target := _roomba_home_target()
+	var pos := grill_roomba_root.global_position
+	var to := Vector2(target.x - pos.x, target.z - pos.z)
+	var moved := 0.0
+	if to.length() > 0.006:
+		var speed := ROOMBA_SEEK_SPEED if not grill_roomba_power_off else ROOMBA_SPEED
+		var step := minf(to.length(), speed * delta)
+		var n := to.normalized()
+		pos.x += n.x * step
+		pos.z += n.y * step
+		pos.y = target.y
+		moved = step
+		grill_roomba_turn_goal = n.angle()
+		grill_roomba_heading = _roomba_smooth_heading(grill_roomba_heading, grill_roomba_turn_goal, delta)
+	else:
+		pos = target
+		grill_roomba_vel = Vector2.ZERO
+	grill_roomba_root.global_position = pos
+	grill_roomba_root.rotation_degrees = Vector3(0.0, _roomba_visual_yaw_degrees(), 0.0)
+	_update_grill_roomba_bristles(delta, moved / maxf(delta, 0.001))
+	_set_roomba_face("sad" if grill_roomba_power_off else "neutral")
+	if game_audio and game_audio.has_method("set_roomba_drive"):
+		game_audio.set_roomba_drive(moved > 0.0005, 0.45)
+	grill_roomba_sync_t = maxf(0.0, grill_roomba_sync_t - delta)
+	if mp_enabled and NetManager.is_host() and grill_roomba_sync_t <= 0.0:
+		grill_roomba_sync_t = ROOMBA_SYNC_INTERVAL
+		_mp_send_roomba_pose()
+
+
 func _update_grill_roomba_bristles(delta: float, speed: float) -> void:
 	var spin:= (8.0 + speed * 32.0) * delta
 	for i in grill_roomba_bristles.size():
@@ -11810,6 +11938,10 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	_roomba_drop_carried_patty_in_place()
 	grill_roomba_held = true
 	grill_roomba_remote_holder_id = 0
+	grill_roomba_home_requested = false
+	grill_roomba_power_off = false
+	grill_roomba_tap_count = 0
+	grill_roomba_tap_cool = 0.0
 	grill_roomba_ledge_phase = "" ## Picking it up rescues the ledge gag.
 	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_poke_pause_t = 0.0
@@ -11845,11 +11977,22 @@ func _try_poke_grill_roomba(screen_pos: Vector2) -> bool:
 		GRILL_SURFACE_Y,
 		grill_roomba_root.global_position.z
 	)
+	var handled_tap_action := (not mp_enabled or NetManager.is_host()) and _roomba_register_tap_action()
 	_start_spatula_place_squash_at(
 		poke_at,
 		HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y,
 		HAND_SPATULA_SLAP_DUR
 	)
+	if handled_tap_action:
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(false)
+		if game_audio and game_audio.has_method("play_roomba_body_tap"):
+			game_audio.play_roomba_body_tap()
+		if mp_enabled and not _mp_applying:
+			mp_roomba_poke.rpc(poke_at.x, poke_at.z)
+			if NetManager.is_host():
+				_mp_send_roomba_pose()
+		return true
 	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
 	grill_roomba_poke_wawawa = true
 	grill_roomba_vel = Vector2.ZERO
@@ -11883,11 +12026,22 @@ func mp_roomba_poke(x: float, z: float) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	_mp_applying = true
 	var poke_at := Vector3(x, GRILL_SURFACE_Y, z)
+	var handled_tap_action := NetManager.is_host() and _roomba_register_tap_action()
 	_start_spatula_place_squash_at(
 		poke_at,
 		HAND_SPATULA_SLAP_CLEAR + ROOMBA_POKE_EXTRA_Y,
 		HAND_SPATULA_SLAP_DUR
 	)
+	if handled_tap_action:
+		if game_audio and game_audio.has_method("set_roomba_drive"):
+			game_audio.set_roomba_drive(false)
+		if game_audio and game_audio.has_method("play_roomba_body_tap"):
+			game_audio.play_roomba_body_tap()
+		_mp_applying = false
+		if NetManager.is_host() and sid != 0:
+			mp_roomba_poke.rpc(x, z)
+			_mp_send_roomba_pose()
+		return
 	grill_roomba_sad_hold_t = ROOMBA_POKE_SAD_SEC
 	grill_roomba_poke_wawawa = true
 	grill_roomba_vel = Vector2.ZERO
@@ -22370,8 +22524,8 @@ func _load_spatula_balance_settings() -> void:
 	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 1.0, 10.0)
 	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.1, 1.4)
 	var loaded_offset_y := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y))
-	if absf(loaded_offset_y - 20.0) <= 0.01:
-		loaded_offset_y = 50.0
+	if absf(loaded_offset_y - 20.0) <= 0.01 or absf(loaded_offset_y - 50.0) <= 0.01:
+		loaded_offset_y = 38.0
 	spatula_balance_screen_nudge = Vector2(
 		clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_x_px", spatula_balance_screen_nudge.x)), -120.0, 120.0),
 		clampf(loaded_offset_y, -120.0, 120.0)
