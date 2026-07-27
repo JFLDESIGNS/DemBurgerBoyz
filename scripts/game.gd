@@ -375,7 +375,7 @@ var _spatula_balance_fall_visual_vel := Vector3.ZERO
 var _spatula_balance_fall_visual_ang := Vector3.ZERO
 const SPATULA_BALANCE_RAGDOLL_CLEARANCE := 0.0381 ## 1.5" above steel so the fall cannot clip through the grill.
 const SPATULA_BALANCE_FALL_HOLD_DUR := 0.34
-const SPATULA_BALANCE_IMPACT_RETURN_DUR := 0.40
+const SPATULA_BALANCE_IMPACT_RETURN_DUR := 1.00
 const SPATULA_BALANCE_IMPACT_RETURN_HOLD := 0.0
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
@@ -5272,6 +5272,22 @@ func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> 
 		_stop_spatula_balance()
 
 
+func _play_pending_spatula_balance_impact(fallback_pos: Vector3 = Vector3.ZERO) -> void:
+	if not _spatula_balance_impact_pending:
+		return
+	_spatula_balance_impact_pending = false
+	var impact_pos := fallback_pos
+	if impact_pos == Vector3.ZERO:
+		impact_pos = Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_CENTER_Z)
+	if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+		var bp := _spatula_balance_ragdoll_body.global_position
+		impact_pos = Vector3(bp.x, GRILL_SURFACE_Y, bp.z)
+	elif _spatula_balance_fall_visual_started:
+		var vp := _spatula_balance_fall_visual_xform.origin
+		impact_pos = Vector3(vp.x, GRILL_SURFACE_Y, vp.z)
+	_play_grill_tap_at(impact_pos, 1.35)
+
+
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if not _spatula_balance_active:
 		_spatula_balance_last_mouse = mouse
@@ -6653,6 +6669,20 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		_spatula_mute_ting = false
 		_stop_spatula_grill_scrape_audio()
 		_update_spatula_balance(mouse, delta)
+		if _spatula_balance_active and _spatula_balance_falling:
+			var frozen_target := _spatula_balance_last_visible_xform
+			if frozen_target == Transform3D.IDENTITY:
+				frozen_target = hand_spatula_root.global_transform
+			if not _spatula_balance_returning:
+				_update_spatula_balance_visual_fall(frozen_target, delta)
+				if _spatula_balance_returning:
+					_render_spatula_balance_return(frozen_target, 0.0)
+			else:
+				_render_spatula_balance_return(frozen_target, delta)
+			var impact_fallback := frozen_target.origin
+			impact_fallback.y = GRILL_SURFACE_Y
+			_play_pending_spatula_balance_impact(impact_fallback)
+			return
 		if not _spatula_balance_active:
 			tip_target = _hand_spatula_tip_from_screen(mouse, hold_y)
 			pitch = rot.x + tip
@@ -6666,16 +6696,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 				pivot_target = tip_target
 			pivot_target.y = balance_y
 			tip_target = pivot_target
-			if _spatula_balance_impact_pending:
-				_spatula_balance_impact_pending = false
-				var impact_pos := Vector3(tip_target.x, GRILL_SURFACE_Y, tip_target.z)
-				if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
-					var bp := _spatula_balance_ragdoll_body.global_position
-					impact_pos = Vector3(bp.x, GRILL_SURFACE_Y, bp.z)
-				elif _spatula_balance_fall_visual_started:
-					var vp := _spatula_balance_fall_visual_xform.origin
-					impact_pos = Vector3(vp.x, GRILL_SURFACE_Y, vp.z)
-				_play_grill_tap_at(impact_pos, 1.35)
+			_play_pending_spatula_balance_impact(Vector3(tip_target.x, GRILL_SURFACE_Y, tip_target.z))
 			balance_basis = _spatula_balance_world_basis()
 			use_balance_basis = true
 			pitch = 0.0
