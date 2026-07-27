@@ -374,7 +374,8 @@ var _spatula_balance_fall_visual_vel := Vector3.ZERO
 var _spatula_balance_fall_visual_ang := Vector3.ZERO
 const SPATULA_BALANCE_RAGDOLL_CLEARANCE := 0.0381 ## 1.5" above steel so the fall cannot clip through the grill.
 const SPATULA_BALANCE_FALL_HOLD_DUR := 0.34
-const SPATULA_BALANCE_IMPACT_RETURN_DUR := 0.40
+const SPATULA_BALANCE_IMPACT_RETURN_DUR := 0.80
+const SPATULA_BALANCE_IMPACT_RETURN_HOLD := 0.08
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -5229,7 +5230,7 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float)
 				_spatula_balance_fall_visual_vel.z *= 0.62
 				_spatula_balance_fall_visual_ang *= 0.42
 				_spatula_balance_returning = true
-				_spatula_balance_return_t = 0.0
+				_spatula_balance_return_t = -SPATULA_BALANCE_IMPACT_RETURN_HOLD
 				_spatula_balance_return_from = xf
 				_spatula_balance_fall_hold_started = true
 			else:
@@ -5250,6 +5251,10 @@ func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> 
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		return
 	_spatula_balance_return_t = minf(_spatula_balance_return_t + maxf(delta, 0.0), SPATULA_BALANCE_IMPACT_RETURN_DUR)
+	if _spatula_balance_return_t < 0.0:
+		hand_spatula_root.visible = true
+		hand_spatula_root.global_transform = _spatula_balance_return_from
+		return
 	var ru := clampf(_spatula_balance_return_t / SPATULA_BALANCE_IMPACT_RETURN_DUR, 0.0, 1.0)
 	var ease := ru * ru * (3.0 - 2.0 * ru)
 	var basis := _spatula_balance_return_from.basis.slerp(target_xform.basis, ease).orthonormalized()
