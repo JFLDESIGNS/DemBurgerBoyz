@@ -366,6 +366,7 @@ var _spatula_balance_returning: bool = false
 var _spatula_balance_fall_hold_started: bool = false
 var _spatula_balance_return_t: float = 0.0
 var _spatula_balance_return_from := Transform3D.IDENTITY
+var _spatula_balance_last_visible_xform := Transform3D.IDENTITY
 const SPATULA_BALANCE_RAGDOLL_CLEARANCE := 0.0381 ## 1.5" above steel so the fall cannot clip through the grill.
 const SPATULA_BALANCE_FALL_HOLD_DUR := 0.34
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
@@ -5037,6 +5038,7 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_fall_hold_started = false
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
+	_spatula_balance_last_visible_xform = Transform3D.IDENTITY
 	_spatula_user_roll = 0.0
 
 
@@ -5056,6 +5058,7 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_fall_hold_started = false
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
+	_spatula_balance_last_visible_xform = Transform3D.IDENTITY
 	_spatula_user_roll = 0.0
 	if _spatula_balance_active:
 		_spatula_balance_drift_dir = Vector2.RIGHT
@@ -5078,15 +5081,15 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 	var floor_body := StaticBody3D.new()
 	floor_body.name = "SpatulaBalanceRagdollFloor"
 	var phys_mat := PhysicsMaterial.new()
-	phys_mat.bounce = 0.36
-	phys_mat.friction = 0.62
+	phys_mat.bounce = 0.16
+	phys_mat.friction = 0.78
 	floor_body.physics_material_override = phys_mat
 	var floor_shape := CollisionShape3D.new()
 	var floor_box := BoxShape3D.new()
 	floor_box.size = Vector3(4.2, 0.012, 2.0)
 	floor_shape.shape = floor_box
 	floor_body.add_child(floor_shape)
-	floor_body.global_position = Vector3(0.0, GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE - 0.006, 0.0)
+	floor_body.global_position = Vector3(start_xform.origin.x, GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE - 0.006, start_xform.origin.z)
 	world.add_child(floor_body)
 	_spatula_balance_ragdoll_floor = floor_body
 
@@ -5103,9 +5106,9 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 	body.collision_mask = 1
 	body.global_transform = start_xform
 	body.global_position.y = maxf(body.global_position.y, GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE + 0.035)
+	world.add_child(body)
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.105, 0.045, 0.56)
 	col.shape = box
 	body.add_child(col)
 	if hand_spatula_visual != null and is_instance_valid(hand_spatula_visual):
@@ -5115,18 +5118,48 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 			visual.transform = hand_spatula_visual.transform
 			body.add_child(visual)
 			_boost_hand_spatula_draw(visual)
-	world.add_child(body)
+	var local_bounds := _spatula_balance_visual_local_bounds(body)
+	if local_bounds.size.length_squared() > 0.0001:
+		box.size = Vector3(maxf(local_bounds.size.x, 0.06), maxf(local_bounds.size.y, 0.035), maxf(local_bounds.size.z, 0.18))
+		col.position = local_bounds.position + local_bounds.size * 0.5
+	else:
+		box.size = Vector3(0.105, 0.045, 0.56)
 	var impulse_dir := Vector3(_spatula_balance_fall_dir.x, 0.18, _spatula_balance_fall_dir.y)
 	if impulse_dir.length_squared() < 0.0001:
 		impulse_dir = Vector3(1.0, 0.18, 0.0)
 	impulse_dir = impulse_dir.normalized()
-	body.linear_velocity = impulse_dir * 0.42 + Vector3(0.0, 0.18, 0.0)
+	body.linear_velocity = Vector3(impulse_dir.x * 0.18, -0.04, impulse_dir.z * 0.18)
+	var ang_push := randf_range(1.7, 2.5)
 	body.angular_velocity = Vector3(
-		_spatula_balance_fall_dir.y * 5.0 + 1.2,
-		(randf() - 0.5) * 1.8,
-		-_spatula_balance_fall_dir.x * 5.0
+		_spatula_balance_fall_dir.y * ang_push,
+		randf_range(-0.35, 0.35),
+		-_spatula_balance_fall_dir.x * ang_push
 	)
 	_spatula_balance_ragdoll_body = body
+
+
+func _spatula_balance_visual_local_bounds(body: Node3D) -> AABB:
+	var bounds := AABB()
+	var has_bounds := false
+	if body == null:
+		return bounds
+	var inv := body.global_transform.affine_inverse()
+	for child in body.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var aabb := mi.get_aabb()
+		var xf := inv * mi.global_transform
+		for x in [aabb.position.x, aabb.position.x + aabb.size.x]:
+			for y in [aabb.position.y, aabb.position.y + aabb.size.y]:
+				for z in [aabb.position.z, aabb.position.z + aabb.size.z]:
+					var p := xf * Vector3(x, y, z)
+					if not has_bounds:
+						bounds = AABB(p, Vector3.ZERO)
+						has_bounds = true
+					else:
+						bounds = bounds.expand(p)
+	return bounds
 
 
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
@@ -6670,10 +6703,15 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var pivot_basis := balance_basis if use_balance_basis else Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
 	var pivot_world := pivot_basis * pivot_local
 	hand_spatula_root.global_position = tip_target - pivot_world
+	if _spatula_balance_active and not _spatula_balance_returning and _spatula_balance_ragdoll_body == null:
+		_spatula_balance_last_visible_xform = hand_spatula_root.global_transform
 	if _spatula_balance_active and _spatula_balance_falling:
 		var target_xform := hand_spatula_root.global_transform
 		if _spatula_balance_ragdoll_body == null and not _spatula_balance_returning:
-			_begin_spatula_balance_ragdoll(target_xform)
+			var spawn_xform := _spatula_balance_last_visible_xform
+			if spawn_xform == Transform3D.IDENTITY:
+				spawn_xform = target_xform
+			_begin_spatula_balance_ragdoll(spawn_xform)
 		if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
 			hand_spatula_root.visible = false
 		elif _spatula_balance_returning:
@@ -7118,8 +7156,6 @@ func _build_flat_top_grill() -> void:
 	grill_glow_meshes.clear()
 	grill_surface_node = surface
 	_ensure_grill_steel_texture()
-	var receiver_mat := _make_grill_zone_metal(Color(0.30, 0.32, 0.36), 0.50, 0.0, GRILL_WIDTH, GRILL_DEPTH)
-	_add_grill_shadow_receiver(surface, Vector3(0, 0, 0), Vector3(GRILL_WIDTH, 0.043, GRILL_DEPTH), receiver_mat)
 	var cook_x0 := 0.0
 	var cook_x1 := 0.0
 	var cook_started := false
@@ -19296,34 +19332,15 @@ func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float, zone_w
 
 func _add_grill_zone_panel(parent: Node3D, local_pos: Vector3, size: Vector3, mat: Material) -> void:
 	var panel := MeshInstance3D.new()
-	var mesh := PlaneMesh.new()
-	mesh.size = Vector2(size.x, size.z)
+	var mesh := BoxMesh.new()
+	mesh.size = size
 	panel.mesh = mesh
-	panel.position = Vector3(local_pos.x, local_pos.y + 0.024, local_pos.z)
-	var overlay_mat := mat
-	if mat is BaseMaterial3D:
-		overlay_mat = mat.duplicate()
-		var bm := overlay_mat as BaseMaterial3D
-		bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		bm.albedo_color.a = 0.42
-		bm.disable_receive_shadows = true
-	panel.material_override = overlay_mat
-	## Decorative heat tint only; one continuous slab below receives all spatula shadows.
+	panel.position = local_pos
+	panel.material_override = mat
+	## Receive only — casting from flat boxes causes self-shadow acne on the top face.
 	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	panel.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	parent.add_child(panel)
-
-
-func _add_grill_shadow_receiver(parent: Node3D, local_pos: Vector3, size: Vector3, mat: Material) -> void:
-	var receiver := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	receiver.mesh = mesh
-	receiver.position = local_pos
-	receiver.material_override = mat
-	receiver.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	receiver.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	parent.add_child(receiver)
 
 
 func _make_grill_splash_stainless() -> StandardMaterial3D:
