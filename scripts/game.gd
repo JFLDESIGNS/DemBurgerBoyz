@@ -978,6 +978,8 @@ const SODA_SLOT_SYMBOL_TEXTURES := {
 	"logo": "res://assets/decal/burger_pals_logo.png",
 }
 const SODA_SLOT_SPIN_DUR := 0.95
+const SODA_SLOT_SPIN_COST := 5.0
+const SODA_SLOT_WIN_PAYOUT := 40.0
 var slot_camera_shake_t: float = 0.0
 var slot_camera_shake_total: float = 0.0
 var slot_camera_base_pos := Vector3(0.0, 1.65, -1.62)
@@ -28949,6 +28951,12 @@ func _toggle_soda_slot_machine() -> void:
 func _start_soda_slot_spin() -> void:
 	if not soda_slot_mode or soda_slot_spin_t > 0.0:
 		return
+	if money < SODA_SLOT_SPIN_COST:
+		_flash("Need %s to spin" % _format_money(SODA_SLOT_SPIN_COST), Color("EF5350"))
+		if game_audio and game_audio.has_method("play_ice_tink"):
+			game_audio.play_ice_tink()
+		return
+	_spend(SODA_SLOT_SPIN_COST, "Spin -%s" % _format_money(SODA_SLOT_SPIN_COST), Color("FFCC80"))
 	soda_slot_spin_t = SODA_SLOT_SPIN_DUR
 	soda_slot_tick_t = 0.0
 	if game_audio:
@@ -29003,13 +29011,14 @@ func _soda_slot_ice_jackpot() -> void:
 		_spawn_flying_ice_cube(tip + Vector3(randf_range(-0.06, 0.06), randf_range(-0.03, 0.04), randf_range(-0.04, 0.05)), tip, true)
 	_soda_slot_soda_jackpot_burst(tip)
 	_start_slot_camera_shake(2.0)
+	_earn_money(SODA_SLOT_WIN_PAYOUT)
 	if game_audio:
 		if game_audio.has_method("play_scale_jingle"):
 			game_audio.play_scale_jingle()
 		if game_audio.has_method("play_ice_tink"):
 			for j in range(4):
 				game_audio.play_ice_tink()
-	_flash("Great job!", Color("FFD54F"))
+	_flash("Great job! +%s" % _format_money(SODA_SLOT_WIN_PAYOUT), Color("FFD54F"))
 
 
 func _soda_slot_soda_jackpot_burst(tip: Vector3) -> void:
@@ -33746,6 +33755,8 @@ func _try_cheese_station_click(screen_pos: Vector2) -> bool:
 
 func _cheese_release_target_ready(screen_pos: Vector2) -> bool:
 	## True when release/click would succeed immediately (burger, Build, or cat).
+	if _find_waiting_customer_at_head(screen_pos) != null:
+		return true
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, screen_pos):
 		return true
 	if _cheese_targets_build_at(screen_pos):
@@ -42920,6 +42931,9 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var mouse := get_viewport().get_mouse_position()
+	if _try_throw_dragged_ingredient_at_customer(mouse):
+		_pending_reorder_drag = null
+		return
 	## Bacon strip → waiting customer's mouth (+10% patience).
 	if _try_feed_bacon_to_customer(mouse):
 		_pending_reorder_drag = null
@@ -42998,6 +43012,140 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 	_pending_cheese_drag = false
 	_pending_ingredient_drag = ""
 	_pending_reorder_drag = null
+
+
+func _clear_pending_ingredient_throw_state(id: String) -> void:
+	_pending_ingredient_drag = ""
+	_pending_cheese_drag = false
+	_strip_gesture_added = true
+	_strip_did_drag = true
+	if id == "cheese" and cheese_held:
+		_clear_cheese_hold_after_use()
+
+
+func _try_throw_dragged_ingredient_at_customer(screen_pos: Vector2) -> bool:
+	if not playing:
+		return false
+	var id := _pending_ingredient_drag
+	if id == "" and (_pending_cheese_drag or cheese_held):
+		id = "cheese"
+	if id == "":
+		return false
+	var cust := _find_waiting_customer_at_head(screen_pos)
+	if cust == null:
+		return false
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust)
+		if nid < 0:
+			return false
+		if not _mp_can_spend_ingredient(id):
+			_clear_pending_ingredient_throw_state(id)
+			return true
+		_clear_pending_ingredient_throw_state(id)
+		mp_customer_ingredient_throw.rpc(nid, id, id == "cheese")
+		return true
+	if not _spend_ingredient(id):
+		_clear_pending_ingredient_throw_state(id)
+		return true
+	_clear_pending_ingredient_throw_state(id)
+	_play_ingredient_fly_to_customer(id, cust, screen_pos, id == "cheese")
+	return true
+
+
+func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: Vector2 = Vector2(INF, INF), stick_cheese: bool = false) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	var ui_root: Control = get_node_or_null("UI/Root") as Control
+	var start := start_override
+	if not is_finite(start.x) or not is_finite(start.y):
+		start = _ingredient_button_screen_center(id)
+	var end := _customer_head_screen(cust)
+	if ui_root == null:
+		_apply_customer_ingredient_hit(cust, id, stick_cheese)
+		return
+	var tex := FoodSpritesScript.get_tex(id)
+	if tex == null:
+		_apply_customer_ingredient_hit(cust, id, stick_cheese)
+		return
+	var fly_root := Control.new()
+	fly_root.name = "CustomerIngredientFly"
+	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fly_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fly_root.z_index = 260
+	ui_root.add_child(fly_root)
+	var icon := TextureRect.new()
+	icon.texture = tex
+	var icon_size := Vector2(96.0, 52.0)
+	icon.custom_minimum_size = icon_size
+	icon.size = icon_size
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.pivot_offset = icon_size * 0.5
+	fly_root.add_child(icon)
+	icon.global_position = start - icon_size * 0.5
+	var tw := create_tween()
+	tw.tween_method(
+		func(t: float) -> void:
+			if not is_instance_valid(icon):
+				return
+			var eased := t * t * (3.0 - 2.0 * t)
+			var pos := start.lerp(end, eased)
+			pos.y -= 80.0 * 4.0 * t * (1.0 - t)
+			icon.global_position = pos - icon_size * 0.5
+			icon.rotation = lerpf(-0.5, 0.6, t)
+			icon.scale = Vector2.ONE.lerp(Vector2(0.72, 0.72), eased),
+		0.0,
+		1.0,
+		0.34
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(fly_root):
+			fly_root.queue_free()
+		_apply_customer_ingredient_hit(cust, id, stick_cheese)
+	)
+
+
+func _apply_customer_ingredient_hit(cust: Node3D, id: String, stick_cheese: bool = false) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	var impatience := 0.45
+	if cust.has_method("patience_ratio"):
+		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
+	if game_audio and game_audio.has_method("play_customer_wawa_click"):
+		game_audio.play_customer_wawa_click(impatience)
+	if cust.has_method("bobble_click"):
+		cust.call("bobble_click")
+	if stick_cheese:
+		_put_cheese_on_customer_head(cust)
+	else:
+		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		_flash("%s: wawawa" % label, Color("FFE082"))
+
+
+func _put_cheese_on_customer_head(cust: Node3D) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	var old := cust.get_node_or_null("CheeseHat")
+	if old != null and is_instance_valid(old):
+		old.queue_free()
+	var cheese := MeshInstance3D.new()
+	cheese.name = "CheeseHat"
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(0.24, 0.012, 0.20)
+	cheese.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.80, 0.20, 1.0)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.62, 0.08)
+	mat.emission_energy_multiplier = 0.18
+	cheese.material_override = mat
+	cheese.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	cust.add_child(cheese)
+	cheese.global_position = _customer_head_world(cust) + Vector3(0.0, 0.11, 0.0)
+	cheese.rotation_degrees = Vector3(randf_range(-8.0, 8.0), randf_range(-18.0, 18.0), randf_range(-9.0, 9.0))
+	_flash("Cheese hat: wawawa", Color("FFE082"))
 
 
 func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
@@ -44285,6 +44433,23 @@ func _cheese_grill_target_under_cursor():
 func _try_place_held_cheese(screen_pos: Vector2) -> void:
 	if not cheese_held:
 		return
+	var cust := _find_waiting_customer_at_head(screen_pos)
+	if cust != null:
+		if mp_enabled and not _mp_applying:
+			var nid := _customer_net_id(cust)
+			if nid >= 0:
+				if not _mp_can_spend_ingredient("cheese"):
+					_clear_cheese_hold_after_use()
+					return
+				_clear_cheese_hold_after_use()
+				mp_customer_ingredient_throw.rpc(nid, "cheese", true)
+				return
+		if not _spend_ingredient("cheese"):
+			_clear_cheese_hold_after_use()
+			return
+		_clear_cheese_hold_after_use()
+		_play_ingredient_fly_to_customer("cheese", cust, screen_pos, true)
+		return
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, screen_pos):
 		_feed_window_cat_ingredient("cheese")
 		return
@@ -45246,6 +45411,40 @@ func _customer_mouth_screen(customer: Node3D) -> Vector2:
 		mouth = customer.mouth_global()
 	var screen_pt := camera.unproject_position(mouth)
 	return screen_pt + Vector2(0.0, -42.0)
+
+
+func _customer_head_world(customer: Node3D) -> Vector3:
+	if customer == null or not is_instance_valid(customer):
+		return Vector3.ZERO
+	if customer.has_method("head_global"):
+		return customer.head_global()
+	return customer.global_position + Vector3(0.0, 1.35, 0.02)
+
+
+func _customer_head_screen(customer: Node3D) -> Vector2:
+	if camera == null or customer == null or not is_instance_valid(customer):
+		return Vector2.ZERO
+	return camera.unproject_position(_customer_head_world(customer))
+
+
+func _find_waiting_customer_at_head(screen_pos: Vector2, max_px: float = 105.0) -> Node3D:
+	if customers_root == null or camera == null:
+		return null
+	var best: Node3D = null
+	var best_d := max_px
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if bool(c.get("is_leaving")) or bool(c.get("is_ragdoll")):
+			continue
+		var head := _customer_head_world(c)
+		if camera.is_position_behind(head):
+			continue
+		var d := screen_pos.distance_to(camera.unproject_position(head))
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
 
 
 func _find_waiting_customer_at_mouth(screen_pos: Vector2, max_px: float = -1.0) -> Node3D:
@@ -46639,6 +46838,15 @@ func _ingredient_cost(id: String) -> float:
 
 func _format_money(amount: float) -> String:
 	return "$%.2f" % amount
+
+
+func _earn_money(amount: float) -> void:
+	if amount <= 0.001:
+		return
+	money += amount
+	_update_hud()
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		_mp_broadcast_economy()
 
 
 func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> void:
@@ -50212,6 +50420,19 @@ func mp_bacon_customer(net_id: int) -> void:
 	if NetManager.is_host():
 		_mp_broadcast_economy()
 		_mp_broadcast_customers()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_customer_ingredient_throw(net_id: int, id: String, stick_cheese: bool = false) -> void:
+	var c = _customer_by_net_id(net_id)
+	if c == null or not is_instance_valid(c):
+		return
+	_mp_applying = true
+	if _mp_spend_ingredient(id):
+		_play_ingredient_fly_to_customer(id, c, Vector2(INF, INF), stick_cheese)
+	_mp_applying = false
+	if NetManager.is_host():
+		_mp_broadcast_economy()
 
 
 @rpc("any_peer", "call_local", "reliable")
