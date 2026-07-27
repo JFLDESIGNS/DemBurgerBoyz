@@ -1701,6 +1701,13 @@ const WORLD_HINT_OUTLINE_PRIO := 23
 const WORLD_HINT_ALPHA := 0.70 ## base opacity
 const WORLD_HINT_FADE_MIN := 0.36 ## bottom of soothing breathe
 const WORLD_HINT_FADE_HZ := 0.22 ## slow in/out pulse
+const WORLD_HINT_CFG_SECTION := "world_hint_text"
+var build_hint_screen_nudge := BUILD_BOARD_HINT_SCREEN_NUDGE
+var fryer_hint_screen_nudge := FRYER_HINT_SCREEN_NUDGE
+var build_hint_font_size := float(WORLD_HINT_FONT_SIZE)
+var fryer_hint_font_size := float(WORLD_HINT_FONT_SIZE)
+var build_hint_alpha := WORLD_HINT_ALPHA
+var fryer_hint_alpha := WORLD_HINT_ALPHA
 ## Keys in GFX_DEFAULTS / gfx menu — red outlines + prep backdrop.
 const BUILD_ZONE_GFX_KEYS: Array[String] = [
 	"bz_row_left", "bz_row_right", "bz_row_top", "bz_row_bottom",
@@ -1914,7 +1921,7 @@ const BURGERPACK_HELD_SCALE := 1.55
 const BURGERPACK_SIT_Y := 0.045 ## Sit on top of steel panels (panel half-height ~0.0225).
 const FRY_BASKET_COOK_SEC := 5.0
 const FRYER_DONE_POP_Y := 0.18 ## lift above oil surface when cook finishes
-const FRYER_HINT_SCREEN_NUDGE := Vector2(10.0, 30.0) ## +10px right (was 0,30)
+const FRYER_HINT_SCREEN_NUDGE := Vector2(-20.0, 30.0) ## 30px camera-left from prior +10px seat.
 const FRY_BASKET_SHAKE_NEED := 1.5
 ## Smoke cylinders under a dunked basket — ~15% larger than burger flip smoke.
 const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
@@ -2294,6 +2301,7 @@ func _ready() -> void:
 	_load_spatula_balance_settings()
 	_load_roomba_home_settings()
 	_load_soda_slot_settings()
+	_load_world_hint_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -20048,6 +20056,57 @@ func _nudge_label3d_on_screen(lab: Label3D, screen_delta: Vector2) -> void:
 	lab.global_position = camera.project_ray_origin(target) + camera.project_ray_normal(target) * depth
 
 
+func _load_world_hint_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	build_hint_screen_nudge = Vector2(
+		clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "build_x_px", build_hint_screen_nudge.x)), -240.0, 240.0),
+		clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "build_y_px", build_hint_screen_nudge.y)), -240.0, 240.0)
+	)
+	fryer_hint_screen_nudge = Vector2(
+		clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "fryer_x_px", fryer_hint_screen_nudge.x)), -240.0, 240.0),
+		clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "fryer_y_px", fryer_hint_screen_nudge.y)), -240.0, 240.0)
+	)
+	build_hint_font_size = clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "build_size", build_hint_font_size)), 24.0, 180.0)
+	fryer_hint_font_size = clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "fryer_size", fryer_hint_font_size)), 24.0, 180.0)
+	build_hint_alpha = clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "build_opacity", build_hint_alpha)), 0.0, 1.0)
+	fryer_hint_alpha = clampf(float(cfg.get_value(WORLD_HINT_CFG_SECTION, "fryer_opacity", fryer_hint_alpha)), 0.0, 1.0)
+
+
+func _save_world_hint_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "build_x_px", build_hint_screen_nudge.x)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "build_y_px", build_hint_screen_nudge.y)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "build_size", build_hint_font_size)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "build_opacity", build_hint_alpha)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "fryer_x_px", fryer_hint_screen_nudge.x)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "fryer_y_px", fryer_hint_screen_nudge.y)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "fryer_size", fryer_hint_font_size)
+	cfg.set_value(WORLD_HINT_CFG_SECTION, "fryer_opacity", fryer_hint_alpha)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _world_hint_alpha_for_label(lab: Label3D) -> float:
+	return fryer_hint_alpha if lab != null and lab.name == "FryerHint" else build_hint_alpha
+
+
+func _world_hint_size_for_label(lab: Label3D) -> int:
+	return roundi(fryer_hint_font_size if lab != null and lab.name == "FryerHint" else build_hint_font_size)
+
+
+func _apply_world_hint_settings_changed() -> void:
+	if build_board_hint_label != null and is_instance_valid(build_board_hint_label):
+		_style_world_hint_label(build_board_hint_label)
+		build_board_hint_label.position = Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + 0.075, -0.05)
+		_nudge_label3d_on_screen(build_board_hint_label, build_hint_screen_nudge)
+	if fryer_label != null and is_instance_valid(fryer_label):
+		_style_world_hint_label(fryer_label)
+		fryer_label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
+		_nudge_label3d_on_screen(fryer_label, fryer_hint_screen_nudge)
+
+
 func _update_patty_warm_hold(patty: Area3D, delta: float) -> void:
 	## Meat starts its 5-min clock on first HOLD visit, then keeps aging everywhere
 	## (grill / spatula / slide-offs do NOT reset the meter).
@@ -25143,7 +25202,8 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 
 func _nudge_fryer_hint_down() -> void:
 	if fryer_label != null and is_instance_valid(fryer_label):
-		_nudge_label3d_on_screen(fryer_label, FRYER_HINT_SCREEN_NUDGE)
+		fryer_label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
+		_nudge_label3d_on_screen(fryer_label, fryer_hint_screen_nudge)
 
 
 func _refresh_fryer_hint_label() -> void:
@@ -34730,10 +34790,11 @@ func _build_smoke2_grill_props() -> void:
 func _style_world_hint_label(lab: Label3D) -> void:
 	## Shared look: Luckiest Guy + thick black stroke + 70% opacity (fade applied live).
 	## Draw above window sill glass so fryer / build hints stay readable.
-	UiFontsScript.apply_luckiest_label3d(lab, WORLD_HINT_FONT_SIZE, WORLD_HINT_WORLD_H, WORLD_HINT_OUTLINE)
+	var alpha := _world_hint_alpha_for_label(lab)
+	UiFontsScript.apply_luckiest_label3d(lab, _world_hint_size_for_label(lab), WORLD_HINT_WORLD_H, WORLD_HINT_OUTLINE)
 	lab.outline_size = WORLD_HINT_OUTLINE
-	lab.outline_modulate = Color(0.0, 0.0, 0.0, WORLD_HINT_ALPHA)
-	lab.modulate = Color(1.0, 0.92, 0.22, WORLD_HINT_ALPHA)
+	lab.outline_modulate = Color(0.0, 0.0, 0.0, alpha)
+	lab.modulate = Color(1.0, 0.92, 0.22, alpha)
 	lab.alpha_cut = Label3D.ALPHA_CUT_DISABLED
 	lab.no_depth_test = true
 	lab.render_priority = WORLD_HINT_RENDER_PRIO
@@ -34745,11 +34806,12 @@ func _update_world_hint_fades(delta: float) -> void:
 	## Soft sine breathe on board + fryer hints — soothing in/out.
 	_world_hint_fade_t += delta
 	var breathe := 0.5 + 0.5 * sin(_world_hint_fade_t * TAU * WORLD_HINT_FADE_HZ)
-	var a := lerpf(WORLD_HINT_FADE_MIN, WORLD_HINT_ALPHA, breathe)
 	for lab in [build_board_hint_label, fryer_label]:
 		var hint := lab as Label3D
 		if hint == null or not is_instance_valid(hint) or not hint.visible:
 			continue
+		var max_a := _world_hint_alpha_for_label(hint)
+		var a := lerpf(minf(WORLD_HINT_FADE_MIN, max_a), max_a, breathe)
 		var c: Color = hint.modulate
 		c.a = a
 		hint.modulate = c
@@ -34775,7 +34837,7 @@ func _build_board_hint_label() -> void:
 	lab.visible = true
 	build_cutting_board.add_child(lab)
 	build_board_hint_label = lab
-	_nudge_label3d_on_screen(build_board_hint_label, BUILD_BOARD_HINT_SCREEN_NUDGE)
+	_nudge_label3d_on_screen(build_board_hint_label, build_hint_screen_nudge)
 	_refresh_build_board_hint()
 
 
@@ -40538,6 +40600,64 @@ func _build_options_menu() -> void:
 	_hidden_add_prop_offset_group(hidden_world_box, "fryer_done", "Fryer Done Location")
 	_hidden_add_prop_offset_group(hidden_world_box, "big_tree", "Big Tree Offset")
 	_hidden_add_prop_offset_group(hidden_world_box, "small_tree", "Small Tree Offset")
+
+	_hidden_add_section(hidden_world_box, "WORLD HINT TEXT")
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_hint_x", "Fryer Hint X px", -240.0, 240.0, 1.0,
+		func(): return fryer_hint_screen_nudge.x,
+		func(v: float):
+			fryer_hint_screen_nudge.x = clampf(v, -240.0, 240.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_hint_y", "Fryer Hint Y px", -240.0, 240.0, 1.0,
+		func(): return fryer_hint_screen_nudge.y,
+		func(v: float):
+			fryer_hint_screen_nudge.y = clampf(v, -240.0, 240.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_hint_size", "Fryer Hint Size", 24.0, 180.0, 1.0,
+		func(): return fryer_hint_font_size,
+		func(v: float):
+			fryer_hint_font_size = clampf(v, 24.0, 180.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_hint_opacity", "Fryer Hint Opacity", 0.0, 1.0, 0.01,
+		func(): return fryer_hint_alpha,
+		func(v: float):
+			fryer_hint_alpha = clampf(v, 0.0, 1.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "build_hint_x", "Drag Patty X px", -240.0, 240.0, 1.0,
+		func(): return build_hint_screen_nudge.x,
+		func(v: float):
+			build_hint_screen_nudge.x = clampf(v, -240.0, 240.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "build_hint_y", "Drag Patty Y px", -240.0, 240.0, 1.0,
+		func(): return build_hint_screen_nudge.y,
+		func(v: float):
+			build_hint_screen_nudge.y = clampf(v, -240.0, 240.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "build_hint_size", "Drag Patty Size", 24.0, 180.0, 1.0,
+		func(): return build_hint_font_size,
+		func(v: float):
+			build_hint_font_size = clampf(v, 24.0, 180.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "build_hint_opacity", "Drag Patty Opacity", 0.0, 1.0, 0.01,
+		func(): return build_hint_alpha,
+		func(v: float):
+			build_hint_alpha = clampf(v, 0.0, 1.0)
+			_save_world_hint_settings()
+			_apply_world_hint_settings_changed()
+	)
 
 	_hidden_add_section(hidden_world_box, "TURBACHEF ROBOT HOME")
 	_hidden_add_labeled_slider(hidden_world_box, "roomba_home_x", "Home X", -4.0, 4.0, 0.01,
