@@ -1258,6 +1258,7 @@ const ROOMBA_SIDE_INSET := 0.162 ## Body center inset; loosened ~4 inches so spa
 const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset; keep this loose so the bot can reach patties by the player.
 const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Far/window edge inset; keeps the bot out of the top strip of the grill.
 const ROOMBA_HOME_CFG_SECTION := "roomba_home"
+const ROOMBA_HOME_CFG_VERSION := 1
 var roomba_home_pos: Vector3 = Vector3(-1.55, GRILL_SURFACE_Y + ROOMBA_SIT_Y, 0.95)
 const AIR_MOTE_COUNT := 56
 const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
@@ -22748,6 +22749,10 @@ func _load_roomba_home_settings() -> void:
 		return
 	if not cfg.has_section(ROOMBA_HOME_CFG_SECTION):
 		return
+	var cfg_version := int(cfg.get_value(ROOMBA_HOME_CFG_SECTION, "version", 0))
+	if cfg_version < ROOMBA_HOME_CFG_VERSION:
+		_save_roomba_home_settings()
+		return
 	roomba_home_pos = Vector3(
 		clampf(float(cfg.get_value(ROOMBA_HOME_CFG_SECTION, "x", roomba_home_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(ROOMBA_HOME_CFG_SECTION, "y", roomba_home_pos.y)), 0.8, 1.8),
@@ -22761,6 +22766,7 @@ func _save_roomba_home_settings() -> void:
 	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "x", roomba_home_pos.x)
 	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "y", roomba_home_pos.y)
 	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "z", roomba_home_pos.z)
+	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "version", ROOMBA_HOME_CFG_VERSION)
 	cfg.save(GFX_CFG_PATH)
 
 
