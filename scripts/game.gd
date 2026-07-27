@@ -362,6 +362,7 @@ var _spatula_balance_impact_pending: bool = false
 var _spatula_balance_impact_done: bool = false
 var _spatula_balance_ragdoll_body: RigidBody3D = null
 var _spatula_balance_ragdoll_floor: StaticBody3D = null
+var _spatula_balance_ragdoll_released: bool = false
 var _spatula_balance_returning: bool = false
 var _spatula_balance_fall_hold_started: bool = false
 var _spatula_balance_return_t: float = 0.0
@@ -5073,6 +5074,7 @@ func _cleanup_spatula_balance_ragdoll() -> void:
 	if _spatula_balance_ragdoll_floor != null and is_instance_valid(_spatula_balance_ragdoll_floor):
 		_spatula_balance_ragdoll_floor.queue_free()
 	_spatula_balance_ragdoll_floor = null
+	_spatula_balance_ragdoll_released = false
 
 
 func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
@@ -5105,7 +5107,9 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 	body.collision_layer = 1
 	body.collision_mask = 1
 	body.global_transform = start_xform
-	body.global_position.y = maxf(body.global_position.y, GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE + 0.035)
+	if body.global_position.y < GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE + 0.035:
+		body.global_position.y = GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE + 0.035
+	body.freeze = true
 	world.add_child(body)
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
@@ -5124,18 +5128,30 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 		col.position = local_bounds.position + local_bounds.size * 0.5
 	else:
 		box.size = Vector3(0.105, 0.045, 0.56)
-	var impulse_dir := Vector3(_spatula_balance_fall_dir.x, 0.18, _spatula_balance_fall_dir.y)
-	if impulse_dir.length_squared() < 0.0001:
-		impulse_dir = Vector3(1.0, 0.18, 0.0)
-	impulse_dir = impulse_dir.normalized()
-	body.linear_velocity = Vector3(impulse_dir.x * 0.18, -0.04, impulse_dir.z * 0.18)
-	var ang_push := randf_range(1.7, 2.5)
-	body.angular_velocity = Vector3(
-		_spatula_balance_fall_dir.y * ang_push,
-		randf_range(-0.35, 0.35),
-		-_spatula_balance_fall_dir.x * ang_push
-	)
+	body.linear_velocity = Vector3.ZERO
+	body.angular_velocity = Vector3.ZERO
+	_spatula_balance_ragdoll_released = false
 	_spatula_balance_ragdoll_body = body
+
+
+func _release_spatula_balance_ragdoll() -> void:
+	if _spatula_balance_ragdoll_released:
+		return
+	if _spatula_balance_ragdoll_body == null or not is_instance_valid(_spatula_balance_ragdoll_body):
+		return
+	_spatula_balance_ragdoll_released = true
+	var body := _spatula_balance_ragdoll_body
+	body.freeze = false
+	var fall_dir := Vector3(_spatula_balance_fall_dir.x, 0.0, _spatula_balance_fall_dir.y)
+	if fall_dir.length_squared() < 0.0001:
+		fall_dir = body.global_transform.basis.z
+	fall_dir = fall_dir.normalized()
+	body.linear_velocity = Vector3(fall_dir.x * 0.055, -0.045, fall_dir.z * 0.055)
+	body.angular_velocity = Vector3(
+		_spatula_balance_fall_dir.y * 0.9,
+		0.0,
+		-_spatula_balance_fall_dir.x * 0.9
+	)
 
 
 func _spatula_balance_visual_local_bounds(body: Node3D) -> AABB:
@@ -5172,6 +5188,8 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		var hold_done_at := ragdoll_dur + SPATULA_BALANCE_FALL_HOLD_DUR
 		if not _spatula_balance_returning:
 			if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+				if _spatula_balance_fall_t >= 0.055:
+					_release_spatula_balance_ragdoll()
 				if not _spatula_balance_impact_done and _spatula_balance_ragdoll_body.get_contact_count() > 0:
 					_spatula_balance_impact_pending = true
 					_spatula_balance_impact_done = true
@@ -6708,10 +6726,8 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	if _spatula_balance_active and _spatula_balance_falling:
 		var target_xform := hand_spatula_root.global_transform
 		if _spatula_balance_ragdoll_body == null and not _spatula_balance_returning:
-			var spawn_xform := _spatula_balance_last_visible_xform
-			if spawn_xform == Transform3D.IDENTITY:
-				spawn_xform = target_xform
-			_begin_spatula_balance_ragdoll(spawn_xform)
+			_spatula_balance_last_visible_xform = target_xform
+			_begin_spatula_balance_ragdoll(target_xform)
 		if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
 			hand_spatula_root.visible = false
 		elif _spatula_balance_returning:
