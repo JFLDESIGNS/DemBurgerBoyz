@@ -2548,6 +2548,18 @@ func _send_gamepad_mouse_button(button_index: int, pressed: bool) -> void:
 	var vp := get_viewport()
 	if vp == null:
 		return
+	_set_gamepad_mouse_button_mask(button_index, pressed)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = button_index
+	ev.pressed = pressed
+	ev.position = vp.get_mouse_position()
+	ev.global_position = ev.position
+	ev.button_mask = _gamepad_mouse_button_mask
+	ev.factor = 1.0
+	Input.parse_input_event(ev)
+
+
+func _set_gamepad_mouse_button_mask(button_index: int, pressed: bool) -> void:
 	var mask := 0
 	match button_index:
 		MOUSE_BUTTON_LEFT:
@@ -2561,19 +2573,94 @@ func _send_gamepad_mouse_button(button_index: int, pressed: bool) -> void:
 			_gamepad_mouse_button_mask |= mask
 		else:
 			_gamepad_mouse_button_mask &= ~mask
-	var ev := InputEventMouseButton.new()
-	ev.button_index = button_index
-	ev.pressed = pressed
-	ev.position = vp.get_mouse_position()
-	ev.global_position = ev.position
-	ev.button_mask = _gamepad_mouse_button_mask
-	ev.factor = 1.0
-	Input.parse_input_event(ev)
+
+
+func _handle_gamepad_world_button(button_index: int, pressed: bool) -> bool:
+	var vp := get_viewport()
+	if vp == null:
+		return false
+	var pos := vp.get_mouse_position()
+	_set_gamepad_mouse_button_mask(button_index, pressed)
+	if button_index == MOUSE_BUTTON_LEFT and not pressed:
+		if spatula_patty != null and spatula_lmb_held:
+			spatula_lmb_held = false
+			_handle_spatula_release(pos)
+			return true
+		if spatula_grill_hold:
+			spatula_grill_hold = false
+			spatula_grill_hold_last_xz = Vector2.INF
+			spatula_grill_hold_on_meat = false
+			_spatula_pull_flip_done = false
+			_spatula_mute_ting = false
+			_stop_spatula_grill_scrape_audio()
+			if dragging_patty == null:
+				return true
+		if dragging_patty != null:
+			_end_patty_drag()
+			return true
+	if not pressed or not playing or options_menu_open or shift_paused:
+		return false
+	if button_index == MOUSE_BUTTON_LEFT or button_index == MOUSE_BUTTON_RIGHT or button_index == MOUSE_BUTTON_MIDDLE:
+		_pulse_cursor_click(pos)
+	if button_index == MOUSE_BUTTON_MIDDLE:
+		if _should_show_hand_spatula(pos) \
+				or (hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible):
+			_toggle_spatula_balance(pos)
+			_refresh_grill_piano_note_labels()
+			return true
+		return false
+	if button_index == MOUSE_BUTTON_LEFT:
+		if _ui_blocks_world_click(pos, false):
+			return false
+		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
+			return false
+		if spatula_patty != null:
+			if spatula_lmb_held and spatula_from_build:
+				return true
+			_begin_hand_spatula_combo(pos, 1)
+			_handle_spatula_click(pos)
+			return true
+		if _should_show_hand_spatula(pos):
+			var under_burger = _pick_patty_for_slide_or_scoop(pos)
+			if under_burger != null:
+				_spatula_cancel_tap_keep_ting()
+				spatula_grill_hold = false
+				spatula_grill_hold_on_meat = false
+				_spatula_pull_flip_done = false
+				_stop_spatula_grill_scrape_audio()
+				_begin_patty_drag(under_burger)
+			else:
+				spatula_grill_hold = true
+				spatula_grill_hold_press_mouse = pos
+				spatula_grill_hold_last_xz = Vector2.INF
+				spatula_grill_hold_on_meat = false
+				_spatula_pull_flip_done = false
+				_begin_hand_spatula_combo(pos)
+			return true
+	if button_index == MOUSE_BUTTON_RIGHT:
+		if _ui_blocks_world_click(pos, true):
+			return false
+		if spatula_patty != null and is_instance_valid(spatula_patty) \
+				and spatula_juggle_patty == null and flicking_patty == null:
+			if _start_spatula_juggle_toss():
+				return true
+		if _try_poke_grill_roomba(pos):
+			return true
+		var smash_target = _pick_patty_for_smash(pos)
+		if smash_target != null:
+			_smash_grill_patty(smash_target)
+			_try_begin_cheese_pull_on_patty(smash_target)
+			return true
+		_try_grill_raycast(pos, true)
+		return true
+	return false
 
 
 func _update_gamepad_button(button_index: int, pressed: bool, prev_pressed: bool) -> bool:
 	if pressed != prev_pressed:
-		_send_gamepad_mouse_button(button_index, pressed)
+		var handled_world := _handle_gamepad_world_button(button_index, pressed)
+		if not handled_world:
+			_send_gamepad_mouse_button(button_index, pressed)
 	return pressed
 
 
