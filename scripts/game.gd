@@ -7118,6 +7118,8 @@ func _build_flat_top_grill() -> void:
 	grill_glow_meshes.clear()
 	grill_surface_node = surface
 	_ensure_grill_steel_texture()
+	var receiver_mat := _make_grill_zone_metal(Color(0.30, 0.32, 0.36), 0.50, 0.0, GRILL_WIDTH, GRILL_DEPTH)
+	_add_grill_shadow_receiver(surface, Vector3(0, 0, 0), Vector3(GRILL_WIDTH, 0.043, GRILL_DEPTH), receiver_mat)
 	var cook_x0 := 0.0
 	var cook_x1 := 0.0
 	var cook_started := false
@@ -19294,15 +19296,34 @@ func _make_grill_zone_metal(albedo: Color, roughness: float, emit: float, zone_w
 
 func _add_grill_zone_panel(parent: Node3D, local_pos: Vector3, size: Vector3, mat: Material) -> void:
 	var panel := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
+	var mesh := PlaneMesh.new()
+	mesh.size = Vector2(size.x, size.z)
 	panel.mesh = mesh
-	panel.position = local_pos
-	panel.material_override = mat
-	## Receive only — casting from flat boxes causes self-shadow acne on the top face.
+	panel.position = Vector3(local_pos.x, local_pos.y + 0.024, local_pos.z)
+	var overlay_mat := mat
+	if mat is BaseMaterial3D:
+		overlay_mat = mat.duplicate()
+		var bm := overlay_mat as BaseMaterial3D
+		bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bm.albedo_color.a = 0.42
+		bm.disable_receive_shadows = true
+	panel.material_override = overlay_mat
+	## Decorative heat tint only; one continuous slab below receives all spatula shadows.
 	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	panel.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	parent.add_child(panel)
+
+
+func _add_grill_shadow_receiver(parent: Node3D, local_pos: Vector3, size: Vector3, mat: Material) -> void:
+	var receiver := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	receiver.mesh = mesh
+	receiver.position = local_pos
+	receiver.material_override = mat
+	receiver.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	receiver.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	parent.add_child(receiver)
 
 
 func _make_grill_splash_stainless() -> StandardMaterial3D:
