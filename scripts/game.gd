@@ -45151,6 +45151,13 @@ func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: 
 	if tex == null:
 		_apply_customer_ingredient_hit(cust, id, stick_cheese)
 		return
+	var side_sign := 1.0 if start.x <= end.x else -1.0
+	var bounce_end := end + Vector2(280.0 * side_sign, 82.0)
+	if camera != null and cust != null and is_instance_valid(cust):
+		var cam_right := camera.global_transform.basis.x.normalized()
+		var head_side := _customer_head_world(cust) + cam_right * side_sign * 1.22 + Vector3(0.0, -0.14, 0.0)
+		if not camera.is_position_behind(head_side):
+			bounce_end = camera.unproject_position(head_side)
 	var fly_root := Control.new()
 	fly_root.name = "CustomerIngredientFly"
 	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -45183,23 +45190,32 @@ func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: 
 		1.0,
 		0.30
 	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		if game_audio != null and game_audio.has_method("play_ingredient"):
+			game_audio.play_ingredient(id, 1.45)
+		elif game_audio != null and game_audio.has_method("play_bun_thud"):
+			game_audio.play_bun_thud(1.25)
+		_apply_customer_ingredient_hit(cust, id, stick_cheese)
+	)
 	tw.tween_method(
 		func(t: float) -> void:
 			if not is_instance_valid(icon):
 				return
-			var bounce := sin(t * PI)
-			var squash := sin(t * TAU)
-			icon.global_position = end - icon_size * 0.5 + Vector2(0.0, -22.0 * bounce)
-			icon.scale = Vector2(0.48 + 0.10 * bounce, 0.48 - 0.04 * absf(squash))
-			icon.rotation = lerpf(0.8, -0.25, t),
+			var eased := 1.0 - pow(1.0 - t, 2.0)
+			var hop := sin(t * PI)
+			var pos := end.lerp(bounce_end, eased)
+			pos.y -= 70.0 * hop
+			icon.global_position = pos - icon_size * 0.5
+			icon.scale = Vector2(0.56, 0.45).lerp(Vector2(0.30, 0.30), t)
+			icon.modulate.a = lerpf(1.0, 0.0, maxf(0.0, (t - 0.62) / 0.38))
+			icon.rotation = lerpf(0.8, 3.4 * side_sign, t),
 		0.0,
 		1.0,
-		0.16
-	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		0.34
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(fly_root):
 			fly_root.queue_free()
-		_apply_customer_ingredient_hit(cust, id, stick_cheese)
 	)
 
 
