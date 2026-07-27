@@ -5248,7 +5248,7 @@ func _build_spatula_balance_timer_label() -> void:
 	label.modulate = Color(0.90, 0.96, 1.0, 0.92)
 	label.outline_modulate = Color(0.02, 0.03, 0.04, 0.85)
 	label.outline_size = 7
-	label.font_size = 14
+	label.font_size = 11
 	hand_spatula_root.add_child(label)
 	_spatula_balance_timer_label = label
 
@@ -5636,7 +5636,7 @@ func _update_spatula_balance_timer_label() -> void:
 	if not show:
 		return
 	_spatula_balance_timer_label.text = "%.1fs" % _spatula_balance_timer_t
-	_spatula_balance_timer_label.global_position = hand_spatula_root.global_position + Vector3(0.0, 0.42, 0.0)
+	_spatula_balance_timer_label.global_position = hand_spatula_root.global_position + Vector3(0.0, 0.30, 0.0)
 
 
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
