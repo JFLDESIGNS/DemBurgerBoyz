@@ -3354,19 +3354,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				## Slide / scoop only if the burger is under the cursor — near-miss scrapes instead.
 				var under_burger = _pick_patty_for_slide_or_scoop(event.position)
 				if under_burger != null:
-					## Flat blade hops burgers; tilted blade still drag-slides / scoops.
+					## Burger under cursor keeps classic quick-click flip and drag-slide.
+					## Empty-steel grill-hold below is the only flat push/pop mode.
 					_spatula_cancel_tap_keep_ting()
-					spatula_grill_hold = absf(_spatula_user_roll) < HAND_SPATULA_ROLL_STEP * 0.5
-					spatula_grill_hold_press_mouse = event.position
-					spatula_grill_hold_last_xz = Vector2.INF
-					spatula_grill_hold_on_meat = spatula_grill_hold
+					spatula_grill_hold = false
+					spatula_grill_hold_on_meat = false
 					_spatula_pull_flip_done = false
 					_stop_spatula_grill_scrape_audio()
-					if spatula_grill_hold:
-						_begin_hand_spatula_combo(event.position)
-						_spatula_flat_pop_patties(under_burger.global_position)
-					else:
-						_begin_patty_drag(under_burger)
+					_begin_patty_drag(under_burger)
 				else:
 					## Supplement: empty-steel hold scrapes and tip-pushes nearby burgers.
 					spatula_grill_hold = true
