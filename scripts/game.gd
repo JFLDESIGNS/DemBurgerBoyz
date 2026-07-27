@@ -295,17 +295,17 @@ const HAND_SPATULA_SLAP_CLEAR := 0.06722 ## 1" lower than prior 0.09262
 const HAND_SPATULA_SLAP_FWD_PITCH := 12.0 ## +X tips blade toward steel
 ## Drag slide: under the burger — raised 1.5" so the blade clears the patty (was clipping at +1").
 const HAND_SPATULA_DRAG_CLEAR := HAND_SPATULA_SLAP_CLEAR + 0.0254 + 0.0127
-## LMB hold on empty steel: scrape pose (no burger) — stays at slap clear height.
-const HAND_SPATULA_HOLD_SLIDE_CLEAR := HAND_SPATULA_SLAP_CLEAR
+## LMB hold on empty steel: scrape pose (no burger) — pressed 1" closer to the steel.
+const HAND_SPATULA_HOLD_SLIDE_CLEAR := HAND_SPATULA_SLAP_CLEAR - 0.0254
 const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/falling
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to flip.
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
-const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.118
-const HAND_SPATULA_BALANCE_UNSTABLE := 7.4
-const HAND_SPATULA_BALANCE_DRIFT := 1.05
-const HAND_SPATULA_BALANCE_DAMP := 0.985
-const HAND_SPATULA_BALANCE_MAX_TILT := 48.0
+const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.018
+const HAND_SPATULA_BALANCE_UNSTABLE := 9.2
+const HAND_SPATULA_BALANCE_DRIFT := 0.0
+const HAND_SPATULA_BALANCE_DAMP := 0.992
+const HAND_SPATULA_BALANCE_MAX_TILT := 70.0
 const HAND_SPATULA_BALANCE_BASE_Y := 0.075
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
@@ -4977,15 +4977,22 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 	## Scroll up → +45° / +90° · scroll down → opposite · snap to those steps.
 	if dir == 0:
 		return
-	_spatula_balance_active = false
-	_spatula_balance_tilt = Vector2.ZERO
-	_spatula_balance_vel = Vector2.ZERO
+	_stop_spatula_balance()
 	var next := _spatula_user_roll + float(dir) * HAND_SPATULA_ROLL_STEP
 	## Snap so leftover 30° steps from older builds clean up.
 	next = snappedf(next, HAND_SPATULA_ROLL_STEP)
 	_spatula_user_roll = clampf(next, -HAND_SPATULA_ROLL_MAX, HAND_SPATULA_ROLL_MAX)
 	## Debug note labels follow the active key / HOLD voice.
 	_refresh_grill_piano_note_labels()
+
+
+func _stop_spatula_balance() -> void:
+	_spatula_balance_active = false
+	_spatula_balance_last_mouse = Vector2.INF
+	_spatula_balance_tilt = Vector2.ZERO
+	_spatula_balance_vel = Vector2.ZERO
+	_spatula_balance_drift_dir = Vector2.RIGHT
+	_spatula_user_roll = 0.0
 
 
 func _toggle_spatula_balance(mouse: Vector2) -> void:
@@ -4995,12 +5002,9 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_vel = Vector2.ZERO
 	_spatula_user_roll = 0.0
 	if _spatula_balance_active:
-		var a := randf() * TAU
-		_spatula_balance_drift_dir = Vector2(cos(a), sin(a)).normalized()
-		_spatula_balance_tilt = _spatula_balance_drift_dir * deg_to_rad(randf_range(4.0, 8.0))
-		_spatula_balance_vel = _spatula_balance_drift_dir * randf_range(0.12, 0.22)
-	else:
 		_spatula_balance_drift_dir = Vector2.RIGHT
+	else:
+		_stop_spatula_balance()
 
 
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
@@ -5012,22 +5016,20 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		return
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
-	var t := Time.get_ticks_msec() * 0.001
-	var wind := _spatula_balance_drift_dir + Vector2(cos(t * 1.9), sin(t * 1.37)) * 0.42
-	if wind.length_squared() > 0.001:
-		wind = wind.normalized()
 	var lean := _spatula_balance_tilt
-	var lean_gain := 0.45 + lean.length() * 5.2
+	var move := Vector2(mouse_delta.x, mouse_delta.y)
+	if move.length_squared() > 0.01:
+		_spatula_balance_drift_dir = move.normalized()
+		_spatula_balance_vel += move * HAND_SPATULA_BALANCE_MOUSE_CORRECT
+	var lean_gain := 0.25 + lean.length() * 7.0
 	_spatula_balance_vel += lean * HAND_SPATULA_BALANCE_UNSTABLE * lean_gain * delta
-	_spatula_balance_vel += wind * HAND_SPATULA_BALANCE_DRIFT * delta
-	## Move under the falling top: mouse movement in the lean direction counters it.
-	_spatula_balance_vel -= Vector2(mouse_delta.x, mouse_delta.y) * HAND_SPATULA_BALANCE_MOUSE_CORRECT
+	if HAND_SPATULA_BALANCE_DRIFT > 0.0:
+		_spatula_balance_vel += _spatula_balance_drift_dir * HAND_SPATULA_BALANCE_DRIFT * delta
 	_spatula_balance_vel *= pow(HAND_SPATULA_BALANCE_DAMP, delta * 60.0)
 	_spatula_balance_tilt += _spatula_balance_vel * delta
 	var max_rad := deg_to_rad(HAND_SPATULA_BALANCE_MAX_TILT)
 	if _spatula_balance_tilt.length() > max_rad:
-		_spatula_balance_tilt = _spatula_balance_tilt.normalized() * max_rad
-		_spatula_balance_vel *= -0.18
+		_stop_spatula_balance()
 
 
 func _spatula_roll_midi_offset() -> int:
@@ -6315,18 +6317,25 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		_spatula_mute_ting = false
 		_stop_spatula_grill_scrape_audio()
 		_update_spatula_balance(mouse, delta)
-		var balance_y := GRILL_SURFACE_Y + HAND_SPATULA_BALANCE_BASE_Y
-		var pivot_target := _hand_spatula_hold_point_from_screen(mouse, balance_y)
-		if pivot_target == Vector3.ZERO:
-			pivot_target = _tool_hold_point_from_screen(mouse, balance_y)
-		if pivot_target == Vector3.ZERO:
-			pivot_target = tip_target
-		pivot_target.y = balance_y
-		tip_target = pivot_target
-		var wobble := sin(Time.get_ticks_msec() * 0.018) * 1.2
-		pitch = -90.0 + rad_to_deg(_spatula_balance_tilt.y)
-		roll = rad_to_deg(_spatula_balance_tilt.x) + wobble
-		pivot_local = HAND_SPATULA_BALANCE_PIVOT_OFFSET
+		if not _spatula_balance_active:
+			tip_target = _hand_spatula_tip_from_screen(mouse, hold_y)
+			pitch = rot.x + tip
+			roll = 0.0
+			pivot_local = HAND_SPATULA_TIP_OFFSET
+		else:
+			var balance_y := GRILL_SURFACE_Y + HAND_SPATULA_BALANCE_BASE_Y
+			var pivot_target := _grill_plane_from_screen(mouse)
+			if pivot_target != Vector3.ZERO:
+				pivot_target.y = balance_y
+			else:
+				pivot_target = _tool_hold_point_from_screen(mouse, balance_y)
+			if pivot_target == Vector3.ZERO:
+				pivot_target = tip_target
+			pivot_target.y = balance_y
+			tip_target = pivot_target
+			pitch = -90.0 + rad_to_deg(_spatula_balance_tilt.y)
+			roll = rad_to_deg(_spatula_balance_tilt.x)
+			pivot_local = HAND_SPATULA_BALANCE_PIVOT_OFFSET
 	elif dragging:
 		## Burger slide — spatula rides under the patty. Never scrape/clean while dragging a burger.
 		if _spatula_anim_kind == 1 or _spatula_anim_kind == 2:
