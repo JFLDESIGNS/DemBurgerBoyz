@@ -1528,6 +1528,21 @@ var tree_birch_yaw: float = TREE_BIRCH_DEFAULT_YAW
 var options_hidden_tree_select: OptionButton = null
 var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
 const TREE_XFORM_CFG_SECTION := "tree_xform"
+const PROP_OFFSET_CFG_SECTION := "prop_offsets"
+var prop_offsets: Dictionary = {
+	"burger_buns": Vector3.ZERO,
+	"cheese_stack": Vector3.ZERO,
+	"cutting_board": Vector3.ZERO,
+	"seasoning_shaker": Vector3.ZERO,
+	"fire_ext": Vector3.ZERO,
+	"oil_bottle": Vector3.ZERO,
+	"open_sign": Vector3.ZERO,
+	"fryer": Vector3.ZERO,
+	"fryer_done": Vector3.ZERO,
+	"big_tree": Vector3.ZERO,
+	"small_tree": Vector3.ZERO,
+}
+var prop_offsets_loaded: bool = false
 var screen_zone_overlay: Control = null
 var screen_zone_overlay_visible: bool = false
 const SCREEN_ZONE_COLS := 5
@@ -1793,8 +1808,22 @@ var soda_soft_tight := 0.055
 var soda_soft_pull := 0.72
 var soda_soft_unlock_grace := 0.55
 var soda_soft_debug := false
+var soda_soft_offsets_in: Dictionary = {
+	"cola": Vector3.ZERO,
+	"lemon_lime": Vector3.ZERO,
+	"orange": Vector3.ZERO,
+	"ice": Vector3.ZERO,
+}
+var soda_soft_radius_mult: Dictionary = {
+	"cola": 1.0,
+	"lemon_lime": 1.0,
+	"orange": 1.0,
+	"ice": 1.0,
+}
 var soda_fill_follow_rate := 28.0
 var soda_fill_max_speed := 4.2
+var cup_liquid_top_offset_in := 0.0
+var cup_liquid_radius_scale := 1.0
 var soda_tank_visual_scale := 0.68
 var soda_tank_x_offset_in := 0.0
 var soda_tank_y_offset_in := 21.0
@@ -14648,6 +14677,11 @@ func _make_residue_texture(seed_i: int) -> ImageTexture:
 
 func _build_fire_extinguisher() -> void:
 	## Mounted on the left window beam, just left of scraper / oil / seasoning.
+	if ext_root != null and is_instance_valid(ext_root):
+		ext_root.queue_free()
+	ext_root = null
+	ext_visual = null
+	ext_area = null
 	const SCENE_PATH := "res://assets/fire_ext/FireExt.fbx"
 	const DIFF_PATH := "res://assets/fire_ext/DIFFUSE.jpg"
 	const NORM_PATH := "res://assets/fire_ext/NORMAL.jpg"
@@ -14660,7 +14694,7 @@ func _build_fire_extinguisher() -> void:
 	var visual := packed.instantiate() as Node3D
 	if visual == null:
 		return
-	ext_home = Vector3(2.2662, 1.72, 0.937)
+	ext_home = Vector3(2.2662, 1.72, 0.937) + _prop_offset("fire_ext")
 	ext_root = Node3D.new()
 	ext_root.name = "FireExtinguisher"
 	ext_root.position = ext_home
@@ -15969,7 +16003,7 @@ func _build_wire_brush() -> void:
 
 func _build_season_shaker() -> void:
 	## Seasoning hanging next to the oil bottle on the far-left window beam.
-	shaker_home = Vector3(2.0340, 2.0384, 1.12) ## Camera-left away from order tickets.
+	shaker_home = Vector3(2.0340, 2.0384, 1.12) + _prop_offset("seasoning_shaker") ## Camera-left away from order tickets.
 	if shaker_root != null and is_instance_valid(shaker_root):
 		shaker_root.queue_free()
 	shaker_root = null
@@ -19387,7 +19421,13 @@ func _clear_melting_cups() -> void:
 
 func _build_oil_bottle() -> void:
 	## Oil bottle hanging from the far-left window beam.
-	oil_home = Vector3(1.6740, 2.12, 1.12)
+	if oil_root != null and is_instance_valid(oil_root):
+		oil_root.queue_free()
+	oil_root = null
+	oil_area = null
+	oil_liquid_pivot = null
+	oil_liquid_mesh = null
+	oil_home = Vector3(1.6740, 2.12, 1.12) + _prop_offset("oil_bottle")
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
@@ -22835,12 +22875,12 @@ func _sync_roomba_home_hidden_ui() -> void:
 func _apply_outdoor_tree_xforms() -> void:
 	if tree_front_node != null and is_instance_valid(tree_front_node):
 		if not bool(tree_front_node.get_meta("tree_shaking", false)):
-			tree_front_node.position = tree_front_pos
+			tree_front_node.position = tree_front_pos + _prop_offset("big_tree")
 			tree_front_node.rotation_degrees = Vector3(0.0, tree_front_yaw, 0.0)
 			tree_front_node.set_meta("tree_base_rot", Vector3(0.0, tree_front_yaw, 0.0))
 	if tree_birch_node != null and is_instance_valid(tree_birch_node):
 		if not bool(tree_birch_node.get_meta("tree_shaking", false)):
-			tree_birch_node.position = tree_birch_pos
+			tree_birch_node.position = tree_birch_pos + _prop_offset("small_tree")
 			tree_birch_node.rotation_degrees = Vector3(0.0, tree_birch_yaw, 0.0)
 			tree_birch_node.set_meta("tree_base_rot", Vector3(0.0, tree_birch_yaw, 0.0))
 	## Keep fill lights glued to the moved trunks.
@@ -22932,6 +22972,90 @@ func _sync_tree_xform_hidden_ui() -> void:
 			options_hidden_tree_light_labs[key].text = fmt % float(vals[key])
 
 
+func _ensure_prop_offsets_loaded() -> void:
+	if prop_offsets_loaded:
+		return
+	prop_offsets_loaded = true
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	for key in prop_offsets.keys():
+		var cur: Vector3 = prop_offsets[key]
+		prop_offsets[key] = Vector3(
+			clampf(float(cfg.get_value(PROP_OFFSET_CFG_SECTION, "%s_x" % key, cur.x)), -12.0, 12.0),
+			clampf(float(cfg.get_value(PROP_OFFSET_CFG_SECTION, "%s_y" % key, cur.y)), -6.0, 8.0),
+			clampf(float(cfg.get_value(PROP_OFFSET_CFG_SECTION, "%s_z" % key, cur.z)), -12.0, 16.0)
+		)
+
+
+func _prop_offset(key: String) -> Vector3:
+	_ensure_prop_offsets_loaded()
+	return prop_offsets.get(key, Vector3.ZERO) as Vector3
+
+
+func _save_prop_offset_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	for key in prop_offsets.keys():
+		var off: Vector3 = prop_offsets[key]
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "%s_x" % key, off.x)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "%s_y" % key, off.y)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "%s_z" % key, off.z)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _set_prop_offset_axis(key: String, axis: String, val: float) -> void:
+	_ensure_prop_offsets_loaded()
+	var off: Vector3 = prop_offsets.get(key, Vector3.ZERO)
+	match axis:
+		"x":
+			off.x = clampf(val, -12.0, 12.0)
+		"y":
+			off.y = clampf(val, -6.0, 8.0)
+		"z":
+			off.z = clampf(val, -12.0, 16.0)
+	prop_offsets[key] = off
+	_save_prop_offset_settings()
+	_apply_prop_offset_changed(key)
+
+
+func _apply_prop_offset_changed(key: String) -> void:
+	match key:
+		"burger_buns", "cheese_stack", "cutting_board":
+			_build_cutting_board_prop()
+			_build_cheese_station_prop()
+		"seasoning_shaker":
+			_build_season_shaker()
+		"fire_ext":
+			_build_fire_extinguisher()
+		"oil_bottle":
+			_build_oil_bottle()
+		"open_sign":
+			_build_open_closed_sign()
+		"fryer":
+			_build_fryer_machine()
+		"fryer_done":
+			_refresh_ready_fries_visuals()
+		"big_tree", "small_tree":
+			_apply_outdoor_tree_xforms()
+
+
+func _hidden_add_prop_offset_group(parent: Control, key: String, title: String) -> void:
+	_hidden_add_section(parent, title)
+	_hidden_add_labeled_slider(parent, "%s_x" % key, "X Offset", -12.0, 12.0, 0.01,
+		func(): return _prop_offset(key).x,
+		func(v: float): _set_prop_offset_axis(key, "x", v)
+	)
+	_hidden_add_labeled_slider(parent, "%s_y" % key, "Height Offset", -6.0, 8.0, 0.01,
+		func(): return _prop_offset(key).y,
+		func(v: float): _set_prop_offset_axis(key, "y", v)
+	)
+	_hidden_add_labeled_slider(parent, "%s_z" % key, "Z Offset", -12.0, 16.0, 0.01,
+		func(): return _prop_offset(key).z,
+		func(v: float): _set_prop_offset_axis(key, "z", v)
+	)
+
+
 func _icecream_station_world_pos() -> Vector3:
 	## Camera looks +Z out the window → camera-right is world −X.
 	return ICECREAM_STATION_POS + Vector3(-icecream_cam_right_ft * FT_TO_M, 0.0, 0.0)
@@ -23004,6 +23128,12 @@ func _load_soda_tuning_settings() -> void:
 			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, (soda_nozzle_offsets_in.get(fid, Vector3.ZERO) as Vector3).y)), -12.0, 12.0),
 			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, (soda_nozzle_offsets_in.get(fid, Vector3.ZERO) as Vector3).z)), -12.0, 12.0)
 		)
+		soda_soft_offsets_in[fid] = Vector3(
+			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_soft_x_in" % fid, (soda_soft_offsets_in.get(fid, Vector3.ZERO) as Vector3).x)), -12.0, 12.0),
+			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_soft_y_in" % fid, (soda_soft_offsets_in.get(fid, Vector3.ZERO) as Vector3).y)), -12.0, 12.0),
+			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, (soda_soft_offsets_in.get(fid, Vector3.ZERO) as Vector3).z)), -12.0, 12.0)
+		)
+		soda_soft_radius_mult[fid] = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_soft_radius_mult" % fid, soda_soft_radius_mult.get(fid, 1.0))), 0.25, 3.0)
 	soda_blocker_half_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_half_x", soda_blocker_half_x)), 0.05, 1.5)
 	soda_blocker_height = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)), 0.05, 2.5)
 	soda_blocker_front_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)), -0.7, 0.7)
@@ -23025,6 +23155,8 @@ func _load_soda_tuning_settings() -> void:
 	soda_soft_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_debug", soda_soft_debug))
 	soda_fill_follow_rate = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_follow_rate", soda_fill_follow_rate)), 1.0, 80.0)
 	soda_fill_max_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)), 0.2, 12.0)
+	cup_liquid_top_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_liquid_top_offset_in", cup_liquid_top_offset_in)), -6.0, 6.0)
+	cup_liquid_radius_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_liquid_radius_scale", cup_liquid_radius_scale)), 0.5, 1.5)
 	soda_tank_visual_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_scale", soda_tank_visual_scale)), 0.2, 1.4)
 	soda_tank_x_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_x_in", soda_tank_x_offset_in)), -12.0, 12.0)
 	soda_tank_y_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)), -8.0, 36.0)
@@ -23044,6 +23176,11 @@ func _save_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, off.x)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, off.y)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, off.z)
+		var soft: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_x_in" % fid, soft.x)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_y_in" % fid, soft.y)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, soft.z)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_radius_mult" % fid, float(soda_soft_radius_mult.get(fid, 1.0)))
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_half_x", soda_blocker_half_x)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)
@@ -23065,6 +23202,8 @@ func _save_soda_tuning_settings() -> void:
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_debug", soda_soft_debug)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "fill_follow_rate", soda_fill_follow_rate)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_liquid_top_offset_in", cup_liquid_top_offset_in)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_liquid_radius_scale", cup_liquid_radius_scale)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_scale", soda_tank_visual_scale)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_x_in", soda_tank_x_offset_in)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)
@@ -23310,6 +23449,53 @@ func _set_soda_nozzle_offset_axis(fid: String, axis: String, val: float) -> void
 		"z":
 			off.z = clampf(val, -12.0, 12.0)
 	soda_nozzle_offsets_in[fid] = off
+
+
+func _soda_soft_offset_axis(fid: String, axis: String) -> float:
+	var off: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
+	match axis:
+		"x":
+			return off.x
+		"y":
+			return off.y
+		"z":
+			return off.z
+	return 0.0
+
+
+func _set_soda_soft_offset_axis(fid: String, axis: String, val: float) -> void:
+	var off: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
+	match axis:
+		"x":
+			off.x = clampf(val, -12.0, 12.0)
+		"y":
+			off.y = clampf(val, -12.0, 12.0)
+		"z":
+			off.z = clampf(val, -12.0, 12.0)
+	soda_soft_offsets_in[fid] = off
+
+
+func _soda_soft_radius_mult_value(fid: String) -> float:
+	return float(soda_soft_radius_mult.get(fid, 1.0))
+
+
+func _set_soda_soft_radius_mult(fid: String, val: float) -> void:
+	soda_soft_radius_mult[fid] = clampf(val, 0.25, 3.0)
+
+
+func _hidden_add_soda_soft_lock_group(parent: Control, fid: String, label_prefix: String) -> void:
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_x" % fid, "%s Seat X (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(): return _soda_soft_offset_axis(fid, "x"),
+		func(v: float): _set_soda_soft_offset_axis(fid, "x", v))
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_y" % fid, "%s Seat Height (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(): return _soda_soft_offset_axis(fid, "y"),
+		func(v: float): _set_soda_soft_offset_axis(fid, "y", v))
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_z" % fid, "%s Seat Z (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(): return _soda_soft_offset_axis(fid, "z"),
+		func(v: float): _set_soda_soft_offset_axis(fid, "z", v))
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_mult" % fid, "%s Radius Mult" % label_prefix, 0.25, 3.0, 0.01,
+		func(): return _soda_soft_radius_mult_value(fid),
+		func(v: float): _set_soda_soft_radius_mult(fid, v))
 
 
 func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
@@ -24453,6 +24639,7 @@ func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 		for fid in SODA_FLAVORS:
 			var tip := Marker3D.new()
 			tip.name = "SodaSpoutTip_%s" % fid
+			tip.set_meta("soda_station_id", fid)
 			var base: Vector3 = SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
 			tip.position = _soda_model_local(base + _soda_nozzle_offset_model(fid))
 			parent.add_child(tip)
@@ -24462,6 +24649,7 @@ func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 	else:
 		var tip := Marker3D.new()
 		tip.name = "IceSpoutTip"
+		tip.set_meta("soda_station_id", "ice")
 		tip.position = _soda_model_local(SODA_MODEL_ICE_SPOUT + _soda_nozzle_offset_model("ice"))
 		parent.add_child(tip)
 		ice_spout_marker = tip
@@ -24486,6 +24674,21 @@ func _soda_tip_for_station(fid: String) -> Marker3D:
 	return null
 
 
+func _soda_station_id_for_tip(tip: Node3D) -> String:
+	if tip == null or not is_instance_valid(tip):
+		return ""
+	if tip.has_meta("soda_station_id"):
+		return str(tip.get_meta("soda_station_id"))
+	for fid in soda_spout_markers.keys():
+		if soda_spout_markers[fid] == tip:
+			return str(fid)
+	return ""
+
+
+func _soda_soft_radius_for_station(fid: String) -> float:
+	return soda_soft_magnet_radius * clampf(float(soda_soft_radius_mult.get(fid, 1.0)), 0.25, 3.0)
+
+
 func _set_soda_active_station(fid: String) -> void:
 	if fid == soda_active_station:
 		return
@@ -24499,17 +24702,20 @@ func _set_soda_active_station(fid: String) -> void:
 func _nearest_soda_station_for_pos(pos: Vector3, max_dist: float) -> Dictionary:
 	var best_id := ""
 	var best_tip: Marker3D = null
-	var best_d := max_dist
+	var best_d := INF
 	for fid in _soda_station_tip_ids():
 		var tip := _soda_tip_for_station(fid)
 		if tip == null:
 			continue
 		var seat := _cup_target_for_spout(tip)
 		var d := Vector2(pos.x - seat.x, pos.z - seat.z).length()
-		if d < best_d:
+		var station_max := maxf(max_dist, _soda_soft_radius_for_station(fid))
+		if d < best_d and d <= station_max:
 			best_d = d
 			best_id = fid
 			best_tip = tip
+	if best_id == "":
+		best_d = max_dist
 	return {"id": best_id, "tip": best_tip, "dist": best_d}
 
 
@@ -24591,8 +24797,8 @@ func _refresh_soda_tuning_debug_visuals() -> void:
 			var disc := MeshInstance3D.new()
 			disc.name = "SoftLock_%s" % fid
 			var cyl := CylinderMesh.new()
-			cyl.top_radius = soda_soft_magnet_radius
-			cyl.bottom_radius = soda_soft_magnet_radius
+			cyl.top_radius = _soda_soft_radius_for_station(fid)
+			cyl.bottom_radius = _soda_soft_radius_for_station(fid)
 			cyl.height = 0.006
 			disc.mesh = cyl
 			disc.position = seat
@@ -24813,7 +25019,7 @@ func _build_fryer_machine() -> void:
 
 	var root := Node3D.new()
 	root.name = "FrenchFryStation"
-	root.position = FRYER_STATION_POS
+	root.position = FRYER_STATION_POS + _prop_offset("fryer")
 	root.rotation_degrees = FRYER_STATION_ROT
 	world.add_child(root)
 	fryer_root = root
@@ -25521,7 +25727,7 @@ func _ready_fries_slot_world(i: int) -> Vector3:
 	var z := b.end.y - 0.04 - float(row) * FRIES_HOLD_PACK_SPACING_Z + FRIES_HOLD_FAR_NUDGE
 	x = clampf(x, b.position.x, b.end.x)
 	z = clampf(z, b.position.y, z_hi)
-	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z)
+	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z) + _prop_offset("fryer_done")
 
 
 func _separate_ready_fries_packs() -> void:
@@ -30613,8 +30819,10 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	if locked_valid:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
+		var locked_id := _soda_station_id_for_tip(_cup_spout_lock)
+		var locked_radius := _soda_soft_radius_for_station(locked_id)
 		## Hard break if the hand is past the leash — don't keep tugging.
-		var release_dist := maxf(soda_soft_release, soda_soft_magnet_radius * 0.82)
+		var release_dist := maxf(soda_soft_release, locked_radius * 0.82)
 		if locked_d > release_dist:
 			_cup_spout_lock = null
 			_cup_spout_unlock_grace = soda_soft_unlock_grace
@@ -30632,19 +30840,23 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 	var best_node: Node3D = null
 	var best_target := Vector3.ZERO
-	var best_d := soda_soft_magnet_radius
+	var best_d := INF
+	var best_radius := soda_soft_magnet_radius
 	for tip in candidates:
+		var fid := _soda_station_id_for_tip(tip)
+		var radius := _soda_soft_radius_for_station(fid)
 		var tpos := _cup_target_for_spout(tip)
 		var d := Vector2(hit.x - tpos.x, hit.z - tpos.z).length()
-		if d < best_d:
+		if d < best_d and d <= radius:
 			best_d = d
 			best_node = tip
 			best_target = tpos
+			best_radius = radius
 	if best_node == null:
 		return hit
-	if best_d <= maxf(soda_soft_acquire, soda_soft_magnet_radius * 0.70):
+	if best_d <= maxf(soda_soft_acquire, best_radius * 0.70):
 		_cup_spout_lock = best_node
-	var pull := clampf(1.0 - best_d / soda_soft_magnet_radius, 0.0, 1.0)
+	var pull := clampf(1.0 - best_d / best_radius, 0.0, 1.0)
 	pull = pull * pull
 	## Stronger pre-lock tug so the cup can cross the cabinet lip into the seat.
 	var tug := 0.72 if best_d <= soda_soft_acquire * 1.35 else 0.48
@@ -30664,7 +30876,8 @@ func _cup_near_fill_seat(pos: Vector3) -> bool:
 			tips.append(tip)
 	for tip in tips:
 		var tpos := _cup_target_for_spout(tip)
-		if Vector2(pos.x - tpos.x, pos.z - tpos.z).length() <= soda_soft_magnet_radius * 1.25:
+		var fid := _soda_station_id_for_tip(tip)
+		if Vector2(pos.x - tpos.x, pos.z - tpos.z).length() <= _soda_soft_radius_for_station(fid) * 1.25:
 			return true
 	return false
 
@@ -30682,7 +30895,13 @@ func _cup_deck_fill_y() -> float:
 func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	## Soft-lock fill seat: XZ under the nozzle, Y on the drip deck (not mid-air).
 	var tip_p := tip.global_position
-	return Vector3(tip_p.x, _cup_deck_fill_y(), tip_p.z)
+	var fid := _soda_station_id_for_tip(tip)
+	var off_in: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
+	var off := off_in * INCH_TO_M
+	if soda_root != null and is_instance_valid(soda_root):
+		var local := soda_root.to_local(Vector3(tip_p.x, _cup_deck_fill_y(), tip_p.z)) + off
+		return soda_root.to_global(local)
+	return Vector3(tip_p.x, _cup_deck_fill_y(), tip_p.z) + off
 
 
 func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
@@ -31806,8 +32025,8 @@ func _refresh_cup_visuals() -> void:
 			var liq := cup_liquid_mesh.mesh as CylinderMesh
 			if liq:
 				liq.height = h
-				liq.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
-				liq.bottom_radius = CUP_LIQUID_BOT_R
+				liq.top_radius = (CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill) * cup_liquid_radius_scale
+				liq.bottom_radius = CUP_LIQUID_BOT_R * cup_liquid_radius_scale
 				liq.cap_top = true
 				liq.cap_bottom = true
 			cup_liquid_mesh.position.y = h * 0.5
@@ -31824,10 +32043,10 @@ func _refresh_cup_visuals() -> void:
 				var plane := cup_liquid_surface.mesh as PlaneMesh
 				if plane:
 					var r := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * cup_soda_fill
-					plane.size = Vector2(r * 2.05, r * 2.05)
+					plane.size = Vector2(r * 2.05, r * 2.05) * cup_liquid_radius_scale
 				cup_liquid_surface.visible = true
 			if cup_surface_pivot != null and is_instance_valid(cup_surface_pivot):
-				cup_surface_pivot.position.y = h + 0.002
+				cup_surface_pivot.position.y = h + 0.002 + cup_liquid_top_offset_in * INCH_TO_M
 			_refresh_cup_fizz_visual()
 		else:
 			cup_liquid_mesh.visible = false
@@ -34245,7 +34464,7 @@ func _cutting_board_world_center() -> Vector3:
 	var grill_left_edge := GRILL_CENTER_X + GRILL_WIDTH * 0.5
 	var cx := grill_left_edge + CUTTING_BOARD_GAP + bw * 0.5
 	var cy := GRILL_SURFACE_Y - bh * 0.5 + 0.012
-	return Vector3(cx, cy, GRILL_SURFACE_Z + CUTTING_BOARD_Z_OFFSET)
+	return Vector3(cx, cy, GRILL_SURFACE_Z + CUTTING_BOARD_Z_OFFSET) + _prop_offset("cutting_board")
 
 
 func _station_cutting_board_is_empty(station_index: int = STATION_CRAFT) -> bool:
@@ -34607,13 +34826,14 @@ func _build_cheese_station_prop() -> void:
 	var slice_step := 0.0145
 	var slice_w := 0.118
 	## Two piles nearer the grill; buns sit on the board side (higher local X).
+	var cheese_off := _prop_offset("cheese_stack")
 	var pile_defs := [
-		{"name": "CheesePileA", "pos": Vector3(-0.34, slice_thick * 0.5 - 0.076, 0.14), "yaw": -8.0},
-		{"name": "CheesePileB", "pos": Vector3(-0.185, slice_thick * 0.5 - 0.076, 0.15), "yaw": 11.0},
+		{"name": "CheesePileA", "pos": Vector3(-0.34, slice_thick * 0.5 - 0.076, 0.14) + cheese_off, "yaw": -8.0},
+		{"name": "CheesePileB", "pos": Vector3(-0.185, slice_thick * 0.5 - 0.076, 0.15) + cheese_off, "yaw": 11.0},
 	]
 	var mid := Node3D.new()
 	mid.name = "CheesePileMid"
-	mid.position = Vector3(-0.262, slice_thick * 0.5 - 0.076, 0.145)
+	mid.position = Vector3(-0.262, slice_thick * 0.5 - 0.076, 0.145) + cheese_off
 	root.add_child(mid)
 	cheese_stack_anchor = mid
 	for pi in pile_defs.size():
@@ -34702,6 +34922,7 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	## Two towers left of cheese; each is a double stack (2 bottom+top pairs) = 4 sets.
 	bun_pile_root = Node3D.new()
 	bun_pile_root.name = "BunInventoryPiles"
+	bun_pile_root.position = _prop_offset("burger_buns")
 	parent.add_child(bun_pile_root)
 	bun_pile_stacks.clear()
 	bun_pile_anchors.clear()
@@ -40305,6 +40526,19 @@ func _build_options_menu() -> void:
 		func(): return _hidden_tree_edit_yaw(),
 		func(v: float): _hidden_set_tree_edit_yaw(clampf(v, -180.0, 180.0)))
 
+	_hidden_add_section(hidden_world_box, "PROP OFFSETS")
+	_hidden_add_prop_offset_group(hidden_world_box, "burger_buns", "Burger Buns")
+	_hidden_add_prop_offset_group(hidden_world_box, "cheese_stack", "Cheese Stack")
+	_hidden_add_prop_offset_group(hidden_world_box, "cutting_board", "Cutting Board")
+	_hidden_add_prop_offset_group(hidden_world_box, "seasoning_shaker", "Seasoning Shaker")
+	_hidden_add_prop_offset_group(hidden_world_box, "fire_ext", "Fire Extinguisher")
+	_hidden_add_prop_offset_group(hidden_world_box, "oil_bottle", "Oil Bottle")
+	_hidden_add_prop_offset_group(hidden_world_box, "open_sign", "We Are Open Sign")
+	_hidden_add_prop_offset_group(hidden_world_box, "fryer", "Fryer")
+	_hidden_add_prop_offset_group(hidden_world_box, "fryer_done", "Fryer Done Location")
+	_hidden_add_prop_offset_group(hidden_world_box, "big_tree", "Big Tree Offset")
+	_hidden_add_prop_offset_group(hidden_world_box, "small_tree", "Small Tree Offset")
+
 	_hidden_add_section(hidden_world_box, "TURBACHEF ROBOT HOME")
 	_hidden_add_labeled_slider(hidden_world_box, "roomba_home_x", "Home X", -4.0, 4.0, 0.01,
 		func(): return roomba_home_pos.x,
@@ -40670,6 +40904,22 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_speed", "Fill Max Speed", 0.2, 12.0, 0.1,
 		func(): return soda_fill_max_speed,
 		func(v: float): soda_fill_max_speed = clampf(v, 0.2, 12.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "cup_liquid_top", "Cup Liquid Top Offset (in)", -6.0, 6.0, 0.05,
+		func(): return cup_liquid_top_offset_in,
+		func(v: float):
+			cup_liquid_top_offset_in = clampf(v, -6.0, 6.0)
+			_refresh_cup_visuals())
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "cup_liquid_radius", "Cup Liquid Radius Scale", 0.5, 1.5, 0.01,
+		func(): return cup_liquid_radius_scale,
+		func(v: float):
+			cup_liquid_radius_scale = clampf(v, 0.5, 1.5)
+			_refresh_cup_visuals())
+
+	_hidden_add_section(hidden_soda_box, "PER-FLAVOR SOFT LOCK SEATS")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Cola")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "lemon_lime", "Lime")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "orange", "Orange")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice")
 
 	var slot_lab := Label.new()
 	slot_lab.text = "SODA SLOT MACHINE"
@@ -44971,7 +45221,7 @@ func _build_open_closed_sign() -> void:
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
 	## Prior seat + ~40 screen px up (~0.12m at this depth).
-	root.position = Vector3(-1.08, 1.90, 1.14)
+	root.position = Vector3(-1.08, 1.90, 1.14) + _prop_offset("open_sign")
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
