@@ -1169,6 +1169,7 @@ var grill_roomba_poke_wobble_t: float = 0.0 ## Small in-place tip wobble after a
 var grill_roomba_poke_wobble_phase: float = 0.0
 var grill_roomba_home_requested: bool = false
 var grill_roomba_power_off: bool = false
+var grill_roomba_manual_grill_idle: bool = false
 var grill_roomba_tap_count: int = 0
 var grill_roomba_tap_cool: float = 0.0
 const ROOMBA_POKE_WOBBLE_SEC := 0.38
@@ -11573,6 +11574,7 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_poke_wawawa = false
 	grill_roomba_home_requested = false
 	grill_roomba_power_off = false
+	grill_roomba_manual_grill_idle = false
 	grill_roomba_tap_count = 0
 	grill_roomba_tap_cool = 0.0
 	if game_audio and game_audio.has_method("set_roomba_wawawa"):
@@ -11710,7 +11712,7 @@ func _update_grill_roomba(delta: float) -> void:
 	var has_dirt:= target.is_finite()
 	var has_patty_task:= carrying or scooping or tasking
 	var bumper_aligning := _roomba_bumper_align_active()
-	if not has_dirt and not has_patty_task and not grill_on_fire:
+	if not has_dirt and not has_patty_task and not grill_on_fire and not grill_roomba_manual_grill_idle:
 		_update_roomba_home(delta)
 		return
 	grill_roomba_task_t = grill_roomba_task_t + delta if has_patty_task else 0.0
@@ -11941,6 +11943,7 @@ func _roomba_clear_active_work(drop_patty: bool = true) -> void:
 func _roomba_set_home_mode(power_off: bool) -> void:
 	grill_roomba_home_requested = true
 	grill_roomba_power_off = power_off
+	grill_roomba_manual_grill_idle = false
 	grill_roomba_ledge_phase = ""
 	grill_roomba_ledge_wobble = 0.0
 	grill_roomba_poke_pause_t = 0.0
@@ -11957,6 +11960,7 @@ func _roomba_set_home_mode(power_off: bool) -> void:
 func _roomba_resume_from_home() -> void:
 	grill_roomba_home_requested = false
 	grill_roomba_power_off = false
+	grill_roomba_manual_grill_idle = true
 	grill_roomba_tap_count = 0
 	grill_roomba_tap_cool = 0.0
 	grill_roomba_reaim_t = 0.0
@@ -12206,6 +12210,7 @@ func _roomba_apply_released_pose() -> void:
 		grill_roomba_root.global_position = p
 		grill_roomba_root.rotation_degrees.x = 0.0
 		grill_roomba_root.rotation_degrees.z = 0.0
+		grill_roomba_manual_grill_idle = true
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -12291,6 +12296,7 @@ func _release_grill_roomba() -> void:
 		grill_roomba_root.global_position = p
 		grill_roomba_root.rotation_degrees.x = 0.0
 		grill_roomba_root.rotation_degrees.z = 0.0
+		grill_roomba_manual_grill_idle = true
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_reaim_t = 0.2
 	_flash("Turbachef Robot back on the grill", Color("A5D6A7"))
