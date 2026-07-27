@@ -2427,7 +2427,7 @@ func _build_cheese_slice() -> void:
 	_cheese_root = Node3D.new()
 	_cheese_root.name = "CheeseSlice"
 	## Sit just above the meat top disc (+0.2" / 0.00508 from prior 0.0255).
-	_cheese_root.position = Vector3(0, 0.0306, 0)
+	_cheese_root.position = Vector3(0, 0.0318, 0)
 	if _mesh != null and is_instance_valid(_mesh):
 		_mesh.add_child(_cheese_root)
 	else:
@@ -2494,6 +2494,10 @@ func _update_cheese_visual() -> void:
 	if _cheese_root == null or not is_instance_valid(_cheese_root) or _cheese_mat == null:
 		return
 	var t := clampf(cheese_melt, 0.0, 1.0)
+	var top_up := 1.0
+	if _mesh != null and is_instance_valid(_mesh):
+		top_up = _mesh.global_transform.basis.y.normalized().dot(Vector3.UP)
+	_cheese_root.visible = top_up > -0.12
 	var drape := smoothstep(0.12, 0.95, t)
 	drape = drape * drape * (3.0 - 2.0 * drape)
 	## Warm cheddar yellow → deeper orange as it melts.
@@ -2507,7 +2511,7 @@ func _update_cheese_visual() -> void:
 		var sx: float = item["sx"]
 		var sz: float = item["sz"]
 		pivot.rotation_degrees = Vector3(sz * angle, 0.0, -sx * angle)
-	_cheese_root.position.y = lerpf(0.0306, 0.0291, drape)
+	_cheese_root.position.y = lerpf(0.0318, 0.0304, drape)
 	_cheese_root.scale = Vector3(lerpf(1.0, 1.006, drape), 1.0, lerpf(1.0, 1.006, drape))
 
 

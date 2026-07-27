@@ -5,7 +5,7 @@ const SCENE_PATH := "res://assets/cat/cat.fbx"
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
 const HOME_X := 1.38
-const HOME_Z := 1.68
+const HOME_Z := 1.76
 ## Under the sill when hidden; peek high enough to clear the ledge.
 ## Dropped another 6″ from the prior peek heights.
 const HIDDEN_Y := 0.141
@@ -184,10 +184,10 @@ func _build() -> void:
 	_area.monitorable = true
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	## Generous head hit box in local (unscaled root) space.
-	box.size = Vector3(0.55, 0.55, 0.45)
+	## Head-only hit box so grill clicks under/around the cat keep going to the grill.
+	box.size = Vector3(0.36, 0.34, 0.30)
 	shape.shape = box
-	shape.position = Vector3(0.0, 0.42, 0.08)
+	shape.position = Vector3(0.0, 0.48, 0.08)
 	_area.add_child(shape)
 	add_child(_area)
 	_ensure_hearts()
@@ -591,8 +591,8 @@ func _apply_visual_scale() -> void:
 	if _area != null:
 		var shape := _area.get_child(0) as CollisionShape3D
 		if shape != null and shape.shape is BoxShape3D:
-			(shape.shape as BoxShape3D).size = Vector3(0.55, 0.55, 0.45) * size_m
-			shape.position = Vector3(0.0, 0.42 * size_m + _visual.position.y, 0.08)
+			(shape.shape as BoxShape3D).size = Vector3(0.36, 0.34, 0.30) * size_m
+			shape.position = Vector3(0.0, 0.48 * size_m + _visual.position.y, 0.08)
 
 
 func _begin_run_away() -> void:
@@ -679,7 +679,7 @@ func hit_test(camera: Camera3D, screen_pos: Vector2, max_px: float = 52.0) -> bo
 		return false
 	var screen_pt := camera.unproject_position(tip)
 	## Bigger cat = easier to click.
-	var px := max_px * (0.85 + 0.35 * _size_mul())
+	var px := max_px * (0.48 + 0.18 * _size_mul())
 	if screen_pos.distance_to(screen_pt) <= px:
 		return true
 	var from := camera.project_ray_origin(screen_pos)

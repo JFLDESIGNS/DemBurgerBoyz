@@ -25689,6 +25689,43 @@ func _populate_fry_pack(pack: Node3D) -> void:
 	_ensure_fries_pack_sparkles(pack)
 
 
+func _set_fries_pack_foreground(pack: Node3D) -> void:
+	## Remote-held fries occupy the same hand layer as cups so they do not vanish behind tray/cup art.
+	if pack == null:
+		return
+	var stack: Array[Node] = [pack]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for child in node.get_children():
+			stack.append(child)
+		if not (node is MeshInstance3D):
+			continue
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.sorting_offset = 20.0
+		var surf_count := 0
+		if mi.mesh != null:
+			surf_count = mi.mesh.get_surface_count()
+		surf_count = maxi(surf_count, mi.get_surface_override_material_count())
+		surf_count = maxi(surf_count, 1)
+		for si in surf_count:
+			var base: Material = mi.get_active_material(si) if mi.mesh != null and si < mi.mesh.get_surface_count() else mi.material_override
+			var mat: StandardMaterial3D
+			if base is StandardMaterial3D:
+				mat = (base as StandardMaterial3D).duplicate() as StandardMaterial3D
+			else:
+				mat = StandardMaterial3D.new()
+				mat.albedo_color = Color.WHITE
+			mat.no_depth_test = true
+			mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+			mat.render_priority = CUP_DRAW_PRIORITY + 4
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			if mi.mesh != null and si < mi.mesh.get_surface_count():
+				mi.set_surface_override_material(si, mat)
+			else:
+				mi.material_override = mat
+
+
 func _make_fries_sparkle_mat() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -50845,6 +50882,7 @@ func _mp_ensure_remote_fries(peer_id: int) -> Node3D:
 	var ghost := Node3D.new()
 	ghost.name = "RemoteFries_%d" % peer_id
 	_populate_fry_pack(ghost)
+	_set_fries_pack_foreground(ghost)
 	_mp_strip_tool_pickable(ghost)
 	ghost.visible = false
 	ghost.scale = Vector3(1.18, 1.18, 1.18)
