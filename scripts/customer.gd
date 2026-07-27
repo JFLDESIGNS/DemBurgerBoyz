@@ -99,7 +99,7 @@ const JIMIN_FACTS: Array[String] = [
 ]
 ## Shrink so face + torso sit in the service window (not cropped by the lintel).
 const CHAR_SCALE := 0.552 ## ~15% larger than 0.48
-## Must match game.gd CUSTOMER_WAWA_COLLISION_LAYER — torso/head click only.
+## Must match game.gd CUSTOMER_WAWA_COLLISION_LAYER — head click only.
 const WAWA_CLICK_LAYER := 524288
 ## Sidewalk stand height — feet on pavement (was floating ~1 ft at 0.22).
 const STAND_Y := -0.02
@@ -629,7 +629,7 @@ func _build() -> void:
 
 
 func _setup_wawa_click_volume() -> void:
-	## Separate torso/head trigger — legs / empty space around them never steal grill clicks.
+	## Separate head trigger — body / legs / empty space around them never steal grill clicks.
 	if _wawa_click_area != null and is_instance_valid(_wawa_click_area):
 		return
 	_wawa_click_area = Area3D.new()
@@ -641,12 +641,10 @@ func _setup_wawa_click_volume() -> void:
 	_wawa_click_area.monitorable = true
 	_wawa_click_area.set_meta("wawa_customer", self)
 	var col := CollisionShape3D.new()
-	var capsule := CapsuleShape3D.new()
-	## Chest through crown (not pelvis/legs).
-	capsule.radius = 0.26
-	capsule.height = 0.88
-	col.shape = capsule
-	col.position = Vector3(0.0, 1.08, 0.06)
+	var head := SphereShape3D.new()
+	head.radius = 0.25
+	col.shape = head
+	col.position = Vector3(0.0, 1.33, 0.06)
 	_wawa_click_area.add_child(col)
 	add_child(_wawa_click_area)
 

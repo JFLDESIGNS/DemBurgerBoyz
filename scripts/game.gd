@@ -5246,6 +5246,20 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float)
 	hand_spatula_root.global_transform = _spatula_balance_fall_visual_xform
 
 
+func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> void:
+	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
+		return
+	_spatula_balance_return_t = minf(_spatula_balance_return_t + maxf(delta, 0.0), SPATULA_BALANCE_IMPACT_RETURN_DUR)
+	var ru := clampf(_spatula_balance_return_t / SPATULA_BALANCE_IMPACT_RETURN_DUR, 0.0, 1.0)
+	var ease := ru * ru * (3.0 - 2.0 * ru)
+	var basis := _spatula_balance_return_from.basis.slerp(target_xform.basis, ease).orthonormalized()
+	var origin := _spatula_balance_return_from.origin.lerp(target_xform.origin, ease)
+	hand_spatula_root.visible = true
+	hand_spatula_root.global_transform = Transform3D(basis, origin)
+	if ru >= 1.0:
+		_stop_spatula_balance()
+
+
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if not _spatula_balance_active:
 		_spatula_balance_last_mouse = mouse
@@ -5278,8 +5292,6 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 				else:
 					_spatula_balance_return_from = hand_spatula_root.global_transform if hand_spatula_root != null and is_instance_valid(hand_spatula_root) else Transform3D.IDENTITY
 				_cleanup_spatula_balance_ragdoll()
-		else:
-			_spatula_balance_return_t += delta
 		return
 	if _spatula_balance_last_mouse.x == INF:
 		_spatula_balance_last_mouse = mouse
@@ -6799,14 +6811,10 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		var target_xform := hand_spatula_root.global_transform
 		if not _spatula_balance_returning:
 			_update_spatula_balance_visual_fall(target_xform, delta)
+			if _spatula_balance_returning:
+				_render_spatula_balance_return(target_xform, 0.0)
 		else:
-			hand_spatula_root.visible = true
-			var rd := maxf(SPATULA_BALANCE_IMPACT_RETURN_DUR, spatula_balance_return_dur)
-			var ru := clampf(_spatula_balance_return_t / rd, 0.0, 1.0)
-			var ease := ru * ru * (3.0 - 2.0 * ru)
-			hand_spatula_root.global_transform = _spatula_balance_return_from.interpolate_with(target_xform, ease)
-			if ru >= 1.0:
-				_stop_spatula_balance()
+			_render_spatula_balance_return(target_xform, delta)
 	## Scooped burger rides the blade — same yaw/roll as the spatula (no visual offset).
 	if carrying and not dragging:
 		_seat_held_patty_on_spatula()
