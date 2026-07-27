@@ -1026,6 +1026,7 @@ var _fries_pack_vel: Vector3 = Vector3.ZERO
 var _fries_pack_mouse_prev: Vector2 = Vector2.ZERO
 var _fries_spill_cd: float = 0.0
 var grill_spilled_fries: Array = [] ## single fries dropped on steel {root, mat, smoke, age, fired, half_h}
+var _next_spilled_fry_net_id: int = 1
 var spilled_fry_held: bool = false
 var spilled_fry_held_idx: int = -1 ## index into grill_spilled_fries while carrying
 const FRIES_SPILL_SPEED := 2.35 ## whip the pack this hard over the grill → fries fly out
@@ -1041,6 +1042,8 @@ const FRIES_SPILL_SIT_Y := 0.017 ## ~half-inch lift so sticks don't clip the ste
 const FRIES_HOLD_MAX_PACKS := 4
 const FRIES_HOLD_PUSH_RADIUS := 0.13
 const FRIES_HOLD_PUSH_STEP := 0.018
+const FRIES_HOLD_LEFT_OFFSET := Vector3(-0.34, 0.31, 0.02)
+const FRIES_HOLD_FOLLOW_RADIUS := 0.18
 const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the strip.
 const FRIES_HOLD_MIN_SEP := 0.052 ## Matches tighter HOLD pack spacing.
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
@@ -15000,6 +15003,22 @@ func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3
 	return hit
 
 
+func _fries_hold_point_from_screen(screen_pos: Vector2, extra_y: float = 0.0) -> Vector3:
+	var base := Vector3(GRILL_CENTER_X - GRILL_WIDTH * 0.55, GRILL_SURFACE_Y + 0.31 + extra_y, GRILL_SURFACE_Z + 0.10)
+	if fryer_root != null and is_instance_valid(fryer_root):
+		base = fryer_root.to_global(FRIES_HOLD_LEFT_OFFSET + Vector3(0.0, extra_y, 0.0))
+	if camera == null:
+		return base
+	var projected := _tool_hold_point_from_screen(screen_pos, base.y)
+	var delta := projected - base
+	delta.y = 0.0
+	if delta.length() > FRIES_HOLD_FOLLOW_RADIUS:
+		delta = delta.normalized() * FRIES_HOLD_FOLLOW_RADIUS
+	var out := base + delta
+	out.y = base.y
+	return out
+
+
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
 	if _ui_blocks_world_click(screen_pos):
 		return false
@@ -23445,6 +23464,7 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 	_fries_pack_prev_pos = Vector3.ZERO
 	_fries_pack_vel = Vector3.ZERO
 	_clear_grill_spilled_fries()
+	_next_spilled_fry_net_id = 1
 	for i in fryer_baskets.size():
 		var data: Dictionary = fryer_baskets[i]
 		var root := data.get("root") as Node3D
@@ -23806,8 +23826,7 @@ func _update_held_fries_pack(delta: float) -> void:
 	if not fries_pack_held or fries_pack_root == null or not is_instance_valid(fries_pack_root):
 		return
 	var mouse := get_viewport().get_mouse_position()
-	var seat := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.20)
-	seat.y += 0.09
+	var seat := _fries_hold_point_from_screen(mouse)
 	fries_pack_root.global_position = fries_pack_root.global_position.lerp(seat, clampf(delta * 16.0, 0.0, 1.0))
 	_fries_pack_vel = (fries_pack_root.global_position - _fries_pack_prev_pos) / maxf(delta, 0.001)
 	_fries_pack_prev_pos = fries_pack_root.global_position
@@ -23853,14 +23872,34 @@ func _spill_fry_onto_grill(from: Vector3, vel: Vector3) -> void:
 	land.z = clampf(land.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
 	land.y = GRILL_SURFACE_Y ## spawn places the stick above steel using fry height
 	var yaw := randf() * 360.0
+	var net_id := _make_spilled_fry_net_id()
 	if mp_enabled and not _mp_applying:
-		mp_fry_spill.rpc(from.x, from.y, from.z, land.x, land.z, yaw)
+		mp_fry_spill.rpc(net_id, from.x, from.y, from.z, land.x, land.z, yaw)
 		return
-	_spawn_spilled_fry_local(land, yaw, from)
+	_spawn_spilled_fry_local(land, yaw, from, net_id)
 
 
-func _spawn_spilled_fry_local(land: Vector3, yaw_deg: float, start: Vector3 = Vector3.INF) -> void:
+func _make_spilled_fry_net_id() -> int:
+	var peer := NetManager.my_id() if mp_enabled and NetManager.is_online() else 1
+	var net_id := peer * 100000 + _next_spilled_fry_net_id
+	_next_spilled_fry_net_id += 1
+	return net_id
+
+
+func _spilled_fry_by_net_id(net_id: int) -> Dictionary:
+	if net_id <= 0:
+		return {}
+	for i in grill_spilled_fries.size():
+		var item: Dictionary = grill_spilled_fries[i]
+		if int(item.get("net_id", 0)) == net_id:
+			return {"idx": i, "item": item}
+	return {}
+
+
+func _spawn_spilled_fry_local(land: Vector3, yaw_deg: float, start: Vector3 = Vector3.INF, net_id: int = 0) -> void:
 	if world == null and grill_root == null:
+		return
+	if net_id > 0 and not _spilled_fry_by_net_id(net_id).is_empty():
 		return
 	var parent: Node = world if world != null else grill_root
 	var fry := MeshInstance3D.new()
@@ -23918,6 +23957,7 @@ func _spawn_spilled_fry_local(land: Vector3, yaw_deg: float, start: Vector3 = Ve
 		"fired": false,
 		"half_h": h * 0.5,
 		"held": false,
+		"net_id": net_id,
 	})
 	if game_audio and game_audio.has_method("play_click"):
 		game_audio.play_click()
@@ -24081,8 +24121,7 @@ func _update_held_spilled_fry(delta: float) -> void:
 		spilled_fry_held_idx = -1
 		return
 	var mouse := get_viewport().get_mouse_position()
-	var seat := _tool_hold_point_from_screen(mouse, GRILL_SURFACE_Y + 0.16)
-	seat.y += 0.04
+	var seat := _fries_hold_point_from_screen(mouse, -0.04)
 	root.global_position = root.global_position.lerp(seat, clampf(delta * 18.0, 0.0, 1.0))
 	root.rotation_degrees.x = lerpf(root.rotation_degrees.x, -25.0, clampf(delta * 10.0, 0.0, 1.0))
 
@@ -47439,11 +47478,14 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_fry_spill(sx: float, sy: float, sz: float, x: float, z: float, yaw: float) -> void:
+func mp_fry_spill(net_id: int, sx: float, sy: float, sz: float, x: float, z: float, yaw: float) -> void:
 	## Partner (or self via call_local) dropped a loose fry onto the steel.
+	var sid := multiplayer.get_remote_sender_id()
 	_mp_applying = true
-	_spawn_spilled_fry_local(Vector3(x, GRILL_SURFACE_Y, z), yaw, Vector3(sx, sy, sz))
+	_spawn_spilled_fry_local(Vector3(x, GRILL_SURFACE_Y, z), yaw, Vector3(sx, sy, sz), net_id)
 	_mp_applying = false
+	if NetManager.is_host() and sid != 0:
+		mp_fry_spill.rpc(net_id, sx, sy, sz, x, z, yaw)
 
 
 func _mp_update_cursors(delta: float) -> void:
