@@ -2093,6 +2093,16 @@ var _mp_cursor_layer: Control = null
 var _cursor_tex_normal: Texture2D = null
 var _cursor_tex_click: Texture2D = null
 var _cursor_click_t: float = 0.0
+var _gamepad_cursor_active: bool = false
+var _gamepad_prev_left_click: bool = false
+var _gamepad_prev_right_click: bool = false
+var _gamepad_prev_middle_click: bool = false
+var _gamepad_prev_radio: bool = false
+var _gamepad_prev_radio_prev: bool = false
+var _gamepad_prev_radio_next: bool = false
+
+const GAMEPAD_CURSOR_SPEED := 980.0
+const GAMEPAD_CURSOR_DEADZONE := 0.18
 var _mp_next_customer_net_id: int = 1
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
@@ -2152,6 +2162,7 @@ func _ready() -> void:
 		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 	_setup_glove_cursor()
 	UiFontsScript.ensure_loaded()
+	_setup_gamepad_input_map()
 	var ui_root: Control = get_node("UI/Root")
 	ui_root.theme = UiFontsScript.make_theme()
 	_style_static_labels()
@@ -2475,6 +2486,115 @@ func _pulse_cursor_click(screen_pos: Vector2) -> void:
 		var vp := get_viewport().get_visible_rect().size
 		if vp.x > 1.0 and vp.y > 1.0:
 			mp_cursor_click.rpc(screen_pos.x / vp.x, screen_pos.y / vp.y)
+
+
+func _setup_gamepad_input_map() -> void:
+	_bind_gamepad_button("flip", JOY_BUTTON_Y)
+	_bind_gamepad_button("serve", JOY_BUTTON_RIGHT_SHOULDER)
+	_bind_gamepad_button("trash", JOY_BUTTON_X)
+	_bind_gamepad_button("toggle_burner", JOY_BUTTON_LEFT_SHOULDER)
+
+
+func _bind_gamepad_button(action_name: String, button_index: int) -> void:
+	if not InputMap.has_action(action_name):
+		InputMap.add_action(action_name)
+	for ev in InputMap.action_get_events(action_name):
+		if ev is InputEventJoypadButton and ev.button_index == button_index:
+			return
+	var joy_ev := InputEventJoypadButton.new()
+	joy_ev.button_index = button_index
+	InputMap.action_add_event(action_name, joy_ev)
+
+
+func _joy_pressed(button_index: int) -> bool:
+	for id in Input.get_connected_joypads():
+		if Input.is_joy_button_pressed(int(id), button_index):
+			return true
+	return false
+
+
+func _joy_axis_pair(axis_x: int, axis_y: int) -> Vector2:
+	var best := Vector2.ZERO
+	for id in Input.get_connected_joypads():
+		var v := Vector2(
+			Input.get_joy_axis(int(id), axis_x),
+			Input.get_joy_axis(int(id), axis_y)
+		)
+		if v.length_squared() > best.length_squared():
+			best = v
+	if best.length() < GAMEPAD_CURSOR_DEADZONE:
+		return Vector2.ZERO
+	var len := clampf((best.length() - GAMEPAD_CURSOR_DEADZONE) / (1.0 - GAMEPAD_CURSOR_DEADZONE), 0.0, 1.0)
+	return best.normalized() * len
+
+
+func _send_gamepad_mouse_button(button_index: int, pressed: bool) -> void:
+	var vp := get_viewport()
+	if vp == null:
+		return
+	var ev := InputEventMouseButton.new()
+	ev.button_index = button_index
+	ev.pressed = pressed
+	ev.position = vp.get_mouse_position()
+	ev.global_position = ev.position
+	ev.factor = 1.0
+	Input.parse_input_event(ev)
+
+
+func _update_gamepad_button(button_index: int, pressed: bool, prev_pressed: bool) -> bool:
+	if pressed != prev_pressed:
+		_send_gamepad_mouse_button(button_index, pressed)
+	return pressed
+
+
+func _update_gamepad_cursor(delta: float) -> void:
+	var vp := get_viewport()
+	if vp == null:
+		return
+	if Input.get_connected_joypads().is_empty():
+		_gamepad_cursor_active = false
+		_gamepad_prev_left_click = false
+		_gamepad_prev_right_click = false
+		_gamepad_prev_middle_click = false
+		return
+	var move := _joy_axis_pair(JOY_AXIS_LEFT_X, JOY_AXIS_LEFT_Y)
+	var look := _joy_axis_pair(JOY_AXIS_RIGHT_X, JOY_AXIS_RIGHT_Y)
+	var cursor_move := move + look * 0.55
+	if cursor_move.length_squared() > 0.0001:
+		_gamepad_cursor_active = true
+		var mouse := vp.get_mouse_position() + cursor_move * GAMEPAD_CURSOR_SPEED * delta
+		var size := vp.get_visible_rect().size
+		mouse.x = clampf(mouse.x, 0.0, maxf(1.0, size.x - 1.0))
+		mouse.y = clampf(mouse.y, 0.0, maxf(1.0, size.y - 1.0))
+		vp.warp_mouse(mouse)
+		var motion := InputEventMouseMotion.new()
+		motion.position = mouse
+		motion.global_position = mouse
+		motion.relative = cursor_move * GAMEPAD_CURSOR_SPEED * delta
+		motion.velocity = cursor_move * GAMEPAD_CURSOR_SPEED
+		Input.parse_input_event(motion)
+	var left_click := _joy_pressed(JOY_BUTTON_A) or Input.get_action_strength("ui_accept") > 0.5
+	var right_click := _joy_pressed(JOY_BUTTON_B) or Input.get_action_strength("ui_cancel") > 0.5
+	var middle_click := _joy_pressed(JOY_BUTTON_Y)
+	_gamepad_prev_left_click = _update_gamepad_button(MOUSE_BUTTON_LEFT, left_click, _gamepad_prev_left_click)
+	_gamepad_prev_right_click = _update_gamepad_button(MOUSE_BUTTON_RIGHT, right_click, _gamepad_prev_right_click)
+	_gamepad_prev_middle_click = _update_gamepad_button(MOUSE_BUTTON_MIDDLE, middle_click, _gamepad_prev_middle_click)
+	if radio:
+		var radio_now := _joy_pressed(JOY_BUTTON_DPAD_UP)
+		if radio_now and not _gamepad_prev_radio:
+			radio.toggle_power()
+			_flash("Radio %s" % ("ON" if radio.powered else "OFF"), Color("FFCC80"))
+		_gamepad_prev_radio = radio_now
+		var prev_now := _joy_pressed(JOY_BUTTON_DPAD_LEFT)
+		if prev_now and not _gamepad_prev_radio_prev:
+			radio.prev_channel()
+			_spin_radio_dial(-1)
+		_gamepad_prev_radio_prev = prev_now
+		var next_now := _joy_pressed(JOY_BUTTON_DPAD_RIGHT)
+		if next_now and not _gamepad_prev_radio_next:
+			radio.next_channel()
+			_spin_radio_dial(1)
+		_gamepad_prev_radio_next = next_now
 
 
 func _update_local_cursor_click(delta: float) -> void:
@@ -2822,7 +2942,6 @@ func _start_game() -> void:
 	if not mp_enabled or NetManager.is_host():
 		if day == 1 and BTS_SPECIAL_GUESTS_ENABLED:
 			_begin_bts_day1_cat_announcement()
-		_start_radio_fade_in()
 	# _begin_opening_terror_ambush()
 
 
@@ -2864,12 +2983,9 @@ func _restart() -> void:
 	_refresh_all_stations()
 	_begin_start_tutorial()
 	_reset_supplies(false)
-	if day != 1:
-		_start_radio_fade_in()
-	elif not mp_enabled or NetManager.is_host():
+	if day == 1 and (not mp_enabled or NetManager.is_host()):
 		if BTS_SPECIAL_GUESTS_ENABLED:
 			_begin_bts_day1_cat_announcement()
-		_start_radio_fade_in()
 	if day != 1:
 		_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
 	## Keep a pending mustache-cat visit across the day break; clear cool so it can land.
@@ -2881,6 +2997,7 @@ func _restart() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_gamepad_cursor(delta)
 	_mp_update_cursors(delta)
 	_update_local_cursor_click(delta)
 	_update_phone_scroll_inertia(delta)
@@ -23230,7 +23347,9 @@ func _ensure_soda_slot_bulbs() -> void:
 		soda_slot_spin_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		soda_slot_spin_label.no_depth_test = false
 		soda_slot_bulb_root.add_child(soda_slot_spin_label)
-		soda_slot_spin_label.global_position = spin_area.global_position + spin_area.global_transform.basis.z.normalized() * 0.036
+		soda_slot_spin_label.global_position = spin_area.global_position \
+			- spin_area.global_transform.basis.x.normalized() * INCH_TO_M \
+			+ spin_area.global_transform.basis.z.normalized() * 0.036
 
 
 func _set_soda_slot_bulbs_visible(on: bool) -> void:
@@ -32982,7 +33101,7 @@ func _setup_radio() -> void:
 	_build_hud_chrome_toggle()
 	_reset_supplies()
 	radio.set_volume_linear(0.80)
-	radio.set_powered(true)
+	radio.set_powered(false)
 	_refresh_radio_ui()
 
 
@@ -36063,7 +36182,6 @@ func _setup_burgerpals_startup_sound() -> void:
 	## Startup VO — 30% quieter than prior 1.10 linear gain.
 	burgerpals_startup_player.volume_db = linear_to_db(0.77)
 	add_child(burgerpals_startup_player)
-	get_tree().create_timer(1.7).timeout.connect(_play_burgerpals_startup_sound)
 
 
 func _play_burgerpals_startup_sound() -> void:
@@ -43440,6 +43558,7 @@ func _open_service_window() -> void:
 	service_window_closed = false
 	spawn_timer = minf(spawn_timer, 4.0)
 	_sync_open_closed_sign(true)
+	_play_burgerpals_startup_sound()
 	_flash("We're open — customers incoming", Color("A5D6A7"))
 
 
@@ -43468,6 +43587,7 @@ func _reset_service_window_open() -> void:
 	service_window_closed = false
 	_set_shift_paused(false, false)
 	_sync_open_closed_sign(false)
+	_play_burgerpals_startup_sound()
 
 
 func _can_drop_station_patty_on_grill(data: Variant) -> bool:
