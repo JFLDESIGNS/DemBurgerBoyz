@@ -311,6 +311,7 @@ var spatula_balance_damp: float = 0.982
 var spatula_balance_max_tilt: float = 80.0
 var spatula_balance_fall_tilt: float = 104.0
 var spatula_balance_fall_dur: float = 0.42
+var spatula_balance_ragdoll_dur: float = 1.0
 var spatula_balance_bounce_deg: float = 16.0
 var spatula_balance_bounce_dur: float = 0.10
 var spatula_balance_return_dur: float = 0.32
@@ -359,6 +360,12 @@ var _spatula_balance_fall_from := Vector2.ZERO
 var _spatula_balance_fall_dir := Vector2.RIGHT
 var _spatula_balance_impact_pending: bool = false
 var _spatula_balance_impact_done: bool = false
+var _spatula_balance_ragdoll_height: float = 0.0
+var _spatula_balance_ragdoll_y_vel: float = 0.0
+var _spatula_balance_ragdoll_ang_vel := Vector2.ZERO
+var _spatula_balance_returning: bool = false
+var _spatula_balance_return_from := Vector2.ZERO
+var _spatula_balance_return_height: float = 0.0
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -5023,6 +5030,12 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_fall_dir = Vector2.RIGHT
 	_spatula_balance_impact_pending = false
 	_spatula_balance_impact_done = false
+	_spatula_balance_ragdoll_height = 0.0
+	_spatula_balance_ragdoll_y_vel = 0.0
+	_spatula_balance_ragdoll_ang_vel = Vector2.ZERO
+	_spatula_balance_returning = false
+	_spatula_balance_return_from = Vector2.ZERO
+	_spatula_balance_return_height = 0.0
 	_spatula_user_roll = 0.0
 
 
@@ -5037,6 +5050,12 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_fall_dir = Vector2.RIGHT
 	_spatula_balance_impact_pending = false
 	_spatula_balance_impact_done = false
+	_spatula_balance_ragdoll_height = 0.0
+	_spatula_balance_ragdoll_y_vel = 0.0
+	_spatula_balance_ragdoll_ang_vel = Vector2.ZERO
+	_spatula_balance_returning = false
+	_spatula_balance_return_from = Vector2.ZERO
+	_spatula_balance_return_height = 0.0
 	_spatula_user_roll = 0.0
 	if _spatula_balance_active:
 		_spatula_balance_drift_dir = Vector2.RIGHT
@@ -5050,28 +5069,36 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		return
 	if _spatula_balance_falling:
 		_spatula_balance_fall_t += delta
-		var fall_dur := maxf(0.05, spatula_balance_fall_dur)
-		var bounce_dur := maxf(0.02, spatula_balance_bounce_dur)
+		var ragdoll_dur := maxf(0.1, spatula_balance_ragdoll_dur)
 		var return_dur := maxf(0.05, spatula_balance_return_dur)
 		var fall_rad := deg_to_rad(spatula_balance_fall_tilt)
-		var bounce_rad := deg_to_rad(maxf(0.0, spatula_balance_fall_tilt - spatula_balance_bounce_deg))
-		if _spatula_balance_fall_t < fall_dur:
-			var u := clampf(_spatula_balance_fall_t / fall_dur, 0.0, 1.0)
-			var eased := 1.0 - pow(1.0 - u, 2.0)
-			_spatula_balance_tilt = _spatula_balance_fall_from.lerp(_spatula_balance_fall_dir * fall_rad, eased)
-		elif _spatula_balance_fall_t < fall_dur + bounce_dur:
-			if not _spatula_balance_impact_done:
-				_spatula_balance_impact_pending = true
-				_spatula_balance_impact_done = true
-			var bu := clampf((_spatula_balance_fall_t - fall_dur) / bounce_dur, 0.0, 1.0)
-			var bounce_ease := 1.0 - pow(1.0 - bu, 2.0)
-			_spatula_balance_tilt = _spatula_balance_fall_dir * lerpf(fall_rad, bounce_rad, bounce_ease)
-		elif _spatula_balance_fall_t < fall_dur + bounce_dur + return_dur:
-			var ru := clampf((_spatula_balance_fall_t - fall_dur - bounce_dur) / return_dur, 0.0, 1.0)
-			var return_ease := ru * ru * (3.0 - 2.0 * ru)
-			_spatula_balance_tilt = _spatula_balance_fall_dir * lerpf(bounce_rad, 0.0, return_ease)
+		if _spatula_balance_fall_t < ragdoll_dur:
+			_spatula_balance_ragdoll_y_vel -= 1.85 * delta
+			_spatula_balance_ragdoll_height += _spatula_balance_ragdoll_y_vel * delta
+			if _spatula_balance_ragdoll_height <= 0.0:
+				_spatula_balance_ragdoll_height = 0.0
+				if _spatula_balance_ragdoll_y_vel < -0.03:
+					if not _spatula_balance_impact_done:
+						_spatula_balance_impact_pending = true
+						_spatula_balance_impact_done = true
+					_spatula_balance_ragdoll_y_vel = absf(_spatula_balance_ragdoll_y_vel) * 0.36
+					_spatula_balance_ragdoll_ang_vel += _spatula_balance_fall_dir * deg_to_rad(spatula_balance_bounce_deg * 4.5)
+			_spatula_balance_ragdoll_ang_vel += _spatula_balance_fall_dir * 1.35 * delta
+			_spatula_balance_ragdoll_ang_vel *= pow(0.925, delta * 60.0)
+			_spatula_balance_tilt += _spatula_balance_ragdoll_ang_vel * delta
+			if _spatula_balance_tilt.length() > fall_rad:
+				_spatula_balance_tilt = _spatula_balance_tilt.normalized() * fall_rad
 		else:
-			_stop_spatula_balance()
+			if not _spatula_balance_returning:
+				_spatula_balance_returning = true
+				_spatula_balance_return_from = _spatula_balance_tilt
+				_spatula_balance_return_height = _spatula_balance_ragdoll_height
+			var ru := clampf((_spatula_balance_fall_t - ragdoll_dur) / return_dur, 0.0, 1.0)
+			var return_ease := ru * ru * (3.0 - 2.0 * ru)
+			_spatula_balance_tilt = _spatula_balance_return_from.lerp(Vector2.ZERO, return_ease)
+			_spatula_balance_ragdoll_height = lerpf(_spatula_balance_return_height, 0.0, return_ease)
+			if ru >= 1.0:
+				_stop_spatula_balance()
 		return
 	if _spatula_balance_last_mouse.x == INF:
 		_spatula_balance_last_mouse = mouse
@@ -5098,15 +5125,14 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_falling = true
 		_spatula_balance_fall_t = 0.0
 		_spatula_balance_fall_from = _spatula_balance_tilt
-		var side := -1.0 if _spatula_balance_tilt.x < 0.0 else 1.0
-		if absf(_spatula_balance_tilt.x) < 0.001:
-			side = -1.0 if _spatula_balance_vel.x < 0.0 else 1.0
-		if absf(_spatula_balance_tilt.x) < 0.001 and absf(_spatula_balance_vel.x) < 0.001:
-			side = -1.0 if _spatula_balance_drift_dir.x < 0.0 else 1.0
-		if absf(side) <= 0.0:
-			side = 1.0
-		_spatula_balance_fall_dir = Vector2(side, 0.0)
+		_spatula_balance_fall_dir = _spatula_balance_tilt.normalized() if _spatula_balance_tilt.length_squared() > 0.0001 else _spatula_balance_drift_dir.normalized()
 		_spatula_balance_vel = Vector2.ZERO
+		_spatula_balance_ragdoll_height = 0.18
+		_spatula_balance_ragdoll_y_vel = 0.05
+		_spatula_balance_ragdoll_ang_vel = _spatula_balance_fall_dir * 1.65
+		_spatula_balance_impact_pending = false
+		_spatula_balance_impact_done = false
+		_spatula_balance_returning = false
 
 
 func _spatula_balance_world_basis() -> Basis:
@@ -6432,7 +6458,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			var pivot_target := _tool_hold_point_from_screen(balance_mouse, balance_y)
 			if pivot_target == Vector3.ZERO:
 				pivot_target = tip_target
-			pivot_target.y = balance_y
+			pivot_target.y = balance_y + _spatula_balance_ragdoll_height
 			tip_target = pivot_target
 			if _spatula_balance_impact_pending:
 				_spatula_balance_impact_pending = false
