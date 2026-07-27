@@ -301,12 +301,16 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to flip.
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
-const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.034
-const HAND_SPATULA_BALANCE_UNSTABLE := 5.6
+const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.028
+const HAND_SPATULA_BALANCE_COUNTER_PUSH := 0.052
+const HAND_SPATULA_BALANCE_UNSTABLE := 6.4
 const HAND_SPATULA_BALANCE_DRIFT := 0.0
-const HAND_SPATULA_BALANCE_DAMP := 0.965
-const HAND_SPATULA_BALANCE_MAX_TILT := 68.0
-const HAND_SPATULA_BALANCE_MAX_VEL := 3.25
+const HAND_SPATULA_BALANCE_DAMP := 0.982
+const HAND_SPATULA_BALANCE_MAX_TILT := 72.0
+const HAND_SPATULA_BALANCE_FALL_TILT := 104.0
+const HAND_SPATULA_BALANCE_FALL_DUR := 0.42
+const HAND_SPATULA_BALANCE_FALL_HOLD := 0.12
+const HAND_SPATULA_BALANCE_MAX_VEL := 4.8
 const HAND_SPATULA_BALANCE_BASE_Y := 0.045
 const HAND_SPATULA_BALANCE_SCREEN_NUDGE := Vector2(0.0, 40.0)
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
@@ -346,6 +350,10 @@ var _spatula_balance_last_mouse := Vector2.INF
 var _spatula_balance_tilt := Vector2.ZERO
 var _spatula_balance_vel := Vector2.ZERO
 var _spatula_balance_drift_dir := Vector2.RIGHT
+var _spatula_balance_falling: bool = false
+var _spatula_balance_fall_t: float = 0.0
+var _spatula_balance_fall_from := Vector2.ZERO
+var _spatula_balance_fall_dir := Vector2.RIGHT
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -5000,6 +5008,10 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_tilt = Vector2.ZERO
 	_spatula_balance_vel = Vector2.ZERO
 	_spatula_balance_drift_dir = Vector2.RIGHT
+	_spatula_balance_falling = false
+	_spatula_balance_fall_t = 0.0
+	_spatula_balance_fall_from = Vector2.ZERO
+	_spatula_balance_fall_dir = Vector2.RIGHT
 	_spatula_user_roll = 0.0
 
 
@@ -5008,6 +5020,10 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_last_mouse = mouse
 	_spatula_balance_tilt = Vector2.ZERO
 	_spatula_balance_vel = Vector2.ZERO
+	_spatula_balance_falling = false
+	_spatula_balance_fall_t = 0.0
+	_spatula_balance_fall_from = Vector2.ZERO
+	_spatula_balance_fall_dir = Vector2.RIGHT
 	_spatula_user_roll = 0.0
 	if _spatula_balance_active:
 		_spatula_balance_drift_dir = Vector2.RIGHT
@@ -5019,6 +5035,15 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if not _spatula_balance_active:
 		_spatula_balance_last_mouse = mouse
 		return
+	if _spatula_balance_falling:
+		_spatula_balance_fall_t += delta
+		var u := clampf(_spatula_balance_fall_t / HAND_SPATULA_BALANCE_FALL_DUR, 0.0, 1.0)
+		var eased := 1.0 - pow(1.0 - u, 2.0)
+		var fall_rad := deg_to_rad(HAND_SPATULA_BALANCE_FALL_TILT)
+		_spatula_balance_tilt = _spatula_balance_fall_from.lerp(_spatula_balance_fall_dir * fall_rad, eased)
+		if _spatula_balance_fall_t >= HAND_SPATULA_BALANCE_FALL_DUR + HAND_SPATULA_BALANCE_FALL_HOLD:
+			_stop_spatula_balance()
+		return
 	if _spatula_balance_last_mouse.x == INF:
 		_spatula_balance_last_mouse = mouse
 		return
@@ -5028,7 +5053,9 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	var move := Vector2(-mouse_delta.x, -mouse_delta.y)
 	if move.length_squared() > 0.01:
 		_spatula_balance_drift_dir = move.normalized()
-		_spatula_balance_vel += move * HAND_SPATULA_BALANCE_MOUSE_CORRECT
+		var countering := lean.length_squared() > 0.0001 and move.dot(lean) < 0.0
+		var impulse := HAND_SPATULA_BALANCE_COUNTER_PUSH if countering else HAND_SPATULA_BALANCE_MOUSE_CORRECT
+		_spatula_balance_vel += move * impulse
 	var lean_gain := 0.22 + lean.length() * 3.8
 	_spatula_balance_vel += lean * HAND_SPATULA_BALANCE_UNSTABLE * lean_gain * delta
 	if HAND_SPATULA_BALANCE_DRIFT > 0.0:
@@ -5039,7 +5066,13 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	_spatula_balance_tilt += _spatula_balance_vel * delta
 	var max_rad := deg_to_rad(HAND_SPATULA_BALANCE_MAX_TILT)
 	if _spatula_balance_tilt.length() > max_rad:
-		_stop_spatula_balance()
+		_spatula_balance_falling = true
+		_spatula_balance_fall_t = 0.0
+		_spatula_balance_fall_from = _spatula_balance_tilt
+		_spatula_balance_fall_dir = _spatula_balance_tilt.normalized()
+		if _spatula_balance_fall_dir.length_squared() <= 0.0001:
+			_spatula_balance_fall_dir = Vector2.RIGHT
+		_spatula_balance_vel = Vector2.ZERO
 
 
 func _spatula_roll_midi_offset() -> int:
