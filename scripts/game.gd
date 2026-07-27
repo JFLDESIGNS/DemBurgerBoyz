@@ -959,14 +959,20 @@ var soda_flavor_mats: Dictionary = {} ## flavor id / pad_* -> Material (tank Sha
 var soda_flavor_pads: Dictionary = {} ## flavor id -> MeshInstance3D (press-in buttons)
 var soda_flavor_labels: Dictionary = {} ## flavor id -> Label3D
 var soda_slot_mode: bool = false
-var soda_slot_root: Node3D = null
-var soda_slot_reel_labels: Array[Label3D] = []
-var soda_slot_reel_panels: Array[MeshInstance3D] = []
-var soda_slot_spin_label: Label3D = null
-var soda_slot_reels: Array[String] = ["7", "BAR", "ICE"]
+var soda_slot_reels: Array[String] = ["tomato", "cheese", "bun"]
+var soda_slot_symbol_mats: Dictionary = {}
+var soda_slot_spin_mat: StandardMaterial3D = null
 var soda_slot_spin_t: float = 0.0
 var soda_slot_tick_t: float = 0.0
-const SODA_SLOT_SYMBOLS: Array[String] = ["7", "BAR", "ICE", "POP", "BUN", "HOT"]
+const SODA_SLOT_SYMBOLS: Array[String] = ["tomato", "cheese", "bun", "pickle", "bacon", "logo"]
+const SODA_SLOT_SYMBOL_TEXTURES := {
+	"tomato": "res://assets/ingredients/tomato.png",
+	"cheese": "res://assets/ingredients/cheese.png",
+	"bun": "res://assets/ingredients/bun_top.png",
+	"pickle": "res://assets/ingredients/pickle.png",
+	"bacon": "res://assets/ingredients/bacon.png",
+	"logo": "res://assets/decal/burger_pals_logo.png",
+}
 const SODA_SLOT_SPIN_DUR := 0.95
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
 var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
@@ -1467,7 +1473,7 @@ var _tree_shake_vel: Vector2 = Vector2.ZERO
 var _tree_hold_lean: Vector3 = Vector3.ZERO
 const TREE_FRONT_DEFAULT_POS := Vector3(-4.33, 0.0, 5.36)
 const TREE_FRONT_DEFAULT_YAW := 60.0
-const TREE_BIRCH_DEFAULT_POS := Vector3(3.92, 0.0, 3.05)
+const TREE_BIRCH_DEFAULT_POS := Vector3(3.0056, 0.0, 4.574)
 const TREE_BIRCH_DEFAULT_YAW := 55.0 ## prior 35° + 20°
 var tree_front_node: Node3D = null
 var tree_birch_node: Node3D = null
@@ -22290,6 +22296,9 @@ func _load_tree_xform_settings() -> void:
 		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_y", tree_birch_pos.y)),
 		float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_z", tree_birch_pos.z))
 	)
+	var old_birch_default := Vector3(3.92, 0.0, 3.05)
+	if tree_birch_pos.distance_to(old_birch_default) <= 0.08:
+		tree_birch_pos = TREE_BIRCH_DEFAULT_POS
 	tree_birch_yaw = float(cfg.get_value(TREE_XFORM_CFG_SECTION, "birch_yaw", tree_birch_yaw))
 
 
@@ -22772,12 +22781,8 @@ func _build_soda_station() -> void:
 	soda_flavor_mats.clear()
 	soda_flavor_pads.clear()
 	soda_flavor_labels.clear()
-	if soda_slot_root != null and is_instance_valid(soda_slot_root):
-		soda_slot_root.queue_free()
-	soda_slot_root = null
-	soda_slot_reel_labels.clear()
-	soda_slot_reel_panels.clear()
-	soda_slot_spin_label = null
+	soda_slot_symbol_mats.clear()
+	soda_slot_spin_mat = null
 	soda_slot_spin_t = 0.0
 	soda_slot_tick_t = 0.0
 	soda_tank_bubbles.clear()
@@ -22876,7 +22881,7 @@ func _build_soda_station() -> void:
 	## Flavor clicks sit on the model's brand squares (not floating pads).
 	if visual != null:
 		_setup_soda_brand_click_areas(visual)
-		_setup_soda_slot_machine_overlay()
+		_refresh_soda_slot_machine_visuals()
 		_setup_soda_dispense_clips(visual)
 	else:
 		## Fallback cabinet — keep approximate front-face hitboxes.
@@ -22899,7 +22904,7 @@ func _build_soda_station() -> void:
 			root.add_child(area)
 			soda_flavor_areas[fid] = area
 			i += 1
-		_setup_soda_slot_machine_overlay()
+		_refresh_soda_slot_machine_visuals()
 
 	## Invisible pour tips under model nozzles (1–3 soda by flavor, 4 = ice).
 	_add_soda_spout_marker_only(root, true)
@@ -23100,82 +23105,68 @@ func _setup_soda_brand_click_areas(visual: Node3D) -> void:
 		soda_flavor_areas[fid] = area
 
 
-func _setup_soda_slot_machine_overlay() -> void:
-	if soda_root == null or not is_instance_valid(soda_root):
-		return
-	if soda_slot_root != null and is_instance_valid(soda_slot_root):
-		soda_slot_root.queue_free()
-	soda_slot_root = Node3D.new()
-	soda_slot_root.name = "SodaSlotMachineOverlay"
-	soda_root.add_child(soda_slot_root)
-	soda_slot_reel_labels.clear()
-	soda_slot_reel_panels.clear()
-	soda_slot_spin_label = null
+func _soda_slot_symbol_material(sym: String) -> StandardMaterial3D:
+	if soda_slot_symbol_mats.has(sym):
+		return soda_slot_symbol_mats[sym]
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "SlotSymbol_%s" % sym
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.88, 0.32)
+	mat.emission_energy_multiplier = 0.75
+	mat.albedo_color = Color.WHITE
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+	mat.render_priority = 14
+	var path := str(SODA_SLOT_SYMBOL_TEXTURES.get(sym, ""))
+	if path != "" and ResourceLoader.exists(path):
+		mat.albedo_texture = load(path) as Texture2D
+	soda_slot_symbol_mats[sym] = mat
+	return mat
+
+
+func _soda_slot_spin_material() -> StandardMaterial3D:
+	if soda_slot_spin_mat != null:
+		return soda_slot_spin_mat
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "SlotSpinButton"
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.08, 0.02)
+	mat.emission_energy_multiplier = 0.9
+	mat.albedo_color = Color(0.95, 0.04, 0.02)
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 14
+	var path := "res://assets/decal/burger_pals_logo.png"
+	if ResourceLoader.exists(path):
+		mat.albedo_texture = load(path) as Texture2D
+	soda_slot_spin_mat = mat
+	return mat
+
+
+func _refresh_soda_slot_machine_visuals() -> void:
 	var reel_ids: Array[String] = ["cola", "lemon_lime", "orange"]
 	for i in reel_ids.size():
 		var fid := reel_ids[i]
-		var area: Area3D = soda_flavor_areas.get(fid, null)
-		if area == null or not is_instance_valid(area):
+		var pad: MeshInstance3D = soda_flavor_pads.get(fid, null)
+		if pad == null or not is_instance_valid(pad):
 			continue
-		var panel := _make_soda_slot_panel(Color(0.04, 0.05, 0.09), Color(0.95, 0.78, 0.20))
-		soda_slot_root.add_child(panel)
-		_place_soda_slot_node_on_area(panel, area, 0.016)
-		soda_slot_reel_panels.append(panel)
-		var lab := _make_soda_slot_label(str(soda_slot_reels[i]), 28, Color(1.0, 0.93, 0.45, 1.0))
-		soda_slot_root.add_child(lab)
-		_place_soda_slot_node_on_area(lab, area, 0.028)
-		soda_slot_reel_labels.append(lab)
-	var spin_area: Area3D = soda_flavor_areas.get("ice", null)
-	if spin_area != null and is_instance_valid(spin_area):
-		var spin_panel := _make_soda_slot_panel(Color(0.12, 0.02, 0.03), Color(1.0, 0.18, 0.10))
-		soda_slot_root.add_child(spin_panel)
-		_place_soda_slot_node_on_area(spin_panel, spin_area, 0.016)
-		soda_slot_spin_label = _make_soda_slot_label("SPIN", 20, Color(1.0, 0.95, 0.88, 1.0))
-		soda_slot_root.add_child(soda_slot_spin_label)
-		_place_soda_slot_node_on_area(soda_slot_spin_label, spin_area, 0.030)
-	soda_slot_root.visible = soda_slot_mode
-
-
-func _make_soda_slot_panel(bg: Color, glow: Color) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	mi.name = "SlotReelPanel"
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.095, 0.108) * SODA_FOUNTAIN_SCALE
-	mi.mesh = quad
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(bg.r, bg.g, bg.b, 0.94)
-	mat.emission_enabled = true
-	mat.emission = glow
-	mat.emission_energy_multiplier = 0.32
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = true
-	mat.render_priority = 16
-	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	return mi
-
-
-func _make_soda_slot_label(txt: String, size: int, col: Color) -> Label3D:
-	var lab := Label3D.new()
-	lab.name = "SlotLabel"
-	lab.text = txt
-	lab.font_size = size
-	lab.modulate = col
-	lab.outline_modulate = Color(0.02, 0.01, 0.0, 0.95)
-	lab.outline_size = 6
-	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	lab.no_depth_test = true
-	return lab
-
-
-func _place_soda_slot_node_on_area(node: Node3D, area: Area3D, out: float) -> void:
-	var front := area.global_transform.basis.z.normalized()
-	if front.length_squared() <= 0.0001:
-		front = Vector3(0.0, 0.0, 1.0)
-	node.global_position = area.global_position + front * out
-	node.global_rotation = area.global_rotation
+		if soda_slot_mode:
+			pad.material_override = _soda_slot_symbol_material(str(soda_slot_reels[i]))
+		else:
+			var mat = soda_flavor_mats.get(fid, null)
+			if mat != null:
+				pad.material_override = mat
+	var spin_pad: MeshInstance3D = soda_flavor_pads.get("ice", null)
+	if spin_pad != null and is_instance_valid(spin_pad):
+		if soda_slot_mode:
+			spin_pad.material_override = _soda_slot_spin_material()
+		else:
+			var ice_mat = soda_flavor_mats.get("ice", null)
+			if ice_mat != null:
+				spin_pad.material_override = ice_mat
 
 
 func _collect_soda_brand_panels(n: Node, xf: Transform3D, out: Array) -> void:
@@ -28856,10 +28847,7 @@ func _set_soda_flavor(fid: String) -> void:
 
 func _toggle_soda_slot_machine() -> void:
 	soda_slot_mode = not soda_slot_mode
-	if soda_slot_root == null or not is_instance_valid(soda_slot_root):
-		_setup_soda_slot_machine_overlay()
-	if soda_slot_root != null and is_instance_valid(soda_slot_root):
-		soda_slot_root.visible = soda_slot_mode
+	_refresh_soda_slot_machine_visuals()
 	if game_audio:
 		game_audio.play_click()
 	_flash("SODA SLOTS — tap SPIN" if soda_slot_mode else "Soda fountain mode", Color("FFD54F"))
@@ -28880,9 +28868,6 @@ func _start_soda_slot_spin() -> void:
 
 
 func _update_soda_slot_machine(delta: float) -> void:
-	if soda_slot_root == null or not is_instance_valid(soda_slot_root):
-		return
-	soda_slot_root.visible = soda_slot_mode
 	if not soda_slot_mode:
 		return
 	if soda_slot_spin_t <= 0.0:
@@ -28891,14 +28876,10 @@ func _update_soda_slot_machine(delta: float) -> void:
 	soda_slot_tick_t -= delta
 	if soda_slot_tick_t <= 0.0:
 		soda_slot_tick_t = 0.055
-		for i in soda_slot_reel_labels.size():
-			var lab := soda_slot_reel_labels[i]
-			if lab == null or not is_instance_valid(lab):
-				continue
+		for i in range(mini(3, soda_slot_reels.size())):
 			var sym := str(SODA_SLOT_SYMBOLS.pick_random())
-			lab.text = sym
-			if i < soda_slot_reels.size():
-				soda_slot_reels[i] = sym
+			soda_slot_reels[i] = sym
+		_refresh_soda_slot_machine_visuals()
 		if game_audio and game_audio.has_method("play_ice_tink") and randf() < 0.45:
 			game_audio.play_ice_tink()
 	if soda_slot_spin_t <= 0.0:
@@ -28906,15 +28887,13 @@ func _update_soda_slot_machine(delta: float) -> void:
 
 
 func _finish_soda_slot_spin() -> void:
-	for i in range(mini(soda_slot_reel_labels.size(), 3)):
+	for i in range(mini(soda_slot_reels.size(), 3)):
 		var sym := str(SODA_SLOT_SYMBOLS.pick_random())
 		## Quick version: small chance of a match so the ice jackpot is easy to see while testing.
 		if randf() < 0.18:
 			sym = str(soda_slot_reels[0])
 		soda_slot_reels[i] = sym
-		var lab := soda_slot_reel_labels[i]
-		if lab != null and is_instance_valid(lab):
-			lab.text = sym
+	_refresh_soda_slot_machine_visuals()
 	var win := soda_slot_reels.size() >= 3 and soda_slot_reels[0] == soda_slot_reels[1] and soda_slot_reels[1] == soda_slot_reels[2]
 	if win:
 		_soda_slot_ice_jackpot()
@@ -38759,7 +38738,7 @@ func _build_options_menu() -> void:
 	, true)
 
 	var tree_xf_lab := Label.new()
-	tree_xf_lab.text = "TREE POSITION / ROTATION"
+	tree_xf_lab.text = "TREE LOCATION / HEIGHT"
 	UiFontsScript.apply_label(tree_xf_lab, true, 13)
 	tree_xf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	options_hidden_room_tone_box.add_child(tree_xf_lab)
@@ -38767,8 +38746,8 @@ func _build_options_menu() -> void:
 	options_hidden_tree_select = OptionButton.new()
 	options_hidden_tree_select.custom_minimum_size = Vector2(0, 36)
 	options_hidden_tree_select.focus_mode = Control.FOCUS_ALL
-	options_hidden_tree_select.add_item("Large Tree")
-	options_hidden_tree_select.add_item("Birch Tree")
+	options_hidden_tree_select.add_item("Big Tree (camera right)")
+	options_hidden_tree_select.add_item("Small Tree (camera left)")
 	options_hidden_tree_select.select(options_hidden_tree_edit_idx)
 	options_hidden_tree_select.item_selected.connect(func(idx: int):
 		options_hidden_tree_edit_idx = clampi(idx, 0, 1)
@@ -38777,13 +38756,13 @@ func _build_options_menu() -> void:
 	)
 	options_hidden_room_tone_box.add_child(options_hidden_tree_select)
 
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tx", "Position X", -12.0, 12.0, 0.05,
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tx", "Location X", -12.0, 12.0, 0.05,
 		func(): return _hidden_tree_edit_pos().x,
 		func(v: float): _hidden_set_tree_edit_pos_axis("x", clampf(v, -12.0, 12.0)))
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "ty", "Position Y", -2.0, 6.0, 0.05,
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "ty", "Height", -2.0, 6.0, 0.05,
 		func(): return _hidden_tree_edit_pos().y,
 		func(v: float): _hidden_set_tree_edit_pos_axis("y", clampf(v, -2.0, 6.0)))
-	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tz", "Position Z", -2.0, 16.0, 0.05,
+	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tz", "Location Z", -2.0, 16.0, 0.05,
 		func(): return _hidden_tree_edit_pos().z,
 		func(v: float): _hidden_set_tree_edit_pos_axis("z", clampf(v, -2.0, 16.0)))
 	_hidden_add_tree_xform_slider(options_hidden_room_tone_box, "tyaw", "Yaw °", -180.0, 180.0, 1.0,
@@ -48747,11 +48726,15 @@ func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
+	if not is_finite(nx) or not is_finite(ny) or nx < -0.05 or ny < -0.05 or nx > 1.05 or ny > 1.05:
+		return
 	var wrap := _mp_ensure_remote_cursor(sid)
 	wrap.visible = true
 	var vp := get_viewport().get_visible_rect().size
+	if vp.x <= 1.0 or vp.y <= 1.0:
+		return
 	## Hotspot matches local glove tip (~0, 3).
-	wrap.position = Vector2(nx * vp.x, ny * vp.y) - Vector2(0, 3)
+	wrap.position = Vector2(clampf(nx, 0.0, 1.0) * vp.x, clampf(ny, 0.0, 1.0) * vp.y) - Vector2(0, 3)
 	var tag: Label = wrap.get_node_or_null("Tag") as Label
 	if tag:
 		tag.text = NetManager.name_for_peer(sid)
