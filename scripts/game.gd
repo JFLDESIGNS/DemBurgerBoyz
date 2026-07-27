@@ -969,6 +969,14 @@ var soda_slot_spin_label: Label3D = null
 var soda_slot_spin_t: float = 0.0
 var soda_slot_tick_t: float = 0.0
 var soda_slot_pulse_t: float = 0.0
+const SODA_SLOT_CFG_SECTION := "soda_slot"
+const SODA_SLOT_TEX_SIZE := 256
+var soda_slot_icon_size_px: float = 118.0
+var soda_slot_icon_padding_px: float = 18.0
+var soda_slot_icon_offset_px := Vector2.ZERO
+var soda_slot_spin_button_offset_in := Vector3.ZERO
+var soda_slot_spin_text_offset_in := Vector3(-1.0, 0.0, 1.42)
+var soda_slot_spin_text_size: float = 32.0
 const SODA_SLOT_SYMBOLS: Array[String] = ["tomato", "cheese", "bun", "pickle", "bacon", "logo"]
 const SODA_SLOT_SYMBOL_TEXTURES := {
 	"tomato": "res://assets/ingredients/tomato.png",
@@ -2195,6 +2203,7 @@ func _ready() -> void:
 	brush_swipe_cool.fill(0.0)
 	_setup_stations_data()
 	_load_spatula_balance_settings()
+	_load_soda_slot_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -22739,6 +22748,75 @@ func _sync_soda_cup_height_hidden_ui() -> void:
 			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
 
 
+func _load_soda_slot_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(SODA_SLOT_CFG_SECTION):
+		return
+	soda_slot_icon_size_px = clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "icon_size_px", soda_slot_icon_size_px)), 24.0, 240.0)
+	soda_slot_icon_padding_px = clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "icon_padding_px", soda_slot_icon_padding_px)), 0.0, 112.0)
+	soda_slot_icon_offset_px = Vector2(
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "icon_offset_x_px", soda_slot_icon_offset_px.x)), -96.0, 96.0),
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "icon_offset_y_px", soda_slot_icon_offset_px.y)), -96.0, 96.0)
+	)
+	soda_slot_spin_button_offset_in = Vector3(
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "button_offset_x_in", soda_slot_spin_button_offset_in.x)), -8.0, 8.0),
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "button_offset_y_in", soda_slot_spin_button_offset_in.y)), -6.0, 6.0),
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "button_offset_z_in", soda_slot_spin_button_offset_in.z)), -6.0, 6.0)
+	)
+	soda_slot_spin_text_offset_in = Vector3(
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "text_offset_x_in", soda_slot_spin_text_offset_in.x)), -8.0, 8.0),
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "text_offset_y_in", soda_slot_spin_text_offset_in.y)), -6.0, 6.0),
+		clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "text_offset_z_in", soda_slot_spin_text_offset_in.z)), -6.0, 6.0)
+	)
+	soda_slot_spin_text_size = clampf(float(cfg.get_value(SODA_SLOT_CFG_SECTION, "text_size", soda_slot_spin_text_size)), 12.0, 72.0)
+
+
+func _save_soda_slot_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "icon_size_px", soda_slot_icon_size_px)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "icon_padding_px", soda_slot_icon_padding_px)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "icon_offset_x_px", soda_slot_icon_offset_px.x)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "icon_offset_y_px", soda_slot_icon_offset_px.y)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "button_offset_x_in", soda_slot_spin_button_offset_in.x)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "button_offset_y_in", soda_slot_spin_button_offset_in.y)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "button_offset_z_in", soda_slot_spin_button_offset_in.z)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "text_offset_x_in", soda_slot_spin_text_offset_in.x)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "text_offset_y_in", soda_slot_spin_text_offset_in.y)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "text_offset_z_in", soda_slot_spin_text_offset_in.z)
+	cfg.set_value(SODA_SLOT_CFG_SECTION, "text_size", soda_slot_spin_text_size)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_soda_slot_settings_changed(rebuild_symbols: bool = false) -> void:
+	if rebuild_symbols:
+		soda_slot_symbol_mats.clear()
+	_refresh_soda_slot_machine_visuals()
+
+
+func _sync_soda_slot_hidden_ui() -> void:
+	var vals := {
+		"slot_icon_size": soda_slot_icon_size_px,
+		"slot_icon_pad": soda_slot_icon_padding_px,
+		"slot_icon_x": soda_slot_icon_offset_px.x,
+		"slot_icon_y": soda_slot_icon_offset_px.y,
+		"slot_btn_x": soda_slot_spin_button_offset_in.x,
+		"slot_btn_y": soda_slot_spin_button_offset_in.y,
+		"slot_btn_z": soda_slot_spin_button_offset_in.z,
+		"slot_text_x": soda_slot_spin_text_offset_in.x,
+		"slot_text_y": soda_slot_spin_text_offset_in.y,
+		"slot_text_z": soda_slot_spin_text_offset_in.z,
+		"slot_text_size": soda_slot_spin_text_size,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
 
 func _sync_icecream_station_hidden_ui() -> void:
 	if options_hidden_icecream_pos_slider != null and is_instance_valid(options_hidden_icecream_pos_slider):
@@ -23404,6 +23482,7 @@ func _setup_soda_brand_click_areas(visual: Node3D) -> void:
 				var src := panels[i]["mat"] as StandardMaterial3D
 				art.albedo_texture = src.albedo_texture
 		mi.material_override = art
+		mi.set_meta("slot_base_position", mi.position)
 		soda_flavor_mats[fid] = art
 		soda_flavor_pads[fid] = mi
 
@@ -23424,6 +23503,7 @@ func _setup_soda_brand_click_areas(visual: Node3D) -> void:
 		area.global_position = center_global
 		## Nudge slightly toward the cook so the box sits in front of the art.
 		area.position.z += 0.012
+		area.set_meta("slot_base_position", area.position)
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
 		box.size = Vector3(maxf(sx * 1.1, 0.04), maxf(sy * 1.1, 0.04), maxf(sz * 6.0, 0.05))
@@ -23452,7 +23532,7 @@ func _soda_slot_symbol_material(sym: String) -> StandardMaterial3D:
 
 
 func _soda_slot_padded_symbol_texture(sym: String) -> Texture2D:
-	var img := Image.create(256, 256, false, Image.FORMAT_RGBA8)
+	var img := Image.create(SODA_SLOT_TEX_SIZE, SODA_SLOT_TEX_SIZE, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0.035, 0.040, 0.035, 1.0))
 	var path := str(SODA_SLOT_SYMBOL_TEXTURES.get(sym, ""))
 	if path == "" or not ResourceLoader.exists(path):
@@ -23464,12 +23544,16 @@ func _soda_slot_padded_symbol_texture(sym: String) -> Texture2D:
 	if src == null or src.is_empty():
 		return ImageTexture.create_from_image(img)
 	src.convert(Image.FORMAT_RGBA8)
-	var max_side := 118
+	var padded_side := maxi(1, SODA_SLOT_TEX_SIZE - int(round(soda_slot_icon_padding_px)) * 2)
+	var max_side := mini(int(round(soda_slot_icon_size_px)), padded_side)
 	var src_size := src.get_size()
 	var scale := minf(float(max_side) / maxf(1.0, float(src_size.x)), float(max_side) / maxf(1.0, float(src_size.y)))
 	var out_size := Vector2i(maxi(1, int(round(float(src_size.x) * scale))), maxi(1, int(round(float(src_size.y) * scale))))
 	src.resize(out_size.x, out_size.y, Image.INTERPOLATE_LANCZOS)
-	var dst := Vector2i((256 - out_size.x) / 2, (256 - out_size.y) / 2)
+	var dst := Vector2i(
+		clampi((SODA_SLOT_TEX_SIZE - out_size.x) / 2 + int(round(soda_slot_icon_offset_px.x)), 0, SODA_SLOT_TEX_SIZE - out_size.x),
+		clampi((SODA_SLOT_TEX_SIZE - out_size.y) / 2 + int(round(soda_slot_icon_offset_px.y)), 0, SODA_SLOT_TEX_SIZE - out_size.y)
+	)
 	img.blend_rect(src, Rect2i(Vector2i.ZERO, out_size), dst)
 	return ImageTexture.create_from_image(img)
 
@@ -23540,9 +23624,33 @@ func _ensure_soda_slot_bulbs() -> void:
 		soda_slot_spin_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		soda_slot_spin_label.no_depth_test = false
 		soda_slot_bulb_root.add_child(soda_slot_spin_label)
-		soda_slot_spin_label.global_position = spin_area.global_position \
-			- spin_area.global_transform.basis.x.normalized() * INCH_TO_M \
-			+ spin_area.global_transform.basis.z.normalized() * 0.036
+		_apply_soda_slot_layout()
+
+
+func _node3d_base_position(n: Node3D) -> Vector3:
+	if n == null or not is_instance_valid(n):
+		return Vector3.ZERO
+	if not n.has_meta("slot_base_position"):
+		n.set_meta("slot_base_position", n.position)
+	return n.get_meta("slot_base_position") as Vector3
+
+
+func _apply_soda_slot_layout() -> void:
+	var spin_offset := soda_slot_spin_button_offset_in * INCH_TO_M if soda_slot_mode else Vector3.ZERO
+	var spin_pad: MeshInstance3D = soda_flavor_pads.get("ice", null)
+	if spin_pad != null and is_instance_valid(spin_pad):
+		spin_pad.position = _node3d_base_position(spin_pad) + spin_offset
+	var spin_area: Area3D = soda_flavor_areas.get("ice", null)
+	if spin_area != null and is_instance_valid(spin_area):
+		spin_area.position = _node3d_base_position(spin_area) + spin_offset
+	if soda_slot_spin_label != null and is_instance_valid(soda_slot_spin_label):
+		soda_slot_spin_label.font_size = int(round(soda_slot_spin_text_size))
+		if spin_area != null and is_instance_valid(spin_area):
+			var basis := spin_area.global_transform.basis
+			soda_slot_spin_label.global_position = spin_area.global_position \
+				+ basis.x.normalized() * soda_slot_spin_text_offset_in.x * INCH_TO_M \
+				+ basis.y.normalized() * soda_slot_spin_text_offset_in.y * INCH_TO_M \
+				+ basis.z.normalized() * soda_slot_spin_text_offset_in.z * INCH_TO_M
 
 
 func _set_soda_slot_bulbs_visible(on: bool) -> void:
@@ -23598,6 +23706,7 @@ func _refresh_soda_slot_machine_visuals() -> void:
 			var ice_mat = soda_flavor_mats.get("ice", null)
 			if ice_mat != null:
 				spin_pad.material_override = ice_mat
+	_apply_soda_slot_layout()
 
 
 func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
@@ -23650,6 +23759,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		quad.size = Vector2(panel_w, panel_h)
 		mi.mesh = quad
 		mi.position = panel_pos
+		mi.set_meta("slot_base_position", mi.position)
 		mi.material_override = _make_soda_flavor_panel_mat(fid)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		soda_flavor_panel_root.add_child(mi)
@@ -23665,6 +23775,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		lab.outline_size = 3
 		lab.no_depth_test = false
 		lab.position = panel_pos + Vector3(0.0, -panel_h * 0.08, 0.004)
+		lab.set_meta("slot_base_position", lab.position)
 		soda_flavor_panel_root.add_child(lab)
 		soda_flavor_labels[fid] = lab
 		var area := Area3D.new()
@@ -23676,6 +23787,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		area.monitorable = true
 		soda_root.add_child(area)
 		area.position = panel_pos + Vector3(0.0, 0.0, 0.012)
+		area.set_meta("slot_base_position", area.position)
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
 		box.size = Vector3(panel_w * 1.12, panel_h * 1.12, 0.06)
@@ -39557,6 +39669,89 @@ func _build_options_menu() -> void:
 			_save_soda_cup_height_settings()
 	)
 
+	var slot_lab := Label.new()
+	slot_lab.text = "SODA SLOT MACHINE"
+	UiFontsScript.apply_label(slot_lab, true, 13)
+	slot_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(slot_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_size", "Icon Size px", 24.0, 240.0, 1.0,
+		func(): return soda_slot_icon_size_px,
+		func(v: float):
+			soda_slot_icon_size_px = clampf(v, 24.0, 240.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed(true)
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_pad", "Icon Padding px", 0.0, 112.0, 1.0,
+		func(): return soda_slot_icon_padding_px,
+		func(v: float):
+			soda_slot_icon_padding_px = clampf(v, 0.0, 112.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed(true)
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_x", "Icon X px", -96.0, 96.0, 1.0,
+		func(): return soda_slot_icon_offset_px.x,
+		func(v: float):
+			soda_slot_icon_offset_px.x = clampf(v, -96.0, 96.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed(true)
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_icon_y", "Icon Y px", -96.0, 96.0, 1.0,
+		func(): return soda_slot_icon_offset_px.y,
+		func(v: float):
+			soda_slot_icon_offset_px.y = clampf(v, -96.0, 96.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed(true)
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_btn_x", "Button X (in)", -8.0, 8.0, 0.1,
+		func(): return soda_slot_spin_button_offset_in.x,
+		func(v: float):
+			soda_slot_spin_button_offset_in.x = clampf(v, -8.0, 8.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_btn_y", "Button Y (in)", -6.0, 6.0, 0.1,
+		func(): return soda_slot_spin_button_offset_in.y,
+		func(v: float):
+			soda_slot_spin_button_offset_in.y = clampf(v, -6.0, 6.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_btn_z", "Button Depth (in)", -6.0, 6.0, 0.1,
+		func(): return soda_slot_spin_button_offset_in.z,
+		func(v: float):
+			soda_slot_spin_button_offset_in.z = clampf(v, -6.0, 6.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_x", "Text X (in)", -8.0, 8.0, 0.1,
+		func(): return soda_slot_spin_text_offset_in.x,
+		func(v: float):
+			soda_slot_spin_text_offset_in.x = clampf(v, -8.0, 8.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_y", "Text Y (in)", -6.0, 6.0, 0.1,
+		func(): return soda_slot_spin_text_offset_in.y,
+		func(v: float):
+			soda_slot_spin_text_offset_in.y = clampf(v, -6.0, 6.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_z", "Text Depth (in)", -6.0, 6.0, 0.1,
+		func(): return soda_slot_spin_text_offset_in.z,
+		func(v: float):
+			soda_slot_spin_text_offset_in.z = clampf(v, -6.0, 6.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "slot_text_size", "Text Size", 12.0, 72.0, 1.0,
+		func(): return soda_slot_spin_text_size,
+		func(v: float):
+			soda_slot_spin_text_size = clampf(v, 12.0, 72.0)
+			_save_soda_slot_settings()
+			_apply_soda_slot_settings_changed()
+	)
+
 	var ao_lab := Label.new()
 	ao_lab.text = "AMBIENT OCCLUSION"
 	UiFontsScript.apply_label(ao_lab, true, 13)
@@ -39762,6 +39957,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_grill_season_hidden_ui()
 			_sync_grill_vignette_hidden_ui()
 			_sync_icecream_station_hidden_ui()
+			_sync_soda_slot_hidden_ui()
 			_refresh_options_graphics_controls()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
