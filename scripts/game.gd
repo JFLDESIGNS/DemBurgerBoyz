@@ -5257,7 +5257,9 @@ func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> 
 		return
 	var ru := clampf(_spatula_balance_return_t / SPATULA_BALANCE_IMPACT_RETURN_DUR, 0.0, 1.0)
 	var ease := ru * ru * (3.0 - 2.0 * ru)
-	var basis := _spatula_balance_return_from.basis.slerp(target_xform.basis, ease).orthonormalized()
+	var from_q := Quaternion(_spatula_balance_return_from.basis.orthonormalized())
+	var to_q := Quaternion(target_xform.basis.orthonormalized())
+	var basis := Basis(from_q.slerp(to_q, ease)).orthonormalized()
 	var origin := _spatula_balance_return_from.origin.lerp(target_xform.origin, ease)
 	hand_spatula_root.visible = true
 	hand_spatula_root.global_transform = Transform3D(basis, origin)
