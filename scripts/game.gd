@@ -1555,6 +1555,10 @@ var options_hidden_icecream_pos_slider: HSlider = null
 var options_hidden_icecream_pos_lab: Label = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
+var street_bg_choice: String = "preview"
+var street_bg_custom_path: String = ""
+var street_bg_option: OptionButton = null
+var street_bg_custom_edit: LineEdit = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -2048,6 +2052,8 @@ const SODA_TANK_MAX_H := 0.245
 const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
+const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
+const STREET_BG_PREVIEW_PATH := "res://assets/bg/street_preview_storefront.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2307,6 +2313,7 @@ func _ready() -> void:
 	_load_spatula_balance_settings()
 	_load_roomba_home_settings()
 	_load_soda_slot_settings()
+	_load_street_background_settings()
 	_load_world_hint_settings()
 	_load_fryer_tuning_settings()
 	_build_3d_world()
@@ -22071,10 +22078,10 @@ func _build_outdoor_street() -> void:
 	outdoor.add_child(floor_body)
 
 	## Matte painting fills the view beyond the window.
-	const BG_PATH := "res://assets/bg/street_window.png"
+	var bg_path := _current_street_background_path()
 	var tex: Texture2D = null
-	if ResourceLoader.exists(BG_PATH):
-		tex = load(BG_PATH) as Texture2D
+	if ResourceLoader.exists(bg_path):
+		tex = load(bg_path) as Texture2D
 	if tex == null:
 		## Fallback flat sky if the paint isn't imported yet.
 		var fallback := _add_box(outdoor, Vector3(28, 14, 0.08), Vector3(0.0, 2.6, 8.5), Color("7EC8E8"))
@@ -39224,6 +39231,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "roomba_drive_volume", "Drive Sound", 0.0, 2.0, 0.01)
 
 	_gfx_add_section(list, "WINDOW BG")
+	_gfx_add_background_selector(list)
 	_gfx_add_slider(list, "bg_y", "BG Height", 0.2, 4.5, 0.02)
 	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
@@ -39409,6 +39417,48 @@ func _gfx_add_check(parent: Control, key: String, label_text: String) -> void:
 	)
 	parent.add_child(btn)
 	gfx_checks[key] = btn
+
+
+func _gfx_add_background_selector(parent: Control) -> void:
+	var lab := Label.new()
+	lab.text = "Background Image"
+	UiFontsScript.apply_label(lab, false, 11)
+	lab.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	parent.add_child(lab)
+
+	street_bg_option = OptionButton.new()
+	street_bg_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_button(street_bg_option, false, 11)
+	_refresh_street_background_option()
+	street_bg_option.item_selected.connect(func(index: int):
+		var meta = street_bg_option.get_item_metadata(index)
+		street_bg_choice = str(meta)
+		_save_street_background_settings()
+		_apply_street_background_texture()
+	)
+	parent.add_child(street_bg_option)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	parent.add_child(row)
+
+	street_bg_custom_edit = LineEdit.new()
+	street_bg_custom_edit.placeholder_text = "res://assets/bg/custom.png"
+	street_bg_custom_edit.text = street_bg_custom_path
+	street_bg_custom_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(street_bg_custom_edit)
+
+	var apply_btn := Button.new()
+	apply_btn.text = "Apply"
+	UiFontsScript.apply_button(apply_btn, true, 11)
+	apply_btn.pressed.connect(func():
+		street_bg_custom_path = street_bg_custom_edit.text.strip_edges()
+		street_bg_choice = "custom" if street_bg_custom_path != "" else street_bg_choice
+		_refresh_street_background_option()
+		_save_street_background_settings()
+		_apply_street_background_texture()
+	)
+	row.add_child(apply_btn)
 
 
 func _toggle_graphics_menu() -> void:
@@ -41976,9 +42026,90 @@ func _copy_build_zone_values() -> void:
 	_flash("Build GFX copied — paste in chat", Color("90CAF9"))
 
 
+func _street_background_options() -> Array:
+	var opts: Array = [
+		{"id": "original", "label": "Original Street", "path": STREET_BG_ORIGINAL_PATH},
+	]
+	if ResourceLoader.exists(STREET_BG_PREVIEW_PATH):
+		opts.append({"id": "preview", "label": "Storefront Preview", "path": STREET_BG_PREVIEW_PATH})
+	if street_bg_custom_path != "":
+		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
+	return opts
+
+
+func _street_background_path_for_choice(choice: String) -> String:
+	match choice:
+		"preview":
+			return STREET_BG_PREVIEW_PATH
+		"custom":
+			return street_bg_custom_path
+		_:
+			return STREET_BG_ORIGINAL_PATH
+
+
+func _current_street_background_path() -> String:
+	var path := _street_background_path_for_choice(street_bg_choice)
+	if path != "" and ResourceLoader.exists(path):
+		return path
+	if ResourceLoader.exists(STREET_BG_PREVIEW_PATH):
+		return STREET_BG_PREVIEW_PATH
+	return STREET_BG_ORIGINAL_PATH
+
+
+func _refresh_street_background_option() -> void:
+	if street_bg_option == null or not is_instance_valid(street_bg_option):
+		return
+	street_bg_option.clear()
+	var opts := _street_background_options()
+	var select_index := 0
+	for i in range(opts.size()):
+		var opt: Dictionary = opts[i]
+		street_bg_option.add_item(str(opt.get("label", "Background")))
+		street_bg_option.set_item_metadata(i, str(opt.get("id", "original")))
+		if str(opt.get("id", "original")) == street_bg_choice:
+			select_index = i
+	street_bg_option.select(select_index)
+
+
+func _load_street_background_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) == OK:
+		street_bg_choice = str(cfg.get_value("street_bg", "choice", street_bg_choice))
+		street_bg_custom_path = str(cfg.get_value("street_bg", "custom_path", ""))
+	if not ResourceLoader.exists(_street_background_path_for_choice(street_bg_choice)):
+		street_bg_choice = "preview" if ResourceLoader.exists(STREET_BG_PREVIEW_PATH) else "original"
+
+
+func _save_street_background_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value("street_bg", "choice", street_bg_choice)
+	cfg.set_value("street_bg", "custom_path", street_bg_custom_path)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_street_background_texture() -> void:
+	if street_matte == null or not is_instance_valid(street_matte):
+		return
+	var tex := load(_current_street_background_path()) as Texture2D
+	if tex == null:
+		return
+	var mat := street_matte.material_override as StandardMaterial3D
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color.WHITE
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.render_priority = -8
+		street_matte.material_override = mat
+	mat.albedo_texture = tex
+
+
 func _apply_street_matte_settings(s: Dictionary) -> void:
 	if street_matte == null or not is_instance_valid(street_matte):
 		return
+	_apply_street_background_texture()
 	var y := float(s.get("bg_y", STREET_MATTE_DEFAULT_Y))
 	var sc := float(s.get("bg_scale", 1.0))
 	street_matte.position = Vector3(0.0, y, STREET_MATTE_BASE_Z)
