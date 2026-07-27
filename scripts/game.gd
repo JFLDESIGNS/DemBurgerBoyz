@@ -313,6 +313,8 @@ const HAND_SPATULA_BALANCE_FALL_HOLD := 0.12
 const HAND_SPATULA_BALANCE_MAX_VEL := 4.8
 const HAND_SPATULA_BALANCE_BASE_Y := 0.045
 const HAND_SPATULA_BALANCE_SCREEN_NUDGE := Vector2(0.0, 40.0)
+const HAND_SPATULA_BALANCE_DEPTH_INPUT := 0.42
+const HAND_SPATULA_BALANCE_DEPTH_VISUAL := 0.32
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
@@ -5050,7 +5052,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
 	var lean := _spatula_balance_tilt
-	var move := Vector2(-mouse_delta.x, -mouse_delta.y)
+	var move := Vector2(-mouse_delta.x, -mouse_delta.y * HAND_SPATULA_BALANCE_DEPTH_INPUT)
 	if move.length_squared() > 0.01:
 		_spatula_balance_drift_dir = move.normalized()
 		var countering := lean.length_squared() > 0.0001 and move.dot(lean) < 0.0
@@ -5069,9 +5071,14 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_falling = true
 		_spatula_balance_fall_t = 0.0
 		_spatula_balance_fall_from = _spatula_balance_tilt
-		_spatula_balance_fall_dir = _spatula_balance_tilt.normalized()
-		if _spatula_balance_fall_dir.length_squared() <= 0.0001:
-			_spatula_balance_fall_dir = Vector2.RIGHT
+		var side := -1.0 if _spatula_balance_tilt.x < 0.0 else 1.0
+		if absf(_spatula_balance_tilt.x) < 0.001:
+			side = -1.0 if _spatula_balance_vel.x < 0.0 else 1.0
+		if absf(_spatula_balance_tilt.x) < 0.001 and absf(_spatula_balance_vel.x) < 0.001:
+			side = -1.0 if _spatula_balance_drift_dir.x < 0.0 else 1.0
+		if absf(side) <= 0.0:
+			side = 1.0
+		_spatula_balance_fall_dir = Vector2(side, 0.0)
 		_spatula_balance_vel = Vector2.ZERO
 
 
@@ -6373,7 +6380,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 				pivot_target = tip_target
 			pivot_target.y = balance_y
 			tip_target = pivot_target
-			pitch = -90.0 + rad_to_deg(_spatula_balance_tilt.y)
+			pitch = -90.0 + rad_to_deg(_spatula_balance_tilt.y) * HAND_SPATULA_BALANCE_DEPTH_VISUAL
 			roll = rad_to_deg(_spatula_balance_tilt.x)
 			pivot_local = HAND_SPATULA_BALANCE_PIVOT_OFFSET
 	elif dragging:
