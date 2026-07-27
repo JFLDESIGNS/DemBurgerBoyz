@@ -1451,7 +1451,7 @@ var options_hidden_tree_select: OptionButton = null
 var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
 const TREE_XFORM_CFG_SECTION := "tree_xform"
 ## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
-var icecream_cam_right_ft: float = 2.1667 ## was 1.5; +8" camera-right
+var icecream_cam_right_ft: float = 1.5
 const FT_TO_M := 0.3048
 const ICECREAM_POS_CFG_SECTION := "icecream_station"
 var options_hidden_icecream_pos_slider: HSlider = null
@@ -13844,7 +13844,7 @@ func _build_fire_extinguisher() -> void:
 	var visual := packed.instantiate() as Node3D
 	if visual == null:
 		return
-	ext_home = Vector3(2.063, 1.72, 0.937)
+	ext_home = Vector3(2.2662, 1.72, 0.937)
 	ext_root = Node3D.new()
 	ext_root.name = "FireExtinguisher"
 	ext_root.position = ext_home
@@ -15278,19 +15278,7 @@ func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3
 
 
 func _fries_hold_point_from_screen(screen_pos: Vector2, extra_y: float = 0.0) -> Vector3:
-	var base := Vector3(GRILL_CENTER_X - GRILL_WIDTH * 0.55, GRILL_SURFACE_Y + 0.31 + extra_y, GRILL_SURFACE_Z + 0.10)
-	if fryer_root != null and is_instance_valid(fryer_root):
-		base = fryer_root.to_global(FRIES_HOLD_LEFT_OFFSET + Vector3(0.0, extra_y, 0.0))
-	if camera == null:
-		return base
-	var projected := _tool_hold_point_from_screen(screen_pos, base.y)
-	var delta := projected - base
-	delta.y = 0.0
-	if delta.length() > FRIES_HOLD_FOLLOW_RADIUS:
-		delta = delta.normalized() * FRIES_HOLD_FOLLOW_RADIUS
-	var out := base + delta
-	out.y = base.y
-	return out
+	return _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.31 + extra_y)
 
 
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
@@ -22049,9 +22037,9 @@ func _load_icecream_station_settings() -> void:
 		return
 	if cfg.has_section_key(ICECREAM_POS_CFG_SECTION, "cam_right_ft"):
 		var v := float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft"))
-		## Migrate prior default 1.5 → +8" camera-right.
-		if absf(v - 1.5) < 0.02:
-			v = 2.1667
+		## Migrate prior default 2.1667 → 8" camera-left.
+		if absf(v - 2.1667) < 0.02:
+			v = 1.5
 		icecream_cam_right_ft = clampf(v, -4.0, 8.0)
 
 
