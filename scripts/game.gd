@@ -2057,6 +2057,7 @@ const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
 const STREET_BG_PREVIEW_PATH := "res://assets/bg/street_preview_storefront.png"
 const STREET_BG_BRIGHT_PATH := "res://IMAGES/storefront2.png"
+const STREET_BG_LOCATION1_PATH := "res://IMAGES/location1.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -42140,6 +42141,8 @@ func _street_background_options() -> Array:
 		opts.append({"id": "preview", "label": "Storefront Preview", "path": STREET_BG_PREVIEW_PATH})
 	if ResourceLoader.exists(STREET_BG_BRIGHT_PATH):
 		opts.append({"id": "bright", "label": "Bright Village", "path": STREET_BG_BRIGHT_PATH})
+	if ResourceLoader.exists(STREET_BG_LOCATION1_PATH):
+		opts.append({"id": "location1", "label": "Location 1", "path": STREET_BG_LOCATION1_PATH})
 	if street_bg_custom_path != "":
 		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
 	return opts
@@ -42151,6 +42154,8 @@ func _street_background_path_for_choice(choice: String) -> String:
 			return STREET_BG_PREVIEW_PATH
 		"bright":
 			return STREET_BG_BRIGHT_PATH
+		"location1":
+			return STREET_BG_LOCATION1_PATH
 		"custom":
 			return street_bg_custom_path
 		_:
