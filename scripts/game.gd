@@ -45138,9 +45138,11 @@ func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: 
 	if cust == null or not is_instance_valid(cust):
 		return
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
-	var start := start_override
-	if not is_finite(start.x) or not is_finite(start.y):
-		start = _ingredient_button_screen_center(id)
+	## Launch from the ingredient bar so throws feel like they came out of the tray,
+	## not from the release point over the customer's face.
+	var start := _ingredient_button_screen_center(id)
+	if (not is_finite(start.x) or not is_finite(start.y)) and is_finite(start_override.x) and is_finite(start_override.y):
+		start = start_override
 	var end := _customer_head_screen(cust)
 	if ui_root == null:
 		_apply_customer_ingredient_hit(cust, id, stick_cheese)
@@ -45157,7 +45159,7 @@ func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: 
 	ui_root.add_child(fly_root)
 	var icon := TextureRect.new()
 	icon.texture = tex
-	var icon_size := Vector2(96.0, 52.0)
+	var icon_size := Vector2(124.0, 70.0)
 	icon.custom_minimum_size = icon_size
 	icon.size = icon_size
 	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -45173,14 +45175,27 @@ func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: 
 				return
 			var eased := t * t * (3.0 - 2.0 * t)
 			var pos := start.lerp(end, eased)
-			pos.y -= 80.0 * 4.0 * t * (1.0 - t)
+			pos.y -= 110.0 * 4.0 * t * (1.0 - t)
 			icon.global_position = pos - icon_size * 0.5
-			icon.rotation = lerpf(-0.5, 0.6, t)
-			icon.scale = Vector2.ONE.lerp(Vector2(0.72, 0.72), eased),
+			icon.rotation = lerpf(-0.65, 0.8, t)
+			icon.scale = Vector2(1.35, 1.35).lerp(Vector2(0.48, 0.48), eased),
 		0.0,
 		1.0,
-		0.34
+		0.30
 	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_method(
+		func(t: float) -> void:
+			if not is_instance_valid(icon):
+				return
+			var bounce := sin(t * PI)
+			var squash := sin(t * TAU)
+			icon.global_position = end - icon_size * 0.5 + Vector2(0.0, -22.0 * bounce)
+			icon.scale = Vector2(0.48 + 0.10 * bounce, 0.48 - 0.04 * absf(squash))
+			icon.rotation = lerpf(0.8, -0.25, t),
+		0.0,
+		1.0,
+		0.16
+	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(fly_root):
 			fly_root.queue_free()
@@ -45211,22 +45226,50 @@ func _put_cheese_on_customer_head(cust: Node3D) -> void:
 	var old := cust.get_node_or_null("CheeseHat")
 	if old != null and is_instance_valid(old):
 		old.queue_free()
-	var cheese := MeshInstance3D.new()
+	var cheese := Node3D.new()
 	cheese.name = "CheeseHat"
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.24, 0.012, 0.20)
-	cheese.mesh = mesh
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(1.0, 0.80, 0.20, 1.0)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.albedo_color = Color(1.0, 0.78, 0.12, 1.0)
 	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.62, 0.08)
-	mat.emission_energy_multiplier = 0.18
-	cheese.material_override = mat
-	cheese.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	mat.emission = Color(1.0, 0.58, 0.04)
+	mat.emission_energy_multiplier = 0.10
+	mat.roughness = 0.72
+	var spots := [
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(-0.060, -0.010, 0.020),
+		Vector3(0.060, -0.010, 0.018),
+		Vector3(-0.020, -0.014, -0.055),
+		Vector3(0.030, -0.013, 0.058)
+	]
 	cust.add_child(cheese)
-	cheese.global_position = _customer_head_world(cust) + Vector3(0.0, 0.11, 0.0)
-	cheese.rotation_degrees = Vector3(randf_range(-8.0, 8.0), randf_range(-18.0, 18.0), randf_range(-9.0, 9.0))
+	var head := _customer_head_world(cust)
+	cheese.global_position = head + Vector3(0.0, 0.22, 0.0)
+	cheese.rotation_degrees = Vector3(0.0, randf_range(-10.0, 10.0), 0.0)
+	for i in spots.size():
+		var piece := MeshInstance3D.new()
+		piece.name = "CheeseSquare%02d" % i
+		var mesh := BoxMesh.new()
+		var side := 0.096 if i > 0 else 0.116
+		mesh.size = Vector3(side, 0.010, side)
+		piece.mesh = mesh
+		piece.material_override = mat
+		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		piece.position = spots[i]
+		var target_rot := Vector3(spots[i].z * 210.0 + randf_range(-3.0, 3.0), randf_range(-7.0, 7.0), -spots[i].x * 210.0 + randf_range(-3.0, 3.0))
+		piece.rotation_degrees = Vector3(0.0, target_rot.y, 0.0)
+		piece.set_meta("cheese_head_rot", target_rot)
+		cheese.add_child(piece)
+	cheese.scale = Vector3(1.18, 0.72, 1.18)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(cheese, "global_position", head + Vector3(0.0, 0.105, 0.0), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(cheese, "scale", Vector3.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	for child in cheese.get_children():
+		var piece := child as MeshInstance3D
+		if piece == null:
+			continue
+		tw.tween_property(piece, "rotation_degrees", piece.get_meta("cheese_head_rot", piece.rotation_degrees), 0.22).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_flash("Cheese hat: wawawa", Color("FFE082"))
 
 
