@@ -314,7 +314,7 @@ var spatula_balance_fall_dur: float = 0.42
 var spatula_balance_ragdoll_dur: float = 1.0
 var spatula_balance_bounce_deg: float = 16.0
 var spatula_balance_bounce_dur: float = 0.10
-var spatula_balance_return_dur: float = 0.32
+var spatula_balance_return_dur: float = 1.0
 var spatula_balance_max_vel: float = 4.8
 var spatula_balance_depth_input: float = 0.88
 var spatula_balance_screen_nudge := Vector2(0.0, 20.0)
@@ -368,6 +368,7 @@ var _spatula_balance_fall_hold_started: bool = false
 var _spatula_balance_return_t: float = 0.0
 var _spatula_balance_return_from := Transform3D.IDENTITY
 var _spatula_balance_return_to := Transform3D.IDENTITY
+var _spatula_balance_fall_start_xform := Transform3D.IDENTITY
 var _spatula_balance_last_visible_xform := Transform3D.IDENTITY
 var _spatula_balance_fall_visual_started: bool = false
 var _spatula_balance_fall_visual_xform := Transform3D.IDENTITY
@@ -5047,6 +5048,7 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
 	_spatula_balance_return_to = Transform3D.IDENTITY
+	_spatula_balance_fall_start_xform = Transform3D.IDENTITY
 	_spatula_balance_last_visible_xform = Transform3D.IDENTITY
 	_reset_spatula_balance_visual_fall()
 	_spatula_user_roll = 0.0
@@ -5069,6 +5071,7 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
 	_spatula_balance_return_to = Transform3D.IDENTITY
+	_spatula_balance_fall_start_xform = Transform3D.IDENTITY
 	_spatula_balance_last_visible_xform = Transform3D.IDENTITY
 	_reset_spatula_balance_visual_fall()
 	_spatula_user_roll = 0.0
@@ -5196,7 +5199,7 @@ func _spatula_balance_visual_local_bounds(body: Node3D) -> AABB:
 	return bounds
 
 
-func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float) -> void:
+func _update_spatula_balance_visual_fall(start_xform: Transform3D, return_xform: Transform3D, delta: float) -> void:
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		return
 	if not _spatula_balance_fall_visual_started:
@@ -5235,7 +5238,7 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float)
 				_spatula_balance_returning = true
 				_spatula_balance_return_t = 0.0
 				_spatula_balance_return_from = xf
-				_spatula_balance_return_to = start_xform
+				_spatula_balance_return_to = return_xform
 				_spatula_balance_fall_hold_started = true
 			else:
 				_spatula_balance_fall_visual_vel.y = 0.0
@@ -5255,12 +5258,13 @@ func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> 
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		return
 	var return_target := _spatula_balance_return_to if _spatula_balance_return_to != Transform3D.IDENTITY else target_xform
-	_spatula_balance_return_t = minf(_spatula_balance_return_t + maxf(delta, 0.0), SPATULA_BALANCE_IMPACT_RETURN_DUR)
+	var return_dur := maxf(spatula_balance_return_dur, 0.05)
+	_spatula_balance_return_t = minf(_spatula_balance_return_t + maxf(delta, 0.0), return_dur)
 	if _spatula_balance_return_t < 0.0:
 		hand_spatula_root.visible = true
 		hand_spatula_root.global_transform = _spatula_balance_return_from
 		return
-	var ru := clampf(_spatula_balance_return_t / SPATULA_BALANCE_IMPACT_RETURN_DUR, 0.0, 1.0)
+	var ru := clampf(_spatula_balance_return_t / return_dur, 0.0, 1.0)
 	var ease := ru * ru * (3.0 - 2.0 * ru)
 	var from_q := Quaternion(_spatula_balance_return_from.basis.orthonormalized())
 	var to_q := Quaternion(return_target.basis.orthonormalized())
@@ -5354,6 +5358,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_returning = false
 		_spatula_balance_fall_hold_started = false
 		_spatula_balance_return_t = 0.0
+		_spatula_balance_fall_start_xform = Transform3D.IDENTITY
 		_reset_spatula_balance_visual_fall()
 
 
@@ -6602,6 +6607,19 @@ func _hand_spatula_side_yaw_at(world_pos: Vector3) -> float:
 	return side * HAND_SPATULA_SIDE_YAW
 
 
+func _hand_spatula_normal_return_xform(mouse: Vector2, hold_y: float, carrying: bool) -> Transform3D:
+	var tip_target := _hand_spatula_tip_from_screen(mouse, hold_y)
+	if tip_target == Vector3.ZERO:
+		return hand_spatula_root.global_transform if hand_spatula_root != null and is_instance_valid(hand_spatula_root) else Transform3D.IDENTITY
+	var tip := sin(Time.get_ticks_msec() * 0.012) * 0.8
+	var rot := HAND_SPATULA_CARRY_ROT if carrying else HAND_SPATULA_EMPTY_ROT
+	var pitch := rot.x + tip
+	var yaw := _hand_spatula_side_yaw_at(tip_target)
+	var roll := _spatula_user_roll
+	var basis := Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll))).orthonormalized()
+	return Transform3D(basis, tip_target - basis * HAND_SPATULA_TIP_OFFSET)
+
+
 func _update_hand_spatula_cursor(delta: float) -> void:
 	## Tap rings keep growing even if the spatula leaves the grill.
 	_tick_spatula_tap_rings(delta)
@@ -6668,18 +6686,23 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		_spatula_pull_flip_done = false
 		_spatula_mute_ting = false
 		_stop_spatula_grill_scrape_audio()
+		var fail_start_xform := hand_spatula_root.global_transform
+		var fail_return_xform := _hand_spatula_normal_return_xform(mouse, hold_y, carrying)
 		_update_spatula_balance(mouse, delta)
 		if _spatula_balance_active and _spatula_balance_falling:
-			var frozen_target := _spatula_balance_last_visible_xform
-			if frozen_target == Transform3D.IDENTITY:
-				frozen_target = hand_spatula_root.global_transform
+			if _spatula_balance_fall_start_xform == Transform3D.IDENTITY:
+				_spatula_balance_fall_start_xform = fail_start_xform
+			if _spatula_balance_return_to == Transform3D.IDENTITY:
+				_spatula_balance_return_to = fail_return_xform
+			var fall_start := _spatula_balance_fall_start_xform
+			var return_target := _spatula_balance_return_to
 			if not _spatula_balance_returning:
-				_update_spatula_balance_visual_fall(frozen_target, delta)
+				_update_spatula_balance_visual_fall(fall_start, return_target, delta)
 				if _spatula_balance_returning:
-					_render_spatula_balance_return(frozen_target, 0.0)
+					_render_spatula_balance_return(return_target, 0.0)
 			else:
-				_render_spatula_balance_return(frozen_target, delta)
-			var impact_fallback := frozen_target.origin
+				_render_spatula_balance_return(return_target, delta)
+			var impact_fallback := fall_start.origin
 			impact_fallback.y = GRILL_SURFACE_Y
 			_play_pending_spatula_balance_impact(impact_fallback)
 			return
@@ -6843,12 +6866,18 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		_spatula_balance_last_visible_xform = hand_spatula_root.global_transform
 	if _spatula_balance_active and _spatula_balance_falling:
 		var target_xform := hand_spatula_root.global_transform
+		if _spatula_balance_fall_start_xform == Transform3D.IDENTITY:
+			_spatula_balance_fall_start_xform = target_xform
+		if _spatula_balance_return_to == Transform3D.IDENTITY:
+			_spatula_balance_return_to = _hand_spatula_normal_return_xform(mouse, hold_y, carrying)
+		var fall_start := _spatula_balance_fall_start_xform
+		var return_target := _spatula_balance_return_to
 		if not _spatula_balance_returning:
-			_update_spatula_balance_visual_fall(target_xform, delta)
+			_update_spatula_balance_visual_fall(fall_start, return_target, delta)
 			if _spatula_balance_returning:
-				_render_spatula_balance_return(target_xform, 0.0)
+				_render_spatula_balance_return(return_target, 0.0)
 		else:
-			_render_spatula_balance_return(target_xform, delta)
+			_render_spatula_balance_return(return_target, delta)
 	## Scooped burger rides the blade — same yaw/roll as the spatula (no visual offset).
 	if carrying and not dragging:
 		_seat_held_patty_on_spatula()
@@ -21994,7 +22023,8 @@ func _load_spatula_balance_settings() -> void:
 	spatula_balance_fall_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_dur", spatula_balance_fall_dur)), 0.12, 0.9)
 	spatula_balance_bounce_deg = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)), 0.0, 35.0)
 	spatula_balance_bounce_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)), 0.03, 0.25)
-	spatula_balance_return_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur)), 0.05, 0.8)
+	var loaded_return_dur := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur))
+	spatula_balance_return_dur = 1.0 if loaded_return_dur < 0.95 else clampf(loaded_return_dur, 0.05, 1.0)
 	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 1.0, 10.0)
 	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.1, 1.4)
 	spatula_balance_screen_nudge = Vector2(
@@ -38470,10 +38500,10 @@ func _build_options_menu() -> void:
 			spatula_balance_bounce_dur = clampf(v, 0.03, 0.25)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_return_time", "Return Time", 0.05, 0.8, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_return_time", "Return Time", 0.05, 1.0, 0.01,
 		func(): return spatula_balance_return_dur,
 		func(v: float):
-			spatula_balance_return_dur = clampf(v, 0.05, 0.8)
+			spatula_balance_return_dur = clampf(v, 0.05, 1.0)
 			_save_spatula_balance_settings()
 	)
 	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_vel", "Max Speed", 1.0, 10.0, 0.1,
