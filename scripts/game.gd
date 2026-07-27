@@ -301,13 +301,13 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to flip.
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
-const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.165
-const HAND_SPATULA_BALANCE_UNSTABLE := 2.85
-const HAND_SPATULA_BALANCE_DRIFT := 0.42
-const HAND_SPATULA_BALANCE_DAMP := 0.94
-const HAND_SPATULA_BALANCE_MAX_TILT := 32.0
-const HAND_SPATULA_BALANCE_HEIGHT := 0.52
-const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.22)
+const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.118
+const HAND_SPATULA_BALANCE_UNSTABLE := 7.4
+const HAND_SPATULA_BALANCE_DRIFT := 1.05
+const HAND_SPATULA_BALANCE_DAMP := 0.985
+const HAND_SPATULA_BALANCE_MAX_TILT := 48.0
+const HAND_SPATULA_BALANCE_BASE_Y := 0.075
+const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
 const SPATULA_JUGGLE_PEAK := 0.64 ## clear rise so the fall reads (not a mid-air teleport)
@@ -4997,6 +4997,8 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	if _spatula_balance_active:
 		var a := randf() * TAU
 		_spatula_balance_drift_dir = Vector2(cos(a), sin(a)).normalized()
+		_spatula_balance_tilt = _spatula_balance_drift_dir * deg_to_rad(randf_range(4.0, 8.0))
+		_spatula_balance_vel = _spatula_balance_drift_dir * randf_range(0.12, 0.22)
 	else:
 		_spatula_balance_drift_dir = Vector2.RIGHT
 
@@ -5011,11 +5013,14 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
 	var t := Time.get_ticks_msec() * 0.001
-	var wind := _spatula_balance_drift_dir + Vector2(cos(t * 1.7), sin(t * 1.23)) * 0.32
+	var wind := _spatula_balance_drift_dir + Vector2(cos(t * 1.9), sin(t * 1.37)) * 0.42
 	if wind.length_squared() > 0.001:
 		wind = wind.normalized()
-	_spatula_balance_vel += _spatula_balance_tilt * HAND_SPATULA_BALANCE_UNSTABLE * delta
+	var lean := _spatula_balance_tilt
+	var lean_gain := 0.45 + lean.length() * 5.2
+	_spatula_balance_vel += lean * HAND_SPATULA_BALANCE_UNSTABLE * lean_gain * delta
 	_spatula_balance_vel += wind * HAND_SPATULA_BALANCE_DRIFT * delta
+	## Move under the falling top: mouse movement in the lean direction counters it.
 	_spatula_balance_vel -= Vector2(mouse_delta.x, mouse_delta.y) * HAND_SPATULA_BALANCE_MOUSE_CORRECT
 	_spatula_balance_vel *= pow(HAND_SPATULA_BALANCE_DAMP, delta * 60.0)
 	_spatula_balance_tilt += _spatula_balance_vel * delta
@@ -6310,15 +6315,17 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		_spatula_mute_ting = false
 		_stop_spatula_grill_scrape_audio()
 		_update_spatula_balance(mouse, delta)
-		var pivot_target := _grill_plane_from_screen(mouse)
+		var balance_y := GRILL_SURFACE_Y + HAND_SPATULA_BALANCE_BASE_Y
+		var pivot_target := _hand_spatula_hold_point_from_screen(mouse, balance_y)
 		if pivot_target == Vector3.ZERO:
-			pivot_target = _hand_spatula_hold_point_from_screen(mouse, GRILL_SURFACE_Y + HAND_SPATULA_HOLD_Y)
+			pivot_target = _tool_hold_point_from_screen(mouse, balance_y)
 		if pivot_target == Vector3.ZERO:
 			pivot_target = tip_target
-		pivot_target.y = GRILL_SURFACE_Y + HAND_SPATULA_HOLD_Y
+		pivot_target.y = balance_y
 		tip_target = pivot_target
+		var wobble := sin(Time.get_ticks_msec() * 0.018) * 1.2
 		pitch = -90.0 + rad_to_deg(_spatula_balance_tilt.y)
-		roll = rad_to_deg(_spatula_balance_tilt.x)
+		roll = rad_to_deg(_spatula_balance_tilt.x) + wobble
 		pivot_local = HAND_SPATULA_BALANCE_PIVOT_OFFSET
 	elif dragging:
 		## Burger slide — spatula rides under the patty. Never scrape/clean while dragging a burger.
