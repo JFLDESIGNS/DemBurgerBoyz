@@ -363,9 +363,11 @@ var _spatula_balance_impact_done: bool = false
 var _spatula_balance_ragdoll_body: RigidBody3D = null
 var _spatula_balance_ragdoll_floor: StaticBody3D = null
 var _spatula_balance_returning: bool = false
+var _spatula_balance_fall_hold_started: bool = false
 var _spatula_balance_return_t: float = 0.0
 var _spatula_balance_return_from := Transform3D.IDENTITY
 const SPATULA_BALANCE_RAGDOLL_CLEARANCE := 0.0381 ## 1.5" above steel so the fall cannot clip through the grill.
+const SPATULA_BALANCE_FALL_HOLD_DUR := 0.34
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -5032,6 +5034,7 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_impact_done = false
 	_cleanup_spatula_balance_ragdoll()
 	_spatula_balance_returning = false
+	_spatula_balance_fall_hold_started = false
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
 	_spatula_user_roll = 0.0
@@ -5050,6 +5053,7 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_impact_done = false
 	_cleanup_spatula_balance_ragdoll()
 	_spatula_balance_returning = false
+	_spatula_balance_fall_hold_started = false
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
 	_spatula_user_roll = 0.0
@@ -5073,6 +5077,10 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 		return
 	var floor_body := StaticBody3D.new()
 	floor_body.name = "SpatulaBalanceRagdollFloor"
+	var phys_mat := PhysicsMaterial.new()
+	phys_mat.bounce = 0.36
+	phys_mat.friction = 0.62
+	floor_body.physics_material_override = phys_mat
 	var floor_shape := CollisionShape3D.new()
 	var floor_box := BoxShape3D.new()
 	floor_box.size = Vector3(4.2, 0.012, 2.0)
@@ -5088,6 +5096,7 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 	body.gravity_scale = 1.0
 	body.linear_damp = 0.22
 	body.angular_damp = 0.18
+	body.physics_material_override = phys_mat
 	body.contact_monitor = true
 	body.max_contacts_reported = 4
 	body.collision_layer = 1
@@ -5127,6 +5136,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if _spatula_balance_falling:
 		_spatula_balance_fall_t += delta
 		var ragdoll_dur := maxf(0.1, spatula_balance_ragdoll_dur)
+		var hold_done_at := ragdoll_dur + SPATULA_BALANCE_FALL_HOLD_DUR
 		if not _spatula_balance_returning:
 			if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
 				if not _spatula_balance_impact_done and _spatula_balance_ragdoll_body.get_contact_count() > 0:
@@ -5136,7 +5146,12 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 					var p := _spatula_balance_ragdoll_body.global_position
 					p.y = GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE
 					_spatula_balance_ragdoll_body.global_position = p
-			if _spatula_balance_fall_t >= ragdoll_dur:
+				if _spatula_balance_fall_t >= ragdoll_dur and not _spatula_balance_fall_hold_started:
+					_spatula_balance_fall_hold_started = true
+					_spatula_balance_ragdoll_body.freeze = true
+					_spatula_balance_ragdoll_body.linear_velocity = Vector3.ZERO
+					_spatula_balance_ragdoll_body.angular_velocity = Vector3.ZERO
+			if _spatula_balance_fall_t >= hold_done_at:
 				_spatula_balance_returning = true
 				_spatula_balance_return_t = 0.0
 				if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
@@ -5177,6 +5192,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_impact_pending = false
 		_spatula_balance_impact_done = false
 		_spatula_balance_returning = false
+		_spatula_balance_fall_hold_started = false
 		_spatula_balance_return_t = 0.0
 
 
