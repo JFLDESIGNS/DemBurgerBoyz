@@ -314,10 +314,13 @@ var spatula_balance_fall_dur: float = 0.42
 var spatula_balance_ragdoll_dur: float = 1.0
 var spatula_balance_bounce_deg: float = 16.0
 var spatula_balance_bounce_dur: float = 0.10
-var spatula_balance_return_dur: float = 1.0
+var spatula_balance_return_dur: float = 0.2
 var spatula_balance_max_vel: float = 4.8
 var spatula_balance_depth_input: float = 0.88
 var spatula_balance_screen_nudge := Vector2(0.0, 20.0)
+var _spatula_balance_timer_label: Label3D = null
+var _spatula_balance_timer_t: float = 0.0
+var _spatula_balance_whoosh_cool: float = 0.0
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
 const SPATULA_JUGGLE_PEAK := 0.64 ## clear rise so the fall reads (not a mid-air teleport)
@@ -562,7 +565,7 @@ var master_vol_row: Control = null
 var master_vol_slider: HSlider = null
 ## Slider 0–1; 1.0 = old ~20% bus level (comfortable game max).
 var master_volume_linear: float = 1.0
-var ingredient_touch_volume: float = 2.0
+var ingredient_touch_volume: float = 2.6
 const MASTER_VOL_MAX := 0.20
 const AUDIO_CFG_PATH := "user://audio_settings.cfg"
 const AUDIO_MASTER_KEY := "master_ui"
@@ -4926,6 +4929,24 @@ func _build_hand_spatula() -> void:
 	hand_spatula_root = root
 	hand_spatula_visual = visual
 	_boost_hand_spatula_draw(visual)
+	_build_spatula_balance_timer_label()
+
+
+func _build_spatula_balance_timer_label() -> void:
+	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
+		return
+	var label := Label3D.new()
+	label.name = "BalanceTimer"
+	label.text = "0.0s"
+	label.visible = false
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.modulate = Color(0.90, 0.96, 1.0, 0.92)
+	label.outline_modulate = Color(0.02, 0.03, 0.04, 0.85)
+	label.outline_size = 7
+	label.font_size = 42
+	hand_spatula_root.add_child(label)
+	_spatula_balance_timer_label = label
 
 
 func _boost_hand_spatula_draw(root: Node3D) -> void:
@@ -5032,6 +5053,10 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 
 func _stop_spatula_balance() -> void:
 	_spatula_balance_active = false
+	_spatula_balance_timer_t = 0.0
+	_spatula_balance_whoosh_cool = 0.0
+	if _spatula_balance_timer_label != null and is_instance_valid(_spatula_balance_timer_label):
+		_spatula_balance_timer_label.visible = false
 	_spatula_balance_last_mouse = Vector2.INF
 	_spatula_balance_tilt = Vector2.ZERO
 	_spatula_balance_vel = Vector2.ZERO
@@ -5056,6 +5081,11 @@ func _stop_spatula_balance() -> void:
 
 func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_active = not _spatula_balance_active
+	_spatula_balance_timer_t = 0.0
+	_spatula_balance_whoosh_cool = 0.0
+	if _spatula_balance_timer_label != null and is_instance_valid(_spatula_balance_timer_label):
+		_spatula_balance_timer_label.visible = _spatula_balance_active
+		_spatula_balance_timer_label.text = "0.0s"
 	_spatula_balance_last_mouse = mouse
 	_spatula_balance_tilt = Vector2.ZERO
 	_spatula_balance_vel = Vector2.ZERO
@@ -5292,12 +5322,26 @@ func _play_pending_spatula_balance_impact(fallback_pos: Vector3 = Vector3.ZERO) 
 	_play_grill_tap_at(impact_pos, 1.35)
 
 
+func _update_spatula_balance_timer_label() -> void:
+	if _spatula_balance_timer_label == null or not is_instance_valid(_spatula_balance_timer_label):
+		return
+	var show := _spatula_balance_active and not _spatula_balance_falling and not _spatula_balance_returning
+	_spatula_balance_timer_label.visible = show
+	if not show:
+		return
+	_spatula_balance_timer_label.text = "%.1fs" % _spatula_balance_timer_t
+	_spatula_balance_timer_label.global_position = hand_spatula_root.global_position + Vector3(0.0, 0.42, 0.0)
+
+
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if not _spatula_balance_active:
 		_spatula_balance_last_mouse = mouse
+		_update_spatula_balance_timer_label()
 		return
+	_spatula_balance_whoosh_cool = maxf(0.0, _spatula_balance_whoosh_cool - delta)
 	if _spatula_balance_falling:
 		_spatula_balance_fall_t += delta
+		_update_spatula_balance_timer_label()
 		var ragdoll_dur := maxf(0.1, spatula_balance_ragdoll_dur)
 		var hold_done_at := ragdoll_dur + SPATULA_BALANCE_FALL_HOLD_DUR
 		if not _spatula_balance_returning:
@@ -5331,6 +5375,11 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		return
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
+	_spatula_balance_timer_t += maxf(delta, 0.0)
+	if mouse_delta.length() >= 12.0 and _spatula_balance_whoosh_cool <= 0.0:
+		_spatula_balance_whoosh_cool = 0.16
+		if game_audio != null and game_audio.has_method("play_spatula_whoosh"):
+			game_audio.play_spatula_whoosh()
 	var lean := _spatula_balance_tilt
 	var move := Vector2(-mouse_delta.x, -mouse_delta.y * spatula_balance_depth_input)
 	if move.length_squared() > 0.01:
@@ -5360,6 +5409,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_return_t = 0.0
 		_spatula_balance_fall_start_xform = Transform3D.IDENTITY
 		_reset_spatula_balance_visual_fall()
+	_update_spatula_balance_timer_label()
 
 
 func _spatula_balance_world_basis() -> Basis:
@@ -22024,7 +22074,7 @@ func _load_spatula_balance_settings() -> void:
 	spatula_balance_bounce_deg = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)), 0.0, 35.0)
 	spatula_balance_bounce_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)), 0.03, 0.25)
 	var loaded_return_dur := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur))
-	spatula_balance_return_dur = 1.0 if loaded_return_dur < 0.95 else clampf(loaded_return_dur, 0.05, 1.0)
+	spatula_balance_return_dur = 0.2 if loaded_return_dur >= 0.95 or absf(loaded_return_dur - 0.32) <= 0.02 else clampf(loaded_return_dur, 0.05, 1.0)
 	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 1.0, 10.0)
 	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.1, 1.4)
 	spatula_balance_screen_nudge = Vector2(
@@ -31192,7 +31242,12 @@ func _mp_broadcast_local_idle_drinks() -> void:
 				fill,
 				ice,
 				fizz,
-				bool(pc.get_meta("steel_hold", false))
+				bool(pc.get_meta("steel_hold", false)),
+				float(pc.rotation_degrees.x),
+				float(pc.rotation_degrees.y),
+				float(pc.rotation_degrees.z),
+				bool(pc.get_meta("lid_down", false)),
+				bool(pc.get_meta("on_side", false))
 			)
 		else:
 			mp_cup_park.rpc(nid, flavor, fill, ice, fizz)
@@ -31223,7 +31278,12 @@ func _mp_send_cup_steel(root: Node3D, drop: Vector3, on_hold: bool) -> void:
 		float(root.get_meta("soda_fill", 0.0)),
 		float(root.get_meta("ice_fill", 0.0)),
 		float(root.get_meta("fizz", 0.0)),
-		on_hold
+		on_hold,
+		float(root.rotation_degrees.x),
+		float(root.rotation_degrees.y),
+		float(root.rotation_degrees.z),
+		bool(root.get_meta("lid_down", false)),
+		bool(root.get_meta("on_side", false))
 	)
 
 
@@ -39915,7 +39975,8 @@ func _load_audio_settings() -> void:
 	if cfg.has_section_key("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY):
 		outdoor_ambience_volume = clampf(float(cfg.get_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY)), 0.0, OUTDOOR_AMBIENCE_VOL_MAX)
 	if cfg.has_section_key("audio", AUDIO_INGREDIENT_TOUCH_VOL_KEY):
-		ingredient_touch_volume = clampf(float(cfg.get_value("audio", AUDIO_INGREDIENT_TOUCH_VOL_KEY)), 0.0, 4.0)
+		var loaded_ing_vol := float(cfg.get_value("audio", AUDIO_INGREDIENT_TOUCH_VOL_KEY))
+		ingredient_touch_volume = 2.6 if absf(loaded_ing_vol - 2.0) <= 0.02 else clampf(loaded_ing_vol, 0.0, 4.0)
 	## Snap to nearest allowed Solfeggio bed.
 	var best := float(ROOM_TONE_FREQS[0])
 	var best_d := 9999.0
@@ -47310,7 +47371,12 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 				float(pc.get_meta("soda_fill", 0.0)),
 				float(pc.get_meta("ice_fill", 0.0)),
 				float(pc.get_meta("fizz", 0.0)),
-				bool(pc.get_meta("steel_hold", false))
+				bool(pc.get_meta("steel_hold", false)),
+				float(pc.rotation_degrees.x),
+				float(pc.rotation_degrees.y),
+				float(pc.rotation_degrees.z),
+				bool(pc.get_meta("lid_down", false)),
+				bool(pc.get_meta("on_side", false))
 			)
 		else:
 			mp_cup_park.rpc_id(
@@ -49984,11 +50050,16 @@ func mp_cup_steel(
 	fill: float,
 	ice: float,
 	fizz: float,
-	on_hold: bool
+	on_hold: bool,
+	rot_x: float = 0.0,
+	rot_y: float = 0.0,
+	rot_z: float = 0.0,
+	lid_down: bool = false,
+	on_side: bool = false
 ) -> void:
 	## Partner set a drink on cold steel or HOLD — sit it there, no melt.
 	_mp_applying = true
-	_mp_spawn_steel_drink_local(cup_net_id, x, z, flavor, fill, ice, fizz, on_hold)
+	_mp_spawn_steel_drink_local(cup_net_id, x, z, flavor, fill, ice, fizz, on_hold, rot_x, rot_y, rot_z, lid_down, on_side)
 	_mp_applying = false
 
 
@@ -50404,7 +50475,12 @@ func _mp_spawn_steel_drink_local(
 	fill: float,
 	ice: float,
 	fizz: float,
-	on_hold: bool
+	on_hold: bool,
+	rot_x: float = 0.0,
+	rot_y: float = 0.0,
+	rot_z: float = 0.0,
+	lid_down: bool = false,
+	on_side: bool = false
 ) -> void:
 	if world == null:
 		return
@@ -50420,9 +50496,11 @@ func _mp_spawn_steel_drink_local(
 	root.set_meta("mp_mirror", true)
 	root.set_meta("on_steel", true)
 	root.set_meta("steel_hold", on_hold)
+	root.set_meta("lid_down", lid_down)
+	root.set_meta("on_side", on_side)
 	_clear_tray_slot(root)
-	root.global_position = Vector3(x, GRILL_SURFACE_Y + CUP_STEEL_SIT_Y, z)
-	root.rotation_degrees = _cup_presented_rotation(root)
+	root.global_position = Vector3(x, _cup_steel_sit_y_for_meta(lid_down, on_side), z)
+	root.rotation_degrees = Vector3(rot_x, rot_y, rot_z)
 	var area := root.get_node_or_null("CupGrab") as Area3D
 	if area:
 		area.input_ray_pickable = true
