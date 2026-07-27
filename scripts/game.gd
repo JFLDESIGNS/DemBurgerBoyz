@@ -321,6 +321,18 @@ var spatula_balance_bounce_dur: float = 0.10
 var spatula_balance_return_dur: float = 0.2
 var spatula_balance_max_vel: float = 4.8
 var spatula_balance_depth_input: float = 0.88
+var spatula_balance_ragdoll_hold_dur: float = 0.34
+var spatula_balance_body_linear_damp: float = 0.22
+var spatula_balance_body_angular_damp: float = 0.18
+var spatula_balance_floor_bounce: float = 0.16
+var spatula_balance_floor_friction: float = 0.78
+var spatula_balance_fall_gravity: float = 4.9
+var spatula_balance_fall_bounce: float = 0.22
+var spatula_balance_fall_slide_damp: float = 0.62
+var spatula_balance_fall_spin_damp: float = 0.42
+var spatula_balance_floor_slide_damp: float = 0.84
+var spatula_balance_floor_spin_damp: float = 0.78
+var spatula_balance_whoosh_cooldown: float = 0.16
 var spatula_balance_screen_nudge := Vector2(0.0, 38.0)
 var _spatula_balance_timer_label: Label3D = null
 var _spatula_balance_timer_t: float = 0.0
@@ -5428,8 +5440,8 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 	var floor_body := StaticBody3D.new()
 	floor_body.name = "SpatulaBalanceRagdollFloor"
 	var phys_mat := PhysicsMaterial.new()
-	phys_mat.bounce = 0.16
-	phys_mat.friction = 0.78
+	phys_mat.bounce = spatula_balance_floor_bounce
+	phys_mat.friction = spatula_balance_floor_friction
 	floor_body.physics_material_override = phys_mat
 	var floor_shape := CollisionShape3D.new()
 	var floor_box := BoxShape3D.new()
@@ -5444,8 +5456,8 @@ func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
 	body.name = "SpatulaBalanceRagdoll"
 	body.mass = 0.42
 	body.gravity_scale = 1.0
-	body.linear_damp = 0.22
-	body.angular_damp = 0.18
+	body.linear_damp = spatula_balance_body_linear_damp
+	body.angular_damp = spatula_balance_body_angular_damp
 	body.physics_material_override = phys_mat
 	body.contact_monitor = true
 	body.max_contacts_reported = 4
@@ -5543,7 +5555,7 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, return_xform:
 	_spatula_balance_last_visible_xform = _spatula_balance_fall_visual_xform
 	var settle_y := GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE + 0.055
 	if _spatula_balance_fall_t > 0.035 and not _spatula_balance_fall_hold_started:
-		_spatula_balance_fall_visual_vel.y -= 4.9 * delta
+		_spatula_balance_fall_visual_vel.y -= spatula_balance_fall_gravity * delta
 		var xf := _spatula_balance_fall_visual_xform
 		xf.origin += _spatula_balance_fall_visual_vel * delta
 		var ang := _spatula_balance_fall_visual_ang
@@ -5555,10 +5567,10 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, return_xform:
 			if not _spatula_balance_impact_done:
 				_spatula_balance_impact_pending = true
 				_spatula_balance_impact_done = true
-				_spatula_balance_fall_visual_vel.y = absf(_spatula_balance_fall_visual_vel.y) * 0.22
-				_spatula_balance_fall_visual_vel.x *= 0.62
-				_spatula_balance_fall_visual_vel.z *= 0.62
-				_spatula_balance_fall_visual_ang *= 0.42
+				_spatula_balance_fall_visual_vel.y = absf(_spatula_balance_fall_visual_vel.y) * spatula_balance_fall_bounce
+				_spatula_balance_fall_visual_vel.x *= spatula_balance_fall_slide_damp
+				_spatula_balance_fall_visual_vel.z *= spatula_balance_fall_slide_damp
+				_spatula_balance_fall_visual_ang *= spatula_balance_fall_spin_damp
 				_spatula_balance_returning = true
 				_spatula_balance_return_t = 0.0
 				_spatula_balance_return_from = xf
@@ -5566,9 +5578,9 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, return_xform:
 				_spatula_balance_fall_hold_started = true
 			else:
 				_spatula_balance_fall_visual_vel.y = 0.0
-				_spatula_balance_fall_visual_vel.x *= 0.84
-				_spatula_balance_fall_visual_vel.z *= 0.84
-				_spatula_balance_fall_visual_ang *= 0.78
+				_spatula_balance_fall_visual_vel.x *= spatula_balance_floor_slide_damp
+				_spatula_balance_fall_visual_vel.z *= spatula_balance_floor_slide_damp
+				_spatula_balance_fall_visual_ang *= spatula_balance_floor_spin_damp
 		_spatula_balance_fall_visual_xform = xf
 		if _spatula_balance_fall_t >= maxf(0.1, spatula_balance_ragdoll_dur):
 			_spatula_balance_fall_hold_started = true
@@ -5637,7 +5649,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_fall_t += delta
 		_update_spatula_balance_timer_label()
 		var ragdoll_dur := maxf(0.1, spatula_balance_ragdoll_dur)
-		var hold_done_at := ragdoll_dur + SPATULA_BALANCE_FALL_HOLD_DUR
+		var hold_done_at := ragdoll_dur + spatula_balance_ragdoll_hold_dur
 		if not _spatula_balance_returning:
 			if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
 				if _spatula_balance_fall_t >= 0.055:
@@ -5674,7 +5686,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if _spatula_balance_timer_started:
 		_spatula_balance_timer_t += maxf(delta, 0.0)
 	if mouse_delta.length() >= 12.0 and _spatula_balance_whoosh_cool <= 0.0:
-		_spatula_balance_whoosh_cool = 0.16
+		_spatula_balance_whoosh_cool = spatula_balance_whoosh_cooldown
 		if game_audio != null and game_audio.has_method("play_spatula_whoosh"):
 			game_audio.play_spatula_whoosh()
 	var lean := _spatula_balance_tilt
@@ -22605,20 +22617,32 @@ func _load_spatula_balance_settings() -> void:
 		return
 	if not cfg.has_section(SPATULA_BALANCE_CFG_SECTION):
 		return
-	spatula_balance_mouse_correct = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "mouse_correct", spatula_balance_mouse_correct)), 0.005, 0.06)
-	spatula_balance_counter_push = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "counter_push", spatula_balance_counter_push)), 0.005, 0.09)
-	spatula_balance_unstable = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "unstable", spatula_balance_unstable)), 1.0, 12.0)
-	spatula_balance_drift = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "drift", spatula_balance_drift)), 0.0, 2.0)
-	spatula_balance_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "damp", spatula_balance_damp)), 0.90, 0.998)
-	spatula_balance_max_tilt = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_tilt", spatula_balance_max_tilt)), 35.0, 90.0)
-	spatula_balance_fall_tilt = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_tilt", spatula_balance_fall_tilt)), 75.0, 130.0)
-	spatula_balance_fall_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_dur", spatula_balance_fall_dur)), 0.12, 0.9)
-	spatula_balance_bounce_deg = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)), 0.0, 35.0)
-	spatula_balance_bounce_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)), 0.03, 0.25)
-	var loaded_return_dur := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur))
-	spatula_balance_return_dur = 0.2 if loaded_return_dur >= 0.95 or absf(loaded_return_dur - 0.32) <= 0.02 else clampf(loaded_return_dur, 0.05, 1.0)
-	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 1.0, 10.0)
-	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.1, 1.4)
+	spatula_balance_mouse_correct = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "mouse_correct", spatula_balance_mouse_correct)), 0.0, 0.16)
+	spatula_balance_counter_push = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "counter_push", spatula_balance_counter_push)), 0.0, 0.22)
+	spatula_balance_unstable = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "unstable", spatula_balance_unstable)), 0.0, 30.0)
+	spatula_balance_drift = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "drift", spatula_balance_drift)), -8.0, 8.0)
+	spatula_balance_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "damp", spatula_balance_damp)), 0.50, 1.02)
+	spatula_balance_max_tilt = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_tilt", spatula_balance_max_tilt)), 10.0, 160.0)
+	spatula_balance_fall_tilt = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_tilt", spatula_balance_fall_tilt)), 20.0, 179.0)
+	spatula_balance_fall_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_dur", spatula_balance_fall_dur)), 0.03, 2.0)
+	spatula_balance_ragdoll_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "ragdoll_dur", spatula_balance_ragdoll_dur)), 0.05, 4.0)
+	spatula_balance_ragdoll_hold_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "ragdoll_hold_dur", spatula_balance_ragdoll_hold_dur)), 0.0, 3.0)
+	spatula_balance_bounce_deg = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)), 0.0, 90.0)
+	spatula_balance_bounce_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)), 0.0, 1.0)
+	spatula_balance_return_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur)), 0.02, 3.0)
+	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 0.1, 30.0)
+	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.0, 4.0)
+	spatula_balance_body_linear_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "body_linear_damp", spatula_balance_body_linear_damp)), 0.0, 8.0)
+	spatula_balance_body_angular_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "body_angular_damp", spatula_balance_body_angular_damp)), 0.0, 8.0)
+	spatula_balance_floor_bounce = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "floor_bounce", spatula_balance_floor_bounce)), 0.0, 1.0)
+	spatula_balance_floor_friction = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "floor_friction", spatula_balance_floor_friction)), 0.0, 2.0)
+	spatula_balance_fall_gravity = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_gravity", spatula_balance_fall_gravity)), 0.0, 30.0)
+	spatula_balance_fall_bounce = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_bounce", spatula_balance_fall_bounce)), 0.0, 1.5)
+	spatula_balance_fall_slide_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_slide_damp", spatula_balance_fall_slide_damp)), 0.0, 1.5)
+	spatula_balance_fall_spin_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_spin_damp", spatula_balance_fall_spin_damp)), 0.0, 1.5)
+	spatula_balance_floor_slide_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "floor_slide_damp", spatula_balance_floor_slide_damp)), 0.0, 1.5)
+	spatula_balance_floor_spin_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "floor_spin_damp", spatula_balance_floor_spin_damp)), 0.0, 1.5)
+	spatula_balance_whoosh_cooldown = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "whoosh_cooldown", spatula_balance_whoosh_cooldown)), 0.0, 1.0)
 	var loaded_offset_y := float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y))
 	if absf(loaded_offset_y - 20.0) <= 0.01 or absf(loaded_offset_y - 50.0) <= 0.01:
 		loaded_offset_y = 38.0
@@ -22639,11 +22663,24 @@ func _save_spatula_balance_settings() -> void:
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "max_tilt", spatula_balance_max_tilt)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_tilt", spatula_balance_fall_tilt)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_dur", spatula_balance_fall_dur)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "ragdoll_dur", spatula_balance_ragdoll_dur)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "ragdoll_hold_dur", spatula_balance_ragdoll_hold_dur)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "body_linear_damp", spatula_balance_body_linear_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "body_angular_damp", spatula_balance_body_angular_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "floor_bounce", spatula_balance_floor_bounce)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "floor_friction", spatula_balance_floor_friction)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_gravity", spatula_balance_fall_gravity)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_bounce", spatula_balance_fall_bounce)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_slide_damp", spatula_balance_fall_slide_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_spin_damp", spatula_balance_fall_spin_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "floor_slide_damp", spatula_balance_floor_slide_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "floor_spin_damp", spatula_balance_floor_spin_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "whoosh_cooldown", spatula_balance_whoosh_cooldown)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "offset_x_px", spatula_balance_screen_nudge.x)
 	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y)
 	cfg.save(GFX_CFG_PATH)
@@ -22659,11 +22696,24 @@ func _sync_spatula_balance_hidden_ui() -> void:
 		"bal_max_tilt": spatula_balance_max_tilt,
 		"bal_fall_tilt": spatula_balance_fall_tilt,
 		"bal_fall_time": spatula_balance_fall_dur,
+		"bal_ragdoll_time": spatula_balance_ragdoll_dur,
+		"bal_hold_time": spatula_balance_ragdoll_hold_dur,
 		"bal_bounce_deg": spatula_balance_bounce_deg,
 		"bal_bounce_time": spatula_balance_bounce_dur,
 		"bal_return_time": spatula_balance_return_dur,
 		"bal_max_vel": spatula_balance_max_vel,
 		"bal_depth": spatula_balance_depth_input,
+		"bal_body_linear_damp": spatula_balance_body_linear_damp,
+		"bal_body_angular_damp": spatula_balance_body_angular_damp,
+		"bal_floor_bounce": spatula_balance_floor_bounce,
+		"bal_floor_friction": spatula_balance_floor_friction,
+		"bal_gravity": spatula_balance_fall_gravity,
+		"bal_impact_bounce": spatula_balance_fall_bounce,
+		"bal_impact_slide_damp": spatula_balance_fall_slide_damp,
+		"bal_impact_spin_damp": spatula_balance_fall_spin_damp,
+		"bal_floor_slide_damp": spatula_balance_floor_slide_damp,
+		"bal_floor_spin_damp": spatula_balance_floor_spin_damp,
+		"bal_whoosh_cd": spatula_balance_whoosh_cooldown,
 		"bal_off_x": spatula_balance_screen_nudge.x,
 		"bal_off_y": spatula_balance_screen_nudge.y,
 	}
@@ -39656,82 +39706,160 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(balance_lab, true, 13)
 	balance_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	options_hidden_room_tone_box.add_child(balance_lab)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_mouse", "Side Sensitivity", 0.005, 0.06, 0.001,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_mouse", "Side Sensitivity", 0.0, 0.16, 0.001,
 		func(): return spatula_balance_mouse_correct,
 		func(v: float):
-			spatula_balance_mouse_correct = clampf(v, 0.005, 0.06)
+			spatula_balance_mouse_correct = clampf(v, 0.0, 0.16)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_counter", "Counter Push", 0.005, 0.09, 0.001,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_counter", "Counter Push", 0.0, 0.22, 0.001,
 		func(): return spatula_balance_counter_push,
 		func(v: float):
-			spatula_balance_counter_push = clampf(v, 0.005, 0.09)
+			spatula_balance_counter_push = clampf(v, 0.0, 0.22)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_depth", "Forward Input", 0.1, 1.4, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_depth", "Forward Input", 0.0, 4.0, 0.01,
 		func(): return spatula_balance_depth_input,
 		func(v: float):
-			spatula_balance_depth_input = clampf(v, 0.1, 1.4)
+			spatula_balance_depth_input = clampf(v, 0.0, 4.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_unstable", "Fall Force", 1.0, 12.0, 0.1,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_unstable", "Fall Force", 0.0, 30.0, 0.1,
 		func(): return spatula_balance_unstable,
 		func(v: float):
-			spatula_balance_unstable = clampf(v, 1.0, 12.0)
+			spatula_balance_unstable = clampf(v, 0.0, 30.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_drift", "Idle Drift", 0.0, 2.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_drift", "Idle Drift", -8.0, 8.0, 0.01,
 		func(): return spatula_balance_drift,
 		func(v: float):
-			spatula_balance_drift = clampf(v, 0.0, 2.0)
+			spatula_balance_drift = clampf(v, -8.0, 8.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_damp", "Damping", 0.90, 0.998, 0.001,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_damp", "Balance Damping", 0.50, 1.02, 0.001,
 		func(): return spatula_balance_damp,
 		func(v: float):
-			spatula_balance_damp = clampf(v, 0.90, 0.998)
+			spatula_balance_damp = clampf(v, 0.50, 1.02)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_tilt", "Max Tilt deg", 35.0, 90.0, 1.0,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_tilt", "Max Tilt deg", 10.0, 160.0, 1.0,
 		func(): return spatula_balance_max_tilt,
 		func(v: float):
-			spatula_balance_max_tilt = clampf(v, 35.0, 90.0)
+			spatula_balance_max_tilt = clampf(v, 10.0, 160.0)
 			_save_spatula_balance_settings()
 	, true)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_tilt", "Fall Tilt deg", 75.0, 130.0, 1.0,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_tilt", "Fall Tilt deg", 20.0, 179.0, 1.0,
 		func(): return spatula_balance_fall_tilt,
 		func(v: float):
-			spatula_balance_fall_tilt = clampf(v, 75.0, 130.0)
+			spatula_balance_fall_tilt = clampf(v, 20.0, 179.0)
 			_save_spatula_balance_settings()
 	, true)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_time", "Fall Time", 0.12, 0.9, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_time", "Fall Time", 0.03, 2.0, 0.01,
 		func(): return spatula_balance_fall_dur,
 		func(v: float):
-			spatula_balance_fall_dur = clampf(v, 0.12, 0.9)
+			spatula_balance_fall_dur = clampf(v, 0.03, 2.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_deg", "Bounce deg", 0.0, 35.0, 1.0,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_ragdoll_time", "Ragdoll Time", 0.05, 4.0, 0.01,
+		func(): return spatula_balance_ragdoll_dur,
+		func(v: float):
+			spatula_balance_ragdoll_dur = clampf(v, 0.05, 4.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_hold_time", "Fall Hold Time", 0.0, 3.0, 0.01,
+		func(): return spatula_balance_ragdoll_hold_dur,
+		func(v: float):
+			spatula_balance_ragdoll_hold_dur = clampf(v, 0.0, 3.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_deg", "Bounce deg", 0.0, 90.0, 1.0,
 		func(): return spatula_balance_bounce_deg,
 		func(v: float):
-			spatula_balance_bounce_deg = clampf(v, 0.0, 35.0)
+			spatula_balance_bounce_deg = clampf(v, 0.0, 90.0)
 			_save_spatula_balance_settings()
 	, true)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_time", "Bounce Time", 0.03, 0.25, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_time", "Bounce Time", 0.0, 1.0, 0.01,
 		func(): return spatula_balance_bounce_dur,
 		func(v: float):
-			spatula_balance_bounce_dur = clampf(v, 0.03, 0.25)
+			spatula_balance_bounce_dur = clampf(v, 0.0, 1.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_return_time", "Return Time", 0.05, 1.0, 0.01,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_return_time", "Return Time", 0.02, 3.0, 0.01,
 		func(): return spatula_balance_return_dur,
 		func(v: float):
-			spatula_balance_return_dur = clampf(v, 0.05, 1.0)
+			spatula_balance_return_dur = clampf(v, 0.02, 3.0)
 			_save_spatula_balance_settings()
 	)
-	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_vel", "Max Speed", 1.0, 10.0, 0.1,
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_vel", "Max Speed", 0.1, 30.0, 0.1,
 		func(): return spatula_balance_max_vel,
 		func(v: float):
-			spatula_balance_max_vel = clampf(v, 1.0, 10.0)
+			spatula_balance_max_vel = clampf(v, 0.1, 30.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_body_linear_damp", "Body Linear Damp", 0.0, 8.0, 0.01,
+		func(): return spatula_balance_body_linear_damp,
+		func(v: float):
+			spatula_balance_body_linear_damp = clampf(v, 0.0, 8.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_body_angular_damp", "Body Angular Damp", 0.0, 8.0, 0.01,
+		func(): return spatula_balance_body_angular_damp,
+		func(v: float):
+			spatula_balance_body_angular_damp = clampf(v, 0.0, 8.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_bounce", "Floor Bounce", 0.0, 1.0, 0.01,
+		func(): return spatula_balance_floor_bounce,
+		func(v: float):
+			spatula_balance_floor_bounce = clampf(v, 0.0, 1.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_friction", "Floor Friction", 0.0, 2.0, 0.01,
+		func(): return spatula_balance_floor_friction,
+		func(v: float):
+			spatula_balance_floor_friction = clampf(v, 0.0, 2.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_gravity", "Fall Gravity", 0.0, 30.0, 0.1,
+		func(): return spatula_balance_fall_gravity,
+		func(v: float):
+			spatula_balance_fall_gravity = clampf(v, 0.0, 30.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_impact_bounce", "Impact Bounce", 0.0, 1.5, 0.01,
+		func(): return spatula_balance_fall_bounce,
+		func(v: float):
+			spatula_balance_fall_bounce = clampf(v, 0.0, 1.5)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_impact_slide_damp", "Impact Slide Damp", 0.0, 1.5, 0.01,
+		func(): return spatula_balance_fall_slide_damp,
+		func(v: float):
+			spatula_balance_fall_slide_damp = clampf(v, 0.0, 1.5)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_impact_spin_damp", "Impact Spin Damp", 0.0, 1.5, 0.01,
+		func(): return spatula_balance_fall_spin_damp,
+		func(v: float):
+			spatula_balance_fall_spin_damp = clampf(v, 0.0, 1.5)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_slide_damp", "Floor Slide Damp", 0.0, 1.5, 0.01,
+		func(): return spatula_balance_floor_slide_damp,
+		func(v: float):
+			spatula_balance_floor_slide_damp = clampf(v, 0.0, 1.5)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_floor_spin_damp", "Floor Spin Damp", 0.0, 1.5, 0.01,
+		func(): return spatula_balance_floor_spin_damp,
+		func(v: float):
+			spatula_balance_floor_spin_damp = clampf(v, 0.0, 1.5)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_whoosh_cd", "Whoosh Cooldown", 0.0, 1.0, 0.01,
+		func(): return spatula_balance_whoosh_cooldown,
+		func(v: float):
+			spatula_balance_whoosh_cooldown = clampf(v, 0.0, 1.0)
 			_save_spatula_balance_settings()
 	)
 	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_off_x", "Cursor Offset X px", -120.0, 120.0, 1.0,
