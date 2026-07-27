@@ -320,6 +320,7 @@ var spatula_balance_depth_input: float = 0.88
 var spatula_balance_screen_nudge := Vector2(0.0, 20.0)
 var _spatula_balance_timer_label: Label3D = null
 var _spatula_balance_timer_t: float = 0.0
+var _spatula_balance_timer_started: bool = false
 var _spatula_balance_whoosh_cool: float = 0.0
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
@@ -4944,7 +4945,7 @@ func _build_spatula_balance_timer_label() -> void:
 	label.modulate = Color(0.90, 0.96, 1.0, 0.92)
 	label.outline_modulate = Color(0.02, 0.03, 0.04, 0.85)
 	label.outline_size = 7
-	label.font_size = 42
+	label.font_size = 14
 	hand_spatula_root.add_child(label)
 	_spatula_balance_timer_label = label
 
@@ -5054,6 +5055,7 @@ func _nudge_spatula_user_roll(dir: int) -> void:
 func _stop_spatula_balance() -> void:
 	_spatula_balance_active = false
 	_spatula_balance_timer_t = 0.0
+	_spatula_balance_timer_started = false
 	_spatula_balance_whoosh_cool = 0.0
 	if _spatula_balance_timer_label != null and is_instance_valid(_spatula_balance_timer_label):
 		_spatula_balance_timer_label.visible = false
@@ -5082,6 +5084,7 @@ func _stop_spatula_balance() -> void:
 func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_active = not _spatula_balance_active
 	_spatula_balance_timer_t = 0.0
+	_spatula_balance_timer_started = false
 	_spatula_balance_whoosh_cool = 0.0
 	if _spatula_balance_timer_label != null and is_instance_valid(_spatula_balance_timer_label):
 		_spatula_balance_timer_label.visible = _spatula_balance_active
@@ -5375,7 +5378,10 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		return
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
-	_spatula_balance_timer_t += maxf(delta, 0.0)
+	if mouse_delta.length() >= 2.0:
+		_spatula_balance_timer_started = true
+	if _spatula_balance_timer_started:
+		_spatula_balance_timer_t += maxf(delta, 0.0)
 	if mouse_delta.length() >= 12.0 and _spatula_balance_whoosh_cool <= 0.0:
 		_spatula_balance_whoosh_cool = 0.16
 		if game_audio != null and game_audio.has_method("play_spatula_whoosh"):
