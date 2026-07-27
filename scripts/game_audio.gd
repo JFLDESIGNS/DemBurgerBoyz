@@ -1132,20 +1132,20 @@ func _next_sizzle_sample(bed_gain: float, pop_boost: float) -> float:
 	return clampf(bed + pop, -1.0, 1.0)
 
 
-func play_ingredient(id: String) -> void:
+func play_ingredient(id: String, volume_scale: float = 1.0) -> void:
 	## Buns get the hollow body thud (same as clicking the 3D pile).
 	if id == "bun_top" or id == "bun_bottom":
-		play_bun_thud()
+		play_bun_thud(volume_scale)
 		return
 	var midi: int = int(INGREDIENT_MIDI.get(id, 60))
 	## Soft quiet tap — stays under sizzle / radio / grade stingers (+35% vs prior 0.15).
-	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.2025)
+	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.2025 * maxf(0.0, volume_scale))
 
 
-func play_bun_thud() -> void:
+func play_bun_thud(volume_scale: float = 1.0) -> void:
 	## Medium bassy body knock — lighter / hollower than the street-tree thud.
 	## v3 keys force a rebuild of the louder sample; gain −20% from prior 1.35.
-	_play_cached("bun_thud_v3_%d" % (randi() % 3), _make_bun_thud, 0.94 + randf() * 0.12, 1.08)
+	_play_cached("bun_thud_v3_%d" % (randi() % 3), _make_bun_thud, 0.94 + randf() * 0.12, 1.08 * maxf(0.0, volume_scale))
 
 
 func play_cutting_board_thud() -> void:

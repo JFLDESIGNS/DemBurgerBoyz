@@ -301,20 +301,22 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to flip.
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
-const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.028
-const HAND_SPATULA_BALANCE_COUNTER_PUSH := 0.052
-const HAND_SPATULA_BALANCE_UNSTABLE := 6.4
-const HAND_SPATULA_BALANCE_DRIFT := 0.0
-const HAND_SPATULA_BALANCE_DAMP := 0.982
-const HAND_SPATULA_BALANCE_MAX_TILT := 72.0
-const HAND_SPATULA_BALANCE_FALL_TILT := 104.0
-const HAND_SPATULA_BALANCE_FALL_DUR := 0.42
-const HAND_SPATULA_BALANCE_FALL_HOLD := 0.12
-const HAND_SPATULA_BALANCE_MAX_VEL := 4.8
 const HAND_SPATULA_BALANCE_BASE_Y := 0.045
-const HAND_SPATULA_BALANCE_SCREEN_NUDGE := Vector2.ZERO
-const HAND_SPATULA_BALANCE_DEPTH_INPUT := 0.88
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
+var spatula_balance_mouse_correct: float = 0.024
+var spatula_balance_counter_push: float = 0.046
+var spatula_balance_unstable: float = 6.4
+var spatula_balance_drift: float = 0.0
+var spatula_balance_damp: float = 0.982
+var spatula_balance_max_tilt: float = 72.0
+var spatula_balance_fall_tilt: float = 104.0
+var spatula_balance_fall_dur: float = 0.42
+var spatula_balance_bounce_deg: float = 16.0
+var spatula_balance_bounce_dur: float = 0.10
+var spatula_balance_return_dur: float = 0.32
+var spatula_balance_max_vel: float = 4.8
+var spatula_balance_depth_input: float = 0.88
+var spatula_balance_screen_nudge := Vector2(0.0, 20.0)
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
 const SPATULA_JUGGLE_PEAK := 0.64 ## clear rise so the fall reads (not a mid-air teleport)
@@ -355,6 +357,8 @@ var _spatula_balance_falling: bool = false
 var _spatula_balance_fall_t: float = 0.0
 var _spatula_balance_fall_from := Vector2.ZERO
 var _spatula_balance_fall_dir := Vector2.RIGHT
+var _spatula_balance_impact_pending: bool = false
+var _spatula_balance_impact_done: bool = false
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -539,9 +543,11 @@ var master_vol_row: Control = null
 var master_vol_slider: HSlider = null
 ## Slider 0–1; 1.0 = old ~20% bus level (comfortable game max).
 var master_volume_linear: float = 1.0
+var ingredient_touch_volume: float = 2.0
 const MASTER_VOL_MAX := 0.20
 const AUDIO_CFG_PATH := "user://audio_settings.cfg"
 const AUDIO_MASTER_KEY := "master_ui"
+const AUDIO_INGREDIENT_TOUCH_VOL_KEY := "ingredient_touch_volume"
 var ingredient_buttons: Dictionary = {} ## id -> Button
 var _strip_did_drag: bool = false ## Skip press action after a paint-swipe.
 var _strip_swipe_active: bool = false ## LMB paint across topping buttons.
@@ -1885,6 +1891,7 @@ const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 0.6) ## 40% transparent wall art
 const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 0.6)
 const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
+const SPATULA_BALANCE_CFG_SECTION := "spatula_balance"
 const GFX_DEFAULTS := {
 	"bloom": 0.4,
 	"glow_intensity": 0.09,
@@ -2116,6 +2123,7 @@ func _ready() -> void:
 	brush_swipe_cool.resize(GRILL_SLOTS)
 	brush_swipe_cool.fill(0.0)
 	_setup_stations_data()
+	_load_spatula_balance_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -5013,6 +5021,8 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_fall_t = 0.0
 	_spatula_balance_fall_from = Vector2.ZERO
 	_spatula_balance_fall_dir = Vector2.RIGHT
+	_spatula_balance_impact_pending = false
+	_spatula_balance_impact_done = false
 	_spatula_user_roll = 0.0
 
 
@@ -5025,6 +5035,8 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_fall_t = 0.0
 	_spatula_balance_fall_from = Vector2.ZERO
 	_spatula_balance_fall_dir = Vector2.RIGHT
+	_spatula_balance_impact_pending = false
+	_spatula_balance_impact_done = false
 	_spatula_user_roll = 0.0
 	if _spatula_balance_active:
 		_spatula_balance_drift_dir = Vector2.RIGHT
@@ -5038,11 +5050,27 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		return
 	if _spatula_balance_falling:
 		_spatula_balance_fall_t += delta
-		var u := clampf(_spatula_balance_fall_t / HAND_SPATULA_BALANCE_FALL_DUR, 0.0, 1.0)
-		var eased := 1.0 - pow(1.0 - u, 2.0)
-		var fall_rad := deg_to_rad(HAND_SPATULA_BALANCE_FALL_TILT)
-		_spatula_balance_tilt = _spatula_balance_fall_from.lerp(_spatula_balance_fall_dir * fall_rad, eased)
-		if _spatula_balance_fall_t >= HAND_SPATULA_BALANCE_FALL_DUR + HAND_SPATULA_BALANCE_FALL_HOLD:
+		var fall_dur := maxf(0.05, spatula_balance_fall_dur)
+		var bounce_dur := maxf(0.02, spatula_balance_bounce_dur)
+		var return_dur := maxf(0.05, spatula_balance_return_dur)
+		var fall_rad := deg_to_rad(spatula_balance_fall_tilt)
+		var bounce_rad := deg_to_rad(maxf(0.0, spatula_balance_fall_tilt - spatula_balance_bounce_deg))
+		if _spatula_balance_fall_t < fall_dur:
+			var u := clampf(_spatula_balance_fall_t / fall_dur, 0.0, 1.0)
+			var eased := 1.0 - pow(1.0 - u, 2.0)
+			_spatula_balance_tilt = _spatula_balance_fall_from.lerp(_spatula_balance_fall_dir * fall_rad, eased)
+		elif _spatula_balance_fall_t < fall_dur + bounce_dur:
+			if not _spatula_balance_impact_done:
+				_spatula_balance_impact_pending = true
+				_spatula_balance_impact_done = true
+			var bu := clampf((_spatula_balance_fall_t - fall_dur) / bounce_dur, 0.0, 1.0)
+			var bounce_ease := 1.0 - pow(1.0 - bu, 2.0)
+			_spatula_balance_tilt = _spatula_balance_fall_dir * lerpf(fall_rad, bounce_rad, bounce_ease)
+		elif _spatula_balance_fall_t < fall_dur + bounce_dur + return_dur:
+			var ru := clampf((_spatula_balance_fall_t - fall_dur - bounce_dur) / return_dur, 0.0, 1.0)
+			var return_ease := ru * ru * (3.0 - 2.0 * ru)
+			_spatula_balance_tilt = _spatula_balance_fall_dir * lerpf(bounce_rad, 0.0, return_ease)
+		else:
 			_stop_spatula_balance()
 		return
 	if _spatula_balance_last_mouse.x == INF:
@@ -5051,21 +5079,21 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
 	var lean := _spatula_balance_tilt
-	var move := Vector2(-mouse_delta.x, -mouse_delta.y * HAND_SPATULA_BALANCE_DEPTH_INPUT)
+	var move := Vector2(-mouse_delta.x, -mouse_delta.y * spatula_balance_depth_input)
 	if move.length_squared() > 0.01:
 		_spatula_balance_drift_dir = move.normalized()
 		var countering := lean.length_squared() > 0.0001 and move.dot(lean) < 0.0
-		var impulse := HAND_SPATULA_BALANCE_COUNTER_PUSH if countering else HAND_SPATULA_BALANCE_MOUSE_CORRECT
+		var impulse := spatula_balance_counter_push if countering else spatula_balance_mouse_correct
 		_spatula_balance_vel += move * impulse
 	var lean_gain := 0.22 + lean.length() * 3.8
-	_spatula_balance_vel += lean * HAND_SPATULA_BALANCE_UNSTABLE * lean_gain * delta
-	if HAND_SPATULA_BALANCE_DRIFT > 0.0:
-		_spatula_balance_vel += _spatula_balance_drift_dir * HAND_SPATULA_BALANCE_DRIFT * delta
-	_spatula_balance_vel *= pow(HAND_SPATULA_BALANCE_DAMP, delta * 60.0)
-	if _spatula_balance_vel.length() > HAND_SPATULA_BALANCE_MAX_VEL:
-		_spatula_balance_vel = _spatula_balance_vel.normalized() * HAND_SPATULA_BALANCE_MAX_VEL
+	_spatula_balance_vel += lean * spatula_balance_unstable * lean_gain * delta
+	if spatula_balance_drift > 0.0:
+		_spatula_balance_vel += _spatula_balance_drift_dir * spatula_balance_drift * delta
+	_spatula_balance_vel *= pow(spatula_balance_damp, delta * 60.0)
+	if _spatula_balance_vel.length() > spatula_balance_max_vel:
+		_spatula_balance_vel = _spatula_balance_vel.normalized() * spatula_balance_max_vel
 	_spatula_balance_tilt += _spatula_balance_vel * delta
-	var max_rad := deg_to_rad(HAND_SPATULA_BALANCE_MAX_TILT)
+	var max_rad := deg_to_rad(spatula_balance_max_tilt)
 	if _spatula_balance_tilt.length() > max_rad:
 		_spatula_balance_falling = true
 		_spatula_balance_fall_t = 0.0
@@ -5092,7 +5120,7 @@ func _spatula_balance_world_basis() -> Basis:
 		depth_dir = Vector3.FORWARD
 	depth_dir = depth_dir.normalized()
 	var lean_plane := screen_right * _spatula_balance_tilt.x + depth_dir * _spatula_balance_tilt.y
-	var lean_angle := clampf(lean_plane.length(), 0.0, deg_to_rad(HAND_SPATULA_BALANCE_FALL_TILT))
+	var lean_angle := clampf(lean_plane.length(), 0.0, deg_to_rad(spatula_balance_fall_tilt))
 	var pole := Vector3.UP
 	if lean_angle > 0.0001:
 		pole = (Vector3.UP * cos(lean_angle) + lean_plane.normalized() * sin(lean_angle)).normalized()
@@ -6400,12 +6428,15 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			pivot_local = HAND_SPATULA_TIP_OFFSET
 		else:
 			var balance_y := GRILL_SURFACE_Y + HAND_SPATULA_BALANCE_BASE_Y
-			var balance_mouse := mouse + HAND_SPATULA_BALANCE_SCREEN_NUDGE
+			var balance_mouse := mouse + spatula_balance_screen_nudge
 			var pivot_target := _tool_hold_point_from_screen(balance_mouse, balance_y)
 			if pivot_target == Vector3.ZERO:
 				pivot_target = tip_target
 			pivot_target.y = balance_y
 			tip_target = pivot_target
+			if _spatula_balance_impact_pending:
+				_spatula_balance_impact_pending = false
+				_play_grill_tap_at(Vector3(tip_target.x, GRILL_SURFACE_Y, tip_target.z), 1.35)
 			balance_basis = _spatula_balance_world_basis()
 			use_balance_basis = true
 			pitch = 0.0
@@ -10035,7 +10066,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	_refresh_station(STATION_CRAFT)
 	_select_station(STATION_CRAFT)
 	if game_audio:
-		game_audio.play_ingredient("patty")
+		_play_ingredient_touch_sfx("patty")
 	var n: int = st["patties"].size()
 	if patty.has_cheese and not patty.cheese_ready():
 		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(3.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
@@ -14065,7 +14096,7 @@ func _feed_window_cat_ingredient_local(id: String) -> void:
 	var label := id.replace("_", " ")
 	_flash("Cat loves the %s!" % label, Color("FFE082"))
 	if game_audio:
-		game_audio.play_ingredient(id)
+		_play_ingredient_touch_sfx(id)
 
 
 func _held_patty_near_screen(patty: Area3D, screen_pos: Vector2, max_px: float = 78.0) -> bool:
@@ -21687,6 +21718,79 @@ func _sync_tree_wind_hidden_ui() -> void:
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
 			var v := float(vals[key])
 			options_hidden_tree_light_labs[key].text = ("%.1f°" % v) if key == "wind_dir" else ("%.2f" % v)
+
+
+func _load_spatula_balance_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(SPATULA_BALANCE_CFG_SECTION):
+		return
+	spatula_balance_mouse_correct = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "mouse_correct", spatula_balance_mouse_correct)), 0.005, 0.06)
+	spatula_balance_counter_push = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "counter_push", spatula_balance_counter_push)), 0.005, 0.09)
+	spatula_balance_unstable = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "unstable", spatula_balance_unstable)), 1.0, 12.0)
+	spatula_balance_drift = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "drift", spatula_balance_drift)), 0.0, 2.0)
+	spatula_balance_damp = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "damp", spatula_balance_damp)), 0.90, 0.998)
+	spatula_balance_max_tilt = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_tilt", spatula_balance_max_tilt)), 35.0, 90.0)
+	spatula_balance_fall_tilt = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_tilt", spatula_balance_fall_tilt)), 75.0, 130.0)
+	spatula_balance_fall_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "fall_dur", spatula_balance_fall_dur)), 0.12, 0.9)
+	spatula_balance_bounce_deg = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)), 0.0, 35.0)
+	spatula_balance_bounce_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)), 0.03, 0.25)
+	spatula_balance_return_dur = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur)), 0.05, 0.8)
+	spatula_balance_max_vel = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)), 1.0, 10.0)
+	spatula_balance_depth_input = clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)), 0.1, 1.4)
+	spatula_balance_screen_nudge = Vector2(
+		clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_x_px", spatula_balance_screen_nudge.x)), -120.0, 120.0),
+		clampf(float(cfg.get_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y)), -120.0, 120.0)
+	)
+
+
+func _save_spatula_balance_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "mouse_correct", spatula_balance_mouse_correct)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "counter_push", spatula_balance_counter_push)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "unstable", spatula_balance_unstable)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "drift", spatula_balance_drift)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "damp", spatula_balance_damp)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "max_tilt", spatula_balance_max_tilt)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_tilt", spatula_balance_fall_tilt)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "fall_dur", spatula_balance_fall_dur)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "bounce_deg", spatula_balance_bounce_deg)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "bounce_dur", spatula_balance_bounce_dur)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "return_dur", spatula_balance_return_dur)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "max_vel", spatula_balance_max_vel)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "depth_input", spatula_balance_depth_input)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "offset_x_px", spatula_balance_screen_nudge.x)
+	cfg.set_value(SPATULA_BALANCE_CFG_SECTION, "offset_y_px", spatula_balance_screen_nudge.y)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _sync_spatula_balance_hidden_ui() -> void:
+	var vals := {
+		"bal_mouse": spatula_balance_mouse_correct,
+		"bal_counter": spatula_balance_counter_push,
+		"bal_unstable": spatula_balance_unstable,
+		"bal_drift": spatula_balance_drift,
+		"bal_damp": spatula_balance_damp,
+		"bal_max_tilt": spatula_balance_max_tilt,
+		"bal_fall_tilt": spatula_balance_fall_tilt,
+		"bal_fall_time": spatula_balance_fall_dur,
+		"bal_bounce_deg": spatula_balance_bounce_deg,
+		"bal_bounce_time": spatula_balance_bounce_dur,
+		"bal_return_time": spatula_balance_return_dur,
+		"bal_max_vel": spatula_balance_max_vel,
+		"bal_depth": spatula_balance_depth_input,
+		"bal_off_x": spatula_balance_screen_nudge.x,
+		"bal_off_y": spatula_balance_screen_nudge.y,
+	}
+	var deg_keys := ["bal_max_tilt", "bal_fall_tilt", "bal_bounce_deg"]
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			var v := float(vals[key])
+			options_hidden_tree_light_labs[key].text = ("%.1fÂ°" % v) if deg_keys.has(key) else ("%.2f" % v)
 
 
 func _apply_outdoor_tree_xforms() -> void:
@@ -36341,6 +36445,11 @@ func _sfx_click() -> void:
 		game_audio.play_click()
 
 
+func _play_ingredient_touch_sfx(id: String) -> void:
+	if game_audio:
+		game_audio.play_ingredient(id, ingredient_touch_volume)
+
+
 func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 	if game_audio == null:
 		return
@@ -38032,6 +38141,114 @@ func _build_options_menu() -> void:
 		func(): return _hidden_tree_edit_yaw(),
 		func(v: float): _hidden_set_tree_edit_yaw(clampf(v, -180.0, 180.0)))
 
+	var balance_lab := Label.new()
+	balance_lab.text = "SPATULA BALANCE"
+	UiFontsScript.apply_label(balance_lab, true, 13)
+	balance_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(balance_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_mouse", "Side Sensitivity", 0.005, 0.06, 0.001,
+		func(): return spatula_balance_mouse_correct,
+		func(v: float):
+			spatula_balance_mouse_correct = clampf(v, 0.005, 0.06)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_counter", "Counter Push", 0.005, 0.09, 0.001,
+		func(): return spatula_balance_counter_push,
+		func(v: float):
+			spatula_balance_counter_push = clampf(v, 0.005, 0.09)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_depth", "Forward Input", 0.1, 1.4, 0.01,
+		func(): return spatula_balance_depth_input,
+		func(v: float):
+			spatula_balance_depth_input = clampf(v, 0.1, 1.4)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_unstable", "Fall Force", 1.0, 12.0, 0.1,
+		func(): return spatula_balance_unstable,
+		func(v: float):
+			spatula_balance_unstable = clampf(v, 1.0, 12.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_drift", "Idle Drift", 0.0, 2.0, 0.01,
+		func(): return spatula_balance_drift,
+		func(v: float):
+			spatula_balance_drift = clampf(v, 0.0, 2.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_damp", "Damping", 0.90, 0.998, 0.001,
+		func(): return spatula_balance_damp,
+		func(v: float):
+			spatula_balance_damp = clampf(v, 0.90, 0.998)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_tilt", "Max Tilt deg", 35.0, 90.0, 1.0,
+		func(): return spatula_balance_max_tilt,
+		func(v: float):
+			spatula_balance_max_tilt = clampf(v, 35.0, 90.0)
+			_save_spatula_balance_settings()
+	, true)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_tilt", "Fall Tilt deg", 75.0, 130.0, 1.0,
+		func(): return spatula_balance_fall_tilt,
+		func(v: float):
+			spatula_balance_fall_tilt = clampf(v, 75.0, 130.0)
+			_save_spatula_balance_settings()
+	, true)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_fall_time", "Fall Time", 0.12, 0.9, 0.01,
+		func(): return spatula_balance_fall_dur,
+		func(v: float):
+			spatula_balance_fall_dur = clampf(v, 0.12, 0.9)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_deg", "Bounce deg", 0.0, 35.0, 1.0,
+		func(): return spatula_balance_bounce_deg,
+		func(v: float):
+			spatula_balance_bounce_deg = clampf(v, 0.0, 35.0)
+			_save_spatula_balance_settings()
+	, true)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_bounce_time", "Bounce Time", 0.03, 0.25, 0.01,
+		func(): return spatula_balance_bounce_dur,
+		func(v: float):
+			spatula_balance_bounce_dur = clampf(v, 0.03, 0.25)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_return_time", "Return Time", 0.05, 0.8, 0.01,
+		func(): return spatula_balance_return_dur,
+		func(v: float):
+			spatula_balance_return_dur = clampf(v, 0.05, 0.8)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_max_vel", "Max Speed", 1.0, 10.0, 0.1,
+		func(): return spatula_balance_max_vel,
+		func(v: float):
+			spatula_balance_max_vel = clampf(v, 1.0, 10.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_off_x", "Cursor Offset X px", -120.0, 120.0, 1.0,
+		func(): return spatula_balance_screen_nudge.x,
+		func(v: float):
+			spatula_balance_screen_nudge.x = clampf(v, -120.0, 120.0)
+			_save_spatula_balance_settings()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "bal_off_y", "Cursor Offset Y px", -120.0, 120.0, 1.0,
+		func(): return spatula_balance_screen_nudge.y,
+		func(v: float):
+			spatula_balance_screen_nudge.y = clampf(v, -120.0, 120.0)
+			_save_spatula_balance_settings()
+	)
+
+	var ing_audio_lab := Label.new()
+	ing_audio_lab.text = "INGREDIENT AUDIO"
+	UiFontsScript.apply_label(ing_audio_lab, true, 13)
+	ing_audio_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	options_hidden_room_tone_box.add_child(ing_audio_lab)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "ing_touch_vol", "Touch Volume", 0.0, 4.0, 0.05,
+		func(): return ingredient_touch_volume,
+		func(v: float):
+			ingredient_touch_volume = clampf(v, 0.0, 4.0)
+			_save_audio_settings()
+	)
+
 	var ice_lab := Label.new()
 	ice_lab.text = "SOFT SERVE POSITION"
 	UiFontsScript.apply_label(ice_lab, true, 13)
@@ -38282,6 +38499,11 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_light_hidden_ui()
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
+			_sync_spatula_balance_hidden_ui()
+			if options_hidden_tree_light_sliders.has("ing_touch_vol") and options_hidden_tree_light_sliders["ing_touch_vol"] != null:
+				options_hidden_tree_light_sliders["ing_touch_vol"].set_value_no_signal(ingredient_touch_volume)
+			if options_hidden_tree_light_labs.has("ing_touch_vol") and options_hidden_tree_light_labs["ing_touch_vol"] != null:
+				options_hidden_tree_light_labs["ing_touch_vol"].text = "%.2f" % ingredient_touch_volume
 			_sync_grill_heat_hidden_ui()
 			_sync_grill_surface_light_hidden_ui()
 			_sync_window_sill_glass_hidden_ui()
@@ -39404,6 +39626,8 @@ func _load_audio_settings() -> void:
 		room_tone_volume = clampf(float(cfg.get_value("audio", AUDIO_ROOM_TONE_VOL_KEY)), 0.0, 1.0)
 	if cfg.has_section_key("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY):
 		outdoor_ambience_volume = clampf(float(cfg.get_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY)), 0.0, OUTDOOR_AMBIENCE_VOL_MAX)
+	if cfg.has_section_key("audio", AUDIO_INGREDIENT_TOUCH_VOL_KEY):
+		ingredient_touch_volume = clampf(float(cfg.get_value("audio", AUDIO_INGREDIENT_TOUCH_VOL_KEY)), 0.0, 4.0)
 	## Snap to nearest allowed Solfeggio bed.
 	var best := float(ROOM_TONE_FREQS[0])
 	var best_d := 9999.0
@@ -39423,6 +39647,7 @@ func _save_audio_settings() -> void:
 	cfg.set_value("audio", AUDIO_ROOM_TONE_HZ_KEY, room_tone_hz)
 	cfg.set_value("audio", AUDIO_ROOM_TONE_VOL_KEY, room_tone_volume)
 	cfg.set_value("audio", AUDIO_OUTDOOR_AMBIENCE_VOL_KEY, outdoor_ambience_volume)
+	cfg.set_value("audio", AUDIO_INGREDIENT_TOUCH_VOL_KEY, ingredient_touch_volume)
 	cfg.save(AUDIO_CFG_PATH)
 
 
@@ -41256,7 +41481,7 @@ func _pulse_ingredient_feedback(id: String) -> void:
 		_bounce_top_bun_pile()
 	_skip_next_bun_bounce = false
 	if game_audio:
-		game_audio.play_ingredient(id)
+		_play_ingredient_touch_sfx(id)
 
 
 func _ingredient_button_screen_center(id: String) -> Vector2:
@@ -41892,7 +42117,7 @@ func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
 			target.has_cheese = false
 		return false
 	if game_audio:
-		game_audio.play_ingredient("cheese")
+		_play_ingredient_touch_sfx("cheese")
 	_flash("Cheese on! Melts in 3s", Color("FFE082"))
 	return true
 
@@ -42603,7 +42828,7 @@ func _commit_bun_to_build(bun: Area3D) -> void:
 	_refresh_station(STATION_CRAFT)
 	_select_station(STATION_CRAFT)
 	if game_audio:
-		game_audio.play_ingredient("bun_top")
+		_play_ingredient_touch_sfx("bun_top")
 	var note := "raw"
 	if cook >= BunToastScript.TOAST_BURNT:
 		note = "burnt"
@@ -43060,7 +43285,7 @@ func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void
 		cheese_ghost.visible = true
 	_refresh_cheese_piles()
 	if not skip_sfx and game_audio:
-		game_audio.play_ingredient("cheese")
+		_play_ingredient_touch_sfx("cheese")
 	if from_drag:
 		_flash("Release on a burger, Build, or the cat", Color("FFE082"))
 	else:
@@ -43313,7 +43538,7 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 				target.has_cheese = false
 			return
 		if game_audio:
-			game_audio.play_ingredient("cheese")
+			_play_ingredient_touch_sfx("cheese")
 		_flash("Cheese on! Melts in 3s", Color("FFE082"))
 
 
@@ -43411,7 +43636,7 @@ func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: 
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
-		game_audio.play_ingredient(id)
+		_play_ingredient_touch_sfx(id)
 	_note_melody_press(id)
 	_mp_broadcast_station(station_index)
 	call_deferred("_try_auto_serve")
@@ -43452,7 +43677,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	_start_station_freshness(station_index)
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
-		game_audio.play_ingredient("cheese")
+		_play_ingredient_touch_sfx("cheese")
 	_note_melody_press("cheese")
 	_flash("Cheese on — melting 3s (order already counts it)", Color("FFE082"))
 	_mp_broadcast_station(station_index)
@@ -43509,7 +43734,7 @@ func _select_station_layer(station_index: int, layer_index: int, refresh_ui: boo
 	var id: String = str(items[layer_index]) if layer_index >= 0 and layer_index < items.size() else ""
 	if id != "":
 		if game_audio:
-			game_audio.play_ingredient(id)
+			_play_ingredient_touch_sfx(id)
 		var label: String = GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize())
 		_flash("Selected %s — drag off Build to trash" % label, Color("FFE082"))
 
@@ -44199,7 +44424,7 @@ func _animate_top_bun_on_station(station_index: int, on_done: Callable) -> void:
 	var final_y: float = row.position.y
 	row.position.y = final_y - 46.0
 	if game_audio:
-		game_audio.play_ingredient("bun_top")
+		_play_ingredient_touch_sfx("bun_top")
 	var tw := create_tween()
 	tw.tween_property(row, "position:y", final_y, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_interval(0.04)
@@ -44348,7 +44573,7 @@ func _try_feed_bacon_to_customer(screen_pos: Vector2) -> bool:
 	_strip_did_drag = true
 	_strip_gesture_added = true
 	if game_audio:
-		game_audio.play_ingredient("bacon")
+		_play_ingredient_touch_sfx("bacon")
 	var pct := int(round(BACON_PATIENCE_RESTORE * 100.0))
 	_flash("Bacon snack! +%d%% patience" % pct, Color("FFAB91"))
 	return true
@@ -48077,7 +48302,7 @@ func mp_cheese_patty(net_id: int) -> void:
 	if p.add_cheese():
 		_mp_spend_ingredient("cheese")
 		if game_audio:
-			game_audio.play_ingredient("cheese")
+			_play_ingredient_touch_sfx("cheese")
 		_flash("Cheese on! Melts in 3s", Color("FFE082"))
 	_mp_applying = false
 	if NetManager.is_host():
@@ -48730,7 +48955,7 @@ func mp_cat_feed(kind: String, patty_net_id: int) -> void:
 		var label := kind.replace("_", " ")
 		_flash("Cat loves the %s!" % label, Color("FFE082"))
 		if game_audio:
-			game_audio.play_ingredient(kind)
+			_play_ingredient_touch_sfx(kind)
 	_mp_applying = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
@@ -49175,7 +49400,7 @@ func mp_bacon_customer(net_id: int) -> void:
 		if bool(c.feed_bacon_snack(BACON_PATIENCE_RESTORE)):
 			_mp_spend_ingredient("bacon")
 			if game_audio:
-				game_audio.play_ingredient("bacon")
+				_play_ingredient_touch_sfx("bacon")
 			var pct := int(round(BACON_PATIENCE_RESTORE * 100.0))
 			_flash("Bacon snack! +%d%% patience" % pct, Color("FFAB91"))
 		else:
