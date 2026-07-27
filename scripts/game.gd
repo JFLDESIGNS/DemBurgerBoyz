@@ -23312,6 +23312,7 @@ func _build_soda_station() -> void:
 	## Invisible pour tips under model nozzles (1–3 soda by flavor, 4 = ice).
 	_add_soda_spout_marker_only(root, true)
 	_add_soda_spout_marker_only(root, false)
+	_add_soda_nozzle_fill_visuals(root)
 	_sync_soda_spout_to_flavor()
 
 	## Park + fill seat on the drip-grate top (not tip-relative mid-air).
@@ -23997,6 +23998,65 @@ func _sync_soda_spout_to_flavor() -> void:
 		return
 	var local: Vector3 = SODA_MODEL_SPOUT_POS.get(soda_selected_flavor, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
 	soda_spout_marker.position = _soda_model_local(local)
+
+
+func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
+	if parent == null:
+		return
+	var existing := parent.get_node_or_null("SodaNozzleFillVisuals")
+	if existing != null:
+		existing.queue_free()
+	var root := Node3D.new()
+	root.name = "SodaNozzleFillVisuals"
+	parent.add_child(root)
+	var mat := _make_soda_metal_mat(Color(0.50, 0.52, 0.55), 0.92, 0.20)
+	var throat_mat := _make_soda_metal_mat(Color(0.13, 0.15, 0.17), 0.45, 0.48)
+	for fid in SODA_BRAND_FLAVOR_ORDER:
+		var model_pos: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+		_add_soda_nozzle_fill_visual(root, "NozzleFill_%s" % fid, _soda_model_local(model_pos), mat, throat_mat)
+
+
+func _add_soda_nozzle_fill_visual(parent: Node3D, nozzle_name: String, local_pos: Vector3, mat: Material, throat_mat: Material) -> void:
+	var group := Node3D.new()
+	group.name = nozzle_name
+	group.position = local_pos
+	parent.add_child(group)
+
+	var neck := MeshInstance3D.new()
+	neck.name = "Neck"
+	var neck_mesh := CylinderMesh.new()
+	neck_mesh.top_radius = 0.014
+	neck_mesh.bottom_radius = 0.016
+	neck_mesh.height = 0.044
+	neck_mesh.radial_segments = 24
+	neck.mesh = neck_mesh
+	neck.position = Vector3(0.0, -0.012, 0.0)
+	neck.material_override = mat
+	group.add_child(neck)
+
+	var bell := MeshInstance3D.new()
+	bell.name = "Bell"
+	var bell_mesh := CylinderMesh.new()
+	bell_mesh.top_radius = 0.024
+	bell_mesh.bottom_radius = 0.042
+	bell_mesh.height = 0.045
+	bell_mesh.radial_segments = 28
+	bell.mesh = bell_mesh
+	bell.position = Vector3(0.0, -0.045, 0.0)
+	bell.material_override = mat
+	group.add_child(bell)
+
+	var throat := MeshInstance3D.new()
+	throat.name = "Throat"
+	var throat_mesh := CylinderMesh.new()
+	throat_mesh.top_radius = 0.023
+	throat_mesh.bottom_radius = 0.025
+	throat_mesh.height = 0.008
+	throat_mesh.radial_segments = 24
+	throat.mesh = throat_mesh
+	throat.position = Vector3(0.0, -0.071, 0.0)
+	throat.material_override = throat_mat
+	group.add_child(throat)
 
 
 func _make_soda_metal_mat(col: Color, metallic: float, roughness: float) -> StandardMaterial3D:
