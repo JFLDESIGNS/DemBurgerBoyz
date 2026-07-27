@@ -1256,6 +1256,8 @@ const ROOMBA_SENSOR_DEBUG_ON := true
 const ROOMBA_SIDE_INSET := 0.162 ## Body center inset; loosened ~4 inches so spatula can reach side-edge patties.
 const ROOMBA_DEPTH_INSET := 0.026 ## Near/player edge inset; keep this loose so the bot can reach patties by the player.
 const ROOMBA_TOP_DEPTH_INSET := 0.153 ## Far/window edge inset; keeps the bot out of the top strip of the grill.
+const ROOMBA_HOME_CFG_SECTION := "roomba_home"
+var roomba_home_pos: Vector3 = Vector3(-1.55, GRILL_SURFACE_Y + ROOMBA_SIT_Y, 0.95)
 const AIR_MOTE_COUNT := 56
 const AIR_MOTE_BOUNDS_MIN := Vector3(-2.35, 0.95, -1.05)
 const AIR_MOTE_BOUNDS_MAX := Vector3(2.35, 2.35, 1.25)
@@ -1461,6 +1463,7 @@ var options_hidden_password: LineEdit = null
 var options_hidden_unlock_btn: Button = null
 var options_hidden_advanced_btn: Button = null
 var options_hidden_piano_check: CheckButton = null
+var options_hidden_zone_check: CheckButton = null
 var options_hidden_status: Label = null
 var options_hidden_room_tone_box: VBoxContainer = null
 var options_hidden_room_tone_option: OptionButton = null
@@ -1519,6 +1522,10 @@ var tree_birch_yaw: float = TREE_BIRCH_DEFAULT_YAW
 var options_hidden_tree_select: OptionButton = null
 var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
 const TREE_XFORM_CFG_SECTION := "tree_xform"
+var screen_zone_overlay: Control = null
+var screen_zone_overlay_visible: bool = false
+const SCREEN_ZONE_COLS := 5
+const SCREEN_ZONE_ROWS := 6
 ## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
 var icecream_cam_right_ft: float = 1.5
 const FT_TO_M := 0.3048
@@ -2215,6 +2222,7 @@ func _ready() -> void:
 	brush_swipe_cool.fill(0.0)
 	_setup_stations_data()
 	_load_spatula_balance_settings()
+	_load_roomba_home_settings()
 	_load_soda_slot_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
@@ -11897,9 +11905,7 @@ func _update_held_grill_roomba(delta: float) -> void:
 
 
 func _roomba_home_target() -> Vector3:
-	var x := GRILL_CENTER_X + GRILL_WIDTH * 0.5 + ROOMBA_RADIUS * 3.2
-	var z := GRILL_SURFACE_Z + GRILL_DEPTH * 0.18
-	return Vector3(x, GRILL_SURFACE_Y + ROOMBA_SIT_Y, z)
+	return Vector3(roomba_home_pos.x, roomba_home_pos.y, roomba_home_pos.z)
 
 
 func _roomba_clear_active_work(drop_patty: bool = true) -> void:
@@ -22726,6 +22732,51 @@ func _sync_spatula_balance_hidden_ui() -> void:
 			options_hidden_tree_light_labs[key].text = ("%.1fÂ°" % v) if deg_keys.has(key) else ("%.2f" % v)
 
 
+func _load_roomba_home_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(ROOMBA_HOME_CFG_SECTION):
+		return
+	roomba_home_pos = Vector3(
+		clampf(float(cfg.get_value(ROOMBA_HOME_CFG_SECTION, "x", roomba_home_pos.x)), -4.0, 4.0),
+		clampf(float(cfg.get_value(ROOMBA_HOME_CFG_SECTION, "y", roomba_home_pos.y)), 0.8, 1.8),
+		clampf(float(cfg.get_value(ROOMBA_HOME_CFG_SECTION, "z", roomba_home_pos.z)), -1.2, 2.2)
+	)
+
+
+func _save_roomba_home_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "x", roomba_home_pos.x)
+	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "y", roomba_home_pos.y)
+	cfg.set_value(ROOMBA_HOME_CFG_SECTION, "z", roomba_home_pos.z)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_roomba_home_settings_changed() -> void:
+	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
+		return
+	if grill_roomba_power_off or grill_roomba_home_requested or grill_roomba_root.global_position.distance_to(_roomba_home_target()) <= 0.16:
+		grill_roomba_root.global_position = _roomba_home_target()
+		grill_roomba_last_xz = Vector2(roomba_home_pos.x, roomba_home_pos.z)
+		if mp_enabled and NetManager.is_host():
+			_mp_send_roomba_pose()
+
+
+func _sync_roomba_home_hidden_ui() -> void:
+	var vals := {
+		"roomba_home_x": roomba_home_pos.x,
+		"roomba_home_y": roomba_home_pos.y,
+		"roomba_home_z": roomba_home_pos.z,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
 func _apply_outdoor_tree_xforms() -> void:
 	if tree_front_node != null and is_instance_valid(tree_front_node):
 		if not bool(tree_front_node.get_meta("tree_shaking", false)):
@@ -23449,7 +23500,6 @@ func _build_soda_station() -> void:
 	## Invisible pour tips under model nozzles (1–3 soda by flavor, 4 = ice).
 	_add_soda_spout_marker_only(root, true)
 	_add_soda_spout_marker_only(root, false)
-	_add_soda_nozzle_fill_visuals(root)
 	_sync_soda_spout_to_flavor()
 
 	## Park + fill seat on the drip-grate top (not tip-relative mid-air).
@@ -38652,6 +38702,74 @@ func _layout_options_panel() -> void:
 	options_panel.offset_bottom = half_h
 
 
+func _build_screen_zone_overlay() -> void:
+	if options_layer == null or not is_instance_valid(options_layer):
+		return
+	if screen_zone_overlay != null and is_instance_valid(screen_zone_overlay):
+		screen_zone_overlay.queue_free()
+	screen_zone_overlay = Control.new()
+	screen_zone_overlay.name = "ScreenZoneOverlay"
+	screen_zone_overlay.visible = screen_zone_overlay_visible
+	screen_zone_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	screen_zone_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	screen_zone_overlay.z_index = 90
+	options_layer.add_child(screen_zone_overlay)
+	for row in range(SCREEN_ZONE_ROWS):
+		for col in range(SCREEN_ZONE_COLS):
+			var zone_num := row * SCREEN_ZONE_COLS + col + 1
+			var cell := PanelContainer.new()
+			cell.name = "Zone%02d" % zone_num
+			cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cell.set_anchors_preset(Control.PRESET_FULL_RECT)
+			cell.anchor_left = float(col) / float(SCREEN_ZONE_COLS)
+			cell.anchor_right = float(col + 1) / float(SCREEN_ZONE_COLS)
+			cell.anchor_top = float(row) / float(SCREEN_ZONE_ROWS)
+			cell.anchor_bottom = float(row + 1) / float(SCREEN_ZONE_ROWS)
+			cell.offset_left = 0
+			cell.offset_right = 0
+			cell.offset_top = 0
+			cell.offset_bottom = 0
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.0, 0.0, 0.0, 0.10)
+			sb.border_color = Color(0.2, 0.85, 1.0, 0.62)
+			sb.set_border_width_all(1)
+			cell.add_theme_stylebox_override("panel", sb)
+			var lab := Label.new()
+			lab.text = str(zone_num)
+			lab.set_anchors_preset(Control.PRESET_FULL_RECT)
+			lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			UiFontsScript.apply_label(lab, true, 30)
+			lab.add_theme_color_override("font_color", Color(0.84, 0.96, 1.0, 0.92))
+			lab.add_theme_color_override("font_outline_color", Color(0.0, 0.02, 0.04, 0.95))
+			lab.add_theme_constant_override("outline_size", 4)
+			cell.add_child(lab)
+			screen_zone_overlay.add_child(cell)
+
+
+func _set_screen_zone_overlay_visible(on: bool) -> void:
+	screen_zone_overlay_visible = on
+	if screen_zone_overlay == null or not is_instance_valid(screen_zone_overlay):
+		_build_screen_zone_overlay()
+	if screen_zone_overlay != null and is_instance_valid(screen_zone_overlay):
+		screen_zone_overlay.visible = on
+	if options_hidden_zone_check != null and is_instance_valid(options_hidden_zone_check):
+		options_hidden_zone_check.set_pressed_no_signal(on)
+
+
+func _hidden_add_section(parent: Control, text: String) -> Label:
+	var sep := HSeparator.new()
+	parent.add_child(sep)
+	var lab := Label.new()
+	lab.text = text
+	UiFontsScript.apply_label(lab, true, 13)
+	lab.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	lab.add_theme_constant_override("outline_size", 1)
+	parent.add_child(lab)
+	return lab
+
+
 func _layout_gfx_panel() -> void:
 	if gfx_panel == null or not is_instance_valid(gfx_panel):
 		return
@@ -38674,6 +38792,7 @@ func _build_options_menu() -> void:
 	options_layer.name = "OptionsLayer"
 	options_layer.layer = 100
 	add_child(options_layer)
+	_build_screen_zone_overlay()
 
 	options_root = Control.new()
 	options_root.name = "OptionsMenu"
@@ -38874,6 +38993,17 @@ func _build_options_menu() -> void:
 		_set_graphics_menu_open(true)
 	)
 	options_hidden_advanced_btn.visible = false
+
+	options_hidden_zone_check = CheckButton.new()
+	options_hidden_zone_check.text = "Show Screen Zones (1-30)"
+	options_hidden_zone_check.button_pressed = screen_zone_overlay_visible
+	options_hidden_zone_check.visible = false
+	UiFontsScript.apply_button(options_hidden_zone_check, false, 13)
+	options_hidden_zone_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	options_hidden_zone_check.toggled.connect(func(on: bool):
+		_set_screen_zone_overlay_visible(on)
+	)
+	hidden.add_child(options_hidden_zone_check)
 
 	options_hidden_piano_check = CheckButton.new()
 	options_hidden_piano_check.text = "Show Grill Tap Pads (12 piano + 5 HOLD drums)"
@@ -39701,6 +39831,29 @@ func _build_options_menu() -> void:
 		func(): return _hidden_tree_edit_yaw(),
 		func(v: float): _hidden_set_tree_edit_yaw(clampf(v, -180.0, 180.0)))
 
+	_hidden_add_section(options_hidden_room_tone_box, "TURBACHEF ROBOT HOME")
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "roomba_home_x", "Home X", -4.0, 4.0, 0.01,
+		func(): return roomba_home_pos.x,
+		func(v: float):
+			roomba_home_pos.x = clampf(v, -4.0, 4.0)
+			_save_roomba_home_settings()
+			_apply_roomba_home_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "roomba_home_y", "Home Height", 0.8, 1.8, 0.01,
+		func(): return roomba_home_pos.y,
+		func(v: float):
+			roomba_home_pos.y = clampf(v, 0.8, 1.8)
+			_save_roomba_home_settings()
+			_apply_roomba_home_settings_changed()
+	)
+	_hidden_add_labeled_slider(options_hidden_room_tone_box, "roomba_home_z", "Home Z", -1.2, 2.2, 0.01,
+		func(): return roomba_home_pos.z,
+		func(v: float):
+			roomba_home_pos.z = clampf(v, -1.2, 2.2)
+			_save_roomba_home_settings()
+			_apply_roomba_home_settings_changed()
+	)
+
 	var balance_lab := Label.new()
 	balance_lab.text = "SPATULA BALANCE"
 	UiFontsScript.apply_label(balance_lab, true, 13)
@@ -40205,6 +40358,10 @@ func _try_unlock_hidden_options() -> void:
 		options_hidden_piano_check.visible = ok
 		if ok:
 			options_hidden_piano_check.set_pressed_no_signal(grill_piano_debug_outline)
+	if options_hidden_zone_check != null and is_instance_valid(options_hidden_zone_check):
+		options_hidden_zone_check.visible = ok
+		if ok:
+			options_hidden_zone_check.set_pressed_no_signal(screen_zone_overlay_visible)
 	if options_hidden_room_tone_box != null and is_instance_valid(options_hidden_room_tone_box):
 		options_hidden_room_tone_box.visible = ok
 		if ok:
@@ -40221,6 +40378,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
 			_sync_spatula_balance_hidden_ui()
+			_sync_roomba_home_hidden_ui()
 			if options_hidden_tree_light_sliders.has("ing_touch_vol") and options_hidden_tree_light_sliders["ing_touch_vol"] != null:
 				options_hidden_tree_light_sliders["ing_touch_vol"].set_value_no_signal(ingredient_touch_volume)
 			if options_hidden_tree_light_labs.has("ing_touch_vol") and options_hidden_tree_light_labs["ing_touch_vol"] != null:
