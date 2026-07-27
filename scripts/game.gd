@@ -23133,16 +23133,35 @@ func _soda_slot_symbol_material(sym: String) -> StandardMaterial3D:
 	mat.emission_energy_multiplier = 0.75
 	mat.albedo_color = Color.WHITE
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.uv1_scale = Vector3(0.76, 0.76, 1.0)
-	mat.uv1_offset = Vector3(0.12, 0.12, 0.0)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.no_depth_test = false
 	mat.render_priority = 14
-	var path := str(SODA_SLOT_SYMBOL_TEXTURES.get(sym, ""))
-	if path != "" and ResourceLoader.exists(path):
-		mat.albedo_texture = load(path) as Texture2D
+	mat.albedo_texture = _soda_slot_padded_symbol_texture(sym)
 	soda_slot_symbol_mats[sym] = mat
 	return mat
+
+
+func _soda_slot_padded_symbol_texture(sym: String) -> Texture2D:
+	var img := Image.create(256, 256, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.035, 0.040, 0.035, 1.0))
+	var path := str(SODA_SLOT_SYMBOL_TEXTURES.get(sym, ""))
+	if path == "" or not ResourceLoader.exists(path):
+		return ImageTexture.create_from_image(img)
+	var tex := load(path) as Texture2D
+	if tex == null:
+		return ImageTexture.create_from_image(img)
+	var src := tex.get_image()
+	if src == null or src.is_empty():
+		return ImageTexture.create_from_image(img)
+	src.convert(Image.FORMAT_RGBA8)
+	var max_side := 118
+	var src_size := src.get_size()
+	var scale := minf(float(max_side) / maxf(1.0, float(src_size.x)), float(max_side) / maxf(1.0, float(src_size.y)))
+	var out_size := Vector2i(maxi(1, int(round(float(src_size.x) * scale))), maxi(1, int(round(float(src_size.y) * scale))))
+	src.resize(out_size.x, out_size.y, Image.INTERPOLATE_LANCZOS)
+	var dst := Vector2i((256 - out_size.x) / 2, (256 - out_size.y) / 2)
+	img.blend_rect(src, Rect2i(Vector2i.ZERO, out_size), dst)
+	return ImageTexture.create_from_image(img)
 
 
 func _soda_slot_spin_material() -> StandardMaterial3D:
@@ -23158,9 +23177,6 @@ func _soda_slot_spin_material() -> StandardMaterial3D:
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.render_priority = 14
-	var path := "res://assets/decal/burger_pals_logo.png"
-	if ResourceLoader.exists(path):
-		mat.albedo_texture = load(path) as Texture2D
 	soda_slot_spin_mat = mat
 	return mat
 
@@ -23174,17 +23190,20 @@ func _ensure_soda_slot_bulbs() -> void:
 	soda_slot_bulb_root.name = "SlotBulbs"
 	soda_root.add_child(soda_slot_bulb_root)
 	soda_slot_bulb_mats.clear()
-	var ids: Array[String] = ["cola", "lemon_lime", "orange", "ice"]
-	for fid in ids:
-		var area: Area3D = soda_flavor_areas.get(fid, null)
-		if area == null or not is_instance_valid(area):
-			continue
-		for side in [-1.0, 1.0]:
+	var first_area: Area3D = soda_flavor_areas.get("cola", null)
+	var last_area: Area3D = soda_flavor_areas.get("ice", null)
+	if first_area != null and is_instance_valid(first_area) and last_area != null and is_instance_valid(last_area):
+		var right := first_area.global_transform.basis.x.normalized()
+		var up := first_area.global_transform.basis.y.normalized()
+		var front := first_area.global_transform.basis.z.normalized()
+		var start_pos := first_area.global_position - right * 0.055 + up * 0.075 + front * 0.026
+		var end_pos := last_area.global_position + right * 0.055 + up * 0.075 + front * 0.026
+		for i in range(11):
 			var bulb := MeshInstance3D.new()
 			bulb.name = "SlotBulb"
 			var sph := SphereMesh.new()
-			sph.radius = 0.010
-			sph.height = 0.020
+			sph.radius = 0.0075
+			sph.height = 0.015
 			bulb.mesh = sph
 			var mat := StandardMaterial3D.new()
 			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -23195,22 +23214,21 @@ func _ensure_soda_slot_bulbs() -> void:
 			bulb.material_override = mat
 			bulb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			soda_slot_bulb_root.add_child(bulb)
-			var right := area.global_transform.basis.x.normalized()
-			var up := area.global_transform.basis.y.normalized()
-			var front := area.global_transform.basis.z.normalized()
-			bulb.global_position = area.global_position + right * side * 0.055 + up * 0.060 + front * 0.025
+			var t := float(i) / 10.0
+			bulb.global_position = start_pos.lerp(end_pos, t)
 			soda_slot_bulb_mats.append(mat)
 	var spin_area: Area3D = soda_flavor_areas.get("ice", null)
 	if spin_area != null and is_instance_valid(spin_area):
 		soda_slot_spin_label = Label3D.new()
 		soda_slot_spin_label.name = "SlotSpinLabel"
 		soda_slot_spin_label.text = "SPIN"
-		soda_slot_spin_label.font_size = 18
+		soda_slot_spin_label.font_size = 32
+		soda_slot_spin_label.pixel_size = 0.00155
 		soda_slot_spin_label.modulate = Color(1.0, 0.94, 0.70, 1.0)
 		soda_slot_spin_label.outline_modulate = Color(0.25, 0.0, 0.0, 0.95)
-		soda_slot_spin_label.outline_size = 5
+		soda_slot_spin_label.outline_size = 2
 		soda_slot_spin_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		soda_slot_spin_label.no_depth_test = true
+		soda_slot_spin_label.no_depth_test = false
 		soda_slot_bulb_root.add_child(soda_slot_spin_label)
 		soda_slot_spin_label.global_position = spin_area.global_position + spin_area.global_transform.basis.z.normalized() * 0.036
 
