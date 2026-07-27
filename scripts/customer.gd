@@ -1307,7 +1307,7 @@ func _process(delta: float) -> void:
 		if queue_timer_active and patience <= 0.0 and not mp_host_driven and not _eating:
 			leave_mad()
 			patience_expired.emit(self)
-	## Ticket stopwatch is independent of patience, so non-front tickets still age.
+	## Ticket stopwatch is owned by the selected/main order; side tickets stay paused.
 	if _order_clock_on and not is_leaving and not mp_host_driven:
 		order_elapsed_sec += delta
 

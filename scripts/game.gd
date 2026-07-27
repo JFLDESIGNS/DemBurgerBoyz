@@ -613,7 +613,7 @@ var shaker_area: Area3D = null
 var shaker_visual: Node3D = null
 var shaker_particles: GPUParticles3D = null
 var shaker_btn: Button = null
-var shaker_home: Vector3 = Vector3(1.7292, 2.0384, 1.12) ## +8" camera-left from prior 1.526
+var shaker_home: Vector3 = Vector3(2.0340, 2.0384, 1.12) ## +1 ft camera-left, away from order tickets
 var shaker_season_cool: float = 0.0
 var _shaker_hold_t: float = 0.0 ## seconds held; short tap → hi-hat crash
 var _shaker_did_season: bool = false
@@ -644,7 +644,7 @@ const OIL_LIQUID_UPRIGHT_BOT_R := 0.0315
 const OIL_LIQUID_UPRIGHT_TOP_R := 0.0265
 const OIL_LIQUID_POUR_BOT_R := 0.020
 const OIL_LIQUID_POUR_TOP_R := 0.011
-var oil_home: Vector3 = Vector3(1.3692, 2.12, 1.12) ## +8" camera-left
+var oil_home: Vector3 = Vector3(1.6740, 2.12, 1.12) ## +1 ft camera-left, away from order tickets
 var oil_spray_cool: float = 0.0
 var oil_last_draw: Vector3 = Vector3.ZERO
 var oil_pour_hold_t: float = 0.0 ## Seconds continuously pouring while held.
@@ -787,9 +787,9 @@ const SPATULA_CUP_PUSH_RADIUS := 0.095
 const SPATULA_CUP_PUSH_SCALE := 2.1
 const SPATULA_CUP_PUSH_MAX := 0.11
 const PATTY_RELEASE_SLIDE_MIN_SPEED := 0.18
-const PATTY_RELEASE_SLIDE_MAX_SPEED := 0.72
-const PATTY_RELEASE_SLIDE_FRICTION := 4.2
-const PATTY_RELEASE_SLIDE_MAX_DIST := 0.135 ## ~5.3 inches of extra glide.
+const PATTY_RELEASE_SLIDE_MAX_SPEED := 2.88
+const PATTY_RELEASE_SLIDE_FRICTION := 1.05
+const PATTY_RELEASE_SLIDE_MAX_DIST := 0.54 ## 4x longer release glide.
 ## Click-drag to slide patties on the flat-top (legacy / non-spatula path).
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
@@ -20192,7 +20192,6 @@ func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
 			p._play_done_jump(POP_PEAK)
 		if game_audio and game_audio.has_method("play_grease_pop"):
 			game_audio.play_grease_pop(false)
-		_try_attach_cheese_strings_to_patty(p, tip_pos)
 		if mp_enabled and not _mp_applying and int(p.get("net_id")) >= 0:
 			mp_spatula_flat_pop.rpc(int(p.net_id), tip_pos.x, tip_pos.z)
 
@@ -20454,6 +20453,13 @@ func _try_attach_cheese_strings_near_tip(tip_pos: Vector3) -> void:
 func _try_attach_cheese_strings_to_patty(patty: Area3D, tip_pos: Vector3) -> void:
 	if not _patty_can_cheese_string(patty):
 		return
+	if mp_enabled:
+		var nid := int(patty.get("net_id")) if patty.get("net_id") != null else -1
+		var holder := _mp_peer_holding_net(nid)
+		if holder != 0 and holder != NetManager.my_id():
+			return
+		if dragging_patty == patty and drag_owner_id != 0 and drag_owner_id != NetManager.my_id():
+			return
 	if _cheese_string_exists_for(patty):
 		return
 	## Sliding the burger itself — always in range; tip rides with the patty.
@@ -20629,6 +20635,17 @@ func _update_cheese_strings(delta: float) -> void:
 			continue
 		var cheese_base: Vector3 = patty.cheese_anchor_world() if patty.has_method("cheese_anchor_world") \
 			else patty.global_position + Vector3(0, 0.028, 0)
+		if mp_enabled:
+			var nid := int(patty.get("net_id")) if patty.get("net_id") != null else -1
+			var holder := _mp_peer_holding_net(nid)
+			if holder != 0 and holder != NetManager.my_id():
+				if cheese_pull_patty == patty:
+					cheese_pull_patty = null
+				_free_cheese_string_item(item)
+				continue
+			if dragging_patty == patty and drag_owner_id != 0 and drag_owner_id != NetManager.my_id():
+				_free_cheese_string_item(item)
+				continue
 		if tip == Vector3.ZERO:
 			tip = item.get("tip_cache", cheese_base + Vector3(0.05, 0.05, 0.0))
 		## Active pull: RMB latch, or LMB hold/slide on the melt.
@@ -31973,8 +31990,8 @@ func _setup_radio() -> void:
 	_build_phone_ui()
 	_build_hud_chrome_toggle()
 	_reset_supplies()
-	radio.set_volume_linear(0.0)
-	radio.set_powered(false)
+	radio.set_volume_linear(0.80)
+	radio.set_powered(true)
 	_refresh_radio_ui()
 
 
@@ -40239,8 +40256,8 @@ func _create_ticket(customer: Node3D) -> void:
 	ticket_box.add_child(wrap)
 	tickets[customer] = wrap
 	customer.set_meta("ticket_build_clock_stopped", false)
-	if customer.has_method("start_order_clock"):
-		customer.start_order_clock(true)
+	if customer.has_method("stop_order_clock"):
+		customer.stop_order_clock()
 	_highlight_tickets()
 	_refresh_ticket_checkmarks()
 	_refresh_customer_queue_timers()
@@ -40759,6 +40776,11 @@ func _refresh_customer_queue_timers() -> void:
 		var active: bool = cust == front
 		if cust.has_method("set_queue_timer_active"):
 			cust.set_queue_timer_active(active)
+		if active:
+			if cust.has_method("start_order_clock"):
+				cust.start_order_clock(false)
+		elif cust.has_method("stop_order_clock"):
+			cust.stop_order_clock()
 
 
 func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
@@ -40782,6 +40804,22 @@ func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
 			if c != null and is_instance_valid(c) and bool(c.get("is_waiting")) and tickets.has(c):
 				selected_customer = c
 				break
+
+
+func _mp_force_remove_customer(cust: Node3D) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	_close_dialogue_if_customer(cust)
+	_remove_ticket(cust)
+	customers.erase(cust)
+	if selected_customer == cust:
+		selected_customer = null
+	var nid := _customer_net_id(cust)
+	if nid >= 0 and cust.has_meta("mp_net_id"):
+		_mp_customer_net_ids.erase(cust.get_instance_id())
+	if bool(cust.get("is_disguise_cat")):
+		_clear_disguise_cat_state()
+	cust.queue_free()
 
 
 func _highlight_tickets() -> void:
@@ -47184,6 +47222,22 @@ func _mp_set_remote_glock_laser(root: Node3D, on: bool) -> void:
 			node.visible = on
 
 
+func _mp_force_remote_glock_visible(root: Node3D) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	root.visible = true
+	var mesh := root.find_child("GlockMesh", true, false)
+	if mesh != null and is_instance_valid(mesh):
+		mesh.visible = true
+	for child in root.get_children():
+		if child is CollisionObject3D:
+			continue
+		if child is Node3D and str(child.name).begins_with("GlockLaser"):
+			continue
+		if child is Node3D:
+			(child as Node3D).visible = true
+
+
 func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 	if except_kind != 2 and _mp_remote_oil.has(peer_id):
 		var oil: Node3D = _mp_remote_oil[peer_id]
@@ -47475,6 +47529,7 @@ func mp_tool_pose(
 			glock.visible = true
 			glock.global_position = pos
 			glock.global_rotation_degrees = rot
+			_mp_force_remote_glock_visible(glock)
 			_mp_set_remote_glock_laser(glock, true)
 		9:
 			var fries := _mp_ensure_remote_fries(sid)
@@ -47902,7 +47957,6 @@ func mp_spatula_flat_pop(net_id: int, tip_x: float, tip_z: float) -> void:
 		p._play_done_jump(0.034)
 	if game_audio and game_audio.has_method("play_grease_pop"):
 		game_audio.play_grease_pop(false)
-	_try_attach_cheese_strings_to_patty(p, Vector3(tip_x, GRILL_SURFACE_Y + HAND_SPATULA_HOLD_SLIDE_CLEAR, tip_z))
 	_mp_applying = false
 
 
@@ -49013,13 +49067,19 @@ func mp_sync_customers(
 			continue
 		var nid2 := _customer_net_id(c)
 		if nid2 >= 0 and not seen.has(nid2):
-			if not bool(c.get("is_leaving")) and c.has_method("leave_happy"):
-				c.leave_happy()
-			_customer_leave_apply(c, false)
+			_mp_force_remove_customer(c)
 			ticket_structure_changed = true
 		elif nid2 < 0 and bool(c.get("is_disguise_cat")):
-			_customer_leave_apply(c, false)
+			_mp_force_remove_customer(c)
 			ticket_structure_changed = true
+	if customers_root != null:
+		for stray in customers_root.get_children():
+			if stray == null or not is_instance_valid(stray) or customers.has(stray):
+				continue
+			var stray_nid := _customer_net_id(stray)
+			if stray_nid >= 0 and not seen.has(stray_nid):
+				_mp_force_remove_customer(stray)
+				ticket_structure_changed = true
 	_mp_cull_stale_tickets(seen)
 	## Patience fill is cheap to repaint; avoid the heavier queue timer/layout pass
 	## unless tickets were actually created or removed by the host snapshot.
