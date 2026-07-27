@@ -23768,6 +23768,7 @@ func _build_soda_station() -> void:
 	_add_soda_spout_marker_only(root, true)
 	_add_soda_spout_marker_only(root, false)
 	_sync_soda_spout_to_flavor()
+	_add_missing_soda_dispense_clips()
 	_rebuild_soda_tank_visuals()
 
 	## Park + fill seat on the drip-grate top (not tip-relative mid-air).
@@ -24373,6 +24374,7 @@ func _setup_soda_dispense_clips(visual: Node3D) -> void:
 			"rest_pos": rest_pos,
 			"rest_rot": rest_rot,
 		})
+	_add_missing_soda_dispense_clips()
 
 
 func _collect_soda_stick_roots(n: Node, out: Array) -> void:
@@ -24382,6 +24384,68 @@ func _collect_soda_stick_roots(n: Node, out: Array) -> void:
 		return
 	for c in n.get_children():
 		_collect_soda_stick_roots(c, out)
+
+
+func _add_missing_soda_dispense_clips() -> void:
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	for fid in _soda_station_tip_ids():
+		var tip := _soda_tip_for_station(fid)
+		if tip == null:
+			continue
+		var tip_xz := Vector2(tip.global_position.x, tip.global_position.z)
+		var found := false
+		for clip in soda_dispense_clips:
+			var n: Node3D = clip.get("node")
+			if n == null or not is_instance_valid(n):
+				continue
+			var gp := n.global_position
+			if Vector2(gp.x, gp.z).distance_to(tip_xz) <= 0.075:
+				found = true
+				break
+		if found:
+			continue
+		var lever := _make_soda_dispense_clip(fid, tip.position)
+		soda_root.add_child(lever)
+		var rest_pos := lever.position
+		var rest_rot := lever.rotation_degrees
+		soda_dispense_clips.append({
+			"node": lever,
+			"rest_pos": rest_pos,
+			"rest_rot": rest_rot,
+		})
+
+
+func _make_soda_dispense_clip(fid: String, tip_local: Vector3) -> Node3D:
+	var lever := Node3D.new()
+	lever.name = "AutoStick_%s" % fid
+	lever.position = tip_local + Vector3(0.0, -0.032, 0.034)
+	lever.rotation_degrees = Vector3(SODA_CLIP_REST_TILT_X, 0.0, 0.0)
+	var mat := _soda_body_material_for("Stick1")
+	var rod := MeshInstance3D.new()
+	rod.name = "Rod"
+	var rod_mesh := CylinderMesh.new()
+	rod_mesh.top_radius = 0.0065
+	rod_mesh.bottom_radius = 0.0075
+	rod_mesh.height = 0.118
+	rod.mesh = rod_mesh
+	rod.position = Vector3(0.0, -0.058, 0.0)
+	rod.rotation_degrees = Vector3(0.0, 0.0, 7.0)
+	rod.material_override = mat
+	rod.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	lever.add_child(rod)
+	var foot := MeshInstance3D.new()
+	foot.name = "Foot"
+	var foot_mesh := SphereMesh.new()
+	foot_mesh.radius = 0.014
+	foot_mesh.height = 0.018
+	foot.mesh = foot_mesh
+	foot.position = Vector3(0.008, -0.122, 0.0)
+	foot.scale = Vector3(0.85, 0.55, 0.85)
+	foot.material_override = mat
+	foot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	lever.add_child(foot)
+	return lever
 
 
 func _update_soda_dispense_clips(delta: float, pouring_soda: bool, pouring_ice: bool) -> void:
