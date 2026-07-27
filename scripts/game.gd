@@ -958,6 +958,16 @@ var soda_flavor_areas: Dictionary = {} ## flavor id -> Area3D
 var soda_flavor_mats: Dictionary = {} ## flavor id / pad_* -> Material (tank ShaderMaterial or pad StandardMaterial3D)
 var soda_flavor_pads: Dictionary = {} ## flavor id -> MeshInstance3D (press-in buttons)
 var soda_flavor_labels: Dictionary = {} ## flavor id -> Label3D
+var soda_slot_mode: bool = false
+var soda_slot_root: Node3D = null
+var soda_slot_reel_labels: Array[Label3D] = []
+var soda_slot_reel_panels: Array[MeshInstance3D] = []
+var soda_slot_spin_label: Label3D = null
+var soda_slot_reels: Array[String] = ["7", "BAR", "ICE"]
+var soda_slot_spin_t: float = 0.0
+var soda_slot_tick_t: float = 0.0
+const SODA_SLOT_SYMBOLS: Array[String] = ["7", "BAR", "ICE", "POP", "BUN", "HOT"]
+const SODA_SLOT_SPIN_DUR := 0.95
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
 var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
 var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
@@ -2978,6 +2988,7 @@ func _process(delta: float) -> void:
 	_update_oil_slicks(delta)
 	_update_soda_slicks(delta)
 	_update_soda_char_spots(delta)
+	_update_soda_slot_machine(delta)
 	_update_ice_melt_water_spots(delta)
 	_update_melting_cups(delta)
 	_update_melting_icecreams(delta)
@@ -4070,6 +4081,13 @@ func _handle_keyboard_cook_key(event: InputEventKey) -> bool:
 			elif not is_down and _kb_o_down:
 				_kb_o_down = false
 				_kb_stop_soda_pour()
+			else:
+				return false
+			get_viewport().set_input_as_handled()
+			return true
+		KEY_V:
+			if is_down and not event.echo:
+				_toggle_soda_slot_machine()
 			else:
 				return false
 			get_viewport().set_input_as_handled()
@@ -22754,6 +22772,14 @@ func _build_soda_station() -> void:
 	soda_flavor_mats.clear()
 	soda_flavor_pads.clear()
 	soda_flavor_labels.clear()
+	if soda_slot_root != null and is_instance_valid(soda_slot_root):
+		soda_slot_root.queue_free()
+	soda_slot_root = null
+	soda_slot_reel_labels.clear()
+	soda_slot_reel_panels.clear()
+	soda_slot_spin_label = null
+	soda_slot_spin_t = 0.0
+	soda_slot_tick_t = 0.0
 	soda_tank_bubbles.clear()
 	soda_tank_syrup.clear()
 	## Keep fill levels across rebuilds within a shift; reset only on new economy.
@@ -22850,6 +22876,7 @@ func _build_soda_station() -> void:
 	## Flavor clicks sit on the model's brand squares (not floating pads).
 	if visual != null:
 		_setup_soda_brand_click_areas(visual)
+		_setup_soda_slot_machine_overlay()
 		_setup_soda_dispense_clips(visual)
 	else:
 		## Fallback cabinet — keep approximate front-face hitboxes.
@@ -22872,6 +22899,7 @@ func _build_soda_station() -> void:
 			root.add_child(area)
 			soda_flavor_areas[fid] = area
 			i += 1
+		_setup_soda_slot_machine_overlay()
 
 	## Invisible pour tips under model nozzles (1–3 soda by flavor, 4 = ice).
 	_add_soda_spout_marker_only(root, true)
@@ -23070,6 +23098,84 @@ func _setup_soda_brand_click_areas(visual: Node3D) -> void:
 		shape.shape = box
 		area.add_child(shape)
 		soda_flavor_areas[fid] = area
+
+
+func _setup_soda_slot_machine_overlay() -> void:
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	if soda_slot_root != null and is_instance_valid(soda_slot_root):
+		soda_slot_root.queue_free()
+	soda_slot_root = Node3D.new()
+	soda_slot_root.name = "SodaSlotMachineOverlay"
+	soda_root.add_child(soda_slot_root)
+	soda_slot_reel_labels.clear()
+	soda_slot_reel_panels.clear()
+	soda_slot_spin_label = null
+	var reel_ids: Array[String] = ["cola", "lemon_lime", "orange"]
+	for i in reel_ids.size():
+		var fid := reel_ids[i]
+		var area: Area3D = soda_flavor_areas.get(fid, null)
+		if area == null or not is_instance_valid(area):
+			continue
+		var panel := _make_soda_slot_panel(Color(0.04, 0.05, 0.09), Color(0.95, 0.78, 0.20))
+		soda_slot_root.add_child(panel)
+		_place_soda_slot_node_on_area(panel, area, 0.016)
+		soda_slot_reel_panels.append(panel)
+		var lab := _make_soda_slot_label(str(soda_slot_reels[i]), 28, Color(1.0, 0.93, 0.45, 1.0))
+		soda_slot_root.add_child(lab)
+		_place_soda_slot_node_on_area(lab, area, 0.028)
+		soda_slot_reel_labels.append(lab)
+	var spin_area: Area3D = soda_flavor_areas.get("ice", null)
+	if spin_area != null and is_instance_valid(spin_area):
+		var spin_panel := _make_soda_slot_panel(Color(0.12, 0.02, 0.03), Color(1.0, 0.18, 0.10))
+		soda_slot_root.add_child(spin_panel)
+		_place_soda_slot_node_on_area(spin_panel, spin_area, 0.016)
+		soda_slot_spin_label = _make_soda_slot_label("SPIN", 20, Color(1.0, 0.95, 0.88, 1.0))
+		soda_slot_root.add_child(soda_slot_spin_label)
+		_place_soda_slot_node_on_area(soda_slot_spin_label, spin_area, 0.030)
+	soda_slot_root.visible = soda_slot_mode
+
+
+func _make_soda_slot_panel(bg: Color, glow: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = "SlotReelPanel"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.095, 0.108) * SODA_FOUNTAIN_SCALE
+	mi.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(bg.r, bg.g, bg.b, 0.94)
+	mat.emission_enabled = true
+	mat.emission = glow
+	mat.emission_energy_multiplier = 0.32
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.render_priority = 16
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
+func _make_soda_slot_label(txt: String, size: int, col: Color) -> Label3D:
+	var lab := Label3D.new()
+	lab.name = "SlotLabel"
+	lab.text = txt
+	lab.font_size = size
+	lab.modulate = col
+	lab.outline_modulate = Color(0.02, 0.01, 0.0, 0.95)
+	lab.outline_size = 6
+	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lab.no_depth_test = true
+	return lab
+
+
+func _place_soda_slot_node_on_area(node: Node3D, area: Area3D, out: float) -> void:
+	var front := area.global_transform.basis.z.normalized()
+	if front.length_squared() <= 0.0001:
+		front = Vector3(0.0, 0.0, 1.0)
+	node.global_position = area.global_position + front * out
+	node.global_rotation = area.global_rotation
 
 
 func _collect_soda_brand_panels(n: Node, xf: Transform3D, out: Array) -> void:
@@ -28720,6 +28826,9 @@ func _try_soda_flavor_click(screen_pos: Vector2) -> bool:
 
 
 func _set_soda_flavor(fid: String) -> void:
+	if soda_slot_mode and fid == "ice":
+		_start_soda_slot_spin()
+		return
 	if fid == "ice":
 		## Rightmost brand square — remind the cook which nozzle is ice.
 		if SODA_FLAVORS.has(soda_selected_flavor):
@@ -28743,6 +28852,89 @@ func _set_soda_flavor(fid: String) -> void:
 	_flash("Flavor: %s — tap a brand to switch" % str(SODA_FLAVOR_LABELS.get(fid, fid)), Color("FFE082"))
 	if mp_enabled and not _mp_applying:
 		mp_soda_flavor.rpc(fid)
+
+
+func _toggle_soda_slot_machine() -> void:
+	soda_slot_mode = not soda_slot_mode
+	if soda_slot_root == null or not is_instance_valid(soda_slot_root):
+		_setup_soda_slot_machine_overlay()
+	if soda_slot_root != null and is_instance_valid(soda_slot_root):
+		soda_slot_root.visible = soda_slot_mode
+	if game_audio:
+		game_audio.play_click()
+	_flash("SODA SLOTS — tap SPIN" if soda_slot_mode else "Soda fountain mode", Color("FFD54F"))
+
+
+func _start_soda_slot_spin() -> void:
+	if not soda_slot_mode or soda_slot_spin_t > 0.0:
+		return
+	soda_slot_spin_t = SODA_SLOT_SPIN_DUR
+	soda_slot_tick_t = 0.0
+	if game_audio:
+		if game_audio.has_method("play_scale_jingle"):
+			game_audio.play_scale_jingle()
+		if game_audio.has_method("play_ice_tink"):
+			game_audio.play_ice_tink()
+		game_audio.play_click()
+	_flash("Spin!", Color("FFD54F"))
+
+
+func _update_soda_slot_machine(delta: float) -> void:
+	if soda_slot_root == null or not is_instance_valid(soda_slot_root):
+		return
+	soda_slot_root.visible = soda_slot_mode
+	if not soda_slot_mode:
+		return
+	if soda_slot_spin_t <= 0.0:
+		return
+	soda_slot_spin_t = maxf(0.0, soda_slot_spin_t - delta)
+	soda_slot_tick_t -= delta
+	if soda_slot_tick_t <= 0.0:
+		soda_slot_tick_t = 0.055
+		for i in soda_slot_reel_labels.size():
+			var lab := soda_slot_reel_labels[i]
+			if lab == null or not is_instance_valid(lab):
+				continue
+			var sym := str(SODA_SLOT_SYMBOLS.pick_random())
+			lab.text = sym
+			if i < soda_slot_reels.size():
+				soda_slot_reels[i] = sym
+		if game_audio and game_audio.has_method("play_ice_tink") and randf() < 0.45:
+			game_audio.play_ice_tink()
+	if soda_slot_spin_t <= 0.0:
+		_finish_soda_slot_spin()
+
+
+func _finish_soda_slot_spin() -> void:
+	for i in range(mini(soda_slot_reel_labels.size(), 3)):
+		var sym := str(SODA_SLOT_SYMBOLS.pick_random())
+		## Quick version: small chance of a match so the ice jackpot is easy to see while testing.
+		if randf() < 0.18:
+			sym = str(soda_slot_reels[0])
+		soda_slot_reels[i] = sym
+		var lab := soda_slot_reel_labels[i]
+		if lab != null and is_instance_valid(lab):
+			lab.text = sym
+	var win := soda_slot_reels.size() >= 3 and soda_slot_reels[0] == soda_slot_reels[1] and soda_slot_reels[1] == soda_slot_reels[2]
+	if win:
+		_soda_slot_ice_jackpot()
+	else:
+		if game_audio and game_audio.has_method("play_ice_tink"):
+			game_audio.play_ice_tink()
+		_flash("No match", Color("B0BEC5"))
+
+
+func _soda_slot_ice_jackpot() -> void:
+	var tip := ice_spout_marker.global_position if ice_spout_marker != null and is_instance_valid(ice_spout_marker) else soda_root.global_position + Vector3(0.0, 0.45, 0.18)
+	for i in range(34):
+		_spawn_flying_ice_cube(tip + Vector3(randf_range(-0.06, 0.06), randf_range(-0.03, 0.04), randf_range(-0.04, 0.05)), tip, true)
+	if game_audio:
+		if game_audio.has_method("play_scale_jingle"):
+			game_audio.play_scale_jingle()
+		if game_audio.has_method("play_ice_tink"):
+			for j in range(4):
+				game_audio.play_ice_tink()
+	_flash("JACKPOT ICE!", Color("80DEEA"))
 
 
 func _refresh_soda_flavor_lights_ice_focus(ice_on: bool) -> void:
