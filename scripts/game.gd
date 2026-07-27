@@ -962,8 +962,12 @@ var soda_slot_mode: bool = false
 var soda_slot_reels: Array[String] = ["tomato", "cheese", "bun"]
 var soda_slot_symbol_mats: Dictionary = {}
 var soda_slot_spin_mat: StandardMaterial3D = null
+var soda_slot_bulb_root: Node3D = null
+var soda_slot_bulb_mats: Array[StandardMaterial3D] = []
+var soda_slot_spin_label: Label3D = null
 var soda_slot_spin_t: float = 0.0
 var soda_slot_tick_t: float = 0.0
+var soda_slot_pulse_t: float = 0.0
 const SODA_SLOT_SYMBOLS: Array[String] = ["tomato", "cheese", "bun", "pickle", "bacon", "logo"]
 const SODA_SLOT_SYMBOL_TEXTURES := {
 	"tomato": "res://assets/ingredients/tomato.png",
@@ -974,6 +978,9 @@ const SODA_SLOT_SYMBOL_TEXTURES := {
 	"logo": "res://assets/decal/burger_pals_logo.png",
 }
 const SODA_SLOT_SPIN_DUR := 0.95
+var slot_camera_shake_t: float = 0.0
+var slot_camera_shake_total: float = 0.0
+var slot_camera_base_pos := Vector3(0.0, 1.65, -1.62)
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
 var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
 var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
@@ -2995,6 +3002,7 @@ func _process(delta: float) -> void:
 	_update_soda_slicks(delta)
 	_update_soda_char_spots(delta)
 	_update_soda_slot_machine(delta)
+	_update_slot_camera_shake(delta)
 	_update_ice_melt_water_spots(delta)
 	_update_melting_cups(delta)
 	_update_melting_icecreams(delta)
@@ -4836,7 +4844,8 @@ func _end_day() -> void:
 # --- 3D world: inside truck, looking out ------------------------------------
 
 func _build_3d_world() -> void:
-	camera.position = Vector3(0.0, 1.65, -1.62)
+	slot_camera_base_pos = Vector3(0.0, 1.65, -1.62)
+	camera.position = slot_camera_base_pos
 	camera.look_at(Vector3(0.0, 1.32, 0.55), Vector3.UP)
 	camera.fov = 58.0
 
@@ -22783,8 +22792,14 @@ func _build_soda_station() -> void:
 	soda_flavor_labels.clear()
 	soda_slot_symbol_mats.clear()
 	soda_slot_spin_mat = null
+	if soda_slot_bulb_root != null and is_instance_valid(soda_slot_bulb_root):
+		soda_slot_bulb_root.queue_free()
+	soda_slot_bulb_root = null
+	soda_slot_bulb_mats.clear()
+	soda_slot_spin_label = null
 	soda_slot_spin_t = 0.0
 	soda_slot_tick_t = 0.0
+	soda_slot_pulse_t = 0.0
 	soda_tank_bubbles.clear()
 	soda_tank_syrup.clear()
 	## Keep fill levels across rebuilds within a shift; reset only on new economy.
@@ -23116,6 +23131,8 @@ func _soda_slot_symbol_material(sym: String) -> StandardMaterial3D:
 	mat.emission_energy_multiplier = 0.75
 	mat.albedo_color = Color.WHITE
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.uv1_scale = Vector3(0.76, 0.76, 1.0)
+	mat.uv1_offset = Vector3(0.12, 0.12, 0.0)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.no_depth_test = false
 	mat.render_priority = 14
@@ -23146,7 +23163,83 @@ func _soda_slot_spin_material() -> StandardMaterial3D:
 	return mat
 
 
+func _ensure_soda_slot_bulbs() -> void:
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	if soda_slot_bulb_root != null and is_instance_valid(soda_slot_bulb_root):
+		return
+	soda_slot_bulb_root = Node3D.new()
+	soda_slot_bulb_root.name = "SlotBulbs"
+	soda_root.add_child(soda_slot_bulb_root)
+	soda_slot_bulb_mats.clear()
+	var ids: Array[String] = ["cola", "lemon_lime", "orange", "ice"]
+	for fid in ids:
+		var area: Area3D = soda_flavor_areas.get(fid, null)
+		if area == null or not is_instance_valid(area):
+			continue
+		for side in [-1.0, 1.0]:
+			var bulb := MeshInstance3D.new()
+			bulb.name = "SlotBulb"
+			var sph := SphereMesh.new()
+			sph.radius = 0.010
+			sph.height = 0.020
+			bulb.mesh = sph
+			var mat := StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.emission_enabled = true
+			mat.emission = Color(1.0, 0.72, 0.16)
+			mat.emission_energy_multiplier = 1.2
+			mat.albedo_color = Color(1.0, 0.72, 0.16)
+			bulb.material_override = mat
+			bulb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			soda_slot_bulb_root.add_child(bulb)
+			var right := area.global_transform.basis.x.normalized()
+			var up := area.global_transform.basis.y.normalized()
+			var front := area.global_transform.basis.z.normalized()
+			bulb.global_position = area.global_position + right * side * 0.055 + up * 0.060 + front * 0.025
+			soda_slot_bulb_mats.append(mat)
+	var spin_area: Area3D = soda_flavor_areas.get("ice", null)
+	if spin_area != null and is_instance_valid(spin_area):
+		soda_slot_spin_label = Label3D.new()
+		soda_slot_spin_label.name = "SlotSpinLabel"
+		soda_slot_spin_label.text = "SPIN"
+		soda_slot_spin_label.font_size = 18
+		soda_slot_spin_label.modulate = Color(1.0, 0.94, 0.70, 1.0)
+		soda_slot_spin_label.outline_modulate = Color(0.25, 0.0, 0.0, 0.95)
+		soda_slot_spin_label.outline_size = 5
+		soda_slot_spin_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		soda_slot_spin_label.no_depth_test = true
+		soda_slot_bulb_root.add_child(soda_slot_spin_label)
+		soda_slot_spin_label.global_position = spin_area.global_position + spin_area.global_transform.basis.z.normalized() * 0.036
+
+
+func _set_soda_slot_bulbs_visible(on: bool) -> void:
+	if on:
+		_ensure_soda_slot_bulbs()
+	if soda_slot_bulb_root != null and is_instance_valid(soda_slot_bulb_root):
+		soda_slot_bulb_root.visible = on
+
+
+func _update_soda_slot_pulse(delta: float) -> void:
+	soda_slot_pulse_t += delta
+	var spin_pulse := 0.72 + 0.28 * sin(soda_slot_pulse_t * TAU * 1.8)
+	if soda_slot_spin_mat != null:
+		soda_slot_spin_mat.emission = Color(1.0, 0.12 + spin_pulse * 0.18, 0.02)
+		soda_slot_spin_mat.emission_energy_multiplier = 1.15 + spin_pulse * 1.35
+		soda_slot_spin_mat.albedo_color = Color(0.92 + spin_pulse * 0.08, 0.04 + spin_pulse * 0.18, 0.02)
+	if soda_slot_spin_label != null and is_instance_valid(soda_slot_spin_label):
+		soda_slot_spin_label.modulate = Color(1.0, 0.82 + spin_pulse * 0.18, 0.42 + spin_pulse * 0.25, 1.0)
+	for i in range(soda_slot_bulb_mats.size()):
+		var mat := soda_slot_bulb_mats[i]
+		if mat == null:
+			continue
+		var bulb_pulse := 0.55 + 0.45 * sin(soda_slot_pulse_t * TAU * 2.6 + float(i) * 0.72)
+		mat.emission_energy_multiplier = 0.85 + bulb_pulse * 1.65
+		mat.albedo_color = Color(1.0, 0.52 + bulb_pulse * 0.28, 0.10 + bulb_pulse * 0.22)
+
+
 func _refresh_soda_slot_machine_visuals() -> void:
+	_set_soda_slot_bulbs_visible(soda_slot_mode)
 	var reel_ids: Array[String] = ["cola", "lemon_lime", "orange"]
 	for i in reel_ids.size():
 		var fid := reel_ids[i]
@@ -28870,6 +28963,7 @@ func _start_soda_slot_spin() -> void:
 func _update_soda_slot_machine(delta: float) -> void:
 	if not soda_slot_mode:
 		return
+	_update_soda_slot_pulse(delta)
 	if soda_slot_spin_t <= 0.0:
 		return
 	soda_slot_spin_t = maxf(0.0, soda_slot_spin_t - delta)
@@ -28905,15 +28999,86 @@ func _finish_soda_slot_spin() -> void:
 
 func _soda_slot_ice_jackpot() -> void:
 	var tip := ice_spout_marker.global_position if ice_spout_marker != null and is_instance_valid(ice_spout_marker) else soda_root.global_position + Vector3(0.0, 0.45, 0.18)
-	for i in range(34):
+	for i in range(260):
 		_spawn_flying_ice_cube(tip + Vector3(randf_range(-0.06, 0.06), randf_range(-0.03, 0.04), randf_range(-0.04, 0.05)), tip, true)
+	_soda_slot_soda_jackpot_burst(tip)
+	_start_slot_camera_shake(2.0)
 	if game_audio:
 		if game_audio.has_method("play_scale_jingle"):
 			game_audio.play_scale_jingle()
 		if game_audio.has_method("play_ice_tink"):
 			for j in range(4):
 				game_audio.play_ice_tink()
-	_flash("JACKPOT ICE!", Color("80DEEA"))
+	_flash("Great job!", Color("FFD54F"))
+
+
+func _soda_slot_soda_jackpot_burst(tip: Vector3) -> void:
+	if world == null:
+		return
+	for fid in SODA_FLAVORS:
+		var col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.35, 0.12, 0.08))
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(col.r, col.g, col.b, 0.78)
+		mat.emission_enabled = true
+		mat.emission = col
+		mat.emission_energy_multiplier = 0.55
+		for i in range(22):
+			var drop := MeshInstance3D.new()
+			drop.name = "SlotSodaShot"
+			var sph := SphereMesh.new()
+			sph.radius = randf_range(0.010, 0.018)
+			sph.height = sph.radius * 2.0
+			drop.mesh = sph
+			drop.material_override = mat
+			drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			world.add_child(drop)
+			var start := tip + Vector3(randf_range(-0.05, 0.05), randf_range(-0.02, 0.06), randf_range(-0.04, 0.05))
+			var end := Vector3(
+				GRILL_CENTER_X + randf_range(-GRILL_WIDTH * 0.42, GRILL_WIDTH * 0.42),
+				GRILL_SURFACE_Y + OIL_SIT_Y + 0.010,
+				GRILL_SURFACE_Z + randf_range(-GRILL_DEPTH * 0.38, GRILL_DEPTH * 0.34)
+			)
+			drop.global_position = start
+			var mid := Vector3(
+				lerpf(start.x, end.x, 0.45) + randf_range(-0.10, 0.10),
+				maxf(start.y, end.y) + randf_range(0.18, 0.36),
+				lerpf(start.z, end.z, 0.45) + randf_range(-0.08, 0.08)
+			)
+			var tw := create_tween()
+			tw.set_parallel(false)
+			tw.tween_property(drop, "global_position", mid, randf_range(0.12, 0.19)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			tw.tween_property(drop, "global_position", end, randf_range(0.22, 0.34)).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			tw.tween_callback(func() -> void:
+				if is_instance_valid(drop):
+					drop.queue_free()
+				_spawn_soda_slick(end, randf_range(0.035, 0.065), fid)
+			)
+
+
+func _start_slot_camera_shake(duration: float = 2.0) -> void:
+	slot_camera_shake_t = maxf(slot_camera_shake_t, duration)
+	slot_camera_shake_total = maxf(slot_camera_shake_total, duration)
+
+
+func _update_slot_camera_shake(delta: float) -> void:
+	if camera == null or not is_instance_valid(camera):
+		return
+	if slot_camera_shake_t <= 0.0:
+		if camera.position.distance_to(slot_camera_base_pos) > 0.0001:
+			camera.position = camera.position.lerp(slot_camera_base_pos, clampf(delta * 10.0, 0.0, 1.0))
+		return
+	slot_camera_shake_t = maxf(0.0, slot_camera_shake_t - delta)
+	var k := slot_camera_shake_t / maxf(slot_camera_shake_total, 0.001)
+	var amp := 0.024 * k
+	camera.position = slot_camera_base_pos + Vector3(
+		randf_range(-amp, amp),
+		randf_range(-amp * 0.55, amp * 0.55),
+		0.0
+	)
+	if slot_camera_shake_t <= 0.0:
+		camera.position = slot_camera_base_pos
 
 
 func _refresh_soda_flavor_lights_ice_focus(ice_on: bool) -> void:
