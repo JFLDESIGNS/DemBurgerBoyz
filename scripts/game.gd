@@ -1786,11 +1786,11 @@ var soda_tray_spacing := 0.20
 var soda_tray_magnet_radius := 0.26
 var soda_tray_release_radius := 0.34
 var soda_tray_magnet_pull := 0.16
-var soda_soft_magnet_radius := 0.28
-var soda_soft_acquire := 0.20
-var soda_soft_release := 0.11
-var soda_soft_tight := 0.035
-var soda_soft_pull := 0.58
+var soda_soft_magnet_radius := 0.38
+var soda_soft_acquire := 0.30
+var soda_soft_release := 0.22
+var soda_soft_tight := 0.055
+var soda_soft_pull := 0.72
 var soda_soft_unlock_grace := 0.55
 var soda_soft_debug := false
 var soda_fill_follow_rate := 28.0
@@ -24517,7 +24517,7 @@ func _update_soda_station_focus_for_cup() -> void:
 	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
 		_set_soda_active_station("")
 		return
-	var near := _nearest_soda_station_for_pos(cup_root.global_position, soda_soft_magnet_radius * 1.35)
+	var near := _nearest_soda_station_for_pos(cup_root.global_position, soda_soft_magnet_radius * 1.90)
 	_set_soda_active_station(str(near.get("id", "")))
 
 
@@ -30015,12 +30015,12 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 
 
 func _refresh_soda_flavor_lights() -> void:
+	var lit_id := soda_active_station if soda_active_station != "" else soda_selected_flavor
 	for key in soda_flavor_mats.keys():
 		var mat = soda_flavor_mats[key]
 		if mat == null:
 			continue
 		var fid := str(key)
-		var lit_id := soda_active_station if soda_active_station != "" else soda_selected_flavor
 		var selected := fid == lit_id or fid == ("pad_%s" % lit_id)
 		if mat is ShaderMaterial:
 			## Jug syrup — brighter warm core when that flavor is armed.
@@ -30031,25 +30031,25 @@ func _refresh_soda_flavor_lights() -> void:
 			sm2.emission_enabled = true
 			## Brand logo panels: keep art visible, pulse a little when armed.
 			if sm2.albedo_texture != null:
-				sm2.emission = Color(1.0, 0.96, 0.78) if selected else Color(0.12, 0.12, 0.12)
-				sm2.emission_energy_multiplier = 1.65 if selected else 0.18
-				sm2.albedo_color = Color.WHITE
+				sm2.emission = Color(1.0, 0.98, 0.72) if selected else Color(0.18, 0.16, 0.10)
+				sm2.emission_energy_multiplier = 3.4 if selected else 0.35
+				sm2.albedo_color = Color(1.0, 1.0, 0.88, 1.0) if selected else Color.WHITE
 			else:
-				sm2.emission_energy_multiplier = 1.85 if selected else 0.0
+				sm2.emission_energy_multiplier = 4.2 if selected else 0.18
 				var col2: Color = SODA_FLAVOR_COLORS.get(fid.trim_prefix("pad_"), Color(0.4, 0.2, 0.15))
-				col2.a = 0.54 if selected else 0.0
+				col2.a = 0.92 if selected else 0.36
 				sm2.albedo_color = col2
-				sm2.emission = Color(lerpf(col2.r, 1.0, 0.35), lerpf(col2.g, 0.95, 0.25), lerpf(col2.b, 0.75, 0.18))
+				sm2.emission = Color(lerpf(col2.r, 1.0, 0.55), lerpf(col2.g, 0.98, 0.42), lerpf(col2.b, 0.82, 0.32))
 	## Selected jug label pops a bit.
 	for fid2 in soda_flavor_labels.keys():
 		var lab: Label3D = soda_flavor_labels[fid2] as Label3D
 		if lab == null or not is_instance_valid(lab):
 			continue
-		var lit_id2 := soda_active_station if soda_active_station != "" else soda_selected_flavor
-		var armed: bool = str(fid2) == lit_id2
-		lab.modulate = Color(1.0, 1.0, 0.75, 1.0) if armed else Color(1, 1, 1, 0.85)
-		lab.outline_size = 4 if armed else 3
-		lab.font_size = 17 if armed else 15
+		var armed: bool = str(fid2) == lit_id
+		lab.visible = true
+		lab.modulate = Color(1.0, 1.0, 0.55, 1.0) if armed else Color(1, 1, 1, 0.95)
+		lab.outline_size = 6 if armed else 4
+		lab.font_size = 18 if armed else 16
 	## Soda nozzle metal tracks the selected flavor color (legacy procedural spout).
 	if soda_spout_mat != null:
 		var fc: Color = SODA_FLAVOR_COLORS.get(soda_selected_flavor, Color(0.85, 0.22, 0.18))
@@ -30614,12 +30614,13 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
 		## Hard break if the hand is past the leash — don't keep tugging.
-		if locked_d > soda_soft_release:
+		var release_dist := maxf(soda_soft_release, soda_soft_magnet_radius * 0.82)
+		if locked_d > release_dist:
 			_cup_spout_lock = null
 			_cup_spout_unlock_grace = soda_soft_unlock_grace
 			return hit
 		## Center is firm; edge pull fades hard so a short drag frees the cup.
-		var tight := clampf(1.0 - locked_d / soda_soft_release, 0.0, 1.0)
+		var tight := clampf(1.0 - locked_d / release_dist, 0.0, 1.0)
 		var pull_xz := lerpf(0.12, soda_soft_pull, tight * tight)
 		if locked_d <= soda_soft_tight:
 			pull_xz = soda_soft_pull
@@ -30641,7 +30642,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 			best_target = tpos
 	if best_node == null:
 		return hit
-	if best_d <= soda_soft_acquire:
+	if best_d <= maxf(soda_soft_acquire, soda_soft_magnet_radius * 0.70):
 		_cup_spout_lock = best_node
 	var pull := clampf(1.0 - best_d / soda_soft_magnet_radius, 0.0, 1.0)
 	pull = pull * pull
@@ -31393,7 +31394,10 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			station_id = fid
 			station_tip = tip_pos
 	if station_id == "":
-		var near := _nearest_soda_station_for_pos(cup_root.global_position, soda_soft_magnet_radius * 1.45)
+		var zone_radius := maxf(soda_soft_magnet_radius * 1.90, soda_soft_acquire * 2.25)
+		var near := _nearest_soda_station_for_pos(rim, zone_radius)
+		if str(near.get("id", "")) == "":
+			near = _nearest_soda_station_for_pos(cup_root.global_position, zone_radius)
 		station_id = str(near.get("id", ""))
 		var near_tip: Marker3D = near.get("tip", null)
 		if station_id != "" and near_tip != null and is_instance_valid(near_tip):
