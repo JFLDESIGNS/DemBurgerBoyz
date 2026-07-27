@@ -958,6 +958,7 @@ var soda_flavor_areas: Dictionary = {} ## flavor id -> Area3D
 var soda_flavor_mats: Dictionary = {} ## flavor id / pad_* -> Material (tank ShaderMaterial or pad StandardMaterial3D)
 var soda_flavor_pads: Dictionary = {} ## flavor id -> MeshInstance3D (press-in buttons)
 var soda_flavor_labels: Dictionary = {} ## flavor id -> Label3D
+var soda_flavor_panel_root: Node3D = null
 var soda_slot_mode: bool = false
 var soda_slot_reels: Array[String] = ["tomato", "cheese", "bun"]
 var soda_slot_symbol_mats: Dictionary = {}
@@ -2097,6 +2098,7 @@ var _gamepad_cursor_active: bool = false
 var _gamepad_prev_left_click: bool = false
 var _gamepad_prev_right_click: bool = false
 var _gamepad_prev_middle_click: bool = false
+var _gamepad_mouse_button_mask: int = 0
 var _gamepad_prev_radio: bool = false
 var _gamepad_prev_radio_prev: bool = false
 var _gamepad_prev_radio_next: bool = false
@@ -2532,11 +2534,25 @@ func _send_gamepad_mouse_button(button_index: int, pressed: bool) -> void:
 	var vp := get_viewport()
 	if vp == null:
 		return
+	var mask := 0
+	match button_index:
+		MOUSE_BUTTON_LEFT:
+			mask = MOUSE_BUTTON_MASK_LEFT
+		MOUSE_BUTTON_RIGHT:
+			mask = MOUSE_BUTTON_MASK_RIGHT
+		MOUSE_BUTTON_MIDDLE:
+			mask = MOUSE_BUTTON_MASK_MIDDLE
+	if mask != 0:
+		if pressed:
+			_gamepad_mouse_button_mask |= mask
+		else:
+			_gamepad_mouse_button_mask &= ~mask
 	var ev := InputEventMouseButton.new()
 	ev.button_index = button_index
 	ev.pressed = pressed
 	ev.position = vp.get_mouse_position()
 	ev.global_position = ev.position
+	ev.button_mask = _gamepad_mouse_button_mask
 	ev.factor = 1.0
 	Input.parse_input_event(ev)
 
@@ -2556,6 +2572,7 @@ func _update_gamepad_cursor(delta: float) -> void:
 		_gamepad_prev_left_click = false
 		_gamepad_prev_right_click = false
 		_gamepad_prev_middle_click = false
+		_gamepad_mouse_button_mask = 0
 		return
 	var move := _joy_axis_pair(JOY_AXIS_LEFT_X, JOY_AXIS_LEFT_Y)
 	var look := _joy_axis_pair(JOY_AXIS_RIGHT_X, JOY_AXIS_RIGHT_Y)
@@ -2572,9 +2589,10 @@ func _update_gamepad_cursor(delta: float) -> void:
 		motion.global_position = mouse
 		motion.relative = cursor_move * GAMEPAD_CURSOR_SPEED * delta
 		motion.velocity = cursor_move * GAMEPAD_CURSOR_SPEED
+		motion.button_mask = _gamepad_mouse_button_mask
 		Input.parse_input_event(motion)
-	var left_click := _joy_pressed(JOY_BUTTON_A) or Input.get_action_strength("ui_accept") > 0.5
-	var right_click := _joy_pressed(JOY_BUTTON_B) or Input.get_action_strength("ui_cancel") > 0.5
+	var left_click := _joy_pressed(JOY_BUTTON_A)
+	var right_click := _joy_pressed(JOY_BUTTON_B)
 	var middle_click := _joy_pressed(JOY_BUTTON_Y)
 	_gamepad_prev_left_click = _update_gamepad_button(MOUSE_BUTTON_LEFT, left_click, _gamepad_prev_left_click)
 	_gamepad_prev_right_click = _update_gamepad_button(MOUSE_BUTTON_RIGHT, right_click, _gamepad_prev_right_click)
@@ -2595,6 +2613,19 @@ func _update_gamepad_cursor(delta: float) -> void:
 			radio.next_channel()
 			_spin_radio_dial(1)
 		_gamepad_prev_radio_next = next_now
+
+
+func _pointer_button_pressed(button_index: int) -> bool:
+	if Input.is_mouse_button_pressed(button_index):
+		return true
+	match button_index:
+		MOUSE_BUTTON_LEFT:
+			return (_gamepad_mouse_button_mask & MOUSE_BUTTON_MASK_LEFT) != 0
+		MOUSE_BUTTON_RIGHT:
+			return (_gamepad_mouse_button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0
+		MOUSE_BUTTON_MIDDLE:
+			return (_gamepad_mouse_button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0
+	return false
 
 
 func _update_local_cursor_click(delta: float) -> void:
@@ -4037,7 +4068,7 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 				_strip_did_drag = true
 			_strip_swipe_added.clear()
 		return false
-	if event is InputEventMouseMotion and _strip_swipe_active and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if event is InputEventMouseMotion and _strip_swipe_active and _pointer_button_pressed(MOUSE_BUTTON_LEFT):
 		var mouse2 := _strip_mouse_pos(event)
 		var start_pos: Vector2 = _strip_swipe_added.get("_start", mouse2)
 		var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
@@ -5748,7 +5779,7 @@ func _try_spatula_pull_flip_gesture(mouse: Vector2) -> void:
 	## LMB held on empty steel, drag down (toward cook) until aim leaves the grill.
 	if not spatula_grill_hold or _spatula_pull_flip_done:
 		return
-	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if not _pointer_button_pressed(MOUSE_BUTTON_LEFT):
 		return
 	if _spatula_anim_kind == 3:
 		return
@@ -6847,7 +6878,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	_try_spatula_pull_flip_gesture(mouse)
 	var animating := _spatula_anim_kind > 0
 	var dragging := dragging_patty != null and is_instance_valid(dragging_patty)
-	var grill_hold := spatula_grill_hold and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	var grill_hold := spatula_grill_hold and _pointer_button_pressed(MOUSE_BUTTON_LEFT)
 	if spatula_grill_hold and not grill_hold:
 		## Button released outside our release handler — clear hold state.
 		spatula_grill_hold = false
@@ -21997,7 +22028,7 @@ func _update_tree_shake_hold(delta: float) -> void:
 	if not is_instance_valid(_tree_shake_held):
 		_release_tree_shake_hold()
 		return
-	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if not _pointer_button_pressed(MOUSE_BUTTON_LEFT):
 		_release_tree_shake_hold()
 		return
 	var mouse := get_viewport().get_mouse_position()
@@ -22909,6 +22940,9 @@ func _build_soda_station() -> void:
 	soda_flavor_mats.clear()
 	soda_flavor_pads.clear()
 	soda_flavor_labels.clear()
+	if soda_flavor_panel_root != null and is_instance_valid(soda_flavor_panel_root):
+		soda_flavor_panel_root.queue_free()
+	soda_flavor_panel_root = null
 	soda_slot_symbol_mats.clear()
 	soda_slot_spin_mat = null
 	if soda_slot_bulb_root != null and is_instance_valid(soda_slot_bulb_root):
@@ -23181,6 +23215,8 @@ func _setup_soda_brand_click_areas(visual: Node3D) -> void:
 	## Hitboxes aligned to each Brand square mesh so clicks land on the logos.
 	if soda_root == null:
 		return
+	if _setup_soda_generated_flavor_panels(visual):
+		return
 	var panels: Array = [] ## {x, mi, mat}
 	_collect_soda_brand_panels(visual, Transform3D.IDENTITY, panels)
 	panels.sort_custom(func(a, b): return float(a["x"]) < float(b["x"]))
@@ -23385,6 +23421,9 @@ func _refresh_soda_slot_machine_visuals() -> void:
 		var pad: MeshInstance3D = soda_flavor_pads.get(fid, null)
 		if pad == null or not is_instance_valid(pad):
 			continue
+		var lab: Label3D = soda_flavor_labels.get(fid, null)
+		if lab != null and is_instance_valid(lab):
+			lab.visible = not soda_slot_mode
 		if soda_slot_mode:
 			pad.material_override = _soda_slot_symbol_material(str(soda_slot_reels[i]))
 		else:
@@ -23393,12 +23432,127 @@ func _refresh_soda_slot_machine_visuals() -> void:
 				pad.material_override = mat
 	var spin_pad: MeshInstance3D = soda_flavor_pads.get("ice", null)
 	if spin_pad != null and is_instance_valid(spin_pad):
+		var ice_lab: Label3D = soda_flavor_labels.get("ice", null)
+		if ice_lab != null and is_instance_valid(ice_lab):
+			ice_lab.visible = not soda_slot_mode
 		if soda_slot_mode:
 			spin_pad.material_override = _soda_slot_spin_material()
 		else:
 			var ice_mat = soda_flavor_mats.get("ice", null)
 			if ice_mat != null:
 				spin_pad.material_override = ice_mat
+
+
+func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
+	if soda_root == null:
+		return false
+	var panels: Array = []
+	if visual != null:
+		_collect_soda_brand_panels(visual, Transform3D.IDENTITY, panels)
+	var panel_y := 0.34 * SODA_FOUNTAIN_SCALE
+	var panel_z := 0.178 * SODA_FOUNTAIN_SCALE
+	var panel_w := 0.086 * SODA_FOUNTAIN_SCALE
+	var panel_h := 0.096 * SODA_FOUNTAIN_SCALE
+	if panels.size() > 0:
+		var y_sum := 0.0
+		var z_sum := 0.0
+		var w_sum := 0.0
+		var h_sum := 0.0
+		var count := 0
+		var backing := _make_soda_flavor_panel_backing_mat()
+		for p in panels:
+			var src_mi: MeshInstance3D = p.get("mi")
+			if src_mi == null or not is_instance_valid(src_mi) or src_mi.mesh == null:
+				continue
+			src_mi.material_override = backing
+			var aabb := src_mi.get_aabb()
+			var center_local := soda_root.to_local(src_mi.to_global(aabb.get_center()))
+			y_sum += center_local.y
+			z_sum += center_local.z
+			w_sum += src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(aabb.size.x, 0.0, 0.0)))
+			h_sum += src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(0.0, aabb.size.y, 0.0)))
+			count += 1
+		if count > 0:
+			panel_y = y_sum / float(count)
+			panel_z = z_sum / float(count) + 0.010
+			panel_w = clampf(w_sum / float(count) * 0.92, 0.10, 0.19)
+			panel_h = clampf(h_sum / float(count) * 0.90, 0.10, 0.20)
+	if soda_flavor_panel_root != null and is_instance_valid(soda_flavor_panel_root):
+		soda_flavor_panel_root.queue_free()
+	soda_flavor_panel_root = Node3D.new()
+	soda_flavor_panel_root.name = "FlavorPanels"
+	soda_root.add_child(soda_flavor_panel_root)
+	for fid in SODA_BRAND_FLAVOR_ORDER:
+		var nozzle_local: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+		var panel_pos := _soda_model_local(nozzle_local)
+		panel_pos.y = panel_y
+		panel_pos.z = panel_z
+		var mi := MeshInstance3D.new()
+		mi.name = "FlavorPanel_%s" % fid
+		var quad := QuadMesh.new()
+		quad.size = Vector2(panel_w, panel_h)
+		mi.mesh = quad
+		mi.position = panel_pos
+		mi.material_override = _make_soda_flavor_panel_mat(fid)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		soda_flavor_panel_root.add_child(mi)
+		soda_flavor_mats[fid] = mi.material_override
+		soda_flavor_pads[fid] = mi
+		var lab := Label3D.new()
+		lab.name = "FlavorLabel_%s" % fid
+		lab.text = "ICE" if fid == "ice" else str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper()))
+		lab.font_size = 28
+		lab.pixel_size = 0.00125
+		lab.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.88)
+		lab.outline_size = 3
+		lab.no_depth_test = false
+		lab.position = panel_pos + Vector3(0.0, -panel_h * 0.08, 0.004)
+		soda_flavor_panel_root.add_child(lab)
+		soda_flavor_labels[fid] = lab
+		var area := Area3D.new()
+		area.name = "FlavorArea_%s" % fid
+		area.input_ray_pickable = true
+		area.collision_layer = SODA_FLAVOR_COLLISION_LAYER
+		area.collision_mask = 0
+		area.monitoring = false
+		area.monitorable = true
+		soda_root.add_child(area)
+		area.position = panel_pos + Vector3(0.0, 0.0, 0.012)
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(panel_w * 1.12, panel_h * 1.12, 0.06)
+		shape.shape = box
+		area.add_child(shape)
+		soda_flavor_areas[fid] = area
+	return true
+
+
+func _make_soda_flavor_panel_backing_mat() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "SodaBrandBacking"
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.015, 0.018, 0.022, 1.0)
+	mat.emission_enabled = true
+	mat.emission = Color(0.01, 0.012, 0.016, 1.0)
+	mat.emission_energy_multiplier = 0.2
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+func _make_soda_flavor_panel_mat(fid: String) -> StandardMaterial3D:
+	var col: Color = Color(0.55, 0.75, 0.95) if fid == "ice" else SODA_FLAVOR_COLORS.get(fid, Color(0.4, 0.2, 0.15))
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "SodaPanel_%s" % fid
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = col.darkened(0.20)
+	mat.emission_enabled = true
+	mat.emission = col
+	mat.emission_energy_multiplier = 0.32
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.render_priority = 12
+	return mat
 
 
 func _collect_soda_brand_panels(n: Node, xf: Transform3D, out: Array) -> void:
@@ -36127,7 +36281,7 @@ func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
 			_phone_scroll_drag_pending = false
 			_phone_scroll_dragging = false
 	elif ev is InputEventMouseMotion:
-		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		if not _pointer_button_pressed(MOUSE_BUTTON_LEFT):
 			_phone_scroll_drag_pending = false
 			_phone_scroll_dragging = false
 			return
