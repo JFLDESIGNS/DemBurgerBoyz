@@ -367,6 +367,7 @@ var _spatula_balance_returning: bool = false
 var _spatula_balance_fall_hold_started: bool = false
 var _spatula_balance_return_t: float = 0.0
 var _spatula_balance_return_from := Transform3D.IDENTITY
+var _spatula_balance_return_to := Transform3D.IDENTITY
 var _spatula_balance_last_visible_xform := Transform3D.IDENTITY
 var _spatula_balance_fall_visual_started: bool = false
 var _spatula_balance_fall_visual_xform := Transform3D.IDENTITY
@@ -5045,6 +5046,7 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_fall_hold_started = false
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
+	_spatula_balance_return_to = Transform3D.IDENTITY
 	_spatula_balance_last_visible_xform = Transform3D.IDENTITY
 	_reset_spatula_balance_visual_fall()
 	_spatula_user_roll = 0.0
@@ -5066,6 +5068,7 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_fall_hold_started = false
 	_spatula_balance_return_t = 0.0
 	_spatula_balance_return_from = Transform3D.IDENTITY
+	_spatula_balance_return_to = Transform3D.IDENTITY
 	_spatula_balance_last_visible_xform = Transform3D.IDENTITY
 	_reset_spatula_balance_visual_fall()
 	_spatula_user_roll = 0.0
@@ -5232,6 +5235,7 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float)
 				_spatula_balance_returning = true
 				_spatula_balance_return_t = -SPATULA_BALANCE_IMPACT_RETURN_HOLD
 				_spatula_balance_return_from = xf
+				_spatula_balance_return_to = start_xform
 				_spatula_balance_fall_hold_started = true
 			else:
 				_spatula_balance_fall_visual_vel.y = 0.0
@@ -5250,6 +5254,7 @@ func _update_spatula_balance_visual_fall(start_xform: Transform3D, delta: float)
 func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> void:
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		return
+	var return_target := _spatula_balance_return_to if _spatula_balance_return_to != Transform3D.IDENTITY else target_xform
 	_spatula_balance_return_t = minf(_spatula_balance_return_t + maxf(delta, 0.0), SPATULA_BALANCE_IMPACT_RETURN_DUR)
 	if _spatula_balance_return_t < 0.0:
 		hand_spatula_root.visible = true
@@ -5258,9 +5263,9 @@ func _render_spatula_balance_return(target_xform: Transform3D, delta: float) -> 
 	var ru := clampf(_spatula_balance_return_t / SPATULA_BALANCE_IMPACT_RETURN_DUR, 0.0, 1.0)
 	var ease := ru * ru * (3.0 - 2.0 * ru)
 	var from_q := Quaternion(_spatula_balance_return_from.basis.orthonormalized())
-	var to_q := Quaternion(target_xform.basis.orthonormalized())
+	var to_q := Quaternion(return_target.basis.orthonormalized())
 	var basis := Basis(from_q.slerp(to_q, ease)).orthonormalized()
-	var origin := _spatula_balance_return_from.origin.lerp(target_xform.origin, ease)
+	var origin := _spatula_balance_return_from.origin.lerp(return_target.origin, ease)
 	hand_spatula_root.visible = true
 	hand_spatula_root.global_transform = Transform3D(basis, origin)
 	if ru >= 1.0:
@@ -5298,6 +5303,7 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 					_spatula_balance_return_from = _spatula_balance_ragdoll_body.global_transform
 				else:
 					_spatula_balance_return_from = hand_spatula_root.global_transform if hand_spatula_root != null and is_instance_valid(hand_spatula_root) else Transform3D.IDENTITY
+				_spatula_balance_return_to = Transform3D.IDENTITY
 				_cleanup_spatula_balance_ragdoll()
 		return
 	if _spatula_balance_last_mouse.x == INF:
