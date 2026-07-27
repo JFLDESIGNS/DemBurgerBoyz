@@ -1796,8 +1796,8 @@ var soda_soft_debug := false
 var soda_fill_follow_rate := 28.0
 var soda_fill_max_speed := 4.2
 var soda_tank_visual_scale := 0.68
-var soda_tank_y_offset_in := 5.0
-var soda_tank_z_offset_in := 0.5
+var soda_tank_y_offset_in := 9.0
+var soda_tank_z_offset_in := -1.6
 const CUP_COLLISION_LAYER := 1024
 const CUP_RACK_COLLISION_LAYER := 2048 ## empty CUPS peg pick volume (must not steal cup rays)
 const SODA_FLAVOR_COLLISION_LAYER := 4096
@@ -22984,6 +22984,11 @@ func _load_soda_tuning_settings() -> void:
 		return
 	if not cfg.has_section(SODA_TUNING_CFG_SECTION):
 		return
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "tank_top_clear_v1"):
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_top_clear_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
