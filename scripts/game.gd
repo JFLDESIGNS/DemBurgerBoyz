@@ -301,12 +301,14 @@ const HAND_SPATULA_FLOURISH_LIFT := 0.22 ## ~8.5" peak — flips while rising/fa
 ## Hold LMB + drag screen-down off the grill → spatula flip (replaces old 3-tap).
 const HAND_SPATULA_PULL_FLIP_DY := 44.0 ## Min screen-px down; less pullback to flip.
 const HAND_SPATULA_PULL_FLIP_MAX_DX_RATIO := 0.55 ## Sideways scrape must stay under this vs dy
-const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.018
-const HAND_SPATULA_BALANCE_UNSTABLE := 9.2
+const HAND_SPATULA_BALANCE_MOUSE_CORRECT := 0.034
+const HAND_SPATULA_BALANCE_UNSTABLE := 5.6
 const HAND_SPATULA_BALANCE_DRIFT := 0.0
-const HAND_SPATULA_BALANCE_DAMP := 0.992
-const HAND_SPATULA_BALANCE_MAX_TILT := 70.0
-const HAND_SPATULA_BALANCE_BASE_Y := 0.075
+const HAND_SPATULA_BALANCE_DAMP := 0.965
+const HAND_SPATULA_BALANCE_MAX_TILT := 68.0
+const HAND_SPATULA_BALANCE_MAX_VEL := 3.25
+const HAND_SPATULA_BALANCE_BASE_Y := 0.045
+const HAND_SPATULA_BALANCE_SCREEN_NUDGE := Vector2(0.0, 40.0)
 const HAND_SPATULA_BALANCE_PIVOT_OFFSET := Vector3(0.0, 0.0, -0.305)
 ## Right-click while scooped → burger jumps off, two flips, land or re-catch.
 const SPATULA_JUGGLE_DUR := 1.15
@@ -5028,15 +5030,17 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	var mouse_delta := mouse - _spatula_balance_last_mouse
 	_spatula_balance_last_mouse = mouse
 	var lean := _spatula_balance_tilt
-	var move := Vector2(mouse_delta.x, mouse_delta.y)
+	var move := Vector2(-mouse_delta.x, -mouse_delta.y)
 	if move.length_squared() > 0.01:
 		_spatula_balance_drift_dir = move.normalized()
 		_spatula_balance_vel += move * HAND_SPATULA_BALANCE_MOUSE_CORRECT
-	var lean_gain := 0.25 + lean.length() * 7.0
+	var lean_gain := 0.22 + lean.length() * 3.8
 	_spatula_balance_vel += lean * HAND_SPATULA_BALANCE_UNSTABLE * lean_gain * delta
 	if HAND_SPATULA_BALANCE_DRIFT > 0.0:
 		_spatula_balance_vel += _spatula_balance_drift_dir * HAND_SPATULA_BALANCE_DRIFT * delta
 	_spatula_balance_vel *= pow(HAND_SPATULA_BALANCE_DAMP, delta * 60.0)
+	if _spatula_balance_vel.length() > HAND_SPATULA_BALANCE_MAX_VEL:
+		_spatula_balance_vel = _spatula_balance_vel.normalized() * HAND_SPATULA_BALANCE_MAX_VEL
 	_spatula_balance_tilt += _spatula_balance_vel * delta
 	var max_rad := deg_to_rad(HAND_SPATULA_BALANCE_MAX_TILT)
 	if _spatula_balance_tilt.length() > max_rad:
@@ -6335,11 +6339,8 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			pivot_local = HAND_SPATULA_TIP_OFFSET
 		else:
 			var balance_y := GRILL_SURFACE_Y + HAND_SPATULA_BALANCE_BASE_Y
-			var pivot_target := _grill_plane_from_screen(mouse)
-			if pivot_target != Vector3.ZERO:
-				pivot_target.y = balance_y
-			else:
-				pivot_target = _tool_hold_point_from_screen(mouse, balance_y)
+			var balance_mouse := mouse + HAND_SPATULA_BALANCE_SCREEN_NUDGE
+			var pivot_target := _tool_hold_point_from_screen(balance_mouse, balance_y)
 			if pivot_target == Vector3.ZERO:
 				pivot_target = tip_target
 			pivot_target.y = balance_y
@@ -6475,7 +6476,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	## Scroll-wheel blade roll (±45° / ±90°) on top of anim / hold pose.
 	roll += _spatula_user_roll
 	## Edge yaw from grill X — left CCW, right CW (no side roll).
-	var yaw := _hand_spatula_side_yaw_at(tip_target)
+	var yaw := 0.0 if _spatula_balance_active else _hand_spatula_side_yaw_at(tip_target)
 	hand_spatula_root.rotation_degrees = Vector3(pitch, yaw, roll)
 	## Pivot: tip for taps, blade mid for the flip flourish.
 	var pivot_basis := Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
@@ -14912,7 +14913,7 @@ func _build_wire_brush() -> void:
 
 func _build_season_shaker() -> void:
 	## Seasoning hanging next to the oil bottle on the far-left window beam.
-	shaker_home = Vector3(1.526, 2.0384, 1.12) ## −4" from prior 2.14
+	shaker_home = Vector3(2.0340, 2.0384, 1.12) ## Camera-left away from order tickets.
 	if shaker_root != null and is_instance_valid(shaker_root):
 		shaker_root.queue_free()
 	shaker_root = null
@@ -18342,7 +18343,7 @@ func _clear_melting_cups() -> void:
 
 func _build_oil_bottle() -> void:
 	## Oil bottle hanging from the far-left window beam.
-	oil_home = Vector3(1.166, 2.12, 1.12)
+	oil_home = Vector3(1.6740, 2.12, 1.12)
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
