@@ -30031,15 +30031,15 @@ func _refresh_soda_flavor_lights() -> void:
 			sm2.emission_enabled = true
 			## Brand logo panels: keep art visible, pulse a little when armed.
 			if sm2.albedo_texture != null:
-				sm2.emission = Color(1.0, 1.0, 1.0) if selected else Color(0.12, 0.12, 0.12)
-				sm2.emission_energy_multiplier = 0.55 if selected else 0.18
+				sm2.emission = Color(1.0, 0.96, 0.78) if selected else Color(0.12, 0.12, 0.12)
+				sm2.emission_energy_multiplier = 1.65 if selected else 0.18
 				sm2.albedo_color = Color.WHITE
 			else:
-				sm2.emission_energy_multiplier = 0.55 if selected else 0.0
+				sm2.emission_energy_multiplier = 1.85 if selected else 0.0
 				var col2: Color = SODA_FLAVOR_COLORS.get(fid.trim_prefix("pad_"), Color(0.4, 0.2, 0.15))
-				col2.a = 0.28 if selected else 0.0
+				col2.a = 0.54 if selected else 0.0
 				sm2.albedo_color = col2
-				sm2.emission = Color(col2.r, col2.g, col2.b)
+				sm2.emission = Color(lerpf(col2.r, 1.0, 0.35), lerpf(col2.g, 0.95, 0.25), lerpf(col2.b, 0.75, 0.18))
 	## Selected jug label pops a bit.
 	for fid2 in soda_flavor_labels.keys():
 		var lab: Label3D = soda_flavor_labels[fid2] as Label3D
@@ -31392,6 +31392,12 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			station_d = d
 			station_id = fid
 			station_tip = tip_pos
+	if station_id == "":
+		var near := _nearest_soda_station_for_pos(cup_root.global_position, soda_soft_magnet_radius * 1.45)
+		station_id = str(near.get("id", ""))
+		var near_tip: Marker3D = near.get("tip", null)
+		if station_id != "" and near_tip != null and is_instance_valid(near_tip):
+			station_tip = near_tip.global_position
 	var pouring_soda := false
 	var pouring_ice := false
 	if station_id != "":
