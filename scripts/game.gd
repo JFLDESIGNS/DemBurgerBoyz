@@ -786,6 +786,10 @@ const SPATULA_EDGE_PUSH_EXTRA_MUL := 1.12 ## ±90° gets a little more
 const SPATULA_CUP_PUSH_RADIUS := 0.095
 const SPATULA_CUP_PUSH_SCALE := 2.1
 const SPATULA_CUP_PUSH_MAX := 0.11
+const PATTY_RELEASE_SLIDE_MIN_SPEED := 0.18
+const PATTY_RELEASE_SLIDE_MAX_SPEED := 0.72
+const PATTY_RELEASE_SLIDE_FRICTION := 4.2
+const PATTY_RELEASE_SLIDE_MAX_DIST := 0.135 ## ~5.3 inches of extra glide.
 ## Click-drag to slide patties on the flat-top (legacy / non-spatula path).
 var dragging_patty = null
 var drag_start_mouse := Vector2.ZERO
@@ -795,6 +799,10 @@ var drag_pop_accum: float = 0.0
 var drag_last_xz := Vector2.ZERO
 var drag_last_mouse := Vector2.ZERO
 var drag_vel_screen := Vector2.ZERO ## px/sec while sliding (for flick-to-Build)
+var drag_vel_xz := Vector2.ZERO
+var slide_inertia_patty = null
+var slide_inertia_vel := Vector2.ZERO
+var slide_inertia_left: float = 0.0
 var flicking_patty = null ## mid air toward Build
 var spatula_last_mouse := Vector2.ZERO
 var spatula_vel_screen := Vector2.ZERO ## px/sec while carrying (flick throw)
@@ -2840,6 +2848,8 @@ func _process(delta: float) -> void:
 	_update_grill_surface_light(delta)
 	if dragging_patty != null:
 		_update_patty_drag(delta)
+	if slide_inertia_patty != null:
+		_update_patty_slide_inertia(delta)
 	if cheese_held or _cheese_returning:
 		_update_cheese_ghost(delta)
 	if spatula_patty != null:
@@ -3000,6 +3010,11 @@ func _process(delta: float) -> void:
 		if _mp_drag_accum >= 0.05:
 			_mp_drag_accum = 0.0
 			_mp_send_patty_pose(dragging_patty)
+	if mp_enabled and slide_inertia_patty != null and is_instance_valid(slide_inertia_patty):
+		_mp_drag_accum += delta
+		if _mp_drag_accum >= 0.05:
+			_mp_drag_accum = 0.0
+			_mp_send_patty_pose(slide_inertia_patty)
 	if mp_enabled and spatula_patty != null and is_instance_valid(spatula_patty):
 		if spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id():
 			_mp_send_patty_pose(spatula_patty, true)
@@ -8871,9 +8886,14 @@ func _begin_patty_drag_local(patty: Area3D) -> void:
 	drag_press_sec = Time.get_ticks_msec() * 0.001
 	drag_last_mouse = drag_start_mouse
 	drag_vel_screen = Vector2.ZERO
+	drag_vel_xz = Vector2.ZERO
 	drag_did_move = false
 	drag_pop_accum = 0.0
 	drag_last_xz = Vector2(patty._rest_x, patty._rest_z)
+	if slide_inertia_patty == patty:
+		slide_inertia_patty = null
+		slide_inertia_vel = Vector2.ZERO
+		slide_inertia_left = 0.0
 	if mp_enabled:
 		drag_owner_id = NetManager.my_id()
 
@@ -8921,51 +8941,15 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 		if game_audio:
 			game_audio.set_slide_moving(false)
 		return
-	var bounds := _grill_place_bounds()
-	var x := clampf(hit.x, bounds.position.x, bounds.end.x)
-	var z := clampf(hit.z, bounds.position.y, bounds.end.y)
-	var target := Vector3(x, GRILL_SURFACE_Y, z)
-	var ignore_idx: int = dragging_patty.slot_index
-	var intended_move := Vector2(target.x - drag_last_xz.x, target.z - drag_last_xz.y)
-	var intended_moved := intended_move.length()
-	if intended_moved > 0.0001:
-		_push_neighbors_from_drag(target, intended_move, intended_moved, ignore_idx)
-	if _patty_blocked_at(target, ignore_idx):
-		var from := drag_last_xz
-		var delta_xz := Vector2(x - from.x, z - from.y)
-		var found_slide := false
-		if delta_xz.length_squared() > 0.000001:
-			for frac in [1.0, 0.85, 0.7, 0.55, 0.4, 0.25]:
-				var try := Vector3(
-					from.x + delta_xz.x * frac,
-					GRILL_SURFACE_Y,
-					from.y + delta_xz.y * frac
-				)
-				try.x = clampf(try.x, bounds.position.x, bounds.end.x)
-				try.z = clampf(try.z, bounds.position.y, bounds.end.y)
-				if not _patty_blocked_at(try, ignore_idx):
-					target = try
-					found_slide = true
-					break
-		if not found_slide:
-			var try_x := Vector3(x, GRILL_SURFACE_Y, from.y)
-			var try_z := Vector3(from.x, GRILL_SURFACE_Y, z)
-			if not _patty_blocked_at(try_x, ignore_idx):
-				target = try_x
-			elif not _patty_blocked_at(try_z, ignore_idx):
-				target = try_z
-			else:
-				target = Vector3(from.x, GRILL_SURFACE_Y, from.y)
-	var move_vec := Vector2(target.x - drag_last_xz.x, target.z - drag_last_xz.y)
+	var result := _move_grill_patty_slide(dragging_patty, Vector2(hit.x, hit.z), drag_last_xz, true)
+	var target: Vector3 = result["target"]
+	var move_vec: Vector2 = result["move"]
 	var moved := move_vec.length()
-	dragging_patty._rest_x = target.x
-	dragging_patty._rest_z = target.z
-	dragging_patty.position.x = target.x
-	dragging_patty.position.z = target.z
-	var idx: int = dragging_patty.slot_index
-	if idx >= 0 and idx < slot_positions.size():
-		slot_positions[idx] = Vector3(target.x, GRILL_SURFACE_Y, target.z)
 	drag_last_xz = Vector2(target.x, target.z)
+	if moved > 0.0001:
+		drag_vel_xz = drag_vel_xz.lerp(move_vec / dt, clampf(dt * 18.0, 0.0, 1.0))
+	else:
+		drag_vel_xz = drag_vel_xz.move_toward(Vector2.ZERO, dt * PATTY_RELEASE_SLIDE_FRICTION)
 	if game_audio:
 		var speed := moved / dt
 		game_audio.set_slide_moving(true, clampf(speed * 0.35, 0.0, 1.2))
@@ -8985,6 +8969,112 @@ func _update_patty_drag(delta: float = 0.016) -> void:
 				game_audio.play_grease_pop()
 
 
+func _move_grill_patty_slide(patty: Area3D, target_xz: Vector2, from_xz: Vector2, push_neighbors: bool) -> Dictionary:
+	var bounds := _grill_place_bounds()
+	var x := clampf(target_xz.x, bounds.position.x, bounds.end.x)
+	var z := clampf(target_xz.y, bounds.position.y, bounds.end.y)
+	var target := Vector3(x, GRILL_SURFACE_Y, z)
+	var ignore_idx: int = patty.slot_index
+	var intended_move := Vector2(target.x - from_xz.x, target.z - from_xz.y)
+	var intended_moved := intended_move.length()
+	if push_neighbors and intended_moved > 0.0001:
+		_push_neighbors_from_drag(target, intended_move, intended_moved, ignore_idx)
+	if _patty_blocked_at(target, ignore_idx):
+		var delta_xz := Vector2(x - from_xz.x, z - from_xz.y)
+		var found_slide := false
+		if delta_xz.length_squared() > 0.000001:
+			for frac in [1.0, 0.85, 0.7, 0.55, 0.4, 0.25]:
+				var try := Vector3(
+					from_xz.x + delta_xz.x * frac,
+					GRILL_SURFACE_Y,
+					from_xz.y + delta_xz.y * frac
+				)
+				try.x = clampf(try.x, bounds.position.x, bounds.end.x)
+				try.z = clampf(try.z, bounds.position.y, bounds.end.y)
+				if not _patty_blocked_at(try, ignore_idx):
+					target = try
+					found_slide = true
+					break
+		if not found_slide:
+			var try_x := Vector3(x, GRILL_SURFACE_Y, from_xz.y)
+			var try_z := Vector3(from_xz.x, GRILL_SURFACE_Y, z)
+			if not _patty_blocked_at(try_x, ignore_idx):
+				target = try_x
+			elif not _patty_blocked_at(try_z, ignore_idx):
+				target = try_z
+			else:
+				target = Vector3(from_xz.x, GRILL_SURFACE_Y, from_xz.y)
+	patty._rest_x = target.x
+	patty._rest_z = target.z
+	patty.position.x = target.x
+	patty.position.z = target.z
+	var idx: int = patty.slot_index
+	if idx >= 0 and idx < slot_positions.size():
+		slot_positions[idx] = Vector3(target.x, GRILL_SURFACE_Y, target.z)
+	var move_vec := Vector2(target.x - from_xz.x, target.z - from_xz.y)
+	return {"target": target, "move": move_vec}
+
+
+func _start_patty_slide_inertia(patty: Area3D, vel_xz: Vector2) -> bool:
+	if patty == null or not is_instance_valid(patty):
+		return false
+	if spatula_patty == patty or flicking_patty == patty:
+		return false
+	var speed := vel_xz.length()
+	if speed < PATTY_RELEASE_SLIDE_MIN_SPEED:
+		return false
+	slide_inertia_patty = patty
+	slide_inertia_vel = vel_xz.limit_length(PATTY_RELEASE_SLIDE_MAX_SPEED)
+	slide_inertia_left = PATTY_RELEASE_SLIDE_MAX_DIST
+	if "is_slide_drag" in patty:
+		patty.is_slide_drag = true
+	return true
+
+
+func _stop_patty_slide_inertia() -> void:
+	if slide_inertia_patty != null and is_instance_valid(slide_inertia_patty) and "is_slide_drag" in slide_inertia_patty:
+		slide_inertia_patty.is_slide_drag = false
+	slide_inertia_patty = null
+	slide_inertia_vel = Vector2.ZERO
+	slide_inertia_left = 0.0
+	if game_audio:
+		game_audio.set_slide_moving(false)
+		if game_audio.has_method("set_burger_slide_oil"):
+			game_audio.set_burger_slide_oil(false)
+
+
+func _update_patty_slide_inertia(delta: float = 0.016) -> void:
+	if slide_inertia_patty == null or not is_instance_valid(slide_inertia_patty):
+		_stop_patty_slide_inertia()
+		return
+	var patty: Area3D = slide_inertia_patty
+	if patty == dragging_patty or spatula_patty == patty or flicking_patty == patty:
+		_stop_patty_slide_inertia()
+		return
+	var dt := maxf(delta, 0.001)
+	var speed := slide_inertia_vel.length()
+	if speed < 0.015 or slide_inertia_left <= 0.001:
+		_stop_patty_slide_inertia()
+		return
+	var from_xz := Vector2(patty._rest_x, patty._rest_z)
+	var step := slide_inertia_vel * dt
+	if step.length() > slide_inertia_left:
+		step = step.normalized() * slide_inertia_left
+	var result := _move_grill_patty_slide(patty, from_xz + step, from_xz, true)
+	var move_vec: Vector2 = result["move"]
+	var moved := move_vec.length()
+	if moved <= 0.0001:
+		_stop_patty_slide_inertia()
+		return
+	slide_inertia_left -= moved
+	var new_speed := maxf(0.0, speed - PATTY_RELEASE_SLIDE_FRICTION * dt)
+	slide_inertia_vel = slide_inertia_vel.normalized() * new_speed
+	if game_audio:
+		game_audio.set_slide_moving(true, clampf((moved / dt) * 0.30, 0.0, 1.0))
+		if game_audio.has_method("set_burger_slide_oil"):
+			game_audio.set_burger_slide_oil(moved > 0.0004, clampf((moved / dt) * 0.35, 0.0, 1.1))
+
+
 func _end_patty_drag() -> void:
 	if dragging_patty == null:
 		return
@@ -8997,11 +9087,13 @@ func _end_patty_drag() -> void:
 	var is_quick_tap := (not slid) and hold_sec < SCOOP_TAP_MAX_SEC
 	var mouse := get_viewport().get_mouse_position()
 	var vel := drag_vel_screen
+	var release_vel_xz := drag_vel_xz
 	var travel := mouse.distance_to(drag_start_mouse)
 	dragging_patty = null
 	drag_owner_id = 0
 	drag_did_move = false
 	drag_vel_screen = Vector2.ZERO
+	drag_vel_xz = Vector2.ZERO
 	if is_instance_valid(patty) and "is_slide_drag" in patty:
 		patty.is_slide_drag = false
 	if game_audio:
@@ -9045,6 +9137,8 @@ func _end_patty_drag() -> void:
 		return
 	## Hold / slide release → cheese pull when ready (burger stays on the steel).
 	if _try_begin_cheese_pull_on_patty(patty):
+		return
+	if slid and _start_patty_slide_inertia(patty, release_vel_xz):
 		return
 	if _is_in_warmer_zone(patty.position):
 		var left := maxi(0, int(ceil(WARM_HOLD_MAX - float(patty.warm_hold_time))))
@@ -47489,7 +47583,7 @@ func _mp_cull_orphan_patties(_seen_net_ids: Dictionary = {}) -> void:
 	for gp_live in grill:
 		if gp_live != null and is_instance_valid(gp_live):
 			live_patty_instances[gp_live.get_instance_id()] = true
-	for held_live in [spatula_patty, dragging_patty, flicking_patty, grill_roomba_carry_patty, grill_roomba_scoop_patty]:
+	for held_live in [spatula_patty, dragging_patty, slide_inertia_patty, flicking_patty, grill_roomba_carry_patty, grill_roomba_scoop_patty]:
 		if held_live != null and is_instance_valid(held_live):
 			live_patty_instances[held_live.get_instance_id()] = true
 	for st_live in stations:
@@ -47649,6 +47743,8 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool, rx: fl
 	## Don't fight local drag / scoop ownership.
 	if dragging_patty == p and drag_owner_id == NetManager.my_id():
 		return
+	if slide_inertia_patty == p:
+		return
 	if spatula_patty == p:
 		return
 	p.position = Vector3(x, y, z)
@@ -47673,6 +47769,8 @@ func mp_claim_drag(net_id: int) -> void:
 	## Transfer drag claim.
 	if dragging_patty == p and drag_owner_id != sid:
 		dragging_patty = null
+	if slide_inertia_patty == p and sid != NetManager.my_id():
+		_stop_patty_slide_inertia()
 	drag_owner_id = sid
 	if sid == NetManager.my_id():
 		_begin_patty_drag_local(p)
