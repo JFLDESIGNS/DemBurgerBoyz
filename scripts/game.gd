@@ -360,12 +360,12 @@ var _spatula_balance_fall_from := Vector2.ZERO
 var _spatula_balance_fall_dir := Vector2.RIGHT
 var _spatula_balance_impact_pending: bool = false
 var _spatula_balance_impact_done: bool = false
-var _spatula_balance_ragdoll_height: float = 0.0
-var _spatula_balance_ragdoll_y_vel: float = 0.0
-var _spatula_balance_ragdoll_ang_vel := Vector2.ZERO
+var _spatula_balance_ragdoll_body: RigidBody3D = null
+var _spatula_balance_ragdoll_floor: StaticBody3D = null
 var _spatula_balance_returning: bool = false
-var _spatula_balance_return_from := Vector2.ZERO
-var _spatula_balance_return_height: float = 0.0
+var _spatula_balance_return_t: float = 0.0
+var _spatula_balance_return_from := Transform3D.IDENTITY
+const SPATULA_BALANCE_RAGDOLL_CLEARANCE := 0.0381 ## 1.5" above steel so the fall cannot clip through the grill.
 var spatula_juggle_patty = null ## airborne after right-click toss from scoop
 var spatula_juggle_t: float = 0.0
 var spatula_juggle_start := Vector3.ZERO
@@ -5030,12 +5030,10 @@ func _stop_spatula_balance() -> void:
 	_spatula_balance_fall_dir = Vector2.RIGHT
 	_spatula_balance_impact_pending = false
 	_spatula_balance_impact_done = false
-	_spatula_balance_ragdoll_height = 0.0
-	_spatula_balance_ragdoll_y_vel = 0.0
-	_spatula_balance_ragdoll_ang_vel = Vector2.ZERO
+	_cleanup_spatula_balance_ragdoll()
 	_spatula_balance_returning = false
-	_spatula_balance_return_from = Vector2.ZERO
-	_spatula_balance_return_height = 0.0
+	_spatula_balance_return_t = 0.0
+	_spatula_balance_return_from = Transform3D.IDENTITY
 	_spatula_user_roll = 0.0
 
 
@@ -5050,17 +5048,76 @@ func _toggle_spatula_balance(mouse: Vector2) -> void:
 	_spatula_balance_fall_dir = Vector2.RIGHT
 	_spatula_balance_impact_pending = false
 	_spatula_balance_impact_done = false
-	_spatula_balance_ragdoll_height = 0.0
-	_spatula_balance_ragdoll_y_vel = 0.0
-	_spatula_balance_ragdoll_ang_vel = Vector2.ZERO
+	_cleanup_spatula_balance_ragdoll()
 	_spatula_balance_returning = false
-	_spatula_balance_return_from = Vector2.ZERO
-	_spatula_balance_return_height = 0.0
+	_spatula_balance_return_t = 0.0
+	_spatula_balance_return_from = Transform3D.IDENTITY
 	_spatula_user_roll = 0.0
 	if _spatula_balance_active:
 		_spatula_balance_drift_dir = Vector2.RIGHT
 	else:
 		_stop_spatula_balance()
+
+
+func _cleanup_spatula_balance_ragdoll() -> void:
+	if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+		_spatula_balance_ragdoll_body.queue_free()
+	_spatula_balance_ragdoll_body = null
+	if _spatula_balance_ragdoll_floor != null and is_instance_valid(_spatula_balance_ragdoll_floor):
+		_spatula_balance_ragdoll_floor.queue_free()
+	_spatula_balance_ragdoll_floor = null
+
+
+func _begin_spatula_balance_ragdoll(start_xform: Transform3D) -> void:
+	if world == null or _spatula_balance_ragdoll_body != null:
+		return
+	var floor_body := StaticBody3D.new()
+	floor_body.name = "SpatulaBalanceRagdollFloor"
+	var floor_shape := CollisionShape3D.new()
+	var floor_box := BoxShape3D.new()
+	floor_box.size = Vector3(4.2, 0.012, 2.0)
+	floor_shape.shape = floor_box
+	floor_body.add_child(floor_shape)
+	floor_body.global_position = Vector3(0.0, GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE - 0.006, 0.0)
+	world.add_child(floor_body)
+	_spatula_balance_ragdoll_floor = floor_body
+
+	var body := RigidBody3D.new()
+	body.name = "SpatulaBalanceRagdoll"
+	body.mass = 0.42
+	body.gravity_scale = 1.0
+	body.linear_damp = 0.22
+	body.angular_damp = 0.18
+	body.contact_monitor = true
+	body.max_contacts_reported = 4
+	body.collision_layer = 1
+	body.collision_mask = 1
+	body.global_transform = start_xform
+	body.global_position.y = maxf(body.global_position.y, GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE + 0.035)
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.105, 0.045, 0.56)
+	col.shape = box
+	body.add_child(col)
+	if hand_spatula_visual != null and is_instance_valid(hand_spatula_visual):
+		var visual := hand_spatula_visual.duplicate() as Node3D
+		if visual != null:
+			visual.name = "Visual"
+			visual.transform = hand_spatula_visual.transform
+			body.add_child(visual)
+			_boost_hand_spatula_draw(visual)
+	world.add_child(body)
+	var impulse_dir := Vector3(_spatula_balance_fall_dir.x, 0.18, _spatula_balance_fall_dir.y)
+	if impulse_dir.length_squared() < 0.0001:
+		impulse_dir = Vector3(1.0, 0.18, 0.0)
+	impulse_dir = impulse_dir.normalized()
+	body.linear_velocity = impulse_dir * 0.42 + Vector3(0.0, 0.18, 0.0)
+	body.angular_velocity = Vector3(
+		_spatula_balance_fall_dir.y * 5.0 + 1.2,
+		(randf() - 0.5) * 1.8,
+		-_spatula_balance_fall_dir.x * 5.0
+	)
+	_spatula_balance_ragdoll_body = body
 
 
 func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
@@ -5070,35 +5127,25 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 	if _spatula_balance_falling:
 		_spatula_balance_fall_t += delta
 		var ragdoll_dur := maxf(0.1, spatula_balance_ragdoll_dur)
-		var return_dur := maxf(0.05, spatula_balance_return_dur)
-		var fall_rad := deg_to_rad(spatula_balance_fall_tilt)
-		if _spatula_balance_fall_t < ragdoll_dur:
-			_spatula_balance_ragdoll_y_vel -= 1.85 * delta
-			_spatula_balance_ragdoll_height += _spatula_balance_ragdoll_y_vel * delta
-			if _spatula_balance_ragdoll_height <= 0.0:
-				_spatula_balance_ragdoll_height = 0.0
-				if _spatula_balance_ragdoll_y_vel < -0.03:
-					if not _spatula_balance_impact_done:
-						_spatula_balance_impact_pending = true
-						_spatula_balance_impact_done = true
-					_spatula_balance_ragdoll_y_vel = absf(_spatula_balance_ragdoll_y_vel) * 0.36
-					_spatula_balance_ragdoll_ang_vel += _spatula_balance_fall_dir * deg_to_rad(spatula_balance_bounce_deg * 4.5)
-			_spatula_balance_ragdoll_ang_vel += _spatula_balance_fall_dir * 1.35 * delta
-			_spatula_balance_ragdoll_ang_vel *= pow(0.925, delta * 60.0)
-			_spatula_balance_tilt += _spatula_balance_ragdoll_ang_vel * delta
-			if _spatula_balance_tilt.length() > fall_rad:
-				_spatula_balance_tilt = _spatula_balance_tilt.normalized() * fall_rad
-		else:
-			if not _spatula_balance_returning:
+		if not _spatula_balance_returning:
+			if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+				if not _spatula_balance_impact_done and _spatula_balance_ragdoll_body.get_contact_count() > 0:
+					_spatula_balance_impact_pending = true
+					_spatula_balance_impact_done = true
+				if _spatula_balance_ragdoll_body.global_position.y < GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE:
+					var p := _spatula_balance_ragdoll_body.global_position
+					p.y = GRILL_SURFACE_Y + SPATULA_BALANCE_RAGDOLL_CLEARANCE
+					_spatula_balance_ragdoll_body.global_position = p
+			if _spatula_balance_fall_t >= ragdoll_dur:
 				_spatula_balance_returning = true
-				_spatula_balance_return_from = _spatula_balance_tilt
-				_spatula_balance_return_height = _spatula_balance_ragdoll_height
-			var ru := clampf((_spatula_balance_fall_t - ragdoll_dur) / return_dur, 0.0, 1.0)
-			var return_ease := ru * ru * (3.0 - 2.0 * ru)
-			_spatula_balance_tilt = _spatula_balance_return_from.lerp(Vector2.ZERO, return_ease)
-			_spatula_balance_ragdoll_height = lerpf(_spatula_balance_return_height, 0.0, return_ease)
-			if ru >= 1.0:
-				_stop_spatula_balance()
+				_spatula_balance_return_t = 0.0
+				if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+					_spatula_balance_return_from = _spatula_balance_ragdoll_body.global_transform
+				else:
+					_spatula_balance_return_from = hand_spatula_root.global_transform if hand_spatula_root != null and is_instance_valid(hand_spatula_root) else Transform3D.IDENTITY
+				_cleanup_spatula_balance_ragdoll()
+		else:
+			_spatula_balance_return_t += delta
 		return
 	if _spatula_balance_last_mouse.x == INF:
 		_spatula_balance_last_mouse = mouse
@@ -5127,12 +5174,10 @@ func _update_spatula_balance(mouse: Vector2, delta: float) -> void:
 		_spatula_balance_fall_from = _spatula_balance_tilt
 		_spatula_balance_fall_dir = _spatula_balance_tilt.normalized() if _spatula_balance_tilt.length_squared() > 0.0001 else _spatula_balance_drift_dir.normalized()
 		_spatula_balance_vel = Vector2.ZERO
-		_spatula_balance_ragdoll_height = 0.18
-		_spatula_balance_ragdoll_y_vel = 0.05
-		_spatula_balance_ragdoll_ang_vel = _spatula_balance_fall_dir * 1.65
 		_spatula_balance_impact_pending = false
 		_spatula_balance_impact_done = false
 		_spatula_balance_returning = false
+		_spatula_balance_return_t = 0.0
 
 
 func _spatula_balance_world_basis() -> Basis:
@@ -6458,11 +6503,15 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 			var pivot_target := _tool_hold_point_from_screen(balance_mouse, balance_y)
 			if pivot_target == Vector3.ZERO:
 				pivot_target = tip_target
-			pivot_target.y = balance_y + _spatula_balance_ragdoll_height
+			pivot_target.y = balance_y
 			tip_target = pivot_target
 			if _spatula_balance_impact_pending:
 				_spatula_balance_impact_pending = false
-				_play_grill_tap_at(Vector3(tip_target.x, GRILL_SURFACE_Y, tip_target.z), 1.35)
+				var impact_pos := Vector3(tip_target.x, GRILL_SURFACE_Y, tip_target.z)
+				if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+					var bp := _spatula_balance_ragdoll_body.global_position
+					impact_pos = Vector3(bp.x, GRILL_SURFACE_Y, bp.z)
+				_play_grill_tap_at(impact_pos, 1.35)
 			balance_basis = _spatula_balance_world_basis()
 			use_balance_basis = true
 			pitch = 0.0
@@ -6605,6 +6654,20 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var pivot_basis := balance_basis if use_balance_basis else Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
 	var pivot_world := pivot_basis * pivot_local
 	hand_spatula_root.global_position = tip_target - pivot_world
+	if _spatula_balance_active and _spatula_balance_falling:
+		var target_xform := hand_spatula_root.global_transform
+		if _spatula_balance_ragdoll_body == null and not _spatula_balance_returning:
+			_begin_spatula_balance_ragdoll(target_xform)
+		if _spatula_balance_ragdoll_body != null and is_instance_valid(_spatula_balance_ragdoll_body):
+			hand_spatula_root.visible = false
+		elif _spatula_balance_returning:
+			hand_spatula_root.visible = true
+			var rd := maxf(0.05, spatula_balance_return_dur)
+			var ru := clampf(_spatula_balance_return_t / rd, 0.0, 1.0)
+			var ease := ru * ru * (3.0 - 2.0 * ru)
+			hand_spatula_root.global_transform = _spatula_balance_return_from.interpolate_with(target_xform, ease)
+			if ru >= 1.0:
+				_stop_spatula_balance()
 	## Scooped burger rides the blade — same yaw/roll as the spatula (no visual offset).
 	if carrying and not dragging:
 		_seat_held_patty_on_spatula()
