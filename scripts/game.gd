@@ -1833,7 +1833,7 @@ var soda_blocker_front_z := 0.05
 var soda_blocker_fill_z := -0.11
 var soda_blocker_debug := false
 var soda_cup_rest_x := -0.28
-var soda_cup_rest_z := 0.28
+var soda_cup_rest_z := 0.62
 var soda_tray_first_x := -0.38
 var soda_tray_spacing := 0.20
 var soda_tray_magnet_radius := 0.26
@@ -23271,6 +23271,10 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "ice_soft_z_in", 0.0)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "front_tray_seats_v4", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "front_tray_seats_v5"):
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "front_tray_seats_v5", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -23296,7 +23300,7 @@ func _load_soda_tuning_settings() -> void:
 	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), -0.7, 0.7)
 	soda_blocker_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_debug", soda_blocker_debug))
 	soda_cup_rest_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_x", soda_cup_rest_x)), -1.0, 1.0)
-	soda_cup_rest_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)), -0.2, 1.0)
+	soda_cup_rest_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)), -0.2, 1.2)
 	soda_tray_first_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_first_x", soda_tray_first_x)), -1.0, 0.7)
 	soda_tray_spacing = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_spacing", soda_tray_spacing)), 0.04, 0.45)
 	soda_tray_magnet_radius = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_magnet_radius", soda_tray_magnet_radius)), 0.02, 0.8)
@@ -24148,7 +24152,6 @@ func _build_soda_station() -> void:
 	_refresh_soda_tuning_debug_visuals()
 
 	_build_soda_cup_rack(root)
-	_add_soda_drip_grate_overlay(root)
 	_refresh_soda_flavor_lights()
 	## Collision hulls in soda_root local space (scaled model bounds).
 	var s := SODA_FOUNTAIN_SCALE
@@ -24213,6 +24216,15 @@ func _apply_soda_fountain_textures(root: Node) -> void:
 	_dress_soda_fountain_materials(root)
 
 
+func _soda_node_path_has(n: Node, needle: String) -> bool:
+	var cur := n
+	while cur != null:
+		if str(cur.name).find(needle) >= 0:
+			return true
+		cur = cur.get_parent()
+	return false
+
+
 func _dress_soda_fountain_materials(n: Node) -> void:
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
@@ -24265,6 +24277,10 @@ func _dress_soda_fountain_materials(n: Node) -> void:
 					else:
 						finish = "Metal"
 				var body_mat := _soda_body_material_for(finish)
+				if _soda_node_path_has(mi, "Metal_Perforated_tray"):
+					body_mat = _soda_body_material_for("Metal_Plate")
+				elif _soda_node_path_has(mi, "Metal_Tray"):
+					body_mat = _soda_body_material_for("Metal_Tray")
 				mi.mesh.surface_set_material(si, body_mat)
 				mi.material_override = body_mat
 	for c in n.get_children():
@@ -40120,6 +40136,8 @@ func _build_options_menu() -> void:
 	hidden_grill_box.get_parent().get_parent().name = "Grill"
 	var hidden_world_box := _hidden_add_category(hidden_tabs, "WORLD AND PROP POSITIONS")
 	hidden_world_box.get_parent().get_parent().name = "World"
+	var hidden_counter_box := _hidden_add_category(hidden_tabs, "COUNTER LAYOUT")
+	hidden_counter_box.get_parent().get_parent().name = "Counter"
 	var hidden_tools_box := _hidden_add_category(hidden_tabs, "TOOLS AND MINIGAMES")
 	hidden_tools_box.get_parent().get_parent().name = "Tools"
 	var hidden_soda_box := _hidden_add_category(hidden_tabs, "DRINK DISPENSER")
@@ -40952,33 +40970,34 @@ func _build_options_menu() -> void:
 	_gfx_add_slider(hidden_world_box, "bunting_flag_h", "Flag Height", 0.04, 0.8, 0.01)
 	_gfx_add_slider(hidden_world_box, "bunting_rope", "Rope Thickness", 0.003, 0.08, 0.001)
 
-	_hidden_add_section(hidden_world_box, "PROP OFFSETS")
-	_hidden_add_prop_offset_group(hidden_world_box, "burger_buns", "Burger Buns")
-	_gfx_add_slider(hidden_world_box, "burger_bun_scale", "Burger Bun Size", 0.45, 2.5, 0.01)
-	_hidden_add_prop_offset_group(hidden_world_box, "cheese_stack", "Cheese Stack")
-	_gfx_add_slider(hidden_world_box, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
-	_hidden_add_prop_offset_group(hidden_world_box, "cutting_board", "Cutting Board")
-	_hidden_add_section(hidden_world_box, "CUTTING BOARD UI")
-	_gfx_add_slider(hidden_world_box, "bz_row_left", "Board UI Left", -250.0, 450.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_row_top", "Board UI Top", -300.0, 500.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_zone_left", "Stack X In Panel", -160.0, 220.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_zone_top", "Stack Y In Panel", -160.0, 260.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_plate_shift", "Burger Stack X", -160.0, 220.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_plate_y", "Burger Stack Y", -80.0, 260.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_panel_w", "Board UI Width", 100.0, 420.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_panel_h", "Board UI Height", 120.0, 520.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_hit_l", "Board Hit Pad Left", 0.0, 120.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_hit_t", "Board Hit Pad Top", 0.0, 160.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_hit_r", "Board Hit Pad Right", 0.0, 120.0, 1.0)
-	_gfx_add_slider(hidden_world_box, "bz_hit_b", "Board Hit Pad Bottom", 0.0, 120.0, 1.0)
-	_hidden_add_prop_offset_group(hidden_world_box, "seasoning_shaker", "Seasoning Shaker")
-	_hidden_add_prop_offset_group(hidden_world_box, "fire_ext", "Fire Extinguisher")
-	_hidden_add_prop_offset_group(hidden_world_box, "oil_bottle", "Oil Bottle")
-	_hidden_add_prop_offset_group(hidden_world_box, "open_sign", "We Are Open Sign")
-	_hidden_add_prop_offset_group(hidden_world_box, "fryer", "Fryer")
-	_hidden_add_prop_offset_group(hidden_world_box, "fryer_done", "Fryer Done Location")
-	_hidden_add_prop_offset_group(hidden_world_box, "big_tree", "Big Tree Offset")
-	_hidden_add_prop_offset_group(hidden_world_box, "small_tree", "Small Tree Offset")
+	_hidden_add_section(hidden_counter_box, "BUNS / CHEESE / BOARD")
+	_hidden_add_prop_offset_group(hidden_counter_box, "burger_buns", "Burger Buns")
+	_gfx_add_slider(hidden_counter_box, "burger_bun_scale", "Burger Bun Size", 0.45, 2.5, 0.01)
+	_hidden_add_prop_offset_group(hidden_counter_box, "cheese_stack", "Cheese Stack")
+	_gfx_add_slider(hidden_counter_box, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
+	_hidden_add_prop_offset_group(hidden_counter_box, "cutting_board", "Cutting Board")
+	_hidden_add_section(hidden_counter_box, "CUTTING BOARD UI")
+	_gfx_add_slider(hidden_counter_box, "bz_row_left", "Board UI Left", -250.0, 450.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_row_top", "Board UI Top", -300.0, 500.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_zone_left", "Stack X In Panel", -160.0, 220.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_zone_top", "Stack Y In Panel", -160.0, 260.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_plate_shift", "Burger Stack X", -160.0, 220.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_plate_y", "Burger Stack Y", -80.0, 260.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_panel_w", "Board UI Width", 100.0, 420.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_panel_h", "Board UI Height", 120.0, 520.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_hit_l", "Board Hit Pad Left", 0.0, 120.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_hit_t", "Board Hit Pad Top", 0.0, 160.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_hit_r", "Board Hit Pad Right", 0.0, 120.0, 1.0)
+	_gfx_add_slider(hidden_counter_box, "bz_hit_b", "Board Hit Pad Bottom", 0.0, 120.0, 1.0)
+	_hidden_add_section(hidden_counter_box, "COUNTER PROPS")
+	_hidden_add_prop_offset_group(hidden_counter_box, "seasoning_shaker", "Seasoning Shaker")
+	_hidden_add_prop_offset_group(hidden_counter_box, "fire_ext", "Fire Extinguisher")
+	_hidden_add_prop_offset_group(hidden_counter_box, "oil_bottle", "Oil Bottle")
+	_hidden_add_prop_offset_group(hidden_counter_box, "open_sign", "We Are Open Sign")
+	_hidden_add_prop_offset_group(hidden_counter_box, "fryer", "Fryer")
+	_hidden_add_prop_offset_group(hidden_counter_box, "fryer_done", "Fryer Done Location")
+	_hidden_add_prop_offset_group(hidden_counter_box, "big_tree", "Big Tree Offset")
+	_hidden_add_prop_offset_group(hidden_counter_box, "small_tree", "Small Tree Offset")
 
 	_hidden_add_section(hidden_world_box, "FRYER SHAKE / TIMING")
 	_hidden_add_labeled_slider(hidden_world_box, "fryer_station_scale", "Fryer Scale", 0.45, 2.5, 0.01,
@@ -41459,9 +41478,9 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_x", "Cup Rest X", -1.0, 1.0, 0.01,
 		func(): return soda_cup_rest_x,
 		func(v: float): soda_cup_rest_x = clampf(v, -1.0, 1.0))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_z", "Cup Rest Z", -0.2, 1.0, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_z", "Cup Rest Z", -0.2, 1.2, 0.01,
 		func(): return soda_cup_rest_z,
-		func(v: float): soda_cup_rest_z = clampf(v, -0.2, 1.0))
+		func(v: float): soda_cup_rest_z = clampf(v, -0.2, 1.2))
 
 	_hidden_add_section(hidden_soda_box, "CUP PULL / FILL FEEL")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_x", "Tray First X", -1.0, 0.7, 0.01,
