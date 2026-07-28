@@ -5232,14 +5232,15 @@ func _build_3d_world() -> void:
 	_add_box(world, Vector3(6.5, 0.16, 4.2), Vector3(0, 2.72, -0.4), Color("050505"))
 
 	# Front wall around window
+	const SERVICE_WINDOW_OPENING_RAISE := 0.3048 # One foot higher top opening, in meters.
 	_add_box(world, Vector3(1.15, 2.7, 0.2), Vector3(-2.95, 1.35, 1.35), Color("080808"))
 	_add_box(world, Vector3(1.15, 2.7, 0.2), Vector3(2.95, 1.35, 1.35), Color("080808"))
-	_add_box(world, Vector3(4.8, 0.55, 0.2), Vector3(0, 2.45, 1.35), Color("080808"))
+	_add_box(world, Vector3(4.8, 0.55 - SERVICE_WINDOW_OPENING_RAISE, 0.2), Vector3(0, 2.45 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.35), Color("080808"))
 	_add_box(world, Vector3(4.8, 0.7, 0.2), Vector3(0, 0.55, 1.35), Color("0A0A0A"))
-	_add_box(world, Vector3(4.9, 0.12, 0.18), Vector3(0, 2.12, 1.38), Color("121212"))
+	_add_box(world, Vector3(4.9, 0.12, 0.18), Vector3(0, 2.12 + SERVICE_WINDOW_OPENING_RAISE, 1.38), Color("121212"))
 	_add_box(world, Vector3(4.9, 0.12, 0.18), Vector3(0, 0.95, 1.38), Color("121212"))
-	_add_box(world, Vector3(0.12, 1.3, 0.18), Vector3(-2.4, 1.55, 1.38), Color("121212"))
-	_add_box(world, Vector3(0.12, 1.3, 0.18), Vector3(2.4, 1.55, 1.38), Color("121212"))
+	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(-2.4, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
+	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.4, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
 	_add_box(world, Vector3(4.8, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
 
 	# Raised flat-top cabinet — black like the truck walls.
