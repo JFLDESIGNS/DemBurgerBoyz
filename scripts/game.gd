@@ -15296,7 +15296,7 @@ func _reset_fire_extinguisher() -> void:
 
 
 func _build_glock() -> void:
-	## Hung on the window lintel, immediately right of the FIRST SALE plaque.
+	## Glock removed from the active truck scene.
 	const SCENE_PATH := "res://assets/glock/Glock.fbx"
 	const DIFF_PATH := "res://assets/glock/Low_Explode_Glock_Mat_BaseColor.png"
 	const MET_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Metallic.png"
@@ -15322,6 +15322,11 @@ func _build_glock() -> void:
 	var old_plate := world.get_node_or_null("GlockShadowPlate")
 	if old_plate != null and is_instance_valid(old_plate):
 		old_plate.queue_free()
+	glock_held = false
+	glock_cooldown = 0.0
+	glock_recoil = 0.0
+	_set_glock_laser_visible(false)
+	return
 	if not ResourceLoader.exists(SCENE_PATH):
 		push_warning("Glock missing: %s" % SCENE_PATH)
 		return
@@ -23646,12 +23651,14 @@ func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String
 
 
 func _build_first_sale_decal() -> void:
-	## Framed "FIRST SALE!" plaque on the interior lintel — covers the wall Glock.
+	## First Sale plaque removed from the active truck scene.
 	if first_sale_decal != null and is_instance_valid(first_sale_decal):
 		first_sale_decal.queue_free()
 		first_sale_decal = null
 	sale_area = null
 	sale_held = false
+	_refresh_glock_cover_lock()
+	return
 	const TEX_PATH := "res://assets/decal/first_sale.png"
 	if not ResourceLoader.exists(TEX_PATH):
 		push_warning("First Sale texture missing: %s" % TEX_PATH)
@@ -23746,6 +23753,7 @@ func _set_glock_cover_meshes_visible(on: bool) -> void:
 
 
 func _begin_sale_hold() -> bool:
+	return false
 	if not playing or sale_held or first_sale_decal == null:
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held or cup_held or dragging_patty != null:
@@ -23799,7 +23807,7 @@ func _release_sale_plaque() -> void:
 
 
 func _build_wall_paper_decals() -> void:
-	## Business license, health certificate, and beach photo — camera-right of First Sale.
+	## Health certificate only; business license and beach photo are removed.
 	if wall_paper_decals != null and is_instance_valid(wall_paper_decals):
 		wall_paper_decals.queue_free()
 		wall_paper_decals = null
@@ -23807,27 +23815,13 @@ func _build_wall_paper_decals() -> void:
 	root.name = "WallPaperDecals"
 	world.add_child(root)
 	wall_paper_decals = root
-	## Camera-right = world −X. Cluster sits just past the First Sale plaque edge.
-	## Sheet order left→right: license, health cert, beach polaroid.
+	## Camera-right = world −X.
 	var specs: Array = [
-		{
-			"name": "BusinessLicense",
-			"path": "res://assets/decal/business_license.png",
-			"size": Vector2(0.40, 0.333),
-			## +6" up, +6" camera-right (−X).
-			"pos": Vector3(-0.732, 2.372, WALL_PAPER_Z),
-		},
 		{
 			"name": "HealthCertificate",
 			"path": "res://assets/decal/health_certificate.png",
 			"size": Vector2(0.30, 0.254),
 			"pos": Vector3(-1.112, 2.452, WALL_PAPER_Z),
-		},
-		{
-			"name": "BeachPhoto",
-			"path": "res://assets/decal/beach_photo.png",
-			"size": Vector2(0.175, 0.163),
-			"pos": Vector3(-1.372, 2.292, WALL_PAPER_Z),
 		},
 	]
 	for spec in specs:
@@ -39311,12 +39305,6 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
 	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
-	_gfx_add_section(list, "FIRST SALE DECAL")
-	_gfx_add_slider(list, "sale_x", "Sale X", -2.5, 2.5, 0.01)
-	_gfx_add_slider(list, "sale_y", "Sale Y", 1.5, 2.8, 0.01)
-	_gfx_add_slider(list, "sale_z", "Sale Z", 0.9, 1.5, 0.01)
-	_gfx_add_slider(list, "sale_scale", "Sale Scale", 0.25, 2.5, 0.01)
-
 	_gfx_add_section(list, "MENU BOARD")
 	_gfx_add_slider(list, "menu_x", "Menu X", -3.2, 3.2, 0.01)
 	_gfx_add_slider(list, "menu_y", "Menu Y", 0.8, 2.6, 0.01)
@@ -45709,8 +45697,8 @@ func _build_open_closed_sign() -> void:
 
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
-	## Prior seat + ~40 screen px up (~0.12m at this depth).
-	root.position = Vector3(-1.08, 1.90, 1.14) + _prop_offset("open_sign")
+	## Raised another ~50 screen px at this depth.
+	root.position = Vector3(-1.08, 2.05, 1.14) + _prop_offset("open_sign")
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
