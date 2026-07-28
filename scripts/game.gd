@@ -1146,6 +1146,12 @@ const FRIES_HOLD_LEFT_OFFSET := Vector3(-0.34, 0.31, 0.02)
 const FRIES_HOLD_FOLLOW_RADIUS := 0.18
 const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the strip.
 const FRIES_HOLD_MIN_SEP := 0.052 ## Matches tighter HOLD pack spacing.
+var fryer_station_scale := 1.0
+var fries_hand_hold_offset_in := Vector3.ZERO
+var fries_ready_spacing_x := FRIES_HOLD_PACK_SPACING_X
+var fries_ready_spacing_z := FRIES_HOLD_PACK_SPACING_Z
+var fries_ready_min_sep := FRIES_HOLD_MIN_SEP
+var fries_ready_pack_scale := FRIES_HOLD_PACK_SCALE
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -16155,7 +16161,7 @@ func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3
 
 
 func _fries_hold_point_from_screen(screen_pos: Vector2, extra_y: float = 0.0) -> Vector3:
-	return _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.31 + extra_y)
+	return _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.31 + extra_y) + fries_hand_hold_offset_in * INCH_TO_M
 
 
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
@@ -20116,6 +20122,16 @@ func _load_fryer_tuning_settings() -> void:
 	fry_basket_shake_speed_threshold = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_speed_threshold", fry_basket_shake_speed_threshold)), 0.0, 0.5)
 	fry_basket_shake_gain = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)), 0.1, 5.0)
 	fry_basket_shake_decay = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)), 0.0, 1.5)
+	fryer_station_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "station_scale", fryer_station_scale)), 0.45, 2.5)
+	fries_hand_hold_offset_in = Vector3(
+		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "hand_hold_x_in", fries_hand_hold_offset_in.x)), -18.0, 18.0),
+		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "hand_hold_y_in", fries_hand_hold_offset_in.y)), -18.0, 18.0),
+		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "hand_hold_z_in", fries_hand_hold_offset_in.z)), -18.0, 18.0)
+	)
+	fries_ready_spacing_x = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "ready_spacing_x", fries_ready_spacing_x)), 0.01, 0.30)
+	fries_ready_spacing_z = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "ready_spacing_z", fries_ready_spacing_z)), 0.01, 0.30)
+	fries_ready_min_sep = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "ready_min_sep", fries_ready_min_sep)), 0.01, 0.30)
+	fries_ready_pack_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", fries_ready_pack_scale)), 0.25, 1.5)
 
 
 func _save_fryer_tuning_settings() -> void:
@@ -20126,6 +20142,14 @@ func _save_fryer_tuning_settings() -> void:
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_speed_threshold", fry_basket_shake_speed_threshold)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "station_scale", fryer_station_scale)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_x_in", fries_hand_hold_offset_in.x)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_y_in", fries_hand_hold_offset_in.y)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_z_in", fries_hand_hold_offset_in.z)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_spacing_x", fries_ready_spacing_x)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_spacing_z", fries_ready_spacing_z)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_min_sep", fries_ready_min_sep)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", fries_ready_pack_scale)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -25135,6 +25159,7 @@ func _build_fryer_machine() -> void:
 	root.name = "FrenchFryStation"
 	root.position = FRYER_STATION_POS + _prop_offset("fryer")
 	root.rotation_degrees = FRYER_STATION_ROT
+	root.scale = Vector3.ONE * fryer_station_scale
 	world.add_child(root)
 	fryer_root = root
 
@@ -25873,10 +25898,10 @@ func _ready_fries_slot_world(i: int) -> Vector3:
 	var col := clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) % 2
 	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
 	var cx := (b.position.x + b.end.x) * 0.5
-	var x := cx + (float(col) - 0.5) * FRIES_HOLD_PACK_SPACING_X
+	var x := cx + (float(col) - 0.5) * fries_ready_spacing_x
 	## b.end.y = cook-side / far from camera. Nudge further +Z so packs sit up-screen.
 	var z_hi := b.end.y + FRIES_HOLD_FAR_NUDGE
-	var z := b.end.y - 0.04 - float(row) * FRIES_HOLD_PACK_SPACING_Z + FRIES_HOLD_FAR_NUDGE
+	var z := b.end.y - 0.04 - float(row) * fries_ready_spacing_z + FRIES_HOLD_FAR_NUDGE
 	x = clampf(x, b.position.x, b.end.x)
 	z = clampf(z, b.position.y, z_hi)
 	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z) + _prop_offset("fryer_done")
@@ -25899,9 +25924,9 @@ func _separate_ready_fries_packs() -> void:
 				var bb := packs[b_i]
 				var d := Vector2(a.global_position.x - bb.global_position.x, a.global_position.z - bb.global_position.z)
 				var dist := d.length()
-				if dist >= FRIES_HOLD_MIN_SEP:
+				if dist >= fries_ready_min_sep:
 					continue
-				var push := (FRIES_HOLD_MIN_SEP - dist) * 0.5 + 0.002
+				var push := (fries_ready_min_sep - dist) * 0.5 + 0.002
 				var away := d.normalized() if dist > 0.0001 else Vector2(1.0 if (a_i % 2) == 0 else -1.0, 0.0)
 				a.global_position.x = clampf(a.global_position.x + away.x * push, b.position.x, b.end.x)
 				a.global_position.z = clampf(a.global_position.z + away.y * push, b.position.y, z_hi)
@@ -25923,7 +25948,7 @@ func _refresh_ready_fries_visuals() -> void:
 		fryer_ready_root.add_child(pack)
 		pack.global_position = _ready_fries_slot_world(i)
 		pack.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
-		var s := FRIES_HOLD_PACK_SCALE
+		var s := fries_ready_pack_scale
 		pack.scale = Vector3(s, s, s)
 		_populate_fry_pack(pack)
 		var area := Area3D.new()
@@ -30374,27 +30399,30 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 
 func _refresh_soda_flavor_lights() -> void:
 	var lit_id := soda_active_station if soda_active_station != "" else soda_selected_flavor
+	var lit_panel_id := "cola" if SODA_SHARED_DRINK_NOZZLE and SODA_FLAVORS.has(lit_id) else lit_id
 	for key in soda_flavor_mats.keys():
 		var mat = soda_flavor_mats[key]
 		if mat == null:
 			continue
 		var fid := str(key)
-		var selected := fid == lit_id or fid == ("pad_%s" % lit_id)
+		var panel_id := fid.trim_prefix("pad_")
+		var selected := fid == lit_id or fid == lit_panel_id or fid == ("pad_%s" % lit_panel_id)
 		if mat is ShaderMaterial:
 			## Jug syrup — brighter warm core when that flavor is armed.
-			var col: Color = SODA_FLAVOR_COLORS.get(fid, Color(0.4, 0.2, 0.15))
+			var col: Color = SODA_FLAVOR_COLORS.get(panel_id, Color(0.4, 0.2, 0.15))
 			_apply_soda_tank_gradient(mat as ShaderMaterial, col, selected, fid)
 		elif mat is StandardMaterial3D:
 			var sm2 := mat as StandardMaterial3D
 			sm2.emission_enabled = true
+			var hot_col := Color(0.20, 0.62, 1.0, 1.0) if lit_panel_id == "ice" else Color(0.48, 0.18, 0.07, 1.0)
 			## Brand logo panels: keep art visible, pulse a little when armed.
 			if sm2.albedo_texture != null:
-				sm2.emission = Color(1.0, 0.98, 0.72) if selected else Color(0.18, 0.16, 0.10)
-				sm2.emission_energy_multiplier = 3.4 if selected else 0.35
-				sm2.albedo_color = Color(1.0, 1.0, 0.88, 1.0) if selected else Color.WHITE
+				sm2.emission = hot_col if selected else Color(0.18, 0.16, 0.10)
+				sm2.emission_energy_multiplier = 5.2 if selected else 0.35
+				sm2.albedo_color = Color(0.78, 0.92, 1.0, 1.0) if selected and lit_panel_id == "ice" else (Color(1.0, 0.86, 0.70, 1.0) if selected else Color.WHITE)
 			else:
-				sm2.emission_energy_multiplier = 4.2 if selected else 0.18
-				var col2: Color = SODA_FLAVOR_COLORS.get(fid.trim_prefix("pad_"), Color(0.4, 0.2, 0.15))
+				sm2.emission_energy_multiplier = 6.0 if selected else 0.18
+				var col2: Color = hot_col if selected else SODA_FLAVOR_COLORS.get(panel_id, Color(0.4, 0.2, 0.15))
 				col2.a = 0.92 if selected else 0.36
 				sm2.albedo_color = col2
 				sm2.emission = Color(lerpf(col2.r, 1.0, 0.55), lerpf(col2.g, 0.98, 0.42), lerpf(col2.b, 0.82, 0.32))
@@ -40850,6 +40878,59 @@ func _build_options_menu() -> void:
 	_hidden_add_prop_offset_group(hidden_world_box, "small_tree", "Small Tree Offset")
 
 	_hidden_add_section(hidden_world_box, "FRYER SHAKE / TIMING")
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_station_scale", "Fryer Scale", 0.45, 2.5, 0.01,
+		func(): return fryer_station_scale,
+		func(v: float):
+			fryer_station_scale = clampf(v, 0.45, 2.5)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_hand_x", "Held Fries X (in)", -18.0, 18.0, 0.1,
+		func(): return fries_hand_hold_offset_in.x,
+		func(v: float):
+			fries_hand_hold_offset_in.x = clampf(v, -18.0, 18.0)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_hand_y", "Held Fries Height (in)", -18.0, 18.0, 0.1,
+		func(): return fries_hand_hold_offset_in.y,
+		func(v: float):
+			fries_hand_hold_offset_in.y = clampf(v, -18.0, 18.0)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_hand_z", "Held Fries Depth (in)", -18.0, 18.0, 0.1,
+		func(): return fries_hand_hold_offset_in.z,
+		func(v: float):
+			fries_hand_hold_offset_in.z = clampf(v, -18.0, 18.0)
+			_save_fryer_tuning_settings()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_ready_spacing_x", "Finished Fries X Separation", 0.01, 0.30, 0.005,
+		func(): return fries_ready_spacing_x,
+		func(v: float):
+			fries_ready_spacing_x = clampf(v, 0.01, 0.30)
+			_save_fryer_tuning_settings()
+			_refresh_ready_fries_visuals()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_ready_spacing_z", "Finished Fries Z Separation", 0.01, 0.30, 0.005,
+		func(): return fries_ready_spacing_z,
+		func(v: float):
+			fries_ready_spacing_z = clampf(v, 0.01, 0.30)
+			_save_fryer_tuning_settings()
+			_refresh_ready_fries_visuals()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_ready_min_sep", "Finished Fries Push Apart", 0.01, 0.30, 0.005,
+		func(): return fries_ready_min_sep,
+		func(v: float):
+			fries_ready_min_sep = clampf(v, 0.01, 0.30)
+			_save_fryer_tuning_settings()
+			_refresh_ready_fries_visuals()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fries_ready_pack_scale", "Finished Fries Scale", 0.25, 1.5, 0.01,
+		func(): return fries_ready_pack_scale,
+		func(v: float):
+			fries_ready_pack_scale = clampf(v, 0.25, 1.5)
+			_save_fryer_tuning_settings()
+			_refresh_ready_fries_visuals()
+	)
 	_hidden_add_labeled_slider(hidden_world_box, "fry_cook_sec", "Cook Seconds", 1.0, 20.0, 0.1,
 		func(): return fry_basket_cook_sec,
 		func(v: float):
@@ -41229,7 +41310,7 @@ func _build_options_menu() -> void:
 			_save_soda_cup_height_settings()
 	)
 
-	_hidden_add_section(hidden_soda_box, "SODA MACHINE TUNING")
+	_hidden_add_section(hidden_soda_box, "DRINK DISPENSER")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_x", "Machine X", -4.0, 4.0, 0.01,
 		func(): return soda_station_pos.x,
 		func(v: float): soda_station_pos.x = clampf(v, -4.0, 4.0))
@@ -41246,13 +41327,11 @@ func _build_options_menu() -> void:
 		func(): return soda_station_scale,
 		func(v: float): soda_station_scale = clampf(v, 0.5, 3.5), true)
 
-	_hidden_add_section(hidden_soda_box, "SODA FILL NOZZLES")
-	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Cola")
-	_hidden_add_soda_nozzle_group(hidden_soda_box, "lemon_lime", "Lime")
-	_hidden_add_soda_nozzle_group(hidden_soda_box, "orange", "Orange")
-	_hidden_add_soda_nozzle_group(hidden_soda_box, "ice", "Ice")
+	_hidden_add_section(hidden_soda_box, "TWO-BAY FILL NOZZLES")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "ice", "Ice Bay")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Soda Bay")
 
-	_hidden_add_section(hidden_soda_box, "SODA TANK VISUALS")
+	_hidden_add_section(hidden_soda_box, "DRINK TANK VISUALS")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_scale", "Tank Size", 0.2, 1.4, 0.01,
 		func(): return soda_tank_visual_scale,
 		func(v: float): soda_tank_visual_scale = clampf(v, 0.2, 1.4), true)
@@ -41266,7 +41345,7 @@ func _build_options_menu() -> void:
 		func(): return soda_tank_z_offset_in,
 		func(v: float): soda_tank_z_offset_in = clampf(v, -8.0, 8.0), true)
 
-	_hidden_add_section(hidden_soda_box, "SODA BLOCKER / CUP REST")
+	_hidden_add_section(hidden_soda_box, "CUP RACK / BLOCKERS")
 	_hidden_add_soda_debug_check(hidden_soda_box, "Show Blocker Debug", func(): return soda_blocker_debug, func(on: bool): soda_blocker_debug = on)
 	_hidden_add_soda_debug_check(hidden_soda_box, "Show Soft-Lock Debug", func(): return soda_soft_debug, func(on: bool): soda_soft_debug = on)
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_x", "Block Half Width", 0.05, 1.5, 0.01,
@@ -41288,7 +41367,7 @@ func _build_options_menu() -> void:
 		func(): return soda_cup_rest_z,
 		func(v: float): soda_cup_rest_z = clampf(v, -0.2, 1.0))
 
-	_hidden_add_section(hidden_soda_box, "SODA CUP PULL / SOFT LOCK")
+	_hidden_add_section(hidden_soda_box, "CUP PULL / FILL FEEL")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_x", "Tray First X", -1.0, 0.7, 0.01,
 		func(): return soda_tray_first_x,
 		func(v: float): soda_tray_first_x = clampf(v, -1.0, 0.7))
@@ -41339,11 +41418,9 @@ func _build_options_menu() -> void:
 			cup_liquid_radius_scale = clampf(v, 0.5, 1.5)
 			_refresh_cup_visuals())
 
-	_hidden_add_section(hidden_soda_box, "PER-FLAVOR SOFT LOCK SEATS")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Cola")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "lemon_lime", "Lime")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "orange", "Orange")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice")
+	_hidden_add_section(hidden_soda_box, "FILL BAY SOFT LOCK SEATS")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice Bay")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Soda Bay")
 
 	var slot_lab := Label.new()
 	slot_lab.text = "SODA SLOT MACHINE"
