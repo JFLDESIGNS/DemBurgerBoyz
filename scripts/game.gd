@@ -24175,11 +24175,19 @@ func _dress_soda_fountain_materials(n: Node) -> void:
 					continue
 				var finish := mat_name
 				var nm := str(mi.name)
+				if finish.begins_with("Metal_Plate"):
+					finish = "Metal_Plate"
+				elif finish.begins_with("Metal_Tray"):
+					finish = "Metal_Tray"
 				if finish == "":
 					if nm.find("Body") >= 0:
 						finish = "Body1"
-					elif nm.find("Floor") >= 0 or nm.find("Tray") >= 0 or nm.find("Plate") >= 0:
-						finish = "Metal"
+					elif nm.find("Plate") >= 0:
+						finish = "Metal_Plate"
+					elif nm.find("Tray") >= 0:
+						finish = "Metal_Tray"
+					elif nm.find("Floor") >= 0:
+						finish = "Metal_Plate"
 					elif nm.find("Plastic") >= 0:
 						finish = "Plastic_frame1"
 					elif nm.find("Tube") >= 0:
@@ -24486,63 +24494,35 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 	var panels: Array = []
 	if visual != null:
 		_collect_soda_brand_panels(visual, Transform3D.IDENTITY, panels)
-	var panel_y := 0.34 * SODA_FOUNTAIN_SCALE
-	var panel_z := 0.178 * SODA_FOUNTAIN_SCALE
-	var panel_w := 0.086 * SODA_FOUNTAIN_SCALE
-	var panel_h := 0.096 * SODA_FOUNTAIN_SCALE
-	if panels.size() > 0:
-		var y_sum := 0.0
-		var z_sum := 0.0
-		var w_sum := 0.0
-		var h_sum := 0.0
-		var count := 0
-		var backing := _make_soda_flavor_panel_backing_mat()
-		panels.sort_custom(func(a, b): return float(a["x"]) < float(b["x"]))
-		for p in panels:
-			var src_mi: MeshInstance3D = p.get("mi")
-			if src_mi == null or not is_instance_valid(src_mi) or src_mi.mesh == null:
-				continue
-			var src_i := count
-			if src_i < SODA_BRAND_FLAVOR_ORDER.size():
-				var src_fid := str(SODA_BRAND_FLAVOR_ORDER[src_i])
-				src_mi.material_override = _make_soda_flavor_panel_mat(src_fid)
-				soda_flavor_mats["model_%s" % src_fid] = src_mi.material_override
-			else:
-				src_mi.material_override = backing
-			var aabb := src_mi.get_aabb()
-			var center_local := soda_root.to_local(src_mi.to_global(aabb.get_center()))
-			y_sum += center_local.y
-			z_sum += center_local.z
-			w_sum += src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(aabb.size.x, 0.0, 0.0)))
-			h_sum += src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(0.0, aabb.size.y, 0.0)))
-			count += 1
-		if count > 0:
-			panel_y = y_sum / float(count)
-			panel_z = z_sum / float(count) + 0.026
-			panel_w = clampf(w_sum / float(count) * 0.92, 0.10, 0.19)
-			panel_h = clampf(h_sum / float(count) * 0.90, 0.10, 0.20)
+	if panels.is_empty():
+		return false
 	if soda_flavor_panel_root != null and is_instance_valid(soda_flavor_panel_root):
 		soda_flavor_panel_root.queue_free()
 	soda_flavor_panel_root = Node3D.new()
-	soda_flavor_panel_root.name = "FlavorPanels"
+	soda_flavor_panel_root.name = "FlavorPanelLabels"
 	soda_root.add_child(soda_flavor_panel_root)
-	for fid in SODA_BRAND_FLAVOR_ORDER:
-		var nozzle_local: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_PANEL_POS.get(fid, SODA_MODEL_PANEL_POS.get("cola", Vector3.ZERO))
-		var panel_pos := _soda_model_local(nozzle_local)
-		panel_pos.y = panel_y
-		panel_pos.z = panel_z
-		var mi := MeshInstance3D.new()
-		mi.name = "FlavorPanel_%s" % fid
-		var quad := QuadMesh.new()
-		quad.size = Vector2(panel_w, panel_h)
-		mi.mesh = quad
-		mi.position = panel_pos
-		mi.set_meta("slot_base_position", mi.position)
-		mi.material_override = _make_soda_flavor_panel_mat(fid)
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		soda_flavor_panel_root.add_child(mi)
-		soda_flavor_mats[fid] = mi.material_override
-		soda_flavor_pads[fid] = mi
+	var backing := _make_soda_flavor_panel_backing_mat()
+	panels.sort_custom(func(a, b): return float(a["x"]) < float(b["x"]))
+	var count := 0
+	for p in panels:
+		var src_mi: MeshInstance3D = p.get("mi")
+		if src_mi == null or not is_instance_valid(src_mi) or src_mi.mesh == null:
+			continue
+		var fid := SODA_BRAND_FLAVOR_ORDER[count] if count < SODA_BRAND_FLAVOR_ORDER.size() else ""
+		var aabb := src_mi.get_aabb()
+		var center_global := src_mi.to_global(aabb.get_center())
+		var panel_pos := soda_root.to_local(center_global)
+		var panel_w := clampf(src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(aabb.size.x, 0.0, 0.0))) * 0.98, 0.10, 0.22)
+		var panel_h := clampf(src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(0.0, aabb.size.y, 0.0))) * 0.98, 0.10, 0.22)
+		if fid == "":
+			src_mi.material_override = backing
+			count += 1
+			continue
+		var mat := _make_soda_flavor_panel_mat(fid)
+		src_mi.material_override = mat
+		src_mi.set_meta("slot_base_position", src_mi.position)
+		soda_flavor_mats[fid] = mat
+		soda_flavor_pads[fid] = src_mi
 		var lab := Label3D.new()
 		lab.name = "FlavorLabel_%s" % fid
 		lab.text = "ICE" if fid == "ice" else str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper()))
@@ -24552,7 +24532,8 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.88)
 		lab.outline_size = 3
 		lab.no_depth_test = true
-		lab.position = panel_pos + Vector3(0.0, -panel_h * 0.08, 0.004)
+		lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		lab.position = panel_pos + Vector3(0.0, -panel_h * 0.08, 0.01)
 		lab.set_meta("slot_base_position", lab.position)
 		soda_flavor_panel_root.add_child(lab)
 		soda_flavor_labels[fid] = lab
@@ -24572,6 +24553,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		shape.shape = box
 		area.add_child(shape)
 		soda_flavor_areas[fid] = area
+		count += 1
 	return true
 
 
@@ -24642,6 +24624,14 @@ func _soda_body_material_for(mat_name: String) -> StandardMaterial3D:
 			sm.albedo_color = Color(0.14, 0.15, 0.17)
 			sm.metallic = 0.92
 			sm.roughness = 0.28
+		"Metal_Plate":
+			sm.albedo_color = Color(0.62, 0.66, 0.70)
+			sm.metallic = 0.96
+			sm.roughness = 0.19
+		"Metal_Tray":
+			sm.albedo_color = Color(0.006, 0.007, 0.009)
+			sm.metallic = 0.55
+			sm.roughness = 0.08
 		"Banner_frame1":
 			sm.albedo_color = Color(0.10, 0.11, 0.12)
 			sm.metallic = 0.88
