@@ -580,6 +580,7 @@ var open_closed_sign: Node3D = null
 var open_closed_sign_area: Area3D = null
 var open_closed_sign_tween: Tween = null
 var open_closed_sign_busy: bool = false
+var window_bunting_root: Node3D = null
 var master_vol_row: Control = null
 var master_vol_slider: HSlider = null
 ## Slider 0–1; 1.0 = old ~20% bus level (comfortable game max).
@@ -2113,6 +2114,15 @@ const GFX_DEFAULTS := {
 	"bg_y": 1.08,
 	"bg_z": STREET_MATTE_BASE_Z,
 	"bg_scale": 1.17,
+	"bunting_x": 0.0,
+	"bunting_y": 1.84,
+	"bunting_z": 1.52,
+	"bunting_width": 4.95,
+	"bunting_sag": 0.18,
+	"bunting_count": 9.0,
+	"bunting_flag_w": 0.34,
+	"bunting_flag_h": 0.38,
+	"bunting_rope": 0.018,
 	"sale_x": 0.0,
 	"sale_y": 2.39,
 	"sale_z": 1.18,
@@ -16043,7 +16053,7 @@ func _build_wire_brush() -> void:
 
 func _build_season_shaker() -> void:
 	## Seasoning hanging next to the oil bottle on the far-left window beam.
-	shaker_home = Vector3(2.0340, 2.0384, 1.12) + _prop_offset("seasoning_shaker") ## Camera-left away from order tickets.
+	shaker_home = Vector3(2.0340, 2.1284, 1.12) + _prop_offset("seasoning_shaker") ## Camera-left away from order tickets.
 	if shaker_root != null and is_instance_valid(shaker_root):
 		shaker_root.queue_free()
 	shaker_root = null
@@ -19467,7 +19477,7 @@ func _build_oil_bottle() -> void:
 	oil_area = null
 	oil_liquid_pivot = null
 	oil_liquid_mesh = null
-	oil_home = Vector3(1.6740, 2.12, 1.12) + _prop_offset("oil_bottle")
+	oil_home = Vector3(1.6740, 2.21, 1.12) + _prop_offset("oil_bottle")
 	oil_root = Node3D.new()
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
@@ -23807,10 +23817,11 @@ func _release_sale_plaque() -> void:
 
 
 func _build_wall_paper_decals() -> void:
-	## Health certificate only; business license and beach photo are removed.
+	## Wall paper decals removed from the active truck scene.
 	if wall_paper_decals != null and is_instance_valid(wall_paper_decals):
 		wall_paper_decals.queue_free()
 		wall_paper_decals = null
+	return
 	var root := Node3D.new()
 	root.name = "WallPaperDecals"
 	world.add_child(root)
@@ -34434,6 +34445,8 @@ func _update_window_godrays(_delta: float) -> void:
 
 
 func _build_window_bunting() -> void:
+	_build_procedural_window_bunting()
+	return
 	## Party bunting draped across the top of the service window opening.
 	const SCENE_PATH := "res://assets/bunting/Bunting.fbx"
 	const TEX_PATH := "res://assets/bunting/bunting_red_yellow.png"
@@ -34458,6 +34471,90 @@ func _build_window_bunting() -> void:
 		tex = load(TEX_PATH) as Texture2D
 	_apply_bunting_materials(root, tex)
 	world.add_child(root)
+
+
+func _build_procedural_window_bunting() -> void:
+	if world == null:
+		return
+	if window_bunting_root != null and is_instance_valid(window_bunting_root):
+		window_bunting_root.queue_free()
+		window_bunting_root = null
+	var cfg := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
+	var root := Node3D.new()
+	root.name = "WindowBunting"
+	root.position = Vector3(
+		float(cfg.get("bunting_x", GFX_DEFAULTS["bunting_x"])),
+		float(cfg.get("bunting_y", GFX_DEFAULTS["bunting_y"])),
+		float(cfg.get("bunting_z", GFX_DEFAULTS["bunting_z"]))
+	)
+	world.add_child(root)
+	window_bunting_root = root
+	var width := maxf(0.4, float(cfg.get("bunting_width", GFX_DEFAULTS["bunting_width"])))
+	var sag := maxf(0.0, float(cfg.get("bunting_sag", GFX_DEFAULTS["bunting_sag"])))
+	var count := clampi(int(round(float(cfg.get("bunting_count", GFX_DEFAULTS["bunting_count"])))), 1, 24)
+	var flag_w := maxf(0.04, float(cfg.get("bunting_flag_w", GFX_DEFAULTS["bunting_flag_w"])))
+	var flag_h := maxf(0.04, float(cfg.get("bunting_flag_h", GFX_DEFAULTS["bunting_flag_h"])))
+	var rope := maxf(0.003, float(cfg.get("bunting_rope", GFX_DEFAULTS["bunting_rope"])))
+	var rope_mat := StandardMaterial3D.new()
+	rope_mat.albedo_color = Color(0.74, 0.47, 0.25)
+	rope_mat.roughness = 0.8
+	rope_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var red_mat := _make_bunting_flag_material(Color(0.94, 0.18, 0.17))
+	var yellow_mat := _make_bunting_flag_material(Color(1.0, 0.84, 0.23))
+	var points: Array[Vector3] = []
+	var rope_steps := max(18, count * 3)
+	for i in range(rope_steps + 1):
+		var t := float(i) / float(rope_steps)
+		points.append(Vector3(lerpf(-width * 0.5, width * 0.5, t), -sag * sin(PI * t), 0.0))
+	for i in range(points.size() - 1):
+		_add_bunting_rope_segment(root, points[i], points[i + 1], rope, rope_mat)
+	for i in range(count):
+		var t := (float(i) + 0.5) / float(count)
+		var pos := Vector3(lerpf(-width * 0.5, width * 0.5, t), -sag * sin(PI * t) - rope * 0.35, 0.004)
+		_add_bunting_flag(root, pos, flag_w, flag_h, red_mat if i % 2 == 0 else yellow_mat)
+
+
+func _make_bunting_flag_material(col: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = col
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 10
+	return mat
+
+
+func _add_bunting_rope_segment(parent: Node3D, a: Vector3, b: Vector3, thick: float, mat: Material) -> void:
+	var d := b - a
+	var mi := MeshInstance3D.new()
+	mi.name = "BuntingRope"
+	var box := BoxMesh.new()
+	box.size = Vector3(maxf(0.01, d.length()), thick, thick)
+	mi.mesh = box
+	mi.position = (a + b) * 0.5
+	mi.rotation_degrees = Vector3(0.0, 0.0, rad_to_deg(atan2(d.y, d.x)))
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+
+
+func _add_bunting_flag(parent: Node3D, pos: Vector3, width: float, height: float, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	mi.name = "BuntingFlag"
+	var arrs := []
+	arrs.resize(Mesh.ARRAY_MAX)
+	arrs[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+		Vector3(-width * 0.5, 0.0, 0.0),
+		Vector3(width * 0.5, 0.0, 0.0),
+		Vector3(0.0, -height, 0.0),
+	])
+	arrs[Mesh.ARRAY_NORMAL] = PackedVector3Array([Vector3(0, 0, -1), Vector3(0, 0, -1), Vector3(0, 0, -1)])
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	mi.mesh = mesh
+	mi.position = pos
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
 
 
 func _apply_bunting_materials(node: Node, tex: Texture2D) -> void:
@@ -40738,6 +40835,17 @@ func _build_options_menu() -> void:
 		func(): return _hidden_tree_edit_yaw(),
 		func(v: float): _hidden_set_tree_edit_yaw(clampf(v, -180.0, 180.0)))
 
+	_hidden_add_section(hidden_world_box, "WINDOW BUNTING")
+	_gfx_add_slider(hidden_world_box, "bunting_x", "Bunting X", -4.0, 4.0, 0.01)
+	_gfx_add_slider(hidden_world_box, "bunting_y", "Bunting Height", 0.8, 2.8, 0.01)
+	_gfx_add_slider(hidden_world_box, "bunting_z", "Bunting Depth", 0.8, 2.4, 0.01)
+	_gfx_add_slider(hidden_world_box, "bunting_width", "Bunting Width", 0.5, 7.0, 0.05)
+	_gfx_add_slider(hidden_world_box, "bunting_sag", "Bunting Sag", 0.0, 0.8, 0.01)
+	_gfx_add_slider(hidden_world_box, "bunting_count", "Triangle Flags", 1.0, 24.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bunting_flag_w", "Flag Width", 0.04, 0.8, 0.01)
+	_gfx_add_slider(hidden_world_box, "bunting_flag_h", "Flag Height", 0.04, 0.8, 0.01)
+	_gfx_add_slider(hidden_world_box, "bunting_rope", "Rope Thickness", 0.003, 0.08, 0.001)
+
 	_hidden_add_section(hidden_world_box, "PROP OFFSETS")
 	_hidden_add_prop_offset_group(hidden_world_box, "burger_buns", "Burger Buns")
 	_hidden_add_prop_offset_group(hidden_world_box, "cheese_stack", "Cheese Stack")
@@ -41945,6 +42053,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_first_sale_decal_settings(s)
 	_apply_menu_board_decal_settings(s)
 	_apply_burner_strip_settings(s)
+	_build_window_bunting()
 	_apply_build_zone_settings(s)
 	_apply_roomba_audio_settings(s)
 
@@ -45698,7 +45807,7 @@ func _build_open_closed_sign() -> void:
 	var root := Node3D.new()
 	root.name = "OpenClosedSign"
 	## Raised another ~50 screen px at this depth.
-	root.position = Vector3(-1.08, 2.05, 1.14) + _prop_offset("open_sign")
+	root.position = Vector3(-1.08, 2.20, 1.14) + _prop_offset("open_sign")
 	root.rotation_degrees = Vector3(0.0, OPEN_CLOSED_SIGN_YAW_OPEN, 0.0)
 	world.add_child(root)
 	open_closed_sign = root
