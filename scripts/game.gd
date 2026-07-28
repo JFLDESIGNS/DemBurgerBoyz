@@ -1466,6 +1466,9 @@ var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitbo
 var options_root: Control = null
 var options_panel: PanelContainer = null
 var options_menu_open: bool = false
+var options_panel_dragging: bool = false
+var options_panel_drag_offset := Vector2.ZERO
+var options_panel_user_moved: bool = false
 var options_vol_slider: HSlider = null
 var options_lobby_btn: Button = null
 var options_layer: CanvasLayer = null
@@ -1782,8 +1785,8 @@ const PHONE_CORNER_INNER := 6
 const PHONE_BELOW_RADIO_GAP := 5.0
 const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a clap-back
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
-const SODA_STATION_POS := Vector3(-1.56, 0.92, 0.98)
-const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
+const SODA_STATION_POS := Vector3(-1.53, 0.91, 0.91)
+const SODA_STATION_ROT := Vector3(0.0, -2.0, 0.0)
 const SODA_FOUNTAIN_MODEL_PATH := "res://models/sodamachine/newmachine1.fbx"
 const SODA_FOUNTAIN_EDIT_FBX := "res://models/sodamachine/newmachine1.fbx"
 const SODA_FOUNTAIN_GLB_PATH := "res://models/sodamachine/soda_fountain.glb"
@@ -1803,6 +1806,8 @@ const SODA_MODEL_PANEL_POS: Dictionary = {
 const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.335, 0.165)
 const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.335, 0.118)
 const SODA_NOZZLE_THROAT_DROP := 0.026
+const SODA_CUP_RACK_LOCAL := Vector3(-0.34, 0.92, 0.02)
+const SODA_CUP_STACK_BASE_LOCAL := Vector3(0.0, -0.10, 0.03)
 const SODA_SHARED_DRINK_NOZZLE := true
 const SODA_MODEL_SPOUT_POS: Dictionary = {
 	"cola": SODA_MODEL_SODA_SPOUT,
@@ -1814,7 +1819,7 @@ const SODA_CLIP_REST_TILT_X := -14.0 ## tip the bottom toward the cook a bit
 const SODA_CLIP_POUR_EXTRA_X := -16.0 ## extra tip while cup is filling
 const SODA_TUNING_CFG_SECTION := "soda_machine_tuning"
 var soda_station_pos := SODA_STATION_POS
-var soda_station_yaw := 180.0
+var soda_station_yaw := SODA_STATION_ROT.y
 var soda_station_scale := SODA_FOUNTAIN_SCALE
 var soda_nozzle_offsets_in: Dictionary = {
 	"cola": Vector3.ZERO,
@@ -3871,6 +3876,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		options_panel_dragging = false
 	if not playing:
 		return
 	## Lasso shape tool owns mouse / hotkeys while active (UI panel still gets GUI events).
@@ -3910,8 +3917,14 @@ func _input(event: InputEvent) -> void:
 					_set_options_menu_open(false)
 				get_viewport().set_input_as_handled()
 			return
-		## Leave mouse/keys alone so HUD Pause / Options buttons still work.
-		return
+		if shift_paused:
+			return
+		if options_menu_open and (event is InputEventMouseButton or event is InputEventMouseMotion):
+			var ui_pos := _event_screen_pos(event)
+			var over_options := options_panel != null and is_instance_valid(options_panel) and options_panel.get_global_rect().has_point(ui_pos)
+			var over_gfx := gfx_panel != null and is_instance_valid(gfx_panel) and gfx_panel.visible and gfx_panel.get_global_rect().has_point(ui_pos)
+			if over_options or over_gfx:
+				return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
 		return
@@ -23360,6 +23373,12 @@ func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
 		tip.position = _soda_nozzle_pour_tip_local(fid)
 	if soda_root != null and is_instance_valid(soda_root):
 		cup_rest = soda_root.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
+		cup_rest_rot = soda_root.global_rotation_degrees
+		var rack := soda_root.get_node_or_null("CupRack") as Node3D
+		if rack != null and is_instance_valid(rack):
+			rack.position = SODA_CUP_RACK_LOCAL
+			cup_home = rack.to_global(SODA_CUP_STACK_BASE_LOCAL)
+			cup_home_rot = soda_root.global_rotation_degrees
 		_layout_parked_cups()
 	if rebuild_tanks:
 		_rebuild_soda_tank_visuals()
@@ -28861,7 +28880,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	var rack := Node3D.new()
 	rack.name = "CupRack"
 	## Top cup tube sits visibly on top of the two-spigot machine.
-	rack.position = Vector3(-0.34, 0.92, 0.02)
+	rack.position = SODA_CUP_RACK_LOCAL
 	station.add_child(rack)
 
 	var tube_mat := _make_soda_metal_mat(Color(0.02, 0.02, 0.025, 0.38), 0.84, 0.24)
@@ -28870,7 +28889,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	tube_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	## Grab cup bottom sits here; decorative nest stacks above it.
-	var stack_base := Vector3(0.0, -0.10, 0.03)
+	var stack_base := SODA_CUP_STACK_BASE_LOCAL
 	var nest_step := 0.042 ## Tall enough to read as a vertical stack (was 0.0175 ≈ 2 cups)
 	var spare_count := 9
 
@@ -28920,10 +28939,10 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	## Grabable empty sits at the bottom of the nest — same size as the decorative cups.
 	## stack_base is the cup root (floor); shell mesh is centered +H/2 above it.
 	cup_home = rack.to_global(stack_base)
-	cup_home_rot = Vector3.ZERO
+	cup_home_rot = station.global_rotation_degrees
 	if cup_rest == Vector3.ZERO:
 		cup_rest = station.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
-		cup_rest_rot = Vector3.ZERO
+		cup_rest_rot = station.global_rotation_degrees
 	_spawn_and_bind_empty_cup()
 
 	soda_stream_mesh = MeshInstance3D.new()
@@ -30843,7 +30862,7 @@ func _cup_rack_seat_global() -> Vector3:
 	if soda_root != null and is_instance_valid(soda_root):
 		var rack := soda_root.get_node_or_null("CupRack") as Node3D
 		if rack != null and is_instance_valid(rack):
-			return rack.to_global(Vector3(0.0, -0.12, 0.06))
+			return rack.to_global(SODA_CUP_STACK_BASE_LOCAL)
 	return cup_home
 
 
@@ -31082,7 +31101,9 @@ func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	var off_in: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
 	var off := off_in * INCH_TO_M
 	if soda_root != null and is_instance_valid(soda_root):
-		var local := soda_root.to_local(Vector3(tip_p.x, _cup_deck_fill_y(), tip_p.z)) + off
+		var local := soda_root.to_local(tip_p)
+		local.y = CUP_TRAY_DECK_LOCAL_Y + cup_fill_extra_y
+		local += off
 		return soda_root.to_global(local)
 	return Vector3(tip_p.x, _cup_deck_fill_y(), tip_p.z) + off
 
@@ -39665,6 +39686,8 @@ const OPTIONS_SCREEN_MARGIN := 30.0 ## Keep options / advanced GFX clear of scre
 func _layout_options_panel() -> void:
 	if options_panel == null or not is_instance_valid(options_panel):
 		return
+	if options_panel_user_moved:
+		return
 	var vr := get_viewport().get_visible_rect().size
 	var half_w := minf(210.0, maxf(160.0, (vr.x - OPTIONS_SCREEN_MARGIN * 2.0) * 0.5))
 	var half_h := maxf(140.0, (vr.y - OPTIONS_SCREEN_MARGIN * 2.0) * 0.5)
@@ -39744,6 +39767,16 @@ func _hidden_add_section(parent: Control, text: String) -> Label:
 
 
 func _hidden_add_category(parent: Control, text: String) -> VBoxContainer:
+	var tab_scroll: ScrollContainer = null
+	if parent is TabContainer:
+		tab_scroll = ScrollContainer.new()
+		tab_scroll.name = text.capitalize().replace(" ", "")
+		tab_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tab_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		tab_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		tab_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+		parent.add_child(tab_scroll)
+		parent = tab_scroll
 	var panel := PanelContainer.new()
 	panel.name = text.capitalize().replace(" ", "") + "Group"
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -39801,21 +39834,14 @@ func _build_options_menu() -> void:
 	options_root.name = "OptionsMenu"
 	options_root.visible = false
 	options_root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	options_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	options_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	options_root.process_mode = Node.PROCESS_MODE_ALWAYS
 	options_layer.add_child(options_root)
 
 	options_dim = ColorRect.new()
 	options_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	options_dim.color = Color(0.02, 0.03, 0.05, 0.72)
-	options_dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	options_dim.gui_input.connect(func(ev: InputEvent):
-		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-			if gfx_panel != null and gfx_panel.visible:
-				return
-			## Only close when clicking the dim itself (not the panel).
-			_set_options_menu_open(false)
-	)
+	options_dim.color = Color(0.02, 0.03, 0.05, 0.0)
+	options_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	options_root.add_child(options_dim)
 
 	options_panel = PanelContainer.new()
@@ -39850,9 +39876,20 @@ func _build_options_menu() -> void:
 	var title := Label.new()
 	title.text = "OPTIONS"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.mouse_filter = Control.MOUSE_FILTER_STOP
 	UiFontsScript.apply_label(title, true, 26)
 	title.add_theme_color_override("font_color", Color(1.0, 0.88, 0.4))
+	title.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+			options_panel_dragging = ev.pressed
+			if options_panel_dragging and options_panel != null and is_instance_valid(options_panel):
+				options_panel_user_moved = true
+				options_panel_drag_offset = get_viewport().get_mouse_position() - options_panel.global_position
+			title.accept_event()
+		elif ev is InputEventMouseMotion and options_panel_dragging and options_panel != null and is_instance_valid(options_panel):
+			options_panel.global_position = get_viewport().get_mouse_position() - options_panel_drag_offset
+			title.accept_event()
+	)
 	v.add_child(title)
 
 	var hint := Label.new()
@@ -40029,14 +40066,28 @@ func _build_options_menu() -> void:
 	options_hidden_room_tone_box.visible = false
 	options_hidden_room_tone_box.add_theme_constant_override("separation", 8)
 	hidden.add_child(options_hidden_room_tone_box)
-	var hidden_bg_box := _hidden_add_category(options_hidden_room_tone_box, "BACKGROUND IMAGE")
-	var hidden_debug_box := _hidden_add_category(options_hidden_room_tone_box, "DEBUG OVERLAYS")
-	var hidden_audio_box := _hidden_add_category(options_hidden_room_tone_box, "AUDIO")
-	var hidden_grill_box := _hidden_add_category(options_hidden_room_tone_box, "GRILL VISUALS")
-	var hidden_world_box := _hidden_add_category(options_hidden_room_tone_box, "WORLD AND PROP POSITIONS")
-	var hidden_tools_box := _hidden_add_category(options_hidden_room_tone_box, "TOOLS AND MINIGAMES")
-	var hidden_soda_box := _hidden_add_category(options_hidden_room_tone_box, "SODA AND SLOT MACHINE")
-	var hidden_render_box := _hidden_add_category(options_hidden_room_tone_box, "ADVANCED RENDERING")
+	var hidden_tabs := TabContainer.new()
+	hidden_tabs.custom_minimum_size = Vector2(0, 520)
+	hidden_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hidden_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	hidden_tabs.mouse_filter = Control.MOUSE_FILTER_STOP
+	options_hidden_room_tone_box.add_child(hidden_tabs)
+	var hidden_bg_box := _hidden_add_category(hidden_tabs, "BACKGROUND IMAGE")
+	hidden_bg_box.get_parent().get_parent().name = "Background"
+	var hidden_debug_box := _hidden_add_category(hidden_tabs, "DEBUG OVERLAYS")
+	hidden_debug_box.get_parent().get_parent().name = "Debug"
+	var hidden_audio_box := _hidden_add_category(hidden_tabs, "AUDIO")
+	hidden_audio_box.get_parent().get_parent().name = "Audio"
+	var hidden_grill_box := _hidden_add_category(hidden_tabs, "GRILL VISUALS")
+	hidden_grill_box.get_parent().get_parent().name = "Grill"
+	var hidden_world_box := _hidden_add_category(hidden_tabs, "WORLD AND PROP POSITIONS")
+	hidden_world_box.get_parent().get_parent().name = "World"
+	var hidden_tools_box := _hidden_add_category(hidden_tabs, "TOOLS AND MINIGAMES")
+	hidden_tools_box.get_parent().get_parent().name = "Tools"
+	var hidden_soda_box := _hidden_add_category(hidden_tabs, "DRINK DISPENSER")
+	hidden_soda_box.get_parent().get_parent().name = "Drinks"
+	var hidden_render_box := _hidden_add_category(hidden_tabs, "ADVANCED RENDERING")
+	hidden_render_box.get_parent().get_parent().name = "Render"
 	for debug_control in [options_hidden_zone_check, options_hidden_piano_check]:
 		if debug_control != null and is_instance_valid(debug_control):
 			hidden.remove_child(debug_control)
@@ -41415,89 +41466,6 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice Bay")
 	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Soda Bay")
 
-	var slot_lab := Label.new()
-	slot_lab.text = "SODA SLOT MACHINE"
-	UiFontsScript.apply_label(slot_lab, true, 13)
-	slot_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	hidden_soda_box.add_child(slot_lab)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_size", "Icon Size px", 24.0, 240.0, 1.0,
-		func(): return soda_slot_icon_size_px,
-		func(v: float):
-			soda_slot_icon_size_px = clampf(v, 24.0, 240.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed(true)
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_pad", "Icon Padding px", 0.0, 112.0, 1.0,
-		func(): return soda_slot_icon_padding_px,
-		func(v: float):
-			soda_slot_icon_padding_px = clampf(v, 0.0, 112.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed(true)
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_x", "Icon X px", -96.0, 96.0, 1.0,
-		func(): return soda_slot_icon_offset_px.x,
-		func(v: float):
-			soda_slot_icon_offset_px.x = clampf(v, -96.0, 96.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed(true)
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_icon_y", "Icon Y px", -96.0, 96.0, 1.0,
-		func(): return soda_slot_icon_offset_px.y,
-		func(v: float):
-			soda_slot_icon_offset_px.y = clampf(v, -96.0, 96.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed(true)
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_btn_x", "Button X (in)", -8.0, 8.0, 0.1,
-		func(): return soda_slot_spin_button_offset_in.x,
-		func(v: float):
-			soda_slot_spin_button_offset_in.x = clampf(v, -8.0, 8.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_btn_y", "Button Y (in)", -6.0, 6.0, 0.1,
-		func(): return soda_slot_spin_button_offset_in.y,
-		func(v: float):
-			soda_slot_spin_button_offset_in.y = clampf(v, -6.0, 6.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_btn_z", "Button Depth (in)", -6.0, 6.0, 0.1,
-		func(): return soda_slot_spin_button_offset_in.z,
-		func(v: float):
-			soda_slot_spin_button_offset_in.z = clampf(v, -6.0, 6.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_x", "Text X (in)", -8.0, 8.0, 0.1,
-		func(): return soda_slot_spin_text_offset_in.x,
-		func(v: float):
-			soda_slot_spin_text_offset_in.x = clampf(v, -8.0, 8.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_y", "Text Y (in)", -6.0, 6.0, 0.1,
-		func(): return soda_slot_spin_text_offset_in.y,
-		func(v: float):
-			soda_slot_spin_text_offset_in.y = clampf(v, -6.0, 6.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_z", "Text Depth (in)", -6.0, 6.0, 0.1,
-		func(): return soda_slot_spin_text_offset_in.z,
-		func(v: float):
-			soda_slot_spin_text_offset_in.z = clampf(v, -6.0, 6.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-	_hidden_add_labeled_slider(hidden_soda_box, "slot_text_size", "Text Size", 12.0, 72.0, 1.0,
-		func(): return soda_slot_spin_text_size,
-		func(v: float):
-			soda_slot_spin_text_size = clampf(v, 12.0, 72.0)
-			_save_soda_slot_settings()
-			_apply_soda_slot_settings_changed()
-	)
-
 	var ao_lab := Label.new()
 	ao_lab.text = "AMBIENT OCCLUSION"
 	UiFontsScript.apply_label(ao_lab, true, 13)
@@ -41758,6 +41726,7 @@ func _set_options_menu_open(open: bool) -> void:
 	if options_layer != null and is_instance_valid(options_layer):
 		options_layer.visible = open
 	if not open:
+		options_panel_dragging = false
 		_set_graphics_menu_open(false)
 	else:
 		_layout_options_panel()
