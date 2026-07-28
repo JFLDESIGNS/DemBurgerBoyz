@@ -1447,9 +1447,9 @@ func play_grade_tune(label: String) -> void:
 	match label:
 		"Wow!":
 			_play_cached("grade_wow", _make_wow_tune, 0.88, 0.52)
-		"Perfect!":
+		"Perfect!", "Perfect":
 			_play_cached("grade_perfect", _make_perfect_tune, 0.88, 0.46)
-		"Great!":
+		"Great!", "Great job":
 			_play_cached("grade_great", _make_great_tune, 0.88, 0.40)
 		"Good":
 			_play_cached("grade_good", _make_good_tune, 0.90, 0.34)

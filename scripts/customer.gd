@@ -160,11 +160,9 @@ var queue_timer_active: bool = true
 ## Serve-speed clock starts when the order ticket appears.
 var order_elapsed_sec: float = 0.0
 var _order_clock_on: bool = false
-const SERVE_WOW_SEC := 3.0
-const SERVE_PERFECT_SEC := 6.0
-const SERVE_GREAT_SEC := 10.0
-const SERVE_GOOD_SEC := 30.0
-const SERVE_NOT_GOOD_SEC := 45.0
+const SERVE_PERFECT_SEC := 10.0
+const SERVE_GREAT_JOB_SEC := 20.0
+const SERVE_REVIEW_HOLD_SEC := 2.0
 var speech: String = ""
 var last_tip: int = 0
 var last_base_pay: int = 0
@@ -1376,7 +1374,7 @@ func set_queue_timer_active(active: bool) -> void:
 
 
 func speed_rating(burnt: bool = false) -> Dictionary:
-	## Wow! ≤3s · Perfect! ≤6s · Great! ≤10s · Good <30s · Not good → Bad — from ticket time.
+	## Perfect <=10s, Great job <=20s, then -0.5 star per extra 5 seconds.
 	if burnt:
 		return {
 			"score": 12,
@@ -1390,61 +1388,51 @@ func speed_rating(burnt: bool = false) -> Dictionary:
 			"text": "Bad  Burnt",
 		}
 	var wait := order_elapsed_sec
-	var score := 70
+	var stars := 5.0
+	if wait > SERVE_GREAT_JOB_SEC:
+		stars = 5.0 - ceilf((wait - SERVE_GREAT_JOB_SEC) / 5.0) * 0.5
+	stars = clampf(stars, 1.0, 5.0)
+	var score := int(round(stars / 5.0 * 100.0))
 	var grade := "B"
-	var stars := 3
 	var label := "Good"
 	var detail := "%.0fs" % wait
 	var color := Color("81C784")
 	var pay_mul := 1.0
-	if wait <= SERVE_WOW_SEC:
+	if wait <= SERVE_PERFECT_SEC:
 		score = 100
 		grade = "S"
-		stars = 5
-		label = "Wow!"
-		detail = "%.1fs" % wait
-		color = Color("FFD54F")
-		pay_mul = 1.5
-	elif wait <= SERVE_PERFECT_SEC:
-		score = 100
-		grade = "S"
-		stars = 5
-		label = "Perfect!"
+		label = "Perfect"
 		detail = "%.1fs" % wait
 		color = Color("FFEB3B")
-		pay_mul = 1.35
-	elif wait <= SERVE_GREAT_SEC:
-		score = 88
+		pay_mul = 1.45
+	elif wait <= SERVE_GREAT_JOB_SEC:
+		score = 95
 		grade = "A"
-		stars = 4
-		label = "Great!"
+		label = "Great job"
 		detail = "%.1fs" % wait
 		color = Color("A5D6A7")
 		pay_mul = 1.2
-	elif wait < SERVE_GOOD_SEC:
-		score = 72
+	elif stars >= 4.0:
+		score = int(round(stars / 5.0 * 100.0))
 		grade = "B"
-		stars = 3
 		label = "Good"
 		detail = "%.0fs" % wait
 		color = Color("81C784")
 		pay_mul = 1.0
-	elif wait < SERVE_NOT_GOOD_SEC:
-		score = 38
-		grade = "D"
-		stars = 1
-		label = "Not good"
+	elif stars >= 2.5:
+		score = int(round(stars / 5.0 * 100.0))
+		grade = "C"
+		label = "Slow"
 		detail = "%.0fs" % wait
 		color = Color("FFA726")
-		pay_mul = 0.55
+		pay_mul = 0.7
 	else:
-		score = 15
-		grade = "F"
-		stars = 0
-		label = "Bad"
+		score = int(round(stars / 5.0 * 100.0))
+		grade = "D"
+		label = "Not good"
 		detail = "%.0fs" % wait
 		color = Color("EF5350")
-		pay_mul = 0.28
+		pay_mul = 0.42
 	return {
 		"score": score,
 		"grade": grade,
@@ -1613,19 +1601,26 @@ func bounce_happy() -> void:
 	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.15)
 
 
-func show_review_stars(stars: float) -> void:
-	## Floating ★★★★☆ above the head when this guest posts a social review.
+func show_review_stars(stars: float, review_text: String = "") -> void:
+	## Floating rating above the head when this guest posts a social review.
 	var full := clampi(int(floor(clampf(stars, 0.0, 5.0) + 0.25)), 0, 5)
 	var text := ""
 	for i in 5:
 		text += "★" if i < full else "☆"
+	if absf(stars - roundf(stars)) > 0.01:
+		text += " %.1f/5" % stars
+	if review_text.strip_edges() != "":
+		var short := review_text.strip_edges().replace("\n", " ")
+		if short.length() > 72:
+			short = short.substr(0, 69) + "..."
+		text += "\n" + short
 	if _review_stars == null:
 		_review_stars = Label3D.new()
 		_review_stars.name = "ReviewStars"
 		_review_stars.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_review_stars.no_depth_test = true
 		_review_stars.shaded = false
-		UiFontsScript.apply_label3d(_review_stars, true, 56, 0.11)
+		UiFontsScript.apply_label3d(_review_stars, true, 40, 0.085)
 		_review_stars.outline_size = 10
 		_review_stars.outline_modulate = Color(0.08, 0.05, 0.0, 0.85)
 		add_child(_review_stars)
@@ -1646,11 +1641,11 @@ func show_review_stars(stars: float) -> void:
 	_review_stars_tween = create_tween()
 	_review_stars_tween.set_parallel(true)
 	_review_stars_tween.tween_property(
-		_review_stars, "position:y", BAR_Y + 0.58, 1.55
+		_review_stars, "position:y", BAR_Y + 0.42, 2.0
 	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	_review_stars_tween.tween_property(
-		_review_stars, "modulate:a", 0.0, 1.55
-	).set_delay(0.4).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		_review_stars, "modulate:a", 0.0, 2.0
+	).set_delay(1.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_review_stars_tween.chain().tween_callback(func() -> void:
 		if _review_stars != null and is_instance_valid(_review_stars):
 			_review_stars.visible = false
@@ -2931,6 +2926,18 @@ func complete_serve(payout: int) -> void:
 		_bubble.visible = false
 	if _bubble_bg:
 		_bubble_bg.visible = false
+	if bool(get_meta("serve_review_hold", false)):
+		set_meta("serve_review_pending", true)
+		_set_mood("cheer")
+		get_tree().create_timer(SERVE_REVIEW_HOLD_SEC).timeout.connect(func() -> void:
+			if not is_instance_valid(self) or is_leaving:
+				return
+			set_meta("serve_review_hold", false)
+			set_meta("serve_review_pending", false)
+			served.emit(self, payout)
+			leave_happy()
+		)
+		return
 	served.emit(self, payout)
 	leave_happy()
 
@@ -2940,5 +2947,17 @@ func complete_serve_meh(payout: int) -> void:
 		_bubble.visible = false
 	if _bubble_bg:
 		_bubble_bg.visible = false
+	if bool(get_meta("serve_review_hold", false)):
+		set_meta("serve_review_pending", true)
+		_set_mood("ok")
+		get_tree().create_timer(SERVE_REVIEW_HOLD_SEC).timeout.connect(func() -> void:
+			if not is_instance_valid(self) or is_leaving:
+				return
+			set_meta("serve_review_hold", false)
+			set_meta("serve_review_pending", false)
+			served.emit(self, payout)
+			leave_meh()
+		)
+		return
 	served.emit(self, payout)
 	leave_meh()

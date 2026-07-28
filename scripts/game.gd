@@ -36366,12 +36366,12 @@ func _commit_social_review(
 				img.decompress()
 			pic_png = img.save_png_to_buffer()
 	_apply_social_review(stars, who, text, pic)
-	_show_customer_review_stars(customer, stars)
+	_show_customer_review_stars(customer, stars, text)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
 		mp_social_review.rpc(stars, who, text, pic_png)
 		var nid := _customer_net_id(customer)
 		if nid >= 0:
-			mp_customer_review_stars.rpc(nid, stars)
+			mp_customer_review_stars.rpc(nid, stars, text)
 		## Absolute feed replace so guests never show stars with an empty FEED.
 		_mp_broadcast_social_feed()
 
@@ -36385,11 +36385,11 @@ func _bts_review_for_customer(customer: Node3D) -> Dictionary:
 	return BTS_REVIEW_BY_SKIN[skin_idx] as Dictionary
 
 
-func _show_customer_review_stars(customer: Node3D, stars: float) -> void:
+func _show_customer_review_stars(customer: Node3D, stars: float, review_text: String = "") -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
 	if customer.has_method("show_review_stars"):
-		customer.show_review_stars(stars)
+		customer.show_review_stars(stars, review_text)
 
 
 func _apply_social_review(
@@ -36613,36 +36613,13 @@ func _review_stars_from_serve(
 ) -> float:
 	if wrong or payout <= 0:
 		return 1.0
-	var cook_stars := float(cook_r.get("stars", 3))
-	var cook_score := int(cook_r.get("score", 70))
-	## Burnt: 80% hate it (1★) · 20% charcoal weirdos leave a good review about it.
 	if _cook_rating_is_burnt(cook_r):
-		if randf() < 0.20:
-			return 5.0 if randf() < 0.45 else 4.0
 		return 1.0
-	if meh:
-		## Mild misses land on 2–3★ more often than a hard 1.
-		return 2.0 if randf() < 0.55 else 3.0
-	var stars := cook_stars
-	## Order quality can lift a decent cook — not always straight to 5.
-	if cook_score >= 70 and cook_stars >= 3.0:
-		if quality >= 0.98:
-			stars = 5.0 if randf() < 0.55 else 4.0
-		elif quality >= 0.9:
-			stars = 4.0 if randf() < 0.7 else 3.0
-		elif cook_stars >= 4.0:
-			## Great timing still sometimes posts a chill 3★.
-			if randf() < 0.22:
-				stars = 3.0
-		elif cook_stars >= 3.0:
-			## Good serves spread across 3 / 4.
-			stars = 4.0 if randf() < 0.45 else 3.0
-	elif cook_stars <= 1.0:
-		stars = 1.0 if randf() < 0.7 else 2.0
-	elif cook_stars <= 2.0:
-		stars = 2.0 if randf() < 0.65 else 3.0
-	## Whole-star posts only — BizPhone never shows half stars in the feed copy.
-	return clampf(roundf(stars), 1.0, 5.0)
+	var wait := float(cook_r.get("wait", 0.0))
+	var timing_stars := 5.0
+	if wait > 20.0:
+		timing_stars = 5.0 - ceilf((wait - 20.0) / 5.0) * 0.5
+	return clampf(timing_stars, 1.0, 5.0)
 
 
 func _cook_rating_is_burnt(cook_r: Dictionary) -> bool:
@@ -48799,12 +48776,17 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 			}
 	var guest_mp := mp_enabled and not NetManager.is_host()
 	var disguise := bool(cust.get("is_disguise_cat"))
+	cust.set_meta("serve_review_hold", true)
 	var pay: Dictionary = cust.receive_burger(
 		items, patty_mult, combo, tip_factor, fresh_r, seasoned
 	)
 	var payout: int = int(pay.get("total", 0))
 	var tip_amt: int = int(pay.get("tip", 0))
 	var was_meh: bool = bool(pay.get("meh", false)) or not seasoned
+	if not bool(pay.get("perfect", false)) and str(cook_r.get("label", "")) in ["Perfect", "Great job"]:
+		cook_r = cook_r.duplicate()
+		cook_r["label"] = "Good"
+		cook_r["text"] = "Good  %s" % str(cook_r.get("detail", "")).strip_edges()
 	var cook_bit := "  %s" % cook_r["text"]
 	if cust.has_method("stop_order_clock"):
 		cust.stop_order_clock()
@@ -48825,12 +48807,15 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 		if game_audio:
 			var grade_lab := str(cook_r.get("label", ""))
 			## Order-up bell already rang at serve start — grade tunes only here.
-			if not was_meh and grade_lab in ["Wow!", "Perfect!", "Great!", "Good"]:
+			if not was_meh and grade_lab in ["Perfect", "Great job", "Good"]:
 				game_audio.play_grade_tune(grade_lab)
-		var speed_top: bool = str(cook_r.get("label", "")) in ["Wow!", "Perfect!"]
+		var speed_top: bool = str(cook_r.get("label", "")) in ["Perfect", "Great job"]
 		var was_perfect: bool = (
 			not was_meh
-			and ((bool(pay.get("perfect", false)) and patty_mult >= 1.0 and fresh_r > 0.4) or speed_top)
+			and bool(pay.get("perfect", false))
+			and patty_mult >= 1.0
+			and fresh_r > 0.4
+			and speed_top
 		)
 		if not guest_mp:
 			if was_perfect:
@@ -48853,10 +48838,10 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 				"  COMBO x%d" % combo if combo > 1 else "",
 				cook_bit
 			], cook_r["color"] if int(cook_r["score"]) >= 70 else Color("FFE082"))
-		elif str(cook_r.get("label", "")) == "Wow!":
-			_flash("+%s  Wow! COMBO x%d%s" % [_format_money(float(payout)), combo, cook_bit], Color("FFD54F"))
-		elif speed_top:
-			_flash("+%s  Perfect! COMBO x%d%s" % [_format_money(float(payout)), combo, cook_bit], Color("FFEB3B"))
+		elif str(cook_r.get("label", "")) == "Perfect":
+			_flash("+%s  Perfect COMBO x%d%s" % [_format_money(float(payout)), combo, cook_bit], Color("FFEB3B"))
+		elif str(cook_r.get("label", "")) == "Great job":
+			_flash("+%s  Great job COMBO x%d%s" % [_format_money(float(payout)), combo, cook_bit], Color("A5D6A7"))
 		else:
 			var fresh_note := " (stale)" if fresh_r <= 0.4 else ""
 			_flash("+%s%s%s" % [_format_money(float(payout)), fresh_note, cook_bit], cook_r["color"])
@@ -48886,7 +48871,7 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 			review_kind = "meh"
 		elif review_stars <= 1.5:
 			review_kind = "angry"
-		_maybe_record_social_review(review_stars, review_kind, tip_amt, station_index, cust)
+		_commit_social_review(review_stars, review_kind, tip_amt, station_index, cust)
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
 			and not _customer_soda_handed(cust):
@@ -49172,6 +49157,8 @@ func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> vo
 			return
 		if not _auto_serving:
 			_flash("Click an order ticket first, then Serve", Color("EF5350"))
+		return
+	if bool(customer.get_meta("serve_review_pending", false)):
 		return
 	selected_customer = customer
 	_highlight_tickets()
@@ -52647,12 +52634,12 @@ func mp_social_review(stars: float, who: String, text: String, pic_png: PackedBy
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_customer_review_stars(net_id: int, stars: float) -> void:
+func mp_customer_review_stars(net_id: int, stars: float, review_text: String = "") -> void:
 	## Guest: float ★ rating above the customer who just posted.
 	if NetManager.is_host():
 		return
 	var c = _customer_by_net_id(net_id)
-	_show_customer_review_stars(c, stars)
+	_show_customer_review_stars(c, stars, review_text)
 
 
 @rpc("any_peer", "call_remote", "reliable")
