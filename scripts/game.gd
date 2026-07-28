@@ -1791,12 +1791,12 @@ const SODA_BRAND_LOGO_PATHS: Array[String] = [
 ## Two-bay sodaedit setup: back bay is ice, front bay is cola.
 const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["ice", "cola"]
 const SODA_MODEL_PANEL_POS: Dictionary = {
-	"ice": Vector3(-0.075, 0.245, 0.118),
-	"cola": Vector3(0.075, 0.245, 0.165),
+	"ice": Vector3(-0.075, 0.335, 0.118),
+	"cola": Vector3(0.075, 0.335, 0.165),
 }
-const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.245, 0.165)
-const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.245, 0.118)
-const SODA_NOZZLE_THROAT_DROP := 0.071
+const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.335, 0.165)
+const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.335, 0.118)
+const SODA_NOZZLE_THROAT_DROP := 0.026
 const SODA_SHARED_DRINK_NOZZLE := true
 const SODA_MODEL_SPOUT_POS: Dictionary = {
 	"cola": SODA_MODEL_SODA_SPOUT,
@@ -23218,12 +23218,12 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_top_clear_v2", true)
 		cfg.save(GFX_CFG_PATH)
-	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v2"):
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v3"):
 		for fid in ["cola", "ice"]:
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, 0.0)
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, 0.0)
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, 0.0)
-		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v2", true)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v3", true)
 		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
@@ -24496,11 +24496,18 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		var h_sum := 0.0
 		var count := 0
 		var backing := _make_soda_flavor_panel_backing_mat()
+		panels.sort_custom(func(a, b): return float(a["x"]) < float(b["x"]))
 		for p in panels:
 			var src_mi: MeshInstance3D = p.get("mi")
 			if src_mi == null or not is_instance_valid(src_mi) or src_mi.mesh == null:
 				continue
-			src_mi.material_override = backing
+			var src_i := count
+			if src_i < SODA_BRAND_FLAVOR_ORDER.size():
+				var src_fid := str(SODA_BRAND_FLAVOR_ORDER[src_i])
+				src_mi.material_override = _make_soda_flavor_panel_mat(src_fid)
+				soda_flavor_mats["model_%s" % src_fid] = src_mi.material_override
+			else:
+				src_mi.material_override = backing
 			var aabb := src_mi.get_aabb()
 			var center_local := soda_root.to_local(src_mi.to_global(aabb.get_center()))
 			y_sum += center_local.y
@@ -24510,7 +24517,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 			count += 1
 		if count > 0:
 			panel_y = y_sum / float(count)
-			panel_z = z_sum / float(count) + 0.010
+			panel_z = z_sum / float(count) + 0.026
 			panel_w = clampf(w_sum / float(count) * 0.92, 0.10, 0.19)
 			panel_h = clampf(h_sum / float(count) * 0.90, 0.10, 0.20)
 	if soda_flavor_panel_root != null and is_instance_valid(soda_flavor_panel_root):
@@ -24543,7 +24550,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		lab.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.88)
 		lab.outline_size = 3
-		lab.no_depth_test = false
+		lab.no_depth_test = true
 		lab.position = panel_pos + Vector3(0.0, -panel_h * 0.08, 0.004)
 		lab.set_meta("slot_base_position", lab.position)
 		soda_flavor_panel_root.add_child(lab)
@@ -24584,13 +24591,14 @@ func _make_soda_flavor_panel_mat(fid: String) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.resource_name = "SodaPanel_%s" % fid
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = col.darkened(0.20)
+	mat.albedo_color = col.darkened(0.12)
 	mat.emission_enabled = true
 	mat.emission = col
-	mat.emission_energy_multiplier = 0.32
+	mat.emission_energy_multiplier = 1.05
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.render_priority = 12
+	mat.no_depth_test = true
+	mat.render_priority = 18
 	return mat
 
 
