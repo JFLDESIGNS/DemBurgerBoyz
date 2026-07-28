@@ -1796,6 +1796,7 @@ const SODA_MODEL_PANEL_POS: Dictionary = {
 }
 const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.252, -0.188)
 const SODA_MODEL_ICE_SPOUT := Vector3(-0.085, 0.252, -0.118)
+const SODA_NOZZLE_THROAT_DROP := 0.071
 const SODA_SHARED_DRINK_NOZZLE := true
 const SODA_MODEL_SPOUT_POS: Dictionary = {
 	"cola": SODA_MODEL_SODA_SPOUT,
@@ -1810,7 +1811,7 @@ var soda_station_pos := SODA_STATION_POS
 var soda_station_yaw := 180.0
 var soda_station_scale := SODA_FOUNTAIN_SCALE
 var soda_nozzle_offsets_in: Dictionary = {
-	"cola": Vector3(-0.05, -0.05, 0.0),
+	"cola": Vector3.ZERO,
 	"lemon_lime": Vector3.ZERO,
 	"orange": Vector3.ZERO,
 	"ice": Vector3.ZERO,
@@ -23217,6 +23218,13 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_top_clear_v2", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v1"):
+		for fid in ["cola", "ice"]:
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -23324,8 +23332,7 @@ func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
 		var tip := _soda_tip_for_station(fid)
 		if tip == null:
 			continue
-		var base: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
-		tip.position = _soda_model_local(base + _soda_nozzle_offset_model(fid))
+		tip.position = _soda_nozzle_pour_tip_local(fid)
 	if soda_root != null and is_instance_valid(soda_root):
 		cup_rest = soda_root.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
 		_layout_parked_cups()
@@ -24742,6 +24749,18 @@ func _soda_nozzle_offset_model(fid: String) -> Vector3:
 	return off_in * INCH_TO_M / maxf(soda_station_scale, 0.001)
 
 
+func _soda_nozzle_base_model(fid: String) -> Vector3:
+	return SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+
+
+func _soda_nozzle_visual_local(fid: String) -> Vector3:
+	return _soda_model_local(_soda_nozzle_base_model(fid) + _soda_nozzle_offset_model(fid))
+
+
+func _soda_nozzle_pour_tip_local(fid: String) -> Vector3:
+	return _soda_nozzle_visual_local(fid) + Vector3(0.0, -SODA_NOZZLE_THROAT_DROP, 0.0)
+
+
 func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 	## Pour tip only — nozzles are part of the fountain mesh.
 	if is_soda:
@@ -24749,8 +24768,7 @@ func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 			var tip := Marker3D.new()
 			tip.name = "SodaSpoutTip_%s" % fid
 			tip.set_meta("soda_station_id", fid)
-			var base: Vector3 = SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
-			tip.position = _soda_model_local(base + _soda_nozzle_offset_model(fid))
+			tip.position = _soda_nozzle_pour_tip_local(fid)
 			parent.add_child(tip)
 			soda_spout_markers[fid] = tip
 		soda_spout_marker = soda_spout_markers.get("cola", null)
@@ -24759,7 +24777,7 @@ func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 		var tip := Marker3D.new()
 		tip.name = "IceSpoutTip"
 		tip.set_meta("soda_station_id", "ice")
-		tip.position = _soda_model_local(SODA_MODEL_ICE_SPOUT + _soda_nozzle_offset_model("ice"))
+		tip.position = _soda_nozzle_pour_tip_local("ice")
 		parent.add_child(tip)
 		ice_spout_marker = tip
 		soda_spout_markers["ice"] = tip
@@ -24916,8 +24934,8 @@ func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
 	parent.add_child(root)
 	var mat := _make_soda_metal_mat(Color(0.50, 0.52, 0.55), 0.92, 0.20)
 	var throat_mat := _make_soda_metal_mat(Color(0.13, 0.15, 0.17), 0.45, 0.48)
-	_add_soda_nozzle_fill_visual(root, "NozzleFill_ice", _soda_model_local(SODA_MODEL_ICE_SPOUT), mat, throat_mat)
-	_add_soda_nozzle_fill_visual(root, "NozzleFill_soda", _soda_model_local(SODA_MODEL_SODA_SPOUT), mat, throat_mat)
+	_add_soda_nozzle_fill_visual(root, "NozzleFill_ice", _soda_nozzle_visual_local("ice"), mat, throat_mat)
+	_add_soda_nozzle_fill_visual(root, "NozzleFill_soda", _soda_nozzle_visual_local("cola"), mat, throat_mat)
 
 
 func _add_soda_nozzle_fill_visual(parent: Node3D, nozzle_name: String, local_pos: Vector3, mat: Material, throat_mat: Material) -> void:
