@@ -352,9 +352,9 @@ const SPATULA_JUGGLE_CATCH_Y := 0.18 ## vertical catch window
 const SPATULA_JUGGLE_CATCH_START_T := 0.18 ## don't instant re-catch on launch
 ## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
 ## One notch jumps a full step; wheel factor can stack notches (feels snappier).
-const HAND_SPATULA_ROLL_STEP := 45.0
+const HAND_SPATULA_ROLL_STEP := 90.0
 const HAND_SPATULA_ROLL_MAX := 90.0
-const HAND_SPATULA_ROLL_WHEEL_MULT := 2 ## notches per wheel tick (faster tilt)
+const HAND_SPATULA_ROLL_WHEEL_MULT := 1 ## one notch per wheel tick: -90 / 0 / +90 only
 ## Move this far from the tap contact → cancel tap pose (ting still fires at original strip).
 const HAND_SPATULA_TAP_CANCEL_XZ := 0.032
 const HAND_SPATULA_TAP_CANCEL_PX := 10.0
@@ -3754,7 +3754,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			## Faster tilt: two detents per tick (0→90 in one scroll). Shift = fine 45°.
 			var ticks := 1
 			if not event.shift_pressed:
-				ticks = maxi(HAND_SPATULA_ROLL_WHEEL_MULT, maxi(1, int(round(absf(event.factor)))))
+				ticks = 1
 			for _i in ticks:
 				_nudge_spatula_user_roll(roll_dir)
 			get_viewport().set_input_as_handled()
@@ -36379,6 +36379,7 @@ func _commit_social_review(
 			pic_png = img.save_png_to_buffer()
 	_apply_social_review(stars, who, text, pic)
 	_show_customer_review_stars(customer, stars, text)
+	_show_customer_review_ui(stars, text)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
 		mp_social_review.rpc(stars, who, text, pic_png)
 		var nid := _customer_net_id(customer)
@@ -36402,6 +36403,14 @@ func _show_customer_review_stars(customer: Node3D, stars: float, review_text: St
 		return
 	if customer.has_method("show_review_stars"):
 		customer.show_review_stars(stars, review_text)
+
+
+func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
+	var short := _clip_review_quote(review_text, 78)
+	var line := "%s  %.1f/5" % [_star_bar_text(stars), clampf(stars, 0.0, 5.0)]
+	if short != "":
+		line += "\n" + short
+	_flash(line, Color("FFD54F"), 3.4)
 
 
 func _apply_social_review(
@@ -52652,6 +52661,7 @@ func mp_customer_review_stars(net_id: int, stars: float, review_text: String = "
 		return
 	var c = _customer_by_net_id(net_id)
 	_show_customer_review_stars(c, stars, review_text)
+	_show_customer_review_ui(stars, review_text)
 
 
 @rpc("any_peer", "call_remote", "reliable")

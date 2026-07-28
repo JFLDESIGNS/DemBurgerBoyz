@@ -1610,11 +1610,6 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		text += "★" if i < full else "☆"
 	if absf(stars - roundf(stars)) > 0.01:
 		text += " %.1f/5" % stars
-	if review_text.strip_edges() != "":
-		var short := review_text.strip_edges().replace("\n", " ")
-		if short.length() > 72:
-			short = short.substr(0, 69) + "..."
-		text += "\n" + short
 	if _review_box == null:
 		_review_box = MeshInstance3D.new()
 		_review_box.name = "ReviewBox"
@@ -1649,7 +1644,7 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 	var line_count := maxi(1, text.count("\n") + 1)
 	var box_mesh := _review_box.mesh as QuadMesh
 	if box_mesh != null:
-		box_mesh.size = Vector2(2.75, 0.44 + float(line_count) * 0.25)
+		box_mesh.size = Vector2(1.35, 0.42 + float(line_count) * 0.18)
 	_review_box.position = Vector3(0.0, BAR_Y + 0.09, 0.045)
 	## Gold for solid ratings; cooler amber when they roasted you.
 	if full >= 4:
