@@ -1829,11 +1829,11 @@ var soda_nozzle_offsets_in: Dictionary = {
 }
 var soda_blocker_half_x := 0.58
 var soda_blocker_height := 1.30
-var soda_blocker_front_z := 0.05
-var soda_blocker_fill_z := -0.11
+var soda_blocker_front_z := -0.34
+var soda_blocker_fill_z := -0.48
 var soda_blocker_debug := false
 var soda_cup_rest_x := -0.28
-var soda_cup_rest_z := 0.62
+var soda_cup_rest_z := -0.36
 var soda_tray_first_x := -0.38
 var soda_tray_spacing := 0.20
 var soda_tray_magnet_radius := 0.26
@@ -23275,6 +23275,16 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "front_tray_seats_v5", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_front_side_v6"):
+		## The two-spigot FBX pours from local -Z after the visual 180 yaw. Older saved
+		## tuning parked cups at +Z, which is the back side of this machine.
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)
+		for fid in ["cola", "ice"]:
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_front_side_v6", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -23296,11 +23306,11 @@ func _load_soda_tuning_settings() -> void:
 		soda_soft_radius_mult[fid] = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_soft_radius_mult" % fid, soda_soft_radius_mult.get(fid, 1.0))), 0.25, 3.0)
 	soda_blocker_half_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_half_x", soda_blocker_half_x)), 0.05, 1.5)
 	soda_blocker_height = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)), 0.05, 2.5)
-	soda_blocker_front_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)), -0.7, 0.7)
-	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), -0.7, 0.7)
+	soda_blocker_front_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)), -1.2, 0.7)
+	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), -1.2, 0.7)
 	soda_blocker_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_debug", soda_blocker_debug))
 	soda_cup_rest_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_x", soda_cup_rest_x)), -1.0, 1.0)
-	soda_cup_rest_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)), -0.2, 1.2)
+	soda_cup_rest_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)), -1.2, 1.2)
 	soda_tray_first_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_first_x", soda_tray_first_x)), -1.0, 0.7)
 	soda_tray_spacing = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_spacing", soda_tray_spacing)), 0.04, 0.45)
 	soda_tray_magnet_radius = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_magnet_radius", soda_tray_magnet_radius)), 0.02, 0.8)
@@ -31141,8 +31151,8 @@ func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	var off := off_in * INCH_TO_M
 	if soda_root != null and is_instance_valid(soda_root):
 		var local := tip.position if tip.get_parent() == soda_root else soda_root.to_local(tip_p)
-		## Keep X lined up with the nozzle, but park/fill on the visible front tray.
-		local.z = soda_cup_rest_z
+		## Keep X/Z lined up with the actual nozzle. Parking uses cup_rest_z, but fill
+		## seats must stay with the rotated two-spigot model or they land on the rear.
 		local.y = CUP_TRAY_DECK_LOCAL_Y + cup_fill_extra_y
 		local += off
 		return soda_root.to_global(local)
@@ -41469,18 +41479,18 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_h", "Block Height", 0.05, 2.5, 0.01,
 		func(): return soda_blocker_height,
 		func(v: float): soda_blocker_height = clampf(v, 0.05, 2.5))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_front", "Grab Block Z", -0.7, 0.7, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_front", "Grab Block Z", -1.2, 0.7, 0.01,
 		func(): return soda_blocker_front_z,
-		func(v: float): soda_blocker_front_z = clampf(v, -0.7, 0.7))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_fill", "Fill Block Z", -0.7, 0.7, 0.01,
+		func(v: float): soda_blocker_front_z = clampf(v, -1.2, 0.7))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_fill", "Fill Block Z", -1.2, 0.7, 0.01,
 		func(): return soda_blocker_fill_z,
-		func(v: float): soda_blocker_fill_z = clampf(v, -0.7, 0.7))
+		func(v: float): soda_blocker_fill_z = clampf(v, -1.2, 0.7))
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_x", "Cup Rest X", -1.0, 1.0, 0.01,
 		func(): return soda_cup_rest_x,
 		func(v: float): soda_cup_rest_x = clampf(v, -1.0, 1.0))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_z", "Cup Rest Z", -0.2, 1.2, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_z", "Cup Rest Z", -1.2, 1.2, 0.01,
 		func(): return soda_cup_rest_z,
-		func(v: float): soda_cup_rest_z = clampf(v, -0.2, 1.2))
+		func(v: float): soda_cup_rest_z = clampf(v, -1.2, 1.2))
 
 	_hidden_add_section(hidden_soda_box, "CUP PULL / FILL FEEL")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_x", "Tray First X", -1.0, 0.7, 0.01,
