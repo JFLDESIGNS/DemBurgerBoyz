@@ -24109,6 +24109,7 @@ func _build_soda_station() -> void:
 	_refresh_soda_tuning_debug_visuals()
 
 	_build_soda_cup_rack(root)
+	_add_soda_drip_grate_overlay(root)
 	_refresh_soda_flavor_lights()
 	## Collision hulls in soda_root local space (scaled model bounds).
 	var s := SODA_FOUNTAIN_SCALE
@@ -24959,6 +24960,26 @@ func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
 	var throat_mat := _make_soda_metal_mat(Color(0.13, 0.15, 0.17), 0.45, 0.48)
 	_add_soda_nozzle_fill_visual(root, "NozzleFill_ice", _soda_nozzle_visual_local("ice"), mat, throat_mat)
 	_add_soda_nozzle_fill_visual(root, "NozzleFill_soda", _soda_nozzle_visual_local("cola"), mat, throat_mat)
+
+
+func _add_soda_drip_grate_overlay(parent: Node3D) -> void:
+	if parent == null:
+		return
+	var existing := parent.get_node_or_null("SodaDripGrateOverlay")
+	if existing != null:
+		existing.queue_free()
+	var root := Node3D.new()
+	root.name = "SodaDripGrateOverlay"
+	parent.add_child(root)
+	var metal := _make_soda_metal_mat(Color(0.68, 0.72, 0.72), 0.96, 0.16)
+	var dark := _make_soda_metal_mat(Color(0.006, 0.006, 0.007), 0.55, 0.18)
+	var top_y := CUP_TRAY_DECK_LOCAL_Y + 0.004
+	_add_mesh_box(root, "MetalGrateTop", Vector3(0.64, 0.006, 0.24), Vector3(0.0, top_y, 0.47), metal)
+	for row in 3:
+		for col in 7:
+			var slot := _add_mesh_box(root, "GrateSlot_%d_%d" % [row, col], Vector3(0.048, 0.003, 0.015), Vector3(-0.21 + float(col) * 0.07, top_y + 0.004, 0.395 + float(row) * 0.055), dark)
+			slot.rotation_degrees.y = 0.0
+	_add_mesh_box(root, "GlossBlackTrayUnderlay", Vector3(0.68, 0.038, 0.28), Vector3(0.0, top_y - 0.030, 0.47), dark)
 
 
 func _add_soda_nozzle_fill_visual(parent: Node3D, nozzle_name: String, local_pos: Vector3, mat: Material, throat_mat: Material) -> void:
@@ -25907,35 +25928,6 @@ func _ready_fries_slot_world(i: int) -> Vector3:
 	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z) + _prop_offset("fryer_done")
 
 
-func _separate_ready_fries_packs() -> void:
-	## Push shelf packs apart if anything still shares the same seat.
-	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
-		return
-	var b := _warmer_place_bounds()
-	var z_hi := b.end.y + FRIES_HOLD_FAR_NUDGE
-	var packs: Array[Node3D] = []
-	for child in fryer_ready_root.get_children():
-		if child is Node3D:
-			packs.append(child as Node3D)
-	for _pass in 4:
-		for a_i in packs.size():
-			for b_i in range(a_i + 1, packs.size()):
-				var a := packs[a_i]
-				var bb := packs[b_i]
-				var d := Vector2(a.global_position.x - bb.global_position.x, a.global_position.z - bb.global_position.z)
-				var dist := d.length()
-				if dist >= fries_ready_min_sep:
-					continue
-				var push := (fries_ready_min_sep - dist) * 0.5 + 0.002
-				var away := d.normalized() if dist > 0.0001 else Vector2(1.0 if (a_i % 2) == 0 else -1.0, 0.0)
-				a.global_position.x = clampf(a.global_position.x + away.x * push, b.position.x, b.end.x)
-				a.global_position.z = clampf(a.global_position.z + away.y * push, b.position.y, z_hi)
-				bb.global_position.x = clampf(bb.global_position.x - away.x * push, b.position.x, b.end.x)
-				bb.global_position.z = clampf(bb.global_position.z - away.y * push, b.position.y, z_hi)
-				a.global_position.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
-				bb.global_position.y = GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y
-
-
 func _refresh_ready_fries_visuals() -> void:
 	if fryer_ready_root == null or not is_instance_valid(fryer_ready_root):
 		return
@@ -25963,7 +25955,6 @@ func _refresh_ready_fries_visuals() -> void:
 		shape.position = Vector3(0.0, 0.085, 0.0)
 		area.add_child(shape)
 		pack.add_child(area)
-	_separate_ready_fries_packs()
 
 
 func _reset_fryer_state(clear_servings: bool = true) -> void:
@@ -26094,10 +26085,10 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 	return _begin_fryer_basket_hold(idx)
 
 
-func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
+func _ready_fries_index_under_cursor(screen_pos: Vector2) -> int:
 	if not _owns_fryer_machine() or fryer_ready_servings <= 0 or fryer_ready_root == null \
 			or not is_instance_valid(fryer_ready_root) or camera == null:
-		return false
+		return -1
 	var from := camera.project_ray_origin(screen_pos)
 	var to := from + camera.project_ray_normal(screen_pos) * 12.0
 	var q := PhysicsRayQueryParameters3D.create(from, to, FRYER_COLLISION_LAYER)
@@ -26107,24 +26098,34 @@ func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
 	if hit.has("collider"):
 		var node := hit["collider"] as Node
 		while node != null:
-			if node == fryer_ready_root:
-				return true
+			var node_name := str(node.name)
+			if node is Node3D and node_name.begins_with("ReadyFries") and node_name.replace("ReadyFries", "").is_valid_int():
+				return clampi(int(node_name.replace("ReadyFries", "")), 0, FRIES_HOLD_MAX_PACKS - 1)
 			node = node.get_parent()
 	var best_d := 64.0
+	var best_i := -1
 	var count := mini(fryer_ready_servings, FRIES_HOLD_MAX_PACKS)
 	for i in count:
 		var sp := camera.unproject_position(_ready_fries_slot_world(i) + Vector3(0.0, 0.10, 0.0))
-		best_d = minf(best_d, sp.distance_to(screen_pos))
-	return best_d < 64.0
+		var d := sp.distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			best_i = i
+	return best_i if best_d < 64.0 else -1
+
+
+func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
+	return _ready_fries_index_under_cursor(screen_pos) >= 0
 
 
 func _try_ready_fries_click(screen_pos: Vector2) -> bool:
-	if not _ready_fries_under_cursor(screen_pos):
+	var slot_idx := _ready_fries_index_under_cursor(screen_pos)
+	if slot_idx < 0:
 		return false
-	return _begin_fries_pack_hold()
+	return _begin_fries_pack_hold(slot_idx)
 
 
-func _begin_fries_pack_hold() -> bool:
+func _begin_fries_pack_hold(slot_idx: int = -1) -> bool:
 	if fryer_ready_servings <= 0 or fries_pack_held:
 		return false
 	if fryer_held_index >= 0 or spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
@@ -26132,6 +26133,8 @@ func _begin_fries_pack_hold() -> bool:
 			or cup_held or icecream_cone_held or burnt_icecream_cone_held or fries_pack_held or spilled_fry_held:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
+	var start_slot := clampi(slot_idx if slot_idx >= 0 else fryer_ready_servings - 1, 0, FRIES_HOLD_MAX_PACKS - 1)
+	var start := _ready_fries_slot_world(start_slot)
 	fryer_ready_servings = maxi(0, fryer_ready_servings - 1)
 	_refresh_ready_fries_visuals()
 	_refresh_ticket_checkmarks()
@@ -26139,9 +26142,6 @@ func _begin_fries_pack_hold() -> bool:
 	fries_pack_root = Node3D.new()
 	fries_pack_root.name = "HeldFries"
 	world.add_child(fries_pack_root)
-	var start := Vector3.ZERO
-	if fryer_ready_root != null and is_instance_valid(fryer_ready_root):
-		start = _ready_fries_slot_world(maxi(0, mini(fryer_ready_servings, FRIES_HOLD_MAX_PACKS - 1)))
 	fries_pack_root.global_position = start
 	fries_pack_root.scale = Vector3(1.18, 1.18, 1.18)
 	fries_pack_root.rotation_degrees = Vector3(-4.0, 0.0, 0.0) ## logo side toward cook/camera
@@ -40914,13 +40914,6 @@ func _build_options_menu() -> void:
 		func(): return fries_ready_spacing_z,
 		func(v: float):
 			fries_ready_spacing_z = clampf(v, 0.01, 0.30)
-			_save_fryer_tuning_settings()
-			_refresh_ready_fries_visuals()
-	)
-	_hidden_add_labeled_slider(hidden_world_box, "fries_ready_min_sep", "Finished Fries Push Apart", 0.01, 0.30, 0.005,
-		func(): return fries_ready_min_sep,
-		func(v: float):
-			fries_ready_min_sep = clampf(v, 0.01, 0.30)
 			_save_fryer_tuning_settings()
 			_refresh_ready_fries_visuals()
 	)
