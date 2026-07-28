@@ -1791,11 +1791,11 @@ const SODA_BRAND_LOGO_PATHS: Array[String] = [
 ## Two-bay sodaedit setup: back bay is ice, front bay is cola.
 const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["ice", "cola"]
 const SODA_MODEL_PANEL_POS: Dictionary = {
-	"ice": Vector3(-0.085, 0.252, -0.118),
-	"cola": Vector3(0.075, 0.252, -0.188),
+	"ice": Vector3(-0.075, 0.245, 0.118),
+	"cola": Vector3(0.075, 0.245, 0.165),
 }
-const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.252, -0.188)
-const SODA_MODEL_ICE_SPOUT := Vector3(-0.085, 0.252, -0.118)
+const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.245, 0.165)
+const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.245, 0.118)
 const SODA_NOZZLE_THROAT_DROP := 0.071
 const SODA_SHARED_DRINK_NOZZLE := true
 const SODA_MODEL_SPOUT_POS: Dictionary = {
@@ -23218,12 +23218,12 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_top_clear_v2", true)
 		cfg.save(GFX_CFG_PATH)
-	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v1"):
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v2"):
 		for fid in ["cola", "ice"]:
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, 0.0)
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, 0.0)
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, 0.0)
-		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v1", true)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
