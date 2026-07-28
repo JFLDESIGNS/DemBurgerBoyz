@@ -845,7 +845,7 @@ const SPATULA_EDGE_PUSH_EXTRA_MUL := 1.12 ## ±90° gets a little more
 const SPATULA_CUP_PUSH_RADIUS := 0.095
 const SPATULA_CUP_PUSH_SCALE := 2.1
 const SPATULA_CUP_PUSH_MAX := 0.11
-const PATTY_RELEASE_SLIDE_MIN_SPEED := 0.18
+const PATTY_RELEASE_SLIDE_MIN_SPEED := 0.75
 const PATTY_RELEASE_SLIDE_MAX_SPEED := 2.88
 const PATTY_RELEASE_SLIDE_FRICTION := 1.05
 const PATTY_RELEASE_SLIDE_MAX_DIST := 0.54 ## 4x longer release glide.
@@ -8451,40 +8451,9 @@ func _try_push_ready_fries_from_xz(source: Vector3, move_xz: Vector2, moved: flo
 func _push_neighbors_from_drag(target: Vector3, move_xz: Vector2, moved: float, ignore_idx: int, hit_speed: float = 0.0) -> bool:
 	if moved <= 0.0001:
 		return true
-	var changed := true
-	var any_blocked := false
-	var passes := 0
-	## Heavier neighbors: less coupling to the drag, smaller shove per overlap.
-	while changed and passes < 2:
-		changed = false
-		passes += 1
-		for i in GRILL_SLOTS:
-			if i == ignore_idx:
-				continue
-			var p = grill[i]
-			if p == null or not is_instance_valid(p) or p.is_held:
-				continue
-			var d := Vector2(target.x - p.position.x, target.z - p.position.z).length()
-			if d >= PATTY_MIN_SEP:
-				continue
-			var away := Vector2(p.position.x - target.x, p.position.z - target.z)
-			if away.length_squared() <= 0.000001:
-				away = move_xz
-			var overlap := PATTY_MIN_SEP - d
-			var hit_strength := maxf(hit_speed, moved / 0.016)
-			var push_len := maxf(
-				moved * (PATTY_NEIGHBOR_PUSH_MOVE_MUL + clampf(hit_strength * 0.08, 0.0, 0.22)),
-				overlap * PATTY_NEIGHBOR_PUSH_SEP_MUL + 0.002
-			)
-			var push_dir := away + move_xz * PATTY_NEIGHBOR_DRAG_COUPLE
-			if _try_shove_patty(i, p, push_dir, push_len, ignore_idx, true):
-				changed = true
-				_start_patty_collision_slide(p, push_dir, hit_strength)
-			else:
-				any_blocked = true
 	_try_push_roomba_from_patty(target, move_xz, moved)
 	_try_push_ready_fries_from_xz(target, move_xz, moved)
-	return not any_blocked or not _patty_blocked_at(target, ignore_idx)
+	return not _patty_blocked_at(target, ignore_idx)
 
 
 func _start_patty_collision_slide(patty: Area3D, dir_xz: Vector2, hit_speed: float) -> void:
@@ -9978,7 +9947,7 @@ func _start_patty_slide_inertia(patty: Area3D, vel_xz: Vector2) -> bool:
 
 func _patty_slide_dist_for_speed(speed: float, max_dist: float) -> float:
 	var t := clampf((speed - PATTY_RELEASE_SLIDE_MIN_SPEED) / maxf(0.001, PATTY_RELEASE_SLIDE_MAX_SPEED - PATTY_RELEASE_SLIDE_MIN_SPEED), 0.0, 1.0)
-	return lerpf(0.10, max_dist, t)
+	return lerpf(0.03, max_dist, t)
 
 
 func _stop_patty_slide_inertia() -> void:
@@ -10069,7 +10038,7 @@ func _update_patty_slide_inertia(delta: float = 0.016) -> void:
 	var step := slide_inertia_vel * dt
 	if step.length() > slide_inertia_left:
 		step = step.normalized() * slide_inertia_left
-	var result := _move_grill_patty_slide(patty, from_xz + step, from_xz, true, speed)
+	var result := _move_grill_patty_slide(patty, from_xz + step, from_xz, false, speed)
 	var move_vec: Vector2 = result["move"]
 	var moved := move_vec.length()
 	if moved <= 0.0001:
