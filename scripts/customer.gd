@@ -162,7 +162,7 @@ var order_elapsed_sec: float = 0.0
 var _order_clock_on: bool = false
 const SERVE_PERFECT_SEC := 10.0
 const SERVE_GREAT_JOB_SEC := 20.0
-const SERVE_REVIEW_HOLD_SEC := 2.0
+const SERVE_REVIEW_HOLD_SEC := 4.0
 var speech: String = ""
 var last_tip: int = 0
 var last_base_pay: int = 0
@@ -188,6 +188,7 @@ var _bar_root: Node3D
 var _bar_bg: MeshInstance3D
 var _bar_fill: MeshInstance3D
 var _review_stars: Label3D = null
+var _review_box: MeshInstance3D = null
 var _review_stars_tween: Tween = null
 var _treat_hearts: Label3D = null
 var _treat_hearts_tween: Tween = null
@@ -1614,6 +1615,22 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		if short.length() > 72:
 			short = short.substr(0, 69) + "..."
 		text += "\n" + short
+	if _review_box == null:
+		_review_box = MeshInstance3D.new()
+		_review_box.name = "ReviewBox"
+		var box_mesh := QuadMesh.new()
+		box_mesh.size = Vector2(2.75, 0.74)
+		_review_box.mesh = box_mesh
+		_review_box.sorting_offset = 34.0
+		var review_box_mat := StandardMaterial3D.new()
+		review_box_mat.albedo_color = Color(0.045, 0.038, 0.028, 0.82)
+		review_box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		review_box_mat.no_depth_test = true
+		review_box_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		review_box_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		review_box_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_review_box.material_override = review_box_mat
+		add_child(_review_box)
 	if _review_stars == null:
 		_review_stars = Label3D.new()
 		_review_stars.name = "ReviewStars"
@@ -1621,34 +1638,61 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		_review_stars.no_depth_test = true
 		_review_stars.shaded = false
 		UiFontsScript.apply_label3d(_review_stars, true, 40, 0.085)
-		_review_stars.outline_size = 10
-		_review_stars.outline_modulate = Color(0.08, 0.05, 0.0, 0.85)
+		_review_stars.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_review_stars.outline_size = 4
+		_review_stars.outline_modulate = Color(0.03, 0.02, 0.0, 0.75)
+		_review_stars.render_priority = 6
+		_review_stars.outline_render_priority = 5
 		add_child(_review_stars)
 	_review_stars.text = text
 	_review_stars.position = Vector3(0.0, BAR_Y + 0.08, 0.05)
+	var line_count := maxi(1, text.count("\n") + 1)
+	var box_mesh := _review_box.mesh as QuadMesh
+	if box_mesh != null:
+		box_mesh.size = Vector2(2.75, 0.44 + float(line_count) * 0.25)
+	_review_box.position = Vector3(0.0, BAR_Y + 0.09, 0.045)
 	## Gold for solid ratings; cooler amber when they roasted you.
 	if full >= 4:
-		_review_stars.modulate = Color(1.0, 0.86, 0.22, 1.0)
+		_review_stars.modulate = Color(1.0, 0.92, 0.38, 1.0)
 	elif full >= 3:
-		_review_stars.modulate = Color(1.0, 0.78, 0.28, 1.0)
+		_review_stars.modulate = Color(1.0, 0.84, 0.42, 1.0)
 	elif full >= 2:
-		_review_stars.modulate = Color(0.92, 0.72, 0.35, 1.0)
+		_review_stars.modulate = Color(1.0, 0.72, 0.42, 1.0)
 	else:
-		_review_stars.modulate = Color(0.95, 0.45, 0.35, 1.0)
+		_review_stars.modulate = Color(1.0, 0.52, 0.42, 1.0)
+	var box_mat := _review_box.material_override as StandardMaterial3D
+	if box_mat != null:
+		box_mat.albedo_color.a = 0.82
+	_review_box.visible = true
 	_review_stars.visible = true
 	if _review_stars_tween != null and is_instance_valid(_review_stars_tween):
 		_review_stars_tween.kill()
 	_review_stars_tween = create_tween()
 	_review_stars_tween.set_parallel(true)
 	_review_stars_tween.tween_property(
-		_review_stars, "position:y", BAR_Y + 0.42, 2.0
+		_review_stars, "position:y", BAR_Y + 0.42, 4.0
 	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	_review_stars_tween.tween_property(
-		_review_stars, "modulate:a", 0.0, 2.0
-	).set_delay(1.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		_review_box, "position:y", BAR_Y + 0.43, 4.0
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_review_stars_tween.tween_property(
+		_review_stars, "modulate:a", 0.0, 0.75
+	).set_delay(3.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	var fade_review_box := func(a: float) -> void:
+		var mat := _review_box.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_color.a = a
+	_review_stars_tween.tween_method(
+		fade_review_box, 0.82, 0.0, 0.75
+	).set_delay(3.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_review_stars_tween.chain().tween_callback(func() -> void:
 		if _review_stars != null and is_instance_valid(_review_stars):
 			_review_stars.visible = false
+		if _review_box != null and is_instance_valid(_review_box):
+			_review_box.visible = false
+			var mat := _review_box.material_override as StandardMaterial3D
+			if mat != null:
+				mat.albedo_color.a = 0.82
 	)
 
 
