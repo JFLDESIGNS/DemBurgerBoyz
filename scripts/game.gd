@@ -34486,7 +34486,11 @@ func _build_procedural_window_bunting() -> void:
 func _make_bunting_flag_material(col: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = col
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(col.r, col.g, col.b, 0.82)
+	mat.emission_enabled = true
+	mat.emission = col.lightened(0.38)
+	mat.emission_energy_multiplier = 0.16
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.render_priority = 10
 	return mat
