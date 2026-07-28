@@ -1788,15 +1788,14 @@ const SODA_BRAND_LOGO_PATHS: Array[String] = [
 	"res://models/sodamachine/textures/Logos-03.png",
 	"res://models/sodamachine/textures/Logos-04.png",
 ]
-## Left→right brand squares on sodaedit (4th square = ice tip).
-const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["cola", "lemon_lime", "orange", "ice"]
+## Two-bay sodaedit setup: back bay is ice, front bay is cola.
+const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["ice", "cola"]
 const SODA_MODEL_PANEL_POS: Dictionary = {
-	"cola": Vector3(-0.1072, 0.252, -0.159),
-	"lemon_lime": Vector3(-0.0366, 0.252, -0.159),
-	"orange": Vector3(0.0339, 0.252, -0.159),
+	"ice": Vector3(-0.085, 0.252, -0.118),
+	"cola": Vector3(0.075, 0.252, -0.188),
 }
-const SODA_MODEL_SODA_SPOUT := Vector3(0.1045, 0.252, -0.159)
-const SODA_MODEL_ICE_SPOUT := Vector3(-0.1072, 0.252, -0.159)
+const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.252, -0.188)
+const SODA_MODEL_ICE_SPOUT := Vector3(-0.085, 0.252, -0.118)
 const SODA_SHARED_DRINK_NOZZLE := true
 const SODA_MODEL_SPOUT_POS: Dictionary = {
 	"cola": SODA_MODEL_SODA_SPOUT,
@@ -24746,7 +24745,7 @@ func _soda_nozzle_offset_model(fid: String) -> Vector3:
 func _add_soda_spout_marker_only(parent: Node3D, is_soda: bool) -> void:
 	## Pour tip only — nozzles are part of the fountain mesh.
 	if is_soda:
-		for fid in SODA_FLAVORS:
+		for fid in ["cola"]:
 			var tip := Marker3D.new()
 			tip.name = "SodaSpoutTip_%s" % fid
 			tip.set_meta("soda_station_id", fid)
@@ -24774,7 +24773,7 @@ func _sync_soda_spout_to_flavor() -> void:
 
 
 func _soda_station_tip_ids() -> Array[String]:
-	return ["cola", "lemon_lime", "orange", "ice"]
+	return ["cola", "ice"]
 
 
 func _soda_tip_for_station(fid: String) -> Marker3D:
@@ -24801,7 +24800,8 @@ func _soda_soft_radius_for_station(fid: String) -> float:
 
 func _set_soda_active_station(fid: String) -> void:
 	if SODA_SHARED_DRINK_NOZZLE and SODA_FLAVORS.has(fid):
-		fid = soda_selected_flavor
+		soda_selected_flavor = "cola"
+		fid = "cola"
 	if fid == soda_active_station:
 		return
 	soda_active_station = fid
@@ -24844,23 +24844,9 @@ func _rebuild_soda_tank_visuals() -> void:
 		return
 	if soda_tank_root != null and is_instance_valid(soda_tank_root):
 		soda_tank_root.queue_free()
-	soda_tank_root = Node3D.new()
-	soda_tank_root.name = "FlavorTanks"
-	soda_root.add_child(soda_tank_root)
+	soda_tank_root = null
 	soda_tank_syrup.clear()
 	soda_tank_bubbles.clear()
-	for fid in SODA_FLAVORS:
-		var base: Vector3 = SODA_MODEL_PANEL_POS.get(fid, SODA_MODEL_PANEL_POS.get("cola", Vector3.ZERO))
-		var pos := _soda_model_local(base + _soda_nozzle_offset_model(fid))
-		pos.x += soda_tank_x_offset_in * INCH_TO_M
-		pos.y += soda_tank_y_offset_in * INCH_TO_M
-		pos.z += soda_tank_z_offset_in * INCH_TO_M
-		_add_soda_flavor_tank(soda_tank_root, fid, pos)
-		var tank := soda_tank_root.get_node_or_null("Tank_%s" % fid) as Node3D
-		if tank != null:
-			tank.scale = Vector3.ONE * soda_tank_visual_scale
-	_refresh_all_soda_tank_levels()
-	_refresh_soda_tank_bubbles()
 
 
 func _make_soda_debug_mat(col: Color) -> StandardMaterial3D:
@@ -28832,8 +28818,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	## Black-metal tube dispenser — stack matches the grabable cup size exactly.
 	var rack := Node3D.new()
 	rack.name = "CupRack"
-	## Top cup tube nudged camera-left of the fountain face.
-	rack.position = Vector3(-0.40, 0.72, 0.10)
+	## Top cup tube sits visibly on top of the two-spigot machine.
+	rack.position = Vector3(-0.34, 0.92, 0.02)
 	station.add_child(rack)
 
 	var tube_mat := _make_soda_metal_mat(Color(0.02, 0.02, 0.025, 0.38), 0.84, 0.24)
@@ -28842,7 +28828,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	tube_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	## Grab cup bottom sits here; decorative nest stacks above it.
-	var stack_base := Vector3(0.0, -0.12, 0.06)
+	var stack_base := Vector3(0.0, -0.10, 0.03)
 	var nest_step := 0.042 ## Tall enough to read as a vertical stack (was 0.0175 ≈ 2 cups)
 	var spare_count := 9
 
@@ -28856,7 +28842,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	tube_mesh.cap_top = false
 	tube_mesh.cap_bottom = false
 	tube.mesh = tube_mesh
-	tube.position = Vector3(0.0, 0.28, 0.06)
+	tube.position = Vector3(0.0, 0.30, 0.03)
 	tube.material_override = tube_mat
 	tube.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	rack.add_child(tube)
@@ -28881,7 +28867,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack_grab.collision_mask = 0
 	rack_grab.monitoring = false
 	rack_grab.monitorable = true
-	rack_grab.position = Vector3(0.0, -0.06, 0.10)
+	rack_grab.position = Vector3(0.0, -0.04, 0.07)
 	var rack_shape := CollisionShape3D.new()
 	var rack_box := BoxShape3D.new()
 	rack_box.size = Vector3(0.20, 0.15, 0.18)
@@ -30505,7 +30491,7 @@ func _set_soda_flavor(fid: String) -> void:
 		_refresh_soda_flavor_lights_ice_focus(true)
 		if game_audio:
 			game_audio.play_click()
-		_flash("ICE — hold cup under the right nozzle", Color("B3E5FC"))
+		_flash("ICE - hold cup in the back bay", Color("B3E5FC"))
 		if mp_enabled and not _mp_applying and SODA_FLAVORS.has(soda_selected_flavor):
 			mp_soda_flavor.rpc(soda_selected_flavor)
 		return
