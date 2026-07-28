@@ -1833,7 +1833,7 @@ var soda_blocker_front_z := 0.05
 var soda_blocker_fill_z := -0.11
 var soda_blocker_debug := false
 var soda_cup_rest_x := -0.28
-var soda_cup_rest_z := 0.41
+var soda_cup_rest_z := 0.28
 var soda_tray_first_x := -0.38
 var soda_tray_spacing := 0.20
 var soda_tray_magnet_radius := 0.26
@@ -1847,10 +1847,10 @@ var soda_soft_pull := 0.57
 var soda_soft_unlock_grace := 0.54
 var soda_soft_debug := false
 var soda_soft_offsets_in: Dictionary = {
-	"cola": Vector3(-0.05, -0.05, -0.05),
+	"cola": Vector3(-0.05, -0.05, 0.0),
 	"lemon_lime": Vector3.ZERO,
 	"orange": Vector3.ZERO,
-	"ice": Vector3(0.0, -0.05, -0.05),
+	"ice": Vector3(0.0, -0.05, 0.0),
 }
 var soda_soft_radius_mult: Dictionary = {
 	"cola": 0.99,
@@ -23265,6 +23265,12 @@ func _load_soda_tuning_settings() -> void:
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, 0.0)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_nozzle_align_v3", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "front_tray_seats_v4"):
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "cola_soft_z_in", 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "ice_soft_z_in", 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "front_tray_seats_v4", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -31119,6 +31125,8 @@ func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	var off := off_in * INCH_TO_M
 	if soda_root != null and is_instance_valid(soda_root):
 		var local := tip.position if tip.get_parent() == soda_root else soda_root.to_local(tip_p)
+		## Keep X lined up with the nozzle, but park/fill on the visible front tray.
+		local.z = soda_cup_rest_z
 		local.y = CUP_TRAY_DECK_LOCAL_Y + cup_fill_extra_y
 		local += off
 		return soda_root.to_global(local)
