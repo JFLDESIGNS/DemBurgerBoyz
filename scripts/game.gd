@@ -23374,8 +23374,8 @@ func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
 			continue
 		tip.position = _soda_nozzle_pour_tip_local(fid)
 	if soda_root != null and is_instance_valid(soda_root):
-		cup_rest = soda_root.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
-		cup_rest_rot = soda_root.global_rotation_degrees
+		cup_rest = _cup_rest_global()
+		cup_rest_rot = _cup_rest_rotation()
 		var rack := soda_root.get_node_or_null("CupRack") as Node3D
 		if rack != null and is_instance_valid(rack):
 			rack.position = SODA_CUP_RACK_LOCAL
@@ -23385,6 +23385,22 @@ func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
 	if rebuild_tanks:
 		_rebuild_soda_tank_visuals()
 	_refresh_soda_tuning_debug_visuals()
+
+
+func _cup_rest_local() -> Vector3:
+	return Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z)
+
+
+func _cup_rest_global() -> Vector3:
+	if soda_root != null and is_instance_valid(soda_root):
+		return soda_root.to_global(_cup_rest_local())
+	return cup_rest
+
+
+func _cup_rest_rotation() -> Vector3:
+	if soda_root != null and is_instance_valid(soda_root):
+		return soda_root.global_rotation_degrees
+	return cup_rest_rot
 
 
 func _sync_soda_tuning_hidden_ui() -> void:
@@ -24112,12 +24128,8 @@ func _build_soda_station() -> void:
 	_rebuild_soda_tank_visuals()
 
 	## Park + fill seat on the drip-grate top (not tip-relative mid-air).
-	cup_rest = root.to_global(Vector3(
-		soda_cup_rest_x,
-		CUP_TRAY_DECK_LOCAL_Y,
-		soda_cup_rest_z
-	))
-	cup_rest_rot = Vector3.ZERO
+	cup_rest = _cup_rest_global()
+	cup_rest_rot = _cup_rest_rotation()
 
 	var lamp := OmniLight3D.new()
 	lamp.name = "SodaLamp"
@@ -28943,8 +28955,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	cup_home = rack.to_global(stack_base)
 	cup_home_rot = station.global_rotation_degrees
 	if cup_rest == Vector3.ZERO:
-		cup_rest = station.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
-		cup_rest_rot = station.global_rotation_degrees
+		cup_rest = _cup_rest_global()
+		cup_rest_rot = _cup_rest_rotation()
 	_spawn_and_bind_empty_cup()
 
 	soda_stream_mesh = MeshInstance3D.new()
@@ -29337,13 +29349,13 @@ func _layout_parked_cups() -> void:
 		if soda_root != null and is_instance_valid(soda_root):
 			c.global_position = soda_root.to_global(local)
 		else:
-			var park := cup_rest if cup_rest != Vector3.ZERO else cup_home
+			var park := _cup_rest_global() if _cup_rest_global() != Vector3.ZERO else cup_home
 			c.global_position = park
 		c.rotation_degrees = _cup_presented_rotation(c)
 
 
 func _cup_presented_rotation(root: Node3D = null) -> Vector3:
-	var base := cup_rest_rot if cup_rest != Vector3.ZERO else cup_home_rot
+	var base := _cup_rest_rotation() if _cup_rest_global() != Vector3.ZERO else cup_home_rot
 	if base == Vector3.ZERO:
 		base = Vector3.ZERO
 	base.x = 0.0
@@ -29368,7 +29380,7 @@ func _tray_slot_local(slot: int) -> Vector3:
 	## local -X is screen-left with soda yaw 180. Slots stay fixed once assigned.
 	var lx := soda_tray_first_x + float(clampi(slot, 0, CUP_MAX - 1)) * soda_tray_spacing
 	lx = clampf(lx, soda_tray_first_x, 0.28)
-	return Vector3(lx, CUP_TRAY_DECK_LOCAL_Y, 0.54)
+	return Vector3(lx, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z)
 
 
 func _tray_slot_taken(slot: int, ignore: Node3D = null) -> bool:
@@ -29393,8 +29405,9 @@ func _tray_slot_global(slot: int) -> Vector3:
 	var local := _tray_slot_local(slot)
 	if soda_root != null and is_instance_valid(soda_root):
 		return soda_root.to_global(local)
-	if cup_rest != Vector3.ZERO:
-		return cup_rest + Vector3(float(slot) * soda_tray_spacing, 0.0, 0.0)
+	var rest_now := _cup_rest_global()
+	if rest_now != Vector3.ZERO:
+		return rest_now + Vector3(float(slot) * soda_tray_spacing, 0.0, 0.0)
 	return cup_home
 
 
@@ -31091,8 +31104,10 @@ func _cup_deck_fill_y() -> float:
 	var deck := soda_station_pos.y + CUP_TRAY_DECK_LOCAL_Y
 	if soda_root != null and is_instance_valid(soda_root):
 		deck = soda_root.to_global(Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y, 0.0)).y
-	elif cup_rest != Vector3.ZERO:
-		deck = cup_rest.y
+	else:
+		var rest_now := _cup_rest_global()
+		if rest_now != Vector3.ZERO:
+			deck = rest_now.y
 	return deck + cup_fill_extra_y
 
 
@@ -31103,7 +31118,7 @@ func _cup_target_for_spout(tip: Node3D) -> Vector3:
 	var off_in: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
 	var off := off_in * INCH_TO_M
 	if soda_root != null and is_instance_valid(soda_root):
-		var local := soda_root.to_local(tip_p)
+		var local := tip.position if tip.get_parent() == soda_root else soda_root.to_local(tip_p)
 		local.y = CUP_TRAY_DECK_LOCAL_Y + cup_fill_extra_y
 		local += off
 		return soda_root.to_global(local)
@@ -31262,8 +31277,9 @@ func _update_held_cup(delta: float) -> void:
 		cup_root.global_position.y = _cup_deck_fill_y()
 	else:
 		var anchor_y := GRILL_SURFACE_Y + cup_hold_height
-		if cup_rest != Vector3.ZERO:
-			anchor_y = lerpf(anchor_y, cup_rest.y + 0.01, 0.35)
+		var rest_now := _cup_rest_global()
+		if rest_now != Vector3.ZERO:
+			anchor_y = lerpf(anchor_y, rest_now.y + 0.01, 0.35)
 		cup_root.global_position.y = lerpf(cup_root.global_position.y, anchor_y, clampf(delta * 16.0, 0.0, 1.0))
 		cup_root.global_position.y = clampf(cup_root.global_position.y, anchor_y - 0.03, anchor_y + 0.05)
 	## Stay normal in-hand while RMB charges — flip only starts on release.
@@ -32125,8 +32141,9 @@ func _spawn_flying_ice_cube(from_tip: Vector3, to_rim: Vector3, overflow: bool =
 	var land_y := SODA_STATION_POS.y + 0.10
 	if soda_root != null and is_instance_valid(soda_root):
 		land_y = soda_root.global_position.y + 0.10
-	if cup_rest != Vector3.ZERO:
-		land_y = cup_rest.y + 0.002
+	var rest_now := _cup_rest_global()
+	if rest_now != Vector3.ZERO:
+		land_y = rest_now.y + 0.002
 	var end: Vector3
 	var mid: Vector3
 	## BoxMesh is centered — sit a hair higher so they don't read sunk into the steel.
@@ -33961,7 +33978,8 @@ func _trash_held_cup() -> void:
 func _try_return_cup_to_rack(screen_pos: Vector2) -> bool:
 	if not cup_held or cup_root == null or camera == null:
 		return false
-	var tray_pt := camera.unproject_position(cup_rest if cup_rest != Vector3.ZERO else cup_home)
+	var tray_pos := _cup_rest_global()
+	var tray_pt := camera.unproject_position(tray_pos if tray_pos != Vector3.ZERO else cup_home)
 	if screen_pos.distance_to(tray_pt) > 70.0:
 		return false
 	_park_cup_on_tray(true)
@@ -34019,7 +34037,8 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	if used_cup and (cup_soda_fill >= 0.15 or cup_ice_fill >= 0.08 or cup_flavor != ""):
 		if _tray_parked_count() >= CUP_MAX:
 			## Already max parked — keep this as the working cup on the drip tray (not the rack).
-			var park_full := cup_rest if cup_rest != Vector3.ZERO else _cup_drip_tray_fallback()
+			var rest_full_now := _cup_rest_global()
+			var park_full := rest_full_now if rest_full_now != Vector3.ZERO else _cup_drip_tray_fallback()
 			var park_full_rot := _cup_presented_rotation(cup_root)
 			if cup_root != null and is_instance_valid(cup_root):
 				cup_root.rotation_degrees = park_full_rot
@@ -34068,9 +34087,10 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 		return
 
 	## Empty cup only — drip tray. Never use the CUPS nest as a put-down for used cups.
-	var park := cup_rest if cup_rest != Vector3.ZERO else _cup_drip_tray_fallback()
+	var rest_now := _cup_rest_global()
+	var park := rest_now if rest_now != Vector3.ZERO else _cup_drip_tray_fallback()
 	if used_cup:
-		park = cup_rest if cup_rest != Vector3.ZERO else _cup_drip_tray_fallback()
+		park = rest_now if rest_now != Vector3.ZERO else _cup_drip_tray_fallback()
 	var park_rot := _cup_presented_rotation(cup_root)
 	## Sit upright on the tray surface (no carry lean).
 	if cup_root != null and is_instance_valid(cup_root):
@@ -34092,8 +34112,9 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 
 func _cup_drip_tray_fallback() -> Vector3:
 	## Safe put-down when cup_rest isn't ready — never the CUPS dispenser nest.
-	if soda_root != null and is_instance_valid(soda_root):
-		return soda_root.to_global(Vector3(soda_cup_rest_x, CUP_TRAY_DECK_LOCAL_Y, soda_cup_rest_z))
+	var rest_now := _cup_rest_global()
+	if rest_now != Vector3.ZERO:
+		return rest_now
 	return cup_home
 
 
