@@ -1676,7 +1676,7 @@ const CHEESE_STATION_COLLISION_LAYER := 8192
 const CHEESE_STATION_OFFSET := Vector3(0.143, 0.0, 0.278)
 const CHEESE_RETURN_SEC := 0.28 ## Lerp ghost back to the slice stack on a missed drop
 ## Screen grab must be tight — generous radius stole grill scoop/drag clicks.
-const CHEESE_STATION_SCREEN_PX := 40.0
+const CHEESE_STATION_SCREEN_PX := 78.0
 const PREP_UI_MODULATE := Color(0.7, 0.7, 0.7, 1.0)
 const PREP_UI_SIZE := Vector2(420.0, 252.0)
 const PREP_UI_BEHIND_X := -125.0 ## legacy offset when prep lived inside BuildZone
@@ -2122,14 +2122,15 @@ const GFX_DEFAULTS := {
 	"bg_z": STREET_MATTE_BASE_Z,
 	"bg_scale": 1.17,
 	"bunting_x": 0.0,
-	"bunting_y": 1.84,
+	"bunting_y": 2.57,
 	"bunting_z": 1.52,
 	"bunting_width": 4.95,
 	"bunting_sag": 0.18,
 	"bunting_count": 9.0,
 	"bunting_flag_w": 0.34,
 	"bunting_flag_h": 0.38,
-	"bunting_rope": 0.018,
+	"bunting_rope": 0.02,
+	"cheese_stack_scale": 1.0,
 	"sale_x": 0.0,
 	"sale_y": 2.39,
 	"sale_z": 1.18,
@@ -35079,9 +35080,11 @@ func _build_cheese_station_prop() -> void:
 	slice_mat.albedo_color = Color(1.0, 0.86, 0.22)
 	slice_mat.roughness = 0.45
 	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var slice_thick := 0.013
-	var slice_step := 0.0145
-	var slice_w := 0.118
+	var gfx := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
+	var cheese_scale := clampf(float(gfx.get("cheese_stack_scale", GFX_DEFAULTS["cheese_stack_scale"])), 0.45, 2.25)
+	var slice_thick := 0.013 * cheese_scale
+	var slice_step := 0.0145 * cheese_scale
+	var slice_w := 0.118 * cheese_scale
 	## Two piles nearer the grill; buns sit on the board side (higher local X).
 	var cheese_off := _prop_offset("cheese_stack")
 	var pile_defs := [
@@ -35131,9 +35134,9 @@ func _build_cheese_station_prop() -> void:
 	area.monitorable = true
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.26, 0.18, 0.20)
+	box.size = Vector3(0.42 * maxf(1.0, cheese_scale), 0.26 * maxf(1.0, cheese_scale), 0.32 * maxf(1.0, cheese_scale))
 	cs.shape = box
-	cs.position = mid.position + Vector3(0.0, 0.06, 0.0)
+	cs.position = mid.position + Vector3(0.0, 0.08 * maxf(1.0, cheese_scale), 0.0)
 	area.add_child(cs)
 	root.add_child(area)
 	grill_root.add_child(root)
@@ -35441,10 +35444,23 @@ func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 	if not hit.is_empty() and hit.get("collider") == cheese_station_area:
 		return true
 	## Tight screen fallback — only when clearly aiming at the slice piles.
-	var anchor := _cheese_stack_home_world()
-	if camera.is_position_behind(anchor):
-		return false
-	return screen_pos.distance_to(camera.unproject_position(anchor)) < CHEESE_STATION_SCREEN_PX
+	var best_px := INF
+	var targets: Array[Node3D] = []
+	if cheese_station_root != null and is_instance_valid(cheese_station_root):
+		var pile_a := cheese_station_root.get_node_or_null("CheesePileA")
+		var pile_b := cheese_station_root.get_node_or_null("CheesePileB")
+		if pile_a is Node3D:
+			targets.append(pile_a)
+		if pile_b is Node3D:
+			targets.append(pile_b)
+	if cheese_stack_anchor != null and is_instance_valid(cheese_stack_anchor):
+		targets.append(cheese_stack_anchor)
+	for target in targets:
+		var p := target.global_position + Vector3(0.0, 0.07, 0.0)
+		if camera.is_position_behind(p):
+			continue
+		best_px = minf(best_px, screen_pos.distance_to(camera.unproject_position(p)))
+	return best_px < CHEESE_STATION_SCREEN_PX
 
 
 func _try_cheese_station_click(screen_pos: Vector2) -> bool:
@@ -40832,6 +40848,7 @@ func _build_options_menu() -> void:
 	_hidden_add_section(hidden_world_box, "PROP OFFSETS")
 	_hidden_add_prop_offset_group(hidden_world_box, "burger_buns", "Burger Buns")
 	_hidden_add_prop_offset_group(hidden_world_box, "cheese_stack", "Cheese Stack")
+	_gfx_add_slider(hidden_world_box, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
 	_hidden_add_prop_offset_group(hidden_world_box, "cutting_board", "Cutting Board")
 	_hidden_add_prop_offset_group(hidden_world_box, "seasoning_shaker", "Seasoning Shaker")
 	_hidden_add_prop_offset_group(hidden_world_box, "fire_ext", "Fire Extinguisher")
@@ -42037,6 +42054,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_menu_board_decal_settings(s)
 	_apply_burner_strip_settings(s)
 	_build_window_bunting()
+	_build_cheese_station_prop()
 	_apply_build_zone_settings(s)
 	_apply_roomba_audio_settings(s)
 
@@ -42375,6 +42393,16 @@ func _load_graphics_settings() -> void:
 		]:
 			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
 		cfg.set_value("gfx", "gfx_strip_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot: user-tuned bunting defaults plus cheese stack size control.
+	if not cfg.has_section_key("gfx", "gfx_bunting_cheese_v1"):
+		for hk in [
+			"bunting_x", "bunting_y", "bunting_z", "bunting_width", "bunting_sag",
+			"bunting_count", "bunting_flag_w", "bunting_flag_h", "bunting_rope",
+			"cheese_stack_scale",
+		]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_bunting_cheese_v1", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: apply full tuned graphics look (bloom + lighting + look + AO off).
 	if not cfg.has_section_key("gfx", "gfx_preset_v7"):
