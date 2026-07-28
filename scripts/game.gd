@@ -1778,8 +1778,8 @@ const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a cla
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
 const SODA_STATION_POS := Vector3(-1.56, 0.92, 0.98)
 const SODA_STATION_ROT := Vector3(0.0, 180.0, 0.0)
-const SODA_FOUNTAIN_MODEL_PATH := "res://models/sodamachine/soda_fountain_model.tscn"
-const SODA_FOUNTAIN_EDIT_FBX := "res://models/sodamachine/sodaedit1.fbx"
+const SODA_FOUNTAIN_MODEL_PATH := "res://models/sodamachine/soda_fountain.fbx"
+const SODA_FOUNTAIN_EDIT_FBX := "res://models/sodamachine/soda_fountain.fbx"
 const SODA_FOUNTAIN_GLB_PATH := "res://models/sodamachine/soda_fountain.glb"
 const SODA_FOUNTAIN_SCALE := 1.9 ## Authored cm→m already applied; enlarge to counter size
 const SODA_BRAND_LOGO_PATHS: Array[String] = [
@@ -1790,12 +1790,19 @@ const SODA_BRAND_LOGO_PATHS: Array[String] = [
 ]
 ## Left→right brand squares on sodaedit (4th square = ice tip).
 const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["cola", "lemon_lime", "orange", "ice"]
-const SODA_MODEL_SPOUT_POS: Dictionary = {
+const SODA_MODEL_PANEL_POS: Dictionary = {
 	"cola": Vector3(-0.1072, 0.252, -0.159),
 	"lemon_lime": Vector3(-0.0366, 0.252, -0.159),
 	"orange": Vector3(0.0339, 0.252, -0.159),
 }
-const SODA_MODEL_ICE_SPOUT := Vector3(0.1045, 0.252, -0.159)
+const SODA_MODEL_SODA_SPOUT := Vector3(0.1045, 0.252, -0.159)
+const SODA_MODEL_ICE_SPOUT := Vector3(-0.1072, 0.252, -0.159)
+const SODA_SHARED_DRINK_NOZZLE := true
+const SODA_MODEL_SPOUT_POS: Dictionary = {
+	"cola": SODA_MODEL_SODA_SPOUT,
+	"lemon_lime": SODA_MODEL_SODA_SPOUT,
+	"orange": SODA_MODEL_SODA_SPOUT,
+}
 const SODA_CLIP_BACK_M := 0.0254 ## ~1 inch into the cabinet
 const SODA_CLIP_REST_TILT_X := -14.0 ## tip the bottom toward the cook a bit
 const SODA_CLIP_POUR_EXTRA_X := -16.0 ## extra tip while cup is filling
@@ -24506,7 +24513,7 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 	soda_flavor_panel_root.name = "FlavorPanels"
 	soda_root.add_child(soda_flavor_panel_root)
 	for fid in SODA_BRAND_FLAVOR_ORDER:
-		var nozzle_local: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+		var nozzle_local: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_PANEL_POS.get(fid, SODA_MODEL_PANEL_POS.get("cola", Vector3.ZERO))
 		var panel_pos := _soda_model_local(nozzle_local)
 		panel_pos.y = panel_y
 		panel_pos.z = panel_z
@@ -24793,6 +24800,8 @@ func _soda_soft_radius_for_station(fid: String) -> float:
 
 
 func _set_soda_active_station(fid: String) -> void:
+	if SODA_SHARED_DRINK_NOZZLE and SODA_FLAVORS.has(fid):
+		fid = soda_selected_flavor
 	if fid == soda_active_station:
 		return
 	soda_active_station = fid
@@ -24841,7 +24850,7 @@ func _rebuild_soda_tank_visuals() -> void:
 	soda_tank_syrup.clear()
 	soda_tank_bubbles.clear()
 	for fid in SODA_FLAVORS:
-		var base: Vector3 = SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
+		var base: Vector3 = SODA_MODEL_PANEL_POS.get(fid, SODA_MODEL_PANEL_POS.get("cola", Vector3.ZERO))
 		var pos := _soda_model_local(base + _soda_nozzle_offset_model(fid))
 		pos.x += soda_tank_x_offset_in * INCH_TO_M
 		pos.y += soda_tank_y_offset_in * INCH_TO_M
@@ -24921,9 +24930,8 @@ func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
 	parent.add_child(root)
 	var mat := _make_soda_metal_mat(Color(0.50, 0.52, 0.55), 0.92, 0.20)
 	var throat_mat := _make_soda_metal_mat(Color(0.13, 0.15, 0.17), 0.45, 0.48)
-	for fid in SODA_BRAND_FLAVOR_ORDER:
-		var model_pos: Vector3 = SODA_MODEL_ICE_SPOUT if fid == "ice" else SODA_MODEL_SPOUT_POS.get(fid, SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO))
-		_add_soda_nozzle_fill_visual(root, "NozzleFill_%s" % fid, _soda_model_local(model_pos), mat, throat_mat)
+	_add_soda_nozzle_fill_visual(root, "NozzleFill_ice", _soda_model_local(SODA_MODEL_ICE_SPOUT), mat, throat_mat)
+	_add_soda_nozzle_fill_visual(root, "NozzleFill_soda", _soda_model_local(SODA_MODEL_SODA_SPOUT), mat, throat_mat)
 
 
 func _add_soda_nozzle_fill_visual(parent: Node3D, nozzle_name: String, local_pos: Vector3, mat: Material, throat_mat: Material) -> void:
@@ -31772,15 +31780,16 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 	else:
 		_update_soda_station_focus_for_cup()
 	if station_id != "" and station_id != "ice":
+		var fill_flavor := soda_selected_flavor if SODA_SHARED_DRINK_NOZZLE and SODA_FLAVORS.has(station_id) else station_id
 		var before := cup_soda_fill
-		if cup_flavor != "" and cup_flavor != station_id and cup_soda_fill > 0.05:
+		if cup_flavor != "" and cup_flavor != fill_flavor and cup_soda_fill > 0.05:
 			_flash("Empty / return cup first — wrong flavor", Color("FFAB91"))
 			_hide_soda_stream()
-		elif _soda_tank_amount(station_id) <= SODA_TANK_EMPTY:
+		elif _soda_tank_amount(fill_flavor) <= SODA_TANK_EMPTY:
 			_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 			_hide_soda_stream()
 		else:
-			cup_flavor = station_id
+			cup_flavor = fill_flavor
 			if cup_soda_fill < 1.0:
 				var want := minf(1.0 - cup_soda_fill, CUP_FILL_RATE * delta)
 				var got := _drain_soda_tank(cup_flavor, want)
@@ -31796,7 +31805,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 						_refresh_ticket_checkmarks()
 					if before < 0.82 and cup_soda_fill >= 0.82:
 						call_deferred("_try_auto_hand_finished_soda")
-				elif _soda_tank_amount(station_id) <= SODA_TANK_EMPTY:
+				elif _soda_tank_amount(fill_flavor) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 					_hide_soda_stream()
 				else:
@@ -31812,7 +31821,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 					var spill_rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.98, 0.0)
 					_update_soda_stream(station_tip, spill_rim, cup_flavor)
 					_emit_soda_overfill_spill(spill_rim, cup_flavor, spilled, delta)
-				elif _soda_tank_amount(station_id) <= SODA_TANK_EMPTY:
+				elif _soda_tank_amount(fill_flavor) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 					_hide_soda_stream()
 				else:
@@ -36356,7 +36365,10 @@ func _commit_social_review(
 	var pic: Texture2D = null
 	## Cat burnt-triple posts always attach the burger photo as evidence.
 	var force_pic := kind == "cat_burnt"
-	if station_index >= 0 and (force_pic or randf() < SOCIAL_REVIEW_PIC_CHANCE):
+	var pic_chance := SOCIAL_REVIEW_PIC_CHANCE
+	if kind == "good" and stars >= 4.0:
+		pic_chance = 0.45
+	if station_index >= 0 and (force_pic or randf() < pic_chance):
 		pic = _make_review_burger_snapshot(station_index)
 	var pic_png: PackedByteArray = PackedByteArray()
 	if pic != null:
