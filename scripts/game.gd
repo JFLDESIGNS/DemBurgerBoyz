@@ -2142,6 +2142,7 @@ const GFX_DEFAULTS := {
 	"bunting_flag_h": 0.38,
 	"bunting_rope": 0.02,
 	"cheese_stack_scale": 1.0,
+	"burger_bun_scale": 1.0,
 	"sale_x": 0.0,
 	"sale_y": 2.39,
 	"sale_z": 1.18,
@@ -4099,6 +4100,12 @@ func _input(event: InputEvent) -> void:
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if _try_fryer_basket_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
+			if _try_ready_fries_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			## 3D bun towers (board-side) — thud + hop before cheese / UI steal the click.
 			if _try_bun_pile_click(event.position):
 				get_viewport().set_input_as_handled()
@@ -4123,12 +4130,6 @@ func _input(event: InputEvent) -> void:
 					get_viewport().set_input_as_handled()
 					return
 			if _ui_blocks_world_click(event.position):
-				return
-			if _try_fryer_basket_click(event.position):
-				get_viewport().set_input_as_handled()
-				return
-			if _try_ready_fries_click(event.position):
-				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_spilled_fry(event.position):
 				get_viewport().set_input_as_handled()
@@ -23162,8 +23163,9 @@ func _set_prop_offset_axis(key: String, axis: String, val: float) -> void:
 
 func _apply_prop_offset_changed(key: String) -> void:
 	match key:
-		"burger_buns", "cheese_stack", "cutting_board":
+		"cutting_board":
 			_build_cutting_board_prop()
+		"burger_buns", "cheese_stack":
 			_build_cheese_station_prop()
 		"seasoning_shaker":
 			_build_season_shaker()
@@ -34752,14 +34754,18 @@ func _make_toon_wood_material(tex: Texture2D, tint: Color = Color.WHITE, uv_scal
 	return mat
 
 
-func _cutting_board_world_center() -> Vector3:
+func _cutting_board_base_center() -> Vector3:
 	## Same plane as the grill top — tucked just screen-left of the steel edge.
 	var bw := CUTTING_BOARD_SIZE.x
 	var bh := CUTTING_BOARD_SIZE.y
 	var grill_left_edge := GRILL_CENTER_X + GRILL_WIDTH * 0.5
 	var cx := grill_left_edge + CUTTING_BOARD_GAP + bw * 0.5
 	var cy := GRILL_SURFACE_Y - bh * 0.5 + 0.012
-	return Vector3(cx, cy, GRILL_SURFACE_Z + CUTTING_BOARD_Z_OFFSET) + _prop_offset("cutting_board")
+	return Vector3(cx, cy, GRILL_SURFACE_Z + CUTTING_BOARD_Z_OFFSET)
+
+
+func _cutting_board_world_center() -> Vector3:
+	return _cutting_board_base_center() + _prop_offset("cutting_board")
 
 
 func _station_cutting_board_is_empty(station_index: int = STATION_CRAFT) -> bool:
@@ -35106,7 +35112,7 @@ func _build_cheese_station_prop() -> void:
 	bun_pile_anchors.clear()
 	if grill_root == null:
 		return
-	var board_c := _cutting_board_world_center()
+	var board_c := _cutting_board_base_center()
 	var bh := CUTTING_BOARD_SIZE.y
 	var root := Node3D.new()
 	root.name = "CheeseStation"
@@ -35225,22 +35231,25 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	parent.add_child(bun_pile_root)
 	bun_pile_stacks.clear()
 	bun_pile_anchors.clear()
+	var gfx := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
+	var bun_scale := clampf(float(gfx.get("burger_bun_scale", GFX_DEFAULTS["burger_bun_scale"])), 0.45, 2.5)
+	var model_scale := BUN_PILE_SCALE * bun_scale
 	var Pack := preload("res://scripts/burger_pack_models.gd")
 	for tower_i in BUN_PILE_TOWER_COUNT:
 		var tower := Node3D.new()
 		tower.name = "BunTower_%d" % tower_i
-		tower.position = BUN_PILE_BASE + Vector3(float(tower_i) * BUN_PILE_SPACING_X, 0.0, 0.0)
+		tower.position = BUN_PILE_BASE + Vector3(float(tower_i) * BUN_PILE_SPACING_X * bun_scale, 0.0, 0.0)
 		tower.rotation_degrees = Vector3(0.0, float(tower_i) * 9.0 - 4.0, 0.0)
 		bun_pile_root.add_child(tower)
 		for pair_i in BUN_PILE_PAIRS_PER_TOWER:
 			var pair := Node3D.new()
 			pair.name = "BunPair_%d_%d" % [tower_i, pair_i]
-			pair.position = Vector3(0.0, float(pair_i) * BUN_PAIR_STACK_Y * BUN_PILE_SCALE, 0.0)
+			pair.position = Vector3(0.0, float(pair_i) * BUN_PAIR_STACK_Y * model_scale, 0.0)
 			pair.set_meta("tower_i", tower_i)
 			pair.set_meta("pair_i", pair_i) ## 0 = bottom row, 1 = second / top row
 			tower.add_child(pair)
-			var bottom: Node3D = Pack.instantiate_scene(BUN_BOTTOM_PATH, BUN_PILE_SCALE)
-			var top: Node3D = Pack.instantiate_scene(BUN_TOP_PATH, BUN_PILE_SCALE)
+			var bottom: Node3D = Pack.instantiate_scene(BUN_BOTTOM_PATH, model_scale)
+			var top: Node3D = Pack.instantiate_scene(BUN_TOP_PATH, model_scale)
 			if bottom == null or top == null:
 				push_warning("Bun inventory models missing")
 				if bottom:
@@ -35252,7 +35261,7 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 			bottom.name = "Bottom"
 			top.name = "Top"
 			bottom.position = Vector3.ZERO
-			top.position = Vector3(0.0, BUN_PAIR_TOP_Y * BUN_PILE_SCALE, 0.0)
+			top.position = Vector3(0.0, BUN_PAIR_TOP_Y * model_scale, 0.0)
 			pair.add_child(bottom)
 			pair.add_child(top)
 			_burgerpack_boost_draw(bottom)
@@ -35267,9 +35276,9 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 			grab.input_ray_pickable = true
 			var gcs := CollisionShape3D.new()
 			var gbox := BoxShape3D.new()
-			gbox.size = Vector3(0.10, 0.085, 0.10)
+			gbox.size = Vector3(0.10, 0.085, 0.10) * maxf(1.0, bun_scale)
 			gcs.shape = gbox
-			gcs.position = Vector3(0.0, 0.038, 0.0)
+			gcs.position = Vector3(0.0, 0.038 * maxf(1.0, bun_scale), 0.0)
 			grab.add_child(gcs)
 			pair.add_child(grab)
 			pair.visible = false
@@ -35278,7 +35287,7 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	## Fly-to-build home — between the two towers.
 	var home := Node3D.new()
 	home.name = "BunPileHome"
-	home.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * 0.5, 0.08, 0.0)
+	home.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * bun_scale * 0.5, 0.08 * maxf(1.0, bun_scale), 0.0)
 	bun_pile_root.add_child(home)
 	bun_pile_anchors["bun_bottom"] = home
 	bun_pile_anchors["bun_top"] = home
@@ -40916,9 +40925,23 @@ func _build_options_menu() -> void:
 
 	_hidden_add_section(hidden_world_box, "PROP OFFSETS")
 	_hidden_add_prop_offset_group(hidden_world_box, "burger_buns", "Burger Buns")
+	_gfx_add_slider(hidden_world_box, "burger_bun_scale", "Burger Bun Size", 0.45, 2.5, 0.01)
 	_hidden_add_prop_offset_group(hidden_world_box, "cheese_stack", "Cheese Stack")
 	_gfx_add_slider(hidden_world_box, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
 	_hidden_add_prop_offset_group(hidden_world_box, "cutting_board", "Cutting Board")
+	_hidden_add_section(hidden_world_box, "CUTTING BOARD UI")
+	_gfx_add_slider(hidden_world_box, "bz_row_left", "Board UI Left", -250.0, 450.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_row_top", "Board UI Top", -300.0, 500.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_zone_left", "Stack X In Panel", -160.0, 220.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_zone_top", "Stack Y In Panel", -160.0, 260.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_plate_shift", "Burger Stack X", -160.0, 220.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_plate_y", "Burger Stack Y", -80.0, 260.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_panel_w", "Board UI Width", 100.0, 420.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_panel_h", "Board UI Height", 120.0, 520.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_hit_l", "Board Hit Pad Left", 0.0, 120.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_hit_t", "Board Hit Pad Top", 0.0, 160.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_hit_r", "Board Hit Pad Right", 0.0, 120.0, 1.0)
+	_gfx_add_slider(hidden_world_box, "bz_hit_b", "Board Hit Pad Bottom", 0.0, 120.0, 1.0)
 	_hidden_add_prop_offset_group(hidden_world_box, "seasoning_shaker", "Seasoning Shaker")
 	_hidden_add_prop_offset_group(hidden_world_box, "fire_ext", "Fire Extinguisher")
 	_hidden_add_prop_offset_group(hidden_world_box, "oil_bottle", "Oil Bottle")
@@ -42423,15 +42446,15 @@ func _load_graphics_settings() -> void:
 			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
 		cfg.set_value("gfx", "gfx_strip_v1", true)
 		cfg.save(GFX_CFG_PATH)
-	## One-shot: user-tuned bunting defaults plus cheese stack size control.
-	if not cfg.has_section_key("gfx", "gfx_bunting_cheese_v1"):
+	## One-shot: user-tuned bunting defaults plus cheese/bun stack size controls.
+	if not cfg.has_section_key("gfx", "gfx_bunting_cheese_buns_v2"):
 		for hk in [
 			"bunting_x", "bunting_y", "bunting_z", "bunting_width", "bunting_sag",
 			"bunting_count", "bunting_flag_w", "bunting_flag_h", "bunting_rope",
-			"cheese_stack_scale",
+			"cheese_stack_scale", "burger_bun_scale",
 		]:
 			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
-		cfg.set_value("gfx", "gfx_bunting_cheese_v1", true)
+		cfg.set_value("gfx", "gfx_bunting_cheese_buns_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: apply full tuned graphics look (bloom + lighting + look + AO off).
 	if not cfg.has_section_key("gfx", "gfx_preset_v7"):
