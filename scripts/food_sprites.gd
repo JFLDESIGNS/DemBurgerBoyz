@@ -240,14 +240,15 @@ static func _try_load_ingredient(id: String) -> Texture2D:
 
 
 static func prep_layer_image_for_composite(src: Image) -> Image:
-	## Knock out studio-black padding and trim — used by review burger snapshots.
+	## Trim an already-prepared layer for review burger snapshots. Patty textures
+	## are charred after their source backdrop is removed, so knocking out dark
+	## pixels again here would erase the very-burnt meat from the review photo.
 	if src == null:
 		return null
 	var img := src.duplicate()
 	if img.is_compressed():
 		img.decompress()
 	img.convert(Image.FORMAT_RGBA8)
-	_knockout_dark_backdrop(img)
 	img = _crop_to_opaque(img)
 	return img
 

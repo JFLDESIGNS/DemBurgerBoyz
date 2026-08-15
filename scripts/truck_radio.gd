@@ -17,6 +17,7 @@ const FM_STATIONS: Array[Dictionary] = [
 	{"freq": "104.9", "name": "WALM Classical", "url": "https://icecast.walmradio.com:8443/walm2"},
 	{"freq": "107.1", "name": "1LIVE Rock", "url": "http://wdr-1live-live.icecast.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
 ]
+const SMOOTH_JAZZ_FM_INDEX := 1
 
 const AM_STATIONS: Array[Dictionary] = [
 	{"freq": "680", "name": "BBC World", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
@@ -34,7 +35,7 @@ const RECONNECT_AFTER := 12.0
 var powered: bool = false
 var band: int = Band.FM
 ## Default: FM 92.1 Smooth Jazz (index in FM_STATIONS).
-var channel_index: int = 1
+var channel_index: int = SMOOTH_JAZZ_FM_INDEX
 var volume_linear: float = 0.80
 ## Temporary mute for combat theme — keeps stream alive so resume is instant.
 var _combat_silenced: bool = false
@@ -110,7 +111,7 @@ func toggle_power() -> void:
 func toggle_band() -> void:
 	band = Band.AM if band == Band.FM else Band.FM
 	## FM boots on Smooth Jazz; AM starts at the first listing.
-	channel_index = 1 if band == Band.FM else 0
+	channel_index = SMOOTH_JAZZ_FM_INDEX if band == Band.FM else 0
 	if channel_index >= channel_count():
 		channel_index = 0
 	channel_changed.emit(channel_index, channel_title())
@@ -145,6 +146,16 @@ func set_channel(index: int) -> void:
 	channel_changed.emit(channel_index, channel_title())
 	if powered:
 		_tune_current()
+
+
+func select_smooth_jazz() -> void:
+	band = Band.FM
+	channel_index = SMOOTH_JAZZ_FM_INDEX
+	channel_changed.emit(channel_index, channel_title())
+	if powered:
+		_tune_current()
+	else:
+		_emit_status(short_title())
 
 
 func set_volume_linear(v: float) -> void:

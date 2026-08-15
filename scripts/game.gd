@@ -11,7 +11,7 @@ const STATION_BURGER_UI_SCALE := 0.75 ## was 0.625; +20% larger on the build boa
 ## Patties / toppings on the build board — buns stay full size.
 const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-column overshoot
 const STATION_PATTY_BUILD_SCALE := 0.744 ## bare meat (10% smaller than 0.827)
-const STATION_PATTY_CHEESE_BUILD_SCALE := 0.768 ## melt art (10% smaller than 0.853)
+const STATION_PATTY_CHEESE_BUILD_SCALE := STATION_PATTY_BUILD_SCALE ## cheese must not enlarge the meat
 ## Mild finished-stack nest — heel tucks under meat; crown stays clear of patty.
 const BUILD_BUN_NEST_BOTTOM_PX := 2.0
 const BUILD_BUN_NEST_TOP_PX := -6.0 ## negative = lift crown off meat (was +7 glue)
@@ -40,6 +40,25 @@ const GRILL_SURFACE_Z := -0.02 ## farther from cook, closer to window
 const GRILL_CENTER_X := -0.068 ## keep left edge — grill shortened on the right
 const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
+const PHYSICAL_GARBAGE_SCENE := "res://assets/props/trashcan_small_cc0.glb"
+const PHYSICAL_GARBAGE_COLLISION_LAYER := 1048576
+## Camera-right 6 inches and seven inches higher than the first placement.
+const PHYSICAL_GARBAGE_POS := Vector3(-1.4024, 0.2578, 0.16)
+const PHYSICAL_GARBAGE_TARGET_H := 0.94
+const PHYSICAL_GARBAGE_CUT_HALF_W := 0.29
+const PHYSICAL_GARBAGE_CFG_SECTION := "physical_garbage"
+const PHYSICAL_GARBAGE_SYMBOL_PATH := "res://assets/props/public_trash_symbol.svg"
+const PHYSICAL_GARBAGE_DEFAULT_SCALE := 0.792 ## another 10% smaller than the prior 0.88
+var physical_garbage_pos := PHYSICAL_GARBAGE_POS
+var physical_garbage_rot := Vector3.ZERO
+var physical_garbage_scale := PHYSICAL_GARBAGE_DEFAULT_SCALE
+var physical_garbage_symbol_offset := Vector3.ZERO
+var physical_garbage_symbol_rot := Vector3.ZERO
+var physical_garbage_symbol_scale := 1.0
+const ICECREAM_MASCOT_MESH := "res://assets/props/smiling_ice_cream_sf.obj"
+const ICECREAM_MASCOT_TARGET_H := 0.30
+const GRILL_STANDOFF_DIAMETER := 0.127 ## 5 inches
+const GRILL_STANDOFF_CORNER_INSET := 0.0762 ## 3 inches
 ## 14 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
 ## tinggrill.wav reads ~3 semis flat of C5, so request MIDI = sounded + SAMPLE_COMP.
 ## Flat taps: C major twice — C D E F G A B C D E F G A B (C3→B4).
@@ -196,15 +215,58 @@ const CUP_MOUTH_HAND_WORLD := 0.58 ## Or when the cup itself is this close to th
 @onready var grill_power_row: HBoxContainer = %GrillPowerRow
 @onready var ingredient_legend: HBoxContainer = %IngredientLegend
 
+var serve_breakdown_panel: PanelContainer = null
+var serve_breakdown_title: Label = null
+var serve_breakdown_values: Dictionary = {} ## metric id -> value Label
+var serve_breakdown_cells: Dictionary = {} ## metric id -> Wii-style tile PanelContainer
+var _serve_breakdown_tween: Tween = null
+
 var money: float = 0.0
 var combo: int = 0
 var day: int = 1
 var day_time: float = DAY_LENGTH
 var playing: bool = false
-## Start tutorial: 1 = turn burner on · 2 = right-click patty · 0 = done.
+## Separate learn-by-doing mode. Normal shifts do not run these lessons.
+const GUIDED_TUTORIAL_DURATION := 15.0 * 60.0
+const GUIDED_TUTORIAL_STEPS: Array[Dictionary] = [
+	{"title": "WELCOME, CHEF!", "body": "I'm your cat coach. We have 15 minutes and one easy order. Do each job yourself and I'll guide you through the whole burger."},
+	{"title": "TURN ON THE GRILL", "body": "Click BURNER: OFF below the grill (or press G). The steel needs heat before food can cook."},
+	{"title": "PLACE A PATTY", "body": "Right-click an open spot on the grill. A frozen beef ball will land exactly where you point."},
+	{"title": "SMASH THE PATTY", "body": "Right-click the frozen ball again. The spatula will press it flat into a proper smash burger."},
+	{"title": "SEASON THE MEAT", "body": "Click the hanging seasoning shaker, then hold it over the patty until pepper specks appear."},
+	{"title": "COOK THE FIRST SIDE", "body": "Let it sizzle. Watch the ring over the patty and wait until it says FLIP. Good cooks don't rush the sear."},
+	{"title": "FLIP IT", "body": "When FLIP appears, quickly left-click the patty. The spatula will turn it onto its second side."},
+	{"title": "FINISH COOKING", "body": "Wait for the second side. When the ring says SCOOP, the patty is ready to leave the grill."},
+	{"title": "MOVE TO BUILD", "body": "Left-click the ready patty to scoop it, then click or drop it on the Build board at the left."},
+	{"title": "ADD LETTUCE", "body": "Click LETTUCE on the bottom topping strip. It will fly onto the burger in the correct stack order."},
+	{"title": "ADD TOMATO", "body": "Now click TOMATO on the topping strip. Follow the customer's ticket instead of guessing."},
+	{"title": "CROWN THE BURGER", "body": "Click the top-bun pile on the prep counter. The top bun finishes this practice order."},
+	{"title": "SERVE THE ORDER", "body": "Check the ticket, then press the green bell at the bottom-right (or press Enter) to serve."},
+	{"title": "BUY INGREDIENTS", "body": "Drag or wheel down the phone to INVENTORY, then press Buy beside Lettuce. The cat delivers the restock."},
+	{"title": "CLEAN AND CLOSE", "body": "Turn the burner OFF. Then left-click and drag the spatula over the brown grease patch until the steel is clean."},
+]
+var tutorial_mode: bool = false
+var _tutorial_complete: bool = false
+var _tutorial_elapsed: float = 0.0
+var _tutorial_bought_supply: bool = false
+var _tutorial_cleaned_grill: bool = false
+var _tutorial_clean_patch_created: bool = false
 var _tutorial_step: int = 0
 var _tutorial_text: String = ""
 var _tutorial_hint_cycle_t: float = 0.0
+var tutorial_panel: PanelContainer = null
+var tutorial_lesson_label: Label = null
+var tutorial_title_label: Label = null
+var tutorial_body_label: Label = null
+var tutorial_timer_label: Label = null
+var tutorial_progress: ProgressBar = null
+var tutorial_action_btn: Button = null
+var tutorial_exit_btn: Button = null
+var tutorial_mouse_card: PanelContainer = null
+var tutorial_mouse_left: Label = null
+var tutorial_mouse_right: Label = null
+var tutorial_mouse_caption: Label = null
+var tutorial_click_overlay: Control = null
 var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
@@ -350,11 +412,10 @@ const SPATULA_JUGGLE_FLIP_END_T := 0.86
 const SPATULA_JUGGLE_CATCH_R := 0.145 ## tip↔burger XZ catch radius
 const SPATULA_JUGGLE_CATCH_Y := 0.18 ## vertical catch window
 const SPATULA_JUGGLE_CATCH_START_T := 0.18 ## don't instant re-catch on launch
-## Scroll-wheel blade roll — two levels each side: ±45° and ±90°.
-## One notch jumps a full step; wheel factor can stack notches (feels snappier).
+## Scroll-wheel blade mode — flat/normal or fully sideways in either direction.
 const HAND_SPATULA_ROLL_STEP := 90.0
 const HAND_SPATULA_ROLL_MAX := 90.0
-const HAND_SPATULA_ROLL_WHEEL_MULT := 1 ## one notch per wheel tick: -90 / 0 / +90 only
+const HAND_SPATULA_ROLL_WHEEL_MULT := 1 ## one notch toggles normal ↔ sideways
 ## Move this far from the tap contact → cancel tap pose (ting still fires at original strip).
 const HAND_SPATULA_TAP_CANCEL_XZ := 0.032
 const HAND_SPATULA_TAP_CANCEL_PX := 10.0
@@ -362,6 +423,11 @@ const HAND_SPATULA_TAP_CANCEL_PX := 10.0
 var _spatula_anim_kind: int = 0
 var _spatula_anim_t: float = 0.0
 var _spatula_anim_dur: float = 0.0
+const SPATULA_SMASH_RETURN_DUR := 0.30
+var _spatula_smash_returning: bool = false
+var _spatula_smash_return_t: float = 0.0
+var _spatula_smash_return_from := Transform3D.IDENTITY
+var _spatula_press_needs_smooth_return: bool = false
 var _spatula_ting_bits: int = 0 ## Which contact tings already fired this anim
 var _spatula_slap_rest_tip := Vector3.ZERO ## Tip pose when the tap started
 var _spatula_slap_contact := Vector3.ZERO ## Grill-surface point under the click
@@ -451,6 +517,12 @@ var grill_power_labels: Array = []
 var grill_heat_lights: Array = []
 var grill_ui_buttons: Array = []
 var grill_trash_btn: Button = null
+var physical_garbage_root: Node3D = null
+var physical_garbage_area: Area3D = null
+var physical_garbage_target: Marker3D = null
+var physical_garbage_symbol_root: Node3D = null
+var physical_garbage_symbol_base_pos := Vector3(0.0, 0.50, -0.255)
+var _physical_garbage_shake_tween: Tween = null
 var grill_surface_area: Area3D = null
 var grill_surface_mat: StandardMaterial3D = null
 var grill_steel_tex: Texture2D = null
@@ -1007,6 +1079,13 @@ const SODA_SLOT_WIN_PAYOUT := 40.0
 var slot_camera_shake_t: float = 0.0
 var slot_camera_shake_total: float = 0.0
 var slot_camera_base_pos := Vector3(0.0, 1.65, -1.62)
+var player_camera_height: float = 1.65
+var player_camera_x: float = 0.0
+var player_camera_z: float = -1.62
+var player_camera_fov: float = 58.0
+var player_camera_tilt: float = -8.65
+var player_camera_yaw: float = 180.0
+var player_camera_roll: float = 0.0
 var soda_tank_bubbles: Dictionary = {} ## flavor id -> GPUParticles3D in that tank
 var soda_tank_fill: Dictionary = {} ## flavor id -> 0..1 syrup left
 var soda_tank_syrup: Dictionary = {} ## flavor id -> MeshInstance3D syrup volume
@@ -1054,6 +1133,10 @@ var cup_drawing: bool = false ## true while lerping a fresh cup out of the stack
 var _cup_draw_t: float = 0.0
 var _cup_draw_from: Vector3 = Vector3.ZERO
 const CUP_DRAW_DUR := 0.42 ## Nest → hand — fast pull without teleporting.
+const CUP_DISPENSE_TO_FILL_DUR := 0.40
+var _cup_dispensing_to_fill: bool = false
+var _cup_dispense_to_fill_tween: Tween = null
+var _cup_rack_shake_tween: Tween = null
 ## After a fresh rack grab: keep cups off the cabinet back for this long, then open the fill bay.
 const CUP_GRAB_FRONT_BLOCK_SEC := 0.28
 var _cup_grab_front_block_t: float = 0.0
@@ -1129,7 +1212,7 @@ var grill_spilled_fries: Array = [] ## single fries dropped on steel {root, mat,
 var _next_spilled_fry_net_id: int = 1
 var spilled_fry_held: bool = false
 var spilled_fry_held_idx: int = -1 ## index into grill_spilled_fries while carrying
-const FRIES_SPILL_SPEED := 2.35 ## whip the pack this hard over the grill → fries fly out
+const FRIES_SPILL_SPEED := 2.70 ## 15% more forgiving than the old carry threshold
 const FRIES_SPILL_COOLDOWN := 0.32
 const FRIES_GRILL_WAIT_SEC := 3.0 ## sit golden before charring starts
 const FRIES_GRILL_BLACK_SEC := 3.0 ## golden → black over this window, then fire
@@ -1148,10 +1231,10 @@ const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the s
 const FRIES_HOLD_MIN_SEP := 0.052 ## Matches tighter HOLD pack spacing.
 var fryer_station_scale := 1.0
 var fries_hand_hold_offset_in := Vector3.ZERO
-var fries_ready_spacing_x := FRIES_HOLD_PACK_SPACING_X
-var fries_ready_spacing_z := FRIES_HOLD_PACK_SPACING_Z
+var fries_ready_spacing_x := 0.14
+var fries_ready_spacing_z := 0.12
 var fries_ready_min_sep := FRIES_HOLD_MIN_SEP
-var fries_ready_pack_scale := FRIES_HOLD_PACK_SCALE
+var fries_ready_pack_scale := 0.90
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -1311,6 +1394,7 @@ var _cup_flip_pitch_total: float = 0.0
 var _cup_flip_base_rot: Vector3 = Vector3.ZERO
 var _cup_flip_land_lid: bool = false
 var _cup_flip_land_side: bool = false
+var _cup_flip_contents_ejected: bool = false
 var _cup_flip_bobble_phase: float = 0.0
 var _cup_flip_settle: bool = false
 var _cup_flip_settle_t: float = 0.0
@@ -1453,6 +1537,12 @@ var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
 var gfx_sliders: Dictionary = {} ## key -> HSlider
 var gfx_checks: Dictionary = {} ## key -> CheckButton
+## Optional finished-frame world post process. Layer 9 runs after every 3D
+## transparency/render-priority pass and immediately before the HUD on layer 10.
+var screen_style_layer: CanvasLayer = null
+var screen_style_copy: BackBufferCopy = null
+var screen_style_rect: ColorRect = null
+var screen_style_mat: ShaderMaterial = null
 var lasso_tool = null ## LassoToolController — colored shape planes editor
 ## Fullscreen fake distance-field AO (depth crease darkening) — Hidden / GFX toggle.
 var fake_df_ao_mesh: MeshInstance3D = null
@@ -1550,7 +1640,7 @@ var prop_offsets: Dictionary = {
 	"oil_bottle": Vector3.ZERO,
 	"open_sign": Vector3(0.29, 0.0, 0.0),
 	"fryer": Vector3(-0.01, -0.01, 0.0),
-	"fryer_done": Vector3(0.39, 0.0, 0.09),
+	"fryer_done": Vector3.ZERO,
 	"big_tree": Vector3(-0.01, -0.01, -0.01),
 	"small_tree": Vector3.ZERO,
 }
@@ -1559,18 +1649,24 @@ var screen_zone_overlay: Control = null
 var screen_zone_overlay_visible: bool = false
 const SCREEN_ZONE_COLS := 5
 const SCREEN_ZONE_ROWS := 6
-## Soft-serve station — feet camera-right of ICECREAM_STATION_POS (−X). Hidden tunable.
-var icecream_cam_right_ft: float = 1.45
+## Soft-serve station full transform. These defaults preserve the current
+## 1.45 ft camera-right offset and the previously lowered eight-inch height.
+var icecream_station_pos := Vector3(1.63704, 0.9868, 0.647)
+var icecream_station_rot := Vector3(0.0, 180.0, 0.0)
+var icecream_station_scale: float = 1.0
+## Local-space center of the cone nest/grab point on the machine.
+var icecream_cone_pull_local := Vector3(0.34, 0.373, 0.32)
 const FT_TO_M := 0.3048
 const ICECREAM_POS_CFG_SECTION := "icecream_station"
-var options_hidden_icecream_pos_slider: HSlider = null
-var options_hidden_icecream_pos_lab: Label = null
 var street_matte: MeshInstance3D = null
 var street_matte_body: StaticBody3D = null
 var street_bg_choice: String = "original"
 var street_bg_custom_path: String = ""
 var street_bg_option: OptionButton = null
 var street_bg_custom_edit: LineEdit = null
+var street_bg_video_enabled: bool = false
+var street_bg_video_player: VideoStreamPlayer = null
+var options_hidden_bg_video_check: CheckButton = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -1630,6 +1726,9 @@ const STREET_MATTE_BASE_SIZE := Vector2(18.2, 9.1)
 const STREET_MATTE_BASE_Z := 11.5
 ## Default Y: prior 2.55 minus ~3 ft (0.91 m).
 const STREET_MATTE_DEFAULT_Y := 1.64
+## Wide hidden-menu travel so custom art can be framed far above or below the window.
+const STREET_MATTE_MIN_Y := -10.0
+const STREET_MATTE_MAX_Y := 12.0
 ## Backdrop wall — blocks bodies/ragdolls; bullet rays exclude this layer.
 const STREET_MATTE_COLLISION_LAYER := 2048
 ## First Sale plaque on the lintel above the service window (interior).
@@ -1806,8 +1905,10 @@ const SODA_MODEL_PANEL_POS: Dictionary = {
 const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.335, 0.165)
 const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.335, 0.118)
 const SODA_NOZZLE_THROAT_DROP := 0.026
-const SODA_CUP_RACK_LOCAL := Vector3(-0.34, 0.92, 0.02)
+## Open cup supply sits upright on the camera-left half of the fountain roof.
+const SODA_CUP_RACK_LOCAL := Vector3(0.26, 0.98, 0.02)
 const SODA_CUP_STACK_BASE_LOCAL := Vector3(0.0, -0.10, 0.03)
+const SODA_CUP_STACK_ROT := Vector3(180.0, 0.0, 0.0) ## mouths face down on the machine roof
 const SODA_SHARED_DRINK_NOZZLE := true
 const SODA_MODEL_SPOUT_POS: Dictionary = {
 	"cola": SODA_MODEL_SODA_SPOUT,
@@ -1821,6 +1922,10 @@ const SODA_TUNING_CFG_SECTION := "soda_machine_tuning"
 var soda_station_pos := SODA_STATION_POS
 var soda_station_yaw := SODA_STATION_ROT.y
 var soda_station_scale := SODA_FOUNTAIN_SCALE
+## Local transform of the complete visible/clickable cup supply on the fountain.
+var soda_cup_rack_pos := SODA_CUP_RACK_LOCAL
+var soda_cup_rack_rot := Vector3.ZERO
+var soda_cup_rack_scale := 1.0
 var soda_nozzle_offsets_in: Dictionary = {
 	"cola": Vector3.ZERO,
 	"lemon_lime": Vector3.ZERO,
@@ -1847,10 +1952,10 @@ var soda_soft_pull := 0.57
 var soda_soft_unlock_grace := 0.54
 var soda_soft_debug := false
 var soda_soft_offsets_in: Dictionary = {
-	"cola": Vector3(-0.05, -0.05, 0.0),
+	"cola": Vector3.ZERO,
 	"lemon_lime": Vector3.ZERO,
 	"orange": Vector3.ZERO,
-	"ice": Vector3(0.0, -0.05, 0.0),
+	"ice": Vector3.ZERO,
 }
 var soda_soft_radius_mult: Dictionary = {
 	"cola": 0.99,
@@ -1869,7 +1974,8 @@ var soda_tank_z_offset_in := -1.6
 const CUP_COLLISION_LAYER := 1024
 const CUP_RACK_COLLISION_LAYER := 2048 ## empty CUPS peg pick volume (must not steal cup rays)
 const SODA_FLAVOR_COLLISION_LAYER := 4096
-const SODA_FLAVORS: Array[String] = ["cola", "lemon_lime", "orange"]
+## One fountain flavor for now; Ice remains its own non-flavor station.
+const SODA_FLAVORS: Array[String] = ["cola"]
 const SODA_FLAVOR_LABELS: Dictionary = {
 	"cola": "COLA",
 	"lemon_lime": "LIME",
@@ -1888,40 +1994,44 @@ const INCH_TO_M := 0.0254
 ## Carry plane above grill steel (NOT the fill seat). Tunable in Hidden → SODA CUP HEIGHTS.
 const CUP_HOLD_HEIGHT_DEFAULT := 0.0762 ## ~3" — carry only; fill snaps to drip deck
 ## Fill / park seat offset above the fountain drip-deck. Tunable in Hidden menu.
-const CUP_FILL_EXTRA_Y_DEFAULT := 0.0
+const CUP_FILL_EXTRA_Y_DEFAULT := 4.0 * INCH_TO_M
 var cup_hold_height: float = CUP_HOLD_HEIGHT_DEFAULT
 var cup_fill_extra_y: float = CUP_FILL_EXTRA_Y_DEFAULT
 const SODA_CUP_HEIGHT_CFG_SECTION := "soda_cup_heights"
+const SODA_CUP_FILL_RAISE_MIGRATION := "fill_soft_lock_raised_4in_v1"
 ## Local Y of cup bottom on the visible drip ledge (was 0.01*s — clipped through the tray).
 ## +2" again — first fill was still sitting too low under the spout.
 const CUP_TRAY_DECK_LOCAL_Y := 0.08 * SODA_FOUNTAIN_SCALE + 0.0508
-## Cup mesh 20% smaller; full liquid top lowered by 0.3" from the old fill height.
-const CUP_SHELL_H := 0.1512
-const CUP_SHELL_TOP_R := 0.05904
-const CUP_SHELL_BOT_R := 0.04752
-const CUP_LIQUID_BASE_H := 0.016
-const CUP_LIQUID_MAX_H := 0.12678
-const CUP_LIQUID_TOP_R := 0.05616 ## hug the shell — tiny inset only
-const CUP_LIQUID_BOT_R := 0.04464
+## Restored original drink-cup proportions (the prior pass reduced all of these
+## by 20%). Shell, liquid, logo and collision geometry stay matched.
+const CUP_SHELL_H := 0.189
+const CUP_SHELL_TOP_R := 0.0738
+const CUP_SHELL_BOT_R := 0.0594
+const CUP_LIQUID_BASE_H := 0.020
+const CUP_LIQUID_MAX_H := 0.158475
+const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
+const CUP_LIQUID_BOT_R := 0.0558
 ## Thin empty sliver under the pop — keep liquid near the plastic floor.
-const CUP_LIQUID_FLOOR_Y := 0.0064
+const CUP_LIQUID_FLOOR_Y := 0.008
 const CUP_FILL_RATE := 0.95
 const CUP_SPOUT_REACH := 0.55
 const CUP_ICE_CUBE_INTERVAL := 0.065
 const CUP_ICE_OVERFILL_INTERVAL := 0.032
 const CUP_ICE_STACK_MAX := 48 ## pack to the rim (+ mound when overfilling)
 const CUP_ICE_FULL := 1.0 ## beyond this, cubes spill everywhere
-## Soft-serve base seat (pre camera-right offset). Offset applied via icecream_cam_right_ft.
-const ICECREAM_STATION_POS := Vector3(2.079, 1.19, 0.647)
-const ICECREAM_STATION_ROT := Vector3(0.0, 180.0, 0.0)
+## Legacy soft-serve base used only to migrate the old camera-right offset.
+## Its height remains the previously lowered eight-inch placement.
+const ICECREAM_STATION_POS := Vector3(2.079, 0.9868, 0.647)
 const ICECREAM_CONE_COLLISION_LAYER := 16384
 const ICECREAM_CONE_H := 0.151
 const ICECREAM_CONE_R := 0.049
 const ICECREAM_CONE_VISUAL_DROP := -0.024
+const ICECREAM_CONE_STACK_ROT := Vector3(-10.0, 8.0, 0.0)
 const ICECREAM_FILL_RATE := 0.72
 const ICECREAM_SPOUT_HORIZ := 0.155
 const ICECREAM_SPOUT_VERT := 0.46
-const ICECREAM_MAGNET_RADIUS := 0.48
+const ICECREAM_MAGNET_RADIUS := 0.72
+var _icecream_fill_soft_lock: bool = false
 const ICECREAM_GRAB_SCREEN_PX := 52.0
 const ICECREAM_CONE_FILL_DROP := 0.18
 const ICECREAM_SWIRL_H := 0.143
@@ -1971,6 +2081,9 @@ const FRYER_BASKET_FRY_TILT := -5.0
 ## Finished packs clear of the right pit (tracks pit seat).
 const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
 const FRIES_HOLD_PACK_Y := 0.108
+## Finished orders temporarily live beside the visible bun towers for debugging.
+## One foot camera-right of the prior debug/ready position (world camera-right is -X).
+const FRIES_READY_VISIBLE_BASE := Vector3(1.3852, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, 0.16)
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14.
 ## Camera is window-side (−Z) looking +Z — farther on screen = higher Z (far HOLD edge).
 const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
@@ -2053,7 +2166,7 @@ const CUP_BUBBLE_AMOUNT := 34
 const CUP_LIQUID_BUBBLE_COUNT := 56
 const CUP_LIQUID_BUBBLE_TOP_COUNT := 10 ## linger near foam and fade in place
 const CUP_LIQUID_BUBBLE_RISE_COUNT := 22 ## bottom → top risers in the pop body
-const CUP_LIQUID_BUBBLE_SIZE := 0.0038 ## idle carbonation pearls (was too tiny)
+const CUP_LIQUID_BUBBLE_SIZE := 0.0022 ## restrained carbonation pearls inside the drink
 const CUP_TRAY_FIRST_X := -0.38 ## camera-left first parked cup spot
 const CUP_TRAY_SPACING := 0.20 ## gap between parked drinks on the drip tray
 const CUP_DRAW_PRIORITY := 32 ## Above grill shine / burgers when tray items overlap.
@@ -2062,12 +2175,12 @@ const SUPPLY_IDS: Array[String] = [
 	"pickle", "bacon", "ketchup", "mustard", "bun_top",
 ]
 const SYRUP_SUPPLY_IDS: Array[String] = [
-	"syrup_cola", "syrup_lemon_lime", "syrup_orange",
+	"syrup_cola",
 ]
 const SUPPLY_FRESH_MAX := 360.0
 const SUPPLY_BUY_PACK := 8
 const SUPPLY_ORDER_WAIT := 15.0 ## Phone order → cat delivery delay
-const SODA_TANK_CUP_COST := 0.12 ## Full cup pour drains this fraction of a tank
+const SODA_TANK_CUP_COST := 0.06 ## Full cup pour; half the previous syrup drain rate
 const SODA_TANK_SYRUP_REFILL := 0.65 ## One syrup order restores this much tank fill
 const SODA_TANK_MAX_H := 0.245
 const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
@@ -2077,6 +2190,11 @@ const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
 const STREET_BG_PREVIEW_PATH := "res://assets/bg/street_preview_storefront.png"
 const STREET_BG_BRIGHT_PATH := "res://IMAGES/storefront2.png"
 const STREET_BG_LOCATION1_PATH := "res://IMAGES/location1.png"
+const STREET_BG_NEW_ARCADE_PATH := "res://assets/backgrounds/pixel_palace_festival.png"
+const STREET_BG_ARCADIA_PLAY_PATH := "res://assets/backgrounds/arcadia_play.png"
+const STREET_BG_ARCADIA_CLEAN_PATH := "res://assets/backgrounds/arcadia_clean.png"
+const STREET_BG_MILL1_PATH := "res://assets/backgrounds/mill1.png"
+const STREET_BG_ARCADE_VIDEO_PATH := "res://assets/videos/arcade_background.ogv"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2089,6 +2207,9 @@ const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 0.6) ## 40% transparent wall art
 const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 0.6)
 const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
+const CAMERA_CFG_SECTION := "player_camera"
+## One-time migration marker: restore the original view in this build, then preserve edits.
+const CAMERA_ORIGINAL_RESET_KEY := "original_view_reset_20260728_v1"
 const SPATULA_BALANCE_CFG_SECTION := "spatula_balance"
 const GFX_DEFAULTS := {
 	"bloom": 0.4,
@@ -2111,6 +2232,32 @@ const GFX_DEFAULTS := {
 	"ssao_horizon": 0.25,
 	"ssao_sharpness": 0.72,
 	"ssil": true,
+	"toon_filter": false,
+	"toon_outlines": false,
+	"toon_mix": 1.0,
+	"toon_value_steps": 6.0,
+	"toon_step_strength": 1.0,
+	"toon_light_balance": 0.0,
+	"toon_shade_curve": 1.0,
+	"toon_shadow_depth": 0.0,
+	"toon_outline_strength": 0.52,
+	"toon_outline_threshold": 0.055,
+	"toon_outline_softness": 0.125,
+	"toon_outline_thickness": 1.0,
+	"toon_color_brightness": 1.0,
+	"toon_color_contrast": 1.0,
+	"toon_color_saturation": 1.0,
+	"toon_hue_shift": 0.0,
+	"toon_warmth": 0.0,
+	"toon_green_magenta": 0.0,
+	"toon_shadow_color": 0.0,
+	"toon_highlight_color": 0.0,
+	"pixel_filter": false,
+	"pixel_block_size": 5.0,
+	"pixel_mix": 1.0,
+	"pixel_palette_steps": 32.0,
+	"pixel_palette_strength": 0.0,
+	"pixel_grid_strength": 0.0,
 	"fake_df_ao": true,
 	"fake_df_ao_radius": 10.0,
 	"fake_df_ao_intensity": 3.0,
@@ -2297,6 +2444,7 @@ var _mp_slick_sync_cool: float = 0.0
 ## True while a co-op serve is in flight (fly tween) so peers share one outcome.
 var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
+var tutorial_btn: Button = null
 var _burger_assets_warmed: bool = false
 const PATTY_PREWARM_POOL_SIZE := 3
 var _patty_spawn_pool: Array = []
@@ -2307,6 +2455,7 @@ var current_location_id: String = TruckLocationsScript.DEFAULT_ID
 var _location_map_layer: CanvasLayer = null
 var _location_map_ui: Control = null
 var location_map_btn: Button = null ## start-screen CTA
+var game_over_location_btn: Button = null ## area picker shown between shifts
 
 
 func _ready() -> void:
@@ -2352,6 +2501,7 @@ func _ready() -> void:
 	_load_street_background_settings()
 	_load_world_hint_settings()
 	_load_fryer_tuning_settings()
+	_load_player_camera_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -2374,10 +2524,13 @@ func _ready() -> void:
 	call_deferred("_layout_phone_ui_overlay")
 	_build_pause_button()
 	_build_master_volume_ui()
+	_build_screen_style_filter()
 	_build_graphics_ui()
 	_build_options_menu()
+	_build_guided_tutorial_ui()
 	_setup_lasso_tool()
 	_setup_location_map_ui()
+	_setup_game_over_location_button()
 	_layout_top_bar_hud()
 	_setup_game_audio()
 	_setup_grill_song_performer()
@@ -2417,7 +2570,7 @@ func _ready() -> void:
 	ingredient_legend.z_index = 30 ## above GrillDropZone while holding cheese
 	start_btn.pressed.connect(func():
 		_sfx_click()
-		_start_game()
+		_start_game(false)
 	)
 	restart_btn.pressed.connect(func():
 		_sfx_click()
@@ -3172,7 +3325,17 @@ func _station_label(_index: int) -> String:
 	return "Build"
 
 
-func _start_game() -> void:
+func _start_game(guided_tutorial: bool = false) -> void:
+	if guided_tutorial and (mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE):
+		NetManager.stop_browse()
+		NetManager.leave(false)
+		mp_enabled = false
+	tutorial_mode = guided_tutorial
+	_tutorial_complete = false
+	_tutorial_elapsed = 0.0
+	_tutorial_bought_supply = false
+	_tutorial_cleaned_grill = false
+	_tutorial_clean_patch_created = false
 	_clear_bts_day_intro(false)
 	_stop_logo_hover()
 	_stop_intro_title_music()
@@ -3183,11 +3346,11 @@ func _start_game() -> void:
 	money = START_MONEY
 	combo = 0
 	day = 1
-	day_time = DAY_LENGTH
+	day_time = GUIDED_TUTORIAL_DURATION if tutorial_mode else DAY_LENGTH
 	difficulty = 0.0
 	total_served = 0
 	perfect_serves = 0
-	spawn_timer = _first_customer_delay()
+	spawn_timer = 99999.0 if tutorial_mode else _first_customer_delay()
 	_reset_bts_day1_flow()
 	active_station = STATION_CRAFT
 	complaint_station = -1
@@ -3213,23 +3376,43 @@ func _start_game() -> void:
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
-	_begin_start_tutorial()
+	_clear_tutorial_hint()
 	_reset_shop_unlocks()
 	_reset_supplies(true)
+	if tutorial_mode:
+		## Leave room for the phone-restock lesson instead of starting every bin full.
+		supply_stock["lettuce"] = 5
+		_refresh_phone_ui()
+		_spawn_guided_tutorial_customer()
+		_set_guided_tutorial_step(0)
+		if window_cat != null and is_instance_valid(window_cat):
+			if window_cat.has_method("set_tutorial_coach"):
+				window_cat.call("set_tutorial_coach", true)
+			elif window_cat.has_method("special_people_peek"):
+				window_cat.call("special_people_peek", GUIDED_TUTORIAL_DURATION + 30.0)
+	else:
+		if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("set_tutorial_coach"):
+			window_cat.call("set_tutorial_coach", false)
+		_hide_guided_tutorial_ui()
 	_disguise_cat_pending = false
 	_disguise_cat_active = false
 	_disguise_cat_cool = 0.0
 	if not mp_enabled or NetManager.is_host():
 		if day == 1 and BTS_SPECIAL_GUESTS_ENABLED:
 			_begin_bts_day1_cat_announcement()
+	_start_smooth_jazz_radio()
 	# _begin_opening_terror_ambush()
 
 
 func _restart() -> void:
+	if tutorial_mode:
+		_start_game(true)
+		return
 	_clear_bts_day_intro(false)
 	game_over_panel.visible = false
 	start_overlay.visible = false
 	playing = true
+	day = 1 ## Kept for save/network compatibility; location now owns progression.
 	combo = 0
 	day_time = DAY_LENGTH
 	difficulty = 0.0
@@ -3261,13 +3444,20 @@ func _restart() -> void:
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
-	_begin_start_tutorial()
+	_clear_tutorial_hint()
 	_reset_supplies(false)
 	if day == 1 and (not mp_enabled or NetManager.is_host()):
 		if BTS_SPECIAL_GUESTS_ENABLED:
 			_begin_bts_day1_cat_announcement()
-	if day != 1:
-		_flash("Day %d - it gets busier!" % day, Color("FFEB3B"))
+	_start_smooth_jazz_radio()
+	_flash(
+		"Shift started at %s - Area %d of %d" % [
+			TruckLocationsScript.display_name(current_location_id),
+			TruckLocationsScript.rank_of(current_location_id),
+			TruckLocationsScript.all().size(),
+		],
+		TruckLocationsScript.tier_color(TruckLocationsScript.tier_of(current_location_id))
+	)
 	## Keep a pending mustache-cat visit across the day break; clear cool so it can land.
 	_disguise_cat_active = false
 	_disguise_cat_cool = 0.0
@@ -3299,6 +3489,7 @@ func _process(delta: float) -> void:
 			game_audio.set_sizzle_active(false)
 		_update_hand_spatula_cursor(delta)
 		return
+	_update_guided_tutorial(delta)
 	## Sync grill heat to patties / toasting buns (only cook while burner is on + on cook zone).
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -3308,6 +3499,8 @@ func _process(delta: float) -> void:
 			p.heating = grill_on and not ice_ball
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 			if not _is_bun_toast(p):
+				## Let settled raw balls react to burner heat without starting their cook timer.
+				p.ball_heat_motion_active = grill_on and ice_ball and not _is_in_warmer_zone(p.position)
 				_update_patty_oil_cook_time(p, delta)
 				_update_patty_warm_hold(p, delta)
 				_update_patty_cook_spot_residue(p, delta)
@@ -3440,18 +3633,23 @@ func _process(delta: float) -> void:
 	var day1_needs_bts_sequence := _bts_day1_needs_sequence_customers()
 
 	## Shared shift clock — host owns it in co-op (synced via economy packets).
-	if not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
+	if not tutorial_mode and not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
 		day_time -= delta
 		if day_time < 0.0:
 			day_time = 0.0
 	var day_progress := 1.0 - clampf(day_time / DAY_LENGTH, 0.0, 1.0)
-	var day_boost := clampf((day - 1) * 0.22, 0.0, 0.85)
-	difficulty = minf(1.0, day_progress * (0.38 if day == 1 else 0.55) + day_boost)
+	var location_stats := _location_stats()
+	difficulty = clampf(
+		float(location_stats.get("order_base", 0.0))
+			+ day_progress * float(location_stats.get("order_ramp", 0.25)),
+		0.0,
+		1.0
+	)
 
 	## Clock hit zero: no new customers, but finish everyone already waiting.
 	var shift_closing := day_time <= 0.0
 	## Closed sign only blocks walk-ins — kitchen / day clock keep running.
-	if not service_window_closed:
+	if not service_window_closed and not tutorial_mode:
 		# _update_opening_terror_ambush(delta)
 		## In co-op, only the host spawns customers (then replicates).
 		if not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
@@ -3470,9 +3668,9 @@ func _process(delta: float) -> void:
 					_spawn_customer()
 				spawn_timer = _next_spawn_delay()
 
-	rush_mode = _waiting_customer_count() >= maxi(2, _customer_cap() - 1) and day >= 2
+	rush_mode = _customer_cap() >= 3 and _waiting_customer_count() >= maxi(2, _customer_cap() - 1)
 
-	if shift_closing and customers.is_empty():
+	if not tutorial_mode and shift_closing and customers.is_empty():
 		if _maybe_begin_bts_day1_performance():
 			pass
 		elif _bts_day1_blocks_day_end():
@@ -3636,24 +3834,15 @@ func _refresh_freshness_label(index: int) -> void:
 
 
 func _first_customer_delay() -> float:
-	match day:
-		1: return 19.0
-		2: return 13.0
-		3: return 10.0
-		_: return 8.0
+	return float(_location_stats().get("first_delay", 18.0))
+
+
+func _location_stats() -> Dictionary:
+	return TruckLocationsScript.stats_for(current_location_id)
 
 
 func _customer_cap() -> int:
-	## Day 1: one at a time. Day 2+: a growing line (up to 4 lanes).
-	match day:
-		1:
-			return 1
-		2:
-			return 2
-		3:
-			return 3
-		_:
-			return MAX_CUSTOMERS
+	return clampi(int(_location_stats().get("customer_cap", 1)), 1, MAX_CUSTOMERS)
 
 
 func _waiting_customer_count() -> int:
@@ -3669,11 +3858,12 @@ func _waiting_customer_count() -> int:
 
 func _next_spawn_delay() -> float:
 	var day_progress := 1.0 - clampf(day_time / DAY_LENGTH, 0.0, 1.0)
-	match day:
-		1: return lerpf(26.0, 14.0, day_progress) + randf_range(0.0, 5.0)
-		2: return lerpf(12.0, 6.5, day_progress) + randf_range(0.0, 2.5)
-		3: return lerpf(9.0, 4.5, day_progress) + randf_range(0.0, 2.0)
-		_: return lerpf(6.5, 3.0, minf(1.0, day_progress + (day - 4) * 0.1)) + randf_range(0.0, 1.5)
+	var stats := _location_stats()
+	return lerpf(
+		float(stats.get("spawn_start", 25.0)),
+		float(stats.get("spawn_end", 15.0)),
+		day_progress
+	) + randf_range(0.0, float(stats.get("spawn_jitter", 4.0)))
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -3759,17 +3949,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			_nudge_oil_pour_tilt(1.0)
 			get_viewport().set_input_as_handled()
 			return
-		## Spatula: scroll up/down rolls ±45° then ±90°; piano ting shifts with roll.
+		## Spatula: either wheel direction toggles normal ↔ sideways. From
+		## normal, wheel direction chooses which edge faces the steel.
 		if _should_show_hand_spatula(event.position) \
 				or (hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible) \
 				or spatula_grill_hold or (dragging_patty != null and is_instance_valid(dragging_patty)):
 			var roll_dir := 1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1
-			## Faster tilt: two detents per tick (0→90 in one scroll). Shift = fine 45°.
-			var ticks := 1
-			if not event.shift_pressed:
-				ticks = 1
-			for _i in ticks:
-				_nudge_spatula_user_roll(roll_dir)
+			_nudge_spatula_user_roll(roll_dir)
 			get_viewport().set_input_as_handled()
 			return
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -3896,6 +4082,8 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_MIDDLE:
 			_pulse_cursor_click(event.position)
+			if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
+				_show_tutorial_click_visual(event.position, event.button_index)
 		if event.button_index == MOUSE_BUTTON_MIDDLE and (
 				_should_show_hand_spatula(event.position)
 				or (hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible)
@@ -4126,7 +4314,7 @@ func _input(event: InputEvent) -> void:
 				return
 			## CUPS nest — only grab when the cursor ray actually hits the rack volume.
 			if not cup_held and _cup_rack_ray_hit(event.position):
-				if _begin_cup_hold():
+				if _dispense_cup_to_fill_station():
 					get_viewport().set_input_as_handled()
 					return
 			if _ui_blocks_world_click(event.position):
@@ -4608,8 +4796,9 @@ func _cheese_station_screen_center() -> Vector2:
 
 
 func _kb_start_soda_pour(flavor: String) -> void:
-	if flavor == "":
-		return
+	## The fountain is Cola-only for now.  Legacy Lime/Orange hotkeys simply
+	## address the same Cola bay instead of changing the drink flavor.
+	flavor = "cola"
 	if not _owns_soda_machine():
 		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
 		return
@@ -5235,12 +5424,22 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 
 func _end_day() -> void:
 	playing = false
-	day += 1
 	var social_block := _format_day_social_recap()
-	game_over_label.text = "Day %d over!\n\nServed: %d\nPerfect: %d\nWallet: %s\n\n%s\n\nReady for the next rush?" % [
-		day - 1, total_served, perfect_serves, _format_money(money), social_block
+	var location_name := TruckLocationsScript.display_name(current_location_id)
+	var rank := TruckLocationsScript.rank_of(current_location_id)
+	game_over_label.text = "%s shift complete!\nArea %d of %d - %s\n\nServed: %d\nPerfect: %d\nWallet: %s\n\n%s\n\nReplay here or move the truck for a new challenge." % [
+		location_name,
+		rank,
+		TruckLocationsScript.all().size(),
+		TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(current_location_id)),
+		total_served,
+		perfect_serves,
+		_format_money(money),
+		social_block
 	]
-	restart_btn.text = "Start Day %d" % day
+	restart_btn.text = "REPLAY %s" % location_name.to_upper()
+	if game_over_location_btn != null and is_instance_valid(game_over_location_btn):
+		game_over_location_btn.visible = true
 	game_over_panel.visible = true
 	## Bigger panel so best/worst quotes fit.
 	game_over_panel.offset_left = -300.0
@@ -5255,10 +5454,8 @@ func _end_day() -> void:
 # --- 3D world: inside truck, looking out ------------------------------------
 
 func _build_3d_world() -> void:
-	slot_camera_base_pos = Vector3(0.0, 1.65, -1.62)
-	camera.position = slot_camera_base_pos
-	camera.look_at(Vector3(0.0, 1.32, 0.55), Vector3.UP)
-	camera.fov = 58.0
+	_apply_player_camera_settings()
+	_load_physical_garbage_settings()
 
 	_build_checkered_floor()
 
@@ -5281,17 +5478,19 @@ func _build_3d_world() -> void:
 	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.4, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
 	_add_box(world, Vector3(4.8, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
 
-	# Raised flat-top cabinet — black like the truck walls.
-	_add_box(world, Vector3(3.5, 0.95, 1.4), Vector3(0, 0.48, 0.30), Color("080808"))
-	## Shelf / face under the griddle (front apron + side gap).
-	var shelf := _add_box(grill_root, Vector3(3.3, 0.1, 1.55), Vector3(0, 1.0, 0.18), Color("080808"))
-	shelf.material_override.metallic = 0.15
-	shelf.material_override.roughness = 0.85
-	## Extra front apron so the bright under-grill face stays black.
-	_add_box(grill_root, Vector3(3.45, 0.85, 0.12), Vector3(0, 0.55, 0.92), Color("050505"))
-	## Fill the left/right gaps beside the grill cabinet.
-	_add_box(world, Vector3(0.55, 0.95, 1.4), Vector3(-2.05, 0.48, 0.30), Color("080808"))
-	_add_box(world, Vector3(0.55, 0.95, 1.4), Vector3(2.05, 0.48, 0.30), Color("080808"))
+	## End both the cabinet and countertop before the camera-right garbage bay.
+	## Leaving the top slab across this opening hid most of the physical bin.
+	var counter_max_x := 2.325
+	var garbage_cut_max_x := physical_garbage_pos.x \
+			+ PHYSICAL_GARBAGE_CUT_HALF_W * physical_garbage_scale + 0.14
+	var main_run_w := counter_max_x - garbage_cut_max_x
+	var main_run_x := (garbage_cut_max_x + counter_max_x) * 0.5
+	_add_box(world, Vector3(main_run_w, 0.95, 1.35), Vector3(main_run_x, 0.48, 0.08), Color("080808"))
+	var counter_top := _add_box(world, Vector3(main_run_w, 0.10, 1.35), Vector3(main_run_x, 1.0, 0.08), Color("101214"))
+	counter_top.material_override.metallic = 0.32
+	counter_top.material_override.roughness = 0.62
+	_build_physical_garbage_can()
+	_build_grill_standoffs()
 
 	slot_positions.clear()
 	slot_areas.clear()
@@ -5358,6 +5557,256 @@ func _build_3d_world() -> void:
 	_build_hand_spatula()
 
 	_setup_world_lighting()
+
+
+func _build_physical_garbage_can() -> void:
+	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
+		physical_garbage_root.queue_free()
+	physical_garbage_root = null
+	physical_garbage_area = null
+	physical_garbage_target = null
+	physical_garbage_symbol_root = null
+	if not ResourceLoader.exists(PHYSICAL_GARBAGE_SCENE):
+		push_warning("Physical garbage model missing: %s" % PHYSICAL_GARBAGE_SCENE)
+		return
+	var packed := load(PHYSICAL_GARBAGE_SCENE) as PackedScene
+	if packed == null:
+		return
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	var root := Node3D.new()
+	root.name = "PhysicalGarbageCan"
+	root.position = physical_garbage_pos
+	root.rotation_degrees = physical_garbage_rot
+	root.scale = Vector3.ONE * physical_garbage_scale
+	world.add_child(root)
+	physical_garbage_root = root
+	var holder := Node3D.new()
+	holder.name = "TrashcanSmallCC0"
+	root.add_child(holder)
+	holder.add_child(visual)
+	_apply_physical_garbage_tint(visual)
+	## Normalize the authored GLB to the cutout instead of assuming source units.
+	var raw := _mesh_aabb_in_node_space(holder)
+	var scale_fit := PHYSICAL_GARBAGE_TARGET_H / maxf(0.001, raw.size.y)
+	holder.scale = Vector3.ONE * scale_fit
+	var fit := _mesh_aabb_in_node_space(holder)
+	holder.position = Vector3(
+		-(fit.position.x + fit.size.x * 0.5),
+		-fit.position.y,
+		-(fit.position.z + fit.size.z * 0.5)
+	)
+	physical_garbage_symbol_base_pos = Vector3(
+		0.0,
+		PHYSICAL_GARBAGE_TARGET_H * 0.50,
+		-(fit.size.z * 0.5 + 0.006)
+	)
+	_build_physical_garbage_symbol(root)
+	var area := Area3D.new()
+	area.name = "PhysicalGarbageGrab"
+	area.input_ray_pickable = true
+	area.collision_layer = PHYSICAL_GARBAGE_COLLISION_LAYER
+	area.collision_mask = 0
+	area.monitoring = false
+	area.monitorable = true
+	var collision := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(PHYSICAL_GARBAGE_CUT_HALF_W * 1.8, PHYSICAL_GARBAGE_TARGET_H, 0.48)
+	collision.shape = box
+	collision.position = Vector3(0.0, PHYSICAL_GARBAGE_TARGET_H * 0.5, 0.0)
+	area.add_child(collision)
+	root.add_child(area)
+	physical_garbage_area = area
+	var target := Marker3D.new()
+	target.name = "GarbageOpeningTarget"
+	target.position = Vector3(0.0, PHYSICAL_GARBAGE_TARGET_H - 0.045, -0.015)
+	root.add_child(target)
+	physical_garbage_target = target
+
+
+func _build_physical_garbage_symbol(parent: Node3D) -> void:
+	if parent == null or not ResourceLoader.exists(PHYSICAL_GARBAGE_SYMBOL_PATH):
+		return
+	var tex := load(PHYSICAL_GARBAGE_SYMBOL_PATH) as Texture2D
+	if tex == null:
+		return
+	var symbol := Node3D.new()
+	symbol.name = "PublicTrashSymbol"
+	parent.add_child(symbol)
+	physical_garbage_symbol_root = symbol
+
+	var icon := MeshInstance3D.new()
+	icon.name = "Pictogram"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.29, 0.29)
+	icon.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.albedo_color = Color.WHITE
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	mat.render_priority = 2
+	icon.material_override = mat
+	icon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	symbol.add_child(icon)
+	_apply_physical_garbage_symbol_transform()
+
+
+func _load_physical_garbage_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	var had_saved_scale := cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "scale")
+	physical_garbage_pos = Vector3(
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "x", physical_garbage_pos.x)), -3.5, 3.5),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "y", physical_garbage_pos.y)), -1.0, 2.4),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "z", physical_garbage_pos.z)), -2.0, 2.5)
+	)
+	physical_garbage_rot = Vector3(
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "pitch", physical_garbage_rot.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "yaw", physical_garbage_rot.y)), -180.0, 180.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "roll", physical_garbage_rot.z)), -180.0, 180.0)
+	)
+	physical_garbage_scale = clampf(float(cfg.get_value(
+		PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale
+	)), 0.35, 1.5)
+	physical_garbage_symbol_offset = Vector3(
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_x", physical_garbage_symbol_offset.x)), -1.0, 1.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_y", physical_garbage_symbol_offset.y)), -1.0, 1.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_z", physical_garbage_symbol_offset.z)), -1.0, 1.0)
+	)
+	physical_garbage_symbol_rot = Vector3(
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_pitch", physical_garbage_symbol_rot.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_yaw", physical_garbage_symbol_rot.y)), -180.0, 180.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_roll", physical_garbage_symbol_rot.z)), -180.0, 180.0)
+	)
+	physical_garbage_symbol_scale = clampf(float(cfg.get_value(
+		PHYSICAL_GARBAGE_CFG_SECTION, "symbol_scale", physical_garbage_symbol_scale
+	)), 0.25, 3.0)
+	## Existing saves retain their tuning but receive the requested extra 10% reduction once.
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "ten_percent_smaller_v2"):
+		if had_saved_scale:
+			physical_garbage_scale = clampf(physical_garbage_scale * 0.90, 0.35, 1.5)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "ten_percent_smaller_v2", true)
+		cfg.save(GFX_CFG_PATH)
+
+
+func _save_physical_garbage_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "x", physical_garbage_pos.x)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "y", physical_garbage_pos.y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "z", physical_garbage_pos.z)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "pitch", physical_garbage_rot.x)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "yaw", physical_garbage_rot.y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "roll", physical_garbage_rot.z)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_x", physical_garbage_symbol_offset.x)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_y", physical_garbage_symbol_offset.y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_z", physical_garbage_symbol_offset.z)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_pitch", physical_garbage_symbol_rot.x)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_yaw", physical_garbage_symbol_rot.y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_roll", physical_garbage_symbol_rot.z)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_scale", physical_garbage_symbol_scale)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_physical_garbage_transform() -> void:
+	if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
+		return
+	if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
+		_physical_garbage_shake_tween.kill()
+		_physical_garbage_shake_tween = null
+	physical_garbage_root.position = physical_garbage_pos
+	physical_garbage_root.rotation_degrees = physical_garbage_rot
+	physical_garbage_root.scale = Vector3.ONE * physical_garbage_scale
+	_apply_physical_garbage_symbol_transform()
+
+
+func _apply_physical_garbage_symbol_transform() -> void:
+	if physical_garbage_symbol_root == null or not is_instance_valid(physical_garbage_symbol_root):
+		return
+	physical_garbage_symbol_root.position = physical_garbage_symbol_base_pos + physical_garbage_symbol_offset
+	## Quad front points down local -Z toward the cook/player.
+	physical_garbage_symbol_root.rotation_degrees = Vector3(0.0, 180.0, 0.0) + physical_garbage_symbol_rot
+	physical_garbage_symbol_root.scale = Vector3.ONE * physical_garbage_symbol_scale
+
+
+func _physical_garbage_setting_changed() -> void:
+	_save_physical_garbage_settings()
+	_apply_physical_garbage_transform()
+
+
+func _physical_garbage_symbol_setting_changed() -> void:
+	_save_physical_garbage_settings()
+	_apply_physical_garbage_symbol_transform()
+
+
+func _physical_garbage_react() -> void:
+	## Short, damped cabinet wobble. Always settles back to the player's tuned pose.
+	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
+		if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
+			_physical_garbage_shake_tween.kill()
+		physical_garbage_root.position = physical_garbage_pos
+		physical_garbage_root.rotation_degrees = physical_garbage_rot
+		_physical_garbage_shake_tween = create_tween()
+		_physical_garbage_shake_tween.tween_property(
+			physical_garbage_root, "rotation_degrees", physical_garbage_rot + Vector3(-1.0, 0.0, -2.6), 0.055
+		).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_physical_garbage_shake_tween.parallel().tween_property(
+			physical_garbage_root, "position", physical_garbage_pos + Vector3(0.012, -0.006, 0.008), 0.055
+		)
+		_physical_garbage_shake_tween.tween_property(
+			physical_garbage_root, "rotation_degrees", physical_garbage_rot + Vector3(0.6, 0.0, 1.7), 0.075
+		).set_trans(Tween.TRANS_SINE)
+		_physical_garbage_shake_tween.parallel().tween_property(
+			physical_garbage_root, "position", physical_garbage_pos + Vector3(-0.008, 0.002, -0.004), 0.075
+		)
+		_physical_garbage_shake_tween.tween_property(
+			physical_garbage_root, "rotation_degrees", physical_garbage_rot, 0.11
+		).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		_physical_garbage_shake_tween.parallel().tween_property(
+			physical_garbage_root, "position", physical_garbage_pos, 0.11
+		)
+		_physical_garbage_shake_tween.tween_callback(func() -> void:
+			_physical_garbage_shake_tween = null
+		)
+	if game_audio != null and game_audio.has_method("play_trash"):
+		game_audio.play_trash()
+
+
+func _apply_physical_garbage_tint(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mesh_node := node as MeshInstance3D
+		mesh_node.material_override = _make_soda_metal_mat(Color("80B979"), 0.16, 0.46)
+	for child in node.get_children():
+		_apply_physical_garbage_tint(child)
+
+
+func _build_grill_standoffs() -> void:
+	## Two 5-inch cylindrical supports, each inset 3 inches from a grill corner.
+	var stand_mat := _make_soda_metal_mat(Color(0.075, 0.085, 0.095), 0.94, 0.22)
+	var half_span := GRILL_WIDTH * 0.5 - GRILL_STANDOFF_CORNER_INSET
+	for side in [-1.0, 1.0]:
+		var stand := MeshInstance3D.new()
+		stand.name = "GrillStandoff%s" % ("Right" if side < 0.0 else "Left")
+		var mesh := CylinderMesh.new()
+		mesh.top_radius = GRILL_STANDOFF_DIAMETER * 0.5
+		mesh.bottom_radius = GRILL_STANDOFF_DIAMETER * 0.5
+		mesh.height = 0.60
+		mesh.radial_segments = 24
+		stand.mesh = mesh
+		stand.position = Vector3(
+			GRILL_CENTER_X + side * half_span,
+			0.72,
+			GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.08
+		)
+		stand.material_override = stand_mat
+		world.add_child(stand)
 
 
 func _build_hand_spatula() -> void:
@@ -5492,14 +5941,14 @@ func _spatula_tap_amount(u: float) -> float:
 
 
 func _nudge_spatula_user_roll(dir: int) -> void:
-	## Scroll up → +45° / +90° · scroll down → opposite · snap to those steps.
+	## True two-state switch. The old code reset roll inside
+	## _stop_spatula_balance(), then always added ±90, so it could never toggle
+	## back to normal. Remember the incoming state before balance cleanup.
 	if dir == 0:
 		return
+	var was_sideways := absf(_spatula_user_roll) >= HAND_SPATULA_ROLL_STEP * 0.5
 	_stop_spatula_balance()
-	var next := _spatula_user_roll + float(dir) * HAND_SPATULA_ROLL_STEP
-	## Snap so leftover 30° steps from older builds clean up.
-	next = snappedf(next, HAND_SPATULA_ROLL_STEP)
-	_spatula_user_roll = clampf(next, -HAND_SPATULA_ROLL_MAX, HAND_SPATULA_ROLL_MAX)
+	_spatula_user_roll = 0.0 if was_sideways else float(signi(dir)) * HAND_SPATULA_ROLL_MAX
 	## Debug note labels follow the active key / HOLD voice.
 	_refresh_grill_piano_note_labels()
 
@@ -7144,7 +7593,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var mouse := get_viewport().get_mouse_position()
 	## Hold + drag down off the grill → flip (replaces the old 3-tap).
 	_try_spatula_pull_flip_gesture(mouse)
-	var animating := _spatula_anim_kind > 0
+	var animating := _spatula_anim_kind > 0 or _spatula_smash_returning
 	var dragging := dragging_patty != null and is_instance_valid(dragging_patty)
 	var grill_hold := spatula_grill_hold and _pointer_button_pressed(MOUSE_BUTTON_LEFT)
 	if spatula_grill_hold and not grill_hold:
@@ -7180,7 +7629,8 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	## Active tap / smash / flip use their own anchors — don't bail if cursor ray misses the steel.
 	if tip_target == Vector3.ZERO and not dragging and not grill_hold \
 			and _spatula_anim_kind != 1 and _spatula_anim_kind != 2 \
-			and _spatula_anim_kind != 3 and _spatula_anim_kind != 4:
+			and _spatula_anim_kind != 3 and _spatula_anim_kind != 4 \
+			and not _spatula_smash_returning:
 		if _spatula_fx_t >= 0.0:
 			_tick_spatula_flip_fx(delta)
 		return
@@ -7326,6 +7776,11 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 		pitch = float(sample_t["pitch"])
 		roll = float(sample_t["roll"])
 		if u_t >= 1.0:
+			if _spatula_press_needs_smooth_return:
+				_spatula_smash_returning = true
+				_spatula_smash_return_t = 0.0
+				_spatula_smash_return_from = hand_spatula_root.global_transform
+			_spatula_press_needs_smooth_return = false
 			_spatula_anim_kind = 0
 			_spatula_anim_t = 0.0
 			_spatula_tap_press_mouse = Vector2.INF
@@ -7376,6 +7831,20 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var pivot_basis := balance_basis if use_balance_basis else Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
 	var pivot_world := pivot_basis * pivot_local
 	hand_spatula_root.global_position = tip_target - pivot_world
+	if _spatula_smash_returning:
+		## The pose above is the live-cursor target. Blend from the last smash
+		## frame so the blade glides home instead of popping there.
+		var return_to := hand_spatula_root.global_transform
+		_spatula_smash_return_t = minf(
+			_spatula_smash_return_t + maxf(delta, 0.0), SPATULA_SMASH_RETURN_DUR
+		)
+		var return_u := _spatula_slap_smoother(
+			clampf(_spatula_smash_return_t / SPATULA_SMASH_RETURN_DUR, 0.0, 1.0)
+		)
+		hand_spatula_root.global_transform = _spatula_smash_return_from.interpolate_with(return_to, return_u)
+		if _spatula_smash_return_t >= SPATULA_SMASH_RETURN_DUR:
+			_spatula_smash_returning = false
+			_spatula_smash_return_t = 0.0
 	if _spatula_balance_active and not _spatula_balance_returning and _spatula_balance_ragdoll_body == null:
 		_spatula_balance_last_visible_xform = hand_spatula_root.global_transform
 	if _spatula_balance_active and _spatula_balance_falling:
@@ -7675,7 +8144,9 @@ func _setup_world_lighting() -> void:
 	gfx_sun.shadow_enabled = true
 	gfx_sun.shadow_blur = 1.2
 	gfx_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	gfx_sun.rotation_degrees = Vector3(-48.0, 35.0, 8.0)
+	## Camera looks toward +Z, so world -X reads as screen-right.
+	## Mirror the main character key to that side while preserving its elevation.
+	gfx_sun.rotation_degrees = Vector3(-48.0, -35.0, -8.0)
 	world.add_child(gfx_sun)
 
 	## Warm outdoor key from outside the truck — also casts shadows onto the street / customers.
@@ -8091,8 +8562,7 @@ func _trash_burgerpack_inspect() -> void:
 		if area != null and is_instance_valid(area):
 			area.queue_free()
 	)
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	_flash("Trashed %s" % label, Color("FFAB91"))
 
 
@@ -8850,6 +9320,8 @@ func _scrape_finish_clean_local(slot: int) -> void:
 		tw.chain().tween_callback(ch.queue_free)
 	grill_residue_chunks[slot] = []
 	grill_residue[slot] = 0.0
+	if tutorial_mode:
+		_tutorial_cleaned_grill = true
 	if slot < grill_residue_kind.size():
 		grill_residue_kind[slot] = ""
 	if slot < brush_swipe_travel.size():
@@ -8961,6 +9433,17 @@ func _layout_grill_power_row_centered() -> void:
 
 
 func _is_over_garbage(screen_pos: Vector2) -> bool:
+	## The physical bin is the primary target; keep the HUD button as an accessible
+	## fallback for keyboard/gamepad and UI-layer drags.
+	if camera != null and physical_garbage_area != null and is_instance_valid(physical_garbage_area):
+		var from := camera.project_ray_origin(screen_pos)
+		var to := from + camera.project_ray_normal(screen_pos) * 100.0
+		var query := PhysicsRayQueryParameters3D.create(from, to, PHYSICAL_GARBAGE_COLLISION_LAYER)
+		query.collide_with_areas = true
+		query.collide_with_bodies = false
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		if not hit.is_empty() and hit.get("collider") == physical_garbage_area:
+			return true
 	if grill_trash_btn == null or not is_instance_valid(grill_trash_btn):
 		return false
 	## Generous catch pad — Build toppings are dragged from across the screen.
@@ -8990,8 +9473,7 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 		var patty = _extract_station_patty(st_i, from_i)
 		if patty != null and is_instance_valid(patty):
 			patty.queue_free()
-			if game_audio and game_audio.has_method("play_trash"):
-				game_audio.play_trash()
+			_physical_garbage_react()
 			_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 		return
 	if kind == "reorder":
@@ -9012,8 +9494,7 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 		if cheese_held:
 			_cancel_cheese_hold_silent()
 		var id := str(data.get("id", ""))
-		if game_audio and game_audio.has_method("play_trash"):
-			game_audio.play_trash()
+		_physical_garbage_react()
 		var label: String = GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize())
 		_flash("Trashed %s" % label, Color("FFAB91"))
 		_strip_gesture_added = true
@@ -9060,8 +9541,7 @@ func _trash_spatula_patty_local() -> void:
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	if was_bun:
 		_flash("Trashed bun", Color("FFAB91"))
 	else:
@@ -9093,8 +9573,7 @@ func _trash_single_grill_patty_local(patty: Area3D) -> void:
 		spatula_patty = null
 		spatula_owner_id = 0
 	patty.queue_free()
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 
 
@@ -9166,19 +9645,12 @@ func _toggle_grill_power_local(turning_on: bool) -> void:
 	_set_grill_on(turning_on)
 	if grill_on:
 		var empty := _grill_meat_count() == 0
-		if _tutorial_step == 1 and empty:
-			_set_tutorial_hint(2, "Right-click to add burger patty on grill")
-		elif empty:
+		if empty:
 			_flash("Burner ON — right-click the grill where you want each patty", Color("FFCC80"))
 		else:
-			## Burgers already cooking — don't nag co-op cooks to place more.
-			if _tutorial_step == 2:
-				_clear_tutorial_hint()
 			_flash("Burner ON", Color("FFCC80"))
 	else:
 		_flash("Burner OFF", Color("B0BEC5"))
-		if _tutorial_step == 2:
-			_set_tutorial_hint(1, "Turn on grill or burner")
 
 
 func _grill_meat_count() -> int:
@@ -9696,6 +10168,11 @@ func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0,
 	_spatula_anim_kind = 1
 	_spatula_anim_t = 0.0001
 	_spatula_anim_dur = HAND_SPATULA_PLACE_SMASH_DUR if dur < 0.0 else dur
+	## The full frozen-ball smash gets a deliberate 0.3s return to the live cursor.
+	## Quick steel taps keep their existing snappy behavior.
+	_spatula_press_needs_smooth_return = dur < 0.0
+	_spatula_smash_returning = false
+	_spatula_smash_return_t = 0.0
 
 
 func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
@@ -9750,9 +10227,6 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 		var tw := create_tween()
 		tw.tween_property(p, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	call_deferred("_ensure_patty_spawn_pool")
-	## Clear place-patty coach text even when the partner spawned it (co-op).
-	if _tutorial_step == 2:
-		_clear_tutorial_hint()
 	if _mp_applying:
 		## Silent repair spawn during grill sync — no flash spam.
 		return
@@ -20131,6 +20605,15 @@ func _load_fryer_tuning_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GFX_CFG_PATH) != OK:
 		return
+	if not cfg.has_section_key(FRYER_TUNING_CFG_SECTION, "ready_fries_by_buns_v2"):
+		## Override the old HOLD-strip debug seat once. Finished packs must be large
+		## and separated enough to inspect beside the bun towers.
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_spacing_x", 0.14)
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_spacing_z", 0.12)
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_min_sep", 0.10)
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", 0.90)
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_fries_by_buns_v2", true)
+		cfg.save(GFX_CFG_PATH)
 	fry_basket_cook_sec = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "cook_sec", fry_basket_cook_sec)), 1.0, 20.0)
 	fry_basket_shake_need = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_need", fry_basket_shake_need)), 0.1, 6.0)
 	fry_basket_shake_speed_threshold = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_speed_threshold", fry_basket_shake_speed_threshold)), 0.0, 0.5)
@@ -20241,8 +20724,7 @@ func _trash_stale_toast_buns(bun: Area3D) -> void:
 		spatula_from_build = false
 		_refresh_spatula_ui()
 	bun.queue_free()
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	_flash("Toasted buns went stale on HOLD (40s) — tossed", Color("EF5350"))
 
 
@@ -22006,6 +22488,19 @@ func _clear_all_residue() -> void:
 
 func _station_cook_rating(station_index: int, customer: Node3D = null) -> Dictionary:
 	## Serve-speed grade from the order ticket clock; burnt meat forces Bad.
+	if tutorial_mode:
+		var tutorial_wait := _ticket_elapsed_seconds(customer)
+		return {
+			"score": 95,
+			"grade": "A",
+			"stars": 5,
+			"label": "Great job",
+			"detail": "Practice serve",
+			"color": Color("A5D6A7"),
+			"pay_mul": 1.2,
+			"wait": tutorial_wait,
+			"text": "Great job  Practice serve",
+		}
 	var burnt := false
 	var st: Dictionary = stations[station_index]
 	for p in st["patties"]:
@@ -23128,6 +23623,24 @@ func _ensure_prop_offsets_loaded() -> void:
 			clampf(float(cfg.get_value(PROP_OFFSET_CFG_SECTION, "%s_y" % key, cur.y)), -6.0, 8.0),
 			clampf(float(cfg.get_value(PROP_OFFSET_CFG_SECTION, "%s_z" % key, cur.z)), -12.0, 16.0)
 		)
+	if not cfg.has_section_key(PROP_OFFSET_CFG_SECTION, "fryer_done_by_buns_v2"):
+		## The ready-fries base moved next to the buns; erase the old saved HOLD
+		## offset so local tuning cannot hide the debug servings off-screen.
+		prop_offsets["fryer_done"] = Vector3.ZERO
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_x", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_y", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_z", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_by_buns_v2", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PROP_OFFSET_CFG_SECTION, "fryer_done_camera_right_1ft_v3"):
+		## One-time reset ensures an older hidden-menu offset cannot cancel the new
+		## one-foot camera-right ready-fries position requested for this layout.
+		prop_offsets["fryer_done"] = Vector3.ZERO
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_x", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_y", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_z", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_camera_right_1ft_v3", true)
+		cfg.save(GFX_CFG_PATH)
 
 
 func _prop_offset(key: String) -> Vector3:
@@ -23200,31 +23713,143 @@ func _hidden_add_prop_offset_group(parent: Control, key: String, title: String) 
 
 
 func _icecream_station_world_pos() -> Vector3:
-	## Camera looks +Z out the window → camera-right is world −X.
-	return ICECREAM_STATION_POS + Vector3(-icecream_cam_right_ft * FT_TO_M, 0.0, 0.0)
+	return icecream_station_pos
 
 
-func _apply_icecream_station_position() -> void:
+func _apply_icecream_station_transform() -> void:
 	if icecream_root != null and is_instance_valid(icecream_root):
-		icecream_root.position = _icecream_station_world_pos()
+		var old_home := icecream_cone_home
+		var old_rest := icecream_cone_rest
+		icecream_root.position = icecream_station_pos
+		icecream_root.rotation_degrees = icecream_station_rot
+		icecream_root.scale = Vector3.ONE * icecream_station_scale
+		_refresh_icecream_cone_anchor_positions(old_home, old_rest)
+
+
+func _refresh_icecream_cone_anchor_positions(
+	old_home: Vector3 = Vector3.ZERO,
+	old_rest: Vector3 = Vector3.ZERO
+) -> void:
+	if icecream_root == null or not is_instance_valid(icecream_root):
+		return
+	var rack := icecream_root.get_node_or_null("ConeRack") as Node3D
+	if rack != null and is_instance_valid(rack):
+		rack.position = icecream_cone_pull_local
+		icecream_cone_home = rack.to_global(Vector3.ZERO)
+	else:
+		icecream_cone_home = icecream_root.to_global(icecream_cone_pull_local)
+	icecream_cone_rest = icecream_root.to_global(Vector3(0.0, 0.12, 0.42))
+	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root) or icecream_cone_held:
+		return
+	## Keep an idle cone attached to whichever machine anchor it occupied while
+	## sliders move the station; never pull a dropped cone off the grill.
+	if old_home != Vector3.ZERO and icecream_cone_root.global_position.distance_to(old_home) < 0.20:
+		icecream_cone_root.global_transform = _icecream_cone_stack_transform()
+	elif old_rest != Vector3.ZERO and icecream_cone_root.global_position.distance_to(old_rest) < 0.20:
+		icecream_cone_root.global_position = icecream_cone_rest
+
+
+func _icecream_cone_stack_transform() -> Transform3D:
+	## Decorative cones inherit the rotated/scaled machine. The live cone is a
+	## world child, so give it the rack's full transform plus the same local pose.
+	var anchor := icecream_root.global_transform * Transform3D(Basis.IDENTITY, icecream_cone_pull_local)
+	var rack := icecream_root.get_node_or_null("ConeRack") as Node3D
+	if rack != null and is_instance_valid(rack):
+		anchor = rack.global_transform
+	var local_basis := Basis.from_euler(ICECREAM_CONE_STACK_ROT * (PI / 180.0))
+	return anchor * Transform3D(local_basis, Vector3.ZERO)
+
+
+func _set_icecream_cone_pull_axis(axis: String, value: float) -> void:
+	var old_home := icecream_cone_home
+	var old_rest := icecream_cone_rest
+	match axis:
+		"x":
+			icecream_cone_pull_local.x = clampf(value, -2.0, 2.0)
+		"y":
+			icecream_cone_pull_local.y = clampf(value, -2.0, 2.0)
+		"z":
+			icecream_cone_pull_local.z = clampf(value, -2.0, 2.0)
+	_refresh_icecream_cone_anchor_positions(old_home, old_rest)
+	_save_icecream_station_settings()
+
+
+func _set_icecream_station_pos_axis(axis: String, value: float) -> void:
+	match axis:
+		"x":
+			icecream_station_pos.x = clampf(value, -4.0, 4.0)
+		"y":
+			icecream_station_pos.y = clampf(value, -1.0, 4.0)
+		"z":
+			icecream_station_pos.z = clampf(value, -3.0, 5.0)
+	_apply_icecream_station_transform()
+	_save_icecream_station_settings()
+
+
+func _set_icecream_station_rot_axis(axis: String, value: float) -> void:
+	match axis:
+		"x":
+			icecream_station_rot.x = clampf(value, -180.0, 180.0)
+		"y":
+			icecream_station_rot.y = clampf(value, -360.0, 360.0)
+		"z":
+			icecream_station_rot.z = clampf(value, -180.0, 180.0)
+	_apply_icecream_station_transform()
+	_save_icecream_station_settings()
+
+
+func _set_icecream_station_scale(value: float) -> void:
+	icecream_station_scale = clampf(value, 0.35, 3.0)
+	_apply_icecream_station_transform()
+	_save_icecream_station_settings()
 
 
 func _load_icecream_station_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GFX_CFG_PATH) != OK:
 		return
-	if cfg.has_section_key(ICECREAM_POS_CFG_SECTION, "cam_right_ft"):
+	if cfg.has_section_key(ICECREAM_POS_CFG_SECTION, "world_x"):
+		icecream_station_pos = Vector3(
+			clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "world_x", icecream_station_pos.x)), -4.0, 4.0),
+			clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "world_y", icecream_station_pos.y)), -1.0, 4.0),
+			clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "world_z", icecream_station_pos.z)), -3.0, 5.0)
+		)
+	elif cfg.has_section_key(ICECREAM_POS_CFG_SECTION, "cam_right_ft"):
+		## One-time compatibility with builds that only offered a lateral offset.
 		var v := float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft"))
 		## Migrate prior default 2.1667 → 8" camera-left.
 		if absf(v - 2.1667) < 0.02:
 			v = 1.5
-		icecream_cam_right_ft = clampf(v, -4.0, 8.0)
+		v = clampf(v, -4.0, 8.0)
+		icecream_station_pos = ICECREAM_STATION_POS + Vector3(-v * FT_TO_M, 0.0, 0.0)
+	icecream_station_rot = Vector3(
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "pitch", icecream_station_rot.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "yaw", icecream_station_rot.y)), -360.0, 360.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "roll", icecream_station_rot.z)), -180.0, 180.0)
+	)
+	icecream_station_scale = clampf(float(cfg.get_value(
+		ICECREAM_POS_CFG_SECTION, "scale", icecream_station_scale
+	)), 0.35, 3.0)
+	icecream_cone_pull_local = Vector3(
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cone_pull_x", icecream_cone_pull_local.x)), -2.0, 2.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cone_pull_y", icecream_cone_pull_local.y)), -2.0, 2.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cone_pull_z", icecream_cone_pull_local.z)), -2.0, 2.0)
+	)
 
 
 func _save_icecream_station_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(GFX_CFG_PATH)
-	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cam_right_ft", icecream_cam_right_ft)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "world_x", icecream_station_pos.x)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "world_y", icecream_station_pos.y)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "world_z", icecream_station_pos.z)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "pitch", icecream_station_rot.x)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "yaw", icecream_station_rot.y)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "roll", icecream_station_rot.z)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "scale", icecream_station_scale)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cone_pull_x", icecream_cone_pull_local.x)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cone_pull_y", icecream_cone_pull_local.y)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cone_pull_z", icecream_cone_pull_local.z)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -23234,8 +23859,27 @@ func _load_soda_cup_height_settings() -> void:
 		return
 	if cfg.has_section_key(SODA_CUP_HEIGHT_CFG_SECTION, "hold_in"):
 		cup_hold_height = clampf(float(cfg.get_value(SODA_CUP_HEIGHT_CFG_SECTION, "hold_in")), 0.0, 12.0) * INCH_TO_M
-	if cfg.has_section_key(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in"):
-		cup_fill_extra_y = clampf(float(cfg.get_value(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in")), -8.0, 12.0) * INCH_TO_M
+	var had_saved_fill := cfg.has_section_key(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in")
+	var fill_in := float(cfg.get_value(
+		SODA_CUP_HEIGHT_CFG_SECTION,
+		"fill_extra_in",
+		CUP_FILL_EXTRA_Y_DEFAULT / INCH_TO_M
+	))
+	## Existing installs may have a tuned value saved, which would override a
+	## new default. Raise that exact saved seat by four inches once.
+	var raised_once := bool(cfg.get_value(
+		SODA_CUP_HEIGHT_CFG_SECTION,
+		SODA_CUP_FILL_RAISE_MIGRATION,
+		false
+	))
+	if not raised_once:
+		if had_saved_fill:
+			fill_in += 4.0
+		fill_in = clampf(fill_in, -8.0, 12.0)
+		cfg.set_value(SODA_CUP_HEIGHT_CFG_SECTION, "fill_extra_in", fill_in)
+		cfg.set_value(SODA_CUP_HEIGHT_CFG_SECTION, SODA_CUP_FILL_RAISE_MIGRATION, true)
+		cfg.save(GFX_CFG_PATH)
+	cup_fill_extra_y = clampf(fill_in, -8.0, 12.0) * INCH_TO_M
 
 
 func _save_soda_cup_height_settings() -> void:
@@ -23285,6 +23929,23 @@ func _load_soda_tuning_settings() -> void:
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, 0.0)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_front_side_v6", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_ice_center_v7"):
+		## Clear the legacy seat nudge from the old four-nozzle machine. The Ice
+		## seat now starts directly under the visible Ice drop marker.
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "ice_soft_x_in", 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "ice_soft_y_in", 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "ice_soft_z_in", 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_ice_center_v7", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_soft_center_restore_v9"):
+		## Undo the old four-nozzle / five-inch migrations once. Both current bays
+		## derive their seat from the live pour marker; sliders remain editable offsets.
+		for fid in ["cola", "ice"]:
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_x_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_y_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_soft_center_restore_v9", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -23292,6 +23953,19 @@ func _load_soda_tuning_settings() -> void:
 	)
 	soda_station_yaw = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_yaw", soda_station_yaw)), -360.0, 360.0)
 	soda_station_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_scale", soda_station_scale)), 0.5, 3.5)
+	soda_cup_rack_pos = Vector3(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_stack_x", soda_cup_rack_pos.x)), -2.0, 2.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_stack_y", soda_cup_rack_pos.y)), -1.0, 3.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_stack_z", soda_cup_rack_pos.z)), -2.0, 2.0)
+	)
+	soda_cup_rack_rot = Vector3(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_stack_pitch", soda_cup_rack_rot.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_stack_yaw", soda_cup_rack_rot.y)), -180.0, 180.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_stack_roll", soda_cup_rack_rot.z)), -180.0, 180.0)
+	)
+	soda_cup_rack_scale = clampf(float(cfg.get_value(
+		SODA_TUNING_CFG_SECTION, "cup_stack_scale", soda_cup_rack_scale
+	)), 0.25, 3.5)
 	for fid in _soda_station_tip_ids():
 		soda_nozzle_offsets_in[fid] = Vector3(
 			clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, (soda_nozzle_offsets_in.get(fid, Vector3.ZERO) as Vector3).x)), -12.0, 12.0),
@@ -23308,7 +23982,8 @@ func _load_soda_tuning_settings() -> void:
 	soda_blocker_height = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)), 0.05, 2.5)
 	soda_blocker_front_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)), -1.2, 0.7)
 	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), -1.2, 0.7)
-	soda_blocker_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_debug", soda_blocker_debug))
+	## Visual blocker/soft-lock markers were tuning aids, not machine art.
+	soda_blocker_debug = false
 	soda_cup_rest_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_x", soda_cup_rest_x)), -1.0, 1.0)
 	soda_cup_rest_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_z", soda_cup_rest_z)), -1.2, 1.2)
 	soda_tray_first_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tray_first_x", soda_tray_first_x)), -1.0, 0.7)
@@ -23322,7 +23997,7 @@ func _load_soda_tuning_settings() -> void:
 	soda_soft_tight = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_tight", soda_soft_tight)), 0.0, 0.4)
 	soda_soft_pull = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_pull", soda_soft_pull)), 0.0, 1.5)
 	soda_soft_unlock_grace = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", soda_soft_unlock_grace)), 0.0, 3.0)
-	soda_soft_debug = bool(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_debug", soda_soft_debug))
+	soda_soft_debug = false
 	soda_fill_follow_rate = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_follow_rate", soda_fill_follow_rate)), 1.0, 80.0)
 	soda_fill_max_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)), 0.2, 12.0)
 	cup_liquid_top_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_liquid_top_offset_in", cup_liquid_top_offset_in)), -6.0, 6.0)
@@ -23341,6 +24016,13 @@ func _save_soda_tuning_settings() -> void:
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_z", soda_station_pos.z)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_yaw", soda_station_yaw)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "machine_scale", soda_station_scale)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_x", soda_cup_rack_pos.x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_y", soda_cup_rack_pos.y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_z", soda_cup_rack_pos.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_pitch", soda_cup_rack_rot.x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_yaw", soda_cup_rack_rot.y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_roll", soda_cup_rack_rot.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "cup_stack_scale", soda_cup_rack_scale)
 	for fid in _soda_station_tip_ids():
 		var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, off.x)
@@ -23382,6 +24064,7 @@ func _save_soda_tuning_settings() -> void:
 
 
 func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
+	var old_home := cup_home
 	if soda_root != null and is_instance_valid(soda_root):
 		soda_root.position = soda_station_pos
 		soda_root.rotation_degrees.y = soda_station_yaw
@@ -23398,9 +24081,21 @@ func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
 		cup_rest_rot = _cup_rest_rotation()
 		var rack := soda_root.get_node_or_null("CupRack") as Node3D
 		if rack != null and is_instance_valid(rack):
-			rack.position = SODA_CUP_RACK_LOCAL
-			cup_home = rack.to_global(SODA_CUP_STACK_BASE_LOCAL)
-			cup_home_rot = soda_root.global_rotation_degrees
+			if _cup_rack_shake_tween != null and is_instance_valid(_cup_rack_shake_tween):
+				_cup_rack_shake_tween.kill()
+				_cup_rack_shake_tween = null
+			rack.position = soda_cup_rack_pos
+			rack.rotation_degrees = soda_cup_rack_rot
+			rack.scale = Vector3.ONE * soda_cup_rack_scale
+			cup_home = rack.to_global(_cup_rack_root_local())
+			cup_home_rot = _cup_rack_home_rotation()
+			## Keep only the still-unused supply cup attached while tuning the rack.
+			if cup_root != null and is_instance_valid(cup_root) and not cup_held \
+					and not _cup_dispensing_to_fill and not parked_cups.has(cup_root) \
+					and old_home != Vector3.ZERO and cup_root.global_position.distance_to(old_home) < 0.22:
+				cup_root.global_position = cup_home
+				cup_root.rotation_degrees = cup_home_rot
+				cup_root.scale = Vector3.ONE * soda_cup_rack_scale
 		_layout_parked_cups()
 	if rebuild_tanks:
 		_rebuild_soda_tank_visuals()
@@ -23423,6 +24118,21 @@ func _cup_rest_rotation() -> Vector3:
 	return cup_rest_rot
 
 
+func _cup_rack_root_local() -> Vector3:
+	## The cup mesh is authored upward from its root. When inverted, raise that
+	## root one cup height so the visible shell still rests on the stack base.
+	return SODA_CUP_STACK_BASE_LOCAL + Vector3(0.0, CUP_SHELL_H, 0.0)
+
+
+func _cup_rack_home_rotation() -> Vector3:
+	var rack: Node3D = null
+	if soda_root != null and is_instance_valid(soda_root):
+		rack = soda_root.get_node_or_null("CupRack") as Node3D
+	var rot := rack.global_rotation_degrees if rack != null and is_instance_valid(rack) else cup_home_rot
+	rot += SODA_CUP_STACK_ROT
+	return rot
+
+
 func _sync_soda_tuning_hidden_ui() -> void:
 	var vals := {
 		"soda_machine_x": soda_station_pos.x,
@@ -23430,6 +24140,13 @@ func _sync_soda_tuning_hidden_ui() -> void:
 		"soda_machine_z": soda_station_pos.z,
 		"soda_machine_yaw": soda_station_yaw,
 		"soda_machine_scale": soda_station_scale,
+		"soda_cup_stack_x": soda_cup_rack_pos.x,
+		"soda_cup_stack_y": soda_cup_rack_pos.y,
+		"soda_cup_stack_z": soda_cup_rack_pos.z,
+		"soda_cup_stack_pitch": soda_cup_rack_rot.x,
+		"soda_cup_stack_yaw": soda_cup_rack_rot.y,
+		"soda_cup_stack_roll": soda_cup_rack_rot.z,
+		"soda_cup_stack_scale": soda_cup_rack_scale,
 		"soda_block_x": soda_blocker_half_x,
 		"soda_block_h": soda_blocker_height,
 		"soda_block_front": soda_blocker_front_z,
@@ -23459,11 +24176,18 @@ func _sync_soda_tuning_hidden_ui() -> void:
 		vals["%s_nozzle_x" % fid] = off.x
 		vals["%s_nozzle_y" % fid] = off.y
 		vals["%s_nozzle_z" % fid] = off.z
+		var soft: Vector3 = soda_soft_offsets_in.get(fid, Vector3.ZERO)
+		vals["%s_soft_x" % fid] = soft.x
+		vals["%s_soft_y" % fid] = soft.y
+		vals["%s_soft_z" % fid] = soft.z
+		vals["%s_soft_mult" % fid] = float(soda_soft_radius_mult.get(fid, 1.0))
 	for key in vals.keys():
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
 			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
-			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+			var degrees_keys := ["soda_machine_yaw", "soda_cup_stack_pitch", "soda_cup_stack_yaw", "soda_cup_stack_roll"]
+			var fmt := "%.1f°" if key in degrees_keys else "%.2f"
+			options_hidden_tree_light_labs[key].text = fmt % float(vals[key])
 
 
 func _sync_soda_cup_height_hidden_ui() -> void:
@@ -23549,10 +24273,24 @@ func _sync_soda_slot_hidden_ui() -> void:
 
 
 func _sync_icecream_station_hidden_ui() -> void:
-	if options_hidden_icecream_pos_slider != null and is_instance_valid(options_hidden_icecream_pos_slider):
-		options_hidden_icecream_pos_slider.set_value_no_signal(icecream_cam_right_ft)
-	if options_hidden_icecream_pos_lab != null and is_instance_valid(options_hidden_icecream_pos_lab):
-		options_hidden_icecream_pos_lab.text = "%.2f ft" % icecream_cam_right_ft
+	var vals := {
+		"icecream_x": icecream_station_pos.x,
+		"icecream_y": icecream_station_pos.y,
+		"icecream_z": icecream_station_pos.z,
+		"icecream_pitch": icecream_station_rot.x,
+		"icecream_yaw": icecream_station_rot.y,
+		"icecream_roll": icecream_station_rot.z,
+		"icecream_scale": icecream_station_scale,
+		"icecream_cone_pull_x": icecream_cone_pull_local.x,
+		"icecream_cone_pull_y": icecream_cone_pull_local.y,
+		"icecream_cone_pull_z": icecream_cone_pull_local.z,
+	}
+	for key in vals.keys():
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			var is_angle: bool = str(key) in ["icecream_pitch", "icecream_yaw", "icecream_roll"]
+			options_hidden_tree_light_labs[key].text = ("%.1f°" if is_angle else "%.2f") % float(vals[key])
 
 
 func _sync_tree_light_hidden_ui() -> void:
@@ -23607,15 +24345,15 @@ func _hidden_add_soda_debug_check(parent: Control, text: String, getter: Callabl
 
 
 func _hidden_add_soda_nozzle_group(parent: Control, fid: String, label_prefix: String) -> void:
-	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_x" % fid, "%s Nozzle X (in)" % label_prefix, -12.0, 12.0, 0.05,
+	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_x" % fid, "%s Drop X Offset (in)" % label_prefix, -12.0, 12.0, 0.05,
 		func(): return _soda_nozzle_offset_axis(fid, "x"),
-		func(v: float): _set_soda_nozzle_offset_axis(fid, "x", v), true)
-	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_y" % fid, "%s Nozzle Y (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(v: float): _set_soda_nozzle_offset_axis(fid, "x", v))
+	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_y" % fid, "%s Drop Y Offset (in)" % label_prefix, -12.0, 12.0, 0.05,
 		func(): return _soda_nozzle_offset_axis(fid, "y"),
-		func(v: float): _set_soda_nozzle_offset_axis(fid, "y", v), true)
-	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_z" % fid, "%s Nozzle Z (in)" % label_prefix, -12.0, 12.0, 0.05,
+		func(v: float): _set_soda_nozzle_offset_axis(fid, "y", v))
+	_hidden_add_soda_tuning_slider(parent, "%s_nozzle_z" % fid, "%s Drop Z Offset (in)" % label_prefix, -12.0, 12.0, 0.05,
 		func(): return _soda_nozzle_offset_axis(fid, "z"),
-		func(v: float): _set_soda_nozzle_offset_axis(fid, "z", v), true)
+		func(v: float): _set_soda_nozzle_offset_axis(fid, "z", v))
 
 
 func _soda_nozzle_offset_axis(fid: String, axis: String) -> float:
@@ -23675,18 +24413,29 @@ func _set_soda_soft_radius_mult(fid: String, val: float) -> void:
 
 
 func _hidden_add_soda_soft_lock_group(parent: Control, fid: String, label_prefix: String) -> void:
-	_hidden_add_soda_tuning_slider(parent, "%s_soft_x" % fid, "%s Seat X (in)" % label_prefix, -12.0, 12.0, 0.05,
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_x" % fid, "%s Cup Seat X Offset (in)" % label_prefix, -12.0, 12.0, 0.05,
 		func(): return _soda_soft_offset_axis(fid, "x"),
 		func(v: float): _set_soda_soft_offset_axis(fid, "x", v))
-	_hidden_add_soda_tuning_slider(parent, "%s_soft_y" % fid, "%s Seat Height (in)" % label_prefix, -12.0, 12.0, 0.05,
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_y" % fid, "%s Cup Seat Y Offset (in)" % label_prefix, -12.0, 12.0, 0.05,
 		func(): return _soda_soft_offset_axis(fid, "y"),
 		func(v: float): _set_soda_soft_offset_axis(fid, "y", v))
-	_hidden_add_soda_tuning_slider(parent, "%s_soft_z" % fid, "%s Seat Z (in)" % label_prefix, -12.0, 12.0, 0.05,
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_z" % fid, "%s Cup Seat Z Offset (in)" % label_prefix, -12.0, 12.0, 0.05,
 		func(): return _soda_soft_offset_axis(fid, "z"),
 		func(v: float): _set_soda_soft_offset_axis(fid, "z", v))
-	_hidden_add_soda_tuning_slider(parent, "%s_soft_mult" % fid, "%s Radius Mult" % label_prefix, 0.25, 3.0, 0.01,
+	_hidden_add_soda_tuning_slider(parent, "%s_soft_mult" % fid, "%s Lock Radius Mult" % label_prefix, 0.25, 3.0, 0.01,
 		func(): return _soda_soft_radius_mult_value(fid),
 		func(v: float): _set_soda_soft_radius_mult(fid, v))
+
+
+func _reset_two_bay_drink_alignment() -> void:
+	for fid in _soda_station_tip_ids():
+		soda_nozzle_offsets_in[fid] = Vector3.ZERO
+		soda_soft_offsets_in[fid] = Vector3.ZERO
+		soda_soft_radius_mult[fid] = 0.99
+	_save_soda_tuning_settings()
+	_apply_soda_tuning_settings_changed(false)
+	_sync_soda_tuning_hidden_ui()
+	_flash("Cola + Ice bay alignment reset", Color("80DEEA"))
 
 
 func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
@@ -24108,6 +24857,8 @@ func _build_soda_station() -> void:
 		body.position = Vector3(0.0, 0.28, 0.0)
 		body.material_override = _make_soda_metal_mat(Color(0.16, 0.17, 0.19), 0.92, 0.28)
 		root.add_child(body)
+	## Cover the imported pale spill grate with a clean, glossy black deck.
+	_add_soda_drip_grate_overlay(root)
 
 	for fid in SODA_FLAVORS:
 		if not soda_tank_fill.has(fid):
@@ -24171,7 +24922,6 @@ func _build_soda_station() -> void:
 		{"p": Vector3(0.0, 0.33 * s, -0.05 * s + stick * 0.35), "h": Vector3(0.18 * s, 0.28 * s, 0.18 * s + stick * 0.5)}, ## body
 		{"p": Vector3(0.0, 0.35 * s, 0.14 * s + stick * 0.5), "h": Vector3(0.17 * s, 0.16 * s, 0.08 * s + stick * 0.5)}, ## dispenser face
 		{"p": Vector3(0.0, 0.55 * s, 0.05 * s + stick * 0.35), "h": Vector3(0.16 * s, 0.12 * s, 0.10 * s + stick * 0.35)}, ## banner / top
-		{"p": Vector3(-0.38, 0.85, 0.12 + stick * 0.35), "h": Vector3(0.13, 0.28, 0.11 + stick * 0.35)}, ## cup dispenser
 		## Drip grate — top aligns with CUP_TRAY_DECK_LOCAL_Y (cup bottom on the ledge).
 		{"p": Vector3(0.0, CUP_TRAY_DECK_LOCAL_Y * 0.5, 0.10 * s), "h": Vector3(0.18 * s, CUP_TRAY_DECK_LOCAL_Y * 0.5, 0.22 * s), "floor": true},
 	]
@@ -24609,13 +25359,20 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 			count += 1
 			continue
 		var mat := _make_soda_flavor_panel_mat(fid)
+		## Restore the shipped drink art on the generated soda panel. The source
+		## pack has no ice logo, so that bay keeps the clear ICE fallback below.
+		if fid == "cola":
+			var logo_tex := _load_soda_image_texture("res://models/sodamachine/newmachine1_0.png")
+			if logo_tex != null:
+				mat.albedo_texture = logo_tex
+				mat.albedo_color = Color.WHITE
 		src_mi.material_override = mat
 		src_mi.set_meta("slot_base_position", src_mi.position)
 		soda_flavor_mats[fid] = mat
 		soda_flavor_pads[fid] = src_mi
 		var lab := Label3D.new()
 		lab.name = "FlavorLabel_%s" % fid
-		lab.text = "ICE" if fid == "ice" else str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper()))
+		lab.text = "*  ICE  *" if fid == "ice" else (str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper())) if mat.albedo_texture == null else "")
 		lab.font_size = 28
 		lab.pixel_size = 0.00125
 		lab.modulate = Color(1.0, 1.0, 1.0, 1.0)
@@ -24972,44 +25729,10 @@ func _refresh_soda_tuning_debug_visuals() -> void:
 	if soda_tuning_debug_root != null and is_instance_valid(soda_tuning_debug_root):
 		soda_tuning_debug_root.queue_free()
 	soda_tuning_debug_root = null
-	if soda_root == null or not is_instance_valid(soda_root):
-		return
-	if not soda_blocker_debug and not soda_soft_debug:
-		return
-	soda_tuning_debug_root = Node3D.new()
-	soda_tuning_debug_root.name = "SodaTuningDebug"
-	soda_root.add_child(soda_tuning_debug_root)
-	if soda_blocker_debug:
-		for spec in [
-			{"name": "FrontBlock", "z": soda_blocker_front_z, "col": Color(1.0, 0.35, 0.12, 0.22)},
-			{"name": "FillBlock", "z": soda_blocker_fill_z, "col": Color(0.25, 0.75, 1.0, 0.18)},
-		]:
-			var box := MeshInstance3D.new()
-			box.name = str(spec["name"])
-			var mesh := BoxMesh.new()
-			mesh.size = Vector3(soda_blocker_half_x * 2.0, soda_blocker_height, 0.018)
-			box.mesh = mesh
-			box.position = Vector3(0.0, soda_blocker_height * 0.5, float(spec["z"]))
-			box.material_override = _make_soda_debug_mat(spec["col"])
-			box.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			soda_tuning_debug_root.add_child(box)
-	if soda_soft_debug:
-		for fid in _soda_station_tip_ids():
-			var tip := _soda_tip_for_station(fid)
-			if tip == null:
-				continue
-			var seat := soda_root.to_local(_cup_target_for_spout(tip))
-			var disc := MeshInstance3D.new()
-			disc.name = "SoftLock_%s" % fid
-			var cyl := CylinderMesh.new()
-			cyl.top_radius = _soda_soft_radius_for_station(fid)
-			cyl.bottom_radius = _soda_soft_radius_for_station(fid)
-			cyl.height = 0.006
-			disc.mesh = cyl
-			disc.position = seat
-			disc.material_override = _make_soda_debug_mat(Color(0.7, 1.0, 0.25, 0.20))
-			disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			soda_tuning_debug_root.add_child(disc)
+	## Debug geometry is intentionally disabled in game builds. Keeping this
+	## cleanup hook removes green discs left over from older saved settings.
+	soda_blocker_debug = false
+	soda_soft_debug = false
 
 
 func _add_soda_nozzle_fill_visuals(parent: Node3D) -> void:
@@ -25036,8 +25759,14 @@ func _add_soda_drip_grate_overlay(parent: Node3D) -> void:
 	var root := Node3D.new()
 	root.name = "SodaDripGrateOverlay"
 	parent.add_child(root)
-	var metal := _make_soda_metal_mat(Color(0.68, 0.72, 0.72), 0.96, 0.16)
-	var dark := _make_soda_metal_mat(Color(0.006, 0.006, 0.007), 0.55, 0.18)
+	var metal := _make_soda_metal_mat(Color(0.010, 0.012, 0.016), 0.78, 0.055)
+	metal.clearcoat_enabled = true
+	metal.clearcoat = 1.0
+	metal.clearcoat_roughness = 0.035
+	var dark := _make_soda_metal_mat(Color(0.002, 0.003, 0.004), 0.62, 0.10)
+	dark.clearcoat_enabled = true
+	dark.clearcoat = 0.75
+	dark.clearcoat_roughness = 0.06
 	var top_y := CUP_TRAY_DECK_LOCAL_Y + 0.004
 	_add_mesh_box(root, "MetalGrateTop", Vector3(0.64, 0.006, 0.24), Vector3(0.0, top_y, 0.47), metal)
 	for row in 3:
@@ -25183,6 +25912,41 @@ func _fryer_tub_local_x(_index: int = 0) -> float:
 	return FRYER_OIL_LOCAL.x
 
 
+func _fryer_ring_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, normal: Vector3) -> void:
+	for vertex in [a, b, c, a, c, d]:
+		st.set_normal(normal)
+		st.add_vertex(vertex)
+
+
+func _make_fryer_trim_ring_mesh(outer_w: float, outer_d: float, inner_w: float, inner_d: float, height: float) -> ArrayMesh:
+	## A single watertight trim extrusion replaces four independent boxes. This
+	## guarantees flush corners and one continuous highlight around the oil well.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var ox := outer_w * 0.5
+	var oz := outer_d * 0.5
+	var ix := inner_w * 0.5
+	var iz := inner_d * 0.5
+	var yt := height * 0.5
+	var yb := -height * 0.5
+	## Top ring.
+	_fryer_ring_quad(st, Vector3(-ox, yt, -oz), Vector3(ox, yt, -oz), Vector3(ix, yt, -iz), Vector3(-ix, yt, -iz), Vector3.UP)
+	_fryer_ring_quad(st, Vector3(-ix, yt, iz), Vector3(ix, yt, iz), Vector3(ox, yt, oz), Vector3(-ox, yt, oz), Vector3.UP)
+	_fryer_ring_quad(st, Vector3(-ox, yt, -oz), Vector3(-ix, yt, -iz), Vector3(-ix, yt, iz), Vector3(-ox, yt, oz), Vector3.UP)
+	_fryer_ring_quad(st, Vector3(ix, yt, -iz), Vector3(ox, yt, -oz), Vector3(ox, yt, oz), Vector3(ix, yt, iz), Vector3.UP)
+	## Outer vertical extrusion.
+	_fryer_ring_quad(st, Vector3(-ox, yb, -oz), Vector3(ox, yb, -oz), Vector3(ox, yt, -oz), Vector3(-ox, yt, -oz), Vector3(0, 0, -1))
+	_fryer_ring_quad(st, Vector3(ox, yb, oz), Vector3(-ox, yb, oz), Vector3(-ox, yt, oz), Vector3(ox, yt, oz), Vector3(0, 0, 1))
+	_fryer_ring_quad(st, Vector3(-ox, yb, oz), Vector3(-ox, yb, -oz), Vector3(-ox, yt, -oz), Vector3(-ox, yt, oz), Vector3(-1, 0, 0))
+	_fryer_ring_quad(st, Vector3(ox, yb, -oz), Vector3(ox, yb, oz), Vector3(ox, yt, oz), Vector3(ox, yt, -oz), Vector3(1, 0, 0))
+	## Inner vertical lip into the oil well.
+	_fryer_ring_quad(st, Vector3(ix, yb, -iz), Vector3(-ix, yb, -iz), Vector3(-ix, yt, -iz), Vector3(ix, yt, -iz), Vector3(0, 0, 1))
+	_fryer_ring_quad(st, Vector3(-ix, yb, iz), Vector3(ix, yb, iz), Vector3(ix, yt, iz), Vector3(-ix, yt, iz), Vector3(0, 0, -1))
+	_fryer_ring_quad(st, Vector3(-ix, yb, -iz), Vector3(-ix, yb, iz), Vector3(-ix, yt, iz), Vector3(-ix, yt, -iz), Vector3(1, 0, 0))
+	_fryer_ring_quad(st, Vector3(ix, yb, iz), Vector3(ix, yb, -iz), Vector3(ix, yt, -iz), Vector3(ix, yt, iz), Vector3(-1, 0, 0))
+	return st.commit()
+
+
 func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material, oil_mat: Material) -> void:
 	## Recessed oil well — slightly larger pit with a clear grease pool.
 	var tub := Node3D.new()
@@ -25195,10 +25959,14 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 	## ~20% larger footprint than the old cut; thicker oil slab reads as filled.
 	_add_mesh_box(tub, "TubBottom", Vector3(0.34, 0.02, 0.29), Vector3(0.0, oil_y - 0.058, oz), steel_mat)
 	_add_mesh_box(tub, "OilLiquid", Vector3(0.30, 0.02, 0.25), Vector3(0.0, oil_y + 0.002, oz), oil_mat)
-	_add_mesh_box(tub, "RimBack", Vector3(0.36, 0.024, 0.014), Vector3(0.0, oil_y + 0.014, oz - 0.142), rim_mat)
-	_add_mesh_box(tub, "RimFront", Vector3(0.36, 0.018, 0.014), Vector3(0.0, oil_y + 0.01, oz + 0.142), rim_mat)
-	_add_mesh_box(tub, "RimLeft", Vector3(0.014, 0.024, 0.29), Vector3(-0.173, oil_y + 0.014, oz), rim_mat)
-	_add_mesh_box(tub, "RimRight", Vector3(0.014, 0.024, 0.29), Vector3(0.173, oil_y + 0.014, oz), rim_mat)
+	var trim := MeshInstance3D.new()
+	trim.name = "ContinuousOilTubTrim"
+	trim.mesh = _make_fryer_trim_ring_mesh(0.374, 0.304, 0.300, 0.250, 0.026)
+	trim.position = Vector3(0.0, oil_y + 0.014, oz)
+	if rim_mat is BaseMaterial3D:
+		(rim_mat as BaseMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
+	trim.material_override = rim_mat
+	tub.add_child(trim)
 	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
 	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	bubble_mat.emission_enabled = true
@@ -25360,6 +26128,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 		"cook": 0.0,
 		"shake": 0.0,
 		"smoke_after": 0.0,
+		"pop_t": 0.0,
 		"remote_peer": 0,
 		"home": basket.global_position,
 		"home_rot": basket.rotation_degrees,
@@ -25979,18 +26748,15 @@ func _update_ready_fries_pack_sparkles(delta: float) -> void:
 
 
 func _ready_fries_slot_world(i: int) -> Vector3:
-	## Tight 2×2 on the far HOLD edge (+Z) — away from the camera / bottom of frame.
-	var b := _warmer_place_bounds()
+	## Visible 2×2 debug rack beside the bun towers. This deliberately no longer
+	## inherits the HOLD strip bounds, which could clamp saved offsets off-screen.
 	var col := clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) % 2
 	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
-	var cx := (b.position.x + b.end.x) * 0.5
-	var x := cx + (float(col) - 0.5) * fries_ready_spacing_x
-	## b.end.y = cook-side / far from camera. Nudge further +Z so packs sit up-screen.
-	var z_hi := b.end.y + FRIES_HOLD_FAR_NUDGE
-	var z := b.end.y - 0.04 - float(row) * fries_ready_spacing_z + FRIES_HOLD_FAR_NUDGE
-	x = clampf(x, b.position.x, b.end.x)
-	z = clampf(z, b.position.y, z_hi)
-	return Vector3(x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y, z) + _prop_offset("fryer_done")
+	return FRIES_READY_VISIBLE_BASE + Vector3(
+		float(col) * fries_ready_spacing_x,
+		0.0,
+		float(row) * fries_ready_spacing_z
+	) + _prop_offset("fryer_done")
 
 
 func _refresh_ready_fries_visuals() -> void:
@@ -26050,6 +26816,7 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 		data["cook"] = 0.0
 		data["shake"] = 0.0
 		data["smoke_after"] = 0.0
+		data["pop_t"] = 0.0
 		data["remote_peer"] = 0
 		fryer_baskets[i] = data
 		_refresh_fryer_basket_visual(i)
@@ -26139,6 +26906,7 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 		data["state"] = "raw"
 		data["cook"] = 0.0
 		data["shake"] = 0.0
+		data["pop_t"] = 0.0
 		fryer_baskets[idx] = data
 		_refresh_fryer_basket_visual(idx)
 		_mp_send_fryer_basket_pose(true, false, idx)
@@ -26393,6 +27161,9 @@ func _finish_fryer_basket(index: int) -> void:
 	data["cook"] = 0.0
 	data["shake"] = 0.0
 	data["smoke_after"] = 10.0
+	## The completed-basket spring must never carry into the next batch; a stale
+	## positive timer clamps raw baskets above the oil rail and caused batch two to lock.
+	data["pop_t"] = 0.0
 	fryer_baskets[index] = data
 	_release_fryer_basket()
 	_flash("Two fries orders ready!", Color("FFD54F"))
@@ -26733,8 +27504,7 @@ func _release_spilled_fry(screen_pos: Vector2) -> void:
 		grill_spilled_fries.remove_at(spilled_fry_held_idx)
 		spilled_fry_held = false
 		spilled_fry_held_idx = -1
-		if game_audio and game_audio.has_method("play_trash"):
-			game_audio.play_trash()
+		_physical_garbage_react()
 		_flash("Trashed fry", Color("FFAB91"))
 		return
 	## Drop back onto the steel under the cursor.
@@ -26779,8 +27549,7 @@ func _trash_held_fries_pack() -> void:
 		)
 	else:
 		fries_pack_root = null
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	_flash("Trashed fries", Color("FFAB91"))
 	_refresh_ticket_checkmarks()
 	_update_hud()
@@ -26896,13 +27665,14 @@ func _build_icecream_machine() -> void:
 	var root := Node3D.new()
 	root.name = "SoftServeStation"
 	root.position = _icecream_station_world_pos()
-	root.rotation_degrees = ICECREAM_STATION_ROT
+	root.rotation_degrees = icecream_station_rot
+	root.scale = Vector3.ONE * icecream_station_scale
 	world.add_child(root)
 	icecream_root = root
 
-	var body_mat := _make_soda_metal_mat(Color(0.78, 0.80, 0.82), 0.86, 0.2)
+	var body_mat := _make_soda_metal_mat(Color(0.63, 0.67, 0.71), 0.98, 0.12)
 	var dark_mat := _make_soda_metal_mat(Color(0.12, 0.13, 0.15), 0.88, 0.34)
-	var trim_mat := _make_soda_metal_mat(Color(0.94, 0.95, 0.92), 0.38, 0.18)
+	var trim_mat := _make_soda_metal_mat(Color(0.012, 0.015, 0.019), 0.92, 0.18)
 
 	## Slim cabinet so it tucks beside the fountain without eating counter space.
 	var body := MeshInstance3D.new()
@@ -26922,6 +27692,7 @@ func _build_icecream_machine() -> void:
 	top_lid.position = Vector3(0.0, 0.526, 0.0)
 	top_lid.material_override = trim_mat
 	root.add_child(top_lid)
+	_build_icecream_mascot(root)
 
 	var lower_trim := MeshInstance3D.new()
 	lower_trim.name = "LowerCabinetTrim"
@@ -26982,14 +27753,14 @@ func _build_icecream_machine() -> void:
 	## Same size as the grab cone (cup-nest style) — no undersized deco cones.
 	var cone_rack := Node3D.new()
 	cone_rack.name = "ConeRack"
-	cone_rack.position = Vector3(0.34, 0.373, 0.32)
+	cone_rack.position = icecream_cone_pull_local
 	root.add_child(cone_rack)
 	var cone_nest_step := 0.015
 	for i in 3:
 		var deco := _create_icecream_cone_node(false)
-		## Nested behind / slightly above the grab cone so the stack reads as one nest.
-		deco.position = Vector3(0.0, float(i + 1) * cone_nest_step, -float(i + 1) * 0.005)
-		deco.rotation_degrees = Vector3(-10.0, 8.0 + float(i) * 2.5, 0.0)
+		## Keep every cone on one axis; only the vertical nesting changes.
+		deco.position = Vector3(0.0, float(i + 1) * cone_nest_step, 0.0)
+		deco.rotation_degrees = ICECREAM_CONE_STACK_ROT
 		cone_rack.add_child(deco)
 	## Grab cone sits at the front/bottom of the nest — same pose as deco cones.
 	icecream_cone_home = cone_rack.to_global(Vector3.ZERO)
@@ -27029,6 +27800,35 @@ func _build_icecream_machine() -> void:
 
 	_spawn_and_bind_empty_icecream_cone()
 	_build_icecream_stream_fx()
+
+
+func _build_icecream_mascot(machine_root: Node3D) -> void:
+	if machine_root == null or not ResourceLoader.exists(ICECREAM_MASCOT_MESH):
+		push_warning("Ice-cream mascot mesh missing: %s" % ICECREAM_MASCOT_MESH)
+		return
+	var mascot_mesh := load(ICECREAM_MASCOT_MESH) as Mesh
+	if mascot_mesh == null:
+		push_warning("Ice-cream mascot failed to load: %s" % ICECREAM_MASCOT_MESH)
+		return
+	var raw := mascot_mesh.get_aabb()
+	if raw.size.y <= 0.001:
+		push_warning("Ice-cream mascot has no usable height")
+		return
+	var mascot := MeshInstance3D.new()
+	mascot.name = "SmilingIceCreamMascot"
+	mascot.mesh = mascot_mesh
+	mascot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var fit_scale := ICECREAM_MASCOT_TARGET_H / raw.size.y
+	mascot.scale = Vector3.ONE * fit_scale
+	## Center the authored mesh on the lid and seat its lowest point just above
+	## the black trim. The OBJ conversion keeps the character's face on local +Z,
+	## matching the machine's pour face after the station yaw is applied.
+	mascot.position = Vector3(
+		-(raw.position.x + raw.size.x * 0.5) * fit_scale,
+		0.558 - raw.position.y * fit_scale,
+		-(raw.position.z + raw.size.z * 0.5) * fit_scale
+	)
+	machine_root.add_child(mascot)
 
 
 func _create_icecream_cone_node(grabbable: bool = true) -> Node3D:
@@ -27103,8 +27903,7 @@ func _create_icecream_cone_node(grabbable: bool = true) -> Node3D:
 func _spawn_and_bind_empty_icecream_cone() -> void:
 	icecream_cone_root = _create_icecream_cone_node(true)
 	world.add_child(icecream_cone_root)
-	icecream_cone_root.global_position = icecream_cone_home
-	icecream_cone_root.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
+	icecream_cone_root.global_transform = _icecream_cone_stack_transform()
 	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
 	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
 	var ice_on := _owns_icecream_machine()
@@ -27119,6 +27918,7 @@ func _spawn_and_bind_empty_icecream_cone() -> void:
 func _reset_icecream_cone_to_home() -> void:
 	_cancel_auto_hand_finished_icecream()
 	icecream_cone_held = false
+	_icecream_fill_soft_lock = false
 	icecream_cone_fill = 0.0
 	_hide_icecream_stream()
 	if mp_enabled:
@@ -27130,8 +27930,7 @@ func _reset_icecream_cone_to_home() -> void:
 		return
 	var ice_on := _owns_icecream_machine()
 	icecream_cone_root.visible = ice_on
-	icecream_cone_root.global_position = icecream_cone_home
-	icecream_cone_root.rotation_degrees = Vector3(-10.0, 8.0, 0.0)
+	icecream_cone_root.global_transform = _icecream_cone_stack_transform()
 	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
 	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
 	if icecream_cone_area != null:
@@ -27181,6 +27980,9 @@ func _begin_icecream_cone_hold() -> bool:
 	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		_spawn_and_bind_empty_icecream_cone()
 	icecream_cone_held = true
+	## A fresh cone initially settles beneath the nozzle. Moving it deliberately
+	## outside the fill zone releases this soft lock immediately.
+	_icecream_fill_soft_lock = true
 	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
 	icecream_swirl_root = icecream_cone_root.get_node_or_null("SoftServeSwirl") as Node3D
 	if icecream_cone_area != null:
@@ -27224,8 +28026,12 @@ func _icecream_cone_hold_point(screen_pos: Vector2) -> Vector3:
 	if tip != Vector3.ZERO:
 		var seat := Vector3(tip.x, tip.y - ICECREAM_CONE_H - 0.045 - ICECREAM_CONE_FILL_DROP, tip.z)
 		var d := Vector2(hit.x - seat.x, hit.z - seat.z).length()
+		if _icecream_fill_soft_lock and d > ICECREAM_MAGNET_RADIUS * 1.15:
+			_icecream_fill_soft_lock = false
 		if d < ICECREAM_MAGNET_RADIUS:
-			var pull := clampf(1.0 - d / ICECREAM_MAGNET_RADIUS, 0.0, 1.0) * 0.62
+			var pull := clampf(1.0 - d / ICECREAM_MAGNET_RADIUS, 0.0, 1.0) * 0.74
+			if _icecream_fill_soft_lock:
+				pull = maxf(pull, 0.90)
 			hit = hit.lerp(seat, pull)
 			hit.y = lerpf(hold_y, seat.y, pull)
 	hit = _icecream_cone_machine_safe_point(hit)
@@ -27239,36 +28045,30 @@ func _icecream_cone_machine_safe_point(world_pos: Vector3) -> Vector3:
 	## Keep the carried cone on the cook face — never slip behind (esp. left flank).
 	var serve_radius := lerpf(ICECREAM_CONE_R, 0.076, clampf(icecream_cone_fill, 0.0, 1.0))
 	var min_front_z := 0.225 + serve_radius
-	## Wide front band + left wrap (local −X = camera-left of soft-serve).
-	var in_front_band: bool = absf(local.x) <= 0.52 and local.y >= -0.08 and local.y <= 0.98
-	var on_left_flank: bool = local.x <= -0.06 and local.x >= -0.72 and local.y <= 0.98
-	if in_front_band or on_left_flank:
+	## Only block while the cone overlaps the actual 10-inch cabinet. The former
+	## meter-wide band and left wrap prevented serving customers 2 and 3.
+	var in_front_band: bool = absf(local.x) <= 0.20 and local.y >= -0.08 and local.y <= 0.98
+	if in_front_band:
 		local.z = maxf(local.z, min_front_z)
 	return icecream_root.to_global(local)
 
 
 func _add_icecream_cone_front_wall(root: Node3D) -> void:
-	## Invisible collider on the cook face + left wrap so the cone can't poke behind.
+	## Narrow invisible collider on the cabinet itself. Once the cone clears the
+	## machine edge it can travel freely toward every customer opening.
 	if root == null:
 		return
 	var wall := StaticBody3D.new()
 	wall.name = "ConeFrontInvisibleWall"
 	wall.collision_layer = 1
 	wall.collision_mask = 0
-	## Main cook-face slab.
+	## Main cook-face slab, matched to the cabinet rather than a wide service lane.
 	var face := CollisionShape3D.new()
 	var face_box := BoxShape3D.new()
-	face_box.size = Vector3(0.58, 0.92, 0.07)
+	face_box.size = Vector3(0.30, 0.92, 0.07)
 	face.shape = face_box
 	face.position = Vector3(0.0, 0.46, 0.235)
 	wall.add_child(face)
-	## Left-hand wrap (stops sliding around the camera-left edge into the street side).
-	var left := CollisionShape3D.new()
-	var left_box := BoxShape3D.new()
-	left_box.size = Vector3(0.10, 0.92, 0.42)
-	left.shape = left_box
-	left.position = Vector3(-0.30, 0.46, 0.05)
-	wall.add_child(left)
 	root.add_child(wall)
 
 
@@ -27686,6 +28486,7 @@ func _hide_icecream_stream() -> void:
 
 
 func _put_icecream_cone_down() -> void:
+	_icecream_fill_soft_lock = false
 	if not icecream_cone_held:
 		return
 	icecream_cone_held = false
@@ -27827,6 +28628,9 @@ func _begin_icecream_customer_hand(customer: Node3D) -> void:
 	_cancel_auto_hand_finished_icecream()
 	selected_customer = customer
 	_highlight_tickets()
+	customer.set_meta("ticket_build_clock_stopped", true)
+	if customer.has_method("stop_order_clock"):
+		customer.stop_order_clock()
 	icecream_cone_held = false
 	_hide_icecream_stream()
 	if mp_enabled:
@@ -28126,6 +28930,8 @@ func _update_held_burnt_icecream_cone(_delta: float) -> void:
 
 
 func _garbage_lerp_target_world() -> Vector3:
+	if physical_garbage_target != null and is_instance_valid(physical_garbage_target):
+		return physical_garbage_target.global_position
 	if camera != null and grill_trash_btn != null and is_instance_valid(grill_trash_btn):
 		var r := grill_trash_btn.get_global_rect()
 		var screen := r.position + r.size * 0.5
@@ -28153,8 +28959,7 @@ func _release_burnt_icecream_cone_to_garbage() -> void:
 		if root != null and is_instance_valid(root):
 			root.queue_free()
 	)
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	_flash("Burnt cone tossed", Color("B0BEC5"))
 
 
@@ -28922,51 +29727,38 @@ func _add_ice_dispenser_spout(group: Node3D, parent: Node3D, local_pos: Vector3)
 
 
 func _build_soda_cup_rack(station: Node3D) -> void:
-	## Black-metal tube dispenser — stack matches the grabable cup size exactly.
+	## Open cup stack on top of the machine.  The old black sleeve made the
+	## supply look enclosed and left only a tiny click target below the cups.
 	var rack := Node3D.new()
 	rack.name = "CupRack"
-	## Top cup tube sits visibly on top of the two-spigot machine.
-	rack.position = SODA_CUP_RACK_LOCAL
+	## Cups sit visibly on top of the two-spigot machine.
+	rack.position = soda_cup_rack_pos
+	rack.rotation_degrees = soda_cup_rack_rot
+	rack.scale = Vector3.ONE * soda_cup_rack_scale
 	station.add_child(rack)
 
-	var tube_mat := _make_soda_metal_mat(Color(0.02, 0.02, 0.025, 0.38), 0.84, 0.24)
-	tube_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	tube_mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	tube_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	## Grab cup bottom sits here; decorative nest stacks above it.
+	## Grab cup mouth sits here; the complete supply is stored upside down.
 	var stack_base := SODA_CUP_STACK_BASE_LOCAL
-	var nest_step := 0.042 ## Tall enough to read as a vertical stack (was 0.0175 ≈ 2 cups)
-	var spare_count := 9
+	## Five tightly nested inverted cups read as a supply without becoming a tall sleeve.
+	var nest_step := 0.034
+	var spare_count := 5
 
-	var tube := MeshInstance3D.new()
-	tube.name = "CupStackCylinder"
-	var tube_mesh := CylinderMesh.new()
-	tube_mesh.top_radius = CUP_SHELL_TOP_R + 0.018
-	tube_mesh.bottom_radius = CUP_SHELL_TOP_R + 0.018
-	tube_mesh.height = 0.92
-	tube_mesh.radial_segments = 32
-	tube_mesh.cap_top = false
-	tube_mesh.cap_bottom = false
-	tube.mesh = tube_mesh
-	tube.position = Vector3(0.0, 0.30, 0.03)
-	tube.material_override = tube_mat
-	tube.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	rack.add_child(tube)
-
-	## Nested decorative cups above the grabable one — same mesh/size (no extra rim rings).
-	var stack_mat := _make_clear_cup_material(0.16)
+	## Nested decorative cups above the grabable one — slightly stronger alpha
+	## keeps the exposed supply readable against bright outdoor backgrounds.
+	var stack_mat := _make_clear_cup_material(0.24)
 	for i in spare_count:
 		var nest_y := float(i + 1) * nest_step
 		var spare := MeshInstance3D.new()
 		spare.name = "SpareCup_%d" % i
 		spare.mesh = _make_solo_cup_shell_mesh(CUP_SHELL_TOP_R, CUP_SHELL_BOT_R, CUP_SHELL_H, 0.0034)
 		spare.position = stack_base + Vector3(0.0, CUP_SHELL_H * 0.5 + nest_y, 0.0)
+		spare.rotation_degrees = SODA_CUP_STACK_ROT
 		spare.material_override = stack_mat
 		spare.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		rack.add_child(spare)
 
-	## Grab volume — nest / open mouth only (keep below the syrup tanks).
+	## Large grab volume surrounds the whole visible stack, so clicking any cup
+	## dispenses one to the fill station instead of requiring the tiny old mouth.
 	var rack_grab := Area3D.new()
 	rack_grab.name = "CupRackGrab"
 	rack_grab.input_ray_pickable = true
@@ -28974,18 +29766,18 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	rack_grab.collision_mask = 0
 	rack_grab.monitoring = false
 	rack_grab.monitorable = true
-	rack_grab.position = Vector3(0.0, -0.04, 0.07)
+	rack_grab.position = Vector3(0.0, 0.14, 0.03)
 	var rack_shape := CollisionShape3D.new()
 	var rack_box := BoxShape3D.new()
-	rack_box.size = Vector3(0.20, 0.15, 0.18)
+	rack_box.size = Vector3(0.34, 0.48, 0.32)
 	rack_shape.shape = rack_box
 	rack_grab.add_child(rack_shape)
 	rack.add_child(rack_grab)
 
-	## Grabable empty sits at the bottom of the nest — same size as the decorative cups.
-	## stack_base is the cup root (floor); shell mesh is centered +H/2 above it.
-	cup_home = rack.to_global(stack_base)
-	cup_home_rot = station.global_rotation_degrees
+	## Grabable empty is inverted with the decorative cups. Raising its authored
+	## root by one shell height keeps the mouth seated at stack_base.
+	cup_home = rack.to_global(_cup_rack_root_local())
+	cup_home_rot = _cup_rack_home_rotation()
 	if cup_rest == Vector3.ZERO:
 		cup_rest = _cup_rest_global()
 		cup_rest_rot = _cup_rest_rotation()
@@ -29011,6 +29803,10 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 
 func _clear_all_drink_cups() -> void:
+	if _cup_dispense_to_fill_tween != null and is_instance_valid(_cup_dispense_to_fill_tween):
+		_cup_dispense_to_fill_tween.kill()
+	_cup_dispense_to_fill_tween = null
+	_cup_dispensing_to_fill = false
 	for c in parked_cups:
 		if c != null and is_instance_valid(c):
 			c.queue_free()
@@ -29146,7 +29942,9 @@ func _create_drink_cup_node() -> Node3D:
 	rim_mesh.outer_radius = CUP_SHELL_TOP_R + lip
 	rim.mesh = rim_mesh
 	rim.position = Vector3(0.0, CUP_SHELL_H - 0.002, 0.0)
-	rim.material_override = _make_clear_cup_material(0.22)
+	var rim_mat := _make_clear_cup_material(0.22)
+	rim_mat.render_priority = CUP_DRAW_PRIORITY + 6
+	rim.material_override = rim_mat
 	_boost_cup_draw_order(rim)
 	root.add_child(rim)
 
@@ -29206,7 +30004,7 @@ func _create_drink_cup_node() -> Node3D:
 	foam_mat.rim_tint = 0.85
 	foam_mat.no_depth_test = true
 	foam_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	foam_mat.render_priority = CUP_DRAW_PRIORITY
+	foam_mat.render_priority = CUP_DRAW_PRIORITY + 4
 	fizz_mesh.material_override = foam_mat
 	_boost_cup_draw_order(fizz_mesh)
 	surface_pivot.add_child(fizz_mesh)
@@ -29249,40 +30047,40 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 		return
 	var logo := MeshInstance3D.new()
 	logo.name = "BurgerPalsCupLogo"
-	logo.mesh = _make_cup_curved_label_mesh(1.462, 0.084, CUP_SHELL_H * 0.54, 16, 4, 0.0065)
+	logo.mesh = _make_cup_curved_label_mesh(1.08, 0.054, CUP_SHELL_H * 0.52, 16, 4, 0.0065)
 	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
 	mat.albedo_texture = tex
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.23) ## half prior 0.46 — more see-through on the cup
+	mat.albedo_color = Color(0.90, 0.94, 0.98, 0.1725) ## 25% clearer and less sticker-bright
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.roughness = 0.11
+	mat.roughness = 0.24
 	mat.metallic = 0.0
 	mat.clearcoat_enabled = true
-	mat.clearcoat = 1.0
-	mat.clearcoat_roughness = 0.025
+	mat.clearcoat = 0.48
+	mat.clearcoat_roughness = 0.08
 	mat.rim_enabled = true
-	mat.rim = 0.28
-	mat.rim_tint = 0.75
+	mat.rim = 0.14
+	mat.rim_tint = 0.48
 	## Foreground tray layer so burgers cannot punch through the cup logo.
 	mat.no_depth_test = true
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	mat.render_priority = CUP_DRAW_PRIORITY
+	mat.render_priority = CUP_DRAW_PRIORITY + 5
 	logo.material_override = mat
 	logo.sorting_offset = 0.0
 	root.add_child(logo)
 
 	var gloss := MeshInstance3D.new()
 	gloss.name = "BurgerPalsCupLogoGloss"
-	gloss.mesh = _make_cup_curved_label_mesh(1.343, 0.028, CUP_SHELL_H * 0.64, 14, 2, 0.0075)
+	gloss.mesh = _make_cup_curved_label_mesh(0.96, 0.017, CUP_SHELL_H * 0.61, 14, 2, 0.0075)
 	gloss.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var gloss_mat := StandardMaterial3D.new()
 	gloss_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	gloss_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	gloss_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	gloss_mat.albedo_color = Color(0.82, 0.94, 1.0, 0.20)
+	gloss_mat.albedo_color = Color(0.82, 0.94, 1.0, 0.075)
 	gloss_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	gloss_mat.roughness = 0.03
 	gloss_mat.metallic = 0.0
@@ -29291,7 +30089,7 @@ func _add_cup_burger_pals_logo(root: Node3D) -> void:
 	gloss_mat.clearcoat_roughness = 0.01
 	gloss_mat.no_depth_test = true
 	gloss_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	gloss_mat.render_priority = CUP_DRAW_PRIORITY
+	gloss_mat.render_priority = CUP_DRAW_PRIORITY + 6
 	gloss.material_override = gloss_mat
 	gloss.sorting_offset = 0.0
 	root.add_child(gloss)
@@ -29350,6 +30148,7 @@ func _spawn_and_bind_empty_cup() -> void:
 	cup_home = _cup_rack_seat_global()
 	root.global_position = cup_home if cup_home != Vector3.ZERO else Vector3.ZERO
 	root.rotation_degrees = cup_home_rot
+	root.scale = Vector3.ONE * soda_cup_rack_scale
 	_bind_cup_refs(root)
 	cup_flavor = ""
 	cup_soda_fill = 0.0
@@ -29669,6 +30468,7 @@ func _promote_cup_to_active(root: Node3D) -> void:
 		if not prev_used:
 			cup_root.global_position = cup_home
 			cup_root.rotation_degrees = cup_home_rot
+			cup_root.scale = Vector3.ONE * soda_cup_rack_scale
 		else:
 			_save_active_cup_meta()
 			cup_root.set_meta("on_steel", false)
@@ -29920,7 +30720,9 @@ void fragment() {
 """
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
-	mat.render_priority = CUP_DRAW_PRIORITY
+	## Draw the saturated drink after the clear shell. Equal priorities allowed
+	## camera distance to flip their alpha order and sometimes fog the liquid.
+	mat.render_priority = CUP_DRAW_PRIORITY + 2
 	## Flat pop by default — callers opt into pour cream via pour_blend.
 	_apply_soda_liquid_gradient(mat, col, 0.0, 0.0)
 	return mat
@@ -29929,7 +30731,7 @@ void fragment() {
 func _make_soda_surface_material(col: Color) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = _get_soda_surface_shader()
-	mat.render_priority = CUP_DRAW_PRIORITY + 1
+	mat.render_priority = CUP_DRAW_PRIORITY + 3
 	_apply_soda_surface_look(mat, col, 0.0, 0.0)
 	return mat
 
@@ -30168,9 +30970,11 @@ func _boost_cup_draw_order(gi: GeometryInstance3D) -> void:
 	gi.sorting_offset = 10.0
 	var m := gi.material_override
 	if m is BaseMaterial3D:
-		(m as BaseMaterial3D).render_priority = CUP_DRAW_PRIORITY
+		var bm := m as BaseMaterial3D
+		bm.render_priority = maxi(bm.render_priority, CUP_DRAW_PRIORITY)
 	elif m is ShaderMaterial:
-		(m as ShaderMaterial).render_priority = CUP_DRAW_PRIORITY
+		var sm := m as ShaderMaterial
+		sm.render_priority = maxi(sm.render_priority, CUP_DRAW_PRIORITY)
 
 
 func _make_cup_bubble_particles() -> GPUParticles3D:
@@ -30208,8 +31012,8 @@ func _make_cup_bubble_particles() -> GPUParticles3D:
 	draw.cull_mode = BaseMaterial3D.CULL_BACK
 	draw.render_priority = CUP_DRAW_PRIORITY
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.0038
-	sphere.height = 0.0076
+	sphere.radius = 0.0026
+	sphere.height = 0.0052
 	sphere.material = draw
 	fx.draw_pass_1 = sphere
 	fx.material_override = draw
@@ -30430,7 +31234,7 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 	var n := mini(mm.instance_count, 40)
 	var any_alive := false
 	for i in n:
-		## Procedural mid-cup pearls — denser / larger so idle pop reads as carbonated.
+		## Procedural mid-cup pearls — visible carbonation without oversized white beads.
 		var ph := float(i) * 1.7 + tsec * 0.55
 		var t := 0.12 + fmod(ph * 0.11 + float(i) * 0.017, 0.72)
 		var y := liquid_h * t
@@ -30438,8 +31242,8 @@ func _update_parked_cup_idle_bubbles(root: Node3D, fill: float, linger: float, _
 		var ang := ph * 1.3 + float(i) * 0.91
 		var rad := r_at * (0.18 + 0.62 * absf(sin(ph * 0.9)))
 		var pos := Vector3(cos(ang) * rad, y + sin(ph * 2.1) * 0.004, sin(ang) * rad)
-		var pulse := 0.82 + 0.38 * absf(sin(tsec * 2.4 + float(i) * 0.8))
-		var s := pulse * lerpf(0.95, 1.45, linger_t)
+		var pulse := 0.76 + 0.24 * absf(sin(tsec * 2.4 + float(i) * 0.8))
+		var s := pulse * lerpf(0.72, 1.0, linger_t)
 		var alpha := clampf(0.52 + 0.32 * linger_t, 0.48, 0.88) * pulse
 		any_alive = true
 		mm.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * s), pos))
@@ -30613,7 +31417,7 @@ func _set_soda_flavor(fid: String) -> void:
 	_sync_soda_spout_to_flavor()
 	if game_audio:
 		game_audio.play_click()
-	_flash("Flavor: %s — tap a brand to switch" % str(SODA_FLAVOR_LABELS.get(fid, fid)), Color("FFE082"))
+	_flash("COLA ready — hold the cup under SODA", Color("FFE082"))
 	if mp_enabled and not _mp_applying:
 		mp_soda_flavor.rpc(fid)
 
@@ -30744,6 +31548,97 @@ func _soda_slot_soda_jackpot_burst(tip: Vector3) -> void:
 			)
 
 
+func _load_player_camera_settings() -> void:
+	var cfg := ConfigFile.new()
+	var loaded := cfg.load(GFX_CFG_PATH) == OK
+	var original_reset_done := loaded and bool(cfg.get_value(CAMERA_CFG_SECTION, CAMERA_ORIGINAL_RESET_KEY, false))
+	if original_reset_done:
+		player_camera_height = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "height", player_camera_height)), 0.8, 2.8)
+		player_camera_x = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "x", player_camera_x)), -1.5, 1.5)
+		player_camera_z = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "z", player_camera_z)), -3.5, -0.35)
+		player_camera_fov = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "fov", player_camera_fov)), 25.0, 100.0)
+		player_camera_tilt = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "tilt", player_camera_tilt)), -45.0, 35.0)
+		player_camera_yaw = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "yaw", player_camera_yaw)), 150.0, 210.0)
+		player_camera_roll = clampf(float(cfg.get_value(CAMERA_CFG_SECTION, "roll", player_camera_roll)), -25.0, 25.0)
+	else:
+		_set_player_camera_original_view()
+		_save_player_camera_settings()
+
+
+func _apply_player_camera_settings() -> void:
+	if camera == null or not is_instance_valid(camera):
+		return
+	slot_camera_base_pos = Vector3(player_camera_x, player_camera_height, player_camera_z)
+	camera.position = slot_camera_base_pos
+	camera.rotation_degrees = Vector3(player_camera_tilt, player_camera_yaw, player_camera_roll)
+	camera.fov = player_camera_fov
+
+
+func _save_player_camera_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(CAMERA_CFG_SECTION, "height", player_camera_height)
+	cfg.set_value(CAMERA_CFG_SECTION, "x", player_camera_x)
+	cfg.set_value(CAMERA_CFG_SECTION, "z", player_camera_z)
+	cfg.set_value(CAMERA_CFG_SECTION, "fov", player_camera_fov)
+	cfg.set_value(CAMERA_CFG_SECTION, "tilt", player_camera_tilt)
+	cfg.set_value(CAMERA_CFG_SECTION, "yaw", player_camera_yaw)
+	cfg.set_value(CAMERA_CFG_SECTION, "roll", player_camera_roll)
+	cfg.set_value(CAMERA_CFG_SECTION, CAMERA_ORIGINAL_RESET_KEY, true)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _player_camera_value(key: String) -> float:
+	match key:
+		"cam_height": return player_camera_height
+		"cam_x": return player_camera_x
+		"cam_z": return player_camera_z
+		"cam_fov": return player_camera_fov
+		"cam_tilt": return player_camera_tilt
+		"cam_yaw": return player_camera_yaw
+		"cam_roll": return player_camera_roll
+	return 0.0
+
+
+func _set_player_camera_value(key: String, val: float) -> void:
+	match key:
+		"cam_height": player_camera_height = clampf(val, 0.8, 2.8)
+		"cam_x": player_camera_x = clampf(val, -1.5, 1.5)
+		"cam_z": player_camera_z = clampf(val, -3.5, -0.35)
+		"cam_fov": player_camera_fov = clampf(val, 25.0, 100.0)
+		"cam_tilt": player_camera_tilt = clampf(val, -45.0, 35.0)
+		"cam_yaw": player_camera_yaw = clampf(val, 150.0, 210.0)
+		"cam_roll": player_camera_roll = clampf(val, -25.0, 25.0)
+	_apply_player_camera_settings()
+	_save_player_camera_settings()
+
+
+func _set_player_camera_original_view() -> void:
+	player_camera_height = 1.65
+	player_camera_x = 0.0
+	player_camera_z = -1.62
+	player_camera_fov = 58.0
+	player_camera_tilt = -8.65
+	player_camera_yaw = 180.0
+	player_camera_roll = 0.0
+
+
+func _reset_player_camera_settings() -> void:
+	_set_player_camera_original_view()
+	_apply_player_camera_settings()
+	_save_player_camera_settings()
+	_sync_player_camera_hidden_ui()
+
+
+func _sync_player_camera_hidden_ui() -> void:
+	for key in ["cam_height", "cam_x", "cam_z", "cam_fov", "cam_tilt", "cam_yaw", "cam_roll"]:
+		var val := _player_camera_value(key)
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(val)
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = ("%.1f°" % val) if key in ["cam_fov", "cam_tilt", "cam_yaw", "cam_roll"] else ("%.2f" % val)
+
+
 func _start_slot_camera_shake(duration: float = 2.0) -> void:
 	slot_camera_shake_t = maxf(slot_camera_shake_t, duration)
 	slot_camera_shake_total = maxf(slot_camera_shake_total, duration)
@@ -30828,34 +31723,16 @@ func _begin_cup_hold() -> bool:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	var mouse := get_viewport().get_mouse_position()
+	## Rack clicks dispense; the placed cup itself is the second click target.
+	if _cup_rack_ray_hit(mouse):
+		return _dispense_cup_to_fill_station()
 	var target := _nearest_cup_at_screen(mouse)
-	## Prefer taking from the CUPS holder when the ray hits the rack (even if a tray cup is nearer).
-	var from_rack := _cup_rack_ray_hit(mouse)
-	var draw_from_stack := false
-	if target == null or (from_rack and (cup_root == null or not is_instance_valid(cup_root))):
-		if _tray_parked_count() >= CUP_MAX and (cup_root == null or not is_instance_valid(cup_root)):
-			_flash("Tray full — serve a drink first", Color("FFCC80"))
-			return false
-		if cup_root == null or not is_instance_valid(cup_root):
-			if from_rack:
-				_spawn_and_bind_empty_cup()
-				target = cup_root
-				draw_from_stack = true
-			else:
-				_flash("Grab a cup from the CUPS rack", Color("FFE082"))
-				return false
-		else:
-			target = cup_root
 	if target == null or not is_instance_valid(target):
+		_flash("Click CUPS to dispense a cup first", Color("FFE082"))
 		return false
 	var rescued_from_grill := _try_rescue_melting_cup(target)
 	if target != cup_root:
 		_promote_cup_to_active(target)
-	## Empty cup sitting in the dispenser — pull it out with a stack-to-hand lerp.
-	if from_rack and cup_soda_fill < 0.05 and cup_ice_fill < 0.05 and cup_flavor == "" and cup_home != Vector3.ZERO:
-		var near_home := cup_root.global_position.distance_to(cup_home) < 0.18
-		if draw_from_stack or near_home:
-			draw_from_stack = true
 	cup_held = true
 	_cup_flip_air = false
 	_cup_flip_charging = false
@@ -30874,9 +31751,8 @@ func _begin_cup_hold() -> bool:
 	_cup_surface_wobble = 0.0
 	_cup_splash_cd = 0.0
 	_cup_machine_contact_grace = 0.0
+	_cup_spout_lock = null
 	_cup_spout_unlock_grace = 0.0
-	if draw_from_stack:
-		_cup_grab_front_block_t = CUP_GRAB_FRONT_BLOCK_SEC
 	if rescued_from_grill:
 		_flash("Saved the cup!", Color("C5E1A5"))
 	## Only reset foam when picking up an empty cup.
@@ -30891,25 +31767,136 @@ func _begin_cup_hold() -> bool:
 	if cup_area:
 		cup_area.input_ray_pickable = false
 	if game_audio:
-		if draw_from_stack and game_audio.has_method("play_rack_take"):
-			game_audio.play_rack_take()
 		game_audio.play_click()
 	_flash("Hold under SODA or ICE — release onto the tray", Color("80DEEA"))
-	if draw_from_stack:
-		_start_cup_draw_from_rack()
-	else:
-		cup_drawing = false
+	cup_drawing = false
 	if mp_enabled:
 		_mp_send_held_cup_pose(true)
 	return true
 
 
+func _dispense_cup_to_fill_station() -> bool:
+	## First click on CUPS: smoothly carry one empty cup from the visible stack
+	## to the drip/fill station. It becomes pickable when the move completes.
+	if not playing or cup_held:
+		return false
+	if _cup_dispensing_to_fill:
+		_shake_soda_cup_stack()
+		return true
+	if not _owns_soda_machine():
+		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
+		return false
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+			or ext_held or glock_held or sale_held or dragging_patty != null:
+		_flash("Hands full - put that down first", Color("FFCC80"))
+		return false
+	if cup_root == null or not is_instance_valid(cup_root):
+		if _tray_parked_count() >= CUP_MAX:
+			_flash("Tray full - serve a drink first", Color("FFCC80"))
+			return false
+		_spawn_and_bind_empty_cup()
+	if cup_root == null or not is_instance_valid(cup_root):
+		return false
+	var used := cup_soda_fill >= 0.05 or cup_ice_fill >= 0.05 or cup_flavor != ""
+	if used:
+		_flash("Finish or serve the cup on the tray first", Color("FFCC80"))
+		return false
+	_shake_soda_cup_stack()
+	var station := _cup_rest_global()
+	if station == Vector3.ZERO:
+		station = _cup_drip_tray_fallback()
+	var already_ready := cup_root.global_position.distance_to(station) < 0.06
+	cup_drawing = false
+	## A prior fill must never leave its spring/velocity attached to the next cup.
+	_cup_spout_lock = null
+	_cup_spout_unlock_grace = 0.0
+	_cup_machine_contact_grace = 0.0
+	_cup_pouring = false
+	_cup_vel = Vector3.ZERO
+	_cup_prev_pos = cup_root.global_position
+	cup_root.set_meta("on_steel", false)
+	cup_root.set_meta("steel_hold", false)
+	cup_root.set_meta("lid_down", false)
+	cup_root.set_meta("on_side", false)
+	_clear_tray_slot(cup_root)
+	if cup_area != null and is_instance_valid(cup_area):
+		cup_area.input_ray_pickable = already_ready
+	if game_audio:
+		if not already_ready and game_audio.has_method("play_rack_take"):
+			game_audio.play_rack_take()
+		game_audio.play_click()
+	if already_ready:
+		cup_root.global_position = station
+		cup_root.rotation_degrees = _cup_presented_rotation(cup_root)
+		cup_root.scale = Vector3.ONE
+		_flash("Cup ready - click the cup to pick it up", Color("80DEEA"))
+		return true
+
+	var moving_cup := cup_root
+	var target_rotation := _cup_presented_rotation(moving_cup)
+	_cup_dispensing_to_fill = true
+	if _cup_dispense_to_fill_tween != null and is_instance_valid(_cup_dispense_to_fill_tween):
+		_cup_dispense_to_fill_tween.kill()
+	_cup_dispense_to_fill_tween = create_tween()
+	_cup_dispense_to_fill_tween.set_parallel(true)
+	_cup_dispense_to_fill_tween.tween_property(
+		moving_cup, "global_position", station, CUP_DISPENSE_TO_FILL_DUR
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	_cup_dispense_to_fill_tween.tween_property(
+		moving_cup, "rotation_degrees", target_rotation, CUP_DISPENSE_TO_FILL_DUR
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	_cup_dispense_to_fill_tween.tween_property(
+		moving_cup, "scale", Vector3.ONE, CUP_DISPENSE_TO_FILL_DUR
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	_cup_dispense_to_fill_tween.chain().tween_callback(func() -> void:
+		_cup_dispensing_to_fill = false
+		_cup_dispense_to_fill_tween = null
+		if moving_cup == null or not is_instance_valid(moving_cup) or moving_cup != cup_root:
+			return
+		moving_cup.global_position = station
+		moving_cup.rotation_degrees = target_rotation
+		moving_cup.scale = Vector3.ONE
+		var moving_area := moving_cup.get_node_or_null("CupGrab") as Area3D
+		if moving_area != null and is_instance_valid(moving_area):
+			moving_area.input_ray_pickable = true
+		_flash("Cup ready - click the cup to pick it up", Color("80DEEA"))
+	)
+	return true
+
+
+func _shake_soda_cup_stack() -> void:
+	## A short physical acknowledgement on every accepted rack click.
+	if soda_root == null or not is_instance_valid(soda_root):
+		return
+	var rack := soda_root.get_node_or_null("CupRack") as Node3D
+	if rack == null or not is_instance_valid(rack):
+		return
+	if _cup_rack_shake_tween != null and is_instance_valid(_cup_rack_shake_tween):
+		_cup_rack_shake_tween.kill()
+	rack.position = soda_cup_rack_pos
+	rack.rotation_degrees = soda_cup_rack_rot
+	rack.scale = Vector3.ONE * soda_cup_rack_scale
+	_cup_rack_shake_tween = create_tween()
+	_cup_rack_shake_tween.tween_property(rack, "rotation_degrees", soda_cup_rack_rot + Vector3(0.0, 0.0, -5.5), 0.055) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_cup_rack_shake_tween.parallel().tween_property(rack, "position", soda_cup_rack_pos + Vector3(0.012, 0.010, 0.0), 0.055)
+	_cup_rack_shake_tween.tween_property(rack, "rotation_degrees", soda_cup_rack_rot + Vector3(0.0, 0.0, 4.0), 0.075) \
+			.set_trans(Tween.TRANS_SINE)
+	_cup_rack_shake_tween.parallel().tween_property(rack, "position", soda_cup_rack_pos + Vector3(-0.008, 0.004, 0.0), 0.075)
+	_cup_rack_shake_tween.tween_property(rack, "rotation_degrees", soda_cup_rack_rot, 0.10) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_cup_rack_shake_tween.parallel().tween_property(rack, "position", soda_cup_rack_pos, 0.10)
+	_cup_rack_shake_tween.tween_callback(func() -> void:
+		_cup_rack_shake_tween = null
+	)
+
+
 func _cup_rack_seat_global() -> Vector3:
-	## Live bottom-of-stack seat (matches SpareCup nest floor).
+	## Live inverted root seat (the cup mouth itself rests at stack base).
 	if soda_root != null and is_instance_valid(soda_root):
 		var rack := soda_root.get_node_or_null("CupRack") as Node3D
 		if rack != null and is_instance_valid(rack):
-			return rack.to_global(SODA_CUP_STACK_BASE_LOCAL)
+			return rack.to_global(_cup_rack_root_local())
 	return cup_home
 
 
@@ -30951,7 +31938,7 @@ func _start_cup_draw_from_rack() -> void:
 	_cup_draw_from = cup_home if cup_home != Vector3.ZERO else cup_root.global_position
 	cup_root.global_position = _cup_draw_from
 	cup_root.rotation_degrees = cup_home_rot
-	cup_root.scale = Vector3(0.86, 0.86, 0.86)
+	cup_root.scale = Vector3.ONE * (0.86 * soda_cup_rack_scale)
 	_cup_prev_pos = _cup_draw_from
 	_cup_vel = Vector3.ZERO
 	## Avoidance fights nest→hand pulls — keep it off until the draw finishes.
@@ -31010,7 +31997,7 @@ func _update_cup_draw_from_rack(delta: float) -> void:
 		lerpf(cup_home_rot.y, 10.0, e),
 		sin(e * PI) * 2.5
 	)
-	var sc := lerpf(0.86, 1.0, e)
+	var sc := lerpf(0.86 * soda_cup_rack_scale, 1.0, e)
 	cup_root.scale = Vector3(sc, sc, sc)
 	if u >= 1.0:
 		cup_drawing = false
@@ -31075,6 +32062,9 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 		if locked_d > release_dist:
 			_cup_spout_lock = null
 			_cup_spout_unlock_grace = soda_soft_unlock_grace
+			_cup_vel = Vector3.ZERO
+			if cup_root != null and is_instance_valid(cup_root):
+				_cup_prev_pos = cup_root.global_position
 			return hit
 		## Center is firm; edge pull fades hard so a short drag frees the cup.
 		var tight := clampf(1.0 - locked_d / release_dist, 0.0, 1.0)
@@ -31104,6 +32094,13 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	if best_node == null:
 		return hit
 	if best_d <= maxf(soda_soft_acquire, best_radius * 0.70):
+		if _cup_spout_lock != best_node:
+			## Enter the new bay without inheriting the last cup/bay's spring impulse.
+			_cup_vel = Vector3.ZERO
+			_cup_tilt = Vector2.ZERO
+			_cup_slosh = Vector2.ZERO
+			if cup_root != null and is_instance_valid(cup_root):
+				_cup_prev_pos = cup_root.global_position
 		_cup_spout_lock = best_node
 	var pull := clampf(1.0 - best_d / best_radius, 0.0, 1.0)
 	pull = pull * pull
@@ -31220,9 +32217,12 @@ func _update_held_cup(delta: float) -> void:
 	## Nearby alone must NOT trap the cup (that made yank-away feel glued).
 	var locked_tip := _cup_spout_lock if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) else null
 	var fill_tip: Node3D = locked_tip
-	var can_use_fill_bay := (locked_tip != null) or _cup_pouring
-	if can_use_fill_bay and fill_tip == null:
+	## A pour may remain true until the end of this frame. Do not let that stale bit
+	## pull a released/reused cup back to the previous nozzle during unlock grace.
+	var can_use_fill_bay := locked_tip != null
+	if not can_use_fill_bay and _cup_pouring and _cup_spout_unlock_grace <= 0.0:
 		fill_tip = _cup_fill_spout_nearby()
+		can_use_fill_bay = fill_tip != null
 	## Invisible wall on the aim target — stops chase→shove glitching into the cabinet.
 	## Skip near SODA/ICE seats so soft-lock can actually pull under the nozzles.
 	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay \
@@ -31242,8 +32242,14 @@ func _update_held_cup(delta: float) -> void:
 		## (that was gluing the cup so you couldn't yank away).
 		if can_use_fill_bay and fill_tip != null and is_instance_valid(fill_tip):
 			var fill_seat := _cup_target_for_spout(fill_tip)
-			desired.x = seat.x
-			desired.z = seat.z
+			## Once either bay owns the lock, center the cup on that bay's live pour
+			## marker. The cursor leash still releases immediately outside the radius.
+			if locked_tip != null:
+				desired.x = fill_seat.x
+				desired.z = fill_seat.z
+			else:
+				desired.x = seat.x
+				desired.z = seat.z
 			desired.y = fill_seat.y
 			## If the soft-lock already broke this frame, stop the bay plant.
 			if locked_tip == null and not _cup_pouring:
@@ -31555,6 +32561,150 @@ func _spawn_cup_splash_drops() -> void:
 	## Also puddle under the cup if we're whipping it over hot steel.
 	if _is_on_grill_surface(cup_root.global_position):
 		_spawn_soda_slick(cup_root.global_position, 0.04 + cup_soda_fill * 0.03, flavor)
+
+
+func _spawn_flippy_soda_eject(
+	origin: Vector3, mouth_dir: Vector3, travel_dir: Vector3, flavor: String, amount: float
+) -> void:
+	## A real mouth-first dump during a Flippy Cup toss: burst out, then fall to the steel.
+	if world == null or flavor == "" or amount <= 0.02:
+		return
+	var col: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
+	col.a = 0.9
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.roughness = 0.16
+	mat.emission_enabled = true
+	mat.emission = Color(col.r, col.g, col.b)
+	mat.emission_energy_multiplier = 0.16
+	mat.render_priority = CUP_DRAW_PRIORITY + 2
+	var drop_count := clampi(int(round(8.0 + amount * 14.0)), 8, 22)
+	var cook := _cook_place_bounds()
+	for i in drop_count:
+		var drop := MeshInstance3D.new()
+		drop.name = "FlippySodaDrop"
+		var sph := SphereMesh.new()
+		var r := randf_range(0.005, 0.011)
+		sph.radius = r
+		sph.height = r * randf_range(2.2, 3.4)
+		drop.mesh = sph
+		drop.material_override = mat
+		drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		world.add_child(drop)
+		drop.global_position = origin + Vector3(
+			randf_range(-0.025, 0.025), randf_range(-0.012, 0.012), randf_range(-0.025, 0.025)
+		)
+		var burst := drop.global_position \
+				+ mouth_dir * randf_range(0.08, 0.18) \
+				+ travel_dir * randf_range(0.02, 0.10) \
+				+ Vector3(randf_range(-0.06, 0.06), randf_range(-0.015, 0.035), randf_range(-0.05, 0.05))
+		var land_x := burst.x + randf_range(-0.12, 0.12)
+		var land_z := burst.z + randf_range(-0.10, 0.10)
+		if cook.size.x > 0.05 and cook.size.y > 0.05:
+			land_x = clampf(land_x, cook.position.x, cook.end.x)
+			land_z = clampf(land_z, cook.position.y, cook.end.y)
+		var land := Vector3(land_x, GRILL_SURFACE_Y + OIL_SIT_Y, land_z)
+		var out_t := randf_range(0.10, 0.17)
+		var fall_t := randf_range(0.22, 0.36)
+		var tw := create_tween()
+		tw.tween_property(drop, "global_position", burst, out_t) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(drop, "global_position", land, fall_t) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(drop, "scale", Vector3.ONE * 0.35, fall_t)
+		if i % 4 == 0:
+			var puddle_pos := land
+			var puddle_radius := 0.024 + amount * 0.022 + randf() * 0.012
+			tw.tween_callback(func() -> void:
+				_spawn_soda_slick(puddle_pos, puddle_radius, flavor)
+			)
+		tw.tween_callback(drop.queue_free)
+
+
+func _eject_flippy_ice(origin: Vector3, mouth_dir: Vector3, travel_dir: Vector3) -> void:
+	## Detach the visible cubes so the contents genuinely leave the rotating cup.
+	if cup_ice_root == null or not is_instance_valid(cup_ice_root) or world == null:
+		return
+	var cubes := cup_ice_root.get_children()
+	var cook := _cook_place_bounds()
+	for i in cubes.size():
+		var cube := cubes[i] as Node3D
+		if cube == null or not is_instance_valid(cube):
+			continue
+		var start := cube.global_position
+		cube.reparent(world, true)
+		var burst := start \
+				+ mouth_dir * randf_range(0.07, 0.16) \
+				+ travel_dir * randf_range(0.02, 0.09) \
+				+ Vector3(randf_range(-0.07, 0.07), randf_range(0.0, 0.055), randf_range(-0.06, 0.06))
+		var land_x := burst.x + randf_range(-0.15, 0.15)
+		var land_z := burst.z + randf_range(-0.12, 0.12)
+		if cook.size.x > 0.05 and cook.size.y > 0.05:
+			land_x = clampf(land_x, cook.position.x, cook.end.x)
+			land_z = clampf(land_z, cook.position.y, cook.end.y)
+		var land := Vector3(land_x, GRILL_SURFACE_Y + CUP_ICE_CUBE_SIZE * 0.58, land_z)
+		var spin := Vector3(randf_range(100.0, 240.0), randf_range(130.0, 320.0), randf_range(90.0, 230.0))
+		var out_t := randf_range(0.12, 0.2)
+		var fall_t := randf_range(0.22, 0.36)
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(cube, "global_position", burst, out_t) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(cube, "rotation_degrees", cube.rotation_degrees + spin * 0.45, out_t)
+		tw.chain().set_parallel(true)
+		tw.tween_property(cube, "global_position", land, fall_t) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_property(cube, "rotation_degrees", cube.rotation_degrees + spin, fall_t)
+		tw.chain().tween_callback(func() -> void:
+			if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
+				game_audio.trigger_hot_oil(0.35)
+			elif game_audio and game_audio.has_method("play_ice_tink"):
+				game_audio.play_ice_tink()
+		)
+		tw.tween_interval(randf_range(1.8, 3.0) if grill_on else randf_range(3.5, 5.5))
+		tw.tween_property(cube, "scale", Vector3(1.1, 0.08, 1.1) * 0.2, 0.45) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tw.tween_callback(func() -> void:
+			if is_instance_valid(cube):
+				var melt_at := cube.global_position
+				cube.queue_free()
+				_spawn_ice_melt_water_spot(melt_at)
+		)
+
+
+func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
+	if _cup_flip_contents_ejected or cup_root == null or not is_instance_valid(cup_root):
+		return
+	_cup_flip_contents_ejected = true
+	var flavor := cup_flavor
+	var soda_amount := cup_soda_fill
+	var ice_amount := cup_ice_fill
+	var origin := cup_root.to_global(Vector3(0.0, CUP_SHELL_H * 0.94, 0.0))
+	var travel_dir := _cup_flip_end - _cup_flip_start
+	travel_dir.y = 0.0
+	if travel_dir.length_squared() > 0.0001:
+		travel_dir = travel_dir.normalized()
+	if soda_amount > 0.02 and flavor != "":
+		_spawn_flippy_soda_eject(origin, mouth_dir.normalized(), travel_dir, flavor, soda_amount)
+	if ice_amount > 0.04:
+		_eject_flippy_ice(origin, mouth_dir.normalized(), travel_dir)
+	cup_flavor = ""
+	cup_soda_fill = 0.0
+	cup_ice_fill = 0.0
+	_cup_fizz = 0.0
+	_cup_fizz_peak = false
+	_cup_fizz_poof = 0.0
+	_cup_fizz_poofing = false
+	_cup_foam_linger = 0.0
+	_cup_pour_white = 0.0
+	_cup_pouring = false
+	if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
+		cup_bubble_fx.emitting = false
+	_refresh_cup_visuals()
+	_save_active_cup_meta()
+	_refresh_ticket_checkmarks()
 
 
 func _ensure_soda_overfill_cascades(count: int = 33) -> void:
@@ -32678,7 +33828,7 @@ func _refresh_cup_fizz_visual() -> void:
 		else:
 			a = 0.78 * residual ## full → 0 over ~30s
 		fm.albedo_color = Color(0.98, 0.96, 0.92, a)
-		fm.render_priority = CUP_DRAW_PRIORITY
+		fm.render_priority = CUP_DRAW_PRIORITY + 4
 	## Bubbles ride the foam; quieter on residual linger.
 	if cup_bubble_fx != null and is_instance_valid(cup_bubble_fx):
 		if head_alive:
@@ -32890,7 +34040,7 @@ func _make_ice_cube_material() -> StandardMaterial3D:
 		lerpf(0.75, pop.b, 0.35)
 	)
 	mat.emission_energy_multiplier = 0.14
-	mat.render_priority = CUP_DRAW_PRIORITY
+	mat.render_priority = CUP_DRAW_PRIORITY + 4
 	return mat
 
 
@@ -33117,6 +34267,7 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 	_cup_flip_lock_yaw = cup_root.rotation_degrees.y
 	_cup_flip_base_rot = Vector3(cup_root.rotation_degrees.x, _cup_flip_lock_yaw, 0.0)
 	_cup_flip_bobble_phase = randf() * TAU
+	_cup_flip_contents_ejected = false
 	_cup_flip_settle = false
 	_cup_flip_settle_t = 0.0
 	_cup_flip_bounce_prev = 0.0
@@ -33243,6 +34394,11 @@ func _update_cup_rim_flip(delta: float) -> void:
 		0.0
 	)
 	cup_root.global_position = pivot
+	## Once the open end faces down, the contents have lost support and leave the cup.
+	if not _cup_flip_contents_ejected:
+		var mouth_dir := cup_root.global_transform.basis.y.normalized()
+		if mouth_dir.y < -0.18:
+			_eject_cup_flip_contents(mouth_dir)
 	_update_cup_slosh(delta)
 	_update_cup_pour_white(delta)
 	if t < 1.0:
@@ -33269,7 +34425,9 @@ func _finish_cup_rim_flip() -> void:
 	cup_root.set_meta("on_side", pose == "side")
 	_cup_tilt = Vector2.ZERO
 	_cup_vel = Vector3.ZERO
-	if pose == "lid":
+	if _cup_flip_contents_ejected:
+		_flash("Flippy spill — cup emptied!", Color("80DEEA"))
+	elif pose == "lid":
 		_flash("Rim flip!", Color("FFE082"))
 	elif pose == "side":
 		_flash("Sideways!", Color("FFCC80"))
@@ -34001,8 +35159,7 @@ func _trash_held_cup() -> void:
 	_cup_pour_white = 0.0
 	_refresh_soda_tank_bubbles()
 	_refresh_ticket_checkmarks()
-	if game_audio and game_audio.has_method("play_trash"):
-		game_audio.play_trash()
+	_physical_garbage_react()
 	if had_drink:
 		_flash("Trashed drink", Color("FFAB91"))
 	else:
@@ -34024,6 +35181,10 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	if cup_root == null:
 		cup_held = false
 		cup_drawing = false
+		_cup_spout_lock = null
+		_cup_spout_unlock_grace = 0.0
+		_cup_machine_contact_grace = 0.0
+		_cup_pouring = false
 		_hide_soda_stream()
 		if game_audio and game_audio.has_method("set_ice_grind"):
 			game_audio.set_ice_grind(false)
@@ -34041,7 +35202,12 @@ func _park_cup_on_tray(keep_fill: bool = false) -> void:
 	_cup_surface_slosh = Vector2.ZERO
 	_cup_surface_spin = 0.0
 	_cup_surface_wobble = 0.0
+	_cup_spout_lock = null
+	_cup_spout_unlock_grace = 0.0
+	_cup_machine_contact_grace = 0.0
+	_cup_grab_front_block_t = 0.0
 	_cup_pouring = false
+	_cup_prev_pos = cup_root.global_position if is_instance_valid(cup_root) else Vector3.ZERO
 	if mp_enabled:
 		_mp_send_held_cup_pose(true)
 	_refresh_soda_tank_bubbles()
@@ -34589,7 +35755,7 @@ func _build_procedural_window_bunting() -> void:
 	var red_mat := _make_bunting_flag_material(Color(0.94, 0.18, 0.17))
 	var yellow_mat := _make_bunting_flag_material(Color(1.0, 0.84, 0.23))
 	var points: Array[Vector3] = []
-	var rope_steps := max(18, count * 3)
+	var rope_steps := maxi(18, count * 3)
 	for i in range(rope_steps + 1):
 		var t := float(i) / float(rope_steps)
 		points.append(Vector3(lerpf(-width * 0.5, width * 0.5, t), -sag * sin(PI * t), 0.0))
@@ -34786,6 +35952,15 @@ func _start_radio_fade_in() -> void:
 	radio.set_powered(true)
 	radio.fade_volume_in(3.0, 0.80)
 	_refresh_radio_ui()
+
+
+func _start_smooth_jazz_radio() -> void:
+	## Entering a shift always starts on the truck's friendly default station,
+	## regardless of what was previewed from the title screen.
+	if radio == null:
+		return
+	radio.select_smooth_jazz()
+	_start_radio_fade_in()
 
 
 func _build_prep_ingredients_prop() -> void:
@@ -35508,6 +36683,11 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 	_bounce_bun_click_target(pair)
 	if game_audio != null and game_audio.has_method("play_bun_thud"):
 		game_audio.play_bun_thud()
+	## In the guided lesson the bun pile is the explicit final assembly action.
+	if tutorial_mode and _tutorial_step == 11 \
+			and stations[STATION_CRAFT]["items"].has("patty") \
+			and not stations[STATION_CRAFT]["items"].has("bun_top"):
+		_add_ingredient_to_station(STATION_CRAFT, "bun_top")
 	return true
 
 
@@ -35645,7 +36825,7 @@ func _clear_cheese_hold_after_use() -> void:
 
 
 func _build_truck_radio_prop() -> void:
-	## Wall-mounted cab radio — synced each frame to the top-right 2D HUD.
+	## The exterior 3D radio is removed; the HUD radio/audio stays active.
 	if radio_root != null and is_instance_valid(radio_root):
 		radio_root.queue_free()
 	radio_root = null
@@ -35653,8 +36833,6 @@ func _build_truck_radio_prop() -> void:
 	phone_ui_anchor = null
 	radio_dial_mesh = null
 	radio_light_mat = null
-
-	_build_truck_radio_procedural()
 
 
 func _build_truck_radio_from_mesh(mesh: Mesh) -> void:
@@ -36033,6 +37211,8 @@ func _buy_supply_local(id: String) -> void:
 		_flash("Need %s to restock" % _format_money(cost), Color("EF5350"))
 		return
 	money -= cost
+	if tutorial_mode:
+		_tutorial_bought_supply = true
 	_supply_order_seq += 1
 	supply_orders.append({
 		"id": id,
@@ -36508,11 +37688,16 @@ func _commit_social_review(
 			if img.is_compressed():
 				img.decompress()
 			pic_png = img.save_png_to_buffer()
-	_apply_social_review(stars, who, text, pic)
+	var breakdown: Dictionary = {}
+	if customer != null and is_instance_valid(customer):
+		var stored = customer.get_meta("serve_breakdown", {})
+		if typeof(stored) == TYPE_DICTIONARY:
+			breakdown = (stored as Dictionary).duplicate(true)
+	_apply_social_review(stars, who, text, pic, false, breakdown)
 	_show_customer_review_stars(customer, stars, text)
 	_show_customer_review_ui(stars, text)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
-		mp_social_review.rpc(stars, who, text, pic_png)
+		mp_social_review.rpc(stars, who, text, pic_png, breakdown)
 		var nid := _customer_net_id(customer)
 		if nid >= 0:
 			mp_customer_review_stars.rpc(nid, stars, text)
@@ -36536,12 +37721,10 @@ func _show_customer_review_stars(customer: Node3D, stars: float, review_text: St
 		customer.show_review_stars(stars, review_text)
 
 
-func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
-	var short := _clip_review_quote(review_text, 78)
-	var line := "%s  %.1f/5" % [_star_bar_text(stars), clampf(stars, 0.0, 5.0)]
-	if short != "":
-		line += "\n" + short
-	_flash(line, Color("FFD54F"), 3.4)
+func _show_customer_review_ui(_stars: float, _review_text: String = "") -> void:
+	## The compact world-space star card is the only kitchen review overlay.
+	## Full review wording remains available in the phone feed, never on a body.
+	pass
 
 
 func _apply_social_review(
@@ -36549,7 +37732,8 @@ func _apply_social_review(
 	who: String,
 	text: String,
 	pic: Texture2D = null,
-	mirror: bool = false
+	mirror: bool = false,
+	breakdown: Dictionary = {}
 ) -> void:
 	## mirror=true: guest feed post only (host already owns rating totals via economy sync).
 	var clamped := clampf(stars, 0.0, 5.0)
@@ -36565,7 +37749,10 @@ func _apply_social_review(
 	if not mirror:
 		social_review_count += 1
 		social_rating_sum += clamped
-		day_social_reviews.append({"stars": clamped, "who": who, "text": text})
+		var day_post := {"stars": clamped, "who": who, "text": text}
+		if not breakdown.is_empty():
+			day_post["breakdown"] = breakdown.duplicate(true)
+		day_social_reviews.append(day_post)
 		day_social_rating_sum += clamped
 	_social_post_seq += 1
 	var post := {
@@ -36579,6 +37766,8 @@ func _apply_social_review(
 	}
 	if pic != null:
 		post["pic"] = pic
+	if not breakdown.is_empty():
+		post["breakdown"] = breakdown.duplicate(true)
 	social_reviews.push_front(post)
 	while social_reviews.size() > SOCIAL_FEED_MAX:
 		social_reviews.pop_back()
@@ -37130,12 +38319,14 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	var panel := PanelContainer.new()
 	panel.name = "EquipmentShop"
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("FFD54F")))
 	parent.add_child(panel)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 3)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_child(v)
 
 	var title := Label.new()
@@ -37151,6 +38342,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", 4)
 	row.custom_minimum_size = Vector2(0, 22)
 	parent.add_child(row)
@@ -37158,11 +38350,14 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	var copy := VBoxContainer.new()
 	copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	copy.add_theme_constant_override("separation", 0)
+	copy.custom_minimum_size.x = 0
 	copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(copy)
 
 	var name_lab := Label.new()
 	name_lab.text = _shop_item_label(id)
+	name_lab.custom_minimum_size.x = 0
+	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lab.clip_text = true
 	name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	UiFontsScript.apply_label(name_lab, true, 8)
@@ -37171,6 +38366,8 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 
 	var note_lab := Label.new()
 	note_lab.text = _shop_item_note(id)
+	note_lab.custom_minimum_size.x = 0
+	note_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	note_lab.clip_text = true
 	note_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	UiFontsScript.apply_label(note_lab, false, 7)
@@ -37182,7 +38379,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	var buy := Button.new()
 	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
 	buy.disabled = owned or not playing or blocked != ""
-	buy.custom_minimum_size = Vector2(48, 18)
+	buy.custom_minimum_size = Vector2(42, 18)
 	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 	buy.focus_mode = Control.FOCUS_NONE
 	UiFontsScript.apply_button(buy, true, 7)
@@ -37344,6 +38541,101 @@ func _apply_social_reply_remote(post_id: int, kind: String, text: String, argue:
 	_refresh_phone_feed()
 
 
+func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -> void:
+	if breakdown.is_empty():
+		return
+	var scorecard := PanelContainer.new()
+	scorecard.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	scorecard.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var score_style := StyleBoxFlat.new()
+	score_style.bg_color = Color(0.055, 0.075, 0.11, 0.96)
+	score_style.border_color = Color(0.35, 0.58, 0.82, 0.62)
+	score_style.set_border_width_all(1)
+	score_style.set_corner_radius_all(5)
+	score_style.content_margin_left = 5
+	score_style.content_margin_right = 5
+	score_style.content_margin_top = 4
+	score_style.content_margin_bottom = 5
+	scorecard.add_theme_stylebox_override("panel", score_style)
+	parent.add_child(scorecard)
+
+	var stack := VBoxContainer.new()
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.add_theme_constant_override("separation", 1)
+	scorecard.add_child(stack)
+	var title := Label.new()
+	title.text = "ORDER RESULTS"
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_label(title, true, 7)
+	title.add_theme_color_override("font_color", Color("90CAF9"))
+	stack.add_child(title)
+
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 3)
+	stack.add_child(grid)
+	var specs: Array[Dictionary] = [
+		{"id": "accuracy", "label": "ACC"},
+		{"id": "doneness", "label": "COOK"},
+		{"id": "payout", "label": "PAY"},
+		{"id": "tip", "label": "TIP"},
+		{"id": "combo", "label": "COMBO"},
+	]
+	for spec in specs:
+		var id := str(spec["id"])
+		var cell := VBoxContainer.new()
+		## Flexible cells keep the three-column scorecard inside the narrow phone.
+		cell.custom_minimum_size = Vector2(0, 25)
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_theme_constant_override("separation", -2)
+		grid.add_child(cell)
+		var caption := Label.new()
+		caption.text = str(spec["label"])
+		caption.clip_text = true
+		caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		UiFontsScript.apply_label(caption, true, 6)
+		caption.add_theme_color_override("font_color", Color(0.48, 0.57, 0.68))
+		cell.add_child(caption)
+		var value := Label.new()
+		value.text = str(breakdown.get(id, "—"))
+		value.clip_text = true
+		value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		value.tooltip_text = value.text
+		value.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		UiFontsScript.apply_label(value, true, 7)
+		value.add_theme_color_override(
+			"font_color", breakdown.get("%s_color" % id, Color.WHITE) as Color
+		)
+		cell.add_child(value)
+
+
+func _wii_metric_accent(id: String) -> Color:
+	match id:
+		"accuracy", "speed":
+			return Color("39BCEB")
+		"doneness", "payout":
+			return Color("7BCB55")
+		"seasoning", "combo":
+			return Color("FFB63F")
+		"freshness", "tip":
+			return Color("A37BEF")
+		_:
+			return Color("39BCEB")
+
+
+func _wii_readable_color(color: Color) -> Color:
+	var luminance := color.r * 0.299 + color.g * 0.587 + color.b * 0.114
+	return color.darkened(0.42 if luminance > 0.60 else 0.18)
+
+
 func _refresh_phone_feed() -> void:
 	if phone_feed_box == null or not is_instance_valid(phone_feed_box):
 		return
@@ -37379,6 +38671,7 @@ func _refresh_phone_feed() -> void:
 			social_reviews[post_i] = post
 		var card := PanelContainer.new()
 		card.mouse_filter = Control.MOUSE_FILTER_STOP
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var card_sb := StyleBoxFlat.new()
 		card_sb.bg_color = Color(0.09, 0.11, 0.16, 0.9)
 		card_sb.set_corner_radius_all(4)
@@ -37397,6 +38690,7 @@ func _refresh_phone_feed() -> void:
 		phone_feed_box.add_child(card)
 		var cv := VBoxContainer.new()
 		cv.add_theme_constant_override("separation", 2)
+		cv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		cv.mouse_filter = Control.MOUSE_FILTER_STOP
 		card.add_child(cv)
 		var head := HBoxContainer.new()
@@ -37417,9 +38711,13 @@ func _refresh_phone_feed() -> void:
 		var body := Label.new()
 		body.text = str(post.get("text", ""))
 		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		UiFontsScript.apply_label(body, false, 8)
 		body.add_theme_color_override("font_color", Color(0.68, 0.74, 0.82))
 		cv.add_child(body)
+		var breakdown: Dictionary = post.get("breakdown", {}) as Dictionary
+		if not breakdown.is_empty():
+			_add_phone_review_breakdown(cv, breakdown)
 		var pic = post.get("pic", null)
 		if pic is Texture2D and is_instance_valid(pic):
 			var shot := TextureRect.new()
@@ -37436,6 +38734,7 @@ func _refresh_phone_feed() -> void:
 			var ours := Label.new()
 			ours.text = "Burger Pals: %s" % reply_text
 			ours.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			ours.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			UiFontsScript.apply_label(ours, true, 7)
 			ours.add_theme_color_override("font_color", Color(0.72, 0.88, 1.0))
 			cv.add_child(ours)
@@ -37444,6 +38743,7 @@ func _refresh_phone_feed() -> void:
 				var theirs := Label.new()
 				theirs.text = "%s: %s" % [str(post.get("who", "Guest")), argue_text]
 				theirs.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				theirs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				UiFontsScript.apply_label(theirs, false, 7)
 				theirs.add_theme_color_override("font_color", Color(1.0, 0.72, 0.62))
 				cv.add_child(theirs)
@@ -37679,6 +38979,7 @@ func _build_phone_ui() -> void:
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
+	v.custom_minimum_size.x = 0
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(v)
 
@@ -39468,6 +40769,34 @@ func _build_graphics_ui() -> void:
 	_gfx_add_check(list, "shadows", "Cast Shadows")
 	_gfx_add_check(list, "ssil", "Indirect Light (SSIL)")
 
+	_gfx_add_section(list, "SCREEN FILTERS")
+	_gfx_add_check(list, "toon_filter", "Toon Filter")
+	_gfx_add_slider(list, "toon_mix", "Toon Overall Mix", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_value_steps", "Toon Value Steps", 2.0, 16.0, 1.0)
+	_gfx_add_slider(list, "toon_step_strength", "Toon Step Strength", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_light_balance", "Toon Light Balance", -0.3, 0.3, 0.01)
+	_gfx_add_slider(list, "toon_shade_curve", "Toon Shade Curve", 0.4, 2.5, 0.01)
+	_gfx_add_slider(list, "toon_shadow_depth", "Toon Shadow Depth", 0.0, 0.8, 0.01)
+	_gfx_add_check(list, "toon_outlines", "Toon Outlines")
+	_gfx_add_slider(list, "toon_outline_strength", "Outline Strength", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_outline_threshold", "Outline Threshold", 0.01, 0.4, 0.005)
+	_gfx_add_slider(list, "toon_outline_softness", "Outline Softness", 0.005, 0.25, 0.005)
+	_gfx_add_slider(list, "toon_outline_thickness", "Outline Thickness", 0.5, 4.0, 0.05)
+	_gfx_add_slider(list, "toon_color_brightness", "Toon Brightness", 0.5, 1.5, 0.01)
+	_gfx_add_slider(list, "toon_color_contrast", "Toon Contrast", 0.5, 1.8, 0.01)
+	_gfx_add_slider(list, "toon_color_saturation", "Toon Saturation", 0.0, 2.0, 0.01)
+	_gfx_add_slider(list, "toon_hue_shift", "Toon Hue Shift", -180.0, 180.0, 1.0)
+	_gfx_add_slider(list, "toon_warmth", "Toon Warm / Cool", -1.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_green_magenta", "Toon Green / Magenta", -1.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_shadow_color", "Shadow Blue / Warm", -1.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_highlight_color", "Highlight Cool / Warm", -1.0, 1.0, 0.01)
+	_gfx_add_check(list, "pixel_filter", "Pixelated Effect")
+	_gfx_add_slider(list, "pixel_block_size", "Pixel Block Size", 1.0, 32.0, 1.0)
+	_gfx_add_slider(list, "pixel_mix", "Pixel Overall Mix", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "pixel_palette_steps", "Pixel Palette Steps", 2.0, 64.0, 1.0)
+	_gfx_add_slider(list, "pixel_palette_strength", "Pixel Palette Strength", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "pixel_grid_strength", "Pixel Grid Strength", 0.0, 0.8, 0.01)
+
 	_gfx_add_section(list, "AMBIENT OCCLUSION")
 	_gfx_add_check(list, "ssao", "SSAO Enabled")
 	_gfx_add_slider(list, "ssao_radius", "SSAO Radius / Size", 0.2, 4.0, 0.01)
@@ -39500,7 +40829,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_section(list, "WINDOW BG")
 	_gfx_add_background_selector(list)
 	_gfx_add_slider(list, "bg_x", "BG Left / Right", -4.0, 4.0, 0.02)
-	_gfx_add_slider(list, "bg_y", "BG Height", 0.2, 4.5, 0.02)
+	_gfx_add_slider(list, "bg_y", "BG Height", STREET_MATTE_MIN_Y, STREET_MATTE_MAX_Y, 0.02)
 	_gfx_add_slider(list, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
 	_gfx_add_slider(list, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
@@ -39696,6 +41025,9 @@ func _gfx_add_background_selector(parent: Control) -> void:
 	street_bg_option.item_selected.connect(func(index: int):
 		var meta = street_bg_option.get_item_metadata(index)
 		street_bg_choice = str(meta)
+		street_bg_video_enabled = false
+		if options_hidden_bg_video_check != null and is_instance_valid(options_hidden_bg_video_check):
+			options_hidden_bg_video_check.set_pressed_no_signal(false)
 		_save_street_background_settings()
 		_apply_street_background_texture()
 	)
@@ -40136,6 +41468,8 @@ func _build_options_menu() -> void:
 	hidden_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	hidden_tabs.mouse_filter = Control.MOUSE_FILTER_STOP
 	options_hidden_room_tone_box.add_child(hidden_tabs)
+	var hidden_camera_box := _hidden_add_category(hidden_tabs, "PLAYER CAMERA")
+	hidden_camera_box.get_parent().get_parent().name = "Camera"
 	var hidden_bg_box := _hidden_add_category(hidden_tabs, "BACKGROUND IMAGE")
 	hidden_bg_box.get_parent().get_parent().name = "Background"
 	var hidden_debug_box := _hidden_add_category(hidden_tabs, "DEBUG OVERLAYS")
@@ -40159,9 +41493,57 @@ func _build_options_menu() -> void:
 			hidden.remove_child(debug_control)
 			hidden_debug_box.add_child(debug_control)
 
+	var camera_help := Label.new()
+	camera_help.text = "Changes preview live and are saved automatically."
+	camera_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(camera_help, false, 12)
+	camera_help.add_theme_color_override("font_color", Color(0.72, 0.78, 0.86))
+	hidden_camera_box.add_child(camera_help)
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_height", "Height", 0.8, 2.8, 0.01,
+		func(): return _player_camera_value("cam_height"),
+		func(v: float): _set_player_camera_value("cam_height", v))
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_x", "Left / Right", -1.5, 1.5, 0.01,
+		func(): return _player_camera_value("cam_x"),
+		func(v: float): _set_player_camera_value("cam_x", v))
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_z", "Forward / Back", -3.5, -0.35, 0.01,
+		func(): return _player_camera_value("cam_z"),
+		func(v: float): _set_player_camera_value("cam_z", v))
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_fov", "Field of View", 25.0, 100.0, 0.5,
+		func(): return _player_camera_value("cam_fov"),
+		func(v: float): _set_player_camera_value("cam_fov", v),
+		true)
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_tilt", "Tilt Up / Down", -45.0, 35.0, 0.1,
+		func(): return _player_camera_value("cam_tilt"),
+		func(v: float): _set_player_camera_value("cam_tilt", v),
+		true)
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_yaw", "Pan Left / Right", 150.0, 210.0, 0.1,
+		func(): return _player_camera_value("cam_yaw"),
+		func(v: float): _set_player_camera_value("cam_yaw", v),
+		true)
+	_hidden_add_labeled_slider(hidden_camera_box, "cam_roll", "Roll", -25.0, 25.0, 0.1,
+		func(): return _player_camera_value("cam_roll"),
+		func(v: float): _set_player_camera_value("cam_roll", v),
+		true)
+	_options_add_btn(hidden_camera_box, "Reset Camera", func():
+		_reset_player_camera_settings()
+	)
+
 	_gfx_add_background_selector(hidden_bg_box)
+	options_hidden_bg_video_check = CheckButton.new()
+	options_hidden_bg_video_check.text = "Use Arcade Animated Background"
+	options_hidden_bg_video_check.tooltip_text = "Loops the supplied arcade video on the outside background plane. Off uses the current location image."
+	options_hidden_bg_video_check.button_pressed = street_bg_video_enabled
+	UiFontsScript.apply_button(options_hidden_bg_video_check, false, 13)
+	options_hidden_bg_video_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	options_hidden_bg_video_check.toggled.connect(func(on: bool):
+		street_bg_video_enabled = on
+		_save_street_background_settings()
+		_apply_street_background_texture()
+		_sfx_click()
+	)
+	hidden_bg_box.add_child(options_hidden_bg_video_check)
 	_options_add_standard_slider(hidden_bg_box, "bg_x", "BG Left / Right", -4.0, 4.0, 0.02)
-	_options_add_standard_slider(hidden_bg_box, "bg_y", "BG Height", 0.2, 4.5, 0.02)
+	_options_add_standard_slider(hidden_bg_box, "bg_y", "BG Height", STREET_MATTE_MIN_Y, STREET_MATTE_MAX_Y, 0.02)
 	_options_add_standard_slider(hidden_bg_box, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
 	_options_add_standard_slider(hidden_bg_box, "bg_scale", "BG Scale", 0.4, 2.2, 0.01)
 
@@ -41009,6 +42391,94 @@ func _build_options_menu() -> void:
 	_hidden_add_prop_offset_group(hidden_counter_box, "big_tree", "Big Tree Offset")
 	_hidden_add_prop_offset_group(hidden_counter_box, "small_tree", "Small Tree Offset")
 
+	_hidden_add_section(hidden_counter_box, "PHYSICAL GARBAGE CAN")
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_x", "Location X", -3.5, 3.5, 0.01,
+		func(): return physical_garbage_pos.x,
+		func(v: float):
+			physical_garbage_pos.x = clampf(v, -3.5, 3.5)
+			_physical_garbage_setting_changed()
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_y", "Height", -1.0, 2.4, 0.01,
+		func(): return physical_garbage_pos.y,
+		func(v: float):
+			physical_garbage_pos.y = clampf(v, -1.0, 2.4)
+			_physical_garbage_setting_changed()
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_z", "Location Z", -2.0, 2.5, 0.01,
+		func(): return physical_garbage_pos.z,
+		func(v: float):
+			physical_garbage_pos.z = clampf(v, -2.0, 2.5)
+			_physical_garbage_setting_changed()
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_pitch", "Pitch", -180.0, 180.0, 1.0,
+		func(): return physical_garbage_rot.x,
+		func(v: float):
+			physical_garbage_rot.x = clampf(v, -180.0, 180.0)
+			_physical_garbage_setting_changed()
+	, true)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_yaw", "Yaw", -180.0, 180.0, 1.0,
+		func(): return physical_garbage_rot.y,
+		func(v: float):
+			physical_garbage_rot.y = clampf(v, -180.0, 180.0)
+			_physical_garbage_setting_changed()
+	, true)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_roll", "Roll", -180.0, 180.0, 1.0,
+		func(): return physical_garbage_rot.z,
+		func(v: float):
+			physical_garbage_rot.z = clampf(v, -180.0, 180.0)
+			_physical_garbage_setting_changed()
+	, true)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_scale", "Scale", 0.35, 1.5, 0.01,
+		func(): return physical_garbage_scale,
+		func(v: float):
+			physical_garbage_scale = clampf(v, 0.35, 1.5)
+			_physical_garbage_setting_changed()
+	)
+
+	_hidden_add_section(hidden_counter_box, "FRONT TRASH SYMBOL")
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_x", "Symbol X", -1.0, 1.0, 0.005,
+		func(): return physical_garbage_symbol_offset.x,
+		func(v: float):
+			physical_garbage_symbol_offset.x = clampf(v, -1.0, 1.0)
+			_physical_garbage_symbol_setting_changed()
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_y", "Symbol Height", -1.0, 1.0, 0.005,
+		func(): return physical_garbage_symbol_offset.y,
+		func(v: float):
+			physical_garbage_symbol_offset.y = clampf(v, -1.0, 1.0)
+			_physical_garbage_symbol_setting_changed()
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_z", "Symbol Depth", -1.0, 1.0, 0.005,
+		func(): return physical_garbage_symbol_offset.z,
+		func(v: float):
+			physical_garbage_symbol_offset.z = clampf(v, -1.0, 1.0)
+			_physical_garbage_symbol_setting_changed()
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_pitch", "Symbol Pitch", -180.0, 180.0, 1.0,
+		func(): return physical_garbage_symbol_rot.x,
+		func(v: float):
+			physical_garbage_symbol_rot.x = clampf(v, -180.0, 180.0)
+			_physical_garbage_symbol_setting_changed()
+	, true)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_yaw", "Symbol Yaw", -180.0, 180.0, 1.0,
+		func(): return physical_garbage_symbol_rot.y,
+		func(v: float):
+			physical_garbage_symbol_rot.y = clampf(v, -180.0, 180.0)
+			_physical_garbage_symbol_setting_changed()
+	, true)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_roll", "Symbol Roll", -180.0, 180.0, 1.0,
+		func(): return physical_garbage_symbol_rot.z,
+		func(v: float):
+			physical_garbage_symbol_rot.z = clampf(v, -180.0, 180.0)
+			_physical_garbage_symbol_setting_changed()
+	, true)
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_scale", "Symbol Scale", 0.25, 3.0, 0.01,
+		func(): return physical_garbage_symbol_scale,
+		func(v: float):
+			physical_garbage_symbol_scale = clampf(v, 0.25, 3.0)
+			_physical_garbage_symbol_setting_changed()
+	)
+
 	_hidden_add_section(hidden_world_box, "FRYER SHAKE / TIMING")
 	_hidden_add_labeled_slider(hidden_world_box, "fryer_station_scale", "Fryer Scale", 0.45, 2.5, 0.01,
 		func(): return fryer_station_scale,
@@ -41379,49 +42849,65 @@ func _build_options_menu() -> void:
 	)
 
 	var ice_lab := Label.new()
-	ice_lab.text = "SOFT SERVE POSITION"
+	ice_lab.text = "SOFT SERVE TRANSFORM"
 	UiFontsScript.apply_label(ice_lab, true, 13)
 	ice_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	hidden_world_box.add_child(ice_lab)
-
-	var ice_row := HBoxContainer.new()
-	ice_row.add_theme_constant_override("separation", 10)
-	hidden_world_box.add_child(ice_row)
-	var ice_name := Label.new()
-	ice_name.text = "Camera-Right Offset"
-	ice_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UiFontsScript.apply_label(ice_name, false, 12)
-	ice_name.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
-	ice_row.add_child(ice_name)
-	options_hidden_icecream_pos_lab = Label.new()
-	options_hidden_icecream_pos_lab.custom_minimum_size = Vector2(56, 0)
-	options_hidden_icecream_pos_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	UiFontsScript.apply_label(options_hidden_icecream_pos_lab, false, 12)
-	options_hidden_icecream_pos_lab.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
-	options_hidden_icecream_pos_lab.text = "%.2f ft" % icecream_cam_right_ft
-	ice_row.add_child(options_hidden_icecream_pos_lab)
-
-	options_hidden_icecream_pos_slider = HSlider.new()
-	options_hidden_icecream_pos_slider.min_value = -4.0
-	options_hidden_icecream_pos_slider.max_value = 8.0
-	options_hidden_icecream_pos_slider.step = 0.05
-	options_hidden_icecream_pos_slider.value = icecream_cam_right_ft
-	options_hidden_icecream_pos_slider.custom_minimum_size = Vector2(0, 28)
-	options_hidden_icecream_pos_slider.focus_mode = Control.FOCUS_ALL
-	options_hidden_icecream_pos_slider.value_changed.connect(func(val: float):
-		icecream_cam_right_ft = clampf(val, -4.0, 8.0)
-		if options_hidden_icecream_pos_lab != null:
-			options_hidden_icecream_pos_lab.text = "%.2f ft" % icecream_cam_right_ft
-		_apply_icecream_station_position()
-		_save_icecream_station_settings()
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_x", "World X (left/right)", -4.0, 4.0, 0.01,
+		func(): return icecream_station_pos.x,
+		func(v: float): _set_icecream_station_pos_axis("x", v)
 	)
-	hidden_world_box.add_child(options_hidden_icecream_pos_slider)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_y", "World Y (height)", -1.0, 4.0, 0.01,
+		func(): return icecream_station_pos.y,
+		func(v: float): _set_icecream_station_pos_axis("y", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_z", "World Z (depth)", -3.0, 5.0, 0.01,
+		func(): return icecream_station_pos.z,
+		func(v: float): _set_icecream_station_pos_axis("z", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_pitch", "Pitch", -180.0, 180.0, 1.0,
+		func(): return icecream_station_rot.x,
+		func(v: float): _set_icecream_station_rot_axis("x", v), true
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_yaw", "Yaw", -360.0, 360.0, 1.0,
+		func(): return icecream_station_rot.y,
+		func(v: float): _set_icecream_station_rot_axis("y", v), true
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_roll", "Roll", -180.0, 180.0, 1.0,
+		func(): return icecream_station_rot.z,
+		func(v: float): _set_icecream_station_rot_axis("z", v), true
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_scale", "Machine Scale", 0.35, 3.0, 0.01,
+		func(): return icecream_station_scale,
+		func(v: float): _set_icecream_station_scale(v)
+	)
+	_hidden_add_section(hidden_world_box, "CONE PULL POINT (LOCAL)")
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_cone_pull_x", "Cone Pull X (left/right)", -2.0, 2.0, 0.005,
+		func(): return icecream_cone_pull_local.x,
+		func(v: float): _set_icecream_cone_pull_axis("x", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_cone_pull_y", "Cone Pull Y (height)", -2.0, 2.0, 0.005,
+		func(): return icecream_cone_pull_local.y,
+		func(v: float): _set_icecream_cone_pull_axis("y", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_cone_pull_z", "Cone Pull Z (depth)", -2.0, 2.0, 0.005,
+		func(): return icecream_cone_pull_local.z,
+		func(v: float): _set_icecream_cone_pull_axis("z", v)
+	)
 
 	var soda_h_lab := Label.new()
-	soda_h_lab.text = "SODA CUP HEIGHTS"
+	soda_h_lab.text = "COLA + ICE MACHINE"
 	UiFontsScript.apply_label(soda_h_lab, true, 13)
 	soda_h_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
 	hidden_soda_box.add_child(soda_h_lab)
+	var soda_setup_note := Label.new()
+	soda_setup_note.text = "Current hardware: left Ice chute + right Cola nozzle. Drop Offset moves the falling stream. Cup Seat Offset moves the soft-lock target relative to that stream. All bay offsets use machine-local inches."
+	soda_setup_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(soda_setup_note, false, 11)
+	soda_setup_note.add_theme_color_override("font_color", Color(0.62, 0.78, 0.90))
+	hidden_soda_box.add_child(soda_setup_note)
+
+	_hidden_add_section(hidden_soda_box, "CUP HEIGHTS")
 	_hidden_add_labeled_slider(hidden_soda_box, "cup_pull_in", "Carry Height (in)", 0.0, 12.0, 0.25,
 		func(): return cup_hold_height / INCH_TO_M,
 		func(v: float):
@@ -41435,7 +42921,7 @@ func _build_options_menu() -> void:
 			_save_soda_cup_height_settings()
 	)
 
-	_hidden_add_section(hidden_soda_box, "DRINK DISPENSER")
+	_hidden_add_section(hidden_soda_box, "CURRENT TWO-BAY MACHINE · COLA + ICE")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_machine_x", "Machine X", -4.0, 4.0, 0.01,
 		func(): return soda_station_pos.x,
 		func(v: float): soda_station_pos.x = clampf(v, -4.0, 4.0))
@@ -41452,11 +42938,39 @@ func _build_options_menu() -> void:
 		func(): return soda_station_scale,
 		func(v: float): soda_station_scale = clampf(v, 0.5, 3.5), true)
 
-	_hidden_add_section(hidden_soda_box, "TWO-BAY FILL NOZZLES")
-	_hidden_add_soda_nozzle_group(hidden_soda_box, "ice", "Ice Bay")
-	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Soda Bay")
+	_hidden_add_section(hidden_soda_box, "ICE BAY · DROP + CUP SOFT LOCK")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "ice", "Ice")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice")
 
-	_hidden_add_section(hidden_soda_box, "DRINK TANK VISUALS")
+	_hidden_add_section(hidden_soda_box, "COLA BAY · DROP + CUP SOFT LOCK")
+	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Cola")
+	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Cola")
+	_options_add_btn(hidden_soda_box, "RESET COLA + ICE BAY ALIGNMENT", _reset_two_bay_drink_alignment)
+
+	_hidden_add_section(hidden_soda_box, "CUP STACK TRANSFORM")
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_x", "Stack X", -2.0, 2.0, 0.01,
+		func(): return soda_cup_rack_pos.x,
+		func(v: float): soda_cup_rack_pos.x = clampf(v, -2.0, 2.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_y", "Stack Height", -1.0, 3.0, 0.01,
+		func(): return soda_cup_rack_pos.y,
+		func(v: float): soda_cup_rack_pos.y = clampf(v, -1.0, 3.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_z", "Stack Z", -2.0, 2.0, 0.01,
+		func(): return soda_cup_rack_pos.z,
+		func(v: float): soda_cup_rack_pos.z = clampf(v, -2.0, 2.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_pitch", "Stack Pitch", -180.0, 180.0, 1.0,
+		func(): return soda_cup_rack_rot.x,
+		func(v: float): soda_cup_rack_rot.x = clampf(v, -180.0, 180.0), false, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_yaw", "Stack Yaw", -180.0, 180.0, 1.0,
+		func(): return soda_cup_rack_rot.y,
+		func(v: float): soda_cup_rack_rot.y = clampf(v, -180.0, 180.0), false, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_roll", "Stack Roll", -180.0, 180.0, 1.0,
+		func(): return soda_cup_rack_rot.z,
+		func(v: float): soda_cup_rack_rot.z = clampf(v, -180.0, 180.0), false, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_scale", "Stack Scale", 0.25, 3.5, 0.01,
+		func(): return soda_cup_rack_scale,
+		func(v: float): soda_cup_rack_scale = clampf(v, 0.25, 3.5))
+
+	_hidden_add_section(hidden_soda_box, "COLA SYRUP TANK VISUAL")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_scale", "Tank Size", 0.2, 1.4, 0.01,
 		func(): return soda_tank_visual_scale,
 		func(v: float): soda_tank_visual_scale = clampf(v, 0.2, 1.4), true)
@@ -41470,9 +42984,7 @@ func _build_options_menu() -> void:
 		func(): return soda_tank_z_offset_in,
 		func(v: float): soda_tank_z_offset_in = clampf(v, -8.0, 8.0), true)
 
-	_hidden_add_section(hidden_soda_box, "CUP RACK / BLOCKERS")
-	_hidden_add_soda_debug_check(hidden_soda_box, "Show Blocker Debug", func(): return soda_blocker_debug, func(on: bool): soda_blocker_debug = on)
-	_hidden_add_soda_debug_check(hidden_soda_box, "Show Soft-Lock Debug", func(): return soda_soft_debug, func(on: bool): soda_soft_debug = on)
+	_hidden_add_section(hidden_soda_box, "CUP STACK / TWO-BAY COLLISION")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_x", "Block Half Width", 0.05, 1.5, 0.01,
 		func(): return soda_blocker_half_x,
 		func(v: float): soda_blocker_half_x = clampf(v, 0.05, 1.5))
@@ -41492,7 +43004,7 @@ func _build_options_menu() -> void:
 		func(): return soda_cup_rest_z,
 		func(v: float): soda_cup_rest_z = clampf(v, -1.2, 1.2))
 
-	_hidden_add_section(hidden_soda_box, "CUP PULL / FILL FEEL")
+	_hidden_add_section(hidden_soda_box, "SHARED CUP MAGNET / FILL FEEL")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_x", "Tray First X", -1.0, 0.7, 0.01,
 		func(): return soda_tray_first_x,
 		func(v: float): soda_tray_first_x = clampf(v, -1.0, 0.7))
@@ -41543,9 +43055,48 @@ func _build_options_menu() -> void:
 			cup_liquid_radius_scale = clampf(v, 0.5, 1.5)
 			_refresh_cup_visuals())
 
-	_hidden_add_section(hidden_soda_box, "FILL BAY SOFT LOCK SEATS")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice Bay")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Soda Bay")
+	var filter_lab := Label.new()
+	filter_lab.text = "SCREEN FILTERS"
+	UiFontsScript.apply_label(filter_lab, true, 13)
+	filter_lab.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	hidden_render_box.add_child(filter_lab)
+	_options_add_standard_check(hidden_render_box, "toon_filter", "Toon Filter")
+	var filter_note := Label.new()
+	filter_note.text = "World-only; HUD and phone remain sharp. Both effects can be combined. Outlines default OFF."
+	filter_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(filter_note, false, 11)
+	filter_note.add_theme_color_override("font_color", Color(0.68, 0.74, 0.82))
+	hidden_render_box.add_child(filter_note)
+	_hidden_add_section(hidden_render_box, "TOON SHADING")
+	_options_add_standard_slider(hidden_render_box, "toon_mix", "Overall Toon Mix", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_value_steps", "Value Steps / Bands", 2.0, 16.0, 1.0)
+	_options_add_standard_slider(hidden_render_box, "toon_step_strength", "Step Strength", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_light_balance", "Light / Dark Balance", -0.3, 0.3, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_shade_curve", "Shadow Curve", 0.4, 2.5, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_shadow_depth", "Extra Shadow Depth", 0.0, 0.8, 0.01)
+	_hidden_add_section(hidden_render_box, "TOON OUTLINES")
+	_options_add_standard_check(hidden_render_box, "toon_outlines", "Enable Outlines")
+	_options_add_standard_slider(hidden_render_box, "toon_outline_strength", "Outline Darkness", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_outline_threshold", "Outline Detection", 0.01, 0.4, 0.005)
+	_options_add_standard_slider(hidden_render_box, "toon_outline_softness", "Outline Softness", 0.005, 0.25, 0.005)
+	_options_add_standard_slider(hidden_render_box, "toon_outline_thickness", "Outline Thickness", 0.5, 4.0, 0.05)
+	_hidden_add_section(hidden_render_box, "TOON COLOR LOOK")
+	_options_add_standard_slider(hidden_render_box, "toon_color_brightness", "Brightness", 0.5, 1.5, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_color_contrast", "Contrast", 0.5, 1.8, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_color_saturation", "Saturation", 0.0, 2.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_hue_shift", "Hue Shift (degrees)", -180.0, 180.0, 1.0)
+	_options_add_standard_slider(hidden_render_box, "toon_warmth", "Warm (+) / Cool (-)", -1.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_green_magenta", "Green (+) / Magenta (-)", -1.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_shadow_color", "Blue (+) / Warm (-) Shadows", -1.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_highlight_color", "Warm (+) / Cool (-) Highlights", -1.0, 1.0, 0.01)
+	_hidden_add_section(hidden_render_box, "PIXEL EFFECT")
+	_options_add_standard_check(hidden_render_box, "pixel_filter", "Pixelated Effect")
+	_options_add_standard_slider(hidden_render_box, "pixel_block_size", "Pixel Block Size", 1.0, 32.0, 1.0)
+	_options_add_standard_slider(hidden_render_box, "pixel_mix", "Overall Pixel Mix", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "pixel_palette_steps", "Palette Color Steps", 2.0, 64.0, 1.0)
+	_options_add_standard_slider(hidden_render_box, "pixel_palette_strength", "Palette Reduction Strength", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "pixel_grid_strength", "Pixel Grid Darkness", 0.0, 0.8, 0.01)
+	hidden_render_box.add_child(HSeparator.new())
 
 	var ao_lab := Label.new()
 	ao_lab.text = "AMBIENT OCCLUSION"
@@ -41742,9 +43293,12 @@ func _try_unlock_hidden_options() -> void:
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 			_refresh_street_background_option()
+			if options_hidden_bg_video_check != null and is_instance_valid(options_hidden_bg_video_check):
+				options_hidden_bg_video_check.set_pressed_no_signal(street_bg_video_enabled)
 			_sync_tree_light_hidden_ui()
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
+			_sync_player_camera_hidden_ui()
 			_sync_spatula_balance_hidden_ui()
 			_sync_roomba_home_hidden_ui()
 			if options_hidden_tree_light_sliders.has("ing_touch_vol") and options_hidden_tree_light_sliders["ing_touch_vol"] != null:
@@ -41825,6 +43379,10 @@ func _set_options_menu_open(open: bool) -> void:
 
 func _options_restart_day() -> void:
 	_set_options_menu_open(false)
+	if tutorial_mode:
+		_start_game(true)
+		_flash("Tutorial restarted", Color("90CAF9"))
+		return
 	if not playing and game_over_panel != null and game_over_panel.visible:
 		if mp_enabled:
 			mp_restart_day.rpc()
@@ -41840,6 +43398,9 @@ func _options_restart_day() -> void:
 
 func _options_back_to_lobby() -> void:
 	_set_options_menu_open(false)
+	if tutorial_mode:
+		_exit_guided_tutorial()
+		return
 	playing = false
 	if game_audio:
 		game_audio.set_sizzle_active(false)
@@ -41937,6 +43498,18 @@ func _sync_graphics_ui_from_world() -> void:
 		gfx_checks["ssao"].set_pressed_no_signal(gfx_env.ssao_enabled)
 	if gfx_checks.has("ssil"):
 		gfx_checks["ssil"].set_pressed_no_signal(gfx_env.ssil_enabled)
+	if gfx_checks.has("toon_filter"):
+		var toon_on := screen_style_layer != null and screen_style_layer.visible \
+			and screen_style_mat != null and bool(screen_style_mat.get_shader_parameter("toon_enabled"))
+		gfx_checks["toon_filter"].set_pressed_no_signal(toon_on)
+	if gfx_checks.has("toon_outlines"):
+		var outlines_on := screen_style_mat != null \
+			and bool(screen_style_mat.get_shader_parameter("outlines_enabled"))
+		gfx_checks["toon_outlines"].set_pressed_no_signal(outlines_on)
+	if gfx_checks.has("pixel_filter"):
+		var pixel_on := screen_style_layer != null and screen_style_layer.visible \
+			and screen_style_mat != null and bool(screen_style_mat.get_shader_parameter("pixel_enabled"))
+		gfx_checks["pixel_filter"].set_pressed_no_signal(pixel_on)
 	var ao_map := {
 		"ssao_radius": gfx_env.ssao_radius,
 		"ssao_intensity": gfx_env.ssao_intensity,
@@ -42158,6 +43731,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_shadow_settings(s)
 	_apply_fake_df_ao_settings(s)
 	_apply_heat_warp_settings(s)
+	_apply_screen_style_filter(s)
 	_apply_patty_reflection_settings(s)
 	_apply_street_matte_settings(s)
 	_apply_first_sale_decal_settings(s)
@@ -42167,6 +43741,76 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_build_cheese_station_prop()
 	_apply_build_zone_settings(s)
 	_apply_roomba_audio_settings(s)
+
+
+func _build_screen_style_filter() -> void:
+	if screen_style_layer != null and is_instance_valid(screen_style_layer):
+		return
+	var shader := load("res://shaders/screen_style_filter.gdshader") as Shader
+	if shader == null:
+		push_warning("Screen style shader could not be loaded")
+		return
+	## A spatial screen texture is captured before Godot's transparent pass. Patties,
+	## cheese, grease, glass and reflection helpers intentionally live in that later
+	## pass, so a camera quad cannot see them. Copy the completed 3D backbuffer here.
+	screen_style_layer = CanvasLayer.new()
+	screen_style_layer.name = "ScreenStyleLayer"
+	screen_style_layer.layer = 9 ## Main HUD/phone is layer 10.
+	screen_style_layer.visible = false
+	add_child(screen_style_layer)
+
+	screen_style_copy = BackBufferCopy.new()
+	screen_style_copy.name = "Completed3DFrameCopy"
+	screen_style_copy.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
+	screen_style_layer.add_child(screen_style_copy)
+
+	screen_style_rect = ColorRect.new()
+	screen_style_rect.name = "ScreenStylePass"
+	screen_style_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	screen_style_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	screen_style_rect.color = Color.WHITE
+	screen_style_mat = ShaderMaterial.new()
+	screen_style_mat.shader = shader
+	screen_style_mat.set_shader_parameter("toon_enabled", false)
+	screen_style_mat.set_shader_parameter("pixel_enabled", false)
+	screen_style_rect.material = screen_style_mat
+	screen_style_layer.add_child(screen_style_rect)
+
+
+func _apply_screen_style_filter(s: Dictionary) -> void:
+	if screen_style_layer == null or not is_instance_valid(screen_style_layer):
+		_build_screen_style_filter()
+	if screen_style_layer == null or screen_style_mat == null:
+		return
+	var toon_on := bool(s.get("toon_filter", GFX_DEFAULTS["toon_filter"]))
+	var pixel_on := bool(s.get("pixel_filter", GFX_DEFAULTS["pixel_filter"]))
+	screen_style_mat.set_shader_parameter("toon_enabled", toon_on)
+	screen_style_mat.set_shader_parameter("pixel_enabled", pixel_on)
+	screen_style_mat.set_shader_parameter("toon_mix", float(s.get("toon_mix", GFX_DEFAULTS["toon_mix"])))
+	screen_style_mat.set_shader_parameter("toon_levels", float(s.get("toon_value_steps", GFX_DEFAULTS["toon_value_steps"])))
+	screen_style_mat.set_shader_parameter("step_strength", float(s.get("toon_step_strength", GFX_DEFAULTS["toon_step_strength"])))
+	screen_style_mat.set_shader_parameter("light_balance", float(s.get("toon_light_balance", GFX_DEFAULTS["toon_light_balance"])))
+	screen_style_mat.set_shader_parameter("shade_curve", float(s.get("toon_shade_curve", GFX_DEFAULTS["toon_shade_curve"])))
+	screen_style_mat.set_shader_parameter("shadow_depth", float(s.get("toon_shadow_depth", GFX_DEFAULTS["toon_shadow_depth"])))
+	screen_style_mat.set_shader_parameter("outlines_enabled", bool(s.get("toon_outlines", GFX_DEFAULTS["toon_outlines"])))
+	screen_style_mat.set_shader_parameter("outline_strength", float(s.get("toon_outline_strength", GFX_DEFAULTS["toon_outline_strength"])))
+	screen_style_mat.set_shader_parameter("outline_threshold", float(s.get("toon_outline_threshold", GFX_DEFAULTS["toon_outline_threshold"])))
+	screen_style_mat.set_shader_parameter("outline_softness", float(s.get("toon_outline_softness", GFX_DEFAULTS["toon_outline_softness"])))
+	screen_style_mat.set_shader_parameter("outline_thickness", float(s.get("toon_outline_thickness", GFX_DEFAULTS["toon_outline_thickness"])))
+	screen_style_mat.set_shader_parameter("color_brightness", float(s.get("toon_color_brightness", GFX_DEFAULTS["toon_color_brightness"])))
+	screen_style_mat.set_shader_parameter("color_contrast", float(s.get("toon_color_contrast", GFX_DEFAULTS["toon_color_contrast"])))
+	screen_style_mat.set_shader_parameter("color_saturation", float(s.get("toon_color_saturation", GFX_DEFAULTS["toon_color_saturation"])))
+	screen_style_mat.set_shader_parameter("hue_shift_degrees", float(s.get("toon_hue_shift", GFX_DEFAULTS["toon_hue_shift"])))
+	screen_style_mat.set_shader_parameter("warmth", float(s.get("toon_warmth", GFX_DEFAULTS["toon_warmth"])))
+	screen_style_mat.set_shader_parameter("green_magenta", float(s.get("toon_green_magenta", GFX_DEFAULTS["toon_green_magenta"])))
+	screen_style_mat.set_shader_parameter("shadow_color", float(s.get("toon_shadow_color", GFX_DEFAULTS["toon_shadow_color"])))
+	screen_style_mat.set_shader_parameter("highlight_color", float(s.get("toon_highlight_color", GFX_DEFAULTS["toon_highlight_color"])))
+	screen_style_mat.set_shader_parameter("pixel_block_size", float(s.get("pixel_block_size", GFX_DEFAULTS["pixel_block_size"])))
+	screen_style_mat.set_shader_parameter("pixel_mix", float(s.get("pixel_mix", GFX_DEFAULTS["pixel_mix"])))
+	screen_style_mat.set_shader_parameter("pixel_palette_steps", float(s.get("pixel_palette_steps", GFX_DEFAULTS["pixel_palette_steps"])))
+	screen_style_mat.set_shader_parameter("pixel_palette_strength", float(s.get("pixel_palette_strength", GFX_DEFAULTS["pixel_palette_strength"])))
+	screen_style_mat.set_shader_parameter("pixel_grid_strength", float(s.get("pixel_grid_strength", GFX_DEFAULTS["pixel_grid_strength"])))
+	screen_style_layer.visible = toon_on or pixel_on
 
 
 func _build_fake_df_ao_overlay() -> void:
@@ -42352,6 +43996,14 @@ func _street_background_options() -> Array:
 		opts.append({"id": "bright", "label": "Bright Village", "path": STREET_BG_BRIGHT_PATH})
 	if ResourceLoader.exists(STREET_BG_LOCATION1_PATH):
 		opts.append({"id": "location1", "label": "Location 1", "path": STREET_BG_LOCATION1_PATH})
+	if ResourceLoader.exists(STREET_BG_NEW_ARCADE_PATH):
+		opts.append({"id": "new_arcade", "label": "New Arcade", "path": STREET_BG_NEW_ARCADE_PATH})
+	if ResourceLoader.exists(STREET_BG_ARCADIA_PLAY_PATH):
+		opts.append({"id": "arcadia_play", "label": "Arcadia Play", "path": STREET_BG_ARCADIA_PLAY_PATH})
+	if ResourceLoader.exists(STREET_BG_ARCADIA_CLEAN_PATH):
+		opts.append({"id": "arcadia_clean", "label": "Arcadia Clean", "path": STREET_BG_ARCADIA_CLEAN_PATH})
+	if ResourceLoader.exists(STREET_BG_MILL1_PATH):
+		opts.append({"id": "mill1", "label": "mill1", "path": STREET_BG_MILL1_PATH})
 	if street_bg_custom_path != "":
 		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
 	return opts
@@ -42365,6 +44017,14 @@ func _street_background_path_for_choice(choice: String) -> String:
 			return STREET_BG_BRIGHT_PATH
 		"location1":
 			return STREET_BG_LOCATION1_PATH
+		"new_arcade":
+			return STREET_BG_NEW_ARCADE_PATH
+		"arcadia_play":
+			return STREET_BG_ARCADIA_PLAY_PATH
+		"arcadia_clean":
+			return STREET_BG_ARCADIA_CLEAN_PATH
+		"mill1":
+			return STREET_BG_MILL1_PATH
 		"custom":
 			return street_bg_custom_path
 		_:
@@ -42372,6 +44032,18 @@ func _street_background_path_for_choice(choice: String) -> String:
 
 
 func _current_street_background_path() -> String:
+	## Hidden-menu image overrides are opt-in. Location art remains the normal route default.
+	if street_bg_choice == "new_arcade" and ResourceLoader.exists(STREET_BG_NEW_ARCADE_PATH):
+		return STREET_BG_NEW_ARCADE_PATH
+	if street_bg_choice == "arcadia_play" and ResourceLoader.exists(STREET_BG_ARCADIA_PLAY_PATH):
+		return STREET_BG_ARCADIA_PLAY_PATH
+	if street_bg_choice == "arcadia_clean" and ResourceLoader.exists(STREET_BG_ARCADIA_CLEAN_PATH):
+		return STREET_BG_ARCADIA_CLEAN_PATH
+	if street_bg_choice == "mill1" and ResourceLoader.exists(STREET_BG_MILL1_PATH):
+		return STREET_BG_MILL1_PATH
+	var location_path := TruckLocationsScript.background_path(current_location_id)
+	if location_path != "" and ResourceLoader.exists(location_path):
+		return location_path
 	var path := _street_background_path_for_choice(street_bg_choice)
 	if path != "" and ResourceLoader.exists(path):
 		return path
@@ -42400,8 +44072,11 @@ func _load_street_background_settings() -> void:
 	if cfg.load(GFX_CFG_PATH) == OK:
 		street_bg_choice = str(cfg.get_value("street_bg", "choice", street_bg_choice))
 		street_bg_custom_path = str(cfg.get_value("street_bg", "custom_path", ""))
+		street_bg_video_enabled = bool(cfg.get_value("street_bg", "arcade_video_enabled", false))
 	if not ResourceLoader.exists(_street_background_path_for_choice(street_bg_choice)):
 		street_bg_choice = "preview" if ResourceLoader.exists(STREET_BG_PREVIEW_PATH) else "original"
+	if not ResourceLoader.exists(STREET_BG_ARCADE_VIDEO_PATH):
+		street_bg_video_enabled = false
 
 
 func _save_street_background_settings() -> void:
@@ -42409,14 +44084,12 @@ func _save_street_background_settings() -> void:
 	cfg.load(GFX_CFG_PATH)
 	cfg.set_value("street_bg", "choice", street_bg_choice)
 	cfg.set_value("street_bg", "custom_path", street_bg_custom_path)
+	cfg.set_value("street_bg", "arcade_video_enabled", street_bg_video_enabled)
 	cfg.save(GFX_CFG_PATH)
 
 
 func _apply_street_background_texture() -> void:
 	if street_matte == null or not is_instance_valid(street_matte):
-		return
-	var tex := load(_current_street_background_path()) as Texture2D
-	if tex == null:
 		return
 	var mat := street_matte.material_override as StandardMaterial3D
 	if mat == null:
@@ -42427,7 +44100,42 @@ func _apply_street_background_texture() -> void:
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mat.render_priority = -8
 		street_matte.material_override = mat
+	if street_bg_video_enabled:
+		var video_player := _ensure_street_background_video_player()
+		if video_player != null:
+			mat.albedo_texture = video_player.get_video_texture()
+			if not video_player.is_playing():
+				video_player.play()
+			return
+	if street_bg_video_player != null and is_instance_valid(street_bg_video_player):
+		street_bg_video_player.stop()
+	var tex := load(_current_street_background_path()) as Texture2D
+	if tex == null:
+		return
 	mat.albedo_texture = tex
+
+
+func _ensure_street_background_video_player() -> VideoStreamPlayer:
+	if street_bg_video_player != null and is_instance_valid(street_bg_video_player):
+		return street_bg_video_player
+	if not ResourceLoader.exists(STREET_BG_ARCADE_VIDEO_PATH):
+		return null
+	var stream := load(STREET_BG_ARCADE_VIDEO_PATH) as VideoStream
+	if stream == null:
+		return null
+	street_bg_video_player = VideoStreamPlayer.new()
+	street_bg_video_player.name = "ArcadeBackgroundVideo"
+	street_bg_video_player.stream = stream
+	street_bg_video_player.loop = true
+	street_bg_video_player.volume_db = -80.0
+	street_bg_video_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	street_bg_video_player.position = Vector2(-4096.0, -4096.0)
+	street_bg_video_player.size = Vector2.ONE
+	var host: Node = get_node_or_null("UI/Root")
+	if host == null:
+		host = self
+	host.add_child(street_bg_video_player)
+	return street_bg_video_player
 
 
 func _apply_street_matte_settings(s: Dictionary) -> void:
@@ -43423,14 +45131,10 @@ func _spawn_customer() -> void:
 		difficulty, _owns_soda_machine(), _owns_icecream_machine(), _owns_fryer_machine()
 	)
 	var color: Color = GameDataScript.CUSTOMER_COLORS[randi() % GameDataScript.CUSTOMER_COLORS.size()]
-	var patience := lerpf(62.0, 30.0, difficulty) + randf_range(-3, 5)
-	if day == 1:
-		## Still forgiving, but not endless.
-		patience += 32.0
-	elif day == 2:
-		patience += 20.0
-	elif day == 3:
-		patience += 10.0
+	var location_stats := _location_stats()
+	var patience_base := float(location_stats.get("patience_base", 92.0))
+	var patience_jitter := float(location_stats.get("patience_jitter", 6.0))
+	var patience := patience_base + randf_range(-patience_jitter, patience_jitter)
 	var lane := clampi(_waiting_customer_count(), 0, CustomerScript.LANE_X.size() - 1)
 	if not is_bts_guest:
 		skin_idx = _next_customer_skin_idx()
@@ -43902,6 +45606,9 @@ func _create_ticket(customer: Node3D) -> void:
 	ticket_box.add_child(wrap)
 	tickets[customer] = wrap
 	customer.set_meta("ticket_build_clock_stopped", false)
+	## A queued side ticket stays at zero until it becomes the current order.
+	if "order_elapsed_sec" in customer:
+		customer.order_elapsed_sec = 0.0
 	if customer.has_method("stop_order_clock"):
 		customer.stop_order_clock()
 	_highlight_tickets()
@@ -44183,7 +45890,17 @@ func _maybe_stop_ticket_clock_for_build_complete(customer: Node3D) -> void:
 	var burger_order: Array = GameDataScript.order_burger_items(customer.order)
 	if burger_order.is_empty():
 		return
+	## Stop as soon as the required burger is complete on Build. Side drinks,
+	## fries and ice cream do not keep the burger-making stopwatch running.
 	var station_index := _find_perfect_station_for(customer.order)
+	for i in STATION_COUNT:
+		if station_index >= 0:
+			break
+		_sync_station_cheese_items(i)
+		var built: Array = GameDataScript.order_burger_items(stations[i]["items"])
+		if bool(GameDataScript.compare_orders(built, burger_order).get("perfect", false)):
+			station_index = i
+			break
 	if station_index < 0:
 		return
 	if _station_has_melting_cheese(station_index):
@@ -44389,6 +46106,7 @@ func _select_ticket_local(customer: Node3D) -> void:
 		return
 	selected_customer = customer
 	_highlight_tickets()
+	_refresh_customer_queue_timers()
 	_flash("Order selected - Serve from any station", Color("FFE082"))
 
 
@@ -44422,11 +46140,12 @@ func _refresh_customer_queue_timers() -> void:
 		var active: bool = cust == front
 		if cust.has_method("set_queue_timer_active"):
 			cust.set_queue_timer_active(active)
-		if active:
+		if bool(cust.get_meta("ticket_build_clock_stopped", false)) or not active:
+			if cust.has_method("stop_order_clock"):
+				cust.stop_order_clock()
+		else:
 			if cust.has_method("start_order_clock"):
 				cust.start_order_clock(false)
-		elif cust.has_method("stop_order_clock"):
-			cust.stop_order_clock()
 
 
 func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
@@ -47349,8 +49068,7 @@ func _trash_build_layer_local(index: int, remove_i: int) -> void:
 		_reset_station_freshness(index)
 	_after_station_edit(index)
 	var label: String = GameDataScript.INGREDIENT_LABELS.get(removed, removed.capitalize())
-	if game_audio:
-		game_audio.play_trash()
+	_physical_garbage_react()
 	if removed == "patty":
 		_spend(COST_DROP_BURGER, "Trashed burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 	else:
@@ -47660,7 +49378,7 @@ func _layer_width_mul(item: String) -> float:
 		"patty":
 			return 1.20
 		"patty_cheese":
-			return 1.22
+			return 1.20
 		"cheese", "lettuce", "bacon", "tomato", "onion", "pickle":
 			return 1.18
 		"ketchup", "mustard":
@@ -47678,7 +49396,7 @@ func _layer_img_height(item: String) -> float:
 		"patty":
 			return 72.0
 		"patty_cheese":
-			return 74.0
+			return 72.0
 		"bacon":
 			return 58.0
 		"lettuce":
@@ -47816,6 +49534,9 @@ func _clear_local_held_icecream_after_remote_hand() -> void:
 func _try_auto_serve() -> void:
 	## Hand off as soon as a station matches a waiting ticket perfectly.
 	if not playing or _auto_serving or _serve_fly_busy:
+		return
+	## The tutorial explicitly teaches the Serve bell; do not steal that lesson.
+	if tutorial_mode:
 		return
 	## Co-op: any cook can initiate; the reliable serve RPC keeps peers in one outcome.
 	var waiting: Array = []
@@ -48896,6 +50617,256 @@ func _play_delivery_time_announcer(customer: Node3D) -> void:
 	game_audio.play_delivery_time_announcer(wait_sec)
 
 
+func _build_serve_breakdown_ui() -> void:
+	if serve_breakdown_panel != null and is_instance_valid(serve_breakdown_panel):
+		return
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root == null:
+		return
+
+	var panel := PanelContainer.new()
+	panel.name = "ServeBreakdown"
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.offset_left = -125.0
+	panel.offset_top = -200.0
+	panel.offset_right = 125.0
+	panel.offset_bottom = 200.0
+	panel.custom_minimum_size = Vector2(250, 400)
+	panel.z_index = 220
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.visible = false
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.93, 0.985, 1.0, 0.985)
+	panel_style.border_color = Color("54C8F4")
+	panel_style.set_border_width_all(3)
+	panel_style.set_corner_radius_all(24)
+	panel_style.content_margin_left = 12
+	panel_style.content_margin_right = 12
+	panel_style.content_margin_top = 13
+	panel_style.content_margin_bottom = 12
+	panel_style.shadow_color = Color(0.0, 0.14, 0.25, 0.45)
+	panel_style.shadow_size = 14
+	panel_style.shadow_offset = Vector2(3, 6)
+	panel.add_theme_stylebox_override("panel", panel_style)
+	ui_root.add_child(panel)
+	serve_breakdown_panel = panel
+
+	var column := VBoxContainer.new()
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_theme_constant_override("separation", 8)
+	panel.add_child(column)
+
+	var title := Label.new()
+	title.text = "★  ORDER SERVED"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_luckiest_label(title, 20)
+	title.add_theme_color_override("font_color", Color("1686B4"))
+	column.add_child(title)
+	serve_breakdown_title = title
+
+	var subtitle := Label.new()
+	subtitle.text = "LAST ORDER  •  RESULTS"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_label(subtitle, true, 9)
+	subtitle.add_theme_color_override("font_color", Color("5B8197"))
+	column.add_child(subtitle)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 7)
+	grid.add_theme_constant_override("v_separation", 7)
+	column.add_child(grid)
+
+	var metrics: Array[Dictionary] = [
+		{"id": "accuracy", "label": "ACCURACY"},
+		{"id": "doneness", "label": "DONENESS"},
+		{"id": "seasoning", "label": "SEASONING"},
+		{"id": "freshness", "label": "FRESHNESS"},
+		{"id": "speed", "label": "SPEED"},
+		{"id": "tip", "label": "TIP"},
+		{"id": "combo", "label": "COMBO"},
+		{"id": "payout", "label": "PAYOUT"},
+	]
+	serve_breakdown_values.clear()
+	serve_breakdown_cells.clear()
+	for metric in metrics:
+		var id := str(metric["id"])
+		var accent := _wii_metric_accent(id)
+		var tile := PanelContainer.new()
+		tile.custom_minimum_size = Vector2(106, 58)
+		tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var tile_style := StyleBoxFlat.new()
+		tile_style.bg_color = accent.lightened(0.80)
+		tile_style.border_color = accent.lightened(0.18)
+		tile_style.set_border_width_all(2)
+		tile_style.set_corner_radius_all(13)
+		tile_style.content_margin_left = 5
+		tile_style.content_margin_right = 5
+		tile_style.content_margin_top = 5
+		tile_style.content_margin_bottom = 5
+		tile.add_theme_stylebox_override("panel", tile_style)
+		grid.add_child(tile)
+		serve_breakdown_cells[id] = tile
+		var cell := VBoxContainer.new()
+		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_theme_constant_override("separation", 0)
+		tile.add_child(cell)
+		var caption := Label.new()
+		caption.text = str(metric["label"])
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		UiFontsScript.apply_label(caption, true, 8)
+		caption.add_theme_color_override("font_color", accent.darkened(0.38))
+		cell.add_child(caption)
+		var value := Label.new()
+		value.text = "—"
+		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		value.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		value.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		UiFontsScript.apply_label(value, true, 11)
+		value.add_theme_color_override("font_color", Color("244A62"))
+		cell.add_child(value)
+		serve_breakdown_values[id] = value
+
+	var footer := Label.new()
+	footer.text = "◎  WATCH • LEARN • COMBO!"
+	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	footer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_label(footer, true, 9)
+	footer.add_theme_color_override("font_color", Color("1686B4"))
+	column.add_child(footer)
+
+
+func _serve_breakdown_percent_color(value: float) -> Color:
+	if value >= 0.9:
+		return Color("A5D6A7")
+	if value >= 0.7:
+		return Color("FFEE58")
+	if value >= 0.4:
+		return Color("FFB74D")
+	return Color("EF5350")
+
+
+func _station_doneness_breakdown(station_index: int) -> Dictionary:
+	## Report the weakest patty so a bad patty cannot hide inside a double/triple.
+	if station_index < 0 or station_index >= stations.size():
+		return {"text": "N/A", "color": Color("90A4AE")}
+	var weakest_score := 101
+	var weakest_label := "N/A"
+	var weakest_color := Color("90A4AE")
+	for p in stations[station_index]["patties"]:
+		if p == null or not is_instance_valid(p) or not p.has_method("cook_rating"):
+			continue
+		var rating: Dictionary = p.cook_rating()
+		var score := int(rating.get("score", 0))
+		if score < weakest_score:
+			weakest_score = score
+			weakest_label = str(rating.get("label", "N/A"))
+			weakest_color = rating.get("color", Color("90A4AE")) as Color
+	if weakest_score > 100:
+		return {"text": "N/A", "color": Color("90A4AE")}
+	return {
+		"text": "%s  %d%%" % [weakest_label, weakest_score],
+		"color": weakest_color,
+	}
+
+
+func _show_serve_breakdown(data: Dictionary, customer: Node3D = null) -> void:
+	## Phone reviews keep the last-order data; the kitchen overlay is intentionally disabled.
+	if customer != null and is_instance_valid(customer):
+		customer.set_meta("serve_breakdown", data.duplicate(true))
+
+
+func _show_serve_breakdown_overlay(data: Dictionary, customer: Node3D = null) -> void:
+	## Retained as an inactive layout prototype; no gameplay path calls this.
+	if customer != null and is_instance_valid(customer):
+		customer.set_meta("serve_breakdown", data.duplicate(true))
+	if serve_breakdown_panel == null or not is_instance_valid(serve_breakdown_panel):
+		_build_serve_breakdown_ui()
+	if serve_breakdown_panel == null:
+		return
+	serve_breakdown_title.text = "★  %s" % str(data.get("title", "ORDER SERVED"))
+	serve_breakdown_title.add_theme_color_override(
+		"font_color", _wii_readable_color(
+			data.get("title_color", Color("39BCEB")) as Color
+		)
+	)
+	for id in serve_breakdown_values:
+		var value: Label = serve_breakdown_values[id]
+		value.text = str(data.get(id, "—"))
+		var grade_color := data.get("%s_color" % id, _wii_metric_accent(str(id))) as Color
+		value.add_theme_color_override("font_color", _wii_readable_color(grade_color))
+		var tile: PanelContainer = serve_breakdown_cells.get(id) as PanelContainer
+		if tile != null and is_instance_valid(tile):
+			var tile_style := tile.get_theme_stylebox("panel") as StyleBoxFlat
+			if tile_style != null:
+				tile_style.border_color = grade_color.darkened(0.04)
+				tile_style.bg_color = grade_color.lightened(0.82)
+	if _serve_breakdown_tween != null and is_instance_valid(_serve_breakdown_tween):
+		_serve_breakdown_tween.kill()
+	serve_breakdown_panel.visible = true
+	serve_breakdown_panel.modulate = Color(1, 1, 1, 0)
+	serve_breakdown_panel.scale = Vector2(0.94, 0.94)
+	serve_breakdown_panel.pivot_offset = Vector2(20.0, 38.0)
+	_serve_breakdown_tween = create_tween()
+	_serve_breakdown_tween.set_parallel(true)
+	_serve_breakdown_tween.tween_property(
+		serve_breakdown_panel, "modulate:a", 1.0, 0.16
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_serve_breakdown_tween.tween_property(
+		serve_breakdown_panel, "scale", Vector2.ONE, 0.20
+	).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_serve_breakdown_tween.set_parallel(false)
+	## 0.20s entrance + 9.15s hold + 0.65s exit = 10 seconds.
+	_serve_breakdown_tween.tween_interval(9.15)
+	_serve_breakdown_tween.tween_property(
+		serve_breakdown_panel, "modulate:a", 0.0, 0.65
+	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_serve_breakdown_tween.tween_callback(func() -> void:
+		if serve_breakdown_panel != null and is_instance_valid(serve_breakdown_panel):
+			serve_breakdown_panel.visible = false
+			serve_breakdown_panel.scale = Vector2.ONE
+		_serve_breakdown_tween = null
+	)
+
+
+func _show_side_serve_breakdown(
+	customer: Node3D,
+	pay: Dictionary,
+	payout: int,
+	side_name: String,
+	accent: Color
+) -> void:
+	var speed: Dictionary = customer.speed_rating(false) \
+		if customer != null and is_instance_valid(customer) and customer.has_method("speed_rating") \
+		else {"label": "—", "wait": 0.0, "color": Color("B0BEC5")}
+	var wait_sec := float(speed.get("wait", 0.0))
+	_show_serve_breakdown({
+		"title": "%s SERVED" % side_name,
+		"title_color": accent,
+		"accuracy": "100%",
+		"accuracy_color": Color("A5D6A7"),
+		"doneness": "N/A",
+		"doneness_color": Color("90A4AE"),
+		"seasoning": "N/A",
+		"seasoning_color": Color("90A4AE"),
+		"freshness": "READY",
+		"freshness_color": Color("A5D6A7"),
+		"speed": "%s  %.1fs" % [str(speed.get("label", "—")).to_upper(), wait_sec],
+		"speed_color": speed.get("color", Color("B0BEC5")),
+		"tip": _format_money(float(pay.get("tip", 0))),
+		"tip_color": Color("80CBC4") if int(pay.get("tip", 0)) > 0 else Color("B0BEC5"),
+		"combo": "x%d" % combo,
+		"combo_color": Color("FFEE58") if combo > 1 else Color.WHITE,
+		"payout": _format_money(float(payout)),
+		"payout_color": Color("A5D6A7") if payout > 0 else Color("EF5350"),
+	}, customer)
+
+
 func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	var cust: Node3D = customer
 	if cust == null or not is_instance_valid(cust):
@@ -48921,6 +50892,8 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	var tip_factor: float = cust.patience_ratio()
 	var fresh_r := _station_freshness_ratio(station_index)
 	var cook_r := _station_cook_rating(station_index, cust)
+	var speed_r: Dictionary = cook_r.duplicate()
+	var doneness_r := _station_doneness_breakdown(station_index)
 	var seasoned := _station_burgers_seasoned(station_index)
 	patty_mult *= float(cook_r.get("pay_mul", 1.0))
 	## Perfect toasted buns (~2s) bump payout; burnt toast hurts it.
@@ -49020,6 +50993,33 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 		if not guest_mp:
 			combo = 0
 		_flash("Wrong order! Customer is MAD%s" % cook_bit, Color("EF5350"))
+
+	var fresh_grade := _freshness_grade(fresh_r)
+	var actual_payout := 0 if disguise else payout
+	_show_serve_breakdown({
+		"title": "DINE & DASH" if disguise else ("ORDER SERVED" if payout > 0 else "ORDER FAILED"),
+		"title_color": Color("FF8A80") if disguise or payout <= 0 else Color("FFE082"),
+		"accuracy": "%d%%" % int(round(float(result.get("quality", 0.0)) * 100.0)),
+		"accuracy_color": _serve_breakdown_percent_color(float(result.get("quality", 0.0))),
+		"doneness": str(doneness_r.get("text", "N/A")),
+		"doneness_color": doneness_r.get("color", Color("90A4AE")),
+		"seasoning": "SEASONED" if seasoned else "MISSED",
+		"seasoning_color": Color("A5D6A7") if seasoned else Color("EF5350"),
+		"freshness": "%s  %d%%" % [
+			str(fresh_grade.get("text", "—")), int(round(fresh_r * 100.0))
+		],
+		"freshness_color": fresh_grade.get("color", Color("B0BEC5")),
+		"speed": "%s  %.1fs" % [
+			str(speed_r.get("label", "—")).to_upper(), float(speed_r.get("wait", 0.0))
+		],
+		"speed_color": speed_r.get("color", Color("B0BEC5")),
+		"tip": _format_money(float(tip_amt)),
+		"tip_color": Color("80CBC4") if tip_amt > 0 else Color("B0BEC5"),
+		"combo": "x%d" % combo,
+		"combo_color": Color("FFEE58") if combo > 1 else Color.WHITE,
+		"payout": _format_money(float(actual_payout)),
+		"payout_color": Color("A5D6A7") if actual_payout > 0 else Color("EF5350"),
+	}, cust)
 
 	if not guest_mp and disguise and _cook_rating_is_burnt(cook_r):
 		## Freeloader got charcoal — 1★ meow meltdown + photo of the burnt triple.
@@ -49144,6 +51144,10 @@ func _begin_soda_only_serve(customer: Node3D) -> void:
 		return
 	selected_customer = customer
 	_highlight_tickets()
+	## Side-order timing also stops at Serve press, before its handoff animation.
+	customer.set_meta("ticket_build_clock_stopped", true)
+	if customer.has_method("stop_order_clock"):
+		customer.stop_order_clock()
 	if customer.dialogue_open:
 		customer.dialogue_open = false
 	if game_audio and game_audio.has_method("play_order_up"):
@@ -49183,6 +51187,7 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 	var sodas: Array = GameDataScript.order_soda_ids(order)
 	if not sodas.is_empty():
 		soda_lab = str(GameDataScript.INGREDIENT_LABELS.get(sodas[0], "Soda")).to_upper()
+	_show_side_serve_breakdown(cust, pay, payout, soda_lab, Color("80DEEA"))
 	_flash("+%s  %s up!" % [_format_money(float(payout)), soda_lab], Color("80DEEA"))
 	if not guest_mp:
 		_maybe_record_social_review(4.2, "good", int(pay.get("tip", 0)), -1, cust)
@@ -49209,6 +51214,9 @@ func _begin_fries_only_serve(customer: Node3D) -> void:
 		return
 	selected_customer = customer
 	_highlight_tickets()
+	customer.set_meta("ticket_build_clock_stopped", true)
+	if customer.has_method("stop_order_clock"):
+		customer.stop_order_clock()
 	if customer.dialogue_open:
 		customer.dialogue_open = false
 	if game_audio and game_audio.has_method("play_order_up"):
@@ -49287,6 +51295,7 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 		total_served += 1
 		combo += 1
 		perfect_serves += 1
+	_show_side_serve_breakdown(cust, pay, payout, "FRIES", Color("FFD54F"))
 	_flash("+%s  FRIES up!" % _format_money(float(payout)), Color("FFD54F"))
 	if not guest_mp:
 		_maybe_record_social_review(4.1, "good", int(pay.get("tip", 0)), -1, cust)
@@ -49333,6 +51342,11 @@ func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> vo
 		return
 	selected_customer = customer
 	_highlight_tickets()
+	## Hard stop at Serve press as a safety net: scoring never includes the burger's
+	## toss/catch animation even if a final Build refresh landed in the same frame.
+	customer.set_meta("ticket_build_clock_stopped", true)
+	if customer.has_method("stop_order_clock"):
+		customer.stop_order_clock()
 	if customer.dialogue_open:
 		customer.dialogue_open = false
 
@@ -49483,14 +51497,394 @@ func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> v
 func _update_hud() -> void:
 	hud_money.text = _format_money(money)
 	hud_combo.text = "Combo x%d" % combo if combo > 0 else "Combo -"
+	var location_name := TruckLocationsScript.display_name(current_location_id)
 	if day_time <= 0.0 and customers.size() > 0:
-		hud_day.text = "Day %d  -  CLOSING" % day
+		hud_day.text = "%s  -  CLOSING" % location_name
 	else:
-		hud_day.text = "Day %d  -  %ds" % [day, maxi(0, int(ceil(day_time)))]
+		hud_day.text = "%s  -  %ds" % [location_name, maxi(0, int(ceil(day_time)))]
 
 
-func _begin_start_tutorial() -> void:
-	_set_tutorial_hint(1, "Turn on grill or burner")
+func _build_guided_tutorial_ui() -> void:
+	if tutorial_panel != null and is_instance_valid(tutorial_panel):
+		return
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root == null:
+		return
+	tutorial_panel = PanelContainer.new()
+	tutorial_panel.name = "GuidedTutorialPanel"
+	tutorial_panel.visible = false
+	tutorial_panel.z_index = 70
+	tutorial_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	## Keep the coach at the upper-left, clear of the order-ticket rail.
+	tutorial_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	tutorial_panel.offset_left = 18.0
+	tutorial_panel.offset_right = 368.0
+	tutorial_panel.offset_top = 82.0
+	tutorial_panel.offset_bottom = 82.0
+	tutorial_panel.custom_minimum_size = Vector2(350, 0)
+	tutorial_panel.size = Vector2(350, 0)
+	var shell := StyleBoxFlat.new()
+	shell.bg_color = Color(0.035, 0.055, 0.085, 0.97)
+	shell.border_color = Color(1.0, 0.72, 0.22, 0.95)
+	shell.set_border_width_all(3)
+	shell.set_corner_radius_all(16)
+	shell.content_margin_left = 16
+	shell.content_margin_right = 16
+	shell.content_margin_top = 13
+	shell.content_margin_bottom = 13
+	shell.shadow_color = Color(0, 0, 0, 0.48)
+	shell.shadow_size = 10
+	shell.shadow_offset = Vector2(0, 5)
+	tutorial_panel.add_theme_stylebox_override("panel", shell)
+	ui_root.add_child(tutorial_panel)
+
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 7)
+	tutorial_panel.add_child(v)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	v.add_child(head)
+	var coach := Label.new()
+	coach.text = "CAT COACH  /ᐠ｡ꞈ｡ᐟ\\"
+	coach.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(coach, true, 13)
+	coach.add_theme_color_override("font_color", Color("FFD166"))
+	head.add_child(coach)
+	tutorial_timer_label = Label.new()
+	tutorial_timer_label.text = "15:00"
+	tutorial_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(tutorial_timer_label, true, 12)
+	tutorial_timer_label.add_theme_color_override("font_color", Color("A5D6A7"))
+	head.add_child(tutorial_timer_label)
+	tutorial_lesson_label = Label.new()
+	tutorial_lesson_label.text = "LESSON 1 OF 15"
+	UiFontsScript.apply_label(tutorial_lesson_label, true, 9)
+	tutorial_lesson_label.add_theme_color_override("font_color", Color("90CAF9"))
+	v.add_child(tutorial_lesson_label)
+	tutorial_title_label = Label.new()
+	tutorial_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(tutorial_title_label, true, 18)
+	tutorial_title_label.add_theme_color_override("font_color", Color.WHITE)
+	v.add_child(tutorial_title_label)
+	tutorial_body_label = Label.new()
+	tutorial_body_label.custom_minimum_size = Vector2(310, 0)
+	tutorial_body_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tutorial_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(tutorial_body_label, false, 12)
+	tutorial_body_label.add_theme_color_override("font_color", Color(0.86, 0.90, 0.96))
+	v.add_child(tutorial_body_label)
+	tutorial_progress = ProgressBar.new()
+	tutorial_progress.custom_minimum_size = Vector2(0, 8)
+	tutorial_progress.max_value = float(GUIDED_TUTORIAL_STEPS.size())
+	tutorial_progress.show_percentage = false
+	var progress_bg := StyleBoxFlat.new()
+	progress_bg.bg_color = Color(0.09, 0.12, 0.17, 1.0)
+	progress_bg.set_corner_radius_all(4)
+	var progress_fill := StyleBoxFlat.new()
+	progress_fill.bg_color = Color("FFD166")
+	progress_fill.set_corner_radius_all(4)
+	tutorial_progress.add_theme_stylebox_override("background", progress_bg)
+	tutorial_progress.add_theme_stylebox_override("fill", progress_fill)
+	v.add_child(tutorial_progress)
+
+	## Always-visible mouse legend. The active button changes with each lesson,
+	## while actual clicks also pulse at the real cursor location.
+	tutorial_mouse_card = PanelContainer.new()
+	var mouse_style := StyleBoxFlat.new()
+	mouse_style.bg_color = Color(0.075, 0.10, 0.15, 0.96)
+	mouse_style.border_color = Color(0.30, 0.46, 0.66, 0.9)
+	mouse_style.set_border_width_all(1)
+	mouse_style.set_corner_radius_all(8)
+	mouse_style.content_margin_left = 8
+	mouse_style.content_margin_right = 8
+	mouse_style.content_margin_top = 5
+	mouse_style.content_margin_bottom = 5
+	tutorial_mouse_card.add_theme_stylebox_override("panel", mouse_style)
+	v.add_child(tutorial_mouse_card)
+	var mouse_row := HBoxContainer.new()
+	mouse_row.add_theme_constant_override("separation", 7)
+	tutorial_mouse_card.add_child(mouse_row)
+	var mouse_icon := Label.new()
+	mouse_icon.text = "MOUSE"
+	UiFontsScript.apply_label(mouse_icon, true, 9)
+	mouse_icon.add_theme_color_override("font_color", Color("B0BEC5"))
+	mouse_row.add_child(mouse_icon)
+	tutorial_mouse_left = Label.new()
+	tutorial_mouse_left.text = "L CLICK"
+	UiFontsScript.apply_label(tutorial_mouse_left, true, 9)
+	mouse_row.add_child(tutorial_mouse_left)
+	tutorial_mouse_right = Label.new()
+	tutorial_mouse_right.text = "R CLICK"
+	UiFontsScript.apply_label(tutorial_mouse_right, true, 9)
+	mouse_row.add_child(tutorial_mouse_right)
+	tutorial_mouse_caption = Label.new()
+	tutorial_mouse_caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tutorial_mouse_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(tutorial_mouse_caption, false, 9)
+	mouse_row.add_child(tutorial_mouse_caption)
+	var buttons := HBoxContainer.new()
+	buttons.alignment = BoxContainer.ALIGNMENT_END
+	buttons.add_theme_constant_override("separation", 8)
+	v.add_child(buttons)
+	tutorial_exit_btn = Button.new()
+	tutorial_exit_btn.text = "EXIT TUTORIAL"
+	tutorial_exit_btn.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(tutorial_exit_btn, true, 10)
+	_style_phone_reply_button(tutorial_exit_btn, Color("EF9A9A"))
+	tutorial_exit_btn.pressed.connect(func():
+		_sfx_click()
+		_exit_guided_tutorial()
+	)
+	buttons.add_child(tutorial_exit_btn)
+	tutorial_action_btn = Button.new()
+	tutorial_action_btn.text = "LET'S COOK"
+	tutorial_action_btn.focus_mode = Control.FOCUS_NONE
+	UiFontsScript.apply_button(tutorial_action_btn, true, 11)
+	_style_phone_buy_button(tutorial_action_btn)
+	tutorial_action_btn.pressed.connect(_on_guided_tutorial_action)
+	buttons.add_child(tutorial_action_btn)
+
+	tutorial_click_overlay = Control.new()
+	tutorial_click_overlay.name = "TutorialClickVisuals"
+	tutorial_click_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tutorial_click_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tutorial_click_overlay.z_index = 280
+	ui_root.add_child(tutorial_click_overlay)
+
+
+func _spawn_guided_tutorial_customer() -> void:
+	var order: Array[String] = ["bun_bottom", "patty", "tomato", "lettuce", "bun_top"]
+	_spawn_customer_local(order, Color("FFD166"), GUIDED_TUTORIAL_DURATION + 120.0, 0)
+
+
+func _guided_tutorial_patty():
+	for p in grill:
+		if p != null and is_instance_valid(p) and not _is_bun_toast(p):
+			return p
+	return null
+
+
+func _guided_tutorial_step_ready() -> bool:
+	var patty = _guided_tutorial_patty()
+	match _tutorial_step:
+		1:
+			return grill_on
+		2:
+			return patty != null and bool(patty.get("place_ball_waiting"))
+		3:
+			return patty != null and not bool(patty.get("place_ball_waiting")) \
+				and not bool(patty.get("place_morphing"))
+		4:
+			return patty != null and float(patty.get("seasoning")) >= 0.1
+		5:
+			return patty != null and bool(patty.can_flip())
+		6:
+			return patty != null and bool(patty.get("flipped_once"))
+		7:
+			return patty != null and bool(patty.can_scoop())
+		8:
+			return stations[STATION_CRAFT]["items"].has("patty")
+		9:
+			return stations[STATION_CRAFT]["items"].has("lettuce")
+		10:
+			return stations[STATION_CRAFT]["items"].has("tomato") \
+				and stations[STATION_CRAFT]["items"].has("lettuce")
+		11:
+			return stations[STATION_CRAFT]["items"].has("bun_top")
+		12:
+			return total_served > 0
+		13:
+			return _tutorial_bought_supply
+		14:
+			return _tutorial_cleaned_grill and not grill_on
+	return false
+
+
+func _set_guided_tutorial_step(step: int) -> void:
+	if not tutorial_mode or GUIDED_TUTORIAL_STEPS.is_empty():
+		return
+	_tutorial_step = clampi(step, 0, GUIDED_TUTORIAL_STEPS.size() - 1)
+	var lesson: Dictionary = GUIDED_TUTORIAL_STEPS[_tutorial_step]
+	## The coach card owns tutorial copy; keep the legacy center-screen hint off.
+	_tutorial_text = ""
+	if tutorial_panel == null or not is_instance_valid(tutorial_panel):
+		_build_guided_tutorial_ui()
+	if tutorial_panel == null:
+		return
+	tutorial_panel.visible = true
+	tutorial_lesson_label.text = "LESSON %d OF %d" % [_tutorial_step + 1, GUIDED_TUTORIAL_STEPS.size()]
+	tutorial_title_label.text = str(lesson.get("title", "TUTORIAL"))
+	tutorial_body_label.text = str(lesson.get("body", ""))
+	tutorial_progress.value = float(_tutorial_step + 1)
+	tutorial_action_btn.visible = _tutorial_step == 0 or _tutorial_step == 13
+	tutorial_action_btn.text = "LET'S COOK" if _tutorial_step == 0 else "SHOW INVENTORY"
+	_update_tutorial_mouse_legend()
+	if _tutorial_step == 14 and not _tutorial_clean_patch_created:
+		_tutorial_clean_patch_created = true
+		_tutorial_cleaned_grill = false
+		var at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.030, GRILL_SURFACE_Z)
+		_leave_grill_residue_local(0, at, false, "patty", 1.0)
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("pet"):
+		window_cat.call("pet", true)
+
+
+func _update_tutorial_mouse_legend() -> void:
+	if tutorial_mouse_left == null or tutorial_mouse_right == null or tutorial_mouse_caption == null:
+		return
+	var right_steps := [2, 3]
+	var use_right := _tutorial_step in right_steps
+	var use_left := _tutorial_step in [1, 4, 6, 8, 9, 10, 11, 12, 13, 14]
+	tutorial_mouse_left.add_theme_color_override(
+		"font_color", Color("FFD166") if use_left else Color(0.46, 0.52, 0.61)
+	)
+	tutorial_mouse_right.add_theme_color_override(
+		"font_color", Color("FFD166") if use_right else Color(0.46, 0.52, 0.61)
+	)
+	if use_right:
+		tutorial_mouse_caption.text = "RIGHT CLICK"
+	elif _tutorial_step == 14:
+		tutorial_mouse_caption.text = "HOLD + DRAG"
+	elif use_left:
+		tutorial_mouse_caption.text = "LEFT CLICK"
+	else:
+		tutorial_mouse_caption.text = "WATCH"
+
+
+func _show_tutorial_click_visual(screen_pos: Vector2, button_index: int) -> void:
+	if not tutorial_mode or tutorial_click_overlay == null or not is_instance_valid(tutorial_click_overlay):
+		return
+	var ring := Panel.new()
+	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ring.size = Vector2(42, 42)
+	ring.pivot_offset = ring.size * 0.5
+	ring.position = screen_pos - ring.pivot_offset
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 0.82, 0.28, 0.16) if button_index == MOUSE_BUTTON_LEFT \
+		else Color(0.38, 0.72, 1.0, 0.16)
+	style.border_color = Color("FFD166") if button_index == MOUSE_BUTTON_LEFT else Color("64B5F6")
+	style.set_border_width_all(3)
+	style.set_corner_radius_all(22)
+	ring.add_theme_stylebox_override("panel", style)
+	tutorial_click_overlay.add_child(ring)
+	var tag := Label.new()
+	tag.text = "L" if button_index == MOUSE_BUTTON_LEFT else "R"
+	tag.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_label(tag, true, 13)
+	tag.add_theme_color_override("font_color", style.border_color)
+	ring.add_child(tag)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(ring, "scale", Vector2(1.8, 1.8), 0.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(ring, "modulate:a", 0.0, 0.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.chain().tween_callback(ring.queue_free)
+
+
+func _update_guided_tutorial(delta: float) -> void:
+	if not tutorial_mode or _tutorial_complete:
+		return
+	if _tutorial_step > 0:
+		_tutorial_elapsed += delta
+	var remaining := maxf(0.0, GUIDED_TUTORIAL_DURATION - _tutorial_elapsed)
+	day_time = remaining
+	if tutorial_timer_label != null:
+		var mins := int(remaining / 60.0)
+		var secs := int(remaining) % 60
+		tutorial_timer_label.text = "%02d:%02d" % [mins, secs]
+		tutorial_timer_label.add_theme_color_override(
+			"font_color", Color("EF9A9A") if remaining <= 60.0 else Color("A5D6A7")
+		)
+	if remaining <= 0.0:
+		_guided_tutorial_time_up()
+		return
+	if _tutorial_step == 9 and stations[STATION_CRAFT]["items"].has("tomato") \
+			and not stations[STATION_CRAFT]["items"].has("lettuce"):
+		tutorial_body_label.text = "That was tomato—good topping, wrong lesson. Now click LETTUCE; we'll count tomato on the next step."
+	elif _tutorial_step > 0 and _guided_tutorial_step_ready():
+		if _tutorial_step >= GUIDED_TUTORIAL_STEPS.size() - 1:
+			_complete_guided_tutorial()
+		else:
+			_set_guided_tutorial_step(_tutorial_step + 1)
+
+
+func _on_guided_tutorial_action() -> void:
+	_sfx_click()
+	if _tutorial_complete:
+		_exit_guided_tutorial()
+	elif _tutorial_elapsed >= GUIDED_TUTORIAL_DURATION:
+		_start_game(true)
+	elif _tutorial_step == 0:
+		_set_guided_tutorial_step(1)
+	elif _tutorial_step == 13:
+		call_deferred("_tutorial_show_inventory")
+
+
+func _tutorial_show_inventory() -> void:
+	if phone_scroll == null or not is_instance_valid(phone_scroll):
+		return
+	var bar := phone_scroll.get_v_scroll_bar()
+	phone_scroll.scroll_vertical = int(bar.max_value) if bar != null else 99999
+	_phone_scroll_vel = 0.0
+
+
+func _complete_guided_tutorial() -> void:
+	_tutorial_complete = true
+	playing = false
+	_set_grill_on(false)
+	if game_audio:
+		game_audio.set_sizzle_active(false)
+	tutorial_lesson_label.text = "TUTORIAL COMPLETE"
+	tutorial_title_label.text = "YOU'RE READY TO OPEN!"
+	tutorial_body_label.text = "Great job! Purr-fect work. You cooked, built, served, restocked, and cleaned the truck. Start a normal shift whenever you're ready."
+	tutorial_progress.value = tutorial_progress.max_value
+	tutorial_action_btn.text = "MAIN MENU"
+	tutorial_action_btn.visible = true
+	_flash("Tutorial complete! The cat says you're ready.", Color("FFD166"), 4.0)
+
+
+func _guided_tutorial_time_up() -> void:
+	_tutorial_complete = false
+	playing = false
+	_set_grill_on(false)
+	if game_audio:
+		game_audio.set_sizzle_active(false)
+	tutorial_lesson_label.text = "15-MINUTE PRACTICE COMPLETE"
+	tutorial_title_label.text = "TIME FOR ANOTHER TRY?"
+	tutorial_body_label.text = "The cat stopped the clock so nothing burns. Choose Try Again to restart the guided lesson, or return to the main menu."
+	tutorial_action_btn.text = "TRY AGAIN"
+	tutorial_action_btn.visible = true
+
+
+func _hide_guided_tutorial_ui() -> void:
+	if tutorial_panel != null and is_instance_valid(tutorial_panel):
+		tutorial_panel.visible = false
+
+
+func _exit_guided_tutorial() -> void:
+	tutorial_mode = false
+	_tutorial_complete = false
+	_tutorial_step = 0
+	_tutorial_text = ""
+	_hide_guided_tutorial_ui()
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("set_tutorial_coach"):
+		window_cat.call("set_tutorial_coach", false)
+	playing = false
+	_set_grill_on(false)
+	if game_audio:
+		game_audio.set_sizzle_active(false)
+	_clear_all_patty()
+	_clear_spatula()
+	_clear_customers()
+	_clear_all_stations()
+	_cancel_cheese_hold_silent()
+	_cancel_shaker_hold_silent()
+	_reset_oil_bottle()
+	if start_overlay != null:
+		start_overlay.visible = true
+	_start_intro_title_music()
 
 
 func _set_tutorial_hint(step: int, text: String) -> void:
@@ -49728,6 +52122,7 @@ func _setup_start_menu_chrome() -> void:
 
 func _setup_location_map_ui() -> void:
 	_load_truck_location()
+	_apply_street_background_texture()
 	if _location_map_layer != null and is_instance_valid(_location_map_layer):
 		return
 	_location_map_layer = CanvasLayer.new()
@@ -49748,6 +52143,27 @@ func _setup_location_map_ui() -> void:
 	)
 
 
+func _setup_game_over_location_button() -> void:
+	if game_over_location_btn != null and is_instance_valid(game_over_location_btn):
+		return
+	var box := get_node_or_null("UI/Root/GameOverPanel/GOMargin/GOVBox") as VBoxContainer
+	if box == null:
+		return
+	game_over_location_btn = Button.new()
+	game_over_location_btn.name = "ChooseAreaButton"
+	game_over_location_btn.text = "CHOOSE ANOTHER AREA"
+	game_over_location_btn.custom_minimum_size = Vector2(220, 44)
+	game_over_location_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	game_over_location_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(game_over_location_btn, 17)
+	game_over_location_btn.pressed.connect(func():
+		_sfx_click()
+		_open_location_map()
+	)
+	box.add_child(game_over_location_btn)
+	box.move_child(game_over_location_btn, restart_btn.get_index())
+
+
 func _setup_start_location_button() -> void:
 	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
 	if card_col == null:
@@ -49756,7 +52172,7 @@ func _setup_start_location_button() -> void:
 		return
 	location_map_btn = Button.new()
 	location_map_btn.name = "ChangeLocationButton"
-	location_map_btn.text = "CHANGE LOCATION"
+	location_map_btn.text = "AREA: %s  -  CHANGE" % TruckLocationsScript.display_name(current_location_id).to_upper()
 	location_map_btn.custom_minimum_size = Vector2(0, 46)
 	location_map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	location_map_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -49791,6 +52207,50 @@ func _setup_start_location_button() -> void:
 		card_col.move_child(location_map_btn, mode_row.get_index() + 1)
 
 
+func _setup_tutorial_menu_button() -> void:
+	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
+	if card_col == null:
+		return
+	if tutorial_btn != null and is_instance_valid(tutorial_btn):
+		return
+	tutorial_btn = Button.new()
+	tutorial_btn.name = "TutorialButton"
+	tutorial_btn.text = "CAT TUTORIAL  ·  15 MIN"
+	tutorial_btn.tooltip_text = "A separate guided practice mode with the cat coach"
+	tutorial_btn.custom_minimum_size = Vector2(0, 48)
+	tutorial_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tutorial_btn.focus_mode = Control.FOCUS_NONE
+	tutorial_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(tutorial_btn, 18)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.12, 0.20, 0.28, 0.98)
+	normal.set_corner_radius_all(9)
+	normal.set_border_width_all(2)
+	normal.border_color = Color("FFD166")
+	normal.content_margin_left = 16
+	normal.content_margin_right = 16
+	normal.content_margin_top = 12
+	normal.content_margin_bottom = 7
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.18, 0.29, 0.38, 1.0)
+	hover.border_color = Color("FFF1A8")
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(0.08, 0.14, 0.20, 1.0)
+	tutorial_btn.add_theme_stylebox_override("normal", normal)
+	tutorial_btn.add_theme_stylebox_override("hover", hover)
+	tutorial_btn.add_theme_stylebox_override("pressed", pressed)
+	tutorial_btn.add_theme_color_override("font_color", Color("FFF4D0"))
+	tutorial_btn.add_theme_constant_override("outline_size", 0)
+	tutorial_btn.pressed.connect(func():
+		_sfx_click()
+		_start_game(true)
+	)
+	card_col.add_child(tutorial_btn)
+	var mode_row := card_col.get_node_or_null("StartModeRow")
+	if mode_row != null:
+		card_col.move_child(tutorial_btn, mode_row.get_index() + 1)
+
+
 func _open_location_map() -> void:
 	if _location_map_ui == null or not is_instance_valid(_location_map_ui):
 		_setup_location_map_ui()
@@ -49811,16 +52271,39 @@ func _on_location_confirmed(location_id: String) -> void:
 func _apply_location_local(location_id: String) -> void:
 	current_location_id = location_id
 	_save_truck_location()
-	## Customer spawn/patience + street matte swap hook up later via TruckLocationsScript.stats_for / background_path.
+	_apply_street_background_texture()
 	var loc_name: String = TruckLocationsScript.display_name(location_id)
 	var tier: String = TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(location_id))
 	_flash("Parked at %s (%s)" % [loc_name, tier], TruckLocationsScript.tier_color(TruckLocationsScript.tier_of(location_id)))
+	if location_map_btn != null and is_instance_valid(location_map_btn):
+		location_map_btn.text = "AREA: %s  -  CHANGE" % loc_name.to_upper()
+	if game_over_panel != null and game_over_panel.visible and restart_btn != null:
+		restart_btn.text = "START SHIFT AT %s" % loc_name.to_upper()
+		_update_shift_complete_location_summary()
 	## Keep open map pin + cat marker in sync if the panel is up.
 	if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
 		if _location_map_ui.has_method("set_parked_id"):
 			_location_map_ui.call("set_parked_id", current_location_id)
 		elif _location_map_ui.has_method("open"):
 			_location_map_ui.open(current_location_id)
+
+
+func _update_shift_complete_location_summary() -> void:
+	if playing or game_over_label == null or not game_over_panel.visible:
+		return
+	var location_name := TruckLocationsScript.display_name(current_location_id)
+	var rank := TruckLocationsScript.rank_of(current_location_id)
+	var social_block := _format_day_social_recap()
+	game_over_label.text = "%s selected\nArea %d of %d - %s\n\nPrevious shift: Served %d | Perfect %d\nWallet: %s\n\n%s\n\nStart here when you're ready." % [
+		location_name,
+		rank,
+		TruckLocationsScript.all().size(),
+		TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(current_location_id)),
+		total_served,
+		perfect_serves,
+		_format_money(money),
+		social_block,
+	]
 
 
 func _load_truck_location() -> void:
@@ -49933,6 +52416,7 @@ func _setup_multiplayer_ui() -> void:
 	)
 
 	_setup_start_menu_chrome()
+	_setup_tutorial_menu_button()
 	_setup_start_location_button()
 
 	_mp_lobby_root = Control.new()
@@ -50786,7 +53270,8 @@ func _mp_send_social_feed_to(peer_id: int) -> void:
 		pack["id"],
 		pack["reply"],
 		pack["reply_kind"],
-		pack["argue"]
+		pack["argue"],
+		pack["breakdown"]
 	)
 
 
@@ -50802,7 +53287,8 @@ func _mp_broadcast_social_feed() -> void:
 		pack["id"],
 		pack["reply"],
 		pack["reply_kind"],
-		pack["argue"]
+		pack["argue"],
+		pack["breakdown"]
 	)
 
 
@@ -50815,6 +53301,7 @@ func _mp_pack_social_feed() -> Dictionary:
 	var reply_arr: Array = []
 	var reply_kind_arr: Array = []
 	var argue_arr: Array = []
+	var breakdown_arr: Array = []
 	for post in social_reviews:
 		if typeof(post) != TYPE_DICTIONARY:
 			continue
@@ -50825,6 +53312,8 @@ func _mp_pack_social_feed() -> Dictionary:
 		reply_arr.append(str(post.get("reply", "")))
 		reply_kind_arr.append(str(post.get("reply_kind", "")))
 		argue_arr.append(str(post.get("argue", "")))
+		var breakdown: Dictionary = post.get("breakdown", {}) as Dictionary
+		breakdown_arr.append(breakdown.duplicate(true))
 		var pic_png := PackedByteArray()
 		var pic = post.get("pic")
 		if pic is Texture2D:
@@ -50843,6 +53332,7 @@ func _mp_pack_social_feed() -> Dictionary:
 		"reply": reply_arr,
 		"reply_kind": reply_kind_arr,
 		"argue": argue_arr,
+		"breakdown": breakdown_arr,
 	}
 
 
@@ -52791,7 +55281,13 @@ func mp_customer_leave(net_id: int, angry: bool) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_social_review(stars: float, who: String, text: String, pic_png: PackedByteArray = PackedByteArray()) -> void:
+func mp_social_review(
+	stars: float,
+	who: String,
+	text: String,
+	pic_png: PackedByteArray = PackedByteArray(),
+	breakdown: Dictionary = {}
+) -> void:
 	## Guest mirrors a host feed post (chance already rolled on host).
 	if NetManager.is_host():
 		return
@@ -52801,7 +55297,7 @@ func mp_social_review(stars: float, who: String, text: String, pic_png: PackedBy
 		if img.load_png_from_buffer(pic_png) == OK:
 			pic = ImageTexture.create_from_image(img)
 	## Don't bump rating totals — economy sync owns those; this only fills FEED.
-	_apply_social_review(stars, who, text, pic, true)
+	_apply_social_review(stars, who, text, pic, true, breakdown)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -52823,7 +55319,8 @@ func mp_social_feed_sync(
 	id_arr: Array = [],
 	reply_arr: Array = [],
 	reply_kind_arr: Array = [],
-	argue_arr: Array = []
+	argue_arr: Array = [],
+	breakdown_arr: Array = []
 ) -> void:
 	## Absolute feed replace (late-join + live sync). Ratings stay on economy sync.
 	if NetManager.is_host():
@@ -52843,6 +55340,10 @@ func mp_social_feed_sync(
 			"reply_kind": str(reply_kind_arr[i]) if i < reply_kind_arr.size() else "",
 			"argue": str(argue_arr[i]) if i < argue_arr.size() else "",
 		}
+		if i < breakdown_arr.size() and typeof(breakdown_arr[i]) == TYPE_DICTIONARY:
+			var breakdown: Dictionary = breakdown_arr[i] as Dictionary
+			if not breakdown.is_empty():
+				post["breakdown"] = breakdown.duplicate(true)
 		if i < pic_arr.size():
 			var pic_png: PackedByteArray = pic_arr[i] as PackedByteArray
 			if pic_png != null and pic_png.size() > 32:
@@ -53072,8 +55573,7 @@ func mp_trash_station_patty(station_index: int, from_index: int) -> void:
 	var patty = _extract_station_patty(station_index, from_index)
 	if patty != null and is_instance_valid(patty):
 		patty.queue_free()
-		if game_audio and game_audio.has_method("play_trash"):
-			game_audio.play_trash()
+		_physical_garbage_react()
 		_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 	_mp_applying = false
 	if NetManager.is_host():

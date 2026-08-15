@@ -47,7 +47,9 @@ const INGREDIENT_COLORS := {
 }
 
 const EXTRA_TOPPINGS := ["cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
-const SODA_ORDER_IDS: Array[String] = ["soda_cola", "soda_lemon_lime", "soda_orange"]
+## Single fountain flavor for now.  Keep legacy labels above so old review/order
+## data can still be read, but all newly generated drink orders are Cola.
+const SODA_ORDER_IDS: Array[String] = ["soda_cola"]
 const SODA_ONLY_CHANCE := 0.08
 const SODA_WITH_BURGER_CHANCE := 0.30
 const ICECREAM_ONLY_CHANCE := 0.10
@@ -122,10 +124,11 @@ static func wants_fries(order: Array) -> bool:
 
 
 static func soda_flavor_from_order_id(id: String) -> String:
-	## "soda_cola" → "cola", "soda_lemon_lime" → "lemon_lime"
+	## The current fountain is Cola-only.  Legacy soda IDs also resolve to Cola
+	## so a saved ticket from an older build remains completable.
 	var s := str(id)
 	if s.begins_with("soda_"):
-		return s.substr(5)
+		return "cola"
 	return ""
 
 

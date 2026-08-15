@@ -123,6 +123,8 @@ const BAR_ABOVE_HEAD := 0.14
 const BAR_Y := HEAD_TOP_Y + BAR_ABOVE_HEAD
 const BAR_W := 0.42
 const BAR_H := 0.038
+## Guests face the truck at 180 degrees, so local +X places this screen-left.
+const REVIEW_CARD_SIDE_X := 0.95
 const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
 ## Knock-back tumble after a Glock hit, then settle and despawn.
@@ -156,8 +158,8 @@ var lane: int = 0
 var is_waiting: bool = false
 var is_leaving: bool = false
 var order_value: int = 8
-var queue_timer_active: bool = true
-## Serve-speed clock starts when the order ticket appears.
+var queue_timer_active: bool = false
+## Serve-speed clock starts only when this becomes the selected/current order.
 var order_elapsed_sec: float = 0.0
 var _order_clock_on: bool = false
 const SERVE_PERFECT_SEC := 10.0
@@ -601,7 +603,8 @@ func _build() -> void:
 	var bg_mesh := BoxMesh.new()
 	bg_mesh.size = Vector3(0.92, 0.32, 0.04)
 	_bubble_bg.mesh = bg_mesh
-	_bubble_bg.position = Vector3(0, BAR_Y + 0.22, 0)
+	## Keep customer speech beside the character instead of across their chest.
+	_bubble_bg.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.22, 0)
 	var bgm := StandardMaterial3D.new()
 	bgm.albedo_color = Color(1, 1, 1, 0.95)
 	bgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -611,7 +614,7 @@ func _build() -> void:
 
 	_bubble = Label3D.new()
 	_bubble.text = speech
-	_bubble.position = Vector3(0, BAR_Y + 0.22, 0.035)
+	_bubble.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.22, 0.035)
 	_bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_bubble.modulate = Color(0.12, 0.12, 0.14)
 	_bubble.visible = false
@@ -1360,7 +1363,7 @@ func apply_host_snapshot(pos: Vector3, yaw: float, snap: bool = false) -> void:
 
 
 func start_order_clock(reset_elapsed: bool = true) -> void:
-	## Call when the order ticket is created.
+	## The game calls this only while this is the selected/current ticket.
 	if reset_elapsed:
 		order_elapsed_sec = 0.0
 	_order_clock_on = true
@@ -1603,7 +1606,7 @@ func bounce_happy() -> void:
 
 
 func show_review_stars(stars: float, review_text: String = "") -> void:
-	## Floating rating above the head when this guest posts a social review.
+	## Compact floating rating beside the guest. Review wording stays on BizPhone.
 	var full := clampi(int(floor(clampf(stars, 0.0, 5.0) + 0.25)), 0, 5)
 	var text := ""
 	for i in 5:
@@ -1614,16 +1617,20 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		_review_box = MeshInstance3D.new()
 		_review_box.name = "ReviewBox"
 		var box_mesh := QuadMesh.new()
-		box_mesh.size = Vector2(2.75, 0.74)
+		box_mesh.size = Vector2(1.08, 0.34)
 		_review_box.mesh = box_mesh
 		_review_box.sorting_offset = 34.0
 		var review_box_mat := StandardMaterial3D.new()
-		review_box_mat.albedo_color = Color(0.045, 0.038, 0.028, 0.82)
+		review_box_mat.albedo_texture = _make_review_card_texture()
+		review_box_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.50)
 		review_box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		review_box_mat.no_depth_test = true
 		review_box_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 		review_box_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		review_box_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		review_box_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		review_box_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		review_box_mat.render_priority = 4
 		_review_box.material_override = review_box_mat
 		add_child(_review_box)
 	if _review_stars == null:
@@ -1632,20 +1639,19 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		_review_stars.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_review_stars.no_depth_test = true
 		_review_stars.shaded = false
-		UiFontsScript.apply_label3d(_review_stars, true, 40, 0.085)
+		UiFontsScript.apply_label3d(_review_stars, true, 30, 0.066)
 		_review_stars.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_review_stars.outline_size = 4
-		_review_stars.outline_modulate = Color(0.03, 0.02, 0.0, 0.75)
+		_review_stars.outline_size = 2
+		_review_stars.outline_modulate = Color(0.16, 0.10, 0.02, 0.72)
 		_review_stars.render_priority = 6
 		_review_stars.outline_render_priority = 5
 		add_child(_review_stars)
 	_review_stars.text = text
-	_review_stars.position = Vector3(0.0, BAR_Y + 0.08, 0.05)
-	var line_count := maxi(1, text.count("\n") + 1)
+	_review_stars.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.08, 0.05)
 	var box_mesh := _review_box.mesh as QuadMesh
 	if box_mesh != null:
-		box_mesh.size = Vector2(1.35, 0.42 + float(line_count) * 0.18)
-	_review_box.position = Vector3(0.0, BAR_Y + 0.09, 0.045)
+		box_mesh.size = Vector2(1.08, 0.34)
+	_review_box.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.09, 0.045)
 	## Gold for solid ratings; cooler amber when they roasted you.
 	if full >= 4:
 		_review_stars.modulate = Color(1.0, 0.92, 0.38, 1.0)
@@ -1657,7 +1663,7 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		_review_stars.modulate = Color(1.0, 0.52, 0.42, 1.0)
 	var box_mat := _review_box.material_override as StandardMaterial3D
 	if box_mat != null:
-		box_mat.albedo_color.a = 0.82
+		box_mat.albedo_color.a = 0.50
 	_review_box.visible = true
 	_review_stars.visible = true
 	if _review_stars_tween != null and is_instance_valid(_review_stars_tween):
@@ -1678,7 +1684,7 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		if mat != null:
 			mat.albedo_color.a = a
 	_review_stars_tween.tween_method(
-		fade_review_box, 0.82, 0.0, 0.75
+		fade_review_box, 0.50, 0.0, 0.75
 	).set_delay(3.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_review_stars_tween.chain().tween_callback(func() -> void:
 		if _review_stars != null and is_instance_valid(_review_stars):
@@ -1687,8 +1693,28 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 			_review_box.visible = false
 			var mat := _review_box.material_override as StandardMaterial3D
 			if mat != null:
-				mat.albedo_color.a = 0.82
+				mat.albedo_color.a = 0.50
 	)
+
+
+func _make_review_card_texture() -> ImageTexture:
+	## Soft antialiased rounded rectangle mask; material alpha supplies the 50% fill.
+	const W := 192
+	const H := 64
+	const RADIUS := 16.0
+	var img := Image.create(W, H, false, Image.FORMAT_RGBA8)
+	var half := Vector2(float(W), float(H)) * 0.5
+	var inner := half - Vector2(RADIUS, RADIUS)
+	for y in H:
+		for x in W:
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5) - half
+			var q := Vector2(absf(p.x), absf(p.y)) - inner
+			var outside := Vector2(maxf(q.x, 0.0), maxf(q.y, 0.0)).length()
+			var inside := minf(maxf(q.x, q.y), 0.0)
+			var signed_distance := outside + inside - RADIUS
+			var edge_alpha := clampf(0.5 - signed_distance, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, edge_alpha))
+	return ImageTexture.create_from_image(img)
 
 
 func react_free_icecream(accepted: bool = true) -> void:

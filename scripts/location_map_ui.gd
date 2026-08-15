@@ -644,7 +644,11 @@ func _refresh_detail() -> void:
 	if _name_label:
 		_name_label.text = str(loc["name"])
 	if _tier_label:
-		_tier_label.text = TruckLocationsScript.tier_label(tier)
+		_tier_label.text = "AREA %d / %d  •  %s" % [
+			int(loc.get("rank", 1)),
+			TruckLocationsScript.all().size(),
+			TruckLocationsScript.tier_label(tier),
+		]
 		_tier_label.add_theme_color_override("font_color", TruckLocationsScript.tier_color(tier))
 	if _blurb_label:
 		_blurb_label.text = str(loc["blurb"])

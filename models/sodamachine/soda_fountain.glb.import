@@ -1,15 +1,15 @@
-﻿[remap]
+[remap]
 
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cqsoda01fountain"
-path="res://.godot/imported/soda_fountain.glb-332442c992fd407beb4f70dd37853d57.scn"
+uid="uid://cv1rn0b4nwbse"
+path="res://.godot/imported/soda_fountain.glb-936b23ed87e7832705b8bcd13b8f253c.scn"
 
 [deps]
 
 source_file="res://models/sodamachine/soda_fountain.glb"
-dest_files=["res://.godot/imported/soda_fountain.glb-332442c992fd407beb4f70dd37853d57.scn"]
+dest_files=["res://.godot/imported/soda_fountain.glb-936b23ed87e7832705b8bcd13b8f253c.scn"]
 
 [params]
 

@@ -1,5 +1,4 @@
-## Food-truck parking spots across the city.
-## Difficulty changes customer rate + patience later — gameplay/kitchen stay the same.
+## The five-stop food-truck route. Location, not day number, owns difficulty.
 extends RefCounted
 
 const TIER_EASY := "easy"
@@ -7,9 +6,8 @@ const TIER_MEDIUM := "medium"
 const TIER_HARD := "hard"
 const TIER_EXTREME := "extreme"
 
-const DEFAULT_ID := "night_market_peak"
+const DEFAULT_ID := "riverside_park"
 
-## Tier → UI color for pins / badges.
 const TIER_COLORS := {
 	TIER_EASY: Color(0.42, 0.82, 0.48),
 	TIER_MEDIUM: Color(1.0, 0.78, 0.28),
@@ -24,10 +22,7 @@ const TIER_LABELS := {
 	TIER_EXTREME: "VERY HARD",
 }
 
-## Multipliers applied when location logic is wired up.
-## spawn_rate: higher = customers arrive more often (shorter delays).
-## patience: lower = customers wait less before leaving.
-## customer_cap_bonus: extra simultaneous customers on top of day caps.
+## Defaults keep older callers safe. Every stop below supplies exact tuning.
 const TIER_STATS := {
 	TIER_EASY: {"spawn_rate": 0.85, "patience": 1.20, "customer_cap_bonus": 0},
 	TIER_MEDIUM: {"spawn_rate": 1.15, "patience": 0.95, "customer_cap_bonus": 0},
@@ -35,132 +30,52 @@ const TIER_STATS := {
 	TIER_EXTREME: {"spawn_rate": 2.10, "patience": 0.50, "customer_cap_bonus": 2},
 }
 
-## id, display name, blurb, tier, normalized map UV (0–1) on town_map.png building footprints.
-## UVs aim at building centers / park fountain — not road asphalt.
+## order_base + order_ramp drive recipe complexity over one shift; there is no day boost.
 const LOCATIONS: Array[Dictionary] = [
-	## --- Easy (5) ---
 	{
-		"id": "quiet_park",
-		"name": "Quiet Park",
-		"blurb": "Shade, joggers, and the occasional picnic. Gentle starter spot.",
-		"tier": TIER_EASY,
-		"map": Vector2(0.14, 0.76), ## PARKS fountain
-		"bg": "",
+		"id": "riverside_park", "name": "Riverside Park",
+		"blurb": "A relaxed first stop with patient walkers and a one-ticket line.",
+		"tier": TIER_EASY, "rank": 1, "map": Vector2(0.14, 0.76),
+		"bg": "res://assets/bg/street_window.png",
+		"first_delay": 18.0, "spawn_start": 25.0, "spawn_end": 15.0, "spawn_jitter": 4.0,
+		"customer_cap": 1, "patience_base": 92.0, "patience_jitter": 6.0,
+		"order_base": 0.00, "order_ramp": 0.25,
 	},
 	{
-		"id": "suburb_lane",
-		"name": "Suburb Lane",
-		"blurb": "Cul-de-sac cookouts. Neighbors wander over when they smell the grill.",
-		"tier": TIER_EASY,
-		"map": Vector2(0.88, 0.80), ## Bottom-right red-roof house
-		"bg": "",
+		"id": "market_street", "name": "Market Street",
+		"blurb": "A steady shopping crowd. Two orders can stack during the lunch wave.",
+		"tier": TIER_MEDIUM, "rank": 2, "map": Vector2(0.22, 0.48),
+		"bg": "res://IMAGES/location1.png",
+		"first_delay": 14.0, "spawn_start": 18.0, "spawn_end": 10.0, "spawn_jitter": 3.0,
+		"customer_cap": 2, "patience_base": 78.0, "patience_jitter": 5.0,
+		"order_base": 0.18, "order_ramp": 0.28,
 	},
 	{
-		"id": "library_lot",
-		"name": "Library Lot",
-		"blurb": "Study-break snacks. Polite line, plenty of time to plate.",
-		"tier": TIER_EASY,
-		"map": Vector2(0.16, 0.44), ## Middle-left grey office
-		"bg": "",
+		"id": "old_town_shops", "name": "Old Town Shops",
+		"blurb": "Tourists arrive in groups and ask for more complicated burgers.",
+		"tier": TIER_MEDIUM, "rank": 3, "map": Vector2(0.80, 0.46),
+		"bg": "res://assets/bg/street_preview_storefront.png",
+		"first_delay": 11.0, "spawn_start": 14.0, "spawn_end": 7.5, "spawn_jitter": 2.5,
+		"customer_cap": 3, "patience_base": 66.0, "patience_jitter": 5.0,
+		"order_base": 0.34, "order_ramp": 0.31,
 	},
 	{
-		"id": "community_garden",
-		"name": "Community Garden",
-		"blurb": "Gardeners and kids on bikes. Slow afternoon traffic.",
-		"tier": TIER_EASY,
-		"map": Vector2(0.20, 0.84), ## Park gazebo / benches
-		"bg": "",
+		"id": "downtown_row", "name": "Downtown Row",
+		"blurb": "Office rush: a full line, shorter patience, and demanding tickets.",
+		"tier": TIER_HARD, "rank": 4, "map": Vector2(0.53, 0.44),
+		"bg": "res://assets/backgrounds/pixel_palace_street.png",
+		"first_delay": 8.0, "spawn_start": 10.0, "spawn_end": 5.0, "spawn_jitter": 1.8,
+		"customer_cap": 4, "patience_base": 54.0, "patience_jitter": 4.0,
+		"order_base": 0.53, "order_ramp": 0.32,
 	},
 	{
-		"id": "residential_court",
-		"name": "Residential Court",
-		"blurb": "Apartment courtyard. Friendly regulars, low pressure.",
-		"tier": TIER_EASY,
-		"map": Vector2(0.18, 0.17), ## Top-left patio buildings
-		"bg": "",
-	},
-	## --- Medium (5) ---
-	{
-		"id": "downtown_corner",
-		"name": "Downtown Corner",
-		"blurb": "Sidewalk hustle. Lunch rush keeps you honest.",
-		"tier": TIER_MEDIUM,
-		"map": Vector2(0.53, 0.44), ## DOWNTOWN building
-		"bg": "",
-	},
-	{
-		"id": "office_plaza",
-		"name": "Office Plaza",
-		"blurb": "Cubicle escapees on the clock. Tickets stack mid-day.",
-		"tier": TIER_MEDIUM,
-		"map": Vector2(0.38, 0.16), ## Top mid-left commercial
-		"bg": "",
-	},
-	{
-		"id": "shopping_strip",
-		"name": "Shopping Strip",
-		"blurb": "Bag bags and window shoppers. Steady flow all shift.",
-		"tier": TIER_MEDIUM,
-		"map": Vector2(0.33, 0.79), ## Bottom mid-left red-roof shop
-		"bg": "",
-	},
-	{
-		"id": "transit_stop",
-		"name": "Transit Stop",
-		"blurb": "Bus arrivals dump hungry riders. Pace picks up.",
-		"tier": TIER_MEDIUM,
-		"map": Vector2(0.80, 0.46), ## Middle-right shops
-		"bg": "",
-	},
-	{
-		"id": "market_edge",
-		"name": "Market Edge",
-		"blurb": "Farmers-market spillover. Crowds pulse in waves.",
-		"tier": TIER_MEDIUM,
-		"map": Vector2(0.22, 0.48), ## Pink cafe / bakery
-		"bg": "",
-	},
-	## --- Hard (3) ---
-	{
-		"id": "stadium_tailgate",
-		"name": "Stadium Tailgate",
-		"blurb": "Pre-game frenzy. Long lines, short tempers.",
-		"tier": TIER_HARD,
-		"map": Vector2(0.64, 0.12), ## STADIUM roof
-		"bg": "",
-	},
-	{
-		"id": "festival_midway",
-		"name": "Festival Midway",
-		"blurb": "Lights, music, and hungry festival-goers nonstop.",
-		"tier": TIER_HARD,
-		"map": Vector2(0.88, 0.17), ## Far top-right brick shops
-		"bg": "",
-	},
-	{
-		"id": "mall_exterior",
-		"name": "Mall Exterior",
-		"blurb": "Food-court overflow. Everyone wants it yesterday.",
-		"tier": TIER_HARD,
-		"map": Vector2(0.68, 0.68), ## MALL building (above parking)
-		"bg": "",
-	},
-	## --- Very hard (2) ---
-	{
-		"id": "city_center_rush",
-		"name": "City Center Rush",
-		"blurb": "Heart of downtown at peak hour. Wall of tickets.",
-		"tier": TIER_EXTREME,
-		"map": Vector2(0.55, 0.42), ## Downtown upper facade
-		"bg": "",
-	},
-	{
-		"id": "night_market_peak",
-		"name": "Night Market Peak",
-		"blurb": "Neon chaos. Packed aisle, zero patience.",
-		"tier": TIER_EXTREME,
-		"map": Vector2(0.85, 0.42), ## Colorful mid-right block
-		"bg": "",
+		"id": "city_center_peak", "name": "City Center Peak",
+		"blurb": "The final stop. Peak crowds, complex orders, and almost no breathing room.",
+		"tier": TIER_EXTREME, "rank": 5, "map": Vector2(0.64, 0.12),
+		"bg": "res://assets/backgrounds/pixel_palace_festival.png",
+		"first_delay": 5.0, "spawn_start": 7.0, "spawn_end": 3.2, "spawn_jitter": 1.2,
+		"customer_cap": 4, "patience_base": 43.0, "patience_jitter": 3.0,
+		"order_base": 0.70, "order_ramp": 0.30,
 	},
 ]
 
@@ -189,14 +104,25 @@ static func tier_label(tier: String) -> String:
 
 
 static func stats_for(id: String) -> Dictionary:
-	var tier := tier_of(id)
-	return (TIER_STATS.get(tier, TIER_STATS[TIER_EASY]) as Dictionary).duplicate()
+	var loc := get_by_id(id)
+	var tier := str(loc.get("tier", TIER_EASY))
+	var stats := (TIER_STATS.get(tier, TIER_STATS[TIER_EASY]) as Dictionary).duplicate()
+	for key in [
+		"rank", "first_delay", "spawn_start", "spawn_end", "spawn_jitter",
+		"customer_cap", "patience_base", "patience_jitter", "order_base", "order_ramp"
+	]:
+		if loc.has(key):
+			stats[key] = loc[key]
+	return stats
 
 
 static func display_name(id: String) -> String:
 	return str(get_by_id(id).get("name", "Unknown Spot"))
 
 
+static func rank_of(id: String) -> int:
+	return int(get_by_id(id).get("rank", 1))
+
+
 static func background_path(id: String) -> String:
-	## Empty until per-location mattes exist — callers fall back to the default street.
 	return str(get_by_id(id).get("bg", ""))

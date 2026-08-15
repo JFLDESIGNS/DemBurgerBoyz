@@ -93,6 +93,8 @@ var _hold_meter_last_q: int = -1
 const HOLD_METER_PX := 48
 var _sizzle: float = 0.0
 var _bubbles: GPUParticles3D
+var _bubble_process_mat: ParticleProcessMaterial = null
+var _bubble_ball_profile: bool = false
 var _top_bubbles: GPUParticles3D
 var _steam: GPUParticles3D
 var _announced_flip: bool = false
@@ -102,6 +104,7 @@ var _done_jump_tw: Tween = null
 ## Right-click place: ice ball sits until a second right-click smash.
 var place_morphing: bool = false ## Ball visible and/or mid-squash
 var place_ball_waiting: bool = false ## Sphere down — waiting for smash click
+var ball_heat_motion_active: bool = false ## Burner motion only; cook time still waits for smash
 var _frozen_ball: Node3D = null
 var _place_morph_tw: Tween = null
 var _shadow_proxy: MeshInstance3D = null ## Flat-patty disc shadow; off while ice ball is up
@@ -123,6 +126,9 @@ const FROZEN_LAND_SETTLE_DUR := 0.15
 const FROZEN_BALL_CLIP_Y := 0.01524 * PATTY_SIZE_SCALE
 const FROZEN_BALL_HOLD_Y := 0.055 * FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH - FROZEN_BALL_CLIP_Y
 const FROZEN_BALL_LUMP_AMP := 0.016 ## WPO meat lumps (meters at unit sphere)
+const FROZEN_BALL_HEAT_SHIFT := 0.00145
+const FROZEN_BALL_HEAT_LIFT := 0.00115
+const FROZEN_BALL_HEAT_TILT := 1.15
 var _cook_img: Image
 var _cook_tex: ImageTexture
 static var _steam_tex: ImageTexture
@@ -436,6 +442,7 @@ func reset_for_grill_spawn(
 	_place_morph_tw = null
 	place_morphing = false
 	place_ball_waiting = false
+	ball_heat_motion_active = false
 	if _frozen_ball != null and is_instance_valid(_frozen_ball):
 		_frozen_ball.visible = false
 		_reset_frozen_ball_pose()
@@ -500,6 +507,7 @@ func reset_for_grill_spawn(
 	_set_hold_meter_visible(false)
 	if _bubbles:
 		_bubbles.emitting = false
+	_set_edge_bubble_profile(false)
 	if _top_bubbles:
 		_top_bubbles.emitting = false
 	if _steam:
@@ -512,6 +520,26 @@ func reset_for_grill_spawn(
 	_update_meat_top()
 	if _under_mat:
 		_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+
+
+func _set_edge_bubble_profile(ball_mode: bool) -> void:
+	## Reuse the normal depth-tested cooking particles for both shapes.  A
+	## spherical patty needs the emitter above the steel and a much tighter ring.
+	if _bubble_ball_profile == ball_mode:
+		return
+	_bubble_ball_profile = ball_mode
+	if _bubbles == null or not is_instance_valid(_bubbles) or _bubble_process_mat == null:
+		return
+	if ball_mode:
+		## Lift the normal, depth-tested emitter a full two inches above its prior
+		## spherical-patty position so the steel can no longer hide the particles.
+		_bubbles.position.y = 0.0408
+		_bubble_process_mat.emission_ring_radius = 0.055
+		_bubble_process_mat.emission_ring_inner_radius = 0.032
+	else:
+		_bubbles.position.y = -0.028
+		_bubble_process_mat.emission_ring_radius = 0.11
+		_bubble_process_mat.emission_ring_inner_radius = 0.08
 
 
 func _setup_cook_fx() -> void:
@@ -549,6 +577,7 @@ func _setup_cook_fx() -> void:
 	bscale_tex.gradient = bscale
 	bmat.color_ramp = bscale_tex
 	_bubbles.process_material = bmat
+	_bubble_process_mat = bmat
 	var bsphere := SphereMesh.new()
 	bsphere.radius = 0.006
 	bsphere.height = 0.012
@@ -821,10 +850,15 @@ func apply_mp_state(
 
 func _process(delta: float) -> void:
 	_update_flip_smoke(delta)
-	## Frozen sphere / smash morph — no cook FX (mesh is hidden; particles would look like huge balls).
+	_update_frozen_ball_heat_motion(delta)
+	## A settled meatball on hot steel gets the same small edge-grease bubbles as
+	## a flat patty, while its actual cook clock still waits for the smash.
 	var cooking := heating and not is_held and not place_ball_waiting and not place_morphing
+	var ball_bubbling := ball_heat_motion_active and place_ball_waiting \
+		and _place_morph_tw == null and not is_held
 	if _bubbles:
-		_bubbles.emitting = cooking
+		_set_edge_bubble_profile(ball_bubbling)
+		_bubbles.emitting = cooking or ball_bubbling
 	if _top_bubbles:
 		## Surface bubbles ~4s before flip, and again ~4s before scoop-ready.
 		var top_ready := false
@@ -2170,6 +2204,52 @@ func _reset_frozen_ball_pose() -> void:
 	## Wider than tall — 20% vertical squash by default.
 	_frozen_ball.scale = Vector3(FROZEN_BALL_SCALE, FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH, FROZEN_BALL_SCALE)
 	_frozen_ball.position = Vector3(0.0, FROZEN_BALL_HOLD_Y, 0.0)
+	_frozen_ball.rotation_degrees = Vector3.ZERO
+
+
+func _update_frozen_ball_heat_motion(delta: float) -> void:
+	## Unsmashed meat reacts to the hot steel without advancing cook_time or
+	## changing doneness. The landing/smash tweens keep full ownership
+	## while active; this gentle motion begins once the ball has settled.
+	if _frozen_ball == null or not is_instance_valid(_frozen_ball):
+		return
+	if not place_ball_waiting or _place_morph_tw != null:
+		return
+	var rest_scale := Vector3(
+		FROZEN_BALL_SCALE,
+		FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH,
+		FROZEN_BALL_SCALE
+	)
+	var rest_pos := Vector3(0.0, FROZEN_BALL_HOLD_Y, 0.0)
+	if not ball_heat_motion_active:
+		var settle := clampf(delta * 10.0, 0.0, 1.0)
+		_frozen_ball.position = _frozen_ball.position.lerp(rest_pos, settle)
+		_frozen_ball.rotation_degrees = _frozen_ball.rotation_degrees.lerp(Vector3.ZERO, settle)
+		_frozen_ball.scale = _frozen_ball.scale.lerp(rest_scale, settle)
+		return
+	var heat_motion := clampf(heat_mul, 0.35, 1.25)
+	_sizzle += delta * 7.2 * heat_motion
+	var sway_x := sin(_sizzle * 1.55)
+	var sway_z := cos(_sizzle * 1.82)
+	var pulse := sin(_sizzle * 2.35)
+	_frozen_ball.position = rest_pos + Vector3(
+		sway_x * FROZEN_BALL_HEAT_SHIFT,
+		absf(pulse) * FROZEN_BALL_HEAT_LIFT,
+		sway_z * FROZEN_BALL_HEAT_SHIFT * 0.82
+	)
+	_frozen_ball.rotation_degrees = Vector3(
+		sway_z * FROZEN_BALL_HEAT_TILT * 0.72,
+		sin(_sizzle * 0.74) * 0.65,
+		sway_x * FROZEN_BALL_HEAT_TILT
+	)
+	## Tiny alternating compression makes the raw ball feel alive on the heat,
+	## while preserving its weight and keeping its footprint almost stationary.
+	var breathe := pulse * 0.008
+	_frozen_ball.scale = Vector3(
+		rest_scale.x * (1.0 + breathe),
+		rest_scale.y * (1.0 - breathe * 0.72),
+		rest_scale.z * (1.0 - breathe * 0.55)
+	)
 
 
 func play_frozen_drop_appear() -> void:

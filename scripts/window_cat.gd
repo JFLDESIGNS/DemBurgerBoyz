@@ -74,6 +74,7 @@ var mp_puppet: bool = false
 ## When > 0, next peek uses this hold time (cat delivery).
 var _peek_override_sec: float = 0.0
 var _delivery_peek_active: bool = false
+var _tutorial_coach: bool = false
 
 
 func _ready() -> void:
@@ -86,7 +87,16 @@ func _ready() -> void:
 
 
 func _home_x() -> float:
-	return HOME_X
+	## Tutorial coach stands on the clearer camera-right side of the window.
+	return -1.38 if _tutorial_coach else HOME_X
+
+
+func set_tutorial_coach(active: bool) -> void:
+	_tutorial_coach = active
+	if active:
+		special_people_peek(15.0 * 60.0 + 30.0)
+	elif _state == "peek":
+		position.x = _home_x()
 
 
 func _home_z() -> float:
