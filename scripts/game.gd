@@ -33429,17 +33429,16 @@ func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
 
 
 func _ensure_soda_overfill_cascades(count: int = 33) -> void:
-	## Thin arc segments — enough for three curved camera-cardinal pour threads.
+	## Rounded beads — enough for three broken, camera-cardinal overflow trails.
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.0030
-		cyl.bottom_radius = 0.0060
-		cyl.height = 0.06
-		cyl.cap_top = false
-		cyl.cap_bottom = false
-		mi.mesh = cyl
+		var glob := SphereMesh.new()
+		glob.radius = 0.0080
+		glob.height = 0.0160
+		glob.radial_segments = 12
+		glob.rings = 6
+		mi.mesh = glob
 		mi.material_override = _make_soda_stream_material()
 		mi.visible = false
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -33509,7 +33508,7 @@ func _soda_arc_point(a: Vector3, b: Vector3, lift: float, t: float) -> Vector3:
 
 func _place_soda_overfill_ribbon(
 		mi: MeshInstance3D, lip: Vector3, land: Vector3, foam_col: Color, soda_tint: Color,
-		thin: float = 1.0
+		thickness: float = 1.0
 ) -> void:
 	var mid := (lip + land) * 0.5
 	var along := land - lip
@@ -33523,11 +33522,17 @@ func _place_soda_overfill_ribbon(
 	x_axis = x_axis.normalized()
 	var z_axis := x_axis.cross(y_axis).normalized()
 	mi.global_transform = Transform3D(Basis(x_axis, y_axis, z_axis).orthonormalized(), mid)
-	var cyl := mi.mesh as CylinderMesh
-	if cyl:
-		cyl.height = len
-		cyl.top_radius = 0.0028 * thin
-		cyl.bottom_radius = 0.0058 * thin
+	## Stretch a sphere into a softly rounded droplet. It covers only ~62% of
+	## its path segment, leaving visible air between globs instead of a wire line.
+	var glob := mi.mesh as SphereMesh
+	if glob:
+		var base_h := maxf(glob.height, 0.001)
+		var wobble := 0.90 + 0.13 * sin(float(mi.get_instance_id() % 19) * 1.71)
+		mi.scale = Vector3(
+			thickness * wobble,
+			maxf(0.70, len / base_h * 0.62),
+			thickness * (2.0 - wobble)
+		)
 	var mat := mi.material_override as ShaderMaterial
 	if mat:
 		mat.set_shader_parameter("soda_color", soda_tint)
@@ -33538,9 +33543,11 @@ func _place_soda_overfill_ribbon(
 
 func _place_soda_overfill_arc(
 		start_idx: int, seg_count: int, a: Vector3, b: Vector3, lift: float,
-		foam_col: Color, soda_tint: Color, thin: float = 1.0
+		foam_col: Color, soda_tint: Color, thickness: float = 1.0
 ) -> void:
-	## Chain short cylinders along a bowed arc so the pour reads curved.
+	## March rounded globs along a bowed arc. Every third slot stays empty, and
+	## the gap advances over time so overflow feels intermittent rather than solid.
+	var moving_gap := int(floor(Time.get_ticks_msec() * 0.006))
 	for s in seg_count:
 		var idx := start_idx + s
 		if idx < 0 or idx >= _soda_overfill_cascade_meshes.size():
@@ -33548,11 +33555,14 @@ func _place_soda_overfill_arc(
 		var mi := _soda_overfill_cascade_meshes[idx] as MeshInstance3D
 		if mi == null or not is_instance_valid(mi):
 			continue
+		if posmod(s + moving_gap + start_idx, 3) == 2:
+			mi.visible = false
+			continue
 		var t0 := float(s) / float(seg_count)
 		var t1 := float(s + 1) / float(seg_count)
 		var p0 := _soda_arc_point(a, b, lift, t0)
 		var p1 := _soda_arc_point(a, b, lift, t1)
-		_place_soda_overfill_ribbon(mi, p0, p1, foam_col, soda_tint, thin)
+		_place_soda_overfill_ribbon(mi, p0, p1, foam_col, soda_tint, thickness)
 
 
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
@@ -33590,7 +33600,7 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 	var west_tray := west_lip + west * 0.08 + south * (sin(t_ms * 2.8) * 0.012)
 	west_tray.y = deck_y + 0.003
 	var west_fall := maxf(0.018, (west_lip.y - west_tray.y) * 0.55)
-	_place_soda_overfill_arc(0, 8, west_lip, west_tray, west_fall, foam_col, foamish, 0.78)
+	_place_soda_overfill_arc(0, 8, west_lip, west_tray, west_fall, foam_col, foamish, 1.18)
 	var soda_edge_x := _soda_grill_near_machine_x()
 	var grill_land := Vector3(
 		soda_edge_x + 0.012 + sin(t_ms * 2.6) * 0.006,
@@ -33604,7 +33614,7 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 	grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.012, GRILL_CENTER_X - half_w + 0.055)
 	grill_land.z = clampf(grill_land.z, GRILL_SURFACE_Z - half_d + 0.02, GRILL_SURFACE_Z + half_d - 0.02)
 	var hop_lift := 0.055 + 0.010 * sin(t_ms * 3.0)
-	_place_soda_overfill_arc(8, 8, west_tray, grill_land, hop_lift, foam_col, foamish, 0.62)
+	_place_soda_overfill_arc(8, 8, west_tray, grill_land, hop_lift, foam_col, foamish, 1.02)
 	if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.45:
 		_soda_overfill_long_cd = randf_range(0.32, 0.58)
 		_spawn_soda_slick(
@@ -33618,14 +33628,14 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 		+ west * (0.02 * sin(t_ms * 1.9))
 	south_land.y = floor_y + 0.004
 	var south_lift := maxf(0.04, (south_lip.y - south_land.y) * 0.22)
-	_place_soda_overfill_arc(16, 9, south_lip, south_land, south_lift, foam_col, foamish, 0.72)
+	_place_soda_overfill_arc(16, 9, south_lip, south_land, south_lift, foam_col, foamish, 1.12)
 	## --- EAST (screen-right): arcs off to the right of the fountain ---
 	var east_lip := rim + east * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
 	var east_land := east_lip + east * (0.20 + 0.015 * sin(t_ms * 2.7)) \
 		+ south * (0.04 + 0.015 * sin(t_ms * 2.0))
 	east_land.y = lerpf(deck_y, floor_y, 0.55) + 0.004
 	var east_lift := maxf(0.03, (east_lip.y - east_land.y) * 0.28)
-	_place_soda_overfill_arc(25, 8, east_lip, east_land, east_lift, foam_col, foamish, 0.72)
+	_place_soda_overfill_arc(25, 8, east_lip, east_land, east_lift, foam_col, foamish, 1.12)
 	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 
