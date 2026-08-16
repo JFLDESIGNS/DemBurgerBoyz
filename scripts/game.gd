@@ -26275,9 +26275,25 @@ func _rebuild_soda_tank_visuals() -> void:
 		return
 	if soda_tank_root != null and is_instance_valid(soda_tank_root):
 		soda_tank_root.queue_free()
-	soda_tank_root = null
+	soda_tank_root = Node3D.new()
+	soda_tank_root.name = "ColaTank"
+	soda_root.add_child(soda_tank_root)
 	soda_tank_syrup.clear()
 	soda_tank_bubbles.clear()
+
+	## The current fountain has one drink flavor. Restore the old visible syrup
+	## reservoir above that bay without bringing back the retired flavor tanks.
+	var base: Vector3 = SODA_MODEL_SPOUT_POS.get("cola", Vector3.ZERO)
+	var pos := _soda_model_local(base + _soda_nozzle_offset_model("cola"))
+	pos.x += soda_tank_x_offset_in * INCH_TO_M
+	pos.y += soda_tank_y_offset_in * INCH_TO_M
+	pos.z += soda_tank_z_offset_in * INCH_TO_M
+	_add_soda_flavor_tank(soda_tank_root, "cola", pos)
+	var tank := soda_tank_root.get_node_or_null("Tank_cola") as Node3D
+	if tank != null:
+		tank.scale = Vector3.ONE * soda_tank_visual_scale
+	_set_soda_tank_visual_level("cola", _soda_tank_amount("cola"))
+	_refresh_soda_tank_bubbles()
 
 
 func _make_soda_debug_mat(col: Color) -> StandardMaterial3D:
