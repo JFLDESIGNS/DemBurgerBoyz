@@ -2067,7 +2067,7 @@ const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
 const CUP_SHELL_BOT_R := 0.0594
 const SODA_OVERFLOW_SHELL_TEXTURE := "res://assets/vfx/soda_overflow_shell.png"
-const SODA_OVERFLOW_SHELL_SCALE := 1.085 ## outside the plastic without looking detached
+const SODA_OVERFLOW_SHELL_SCALE := 1.18 ## clearly outside the cup and its no-depth plastic layers
 const CUP_LIQUID_BASE_H := 0.020
 const CUP_LIQUID_MAX_H := 0.158475
 const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
@@ -30644,11 +30644,12 @@ func _create_drink_cup_node() -> Node3D:
 	overflow_shell.mesh = _make_overflow_shell_mesh(
 		CUP_SHELL_TOP_R * SODA_OVERFLOW_SHELL_SCALE,
 		CUP_SHELL_BOT_R * SODA_OVERFLOW_SHELL_SCALE,
-		CUP_SHELL_H * 1.025
+		CUP_SHELL_H * 1.08
 	)
 	overflow_shell.position = Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
 	overflow_shell.material_override = _make_soda_overflow_shell_material()
 	overflow_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	overflow_shell.sorting_offset = 2.0
 	overflow_shell.visible = false
 	root.add_child(overflow_shell)
 
@@ -33575,14 +33576,14 @@ func _make_soda_overflow_shell_material() -> ShaderMaterial:
 	var shader := Shader.new()
 	shader.code = """
 shader_type spatial;
-render_mode blend_mix, depth_draw_always, cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_back, unshaded;
 
 uniform sampler2D splash_tex : source_color, filter_linear_mipmap, repeat_enable;
-uniform vec4 foam_color : source_color = vec4(1.0, 0.985, 0.94, 0.86);
+uniform vec4 foam_color : source_color = vec4(1.0, 0.985, 0.94, 1.0);
 uniform float pan_speed = 0.34;
 uniform float vertical_tiles = 1.18;
 uniform float key_low = 0.035;
-uniform float key_soft = 0.24;
+uniform float key_soft = 0.16;
 
 void fragment() {
 	vec2 flow_uv = vec2(UV.x, fract(UV.y * vertical_tiles + TIME * pan_speed));
@@ -33594,9 +33595,7 @@ void fragment() {
 	}
 	ALBEDO = foam_color.rgb;
 	ALPHA = mask * foam_color.a;
-	ROUGHNESS = 0.18;
-	SPECULAR = 0.72;
-	EMISSION = foam_color.rgb * mask * 0.10;
+	EMISSION = foam_color.rgb * mask * 0.24;
 }
 """
 	var mat := ShaderMaterial.new()
@@ -33604,7 +33603,7 @@ void fragment() {
 	var splash := load(SODA_OVERFLOW_SHELL_TEXTURE) as Texture2D
 	if splash != null:
 		mat.set_shader_parameter("splash_tex", splash)
-	mat.render_priority = CUP_DRAW_PRIORITY + 8
+	mat.render_priority = 120 ## after every clear cup/liquid/logo layer
 	return mat
 
 
@@ -33673,6 +33672,10 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 				if got > 0.0005:
 					cup_soda_fill = minf(1.0, cup_soda_fill + got)
 					pouring_soda = true
+					## Start the sleeve during the final pour instead of waiting for a
+					## second frame after exactly 100%; this makes overflow readable
+					## even when the player releases as soon as "filled" appears.
+					_set_soda_overflow_shell_visible(cup_soda_fill >= 0.88)
 					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.7)
 					## Pour all the way to the cup floor (not just the rim).
 					var cup_floor := cup_root.global_position + Vector3(0.0, CUP_LIQUID_FLOOR_Y + 0.004, 0.0)
