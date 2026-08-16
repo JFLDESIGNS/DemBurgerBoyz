@@ -1713,6 +1713,8 @@ var street_bg_choice: String = "original"
 var street_bg_custom_path: String = ""
 var street_bg_option: OptionButton = null
 var street_bg_custom_edit: LineEdit = null
+var location_bg_assignments: Dictionary = {} ## location id -> background choice id
+var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by location id
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -2298,6 +2300,8 @@ const STREET_BG_NEW_ARCADE_PATH := "res://assets/backgrounds/pixel_palace_festiv
 const STREET_BG_ARCADIA_PLAY_PATH := "res://assets/backgrounds/arcadia_play.png"
 const STREET_BG_ARCADIA_CLEAN_PATH := "res://assets/backgrounds/arcadia_clean.png"
 const STREET_BG_MILL1_PATH := "res://assets/backgrounds/mill1.png"
+const STREET_BG_GAS_STATION_PATH := "res://assets/backgrounds/sunny_gas_station.png"
+const STREET_BG_TOWN_SQUARE_PATH := "res://assets/backgrounds/town_square.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2401,21 +2405,22 @@ const GFX_DEFAULTS := {
 	"window_wash_angle": 50.0,
 	## Soft no-shadow key from camera-right (world -X) aimed at customer faces.
 	"customer_fill": 1.45,
-	"customer_fill_x": -2.4,
-	"customer_fill_y": 2.4,
-	"customer_fill_z": 0.55,
-	"customer_fill_pitch": -21.5,
-	"customer_fill_yaw": -125.0,
+	## Camera-right portrait key lives outside the service window, not over the soda station.
+	"customer_fill_x": -3.55,
+	"customer_fill_y": 2.35,
+	"customer_fill_z": 1.65,
+	"customer_fill_pitch": -34.7,
+	"customer_fill_yaw": -105.0,
 	"customer_fill_roll": 0.0,
 	"customer_fill_r": 1.0,
 	"customer_fill_g": 0.89,
 	"customer_fill_b": 0.76,
 	"customer_fill_indirect": 0.65,
-	"customer_fill_specular": 0.18,
+	"customer_fill_specular": 0.08,
 	"customer_fill_size": 0.42,
-	"customer_fill_range": 4.8,
+	"customer_fill_range": 5.0,
 	"customer_fill_attenuation": 1.1,
-	"customer_fill_angle": 58.0,
+	"customer_fill_angle": 46.0,
 	"saturation": 1.07,
 	"contrast": 0.98,
 	"ssao": false,
@@ -8545,20 +8550,21 @@ func _setup_world_lighting() -> void:
 	world.add_child(gfx_window_wash)
 
 	## A soft key on camera-right balances the strong camera-left sunlight on faces.
-	## It casts no shadow so it reads as gentle portrait fill rather than a second sun.
+	## Keep it outside the service window and aimed back at the customer line; placing
+	## it inside put the emitter inches from the soda machine and blew out the cup rack.
 	gfx_customer_fill = SpotLight3D.new()
 	gfx_customer_fill.name = "CustomerCameraRightFill"
 	gfx_customer_fill.light_color = Color(1.0, 0.89, 0.76)
 	gfx_customer_fill.light_energy = 1.45
 	gfx_customer_fill.light_indirect_energy = 0.65
-	gfx_customer_fill.light_specular = 0.18
+	gfx_customer_fill.light_specular = 0.08
 	gfx_customer_fill.light_size = 0.42
-	gfx_customer_fill.spot_range = 4.8
-	gfx_customer_fill.spot_angle = 58.0
+	gfx_customer_fill.spot_range = 5.0
+	gfx_customer_fill.spot_angle = 46.0
 	gfx_customer_fill.spot_attenuation = 1.1
 	gfx_customer_fill.shadow_enabled = false
-	gfx_customer_fill.position = Vector3(-2.4, 2.4, 0.55)
-	gfx_customer_fill.rotation_degrees = Vector3(-21.5, -125.0, 0.0)
+	gfx_customer_fill.position = Vector3(-3.55, 2.35, 1.65)
+	gfx_customer_fill.rotation_degrees = Vector3(-34.7, -105.0, 0.0)
 	world.add_child(gfx_customer_fill)
 
 	var env_node := WorldEnvironment.new()
@@ -11854,10 +11860,7 @@ func _spawn_patty_cook_residue_now(patty: Area3D, from_oil: bool = false) -> voi
 	if slot < 0:
 		return
 	_mark_patty_residue_left(patty, from_oil)
-	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, at.x, at.z, false, "patty", 1.0)
-		return
-	_leave_grill_residue_local(slot, at, false, "patty", 1.0)
+	_publish_grill_residue(slot, at, false, "patty", 1.0)
 
 
 func _update_patty_cook_spot_residue(patty: Area3D, delta: float) -> void:
@@ -12053,10 +12056,21 @@ func _leave_grill_residue(slot: int, patty: Area3D, announce: bool = true) -> vo
 	var res_slot := _find_residue_slot_for_spot(at)
 	if res_slot >= 0:
 		slot = res_slot
-	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, at.x, at.z, announce, "patty", amt)
+	_publish_grill_residue(slot, at, announce, "patty", amt)
+
+
+func _publish_grill_residue(
+	slot: int, at: Vector3, announce: bool = true, kind: String = "patty", amt: float = 1.0
+) -> void:
+	## The host owns the canonical mess. Relay clients request a leave instead of
+	## broadcasting it themselves, which prevents peer-only duplicate debris.
+	if mp_enabled and NetManager.is_online() and not _mp_applying:
+		if NetManager.is_host():
+			mp_residue_leave.rpc(slot, at.x, at.z, announce, kind, amt)
+		else:
+			mp_request_residue_leave.rpc_id(1, slot, at.x, at.z, announce, kind, amt)
 		return
-	_leave_grill_residue_local(slot, at, announce, "patty", amt)
+	_leave_grill_residue_local(slot, at, announce, kind, amt)
 
 
 func _leave_grill_residue_local(
@@ -12205,10 +12219,7 @@ func _leave_cup_char_residue(at: Vector3) -> void:
 	if slot < 0:
 		return
 	var sit := Vector3(at.x, GRILL_SURFACE_Y + 0.028, at.z)
-	if mp_enabled and not _mp_applying:
-		mp_residue_leave.rpc(slot, sit.x, sit.z, true, "cup", 1.0)
-		return
-	_leave_grill_residue_local(slot, sit, true, "cup", 1.0)
+	_publish_grill_residue(slot, sit, true, "cup", 1.0)
 
 
 func _refresh_residue_visual(slot: int) -> void:
@@ -14881,8 +14892,8 @@ func _roomba_clean_liquids_and_debris(pos: Vector3, move_xz: Vector2, moved: flo
 	for sample in _roomba_clean_sample_points(pos):
 		var sp: Vector2 = sample
 		var sample_pos:= Vector3(sp.x, pos.y, sp.y)
-		_scrape_slick_array(oil_slicks, sample_pos, move_xz, tight_moved * 0.72, ROOMBA_CLEAN_CORE_RADIUS * 0.9, false)
-		_scrape_slick_array(soda_slicks, sample_pos, move_xz, tight_moved * 0.72, ROOMBA_CLEAN_CORE_RADIUS * 0.9, true)
+		_scrape_slick_array(oil_slicks, sample_pos, move_xz, tight_moved * 0.72, ROOMBA_CLEAN_CORE_RADIUS * 0.9, "oil")
+		_scrape_slick_array(soda_slicks, sample_pos, move_xz, tight_moved * 0.72, ROOMBA_CLEAN_CORE_RADIUS * 0.9, "soda")
 	_roomba_clean_soda_char(pos, move_xz, tight_moved)
 	_roomba_clean_melting_cups(pos, move_xz, tight_moved)
 	_scrape_burnt_icecreams(pos, move_xz, tight_moved)
@@ -17311,13 +17322,18 @@ func _get_oil_blob_texture() -> ImageTexture:
 
 
 func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> void:
-	## Local puddle first (responsive pour), then tell the partner.
-	_spawn_oil_slick_local(pos, radius)
-	if mp_enabled and not _mp_applying:
-		## Keep grease trails visible on both cooks — light throttle only.
-		if _mp_oil_sync_cool <= 0.0:
-			_mp_oil_sync_cool = 0.03
+	## Multiplayer grease is host-authored. The previous local-first unreliable
+	## trail produced heat-boosting puddles that existed on only one cook's grill.
+	if mp_enabled and NetManager.is_online() and not _mp_applying:
+		if _mp_oil_sync_cool > 0.0:
+			return
+		_mp_oil_sync_cool = 0.03
+		if NetManager.is_host():
 			mp_oil_slick.rpc(pos.x, pos.z, radius)
+		else:
+			mp_request_oil_slick.rpc_id(1, pos.x, pos.z, radius)
+		return
+	_spawn_oil_slick_local(pos, radius)
 
 
 func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
@@ -20790,9 +20806,13 @@ func _oil_heat_mul(world_pos: Vector3) -> float:
 			continue
 		if not bool(item.get("boost_heat", false)):
 			continue
+		## Char, burning grease, and late dark cook-off are visual/scrape hazards,
+		## never hidden cooking accelerators. Only visibly fresh oil grants 2x.
+		if bool(item.get("crust", false)) or bool(item.get("on_fire", false)):
+			continue
 		var age := float(item.get("age", 0.0))
 		var life := maxf(0.001, float(item.get("life", 1.0)))
-		if age >= life or float(item.get("scrape", 1.0)) <= 0.12:
+		if age / life >= 0.68 or float(item.get("scrape", 1.0)) <= 0.12:
 			continue
 		var rad := float(item.get("radius", 0.05)) * maxf(mesh.scale.x, 1.0)
 		var d := Vector2(mesh.position.x - world_pos.x, mesh.position.z - world_pos.z).length()
@@ -21988,8 +22008,8 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float, radius_
 	## radius_scale < 1 (spatula) keeps the hit tight under the tip.
 	var rs := clampf(radius_scale, 0.15, 1.0)
 	var hit_any := false
-	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28 * rs, false) or hit_any
-	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3 * rs, true) or hit_any
+	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28 * rs, "oil") or hit_any
+	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3 * rs, "soda") or hit_any
 	hit_any = _scrape_burnt_icecreams(pos, move_xz, moved, 0.34 * rs) or hit_any
 	hit_any = _scrape_grill_spilled_fries(pos, move_xz, moved, 0.34 * rs) or hit_any
 	## Char blotches — swipe to fling away.
@@ -22074,7 +22094,7 @@ func _scrape_burnt_icecreams(pos: Vector3, move_xz: Vector2, moved: float, hit_r
 
 
 func _scrape_slick_array(
-	arr: Array, pos: Vector3, move_xz: Vector2, moved: float, reach: float, sync_soda: bool = false
+	arr: Array, pos: Vector3, move_xz: Vector2, moved: float, reach: float, sync_kind: String = ""
 ) -> bool:
 	var hit_any := false
 	var i := 0
@@ -22105,12 +22125,15 @@ func _scrape_slick_array(
 			mat.albedo_color = c
 			item["base_a"] = minf(float(item.get("base_a", c.a)), c.a)
 		var removed := scrape <= 0.16
-		if sync_soda and mp_enabled and not _mp_applying:
+		if sync_kind != "" and mp_enabled and not _mp_applying:
 			if removed or _mp_slick_sync_cool <= 0.0:
 				_mp_slick_sync_cool = 0.08
-				mp_soda_slick_scrape.rpc(
-					float(mesh.position.x), float(mesh.position.z), scrape, removed
-				)
+				if sync_kind == "oil":
+					_publish_oil_slick_scrape(float(mesh.position.x), float(mesh.position.z), scrape, removed)
+				else:
+					mp_soda_slick_scrape.rpc(
+						float(mesh.position.x), float(mesh.position.z), scrape, removed
+					)
 		if removed:
 			var dir := move_xz.normalized() if move_xz.length_squared() > 0.0001 else Vector2(1, 0)
 			var fly: Vector3 = mesh.position + Vector3(dir.x, 0.0, dir.y) * (0.1 + randf() * 0.12)
@@ -22173,6 +22196,43 @@ func _mp_apply_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool
 	tw.tween_property(mesh, "scale", Vector3(0.05, 1.0, 0.05), 0.18)
 	tw.chain().tween_callback(mesh.queue_free)
 	soda_slicks.remove_at(idx)
+
+
+func _mp_apply_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	var idx := _mp_find_nearest_slick_idx(oil_slicks, x, z, 0.28)
+	if idx < 0:
+		return
+	var item: Dictionary = oil_slicks[idx]
+	var mesh = item.get("mesh")
+	if mesh == null or not is_instance_valid(mesh):
+		oil_slicks.remove_at(idx)
+		return
+	scrape = clampf(scrape, 0.08, 1.0)
+	item["scrape"] = scrape
+	var base_scale := float(item.get("crust_scale", 1.0)) if bool(item.get("crust", false)) else 1.0
+	mesh.scale = Vector3(base_scale * scrape, 1.0, base_scale * scrape)
+	var mat := mesh.material_override as StandardMaterial3D
+	if mat:
+		var c := mat.albedo_color
+		c.a = maxf(0.05, float(item.get("base_a", c.a)) * scrape)
+		mat.albedo_color = c
+	if not remove:
+		oil_slicks[idx] = item
+		return
+	var smoke = item.get("smoke")
+	if smoke != null and is_instance_valid(smoke):
+		smoke.emitting = false
+	mesh.queue_free()
+	oil_slicks.remove_at(idx)
+
+
+func _publish_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	if not mp_enabled or not NetManager.is_online():
+		return
+	if NetManager.is_host():
+		mp_oil_slick_scrape.rpc(x, z, scrape, remove)
+	else:
+		mp_request_oil_slick_scrape.rpc_id(1, x, z, scrape, remove)
 
 
 func _mp_apply_soda_char_clear(x: float, z: float) -> void:
@@ -28162,7 +28222,12 @@ func _spill_fry_onto_grill(from: Vector3, vel: Vector3) -> void:
 	var yaw := randf() * 360.0
 	var net_id := _make_spilled_fry_net_id()
 	if mp_enabled and not _mp_applying:
-		mp_fry_spill.rpc(net_id, from.x, from.y, from.z, land.x, land.z, yaw)
+		## Route guest spills through the host. Client-originated broadcast RPCs were
+		## not consistently forwarded to every peer by the relay topology.
+		if NetManager.is_host():
+			mp_fry_spill.rpc(net_id, from.x, from.y, from.z, land.x, land.z, yaw)
+		else:
+			mp_request_fry_spill.rpc_id(1, net_id, from.x, from.y, from.z, land.x, land.z, yaw)
 		return
 	_spawn_spilled_fry_local(land, yaw, from, net_id)
 
@@ -42231,10 +42296,66 @@ func _gfx_add_background_selector(parent: Control) -> void:
 		street_bg_custom_path = street_bg_custom_edit.text.strip_edges()
 		street_bg_choice = "custom" if street_bg_custom_path != "" else street_bg_choice
 		_refresh_street_background_option()
+		_refresh_location_background_options()
 		_save_street_background_settings()
 		_apply_street_background_texture()
 	)
 	row.add_child(apply_btn)
+
+
+func _fill_location_background_option(option: OptionButton, location_id: String) -> void:
+	if option == null or not is_instance_valid(option):
+		return
+	option.clear()
+	option.add_item("Route Default")
+	option.set_item_metadata(0, "")
+	var selected_choice := str(location_bg_assignments.get(location_id, ""))
+	var selected_index := 0
+	for value in _street_background_options():
+		var entry: Dictionary = value
+		var choice := str(entry.get("id", "original"))
+		var idx := option.item_count
+		option.add_item(str(entry.get("label", "Background")))
+		option.set_item_metadata(idx, choice)
+		if choice == selected_choice:
+			selected_index = idx
+	option.select(selected_index)
+
+
+func _hidden_add_location_background_row(parent: Control, location: Dictionary) -> void:
+	var location_id := str(location.get("id", ""))
+	if location_id == "":
+		return
+	var label := Label.new()
+	label.text = str(location.get("name", location_id))
+	UiFontsScript.apply_label(label, true, 11)
+	label.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
+	parent.add_child(label)
+	var option := OptionButton.new()
+	option.custom_minimum_size = Vector2(0, 36)
+	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_button(option, false, 11)
+	_fill_location_background_option(option, location_id)
+	option.item_selected.connect(func(index: int) -> void:
+		var choice := str(option.get_item_metadata(index))
+		if choice == "":
+			location_bg_assignments.erase(location_id)
+		else:
+			location_bg_assignments[location_id] = choice
+		_save_street_background_settings()
+		if current_location_id == location_id:
+			_apply_street_background_texture()
+	)
+	parent.add_child(option)
+	location_bg_option_nodes[location_id] = option
+
+
+func _refresh_location_background_options() -> void:
+	for location_id in location_bg_option_nodes.keys():
+		_fill_location_background_option(
+			location_bg_option_nodes[location_id] as OptionButton,
+			str(location_id)
+		)
 
 
 func _toggle_graphics_menu() -> void:
@@ -42921,6 +43042,16 @@ func _build_options_menu() -> void:
 	)
 
 	_gfx_add_background_selector(hidden_bg_box)
+	_hidden_add_section(hidden_bg_box, "MAP LOCATION ASSIGNMENTS")
+	var location_bg_help := Label.new()
+	location_bg_help.text = "Choose a saved image for each route stop. Route Default uses the art defined by that map location."
+	location_bg_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(location_bg_help, false, 11)
+	location_bg_help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.88))
+	hidden_bg_box.add_child(location_bg_help)
+	location_bg_option_nodes.clear()
+	for location in TruckLocationsScript.all():
+		_hidden_add_location_background_row(hidden_bg_box, location)
 	_options_add_standard_slider(hidden_bg_box, "bg_x", "BG Left / Right", -4.0, 4.0, 0.02)
 	_options_add_standard_slider(hidden_bg_box, "bg_y", "BG Height", STREET_MATTE_MIN_Y, STREET_MATTE_MAX_Y, 0.02)
 	_options_add_standard_slider(hidden_bg_box, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
@@ -45649,6 +45780,10 @@ func _street_background_options() -> Array:
 		opts.append({"id": "arcadia_clean", "label": "Arcadia Clean", "path": STREET_BG_ARCADIA_CLEAN_PATH})
 	if ResourceLoader.exists(STREET_BG_MILL1_PATH):
 		opts.append({"id": "mill1", "label": "mill1", "path": STREET_BG_MILL1_PATH})
+	if ResourceLoader.exists(STREET_BG_GAS_STATION_PATH):
+		opts.append({"id": "sunny_gas_station", "label": "Sunny Gas Station", "path": STREET_BG_GAS_STATION_PATH})
+	if ResourceLoader.exists(STREET_BG_TOWN_SQUARE_PATH):
+		opts.append({"id": "town_square", "label": "Town Square", "path": STREET_BG_TOWN_SQUARE_PATH})
 	if street_bg_custom_path != "":
 		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
 	return opts
@@ -45670,6 +45805,10 @@ func _street_background_path_for_choice(choice: String) -> String:
 			return STREET_BG_ARCADIA_CLEAN_PATH
 		"mill1":
 			return STREET_BG_MILL1_PATH
+		"sunny_gas_station":
+			return STREET_BG_GAS_STATION_PATH
+		"town_square":
+			return STREET_BG_TOWN_SQUARE_PATH
 		"custom":
 			return street_bg_custom_path
 		_:
@@ -45677,6 +45816,12 @@ func _street_background_path_for_choice(choice: String) -> String:
 
 
 func _current_street_background_path() -> String:
+	## A per-location assignment is the most specific choice in the hidden menu.
+	var assigned_choice := str(location_bg_assignments.get(current_location_id, ""))
+	if assigned_choice != "":
+		var assigned_path := _street_background_path_for_choice(assigned_choice)
+		if assigned_path != "" and ResourceLoader.exists(assigned_path):
+			return assigned_path
 	## Hidden-menu image overrides are opt-in. Location art remains the normal route default.
 	if street_bg_choice == "new_arcade" and ResourceLoader.exists(STREET_BG_NEW_ARCADE_PATH):
 		return STREET_BG_NEW_ARCADE_PATH
@@ -45686,6 +45831,10 @@ func _current_street_background_path() -> String:
 		return STREET_BG_ARCADIA_CLEAN_PATH
 	if street_bg_choice == "mill1" and ResourceLoader.exists(STREET_BG_MILL1_PATH):
 		return STREET_BG_MILL1_PATH
+	if street_bg_choice == "sunny_gas_station" and ResourceLoader.exists(STREET_BG_GAS_STATION_PATH):
+		return STREET_BG_GAS_STATION_PATH
+	if street_bg_choice == "town_square" and ResourceLoader.exists(STREET_BG_TOWN_SQUARE_PATH):
+		return STREET_BG_TOWN_SQUARE_PATH
 	var location_path := TruckLocationsScript.background_path(current_location_id)
 	if location_path != "" and ResourceLoader.exists(location_path):
 		return location_path
@@ -45717,6 +45866,12 @@ func _load_street_background_settings() -> void:
 	if cfg.load(GFX_CFG_PATH) == OK:
 		street_bg_choice = str(cfg.get_value("street_bg", "choice", street_bg_choice))
 		street_bg_custom_path = str(cfg.get_value("street_bg", "custom_path", ""))
+		location_bg_assignments.clear()
+		for location in TruckLocationsScript.all():
+			var location_id := str(location.get("id", ""))
+			var choice := str(cfg.get_value("location_backgrounds", location_id, ""))
+			if choice != "" and ResourceLoader.exists(_street_background_path_for_choice(choice)):
+				location_bg_assignments[location_id] = choice
 	if not ResourceLoader.exists(_street_background_path_for_choice(street_bg_choice)):
 		street_bg_choice = "preview" if ResourceLoader.exists(STREET_BG_PREVIEW_PATH) else "original"
 
@@ -45726,6 +45881,9 @@ func _save_street_background_settings() -> void:
 	cfg.load(GFX_CFG_PATH)
 	cfg.set_value("street_bg", "choice", street_bg_choice)
 	cfg.set_value("street_bg", "custom_path", street_bg_custom_path)
+	for location in TruckLocationsScript.all():
+		var location_id := str(location.get("id", ""))
+		cfg.set_value("location_backgrounds", location_id, str(location_bg_assignments.get(location_id, "")))
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -45875,6 +46033,17 @@ func _load_graphics_settings() -> void:
 			or hk.begins_with("window_wash_") or hk.begins_with("customer_fill_"):
 				cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
 		cfg.set_value("gfx", "gfx_world_lights_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot correction: v1's portrait fill was accidentally placed inside the
+	## truck beside the soda rack. Move existing installs outside with the new aim.
+	if not cfg.has_section_key("gfx", "gfx_customer_fill_outside_v2"):
+		for hk in [
+			"customer_fill_x", "customer_fill_y", "customer_fill_z",
+			"customer_fill_pitch", "customer_fill_yaw", "customer_fill_roll",
+			"customer_fill_specular", "customer_fill_range", "customer_fill_angle",
+		]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_customer_fill_outside_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: snap wall decals into the camera frustum (were off-screen / broken).
 	if not cfg.has_section_key("gfx", "gfx_decal_v2"):
@@ -51327,8 +51496,8 @@ func _animate_top_bun_on_station(station_index: int, on_done: Callable) -> void:
 	if game_audio:
 		_play_ingredient_touch_sfx("bun_top")
 	var tw := create_tween()
-	tw.tween_property(row, "position:y", final_y, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_interval(0.04)
+	tw.tween_property(row, "position:y", final_y, 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.01)
 	tw.tween_callback(on_done)
 
 
@@ -52101,7 +52270,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.03, 0.94), t))
 		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.35, t))
 		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.3, t))
-	tw.tween_method(seal_step, 0.0, 1.0, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_method(seal_step, 0.0, 1.0, 0.04).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 	## B · Windup — dip back before the toss.
 	var windup_step := func(t: float) -> void:
@@ -52113,7 +52282,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		stack.global_position = start_pos + Vector2(lerpf(0.0, -8.0, t), lerpf(0.0, 12.0, t))
 		apply_bun_pinch.call(bun_pinch_px * 0.4)
 		apply_topping_crush.call(topping_crush_px * 0.35)
-	tw.tween_method(windup_step, 0.0, 1.0, 0.1).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw.tween_method(windup_step, 0.0, 1.0, 0.05).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 
 	tw.tween_callback(func() -> void:
 		if game_audio and game_audio.has_method("play_serve_whoosh"):
@@ -52146,7 +52315,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		apply_stack_scale.call(s)
 		apply_bun_pinch.call(bun_pinch_px * 0.55)
 		apply_topping_crush.call(topping_crush_px * 0.5)
-	tw.tween_method(fly_step, 0.0, 1.0, 0.42).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(fly_step, 0.0, 1.0, 0.26).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 	## D · Impact — bite squash + crumbs + chomp.
 	tw.tween_callback(func() -> void:
@@ -52175,7 +52344,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		apply_stack_scale.call(s)
 		apply_bun_pinch.call(bun_pinch_px * (0.7 + t * 0.35))
 		apply_topping_crush.call(topping_crush_px * (0.6 + t * 0.4))
-	tw.tween_method(impact_step, 0.0, 1.0, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_method(impact_step, 0.0, 1.0, 0.05).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 	## E · Vanish into the mouth.
 	var eat_step := func(t: float) -> void:
@@ -52191,7 +52360,7 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 		stack.modulate.a = 1.0 - ease(t, 1.6)
 		apply_bun_pinch.call(bun_pinch_px * (1.0 + t * 0.5))
 		apply_topping_crush.call(topping_crush_px * (0.9 + t * 0.3))
-	tw.tween_method(eat_step, 0.0, 1.0, 0.26).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_method(eat_step, 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 
 	tw.tween_callback(finish_serve)
 
@@ -52990,6 +53159,20 @@ func _resolve_serve_customer():
 	return selected_customer
 
 
+func _begin_customer_serve_handoff(customer: Node3D) -> void:
+	## The order is committed now, not when the toss animation finishes. Pull its
+	## ticket immediately so the next order can become current during the review.
+	if customer == null or not is_instance_valid(customer):
+		return
+	customer.set_meta("serve_in_progress", true)
+	_remove_ticket(customer)
+	_highlight_tickets()
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		var net_id := _customer_net_id(customer)
+		if net_id >= 0:
+			mp_customer_serve_started.rpc(net_id)
+
+
 func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> void:
 	if not playing or _serve_fly_busy:
 		return
@@ -53053,6 +53236,7 @@ func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> vo
 				_flash("Need a top bun before serving", Color("FFCC80"))
 			return
 
+	_begin_customer_serve_handoff(customer)
 	if game_audio and game_audio.has_method("play_order_up"):
 		game_audio.play_order_up()
 
@@ -55535,12 +55719,15 @@ func _mp_ensure_remote_fries(peer_id: int) -> Node3D:
 		return null
 	var ghost := Node3D.new()
 	ghost.name = "RemoteFries_%d" % peer_id
-	_populate_fry_pack(ghost)
-	_set_fries_pack_foreground(ghost)
-	_mp_strip_tool_pickable(ghost)
+	## Match local construction order. FriesShakeRoot preserves mesh global poses
+	## while reparenting; doing that before the ghost entered the tree offset the
+	## remote fry pile away from its red container.
 	ghost.visible = false
 	ghost.scale = Vector3.ONE * FRIES_FINISHED_HAND_SCALE
 	world.add_child(ghost)
+	_populate_fry_pack(ghost)
+	_set_fries_pack_foreground(ghost)
+	_mp_strip_tool_pickable(ghost)
 	_mp_remote_fries[peer_id] = ghost
 	return ghost
 
@@ -55999,15 +56186,26 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 		tw.tween_property(root, "rotation_degrees", data.get("home_rot", root.rotation_degrees), 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 
-@rpc("any_peer", "call_local", "reliable")
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_fry_spill(net_id: int, sx: float, sy: float, sz: float, x: float, z: float, yaw: float) -> void:
+	## Host validates the loose-fry landing and publishes one authoritative event.
+	var sender := multiplayer.get_remote_sender_id()
+	if not NetManager.is_host() or sender == 0:
+		return
+	## Preserve the sender-owned id range while rejecting collisions/spoofed ids.
+	net_id = sender * 100000 + posmod(net_id, 100000)
+	x = clampf(x, GRILL_CENTER_X - GRILL_WIDTH * 0.48, GRILL_CENTER_X + GRILL_WIDTH * 0.48)
+	z = clampf(z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.48, GRILL_SURFACE_Z + GRILL_DEPTH * 0.48)
+	sy = clampf(sy, GRILL_SURFACE_Y, GRILL_SURFACE_Y + 1.2)
+	mp_fry_spill.rpc(net_id, sx, sy, sz, x, z, fposmod(yaw, 360.0))
+
+
+@rpc("authority", "call_local", "reliable")
 func mp_fry_spill(net_id: int, sx: float, sy: float, sz: float, x: float, z: float, yaw: float) -> void:
-	## Partner (or self via call_local) dropped a loose fry onto the steel.
-	var sid := multiplayer.get_remote_sender_id()
+	## Host-authored loose fry event reaches the host and every connected cook.
 	_mp_applying = true
 	_spawn_spilled_fry_local(Vector3(x, GRILL_SURFACE_Y, z), yaw, Vector3(sx, sy, sz), net_id)
 	_mp_applying = false
-	if NetManager.is_host() and sid != 0:
-		mp_fry_spill.rpc(net_id, sx, sy, sz, x, z, yaw)
 
 
 func _mp_update_cursors(delta: float) -> void:
@@ -56799,6 +56997,161 @@ func _mp_broadcast_grill() -> void:
 		ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
 		heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
 	)
+	_mp_broadcast_grill_mess()
+
+
+func _mp_broadcast_grill_mess() -> void:
+	## Absolute host snapshot repairs missed loose-fry events and, importantly,
+	## removes guest-only residue instead of only ever adding more debris.
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online() or not playing:
+		return
+	var residue_amounts: Array = []
+	var residue_xs: Array = []
+	var residue_zs: Array = []
+	var residue_kinds: Array = []
+	for i in GRILL_SLOTS:
+		var amount := float(grill_residue[i]) if i < grill_residue.size() else 0.0
+		var center: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.ZERO
+		residue_amounts.append(amount)
+		residue_xs.append(center.x)
+		residue_zs.append(center.z)
+		residue_kinds.append(str(grill_residue_kind[i]) if i < grill_residue_kind.size() else "")
+	var fry_ids: Array = []
+	var fry_xs: Array = []
+	var fry_zs: Array = []
+	var fry_yaws: Array = []
+	var fry_ages: Array = []
+	var fry_fired: Array = []
+	for value in grill_spilled_fries:
+		if typeof(value) != TYPE_DICTIONARY:
+			continue
+		var item: Dictionary = value
+		var root := item.get("root") as Node3D
+		var net_id := int(item.get("net_id", 0))
+		if root == null or not is_instance_valid(root) or net_id <= 0 or bool(item.get("held", false)):
+			continue
+		fry_ids.append(net_id)
+		fry_xs.append(root.global_position.x)
+		fry_zs.append(root.global_position.z)
+		fry_yaws.append(root.global_rotation_degrees.y)
+		fry_ages.append(float(item.get("age", 0.0)))
+		fry_fired.append(bool(item.get("fired", false)))
+	mp_sync_grill_mess.rpc(
+		residue_amounts, residue_xs, residue_zs, residue_kinds,
+		fry_ids, fry_xs, fry_zs, fry_yaws, fry_ages, fry_fired
+	)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func mp_sync_grill_mess(
+	residue_amounts: Array,
+	residue_xs: Array,
+	residue_zs: Array,
+	residue_kinds: Array,
+	fry_ids: Array,
+	fry_xs: Array,
+	fry_zs: Array,
+	fry_yaws: Array,
+	fry_ages: Array,
+	fry_fired: Array
+) -> void:
+	if NetManager.is_host() or not playing:
+		return
+	_mp_applying = true
+	## Reconcile every residue slot, including empty host slots. The old join sync
+	## omitted empties, so debris created only on a guest could survive forever.
+	for i in GRILL_SLOTS:
+		var host_amount := clampf(float(residue_amounts[i]) if i < residue_amounts.size() else 0.0, 0.0, 1.0)
+		var host_kind := str(residue_kinds[i]) if i < residue_kinds.size() else ""
+		var host_x := float(residue_xs[i]) if i < residue_xs.size() else 0.0
+		var host_z := float(residue_zs[i]) if i < residue_zs.size() else 0.0
+		if host_amount <= 0.04:
+			if i < grill_residue.size() and float(grill_residue[i]) > 0.0:
+				grill_residue[i] = 0.0
+				_clear_residue_chunks(i)
+			if i < grill_residue_kind.size():
+				grill_residue_kind[i] = ""
+			if i < brush_swipe_travel.size():
+				brush_swipe_travel[i] = 0.0
+			if i < brush_swipe_cool.size():
+				brush_swipe_cool[i] = 0.0
+			continue
+		if host_kind == "":
+			host_kind = "patty"
+		var host_center := Vector3(host_x, GRILL_SURFACE_Y + 0.028, host_z)
+		var local_amount := float(grill_residue[i]) if i < grill_residue.size() else 0.0
+		var local_kind := str(grill_residue_kind[i]) if i < grill_residue_kind.size() else ""
+		var local_center: Vector3 = grill_residue_centers[i] if i < grill_residue_centers.size() else Vector3.INF
+		var rebuild := local_amount <= 0.04 or local_kind != host_kind \
+				or Vector2(local_center.x, local_center.z).distance_to(Vector2(host_x, host_z)) > 0.035
+		if rebuild:
+			if i < grill_residue.size():
+				grill_residue[i] = 0.0
+			_clear_residue_chunks(i)
+			_leave_grill_residue_local(i, host_center, false, host_kind, host_amount)
+		else:
+			grill_residue[i] = host_amount
+			grill_residue_centers[i] = host_center
+			_refresh_residue_visual(i)
+
+	## Reconcile loose fries by stable network id. Snapshot spawning is immediate;
+	## only the original reliable event uses the little hop animation.
+	var seen_fry_ids: Dictionary = {}
+	for j in fry_ids.size():
+		var net_id := int(fry_ids[j])
+		if net_id <= 0:
+			continue
+		seen_fry_ids[net_id] = true
+		var found := _spilled_fry_by_net_id(net_id)
+		if found.is_empty():
+			_spawn_spilled_fry_local(
+				Vector3(
+					float(fry_xs[j]) if j < fry_xs.size() else GRILL_CENTER_X,
+					GRILL_SURFACE_Y,
+					float(fry_zs[j]) if j < fry_zs.size() else GRILL_SURFACE_Z
+				),
+				float(fry_yaws[j]) if j < fry_yaws.size() else 0.0,
+				Vector3.INF,
+				net_id
+			)
+			found = _spilled_fry_by_net_id(net_id)
+		if found.is_empty():
+			continue
+		var idx := int(found.get("idx", -1))
+		if idx < 0 or idx >= grill_spilled_fries.size():
+			continue
+		var item: Dictionary = grill_spilled_fries[idx]
+		if bool(item.get("held", false)):
+			continue
+		var root := item.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			continue
+		var half_h := float(item.get("half_h", 0.008))
+		var host_pos := Vector3(
+			float(fry_xs[j]) if j < fry_xs.size() else root.global_position.x,
+			GRILL_SURFACE_Y + half_h + FRIES_SPILL_SIT_Y,
+			float(fry_zs[j]) if j < fry_zs.size() else root.global_position.z
+		)
+		if root.global_position.distance_to(host_pos) > 0.025:
+			root.global_position = root.global_position.lerp(host_pos, 0.65)
+		root.global_rotation_degrees.y = float(fry_yaws[j]) if j < fry_yaws.size() else root.global_rotation_degrees.y
+		item["age"] = float(fry_ages[j]) if j < fry_ages.size() else float(item.get("age", 0.0))
+		item["fired"] = bool(fry_fired[j]) if j < fry_fired.size() else bool(item.get("fired", false))
+		grill_spilled_fries[idx] = item
+	for i in range(grill_spilled_fries.size() - 1, -1, -1):
+		var item: Dictionary = grill_spilled_fries[i]
+		if bool(item.get("held", false)):
+			continue
+		var net_id := int(item.get("net_id", 0))
+		if net_id > 0 and seen_fry_ids.has(net_id):
+			continue
+		var root := item.get("root") as Node3D
+		if root != null and is_instance_valid(root):
+			root.queue_free()
+		grill_spilled_fries.remove_at(i)
+		if spilled_fry_held and spilled_fry_held_idx > i:
+			spilled_fry_held_idx -= 1
+	_mp_applying = false
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -57432,6 +57785,7 @@ func _mp_broadcast_customers() -> void:
 	var sodas_handed: Array = []
 	var icecreams_handed: Array = []
 	var fries_handed: Array = []
+	var serving: Array = []
 	var yaws: Array = []
 	for c in customers:
 		if c == null or not is_instance_valid(c):
@@ -57449,8 +57803,9 @@ func _mp_broadcast_customers() -> void:
 		sodas_handed.append(_customer_soda_handed(c))
 		icecreams_handed.append(_customer_icecream_handed(c))
 		fries_handed.append(_customer_fries_handed(c))
+		serving.append(bool(c.get_meta("serve_in_progress", false)))
 		yaws.append(float(c.rotation_degrees.y))
-	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed)
+	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed, serving)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -57465,7 +57820,8 @@ func mp_sync_customers(
 	sodas_handed: Array = [],
 	icecreams_handed: Array = [],
 	yaws: Array = [],
-	fries_handed: Array = []
+	fries_handed: Array = [],
+	serving: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -57490,6 +57846,8 @@ func mp_sync_customers(
 			_mark_customer_icecream_handed(c, bool(icecreams_handed[i]))
 		if i < fries_handed.size():
 			_mark_customer_fries_handed(c, bool(fries_handed[i]))
+		var host_serving := bool(serving[i]) if i < serving.size() else false
+		c.set_meta("serve_in_progress", host_serving)
 		var snap_pos: Vector3 = c.global_position
 		if i < xs.size():
 			snap_pos.x = float(xs[i])
@@ -57530,6 +57888,16 @@ func mp_sync_customers(
 			if selected_customer == c:
 				selected_customer = null
 			continue
+		## A committed serve keeps the customer at the window for review but removes
+		## the ticket immediately. Never recreate it from is_waiting during that pose.
+		if host_serving:
+			c.is_waiting = true
+			if tickets.has(c):
+				_remove_ticket(c)
+				ticket_structure_changed = true
+			if selected_customer == c:
+				selected_customer = null
+			continue
 		## Host ticket is up — pin ours if arrival timing drifted.
 		if host_waiting:
 			if not bool(c.is_waiting):
@@ -57563,6 +57931,19 @@ func mp_sync_customers(
 	_refresh_ticket_patience_bars()
 	if ticket_structure_changed:
 		_refresh_customer_queue_timers()
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_customer_serve_started(net_id: int) -> void:
+	## Reliable edge event removes the slip before the next periodic customer frame.
+	var customer = _customer_by_net_id(net_id)
+	if customer == null or not is_instance_valid(customer):
+		return
+	customer.set_meta("serve_in_progress", true)
+	_remove_ticket(customer)
+	if selected_customer == customer:
+		selected_customer = null
+	_highlight_tickets()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -57811,9 +58192,22 @@ func mp_return_build_to_grill(net_id: int, station_index: int, x: float, z: floa
 		_mp_broadcast_station(station_index)
 
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_oil_slick(x: float, z: float, radius: float) -> void:
+	## Oil affects cook speed, so guests may request a drop but only the host creates it.
+	if not NetManager.is_host() or multiplayer.get_remote_sender_id() == 0:
+		return
+	x = clampf(x, GRILL_CENTER_X - GRILL_WIDTH * 0.5, GRILL_CENTER_X + GRILL_WIDTH * 0.5)
+	z = clampf(z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5)
+	radius = clampf(radius, 0.01, 0.18)
+	mp_oil_slick.rpc(x, z, radius)
+
+
+@rpc("authority", "call_local", "reliable")
 func mp_oil_slick(x: float, z: float, radius: float) -> void:
+	_mp_applying = true
 	_spawn_oil_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius)
+	_mp_applying = false
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -58392,7 +58786,27 @@ func mp_grill_fire_end() -> void:
 	_mp_applying = false
 
 
-@rpc("any_peer", "call_local", "reliable")
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_residue_leave(
+	slot: int, x: float, z: float, announce: bool, kind: String = "patty", amt: float = 1.0
+) -> void:
+	## Clients can propose a stain; the host clamps it, chooses the canonical slot,
+	## and republishes one authoritative leave to every cook.
+	if not NetManager.is_host() or multiplayer.get_remote_sender_id() == 0:
+		return
+	x = clampf(x, GRILL_CENTER_X - GRILL_WIDTH * 0.5, GRILL_CENTER_X + GRILL_WIDTH * 0.5)
+	z = clampf(z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5)
+	if kind not in ["patty", "oil", "cup"]:
+		kind = "patty"
+	amt = clampf(amt, 0.0, 1.0)
+	var at := Vector3(x, GRILL_SURFACE_Y + 0.028, z)
+	var host_slot := _find_residue_slot_for_spot(at)
+	if host_slot < 0:
+		host_slot = clampi(slot, 0, GRILL_SLOTS - 1)
+	mp_residue_leave.rpc(host_slot, x, z, announce, kind, amt)
+
+
+@rpc("authority", "call_local", "reliable")
 func mp_residue_leave(
 	slot: int, x: float, z: float, announce: bool, kind: String = "patty", amt: float = 1.0
 ) -> void:
@@ -58517,6 +58931,27 @@ func mp_ttt_reveal(reset_first: bool) -> void:
 	_mp_applying = false
 	if mp_enabled and NetManager.is_host():
 		_sync_ttt_state_to_peers()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	## Validate guest cleanup on the host, then publish the same oil state to everyone.
+	if not NetManager.is_host() or multiplayer.get_remote_sender_id() == 0:
+		return
+	x = clampf(x, GRILL_CENTER_X - GRILL_WIDTH * 0.5, GRILL_CENTER_X + GRILL_WIDTH * 0.5)
+	z = clampf(z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5)
+	scrape = clampf(scrape, 0.08, 1.0)
+	_mp_applying = true
+	_mp_apply_oil_slick_scrape(x, z, scrape, remove)
+	_mp_applying = false
+	mp_oil_slick_scrape.rpc(x, z, scrape, remove)
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+	_mp_applying = true
+	_mp_apply_oil_slick_scrape(x, z, scrape, remove)
+	_mp_applying = false
 
 
 @rpc("any_peer", "call_local", "reliable")
