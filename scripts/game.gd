@@ -2345,8 +2345,8 @@ const GFX_DEFAULTS := {
 	"bunting_wind_gust": 0.35,
 	"bunting_wind_twist": 1.2,
 	"bunting_wind_direction": 1.0,
-	"bunting_edge_opacity": 0.97,
-	"bunting_center_opacity": 0.48,
+	"bunting_edge_opacity": 0.68,
+	"bunting_center_opacity": 0.92,
 	"bunting_edge_width": 0.08,
 	"bunting_edge_softness": 0.09,
 	"cheese_stack_scale": 1.0,
@@ -5912,7 +5912,8 @@ void fragment() {
 	material.shader = shader
 	material.set_shader_parameter("outline_enabled", false)
 	material.set_shader_parameter("outline_pixels", 4.0)
-	material.set_shader_parameter("outline_color", Color(0.18, 1.0, 0.32, 1.0))
+	## Warm yellow stays readable against the can's green body and blue absorption tint.
+	material.set_shader_parameter("outline_color", Color(1.0, 0.82, 0.08, 1.0))
 	return material
 
 
@@ -36516,6 +36517,7 @@ func _add_bunting_flag(parent: Node3D, pos: Vector3, width: float, height: float
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.set_meta("bunting_phase", float(index) * 0.83)
 	mi.set_meta("bunting_base_pos", pos)
+	mi.set_meta("is_bunting_flag", true)
 	parent.add_child(mi)
 
 
@@ -36533,7 +36535,9 @@ func _update_window_bunting_wind(delta: float) -> void:
 	bunting_wind_time = fposmod(bunting_wind_time + delta * bunting_wind_speed * TAU, TAU * 64.0)
 	for child in window_bunting_root.get_children():
 		var flag := child as MeshInstance3D
-		if flag == null or flag.name != "BuntingFlag":
+		## Godot gives same-named sibling nodes generated names after the first flag.
+		## Metadata is stable, so every pennant participates in the wind animation.
+		if flag == null or not bool(flag.get_meta("is_bunting_flag", false)):
 			continue
 		var phase := float(flag.get_meta("bunting_phase", 0.0))
 		var gust_wave := 0.5 + 0.5 * sin(bunting_wind_time * 0.31 + phase * 0.47)
@@ -41529,7 +41533,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "bunting_wind_direction", "Wind Direction (-L / +R)", -1.0, 1.0, 0.05)
 	_gfx_add_slider(list, "bunting_edge_opacity", "Flag Edge Opacity", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "bunting_center_opacity", "Flag Center Opacity", 0.0, 1.0, 0.01)
-	_gfx_add_slider(list, "bunting_edge_width", "Opaque Edge Width", 0.0, 0.35, 0.005)
+	_gfx_add_slider(list, "bunting_edge_width", "Transparent Edge Width", 0.0, 0.35, 0.005)
 	_gfx_add_slider(list, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
 	_gfx_add_section(list, "SCREEN FILTERS")
@@ -43341,7 +43345,7 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_world_box, "bunting_wind_direction", "Wind Direction (-L / +R)", -1.0, 1.0, 0.05)
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_opacity", "Flag Edge Opacity", 0.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_world_box, "bunting_center_opacity", "Flag Center Opacity", 0.0, 1.0, 0.01)
-	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Opaque Edge Width", 0.0, 0.35, 0.005)
+	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Transparent Edge Width", 0.0, 0.35, 0.005)
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
 	_hidden_add_section(hidden_counter_box, "BUNS / CHEESE / BOARD")
@@ -45307,6 +45311,13 @@ func _load_graphics_settings() -> void:
 		]:
 			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
 		cfg.set_value("gfx", "gfx_bunting_cheese_buns_v2", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot: invert the bunting alpha profile so its center is solid and its
+	## cloth perimeter is translucent. This updates installs that saved the old look.
+	if not cfg.has_section_key("gfx", "gfx_bunting_edge_profile_v3"):
+		for hk in ["bunting_edge_opacity", "bunting_center_opacity", "bunting_edge_width", "bunting_edge_softness"]:
+			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_bunting_edge_profile_v3", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: apply full tuned graphics look (bloom + lighting + look + AO off).
 	if not cfg.has_section_key("gfx", "gfx_preset_v7"):
