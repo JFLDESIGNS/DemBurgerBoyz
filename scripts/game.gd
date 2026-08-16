@@ -2249,8 +2249,8 @@ const CAMERA_ORIGINAL_RESET_KEY := "original_view_reset_20260728_v1"
 const SPATULA_BALANCE_CFG_SECTION := "spatula_balance"
 const GFX_DEFAULTS := {
 	"bloom": 0.4,
-	"glow_intensity": 0.09,
-	"glow_strength": 0.42,
+	"glow_intensity": 0.63,
+	"glow_strength": 1.07,
 	"glow_threshold": 0.28,
 	"glow_on": true,
 	"exposure": 0.73,
@@ -42284,6 +42284,9 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(graphics, "contrast", "Contrast", 0.7, 1.5, 0.01)
 	_options_add_standard_slider(graphics, "ambient", "Ambient Light", 0.0, 1.2, 0.01)
 	_options_add_standard_slider(graphics, "bloom", "Bloom Amount", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(graphics, "glow_intensity", "Bloom Intensity", 0.0, 2.5, 0.01)
+	_options_add_standard_slider(graphics, "glow_strength", "Bloom Strength", 0.0, 2.5, 0.01)
+	_options_add_standard_slider(graphics, "glow_threshold", "Bloom Threshold", 0.1, 2.0, 0.01)
 
 	var hidden_tab := MarginContainer.new()
 	hidden_tab.name = "Hidden"
@@ -45335,6 +45338,17 @@ func _load_graphics_settings() -> void:
 		]:
 			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
 		cfg.set_value("gfx", "gfx_preset_v7", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot: a prior tuned preset left the hidden glow multipliers near zero,
+	## making the visible Bloom Amount slider appear broken. Restore only that
+	## known near-off combination; preserve any other user-created glow mix.
+	if not cfg.has_section_key("gfx", "gfx_bloom_restore_v8"):
+		var saved_glow_intensity := float(cfg.get_value("gfx", "glow_intensity", GFX_DEFAULTS["glow_intensity"]))
+		var saved_glow_strength := float(cfg.get_value("gfx", "glow_strength", GFX_DEFAULTS["glow_strength"]))
+		if saved_glow_intensity <= 0.1 and saved_glow_strength <= 0.45:
+			cfg.set_value("gfx", "glow_intensity", GFX_DEFAULTS["glow_intensity"])
+			cfg.set_value("gfx", "glow_strength", GFX_DEFAULTS["glow_strength"])
+		cfg.set_value("gfx", "gfx_bloom_restore_v8", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: snap wall decals into the camera frustum (were off-screen / broken).
 	if not cfg.has_section_key("gfx", "gfx_decal_v2"):
