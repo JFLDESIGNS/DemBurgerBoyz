@@ -1413,8 +1413,6 @@ var _cup_soda_overfill_drop_cd: float = 0.0
 var _soda_overfill_cascade_meshes: Array = [] ## thin rim→deck pour ribbons while overfilling
 var _soda_overfill_flow_on: bool = true ## intermittent breaks in the overflow stream
 var _soda_overfill_flow_t: float = 0.0
-var _soda_overfill_long_cd: float = 0.0 ## every ~2s → 50% chance of grill shoot
-var _soda_overfill_long_t: float = 0.0 ## remaining visible time for the long shoot
 var _cup_prev_pos: Vector3 = Vector3.ZERO
 var _cup_vel: Vector3 = Vector3.ZERO
 var _cup_slosh: Vector2 = Vector2.ZERO ## x = tilt Z, y = tilt X (degrees)
@@ -2028,6 +2026,13 @@ var soda_tank_visual_scale := 0.53
 var soda_tank_x_offset_in := -0.3
 var soda_tank_y_offset_in := 15.8
 var soda_tank_z_offset_in := -1.6
+var soda_tank_rotation_deg := Vector3.ZERO
+var soda_tank_scale_axes := Vector3.ONE
+var soda_tank_glass_opacity := 0.16
+var soda_tank_liquid_opacity := 0.88
+var soda_tank_label_offset := Vector3.ZERO
+var soda_tank_label_scale := 1.0
+var soda_tank_bubble_scale := 1.0
 const CUP_COLLISION_LAYER := 1024
 const CUP_RACK_COLLISION_LAYER := 2048 ## empty CUPS peg pick volume (must not steal cup rays)
 const SODA_FLAVOR_COLLISION_LAYER := 4096
@@ -24435,6 +24440,25 @@ func _load_soda_tuning_settings() -> void:
 	soda_tank_x_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_x_in", soda_tank_x_offset_in)), -12.0, 12.0)
 	soda_tank_y_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)), -8.0, 36.0)
 	soda_tank_z_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)), -8.0, 8.0)
+	soda_tank_rotation_deg = Vector3(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_pitch", soda_tank_rotation_deg.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_yaw", soda_tank_rotation_deg.y)), -180.0, 180.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_roll", soda_tank_rotation_deg.z)), -180.0, 180.0)
+	)
+	soda_tank_scale_axes = Vector3(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_scale_x", soda_tank_scale_axes.x)), 0.25, 3.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_scale_y", soda_tank_scale_axes.y)), 0.25, 3.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_scale_z", soda_tank_scale_axes.z)), 0.25, 3.0)
+	)
+	soda_tank_glass_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_glass_opacity", soda_tank_glass_opacity)), 0.0, 1.0)
+	soda_tank_liquid_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_liquid_opacity", soda_tank_liquid_opacity)), 0.1, 1.0)
+	soda_tank_label_offset = Vector3(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_label_x", soda_tank_label_offset.x)), -0.5, 0.5),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_label_y", soda_tank_label_offset.y)), -0.5, 0.5),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_label_z", soda_tank_label_offset.z)), -0.5, 0.5)
+	)
+	soda_tank_label_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_label_scale", soda_tank_label_scale)), 0.25, 3.0)
+	soda_tank_bubble_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_bubble_scale", soda_tank_bubble_scale)), 0.0, 3.0)
 
 
 func _save_soda_tuning_settings() -> void:
@@ -24489,6 +24513,19 @@ func _save_soda_tuning_settings() -> void:
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_x_in", soda_tank_x_offset_in)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_y_in", soda_tank_y_offset_in)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_z_in", soda_tank_z_offset_in)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_pitch", soda_tank_rotation_deg.x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_yaw", soda_tank_rotation_deg.y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_roll", soda_tank_rotation_deg.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_scale_x", soda_tank_scale_axes.x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_scale_y", soda_tank_scale_axes.y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_scale_z", soda_tank_scale_axes.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_glass_opacity", soda_tank_glass_opacity)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_liquid_opacity", soda_tank_liquid_opacity)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_label_x", soda_tank_label_offset.x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_label_y", soda_tank_label_offset.y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_label_z", soda_tank_label_offset.z)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_label_scale", soda_tank_label_scale)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_bubble_scale", soda_tank_bubble_scale)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -24599,6 +24636,19 @@ func _sync_soda_tuning_hidden_ui() -> void:
 		"soda_tank_x": soda_tank_x_offset_in,
 		"soda_tank_y": soda_tank_y_offset_in,
 		"soda_tank_z": soda_tank_z_offset_in,
+		"soda_tank_pitch": soda_tank_rotation_deg.x,
+		"soda_tank_yaw": soda_tank_rotation_deg.y,
+		"soda_tank_roll": soda_tank_rotation_deg.z,
+		"soda_tank_scale_x": soda_tank_scale_axes.x,
+		"soda_tank_scale_y": soda_tank_scale_axes.y,
+		"soda_tank_scale_z": soda_tank_scale_axes.z,
+		"soda_tank_glass_opacity": soda_tank_glass_opacity,
+		"soda_tank_liquid_opacity": soda_tank_liquid_opacity,
+		"soda_tank_label_x": soda_tank_label_offset.x,
+		"soda_tank_label_y": soda_tank_label_offset.y,
+		"soda_tank_label_z": soda_tank_label_offset.z,
+		"soda_tank_label_scale": soda_tank_label_scale,
+		"soda_tank_bubble_scale": soda_tank_bubble_scale,
 	}
 	for fid in _soda_station_tip_ids():
 		var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
@@ -24614,7 +24664,10 @@ func _sync_soda_tuning_hidden_ui() -> void:
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
 			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
-			var degrees_keys := ["soda_machine_yaw", "soda_cup_stack_pitch", "soda_cup_stack_yaw", "soda_cup_stack_roll"]
+			var degrees_keys := [
+				"soda_machine_yaw", "soda_cup_stack_pitch", "soda_cup_stack_yaw", "soda_cup_stack_roll",
+				"soda_tank_pitch", "soda_tank_yaw", "soda_tank_roll"
+			]
 			var fmt := "%.1f°" if key in degrees_keys else "%.2f"
 			options_hidden_tree_light_labs[key].text = fmt % float(vals[key])
 
@@ -24879,6 +24932,24 @@ func _reset_two_bay_drink_alignment() -> void:
 	_apply_soda_tuning_settings_changed(false)
 	_sync_soda_tuning_hidden_ui()
 	_flash("Cola + Ice bay alignment reset", Color("80DEEA"))
+
+
+func _reset_cola_tank_visual() -> void:
+	soda_tank_visual_scale = 0.53
+	soda_tank_x_offset_in = -0.3
+	soda_tank_y_offset_in = 15.8
+	soda_tank_z_offset_in = -1.6
+	soda_tank_rotation_deg = Vector3.ZERO
+	soda_tank_scale_axes = Vector3.ONE
+	soda_tank_glass_opacity = 0.16
+	soda_tank_liquid_opacity = 0.88
+	soda_tank_label_offset = Vector3.ZERO
+	soda_tank_label_scale = 1.0
+	soda_tank_bubble_scale = 1.0
+	_save_soda_tuning_settings()
+	_rebuild_soda_tank_visuals()
+	_sync_soda_tuning_hidden_ui()
+	_flash("Cola tank visual reset", Color("80DEEA"))
 
 
 func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
@@ -25297,8 +25368,6 @@ func _build_soda_station() -> void:
 	_cup_soda_overfill_drop_cd = 0.0
 	_soda_overfill_flow_on = true
 	_soda_overfill_flow_t = 0.0
-	_soda_overfill_long_cd = 0.0
-	_soda_overfill_long_t = 0.0
 	_cup_prev_pos = Vector3.ZERO
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
@@ -26291,7 +26360,8 @@ func _rebuild_soda_tank_visuals() -> void:
 	_add_soda_flavor_tank(soda_tank_root, "cola", pos)
 	var tank := soda_tank_root.get_node_or_null("Tank_cola") as Node3D
 	if tank != null:
-		tank.scale = Vector3.ONE * soda_tank_visual_scale
+		tank.rotation_degrees = soda_tank_rotation_deg
+		tank.scale = soda_tank_scale_axes * soda_tank_visual_scale
 	_set_soda_tank_visual_level("cola", _soda_tank_amount("cola"))
 	_refresh_soda_tank_bubbles()
 
@@ -29969,7 +30039,7 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 	glass_mesh.height = 0.26
 	glass.mesh = glass_mesh
 	var glass_mat := StandardMaterial3D.new()
-	glass_mat.albedo_color = Color(0.88, 0.94, 1.0, 0.16)
+	glass_mat.albedo_color = Color(0.88, 0.94, 1.0, soda_tank_glass_opacity)
 	glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	glass_mat.roughness = 0.04
 	glass_mat.metallic = 0.12
@@ -30021,7 +30091,8 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 	var tag := Label3D.new()
 	tag.name = "TankLabel"
 	tag.text = str(SODA_FLAVOR_LABELS.get(flavor_id, flavor_id.to_upper()))
-	tag.position = Vector3(0.0, 0.0, 0.132)
+	tag.position = Vector3(0.0, 0.0, 0.132) + soda_tank_label_offset
+	tag.scale = Vector3.ONE * soda_tank_label_scale
 	tag.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	tag.font_size = 45
 	tag.pixel_size = 0.0015
@@ -30120,7 +30191,7 @@ func _apply_soda_tank_gradient(mat: ShaderMaterial, col: Color, selected: bool =
 	if mat == null:
 		return
 	var bot := col
-	bot.a = 0.88 if selected else 0.82
+	bot.a = soda_tank_liquid_opacity
 	var top := col.lightened(0.06)
 	top.a = bot.a
 	var warm := _soda_warm_core(col, flavor_id)
@@ -30205,10 +30276,12 @@ func _refresh_soda_tank_bubbles() -> void:
 		var pouring := str(fid) == soda_selected_flavor and _cup_pouring
 		var pm := fx.process_material as ParticleProcessMaterial
 		var sphere := fx.draw_pass_1 as SphereMesh
-		var want_amt := 28 if pouring else 14
-		if fx.amount != want_amt:
-			fx.amount = want_amt
-			fx.restart()
+		var want_amt := roundi(float(28 if pouring else 14) * soda_tank_bubble_scale)
+		if fx.amount != maxi(1, want_amt) or fx.emitting != (want_amt > 0):
+			fx.amount = maxi(1, want_amt)
+			fx.emitting = want_amt > 0
+			if fx.emitting:
+				fx.restart()
 		if pm:
 			if pouring:
 				## Active pour — visible but not huge.
@@ -33444,21 +33517,44 @@ func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
 	_refresh_ticket_checkmarks()
 
 
-func _ensure_soda_overfill_cascades(count: int = 33) -> void:
-	## Rounded beads — enough for three broken, camera-cardinal overflow trails.
+func _make_soda_overflow_glob_material() -> StandardMaterial3D:
+	## Lit, glossy liquid volume. Unlike the pour shader these pieces keep normal
+	## shading and depth testing, so they read as round droplets instead of cards.
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.38, 0.16, 0.10, 0.94)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.metallic = 0.0
+	mat.roughness = 0.12
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.72
+	mat.clearcoat_roughness = 0.08
+	mat.rim_enabled = true
+	mat.rim = 0.18
+	mat.rim_tint = 0.42
+	mat.emission_enabled = true
+	mat.emission = Color(0.16, 0.045, 0.02)
+	mat.emission_energy_multiplier = 0.08
+	return mat
+
+
+func _ensure_soda_overfill_cascades(count: int = 12) -> void:
+	## Small rounded 3D links for two short cup-rim → drip-tray streams.
 	while _soda_overfill_cascade_meshes.size() < count:
 		var mi := MeshInstance3D.new()
 		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
 		var glob := SphereMesh.new()
-		glob.radius = 0.0080
-		glob.height = 0.0160
-		glob.radial_segments = 12
-		glob.rings = 6
+		glob.radius = 0.0046
+		glob.height = 0.0092
+		glob.radial_segments = 18
+		glob.rings = 9
 		mi.mesh = glob
-		mi.material_override = _make_soda_stream_material()
+		mi.material_override = _make_soda_overflow_glob_material()
 		mi.visible = false
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_boost_cup_draw_order(mi)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		world.add_child(mi)
 		_soda_overfill_cascade_meshes.append(mi)
 
@@ -33468,15 +33564,8 @@ func _hide_soda_overfill_cascades() -> void:
 		var mi := m as MeshInstance3D
 		if mi != null and is_instance_valid(mi):
 			mi.visible = false
-	_soda_overfill_long_t = 0.0
 	_soda_overfill_flow_on = true
 	_soda_overfill_flow_t = 0.0
-
-
-func _soda_overfill_cook_forward() -> Vector3:
-	## Toward the cook / camera (screen-south). Prefer live camera basis.
-	var dirs := _soda_overfill_cam_dirs()
-	return dirs["south"]
 
 
 func _soda_overfill_cam_dirs() -> Dictionary:
@@ -33496,11 +33585,6 @@ func _soda_overfill_cam_dirs() -> Dictionary:
 		if toward_cam.length_squared() > 0.0001:
 			south = toward_cam.normalized()
 	return {"west": west, "east": east, "south": south}
-
-
-func _soda_grill_near_machine_x() -> float:
-	## Grill edge closest to the soda fountain (world −X / screen-right).
-	return GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.07
 
 
 func _tick_soda_overfill_breaks(delta: float) -> void:
@@ -33538,41 +33622,37 @@ func _place_soda_overfill_ribbon(
 	x_axis = x_axis.normalized()
 	var z_axis := x_axis.cross(y_axis).normalized()
 	mi.global_transform = Transform3D(Basis(x_axis, y_axis, z_axis).orthonormalized(), mid)
-	## Stretch a sphere into a softly rounded droplet. It covers only ~62% of
-	## its path segment, leaving visible air between globs instead of a wire line.
+	## Stretch a shaded sphere into a softly rounded liquid link. Slight overlap
+	## between links makes a readable stream without returning to the old wire.
 	var glob := mi.mesh as SphereMesh
 	if glob:
 		var base_h := maxf(glob.height, 0.001)
-		var wobble := 0.90 + 0.13 * sin(float(mi.get_instance_id() % 19) * 1.71)
+		var wobble := 0.94 + 0.07 * sin(float(mi.get_instance_id() % 19) * 1.71)
 		mi.scale = Vector3(
 			thickness * wobble,
-			maxf(0.70, len / base_h * 0.62),
+			maxf(0.70, len / base_h * 1.04),
 			thickness * (2.0 - wobble)
 		)
-	var mat := mi.material_override as ShaderMaterial
+	var mat := mi.material_override as StandardMaterial3D
 	if mat:
-		mat.set_shader_parameter("soda_color", soda_tint)
-		mat.set_shader_parameter("foam_color", foam_col)
-		mat.set_shader_parameter("foam_frac", 0.90)
-		mat.set_shader_parameter("half_h", len * 0.5)
+		var liquid_col := soda_tint.lerp(foam_col, 0.08)
+		liquid_col.a = 0.94
+		mat.albedo_color = liquid_col
+		mat.emission = Color(liquid_col.r, liquid_col.g, liquid_col.b) * 0.14
 
 
 func _place_soda_overfill_arc(
 		start_idx: int, seg_count: int, a: Vector3, b: Vector3, lift: float,
 		foam_col: Color, soda_tint: Color, thickness: float = 1.0
 ) -> void:
-	## March rounded globs along a bowed arc. Every third slot stays empty, and
-	## the gap advances over time so overflow feels intermittent rather than solid.
-	var moving_gap := int(floor(Time.get_ticks_msec() * 0.006))
+	## March overlapping rounded links along a bowed arc. Brief whole-stream
+	## pauses are handled separately; the visible stream itself stays coherent.
 	for s in seg_count:
 		var idx := start_idx + s
 		if idx < 0 or idx >= _soda_overfill_cascade_meshes.size():
 			break
 		var mi := _soda_overfill_cascade_meshes[idx] as MeshInstance3D
 		if mi == null or not is_instance_valid(mi):
-			continue
-		if posmod(s + moving_gap + start_idx, 3) == 2:
-			mi.visible = false
 			continue
 		var t0 := float(s) / float(seg_count)
 		var t1 := float(s + 1) / float(seg_count)
@@ -33581,11 +33661,21 @@ func _place_soda_overfill_arc(
 		_place_soda_overfill_ribbon(mi, p0, p1, foam_col, soda_tint, thickness)
 
 
+func _clamp_soda_overflow_to_tray(point: Vector3) -> Vector3:
+	if soda_root == null or not is_instance_valid(soda_root):
+		return point
+	var local := soda_root.to_local(point)
+	local.x = clampf(local.x, -0.31, 0.31)
+	local.z = clampf(local.z, soda_cup_rest_z - 0.12, soda_cup_rest_z + 0.12)
+	return soda_root.to_global(local)
+
+
 func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Three camera-cardinal streams: west→grill, south→floor, east→right. Only west hits grill.
+	## Simplified overflow: two compact streams land inside the physical drip tray.
+	## Nothing travels to the grill, counter edge, or floor.
 	if cup_root == null or world == null:
 		return
-	_ensure_soda_overfill_cascades(33)
+	_ensure_soda_overfill_cascades(12)
 	_tick_soda_overfill_breaks(delta)
 	for m in _soda_overfill_cascade_meshes:
 		var hide_mi := m as MeshInstance3D
@@ -33593,112 +33683,66 @@ func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) 
 			hide_mi.visible = false
 	var foam_col := Color(0.98, 0.97, 0.94, 0.96)
 	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
-	var foamish := Color(
-		lerpf(foam_col.r, pop.r, 0.18),
-		lerpf(foam_col.g, pop.g, 0.18),
-		lerpf(foam_col.b, pop.b, 0.18),
-		0.92
-	)
+	var foamish := pop.lerp(foam_col, 0.26)
+	foamish.a = 0.94
 	if not _soda_overfill_flow_on:
-		_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
 		_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 		return
 	var deck_y := _cup_deck_fill_y()
-	var floor_y := 0.02
 	var dirs := _soda_overfill_cam_dirs()
 	var west: Vector3 = dirs["west"]
 	var east: Vector3 = dirs["east"]
 	var south: Vector3 = dirs["south"]
 	var t_ms := Time.get_ticks_msec() * 0.001
-	## Mesh layout: west 0-7 + grill 8-15 · south 16-24 · east 25-32.
-	## --- WEST (screen-left): drip tray then short hop onto soda-side grill lip only ---
+	## Main stream: down the cup's camera-left side into the tray center.
 	var west_lip := rim + west * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
-	var west_tray := west_lip + west * 0.08 + south * (sin(t_ms * 2.8) * 0.012)
-	west_tray.y = deck_y + 0.003
-	var west_fall := maxf(0.018, (west_lip.y - west_tray.y) * 0.55)
-	_place_soda_overfill_arc(0, 8, west_lip, west_tray, west_fall, foam_col, foamish, 1.18)
-	var soda_edge_x := _soda_grill_near_machine_x()
-	var grill_land := Vector3(
-		soda_edge_x + 0.012 + sin(t_ms * 2.6) * 0.006,
-		GRILL_SURFACE_Y + OIL_SIT_Y + 0.004,
-		clampf(west_tray.z + south.z * -0.01 + sin(t_ms * 2.1) * 0.018,
-			GRILL_SURFACE_Z - GRILL_DEPTH * 0.35,
-			GRILL_SURFACE_Z + GRILL_DEPTH * 0.20)
-	)
-	var half_w := GRILL_WIDTH * 0.5
-	var half_d := GRILL_DEPTH * 0.5
-	grill_land.x = clampf(grill_land.x, GRILL_CENTER_X - half_w + 0.012, GRILL_CENTER_X - half_w + 0.055)
-	grill_land.z = clampf(grill_land.z, GRILL_SURFACE_Z - half_d + 0.02, GRILL_SURFACE_Z + half_d - 0.02)
-	var hop_lift := 0.055 + 0.010 * sin(t_ms * 3.0)
-	_place_soda_overfill_arc(8, 8, west_tray, grill_land, hop_lift, foam_col, foamish, 1.02)
-	if _soda_overfill_long_cd <= 0.0 and _is_on_grill_surface(grill_land) and randf() < 0.45:
-		_soda_overfill_long_cd = randf_range(0.32, 0.58)
-		_spawn_soda_slick(
-			grill_land + Vector3(randf_range(-0.012, 0.018), 0.0, randf_range(-0.015, 0.015)),
-			0.032 + randf() * 0.02,
-			flavor
-		)
-	## --- SOUTH (toward camera): long curved pour onto the kitchen floor ---
-	var south_lip := rim + south * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
-	var south_land := south_lip + south * (0.26 + 0.02 * sin(t_ms * 2.4)) \
-		+ west * (0.02 * sin(t_ms * 1.9))
-	south_land.y = floor_y + 0.004
-	var south_lift := maxf(0.04, (south_lip.y - south_land.y) * 0.22)
-	_place_soda_overfill_arc(16, 9, south_lip, south_land, south_lift, foam_col, foamish, 1.12)
-	## --- EAST (screen-right): arcs off to the right of the fountain ---
+	var west_tray := west_lip + west * 0.045 + south * (0.010 + sin(t_ms * 2.2) * 0.004)
+	west_tray.y = deck_y + 0.006
+	west_tray = _clamp_soda_overflow_to_tray(west_tray)
+	_place_soda_overfill_arc(0, 7, west_lip, west_tray, 0.010, foam_col, foamish, 0.72)
+	## Smaller secondary dribble on the other side, also ending on the tray.
 	var east_lip := rim + east * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
-	var east_land := east_lip + east * (0.20 + 0.015 * sin(t_ms * 2.7)) \
-		+ south * (0.04 + 0.015 * sin(t_ms * 2.0))
-	east_land.y = lerpf(deck_y, floor_y, 0.55) + 0.004
-	var east_lift := maxf(0.03, (east_lip.y - east_land.y) * 0.28)
-	_place_soda_overfill_arc(25, 8, east_lip, east_land, east_lift, foam_col, foamish, 1.12)
-	_soda_overfill_long_cd = maxf(0.0, _soda_overfill_long_cd - delta)
+	var east_tray := east_lip + east * 0.028 + south * (0.006 + sin(t_ms * 2.7) * 0.003)
+	east_tray.y = deck_y + 0.006
+	east_tray = _clamp_soda_overflow_to_tray(east_tray)
+	_place_soda_overfill_arc(7, 5, east_lip, east_tray, 0.007, foam_col, foamish, 0.58)
 	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
 
 
 func _spawn_soda_overfill_drops(rim: Vector3, flavor: String) -> void:
-	## Foam chunks pouring off the lip onto the drip deck (and grill if they reach it).
+	## A couple of small shaded droplets; every landing is clamped to the tray.
 	if cup_root == null or world == null or flavor == "":
 		return
-	var foam_col := Color(0.98, 0.97, 0.94, 0.92)
 	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
-	var col := foam_col.lerp(Color(pop.r, pop.g, pop.b, 0.9), 0.22)
+	var col := pop.lerp(Color(0.98, 0.97, 0.94, 1.0), 0.24)
+	col.a = 0.94
 	var deck_y := _cup_deck_fill_y()
-	var floor_y := 0.02
 	var dirs := _soda_overfill_cam_dirs()
-	var card: Array[Vector3] = [dirs["west"], dirs["south"], dirs["east"]]
-	for i in 3:
+	var card: Array[Vector3] = [dirs["west"], dirs["east"]]
+	for i in 2:
 		var drop := MeshInstance3D.new()
 		var sph := SphereMesh.new()
-		sph.radius = randf_range(0.007, 0.013)
+		sph.radius = randf_range(0.0032, 0.0052)
 		sph.height = sph.radius * 2.0
+		sph.radial_segments = 14
+		sph.rings = 7
 		drop.mesh = sph
-		var mat := StandardMaterial3D.new()
+		var mat := _make_soda_overflow_glob_material()
 		mat.albedo_color = col
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.emission_enabled = true
-		mat.emission = Color(0.95, 0.94, 0.90) * 0.4
-		mat.emission_energy_multiplier = 0.35
 		drop.material_override = mat
-		drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		world.add_child(drop)
-		var outward: Vector3 = card[i].rotated(Vector3.UP, randf_range(-0.12, 0.12)).normalized()
+		var outward: Vector3 = card[i].rotated(Vector3.UP, randf_range(-0.08, 0.08)).normalized()
 		drop.global_position = rim + outward * (CUP_SHELL_TOP_R * 0.85) + Vector3(0.0, 0.01, 0.0)
-		var end_p := drop.global_position + outward * randf_range(0.10, 0.20) \
-			+ Vector3(randf_range(-0.015, 0.015), 0.0, randf_range(-0.01, 0.02))
-		## West stays near deck/grill height; south→floor; east→right mid drop.
-		if i == 1:
-			end_p.y = floor_y + 0.004
-		elif i == 2:
-			end_p.y = lerpf(deck_y, floor_y, 0.55) + 0.004
-		else:
-			end_p.y = deck_y + 0.004
-		var life := randf_range(0.20, 0.34)
+		var end_p := drop.global_position + outward * randf_range(0.025, 0.055) \
+			+ Vector3(randf_range(-0.006, 0.006), 0.0, randf_range(-0.005, 0.008))
+		end_p.y = deck_y + 0.007
+		end_p = _clamp_soda_overflow_to_tray(end_p)
+		var life := randf_range(0.16, 0.24)
 		var tw := create_tween()
 		tw.set_parallel(true)
 		tw.tween_property(drop, "global_position", end_p, life).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.tween_property(drop, "scale", Vector3.ONE * 0.15, life)
+		tw.tween_property(drop, "scale", Vector3(1.25, 0.28, 1.25), life)
 		tw.chain().tween_callback(drop.queue_free)
 
 
@@ -33708,19 +33752,19 @@ func _emit_soda_overfill_spill(rim: Vector3, flavor: String, amount: float, delt
 		return
 	_cup_soda_overfill_spill_cd = maxf(0.0, _cup_soda_overfill_spill_cd - delta)
 	_update_soda_overfill_cascades(rim, flavor, delta)
-	## Foam burst at the rim only while the short stream is flowing.
+	## A restrained rim fizz supports the 3D stream without spraying beyond the tray.
 	if _soda_overfill_flow_on and soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
-		soda_stream_bubbles.global_position = rim + Vector3(0.0, 0.012, 0.02)
+		soda_stream_bubbles.global_position = rim + Vector3(0.0, 0.006, 0.0)
 		soda_stream_bubbles.emitting = true
-		soda_stream_bubbles.amount = 28
-		soda_stream_bubbles.amount_ratio = 0.85
+		soda_stream_bubbles.amount = 10
+		soda_stream_bubbles.amount_ratio = 0.32
 		var em := soda_stream_bubbles.process_material as ParticleProcessMaterial
 		if em:
-			em.direction = Vector3(randf_range(-0.25, 0.25), 0.55, randf_range(0.35, 0.95))
-			em.spread = 55.0
-			em.initial_velocity_min = 0.22
-			em.initial_velocity_max = 0.55
-			em.gravity = Vector3(0.0, -2.0, 0.0)
+			em.direction = Vector3(0.0, 0.25, 0.08)
+			em.spread = 24.0
+			em.initial_velocity_min = 0.035
+			em.initial_velocity_max = 0.10
+			em.gravity = Vector3(0.0, -1.6, 0.0)
 			## Mostly foam white with a hint of pop.
 			var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.9, 0.9, 0.95))
 			em.color = Color(
@@ -33736,7 +33780,7 @@ func _emit_soda_overfill_spill(rim: Vector3, flavor: String, amount: float, delt
 	if _soda_overfill_flow_on and _cup_soda_overfill_drop_cd <= 0.0:
 		_cup_soda_overfill_drop_cd = randf_range(0.10, 0.18)
 		_spawn_soda_overfill_drops(rim, flavor)
-	## Soft cadence gate — grill pop liquid comes from the long shoot only.
+	## Soft cadence gate for tray droplets only.
 	if _cup_soda_overfill_spill_cd > 0.0:
 		return
 	_cup_soda_overfill_spill_cd = randf_range(0.22, 0.40) + clampf(amount, 0.0, 0.05)
@@ -44089,6 +44133,48 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_z", "Tank Forward (in)", -8.0, 8.0, 0.1,
 		func(): return soda_tank_z_offset_in,
 		func(v: float): soda_tank_z_offset_in = clampf(v, -8.0, 8.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_pitch", "Tank Pitch", -180.0, 180.0, 1.0,
+		func(): return soda_tank_rotation_deg.x,
+		func(v: float): soda_tank_rotation_deg.x = clampf(v, -180.0, 180.0), true, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_yaw", "Tank Yaw", -180.0, 180.0, 1.0,
+		func(): return soda_tank_rotation_deg.y,
+		func(v: float): soda_tank_rotation_deg.y = clampf(v, -180.0, 180.0), true, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_roll", "Tank Roll", -180.0, 180.0, 1.0,
+		func(): return soda_tank_rotation_deg.z,
+		func(v: float): soda_tank_rotation_deg.z = clampf(v, -180.0, 180.0), true, true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_scale_x", "Tank Width X", 0.25, 3.0, 0.01,
+		func(): return soda_tank_scale_axes.x,
+		func(v: float): soda_tank_scale_axes.x = clampf(v, 0.25, 3.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_scale_y", "Tank Height Y", 0.25, 3.0, 0.01,
+		func(): return soda_tank_scale_axes.y,
+		func(v: float): soda_tank_scale_axes.y = clampf(v, 0.25, 3.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_scale_z", "Tank Depth Z", 0.25, 3.0, 0.01,
+		func(): return soda_tank_scale_axes.z,
+		func(v: float): soda_tank_scale_axes.z = clampf(v, 0.25, 3.0), true)
+
+	_hidden_add_section(hidden_soda_box, "COLA TANK APPEARANCE")
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_glass_opacity", "Glass Opacity", 0.0, 1.0, 0.01,
+		func(): return soda_tank_glass_opacity,
+		func(v: float): soda_tank_glass_opacity = clampf(v, 0.0, 1.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_liquid_opacity", "Cola Opacity", 0.1, 1.0, 0.01,
+		func(): return soda_tank_liquid_opacity,
+		func(v: float): soda_tank_liquid_opacity = clampf(v, 0.1, 1.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_bubble_scale", "Bubble Amount", 0.0, 3.0, 0.05,
+		func(): return soda_tank_bubble_scale,
+		func(v: float): soda_tank_bubble_scale = clampf(v, 0.0, 3.0), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_label_x", "Label X", -0.5, 0.5, 0.005,
+		func(): return soda_tank_label_offset.x,
+		func(v: float): soda_tank_label_offset.x = clampf(v, -0.5, 0.5), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_label_y", "Label Y", -0.5, 0.5, 0.005,
+		func(): return soda_tank_label_offset.y,
+		func(v: float): soda_tank_label_offset.y = clampf(v, -0.5, 0.5), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_label_z", "Label Z", -0.5, 0.5, 0.005,
+		func(): return soda_tank_label_offset.z,
+		func(v: float): soda_tank_label_offset.z = clampf(v, -0.5, 0.5), true)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tank_label_scale", "Label Scale", 0.25, 3.0, 0.01,
+		func(): return soda_tank_label_scale,
+		func(v: float): soda_tank_label_scale = clampf(v, 0.25, 3.0), true)
+	_options_add_btn(hidden_soda_box, "RESET COLA TANK", _reset_cola_tank_visual)
 
 	_hidden_add_section(hidden_soda_box, "CUP STACK / TWO-BAY COLLISION")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_x", "Block Half Width", 0.05, 1.5, 0.01,
