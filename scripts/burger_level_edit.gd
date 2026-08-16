@@ -65,7 +65,6 @@ func _rebuild_editor_preview() -> void:
 	_build_oil_bottle(world_props)
 	_build_season_shaker(world_props)
 	_build_fire_extinguisher(world_props)
-	_build_glock(world_props)
 	_build_soda_station(world_props)
 	_build_real_bunting(world_props)
 
@@ -567,24 +566,6 @@ func _build_fire_extinguisher(parent: Node3D) -> void:
 		_assign_owner_recursive(visual)
 	else:
 		_add_cylinder(root, "RedCanFallback", 0.11, 0.45, Vector3.ZERO, _mat(Color(0.65, 0.04, 0.03), 0.2, 0.45), 18)
-
-
-func _build_glock(parent: Node3D) -> void:
-	var root := Node3D.new()
-	root.name = "WallGlock"
-	root.position = Vector3(0.0, 2.38, 1.232)
-	root.rotation_degrees = Vector3(0.0, 270.0, 0.0)
-	parent.add_child(root)
-	_assign_owner_recursive(root)
-
-	var packed := load("res://assets/glock/Glock.fbx") as PackedScene
-	if packed != null:
-		var visual := packed.instantiate() as Node3D
-		visual.name = "GlockMesh"
-		visual.position = Vector3(0.0, 0.02, 0.0)
-		visual.scale = Vector3.ONE * 1.755
-		root.add_child(visual)
-		_assign_owner_recursive(visual)
 
 
 func _build_soda_station(parent: Node3D) -> void:

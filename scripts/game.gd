@@ -1709,9 +1709,6 @@ var street_bg_choice: String = "original"
 var street_bg_custom_path: String = ""
 var street_bg_option: OptionButton = null
 var street_bg_custom_edit: LineEdit = null
-var street_bg_video_enabled: bool = false
-var street_bg_video_player: VideoStreamPlayer = null
-var options_hidden_bg_video_check: CheckButton = null
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -2261,7 +2258,6 @@ const STREET_BG_NEW_ARCADE_PATH := "res://assets/backgrounds/pixel_palace_festiv
 const STREET_BG_ARCADIA_PLAY_PATH := "res://assets/backgrounds/arcadia_play.png"
 const STREET_BG_ARCADIA_CLEAN_PATH := "res://assets/backgrounds/arcadia_clean.png"
 const STREET_BG_MILL1_PATH := "res://assets/backgrounds/mill1.png"
-const STREET_BG_ARCADE_VIDEO_PATH := "res://assets/videos/arcade_background.ogv"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -5636,7 +5632,6 @@ func _build_3d_world() -> void:
 	_build_truck_radio_prop()
 	_build_season_shaker()
 	_build_fire_extinguisher()
-	_build_glock()
 	_build_window_cat()
 	_build_outdoor_street()
 	_build_first_sale_decal()
@@ -15923,87 +15918,6 @@ func _reset_fire_extinguisher() -> void:
 		ext_area.input_ray_pickable = true
 	_clear_grill_fire()
 	_clear_ext_powder_blobs()
-
-
-func _build_glock() -> void:
-	## Glock removed from the active truck scene.
-	const SCENE_PATH := "res://assets/glock/Glock.fbx"
-	const DIFF_PATH := "res://assets/glock/Low_Explode_Glock_Mat_BaseColor.png"
-	const MET_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Metallic.png"
-	const NORM_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Normal.png"
-	const ROUGH_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Roughness.png"
-	const EMIS_PATH := "res://assets/glock/Low_Explode_Glock_Mat_Emissive.png"
-	if glock_root != null and is_instance_valid(glock_root):
-		glock_root.queue_free()
-		glock_root = null
-	glock_flash = null
-	glock_muzzle = null
-	glock_laser_beam = null
-	glock_laser_dot = null
-	glock_laser_module = null
-	glock_rear_sight_l = null
-	glock_rear_sight_r = null
-	glock_visual = null
-	glock_area = null
-	## Drop leftover mount key / shadow plate from older builds.
-	var old_key := world.get_node_or_null("GlockMountKey")
-	if old_key != null and is_instance_valid(old_key):
-		old_key.queue_free()
-	var old_plate := world.get_node_or_null("GlockShadowPlate")
-	if old_plate != null and is_instance_valid(old_plate):
-		old_plate.queue_free()
-	glock_held = false
-	glock_cooldown = 0.0
-	glock_recoil = 0.0
-	_set_glock_laser_visible(false)
-	return
-	if not ResourceLoader.exists(SCENE_PATH):
-		push_warning("Glock missing: %s" % SCENE_PATH)
-		return
-	var packed := load(SCENE_PATH) as PackedScene
-	if packed == null:
-		return
-	var visual := packed.instantiate() as Node3D
-	if visual == null:
-		return
-	## Tucked behind the First Sale plaque — slide the bill aside to grab it.
-	glock_home = Vector3(0.0, 2.38, 1.232)
-	glock_home_rot = Vector3(0.0, 270.0, 0.0)
-	glock_root = Node3D.new()
-	glock_root.name = "WallGlock"
-	glock_root.position = glock_home
-	glock_root.rotation_degrees = glock_home_rot
-	world.add_child(glock_root)
-	visual.name = "GlockMesh"
-	## New single-gun Display mesh: barrel +Z, grip −Y — hang upright on the beam.
-	visual.position = Vector3(0.0, 0.02, 0.0)
-	visual.rotation_degrees = Vector3(0.0, 0.0, 0.0)
-	## Model is already ~handgun-sized (~20cm); slight upscale so it reads on the wall.
-	visual.scale = Vector3.ONE * GLOCK_MESH_SCALE
-	var diff: Texture2D = load(DIFF_PATH) as Texture2D if ResourceLoader.exists(DIFF_PATH) else null
-	var met: Texture2D = load(MET_PATH) as Texture2D if ResourceLoader.exists(MET_PATH) else null
-	var norm: Texture2D = load(NORM_PATH) as Texture2D if ResourceLoader.exists(NORM_PATH) else null
-	var rough: Texture2D = load(ROUGH_PATH) as Texture2D if ResourceLoader.exists(ROUGH_PATH) else null
-	var emis: Texture2D = load(EMIS_PATH) as Texture2D if ResourceLoader.exists(EMIS_PATH) else null
-	_apply_glock_materials(visual, diff, met, norm, rough, emis)
-	glock_root.add_child(visual)
-	glock_visual = visual
-
-	glock_area = Area3D.new()
-	glock_area.name = "GlockGrab"
-	glock_area.input_ray_pickable = true
-	glock_area.collision_layer = GLOCK_COLLISION_LAYER
-	glock_area.collision_mask = 0
-	glock_area.monitoring = false
-	glock_area.monitorable = true
-	var shape := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	box.size = Vector3(0.22, 0.28, 0.32)
-	shape.shape = box
-	shape.position = Vector3(0.0, 0.0, 0.02)
-	glock_area.add_child(shape)
-	glock_root.add_child(glock_area)
-	_ensure_glock_fx()
 
 
 func _apply_glock_materials(node: Node, diff: Texture2D, met: Texture2D, norm: Texture2D, rough: Texture2D, emis: Texture2D) -> void:
@@ -41705,9 +41619,6 @@ func _gfx_add_background_selector(parent: Control) -> void:
 	street_bg_option.item_selected.connect(func(index: int):
 		var meta = street_bg_option.get_item_metadata(index)
 		street_bg_choice = str(meta)
-		street_bg_video_enabled = false
-		if options_hidden_bg_video_check != null and is_instance_valid(options_hidden_bg_video_check):
-			options_hidden_bg_video_check.set_pressed_no_signal(false)
 		_save_street_background_settings()
 		_apply_street_background_texture()
 	)
@@ -42406,19 +42317,6 @@ func _build_options_menu() -> void:
 	)
 
 	_gfx_add_background_selector(hidden_bg_box)
-	options_hidden_bg_video_check = CheckButton.new()
-	options_hidden_bg_video_check.text = "Use Arcade Animated Background"
-	options_hidden_bg_video_check.tooltip_text = "Loops the supplied arcade video on the outside background plane. Off uses the current location image."
-	options_hidden_bg_video_check.button_pressed = street_bg_video_enabled
-	UiFontsScript.apply_button(options_hidden_bg_video_check, false, 13)
-	options_hidden_bg_video_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
-	options_hidden_bg_video_check.toggled.connect(func(on: bool):
-		street_bg_video_enabled = on
-		_save_street_background_settings()
-		_apply_street_background_texture()
-		_sfx_click()
-	)
-	hidden_bg_box.add_child(options_hidden_bg_video_check)
 	_options_add_standard_slider(hidden_bg_box, "bg_x", "BG Left / Right", -4.0, 4.0, 0.02)
 	_options_add_standard_slider(hidden_bg_box, "bg_y", "BG Height", STREET_MATTE_MIN_Y, STREET_MATTE_MAX_Y, 0.02)
 	_options_add_standard_slider(hidden_bg_box, "bg_z", "BG Forward / Back", 6.0, 18.0, 0.05)
@@ -44309,8 +44207,6 @@ func _try_unlock_hidden_options() -> void:
 			if options_hidden_outdoor_ambience_vol_lab != null:
 				options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 			_refresh_street_background_option()
-			if options_hidden_bg_video_check != null and is_instance_valid(options_hidden_bg_video_check):
-				options_hidden_bg_video_check.set_pressed_no_signal(street_bg_video_enabled)
 			_sync_tree_light_hidden_ui()
 			_sync_tree_wind_hidden_ui()
 			_sync_tree_xform_hidden_ui()
@@ -45090,11 +44986,8 @@ func _load_street_background_settings() -> void:
 	if cfg.load(GFX_CFG_PATH) == OK:
 		street_bg_choice = str(cfg.get_value("street_bg", "choice", street_bg_choice))
 		street_bg_custom_path = str(cfg.get_value("street_bg", "custom_path", ""))
-		street_bg_video_enabled = bool(cfg.get_value("street_bg", "arcade_video_enabled", false))
 	if not ResourceLoader.exists(_street_background_path_for_choice(street_bg_choice)):
 		street_bg_choice = "preview" if ResourceLoader.exists(STREET_BG_PREVIEW_PATH) else "original"
-	if not ResourceLoader.exists(STREET_BG_ARCADE_VIDEO_PATH):
-		street_bg_video_enabled = false
 
 
 func _save_street_background_settings() -> void:
@@ -45102,7 +44995,6 @@ func _save_street_background_settings() -> void:
 	cfg.load(GFX_CFG_PATH)
 	cfg.set_value("street_bg", "choice", street_bg_choice)
 	cfg.set_value("street_bg", "custom_path", street_bg_custom_path)
-	cfg.set_value("street_bg", "arcade_video_enabled", street_bg_video_enabled)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -45118,44 +45010,10 @@ func _apply_street_background_texture() -> void:
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mat.render_priority = -8
 		street_matte.material_override = mat
-	if street_bg_video_enabled:
-		var video_player := _ensure_street_background_video_player()
-		if video_player != null:
-			mat.albedo_texture = video_player.get_video_texture()
-			if not video_player.is_playing():
-				video_player.play()
-			return
-	if street_bg_video_player != null and is_instance_valid(street_bg_video_player):
-		street_bg_video_player.stop()
 	var tex := load(_current_street_background_path()) as Texture2D
 	if tex == null:
 		return
 	mat.albedo_texture = tex
-
-
-func _ensure_street_background_video_player() -> VideoStreamPlayer:
-	if street_bg_video_player != null and is_instance_valid(street_bg_video_player):
-		return street_bg_video_player
-	if not ResourceLoader.exists(STREET_BG_ARCADE_VIDEO_PATH):
-		return null
-	var stream := load(STREET_BG_ARCADE_VIDEO_PATH) as VideoStream
-	if stream == null:
-		return null
-	street_bg_video_player = VideoStreamPlayer.new()
-	street_bg_video_player.name = "ArcadeBackgroundVideo"
-	street_bg_video_player.stream = stream
-	street_bg_video_player.loop = true
-	street_bg_video_player.volume_db = -80.0
-	street_bg_video_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	street_bg_video_player.position = Vector2(-4096.0, -4096.0)
-	street_bg_video_player.size = Vector2.ONE
-	var host: Node = get_node_or_null("UI/Root")
-	if host == null:
-		host = self
-	host.add_child(street_bg_video_player)
-	return street_bg_video_player
-
-
 func _apply_street_matte_settings(s: Dictionary) -> void:
 	if street_matte == null or not is_instance_valid(street_matte):
 		return
