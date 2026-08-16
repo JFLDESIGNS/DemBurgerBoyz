@@ -2125,9 +2125,9 @@ const FRY_BASKET_SHAKE_NEED := 1.5
 const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
 const FRYER_SMOKE_DIAMETER := 0.273 ## 0.237 * 1.15
 const FRYER_SMOKE_SPIN_DEG := -72.0
-## Match finished container fries (was pale yellow potato).
-const FRYER_FRY_COLOR := Color(0.96, 0.68, 0.16)
-const FRYER_FRY_COOKED_COLOR := Color(0.88, 0.52, 0.10)
+## Golden potato tones: bright yellow centers with a restrained toasted edge.
+const FRYER_FRY_COLOR := Color(0.97, 0.72, 0.18)
+const FRYER_FRY_COOKED_COLOR := Color(0.90, 0.57, 0.11)
 ## Local −X = camera-left · higher Z = closer to the cook.
 const FRYER_OIL_LOCAL := Vector3(-0.12, -0.056, 0.52)
 const FRYER_OIL_RADIUS := 0.20
@@ -26437,20 +26437,20 @@ func _make_waffle_cone_mat(col: Color, roughness: float = 0.72) -> StandardMater
 
 
 func _style_fries_food_material(mat: StandardMaterial3D, emission_energy: float = 0.34) -> void:
-	## Warm food glow plus orange transmittance gives the chunky fry meshes a
+	## Warm food glow plus golden transmittance gives the chunky fry meshes a
 	## soft faux-SSS edge without flattening their face shading into neon.
 	mat.metallic = 0.0
 	mat.roughness = 0.88
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
 	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.43, 0.055)
+	mat.emission = Color(1.0, 0.50, 0.065)
 	mat.emission_energy_multiplier = clampf(emission_energy, 0.0, 1.5)
 	mat.set("subsurf_scatter_enabled", true)
 	mat.set("subsurf_scatter_strength", 0.28)
 	mat.set("subsurf_scatter_skin_mode", false)
 	mat.set("subsurf_scatter_transmittance_enabled", true)
-	mat.set("subsurf_scatter_transmittance_color", Color(1.0, 0.25, 0.025))
+	mat.set("subsurf_scatter_transmittance_color", Color(1.0, 0.33, 0.035))
 	mat.set("subsurf_scatter_transmittance_depth", 0.028)
 	mat.rim_enabled = true
 	mat.rim = 0.14
@@ -27286,7 +27286,7 @@ func _update_fries_pack_sparkles(pack: Node3D, motion: float) -> void:
 func _paint_fries_pack_meshes(model: Node3D) -> void:
 	## FBX ships untextured grey — paint cup red, fries golden.
 	var cup_mat := _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
-	var fry_mat := _make_basic_mat(Color(0.96, 0.68, 0.16), 0.0, 0.92)
+	var fry_mat := _make_basic_mat(FRYER_FRY_COLOR, 0.0, 0.92)
 	_style_fries_food_material(fry_mat, 0.34)
 	var stack: Array[Node] = [model]
 	while not stack.is_empty():
