@@ -1714,6 +1714,7 @@ var street_bg_custom_path: String = ""
 var street_bg_option: OptionButton = null
 var street_bg_custom_edit: LineEdit = null
 var location_bg_assignments: Dictionary = {} ## location id -> background choice id
+var location_bg_transforms: Dictionary = {} ## location id -> per-location bg_x/bg_y/bg_z/bg_scale overrides
 var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by location id
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
@@ -2302,6 +2303,11 @@ const STREET_BG_ARCADIA_CLEAN_PATH := "res://assets/backgrounds/arcadia_clean.pn
 const STREET_BG_MILL1_PATH := "res://assets/backgrounds/mill1.png"
 const STREET_BG_GAS_STATION_PATH := "res://assets/backgrounds/sunny_gas_station.png"
 const STREET_BG_TOWN_SQUARE_PATH := "res://assets/backgrounds/town_square.png"
+const STREET_BG_SELECTED_MAIN_STREET_PATH := "res://assets/backgrounds/selected_main_street.png"
+const STREET_BG_SELECTED_TREE_PARK_PATH := "res://assets/backgrounds/selected_tree_park.png"
+const STREET_BG_SELECTED_RESIDENTIAL_PATH := "res://assets/backgrounds/selected_residential_row.png"
+const STREET_BG_SELECTED_CONSTRUCTION_PATH := "res://assets/backgrounds/selected_construction_block.png"
+const STREET_BG_SELECTED_WAREHOUSE_PATH := "res://assets/backgrounds/selected_warehouse.png"
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2317,7 +2323,7 @@ const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const FIRST_RUN_GFX_CFG_PATH := "res://defaults/gfx_settings.cfg"
 const FIRST_RUN_AUDIO_CFG_PATH := "res://defaults/audio_settings.cfg"
 const FIRST_RUN_LOCATION_CFG_PATH := "res://defaults/truck_location.cfg"
-const RELEASE_PROFILE_VERSION := 1
+const RELEASE_PROFILE_VERSION := 2
 const RELEASE_PROFILE_SECTION := "release_profile"
 const RELEASE_PROFILE_KEY := "tuned_defaults_version"
 const CAMERA_CFG_SECTION := "player_camera"
@@ -25241,7 +25247,7 @@ func _reset_soda_overflow_visual() -> void:
 	_flash("Drink overflow visual reset", Color("80DEEA"))
 
 
-func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
+func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> HSlider:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	parent.add_child(row)
@@ -25274,6 +25280,7 @@ func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String
 	parent.add_child(slider)
 	options_hidden_tree_light_sliders[key] = slider
 	options_hidden_tree_light_labs[key] = val_lab
+	return slider
 
 
 func _hidden_add_sfx_level_slider(parent: Control, key: String, label_text: String) -> void:
@@ -42322,15 +42329,94 @@ func _fill_location_background_option(option: OptionButton, location_id: String)
 	option.select(selected_index)
 
 
+func _location_background_transform_control_key(location_id: String, setting: String) -> String:
+	return "location_bg_%s_%s" % [location_id, setting]
+
+
+func _location_background_transform_section(location_id: String) -> String:
+	return "location_background_transform_%s" % location_id
+
+
+func _location_background_global_value(setting: String) -> float:
+	if gfx_sliders.has(setting):
+		var slider := gfx_sliders[setting] as HSlider
+		if slider != null and is_instance_valid(slider):
+			return slider.value
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) == OK:
+		return float(cfg.get_value("gfx", setting, GFX_DEFAULTS.get(setting, 0.0)))
+	return float(GFX_DEFAULTS.get(setting, 0.0))
+
+
+func _location_background_transform_value(location_id: String, setting: String) -> float:
+	var transform_settings: Dictionary = location_bg_transforms.get(location_id, {})
+	if transform_settings.has(setting):
+		return float(transform_settings[setting])
+	return _location_background_global_value(setting)
+
+
+func _apply_current_location_background_settings() -> void:
+	var settings := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS.duplicate()
+	_apply_street_matte_settings(settings)
+
+
+func _set_location_background_transform_value(location_id: String, setting: String, value: float) -> void:
+	var transform_settings: Dictionary = location_bg_transforms.get(location_id, {}).duplicate()
+	transform_settings[setting] = value
+	location_bg_transforms[location_id] = transform_settings
+	_save_street_background_settings()
+	if current_location_id == location_id:
+		_apply_current_location_background_settings()
+
+
+func _sync_location_background_transform_controls(location_id: String) -> void:
+	for setting in ["bg_x", "bg_y", "bg_z", "bg_scale"]:
+		var control_key := _location_background_transform_control_key(location_id, setting)
+		var value := _location_background_transform_value(location_id, setting)
+		if options_hidden_tree_light_sliders.has(control_key):
+			var slider := options_hidden_tree_light_sliders[control_key] as HSlider
+			if slider != null and is_instance_valid(slider):
+				slider.set_value_no_signal(value)
+		if options_hidden_tree_light_labs.has(control_key):
+			var value_label := options_hidden_tree_light_labs[control_key] as Label
+			if value_label != null and is_instance_valid(value_label):
+				value_label.text = "%.2f" % value
+
+
+func _reset_location_background_transform(location_id: String) -> void:
+	location_bg_transforms.erase(location_id)
+	_save_street_background_settings()
+	_sync_location_background_transform_controls(location_id)
+	if current_location_id == location_id:
+		_apply_current_location_background_settings()
+	_flash("%s background transform now follows Global" % TruckLocationsScript.display_name(location_id), Color("80DEEA"))
+
+
 func _hidden_add_location_background_row(parent: Control, location: Dictionary) -> void:
 	var location_id := str(location.get("id", ""))
 	if location_id == "":
 		return
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.035, 0.055, 0.085, 0.72)
+	panel_style.border_color = Color(0.22, 0.38, 0.55, 0.75)
+	panel_style.set_border_width_all(1)
+	panel_style.set_corner_radius_all(7)
+	panel_style.content_margin_left = 10.0
+	panel_style.content_margin_right = 10.0
+	panel_style.content_margin_top = 8.0
+	panel_style.content_margin_bottom = 10.0
+	panel.add_theme_stylebox_override("panel", panel_style)
+	parent.add_child(panel)
+	var controls := VBoxContainer.new()
+	controls.add_theme_constant_override("separation", 5)
+	panel.add_child(controls)
 	var label := Label.new()
 	label.text = str(location.get("name", location_id))
 	UiFontsScript.apply_label(label, true, 11)
 	label.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
-	parent.add_child(label)
+	controls.add_child(label)
 	var option := OptionButton.new()
 	option.custom_minimum_size = Vector2(0, 36)
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -42344,10 +42430,25 @@ func _hidden_add_location_background_row(parent: Control, location: Dictionary) 
 			location_bg_assignments[location_id] = choice
 		_save_street_background_settings()
 		if current_location_id == location_id:
-			_apply_street_background_texture()
+			_apply_current_location_background_settings()
 	)
-	parent.add_child(option)
+	controls.add_child(option)
 	location_bg_option_nodes[location_id] = option
+	_hidden_add_labeled_slider(controls, _location_background_transform_control_key(location_id, "bg_x"), "Left / Right", -4.0, 4.0, 0.02,
+		func(): return _location_background_transform_value(location_id, "bg_x"),
+		func(value: float): _set_location_background_transform_value(location_id, "bg_x", value))
+	_hidden_add_labeled_slider(controls, _location_background_transform_control_key(location_id, "bg_y"), "Height", STREET_MATTE_MIN_Y, STREET_MATTE_MAX_Y, 0.02,
+		func(): return _location_background_transform_value(location_id, "bg_y"),
+		func(value: float): _set_location_background_transform_value(location_id, "bg_y", value))
+	_hidden_add_labeled_slider(controls, _location_background_transform_control_key(location_id, "bg_z"), "Forward / Back", 6.0, 18.0, 0.05,
+		func(): return _location_background_transform_value(location_id, "bg_z"),
+		func(value: float): _set_location_background_transform_value(location_id, "bg_z", value))
+	_hidden_add_labeled_slider(controls, _location_background_transform_control_key(location_id, "bg_scale"), "Scale", 0.4, 2.2, 0.01,
+		func(): return _location_background_transform_value(location_id, "bg_scale"),
+		func(value: float): _set_location_background_transform_value(location_id, "bg_scale", value))
+	_options_add_btn(controls, "Reset Transform To Global", func():
+		_reset_location_background_transform(location_id)
+	)
 
 
 func _refresh_location_background_options() -> void:
@@ -43044,7 +43145,7 @@ func _build_options_menu() -> void:
 	_gfx_add_background_selector(hidden_bg_box)
 	_hidden_add_section(hidden_bg_box, "MAP LOCATION ASSIGNMENTS")
 	var location_bg_help := Label.new()
-	location_bg_help.text = "Choose a saved image for each route stop. Route Default uses the art defined by that map location."
+	location_bg_help.text = "Each route stop has its own image, height, position, depth, and scale. Reset Transform To Global makes that stop follow the global controls below."
 	location_bg_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(location_bg_help, false, 11)
 	location_bg_help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.88))
@@ -45784,6 +45885,16 @@ func _street_background_options() -> Array:
 		opts.append({"id": "sunny_gas_station", "label": "Sunny Gas Station", "path": STREET_BG_GAS_STATION_PATH})
 	if ResourceLoader.exists(STREET_BG_TOWN_SQUARE_PATH):
 		opts.append({"id": "town_square", "label": "Town Square", "path": STREET_BG_TOWN_SQUARE_PATH})
+	if ResourceLoader.exists(STREET_BG_SELECTED_MAIN_STREET_PATH):
+		opts.append({"id": "selected_main_street", "label": "Main Street Shops", "path": STREET_BG_SELECTED_MAIN_STREET_PATH})
+	if ResourceLoader.exists(STREET_BG_SELECTED_TREE_PARK_PATH):
+		opts.append({"id": "selected_tree_park", "label": "Tree Park", "path": STREET_BG_SELECTED_TREE_PARK_PATH})
+	if ResourceLoader.exists(STREET_BG_SELECTED_RESIDENTIAL_PATH):
+		opts.append({"id": "selected_residential", "label": "Residential Row", "path": STREET_BG_SELECTED_RESIDENTIAL_PATH})
+	if ResourceLoader.exists(STREET_BG_SELECTED_CONSTRUCTION_PATH):
+		opts.append({"id": "selected_construction", "label": "Construction Block", "path": STREET_BG_SELECTED_CONSTRUCTION_PATH})
+	if ResourceLoader.exists(STREET_BG_SELECTED_WAREHOUSE_PATH):
+		opts.append({"id": "selected_warehouse", "label": "Warehouse District", "path": STREET_BG_SELECTED_WAREHOUSE_PATH})
 	if street_bg_custom_path != "":
 		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
 	return opts
@@ -45809,6 +45920,16 @@ func _street_background_path_for_choice(choice: String) -> String:
 			return STREET_BG_GAS_STATION_PATH
 		"town_square":
 			return STREET_BG_TOWN_SQUARE_PATH
+		"selected_main_street":
+			return STREET_BG_SELECTED_MAIN_STREET_PATH
+		"selected_tree_park":
+			return STREET_BG_SELECTED_TREE_PARK_PATH
+		"selected_residential":
+			return STREET_BG_SELECTED_RESIDENTIAL_PATH
+		"selected_construction":
+			return STREET_BG_SELECTED_CONSTRUCTION_PATH
+		"selected_warehouse":
+			return STREET_BG_SELECTED_WAREHOUSE_PATH
 		"custom":
 			return street_bg_custom_path
 		_:
@@ -45835,6 +45956,13 @@ func _current_street_background_path() -> String:
 		return STREET_BG_GAS_STATION_PATH
 	if street_bg_choice == "town_square" and ResourceLoader.exists(STREET_BG_TOWN_SQUARE_PATH):
 		return STREET_BG_TOWN_SQUARE_PATH
+	if street_bg_choice in [
+		"selected_main_street", "selected_tree_park", "selected_residential",
+		"selected_construction", "selected_warehouse",
+	]:
+		var selected_path := _street_background_path_for_choice(street_bg_choice)
+		if ResourceLoader.exists(selected_path):
+			return selected_path
 	var location_path := TruckLocationsScript.background_path(current_location_id)
 	if location_path != "" and ResourceLoader.exists(location_path):
 		return location_path
@@ -45867,11 +45995,19 @@ func _load_street_background_settings() -> void:
 		street_bg_choice = str(cfg.get_value("street_bg", "choice", street_bg_choice))
 		street_bg_custom_path = str(cfg.get_value("street_bg", "custom_path", ""))
 		location_bg_assignments.clear()
+		location_bg_transforms.clear()
 		for location in TruckLocationsScript.all():
 			var location_id := str(location.get("id", ""))
 			var choice := str(cfg.get_value("location_backgrounds", location_id, ""))
 			if choice != "" and ResourceLoader.exists(_street_background_path_for_choice(choice)):
 				location_bg_assignments[location_id] = choice
+			var transform_settings := {}
+			var section := _location_background_transform_section(location_id)
+			for setting in ["bg_x", "bg_y", "bg_z", "bg_scale"]:
+				if cfg.has_section_key(section, setting):
+					transform_settings[setting] = float(cfg.get_value(section, setting))
+			if not transform_settings.is_empty():
+				location_bg_transforms[location_id] = transform_settings
 	if not ResourceLoader.exists(_street_background_path_for_choice(street_bg_choice)):
 		street_bg_choice = "preview" if ResourceLoader.exists(STREET_BG_PREVIEW_PATH) else "original"
 
@@ -45884,6 +46020,13 @@ func _save_street_background_settings() -> void:
 	for location in TruckLocationsScript.all():
 		var location_id := str(location.get("id", ""))
 		cfg.set_value("location_backgrounds", location_id, str(location_bg_assignments.get(location_id, "")))
+		var section := _location_background_transform_section(location_id)
+		if cfg.has_section(section):
+			cfg.erase_section(section)
+		var transform_settings: Dictionary = location_bg_transforms.get(location_id, {})
+		for setting in ["bg_x", "bg_y", "bg_z", "bg_scale"]:
+			if transform_settings.has(setting):
+				cfg.set_value(section, setting, float(transform_settings[setting]))
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -45907,10 +46050,11 @@ func _apply_street_matte_settings(s: Dictionary) -> void:
 	if street_matte == null or not is_instance_valid(street_matte):
 		return
 	_apply_street_background_texture()
-	var y := float(s.get("bg_y", STREET_MATTE_DEFAULT_Y))
-	var x := float(s.get("bg_x", 0.0))
-	var z := float(s.get("bg_z", STREET_MATTE_BASE_Z))
-	var sc := float(s.get("bg_scale", 1.0))
+	var location_settings: Dictionary = location_bg_transforms.get(current_location_id, {})
+	var y := float(location_settings.get("bg_y", s.get("bg_y", STREET_MATTE_DEFAULT_Y)))
+	var x := float(location_settings.get("bg_x", s.get("bg_x", 0.0)))
+	var z := float(location_settings.get("bg_z", s.get("bg_z", STREET_MATTE_BASE_Z)))
+	var sc := float(location_settings.get("bg_scale", s.get("bg_scale", 1.0)))
 	street_matte.position = Vector3(x, y, z)
 	street_matte.scale = Vector3(sc, sc, 1.0)
 	if street_matte_body != null and is_instance_valid(street_matte_body):
@@ -54129,7 +54273,7 @@ func _setup_start_menu_chrome() -> void:
 
 func _setup_location_map_ui() -> void:
 	_load_truck_location()
-	_apply_street_background_texture()
+	_apply_current_location_background_settings()
 	if _location_map_layer != null and is_instance_valid(_location_map_layer):
 		return
 	_location_map_layer = CanvasLayer.new()
@@ -54278,7 +54422,7 @@ func _on_location_confirmed(location_id: String) -> void:
 func _apply_location_local(location_id: String) -> void:
 	current_location_id = location_id
 	_save_truck_location()
-	_apply_street_background_texture()
+	_apply_current_location_background_settings()
 	var loc_name: String = TruckLocationsScript.display_name(location_id)
 	var tier: String = TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(location_id))
 	_flash("Parked at %s (%s)" % [loc_name, tier], TruckLocationsScript.tier_color(TruckLocationsScript.tier_of(location_id)))
