@@ -1196,6 +1196,14 @@ func _process(delta: float) -> void:
 	_home_x = target_x
 	_update_powder_blobs(delta)
 	_update_leave_fade(delta)
+	## The large review card owns all customer copy while it is visible. Some late
+	## reaction paths (notably extinguisher powder) update speech after the review
+	## starts, so enforce exclusivity every frame as well as when the card opens.
+	if _review_card_is_showing():
+		if _bubble != null:
+			_bubble.visible = false
+		if _bubble_bg != null:
+			_bubble_bg.visible = false
 
 	if is_ragdoll:
 		_update_ragdoll(delta)
@@ -1879,6 +1887,12 @@ func show_review_stars(stars: float, review_text: String = "", duration_override
 	)
 
 
+func _review_card_is_showing() -> bool:
+	return _review_card_root != null \
+		and is_instance_valid(_review_card_root) \
+		and _review_card_root.visible
+
+
 func _review_first_two_lines(raw: String) -> String:
 	var cleaned := " ".join(raw.strip_edges().split(" ", false))
 	if cleaned.is_empty():
@@ -2058,7 +2072,7 @@ func leave_heck() -> void:
 	_play_anim("idle")
 	if _bubble:
 		_bubble.text = speech
-		_bubble.visible = true
+		_bubble.visible = not _review_card_is_showing()
 	if _bubble_bg:
 		_bubble_bg.visible = true
 	if _bar_root:
@@ -2212,7 +2226,7 @@ func leave_powdered() -> void:
 		_body.position.y = _base_body_y
 	if _bubble:
 		_bubble.text = speech
-		_bubble.visible = true
+		_bubble.visible = not _review_card_is_showing()
 	if _bubble_bg:
 		_bubble_bg.visible = false
 	if _bar_root:
