@@ -233,7 +233,7 @@ const GUIDED_TUTORIAL_STEPS: Array[Dictionary] = [
 	{"title": "TURN ON THE GRILL", "body": "Click BURNER: OFF below the grill (or press G). The steel needs heat before food can cook."},
 	{"title": "PLACE A PATTY", "body": "Right-click an open spot on the grill. A frozen beef ball will land exactly where you point."},
 	{"title": "SMASH THE PATTY", "body": "Right-click the frozen ball again. The spatula will press it flat into a proper smash burger."},
-	{"title": "SEASON THE MEAT", "body": "Click the hanging seasoning shaker, then hold it over the patty until pepper specks appear."},
+	{"title": "SEASON THE MEAT", "body": "Click and HOLD the hanging seasoning shaker. Keep holding while you move it over the patty until pepper specks appear."},
 	{"title": "COOK THE FIRST SIDE", "body": "Let it sizzle. Watch the ring over the patty and wait until it says FLIP. Good cooks don't rush the sear."},
 	{"title": "FLIP IT", "body": "When FLIP appears, quickly left-click the patty. The spatula will turn it onto its second side."},
 	{"title": "FINISH COOKING", "body": "Wait for the second side. When the ring says SCOOP, the patty is ready to leave the grill."},
@@ -251,6 +251,9 @@ var _tutorial_elapsed: float = 0.0
 var _tutorial_bought_supply: bool = false
 var _tutorial_cleaned_grill: bool = false
 var _tutorial_clean_patch_created: bool = false
+## Monotonic milestones for the one tutorial burger. Some gameplay states (notably
+## can_flip) last only until the action happens, so the coach must remember them.
+var _tutorial_patty_flags: Dictionary = {}
 var _tutorial_step: int = 0
 var _tutorial_text: String = ""
 var _tutorial_hint_cycle_t: float = 0.0
@@ -3398,6 +3401,7 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	_tutorial_bought_supply = false
 	_tutorial_cleaned_grill = false
 	_tutorial_clean_patch_created = false
+	_reset_guided_tutorial_patty_flags()
 	_clear_bts_day_intro(false)
 	_stop_logo_hover()
 	_stop_intro_title_music()
@@ -52756,26 +52760,76 @@ func _guided_tutorial_patty():
 	return null
 
 
+func _reset_guided_tutorial_patty_flags() -> void:
+	_tutorial_patty_flags = {
+		"placed": false,
+		"smashed": false,
+		"seasoned": false,
+		"flip_ready": false,
+		"flipped": false,
+		"scoop_ready": false,
+		"moved_to_build": false,
+	}
+
+
+func _capture_guided_tutorial_patty_flags(patty) -> void:
+	if _tutorial_patty_flags.is_empty():
+		_reset_guided_tutorial_patty_flags()
+	var on_build: bool = bool(stations[STATION_CRAFT]["items"].has("patty"))
+	if on_build:
+		## Reaching Build proves all grill-only actions that precede the scoop.
+		_tutorial_patty_flags["placed"] = true
+		_tutorial_patty_flags["smashed"] = true
+		_tutorial_patty_flags["flip_ready"] = true
+		_tutorial_patty_flags["flipped"] = true
+		_tutorial_patty_flags["scoop_ready"] = true
+		_tutorial_patty_flags["moved_to_build"] = true
+	if patty == null or not is_instance_valid(patty):
+		return
+	patty.set_meta("guided_tutorial_patty", true)
+	## Count placement after the frozen ball has landed. If the player already
+	## smashed it, the smashed state is also proof that placement was completed.
+	var ball_waiting := bool(patty.get("place_ball_waiting"))
+	var morphing := bool(patty.get("place_morphing"))
+	var smashed := not ball_waiting and not morphing
+	if ball_waiting or smashed:
+		_tutorial_patty_flags["placed"] = true
+	if smashed:
+		_tutorial_patty_flags["smashed"] = true
+	if float(patty.get("seasoning")) >= 0.1:
+		_tutorial_patty_flags["seasoned"] = true
+	var flipped := bool(patty.get("flipped_once"))
+	if bool(patty.can_flip()) or flipped:
+		## A successful early flip is proof that the first side reached FLIP.
+		_tutorial_patty_flags["flip_ready"] = true
+	if flipped:
+		_tutorial_patty_flags["flipped"] = true
+	if bool(patty.can_scoop()):
+		_tutorial_patty_flags["scoop_ready"] = true
+	for flag_name in _tutorial_patty_flags:
+		patty.set_meta("tutorial_%s" % str(flag_name), bool(_tutorial_patty_flags[flag_name]))
+
+
 func _guided_tutorial_step_ready() -> bool:
 	var patty = _guided_tutorial_patty()
+	_capture_guided_tutorial_patty_flags(patty)
 	match _tutorial_step:
 		1:
 			return grill_on
 		2:
-			return patty != null and bool(patty.get("place_ball_waiting"))
+			return bool(_tutorial_patty_flags.get("placed", false))
 		3:
-			return patty != null and not bool(patty.get("place_ball_waiting")) \
-				and not bool(patty.get("place_morphing"))
+			return bool(_tutorial_patty_flags.get("smashed", false))
 		4:
-			return patty != null and float(patty.get("seasoning")) >= 0.1
+			return bool(_tutorial_patty_flags.get("seasoned", false))
 		5:
-			return patty != null and bool(patty.can_flip())
+			return bool(_tutorial_patty_flags.get("flip_ready", false))
 		6:
-			return patty != null and bool(patty.get("flipped_once"))
+			return bool(_tutorial_patty_flags.get("flipped", false))
 		7:
-			return patty != null and bool(patty.can_scoop())
+			return bool(_tutorial_patty_flags.get("scoop_ready", false))
 		8:
-			return stations[STATION_CRAFT]["items"].has("patty")
+			return bool(_tutorial_patty_flags.get("moved_to_build", false))
 		9:
 			return stations[STATION_CRAFT]["items"].has("lettuce")
 		10:
@@ -52834,6 +52888,8 @@ func _update_tutorial_mouse_legend() -> void:
 	)
 	if use_right:
 		tutorial_mouse_caption.text = "RIGHT CLICK"
+	elif _tutorial_step == 4:
+		tutorial_mouse_caption.text = "CLICK + HOLD"
 	elif _tutorial_step == 14:
 		tutorial_mouse_caption.text = "HOLD + DRAG"
 	elif use_left:
