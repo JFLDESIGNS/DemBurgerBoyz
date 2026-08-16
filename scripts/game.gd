@@ -1154,6 +1154,8 @@ var soda_dispense_clips: Array = [] ## {node, rest_pos, rest_rot} nozzle levers 
 var cup_root: Node3D = null
 var cup_area: Area3D = null
 var cup_shell_mesh: MeshInstance3D = null
+var cup_overflow_shell: MeshInstance3D = null ## animated keyed splash wrapped just outside the cup
+var cup_overflow_shell_mat: ShaderMaterial = null
 var cup_liquid_mesh: MeshInstance3D = null
 var cup_liquid_mat: ShaderMaterial = null ## body: vertical pop→white gradient
 var cup_liquid_pivot: Node3D = null ## mild body lean with motion
@@ -1408,11 +1410,6 @@ var _godray_meshes: Array = [] ## MeshInstance3D shafts
 var _godray_base_alpha: PackedFloat32Array = PackedFloat32Array()
 var _godray_phase: PackedFloat32Array = PackedFloat32Array()
 var _cup_ice_spawn_cd: float = 0.0
-var _cup_soda_overfill_spill_cd: float = 0.0
-var _cup_soda_overfill_drop_cd: float = 0.0
-var _soda_overfill_cascade_meshes: Array = [] ## thin rim→deck pour ribbons while overfilling
-var _soda_overfill_flow_on: bool = true ## intermittent breaks in the overflow stream
-var _soda_overfill_flow_t: float = 0.0
 var _cup_prev_pos: Vector3 = Vector3.ZERO
 var _cup_vel: Vector3 = Vector3.ZERO
 var _cup_slosh: Vector2 = Vector2.ZERO ## x = tilt Z, y = tilt X (degrees)
@@ -2069,6 +2066,8 @@ const CUP_TRAY_DECK_LOCAL_Y := 0.08 * SODA_FOUNTAIN_SCALE + 0.0508
 const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
 const CUP_SHELL_BOT_R := 0.0594
+const SODA_OVERFLOW_SHELL_TEXTURE := "res://assets/vfx/soda_overflow_shell.png"
+const SODA_OVERFLOW_SHELL_SCALE := 1.085 ## outside the plastic without looking detached
 const CUP_LIQUID_BASE_H := 0.020
 const CUP_LIQUID_MAX_H := 0.158475
 const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
@@ -25301,11 +25300,6 @@ func _build_soda_station() -> void:
 		soda_stream_mesh.queue_free()
 	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
 		soda_stream_bubbles.queue_free()
-	for m in _soda_overfill_cascade_meshes:
-		var mi := m as MeshInstance3D
-		if mi != null and is_instance_valid(mi):
-			mi.queue_free()
-	_soda_overfill_cascade_meshes.clear()
 	soda_stream_mesh = null
 	soda_stream_mat = null
 	soda_stream_bubbles = null
@@ -25345,6 +25339,8 @@ func _build_soda_station() -> void:
 	cup_root = null
 	cup_area = null
 	cup_shell_mesh = null
+	cup_overflow_shell = null
+	cup_overflow_shell_mat = null
 	cup_liquid_mesh = null
 	cup_liquid_mat = null
 	cup_liquid_pivot = null
@@ -25361,13 +25357,8 @@ func _build_soda_station() -> void:
 	soda_stream_mesh = null
 	soda_stream_mat = null
 	soda_stream_bubbles = null
-	_soda_overfill_cascade_meshes.clear()
 	_serve_cup_node = null
 	_cup_ice_spawn_cd = 0.0
-	_cup_soda_overfill_spill_cd = 0.0
-	_cup_soda_overfill_drop_cd = 0.0
-	_soda_overfill_flow_on = true
-	_soda_overfill_flow_t = 0.0
 	_cup_prev_pos = Vector3.ZERO
 	_cup_vel = Vector3.ZERO
 	_cup_slosh = Vector2.ZERO
@@ -30563,6 +30554,8 @@ func _clear_cup_refs() -> void:
 	_cup_grab_front_block_t = 0.0
 	cup_area = null
 	cup_shell_mesh = null
+	cup_overflow_shell = null
+	cup_overflow_shell_mat = null
 	cup_liquid_mesh = null
 	cup_liquid_mat = null
 	cup_liquid_pivot = null
@@ -30582,6 +30575,10 @@ func _bind_cup_refs(root: Node3D) -> void:
 	cup_root = root
 	cup_area = root.get_node_or_null("CupGrab") as Area3D
 	cup_shell_mesh = root.get_node_or_null("Shell") as MeshInstance3D
+	cup_overflow_shell = root.get_node_or_null("OverflowShell") as MeshInstance3D
+	cup_overflow_shell_mat = cup_overflow_shell.material_override as ShaderMaterial if cup_overflow_shell else null
+	if cup_overflow_shell != null:
+		cup_overflow_shell.visible = false
 	cup_liquid_pivot = root.get_node_or_null("LiquidPivot") as Node3D
 	cup_liquid_mesh = cup_liquid_pivot.get_node_or_null("Liquid") as MeshInstance3D if cup_liquid_pivot else null
 	cup_liquid_mat = cup_liquid_mesh.material_override as ShaderMaterial if cup_liquid_mesh else null
@@ -30638,6 +30635,22 @@ func _create_drink_cup_node() -> Node3D:
 	cup_shell.material_override = _make_clear_cup_material(0.14)
 	_boost_cup_draw_order(cup_shell)
 	root.add_child(cup_shell)
+
+	## Overflow is now one UV-animated shell instead of world-space wires,
+	## droplets and spray. It hugs the cup and is enabled only while a full cup
+	## remains beneath the cola nozzle.
+	var overflow_shell := MeshInstance3D.new()
+	overflow_shell.name = "OverflowShell"
+	overflow_shell.mesh = _make_overflow_shell_mesh(
+		CUP_SHELL_TOP_R * SODA_OVERFLOW_SHELL_SCALE,
+		CUP_SHELL_BOT_R * SODA_OVERFLOW_SHELL_SCALE,
+		CUP_SHELL_H * 1.025
+	)
+	overflow_shell.position = Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
+	overflow_shell.material_override = _make_soda_overflow_shell_material()
+	overflow_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	overflow_shell.visible = false
+	root.add_child(overflow_shell)
 
 	## Opaque-ish plastic floor disc — readable when looking down into the cup.
 	var cup_floor := MeshInstance3D.new()
@@ -31318,6 +31331,45 @@ func _make_solo_cup_shell_mesh(
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return am
+
+
+func _make_overflow_shell_mesh(top_r: float, bot_r: float, height: float) -> ArrayMesh:
+	## Seam-safe tapered sleeve. The duplicated final column gives the splash art
+	## a true 0→1 UV seam instead of stretching the last texel around the cup.
+	var segs := 32
+	var rings := 28
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for ring in range(rings + 1):
+		var v := float(ring) / float(rings)
+		var y := (v - 0.5) * height
+		var r := lerpf(bot_r, top_r, v)
+		for s in range(segs + 1):
+			var u := float(s) / float(segs)
+			var ang := u * TAU
+			var radial := Vector3(cos(ang), 0.0, sin(ang))
+			verts.append(radial * r + Vector3(0.0, y, 0.0))
+			norms.append(radial)
+			uvs.append(Vector2(u, 1.0 - v))
+	for ring in rings:
+		for s in segs:
+			var stride := segs + 1
+			var i0 := ring * stride + s
+			var i1 := i0 + 1
+			var i2 := (ring + 1) * stride + s
+			var i3 := i2 + 1
+			indices.append_array([i0, i2, i1, i1, i2, i3])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 
 func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
@@ -33517,273 +33569,54 @@ func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
 	_refresh_ticket_checkmarks()
 
 
-func _make_soda_overflow_glob_material() -> StandardMaterial3D:
-	## Lit, glossy liquid volume. Unlike the pour shader these pieces keep normal
-	## shading and depth testing, so they read as round droplets instead of cards.
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.38, 0.16, 0.10, 0.94)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.cull_mode = BaseMaterial3D.CULL_BACK
-	mat.metallic = 0.0
-	mat.roughness = 0.12
-	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
-	mat.clearcoat_enabled = true
-	mat.clearcoat = 0.72
-	mat.clearcoat_roughness = 0.08
-	mat.rim_enabled = true
-	mat.rim = 0.18
-	mat.rim_tint = 0.42
-	mat.emission_enabled = true
-	mat.emission = Color(0.16, 0.045, 0.02)
-	mat.emission_energy_multiplier = 0.08
+func _make_soda_overflow_shell_material() -> ShaderMaterial:
+	## Black in the supplied art is keyed out; its white splash shapes wrap the
+	## slightly oversized cup sleeve and travel downward through the UVs.
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode blend_mix, depth_draw_always, cull_back, diffuse_burley, specular_schlick_ggx;
+
+uniform sampler2D splash_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform vec4 foam_color : source_color = vec4(1.0, 0.985, 0.94, 0.86);
+uniform float pan_speed = 0.34;
+uniform float vertical_tiles = 1.18;
+uniform float key_low = 0.035;
+uniform float key_soft = 0.24;
+
+void fragment() {
+	vec2 flow_uv = vec2(UV.x, fract(UV.y * vertical_tiles + TIME * pan_speed));
+	vec3 art = texture(splash_tex, flow_uv).rgb;
+	float brightness = dot(art, vec3(0.299, 0.587, 0.114));
+	float mask = smoothstep(key_low, key_low + key_soft, brightness);
+	if (mask <= 0.004) {
+		discard;
+	}
+	ALBEDO = foam_color.rgb;
+	ALPHA = mask * foam_color.a;
+	ROUGHNESS = 0.18;
+	SPECULAR = 0.72;
+	EMISSION = foam_color.rgb * mask * 0.10;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var splash := load(SODA_OVERFLOW_SHELL_TEXTURE) as Texture2D
+	if splash != null:
+		mat.set_shader_parameter("splash_tex", splash)
+	mat.render_priority = CUP_DRAW_PRIORITY + 8
 	return mat
 
 
-func _ensure_soda_overfill_cascades(count: int = 12) -> void:
-	## Small rounded 3D links for two short cup-rim → drip-tray streams.
-	while _soda_overfill_cascade_meshes.size() < count:
-		var mi := MeshInstance3D.new()
-		mi.name = "SodaOverfillCascade_%d" % _soda_overfill_cascade_meshes.size()
-		var glob := SphereMesh.new()
-		glob.radius = 0.0046
-		glob.height = 0.0092
-		glob.radial_segments = 18
-		glob.rings = 9
-		mi.mesh = glob
-		mi.material_override = _make_soda_overflow_glob_material()
-		mi.visible = false
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		world.add_child(mi)
-		_soda_overfill_cascade_meshes.append(mi)
+func _set_soda_overflow_shell_visible(show_shell: bool) -> void:
+	if cup_overflow_shell != null and is_instance_valid(cup_overflow_shell):
+		cup_overflow_shell.visible = show_shell
 
 
-func _hide_soda_overfill_cascades() -> void:
-	for m in _soda_overfill_cascade_meshes:
-		var mi := m as MeshInstance3D
-		if mi != null and is_instance_valid(mi):
-			mi.visible = false
-	_soda_overfill_flow_on = true
-	_soda_overfill_flow_t = 0.0
-
-
-func _soda_overfill_cam_dirs() -> Dictionary:
-	## Camera-relative cardinals on the floor plane (player-facing compass).
-	## West = screen-left → grill · South = toward camera → floor · East = screen-right.
-	var west := Vector3(1.0, 0.0, 0.0)
-	var east := Vector3(-1.0, 0.0, 0.0)
-	var south := Vector3(0.0, 0.0, -1.0)
-	if camera != null and is_instance_valid(camera):
-		var bx: Vector3 = camera.global_transform.basis.x
-		var bz: Vector3 = camera.global_transform.basis.z
-		var left := Vector3(-bx.x, 0.0, -bx.z)
-		if left.length_squared() > 0.0001:
-			west = left.normalized()
-			east = (-west)
-		var toward_cam := Vector3(bz.x, 0.0, bz.z)
-		if toward_cam.length_squared() > 0.0001:
-			south = toward_cam.normalized()
-	return {"west": west, "east": east, "south": south}
-
-
-func _tick_soda_overfill_breaks(delta: float) -> void:
-	## Mostly on — brief flickers only; all three streams share the same on/off window.
-	_soda_overfill_flow_t = maxf(0.0, _soda_overfill_flow_t - delta)
-	if _soda_overfill_flow_t > 0.0:
-		return
-	_soda_overfill_flow_on = not _soda_overfill_flow_on
-	if _soda_overfill_flow_on:
-		_soda_overfill_flow_t = randf_range(1.10, 1.60)
-	else:
-		_soda_overfill_flow_t = randf_range(0.03, 0.07)
-
-
-func _soda_arc_point(a: Vector3, b: Vector3, lift: float, t: float) -> Vector3:
-	## Quadratic-style pour arc — bows above the straight chord.
-	var p := a.lerp(b, t)
-	p.y += lift * 4.0 * t * (1.0 - t)
-	return p
-
-
-func _place_soda_overfill_ribbon(
-		mi: MeshInstance3D, lip: Vector3, land: Vector3, foam_col: Color, soda_tint: Color,
-		thickness: float = 1.0
-) -> void:
-	var mid := (lip + land) * 0.5
-	var along := land - lip
-	var len := maxf(along.length(), 0.012)
-	mi.visible = true
-	mi.global_position = mid
-	var y_axis := along / len
-	var x_axis := y_axis.cross(Vector3.FORWARD)
-	if x_axis.length_squared() < 0.0001:
-		x_axis = y_axis.cross(Vector3.RIGHT)
-	x_axis = x_axis.normalized()
-	var z_axis := x_axis.cross(y_axis).normalized()
-	mi.global_transform = Transform3D(Basis(x_axis, y_axis, z_axis).orthonormalized(), mid)
-	## Stretch a shaded sphere into a softly rounded liquid link. Slight overlap
-	## between links makes a readable stream without returning to the old wire.
-	var glob := mi.mesh as SphereMesh
-	if glob:
-		var base_h := maxf(glob.height, 0.001)
-		var wobble := 0.94 + 0.07 * sin(float(mi.get_instance_id() % 19) * 1.71)
-		mi.scale = Vector3(
-			thickness * wobble,
-			maxf(0.70, len / base_h * 1.04),
-			thickness * (2.0 - wobble)
-		)
-	var mat := mi.material_override as StandardMaterial3D
-	if mat:
-		var liquid_col := soda_tint.lerp(foam_col, 0.08)
-		liquid_col.a = 0.94
-		mat.albedo_color = liquid_col
-		mat.emission = Color(liquid_col.r, liquid_col.g, liquid_col.b) * 0.14
-
-
-func _place_soda_overfill_arc(
-		start_idx: int, seg_count: int, a: Vector3, b: Vector3, lift: float,
-		foam_col: Color, soda_tint: Color, thickness: float = 1.0
-) -> void:
-	## March overlapping rounded links along a bowed arc. Brief whole-stream
-	## pauses are handled separately; the visible stream itself stays coherent.
-	for s in seg_count:
-		var idx := start_idx + s
-		if idx < 0 or idx >= _soda_overfill_cascade_meshes.size():
-			break
-		var mi := _soda_overfill_cascade_meshes[idx] as MeshInstance3D
-		if mi == null or not is_instance_valid(mi):
-			continue
-		var t0 := float(s) / float(seg_count)
-		var t1 := float(s + 1) / float(seg_count)
-		var p0 := _soda_arc_point(a, b, lift, t0)
-		var p1 := _soda_arc_point(a, b, lift, t1)
-		_place_soda_overfill_ribbon(mi, p0, p1, foam_col, soda_tint, thickness)
-
-
-func _clamp_soda_overflow_to_tray(point: Vector3) -> Vector3:
-	if soda_root == null or not is_instance_valid(soda_root):
-		return point
-	var local := soda_root.to_local(point)
-	local.x = clampf(local.x, -0.31, 0.31)
-	local.z = clampf(local.z, soda_cup_rest_z - 0.12, soda_cup_rest_z + 0.12)
-	return soda_root.to_global(local)
-
-
-func _update_soda_overfill_cascades(rim: Vector3, flavor: String, delta: float) -> void:
-	## Simplified overflow: two compact streams land inside the physical drip tray.
-	## Nothing travels to the grill, counter edge, or floor.
-	if cup_root == null or world == null:
-		return
-	_ensure_soda_overfill_cascades(12)
-	_tick_soda_overfill_breaks(delta)
-	for m in _soda_overfill_cascade_meshes:
-		var hide_mi := m as MeshInstance3D
-		if hide_mi != null and is_instance_valid(hide_mi):
-			hide_mi.visible = false
-	var foam_col := Color(0.98, 0.97, 0.94, 0.96)
-	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
-	var foamish := pop.lerp(foam_col, 0.26)
-	foamish.a = 0.94
-	if not _soda_overfill_flow_on:
-		_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
-		return
-	var deck_y := _cup_deck_fill_y()
-	var dirs := _soda_overfill_cam_dirs()
-	var west: Vector3 = dirs["west"]
-	var east: Vector3 = dirs["east"]
-	var south: Vector3 = dirs["south"]
-	var t_ms := Time.get_ticks_msec() * 0.001
-	## Main stream: down the cup's camera-left side into the tray center.
-	var west_lip := rim + west * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
-	var west_tray := west_lip + west * 0.045 + south * (0.010 + sin(t_ms * 2.2) * 0.004)
-	west_tray.y = deck_y + 0.006
-	west_tray = _clamp_soda_overflow_to_tray(west_tray)
-	_place_soda_overfill_arc(0, 7, west_lip, west_tray, 0.010, foam_col, foamish, 0.72)
-	## Smaller secondary dribble on the other side, also ending on the tray.
-	var east_lip := rim + east * (CUP_SHELL_TOP_R * 0.95) + Vector3(0.0, 0.004, 0.0)
-	var east_tray := east_lip + east * 0.028 + south * (0.006 + sin(t_ms * 2.7) * 0.003)
-	east_tray.y = deck_y + 0.006
-	east_tray = _clamp_soda_overflow_to_tray(east_tray)
-	_place_soda_overfill_arc(7, 5, east_lip, east_tray, 0.007, foam_col, foamish, 0.58)
-	_cup_soda_overfill_drop_cd = maxf(0.0, _cup_soda_overfill_drop_cd - delta)
-
-
-func _spawn_soda_overfill_drops(rim: Vector3, flavor: String) -> void:
-	## A couple of small shaded droplets; every landing is clamped to the tray.
-	if cup_root == null or world == null or flavor == "":
-		return
-	var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.4, 0.2, 0.15))
-	var col := pop.lerp(Color(0.98, 0.97, 0.94, 1.0), 0.24)
-	col.a = 0.94
-	var deck_y := _cup_deck_fill_y()
-	var dirs := _soda_overfill_cam_dirs()
-	var card: Array[Vector3] = [dirs["west"], dirs["east"]]
-	for i in 2:
-		var drop := MeshInstance3D.new()
-		var sph := SphereMesh.new()
-		sph.radius = randf_range(0.0032, 0.0052)
-		sph.height = sph.radius * 2.0
-		sph.radial_segments = 14
-		sph.rings = 7
-		drop.mesh = sph
-		var mat := _make_soda_overflow_glob_material()
-		mat.albedo_color = col
-		drop.material_override = mat
-		drop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		world.add_child(drop)
-		var outward: Vector3 = card[i].rotated(Vector3.UP, randf_range(-0.08, 0.08)).normalized()
-		drop.global_position = rim + outward * (CUP_SHELL_TOP_R * 0.85) + Vector3(0.0, 0.01, 0.0)
-		var end_p := drop.global_position + outward * randf_range(0.025, 0.055) \
-			+ Vector3(randf_range(-0.006, 0.006), 0.0, randf_range(-0.005, 0.008))
-		end_p.y = deck_y + 0.007
-		end_p = _clamp_soda_overflow_to_tray(end_p)
-		var life := randf_range(0.16, 0.24)
-		var tw := create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(drop, "global_position", end_p, life).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.tween_property(drop, "scale", Vector3(1.25, 0.28, 1.25), life)
-		tw.chain().tween_callback(drop.queue_free)
-
-
-func _emit_soda_overfill_spill(rim: Vector3, flavor: String, amount: float, delta: float) -> void:
-	## Full cup still under the nozzle → foam spill streams off the rim (with breaks).
-	if cup_root == null:
-		return
-	_cup_soda_overfill_spill_cd = maxf(0.0, _cup_soda_overfill_spill_cd - delta)
-	_update_soda_overfill_cascades(rim, flavor, delta)
-	## A restrained rim fizz supports the 3D stream without spraying beyond the tray.
-	if _soda_overfill_flow_on and soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
-		soda_stream_bubbles.global_position = rim + Vector3(0.0, 0.006, 0.0)
-		soda_stream_bubbles.emitting = true
-		soda_stream_bubbles.amount = 10
-		soda_stream_bubbles.amount_ratio = 0.32
-		var em := soda_stream_bubbles.process_material as ParticleProcessMaterial
-		if em:
-			em.direction = Vector3(0.0, 0.25, 0.08)
-			em.spread = 24.0
-			em.initial_velocity_min = 0.035
-			em.initial_velocity_max = 0.10
-			em.gravity = Vector3(0.0, -1.6, 0.0)
-			## Mostly foam white with a hint of pop.
-			var pop: Color = SODA_FLAVOR_COLORS.get(flavor, Color(0.9, 0.9, 0.95))
-			em.color = Color(
-				lerpf(0.97, pop.r, 0.18),
-				lerpf(0.96, pop.g, 0.18),
-				lerpf(0.94, pop.b, 0.18),
-				0.92
-			)
-	elif soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
-		## Quiet the foam spray during stream breaks.
-		soda_stream_bubbles.amount_ratio = 0.15
-	## Foam chunks only during short-stream "on" windows.
-	if _soda_overfill_flow_on and _cup_soda_overfill_drop_cd <= 0.0:
-		_cup_soda_overfill_drop_cd = randf_range(0.10, 0.18)
-		_spawn_soda_overfill_drops(rim, flavor)
-	## Soft cadence gate for tray droplets only.
-	if _cup_soda_overfill_spill_cd > 0.0:
-		return
-	_cup_soda_overfill_spill_cd = randf_range(0.22, 0.40) + clampf(amount, 0.0, 0.05)
+func _emit_soda_overfill_spill(_rim: Vector3, _flavor: String, _amount: float, _delta: float) -> void:
+	## Full cup still under the nozzle: reveal the vertically panning texture shell.
+	## No extra streams, spray particles, loose globs, or tray decals are spawned.
+	_set_soda_overflow_shell_visible(true)
 
 
 func _try_fill_cup_at_spouts(delta: float) -> void:
@@ -34071,7 +33904,7 @@ func _hide_soda_stream() -> void:
 	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
 		soda_stream_bubbles.emitting = false
 		soda_stream_bubbles.amount_ratio = 0.0
-	_hide_soda_overfill_cascades()
+	_set_soda_overflow_shell_visible(false)
 	if game_audio and game_audio.has_method("set_soda_pour"):
 		game_audio.set_soda_pour(false)
 
