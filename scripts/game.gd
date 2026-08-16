@@ -228,9 +228,28 @@ var day_time: float = DAY_LENGTH
 var playing: bool = false
 ## Separate learn-by-doing mode. Normal shifts do not run these lessons.
 const GUIDED_TUTORIAL_DURATION := 15.0 * 60.0
+const TUTORIAL_STEP_WELCOME := 0
+const TUTORIAL_STEP_GRILL := 1
+const TUTORIAL_STEP_OIL := 2
+const TUTORIAL_STEP_PLACE := 3
+const TUTORIAL_STEP_SMASH := 4
+const TUTORIAL_STEP_SEASON := 5
+const TUTORIAL_STEP_COOK_FIRST := 6
+const TUTORIAL_STEP_FLIP := 7
+const TUTORIAL_STEP_FINISH := 8
+const TUTORIAL_STEP_BUILD := 9
+const TUTORIAL_STEP_LETTUCE := 10
+const TUTORIAL_STEP_TOMATO := 11
+const TUTORIAL_STEP_BUN := 12
+const TUTORIAL_STEP_SERVE := 13
+const TUTORIAL_STEP_REVIEWS := 14
+const TUTORIAL_STEP_BUY := 15
+const TUTORIAL_STEP_FIRE := 16
+const TUTORIAL_STEP_CLEAN := 17
 const GUIDED_TUTORIAL_STEPS: Array[Dictionary] = [
 	{"title": "WELCOME, CHEF!", "body": "I'm your cat coach. We have 15 minutes and one easy order. Do each job yourself and I'll guide you through the whole burger."},
 	{"title": "TURN ON THE GRILL", "body": "Click BURNER: OFF below the grill (or press G). The steel needs heat before food can cook."},
+	{"title": "OIL COOKS 2x FASTER", "body": "Click and HOLD the yellow oil bottle, drag a short line on the grill, then release. A patty touching oil cooks at 2x speed—but too much oil can start a grease fire."},
 	{"title": "PLACE A PATTY", "body": "Right-click an open spot on the grill. A frozen beef ball will land exactly where you point."},
 	{"title": "SMASH THE PATTY", "body": "Right-click the frozen ball again. The spatula will press it flat into a proper smash burger."},
 	{"title": "SEASON THE MEAT", "body": "Click and HOLD the hanging seasoning shaker. Keep holding while you move it over the patty until pepper specks appear."},
@@ -241,8 +260,10 @@ const GUIDED_TUTORIAL_STEPS: Array[Dictionary] = [
 	{"title": "ADD LETTUCE", "body": "Click LETTUCE on the bottom topping strip. It will fly onto the burger in the correct stack order."},
 	{"title": "ADD TOMATO", "body": "Now click TOMATO on the topping strip. Follow the customer's ticket instead of guessing."},
 	{"title": "CROWN THE BURGER", "body": "Click the top-bun pile on the prep counter. The top bun finishes this practice order."},
-	{"title": "SERVE THE ORDER", "body": "Check the ticket, then press Enter to serve the finished order."},
-	{"title": "BUY INGREDIENTS", "body": "Drag or wheel down the phone to INVENTORY, then press Buy beside Lettuce. The cat delivers the restock."},
+	{"title": "SERVE THE ORDER", "body": "Check the ticket, then press Enter to serve the finished order. Tutorial timing always gets Great Job so you can focus on learning."},
+	{"title": "CHECK PLAYER REVIEWS", "body": "Customers leave star ratings, comments, and order results in the phone's SOCIAL feed. Use reviews to learn what was accurate, cooked well, fresh, and fast."},
+	{"title": "BUY INGREDIENTS", "body": "Watch the stock bars in the phone's INVENTORY. Press Buy beside Lettuce now; the cat delivers the restock before you run out."},
+	{"title": "KNOW YOUR FIRE PLAN", "body": "Too much oil or an overheated grill can start a fire. Grab and HOLD the red extinguisher, aim at the flames, and sweep until they are out. Click GOT IT when ready."},
 	{"title": "CLEAN AND CLOSE", "body": "Turn the burner OFF. Then left-click and drag the spatula over the brown grease patch until the steel is clean."},
 ]
 var tutorial_mode: bool = false
@@ -251,6 +272,12 @@ var _tutorial_elapsed: float = 0.0
 var _tutorial_bought_supply: bool = false
 var _tutorial_cleaned_grill: bool = false
 var _tutorial_clean_patch_created: bool = false
+var _tutorial_used_oil: bool = false
+var _tutorial_reviews_seen: bool = false
+var _tutorial_fire_acknowledged: bool = false
+var _tutorial_highlight_time: float = 0.0
+var _tutorial_tool_outline_mat: ShaderMaterial = null
+var _tutorial_highlight_overlays: Dictionary = {}
 ## Monotonic milestones for the one tutorial burger. Some gameplay states (notably
 ## can_flip) last only until the action happens, so the coach must remember them.
 var _tutorial_patty_flags: Dictionary = {}
@@ -3392,6 +3419,10 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	_tutorial_bought_supply = false
 	_tutorial_cleaned_grill = false
 	_tutorial_clean_patch_created = false
+	_tutorial_used_oil = false
+	_tutorial_reviews_seen = false
+	_tutorial_fire_acknowledged = false
+	_clear_tutorial_tool_highlight()
 	_reset_guided_tutorial_patty_flags()
 	_clear_bts_day_intro(false)
 	_stop_logo_hover()
@@ -11586,7 +11617,7 @@ func _update_patty_oil_cook_time(patty: Area3D, delta: float) -> void:
 		return
 	if not grill_on or float(patty.heat_mul) <= 0.01:
 		return
-	if _oil_heat_mul(patty.position) < 2.9:
+	if _oil_heat_mul(patty.position) < 1.9:
 		return
 	patty.oil_cook_t = float(patty.oil_cook_t) + delta
 
@@ -17157,6 +17188,8 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 
 
 func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
+	if tutorial_mode:
+		_tutorial_used_oil = true
 	var slick := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	var rad := radius * (0.9 + randf() * 0.25)
@@ -20613,7 +20646,7 @@ func _warmer_heat_mul(world_pos: Vector3) -> float:
 
 
 func _oil_heat_mul(world_pos: Vector3) -> float:
-	## Oil puddles conduct heat hard — cook ~3× faster on that spot (cook zones only).
+	## Oil puddles conduct heat hard — cook 2× faster on that spot (cook zones only).
 	if _is_in_warmer_zone(world_pos):
 		return 1.0
 	if oil_slicks.is_empty():
@@ -20631,7 +20664,7 @@ func _oil_heat_mul(world_pos: Vector3) -> float:
 		var rad := float(item.get("radius", 0.05)) * maxf(mesh.scale.x, 1.0)
 		var d := Vector2(mesh.position.x - world_pos.x, mesh.position.z - world_pos.z).length()
 		if d <= rad + 0.09:
-			return 3.0
+			return 2.0
 	return 1.0
 
 
@@ -20639,8 +20672,8 @@ func _warmer_speed_label(world_pos: Vector3) -> String:
 	var z := _grill_zone_at(world_pos)
 	if z.is_empty():
 		return ""
-	if _oil_heat_mul(world_pos) >= 2.9 and float(z["mul"]) > 0.0:
-		return "OILED 3x"
+	if _oil_heat_mul(world_pos) >= 1.9 and float(z["mul"]) > 0.0:
+		return "OILED 2x"
 	return str(z["label"])
 
 
@@ -37440,7 +37473,7 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 	if game_audio != null and game_audio.has_method("play_bun_thud"):
 		game_audio.play_bun_thud()
 	## In the guided lesson the bun pile is the explicit final assembly action.
-	if tutorial_mode and _tutorial_step == 11 \
+	if tutorial_mode and _tutorial_step == TUTORIAL_STEP_BUN \
 			and stations[STATION_CRAFT]["items"].has("patty") \
 			and not stations[STATION_CRAFT]["items"].has("bun_top"):
 		_add_ingredient_to_station(STATION_CRAFT, "bun_top")
@@ -51665,6 +51698,10 @@ func _play_delivery_time_announcer(customer: Node3D) -> void:
 		return
 	if customer == null or not is_instance_valid(customer):
 		return
+	if tutorial_mode:
+		## Tutorial is practice: always play Great Job, never the late-order "ohhh".
+		game_audio.play_delivery_time_announcer(8.0)
+		return
 	var wait_sec := 0.0
 	if "order_elapsed_sec" in customer:
 		wait_sec = float(customer.order_elapsed_sec)
@@ -51980,8 +52017,19 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	)
 	var payout: int = int(pay.get("total", 0))
 	var tip_amt: int = int(pay.get("tip", 0))
-	var was_meh: bool = bool(pay.get("meh", false)) or not seasoned
-	if not bool(pay.get("perfect", false)) and str(cook_r.get("label", "")) in ["Perfect", "Great job"]:
+	var was_meh: bool = false if tutorial_mode else (bool(pay.get("meh", false)) or not seasoned)
+	if tutorial_mode:
+		cook_r = cook_r.duplicate()
+		cook_r["score"] = 95
+		cook_r["grade"] = "A"
+		cook_r["stars"] = 5
+		cook_r["label"] = "Great job"
+		cook_r["detail"] = "Practice serve"
+		cook_r["text"] = "Great job  Practice serve"
+		cook_r["color"] = Color("A5D6A7")
+		## Keep the tutorial's example review positive regardless of practice time.
+		cook_r["wait"] = 8.0
+	elif not bool(pay.get("perfect", false)) and str(cook_r.get("label", "")) in ["Perfect", "Great job"]:
 		cook_r = cook_r.duplicate()
 		cook_r["label"] = "Good"
 		cook_r["text"] = "Good  %s" % str(cook_r.get("detail", "")).strip_edges()
@@ -52769,38 +52817,114 @@ func _capture_guided_tutorial_patty_flags(patty) -> void:
 		patty.set_meta("tutorial_%s" % str(flag_name), bool(_tutorial_patty_flags[flag_name]))
 
 
+func _tutorial_outline_material() -> ShaderMaterial:
+	if _tutorial_tool_outline_mat != null:
+		return _tutorial_tool_outline_mat
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_opaque, shadows_disabled, ambient_light_disabled;
+uniform vec4 outline_color : source_color = vec4(1.0, 0.76, 0.04, 1.0);
+uniform float outline_width = 0.010;
+uniform float glow_strength = 1.6;
+void vertex() {
+	VERTEX += NORMAL * outline_width;
+}
+void fragment() {
+	ALBEDO = outline_color.rgb;
+	EMISSION = outline_color.rgb * glow_strength;
+	ALPHA = outline_color.a;
+}
+"""
+	_tutorial_tool_outline_mat = ShaderMaterial.new()
+	_tutorial_tool_outline_mat.shader = shader
+	return _tutorial_tool_outline_mat
+
+
+func _clear_tutorial_tool_highlight() -> void:
+	for mesh_variant in _tutorial_highlight_overlays.keys():
+		var mesh := mesh_variant as MeshInstance3D
+		if mesh != null and is_instance_valid(mesh):
+			mesh.material_overlay = _tutorial_highlight_overlays[mesh_variant]
+	_tutorial_highlight_overlays.clear()
+
+
+func _apply_tutorial_tool_highlight(root: Node3D) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	var meshes: Array[MeshInstance3D] = []
+	if root is MeshInstance3D:
+		meshes.append(root as MeshInstance3D)
+	for child in root.find_children("*", "MeshInstance3D", true, false):
+		if child is MeshInstance3D:
+			meshes.append(child as MeshInstance3D)
+	var outline := _tutorial_outline_material()
+	for mesh in meshes:
+		if not _tutorial_highlight_overlays.has(mesh):
+			_tutorial_highlight_overlays[mesh] = mesh.material_overlay
+		mesh.material_overlay = outline
+
+
+func _refresh_tutorial_tool_highlight() -> void:
+	_clear_tutorial_tool_highlight()
+	_tutorial_highlight_time = 0.0
+	if not tutorial_mode:
+		return
+	match _tutorial_step:
+		TUTORIAL_STEP_OIL:
+			_apply_tutorial_tool_highlight(oil_root)
+		TUTORIAL_STEP_SEASON:
+			_apply_tutorial_tool_highlight(shaker_root)
+		TUTORIAL_STEP_FIRE:
+			_apply_tutorial_tool_highlight(ext_root)
+
+
+func _update_tutorial_tool_highlight(delta: float) -> void:
+	if _tutorial_highlight_overlays.is_empty() or _tutorial_tool_outline_mat == null:
+		return
+	_tutorial_highlight_time += delta
+	var pulse := 1.35 + (sin(_tutorial_highlight_time * 4.5) * 0.5 + 0.5) * 1.15
+	_tutorial_tool_outline_mat.set_shader_parameter("glow_strength", pulse)
+
+
 func _guided_tutorial_step_ready() -> bool:
 	var patty = _guided_tutorial_patty()
 	_capture_guided_tutorial_patty_flags(patty)
 	match _tutorial_step:
-		1:
+		TUTORIAL_STEP_GRILL:
 			return grill_on
-		2:
+		TUTORIAL_STEP_OIL:
+			return _tutorial_used_oil
+		TUTORIAL_STEP_PLACE:
 			return bool(_tutorial_patty_flags.get("placed", false))
-		3:
+		TUTORIAL_STEP_SMASH:
 			return bool(_tutorial_patty_flags.get("smashed", false))
-		4:
+		TUTORIAL_STEP_SEASON:
 			return bool(_tutorial_patty_flags.get("seasoned", false))
-		5:
+		TUTORIAL_STEP_COOK_FIRST:
 			return bool(_tutorial_patty_flags.get("flip_ready", false))
-		6:
+		TUTORIAL_STEP_FLIP:
 			return bool(_tutorial_patty_flags.get("flipped", false))
-		7:
+		TUTORIAL_STEP_FINISH:
 			return bool(_tutorial_patty_flags.get("scoop_ready", false))
-		8:
+		TUTORIAL_STEP_BUILD:
 			return bool(_tutorial_patty_flags.get("moved_to_build", false))
-		9:
+		TUTORIAL_STEP_LETTUCE:
 			return stations[STATION_CRAFT]["items"].has("lettuce")
-		10:
+		TUTORIAL_STEP_TOMATO:
 			return stations[STATION_CRAFT]["items"].has("tomato") \
 				and stations[STATION_CRAFT]["items"].has("lettuce")
-		11:
+		TUTORIAL_STEP_BUN:
 			return stations[STATION_CRAFT]["items"].has("bun_top")
-		12:
+		TUTORIAL_STEP_SERVE:
 			return total_served > 0
-		13:
+		TUTORIAL_STEP_REVIEWS:
+			return _tutorial_reviews_seen
+		TUTORIAL_STEP_BUY:
 			return _tutorial_bought_supply
-		14:
+		TUTORIAL_STEP_FIRE:
+			return _tutorial_fire_acknowledged
+		TUTORIAL_STEP_CLEAN:
 			return _tutorial_cleaned_grill and not grill_on
 	return false
 
@@ -52809,6 +52933,7 @@ func _set_guided_tutorial_step(step: int) -> void:
 	if not tutorial_mode or GUIDED_TUTORIAL_STEPS.is_empty():
 		return
 	_tutorial_step = clampi(step, 0, GUIDED_TUTORIAL_STEPS.size() - 1)
+	_refresh_tutorial_tool_highlight()
 	var lesson: Dictionary = GUIDED_TUTORIAL_STEPS[_tutorial_step]
 	## The coach card owns tutorial copy; keep the legacy center-screen hint off.
 	_tutorial_text = ""
@@ -52821,10 +52946,20 @@ func _set_guided_tutorial_step(step: int) -> void:
 	tutorial_title_label.text = str(lesson.get("title", "TUTORIAL"))
 	tutorial_body_label.text = str(lesson.get("body", ""))
 	tutorial_progress.value = float(_tutorial_step + 1)
-	tutorial_action_btn.visible = _tutorial_step == 0 or _tutorial_step == 13
-	tutorial_action_btn.text = "LET'S COOK" if _tutorial_step == 0 else "SHOW INVENTORY"
+	tutorial_action_btn.visible = _tutorial_step in [
+		TUTORIAL_STEP_WELCOME, TUTORIAL_STEP_REVIEWS, TUTORIAL_STEP_BUY, TUTORIAL_STEP_FIRE
+	]
+	match _tutorial_step:
+		TUTORIAL_STEP_WELCOME:
+			tutorial_action_btn.text = "LET'S COOK"
+		TUTORIAL_STEP_REVIEWS:
+			tutorial_action_btn.text = "SHOW REVIEWS"
+		TUTORIAL_STEP_BUY:
+			tutorial_action_btn.text = "SHOW INVENTORY"
+		TUTORIAL_STEP_FIRE:
+			tutorial_action_btn.text = "GOT IT"
 	_update_tutorial_mouse_legend()
-	if _tutorial_step == 14 and not _tutorial_clean_patch_created:
+	if _tutorial_step == TUTORIAL_STEP_CLEAN and not _tutorial_clean_patch_created:
 		_tutorial_clean_patch_created = true
 		_tutorial_cleaned_grill = false
 		var at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y + 0.030, GRILL_SURFACE_Z)
@@ -52836,9 +52971,15 @@ func _set_guided_tutorial_step(step: int) -> void:
 func _update_tutorial_mouse_legend() -> void:
 	if tutorial_mouse_left == null or tutorial_mouse_right == null or tutorial_mouse_caption == null:
 		return
-	var right_steps := [2, 3]
+	var right_steps := [TUTORIAL_STEP_PLACE, TUTORIAL_STEP_SMASH]
 	var use_right := _tutorial_step in right_steps
-	var use_left := _tutorial_step in [1, 4, 6, 8, 9, 10, 11, 12, 13, 14]
+	var use_left := _tutorial_step in [
+		TUTORIAL_STEP_GRILL, TUTORIAL_STEP_OIL, TUTORIAL_STEP_SEASON,
+		TUTORIAL_STEP_FLIP, TUTORIAL_STEP_BUILD, TUTORIAL_STEP_LETTUCE,
+		TUTORIAL_STEP_TOMATO, TUTORIAL_STEP_BUN, TUTORIAL_STEP_SERVE,
+		TUTORIAL_STEP_REVIEWS, TUTORIAL_STEP_BUY, TUTORIAL_STEP_FIRE,
+		TUTORIAL_STEP_CLEAN,
+	]
 	tutorial_mouse_left.add_theme_color_override(
 		"font_color", Color("FFD166") if use_left else Color(0.46, 0.52, 0.61)
 	)
@@ -52847,9 +52988,9 @@ func _update_tutorial_mouse_legend() -> void:
 	)
 	if use_right:
 		tutorial_mouse_caption.text = "RIGHT CLICK"
-	elif _tutorial_step == 4:
+	elif _tutorial_step in [TUTORIAL_STEP_OIL, TUTORIAL_STEP_SEASON]:
 		tutorial_mouse_caption.text = "CLICK + HOLD"
-	elif _tutorial_step == 14:
+	elif _tutorial_step == TUTORIAL_STEP_CLEAN:
 		tutorial_mouse_caption.text = "HOLD + DRAG"
 	elif use_left:
 		tutorial_mouse_caption.text = "LEFT CLICK"
@@ -52894,6 +53035,7 @@ func _update_guided_tutorial(delta: float) -> void:
 		return
 	if _tutorial_step > 0:
 		_tutorial_elapsed += delta
+	_update_tutorial_tool_highlight(delta)
 	var remaining := maxf(0.0, GUIDED_TUTORIAL_DURATION - _tutorial_elapsed)
 	day_time = remaining
 	if tutorial_timer_label != null:
@@ -52906,10 +53048,10 @@ func _update_guided_tutorial(delta: float) -> void:
 	if remaining <= 0.0:
 		_guided_tutorial_time_up()
 		return
-	if _tutorial_step == 9 and stations[STATION_CRAFT]["items"].has("tomato") \
+	if _tutorial_step == TUTORIAL_STEP_LETTUCE and stations[STATION_CRAFT]["items"].has("tomato") \
 			and not stations[STATION_CRAFT]["items"].has("lettuce"):
 		tutorial_body_label.text = "That was tomato—good topping, wrong lesson. Now click LETTUCE; we'll count tomato on the next step."
-	elif _tutorial_step > 0 and _guided_tutorial_step_ready():
+	elif _tutorial_step > TUTORIAL_STEP_WELCOME and _guided_tutorial_step_ready():
 		if _tutorial_step >= GUIDED_TUTORIAL_STEPS.size() - 1:
 			_complete_guided_tutorial()
 		else:
@@ -52922,10 +53064,23 @@ func _on_guided_tutorial_action() -> void:
 		_exit_guided_tutorial()
 	elif _tutorial_elapsed >= GUIDED_TUTORIAL_DURATION:
 		_start_game(true)
-	elif _tutorial_step == 0:
-		_set_guided_tutorial_step(1)
-	elif _tutorial_step == 13:
+	elif _tutorial_step == TUTORIAL_STEP_WELCOME:
+		_set_guided_tutorial_step(TUTORIAL_STEP_GRILL)
+	elif _tutorial_step == TUTORIAL_STEP_REVIEWS:
+		_tutorial_reviews_seen = true
+		call_deferred("_tutorial_show_reviews")
+	elif _tutorial_step == TUTORIAL_STEP_BUY:
 		call_deferred("_tutorial_show_inventory")
+	elif _tutorial_step == TUTORIAL_STEP_FIRE:
+		_tutorial_fire_acknowledged = true
+
+
+func _tutorial_show_reviews() -> void:
+	_refresh_phone_ui()
+	if phone_scroll == null or not is_instance_valid(phone_scroll):
+		return
+	phone_scroll.scroll_vertical = 0
+	_phone_scroll_vel = 0.0
 
 
 func _tutorial_show_inventory() -> void:
@@ -52938,6 +53093,7 @@ func _tutorial_show_inventory() -> void:
 
 func _complete_guided_tutorial() -> void:
 	_tutorial_complete = true
+	_clear_tutorial_tool_highlight()
 	playing = false
 	_set_grill_on(false)
 	if game_audio:
@@ -52953,6 +53109,7 @@ func _complete_guided_tutorial() -> void:
 
 func _guided_tutorial_time_up() -> void:
 	_tutorial_complete = false
+	_clear_tutorial_tool_highlight()
 	playing = false
 	_set_grill_on(false)
 	if game_audio:
@@ -52965,6 +53122,7 @@ func _guided_tutorial_time_up() -> void:
 
 
 func _hide_guided_tutorial_ui() -> void:
+	_clear_tutorial_tool_highlight()
 	if tutorial_panel != null and is_instance_valid(tutorial_panel):
 		tutorial_panel.visible = false
 
