@@ -2345,7 +2345,7 @@ const GFX_DEFAULTS := {
 	"bunting_wind_gust": 0.35,
 	"bunting_wind_twist": 1.2,
 	"bunting_wind_direction": 1.0,
-	"bunting_edge_opacity": 0.68,
+	"bunting_edge_opacity": 0.92,
 	"bunting_center_opacity": 0.92,
 	"bunting_edge_width": 0.08,
 	"bunting_edge_softness": 0.09,
@@ -41533,7 +41533,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "bunting_wind_direction", "Wind Direction (-L / +R)", -1.0, 1.0, 0.05)
 	_gfx_add_slider(list, "bunting_edge_opacity", "Flag Edge Opacity", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "bunting_center_opacity", "Flag Center Opacity", 0.0, 1.0, 0.01)
-	_gfx_add_slider(list, "bunting_edge_width", "Transparent Edge Width", 0.0, 0.35, 0.005)
+	_gfx_add_slider(list, "bunting_edge_width", "Edge Blend Width", 0.0, 0.35, 0.005)
 	_gfx_add_slider(list, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
 	_gfx_add_section(list, "SCREEN FILTERS")
@@ -43345,7 +43345,7 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_world_box, "bunting_wind_direction", "Wind Direction (-L / +R)", -1.0, 1.0, 0.05)
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_opacity", "Flag Edge Opacity", 0.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_world_box, "bunting_center_opacity", "Flag Center Opacity", 0.0, 1.0, 0.01)
-	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Transparent Edge Width", 0.0, 0.35, 0.005)
+	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Edge Blend Width", 0.0, 0.35, 0.005)
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
 	_hidden_add_section(hidden_counter_box, "BUNS / CHEESE / BOARD")
@@ -45318,6 +45318,12 @@ func _load_graphics_settings() -> void:
 		for hk in ["bunting_edge_opacity", "bunting_center_opacity", "bunting_edge_width", "bunting_edge_softness"]:
 			cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
 		cfg.set_value("gfx", "gfx_bunting_edge_profile_v3", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot: remove the edge transparency profile and ship an even-opacity flag.
+	if not cfg.has_section_key("gfx", "gfx_bunting_even_opacity_v4"):
+		cfg.set_value("gfx", "bunting_edge_opacity", GFX_DEFAULTS["bunting_edge_opacity"])
+		cfg.set_value("gfx", "bunting_center_opacity", GFX_DEFAULTS["bunting_center_opacity"])
+		cfg.set_value("gfx", "gfx_bunting_even_opacity_v4", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: apply full tuned graphics look (bloom + lighting + look + AO off).
 	if not cfg.has_section_key("gfx", "gfx_preset_v7"):
