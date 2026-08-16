@@ -2067,7 +2067,8 @@ const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
 const CUP_SHELL_BOT_R := 0.0594
 const SODA_OVERFLOW_SHELL_TEXTURE := "res://assets/vfx/soda_overflow_shell.png"
-const SODA_OVERFLOW_SHELL_SCALE := 1.18 ## clearly outside the cup and its no-depth plastic layers
+const SODA_OVERFLOW_SHELL_SCALE := 1.06 ## just outside the cup's widest top rim
+const SODA_OVERFLOW_SHELL_HEIGHT_SCALE := 1.06
 const CUP_LIQUID_BASE_H := 0.020
 const CUP_LIQUID_MAX_H := 0.158475
 const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
@@ -30641,12 +30642,20 @@ func _create_drink_cup_node() -> Node3D:
 	## remains beneath the cola nozzle.
 	var overflow_shell := MeshInstance3D.new()
 	overflow_shell.name = "OverflowShell"
-	overflow_shell.mesh = _make_overflow_shell_mesh(
-		CUP_SHELL_TOP_R * SODA_OVERFLOW_SHELL_SCALE,
-		CUP_SHELL_BOT_R * SODA_OVERFLOW_SHELL_SCALE,
-		CUP_SHELL_H * 1.08
-	)
-	overflow_shell.position = Vector3(0.0, CUP_SHELL_H * 0.5, 0.0)
+	var overflow_height := CUP_SHELL_H * SODA_OVERFLOW_SHELL_HEIGHT_SCALE
+	var overflow_cylinder := CylinderMesh.new()
+	var overflow_radius := CUP_SHELL_TOP_R * SODA_OVERFLOW_SHELL_SCALE
+	overflow_cylinder.top_radius = overflow_radius
+	overflow_cylinder.bottom_radius = overflow_radius
+	overflow_cylinder.height = overflow_height
+	overflow_cylinder.radial_segments = 40
+	overflow_cylinder.rings = 1
+	overflow_cylinder.cap_top = false
+	overflow_cylinder.cap_bottom = false
+	overflow_shell.mesh = overflow_cylinder
+	## Keep the top perfectly even with the cup rim; the slight extra height
+	## extends beneath the cup instead of forming a collar above it.
+	overflow_shell.position = Vector3(0.0, CUP_SHELL_H - overflow_height * 0.5, 0.0)
 	overflow_shell.material_override = _make_soda_overflow_shell_material()
 	overflow_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	overflow_shell.sorting_offset = 2.0
@@ -31332,45 +31341,6 @@ func _make_solo_cup_shell_mesh(
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return am
-
-
-func _make_overflow_shell_mesh(top_r: float, bot_r: float, height: float) -> ArrayMesh:
-	## Seam-safe tapered sleeve. The duplicated final column gives the splash art
-	## a true 0→1 UV seam instead of stretching the last texel around the cup.
-	var segs := 32
-	var rings := 28
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var indices := PackedInt32Array()
-	for ring in range(rings + 1):
-		var v := float(ring) / float(rings)
-		var y := (v - 0.5) * height
-		var r := lerpf(bot_r, top_r, v)
-		for s in range(segs + 1):
-			var u := float(s) / float(segs)
-			var ang := u * TAU
-			var radial := Vector3(cos(ang), 0.0, sin(ang))
-			verts.append(radial * r + Vector3(0.0, y, 0.0))
-			norms.append(radial)
-			uvs.append(Vector2(u, 1.0 - v))
-	for ring in rings:
-		for s in segs:
-			var stride := segs + 1
-			var i0 := ring * stride + s
-			var i1 := i0 + 1
-			var i2 := (ring + 1) * stride + s
-			var i3 := i2 + 1
-			indices.append_array([i0, i2, i1, i1, i2, i3])
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
 
 
 func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
@@ -33571,8 +33541,7 @@ func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
 
 
 func _make_soda_overflow_shell_material() -> ShaderMaterial:
-	## Black in the supplied art is keyed out; its white splash shapes wrap the
-	## slightly oversized cup sleeve and travel downward through the UVs.
+	## Black in the supplied stripe art is keyed out; white becomes moving foam.
 	var shader := Shader.new()
 	shader.code = """
 shader_type spatial;
@@ -33586,7 +33555,8 @@ uniform float key_low = 0.035;
 uniform float key_soft = 0.16;
 
 void fragment() {
-	vec2 flow_uv = vec2(UV.x, fract(UV.y * vertical_tiles + TIME * pan_speed));
+	// Subtracting time makes the sampled bands travel from the rim downward.
+	vec2 flow_uv = vec2(UV.x, fract(UV.y * vertical_tiles - TIME * pan_speed));
 	vec3 art = texture(splash_tex, flow_uv).rgb;
 	float brightness = dot(art, vec3(0.299, 0.587, 0.114));
 	float mask = smoothstep(key_low, key_low + key_soft, brightness);
