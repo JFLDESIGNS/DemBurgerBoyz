@@ -788,6 +788,7 @@ var shaker_home: Vector3 = Vector3(2.0340, 2.0384, 1.12) ## +1 ft camera-left, a
 var shaker_season_cool: float = 0.0
 var _shaker_hold_t: float = 0.0 ## seconds held; short tap → hi-hat crash
 var _shaker_did_season: bool = false
+var _shaker_rattling: bool = false
 const SHAKER_TAP_CRASH_SEC := 0.28 ## release sooner than this = tap crash
 ## Oil bottle — next to scraper/shaker; flip upside-down to draw puddle lines.
 var oil_held: bool = false
@@ -1210,6 +1211,7 @@ var icecream_cone_home: Vector3 = Vector3.ZERO
 var icecream_cone_rest: Vector3 = Vector3.ZERO
 var icecream_cone_held: bool = false
 var icecream_cone_fill: float = 0.0
+var _icecream_pouring: bool = false
 var _icecream_prev_pos: Vector3 = Vector3.ZERO
 var _icecream_vel: Vector3 = Vector3.ZERO
 var _icecream_swirl_bounce: float = 0.0
@@ -1448,6 +1450,7 @@ var _cup_fizz_poof: float = 0.0 ## 0–1 end-of-life poof out the top
 var _cup_fizz_poofing: bool = false
 var _cup_foam_linger: float = 0.0 ## seconds of leftover top foam after the head dies
 var _cup_pouring: bool = false
+var _cup_pouring_ice: bool = false
 var _cup_pour_white: float = 0.0 ## 1 while pouring (top-half white), fades to 0 over 2s
 const CUP_POUR_WHITE_FADE := 4.0 ## cream/pop gradient fade after pour / while carrying (2× prior)
 var social_rating_sum: float = 0.0
@@ -2064,8 +2067,44 @@ const CUP_SHELL_H := 0.189
 const CUP_SHELL_TOP_R := 0.0738
 const CUP_SHELL_BOT_R := 0.0594
 const SODA_OVERFLOW_SHELL_TEXTURE := "res://assets/vfx/soda_overflow_shell.png"
-const SODA_OVERFLOW_SHELL_SCALE := 1.06 ## just outside the cup's widest top rim
-const SODA_OVERFLOW_SHELL_HEIGHT_SCALE := 1.06
+const SODA_OVERFLOW_SHELL_SCALE_DEFAULT := 1.06 ## just outside the cup's widest top rim
+const SODA_OVERFLOW_SHELL_HEIGHT_SCALE_DEFAULT := 1.06
+const SODA_OVERFLOW_OPACITY_DEFAULT := 0.72
+const SODA_OVERFLOW_BOTTOM_OPACITY_DEFAULT := 0.18
+const SODA_OVERFLOW_BOTTOM_FADE_DEFAULT := 0.30
+const SODA_OVERFLOW_TEXTURE_X_DEFAULT := 1.35
+const SODA_OVERFLOW_TEXTURE_Y_DEFAULT := 1.70 ## smaller foam bands than the previous shell
+const SODA_OVERFLOW_PAN_SPEED_DEFAULT := 0.30
+const SODA_OVERFLOW_SHADE_DEFAULT := 0.42
+const SODA_OVERFLOW_EMISSION_DEFAULT := 0.055
+const SODA_OVERFLOW_BUBBLE_AMOUNT_DEFAULT := 0.82
+const SODA_OVERFLOW_BOTTOM_BUBBLES_DEFAULT := 0.92
+const SODA_OVERFLOW_BUBBLE_SIZE_DEFAULT := 0.042
+const SODA_OVERFLOW_BUBBLE_SPEED_DEFAULT := 0.24
+const SODA_OVERFLOW_BUBBLE_SHRINK_DEFAULT := 0.72
+const SODA_OVERFLOW_WOBBLE_IN_DEFAULT := 0.10
+const SODA_OVERFLOW_WOBBLE_SPEED_DEFAULT := 1.85
+const SODA_OVERFLOW_WOBBLE_FREQ_DEFAULT := 13.0
+const SODA_OVERFLOW_FOAM_COLOR_DEFAULT := Color(1.0, 0.975, 0.90)
+var soda_overflow_shell_scale: float = SODA_OVERFLOW_SHELL_SCALE_DEFAULT
+var soda_overflow_shell_height_scale: float = SODA_OVERFLOW_SHELL_HEIGHT_SCALE_DEFAULT
+var soda_overflow_opacity: float = SODA_OVERFLOW_OPACITY_DEFAULT
+var soda_overflow_bottom_opacity: float = SODA_OVERFLOW_BOTTOM_OPACITY_DEFAULT
+var soda_overflow_bottom_fade: float = SODA_OVERFLOW_BOTTOM_FADE_DEFAULT
+var soda_overflow_texture_x: float = SODA_OVERFLOW_TEXTURE_X_DEFAULT
+var soda_overflow_texture_y: float = SODA_OVERFLOW_TEXTURE_Y_DEFAULT
+var soda_overflow_pan_speed: float = SODA_OVERFLOW_PAN_SPEED_DEFAULT
+var soda_overflow_shade: float = SODA_OVERFLOW_SHADE_DEFAULT
+var soda_overflow_emission: float = SODA_OVERFLOW_EMISSION_DEFAULT
+var soda_overflow_bubble_amount: float = SODA_OVERFLOW_BUBBLE_AMOUNT_DEFAULT
+var soda_overflow_bottom_bubbles: float = SODA_OVERFLOW_BOTTOM_BUBBLES_DEFAULT
+var soda_overflow_bubble_size: float = SODA_OVERFLOW_BUBBLE_SIZE_DEFAULT
+var soda_overflow_bubble_speed: float = SODA_OVERFLOW_BUBBLE_SPEED_DEFAULT
+var soda_overflow_bubble_shrink: float = SODA_OVERFLOW_BUBBLE_SHRINK_DEFAULT
+var soda_overflow_wobble_in: float = SODA_OVERFLOW_WOBBLE_IN_DEFAULT
+var soda_overflow_wobble_speed: float = SODA_OVERFLOW_WOBBLE_SPEED_DEFAULT
+var soda_overflow_wobble_freq: float = SODA_OVERFLOW_WOBBLE_FREQ_DEFAULT
+var soda_overflow_foam_color: Color = SODA_OVERFLOW_FOAM_COLOR_DEFAULT
 const CUP_LIQUID_BASE_H := 0.020
 const CUP_LIQUID_MAX_H := 0.158475
 const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
@@ -2270,6 +2309,12 @@ const DECAL_ALBEDO := Color(0.34, 0.34, 0.34, 0.6) ## 40% transparent wall art
 const WALL_PAPER_ALBEDO := Color(0.28, 0.28, 0.28, 0.6)
 const WALL_PAPER_Z := FIRST_SALE_DEFAULT_Z
 const GFX_CFG_PATH := "user://gfx_settings.cfg"
+const FIRST_RUN_GFX_CFG_PATH := "res://defaults/gfx_settings.cfg"
+const FIRST_RUN_AUDIO_CFG_PATH := "res://defaults/audio_settings.cfg"
+const FIRST_RUN_LOCATION_CFG_PATH := "res://defaults/truck_location.cfg"
+const RELEASE_PROFILE_VERSION := 1
+const RELEASE_PROFILE_SECTION := "release_profile"
+const RELEASE_PROFILE_KEY := "tuned_defaults_version"
 const CAMERA_CFG_SECTION := "player_camera"
 ## One-time migration marker: restore the original view in this build, then preserve edits.
 const CAMERA_ORIGINAL_RESET_KEY := "original_view_reset_20260728_v1"
@@ -2519,6 +2564,14 @@ var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
 var _mp_remote_icecreams: Dictionary = {} ## peer_id -> soft-serve cone ghost while held
 var _mp_remote_fries: Dictionary = {} ## peer_id -> fries cup ghost while held
 var _mp_steel_icecreams: Dictionary = {} ## cone_net_id -> partner cold-steel sit mirror
+var _mp_remote_soda_pouring: Dictionary = {} ## peer_id -> continuous fountain loop state
+var _mp_remote_ice_pouring: Dictionary = {} ## peer_id -> continuous ice grinder loop state
+var _mp_remote_softserve_pouring: Dictionary = {} ## peer_id -> soft-serve loop state
+var _mp_remote_ext_spraying: Dictionary = {} ## peer_id -> extinguisher loop state
+var _mp_remote_shaker_rattling: Dictionary = {} ## peer_id -> shaker loop state
+var _mp_soda_drain_pending: Dictionary = {} ## guest-only syrup usage awaiting host authority
+var _mp_soda_drain_flush_cool: float = 0.0
+const MP_SODA_DRAIN_FLUSH_SEC := 0.12
 var _mp_cup_pose_cool: float = 0.0
 var _mp_icecream_pose_cool: float = 0.0
 var _mp_cup_seq: int = 1 ## per-peer idle-drink ids (owner*1e6 + seq)
@@ -2544,6 +2597,7 @@ var game_over_location_btn: Button = null ## area picker shown between shifts
 
 func _ready() -> void:
 	randomize()
+	_seed_first_run_configs()
 	## Always boot fullscreen — no windowed chrome / minimize-on-launch.
 	## Multiplayer lobby switches to windowed so two instances can share a PC.
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
@@ -3694,6 +3748,7 @@ func _process(delta: float) -> void:
 	_update_smoke2_grill_spin(delta)
 	_update_grill_fire(delta)
 	_update_ext_powder_blobs(delta)
+	_sync_shared_kitchen_loop_audio()
 	if not tickets.is_empty():
 		_refresh_ticket_patience_bars()
 	if brush_held and not brush_throwing:
@@ -3806,6 +3861,10 @@ func _process(delta: float) -> void:
 		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
 		_mp_icecream_pose_cool = maxf(0.0, _mp_icecream_pose_cool - delta)
 		_mp_slick_sync_cool = maxf(0.0, _mp_slick_sync_cool - delta)
+		_mp_soda_drain_flush_cool = maxf(0.0, _mp_soda_drain_flush_cool - delta)
+		if not NetManager.is_host() and _mp_soda_drain_flush_cool <= 0.0 \
+				and not _mp_soda_drain_pending.is_empty():
+			_mp_flush_soda_tank_drain()
 		var spatula_visible := hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible
 		if oil_held or shaker_held or ext_held or glock_held or brush_held or fries_pack_held or spatula_visible or _mp_spatula_pose_sent:
 			_mp_send_held_tool_pose(false)
@@ -5843,6 +5902,8 @@ func _physical_garbage_symbol_setting_changed() -> void:
 
 func _physical_garbage_react() -> void:
 	## Short, damped cabinet wobble. Always settles back to the player's tuned pose.
+	if mp_enabled and NetManager.is_online() and not _mp_applying:
+		mp_garbage_react.rpc()
 	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
 		if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
 			_physical_garbage_shake_tween.kill()
@@ -5872,6 +5933,31 @@ func _physical_garbage_react() -> void:
 		)
 	if game_audio != null and game_audio.has_method("play_trash"):
 		game_audio.play_trash()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_garbage_react() -> void:
+	_mp_applying = true
+	_physical_garbage_react()
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "unreliable")
+func mp_shared_kitchen_sfx(kind: String) -> void:
+	## Small physical actions are simulated by the owner but happen in one shared
+	## truck. Mirror the readable one-shots without duplicating the caller's sound.
+	match kind:
+		"cup_take":
+			_shake_soda_cup_stack()
+			if game_audio:
+				if game_audio.has_method("play_rack_take"):
+					game_audio.play_rack_take()
+				game_audio.play_click()
+		"cup_flip":
+			if game_audio:
+				game_audio.play_scoop()
+				if game_audio.has_method("play_spatula_whoosh"):
+					game_audio.play_spatula_whoosh()
 
 
 func _make_physical_garbage_material() -> ShaderMaterial:
@@ -9528,13 +9614,17 @@ func _build_grill_burner_ui() -> void:
 	)
 	grill_power_row.add_child(btn)
 	grill_ui_buttons.append(btn)
+	var viewport := get_viewport()
+	var relayout := Callable(self, "_layout_grill_power_row_centered")
+	if viewport != null and not viewport.size_changed.is_connected(relayout):
+		viewport.size_changed.connect(relayout)
 
 	_layout_grill_power_row_centered()
 	_refresh_grill_ui_button(0)
 
 
 func _layout_grill_power_row_centered() -> void:
-	## BottomUI is right-aligned for toppings — pin the burner to screen center.
+	## Track the visible flat-top center rather than the full viewport center.
 	if grill_power_row == null:
 		return
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
@@ -9546,12 +9636,20 @@ func _layout_grill_power_row_centered() -> void:
 			old_parent.remove_child(grill_power_row)
 		ui_root.add_child(grill_power_row)
 	grill_power_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	grill_power_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	grill_power_row.anchor_left = 0.0
+	grill_power_row.anchor_right = 0.0
+	grill_power_row.anchor_top = 1.0
+	grill_power_row.anchor_bottom = 1.0
 	grill_power_row.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	grill_power_row.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	var center_x := ui_root.size.x * 0.5
+	if camera != null and is_instance_valid(camera):
+		var grill_center_world := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+		if not camera.is_position_behind(grill_center_world):
+			center_x = camera.unproject_position(grill_center_world).x
 	var half_w := GRILL_POWER_ROW_WIDTH * 0.5
-	grill_power_row.offset_left = -half_w
-	grill_power_row.offset_right = half_w
+	grill_power_row.offset_left = center_x - half_w
+	grill_power_row.offset_right = center_x + half_w
 	grill_power_row.offset_bottom = -GRILL_POWER_ROW_BOTTOM
 	grill_power_row.offset_top = grill_power_row.offset_bottom - 26.0
 	grill_power_row.z_index = 8
@@ -10897,12 +10995,16 @@ func _on_patty_clicked(patty: Area3D) -> void:
 	if not playing:
 		return
 	if mp_enabled and not _mp_applying and patty != null and int(patty.get("net_id")) >= 0:
-		mp_patty_click.rpc(int(patty.net_id))
+		var requested_flip_grade := ""
+		if not bool(patty.get("flipped_once")) and patty.can_flip() \
+				and patty.has_method("current_flip_grade"):
+			requested_flip_grade = str(patty.current_flip_grade())
+		mp_patty_click.rpc(int(patty.net_id), requested_flip_grade)
 		return
 	_on_patty_clicked_local(patty)
 
 
-func _on_patty_clicked_local(patty: Area3D) -> void:
+func _on_patty_clicked_local(patty: Area3D, forced_flip_grade: String = "") -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
 	if _is_bun_toast(patty):
@@ -10911,9 +11013,16 @@ func _on_patty_clicked_local(patty: Area3D) -> void:
 	## Must flip before scooping - never grab a pre-flip patty.
 	if not patty.flipped_once:
 		if patty.can_flip():
-			var ok: bool = patty.flip()
+			var ok: bool = patty.flip(forced_flip_grade)
 			if ok:
-				_flash("Flipped! Cook the other side, then scoop", Color("FFEB3B") if patty.perfect_flip else Color("B0BEC5"))
+				var grade := str(patty.get("last_flip_grade"))
+				match grade:
+					"perfect":
+						_flash("Perfect flip! Cook the other side", Color("FFEB3B"))
+					"great":
+						_flash("Great flip! Cook the other side", Color("81C784"))
+					_:
+						_flash("Ohhh! Late flip - cook the other side", Color("FFA726"))
 				## Spatula mirrors the burger flip (whoosh/ribbons, no ting).
 				_start_spatula_flip_at_patty(patty)
 		else:
@@ -16881,6 +16990,7 @@ func _cancel_shaker_hold() -> void:
 	shaker_held = false
 	_shaker_hold_t = 0.0
 	_shaker_did_season = false
+	_shaker_rattling = false
 	if game_audio:
 		game_audio.set_shaker_rattle(false)
 		if was_tap and game_audio.has_method("play_shaker_tap_crash"):
@@ -16909,6 +17019,7 @@ func _cancel_shaker_hold_silent() -> void:
 	shaker_held = false
 	_shaker_hold_t = 0.0
 	_shaker_did_season = false
+	_shaker_rattling = false
 	if game_audio:
 		game_audio.set_shaker_rattle(false)
 	if shaker_particles:
@@ -16943,6 +17054,7 @@ func _update_held_shaker(_delta: float) -> void:
 	var over_beef: bool = target != null
 	if shaker_particles:
 		shaker_particles.emitting = over_beef
+	_shaker_rattling = over_beef
 	if game_audio:
 		game_audio.set_shaker_rattle(over_beef)
 	if over_beef and shaker_season_cool <= 0.0:
@@ -24373,6 +24485,29 @@ func _load_soda_tuning_settings() -> void:
 	)
 	soda_tank_label_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_label_scale", soda_tank_label_scale)), 0.25, 3.0)
 	soda_tank_bubble_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_bubble_scale", soda_tank_bubble_scale)), 0.0, 3.0)
+	soda_overflow_shell_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_shell_scale", soda_overflow_shell_scale)), 0.95, 1.35)
+	soda_overflow_shell_height_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_height_scale", soda_overflow_shell_height_scale)), 0.6, 1.6)
+	soda_overflow_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_opacity", soda_overflow_opacity)), 0.05, 1.0)
+	soda_overflow_bottom_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_opacity", soda_overflow_bottom_opacity)), 0.0, 1.0)
+	soda_overflow_bottom_fade = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_fade", soda_overflow_bottom_fade)), 0.05, 0.8)
+	soda_overflow_texture_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_texture_x", soda_overflow_texture_x)), 0.25, 4.0)
+	soda_overflow_texture_y = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_texture_y", soda_overflow_texture_y)), 0.25, 6.0)
+	soda_overflow_pan_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_pan_speed", soda_overflow_pan_speed)), -1.5, 1.5)
+	soda_overflow_shade = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_shade", soda_overflow_shade)), 0.0, 1.0)
+	soda_overflow_emission = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_emission", soda_overflow_emission)), 0.0, 0.5)
+	soda_overflow_bubble_amount = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_amount", soda_overflow_bubble_amount)), 0.0, 2.0)
+	soda_overflow_bottom_bubbles = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_bubbles", soda_overflow_bottom_bubbles)), 0.0, 2.0)
+	soda_overflow_bubble_size = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_size", soda_overflow_bubble_size)), 0.005, 0.12)
+	soda_overflow_bubble_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_speed", soda_overflow_bubble_speed)), 0.0, 1.5)
+	soda_overflow_bubble_shrink = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_shrink", soda_overflow_bubble_shrink)), 0.0, 0.95)
+	soda_overflow_wobble_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_wobble_in", soda_overflow_wobble_in)), 0.0, 0.5)
+	soda_overflow_wobble_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_wobble_speed", soda_overflow_wobble_speed)), 0.0, 8.0)
+	soda_overflow_wobble_freq = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_wobble_freq", soda_overflow_wobble_freq)), 1.0, 40.0)
+	soda_overflow_foam_color = Color(
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_foam_r", soda_overflow_foam_color.r)), 0.0, 1.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_foam_g", soda_overflow_foam_color.g)), 0.0, 1.0),
+		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_foam_b", soda_overflow_foam_color.b)), 0.0, 1.0)
+	)
 
 
 func _save_soda_tuning_settings() -> void:
@@ -24440,6 +24575,27 @@ func _save_soda_tuning_settings() -> void:
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_label_z", soda_tank_label_offset.z)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_label_scale", soda_tank_label_scale)
 	cfg.set_value(SODA_TUNING_CFG_SECTION, "tank_bubble_scale", soda_tank_bubble_scale)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_shell_scale", soda_overflow_shell_scale)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_height_scale", soda_overflow_shell_height_scale)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_opacity", soda_overflow_opacity)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_opacity", soda_overflow_bottom_opacity)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_fade", soda_overflow_bottom_fade)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_texture_x", soda_overflow_texture_x)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_texture_y", soda_overflow_texture_y)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_pan_speed", soda_overflow_pan_speed)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_shade", soda_overflow_shade)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_emission", soda_overflow_emission)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_amount", soda_overflow_bubble_amount)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_bubbles", soda_overflow_bottom_bubbles)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_size", soda_overflow_bubble_size)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_speed", soda_overflow_bubble_speed)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_bubble_shrink", soda_overflow_bubble_shrink)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_wobble_in", soda_overflow_wobble_in)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_wobble_speed", soda_overflow_wobble_speed)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_wobble_freq", soda_overflow_wobble_freq)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_foam_r", soda_overflow_foam_color.r)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_foam_g", soda_overflow_foam_color.g)
+	cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_foam_b", soda_overflow_foam_color.b)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -24479,6 +24635,7 @@ func _apply_soda_tuning_settings_changed(rebuild_tanks: bool = false) -> void:
 		_layout_parked_cups()
 	if rebuild_tanks:
 		_rebuild_soda_tank_visuals()
+	_apply_soda_overflow_settings_to_all_cups()
 	_refresh_soda_tuning_debug_visuals()
 
 
@@ -24563,6 +24720,27 @@ func _sync_soda_tuning_hidden_ui() -> void:
 		"soda_tank_label_z": soda_tank_label_offset.z,
 		"soda_tank_label_scale": soda_tank_label_scale,
 		"soda_tank_bubble_scale": soda_tank_bubble_scale,
+		"soda_overflow_shell_scale": soda_overflow_shell_scale,
+		"soda_overflow_height_scale": soda_overflow_shell_height_scale,
+		"soda_overflow_opacity": soda_overflow_opacity,
+		"soda_overflow_bottom_opacity": soda_overflow_bottom_opacity,
+		"soda_overflow_bottom_fade": soda_overflow_bottom_fade,
+		"soda_overflow_texture_x": soda_overflow_texture_x,
+		"soda_overflow_texture_y": soda_overflow_texture_y,
+		"soda_overflow_pan_speed": soda_overflow_pan_speed,
+		"soda_overflow_shade": soda_overflow_shade,
+		"soda_overflow_emission": soda_overflow_emission,
+		"soda_overflow_bubble_amount": soda_overflow_bubble_amount,
+		"soda_overflow_bottom_bubbles": soda_overflow_bottom_bubbles,
+		"soda_overflow_bubble_size": soda_overflow_bubble_size,
+		"soda_overflow_bubble_speed": soda_overflow_bubble_speed,
+		"soda_overflow_bubble_shrink": soda_overflow_bubble_shrink,
+		"soda_overflow_wobble_in": soda_overflow_wobble_in,
+		"soda_overflow_wobble_speed": soda_overflow_wobble_speed,
+		"soda_overflow_wobble_freq": soda_overflow_wobble_freq,
+		"soda_overflow_foam_r": soda_overflow_foam_color.r,
+		"soda_overflow_foam_g": soda_overflow_foam_color.g,
+		"soda_overflow_foam_b": soda_overflow_foam_color.b,
 	}
 	for fid in _soda_station_tip_ids():
 		var off: Vector3 = soda_nozzle_offsets_in.get(fid, Vector3.ZERO)
@@ -24864,6 +25042,32 @@ func _reset_cola_tank_visual() -> void:
 	_rebuild_soda_tank_visuals()
 	_sync_soda_tuning_hidden_ui()
 	_flash("Cola tank visual reset", Color("80DEEA"))
+
+
+func _reset_soda_overflow_visual() -> void:
+	soda_overflow_shell_scale = SODA_OVERFLOW_SHELL_SCALE_DEFAULT
+	soda_overflow_shell_height_scale = SODA_OVERFLOW_SHELL_HEIGHT_SCALE_DEFAULT
+	soda_overflow_opacity = SODA_OVERFLOW_OPACITY_DEFAULT
+	soda_overflow_bottom_opacity = SODA_OVERFLOW_BOTTOM_OPACITY_DEFAULT
+	soda_overflow_bottom_fade = SODA_OVERFLOW_BOTTOM_FADE_DEFAULT
+	soda_overflow_texture_x = SODA_OVERFLOW_TEXTURE_X_DEFAULT
+	soda_overflow_texture_y = SODA_OVERFLOW_TEXTURE_Y_DEFAULT
+	soda_overflow_pan_speed = SODA_OVERFLOW_PAN_SPEED_DEFAULT
+	soda_overflow_shade = SODA_OVERFLOW_SHADE_DEFAULT
+	soda_overflow_emission = SODA_OVERFLOW_EMISSION_DEFAULT
+	soda_overflow_bubble_amount = SODA_OVERFLOW_BUBBLE_AMOUNT_DEFAULT
+	soda_overflow_bottom_bubbles = SODA_OVERFLOW_BOTTOM_BUBBLES_DEFAULT
+	soda_overflow_bubble_size = SODA_OVERFLOW_BUBBLE_SIZE_DEFAULT
+	soda_overflow_bubble_speed = SODA_OVERFLOW_BUBBLE_SPEED_DEFAULT
+	soda_overflow_bubble_shrink = SODA_OVERFLOW_BUBBLE_SHRINK_DEFAULT
+	soda_overflow_wobble_in = SODA_OVERFLOW_WOBBLE_IN_DEFAULT
+	soda_overflow_wobble_speed = SODA_OVERFLOW_WOBBLE_SPEED_DEFAULT
+	soda_overflow_wobble_freq = SODA_OVERFLOW_WOBBLE_FREQ_DEFAULT
+	soda_overflow_foam_color = SODA_OVERFLOW_FOAM_COLOR_DEFAULT
+	_save_soda_tuning_settings()
+	_apply_soda_overflow_settings_to_all_cups()
+	_sync_soda_tuning_hidden_ui()
+	_flash("Drink overflow visual reset", Color("80DEEA"))
 
 
 func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> void:
@@ -27609,6 +27813,11 @@ func _begin_fryer_basket_hold(index: int) -> bool:
 		return false
 	if fryer_held_index >= 0:
 		return true
+	var existing_data: Dictionary = fryer_baskets[index]
+	var remote_holder := int(existing_data.get("remote_peer", 0))
+	if mp_enabled and remote_holder != 0 and remote_holder != NetManager.my_id():
+		_flash("Another cook has that basket", Color("90CAF9"))
+		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null \
 			or cup_held or icecream_cone_held or burnt_icecream_cone_held:
@@ -28208,6 +28417,7 @@ func _release_fries_pack(screen_pos: Vector2) -> void:
 func _serve_held_fries_pack(customer: Node3D) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
+	var guest_mp := mp_enabled and NetManager.is_online() and not NetManager.is_host()
 	fries_pack_held = false
 	if mp_enabled and NetManager.is_online():
 		mp_tool_pose.rpc(9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
@@ -28231,6 +28441,14 @@ func _serve_held_fries_pack(customer: Node3D) -> void:
 			if served_root != null and is_instance_valid(served_root):
 				served_root.queue_free()
 		)
+	if guest_mp:
+		var customer_id := _customer_net_id(customer)
+		if customer_id >= 0:
+			mp_fries_hand.rpc_id(1, customer_id)
+		return
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_customers()
+		_mp_broadcast_economy()
 	if GameDataScript.is_fries_only_order(customer.order):
 		_submit_serve_request(customer, -3)
 	else:
@@ -28733,6 +28951,7 @@ func _try_fill_icecream_cone(delta: float) -> void:
 	var horiz := Vector2(tip.x - rim.x, tip.z - rim.z).length()
 	var vert := absf(tip.y - rim.y)
 	if horiz <= ICECREAM_SPOUT_HORIZ and vert <= ICECREAM_SPOUT_VERT and icecream_cone_fill < 1.0:
+		_icecream_pouring = true
 		if game_audio and game_audio.has_method("set_softserve_dispense"):
 			game_audio.set_softserve_dispense(true)
 		icecream_cone_fill = minf(1.0, icecream_cone_fill + ICECREAM_FILL_RATE * delta)
@@ -29073,6 +29292,7 @@ func _make_icecream_stream_curve_mesh(from_tip: Vector3, to_rim: Vector3) -> Arr
 
 
 func _hide_icecream_stream() -> void:
+	_icecream_pouring = false
 	if icecream_stream_mesh != null and is_instance_valid(icecream_stream_mesh):
 		icecream_stream_mesh.visible = false
 	if icecream_stream_fx != null and is_instance_valid(icecream_stream_fx):
@@ -30074,6 +30294,8 @@ func _drain_soda_tank(flavor_id: String, cup_fill_delta: float) -> float:
 	var allowed := take / maxf(SODA_TANK_CUP_COST, 0.001)
 	var after := have - take
 	_set_soda_tank_visual_level(fid, after)
+	if mp_enabled and NetManager.is_online() and not NetManager.is_host() and not _mp_applying:
+		_mp_queue_soda_tank_drain(fid, take)
 	## One-shot low syrup warning at 25% — not an "empty" scare while jugs are full.
 	if have > SODA_TANK_LOW_WARN and after <= SODA_TANK_LOW_WARN:
 		if not bool(_soda_low_warned.get(fid, false)):
@@ -30083,6 +30305,32 @@ func _drain_soda_tank(flavor_id: String, cup_fill_delta: float) -> float:
 				Color("FFB74D")
 			)
 	return allowed
+
+
+func _mp_queue_soda_tank_drain(flavor_id: String, tank_amount: float) -> void:
+	## Guests predict the visual locally, then report compact accumulated usage to
+	## the host. The host owns the shared tank and immediately rebroadcasts it.
+	if tank_amount <= 0.0 or not SODA_FLAVORS.has(flavor_id):
+		return
+	_mp_soda_drain_pending[flavor_id] = float(_mp_soda_drain_pending.get(flavor_id, 0.0)) + tank_amount
+	if _mp_soda_drain_flush_cool <= 0.0:
+		_mp_soda_drain_flush_cool = MP_SODA_DRAIN_FLUSH_SEC
+
+
+func _mp_flush_soda_tank_drain() -> void:
+	if _mp_soda_drain_pending.is_empty():
+		return
+	if not mp_enabled or not NetManager.is_online() or NetManager.is_host():
+		_mp_soda_drain_pending.clear()
+		return
+	var pending := _mp_soda_drain_pending.duplicate()
+	_mp_soda_drain_pending.clear()
+	_mp_soda_drain_flush_cool = MP_SODA_DRAIN_FLUSH_SEC
+	for fid_value in pending.keys():
+		var fid := str(fid_value)
+		var amount := clampf(float(pending[fid_value]), 0.0, 0.08)
+		if amount > 0.00001:
+			mp_request_soda_tank_drain.rpc_id(1, fid, amount)
 
 
 func _refill_soda_tank(flavor_id: String, amount: float) -> void:
@@ -30556,14 +30804,14 @@ func _create_drink_cup_node() -> Node3D:
 	## remains beneath the cola nozzle.
 	var overflow_shell := MeshInstance3D.new()
 	overflow_shell.name = "OverflowShell"
-	var overflow_height := CUP_SHELL_H * SODA_OVERFLOW_SHELL_HEIGHT_SCALE
+	var overflow_height := CUP_SHELL_H * soda_overflow_shell_height_scale
 	var overflow_cylinder := CylinderMesh.new()
-	var overflow_radius := CUP_SHELL_TOP_R * SODA_OVERFLOW_SHELL_SCALE
+	var overflow_radius := CUP_SHELL_TOP_R * soda_overflow_shell_scale
 	overflow_cylinder.top_radius = overflow_radius
 	overflow_cylinder.bottom_radius = overflow_radius
 	overflow_cylinder.height = overflow_height
 	overflow_cylinder.radial_segments = 40
-	overflow_cylinder.rings = 1
+	overflow_cylinder.rings = 12 ## enough vertical vertices for the world-space wobble
 	overflow_cylinder.cap_top = false
 	overflow_cylinder.cap_bottom = false
 	overflow_shell.mesh = overflow_cylinder
@@ -32476,6 +32724,8 @@ func _dispense_cup_to_fill_station() -> bool:
 		return false
 	if _cup_dispensing_to_fill:
 		_shake_soda_cup_stack()
+		if mp_enabled and NetManager.is_online():
+			mp_shared_kitchen_sfx.rpc("cup_take")
 		return true
 	if not _owns_soda_machine():
 		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
@@ -32497,6 +32747,8 @@ func _dispense_cup_to_fill_station() -> bool:
 		return false
 	cup_root.visible = true
 	_shake_soda_cup_stack()
+	if mp_enabled and NetManager.is_online():
+		mp_shared_kitchen_sfx.rpc("cup_take")
 	var station := _cup_rest_global()
 	if station == Vector3.ZERO:
 		station = _cup_drip_tray_fallback()
@@ -33455,31 +33707,110 @@ func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
 
 
 func _make_soda_overflow_shell_material() -> ShaderMaterial:
-	## Black in the supplied stripe art is keyed out; white becomes moving foam.
+	## Black in the supplied stripe art is keyed out; white becomes shaded moving foam.
+	## Procedural ring bubbles travel down the cup and collect near the fading base.
 	var shader := Shader.new()
 	shader.code = """
 shader_type spatial;
-render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_back, unshaded;
+render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_back;
 
 uniform sampler2D splash_tex : source_color, filter_linear_mipmap, repeat_enable;
-uniform vec4 foam_color : source_color = vec4(1.0, 0.985, 0.94, 1.0);
-uniform float pan_speed = 0.34;
-uniform float vertical_tiles = 1.18;
+uniform vec4 foam_color : source_color = vec4(1.0, 0.975, 0.90, 1.0);
+uniform float opacity : hint_range(0.0, 1.0) = 0.72;
+uniform float bottom_opacity : hint_range(0.0, 1.0) = 0.18;
+uniform float bottom_fade : hint_range(0.01, 0.9) = 0.30;
+uniform float pan_speed = 0.30;
+uniform float texture_tiles_x = 1.12;
+uniform float texture_tiles_y = 1.46;
 uniform float key_low = 0.035;
 uniform float key_soft = 0.16;
+uniform float shade_strength : hint_range(0.0, 1.0) = 0.42;
+uniform float emission_strength : hint_range(0.0, 0.5) = 0.055;
+uniform float bubble_amount : hint_range(0.0, 2.0) = 0.82;
+uniform float bottom_bubble_amount : hint_range(0.0, 2.0) = 0.92;
+uniform float bubble_size : hint_range(0.002, 0.15) = 0.042;
+uniform float bubble_speed : hint_range(0.0, 2.0) = 0.24;
+uniform float bubble_shrink : hint_range(0.0, 0.98) = 0.72;
+uniform float wobble_strength : hint_range(0.0, 0.02) = 0.00254;
+uniform float wobble_speed : hint_range(0.0, 10.0) = 1.85;
+uniform float wobble_frequency : hint_range(1.0, 50.0) = 13.0;
+
+float hash11(float p) {
+	return fract(sin(p * 127.1 + 311.7) * 43758.5453);
+}
+
+float wrapped_x_distance(float a, float b) {
+	float d = abs(a - b);
+	return min(d, 1.0 - d);
+}
+
+float bubble_ring(vec2 uv, vec2 center, float radius) {
+	float dx = wrapped_x_distance(uv.x, center.x);
+	float d = length(vec2(dx, (uv.y - center.y) * 0.82));
+	float outer = 1.0 - smoothstep(radius * 0.70, radius, d);
+	float inner = 1.0 - smoothstep(radius * 0.24, radius * 0.50, d);
+	return max(outer - inner, 0.0);
+}
+
+float moving_bubbles(vec2 uv) {
+	float field = 0.0;
+	for (int i = 0; i < 12; i++) {
+		float fi = float(i);
+		float seed = hash11(fi + 1.7);
+		float progress = fract(seed + TIME * bubble_speed * (0.72 + seed * 0.48));
+		float bx = fract(hash11(fi * 3.31 + 4.2) + sin(TIME * (0.7 + seed) + fi) * 0.012);
+		float end_scale = max(0.05, 1.0 - bubble_shrink);
+		float radius = bubble_size * mix(1.0, end_scale, progress) * (0.72 + seed * 0.48);
+		field = max(field, bubble_ring(uv, vec2(bx, progress), radius));
+	}
+	return field;
+}
+
+float bottom_bubbles(vec2 uv) {
+	float field = 0.0;
+	for (int i = 0; i < 8; i++) {
+		float fi = float(i);
+		float seed = hash11(fi * 5.17 + 9.4);
+		float bx = fract(hash11(fi * 2.83 + 1.1) + sin(TIME * 0.8 + fi) * 0.008);
+		float by = 0.78 + hash11(fi * 7.13 + 2.0) * 0.18;
+		float pulse = 0.82 + sin(TIME * (1.1 + seed) + fi * 2.2) * 0.18;
+		float radius = bubble_size * (0.32 + seed * 0.42) * pulse;
+		field = max(field, bubble_ring(uv, vec2(bx, by), radius));
+	}
+	return field;
+}
+
+void vertex() {
+	vec3 world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec2 radial = normalize(VERTEX.xz + vec2(0.00001));
+	float wave_a = sin(world_pos.y * wobble_frequency + TIME * wobble_speed + world_pos.x * 3.1);
+	float wave_b = sin(world_pos.y * wobble_frequency * 0.53 - TIME * wobble_speed * 0.71 + world_pos.z * 4.7);
+	VERTEX.xz += radial * (wave_a + wave_b * 0.45) * wobble_strength;
+}
 
 void fragment() {
 	// Subtracting time makes the sampled bands travel from the rim downward.
-	vec2 flow_uv = vec2(UV.x, fract(UV.y * vertical_tiles - TIME * pan_speed));
+	vec2 flow_uv = vec2(fract(UV.x * texture_tiles_x), fract(UV.y * texture_tiles_y - TIME * pan_speed));
 	vec3 art = texture(splash_tex, flow_uv).rgb;
 	float brightness = dot(art, vec3(0.299, 0.587, 0.114));
-	float mask = smoothstep(key_low, key_low + key_soft, brightness);
-	if (mask <= 0.004) {
+	float texture_mask = smoothstep(key_low, key_low + key_soft, brightness);
+	float moving = moving_bubbles(UV) * bubble_amount;
+	float bottom = bottom_bubbles(UV) * bottom_bubble_amount;
+	float bubble_mask = clamp(max(moving, bottom), 0.0, 1.0);
+	float bottom_zone = smoothstep(1.0 - bottom_fade, 1.0, UV.y);
+	float lower_alpha = mix(1.0, bottom_opacity, bottom_zone);
+	float mask = max(texture_mask * lower_alpha, bubble_mask * mix(lower_alpha, 1.0, 0.35));
+	if (mask <= 0.003) {
 		discard;
 	}
-	ALBEDO = foam_color.rgb;
-	ALPHA = mask * foam_color.a;
-	EMISSION = foam_color.rgb * mask * 0.24;
+	float facing = clamp(abs(dot(normalize(NORMAL), normalize(VIEW))), 0.0, 1.0);
+	float curved_shade = mix(0.60, 1.0, pow(facing, 0.68));
+	vec3 shaded_foam = foam_color.rgb * mix(1.0, curved_shade, shade_strength);
+	ALBEDO = shaded_foam;
+	ROUGHNESS = 0.72;
+	SPECULAR = 0.25;
+	ALPHA = mask * opacity * foam_color.a;
+	EMISSION = shaded_foam * mask * emission_strength;
 }
 """
 	var mat := ShaderMaterial.new()
@@ -33487,8 +33818,65 @@ void fragment() {
 	var splash := load(SODA_OVERFLOW_SHELL_TEXTURE) as Texture2D
 	if splash != null:
 		mat.set_shader_parameter("splash_tex", splash)
+	_configure_soda_overflow_shell_material(mat)
 	mat.render_priority = 120 ## after every clear cup/liquid/logo layer
 	return mat
+
+
+func _configure_soda_overflow_shell_material(mat: ShaderMaterial) -> void:
+	if mat == null:
+		return
+	mat.set_shader_parameter("foam_color", soda_overflow_foam_color)
+	mat.set_shader_parameter("opacity", soda_overflow_opacity)
+	mat.set_shader_parameter("bottom_opacity", soda_overflow_bottom_opacity)
+	mat.set_shader_parameter("bottom_fade", soda_overflow_bottom_fade)
+	mat.set_shader_parameter("texture_tiles_x", soda_overflow_texture_x)
+	mat.set_shader_parameter("texture_tiles_y", soda_overflow_texture_y)
+	mat.set_shader_parameter("pan_speed", soda_overflow_pan_speed)
+	mat.set_shader_parameter("shade_strength", soda_overflow_shade)
+	mat.set_shader_parameter("emission_strength", soda_overflow_emission)
+	mat.set_shader_parameter("bubble_amount", soda_overflow_bubble_amount)
+	mat.set_shader_parameter("bottom_bubble_amount", soda_overflow_bottom_bubbles)
+	mat.set_shader_parameter("bubble_size", soda_overflow_bubble_size)
+	mat.set_shader_parameter("bubble_speed", soda_overflow_bubble_speed)
+	mat.set_shader_parameter("bubble_shrink", soda_overflow_bubble_shrink)
+	mat.set_shader_parameter("wobble_strength", soda_overflow_wobble_in * INCH_TO_M)
+	mat.set_shader_parameter("wobble_speed", soda_overflow_wobble_speed)
+	mat.set_shader_parameter("wobble_frequency", soda_overflow_wobble_freq)
+
+
+func _apply_soda_overflow_settings_to_shell(shell: MeshInstance3D) -> void:
+	if shell == null or not is_instance_valid(shell):
+		return
+	var overflow_height := CUP_SHELL_H * soda_overflow_shell_height_scale
+	var overflow_radius := CUP_SHELL_TOP_R * soda_overflow_shell_scale
+	var cylinder := shell.mesh as CylinderMesh
+	if cylinder == null:
+		cylinder = CylinderMesh.new()
+	cylinder.top_radius = overflow_radius
+	cylinder.bottom_radius = overflow_radius
+	cylinder.height = overflow_height
+	cylinder.radial_segments = 40
+	cylinder.rings = 12
+	cylinder.cap_top = false
+	cylinder.cap_bottom = false
+	shell.mesh = cylinder
+	shell.position = Vector3(0.0, CUP_SHELL_H - overflow_height * 0.5, 0.0)
+	var mat := shell.material_override as ShaderMaterial
+	if mat == null:
+		mat = _make_soda_overflow_shell_material()
+		shell.material_override = mat
+	else:
+		_configure_soda_overflow_shell_material(mat)
+	if shell == cup_overflow_shell:
+		cup_overflow_shell_mat = mat
+
+
+func _apply_soda_overflow_settings_to_all_cups() -> void:
+	if world == null or not is_instance_valid(world):
+		return
+	for node in world.find_children("OverflowShell", "MeshInstance3D", true, false):
+		_apply_soda_overflow_settings_to_shell(node as MeshInstance3D)
 
 
 func _set_soda_overflow_shell_visible(show_shell: bool) -> void:
@@ -33504,6 +33892,7 @@ func _emit_soda_overfill_spill(_rim: Vector3, _flavor: String, _amount: float, _
 
 func _try_fill_cup_at_spouts(delta: float) -> void:
 	if cup_root == null:
+		_cup_pouring_ice = false
 		_hide_soda_stream()
 		if game_audio and game_audio.has_method("set_ice_grind"):
 			game_audio.set_ice_grind(false)
@@ -33614,10 +34003,13 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			_flash("Ice everywhere!", Color("81D4FA"))
 	var was_pouring := _cup_pouring
 	_cup_pouring = pouring_soda
+	_cup_pouring_ice = pouring_ice
 	_update_soda_dispense_clips(delta, pouring_soda, pouring_ice)
 	if _cup_pouring != was_pouring:
 		_refresh_soda_tank_bubbles()
 		if not _cup_pouring:
+			if mp_enabled and not NetManager.is_host():
+				_mp_flush_soda_tank_drain()
 			_refresh_phone_ui()
 			if mp_enabled and NetManager.is_host():
 				_mp_broadcast_economy()
@@ -33786,6 +34178,9 @@ func _update_soda_stream(from_tip: Vector3, to_floor: Vector3, flavor: String) -
 
 
 func _hide_soda_stream() -> void:
+	_cup_pouring_ice = false
+	if _cup_pouring and mp_enabled and not NetManager.is_host():
+		_mp_flush_soda_tank_drain()
 	if soda_stream_mesh != null and is_instance_valid(soda_stream_mesh):
 		soda_stream_mesh.visible = false
 	if soda_stream_bubbles != null and is_instance_valid(soda_stream_bubbles):
@@ -34804,6 +35199,8 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 		game_audio.play_scoop()
 		if game_audio.has_method("play_spatula_whoosh"):
 			game_audio.play_spatula_whoosh()
+	if mp_enabled and NetManager.is_online():
+		mp_shared_kitchen_sfx.rpc("cup_flip")
 
 
 func _cup_flip_arc_height_mul(t: float) -> float:
@@ -35583,7 +35980,11 @@ func _find_waiting_customer_near_cup(cup_pos: Vector3) -> Node3D:
 	return best
 
 
-func _begin_early_drink_hand(customer: Node3D, flavor: String) -> void:
+func _begin_early_drink_hand(
+	customer: Node3D,
+	flavor: String,
+	remote_drink: Node3D = null
+) -> void:
 	if customer == null or not is_instance_valid(customer) or not customer.is_waiting:
 		return
 	if _serve_fly_busy:
@@ -35605,28 +36006,41 @@ func _begin_early_drink_hand(customer: Node3D, flavor: String) -> void:
 		_mp_send_held_cup_pose(true)
 	var soda_id := "soda_%s" % flavor
 	var has_local := false
-	if cup_root != null and is_instance_valid(cup_root) and cup_flavor == flavor and cup_soda_fill >= 0.82:
-		has_local = true
-	elif _find_ready_drink_for_soda(soda_id) != null:
-		has_local = true
+	if remote_drink == null or not is_instance_valid(remote_drink):
+		if cup_root != null and is_instance_valid(cup_root) and cup_flavor == flavor and cup_soda_fill >= 0.82:
+			has_local = true
+		elif _find_ready_drink_for_soda(soda_id) != null:
+			has_local = true
 	var lab: String = str(GameDataScript.INGREDIENT_LABELS.get(soda_id, flavor)).to_upper()
 	if not _mp_applying:
 		_flash("%s handed early — finish the burger!" % lab, Color("80DEEA"))
-	## Peers without a local cup still play the toss + tick the order line.
-	_play_cup_fly_to_mouth(customer, func() -> void: _complete_early_drink_hand(customer, flavor, has_local))
+	## A guest's drink exists on the host as a streamed ghost. Use that exact prop
+	## for the toss instead of accidentally selecting the host cook's working cup.
+	_play_cup_fly_to_mouth(
+		customer,
+		func() -> void: _complete_early_drink_hand(customer, flavor, has_local, remote_drink),
+		false,
+		remote_drink
+	)
 
 
-func _complete_early_drink_hand(customer: Node3D, flavor: String, consume_local: bool = true) -> void:
+func _complete_early_drink_hand(
+	customer: Node3D,
+	flavor: String,
+	consume_local: bool = true,
+	remote_drink: Node3D = null
+) -> void:
 	if customer != null and is_instance_valid(customer):
 		_mark_customer_soda_handed(customer, true)
-	## Consume only when this peer actually had the drink (host pourer / matching tray).
+	## Consume only the prop that actually supplied this order. In particular, a
+	## guest hand-off must never delete a matching cup parked by the host.
 	if consume_local:
 		_consume_cup_for_serve(customer)
-	else:
-		## Remote: drop a matching tray cup if bootstrap/park sync left one.
-		var soda_id := "soda_%s" % flavor
-		if _find_ready_drink_for_soda(soda_id) != null:
-			_consume_cup_for_serve(customer)
+	elif remote_drink != null and is_instance_valid(remote_drink):
+		remote_drink.set_meta("serving_consumed", true)
+		remote_drink.queue_free()
+		if _serve_cup_node == remote_drink:
+			_serve_cup_node = null
 	_refresh_ticket_checkmarks()
 	_update_hud()
 	if not _mp_applying:
@@ -39745,6 +40159,38 @@ func _setup_game_audio() -> void:
 	_apply_room_tone_settings()
 
 
+func _seed_first_run_configs() -> void:
+	## Apply the release-tuned profile once to both clean installs and older installs.
+	## Keys not present in the bundled profile survive the merge, so newer settings are safe.
+	var profiles := [
+		{"user": GFX_CFG_PATH, "bundled": FIRST_RUN_GFX_CFG_PATH},
+		{"user": AUDIO_CFG_PATH, "bundled": FIRST_RUN_AUDIO_CFG_PATH},
+		{"user": LOCATION_CFG_PATH, "bundled": FIRST_RUN_LOCATION_CFG_PATH},
+	]
+	for profile in profiles:
+		var user_path := str(profile["user"])
+		var bundled_path := str(profile["bundled"])
+		var bundled := ConfigFile.new()
+		if bundled.load(bundled_path) != OK:
+			push_warning("First-run settings profile missing: %s" % bundled_path)
+			continue
+		var local := ConfigFile.new()
+		local.load(user_path)
+		var applied_version := int(local.get_value(
+			RELEASE_PROFILE_SECTION,
+			RELEASE_PROFILE_KEY,
+			0
+		))
+		if applied_version >= RELEASE_PROFILE_VERSION:
+			continue
+		for section in bundled.get_sections():
+			for key in bundled.get_section_keys(section):
+				local.set_value(section, key, bundled.get_value(section, key))
+		local.set_value(RELEASE_PROFILE_SECTION, RELEASE_PROFILE_KEY, RELEASE_PROFILE_VERSION)
+		if local.save(user_path) != OK:
+			push_warning("Could not update release settings profile: %s" % user_path)
+
+
 func _setup_burgerpals_startup_sound() -> void:
 	if burgerpals_startup_player != null and is_instance_valid(burgerpals_startup_player):
 		return
@@ -43800,6 +44246,78 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Cola")
 	_hidden_add_soda_soft_lock_group(hidden_soda_box, "cola", "Cola")
 	_options_add_btn(hidden_soda_box, "RESET COLA + ICE BAY ALIGNMENT", _reset_two_bay_drink_alignment)
+
+	_hidden_add_section(hidden_soda_box, "DRINK OVERFLOW FOAM")
+	var overflow_note := Label.new()
+	overflow_note.text = "Animated cup shell: shaded foam bands, downward bubbles, lower fade, and world-space wobble. Changes save automatically."
+	overflow_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	overflow_note.add_theme_color_override("font_color", Color("AFC7D9"))
+	overflow_note.add_theme_font_size_override("font_size", 10)
+	hidden_soda_box.add_child(overflow_note)
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_shell_scale", "Shell Width Scale", 0.95, 1.35, 0.01,
+		func(): return soda_overflow_shell_scale,
+		func(v: float): soda_overflow_shell_scale = clampf(v, 0.95, 1.35))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_height_scale", "Shell Height Scale", 0.6, 1.6, 0.01,
+		func(): return soda_overflow_shell_height_scale,
+		func(v: float): soda_overflow_shell_height_scale = clampf(v, 0.6, 1.6))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_opacity", "Overall Opacity", 0.05, 1.0, 0.01,
+		func(): return soda_overflow_opacity,
+		func(v: float): soda_overflow_opacity = clampf(v, 0.05, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bottom_opacity", "Bottom Opacity", 0.0, 1.0, 0.01,
+		func(): return soda_overflow_bottom_opacity,
+		func(v: float): soda_overflow_bottom_opacity = clampf(v, 0.0, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bottom_fade", "Bottom Fade Height", 0.05, 0.8, 0.01,
+		func(): return soda_overflow_bottom_fade,
+		func(v: float): soda_overflow_bottom_fade = clampf(v, 0.05, 0.8))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_texture_x", "Texture Scale X", 0.25, 4.0, 0.01,
+		func(): return soda_overflow_texture_x,
+		func(v: float): soda_overflow_texture_x = clampf(v, 0.25, 4.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_texture_y", "Texture Scale Y", 0.25, 6.0, 0.01,
+		func(): return soda_overflow_texture_y,
+		func(v: float): soda_overflow_texture_y = clampf(v, 0.25, 6.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_pan_speed", "Downward Pan Speed", -1.5, 1.5, 0.01,
+		func(): return soda_overflow_pan_speed,
+		func(v: float): soda_overflow_pan_speed = clampf(v, -1.5, 1.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_shade", "Foam Shading", 0.0, 1.0, 0.01,
+		func(): return soda_overflow_shade,
+		func(v: float): soda_overflow_shade = clampf(v, 0.0, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_emission", "Foam Glow", 0.0, 0.5, 0.005,
+		func(): return soda_overflow_emission,
+		func(v: float): soda_overflow_emission = clampf(v, 0.0, 0.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bubble_amount", "Face Bubble Amount", 0.0, 2.0, 0.01,
+		func(): return soda_overflow_bubble_amount,
+		func(v: float): soda_overflow_bubble_amount = clampf(v, 0.0, 2.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bottom_bubbles", "Bottom Bubble Amount", 0.0, 2.0, 0.01,
+		func(): return soda_overflow_bottom_bubbles,
+		func(v: float): soda_overflow_bottom_bubbles = clampf(v, 0.0, 2.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bubble_size", "Bubble Size", 0.005, 0.12, 0.001,
+		func(): return soda_overflow_bubble_size,
+		func(v: float): soda_overflow_bubble_size = clampf(v, 0.005, 0.12))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bubble_speed", "Bubble Fall Speed", 0.0, 1.5, 0.01,
+		func(): return soda_overflow_bubble_speed,
+		func(v: float): soda_overflow_bubble_speed = clampf(v, 0.0, 1.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bubble_shrink", "Bubble Big-to-Small", 0.0, 0.95, 0.01,
+		func(): return soda_overflow_bubble_shrink,
+		func(v: float): soda_overflow_bubble_shrink = clampf(v, 0.0, 0.95))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_wobble_in", "Wobble Amount (in)", 0.0, 0.5, 0.01,
+		func(): return soda_overflow_wobble_in,
+		func(v: float): soda_overflow_wobble_in = clampf(v, 0.0, 0.5))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_wobble_speed", "Wobble Speed", 0.0, 8.0, 0.05,
+		func(): return soda_overflow_wobble_speed,
+		func(v: float): soda_overflow_wobble_speed = clampf(v, 0.0, 8.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_wobble_freq", "Wobble Frequency", 1.0, 40.0, 0.1,
+		func(): return soda_overflow_wobble_freq,
+		func(v: float): soda_overflow_wobble_freq = clampf(v, 1.0, 40.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_foam_r", "Foam Color Red", 0.0, 1.0, 0.01,
+		func(): return soda_overflow_foam_color.r,
+		func(v: float): soda_overflow_foam_color.r = clampf(v, 0.0, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_foam_g", "Foam Color Green", 0.0, 1.0, 0.01,
+		func(): return soda_overflow_foam_color.g,
+		func(v: float): soda_overflow_foam_color.g = clampf(v, 0.0, 1.0))
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_foam_b", "Foam Color Blue", 0.0, 1.0, 0.01,
+		func(): return soda_overflow_foam_color.b,
+		func(v: float): soda_overflow_foam_color.b = clampf(v, 0.0, 1.0))
+	_options_add_btn(hidden_soda_box, "RESET DRINK OVERFLOW", _reset_soda_overflow_visual)
 
 	_hidden_add_section(hidden_soda_box, "CUP STACK TRANSFORM")
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_cup_stack_x", "Stack X", -2.0, 2.0, 0.01,
@@ -50312,10 +50830,15 @@ func _submit_serve_request(cust: Node3D, station_index: int) -> void:
 		return
 	if mp_enabled and not _mp_applying:
 		var cid := _customer_net_id(cust)
+		var source_has_held_cup := station_index == -2 and cup_held \
+				and cup_root != null and is_instance_valid(cup_root) \
+				and cup_soda_fill >= 0.82 and cup_flavor != ""
 		if NetManager.is_host():
-			mp_serve(cid, station_index)
+			mp_serve(cid, station_index, source_has_held_cup)
 		elif cid >= 0:
-			mp_serve.rpc_id(1, cid, station_index)
+			mp_serve.rpc_id(1, cid, station_index, source_has_held_cup)
+			if source_has_held_cup:
+				_clear_local_held_cup_after_remote_hand()
 		return
 	if station_index == -2:
 		_begin_soda_only_serve(cust)
@@ -51094,14 +51617,21 @@ func _play_icecream_fly_to_mouth(from_cone: Node3D, customer: Node3D, on_done: C
 	tw.tween_callback(finish_cone)
 
 
-func _play_cup_fly_to_mouth(customer: Node3D, on_done: Callable, companion: bool = false) -> void:
+func _play_cup_fly_to_mouth(
+	customer: Node3D,
+	on_done: Callable,
+	companion: bool = false,
+	drink_override: Node3D = null
+) -> void:
 	## Toss the fountain drink to the customer. companion=true runs beside a burger toss.
 	if not companion:
 		_serve_fly_busy = true
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
-	var drink: Node3D = null
+	var drink: Node3D = drink_override if drink_override != null and is_instance_valid(drink_override) else null
 	var flavor := "cola"
-	if customer != null and is_instance_valid(customer):
+	if drink != null:
+		flavor = str(drink.get_meta("flavor", flavor))
+	elif customer != null and is_instance_valid(customer):
 		var sodas: Array = GameDataScript.order_soda_ids(customer.order)
 		if not sodas.is_empty():
 			drink = _find_ready_drink_for_soda(str(sodas[0]))
@@ -52015,7 +52545,11 @@ func _on_serve() -> void:
 	_submit_serve_request(cust, station_index)
 
 
-func _begin_soda_only_serve(customer: Node3D) -> void:
+func _begin_soda_only_serve(
+	customer: Node3D,
+	source_peer_id: int = 0,
+	source_has_held_cup: bool = false
+) -> void:
 	if not playing or customer == null or not is_instance_valid(customer) or not customer.is_waiting:
 		return
 	if _serve_fly_busy:
@@ -52031,10 +52565,28 @@ func _begin_soda_only_serve(customer: Node3D) -> void:
 	if game_audio and game_audio.has_method("play_order_up"):
 		game_audio.play_order_up()
 	var cust: Node3D = customer
-	_play_cup_fly_to_mouth(cust, func() -> void: _complete_soda_only_serve(cust))
+	var remote_drink: Node3D = null
+	if source_has_held_cup and source_peer_id > 0 and source_peer_id != NetManager.my_id():
+		if _mp_remote_cups.has(source_peer_id):
+			remote_drink = _mp_remote_cups[source_peer_id] as Node3D
+		if remote_drink == null or not is_instance_valid(remote_drink):
+			remote_drink = _mp_ensure_remote_cup(source_peer_id)
+			if remote_drink != null:
+				var sodas: Array = GameDataScript.order_soda_ids(customer.order)
+				var fallback_flavor := GameDataScript.soda_flavor_from_order_id(str(sodas[0])) if not sodas.is_empty() else "cola"
+				_mp_apply_remote_cup_fill(remote_drink, fallback_flavor, 1.0, 0.0, 0.0, false)
+		_mp_remote_cups.erase(source_peer_id)
+		_mp_remote_soda_pouring.erase(source_peer_id)
+		_mp_remote_ice_pouring.erase(source_peer_id)
+	_play_cup_fly_to_mouth(
+		cust,
+		func() -> void: _complete_soda_only_serve(cust, remote_drink),
+		false,
+		remote_drink
+	)
 
 
-func _complete_soda_only_serve(customer: Node3D = null) -> void:
+func _complete_soda_only_serve(customer: Node3D = null, remote_drink: Node3D = null) -> void:
 	var cust: Node3D = customer
 	if cust == null or not is_instance_valid(cust):
 		cust = selected_customer
@@ -52060,7 +52612,13 @@ func _complete_soda_only_serve(customer: Node3D = null) -> void:
 		total_served += 1
 		combo += 1
 		perfect_serves += 1
-	_consume_cup_for_serve(cust)
+	if remote_drink != null and is_instance_valid(remote_drink):
+		remote_drink.set_meta("serving_consumed", true)
+		remote_drink.queue_free()
+		if _serve_cup_node == remote_drink:
+			_serve_cup_node = null
+	else:
+		_consume_cup_for_serve(cust)
 	var soda_lab := "SODA"
 	var sodas: Array = GameDataScript.order_soda_ids(order)
 	if not sodas.is_empty():
@@ -53831,8 +54389,78 @@ func _mp_join_room(ip: String, port: int) -> void:
 
 func _mp_on_connection_changed() -> void:
 	mp_enabled = NetManager.is_online() or NetManager.role == NetManager.Role.HOST or NetManager.role == NetManager.Role.CLIENT
+	call_deferred("_mp_cleanup_departed_peer_state")
 	_mp_refresh_lobby_status()
 	_mp_rebuild_room_list()
+
+
+func _mp_cleanup_departed_peer_state() -> void:
+	## Connection loss used to leave invisible held tools, loop sounds, claimed
+	## fryer baskets, and occasionally an ungrabbable patty behind. Reconcile all
+	## transient peer-owned state against the actual room membership.
+	var live: Dictionary = {}
+	if NetManager.is_online():
+		for live_id in NetManager.connected_peer_ids():
+			live[int(live_id)] = true
+	var peer_ids: Dictionary = {}
+	var peer_stores: Array = [
+		_mp_remote_oil, _mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
+		_mp_remote_brush, _mp_remote_spatula, _mp_remote_cups,
+		_mp_remote_icecreams, _mp_remote_fries, _mp_remote_cursors,
+		_mp_remote_soda_pouring, _mp_remote_ice_pouring,
+		_mp_remote_softserve_pouring, _mp_remote_ext_spraying,
+		_mp_remote_shaker_rattling, mp_held_net,
+	]
+	for store_value in peer_stores:
+		var store: Dictionary = store_value
+		for key in store.keys():
+			peer_ids[int(key)] = true
+	for peer_value in peer_ids.keys():
+		var peer_id := int(peer_value)
+		if live.has(peer_id):
+			continue
+		if mp_held_net.has(peer_id):
+			var held_patty = _patty_by_net_id(int(mp_held_net[peer_id]))
+			if held_patty != null and is_instance_valid(held_patty):
+				held_patty.is_held = false
+				held_patty.heating = grill_on
+				held_patty.position.y = GRILL_SURFACE_Y
+				held_patty._rest_x = held_patty.position.x
+				held_patty._rest_z = held_patty.position.z
+		mp_held_net.erase(peer_id)
+		for node_store_value in [
+			_mp_remote_oil, _mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
+			_mp_remote_brush, _mp_remote_spatula, _mp_remote_cups,
+			_mp_remote_icecreams, _mp_remote_fries, _mp_remote_cursors,
+		]:
+			var node_store: Dictionary = node_store_value
+			if node_store.has(peer_id):
+				var ghost = node_store[peer_id]
+				if ghost != null and is_instance_valid(ghost):
+					ghost.queue_free()
+				node_store.erase(peer_id)
+		_mp_remote_soda_pouring.erase(peer_id)
+		_mp_remote_ice_pouring.erase(peer_id)
+		_mp_remote_softserve_pouring.erase(peer_id)
+		_mp_remote_ext_spraying.erase(peer_id)
+		_mp_remote_shaker_rattling.erase(peer_id)
+		for basket_index in fryer_baskets.size():
+			var basket: Dictionary = fryer_baskets[basket_index]
+			if int(basket.get("remote_peer", 0)) != peer_id:
+				continue
+			basket["remote_peer"] = 0
+			fryer_baskets[basket_index] = basket
+			var basket_area := basket.get("area") as Area3D
+			if basket_area != null and is_instance_valid(basket_area):
+				basket_area.input_ray_pickable = true
+			var basket_root := basket.get("root") as Node3D
+			if basket_root != null and is_instance_valid(basket_root):
+				basket_root.global_position = basket.get("home", basket_root.global_position)
+				basket_root.rotation_degrees = basket.get("home_rot", basket_root.rotation_degrees)
+	if not NetManager.is_online():
+		_mp_soda_drain_pending.clear()
+		_mp_soda_drain_flush_cool = 0.0
+	_sync_shared_kitchen_loop_audio()
 
 
 func _mp_refresh_lobby_status() -> void:
@@ -53984,6 +54612,8 @@ func _mp_on_session_start(session_seed: int) -> void:
 	seed(session_seed)
 	mp_enabled = true
 	mp_held_net.clear()
+	_mp_soda_drain_pending.clear()
+	_mp_soda_drain_flush_cool = 0.0
 	for steel_id in _mp_steel_icecreams.keys():
 		var steel_ghost: Node3D = _mp_steel_icecreams[steel_id]
 		if steel_ghost != null and is_instance_valid(steel_ghost):
@@ -54456,6 +55086,40 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 		_mp_spatula_pose_sent = false
 
 
+func _mp_state_has_active(store: Dictionary) -> bool:
+	for value in store.values():
+		if bool(value):
+			return true
+	return false
+
+
+func _sync_shared_kitchen_loop_audio() -> void:
+	## Continuous equipment is heard from every active cook. Pose packets carry
+	## the compact on/off state; a single OR-mix prevents one player releasing a
+	## tool from silencing a partner who is still using theirs.
+	if game_audio == null:
+		return
+	var use_remote := mp_enabled and NetManager.is_online()
+	if game_audio.has_method("set_soda_pour"):
+		game_audio.set_soda_pour(_cup_pouring or (use_remote and _mp_state_has_active(_mp_remote_soda_pouring)))
+	if game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(_cup_pouring_ice or (use_remote and _mp_state_has_active(_mp_remote_ice_pouring)))
+	if game_audio.has_method("set_softserve_dispense"):
+		game_audio.set_softserve_dispense(_icecream_pouring or (use_remote and _mp_state_has_active(_mp_remote_softserve_pouring)))
+	if game_audio.has_method("set_ext_spray"):
+		game_audio.set_ext_spray(ext_spraying or (use_remote and _mp_state_has_active(_mp_remote_ext_spraying)))
+	if game_audio.has_method("set_shaker_rattle"):
+		game_audio.set_shaker_rattle(_shaker_rattling or (use_remote and _mp_state_has_active(_mp_remote_shaker_rattling)))
+	if game_audio.has_method("set_fryer_oil"):
+		var fryer_active := false
+		for basket_state in fryer_baskets:
+			if typeof(basket_state) == TYPE_DICTIONARY \
+					and str((basket_state as Dictionary).get("state", "empty")) == "cooking":
+				fryer_active = true
+				break
+		game_audio.set_fryer_oil(fryer_active, 1.0)
+
+
 func _mp_hand_spatula_over_grill() -> bool:
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root) or not hand_spatula_root.visible:
 		return false
@@ -54542,7 +55206,7 @@ func _mp_send_held_cup_pose(force: bool = false) -> void:
 		return
 	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
 		if force:
-			mp_cup_pose.rpc(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "", 0.0, 0.0, 0.0, false)
+			mp_cup_pose.rpc(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "", 0.0, 0.0, 0.0, false, false)
 		return
 	if not force and _mp_cup_pose_cool > 0.0:
 		return
@@ -54557,7 +55221,8 @@ func _mp_send_held_cup_pose(force: bool = false) -> void:
 		cup_soda_fill,
 		cup_ice_fill,
 		_cup_fizz,
-		_cup_pouring
+		_cup_pouring,
+		_cup_pouring_ice
 	)
 
 
@@ -54689,6 +55354,10 @@ func _mp_force_remote_glock_visible(root: Node3D) -> void:
 
 
 func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
+	if except_kind != 4:
+		_mp_remote_shaker_rattling.erase(peer_id)
+	if except_kind != 5:
+		_mp_remote_ext_spraying.erase(peer_id)
 	if except_kind != 2 and _mp_remote_oil.has(peer_id):
 		var oil: Node3D = _mp_remote_oil[peer_id]
 		if oil != null and is_instance_valid(oil):
@@ -54797,7 +55466,9 @@ func _mp_apply_remote_icecream_fill(root: Node3D, fill: float, pouring: bool) ->
 	_mp_set_remote_icecream_stream(root, pouring)
 
 
-func _mp_apply_remote_cup_fill(root: Node3D, flavor: String, fill: float, ice: float, fizz: float) -> void:
+func _mp_apply_remote_cup_fill(
+	root: Node3D, flavor: String, fill: float, ice: float, fizz: float, pouring: bool = false
+) -> void:
 	## Mirror liquid / ice look on a partner's held cup ghost.
 	if root == null or not is_instance_valid(root):
 		return
@@ -54840,6 +55511,19 @@ func _mp_apply_remote_cup_fill(root: Node3D, flavor: String, fill: float, ice: f
 		else:
 			liq.visible = false
 	_apply_parked_cup_foam_visual(root, fizz, CUP_FOAM_LINGER if fill > 0.08 else 0.0, fill, false, 0.0)
+	## Held partner cups previously carried the numeric ice value but never built
+	## their cubes, so new iced drinks looked empty to everyone else.
+	var prev_ice := cup_ice_fill
+	var prev_ice_root := cup_ice_root
+	cup_ice_fill = ice
+	cup_ice_root = root.get_node_or_null("IceStack") as Node3D
+	_refresh_cup_ice_stack()
+	cup_ice_fill = prev_ice
+	cup_ice_root = prev_ice_root
+	var overflow := root.get_node_or_null("OverflowShell") as MeshInstance3D
+	if overflow != null:
+		_apply_soda_overflow_settings_to_shell(overflow)
+		overflow.visible = pouring and fill >= 0.88
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -54859,6 +55543,7 @@ func mp_icecream_pose(
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
 	if not active:
+		_mp_remote_softserve_pouring.erase(sid)
 		if _mp_remote_icecreams.has(sid):
 			var hide_cone: Node3D = _mp_remote_icecreams[sid]
 			if hide_cone != null and is_instance_valid(hide_cone):
@@ -54872,6 +55557,7 @@ func mp_icecream_pose(
 	ghost.visible = true
 	ghost.global_position = Vector3(x, y, z)
 	ghost.global_rotation_degrees = Vector3(rx, ry, rz)
+	_mp_remote_softserve_pouring[sid] = pouring
 	_mp_apply_remote_icecream_fill(ghost, fill, pouring)
 
 
@@ -54888,13 +55574,16 @@ func mp_cup_pose(
 	fill: float,
 	ice: float,
 	fizz: float,
-	pouring: bool
+	pouring: bool,
+	pouring_ice: bool = false
 ) -> void:
 	## Partner is carrying / pouring a drink — show a ghost cup in their hand.
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
 	if not active:
+		_mp_remote_soda_pouring.erase(sid)
+		_mp_remote_ice_pouring.erase(sid)
 		if _mp_remote_cups.has(sid):
 			var hide_cup: Node3D = _mp_remote_cups[sid]
 			if hide_cup != null and is_instance_valid(hide_cup):
@@ -54907,7 +55596,9 @@ func mp_cup_pose(
 	ghost.visible = true
 	ghost.global_position = Vector3(x, y, z)
 	ghost.global_rotation_degrees = Vector3(rx, ry, rz)
-	_mp_apply_remote_cup_fill(ghost, flavor, fill, ice, fizz)
+	_mp_remote_soda_pouring[sid] = pouring
+	_mp_remote_ice_pouring[sid] = pouring_ice
+	_mp_apply_remote_cup_fill(ghost, flavor, fill, ice, fizz, pouring)
 	## Soft stream hint while they pour under the nozzle.
 	if pouring and soda_stream_mesh != null and is_instance_valid(soda_stream_mesh) \
 			and not cup_held:
@@ -54935,6 +55626,10 @@ func mp_tool_pose(
 		_mp_hide_remote_tools(sid, -1)
 		return
 	_mp_hide_remote_tools(sid, kind)
+	if kind == 4:
+		_mp_remote_shaker_rattling[sid] = emitting
+	elif kind == 5:
+		_mp_remote_ext_spraying[sid] = emitting
 	var pos := Vector3(x, y, z)
 	var rot := Vector3(rx, ry, rz)
 	match kind:
@@ -55024,6 +55719,9 @@ func mp_fryer_basket_pose(
 	if fryer_held_index == index:
 		## Local hand wins if both players race for the same basket.
 		return
+	var claimed_by := int(data.get("remote_peer", 0))
+	if active and claimed_by != 0 and claimed_by != sid:
+		return
 	var root := data.get("root") as Node3D
 	if root == null or not is_instance_valid(root):
 		return
@@ -55032,6 +55730,9 @@ func mp_fryer_basket_pose(
 	data["shake"] = maxf(0.0, shake)
 	data["remote_peer"] = sid if active else 0
 	fryer_baskets[index] = data
+	var area := data.get("area") as Area3D
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = not active
 	_refresh_fryer_basket_visual(index)
 	if active:
 		root.global_position = Vector3(x, y, z)
@@ -55062,6 +55763,9 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 	data["smoke_after"] = clampf(smoke_after, 0.0, 10.0)
 	data["remote_peer"] = 0
 	fryer_baskets[index] = data
+	var area := data.get("area") as Area3D
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = true
 	_refresh_fryer_basket_visual(index)
 	if settle_home:
 		var tw := create_tween()
@@ -55337,7 +56041,7 @@ func mp_spawn_patty(net_id: int, idx: int, x: float, z: float) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_patty_click(net_id: int) -> void:
+func mp_patty_click(net_id: int, requested_flip_grade: String = "") -> void:
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
@@ -55351,7 +56055,7 @@ func mp_patty_click(net_id: int) -> void:
 	_mp_applying = true
 	if sid == NetManager.my_id():
 		spatula_owner_id = sid
-		_on_patty_clicked_local(p)
+		_on_patty_clicked_local(p, requested_flip_grade)
 		if spatula_patty != null:
 			_mp_mark_held(sid, spatula_patty)
 		else:
@@ -55361,7 +56065,7 @@ func mp_patty_click(net_id: int) -> void:
 		if not p.flipped_once:
 			if p.can_flip():
 				_start_spatula_place_squash_at(p.global_position)
-				p.flip()
+				p.flip(requested_flip_grade)
 		elif p.can_scoop():
 			_mp_apply_remote_scoop(p, sid)
 	_mp_applying = false
@@ -55500,9 +56204,16 @@ func mp_drop_to_build(net_id: int, index: int) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
+func mp_serve(
+	cust_net_id: int = -1,
+	station_index: int = -1,
+	source_has_held_cup: bool = false
+) -> void:
 	if mp_enabled and not NetManager.is_host():
 		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
 	_mp_serve_sync = true
 	_mp_applying = true
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
@@ -55511,7 +56222,11 @@ func mp_serve(cust_net_id: int = -1, station_index: int = -1) -> void:
 		_highlight_tickets()
 	if station_index == -2:
 		## Soda-only hand-off (no Build station).
-		_begin_soda_only_serve(cust if cust != null else selected_customer)
+		_begin_soda_only_serve(
+			cust if cust != null else selected_customer,
+			sid,
+			source_has_held_cup
+		)
 		_mp_applying = false
 		return
 	if station_index == -3:
@@ -55536,10 +56251,24 @@ func mp_drink_hand(cust_net_id: int, flavor: String) -> void:
 	## Early drink hand-off to a waiting customer (burger may still be cooking).
 	if mp_enabled and not NetManager.is_host():
 		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
 	_mp_applying = true
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
-	if cust != null and is_instance_valid(cust):
-		_begin_early_drink_hand(cust, flavor)
+	if cust != null and is_instance_valid(cust) and _customer_wants_flavor(cust, flavor):
+		var remote_drink: Node3D = null
+		if sid != NetManager.my_id():
+			if _mp_remote_cups.has(sid):
+				remote_drink = _mp_remote_cups[sid] as Node3D
+			if remote_drink == null or not is_instance_valid(remote_drink):
+				remote_drink = _mp_ensure_remote_cup(sid)
+				if remote_drink != null:
+					_mp_apply_remote_cup_fill(remote_drink, flavor, 1.0, 0.0, 0.0, false)
+			_mp_remote_cups.erase(sid)
+			_mp_remote_soda_pouring.erase(sid)
+			_mp_remote_ice_pouring.erase(sid)
+		_begin_early_drink_hand(cust, flavor, remote_drink)
 	_mp_applying = false
 
 
@@ -55578,6 +56307,46 @@ func mp_icecream_hand(cust_net_id: int) -> void:
 		_mp_applying = false
 		call_deferred("_complete_synced_icecream_hand", cust_net_id)
 		return
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_fries_hand(cust_net_id: int) -> void:
+	## Guest-held fries are a local prop until the hand-off. The host consumes the
+	## authoritative serving here, marks the shared ticket, and closes fries-only
+	## orders so every peer converges on one ready-serving count.
+	if mp_enabled and not NetManager.is_host():
+		return
+	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
+	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
+		return
+	if not GameDataScript.wants_fries(cust.order) or _customer_fries_handed(cust):
+		return
+	if not _customer_can_claim_fries(cust):
+		_mp_broadcast_economy()
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if sid == 0:
+		sid = NetManager.my_id()
+	if _mp_remote_fries.has(sid):
+		var remote_fries: Node3D = _mp_remote_fries[sid] as Node3D
+		if remote_fries != null and is_instance_valid(remote_fries):
+			remote_fries.visible = false
+			remote_fries.queue_free()
+		_mp_remote_fries.erase(sid)
+	_mp_applying = true
+	selected_customer = cust
+	_consume_fries_for_serve(cust)
+	_mp_applying = false
+	if GameDataScript.is_fries_only_order(cust.order):
+		_begin_fries_only_serve(cust)
+	else:
+		if game_audio and game_audio.has_method("play_serve_whoosh"):
+			game_audio.play_serve_whoosh()
+		_refresh_ticket_checkmarks()
+		_highlight_tickets()
+		_update_hud()
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
 
 
 ## any_peer (host-only callers): authority can drop on relay peers.
@@ -56287,6 +57056,20 @@ func mp_add_fries_ready(amount: int) -> void:
 	if not NetManager.is_host():
 		return
 	_add_ready_fries_local(maxi(0, amount))
+	_mp_broadcast_economy()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_soda_tank_drain(flavor_id: String, tank_amount: float) -> void:
+	## Shared drink inventory is host-authoritative. Without this request, a
+	## guest's pour was overwritten by the next economy snapshot and cost no syrup.
+	if not NetManager.is_host() or not SODA_FLAVORS.has(flavor_id):
+		return
+	var amount := clampf(tank_amount, 0.0, 0.08)
+	if amount <= 0.00001:
+		return
+	_set_soda_tank_visual_level(flavor_id, _soda_tank_amount(flavor_id) - amount)
+	_refresh_soda_tank_bubbles()
 	_mp_broadcast_economy()
 
 
@@ -57441,6 +58224,9 @@ func mp_residue_clean(slot: int, x: float = 0.0, z: float = 0.0) -> void:
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func mp_ext_spray(spraying: bool, ax: float, az: float, on_customer: bool) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid > 0 and sid != multiplayer.get_unique_id():
+		_mp_remote_ext_spraying[sid] = spraying
 	_ensure_ext_powder()
 	if ext_powder:
 		ext_powder.emitting = spraying

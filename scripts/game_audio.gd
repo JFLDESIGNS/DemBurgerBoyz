@@ -1517,6 +1517,16 @@ func play_perfect_announcer() -> void:
 	_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
 
 
+func play_flip_grade_announcer(grade: String) -> void:
+	match grade:
+		"perfect":
+			_play_announcer_stream("flip_perfect_announcer", "res://sounds/perfect.wav", 0.65)
+		"great":
+			_play_announcer_stream("flip_great_announcer", "res://sounds/greatjob.wav", 0.68)
+		_:
+			_play_announcer_stream("flip_late_announcer", "res://sounds/ohhh.wav", 0.68)
+
+
 func play_delivery_time_announcer(wait_sec: float) -> void:
 	if wait_sec < 5.0:
 		_play_announcer_stream("order_perfect_announcer", "res://sounds/perfect.wav", 0.65)

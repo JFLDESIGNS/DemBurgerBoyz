@@ -14,9 +14,11 @@ const COOK_DONE := 15.0
 const COOK_PERFECT := 21.0
 const COOK_BURNT := 38.0 ## Slightly more grace before charcoal.
 const FLIP_READY := 15.0
-const FLIP_WINDOW_START := 15.0
-const FLIP_WINDOW_END := 24.0 ## Slightly wider perfect-flip window.
-const PERFECT_ANNOUNCER_AFTER_FLIP_READY := 0.7
+const PERFECT_FLIP_MAX_LATE := 0.5
+const GREAT_FLIP_MAX_LATE := 1.0
+const FLIP_GRADE_PERFECT := "perfect"
+const FLIP_GRADE_GREAT := "great"
+const FLIP_GRADE_LATE := "late"
 const SCOOP_READY := 15.0 ## second side cook time before scoop
 
 var cook_time: float = 0.0
@@ -29,6 +31,7 @@ var slot_index: int = -1
 ## Multiplayer identity — assigned when spawned in a co-op session.
 var net_id: int = -1
 var perfect_flip: bool = false
+var last_flip_grade: String = ""
 var heating: bool = true
 var heat_mul: float = 1.0 ## 1 = full grill · 0 = hold zone (no cook)
 var warm_hold_time: float = 0.0 ## seconds parked on the hold strip
@@ -465,6 +468,7 @@ func reset_for_grill_spawn(
 	slot_index = p_slot_index
 	net_id = p_net_id
 	perfect_flip = false
+	last_flip_grade = ""
 	heating = p_heating
 	heat_mul = 1.0
 	warm_hold_time = 0.0
@@ -810,6 +814,7 @@ func apply_mp_state(
 	is_held = p_held
 	slot_index = p_slot
 	perfect_flip = p_perfect_flip
+	last_flip_grade = _flip_grade_for_first_side(p_first) if p_flipped else ""
 	position = Vector3(px, py, pz)
 	_rest_x = px
 	_rest_z = pz
@@ -1831,21 +1836,42 @@ func can_scoop() -> bool:
 
 
 func is_in_flip_window() -> bool:
-	return not flipped_once and cook_time >= FLIP_WINDOW_START and cook_time <= FLIP_WINDOW_END
+	return not flipped_once and cook_time >= FLIP_READY and cook_time <= FLIP_READY + PERFECT_FLIP_MAX_LATE
 
 
 func is_in_perfect_announcer_window() -> bool:
 	return is_in_flip_window()
 
 
-func flip() -> bool:
+func _flip_grade_for_first_side(first_side_seconds: float) -> String:
+	var lateness := maxf(0.0, first_side_seconds - FLIP_READY)
+	if lateness <= PERFECT_FLIP_MAX_LATE:
+		return FLIP_GRADE_PERFECT
+	## Treat the fractional 0.5–0.6 gap as Great so feedback is continuous.
+	if lateness <= GREAT_FLIP_MAX_LATE:
+		return FLIP_GRADE_GREAT
+	return FLIP_GRADE_LATE
+
+
+func current_flip_grade() -> String:
+	## Public read used by multiplayer before the flip RPC. The initiating cook's
+	## visible timing grade is then applied on every peer, avoiding threshold
+	## disagreements caused by a few frames of network/cook-clock drift.
+	return _flip_grade_for_first_side(cook_time)
+
+
+func flip(forced_grade: String = "") -> bool:
 	if flipped_once or cook_time < FLIP_READY:
 		return false
-	var announce_perfect := is_in_perfect_announcer_window()
 	## Lock in first-side doneness so the new top stays seared and sides keep their tones.
 	first_side_time = cook_time
+	last_flip_grade = forced_grade if [
+		FLIP_GRADE_PERFECT,
+		FLIP_GRADE_GREAT,
+		FLIP_GRADE_LATE,
+	].has(forced_grade) else _flip_grade_for_first_side(first_side_time)
 	flipped_once = true
-	perfect_flip = announce_perfect
+	perfect_flip = last_flip_grade == FLIP_GRADE_PERFECT
 	## Fresh timer for the second side (~15s to scoop).
 	cook_time = 0.0
 	_announced_scoop = false
@@ -1869,7 +1895,9 @@ func flip() -> bool:
 		audio.play_flip()
 		if audio.has_method("play_spatula_whoosh"):
 			audio.play_spatula_whoosh()
-		if perfect_flip and audio.has_method("play_perfect_announcer"):
+		if audio.has_method("play_flip_grade_announcer"):
+			audio.play_flip_grade_announcer(last_flip_grade)
+		elif perfect_flip and audio.has_method("play_perfect_announcer"):
 			audio.play_perfect_announcer()
 	var tw := create_tween()
 	## 15% faster than prior 0.08 / 0.12 squash.
@@ -2726,11 +2754,22 @@ func _update_cheese_visual() -> void:
 		return
 	var t := clampf(cheese_melt, 0.0, 1.0)
 	var top_up := 1.0
+	var cheese_normal := Vector3.UP
 	if _mesh != null and is_instance_valid(_mesh):
-		top_up = _mesh.global_transform.basis.y.normalized().dot(Vector3.UP)
+		cheese_normal = _mesh.global_transform.basis.y.normalized()
+		top_up = cheese_normal.dot(Vector3.UP)
 	## Only draw cheese while its actual top face points upward. During an
 	## airborne flip it disappears through the underside, then returns on top.
-	_cheese_root.visible = top_up > 0.12
+	## Held patties also need a view-facing check: the meat is intentionally a
+	## no-depth stylized layer, so the melted corner meshes otherwise sort through
+	## the opposite face during the two-flip right-click juggle.
+	var cheese_face_visible := top_up > 0.12
+	if cheese_face_visible and is_held:
+		var active_camera := get_viewport().get_camera_3d()
+		if active_camera != null and is_instance_valid(active_camera):
+			var to_camera := (active_camera.global_position - _cheese_root.global_position).normalized()
+			cheese_face_visible = cheese_normal.dot(to_camera) > 0.28
+	_cheese_root.visible = cheese_face_visible
 	var drape := smoothstep(0.12, 0.95, t)
 	drape = drape * drape * (3.0 - 2.0 * drape)
 	## Warm cheddar yellow → deeper orange as it melts.
