@@ -1573,6 +1573,7 @@ var gfx_outside_fill: DirectionalLight3D = null
 var gfx_kitchen: OmniLight3D = null
 var gfx_grill_lamp: SpotLight3D = null
 var gfx_window_wash: SpotLight3D = null
+var gfx_customer_fill: SpotLight3D = null
 var gfx_sky_mat: PanoramaSkyMaterial = null
 var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
@@ -2069,8 +2070,8 @@ const CUP_SHELL_BOT_R := 0.0594
 const SODA_OVERFLOW_SHELL_TEXTURE := "res://assets/vfx/soda_overflow_shell.png"
 const SODA_OVERFLOW_SHELL_SCALE_DEFAULT := 1.06 ## just outside the cup's widest top rim
 const SODA_OVERFLOW_SHELL_HEIGHT_SCALE_DEFAULT := 1.06
-const SODA_OVERFLOW_OPACITY_DEFAULT := 0.72
-const SODA_OVERFLOW_BOTTOM_OPACITY_DEFAULT := 0.18
+const SODA_OVERFLOW_OPACITY_DEFAULT := 0.55
+const SODA_OVERFLOW_BOTTOM_OPACITY_DEFAULT := 0.12
 const SODA_OVERFLOW_BOTTOM_FADE_DEFAULT := 0.30
 const SODA_OVERFLOW_TEXTURE_X_DEFAULT := 1.35
 const SODA_OVERFLOW_TEXTURE_Y_DEFAULT := 1.70 ## smaller foam bands than the previous shell
@@ -2328,9 +2329,93 @@ const GFX_DEFAULTS := {
 	"exposure": 0.73,
 	"ambient": 0.44,
 	"sun": 2.09,
+	"sun_x": 0.0,
+	"sun_y": 0.0,
+	"sun_z": 0.0,
+	"sun_pitch": -48.0,
+	"sun_yaw": -35.0,
+	"sun_roll": -8.0,
+	"sun_r": 1.0,
+	"sun_g": 0.86,
+	"sun_b": 0.62,
+	"sun_indirect": 1.15,
+	"sun_specular": 0.5,
+	"outside_fill": 0.95,
+	"outside_x": 0.0,
+	"outside_y": 0.0,
+	"outside_z": 0.0,
+	"outside_pitch": -36.0,
+	"outside_yaw": -155.0,
+	"outside_roll": 0.0,
+	"outside_r": 1.0,
+	"outside_g": 0.72,
+	"outside_b": 0.42,
+	"outside_indirect": 0.85,
+	"outside_specular": 0.35,
 	"kitchen": 0.81,
+	"kitchen_x": 0.0,
+	"kitchen_y": 2.45,
+	"kitchen_z": -0.35,
+	"kitchen_pitch": 0.0,
+	"kitchen_yaw": 0.0,
+	"kitchen_roll": 0.0,
+	"kitchen_r": 1.0,
+	"kitchen_g": 0.88,
+	"kitchen_b": 0.72,
+	"kitchen_indirect": 1.0,
+	"kitchen_specular": 0.35,
+	"kitchen_size": 0.35,
+	"kitchen_range": 5.5,
+	"kitchen_attenuation": 1.15,
 	"grill_lamp": 1.42,
+	"grill_lamp_x": GRILL_CENTER_X,
+	"grill_lamp_y": 2.35,
+	"grill_lamp_z": GRILL_SURFACE_Z - 0.15,
+	"grill_lamp_pitch": -72.0,
+	"grill_lamp_yaw": 0.0,
+	"grill_lamp_roll": 0.0,
+	"grill_lamp_r": 1.0,
+	"grill_lamp_g": 0.92,
+	"grill_lamp_b": 0.78,
+	"grill_lamp_indirect": 1.0,
+	"grill_lamp_specular": 0.32,
+	"grill_lamp_size": 0.18,
+	"grill_lamp_range": 3.2,
+	"grill_lamp_attenuation": 0.9,
+	"grill_lamp_angle": 42.0,
 	"window_wash": 0.97,
+	"window_wash_x": 0.0,
+	"window_wash_y": 1.9,
+	"window_wash_z": 1.55,
+	"window_wash_pitch": -25.0,
+	"window_wash_yaw": 180.0,
+	"window_wash_roll": 0.0,
+	"window_wash_r": 1.0,
+	"window_wash_g": 0.84,
+	"window_wash_b": 0.62,
+	"window_wash_indirect": 1.0,
+	"window_wash_specular": 0.25,
+	"window_wash_size": 0.25,
+	"window_wash_range": 4.0,
+	"window_wash_attenuation": 1.0,
+	"window_wash_angle": 50.0,
+	## Soft no-shadow key from camera-right (world -X) aimed at customer faces.
+	"customer_fill": 1.45,
+	"customer_fill_x": -2.4,
+	"customer_fill_y": 2.4,
+	"customer_fill_z": 0.55,
+	"customer_fill_pitch": -21.5,
+	"customer_fill_yaw": -125.0,
+	"customer_fill_roll": 0.0,
+	"customer_fill_r": 1.0,
+	"customer_fill_g": 0.89,
+	"customer_fill_b": 0.76,
+	"customer_fill_indirect": 0.65,
+	"customer_fill_specular": 0.18,
+	"customer_fill_size": 0.42,
+	"customer_fill_range": 4.8,
+	"customer_fill_attenuation": 1.1,
+	"customer_fill_angle": 58.0,
 	"saturation": 1.07,
 	"contrast": 0.98,
 	"ssao": false,
@@ -8458,6 +8543,23 @@ func _setup_world_lighting() -> void:
 	gfx_window_wash.position = Vector3(0.0, 1.9, 1.55)
 	gfx_window_wash.rotation_degrees = Vector3(-25.0, 180.0, 0.0)
 	world.add_child(gfx_window_wash)
+
+	## A soft key on camera-right balances the strong camera-left sunlight on faces.
+	## It casts no shadow so it reads as gentle portrait fill rather than a second sun.
+	gfx_customer_fill = SpotLight3D.new()
+	gfx_customer_fill.name = "CustomerCameraRightFill"
+	gfx_customer_fill.light_color = Color(1.0, 0.89, 0.76)
+	gfx_customer_fill.light_energy = 1.45
+	gfx_customer_fill.light_indirect_energy = 0.65
+	gfx_customer_fill.light_specular = 0.18
+	gfx_customer_fill.light_size = 0.42
+	gfx_customer_fill.spot_range = 4.8
+	gfx_customer_fill.spot_angle = 58.0
+	gfx_customer_fill.spot_attenuation = 1.1
+	gfx_customer_fill.shadow_enabled = false
+	gfx_customer_fill.position = Vector3(-2.4, 2.4, 0.55)
+	gfx_customer_fill.rotation_degrees = Vector3(-21.5, -125.0, 0.0)
+	world.add_child(gfx_customer_fill)
 
 	var env_node := WorldEnvironment.new()
 	env_node.name = "WorldEnvironment"
@@ -24404,6 +24506,15 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "block_fill_z", SODA_FILL_FRONT_SAFE_Z)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_live_lock_calibration_v10", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "overflow_transparency_range_v11"):
+		## Preserve hand-tuned values; only soften the exact old shipped opacity.
+		var old_overflow_opacity := float(cfg.get_value(
+			SODA_TUNING_CFG_SECTION, "overflow_opacity", 0.72
+		))
+		if is_equal_approx(old_overflow_opacity, 0.72):
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_opacity", SODA_OVERFLOW_OPACITY_DEFAULT)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_transparency_range_v11", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -24487,7 +24598,7 @@ func _load_soda_tuning_settings() -> void:
 	soda_tank_bubble_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_bubble_scale", soda_tank_bubble_scale)), 0.0, 3.0)
 	soda_overflow_shell_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_shell_scale", soda_overflow_shell_scale)), 0.95, 1.35)
 	soda_overflow_shell_height_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_height_scale", soda_overflow_shell_height_scale)), 0.6, 1.6)
-	soda_overflow_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_opacity", soda_overflow_opacity)), 0.05, 1.0)
+	soda_overflow_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_opacity", soda_overflow_opacity)), 0.0, 1.0)
 	soda_overflow_bottom_opacity = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_opacity", soda_overflow_bottom_opacity)), 0.0, 1.0)
 	soda_overflow_bottom_fade = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_bottom_fade", soda_overflow_bottom_fade)), 0.05, 0.8)
 	soda_overflow_texture_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "overflow_texture_x", soda_overflow_texture_x)), 0.25, 4.0)
@@ -33716,8 +33827,8 @@ render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_back;
 
 uniform sampler2D splash_tex : source_color, filter_linear_mipmap, repeat_enable;
 uniform vec4 foam_color : source_color = vec4(1.0, 0.975, 0.90, 1.0);
-uniform float opacity : hint_range(0.0, 1.0) = 0.72;
-uniform float bottom_opacity : hint_range(0.0, 1.0) = 0.18;
+uniform float opacity : hint_range(0.0, 1.0) = 0.55;
+uniform float bottom_opacity : hint_range(0.0, 1.0) = 0.12;
 uniform float bottom_fade : hint_range(0.01, 0.9) = 0.30;
 uniform float pan_speed = 0.30;
 uniform float texture_tiles_x = 1.12;
@@ -41999,6 +42110,39 @@ func _gfx_add_section(parent: Control, text: String) -> void:
 	parent.add_child(lab)
 
 
+func _hidden_add_world_light_group(
+	parent: Control,
+	title: String,
+	prefix: String,
+	energy_key: String,
+	kind: String
+) -> void:
+	_hidden_add_section(parent, title)
+	## The four original energy keys already have advanced-panel backing sliders;
+	## mirror those instead of replacing their canonical entry in gfx_sliders.
+	if gfx_sliders.has(energy_key):
+		_options_add_standard_slider(parent, energy_key, "Brightness", 0.0, 8.0, 0.01)
+	else:
+		_gfx_add_slider(parent, energy_key, "Brightness", 0.0, 8.0, 0.01)
+	_gfx_add_slider(parent, "%s_indirect" % prefix, "Indirect Brightness", 0.0, 4.0, 0.01)
+	_gfx_add_slider(parent, "%s_specular" % prefix, "Specular Strength", 0.0, 2.0, 0.01)
+	_gfx_add_slider(parent, "%s_x" % prefix, "Position X", -10.0, 10.0, 0.01)
+	_gfx_add_slider(parent, "%s_y" % prefix, "Position Y", -5.0, 12.0, 0.01)
+	_gfx_add_slider(parent, "%s_z" % prefix, "Position Z", -10.0, 18.0, 0.01)
+	_gfx_add_slider(parent, "%s_pitch" % prefix, "Pitch", -180.0, 180.0, 0.1)
+	_gfx_add_slider(parent, "%s_yaw" % prefix, "Yaw", -180.0, 180.0, 0.1)
+	_gfx_add_slider(parent, "%s_roll" % prefix, "Roll", -180.0, 180.0, 0.1)
+	_gfx_add_slider(parent, "%s_r" % prefix, "Color Red", 0.0, 1.0, 0.01)
+	_gfx_add_slider(parent, "%s_g" % prefix, "Color Green", 0.0, 1.0, 0.01)
+	_gfx_add_slider(parent, "%s_b" % prefix, "Color Blue", 0.0, 1.0, 0.01)
+	if kind == "omni" or kind == "spot":
+		_gfx_add_slider(parent, "%s_size" % prefix, "Source Size / Softness", 0.0, 2.0, 0.01)
+		_gfx_add_slider(parent, "%s_range" % prefix, "Range", 0.1, 20.0, 0.05)
+		_gfx_add_slider(parent, "%s_attenuation" % prefix, "Falloff", 0.05, 4.0, 0.01)
+	if kind == "spot":
+		_gfx_add_slider(parent, "%s_angle" % prefix, "Spot Cone Angle", 1.0, 179.0, 0.5)
+
+
 func _gfx_add_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float) -> void:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 1)
@@ -42658,6 +42802,7 @@ func _build_options_menu() -> void:
 	var hidden_tools_box := _hidden_add_accordion(hidden_objects_root, "TOOLS + MINIGAMES", "Objects", 0)
 	var hidden_review_box := _hidden_add_accordion(hidden_objects_root, "CUSTOMER REVIEW BUBBLE", "Objects", 0)
 	var hidden_camera_box := _hidden_add_accordion(hidden_render_root, "PLAYER CAMERA", "Render", 1, true)
+	var hidden_lighting_box := _hidden_add_accordion(hidden_render_root, "WORLD LIGHTS", "Render", 1)
 	var hidden_bg_box := _hidden_add_accordion(hidden_render_root, "BACKGROUND IMAGE", "Render", 1)
 	var hidden_render_box := _hidden_add_accordion(hidden_render_root, "ADVANCED RENDERING", "Render", 1)
 	var hidden_debug_box := _hidden_add_accordion(hidden_gameplay_root, "DEBUG OVERLAYS", "Gameplay", 2, true)
@@ -42726,6 +42871,19 @@ func _build_options_menu() -> void:
 	_hidden_add_customer_review_slider(hidden_review_box, "hold_sec", "Display Time", 0.25)
 	_options_add_btn(hidden_review_box, "Preview Review Bubble (30 sec)", _preview_customer_review_card)
 	_options_add_btn(hidden_review_box, "Reset Review Bubble", _reset_customer_review_card_settings)
+
+	var lighting_help := Label.new()
+	lighting_help.text = "Every scene light saves independently. Directional Sun/Outside position is exposed for consistency, but their rotation controls the visible direction. Customer Fill starts on camera-right."
+	lighting_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(lighting_help, false, 11)
+	lighting_help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+	hidden_lighting_box.add_child(lighting_help)
+	_hidden_add_world_light_group(hidden_lighting_box, "SUN / MAIN KEY", "sun", "sun", "directional")
+	_hidden_add_world_light_group(hidden_lighting_box, "OUTSIDE WARM FILL", "outside", "outside_fill", "directional")
+	_hidden_add_world_light_group(hidden_lighting_box, "KITCHEN CEILING FILL", "kitchen", "kitchen", "omni")
+	_hidden_add_world_light_group(hidden_lighting_box, "GRILL WORK LIGHT", "grill_lamp", "grill_lamp", "spot")
+	_hidden_add_world_light_group(hidden_lighting_box, "WINDOW WASH", "window_wash", "window_wash", "spot")
+	_hidden_add_world_light_group(hidden_lighting_box, "CUSTOMER CAMERA-RIGHT FILL", "customer_fill", "customer_fill", "spot")
 
 	var camera_help := Label.new()
 	camera_help.text = "Changes preview live and are saved automatically."
@@ -44260,9 +44418,9 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_height_scale", "Shell Height Scale", 0.6, 1.6, 0.01,
 		func(): return soda_overflow_shell_height_scale,
 		func(v: float): soda_overflow_shell_height_scale = clampf(v, 0.6, 1.6))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_opacity", "Overall Opacity", 0.05, 1.0, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_opacity", "Overall Opacity (0 = invisible)", 0.0, 1.0, 0.01,
 		func(): return soda_overflow_opacity,
-		func(v: float): soda_overflow_opacity = clampf(v, 0.05, 1.0))
+		func(v: float): soda_overflow_opacity = clampf(v, 0.0, 1.0))
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_overflow_bottom_opacity", "Bottom Opacity", 0.0, 1.0, 0.01,
 		func(): return soda_overflow_bottom_opacity,
 		func(v: float): soda_overflow_bottom_opacity = clampf(v, 0.0, 1.0))
@@ -44546,6 +44704,11 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_render_box, "fake_df_ao_contrast", "Fake AO Contrast", 0.5, 4.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "fake_df_ao_bias", "Fake AO Bias", 0.0, 0.01, 0.0001)
 
+	## Hidden-only GFX sliders are registered after the advanced panel's initial
+	## settings load. Reload once so their saved transforms win over defaults.
+	_load_graphics_settings()
+	_apply_graphics_settings(_read_graphics_from_ui())
+	_refresh_options_graphics_controls()
 	_hidden_finalize_search_index()
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
@@ -45116,6 +45279,63 @@ func _apply_burner_strip_settings(s: Dictionary) -> void:
 		sl.light_size = size
 
 
+func _apply_world_light_base(light: Light3D, prefix: String, energy_key: String, s: Dictionary) -> void:
+	if light == null or not is_instance_valid(light):
+		return
+	light.light_energy = float(s.get(energy_key, GFX_DEFAULTS[energy_key]))
+	light.position = Vector3(
+		float(s.get("%s_x" % prefix, GFX_DEFAULTS["%s_x" % prefix])),
+		float(s.get("%s_y" % prefix, GFX_DEFAULTS["%s_y" % prefix])),
+		float(s.get("%s_z" % prefix, GFX_DEFAULTS["%s_z" % prefix]))
+	)
+	light.rotation_degrees = Vector3(
+		float(s.get("%s_pitch" % prefix, GFX_DEFAULTS["%s_pitch" % prefix])),
+		float(s.get("%s_yaw" % prefix, GFX_DEFAULTS["%s_yaw" % prefix])),
+		float(s.get("%s_roll" % prefix, GFX_DEFAULTS["%s_roll" % prefix]))
+	)
+	light.light_color = Color(
+		float(s.get("%s_r" % prefix, GFX_DEFAULTS["%s_r" % prefix])),
+		float(s.get("%s_g" % prefix, GFX_DEFAULTS["%s_g" % prefix])),
+		float(s.get("%s_b" % prefix, GFX_DEFAULTS["%s_b" % prefix]))
+	)
+	light.light_indirect_energy = float(s.get(
+		"%s_indirect" % prefix, GFX_DEFAULTS["%s_indirect" % prefix]
+	))
+	light.light_specular = float(s.get(
+		"%s_specular" % prefix, GFX_DEFAULTS["%s_specular" % prefix]
+	))
+	var size_key := "%s_size" % prefix
+	if GFX_DEFAULTS.has(size_key):
+		light.light_size = float(s.get(size_key, GFX_DEFAULTS[size_key]))
+
+
+func _apply_world_light_settings(s: Dictionary) -> void:
+	_apply_world_light_base(gfx_sun, "sun", "sun", s)
+	_apply_world_light_base(gfx_outside_fill, "outside", "outside_fill", s)
+	_apply_world_light_base(gfx_kitchen, "kitchen", "kitchen", s)
+	_apply_world_light_base(gfx_grill_lamp, "grill_lamp", "grill_lamp", s)
+	_apply_world_light_base(gfx_window_wash, "window_wash", "window_wash", s)
+	_apply_world_light_base(gfx_customer_fill, "customer_fill", "customer_fill", s)
+
+	if gfx_kitchen != null:
+		gfx_kitchen.omni_range = float(s.get("kitchen_range", GFX_DEFAULTS["kitchen_range"]))
+		gfx_kitchen.omni_attenuation = float(s.get("kitchen_attenuation", GFX_DEFAULTS["kitchen_attenuation"]))
+	for entry in [
+		{"light": gfx_grill_lamp, "prefix": "grill_lamp"},
+		{"light": gfx_window_wash, "prefix": "window_wash"},
+		{"light": gfx_customer_fill, "prefix": "customer_fill"},
+	]:
+		var spot := entry["light"] as SpotLight3D
+		if spot == null or not is_instance_valid(spot):
+			continue
+		var prefix := str(entry["prefix"])
+		spot.spot_range = float(s.get("%s_range" % prefix, GFX_DEFAULTS["%s_range" % prefix]))
+		spot.spot_attenuation = float(s.get(
+			"%s_attenuation" % prefix, GFX_DEFAULTS["%s_attenuation" % prefix]
+		))
+		spot.spot_angle = float(s.get("%s_angle" % prefix, GFX_DEFAULTS["%s_angle" % prefix]))
+
+
 func _apply_graphics_settings(s: Dictionary) -> void:
 	if gfx_env != null:
 		gfx_env.glow_enabled = bool(s.get("glow_on", true))
@@ -45135,14 +45355,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 		gfx_env.ssao_horizon = float(s.get("ssao_horizon", GFX_DEFAULTS["ssao_horizon"]))
 		gfx_env.ssao_sharpness = float(s.get("ssao_sharpness", GFX_DEFAULTS["ssao_sharpness"]))
 		gfx_env.ssil_enabled = bool(s.get("ssil", GFX_DEFAULTS["ssil"]))
-	if gfx_sun:
-		gfx_sun.light_energy = float(s.get("sun", 1.55))
-	if gfx_kitchen:
-		gfx_kitchen.light_energy = float(s.get("kitchen", 1.65))
-	if gfx_grill_lamp:
-		gfx_grill_lamp.light_energy = float(s.get("grill_lamp", 1.35))
-	if gfx_window_wash:
-		gfx_window_wash.light_energy = float(s.get("window_wash", 1.1))
+	_apply_world_light_settings(s)
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
 	_apply_shadow_settings(s)
@@ -45650,6 +45863,18 @@ func _load_graphics_settings() -> void:
 			cfg.set_value("gfx", "glow_intensity", GFX_DEFAULTS["glow_intensity"])
 			cfg.set_value("gfx", "glow_strength", GFX_DEFAULTS["glow_strength"])
 		cfg.set_value("gfx", "gfx_bloom_restore_v8", true)
+		cfg.save(GFX_CFG_PATH)
+	## One-shot: add complete transforms/material response for every persistent
+	## world light and enable the new soft customer key on camera-right.
+	if not cfg.has_section_key("gfx", "gfx_world_lights_v1"):
+		for hk_var in GFX_DEFAULTS:
+			var hk := str(hk_var)
+			if hk == "outside_fill" or hk == "customer_fill" \
+			or hk.begins_with("sun_") or hk.begins_with("outside_") \
+			or hk.begins_with("kitchen_") or hk.begins_with("grill_lamp_") \
+			or hk.begins_with("window_wash_") or hk.begins_with("customer_fill_"):
+				cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "gfx_world_lights_v1", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: snap wall decals into the camera frustum (were off-screen / broken).
 	if not cfg.has_section_key("gfx", "gfx_decal_v2"):

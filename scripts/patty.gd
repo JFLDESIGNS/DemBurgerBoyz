@@ -14,8 +14,8 @@ const COOK_DONE := 15.0
 const COOK_PERFECT := 21.0
 const COOK_BURNT := 38.0 ## Slightly more grace before charcoal.
 const FLIP_READY := 15.0
-const PERFECT_FLIP_MAX_LATE := 0.5
-const GREAT_FLIP_MAX_LATE := 1.0
+const PERFECT_FLIP_MAX_LATE := 0.9
+const GREAT_FLIP_MAX_LATE := 1.8
 const FLIP_GRADE_PERFECT := "perfect"
 const FLIP_GRADE_GREAT := "great"
 const FLIP_GRADE_LATE := "late"
@@ -1847,7 +1847,7 @@ func _flip_grade_for_first_side(first_side_seconds: float) -> String:
 	var lateness := maxf(0.0, first_side_seconds - FLIP_READY)
 	if lateness <= PERFECT_FLIP_MAX_LATE:
 		return FLIP_GRADE_PERFECT
-	## Treat the fractional 0.5–0.6 gap as Great so feedback is continuous.
+	## The exact 0.9-second boundary stays Perfect; Great begins immediately after it.
 	if lateness <= GREAT_FLIP_MAX_LATE:
 		return FLIP_GRADE_GREAT
 	return FLIP_GRADE_LATE
