@@ -1564,10 +1564,6 @@ var lasso_tool = null ## LassoToolController — colored shape planes editor
 var fake_df_ao_mesh: MeshInstance3D = null
 var fake_df_ao_mat: ShaderMaterial = null
 var _skip_next_bun_bounce: bool = false
-var patty_reflection_height_offset: float = -0.05
-var patty_reflection_opacity: float = 0.28
-var patty_reflection_fade_height: float = 0.04
-var patty_reflection_fade_opacity: float = 0.04
 var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitboxes)
 var options_root: Control = null
 var options_panel: PanelContainer = null
@@ -2325,10 +2321,6 @@ const GFX_DEFAULTS := {
 	"heat_warp_speed": 1.65,
 	"heat_warp_strength": 0.006,
 	"heat_warp_tight": 1.45,
-	"patty_reflect_y": -0.05,
-	"patty_reflect_opacity": 0.28,
-	"patty_reflect_fade_height": 0.04,
-	"patty_reflect_fade_opacity": 0.04,
 	"roomba_drive_volume": 1.0,
 	"bg_x": 0.0,
 	"bg_y": 1.08,
@@ -2697,7 +2689,6 @@ func _ensure_patty_spawn_pool() -> void:
 		warm.position = Vector3(999.0, -999.0, 999.0)
 		warm.set_meta("patty_pool", true)
 		patties_root.add_child(warm)
-		_apply_patty_reflection_to_patty(warm)
 		_patty_spawn_pool.append(warm)
 		await get_tree().process_frame
 
@@ -10342,7 +10333,6 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 		p._rest_z = z
 	if p.get_parent() == null:
 		patties_root.add_child(p)
-	_apply_patty_reflection_to_patty(p)
 	grill[idx] = p
 	slot_positions[idx] = Vector3(x, GRILL_SURFACE_Y, z)
 	## First right-click: frozen ice ball only (smash on a second right-click).
@@ -41604,12 +41594,6 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "heat_warp_strength", "Warp Strength", 0.0, 0.03, 0.0005)
 	_gfx_add_slider(list, "heat_warp_tight", "Warp Tightness", 0.5, 2.2, 0.05)
 
-	_gfx_add_section(list, "PATTY REFLECTION")
-	_gfx_add_slider(list, "patty_reflect_y", "Reflect Height", -0.08, 0.08, 0.001)
-	_gfx_add_slider(list, "patty_reflect_opacity", "Reflect Opacity", 0.0, 1.0, 0.01)
-	_gfx_add_slider(list, "patty_reflect_fade_height", "Reflect Fade Height", 0.002, 0.12, 0.001)
-	_gfx_add_slider(list, "patty_reflect_fade_opacity", "Reflect Bottom Fade", 0.0, 1.0, 0.01)
-
 	_gfx_add_section(list, "ROOMBA")
 	_gfx_add_slider(list, "roomba_drive_volume", "Drive Sound", 0.0, 2.0, 0.01)
 
@@ -44767,19 +44751,6 @@ func _apply_burner_strip_settings(s: Dictionary) -> void:
 		sl.light_size = size
 
 
-func _apply_patty_reflection_settings(s: Dictionary) -> void:
-	## Fake patty reflections disabled — backup in scripts/backups/patty_fake_reflections_backup.gd.txt
-	patty_reflection_height_offset = float(s.get("patty_reflect_y", GFX_DEFAULTS["patty_reflect_y"]))
-	patty_reflection_opacity = float(s.get("patty_reflect_opacity", GFX_DEFAULTS["patty_reflect_opacity"]))
-	patty_reflection_fade_height = float(s.get("patty_reflect_fade_height", GFX_DEFAULTS["patty_reflect_fade_height"]))
-	patty_reflection_fade_opacity = float(s.get("patty_reflect_fade_opacity", GFX_DEFAULTS["patty_reflect_fade_opacity"]))
-
-
-func _apply_patty_reflection_to_patty(_p) -> void:
-	## No-op while fake reflections are removed.
-	pass
-
-
 func _apply_graphics_settings(s: Dictionary) -> void:
 	if gfx_env != null:
 		gfx_env.glow_enabled = bool(s.get("glow_on", true))
@@ -44813,7 +44784,6 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_fake_df_ao_settings(s)
 	_apply_heat_warp_settings(s)
 	_apply_screen_style_filter(s)
-	_apply_patty_reflection_settings(s)
 	_apply_street_matte_settings(s)
 	_apply_first_sale_decal_settings(s)
 	_apply_menu_board_decal_settings(s)
@@ -45602,17 +45572,6 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "bz_plate_shift", GFX_DEFAULTS["bz_plate_shift"])
 		cfg.set_value("gfx", "bz_plate_y", GFX_DEFAULTS["bz_plate_y"])
 		cfg.set_value("gfx", "gfx_bz_burger_nudge_v2", true)
-		cfg.save(GFX_CFG_PATH)
-	## Tuned patty reflection from in-game GFX: visible over cooker, soft under patty.
-	if not cfg.has_section_key("gfx", "gfx_patty_reflect_v1"):
-		for key in [
-			"patty_reflect_y",
-			"patty_reflect_opacity",
-			"patty_reflect_fade_height",
-			"patty_reflect_fade_opacity",
-		]:
-			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
-		cfg.set_value("gfx", "gfx_patty_reflect_v1", true)
 		cfg.save(GFX_CFG_PATH)
 	## One-shot: cast shadows on by default (warm outdoor light + grill receive).
 	if not cfg.has_section_key("gfx", "gfx_shadows_v1"):

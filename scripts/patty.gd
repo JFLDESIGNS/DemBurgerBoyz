@@ -419,24 +419,6 @@ func _ready() -> void:
 	_update_cook_gradient()
 	_update_frost_visual()
 
-
-## Fake grill reflections disabled — full code in scripts/backups/patty_fake_reflections_backup.gd.txt
-func set_grill_reflection_enabled(_enabled: bool) -> void:
-	pass
-
-
-func set_grill_reflection_height_offset(_offset: float) -> void:
-	pass
-
-
-func set_grill_reflection_tuning(_offset: float, _alpha: float, _fade_height: float, _fade_opacity: float) -> void:
-	pass
-
-
-func _update_reflection_visual() -> void:
-	pass
-
-
 func reset_for_grill_spawn(
 	p_slot_index: int,
 	p_net_id: int,
@@ -797,7 +779,6 @@ func refresh_cook_visuals() -> void:
 	if has_cheese:
 		_update_cheese_visual()
 	_update_ready_cues()
-	_update_reflection_visual()
 
 
 func apply_mp_state(
@@ -856,7 +837,6 @@ func apply_mp_state(
 	if warm_hold_time > 0.0 or heat_mul <= 0.001:
 		_set_hold_meter_visible(flipped_once and can_scoop())
 		_refresh_hold_meter()
-	_update_reflection_visual()
 
 
 func _process(delta: float) -> void:
@@ -903,7 +883,6 @@ func _process(delta: float) -> void:
 		if _hint:
 			_hint.visible = false
 		_set_hold_meter_visible(false)
-		_update_reflection_visual()
 		return
 	if heating and not mp_puppet:
 		var rate := (1.0 + smash_bonus) * heat_mul
@@ -919,7 +898,6 @@ func _process(delta: float) -> void:
 	_update_meat_top()
 	_update_frozen_ball_cook_visual()
 	_update_frozen_ball_cook_visual()
-	_update_reflection_visual()
 	if _under_mat:
 		## Face on the grill: raw underside after flip, seared contact before.
 		if flipped_once:
@@ -945,7 +923,6 @@ func _process(delta: float) -> void:
 		if _hint:
 			_hint.visible = false
 		_set_hold_meter_visible(false)
-		_update_reflection_visual()
 		return
 
 	if can_flip():
@@ -2084,11 +2061,10 @@ func _frozen_ball_shader_resource(opaque: bool) -> Shader:
 	if opaque:
 		modes += ", depth_draw_opaque"
 	else:
-		## Frozen patties can overlap before they are smashed.  The old
-		## depth_draw_never path let frost on a rear patty blend over every
-		## patty in front of it.  Keep the translucent look, but give the shell
-		## an alpha depth pre-pass so normal scene depth sorts those overlaps.
-		modes += ", blend_mix, depth_prepass_alpha, shadows_disabled"
+		## The frost shell stays translucent, but always writes depth. Alpha
+		## pre-pass ignored this low-alpha shell on some renderers, allowing a
+		## rear burger's frost to show through a nearer burger.
+		modes += ", blend_mix, depth_draw_always, shadows_disabled"
 	shader.code = """
 shader_type spatial;
 render_mode %s;
