@@ -2084,7 +2084,11 @@ func _frozen_ball_shader_resource(opaque: bool) -> Shader:
 	if opaque:
 		modes += ", depth_draw_opaque"
 	else:
-		modes += ", blend_mix, depth_draw_never, shadows_disabled"
+		## Frozen patties can overlap before they are smashed.  The old
+		## depth_draw_never path let frost on a rear patty blend over every
+		## patty in front of it.  Keep the translucent look, but give the shell
+		## an alpha depth pre-pass so normal scene depth sorts those overlaps.
+		modes += ", blend_mix, depth_prepass_alpha, shadows_disabled"
 	shader.code = """
 shader_type spatial;
 render_mode %s;
@@ -2325,13 +2329,15 @@ func _ensure_frozen_ball() -> void:
 		)
 		var fmat := StandardMaterial3D.new()
 		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		## Alpha depth pre-pass prevents shards on a rear frozen patty from
+		## showing through the opaque meat of a nearer patty.
+		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 		## 25% more transparent than prior ice shards (×0.75 alpha).
 		var ice_a := ((0.14 + randf() * 0.12) if big_chunk else (0.28 + randf() * 0.22)) * 0.75
 		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, ice_a)
 		fleck.set_meta("base_ice_alpha", ice_a)
 		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 		fmat.no_depth_test = false
 		fmat.render_priority = PATTY_BODY_PRIORITY + 8
 		fleck.material_override = fmat
