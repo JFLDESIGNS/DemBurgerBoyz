@@ -123,8 +123,57 @@ const BAR_ABOVE_HEAD := 0.14
 const BAR_Y := HEAD_TOP_Y + BAR_ABOVE_HEAD
 const BAR_W := 0.42
 const BAR_H := 0.038
-## Guests face the truck at 180 degrees, so local +X places this screen-left.
-const REVIEW_CARD_SIDE_X := 0.95
+const SPEECH_BUBBLE_SIDE_X := 0.95
+## Tunable 3D review card. In the service-window camera local -X reads on the
+## customer's camera-right. The layers use a tiny depth gap plus explicit render
+## priority: large gaps cause perspective parallax that pulls centered copy away
+## from the middle of its bubble.
+const REVIEW_CARD_DEFAULTS := {
+	"position_x": -1.35,
+	"position_y": BAR_Y + 0.44,
+	"position_z": 0.0,
+	"scale": 1.10,
+	"rise": 0.34,
+	"width": 1.70,
+	"height": 0.68,
+	"padding_x": 0.30,
+	"padding_y": 0.13,
+	"box_depth": -0.010,
+	"star_depth": 0.0,
+	"text_depth": 0.005,
+	"star_y": 0.105,
+	"text_y": -0.100,
+	"star_size": 0.135,
+	"text_size": 0.090,
+	"star_outline": 36.0,
+	"text_outline": 36.0,
+	"opacity": 0.62,
+	"hold_sec": 4.5,
+	"line_chars": 24.0,
+}
+const REVIEW_CARD_RANGES := {
+	"position_x": Vector2(-3.0, 3.0),
+	"position_y": Vector2(0.2, 3.2),
+	"position_z": Vector2(-1.5, 1.5),
+	"scale": Vector2(0.25, 3.0),
+	"rise": Vector2(-1.0, 1.5),
+	"width": Vector2(0.35, 4.0),
+	"height": Vector2(0.18, 1.5),
+	"padding_x": Vector2(0.04, 0.80),
+	"padding_y": Vector2(0.04, 0.60),
+	"box_depth": Vector2(-1.5, 0.5),
+	"star_depth": Vector2(-0.5, 1.5),
+	"text_depth": Vector2(-0.5, 1.5),
+	"star_y": Vector2(-0.7, 0.7),
+	"text_y": Vector2(-0.7, 0.7),
+	"star_size": Vector2(0.025, 0.30),
+	"text_size": Vector2(0.020, 0.20),
+	"star_outline": Vector2(0.0, 80.0),
+	"text_outline": Vector2(0.0, 80.0),
+	"opacity": Vector2(0.05, 1.0),
+	"hold_sec": Vector2(2.0, 30.0),
+	"line_chars": Vector2(12.0, 52.0),
+}
 const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
 ## Knock-back tumble after a Glock hit, then settle and despawn.
@@ -190,8 +239,11 @@ var _bar_root: Node3D
 var _bar_bg: MeshInstance3D
 var _bar_fill: MeshInstance3D
 var _review_stars: Label3D = null
+var _review_text: Label3D = null
 var _review_box: MeshInstance3D = null
+var _review_card_root: Node3D = null
 var _review_stars_tween: Tween = null
+var _review_card_settings: Dictionary = REVIEW_CARD_DEFAULTS.duplicate(true)
 var _treat_hearts: Label3D = null
 var _treat_hearts_tween: Tween = null
 
@@ -604,7 +656,7 @@ func _build() -> void:
 	bg_mesh.size = Vector3(0.92, 0.32, 0.04)
 	_bubble_bg.mesh = bg_mesh
 	## Keep customer speech beside the character instead of across their chest.
-	_bubble_bg.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.22, 0)
+	_bubble_bg.position = Vector3(SPEECH_BUBBLE_SIDE_X, BAR_Y + 0.22, 0)
 	var bgm := StandardMaterial3D.new()
 	bgm.albedo_color = Color(1, 1, 1, 0.95)
 	bgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -614,7 +666,7 @@ func _build() -> void:
 
 	_bubble = Label3D.new()
 	_bubble.text = speech
-	_bubble.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.22, 0.035)
+	_bubble.position = Vector3(SPEECH_BUBBLE_SIDE_X, BAR_Y + 0.22, 0.035)
 	_bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_bubble.modulate = Color(0.12, 0.12, 0.14)
 	_bubble.visible = false
@@ -929,6 +981,8 @@ func _apply_leave_fade_alpha(alpha: float) -> void:
 		_treat_hearts.modulate.a = minf(_treat_hearts.modulate.a, alpha)
 	if _review_stars:
 		_review_stars.modulate.a = minf(_review_stars.modulate.a, alpha)
+	if _review_text:
+		_review_text.modulate.a = minf(_review_text.modulate.a, alpha)
 
 
 func _fade_node_materials(node: Node, alpha: float) -> void:
@@ -1605,24 +1659,41 @@ func bounce_happy() -> void:
 	tw.tween_property(_body, "scale", Vector3.ONE * CHAR_SCALE, 0.15)
 
 
-func show_review_stars(stars: float, review_text: String = "") -> void:
-	## Compact floating rating beside the guest. Review wording stays on BizPhone.
-	var full := clampi(int(floor(clampf(stars, 0.0, 5.0) + 0.25)), 0, 5)
-	var text := ""
-	for i in 5:
-		text += "★" if i < full else "☆"
-	if absf(stars - roundf(stars)) > 0.01:
-		text += " %.1f/5" % stars
+func apply_review_card_settings(settings: Dictionary) -> void:
+	_review_card_settings = REVIEW_CARD_DEFAULTS.duplicate(true)
+	for key in REVIEW_CARD_DEFAULTS:
+		if not settings.has(key):
+			continue
+		var bounds: Vector2 = REVIEW_CARD_RANGES.get(key, Vector2(-1000.0, 1000.0))
+		_review_card_settings[key] = clampf(float(settings[key]), bounds.x, bounds.y)
+	## Live Hidden-menu tuning intentionally parks an active preview at its start
+	## pose; otherwise its old rise tween would keep fighting the sliders.
+	if _review_stars_tween != null and is_instance_valid(_review_stars_tween):
+		_review_stars_tween.kill()
+		_review_stars_tween = null
+	_apply_review_card_layout()
+
+
+func _review_card_value(key: String) -> float:
+	return float(_review_card_settings.get(key, REVIEW_CARD_DEFAULTS.get(key, 0.0)))
+
+
+func _ensure_review_card_nodes() -> void:
+	if _review_card_root == null:
+		_review_card_root = Node3D.new()
+		_review_card_root.name = "ReviewCardRoot"
+		## Reviews stay in world space so a guest's turn-to-leave animation cannot
+		## swing the card back across the customer.
+		_review_card_root.top_level = true
+		add_child(_review_card_root)
 	if _review_box == null:
 		_review_box = MeshInstance3D.new()
 		_review_box.name = "ReviewBox"
-		var box_mesh := QuadMesh.new()
-		box_mesh.size = Vector2(1.08, 0.34)
-		_review_box.mesh = box_mesh
-		_review_box.sorting_offset = 34.0
+		_review_box.mesh = QuadMesh.new()
+		_review_box.sorting_offset = -128.0
 		var review_box_mat := StandardMaterial3D.new()
 		review_box_mat.albedo_texture = _make_review_card_texture()
-		review_box_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.50)
+		review_box_mat.albedo_color = Color(0.97, 0.985, 1.0, _review_card_value("opacity"))
 		review_box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		review_box_mat.no_depth_test = true
 		review_box_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
@@ -1630,71 +1701,208 @@ func show_review_stars(stars: float, review_text: String = "") -> void:
 		review_box_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 		review_box_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		review_box_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-		review_box_mat.render_priority = 4
+		review_box_mat.render_priority = -100
 		_review_box.material_override = review_box_mat
-		add_child(_review_box)
+		_review_card_root.add_child(_review_box)
 	if _review_stars == null:
 		_review_stars = Label3D.new()
 		_review_stars.name = "ReviewStars"
 		_review_stars.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_review_stars.no_depth_test = true
 		_review_stars.shaded = false
-		UiFontsScript.apply_label3d(_review_stars, true, 30, 0.066)
 		_review_stars.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_review_stars.outline_size = 2
-		_review_stars.outline_modulate = Color(0.16, 0.10, 0.02, 0.72)
-		_review_stars.render_priority = 6
-		_review_stars.outline_render_priority = 5
-		add_child(_review_stars)
+		_review_stars.sorting_offset = 128.0
+		_review_card_root.add_child(_review_stars)
+	if _review_text == null:
+		_review_text = Label3D.new()
+		_review_text.name = "ReviewText"
+		_review_text.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_review_text.no_depth_test = true
+		_review_text.shaded = false
+		_review_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_review_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_review_text.sorting_offset = 126.0
+		_review_card_root.add_child(_review_text)
+
+
+func _apply_review_card_layout() -> void:
+	if _review_card_root == null or not is_instance_valid(_review_card_root):
+		return
+	if _review_stars != null:
+		UiFontsScript.apply_label3d(_review_stars, true, 96, _review_card_value("star_size"))
+		## Alpha-cut labels render before transparent geometry. Keeping them in the
+		## transparent pass lets priority + physical depth put them above the card.
+		_review_stars.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+		_review_stars.no_depth_test = true
+		_review_stars.outline_size = int(round(_review_card_value("star_outline")))
+		## Thick dark edge at 83% opacity (17% transparent).
+		_review_stars.outline_modulate = Color(0.015, 0.012, 0.008, 0.83)
+		_review_stars.render_priority = 126
+		_review_stars.outline_render_priority = 125
+		_review_stars.sorting_offset = 128.0
+		_review_stars.position = Vector3(0.0, _review_card_value("star_y"), _review_card_value("star_depth"))
+	if _review_text != null:
+		UiFontsScript.apply_label3d(_review_text, true, 72, _review_card_value("text_size"))
+		_review_text.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+		_review_text.no_depth_test = true
+		_review_text.outline_size = int(round(_review_card_value("text_outline")))
+		## Keep the thick readability stroke, but soften it against the bright card.
+		## Alpha 0.83 = 17% transparent.
+		_review_text.outline_modulate = Color(0.0, 0.0, 0.0, 0.83)
+		_review_text.render_priority = 126
+		_review_text.outline_render_priority = 125
+		_review_text.sorting_offset = 126.0
+		_review_text.position = Vector3(0.0, _review_card_value("text_y"), _review_card_value("text_depth"))
+	## Measure after the final font, font size, pixel size and outline are applied.
+	## This makes the background follow the actual rendered glyphs, not an average
+	## character-width guess that fails on wide review copy.
+	var content_size := _review_card_content_size()
+	_review_card_root.top_level = true
+	_review_card_root.global_position = global_position + Vector3(
+		_review_card_value("position_x"),
+		_review_card_value("position_y"),
+		_review_card_value("position_z")
+	)
+	_review_card_root.scale = Vector3.ONE * _review_card_value("scale")
+	if _review_box != null:
+		_review_box.position = Vector3(0.0, 0.0, _review_card_value("box_depth"))
+		var box_mesh := _review_box.mesh as QuadMesh
+		if box_mesh != null:
+			box_mesh.size = content_size
+		var box_mat := _review_box.material_override as StandardMaterial3D
+		if box_mat != null:
+			box_mat.albedo_color.a = _review_card_value("opacity")
+
+
+func _review_card_content_size() -> Vector2:
+	## Width/height sliders act as minimums. Long copy expands the rounded card
+	## instead of spilling outside it, while the kitchen view remains two lines.
+	var line_count := 0
+	var text_width := 0.0
+	if _review_text != null and not _review_text.text.is_empty():
+		var review_lines := _review_text.text.split("\n", false)
+		line_count = review_lines.size()
+		var review_font: Font = _review_text.font
+		for line_var in review_lines:
+			if review_font != null:
+				var line_px := review_font.get_string_size(
+					str(line_var), HORIZONTAL_ALIGNMENT_LEFT, -1.0, _review_text.font_size
+				).x
+				text_width = maxf(text_width, line_px * _review_text.pixel_size)
+			else:
+				text_width = maxf(text_width, float(str(line_var).length()) * _review_card_value("text_size") * 0.75)
+		text_width += float(_review_text.outline_size) * _review_text.pixel_size * 2.0
+	var stars_width := 0.0
+	if _review_stars != null and not _review_stars.text.is_empty():
+		var stars_font: Font = _review_stars.font
+		if stars_font != null:
+			stars_width = stars_font.get_string_size(
+				_review_stars.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _review_stars.font_size
+			).x * _review_stars.pixel_size
+		else:
+			stars_width = 5.0 * _review_card_value("star_size")
+		stars_width += float(_review_stars.outline_size) * _review_stars.pixel_size * 2.0
+	var content_width := maxf(text_width, stars_width) + _review_card_value("padding_x") * 2.0
+	var card_width := maxf(_review_card_value("width"), content_width)
+
+	var top_edge := _review_card_value("star_y") + _review_card_value("star_size") * 0.72
+	var text_rows := maxi(1, line_count)
+	var bottom_edge := _review_card_value("text_y") - float(text_rows) * _review_card_value("text_size") * 0.64
+	var content_height := top_edge - bottom_edge + _review_card_value("padding_y") * 2.0
+	var card_height := maxf(_review_card_value("height"), content_height)
+	return Vector2(card_width, card_height)
+
+
+func show_review_stars(stars: float, review_text: String = "", duration_override: float = -1.0) -> void:
+	## The kitchen card shows only the useful first two lines; the full review stays
+	## on BizPhone. All visual layers live under one independently tunable root.
+	var full := clampi(int(floor(clampf(stars, 0.0, 5.0) + 0.25)), 0, 5)
+	var text := ""
+	for i in 5:
+		text += "★" if i < full else "☆"
+	var short_review := _review_first_two_lines(review_text)
+	if _bubble != null:
+		_bubble.visible = false
+	if _bubble_bg != null:
+		_bubble_bg.visible = false
+	_ensure_review_card_nodes()
 	_review_stars.text = text
-	_review_stars.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.08, 0.05)
-	var box_mesh := _review_box.mesh as QuadMesh
-	if box_mesh != null:
-		box_mesh.size = Vector2(1.08, 0.34)
-	_review_box.position = Vector3(REVIEW_CARD_SIDE_X, BAR_Y + 0.09, 0.045)
-	## Gold for solid ratings; cooler amber when they roasted you.
-	if full >= 4:
-		_review_stars.modulate = Color(1.0, 0.92, 0.38, 1.0)
-	elif full >= 3:
-		_review_stars.modulate = Color(1.0, 0.84, 0.42, 1.0)
-	elif full >= 2:
-		_review_stars.modulate = Color(1.0, 0.72, 0.42, 1.0)
-	else:
-		_review_stars.modulate = Color(1.0, 0.52, 0.42, 1.0)
-	var box_mat := _review_box.material_override as StandardMaterial3D
-	if box_mat != null:
-		box_mat.albedo_color.a = 0.50
+	_review_text.text = short_review
+	## Apply after assigning copy so the rounded card can size itself to the two
+	## actual lines rather than to an empty preview label.
+	_apply_review_card_layout()
+	_review_stars.modulate = Color(1.0, 0.80, 0.06, 1.0)
+	_review_text.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_review_card_root.visible = true
 	_review_box.visible = true
 	_review_stars.visible = true
+	_review_text.visible = short_review != ""
 	if _review_stars_tween != null and is_instance_valid(_review_stars_tween):
 		_review_stars_tween.kill()
+	var duration := duration_override if duration_override > 0.0 else _review_card_value("hold_sec")
+	duration = maxf(2.0, duration)
+	var fade_sec := minf(0.90, duration * 0.25)
+	var fade_delay := maxf(0.0, duration - fade_sec)
+	var start_y := _review_card_root.position.y
+	var opacity := _review_card_value("opacity")
 	_review_stars_tween = create_tween()
 	_review_stars_tween.set_parallel(true)
 	_review_stars_tween.tween_property(
-		_review_stars, "position:y", BAR_Y + 0.42, 4.0
+		_review_card_root, "position:y", start_y + _review_card_value("rise"), duration
 	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	_review_stars_tween.tween_property(
-		_review_box, "position:y", BAR_Y + 0.43, 4.0
-	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_review_stars, "modulate:a", 0.0, fade_sec
+	).set_delay(fade_delay).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_review_stars_tween.tween_property(
-		_review_stars, "modulate:a", 0.0, 0.75
-	).set_delay(3.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		_review_text, "modulate:a", 0.0, fade_sec
+	).set_delay(fade_delay).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	var fade_review_box := func(a: float) -> void:
 		var mat := _review_box.material_override as StandardMaterial3D
 		if mat != null:
 			mat.albedo_color.a = a
 	_review_stars_tween.tween_method(
-		fade_review_box, 0.50, 0.0, 0.75
-	).set_delay(3.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		fade_review_box, opacity, 0.0, fade_sec
+	).set_delay(fade_delay).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_review_stars_tween.chain().tween_callback(func() -> void:
 		if _review_stars != null and is_instance_valid(_review_stars):
 			_review_stars.visible = false
+		if _review_text != null and is_instance_valid(_review_text):
+			_review_text.visible = false
 		if _review_box != null and is_instance_valid(_review_box):
 			_review_box.visible = false
 			var mat := _review_box.material_override as StandardMaterial3D
 			if mat != null:
-				mat.albedo_color.a = 0.50
+				mat.albedo_color.a = _review_card_value("opacity")
+		if _review_card_root != null and is_instance_valid(_review_card_root):
+			_review_card_root.visible = false
+		_review_stars_tween = null
 	)
+
+
+func _review_first_two_lines(raw: String) -> String:
+	var cleaned := " ".join(raw.strip_edges().split(" ", false))
+	if cleaned.is_empty():
+		return ""
+	var max_line := clampi(int(round(_review_card_value("line_chars"))), 12, 52)
+	var max_total := max_line * 2
+	var words := cleaned.split(" ", false)
+	var lines: Array[String] = [""]
+	for word_var in words:
+		var word := str(word_var)
+		var current := lines[lines.size() - 1]
+		var candidate := word if current.is_empty() else "%s %s" % [current, word]
+		if candidate.length() <= max_line:
+			lines[lines.size() - 1] = candidate
+		elif lines.size() < 2:
+			lines.append(word.left(max_line))
+		else:
+			var last := lines[1].left(max_line - 1).strip_edges()
+			lines[1] = "%s…" % last
+			break
+	var result := "\n".join(lines)
+	if result.replace("\n", " ").length() > max_total:
+		result = "%s…" % result.left(max_total - 1)
+	return result
 
 
 func _make_review_card_texture() -> ImageTexture:

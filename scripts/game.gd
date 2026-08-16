@@ -241,7 +241,7 @@ const GUIDED_TUTORIAL_STEPS: Array[Dictionary] = [
 	{"title": "ADD LETTUCE", "body": "Click LETTUCE on the bottom topping strip. It will fly onto the burger in the correct stack order."},
 	{"title": "ADD TOMATO", "body": "Now click TOMATO on the topping strip. Follow the customer's ticket instead of guessing."},
 	{"title": "CROWN THE BURGER", "body": "Click the top-bun pile on the prep counter. The top bun finishes this practice order."},
-	{"title": "SERVE THE ORDER", "body": "Check the ticket, then press the green bell at the bottom-right (or press Enter) to serve."},
+	{"title": "SERVE THE ORDER", "body": "Check the ticket, then press Enter to serve the finished order."},
 	{"title": "BUY INGREDIENTS", "body": "Drag or wheel down the phone to INVENTORY, then press Buy beside Lettuce. The cat delivers the restock."},
 	{"title": "CLEAN AND CLOSE", "body": "Turn the burner OFF. Then left-click and drag the spatula over the brown grease patch until the steel is clean."},
 ]
@@ -272,6 +272,8 @@ var difficulty: float = 0.0
 var spawn_timer: float = 2.0
 var customers: Array = []
 var _customer_skin_bag: Array[int] = []
+const CUSTOMER_REVIEW_CFG_SECTION := "customer_review_card"
+var customer_review_settings: Dictionary = {}
 const BTS_SPECIAL_GUESTS_ENABLED := false
 const BTS_DAY1_REGULAR_BEFORE := 2
 const BTS_DAY1_SKIN_QUEUE: Array[int] = []
@@ -483,6 +485,7 @@ var _spatula_fx_center := Vector3.ZERO
 const SPATULA_RIBBON_MAX_POINTS := 28
 const SPATULA_RIBBON_ALPHA := 0.30
 const SPATULA_FX_DUR := 1.0 ## Ribbons/circle linger and ease out over 1s
+const SPATULA_FX_RENDER_PRIORITY := 12 ## After service-window glass (priority 4).
 ## White stroke ring on the steel at each spatula piano tap.
 var _spatula_tap_rings: Array = [] ## {root, mi, mat, t, center}
 const SPATULA_TAP_RING_DUR := 0.28 ## Snappier expand/fade
@@ -516,13 +519,14 @@ var grill_pad_mats: Array = []
 var grill_power_labels: Array = []
 var grill_heat_lights: Array = []
 var grill_ui_buttons: Array = []
-var grill_trash_btn: Button = null
 var physical_garbage_root: Node3D = null
 var physical_garbage_area: Area3D = null
 var physical_garbage_target: Marker3D = null
 var physical_garbage_symbol_root: Node3D = null
 var physical_garbage_symbol_base_pos := Vector3(0.0, 0.50, -0.255)
 var _physical_garbage_shake_tween: Tween = null
+var physical_garbage_outline_material: ShaderMaterial = null
+var _physical_garbage_hovered := false
 var grill_surface_area: Area3D = null
 var grill_surface_mat: StandardMaterial3D = null
 var grill_steel_tex: Texture2D = null
@@ -575,7 +579,7 @@ var sill_glass_reflect: float = 0.76
 var sill_glass_vignette: float = 0.91
 var sill_glass_strip_y: float = 1.0
 var sill_glass_strip_h: float = 0.10
-var sill_glass_strip_opacity: float = 0.85
+var sill_glass_strip_opacity: float = 0.0 ## Optional stylized stripe; disabled by default.
 var sill_glass_strip_reps: float = 14.0
 var sill_glass_strip_red := Color(0.78, 0.08, 0.05)
 var sill_glass_strip_white := Color(0.92, 0.92, 0.90)
@@ -653,6 +657,12 @@ var open_closed_sign_area: Area3D = null
 var open_closed_sign_tween: Tween = null
 var open_closed_sign_busy: bool = false
 var window_bunting_root: Node3D = null
+var bunting_wind_time: float = 0.0
+var bunting_wind_strength_deg: float = 2.4
+var bunting_wind_speed: float = 0.55
+var bunting_wind_gust: float = 0.35
+var bunting_wind_twist_deg: float = 1.2
+var bunting_wind_direction: float = 1.0
 var master_vol_row: Control = null
 var master_vol_slider: HSlider = null
 ## Slider 0–1; 1.0 = old ~20% bus level (comfortable game max).
@@ -1133,7 +1143,7 @@ var cup_drawing: bool = false ## true while lerping a fresh cup out of the stack
 var _cup_draw_t: float = 0.0
 var _cup_draw_from: Vector3 = Vector3.ZERO
 const CUP_DRAW_DUR := 0.42 ## Nest → hand — fast pull without teleporting.
-const CUP_DISPENSE_TO_FILL_DUR := 0.40
+const CUP_DISPENSE_TO_FILL_DUR := 0.22
 var _cup_dispensing_to_fill: bool = false
 var _cup_dispense_to_fill_tween: Tween = null
 var _cup_rack_shake_tween: Tween = null
@@ -1229,12 +1239,15 @@ const FRIES_HOLD_LEFT_OFFSET := Vector3(-0.34, 0.31, 0.02)
 const FRIES_HOLD_FOLLOW_RADIUS := 0.18
 const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the strip.
 const FRIES_HOLD_MIN_SEP := 0.052 ## Matches tighter HOLD pack spacing.
+const FRIES_FINISHED_HAND_SCALE := 1.357 ## Previous 1.18 presentation size +15%.
 var fryer_station_scale := 1.0
+var fryer_oil_color := Color(0.92, 0.68, 0.12, 0.92)
+var fryer_bubble_color := Color(1.0, 0.92, 0.28, 0.72)
 var fries_hand_hold_offset_in := Vector3.ZERO
 var fries_ready_spacing_x := 0.14
 var fries_ready_spacing_z := 0.12
 var fries_ready_min_sep := FRIES_HOLD_MIN_SEP
-var fries_ready_pack_scale := 0.90
+var fries_ready_pack_scale := 1.035 ## Previous 0.90 shelf size +15%.
 ## Soft kitchen dust motes — drift in air and get shoved by tools / cursor.
 var air_motes_mm: MultiMeshInstance3D = null
 var _air_mote_pos: PackedVector3Array = PackedVector3Array()
@@ -1574,6 +1587,10 @@ var options_hidden_piano_check: CheckButton = null
 var options_hidden_zone_check: CheckButton = null
 var options_hidden_status: Label = null
 var options_hidden_room_tone_box: VBoxContainer = null
+var options_hidden_tabs: TabContainer = null
+var options_hidden_search: LineEdit = null
+var options_hidden_search_results: OptionButton = null
+var options_hidden_accordions: Array[Dictionary] = []
 var options_hidden_room_tone_option: OptionButton = null
 var options_hidden_room_tone_vol: HSlider = null
 var options_hidden_room_tone_vol_lab: Label = null
@@ -1654,6 +1671,13 @@ const SCREEN_ZONE_ROWS := 6
 var icecream_station_pos := Vector3(1.63704, 0.9868, 0.647)
 var icecream_station_rot := Vector3(0.0, 180.0, 0.0)
 var icecream_station_scale: float = 1.0
+var icecream_mascot_offset := Vector3.ZERO
+var icecream_mascot_rot := Vector3.ZERO
+var icecream_mascot_scale: float = 1.0
+var icecream_mascot_spin_speed: float = 12.0 ## Degrees per second; 0 pauses the display spin.
+var icecream_mascot_spin_clockwise: bool = true
+var icecream_mascot_spin_phase: float = 0.0
+var options_hidden_icecream_mascot_spin_clockwise: CheckButton = null
 ## Local-space center of the cone nest/grab point on the machine.
 var icecream_cone_pull_local := Vector3(0.34, 0.373, 0.32)
 const FT_TO_M := 0.3048
@@ -1814,8 +1838,9 @@ const WORLD_HINT_OUTLINE := 22 ## black stroke (was 10)
 const WORLD_HINT_RENDER_PRIO := 24 ## Above sill glass (prio 4) so fryer text isn't muted behind it
 const WORLD_HINT_OUTLINE_PRIO := 23
 const WORLD_HINT_ALPHA := 0.70 ## base opacity
-const WORLD_HINT_FADE_MIN := 0.36 ## bottom of soothing breathe
-const WORLD_HINT_FADE_HZ := 0.22 ## slow in/out pulse
+const WORLD_HINT_CYCLE_SEC := 5.0
+const WORLD_HINT_SHOW_SEC := 2.0
+const WORLD_HINT_EDGE_FADE_SEC := 0.16
 const WORLD_HINT_CFG_SECTION := "world_hint_text"
 const FRYER_TUNING_CFG_SECTION := "fryer_tuning"
 var build_hint_screen_nudge := BUILD_BOARD_HINT_SCREEN_NUDGE
@@ -1868,9 +1893,10 @@ const RADIO_UI_PANEL_SIZE := Vector2(200.0, 0.0) ## width locked; height hugs co
 const RADIO_UI_TOP := 82.0 ## was 52 — nudged down 30px with phone
 const RADIO_UI_RIGHT := 10.0
 const RADIO_UI_LEFT := 210.0 ## panel width + right margin
-## Android phone HUD — floats under the truck radio.
+## Android phone HUD — includes the cab radio as its first section.
 const PHONE_UI_BASE_H := 278.0
 const PHONE_UI_SIZE := Vector2(200.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10) ## +15% +5% +10% +10% taller
+const PHONE_UI_SCALE := 0.968 ## Another 10% larger than the previous 0.88 layout.
 const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 28.0 ## fit inside screen + section margins
 const PHONE_LOGO_WRAP_H := 78.0 ## bigger home-screen brand mark
 const PHONE_LOGO_DISPLAY_H := 72.0
@@ -1881,7 +1907,6 @@ const PHONE_SCROLL_MIN_VEL := 10.0
 const PHONE_SCROLL_WHEEL_KICK := 520.0
 const PHONE_CORNER_OUTER := 10
 const PHONE_CORNER_INNER := 6
-const PHONE_BELOW_RADIO_GAP := 5.0
 const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a clap-back
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
 const SODA_STATION_POS := Vector3(-1.53, 0.91, 0.91)
@@ -1897,13 +1922,14 @@ const SODA_BRAND_LOGO_PATHS: Array[String] = [
 	"res://models/sodamachine/textures/Logos-04.png",
 ]
 ## Two-bay sodaedit setup: back bay is ice, front bay is cola.
-const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["ice", "cola"]
-const SODA_MODEL_PANEL_POS: Dictionary = {
-	"ice": Vector3(-0.075, 0.335, 0.118),
-	"cola": Vector3(0.075, 0.335, 0.165),
-}
+## The imported machine faces 180 degrees, so its local flavor order is the
+## inverse of the order seen by the service-window camera.
+const SODA_BRAND_FLAVOR_ORDER: Array[String] = ["cola", "ice"]
 const SODA_MODEL_SODA_SPOUT := Vector3(0.075, 0.335, 0.165)
-const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.335, 0.118)
+## Both outlets on newmachine1 share the same front/back centerline.  The older
+## Ice value was inherited from the four-bay fountain and planted the cup about
+## 3.4 inches behind the visible Ice outlet after model scaling.
+const SODA_MODEL_ICE_SPOUT := Vector3(-0.075, 0.335, 0.165)
 const SODA_NOZZLE_THROAT_DROP := 0.026
 ## Open cup supply sits upright on the camera-left half of the fountain roof.
 const SODA_CUP_RACK_LOCAL := Vector3(0.26, 0.98, 0.02)
@@ -1935,7 +1961,10 @@ var soda_nozzle_offsets_in: Dictionary = {
 var soda_blocker_half_x := 0.58
 var soda_blocker_height := 1.30
 var soda_blocker_front_z := -0.34
-var soda_blocker_fill_z := -0.48
+## The fill bay must remain open enough for the nozzle seat (-0.313 local Z),
+## but not so deep that the cup can pass behind the stream and stop filling.
+const SODA_FILL_FRONT_SAFE_Z := -0.415
+var soda_blocker_fill_z := SODA_FILL_FRONT_SAFE_Z
 var soda_blocker_debug := false
 var soda_cup_rest_x := -0.28
 var soda_cup_rest_z := -0.36
@@ -1944,12 +1973,14 @@ var soda_tray_spacing := 0.20
 var soda_tray_magnet_radius := 0.26
 var soda_tray_release_radius := 0.34
 var soda_tray_magnet_pull := 0.15
-var soda_soft_magnet_radius := 0.27
-var soda_soft_acquire := 0.19
-var soda_soft_release := 0.10
+## The current two outlets are only ~28 cm apart.  The older four-bay catch
+## radius made their locks overlap almost completely and retain the wrong bay.
+var soda_soft_magnet_radius := 0.20
+var soda_soft_acquire := 0.14
+var soda_soft_release := 0.14
 var soda_soft_tight := 0.03
 var soda_soft_pull := 0.57
-var soda_soft_unlock_grace := 0.54
+var soda_soft_unlock_grace := 0.10
 var soda_soft_debug := false
 var soda_soft_offsets_in: Dictionary = {
 	"cola": Vector3.ZERO,
@@ -1964,7 +1995,7 @@ var soda_soft_radius_mult: Dictionary = {
 	"ice": 0.99,
 }
 var soda_fill_follow_rate := 28.0
-var soda_fill_max_speed := 4.2
+var soda_fill_max_speed := 1.2
 var cup_liquid_top_offset_in := 0.05
 var cup_liquid_radius_scale := 1.0
 var soda_tank_visual_scale := 0.53
@@ -2101,6 +2132,11 @@ const CUP_FOLLOW_MAX_SPEED := 3.6 ## m/s — allow fast cursor sweeps without te
 const CUP_FILL_FOLLOW_RATE := 28.0
 const CUP_FILL_FOLLOW_MAX_SPEED := 4.2
 const CUP_FILL_RIM_GAP := 0.045 ## tip→rim clearance — cup sits just under the stream
+## A locked cup should glide into the nozzle, never ricochet between the cursor and
+## cabinet. This hard cap is intentionally below the Hidden-menu tuning ceiling.
+const CUP_FILL_EMPTY_MAX_SPEED := 1.20
+const CUP_FILL_FULL_MAX_SPEED := 0.62
+const CUP_FILL_SETTLE_XZ := 0.006
 ## Soft-lock fill lift uses runtime `cup_fill_extra_y` (Hidden menu).
 ## Keep seat helpful under the stream, but easy to yank free and place elsewhere.
 const CUP_FILL_LOCK_PULL := 0.58
@@ -2237,16 +2273,32 @@ const GFX_DEFAULTS := {
 	"toon_mix": 1.0,
 	"toon_value_steps": 6.0,
 	"toon_step_strength": 1.0,
+	"toon_band_smoothness": 0.18,
+	"toon_band_offset": 0.0,
+	"toon_dither_strength": 0.08,
+	"toon_dither_scale": 1.0,
+	"toon_dither_smoothness": 0.45,
+	"toon_dither_contrast": 1.0,
+	"toon_dither_bias": 0.0,
 	"toon_light_balance": 0.0,
 	"toon_shade_curve": 1.0,
 	"toon_shadow_depth": 0.0,
+	"toon_shadow_cutoff": 0.45,
+	"toon_shadow_softness": 0.54,
+	"toon_highlight_cutoff": 0.75,
+	"toon_highlight_softness": 0.40,
 	"toon_outline_strength": 0.52,
 	"toon_outline_threshold": 0.055,
 	"toon_outline_softness": 0.125,
 	"toon_outline_thickness": 1.0,
+	"toon_outline_color_sensitivity": 0.0,
+	"toon_outline_color_retention": 0.0,
 	"toon_color_brightness": 1.0,
 	"toon_color_contrast": 1.0,
 	"toon_color_saturation": 1.0,
+	"toon_color_gamma": 1.0,
+	"toon_black_lift": 0.0,
+	"toon_highlight_rolloff": 0.0,
 	"toon_hue_shift": 0.0,
 	"toon_warmth": 0.0,
 	"toon_green_magenta": 0.0,
@@ -2288,6 +2340,15 @@ const GFX_DEFAULTS := {
 	"bunting_flag_w": 0.34,
 	"bunting_flag_h": 0.38,
 	"bunting_rope": 0.02,
+	"bunting_wind_strength": 2.4,
+	"bunting_wind_speed": 0.55,
+	"bunting_wind_gust": 0.35,
+	"bunting_wind_twist": 1.2,
+	"bunting_wind_direction": 1.0,
+	"bunting_edge_opacity": 0.97,
+	"bunting_center_opacity": 0.48,
+	"bunting_edge_width": 0.08,
+	"bunting_edge_softness": 0.09,
 	"cheese_stack_scale": 1.0,
 	"burger_bun_scale": 1.0,
 	"sale_x": 0.0,
@@ -2502,6 +2563,7 @@ func _ready() -> void:
 	_load_world_hint_settings()
 	_load_fryer_tuning_settings()
 	_load_player_camera_settings()
+	_load_customer_review_card_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -2526,13 +2588,13 @@ func _ready() -> void:
 	_build_master_volume_ui()
 	_build_screen_style_filter()
 	_build_graphics_ui()
+	_setup_game_audio()
 	_build_options_menu()
 	_build_guided_tutorial_ui()
 	_setup_lasso_tool()
 	_setup_location_map_ui()
 	_setup_game_over_location_button()
 	_layout_top_bar_hud()
-	_setup_game_audio()
 	_setup_grill_song_performer()
 	_load_grill_ttt_settings()
 	_setup_grill_ttt()
@@ -3471,8 +3533,11 @@ func _process(delta: float) -> void:
 	_mp_update_cursors(delta)
 	_update_local_cursor_click(delta)
 	_update_phone_scroll_inertia(delta)
+	_update_icecream_mascot_spin(delta)
+	_update_window_bunting_wind(delta)
 	_update_keyboard_cook_shortcuts(delta)
 	_update_air_motes(delta)
+	_update_physical_garbage_hover()
 	_update_start_patty_preview(delta)
 	## Window godrays disabled for now (too strong).
 	# _update_window_godrays(delta)
@@ -3494,13 +3559,14 @@ func _process(delta: float) -> void:
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p != null and is_instance_valid(p):
-			## Ice ball / mid-squash must stay cold — otherwise big grease bubbles spawn under it.
-			var ice_ball := bool(p.get("place_ball_waiting")) or bool(p.get("place_morphing"))
-			p.heating = grill_on and not ice_ball
+			## A waiting meat sphere cooks on hot steel just like the flat puck. Only
+			## the brief ball-to-puck squash pauses its cook clock/effects.
+			var waiting_ball := bool(p.get("place_ball_waiting"))
+			var squash_morph := bool(p.get("place_morphing")) and not waiting_ball
+			p.heating = grill_on and not squash_morph
 			p.heat_mul = _warmer_heat_mul(p.position) * _oil_heat_mul(p.position)
 			if not _is_bun_toast(p):
-				## Let settled raw balls react to burner heat without starting their cook timer.
-				p.ball_heat_motion_active = grill_on and ice_ball and not _is_in_warmer_zone(p.position)
+				p.ball_heat_motion_active = grill_on and waiting_ball and not _is_in_warmer_zone(p.position)
 				_update_patty_oil_cook_time(p, delta)
 				_update_patty_warm_hold(p, delta)
 				_update_patty_cook_spot_residue(p, delta)
@@ -4845,6 +4911,7 @@ func _kb_grab_cup_from_rack() -> bool:
 		_spawn_and_bind_empty_cup()
 	if cup_root == null or not is_instance_valid(cup_root):
 		return false
+	cup_root.visible = true
 	cup_held = true
 	_clear_tray_slot(cup_root)
 	_cup_prev_pos = cup_root.global_position
@@ -5566,6 +5633,8 @@ func _build_physical_garbage_can() -> void:
 	physical_garbage_area = null
 	physical_garbage_target = null
 	physical_garbage_symbol_root = null
+	physical_garbage_outline_material = null
+	_physical_garbage_hovered = false
 	if not ResourceLoader.exists(PHYSICAL_GARBAGE_SCENE):
 		push_warning("Physical garbage model missing: %s" % PHYSICAL_GARBAGE_SCENE)
 		return
@@ -5779,12 +5848,82 @@ func _physical_garbage_react() -> void:
 		game_audio.play_trash()
 
 
-func _apply_physical_garbage_tint(node: Node) -> void:
+func _make_physical_garbage_material() -> ShaderMaterial:
+	## Blue edge absorption fakes light travelling through molded green plastic.
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+
+uniform vec4 body_color : source_color = vec4(0.39, 0.68, 0.43, 1.0);
+uniform vec3 absorption_color : source_color = vec3(0.08, 0.28, 0.54);
+
+void fragment() {
+	float facing = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
+	float thin_edge = pow(1.0 - facing, 2.15);
+	ALBEDO = mix(body_color.rgb, body_color.rgb * vec3(0.82, 0.96, 1.06), thin_edge * 0.28);
+	METALLIC = 0.05;
+	ROUGHNESS = 0.34;
+	SPECULAR = 0.48;
+	EMISSION = absorption_color * (0.025 + thin_edge * 0.18);
+}
+"""
+	var material := ShaderMaterial.new()
+	material.resource_name = "GarbageCanBlueAbsorption"
+	material.shader = shader
+	physical_garbage_outline_material = _make_physical_garbage_outline_material()
+	material.next_pass = physical_garbage_outline_material
+	return material
+
+
+func _make_physical_garbage_outline_material() -> ShaderMaterial:
+	## Inverted-hull outline expanded in clip space. Because the expansion uses
+	## viewport pixels, it stays at a readable four-pixel width at every scale.
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_never;
+
+uniform bool outline_enabled = false;
+uniform float outline_pixels = 4.0;
+uniform vec2 viewport_size = vec2(1920.0, 1080.0);
+uniform vec4 outline_color : source_color = vec4(0.18, 1.0, 0.32, 1.0);
+
+void vertex() {
+	vec4 clip_position = PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	vec3 view_normal = normalize(mat3(MODELVIEW_MATRIX) * NORMAL);
+	vec2 clip_normal = (PROJECTION_MATRIX * vec4(view_normal, 0.0)).xy;
+	float normal_length = length(clip_normal);
+	clip_normal = normal_length > 0.0001 ? clip_normal / normal_length : vec2(0.0, 1.0);
+	clip_position.xy += clip_normal * (outline_pixels * 2.0 / viewport_size) * clip_position.w;
+	POSITION = clip_position;
+}
+
+void fragment() {
+	if (!outline_enabled) {
+		discard;
+	}
+	ALBEDO = outline_color.rgb;
+	ALPHA = outline_color.a;
+}
+"""
+	var material := ShaderMaterial.new()
+	material.resource_name = "GarbageCanHoverOutline4px"
+	material.shader = shader
+	material.set_shader_parameter("outline_enabled", false)
+	material.set_shader_parameter("outline_pixels", 4.0)
+	material.set_shader_parameter("outline_color", Color(0.18, 1.0, 0.32, 1.0))
+	return material
+
+
+func _apply_physical_garbage_tint(node: Node, shared_material: Material = null) -> void:
+	if shared_material == null:
+		shared_material = _make_physical_garbage_material()
 	if node is MeshInstance3D:
 		var mesh_node := node as MeshInstance3D
-		mesh_node.material_override = _make_soda_metal_mat(Color("80B979"), 0.16, 0.46)
+		mesh_node.material_override = shared_material
 	for child in node.get_children():
-		_apply_physical_garbage_tint(child)
+		_apply_physical_garbage_tint(child, shared_material)
 
 
 func _build_grill_standoffs() -> void:
@@ -6556,6 +6695,11 @@ func _make_spatula_fx_mat(alpha: float) -> StandardMaterial3D:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	## Screen-reading glass cannot contain transparent geometry from the earlier
+	## pass. Draw this short-lived flourish after the glass and ignore the glass
+	## depth so the trail remains visible as it crosses the service window.
+	mat.no_depth_test = true
+	mat.render_priority = SPATULA_FX_RENDER_PRIORITY
 	return mat
 
 
@@ -6727,7 +6871,10 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_over
 		return
 	if game_audio.has_method("play_spatula_ting"):
 		var midi := _grill_piano_midi_at(world_pos) + _spatula_roll_midi_offset_for_roll(tap_roll)
-		game_audio.play_spatula_ting(midi, volume_scale)
+		## Labels show the sounded pitch; the sampler request includes its +3
+		## compensation. Audio owns saved per-note gains for E4–B4.
+		var sounded_midi := midi - GRILL_PIANO_SAMPLE_COMP
+		game_audio.play_spatula_ting(midi, volume_scale, sounded_midi)
 	if send_mp and mp_enabled and not _mp_applying:
 		mp_spatula_tap_fx.rpc(world_pos.x, world_pos.z, volume_scale, tap_roll)
 
@@ -8551,18 +8698,7 @@ func _trash_burgerpack_inspect() -> void:
 		return
 	burgerpack_inspect_items.erase(area)
 	var label := str(area.get_meta("label", "prop"))
-	var target := _garbage_lerp_target_world()
-	area.input_ray_pickable = false
-	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(area, "global_position", target, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.tween_property(area, "scale", Vector3(0.15, 0.15, 0.15), 0.18)
-	tw.tween_property(area, "rotation_degrees", area.rotation_degrees + Vector3(50.0, 120.0, 30.0), 0.18)
-	tw.chain().tween_callback(func() -> void:
-		if area != null and is_instance_valid(area):
-			area.queue_free()
-	)
-	_physical_garbage_react()
+	_animate_object_into_garbage(area, 0.24)
 	_flash("Trashed %s" % label, Color("FFAB91"))
 
 
@@ -9338,7 +9474,6 @@ func _build_grill_burner_ui() -> void:
 	for child in grill_power_row.get_children():
 		child.queue_free()
 	grill_ui_buttons.clear()
-	grill_trash_btn = null
 	grill_power_row.visible = true
 	grill_power_row.mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -9367,49 +9502,12 @@ func _build_grill_burner_ui() -> void:
 	grill_power_row.add_child(btn)
 	grill_ui_buttons.append(btn)
 
-	var trash := Button.new()
-	trash.text = "🗑 GARBAGE"
-	trash.tooltip_text = "Drag a Build topping/patty/drink here, or click while holding an inspect prop"
-	trash.custom_minimum_size = Vector2(96, 22)
-	trash.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(trash, true, 10)
-	var tsb := StyleBoxFlat.new()
-	tsb.bg_color = Color(0.22, 0.22, 0.24)
-	tsb.set_corner_radius_all(8)
-	tsb.set_border_width_all(2)
-	tsb.border_color = Color(0.55, 0.55, 0.58)
-	tsb.content_margin_left = 10
-	tsb.content_margin_right = 10
-	tsb.content_margin_top = 5
-	tsb.content_margin_bottom = 5
-	trash.add_theme_stylebox_override("normal", tsb)
-	var thov := tsb.duplicate()
-	thov.bg_color = Color(0.38, 0.18, 0.16)
-	thov.border_color = Color(0.9, 0.45, 0.35)
-	trash.add_theme_stylebox_override("hover", thov)
-	trash.add_theme_color_override("font_color", Color(0.95, 0.92, 0.9))
-	trash.pressed.connect(func():
-		_sfx_click()
-		if burgerpack_held != null:
-			_trash_burgerpack_inspect()
-		elif spatula_patty != null:
-			_trash_spatula_patty()
-		else:
-			_flash("Drag a patty onto GARBAGE to toss it", Color("FFCC80"))
-	)
-	trash.set_drag_forwarding(
-		Callable(),
-		func(_pos, data): return _can_drop_patty_on_garbage(data),
-		func(_pos, data): _drop_patty_on_garbage(data)
-	)
-	grill_power_row.add_child(trash)
-	grill_trash_btn = trash
 	_layout_grill_power_row_centered()
 	_refresh_grill_ui_button(0)
 
 
 func _layout_grill_power_row_centered() -> void:
-	## BottomUI is right-aligned for toppings — pin burner/garbage to screen center.
+	## BottomUI is right-aligned for toppings — pin the burner to screen center.
 	if grill_power_row == null:
 		return
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
@@ -9433,8 +9531,7 @@ func _layout_grill_power_row_centered() -> void:
 
 
 func _is_over_garbage(screen_pos: Vector2) -> bool:
-	## The physical bin is the primary target; keep the HUD button as an accessible
-	## fallback for keyboard/gamepad and UI-layer drags.
+	## The physical bin is now the only garbage target.
 	if camera != null and physical_garbage_area != null and is_instance_valid(physical_garbage_area):
 		var from := camera.project_ray_origin(screen_pos)
 		var to := from + camera.project_ray_normal(screen_pos) * 100.0
@@ -9444,11 +9541,26 @@ func _is_over_garbage(screen_pos: Vector2) -> bool:
 		var hit := get_world_3d().direct_space_state.intersect_ray(query)
 		if not hit.is_empty() and hit.get("collider") == physical_garbage_area:
 			return true
-	if grill_trash_btn == null or not is_instance_valid(grill_trash_btn):
-		return false
-	## Generous catch pad — Build toppings are dragged from across the screen.
-	var r := grill_trash_btn.get_global_rect().grow(28.0)
-	return r.has_point(screen_pos)
+	return false
+
+
+func _update_physical_garbage_hover() -> void:
+	if physical_garbage_outline_material == null:
+		return
+	var viewport := get_viewport()
+	if viewport == null:
+		return
+	## A patty still sliding on the grill is not a carried trash item. Keeping the
+	## bin dark here avoids advertising the old slide-directly-into-trash action.
+	var sliding_patty := dragging_patty != null and is_instance_valid(dragging_patty)
+	var hovered := not sliding_patty and _is_over_garbage(viewport.get_mouse_position())
+	if hovered == _physical_garbage_hovered:
+		return
+	_physical_garbage_hovered = hovered
+	physical_garbage_outline_material.set_shader_parameter("outline_enabled", hovered)
+	physical_garbage_outline_material.set_shader_parameter(
+		"viewport_size", Vector2(viewport.get_visible_rect().size)
+	)
 
 
 func _can_drop_patty_on_garbage(data: Variant) -> bool:
@@ -9532,8 +9644,7 @@ func _trash_spatula_patty_local() -> void:
 		_flash("Nothing on the spatula to trash", Color("B0BEC5"))
 		return
 	var was_bun := _is_bun_toast(spatula_patty)
-	if is_instance_valid(spatula_patty):
-		spatula_patty.queue_free()
+	var discarded_patty := spatula_patty as Node3D
 	spatula_patty = null
 	spatula_owner_id = 0
 	spatula_from_build = false
@@ -9541,7 +9652,7 @@ func _trash_spatula_patty_local() -> void:
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
-	_physical_garbage_react()
+	_animate_object_into_garbage(discarded_patty, 0.26)
 	if was_bun:
 		_flash("Trashed bun", Color("FFAB91"))
 	else:
@@ -9572,14 +9683,13 @@ func _trash_single_grill_patty_local(patty: Area3D) -> void:
 	if spatula_patty == patty:
 		spatula_patty = null
 		spatula_owner_id = 0
-	patty.queue_free()
-	_physical_garbage_react()
+	_animate_object_into_garbage(patty, 0.26)
 	_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 
 
 func _trash_grill_patties() -> void:
-	## Legacy no-op — use drag-to-garbage for one patty at a time.
-	_flash("Drag a patty onto GARBAGE to toss it", Color("FFCC80"))
+	## Legacy no-op — patties must leave the grill on the spatula before disposal.
+	_flash("Scoop a patty first, then drop it into the garbage", Color("FFCC80"))
 
 
 func _hide_grill_power_ui() -> void:
@@ -9588,7 +9698,6 @@ func _hide_grill_power_ui() -> void:
 			child.queue_free()
 		grill_power_row.visible = false
 	grill_ui_buttons.clear()
-	grill_trash_btn = null
 
 
 func _refresh_grill_ui_button(_index: int) -> void:
@@ -10141,10 +10250,24 @@ func _try_place_patty_at(world_pos: Vector3) -> void:
 	## First right-click only lays the ice ball — smash is a second right-click.
 	if mp_enabled and not _mp_applying:
 		if NetManager.is_host():
+			## Reserve meat when it leaves inventory, not when the cooked patty
+			## reaches Build. Patties already on the grill remain usable at zero stock.
+			if not _try_use_supply("patty"):
+				return
 			var nid := NetManager.alloc_net_id()
 			mp_spawn_patty.rpc(nid, idx, place_pos.x, place_pos.z)
+			_mp_broadcast_economy()
 		else:
+			## Host validates again authoritatively. This local check gives the
+			## player immediate feedback when the synced stock is already empty.
+			if int(supply_stock.get("patty", 0)) <= 0:
+				_flash("Out of Patty — restock on phone!", Color("EF5350"))
+				_refresh_phone_ui()
+				_refresh_ingredient_stock_bars()
+				return
 			mp_request_spawn_patty.rpc_id(1, place_pos.x, place_pos.z)
+		return
+	if not _try_use_supply("patty"):
 		return
 	_spawn_patty_at(idx, place_pos)
 
@@ -10601,9 +10724,12 @@ func _end_patty_drag() -> void:
 		_on_window_cat_fed("patty")
 		_flash("Cat stole the burger! ♥", Color("FF8A80"))
 		return
-	## Drag onto GARBAGE to toss this one patty.
+	## Sliding stays on the steel. A patty must be scooped onto the spatula before
+	## the physical garbage can will accept it.
 	if _is_over_garbage(mouse):
-		_trash_single_grill_patty(patty)
+		_flash("Scoop the patty first, then put it in the garbage", Color("FFCC80"))
+		if game_audio and game_audio.has_method("play_error"):
+			game_audio.play_error()
 		return
 	## Quick tap only → flip / scoop. Hold ≥ 0.2s (or slide) never auto-scoops.
 	if is_quick_tap:
@@ -11392,14 +11518,6 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	if not st["patties"].has(patty):
 		var needs_bun := not items.has("bun_bottom")
 		if needs_bun and not _mp_try_use_supply("bun_bottom"):
-			patty.is_held = false
-			patty.visible = true
-			patty.heating = grill_on
-			return
-		if not _mp_try_use_supply("patty"):
-			if needs_bun:
-				supply_stock["bun_bottom"] = int(supply_stock.get("bun_bottom", 0)) + 1
-				_refresh_phone_ui()
 			patty.is_held = false
 			patty.visible = true
 			patty.heating = grill_on
@@ -20601,6 +20719,152 @@ func _save_world_hint_settings() -> void:
 	cfg.save(GFX_CFG_PATH)
 
 
+func _load_customer_review_card_settings() -> void:
+	customer_review_settings = CustomerScript.REVIEW_CARD_DEFAULTS.duplicate(true)
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	for key_var in CustomerScript.REVIEW_CARD_DEFAULTS:
+		var key := str(key_var)
+		var bounds: Vector2 = CustomerScript.REVIEW_CARD_RANGES.get(key, Vector2(-1000.0, 1000.0))
+		var fallback := float(CustomerScript.REVIEW_CARD_DEFAULTS[key])
+		customer_review_settings[key] = clampf(
+			float(cfg.get_value(CUSTOMER_REVIEW_CFG_SECTION, key, fallback)), bounds.x, bounds.y
+		)
+	## Superseded by camera_left_measured_card_v4 below; retained so older config
+	## files still advance through migrations in a predictable order.
+	if not cfg.has_section_key(CUSTOMER_REVIEW_CFG_SECTION, "camera_left_fluid_card_v3"):
+		customer_review_settings["position_x"] = -absf(_customer_review_value("position_x"))
+		customer_review_settings["width"] = maxf(_customer_review_value("width"), 1.32)
+		customer_review_settings["height"] = maxf(_customer_review_value("height"), 0.58)
+		customer_review_settings["star_outline"] = maxf(_customer_review_value("star_outline"), 18.0)
+		customer_review_settings["text_outline"] = maxf(_customer_review_value("text_outline"), 18.0)
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "camera_left_fluid_card_v3", true)
+		for key in customer_review_settings:
+			cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, key, customer_review_settings[key])
+		cfg.save(GFX_CFG_PATH)
+	## The service-window screenshot is authoritative: customer local +X is camera
+	## left. This migration also replaces estimated wrapping with roomy measured
+	## bounds and makes both outlines intentionally bold.
+	if not cfg.has_section_key(CUSTOMER_REVIEW_CFG_SECTION, "camera_left_measured_card_v4"):
+		customer_review_settings["position_x"] = maxf(absf(_customer_review_value("position_x")), 1.35)
+		customer_review_settings["width"] = maxf(_customer_review_value("width"), 1.70)
+		customer_review_settings["height"] = maxf(_customer_review_value("height"), 0.68)
+		customer_review_settings["padding_x"] = maxf(_customer_review_value("padding_x"), 0.30)
+		customer_review_settings["padding_y"] = maxf(_customer_review_value("padding_y"), 0.20)
+		customer_review_settings["star_outline"] = maxf(_customer_review_value("star_outline"), 36.0)
+		customer_review_settings["text_outline"] = maxf(_customer_review_value("text_outline"), 36.0)
+		customer_review_settings["line_chars"] = minf(_customer_review_value("line_chars"), 24.0)
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "camera_left_measured_card_v4", true)
+		for key in customer_review_settings:
+			cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, key, customer_review_settings[key])
+		cfg.save(GFX_CFG_PATH)
+	## Keep all three layers on essentially the same camera plane. The prior deep
+	## separation made correctly centered labels project above and to the right of
+	## the bubble. Render priorities already provide reliable layer ordering.
+	if not cfg.has_section_key(CUSTOMER_REVIEW_CFG_SECTION, "centered_large_copy_v5"):
+		customer_review_settings["padding_y"] = 0.13
+		customer_review_settings["box_depth"] = -0.010
+		customer_review_settings["star_depth"] = 0.0
+		customer_review_settings["text_depth"] = 0.005
+		customer_review_settings["star_y"] = 0.105
+		customer_review_settings["text_y"] = -0.100
+		customer_review_settings["star_size"] = maxf(_customer_review_value("star_size"), 0.135)
+		customer_review_settings["text_size"] = maxf(_customer_review_value("text_size"), 0.090)
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "centered_large_copy_v5", true)
+		for key in customer_review_settings:
+			cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, key, customer_review_settings[key])
+		cfg.save(GFX_CFG_PATH)
+	## Requested placement reversal: customer local -X is camera-right in the
+	## service-window view. Preserve the tuned distance while flipping its side.
+	if not cfg.has_section_key(CUSTOMER_REVIEW_CFG_SECTION, "camera_right_side_v6"):
+		customer_review_settings["position_x"] = -maxf(absf(_customer_review_value("position_x")), 1.35)
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "position_x", customer_review_settings["position_x"])
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "camera_right_side_v6", true)
+		cfg.save(GFX_CFG_PATH)
+
+
+func _save_customer_review_card_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	for key in customer_review_settings:
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, key, customer_review_settings[key])
+	cfg.save(GFX_CFG_PATH)
+
+
+func _customer_review_value(key: String) -> float:
+	return float(customer_review_settings.get(
+		key, CustomerScript.REVIEW_CARD_DEFAULTS.get(key, 0.0)
+	))
+
+
+func _set_customer_review_value(key: String, value: float) -> void:
+	if not CustomerScript.REVIEW_CARD_DEFAULTS.has(key):
+		return
+	var bounds: Vector2 = CustomerScript.REVIEW_CARD_RANGES.get(key, Vector2(-1000.0, 1000.0))
+	customer_review_settings[key] = clampf(value, bounds.x, bounds.y)
+	_save_customer_review_card_settings()
+	_apply_customer_review_card_settings_to_all()
+
+
+func _apply_customer_review_card_settings_to_all() -> void:
+	var seen: Dictionary = {}
+	var candidates: Array = customers.duplicate()
+	if customers_root != null:
+		candidates.append_array(customers_root.get_children())
+	if bts_day_intro_root != null and is_instance_valid(bts_day_intro_root):
+		candidates.append_array(bts_day_intro_root.get_children())
+	for customer in candidates:
+		if customer == null or not is_instance_valid(customer):
+			continue
+		var iid: int = int(customer.get_instance_id())
+		if seen.has(iid):
+			continue
+		seen[iid] = true
+		if customer.has_method("apply_review_card_settings"):
+			customer.apply_review_card_settings(customer_review_settings)
+
+
+func _reset_customer_review_card_settings() -> void:
+	customer_review_settings = CustomerScript.REVIEW_CARD_DEFAULTS.duplicate(true)
+	_save_customer_review_card_settings()
+	_apply_customer_review_card_settings_to_all()
+	_sync_customer_review_hidden_ui()
+	_flash("Review bubble reset", Color("90CAF9"))
+
+
+func _preview_customer_review_card() -> void:
+	var customer = selected_customer
+	if customer == null or not is_instance_valid(customer):
+		for candidate in customers:
+			if candidate != null and is_instance_valid(candidate):
+				customer = candidate
+				break
+	if customer == null or not is_instance_valid(customer):
+		_flash("A customer must be at the window to preview the review bubble", Color("FFCC80"))
+		return
+	if customer.has_method("apply_review_card_settings"):
+		customer.apply_review_card_settings(customer_review_settings)
+	if customer.has_method("show_review_stars"):
+		customer.show_review_stars(5.0, "Loved every bite. Fast, fresh, and exactly what I ordered!", 30.0)
+	_flash("Review bubble preview — adjust controls live", Color("90CAF9"), 3.0)
+
+
+func _sync_customer_review_hidden_ui() -> void:
+	for key_var in CustomerScript.REVIEW_CARD_DEFAULTS:
+		var key := str(key_var)
+		var ui_key := "customer_review_%s" % key
+		var value := _customer_review_value(key)
+		if options_hidden_tree_light_sliders.has(ui_key):
+			var slider := options_hidden_tree_light_sliders[ui_key] as Range
+			if slider != null and is_instance_valid(slider):
+				slider.set_value_no_signal(value)
+		if options_hidden_tree_light_labs.has(ui_key):
+			var lab := options_hidden_tree_light_labs[ui_key] as Label
+			if lab != null and is_instance_valid(lab):
+				lab.text = "%.2f" % value
+
+
 func _load_fryer_tuning_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GFX_CFG_PATH) != OK:
@@ -20614,12 +20878,24 @@ func _load_fryer_tuning_settings() -> void:
 		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", 0.90)
 		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_fries_by_buns_v2", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(FRYER_TUNING_CFG_SECTION, "finished_fries_scale_15_v1"):
+		## Preserve custom tuning while making every existing finished pack 15% larger.
+		var old_ready_scale := float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", 0.90))
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "ready_pack_scale", minf(1.5, old_ready_scale * 1.15))
+		cfg.set_value(FRYER_TUNING_CFG_SECTION, "finished_fries_scale_15_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	fry_basket_cook_sec = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "cook_sec", fry_basket_cook_sec)), 1.0, 20.0)
 	fry_basket_shake_need = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_need", fry_basket_shake_need)), 0.1, 6.0)
 	fry_basket_shake_speed_threshold = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_speed_threshold", fry_basket_shake_speed_threshold)), 0.0, 0.5)
 	fry_basket_shake_gain = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)), 0.1, 5.0)
 	fry_basket_shake_decay = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)), 0.0, 1.5)
 	fryer_station_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "station_scale", fryer_station_scale)), 0.45, 2.5)
+	var saved_oil_color: Variant = cfg.get_value(FRYER_TUNING_CFG_SECTION, "oil_color", fryer_oil_color)
+	if saved_oil_color is Color:
+		fryer_oil_color = saved_oil_color
+	var saved_bubble_color: Variant = cfg.get_value(FRYER_TUNING_CFG_SECTION, "bubble_color", fryer_bubble_color)
+	if saved_bubble_color is Color:
+		fryer_bubble_color = saved_bubble_color
 	fries_hand_hold_offset_in = Vector3(
 		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "hand_hold_x_in", fries_hand_hold_offset_in.x)), -18.0, 18.0),
 		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "hand_hold_y_in", fries_hand_hold_offset_in.y)), -18.0, 18.0),
@@ -20640,6 +20916,8 @@ func _save_fryer_tuning_settings() -> void:
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "station_scale", fryer_station_scale)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "oil_color", fryer_oil_color)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "bubble_color", fryer_bubble_color)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_x_in", fries_hand_hold_offset_in.x)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_y_in", fries_hand_hold_offset_in.y)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_z_in", fries_hand_hold_offset_in.z)
@@ -20970,6 +21248,14 @@ func _load_window_sill_glass_settings() -> void:
 	sill_glass_strip_white.r = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wr", sill_glass_strip_white.r)), 0.0, 1.0)
 	sill_glass_strip_white.g = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wg", sill_glass_strip_white.g)), 0.0, 1.0)
 	sill_glass_strip_white.b = clampf(float(cfg.get_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_wb", sill_glass_strip_white.b)), 0.0, 1.0)
+	## The old shader shipped with an opaque red/white barber stripe at the glass
+	## top. It looked like a broken reflection, so existing saves migrate it off;
+	## the Hidden menu can still deliberately turn it back on.
+	if not cfg.has_section_key(WINDOW_SILL_GLASS_CFG_SECTION, "neutral_top_strip_v1"):
+		sill_glass_strip_opacity = 0.0
+		cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "strip_op", sill_glass_strip_opacity)
+		cfg.set_value(WINDOW_SILL_GLASS_CFG_SECTION, "neutral_top_strip_v1", true)
+		cfg.save(GFX_CFG_PATH)
 
 
 func _save_window_sill_glass_settings() -> void:
@@ -23723,7 +24009,34 @@ func _apply_icecream_station_transform() -> void:
 		icecream_root.position = icecream_station_pos
 		icecream_root.rotation_degrees = icecream_station_rot
 		icecream_root.scale = Vector3.ONE * icecream_station_scale
+		_apply_icecream_mascot_transform()
 		_refresh_icecream_cone_anchor_positions(old_home, old_rest)
+
+
+func _apply_icecream_mascot_transform() -> void:
+	if icecream_root == null or not is_instance_valid(icecream_root):
+		return
+	var mascot := icecream_root.get_node_or_null("SmilingIceCreamMascot") as MeshInstance3D
+	if mascot == null or not is_instance_valid(mascot):
+		return
+	var base_pos: Vector3 = mascot.get_meta("base_position", mascot.position)
+	var base_fit := float(mascot.get_meta("base_fit_scale", 1.0))
+	mascot.position = base_pos + icecream_mascot_offset
+	mascot.rotation_degrees = icecream_mascot_rot + Vector3(0.0, icecream_mascot_spin_phase, 0.0)
+	mascot.scale = Vector3.ONE * base_fit * icecream_mascot_scale
+
+
+func _update_icecream_mascot_spin(delta: float) -> void:
+	if icecream_mascot_spin_speed <= 0.0:
+		return
+	if icecream_root == null or not is_instance_valid(icecream_root):
+		return
+	var direction := -1.0 if icecream_mascot_spin_clockwise else 1.0
+	icecream_mascot_spin_phase = fposmod(
+		icecream_mascot_spin_phase + icecream_mascot_spin_speed * direction * delta,
+		360.0
+	)
+	_apply_icecream_mascot_transform()
 
 
 func _refresh_icecream_cone_anchor_positions(
@@ -23771,6 +24084,46 @@ func _set_icecream_cone_pull_axis(axis: String, value: float) -> void:
 		"z":
 			icecream_cone_pull_local.z = clampf(value, -2.0, 2.0)
 	_refresh_icecream_cone_anchor_positions(old_home, old_rest)
+	_save_icecream_station_settings()
+
+
+func _set_icecream_mascot_offset_axis(axis: String, value: float) -> void:
+	match axis:
+		"x":
+			icecream_mascot_offset.x = clampf(value, -2.0, 2.0)
+		"y":
+			icecream_mascot_offset.y = clampf(value, -2.0, 2.0)
+		"z":
+			icecream_mascot_offset.z = clampf(value, -2.0, 2.0)
+	_apply_icecream_mascot_transform()
+	_save_icecream_station_settings()
+
+
+func _set_icecream_mascot_rot_axis(axis: String, value: float) -> void:
+	match axis:
+		"x":
+			icecream_mascot_rot.x = clampf(value, -180.0, 180.0)
+		"y":
+			icecream_mascot_rot.y = clampf(value, -360.0, 360.0)
+		"z":
+			icecream_mascot_rot.z = clampf(value, -180.0, 180.0)
+	_apply_icecream_mascot_transform()
+	_save_icecream_station_settings()
+
+
+func _set_icecream_mascot_scale(value: float) -> void:
+	icecream_mascot_scale = clampf(value, 0.1, 4.0)
+	_apply_icecream_mascot_transform()
+	_save_icecream_station_settings()
+
+
+func _set_icecream_mascot_spin_speed(value: float) -> void:
+	icecream_mascot_spin_speed = clampf(value, 0.0, 90.0)
+	_save_icecream_station_settings()
+
+
+func _set_icecream_mascot_spin_clockwise(on: bool) -> void:
+	icecream_mascot_spin_clockwise = on
 	_save_icecream_station_settings()
 
 
@@ -23835,6 +24188,25 @@ func _load_icecream_station_settings() -> void:
 		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cone_pull_y", icecream_cone_pull_local.y)), -2.0, 2.0),
 		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "cone_pull_z", icecream_cone_pull_local.z)), -2.0, 2.0)
 	)
+	icecream_mascot_offset = Vector3(
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "mascot_x", icecream_mascot_offset.x)), -2.0, 2.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "mascot_y", icecream_mascot_offset.y)), -2.0, 2.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "mascot_z", icecream_mascot_offset.z)), -2.0, 2.0)
+	)
+	icecream_mascot_rot = Vector3(
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "mascot_pitch", icecream_mascot_rot.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "mascot_yaw", icecream_mascot_rot.y)), -360.0, 360.0),
+		clampf(float(cfg.get_value(ICECREAM_POS_CFG_SECTION, "mascot_roll", icecream_mascot_rot.z)), -180.0, 180.0)
+	)
+	icecream_mascot_scale = clampf(float(cfg.get_value(
+		ICECREAM_POS_CFG_SECTION, "mascot_scale", icecream_mascot_scale
+	)), 0.1, 4.0)
+	icecream_mascot_spin_speed = clampf(float(cfg.get_value(
+		ICECREAM_POS_CFG_SECTION, "mascot_spin_speed", icecream_mascot_spin_speed
+	)), 0.0, 90.0)
+	icecream_mascot_spin_clockwise = bool(cfg.get_value(
+		ICECREAM_POS_CFG_SECTION, "mascot_spin_clockwise", icecream_mascot_spin_clockwise
+	))
 
 
 func _save_icecream_station_settings() -> void:
@@ -23850,6 +24222,15 @@ func _save_icecream_station_settings() -> void:
 	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cone_pull_x", icecream_cone_pull_local.x)
 	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cone_pull_y", icecream_cone_pull_local.y)
 	cfg.set_value(ICECREAM_POS_CFG_SECTION, "cone_pull_z", icecream_cone_pull_local.z)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_x", icecream_mascot_offset.x)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_y", icecream_mascot_offset.y)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_z", icecream_mascot_offset.z)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_pitch", icecream_mascot_rot.x)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_yaw", icecream_mascot_rot.y)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_roll", icecream_mascot_rot.z)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_scale", icecream_mascot_scale)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_spin_speed", icecream_mascot_spin_speed)
+	cfg.set_value(ICECREAM_POS_CFG_SECTION, "mascot_spin_clockwise", icecream_mascot_spin_clockwise)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -23946,6 +24327,24 @@ func _load_soda_tuning_settings() -> void:
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, 0.0)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_soft_center_restore_v9", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "two_bay_live_lock_calibration_v10"):
+		## Rebase old-machine tuning onto the rendered two-bay model once. Nozzle and
+		## seat sliders remain available afterward, but every existing save starts
+		## from the actual Cola / Ice outlet centers and non-overlapping handoff values.
+		for fid in ["cola", "ice"]:
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_x_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_y_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_nozzle_z_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_x_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_y_in" % fid, 0.0)
+			cfg.set_value(SODA_TUNING_CFG_SECTION, "%s_soft_z_in" % fid, 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_radius", 0.20)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_acquire", 0.14)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_release", 0.14)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", 0.10)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "block_fill_z", SODA_FILL_FRONT_SAFE_Z)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_live_lock_calibration_v10", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -23981,7 +24380,7 @@ func _load_soda_tuning_settings() -> void:
 	soda_blocker_half_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_half_x", soda_blocker_half_x)), 0.05, 1.5)
 	soda_blocker_height = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_height", soda_blocker_height)), 0.05, 2.5)
 	soda_blocker_front_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_front_z", soda_blocker_front_z)), -1.2, 0.7)
-	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), -1.2, 0.7)
+	soda_blocker_fill_z = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "block_fill_z", soda_blocker_fill_z)), SODA_FILL_FRONT_SAFE_Z, 0.7)
 	## Visual blocker/soft-lock markers were tuning aids, not machine art.
 	soda_blocker_debug = false
 	soda_cup_rest_x = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_rest_x", soda_cup_rest_x)), -1.0, 1.0)
@@ -23999,7 +24398,9 @@ func _load_soda_tuning_settings() -> void:
 	soda_soft_unlock_grace = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", soda_soft_unlock_grace)), 0.0, 3.0)
 	soda_soft_debug = false
 	soda_fill_follow_rate = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_follow_rate", soda_fill_follow_rate)), 1.0, 80.0)
-	soda_fill_max_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)), 0.2, 12.0)
+	## The old 12 m/s ceiling let saved tuning overwhelm the fill-seat spring.
+	## Keep legacy values safe while preserving slower player-tuned motion.
+	soda_fill_max_speed = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "fill_max_speed", soda_fill_max_speed)), 0.2, CUP_FILL_EMPTY_MAX_SPEED)
 	cup_liquid_top_offset_in = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_liquid_top_offset_in", cup_liquid_top_offset_in)), -6.0, 6.0)
 	cup_liquid_radius_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "cup_liquid_radius_scale", cup_liquid_radius_scale)), 0.5, 1.5)
 	soda_tank_visual_scale = clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "tank_scale", soda_tank_visual_scale)), 0.2, 1.4)
@@ -24284,13 +24685,27 @@ func _sync_icecream_station_hidden_ui() -> void:
 		"icecream_cone_pull_x": icecream_cone_pull_local.x,
 		"icecream_cone_pull_y": icecream_cone_pull_local.y,
 		"icecream_cone_pull_z": icecream_cone_pull_local.z,
+		"icecream_mascot_x": icecream_mascot_offset.x,
+		"icecream_mascot_y": icecream_mascot_offset.y,
+		"icecream_mascot_z": icecream_mascot_offset.z,
+		"icecream_mascot_pitch": icecream_mascot_rot.x,
+		"icecream_mascot_yaw": icecream_mascot_rot.y,
+		"icecream_mascot_roll": icecream_mascot_rot.z,
+		"icecream_mascot_scale": icecream_mascot_scale,
+		"icecream_mascot_spin_speed": icecream_mascot_spin_speed,
 	}
 	for key in vals.keys():
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
 			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
-			var is_angle: bool = str(key) in ["icecream_pitch", "icecream_yaw", "icecream_roll"]
+			var is_angle: bool = str(key) in [
+				"icecream_pitch", "icecream_yaw", "icecream_roll",
+				"icecream_mascot_pitch", "icecream_mascot_yaw", "icecream_mascot_roll"
+			]
 			options_hidden_tree_light_labs[key].text = ("%.1f°" if is_angle else "%.2f") % float(vals[key])
+	if options_hidden_icecream_mascot_spin_clockwise != null \
+			and is_instance_valid(options_hidden_icecream_mascot_spin_clockwise):
+		options_hidden_icecream_mascot_spin_clockwise.set_pressed_no_signal(icecream_mascot_spin_clockwise)
 
 
 func _sync_tree_light_hidden_ui() -> void:
@@ -24471,6 +24886,56 @@ func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String
 	parent.add_child(slider)
 	options_hidden_tree_light_sliders[key] = slider
 	options_hidden_tree_light_labs[key] = val_lab
+
+
+func _hidden_add_sfx_level_slider(parent: Control, key: String, label_text: String) -> void:
+	_hidden_add_labeled_slider(
+		parent,
+		"sfx_%s" % key,
+		label_text,
+		0.0,
+		2.0,
+		0.01,
+		func() -> float:
+			return game_audio.get_sfx_level(key) if game_audio != null else 1.0,
+		func(value: float) -> void:
+			if game_audio != null and game_audio.has_method("set_sfx_level"):
+				game_audio.set_sfx_level(key, value)
+	)
+
+
+func _hidden_add_spatula_note_boost_slider(
+	parent: Control, sounded_midi: int, label_text: String
+) -> void:
+	_hidden_add_labeled_slider(
+		parent,
+		"spatula_note_%d" % sounded_midi,
+		label_text,
+		0.25,
+		4.0,
+		0.05,
+		func() -> float:
+			return game_audio.get_spatula_note_boost(sounded_midi) if game_audio != null else 1.25,
+		func(value: float) -> void:
+			if game_audio != null and game_audio.has_method("set_spatula_note_boost"):
+				game_audio.set_spatula_note_boost(sounded_midi, value)
+	)
+
+
+func _hidden_add_customer_review_slider(
+	parent: Control, key: String, label_text: String, step: float = 0.01
+) -> void:
+	var bounds: Vector2 = CustomerScript.REVIEW_CARD_RANGES.get(key, Vector2(-10.0, 10.0))
+	_hidden_add_labeled_slider(
+		parent,
+		"customer_review_%s" % key,
+		label_text,
+		bounds.x,
+		bounds.y,
+		step,
+		func() -> float: return _customer_review_value(key),
+		func(value: float) -> void: _set_customer_review_value(key, value)
+	)
 
 
 func _build_first_sale_decal() -> void:
@@ -24847,6 +25312,11 @@ func _build_soda_station() -> void:
 		visual.scale = Vector3.ONE * soda_station_scale
 		root.add_child(visual)
 		_apply_soda_fountain_textures(visual)
+		## The FBX contains both a solid tray and a zero-thickness perforated
+		## tray in the same assembly.  Our generated grate replaces that pair;
+		## leaving either imported layer visible creates a second ledge behind
+		## the machine when viewed from the opposite side.
+		_hide_imported_soda_runoff_tray(visual)
 	else:
 		push_warning("Soda fountain model missing — using placeholder cabinet")
 		var body := MeshInstance3D.new()
@@ -24983,6 +25453,15 @@ func _soda_node_path_has(n: Node, needle: String) -> bool:
 			return true
 		cur = cur.get_parent()
 	return false
+
+
+func _hide_imported_soda_runoff_tray(n: Node) -> void:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if _soda_node_path_has(mi, "Metal_Perforated_tray") or _soda_node_path_has(mi, "Metal_Tray"):
+			mi.visible = false
+	for child in n.get_children():
+		_hide_imported_soda_runoff_tray(child)
 
 
 func _dress_soda_fountain_materials(n: Node) -> void:
@@ -25352,6 +25831,8 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		var aabb := src_mi.get_aabb()
 		var center_global := src_mi.to_global(aabb.get_center())
 		var panel_pos := soda_root.to_local(center_global)
+		## Use the transformed Brand mesh itself. The old four-nozzle anchors pushed
+		## these overlays down and sideways on the current two-bay fountain.
 		var panel_w := clampf(src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(aabb.size.x, 0.0, 0.0))) * 0.98, 0.10, 0.22)
 		var panel_h := clampf(src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(0.0, aabb.size.y, 0.0))) * 0.98, 0.10, 0.22)
 		if fid == "":
@@ -25359,20 +25840,26 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 			count += 1
 			continue
 		var mat := _make_soda_flavor_panel_mat(fid)
+		var logo_tex: Texture2D = null
 		## Restore the shipped drink art on the generated soda panel. The source
 		## pack has no ice logo, so that bay keeps the clear ICE fallback below.
 		if fid == "cola":
-			var logo_tex := _load_soda_image_texture("res://models/sodamachine/newmachine1_0.png")
-			if logo_tex != null:
-				mat.albedo_texture = logo_tex
-				mat.albedo_color = Color.WHITE
+			logo_tex = _load_soda_image_texture("res://models/sodamachine/newmachine1_0.png")
+			## Art is carried by the dedicated foreground plane below. Applying it to
+			## the imported source mesh can paint the shared ICE surface as well.
 		src_mi.material_override = mat
 		src_mi.set_meta("slot_base_position", src_mi.position)
 		soda_flavor_mats[fid] = mat
 		soda_flavor_pads[fid] = src_mi
+		if logo_tex != null:
+			_add_soda_flavor_graphic_plane(fid, logo_tex, panel_pos, Vector2(panel_w, panel_h))
+		elif fid == "ice":
+			_add_soda_ice_graphic(panel_pos, Vector2(panel_w, panel_h))
 		var lab := Label3D.new()
 		lab.name = "FlavorLabel_%s" % fid
-		lab.text = "*  ICE  *" if fid == "ice" else (str(SODA_FLAVOR_LABELS.get(fid, fid.to_upper())) if mat.albedo_texture == null else "")
+		## Dedicated foreground art handles the two active bays; keep this hidden
+		## state label text-free so logos never double-stack.
+		lab.text = ""
 		lab.font_size = 28
 		lab.pixel_size = 0.00125
 		lab.modulate = Color(1.0, 1.0, 1.0, 1.0)
@@ -25402,6 +25889,56 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		soda_flavor_areas[fid] = area
 		count += 1
 	return true
+
+
+func _add_soda_flavor_graphic_plane(
+	fid: String, texture: Texture2D, panel_pos: Vector3, panel_size: Vector2
+) -> void:
+	## Imported FBX panel normals/material slots vary between exporter versions.
+	## A tiny camera-facing overlay keeps the flavor art readable while leaving
+	## the machine mesh, collision areas, and fake-reflection layers untouched.
+	if soda_flavor_panel_root == null or texture == null:
+		return
+	var graphic := MeshInstance3D.new()
+	graphic.name = "FlavorGraphic_%s" % fid
+	var quad := QuadMesh.new()
+	quad.size = panel_size * 0.92
+	graphic.mesh = quad
+	graphic.position = panel_pos + Vector3(0.0, 0.0, 0.022)
+	graphic.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "SodaFlavorGraphic_%s" % fid
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color.WHITE
+	mat.albedo_texture = texture
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.no_depth_test = true
+	mat.render_priority = 20
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	graphic.material_override = mat
+	soda_flavor_panel_root.add_child(graphic)
+
+
+func _add_soda_ice_graphic(panel_pos: Vector3, panel_size: Vector2) -> void:
+	if soda_flavor_panel_root == null:
+		return
+	var ice_art := Label3D.new()
+	ice_art.name = "IcePanelArt"
+	ice_art.text = "❄  ICE"
+	ice_art.font_size = 32
+	ice_art.pixel_size = clampf(panel_size.x / 170.0, 0.0009, 0.00145)
+	ice_art.modulate = Color(0.90, 0.98, 1.0, 1.0)
+	ice_art.outline_modulate = Color(0.015, 0.12, 0.24, 1.0)
+	ice_art.outline_size = 4
+	ice_art.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ice_art.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ice_art.no_depth_test = true
+	ice_art.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	ice_art.render_priority = 22
+	ice_art.outline_render_priority = 21
+	ice_art.position = panel_pos + Vector3(0.0, 0.0, 0.025)
+	soda_flavor_panel_root.add_child(ice_art)
 
 
 func _make_soda_flavor_panel_backing_mat() -> StandardMaterial3D:
@@ -25450,14 +25987,16 @@ func _collect_soda_brand_panels(n: Node, xf: Transform3D, out: Array) -> void:
 
 
 func _load_soda_image_texture(path: String) -> Texture2D:
-	if not FileAccess.file_exists(path):
+	## Load the imported Godot texture resource so this also works in the PCK.
+	## Image.load() against res:// succeeds in editor but not in release exports.
+	if not ResourceLoader.exists(path):
 		push_warning("Soda texture missing: %s" % path)
 		return null
-	var img := Image.new()
-	if img.load(path) != OK:
+	var tex := load(path) as Texture2D
+	if tex == null:
 		push_warning("Soda texture failed to load: %s" % path)
 		return null
-	return ImageTexture.create_from_image(img)
+	return tex
 
 
 func _soda_body_material_for(mat_name: String) -> StandardMaterial3D:
@@ -25759,21 +26298,30 @@ func _add_soda_drip_grate_overlay(parent: Node3D) -> void:
 	var root := Node3D.new()
 	root.name = "SodaDripGrateOverlay"
 	parent.add_child(root)
-	var metal := _make_soda_metal_mat(Color(0.010, 0.012, 0.016), 0.78, 0.055)
+	var metal := _make_soda_metal_mat(Color(0.055, 0.065, 0.078), 0.84, 0.10)
 	metal.clearcoat_enabled = true
 	metal.clearcoat = 1.0
 	metal.clearcoat_roughness = 0.035
-	var dark := _make_soda_metal_mat(Color(0.002, 0.003, 0.004), 0.62, 0.10)
+	var dark := _make_soda_metal_mat(Color(0.006, 0.008, 0.012), 0.72, 0.08)
 	dark.clearcoat_enabled = true
 	dark.clearcoat = 0.75
 	dark.clearcoat_roughness = 0.06
-	var top_y := CUP_TRAY_DECK_LOCAL_Y + 0.004
-	_add_mesh_box(root, "MetalGrateTop", Vector3(0.64, 0.006, 0.24), Vector3(0.0, top_y, 0.47), metal)
+	## The previous overlay used +Z, which is the rear of the current two-bay
+	## machine. Seat the tray under the actual cup rest on the cook-facing -Z side.
+	var deck_y := CUP_TRAY_DECK_LOCAL_Y
+	var tray_z := soda_cup_rest_z
+	_add_mesh_box(root, "MetalGrateTop", Vector3(0.70, 0.008, 0.30), Vector3(0.0, deck_y - 0.004, tray_z), metal)
 	for row in 3:
 		for col in 7:
-			var slot := _add_mesh_box(root, "GrateSlot_%d_%d" % [row, col], Vector3(0.048, 0.003, 0.015), Vector3(-0.21 + float(col) * 0.07, top_y + 0.004, 0.395 + float(row) * 0.055), dark)
+			var slot := _add_mesh_box(root, "GrateSlot_%d_%d" % [row, col], Vector3(0.052, 0.003, 0.018), Vector3(-0.225 + float(col) * 0.075, deck_y + 0.0015, tray_z - 0.060 + float(row) * 0.060), dark)
 			slot.rotation_degrees.y = 0.0
-	_add_mesh_box(root, "GlossBlackTrayUnderlay", Vector3(0.68, 0.038, 0.28), Vector3(0.0, top_y - 0.030, 0.47), dark)
+	_add_mesh_box(root, "GlossBlackTrayUnderlay", Vector3(0.74, 0.040, 0.34), Vector3(0.0, deck_y - 0.028, tray_z), dark)
+	## A raised rim makes the runoff tray readable against the black cabinet.
+	var rim := _make_soda_metal_mat(Color(0.12, 0.135, 0.16), 0.92, 0.14)
+	_add_mesh_box(root, "TrayRimLeft", Vector3(0.024, 0.026, 0.34), Vector3(-0.362, deck_y + 0.009, tray_z), rim)
+	_add_mesh_box(root, "TrayRimRight", Vector3(0.024, 0.026, 0.34), Vector3(0.362, deck_y + 0.009, tray_z), rim)
+	_add_mesh_box(root, "TrayRimFront", Vector3(0.75, 0.026, 0.024), Vector3(0.0, deck_y + 0.009, tray_z - 0.162), rim)
+	_add_mesh_box(root, "TrayRimBack", Vector3(0.75, 0.026, 0.024), Vector3(0.0, deck_y + 0.009, tray_z + 0.162), rim)
 
 
 func _add_soda_nozzle_fill_visual(parent: Node3D, nozzle_name: String, local_pos: Vector3, mat: Material, throat_mat: Material) -> void:
@@ -25858,6 +26406,28 @@ func _make_waffle_cone_mat(col: Color, roughness: float = 0.72) -> StandardMater
 	mat.rim = 0.18
 	mat.rim_tint = 0.25
 	return mat
+
+
+func _style_fries_food_material(mat: StandardMaterial3D, emission_energy: float = 0.34) -> void:
+	## Warm food glow plus orange transmittance gives the chunky fry meshes a
+	## soft faux-SSS edge without flattening their face shading into neon.
+	mat.metallic = 0.0
+	mat.roughness = 0.88
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.43, 0.055)
+	mat.emission_energy_multiplier = clampf(emission_energy, 0.0, 1.5)
+	mat.set("subsurf_scatter_enabled", true)
+	mat.set("subsurf_scatter_strength", 0.28)
+	mat.set("subsurf_scatter_skin_mode", false)
+	mat.set("subsurf_scatter_transmittance_enabled", true)
+	mat.set("subsurf_scatter_transmittance_color", Color(1.0, 0.25, 0.025))
+	mat.set("subsurf_scatter_transmittance_depth", 0.028)
+	mat.rim_enabled = true
+	mat.rim = 0.14
+	mat.rim_tint = 0.72
+	mat.clearcoat_enabled = false
 
 
 func _make_basic_mat(col: Color, metallic: float = 0.0, roughness: float = 0.55) -> StandardMaterial3D:
@@ -25967,10 +26537,10 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		(rim_mat as BaseMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
 	trim.material_override = rim_mat
 	tub.add_child(trim)
-	var bubble_mat := _make_basic_mat(Color(1.0, 0.92, 0.28, 0.72), 0.0, 0.18)
+	var bubble_mat := _make_basic_mat(fryer_bubble_color, 0.0, 0.18)
 	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	bubble_mat.emission_enabled = true
-	bubble_mat.emission = Color(1.0, 0.78, 0.12)
+	bubble_mat.emission = fryer_bubble_color.lightened(0.12)
 	bubble_mat.emission_energy_multiplier = 0.24
 	for i in 9:
 		var bubble := MeshInstance3D.new()
@@ -26018,10 +26588,10 @@ func _build_fryer_machine() -> void:
 	fryer_root = root
 
 	var steel_mat := _make_soda_metal_mat(Color(0.60, 0.61, 0.58), 0.92, 0.18)
-	var oil_mat := _make_basic_mat(Color(0.92, 0.68, 0.12, 0.92), 0.05, 0.14)
+	var oil_mat := _make_basic_mat(fryer_oil_color, 0.05, 0.14)
 	oil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	oil_mat.emission_enabled = true
-	oil_mat.emission = Color(1.0, 0.62, 0.08)
+	oil_mat.emission = fryer_oil_color.lightened(0.08)
 	oil_mat.emission_energy_multiplier = 0.34
 	oil_mat.roughness = 0.18
 	oil_mat.metallic = 0.12
@@ -26092,10 +26662,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	fries_root.name = "Potatoes"
 	basket.add_child(fries_root)
 	var raw_mat := _make_basic_mat(FRYER_FRY_COLOR, 0.0, 1.0)
-	raw_mat.metallic = 0.0
-	raw_mat.roughness = 1.0
-	raw_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	raw_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
+	_style_fries_food_material(raw_mat, 0.10)
 	for i in 26:
 		var fry := _add_mesh_box(
 			fries_root,
@@ -26188,6 +26755,7 @@ func _refresh_fryer_basket_visual(index: int) -> void:
 			var mat := mi.material_override as StandardMaterial3D
 			if mat != null:
 				mat.albedo_color = FRYER_FRY_COLOR.lerp(FRYER_FRY_COOKED_COLOR, cooked_t)
+				mat.emission_energy_multiplier = lerpf(0.10, 0.34, cooked_t)
 	_set_fryer_basket_smoke_active(root, state == "cooking" or float(data.get("smoke_after", 0.0)) > 0.0)
 	var area := data.get("area") as Area3D
 	if area != null and is_instance_valid(area):
@@ -26691,15 +27259,7 @@ func _paint_fries_pack_meshes(model: Node3D) -> void:
 	## FBX ships untextured grey — paint cup red, fries golden.
 	var cup_mat := _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
 	var fry_mat := _make_basic_mat(Color(0.96, 0.68, 0.16), 0.0, 0.92)
-	fry_mat.metallic = 0.0
-	fry_mat.roughness = 1.0
-	fry_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	fry_mat.emission_enabled = true
-	fry_mat.emission = Color(1.0, 0.82, 0.18) ## yellow-golden glow
-	fry_mat.emission_energy_multiplier = 0.20
-	fry_mat.clearcoat_enabled = false
-	fry_mat.rim_enabled = false
-	fry_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
+	_style_fries_food_material(fry_mat, 0.34)
 	var stack: Array[Node] = [model]
 	while not stack.is_empty():
 		var node: Node = stack.pop_back()
@@ -26834,6 +27394,39 @@ func _fryer_oil_global(index: int = -1) -> Vector3:
 	return fryer_root.to_global(_fryer_oil_local_for_index(index))
 
 
+func _set_fryer_color_component(target: String, component: String, value: float) -> void:
+	var color := fryer_oil_color if target == "oil" else fryer_bubble_color
+	match component:
+		"r": color.r = clampf(value, 0.0, 1.0)
+		"g": color.g = clampf(value, 0.0, 1.0)
+		"b": color.b = clampf(value, 0.0, 1.0)
+		"a": color.a = clampf(value, 0.05, 1.0)
+	if target == "oil":
+		fryer_oil_color = color
+	else:
+		fryer_bubble_color = color
+	_apply_fryer_visual_colors()
+	_save_fryer_tuning_settings()
+
+
+func _apply_fryer_visual_colors() -> void:
+	if fryer_root != null and is_instance_valid(fryer_root):
+		for node in fryer_root.find_children("OilLiquid", "MeshInstance3D", true, false):
+			var oil_mesh := node as MeshInstance3D
+			var oil_mat := oil_mesh.material_override as StandardMaterial3D
+			if oil_mat != null:
+				oil_mat.albedo_color = fryer_oil_color
+				oil_mat.emission = fryer_oil_color.lightened(0.08)
+	for bubble_var in fryer_oil_bubbles:
+		var bubble := bubble_var as MeshInstance3D
+		if bubble == null or not is_instance_valid(bubble):
+			continue
+		var bubble_mat := bubble.material_override as StandardMaterial3D
+		if bubble_mat != null:
+			bubble_mat.albedo_color = fryer_bubble_color
+			bubble_mat.emission = fryer_bubble_color.lightened(0.12)
+
+
 func _update_fryer_oil_bubbles(delta: float) -> void:
 	if fryer_root == null or not is_instance_valid(fryer_root) or not fryer_root.visible:
 		return
@@ -26853,7 +27446,7 @@ func _update_fryer_oil_bubbles(delta: float) -> void:
 		var mat := bubble.material_override as StandardMaterial3D
 		if mat != null:
 			var c := mat.albedo_color
-			c.a = 0.55 + pulse * 0.35
+			c.a = clampf(fryer_bubble_color.a * (0.76 + pulse * 0.24), 0.0, 1.0)
 			mat.albedo_color = c
 
 
@@ -26976,7 +27569,7 @@ func _begin_fries_pack_hold(slot_idx: int = -1) -> bool:
 	fries_pack_root.name = "HeldFries"
 	world.add_child(fries_pack_root)
 	fries_pack_root.global_position = start
-	fries_pack_root.scale = Vector3(1.18, 1.18, 1.18)
+	fries_pack_root.scale = Vector3.ONE * FRIES_FINISHED_HAND_SCALE
 	fries_pack_root.rotation_degrees = Vector3(-4.0, 0.0, 0.0) ## logo side toward cook/camera
 	_populate_fry_pack(fries_pack_root)
 	_fries_pack_prev_pos = fries_pack_root.global_position
@@ -27267,13 +27860,7 @@ func _spawn_spilled_fry_local(land: Vector3, yaw_deg: float, start: Vector3 = Ve
 	box.size = Vector3(w, h, length)
 	fry.mesh = box
 	var mat := _make_basic_mat(Color(0.96, 0.68, 0.16), 0.0, 1.0)
-	mat.metallic = 0.0
-	mat.roughness = 1.0
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.82, 0.18)
-	mat.emission_energy_multiplier = 0.20
+	_style_fries_food_material(mat, 0.34)
 	fry.material_override = mat
 	parent.add_child(fry)
 	## Sit on top of the steel (mesh is centered) — don't clip through.
@@ -27354,10 +27941,12 @@ func _update_grill_spilled_fries(delta: float) -> void:
 				var black := Color(0.04, 0.03, 0.02)
 				var t := smoothstep(0.0, 1.0, burn)
 				mat.albedo_color = golden.lerp(black, t)
-				mat.roughness = lerpf(1.0, 0.95, burn)
+				mat.roughness = lerpf(0.88, 0.98, burn)
 				mat.emission_enabled = burn < 0.92
-				mat.emission = Color(1.0, 0.82, 0.18).lerp(Color(0.08, 0.04, 0.02), t)
-				mat.emission_energy_multiplier = lerpf(0.20, 0.0, t)
+				mat.emission = Color(1.0, 0.43, 0.055).lerp(Color(0.08, 0.04, 0.02), t)
+				mat.emission_energy_multiplier = lerpf(0.34, 0.0, t)
+				mat.set("subsurf_scatter_strength", lerpf(0.28, 0.0, t))
+				mat.rim = lerpf(0.14, 0.0, t)
 			if smoke != null and is_instance_valid(smoke):
 				smoke.emitting = grill_on
 				smoke.amount_ratio = clampf(0.2 + burn * 0.65, 0.0, 0.85)
@@ -27496,15 +28085,10 @@ func _release_spilled_fry(screen_pos: Vector2) -> void:
 		spilled_fry_held_idx = -1
 		return
 	if _is_over_garbage(screen_pos):
-		var tw := create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(root, "global_position", _garbage_lerp_target_world(), 0.16)
-		tw.tween_property(root, "scale", Vector3(0.05, 0.05, 0.05), 0.16)
-		tw.chain().tween_callback(root.queue_free)
 		grill_spilled_fries.remove_at(spilled_fry_held_idx)
 		spilled_fry_held = false
 		spilled_fry_held_idx = -1
-		_physical_garbage_react()
+		_animate_object_into_garbage(root, 0.22)
 		_flash("Trashed fry", Color("FFAB91"))
 		return
 	## Drop back onto the steel under the cursor.
@@ -27537,19 +28121,9 @@ func _trash_held_fries_pack() -> void:
 	if fries_pack_root != null and is_instance_valid(fries_pack_root):
 		var root := fries_pack_root
 		fries_pack_root = null
-		var target := _garbage_lerp_target_world()
-		var tw := create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(root, "global_position", target, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.tween_property(root, "scale", Vector3(0.2, 0.2, 0.2), 0.18)
-		tw.tween_property(root, "rotation_degrees", root.rotation_degrees + Vector3(40.0, 90.0, 20.0), 0.18)
-		tw.chain().tween_callback(func() -> void:
-			if root != null and is_instance_valid(root):
-				root.queue_free()
-		)
+		_animate_object_into_garbage(root, 0.24)
 	else:
 		fries_pack_root = null
-	_physical_garbage_react()
 	_flash("Trashed fries", Color("FFAB91"))
 	_refresh_ticket_checkmarks()
 	_update_hud()
@@ -27819,16 +28393,18 @@ func _build_icecream_mascot(machine_root: Node3D) -> void:
 	mascot.mesh = mascot_mesh
 	mascot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	var fit_scale := ICECREAM_MASCOT_TARGET_H / raw.size.y
-	mascot.scale = Vector3.ONE * fit_scale
 	## Center the authored mesh on the lid and seat its lowest point just above
 	## the black trim. The OBJ conversion keeps the character's face on local +Z,
 	## matching the machine's pour face after the station yaw is applied.
-	mascot.position = Vector3(
+	var base_position := Vector3(
 		-(raw.position.x + raw.size.x * 0.5) * fit_scale,
 		0.558 - raw.position.y * fit_scale,
 		-(raw.position.z + raw.size.z * 0.5) * fit_scale
 	)
+	mascot.set_meta("base_position", base_position)
+	mascot.set_meta("base_fit_scale", fit_scale)
 	machine_root.add_child(mascot)
+	_apply_icecream_mascot_transform()
 
 
 func _create_icecream_cone_node(grabbable: bool = true) -> Node3D:
@@ -28499,9 +29075,15 @@ func _put_icecream_cone_down() -> void:
 		return
 	var mouse := get_viewport().get_mouse_position()
 	if _is_over_garbage(mouse):
+		var trashed_fill := icecream_cone_fill
 		if mp_enabled and not _mp_applying:
 			_mp_send_icecream_unsteel(icecream_cone_root)
-		icecream_cone_root.queue_free()
+		var discarded_cone := icecream_cone_root
+		icecream_cone_root = null
+		icecream_cone_area = null
+		icecream_swirl_root = null
+		_animate_object_into_garbage(discarded_cone, 0.28)
+		_flash("Trashed ice cream" if trashed_fill > 0.08 else "Trashed cone", Color("FFAB91"))
 		_spawn_and_bind_empty_icecream_cone()
 		return
 	if _try_hand_held_icecream_to_customer(mouse, false):
@@ -28932,13 +29514,40 @@ func _update_held_burnt_icecream_cone(_delta: float) -> void:
 func _garbage_lerp_target_world() -> Vector3:
 	if physical_garbage_target != null and is_instance_valid(physical_garbage_target):
 		return physical_garbage_target.global_position
-	if camera != null and grill_trash_btn != null and is_instance_valid(grill_trash_btn):
-		var r := grill_trash_btn.get_global_rect()
-		var screen := r.position + r.size * 0.5
-		var hit := _tool_hold_point_from_screen(screen, GRILL_SURFACE_Y + 0.18)
-		if hit != Vector3.ZERO:
-			return hit
 	return Vector3(GRILL_CENTER_X + GRILL_WIDTH * 0.56, GRILL_SURFACE_Y + 0.18, GRILL_SURFACE_Z + GRILL_DEPTH * 0.42)
+
+
+func _animate_object_into_garbage(node: Node3D, duration: float = 0.28) -> void:
+	## Keep the discarded object visible until it reaches the physical opening.
+	if node == null or not is_instance_valid(node):
+		_physical_garbage_react()
+		return
+	if node is Area3D:
+		(node as Area3D).input_ray_pickable = false
+		(node as Area3D).monitoring = false
+		(node as Area3D).monitorable = false
+	for child in node.find_children("*", "Area3D", true, false):
+		var area := child as Area3D
+		if area != null:
+			area.input_ray_pickable = false
+			area.monitoring = false
+			area.monitorable = false
+	node.set_process(false)
+	node.set_physics_process(false)
+	if world != null and node.get_parent() != world:
+		node.reparent(world, true)
+	var target := _garbage_lerp_target_world()
+	var start_scale := node.scale
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(node, "global_position", target, duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(node, "rotation_degrees", node.rotation_degrees + Vector3(85.0, 170.0, 55.0), duration)
+	tw.tween_property(node, "scale", start_scale * 0.08, duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.chain().tween_callback(func() -> void:
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+		_physical_garbage_react()
+	)
 
 
 func _release_burnt_icecream_cone_to_garbage() -> void:
@@ -28950,16 +29559,7 @@ func _release_burnt_icecream_cone_to_garbage() -> void:
 	burnt_icecream_cone_puddle = null
 	if root == null or not is_instance_valid(root):
 		return
-	var target := _garbage_lerp_target_world()
-	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(root, "global_position", target, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.tween_property(root, "scale", Vector3.ONE * 0.08, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.chain().tween_callback(func() -> void:
-		if root != null and is_instance_valid(root):
-			root.queue_free()
-	)
-	_physical_garbage_react()
+	_animate_object_into_garbage(root, 0.32)
 	_flash("Burnt cone tossed", Color("B0BEC5"))
 
 
@@ -29739,23 +30339,39 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 	## Grab cup mouth sits here; the complete supply is stored upside down.
 	var stack_base := SODA_CUP_STACK_BASE_LOCAL
-	## Five tightly nested inverted cups read as a supply without becoming a tall sleeve.
-	var nest_step := 0.034
-	var spare_count := 5
+	## One translucent outer shell plus four separate rims reads as a nested cup
+	## stack without layering four full plastic walls into an opaque white column.
+	var nest_step := 0.021
+	var spare_count := 4
 
-	## Nested decorative cups above the grabable one — slightly stronger alpha
-	## keeps the exposed supply readable against bright outdoor backgrounds.
-	var stack_mat := _make_clear_cup_material(0.24)
+	var stack_mat := _make_cup_stack_prop_material()
+	var rim_mat := stack_mat.duplicate() as StandardMaterial3D
+	rim_mat.albedo_color.a = 0.48
+	rim_mat.roughness = 0.30
+	var shell_y := float(spare_count) * nest_step
+	var stack_shell := MeshInstance3D.new()
+	stack_shell.name = "CupStackOuterShell"
+	stack_shell.mesh = _make_solo_cup_shell_mesh(CUP_SHELL_TOP_R, CUP_SHELL_BOT_R, CUP_SHELL_H, 0.0034)
+	stack_shell.position = stack_base + Vector3(0.0, CUP_SHELL_H * 0.5 + shell_y, 0.0)
+	stack_shell.rotation_degrees = SODA_CUP_STACK_ROT
+	stack_shell.material_override = stack_mat
+	stack_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rack.add_child(stack_shell)
 	for i in spare_count:
 		var nest_y := float(i + 1) * nest_step
-		var spare := MeshInstance3D.new()
-		spare.name = "SpareCup_%d" % i
-		spare.mesh = _make_solo_cup_shell_mesh(CUP_SHELL_TOP_R, CUP_SHELL_BOT_R, CUP_SHELL_H, 0.0034)
-		spare.position = stack_base + Vector3(0.0, CUP_SHELL_H * 0.5 + nest_y, 0.0)
-		spare.rotation_degrees = SODA_CUP_STACK_ROT
-		spare.material_override = stack_mat
-		spare.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		rack.add_child(spare)
+		## Brighter rims communicate each nested cup without another overlapping body.
+		var rim := MeshInstance3D.new()
+		rim.name = "SpareCupRim_%d" % i
+		var rim_mesh := TorusMesh.new()
+		rim_mesh.inner_radius = CUP_SHELL_TOP_R - 0.0045
+		rim_mesh.outer_radius = CUP_SHELL_TOP_R + 0.0015
+		rim_mesh.rings = 20
+		rim_mesh.ring_segments = 8
+		rim.mesh = rim_mesh
+		rim.position = stack_base + Vector3(0.0, nest_y, 0.0)
+		rim.material_override = rim_mat
+		rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		rack.add_child(rim)
 
 	## Large grab volume surrounds the whole visible stack, so clicking any cup
 	## dispenses one to the fill station instead of requiring the tiny old mouth.
@@ -30162,6 +30778,9 @@ func _spawn_and_bind_empty_cup() -> void:
 	_cup_pouring = false
 	_build_cup_liquid_bubbles()
 	_refresh_cup_visuals()
+	## The working transparent cup is inventory, not another decorative shell.
+	## Keep it hidden in the rack and reveal it only when it starts dispensing.
+	root.visible = false
 
 
 func _layout_parked_cups() -> void:
@@ -30469,6 +31088,7 @@ func _promote_cup_to_active(root: Node3D) -> void:
 			cup_root.global_position = cup_home
 			cup_root.rotation_degrees = cup_home_rot
 			cup_root.scale = Vector3.ONE * soda_cup_rack_scale
+			cup_root.visible = false
 		else:
 			_save_active_cup_meta()
 			cup_root.set_meta("on_steel", false)
@@ -30480,6 +31100,7 @@ func _promote_cup_to_active(root: Node3D) -> void:
 		_clear_cup_refs()
 		cup_root = null
 	_bind_cup_refs(root)
+	root.visible = true
 	_load_cup_meta(root)
 	## Rebuild bubble buffers for the newly active cup if missing.
 	if cup_liquid_bubbles_mm == null:
@@ -30600,6 +31221,25 @@ func _make_clear_cup_material(alpha: float) -> StandardMaterial3D:
 	mat.no_depth_test = true
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.render_priority = CUP_DRAW_PRIORITY
+	return mat
+
+
+func _make_cup_stack_prop_material() -> StandardMaterial3D:
+	## A single lightly frosted shell; unlike the previous four opaque bodies it
+	## lets the machine/background read through without nested alpha artifacts.
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "CupStackClearPlastic"
+	mat.albedo_color = Color(0.91, 0.95, 1.0, 0.18)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.roughness = 0.30
+	mat.metallic = 0.0
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.08
+	mat.clearcoat_roughness = 0.24
 	return mat
 
 
@@ -31801,6 +32441,7 @@ func _dispense_cup_to_fill_station() -> bool:
 	if used:
 		_flash("Finish or serve the cup on the tray first", Color("FFCC80"))
 		return false
+	cup_root.visible = true
 	_shake_soda_cup_stack()
 	var station := _cup_rest_global()
 	if station == Vector3.ZERO:
@@ -31911,7 +32552,7 @@ func _cup_soda_front_z() -> float:
 	## Firm wall only during the fresh-grab window; then open the fill bay.
 	if _cup_grab_front_block_t > 0.0:
 		return soda_blocker_front_z
-	return soda_blocker_fill_z
+	return maxf(soda_blocker_fill_z, SODA_FILL_FRONT_SAFE_Z)
 
 
 func _cup_rack_front_grab_pos() -> Vector3:
@@ -31934,6 +32575,7 @@ func _start_cup_draw_from_rack() -> void:
 	if cup_root == null or not is_instance_valid(cup_root):
 		cup_drawing = false
 		return
+	cup_root.visible = true
 	cup_home = _cup_rack_seat_global()
 	_cup_draw_from = cup_home if cup_home != Vector3.ZERO else cup_root.global_position
 	cup_root.global_position = _cup_draw_from
@@ -32055,6 +32697,37 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	if locked_valid:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
+		## The new two-bay machine is close enough that both attraction circles can
+		## touch. If the hand clearly crosses into the other outlet, transfer ownership
+		## immediately instead of holding the old bay and imposing an unlock delay.
+		var switch_node: Node3D = null
+		var switch_target := Vector3.ZERO
+		var switch_d := INF
+		for candidate in candidates:
+			if candidate == _cup_spout_lock:
+				continue
+			var candidate_target := _cup_target_for_spout(candidate)
+			var candidate_d := Vector2(hit.x - candidate_target.x, hit.z - candidate_target.z).length()
+			var candidate_id := _soda_station_id_for_tip(candidate)
+			var candidate_acquire := maxf(soda_soft_acquire, _soda_soft_radius_for_station(candidate_id) * 0.70)
+			if candidate_d <= candidate_acquire and candidate_d + 0.025 < locked_d and candidate_d < switch_d:
+				switch_node = candidate
+				switch_target = candidate_target
+				switch_d = candidate_d
+		if switch_node != null:
+			_cup_spout_lock = switch_node
+			_cup_spout_unlock_grace = 0.0
+			_cup_vel = Vector3.ZERO
+			_cup_tilt = Vector2.ZERO
+			_cup_slosh = Vector2.ZERO
+			if cup_root != null and is_instance_valid(cup_root):
+				_cup_prev_pos = cup_root.global_position
+			var switched := hit
+			var switch_pull := clampf(soda_soft_pull, 0.0, 1.0)
+			switched.x = lerpf(hit.x, switch_target.x, switch_pull)
+			switched.z = lerpf(hit.z, switch_target.z, switch_pull)
+			switched.y = lerpf(hit.y, switch_target.y, 0.70)
+			return switched
 		var locked_id := _soda_station_id_for_tip(_cup_spout_lock)
 		var locked_radius := _soda_soft_radius_for_station(locked_id)
 		## Hard break if the hand is past the leash — don't keep tugging.
@@ -32165,9 +32838,13 @@ func _cup_under_spout(tip: Vector3, rim: Vector3) -> bool:
 
 
 func _cup_fill_spout_nearby() -> Node3D:
-	## Nearest soda/ice tip by XZ — used to force deck Y on first fill before soft-lock sticks.
+	## Resolve against the same seat positions used by the soft lock. Comparing the
+	## cup against raw nozzle coordinates could select the neighboring bay whenever
+	## a Hidden-menu seat offset was active.
 	if cup_root == null or not is_instance_valid(cup_root):
 		return null
+	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
+		return _cup_spout_lock
 	var best: Node3D = null
 	var best_d := soda_soft_magnet_radius
 	var tips: Array[Node3D] = []
@@ -32176,7 +32853,7 @@ func _cup_fill_spout_nearby() -> Node3D:
 		if tip != null:
 			tips.append(tip)
 	for tip in tips:
-		var tpos: Vector3 = tip.global_position
+		var tpos := _cup_target_for_spout(tip)
 		var d := Vector2(cup_root.global_position.x - tpos.x, cup_root.global_position.z - tpos.z).length()
 		if d < best_d:
 			best_d = d
@@ -32217,16 +32894,13 @@ func _update_held_cup(delta: float) -> void:
 	## Nearby alone must NOT trap the cup (that made yank-away feel glued).
 	var locked_tip := _cup_spout_lock if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) else null
 	var fill_tip: Node3D = locked_tip
-	## A pour may remain true until the end of this frame. Do not let that stale bit
-	## pull a released/reused cup back to the previous nozzle during unlock grace.
+	## Only an active soft lock may steer a cup. A one-frame stale `_cup_pouring`
+	## flag previously reattached released cups and caused the visible ping-pong.
 	var can_use_fill_bay := locked_tip != null
-	if not can_use_fill_bay and _cup_pouring and _cup_spout_unlock_grace <= 0.0:
-		fill_tip = _cup_fill_spout_nearby()
-		can_use_fill_bay = fill_tip != null
-	## Invisible wall on the aim target — stops chase→shove glitching into the cabinet.
-	## Skip near SODA/ICE seats so soft-lock can actually pull under the nozzles.
-	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay \
-			and not _cup_near_fill_seat(seat):
+	## The front wall remains active inside the fill approach. Its safe depth sits
+	## just behind the live nozzle seats, so it cannot block filling but it does
+	## stop the cursor from pushing a cup through/past the stream.
+	if seat != Vector3.ZERO and not can_reach_customer and not can_use_fill_bay:
 		seat = _resolve_cup_against_soda(seat, false)
 	if seat != Vector3.ZERO:
 		var prev := cup_root.global_position
@@ -32258,8 +32932,17 @@ func _update_held_cup(delta: float) -> void:
 				_cup_vel.x *= clampf(1.0 - delta * 6.0, 0.0, 1.0)
 				_cup_vel.z *= clampf(1.0 - delta * 6.0, 0.0, 1.0)
 				_cup_vel.y = 0.0
+		if not can_reach_customer and not can_use_fill_bay:
+			desired = _clamp_cup_to_machine_front(
+				desired, soda_root, soda_blocker_half_x, soda_blocker_height, _cup_soda_front_z()
+			)
 		var step := desired - prev
-		var max_step := (soda_fill_max_speed if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
+		var active_fill_speed := soda_fill_max_speed
+		if can_use_fill_bay:
+			var contents := clampf(maxf(cup_soda_fill, cup_ice_fill), 0.0, 1.0)
+			var stable_cap := lerpf(CUP_FILL_EMPTY_MAX_SPEED, CUP_FILL_FULL_MAX_SPEED, contents)
+			active_fill_speed = minf(active_fill_speed, stable_cap)
+		var max_step := (active_fill_speed if can_use_fill_bay else CUP_FOLLOW_MAX_SPEED) * delta
 		if step.length() > max_step and max_step > 0.0001:
 			## Never rate-limit the drop onto the drip deck — that's the whole point of first fill.
 			if can_use_fill_bay:
@@ -32271,6 +32954,16 @@ func _update_held_cup(delta: float) -> void:
 					desired.z = prev.z + xz.y
 			else:
 				desired = prev + step.normalized() * max_step
+		if can_use_fill_bay and fill_tip != null and is_instance_valid(fill_tip):
+			## End tiny sub-pixel corrections once centered. This also clears any
+			## velocity inherited while entering the fill bay.
+			var stable_seat := _cup_target_for_spout(fill_tip)
+			var settle_delta := Vector2(stable_seat.x - desired.x, stable_seat.z - desired.z)
+			if settle_delta.length() <= CUP_FILL_SETTLE_XZ:
+				desired.x = stable_seat.x
+				desired.z = stable_seat.z
+				_cup_vel.x = 0.0
+				_cup_vel.z = 0.0
 		cup_root.global_position = desired
 		if delta > 0.0001:
 			_cup_vel = (cup_root.global_position - _cup_prev_pos) / delta
@@ -33002,31 +33695,30 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 			game_audio.set_ice_grind(false)
 		return
 	var rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.95, 0.0)
-	## Pick the nearer nozzle only — soda and ice never fire together.
+	## Pick the nearer nozzle only — soda and ice never fire together. An active
+	## lock is authoritative so neighboring bays cannot alternate frame-to-frame.
 	var station_id := ""
 	var station_tip := Vector3.ZERO
 	var station_d := 999.0
-	for fid in _soda_station_tip_ids():
-		var tip := _soda_tip_for_station(fid)
-		if tip == null:
-			continue
-		var tip_pos := tip.global_position
-		if not _cup_under_spout(tip_pos, rim):
-			continue
-		var d := Vector2(tip_pos.x - rim.x, tip_pos.z - rim.z).length()
-		if d < station_d:
-			station_d = d
-			station_id = fid
-			station_tip = tip_pos
-	if station_id == "":
-		var zone_radius := maxf(soda_soft_magnet_radius * 1.90, soda_soft_acquire * 2.25)
-		var near := _nearest_soda_station_for_pos(rim, zone_radius)
-		if str(near.get("id", "")) == "":
-			near = _nearest_soda_station_for_pos(cup_root.global_position, zone_radius)
-		station_id = str(near.get("id", ""))
-		var near_tip: Marker3D = near.get("tip", null)
-		if station_id != "" and near_tip != null and is_instance_valid(near_tip):
-			station_tip = near_tip.global_position
+	var locked_tip: Node3D = _cup_spout_lock if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) else null
+	if locked_tip != null:
+		var locked_pos := locked_tip.global_position
+		if _cup_under_spout(locked_pos, rim):
+			station_id = _soda_station_id_for_tip(locked_tip)
+			station_tip = locked_pos
+	else:
+		for fid in _soda_station_tip_ids():
+			var tip := _soda_tip_for_station(fid)
+			if tip == null:
+				continue
+			var tip_pos := tip.global_position
+			if not _cup_under_spout(tip_pos, rim):
+				continue
+			var d := Vector2(tip_pos.x - rim.x, tip_pos.z - rim.z).length()
+			if d < station_d:
+				station_d = d
+				station_id = fid
+				station_tip = tip_pos
 	var pouring_soda := false
 	var pouring_ice := false
 	if station_id != "":
@@ -34292,6 +34984,8 @@ func _start_cup_rim_flip(hold_sec: float) -> void:
 	_cup_flip_t = 0.0
 	if game_audio:
 		game_audio.play_scoop()
+		if game_audio.has_method("play_spatula_whoosh"):
+			game_audio.play_spatula_whoosh()
 
 
 func _cup_flip_arc_height_mul(t: float) -> float:
@@ -35144,8 +35838,7 @@ func _trash_held_cup() -> void:
 	if mp_enabled:
 		_mp_send_held_cup_pose(true)
 	var had_drink := cup_soda_fill >= 0.15 or cup_ice_fill >= 0.15
-	if cup_root != null and is_instance_valid(cup_root):
-		cup_root.queue_free()
+	var discarded_cup := cup_root
 	cup_root = null
 	_clear_cup_refs()
 	cup_flavor = ""
@@ -35159,7 +35852,7 @@ func _trash_held_cup() -> void:
 	_cup_pour_white = 0.0
 	_refresh_soda_tank_bubbles()
 	_refresh_ticket_checkmarks()
-	_physical_garbage_react()
+	_animate_object_into_garbage(discarded_cup, 0.28)
 	if had_drink:
 		_flash("Trashed drink", Color("FFAB91"))
 	else:
@@ -35733,6 +36426,7 @@ func _build_procedural_window_bunting() -> void:
 		window_bunting_root.queue_free()
 		window_bunting_root = null
 	var cfg := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
+	_apply_bunting_wind_settings(cfg)
 	var root := Node3D.new()
 	root.name = "WindowBunting"
 	root.position = Vector3(
@@ -35752,8 +36446,8 @@ func _build_procedural_window_bunting() -> void:
 	rope_mat.albedo_color = Color(0.74, 0.47, 0.25)
 	rope_mat.roughness = 0.8
 	rope_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var red_mat := _make_bunting_flag_material(Color(0.94, 0.18, 0.17))
-	var yellow_mat := _make_bunting_flag_material(Color(1.0, 0.84, 0.23))
+	var red_mat := _make_bunting_flag_material(Color(0.94, 0.18, 0.17), cfg)
+	var yellow_mat := _make_bunting_flag_material(Color(1.0, 0.84, 0.23), cfg)
 	var points: Array[Vector3] = []
 	var rope_steps := maxi(18, count * 3)
 	for i in range(rope_steps + 1):
@@ -35764,19 +36458,27 @@ func _build_procedural_window_bunting() -> void:
 	for i in range(count):
 		var t := (float(i) + 0.5) / float(count)
 		var pos := Vector3(lerpf(-width * 0.5, width * 0.5, t), -sag * sin(PI * t) - rope * 0.35, 0.004)
-		_add_bunting_flag(root, pos, flag_w, flag_h, red_mat if i % 2 == 0 else yellow_mat)
+		_add_bunting_flag(root, pos, flag_w, flag_h, red_mat if i % 2 == 0 else yellow_mat, i)
 
 
-func _make_bunting_flag_material(col: Color) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(col.r, col.g, col.b, 0.82)
-	mat.emission_enabled = true
-	mat.emission = col.lightened(0.38)
-	mat.emission_energy_multiplier = 0.16
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+func _make_bunting_flag_material(col: Color, cfg: Dictionary) -> Material:
+	var shader := load("res://shaders/bunting_flag.gdshader") as Shader
+	if shader == null:
+		var fallback := StandardMaterial3D.new()
+		fallback.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		fallback.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fallback.albedo_color = Color(col.r, col.g, col.b, 0.82)
+		fallback.cull_mode = BaseMaterial3D.CULL_DISABLED
+		fallback.render_priority = 10
+		return fallback
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
 	mat.render_priority = 10
+	mat.set_shader_parameter("flag_color", col)
+	mat.set_shader_parameter("edge_opacity", clampf(float(cfg.get("bunting_edge_opacity", GFX_DEFAULTS["bunting_edge_opacity"])), 0.0, 1.0))
+	mat.set_shader_parameter("center_opacity", clampf(float(cfg.get("bunting_center_opacity", GFX_DEFAULTS["bunting_center_opacity"])), 0.0, 1.0))
+	mat.set_shader_parameter("edge_width", clampf(float(cfg.get("bunting_edge_width", GFX_DEFAULTS["bunting_edge_width"])), 0.0, 0.35))
+	mat.set_shader_parameter("edge_softness", clampf(float(cfg.get("bunting_edge_softness", GFX_DEFAULTS["bunting_edge_softness"])), 0.005, 0.35))
 	return mat
 
 
@@ -35794,7 +36496,7 @@ func _add_bunting_rope_segment(parent: Node3D, a: Vector3, b: Vector3, thick: fl
 	parent.add_child(mi)
 
 
-func _add_bunting_flag(parent: Node3D, pos: Vector3, width: float, height: float, mat: Material) -> void:
+func _add_bunting_flag(parent: Node3D, pos: Vector3, width: float, height: float, mat: Material, index: int) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = "BuntingFlag"
 	var arrs := []
@@ -35805,13 +36507,45 @@ func _add_bunting_flag(parent: Node3D, pos: Vector3, width: float, height: float
 		Vector3(0.0, -height, 0.0),
 	])
 	arrs[Mesh.ARRAY_NORMAL] = PackedVector3Array([Vector3(0, 0, -1), Vector3(0, 0, -1), Vector3(0, 0, -1)])
+	arrs[Mesh.ARRAY_TEX_UV] = PackedVector2Array([Vector2(0, 0), Vector2(1, 0), Vector2(0.5, 1)])
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
 	mi.mesh = mesh
 	mi.position = pos
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.set_meta("bunting_phase", float(index) * 0.83)
+	mi.set_meta("bunting_base_pos", pos)
 	parent.add_child(mi)
+
+
+func _apply_bunting_wind_settings(cfg: Dictionary) -> void:
+	bunting_wind_strength_deg = clampf(float(cfg.get("bunting_wind_strength", GFX_DEFAULTS["bunting_wind_strength"])), 0.0, 12.0)
+	bunting_wind_speed = clampf(float(cfg.get("bunting_wind_speed", GFX_DEFAULTS["bunting_wind_speed"])), 0.0, 4.0)
+	bunting_wind_gust = clampf(float(cfg.get("bunting_wind_gust", GFX_DEFAULTS["bunting_wind_gust"])), 0.0, 1.0)
+	bunting_wind_twist_deg = clampf(float(cfg.get("bunting_wind_twist", GFX_DEFAULTS["bunting_wind_twist"])), 0.0, 12.0)
+	bunting_wind_direction = clampf(float(cfg.get("bunting_wind_direction", GFX_DEFAULTS["bunting_wind_direction"])), -1.0, 1.0)
+
+
+func _update_window_bunting_wind(delta: float) -> void:
+	if window_bunting_root == null or not is_instance_valid(window_bunting_root):
+		return
+	bunting_wind_time = fposmod(bunting_wind_time + delta * bunting_wind_speed * TAU, TAU * 64.0)
+	for child in window_bunting_root.get_children():
+		var flag := child as MeshInstance3D
+		if flag == null or flag.name != "BuntingFlag":
+			continue
+		var phase := float(flag.get_meta("bunting_phase", 0.0))
+		var gust_wave := 0.5 + 0.5 * sin(bunting_wind_time * 0.31 + phase * 0.47)
+		var gust_mul := lerpf(1.0 - bunting_wind_gust * 0.35, 1.0 + bunting_wind_gust, gust_wave)
+		var flutter := sin(bunting_wind_time + phase) * bunting_wind_strength_deg * gust_mul
+		var quick_flutter := sin(bunting_wind_time * 1.83 + phase * 1.37)
+		var twist := quick_flutter * bunting_wind_twist_deg * gust_mul * bunting_wind_direction
+		var side_sway := sin(bunting_wind_time * 0.73 + phase * 0.61) \
+			* bunting_wind_strength_deg * 0.22 * bunting_wind_direction
+		flag.rotation_degrees = Vector3(flutter, twist, side_sway)
+		var base_pos: Vector3 = flag.get_meta("bunting_base_pos", flag.position)
+		flag.position = base_pos + Vector3(0.0, quick_flutter * 0.0035 * gust_mul, 0.0)
 
 
 func _apply_bunting_materials(node: Node, tex: Texture2D) -> void:
@@ -35936,8 +36670,8 @@ func _setup_radio() -> void:
 	radio.status_changed.connect(_on_radio_status)
 	radio.channel_changed.connect(_on_radio_channel)
 	radio.powered_changed.connect(_on_radio_powered)
-	_build_radio_ui()
 	_build_phone_ui()
+	_build_radio_ui()
 	_build_hud_chrome_toggle()
 	_reset_supplies()
 	radio.set_volume_linear(0.80)
@@ -36274,19 +37008,42 @@ func _style_world_hint_label(lab: Label3D) -> void:
 
 
 func _update_world_hint_fades(delta: float) -> void:
-	## Soft sine breathe on board + fryer hints — soothing in/out.
-	_world_hint_fade_t += delta
-	var breathe := 0.5 + 0.5 * sin(_world_hint_fade_t * TAU * WORLD_HINT_FADE_HZ)
+	## Idle teaching prompts appear for two seconds every five seconds. Once the
+	## fryer is in use, its changing next-step prompt stays continuously visible.
+	_world_hint_fade_t = fmod(_world_hint_fade_t + delta, WORLD_HINT_CYCLE_SEC)
+	var periodic_visible := _world_hint_fade_t < WORLD_HINT_SHOW_SEC
+	var periodic_alpha := 1.0
+	if _world_hint_fade_t < WORLD_HINT_EDGE_FADE_SEC:
+		periodic_alpha = smoothstep(0.0, WORLD_HINT_EDGE_FADE_SEC, _world_hint_fade_t)
+	elif _world_hint_fade_t > WORLD_HINT_SHOW_SEC - WORLD_HINT_EDGE_FADE_SEC:
+		periodic_alpha = 1.0 - smoothstep(
+			WORLD_HINT_SHOW_SEC - WORLD_HINT_EDGE_FADE_SEC,
+			WORLD_HINT_SHOW_SEC,
+			_world_hint_fade_t
+		)
+	_refresh_build_board_hint()
+	var fryer_active := _fryer_is_in_use()
+	if fryer_label != null and is_instance_valid(fryer_label):
+		fryer_label.visible = playing and (fryer_active or periodic_visible)
 	for lab in [build_board_hint_label, fryer_label]:
 		var hint := lab as Label3D
 		if hint == null or not is_instance_valid(hint) or not hint.visible:
 			continue
 		var max_a := _world_hint_alpha_for_label(hint)
-		var a := lerpf(minf(WORLD_HINT_FADE_MIN, max_a), max_a, breathe)
+		var a := max_a if hint == fryer_label and fryer_active else max_a * periodic_alpha
 		var c: Color = hint.modulate
 		c.a = a
 		hint.modulate = c
 		hint.outline_modulate = Color(0.0, 0.0, 0.0, a)
+
+
+func _fryer_is_in_use() -> bool:
+	if fryer_held_index >= 0:
+		return true
+	for data in fryer_baskets:
+		if typeof(data) == TYPE_DICTIONARY and str(data.get("state", "empty")) != "empty":
+			return true
+	return false
 
 
 func _build_board_hint_label() -> void:
@@ -36324,7 +37081,8 @@ func _refresh_build_board_hint() -> void:
 	var st: Dictionary = stations[STATION_CRAFT]
 	var items: Array = st.get("items", [])
 	var patties: Array = st.get("patties", [])
-	build_board_hint_label.visible = items.is_empty() and patties.is_empty() and spatula_patty == null
+	var idle_board := items.is_empty() and patties.is_empty() and spatula_patty == null
+	build_board_hint_label.visible = idle_board and _world_hint_fade_t < WORLD_HINT_SHOW_SEC
 
 
 func _build_cheese_station_prop() -> void:
@@ -37001,20 +37759,20 @@ func _apply_radio_materials(node: Node, alb: Texture2D, norm: Texture2D, met: Te
 
 
 func _layout_phone_ui_overlay() -> void:
-	## Phone stacks under the fixed top-right radio panel.
-	if phone_column == null or radio_column == null:
+	## The combined phone starts at the former radio anchor and stays right aligned.
+	if phone_column == null:
 		return
-	var radio_rect := radio_column.get_global_rect()
-	phone_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	phone_column.position = Vector2(
-		radio_rect.position.x + (radio_rect.size.x - PHONE_UI_SIZE.x) * 0.5,
-		radio_rect.position.y + radio_rect.size.y + PHONE_BELOW_RADIO_GAP
-	)
 	var vr := get_viewport().get_visible_rect()
-	phone_column.position.x = clampf(
-		phone_column.position.x,
-		vr.position.x + 6.0,
-		vr.position.x + vr.size.x - PHONE_UI_SIZE.x - 6.0
+	var visible_size := PHONE_UI_SIZE * PHONE_UI_SCALE
+	phone_column.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	phone_column.scale = Vector2.ONE * PHONE_UI_SCALE
+	phone_column.position = Vector2(
+		clampf(
+			vr.position.x + vr.size.x - visible_size.x - RADIO_UI_RIGHT,
+			vr.position.x + 6.0,
+			vr.position.x + vr.size.x - visible_size.x - 6.0
+		),
+		vr.position.y + RADIO_UI_TOP
 	)
 	phone_column.size = PHONE_UI_SIZE
 	_layout_hud_chrome_toggle()
@@ -37022,7 +37780,7 @@ func _layout_phone_ui_overlay() -> void:
 
 
 func _build_hud_chrome_toggle() -> void:
-	## Bare ▲ under the phone collapses phone + radio so the soda fountain is clear.
+	## Bare ▲ under the phone collapses the combined phone so the soda fountain is clear.
 	var ui_root: Control = get_node_or_null("UI/Root")
 	if ui_root == null:
 		return
@@ -37031,7 +37789,7 @@ func _build_hud_chrome_toggle() -> void:
 	hud_chrome_toggle = Button.new()
 	hud_chrome_toggle.name = "HudChromeToggle"
 	hud_chrome_toggle.text = "▲"
-	hud_chrome_toggle.tooltip_text = "Hide phone & radio — use soda fountain"
+	hud_chrome_toggle.tooltip_text = "Hide phone — use soda fountain"
 	hud_chrome_toggle.custom_minimum_size = Vector2(36, 22)
 	hud_chrome_toggle.focus_mode = Control.FOCUS_NONE
 	hud_chrome_toggle.z_index = 22
@@ -37062,27 +37820,25 @@ func _layout_hud_chrome_toggle() -> void:
 			RADIO_UI_TOP - 2.0
 		)
 	else:
-		var pr := phone_column.get_global_rect()
+		var visible_size := PHONE_UI_SIZE * PHONE_UI_SCALE
 		hud_chrome_toggle.position = Vector2(
-			pr.position.x + (pr.size.x - 36.0) * 0.5,
-			pr.position.y + pr.size.y + 2.0 ## was +4 — nudge 2px up
+			phone_column.position.x + (visible_size.x - 36.0) * 0.5,
+			phone_column.position.y + visible_size.y + 2.0
 		)
 
 
 func _toggle_hud_chrome_collapsed() -> void:
 	hud_chrome_collapsed = not hud_chrome_collapsed
-	if radio_column != null and is_instance_valid(radio_column):
-		radio_column.visible = not hud_chrome_collapsed
 	if phone_column != null and is_instance_valid(phone_column):
 		phone_column.visible = not hud_chrome_collapsed
 	if hud_chrome_toggle != null and is_instance_valid(hud_chrome_toggle):
 		if hud_chrome_collapsed:
 			hud_chrome_toggle.text = "▼"
-			hud_chrome_toggle.tooltip_text = "Show phone & radio"
-			_flash("Phone & radio tucked — soda fountain clear", Color("80CBC4"))
+			hud_chrome_toggle.tooltip_text = "Show phone"
+			_flash("Phone tucked — soda fountain clear", Color("80CBC4"))
 		else:
 			hud_chrome_toggle.text = "▲"
-			hud_chrome_toggle.tooltip_text = "Hide phone & radio — use soda fountain"
+			hud_chrome_toggle.tooltip_text = "Hide phone — use soda fountain"
 	if game_audio:
 		game_audio.play_click()
 	_layout_hud_chrome_toggle()
@@ -37998,7 +38754,7 @@ func _refresh_phone_ui() -> void:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_theme_constant_override("separation", 3)
-		row.custom_minimum_size = Vector2(0, 18)
+		row.custom_minimum_size = Vector2(0, 20)
 		phone_inventory_box.add_child(row)
 
 		var name_lab := Label.new()
@@ -38011,8 +38767,8 @@ func _refresh_phone_ui() -> void:
 		name_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		name_lab.clip_text = true
 		name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		UiFontsScript.apply_label(name_lab, false, 8)
-		name_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+		UiFontsScript.apply_label(name_lab, false, 9)
+		name_lab.add_theme_color_override("font_color", Color(0.84, 0.89, 0.96))
 		row.add_child(name_lab)
 
 		var stock := int(supply_stock.get(id, 0))
@@ -38025,7 +38781,7 @@ func _refresh_phone_ui() -> void:
 		count_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		count_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		UiFontsScript.apply_label(count_lab, true, 8)
+		UiFontsScript.apply_label(count_lab, true, 9)
 		count_lab.add_theme_color_override("font_color", stock_col)
 		row.add_child(count_lab)
 
@@ -38056,10 +38812,10 @@ func _refresh_phone_ui() -> void:
 			buy.tooltip_text = "Cat delivering…"
 		else:
 			buy.tooltip_text = "Buy %d for %s · cat delivers in %ds" % [SUPPLY_BUY_PACK, _format_money(pack_cost), int(SUPPLY_ORDER_WAIT)]
-		buy.custom_minimum_size = Vector2(28, 16)
+		buy.custom_minimum_size = Vector2(30, 18)
 		buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 		buy.focus_mode = Control.FOCUS_NONE
-		UiFontsScript.apply_button(buy, true, 7)
+		UiFontsScript.apply_button(buy, true, 8)
 		_style_phone_buy_button(buy)
 		var sid := id
 		if not pending:
@@ -38073,7 +38829,7 @@ func _refresh_phone_ui() -> void:
 			var row2 := HBoxContainer.new()
 			row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row2.add_theme_constant_override("separation", 3)
-			row2.custom_minimum_size = Vector2(0, 18)
+			row2.custom_minimum_size = Vector2(0, 20)
 			phone_inventory_box.add_child(row2)
 
 			var name2 := Label.new()
@@ -38085,8 +38841,8 @@ func _refresh_phone_ui() -> void:
 			name2.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			name2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			name2.clip_text = true
-			UiFontsScript.apply_label(name2, false, 8)
-			name2.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+			UiFontsScript.apply_label(name2, false, 9)
+			name2.add_theme_color_override("font_color", Color(0.84, 0.89, 0.96))
 			row2.add_child(name2)
 
 			var fill_r := _soda_tank_amount(fid)
@@ -38095,7 +38851,7 @@ func _refresh_phone_ui() -> void:
 			pct.custom_minimum_size = Vector2(22, 0)
 			pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			pct.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			UiFontsScript.apply_label(pct, true, 8)
+			UiFontsScript.apply_label(pct, true, 9)
 			pct.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35) if fill_r < SODA_TANK_LOW_WARN else Color(0.7, 0.9, 0.75))
 			row2.add_child(pct)
 
@@ -38126,9 +38882,9 @@ func _refresh_phone_ui() -> void:
 			buy2.tooltip_text = "Order syrup refill for %s · cat in %ds" % [_format_money(syrup_cost), int(SUPPLY_ORDER_WAIT)]
 			if pend2:
 				buy2.tooltip_text = "Cat delivering syrup…"
-			buy2.custom_minimum_size = Vector2(28, 16)
+			buy2.custom_minimum_size = Vector2(30, 18)
 			buy2.focus_mode = Control.FOCUS_NONE
-			UiFontsScript.apply_button(buy2, true, 7)
+			UiFontsScript.apply_button(buy2, true, 8)
 			_style_phone_buy_button(buy2)
 			var syrup_id := sid2
 			if not pend2:
@@ -38184,17 +38940,19 @@ func _style_phone_reply_button(btn: Button, accent: Color = Color(0.45, 0.68, 0.
 
 func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.06, 0.08, 0.12, 0.92)
-	sb.border_color = Color(accent.r, accent.g, accent.b, 0.45)
+	sb.bg_color = Color(0.055, 0.075, 0.12, 0.97)
+	sb.border_color = Color(accent.r, accent.g, accent.b, 0.68)
 	sb.border_width_left = 2
 	sb.border_width_top = 1
 	sb.border_width_right = 1
 	sb.border_width_bottom = 1
-	sb.set_corner_radius_all(PHONE_CORNER_INNER)
-	sb.content_margin_left = 5
-	sb.content_margin_right = 6
-	sb.content_margin_top = 5
-	sb.content_margin_bottom = 5
+	sb.set_corner_radius_all(PHONE_CORNER_INNER + 1)
+	sb.content_margin_left = 6
+	sb.content_margin_right = 7
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	sb.shadow_color = Color(0, 0, 0, 0.22)
+	sb.shadow_size = 2
 	return sb
 
 
@@ -38331,7 +39089,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 
 	var title := Label.new()
 	title.text = "EQUIPMENT"
-	UiFontsScript.apply_label(title, true, 9)
+	UiFontsScript.apply_label(title, true, 10)
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	v.add_child(title)
 
@@ -38344,7 +39102,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", 4)
-	row.custom_minimum_size = Vector2(0, 22)
+	row.custom_minimum_size = Vector2(0, 25)
 	parent.add_child(row)
 
 	var copy := VBoxContainer.new()
@@ -38360,7 +39118,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lab.clip_text = true
 	name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(name_lab, true, 8)
+	UiFontsScript.apply_label(name_lab, true, 9)
 	name_lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	copy.add_child(name_lab)
 
@@ -38370,8 +39128,8 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	note_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	note_lab.clip_text = true
 	note_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(note_lab, false, 7)
-	note_lab.add_theme_color_override("font_color", Color(0.58, 0.66, 0.76))
+	UiFontsScript.apply_label(note_lab, false, 8)
+	note_lab.add_theme_color_override("font_color", Color(0.68, 0.75, 0.84))
 	copy.add_child(note_lab)
 
 	var owned := bool(owned_machines.get(id, false))
@@ -38379,10 +39137,10 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	var buy := Button.new()
 	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
 	buy.disabled = owned or not playing or blocked != ""
-	buy.custom_minimum_size = Vector2(42, 18)
+	buy.custom_minimum_size = Vector2(44, 21)
 	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 	buy.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(buy, true, 7)
+	UiFontsScript.apply_button(buy, true, 8)
 	_style_phone_buy_button(buy)
 	if owned:
 		buy.tooltip_text = "Already installed"
@@ -38567,7 +39325,7 @@ func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -
 	var title := Label.new()
 	title.text = "ORDER RESULTS"
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	UiFontsScript.apply_label(title, true, 7)
+	UiFontsScript.apply_label(title, true, 8)
 	title.add_theme_color_override("font_color", Color("90CAF9"))
 	stack.add_child(title)
 
@@ -38600,7 +39358,7 @@ func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -
 		caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		UiFontsScript.apply_label(caption, true, 6)
+		UiFontsScript.apply_label(caption, true, 7)
 		caption.add_theme_color_override("font_color", Color(0.48, 0.57, 0.68))
 		cell.add_child(caption)
 		var value := Label.new()
@@ -38610,7 +39368,7 @@ func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -
 		value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		value.tooltip_text = value.text
 		value.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		UiFontsScript.apply_label(value, true, 7)
+		UiFontsScript.apply_label(value, true, 8)
 		value.add_theme_color_override(
 			"font_color", breakdown.get("%s_color" % id, Color.WHITE) as Color
 		)
@@ -38644,16 +39402,16 @@ func _refresh_phone_feed() -> void:
 		var empty := Label.new()
 		empty.text = "No posts yet — serve someone!"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UiFontsScript.apply_label(empty, false, 8)
-		empty.add_theme_color_override("font_color", Color(0.48, 0.55, 0.64))
+		UiFontsScript.apply_label(empty, false, 9)
+		empty.add_theme_color_override("font_color", Color(0.65, 0.72, 0.82))
 		phone_feed_box.add_child(empty)
 		return
 	if social_reviews.size() > SOCIAL_FEED_RECENT_VISIBLE:
 		var toggle := Button.new()
 		toggle.focus_mode = Control.FOCUS_NONE
-		toggle.custom_minimum_size = Vector2(0, 17)
+		toggle.custom_minimum_size = Vector2(0, 19)
 		toggle.text = "Show recent 5" if _phone_feed_show_all else "Show all %d" % social_reviews.size()
-		UiFontsScript.apply_button(toggle, true, 7)
+		UiFontsScript.apply_button(toggle, true, 8)
 		_style_phone_reply_button(toggle, Color("FFD54F"))
 		toggle.pressed.connect(func():
 			_phone_feed_show_all = not _phone_feed_show_all
@@ -38673,12 +39431,12 @@ func _refresh_phone_feed() -> void:
 		card.mouse_filter = Control.MOUSE_FILTER_STOP
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var card_sb := StyleBoxFlat.new()
-		card_sb.bg_color = Color(0.09, 0.11, 0.16, 0.9)
-		card_sb.set_corner_radius_all(4)
-		card_sb.content_margin_left = 5
-		card_sb.content_margin_right = 5
-		card_sb.content_margin_top = 3
-		card_sb.content_margin_bottom = 3
+		card_sb.bg_color = Color(0.075, 0.10, 0.16, 0.97)
+		card_sb.set_corner_radius_all(6)
+		card_sb.content_margin_left = 6
+		card_sb.content_margin_right = 6
+		card_sb.content_margin_top = 5
+		card_sb.content_margin_bottom = 5
 		## Newest post pops with a brighter border so it reads as “just in”.
 		if post_i == 0:
 			card_sb.border_color = Color(0.55, 0.78, 1.0, 0.9)
@@ -38699,21 +39457,21 @@ func _refresh_phone_feed() -> void:
 		cv.add_child(head)
 		var who := Label.new()
 		who.text = str(post.get("who", "Guest"))
-		UiFontsScript.apply_label(who, true, 8)
+		UiFontsScript.apply_label(who, true, 9)
 		who.add_theme_color_override("font_color", Color(0.88, 0.93, 1.0))
 		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		head.add_child(who)
 		var stars := Label.new()
 		stars.text = _star_bar_text(float(post.get("stars", 3.0)))
-		UiFontsScript.apply_label(stars, true, 7)
+		UiFontsScript.apply_label(stars, true, 9)
 		stars.add_theme_color_override("font_color", Color("FFD54F"))
 		head.add_child(stars)
 		var body := Label.new()
 		body.text = str(post.get("text", ""))
 		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		UiFontsScript.apply_label(body, false, 8)
-		body.add_theme_color_override("font_color", Color(0.68, 0.74, 0.82))
+		UiFontsScript.apply_label(body, false, 9)
+		body.add_theme_color_override("font_color", Color(0.82, 0.87, 0.94))
 		cv.add_child(body)
 		var breakdown: Dictionary = post.get("breakdown", {}) as Dictionary
 		if not breakdown.is_empty():
@@ -38735,7 +39493,7 @@ func _refresh_phone_feed() -> void:
 			ours.text = "Burger Pals: %s" % reply_text
 			ours.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			ours.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			UiFontsScript.apply_label(ours, true, 7)
+			UiFontsScript.apply_label(ours, true, 8)
 			ours.add_theme_color_override("font_color", Color(0.72, 0.88, 1.0))
 			cv.add_child(ours)
 			var argue_text := str(post.get("argue", "")).strip_edges()
@@ -38744,7 +39502,7 @@ func _refresh_phone_feed() -> void:
 				theirs.text = "%s: %s" % [str(post.get("who", "Guest")), argue_text]
 				theirs.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 				theirs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				UiFontsScript.apply_label(theirs, false, 7)
+				UiFontsScript.apply_label(theirs, false, 8)
 				theirs.add_theme_color_override("font_color", Color(1.0, 0.72, 0.62))
 				cv.add_child(theirs)
 		else:
@@ -38759,7 +39517,7 @@ func _refresh_phone_feed() -> void:
 				b_not.focus_mode = Control.FOCUS_NONE
 				b_not.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				b_not.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_not, true, 6)
+				UiFontsScript.apply_button(b_not, true, 7)
 				_style_phone_reply_button(b_not, Color(0.95, 0.72, 0.45))
 				var pid_not := post_id
 				b_not.pressed.connect(func(): _reply_to_social_review(pid_not, "not_true"))
@@ -38769,7 +39527,7 @@ func _refresh_phone_feed() -> void:
 				b_better.focus_mode = Control.FOCUS_NONE
 				b_better.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				b_better.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_better, true, 6)
+				UiFontsScript.apply_button(b_better, true, 7)
 				_style_phone_reply_button(b_better, Color(0.55, 0.85, 0.65))
 				var pid_better := post_id
 				b_better.pressed.connect(func(): _reply_to_social_review(pid_better, "better"))
@@ -38784,7 +39542,7 @@ func _refresh_phone_feed() -> void:
 				b_liar.focus_mode = Control.FOCUS_NONE
 				b_liar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				b_liar.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_liar, true, 6)
+				UiFontsScript.apply_button(b_liar, true, 7)
 				_style_phone_reply_button(b_liar, Color(0.95, 0.45, 0.45))
 				var pid_liar := post_id
 				b_liar.pressed.connect(func(): _reply_to_social_review(pid_liar, "liar"))
@@ -38794,7 +39552,7 @@ func _refresh_phone_feed() -> void:
 				b_custom.focus_mode = Control.FOCUS_NONE
 				b_custom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				b_custom.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_custom, true, 6)
+				UiFontsScript.apply_button(b_custom, true, 7)
 				_style_phone_reply_button(b_custom)
 				var pid_custom := post_id
 				b_custom.pressed.connect(func(): _show_social_reply_custom(pid_custom))
@@ -38811,7 +39569,7 @@ func _refresh_phone_feed() -> void:
 					edit.custom_minimum_size = Vector2(0, 18)
 					edit.max_length = 140
 					edit.focus_mode = Control.FOCUS_ALL
-					edit.add_theme_font_size_override("font_size", 8)
+					edit.add_theme_font_size_override("font_size", 9)
 					edit.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 					edit.add_theme_color_override("font_placeholder_color", Color(0.45, 0.52, 0.62))
 					var pid_edit := post_id
@@ -38822,7 +39580,7 @@ func _refresh_phone_feed() -> void:
 					send.text = "Send"
 					send.focus_mode = Control.FOCUS_NONE
 					send.custom_minimum_size = Vector2(34, 18)
-					UiFontsScript.apply_button(send, true, 6)
+					UiFontsScript.apply_button(send, true, 7)
 					_style_phone_reply_button(send, Color(0.55, 0.78, 1.0))
 					send.pressed.connect(func(): _reply_to_social_review(pid_edit, "custom", edit.text))
 					draft_row.add_child(send)
@@ -38833,7 +39591,7 @@ func _refresh_phone_feed() -> void:
 				reply_btn.focus_mode = Control.FOCUS_NONE
 				reply_btn.custom_minimum_size = Vector2(44, 15)
 				reply_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-				UiFontsScript.apply_button(reply_btn, true, 6)
+				UiFontsScript.apply_button(reply_btn, true, 7)
 				_style_phone_reply_button(reply_btn)
 				var pid_open := post_id
 				reply_btn.pressed.connect(func(): _open_social_reply_menu(pid_open))
@@ -38863,14 +39621,14 @@ func _build_phone_status_bar() -> Control:
 
 	phone_status_signal = Label.new()
 	phone_status_signal.text = "▂▄▆█"
-	UiFontsScript.apply_label(phone_status_signal, true, 7)
+	UiFontsScript.apply_label(phone_status_signal, true, 8)
 	phone_status_signal.add_theme_color_override("font_color", Color(0.82, 0.88, 0.96))
 	phone_status_signal.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(phone_status_signal)
 
 	phone_status_net = Label.new()
 	phone_status_net.text = "5G"
-	UiFontsScript.apply_label(phone_status_net, true, 7)
+	UiFontsScript.apply_label(phone_status_net, true, 8)
 	phone_status_net.add_theme_color_override("font_color", Color(0.7, 0.78, 0.9))
 	phone_status_net.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_status_net.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -38878,14 +39636,14 @@ func _build_phone_status_bar() -> Control:
 
 	var carrier := Label.new()
 	carrier.text = "BizTel"
-	UiFontsScript.apply_label(carrier, false, 6)
+	UiFontsScript.apply_label(carrier, false, 7)
 	carrier.add_theme_color_override("font_color", Color(0.5, 0.58, 0.68))
 	carrier.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(carrier)
 
 	phone_status_battery = Label.new()
 	phone_status_battery.text = "▮ 78%"
-	UiFontsScript.apply_label(phone_status_battery, true, 7)
+	UiFontsScript.apply_label(phone_status_battery, true, 8)
 	phone_status_battery.add_theme_color_override("font_color", Color(0.55, 0.92, 0.62))
 	phone_status_battery.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	phone_status_battery.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -38910,8 +39668,8 @@ func _build_phone_ui() -> void:
 	body.set_anchors_preset(Control.PRESET_FULL_RECT)
 	body.mouse_filter = Control.MOUSE_FILTER_STOP
 	var body_sb := StyleBoxFlat.new()
-	body_sb.bg_color = Color(0.11, 0.12, 0.14, 0.98)
-	body_sb.border_color = Color(0.28, 0.30, 0.34, 1.0)
+	body_sb.bg_color = Color(0.075, 0.09, 0.125, 0.99)
+	body_sb.border_color = Color(0.38, 0.46, 0.58, 1.0)
 	body_sb.set_border_width_all(3)
 	body_sb.set_corner_radius_all(PHONE_CORNER_OUTER)
 	body_sb.shadow_color = Color(0, 0, 0, 0.45)
@@ -38929,6 +39687,14 @@ func _build_phone_ui() -> void:
 	phone_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_child(phone_stack)
 
+	## The cab radio lives inside the same outer frame as the phone screen.
+	radio_column = VBoxContainer.new()
+	radio_column.name = "PhoneRadioSection"
+	radio_column.add_theme_constant_override("separation", 0)
+	radio_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
+	phone_stack.add_child(radio_column)
+
 	## Screen fills the frame — no solid black forehead/chin bars (those read as bugs).
 	var screen := PanelContainer.new()
 	screen.name = "PhoneScreen"
@@ -38936,8 +39702,8 @@ func _build_phone_ui() -> void:
 	screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	screen.mouse_filter = Control.MOUSE_FILTER_STOP
 	var screen_sb := StyleBoxFlat.new()
-	screen_sb.bg_color = Color(0.04, 0.06, 0.11, 0.98)
-	screen_sb.border_color = Color(0.55, 0.62, 0.72, 0.35)
+	screen_sb.bg_color = Color(0.025, 0.045, 0.085, 0.99)
+	screen_sb.border_color = Color(0.40, 0.58, 0.78, 0.58)
 	screen_sb.set_border_width_all(1)
 	screen_sb.set_corner_radius_all(PHONE_CORNER_INNER)
 	screen_sb.content_margin_left = 4
@@ -39012,13 +39778,13 @@ func _build_phone_ui() -> void:
 
 	var feed_title := Label.new()
 	feed_title.text = "SOCIAL"
-	UiFontsScript.apply_label(feed_title, true, 9)
+	UiFontsScript.apply_label(feed_title, true, 10)
 	feed_title.add_theme_color_override("font_color", Color("90CAF9"))
 	social_v.add_child(feed_title)
 
 	phone_rating_stars = Label.new()
 	phone_rating_stars.text = "☆☆☆☆☆"
-	UiFontsScript.apply_label(phone_rating_stars, true, 14)
+	UiFontsScript.apply_label(phone_rating_stars, true, 16)
 	phone_rating_stars.add_theme_color_override("font_color", Color("FFD54F"))
 	social_v.add_child(phone_rating_stars)
 
@@ -39028,24 +39794,24 @@ func _build_phone_ui() -> void:
 	social_v.add_child(rating_row)
 	phone_rating_value = Label.new()
 	phone_rating_value.text = "—"
-	UiFontsScript.apply_label(phone_rating_value, true, 12)
+	UiFontsScript.apply_label(phone_rating_value, true, 13)
 	phone_rating_value.add_theme_color_override("font_color", Color.WHITE)
 	rating_row.add_child(phone_rating_value)
 	var out_of := Label.new()
 	out_of.text = "/ 5"
-	UiFontsScript.apply_label(out_of, false, 9)
+	UiFontsScript.apply_label(out_of, false, 10)
 	out_of.add_theme_color_override("font_color", Color(0.65, 0.7, 0.78))
 	rating_row.add_child(out_of)
 
 	phone_review_label = Label.new()
 	phone_review_label.text = "New business · 0 reviews"
-	UiFontsScript.apply_label(phone_review_label, false, 8)
-	phone_review_label.add_theme_color_override("font_color", Color(0.55, 0.62, 0.72))
+	UiFontsScript.apply_label(phone_review_label, false, 9)
+	phone_review_label.add_theme_color_override("font_color", Color(0.68, 0.75, 0.84))
 	social_v.add_child(phone_review_label)
 
 	var feed_sub := Label.new()
 	feed_sub.text = "FEED"
-	UiFontsScript.apply_label(feed_sub, true, 8)
+	UiFontsScript.apply_label(feed_sub, true, 9)
 	feed_sub.add_theme_color_override("font_color", Color(0.55, 0.68, 0.82))
 	social_v.add_child(feed_sub)
 
@@ -39068,14 +39834,14 @@ func _build_phone_ui() -> void:
 
 	var inv_title := Label.new()
 	inv_title.text = "INVENTORY"
-	UiFontsScript.apply_label(inv_title, true, 9)
+	UiFontsScript.apply_label(inv_title, true, 10)
 	inv_title.add_theme_color_override("font_color", Color("A5D6A7"))
 	inv_v.add_child(inv_title)
 
 	var inv_hint := Label.new()
 	inv_hint.text = "Freshness · restock packs of %d" % SUPPLY_BUY_PACK
-	UiFontsScript.apply_label(inv_hint, false, 7)
-	inv_hint.add_theme_color_override("font_color", Color(0.45, 0.55, 0.48))
+	UiFontsScript.apply_label(inv_hint, false, 8)
+	inv_hint.add_theme_color_override("font_color", Color(0.61, 0.72, 0.64))
 	inv_v.add_child(inv_hint)
 
 	phone_inventory_box = VBoxContainer.new()
@@ -39747,6 +40513,7 @@ func _spawn_bts_day_intro_crowd() -> void:
 		var cust := CustomerScript.new()
 		cust.name = "BTSCrowdDancer%d" % i
 		cust.setup(_plain_burger_order(), Color(0.85, 0.55, 0.38), 999.0, 0, skin_idx, i % 3, -1)
+		cust.apply_review_card_settings(customer_review_settings)
 		cust.mp_host_driven = true
 		cust.set_queue_timer_active(false)
 		bts_day_intro_root.add_child(cust)
@@ -40433,38 +41200,23 @@ func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 
 
 func _build_radio_ui() -> void:
-	var ui_root: Control = get_node("UI/Root")
-	radio_column = VBoxContainer.new()
-	radio_column.name = "RadioColumn"
-	radio_column.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	radio_column.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	radio_column.offset_left = -RADIO_UI_LEFT
-	radio_column.offset_right = -RADIO_UI_RIGHT
-	radio_column.offset_top = RADIO_UI_TOP
-	radio_column.offset_bottom = RADIO_UI_TOP
-	radio_column.custom_minimum_size = Vector2(RADIO_UI_PANEL_SIZE.x, 0.0)
-	radio_column.add_theme_constant_override("separation", 0)
-	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
-	radio_column.z_index = 20
-	ui_root.add_child(radio_column)
+	if radio_column == null:
+		return
 
-	## Match BizPhone outer frame (same border / corners / shadow language).
+	## Compact radio card inside the BizPhone outer frame.
 	var panel := PanelContainer.new()
 	panel.name = "RadioPanel"
-	panel.custom_minimum_size = Vector2(RADIO_UI_PANEL_SIZE.x, 0.0)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.11, 0.12, 0.14, 0.98)
-	sb.border_color = Color(0.28, 0.30, 0.34, 1.0)
-	sb.set_border_width_all(3)
-	sb.set_corner_radius_all(PHONE_CORNER_OUTER)
-	sb.shadow_color = Color(0, 0, 0, 0.45)
-	sb.shadow_size = 8
-	sb.content_margin_left = 6
-	sb.content_margin_right = 6
+	sb.bg_color = Color(0.075, 0.09, 0.13, 0.99)
+	sb.border_color = Color(0.55, 0.62, 0.72, 0.35)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(PHONE_CORNER_INNER)
+	sb.content_margin_left = 5
+	sb.content_margin_right = 5
 	sb.content_margin_top = 4
-	sb.content_margin_bottom = 4
+	sb.content_margin_bottom = 5
 	panel.add_theme_stylebox_override("panel", sb)
 	radio_column.add_child(panel)
 
@@ -40478,13 +41230,13 @@ func _build_radio_ui() -> void:
 
 	var title_dot := Label.new()
 	title_dot.text = "●"
-	UiFontsScript.apply_label(title_dot, true, 9)
+	UiFontsScript.apply_label(title_dot, true, 10)
 	title_dot.add_theme_color_override("font_color", Color("FFCC80"))
 	title_row.add_child(title_dot)
 
 	var title := Label.new()
 	title.text = "Cab Radio"
-	UiFontsScript.apply_label(title, true, 10)
+	UiFontsScript.apply_label(title, true, 11)
 	title.add_theme_color_override("font_color", Color(0.75, 0.82, 0.92))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title)
@@ -40493,7 +41245,7 @@ func _build_radio_ui() -> void:
 	band_btn.text = "BAND"
 	band_btn.custom_minimum_size = Vector2(44, 22)
 	band_btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(band_btn, true, 9)
+	UiFontsScript.apply_button(band_btn, true, 10)
 	_style_radio_chrome_button(band_btn)
 	band_btn.pressed.connect(func():
 		_sfx_click()
@@ -40508,7 +41260,7 @@ func _build_radio_ui() -> void:
 	radio_power_btn.text = "OFF"
 	radio_power_btn.custom_minimum_size = Vector2(40, 22)
 	radio_power_btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(radio_power_btn, true, 9)
+	UiFontsScript.apply_button(radio_power_btn, true, 10)
 	_style_radio_chrome_button(radio_power_btn)
 	radio_power_btn.pressed.connect(func():
 		_sfx_click()
@@ -40541,7 +41293,7 @@ func _build_radio_ui() -> void:
 	radio_channel_label.text = "FM 92.1 Smooth Jazz"
 	radio_channel_label.clip_text = true
 	radio_channel_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(radio_channel_label, true, 11)
+	UiFontsScript.apply_label(radio_channel_label, true, 12)
 	radio_channel_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
 	v.add_child(radio_channel_label)
 
@@ -40549,7 +41301,7 @@ func _build_radio_ui() -> void:
 	radio_status_label.text = "Radio off"
 	radio_status_label.clip_text = true
 	radio_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(radio_status_label, false, 9)
+	UiFontsScript.apply_label(radio_status_label, false, 10)
 	radio_status_label.add_theme_color_override("font_color", Color(0.55, 0.68, 0.62))
 	v.add_child(radio_status_label)
 
@@ -40562,7 +41314,7 @@ func _build_radio_ui() -> void:
 	prev_btn.tooltip_text = "Previous station"
 	prev_btn.custom_minimum_size = Vector2(32, 22)
 	prev_btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(prev_btn, true, 11)
+	UiFontsScript.apply_button(prev_btn, true, 12)
 	_style_radio_chrome_button(prev_btn)
 	prev_btn.pressed.connect(func():
 		_sfx_click()
@@ -40577,7 +41329,7 @@ func _build_radio_ui() -> void:
 	next_btn.tooltip_text = "Next station"
 	next_btn.custom_minimum_size = Vector2(32, 22)
 	next_btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(next_btn, true, 11)
+	UiFontsScript.apply_button(next_btn, true, 12)
 	_style_radio_chrome_button(next_btn)
 	next_btn.pressed.connect(func():
 		_sfx_click()
@@ -40589,7 +41341,7 @@ func _build_radio_ui() -> void:
 
 	var vol_lab := Label.new()
 	vol_lab.text = "VOL"
-	UiFontsScript.apply_label(vol_lab, true, 9)
+	UiFontsScript.apply_label(vol_lab, true, 10)
 	vol_lab.add_theme_color_override("font_color", Color(0.65, 0.72, 0.8))
 	nav.add_child(vol_lab)
 
@@ -40769,22 +41521,49 @@ func _build_graphics_ui() -> void:
 	_gfx_add_check(list, "shadows", "Cast Shadows")
 	_gfx_add_check(list, "ssil", "Indirect Light (SSIL)")
 
+	_gfx_add_section(list, "BUNTING WIND / MATERIAL")
+	_gfx_add_slider(list, "bunting_wind_strength", "Flag Wind Strength", 0.0, 12.0, 0.05)
+	_gfx_add_slider(list, "bunting_wind_speed", "Flag Wind Speed", 0.0, 4.0, 0.01)
+	_gfx_add_slider(list, "bunting_wind_gust", "Flag Gust Amount", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "bunting_wind_twist", "Flag Flutter Twist", 0.0, 12.0, 0.05)
+	_gfx_add_slider(list, "bunting_wind_direction", "Wind Direction (-L / +R)", -1.0, 1.0, 0.05)
+	_gfx_add_slider(list, "bunting_edge_opacity", "Flag Edge Opacity", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "bunting_center_opacity", "Flag Center Opacity", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "bunting_edge_width", "Opaque Edge Width", 0.0, 0.35, 0.005)
+	_gfx_add_slider(list, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
+
 	_gfx_add_section(list, "SCREEN FILTERS")
 	_gfx_add_check(list, "toon_filter", "Toon Filter")
 	_gfx_add_slider(list, "toon_mix", "Toon Overall Mix", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "toon_value_steps", "Toon Value Steps", 2.0, 16.0, 1.0)
 	_gfx_add_slider(list, "toon_step_strength", "Toon Step Strength", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_band_smoothness", "Toon Band Smoothness", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_band_offset", "Toon Band Offset", -0.5, 0.5, 0.01)
+	_gfx_add_slider(list, "toon_dither_strength", "Toon Dither Strength", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_dither_scale", "Toon Dither Size", 0.5, 12.0, 0.1)
+	_gfx_add_slider(list, "toon_dither_smoothness", "Toon Dither Smoothness", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_dither_contrast", "Toon Dither Contrast", 0.25, 4.0, 0.01)
+	_gfx_add_slider(list, "toon_dither_bias", "Toon Dither Bias", -0.5, 0.5, 0.01)
 	_gfx_add_slider(list, "toon_light_balance", "Toon Light Balance", -0.3, 0.3, 0.01)
 	_gfx_add_slider(list, "toon_shade_curve", "Toon Shade Curve", 0.4, 2.5, 0.01)
 	_gfx_add_slider(list, "toon_shadow_depth", "Toon Shadow Depth", 0.0, 0.8, 0.01)
+	_gfx_add_slider(list, "toon_shadow_cutoff", "Toon Shadow Position", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_shadow_softness", "Toon Shadow Softness", 0.01, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_highlight_cutoff", "Toon Highlight Position", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_highlight_softness", "Toon Highlight Softness", 0.01, 1.0, 0.01)
 	_gfx_add_check(list, "toon_outlines", "Toon Outlines")
 	_gfx_add_slider(list, "toon_outline_strength", "Outline Strength", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "toon_outline_threshold", "Outline Threshold", 0.01, 0.4, 0.005)
 	_gfx_add_slider(list, "toon_outline_softness", "Outline Softness", 0.005, 0.25, 0.005)
 	_gfx_add_slider(list, "toon_outline_thickness", "Outline Thickness", 0.5, 4.0, 0.05)
+	_gfx_add_slider(list, "toon_outline_color_sensitivity", "Outline Color Detection", 0.0, 1.0, 0.01)
+	_gfx_add_slider(list, "toon_outline_color_retention", "Outline Color Retention", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "toon_color_brightness", "Toon Brightness", 0.5, 1.5, 0.01)
 	_gfx_add_slider(list, "toon_color_contrast", "Toon Contrast", 0.5, 1.8, 0.01)
 	_gfx_add_slider(list, "toon_color_saturation", "Toon Saturation", 0.0, 2.0, 0.01)
+	_gfx_add_slider(list, "toon_color_gamma", "Toon Midtone Gamma", 0.35, 2.5, 0.01)
+	_gfx_add_slider(list, "toon_black_lift", "Toon Black Lift", -0.2, 0.3, 0.005)
+	_gfx_add_slider(list, "toon_highlight_rolloff", "Toon Highlight Rolloff", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "toon_hue_shift", "Toon Hue Shift", -180.0, 180.0, 1.0)
 	_gfx_add_slider(list, "toon_warmth", "Toon Warm / Cool", -1.0, 1.0, 0.01)
 	_gfx_add_slider(list, "toon_green_magenta", "Toon Green / Magenta", -1.0, 1.0, 0.01)
@@ -41202,6 +41981,121 @@ func _hidden_add_category(parent: Control, text: String) -> VBoxContainer:
 	return box
 
 
+func _hidden_add_accordion(
+	parent: Control, title: String, category: String, tab_index: int, open_by_default: bool = false
+) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.name = title.capitalize().replace(" ", "").replace("/", "") + "Accordion"
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.045, 0.055, 0.075, 0.86)
+	sb.border_color = Color(0.26, 0.38, 0.54, 0.78)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 8
+	panel.add_theme_stylebox_override("panel", sb)
+	parent.add_child(panel)
+
+	var wrap := VBoxContainer.new()
+	wrap.add_theme_constant_override("separation", 6)
+	panel.add_child(wrap)
+	var header := Button.new()
+	header.toggle_mode = true
+	header.button_pressed = open_by_default
+	header.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	header.custom_minimum_size = Vector2(0, 34)
+	header.text = ("▼  " if open_by_default else "▶  ") + title
+	UiFontsScript.apply_button(header, true, 13)
+	wrap.add_child(header)
+	var body := VBoxContainer.new()
+	body.visible = open_by_default
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 7)
+	wrap.add_child(body)
+	header.toggled.connect(func(on: bool) -> void:
+		body.visible = on
+		header.text = ("▼  " if on else "▶  ") + title
+	)
+	options_hidden_accordions.append({
+		"title": title,
+		"category": category,
+		"tab": tab_index,
+		"panel": panel,
+		"header": header,
+		"body": body,
+		"search": title.to_lower() + " " + category.to_lower(),
+	})
+	return body
+
+
+func _hidden_collect_search_text(node: Node) -> String:
+	var parts: Array[String] = []
+	if node is Label:
+		parts.append((node as Label).text)
+	elif node is Button:
+		parts.append((node as Button).text)
+	elif node is LineEdit:
+		parts.append((node as LineEdit).placeholder_text)
+	for child in node.get_children():
+		parts.append(_hidden_collect_search_text(child))
+	return " ".join(parts)
+
+
+func _hidden_finalize_search_index() -> void:
+	for entry in options_hidden_accordions:
+		var body: Node = entry.get("body")
+		entry["search"] = (
+			str(entry.get("title", "")) + " " + str(entry.get("category", ""))
+			+ " " + _hidden_collect_search_text(body)
+		).to_lower()
+	_hidden_refresh_search_results("")
+
+
+func _hidden_refresh_search_results(query: String) -> void:
+	if options_hidden_search_results == null or not is_instance_valid(options_hidden_search_results):
+		return
+	options_hidden_search_results.clear()
+	var q := query.strip_edges().to_lower()
+	options_hidden_search_results.add_item(
+		"All objects and sections" if q == "" else "Matching controls"
+	)
+	options_hidden_search_results.set_item_disabled(0, true)
+	for i in options_hidden_accordions.size():
+		var entry: Dictionary = options_hidden_accordions[i]
+		if q != "" and not str(entry.get("search", "")).contains(q):
+			continue
+		var item := options_hidden_search_results.get_item_count()
+		options_hidden_search_results.add_item("%s  ·  %s" % [entry["title"], entry["category"]])
+		options_hidden_search_results.set_item_metadata(item, i)
+	options_hidden_search_results.select(0)
+
+
+func _hidden_jump_to_search_result(item: int) -> void:
+	if item <= 0 or options_hidden_search_results == null:
+		return
+	var entry_index := int(options_hidden_search_results.get_item_metadata(item))
+	if entry_index < 0 or entry_index >= options_hidden_accordions.size():
+		return
+	var entry: Dictionary = options_hidden_accordions[entry_index]
+	if options_hidden_tabs != null and is_instance_valid(options_hidden_tabs):
+		options_hidden_tabs.current_tab = int(entry.get("tab", 0))
+	var header := entry.get("header") as Button
+	var body := entry.get("body") as VBoxContainer
+	var panel := entry.get("panel") as Control
+	if header != null and body != null:
+		header.set_pressed_no_signal(true)
+		header.text = "▼  " + str(entry.get("title", ""))
+		body.visible = true
+	var cursor: Node = panel
+	while cursor != null and not cursor is ScrollContainer:
+		cursor = cursor.get_parent()
+	if cursor is ScrollContainer and panel != null:
+		(cursor as ScrollContainer).call_deferred("ensure_control_visible", panel)
+
+
 func _layout_gfx_panel() -> void:
 	if gfx_panel == null or not is_instance_valid(gfx_panel):
 		return
@@ -41462,36 +42356,115 @@ func _build_options_menu() -> void:
 	options_hidden_room_tone_box.visible = false
 	options_hidden_room_tone_box.add_theme_constant_override("separation", 8)
 	hidden.add_child(options_hidden_room_tone_box)
-	var hidden_tabs := TabContainer.new()
-	hidden_tabs.custom_minimum_size = Vector2(0, 520)
-	hidden_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hidden_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	hidden_tabs.mouse_filter = Control.MOUSE_FILTER_STOP
-	options_hidden_room_tone_box.add_child(hidden_tabs)
-	var hidden_camera_box := _hidden_add_category(hidden_tabs, "PLAYER CAMERA")
-	hidden_camera_box.get_parent().get_parent().name = "Camera"
-	var hidden_bg_box := _hidden_add_category(hidden_tabs, "BACKGROUND IMAGE")
-	hidden_bg_box.get_parent().get_parent().name = "Background"
-	var hidden_debug_box := _hidden_add_category(hidden_tabs, "DEBUG OVERLAYS")
-	hidden_debug_box.get_parent().get_parent().name = "Debug"
-	var hidden_audio_box := _hidden_add_category(hidden_tabs, "AUDIO")
-	hidden_audio_box.get_parent().get_parent().name = "Audio"
-	var hidden_grill_box := _hidden_add_category(hidden_tabs, "GRILL VISUALS")
-	hidden_grill_box.get_parent().get_parent().name = "Grill"
-	var hidden_world_box := _hidden_add_category(hidden_tabs, "WORLD AND PROP POSITIONS")
-	hidden_world_box.get_parent().get_parent().name = "World"
-	var hidden_counter_box := _hidden_add_category(hidden_tabs, "COUNTER LAYOUT")
-	hidden_counter_box.get_parent().get_parent().name = "Counter"
-	var hidden_tools_box := _hidden_add_category(hidden_tabs, "TOOLS AND MINIGAMES")
-	hidden_tools_box.get_parent().get_parent().name = "Tools"
-	var hidden_soda_box := _hidden_add_category(hidden_tabs, "DRINK DISPENSER")
-	hidden_soda_box.get_parent().get_parent().name = "Drinks"
-	var hidden_render_box := _hidden_add_category(hidden_tabs, "ADVANCED RENDERING")
-	hidden_render_box.get_parent().get_parent().name = "Render"
+	var search_lab := Label.new()
+	search_lab.text = "FIND A HIDDEN CONTROL"
+	UiFontsScript.apply_label(search_lab, true, 12)
+	search_lab.add_theme_color_override("font_color", Color(0.72, 0.88, 1.0))
+	options_hidden_room_tone_box.add_child(search_lab)
+	options_hidden_search = LineEdit.new()
+	options_hidden_search.placeholder_text = "Search: ice cream, cup stack, camera, toon..."
+	options_hidden_search.custom_minimum_size = Vector2(0, 36)
+	options_hidden_search.text_changed.connect(_hidden_refresh_search_results)
+	options_hidden_room_tone_box.add_child(options_hidden_search)
+	options_hidden_search_results = OptionButton.new()
+	options_hidden_search_results.custom_minimum_size = Vector2(0, 38)
+	UiFontsScript.apply_button(options_hidden_search_results, false, 12)
+	options_hidden_search_results.item_selected.connect(_hidden_jump_to_search_result)
+	options_hidden_room_tone_box.add_child(options_hidden_search_results)
+
+	options_hidden_accordions.clear()
+	options_hidden_tabs = TabContainer.new()
+	options_hidden_tabs.custom_minimum_size = Vector2(0, 520)
+	options_hidden_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	options_hidden_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	options_hidden_tabs.mouse_filter = Control.MOUSE_FILTER_STOP
+	options_hidden_room_tone_box.add_child(options_hidden_tabs)
+	var hidden_objects_root := _hidden_add_category(options_hidden_tabs, "OBJECTS")
+	hidden_objects_root.get_parent().get_parent().name = "Objects"
+	var hidden_render_root := _hidden_add_category(options_hidden_tabs, "RENDER")
+	hidden_render_root.get_parent().get_parent().name = "Render"
+	var hidden_gameplay_root := _hidden_add_category(options_hidden_tabs, "GAMEPLAY + DEBUG")
+	hidden_gameplay_root.get_parent().get_parent().name = "Gameplay"
+	var hidden_audio_root := _hidden_add_category(options_hidden_tabs, "AUDIO")
+	hidden_audio_root.get_parent().get_parent().name = "Audio"
+
+	## The object tab is now a scan-friendly list; each object family expands in
+	## place instead of forcing a hunt through ten unrelated tabs.
+	var hidden_world_box := _hidden_add_accordion(hidden_objects_root, "WORLD + ICE-CREAM MACHINE", "Objects", 0, true)
+	var hidden_counter_box := _hidden_add_accordion(hidden_objects_root, "COUNTERS + GARBAGE", "Objects", 0)
+	var hidden_grill_box := _hidden_add_accordion(hidden_objects_root, "GRILL OBJECTS + VISUALS", "Objects", 0)
+	var hidden_soda_box := _hidden_add_accordion(hidden_objects_root, "COLA MACHINE + CUP STACK", "Objects", 0)
+	var hidden_tools_box := _hidden_add_accordion(hidden_objects_root, "TOOLS + MINIGAMES", "Objects", 0)
+	var hidden_review_box := _hidden_add_accordion(hidden_objects_root, "CUSTOMER REVIEW BUBBLE", "Objects", 0)
+	var hidden_camera_box := _hidden_add_accordion(hidden_render_root, "PLAYER CAMERA", "Render", 1, true)
+	var hidden_bg_box := _hidden_add_accordion(hidden_render_root, "BACKGROUND IMAGE", "Render", 1)
+	var hidden_render_box := _hidden_add_accordion(hidden_render_root, "ADVANCED RENDERING", "Render", 1)
+	var hidden_debug_box := _hidden_add_accordion(hidden_gameplay_root, "DEBUG OVERLAYS", "Gameplay", 2, true)
+	var hidden_audio_box := _hidden_add_accordion(hidden_audio_root, "AUDIO MIX", "Audio", 3, true)
+	_hidden_add_section(hidden_audio_box, "SOUND EFFECT LEVELS")
+	var sfx_help := Label.new()
+	sfx_help.text = "0 = mute · 1 = original mix · 2 = double level. Changes save automatically."
+	sfx_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(sfx_help, false, 11)
+	sfx_help.add_theme_color_override("font_color", Color(0.70, 0.76, 0.84))
+	hidden_audio_box.add_child(sfx_help)
+	if game_audio != null and game_audio.has_method("get_sfx_tuning_entries"):
+		for entry_var in game_audio.get_sfx_tuning_entries():
+			var entry: Dictionary = entry_var
+			_hidden_add_sfx_level_slider(hidden_audio_box, str(entry.get("key", "tools")), str(entry.get("label", "Sound")))
+	_hidden_add_section(hidden_audio_box, "SPATULA PIANO NOTES")
+	var spatula_note_help := Label.new()
+	spatula_note_help.text = "Original spatula hit only. 1.00 = unboosted recording; each E4–B4 note saves independently."
+	spatula_note_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(spatula_note_help, false, 11)
+	spatula_note_help.add_theme_color_override("font_color", Color(0.70, 0.76, 0.84))
+	hidden_audio_box.add_child(spatula_note_help)
+	if game_audio != null and game_audio.has_method("get_spatula_note_boost_entries"):
+		for note_var in game_audio.get_spatula_note_boost_entries():
+			var note_entry: Dictionary = note_var
+			_hidden_add_spatula_note_boost_slider(
+				hidden_audio_box,
+				int(note_entry.get("midi", 64)),
+				str(note_entry.get("label", "Note Boost"))
+			)
 	for debug_control in [options_hidden_zone_check, options_hidden_piano_check]:
 		if debug_control != null and is_instance_valid(debug_control):
 			hidden.remove_child(debug_control)
 			hidden_debug_box.add_child(debug_control)
+
+	var review_help := Label.new()
+	review_help.text = "Live controls for the 3D review card. Positive content depth moves toward the camera. Bubble, stars, and copy have separate Z layers so they cannot z-fight."
+	review_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(review_help, false, 11)
+	review_help.add_theme_color_override("font_color", Color(0.72, 0.82, 0.94))
+	hidden_review_box.add_child(review_help)
+	_hidden_add_section(hidden_review_box, "PLACEMENT + OVERALL SCALE")
+	_hidden_add_customer_review_slider(hidden_review_box, "position_x", "Left / Right", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "position_y", "Height", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "position_z", "Whole Card Depth", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "scale", "Overall Scale", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "rise", "Float-Up Distance", 0.01)
+	_hidden_add_section(hidden_review_box, "BUBBLE BACKGROUND")
+	_hidden_add_customer_review_slider(hidden_review_box, "width", "Minimum Bubble Width", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "height", "Minimum Bubble Height", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "padding_x", "Copy Side Padding", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "padding_y", "Copy Top / Bottom Padding", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "box_depth", "Bubble Depth (back)", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "opacity", "Bubble Opacity", 0.01)
+	_hidden_add_section(hidden_review_box, "STAR RATING")
+	_hidden_add_customer_review_slider(hidden_review_box, "star_y", "Stars Up / Down", 0.005)
+	_hidden_add_customer_review_slider(hidden_review_box, "star_depth", "Stars Depth", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "star_size", "Star Size", 0.005)
+	_hidden_add_customer_review_slider(hidden_review_box, "star_outline", "Star Outline (px)", 1.0)
+	_hidden_add_section(hidden_review_box, "REVIEW COPY")
+	_hidden_add_customer_review_slider(hidden_review_box, "text_y", "Text Up / Down", 0.005)
+	_hidden_add_customer_review_slider(hidden_review_box, "text_depth", "Text Depth", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "text_size", "Text Size", 0.005)
+	_hidden_add_customer_review_slider(hidden_review_box, "text_outline", "Text Outline (px)", 1.0)
+	_hidden_add_customer_review_slider(hidden_review_box, "line_chars", "Characters Per Line", 1.0)
+	_hidden_add_customer_review_slider(hidden_review_box, "hold_sec", "Display Time", 0.25)
+	_options_add_btn(hidden_review_box, "Preview Review Bubble (30 sec)", _preview_customer_review_card)
+	_options_add_btn(hidden_review_box, "Reset Review Bubble", _reset_customer_review_card_settings)
 
 	var camera_help := Label.new()
 	camera_help.text = "Changes preview live and are saved automatically."
@@ -42361,6 +43334,15 @@ func _build_options_menu() -> void:
 	_gfx_add_slider(hidden_world_box, "bunting_flag_w", "Flag Width", 0.04, 0.8, 0.01)
 	_gfx_add_slider(hidden_world_box, "bunting_flag_h", "Flag Height", 0.04, 0.8, 0.01)
 	_gfx_add_slider(hidden_world_box, "bunting_rope", "Rope Thickness", 0.003, 0.08, 0.001)
+	_options_add_standard_slider(hidden_world_box, "bunting_wind_strength", "Flag Wind Strength", 0.0, 12.0, 0.05)
+	_options_add_standard_slider(hidden_world_box, "bunting_wind_speed", "Flag Wind Speed", 0.0, 4.0, 0.01)
+	_options_add_standard_slider(hidden_world_box, "bunting_wind_gust", "Flag Gust Amount", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_world_box, "bunting_wind_twist", "Flag Flutter Twist", 0.0, 12.0, 0.05)
+	_options_add_standard_slider(hidden_world_box, "bunting_wind_direction", "Wind Direction (-L / +R)", -1.0, 1.0, 0.05)
+	_options_add_standard_slider(hidden_world_box, "bunting_edge_opacity", "Flag Edge Opacity", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_world_box, "bunting_center_opacity", "Flag Center Opacity", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Opaque Edge Width", 0.0, 0.35, 0.005)
+	_options_add_standard_slider(hidden_world_box, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
 	_hidden_add_section(hidden_counter_box, "BUNS / CHEESE / BOARD")
 	_hidden_add_prop_offset_group(hidden_counter_box, "burger_buns", "Burger Buns")
@@ -42487,6 +43469,33 @@ func _build_options_menu() -> void:
 			_save_fryer_tuning_settings()
 			_build_fryer_machine()
 	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_height_fine", "Fryer Height Fine (in)", -24.0, 36.0, 0.1,
+		func(): return _prop_offset("fryer").y / INCH_TO_M,
+		func(v: float): _set_prop_offset_axis("fryer", "y", v * INCH_TO_M)
+	)
+	_hidden_add_section(hidden_world_box, "FRYER OIL COLOR")
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_oil_r", "Oil Red", 0.0, 1.0, 0.01,
+		func(): return fryer_oil_color.r,
+		func(v: float): _set_fryer_color_component("oil", "r", v))
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_oil_g", "Oil Green", 0.0, 1.0, 0.01,
+		func(): return fryer_oil_color.g,
+		func(v: float): _set_fryer_color_component("oil", "g", v))
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_oil_b", "Oil Blue", 0.0, 1.0, 0.01,
+		func(): return fryer_oil_color.b,
+		func(v: float): _set_fryer_color_component("oil", "b", v))
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_oil_a", "Oil Opacity", 0.05, 1.0, 0.01,
+		func(): return fryer_oil_color.a,
+		func(v: float): _set_fryer_color_component("oil", "a", v))
+	_hidden_add_section(hidden_world_box, "FRYER BUBBLE COLOR")
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_bubble_r", "Bubble Red", 0.0, 1.0, 0.01,
+		func(): return fryer_bubble_color.r,
+		func(v: float): _set_fryer_color_component("bubble", "r", v))
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_bubble_g", "Bubble Green", 0.0, 1.0, 0.01,
+		func(): return fryer_bubble_color.g,
+		func(v: float): _set_fryer_color_component("bubble", "g", v))
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_bubble_b", "Bubble Blue", 0.0, 1.0, 0.01,
+		func(): return fryer_bubble_color.b,
+		func(v: float): _set_fryer_color_component("bubble", "b", v))
 	_hidden_add_labeled_slider(hidden_world_box, "fries_hand_x", "Held Fries X (in)", -18.0, 18.0, 0.1,
 		func(): return fries_hand_hold_offset_in.x,
 		func(v: float):
@@ -42894,6 +43903,49 @@ func _build_options_menu() -> void:
 		func(): return icecream_cone_pull_local.z,
 		func(v: float): _set_icecream_cone_pull_axis("z", v)
 	)
+	_hidden_add_section(hidden_world_box, "ICE-CREAM MASCOT / CONE PROP")
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_x", "Prop X (left/right)", -2.0, 2.0, 0.005,
+		func(): return icecream_mascot_offset.x,
+		func(v: float): _set_icecream_mascot_offset_axis("x", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_y", "Prop Y (height)", -2.0, 2.0, 0.005,
+		func(): return icecream_mascot_offset.y,
+		func(v: float): _set_icecream_mascot_offset_axis("y", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_z", "Prop Z (depth)", -2.0, 2.0, 0.005,
+		func(): return icecream_mascot_offset.z,
+		func(v: float): _set_icecream_mascot_offset_axis("z", v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_pitch", "Prop Pitch", -180.0, 180.0, 1.0,
+		func(): return icecream_mascot_rot.x,
+		func(v: float): _set_icecream_mascot_rot_axis("x", v), true
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_yaw", "Prop Yaw", -360.0, 360.0, 1.0,
+		func(): return icecream_mascot_rot.y,
+		func(v: float): _set_icecream_mascot_rot_axis("y", v), true
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_roll", "Prop Roll", -180.0, 180.0, 1.0,
+		func(): return icecream_mascot_rot.z,
+		func(v: float): _set_icecream_mascot_rot_axis("z", v), true
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_scale", "Prop Scale", 0.1, 4.0, 0.01,
+		func(): return icecream_mascot_scale,
+		func(v: float): _set_icecream_mascot_scale(v)
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "icecream_mascot_spin_speed", "Spin Speed (degrees/sec)", 0.0, 90.0, 1.0,
+		func(): return icecream_mascot_spin_speed,
+		func(v: float): _set_icecream_mascot_spin_speed(v)
+	)
+	options_hidden_icecream_mascot_spin_clockwise = CheckButton.new()
+	options_hidden_icecream_mascot_spin_clockwise.text = "Spin Clockwise (off = counter-clockwise)"
+	options_hidden_icecream_mascot_spin_clockwise.tooltip_text = "Switch the mascot's rotation direction. Set speed to 0 to pause it."
+	options_hidden_icecream_mascot_spin_clockwise.button_pressed = icecream_mascot_spin_clockwise
+	options_hidden_icecream_mascot_spin_clockwise.custom_minimum_size = Vector2(0, 32)
+	options_hidden_icecream_mascot_spin_clockwise.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(options_hidden_icecream_mascot_spin_clockwise, false, 12)
+	options_hidden_icecream_mascot_spin_clockwise.add_theme_color_override("font_color", Color(0.88, 0.93, 1.0))
+	options_hidden_icecream_mascot_spin_clockwise.toggled.connect(_set_icecream_mascot_spin_clockwise)
+	hidden_world_box.add_child(options_hidden_icecream_mascot_spin_clockwise)
 
 	var soda_h_lab := Label.new()
 	soda_h_lab.text = "COLA + ICE MACHINE"
@@ -42994,9 +44046,9 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_front", "Grab Block Z", -1.2, 0.7, 0.01,
 		func(): return soda_blocker_front_z,
 		func(v: float): soda_blocker_front_z = clampf(v, -1.2, 0.7))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_fill", "Fill Block Z", -1.2, 0.7, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_block_fill", "Fill Block Z", SODA_FILL_FRONT_SAFE_Z, 0.7, 0.01,
 		func(): return soda_blocker_fill_z,
-		func(v: float): soda_blocker_fill_z = clampf(v, -1.2, 0.7))
+		func(v: float): soda_blocker_fill_z = clampf(v, SODA_FILL_FRONT_SAFE_Z, 0.7))
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_rest_x", "Cup Rest X", -1.0, 1.0, 0.01,
 		func(): return soda_cup_rest_x,
 		func(v: float): soda_cup_rest_x = clampf(v, -1.0, 1.0))
@@ -43041,9 +44093,9 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_follow", "Fill Follow Rate", 1.0, 80.0, 0.5,
 		func(): return soda_fill_follow_rate,
 		func(v: float): soda_fill_follow_rate = clampf(v, 1.0, 80.0))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_speed", "Fill Max Speed", 0.2, 12.0, 0.1,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_speed", "Fill Max Speed", 0.2, CUP_FILL_EMPTY_MAX_SPEED, 0.05,
 		func(): return soda_fill_max_speed,
-		func(v: float): soda_fill_max_speed = clampf(v, 0.2, 12.0))
+		func(v: float): soda_fill_max_speed = clampf(v, 0.2, CUP_FILL_EMPTY_MAX_SPEED))
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "cup_liquid_top", "Cup Liquid Top Offset (in)", -6.0, 6.0, 0.05,
 		func(): return cup_liquid_top_offset_in,
 		func(v: float):
@@ -43071,19 +44123,36 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_render_box, "toon_mix", "Overall Toon Mix", 0.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_value_steps", "Value Steps / Bands", 2.0, 16.0, 1.0)
 	_options_add_standard_slider(hidden_render_box, "toon_step_strength", "Step Strength", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_band_smoothness", "Band Edge Smoothness", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_band_offset", "Band Position Offset", -0.5, 0.5, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_light_balance", "Light / Dark Balance", -0.3, 0.3, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_shade_curve", "Shadow Curve", 0.4, 2.5, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_shadow_depth", "Extra Shadow Depth", 0.0, 0.8, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_shadow_cutoff", "Shadow Region Position", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_shadow_softness", "Shadow Region Softness", 0.01, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_highlight_cutoff", "Highlight Region Position", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_highlight_softness", "Highlight Region Softness", 0.01, 1.0, 0.01)
+	_hidden_add_section(hidden_render_box, "TOON DITHERING")
+	_options_add_standard_slider(hidden_render_box, "toon_dither_strength", "Dither Strength", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_dither_scale", "Dither Pattern Size", 0.5, 12.0, 0.1)
+	_options_add_standard_slider(hidden_render_box, "toon_dither_smoothness", "Dither Smoothness", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_dither_contrast", "Dither Pattern Contrast", 0.25, 4.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_dither_bias", "Dither Light / Dark Bias", -0.5, 0.5, 0.01)
 	_hidden_add_section(hidden_render_box, "TOON OUTLINES")
 	_options_add_standard_check(hidden_render_box, "toon_outlines", "Enable Outlines")
 	_options_add_standard_slider(hidden_render_box, "toon_outline_strength", "Outline Darkness", 0.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_outline_threshold", "Outline Detection", 0.01, 0.4, 0.005)
 	_options_add_standard_slider(hidden_render_box, "toon_outline_softness", "Outline Softness", 0.005, 0.25, 0.005)
 	_options_add_standard_slider(hidden_render_box, "toon_outline_thickness", "Outline Thickness", 0.5, 4.0, 0.05)
+	_options_add_standard_slider(hidden_render_box, "toon_outline_color_sensitivity", "Color Edge Detection", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_outline_color_retention", "Outline Color Retention", 0.0, 1.0, 0.01)
 	_hidden_add_section(hidden_render_box, "TOON COLOR LOOK")
 	_options_add_standard_slider(hidden_render_box, "toon_color_brightness", "Brightness", 0.5, 1.5, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_color_contrast", "Contrast", 0.5, 1.8, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_color_saturation", "Saturation", 0.0, 2.0, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_color_gamma", "Midtone Gamma", 0.35, 2.5, 0.01)
+	_options_add_standard_slider(hidden_render_box, "toon_black_lift", "Black Lift", -0.2, 0.3, 0.005)
+	_options_add_standard_slider(hidden_render_box, "toon_highlight_rolloff", "Highlight Rolloff", 0.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_hue_shift", "Hue Shift (degrees)", -180.0, 180.0, 1.0)
 	_options_add_standard_slider(hidden_render_box, "toon_warmth", "Warm (+) / Cool (-)", -1.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_green_magenta", "Green (+) / Magenta (-)", -1.0, 1.0, 0.01)
@@ -43115,6 +44184,7 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_render_box, "fake_df_ao_contrast", "Fake AO Contrast", 0.5, 4.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "fake_df_ao_bias", "Fake AO Bias", 0.0, 0.01, 0.0001)
 
+	_hidden_finalize_search_index()
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
 	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -43789,17 +44859,33 @@ func _apply_screen_style_filter(s: Dictionary) -> void:
 	screen_style_mat.set_shader_parameter("toon_mix", float(s.get("toon_mix", GFX_DEFAULTS["toon_mix"])))
 	screen_style_mat.set_shader_parameter("toon_levels", float(s.get("toon_value_steps", GFX_DEFAULTS["toon_value_steps"])))
 	screen_style_mat.set_shader_parameter("step_strength", float(s.get("toon_step_strength", GFX_DEFAULTS["toon_step_strength"])))
+	screen_style_mat.set_shader_parameter("band_smoothness", float(s.get("toon_band_smoothness", GFX_DEFAULTS["toon_band_smoothness"])))
+	screen_style_mat.set_shader_parameter("band_offset", float(s.get("toon_band_offset", GFX_DEFAULTS["toon_band_offset"])))
+	screen_style_mat.set_shader_parameter("dither_strength", float(s.get("toon_dither_strength", GFX_DEFAULTS["toon_dither_strength"])))
+	screen_style_mat.set_shader_parameter("dither_scale", float(s.get("toon_dither_scale", GFX_DEFAULTS["toon_dither_scale"])))
+	screen_style_mat.set_shader_parameter("dither_smoothness", float(s.get("toon_dither_smoothness", GFX_DEFAULTS["toon_dither_smoothness"])))
+	screen_style_mat.set_shader_parameter("dither_contrast", float(s.get("toon_dither_contrast", GFX_DEFAULTS["toon_dither_contrast"])))
+	screen_style_mat.set_shader_parameter("dither_bias", float(s.get("toon_dither_bias", GFX_DEFAULTS["toon_dither_bias"])))
 	screen_style_mat.set_shader_parameter("light_balance", float(s.get("toon_light_balance", GFX_DEFAULTS["toon_light_balance"])))
 	screen_style_mat.set_shader_parameter("shade_curve", float(s.get("toon_shade_curve", GFX_DEFAULTS["toon_shade_curve"])))
 	screen_style_mat.set_shader_parameter("shadow_depth", float(s.get("toon_shadow_depth", GFX_DEFAULTS["toon_shadow_depth"])))
+	screen_style_mat.set_shader_parameter("shadow_cutoff", float(s.get("toon_shadow_cutoff", GFX_DEFAULTS["toon_shadow_cutoff"])))
+	screen_style_mat.set_shader_parameter("shadow_softness", float(s.get("toon_shadow_softness", GFX_DEFAULTS["toon_shadow_softness"])))
+	screen_style_mat.set_shader_parameter("highlight_cutoff", float(s.get("toon_highlight_cutoff", GFX_DEFAULTS["toon_highlight_cutoff"])))
+	screen_style_mat.set_shader_parameter("highlight_softness", float(s.get("toon_highlight_softness", GFX_DEFAULTS["toon_highlight_softness"])))
 	screen_style_mat.set_shader_parameter("outlines_enabled", bool(s.get("toon_outlines", GFX_DEFAULTS["toon_outlines"])))
 	screen_style_mat.set_shader_parameter("outline_strength", float(s.get("toon_outline_strength", GFX_DEFAULTS["toon_outline_strength"])))
 	screen_style_mat.set_shader_parameter("outline_threshold", float(s.get("toon_outline_threshold", GFX_DEFAULTS["toon_outline_threshold"])))
 	screen_style_mat.set_shader_parameter("outline_softness", float(s.get("toon_outline_softness", GFX_DEFAULTS["toon_outline_softness"])))
 	screen_style_mat.set_shader_parameter("outline_thickness", float(s.get("toon_outline_thickness", GFX_DEFAULTS["toon_outline_thickness"])))
+	screen_style_mat.set_shader_parameter("outline_color_sensitivity", float(s.get("toon_outline_color_sensitivity", GFX_DEFAULTS["toon_outline_color_sensitivity"])))
+	screen_style_mat.set_shader_parameter("outline_color_retention", float(s.get("toon_outline_color_retention", GFX_DEFAULTS["toon_outline_color_retention"])))
 	screen_style_mat.set_shader_parameter("color_brightness", float(s.get("toon_color_brightness", GFX_DEFAULTS["toon_color_brightness"])))
 	screen_style_mat.set_shader_parameter("color_contrast", float(s.get("toon_color_contrast", GFX_DEFAULTS["toon_color_contrast"])))
 	screen_style_mat.set_shader_parameter("color_saturation", float(s.get("toon_color_saturation", GFX_DEFAULTS["toon_color_saturation"])))
+	screen_style_mat.set_shader_parameter("color_gamma", float(s.get("toon_color_gamma", GFX_DEFAULTS["toon_color_gamma"])))
+	screen_style_mat.set_shader_parameter("black_lift", float(s.get("toon_black_lift", GFX_DEFAULTS["toon_black_lift"])))
+	screen_style_mat.set_shader_parameter("highlight_rolloff", float(s.get("toon_highlight_rolloff", GFX_DEFAULTS["toon_highlight_rolloff"])))
 	screen_style_mat.set_shader_parameter("hue_shift_degrees", float(s.get("toon_hue_shift", GFX_DEFAULTS["toon_hue_shift"])))
 	screen_style_mat.set_shader_parameter("warmth", float(s.get("toon_warmth", GFX_DEFAULTS["toon_warmth"])))
 	screen_style_mat.set_shader_parameter("green_magenta", float(s.get("toon_green_magenta", GFX_DEFAULTS["toon_green_magenta"])))
@@ -45178,6 +46264,7 @@ func _spawn_customer_local(
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
 	c.setup(typed_order, color, patience, lane, skin_idx, face_style, jin_fact_idx)
+	c.apply_review_card_settings(customer_review_settings)
 	c.set_meta("soda_handed", false)
 	c.set_meta("icecream_handed", false)
 	c.set_meta("fries_handed", false)
@@ -46242,34 +47329,6 @@ func _build_ingredient_legend() -> void:
 	ingredient_legend.add_theme_constant_override("separation", 6)
 	ingredient_legend.clip_contents = false
 
-	## Compact Order-Up bell on the right of the bottom ingredient strip.
-	var serve_btn := Button.new()
-	serve_btn.text = "🔔"
-	serve_btn.tooltip_text = "Order up! — Serve"
-	serve_btn.custom_minimum_size = Vector2(88, 84)
-	serve_btn.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(serve_btn, true, 36)
-	var serve_sb := StyleBoxFlat.new()
-	serve_sb.bg_color = Color(0.2, 0.72, 0.35)
-	serve_sb.set_corner_radius_all(12)
-	serve_sb.content_margin_left = 8
-	serve_sb.content_margin_right = 8
-	serve_sb.content_margin_top = 6
-	serve_sb.content_margin_bottom = 6
-	serve_sb.border_color = Color(0.85, 1.0, 0.55)
-	serve_sb.set_border_width_all(2)
-	serve_btn.add_theme_stylebox_override("normal", serve_sb)
-	var serve_hover := serve_sb.duplicate()
-	serve_hover.bg_color = Color(0.32, 0.85, 0.42)
-	serve_btn.add_theme_stylebox_override("hover", serve_hover)
-	serve_btn.add_theme_color_override("font_color", Color(1.0, 0.95, 0.45))
-	serve_btn.add_theme_color_override("font_outline_color", Color.BLACK)
-	serve_btn.add_theme_constant_override("outline_size", 4)
-	serve_btn.pressed.connect(func():
-		_sfx_click()
-		_on_serve()
-	)
-
 	## Horizontal strip of toppings along the bottom (1 tomato → 7 mustard).
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -46285,7 +47344,6 @@ func _build_ingredient_legend() -> void:
 	panel_sb.set_border_width_all(2)
 	panel.add_theme_stylebox_override("panel", panel_sb)
 	ingredient_legend.add_child(panel)
-	ingredient_legend.add_child(serve_btn)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -46480,7 +47538,7 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 		icon.name = "Art"
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.texture = tex
-		icon.modulate = Color(1.2, 1.2, 1.2, 1.0) ## +20% brighter
+		icon.modulate = Color(1.38, 1.38, 1.38, 1.0) ## 15% brighter than the prior 1.20 treatment
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -46504,10 +47562,12 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	lab.offset_top = -1.0
+	## Preserve the label's height while moving its center exactly two pixels up.
+	lab.offset_top = -3.0
+	lab.offset_bottom = -2.0
 	UiFontsScript.apply_label(lab, true, 12) ## slightly smaller on the key
-	lab.add_theme_color_override("font_color", Color(0.10, 0.11, 0.14))
-	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.55))
+	lab.add_theme_color_override("font_color", Color(0.10, 0.11, 0.14, 0.80))
+	lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.44))
 	lab.add_theme_constant_override("outline_size", 2)
 	root.add_child(lab)
 	return root
@@ -49535,7 +50595,7 @@ func _try_auto_serve() -> void:
 	## Hand off as soon as a station matches a waiting ticket perfectly.
 	if not playing or _auto_serving or _serve_fly_busy:
 		return
-	## The tutorial explicitly teaches the Serve bell; do not steal that lesson.
+	## The tutorial explicitly teaches manual serving with Enter; do not steal that lesson.
 	if tutorial_mode:
 		return
 	## Co-op: any cook can initiate; the reliable serve RPC keeps peers in one outcome.
@@ -53609,7 +54669,7 @@ func _mp_ensure_remote_fries(peer_id: int) -> Node3D:
 	_set_fries_pack_foreground(ghost)
 	_mp_strip_tool_pickable(ghost)
 	ghost.visible = false
-	ghost.scale = Vector3(1.18, 1.18, 1.18)
+	ghost.scale = Vector3.ONE * FRIES_FINISHED_HAND_SCALE
 	world.add_child(ghost)
 	_mp_remote_fries[peer_id] = ghost
 	return ghost
@@ -53948,7 +55008,7 @@ func mp_tool_pose(
 			fries.visible = true
 			fries.global_position = pos
 			fries.global_rotation_degrees = rot
-			fries.scale = Vector3(1.18, 1.18, 1.18)
+			fries.scale = Vector3.ONE * FRIES_FINISHED_HAND_SCALE
 		10:
 			var spatula := _mp_ensure_remote_spatula(sid)
 			if spatula == null:
@@ -54280,8 +55340,11 @@ func mp_request_spawn_patty(x: float, z: float) -> void:
 	var place_pos := _find_closest_patty_place(Vector3(x, GRILL_SURFACE_Y, z))
 	if place_pos == Vector3.ZERO:
 		place_pos = Vector3(x, GRILL_SURFACE_Y, z)
+	if not _try_use_supply("patty"):
+		return
 	var nid := NetManager.alloc_net_id()
 	mp_spawn_patty.rpc(nid, idx, place_pos.x, place_pos.z)
+	_mp_broadcast_economy()
 
 
 @rpc("any_peer", "call_local", "reliable")

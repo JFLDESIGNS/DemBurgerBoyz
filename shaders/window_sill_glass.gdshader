@@ -1,7 +1,7 @@
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_draw_opaque, fog_disabled;
+render_mode blend_mix, cull_disabled, depth_draw_never, fog_disabled;
 
-// Thick sill glass: screen magnify, bottom→top darken, red/white strip, edge vignette.
+// Thick sill glass: screen magnify, bottom→top darken, optional strip, edge vignette.
 
 uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
 uniform float magnify : hint_range(0.0, 0.12) = 0.022;
@@ -15,7 +15,7 @@ uniform float reflectiveness : hint_range(0.0, 1.0) = 0.28;
 uniform float vig_strength : hint_range(0.0, 1.0) = 0.35;
 uniform float strip_y : hint_range(0.0, 1.0) = 0.72; // 0=bottom 1=top
 uniform float strip_h : hint_range(0.01, 0.5) = 0.10;
-uniform float strip_opacity : hint_range(0.0, 1.0) = 0.85;
+uniform float strip_opacity : hint_range(0.0, 1.0) = 0.0;
 uniform float strip_reps : hint_range(1.0, 40.0) = 14.0;
 uniform vec3 strip_red : source_color = vec3(0.78, 0.08, 0.05);
 uniform vec3 strip_white : source_color = vec3(0.92, 0.92, 0.90);

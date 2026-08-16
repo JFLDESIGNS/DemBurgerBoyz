@@ -84,6 +84,9 @@ var _hint: Label3D
 var _hint_mode: String = "" ## "", cooking, flip, scoop, hold
 var _hint_age: float = 0.0
 var _hint_focused: bool = false
+var _flat_hover_outline: MeshInstance3D = null
+var _ball_hover_outline: MeshInstance3D = null
+var _hover_outline_mat: ShaderMaterial = null
 ## Compact HOLD timer — circular progress disc instead of giant "HOLD 241s" text.
 var _hold_meter: MeshInstance3D = null
 var _hold_meter_mat: StandardMaterial3D = null
@@ -104,8 +107,11 @@ var _done_jump_tw: Tween = null
 ## Right-click place: ice ball sits until a second right-click smash.
 var place_morphing: bool = false ## Ball visible and/or mid-squash
 var place_ball_waiting: bool = false ## Sphere down — waiting for smash click
-var ball_heat_motion_active: bool = false ## Burner motion only; cook time still waits for smash
+var ball_heat_motion_active: bool = false ## Burner motion for a settled unsmashed sphere
 var _frozen_ball: Node3D = null
+var _frozen_ball_meat_mat: ShaderMaterial = null
+var _frozen_ball_frost_mat: ShaderMaterial = null
+var _frozen_ball_under_mat: StandardMaterial3D = null
 var _place_morph_tw: Tween = null
 var _shadow_proxy: MeshInstance3D = null ## Flat-patty disc shadow; off while ice ball is up
 ## Overall burger size (mesh + collision + ice ball). 1.0 = original.
@@ -173,6 +179,10 @@ const HINT_SCALE_DIM := 0.55 ## Shrink when the cursor isn't on this patty.
 const HINT_SCALE_COOKING := 0.38 ## Status-only (COOKING…) stays quieter than flip/scoop.
 const PATTY_BODY_PRIORITY := 20
 const PATTY_OVERLAY_PRIORITY := PATTY_BODY_PRIORITY + 8
+const HOVER_OUTLINE_WIDTH := 0.0062 ## Clear selected rim, in world metres before patty scale.
+const HOVER_OUTLINE_COLOR := Color(1.0, 0.68, 0.075, 1.0)
+
+static var _hover_outline_shader: Shader = null
 
 
 func _ready() -> void:
@@ -240,6 +250,7 @@ func _ready() -> void:
 	shadow_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 	_shadow_proxy.material_override = shadow_mat
 	add_child(_shadow_proxy)
+	_ensure_flat_hover_outline()
 
 	## Flat meat top — hides cylinder-cap polar cook UVs under the frost holes.
 	_meat_top = MeshInstance3D.new()
@@ -491,7 +502,7 @@ func reset_for_grill_spawn(
 	_done_jump_y = 0.0
 	_hint_mode = ""
 	_hint_age = 0.0
-	_hint_focused = false
+	set_hint_focus(false)
 	position = p_world_pos
 	rotation = Vector3.ZERO
 	scale = Vector3.ONE
@@ -851,10 +862,12 @@ func apply_mp_state(
 func _process(delta: float) -> void:
 	_update_flip_smoke(delta)
 	_update_frozen_ball_heat_motion(delta)
-	## A settled meatball on hot steel gets the same small edge-grease bubbles as
-	## a flat patty, while its actual cook clock still waits for the smash.
-	var cooking := heating and not is_held and not place_ball_waiting and not place_morphing
-	var ball_bubbling := ball_heat_motion_active and place_ball_waiting \
+	## Unsmashed meat is real food now: it cooks, changes color, and can burn on
+	## hot steel. The squash tween is the only short interval that pauses effects.
+	var sphere_cooking := heating and not is_held and place_ball_waiting
+	var flat_cooking := heating and not is_held and not place_ball_waiting and not place_morphing
+	var cooking := sphere_cooking or flat_cooking
+	var ball_bubbling := sphere_cooking and ball_heat_motion_active \
 		and _place_morph_tw == null and not is_held
 	if _bubbles:
 		_set_edge_bubble_profile(ball_bubbling)
@@ -862,7 +875,7 @@ func _process(delta: float) -> void:
 	if _top_bubbles:
 		## Surface bubbles ~4s before flip, and again ~4s before scoop-ready.
 		var top_ready := false
-		if cooking:
+		if flat_cooking:
 			if not flipped_once and cook_time >= FLIP_READY - BUBBLE_LEAD:
 				top_ready = true
 			elif flipped_once and cook_time >= SCOOP_READY - BUBBLE_LEAD:
@@ -880,10 +893,11 @@ func _process(delta: float) -> void:
 		_cheese_mat = null
 	## Cheese keeps melting anywhere — grill, HOLD, spatula, or Build board.
 	## Guests take melt from host snapshots so co-op doesn't desync scoop-ready.
-	if has_cheese and cheese_melt < 1.0 and not mp_puppet:
-		cheese_melt = minf(1.0, cheese_melt + delta / CHEESE_MELT_TIME)
-		_update_cheese_visual()
-	elif has_cheese and cheese_melt < 1.0 and mp_puppet:
+	if has_cheese:
+		if cheese_melt < 1.0 and not mp_puppet:
+			cheese_melt = minf(1.0, cheese_melt + delta / CHEESE_MELT_TIME)
+		## Keep checking orientation after the melt completes. Juggle flips rotate
+		## the whole patty, so a stale visible flag made cheese show underneath.
 		_update_cheese_visual()
 	if is_held:
 		if _hint:
@@ -903,6 +917,8 @@ func _process(delta: float) -> void:
 	_update_sear_disc()
 	_update_grate_disc()
 	_update_meat_top()
+	_update_frozen_ball_cook_visual()
+	_update_frozen_ball_cook_visual()
 	_update_reflection_visual()
 	if _under_mat:
 		## Face on the grill: raw underside after flip, seared contact before.
@@ -979,7 +995,124 @@ func slot_base_y() -> float:
 
 
 func set_hint_focus(on: bool) -> void:
+	if _hint_focused == on:
+		return
 	_hint_focused = on
+	_set_hover_outline_visible(on)
+
+
+func _hover_outline_shader_resource() -> Shader:
+	if _hover_outline_shader != null:
+		return _hover_outline_shader
+	_hover_outline_shader = Shader.new()
+	_hover_outline_shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_never, shadows_disabled, ambient_light_disabled;
+
+uniform vec4 outline_color : source_color = vec4(1.0, 0.68, 0.075, 1.0);
+uniform float outline_width = 0.0062;
+uniform float lump_amp = 0.0;
+uniform float lump_freq = 3.6;
+uniform float seed = 1.0;
+
+float hash31(vec3 p) {
+	return fract(sin(dot(p, vec3(127.1, 311.7, 74.7)) + seed) * 43758.5453123);
+}
+
+float vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float n000 = hash31(i);
+	float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+	float nx00 = mix(n000, n100, f.x);
+	float nx10 = mix(n010, n110, f.x);
+	float nx01 = mix(n001, n101, f.x);
+	float nx11 = mix(n011, n111, f.x);
+	float nxy0 = mix(nx00, nx10, f.y);
+	float nxy1 = mix(nx01, nx11, f.y);
+	return mix(nxy0, nxy1, f.z);
+}
+
+void vertex() {
+	if (lump_amp > 0.0) {
+		vec3 p = NORMAL * lump_freq + vec3(seed * 0.37, seed * 0.19, seed * 0.53);
+		float n = vnoise(p) * 2.0 - 1.0;
+		n += 0.55 * (vnoise(p * 2.15 + vec3(3.1, 1.4, 0.7)) * 2.0 - 1.0);
+		n += 0.30 * (vnoise(p * 4.4 + vec3(-1.7, 2.2, 0.9)) * 2.0 - 1.0);
+		float pole = smoothstep(0.92, 0.55, abs(NORMAL.y));
+		VERTEX += NORMAL * n * lump_amp * pole;
+	}
+	VERTEX += NORMAL * outline_width;
+}
+
+void fragment() {
+	ALBEDO = outline_color.rgb;
+	EMISSION = outline_color.rgb * 0.52;
+}
+"""
+	return _hover_outline_shader
+
+
+func _ensure_hover_outline_material() -> ShaderMaterial:
+	if _hover_outline_mat != null:
+		return _hover_outline_mat
+	_hover_outline_mat = ShaderMaterial.new()
+	_hover_outline_mat.shader = _hover_outline_shader_resource()
+	_hover_outline_mat.render_priority = PATTY_BODY_PRIORITY - 1
+	_hover_outline_mat.set_shader_parameter("outline_color", HOVER_OUTLINE_COLOR)
+	_hover_outline_mat.set_shader_parameter("outline_width", HOVER_OUTLINE_WIDTH)
+	return _hover_outline_mat
+
+
+func _ensure_flat_hover_outline() -> void:
+	if _mesh == null or _mesh.mesh == null:
+		return
+	if _flat_hover_outline != null and is_instance_valid(_flat_hover_outline):
+		return
+	_flat_hover_outline = MeshInstance3D.new()
+	_flat_hover_outline.name = "HoverOutline"
+	_flat_hover_outline.mesh = _mesh.mesh
+	_flat_hover_outline.material_override = _ensure_hover_outline_material()
+	_flat_hover_outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_flat_hover_outline.visible = _hint_focused
+	_mesh.add_child(_flat_hover_outline)
+
+
+func _ensure_ball_hover_outline(ball_mesh: Mesh, lump_seed: float) -> void:
+	if _frozen_ball == null or ball_mesh == null:
+		return
+	if _ball_hover_outline != null and is_instance_valid(_ball_hover_outline):
+		return
+	_ball_hover_outline = MeshInstance3D.new()
+	_ball_hover_outline.name = "HoverOutline"
+	_ball_hover_outline.mesh = ball_mesh
+	## The ball needs its own material so its lumpy silhouette can share the meat seed.
+	var ball_outline_mat := ShaderMaterial.new()
+	ball_outline_mat.shader = _hover_outline_shader_resource()
+	ball_outline_mat.render_priority = PATTY_BODY_PRIORITY - 1
+	ball_outline_mat.set_shader_parameter("outline_color", HOVER_OUTLINE_COLOR)
+	ball_outline_mat.set_shader_parameter("outline_width", HOVER_OUTLINE_WIDTH)
+	ball_outline_mat.set_shader_parameter("lump_amp", FROZEN_BALL_LUMP_AMP)
+	ball_outline_mat.set_shader_parameter("lump_freq", 3.6)
+	ball_outline_mat.set_shader_parameter("seed", lump_seed)
+	_ball_hover_outline.material_override = ball_outline_mat
+	_ball_hover_outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ball_hover_outline.visible = _hint_focused
+	_frozen_ball.add_child(_ball_hover_outline)
+
+
+func _set_hover_outline_visible(on: bool) -> void:
+	if _flat_hover_outline != null and is_instance_valid(_flat_hover_outline):
+		_flat_hover_outline.visible = on
+	if _ball_hover_outline != null and is_instance_valid(_ball_hover_outline):
+		_ball_hover_outline.visible = on
 
 
 func _set_hint_mode(mode: String, text: String, color: Color) -> void:
@@ -1757,6 +1890,8 @@ func flip() -> bool:
 	var audio := _audio()
 	if audio:
 		audio.play_flip()
+		if audio.has_method("play_spatula_whoosh"):
+			audio.play_spatula_whoosh()
 		if perfect_flip and audio.has_method("play_perfect_announcer"):
 			audio.play_perfect_announcer()
 	var tw := create_tween()
@@ -2072,7 +2207,7 @@ func _ensure_frozen_ball() -> void:
 	## Squashed ice ball — lumpy WPO meat + frost that matches the same lumps.
 	if _frozen_ball != null and is_instance_valid(_frozen_ball):
 		## Rebuild if an older clipped-shell / random-fleck ball was cached.
-		if not bool(_frozen_ball.get_meta("frost_v8", false)):
+		if not bool(_frozen_ball.get_meta("frost_v9_cooks", false)):
 			_frozen_ball.queue_free()
 			_frozen_ball = null
 		else:
@@ -2080,7 +2215,7 @@ func _ensure_frozen_ball() -> void:
 	_frozen_ball = Node3D.new()
 	_frozen_ball.name = "FrozenDropBall"
 	_frozen_ball.visible = false
-	_frozen_ball.set_meta("frost_v8", true)
+	_frozen_ball.set_meta("frost_v9_cooks", true)
 	_reset_frozen_ball_pose()
 	add_child(_frozen_ball)
 
@@ -2104,9 +2239,11 @@ func _ensure_frozen_ball() -> void:
 		true
 	)
 	meat_mat.render_priority = PATTY_BODY_PRIORITY
+	_frozen_ball_meat_mat = meat_mat
 	meat.material_override = meat_mat
 	meat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	_frozen_ball.add_child(meat)
+	_ensure_ball_hover_outline(meat_mesh, lump_seed)
 
 	## Soft underside tint — no WPO (different lumps were the clipped ghost layer).
 	var under := MeshInstance3D.new()
@@ -2124,6 +2261,7 @@ func _ensure_frozen_ball() -> void:
 	under_mat.albedo_color = Color(0.35, 0.12, 0.14, 0.55)
 	under_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	under_mat.render_priority = PATTY_BODY_PRIORITY
+	_frozen_ball_under_mat = under_mat
 	under.material_override = under_mat
 	under.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_frozen_ball.add_child(under)
@@ -2153,6 +2291,7 @@ func _ensure_frozen_ball() -> void:
 	## Bigger frost islands (lower UV scale = chunkier noise patches).
 	shell_mat.set_shader_parameter("uv_scale", Vector2(0.55, 0.45))
 	shell_mat.render_priority = PATTY_BODY_PRIORITY + 3
+	_frozen_ball_frost_mat = shell_mat
 	shell.material_override = shell_mat
 	shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	shell.rotation_degrees.y = randf() * 360.0
@@ -2162,6 +2301,7 @@ func _ensure_frozen_ball() -> void:
 	var fleck_scale_comp := 1.35 / maxf(FROZEN_BALL_SCALE, 0.01)
 	for _i in randi_range(7, 11):
 		var fleck := MeshInstance3D.new()
+		fleck.name = "IceFleck"
 		fleck.mesh = _make_ice_chunk_mesh(randi())
 		var ang := randf() * TAU
 		var elev := lerpf(0.08, 0.92, pow(randf(), 0.5))
@@ -2189,6 +2329,7 @@ func _ensure_frozen_ball() -> void:
 		## 25% more transparent than prior ice shards (×0.75 alpha).
 		var ice_a := ((0.14 + randf() * 0.12) if big_chunk else (0.28 + randf() * 0.22)) * 0.75
 		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, ice_a)
+		fleck.set_meta("base_ice_alpha", ice_a)
 		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 		fmat.no_depth_test = false
@@ -2208,9 +2349,8 @@ func _reset_frozen_ball_pose() -> void:
 
 
 func _update_frozen_ball_heat_motion(delta: float) -> void:
-	## Unsmashed meat reacts to the hot steel without advancing cook_time or
-	## changing doneness. The landing/smash tweens keep full ownership
-	## while active; this gentle motion begins once the ball has settled.
+	## The landing/smash tweens keep full ownership while active; this gentle
+	## motion begins once the cooking sphere has settled.
 	if _frozen_ball == null or not is_instance_valid(_frozen_ball):
 		return
 	if not place_ball_waiting or _place_morph_tw != null:
@@ -2252,6 +2392,34 @@ func _update_frozen_ball_heat_motion(delta: float) -> void:
 	)
 
 
+func _update_frozen_ball_cook_visual() -> void:
+	if _frozen_ball == null or not is_instance_valid(_frozen_ball):
+		return
+	if _frozen_ball_meat_mat != null:
+		_frozen_ball_meat_mat.set_shader_parameter("albedo_color", color_at_cook_time(cook_time))
+	if _frozen_ball_under_mat != null:
+		var under_col := color_at_cook_time(cook_time + 1.5).darkened(0.34)
+		under_col.a = 0.58
+		_frozen_ball_under_mat.albedo_color = under_col
+	var frost_left := 1.0 - clampf(cook_time / maxf(FROST_MELT, 0.01), 0.0, 1.0)
+	if _frozen_ball_frost_mat != null:
+		_frozen_ball_frost_mat.set_shader_parameter(
+			"albedo_color", Color(1.0, 1.0, 1.0, 0.38 * frost_left)
+		)
+		_frozen_ball_frost_mat.set_shader_parameter("tex_blend", 0.88 * frost_left)
+	for child in _frozen_ball.get_children():
+		var fleck := child as MeshInstance3D
+		if fleck == null or not fleck.name.begins_with("IceFleck"):
+			continue
+		var fmat := fleck.material_override as StandardMaterial3D
+		if fmat == null:
+			continue
+		var c := fmat.albedo_color
+		c.a = float(fleck.get_meta("base_ice_alpha", c.a)) * frost_left
+		fmat.albedo_color = c
+		fleck.visible = frost_left > 0.015
+
+
 func play_frozen_drop_appear() -> void:
 	## First right-click: drop a frozen ice ball (waits for a smash click).
 	_ensure_frozen_ball()
@@ -2260,7 +2428,7 @@ func play_frozen_drop_appear() -> void:
 	_place_morph_tw = null
 	place_morphing = true
 	place_ball_waiting = true
-	heating = false ## Don't cook until smashed flat.
+	heating = false ## Grill controller enables heat on the next simulation frame.
 	scale = Vector3.ONE
 	if _mesh != null and is_instance_valid(_mesh):
 		_mesh.visible = false
@@ -2270,6 +2438,7 @@ func play_frozen_drop_appear() -> void:
 	_set_patty_disc_shadow(false) ## Ball meat casts its own round/lumpy shadow.
 	_frozen_ball.visible = true
 	_reset_frozen_ball_pose()
+	_update_frozen_ball_cook_visual()
 	_play_frozen_land_squash()
 	sync_interact_collision()
 	var audio := _audio()
@@ -2577,7 +2746,9 @@ func _update_cheese_visual() -> void:
 	var top_up := 1.0
 	if _mesh != null and is_instance_valid(_mesh):
 		top_up = _mesh.global_transform.basis.y.normalized().dot(Vector3.UP)
-	_cheese_root.visible = top_up > -0.12
+	## Only draw cheese while its actual top face points upward. During an
+	## airborne flip it disappears through the underside, then returns on top.
+	_cheese_root.visible = top_up > 0.12
 	var drape := smoothstep(0.12, 0.95, t)
 	drape = drape * drape * (3.0 - 2.0 * drape)
 	## Warm cheddar yellow → deeper orange as it melts.

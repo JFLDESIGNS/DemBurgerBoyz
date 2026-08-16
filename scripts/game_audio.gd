@@ -3,6 +3,57 @@ extends Node
 
 const MIX_RATE := 22050
 const SFX_POOL := 14
+const SFX_LEVEL_CFG_PATH := "user://audio_settings.cfg"
+const SFX_LEVEL_CFG_SECTION := "sfx_levels"
+const SPATULA_NOTE_BOOST_CFG_SECTION := "spatula_piano_notes"
+const SFX_TUNING_ENTRIES := [
+	{"key": "ui", "label": "UI Clicks + Errors"},
+	{"key": "ingredients", "label": "Ingredients + Buns"},
+	{"key": "flip_whoosh", "label": "Flips + Whooshes"},
+	{"key": "tools", "label": "Spatula + Tools"},
+	{"key": "cooking", "label": "Grill Cooking"},
+	{"key": "burn_liquid", "label": "Burning Ice / Liquid"},
+	{"key": "fryer", "label": "Fryer Oil"},
+	{"key": "drinks", "label": "Soda + Cup"},
+	{"key": "ice", "label": "Ice Dispenser"},
+	{"key": "softserve", "label": "Soft Serve"},
+	{"key": "trash", "label": "Garbage"},
+	{"key": "service", "label": "Serve + Grade"},
+	{"key": "customers", "label": "Customers + Cat"},
+	{"key": "world", "label": "Trees + World Props"},
+]
+const SFX_LEVEL_DEFAULTS := {
+	"ui": 1.0,
+	"ingredients": 1.0,
+	"flip_whoosh": 1.0,
+	"tools": 1.0,
+	"cooking": 1.0,
+	"burn_liquid": 0.38,
+	"fryer": 1.0,
+	"drinks": 1.0,
+	"ice": 1.0,
+	"softserve": 1.0,
+	"trash": 1.0,
+	"service": 1.0,
+	"customers": 1.0,
+	"world": 1.0,
+}
+var sfx_levels: Dictionary = SFX_LEVEL_DEFAULTS.duplicate(true)
+const SPATULA_NOTE_BOOST_ENTRIES := [
+	{"midi": 64, "label": "E4 Boost"},
+	{"midi": 65, "label": "F4 Boost"},
+	{"midi": 67, "label": "G4 Boost"},
+	{"midi": 69, "label": "A4 Boost"},
+	{"midi": 71, "label": "B4 Boost"},
+]
+const SPATULA_NOTE_BOOST_DEFAULTS := {
+	"64": 1.25,
+	"65": 1.25,
+	"67": 1.25,
+	"69": 1.25,
+	"71": 1.25,
+}
+var spatula_note_boosts: Dictionary = SPATULA_NOTE_BOOST_DEFAULTS.duplicate(true)
 
 ## Soft ascending kitchen scale — cheese is the floor, top bun the ceiling.
 ## Order matches the ingredient strip (hotkeys 1→9).
@@ -171,6 +222,8 @@ var _outdoor_ambience_muted: bool = false
 
 
 func _ready() -> void:
+	_load_sfx_levels()
+	_load_spatula_note_boosts()
 	add_to_group("game_audio")
 	for i in SFX_POOL:
 		var p := AudioStreamPlayer.new()
@@ -321,6 +374,127 @@ func _ready() -> void:
 	set_process(true)
 
 
+func get_sfx_tuning_entries() -> Array:
+	return SFX_TUNING_ENTRIES.duplicate(true)
+
+
+func get_spatula_note_boost_entries() -> Array:
+	return SPATULA_NOTE_BOOST_ENTRIES.duplicate(true)
+
+
+func get_spatula_note_boost(sounded_midi: int) -> float:
+	var key := str(sounded_midi)
+	return clampf(float(spatula_note_boosts.get(key, 1.0)), 0.25, 4.0)
+
+
+func set_spatula_note_boost(sounded_midi: int, value: float) -> void:
+	var key := str(sounded_midi)
+	if not SPATULA_NOTE_BOOST_DEFAULTS.has(key):
+		return
+	spatula_note_boosts[key] = clampf(value, 0.25, 4.0)
+	_save_spatula_note_boosts()
+
+
+func get_sfx_level(key: String) -> float:
+	return clampf(float(sfx_levels.get(key, 1.0)), 0.0, 2.0)
+
+
+func set_sfx_level(key: String, value: float) -> void:
+	if not SFX_LEVEL_DEFAULTS.has(key):
+		return
+	sfx_levels[key] = clampf(value, 0.0, 2.0)
+	_refresh_active_sfx_levels()
+	_save_sfx_levels()
+
+
+func _refresh_active_sfx_levels() -> void:
+	if _soda_on and _soda_player != null:
+		_soda_player.volume_db = _sfx_db(-14.0, "drinks")
+	if _ice_on and _ice_player != null:
+		_ice_player.volume_db = _sfx_db(-22.0, "ice")
+	if _softserve_on and _softserve_player != null:
+		_softserve_player.volume_db = _sfx_db(-7.5, "softserve")
+	if _fryer_on and _fryer_player != null:
+		_fryer_player.volume_db = _sfx_db(-4.5, "fryer")
+	if _hiss_on and _hiss_player != null:
+		_hiss_player.volume_db = _sfx_db(-30.0, "cooking")
+	if _spray_on and _spray_player != null:
+		_spray_player.volume_db = _sfx_db(-9.5, "tools")
+	if _shake_on:
+		_sync_shaker_rattle()
+
+
+func _load_sfx_levels() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SFX_LEVEL_CFG_PATH)
+	for key_var in SFX_LEVEL_DEFAULTS.keys():
+		var key := str(key_var)
+		sfx_levels[key] = clampf(float(cfg.get_value(
+			SFX_LEVEL_CFG_SECTION, key, SFX_LEVEL_DEFAULTS[key]
+		)), 0.0, 2.0)
+
+
+func _load_spatula_note_boosts() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SFX_LEVEL_CFG_PATH)
+	for key_var in SPATULA_NOTE_BOOST_DEFAULTS.keys():
+		var key := str(key_var)
+		spatula_note_boosts[key] = clampf(float(cfg.get_value(
+			SPATULA_NOTE_BOOST_CFG_SECTION, key, SPATULA_NOTE_BOOST_DEFAULTS[key]
+		)), 0.25, 4.0)
+
+
+func _save_sfx_levels() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SFX_LEVEL_CFG_PATH)
+	for key_var in SFX_LEVEL_DEFAULTS.keys():
+		var key := str(key_var)
+		cfg.set_value(SFX_LEVEL_CFG_SECTION, key, get_sfx_level(key))
+	cfg.save(SFX_LEVEL_CFG_PATH)
+
+
+func _save_spatula_note_boosts() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SFX_LEVEL_CFG_PATH)
+	for key_var in SPATULA_NOTE_BOOST_DEFAULTS.keys():
+		var key := str(key_var)
+		cfg.set_value(SPATULA_NOTE_BOOST_CFG_SECTION, key, get_spatula_note_boost(int(key)))
+	cfg.save(SFX_LEVEL_CFG_PATH)
+
+
+func _sfx(key: String) -> float:
+	return get_sfx_level(key)
+
+
+func _sfx_db(base_db: float, key: String) -> float:
+	var level := _sfx(key)
+	if level <= 0.0001:
+		return -80.0
+	return linear_to_db(db_to_linear(base_db) * level)
+
+
+func _sfx_category_for_cache_key(key: String) -> String:
+	if key.begins_with("ui_") or key.begins_with("error"):
+		return "ui"
+	if key.begins_with("ing_") or key.begins_with("bun_") or key.begins_with("cutting_"):
+		return "ingredients"
+	if "flip" in key or "whoosh" in key or key.begins_with("scoop"):
+		return "flip_whoosh"
+	if key.begins_with("trash"):
+		return "trash"
+	if key.begins_with("grease_") or key.begins_with("smash_") or key.begins_with("hot_oil"):
+		return "cooking"
+	if key.begins_with("cup_") or key.begins_with("rack_") or key.begins_with("ice_tink"):
+		return "drinks"
+	if key.begins_with("serve_") or key.begins_with("order_") or key.begins_with("grade_") or key.begins_with("happy_"):
+		return "service"
+	if key.begins_with("cat_") or key.begins_with("burger_chomp") or "wawa" in key:
+		return "customers"
+	if key.begins_with("tree_") or key.begins_with("roomba_"):
+		return "world"
+	return "tools"
+
+
 func _process(delta: float) -> void:
 	## Fade crackle bed toward target (up when sliding, down when stopped).
 	var fade_spd := 7.0 if _slide_target > _slide_gain else 3.2
@@ -334,7 +508,8 @@ func _process(delta: float) -> void:
 			elif _oil_slide_gain > 0.01:
 				## Burger drag layers metal + oil — keep the scrape bed quieter too.
 				slide_mul = BURGER_SLIDE_VOL_MUL
-			_slide_player.volume_db = linear_to_db(clampf(_slide_gain * 0.42 * slide_mul, 0.02, 1.15))
+			var slide_linear := clampf(_slide_gain * 0.42 * slide_mul, 0.0001, 1.15)
+			_slide_player.volume_db = _sfx_db(linear_to_db(slide_linear), "tools")
 			_slide_player.pitch_scale = (1.15 + _slide_gain * 0.2) * _scrape_dir_pitch
 			if not _slide_player.playing:
 				_slide_player.play()
@@ -348,7 +523,8 @@ func _process(delta: float) -> void:
 	_oil_slide_gain = move_toward(_oil_slide_gain, _oil_slide_target, delta * oil_fade)
 	if _oil_slide_player:
 		if _oil_slide_gain > 0.01:
-			_oil_slide_player.volume_db = linear_to_db(clampf(_oil_slide_gain * 0.31 * BURGER_SLIDE_VOL_MUL, 0.02, 0.38))
+			var oil_slide_linear := clampf(_oil_slide_gain * 0.31 * BURGER_SLIDE_VOL_MUL, 0.0001, 0.38)
+			_oil_slide_player.volume_db = _sfx_db(linear_to_db(oil_slide_linear), "cooking")
 			_oil_slide_player.pitch_scale = 0.92 + _oil_slide_gain * 0.18
 			if not _oil_slide_player.playing:
 				_oil_slide_player.play()
@@ -374,7 +550,7 @@ func _process(delta: float) -> void:
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
 			var drive_linear := clampf(_roomba_drive_gain * 0.32 * _roomba_drive_volume_scale, 0.0001, 1.4)
-			_roomba_drive_player.volume_db = linear_to_db(drive_linear)
+			_roomba_drive_player.volume_db = _sfx_db(linear_to_db(drive_linear), "world")
 			_roomba_drive_player.pitch_scale = 1.42 + _roomba_drive_gain * 0.58
 			if not _roomba_drive_player.playing:
 				_roomba_drive_player.play()
@@ -394,14 +570,16 @@ func _process(delta: float) -> void:
 		if _hot_oil_full_left <= 0.0:
 			_hot_oil_fade_left = HOT_OIL_FADE_SEC
 		if _sizzle_player != null:
-			_sizzle_player.volume_db = linear_to_db(db_to_linear(-3.5) * vol_mul)
+			var hot_key := "cooking" if _hot_oil_volume_mul >= 0.85 else "burn_liquid"
+			_sizzle_player.volume_db = linear_to_db(db_to_linear(-3.5) * vol_mul * maxf(_sfx(hot_key), 0.0001)) if _sfx(hot_key) > 0.0001 else -80.0
 			if not _sizzle_player.playing:
 				_sizzle_player.play()
 		_hot_oil_pop_cd -= delta
 		if _hot_oil_pop_cd <= 0.0:
 			## Soften pop cluster when volume is dialed down (ice water).
+			var pop_level := 1.0 if vol_mul >= 0.85 else _sfx("burn_liquid")
 			if vol_mul >= 0.85 or randf() < vol_mul:
-				play_grease_pop(true)
+				play_grease_pop(true, pop_level)
 			if vol_mul >= 0.85 and randf() < 0.55:
 				play_grease_pop(true)
 			_hot_oil_pop_cd = lerpf(0.06, 0.028, vol_mul) + randf() * 0.045
@@ -413,13 +591,14 @@ func _process(delta: float) -> void:
 		if _sizzle_player != null:
 			## Soft linear die-out over the fade window.
 			var fade_db := lerpf(-42.0, -6.0, oil_fade_t)
-			_sizzle_player.volume_db = linear_to_db(db_to_linear(fade_db) * vol_mul)
+			var fade_key := "cooking" if _hot_oil_volume_mul >= 0.85 else "burn_liquid"
+			_sizzle_player.volume_db = linear_to_db(db_to_linear(fade_db) * vol_mul * maxf(_sfx(fade_key), 0.0001)) if _sfx(fade_key) > 0.0001 else -80.0
 			if not _sizzle_player.playing:
 				_sizzle_player.play()
 		_hot_oil_pop_cd -= delta
 		if _hot_oil_pop_cd <= 0.0 and oil_fade_t > 0.08:
 			if randf() < oil_fade_t * vol_mul:
-				play_grease_pop(true)
+				play_grease_pop(true, 1.0 if vol_mul >= 0.85 else _sfx("burn_liquid"))
 			_hot_oil_pop_cd = lerpf(0.14, 0.04, oil_fade_t) + randf() * 0.05
 	elif _hot_oil_was_active:
 		_hot_oil_was_active = false
@@ -548,7 +727,12 @@ func silence_continuous_beds(mute_room_tone: bool = true) -> void:
 
 
 func _load_outdoor_ambience_stream() -> AudioStreamMP3:
-	## Load Midlands England birdsong MP3 from disk (avoids broken/missing .import in exports).
+	## Prefer the imported stream in packaged builds; raw FileAccess is only an
+	## editor fallback because exports remap the source MP3 into the PCK.
+	if ResourceLoader.exists(OUTDOOR_AMBIENCE_PATH):
+		var imported := load(OUTDOOR_AMBIENCE_PATH) as AudioStreamMP3
+		if imported != null:
+			return imported
 	if not FileAccess.file_exists(OUTDOOR_AMBIENCE_PATH):
 		push_warning("Outdoor ambience missing: %s" % OUTDOOR_AMBIENCE_PATH)
 		return null
@@ -629,7 +813,7 @@ func _sizzle_cook_volume_db() -> float:
 	## Cook-bed loudness from intensity, then HOLD / park volume multiplier.
 	var base_db := lerpf(-18.0, -12.0, clampf(_sizzle_intensity, 0.0, 1.0))
 	var mul := clampf(_sizzle_volume_mul, 0.05, 1.0)
-	return linear_to_db(db_to_linear(base_db) * mul)
+	return linear_to_db(db_to_linear(base_db) * mul * maxf(_sfx("cooking"), 0.0001)) if _sfx("cooking") > 0.0001 else -80.0
 
 
 func set_sizzle_active(active: bool, intensity: float = 0.5, volume_mul: float = 1.0) -> void:
@@ -672,7 +856,8 @@ func trigger_hot_oil(duration: float = 3.0, volume_mul: float = 1.0) -> void:
 	_sizzle_on = true
 	_sizzle_intensity = maxf(_sizzle_intensity, 0.95 * _hot_oil_volume_mul)
 	if _sizzle_player != null:
-		_sizzle_player.volume_db = linear_to_db(db_to_linear(-3.5) * _hot_oil_volume_mul)
+		var hot_key := "cooking" if _hot_oil_volume_mul >= 0.85 else "burn_liquid"
+		_sizzle_player.volume_db = linear_to_db(db_to_linear(-3.5) * _hot_oil_volume_mul * maxf(_sfx(hot_key), 0.0001)) if _sfx(hot_key) > 0.0001 else -80.0
 		if not _sizzle_player.playing:
 			_sizzle_player.play()
 	## Kill idle hiss under the burst so the fry reads clearly.
@@ -686,7 +871,7 @@ func trigger_hot_oil(duration: float = 3.0, volume_mul: float = 1.0) -> void:
 		## Immediate pop cluster on contact (softer when volume is dialed down).
 		var pops := 4 if _hot_oil_volume_mul >= 0.85 else 2
 		for _i in pops:
-			play_grease_pop(true)
+			play_grease_pop(true, 1.0 if _hot_oil_volume_mul >= 0.85 else _sfx("burn_liquid"))
 
 
 func stop_hot_oil() -> void:
@@ -714,7 +899,7 @@ func set_burner_hiss(active: bool) -> void:
 	if active:
 		_hiss_on = true
 		# Boost idle hiss so "burner on" reads immediately even before patties heat up.
-		_hiss_player.volume_db = -30.0
+		_hiss_player.volume_db = _sfx_db(-30.0, "cooking")
 		if not _hiss_player.playing:
 			_hiss_player.play()
 	else:
@@ -729,7 +914,7 @@ func set_ext_spray(active: bool) -> void:
 		return
 	if active:
 		_spray_on = true
-		_spray_player.volume_db = -9.5
+		_spray_player.volume_db = _sfx_db(-9.5, "tools")
 		if not _spray_player.playing:
 			_spray_player.play()
 	else:
@@ -803,10 +988,10 @@ func _sync_shaker_rattle() -> void:
 	if active:
 		_shake_on = true
 		if _scrape_move_on:
-			_shake_player.volume_db = SHAKER_SCRAPE_DEBRIS_DB if _scrape_debris_boost else SHAKER_SCRAPE_DB
+			_shake_player.volume_db = _sfx_db(SHAKER_SCRAPE_DEBRIS_DB if _scrape_debris_boost else SHAKER_SCRAPE_DB, "tools")
 			_shake_player.pitch_scale = _scrape_dir_pitch
 		else:
-			_shake_player.volume_db = SHAKER_RATTLE_DB
+			_shake_player.volume_db = _sfx_db(SHAKER_RATTLE_DB, "tools")
 			_shake_player.pitch_scale = 1.0
 		if not _shake_player.playing:
 			_shake_player.play()
@@ -851,7 +1036,7 @@ func set_fries_shake(active: bool, intensity: float = 1.0) -> void:
 	_fries_shake_intensity = clampf(intensity, 0.0, 1.0)
 	if active and _fries_shake_intensity > 0.05:
 		_fries_shake_on = true
-		_fries_shake_player.volume_db = lerpf(-40.0, -28.0, _fries_shake_intensity)
+		_fries_shake_player.volume_db = _sfx_db(lerpf(-40.0, -28.0, _fries_shake_intensity), "fryer")
 		if not _fries_shake_player.playing:
 			_fries_shake_player.play()
 	else:
@@ -867,7 +1052,7 @@ func set_soda_pour(active: bool) -> void:
 		return
 	if active:
 		_soda_on = true
-		_soda_player.volume_db = -14.0
+		_soda_player.volume_db = _sfx_db(-14.0, "drinks")
 		if not _soda_player.playing:
 			_soda_player.play()
 	else:
@@ -883,7 +1068,7 @@ func set_ice_grind(active: bool) -> void:
 		return
 	if active:
 		_ice_on = true
-		_ice_player.volume_db = -22.0
+		_ice_player.volume_db = _sfx_db(-22.0, "ice")
 		if not _ice_player.playing:
 			_ice_player.play()
 	else:
@@ -898,7 +1083,7 @@ func set_softserve_dispense(active: bool) -> void:
 		return
 	if active:
 		_softserve_on = true
-		_softserve_player.volume_db = -7.5
+		_softserve_player.volume_db = _sfx_db(-7.5, "softserve")
 		if not _softserve_player.playing:
 			_softserve_player.play()
 	else:
@@ -914,7 +1099,7 @@ func set_fryer_oil(active: bool, intensity: float = 1.0) -> void:
 	_fryer_intensity = clampf(intensity, 0.0, 1.35)
 	if active:
 		_fryer_on = true
-		_fryer_player.volume_db = -4.5
+		_fryer_player.volume_db = _sfx_db(-4.5, "fryer")
 		if not _fryer_player.playing:
 			_fryer_player.play()
 	else:
@@ -1230,7 +1415,7 @@ func set_tree_leaf_shake(active: bool, intensity: float = 1.0) -> void:
 	if active and _tree_leaf_intensity > 0.06:
 		_tree_leaf_on = true
 		var linear := db_to_linear(TREE_LEAF_SHAKE_DB) * lerpf(0.50, 1.05, _tree_leaf_intensity)
-		_tree_leaf_player.volume_db = linear_to_db(clampf(linear, 0.02, 0.85))
+		_tree_leaf_player.volume_db = _sfx_db(linear_to_db(clampf(linear, 0.0001, 0.85)), "world")
 		## Gentle brightness tilt only — keep rustle readable as leaves.
 		_tree_leaf_player.pitch_scale = lerpf(0.94, 1.08, _tree_leaf_bright)
 		if not _tree_leaf_player.playing:
@@ -1287,7 +1472,7 @@ func play_stove_light() -> void:
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache["stove_light"]
 	p.pitch_scale = 1.0
-	p.volume_db = linear_to_db(0.475)
+	p.volume_db = _sfx_db(linear_to_db(0.475), "cooking")
 	p.play()
 
 
@@ -1321,7 +1506,10 @@ func _play_announcer_stream(key: String, path: String, gain: float = 0.65) -> vo
 		p.stop()
 	p.stream = stream
 	p.pitch_scale = 1.0
-	p.volume_db = linear_to_db(clampf(gain, 0.05, 1.25))
+	gain *= _sfx("service")
+	if gain <= 0.0001:
+		return
+	p.volume_db = linear_to_db(clampf(gain, 0.001, 2.5))
 	p.play()
 
 
@@ -1347,7 +1535,9 @@ func play_scoop() -> void:
 	_play_cached("scoop", _make_scoop, 0.0, 0.9)
 
 
-func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
+func play_spatula_ting(
+	midi: int = 72, volume_scale: float = 1.0, sounded_midi: int = -1
+) -> void:
 	## tinggrill.wav — labeled C5 / MIDI 72 but reads ~3 semis flat (≈A4).
 	## Grill flat taps: C major ×2 C3→B4 (request MIDI = sounded + 3).
 	if _ting_players.is_empty():
@@ -1371,7 +1561,16 @@ func play_spatula_ting(midi: int = 72, volume_scale: float = 1.0) -> void:
 	if away > 0.001:
 		pitch_boost *= 1.2
 	var gain := base_gain * pitch_boost * maxf(0.0, volume_scale)
-	p.volume_db = linear_to_db(clampf(gain, 0.05, 3.5))
+	## Keep the original spatula recording as the only voice. E4–B4 each have a
+	## saved hidden-menu multiplier; their modest defaults are 1.25×.
+	var tuned_note := SPATULA_NOTE_BOOST_DEFAULTS.has(str(sounded_midi))
+	if tuned_note:
+		gain *= get_spatula_note_boost(sounded_midi)
+	gain *= _sfx("tools")
+	if gain <= 0.0001:
+		return
+	var gain_ceiling := 8.0 if tuned_note else 4.0
+	p.volume_db = linear_to_db(clampf(gain, 0.001, gain_ceiling))
 	p.play()
 
 
@@ -1395,7 +1594,9 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	p.stream = _cache[key]
 	p.pitch_scale = 1.0
 	## Flat drums stay under the piano; hats sit a touch brighter.
-	var base_gain := (0.55 if v == 0 else 0.62) * maxf(0.0, volume_scale)
+	var base_gain := (0.55 if v == 0 else 0.62) * maxf(0.0, volume_scale) * _sfx("tools")
+	if base_gain <= 0.0001:
+		return
 	p.volume_db = linear_to_db(base_gain)
 	p.play()
 	## Louder tin / steel layer so HOLD hits still read as metal spatula on grill.
@@ -1617,7 +1818,7 @@ func set_roomba_wawawa(active: bool) -> void:
 				_roomba_wawawa_player.play(0.0)
 		)
 	_roomba_wawawa_player.pitch_scale = 2.18 ## a bit higher than prior 1.93
-	_roomba_wawawa_player.volume_db = 1.0
+	_roomba_wawawa_player.volume_db = _sfx_db(1.0, "world")
 	if active:
 		if not _roomba_wawawa_player.playing:
 			_roomba_wawawa_player.play(0.0)
@@ -1638,7 +1839,7 @@ func play_roomba_wawa_chirp() -> void:
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache["roomba_wawa_chirp"]
 	p.pitch_scale = 1.96 + randf() * 0.16
-	p.volume_db = linear_to_db(0.56)
+	p.volume_db = _sfx_db(linear_to_db(0.56), "world")
 	p.play(randf_range(0.0, 0.65))
 	var tree := get_tree()
 	if tree != null:
@@ -1817,13 +2018,16 @@ func _make_burger_slide_oil_loop() -> AudioStreamWAV:
 func _play_cached(key: String, builder: Callable, pitch: float, gain: float) -> void:
 	if _players.is_empty():
 		return
+	gain *= _sfx(_sfx_category_for_cache_key(key))
+	if gain <= 0.0001:
+		return
 	if not _cache.has(key):
 		_cache[key] = builder.call()
 	var p: AudioStreamPlayer = _players[_player_i]
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache[key]
 	p.pitch_scale = 1.0 if pitch <= 0.0 else pitch
-	p.volume_db = linear_to_db(clampf(gain, 0.05, 1.5))
+	p.volume_db = linear_to_db(clampf(gain, 0.001, 3.0))
 	p.play()
 
 
