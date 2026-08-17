@@ -2021,10 +2021,6 @@ var soda_soft_radius_mult: Dictionary = {
 }
 var soda_fill_follow_rate := 28.0
 var soda_fill_max_speed := 1.2
-## Ice is normally used first, so crossing toward Cola should hand the cup over
-## near the midpoint instead of making the player fight the old Ice spring.
-const SODA_ICE_TO_COLA_ACQUIRE_MULT := 1.10
-const SODA_ICE_TO_COLA_EARLY_MARGIN := 0.015
 var cup_liquid_top_offset_in := 0.05
 var cup_liquid_radius_scale := 1.0
 var soda_tank_visual_scale := 0.53
@@ -24595,6 +24591,10 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", 0.0)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "instant_bay_reacquire_v12", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "cola_only_soft_lock_v13"):
+		## Ice remains a free-hand fill target. Only the Cola bay may magnetize a cup.
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "cola_only_soft_lock_v13", true)
+		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_y", soda_station_pos.y)), 0.0, 2.4),
@@ -31379,6 +31379,14 @@ func _cup_soft_lock_tray_target(hit: Vector3, hold_y: float) -> Vector3:
 		return hit
 	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock):
 		return hit
+	## Ice is deliberately free-hand. Do not let the general tray parking magnet
+	## masquerade as an Ice-bay lock while the player positions the cup there.
+	var ice_tip := _soda_tip_for_station("ice")
+	if ice_tip != null:
+		var ice_seat := _cup_target_for_spout(ice_tip)
+		var ice_d := Vector2(hit.x - ice_seat.x, hit.z - ice_seat.z).length()
+		if ice_d <= _soda_soft_radius_for_station("ice") * 1.25:
+			return hit
 	var slot := _nearest_free_tray_slot(hit, soda_tray_magnet_radius, cup_root)
 	if slot < 0:
 		return hit
@@ -33177,9 +33185,14 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 
 
 func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
-	## Soft-attach under the pour tip — helpful seat, short leash, easy yank-away.
+	## Cola-only soft attach. Ice is intentionally positioned entirely free-hand.
+	if _cup_spout_lock != null and is_instance_valid(_cup_spout_lock) \
+			and _soda_station_id_for_tip(_cup_spout_lock) != "cola":
+		_cup_spout_lock = null
 	var candidates: Array[Node3D] = []
 	for fid in _soda_station_tip_ids():
+		if fid != "cola":
+			continue
 		var tip := _soda_tip_for_station(fid)
 		if tip != null:
 			candidates.append(tip)
@@ -33201,9 +33214,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
 		var locked_id := _soda_station_id_for_tip(_cup_spout_lock)
-		## The new two-bay machine is close enough that both attraction circles can
-		## touch. If the hand clearly crosses into the other outlet, transfer ownership
-		## immediately instead of holding the old bay and imposing an unlock delay.
+		## Keep generic transfer handling for future Cola-compatible drink outlets.
 		var switch_node: Node3D = null
 		var switch_target := Vector3.ZERO
 		var switch_d := INF
@@ -33216,14 +33227,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 			var candidate_id := _soda_station_id_for_tip(candidate)
 			var candidate_acquire := maxf(soda_soft_acquire, _soda_soft_radius_for_station(candidate_id) * 0.70)
 			nearest_other_d = minf(nearest_other_d, candidate_d)
-			var easy_ice_to_cola := locked_id == "ice" and candidate_id == "cola"
-			if easy_ice_to_cola:
-				candidate_acquire = maxf(
-					candidate_acquire,
-					_soda_soft_radius_for_station(candidate_id) * SODA_ICE_TO_COLA_ACQUIRE_MULT
-				)
-			var crossed_to_candidate := candidate_d <= locked_d + SODA_ICE_TO_COLA_EARLY_MARGIN \
-					if easy_ice_to_cola else candidate_d + 0.025 < locked_d
+			var crossed_to_candidate := candidate_d + 0.025 < locked_d
 			if candidate_d <= candidate_acquire and crossed_to_candidate and candidate_d < switch_d:
 				switch_node = candidate
 				switch_target = candidate_target
@@ -44650,9 +44654,8 @@ func _build_options_menu() -> void:
 		func(): return soda_station_scale,
 		func(v: float): soda_station_scale = clampf(v, 0.5, 3.5), true)
 
-	_hidden_add_section(hidden_soda_box, "ICE BAY · DROP + CUP SOFT LOCK")
+	_hidden_add_section(hidden_soda_box, "ICE BAY · FREE-HAND DROP (NO SOFT LOCK)")
 	_hidden_add_soda_nozzle_group(hidden_soda_box, "ice", "Ice")
-	_hidden_add_soda_soft_lock_group(hidden_soda_box, "ice", "Ice")
 
 	_hidden_add_section(hidden_soda_box, "COLA BAY · DROP + CUP SOFT LOCK")
 	_hidden_add_soda_nozzle_group(hidden_soda_box, "cola", "Cola")
@@ -44846,22 +44849,22 @@ func _build_options_menu() -> void:
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_tray_pull", "Tray Pull", 0.0, 1.0, 0.01,
 		func(): return soda_tray_magnet_pull,
 		func(v: float): soda_tray_magnet_pull = clampf(v, 0.0, 1.0))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_radius", "Soft-Lock Radius", 0.02, 1.0, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_radius", "Cola Soft-Lock Radius", 0.02, 1.0, 0.01,
 		func(): return soda_soft_magnet_radius,
 		func(v: float): soda_soft_magnet_radius = clampf(v, 0.02, 1.0))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_acquire", "Soft Acquire", 0.01, 0.8, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_acquire", "Cola Soft Acquire", 0.01, 0.8, 0.01,
 		func(): return soda_soft_acquire,
 		func(v: float): soda_soft_acquire = clampf(v, 0.01, 0.8))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_release", "Soft Release", 0.01, 0.8, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_release", "Cola Soft Release", 0.01, 0.8, 0.01,
 		func(): return soda_soft_release,
 		func(v: float): soda_soft_release = clampf(v, 0.01, 0.8))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_tight", "Soft Tight", 0.0, 0.4, 0.005,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_tight", "Cola Soft Tight", 0.0, 0.4, 0.005,
 		func(): return soda_soft_tight,
 		func(v: float): soda_soft_tight = clampf(v, 0.0, 0.4))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_pull", "Soft Pull", 0.0, 1.5, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_pull", "Cola Soft Pull", 0.0, 1.5, 0.01,
 		func(): return soda_soft_pull,
 		func(v: float): soda_soft_pull = clampf(v, 0.0, 1.5))
-	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_grace", "Unlock Grace", 0.0, 3.0, 0.01,
+	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_soft_grace", "Cola Unlock Grace", 0.0, 3.0, 0.01,
 		func(): return soda_soft_unlock_grace,
 		func(v: float): soda_soft_unlock_grace = clampf(v, 0.0, 3.0))
 	_hidden_add_soda_tuning_slider(hidden_soda_box, "soda_fill_follow", "Fill Follow Rate", 1.0, 80.0, 0.5,
