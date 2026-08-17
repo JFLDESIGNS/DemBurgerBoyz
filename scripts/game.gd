@@ -2656,6 +2656,7 @@ var _mp_remote_ext: Dictionary = {}
 var _mp_remote_glock: Dictionary = {}
 var _mp_remote_brush: Dictionary = {} ## peer_id -> scraper ghost
 var _mp_remote_spatula: Dictionary = {} ## peer_id -> in-hand grill spatula ghost
+var _mp_remote_spatula_targets: Dictionary = {} ## peer_id -> latest network Transform3D
 var _mp_remote_cups: Dictionary = {} ## peer_id -> DrinkCup ghost while held
 var _mp_remote_icecreams: Dictionary = {} ## peer_id -> soft-serve cone ghost while held
 var _mp_remote_fries: Dictionary = {} ## peer_id -> fries cup ghost while held
@@ -2668,6 +2669,8 @@ var _mp_remote_shaker_rattling: Dictionary = {} ## peer_id -> shaker loop state
 var _mp_soda_drain_pending: Dictionary = {} ## guest-only syrup usage awaiting host authority
 var _mp_soda_drain_flush_cool: float = 0.0
 const MP_SODA_DRAIN_FLUSH_SEC := 0.12
+const MP_REMOTE_SPATULA_SMOOTH_SPEED := 22.0
+const MP_REMOTE_SPATULA_SNAP_DISTANCE := 1.25
 var _mp_cup_pose_cool: float = 0.0
 var _mp_icecream_pose_cool: float = 0.0
 var _mp_cup_seq: int = 1 ## per-peer idle-drink ids (owner*1e6 + seq)
@@ -3947,6 +3950,7 @@ func _process(delta: float) -> void:
 			_mp_cat_accum = 0.0
 			_mp_send_cat_sync()
 	if mp_enabled:
+		_update_mp_remote_spatula_proxies(delta)
 		_mp_oil_sync_cool = maxf(0.0, _mp_oil_sync_cool - delta)
 		_mp_residue_sync_cool = maxf(0.0, _mp_residue_sync_cool - delta)
 		_mp_ext_sync_cool = maxf(0.0, _mp_ext_sync_cool - delta)
@@ -36078,13 +36082,10 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 	if GameDataScript.is_soda_only_order(cust.order):
 		selected_customer = cust
 		_highlight_tickets()
-		cup_held = false
 		_hide_soda_stream()
 		if game_audio and game_audio.has_method("set_ice_grind"):
 			game_audio.set_ice_grind(false)
 		_cup_pouring = false
-		if mp_enabled:
-			_mp_send_held_cup_pose(true)
 		_submit_serve_request(cust, -2)
 		return true
 	## Burger + soda: hand the drink now, keep cooking the burger.
@@ -36112,7 +36113,6 @@ func _try_auto_hand_finished_soda() -> void:
 		if GameDataScript.is_soda_only_order(cust.order):
 			selected_customer = cust
 			_highlight_tickets()
-			cup_held = false
 			_hide_soda_stream()
 			if game_audio and game_audio.has_method("set_ice_grind"):
 				game_audio.set_ice_grind(false)
@@ -51368,9 +51368,11 @@ func _submit_serve_request(cust: Node3D, station_index: int) -> void:
 		return
 	if mp_enabled and not _mp_applying:
 		var cid := _customer_net_id(cust)
-		var source_has_held_cup := station_index == -2 and cup_held \
+		var order_needs_soda := not GameDataScript.order_soda_ids(cust.order).is_empty() \
+				and not _customer_soda_handed(cust)
+		var source_has_held_cup := order_needs_soda and cup_held \
 				and cup_root != null and is_instance_valid(cup_root) \
-				and cup_soda_fill >= 0.82 and cup_flavor != ""
+				and cup_soda_fill >= 0.82 and _customer_wants_flavor(cust, cup_flavor)
 		if NetManager.is_host():
 			mp_serve(cid, station_index, source_has_held_cup)
 		elif cid >= 0:
@@ -52305,7 +52307,12 @@ func _play_cup_fly_to_mouth(
 	tw.tween_callback(finish_cup)
 
 
-func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Callable) -> void:
+func _play_serve_fly_to_mouth(
+	station_index: int,
+	customer: Node3D,
+	on_done: Callable,
+	drink_override: Node3D = null
+) -> void:
 	_serve_fly_busy = true
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
 	if ui_root == null or camera == null:
@@ -52350,10 +52357,11 @@ func _play_serve_fly_to_mouth(station_index: int, customer: Node3D, on_done: Cal
 	var with_soda := customer != null and is_instance_valid(customer) \
 			and not GameDataScript.order_soda_ids(customer.order).is_empty() \
 			and not _customer_soda_handed(customer) \
-			and (_find_ready_drink_for_soda(str(GameDataScript.order_soda_ids(customer.order)[0])) != null \
+			and ((drink_override != null and is_instance_valid(drink_override)) \
+				or _find_ready_drink_for_soda(str(GameDataScript.order_soda_ids(customer.order)[0])) != null \
 				or cup_soda_fill > 0.3)
 	if with_soda:
-		_play_cup_fly_to_mouth(customer, func() -> void: pass, true)
+		_play_cup_fly_to_mouth(customer, func() -> void: pass, true, drink_override)
 
 	var bun_pinch_px := 3.5
 	var topping_crush_px := 2.5
@@ -52802,7 +52810,11 @@ func _show_side_serve_breakdown(
 	}, customer)
 
 
-func _complete_serve(station_index: int, customer: Node3D = null) -> void:
+func _complete_serve(
+	station_index: int,
+	customer: Node3D = null,
+	remote_drink: Node3D = null
+) -> void:
 	var cust: Node3D = customer
 	if cust == null or not is_instance_valid(cust):
 		cust = selected_customer
@@ -52992,7 +53004,13 @@ func _complete_serve(station_index: int, customer: Node3D = null) -> void:
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
 			and not _customer_soda_handed(cust):
-		_consume_cup_for_serve(cust)
+		if remote_drink != null and is_instance_valid(remote_drink):
+			remote_drink.set_meta("serving_consumed", true)
+			remote_drink.queue_free()
+			if _serve_cup_node == remote_drink:
+				_serve_cup_node = null
+		else:
+			_consume_cup_for_serve(cust)
 	_mark_customer_soda_handed(cust, false)
 	if GameDataScript.wants_fries(cust.order) and not _customer_fries_handed(cust):
 		_consume_fries_for_serve(cust)
@@ -53103,25 +53121,44 @@ func _begin_soda_only_serve(
 	if game_audio and game_audio.has_method("play_order_up"):
 		game_audio.play_order_up()
 	var cust: Node3D = customer
-	var remote_drink: Node3D = null
-	if source_has_held_cup and source_peer_id > 0 and source_peer_id != NetManager.my_id():
-		if _mp_remote_cups.has(source_peer_id):
-			remote_drink = _mp_remote_cups[source_peer_id] as Node3D
-		if remote_drink == null or not is_instance_valid(remote_drink):
-			remote_drink = _mp_ensure_remote_cup(source_peer_id)
-			if remote_drink != null:
-				var sodas: Array = GameDataScript.order_soda_ids(customer.order)
-				var fallback_flavor := GameDataScript.soda_flavor_from_order_id(str(sodas[0])) if not sodas.is_empty() else "cola"
-				_mp_apply_remote_cup_fill(remote_drink, fallback_flavor, 1.0, 0.0, 0.0, false)
-		_mp_remote_cups.erase(source_peer_id)
-		_mp_remote_soda_pouring.erase(source_peer_id)
-		_mp_remote_ice_pouring.erase(source_peer_id)
+	var remote_drink := _mp_take_remote_cup_for_serve(
+		source_peer_id,
+		customer,
+		source_has_held_cup
+	)
 	_play_cup_fly_to_mouth(
 		cust,
 		func() -> void: _complete_soda_only_serve(cust, remote_drink),
 		false,
 		remote_drink
 	)
+
+
+func _mp_take_remote_cup_for_serve(
+	source_peer_id: int,
+	customer: Node3D,
+	source_has_held_cup: bool
+) -> Node3D:
+	## Move the initiating guest's visual cup into the authoritative serve. This
+	## keeps the host from accidentally consuming its own local cup instead.
+	if not source_has_held_cup or source_peer_id <= 0 or source_peer_id == NetManager.my_id():
+		return null
+	var remote_drink: Node3D = null
+	if _mp_remote_cups.has(source_peer_id):
+		remote_drink = _mp_remote_cups[source_peer_id] as Node3D
+	if remote_drink == null or not is_instance_valid(remote_drink):
+		remote_drink = _mp_ensure_remote_cup(source_peer_id)
+	if remote_drink != null and is_instance_valid(remote_drink) \
+			and str(remote_drink.get_meta("flavor", "")) == "":
+		var sodas: Array = GameDataScript.order_soda_ids(customer.order) \
+				if customer != null and is_instance_valid(customer) else []
+		var fallback_flavor := GameDataScript.soda_flavor_from_order_id(str(sodas[0])) \
+				if not sodas.is_empty() else "cola"
+		_mp_apply_remote_cup_fill(remote_drink, fallback_flavor, 1.0, 0.0, 0.0, false)
+	_mp_remote_cups.erase(source_peer_id)
+	_mp_remote_soda_pouring.erase(source_peer_id)
+	_mp_remote_ice_pouring.erase(source_peer_id)
+	return remote_drink
 
 
 func _complete_soda_only_serve(customer: Node3D = null, remote_drink: Node3D = null) -> void:
@@ -53317,7 +53354,13 @@ func _begin_customer_serve_handoff(customer: Node3D) -> void:
 			mp_customer_serve_started.rpc(net_id)
 
 
-func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> void:
+func _begin_serve_at(
+	customer: Node3D,
+	station_index: int,
+	force_mp: bool,
+	source_peer_id: int = 0,
+	source_has_held_cup: bool = false
+) -> void:
 	if not playing or _serve_fly_busy:
 		return
 	if customer == null or not is_instance_valid(customer) or not customer.is_waiting:
@@ -53383,19 +53426,34 @@ func _begin_serve_at(customer: Node3D, station_index: int, force_mp: bool) -> vo
 	_begin_customer_serve_handoff(customer)
 	if game_audio and game_audio.has_method("play_order_up"):
 		game_audio.play_order_up()
+	var remote_drink := _mp_take_remote_cup_for_serve(
+		source_peer_id,
+		customer,
+		source_has_held_cup
+	)
 
 	if station_index == STATION_CRAFT:
 		var cust: Node3D = customer
 		var si := station_index
 		if crowned_for_serve:
 			_animate_top_bun_on_station(si, func() -> void:
-				_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si, cust))
+				_play_serve_fly_to_mouth(
+					si,
+					cust,
+					func() -> void: _complete_serve(si, cust, remote_drink),
+					remote_drink
+				)
 			)
 		else:
-			_play_serve_fly_to_mouth(si, cust, func() -> void: _complete_serve(si, cust))
+			_play_serve_fly_to_mouth(
+				si,
+				cust,
+				func() -> void: _complete_serve(si, cust, remote_drink),
+				remote_drink
+			)
 		return
 
-	_complete_serve(station_index, customer)
+	_complete_serve(station_index, customer, remote_drink)
 
 
 func _mp_force_finish_customer(customer: Node3D) -> void:
@@ -54960,6 +55018,7 @@ func _mp_cleanup_departed_peer_state() -> void:
 		_mp_remote_oil, _mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
 		_mp_remote_brush, _mp_remote_spatula, _mp_remote_cups,
 		_mp_remote_icecreams, _mp_remote_fries, _mp_remote_cursors,
+		_mp_remote_spatula_targets,
 		_mp_remote_soda_pouring, _mp_remote_ice_pouring,
 		_mp_remote_softserve_pouring, _mp_remote_ext_spraying,
 		_mp_remote_shaker_rattling, mp_held_net,
@@ -54994,6 +55053,7 @@ func _mp_cleanup_departed_peer_state() -> void:
 				node_store.erase(peer_id)
 		_mp_remote_soda_pouring.erase(peer_id)
 		_mp_remote_ice_pouring.erase(peer_id)
+		_mp_remote_spatula_targets.erase(peer_id)
 		_mp_remote_softserve_pouring.erase(peer_id)
 		_mp_remote_ext_spraying.erase(peer_id)
 		_mp_remote_shaker_rattling.erase(peer_id)
@@ -55854,6 +55914,29 @@ func _mp_ensure_remote_spatula(peer_id: int) -> Node3D:
 	return _mp_ensure_remote_tool(_mp_remote_spatula, peer_id, hand_spatula_root, "RemoteSpatula")
 
 
+func _update_mp_remote_spatula_proxies(delta: float) -> void:
+	## Tool poses arrive at 25 Hz. Interpolate a separate local-only ghost every
+	## rendered frame so a partner's spatula follows smoothly without changing
+	## the authoritative interaction or collision state.
+	if not mp_enabled or _mp_remote_spatula_targets.is_empty():
+		return
+	var blend := 1.0 - exp(-MP_REMOTE_SPATULA_SMOOTH_SPEED * maxf(delta, 0.0))
+	for peer_value in _mp_remote_spatula_targets.keys():
+		var peer_id := int(peer_value)
+		if not _mp_remote_spatula.has(peer_id):
+			_mp_remote_spatula_targets.erase(peer_id)
+			continue
+		var spatula := _mp_remote_spatula[peer_id] as Node3D
+		if spatula == null or not is_instance_valid(spatula):
+			_mp_remote_spatula_targets.erase(peer_id)
+			continue
+		if not spatula.visible:
+			continue
+		var target: Transform3D = _mp_remote_spatula_targets[peer_id]
+		spatula.global_transform = spatula.global_transform.interpolate_with(target, blend)
+		spatula.scale = Vector3.ONE
+
+
 func _mp_ensure_remote_fries(peer_id: int) -> Node3D:
 	if _mp_remote_fries.has(peer_id):
 		var existing: Node3D = _mp_remote_fries[peer_id]
@@ -55927,6 +56010,7 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		var spat: Node3D = _mp_remote_spatula[peer_id]
 		if spat != null and is_instance_valid(spat):
 			spat.visible = false
+		_mp_remote_spatula_targets.erase(peer_id)
 	if except_kind != 4 and _mp_remote_shaker.has(peer_id):
 		var sh: Node3D = _mp_remote_shaker[peer_id]
 		if sh != null and is_instance_valid(sh):
@@ -56244,9 +56328,17 @@ func mp_tool_pose(
 			var spatula := _mp_ensure_remote_spatula(sid)
 			if spatula == null:
 				return
+			var was_visible := spatula.visible
+			var target := Transform3D(
+				Basis.from_euler(Vector3(deg_to_rad(rot.x), deg_to_rad(rot.y), deg_to_rad(rot.z))),
+				pos
+			)
+			var should_snap := not was_visible or not _mp_remote_spatula_targets.has(sid) \
+					or spatula.global_position.distance_to(pos) > MP_REMOTE_SPATULA_SNAP_DISTANCE
+			_mp_remote_spatula_targets[sid] = target
 			spatula.visible = true
-			spatula.global_position = pos
-			spatula.global_rotation_degrees = rot
+			if should_snap:
+				spatula.global_transform = target
 			spatula.scale = Vector3.ONE
 		_:
 			pass
@@ -56807,7 +56899,9 @@ func mp_serve(
 	_begin_serve_at(
 		cust if cust != null else selected_customer,
 		station_index if station_index >= 0 else active_station,
-		true
+		true,
+		sid,
+		source_has_held_cup
 	)
 	_mp_applying = false
 	## Fly tween may still be running; leave authority stays host via _on_customer_left.
