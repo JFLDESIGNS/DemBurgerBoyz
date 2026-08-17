@@ -2021,6 +2021,10 @@ var soda_soft_radius_mult: Dictionary = {
 }
 var soda_fill_follow_rate := 28.0
 var soda_fill_max_speed := 1.2
+## Ice is normally used first, so crossing toward Cola should hand the cup over
+## near the midpoint instead of making the player fight the old Ice spring.
+const SODA_ICE_TO_COLA_ACQUIRE_MULT := 1.10
+const SODA_ICE_TO_COLA_EARLY_MARGIN := 0.015
 var cup_liquid_top_offset_in := 0.05
 var cup_liquid_radius_scale := 1.0
 var soda_tank_visual_scale := 0.53
@@ -33190,12 +33194,14 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 	if locked_valid:
 		var locked_target := _cup_target_for_spout(_cup_spout_lock)
 		var locked_d := Vector2(hit.x - locked_target.x, hit.z - locked_target.z).length()
+		var locked_id := _soda_station_id_for_tip(_cup_spout_lock)
 		## The new two-bay machine is close enough that both attraction circles can
 		## touch. If the hand clearly crosses into the other outlet, transfer ownership
 		## immediately instead of holding the old bay and imposing an unlock delay.
 		var switch_node: Node3D = null
 		var switch_target := Vector3.ZERO
 		var switch_d := INF
+		var nearest_other_d := INF
 		for candidate in candidates:
 			if candidate == _cup_spout_lock:
 				continue
@@ -33203,7 +33209,16 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 			var candidate_d := Vector2(hit.x - candidate_target.x, hit.z - candidate_target.z).length()
 			var candidate_id := _soda_station_id_for_tip(candidate)
 			var candidate_acquire := maxf(soda_soft_acquire, _soda_soft_radius_for_station(candidate_id) * 0.70)
-			if candidate_d <= candidate_acquire and candidate_d + 0.025 < locked_d and candidate_d < switch_d:
+			nearest_other_d = minf(nearest_other_d, candidate_d)
+			var easy_ice_to_cola := locked_id == "ice" and candidate_id == "cola"
+			if easy_ice_to_cola:
+				candidate_acquire = maxf(
+					candidate_acquire,
+					_soda_soft_radius_for_station(candidate_id) * SODA_ICE_TO_COLA_ACQUIRE_MULT
+				)
+			var crossed_to_candidate := candidate_d <= locked_d + SODA_ICE_TO_COLA_EARLY_MARGIN \
+					if easy_ice_to_cola else candidate_d + 0.025 < locked_d
+			if candidate_d <= candidate_acquire and crossed_to_candidate and candidate_d < switch_d:
 				switch_node = candidate
 				switch_target = candidate_target
 				switch_d = candidate_d
@@ -33221,13 +33236,14 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 			switched.z = lerpf(hit.z, switch_target.z, switch_pull)
 			switched.y = lerpf(hit.y, switch_target.y, 0.70)
 			return switched
-		var locked_id := _soda_station_id_for_tip(_cup_spout_lock)
 		var locked_radius := _soda_soft_radius_for_station(locked_id)
 		## Hard break if the hand is past the leash — don't keep tugging.
 		var release_dist := maxf(soda_soft_release, locked_radius * 0.82)
 		if locked_d > release_dist:
 			_cup_spout_lock = null
-			_cup_spout_unlock_grace = soda_soft_unlock_grace
+			## A drag toward the neighboring bay should be eligible to acquire it on
+			## the very next frame. Grace only applies to a true yank away from both.
+			_cup_spout_unlock_grace = 0.0 if nearest_other_d < locked_d else soda_soft_unlock_grace
 			_cup_vel = Vector3.ZERO
 			if cup_root != null and is_instance_valid(cup_root):
 				_cup_prev_pos = cup_root.global_position
