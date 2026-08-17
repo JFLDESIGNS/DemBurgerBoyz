@@ -2005,7 +2005,7 @@ var soda_soft_acquire := 0.14
 var soda_soft_release := 0.14
 var soda_soft_tight := 0.03
 var soda_soft_pull := 0.57
-var soda_soft_unlock_grace := 0.10
+var soda_soft_unlock_grace := 0.0
 var soda_soft_debug := false
 var soda_soft_offsets_in: Dictionary = {
 	"cola": Vector3.ZERO,
@@ -24576,7 +24576,7 @@ func _load_soda_tuning_settings() -> void:
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_radius", 0.20)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_acquire", 0.14)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_release", 0.14)
-		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", 0.10)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", 0.0)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "block_fill_z", SODA_FILL_FRONT_SAFE_Z)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "two_bay_live_lock_calibration_v10", true)
 		cfg.save(GFX_CFG_PATH)
@@ -24588,6 +24588,12 @@ func _load_soda_tuning_settings() -> void:
 		if is_equal_approx(old_overflow_opacity, 0.72):
 			cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_opacity", SODA_OVERFLOW_OPACITY_DEFAULT)
 		cfg.set_value(SODA_TUNING_CFG_SECTION, "overflow_transparency_range_v11", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(SODA_TUNING_CFG_SECTION, "instant_bay_reacquire_v12"):
+		## Ice is optional. Remove the legacy release cooldown from existing saves so
+		## a cup can move straight to Cola, with or without taking Ice first.
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "soft_unlock_grace", 0.0)
+		cfg.set_value(SODA_TUNING_CFG_SECTION, "instant_bay_reacquire_v12", true)
 		cfg.save(GFX_CFG_PATH)
 	soda_station_pos = Vector3(
 		clampf(float(cfg.get_value(SODA_TUNING_CFG_SECTION, "machine_x", soda_station_pos.x)), -4.0, 4.0),
