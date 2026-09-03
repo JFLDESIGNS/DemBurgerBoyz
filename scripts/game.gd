@@ -1716,6 +1716,15 @@ var street_bg_custom_edit: LineEdit = null
 var location_bg_assignments: Dictionary = {} ## location id -> background choice id
 var location_bg_transforms: Dictionary = {} ## location id -> per-location bg_x/bg_y/bg_z/bg_scale overrides
 var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by location id
+var street_car_sprite: Sprite3D = null
+var street_car_exhaust: GPUParticles3D = null
+var street_car_wait: float = 0.0
+var street_car_active: bool = false
+var street_car_direction: float = -1.0
+var street_car_phase: float = 0.0
+var street_car_speed: float = 8.20
+var street_car_half_width: float = 0.0
+var street_car_half_height: float = 0.0
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -1737,6 +1746,45 @@ const BUN_PILE_PAIR_SLOTS := BUN_PILE_TOWER_COUNT * BUN_PILE_PAIRS_PER_TOWER
 const BUN_PILE_SCALE := 0.85 ## Same scale as burgerpack preview props
 const BUN_BOTTOM_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedBottom.glb"
 const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb"
+const KETCHUP_BOTTLE_PATH := "res://models/burgerpack/try2/SM_KetchupSqueezeBottle.glb"
+const MUSTARD_BOTTLE_PATH := "res://models/burgerpack/try2/SM_MustardSqueezeBottle.glb"
+const CONDIMENT_BOTTLE_HEIGHT := 0.24
+const CONDIMENT_BOTTLE_TRAVEL_SEC := 0.30
+const CONDIMENT_BOTTLE_TILT_SEC := 0.12
+const CONDIMENT_BOTTLE_POUR_SEC := 0.34
+const CONDIMENT_BOTTLE_RETURN_SEC := 0.30
+const CONDIMENT_BOTTLE_COLLISION_LAYER := 4194304
+const CONDIMENT_TOOL_HOLD_HEIGHT := 0.38
+## Raised sauce ribbon: the tube's lower edge just kisses the cook surface.
+const CONDIMENT_TOOL_STREAK_RADIUS := 0.0044
+const CONDIMENT_TOOL_STREAK_SPACING := 0.013
+## The grill's visible zone panels are about 0.045 m thick; their top is near +0.023 m.
+## Keep the tube bottom just above that top instead of burying it inside the panel.
+const CONDIMENT_SURFACE_LIFT := 0.0278
+## First scraper pass flattens the raised rope into a thin, paint-like smear.
+const CONDIMENT_SMEAR_SURFACE_LIFT := 0.0238
+## Much thinner than the old oil-sized squeeze stream.
+const CONDIMENT_STREAM_TOP_RADIUS := 0.0041
+const CONDIMENT_STREAM_BOTTOM_RADIUS := 0.0024
+## Thirty-two spline pieces share one ArrayMesh, keeping 4,000 total marks practical.
+const CONDIMENT_SPLINE_SEGMENTS_PER_BATCH := 32
+const CONDIMENT_SPLINE_MAX_SEGMENTS_PER_FLAVOR := 2000
+## Sauce cooks at about one fifth the old rate and only while the burner is on.
+const CONDIMENT_BURN_RATE := 0.35
+var condiment_bottle_roots: Dictionary = {} ## ketchup/mustard -> permanent 3D bottle holder
+var condiment_bottle_homes: Dictionary = {} ## id -> Vector3 center position behind the cheese piles
+var condiment_bottle_home_rots: Dictionary = {} ## id -> upright display rotation
+var condiment_bottle_areas: Dictionary = {} ## id -> Area3D pickup volume
+var condiment_pour_queue: Array[Dictionary] = []
+var condiment_pour_busy: bool = false
+var condiment_active_id: String = ""
+var condiment_active_tween: Tween = null
+var condiment_stream_mesh: MeshInstance3D = null
+var condiment_tool_held: String = ""
+var condiment_tool_pouring: bool = true
+var condiment_tool_last_draw := Vector3.ZERO
+var condiment_tool_stream_phase: float = 0.0
+var condiment_spline_batches: Dictionary = {} ## painter/flavor -> active batched mesh item
 ## Top sits on the bottom heel (untoasted bottom height ≈ 0.040).
 const BUN_PAIR_TOP_Y := 0.039
 ## Vertical step for the second pair on a tower.
@@ -2048,6 +2096,8 @@ const SODA_FLAVOR_COLORS: Dictionary = {
 	"cola": Color(0.32, 0.10, 0.06),
 	"lemon_lime": Color(0.45, 0.78, 0.18),
 	"orange": Color(0.97, 0.30, 0.05), ## redder / more saturated body
+	"ketchup": Color("C92323"),
+	"mustard": Color("F2B51D"),
 }
 ## Mid-glow overrides — orange body got redder; keep the previous amber core.
 const SODA_FLAVOR_WARM: Dictionary = {
@@ -2308,6 +2358,20 @@ const STREET_BG_SELECTED_TREE_PARK_PATH := "res://assets/backgrounds/selected_tr
 const STREET_BG_SELECTED_RESIDENTIAL_PATH := "res://assets/backgrounds/selected_residential_row.png"
 const STREET_BG_SELECTED_CONSTRUCTION_PATH := "res://assets/backgrounds/selected_construction_block.png"
 const STREET_BG_SELECTED_WAREHOUSE_PATH := "res://assets/backgrounds/selected_warehouse.png"
+const STREET_CAR_TEXTURE_PATH := "res://assets/backgrounds/road_delivery_car.png"
+const STREET_CAR_Z := 11.0248 ## Five feet deeper toward the background than the previous 9.5008 m depth.
+const STREET_CAR_Y := 1.60 ## Raised another 0.70 m: twice the previous height adjustment.
+const STREET_CAR_PIXEL_SIZE := 0.010752 ## 20% smaller than the previous rendered size.
+const STREET_CAR_EDGE_X := 8.7
+const STREET_CAR_SPEED := 8.20
+const STREET_CAR_SPEED_MIN := 6.80
+const STREET_CAR_SPEED_MAX := 10.00
+const STREET_CAR_TILT_DEG := 0.65
+const STREET_CAR_RUMBLE_Y := 0.014
+const STREET_CAR_RUMBLE_DEG := 0.14
+const STREET_CAR_RUMBLE_RATE := 18.0
+const STREET_CAR_WAIT_MIN := 17.0
+const STREET_CAR_WAIT_MAX := 34.0
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2651,6 +2715,8 @@ var _mp_fryer_basket_pose_cool: float = 0.0
 var _serve_fly_watch: float = 0.0
 ## peer_id -> ghost Node3D so partners see held tools in-hand
 var _mp_remote_oil: Dictionary = {}
+var _mp_remote_ketchup: Dictionary = {}
+var _mp_remote_mustard: Dictionary = {}
 var _mp_remote_shaker: Dictionary = {}
 var _mp_remote_ext: Dictionary = {}
 var _mp_remote_glock: Dictionary = {}
@@ -3150,7 +3216,7 @@ func _handle_gamepad_world_button(button_index: int, pressed: bool) -> bool:
 	if button_index == MOUSE_BUTTON_LEFT:
 		if _ui_blocks_world_click(pos, false):
 			return false
-		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
+		if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
 			return false
 		if spatula_patty != null:
 			if spatula_lmb_held and spatula_from_build:
@@ -3603,6 +3669,7 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	_cancel_cheese_hold_silent()
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
+	_reset_condiment_bottles()
 	_reset_fire_extinguisher()
 	_reset_glock()
 	if window_cat != null and window_cat.has_method("reset_shift"):
@@ -3671,6 +3738,7 @@ func _restart() -> void:
 	_cancel_cheese_hold_silent()
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
+	_reset_condiment_bottles()
 	_reset_fire_extinguisher()
 	_reset_glock()
 	if window_cat != null and window_cat.has_method("reset_shift"):
@@ -3715,6 +3783,7 @@ func _process(delta: float) -> void:
 	_update_phone_scroll_inertia(delta)
 	_update_icecream_mascot_spin(delta)
 	_update_window_bunting_wind(delta)
+	_update_street_car(delta)
 	_update_keyboard_cook_shortcuts(delta)
 	_update_air_motes(delta)
 	_update_physical_garbage_hover()
@@ -3783,6 +3852,8 @@ func _process(delta: float) -> void:
 	elif oil_root != null:
 		## Keep wall-hung bottle liquid settled / full-looking.
 		_update_oil_liquid(delta)
+	if condiment_tool_held != "":
+		_update_held_condiment(delta)
 	if burgerpack_held != null:
 		_update_held_burgerpack_inspect(delta)
 	if cup_held:
@@ -3966,7 +4037,7 @@ func _process(delta: float) -> void:
 				and not _mp_soda_drain_pending.is_empty():
 			_mp_flush_soda_tank_drain()
 		var spatula_visible := hand_spatula_root != null and is_instance_valid(hand_spatula_root) and hand_spatula_root.visible
-		if oil_held or shaker_held or ext_held or glock_held or brush_held or fries_pack_held or spatula_visible or _mp_spatula_pose_sent:
+		if oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or brush_held or fries_pack_held or spatula_visible or _mp_spatula_pose_sent:
 			_mp_send_held_tool_pose(false)
 		if spatula_visible:
 			_check_remote_spatula_clink()
@@ -4196,6 +4267,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				burgerpack_held_pitch = fposmod(burgerpack_held_pitch + step, 360.0)
 			get_viewport().set_input_as_handled()
 			return
+		## Held sauce bottle: any scroll tick toggles inverted pour / upright.
+		if condiment_tool_held != "":
+			_nudge_condiment_tool_tilt(1.0)
+			get_viewport().set_input_as_handled()
+			return
 		## Oil bottle: any scroll tick toggles pour on/off (starts on).
 		if oil_held:
 			_nudge_oil_pour_tilt(1.0)
@@ -4232,7 +4308,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var grill_place: bool = event.button_index == MOUSE_BUTTON_RIGHT
 		if not cheese_held and _ui_blocks_world_click(event.position, grill_place):
 			return
-		if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
+		if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
 			return
 		if cheese_held:
 			if _is_ingredient_strip_click(event.global_position):
@@ -4485,6 +4561,10 @@ func _input(event: InputEvent) -> void:
 			_end_patty_drag()
 			get_viewport().set_input_as_handled()
 			return
+		if condiment_tool_held != "":
+			_release_condiment_tool()
+			get_viewport().set_input_as_handled()
+			return
 		if oil_held:
 			_release_oil_bottle()
 			get_viewport().set_input_as_handled()
@@ -4546,6 +4626,11 @@ func _input(event: InputEvent) -> void:
 			if _try_ready_fries_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
+			## Sauce bottles sit behind cheese; their own collision must win before
+			## the wider cheese-station grab box beneath them.
+			if _try_grab_condiment_tool(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			## 3D bun towers (board-side) — thud + hop before cheese / UI steal the click.
 			if _try_bun_pile_click(event.position):
 				get_viewport().set_input_as_handled()
@@ -4594,7 +4679,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null:
+			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -4686,6 +4771,10 @@ func _input(event: InputEvent) -> void:
 			return
 		if glock_held:
 			_release_glock()
+			get_viewport().set_input_as_handled()
+			return
+		if condiment_tool_held != "":
+			_release_condiment_tool()
 			get_viewport().set_input_as_handled()
 			return
 		if oil_held:
@@ -4859,6 +4948,10 @@ func _strip_swipe_add(id: String) -> void:
 		_strip_gesture_added = true
 		return
 	var station := active_station
+	if _is_condiment(id):
+		_request_condiment_add(id, station)
+		_strip_gesture_added = true
+		return
 	_play_ingredient_fly_to_build(id, station, func():
 		_add_ingredient_to_station(station, id, false)
 	)
@@ -5253,7 +5346,7 @@ func _kb_begin_oil_quiet() -> bool:
 		return true
 	if oil_root == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held \
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or condiment_tool_held != "" or ext_held or glock_held \
 			or cup_held or dragging_patty != null or icecream_cone_held:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
@@ -5291,7 +5384,7 @@ func _is_grill_screen_point(screen_pos: Vector2) -> bool:
 
 func _try_grill_right_click(screen_pos: Vector2) -> bool:
 	## Runs in _input (before UI) so Build chrome never eats grill right-clicks.
-	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held:
 		return false
 	if spatula_patty != null or spatula_juggle_patty != null or dragging_patty != null or cheese_held:
 		return false
@@ -5784,6 +5877,7 @@ func _build_3d_world() -> void:
 	_build_burner_flames()
 	_build_cutting_board_prop()
 	_build_cheese_station_prop()
+	_build_condiment_bottles()
 	_build_wire_brush()
 	_build_oil_bottle()
 	_build_grill_roomba()
@@ -6243,7 +6337,7 @@ func _pointer_over_glove_ui(screen_pos: Vector2) -> bool:
 func _hands_busy_with_other_tool() -> bool:
 	if lasso_tool != null and lasso_tool.is_active():
 		return true
-	return brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held \
+	return brush_held or cheese_held or shaker_held or oil_held or condiment_tool_held != "" or ext_held or glock_held \
 			or sale_held or cup_held or icecream_cone_held or burnt_icecream_cone_held \
 			or fries_pack_held or spilled_fry_held or fryer_held_index >= 0 \
 			or grill_roomba_held or burgerpack_held != null or dragging_patty != null \
@@ -13012,7 +13106,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 		return false
 	if spatula_patty != null or cup_held or icecream_cone_held or burnt_icecream_cone_held\
 	or fryer_held_index >= 0 or fries_pack_held or spilled_fry_held\
-	or brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held\
+	or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held\
 	or dragging_patty != null or bts_lightstick_held_index >= 0:
 		return false
 	## Strict: cursor linetrace must hit the bot — no fat screen magnet.
@@ -15733,7 +15827,7 @@ func _try_window_cat_click(screen_pos: Vector2) -> bool:
 		return true
 	if not playing or window_cat == null or not is_instance_valid(window_cat):
 		return false
-	if brush_held or oil_held or shaker_held or ext_held or glock_held or dragging_patty != null:
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or dragging_patty != null:
 		return false
 	if not window_cat.hit_test(camera, screen_pos):
 		return false
@@ -17082,7 +17176,7 @@ func _try_grab_shaker(screen_pos: Vector2) -> bool:
 func _begin_shaker_hold() -> void:
 	if not playing:
 		return
-	if brush_held or oil_held or cheese_held or ext_held or glock_held or spatula_patty != null or dragging_patty != null:
+	if brush_held or oil_held or condiment_tool_held != "" or cheese_held or ext_held or glock_held or spatula_patty != null or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return
 	if shaker_held:
@@ -18950,6 +19044,418 @@ func _get_char_crust_texture() -> ImageTexture:
 	return _char_crust_tex
 
 
+func _spawn_condiment_spline_segment(
+	from_pos: Vector3, to_pos: Vector3, radius: float, flavor: String
+) -> void:
+	var points := PackedVector3Array([from_pos, to_pos])
+	_spawn_condiment_spline_segments(points, radius, flavor)
+
+
+func _spawn_condiment_spline_segments(
+	segment_points: PackedVector3Array, radius: float, flavor: String
+) -> void:
+	if not _is_condiment(flavor) or segment_points.size() < 2:
+		return
+	var clean := PackedVector3Array()
+	var pair_count := int(segment_points.size() / 2)
+	for pair_i in range(pair_count):
+		var from_pos := segment_points[pair_i * 2]
+		var to_pos := segment_points[pair_i * 2 + 1]
+		if _is_on_grill_surface(from_pos) and _is_on_grill_surface(to_pos):
+			clean.append(from_pos)
+			clean.append(to_pos)
+	if clean.is_empty():
+		return
+	_spawn_condiment_spline_segments_local(clean, radius, flavor, "local:%s" % flavor)
+	if mp_enabled and not _mp_applying:
+		## One packet per rendered frame instead of one packet per tiny spline piece.
+		mp_condiment_spline_batch.rpc(clean, radius, flavor)
+
+
+func _spawn_condiment_spline_segment_local(
+	from_pos: Vector3, to_pos: Vector3, radius: float, flavor: String,
+	batch_key: String = ""
+) -> void:
+	_spawn_condiment_spline_segments_local(
+		PackedVector3Array([from_pos, to_pos]), radius, flavor, batch_key
+	)
+
+
+func _spawn_condiment_spline_segments_local(
+	segment_points: PackedVector3Array, radius: float, flavor: String,
+	batch_key: String = ""
+) -> void:
+	if grill_root == null or not _is_condiment(flavor) or segment_points.size() < 2:
+		return
+	var rad := clampf(radius, 0.0025, 0.010)
+	if batch_key.is_empty():
+		batch_key = "loose:%s" % flavor
+	var pair_cursor := 0
+	var pair_count := int(segment_points.size() / 2)
+	while pair_cursor < pair_count:
+		var item: Dictionary = condiment_spline_batches.get(batch_key, {})
+		var slick = item.get("mesh")
+		var segments: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
+		var used_pairs := int(segments.size() / 2)
+		var batch_full := used_pairs >= CONDIMENT_SPLINE_SEGMENTS_PER_BATCH
+		var batch_dead := slick == null or not is_instance_valid(slick) \
+			or (slick as Node).is_queued_for_deletion() or bool(item.get("smeared", false))
+		if batch_full or batch_dead:
+			item = _new_condiment_spline_batch(flavor, rad)
+			condiment_spline_batches[batch_key] = item
+			segments = PackedVector3Array()
+			used_pairs = 0
+		var room := CONDIMENT_SPLINE_SEGMENTS_PER_BATCH - used_pairs
+		var take := mini(room, pair_count - pair_cursor)
+		var surface_y := GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT
+		for local_i in range(take):
+			var src_i := (pair_cursor + local_i) * 2
+			var from_pos := segment_points[src_i]
+			var to_pos := segment_points[src_i + 1]
+			segments.append(Vector3(from_pos.x, surface_y, from_pos.z))
+			segments.append(Vector3(to_pos.x, surface_y, to_pos.z))
+		item["spline_segments"] = segments
+		## Rebuild each touched batch once, even if this frame added many samples.
+		_rebuild_condiment_spline_batch(item)
+		pair_cursor += take
+	_trim_condiment_spline_capacity()
+
+func _new_condiment_spline_batch(flavor: String, radius: float) -> Dictionary:
+	var slick := MeshInstance3D.new()
+	slick.name = "%sRaisedSplineBatch" % flavor.capitalize()
+	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	slick.sorting_offset = 4.0
+	var base: Color = SODA_FLAVOR_COLORS.get(flavor, Color("C92323"))
+	slick.material_override = _condiment_surface_material(base)
+	grill_root.add_child(slick)
+	var item := {
+		"mesh": slick,
+		"smoke": null,
+		"age": 0.0,
+		"life": 16.0 + randf() * 8.0,
+		"radius": radius,
+		"tube_radius": radius,
+		"base_a": 1.0,
+		"flavor": flavor,
+		"base_col": base,
+		"scrape": 1.0,
+		"charred": false,
+		"surface_spline": true,
+		"smeared": false,
+		"spline_segments": PackedVector3Array(),
+	}
+	soda_slicks.append(item)
+	return item
+
+
+func _spawn_condiment_spline_batch_local(
+	segments: PackedVector3Array, radius: float, flavor: String
+) -> void:
+	if grill_root == null or not _is_condiment(flavor) or segments.size() < 2:
+		return
+	var item := _new_condiment_spline_batch(flavor, clampf(radius, 0.003, 0.014))
+	item["spline_segments"] = segments.duplicate()
+	_rebuild_condiment_spline_batch(item)
+	_trim_condiment_spline_capacity()
+
+
+func _rebuild_condiment_spline_batch(item: Dictionary) -> void:
+	var slick := item.get("mesh") as MeshInstance3D
+	var segments: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
+	if slick == null or not is_instance_valid(slick) or segments.size() < 2:
+		return
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	for point in segments:
+		min_x = minf(min_x, point.x)
+		max_x = maxf(max_x, point.x)
+		min_z = minf(min_z, point.z)
+		max_z = maxf(max_z, point.z)
+	var center := Vector3(
+		(min_x + max_x) * 0.5,
+		GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT,
+		(min_z + max_z) * 0.5
+	)
+	var tube_radius := float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS))
+	slick.position = center
+	slick.mesh = _make_surface_condiment_spline_batch_mesh(segments, tube_radius, center)
+	item["radius"] = Vector2(max_x - min_x, max_z - min_z).length() * 0.5 + tube_radius
+	item["spline_from"] = segments[0]
+	item["spline_to"] = segments[segments.size() - 1]
+
+
+func _trim_condiment_spline_capacity() -> void:
+	var totals: Dictionary = {}
+	for entry in soda_slicks:
+		if typeof(entry) != TYPE_DICTIONARY or not bool(entry.get("surface_spline", false)):
+			continue
+		var flavor := str(entry.get("flavor", ""))
+		var points: PackedVector3Array = entry.get("spline_segments", PackedVector3Array())
+		totals[flavor] = int(totals.get(flavor, 0)) + int(points.size() / 2)
+	for flavor_key in totals.keys():
+		var flavor := str(flavor_key)
+		var total_segments := int(totals[flavor])
+		while total_segments > CONDIMENT_SPLINE_MAX_SEGMENTS_PER_FLAVOR:
+			var removed_one := false
+			for i in range(soda_slicks.size()):
+				var entry: Dictionary = soda_slicks[i]
+				if not bool(entry.get("surface_spline", false)) \
+						 or str(entry.get("flavor", "")) != flavor:
+					continue
+				var points: PackedVector3Array = entry.get("spline_segments", PackedVector3Array())
+				total_segments -= int(points.size() / 2)
+				var old_mesh = entry.get("mesh")
+				if old_mesh != null and is_instance_valid(old_mesh):
+					old_mesh.queue_free()
+				soda_slicks.remove_at(i)
+				removed_one = true
+				break
+			if not removed_one:
+				break
+
+func _condiment_surface_material(base: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.albedo_color = Color(base.r, base.g, base.b, 1.0)
+	mat.metallic = 0.02
+	mat.roughness = 0.24
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 0.82
+	mat.clearcoat_roughness = 0.1
+	mat.emission_enabled = true
+	mat.emission = base.lightened(0.06)
+	mat.emission_energy_multiplier = 0.045
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 4
+	return mat
+
+
+func _make_surface_condiment_spline_mesh(
+	from_local: Vector3, to_local: Vector3, radius: float
+) -> ArrayMesh:
+	## Cubic centerline with a circular cross-section: a real raised sauce rope,
+	## rather than overlapping alpha planes. Closely spaced pieces join as one stroke.
+	var mesh := ArrayMesh.new()
+	var chord := to_local - from_local
+	var chord_len := maxf(chord.length(), 0.0001)
+	var flat_dir := Vector3(chord.x, 0.0, chord.z).normalized()
+	if flat_dir.length_squared() < 0.000001:
+		flat_dir = Vector3.RIGHT
+	var sideways := Vector3(-flat_dir.z, 0.0, flat_dir.x)
+	## Tiny alternating bow keeps hand-painted lines organic without visible kinks.
+	var bend_sign := -1.0 if sin((from_local.x + to_local.z) * 173.0) < 0.0 else 1.0
+	var bend := minf(radius * 0.22, chord_len * 0.055) * bend_sign
+	var p0 := from_local
+	var p1 := from_local.lerp(to_local, 0.34) + sideways * bend
+	var p2 := from_local.lerp(to_local, 0.68) - sideways * bend * 0.35
+	var p3 := to_local
+	var rings := clampi(int(ceil(chord_len / 0.0045)), 3, 7)
+	var sides := 6
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for ring_i in range(rings + 1):
+		var t := float(ring_i) / float(rings)
+		var omt := 1.0 - t
+		var center := omt * omt * omt * p0 \
+			+ 3.0 * omt * omt * t * p1 \
+			+ 3.0 * omt * t * t * p2 \
+			+ t * t * t * p3
+		var tangent := 3.0 * omt * omt * (p1 - p0) \
+			+ 6.0 * omt * t * (p2 - p1) \
+			+ 3.0 * t * t * (p3 - p2)
+		tangent.y = 0.0
+		if tangent.length_squared() < 0.000001:
+			tangent = flat_dir
+		tangent = tangent.normalized()
+		var side := Vector3(-tangent.z, 0.0, tangent.x)
+		for side_i in range(sides):
+			var angle := float(side_i) / float(sides) * TAU
+			var normal := (side * cos(angle) + Vector3.UP * sin(angle)).normalized()
+			verts.append(center + normal * radius)
+			normals.append(normal)
+			uvs.append(Vector2(float(side_i) / float(sides), t))
+	for ring_i in range(rings):
+		for side_i in range(sides):
+			var next_side := (side_i + 1) % sides
+			var a := ring_i * sides + side_i
+			var b := ring_i * sides + next_side
+			var c := (ring_i + 1) * sides + side_i
+			var d := (ring_i + 1) * sides + next_side
+			indices.append_array(PackedInt32Array([a, b, c, b, d, c]))
+	## End caps prevent dark open ends between short spline samples.
+	var start_cap := verts.size()
+	verts.append(p0)
+	normals.append(-flat_dir)
+	uvs.append(Vector2(0.5, 0.0))
+	var end_cap := verts.size()
+	verts.append(p3)
+	normals.append(flat_dir)
+	uvs.append(Vector2(0.5, 1.0))
+	var last_ring := rings * sides
+	for side_i in range(sides):
+		var next_side := (side_i + 1) % sides
+		indices.append_array(PackedInt32Array([start_cap, next_side, side_i]))
+		indices.append_array(PackedInt32Array([
+			end_cap, last_ring + side_i, last_ring + next_side
+		]))
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+func _make_surface_condiment_spline_batch_mesh(
+	segments: PackedVector3Array, radius: float, origin: Vector3
+) -> ArrayMesh:
+	## Merge up to thirty-two curved tube pieces into one draw object. The pieces retain
+	## their curved centerlines and round cross-sections, but no longer cost one node each.
+	var mesh := ArrayMesh.new()
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var pair_count := int(segments.size() / 2)
+	for pair_i in range(pair_count):
+		var from_local := segments[pair_i * 2] - origin
+		var to_local := segments[pair_i * 2 + 1] - origin
+		from_local.y = 0.0
+		to_local.y = 0.0
+		var piece := _make_surface_condiment_spline_mesh(from_local, to_local, radius)
+		if piece.get_surface_count() <= 0:
+			continue
+		var piece_arrays: Array = piece.surface_get_arrays(0)
+		var piece_verts: PackedVector3Array = piece_arrays[Mesh.ARRAY_VERTEX]
+		var piece_normals: PackedVector3Array = piece_arrays[Mesh.ARRAY_NORMAL]
+		var piece_uvs: PackedVector2Array = piece_arrays[Mesh.ARRAY_TEX_UV]
+		var piece_indices: PackedInt32Array = piece_arrays[Mesh.ARRAY_INDEX]
+		var vertex_offset := verts.size()
+		verts.append_array(piece_verts)
+		normals.append_array(piece_normals)
+		uvs.append_array(piece_uvs)
+		for piece_index in piece_indices:
+			indices.append(vertex_offset + piece_index)
+	if verts.is_empty():
+		return mesh
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _make_surface_condiment_smear_batch_mesh(
+	segments: PackedVector3Array, radius: float, origin: Vector3
+) -> ArrayMesh:
+	## A flattened ribbon with rounded dabs at the joins. It keeps the stroke's
+	## recognizable path after the first scrape with far fewer vertices than the tube.
+	var mesh := ArrayMesh.new()
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var pair_count := int(segments.size() / 2)
+	for pair_i in range(pair_count):
+		var from_local := segments[pair_i * 2] - origin
+		var to_local := segments[pair_i * 2 + 1] - origin
+		from_local.y = 0.0
+		to_local.y = 0.0
+		var chord := to_local - from_local
+		chord.y = 0.0
+		if chord.length_squared() < 0.000001:
+			continue
+		var flat_dir := chord.normalized()
+		var side := Vector3(-flat_dir.z, 0.0, flat_dir.x)
+		var phase := float(pair_i) * 1.618
+		var width_from := maxf(radius * (1.72 + sin(phase) * 0.14), 0.0052)
+		var width_to := maxf(radius * (1.82 + cos(phase * 1.31) * 0.16), 0.0054)
+		var base := verts.size()
+		verts.append_array(PackedVector3Array([
+			from_local - side * width_from,
+			from_local + side * width_from,
+			to_local - side * width_to,
+			to_local + side * width_to,
+		]))
+		for _vertex_i in 4:
+			normals.append(Vector3.UP)
+		uvs.append_array(PackedVector2Array([
+			Vector2(0.0, 0.0), Vector2(1.0, 0.0),
+			Vector2(0.0, 1.0), Vector2(1.0, 1.0),
+		]))
+		indices.append_array(PackedInt32Array([
+			base, base + 2, base + 1,
+			base + 1, base + 2, base + 3,
+		]))
+		## Round both ends so one scrape reads as a wet smoosh, not a flat ribbon strip.
+		for end_i in 2:
+			var center := from_local if end_i == 0 else to_local
+			var dab_radius := width_from if end_i == 0 else width_to
+			var center_i := verts.size()
+			verts.append(center)
+			normals.append(Vector3.UP)
+			uvs.append(Vector2(0.5, 0.5))
+			var sides := 6
+			for side_i in range(sides):
+				var angle := float(side_i) / float(sides) * TAU
+				verts.append(center + Vector3(cos(angle), 0.0, sin(angle)) * dab_radius)
+				normals.append(Vector3.UP)
+				uvs.append(Vector2(cos(angle), sin(angle)) * 0.5 + Vector2(0.5, 0.5))
+			for side_i in range(sides):
+				indices.append_array(PackedInt32Array([
+					center_i,
+					center_i + 1 + side_i,
+					center_i + 1 + ((side_i + 1) % sides),
+				]))
+	if verts.is_empty():
+		return mesh
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _convert_condiment_batch_to_smear(item: Dictionary) -> void:
+	if not bool(item.get("surface_spline", false)) or bool(item.get("smeared", false)):
+		return
+	var slick := item.get("mesh") as MeshInstance3D
+	var segments: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
+	if slick == null or not is_instance_valid(slick) or segments.size() < 2:
+		return
+	var origin := Vector3(
+		slick.position.x,
+		GRILL_SURFACE_Y + CONDIMENT_SMEAR_SURFACE_LIFT,
+		slick.position.z
+	)
+	var radius := float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS))
+	slick.name = "%sScrapedSmear" % str(item.get("flavor", "sauce")).capitalize()
+	slick.position = origin
+	slick.scale = Vector3.ONE
+	slick.sorting_offset = 3.6
+	slick.mesh = _make_surface_condiment_smear_batch_mesh(segments, radius, origin)
+	item["smeared"] = true
+	item["scrape"] = 1.0
+	item["base_a"] = minf(float(item.get("base_a", 1.0)), 0.9)
+	var mat := slick.material_override as StandardMaterial3D
+	if mat:
+		mat.metallic = 0.0
+		mat.roughness = 0.44
+		mat.clearcoat_enabled = true
+		mat.clearcoat = 0.34
+		mat.clearcoat_roughness = 0.35
+
 func _spawn_soda_slick(pos: Vector3, radius: float, flavor: String) -> void:
 	if not _is_on_grill_surface(pos):
 		return
@@ -18961,10 +19467,18 @@ func _spawn_soda_slick(pos: Vector3, radius: float, flavor: String) -> void:
 func _spawn_soda_slick_local(pos: Vector3, radius: float, flavor: String) -> void:
 	if grill_root == null:
 		return
+	if _is_condiment(flavor):
+		var dab_half := Vector3(maxf(radius, CONDIMENT_TOOL_STREAK_RADIUS) * 0.55, 0.0, 0.0)
+		_spawn_condiment_spline_segment_local(pos - dab_half, pos + dab_half, radius, flavor)
+		return
 	var slick := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	var rad := radius * (0.9 + randf() * 0.3)
-	plane.size = Vector2(rad * 2.2, rad * 2.2)
+	var is_condiment := _is_condiment(flavor)
+	## Sauce uses consistent, tightly overlapping marks so a drag reads as one
+	## continuous painted line. Soda keeps its broader irregular splash shapes.
+	var rad := radius * ((0.97 + randf() * 0.06) if is_condiment else (0.9 + randf() * 0.3))
+	var diameter_mul := 2.0 if is_condiment else 2.2
+	plane.size = Vector2(rad * diameter_mul, rad * diameter_mul)
 	slick.mesh = plane
 	slick.position = Vector3(pos.x, GRILL_SURFACE_Y + OIL_SIT_Y, pos.z)
 	slick.rotation_degrees = Vector3(0.0, randf() * 360.0, 0.0)
@@ -18976,9 +19490,9 @@ func _spawn_soda_slick_local(pos: Vector3, radius: float, flavor: String) -> voi
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_texture = _get_soda_blob_texture()
 	## Wet reflective soda puddle — oil-like finish, soda tint.
-	mat.albedo_color = Color(base.r, base.g, base.b, 0.78)
-	mat.metallic = 0.72
-	mat.roughness = 0.07
+	mat.albedo_color = Color(base.r, base.g, base.b, 0.88 if is_condiment else 0.78)
+	mat.metallic = 0.08 if is_condiment else 0.72
+	mat.roughness = 0.26 if is_condiment else 0.07
 	mat.clearcoat_enabled = true
 	mat.clearcoat = 0.9
 	mat.clearcoat_roughness = 0.05
@@ -18990,26 +19504,45 @@ func _spawn_soda_slick_local(pos: Vector3, radius: float, flavor: String) -> voi
 	mat.render_priority = 4
 	slick.material_override = mat
 	grill_root.add_child(slick)
-	var smoke := _make_surface_burn_smoke(rad)
-	slick.add_child(smoke)
+	## A painted line can contain many marks; individual particle systems on
+	## every mark are needlessly expensive. Cola spills retain their burn smoke.
+	var smoke: GPUParticles3D = null
+	if not is_condiment:
+		smoke = _make_surface_burn_smoke(rad)
+		slick.add_child(smoke)
 	soda_slicks.append({
 		"mesh": slick,
 		"smoke": smoke,
 		"age": 0.0,
 		"life": 16.0 + randf() * 8.0,
 		"radius": rad,
-		"base_a": 0.78,
+		"base_a": 0.88 if is_condiment else 0.78,
 		"flavor": flavor,
 		"base_col": base,
 		"scrape": 1.0,
 		"charred": false,
 	})
-	while soda_slicks.size() > 60:
-		var old: Dictionary = soda_slicks.pop_front()
-		var m = old.get("mesh")
-		if m != null and is_instance_valid(m):
-			m.queue_free()
-	if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
+	## The legacy soda-spill cap is independent from the 2,000-per-sauce spline budgets.
+	var flat_slick_count := 0
+	for entry in soda_slicks:
+		if typeof(entry) == TYPE_DICTIONARY and not bool(entry.get("surface_spline", false)):
+			flat_slick_count += 1
+	while flat_slick_count > 180:
+		var removed_flat := false
+		for i in range(soda_slicks.size()):
+			var old: Dictionary = soda_slicks[i]
+			if bool(old.get("surface_spline", false)):
+				continue
+			var m = old.get("mesh")
+			if m != null and is_instance_valid(m):
+				m.queue_free()
+			soda_slicks.remove_at(i)
+			flat_slick_count -= 1
+			removed_flat = true
+			break
+		if not removed_flat:
+			break
+	if not is_condiment and grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
 		game_audio.trigger_hot_oil(2.2)
 
 
@@ -19024,8 +19557,15 @@ func _update_soda_slicks(delta: float) -> void:
 			continue
 		## Already cooked black — stays until scraped (same puddle, no new spawn).
 		var charred := bool(item.get("charred", false))
+		var surface_spline := bool(item.get("surface_spline", false))
+		var smeared := bool(item.get("smeared", false))
 		if not charred:
-			item["age"] = float(item["age"]) + delta * burn_rate
+			if surface_spline:
+				## Ketchup/mustard hold their color with the burner off and cook slowly when on.
+				if grill_on:
+					item["age"] = float(item["age"]) + delta * CONDIMENT_BURN_RATE
+			else:
+				item["age"] = float(item["age"]) + delta * burn_rate
 		var life := float(item["life"])
 		var age := float(item["age"])
 		## Char earlier in the cook — don't spend the whole life as a dark wet spot.
@@ -19076,6 +19616,17 @@ func _update_soda_slicks(delta: float) -> void:
 				mat.clearcoat = 0.0
 				mat.emission_enabled = false
 				mat.emission_energy_multiplier = 0.0
+		## Raised sauce and its scraped flat smear keep their geometric silhouettes;
+		## alpha blob/crust textures belong only on the legacy soda puddles.
+		if mat and surface_spline:
+			mat.albedo_texture = null
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			if not charred:
+				mat.metallic = 0.0 if smeared else lerpf(0.02, 0.0, burn)
+				mat.roughness = lerpf(0.44, 0.78, burn) if smeared else lerpf(0.24, 0.72, burn)
+				mat.clearcoat_enabled = true
+				mat.clearcoat = lerpf(0.34, 0.04, burn) if smeared else lerpf(0.82, 0.08, burn)
+				mat.clearcoat_roughness = lerpf(0.35, 0.75, burn) if smeared else lerpf(0.1, 0.7, burn)
 		## Scraper wear only — don't shrink the puddle away as it cooks.
 		var scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
 		mesh.scale = Vector3(scrape, 1.0, scrape)
@@ -19098,6 +19649,8 @@ func _clear_soda_slicks() -> void:
 		if mesh != null and is_instance_valid(mesh):
 			mesh.queue_free()
 	soda_slicks.clear()
+	condiment_spline_batches.clear()
+
 
 
 func _spawn_soda_char_spot(pos: Vector3, radius: float) -> void:
@@ -20603,7 +21156,7 @@ func _set_oil_aim_marker(show: bool, land: Vector3) -> void:
 func _try_grab_oil(screen_pos: Vector2) -> bool:
 	if oil_held or oil_root == null or camera == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or condiment_tool_held != "" or ext_held or glock_held or dragging_patty != null:
 		return false
 	var tip := oil_root.global_position + Vector3(0, 0.06, 0)
 	var screen_pt := camera.unproject_position(tip)
@@ -20615,7 +21168,7 @@ func _try_grab_oil(screen_pos: Vector2) -> bool:
 func _begin_oil_hold() -> bool:
 	if not playing or oil_held or oil_root == null:
 		return false
-	if spatula_patty != null or brush_held or cheese_held or shaker_held or ext_held or glock_held or cup_held or dragging_patty != null:
+	if spatula_patty != null or brush_held or cheese_held or shaker_held or condiment_tool_held != "" or ext_held or glock_held or cup_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	oil_held = true
@@ -22119,30 +22672,48 @@ func _scrape_slick_array(
 		var mp: Vector3 = (mesh as Node3D).global_position
 		var d := Vector2(pos.x - mp.x, pos.z - mp.z).length()
 		if d > reach + rad:
+			## A completed pass releases the first-scrape latch; the next distinct
+			## pass may wear away the flattened smear.
+			if bool(item.get("smear_scrape_latched", false)):
+				item["smear_scrape_latched"] = false
 			i += 1
 			continue
 		if moved <= 0.0008:
 			i += 1
 			continue
 		hit_any = true
-		## Wear puddle via scrape multiplier (burn update won't fight this).
-		scrape = maxf(0.08, scrape - moved * 3.4)
-		item["scrape"] = scrape
-		var mat := mesh.material_override as StandardMaterial3D
-		if mat:
-			var c := mat.albedo_color
-			c.a = maxf(0.05, c.a - moved * 1.8)
-			mat.albedo_color = c
-			item["base_a"] = minf(float(item.get("base_a", c.a)), c.a)
-		var removed := scrape <= 0.16
+		## Keep the new smear through the remainder of this physical scraper pass.
+		if bool(item.get("smeared", false)) and bool(item.get("smear_scrape_latched", false)):
+			i += 1
+			continue
+		var just_smeared := false
+		## First contact spreads raised ketchup/mustard into a flat colored smear.
+		## Later passes use the existing wear/remove behavior.
+		if bool(item.get("surface_spline", false)) and not bool(item.get("smeared", false)):
+			_convert_condiment_batch_to_smear(item)
+			scrape = 1.0
+			item["scrape"] = scrape
+			item["smear_scrape_latched"] = true
+			just_smeared = true
+		else:
+			scrape = maxf(0.08, scrape - moved * 3.4)
+			item["scrape"] = scrape
+			var mat := mesh.material_override as StandardMaterial3D
+			if mat:
+				var c := mat.albedo_color
+				c.a = maxf(0.05, c.a - moved * 1.8)
+				mat.albedo_color = c
+				item["base_a"] = minf(float(item.get("base_a", c.a)), c.a)
+		var removed := not just_smeared and scrape <= 0.16
 		if sync_kind != "" and mp_enabled and not _mp_applying:
-			if removed or _mp_slick_sync_cool <= 0.0:
+			if removed or just_smeared or _mp_slick_sync_cool <= 0.0:
 				_mp_slick_sync_cool = 0.08
 				if sync_kind == "oil":
 					_publish_oil_slick_scrape(float(mesh.position.x), float(mesh.position.z), scrape, removed)
 				else:
 					mp_soda_slick_scrape.rpc(
-						float(mesh.position.x), float(mesh.position.z), scrape, removed
+						float(mesh.position.x), float(mesh.position.z), scrape, removed,
+						bool(item.get("smeared", false))
 					)
 		if removed:
 			var dir := move_xz.normalized() if move_xz.length_squared() > 0.0001 else Vector2(1, 0)
@@ -22161,7 +22732,6 @@ func _scrape_slick_array(
 		i += 1
 	return hit_any
 
-
 func _mp_find_nearest_slick_idx(arr: Array, x: float, z: float, max_d: float = 0.22) -> int:
 	var best := -1
 	var best_d := max_d
@@ -22177,7 +22747,9 @@ func _mp_find_nearest_slick_idx(arr: Array, x: float, z: float, max_d: float = 0
 	return best
 
 
-func _mp_apply_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
+func _mp_apply_soda_slick_scrape(
+	x: float, z: float, scrape: float, remove: bool, smeared: bool = false
+) -> void:
 	var idx := _mp_find_nearest_slick_idx(soda_slicks, x, z, 0.28)
 	if idx < 0:
 		return
@@ -22186,6 +22758,9 @@ func _mp_apply_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool
 	if mesh == null or not is_instance_valid(mesh):
 		soda_slicks.remove_at(idx)
 		return
+	if smeared and bool(item.get("surface_spline", false)) \
+			and not bool(item.get("smeared", false)):
+		_convert_condiment_batch_to_smear(item)
 	scrape = clampf(scrape, 0.08, 1.0)
 	item["scrape"] = scrape
 	mesh.scale = Vector3(scrape, 1.0, scrape)
@@ -22206,7 +22781,6 @@ func _mp_apply_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool
 	tw.tween_property(mesh, "scale", Vector3(0.05, 1.0, 0.05), 0.18)
 	tw.chain().tween_callback(mesh.queue_free)
 	soda_slicks.remove_at(idx)
-
 
 func _mp_apply_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
 	var idx := _mp_find_nearest_slick_idx(oil_slicks, x, z, 0.28)
@@ -23184,7 +23758,172 @@ func _build_outdoor_street() -> void:
 	outdoor.add_child(street_matte_body)
 	_build_outdoor_front_tree(outdoor)
 	_build_outdoor_birch_tree(outdoor)
+	_build_street_car(outdoor)
 
+
+func _build_street_car(parent: Node3D) -> void:
+	if street_car_sprite != null and is_instance_valid(street_car_sprite):
+		street_car_sprite.queue_free()
+	if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+		street_car_exhaust.queue_free()
+	street_car_sprite = null
+	street_car_exhaust = null
+	street_car_active = false
+	street_car_wait = randf_range(5.0, 11.0)
+	if parent == null or not ResourceLoader.exists(STREET_CAR_TEXTURE_PATH):
+		push_warning("Road car texture missing: %s" % STREET_CAR_TEXTURE_PATH)
+		return
+	var tex := load(STREET_CAR_TEXTURE_PATH) as Texture2D
+	if tex == null:
+		push_warning("Road car texture failed to load")
+		return
+	var sprite := Sprite3D.new()
+	sprite.name = "OccasionalRoadCar"
+	sprite.texture = tex
+	sprite.pixel_size = STREET_CAR_PIXEL_SIZE
+	sprite.centered = true
+	sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	sprite.rotation_degrees = Vector3(0.0, 180.0, STREET_CAR_TILT_DEG) ## Parallel to backdrop with a slight rearward driving lean.
+	sprite.shaded = false
+	sprite.no_depth_test = false ## Customers and all truck geometry must remain in front.
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	## Matte is priority -8 at Z 11.5. The car is closer and one priority step
+	## forward, while customers at Z 2.25 remain unambiguously in front.
+	sprite.render_priority = -7
+	sprite.sorting_offset = -12.0
+	sprite.position = Vector3(-STREET_CAR_EDGE_X, STREET_CAR_Y, STREET_CAR_Z)
+	sprite.visible = false
+	parent.add_child(sprite)
+	street_car_sprite = sprite
+	street_car_half_width = float(tex.get_width()) * STREET_CAR_PIXEL_SIZE * 0.5
+	street_car_half_height = float(tex.get_height()) * STREET_CAR_PIXEL_SIZE * 0.5
+	street_car_exhaust = _make_street_car_exhaust()
+	parent.add_child(street_car_exhaust)
+	_update_street_car_exhaust_position()
+
+
+func _make_street_car_exhaust() -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.name = "StreetCarExhaust"
+	fx.amount = 18
+	fx.lifetime = 0.78
+	fx.randomness = 0.58
+	fx.explosiveness = 0.0
+	fx.local_coords = false
+	fx.emitting = false
+	fx.visibility_aabb = AABB(Vector3(-14.0, -3.0, -2.0), Vector3(28.0, 8.0, 4.0))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fx.sorting_offset = -10.5
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = 0.055
+	pmat.direction = Vector3(1.0, 0.16, 0.0) ## World +X is behind this screen-right-moving van.
+	pmat.spread = 16.0
+	pmat.initial_velocity_min = 0.72
+	pmat.initial_velocity_max = 1.35
+	pmat.gravity = Vector3(0.0, 0.20, 0.0)
+	pmat.damping_min = 0.25
+	pmat.damping_max = 0.55
+	pmat.scale_min = 0.62
+	pmat.scale_max = 1.28
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0, 0.12, 0.55, 1.0])
+	fade.colors = PackedColorArray([
+		Color(0.30, 0.29, 0.32, 0.0),
+		Color(0.30, 0.29, 0.32, 0.30),
+		Color(0.42, 0.41, 0.44, 0.14),
+		Color(0.52, 0.51, 0.54, 0.0),
+	])
+	var fade_tex := GradientTexture1D.new()
+	fade_tex.gradient = fade
+	pmat.color_ramp = fade_tex
+	fx.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.30, 0.30)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	draw.albedo_texture = _get_fire_smoke_texture()
+	draw.albedo_color = Color(0.78, 0.77, 0.80, 0.52)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw.vertex_color_use_as_albedo = true
+	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	draw.render_priority = -6
+	quad.material = draw
+	fx.draw_pass_1 = quad
+	return fx
+
+
+func _update_street_car_exhaust_position() -> void:
+	if street_car_exhaust == null or not is_instance_valid(street_car_exhaust):
+		return
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	## Rear of the texture is screen-left, which is world +X with the mirrored main camera.
+	street_car_exhaust.position = street_car_sprite.position + Vector3(
+		street_car_half_width * 0.90,
+		-street_car_half_height * 0.20,
+		-0.035
+	)
+
+
+func _update_street_car(delta: float) -> void:
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	if not playing:
+		street_car_sprite.visible = false
+		street_car_active = false
+		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+			street_car_exhaust.emitting = false
+		return
+	if options_menu_open or shift_paused:
+		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+			street_car_exhaust.emitting = false
+		return
+	if not street_car_active:
+		street_car_wait -= delta
+		if street_car_wait > 0.0:
+			return
+		street_car_direction = -1.0 ## Fixed opposite direction: screen-left to screen-right.
+		street_car_phase = randf() * TAU
+		street_car_speed = randf_range(STREET_CAR_SPEED_MIN, STREET_CAR_SPEED_MAX)
+		var offscreen_x := STREET_CAR_EDGE_X + street_car_half_width
+		street_car_sprite.position = Vector3(
+			-offscreen_x if street_car_direction > 0.0 else offscreen_x,
+			STREET_CAR_Y,
+			STREET_CAR_Z
+		)
+		## Main camera mirrors world X: compensate so the van faces its screen travel.
+		street_car_sprite.flip_h = street_car_direction > 0.0
+		street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG
+		street_car_sprite.visible = true
+		street_car_active = true
+		_update_street_car_exhaust_position()
+		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+			street_car_exhaust.emitting = true
+		return
+	street_car_phase += delta * STREET_CAR_RUMBLE_RATE
+	street_car_sprite.position.x += street_car_direction * street_car_speed * delta
+	street_car_sprite.position.y = STREET_CAR_Y +		+ sin(street_car_phase) * STREET_CAR_RUMBLE_Y +		+ sin(street_car_phase * 2.37) * STREET_CAR_RUMBLE_Y * 0.28
+	street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG +		+ sin(street_car_phase * 1.31) * STREET_CAR_RUMBLE_DEG
+	_update_street_car_exhaust_position()
+	if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+		street_car_exhaust.emitting = true
+	var finished := (
+		street_car_direction > 0.0 and street_car_sprite.position.x > STREET_CAR_EDGE_X + street_car_half_width
+	) or (
+		street_car_direction < 0.0 and street_car_sprite.position.x < -STREET_CAR_EDGE_X - street_car_half_width
+	)
+	if finished:
+		street_car_sprite.visible = false
+		street_car_active = false
+		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+			street_car_exhaust.emitting = false
+		street_car_wait = randf_range(STREET_CAR_WAIT_MIN, STREET_CAR_WAIT_MAX)
 
 const TREE_FOLIAGE_SHADER_PATH := "res://shaders/tree_foliage.gdshader"
 
@@ -23453,7 +24192,7 @@ func _try_click_outdoor_tree(screen_pos: Vector2) -> bool:
 		return false
 	if not playing or camera == null or world == null:
 		return false
-	if brush_held or oil_held or shaker_held or cheese_held or ext_held or glock_held \
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or cheese_held or ext_held or glock_held \
 			or sale_held or cup_held or spatula_patty != null or dragging_patty != null:
 		return false
 	## Soda machine/cup targets beat outdoor tree shake when their click volumes overlap.
@@ -29873,7 +30612,7 @@ func _try_grab_fallen_icecream_cone(screen_pos: Vector2) -> bool:
 	## Pick up melting / charred / post-fire cones from the steel (toss on release).
 	if not playing or camera == null or burnt_icecream_cone_held:
 		return false
-	if icecream_cone_held or cup_held or brush_held or oil_held or shaker_held or ext_held or glock_held:
+	if icecream_cone_held or cup_held or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held:
 		return false
 	if spatula_patty != null or dragging_patty != null or cheese_held or sale_held:
 		return false
@@ -36541,6 +37280,10 @@ func _air_mote_push_point(delta: float) -> Vector3:
 		return brush_root.global_position
 	if oil_held and oil_root != null and is_instance_valid(oil_root):
 		return oil_root.global_position
+	if condiment_tool_held != "":
+		var condiment_root: Node3D = condiment_bottle_roots.get(condiment_tool_held, null)
+		if condiment_root != null and is_instance_valid(condiment_root):
+			return condiment_root.global_position
 	if shaker_held and shaker_root != null and is_instance_valid(shaker_root):
 		return shaker_root.global_position
 	if ext_held and ext_root != null and is_instance_valid(ext_root):
@@ -37212,7 +37955,7 @@ func _try_cutting_board_thud_click(screen_pos: Vector2) -> bool:
 	## Left-click empty Build wood → short dead thud (not the hollow bun tap).
 	if not playing:
 		return false
-	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held:
 		return false
 	if cheese_held or spatula_patty != null or dragging_patty != null or cup_held:
 		return false
@@ -37527,6 +38270,299 @@ func _refresh_build_board_hint() -> void:
 	var patties: Array = st.get("patties", [])
 	var idle_board := items.is_empty() and patties.is_empty() and spatula_patty == null
 	build_board_hint_label.visible = idle_board and _world_hint_fade_t < WORLD_HINT_SHOW_SEC
+
+
+func _condiment_bottle_scene(id: String) -> PackedScene:
+	## Keep the optional prop load out of the script parser. A missing export must
+	## never prevent the entire game scene from loading and leave a black screen.
+	var path := KETCHUP_BOTTLE_PATH if id == "ketchup" else MUSTARD_BOTTLE_PATH
+	if not ResourceLoader.exists(path):
+		push_warning("Condiment bottle model is missing: %s" % path)
+		return null
+	return ResourceLoader.load(path) as PackedScene
+
+
+func _condiment_bottle_home(id: String) -> Vector3:
+	## Park the squeeze bottles on the rear prep ledge directly behind the two
+	## cheese piles, leaving the cutting/build board clear.
+	var station_origin := _cutting_board_base_center() + Vector3(
+		CHEESE_STATION_OFFSET.x,
+		CUTTING_BOARD_SIZE.y * 0.5 + CHEESE_STATION_OFFSET.y,
+		CHEESE_STATION_OFFSET.z
+	)
+	var x_offset := -0.34 if id == "ketchup" else -0.16
+	return station_origin + Vector3(
+		x_offset,
+		CONDIMENT_BOTTLE_HEIGHT * 0.5 - 0.076,
+		0.32
+	)
+
+
+func _build_condiment_bottles() -> void:
+	if condiment_active_tween != null and is_instance_valid(condiment_active_tween):
+		condiment_active_tween.kill()
+	condiment_active_tween = null
+	for old_root in condiment_bottle_roots.values():
+		if old_root != null and is_instance_valid(old_root):
+			old_root.queue_free()
+	condiment_bottle_roots.clear()
+	condiment_bottle_homes.clear()
+	condiment_bottle_home_rots.clear()
+	condiment_bottle_areas.clear()
+	condiment_tool_held = ""
+	condiment_tool_pouring = true
+	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_stream_phase = 0.0
+	condiment_pour_queue.clear()
+	condiment_pour_busy = false
+	condiment_active_id = ""
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.queue_free()
+	condiment_stream_mesh = null
+	if world == null:
+		return
+
+	for id in ["ketchup", "mustard"]:
+		var packed := _condiment_bottle_scene(id)
+		if packed == null:
+			continue
+		var visual := packed.instantiate() as Node3D
+		if visual == null:
+			continue
+		var holder := Node3D.new()
+		holder.name = "%sBottle" % id.capitalize()
+		var model_pivot := Node3D.new()
+		model_pivot.name = "CenteredModel"
+		holder.add_child(model_pivot)
+		model_pivot.add_child(visual)
+		var bounds := _mesh_aabb_in_node_space(visual)
+		var fit := CONDIMENT_BOTTLE_HEIGHT / maxf(bounds.size.y, 0.001)
+		model_pivot.scale = Vector3.ONE * fit
+		model_pivot.position = -bounds.get_center() * fit
+		var home := _condiment_bottle_home(id)
+		var home_rot := Vector3(0.0, -14.0 if id == "ketchup" else 12.0, 0.0)
+		holder.position = home
+		holder.rotation_degrees = home_rot
+		var grab := Area3D.new()
+		grab.name = "%sBottleGrab" % id.capitalize()
+		grab.collision_layer = CONDIMENT_BOTTLE_COLLISION_LAYER
+		grab.collision_mask = 0
+		grab.monitoring = false
+		grab.monitorable = true
+		grab.input_ray_pickable = true
+		var grab_shape := CollisionShape3D.new()
+		var grab_box := BoxShape3D.new()
+		grab_box.size = Vector3(0.12, CONDIMENT_BOTTLE_HEIGHT, 0.12)
+		grab_shape.shape = grab_box
+		grab.add_child(grab_shape)
+		holder.add_child(grab)
+		world.add_child(holder)
+		condiment_bottle_roots[id] = holder
+		condiment_bottle_homes[id] = home
+		condiment_bottle_home_rots[id] = home_rot
+		condiment_bottle_areas[id] = grab
+
+	condiment_stream_mesh = MeshInstance3D.new()
+	condiment_stream_mesh.name = "CondimentPourStream"
+	condiment_stream_mesh.mesh = ArrayMesh.new()
+	condiment_stream_mesh.visible = false
+	condiment_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	condiment_stream_mesh.sorting_offset = 15.0
+	world.add_child(condiment_stream_mesh)
+
+
+func _reset_condiment_bottles() -> void:
+	if condiment_active_tween != null and is_instance_valid(condiment_active_tween):
+		condiment_active_tween.kill()
+	condiment_active_tween = null
+	condiment_pour_queue.clear()
+	condiment_pour_busy = false
+	condiment_active_id = ""
+	condiment_tool_held = ""
+	condiment_tool_pouring = true
+	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_stream_phase = 0.0
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.visible = false
+	for id in condiment_bottle_roots.keys():
+		var root: Node3D = condiment_bottle_roots.get(id, null)
+		if root == null or not is_instance_valid(root):
+			continue
+		root.position = condiment_bottle_homes.get(id, root.position)
+		root.rotation_degrees = condiment_bottle_home_rots.get(id, Vector3.ZERO)
+		root.scale = Vector3.ONE
+		root.visible = true
+		var area: Area3D = condiment_bottle_areas.get(id, null)
+		if area != null and is_instance_valid(area):
+			area.input_ray_pickable = true
+
+func _try_grab_condiment_tool(screen_pos: Vector2) -> bool:
+	if condiment_tool_held != "" or condiment_pour_busy or camera == null:
+		return false
+	for id in ["ketchup", "mustard"]:
+		var area: Area3D = condiment_bottle_areas.get(id, null)
+		if area != null and is_instance_valid(area) \
+				and _ray_hits_tool(screen_pos, CONDIMENT_BOTTLE_COLLISION_LAYER, area):
+			return _begin_condiment_tool_hold(id)
+	return false
+
+
+func _begin_condiment_tool_hold(id: String) -> bool:
+	if not playing or not _is_condiment(id) or condiment_pour_busy or condiment_tool_held != "":
+		return false
+	if _hands_busy_with_other_tool():
+		_flash("Hands full — put that down first", Color("FFCC80"))
+		return false
+	var root: Node3D = condiment_bottle_roots.get(id, null)
+	if root == null or not is_instance_valid(root):
+		return false
+	condiment_tool_held = id
+	condiment_tool_pouring = true
+	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_stream_phase = 0.0
+	root.visible = true
+	root.scale = Vector3.ONE
+	root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	var seat := _tool_hold_point_from_screen(
+		get_viewport().get_mouse_position(),
+		GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT
+	)
+	if seat != Vector3.ZERO:
+		root.global_position = seat
+	var area: Area3D = condiment_bottle_areas.get(id, null)
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = false
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.visible = false
+		condiment_stream_mesh.material_override = _condiment_stream_material(id)
+	if game_audio:
+		game_audio.play_click()
+	var label: String = str(GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize()))
+	_flash("%s on — drag to paint; scroll to stop" % label, Color("FFE082"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
+	return true
+
+
+func _nudge_condiment_tool_tilt(_dir: float) -> void:
+	if condiment_tool_held == "" or _dir == 0.0:
+		return
+	condiment_tool_pouring = not condiment_tool_pouring
+	condiment_tool_last_draw = Vector3.ZERO
+	if not condiment_tool_pouring and condiment_stream_mesh != null \
+			and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.visible = false
+	var label: String = str(GameDataScript.INGREDIENT_LABELS.get(
+		condiment_tool_held, condiment_tool_held.capitalize()
+	))
+	_flash("%s %s — scroll to %s" % [
+		label,
+		"on" if condiment_tool_pouring else "off",
+		"stop" if condiment_tool_pouring else "pour"
+	], Color("FFE082"))
+	if mp_enabled:
+		_mp_send_held_tool_pose(true)
+
+
+func _update_held_condiment(delta: float) -> void:
+	if condiment_tool_held == "" or camera == null:
+		return
+	var root: Node3D = condiment_bottle_roots.get(condiment_tool_held, null)
+	if root == null or not is_instance_valid(root):
+		condiment_tool_held = ""
+		return
+	var hit := _grill_plane_from_screen(get_viewport().get_mouse_position())
+	if hit == Vector3.ZERO:
+		return
+	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.025, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.025)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.025, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.025)
+	root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, hit.z)
+	root.rotation_degrees = Vector3(180.0 if condiment_tool_pouring else 8.0, 0.0, 0.0)
+	var cur := Vector3(hit.x, GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT, hit.z)
+	if not condiment_tool_pouring:
+		condiment_tool_last_draw = Vector3.ZERO
+		if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+			condiment_stream_mesh.visible = false
+		return
+	condiment_tool_stream_phase += delta * 8.0
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.material_override = _condiment_stream_material(condiment_tool_held)
+	_update_condiment_stream(
+		condiment_tool_held,
+		root,
+		cur + Vector3(0.0, CONDIMENT_TOOL_STREAK_RADIUS * 1.4, 0.0),
+		condiment_tool_stream_phase
+	)
+	if condiment_tool_last_draw == Vector3.ZERO:
+		## A click without a drag still leaves a small raised dab with rounded ends.
+		var dab_half := Vector3(CONDIMENT_TOOL_STREAK_RADIUS * 0.55, 0.0, 0.0)
+		_spawn_condiment_spline_segment(
+			cur - dab_half, cur + dab_half,
+			CONDIMENT_TOOL_STREAK_RADIUS, condiment_tool_held
+		)
+		condiment_tool_last_draw = cur
+		return
+	var gap := Vector2(cur.x - condiment_tool_last_draw.x, cur.z - condiment_tool_last_draw.z).length()
+	if gap < CONDIMENT_TOOL_STREAK_SPACING:
+		return
+	var steps := clampi(int(ceil(gap / CONDIMENT_TOOL_STREAK_SPACING)), 1, 18)
+	var frame_segments := PackedVector3Array()
+	var segment_from := condiment_tool_last_draw
+	for step_i in steps:
+		var u := float(step_i + 1) / float(steps)
+		var segment_to := condiment_tool_last_draw.lerp(cur, u)
+		frame_segments.append(segment_from)
+		frame_segments.append(segment_to)
+		segment_from = segment_to
+	## Append + rebuild once for the whole mouse frame; this removes the syrupy input lag.
+	_spawn_condiment_spline_segments(
+		frame_segments, CONDIMENT_TOOL_STREAK_RADIUS, condiment_tool_held
+	)
+	condiment_tool_last_draw = cur
+
+func _release_condiment_tool() -> void:
+	if condiment_tool_held == "":
+		return
+	var id := condiment_tool_held
+	var root: Node3D = condiment_bottle_roots.get(id, null)
+	condiment_tool_held = ""
+	## Treat the short flight home as busy so a topping-button animation cannot
+	## fight the same bottle tween. Any requested squeeze waits in the queue.
+	condiment_pour_busy = true
+	condiment_active_id = id
+	condiment_tool_pouring = true
+	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_stream_phase = 0.0
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.visible = false
+	var area: Area3D = condiment_bottle_areas.get(id, null)
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = false
+	if root != null and is_instance_valid(root):
+		var home: Vector3 = condiment_bottle_homes.get(id, root.position)
+		var home_rot: Vector3 = condiment_bottle_home_rots.get(id, Vector3.ZERO)
+		var tw := create_tween()
+		condiment_active_tween = tw
+		tw.set_parallel(true)
+		tw.tween_property(root, "position", home, CONDIMENT_BOTTLE_RETURN_SEC) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(root, "rotation_degrees", home_rot, CONDIMENT_BOTTLE_RETURN_SEC) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.chain().tween_callback(func() -> void:
+			condiment_active_tween = null
+			if area != null and is_instance_valid(area):
+				area.input_ray_pickable = true
+			_finish_condiment_pour()
+		)
+	else:
+		if area != null and is_instance_valid(area):
+			area.input_ray_pickable = true
+		_finish_condiment_pour()
+	if game_audio:
+		game_audio.play_click()
+	if mp_enabled:
+		var kind := 11 if id == "ketchup" else 12
+		mp_tool_pose.rpc(kind, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0)
 
 
 func _build_cheese_station_prop() -> void:
@@ -37871,7 +38907,7 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 	## Click a 3D bun under the cursor → thud + hop only (never spawn a 2D build fly/icon).
 	if not playing:
 		return false
-	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held:
 		return false
 	if cheese_held or spatula_patty != null or dragging_patty != null or cup_held:
 		return false
@@ -37951,7 +38987,7 @@ func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 func _try_cheese_station_click(screen_pos: Vector2) -> bool:
 	if not playing or cheese_held or _cheese_returning:
 		return false
-	if brush_held or oil_held or shaker_held or ext_held or glock_held or sale_held:
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held:
 		return false
 	if spatula_patty != null or dragging_patty != null or cup_held:
 		return false
@@ -40861,7 +41897,7 @@ func _try_bts_lightstick_click(screen_pos: Vector2) -> bool:
 	if bts_lightstick_held_index >= 0:
 		return false
 	if spatula_patty != null or cup_held or icecream_cone_held or brush_held or oil_held \
-			or shaker_held or ext_held or glock_held or sale_held or fryer_held_index >= 0 or fries_pack_held:
+			or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or fryer_held_index >= 0 or fries_pack_held:
 		return false
 	var best := -1
 	var best_d := 58.0
@@ -45264,6 +46300,7 @@ func _options_back_to_lobby() -> void:
 	_cancel_cheese_hold_silent()
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
+	_reset_condiment_bottles()
 	_reset_fire_extinguisher()
 	_reset_glock()
 	var was_mp := mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE
@@ -48614,6 +49651,289 @@ func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Call
 	_note_melody_press(id)
 
 
+func _is_condiment(id: String) -> bool:
+	return id == "ketchup" or id == "mustard"
+
+
+func _condiment_can_add(station_index: int, id: String, announce: bool = true) -> bool:
+	if not playing or not _is_condiment(id):
+		return false
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return false
+	var st: Dictionary = stations[station_index]
+	var items: Array = st.get("items", [])
+	if items.size() >= 14:
+		if announce:
+			_flash("Burger too tall!", Color("EF5350"))
+		return false
+	if not items.has("patty") and (st.get("patties", []) as Array).is_empty():
+		if announce:
+			_flash("Drop a patty on the build board first", Color("FFCC80"))
+		return false
+	if items.has(id):
+		if announce:
+			var label: String = str(GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize()))
+			_flash("That burger already has %s" % label, Color("FFCC80"))
+		return false
+	return _mp_can_spend_ingredient(id) if announce else int(supply_stock.get(id, 0)) > 0
+
+
+func _request_condiment_add(id: String, station_index: int) -> void:
+	if condiment_tool_held != "":
+		_flash("Put the sauce bottle down first", Color("FFCC80"))
+		return
+	if not _condiment_can_add(station_index, id, true):
+		return
+	if mp_enabled and not _mp_applying:
+		mp_add_condiment.rpc(station_index, id)
+		return
+	_queue_condiment_pour(id, station_index, false)
+
+
+func _queue_condiment_pour(id: String, station_index: int, networked: bool) -> void:
+	if not _is_condiment(id):
+		return
+	## Ignore a duplicate click while this exact bottle/station is already active or queued.
+	if condiment_pour_busy and condiment_active_id == id:
+		return
+	for queued in condiment_pour_queue:
+		if str(queued.get("id", "")) == id and int(queued.get("station", -1)) == station_index:
+			return
+	var entry := {"id": id, "station": station_index, "networked": networked}
+	if condiment_pour_busy or condiment_tool_held != "":
+		condiment_pour_queue.append(entry)
+		return
+	_start_condiment_pour(entry)
+
+
+func _condiment_pour_target_world(station_index: int) -> Vector3:
+	var board := _cutting_board_world_center()
+	var item_count := 0
+	if station_index >= 0 and station_index < STATION_COUNT:
+		item_count = (stations[station_index].get("items", []) as Array).size()
+	## Raise the landing slightly as the visible Build stack grows.
+	var stack_lift := 0.036 + minf(float(item_count), 10.0) * 0.007
+	return board + Vector3(0.0, CUTTING_BOARD_SIZE.y * 0.5 + stack_lift, -0.015)
+
+
+func _condiment_stream_material(id: String) -> StandardMaterial3D:
+	var col := Color("C92323") if id == "ketchup" else Color("F2B51D")
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.roughness = 0.34
+	mat.metallic = 0.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.emission_enabled = true
+	mat.emission = col.lightened(0.08)
+	mat.emission_energy_multiplier = 0.07
+	mat.render_priority = 15
+	return mat
+
+
+func _update_condiment_stream(id: String, root: Node3D, target: Vector3, phase: float) -> void:
+	if condiment_stream_mesh == null or not is_instance_valid(condiment_stream_mesh):
+		return
+	var from_tip := root.to_global(Vector3(0.0, CONDIMENT_BOTTLE_HEIGHT * 0.5, 0.0))
+	condiment_stream_mesh.visible = true
+	condiment_stream_mesh.global_position = from_tip
+	condiment_stream_mesh.global_basis = Basis.IDENTITY
+	condiment_stream_mesh.mesh = _make_condiment_stream_curve_mesh(from_tip, target, phase)
+	condiment_stream_mesh.rotation_degrees = Vector3.ZERO
+	if condiment_stream_mesh.material_override == null:
+		condiment_stream_mesh.material_override = _condiment_stream_material(id)
+
+
+func _make_condiment_stream_curve_mesh(from_tip: Vector3, target: Vector3, phase: float) -> ArrayMesh:
+	## Rounded, slightly pulsing sauce rope based on the oil bottle's curved stream.
+	var mesh := ArrayMesh.new()
+	var rel_end := target - from_tip
+	var drop := clampf(from_tip.y - target.y, 0.04, 0.30)
+	var lateral := Vector3(rel_end.x, 0.0, rel_end.z)
+	var p0 := Vector3.ZERO
+	var p1 := lateral * 0.24 + Vector3(0.0, -drop * 0.48, 0.0)
+	var p2 := rel_end
+	var rings := 12
+	var segs := 10
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for i in range(rings + 1):
+		var t := float(i) / float(rings)
+		var omt := 1.0 - t
+		var center := omt * omt * p0 + 2.0 * omt * t * p1 + t * t * p2
+		center.x += sin(t * TAU * 1.35 + phase * TAU) * 0.0022 * sin(t * PI)
+		var tangent := (2.0 * omt * (p1 - p0) + 2.0 * t * (p2 - p1)).normalized()
+		if tangent.length_squared() <= 0.000001:
+			tangent = Vector3.DOWN
+		var side := tangent.cross(Vector3.UP)
+		if side.length_squared() <= 0.000001:
+			side = Vector3.RIGHT
+		side = side.normalized()
+		var up := side.cross(tangent).normalized()
+		var pulse := 1.0 + sin(t * TAU * 2.0 - phase * TAU * 3.0) * 0.12
+		var radius := lerpf(CONDIMENT_STREAM_TOP_RADIUS, CONDIMENT_STREAM_BOTTOM_RADIUS, t) * pulse
+		for j in range(segs):
+			var a := float(j) / float(segs) * TAU
+			var normal := (side * cos(a) + up * sin(a)).normalized()
+			verts.append(center + normal * radius)
+			normals.append(normal)
+			uvs.append(Vector2(float(j) / float(segs), t))
+	for i in range(rings):
+		for j in range(segs):
+			var a0 := i * segs + j
+			var b0 := i * segs + ((j + 1) % segs)
+			var c0 := (i + 1) * segs + j
+			var d0 := (i + 1) * segs + ((j + 1) % segs)
+			indices.append(a0)
+			indices.append(b0)
+			indices.append(c0)
+			indices.append(b0)
+			indices.append(d0)
+			indices.append(c0)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _start_condiment_pour(entry: Dictionary) -> void:
+	var id := str(entry.get("id", ""))
+	var station_index := int(entry.get("station", -1))
+	var root: Node3D = condiment_bottle_roots.get(id, null)
+	if root == null or not is_instance_valid(root):
+		_deposit_condiment_entry(entry)
+		_finish_condiment_pour()
+		return
+	condiment_pour_busy = true
+	condiment_active_id = id
+	var area: Area3D = condiment_bottle_areas.get(id, null)
+	if area != null and is_instance_valid(area):
+		area.input_ray_pickable = false
+	root.visible = true
+	root.scale = Vector3.ONE
+	var home: Vector3 = condiment_bottle_homes.get(id, root.position)
+	var home_rot: Vector3 = condiment_bottle_home_rots.get(id, Vector3.ZERO)
+	var start_pos := root.position
+	var start_rot := root.rotation_degrees
+	var target := _condiment_pour_target_world(station_index)
+	var pour_rot := Vector3(0.0, -8.0, 155.0)
+	var pour_basis := Basis.from_euler(Vector3(
+		deg_to_rad(pour_rot.x), deg_to_rad(pour_rot.y), deg_to_rad(pour_rot.z)
+	))
+	var nozzle_offset := pour_basis * Vector3(0.0, CONDIMENT_BOTTLE_HEIGHT * 0.5, 0.0)
+	## Put the squeezing bottle on the player-facing side of the burger. The
+	## stream still lands at the stack center, but the bottle cannot hide behind it.
+	var toward_camera := Vector3(0.0, 0.0, -1.0)
+	if camera != null and is_instance_valid(camera):
+		toward_camera = camera.global_position - target
+		toward_camera.y = 0.0
+		if toward_camera.length_squared() > 0.0001:
+			toward_camera = toward_camera.normalized()
+	var pour_pos := target + toward_camera * 0.34 + Vector3(0.0, 0.125, 0.0) - nozzle_offset
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.visible = false
+		condiment_stream_mesh.material_override = _condiment_stream_material(id)
+	var label: String = str(GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize()))
+	_flash("Squeezing %s" % label, Color("FFE082"))
+
+	var tw := create_tween()
+	condiment_active_tween = tw
+	tw.tween_method(
+		func(t: float) -> void:
+			if root == null or not is_instance_valid(root):
+				return
+			var eased := t * t * (3.0 - 2.0 * t)
+			root.position = start_pos.lerp(pour_pos, eased) + Vector3.UP * sin(t * PI) * 0.085
+			root.rotation_degrees = start_rot.lerp(home_rot + Vector3(-7.0, 0.0, 5.0), eased),
+		0.0, 1.0, CONDIMENT_BOTTLE_TRAVEL_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(root, "rotation_degrees", pour_rot, CONDIMENT_BOTTLE_TILT_SEC) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_method(
+		func(t: float) -> void:
+			if root == null or not is_instance_valid(root):
+				return
+			root.position = pour_pos + Vector3(sin(t * TAU * 3.0) * 0.0035, sin(t * TAU * 2.0) * 0.002, 0.0)
+			var squeeze := 1.0 - sin(t * PI) * 0.045
+			root.scale = Vector3(1.0 + (1.0 - squeeze) * 0.35, squeeze, 1.0 + (1.0 - squeeze) * 0.35)
+			_update_condiment_stream(id, root, target, t),
+		0.0, 1.0, CONDIMENT_BOTTLE_POUR_SEC
+	)
+	tw.tween_callback(func() -> void:
+		if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+			condiment_stream_mesh.visible = false
+		if root != null and is_instance_valid(root):
+			root.scale = Vector3.ONE
+		_deposit_condiment_entry(entry)
+		_return_condiment_bottle(id, root, home, home_rot)
+	)
+
+
+func _deposit_condiment_entry(entry: Dictionary) -> void:
+	var id := str(entry.get("id", ""))
+	var station_index := int(entry.get("station", -1))
+	if bool(entry.get("networked", false)):
+		_mp_applying = true
+		_add_ingredient_to_station_local(station_index, id, false)
+		_mp_applying = false
+		if NetManager.is_host():
+			_mp_broadcast_economy()
+	else:
+		_add_ingredient_to_station(station_index, id, false)
+
+
+func _return_condiment_bottle(id: String, root: Node3D, home: Vector3, home_rot: Vector3) -> void:
+	if root == null or not is_instance_valid(root):
+		_finish_condiment_pour()
+		return
+	var return_start := root.position
+	var return_rot := root.rotation_degrees
+	var tw := create_tween()
+	condiment_active_tween = tw
+	tw.tween_method(
+		func(t: float) -> void:
+			if root == null or not is_instance_valid(root):
+				return
+			var eased := t * t * (3.0 - 2.0 * t)
+			root.position = return_start.lerp(home, eased) + Vector3.UP * sin(t * PI) * 0.07
+			root.rotation_degrees = return_rot.lerp(home_rot, eased),
+		0.0, 1.0, CONDIMENT_BOTTLE_RETURN_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		if root != null and is_instance_valid(root):
+			root.position = home
+			root.rotation_degrees = home_rot
+			root.scale = Vector3.ONE
+		var area: Area3D = condiment_bottle_areas.get(id, null)
+		if area != null and is_instance_valid(area):
+			area.input_ray_pickable = true
+		_finish_condiment_pour()
+	)
+
+
+func _finish_condiment_pour() -> void:
+	condiment_active_tween = null
+	condiment_pour_busy = false
+	condiment_active_id = ""
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.visible = false
+	while not condiment_pour_queue.is_empty():
+		var next: Dictionary = condiment_pour_queue.pop_front()
+		var station_index := int(next.get("station", -1))
+		var id := str(next.get("id", ""))
+		if station_index < 0 or station_index >= STATION_COUNT:
+			continue
+		var items: Array = stations[station_index].get("items", [])
+		if items.has(id) or (not items.has("patty") and (stations[station_index].get("patties", []) as Array).is_empty()):
+			continue
+		_start_condiment_pour(next)
+		break
+
 func _note_melody_press(id: String) -> void:
 	## Ascending kitchen scale — once every strip note is hit, fire the jingle.
 	if not INGREDIENT_HOTKEYS.has(id):
@@ -49563,8 +50883,8 @@ func _make_open_closed_sign_face(tex_path: String, face_name: String) -> MeshIns
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	mat.alpha_scissor_threshold = 0.08
 	mat.albedo_texture = tex
-	## 30% darker than full-bright white so the wood doesn't blow out in daylight.
-	mat.albedo_color = Color(0.7, 0.7, 0.7, 1.0)
+	## Keep the unshaded sign legible in the truck: 20% brighter than the prior 0.70 tint.
+	mat.albedo_color = Color(0.84, 0.84, 0.84, 1.0)
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	mat.render_priority = 16
@@ -50470,13 +51790,16 @@ func _add_ingredient(id: String) -> void:
 		_begin_cheese_hold(false, true)
 		return
 	var station := active_station
+	if _is_condiment(id):
+		_request_condiment_add(id, station)
+		return
 	_play_ingredient_fly_to_build(id, station, func():
 		_add_ingredient_to_station(station, id, false)
 	)
 
 
 func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void:
-	if not playing or brush_held or oil_held or shaker_held or ext_held or glock_held or spatula_patty != null:
+	if not playing or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or spatula_patty != null:
 		return
 	if _cheese_returning:
 		return
@@ -53587,14 +54910,16 @@ func _build_guided_tutorial_ui() -> void:
 	tutorial_panel.visible = false
 	tutorial_panel.z_index = 70
 	tutorial_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	## Keep the coach at the upper-left, clear of the order-ticket rail.
-	tutorial_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	tutorial_panel.offset_left = 18.0
-	tutorial_panel.offset_right = 368.0
-	tutorial_panel.offset_top = 82.0
-	tutorial_panel.offset_bottom = 82.0
+	## Center the card around its dynamic content at every viewport size.
+	tutorial_panel.set_anchors_preset(Control.PRESET_CENTER)
+	tutorial_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	tutorial_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	tutorial_panel.offset_left = -175.0
+	tutorial_panel.offset_right = 175.0
+	## Lift the coach clear of the grill while retaining center anchoring.
+	tutorial_panel.offset_top = -100.0
+	tutorial_panel.offset_bottom = -100.0
 	tutorial_panel.custom_minimum_size = Vector2(350, 0)
-	tutorial_panel.size = Vector2(350, 0)
 	var shell := StyleBoxFlat.new()
 	shell.bg_color = Color(0.035, 0.055, 0.085, 0.97)
 	shell.border_color = Color(1.0, 0.72, 0.22, 0.95)
@@ -53727,7 +55052,8 @@ func _build_guided_tutorial_ui() -> void:
 
 func _spawn_guided_tutorial_customer() -> void:
 	var order: Array[String] = ["bun_bottom", "patty", "tomato", "lettuce", "bun_top"]
-	_spawn_customer_local(order, Color("FFD166"), GUIDED_TUTORIAL_DURATION + 120.0, 0)
+	## Lane 2 is screen-right, leaving the centered coach card unobstructed.
+	_spawn_customer_local(order, Color("FFD166"), GUIDED_TUTORIAL_DURATION + 120.0, 2)
 
 
 func _guided_tutorial_patty():
@@ -54116,6 +55442,7 @@ func _exit_guided_tutorial() -> void:
 	_cancel_cheese_hold_silent()
 	_cancel_shaker_hold_silent()
 	_reset_oil_bottle()
+	_reset_condiment_bottles()
 	if start_overlay != null:
 		start_overlay.visible = true
 	_start_intro_title_music()
@@ -55040,7 +56367,8 @@ func _mp_cleanup_departed_peer_state() -> void:
 			live[int(live_id)] = true
 	var peer_ids: Dictionary = {}
 	var peer_stores: Array = [
-		_mp_remote_oil, _mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
+		_mp_remote_oil, _mp_remote_ketchup, _mp_remote_mustard,
+		_mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
 		_mp_remote_brush, _mp_remote_spatula, _mp_remote_cups,
 		_mp_remote_icecreams, _mp_remote_fries, _mp_remote_cursors,
 		_mp_remote_spatula_targets,
@@ -55066,7 +56394,8 @@ func _mp_cleanup_departed_peer_state() -> void:
 				held_patty._rest_z = held_patty.position.z
 		mp_held_net.erase(peer_id)
 		for node_store_value in [
-			_mp_remote_oil, _mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
+			_mp_remote_oil, _mp_remote_ketchup, _mp_remote_mustard,
+			_mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
 			_mp_remote_brush, _mp_remote_spatula, _mp_remote_cups,
 			_mp_remote_icecreams, _mp_remote_fries, _mp_remote_cursors,
 		]:
@@ -55472,6 +56801,11 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		var sm = slick.get("mesh")
 		if sm == null or not is_instance_valid(sm):
 			continue
+		var is_spline := bool(slick.get("surface_spline", false))
+		var spline_from: Vector3 = slick.get("spline_from", sm.position)
+		var spline_to: Vector3 = slick.get("spline_to", sm.position)
+		var spline_segments: PackedVector3Array = slick.get("spline_segments", PackedVector3Array())
+
 		mp_soda_slick_state.rpc_id(
 			peer_id,
 			float(sm.position.x),
@@ -55481,7 +56815,13 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			float(slick.get("age", 0.0)),
 			float(slick.get("life", 16.0)),
 			float(slick.get("scrape", 1.0)),
-			bool(slick.get("charred", false))
+			bool(slick.get("charred", false)),
+			is_spline,
+			float(spline_from.x), float(spline_from.z),
+			float(spline_to.x), float(spline_to.z),
+			float(slick.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS)),
+			spline_segments,
+			bool(slick.get("smeared", false))
 		)
 	for ice in melting_icecreams:
 		if typeof(ice) != TYPE_DICTIONARY:
@@ -55696,6 +57036,13 @@ func _mp_send_held_tool_pose(force: bool = false) -> void:
 		var r: Vector3 = oil_root.global_rotation_degrees
 		var emitting := oil_particles != null and oil_particles.emitting
 		mp_tool_pose.rpc(2, true, p.x, p.y, p.z, emitting, r.x, r.y, r.z)
+	elif condiment_tool_held != "":
+		var condiment_root: Node3D = condiment_bottle_roots.get(condiment_tool_held, null)
+		if condiment_root != null and is_instance_valid(condiment_root):
+			var cp: Vector3 = condiment_root.global_position
+			var cr: Vector3 = condiment_root.global_rotation_degrees
+			var kind := 11 if condiment_tool_held == "ketchup" else 12
+			mp_tool_pose.rpc(kind, true, cp.x, cp.y, cp.z, condiment_tool_pouring, cr.x, cr.y, cr.z)
 	elif shaker_held and shaker_root != null and is_instance_valid(shaker_root):
 		var sp: Vector3 = shaker_root.global_position
 		var sr: Vector3 = shaker_root.global_rotation_degrees
@@ -55919,6 +57266,13 @@ func _mp_ensure_remote_oil(peer_id: int) -> Node3D:
 	return _mp_ensure_remote_tool(_mp_remote_oil, peer_id, oil_root, "RemoteOil")
 
 
+func _mp_ensure_remote_condiment(peer_id: int, id: String) -> Node3D:
+	var source: Node3D = condiment_bottle_roots.get(id, null)
+	if id == "ketchup":
+		return _mp_ensure_remote_tool(_mp_remote_ketchup, peer_id, source, "RemoteKetchup")
+	return _mp_ensure_remote_tool(_mp_remote_mustard, peer_id, source, "RemoteMustard")
+
+
 func _mp_ensure_remote_shaker(peer_id: int) -> Node3D:
 	return _mp_ensure_remote_tool(_mp_remote_shaker, peer_id, shaker_root, "RemoteShaker")
 
@@ -56027,6 +57381,14 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		if oil != null and is_instance_valid(oil):
 			oil.visible = false
 			_mp_set_remote_tool_fx(oil, "OilParticles", false)
+	if except_kind != 11 and _mp_remote_ketchup.has(peer_id):
+		var ketchup: Node3D = _mp_remote_ketchup[peer_id]
+		if ketchup != null and is_instance_valid(ketchup):
+			ketchup.visible = false
+	if except_kind != 12 and _mp_remote_mustard.has(peer_id):
+		var mustard: Node3D = _mp_remote_mustard[peer_id]
+		if mustard != null and is_instance_valid(mustard):
+			mustard.visible = false
 	if except_kind != 3 and _mp_remote_brush.has(peer_id):
 		var br: Node3D = _mp_remote_brush[peer_id]
 		if br != null and is_instance_valid(br):
@@ -56283,7 +57645,7 @@ func mp_tool_pose(
 	ry: float = 0.0,
 	rz: float = 0.0
 ) -> void:
-	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock · 9 fries · 10 spatula
+	## kind: 2 oil · 3 scraper · 4 shaker · 5 extinguisher · 6 glock · 9 fries · 10 spatula · 11 ketchup · 12 mustard
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -56349,6 +57711,15 @@ func mp_tool_pose(
 			fries.global_position = pos
 			fries.global_rotation_degrees = rot
 			fries.scale = Vector3.ONE * FRIES_FINISHED_HAND_SCALE
+		11, 12:
+			var condiment_id := "ketchup" if kind == 11 else "mustard"
+			var condiment := _mp_ensure_remote_condiment(sid, condiment_id)
+			if condiment == null:
+				return
+			condiment.visible = true
+			condiment.global_position = pos
+			condiment.global_rotation_degrees = rot
+			condiment.scale = Vector3.ONE
 		10:
 			var spatula := _mp_ensure_remote_spatula(sid)
 			if spatula == null:
@@ -56503,6 +57874,10 @@ func _mp_update_cursors(delta: float) -> void:
 				tool = 8
 			elif fries_pack_held:
 				tool = 9
+			elif condiment_tool_held == "ketchup":
+				tool = 11
+			elif condiment_tool_held == "mustard":
+				tool = 12
 			mp_cursor_pos.rpc(m.x / vp.x, m.y / vp.y, held, tool)
 
 
@@ -56836,6 +58211,14 @@ func mp_release_drag(net_id: int) -> void:
 	if p != null and dragging_patty == p and sid != NetManager.my_id():
 		dragging_patty = null
 
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_add_condiment(station_index: int, id: String) -> void:
+	## Reliable call-local keeps the bottle travel/pour synchronized for every cook;
+	## the host still owns shared ingredient stock when the sauce lands.
+	if not _is_condiment(id) or station_index < 0 or station_index >= STATION_COUNT:
+		return
+	_queue_condiment_pour(id, station_index, true)
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_add_ingredient(station_index: int, id: String) -> void:
@@ -58474,6 +59857,59 @@ func mp_oil_slick(x: float, z: float, radius: float) -> void:
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_condiment_spline_batch(
+	segment_points: PackedVector3Array, radius: float, flavor: String
+) -> void:
+	if not _is_condiment(flavor) or segment_points.size() < 2 \
+			or segment_points.size() > CONDIMENT_SPLINE_SEGMENTS_PER_BATCH * 2:
+		return
+	var min_x := GRILL_CENTER_X - GRILL_WIDTH * 0.5
+	var max_x := GRILL_CENTER_X + GRILL_WIDTH * 0.5
+	var min_z := GRILL_SURFACE_Z - GRILL_DEPTH * 0.5
+	var max_z := GRILL_SURFACE_Z + GRILL_DEPTH * 0.5
+	var clean := PackedVector3Array()
+	for point in segment_points:
+		clean.append(Vector3(
+			clampf(point.x, min_x, max_x),
+			GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT,
+			clampf(point.z, min_z, max_z)
+		))
+	var sender := multiplayer.get_remote_sender_id()
+	_mp_applying = true
+	_spawn_condiment_spline_segments_local(
+		clean, clampf(radius, 0.0025, 0.010), flavor,
+		"remote:%d:%s" % [sender, flavor]
+	)
+	_mp_applying = false
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func mp_condiment_spline(
+	from_x: float, from_z: float, to_x: float, to_z: float,
+	radius: float, flavor: String
+) -> void:
+	if not _is_condiment(flavor):
+		return
+	var min_x := GRILL_CENTER_X - GRILL_WIDTH * 0.5
+	var max_x := GRILL_CENTER_X + GRILL_WIDTH * 0.5
+	var min_z := GRILL_SURFACE_Z - GRILL_DEPTH * 0.5
+	var max_z := GRILL_SURFACE_Z + GRILL_DEPTH * 0.5
+	from_x = clampf(from_x, min_x, max_x)
+	to_x = clampf(to_x, min_x, max_x)
+	from_z = clampf(from_z, min_z, max_z)
+	to_z = clampf(to_z, min_z, max_z)
+	radius = clampf(radius, 0.003, 0.014)
+	var sender := multiplayer.get_remote_sender_id()
+	_mp_applying = true
+	_spawn_condiment_spline_segment_local(
+		Vector3(from_x, GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT, from_z),
+		Vector3(to_x, GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT, to_z),
+		radius,
+		flavor,
+		"remote:%d:%s" % [sender, flavor]
+	)
+	_mp_applying = false
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
 func mp_soda_slick(x: float, z: float, radius: float, flavor: String) -> void:
 	_mp_applying = true
 	_spawn_soda_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius, flavor)
@@ -58489,11 +59925,31 @@ func mp_soda_slick_state(
 	age: float,
 	life: float,
 	scrape: float,
-	charred: bool
+	charred: bool,
+	surface_spline: bool = false,
+	from_x: float = 0.0,
+	from_z: float = 0.0,
+	to_x: float = 0.0,
+	to_z: float = 0.0,
+	tube_radius: float = CONDIMENT_TOOL_STREAK_RADIUS,
+	spline_segments: PackedVector3Array = PackedVector3Array(),
+	smeared: bool = false
 ) -> void:
-	## Mid-join / catch-up: recreate a soda spill with cook + scrape progress.
+	## Mid-join / catch-up: restore flat spills, raised sauce, and scraped sauce smears.
 	_mp_applying = true
-	_spawn_soda_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius, flavor)
+	if surface_spline and _is_condiment(flavor):
+		if spline_segments.size() >= 2:
+			_spawn_condiment_spline_batch_local(spline_segments, tube_radius, flavor)
+		else:
+			_spawn_condiment_spline_segment_local(
+				Vector3(from_x, GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT, from_z),
+				Vector3(to_x, GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT, to_z),
+				tube_radius,
+				flavor,
+				"catchup:%d" % soda_slicks.size()
+			)
+	else:
+		_spawn_soda_slick_local(Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z), radius, flavor)
 	if not soda_slicks.is_empty():
 		var item: Dictionary = soda_slicks[soda_slicks.size() - 1]
 		item["age"] = maxf(0.0, age)
@@ -58502,18 +59958,25 @@ func mp_soda_slick_state(
 		item["charred"] = charred
 		if charred:
 			item["age"] = float(item["life"])
+		if smeared and surface_spline:
+			_convert_condiment_batch_to_smear(item)
 		var mesh = item.get("mesh")
 		if mesh != null and is_instance_valid(mesh):
 			mesh.scale = Vector3(float(item["scrape"]), 1.0, float(item["scrape"]))
-			mesh.position = Vector3(x, GRILL_SURFACE_Y + OIL_SIT_Y, z)
+			mesh.position = Vector3(
+				x,
+				GRILL_SURFACE_Y + (CONDIMENT_SMEAR_SURFACE_LIFT if smeared else CONDIMENT_SURFACE_LIFT) if surface_spline else GRILL_SURFACE_Y + OIL_SIT_Y,
+				z
+			)
 	_mp_applying = false
 
-
 @rpc("any_peer", "call_remote", "reliable")
-func mp_soda_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
-	## Partner scraped a soda puddle / burnt crust — keep both grills matching.
+func mp_soda_slick_scrape(
+	x: float, z: float, scrape: float, remove: bool, smeared: bool = false
+) -> void:
+	## Partner scraped a soda puddle, sauce smear, or burnt crust.
 	_mp_applying = true
-	_mp_apply_soda_slick_scrape(x, z, scrape, remove)
+	_mp_apply_soda_slick_scrape(x, z, scrape, remove, smeared)
 	_mp_applying = false
 
 

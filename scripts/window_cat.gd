@@ -5,6 +5,8 @@ const SCENE_PATH := "res://assets/cat/cat.fbx"
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
 const HOME_X := 1.38
+## Tutorial composition: farther screen-left, opposite the tutorial customer.
+const TUTORIAL_COACH_X := 1.85
 const HOME_Z := 1.76
 ## Under the sill when hidden; peek high enough to clear the ledge.
 ## Dropped another 6″ from the prior peek heights.
@@ -87,8 +89,8 @@ func _ready() -> void:
 
 
 func _home_x() -> float:
-	## Tutorial coach stands on the clearer camera-right side of the window.
-	return -1.38 if _tutorial_coach else HOME_X
+	## World +X is screen-left; keep the tutorial cat opposite the customer.
+	return TUTORIAL_COACH_X if _tutorial_coach else HOME_X
 
 
 func set_tutorial_coach(active: bool) -> void:
