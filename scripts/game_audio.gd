@@ -1648,6 +1648,12 @@ func play_spatula_whoosh() -> void:
 	_play_cached("spatula_whoosh", _make_spatula_whoosh, 0.0, 0.0672)
 
 
+func play_car_whoosh() -> void:
+	## Pass-by air rush when the street van crosses the window.
+	## Much quieter than the old 0.52 gain.
+	_play_cached("car_whoosh", _make_car_whoosh, 0.0, 0.13)
+
+
 func play_burger_chomp() -> void:
 	## Quick bite when the burger hits the customer's mouth.
 	_play_cached("burger_chomp", _make_burger_chomp, 0.0, 0.55)
@@ -2466,6 +2472,24 @@ func _make_spatula_whoosh() -> AudioStreamWAV:
 		var tone := sin(t * lerpf(520.0, 140.0, u) * TAU) * 0.28
 		var hiss := sin(t * lerpf(1800.0, 600.0, u) * TAU) * (randf() * 0.12)
 		_write_s16(pcm, i, int(clampf((noise + tone + hiss) * env, -1.0, 1.0) * 16500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_car_whoosh() -> AudioStreamWAV:
+	## Longer falling pass-by — Doppler-ish air as the van crosses the window.
+	var dur := 0.62
+	var n := int(MIX_RATE * dur)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var u := t / dur
+		var env := sin(clampf(u, 0.0, 1.0) * PI) * exp(-u * 0.55)
+		var noise := (randf() * 2.0 - 1.0) * 0.70
+		var tone := sin(t * lerpf(280.0, 70.0, u) * TAU) * 0.34
+		var hiss := sin(t * lerpf(1400.0, 320.0, u) * TAU) * (randf() * 0.16)
+		var rumble := sin(t * lerpf(55.0, 28.0, u) * TAU) * 0.18
+		_write_s16(pcm, i, int(clampf((noise + tone + hiss + rumble) * env, -1.0, 1.0) * 17500.0))
 	return _wav_from_pcm(pcm, false)
 
 

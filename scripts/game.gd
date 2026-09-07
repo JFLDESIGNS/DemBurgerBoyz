@@ -42,13 +42,14 @@ const GRILL_WIDTH := 1.786 ## was 2.35; removed separate far-right hold strip
 const GRILL_DEPTH := 0.95
 const PHYSICAL_GARBAGE_SCENE := "res://assets/props/trashcan_small_cc0.glb"
 const PHYSICAL_GARBAGE_COLLISION_LAYER := 1048576
-## Camera-right 6 inches and seven inches higher than the first placement.
-const PHYSICAL_GARBAGE_POS := Vector3(-1.4024, 0.2578, 0.16)
+## Fine-tune offset from the ingredient-strip follow point (world meters).
+const PHYSICAL_GARBAGE_POS := Vector3.ZERO
 const PHYSICAL_GARBAGE_TARGET_H := 0.94
 const PHYSICAL_GARBAGE_CUT_HALF_W := 0.29
 const PHYSICAL_GARBAGE_CFG_SECTION := "physical_garbage"
 const PHYSICAL_GARBAGE_SYMBOL_PATH := "res://assets/props/public_trash_symbol.svg"
-const PHYSICAL_GARBAGE_DEFAULT_SCALE := 0.792 ## another 10% smaller than the prior 0.88
+const PHYSICAL_GARBAGE_DEFAULT_SCALE := 0.55
+const PHYSICAL_GARBAGE_FOLLOW_GAP_PX := 62.0
 var physical_garbage_pos := PHYSICAL_GARBAGE_POS
 var physical_garbage_rot := Vector3.ZERO
 var physical_garbage_scale := PHYSICAL_GARBAGE_DEFAULT_SCALE
@@ -159,6 +160,7 @@ const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd
 const GrillTttScript := preload("res://scripts/grill_ttt.gd")
 const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
 const LocationMapUIScript := preload("res://scripts/location_map_ui.gd")
+const HsbColorPickerScript := preload("res://scripts/hsb_color_picker.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
 const BURGERPALS_STARTUP_SOUND_PATH := "res://sounds/burgerpals.wav"
@@ -182,6 +184,7 @@ const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
 const SHOP_GRILL_ROOMBA := "grill_roomba"
 const SHOP_FRIDGE_UPGRADE := "fridge_upgrade"
+const SHOP_TRUCK := "truck_buyout"
 const SHOP_SODA_MACHINE_COST := 300.0
 const SHOP_ICECREAM_MACHINE_COST := 500.0
 const SHOP_FRYER_MACHINE_COST := 100.0
@@ -703,6 +706,34 @@ const AUDIO_CFG_PATH := "user://audio_settings.cfg"
 const AUDIO_MASTER_KEY := "master_ui"
 const AUDIO_INGREDIENT_TOUCH_VOL_KEY := "ingredient_touch_volume"
 var ingredient_buttons: Dictionary = {} ## id -> Button
+var ingredient_bin_root: Node3D = null
+var ingredient_bin_nodes: Dictionary = {} ## id -> Node3D
+var ingredient_bin_mats: Dictionary = {} ## id -> StandardMaterial3D
+var ingredient_bin_hover: Dictionary = {} ## id -> bool
+var ingredient_bin_spacing: float = 8.0
+var ingredient_bin_tile: float = 96.0
+var ingredient_bin_length: float = 1.55
+var ingredient_bin_height: float = 0.812
+var ingredient_bin_wall: float = 0.09
+var ingredient_bin_radius: float = 0.16
+var ingredient_bin_floor: float = 0.10
+var ingredient_bin_scale: float = 1.0
+var ingredient_bin_cam_z: float = 0.76
+var ingredient_bin_color := Color(0.78, 0.80, 0.84)
+var ingredient_bin_well_color := Color(0.42, 0.44, 0.48)
+var ingredient_bin_stainless: bool = true
+var ingredient_icon_w: float = 64.0
+var ingredient_icon_h: float = 44.0
+var ingredient_icon_y: float = 0.0
+var ingredient_label_y: float = 0.0
+var ingredient_bin_y_px: float = 0.0
+var ingredient_stock_visible: bool = false
+var ingredient_bin_shell_picker = null
+var ingredient_bin_well_picker = null
+var ingredient_stock_check: CheckButton = null
+var ingredient_bin_steel_check: CheckButton = null
+var _ingredient_bin_rebuild_queued: bool = false
+const INGREDIENT_BINS_CFG_SECTION := "ingredient_bins"
 var _strip_did_drag: bool = false ## Skip press action after a paint-swipe.
 var _strip_swipe_active: bool = false ## LMB paint across topping buttons.
 var _strip_swipe_added: Dictionary = {} ## id -> true for this swipe
@@ -902,6 +933,23 @@ var _disguise_cat_active: bool = false
 var _disguise_cat_cool: float = 0.0
 const DISGUISE_CAT_CHANCE := 1.0 ## Always joins once maxed (was 0.55 and never retried)
 const DISGUISE_CAT_COOLDOWN := 90.0
+## Mustache-and-hat guy — takes half the day's take until you buy him out.
+const CUT_COLLECTOR_BUYOUT := 10000.0
+const CUT_COLLECTOR_LANE_X := 1.12 ## far screen-left, not in the order line
+const CUT_COLLECTOR_SKIN := 2 ## criminalMaleA
+const CUT_COLLECTOR_WAWA_SEC := 30.0
+const CUT_COLLECTOR_WAWA_CHANCE := 0.50
+var truck_bought_out: bool = false
+var shift_start_money: float = START_MONEY
+var last_day_earnings: float = 0.0
+var last_day_cut: float = 0.0
+var _cut_collector: Node3D = null
+var _cut_collector_kind: String = "" ## "" | "wawa" | "cut" | "pep"
+var _cut_collector_wawa_timer: float = 30.0
+var _cut_collector_cut_done: bool = false
+var _cut_collector_seq: int = 0
+var _boss_caption_seq: int = 0
+var cut_buyout_btn: Button = null
 ## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
 var glock_held: bool = false
 var glock_root: Node3D = null
@@ -1574,6 +1622,26 @@ var gfx_kitchen: OmniLight3D = null
 var gfx_grill_lamp: SpotLight3D = null
 var gfx_window_wash: SpotLight3D = null
 var gfx_customer_fill: SpotLight3D = null
+var soda_lamp: OmniLight3D = null
+var icecream_lamp: OmniLight3D = null
+var hidden_scanned_lights_host: VBoxContainer = null
+var soda_lamp_energy: float = 0.75
+var soda_lamp_range: float = 1.2
+var soda_lamp_specular: float = 0.5
+var soda_lamp_size: float = 0.0
+var soda_lamp_x: float = 0.0
+var soda_lamp_y: float = 0.85
+var soda_lamp_z: float = 0.35
+var soda_lamp_color := Color(1.0, 0.96, 0.90)
+var icecream_lamp_energy: float = 0.38
+var icecream_lamp_range: float = 0.8
+var icecream_lamp_specular: float = 0.35
+var icecream_lamp_size: float = 0.0
+var icecream_lamp_x: float = 0.0
+var icecream_lamp_y: float = 0.50
+var icecream_lamp_z: float = 0.34
+var icecream_lamp_color := Color(1.0, 0.86, 0.64)
+const STATION_LIGHTS_CFG_SECTION := "station_lights"
 var gfx_sky_mat: PanoramaSkyMaterial = null
 var gfx_panel: PanelContainer = null
 var gfx_btn: Button = null
@@ -1638,6 +1706,7 @@ var tree_fill_entries: Array = []
 var tree_light_energy: float = 2.65
 var tree_light_range: float = 2.7
 var tree_light_size: float = 0.14 ## Visible bulb radius (meters)
+var tree_light_specular: float = 0.15
 var tree_light_off_x: float = 0.35
 var tree_light_off_y: float = 2.85
 var tree_light_off_z: float = 0.7
@@ -1718,13 +1787,16 @@ var location_bg_transforms: Dictionary = {} ## location id -> per-location bg_x/
 var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by location id
 var street_car_sprite: Sprite3D = null
 var street_car_exhaust: GPUParticles3D = null
+var street_car_blur_sprites: Array = [] ## trailing Sprite3D smears
 var street_car_wait: float = 0.0
 var street_car_active: bool = false
 var street_car_direction: float = -1.0
 var street_car_phase: float = 0.0
-var street_car_speed: float = 8.20
+var street_car_speed: float = 9.84
 var street_car_half_width: float = 0.0
 var street_car_half_height: float = 0.0
+var street_car_last_x: float = 0.0
+var street_car_whoosh_played: bool = false
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -1748,14 +1820,18 @@ const BUN_BOTTOM_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedBott
 const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb"
 const KETCHUP_BOTTLE_PATH := "res://models/burgerpack/try2/SM_KetchupSqueezeBottle.glb"
 const MUSTARD_BOTTLE_PATH := "res://models/burgerpack/try2/SM_MustardSqueezeBottle.glb"
-const CONDIMENT_BOTTLE_HEIGHT := 0.24
+const CONDIMENT_BOTTLE_HEIGHT := 0.30 ## 25% larger than the original 0.24 m squeeze bottles.
 const CONDIMENT_BOTTLE_TRAVEL_SEC := 0.30
 const CONDIMENT_BOTTLE_TILT_SEC := 0.12
 const CONDIMENT_BOTTLE_POUR_SEC := 0.34
 const CONDIMENT_BOTTLE_RETURN_SEC := 0.30
 const CONDIMENT_BOTTLE_COLLISION_LAYER := 4194304
+const CONDIMENT_AUTO_POUR_CAMERA_OFFSET := 0.56
+const CONDIMENT_AUTO_POUR_HEIGHT_OFFSET := 0.4298 ## Previous 0.125 m plus exactly one foot.
+const CONDIMENT_ANIM_RENDER_PRIORITY := 34
+const CONDIMENT_ANIM_SORTING_OFFSET := 24.0
 const CONDIMENT_TOOL_HOLD_HEIGHT := 0.38
-## Raised sauce ribbon: the tube's lower edge just kisses the cook surface.
+## Lightweight raised sauce ribbon: enough height for lighting without tube geometry.
 const CONDIMENT_TOOL_STREAK_RADIUS := 0.0044
 const CONDIMENT_TOOL_STREAK_SPACING := 0.013
 ## The grill's visible zone panels are about 0.045 m thick; their top is near +0.023 m.
@@ -1766,8 +1842,8 @@ const CONDIMENT_SMEAR_SURFACE_LIFT := 0.0238
 ## Much thinner than the old oil-sized squeeze stream.
 const CONDIMENT_STREAM_TOP_RADIUS := 0.0041
 const CONDIMENT_STREAM_BOTTOM_RADIUS := 0.0024
-## Thirty-two spline pieces share one ArrayMesh, keeping 4,000 total marks practical.
-const CONDIMENT_SPLINE_SEGMENTS_PER_BATCH := 32
+## Larger low-poly batches sharply reduce nodes/draw calls while keeping 4,000 marks practical.
+const CONDIMENT_SPLINE_SEGMENTS_PER_BATCH := 96
 const CONDIMENT_SPLINE_MAX_SEGMENTS_PER_FLAVOR := 2000
 ## Sauce cooks at about one fifth the old rate and only while the burner is on.
 const CONDIMENT_BURN_RATE := 0.35
@@ -1784,7 +1860,7 @@ var condiment_tool_held: String = ""
 var condiment_tool_pouring: bool = true
 var condiment_tool_last_draw := Vector3.ZERO
 var condiment_tool_stream_phase: float = 0.0
-var condiment_spline_batches: Dictionary = {} ## painter/flavor -> active batched mesh item
+var condiment_spline_batches: Dictionary = {} ## Legacy state name; painter/flavor -> active ribbon batch.
 ## Top sits on the bottom heel (untoasted bottom height ≈ 0.040).
 const BUN_PAIR_TOP_Y := 0.039
 ## Vertical step for the second pair on a tower.
@@ -1948,7 +2024,7 @@ const STRIP_GFX_KEYS: Array[String] = [
 ]
 const BUILD_GFX_KEYS: Array[String] = BUILD_ZONE_GFX_KEYS + PREP_GFX_KEYS + STRIP_GFX_KEYS
 const BUILD_DEBUG_OUTLINE_COLOR := Color(1.0, 0.1, 0.1, 0.95)
-const GRILL_POWER_ROW_BOTTOM := 112.0 ## px above screen bottom — centered on grill
+const GRILL_POWER_ROW_BOTTOM := 122.0 ## px above screen bottom — centered on grill
 const GRILL_POWER_ROW_WIDTH := 214.0 ## burner + gap + garbage (~20% smaller)
 ## Wall cab radio prop. Keep this procedural so no extra 3D radio model ships.
 const RADIO_MESH_PATH := "res://models/RADIO/source/RADIO SCETC FAB.obj"
@@ -2363,9 +2439,10 @@ const STREET_CAR_Z := 11.0248 ## Five feet deeper toward the background than the
 const STREET_CAR_Y := 1.60 ## Raised another 0.70 m: twice the previous height adjustment.
 const STREET_CAR_PIXEL_SIZE := 0.010752 ## 20% smaller than the previous rendered size.
 const STREET_CAR_EDGE_X := 8.7
-const STREET_CAR_SPEED := 8.20
-const STREET_CAR_SPEED_MIN := 6.80
-const STREET_CAR_SPEED_MAX := 10.00
+const STREET_CAR_SPEED := 9.84 ## 20% faster than the original 8.20.
+const STREET_CAR_SPEED_MIN := 8.16
+const STREET_CAR_SPEED_MAX := 12.00
+const STREET_CAR_BLUR_COUNT := 5
 const STREET_CAR_TILT_DEG := 0.65
 const STREET_CAR_RUMBLE_Y := 0.014
 const STREET_CAR_RUMBLE_DEG := 0.14
@@ -2549,6 +2626,9 @@ const GFX_DEFAULTS := {
 	"fake_df_ao_bias": 0.0012,
 	"shadows": true, ## Cast shadows on by default
 	"sky_energy": 0.5,
+	"sky_reflections": true,
+	"sky_yaw": 40.0,
+	"sky_pitch": 0.0,
 	"heat_warp_on": true,
 	"heat_warp_size": 0.86,
 	"heat_warp_speed": 1.65,
@@ -2599,6 +2679,7 @@ const GFX_DEFAULTS := {
 	"strip_range": 0.36,
 	"strip_angle": 76.0,
 	"strip_size": 0.55,
+	"strip_specular": 0.5,
 	"strip_width": 0.20,
 	## Build zone hitboxes — tune in GFX → BUILD ZONES (red outlines update live).
 	"bz_row_left": BUILD_STATIONS_ROW_LEFT,
@@ -2645,7 +2726,7 @@ const GFX_DEFAULTS := {
 	"strip_icon_x": 0.0,
 	"strip_icon_y": 0.0,
 	"strip_bar_left": 8.0,
-	"strip_bar_top": -100.0,
+	"strip_bar_top": -118.0,
 	"strip_bar_right": -8.0,
 	"strip_bar_bottom": -6.0,
 	"bz_debug_outline": false,
@@ -2806,6 +2887,8 @@ func _ready() -> void:
 	_load_fryer_tuning_settings()
 	_load_player_camera_settings()
 	_load_customer_review_card_settings()
+	_load_station_light_settings()
+	_load_ingredient_bin_settings()
 	_build_3d_world()
 	_build_grill_burner_ui()
 	_build_station_ui()
@@ -2825,6 +2908,8 @@ func _ready() -> void:
 			vp.size_changed.connect(_layout_build_column_root)
 		if not vp.size_changed.is_connected(_refresh_build_debug_outlines):
 			vp.size_changed.connect(_refresh_build_debug_outlines)
+		if not vp.size_changed.is_connected(_update_ingredient_bins_3d):
+			vp.size_changed.connect(_update_ingredient_bins_3d)
 	call_deferred("_layout_phone_ui_overlay")
 	_build_pause_button()
 	_build_master_volume_ui()
@@ -2836,6 +2921,7 @@ func _ready() -> void:
 	_setup_lasso_tool()
 	_setup_location_map_ui()
 	_setup_game_over_location_button()
+	_setup_cut_buyout_button()
 	_layout_top_bar_hud()
 	_setup_grill_song_performer()
 	_load_grill_ttt_settings()
@@ -3652,6 +3738,11 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	## Backup if title-screen warm was skipped / still running.
 	call_deferred("_ensure_runtime_prewarms")
 	money = START_MONEY
+	shift_start_money = START_MONEY
+	last_day_earnings = 0.0
+	last_day_cut = 0.0
+	truck_bought_out = false
+	_reset_cut_collector_shift(true)
 	combo = 0
 	day = 1
 	day_time = GUIDED_TUTORIAL_DURATION if tutorial_mode else DAY_LENGTH
@@ -3710,6 +3801,8 @@ func _start_game(guided_tutorial: bool = false) -> void:
 		if day == 1 and BTS_SPECIAL_GUESTS_ENABLED:
 			_begin_bts_day1_cat_announcement()
 	_start_smooth_jazz_radio()
+	if not tutorial_mode and not truck_bought_out:
+		_spawn_cut_collector("pep")
 	# _begin_opening_terror_ambush()
 
 
@@ -3756,6 +3849,10 @@ func _restart() -> void:
 	_refresh_all_stations()
 	_clear_tutorial_hint()
 	_reset_supplies(false)
+	shift_start_money = money
+	last_day_earnings = 0.0
+	last_day_cut = 0.0
+	_reset_cut_collector_shift(false)
 	if day == 1 and (not mp_enabled or NetManager.is_host()):
 		if BTS_SPECIAL_GUESTS_ENABLED:
 			_begin_bts_day1_cat_announcement()
@@ -3773,6 +3870,8 @@ func _restart() -> void:
 	_disguise_cat_cool = 0.0
 	if _disguise_cat_pending:
 		_try_spawn_disguise_cat()
+	if not truck_bought_out:
+		_spawn_cut_collector("pep")
 	# _begin_opening_terror_ambush()
 
 
@@ -3788,6 +3887,8 @@ func _process(delta: float) -> void:
 	_update_air_motes(delta)
 	_update_physical_garbage_hover()
 	_update_start_patty_preview(delta)
+	_update_ingredient_bins_3d()
+	_update_physical_garbage_screen_follow()
 	## Window godrays disabled for now (too strong).
 	# _update_window_godrays(delta)
 	if not playing:
@@ -3975,6 +4076,8 @@ func _process(delta: float) -> void:
 				_disguise_cat_cool = maxf(0.0, _disguise_cat_cool - delta)
 			if _disguise_cat_pending:
 				_try_spawn_disguise_cat()
+			if not shift_closing:
+				_update_cut_collector_wawa(delta)
 			spawn_timer -= delta
 			var cap := _customer_cap()
 			var waiting_n := _waiting_customer_count()
@@ -3988,10 +4091,15 @@ func _process(delta: float) -> void:
 
 	rush_mode = _customer_cap() >= 3 and _waiting_customer_count() >= maxi(2, _customer_cap() - 1)
 
-	if not tutorial_mode and shift_closing and customers.is_empty():
+	if not tutorial_mode and shift_closing and _regular_customers_empty():
 		if _maybe_begin_bts_day1_performance():
 			pass
 		elif _bts_day1_blocks_day_end():
+			pass
+		elif not truck_bought_out and not _cut_collector_cut_done:
+			if not _has_cut_collector():
+				_spawn_cut_collector("cut")
+		elif _has_cut_collector():
 			pass
 		elif mp_enabled:
 			if NetManager.is_host():
@@ -4174,6 +4282,8 @@ func _waiting_customer_count() -> int:
 		if c == null or not is_instance_valid(c):
 			continue
 		if bool(c.get("is_leaving")):
+			continue
+		if bool(c.get("is_cut_collector")):
 			continue
 		n += 1
 	return n
@@ -5773,25 +5883,28 @@ func _end_day() -> void:
 	var social_block := _format_day_social_recap()
 	var location_name := TruckLocationsScript.display_name(current_location_id)
 	var rank := TruckLocationsScript.rank_of(current_location_id)
-	game_over_label.text = "%s shift complete!\nArea %d of %d - %s\n\nServed: %d\nPerfect: %d\nWallet: %s\n\n%s\n\nReplay here or move the truck for a new challenge." % [
+	var cut_block := _format_day_cut_recap()
+	game_over_label.text = "%s shift complete!\nArea %d of %d - %s\n\nServed: %d\nPerfect: %d\n%sWallet: %s\n\n%s\n\nReplay here or move the truck for a new challenge." % [
 		location_name,
 		rank,
 		TruckLocationsScript.all().size(),
 		TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(current_location_id)),
 		total_served,
 		perfect_serves,
+		cut_block,
 		_format_money(money),
 		social_block
 	]
 	restart_btn.text = "REPLAY %s" % location_name.to_upper()
 	if game_over_location_btn != null and is_instance_valid(game_over_location_btn):
 		game_over_location_btn.visible = true
+	_refresh_cut_buyout_button()
 	game_over_panel.visible = true
-	## Bigger panel so best/worst quotes fit.
+	## Bigger panel so best/worst quotes + the cut recap fit.
 	game_over_panel.offset_left = -300.0
 	game_over_panel.offset_right = 300.0
-	game_over_panel.offset_top = -240.0
-	game_over_panel.offset_bottom = 240.0
+	game_over_panel.offset_top = -270.0
+	game_over_panel.offset_bottom = 270.0
 	if game_over_label:
 		game_over_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		UiFontsScript.apply_label(game_over_label, true, 15)
@@ -5824,15 +5937,9 @@ func _build_3d_world() -> void:
 	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.4, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
 	_add_box(world, Vector3(4.8, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
 
-	## End both the cabinet and countertop before the camera-right garbage bay.
-	## Leaving the top slab across this opening hid most of the physical bin.
-	var counter_max_x := 2.325
-	var garbage_cut_max_x := physical_garbage_pos.x \
-			+ PHYSICAL_GARBAGE_CUT_HALF_W * physical_garbage_scale + 0.14
-	var main_run_w := counter_max_x - garbage_cut_max_x
-	var main_run_x := (garbage_cut_max_x + counter_max_x) * 0.5
-	_add_box(world, Vector3(main_run_w, 0.95, 1.35), Vector3(main_run_x, 0.48, 0.08), Color("080808"))
-	var counter_top := _add_box(world, Vector3(main_run_w, 0.10, 1.35), Vector3(main_run_x, 1.0, 0.08), Color("101214"))
+	## Full counter — the physical can now sits with the ingredient strip.
+	_add_box(world, Vector3(4.65, 0.95, 1.35), Vector3(0.0, 0.48, 0.08), Color("080808"))
+	var counter_top := _add_box(world, Vector3(4.65, 0.10, 1.35), Vector3(0.0, 1.0, 0.08), Color("101214"))
 	counter_top.material_override.metallic = 0.32
 	counter_top.material_override.roughness = 0.62
 	_build_physical_garbage_can()
@@ -5971,6 +6078,7 @@ func _build_physical_garbage_can() -> void:
 	target.position = Vector3(0.0, PHYSICAL_GARBAGE_TARGET_H - 0.045, -0.015)
 	root.add_child(target)
 	physical_garbage_target = target
+	call_deferred("_update_physical_garbage_screen_follow")
 
 
 func _build_physical_garbage_symbol(parent: Node3D) -> void:
@@ -6041,6 +6149,15 @@ func _load_physical_garbage_settings() -> void:
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "ten_percent_smaller_v2", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "beside_ingredients_v1"):
+		physical_garbage_pos = Vector3.ZERO
+		physical_garbage_scale = clampf(physical_garbage_scale * 0.86, 0.35, 1.5)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "x", physical_garbage_pos.x)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "y", physical_garbage_pos.y)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "z", physical_garbage_pos.z)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "beside_ingredients_v1", true)
+		cfg.save(GFX_CFG_PATH)
 
 
 func _save_physical_garbage_settings() -> void:
@@ -6069,10 +6186,53 @@ func _apply_physical_garbage_transform() -> void:
 	if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
 		_physical_garbage_shake_tween.kill()
 		_physical_garbage_shake_tween = null
-	physical_garbage_root.position = physical_garbage_pos
 	physical_garbage_root.rotation_degrees = physical_garbage_rot
 	physical_garbage_root.scale = Vector3.ONE * physical_garbage_scale
 	_apply_physical_garbage_symbol_transform()
+	_update_physical_garbage_screen_follow()
+
+
+func _physical_garbage_rest_world() -> Vector3:
+	var follow := _physical_garbage_follow_world()
+	if follow == Vector3.INF:
+		return physical_garbage_pos
+	return follow + physical_garbage_pos
+
+
+func _physical_garbage_follow_world() -> Vector3:
+	if camera == null or not is_instance_valid(camera):
+		return Vector3.INF
+	if INGREDIENT_HOTKEYS.is_empty() or not ingredient_buttons.has(INGREDIENT_HOTKEYS.back()):
+		return Vector3.INF
+	var btn: Control = ingredient_buttons[INGREDIENT_HOTKEYS.back()]
+	if btn == null or not is_instance_valid(btn):
+		return Vector3.INF
+	var r := btn.get_global_rect()
+	if r.size.x < 4.0 or r.size.y < 4.0:
+		return Vector3.INF
+	var screen := Vector2(
+		r.position.x + r.size.x + PHYSICAL_GARBAGE_FOLLOW_GAP_PX,
+		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
+	)
+	var world_pt := camera.project_position(screen, ingredient_bin_cam_z)
+	var can_h := PHYSICAL_GARBAGE_TARGET_H * physical_garbage_scale
+	world_pt.y -= can_h * 0.88
+	return world_pt
+
+
+func _update_physical_garbage_screen_follow() -> void:
+	if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
+		return
+	if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
+		return
+	var rest := _physical_garbage_rest_world()
+	physical_garbage_root.position = rest
+	physical_garbage_root.rotation_degrees = physical_garbage_rot
+	physical_garbage_root.scale = Vector3.ONE * physical_garbage_scale
+	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
+			and ingredient_legend.visible \
+			and (start_overlay == null or not start_overlay.visible)
+	physical_garbage_root.visible = show
 
 
 func _apply_physical_garbage_symbol_transform() -> void:
@@ -6101,26 +6261,27 @@ func _physical_garbage_react() -> void:
 	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
 		if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
 			_physical_garbage_shake_tween.kill()
-		physical_garbage_root.position = physical_garbage_pos
+		var rest := _physical_garbage_rest_world()
+		physical_garbage_root.position = rest
 		physical_garbage_root.rotation_degrees = physical_garbage_rot
 		_physical_garbage_shake_tween = create_tween()
 		_physical_garbage_shake_tween.tween_property(
 			physical_garbage_root, "rotation_degrees", physical_garbage_rot + Vector3(-1.0, 0.0, -2.6), 0.055
 		).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		_physical_garbage_shake_tween.parallel().tween_property(
-			physical_garbage_root, "position", physical_garbage_pos + Vector3(0.012, -0.006, 0.008), 0.055
+			physical_garbage_root, "position", rest + Vector3(0.012, -0.006, 0.008), 0.055
 		)
 		_physical_garbage_shake_tween.tween_property(
 			physical_garbage_root, "rotation_degrees", physical_garbage_rot + Vector3(0.6, 0.0, 1.7), 0.075
 		).set_trans(Tween.TRANS_SINE)
 		_physical_garbage_shake_tween.parallel().tween_property(
-			physical_garbage_root, "position", physical_garbage_pos + Vector3(-0.008, 0.002, -0.004), 0.075
+			physical_garbage_root, "position", rest + Vector3(-0.008, 0.002, -0.004), 0.075
 		)
 		_physical_garbage_shake_tween.tween_property(
 			physical_garbage_root, "rotation_degrees", physical_garbage_rot, 0.11
 		).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		_physical_garbage_shake_tween.parallel().tween_property(
-			physical_garbage_root, "position", physical_garbage_pos, 0.11
+			physical_garbage_root, "position", rest, 0.11
 		)
 		_physical_garbage_shake_tween.tween_callback(func() -> void:
 			_physical_garbage_shake_tween = null
@@ -12247,6 +12408,8 @@ func _try_customer_gross_leave(customer: Node3D) -> bool:
 		return false
 	if bool(customer.get("is_terrorist")):
 		return false
+	if bool(customer.get("is_cut_collector")):
+		return false
 	if bool(customer.get("is_leaving")):
 		return false
 	if not bool(customer.get("is_waiting")):
@@ -15808,6 +15971,232 @@ func _clear_disguise_cat_state() -> void:
 		window_cat.set("enabled", true)
 
 
+func _reset_cut_collector_shift(full_run: bool) -> void:
+	if _cut_collector != null and is_instance_valid(_cut_collector):
+		_cut_collector.queue_free()
+	_cut_collector = null
+	_cut_collector_kind = ""
+	_cut_collector_cut_done = false
+	_cut_collector_seq += 1
+	_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
+	_hide_boss_caption()
+	if full_run:
+		last_day_earnings = 0.0
+		last_day_cut = 0.0
+	_refresh_cut_buyout_button()
+
+
+func _regular_customers_empty() -> bool:
+	for c in customers:
+		if c == null or not is_instance_valid(c):
+			continue
+		if bool(c.get("is_cut_collector")):
+			continue
+		return false
+	return true
+
+
+func _has_cut_collector() -> bool:
+	if _cut_collector != null and is_instance_valid(_cut_collector):
+		return true
+	return false
+
+
+func _update_cut_collector_wawa(delta: float) -> void:
+	if tutorial_mode or truck_bought_out:
+		return
+	if _has_cut_collector():
+		return
+	_cut_collector_wawa_timer -= delta
+	if _cut_collector_wawa_timer > 0.0:
+		return
+	_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
+	if randf() < CUT_COLLECTOR_WAWA_CHANCE:
+		_spawn_cut_collector("wawa")
+
+
+func _spawn_cut_collector(kind: String) -> void:
+	if tutorial_mode or _has_cut_collector():
+		return
+	if truck_bought_out:
+		return
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		mp_spawn_cut_collector.rpc(kind)
+		return
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
+	_spawn_cut_collector_local(kind)
+
+
+func _spawn_cut_collector_local(kind: String) -> void:
+	if _has_cut_collector():
+		return
+	var c = CustomerScript.new()
+	c.setup([], Color("4A3B2F"), 9999.0, 0, CUT_COLLECTOR_SKIN, 0, -1)
+	c.apply_review_card_settings(customer_review_settings)
+	c.set_meta("soda_handed", false)
+	c.set_meta("icecream_handed", false)
+	c.set_meta("fries_handed", false)
+	c.set_meta("cut_visit", kind)
+	c.set_meta("gross_ok", true)
+	if mp_enabled and not NetManager.is_host():
+		c.mp_host_driven = true
+	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
+	c.target_x = CUT_COLLECTOR_LANE_X
+	c.rotation_degrees = Vector3(0, CustomerScript.WALK_PLUS_X_YAW, 0)
+	c.scale = Vector3(1.0, 1.0, 1.0)
+	c.arrived.connect(_on_cut_collector_arrived)
+	c.tree_exiting.connect(func():
+		if _cut_collector == c:
+			_cut_collector = null
+			_cut_collector_kind = ""
+			_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
+			_hide_boss_caption()
+	)
+	customers_root.add_child(c)
+	## Not a ticket customer — keep him off the order line entirely.
+	if c.has_method("apply_cut_collector_look"):
+		c.apply_cut_collector_look()
+	_cut_collector = c
+	_cut_collector_kind = kind
+	_play_boss_arrive_sound()
+
+
+func _play_boss_arrive_sound() -> void:
+	if game_audio == null:
+		return
+	if game_audio.has_method("play_customer_grobble"):
+		game_audio.play_customer_grobble(0.9)
+	elif game_audio.has_method("play_customer_wawa_click"):
+		game_audio.play_customer_wawa_click(0.9)
+
+
+func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> void:
+	_boss_caption_seq += 1
+	var seq := _boss_caption_seq
+	if dialogue_panel == null or not is_instance_valid(dialogue_panel):
+		_flash(body, Color("FFCC80"))
+		return
+	if dialogue_title:
+		dialogue_title.text = title
+	if dialogue_body:
+		dialogue_body.text = body
+		dialogue_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if dialogue_options:
+		dialogue_options.visible = false
+	dialogue_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dialogue_panel.visible = true
+	if duration > 0.05:
+		get_tree().create_timer(duration).timeout.connect(func():
+			if seq != _boss_caption_seq:
+				return
+			_hide_boss_caption()
+		)
+
+
+func _hide_boss_caption() -> void:
+	_boss_caption_seq += 1
+	if dialogue_panel != null and is_instance_valid(dialogue_panel):
+		dialogue_panel.visible = false
+	if dialogue_options != null:
+		dialogue_options.visible = true
+
+
+func _on_cut_collector_arrived(customer: Node3D) -> void:
+	if customer == null or not is_instance_valid(customer):
+		return
+	var kind := str(customer.get_meta("cut_visit", _cut_collector_kind))
+	_cut_collector_seq += 1
+	var seq := _cut_collector_seq
+	if kind == "cut":
+		_show_boss_caption(
+			"THE BOSS",
+			"Time to take my cut.\nUntil you buy this, cut half this money is mine.",
+			6.0
+		)
+		get_tree().create_timer(2.35).timeout.connect(func():
+			if seq != _cut_collector_seq:
+				return
+			if customer == null or not is_instance_valid(customer) or bool(customer.get("is_leaving")):
+				return
+			_apply_cut_collector_payout()
+			get_tree().create_timer(2.4).timeout.connect(func():
+				if seq != _cut_collector_seq:
+					return
+				if customer == null or not is_instance_valid(customer) or bool(customer.get("is_leaving")):
+					return
+				if customer.has_method("leave_happy"):
+					customer.leave_happy()
+			)
+		)
+		return
+	if kind == "pep":
+		_show_boss_caption(
+			"THE BOSS",
+			"Listen up. Cook hot, serve fast, keep the steel clean.\nUntil you buy this, cut half this money is mine.",
+			6.2
+		)
+		get_tree().create_timer(5.6).timeout.connect(func():
+			if seq != _cut_collector_seq:
+				return
+			if customer == null or not is_instance_valid(customer) or bool(customer.get("is_leaving")):
+				return
+			if customer.has_method("leave_happy"):
+				customer.leave_happy()
+		)
+		return
+	_show_boss_caption("THE BOSS", "wawa wa", 2.6)
+	get_tree().create_timer(2.5).timeout.connect(func():
+		if seq != _cut_collector_seq:
+			return
+		if customer == null or not is_instance_valid(customer) or bool(customer.get("is_leaving")):
+			return
+		if customer.has_method("leave_happy"):
+			customer.leave_happy()
+	)
+
+
+func _apply_cut_collector_payout() -> void:
+	var earned := maxf(0.0, money - shift_start_money)
+	var cut := floorf(earned * 50.0) / 100.0
+	last_day_earnings = earned
+	last_day_cut = cut
+	_cut_collector_cut_done = true
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		if cut > 0.001:
+			_flash("Today's take %s — he takes %s" % [_format_money(earned), _format_money(cut)], Color("FF8A80"))
+		else:
+			_flash("Today's take %s — nothing for him" % _format_money(earned), Color("BCAAA4"))
+		return
+	if cut > 0.001:
+		_spend(
+			cut,
+			"Today's take %s — he takes %s" % [_format_money(earned), _format_money(cut)],
+			Color("FF8A80")
+		)
+	else:
+		_flash("Today's take %s — nothing for him" % _format_money(earned), Color("BCAAA4"))
+
+
+func _format_day_cut_recap() -> String:
+	if truck_bought_out and last_day_cut <= 0.001 and last_day_earnings <= 0.001:
+		return "The truck is yours — no cut.\n"
+	if last_day_earnings <= 0.001 and last_day_cut <= 0.001:
+		if truck_bought_out:
+			return "The truck is yours — no cut.\n"
+		return "Today's take: %s\nHis cut: %s\n" % [_format_money(0.0), _format_money(0.0)]
+	var kept := maxf(0.0, last_day_earnings - last_day_cut)
+	var extra := ""
+	if truck_bought_out:
+		extra = "Bought out — he won't be back.\n"
+	return "Today's take: %s\nHis cut: %s\nYou keep: %s\n%s" % [
+		_format_money(last_day_earnings),
+		_format_money(last_day_cut),
+		_format_money(kept),
+		extra,
+	]
+
+
 func _park_window_cat_for_disguise() -> void:
 	if window_cat == null or not is_instance_valid(window_cat):
 		return
@@ -19115,7 +19504,7 @@ func _spawn_condiment_spline_segments_local(
 			segments.append(Vector3(from_pos.x, surface_y, from_pos.z))
 			segments.append(Vector3(to_pos.x, surface_y, to_pos.z))
 		item["spline_segments"] = segments
-		## Rebuild each touched batch once, even if this frame added many samples.
+		## Rebuild each touched lightweight ribbon batch once per rendered frame.
 		_rebuild_condiment_spline_batch(item)
 		pair_cursor += take
 	_trim_condiment_spline_capacity()
@@ -19140,7 +19529,7 @@ func _new_condiment_spline_batch(flavor: String, radius: float) -> Dictionary:
 		"base_col": base,
 		"scrape": 1.0,
 		"charred": false,
-		"surface_spline": true,
+		"surface_spline": true, ## Legacy multiplayer/save flag; rendered as a low-poly ribbon.
 		"smeared": false,
 		"spline_segments": PackedVector3Array(),
 	}
@@ -19180,7 +19569,7 @@ func _rebuild_condiment_spline_batch(item: Dictionary) -> void:
 	)
 	var tube_radius := float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS))
 	slick.position = center
-	slick.mesh = _make_surface_condiment_spline_batch_mesh(segments, tube_radius, center)
+	slick.mesh = _make_surface_condiment_ribbon_batch_mesh(segments, tube_radius, center)
 	item["radius"] = Vector2(max_x - min_x, max_z - min_z).length() * 0.5 + tube_radius
 	item["spline_from"] = segments[0]
 	item["spline_to"] = segments[segments.size() - 1]
@@ -19232,90 +19621,12 @@ func _condiment_surface_material(base: Color) -> StandardMaterial3D:
 	return mat
 
 
-func _make_surface_condiment_spline_mesh(
-	from_local: Vector3, to_local: Vector3, radius: float
-) -> ArrayMesh:
-	## Cubic centerline with a circular cross-section: a real raised sauce rope,
-	## rather than overlapping alpha planes. Closely spaced pieces join as one stroke.
-	var mesh := ArrayMesh.new()
-	var chord := to_local - from_local
-	var chord_len := maxf(chord.length(), 0.0001)
-	var flat_dir := Vector3(chord.x, 0.0, chord.z).normalized()
-	if flat_dir.length_squared() < 0.000001:
-		flat_dir = Vector3.RIGHT
-	var sideways := Vector3(-flat_dir.z, 0.0, flat_dir.x)
-	## Tiny alternating bow keeps hand-painted lines organic without visible kinks.
-	var bend_sign := -1.0 if sin((from_local.x + to_local.z) * 173.0) < 0.0 else 1.0
-	var bend := minf(radius * 0.22, chord_len * 0.055) * bend_sign
-	var p0 := from_local
-	var p1 := from_local.lerp(to_local, 0.34) + sideways * bend
-	var p2 := from_local.lerp(to_local, 0.68) - sideways * bend * 0.35
-	var p3 := to_local
-	var rings := clampi(int(ceil(chord_len / 0.0045)), 3, 7)
-	var sides := 6
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var indices := PackedInt32Array()
-	for ring_i in range(rings + 1):
-		var t := float(ring_i) / float(rings)
-		var omt := 1.0 - t
-		var center := omt * omt * omt * p0 \
-			+ 3.0 * omt * omt * t * p1 \
-			+ 3.0 * omt * t * t * p2 \
-			+ t * t * t * p3
-		var tangent := 3.0 * omt * omt * (p1 - p0) \
-			+ 6.0 * omt * t * (p2 - p1) \
-			+ 3.0 * t * t * (p3 - p2)
-		tangent.y = 0.0
-		if tangent.length_squared() < 0.000001:
-			tangent = flat_dir
-		tangent = tangent.normalized()
-		var side := Vector3(-tangent.z, 0.0, tangent.x)
-		for side_i in range(sides):
-			var angle := float(side_i) / float(sides) * TAU
-			var normal := (side * cos(angle) + Vector3.UP * sin(angle)).normalized()
-			verts.append(center + normal * radius)
-			normals.append(normal)
-			uvs.append(Vector2(float(side_i) / float(sides), t))
-	for ring_i in range(rings):
-		for side_i in range(sides):
-			var next_side := (side_i + 1) % sides
-			var a := ring_i * sides + side_i
-			var b := ring_i * sides + next_side
-			var c := (ring_i + 1) * sides + side_i
-			var d := (ring_i + 1) * sides + next_side
-			indices.append_array(PackedInt32Array([a, b, c, b, d, c]))
-	## End caps prevent dark open ends between short spline samples.
-	var start_cap := verts.size()
-	verts.append(p0)
-	normals.append(-flat_dir)
-	uvs.append(Vector2(0.5, 0.0))
-	var end_cap := verts.size()
-	verts.append(p3)
-	normals.append(flat_dir)
-	uvs.append(Vector2(0.5, 1.0))
-	var last_ring := rings * sides
-	for side_i in range(sides):
-		var next_side := (side_i + 1) % sides
-		indices.append_array(PackedInt32Array([start_cap, next_side, side_i]))
-		indices.append_array(PackedInt32Array([
-			end_cap, last_ring + side_i, last_ring + next_side
-		]))
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_INDEX] = indices
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
-
-func _make_surface_condiment_spline_batch_mesh(
+func _make_surface_condiment_ribbon_batch_mesh(
 	segments: PackedVector3Array, radius: float, origin: Vector3
 ) -> ArrayMesh:
-	## Merge up to thirty-two curved tube pieces into one draw object. The pieces retain
-	## their curved centerlines and round cross-sections, but no longer cost one node each.
+	## Directly emit one shallow triangular ridge per mouse sample. Six vertices and
+	## four visible triangles replace each old multi-ring, six-sided spline tube.
+	## No temporary per-piece ArrayMeshes are created in this hot drawing path.
 	var mesh := ArrayMesh.new()
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -19323,24 +19634,47 @@ func _make_surface_condiment_spline_batch_mesh(
 	var indices := PackedInt32Array()
 	var pair_count := int(segments.size() / 2)
 	for pair_i in range(pair_count):
-		var from_local := segments[pair_i * 2] - origin
-		var to_local := segments[pair_i * 2 + 1] - origin
+		var from_local: Vector3 = segments[pair_i * 2] - origin
+		var to_local: Vector3 = segments[pair_i * 2 + 1] - origin
 		from_local.y = 0.0
 		to_local.y = 0.0
-		var piece := _make_surface_condiment_spline_mesh(from_local, to_local, radius)
-		if piece.get_surface_count() <= 0:
+		var chord := to_local - from_local
+		chord.y = 0.0
+		if chord.length_squared() < 0.000001:
 			continue
-		var piece_arrays: Array = piece.surface_get_arrays(0)
-		var piece_verts: PackedVector3Array = piece_arrays[Mesh.ARRAY_VERTEX]
-		var piece_normals: PackedVector3Array = piece_arrays[Mesh.ARRAY_NORMAL]
-		var piece_uvs: PackedVector2Array = piece_arrays[Mesh.ARRAY_TEX_UV]
-		var piece_indices: PackedInt32Array = piece_arrays[Mesh.ARRAY_INDEX]
-		var vertex_offset := verts.size()
-		verts.append_array(piece_verts)
-		normals.append_array(piece_normals)
-		uvs.append_array(piece_uvs)
-		for piece_index in piece_indices:
-			indices.append(vertex_offset + piece_index)
+		var flat_dir := chord.normalized()
+		var side := Vector3(-flat_dir.z, 0.0, flat_dir.x)
+		var half_width := maxf(radius * 1.04, 0.0028)
+		var base_y := -maxf(radius * 0.56, 0.00145)
+		var crown_y := maxf(radius * 0.72, 0.0019)
+		var left_normal := (Vector3.UP * 0.78 - side * 0.63).normalized()
+		var right_normal := (Vector3.UP * 0.78 + side * 0.63).normalized()
+		var base := verts.size()
+		verts.append_array(PackedVector3Array([
+			from_local - side * half_width + Vector3.UP * base_y,
+			from_local + Vector3.UP * crown_y,
+			from_local + side * half_width + Vector3.UP * base_y,
+			to_local - side * half_width + Vector3.UP * base_y,
+			to_local + Vector3.UP * crown_y,
+			to_local + side * half_width + Vector3.UP * base_y,
+		]))
+		normals.append_array(PackedVector3Array([
+			left_normal, Vector3.UP, right_normal,
+			left_normal, Vector3.UP, right_normal,
+		]))
+		uvs.append_array(PackedVector2Array([
+			Vector2(0.0, 0.0), Vector2(0.5, 0.0), Vector2(1.0, 0.0),
+			Vector2(0.0, 1.0), Vector2(0.5, 1.0), Vector2(1.0, 1.0),
+		]))
+		indices.append_array(PackedInt32Array([
+			base, base + 3, base + 1,
+			base + 1, base + 3, base + 4,
+			base + 1, base + 4, base + 2,
+			base + 2, base + 4, base + 5,
+			## Two tiny caps keep isolated dabs and batch ends from looking hollow.
+			base, base + 1, base + 2,
+			base + 3, base + 5, base + 4,
+		]))
 	if verts.is_empty():
 		return mesh
 	var arrays := []
@@ -19356,13 +19690,14 @@ func _make_surface_condiment_spline_batch_mesh(
 func _make_surface_condiment_smear_batch_mesh(
 	segments: PackedVector3Array, radius: float, origin: Vector3
 ) -> ArrayMesh:
-	## A flattened ribbon with rounded dabs at the joins. It keeps the stroke's
-	## recognizable path after the first scrape with far fewer vertices than the tube.
+	## One flat strip plus two rounded batch-end caps preserves the scraped smoosh.
 	var mesh := ArrayMesh.new()
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var indices := PackedInt32Array()
+	var cap_centers := PackedVector3Array()
+	var cap_radii := PackedFloat32Array()
 	var pair_count := int(segments.size() / 2)
 	for pair_i in range(pair_count):
 		var from_local := segments[pair_i * 2] - origin
@@ -19395,26 +19730,35 @@ func _make_surface_condiment_smear_batch_mesh(
 			base, base + 2, base + 1,
 			base + 1, base + 2, base + 3,
 		]))
-		## Round both ends so one scrape reads as a wet smoosh, not a flat ribbon strip.
-		for end_i in 2:
-			var center := from_local if end_i == 0 else to_local
-			var dab_radius := width_from if end_i == 0 else width_to
-			var center_i := verts.size()
-			verts.append(center)
+		## Only the two ends of the whole batch need rounded caps. The previous mesh
+		## added two six-sided dabs to every segment, multiplying scrape geometry.
+		if cap_centers.is_empty():
+			cap_centers.append(from_local)
+			cap_radii.append(width_from)
+			cap_centers.append(to_local)
+			cap_radii.append(width_to)
+		else:
+			cap_centers[1] = to_local
+			cap_radii[1] = width_to
+	for cap_i in range(cap_centers.size()):
+		var center := cap_centers[cap_i]
+		var dab_radius := cap_radii[cap_i]
+		var center_i := verts.size()
+		verts.append(center)
+		normals.append(Vector3.UP)
+		uvs.append(Vector2(0.5, 0.5))
+		var sides := 8
+		for side_i in range(sides):
+			var angle := float(side_i) / float(sides) * TAU
+			verts.append(center + Vector3(cos(angle), 0.0, sin(angle)) * dab_radius)
 			normals.append(Vector3.UP)
-			uvs.append(Vector2(0.5, 0.5))
-			var sides := 6
-			for side_i in range(sides):
-				var angle := float(side_i) / float(sides) * TAU
-				verts.append(center + Vector3(cos(angle), 0.0, sin(angle)) * dab_radius)
-				normals.append(Vector3.UP)
-				uvs.append(Vector2(cos(angle), sin(angle)) * 0.5 + Vector2(0.5, 0.5))
-			for side_i in range(sides):
-				indices.append_array(PackedInt32Array([
-					center_i,
-					center_i + 1 + side_i,
-					center_i + 1 + ((side_i + 1) % sides),
-				]))
+			uvs.append(Vector2(cos(angle), sin(angle)) * 0.5 + Vector2(0.5, 0.5))
+		for side_i in range(sides):
+			indices.append_array(PackedInt32Array([
+				center_i,
+				center_i + 1 + side_i,
+				center_i + 1 + ((side_i + 1) % sides),
+			]))
 	if verts.is_empty():
 		return mesh
 	var arrays := []
@@ -23766,6 +24110,10 @@ func _build_street_car(parent: Node3D) -> void:
 		street_car_sprite.queue_free()
 	if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 		street_car_exhaust.queue_free()
+	for ghost in street_car_blur_sprites:
+		if ghost != null and is_instance_valid(ghost):
+			ghost.queue_free()
+	street_car_blur_sprites.clear()
 	street_car_sprite = null
 	street_car_exhaust = null
 	street_car_active = false
@@ -23799,6 +24147,15 @@ func _build_street_car(parent: Node3D) -> void:
 	street_car_sprite = sprite
 	street_car_half_width = float(tex.get_width()) * STREET_CAR_PIXEL_SIZE * 0.5
 	street_car_half_height = float(tex.get_height()) * STREET_CAR_PIXEL_SIZE * 0.5
+	for i in STREET_CAR_BLUR_COUNT:
+		var ghost := sprite.duplicate() as Sprite3D
+		ghost.name = "OccasionalRoadCarBlur%d" % i
+		ghost.visible = false
+		ghost.modulate = Color(1.0, 1.0, 1.0, 0.22 / float(i + 1))
+		ghost.render_priority = -8
+		ghost.sorting_offset = -12.4 - float(i) * 0.15
+		parent.add_child(ghost)
+		street_car_blur_sprites.append(ghost)
 	street_car_exhaust = _make_street_car_exhaust()
 	parent.add_child(street_car_exhaust)
 	_update_street_car_exhaust_position()
@@ -23879,6 +24236,7 @@ func _update_street_car(delta: float) -> void:
 		street_car_active = false
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = false
+		_set_street_car_blur_visible(false)
 		return
 	if options_menu_open or shift_paused:
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
@@ -23887,6 +24245,7 @@ func _update_street_car(delta: float) -> void:
 	if not street_car_active:
 		street_car_wait -= delta
 		if street_car_wait > 0.0:
+			_set_street_car_blur_visible(false)
 			return
 		street_car_direction = -1.0 ## Fixed opposite direction: screen-left to screen-right.
 		street_car_phase = randf() * TAU
@@ -23902,15 +24261,23 @@ func _update_street_car(delta: float) -> void:
 		street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG
 		street_car_sprite.visible = true
 		street_car_active = true
+		street_car_whoosh_played = false
+		street_car_last_x = street_car_sprite.position.x
 		_update_street_car_exhaust_position()
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = true
+		_update_street_car_motion_blur()
 		return
 	street_car_phase += delta * STREET_CAR_RUMBLE_RATE
 	street_car_sprite.position.x += street_car_direction * street_car_speed * delta
-	street_car_sprite.position.y = STREET_CAR_Y +		+ sin(street_car_phase) * STREET_CAR_RUMBLE_Y +		+ sin(street_car_phase * 2.37) * STREET_CAR_RUMBLE_Y * 0.28
-	street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG +		+ sin(street_car_phase * 1.31) * STREET_CAR_RUMBLE_DEG
+	street_car_sprite.position.y = STREET_CAR_Y \
+		+ sin(street_car_phase) * STREET_CAR_RUMBLE_Y \
+		+ sin(street_car_phase * 2.37) * STREET_CAR_RUMBLE_Y * 0.28
+	street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG \
+		+ sin(street_car_phase * 1.31) * STREET_CAR_RUMBLE_DEG
+	_play_street_car_whoosh_if_passing()
 	_update_street_car_exhaust_position()
+	_update_street_car_motion_blur()
 	if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 		street_car_exhaust.emitting = true
 	var finished := (
@@ -23923,7 +24290,57 @@ func _update_street_car(delta: float) -> void:
 		street_car_active = false
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = false
+		_set_street_car_blur_visible(false)
 		street_car_wait = randf_range(STREET_CAR_WAIT_MIN, STREET_CAR_WAIT_MAX)
+
+
+func _play_street_car_whoosh_if_passing() -> void:
+	if street_car_whoosh_played or street_car_sprite == null:
+		return
+	var x := street_car_sprite.position.x
+	if street_car_last_x * x > 0.0:
+		street_car_last_x = x
+		return
+	street_car_last_x = x
+	street_car_whoosh_played = true
+	if game_audio != null and game_audio.has_method("play_car_whoosh"):
+		game_audio.play_car_whoosh()
+
+
+func _street_car_blur_stretch() -> float:
+	return 1.0 + clampf(street_car_speed / 18.0, 0.16, 0.42)
+
+
+func _set_street_car_blur_visible(on: bool) -> void:
+	if street_car_sprite != null and is_instance_valid(street_car_sprite) and not on:
+		street_car_sprite.scale = Vector3.ONE
+	for ghost in street_car_blur_sprites:
+		if ghost != null and is_instance_valid(ghost):
+			ghost.visible = on
+
+
+func _update_street_car_motion_blur() -> void:
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	var stretch := _street_car_blur_stretch()
+	street_car_sprite.scale = Vector3(stretch, 1.0, 1.0)
+	var trail := -street_car_direction * street_car_half_width * 0.42
+	for i in street_car_blur_sprites.size():
+		var ghost := street_car_blur_sprites[i] as Sprite3D
+		if ghost == null or not is_instance_valid(ghost):
+			continue
+		ghost.visible = street_car_active and street_car_sprite.visible
+		ghost.texture = street_car_sprite.texture
+		ghost.flip_h = street_car_sprite.flip_h
+		ghost.rotation_degrees = street_car_sprite.rotation_degrees
+		ghost.pixel_size = street_car_sprite.pixel_size
+		ghost.position = street_car_sprite.position + Vector3(
+			trail * float(i + 1),
+			0.0,
+			0.012 * float(i + 1)
+		)
+		ghost.scale = Vector3(stretch * (1.08 + float(i) * 0.10), 1.0, 1.0)
+		ghost.modulate = Color(1.0, 1.0, 1.0, 0.26 / float(i + 1))
 
 const TREE_FOLIAGE_SHADER_PATH := "res://shaders/tree_foliage.gdshader"
 
@@ -24507,6 +24924,7 @@ func _apply_tree_fill_light_settings() -> void:
 		var ol := light as OmniLight3D
 		ol.light_energy = tree_light_energy
 		ol.omni_range = tree_light_range
+		ol.light_specular = tree_light_specular
 		ol.position = pos
 		ol.shadow_enabled = false
 		var mi := bulb as MeshInstance3D
@@ -24530,6 +24948,7 @@ func _load_tree_light_settings() -> void:
 	tree_light_energy = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "energy", tree_light_energy)), 0.0, 6.0)
 	tree_light_range = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "range", tree_light_range)), 0.5, 20.0)
 	tree_light_size = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "size", tree_light_size)), 0.02, 1.2)
+	tree_light_specular = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "specular", tree_light_specular)), 0.0, 2.0)
 	tree_light_off_x = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "off_x", tree_light_off_x)), -8.0, 8.0)
 	tree_light_off_y = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "off_y", tree_light_off_y)), 0.2, 12.0)
 	tree_light_off_z = clampf(float(cfg.get_value(TREE_LIGHTS_CFG_SECTION, "off_z", tree_light_off_z)), -8.0, 8.0)
@@ -24541,9 +24960,108 @@ func _save_tree_light_settings() -> void:
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "energy", tree_light_energy)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "range", tree_light_range)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "size", tree_light_size)
+	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "specular", tree_light_specular)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_x", tree_light_off_x)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_y", tree_light_off_y)
 	cfg.set_value(TREE_LIGHTS_CFG_SECTION, "off_z", tree_light_off_z)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_soda_lamp_settings() -> void:
+	_apply_station_omni_lamp(
+		soda_lamp,
+		soda_lamp_energy,
+		soda_lamp_range,
+		soda_lamp_specular,
+		soda_lamp_size,
+		Vector3(soda_lamp_x, soda_lamp_y, soda_lamp_z),
+		soda_lamp_color
+	)
+
+
+func _apply_icecream_lamp_settings() -> void:
+	_apply_station_omni_lamp(
+		icecream_lamp,
+		icecream_lamp_energy,
+		icecream_lamp_range,
+		icecream_lamp_specular,
+		icecream_lamp_size,
+		Vector3(icecream_lamp_x, icecream_lamp_y, icecream_lamp_z),
+		icecream_lamp_color
+	)
+
+
+func _apply_station_omni_lamp(
+	light: OmniLight3D,
+	energy: float,
+	rng: float,
+	spec: float,
+	size: float,
+	pos: Vector3,
+	col: Color
+) -> void:
+	if light == null or not is_instance_valid(light):
+		return
+	light.light_energy = energy
+	light.omni_range = rng
+	light.light_specular = spec
+	light.light_size = size
+	light.position = pos
+	light.light_color = col
+	light.shadow_enabled = false
+
+
+func _load_station_light_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(STATION_LIGHTS_CFG_SECTION):
+		return
+	soda_lamp_energy = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_energy", soda_lamp_energy)), 0.0, 8.0)
+	soda_lamp_range = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_range", soda_lamp_range)), 0.1, 12.0)
+	soda_lamp_specular = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_specular", soda_lamp_specular)), 0.0, 2.0)
+	soda_lamp_size = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_size", soda_lamp_size)), 0.0, 2.0)
+	soda_lamp_x = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_x", soda_lamp_x)), -4.0, 4.0)
+	soda_lamp_y = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_y", soda_lamp_y)), -1.0, 4.0)
+	soda_lamp_z = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_z", soda_lamp_z)), -4.0, 4.0)
+	soda_lamp_color.r = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_r", soda_lamp_color.r)), 0.0, 1.0)
+	soda_lamp_color.g = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_g", soda_lamp_color.g)), 0.0, 1.0)
+	soda_lamp_color.b = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "soda_b", soda_lamp_color.b)), 0.0, 1.0)
+	icecream_lamp_energy = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_energy", icecream_lamp_energy)), 0.0, 8.0)
+	icecream_lamp_range = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_range", icecream_lamp_range)), 0.1, 12.0)
+	icecream_lamp_specular = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_specular", icecream_lamp_specular)), 0.0, 2.0)
+	icecream_lamp_size = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_size", icecream_lamp_size)), 0.0, 2.0)
+	icecream_lamp_x = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_x", icecream_lamp_x)), -4.0, 4.0)
+	icecream_lamp_y = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_y", icecream_lamp_y)), -1.0, 4.0)
+	icecream_lamp_z = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_z", icecream_lamp_z)), -4.0, 4.0)
+	icecream_lamp_color.r = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_r", icecream_lamp_color.r)), 0.0, 1.0)
+	icecream_lamp_color.g = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_g", icecream_lamp_color.g)), 0.0, 1.0)
+	icecream_lamp_color.b = clampf(float(cfg.get_value(STATION_LIGHTS_CFG_SECTION, "ice_b", icecream_lamp_color.b)), 0.0, 1.0)
+
+
+func _save_station_light_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_energy", soda_lamp_energy)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_range", soda_lamp_range)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_specular", soda_lamp_specular)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_size", soda_lamp_size)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_x", soda_lamp_x)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_y", soda_lamp_y)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_z", soda_lamp_z)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_r", soda_lamp_color.r)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_g", soda_lamp_color.g)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "soda_b", soda_lamp_color.b)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_energy", icecream_lamp_energy)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_range", icecream_lamp_range)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_specular", icecream_lamp_specular)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_size", icecream_lamp_size)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_x", icecream_lamp_x)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_y", icecream_lamp_y)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_z", icecream_lamp_z)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_r", icecream_lamp_color.r)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_g", icecream_lamp_color.g)
+	cfg.set_value(STATION_LIGHTS_CFG_SECTION, "ice_b", icecream_lamp_color.b)
 	cfg.save(GFX_CFG_PATH)
 
 
@@ -25816,6 +26334,7 @@ func _sync_tree_light_hidden_ui() -> void:
 		"energy": tree_light_energy,
 		"range": tree_light_range,
 		"size": tree_light_size,
+		"specular": tree_light_specular,
 		"off_x": tree_light_off_x,
 		"off_y": tree_light_off_y,
 		"off_z": tree_light_off_z,
@@ -26023,6 +26542,7 @@ func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String
 	slider.max_value = max_v
 	slider.step = step
 	slider.value = cur
+	slider.scrollable = false
 	slider.custom_minimum_size = Vector2(0, 28)
 	slider.focus_mode = Control.FOCUS_ALL
 	slider.value_changed.connect(func(val: float):
@@ -26034,6 +26554,53 @@ func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String
 	options_hidden_tree_light_sliders[key] = slider
 	options_hidden_tree_light_labs[key] = val_lab
 	return slider
+
+
+func _hidden_disable_param_wheel(node: Node) -> void:
+	## Wheel on Hidden sliders / dropdowns was changing values instead of scrolling the list.
+	if node == null:
+		return
+	if node is ScrollContainer or node is ScrollBar or node is TabBar:
+		for child in node.get_children():
+			_hidden_disable_param_wheel(child)
+		return
+	if node is Slider:
+		(node as Slider).scrollable = false
+	if node is Control:
+		var ctrl := node as Control
+		if not ctrl.has_meta("_hidden_wheel_bound"):
+			ctrl.set_meta("_hidden_wheel_bound", true)
+			ctrl.gui_input.connect(_on_hidden_param_wheel.bind(ctrl))
+	for child in node.get_children():
+		_hidden_disable_param_wheel(child)
+
+
+func _on_hidden_param_wheel(event: InputEvent, ctrl: Control) -> void:
+	if not (event is InputEventMouseButton):
+		return
+	var mb := event as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_WHEEL_UP and mb.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+		return
+	_hidden_scroll_ancestor(ctrl, mb)
+	ctrl.accept_event()
+
+
+func _hidden_scroll_ancestor(from: Node, mb: InputEventMouseButton) -> void:
+	var n: Node = from
+	while n != null:
+		if n is ScrollContainer:
+			var sc := n as ScrollContainer
+			if sc.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED:
+				var bar := sc.get_v_scroll_bar()
+				var step := 48.0
+				if bar != null:
+					step = maxf(32.0, bar.page * 0.12)
+				var delta := -step if mb.button_index == MOUSE_BUTTON_WHEEL_UP else step
+				if mb.factor > 0.0:
+					delta *= mb.factor
+				sc.scroll_vertical = int(round(float(sc.scroll_vertical) + delta))
+				return
+		n = n.get_parent()
 
 
 func _hidden_add_sfx_level_slider(parent: Control, key: String, label_text: String) -> void:
@@ -26345,6 +26912,7 @@ func _build_soda_station() -> void:
 	if soda_root != null and is_instance_valid(soda_root):
 		soda_root.queue_free()
 	soda_root = null
+	soda_lamp = null
 	_clear_all_drink_cups()
 	if soda_stream_mesh != null and is_instance_valid(soda_stream_mesh):
 		soda_stream_mesh.queue_free()
@@ -26512,12 +27080,10 @@ func _build_soda_station() -> void:
 
 	var lamp := OmniLight3D.new()
 	lamp.name = "SodaLamp"
-	lamp.light_color = Color(1.0, 0.96, 0.90)
-	lamp.light_energy = 0.75
-	lamp.omni_range = 1.2
 	lamp.shadow_enabled = false
-	lamp.position = Vector3(0.0, 0.85, 0.35)
 	root.add_child(lamp)
+	soda_lamp = lamp
+	_apply_soda_lamp_settings()
 	_refresh_soda_tuning_debug_visuals()
 
 	_build_soda_cup_rack(root)
@@ -29395,6 +29961,7 @@ func _build_icecream_machine() -> void:
 	if icecream_root != null and is_instance_valid(icecream_root):
 		icecream_root.queue_free()
 	icecream_root = null
+	icecream_lamp = null
 	icecream_cone_root = null
 	icecream_cone_area = null
 	icecream_swirl_root = null
@@ -29539,12 +30106,10 @@ func _build_icecream_machine() -> void:
 
 	var lamp := OmniLight3D.new()
 	lamp.name = "SoftServeGlow"
-	lamp.light_color = Color(1.0, 0.86, 0.64)
-	lamp.light_energy = 0.38
-	lamp.omni_range = 0.8
 	lamp.shadow_enabled = false
-	lamp.position = Vector3(0.0, 0.50, 0.34)
 	root.add_child(lamp)
+	icecream_lamp = lamp
+	_apply_icecream_lamp_settings()
 
 	_spawn_and_bind_empty_icecream_cone()
 	_build_icecream_stream_fx()
@@ -38298,6 +38863,56 @@ func _condiment_bottle_home(id: String) -> Vector3:
 	)
 
 
+func _prepare_condiment_bottle_draw(root: Node3D) -> void:
+	## Imported GLB materials may be shared. Give each bottle local surface overrides
+	## so temporary foreground animation settings never alter another world prop.
+	if root == null:
+		return
+	for node in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		for surface_i in range(mi.mesh.get_surface_count()):
+			var source := mi.get_active_material(surface_i) as Material
+			if source == null:
+				continue
+			var dup := source.duplicate(true) as Material
+			if dup == null:
+				continue
+			dup.set_meta("condiment_home_priority", dup.render_priority)
+			if dup is BaseMaterial3D:
+				var base := dup as BaseMaterial3D
+				base.set_meta("condiment_home_no_depth", base.no_depth_test)
+				base.set_meta("condiment_home_depth_draw", int(base.depth_draw_mode))
+			mi.set_surface_override_material(surface_i, dup)
+
+
+func _set_condiment_bottle_animation_front(root: Node3D, active: bool) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	for node in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		mi.sorting_offset = CONDIMENT_ANIM_SORTING_OFFSET if active else 0.0
+		for surface_i in range(mi.mesh.get_surface_count()):
+			var mat := mi.get_surface_override_material(surface_i) as Material
+			if mat == null:
+				continue
+			mat.render_priority = CONDIMENT_ANIM_RENDER_PRIORITY if active else int(mat.get_meta("condiment_home_priority", 0))
+			if mat is BaseMaterial3D:
+				var base := mat as BaseMaterial3D
+				if active:
+					base.no_depth_test = true
+					base.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+				else:
+					base.no_depth_test = bool(base.get_meta("condiment_home_no_depth", false))
+					base.depth_draw_mode = int(base.get_meta(
+						"condiment_home_depth_draw",
+						BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+					))
+
+
 func _build_condiment_bottles() -> void:
 	if condiment_active_tween != null and is_instance_valid(condiment_active_tween):
 		condiment_active_tween.kill()
@@ -38339,6 +38954,7 @@ func _build_condiment_bottles() -> void:
 		var fit := CONDIMENT_BOTTLE_HEIGHT / maxf(bounds.size.y, 0.001)
 		model_pivot.scale = Vector3.ONE * fit
 		model_pivot.position = -bounds.get_center() * fit
+		_prepare_condiment_bottle_draw(visual)
 		var home := _condiment_bottle_home(id)
 		var home_rot := Vector3(0.0, -14.0 if id == "ketchup" else 12.0, 0.0)
 		holder.position = home
@@ -38352,7 +38968,7 @@ func _build_condiment_bottles() -> void:
 		grab.input_ray_pickable = true
 		var grab_shape := CollisionShape3D.new()
 		var grab_box := BoxShape3D.new()
-		grab_box.size = Vector3(0.12, CONDIMENT_BOTTLE_HEIGHT, 0.12)
+		grab_box.size = Vector3(0.15, CONDIMENT_BOTTLE_HEIGHT, 0.15)
 		grab_shape.shape = grab_box
 		grab.add_child(grab_shape)
 		holder.add_child(grab)
@@ -38392,6 +39008,7 @@ func _reset_condiment_bottles() -> void:
 		root.rotation_degrees = condiment_bottle_home_rots.get(id, Vector3.ZERO)
 		root.scale = Vector3.ONE
 		root.visible = true
+		_set_condiment_bottle_animation_front(root, false)
 		var area: Area3D = condiment_bottle_areas.get(id, null)
 		if area != null and is_instance_valid(area):
 			area.input_ray_pickable = true
@@ -38422,6 +39039,7 @@ func _begin_condiment_tool_hold(id: String) -> bool:
 	condiment_tool_stream_phase = 0.0
 	root.visible = true
 	root.scale = Vector3.ONE
+	_set_condiment_bottle_animation_front(root, true)
 	root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
 	var seat := _tool_hold_point_from_screen(
 		get_viewport().get_mouse_position(),
@@ -38505,16 +39123,10 @@ func _update_held_condiment(delta: float) -> void:
 	var gap := Vector2(cur.x - condiment_tool_last_draw.x, cur.z - condiment_tool_last_draw.z).length()
 	if gap < CONDIMENT_TOOL_STREAK_SPACING:
 		return
-	var steps := clampi(int(ceil(gap / CONDIMENT_TOOL_STREAK_SPACING)), 1, 18)
-	var frame_segments := PackedVector3Array()
-	var segment_from := condiment_tool_last_draw
-	for step_i in steps:
-		var u := float(step_i + 1) / float(steps)
-		var segment_to := condiment_tool_last_draw.lerp(cur, u)
-		frame_segments.append(segment_from)
-		frame_segments.append(segment_to)
-		segment_from = segment_to
-	## Append + rebuild once for the whole mouse frame; this removes the syrupy input lag.
+	## Consecutive frame samples already define a continuous line. The old path split
+	## this same straight span into as many as 18 redundant pieces before rebuilding.
+	var frame_segments := PackedVector3Array([condiment_tool_last_draw, cur])
+	## Append + rebuild once for the whole mouse frame.
 	_spawn_condiment_spline_segments(
 		frame_segments, CONDIMENT_TOOL_STREAK_RADIUS, condiment_tool_held
 	)
@@ -38550,6 +39162,7 @@ func _release_condiment_tool() -> void:
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tw.chain().tween_callback(func() -> void:
 			condiment_active_tween = null
+			_set_condiment_bottle_animation_front(root, false)
 			if area != null and is_instance_valid(area):
 				area.input_ray_pickable = true
 			_finish_condiment_pour()
@@ -39784,6 +40397,7 @@ func _refresh_ingredient_stock_bars() -> void:
 		var cap: int = maxi(1, _ingredient_stock_cap(str(id)))
 		var stock_ratio := clampf(float(stock) / float(cap), 0.0, 1.0)
 		if stock_bar != null and fill != null:
+			stock_bar.visible = ingredient_stock_visible
 			stock_bar.custom_minimum_size = Vector2(46, 3)
 			stock_bar.size.y = 3.0
 			var width := stock_bar.size.x
@@ -40448,6 +41062,8 @@ func _shop_item_cost(id: String) -> float:
 			return SHOP_GRILL_ROOMBA_COST
 		SHOP_FRIDGE_UPGRADE:
 			return SHOP_FRIDGE_UPGRADE_COST
+		SHOP_TRUCK:
+			return CUT_COLLECTOR_BUYOUT
 		_:
 			return 0.0
 
@@ -40464,6 +41080,8 @@ func _shop_item_label(id: String) -> String:
 			return "Turbachef Robot"
 		SHOP_FRIDGE_UPGRADE:
 			return "Bigger Fridge"
+		SHOP_TRUCK:
+			return "Buy The Truck"
 		_:
 			return id
 
@@ -40480,6 +41098,8 @@ func _shop_item_note(id: String) -> String:
 			return "Auto-cleans dirty grill spots"
 		SHOP_FRIDGE_UPGRADE:
 			return "Doubles storage"
+		SHOP_TRUCK:
+			return "He stops taking half"
 		_:
 			return ""
 
@@ -40573,6 +41193,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	v.add_child(title)
 
+	_add_phone_shop_item(v, SHOP_TRUCK)
 	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE]:
 		_add_phone_shop_item(v, id)
 
@@ -40613,6 +41234,8 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	copy.add_child(note_lab)
 
 	var owned := bool(owned_machines.get(id, false))
+	if id == SHOP_TRUCK:
+		owned = truck_bought_out
 	var blocked := _shop_item_block_reason(id)
 	var buy := Button.new()
 	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
@@ -40636,10 +41259,24 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	row.add_child(buy)
 
 
+func _shop_catalog_ids() -> Array[String]:
+	return [
+		SHOP_TRUCK,
+		SHOP_SODA_MACHINE,
+		SHOP_ICECREAM_MACHINE,
+		SHOP_FRYER_MACHINE,
+		SHOP_GRILL_ROOMBA,
+		SHOP_FRIDGE_UPGRADE,
+	]
+
+
 func _buy_shop_item(id: String) -> void:
 	if not playing:
 		return
-	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE].has(id):
+	if not _shop_catalog_ids().has(id):
+		return
+	if id == SHOP_TRUCK:
+		_try_buyout_truck()
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
@@ -43026,6 +43663,9 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "grill_lamp", "Grill Lamp", 0.0, 3.5, 0.01)
 	_gfx_add_slider(list, "window_wash", "Window Wash", 0.0, 3.0, 0.01)
 	_gfx_add_slider(list, "sky_energy", "Sky Brightness", 0.05, 1.5, 0.01)
+	_gfx_add_slider(list, "sky_yaw", "HDRI Yaw", -180.0, 180.0, 1.0)
+	_gfx_add_slider(list, "sky_pitch", "HDRI Pitch", -90.0, 90.0, 1.0)
+	_gfx_add_check(list, "sky_reflections", "Sky Reflections")
 
 	_gfx_add_section(list, "LOOK")
 	_gfx_add_slider(list, "saturation", "Saturation", 0.5, 1.6, 0.01)
@@ -43125,7 +43765,7 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "menu_scale", "Menu Scale", 0.25, 2.5, 0.01)
 	_gfx_add_slider(list, "menu_yaw", "Menu Yaw", -180.0, 180.0, 1.0)
 
-	_gfx_add_section(list, "GRILL STRIP LIGHT")
+	_gfx_add_section(list, "GRILL COOK-SIDE STRIP (rect / area)")
 	_gfx_add_slider(list, "strip_x", "Strip X", -1.5, 1.5, 0.005)
 	_gfx_add_slider(list, "strip_y", "Strip Y", -0.25, 0.25, 0.005)
 	_gfx_add_slider(list, "strip_z", "Strip Z", -0.5, 0.5, 0.005)
@@ -43133,9 +43773,10 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "strip_yaw", "Strip Yaw", -180.0, 180.0, 1.0)
 	_gfx_add_slider(list, "strip_roll", "Strip Roll", -45.0, 45.0, 1.0)
 	_gfx_add_slider(list, "strip_energy", "Strip Brightness", 0.0, 2.0, 0.01)
+	_gfx_add_slider(list, "strip_specular", "Strip Specular", 0.0, 2.0, 0.01)
 	_gfx_add_slider(list, "strip_range", "Strip Range", 0.3, 4.0, 0.01)
 	_gfx_add_slider(list, "strip_angle", "Strip Cone", 20.0, 120.0, 1.0)
-	_gfx_add_slider(list, "strip_size", "Strip Size", 0.05, 2.0, 0.01)
+	_gfx_add_slider(list, "strip_size", "Source Size (rect softness)", 0.05, 2.0, 0.01)
 	_gfx_add_slider(list, "strip_width", "Strip Width", 0.2, 1.5, 0.01)
 
 	_gfx_add_section(list, "GRILL TAP PADS")
@@ -43275,6 +43916,234 @@ func _hidden_add_world_light_group(
 		_gfx_add_slider(parent, "%s_attenuation" % prefix, "Falloff", 0.05, 4.0, 0.01)
 	if kind == "spot":
 		_gfx_add_slider(parent, "%s_angle" % prefix, "Spot Cone Angle", 1.0, 179.0, 0.5)
+
+
+func _hidden_add_station_lamp_group(
+	parent: Control,
+	title: String,
+	prefix: String,
+	energy_get: Callable, energy_set: Callable,
+	range_get: Callable, range_set: Callable,
+	spec_get: Callable, spec_set: Callable,
+	size_get: Callable, size_set: Callable,
+	x_get: Callable, x_set: Callable,
+	y_get: Callable, y_set: Callable,
+	z_get: Callable, z_set: Callable,
+	r_get: Callable, r_set: Callable,
+	g_get: Callable, g_set: Callable,
+	b_get: Callable, b_set: Callable,
+	apply_fn: Callable
+) -> void:
+	_hidden_add_section(parent, title)
+	var on_change := func(setter: Callable, value: float) -> void:
+		setter.call(value)
+		apply_fn.call()
+		_save_station_light_settings()
+	_hidden_add_labeled_slider(parent, "%s_energy" % prefix, "Brightness", 0.0, 8.0, 0.01,
+		energy_get, func(v: float): on_change.call(energy_set, v))
+	_hidden_add_labeled_slider(parent, "%s_specular" % prefix, "Specular Strength", 0.0, 2.0, 0.01,
+		spec_get, func(v: float): on_change.call(spec_set, v))
+	_hidden_add_labeled_slider(parent, "%s_range" % prefix, "Range", 0.1, 12.0, 0.05,
+		range_get, func(v: float): on_change.call(range_set, v))
+	_hidden_add_labeled_slider(parent, "%s_size" % prefix, "Source Size / Softness", 0.0, 2.0, 0.01,
+		size_get, func(v: float): on_change.call(size_set, v))
+	_hidden_add_labeled_slider(parent, "%s_x" % prefix, "Position X", -4.0, 4.0, 0.01,
+		x_get, func(v: float): on_change.call(x_set, v))
+	_hidden_add_labeled_slider(parent, "%s_y" % prefix, "Position Y", -1.0, 4.0, 0.01,
+		y_get, func(v: float): on_change.call(y_set, v))
+	_hidden_add_labeled_slider(parent, "%s_z" % prefix, "Position Z", -4.0, 4.0, 0.01,
+		z_get, func(v: float): on_change.call(z_set, v))
+	_hidden_add_labeled_slider(parent, "%s_r" % prefix, "Color Red", 0.0, 1.0, 0.01,
+		r_get, func(v: float): on_change.call(r_set, v))
+	_hidden_add_labeled_slider(parent, "%s_g" % prefix, "Color Green", 0.0, 1.0, 0.01,
+		g_get, func(v: float): on_change.call(g_set, v))
+	_hidden_add_labeled_slider(parent, "%s_b" % prefix, "Color Blue", 0.0, 1.0, 0.01,
+		b_get, func(v: float): on_change.call(b_set, v))
+
+
+func _catalogued_world_lights() -> Array:
+	var known: Array = []
+	for n in [
+		gfx_sun, gfx_outside_fill, gfx_kitchen, gfx_grill_lamp,
+		gfx_window_wash, gfx_customer_fill, soda_lamp, icecream_lamp
+	]:
+		if n != null and is_instance_valid(n):
+			known.append(n)
+	for light in grill_surface_lights:
+		if light != null and is_instance_valid(light):
+			known.append(light)
+	for light in burner_flame_lights:
+		if light != null and is_instance_valid(light):
+			known.append(light)
+	for heat in grill_heat_lights:
+		if heat != null and is_instance_valid(heat):
+			known.append(heat)
+	for entry in tree_fill_entries:
+		var tree_light = entry.get("light")
+		if tree_light != null and is_instance_valid(tree_light):
+			known.append(tree_light)
+	return known
+
+
+func _collect_scene_lights(n: Node, out: Array) -> void:
+	if n == null or not is_instance_valid(n):
+		return
+	if n == start_patty_preview_vp:
+		return
+	if start_patty_preview_vp != null and is_instance_valid(start_patty_preview_vp) \
+			and start_patty_preview_vp.is_ancestor_of(n):
+		return
+	if n is Light3D:
+		out.append(n)
+	for child in n.get_children():
+		_collect_scene_lights(child, out)
+
+
+func _refresh_scanned_world_lights() -> void:
+	if hidden_scanned_lights_host == null or not is_instance_valid(hidden_scanned_lights_host):
+		return
+	for child in hidden_scanned_lights_host.get_children():
+		hidden_scanned_lights_host.remove_child(child)
+		child.queue_free()
+	var found: Array = []
+	_collect_scene_lights(self, found)
+	var known := _catalogued_world_lights()
+	var extra: Array = []
+	for light in found:
+		if light == null or not is_instance_valid(light):
+			continue
+		if known.has(light):
+			continue
+		extra.append(light)
+	if extra.is_empty():
+		var empty := Label.new()
+		empty.text = "No extra spawned lights right now. Named lights above already cover the kitchen, grill, trees, soda, ice cream, and burner strip."
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(empty, false, 11)
+		empty.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+		hidden_scanned_lights_host.add_child(empty)
+		return
+	for light in extra:
+		_hidden_add_scanned_light_group(hidden_scanned_lights_host, light as Light3D)
+
+
+func _hidden_add_scanned_light_group(parent: Control, light: Light3D) -> void:
+	if light == null or not is_instance_valid(light):
+		return
+	var kind := "Directional"
+	if light is OmniLight3D:
+		kind = "Omni"
+	elif light is SpotLight3D:
+		kind = "Spot"
+	var gp := light.global_position
+	var behind := camera != null and is_instance_valid(camera) and gp.z < camera.global_position.z - 0.08
+	var title := "%s  [%s]  world (%.2f, %.2f, %.2f)" % [light.name, kind, gp.x, gp.y, gp.z]
+	if behind:
+		title = "BEHIND PLAYER · " + title
+	_hidden_add_section(parent, title)
+	var lid := light.get_instance_id()
+	_hidden_add_labeled_slider(parent, "scan_%d_energy" % lid, "Brightness", 0.0, 16.0, 0.01,
+		func(): return light.light_energy if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				light.light_energy = v)
+	_hidden_add_labeled_slider(parent, "scan_%d_specular" % lid, "Specular Strength", 0.0, 2.0, 0.01,
+		func(): return light.light_specular if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				light.light_specular = v)
+	_hidden_add_labeled_slider(parent, "scan_%d_size" % lid, "Source Size / Softness", 0.0, 2.0, 0.01,
+		func(): return light.light_size if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				light.light_size = v)
+	_hidden_add_labeled_slider(parent, "scan_%d_gx" % lid, "World X", -12.0, 12.0, 0.01,
+		func(): return light.global_position.x if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				var p := light.global_position
+				p.x = v
+				light.global_position = p)
+	_hidden_add_labeled_slider(parent, "scan_%d_gy" % lid, "World Y", -4.0, 12.0, 0.01,
+		func(): return light.global_position.y if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				var p := light.global_position
+				p.y = v
+				light.global_position = p)
+	_hidden_add_labeled_slider(parent, "scan_%d_gz" % lid, "World Z", -12.0, 18.0, 0.01,
+		func(): return light.global_position.z if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				var p := light.global_position
+				p.z = v
+				light.global_position = p)
+	_hidden_add_labeled_slider(parent, "scan_%d_r" % lid, "Color Red", 0.0, 1.0, 0.01,
+		func(): return light.light_color.r if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				var c := light.light_color
+				c.r = v
+				light.light_color = c)
+	_hidden_add_labeled_slider(parent, "scan_%d_g" % lid, "Color Green", 0.0, 1.0, 0.01,
+		func(): return light.light_color.g if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				var c := light.light_color
+				c.g = v
+				light.light_color = c)
+	_hidden_add_labeled_slider(parent, "scan_%d_b" % lid, "Color Blue", 0.0, 1.0, 0.01,
+		func(): return light.light_color.b if is_instance_valid(light) else 0.0,
+		func(v: float):
+			if is_instance_valid(light):
+				var c := light.light_color
+				c.b = v
+				light.light_color = c)
+	if light is OmniLight3D:
+		var omni := light as OmniLight3D
+		_hidden_add_labeled_slider(parent, "scan_%d_range" % lid, "Range", 0.1, 20.0, 0.05,
+			func(): return omni.omni_range if is_instance_valid(omni) else 0.0,
+			func(v: float):
+				if is_instance_valid(omni):
+					omni.omni_range = v)
+		_hidden_add_labeled_slider(parent, "scan_%d_att" % lid, "Falloff", 0.05, 4.0, 0.01,
+			func(): return omni.omni_attenuation if is_instance_valid(omni) else 0.0,
+			func(v: float):
+				if is_instance_valid(omni):
+					omni.omni_attenuation = v)
+	elif light is SpotLight3D:
+		var spot := light as SpotLight3D
+		_hidden_add_labeled_slider(parent, "scan_%d_range" % lid, "Range", 0.1, 20.0, 0.05,
+			func(): return spot.spot_range if is_instance_valid(spot) else 0.0,
+			func(v: float):
+				if is_instance_valid(spot):
+					spot.spot_range = v)
+		_hidden_add_labeled_slider(parent, "scan_%d_angle" % lid, "Spot Cone Angle", 1.0, 179.0, 0.5,
+			func(): return spot.spot_angle if is_instance_valid(spot) else 0.0,
+			func(v: float):
+				if is_instance_valid(spot):
+					spot.spot_angle = v)
+		_hidden_add_labeled_slider(parent, "scan_%d_pitch" % lid, "Pitch", -180.0, 180.0, 0.1,
+			func(): return light.rotation_degrees.x if is_instance_valid(light) else 0.0,
+			func(v: float):
+				if is_instance_valid(light):
+					light.rotation_degrees.x = v, true)
+		_hidden_add_labeled_slider(parent, "scan_%d_yaw" % lid, "Yaw", -180.0, 180.0, 0.1,
+			func(): return light.rotation_degrees.y if is_instance_valid(light) else 0.0,
+			func(v: float):
+				if is_instance_valid(light):
+					light.rotation_degrees.y = v, true)
+	elif light is DirectionalLight3D:
+		_hidden_add_labeled_slider(parent, "scan_%d_pitch" % lid, "Pitch", -180.0, 180.0, 0.1,
+			func(): return light.rotation_degrees.x if is_instance_valid(light) else 0.0,
+			func(v: float):
+				if is_instance_valid(light):
+					light.rotation_degrees.x = v, true)
+		_hidden_add_labeled_slider(parent, "scan_%d_yaw" % lid, "Yaw", -180.0, 180.0, 0.1,
+			func(): return light.rotation_degrees.y if is_instance_valid(light) else 0.0,
+			func(v: float):
+				if is_instance_valid(light):
+					light.rotation_degrees.y = v, true)
 
 
 func _gfx_add_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float) -> void:
@@ -44085,12 +44954,14 @@ func _build_options_menu() -> void:
 	var hidden_soda_box := _hidden_add_accordion(hidden_objects_root, "COLA MACHINE + CUP STACK", "Objects", 0)
 	var hidden_tools_box := _hidden_add_accordion(hidden_objects_root, "TOOLS + MINIGAMES", "Objects", 0)
 	var hidden_review_box := _hidden_add_accordion(hidden_objects_root, "CUSTOMER REVIEW BUBBLE", "Objects", 0)
+	var hidden_bins_box := _hidden_add_accordion(hidden_objects_root, "INGREDIENT BINS", "Objects", 0)
 	var hidden_camera_box := _hidden_add_accordion(hidden_render_root, "PLAYER CAMERA", "Render", 1, true)
 	var hidden_lighting_box := _hidden_add_accordion(hidden_render_root, "WORLD LIGHTS", "Render", 1)
 	var hidden_bg_box := _hidden_add_accordion(hidden_render_root, "BACKGROUND IMAGE", "Render", 1)
 	var hidden_render_box := _hidden_add_accordion(hidden_render_root, "ADVANCED RENDERING", "Render", 1)
 	var hidden_debug_box := _hidden_add_accordion(hidden_gameplay_root, "DEBUG OVERLAYS", "Gameplay", 2, true)
 	var hidden_audio_box := _hidden_add_accordion(hidden_audio_root, "AUDIO MIX", "Audio", 3, true)
+	_hidden_setup_ingredient_bin_controls(hidden_bins_box)
 	_hidden_add_section(hidden_audio_box, "SOUND EFFECT LEVELS")
 	var sfx_help := Label.new()
 	sfx_help.text = "0 = mute · 1 = original mix · 2 = double level. Changes save automatically."
@@ -44157,17 +45028,188 @@ func _build_options_menu() -> void:
 	_options_add_btn(hidden_review_box, "Reset Review Bubble", _reset_customer_review_card_settings)
 
 	var lighting_help := Label.new()
-	lighting_help.text = "Every scene light saves independently. Directional Sun/Outside position is exposed for consistency, but their rotation controls the visible direction. Customer Fill starts on camera-right."
+	lighting_help.text = "Cook-side grill fill is GRILL COOK-SIDE STRIP — a row of spots with a large Source Size (Godot’s stand-in for a rect / area light). Dim its Specular or Brightness to kill ketchup glare. KITCHEN CEILING FILL is the other large area omni over the cook side. Spawned extras are tagged BEHIND PLAYER after Rescan."
 	lighting_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(lighting_help, false, 11)
 	lighting_help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
 	hidden_lighting_box.add_child(lighting_help)
+	_hidden_add_section(hidden_lighting_box, "HDRI SKY")
+	_options_add_standard_check(hidden_lighting_box, "sky_reflections", "Sky Reflections (HDRI speculars)")
+	_options_add_standard_slider(hidden_lighting_box, "sky_energy", "HDRI Brightness", 0.05, 1.5, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "sky_yaw", "HDRI Yaw", -180.0, 180.0, 1.0)
+	_options_add_standard_slider(hidden_lighting_box, "sky_pitch", "HDRI Pitch", -90.0, 90.0, 1.0)
+	_options_add_standard_slider(hidden_lighting_box, "ambient", "Ambient", 0.0, 1.2, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "exposure", "Exposure", 0.4, 1.8, 0.01)
+	_options_add_standard_check(hidden_lighting_box, "glow_on", "Glow / Bloom")
+	_options_add_standard_slider(hidden_lighting_box, "bloom", "Bloom", 0.0, 1.0, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "glow_intensity", "Glow Intensity", 0.0, 2.5, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "glow_strength", "Glow Strength", 0.0, 2.5, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "glow_threshold", "Glow Threshold", 0.1, 2.0, 0.01)
 	_hidden_add_world_light_group(hidden_lighting_box, "SUN / MAIN KEY", "sun", "sun", "directional")
 	_hidden_add_world_light_group(hidden_lighting_box, "OUTSIDE WARM FILL", "outside", "outside_fill", "directional")
-	_hidden_add_world_light_group(hidden_lighting_box, "KITCHEN CEILING FILL", "kitchen", "kitchen", "omni")
+	_hidden_add_world_light_group(hidden_lighting_box, "KITCHEN CEILING FILL (cook-side area omni)", "kitchen", "kitchen", "omni")
 	_hidden_add_world_light_group(hidden_lighting_box, "GRILL WORK LIGHT", "grill_lamp", "grill_lamp", "spot")
+	_hidden_add_section(hidden_lighting_box, "GRILL COOK-SIDE STRIP (rect / area light)")
+	_options_add_standard_slider(hidden_lighting_box, "strip_x", "Strip X", -1.5, 1.5, 0.005)
+	_options_add_standard_slider(hidden_lighting_box, "strip_y", "Strip Y", -0.25, 0.25, 0.005)
+	_options_add_standard_slider(hidden_lighting_box, "strip_z", "Strip Z", -0.5, 0.5, 0.005)
+	_options_add_standard_slider(hidden_lighting_box, "strip_pitch", "Strip Pitch", -90.0, 90.0, 1.0)
+	_options_add_standard_slider(hidden_lighting_box, "strip_yaw", "Strip Yaw", -180.0, 180.0, 1.0)
+	_options_add_standard_slider(hidden_lighting_box, "strip_roll", "Strip Roll", -45.0, 45.0, 1.0)
+	_options_add_standard_slider(hidden_lighting_box, "strip_energy", "Strip Brightness", 0.0, 2.0, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "strip_specular", "Strip Specular", 0.0, 2.0, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "strip_range", "Strip Range", 0.3, 4.0, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "strip_angle", "Strip Cone", 20.0, 120.0, 1.0)
+	_options_add_standard_slider(hidden_lighting_box, "strip_size", "Source Size (rect softness)", 0.05, 2.0, 0.01)
+	_options_add_standard_slider(hidden_lighting_box, "strip_width", "Strip Width", 0.2, 1.5, 0.01)
 	_hidden_add_world_light_group(hidden_lighting_box, "WINDOW WASH", "window_wash", "window_wash", "spot")
 	_hidden_add_world_light_group(hidden_lighting_box, "CUSTOMER CAMERA-RIGHT FILL", "customer_fill", "customer_fill", "spot")
+	var surf_lab := Label.new()
+	surf_lab.text = "GRILL SURFACE LIGHT (ON)"
+	UiFontsScript.apply_label(surf_lab, true, 13)
+	surf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	hidden_lighting_box.add_child(surf_lab)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_energy", "Light Greatness", 0.0, 2.0, 0.01,
+		func(): return grill_surf_light_energy,
+		func(v: float):
+			grill_surf_light_energy = clampf(v, 0.0, 2.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_range", "Light Range", 0.2, 4.0, 0.02,
+		func(): return grill_surf_light_range,
+		func(v: float):
+			grill_surf_light_range = clampf(v, 0.2, 4.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_height", "Light Height", 0.02, 0.6, 0.005,
+		func(): return grill_surf_light_height,
+		func(v: float):
+			grill_surf_light_height = clampf(v, 0.02, 0.6)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_flicker", "Light Flicker", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_flicker,
+		func(v: float):
+			grill_surf_light_flicker = clampf(v, 0.0, 1.0)
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_specular", "Light Specular", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_specular,
+		func(v: float):
+			grill_surf_light_specular = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_r", "Light Color R", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_color.r,
+		func(v: float):
+			grill_surf_light_color.r = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_g", "Light Color G", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_color.g,
+		func(v: float):
+			grill_surf_light_color.g = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	_hidden_add_labeled_slider(hidden_lighting_box, "surf_light_b", "Light Color B", 0.0, 1.0, 0.01,
+		func(): return grill_surf_light_color.b,
+		func(v: float):
+			grill_surf_light_color.b = clampf(v, 0.0, 1.0)
+			_apply_grill_surface_light()
+			_save_grill_surface_light_settings()
+	)
+	var tree_lab := Label.new()
+	tree_lab.text = "TREE FILL LIGHTS"
+	UiFontsScript.apply_label(tree_lab, true, 13)
+	tree_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
+	hidden_lighting_box.add_child(tree_lab)
+	_hidden_add_tree_light_slider(hidden_lighting_box, "energy", "Brightness", 0.0, 6.0, 0.05,
+		func(): return tree_light_energy,
+		func(v: float): tree_light_energy = clampf(v, 0.0, 6.0))
+	_hidden_add_tree_light_slider(hidden_lighting_box, "range", "Influence Radius", 0.5, 20.0, 0.1,
+		func(): return tree_light_range,
+		func(v: float): tree_light_range = clampf(v, 0.5, 20.0))
+	_hidden_add_tree_light_slider(hidden_lighting_box, "size", "Bulb Size", 0.02, 1.2, 0.01,
+		func(): return tree_light_size,
+		func(v: float): tree_light_size = clampf(v, 0.02, 1.2))
+	_hidden_add_tree_light_slider(hidden_lighting_box, "specular", "Specular Strength", 0.0, 2.0, 0.01,
+		func(): return tree_light_specular,
+		func(v: float): tree_light_specular = clampf(v, 0.0, 2.0))
+	_hidden_add_tree_light_slider(hidden_lighting_box, "off_x", "Location X", -8.0, 8.0, 0.05,
+		func(): return tree_light_off_x,
+		func(v: float): tree_light_off_x = clampf(v, -8.0, 8.0))
+	_hidden_add_tree_light_slider(hidden_lighting_box, "off_y", "Location Y", 0.2, 12.0, 0.05,
+		func(): return tree_light_off_y,
+		func(v: float): tree_light_off_y = clampf(v, 0.2, 12.0))
+	_hidden_add_tree_light_slider(hidden_lighting_box, "off_z", "Location Z", -8.0, 8.0, 0.05,
+		func(): return tree_light_off_z,
+		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
+	_hidden_add_station_lamp_group(
+		hidden_lighting_box, "SODA MACHINE LAMP", "soda_lamp",
+		(func(): return soda_lamp_energy),
+		(func(v: float): soda_lamp_energy = clampf(v, 0.0, 8.0)),
+		(func(): return soda_lamp_range),
+		(func(v: float): soda_lamp_range = clampf(v, 0.1, 12.0)),
+		(func(): return soda_lamp_specular),
+		(func(v: float): soda_lamp_specular = clampf(v, 0.0, 2.0)),
+		(func(): return soda_lamp_size),
+		(func(v: float): soda_lamp_size = clampf(v, 0.0, 2.0)),
+		(func(): return soda_lamp_x),
+		(func(v: float): soda_lamp_x = clampf(v, -4.0, 4.0)),
+		(func(): return soda_lamp_y),
+		(func(v: float): soda_lamp_y = clampf(v, -1.0, 4.0)),
+		(func(): return soda_lamp_z),
+		(func(v: float): soda_lamp_z = clampf(v, -4.0, 4.0)),
+		(func(): return soda_lamp_color.r),
+		(func(v: float): soda_lamp_color.r = clampf(v, 0.0, 1.0)),
+		(func(): return soda_lamp_color.g),
+		(func(v: float): soda_lamp_color.g = clampf(v, 0.0, 1.0)),
+		(func(): return soda_lamp_color.b),
+		(func(v: float): soda_lamp_color.b = clampf(v, 0.0, 1.0)),
+		_apply_soda_lamp_settings
+	)
+	_hidden_add_station_lamp_group(
+		hidden_lighting_box, "ICE CREAM GLOW", "ice_lamp",
+		(func(): return icecream_lamp_energy),
+		(func(v: float): icecream_lamp_energy = clampf(v, 0.0, 8.0)),
+		(func(): return icecream_lamp_range),
+		(func(v: float): icecream_lamp_range = clampf(v, 0.1, 12.0)),
+		(func(): return icecream_lamp_specular),
+		(func(v: float): icecream_lamp_specular = clampf(v, 0.0, 2.0)),
+		(func(): return icecream_lamp_size),
+		(func(v: float): icecream_lamp_size = clampf(v, 0.0, 2.0)),
+		(func(): return icecream_lamp_x),
+		(func(v: float): icecream_lamp_x = clampf(v, -4.0, 4.0)),
+		(func(): return icecream_lamp_y),
+		(func(v: float): icecream_lamp_y = clampf(v, -1.0, 4.0)),
+		(func(): return icecream_lamp_z),
+		(func(v: float): icecream_lamp_z = clampf(v, -4.0, 4.0)),
+		(func(): return icecream_lamp_color.r),
+		(func(v: float): icecream_lamp_color.r = clampf(v, 0.0, 1.0)),
+		(func(): return icecream_lamp_color.g),
+		(func(v: float): icecream_lamp_color.g = clampf(v, 0.0, 1.0)),
+		(func(): return icecream_lamp_color.b),
+		(func(v: float): icecream_lamp_color.b = clampf(v, 0.0, 1.0)),
+		_apply_icecream_lamp_settings
+	)
+	_hidden_add_section(hidden_lighting_box, "SPAWNED / OTHER LIGHTS")
+	var scan_help := Label.new()
+	scan_help.text = "Finds every Light3D in the scene that is not already listed above — muzzle flashes, BTS lights, leftovers parented to the camera, anything spawned later."
+	scan_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(scan_help, false, 11)
+	scan_help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+	hidden_lighting_box.add_child(scan_help)
+	_options_add_btn(hidden_lighting_box, "Rescan World Lights", _refresh_scanned_world_lights)
+	hidden_scanned_lights_host = VBoxContainer.new()
+	hidden_scanned_lights_host.add_theme_constant_override("separation", 6)
+	hidden_lighting_box.add_child(hidden_scanned_lights_host)
+	_refresh_scanned_world_lights()
 
 	var camera_help := Label.new()
 	camera_help.text = "Changes preview live and are saved automatically."
@@ -44318,30 +45360,6 @@ func _build_options_menu() -> void:
 	if options_hidden_outdoor_ambience_vol_lab != null:
 		options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 
-	var tree_lab := Label.new()
-	tree_lab.text = "TREE FILL LIGHTS"
-	UiFontsScript.apply_label(tree_lab, true, 13)
-	tree_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	hidden_world_box.add_child(tree_lab)
-	_hidden_add_tree_light_slider(hidden_world_box, "energy", "Brightness", 0.0, 6.0, 0.05,
-		func(): return tree_light_energy,
-		func(v: float): tree_light_energy = clampf(v, 0.0, 6.0))
-	_hidden_add_tree_light_slider(hidden_world_box, "range", "Influence Radius", 0.5, 20.0, 0.1,
-		func(): return tree_light_range,
-		func(v: float): tree_light_range = clampf(v, 0.5, 20.0))
-	_hidden_add_tree_light_slider(hidden_world_box, "size", "Bulb Size", 0.02, 1.2, 0.01,
-		func(): return tree_light_size,
-		func(v: float): tree_light_size = clampf(v, 0.02, 1.2))
-	_hidden_add_tree_light_slider(hidden_world_box, "off_x", "Location X", -8.0, 8.0, 0.05,
-		func(): return tree_light_off_x,
-		func(v: float): tree_light_off_x = clampf(v, -8.0, 8.0))
-	_hidden_add_tree_light_slider(hidden_world_box, "off_y", "Location Y", 0.2, 12.0, 0.05,
-		func(): return tree_light_off_y,
-		func(v: float): tree_light_off_y = clampf(v, 0.2, 12.0))
-	_hidden_add_tree_light_slider(hidden_world_box, "off_z", "Location Z", -8.0, 8.0, 0.05,
-		func(): return tree_light_off_z,
-		func(v: float): tree_light_off_z = clampf(v, -8.0, 8.0))
-
 	var heat_lab := Label.new()
 	heat_lab.text = "GRILL HEAT SPOTS"
 	UiFontsScript.apply_label(heat_lab, true, 13)
@@ -44416,67 +45434,6 @@ func _build_options_menu() -> void:
 			grill_heat_tint.b = clampf(v, 0.0, 1.0)
 			_apply_grill_heat_settings()
 			_save_grill_heat_settings()
-	)
-
-	var surf_lab := Label.new()
-	surf_lab.text = "GRILL SURFACE LIGHT (ON)"
-	UiFontsScript.apply_label(surf_lab, true, 13)
-	surf_lab.add_theme_color_override("font_color", Color(0.85, 0.9, 0.95))
-	hidden_grill_box.add_child(surf_lab)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_energy", "Light Greatness", 0.0, 2.0, 0.01,
-		func(): return grill_surf_light_energy,
-		func(v: float):
-			grill_surf_light_energy = clampf(v, 0.0, 2.0)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_range", "Light Range", 0.2, 4.0, 0.02,
-		func(): return grill_surf_light_range,
-		func(v: float):
-			grill_surf_light_range = clampf(v, 0.2, 4.0)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_height", "Light Height", 0.02, 0.6, 0.005,
-		func(): return grill_surf_light_height,
-		func(v: float):
-			grill_surf_light_height = clampf(v, 0.02, 0.6)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_flicker", "Light Flicker", 0.0, 1.0, 0.01,
-		func(): return grill_surf_light_flicker,
-		func(v: float):
-			grill_surf_light_flicker = clampf(v, 0.0, 1.0)
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_specular", "Light Specular", 0.0, 1.0, 0.01,
-		func(): return grill_surf_light_specular,
-		func(v: float):
-			grill_surf_light_specular = clampf(v, 0.0, 1.0)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_r", "Light Color R", 0.0, 1.0, 0.01,
-		func(): return grill_surf_light_color.r,
-		func(v: float):
-			grill_surf_light_color.r = clampf(v, 0.0, 1.0)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_g", "Light Color G", 0.0, 1.0, 0.01,
-		func(): return grill_surf_light_color.g,
-		func(v: float):
-			grill_surf_light_color.g = clampf(v, 0.0, 1.0)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
-	)
-	_hidden_add_labeled_slider(hidden_grill_box, "surf_light_b", "Light Color B", 0.0, 1.0, 0.01,
-		func(): return grill_surf_light_color.b,
-		func(v: float):
-			grill_surf_light_color.b = clampf(v, 0.0, 1.0)
-			_apply_grill_surface_light()
-			_save_grill_surface_light_settings()
 	)
 
 	var sill_lab := Label.new()
@@ -45074,19 +46031,19 @@ func _build_options_menu() -> void:
 	_hidden_add_prop_offset_group(hidden_counter_box, "small_tree", "Small Tree Offset")
 
 	_hidden_add_section(hidden_counter_box, "PHYSICAL GARBAGE CAN")
-	_hidden_add_labeled_slider(hidden_counter_box, "garbage_x", "Location X", -3.5, 3.5, 0.01,
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_x", "Offset X", -3.5, 3.5, 0.01,
 		func(): return physical_garbage_pos.x,
 		func(v: float):
 			physical_garbage_pos.x = clampf(v, -3.5, 3.5)
 			_physical_garbage_setting_changed()
 	)
-	_hidden_add_labeled_slider(hidden_counter_box, "garbage_y", "Height", -1.0, 2.4, 0.01,
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_y", "Offset Y", -1.0, 2.4, 0.01,
 		func(): return physical_garbage_pos.y,
 		func(v: float):
 			physical_garbage_pos.y = clampf(v, -1.0, 2.4)
 			_physical_garbage_setting_changed()
 	)
-	_hidden_add_labeled_slider(hidden_counter_box, "garbage_z", "Location Z", -2.0, 2.5, 0.01,
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_z", "Offset Z", -2.0, 2.5, 0.01,
 		func(): return physical_garbage_pos.z,
 		func(v: float):
 			physical_garbage_pos.z = clampf(v, -2.0, 2.5)
@@ -46009,6 +46966,7 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(options_hidden_status, false, 12)
 	options_hidden_status.add_theme_color_override("font_color", Color(0.78, 0.82, 0.9))
 	hidden.add_child(options_hidden_status)
+	_hidden_disable_param_wheel(hidden)
 
 
 func _options_add_btn(parent: Control, text: String, action: Callable) -> Button:
@@ -46365,6 +47323,8 @@ func _sync_graphics_ui_from_world() -> void:
 		"grill_lamp": gfx_grill_lamp.light_energy if gfx_grill_lamp else float(GFX_DEFAULTS["grill_lamp"]),
 		"window_wash": gfx_window_wash.light_energy if gfx_window_wash else float(GFX_DEFAULTS["window_wash"]),
 		"sky_energy": gfx_sky_mat.energy_multiplier if gfx_sky_mat else float(GFX_DEFAULTS["sky_energy"]),
+		"sky_yaw": rad_to_deg(gfx_env.sky_rotation.y) if gfx_env else float(GFX_DEFAULTS["sky_yaw"]),
+		"sky_pitch": rad_to_deg(gfx_env.sky_rotation.x) if gfx_env else float(GFX_DEFAULTS["sky_pitch"]),
 	}
 	for key in map:
 		if gfx_sliders.has(key) and gfx_sliders[key] != null:
@@ -46378,6 +47338,10 @@ func _sync_graphics_ui_from_world() -> void:
 						val_lab.text = "%.2f" % float(map[key])
 	if gfx_checks.has("glow_on"):
 		gfx_checks["glow_on"].set_pressed_no_signal(gfx_env.glow_enabled)
+	if gfx_checks.has("sky_reflections"):
+		gfx_checks["sky_reflections"].set_pressed_no_signal(
+			gfx_env.reflected_light_source == Environment.REFLECTION_SOURCE_SKY
+		)
 	if gfx_checks.has("shadows"):
 		var sh_on := gfx_sun != null and gfx_sun.shadow_enabled
 		gfx_checks["shadows"].set_pressed_no_signal(sh_on)
@@ -46513,6 +47477,7 @@ func _sync_graphics_ui_from_world() -> void:
 			strip_map["strip_range"] = probe.spot_range
 			strip_map["strip_angle"] = probe.spot_angle
 			strip_map["strip_size"] = probe.light_size
+			strip_map["strip_specular"] = probe.light_specular
 		if burner_strip_cook_w > 0.001 and probe != null and burner_flame_lights.size() > 1:
 			var edge: SpotLight3D = burner_flame_lights[burner_flame_lights.size() - 1] as SpotLight3D
 			if edge != null:
@@ -46555,6 +47520,7 @@ func _apply_burner_strip_settings(s: Dictionary) -> void:
 	var rng := float(s.get("strip_range", GFX_DEFAULTS["strip_range"]))
 	var angle := float(s.get("strip_angle", GFX_DEFAULTS["strip_angle"]))
 	var size := float(s.get("strip_size", GFX_DEFAULTS["strip_size"]))
+	var spec := float(s.get("strip_specular", GFX_DEFAULTS["strip_specular"]))
 	var width_mul := float(s.get("strip_width", GFX_DEFAULTS["strip_width"]))
 	var count := burner_flame_lights.size()
 	var strip_on := grill_on and burner_flame_root != null and is_instance_valid(burner_flame_root) and burner_flame_root.visible
@@ -46571,6 +47537,7 @@ func _apply_burner_strip_settings(s: Dictionary) -> void:
 		sl.spot_range = rng
 		sl.spot_angle = angle
 		sl.light_size = size
+		sl.light_specular = spec
 
 
 func _apply_world_light_base(light: Light3D, prefix: String, energy_key: String, s: Dictionary) -> void:
@@ -46649,9 +47616,20 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 		gfx_env.ssao_horizon = float(s.get("ssao_horizon", GFX_DEFAULTS["ssao_horizon"]))
 		gfx_env.ssao_sharpness = float(s.get("ssao_sharpness", GFX_DEFAULTS["ssao_sharpness"]))
 		gfx_env.ssil_enabled = bool(s.get("ssil", GFX_DEFAULTS["ssil"]))
+		gfx_env.reflected_light_source = (
+			Environment.REFLECTION_SOURCE_SKY
+			if bool(s.get("sky_reflections", GFX_DEFAULTS.get("sky_reflections", true)))
+			else Environment.REFLECTION_SOURCE_DISABLED
+		)
 	_apply_world_light_settings(s)
 	if gfx_sky_mat:
 		gfx_sky_mat.energy_multiplier = float(s.get("sky_energy", 0.42))
+	if gfx_env != null:
+		gfx_env.sky_rotation = Vector3(
+			deg_to_rad(float(s.get("sky_pitch", GFX_DEFAULTS.get("sky_pitch", 0.0)))),
+			deg_to_rad(float(s.get("sky_yaw", GFX_DEFAULTS.get("sky_yaw", 40.0)))),
+			0.0
+		)
 	_apply_shadow_settings(s)
 	_apply_fake_df_ao_settings(s)
 	_apply_heat_warp_settings(s)
@@ -46887,23 +47865,7 @@ func _apply_ingredient_strip_settings(s: Dictionary) -> void:
 		ingredient_legend.offset_top = float(s.get("strip_bar_top", GFX_DEFAULTS["strip_bar_top"]))
 		ingredient_legend.offset_right = float(s.get("strip_bar_right", GFX_DEFAULTS["strip_bar_right"]))
 		ingredient_legend.offset_bottom = float(s.get("strip_bar_bottom", GFX_DEFAULTS["strip_bar_bottom"]))
-	var iw := float(s.get("strip_icon_w", GFX_DEFAULTS["strip_icon_w"]))
-	var ih := float(s.get("strip_icon_h", GFX_DEFAULTS["strip_icon_h"]))
-	var ix := float(s.get("strip_icon_x", GFX_DEFAULTS["strip_icon_x"]))
-	var iy := float(s.get("strip_icon_y", GFX_DEFAULTS["strip_icon_y"]))
-	for id in ingredient_buttons:
-		var btn: Control = ingredient_buttons[id]
-		if btn == null or not is_instance_valid(btn):
-			continue
-		var margin := btn.get_node_or_null("IconMargin") as MarginContainer
-		if margin == null or not is_instance_valid(margin):
-			continue
-		margin.add_theme_constant_override("margin_left", int(ix))
-		margin.add_theme_constant_override("margin_top", int(iy))
-		var icon := margin.get_node_or_null("StripIcon") as TextureRect
-		if icon != null and is_instance_valid(icon):
-			icon.custom_minimum_size = Vector2(iw, ih)
-			icon.size = Vector2(iw, ih)
+	_apply_ingredient_bin_strip_layout()
 
 
 func _copy_build_zone_values() -> void:
@@ -48225,6 +49187,9 @@ func _on_customer_arrived(customer: Node3D) -> void:
 			selected_customer = customer
 			_highlight_tickets()
 		return
+	if customer != null and bool(customer.get("is_cut_collector")):
+		_on_cut_collector_arrived(customer)
+		return
 	## Walk up to a crusty grill → 50% walk out, 50% don't care.
 	if _try_customer_gross_leave(customer):
 		return
@@ -48408,6 +49373,11 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		_clear_disguise_cat_state()
 		## Busted / dashed — no angry-$2 (the bit is the free burger).
 		return
+	if bool(customer.get("is_cut_collector")):
+		if _cut_collector == customer:
+			_cut_collector = null
+		_cut_collector_kind = ""
+		return
 	if bool(customer.get("is_terrorist")):
 		_check_terrorist_wave_end()
 		return
@@ -48436,6 +49406,11 @@ func _reposition_customers() -> void:
 			continue
 		## Hostiles manage their own patrol waypoints — don't yank them into customer lanes.
 		if bool(c.get("is_terrorist")):
+			c.global_position.y = CustomerScript.STAND_Y
+			continue
+		if bool(c.get("is_cut_collector")):
+			c.lane = 0
+			c.target_x = CUT_COLLECTOR_LANE_X
 			c.global_position.y = CustomerScript.STAND_Y
 			continue
 		c.lane = i
@@ -49234,6 +50209,11 @@ func _clear_customers() -> void:
 			c.queue_free()
 	customers.clear()
 	selected_customer = null
+	if _cut_collector != null and is_instance_valid(_cut_collector):
+		_cut_collector.queue_free()
+	_cut_collector = null
+	_cut_collector_kind = ""
+	_hide_boss_caption()
 	terrorist_wave_active = false
 	_opening_terr_active = false
 	_opening_terr_timer = 0.0
@@ -49243,74 +50223,578 @@ func _clear_customers() -> void:
 
 # --- Spatula + assembly stations -------------------------------------------
 
+func _style_ingredient_bin_mat(mat: StandardMaterial3D, hovered: bool) -> void:
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	ingredient_bin_well_color = ingredient_bin_color
+	var base := ingredient_bin_color
+	mat.albedo_color = base.lerp(Color.WHITE, 0.18) if hovered else base
+	if ingredient_bin_stainless:
+		mat.metallic = 0.92
+		mat.roughness = 0.22
+		mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	else:
+		mat.metallic = 0.02
+		mat.roughness = 0.40
+	if hovered:
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.96, 0.86)
+		mat.emission_energy_multiplier = 0.08 if ingredient_bin_stainless else 0.12
+	else:
+		mat.emission_enabled = false
+		mat.emission_energy_multiplier = 0.0
+
+
+func _make_ingredient_bin_mat(hovered: bool) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	_style_ingredient_bin_mat(mat, hovered)
+	return mat
+
+
+func _set_ingredient_bin_shell_mat(tub: Node3D, mat: StandardMaterial3D) -> void:
+	var comb := tub.get_node_or_null("Shell")
+	if comb == null:
+		return
+	if comb is GeometryInstance3D:
+		(comb as GeometryInstance3D).material_override = null
+	## Same material on outer shell, lip, inner walls, and floor.
+	_apply_csg_all_material(comb, mat)
+	var well := tub.get_node_or_null("Well") as MeshInstance3D
+	if well != null:
+		well.material_override = mat
+
+
+func _apply_csg_all_material(node: Node, mat: Material) -> void:
+	if node is CSGBox3D:
+		(node as CSGBox3D).material = mat
+	elif node is CSGCylinder3D:
+		(node as CSGCylinder3D).material = mat
+	for child in node.get_children():
+		_apply_csg_all_material(child, mat)
+
+
+func _csg_add_rounded_box(parent: Node, width: float, height: float, radius: float, op: int = CSGShape3D.OPERATION_UNION) -> void:
+	var box_a := CSGBox3D.new()
+	box_a.operation = op
+	box_a.size = Vector3(width, height, maxf(0.02, width - 2.0 * radius))
+	parent.add_child(box_a)
+	var box_b := CSGBox3D.new()
+	box_b.operation = op
+	box_b.size = Vector3(maxf(0.02, width - 2.0 * radius), height, width)
+	parent.add_child(box_b)
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			var cyl := CSGCylinder3D.new()
+			cyl.operation = op
+			cyl.radius = radius
+			cyl.height = height
+			cyl.sides = 12
+			cyl.position = Vector3(sx * (width * 0.5 - radius), 0.0, sz * (width * 0.5 - radius))
+			parent.add_child(cyl)
+
+
+func _make_ingredient_tub_3d() -> Node3D:
+	## Open-top rounded plastic tub. Origin is the opening (top face at y=0).
+	var root := Node3D.new()
+	root.name = "Tub"
+	var h := maxf(0.2, ingredient_bin_height)
+	var w := maxf(0.4, ingredient_bin_length)
+	var wall := clampf(ingredient_bin_wall, 0.03, w * 0.35)
+	var r := clampf(ingredient_bin_radius, 0.04, w * 0.45)
+	var floor_t := clampf(ingredient_bin_floor, 0.03, h * 0.45)
+	var comb := CSGCombiner3D.new()
+	comb.name = "Shell"
+	comb.use_collision = false
+	comb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	comb.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	comb.calculate_tangents = true
+	comb.position.y = -h * 0.5
+	root.add_child(comb)
+	_csg_add_rounded_box(comb, w, h, r)
+	var cavity := CSGCombiner3D.new()
+	cavity.operation = CSGShape3D.OPERATION_SUBTRACTION
+	cavity.use_collision = false
+	## Punch past the top face so CSG cannot leave a coplanar lid/"cap".
+	var overshoot := 0.10
+	var ih := h - floor_t + overshoot
+	var iw := w - 2.0 * wall
+	var ir := maxf(0.04, r - wall)
+	cavity.position.y = floor_t * 0.5 + overshoot * 0.5
+	_csg_add_rounded_box(cavity, iw, ih, ir)
+	comb.add_child(cavity)
+
+	var well := MeshInstance3D.new()
+	well.name = "Well"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(iw * 0.90, iw * 0.90)
+	well.mesh = plane
+	well.position.y = -h + floor_t + 0.006
+	well.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	well.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	root.add_child(well)
+	return root
+
+
+func _clear_ingredient_bins_3d() -> void:
+	if ingredient_bin_root != null and is_instance_valid(ingredient_bin_root):
+		ingredient_bin_root.queue_free()
+	ingredient_bin_root = null
+	ingredient_bin_nodes.clear()
+	ingredient_bin_mats.clear()
+	ingredient_bin_hover.clear()
+
+
+func _build_ingredient_bins_3d() -> void:
+	_clear_ingredient_bins_3d()
+	if world == null:
+		return
+	ingredient_bin_root = Node3D.new()
+	ingredient_bin_root.name = "IngredientBins3D"
+	world.add_child(ingredient_bin_root)
+	for id in INGREDIENT_HOTKEYS:
+		var tub := _make_ingredient_tub_3d()
+		tub.name = "Bin_%s" % id
+		var mat := _make_ingredient_bin_mat(false)
+		_set_ingredient_bin_shell_mat(tub, mat)
+		ingredient_bin_root.add_child(tub)
+		ingredient_bin_nodes[id] = tub
+		ingredient_bin_mats[id] = mat
+		ingredient_bin_hover[id] = false
+	call_deferred("_update_ingredient_bins_3d")
+
+
+func _set_ingredient_bin_hover(btn: Control, hovered: bool) -> void:
+	var id := ""
+	for key in ingredient_buttons:
+		if ingredient_buttons[key] == btn:
+			id = str(key)
+			break
+	if id == "":
+		return
+	ingredient_bin_hover[id] = hovered
+	var tub: Node3D = ingredient_bin_nodes.get(id, null)
+	if tub == null or not is_instance_valid(tub):
+		return
+	var mat: StandardMaterial3D = ingredient_bin_mats.get(id, null)
+	if mat == null or not is_instance_valid(mat):
+		mat = _make_ingredient_bin_mat(hovered)
+		ingredient_bin_mats[id] = mat
+		_set_ingredient_bin_shell_mat(tub, mat)
+	else:
+		_style_ingredient_bin_mat(mat, hovered)
+
+
+func _update_ingredient_bins_3d() -> void:
+	if camera == null or ingredient_bin_root == null or not is_instance_valid(ingredient_bin_root):
+		return
+	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
+			and ingredient_legend.visible \
+			and (start_overlay == null or not start_overlay.visible)
+	ingredient_bin_root.visible = show
+	if not show:
+		return
+	for id in INGREDIENT_HOTKEYS:
+		if not ingredient_bin_nodes.has(id) or not ingredient_buttons.has(id):
+			continue
+		var tub: Node3D = ingredient_bin_nodes[id]
+		var btn: Control = ingredient_buttons[id]
+		if tub == null or not is_instance_valid(tub) or btn == null or not is_instance_valid(btn):
+			continue
+		var r := btn.get_global_rect()
+		if r.size.x < 4.0 or r.size.y < 4.0:
+			continue
+		## Aim at the lower square of the hit tile so the opening sits under the icon.
+		var screen := Vector2(
+			r.position.x + r.size.x * 0.5,
+			r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
+		)
+		var world_pt := camera.project_position(screen, ingredient_bin_cam_z)
+		var screen_r := Vector2(r.position.x + r.size.x, r.position.y + r.size.y * 0.62 - ingredient_bin_y_px)
+		var world_r := camera.project_position(screen_r, ingredient_bin_cam_z)
+		var world_w := world_pt.distance_to(world_r) * (ingredient_bin_tile / maxf(r.size.x, 1.0))
+		if world_w < 0.01:
+			continue
+		tub.global_position = world_pt
+		tub.global_basis = Basis.IDENTITY
+		var hover_mul := 1.06 if bool(ingredient_bin_hover.get(id, false)) else 1.0
+		var shake_mul := btn.scale.x if btn.scale.x > 0.2 else 1.0
+		tub.scale = Vector3.ONE * (world_w * ingredient_bin_scale * hover_mul * shake_mul)
+
+
+func _apply_ingredient_bin_strip_layout() -> void:
+	if ingredient_legend == null or not is_instance_valid(ingredient_legend):
+		return
+	ingredient_legend.add_theme_constant_override("separation", int(round(ingredient_bin_spacing)))
+	for id in ingredient_buttons:
+		var btn: Control = ingredient_buttons[id]
+		if btn == null or not is_instance_valid(btn):
+			continue
+		btn.custom_minimum_size = Vector2(ingredient_bin_tile, ingredient_bin_tile)
+		var stack := btn.get_node_or_null("Stack") as Control
+		if stack != null:
+			stack.offset_top = -4.0 - ingredient_icon_y
+		var margin := btn.get_node_or_null("Stack/IconMargin") as MarginContainer
+		if margin != null:
+			var icon := margin.get_node_or_null("StripIcon") as TextureRect
+			if icon != null:
+				icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
+				icon.size = Vector2(ingredient_icon_w, ingredient_icon_h)
+		var label_margin := btn.get_node_or_null("Stack/LabelMargin") as MarginContainer
+		if label_margin != null:
+			label_margin.add_theme_constant_override("margin_top", int(ingredient_label_y))
+			label_margin.add_theme_constant_override("margin_bottom", int(-ingredient_label_y) if ingredient_label_y < 0.0 else 0)
+		var name_lab := btn.get_node_or_null("NameLab") as Label
+		if name_lab == null:
+			name_lab = btn.get_node_or_null("Stack/NameLab") as Label
+		if name_lab != null:
+			name_lab.offset_top = -28.0 - ingredient_label_y
+			name_lab.offset_bottom = -6.0 - ingredient_label_y
+		var stock_bar := btn.get_node_or_null("Stack/StockBar") as Control
+		if stock_bar != null:
+			stock_bar.visible = ingredient_stock_visible
+
+
+func _queue_ingredient_bin_rebuild() -> void:
+	if _ingredient_bin_rebuild_queued:
+		return
+	_ingredient_bin_rebuild_queued = true
+	call_deferred("_flush_ingredient_bin_rebuild")
+
+
+func _flush_ingredient_bin_rebuild() -> void:
+	_ingredient_bin_rebuild_queued = false
+	_build_ingredient_bins_3d()
+
+
+func _touch_ingredient_bins(rebuild_mesh: bool) -> void:
+	_apply_ingredient_bin_strip_layout()
+	if rebuild_mesh:
+		_queue_ingredient_bin_rebuild()
+	else:
+		_apply_ingredient_bin_colors()
+		_update_ingredient_bins_3d()
+		_update_physical_garbage_screen_follow()
+	_save_ingredient_bin_settings()
+
+
+func _apply_ingredient_bin_colors() -> void:
+	for id in ingredient_bin_nodes:
+		var hovered := bool(ingredient_bin_hover.get(id, false))
+		var tub: Node3D = ingredient_bin_nodes[id]
+		if tub == null or not is_instance_valid(tub):
+			continue
+		var mat: StandardMaterial3D = ingredient_bin_mats.get(id, null)
+		if mat == null or not is_instance_valid(mat):
+			mat = _make_ingredient_bin_mat(hovered)
+			ingredient_bin_mats[id] = mat
+			_set_ingredient_bin_shell_mat(tub, mat)
+		else:
+			_style_ingredient_bin_mat(mat, hovered)
+			_set_ingredient_bin_shell_mat(tub, mat)
+
+
+func _ingredient_bin_default_map() -> Dictionary:
+	return {
+		"spacing": 8.0,
+		"tile": 96.0,
+		"length": 1.55,
+		"height": 0.812,
+		"wall": 0.09,
+		"radius": 0.16,
+		"floor": 0.10,
+		"scale": 1.0,
+		"cam_z": 0.76,
+		"r": 0.78,
+		"g": 0.80,
+		"b": 0.84,
+		"well_r": 0.78,
+		"well_g": 0.80,
+		"well_b": 0.84,
+		"stainless": 1.0,
+		"icon_w": 64.0,
+		"icon_h": 44.0,
+		"icon_y": 0.0,
+		"label_y": 0.0,
+		"tray_y": 0.0,
+		"stock_on": 0.0,
+	}
+
+
+func _reset_ingredient_bin_settings() -> void:
+	var d := _ingredient_bin_default_map()
+	ingredient_bin_spacing = float(d["spacing"])
+	ingredient_bin_tile = float(d["tile"])
+	ingredient_bin_length = float(d["length"])
+	ingredient_bin_height = float(d["height"])
+	ingredient_bin_wall = float(d["wall"])
+	ingredient_bin_radius = float(d["radius"])
+	ingredient_bin_floor = float(d["floor"])
+	ingredient_bin_scale = float(d["scale"])
+	ingredient_bin_cam_z = float(d["cam_z"])
+	ingredient_bin_color = Color(float(d["r"]), float(d["g"]), float(d["b"]))
+	ingredient_bin_well_color = Color(float(d["well_r"]), float(d["well_g"]), float(d["well_b"]))
+	ingredient_bin_stainless = bool(d["stainless"])
+	ingredient_icon_w = float(d["icon_w"])
+	ingredient_icon_h = float(d["icon_h"])
+	ingredient_icon_y = float(d["icon_y"])
+	ingredient_label_y = float(d["label_y"])
+	ingredient_bin_y_px = float(d["tray_y"])
+	ingredient_stock_visible = bool(d["stock_on"])
+	_apply_ingredient_bin_strip_layout()
+	_build_ingredient_bins_3d()
+	_save_ingredient_bin_settings()
+	_refresh_ingredient_bin_sliders()
+	if ingredient_bin_shell_picker != null and is_instance_valid(ingredient_bin_shell_picker):
+		ingredient_bin_shell_picker.set_color(ingredient_bin_color)
+	if ingredient_stock_check != null and is_instance_valid(ingredient_stock_check):
+		ingredient_stock_check.set_pressed_no_signal(ingredient_stock_visible)
+	if ingredient_bin_steel_check != null and is_instance_valid(ingredient_bin_steel_check):
+		ingredient_bin_steel_check.set_pressed_no_signal(ingredient_bin_stainless)
+
+
+func _refresh_ingredient_bin_sliders() -> void:
+	var vals := {
+		"ibin_spacing": ingredient_bin_spacing,
+		"ibin_tile": ingredient_bin_tile,
+		"ibin_length": ingredient_bin_length,
+		"ibin_height": ingredient_bin_height,
+		"ibin_wall": ingredient_bin_wall,
+		"ibin_radius": ingredient_bin_radius,
+		"ibin_floor": ingredient_bin_floor,
+		"ibin_scale": ingredient_bin_scale,
+		"ibin_cam_z": ingredient_bin_cam_z,
+		"ibin_icon_w": ingredient_icon_w,
+		"ibin_icon_h": ingredient_icon_h,
+		"ibin_icon_y": ingredient_icon_y,
+		"ibin_label_y": ingredient_label_y,
+		"ibin_tray_y": ingredient_bin_y_px,
+	}
+	for key in vals:
+		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
+		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+
+
+func _load_ingredient_bin_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(INGREDIENT_BINS_CFG_SECTION):
+		return
+	var s := INGREDIENT_BINS_CFG_SECTION
+	ingredient_bin_spacing = clampf(float(cfg.get_value(s, "spacing", ingredient_bin_spacing)), 0.0, 48.0)
+	ingredient_bin_tile = clampf(float(cfg.get_value(s, "tile", ingredient_bin_tile)), 64.0, 180.0)
+	ingredient_bin_length = clampf(float(cfg.get_value(s, "length", ingredient_bin_length)), 0.6, 3.2)
+	ingredient_bin_height = clampf(float(cfg.get_value(s, "height", ingredient_bin_height)), 0.2, 2.0)
+	ingredient_bin_wall = clampf(float(cfg.get_value(s, "wall", ingredient_bin_wall)), 0.03, 0.25)
+	ingredient_bin_radius = clampf(float(cfg.get_value(s, "radius", ingredient_bin_radius)), 0.04, 0.45)
+	ingredient_bin_floor = clampf(float(cfg.get_value(s, "floor", ingredient_bin_floor)), 0.03, 0.25)
+	ingredient_bin_scale = clampf(float(cfg.get_value(s, "scale", ingredient_bin_scale)), 0.4, 2.2)
+	ingredient_bin_cam_z = clampf(float(cfg.get_value(s, "cam_z", ingredient_bin_cam_z)), 0.3, 1.6)
+	ingredient_bin_color.r = clampf(float(cfg.get_value(s, "r", ingredient_bin_color.r)), 0.0, 1.0)
+	ingredient_bin_color.g = clampf(float(cfg.get_value(s, "g", ingredient_bin_color.g)), 0.0, 1.0)
+	ingredient_bin_color.b = clampf(float(cfg.get_value(s, "b", ingredient_bin_color.b)), 0.0, 1.0)
+	ingredient_bin_well_color = ingredient_bin_color
+	ingredient_icon_w = clampf(float(cfg.get_value(s, "icon_w", ingredient_icon_w)), 16.0, 160.0)
+	ingredient_icon_h = clampf(float(cfg.get_value(s, "icon_h", ingredient_icon_h)), 16.0, 160.0)
+	ingredient_icon_y = clampf(float(cfg.get_value(s, "icon_y", ingredient_icon_y)), -80.0, 80.0)
+	ingredient_label_y = clampf(float(cfg.get_value(s, "label_y", ingredient_label_y)), -80.0, 80.0)
+	ingredient_bin_y_px = clampf(float(cfg.get_value(s, "tray_y", ingredient_bin_y_px)), -120.0, 120.0)
+	ingredient_stock_visible = bool(cfg.get_value(s, "stock_on", ingredient_stock_visible))
+	ingredient_bin_stainless = bool(cfg.get_value(s, "stainless", true))
+	if not cfg.has_section_key(s, "height_40pct_v1"):
+		ingredient_bin_height = clampf(ingredient_bin_height * 1.4, 0.2, 2.0)
+		cfg.set_value(s, "height", ingredient_bin_height)
+		cfg.set_value(s, "height_40pct_v1", true)
+		cfg.save(GFX_CFG_PATH)
+
+
+func _save_ingredient_bin_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	var s := INGREDIENT_BINS_CFG_SECTION
+	cfg.set_value(s, "spacing", ingredient_bin_spacing)
+	cfg.set_value(s, "tile", ingredient_bin_tile)
+	cfg.set_value(s, "length", ingredient_bin_length)
+	cfg.set_value(s, "height", ingredient_bin_height)
+	cfg.set_value(s, "wall", ingredient_bin_wall)
+	cfg.set_value(s, "radius", ingredient_bin_radius)
+	cfg.set_value(s, "floor", ingredient_bin_floor)
+	cfg.set_value(s, "scale", ingredient_bin_scale)
+	cfg.set_value(s, "cam_z", ingredient_bin_cam_z)
+	cfg.set_value(s, "r", ingredient_bin_color.r)
+	cfg.set_value(s, "g", ingredient_bin_color.g)
+	cfg.set_value(s, "b", ingredient_bin_color.b)
+	cfg.set_value(s, "well_r", ingredient_bin_well_color.r)
+	cfg.set_value(s, "well_g", ingredient_bin_well_color.g)
+	cfg.set_value(s, "well_b", ingredient_bin_well_color.b)
+	cfg.set_value(s, "icon_w", ingredient_icon_w)
+	cfg.set_value(s, "icon_h", ingredient_icon_h)
+	cfg.set_value(s, "icon_y", ingredient_icon_y)
+	cfg.set_value(s, "label_y", ingredient_label_y)
+	cfg.set_value(s, "tray_y", ingredient_bin_y_px)
+	cfg.set_value(s, "stock_on", ingredient_stock_visible)
+	cfg.set_value(s, "stainless", ingredient_bin_stainless)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _hidden_setup_ingredient_bin_controls(parent: Control) -> void:
+	var help := Label.new()
+	help.text = "3D topping tubs under the ingredient icons. Spacing and tile size pack the row; length / depth change the tub shape."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(help, false, 11)
+	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+	parent.add_child(help)
+	_hidden_add_section(parent, "LAYOUT")
+	_hidden_add_labeled_slider(parent, "ibin_spacing", "Spacing", 0.0, 40.0, 1.0,
+		func(): return ingredient_bin_spacing,
+		func(v: float):
+			ingredient_bin_spacing = clampf(v, 0.0, 40.0)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_tile", "Tile Size", 64.0, 180.0, 1.0,
+		func(): return ingredient_bin_tile,
+		func(v: float):
+			ingredient_bin_tile = clampf(v, 64.0, 180.0)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_scale", "Overall Scale", 0.4, 2.2, 0.01,
+		func(): return ingredient_bin_scale,
+		func(v: float):
+			ingredient_bin_scale = clampf(v, 0.4, 2.2)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_cam_z", "Distance From Camera", 0.3, 1.6, 0.01,
+		func(): return ingredient_bin_cam_z,
+		func(v: float):
+			ingredient_bin_cam_z = clampf(v, 0.3, 1.6)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_tray_y", "Trays Up / Down", -120.0, 120.0, 1.0,
+		func(): return ingredient_bin_y_px,
+		func(v: float):
+			ingredient_bin_y_px = clampf(v, -120.0, 120.0)
+			_touch_ingredient_bins(false))
+	_hidden_add_section(parent, "SHAPE")
+	_hidden_add_labeled_slider(parent, "ibin_length", "Length / Width", 0.6, 3.2, 0.01,
+		func(): return ingredient_bin_length,
+		func(v: float):
+			ingredient_bin_length = clampf(v, 0.6, 3.2)
+			_touch_ingredient_bins(true))
+	_hidden_add_labeled_slider(parent, "ibin_height", "Depth (away from you)", 0.2, 2.0, 0.01,
+		func(): return ingredient_bin_height,
+		func(v: float):
+			ingredient_bin_height = clampf(v, 0.2, 2.0)
+			_touch_ingredient_bins(true))
+	_hidden_add_labeled_slider(parent, "ibin_wall", "Wall Thickness", 0.03, 0.25, 0.005,
+		func(): return ingredient_bin_wall,
+		func(v: float):
+			ingredient_bin_wall = clampf(v, 0.03, 0.25)
+			_touch_ingredient_bins(true))
+	_hidden_add_labeled_slider(parent, "ibin_radius", "Corner Radius", 0.04, 0.45, 0.005,
+		func(): return ingredient_bin_radius,
+		func(v: float):
+			ingredient_bin_radius = clampf(v, 0.04, 0.45)
+			_touch_ingredient_bins(true))
+	_hidden_add_labeled_slider(parent, "ibin_floor", "Floor Thickness", 0.03, 0.25, 0.005,
+		func(): return ingredient_bin_floor,
+		func(v: float):
+			ingredient_bin_floor = clampf(v, 0.03, 0.25)
+			_touch_ingredient_bins(true))
+	_hidden_add_section(parent, "TRAY COLOR")
+	ingredient_bin_steel_check = CheckButton.new()
+	ingredient_bin_steel_check.text = "Stainless Steel"
+	ingredient_bin_steel_check.button_pressed = ingredient_bin_stainless
+	ingredient_bin_steel_check.custom_minimum_size = Vector2(0, 32)
+	ingredient_bin_steel_check.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(ingredient_bin_steel_check, false, 13)
+	ingredient_bin_steel_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	ingredient_bin_steel_check.toggled.connect(func(on: bool):
+		ingredient_bin_stainless = on
+		_touch_ingredient_bins(true)
+	)
+	parent.add_child(ingredient_bin_steel_check)
+	var shell_lab := Label.new()
+	shell_lab.text = "Color"
+	UiFontsScript.apply_label(shell_lab, false, 12)
+	shell_lab.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
+	parent.add_child(shell_lab)
+	ingredient_bin_shell_picker = HsbColorPickerScript.new()
+	parent.add_child(ingredient_bin_shell_picker)
+	ingredient_bin_shell_picker.set_color(ingredient_bin_color)
+	ingredient_bin_shell_picker.color_changed.connect(func(c: Color):
+		ingredient_bin_color = Color(c.r, c.g, c.b, 1.0)
+		ingredient_bin_well_color = ingredient_bin_color
+		_touch_ingredient_bins(false)
+	)
+	_hidden_add_section(parent, "2D ICONS + LABELS")
+	_hidden_add_labeled_slider(parent, "ibin_icon_w", "Icon Width", 16.0, 160.0, 1.0,
+		func(): return ingredient_icon_w,
+		func(v: float):
+			ingredient_icon_w = clampf(v, 16.0, 160.0)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_icon_h", "Icon Height", 16.0, 160.0, 1.0,
+		func(): return ingredient_icon_h,
+		func(v: float):
+			ingredient_icon_h = clampf(v, 16.0, 160.0)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_icon_y", "Icons Up / Down", -80.0, 80.0, 1.0,
+		func(): return ingredient_icon_y,
+		func(v: float):
+			ingredient_icon_y = clampf(v, -80.0, 80.0)
+			_touch_ingredient_bins(false))
+	_hidden_add_labeled_slider(parent, "ibin_label_y", "Labels Up / Down", -80.0, 80.0, 1.0,
+		func(): return ingredient_label_y,
+		func(v: float):
+			ingredient_label_y = clampf(v, -80.0, 80.0)
+			_touch_ingredient_bins(false))
+	ingredient_stock_check = CheckButton.new()
+	ingredient_stock_check.text = "Show Ingredient Capacity Bar"
+	ingredient_stock_check.button_pressed = ingredient_stock_visible
+	ingredient_stock_check.custom_minimum_size = Vector2(0, 32)
+	ingredient_stock_check.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(ingredient_stock_check, false, 13)
+	ingredient_stock_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	ingredient_stock_check.toggled.connect(func(on: bool):
+		ingredient_stock_visible = on
+		_touch_ingredient_bins(false)
+	)
+	parent.add_child(ingredient_stock_check)
+	_options_add_btn(parent, "Reset Ingredient Bins", _reset_ingredient_bin_settings)
+
+
 func _build_ingredient_legend() -> void:
 	for child in ingredient_legend.get_children():
 		child.queue_free()
 	ingredient_buttons.clear()
-	ingredient_legend.add_theme_constant_override("separation", 6)
+	ingredient_legend.add_theme_constant_override("separation", int(round(ingredient_bin_spacing)))
+	ingredient_legend.alignment = BoxContainer.ALIGNMENT_CENTER
 	ingredient_legend.clip_contents = false
 
-	## Horizontal strip of toppings along the bottom (1 tomato → 7 mustard).
-	var panel := PanelContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.clip_contents = false ## hover keycaps sit above the strip top edge
-	var panel_sb := StyleBoxFlat.new()
-	panel_sb.bg_color = Color(0.12, 0.13, 0.16, 0.94)
-	panel_sb.set_corner_radius_all(12)
-	panel_sb.content_margin_left = 8
-	panel_sb.content_margin_right = 8
-	panel_sb.content_margin_top = 6
-	panel_sb.content_margin_bottom = 6
-	panel_sb.border_color = Color(0.35, 0.38, 0.44)
-	panel_sb.set_border_width_all(2)
-	panel.add_theme_stylebox_override("panel", panel_sb)
-	ingredient_legend.add_child(panel)
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	panel.add_child(row)
-
-	var strip_bg := Color(0.18, 0.20, 0.24, 1.0)
-	var strip_hover := Color(0.24, 0.27, 0.32, 1.0)
-	var strip_press := Color(0.28, 0.32, 0.38, 1.0)
+	var empty_sb := StyleBoxEmpty.new()
+	empty_sb.content_margin_left = 2
+	empty_sb.content_margin_right = 2
+	empty_sb.content_margin_top = 2
+	empty_sb.content_margin_bottom = 2
 
 	for hi in range(INGREDIENT_HOTKEYS.size()):
 		var id: String = INGREDIENT_HOTKEYS[hi]
 		var tbtn := Button.new()
-		tbtn.custom_minimum_size = Vector2(90, 84)
-		tbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tbtn.custom_minimum_size = Vector2(ingredient_bin_tile, ingredient_bin_tile)
+		tbtn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		tbtn.focus_mode = Control.FOCUS_NONE
 		tbtn.flat = true
-		## Allow the hover keycap to sit on the top edge without clipping.
 		tbtn.clip_contents = false
 		tbtn.tooltip_text = GameDataScript.INGREDIENT_LABELS[id]
-
-		var tsb := StyleBoxFlat.new()
-		tsb.bg_color = strip_bg
-		tsb.set_corner_radius_all(10)
-		tsb.content_margin_left = 4
-		tsb.content_margin_right = 4
-		tsb.content_margin_top = 4
-		tsb.content_margin_bottom = 4
-		tsb.border_color = Color(0.32, 0.35, 0.4)
-		tsb.set_border_width_all(1)
-		tbtn.add_theme_stylebox_override("normal", tsb)
-		var tsbh := tsb.duplicate()
-		tsbh.bg_color = strip_hover
-		tsbh.border_color = Color("FFB74D")
-		tbtn.add_theme_stylebox_override("hover", tsbh)
-		var tsbp := tsb.duplicate()
-		tsbp.bg_color = strip_press
-		tbtn.add_theme_stylebox_override("pressed", tsbp)
+		tbtn.add_theme_stylebox_override("normal", empty_sb)
+		tbtn.add_theme_stylebox_override("hover", empty_sb)
+		tbtn.add_theme_stylebox_override("pressed", empty_sb)
+		tbtn.add_theme_stylebox_override("focus", empty_sb)
 
 		var col := VBoxContainer.new()
 		col.name = "Stack"
 		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		col.add_theme_constant_override("separation", 2)
-		col.alignment = BoxContainer.ALIGNMENT_CENTER
+		col.add_theme_constant_override("separation", 1)
+		col.alignment = BoxContainer.ALIGNMENT_BEGIN
 		col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		## Lift the icon so it floats above the 3D tub opening.
+		col.offset_top = -4.0 - ingredient_icon_y
 		tbtn.add_child(col)
 
 		var icon_margin := MarginContainer.new()
@@ -49323,24 +50807,20 @@ func _build_ingredient_legend() -> void:
 		var icon := TextureRect.new()
 		icon.name = "StripIcon"
 		icon.texture = FoodSpritesScript.get_tex(id)
-		icon.custom_minimum_size = Vector2(GFX_DEFAULTS["strip_icon_w"], GFX_DEFAULTS["strip_icon_h"])
+		icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon_margin.add_child(icon)
 
-		var name_lab := Label.new()
-		name_lab.text = GameDataScript.INGREDIENT_LABELS[id]
-		UiFontsScript.apply_label(name_lab, true, 14)
-		name_lab.add_theme_color_override("font_color", Color(1.0, 0.98, 0.92))
-		name_lab.add_theme_color_override("font_outline_color", Color.BLACK)
-		name_lab.add_theme_constant_override("outline_size", 2)
-		name_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		col.add_child(name_lab)
+		var spacer := Control.new()
+		spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		col.add_child(spacer)
 
 		var stock_bar := Control.new()
 		stock_bar.name = "StockBar"
+		stock_bar.visible = ingredient_stock_visible
 		stock_bar.custom_minimum_size = Vector2(46, 3)
 		stock_bar.clip_contents = true
 		stock_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -49348,7 +50828,7 @@ func _build_ingredient_legend() -> void:
 
 		var stock_bg := ColorRect.new()
 		stock_bg.name = "Bg"
-		stock_bg.color = Color(0.035, 0.04, 0.05, 0.86)
+		stock_bg.color = Color(0.78, 0.80, 0.83, 0.95)
 		stock_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		stock_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		stock_bar.add_child(stock_bg)
@@ -49361,7 +50841,22 @@ func _build_ingredient_legend() -> void:
 		stock_fill.offset_bottom = 0.0
 		stock_bar.add_child(stock_fill)
 
-		## Keycap PNG + digit — only while hovering this topping.
+		var name_lab := Label.new()
+		name_lab.name = "NameLab"
+		name_lab.text = GameDataScript.INGREDIENT_LABELS[id]
+		UiFontsScript.apply_label(name_lab, true, 13)
+		name_lab.add_theme_color_override("font_color", Color(0.22, 0.24, 0.28, 1.0))
+		name_lab.add_theme_color_override("font_outline_color", Color(1.0, 1.0, 1.0, 0.85))
+		name_lab.add_theme_constant_override("outline_size", 2)
+		name_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		name_lab.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		name_lab.offset_left = -70.0
+		name_lab.offset_right = 70.0
+		name_lab.offset_top = -28.0 - ingredient_label_y
+		name_lab.offset_bottom = -6.0 - ingredient_label_y
+		tbtn.add_child(name_lab)
+
 		var keycap_host := Control.new()
 		keycap_host.name = "KeycapHost"
 		keycap_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -49369,18 +50864,20 @@ func _build_ingredient_legend() -> void:
 		keycap_host.set_anchors_preset(Control.PRESET_CENTER_TOP)
 		keycap_host.offset_left = -16.0
 		keycap_host.offset_right = 16.0
-		keycap_host.offset_top = -22.0
-		keycap_host.offset_bottom = 10.0
+		keycap_host.offset_top = -48.0
+		keycap_host.offset_bottom = -16.0
 		var keycap_view := _make_strip_hotkey_keycap(HOTKEY_LABELS[hi])
 		keycap_view.name = "KeycapView"
 		keycap_view.visible = false
 		keycap_host.add_child(keycap_view)
 		tbtn.add_child(keycap_host)
 		tbtn.mouse_entered.connect(func():
+			_set_ingredient_bin_hover(tbtn, true)
 			if is_instance_valid(keycap_view):
 				keycap_view.visible = true
 		)
 		tbtn.mouse_exited.connect(func():
+			_set_ingredient_bin_hover(tbtn, false)
 			if is_instance_valid(keycap_view):
 				keycap_view.visible = false
 		)
@@ -49396,11 +50893,8 @@ func _build_ingredient_legend() -> void:
 		)
 		tbtn.set_drag_forwarding(
 			func(_pos):
-				## If paint-swipe already applied this topping, don't also start a UI drag
-				## that would drop a second copy on Build.
 				if _strip_gesture_added:
 					return null
-				## Grab-and-hold is not a click — suppress the button pressed → Build add.
 				_strip_did_drag = true
 				_pending_cheese_drag = false
 				_pending_ingredient_drag = capture
@@ -49414,8 +50908,9 @@ func _build_ingredient_legend() -> void:
 			Callable(),
 			Callable()
 		)
-		row.add_child(tbtn)
+		ingredient_legend.add_child(tbtn)
 		ingredient_buttons[id] = tbtn
+	_build_ingredient_bins_3d()
 	_refresh_ingredient_stock_bars()
 	call_deferred("_refresh_ingredient_stock_bars")
 
@@ -49509,21 +51004,10 @@ func _shake_ingredient_button(btn: Control) -> void:
 	var tw2 := create_tween()
 	tw2.tween_property(btn, "scale", Vector2(1.1, 1.1), 0.06)
 	tw2.tween_property(btn, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK)
-	## Brief soft pulse on the strip — no loud yellow box.
-	var flash := StyleBoxFlat.new()
-	flash.bg_color = Color(0.28, 0.26, 0.22, 0.55)
-	flash.set_corner_radius_all(12)
-	flash.border_color = Color(1.0, 1.0, 1.0, 0.2)
-	flash.set_border_width_all(1)
-	flash.content_margin_left = 6
-	flash.content_margin_right = 8
-	flash.content_margin_top = 6
-	flash.content_margin_bottom = 6
-	var prev_normal = btn.get_theme_stylebox("normal")
-	btn.add_theme_stylebox_override("normal", flash)
+	_set_ingredient_bin_hover(btn, true)
 	get_tree().create_timer(0.14).timeout.connect(func():
-		if is_instance_valid(btn) and prev_normal:
-			btn.add_theme_stylebox_override("normal", prev_normal)
+		if is_instance_valid(btn):
+			_set_ingredient_bin_hover(btn, false)
 	)
 
 
@@ -49816,6 +51300,7 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 		area.input_ray_pickable = false
 	root.visible = true
 	root.scale = Vector3.ONE
+	_set_condiment_bottle_animation_front(root, true)
 	var home: Vector3 = condiment_bottle_homes.get(id, root.position)
 	var home_rot: Vector3 = condiment_bottle_home_rots.get(id, Vector3.ZERO)
 	var start_pos := root.position
@@ -49834,7 +51319,7 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 		toward_camera.y = 0.0
 		if toward_camera.length_squared() > 0.0001:
 			toward_camera = toward_camera.normalized()
-	var pour_pos := target + toward_camera * 0.34 + Vector3(0.0, 0.125, 0.0) - nozzle_offset
+	var pour_pos := target + toward_camera * CONDIMENT_AUTO_POUR_CAMERA_OFFSET + Vector3.UP * CONDIMENT_AUTO_POUR_HEIGHT_OFFSET - nozzle_offset
 	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
 		condiment_stream_mesh.visible = false
 		condiment_stream_mesh.material_override = _condiment_stream_material(id)
@@ -49909,6 +51394,7 @@ func _return_condiment_bottle(id: String, root: Node3D, home: Vector3, home_rot:
 			root.position = home
 			root.rotation_degrees = home_rot
 			root.scale = Vector3.ONE
+			_set_condiment_bottle_animation_front(root, false)
 		var area: Area3D = condiment_bottle_areas.get(id, null)
 		if area != null and is_instance_valid(area):
 			area.input_ray_pickable = true
@@ -54675,11 +56161,12 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 
 
 func _resolve_serve_customer():
-	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
+	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting \
+			and not bool(selected_customer.get("is_cut_collector")):
 		return selected_customer
 	selected_customer = null
 	for c in customers:
-		if c != null and is_instance_valid(c) and c.is_waiting:
+		if c != null and is_instance_valid(c) and c.is_waiting and not bool(c.get("is_cut_collector")):
 			if selected_customer != null:
 				selected_customer = null
 				break
@@ -55725,6 +57212,67 @@ func _setup_game_over_location_button() -> void:
 	box.move_child(game_over_location_btn, restart_btn.get_index())
 
 
+func _setup_cut_buyout_button() -> void:
+	if cut_buyout_btn != null and is_instance_valid(cut_buyout_btn):
+		_refresh_cut_buyout_button()
+		return
+	var box := get_node_or_null("UI/Root/GameOverPanel/GOMargin/GOVBox") as VBoxContainer
+	if box == null:
+		return
+	cut_buyout_btn = Button.new()
+	cut_buyout_btn.name = "CutBuyoutButton"
+	cut_buyout_btn.text = "BUY OUT THE TRUCK  ·  $10,000"
+	cut_buyout_btn.tooltip_text = "Pay $10,000 once. He stops taking half your day's take."
+	cut_buyout_btn.custom_minimum_size = Vector2(280, 44)
+	cut_buyout_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	cut_buyout_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(cut_buyout_btn, 16)
+	cut_buyout_btn.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55, 1.0))
+	cut_buyout_btn.pressed.connect(func():
+		_sfx_click()
+		_try_buyout_truck()
+	)
+	box.add_child(cut_buyout_btn)
+	if game_over_location_btn != null and is_instance_valid(game_over_location_btn):
+		box.move_child(cut_buyout_btn, game_over_location_btn.get_index())
+	_refresh_cut_buyout_button()
+
+
+func _refresh_cut_buyout_button() -> void:
+	if cut_buyout_btn == null or not is_instance_valid(cut_buyout_btn):
+		return
+	var can_buy := (not playing) and (game_over_panel != null and game_over_panel.visible) \
+		and (not truck_bought_out) and money + 0.001 >= CUT_COLLECTOR_BUYOUT
+	cut_buyout_btn.visible = can_buy
+	cut_buyout_btn.disabled = not can_buy
+	if truck_bought_out:
+		cut_buyout_btn.text = "TRUCK BOUGHT OUT"
+	else:
+		cut_buyout_btn.text = "BUY OUT THE TRUCK  ·  $10,000"
+
+
+func _try_buyout_truck() -> void:
+	if truck_bought_out:
+		_flash("The truck is already yours", Color("A5D6A7"))
+		_refresh_cut_buyout_button()
+		return
+	if money + 0.001 < CUT_COLLECTOR_BUYOUT:
+		_flash("Need %s to buy him out" % _format_money(CUT_COLLECTOR_BUYOUT), Color("EF5350"))
+		return
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
+	_spend(CUT_COLLECTOR_BUYOUT, "Bought out the truck — %s" % _format_money(CUT_COLLECTOR_BUYOUT), Color("FFE082"))
+	truck_bought_out = true
+	_flash("The truck is yours. He won't take a cut again.", Color("FFD54F"))
+	_show_boss_caption("THE BOSS", "It's yours. Don't wreck it.", 3.4)
+	if _cut_collector != null and is_instance_valid(_cut_collector) and _cut_collector.has_method("leave_happy"):
+		_cut_collector.leave_happy()
+	_refresh_cut_buyout_button()
+	call_deferred("_refresh_phone_ui")
+	if game_over_panel != null and game_over_panel.visible:
+		_update_shift_complete_location_summary()
+
+
 func _setup_start_location_button() -> void:
 	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
 	if card_col == null:
@@ -55855,16 +57403,19 @@ func _update_shift_complete_location_summary() -> void:
 	var location_name := TruckLocationsScript.display_name(current_location_id)
 	var rank := TruckLocationsScript.rank_of(current_location_id)
 	var social_block := _format_day_social_recap()
-	game_over_label.text = "%s selected\nArea %d of %d - %s\n\nPrevious shift: Served %d | Perfect %d\nWallet: %s\n\n%s\n\nStart here when you're ready." % [
+	var cut_block := _format_day_cut_recap()
+	game_over_label.text = "%s selected\nArea %d of %d - %s\n\nPrevious shift: Served %d | Perfect %d\n%sWallet: %s\n\n%s\n\nStart here when you're ready." % [
 		location_name,
 		rank,
 		TruckLocationsScript.all().size(),
 		TruckLocationsScript.tier_label(TruckLocationsScript.tier_of(current_location_id)),
 		total_served,
 		perfect_serves,
+		cut_block,
 		_format_money(money),
 		social_block,
 	]
+	_refresh_cut_buyout_button()
 
 
 func _load_truck_location() -> void:
@@ -58442,6 +59993,16 @@ func mp_spawn_customer(
 	_spawn_customer_local(
 		order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat, jin_fact_idx
 	)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_spawn_cut_collector(kind: String) -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if mp_enabled and not NetManager.is_host() and sid != 1:
+		return
+	_mp_applying = true
+	_spawn_cut_collector_local(kind)
 	_mp_applying = false
 
 

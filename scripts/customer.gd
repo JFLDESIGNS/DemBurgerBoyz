@@ -280,6 +280,8 @@ var _skin_path: String = ""
 var is_terrorist: bool = false
 ## Full-size window cat in a fake mustache — orders a triple, never pays.
 var is_disguise_cat: bool = false
+## Human boss visitor — mustache + hat. Not a ticket customer.
+var is_cut_collector: bool = false
 var is_jin_guest: bool = false
 var is_jimin_guest: bool = false
 var is_bts_guest: bool = false
@@ -417,19 +419,37 @@ func _apply_jimin_guest_fact(fact_idx: int = -1) -> void:
 func show_special_speech(duration: float = 5.5) -> void:
 	if chatter == "":
 		return
+	say_line(chatter, duration, Color(1.0, 0.94, 0.62))
+
+
+func say_line(text: String, duration: float = 3.4, tint: Color = Color(0.12, 0.12, 0.14)) -> void:
+	speech = text
 	if _bubble:
-		_bubble.text = chatter
-		_bubble.modulate = Color(1.0, 0.94, 0.62)
+		_bubble.text = text
+		_bubble.modulate = tint
 		_bubble.visible = true
 	if _bubble_bg:
 		_bubble_bg.visible = true
-	await get_tree().create_timer(duration).timeout
-	if not is_instance_valid(self):
+		var parts := text.split("\n")
+		var longest := 0
+		for line in parts:
+			longest = maxi(longest, str(line).length())
+		var line_n := maxi(1, parts.size())
+		var w := clampf(0.58 + float(longest) * 0.042, 0.78, 1.72)
+		var h := 0.30 + float(maxi(0, line_n - 1)) * 0.16
+		if _bubble_bg.mesh is BoxMesh:
+			(_bubble_bg.mesh as BoxMesh).size = Vector3(w, h, 0.04)
+	if duration <= 0.01:
 		return
-	if _bubble and is_waiting:
-		_bubble.visible = false
-	if _bubble_bg and is_waiting:
-		_bubble_bg.visible = false
+	var shown := text
+	get_tree().create_timer(duration).timeout.connect(func():
+		if not is_instance_valid(self) or is_leaving:
+			return
+		if _bubble != null and _bubble.text == shown:
+			_bubble.visible = false
+		if _bubble_bg != null:
+			_bubble_bg.visible = false
+	)
 
 
 func needs_dialogue() -> bool:
@@ -1328,17 +1348,24 @@ func _process(delta: float) -> void:
 		_arrive_turning = false
 		rotation_degrees.y = FACE_TRUCK_YAW
 		is_waiting = true
-		## Speech bubble off for now — tickets carry the order.
-		if _bubble:
-			_bubble.visible = false
-		if _bubble_bg:
-			_bubble_bg.visible = false
+		## Speech bubble off for ticket guests; collector talks at the window.
+		if not is_cut_collector:
+			if _bubble:
+				_bubble.visible = false
+			if _bubble_bg:
+				_bubble_bg.visible = false
 		_refresh_patience_bar()
 		_play_anim("idle")
 		arrived.emit(self)
 		_apply_bobble(false)
 	elif _shake_time <= 0.0:
 		rotation_degrees.y = FACE_TRUCK_YAW
+		if is_cut_collector:
+			_play_anim("idle")
+			_clear_antsy_wait_pose()
+			_apply_bobble(false)
+			_animate_expression(delta)
+			return
 		if _eating:
 			_play_anim("idle")
 			if _anim_player:
@@ -2829,6 +2856,148 @@ func _disguise_mustache_local() -> Vector3:
 		DISGUISE_CAT_MESH_Y + _WINDOW_CAT_MOUTH.y * (DISGUISE_CAT_SCALE_Y / _WINDOW_CAT_MESH_SCALE),
 		_WINDOW_CAT_MOUTH.z * (DISGUISE_CAT_SCALE_Z / _WINDOW_CAT_MESH_SCALE)
 	)
+
+
+func apply_cut_collector_look() -> void:
+	## Keep the human toon; add a fake mustache and top hat. No ticket.
+	is_cut_collector = true
+	personality = "quiet"
+	chatter = ""
+	order.clear()
+	order_value = 0
+	queue_timer_active = false
+	patience_max = 9999.0
+	patience = 9999.0
+	speech = ""
+	## Kenney toon already has a mustache — do not glue a second card on the face.
+	_build_human_top_hat()
+
+
+func _collector_head_host() -> Node3D:
+	var existing := find_child("CollectorHeadAttach", true, false) as Node3D
+	if existing != null and is_instance_valid(existing):
+		return existing
+	_cache_skeleton()
+	_cache_panic_bones()
+	var bone_name := ""
+	if _panic_bones.has("Head"):
+		bone_name = "Head"
+	else:
+		for bn in _panic_bones.keys():
+			var low := str(bn).to_lower()
+			if low.ends_with("head") or low.contains("head"):
+				bone_name = str(bn)
+				break
+	if _skeleton != null and bone_name != "":
+		var attach := BoneAttachment3D.new()
+		attach.name = "CollectorHeadAttach"
+		attach.bone_name = bone_name
+		_skeleton.add_child(attach)
+		return attach
+	return self
+
+
+func _build_human_mustache() -> void:
+	if _mustache_root != null and is_instance_valid(_mustache_root):
+		_mustache_root.queue_free()
+	_mustache_root = Node3D.new()
+	_mustache_root.name = "CollectorMustache"
+	var host := _collector_head_host()
+	if host == self:
+		## Customer root is unscaled; sit on the face under the window lintel.
+		_mustache_root.position = Vector3(0.0, HEAD_TOP_Y - 0.16, 0.16)
+	else:
+		## Head-bone space — a little down and toward the camera/face.
+		_mustache_root.position = Vector3(0.0, -0.02, 0.11)
+		_mustache_root.scale = Vector3(1.15, 1.15, 1.15)
+	host.add_child(_mustache_root)
+	var card := MeshInstance3D.new()
+	card.name = "MustacheCard"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.22, 0.11)
+	card.mesh = quad
+	var card_mat := StandardMaterial3D.new()
+	if ResourceLoader.exists(DISGUISE_MUSTACHE_TEX):
+		card_mat.albedo_texture = load(DISGUISE_MUSTACHE_TEX) as Texture2D
+	card_mat.albedo_color = Color.WHITE
+	card_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	card_mat.alpha_scissor_threshold = 0.08
+	card_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	card_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	card_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	card.material_override = card_mat
+	_mustache_root.add_child(card)
+
+
+func _build_human_top_hat() -> void:
+	if _disguise_hat_root != null and is_instance_valid(_disguise_hat_root):
+		_disguise_hat_root.queue_free()
+	_disguise_hat_root = Node3D.new()
+	_disguise_hat_root.name = "CollectorTopHat"
+	var host := _collector_head_host()
+	if host == self:
+		_disguise_hat_root.position = Vector3(0.0, HEAD_TOP_Y + 0.22, 0.04)
+		_disguise_hat_root.rotation_degrees = Vector3(-8.0, 0.0, 4.0)
+	else:
+		## Sit on the skull, not the chest — Head bone origin is the neck/skull.
+		_disguise_hat_root.position = Vector3(0.0, 0.16, 0.0)
+		_disguise_hat_root.rotation_degrees = Vector3(-8.0, 0.0, 4.0)
+	host.add_child(_disguise_hat_root)
+
+	var black_mat := StandardMaterial3D.new()
+	black_mat.albedo_color = Color(0.012, 0.011, 0.010)
+	black_mat.roughness = 0.82
+	var band_mat := StandardMaterial3D.new()
+	band_mat.albedo_color = Color(0.22, 0.045, 0.04)
+	band_mat.roughness = 0.78
+	var s := 0.72 if host != self else 1.0
+
+	var brim := MeshInstance3D.new()
+	brim.name = "TopHatBrim"
+	var brim_mesh := CylinderMesh.new()
+	brim_mesh.top_radius = 0.14 * s
+	brim_mesh.bottom_radius = 0.14 * s
+	brim_mesh.height = 0.018 * s
+	brim_mesh.radial_segments = 28
+	brim.mesh = brim_mesh
+	brim.material_override = black_mat
+	_disguise_hat_root.add_child(brim)
+
+	var crown := MeshInstance3D.new()
+	crown.name = "TopHatCrown"
+	var crown_mesh := CylinderMesh.new()
+	crown_mesh.top_radius = 0.09 * s
+	crown_mesh.bottom_radius = 0.09 * s
+	crown_mesh.height = 0.16 * s
+	crown_mesh.radial_segments = 28
+	crown.mesh = crown_mesh
+	crown.material_override = black_mat
+	crown.position = Vector3(0.0, 0.09 * s, 0.0)
+	_disguise_hat_root.add_child(crown)
+
+	var cap := MeshInstance3D.new()
+	cap.name = "TopHatTopCap"
+	var cap_mesh := CylinderMesh.new()
+	cap_mesh.top_radius = 0.092 * s
+	cap_mesh.bottom_radius = 0.092 * s
+	cap_mesh.height = 0.012 * s
+	cap_mesh.radial_segments = 28
+	cap.mesh = cap_mesh
+	cap.material_override = black_mat
+	cap.position = Vector3(0.0, 0.175 * s, 0.0)
+	_disguise_hat_root.add_child(cap)
+
+	var band := MeshInstance3D.new()
+	band.name = "TopHatBand"
+	var band_mesh := CylinderMesh.new()
+	band_mesh.top_radius = 0.095 * s
+	band_mesh.bottom_radius = 0.095 * s
+	band_mesh.height = 0.022 * s
+	band_mesh.radial_segments = 28
+	band.mesh = band_mesh
+	band.material_override = band_mat
+	band.position = Vector3(0.0, 0.028 * s, 0.0)
+	_disguise_hat_root.add_child(band)
 
 
 func apply_disguise_cat_look() -> void:
