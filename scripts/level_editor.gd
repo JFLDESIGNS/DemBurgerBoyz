@@ -36,6 +36,7 @@ var _gizmo_axis: int = -1
 var _gizmo_grab_origin := Vector3.ZERO
 var _gizmo_grab_obj := Vector3.ZERO
 var _place_counter := 0
+var _napkin_darkness_default := 0.0
 
 
 func setup(game: Node, world: Node3D, grill: Node3D, main_cam: Camera3D) -> void:
@@ -673,6 +674,7 @@ func _rebuild_inspector() -> void:
 		UiFontsScript.apply_label(empty, false, 12)
 		empty.add_theme_color_override("font_color", Color(0.72, 0.78, 0.86))
 		_inspector.add_child(empty)
+		_add_napkin_darkness_controls(false)
 		return
 	var name_lab := Label.new()
 	name_lab.text = _selected.name
@@ -690,6 +692,7 @@ func _rebuild_inspector() -> void:
 			_selected.scale = Vector3.ONE * v
 			_save_if_dressing()
 	)
+	_add_napkin_darkness_controls(_is_napkin(_selected))
 	if _selected is Light3D:
 		var light := _selected as Light3D
 		_add_inspect_spin("Brightness", light.light_energy, 0.0, 16.0, 0.05, func(v):
@@ -697,6 +700,24 @@ func _rebuild_inspector() -> void:
 				(_selected as Light3D).light_energy = v
 				_save_if_dressing()
 		)
+		_add_inspect_spin("Specular Strength", light.light_specular, 0.0, 2.0, 0.01, func(v):
+			if _selected is Light3D:
+				(_selected as Light3D).light_specular = v
+				_save_if_dressing()
+		)
+		if light is DirectionalLight3D:
+			var sun := light as DirectionalLight3D
+			_add_inspect_spin("Light Source Size", sun.light_angular_distance, 0.0, 10.0, 0.05, func(v):
+				if _selected is DirectionalLight3D:
+					(_selected as DirectionalLight3D).light_angular_distance = v
+					_save_if_dressing()
+			)
+		else:
+			_add_inspect_spin("Light Source Size", light.light_size, 0.0, 2.0, 0.01, func(v):
+				if _selected is Light3D:
+					(_selected as Light3D).light_size = v
+					_save_if_dressing()
+			)
 		_add_inspect_spin("Range", _light_range(light), 0.1, 20.0, 0.05, func(v):
 			_set_light_range(v)
 		)
@@ -747,6 +768,63 @@ func _add_inspect_spin(label_text: String, value: float, mn: float, mx: float, s
 	)
 	row.add_child(spin)
 	_inspector.add_child(row)
+
+
+func _is_napkin(n: Node) -> bool:
+	return n != null and n is Node3D and (n as Node3D).name.begins_with("Napkin")
+
+
+func _napkin_tint(darkness: float) -> Color:
+	var b: float = clampf(1.0 - darkness, 0.08, 1.0)
+	return Color(b, b, b, 1.0)
+
+
+func _napkin_darkness_of(n: Node) -> float:
+	if n == null or not n.has_meta("napkin_darkness"):
+		return _napkin_darkness_default
+	return clampf(float(n.get_meta("napkin_darkness")), 0.0, 0.90)
+
+
+func _apply_napkin_darkness(mi: MeshInstance3D, darkness: float) -> void:
+	if mi == null:
+		return
+	var d: float = clampf(darkness, 0.0, 0.90)
+	mi.set_meta("napkin_darkness", d)
+	var mat := mi.material_override as StandardMaterial3D
+	if mat == null:
+		mat = _make_napkin_mat(d)
+		mi.material_override = mat
+	else:
+		mat.albedo_color = _napkin_tint(d)
+
+
+func _set_all_napkin_darkness(darkness: float) -> void:
+	_napkin_darkness_default = clampf(darkness, 0.0, 0.90)
+	if _dressing == null:
+		return
+	for child in _dressing.get_children():
+		if child is MeshInstance3D and _is_napkin(child):
+			_apply_napkin_darkness(child as MeshInstance3D, _napkin_darkness_default)
+	_save_dressing()
+
+
+func _add_napkin_darkness_controls(include_selected: bool) -> void:
+	if include_selected and _selected is MeshInstance3D:
+		_add_inspect_spin("Napkin Darkness", _napkin_darkness_of(_selected), 0.0, 0.90, 0.01, func(v: float):
+			if _selected is MeshInstance3D and _is_napkin(_selected):
+				_apply_napkin_darkness(_selected as MeshInstance3D, v)
+				_save_if_dressing()
+		)
+	var has_napkin := false
+	if _dressing != null:
+		for child in _dressing.get_children():
+			if _is_napkin(child):
+				has_napkin = true
+				break
+	if has_napkin or include_selected:
+		_add_inspect_spin("All Napkins Darkness", _napkin_darkness_default, 0.0, 0.90, 0.01, func(v: float):
+			_set_all_napkin_darkness(v)
+		)
 
 
 func _refresh_inspector_values() -> void:
@@ -899,11 +977,12 @@ func _make_dressing_napkin() -> MeshInstance3D:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(0.26, 0.26)
 	mi.mesh = plane
-	mi.material_override = _make_napkin_mat()
+	mi.material_override = _make_napkin_mat(_napkin_darkness_default)
+	mi.set_meta("napkin_darkness", _napkin_darkness_default)
 	return mi
 
 
-func _make_napkin_mat() -> StandardMaterial3D:
+func _make_napkin_mat(darkness: float = 0.0) -> StandardMaterial3D:
 	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
 	for y in 8:
 		for x in 8:
@@ -912,6 +991,7 @@ func _make_napkin_mat() -> StandardMaterial3D:
 	var tex := ImageTexture.create_from_image(img)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
+	mat.albedo_color = _napkin_tint(darkness)
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	mat.roughness = 0.82
 	mat.metallic = 0.0
@@ -946,14 +1026,19 @@ func _save_dressing() -> void:
 		if n is Light3D:
 			var L := n as Light3D
 			cfg.set_value(SAVE_SECTION, p + "energy", L.light_energy)
+			cfg.set_value(SAVE_SECTION, p + "specular", L.light_specular)
+			cfg.set_value(SAVE_SECTION, p + "size", L.light_size)
 			cfg.set_value(SAVE_SECTION, p + "cr", L.light_color.r)
 			cfg.set_value(SAVE_SECTION, p + "cg", L.light_color.g)
 			cfg.set_value(SAVE_SECTION, p + "cb", L.light_color.b)
 			cfg.set_value(SAVE_SECTION, p + "range", _light_range(L))
 			if L is SpotLight3D:
 				cfg.set_value(SAVE_SECTION, p + "angle", (L as SpotLight3D).spot_angle)
+		if _is_napkin(n):
+			cfg.set_value(SAVE_SECTION, p + "dark", _napkin_darkness_of(n))
 		i += 1
 	cfg.set_value(SAVE_SECTION, "count", i)
+	cfg.set_value(SAVE_SECTION, "napkin_darkness", _napkin_darkness_default)
 	cfg.save(SAVE_PATH)
 
 
@@ -983,6 +1068,7 @@ func _load_dressing() -> void:
 		return
 	for child in _dressing.get_children():
 		child.queue_free()
+	_napkin_darkness_default = clampf(float(cfg.get_value(SAVE_SECTION, "napkin_darkness", 0.0)), 0.0, 0.90)
 	var count := int(cfg.get_value(SAVE_SECTION, "count", 0))
 	for i in count:
 		var p := "n%d_" % i
@@ -1022,6 +1108,8 @@ func _load_dressing() -> void:
 		if node is Light3D:
 			var L := node as Light3D
 			L.light_energy = float(cfg.get_value(SAVE_SECTION, p + "energy", L.light_energy))
+			L.light_specular = float(cfg.get_value(SAVE_SECTION, p + "specular", L.light_specular))
+			L.light_size = float(cfg.get_value(SAVE_SECTION, p + "size", L.light_size))
 			L.light_color = Color(
 				float(cfg.get_value(SAVE_SECTION, p + "cr", L.light_color.r)),
 				float(cfg.get_value(SAVE_SECTION, p + "cg", L.light_color.g)),
@@ -1032,6 +1120,11 @@ func _load_dressing() -> void:
 			elif L is SpotLight3D:
 				(L as SpotLight3D).spot_range = float(cfg.get_value(SAVE_SECTION, p + "range", 3.2))
 				(L as SpotLight3D).spot_angle = float(cfg.get_value(SAVE_SECTION, p + "angle", 40.0))
+		if node is MeshInstance3D and kind == "napkin":
+			_apply_napkin_darkness(
+				node as MeshInstance3D,
+				float(cfg.get_value(SAVE_SECTION, p + "dark", _napkin_darkness_default))
+			)
 		_dressing.add_child(node)
 	_select(null)
 	_refresh_outliner()

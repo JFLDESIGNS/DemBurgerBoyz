@@ -1249,7 +1249,7 @@ func frost_top_amount() -> float:
 	return clampf(1.0 - smoothstep(0.0, 1.0, u), 0.0, 1.0)
 
 
-func _make_ice_chunk_mesh(chunk_seed: int) -> ArrayMesh:
+static func _make_ice_chunk_mesh(chunk_seed: int) -> ArrayMesh:
 	## Low-poly irregular ice shard — broken crystal, not a cube.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = chunk_seed if chunk_seed != 0 else randi()
@@ -2079,7 +2079,7 @@ static var _frozen_shader_opaque: Shader = null
 static var _frozen_shader_alpha: Shader = null
 
 
-func _frozen_ball_shader_resource(opaque: bool) -> Shader:
+static func _frozen_ball_shader_resource(opaque: bool) -> Shader:
 	if opaque and _frozen_shader_opaque != null:
 		return _frozen_shader_opaque
 	if not opaque and _frozen_shader_alpha != null:
@@ -2154,7 +2154,7 @@ void fragment() {
 	return shader
 
 
-func _make_frozen_ball_shader(
+static func _make_frozen_ball_shader(
 	albedo: Color,
 	seed: float,
 	lump_amp: float,
@@ -2202,13 +2202,57 @@ func _set_patty_disc_shadow(on: bool) -> void:
 	_shadow_proxy.visible = on
 
 
-func _basis_y_along_normal(normal: Vector3, twist: float) -> Basis:
+static func _basis_y_along_normal(normal: Vector3, twist: float) -> Basis:
 	## Local +Y follows the surface normal (ice-chunk tip points out).
 	var up := normal.normalized()
 	var ref := Vector3.RIGHT if absf(up.dot(Vector3.UP)) > 0.92 else Vector3.UP
 	var x_axis := ref.cross(up).normalized()
 	var z_axis := x_axis.cross(up).normalized()
 	return Basis(x_axis, up, z_axis).rotated(up, twist)
+
+
+static func _attach_ice_chunks_on_ball(parent: Node3D, meat_r: float, scale_mul: float) -> void:
+	## Irregular ice shards stuck to a frozen meatball.
+	if parent == null:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var n: int = rng.randi_range(10, 15)
+	for _i in n:
+		var fleck := MeshInstance3D.new()
+		fleck.name = "IceFleck"
+		fleck.mesh = _make_ice_chunk_mesh(rng.randi())
+		var ang: float = rng.randf() * TAU
+		var elev: float = lerpf(0.10, 0.90, pow(rng.randf(), 0.52))
+		var normal := Vector3(cos(ang) * cos(elev), sin(elev), sin(ang) * cos(elev)).normalized()
+		var r: float = meat_r + 0.003 + rng.randf() * 0.006
+		var twist: float = rng.randf() * TAU
+		var tangent := normal.cross(Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).normalized()
+		var tilt := Basis(tangent, deg_to_rad(rng.randf_range(-22.0, 22.0)))
+		fleck.transform = Transform3D(tilt * _basis_y_along_normal(normal, twist), normal * r)
+		var big_chunk: bool = rng.randf() > 0.42
+		var s_base: float = (2.15 + rng.randf() * 1.55) if big_chunk else (1.15 + rng.randf() * 0.85)
+		var s: float = s_base * scale_mul
+		fleck.scale = Vector3(
+			s * (0.90 + rng.randf() * 0.55),
+			s * (0.75 + rng.randf() * 0.65),
+			s * (0.90 + rng.randf() * 0.55)
+		)
+		var fmat := StandardMaterial3D.new()
+		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+		fmat.metallic = 0.12
+		fmat.roughness = 0.16
+		fmat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+		var ice_a: float = (0.70 + rng.randf() * 0.18) if big_chunk else (0.82 + rng.randf() * 0.14)
+		fmat.albedo_color = Color(0.78 + rng.randf() * 0.14, 0.91 + rng.randf() * 0.07, 1.0, ice_a)
+		fleck.set_meta("base_ice_alpha", ice_a)
+		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+		fmat.render_priority = PATTY_BODY_PRIORITY + 8
+		fleck.material_override = fmat
+		fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(fleck)
 
 
 func _ensure_frozen_ball() -> void:
@@ -2314,13 +2358,11 @@ func _ensure_frozen_ball() -> void:
 		var ang := randf() * TAU
 		var elev := lerpf(0.08, 0.92, pow(randf(), 0.5))
 		var normal := Vector3(cos(ang) * cos(elev), sin(elev), sin(ang) * cos(elev)).normalized()
-		## Brought in tight to the meat (+ WPO bumps still clear most flecks).
 		var r := MEAT_R + 0.0015 + randf() * 0.002
 		var twist := randf() * TAU
 		var tangent := normal.cross(Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).normalized()
 		var tilt := Basis(tangent, deg_to_rad(randf_range(-8.0, 8.0)))
 		fleck.transform = Transform3D(tilt * _basis_y_along_normal(normal, twist), normal * r)
-		## Mostly medium; a few noticeably bigger chunks (more transparent).
 		var s_base := 0.50 + randf() * 0.55
 		var big_chunk := randf() > 0.72
 		if big_chunk:
@@ -2328,15 +2370,12 @@ func _ensure_frozen_ball() -> void:
 		var s := s_base * fleck_scale_comp
 		fleck.scale = Vector3(
 			s * (0.75 + randf() * 0.55),
-			s * (0.35 + randf() * 0.35), ## flatter into the surface
+			s * (0.35 + randf() * 0.35),
 			s * (0.75 + randf() * 0.55)
 		)
 		var fmat := StandardMaterial3D.new()
 		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		## Alpha depth pre-pass prevents shards on a rear frozen patty from
-		## showing through the opaque meat of a nearer patty.
 		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
-		## 25% more transparent than prior ice shards (×0.75 alpha).
 		var ice_a := ((0.14 + randf() * 0.12) if big_chunk else (0.28 + randf() * 0.22)) * 0.75
 		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, ice_a)
 		fleck.set_meta("base_ice_alpha", ice_a)

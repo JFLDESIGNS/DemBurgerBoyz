@@ -1205,6 +1205,16 @@ func _make_speech() -> String:
 	return _order_line()
 
 
+func _yaw_lerp(from_deg: float, to_deg: float, t: float) -> float:
+	## Shortest turn — avoid the long-way spin when walking yaw is −90 and truck face is 180.
+	return rad_to_deg(lerp_angle(deg_to_rad(from_deg), deg_to_rad(to_deg), t))
+
+
+func _sidewalk_walk_yaw(dx: float) -> float:
+	## Kenney +Z nose follows travel on ±X.
+	return WALK_PLUS_X_YAW if dx > 0.0 else WALK_MINUS_X_YAW
+
+
 func _process(delta: float) -> void:
 	_bounce += delta * 3.2
 	var bobble_spd := 2.4
@@ -1268,7 +1278,7 @@ func _process(delta: float) -> void:
 		if not _leave_turned:
 			var turn_t := clampf(_leave_spin / LEAVE_TURN_SEC, 0.0, 1.0)
 			var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
-			rotation_degrees.y = lerpf(_leave_yaw_from, FACE_AWAY_YAW, ease_t)
+			rotation_degrees.y = _yaw_lerp(_leave_yaw_from, FACE_AWAY_YAW, ease_t)
 			if _body:
 				_body.position.y = _base_body_y
 				if _powder_hit:
@@ -1317,7 +1327,7 @@ func _process(delta: float) -> void:
 	var dx: float = target_x - global_position.x
 	if absf(dx) > 0.05 and _shake_time <= 0.0:
 		## Face the way we're walking (along the sidewalk), not sideways at the truck.
-		rotation_degrees.y = WALK_PLUS_X_YAW if dx > 0.0 else WALK_MINUS_X_YAW
+		rotation_degrees.y = _sidewalk_walk_yaw(dx)
 		_arrive_turning = false
 		global_position.x += signf(dx) * minf(absf(dx), delta * 1.6)
 		_play_anim("walk")
@@ -1337,7 +1347,7 @@ func _process(delta: float) -> void:
 		_arrive_turn_t += delta
 		var turn_t := clampf(_arrive_turn_t / ARRIVE_TURN_SEC, 0.0, 1.0)
 		var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
-		rotation_degrees.y = lerpf(_arrive_yaw_from, FACE_TRUCK_YAW, ease_t)
+		rotation_degrees.y = _yaw_lerp(_arrive_yaw_from, FACE_TRUCK_YAW, ease_t)
 		_play_anim("idle")
 		_apply_bobble(false)
 		if _bar_root:

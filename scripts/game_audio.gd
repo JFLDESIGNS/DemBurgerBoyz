@@ -486,7 +486,8 @@ func _sfx_category_for_cache_key(key: String) -> String:
 		return "cooking"
 	if key.begins_with("cup_") or key.begins_with("rack_") or key.begins_with("ice_tink"):
 		return "drinks"
-	if key.begins_with("serve_") or key.begins_with("order_") or key.begins_with("grade_") or key.begins_with("happy_"):
+	if key.begins_with("serve_") or key.begins_with("order_") or key.begins_with("grade_") \
+			or key.begins_with("happy_") or key.begins_with("chaching"):
 		return "service"
 	if key.begins_with("cat_") or key.begins_with("burger_chomp") or "wawa" in key:
 		return "customers"
@@ -1628,8 +1629,8 @@ func _load_tinggrill_stream() -> AudioStream:
 
 
 func play_chaching() -> void:
-	## Soft service bell fallback.
-	play_order_up()
+	## Cash-register cha-ching when a ticket pays into the tip jar.
+	_play_cached("chaching", _make_chaching, 0.0, 0.78)
 
 
 func play_order_up() -> void:
@@ -1724,7 +1725,7 @@ const GROBBLE_CLIP_SEC := 3.0
 const GROBBLE_FADE_IN_SEC := 0.3
 const CLICK_WAWA_CLIP_SEC := 1.15
 const BOSS_WAWA_CLIP_SEC := 4.0
-const BOSS_WAWA_VOLUME_MUL := 1.5
+const BOSS_WAWA_VOLUME_MUL := 3.6
 var _roomba_wawawa_player: AudioStreamPlayer = null
 var _roomba_wawawa_on: bool = false
 var _customer_click_wawa: AudioStreamPlayer = null
@@ -1770,8 +1771,8 @@ func play_customer_grobble(impatience: float = 0.5) -> void:
 	)
 
 
-func play_boss_wawa() -> void:
-	## Pep talk / check-in — same grobble, 1.5× louder, ~4s.
+func play_boss_wawa(loud: bool = false) -> void:
+	## Pep talk / check-in — same grobble, louder when the grill is a mess.
 	if not ResourceLoader.exists(WAWA_PATH):
 		return
 	if not _cache.has("wawawa"):
@@ -1785,7 +1786,8 @@ func play_boss_wawa() -> void:
 	var max_start := maxf(0.0, length - source_needed)
 	var start_at := randf() * max_start if max_start > 0.0 else 0.0
 	var customer_gain := lerpf(0.62, 0.82, 0.5) * lerpf(1.0, 1.08, 0.5)
-	var target_db := linear_to_db(customer_gain * BOSS_WAWA_VOLUME_MUL)
+	var vol_mul := BOSS_WAWA_VOLUME_MUL * (2.35 if loud else 1.0)
+	var target_db := linear_to_db(customer_gain * vol_mul)
 	var p := AudioStreamPlayer.new()
 	p.name = "BossWawa"
 	p.bus = "Master"
@@ -2708,6 +2710,35 @@ func _make_shaker_tap_crash() -> AudioStreamWAV:
 		var sizzle := (rng.randf() * 2.0 - 1.0) * 0.28 * exp(-t * 7.5)
 		var wave := (air * 0.9 + ring + crash_body + sizzle) * env
 		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 23500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_chaching() -> AudioStreamWAV:
+	## Classic register: bright ding, then a lower metallic “ching”.
+	var n := int(MIX_RATE * 0.72)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var f_hi := 2093.0 ## C7
+	var f_lo := 1046.5 ## C6
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var wave := 0.0
+		var a0 := clampf(t / 0.003, 0.0, 1.0) * exp(-t * 6.2)
+		wave += (
+			sin(t * f_hi * TAU) * 0.55
+			+ sin(t * f_hi * 2.01 * TAU) * 0.22 * exp(-t * 8.0)
+			+ sin(t * f_hi * 2.76 * TAU) * 0.16 * exp(-t * 9.5)
+		) * a0
+		if t >= 0.07:
+			var u := t - 0.07
+			var a1 := clampf(u / 0.003, 0.0, 1.0) * exp(-u * 4.4)
+			wave += (
+				sin(u * f_lo * TAU) * 0.62
+				+ sin(u * f_lo * 2.0 * TAU) * 0.18 * exp(-u * 6.5)
+				+ sin(u * f_lo * 3.01 * TAU) * 0.10 * exp(-u * 8.0)
+			) * a1
+		var drawer := exp(-t * 18.0) * (randf() * 2.0 - 1.0) * 0.08
+		_write_s16(pcm, i, int(clampf(wave + drawer, -1.0, 1.0) * 17500.0))
 	return _wav_from_pcm(pcm, false)
 
 
