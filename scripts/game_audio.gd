@@ -1723,6 +1723,8 @@ const WAWA_PATH := "res://sounds/wawawa.ogg"
 const GROBBLE_CLIP_SEC := 3.0
 const GROBBLE_FADE_IN_SEC := 0.3
 const CLICK_WAWA_CLIP_SEC := 1.15
+const BOSS_WAWA_CLIP_SEC := 4.0
+const BOSS_WAWA_VOLUME_MUL := 1.5
 var _roomba_wawawa_player: AudioStreamPlayer = null
 var _roomba_wawawa_on: bool = false
 var _customer_click_wawa: AudioStreamPlayer = null
@@ -1762,6 +1764,42 @@ func play_customer_grobble(impatience: float = 0.5) -> void:
 	if tree == null:
 		return
 	tree.create_timer(GROBBLE_CLIP_SEC).timeout.connect(func():
+		if is_instance_valid(p):
+			p.stop()
+			p.queue_free()
+	)
+
+
+func play_boss_wawa() -> void:
+	## Pep talk / check-in — same grobble, 1.5× louder, ~4s.
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if not _cache.has("wawawa"):
+		var loaded: AudioStream = load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_cache["wawawa"] = loaded
+	var stream: AudioStream = _cache["wawawa"]
+	var length := stream.get_length()
+	var source_needed := BOSS_WAWA_CLIP_SEC * GROBBLE_PITCH
+	var max_start := maxf(0.0, length - source_needed)
+	var start_at := randf() * max_start if max_start > 0.0 else 0.0
+	var customer_gain := lerpf(0.62, 0.82, 0.5) * lerpf(1.0, 1.08, 0.5)
+	var target_db := linear_to_db(customer_gain * BOSS_WAWA_VOLUME_MUL)
+	var p := AudioStreamPlayer.new()
+	p.name = "BossWawa"
+	p.bus = "Master"
+	p.stream = stream
+	p.pitch_scale = GROBBLE_PITCH
+	p.volume_db = -80.0
+	add_child(p)
+	p.play(start_at)
+	var tw := create_tween()
+	tw.tween_property(p, "volume_db", target_db, GROBBLE_FADE_IN_SEC)
+	var tree := get_tree()
+	if tree == null:
+		return
+	tree.create_timer(BOSS_WAWA_CLIP_SEC).timeout.connect(func():
 		if is_instance_valid(p):
 			p.stop()
 			p.queue_free()

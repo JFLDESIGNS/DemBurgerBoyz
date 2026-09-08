@@ -42,6 +42,9 @@ const PATTY_EAT_WIDTH_BOOST := 0.25 ## +25% width while chewing a patty, before 
 const RUN_SEC := 1.35
 const AFTER_BURGER_HIDE_SEC := 95.0
 const DELIVERY_TURN_SEC := 0.45
+const BAG_CHASE_SEC := 0.68
+const BAG_SNATCH_SEC := 0.20
+const BAG_RUN_SEC := 1.70
 
 signal fed(kind: String)
 signal petted
@@ -51,7 +54,7 @@ signal became_full_sized
 var _visual: Node3D = null
 var _area: Area3D = null
 var _anim: AnimationPlayer = null
-var _state: String = "hidden" ## hidden | rising | peek | delivery_turning | lowering | fed_hold | running
+var _state: String = "hidden" ## hidden | rising | peek | delivery_turning | lowering | fed_hold | bag_chase | bag_snatch | running
 var _timer: float = 4.0
 var _bob: float = 0.0
 var _pet_squash: float = 0.0
@@ -61,10 +64,14 @@ var enabled: bool = true
 ## Kept for API compat — peeks no longer require an empty window.
 var _gap_open: bool = true
 var _mouth_burger: Node3D = null
+var _carried_bag: Node3D = null
+var _carried_bag_base_scale: float = 0.45
+var _bag_heist: bool = false
 var _hearts: GPUParticles3D = null
 var _run_from: Vector3 = Vector3.ZERO
 var _run_to: Vector3 = Vector3.ZERO
 var _run_yaw_from: float = FACE_COOK_YAW
+var _run_yaw_to: float = FACE_AWAY_YAW
 ## Persistent chonk from feeding (0 = slim … FAT_MAX = very wide). Survives run-aways.
 var _fat: float = 0.0
 ## Extra overall size after width is maxed (0 = normal … GIANT_MAX = 2×).
@@ -454,6 +461,8 @@ func get_mp_sync() -> Dictionary:
 
 
 func apply_mp_sync(d: Dictionary) -> void:
+	if _bag_heist:
+		return
 	_state = str(d.get("state", _state))
 	_timer = float(d.get("timer", _timer))
 	position = Vector3(float(d.get("x", position.x)), float(d.get("y", position.y)), float(d.get("z", position.z)))
@@ -479,7 +488,8 @@ func _process(delta: float) -> void:
 	_pet_squash = maxf(0.0, _pet_squash - delta * 3.2)
 	_eat_flash = maxf(0.0, _eat_flash - delta)
 	## Puppet peers still run squash / scale / bob, not the peek state machine.
-	if mp_puppet:
+	## A local trash-bag heist plays on whoever threw it.
+	if mp_puppet and not _bag_heist:
 		_apply_visual_scale()
 		return
 	_timer -= delta
@@ -554,13 +564,37 @@ func _process(delta: float) -> void:
 				_mouth_burger.position.y = 0.34 + sin(_bob * 7.0) * 0.01
 			if _timer <= 0.0:
 				_begin_run_away()
+		"bag_chase":
+			visible = true
+			var chase_u := 1.0 - clampf(_timer / BAG_CHASE_SEC, 0.0, 1.0)
+			var chase_ease := chase_u * chase_u * (3.0 - 2.0 * chase_u)
+			position = _run_from.lerp(_run_to, chase_ease)
+			position.y += absf(sin(chase_u * TAU * 4.0)) * 0.11
+			var look_bag := _yaw_look(_run_from, _run_to)
+			var face_u := smoothstep(0.52, 1.0, chase_u)
+			rotation_degrees.y = lerpf(look_bag, FACE_COOK_YAW, face_u)
+			if _anim != null:
+				_anim.speed_scale = 1.85
+			if _timer <= 0.0:
+				_snatch_garbage_bag()
+				_state = "bag_snatch"
+				_timer = BAG_SNATCH_SEC
+		"bag_snatch":
+			visible = true
+			position.y = _run_to.y + absf(sin(_bob * 18.0)) * 0.04
+			rotation_degrees.y = FACE_COOK_YAW
+			if _anim != null:
+				_anim.speed_scale = 1.4
+			if _timer <= 0.0:
+				_begin_bag_run_away()
 		"running":
 			visible = true
-			var u := 1.0 - clampf(_timer / RUN_SEC, 0.0, 1.0)
+			var run_len := BAG_RUN_SEC if _bag_heist else RUN_SEC
+			var u := 1.0 - clampf(_timer / maxf(run_len, 0.05), 0.0, 1.0)
 			var ease_r := u * u * (3.0 - 2.0 * u)
 			position = _run_from.lerp(_run_to, ease_r)
-			rotation_degrees.y = lerpf(_run_yaw_from, FACE_AWAY_YAW + 25.0, ease_r)
-			## Gallop bob while carrying the burger off.
+			rotation_degrees.y = lerpf(_run_yaw_from, _run_yaw_to, ease_r)
+			## Gallop bob while carrying the burger / bag off.
 			position.y += absf(sin(u * TAU * 3.0)) * 0.08
 			if _anim != null:
 				_anim.speed_scale = 1.6
@@ -583,6 +617,8 @@ func _process(delta: float) -> void:
 				rotation_degrees.y = FACE_COOK_YAW
 				_treat_arm = 0.0
 				_clear_mouth_burger()
+				_drop_carried_bag()
+	_jiggle_carried_bag()
 	_apply_visual_scale()
 
 
@@ -617,8 +653,111 @@ func _begin_run_away() -> void:
 	## Dash screen-left / street-ward with the burger.
 	_run_to = Vector3(_home_x() + 2.4 + _giant * 0.8, _hidden_y() + 0.15, _home_z() + 2.8 + _giant * 0.6)
 	_run_yaw_from = rotation_degrees.y
+	_run_yaw_to = FACE_AWAY_YAW + 25.0
 	if _anim != null:
 		_anim.speed_scale = 1.55
+
+
+func _yaw_look(from: Vector3, to: Vector3) -> float:
+	var d := to - from
+	d.y = 0.0
+	if d.length_squared() < 0.0001:
+		return FACE_AWAY_YAW
+	return rad_to_deg(atan2(d.x, d.z))
+
+
+func steal_garbage_bag(bag: Node3D, land_pos: Vector3) -> bool:
+	## Sprint from the window to the street landing, snatch the bag, bolt.
+	if not enabled or _visual == null or bag == null or not is_instance_valid(bag):
+		return false
+	_clear_mouth_burger()
+	_patty_eat_wide = 0.0
+	_delivery_peek_active = false
+	_peek_override_sec = 0.0
+	if _carried_bag != null and is_instance_valid(_carried_bag) and _carried_bag != bag:
+		_kill_bag_street_tween(_carried_bag)
+		_carried_bag.queue_free()
+	_carried_bag = bag
+	_bag_heist = true
+	var start := position
+	if not visible or _state == "hidden" or _state == "lowering":
+		start = Vector3(_home_x() + 0.2, lerpf(_hidden_y(), _shown_y(), 0.62), _home_z() + 0.55)
+	_run_from = start
+	_run_to = Vector3(land_pos.x, maxf(land_pos.y, 0.16) + 0.22, land_pos.z)
+	_run_yaw_from = rotation_degrees.y
+	_run_yaw_to = _yaw_look(start, _run_to)
+	position = start
+	rotation_degrees = Vector3(0.0, _run_yaw_from, 0.0)
+	visible = true
+	_state = "bag_chase"
+	_timer = BAG_CHASE_SEC
+	if _anim != null:
+		_anim.speed_scale = 1.85
+	return true
+
+
+func _kill_bag_street_tween(bag: Node3D) -> void:
+	if bag == null or not bag.has_meta("street_tween"):
+		return
+	var tw: Variant = bag.get_meta("street_tween")
+	if tw is Tween and is_instance_valid(tw):
+		(tw as Tween).kill()
+	bag.remove_meta("street_tween")
+
+
+func _snatch_garbage_bag() -> void:
+	if _carried_bag == null or not is_instance_valid(_carried_bag):
+		_carried_bag = null
+		return
+	_kill_bag_street_tween(_carried_bag)
+	if _carried_bag.get_parent() != self:
+		_carried_bag.reparent(self, true)
+	var mag := (absf(_carried_bag.scale.x) + absf(_carried_bag.scale.y) + absf(_carried_bag.scale.z)) / 3.0
+	_carried_bag_base_scale = clampf(mag * 0.62, 0.22, 0.72)
+	_carried_bag.scale = Vector3.ONE * _carried_bag_base_scale
+	_carried_bag.position = Vector3(0.06, 0.20, 0.40)
+	_carried_bag.rotation_degrees = Vector3(-32.0, 22.0, 58.0)
+	_carried_bag.visible = true
+	_burst_hearts()
+	_pet_squash = 0.85
+
+
+func _begin_bag_run_away() -> void:
+	_state = "running"
+	_timer = BAG_RUN_SEC
+	_run_from = position
+	_run_to = Vector3(
+		position.x + 2.8 + _giant * 0.6,
+		_hidden_y() + 0.14,
+		position.z + 3.5 + _giant * 0.45
+	)
+	_run_yaw_from = rotation_degrees.y
+	_run_yaw_to = _yaw_look(_run_from, _run_to)
+	if _anim != null:
+		_anim.speed_scale = 1.7
+
+
+func _jiggle_carried_bag() -> void:
+	if _carried_bag == null or not is_instance_valid(_carried_bag):
+		return
+	if _carried_bag.get_parent() != self:
+		return
+	## Vertical squash and stretch while running — no wobble spin.
+	var bounce := absf(sin(_bob * 12.0))
+	var stretch := bounce * 0.22
+	var sy := _carried_bag_base_scale * (1.0 + stretch)
+	var sxz := _carried_bag_base_scale * (1.0 - stretch * 0.38)
+	_carried_bag.scale = Vector3(sxz, sy, sxz)
+	_carried_bag.rotation_degrees = Vector3(-32.0, 22.0, 58.0)
+	_carried_bag.position = Vector3(0.06, 0.20 + bounce * 0.012, 0.40)
+
+
+func _drop_carried_bag() -> void:
+	if _carried_bag != null and is_instance_valid(_carried_bag):
+		_kill_bag_street_tween(_carried_bag)
+		_carried_bag.queue_free()
+	_carried_bag = null
+	_bag_heist = false
 
 
 func _finish_run_away() -> void:
@@ -629,6 +768,7 @@ func _finish_run_away() -> void:
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 	_treat_arm = 0.0
 	_clear_mouth_burger()
+	_drop_carried_bag()
 	if _anim != null:
 		_anim.speed_scale = 0.85
 	if _hearts != null and is_instance_valid(_hearts):
@@ -637,7 +777,7 @@ func _finish_run_away() -> void:
 
 func request_delivery_peek(hold_sec: float = 5.5) -> void:
 	## Force a peek so the cat can toss phone restocks into the kitchen.
-	if not enabled or _visual == null or mp_puppet:
+	if not enabled or _visual == null or mp_puppet or _bag_heist:
 		return
 	if _state == "fed_hold" or _state == "running":
 		_clear_mouth_burger()
@@ -652,7 +792,7 @@ func request_delivery_peek(hold_sec: float = 5.5) -> void:
 
 
 func special_people_peek(hold_sec: float = 5.5) -> void:
-	if not enabled or _visual == null:
+	if not enabled or _visual == null or _bag_heist:
 		return
 	_clear_mouth_burger()
 	_patty_eat_wide = 0.0
@@ -710,6 +850,8 @@ func hit_test_feed(camera: Camera3D, screen_pos: Vector2) -> bool:
 
 
 func pet(force: bool = false) -> void:
+	if _bag_heist:
+		return
 	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
@@ -726,6 +868,8 @@ func pet(force: bool = false) -> void:
 
 
 func feed(kind: String, force: bool = false) -> void:
+	if _bag_heist:
+		return
 	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
@@ -779,6 +923,7 @@ func reset_shift(persist_weight: bool = true) -> void:
 	position = Vector3(_home_x(), _hidden_y(), _home_z())
 	rotation_degrees = Vector3(0.0, FACE_COOK_YAW, 0.0)
 	_clear_mouth_burger()
+	_drop_carried_bag()
 	if _anim != null:
 		_anim.speed_scale = 0.85
 	if _hearts != null and is_instance_valid(_hearts):

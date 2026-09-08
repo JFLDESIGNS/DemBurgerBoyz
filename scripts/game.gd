@@ -48,8 +48,14 @@ const PHYSICAL_GARBAGE_TARGET_H := 0.94
 const PHYSICAL_GARBAGE_CUT_HALF_W := 0.29
 const PHYSICAL_GARBAGE_CFG_SECTION := "physical_garbage"
 const PHYSICAL_GARBAGE_SYMBOL_PATH := "res://assets/props/public_trash_symbol.svg"
-const PHYSICAL_GARBAGE_DEFAULT_SCALE := 0.55
-const PHYSICAL_GARBAGE_FOLLOW_GAP_PX := 62.0
+const PHYSICAL_GARBAGE_DEFAULT_SCALE := 1.0
+const PHYSICAL_GARBAGE_FOLLOW_GAP_PX := 72.0
+const GARBAGE_TRAY_WIDTH_MUL := 2.0
+const GARBAGE_TRAY_HEIGHT_MUL := 2.9
+const GARBAGE_TRAY_LIP := 0.07
+const GARBAGE_TRAY_LIP_T := 0.012
+const GARBAGE_BAG_CAPACITY := 12
+const BOTTOM_ROW_SUPPLY_GAP_PX := 132.0
 var physical_garbage_pos := PHYSICAL_GARBAGE_POS
 var physical_garbage_rot := Vector3.ZERO
 var physical_garbage_scale := PHYSICAL_GARBAGE_DEFAULT_SCALE
@@ -58,8 +64,11 @@ var physical_garbage_symbol_rot := Vector3.ZERO
 var physical_garbage_symbol_scale := 1.0
 const ICECREAM_MASCOT_MESH := "res://assets/props/smiling_ice_cream_sf.obj"
 const ICECREAM_MASCOT_TARGET_H := 0.30
-const GRILL_STANDOFF_DIAMETER := 0.127 ## 5 inches
-const GRILL_STANDOFF_CORNER_INSET := 0.0762 ## 3 inches
+const GRILL_STANDOFF_DIAMETER := 0.055 ## ~2.2" stainless legs under the cook-side corners
+const GRILL_STANDOFF_HEIGHT := 0.52
+const GRILL_STANDOFF_CORNER_INSET := 0.07
+const GRILL_STANDOFF_CFG_SECTION := "grill_standoffs"
+const GRILL_STANDOFF_AWAY_Z := 0.09 ## 3 pinches (0.03) away from the cook / toward the grill
 ## 14 piano strips across FULL + 1/2 cook zones only (HOLD is drums).
 ## tinggrill.wav reads ~3 semis flat of C5, so request MIDI = sounded + SAMPLE_COMP.
 ## Flat taps: C major twice — C D E F G A B C D E F G A B (C3→B4).
@@ -154,6 +163,7 @@ const GameDataScript := preload("res://scripts/game_data.gd")
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const LassoToolControllerScript := preload("res://scripts/lasso_tool_controller.gd")
+const LevelEditorScript := preload("res://scripts/level_editor.gd")
 const TruckRadioScript := preload("res://scripts/truck_radio.gd")
 const GameAudioScript := preload("res://scripts/game_audio.gd")
 const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd")
@@ -165,13 +175,14 @@ const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
 const BURGERPALS_STARTUP_SOUND_PATH := "res://sounds/burgerpals.wav"
 const BTS_CAT_BOOK_COVER_PATH := "res://assets/decal/magic_breaking_book.png"
-## Hotkeys 1-7 match strip toppings (tomato → mustard). Cheese is grabbed from the board wheel.
-## Bottom bar left→right: tomato … mustard, then Serve on the right.
+## Hotkeys 1-8 match strip toppings (cheese → mustard).
+## Bottom bar left→right: cheese … mustard, then Serve on the right.
 ## Bottom bun is automatic when a patty hits a station — not on the strip.
 const INGREDIENT_HOTKEYS: Array[String] = [
-	"tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard",
+	"cheese", "tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard",
 ]
-const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7"]
+const BIN_FILL_IDS: Array[String] = ["tomato", "lettuce", "onion", "pickle", "bacon"]
+const HOTKEY_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8"]
 ## Operating costs — waste & supplies cut into tips.
 const COST_DROP_BURGER := 3.00
 const COST_OIL_USE := 0.0 ## Stocked tools are free to use
@@ -179,6 +190,9 @@ const COST_SEASON_USE := 0.0
 const COST_INGREDIENT := 0.25 ## Phone restock unit baseline (using fridge stock is free)
 const COST_BACON := 0.50
 const START_MONEY := 1000.0
+const BANK_CFG_SECTION := "bank"
+const BANK_SAVINGS_RATE_DEFAULT := 1.0
+const BANK_LOAN_RATE_DEFAULT := 5.0
 const SHOP_SODA_MACHINE := "soda_machine"
 const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
@@ -225,6 +239,14 @@ var serve_breakdown_cells: Dictionary = {} ## metric id -> Wii-style tile PanelC
 var _serve_breakdown_tween: Tween = null
 
 var money: float = 0.0
+var bank_savings: float = 0.0
+var bank_loan: float = 0.0
+var bank_savings_rate_pct: float = BANK_SAVINGS_RATE_DEFAULT
+var bank_loan_rate_pct: float = BANK_LOAN_RATE_DEFAULT
+var bank_xfer_chunk: float = 100.0
+var bank_borrow_typed: float = 100.0
+var credit_score: int = 500
+var bank_lifetime_repaid: float = 0.0
 var combo: int = 0
 var day: int = 1
 var day_time: float = DAY_LENGTH
@@ -559,7 +581,28 @@ var physical_garbage_symbol_root: Node3D = null
 var physical_garbage_symbol_base_pos := Vector3(0.0, 0.50, -0.255)
 var _physical_garbage_shake_tween: Tween = null
 var physical_garbage_outline_material: ShaderMaterial = null
+var physical_garbage_tray_mat: StandardMaterial3D = null
 var _physical_garbage_hovered := false
+var garbage_liner_enabled := true
+var garbage_fill := 0
+var garbage_bag_full := false
+var garbage_bag_held := false
+var garbage_bag_hold_vel := Vector3.ZERO
+var garbage_liner_root: Node3D = null
+var garbage_liner_offset := Vector3.ZERO
+var garbage_liner_scale := Vector3.ONE
+var garbage_bag_root: Node3D = null
+var garbage_bag_mat: StandardMaterial3D = null
+var garbage_liner_wobble_mat: ShaderMaterial = null
+var garbage_liner_wobble_amp := 0.14
+var garbage_liner_wobble_freq := 3.2
+var garbage_liner_wobble_speed := 0.0
+var garbage_liner_wobble_y := 2.2
+var garbage_liner_wobble_xz := 1.8
+var garbage_tied_bag_scale := 4.0
+var garbage_bag_hold_height := 0.48 ## meters above grill — drink-style plane
+var garbage_bag_hold_scale := 0.72 ## in-hand finished sack
+var garbage_bag_tilt := Vector2.ZERO
 var grill_surface_area: Area3D = null
 var grill_surface_mat: StandardMaterial3D = null
 var grill_steel_tex: Texture2D = null
@@ -728,17 +771,31 @@ var ingredient_icon_y: float = 0.0
 var ingredient_label_y: float = 0.0
 var ingredient_bin_y_px: float = 0.0
 var ingredient_stock_visible: bool = false
+var bin_fill_brightness: float = 0.70 ## In-tray pile art; 0.70 = 30% darker
+var strip_icon_brightness: float = 1.0
+var strip_icon_saturation: float = 1.0
+var _strip_icon_mat: ShaderMaterial = null
 var ingredient_bin_shell_picker = null
 var ingredient_bin_well_picker = null
 var ingredient_stock_check: CheckButton = null
 var ingredient_bin_steel_check: CheckButton = null
 var _ingredient_bin_rebuild_queued: bool = false
 const INGREDIENT_BINS_CFG_SECTION := "ingredient_bins"
+## 2D pile sprites inside tomato/lettuce/onion/pickle/bacon trays.
+## Per id: x,y,z placement, sx/sy scale, full/empty local Y, tilt toward camera.
+var bin_fill_settings: Dictionary = {}
 var _strip_did_drag: bool = false ## Skip press action after a paint-swipe.
 var _strip_swipe_active: bool = false ## LMB paint across topping buttons.
 var _strip_swipe_added: Dictionary = {} ## id -> true for this swipe
 var _strip_gesture_added: bool = false ## Already applied a topping this LMB gesture.
 const STRIP_SWIPE_THRESH_PX := 44.0 ## Higher = fewer mis-paints when clicking cheese next to tomato
+const STRIP_HOLD_PICKUP_SEC := 0.20 ## Click = add to Build; hold = pick up cheese / sauce bottle
+const STRIP_HOLD_DRAG_PX := 12.0
+var _strip_hold_armed: bool = false
+var _strip_hold_started: bool = false
+var _strip_hold_id: String = ""
+var _strip_hold_t: float = 0.0
+var _strip_hold_origin: Vector2 = Vector2.ZERO
 var _auto_serving: bool = false
 var _serve_fly_busy: bool = false
 var _ingredient_fly_busy: bool = false
@@ -936,6 +993,7 @@ const DISGUISE_CAT_COOLDOWN := 90.0
 ## Mustache-and-hat guy — takes half the day's take until you buy him out.
 const CUT_COLLECTOR_BUYOUT := 10000.0
 const CUT_COLLECTOR_LANE_X := 1.12 ## far screen-left, not in the order line
+const CUT_COLLECTOR_SPAWN_X := 6.5 ## camera-left (world +X); customers enter from camera-right
 const CUT_COLLECTOR_SKIN := 2 ## criminalMaleA
 const CUT_COLLECTOR_WAWA_SEC := 30.0
 const CUT_COLLECTOR_WAWA_CHANCE := 0.50
@@ -1091,6 +1149,20 @@ var phone_scroll: ScrollContainer = null
 var phone_status_signal: Label = null
 var phone_status_net: Label = null
 var phone_status_battery: Label = null
+var phone_nav_bar: Control = null
+var phone_nav_title: Label = null
+var phone_home_page: Control = null
+var phone_social_page: Control = null
+var phone_shop_page: Control = null
+var phone_maps_page: Control = null
+var phone_maps_box: VBoxContainer = null
+var phone_maps_here: Label = null
+var phone_maps_preview: Control = null
+var phone_maps_art: TextureRect = null
+var phone_maps_pin_layer: Control = null
+var phone_bank_page: Control = null
+var phone_bank_box: VBoxContainer = null
+var _phone_app_id: String = "home"
 var _phone_scroll_dragging: bool = false
 var _phone_scroll_drag_pending: bool = false
 var _phone_scroll_drag_start_y: float = 0.0
@@ -1323,6 +1395,10 @@ const FRIES_HOLD_PACK_SCALE := 0.70 ## Smaller on HOLD so a 2×2 grid fits the s
 const FRIES_HOLD_MIN_SEP := 0.052 ## Matches tighter HOLD pack spacing.
 const FRIES_FINISHED_HAND_SCALE := 1.357 ## Previous 1.18 presentation size +15%.
 var fryer_station_scale := 1.0
+var fryer_pit_scale := 2.0
+var fryer_basket_scale := 2.0
+var fryer_trim_scale := 1.0
+var fryer_pit_offset := Vector3.ZERO
 var fryer_oil_color := Color(0.92, 0.68, 0.12, 0.92)
 var fryer_bubble_color := Color(1.0, 0.92, 0.28, 0.72)
 var fries_hand_hold_offset_in := Vector3.ZERO
@@ -1654,6 +1730,7 @@ var screen_style_copy: BackBufferCopy = null
 var screen_style_rect: ColorRect = null
 var screen_style_mat: ShaderMaterial = null
 var lasso_tool = null ## LassoToolController — colored shape planes editor
+var level_editor = null ## In-game fly-cam dresser (L)
 ## Fullscreen fake distance-field AO (depth crease darkening) — Hidden / GFX toggle.
 var fake_df_ao_mesh: MeshInstance3D = null
 var fake_df_ao_mat: ShaderMaterial = null
@@ -1684,6 +1761,15 @@ var options_hidden_tabs: TabContainer = null
 var options_hidden_search: LineEdit = null
 var options_hidden_search_results: OptionButton = null
 var options_hidden_accordions: Array[Dictionary] = []
+var options_hidden_section_open: Dictionary = {} ## persist key -> expanded
+const HIDDEN_UI_CFG_SECTION := "hidden_ui"
+const HIDDEN_GIZMO_LEN := 0.28
+const HIDDEN_GIZMO_HIT_PX := 16.0
+var hidden_gizmo_root: Node3D = null
+var hidden_gizmo_selected: Dictionary = {}
+var hidden_gizmo_axis: int = -1
+var hidden_gizmo_grab_origin := Vector3.ZERO
+var hidden_gizmo_grab_offset := Vector3.ZERO
 var options_hidden_room_tone_option: OptionButton = null
 var options_hidden_room_tone_vol: HSlider = null
 var options_hidden_room_tone_vol_lab: Label = null
@@ -1743,8 +1829,8 @@ var options_hidden_tree_edit_idx: int = 0 ## 0 = large, 1 = birch
 const TREE_XFORM_CFG_SECTION := "tree_xform"
 const PROP_OFFSET_CFG_SECTION := "prop_offsets"
 var prop_offsets: Dictionary = {
-	"burger_buns": Vector3(0.0, -0.01, 0.0),
-	"cheese_stack": Vector3(-0.01, -0.05, -0.03),
+	"burger_buns": Vector3.ZERO,
+	"cheese_stack": Vector3.ZERO,
 	"cutting_board": Vector3(0.05, 0.0, 0.0),
 	"seasoning_shaker": Vector3(-0.06, 0.0, 0.0),
 	"fire_ext": Vector3(-0.05, -0.01, -0.01),
@@ -1808,12 +1894,18 @@ var cheese_station_area: Area3D = null
 var cheese_stack_anchor: Node3D = null ## World home for returning unused slices
 var cheese_stack_top: MeshInstance3D = null ## Hidden while a slice is in hand
 var cheese_pile_slices: Array = [] ## MeshInstance3D slots — visibility tracks fridge stock
-const CHEESE_PILE_MAX_EACH := 10 ## visual cap per pile (20 total)
+const CHEESE_PILE_MAX := 10 ## visual cap for the single cheese stack
+var grill_standoff_root: Node3D = null
+var grill_standoff_left: MeshInstance3D = null
+var grill_standoff_right: MeshInstance3D = null
+var grill_standoff_left_offset := Vector3(0.0, 0.0, GRILL_STANDOFF_AWAY_Z)
+var grill_standoff_right_offset := Vector3(0.0, 0.0, GRILL_STANDOFF_AWAY_Z)
+var grill_standoff_height: float = GRILL_STANDOFF_HEIGHT
 var bun_pile_root: Node3D = null
 var bun_pile_area: Area3D = null ## Click volume over the 3D bun towers
 var bun_pile_stacks: Array = [] ## Pair roots (bottom+top); visibility tracks stock
-const BUN_PILE_TOWER_COUNT := 2 ## two towers on the board side (away from grill)
-const BUN_PILE_PAIRS_PER_TOWER := 2 ## double-stack each = 4 bun sets total
+const BUN_PILE_TOWER_COUNT := 1 ## one pile beside the cheese (was two side-by-side)
+const BUN_PILE_PAIRS_PER_TOWER := 2 ## two bun sets stacked: 2 bottoms + 2 tops
 const BUN_PILE_PAIR_SLOTS := BUN_PILE_TOWER_COUNT * BUN_PILE_PAIRS_PER_TOWER
 const BUN_PILE_SCALE := 0.85 ## Same scale as burgerpack preview props
 const BUN_BOTTOM_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedBottom.glb"
@@ -1847,9 +1939,24 @@ const CONDIMENT_SPLINE_SEGMENTS_PER_BATCH := 96
 const CONDIMENT_SPLINE_MAX_SEGMENTS_PER_FLAVOR := 2000
 ## Sauce cooks at about one fifth the old rate and only while the burner is on.
 const CONDIMENT_BURN_RATE := 0.35
+const CONDIMENT_HELD_UPRIGHT_PITCH := 8.0
+const CONDIMENT_HELD_POUR_PITCH := 102.0
+const CONDIMENT_TILT_POUR_ENABLE := 62.0
+const CONDIMENT_TILT_STEP := 9.0
+const CONDIMENT_SMEAR_CAP := 28
+const CONDIMENT_CHUNK_CAP := 40
 var condiment_bottle_roots: Dictionary = {} ## ketchup/mustard -> permanent 3D bottle holder
-var condiment_bottle_homes: Dictionary = {} ## id -> Vector3 center position behind the cheese piles
+var condiment_bottle_homes: Dictionary = {} ## id -> Vector3 parked in the ketchup/mustard tray
 var condiment_bottle_home_rots: Dictionary = {} ## id -> upright display rotation
+var condiment_bottle_home_scales: Dictionary = {} ## id -> float sit-in-tray scale
+var condiment_bottle_nudge := {
+	"ketchup": Vector3.ZERO,
+	"mustard": Vector3.ZERO,
+}
+var condiment_bottle_extra_scale := {
+	"ketchup": 1.0,
+	"mustard": 1.0,
+}
 var condiment_bottle_areas: Dictionary = {} ## id -> Area3D pickup volume
 var condiment_pour_queue: Array[Dictionary] = []
 var condiment_pour_busy: bool = false
@@ -1857,9 +1964,15 @@ var condiment_active_id: String = ""
 var condiment_active_tween: Tween = null
 var condiment_stream_mesh: MeshInstance3D = null
 var condiment_tool_held: String = ""
-var condiment_tool_pouring: bool = true
+var condiment_tool_pouring: bool = false
+var condiment_tool_tilt_deg: float = 0.0
+var condiment_tilt_sensitivity: float = 1.0
 var condiment_tool_last_draw := Vector3.ZERO
+var condiment_tool_last_dir := Vector3.ZERO
+var condiment_draw_smooth := Vector3.ZERO
 var condiment_tool_stream_phase: float = 0.0
+var condiment_smear_items: Array = []
+var condiment_chunk_items: Array = []
 var condiment_spline_batches: Dictionary = {} ## Legacy state name; painter/flavor -> active ribbon batch.
 ## Top sits on the bottom heel (untoasted bottom height ≈ 0.040).
 const BUN_PAIR_TOP_Y := 0.039
@@ -2042,20 +2155,22 @@ const RADIO_UI_PANEL_SIZE := Vector2(200.0, 0.0) ## width locked; height hugs co
 const RADIO_UI_TOP := 82.0 ## was 52 — nudged down 30px with phone
 const RADIO_UI_RIGHT := 10.0
 const RADIO_UI_LEFT := 210.0 ## panel width + right margin
-## Android phone HUD — includes the cab radio as its first section.
+## Android phone HUD — radio lives on the screen under a real top bezel.
 const PHONE_UI_BASE_H := 278.0
-const PHONE_UI_SIZE := Vector2(200.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10) ## +15% +5% +10% +10% taller
-const PHONE_UI_SCALE := 0.968 ## Another 10% larger than the previous 0.88 layout.
-const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 28.0 ## fit inside screen + section margins
-const PHONE_LOGO_WRAP_H := 78.0 ## bigger home-screen brand mark
-const PHONE_LOGO_DISPLAY_H := 72.0
-const PHONE_STATUS_H := 16.0
+const PHONE_UI_SIZE := Vector2(236.0, PHONE_UI_BASE_H * 1.15 * 1.05 * 1.10 * 1.10 * 1.18)
+const PHONE_UI_SCALE := 1.05
+const PHONE_LOGO_INNER_W := PHONE_UI_SIZE.x - 36.0
+const PHONE_LOGO_WRAP_H := 52.0
+const PHONE_LOGO_DISPLAY_H := 48.0
+const PHONE_STATUS_H := 22.0
+const PHONE_BEZEL_TOP := 26.0
+const PHONE_BEZEL_BOTTOM := 18.0
 const PHONE_SCROLL_DRAG_THRESH := 8.0
 const PHONE_SCROLL_FRICTION := 4.8
 const PHONE_SCROLL_MIN_VEL := 10.0
 const PHONE_SCROLL_WHEEL_KICK := 520.0
-const PHONE_CORNER_OUTER := 10
-const PHONE_CORNER_INNER := 6
+const PHONE_CORNER_OUTER := 18
+const PHONE_CORNER_INNER := 10
 const SOCIAL_REPLY_ARGUE_CHANCE := 0.48 ## Not True! / Liar! sometimes get a clap-back
 ## Soda fountain — right counter (screen-right = world −X). Yaw 180 faces the camera.
 const SODA_STATION_POS := Vector3(-1.53, 0.91, 0.91)
@@ -2419,6 +2534,7 @@ const SODA_TANK_MAX_H := 0.245
 const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
+const START_LOGO_TEX_PATH := "res://assets/decal/opening_truck.jpg"
 const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
 const STREET_BG_PREVIEW_PATH := "res://assets/bg/street_preview_storefront.png"
 const STREET_BG_BRIGHT_PATH := "res://IMAGES/storefront2.png"
@@ -2919,6 +3035,7 @@ func _ready() -> void:
 	_build_options_menu()
 	_build_guided_tutorial_ui()
 	_setup_lasso_tool()
+	_setup_level_editor()
 	_setup_location_map_ui()
 	_setup_game_over_location_button()
 	_setup_cut_buyout_button()
@@ -3503,36 +3620,37 @@ func _layout_flash_label() -> void:
 
 
 func _setup_start_logo() -> void:
-	## Swap the text title for the Burger Pals brand mark on the open screen.
+	## Swap the text title for the Burger Pals truck art on the open screen.
 	var center := get_node_or_null("UI/Root/StartOverlay/StartCenter") as VBoxContainer
 	if center == null:
 		return
 	var title := center.get_node_or_null("Title") as Label
 	if title:
 		title.visible = false
+	var logo_path := START_LOGO_TEX_PATH
+	if not ResourceLoader.exists(logo_path) and not FileAccess.file_exists(logo_path):
+		logo_path = LOGO_TEX_PATH
 	if start_logo != null and is_instance_valid(start_logo):
 		_stop_logo_hover()
 		if start_logo_motion != null and is_instance_valid(start_logo_motion):
 			start_logo_motion.position = Vector2.ZERO
 			start_logo_motion.rotation = 0.0
 			start_logo_motion.scale = Vector2.ONE
-		start_logo.position = Vector2(20, 38)
+		start_logo.position = Vector2.ZERO
 		start_logo.rotation = 0.0
 		start_logo.scale = Vector2.ONE
+		var keep_tex := _load_start_logo_texture(logo_path)
+		if keep_tex != null:
+			start_logo.texture = keep_tex
 		return
-	if not ResourceLoader.exists(LOGO_TEX_PATH):
-		if title:
-			title.visible = true
-		return
-	var tex := load(LOGO_TEX_PATH) as Texture2D
+	var tex := _load_start_logo_texture(logo_path)
 	if tex == null:
 		if title:
 			title.visible = true
 		return
-	## Extra vertical room so layout stays stable (no bob).
 	start_logo_wrap = Control.new()
 	start_logo_wrap.name = "BurgerPalsLogoWrap"
-	start_logo_wrap.custom_minimum_size = Vector2(260, 344)
+	start_logo_wrap.custom_minimum_size = Vector2(640, 300)
 	start_logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	start_logo_wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 	start_logo_wrap.gui_input.connect(_on_start_logo_gui_input)
@@ -3541,8 +3659,8 @@ func _setup_start_logo() -> void:
 
 	start_logo_motion = Control.new()
 	start_logo_motion.name = "StartLogoMotion"
-	start_logo_motion.custom_minimum_size = Vector2(260, 344)
-	start_logo_motion.size = Vector2(260, 344)
+	start_logo_motion.custom_minimum_size = Vector2(640, 300)
+	start_logo_motion.size = Vector2(640, 300)
 	start_logo_motion.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	start_logo_wrap.add_child(start_logo_motion)
 
@@ -3551,19 +3669,31 @@ func _setup_start_logo() -> void:
 	start_logo.texture = tex
 	start_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	start_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	start_logo.custom_minimum_size = Vector2(220, 220)
-	start_logo.size = Vector2(220, 220)
-	start_logo.position = Vector2(20, 38)
+	start_logo.custom_minimum_size = Vector2(620, 280)
+	start_logo.size = Vector2(620, 280)
+	start_logo.position = Vector2.ZERO
 	start_logo.mouse_filter = Control.MOUSE_FILTER_STOP
 	start_logo.gui_input.connect(_on_start_logo_gui_input)
 	start_logo_motion.add_child(start_logo)
-	_setup_start_patty_preview()
-	## Tall enough for logo + blurb + Solo + Multiplayer.
-	center.offset_top = -390.0
-	center.offset_bottom = 210.0
-	center.offset_left = -380.0
-	center.offset_right = 380.0
+	## Truck art sits still — no hover bob and no patty overlay on the mark.
+	center.offset_top = -430.0
+	center.offset_bottom = 230.0
+	center.offset_left = -420.0
+	center.offset_right = 420.0
 	_stop_logo_hover()
+
+
+func _load_start_logo_texture(path: String) -> Texture2D:
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			return res as Texture2D
+	var abs_path := ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(path) or FileAccess.file_exists(abs_path):
+		var img := Image.new()
+		if img.load(abs_path if FileAccess.file_exists(abs_path) else path) == OK:
+			return ImageTexture.create_from_image(img)
+	return null
 
 
 func _setup_start_patty_preview() -> void:
@@ -3627,18 +3757,18 @@ func _setup_start_patty_preview() -> void:
 
 
 func _start_logo_hover() -> void:
-	## Hover disabled — keep logo still on the home screen.
+	## Hover disabled — keep the opening truck still.
 	_stop_logo_hover()
 	if start_logo_motion != null and is_instance_valid(start_logo_motion):
 		start_logo_motion.position = Vector2.ZERO
 		start_logo_motion.rotation = 0.0
 		start_logo_motion.scale = Vector2.ONE
 	if start_logo != null and is_instance_valid(start_logo):
-		start_logo.position = Vector2(20, 38)
+		start_logo.position = Vector2.ZERO
 		start_logo.rotation = 0.0
 		start_logo.scale = Vector2.ONE
 	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
-		start_patty_preview_wrap.position = Vector2(5, 188)
+		start_patty_preview_wrap.position = Vector2(195, 248)
 
 
 func _stop_logo_hover() -> void:
@@ -3648,36 +3778,12 @@ func _stop_logo_hover() -> void:
 
 
 func _bounce_start_logo() -> void:
-	var mover := start_logo_motion
-	if mover == null or not is_instance_valid(mover):
-		mover = start_logo
-	if mover == null or not is_instance_valid(mover):
-		return
-	_stop_logo_hover()
-	mover.pivot_offset = Vector2(130, 172)
-	mover.position = Vector2.ZERO
-	mover.rotation = 0.0
-	mover.scale = Vector2.ONE
-	if start_logo != null and is_instance_valid(start_logo):
-		start_logo.position = Vector2(20, 38)
-		start_logo.rotation = 0.0
-		start_logo.scale = Vector2.ONE
-	if start_patty_preview_wrap != null and is_instance_valid(start_patty_preview_wrap):
-		start_patty_preview_wrap.position = Vector2(5, 188)
-	start_logo_tween = create_tween()
-	start_logo_tween.set_parallel(true)
-	start_logo_tween.tween_property(mover, "position", Vector2(0, -46), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(mover, "scale", Vector2(1.08, 0.94), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(mover, "rotation", deg_to_rad(-3.5), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	start_logo_tween.chain().set_parallel(true)
-	start_logo_tween.tween_property(mover, "position", Vector2.ZERO, 0.26).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(mover, "scale", Vector2.ONE, 0.26).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	start_logo_tween.tween_property(mover, "rotation", 0.0, 0.26).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	## Opening truck art stays still — no bob or bounce.
+	pass
 
 
 func _on_start_logo_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		_bounce_start_logo()
 		_play_burgerpals_voice()
 		get_viewport().set_input_as_handled()
 
@@ -3697,11 +3803,14 @@ func _setup_stations_data() -> void:
 			"plate": null,
 			"drop_hint": null,
 			"drop_btn": null,
+			"trash_btn": null,
+			"layer_hint": null,
 			"fresh_label": null,
 			"fresh_active": false,
 			"freshness": FRESHNESS_MAX,
 			"spoiled": false,
 			"selected_layer": -1,
+			"hovered_layer": -1,
 		})
 
 
@@ -3738,6 +3847,11 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	## Backup if title-screen warm was skipped / still running.
 	call_deferred("_ensure_runtime_prewarms")
 	money = START_MONEY
+	bank_savings = 0.0
+	bank_loan = 0.0
+	bank_borrow_typed = 100.0
+	credit_score = 500
+	bank_lifetime_repaid = 0.0
 	shift_start_money = START_MONEY
 	last_day_earnings = 0.0
 	last_day_cut = 0.0
@@ -3884,11 +3998,17 @@ func _process(delta: float) -> void:
 	_update_window_bunting_wind(delta)
 	_update_street_car(delta)
 	_update_keyboard_cook_shortcuts(delta)
+	if level_editor != null and level_editor.is_active():
+		level_editor.update_fly(delta)
+	_update_strip_hold_pickup(delta)
 	_update_air_motes(delta)
 	_update_physical_garbage_hover()
 	_update_start_patty_preview(delta)
-	_update_ingredient_bins_3d()
+	if level_editor == null or not level_editor.is_active():
+		_update_ingredient_bins_3d()
 	_update_physical_garbage_screen_follow()
+	_update_bottom_row_supply_follow()
+	_hidden_gizmo_update_visual()
 	## Window godrays disabled for now (too strong).
 	# _update_window_godrays(delta)
 	if not playing:
@@ -4001,6 +4121,8 @@ func _process(delta: float) -> void:
 		_update_held_glock(delta)
 	if sale_held:
 		_update_held_sale(delta)
+	if garbage_bag_held:
+		_update_held_garbage_bag(delta)
 	if glock_cooldown > 0.0:
 		glock_cooldown = maxf(0.0, glock_cooldown - delta)
 	if glock_recoil > 0.0:
@@ -4300,6 +4422,10 @@ func _next_spawn_delay() -> float:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _try_level_editor_hotkey(event):
+		return
+	if level_editor != null and level_editor.is_active():
+		return
 	## Audio debug works on title / pause / in-shift.
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_9 or event.physical_keycode == KEY_9 \
@@ -4377,9 +4503,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				burgerpack_held_pitch = fposmod(burgerpack_held_pitch + step, 360.0)
 			get_viewport().set_input_as_handled()
 			return
-		## Held sauce bottle: any scroll tick toggles inverted pour / upright.
+		## Held sauce bottle: scroll down tilts toward the grill; scroll up stands it up.
 		if condiment_tool_held != "":
-			_nudge_condiment_tool_tilt(1.0)
+			var tilt_dir: float = 1.0 if event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1.0
+			_nudge_condiment_tool_tilt(tilt_dir)
 			get_viewport().set_input_as_handled()
 			return
 		## Oil bottle: any scroll tick toggles pour on/off (starts on).
@@ -4501,6 +4628,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if _try_level_editor_hotkey(event):
+		return
+	if level_editor != null and level_editor.is_active():
+		if level_editor.handle_input(event):
+			get_viewport().set_input_as_handled()
+			return
+		if not level_editor.is_pointer_over_ui(_event_screen_pos(event)):
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		options_panel_dragging = false
 	if not playing:
@@ -4538,6 +4674,10 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 			if options_menu_open and (event.keycode == KEY_ESCAPE or event.keycode == KEY_F10):
+				if _hidden_gizmo_has_selection() and event.keycode == KEY_ESCAPE:
+					_hidden_gizmo_select({})
+					get_viewport().set_input_as_handled()
+					return
 				if gfx_panel != null and gfx_panel.visible:
 					_set_graphics_menu_open(false)
 				else:
@@ -4551,6 +4691,12 @@ func _input(event: InputEvent) -> void:
 			var over_options := options_panel != null and is_instance_valid(options_panel) and options_panel.get_global_rect().has_point(ui_pos)
 			var over_gfx := gfx_panel != null and is_instance_valid(gfx_panel) and gfx_panel.visible and gfx_panel.get_global_rect().has_point(ui_pos)
 			if over_options or over_gfx:
+				return
+			if _hidden_gizmo_handle_input(event):
+				get_viewport().set_input_as_handled()
+				return
+			if _hidden_gizmo_active() and event is InputEventMouseButton:
+				get_viewport().set_input_as_handled()
 				return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
 	if _handle_strip_swipe_input(event):
@@ -4727,18 +4873,25 @@ func _input(event: InputEvent) -> void:
 			_release_bts_lightstick()
 			get_viewport().set_input_as_handled()
 			return
+		if garbage_bag_held:
+			_throw_garbage_bag_to_street(event.position)
+			get_viewport().set_input_as_handled()
+			return
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if _try_pickup_garbage_bag(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _try_fryer_basket_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			if _try_ready_fries_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
-			## Sauce bottles sit behind cheese; their own collision must win before
-			## the wider cheese-station grab box beneath them.
-			if _try_grab_condiment_tool(event.position):
+			## Strip click on ketchup/mustard adds to the burger. Hold the strip
+			## button to pick up the 3D bottle. Don't steal that click for a grab.
+			if not _is_ingredient_strip_click(event.position) and _try_grab_condiment_tool(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			## 3D bun towers (board-side) — thud + hop before cheese / UI steal the click.
@@ -4789,7 +4942,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null:
+			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null or garbage_bag_held:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -4935,21 +5088,86 @@ func _is_enter_pressed(event: InputEvent) -> bool:
 	return event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER
 
 
+func _strip_uses_hold_pickup(id: String) -> bool:
+	## Cheese / ketchup / mustard: tap adds to Build; hold (or drag out) picks the tool up.
+	return id == "cheese" or id == "ketchup" or id == "mustard"
+
+
+func _begin_strip_hold_tracking(id: String, origin: Vector2) -> void:
+	_strip_hold_armed = true
+	_strip_hold_started = false
+	_strip_hold_id = id
+	_strip_hold_t = 0.0
+	_strip_hold_origin = origin
+
+
+func _clear_strip_hold_tracking() -> void:
+	_strip_hold_armed = false
+	_strip_hold_started = false
+	_strip_hold_id = ""
+	_strip_hold_t = 0.0
+
+
+func _try_start_strip_hold_pickup() -> void:
+	if _strip_hold_started or _strip_hold_id == "":
+		return
+	var id := _strip_hold_id
+	_strip_hold_started = true
+	_strip_hold_armed = false
+	_strip_swipe_active = false
+	_strip_swipe_added.clear()
+	if _is_condiment(id):
+		if _begin_condiment_tool_hold(id):
+			_strip_gesture_added = true
+			_strip_did_drag = true
+		return
+	if id == "cheese":
+		_begin_cheese_hold(true)
+		if cheese_held:
+			_cheese_lmb_drag = true
+			_cheese_drag_origin = get_viewport().get_mouse_position()
+			_strip_gesture_added = true
+			_strip_did_drag = true
+
+
+func _update_strip_hold_pickup(delta: float) -> void:
+	if not playing or options_menu_open or shift_paused:
+		return
+	if not _strip_hold_armed or _strip_hold_started:
+		return
+	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_strip_hold_armed = false
+		return
+	if bool(_strip_swipe_added.get("_moved", false)):
+		_clear_strip_hold_tracking()
+		return
+	_strip_hold_t += delta
+	var mouse := get_viewport().get_mouse_position()
+	var over_id: String = _strip_ingredient_at(mouse)
+	if over_id != "" and over_id != _strip_hold_id:
+		## Crossing another strip tile — wait for swipe, don't steal the bottle / cheese.
+		return
+	if _strip_hold_t >= STRIP_HOLD_PICKUP_SEC:
+		_try_start_strip_hold_pickup()
+		return
+	if mouse.distance_to(_strip_hold_origin) >= STRIP_HOLD_DRAG_PX:
+		var delta_pos: Vector2 = mouse - _strip_hold_origin
+		var left_strip: bool = over_id == ""
+		var mostly_vertical: bool = absf(delta_pos.y) > absf(delta_pos.x) * 1.15
+		if left_strip or mostly_vertical:
+			_try_start_strip_hold_pickup()
+
+
 func _handle_strip_swipe_input(event: InputEvent) -> bool:
 	## Drag across topping buttons to stack them in order — one pass for EVERYTHING.
-	## Cheese is excluded: it's a pick-up ghost, and swipe drifts often paint tomato instead.
+	## Cheese / ketchup / mustard still click-to-add and hold-to-pickup; a strip
+	## paint swipe can include them too.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var mouse := _strip_mouse_pos(event)
 			var id := _strip_ingredient_at(mouse)
 			if id == "":
 				_strip_swipe_active = false
-				return false
-			## Cheese click/drag is hold-to-place — never start a paint-swipe from it.
-			if id == "cheese":
-				_strip_swipe_active = false
-				_strip_did_drag = false
-				_strip_gesture_added = false
 				return false
 			## Fresh press — never inherit a stale skip flag from a prior drag.
 			_strip_did_drag = false
@@ -4959,6 +5177,10 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 			_strip_swipe_added["_start"] = mouse
 			_strip_swipe_added["_start_id"] = id
 			_strip_swipe_added["_moved"] = false
+			if _strip_uses_hold_pickup(id):
+				_begin_strip_hold_tracking(id, mouse)
+			else:
+				_clear_strip_hold_tracking()
 			return false
 		## Release ends a paint swipe.
 		if _strip_swipe_active:
@@ -4969,23 +5191,29 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 			_strip_swipe_added.clear()
 		return false
 	if event is InputEventMouseMotion and _strip_swipe_active and _pointer_button_pressed(MOUSE_BUTTON_LEFT):
+		if _strip_hold_started:
+			return false
 		var mouse2 := _strip_mouse_pos(event)
-		var start_pos: Vector2 = _strip_swipe_added.get("_start", mouse2)
+		var start_pos: Vector2 = mouse2
+		var start_raw: Variant = _strip_swipe_added.get("_start", mouse2)
+		if start_raw is Vector2:
+			start_pos = start_raw as Vector2
 		var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
 		if not bool(_strip_swipe_added.get("_moved", false)):
 			if start_pos.distance_to(mouse2) >= STRIP_SWIPE_THRESH_PX:
-				_strip_swipe_added["_moved"] = true
-				_strip_did_drag = true
-				## Do NOT auto-send the pressed topping to Build here — a grab/hold
-				## drag (bacon → cat, etc.) is not a click. Paint only when the
-				## cursor crosses onto a different strip button below.
+				var peek_id: String = _strip_ingredient_at(mouse2)
+				if peek_id != "":
+					_strip_swipe_added["_moved"] = true
+					_strip_did_drag = true
+					_clear_strip_hold_tracking()
+					## Do NOT auto-send the pressed topping to Build here — a grab/hold
+					## drag (bacon → cat, etc.) is not a click. Paint only when the
+					## cursor is still on a strip button below.
 		if bool(_strip_swipe_added.get("_moved", false)):
-			var id2 := _strip_ingredient_at(mouse2)
-			## Never paint cheese mid-swipe — keeps tomato/cheese boundary clean.
-			if id2 != "" and id2 != "cheese":
+			var id2: String = _strip_ingredient_at(mouse2)
+			if id2 != "":
 				## Entering a new topping: include the start button once, then this one.
-				if start_id != "" and start_id != "cheese" and id2 != start_id \
-						and not _strip_swipe_added.has(start_id):
+				if start_id != "" and id2 != start_id and not _strip_swipe_added.has(start_id):
 					_strip_swipe_add(start_id)
 				_strip_swipe_add(id2)
 		return true
@@ -5084,6 +5312,8 @@ func _ingredient_from_hotkey(keycode: Key) -> String:
 			return INGREDIENT_HOTKEYS[5] if INGREDIENT_HOTKEYS.size() > 5 else ""
 		KEY_7, KEY_KP_7:
 			return INGREDIENT_HOTKEYS[6] if INGREDIENT_HOTKEYS.size() > 6 else ""
+		KEY_8, KEY_KP_8:
+			return INGREDIENT_HOTKEYS[7] if INGREDIENT_HOTKEYS.size() > 7 else ""
 	return ""
 
 
@@ -5095,7 +5325,7 @@ func _kb_typing_blocked() -> bool:
 
 
 func _handle_keyboard_cook_key(event: InputEventKey) -> bool:
-	## Tap C = cheese to Build · hold C/L/O = soda · hold I = soft serve · hold S = scrape · hold H oils FULL burgers.
+	## Tap C = cheese to Build · hold C/O = soda · L opens the fly-cam level editor.
 	if _kb_typing_blocked():
 		return false
 	var code := event.keycode
@@ -5127,17 +5357,6 @@ func _handle_keyboard_cook_key(event: InputEventKey) -> bool:
 			elif not is_down and _kb_i_down:
 				_kb_i_down = false
 				_kb_stop_icecream()
-			else:
-				return false
-			get_viewport().set_input_as_handled()
-			return true
-		KEY_L:
-			if is_down and not event.echo:
-				_kb_l_down = true
-				_kb_start_soda_pour("lemon_lime")
-			elif not is_down and _kb_l_down:
-				_kb_l_down = false
-				_kb_stop_soda_pour()
 			else:
 				return false
 			get_viewport().set_input_as_handled()
@@ -5243,10 +5462,6 @@ func _kb_fly_cheese_to_build() -> void:
 
 
 func _cheese_station_screen_center() -> Vector2:
-	if camera != null and cheese_station_area != null and is_instance_valid(cheese_station_area):
-		var pt := cheese_station_area.global_position + Vector3(0.0, 0.06, 0.0)
-		if not camera.is_position_behind(pt):
-			return camera.unproject_position(pt)
 	return _ingredient_button_screen_center("cheese")
 
 
@@ -5884,7 +6099,7 @@ func _end_day() -> void:
 	var location_name := TruckLocationsScript.display_name(current_location_id)
 	var rank := TruckLocationsScript.rank_of(current_location_id)
 	var cut_block := _format_day_cut_recap()
-	game_over_label.text = "%s shift complete!\nArea %d of %d - %s\n\nServed: %d\nPerfect: %d\n%sWallet: %s\n\n%s\n\nReplay here or move the truck for a new challenge." % [
+	game_over_label.text = "%s shift complete!\nArea %d of %d - %s\n\nServed: %d\nPerfect: %d\n%sWallet: %s\n%s\n\n%s\n\nReplay here or move the truck for a new challenge." % [
 		location_name,
 		rank,
 		TruckLocationsScript.all().size(),
@@ -5893,6 +6108,7 @@ func _end_day() -> void:
 		perfect_serves,
 		cut_block,
 		_format_money(money),
+		_apply_bank_day_interest(),
 		social_block
 	]
 	restart_btn.text = "REPLAY %s" % location_name.to_upper()
@@ -6012,52 +6228,114 @@ func _build_3d_world() -> void:
 	_setup_world_lighting()
 
 
+func _garbage_tray_dims() -> Dictionary:
+	var tray_z := maxf(0.4, ingredient_bin_length)
+	var tray_x := tray_z * GARBAGE_TRAY_WIDTH_MUL
+	var h := maxf(0.2, ingredient_bin_height) * GARBAGE_TRAY_HEIGHT_MUL
+	var wall := clampf(ingredient_bin_wall, 0.03, tray_z * 0.35)
+	var r := clampf(ingredient_bin_radius, 0.04, tray_z * 0.45)
+	var floor_t := clampf(ingredient_bin_floor, 0.03, h * 0.45)
+	return {
+		"x": tray_x,
+		"z": tray_z,
+		"h": h,
+		"wall": wall,
+		"r": r,
+		"floor": floor_t,
+		"lip": GARBAGE_TRAY_LIP,
+		"lip_t": GARBAGE_TRAY_LIP_T,
+	}
+
+
+func _add_garbage_tray_shell(parent: Node3D, dims: Dictionary) -> void:
+	var tray_x := float(dims["x"])
+	var tray_z := float(dims["z"])
+	var h := float(dims["h"])
+	var wall := float(dims["wall"])
+	var r := float(dims["r"])
+	var floor_t := float(dims["floor"])
+	var lip := float(dims["lip"])
+	var lip_t := float(dims["lip_t"])
+	var comb := CSGCombiner3D.new()
+	comb.name = "Shell"
+	comb.use_collision = false
+	comb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	comb.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	comb.calculate_tangents = true
+	parent.add_child(comb)
+	var body := CSGCombiner3D.new()
+	body.use_collision = false
+	body.position.y = -h * 0.5
+	_csg_add_rounded_rect(body, tray_x, h, tray_z, r)
+	comb.add_child(body)
+	var lip_comb := CSGCombiner3D.new()
+	lip_comb.use_collision = false
+	lip_comb.position.y = -lip_t * 0.5
+	var lip_x := tray_x + lip * 2.0
+	var lip_z := tray_z + lip * 2.0
+	_csg_add_rounded_rect(lip_comb, lip_x, lip_t, lip_z, minf(r + lip * 0.5, minf(lip_x, lip_z) * 0.45))
+	comb.add_child(lip_comb)
+	var cavity := CSGCombiner3D.new()
+	cavity.operation = CSGShape3D.OPERATION_SUBTRACTION
+	cavity.use_collision = false
+	var overshoot := 0.12
+	var ih := h - floor_t + overshoot
+	var ix := maxf(0.12, tray_x - 2.0 * wall)
+	var iz := maxf(0.12, tray_z - 2.0 * wall)
+	var ir := maxf(0.04, r - wall)
+	cavity.position.y = -h * 0.5 + floor_t * 0.5 + overshoot * 0.5
+	_csg_add_rounded_rect(cavity, ix, ih, iz, ir)
+	comb.add_child(cavity)
+	var well := MeshInstance3D.new()
+	well.name = "Well"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(ix * 0.90, iz * 0.90)
+	well.mesh = plane
+	well.position.y = -h + floor_t + 0.006
+	well.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	well.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	parent.add_child(well)
+
+
 func _build_physical_garbage_can() -> void:
 	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
+		if garbage_bag_root != null and is_instance_valid(garbage_bag_root) \
+				and garbage_bag_root.get_parent() == physical_garbage_root:
+			garbage_bag_root = null
+		garbage_liner_root = null
 		physical_garbage_root.queue_free()
 	physical_garbage_root = null
 	physical_garbage_area = null
 	physical_garbage_target = null
 	physical_garbage_symbol_root = null
+	physical_garbage_tray_mat = null
 	physical_garbage_outline_material = null
 	_physical_garbage_hovered = false
-	if not ResourceLoader.exists(PHYSICAL_GARBAGE_SCENE):
-		push_warning("Physical garbage model missing: %s" % PHYSICAL_GARBAGE_SCENE)
+	if world == null:
 		return
-	var packed := load(PHYSICAL_GARBAGE_SCENE) as PackedScene
-	if packed == null:
-		return
-	var visual := packed.instantiate() as Node3D
-	if visual == null:
-		return
+	var dims := _garbage_tray_dims()
+	var tray_x := float(dims["x"])
+	var tray_z := float(dims["z"])
+	var h := float(dims["h"])
+	var lip := float(dims["lip"])
 	var root := Node3D.new()
 	root.name = "PhysicalGarbageCan"
 	root.position = physical_garbage_pos
 	root.rotation_degrees = physical_garbage_rot
-	root.scale = Vector3.ONE * physical_garbage_scale
 	world.add_child(root)
 	physical_garbage_root = root
-	var holder := Node3D.new()
-	holder.name = "TrashcanSmallCC0"
-	root.add_child(holder)
-	holder.add_child(visual)
-	_apply_physical_garbage_tint(visual)
-	## Normalize the authored GLB to the cutout instead of assuming source units.
-	var raw := _mesh_aabb_in_node_space(holder)
-	var scale_fit := PHYSICAL_GARBAGE_TARGET_H / maxf(0.001, raw.size.y)
-	holder.scale = Vector3.ONE * scale_fit
-	var fit := _mesh_aabb_in_node_space(holder)
-	holder.position = Vector3(
-		-(fit.position.x + fit.size.x * 0.5),
-		-fit.position.y,
-		-(fit.position.z + fit.size.z * 0.5)
-	)
+	_add_garbage_tray_shell(root, dims)
+	## Plaque sits on the cook-facing wall, below the bag lip so it stays readable.
 	physical_garbage_symbol_base_pos = Vector3(
 		0.0,
-		PHYSICAL_GARBAGE_TARGET_H * 0.50,
-		-(fit.size.z * 0.5 + 0.006)
+		-clampf(h * 0.30, 0.22, 0.42),
+		-(tray_z * 0.5) - 0.018
 	)
-	_build_physical_garbage_symbol(root)
+	_build_physical_garbage_symbol(root, Vector2(
+		clampf(tray_x * 0.38, 0.38, 0.72),
+		clampf(tray_x * 0.38, 0.38, 0.72)
+	))
+	_add_garbage_liner(root, dims)
 	var area := Area3D.new()
 	area.name = "PhysicalGarbageGrab"
 	area.input_ray_pickable = true
@@ -6067,21 +6345,25 @@ func _build_physical_garbage_can() -> void:
 	area.monitorable = true
 	var collision := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(PHYSICAL_GARBAGE_CUT_HALF_W * 1.8, PHYSICAL_GARBAGE_TARGET_H, 0.48)
+	box.size = Vector3(tray_x + lip * 2.0, h + 0.04, tray_z + lip * 2.0)
 	collision.shape = box
-	collision.position = Vector3(0.0, PHYSICAL_GARBAGE_TARGET_H * 0.5, 0.0)
+	collision.name = "GrabShape"
+	collision.position = Vector3(0.0, -h * 0.5, 0.0)
 	area.add_child(collision)
 	root.add_child(area)
 	physical_garbage_area = area
 	var target := Marker3D.new()
 	target.name = "GarbageOpeningTarget"
-	target.position = Vector3(0.0, PHYSICAL_GARBAGE_TARGET_H - 0.045, -0.015)
+	target.position = Vector3(0.0, -0.02, 0.0)
 	root.add_child(target)
 	physical_garbage_target = target
+	_apply_physical_garbage_tray_style()
+	_restore_garbage_bag_visuals()
+	_refresh_garbage_grab_shape()
 	call_deferred("_update_physical_garbage_screen_follow")
 
 
-func _build_physical_garbage_symbol(parent: Node3D) -> void:
+func _build_physical_garbage_symbol(parent: Node3D, pict_size: Vector2 = Vector2(0.29, 0.29)) -> void:
 	if parent == null or not ResourceLoader.exists(PHYSICAL_GARBAGE_SYMBOL_PATH):
 		return
 	var tex := load(PHYSICAL_GARBAGE_SYMBOL_PATH) as Texture2D
@@ -6092,23 +6374,637 @@ func _build_physical_garbage_symbol(parent: Node3D) -> void:
 	parent.add_child(symbol)
 	physical_garbage_symbol_root = symbol
 
+	var plate := MeshInstance3D.new()
+	plate.name = "Plaque"
+	var plate_mesh := QuadMesh.new()
+	plate_mesh.size = pict_size * 1.22
+	plate.mesh = plate_mesh
+	plate.position.z = -0.006
+	var plate_mat := StandardMaterial3D.new()
+	plate_mat.albedo_color = Color(0.07, 0.07, 0.08)
+	plate_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	plate_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	plate_mat.no_depth_test = true
+	plate_mat.render_priority = 27
+	plate.material_override = plate_mat
+	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	symbol.add_child(plate)
+
 	var icon := MeshInstance3D.new()
 	icon.name = "Pictogram"
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.29, 0.29)
+	quad.size = pict_size
 	icon.mesh = quad
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
-	mat.albedo_color = Color.WHITE
+	mat.albedo_color = Color(0.98, 0.96, 0.90, 1.0)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.emission_enabled = true
+	mat.emission = Color(0.55, 0.52, 0.44)
+	mat.emission_energy_multiplier = 0.55
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
-	mat.render_priority = 2
+	mat.render_priority = 29
 	icon.material_override = mat
 	icon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	symbol.add_child(icon)
 	_apply_physical_garbage_symbol_transform()
+
+
+func _garbage_bag_material() -> StandardMaterial3D:
+	if garbage_bag_mat != null and is_instance_valid(garbage_bag_mat):
+		return garbage_bag_mat
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.07, 0.07, 0.075)
+	mat.roughness = 0.86
+	mat.metallic = 0.02
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	garbage_bag_mat = mat
+	return mat
+
+
+func _garbage_liner_wobble_shader_code() -> String:
+	return """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;
+
+uniform vec4 albedo : source_color = vec4(0.09, 0.09, 0.10, 1.0);
+uniform float roughness = 0.9;
+uniform float metallic = 0.02;
+uniform float wobble_amp = 0.14;
+uniform float wobble_freq = 3.2;
+uniform float wobble_speed = 0.0;
+uniform float wobble_y = 2.2;
+uniform float wobble_xz = 1.8;
+
+void vertex() {
+	float rim = smoothstep(-0.18, 0.04, VERTEX.y);
+	float seed = VERTEX.x * 13.7 + VERTEX.z * 9.1 + VERTEX.y * 4.3;
+	float t = TIME * wobble_speed;
+	float n1 = sin(VERTEX.x * wobble_freq + VERTEX.z * wobble_freq * 0.73 + seed * 0.15 + t);
+	float n2 = sin(VERTEX.z * wobble_freq * 1.21 - VERTEX.x * 0.91 + 2.41 + t * 0.37);
+	float n3 = sin((VERTEX.x + VERTEX.z) * wobble_freq * 0.42 + 0.63);
+	float n4 = sin(VERTEX.x * wobble_freq * 0.55 - VERTEX.z * wobble_freq * 0.61 + 4.2);
+	float mag = wobble_amp * (0.55 + rim * 2.8);
+	VERTEX += vec3(
+		(n1 + n4 * 0.45) * mag * wobble_xz,
+		(n2 + n3) * 0.55 * mag * wobble_y,
+		(n2 + n1 * 0.35) * mag * wobble_xz
+	);
+}
+
+void fragment() {
+	ALBEDO = albedo.rgb;
+	ROUGHNESS = roughness;
+	METALLIC = metallic;
+	SPECULAR = 0.28;
+}
+"""
+
+
+func _garbage_liner_wobble_material() -> ShaderMaterial:
+	if garbage_liner_wobble_mat != null and is_instance_valid(garbage_liner_wobble_mat):
+		_apply_garbage_liner_wobble_params()
+		return garbage_liner_wobble_mat
+	var shader := Shader.new()
+	shader.code = _garbage_liner_wobble_shader_code()
+	var mat := ShaderMaterial.new()
+	mat.resource_name = "GarbageLinerWobble"
+	mat.shader = shader
+	garbage_liner_wobble_mat = mat
+	_apply_garbage_liner_wobble_params()
+	return mat
+
+
+func _apply_garbage_liner_wobble_params() -> void:
+	if garbage_liner_wobble_mat == null or not is_instance_valid(garbage_liner_wobble_mat):
+		return
+	if garbage_liner_wobble_mat.shader == null:
+		garbage_liner_wobble_mat.shader = Shader.new()
+	garbage_liner_wobble_mat.shader.code = _garbage_liner_wobble_shader_code()
+	garbage_liner_wobble_mat.set_shader_parameter("wobble_amp", garbage_liner_wobble_amp)
+	garbage_liner_wobble_mat.set_shader_parameter("wobble_freq", garbage_liner_wobble_freq)
+	garbage_liner_wobble_mat.set_shader_parameter("wobble_speed", garbage_liner_wobble_speed)
+	garbage_liner_wobble_mat.set_shader_parameter("wobble_y", garbage_liner_wobble_y)
+	garbage_liner_wobble_mat.set_shader_parameter("wobble_xz", garbage_liner_wobble_xz)
+
+
+func _garbage_liner_rim_point(i: int, count: int, hx: float, hz: float, corner_r: float = 0.0) -> Vector3:
+	var n := maxi(1, count)
+	var cr := minf(maxf(corner_r, 0.0), minf(hx, hz) * 0.92)
+	if cr <= 0.001:
+		var a := TAU * float(i) / float(n)
+		var ca := cos(a)
+		var sa := sin(a)
+		var pwr := 0.35
+		return Vector3(
+			hx * signf(ca) * pow(absf(ca), pwr),
+			0.0,
+			hz * signf(sa) * pow(absf(sa), pwr)
+		)
+	var straight_x := maxf(0.0, hx - cr)
+	var straight_z := maxf(0.0, hz - cr)
+	var arc := PI * 0.5 * cr
+	var perim := 4.0 * (straight_x + straight_z + arc)
+	var d := fposmod(float(i) / float(n) * perim, perim)
+	var px := 0.0
+	var pz := 0.0
+	var seg := straight_x * 2.0
+	if d <= seg:
+		px = lerp(-straight_x, straight_x, d / maxf(seg, 0.0001))
+		pz = -hz
+	else:
+		d -= seg
+		seg = arc
+		if d <= seg:
+			var t: float = float(d) / maxf(float(seg), 0.0001)
+			var ang: float = lerp(-PI * 0.5, 0.0, t)
+			px = straight_x + cos(ang) * cr
+			pz = -straight_z + sin(ang) * cr
+		else:
+			d -= seg
+			seg = straight_z * 2.0
+			if d <= seg:
+				px = hx
+				pz = lerp(-straight_z, straight_z, d / maxf(seg, 0.0001))
+			else:
+				d -= seg
+				seg = arc
+				if d <= seg:
+					var t2: float = float(d) / maxf(float(seg), 0.0001)
+					var ang2: float = lerp(0.0, PI * 0.5, t2)
+					px = straight_x + cos(ang2) * cr
+					pz = straight_z + sin(ang2) * cr
+				else:
+					d -= seg
+					seg = straight_x * 2.0
+					if d <= seg:
+						px = lerp(straight_x, -straight_x, d / maxf(seg, 0.0001))
+						pz = hz
+					else:
+						d -= seg
+						seg = arc
+						if d <= seg:
+							var t3: float = float(d) / maxf(float(seg), 0.0001)
+							var ang3: float = lerp(PI * 0.5, PI, t3)
+							px = -straight_x + cos(ang3) * cr
+							pz = straight_z + sin(ang3) * cr
+						else:
+							d -= seg
+							seg = straight_z * 2.0
+							if d <= seg:
+								px = -hx
+								pz = lerp(straight_z, -straight_z, d / maxf(seg, 0.0001))
+							else:
+								d -= seg
+								var t4: float = clampf(float(d) / maxf(float(arc), 0.0001), 0.0, 1.0)
+								var ang4: float = lerp(PI, PI * 1.5, t4)
+								px = -straight_x + cos(ang4) * cr
+								pz = -straight_z + sin(ang4) * cr
+	return Vector3(px, 0.0, pz)
+
+
+func _garbage_liner_loop(hx: float, hz: float, y: float, count: int, jitter: float, corner_r: float = 0.0) -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	pts.resize(count)
+	for i in count:
+		var p := _garbage_liner_rim_point(i, count, hx, hz, corner_r)
+		if jitter > 0.0001:
+			p.x += sin(float(i) * 2.73 + 0.6) * jitter
+			p.z += cos(float(i) * 1.91 + 1.2) * jitter
+			p.y += sin(float(i) * 3.17 + 0.3) * jitter * 0.85
+		p.y += y
+		pts[i] = p
+	return pts
+
+
+func _stitch_garbage_liner_loops(st: SurfaceTool, a: PackedVector3Array, b: PackedVector3Array) -> void:
+	var n := mini(a.size(), b.size())
+	if n < 3:
+		return
+	for i in n:
+		var j := (i + 1) % n
+		st.add_vertex(a[i])
+		st.add_vertex(a[j])
+		st.add_vertex(b[j])
+		st.add_vertex(a[i])
+		st.add_vertex(b[j])
+		st.add_vertex(b[i])
+
+
+func _make_garbage_liner_mesh(dims: Dictionary) -> ArrayMesh:
+	var h := float(dims["h"])
+	var wall := float(dims["wall"])
+	var floor_t := float(dims["floor"])
+	var r := float(dims["r"])
+	var ix := maxf(0.10, float(dims["x"]) - 2.0 * wall)
+	var iz := maxf(0.10, float(dims["z"]) - 2.0 * wall)
+	var inner_h := maxf(0.16, h - floor_t - 0.02)
+	## Thin inner bag only — a tiny rolled bead at the mouth, not a lid across the can lip.
+	var mouth_hx := maxf(0.07, ix * 0.5 - 0.006)
+	var mouth_hz := maxf(0.07, iz * 0.5 - 0.006)
+	var cr := maxf(0.03, r - wall)
+	var segs := 96
+	var bead := 0.016
+	var rows: Array[PackedVector3Array] = [
+		_garbage_liner_loop(mouth_hx * 0.86, mouth_hz * 0.86, -inner_h + 0.02, segs, 0.018, cr * 0.86),
+		_garbage_liner_loop(mouth_hx * 0.94, mouth_hz * 0.94, -inner_h * 0.72, segs, 0.022, cr * 0.94),
+		_garbage_liner_loop(mouth_hx * 0.99, mouth_hz * 0.99, -inner_h * 0.42, segs, 0.026, cr * 0.99),
+		_garbage_liner_loop(mouth_hx, mouth_hz, -inner_h * 0.16, segs, 0.030, cr),
+		_garbage_liner_loop(mouth_hx, mouth_hz, -0.004, segs, 0.038, cr),
+		_garbage_liner_loop(mouth_hx + bead * 0.35, mouth_hz + bead * 0.35, 0.010, segs, 0.046, cr + bead * 0.2),
+		_garbage_liner_loop(mouth_hx + bead, mouth_hz + bead, 0.004, segs, 0.042, cr + bead * 0.45),
+		_garbage_liner_loop(mouth_hx + bead * 1.15, mouth_hz + bead * 1.15, -0.022, segs, 0.036, cr + bead * 0.5),
+	]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for row_i in range(rows.size() - 1):
+		_stitch_garbage_liner_loops(st, rows[row_i], rows[row_i + 1])
+	st.generate_normals()
+	st.index()
+	return st.commit()
+
+
+func _add_garbage_liner(parent: Node3D, dims: Dictionary) -> void:
+	garbage_liner_root = null
+	garbage_liner_wobble_mat = null
+	if parent == null:
+		return
+	var liner := Node3D.new()
+	liner.name = "GarbageLiner"
+	parent.add_child(liner)
+	garbage_liner_root = liner
+	var sack := MeshInstance3D.new()
+	sack.name = "Sack"
+	sack.mesh = _make_garbage_liner_mesh(dims)
+	sack.material_override = _garbage_liner_wobble_material()
+	sack.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sack.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	sack.set_meta("base_scale", Vector3.ONE)
+	liner.add_child(sack)
+	_restore_garbage_bag_visuals()
+
+
+func _make_tied_garbage_bag() -> Node3D:
+	var bag := Node3D.new()
+	bag.name = "TiedGarbageBag"
+	var mat := _garbage_liner_wobble_material()
+	var body := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.42
+	sphere.height = 0.78
+	sphere.radial_segments = 28
+	sphere.rings = 18
+	body.mesh = sphere
+	body.scale = Vector3(1.34, 0.96, 1.18)
+	body.position.y = 0.10
+	body.material_override = mat
+	bag.add_child(body)
+	var lump := MeshInstance3D.new()
+	var lump_mesh := SphereMesh.new()
+	lump_mesh.radius = 0.24
+	lump_mesh.height = 0.38
+	lump_mesh.radial_segments = 20
+	lump_mesh.rings = 12
+	lump.mesh = lump_mesh
+	lump.position = Vector3(0.18, 0.06, 0.10)
+	lump.scale = Vector3(1.22, 0.84, 1.02)
+	lump.material_override = mat
+	bag.add_child(lump)
+	var lump2 := MeshInstance3D.new()
+	var lump2_mesh := SphereMesh.new()
+	lump2_mesh.radius = 0.20
+	lump2_mesh.height = 0.32
+	lump2_mesh.radial_segments = 18
+	lump2_mesh.rings = 12
+	lump2.mesh = lump2_mesh
+	lump2.position = Vector3(-0.16, 0.03, -0.10)
+	lump2.scale = Vector3(1.10, 0.80, 1.14)
+	lump2.material_override = mat
+	bag.add_child(lump2)
+	var lump3 := MeshInstance3D.new()
+	var lump3_mesh := SphereMesh.new()
+	lump3_mesh.radius = 0.16
+	lump3_mesh.height = 0.26
+	lump3_mesh.radial_segments = 16
+	lump3_mesh.rings = 10
+	lump3.mesh = lump3_mesh
+	lump3.position = Vector3(0.04, -0.02, 0.16)
+	lump3.scale = Vector3(1.08, 0.72, 0.92)
+	lump3.material_override = mat
+	bag.add_child(lump3)
+	var neck := MeshInstance3D.new()
+	var neck_mesh := CylinderMesh.new()
+	neck_mesh.top_radius = 0.06
+	neck_mesh.bottom_radius = 0.16
+	neck_mesh.height = 0.28
+	neck_mesh.radial_segments = 16
+	neck.mesh = neck_mesh
+	neck.position.y = 0.48
+	neck.rotation_degrees = Vector3(8.0, 0.0, -6.0)
+	neck.material_override = mat
+	bag.add_child(neck)
+	var knot := MeshInstance3D.new()
+	var knot_mesh := SphereMesh.new()
+	knot_mesh.radius = 0.10
+	knot_mesh.height = 0.17
+	knot_mesh.radial_segments = 16
+	knot_mesh.rings = 10
+	knot.mesh = knot_mesh
+	knot.position.y = 0.64
+	knot.scale = Vector3(1.50, 0.64, 1.08)
+	knot.material_override = mat
+	bag.add_child(knot)
+	var twist := MeshInstance3D.new()
+	var twist_mesh := SphereMesh.new()
+	twist_mesh.radius = 0.07
+	twist_mesh.height = 0.12
+	twist_mesh.radial_segments = 14
+	twist.mesh = twist_mesh
+	twist.position = Vector3(0.10, 0.65, 0.02)
+	twist.scale = Vector3(1.65, 0.55, 0.82)
+	twist.material_override = mat
+	bag.add_child(twist)
+	return bag
+
+
+func _apply_tied_bag_sit_transform(bag: Node3D) -> void:
+	if bag == null or not is_instance_valid(bag) or physical_garbage_root == null:
+		return
+	if bag.get_parent() != physical_garbage_root:
+		if bag.get_parent() != null:
+			bag.reparent(physical_garbage_root, false)
+		else:
+			physical_garbage_root.add_child(bag)
+	bag.position = Vector3(0.0, 0.10 * garbage_tied_bag_scale, 0.0)
+	bag.rotation_degrees = Vector3(-8.0, 16.0, 6.0)
+	bag.scale = Vector3.ONE * garbage_tied_bag_scale
+
+
+func _apply_garbage_liner_transform() -> void:
+	if garbage_liner_root == null or not is_instance_valid(garbage_liner_root):
+		return
+	garbage_liner_root.position = garbage_liner_offset
+	garbage_liner_root.scale = garbage_liner_scale
+
+
+func _restore_garbage_bag_visuals() -> void:
+	if garbage_liner_root != null and is_instance_valid(garbage_liner_root):
+		_apply_garbage_liner_transform()
+		garbage_liner_root.visible = garbage_liner_enabled and not garbage_bag_full and not garbage_bag_held
+		_refresh_garbage_liner_fill()
+	if garbage_bag_held:
+		return
+	if garbage_bag_full and garbage_liner_enabled and physical_garbage_root != null:
+		if garbage_bag_root == null or not is_instance_valid(garbage_bag_root):
+			garbage_bag_root = _make_tied_garbage_bag()
+		_apply_tied_bag_sit_transform(garbage_bag_root)
+		garbage_bag_root.visible = true
+	elif garbage_bag_root != null and is_instance_valid(garbage_bag_root) \
+			and not garbage_bag_held:
+		garbage_bag_root.visible = false
+	_refresh_garbage_grab_shape()
+
+
+func _refresh_garbage_liner_fill() -> void:
+	if garbage_liner_root == null or not is_instance_valid(garbage_liner_root):
+		return
+	var sack := garbage_liner_root.get_node_or_null("Sack") as Node3D
+	if sack == null:
+		return
+	var t := clampf(float(garbage_fill) / float(GARBAGE_BAG_CAPACITY), 0.0, 1.0)
+	var base: Vector3 = sack.get_meta("base_scale", Vector3.ONE)
+	sack.scale = Vector3(base.x * (1.0 + t * 0.08), base.y * (1.0 + t * 0.10), base.z * (1.0 + t * 0.08))
+
+
+func _garbage_ready_for_trash() -> bool:
+	if garbage_bag_held:
+		_flash("Toss the bag into the street first", Color("FFCC80"))
+		return false
+	if garbage_liner_enabled and garbage_bag_full:
+		_flash("Bag is full — pick it up and toss it in the street", Color("FFCC80"))
+		return false
+	return true
+
+
+func _register_garbage_fill() -> void:
+	if not garbage_liner_enabled or garbage_bag_held or garbage_bag_full:
+		return
+	garbage_fill = mini(garbage_fill + 1, GARBAGE_BAG_CAPACITY)
+	_refresh_garbage_liner_fill()
+	if garbage_fill >= GARBAGE_BAG_CAPACITY:
+		_cinch_garbage_bag()
+
+
+func _cinch_garbage_bag() -> void:
+	garbage_bag_full = true
+	if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
+		return
+	var finish := func() -> void:
+		if garbage_liner_root != null and is_instance_valid(garbage_liner_root):
+			garbage_liner_root.visible = false
+			_apply_garbage_liner_transform()
+		if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
+			return
+		if garbage_bag_root != null and is_instance_valid(garbage_bag_root):
+			garbage_bag_root.queue_free()
+		garbage_bag_root = _make_tied_garbage_bag()
+		_apply_tied_bag_sit_transform(garbage_bag_root)
+		garbage_bag_root.scale = Vector3.ONE * (garbage_tied_bag_scale * 0.62)
+		_refresh_garbage_grab_shape()
+		var pop := create_tween()
+		pop.tween_property(garbage_bag_root, "scale", Vector3.ONE * garbage_tied_bag_scale, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		_flash("Bag's full — toss it in the street", Color("B0BEC5"))
+	if garbage_liner_root != null and is_instance_valid(garbage_liner_root) and garbage_liner_root.visible:
+		var cinch_scale := Vector3(
+			garbage_liner_scale.x * 0.38,
+			garbage_liner_scale.y * 1.28,
+			garbage_liner_scale.z * 0.38
+		)
+		var cinch_pos := garbage_liner_offset + Vector3(0.0, 0.11, 0.0)
+		var tw := create_tween()
+		tw.tween_property(garbage_liner_root, "scale", cinch_scale, 0.26) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(garbage_liner_root, "position", cinch_pos, 0.26)
+		tw.tween_callback(finish)
+	else:
+		finish.call()
+
+
+func _try_pickup_garbage_bag(screen_pos: Vector2) -> bool:
+	if not playing or not garbage_liner_enabled or not garbage_bag_full or garbage_bag_held:
+		return false
+	if _hands_busy_with_other_tool() or spatula_patty != null:
+		return false
+	if not _garbage_area_hit(screen_pos):
+		return false
+	if garbage_bag_root == null or not is_instance_valid(garbage_bag_root):
+		garbage_bag_root = _make_tied_garbage_bag()
+	if world != null and garbage_bag_root.get_parent() != world:
+		if garbage_bag_root.get_parent() != null:
+			garbage_bag_root.reparent(world, true)
+		else:
+			world.add_child(garbage_bag_root)
+	garbage_bag_root.scale = Vector3.ONE * garbage_bag_hold_scale
+	garbage_bag_held = true
+	garbage_bag_hold_vel = Vector3.ZERO
+	garbage_bag_tilt = Vector2.ZERO
+	if game_audio:
+		game_audio.play_click()
+	_flash("Hold and fling it into the street", Color("B0BEC5"))
+	_update_held_garbage_bag(0.0)
+	return true
+
+
+func _garbage_bag_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
+	## Drink-style plane track, parked higher so the sack sits in-hand.
+	if camera == null:
+		return Vector3.ZERO
+	var hold_y := GRILL_SURFACE_Y + garbage_bag_hold_height
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	var hit := Vector3.ZERO
+	if absf(dir.y) > 0.002:
+		var t := (hold_y - from.y) / dir.y
+		if t > 0.05:
+			hit = from + dir * t
+	if hit == Vector3.ZERO:
+		hit = from + dir * 2.4
+		hit.y = hold_y
+	hit.x = clampf(hit.x, -2.40, 2.40)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - 0.85, 2.85)
+	hit.y = hold_y
+	return hit
+
+
+func _update_held_garbage_bag(delta: float) -> void:
+	if not garbage_bag_held or garbage_bag_root == null or not is_instance_valid(garbage_bag_root):
+		return
+	var hit := _garbage_bag_hold_point_from_screen(get_viewport().get_mouse_position())
+	if hit == Vector3.ZERO:
+		return
+	var hold_y := GRILL_SURFACE_Y + garbage_bag_hold_height
+	hit.y = hold_y
+	var prev := garbage_bag_root.global_position
+	var follow := 1.0 if delta <= 0.0 else clampf(CUP_FOLLOW_RATE * delta, 0.0, 1.0)
+	var desired := prev.lerp(hit, follow)
+	if delta > 0.0001:
+		var step := desired - prev
+		var max_step := CUP_FOLLOW_MAX_SPEED * delta
+		if step.length() > max_step and max_step > 0.0001:
+			desired = prev + step.normalized() * max_step
+		garbage_bag_hold_vel = (desired - prev) / delta
+	else:
+		garbage_bag_hold_vel = Vector3.ZERO
+	desired.y = hold_y if delta <= 0.0 else lerpf(desired.y, hold_y, clampf(delta * 16.0, 0.0, 1.0))
+	garbage_bag_root.global_position = desired
+	## Soft-body squash/stretch while you move it — no animated crinkle.
+	var speed_xz := Vector2(garbage_bag_hold_vel.x, garbage_bag_hold_vel.z).length()
+	var stretch := clampf(speed_xz * 0.10, 0.0, 0.22)
+	var sy := garbage_bag_hold_scale * (1.0 + stretch)
+	var sxz := garbage_bag_hold_scale * (1.0 - stretch * 0.42)
+	garbage_bag_root.scale = Vector3(sxz, sy, sxz)
+	## Same lean-from-velocity as the drink — settle upright when still.
+	var horiz := Vector2(-garbage_bag_hold_vel.x, garbage_bag_hold_vel.z)
+	if horiz.length() < CUP_TILT_VEL_DEADZONE:
+		horiz = Vector2.ZERO
+	var target_tilt := horiz * CUP_TILT_FROM_VEL
+	if target_tilt.length() > CUP_TILT_MAX:
+		target_tilt = target_tilt.normalized() * CUP_TILT_MAX
+	var tilt_rate := CUP_TILT_FOLLOW if horiz.length() > 0.08 else CUP_TILT_SETTLE
+	garbage_bag_tilt = garbage_bag_tilt.lerp(target_tilt, clampf(delta * tilt_rate, 0.0, 1.0) if delta > 0.0 else 1.0)
+	garbage_bag_root.rotation_degrees = Vector3(-6.0 + garbage_bag_tilt.y, 10.0, garbage_bag_tilt.x)
+
+
+func _throw_garbage_bag_to_street(screen_pos: Vector2) -> void:
+	if not garbage_bag_held or garbage_bag_root == null or not is_instance_valid(garbage_bag_root):
+		garbage_bag_held = false
+		return
+	var bag := garbage_bag_root
+	garbage_bag_held = false
+	garbage_bag_root = null
+	garbage_bag_full = false
+	garbage_fill = 0
+	_restore_garbage_bag_visuals()
+	_refresh_garbage_grab_shape()
+	if world != null and bag.get_parent() != world:
+		bag.reparent(world, true)
+	var start := bag.global_position
+	var aim := _garbage_bag_hold_point_from_screen(screen_pos)
+	var fling := garbage_bag_hold_vel
+	garbage_bag_hold_vel = Vector3.ZERO
+	var push_x := clampf(aim.x + fling.x * 0.16, -2.2, 2.2)
+	var push_z := clampf(maxf(aim.z, start.z) + maxf(fling.z, 0.8) * 0.22 + 2.4, 3.4, 6.2)
+	var mid := Vector3(lerpf(start.x, push_x, 0.45), maxf(start.y, 1.7) + 0.85, lerpf(start.z, push_z, 0.42))
+	var land := Vector3(push_x, 0.18, push_z)
+	var stolen := false
+	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("steal_garbage_bag"):
+		stolen = bool(window_cat.call("steal_garbage_bag", bag, land))
+	var tw := create_tween()
+	tw.set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(bag, "global_position", mid, 0.26).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(bag, "rotation_degrees", Vector3(80.0, 140.0, -40.0), 0.26)
+	tw.tween_property(bag, "global_position", land, 0.40).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(bag, "rotation_degrees", Vector3(12.0, randf_range(-40.0, 40.0), 8.0), 0.40)
+	if stolen:
+		bag.set_meta("street_tween", tw)
+		if game_audio:
+			if game_audio.has_method("play_cat_meow"):
+				game_audio.play_cat_meow()
+			if game_audio.has_method("play_spatula_whoosh"):
+				game_audio.play_spatula_whoosh()
+		_flash("The cat ran off with it — new bag in the can", Color("CE93D8"))
+	else:
+		var shrink_to := bag.scale * 0.02
+		tw.tween_interval(10.0)
+		tw.tween_property(bag, "scale", shrink_to, 0.45)
+		tw.tween_callback(func() -> void:
+			if bag != null and is_instance_valid(bag):
+				bag.queue_free()
+		)
+		_flash("New bag in the can", Color("A5D6A7"))
+	if garbage_liner_root != null and is_instance_valid(garbage_liner_root) and garbage_liner_root.visible:
+		garbage_liner_root.position = garbage_liner_offset
+		garbage_liner_root.scale = garbage_liner_scale * 0.72
+		var liner_tw := create_tween()
+		liner_tw.tween_property(garbage_liner_root, "scale", garbage_liner_scale, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _refresh_garbage_grab_shape() -> void:
+	if physical_garbage_area == null or not is_instance_valid(physical_garbage_area):
+		return
+	var collision := physical_garbage_area.get_node_or_null("GrabShape") as CollisionShape3D
+	if collision == null or collision.shape == null:
+		return
+	var box := collision.shape as BoxShape3D
+	if box == null:
+		return
+	var dims := _garbage_tray_dims()
+	var tray_x := float(dims["x"])
+	var tray_z := float(dims["z"])
+	var h := float(dims["h"])
+	var lip := float(dims["lip"])
+	var extra_up := 0.08
+	var extra_xz := 0.0
+	if garbage_bag_full and not garbage_bag_held:
+		extra_up = 0.28 + 0.62 * garbage_tied_bag_scale
+		extra_xz = 0.22 + 0.28 * garbage_tied_bag_scale
+	box.size = Vector3(tray_x + lip * 2.0 + extra_xz, h + extra_up, tray_z + lip * 2.0 + extra_xz)
+	collision.position = Vector3(0.0, -h * 0.5 + extra_up * 0.5, 0.0)
+
+
+func _garbage_area_hit(screen_pos: Vector2) -> bool:
+	if camera == null or physical_garbage_area == null or not is_instance_valid(physical_garbage_area):
+		return false
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 100.0
+	var query := PhysicsRayQueryParameters3D.create(from, to, PHYSICAL_GARBAGE_COLLISION_LAYER)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	return not hit.is_empty() and hit.get("collider") == physical_garbage_area
 
 
 func _load_physical_garbage_settings() -> void:
@@ -6128,7 +7024,7 @@ func _load_physical_garbage_settings() -> void:
 	)
 	physical_garbage_scale = clampf(float(cfg.get_value(
 		PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale
-	)), 0.35, 1.5)
+	)), 0.12, 2.2)
 	physical_garbage_symbol_offset = Vector3(
 		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_x", physical_garbage_symbol_offset.x)), -1.0, 1.0),
 		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_y", physical_garbage_symbol_offset.y)), -1.0, 1.0),
@@ -6145,19 +7041,100 @@ func _load_physical_garbage_settings() -> void:
 	## Existing saves retain their tuning but receive the requested extra 10% reduction once.
 	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "ten_percent_smaller_v2"):
 		if had_saved_scale:
-			physical_garbage_scale = clampf(physical_garbage_scale * 0.90, 0.35, 1.5)
+			physical_garbage_scale = clampf(physical_garbage_scale * 0.90, 0.12, 2.2)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "ten_percent_smaller_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "beside_ingredients_v1"):
 		physical_garbage_pos = Vector3.ZERO
-		physical_garbage_scale = clampf(physical_garbage_scale * 0.86, 0.35, 1.5)
+		physical_garbage_scale = clampf(physical_garbage_scale * 0.86, 0.12, 2.2)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "x", physical_garbage_pos.x)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "y", physical_garbage_pos.y)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "z", physical_garbage_pos.z)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "beside_ingredients_v1", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "tray_can_v1"):
+		physical_garbage_scale = PHYSICAL_GARBAGE_DEFAULT_SCALE
+		physical_garbage_pos.y = 0.0
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "y", physical_garbage_pos.y)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "scale", physical_garbage_scale)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "tray_can_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_lip_v1"):
+		physical_garbage_symbol_offset = Vector3.ZERO
+		physical_garbage_symbol_rot = Vector3.ZERO
+		physical_garbage_symbol_scale = 1.0
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_x", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_y", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_z", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_pitch", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_yaw", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_roll", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_scale", 1.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_lip_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_front_face_v1"):
+		physical_garbage_symbol_offset = Vector3.ZERO
+		physical_garbage_symbol_rot = Vector3.ZERO
+		physical_garbage_symbol_scale = 1.0
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_x", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_y", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_z", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_pitch", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_yaw", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_roll", 0.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_scale", 1.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_front_face_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	garbage_liner_enabled = bool(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner", true))
+	garbage_liner_wobble_amp = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_amp", garbage_liner_wobble_amp)), 0.0, 0.32)
+	garbage_liner_wobble_freq = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_freq", garbage_liner_wobble_freq)), 0.4, 28.0)
+	garbage_liner_wobble_speed = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_speed", garbage_liner_wobble_speed)), 0.0, 10.0)
+	garbage_liner_wobble_y = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_y", garbage_liner_wobble_y)), 0.0, 3.5)
+	garbage_liner_wobble_xz = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_xz", garbage_liner_wobble_xz)), 0.0, 3.5)
+	garbage_tied_bag_scale = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "tied_bag_scale", garbage_tied_bag_scale)), 0.5, 8.0)
+	garbage_bag_hold_scale = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)), 0.2, 3.0)
+	garbage_bag_hold_height = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_height", garbage_bag_hold_height)), 0.05, 1.20)
+	garbage_liner_offset = Vector3(
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_x", garbage_liner_offset.x)), -1.0, 1.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_y", garbage_liner_offset.y)), -1.0, 1.0),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_z", garbage_liner_offset.z)), -1.0, 1.0)
+	)
+	garbage_liner_scale = Vector3(
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_sx", garbage_liner_scale.x)), 0.35, 2.8),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_sy", garbage_liner_scale.y)), 0.35, 2.8),
+		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_sz", garbage_liner_scale.z)), 0.35, 2.8)
+	)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "liner_thin_v1"):
+		garbage_liner_wobble_amp = 0.14
+		garbage_liner_wobble_freq = 3.2
+		garbage_liner_wobble_speed = 0.0
+		garbage_liner_wobble_y = 2.2
+		garbage_liner_wobble_xz = 1.8
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_amp", garbage_liner_wobble_amp)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_freq", garbage_liner_wobble_freq)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_speed", garbage_liner_wobble_speed)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_y", garbage_liner_wobble_y)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_xz", garbage_liner_wobble_xz)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_thin_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "liner_static_crinkle_v1"):
+		garbage_liner_wobble_amp = 0.14
+		garbage_liner_wobble_freq = 3.2
+		garbage_liner_wobble_speed = 0.0
+		garbage_liner_wobble_y = 2.2
+		garbage_liner_wobble_xz = 1.8
+		garbage_liner_wobble_mat = null
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_amp", garbage_liner_wobble_amp)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_freq", garbage_liner_wobble_freq)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_speed", garbage_liner_wobble_speed)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_y", garbage_liner_wobble_y)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_xz", garbage_liner_wobble_xz)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_static_crinkle_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	_apply_garbage_liner_wobble_params()
+	_apply_garbage_liner_transform()
 
 
 func _save_physical_garbage_settings() -> void:
@@ -6177,7 +7154,34 @@ func _save_physical_garbage_settings() -> void:
 	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_yaw", physical_garbage_symbol_rot.y)
 	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_roll", physical_garbage_symbol_rot.z)
 	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "symbol_scale", physical_garbage_symbol_scale)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner", garbage_liner_enabled)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_amp", garbage_liner_wobble_amp)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_freq", garbage_liner_wobble_freq)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_speed", garbage_liner_wobble_speed)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_y", garbage_liner_wobble_y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_xz", garbage_liner_wobble_xz)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "tied_bag_scale", garbage_tied_bag_scale)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_height", garbage_bag_hold_height)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_x", garbage_liner_offset.x)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_y", garbage_liner_offset.y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_z", garbage_liner_offset.z)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_sx", garbage_liner_scale.x)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_sy", garbage_liner_scale.y)
+	cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_sz", garbage_liner_scale.z)
 	cfg.save(GFX_CFG_PATH)
+
+
+func _set_garbage_liner_enabled(on: bool) -> void:
+	garbage_liner_enabled = on
+	if not on:
+		garbage_fill = 0
+		garbage_bag_full = false
+		if not garbage_bag_held and garbage_bag_root != null and is_instance_valid(garbage_bag_root):
+			garbage_bag_root.queue_free()
+			garbage_bag_root = null
+	_restore_garbage_bag_visuals()
+	_save_physical_garbage_settings()
 
 
 func _apply_physical_garbage_transform() -> void:
@@ -6187,7 +7191,7 @@ func _apply_physical_garbage_transform() -> void:
 		_physical_garbage_shake_tween.kill()
 		_physical_garbage_shake_tween = null
 	physical_garbage_root.rotation_degrees = physical_garbage_rot
-	physical_garbage_root.scale = Vector3.ONE * physical_garbage_scale
+	physical_garbage_root.scale = Vector3.ONE * _physical_garbage_world_scale()
 	_apply_physical_garbage_symbol_transform()
 	_update_physical_garbage_screen_follow()
 
@@ -6197,6 +7201,51 @@ func _physical_garbage_rest_world() -> Vector3:
 	if follow == Vector3.INF:
 		return physical_garbage_pos
 	return follow + physical_garbage_pos
+
+
+func _ingredient_strip_world_w_from_btn(btn: Control) -> float:
+	if camera == null or not is_instance_valid(camera) or btn == null or not is_instance_valid(btn):
+		return 0.0
+	var r := btn.get_global_rect()
+	if r.size.x < 4.0 or r.size.y < 4.0:
+		return 0.0
+	var screen := Vector2(
+		r.position.x + r.size.x * 0.5,
+		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
+	)
+	var world_pt := camera.project_position(screen, ingredient_bin_cam_z)
+	var screen_r := Vector2(r.position.x + r.size.x, r.position.y + r.size.y * 0.62 - ingredient_bin_y_px)
+	var world_r := camera.project_position(screen_r, ingredient_bin_cam_z)
+	return world_pt.distance_to(world_r) * (ingredient_bin_tile / maxf(r.size.x, 1.0))
+
+
+func _physical_garbage_world_scale() -> float:
+	var world_w := 0.0
+	if not INGREDIENT_HOTKEYS.is_empty() and ingredient_buttons.has(INGREDIENT_HOTKEYS.back()):
+		world_w = _ingredient_strip_world_w_from_btn(ingredient_buttons[INGREDIENT_HOTKEYS.back()])
+	if world_w < 0.01:
+		return maxf(0.12, physical_garbage_scale)
+	return world_w * ingredient_bin_scale * physical_garbage_scale
+
+
+func _apply_physical_garbage_tray_style() -> void:
+	if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
+		return
+	if physical_garbage_tray_mat == null or not is_instance_valid(physical_garbage_tray_mat):
+		physical_garbage_tray_mat = _make_ingredient_bin_mat(_physical_garbage_hovered)
+	else:
+		_style_ingredient_bin_mat(physical_garbage_tray_mat, _physical_garbage_hovered)
+	if physical_garbage_outline_material == null or not is_instance_valid(physical_garbage_outline_material):
+		physical_garbage_outline_material = _make_physical_garbage_outline_material()
+	physical_garbage_tray_mat.next_pass = physical_garbage_outline_material
+	var comb := physical_garbage_root.get_node_or_null("Shell")
+	if comb != null:
+		if comb is GeometryInstance3D:
+			(comb as GeometryInstance3D).material_override = null
+		_apply_csg_all_material(comb, physical_garbage_tray_mat)
+	var well := physical_garbage_root.get_node_or_null("Well") as MeshInstance3D
+	if well != null:
+		well.material_override = physical_garbage_tray_mat
 
 
 func _physical_garbage_follow_world() -> Vector3:
@@ -6210,14 +7259,12 @@ func _physical_garbage_follow_world() -> Vector3:
 	var r := btn.get_global_rect()
 	if r.size.x < 4.0 or r.size.y < 4.0:
 		return Vector3.INF
+	var half_px := maxf(0.4, ingredient_bin_length) * ingredient_bin_scale * physical_garbage_scale * (ingredient_bin_tile * 0.5)
 	var screen := Vector2(
-		r.position.x + r.size.x + PHYSICAL_GARBAGE_FOLLOW_GAP_PX,
+		r.position.x + r.size.x + PHYSICAL_GARBAGE_FOLLOW_GAP_PX + half_px,
 		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
 	)
-	var world_pt := camera.project_position(screen, ingredient_bin_cam_z)
-	var can_h := PHYSICAL_GARBAGE_TARGET_H * physical_garbage_scale
-	world_pt.y -= can_h * 0.88
-	return world_pt
+	return camera.project_position(screen, ingredient_bin_cam_z)
 
 
 func _update_physical_garbage_screen_follow() -> void:
@@ -6228,11 +7275,43 @@ func _update_physical_garbage_screen_follow() -> void:
 	var rest := _physical_garbage_rest_world()
 	physical_garbage_root.position = rest
 	physical_garbage_root.rotation_degrees = physical_garbage_rot
-	physical_garbage_root.scale = Vector3.ONE * physical_garbage_scale
+	physical_garbage_root.scale = Vector3.ONE * _physical_garbage_world_scale()
 	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
 			and ingredient_legend.visible \
 			and (start_overlay == null or not start_overlay.visible)
 	physical_garbage_root.visible = show
+
+
+func _bottom_row_supply_follow_world() -> Vector3:
+	if camera == null or not is_instance_valid(camera):
+		return Vector3.INF
+	if INGREDIENT_HOTKEYS.is_empty() or not ingredient_buttons.has(INGREDIENT_HOTKEYS[0]):
+		return Vector3.INF
+	var btn: Control = ingredient_buttons[INGREDIENT_HOTKEYS[0]]
+	if btn == null or not is_instance_valid(btn):
+		return Vector3.INF
+	var r := btn.get_global_rect()
+	if r.size.x < 4.0 or r.size.y < 4.0:
+		return Vector3.INF
+	var screen := Vector2(
+		r.position.x - BOTTOM_ROW_SUPPLY_GAP_PX,
+		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
+	)
+	return camera.project_position(screen, ingredient_bin_cam_z)
+
+
+func _update_bottom_row_supply_follow() -> void:
+	if cheese_station_root == null or not is_instance_valid(cheese_station_root):
+		return
+	var follow := _bottom_row_supply_follow_world()
+	if follow == Vector3.INF:
+		return
+	cheese_station_root.global_position = follow
+	cheese_station_root.global_basis = Basis.IDENTITY
+	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
+			and ingredient_legend.visible \
+			and (start_overlay == null or not start_overlay.visible)
+	cheese_station_root.visible = show
 
 
 func _apply_physical_garbage_symbol_transform() -> void:
@@ -6240,7 +7319,7 @@ func _apply_physical_garbage_symbol_transform() -> void:
 		return
 	physical_garbage_symbol_root.position = physical_garbage_symbol_base_pos + physical_garbage_symbol_offset
 	## Quad front points down local -Z toward the cook/player.
-	physical_garbage_symbol_root.rotation_degrees = Vector3(0.0, 180.0, 0.0) + physical_garbage_symbol_rot
+	physical_garbage_symbol_root.rotation_degrees = Vector3(-12.0, 180.0, 0.0) + physical_garbage_symbol_rot
 	physical_garbage_symbol_root.scale = Vector3.ONE * physical_garbage_symbol_scale
 
 
@@ -6258,6 +7337,7 @@ func _physical_garbage_react() -> void:
 	## Short, damped cabinet wobble. Always settles back to the player's tuned pose.
 	if mp_enabled and NetManager.is_online() and not _mp_applying:
 		mp_garbage_react.rpc()
+	_register_garbage_fill()
 	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
 		if _physical_garbage_shake_tween != null and is_instance_valid(_physical_garbage_shake_tween):
 			_physical_garbage_shake_tween.kill()
@@ -6395,25 +7475,114 @@ func _apply_physical_garbage_tint(node: Node, shared_material: Material = null) 
 
 
 func _build_grill_standoffs() -> void:
-	## Two 5-inch cylindrical supports, each inset 3 inches from a grill corner.
-	var stand_mat := _make_soda_metal_mat(Color(0.075, 0.085, 0.095), 0.94, 0.22)
-	var half_span := GRILL_WIDTH * 0.5 - GRILL_STANDOFF_CORNER_INSET
-	for side in [-1.0, 1.0]:
-		var stand := MeshInstance3D.new()
-		stand.name = "GrillStandoff%s" % ("Right" if side < 0.0 else "Left")
-		var mesh := CylinderMesh.new()
-		mesh.top_radius = GRILL_STANDOFF_DIAMETER * 0.5
-		mesh.bottom_radius = GRILL_STANDOFF_DIAMETER * 0.5
-		mesh.height = 0.60
-		mesh.radial_segments = 24
-		stand.mesh = mesh
-		stand.position = Vector3(
-			GRILL_CENTER_X + side * half_span,
-			0.72,
-			GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.08
-		)
-		stand.material_override = stand_mat
-		world.add_child(stand)
+	## Stainless legs under the cook-side corners so the flat-top doesn't float.
+	if grill_standoff_root != null and is_instance_valid(grill_standoff_root):
+		grill_standoff_root.queue_free()
+	grill_standoff_root = null
+	grill_standoff_left = null
+	grill_standoff_right = null
+	if world == null:
+		return
+	for old_name in ["GrillStandoffLeft", "GrillStandoffRight", "GrillStandoffs"]:
+		var leftover := world.get_node_or_null(old_name)
+		if leftover != null:
+			leftover.queue_free()
+	_load_grill_standoff_settings()
+	var stand_mat := _make_soda_metal_mat(Color(0.78, 0.80, 0.84), 0.92, 0.28)
+	grill_standoff_root = Node3D.new()
+	grill_standoff_root.name = "GrillStandoffs"
+	world.add_child(grill_standoff_root)
+	grill_standoff_left = _make_grill_standoff_mesh("GrillStandoffLeft", stand_mat)
+	grill_standoff_right = _make_grill_standoff_mesh("GrillStandoffRight", stand_mat)
+	grill_standoff_root.add_child(grill_standoff_left)
+	grill_standoff_root.add_child(grill_standoff_right)
+	_apply_grill_standoff_transforms()
+
+
+func _make_grill_standoff_mesh(node_name: String, mat: Material) -> MeshInstance3D:
+	var stand := MeshInstance3D.new()
+	stand.name = node_name
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = GRILL_STANDOFF_DIAMETER * 0.5
+	mesh.bottom_radius = GRILL_STANDOFF_DIAMETER * 0.55
+	mesh.height = 1.0
+	mesh.radial_segments = 20
+	stand.mesh = mesh
+	stand.material_override = mat
+	stand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	return stand
+
+
+func _grill_standoff_base_pos(camera_left: bool) -> Vector3:
+	## camera-left is world +X. Sit just in front of the cook-side lip.
+	var side := 1.0 if camera_left else -1.0
+	var half_x := GRILL_WIDTH * 0.5 - GRILL_STANDOFF_CORNER_INSET
+	var h := maxf(0.12, grill_standoff_height)
+	var top_y := GRILL_SURFACE_Y - 0.02
+	return Vector3(
+		GRILL_CENTER_X + side * half_x,
+		top_y - h * 0.5,
+		GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 - 0.018
+	)
+
+
+func _apply_grill_standoff_transforms() -> void:
+	var h := maxf(0.12, grill_standoff_height)
+	if grill_standoff_left != null and is_instance_valid(grill_standoff_left):
+		grill_standoff_left.position = _grill_standoff_base_pos(true) + grill_standoff_left_offset
+		grill_standoff_left.scale = Vector3(1.0, h, 1.0)
+	if grill_standoff_right != null and is_instance_valid(grill_standoff_right):
+		grill_standoff_right.position = _grill_standoff_base_pos(false) + grill_standoff_right_offset
+		grill_standoff_right.scale = Vector3(1.0, h, 1.0)
+
+
+func _load_grill_standoff_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	var s := GRILL_STANDOFF_CFG_SECTION
+	if not cfg.has_section(s):
+		return
+	grill_standoff_left_offset = Vector3(
+		float(cfg.get_value(s, "left_x", grill_standoff_left_offset.x)),
+		float(cfg.get_value(s, "left_y", grill_standoff_left_offset.y)),
+		float(cfg.get_value(s, "left_z", grill_standoff_left_offset.z))
+	)
+	grill_standoff_right_offset = Vector3(
+		float(cfg.get_value(s, "right_x", grill_standoff_right_offset.x)),
+		float(cfg.get_value(s, "right_y", grill_standoff_right_offset.y)),
+		float(cfg.get_value(s, "right_z", grill_standoff_right_offset.z))
+	)
+	grill_standoff_height = clampf(float(cfg.get_value(s, "height", grill_standoff_height)), 0.12, 1.4)
+	if not bool(cfg.get_value(s, "standoff_away_v1", false)):
+		if cfg.has_section_key(s, "left_z"):
+			grill_standoff_left_offset.z = clampf(grill_standoff_left_offset.z + GRILL_STANDOFF_AWAY_Z, -1.2, 1.2)
+		if cfg.has_section_key(s, "right_z"):
+			grill_standoff_right_offset.z = clampf(grill_standoff_right_offset.z + GRILL_STANDOFF_AWAY_Z, -1.2, 1.2)
+		cfg.set_value(s, "left_z", grill_standoff_left_offset.z)
+		cfg.set_value(s, "right_z", grill_standoff_right_offset.z)
+		cfg.set_value(s, "standoff_away_v1", true)
+		cfg.save(GFX_CFG_PATH)
+
+
+func _save_grill_standoff_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	var s := GRILL_STANDOFF_CFG_SECTION
+	cfg.set_value(s, "left_x", grill_standoff_left_offset.x)
+	cfg.set_value(s, "left_y", grill_standoff_left_offset.y)
+	cfg.set_value(s, "left_z", grill_standoff_left_offset.z)
+	cfg.set_value(s, "right_x", grill_standoff_right_offset.x)
+	cfg.set_value(s, "right_y", grill_standoff_right_offset.y)
+	cfg.set_value(s, "right_z", grill_standoff_right_offset.z)
+	cfg.set_value(s, "height", grill_standoff_height)
+	cfg.set_value(s, "standoff_away_v1", true)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _grill_standoff_setting_changed() -> void:
+	_apply_grill_standoff_transforms()
+	_save_grill_standoff_settings()
 
 
 func _build_hand_spatula() -> void:
@@ -6502,7 +7671,7 @@ func _hands_busy_with_other_tool() -> bool:
 			or sale_held or cup_held or icecream_cone_held or burnt_icecream_cone_held \
 			or fries_pack_held or spilled_fry_held or fryer_held_index >= 0 \
 			or grill_roomba_held or burgerpack_held != null or dragging_patty != null \
-			or bts_lightstick_held_index >= 0
+			or bts_lightstick_held_index >= 0 or garbage_bag_held
 
 
 func _should_show_hand_spatula(screen_pos: Vector2) -> bool:
@@ -10029,21 +11198,22 @@ func _layout_grill_power_row_centered() -> void:
 
 
 func _is_over_garbage(screen_pos: Vector2) -> bool:
-	## The physical bin is now the only garbage target.
-	if camera != null and physical_garbage_area != null and is_instance_valid(physical_garbage_area):
-		var from := camera.project_ray_origin(screen_pos)
-		var to := from + camera.project_ray_normal(screen_pos) * 100.0
-		var query := PhysicsRayQueryParameters3D.create(from, to, PHYSICAL_GARBAGE_COLLISION_LAYER)
-		query.collide_with_areas = true
-		query.collide_with_bodies = false
-		var hit := get_world_3d().direct_space_state.intersect_ray(query)
-		if not hit.is_empty() and hit.get("collider") == physical_garbage_area:
+	if garbage_bag_held or (garbage_liner_enabled and garbage_bag_full):
+		return false
+	return _garbage_area_hit(screen_pos)
+
+
+func _is_over_build_trash(screen_pos: Vector2) -> bool:
+	for i in STATION_COUNT:
+		var btn: Control = stations[i].get("trash_btn", null)
+		if btn != null and is_instance_valid(btn) and btn.visible \
+				and btn.get_global_rect().grow(12).has_point(screen_pos):
 			return true
 	return false
 
 
 func _update_physical_garbage_hover() -> void:
-	if physical_garbage_outline_material == null:
+	if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
 		return
 	var viewport := get_viewport()
 	if viewport == null:
@@ -10051,18 +11221,22 @@ func _update_physical_garbage_hover() -> void:
 	## A patty still sliding on the grill is not a carried trash item. Keeping the
 	## bin dark here avoids advertising the old slide-directly-into-trash action.
 	var sliding_patty := dragging_patty != null and is_instance_valid(dragging_patty)
-	var hovered := not sliding_patty and _is_over_garbage(viewport.get_mouse_position())
+	var hovered := not sliding_patty and not garbage_bag_held and _garbage_area_hit(viewport.get_mouse_position())
 	if hovered == _physical_garbage_hovered:
 		return
 	_physical_garbage_hovered = hovered
-	physical_garbage_outline_material.set_shader_parameter("outline_enabled", hovered)
-	physical_garbage_outline_material.set_shader_parameter(
-		"viewport_size", Vector2(viewport.get_visible_rect().size)
-	)
+	if physical_garbage_outline_material != null and is_instance_valid(physical_garbage_outline_material):
+		physical_garbage_outline_material.set_shader_parameter("outline_enabled", hovered)
+		physical_garbage_outline_material.set_shader_parameter(
+			"viewport_size", Vector2(viewport.get_visible_rect().size)
+		)
+	_apply_physical_garbage_tray_style()
 
 
 func _can_drop_patty_on_garbage(data: Variant) -> bool:
 	if typeof(data) != TYPE_DICTIONARY:
+		return false
+	if garbage_bag_held or (garbage_liner_enabled and garbage_bag_full):
 		return false
 	var kind: String = data.get("kind", "")
 	## Build layers, Build patties, or strip toppings dragged to trash.
@@ -10071,6 +11245,8 @@ func _can_drop_patty_on_garbage(data: Variant) -> bool:
 
 func _drop_patty_on_garbage(data: Variant) -> void:
 	if typeof(data) != TYPE_DICTIONARY:
+		return
+	if not _garbage_ready_for_trash():
 		return
 	var kind: String = data.get("kind", "")
 	if kind == "station_patty":
@@ -16041,9 +17217,9 @@ func _spawn_cut_collector_local(kind: String) -> void:
 	c.set_meta("gross_ok", true)
 	if mp_enabled and not NetManager.is_host():
 		c.mp_host_driven = true
-	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
+	c.position = Vector3(CUT_COLLECTOR_SPAWN_X, CustomerScript.STAND_Y, 2.25)
 	c.target_x = CUT_COLLECTOR_LANE_X
-	c.rotation_degrees = Vector3(0, CustomerScript.WALK_PLUS_X_YAW, 0)
+	c.rotation_degrees = Vector3(0, CustomerScript.WALK_MINUS_X_YAW, 0)
 	c.scale = Vector3(1.0, 1.0, 1.0)
 	c.arrived.connect(_on_cut_collector_arrived)
 	c.tree_exiting.connect(func():
@@ -16059,39 +17235,25 @@ func _spawn_cut_collector_local(kind: String) -> void:
 		c.apply_cut_collector_look()
 	_cut_collector = c
 	_cut_collector_kind = kind
-	_play_boss_arrive_sound()
 
 
 func _play_boss_arrive_sound() -> void:
 	if game_audio == null:
 		return
-	if game_audio.has_method("play_customer_grobble"):
+	if game_audio.has_method("play_boss_wawa"):
+		game_audio.play_boss_wawa()
+	elif game_audio.has_method("play_customer_grobble"):
 		game_audio.play_customer_grobble(0.9)
-	elif game_audio.has_method("play_customer_wawa_click"):
-		game_audio.play_customer_wawa_click(0.9)
 
 
 func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> void:
 	_boss_caption_seq += 1
-	var seq := _boss_caption_seq
-	if dialogue_panel == null or not is_instance_valid(dialogue_panel):
-		_flash(body, Color("FFCC80"))
-		return
-	if dialogue_title:
-		dialogue_title.text = title
-	if dialogue_body:
-		dialogue_body.text = body
-		dialogue_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	if dialogue_options:
-		dialogue_options.visible = false
-	dialogue_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	dialogue_panel.visible = true
-	if duration > 0.05:
-		get_tree().create_timer(duration).timeout.connect(func():
-			if seq != _boss_caption_seq:
-				return
-			_hide_boss_caption()
-		)
+	if dialogue_panel != null and is_instance_valid(dialogue_panel):
+		dialogue_panel.visible = false
+	var line := body.replace("\n", " ").strip_edges()
+	if title != "":
+		line = "%s — %s" % [title, line]
+	_flash(line, Color("FFE082"), maxf(duration, 1.4))
 
 
 func _hide_boss_caption() -> void:
@@ -16108,6 +17270,7 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 	var kind := str(customer.get_meta("cut_visit", _cut_collector_kind))
 	_cut_collector_seq += 1
 	var seq := _cut_collector_seq
+	_play_boss_arrive_sound()
 	if kind == "cut":
 		_show_boss_caption(
 			"THE BOSS",
@@ -16145,8 +17308,8 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 				customer.leave_happy()
 		)
 		return
-	_show_boss_caption("THE BOSS", "wawa wa", 2.6)
-	get_tree().create_timer(2.5).timeout.connect(func():
+	## Morning / random drop-in — grobble only, no typed wawa.
+	get_tree().create_timer(4.2).timeout.connect(func():
 		if seq != _cut_collector_seq:
 			return
 		if customer == null or not is_instance_valid(customer) or bool(customer.get("is_leaving")):
@@ -19621,63 +20784,106 @@ func _condiment_surface_material(base: Color) -> StandardMaterial3D:
 	return mat
 
 
+func _condiment_pairs_to_polyline(segments: PackedVector3Array) -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	var pair_count: int = int(segments.size() / 2)
+	for pair_i in range(pair_count):
+		var a: Vector3 = segments[pair_i * 2]
+		var b: Vector3 = segments[pair_i * 2 + 1]
+		if pts.is_empty():
+			pts.append(a)
+			pts.append(b)
+			continue
+		var last: Vector3 = pts[pts.size() - 1]
+		if last.distance_squared_to(a) > 0.00004:
+			pts.append(a)
+		if last.distance_squared_to(b) > 0.00004 and a.distance_squared_to(b) > 0.00004:
+			pts.append(b)
+	return pts
+
+
+func _chaikin_polyline(pts: PackedVector3Array, iters: int = 1) -> PackedVector3Array:
+	var cur: PackedVector3Array = pts
+	for _pass in range(iters):
+		if cur.size() < 3:
+			break
+		var nxt := PackedVector3Array()
+		nxt.append(cur[0])
+		for i in range(cur.size() - 1):
+			var a: Vector3 = cur[i]
+			var b: Vector3 = cur[i + 1]
+			nxt.append(a.lerp(b, 0.25))
+			nxt.append(a.lerp(b, 0.75))
+		nxt.append(cur[cur.size() - 1])
+		cur = nxt
+	return cur
+
+
 func _make_surface_condiment_ribbon_batch_mesh(
 	segments: PackedVector3Array, radius: float, origin: Vector3
 ) -> ArrayMesh:
-	## Directly emit one shallow triangular ridge per mouse sample. Six vertices and
-	## four visible triangles replace each old multi-ring, six-sided spline tube.
-	## No temporary per-piece ArrayMeshes are created in this hot drawing path.
+	## One continuous raised bead: pair samples become a polyline, Chaikin rounds
+	## the path, then rings share averaged side vectors so curves stay smooth.
 	var mesh := ArrayMesh.new()
+	var raw_pts: PackedVector3Array = _condiment_pairs_to_polyline(segments)
+	var pts: PackedVector3Array = _chaikin_polyline(raw_pts, 1 if raw_pts.size() >= 3 else 0)
+	if pts.size() < 2:
+		return mesh
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var indices := PackedInt32Array()
-	var pair_count := int(segments.size() / 2)
-	for pair_i in range(pair_count):
-		var from_local: Vector3 = segments[pair_i * 2] - origin
-		var to_local: Vector3 = segments[pair_i * 2 + 1] - origin
-		from_local.y = 0.0
-		to_local.y = 0.0
-		var chord := to_local - from_local
-		chord.y = 0.0
-		if chord.length_squared() < 0.000001:
+	var half_width: float = maxf(radius * 1.08, 0.0028)
+	var base_y: float = -maxf(radius * 0.56, 0.00145)
+	var crown_y: float = maxf(radius * 0.78, 0.0019)
+	var ring_count: int = pts.size()
+	var sides := PackedVector3Array()
+	sides.resize(ring_count)
+	for i in range(ring_count):
+		var dir := Vector3.ZERO
+		if i + 1 < ring_count:
+			dir += pts[i + 1] - pts[i]
+		if i > 0:
+			dir += pts[i] - pts[i - 1]
+		dir.y = 0.0
+		if dir.length_squared() < 0.000001:
+			dir = Vector3(1.0, 0.0, 0.0)
+		else:
+			dir = dir.normalized()
+		sides[i] = Vector3(-dir.z, 0.0, dir.x)
+	for i in range(ring_count):
+		var local: Vector3 = pts[i] - origin
+		local.y = 0.0
+		var side: Vector3 = sides[i]
+		var v: float = float(i) / float(maxi(ring_count - 1, 1))
+		verts.append(local - side * half_width + Vector3.UP * base_y)
+		verts.append(local + Vector3.UP * crown_y)
+		verts.append(local + side * half_width + Vector3.UP * base_y)
+		var left_n: Vector3 = (Vector3.UP * 0.78 - side * 0.63).normalized()
+		var right_n: Vector3 = (Vector3.UP * 0.78 + side * 0.63).normalized()
+		normals.append(left_n)
+		normals.append(Vector3.UP)
+		normals.append(right_n)
+		uvs.append(Vector2(0.0, v))
+		uvs.append(Vector2(0.5, v))
+		uvs.append(Vector2(1.0, v))
+		if i == 0:
 			continue
-		var flat_dir := chord.normalized()
-		var side := Vector3(-flat_dir.z, 0.0, flat_dir.x)
-		var half_width := maxf(radius * 1.04, 0.0028)
-		var base_y := -maxf(radius * 0.56, 0.00145)
-		var crown_y := maxf(radius * 0.72, 0.0019)
-		var left_normal := (Vector3.UP * 0.78 - side * 0.63).normalized()
-		var right_normal := (Vector3.UP * 0.78 + side * 0.63).normalized()
-		var base := verts.size()
-		verts.append_array(PackedVector3Array([
-			from_local - side * half_width + Vector3.UP * base_y,
-			from_local + Vector3.UP * crown_y,
-			from_local + side * half_width + Vector3.UP * base_y,
-			to_local - side * half_width + Vector3.UP * base_y,
-			to_local + Vector3.UP * crown_y,
-			to_local + side * half_width + Vector3.UP * base_y,
-		]))
-		normals.append_array(PackedVector3Array([
-			left_normal, Vector3.UP, right_normal,
-			left_normal, Vector3.UP, right_normal,
-		]))
-		uvs.append_array(PackedVector2Array([
-			Vector2(0.0, 0.0), Vector2(0.5, 0.0), Vector2(1.0, 0.0),
-			Vector2(0.0, 1.0), Vector2(0.5, 1.0), Vector2(1.0, 1.0),
-		]))
+		var base: int = (i - 1) * 3
+		var nxt: int = i * 3
 		indices.append_array(PackedInt32Array([
-			base, base + 3, base + 1,
-			base + 1, base + 3, base + 4,
-			base + 1, base + 4, base + 2,
-			base + 2, base + 4, base + 5,
-			## Two tiny caps keep isolated dabs and batch ends from looking hollow.
-			base, base + 1, base + 2,
-			base + 3, base + 5, base + 4,
+			base, nxt, base + 1,
+			base + 1, nxt, nxt + 1,
+			base + 1, nxt + 1, base + 2,
+			base + 2, nxt + 1, nxt + 2,
 		]))
+	if ring_count >= 2:
+		indices.append_array(PackedInt32Array([0, 1, 2]))
+		var last: int = (ring_count - 1) * 3
+		indices.append_array(PackedInt32Array([last, last + 2, last + 1]))
 	if verts.is_empty():
 		return mesh
-	var arrays := []
+	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_NORMAL] = normals
@@ -19800,6 +21006,155 @@ func _convert_condiment_batch_to_smear(item: Dictionary) -> void:
 		mat.clearcoat = 0.34
 		mat.clearcoat_roughness = 0.35
 
+
+func _condiment_cut_segments_near(item: Dictionary, pos: Vector3, radius: float) -> int:
+	var segments: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
+	if segments.size() < 2:
+		return 0
+	var kept := PackedVector3Array()
+	var removed: int = 0
+	var pair_count: int = int(segments.size() / 2)
+	for pair_i in range(pair_count):
+		var a: Vector3 = segments[pair_i * 2]
+		var b: Vector3 = segments[pair_i * 2 + 1]
+		var mid: Vector3 = (a + b) * 0.5
+		var da: float = Vector2(a.x - pos.x, a.z - pos.z).length()
+		var db: float = Vector2(b.x - pos.x, b.z - pos.z).length()
+		var dm: float = Vector2(mid.x - pos.x, mid.z - pos.z).length()
+		if da <= radius or db <= radius or dm <= radius:
+			removed += 1
+			continue
+		kept.append(a)
+		kept.append(b)
+	if removed <= 0:
+		return 0
+	item["spline_segments"] = kept
+	if kept.size() >= 2:
+		_rebuild_condiment_spline_batch(item)
+	return removed
+
+
+func _spawn_condiment_contact_smear(pos: Vector3, swipe: Vector2, flavor: String, radius: float) -> void:
+	if grill_root == null:
+		return
+	var dir: Vector2 = swipe.normalized() if swipe.length_squared() > 0.0001 else Vector2(1.0, 0.0)
+	var smear := MeshInstance3D.new()
+	smear.name = "%sContactSmear" % flavor.capitalize()
+	var length: float = 0.042
+	var width: float = maxf(radius * 3.4, 0.008)
+	var box := BoxMesh.new()
+	box.size = Vector3(width, maxf(radius * 0.55, 0.0016), length)
+	smear.mesh = box
+	smear.position = Vector3(pos.x, GRILL_SURFACE_Y + CONDIMENT_SMEAR_SURFACE_LIFT, pos.z)
+	smear.rotation = Vector3(0.0, atan2(dir.x, dir.y), 0.0)
+	smear.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	smear.sorting_offset = 3.4
+	var base: Color = SODA_FLAVOR_COLORS.get(flavor, Color("C92323"))
+	var mat := _condiment_surface_material(base)
+	mat.metallic = 0.0
+	mat.roughness = 0.42
+	mat.clearcoat = 0.28
+	mat.clearcoat_roughness = 0.4
+	smear.material_override = mat
+	grill_root.add_child(smear)
+	condiment_smear_items.append({
+		"mesh": smear,
+		"age": 0.0,
+		"life": 22.0 + randf() * 10.0,
+	})
+	while condiment_smear_items.size() > CONDIMENT_SMEAR_CAP:
+		var old: Dictionary = condiment_smear_items.pop_front()
+		var old_mesh = old.get("mesh")
+		if old_mesh != null and is_instance_valid(old_mesh):
+			old_mesh.queue_free()
+
+
+func _spawn_condiment_burnt_chunks(pos: Vector3, flavor: String) -> void:
+	if grill_root == null:
+		return
+	var n: int = 3 + randi() % 3
+	for _i in n:
+		var bit := MeshInstance3D.new()
+		bit.name = "%sBurntChunk" % flavor.capitalize()
+		if randf() > 0.4:
+			var cyl := CylinderMesh.new()
+			var r: float = 0.006 + randf() * 0.008
+			cyl.top_radius = r * 0.7
+			cyl.bottom_radius = r
+			cyl.height = 0.0034 + randf() * 0.003
+			cyl.radial_segments = 7
+			bit.mesh = cyl
+		else:
+			var box := BoxMesh.new()
+			box.size = Vector3(0.01 + randf() * 0.014, 0.003 + randf() * 0.003, 0.009 + randf() * 0.012)
+			bit.mesh = box
+		var ang: float = randf() * TAU
+		var rad: float = sqrt(randf()) * 0.018
+		bit.position = Vector3(pos.x + cos(ang) * rad, GRILL_SURFACE_Y + 0.026 + randf() * 0.003, pos.z + sin(ang) * rad)
+		bit.rotation_degrees = Vector3(randf_range(-16.0, 16.0), randf() * 360.0, randf_range(-16.0, 16.0))
+		bit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.albedo_color = Color(0.04, 0.025, 0.018, 1.0)
+		mat.metallic = 0.0
+		mat.roughness = 0.94
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bit.material_override = mat
+		grill_root.add_child(bit)
+		condiment_chunk_items.append({
+			"mesh": bit,
+			"age": 0.0,
+			"life": 80.0 + randf() * 40.0,
+		})
+	while condiment_chunk_items.size() > CONDIMENT_CHUNK_CAP:
+		var old: Dictionary = condiment_chunk_items.pop_front()
+		var old_mesh = old.get("mesh")
+		if old_mesh != null and is_instance_valid(old_mesh):
+			old_mesh.queue_free()
+
+
+func _update_condiment_scrape_fx(delta: float) -> void:
+	_age_mesh_item_list(condiment_smear_items, delta, 0.82)
+	_age_mesh_item_list(condiment_chunk_items, delta, 0.92)
+
+
+func _age_mesh_item_list(arr: Array, delta: float, fade_start: float) -> void:
+	var i: int = 0
+	while i < arr.size():
+		var item: Dictionary = arr[i]
+		item["age"] = float(item.get("age", 0.0)) + delta
+		var mesh = item.get("mesh")
+		var life: float = float(item.get("life", 16.0))
+		var age: float = float(item.get("age", 0.0))
+		if mesh == null or not is_instance_valid(mesh) or age >= life:
+			if mesh != null and is_instance_valid(mesh):
+				mesh.queue_free()
+			arr.remove_at(i)
+			continue
+		var t: float = age / maxf(life, 0.01)
+		if t > fade_start:
+			var fade: float = 1.0 - smoothstep(fade_start, 1.0, t)
+			var mat := mesh.material_override as StandardMaterial3D
+			if mat:
+				var c: Color = mat.albedo_color
+				c.a = fade
+				mat.albedo_color = c
+		i += 1
+
+
+func _clear_condiment_scrape_fx() -> void:
+	for item in condiment_smear_items:
+		var mesh = item.get("mesh") if typeof(item) == TYPE_DICTIONARY else null
+		if mesh != null and is_instance_valid(mesh):
+			mesh.queue_free()
+	condiment_smear_items.clear()
+	for item2 in condiment_chunk_items:
+		var mesh2 = item2.get("mesh") if typeof(item2) == TYPE_DICTIONARY else null
+		if mesh2 != null and is_instance_valid(mesh2):
+			mesh2.queue_free()
+	condiment_chunk_items.clear()
+
+
 func _spawn_soda_slick(pos: Vector3, radius: float, flavor: String) -> void:
 	if not _is_on_grill_surface(pos):
 		return
@@ -19891,6 +21246,7 @@ func _spawn_soda_slick_local(pos: Vector3, radius: float, flavor: String) -> voi
 
 
 func _update_soda_slicks(delta: float) -> void:
+	_update_condiment_scrape_fx(delta)
 	var i := 0
 	var burn_rate := 1.7 if grill_on else 0.75
 	while i < soda_slicks.size():
@@ -19972,8 +21328,12 @@ func _update_soda_slicks(delta: float) -> void:
 				mat.clearcoat = lerpf(0.34, 0.04, burn) if smeared else lerpf(0.82, 0.08, burn)
 				mat.clearcoat_roughness = lerpf(0.35, 0.75, burn) if smeared else lerpf(0.1, 0.7, burn)
 		## Scraper wear only — don't shrink the puddle away as it cooks.
+		## Raised sauce uses localized segment cuts instead of whole-mesh scale.
 		var scrape := clampf(float(item.get("scrape", 1.0)), 0.08, 1.0)
-		mesh.scale = Vector3(scrape, 1.0, scrape)
+		if surface_spline:
+			mesh.scale = Vector3.ONE
+		else:
+			mesh.scale = Vector3(scrape, 1.0, scrape)
 		var smoke = item.get("smoke")
 		if smoke != null and is_instance_valid(smoke):
 			var smoke_amt := 0.0
@@ -19994,6 +21354,7 @@ func _clear_soda_slicks() -> void:
 			mesh.queue_free()
 	soda_slicks.clear()
 	condiment_spline_batches.clear()
+	_clear_condiment_scrape_fx()
 
 
 
@@ -21978,6 +23339,14 @@ func _load_fryer_tuning_settings() -> void:
 	fry_basket_shake_gain = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)), 0.1, 5.0)
 	fry_basket_shake_decay = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)), 0.0, 1.5)
 	fryer_station_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "station_scale", fryer_station_scale)), 0.45, 2.5)
+	fryer_pit_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "pit_scale", fryer_pit_scale)), 0.4, 4.0)
+	fryer_basket_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "basket_scale", fryer_basket_scale)), 0.35, 4.0)
+	fryer_trim_scale = clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "trim_scale", fryer_trim_scale)), 0.4, 2.5)
+	fryer_pit_offset = Vector3(
+		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "pit_x", fryer_pit_offset.x)), -1.2, 1.2),
+		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "pit_y", fryer_pit_offset.y)), -0.8, 0.8),
+		clampf(float(cfg.get_value(FRYER_TUNING_CFG_SECTION, "pit_z", fryer_pit_offset.z)), -1.2, 1.2)
+	)
 	var saved_oil_color: Variant = cfg.get_value(FRYER_TUNING_CFG_SECTION, "oil_color", fryer_oil_color)
 	if saved_oil_color is Color:
 		fryer_oil_color = saved_oil_color
@@ -22004,6 +23373,12 @@ func _save_fryer_tuning_settings() -> void:
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_gain", fry_basket_shake_gain)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "shake_decay", fry_basket_shake_decay)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "station_scale", fryer_station_scale)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "pit_scale", fryer_pit_scale)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "basket_scale", fryer_basket_scale)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "trim_scale", fryer_trim_scale)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "pit_x", fryer_pit_offset.x)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "pit_y", fryer_pit_offset.y)
+	cfg.set_value(FRYER_TUNING_CFG_SECTION, "pit_z", fryer_pit_offset.z)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "oil_color", fryer_oil_color)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "bubble_color", fryer_bubble_color)
 	cfg.set_value(FRYER_TUNING_CFG_SECTION, "hand_hold_x_in", fries_hand_hold_offset_in.x)
@@ -22917,6 +24292,8 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float, radius_
 	var hit_any := false
 	hit_any = _scrape_slick_array(oil_slicks, pos, move_xz, moved, 0.28 * rs, "oil") or hit_any
 	hit_any = _scrape_slick_array(soda_slicks, pos, move_xz, moved, 0.3 * rs, "soda") or hit_any
+	hit_any = _scrape_condiment_fx_meshes(condiment_smear_items, pos, 0.03 * rs) or hit_any
+	hit_any = _scrape_condiment_fx_meshes(condiment_chunk_items, pos, 0.026 * rs) or hit_any
 	hit_any = _scrape_burnt_icecreams(pos, move_xz, moved, 0.34 * rs) or hit_any
 	hit_any = _scrape_grill_spilled_fries(pos, move_xz, moved, 0.34 * rs) or hit_any
 	## Char blotches — swipe to fling away.
@@ -23000,6 +24377,30 @@ func _scrape_burnt_icecreams(pos: Vector3, move_xz: Vector2, moved: float, hit_r
 	return hit_any
 
 
+func _scrape_condiment_fx_meshes(arr: Array, pos: Vector3, reach: float) -> bool:
+	var hit_any: bool = false
+	var i: int = 0
+	while i < arr.size():
+		var item: Dictionary = arr[i]
+		var mesh = item.get("mesh")
+		if mesh == null or not is_instance_valid(mesh):
+			arr.remove_at(i)
+			continue
+		var mp: Vector3 = (mesh as Node3D).global_position
+		if Vector2(pos.x - mp.x, pos.z - mp.z).length() > reach:
+			i += 1
+			continue
+		hit_any = true
+		var fly: Vector3 = mesh.position + Vector3(randf_range(-0.06, 0.06), 0.04, randf_range(-0.06, 0.06))
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(mesh, "position", fly, 0.14)
+		tw.tween_property(mesh, "scale", Vector3(0.04, 1.0, 0.04), 0.14)
+		tw.chain().tween_callback(mesh.queue_free)
+		arr.remove_at(i)
+	return hit_any
+
+
 func _scrape_slick_array(
 	arr: Array, pos: Vector3, move_xz: Vector2, moved: float, reach: float, sync_kind: String = ""
 ) -> bool:
@@ -23026,29 +24427,35 @@ func _scrape_slick_array(
 			i += 1
 			continue
 		hit_any = true
-		## Keep the new smear through the remainder of this physical scraper pass.
-		if bool(item.get("smeared", false)) and bool(item.get("smear_scrape_latched", false)):
+		if bool(item.get("surface_spline", false)):
+			var flavor: String = str(item.get("flavor", "ketchup"))
+			var charred_sauce: bool = bool(item.get("charred", false))
+			var cut_r: float = maxf(0.028, reach * 0.55)
+			var cut_n: int = _condiment_cut_segments_near(item, pos, cut_r)
+			if cut_n > 0:
+				if charred_sauce:
+					_spawn_condiment_burnt_chunks(pos, flavor)
+				else:
+					_spawn_condiment_contact_smear(pos, move_xz, flavor, float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS)))
+			var left_pts: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
+			if left_pts.size() < 2:
+				var leftover = item.get("mesh")
+				if leftover != null and is_instance_valid(leftover):
+					leftover.queue_free()
+				arr.remove_at(i)
+				continue
 			i += 1
 			continue
+		scrape = maxf(0.08, scrape - moved * 3.4)
+		item["scrape"] = scrape
+		var mat := mesh.material_override as StandardMaterial3D
+		if mat:
+			var c := mat.albedo_color
+			c.a = maxf(0.05, c.a - moved * 1.8)
+			mat.albedo_color = c
+			item["base_a"] = minf(float(item.get("base_a", c.a)), c.a)
 		var just_smeared := false
-		## First contact spreads raised ketchup/mustard into a flat colored smear.
-		## Later passes use the existing wear/remove behavior.
-		if bool(item.get("surface_spline", false)) and not bool(item.get("smeared", false)):
-			_convert_condiment_batch_to_smear(item)
-			scrape = 1.0
-			item["scrape"] = scrape
-			item["smear_scrape_latched"] = true
-			just_smeared = true
-		else:
-			scrape = maxf(0.08, scrape - moved * 3.4)
-			item["scrape"] = scrape
-			var mat := mesh.material_override as StandardMaterial3D
-			if mat:
-				var c := mat.albedo_color
-				c.a = maxf(0.05, c.a - moved * 1.8)
-				mat.albedo_color = c
-				item["base_a"] = minf(float(item.get("base_a", c.a)), c.a)
-		var removed := not just_smeared and scrape <= 0.16
+		var removed := scrape <= 0.16
 		if sync_kind != "" and mp_enabled and not _mp_applying:
 			if removed or just_smeared or _mp_slick_sync_cool <= 0.0:
 				_mp_slick_sync_cool = 0.08
@@ -25415,6 +26822,18 @@ func _ensure_prop_offsets_loaded() -> void:
 		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_z", 0.0)
 		cfg.set_value(PROP_OFFSET_CFG_SECTION, "fryer_done_camera_right_1ft_v3", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PROP_OFFSET_CFG_SECTION, "bottom_row_follow_v1"):
+		## Buns + cheese now sit with the ingredient strip; drop old board offsets.
+		prop_offsets["burger_buns"] = Vector3.ZERO
+		prop_offsets["cheese_stack"] = Vector3.ZERO
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "burger_buns_x", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "burger_buns_y", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "burger_buns_z", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "cheese_stack_x", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "cheese_stack_y", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "cheese_stack_z", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "bottom_row_follow_v1", true)
+		cfg.save(GFX_CFG_PATH)
 
 
 func _prop_offset(key: String) -> Vector3:
@@ -26517,6 +27936,126 @@ func _reset_soda_overflow_visual() -> void:
 	_apply_soda_overflow_settings_to_all_cups()
 	_sync_soda_tuning_hidden_ui()
 	_flash("Drink overflow visual reset", Color("80DEEA"))
+
+
+func _hidden_add_garbage_liner_toggle(parent: Control) -> void:
+	var liner_check := CheckButton.new()
+	liner_check.text = "Garbage Bag Liner"
+	liner_check.button_pressed = garbage_liner_enabled
+	liner_check.custom_minimum_size = Vector2(0, 32)
+	liner_check.focus_mode = Control.FOCUS_ALL
+	UiFontsScript.apply_button(liner_check, false, 13)
+	liner_check.add_theme_color_override("font_color", Color(0.9, 0.92, 0.95))
+	liner_check.toggled.connect(func(on: bool):
+		_set_garbage_liner_enabled(on)
+	)
+	parent.add_child(liner_check)
+
+
+func _garbage_liner_wobble_setting_changed() -> void:
+	_apply_garbage_liner_wobble_params()
+	_save_physical_garbage_settings()
+
+
+func _tied_bag_scale_setting_changed() -> void:
+	if garbage_bag_full and not garbage_bag_held and garbage_bag_root != null and is_instance_valid(garbage_bag_root):
+		_apply_tied_bag_sit_transform(garbage_bag_root)
+	_refresh_garbage_grab_shape()
+	_save_physical_garbage_settings()
+
+
+func _garbage_liner_fit_setting_changed() -> void:
+	_apply_garbage_liner_transform()
+	_save_physical_garbage_settings()
+
+
+func _hidden_add_garbage_liner_wobble_controls(parent: Control, key_prefix: String) -> void:
+	_hidden_add_section(parent, "GARBAGE LINER FIT")
+	_hidden_add_labeled_slider(parent, key_prefix + "liner_x", "Liner X", -1.0, 1.0, 0.005,
+		func(): return garbage_liner_offset.x,
+		func(v: float):
+			garbage_liner_offset.x = clampf(v, -1.0, 1.0)
+			_garbage_liner_fit_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "liner_y", "Liner Height", -1.0, 1.0, 0.005,
+		func(): return garbage_liner_offset.y,
+		func(v: float):
+			garbage_liner_offset.y = clampf(v, -1.0, 1.0)
+			_garbage_liner_fit_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "liner_z", "Liner Depth", -1.0, 1.0, 0.005,
+		func(): return garbage_liner_offset.z,
+		func(v: float):
+			garbage_liner_offset.z = clampf(v, -1.0, 1.0)
+			_garbage_liner_fit_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "liner_sx", "Liner Width", 0.35, 2.8, 0.01,
+		func(): return garbage_liner_scale.x,
+		func(v: float):
+			garbage_liner_scale.x = clampf(v, 0.35, 2.8)
+			_garbage_liner_fit_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "liner_sy", "Liner Size Y", 0.35, 2.8, 0.01,
+		func(): return garbage_liner_scale.y,
+		func(v: float):
+			garbage_liner_scale.y = clampf(v, 0.35, 2.8)
+			_garbage_liner_fit_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "liner_sz", "Liner Size Z", 0.35, 2.8, 0.01,
+		func(): return garbage_liner_scale.z,
+		func(v: float):
+			garbage_liner_scale.z = clampf(v, 0.35, 2.8)
+			_garbage_liner_fit_setting_changed()
+	)
+	_hidden_add_section(parent, "GARBAGE BAG CRINKLE")
+	_hidden_add_labeled_slider(parent, key_prefix + "wobble_amp", "Crinkle Amount", 0.0, 0.32, 0.001,
+		func(): return garbage_liner_wobble_amp,
+		func(v: float):
+			garbage_liner_wobble_amp = clampf(v, 0.0, 0.32)
+			_garbage_liner_wobble_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "wobble_freq", "Ripple Size (lower = bigger)", 0.4, 12.0, 0.05,
+		func(): return garbage_liner_wobble_freq,
+		func(v: float):
+			garbage_liner_wobble_freq = clampf(v, 0.4, 12.0)
+			_garbage_liner_wobble_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "wobble_speed", "Animate Speed (0 = still)", 0.0, 10.0, 0.05,
+		func(): return garbage_liner_wobble_speed,
+		func(v: float):
+			garbage_liner_wobble_speed = clampf(v, 0.0, 10.0)
+			_garbage_liner_wobble_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "wobble_y", "Crinkle Height", 0.0, 3.5, 0.05,
+		func(): return garbage_liner_wobble_y,
+		func(v: float):
+			garbage_liner_wobble_y = clampf(v, 0.0, 3.5)
+			_garbage_liner_wobble_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "wobble_xz", "Crinkle Side", 0.0, 3.5, 0.05,
+		func(): return garbage_liner_wobble_xz,
+		func(v: float):
+			garbage_liner_wobble_xz = clampf(v, 0.0, 3.5)
+			_garbage_liner_wobble_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "tied_bag_scale", "Tied Bag Size (in can)", 0.5, 8.0, 0.05,
+		func(): return garbage_tied_bag_scale,
+		func(v: float):
+			garbage_tied_bag_scale = clampf(v, 0.5, 8.0)
+			_tied_bag_scale_setting_changed()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "hold_bag_scale", "Held / Finished Bag Size", 0.2, 3.0, 0.01,
+		func(): return garbage_bag_hold_scale,
+		func(v: float):
+			garbage_bag_hold_scale = clampf(v, 0.2, 3.0)
+			_save_physical_garbage_settings()
+	)
+	_hidden_add_labeled_slider(parent, key_prefix + "hold_bag_height", "Held / Finished Bag Height", 0.05, 1.20, 0.01,
+		func(): return garbage_bag_hold_height,
+		func(v: float):
+			garbage_bag_hold_height = clampf(v, 0.05, 1.20)
+			_save_physical_garbage_settings()
+	)
 
 
 func _hidden_add_labeled_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float, getter: Callable, on_change: Callable, degrees_fmt: bool = false) -> HSlider:
@@ -28196,7 +29735,11 @@ func _add_mesh_rod(parent: Node3D, name: String, length: float, radius: float, p
 
 func _fryer_oil_local_for_index(_index: int = -1) -> Vector3:
 	## Single centered oil well — basket index is unused for placement.
-	return FRYER_OIL_LOCAL
+	return FRYER_OIL_LOCAL + fryer_pit_offset
+
+
+func _fryer_oil_radius() -> float:
+	return FRYER_OIL_RADIUS * maxf(0.4, fryer_pit_scale)
 
 
 func _fryer_tub_local_x(_index: int = 0) -> float:
@@ -28239,20 +29782,21 @@ func _make_fryer_trim_ring_mesh(outer_w: float, outer_d: float, inner_w: float, 
 
 
 func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material, oil_mat: Material) -> void:
-	## Recessed oil well — slightly larger pit with a clear grease pool.
+	## Recessed oil well — pit scale defaults to 2x the original footprint.
 	var tub := Node3D.new()
 	tub.name = "OilTub%d" % index
-	tub.position = Vector3(x, 0.0, 0.0)
+	var ps: float = maxf(0.4, fryer_pit_scale)
+	var ts: float = maxf(0.4, fryer_trim_scale)
+	tub.position = Vector3(x, 0.0, 0.0) + fryer_pit_offset
 	parent.add_child(tub)
 	var rim_mat := _make_soda_metal_mat(Color(0.42, 0.43, 0.41), 0.88, 0.20)
 	var oil_y := FRYER_OIL_LOCAL.y
 	var oz := FRYER_OIL_LOCAL.z
-	## ~20% larger footprint than the old cut; thicker oil slab reads as filled.
-	_add_mesh_box(tub, "TubBottom", Vector3(0.34, 0.02, 0.29), Vector3(0.0, oil_y - 0.058, oz), steel_mat)
-	_add_mesh_box(tub, "OilLiquid", Vector3(0.30, 0.02, 0.25), Vector3(0.0, oil_y + 0.002, oz), oil_mat)
+	_add_mesh_box(tub, "TubBottom", Vector3(0.34 * ps, 0.02, 0.29 * ps), Vector3(0.0, oil_y - 0.058, oz), steel_mat)
+	_add_mesh_box(tub, "OilLiquid", Vector3(0.30 * ps, 0.02, 0.25 * ps), Vector3(0.0, oil_y + 0.002, oz), oil_mat)
 	var trim := MeshInstance3D.new()
 	trim.name = "ContinuousOilTubTrim"
-	trim.mesh = _make_fryer_trim_ring_mesh(0.374, 0.304, 0.300, 0.250, 0.026)
+	trim.mesh = _make_fryer_trim_ring_mesh(0.374 * ps * ts, 0.304 * ps * ts, 0.300 * ps, 0.250 * ps, 0.026)
 	trim.position = Vector3(0.0, oil_y + 0.014, oz)
 	if rim_mat is BaseMaterial3D:
 		(rim_mat as BaseMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -28267,7 +29811,7 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		var bubble := MeshInstance3D.new()
 		bubble.name = "OilBubble%d" % i
 		var mesh := SphereMesh.new()
-		var r := randf_range(0.017, 0.033)
+		var r := randf_range(0.017, 0.033) * sqrt(ps)
 		mesh.radius = r
 		mesh.height = r * 2.0
 		mesh.radial_segments = 12
@@ -28275,9 +29819,9 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 		bubble.mesh = mesh
 		bubble.material_override = bubble_mat
 		bubble.position = Vector3(
-			randf_range(-0.12, 0.12),
+			randf_range(-0.12, 0.12) * ps,
 			FRYER_OIL_LOCAL.y - r * 0.05 + randf_range(-0.002, 0.004),
-			FRYER_OIL_LOCAL.z + randf_range(-0.095, 0.095)
+			FRYER_OIL_LOCAL.z + randf_range(-0.095, 0.095) * ps
 		)
 		bubble.set_meta("home", bubble.position)
 		bubble.set_meta("phase", randf_range(0.0, TAU))
@@ -28408,6 +29952,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	shape.position = Vector3(0.0, 0.105, 0.08)
 	area.add_child(shape)
 	basket.add_child(area)
+	basket.scale = Vector3.ONE * maxf(0.35, fryer_basket_scale)
 
 	fryer_baskets.append({
 		"root": basket,
@@ -29390,7 +30935,7 @@ func _update_held_fryer_basket(delta: float) -> void:
 	_fryer_prev_pos = root.global_position
 	var state := str(data.get("state", "empty"))
 	var oil_dist := Vector2(root.global_position.x - oil.x, root.global_position.z - oil.z).length()
-	var in_oil := oil != Vector3.ZERO and oil_dist <= FRYER_OIL_RADIUS * 0.65 and root.global_position.y <= oil.y - 0.040
+	var in_oil := oil != Vector3.ZERO and oil_dist <= _fryer_oil_radius() * 0.65 and root.global_position.y <= oil.y - 0.040
 	if (state == "raw" or state == "cooking") and in_oil:
 		if state != "cooking" and game_audio and game_audio.has_method("set_fryer_oil"):
 			game_audio.set_fryer_oil(true, 1.0)
@@ -38422,6 +39967,7 @@ func _setup_radio() -> void:
 	radio.status_changed.connect(_on_radio_status)
 	radio.channel_changed.connect(_on_radio_channel)
 	radio.powered_changed.connect(_on_radio_powered)
+	_load_bank_settings()
 	_build_phone_ui()
 	_build_radio_ui()
 	_build_hud_chrome_toggle()
@@ -38847,20 +40393,59 @@ func _condiment_bottle_scene(id: String) -> PackedScene:
 	return ResourceLoader.load(path) as PackedScene
 
 
+func _condiment_bottle_home_scale(id: String) -> float:
+	## Fit the squeeze bottle inside the matching ingredient tub opening.
+	var tub: Node3D = ingredient_bin_nodes.get(id, null)
+	if tub == null or not is_instance_valid(tub):
+		return float(condiment_bottle_home_scales.get(id, 1.0)) * float(condiment_bottle_extra_scale.get(id, 1.0))
+	var opening := maxf(0.4, ingredient_bin_length - 2.0 * ingredient_bin_wall) * tub.scale.x
+	var fit := clampf(opening * 0.82 / 0.15, 0.22, 1.35)
+	return fit * float(condiment_bottle_extra_scale.get(id, 1.0))
+
+
 func _condiment_bottle_home(id: String) -> Vector3:
-	## Park the squeeze bottles on the rear prep ledge directly behind the two
-	## cheese piles, leaving the cutting/build board clear.
-	var station_origin := _cutting_board_base_center() + Vector3(
-		CHEESE_STATION_OFFSET.x,
-		CUTTING_BOARD_SIZE.y * 0.5 + CHEESE_STATION_OFFSET.y,
-		CHEESE_STATION_OFFSET.z
-	)
-	var x_offset := -0.34 if id == "ketchup" else -0.16
-	return station_origin + Vector3(
-		x_offset,
-		CONDIMENT_BOTTLE_HEIGHT * 0.5 - 0.076,
-		0.32
-	)
+	## Sit the bottle in the ketchup / mustard tray well.
+	var tub: Node3D = ingredient_bin_nodes.get(id, null)
+	if tub != null and is_instance_valid(tub):
+		var h := maxf(0.2, ingredient_bin_height)
+		var floor_t := clampf(ingredient_bin_floor, 0.03, h * 0.45)
+		var sit_scale := _condiment_bottle_home_scale(id)
+		var well_y := tub.global_position.y + (-h + floor_t + 0.012) * tub.scale.y
+		return Vector3(
+			tub.global_position.x,
+			well_y + CONDIMENT_BOTTLE_HEIGHT * 0.5 * sit_scale,
+			tub.global_position.z
+		) + Vector3(condiment_bottle_nudge.get(id, Vector3.ZERO))
+	var board := _cutting_board_world_center()
+	var x_offset := -0.22 if id == "ketchup" else -0.06
+	return board + Vector3(x_offset, CONDIMENT_BOTTLE_HEIGHT * 0.5, 0.28) \
+			+ Vector3(condiment_bottle_nudge.get(id, Vector3.ZERO))
+
+
+func _condiment_bottle_busy(id: String) -> bool:
+	return condiment_tool_held == id or (condiment_pour_busy and condiment_active_id == id)
+
+
+func _park_idle_condiment_bottles() -> void:
+	var show := ingredient_bin_root != null and is_instance_valid(ingredient_bin_root) \
+			and ingredient_bin_root.visible
+	for id in ["ketchup", "mustard"]:
+		var root: Node3D = condiment_bottle_roots.get(id, null)
+		if root == null or not is_instance_valid(root):
+			continue
+		var home := _condiment_bottle_home(id)
+		var home_scale := _condiment_bottle_home_scale(id)
+		condiment_bottle_homes[id] = home
+		condiment_bottle_home_scales[id] = home_scale
+		if _condiment_bottle_busy(id):
+			root.visible = true
+			continue
+		root.visible = show
+		if not show:
+			continue
+		root.position = home
+		root.scale = Vector3.ONE * home_scale
+		root.rotation_degrees = condiment_bottle_home_rots.get(id, Vector3.ZERO)
 
 
 func _prepare_condiment_bottle_draw(root: Node3D) -> void:
@@ -38923,10 +40508,14 @@ func _build_condiment_bottles() -> void:
 	condiment_bottle_roots.clear()
 	condiment_bottle_homes.clear()
 	condiment_bottle_home_rots.clear()
+	condiment_bottle_home_scales.clear()
 	condiment_bottle_areas.clear()
 	condiment_tool_held = ""
-	condiment_tool_pouring = true
+	condiment_tool_pouring = false
+	condiment_tool_tilt_deg = 0.0
 	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_last_dir = Vector3.ZERO
+	condiment_draw_smooth = Vector3.ZERO
 	condiment_tool_stream_phase = 0.0
 	condiment_pour_queue.clear()
 	condiment_pour_busy = false
@@ -38976,6 +40565,7 @@ func _build_condiment_bottles() -> void:
 		condiment_bottle_roots[id] = holder
 		condiment_bottle_homes[id] = home
 		condiment_bottle_home_rots[id] = home_rot
+		condiment_bottle_home_scales[id] = 1.0
 		condiment_bottle_areas[id] = grab
 
 	condiment_stream_mesh = MeshInstance3D.new()
@@ -38985,6 +40575,7 @@ func _build_condiment_bottles() -> void:
 	condiment_stream_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	condiment_stream_mesh.sorting_offset = 15.0
 	world.add_child(condiment_stream_mesh)
+	call_deferred("_park_idle_condiment_bottles")
 
 
 func _reset_condiment_bottles() -> void:
@@ -38995,8 +40586,11 @@ func _reset_condiment_bottles() -> void:
 	condiment_pour_busy = false
 	condiment_active_id = ""
 	condiment_tool_held = ""
-	condiment_tool_pouring = true
+	condiment_tool_pouring = false
+	condiment_tool_tilt_deg = 0.0
 	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_last_dir = Vector3.ZERO
+	condiment_draw_smooth = Vector3.ZERO
 	condiment_tool_stream_phase = 0.0
 	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
 		condiment_stream_mesh.visible = false
@@ -39006,7 +40600,7 @@ func _reset_condiment_bottles() -> void:
 			continue
 		root.position = condiment_bottle_homes.get(id, root.position)
 		root.rotation_degrees = condiment_bottle_home_rots.get(id, Vector3.ZERO)
-		root.scale = Vector3.ONE
+		root.scale = Vector3.ONE * float(condiment_bottle_home_scales.get(id, 1.0))
 		root.visible = true
 		_set_condiment_bottle_animation_front(root, false)
 		var area: Area3D = condiment_bottle_areas.get(id, null)
@@ -39034,13 +40628,16 @@ func _begin_condiment_tool_hold(id: String) -> bool:
 	if root == null or not is_instance_valid(root):
 		return false
 	condiment_tool_held = id
-	condiment_tool_pouring = true
+	condiment_tool_tilt_deg = 0.0
+	condiment_tool_pouring = false
 	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_last_dir = Vector3.ZERO
+	condiment_draw_smooth = Vector3.ZERO
 	condiment_tool_stream_phase = 0.0
 	root.visible = true
 	root.scale = Vector3.ONE
 	_set_condiment_bottle_animation_front(root, true)
-	root.rotation_degrees = Vector3(180.0, 0.0, 0.0)
+	root.rotation_degrees = Vector3(CONDIMENT_HELD_UPRIGHT_PITCH, 0.0, 0.0)
 	var seat := _tool_hold_point_from_screen(
 		get_viewport().get_mouse_position(),
 		GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT
@@ -39056,28 +40653,43 @@ func _begin_condiment_tool_hold(id: String) -> bool:
 	if game_audio:
 		game_audio.play_click()
 	var label: String = str(GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize()))
-	_flash("%s on — drag to paint; scroll to stop" % label, Color("FFE082"))
+	_flash("%s upright — scroll down to pour" % label, Color("FFE082"))
 	if mp_enabled:
 		_mp_send_held_tool_pose(true)
 	return true
 
 
-func _nudge_condiment_tool_tilt(_dir: float) -> void:
-	if condiment_tool_held == "" or _dir == 0.0:
+func _condiment_held_pitch() -> float:
+	var span: float = CONDIMENT_HELD_POUR_PITCH - CONDIMENT_HELD_UPRIGHT_PITCH
+	var t: float = clampf(condiment_tool_tilt_deg / span, 0.0, 1.0)
+	return CONDIMENT_HELD_UPRIGHT_PITCH + span * t
+
+
+func _nudge_condiment_tool_tilt(dir: float) -> void:
+	if condiment_tool_held == "" or dir == 0.0:
 		return
-	condiment_tool_pouring = not condiment_tool_pouring
-	condiment_tool_last_draw = Vector3.ZERO
-	if not condiment_tool_pouring and condiment_stream_mesh != null \
-			and is_instance_valid(condiment_stream_mesh):
-		condiment_stream_mesh.visible = false
-	var label: String = str(GameDataScript.INGREDIENT_LABELS.get(
-		condiment_tool_held, condiment_tool_held.capitalize()
-	))
-	_flash("%s %s — scroll to %s" % [
-		label,
-		"on" if condiment_tool_pouring else "off",
-		"stop" if condiment_tool_pouring else "pour"
-	], Color("FFE082"))
+	var span: float = CONDIMENT_HELD_POUR_PITCH - CONDIMENT_HELD_UPRIGHT_PITCH
+	var was_pouring: bool = condiment_tool_pouring
+	condiment_tool_tilt_deg = clampf(
+		condiment_tool_tilt_deg + dir * CONDIMENT_TILT_STEP * condiment_tilt_sensitivity,
+		0.0,
+		span
+	)
+	condiment_tool_pouring = condiment_tool_tilt_deg >= CONDIMENT_TILT_POUR_ENABLE
+	if not condiment_tool_pouring:
+		condiment_tool_last_draw = Vector3.ZERO
+		condiment_tool_last_dir = Vector3.ZERO
+		condiment_draw_smooth = Vector3.ZERO
+		if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+			condiment_stream_mesh.visible = false
+	if was_pouring != condiment_tool_pouring:
+		var label: String = str(GameDataScript.INGREDIENT_LABELS.get(
+			condiment_tool_held, condiment_tool_held.capitalize()
+		))
+		_flash(
+			"%s pouring" % label if condiment_tool_pouring else "%s upright — scroll down to pour" % label,
+			Color("FFE082")
+		)
 	if mp_enabled:
 		_mp_send_held_tool_pose(true)
 
@@ -39095,10 +40707,12 @@ func _update_held_condiment(delta: float) -> void:
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.025, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.025)
 	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.5 + 0.025, GRILL_SURFACE_Z + GRILL_DEPTH * 0.5 - 0.025)
 	root.global_position = Vector3(hit.x, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, hit.z)
-	root.rotation_degrees = Vector3(180.0 if condiment_tool_pouring else 8.0, 0.0, 0.0)
+	root.rotation_degrees = Vector3(_condiment_held_pitch(), 0.0, 0.0)
 	var cur := Vector3(hit.x, GRILL_SURFACE_Y + CONDIMENT_SURFACE_LIFT, hit.z)
 	if not condiment_tool_pouring:
 		condiment_tool_last_draw = Vector3.ZERO
+		condiment_tool_last_dir = Vector3.ZERO
+		condiment_draw_smooth = Vector3.ZERO
 		if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
 			condiment_stream_mesh.visible = false
 		return
@@ -39111,26 +40725,33 @@ func _update_held_condiment(delta: float) -> void:
 		cur + Vector3(0.0, CONDIMENT_TOOL_STREAK_RADIUS * 1.4, 0.0),
 		condiment_tool_stream_phase
 	)
+	if condiment_draw_smooth == Vector3.ZERO:
+		condiment_draw_smooth = cur
+	else:
+		condiment_draw_smooth = condiment_draw_smooth.lerp(cur, 0.38)
+	var draw_pt: Vector3 = condiment_draw_smooth
 	if condiment_tool_last_draw == Vector3.ZERO:
-		## A click without a drag still leaves a small raised dab with rounded ends.
 		var dab_half := Vector3(CONDIMENT_TOOL_STREAK_RADIUS * 0.55, 0.0, 0.0)
 		_spawn_condiment_spline_segment(
-			cur - dab_half, cur + dab_half,
+			draw_pt - dab_half, draw_pt + dab_half,
 			CONDIMENT_TOOL_STREAK_RADIUS, condiment_tool_held
 		)
-		condiment_tool_last_draw = cur
+		condiment_tool_last_draw = draw_pt
 		return
-	var gap := Vector2(cur.x - condiment_tool_last_draw.x, cur.z - condiment_tool_last_draw.z).length()
-	if gap < CONDIMENT_TOOL_STREAK_SPACING:
+	var travel: Vector3 = draw_pt - condiment_tool_last_draw
+	travel.y = 0.0
+	var gap: float = travel.length()
+	var angle_change: float = 0.0
+	if condiment_tool_last_dir.length_squared() > 0.000001 and travel.length_squared() > 0.000001:
+		angle_change = rad_to_deg(acos(clampf(condiment_tool_last_dir.normalized().dot(travel.normalized()), -1.0, 1.0)))
+	if gap < CONDIMENT_TOOL_STREAK_SPACING * 0.72 and angle_change < 11.0:
 		return
-	## Consecutive frame samples already define a continuous line. The old path split
-	## this same straight span into as many as 18 redundant pieces before rebuilding.
-	var frame_segments := PackedVector3Array([condiment_tool_last_draw, cur])
-	## Append + rebuild once for the whole mouse frame.
+	var frame_segments := PackedVector3Array([condiment_tool_last_draw, draw_pt])
 	_spawn_condiment_spline_segments(
 		frame_segments, CONDIMENT_TOOL_STREAK_RADIUS, condiment_tool_held
 	)
-	condiment_tool_last_draw = cur
+	condiment_tool_last_dir = travel
+	condiment_tool_last_draw = draw_pt
 
 func _release_condiment_tool() -> void:
 	if condiment_tool_held == "":
@@ -39142,8 +40763,11 @@ func _release_condiment_tool() -> void:
 	## fight the same bottle tween. Any requested squeeze waits in the queue.
 	condiment_pour_busy = true
 	condiment_active_id = id
-	condiment_tool_pouring = true
+	condiment_tool_pouring = false
+	condiment_tool_tilt_deg = 0.0
 	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_last_dir = Vector3.ZERO
+	condiment_draw_smooth = Vector3.ZERO
 	condiment_tool_stream_phase = 0.0
 	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
 		condiment_stream_mesh.visible = false
@@ -39151,14 +40775,17 @@ func _release_condiment_tool() -> void:
 	if area != null and is_instance_valid(area):
 		area.input_ray_pickable = false
 	if root != null and is_instance_valid(root):
-		var home: Vector3 = condiment_bottle_homes.get(id, root.position)
+		var home: Vector3 = _condiment_bottle_home(id)
 		var home_rot: Vector3 = condiment_bottle_home_rots.get(id, Vector3.ZERO)
+		var home_scale := Vector3.ONE * _condiment_bottle_home_scale(id)
 		var tw := create_tween()
 		condiment_active_tween = tw
 		tw.set_parallel(true)
 		tw.tween_property(root, "position", home, CONDIMENT_BOTTLE_RETURN_SEC) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tw.tween_property(root, "rotation_degrees", home_rot, CONDIMENT_BOTTLE_RETURN_SEC) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(root, "scale", home_scale, CONDIMENT_BOTTLE_RETURN_SEC) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tw.chain().tween_callback(func() -> void:
 			condiment_active_tween = null
@@ -39179,7 +40806,7 @@ func _release_condiment_tool() -> void:
 
 
 func _build_cheese_station_prop() -> void:
-	## Two cheese-slice piles on the counter — height tracks fridge stock.
+	## Board-side bun towers. Cheese now lives in its own ingredient tray.
 	if cheese_station_root != null and is_instance_valid(cheese_station_root):
 		cheese_station_root.queue_free()
 	cheese_station_root = null
@@ -39193,84 +40820,16 @@ func _build_cheese_station_prop() -> void:
 	bun_pile_anchors.clear()
 	if grill_root == null:
 		return
-	var board_c := _cutting_board_base_center()
-	var bh := CUTTING_BOARD_SIZE.y
 	var root := Node3D.new()
 	root.name = "CheeseStation"
-	root.position = board_c + Vector3(
-		CHEESE_STATION_OFFSET.x,
-		bh * 0.5 + CHEESE_STATION_OFFSET.y,
-		CHEESE_STATION_OFFSET.z
-	)
-	var slice_mat := StandardMaterial3D.new()
-	slice_mat.albedo_color = Color(1.0, 0.86, 0.22)
-	slice_mat.roughness = 0.45
-	slice_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	var gfx := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
-	var cheese_scale := clampf(float(gfx.get("cheese_stack_scale", GFX_DEFAULTS["cheese_stack_scale"])), 0.45, 2.25)
-	var slice_thick := 0.013 * cheese_scale
-	var slice_step := 0.0145 * cheese_scale
-	var slice_w := 0.118 * cheese_scale
-	## Two piles nearer the grill; buns sit on the board side (higher local X).
-	var cheese_off := _prop_offset("cheese_stack")
-	var pile_defs := [
-		{"name": "CheesePileA", "pos": Vector3(-0.34, slice_thick * 0.5 - 0.076, 0.14) + cheese_off, "yaw": -8.0},
-		{"name": "CheesePileB", "pos": Vector3(-0.185, slice_thick * 0.5 - 0.076, 0.15) + cheese_off, "yaw": 11.0},
-	]
-	var mid := Node3D.new()
-	mid.name = "CheesePileMid"
-	mid.position = Vector3(-0.262, slice_thick * 0.5 - 0.076, 0.145) + cheese_off
-	root.add_child(mid)
-	cheese_stack_anchor = mid
-	for pi in pile_defs.size():
-		var def: Dictionary = pile_defs[pi]
-		var pile := Node3D.new()
-		pile.name = str(def["name"])
-		pile.position = def["pos"]
-		root.add_child(pile)
-		for si in CHEESE_PILE_MAX_EACH:
-			var slice := MeshInstance3D.new()
-			slice.name = "CheeseSlice_%d_%d" % [pi, si]
-			var sm := BoxMesh.new()
-			## Slight size jitter so piles don't look like perfect bricks.
-			var jx := 1.0 + float(si % 3) * 0.012 - 0.012
-			var jz := 1.0 + float((si + 1) % 3) * 0.01 - 0.01
-			sm.size = Vector3(slice_w * jx, slice_thick, slice_w * jz)
-			slice.mesh = sm
-			slice.position = Vector3(
-				float(si) * 0.0025 - 0.006 + float(pi) * 0.001,
-				float(si) * slice_step,
-				float(si) * -0.0035 + float(pi) * 0.0015
-			)
-			slice.rotation_degrees = Vector3(
-				0.0,
-				float(def["yaw"]) + float(si) * 2.2 - 6.0,
-				float(si % 2) * 0.8 - 0.4
-			)
-			slice.material_override = slice_mat
-			slice.visible = false
-			pile.add_child(slice)
-			cheese_pile_slices.append(slice)
-	## Grab volume covers both piles — keep it tight so grill clicks win nearby.
-	var area := Area3D.new()
-	area.name = "CheeseGrab"
-	area.collision_layer = CHEESE_STATION_COLLISION_LAYER
-	area.collision_mask = 0
-	area.monitoring = false
-	area.monitorable = true
-	var cs := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	box.size = Vector3(0.42 * maxf(1.0, cheese_scale), 0.26 * maxf(1.0, cheese_scale), 0.32 * maxf(1.0, cheese_scale))
-	cs.shape = box
-	cs.position = mid.position + Vector3(0.0, 0.08 * maxf(1.0, cheese_scale), 0.0)
-	area.add_child(cs)
-	root.add_child(area)
-	grill_root.add_child(root)
+	if world != null:
+		world.add_child(root)
+	else:
+		grill_root.add_child(root)
 	cheese_station_root = root
-	cheese_station_area = area
 	_build_bun_inventory_piles(root)
-	_refresh_cheese_piles()
 	_refresh_bun_inventory_piles()
+	call_deferred("_update_bottom_row_supply_follow")
 
 
 func _cheese_visual_stock_count() -> int:
@@ -39282,30 +40841,22 @@ func _cheese_visual_stock_count() -> int:
 
 
 func _refresh_cheese_piles() -> void:
-	## Spread remaining cheese across two piles (left fills slightly first).
 	if cheese_pile_slices.is_empty():
 		return
-	var stock := _cheese_visual_stock_count()
-	var cap := CHEESE_PILE_MAX_EACH * 2
-	var show_n := mini(stock, cap)
-	var left_n := int((show_n + 1) / 2)
-	var right_n := int(show_n / 2)
+	var show_n := mini(_cheese_visual_stock_count(), CHEESE_PILE_MAX)
 	cheese_stack_top = null
 	for i in cheese_pile_slices.size():
 		var slice: MeshInstance3D = cheese_pile_slices[i]
 		if slice == null or not is_instance_valid(slice):
 			continue
-		var pile_i := i / CHEESE_PILE_MAX_EACH
-		var slot_i := i % CHEESE_PILE_MAX_EACH
-		var need := left_n if pile_i == 0 else right_n
-		var on := slot_i < need
+		var on := i < show_n
 		slice.visible = on
 		if on:
 			cheese_stack_top = slice
 
 
 func _build_bun_inventory_piles(parent: Node3D) -> void:
-	## Two towers left of cheese; each is a double stack (2 bottom+top pairs) = 4 sets.
+	## Two bun sets stacked on one pile (bottom+top, then another bottom+top).
 	bun_pile_root = Node3D.new()
 	bun_pile_root.name = "BunInventoryPiles"
 	bun_pile_root.position = _prop_offset("burger_buns")
@@ -39368,7 +40919,7 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	## Fly-to-build home — between the two towers.
 	var home := Node3D.new()
 	home.name = "BunPileHome"
-	home.position = BUN_PILE_BASE + Vector3(BUN_PILE_SPACING_X * bun_scale * 0.5, 0.08 * maxf(1.0, bun_scale), 0.0)
+	home.position = BUN_PILE_BASE + Vector3(0.0, 0.08 * maxf(1.0, bun_scale), 0.0)
 	bun_pile_root.add_child(home)
 	bun_pile_anchors["bun_bottom"] = home
 	bun_pile_anchors["bun_top"] = home
@@ -39377,7 +40928,7 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 
 
 func _bun_visual_pair_count() -> int:
-	## Whole pairs only — peel pair-slots as fridge stock drops (4 visible steps).
+	## Whole pairs only — peel pair-slots as fridge stock drops.
 	var bottoms := maxi(0, int(supply_stock.get("bun_bottom", 0)))
 	var tops := maxi(0, int(supply_stock.get("bun_top", 0)))
 	var pairs := mini(bottoms, tops)
@@ -39551,11 +41102,11 @@ func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAF
 
 
 func _cheese_stack_home_world() -> Vector3:
+	var tub: Node3D = ingredient_bin_nodes.get("cheese", null)
+	if tub != null and is_instance_valid(tub):
+		return tub.global_position + Vector3(0.0, 0.05 * maxf(tub.scale.y, 0.2), 0.0)
 	if cheese_stack_anchor != null and is_instance_valid(cheese_stack_anchor):
-		var lift := 0.02 + float(mini(_cheese_visual_stock_count(), CHEESE_PILE_MAX_EACH)) * 0.0145
-		return cheese_stack_anchor.global_position + Vector3(0.0, lift, 0.0)
-	if cheese_station_area != null and is_instance_valid(cheese_station_area):
-		return cheese_station_area.global_position + Vector3(0.0, 0.05, 0.0)
+		return cheese_stack_anchor.global_position + Vector3(0.0, 0.02, 0.0)
 	return _cutting_board_world_center() + Vector3(0.1, 0.08, 0.3)
 
 
@@ -39577,16 +41128,13 @@ func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
 	if not hit.is_empty() and hit.get("collider") == cheese_station_area:
 		return true
-	## Tight screen fallback — only when clearly aiming at the slice piles.
+	## Tight screen fallback — only when clearly aiming at the slice stack.
 	var best_px := INF
 	var targets: Array[Node3D] = []
 	if cheese_station_root != null and is_instance_valid(cheese_station_root):
-		var pile_a := cheese_station_root.get_node_or_null("CheesePileA")
-		var pile_b := cheese_station_root.get_node_or_null("CheesePileB")
-		if pile_a is Node3D:
-			targets.append(pile_a)
-		if pile_b is Node3D:
-			targets.append(pile_b)
+		var pile := cheese_station_root.get_node_or_null("CheesePile")
+		if pile is Node3D:
+			targets.append(pile)
 	if cheese_stack_anchor != null and is_instance_valid(cheese_stack_anchor):
 		targets.append(cheese_stack_anchor)
 	for target in targets:
@@ -39597,28 +41145,9 @@ func _cheese_station_under_cursor(screen_pos: Vector2) -> bool:
 	return best_px < CHEESE_STATION_SCREEN_PX
 
 
-func _try_cheese_station_click(screen_pos: Vector2) -> bool:
-	if not playing or cheese_held or _cheese_returning:
-		return false
-	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held:
-		return false
-	if spatula_patty != null or dragging_patty != null or cup_held:
-		return false
-	## Hands busy on the flat-top — don't yank a cheese slice by accident.
-	if _pick_patty_at_screen(screen_pos) != null:
-		return false
-	var plane := _grill_plane_from_screen(screen_pos)
-	if plane != Vector3.ZERO and _is_on_grill_surface(plane):
-		return false
-	if not _cheese_station_under_cursor(screen_pos):
-		return false
-	_begin_cheese_hold(false)
-	if cheese_held:
-		## Drag from the slice stack — release on a burger, or miss → lerp home.
-		_cheese_lmb_drag = true
-		_cheese_drag_origin = screen_pos
-		_refresh_cheese_piles()
-	return cheese_held
+func _try_cheese_station_click(_screen_pos: Vector2) -> bool:
+	## Cheese is a strip tray now — no board-side slice stack to grab.
+	return false
 
 
 func _cheese_release_target_ready(screen_pos: Vector2) -> bool:
@@ -39638,7 +41167,7 @@ func _cheese_release_target_ready(screen_pos: Vector2) -> bool:
 
 
 func _start_cheese_return_to_stack() -> void:
-	## Missed drop — fly the ghost slice back onto the stack (local; hold is already local).
+	## Missed drop — fly the ghost slice back onto the cheese tray.
 	if cheese_ghost == null or not is_instance_valid(cheese_ghost):
 		_cancel_cheese_hold_silent()
 		_restore_cheese_stack_top()
@@ -39885,7 +41414,7 @@ func _build_hud_chrome_toggle() -> void:
 	hud_chrome_toggle.tooltip_text = "Hide phone — use soda fountain"
 	hud_chrome_toggle.custom_minimum_size = Vector2(36, 22)
 	hud_chrome_toggle.focus_mode = Control.FOCUS_NONE
-	hud_chrome_toggle.z_index = 22
+	hud_chrome_toggle.z_index = 52
 	hud_chrome_toggle.flat = true
 	UiFontsScript.apply_button(hud_chrome_toggle, true, 18)
 	hud_chrome_toggle.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95, 0.95))
@@ -40405,8 +41934,9 @@ func _refresh_ingredient_stock_bars() -> void:
 				width = stock_bar.custom_minimum_size.x
 			fill.offset_right = width * stock_ratio
 			fill.color = _stock_bar_color(stock, cap)
-		## Low stock: darken icon 30%. Empty: ghost the 2D sprite.
+		## User brightness/sat is on the icon shader; stock fade multiplies after.
 		if icon != null and is_instance_valid(icon):
+			icon.material = _ensure_strip_icon_material()
 			if stock <= 0:
 				icon.modulate = Color(0.72, 0.72, 0.72, 0.28)
 			elif stock_ratio <= 0.25:
@@ -40414,6 +41944,7 @@ func _refresh_ingredient_stock_bars() -> void:
 			else:
 				icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		btn.tooltip_text = "%s\nStock: %d" % [btn.tooltip_text.get_slice("\n", 0), stock]
+	_update_bin_fills_3d()
 
 
 func _record_social_review(stars: float) -> void:
@@ -40627,11 +42158,7 @@ func _apply_social_review(
 
 
 func _scroll_phone_to_social() -> void:
-	## Jump to top of BizPhone so the new SOCIAL post is on-screen (not buried under Inventory).
-	if phone_scroll == null or not is_instance_valid(phone_scroll):
-		return
-	phone_scroll.scroll_vertical = 0
-	_phone_scroll_vel = 0.0
+	_set_phone_app("social")
 
 
 func _clear_phone_box_children(box: Node) -> void:
@@ -40848,7 +42375,7 @@ func _refresh_phone_ui() -> void:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_theme_constant_override("separation", 3)
-		row.custom_minimum_size = Vector2(0, 20)
+		row.custom_minimum_size = Vector2(0, 26)
 		phone_inventory_box.add_child(row)
 
 		var name_lab := Label.new()
@@ -40856,13 +42383,13 @@ func _refresh_phone_ui() -> void:
 		if short.length() > 10:
 			short = short.substr(0, 9) + "…"
 		name_lab.text = short
-		name_lab.custom_minimum_size = Vector2(40, 0)
+		name_lab.custom_minimum_size = Vector2(52, 0)
 		name_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		name_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		name_lab.clip_text = true
 		name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		UiFontsScript.apply_label(name_lab, false, 9)
-		name_lab.add_theme_color_override("font_color", Color(0.84, 0.89, 0.96))
+		UiFontsScript.apply_label(name_lab, false, 12)
+		name_lab.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
 		row.add_child(name_lab)
 
 		var stock := int(supply_stock.get(id, 0))
@@ -40871,17 +42398,17 @@ func _refresh_phone_ui() -> void:
 		var stock_col := _stock_bar_color(stock, stock_cap)
 		var count_lab := Label.new()
 		count_lab.text = str(stock)
-		count_lab.custom_minimum_size = Vector2(12, 0)
+		count_lab.custom_minimum_size = Vector2(16, 0)
 		count_lab.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		count_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		UiFontsScript.apply_label(count_lab, true, 9)
+		UiFontsScript.apply_label(count_lab, true, 12)
 		count_lab.add_theme_color_override("font_color", stock_col)
 		row.add_child(count_lab)
 
 		var bar := ProgressBar.new()
 		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bar.custom_minimum_size = Vector2(12, 4)
+		bar.custom_minimum_size = Vector2(16, 8)
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		bar.max_value = 1.0
@@ -40906,10 +42433,10 @@ func _refresh_phone_ui() -> void:
 			buy.tooltip_text = "Cat delivering…"
 		else:
 			buy.tooltip_text = "Buy %d for %s · cat delivers in %ds" % [SUPPLY_BUY_PACK, _format_money(pack_cost), int(SUPPLY_ORDER_WAIT)]
-		buy.custom_minimum_size = Vector2(30, 18)
+		buy.custom_minimum_size = Vector2(42, 24)
 		buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 		buy.focus_mode = Control.FOCUS_NONE
-		UiFontsScript.apply_button(buy, true, 8)
+		UiFontsScript.apply_button(buy, true, 11)
 		_style_phone_buy_button(buy)
 		var sid := id
 		if not pending:
@@ -40923,7 +42450,7 @@ func _refresh_phone_ui() -> void:
 			var row2 := HBoxContainer.new()
 			row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row2.add_theme_constant_override("separation", 3)
-			row2.custom_minimum_size = Vector2(0, 20)
+			row2.custom_minimum_size = Vector2(0, 26)
 			phone_inventory_box.add_child(row2)
 
 			var name2 := Label.new()
@@ -40931,12 +42458,12 @@ func _refresh_phone_ui() -> void:
 			if short2.length() > 10:
 				short2 = short2.substr(0, 9) + "…"
 			name2.text = short2
-			name2.custom_minimum_size = Vector2(40, 0)
+			name2.custom_minimum_size = Vector2(52, 0)
 			name2.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			name2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			name2.clip_text = true
-			UiFontsScript.apply_label(name2, false, 9)
-			name2.add_theme_color_override("font_color", Color(0.84, 0.89, 0.96))
+			UiFontsScript.apply_label(name2, false, 12)
+			name2.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
 			row2.add_child(name2)
 
 			var fill_r := _soda_tank_amount(fid)
@@ -40976,9 +42503,9 @@ func _refresh_phone_ui() -> void:
 			buy2.tooltip_text = "Order syrup refill for %s · cat in %ds" % [_format_money(syrup_cost), int(SUPPLY_ORDER_WAIT)]
 			if pend2:
 				buy2.tooltip_text = "Cat delivering syrup…"
-			buy2.custom_minimum_size = Vector2(30, 18)
+			buy2.custom_minimum_size = Vector2(42, 24)
 			buy2.focus_mode = Control.FOCUS_NONE
-			UiFontsScript.apply_button(buy2, true, 8)
+			UiFontsScript.apply_button(buy2, true, 11)
 			_style_phone_buy_button(buy2)
 			var syrup_id := sid2
 			if not pend2:
@@ -40994,10 +42521,10 @@ func _style_phone_buy_button(btn: Button) -> void:
 	n.border_color = Color(0.45, 0.78, 0.55, 0.85)
 	n.set_border_width_all(1)
 	n.set_corner_radius_all(3)
-	n.content_margin_left = 3
-	n.content_margin_right = 3
-	n.content_margin_top = 1
-	n.content_margin_bottom = 1
+	n.content_margin_left = 6
+	n.content_margin_right = 6
+	n.content_margin_top = 3
+	n.content_margin_bottom = 3
 	var h := n.duplicate() as StyleBoxFlat
 	h.bg_color = Color(0.22, 0.42, 0.28, 1.0)
 	var p := n.duplicate() as StyleBoxFlat
@@ -41015,11 +42542,11 @@ func _style_phone_reply_button(btn: Button, accent: Color = Color(0.45, 0.68, 0.
 	n.bg_color = Color(0.12, 0.16, 0.24, 0.98)
 	n.border_color = Color(accent.r, accent.g, accent.b, 0.8)
 	n.set_border_width_all(1)
-	n.set_corner_radius_all(3)
-	n.content_margin_left = 3
-	n.content_margin_right = 3
-	n.content_margin_top = 1
-	n.content_margin_bottom = 1
+	n.set_corner_radius_all(4)
+	n.content_margin_left = 6
+	n.content_margin_right = 6
+	n.content_margin_top = 3
+	n.content_margin_bottom = 3
 	var h := n.duplicate() as StyleBoxFlat
 	h.bg_color = Color(0.18, 0.24, 0.34, 1.0)
 	var p := n.duplicate() as StyleBoxFlat
@@ -41034,20 +42561,631 @@ func _style_phone_reply_button(btn: Button, accent: Color = Color(0.45, 0.68, 0.
 
 func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.055, 0.075, 0.12, 0.97)
-	sb.border_color = Color(accent.r, accent.g, accent.b, 0.68)
+	sb.bg_color = Color(0.07, 0.10, 0.15, 0.96)
+	sb.border_color = Color(accent.r, accent.g, accent.b, 0.55)
 	sb.border_width_left = 2
-	sb.border_width_top = 1
+	sb.border_width_top = 2
 	sb.border_width_right = 1
-	sb.border_width_bottom = 1
-	sb.set_corner_radius_all(PHONE_CORNER_INNER + 1)
-	sb.content_margin_left = 6
-	sb.content_margin_right = 7
+	sb.border_width_bottom = 3
+	sb.set_corner_radius_all(16)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
+	sb.shadow_color = Color(0, 0, 0, 0.28)
+	sb.shadow_size = 4
+	sb.shadow_offset = Vector2(0, 2)
+	return sb
+
+
+func _phone_icon_put(img: Image, x: int, y: int, col: Color) -> void:
+	if x < 0 or y < 0 or x >= img.get_width() or y >= img.get_height():
+		return
+	img.set_pixel(x, y, col)
+
+
+func _phone_icon_fill_circle(img: Image, cx: float, cy: float, r: float, col: Color) -> void:
+	var rr := r * r
+	var x0 := int(floor(cx - r))
+	var y0 := int(floor(cy - r))
+	var x1 := int(ceil(cx + r))
+	var y1 := int(ceil(cy + r))
+	for y in range(y0, y1 + 1):
+		for x in range(x0, x1 + 1):
+			var dx := float(x) + 0.5 - cx
+			var dy := float(y) + 0.5 - cy
+			if dx * dx + dy * dy <= rr:
+				_phone_icon_put(img, x, y, col)
+
+
+func _phone_icon_fill_rect(img: Image, x0: int, y0: int, x1: int, y1: int, col: Color) -> void:
+	var a := mini(x0, x1)
+	var b := maxi(x0, x1)
+	var c := mini(y0, y1)
+	var d := maxi(y0, y1)
+	for y in range(c, d + 1):
+		for x in range(a, b + 1):
+			_phone_icon_put(img, x, y, col)
+
+
+func _phone_icon_fill_triangle(img: Image, ax: float, ay: float, bx: float, by: float, cx: float, cy: float, col: Color) -> void:
+	var minx := int(floor(minf(ax, minf(bx, cx))))
+	var maxx := int(ceil(maxf(ax, maxf(bx, cx))))
+	var miny := int(floor(minf(ay, minf(by, cy))))
+	var maxy := int(ceil(maxf(ay, maxf(by, cy))))
+	var area := (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+	if absf(area) < 0.001:
+		return
+	for y in range(miny, maxy + 1):
+		for x in range(minx, maxx + 1):
+			var px := float(x) + 0.5
+			var py := float(y) + 0.5
+			var w0 := ((bx - px) * (cy - py) - (by - py) * (cx - px)) / area
+			var w1 := ((cx - px) * (ay - py) - (cy - py) * (ax - px)) / area
+			var w2 := 1.0 - w0 - w1
+			if w0 >= -0.02 and w1 >= -0.02 and w2 >= -0.02:
+				_phone_icon_put(img, x, y, col)
+
+
+func _phone_app_icon_texture(app_id: String) -> Texture2D:
+	var s := 64
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var w := Color(1, 1, 1, 1)
+	match app_id:
+		"social":
+			_phone_icon_fill_circle(img, 24.0, 26.0, 13.0, w)
+			_phone_icon_fill_circle(img, 42.0, 30.0, 11.0, w)
+			_phone_icon_fill_triangle(img, 16.0, 34.0, 22.0, 46.0, 28.0, 36.0, w)
+			_phone_icon_fill_triangle(img, 46.0, 36.0, 52.0, 50.0, 38.0, 38.0, w)
+			_phone_icon_fill_circle(img, 24.0, 26.0, 8.0, Color(0, 0, 0, 0))
+			_phone_icon_fill_circle(img, 42.0, 30.0, 6.5, Color(0, 0, 0, 0))
+		"shop":
+			_phone_icon_fill_rect(img, 16, 24, 48, 52, w)
+			_phone_icon_fill_rect(img, 20, 28, 44, 48, Color(0, 0, 0, 0))
+			_phone_icon_fill_rect(img, 22, 14, 26, 28, w)
+			_phone_icon_fill_rect(img, 38, 14, 42, 28, w)
+			_phone_icon_fill_circle(img, 24.0, 14.0, 5.0, w)
+			_phone_icon_fill_circle(img, 40.0, 14.0, 5.0, w)
+			_phone_icon_fill_circle(img, 24.0, 14.0, 2.4, Color(0, 0, 0, 0))
+			_phone_icon_fill_circle(img, 40.0, 14.0, 2.4, Color(0, 0, 0, 0))
+			_phone_icon_fill_rect(img, 30, 32, 34, 44, w)
+			_phone_icon_fill_rect(img, 26, 36, 38, 40, w)
+		"maps":
+			_phone_icon_fill_circle(img, 32.0, 24.0, 14.0, w)
+			_phone_icon_fill_triangle(img, 18.0, 28.0, 46.0, 28.0, 32.0, 54.0, w)
+			_phone_icon_fill_circle(img, 32.0, 24.0, 6.0, Color(0, 0, 0, 0))
+		"bank":
+			_phone_icon_fill_triangle(img, 8.0, 22.0, 56.0, 22.0, 32.0, 8.0, w)
+			_phone_icon_fill_rect(img, 12, 22, 52, 48, w)
+			_phone_icon_fill_rect(img, 8, 48, 56, 54, w)
+			for col_x in [18, 28, 38, 46]:
+				_phone_icon_fill_rect(img, col_x - 2, 26, col_x + 2, 48, Color(0, 0, 0, 0))
+		_:
+			_phone_icon_fill_circle(img, 32.0, 32.0, 16.0, w)
+	return ImageTexture.create_from_image(img)
+
+
+func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Color, accent: Color) -> Control:
+	var wrap := VBoxContainer.new()
+	wrap.add_theme_constant_override("separation", 4)
+	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
+	var btn := Button.new()
+	btn.text = ""
+	btn.icon = _phone_app_icon_texture(app_id)
+	if btn.icon == null:
+		btn.text = glyph
+	btn.expand_icon = true
+	btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	btn.add_theme_constant_override("icon_max_width", 40)
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.custom_minimum_size = Vector2(72, 72)
+	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(btn, 26)
+	var n := StyleBoxFlat.new()
+	n.bg_color = bg
+	n.border_color = Color(accent.r, accent.g, accent.b, 0.95)
+	n.set_border_width_all(3)
+	n.set_corner_radius_all(22)
+	n.shadow_color = Color(0, 0, 0, 0.42)
+	n.shadow_size = 8
+	n.shadow_offset = Vector2(0, 3)
+	var h := n.duplicate() as StyleBoxFlat
+	h.bg_color = bg.lightened(0.12)
+	var p := n.duplicate() as StyleBoxFlat
+	p.bg_color = bg.darkened(0.12)
+	btn.add_theme_stylebox_override("normal", n)
+	btn.add_theme_stylebox_override("hover", h)
+	btn.add_theme_stylebox_override("pressed", p)
+	btn.add_theme_color_override("font_color", Color.WHITE)
+	btn.pressed.connect(func():
+		_sfx_click()
+		_set_phone_app(app_id)
+	)
+	wrap.add_child(btn)
+	var lab := Label.new()
+	lab.text = caption
+	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_luckiest_label(lab, 13)
+	lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+	wrap.add_child(lab)
+	return wrap
+
+
+func _set_phone_app(app_id: String) -> void:
+	_phone_app_id = app_id
+	if phone_home_page != null:
+		phone_home_page.visible = app_id == "home"
+	if phone_social_page != null:
+		phone_social_page.visible = app_id == "social"
+	if phone_shop_page != null:
+		phone_shop_page.visible = app_id == "shop"
+	if phone_maps_page != null:
+		phone_maps_page.visible = app_id == "maps"
+	if phone_bank_page != null:
+		phone_bank_page.visible = app_id == "bank"
+	if phone_nav_bar != null:
+		phone_nav_bar.visible = app_id != "home"
+	if phone_nav_title != null:
+		match app_id:
+			"social":
+				phone_nav_title.text = "Social"
+			"shop":
+				phone_nav_title.text = "Shop"
+			"maps":
+				phone_nav_title.text = "Maps"
+			"bank":
+				phone_nav_title.text = "Bank"
+			_:
+				phone_nav_title.text = "Home"
+	if phone_scroll != null and is_instance_valid(phone_scroll):
+		phone_scroll.scroll_vertical = 0
+	_phone_scroll_vel = 0.0
+	if app_id == "maps":
+		_refresh_phone_maps()
+	elif app_id == "social":
+		_refresh_phone_feed()
+	elif app_id == "shop":
+		_refresh_phone_ui()
+	elif app_id == "bank":
+		_refresh_phone_bank()
+
+
+func _refresh_phone_maps() -> void:
+	if phone_maps_box == null or not is_instance_valid(phone_maps_box):
+		return
+	if phone_maps_here != null:
+		phone_maps_here.text = "Parked: %s" % TruckLocationsScript.display_name(current_location_id)
+	_layout_phone_map_pins()
+	_clear_phone_box_children(phone_maps_box)
+	for loc_var in TruckLocationsScript.all():
+		var loc: Dictionary = loc_var
+		var loc_id := str(loc.get("id", ""))
+		var parked := loc_id == current_location_id
+		var tier := str(loc.get("tier", TruckLocationsScript.TIER_EASY))
+		var tier_col := TruckLocationsScript.tier_color(tier)
+		var card := PanelContainer.new()
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card.mouse_filter = Control.MOUSE_FILTER_STOP
+		var csb := StyleBoxFlat.new()
+		csb.bg_color = Color(0.10, 0.13, 0.20, 0.98) if not parked else Color(0.16, 0.18, 0.14, 0.98)
+		csb.border_color = tier_col if not parked else Color(0.55, 0.92, 0.62, 0.95)
+		csb.set_border_width_all(2)
+		csb.set_corner_radius_all(8)
+		csb.content_margin_left = 8
+		csb.content_margin_right = 8
+		csb.content_margin_top = 7
+		csb.content_margin_bottom = 7
+		card.add_theme_stylebox_override("panel", csb)
+		phone_maps_box.add_child(card)
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 3)
+		card.add_child(col)
+		var name_lab := Label.new()
+		name_lab.text = str(loc.get("name", loc_id))
+		name_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(name_lab, true, 13)
+		name_lab.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
+		col.add_child(name_lab)
+		var meta := Label.new()
+		meta.text = "%s  ·  %s" % [
+			TruckLocationsScript.tier_label(tier),
+			"Parked here" if parked else "Tap to park"
+		]
+		UiFontsScript.apply_label(meta, true, 11)
+		meta.add_theme_color_override("font_color", tier_col)
+		col.add_child(meta)
+		var blurb := Label.new()
+		blurb.text = str(loc.get("blurb", ""))
+		blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(blurb, false, 11)
+		blurb.add_theme_color_override("font_color", Color(0.86, 0.90, 0.96))
+		col.add_child(blurb)
+		var park := Button.new()
+		park.text = "PARKED" if parked else "PARK HERE"
+		park.disabled = parked
+		park.focus_mode = Control.FOCUS_NONE
+		park.custom_minimum_size = Vector2(0, 28)
+		park.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UiFontsScript.apply_button(park, true, 12)
+		if parked:
+			_style_phone_reply_button(park, Color(0.55, 0.92, 0.62))
+		else:
+			_style_phone_buy_button(park)
+		var pick_id := loc_id
+		park.pressed.connect(func():
+			_sfx_click()
+			_on_location_confirmed(pick_id)
+			_refresh_phone_maps()
+		)
+		col.add_child(park)
+
+
+func _build_phone_maps_preview(parent: Control) -> void:
+	var frame := PanelContainer.new()
+	frame.name = "PhoneMapPreview"
+	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	frame.custom_minimum_size = Vector2(0, 168)
+	frame.mouse_filter = Control.MOUSE_FILTER_STOP
+	var fsb := StyleBoxFlat.new()
+	fsb.bg_color = Color(0.10, 0.13, 0.16, 1.0)
+	fsb.border_color = Color(0.55, 0.78, 0.95, 0.45)
+	fsb.set_border_width_all(2)
+	fsb.set_corner_radius_all(14)
+	fsb.content_margin_left = 6
+	fsb.content_margin_right = 6
+	fsb.content_margin_top = 6
+	fsb.content_margin_bottom = 6
+	frame.add_theme_stylebox_override("panel", fsb)
+	parent.add_child(frame)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 5)
+	frame.add_child(col)
+	var search := PanelContainer.new()
+	search.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ssb := StyleBoxFlat.new()
+	ssb.bg_color = Color(0.16, 0.18, 0.22, 0.96)
+	ssb.set_corner_radius_all(12)
+	ssb.content_margin_left = 8
+	ssb.content_margin_right = 8
+	ssb.content_margin_top = 4
+	ssb.content_margin_bottom = 4
+	search.add_theme_stylebox_override("panel", ssb)
+	col.add_child(search)
+	var search_lab := Label.new()
+	search_lab.text = "Search this area"
+	UiFontsScript.apply_label(search_lab, false, 11)
+	search_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	search.add_child(search_lab)
+	phone_maps_preview = Control.new()
+	phone_maps_preview.name = "TownMapHost"
+	phone_maps_preview.custom_minimum_size = Vector2(0, 118)
+	phone_maps_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_maps_preview.clip_contents = true
+	phone_maps_preview.mouse_filter = Control.MOUSE_FILTER_STOP
+	phone_maps_preview.resized.connect(_layout_phone_map_pins)
+	col.add_child(phone_maps_preview)
+	phone_maps_art = TextureRect.new()
+	phone_maps_art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	phone_maps_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	phone_maps_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	phone_maps_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if ResourceLoader.exists("res://assets/ui/town_map.png"):
+		phone_maps_art.texture = load("res://assets/ui/town_map.png") as Texture2D
+	elif ResourceLoader.exists("res://IMAGES/town_map.png"):
+		phone_maps_art.texture = load("res://IMAGES/town_map.png") as Texture2D
+	phone_maps_preview.add_child(phone_maps_art)
+	phone_maps_pin_layer = Control.new()
+	phone_maps_pin_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	phone_maps_pin_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_maps_preview.add_child(phone_maps_pin_layer)
+
+
+func _layout_phone_map_pins() -> void:
+	if phone_maps_pin_layer == null or not is_instance_valid(phone_maps_pin_layer):
+		return
+	_clear_phone_box_children(phone_maps_pin_layer)
+	var sz := phone_maps_pin_layer.size
+	if sz.x < 8.0 or sz.y < 8.0:
+		return
+	for loc_var in TruckLocationsScript.all():
+		var loc: Dictionary = loc_var
+		var loc_id := str(loc.get("id", ""))
+		var uv: Vector2 = loc.get("map", Vector2(0.5, 0.5))
+		var parked := loc_id == current_location_id
+		var pin := Button.new()
+		pin.focus_mode = Control.FOCUS_NONE
+		pin.custom_minimum_size = Vector2(16, 16)
+		pin.size = Vector2(16, 16)
+		pin.position = Vector2(uv.x * sz.x, uv.y * sz.y) - Vector2(8, 8)
+		pin.tooltip_text = str(loc.get("name", loc_id))
+		pin.mouse_filter = Control.MOUSE_FILTER_STOP
+		var n := StyleBoxFlat.new()
+		var tier := str(loc.get("tier", TruckLocationsScript.TIER_EASY))
+		n.bg_color = TruckLocationsScript.tier_color(tier)
+		n.border_color = Color.WHITE if parked else Color(0.08, 0.08, 0.10, 0.9)
+		n.set_border_width_all(2 if parked else 1)
+		n.set_corner_radius_all(8)
+		pin.add_theme_stylebox_override("normal", n)
+		var h := n.duplicate() as StyleBoxFlat
+		h.bg_color = n.bg_color.lightened(0.15)
+		pin.add_theme_stylebox_override("hover", h)
+		pin.add_theme_stylebox_override("pressed", n)
+		var pick := loc_id
+		pin.pressed.connect(func():
+			_sfx_click()
+			_on_location_confirmed(pick)
+			call_deferred("_refresh_phone_maps")
+		)
+		phone_maps_pin_layer.add_child(pin)
+
+
+func _load_bank_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	bank_savings_rate_pct = clampf(float(cfg.get_value(BANK_CFG_SECTION, "savings_rate", BANK_SAVINGS_RATE_DEFAULT)), 0.0, 25.0)
+	bank_loan_rate_pct = clampf(float(cfg.get_value(BANK_CFG_SECTION, "loan_rate", BANK_LOAN_RATE_DEFAULT)), 0.0, 50.0)
+	bank_xfer_chunk = clampf(float(cfg.get_value(BANK_CFG_SECTION, "chunk", 100.0)), 10.0, 1000.0)
+
+
+func _save_bank_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(BANK_CFG_SECTION, "savings_rate", bank_savings_rate_pct)
+	cfg.set_value(BANK_CFG_SECTION, "loan_rate", bank_loan_rate_pct)
+	cfg.set_value(BANK_CFG_SECTION, "chunk", bank_xfer_chunk if bank_xfer_chunk > 0.0 else 100.0)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _bank_chunk_amount(limit: float) -> float:
+	if bank_xfer_chunk < 0.0:
+		return maxf(0.0, limit)
+	return minf(bank_xfer_chunk, maxf(0.0, limit))
+
+
+func _bank_deposit() -> void:
+	var amt := _bank_chunk_amount(money)
+	if amt < 0.01:
+		_flash("Need cash in checking", Color("FFCC80"))
+		return
+	money -= amt
+	bank_savings += amt
+	_update_hud()
+	_refresh_phone_bank()
+	_flash("Moved %s into High Yield" % _format_money(amt), Color("A5D6A7"))
+
+
+func _bank_withdraw() -> void:
+	var amt := _bank_chunk_amount(bank_savings)
+	if amt < 0.01:
+		_flash("Nothing in savings", Color("FFCC80"))
+		return
+	bank_savings -= amt
+	money += amt
+	_update_hud()
+	_refresh_phone_bank()
+	_flash("Moved %s to checking" % _format_money(amt), Color("90CAF9"))
+
+
+func _credit_borrow_cap() -> float:
+	if credit_score >= 700:
+		return 1500.0
+	if credit_score >= 600:
+		return 800.0
+	return 500.0
+
+
+func _credit_borrow_room() -> float:
+	return maxf(0.0, _credit_borrow_cap() - bank_loan)
+
+
+func _raise_credit_score(repaid: float) -> void:
+	if repaid < 0.01:
+		return
+	bank_lifetime_repaid += repaid
+	credit_score = clampi(500 + int(floor(bank_lifetime_repaid / 5.0)), 300, 850)
+
+
+func _bank_borrow() -> void:
+	var room := _credit_borrow_room()
+	if room < 1.0:
+		_flash("Loan maxed for credit %d" % credit_score, Color("FFCC80"))
+		return
+	var amt := clampf(bank_borrow_typed, 1.0, room)
+	amt = floorf(amt)
+	if amt < 1.0:
+		_flash("Type how much to borrow (max %s)" % _format_money(room), Color("FFCC80"))
+		return
+	bank_loan += amt
+	money += amt
+	_update_hud()
+	_refresh_phone_bank()
+	_flash("Borrowed %s · %.1f%% a day" % [_format_money(amt), bank_loan_rate_pct], Color("FFCC80"))
+
+
+func _bank_repay() -> void:
+	var amt := _bank_chunk_amount(minf(money, bank_loan))
+	if amt < 0.01:
+		_flash("Nothing to repay" if bank_loan < 0.01 else "Need cash in checking", Color("FFCC80"))
+		return
+	money -= amt
+	bank_loan = maxf(0.0, bank_loan - amt)
+	_raise_credit_score(amt)
+	_update_hud()
+	_refresh_phone_bank()
+	_flash("Paid %s toward the loan · credit %d" % [_format_money(amt), credit_score], Color("A5D6A7"))
+
+
+func _apply_bank_day_interest() -> String:
+	var save_gain := 0.0
+	var loan_cost := 0.0
+	if bank_savings > 0.01:
+		save_gain = bank_savings * (bank_savings_rate_pct / 100.0)
+		bank_savings += save_gain
+	if bank_loan > 0.01:
+		loan_cost = bank_loan * (bank_loan_rate_pct / 100.0)
+		bank_loan += loan_cost
+	_update_hud()
+	_refresh_phone_bank()
+	var lines := "Checking %s · HYSA %s" % [_format_money(money), _format_money(bank_savings)]
+	if save_gain > 0.001:
+		lines += " (+%s)" % _format_money(save_gain)
+	if bank_loan > 0.01:
+		lines += "\nLoan %s" % _format_money(bank_loan)
+		if loan_cost > 0.001:
+			lines += " (+%s interest)" % _format_money(loan_cost)
+	return lines
+
+
+func _phone_bank_amount_chip(label: String, chunk: float) -> Button:
+	var btn := Button.new()
+	btn.text = label
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.custom_minimum_size = Vector2(0, 26)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_button(btn, true, 11)
+	var on := is_equal_approx(bank_xfer_chunk, chunk)
+	_style_phone_reply_button(btn, Color("FFE082") if on else Color(0.55, 0.68, 0.85))
+	btn.pressed.connect(func():
+		_sfx_click()
+		bank_xfer_chunk = chunk
+		_save_bank_settings()
+		_refresh_phone_bank()
+	)
+	return btn
+
+
+func _refresh_phone_bank() -> void:
+	if phone_bank_box == null or not is_instance_valid(phone_bank_box):
+		return
+	_clear_phone_box_children(phone_bank_box)
+	var title := Label.new()
+	title.text = "Burger Pals Bank"
+	UiFontsScript.apply_luckiest_label(title, 16)
+	title.add_theme_color_override("font_color", Color("FFE082"))
+	phone_bank_box.add_child(title)
+	phone_bank_box.add_child(_phone_bank_card("Checking", _format_money(money), "Sales land here. Buy supplies from this till.", Color(0.45, 0.78, 1.0)))
+	phone_bank_box.add_child(_phone_bank_card(
+		"High Yield Savings",
+		_format_money(bank_savings),
+		"%.1f%% a day after each shift." % bank_savings_rate_pct,
+		Color(0.55, 0.92, 0.62)
+	))
+	var save_row := HBoxContainer.new()
+	save_row.add_theme_constant_override("separation", 6)
+	phone_bank_box.add_child(save_row)
+	save_row.add_child(_phone_bank_action("Deposit", Color(0.55, 0.92, 0.62), _bank_deposit))
+	save_row.add_child(_phone_bank_action("Withdraw", Color(0.55, 0.78, 1.0), _bank_withdraw))
+	phone_bank_box.add_child(_phone_bank_card(
+		"Credit Score",
+		str(credit_score),
+		"Borrow limit %s · 500→$500  600→$800  700→$1500. Pays raise the score." % _format_money(_credit_borrow_cap()),
+		Color(0.95, 0.82, 0.42)
+	))
+	phone_bank_box.add_child(_phone_bank_card(
+		"Loan",
+		_format_money(bank_loan),
+		"%.1f%% interest a day until you pay it back. Room left %s." % [bank_loan_rate_pct, _format_money(_credit_borrow_room())],
+		Color(1.0, 0.62, 0.42)
+	))
+	var loan_row := HBoxContainer.new()
+	loan_row.add_theme_constant_override("separation", 6)
+	phone_bank_box.add_child(loan_row)
+	loan_row.add_child(_phone_bank_action("Borrow", Color(1.0, 0.78, 0.38), _bank_borrow))
+	loan_row.add_child(_phone_bank_action("Pay", Color(0.95, 0.55, 0.45), _bank_repay))
+	var borrow_lab := Label.new()
+	borrow_lab.text = "Borrow amount"
+	UiFontsScript.apply_label(borrow_lab, true, 11)
+	borrow_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	phone_bank_box.add_child(borrow_lab)
+	var borrow_edit := LineEdit.new()
+	borrow_edit.placeholder_text = "Type dollars to borrow"
+	borrow_edit.text = str(int(round(bank_borrow_typed))) if bank_borrow_typed > 0.0 else ""
+	borrow_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	borrow_edit.custom_minimum_size = Vector2(0, 28)
+	borrow_edit.max_length = 6
+	borrow_edit.focus_mode = Control.FOCUS_ALL
+	borrow_edit.add_theme_font_size_override("font_size", 14)
+	borrow_edit.add_theme_color_override("font_color", Color(0.95, 0.96, 1.0))
+	borrow_edit.add_theme_color_override("font_placeholder_color", Color(0.45, 0.52, 0.62))
+	borrow_edit.text_changed.connect(func(t: String):
+		var cleaned := ""
+		for ch in t:
+			if ch >= "0" and ch <= "9":
+				cleaned += ch
+		if cleaned != t:
+			borrow_edit.text = cleaned
+			borrow_edit.caret_column = cleaned.length()
+		bank_borrow_typed = float(cleaned) if cleaned != "" else 0.0
+	)
+	borrow_edit.text_submitted.connect(func(_t: String): _bank_borrow())
+	phone_bank_box.add_child(borrow_edit)
+	var amt_lab := Label.new()
+	amt_lab.text = "Pay amount"
+	UiFontsScript.apply_label(amt_lab, true, 11)
+	amt_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	phone_bank_box.add_child(amt_lab)
+	var chips := HBoxContainer.new()
+	chips.add_theme_constant_override("separation", 4)
+	phone_bank_box.add_child(chips)
+	chips.add_child(_phone_bank_amount_chip("$50", 50.0))
+	chips.add_child(_phone_bank_amount_chip("$100", 100.0))
+	chips.add_child(_phone_bank_amount_chip("$250", 250.0))
+	chips.add_child(_phone_bank_amount_chip("All", -1.0))
+
+
+func _phone_bank_card(title: String, amount: String, note: String, accent: Color) -> PanelContainer:
+	var card := PanelContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.11, 0.16, 0.96)
+	sb.border_color = Color(accent.r, accent.g, accent.b, 0.7)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(12)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
 	sb.content_margin_top = 6
 	sb.content_margin_bottom = 6
-	sb.shadow_color = Color(0, 0, 0, 0.22)
-	sb.shadow_size = 2
-	return sb
+	card.add_theme_stylebox_override("panel", sb)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	card.add_child(col)
+	var head := Label.new()
+	head.text = title
+	UiFontsScript.apply_label(head, true, 11)
+	head.add_theme_color_override("font_color", accent)
+	col.add_child(head)
+	var val := Label.new()
+	val.text = amount
+	UiFontsScript.apply_luckiest_label(val, 18)
+	val.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
+	col.add_child(val)
+	var sub := Label.new()
+	sub.text = note
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(sub, false, 10)
+	sub.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	col.add_child(sub)
+	return card
+
+
+func _phone_bank_action(caption: String, accent: Color, cb: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = caption
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.custom_minimum_size = Vector2(0, 30)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_luckiest_button(btn, 13)
+	_style_phone_reply_button(btn, accent)
+	btn.pressed.connect(func():
+		_sfx_click()
+		cb.call()
+	)
+	return btn
 
 
 func _shop_item_cost(id: String) -> float:
@@ -41189,7 +43327,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 
 	var title := Label.new()
 	title.text = "EQUIPMENT"
-	UiFontsScript.apply_label(title, true, 10)
+	UiFontsScript.apply_label(title, true, 13)
 	title.add_theme_color_override("font_color", Color("FFD54F"))
 	v.add_child(title)
 
@@ -41203,7 +43341,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", 4)
-	row.custom_minimum_size = Vector2(0, 25)
+	row.custom_minimum_size = Vector2(0, 32)
 	parent.add_child(row)
 
 	var copy := VBoxContainer.new()
@@ -41219,7 +43357,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lab.clip_text = true
 	name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(name_lab, true, 9)
+	UiFontsScript.apply_label(name_lab, true, 12)
 	name_lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	copy.add_child(name_lab)
 
@@ -41229,8 +43367,8 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	note_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	note_lab.clip_text = true
 	note_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(note_lab, false, 8)
-	note_lab.add_theme_color_override("font_color", Color(0.68, 0.75, 0.84))
+	UiFontsScript.apply_label(note_lab, false, 11)
+	note_lab.add_theme_color_override("font_color", Color(0.80, 0.86, 0.94))
 	copy.add_child(note_lab)
 
 	var owned := bool(owned_machines.get(id, false))
@@ -41240,10 +43378,10 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 	var buy := Button.new()
 	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
 	buy.disabled = owned or not playing or blocked != ""
-	buy.custom_minimum_size = Vector2(44, 21)
+	buy.custom_minimum_size = Vector2(58, 26)
 	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 	buy.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(buy, true, 8)
+	UiFontsScript.apply_button(buy, true, 11)
 	_style_phone_buy_button(buy)
 	if owned:
 		buy.tooltip_text = "Already installed"
@@ -41442,7 +43580,7 @@ func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -
 	var title := Label.new()
 	title.text = "ORDER RESULTS"
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	UiFontsScript.apply_label(title, true, 8)
+	UiFontsScript.apply_label(title, true, 11)
 	title.add_theme_color_override("font_color", Color("90CAF9"))
 	stack.add_child(title)
 
@@ -41475,7 +43613,7 @@ func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -
 		caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		UiFontsScript.apply_label(caption, true, 7)
+		UiFontsScript.apply_label(caption, true, 10)
 		caption.add_theme_color_override("font_color", Color(0.48, 0.57, 0.68))
 		cell.add_child(caption)
 		var value := Label.new()
@@ -41485,7 +43623,7 @@ func _add_phone_review_breakdown(parent: VBoxContainer, breakdown: Dictionary) -
 		value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		value.tooltip_text = value.text
 		value.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		UiFontsScript.apply_label(value, true, 8)
+		UiFontsScript.apply_label(value, true, 11)
 		value.add_theme_color_override(
 			"font_color", breakdown.get("%s_color" % id, Color.WHITE) as Color
 		)
@@ -41519,16 +43657,16 @@ func _refresh_phone_feed() -> void:
 		var empty := Label.new()
 		empty.text = "No posts yet — serve someone!"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UiFontsScript.apply_label(empty, false, 9)
-		empty.add_theme_color_override("font_color", Color(0.65, 0.72, 0.82))
+		UiFontsScript.apply_label(empty, false, 12)
+		empty.add_theme_color_override("font_color", Color(0.82, 0.88, 0.96))
 		phone_feed_box.add_child(empty)
 		return
 	if social_reviews.size() > SOCIAL_FEED_RECENT_VISIBLE:
 		var toggle := Button.new()
 		toggle.focus_mode = Control.FOCUS_NONE
-		toggle.custom_minimum_size = Vector2(0, 19)
+		toggle.custom_minimum_size = Vector2(0, 24)
 		toggle.text = "Show recent 5" if _phone_feed_show_all else "Show all %d" % social_reviews.size()
-		UiFontsScript.apply_button(toggle, true, 8)
+		UiFontsScript.apply_button(toggle, true, 11)
 		_style_phone_reply_button(toggle, Color("FFD54F"))
 		toggle.pressed.connect(func():
 			_phone_feed_show_all = not _phone_feed_show_all
@@ -41550,10 +43688,10 @@ func _refresh_phone_feed() -> void:
 		var card_sb := StyleBoxFlat.new()
 		card_sb.bg_color = Color(0.075, 0.10, 0.16, 0.97)
 		card_sb.set_corner_radius_all(6)
-		card_sb.content_margin_left = 6
-		card_sb.content_margin_right = 6
-		card_sb.content_margin_top = 5
-		card_sb.content_margin_bottom = 5
+		card_sb.content_margin_left = 8
+		card_sb.content_margin_right = 8
+		card_sb.content_margin_top = 7
+		card_sb.content_margin_bottom = 7
 		## Newest post pops with a brighter border so it reads as “just in”.
 		if post_i == 0:
 			card_sb.border_color = Color(0.55, 0.78, 1.0, 0.9)
@@ -41574,21 +43712,21 @@ func _refresh_phone_feed() -> void:
 		cv.add_child(head)
 		var who := Label.new()
 		who.text = str(post.get("who", "Guest"))
-		UiFontsScript.apply_label(who, true, 9)
+		UiFontsScript.apply_label(who, true, 12)
 		who.add_theme_color_override("font_color", Color(0.88, 0.93, 1.0))
 		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		head.add_child(who)
 		var stars := Label.new()
 		stars.text = _star_bar_text(float(post.get("stars", 3.0)))
-		UiFontsScript.apply_label(stars, true, 9)
+		UiFontsScript.apply_label(stars, true, 12)
 		stars.add_theme_color_override("font_color", Color("FFD54F"))
 		head.add_child(stars)
 		var body := Label.new()
 		body.text = str(post.get("text", ""))
 		body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		UiFontsScript.apply_label(body, false, 9)
-		body.add_theme_color_override("font_color", Color(0.82, 0.87, 0.94))
+		UiFontsScript.apply_label(body, false, 12)
+		body.add_theme_color_override("font_color", Color(0.90, 0.93, 0.98))
 		cv.add_child(body)
 		var breakdown: Dictionary = post.get("breakdown", {}) as Dictionary
 		if not breakdown.is_empty():
@@ -41633,8 +43771,8 @@ func _refresh_phone_feed() -> void:
 				b_not.text = "Not True!"
 				b_not.focus_mode = Control.FOCUS_NONE
 				b_not.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				b_not.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_not, true, 7)
+				b_not.custom_minimum_size = Vector2(0, 22)
+				UiFontsScript.apply_button(b_not, true, 11)
 				_style_phone_reply_button(b_not, Color(0.95, 0.72, 0.45))
 				var pid_not := post_id
 				b_not.pressed.connect(func(): _reply_to_social_review(pid_not, "not_true"))
@@ -41643,8 +43781,8 @@ func _refresh_phone_feed() -> void:
 				b_better.text = "Do better"
 				b_better.focus_mode = Control.FOCUS_NONE
 				b_better.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				b_better.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_better, true, 7)
+				b_better.custom_minimum_size = Vector2(0, 22)
+				UiFontsScript.apply_button(b_better, true, 11)
 				_style_phone_reply_button(b_better, Color(0.55, 0.85, 0.65))
 				var pid_better := post_id
 				b_better.pressed.connect(func(): _reply_to_social_review(pid_better, "better"))
@@ -41658,8 +43796,8 @@ func _refresh_phone_feed() -> void:
 				b_liar.text = "Liar!"
 				b_liar.focus_mode = Control.FOCUS_NONE
 				b_liar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				b_liar.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_liar, true, 7)
+				b_liar.custom_minimum_size = Vector2(0, 22)
+				UiFontsScript.apply_button(b_liar, true, 11)
 				_style_phone_reply_button(b_liar, Color(0.95, 0.45, 0.45))
 				var pid_liar := post_id
 				b_liar.pressed.connect(func(): _reply_to_social_review(pid_liar, "liar"))
@@ -41668,8 +43806,8 @@ func _refresh_phone_feed() -> void:
 				b_custom.text = "Custom"
 				b_custom.focus_mode = Control.FOCUS_NONE
 				b_custom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				b_custom.custom_minimum_size = Vector2(0, 16)
-				UiFontsScript.apply_button(b_custom, true, 7)
+				b_custom.custom_minimum_size = Vector2(0, 22)
+				UiFontsScript.apply_button(b_custom, true, 11)
 				_style_phone_reply_button(b_custom)
 				var pid_custom := post_id
 				b_custom.pressed.connect(func(): _show_social_reply_custom(pid_custom))
@@ -41683,10 +43821,10 @@ func _refresh_phone_feed() -> void:
 					edit.placeholder_text = "Type a reply…"
 					edit.text = _phone_reply_custom_draft
 					edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-					edit.custom_minimum_size = Vector2(0, 18)
+					edit.custom_minimum_size = Vector2(0, 24)
 					edit.max_length = 140
 					edit.focus_mode = Control.FOCUS_ALL
-					edit.add_theme_font_size_override("font_size", 9)
+					edit.add_theme_font_size_override("font_size", 12)
 					edit.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 					edit.add_theme_color_override("font_placeholder_color", Color(0.45, 0.52, 0.62))
 					var pid_edit := post_id
@@ -41696,8 +43834,8 @@ func _refresh_phone_feed() -> void:
 					var send := Button.new()
 					send.text = "Send"
 					send.focus_mode = Control.FOCUS_NONE
-					send.custom_minimum_size = Vector2(34, 18)
-					UiFontsScript.apply_button(send, true, 7)
+					send.custom_minimum_size = Vector2(44, 24)
+					UiFontsScript.apply_button(send, true, 11)
 					_style_phone_reply_button(send, Color(0.55, 0.78, 1.0))
 					send.pressed.connect(func(): _reply_to_social_review(pid_edit, "custom", edit.text))
 					draft_row.add_child(send)
@@ -41706,9 +43844,9 @@ func _refresh_phone_feed() -> void:
 				var reply_btn := Button.new()
 				reply_btn.text = "Reply"
 				reply_btn.focus_mode = Control.FOCUS_NONE
-				reply_btn.custom_minimum_size = Vector2(44, 15)
+				reply_btn.custom_minimum_size = Vector2(56, 22)
 				reply_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-				UiFontsScript.apply_button(reply_btn, true, 7)
+				UiFontsScript.apply_button(reply_btn, true, 11)
 				_style_phone_reply_button(reply_btn)
 				var pid_open := post_id
 				reply_btn.pressed.connect(func(): _open_social_reply_menu(pid_open))
@@ -41716,19 +43854,19 @@ func _refresh_phone_feed() -> void:
 
 
 func _build_phone_status_bar() -> Control:
-	## Fake phone bezel strip — signal bars, network, battery.
+	## Status lives on the glass, under the earpiece bezel.
 	var bar := PanelContainer.new()
 	bar.name = "PhoneStatusBar"
 	bar.custom_minimum_size = Vector2(0, PHONE_STATUS_H)
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bar_sb := StyleBoxFlat.new()
-	bar_sb.bg_color = Color(0.02, 0.03, 0.06, 0.92)
-	bar_sb.set_corner_radius_all(3)
-	bar_sb.content_margin_left = 4
-	bar_sb.content_margin_right = 4
-	bar_sb.content_margin_top = 1
-	bar_sb.content_margin_bottom = 1
+	bar_sb.bg_color = Color(0.03, 0.04, 0.07, 0.55)
+	bar_sb.set_corner_radius_all(0)
+	bar_sb.content_margin_left = 6
+	bar_sb.content_margin_right = 6
+	bar_sb.content_margin_top = 2
+	bar_sb.content_margin_bottom = 2
 	bar.add_theme_stylebox_override("panel", bar_sb)
 
 	var row := HBoxContainer.new()
@@ -41738,34 +43876,98 @@ func _build_phone_status_bar() -> Control:
 
 	phone_status_signal = Label.new()
 	phone_status_signal.text = "▂▄▆█"
-	UiFontsScript.apply_label(phone_status_signal, true, 8)
-	phone_status_signal.add_theme_color_override("font_color", Color(0.82, 0.88, 0.96))
+	UiFontsScript.apply_label(phone_status_signal, true, 10)
+	phone_status_signal.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
 	phone_status_signal.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(phone_status_signal)
 
 	phone_status_net = Label.new()
 	phone_status_net.text = "5G"
-	UiFontsScript.apply_label(phone_status_net, true, 8)
-	phone_status_net.add_theme_color_override("font_color", Color(0.7, 0.78, 0.9))
+	UiFontsScript.apply_label(phone_status_net, true, 10)
+	phone_status_net.add_theme_color_override("font_color", Color(0.86, 0.90, 0.98))
 	phone_status_net.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_status_net.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(phone_status_net)
 
 	var carrier := Label.new()
 	carrier.text = "BizTel"
-	UiFontsScript.apply_label(carrier, false, 7)
-	carrier.add_theme_color_override("font_color", Color(0.5, 0.58, 0.68))
+	UiFontsScript.apply_label(carrier, false, 10)
+	carrier.add_theme_color_override("font_color", Color(0.78, 0.84, 0.94))
 	carrier.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(carrier)
 
 	phone_status_battery = Label.new()
 	phone_status_battery.text = "▮ 78%"
-	UiFontsScript.apply_label(phone_status_battery, true, 8)
+	UiFontsScript.apply_label(phone_status_battery, true, 10)
 	phone_status_battery.add_theme_color_override("font_color", Color(0.55, 0.92, 0.62))
 	phone_status_battery.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	phone_status_battery.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(phone_status_battery)
 	return bar
+
+
+func _build_phone_top_bezel() -> Control:
+	var wrap := Control.new()
+	wrap.name = "PhoneTopBezel"
+	wrap.custom_minimum_size = Vector2(0, PHONE_BEZEL_TOP)
+	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var gloss := ColorRect.new()
+	gloss.color = Color(0.42, 0.45, 0.52, 0.22)
+	gloss.set_anchors_preset(Control.PRESET_FULL_RECT)
+	gloss.offset_bottom = -PHONE_BEZEL_TOP * 0.55
+	gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(gloss)
+	var cam := Panel.new()
+	cam.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cam.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	cam.offset_left = 18.0
+	cam.offset_right = 26.0
+	cam.offset_top = -4.0
+	cam.offset_bottom = 4.0
+	var cam_sb := StyleBoxFlat.new()
+	cam_sb.bg_color = Color(0.08, 0.10, 0.14, 1.0)
+	cam_sb.border_color = Color(0.28, 0.32, 0.38, 0.9)
+	cam_sb.set_border_width_all(1)
+	cam_sb.set_corner_radius_all(8)
+	cam.add_theme_stylebox_override("panel", cam_sb)
+	wrap.add_child(cam)
+	var speaker := Panel.new()
+	speaker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	speaker.set_anchors_preset(Control.PRESET_CENTER)
+	speaker.offset_left = -28.0
+	speaker.offset_right = 28.0
+	speaker.offset_top = -3.0
+	speaker.offset_bottom = 3.0
+	var sp_sb := StyleBoxFlat.new()
+	sp_sb.bg_color = Color(0.05, 0.06, 0.08, 1.0)
+	sp_sb.border_color = Color(0.22, 0.24, 0.28, 0.85)
+	sp_sb.set_border_width_all(1)
+	sp_sb.set_corner_radius_all(4)
+	speaker.add_theme_stylebox_override("panel", sp_sb)
+	wrap.add_child(speaker)
+	return wrap
+
+
+func _build_phone_bottom_bezel() -> Control:
+	var wrap := Control.new()
+	wrap.name = "PhoneBottomBezel"
+	wrap.custom_minimum_size = Vector2(0, PHONE_BEZEL_BOTTOM)
+	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var pill := Panel.new()
+	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pill.set_anchors_preset(Control.PRESET_CENTER)
+	pill.offset_left = -22.0
+	pill.offset_right = 22.0
+	pill.offset_top = -2.5
+	pill.offset_bottom = 2.5
+	var pill_sb := StyleBoxFlat.new()
+	pill_sb.bg_color = Color(0.55, 0.58, 0.64, 0.55)
+	pill_sb.set_corner_radius_all(3)
+	pill.add_theme_stylebox_override("panel", pill_sb)
+	wrap.add_child(pill)
+	return wrap
 
 
 func _build_phone_ui() -> void:
@@ -41777,7 +43979,7 @@ func _build_phone_ui() -> void:
 	phone_column.custom_minimum_size = PHONE_UI_SIZE
 	phone_column.size = PHONE_UI_SIZE
 	phone_column.clip_contents = false
-	phone_column.z_index = 20
+	phone_column.z_index = 50
 	ui_root.add_child(phone_column)
 
 	var body := PanelContainer.new()
@@ -41785,16 +43987,20 @@ func _build_phone_ui() -> void:
 	body.set_anchors_preset(Control.PRESET_FULL_RECT)
 	body.mouse_filter = Control.MOUSE_FILTER_STOP
 	var body_sb := StyleBoxFlat.new()
-	body_sb.bg_color = Color(0.075, 0.09, 0.125, 0.99)
-	body_sb.border_color = Color(0.38, 0.46, 0.58, 1.0)
-	body_sb.set_border_width_all(3)
+	body_sb.bg_color = Color(0.10, 0.11, 0.14, 1.0)
+	body_sb.border_color = Color(0.62, 0.66, 0.74, 0.95)
+	body_sb.border_width_left = 2
+	body_sb.border_width_right = 2
+	body_sb.border_width_top = 2
+	body_sb.border_width_bottom = 3
 	body_sb.set_corner_radius_all(PHONE_CORNER_OUTER)
-	body_sb.shadow_color = Color(0, 0, 0, 0.45)
-	body_sb.shadow_size = 8
-	body_sb.content_margin_left = 6
+	body_sb.shadow_color = Color(0, 0, 0, 0.52)
+	body_sb.shadow_size = 14
+	body_sb.shadow_offset = Vector2(1, 5)
+	body_sb.content_margin_left = 8
 	body_sb.content_margin_right = 8
-	body_sb.content_margin_top = 8
-	body_sb.content_margin_bottom = 10
+	body_sb.content_margin_top = 0
+	body_sb.content_margin_bottom = 0
 	body.add_theme_stylebox_override("panel", body_sb)
 	phone_column.add_child(body)
 
@@ -41803,37 +44009,37 @@ func _build_phone_ui() -> void:
 	phone_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_child(phone_stack)
+	phone_stack.add_child(_build_phone_top_bezel())
 
-	## The cab radio lives inside the same outer frame as the phone screen.
-	radio_column = VBoxContainer.new()
-	radio_column.name = "PhoneRadioSection"
-	radio_column.add_theme_constant_override("separation", 0)
-	radio_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
-	phone_stack.add_child(radio_column)
-
-	## Screen fills the frame — no solid black forehead/chin bars (those read as bugs).
+	## Glass sits under the earpiece bezel; radio lives on this screen.
 	var screen := PanelContainer.new()
 	screen.name = "PhoneScreen"
 	screen.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	screen.mouse_filter = Control.MOUSE_FILTER_STOP
 	var screen_sb := StyleBoxFlat.new()
-	screen_sb.bg_color = Color(0.025, 0.045, 0.085, 0.99)
-	screen_sb.border_color = Color(0.40, 0.58, 0.78, 0.58)
-	screen_sb.set_border_width_all(1)
+	screen_sb.bg_color = Color(0.05, 0.075, 0.12, 0.99)
+	screen_sb.border_color = Color(0.28, 0.48, 0.62, 0.40)
+	screen_sb.border_width_left = 1
+	screen_sb.border_width_right = 1
+	screen_sb.border_width_top = 1
+	screen_sb.border_width_bottom = 2
 	screen_sb.set_corner_radius_all(PHONE_CORNER_INNER)
-	screen_sb.content_margin_left = 4
-	screen_sb.content_margin_right = 7
-	screen_sb.content_margin_top = 5
+	screen_sb.shadow_color = Color(0, 0, 0, 0.35)
+	screen_sb.shadow_size = 6
+	screen_sb.shadow_offset = Vector2(0, 2)
+	screen_sb.content_margin_left = 5
+	screen_sb.content_margin_right = 5
+	screen_sb.content_margin_top = 4
 	screen_sb.content_margin_bottom = 5
 	screen.add_theme_stylebox_override("panel", screen_sb)
 	phone_stack.add_child(screen)
+	phone_stack.add_child(_build_phone_bottom_bezel())
 
-	## PanelContainer needs a content host: fixed status bezel + scrollable home.
+	## PanelContainer needs a content host: status + radio widget + scrollable apps.
 	var screen_host := VBoxContainer.new()
 	screen_host.name = "PhoneScreenHost"
-	screen_host.add_theme_constant_override("separation", 2)
+	screen_host.add_theme_constant_override("separation", 3)
 	screen_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	screen_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -41841,6 +44047,39 @@ func _build_phone_ui() -> void:
 
 	var status := _build_phone_status_bar()
 	screen_host.add_child(status)
+
+	radio_column = VBoxContainer.new()
+	radio_column.name = "PhoneRadioSection"
+	radio_column.add_theme_constant_override("separation", 0)
+	radio_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	radio_column.mouse_filter = Control.MOUSE_FILTER_STOP
+	screen_host.add_child(radio_column)
+
+	phone_nav_bar = HBoxContainer.new()
+	phone_nav_bar.name = "PhoneNavBar"
+	phone_nav_bar.add_theme_constant_override("separation", 4)
+	phone_nav_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_nav_bar.custom_minimum_size = Vector2(0, 28)
+	phone_nav_bar.visible = false
+	screen_host.add_child(phone_nav_bar)
+	var back_btn := Button.new()
+	back_btn.text = "<"
+	back_btn.focus_mode = Control.FOCUS_NONE
+	back_btn.custom_minimum_size = Vector2(28, 26)
+	UiFontsScript.apply_button(back_btn, true, 14)
+	_style_phone_reply_button(back_btn, Color(0.78, 0.88, 1.0))
+	back_btn.pressed.connect(func():
+		_sfx_click()
+		_set_phone_app("home")
+	)
+	phone_nav_bar.add_child(back_btn)
+	phone_nav_title = Label.new()
+	phone_nav_title.text = "Home"
+	phone_nav_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_nav_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(phone_nav_title, true, 14)
+	phone_nav_title.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
+	phone_nav_bar.add_child(phone_nav_title)
 
 	var scroll_host := Control.new()
 	scroll_host.name = "PhoneScrollHost"
@@ -41855,23 +44094,28 @@ func _build_phone_ui() -> void:
 	scroll.name = "PhoneScroll"
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER ## drag scroll — no bar
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
 	scroll.gui_input.connect(_on_phone_scroll_gui_input)
 	scroll_host.add_child(scroll)
 
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 6)
+	v.add_theme_constant_override("separation", 8)
 	v.custom_minimum_size.x = 0
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(v)
 
+	phone_home_page = VBoxContainer.new()
+	phone_home_page.name = "PhoneHome"
+	phone_home_page.add_theme_constant_override("separation", 10)
+	phone_home_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(phone_home_page)
 	var logo_wrap := CenterContainer.new()
 	logo_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	logo_wrap.custom_minimum_size = Vector2(PHONE_LOGO_INNER_W, PHONE_LOGO_WRAP_H)
 	logo_wrap.clip_contents = false
 	logo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(logo_wrap)
+	phone_home_page.add_child(logo_wrap)
 	if ResourceLoader.exists(LOGO_TEX_PATH):
 		var logo := TextureRect.new()
 		logo.name = "BurgerPalsLogo"
@@ -41881,92 +44125,138 @@ func _build_phone_ui() -> void:
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		logo_wrap.add_child(logo)
+	var icon_grid := GridContainer.new()
+	icon_grid.columns = 2
+	icon_grid.add_theme_constant_override("h_separation", 12)
+	icon_grid.add_theme_constant_override("v_separation", 12)
+	icon_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_home_page.add_child(icon_grid)
+	icon_grid.add_child(_make_phone_app_icon("social", "Social", "★", Color(0.16, 0.32, 0.62), Color(0.55, 0.78, 1.0)))
+	icon_grid.add_child(_make_phone_app_icon("shop", "Shop", "$", Color(0.12, 0.42, 0.28), Color(0.55, 0.92, 0.62)))
+	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
+	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
+	var home_hint := Label.new()
+	home_hint.text = "Channels · Maps parks the truck · Bank holds the cash."
+	home_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	home_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(home_hint, false, 11)
+	home_hint.add_theme_color_override("font_color", Color(0.82, 0.88, 0.96))
+	phone_home_page.add_child(home_hint)
 
-	## Social app card — rating + feed
-	var social_panel := PanelContainer.new()
-	social_panel.name = "SocialApp"
-	social_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	social_panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("90CAF9")))
-	v.add_child(social_panel)
+	phone_social_page = PanelContainer.new()
+	phone_social_page.name = "SocialApp"
+	phone_social_page.visible = false
+	phone_social_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_social_page.add_theme_stylebox_override("panel", _make_phone_section_style(Color("90CAF9")))
+	v.add_child(phone_social_page)
 	var social_v := VBoxContainer.new()
-	social_v.add_theme_constant_override("separation", 3)
+	social_v.add_theme_constant_override("separation", 5)
 	social_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	social_panel.add_child(social_v)
-
-	var feed_title := Label.new()
-	feed_title.text = "SOCIAL"
-	UiFontsScript.apply_label(feed_title, true, 10)
-	feed_title.add_theme_color_override("font_color", Color("90CAF9"))
-	social_v.add_child(feed_title)
+	phone_social_page.add_child(social_v)
 
 	phone_rating_stars = Label.new()
 	phone_rating_stars.text = "☆☆☆☆☆"
-	UiFontsScript.apply_label(phone_rating_stars, true, 16)
+	UiFontsScript.apply_label(phone_rating_stars, true, 20)
 	phone_rating_stars.add_theme_color_override("font_color", Color("FFD54F"))
 	social_v.add_child(phone_rating_stars)
 
 	var rating_row := HBoxContainer.new()
-	rating_row.add_theme_constant_override("separation", 4)
+	rating_row.add_theme_constant_override("separation", 6)
 	rating_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	social_v.add_child(rating_row)
 	phone_rating_value = Label.new()
 	phone_rating_value.text = "—"
-	UiFontsScript.apply_label(phone_rating_value, true, 13)
+	UiFontsScript.apply_label(phone_rating_value, true, 16)
 	phone_rating_value.add_theme_color_override("font_color", Color.WHITE)
 	rating_row.add_child(phone_rating_value)
 	var out_of := Label.new()
 	out_of.text = "/ 5"
-	UiFontsScript.apply_label(out_of, false, 10)
-	out_of.add_theme_color_override("font_color", Color(0.65, 0.7, 0.78))
+	UiFontsScript.apply_label(out_of, false, 13)
+	out_of.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
 	rating_row.add_child(out_of)
 
 	phone_review_label = Label.new()
 	phone_review_label.text = "New business · 0 reviews"
-	UiFontsScript.apply_label(phone_review_label, false, 9)
-	phone_review_label.add_theme_color_override("font_color", Color(0.68, 0.75, 0.84))
+	UiFontsScript.apply_label(phone_review_label, false, 12)
+	phone_review_label.add_theme_color_override("font_color", Color(0.82, 0.88, 0.95))
 	social_v.add_child(phone_review_label)
 
 	var feed_sub := Label.new()
 	feed_sub.text = "FEED"
-	UiFontsScript.apply_label(feed_sub, true, 9)
-	feed_sub.add_theme_color_override("font_color", Color(0.55, 0.68, 0.82))
+	UiFontsScript.apply_label(feed_sub, true, 12)
+	feed_sub.add_theme_color_override("font_color", Color(0.72, 0.84, 0.98))
 	social_v.add_child(feed_sub)
 
 	phone_feed_box = VBoxContainer.new()
-	phone_feed_box.add_theme_constant_override("separation", 3)
+	phone_feed_box.add_theme_constant_override("separation", 6)
 	phone_feed_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_feed_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	social_v.add_child(phone_feed_box)
 
-	## Inventory app card
-	var inv_panel := PanelContainer.new()
-	inv_panel.name = "InventoryApp"
-	inv_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	inv_panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("A5D6A7")))
-	v.add_child(inv_panel)
+	phone_shop_page = PanelContainer.new()
+	phone_shop_page.name = "InventoryApp"
+	phone_shop_page.visible = false
+	phone_shop_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_shop_page.add_theme_stylebox_override("panel", _make_phone_section_style(Color("A5D6A7")))
+	v.add_child(phone_shop_page)
 	var inv_v := VBoxContainer.new()
-	inv_v.add_theme_constant_override("separation", 3)
+	inv_v.add_theme_constant_override("separation", 5)
 	inv_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	inv_panel.add_child(inv_v)
-
-	var inv_title := Label.new()
-	inv_title.text = "INVENTORY"
-	UiFontsScript.apply_label(inv_title, true, 10)
-	inv_title.add_theme_color_override("font_color", Color("A5D6A7"))
-	inv_v.add_child(inv_title)
+	phone_shop_page.add_child(inv_v)
 
 	var inv_hint := Label.new()
-	inv_hint.text = "Freshness · restock packs of %d" % SUPPLY_BUY_PACK
-	UiFontsScript.apply_label(inv_hint, false, 8)
-	inv_hint.add_theme_color_override("font_color", Color(0.61, 0.72, 0.64))
+	inv_hint.text = "Restock packs of %d" % SUPPLY_BUY_PACK
+	UiFontsScript.apply_label(inv_hint, false, 12)
+	inv_hint.add_theme_color_override("font_color", Color(0.78, 0.90, 0.82))
 	inv_v.add_child(inv_hint)
 
 	phone_inventory_box = VBoxContainer.new()
-	phone_inventory_box.add_theme_constant_override("separation", 2)
+	phone_inventory_box.add_theme_constant_override("separation", 4)
 	phone_inventory_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_inventory_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	inv_v.add_child(phone_inventory_box)
 
+	phone_maps_page = PanelContainer.new()
+	phone_maps_page.name = "MapsApp"
+	phone_maps_page.visible = false
+	phone_maps_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_maps_page.add_theme_stylebox_override("panel", _make_phone_section_style(Color("FFCC80")))
+	v.add_child(phone_maps_page)
+	var maps_v := VBoxContainer.new()
+	maps_v.add_theme_constant_override("separation", 6)
+	maps_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_maps_page.add_child(maps_v)
+	phone_maps_here = Label.new()
+	phone_maps_here.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(phone_maps_here, true, 13)
+	phone_maps_here.add_theme_color_override("font_color", Color("FFCC80"))
+	maps_v.add_child(phone_maps_here)
+	_build_phone_maps_preview(maps_v)
+	var maps_hint := Label.new()
+	maps_hint.text = "Tap a pin or Park below."
+	maps_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(maps_hint, false, 12)
+	maps_hint.add_theme_color_override("font_color", Color(0.90, 0.93, 0.98))
+	maps_v.add_child(maps_hint)
+	phone_maps_box = VBoxContainer.new()
+	phone_maps_box.add_theme_constant_override("separation", 6)
+	phone_maps_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_maps_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	maps_v.add_child(phone_maps_box)
+
+	phone_bank_page = PanelContainer.new()
+	phone_bank_page.name = "BankApp"
+	phone_bank_page.visible = false
+	phone_bank_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_bank_page.add_theme_stylebox_override("panel", _make_phone_section_style(Color("FFE082")))
+	v.add_child(phone_bank_page)
+	phone_bank_box = VBoxContainer.new()
+	phone_bank_box.add_theme_constant_override("separation", 8)
+	phone_bank_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_bank_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	phone_bank_page.add_child(phone_bank_box)
+
+	_set_phone_app("home")
 	_refresh_phone_ui()
 
 
@@ -43352,20 +45642,20 @@ func _build_radio_ui() -> void:
 	if radio_column == null:
 		return
 
-	## Compact radio card inside the BizPhone outer frame.
+	## Compact radio widget on the phone glass.
 	var panel := PanelContainer.new()
 	panel.name = "RadioPanel"
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.075, 0.09, 0.13, 0.99)
-	sb.border_color = Color(0.55, 0.62, 0.72, 0.35)
+	sb.bg_color = Color(0.09, 0.13, 0.19, 0.94)
+	sb.border_color = Color(0.40, 0.55, 0.72, 0.40)
 	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(PHONE_CORNER_INNER)
+	sb.set_corner_radius_all(8)
 	sb.content_margin_left = 5
 	sb.content_margin_right = 5
-	sb.content_margin_top = 4
-	sb.content_margin_bottom = 5
+	sb.content_margin_top = 3
+	sb.content_margin_bottom = 4
 	panel.add_theme_stylebox_override("panel", sb)
 	radio_column.add_child(panel)
 
@@ -43384,7 +45674,7 @@ func _build_radio_ui() -> void:
 	title_row.add_child(title_dot)
 
 	var title := Label.new()
-	title.text = "Cab Radio"
+	title.text = "Radio"
 	UiFontsScript.apply_label(title, true, 11)
 	title.add_theme_color_override("font_color", Color(0.75, 0.82, 0.92))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -43558,6 +45848,46 @@ func _toggle_lasso_tool() -> void:
 		return
 	lasso_tool.toggle_active()
 	_sfx_click()
+
+
+func _setup_level_editor() -> void:
+	if world == null or camera == null:
+		return
+	if level_editor != null and is_instance_valid(level_editor):
+		return
+	level_editor = LevelEditorScript.new()
+	level_editor.name = "LevelEditor"
+	add_child(level_editor)
+	level_editor.setup(self, world, grill_root, camera)
+	level_editor.active_changed.connect(func(on: bool):
+		if on:
+			_flash("L-mode ON — fly the kitchen, Esc preview / L to exit", Color("90CAF9"))
+		else:
+			_flash("L-mode OFF", Color("B0BEC5"))
+	)
+
+
+func _try_level_editor_hotkey(event: InputEvent) -> bool:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return false
+	if event.keycode != KEY_L and event.physical_keycode != KEY_L:
+		return false
+	var focus := get_viewport().gui_get_focus_owner() if get_viewport() else null
+	if focus is LineEdit or focus is TextEdit:
+		return false
+	_toggle_level_editor()
+	get_viewport().set_input_as_handled()
+	return true
+
+
+func _toggle_level_editor() -> void:
+	if level_editor == null:
+		_setup_level_editor()
+	if level_editor == null:
+		return
+	if lasso_tool != null and lasso_tool.is_active():
+		lasso_tool.set_active(false)
+	level_editor.toggle()
 
 
 func _event_screen_pos(event: InputEvent) -> Vector2:
@@ -44484,16 +46814,126 @@ func _set_screen_zone_overlay_visible(on: bool) -> void:
 		options_hidden_zone_check.set_pressed_no_signal(on)
 
 
-func _hidden_add_section(parent: Control, text: String) -> Label:
+func _hidden_section_persist_key(parent: Node, text: String) -> String:
+	var acc: String = ""
+	var n: Node = parent
+	while n != null:
+		if n.has_meta("hidden_accordion_title"):
+			acc = str(n.get_meta("hidden_accordion_title"))
+			break
+		n = n.get_parent()
+	return ("%s/%s" % [acc, text]).strip_edges().to_lower()
+
+
+func _load_hidden_ui_section_folds() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	if not cfg.has_section(HIDDEN_UI_CFG_SECTION):
+		return
+	for raw_key in cfg.get_section_keys(HIDDEN_UI_CFG_SECTION):
+		var key: String = str(raw_key)
+		if not key.begins_with("fold_"):
+			continue
+		options_hidden_section_open[key.substr(5)] = bool(cfg.get_value(HIDDEN_UI_CFG_SECTION, key, true))
+
+
+func _save_hidden_ui_section_fold(key: String, open: bool) -> void:
+	options_hidden_section_open[key] = open
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(HIDDEN_UI_CFG_SECTION, "fold_%s" % key, open)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _hidden_set_section_expanded(header: Button, open: bool, persist: bool = true) -> void:
+	var title: String = str(header.get_meta("hidden_section_title", header.text))
+	var key: String = str(header.get_meta("hidden_section_key", title.to_lower()))
+	header.set_pressed_no_signal(open)
+	header.text = ("%s  %s" % ["▾" if open else "▸", title])
+	var kids: Array = header.get_meta("hidden_section_kids", [])
+	for kid in kids:
+		if kid is CanvasItem and is_instance_valid(kid):
+			(kid as CanvasItem).visible = open
+	if persist:
+		_save_hidden_ui_section_fold(key, open)
+
+
+func _hidden_wire_section_folds() -> void:
+	var headers: Array[Button] = []
+	_hidden_collect_section_headers(options_hidden_room_tone_box, headers)
+	var by_parent: Dictionary = {}
+	for header in headers:
+		var parent: Node = header.get_parent()
+		if parent == null:
+			continue
+		if not by_parent.has(parent):
+			by_parent[parent] = []
+		(by_parent[parent] as Array).append(header)
+	for parent_var in by_parent.keys():
+		var parent: Node = parent_var
+		var list: Array = by_parent[parent]
+		list.sort_custom(func(a: Button, b: Button) -> bool:
+			return a.get_index() < b.get_index()
+		)
+		for i in list.size():
+			var header: Button = list[i]
+			var start_i: int = header.get_index() + 1
+			var end_i: int = parent.get_child_count()
+			if i + 1 < list.size():
+				var next_header: Button = list[i + 1]
+				end_i = next_header.get_index()
+				if end_i > 0:
+					var before_next: Node = parent.get_child(end_i - 1)
+					if before_next is HSeparator:
+						end_i -= 1
+			var kids: Array = []
+			for ci in range(start_i, end_i):
+				var ch: Node = parent.get_child(ci)
+				if ch == header:
+					continue
+				kids.append(ch)
+			header.set_meta("hidden_section_kids", kids)
+			var key: String = str(header.get_meta("hidden_section_key", ""))
+			var open: bool = bool(options_hidden_section_open.get(key, true))
+			_hidden_set_section_expanded(header, open, false)
+
+
+func _hidden_collect_section_headers(node: Node, out: Array[Button]) -> void:
+	if node == null:
+		return
+	if node is Button and (node as Button).has_meta("hidden_section_key"):
+		out.append(node as Button)
+	for child in node.get_children():
+		_hidden_collect_section_headers(child, out)
+
+
+func _hidden_add_section(parent: Control, text: String) -> Button:
 	var sep := HSeparator.new()
 	parent.add_child(sep)
-	var lab := Label.new()
-	lab.text = text
-	UiFontsScript.apply_label(lab, true, 13)
-	lab.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
-	lab.add_theme_constant_override("outline_size", 1)
-	parent.add_child(lab)
-	return lab
+	var key: String = _hidden_section_persist_key(parent, text)
+	var open: bool = bool(options_hidden_section_open.get(key, true))
+	var header := Button.new()
+	header.toggle_mode = true
+	header.flat = true
+	header.focus_mode = Control.FOCUS_NONE
+	header.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	header.custom_minimum_size = Vector2(0, 26)
+	header.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	header.set_meta("hidden_section_key", key)
+	header.set_meta("hidden_section_title", text)
+	header.set_pressed_no_signal(open)
+	header.text = ("%s  %s" % ["▾" if open else "▸", text])
+	UiFontsScript.apply_button(header, true, 13)
+	header.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	header.add_theme_color_override("font_hover_color", Color(1.0, 0.92, 0.62))
+	header.add_theme_color_override("font_pressed_color", Color(1.0, 0.88, 0.52))
+	header.add_theme_constant_override("outline_size", 1)
+	header.toggled.connect(func(on: bool) -> void:
+		_hidden_set_section_expanded(header, on, true)
+	)
+	parent.add_child(header)
+	return header
 
 
 func _hidden_add_category(parent: Control, text: String) -> VBoxContainer:
@@ -44536,6 +46976,431 @@ func _hidden_add_category(parent: Control, text: String) -> VBoxContainer:
 	return box
 
 
+func _hidden_gizmo_active() -> bool:
+	return options_menu_open \
+		and options_hidden_room_tone_box != null \
+		and is_instance_valid(options_hidden_room_tone_box) \
+		and options_hidden_room_tone_box.visible \
+		and (level_editor == null or not level_editor.is_active())
+
+
+func _hidden_gizmo_has_selection() -> bool:
+	return not hidden_gizmo_selected.is_empty()
+
+
+func _hidden_refresh_named_slider(key: String, value: float, degrees_fmt: bool = false) -> void:
+	if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
+		(options_hidden_tree_light_sliders[key] as Range).set_value_no_signal(value)
+	if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
+		var lab: Label = options_hidden_tree_light_labs[key]
+		lab.text = ("%.1f°" % value) if degrees_fmt else ("%.2f" % value)
+
+
+func _hidden_gizmo_ensure() -> void:
+	if hidden_gizmo_root != null and is_instance_valid(hidden_gizmo_root):
+		return
+	if world == null:
+		return
+	hidden_gizmo_root = Node3D.new()
+	hidden_gizmo_root.name = "HiddenPropGizmo"
+	hidden_gizmo_root.visible = false
+	world.add_child(hidden_gizmo_root)
+	_hidden_gizmo_add_axis(Vector3(1, 0, 0), Color(0.92, 0.22, 0.18), "AxisX")
+	_hidden_gizmo_add_axis(Vector3(0, 1, 0), Color(0.28, 0.86, 0.32), "AxisY")
+	_hidden_gizmo_add_axis(Vector3(0, 0, 1), Color(0.22, 0.48, 1.0), "AxisZ")
+	_hidden_gizmo_add_plane(Vector3(1, 0, 0), Color(0.92, 0.22, 0.18, 0.28), "PlaneX")
+	_hidden_gizmo_add_plane(Vector3(0, 1, 0), Color(0.28, 0.86, 0.32, 0.28), "PlaneY")
+	_hidden_gizmo_add_plane(Vector3(0, 0, 1), Color(0.22, 0.48, 1.0, 0.28), "PlaneZ")
+
+
+func _hidden_gizmo_add_axis(dir: Vector3, color: Color, node_name: String) -> void:
+	var shaft := MeshInstance3D.new()
+	shaft.name = node_name
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.008
+	cyl.bottom_radius = 0.008
+	cyl.height = HIDDEN_GIZMO_LEN
+	cyl.radial_segments = 8
+	shaft.mesh = cyl
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = color
+	mat.no_depth_test = true
+	mat.render_priority = 80
+	shaft.material_override = mat
+	shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var tip := MeshInstance3D.new()
+	tip.name = node_name + "Tip"
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.0
+	cone.bottom_radius = 0.022
+	cone.height = 0.06
+	cone.radial_segments = 10
+	tip.mesh = cone
+	tip.material_override = mat
+	tip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var holder := Node3D.new()
+	holder.name = node_name + "Hold"
+	if dir.y > 0.5:
+		shaft.position = Vector3(0, HIDDEN_GIZMO_LEN * 0.5, 0)
+		tip.position = Vector3(0, HIDDEN_GIZMO_LEN + 0.03, 0)
+	elif dir.x > 0.5:
+		holder.rotation_degrees = Vector3(0, 0, -90)
+		shaft.position = Vector3(0, HIDDEN_GIZMO_LEN * 0.5, 0)
+		tip.position = Vector3(0, HIDDEN_GIZMO_LEN + 0.03, 0)
+	else:
+		holder.rotation_degrees = Vector3(90, 0, 0)
+		shaft.position = Vector3(0, HIDDEN_GIZMO_LEN * 0.5, 0)
+		tip.position = Vector3(0, HIDDEN_GIZMO_LEN + 0.03, 0)
+	holder.add_child(shaft)
+	holder.add_child(tip)
+	hidden_gizmo_root.add_child(holder)
+
+
+func _hidden_gizmo_add_plane(axis: Vector3, color: Color, node_name: String) -> void:
+	var quad := MeshInstance3D.new()
+	quad.name = node_name
+	var plane := QuadMesh.new()
+	plane.size = Vector2(0.09, 0.09)
+	quad.mesh = plane
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = color
+	mat.no_depth_test = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 79
+	quad.material_override = mat
+	quad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var holder := Node3D.new()
+	holder.name = node_name + "Hold"
+	if axis.x > 0.5:
+		holder.rotation_degrees = Vector3(0, 90, 0)
+		holder.position = Vector3(0.0, 0.07, 0.07)
+	elif axis.y > 0.5:
+		holder.rotation_degrees = Vector3(-90, 0, 0)
+		holder.position = Vector3(0.07, 0.0, 0.07)
+	else:
+		holder.position = Vector3(0.07, 0.07, 0.0)
+	holder.add_child(quad)
+	hidden_gizmo_root.add_child(holder)
+
+
+func _hidden_gizmo_clear(persist: bool = false) -> void:
+	if persist and _hidden_gizmo_has_selection():
+		_hidden_gizmo_persist_selected()
+	hidden_gizmo_selected = {}
+	hidden_gizmo_axis = -1
+	if hidden_gizmo_root != null and is_instance_valid(hidden_gizmo_root):
+		hidden_gizmo_root.visible = false
+
+
+func _hidden_gizmo_selected_node() -> Node3D:
+	if hidden_gizmo_selected.is_empty():
+		return null
+	var node: Node = hidden_gizmo_selected.get("node", null)
+	if node is Node3D and is_instance_valid(node):
+		return node as Node3D
+	return null
+
+
+func _hidden_gizmo_update_visual() -> void:
+	if not _hidden_gizmo_active():
+		if hidden_gizmo_root != null and is_instance_valid(hidden_gizmo_root):
+			hidden_gizmo_root.visible = false
+		return
+	_hidden_gizmo_ensure()
+	if hidden_gizmo_root == null:
+		return
+	var node: Node3D = _hidden_gizmo_selected_node()
+	if node == null:
+		hidden_gizmo_root.visible = false
+		return
+	hidden_gizmo_root.visible = true
+	hidden_gizmo_root.global_position = node.global_position
+	hidden_gizmo_root.global_basis = Basis.IDENTITY
+
+
+func _hidden_gizmo_pick_axis(screen_pos: Vector2) -> int:
+	var node: Node3D = _hidden_gizmo_selected_node()
+	if node == null or hidden_gizmo_root == null or not hidden_gizmo_root.visible or camera == null:
+		return -1
+	if camera.is_position_behind(node.global_position):
+		return -1
+	var origin: Vector3 = node.global_position
+	var best: int = -1
+	var best_d: float = HIDDEN_GIZMO_HIT_PX
+	var axes: Array[Vector3] = [Vector3.RIGHT, Vector3.UP, Vector3.BACK]
+	for i in 3:
+		var tip: Vector3 = origin + axes[i] * (HIDDEN_GIZMO_LEN + 0.04)
+		if camera.is_position_behind(tip):
+			continue
+		var a: Vector2 = camera.unproject_position(origin)
+		var b: Vector2 = camera.unproject_position(tip)
+		var d: float = _hidden_gizmo_dist_to_segment(screen_pos, a, b)
+		if d < best_d:
+			best_d = d
+			best = i
+	var plane_best: int = _hidden_gizmo_pick_plane(screen_pos)
+	if plane_best >= 0:
+		return plane_best
+	return best
+
+
+func _hidden_gizmo_pick_plane(screen_pos: Vector2) -> int:
+	var node: Node3D = _hidden_gizmo_selected_node()
+	if node == null or camera == null:
+		return -1
+	var origin: Vector3 = node.global_position
+	var planes: Array[Dictionary] = [
+		{"axis": 3, "center": origin + Vector3(0.0, 0.07, 0.07), "n": Vector3.RIGHT},
+		{"axis": 4, "center": origin + Vector3(0.07, 0.0, 0.07), "n": Vector3.UP},
+		{"axis": 5, "center": origin + Vector3(0.07, 0.07, 0.0), "n": Vector3.BACK},
+	]
+	var best: int = -1
+	var best_d: float = 18.0
+	for plane in planes:
+		var center: Vector3 = plane["center"]
+		if camera.is_position_behind(center):
+			continue
+		var d: float = screen_pos.distance_to(camera.unproject_position(center))
+		if d < best_d:
+			best_d = d
+			best = int(plane["axis"])
+	return best
+
+
+func _hidden_gizmo_dist_to_segment(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab: Vector2 = b - a
+	var t: float = 0.0 if ab.length_squared() < 0.001 else clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
+func _hidden_gizmo_axis_grab_world(screen_pos: Vector2, axis: int) -> Vector3:
+	var node: Node3D = _hidden_gizmo_selected_node()
+	if camera == null or node == null:
+		return Vector3.ZERO
+	var origin: Vector3 = node.global_position
+	if axis >= 3:
+		var n: Vector3 = [Vector3.RIGHT, Vector3.UP, Vector3.BACK][axis - 3]
+		var ray_o: Vector3 = camera.project_ray_origin(screen_pos)
+		var ray_d: Vector3 = camera.project_ray_normal(screen_pos)
+		var denom: float = ray_d.dot(n)
+		if absf(denom) < 0.00001:
+			return origin
+		var t: float = (origin - ray_o).dot(n) / denom
+		return ray_o + ray_d * t
+	var dir: Vector3 = [Vector3.RIGHT, Vector3.UP, Vector3.BACK][axis]
+	var ray_o2: Vector3 = camera.project_ray_origin(screen_pos)
+	var ray_d2: Vector3 = camera.project_ray_normal(screen_pos)
+	var plane_n: Vector3 = ray_d2.cross(dir).cross(ray_d2)
+	if plane_n.length_squared() < 0.00001:
+		return origin
+	plane_n = plane_n.normalized()
+	var denom2: float = dir.dot(plane_n)
+	if absf(denom2) < 0.00001:
+		return origin
+	var t2: float = (ray_o2 - origin).dot(plane_n) / denom2
+	return origin + dir * t2
+
+
+func _hidden_gizmo_pickables() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for id in BIN_FILL_IDS:
+		var tub: Node3D = ingredient_bin_nodes.get(id, null)
+		if tub == null or not is_instance_valid(tub):
+			continue
+		var fill: Node3D = tub.get_node_or_null("Fill") as Node3D
+		var node: Node3D = fill if fill != null and is_instance_valid(fill) else tub
+		out.append({"kind": "bin_fill", "id": String(id), "node": node})
+	for id in ["ketchup", "mustard"]:
+		var bottle: Node3D = condiment_bottle_roots.get(id, null)
+		if bottle != null and is_instance_valid(bottle) and not _condiment_bottle_busy(String(id)):
+			out.append({"kind": "bottle", "id": String(id), "node": bottle})
+	if grill_standoff_left != null and is_instance_valid(grill_standoff_left):
+		out.append({"kind": "standoff", "id": "left", "node": grill_standoff_left})
+	if grill_standoff_right != null and is_instance_valid(grill_standoff_right):
+		out.append({"kind": "standoff", "id": "right", "node": grill_standoff_right})
+	if bun_pile_root != null and is_instance_valid(bun_pile_root):
+		out.append({"kind": "prop", "id": "burger_buns", "node": bun_pile_root})
+	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
+		out.append({"kind": "garbage", "id": "tray", "node": physical_garbage_root})
+	return out
+
+
+func _hidden_gizmo_select(entry: Dictionary) -> void:
+	if _hidden_gizmo_has_selection():
+		_hidden_gizmo_persist_selected()
+	hidden_gizmo_selected = entry.duplicate()
+	hidden_gizmo_axis = -1
+	_hidden_gizmo_update_visual()
+	if entry.is_empty():
+		return
+	var label: String = "%s %s" % [str(entry.get("kind", "")), str(entry.get("id", ""))]
+	_flash("Move gizmo: %s" % label, Color("90CAF9"))
+
+
+func _hidden_gizmo_click_select(screen_pos: Vector2) -> void:
+	if camera == null:
+		_hidden_gizmo_select({})
+		return
+	var best: Dictionary = {}
+	var best_d: float = 42.0
+	for entry in _hidden_gizmo_pickables():
+		var node: Node3D = entry.get("node") as Node3D
+		if node == null or not is_instance_valid(node):
+			continue
+		var p: Vector3 = node.global_position
+		if camera.is_position_behind(p):
+			continue
+		var d: float = screen_pos.distance_to(camera.unproject_position(p))
+		if d < best_d:
+			best_d = d
+			best = entry
+	_hidden_gizmo_select(best)
+
+
+func _hidden_gizmo_offset_of(entry: Dictionary) -> Vector3:
+	var kind: String = str(entry.get("kind", ""))
+	var id: String = str(entry.get("id", ""))
+	match kind:
+		"bin_fill":
+			return Vector3(_bin_fill_val(id, "x"), _bin_fill_val(id, "y"), _bin_fill_val(id, "z"))
+		"bottle":
+			return Vector3(condiment_bottle_nudge.get(id, Vector3.ZERO))
+		"standoff":
+			return grill_standoff_left_offset if id == "left" else grill_standoff_right_offset
+		"prop":
+			return _prop_offset(id)
+		"garbage":
+			return physical_garbage_pos
+	return Vector3.ZERO
+
+
+func _hidden_gizmo_apply_offset(entry: Dictionary, offset: Vector3, persist: bool) -> void:
+	var kind: String = str(entry.get("kind", ""))
+	var id: String = str(entry.get("id", ""))
+	match kind:
+		"bin_fill":
+			_bin_fill_store(id, "x", offset.x)
+			_bin_fill_store(id, "y", offset.y)
+			_bin_fill_store(id, "z", offset.z)
+			_update_bin_fills_3d()
+			_hidden_refresh_named_slider("bfill_%s_x" % id, _bin_fill_val(id, "x"))
+			_hidden_refresh_named_slider("bfill_%s_y" % id, _bin_fill_val(id, "y"))
+			_hidden_refresh_named_slider("bfill_%s_z" % id, _bin_fill_val(id, "z"))
+			if persist:
+				_save_ingredient_bin_settings()
+		"bottle":
+			condiment_bottle_nudge[id] = Vector3(
+				clampf(offset.x, -0.6, 0.6),
+				clampf(offset.y, -0.6, 0.6),
+				clampf(offset.z, -0.6, 0.6)
+			)
+			_park_idle_condiment_bottles()
+			var prefix: String = "ketch" if id == "ketchup" else "must"
+			var n: Vector3 = condiment_bottle_nudge[id]
+			_hidden_refresh_named_slider("%s_nx" % prefix, n.x)
+			_hidden_refresh_named_slider("%s_ny" % prefix, n.y)
+			_hidden_refresh_named_slider("%s_nz" % prefix, n.z)
+			if persist:
+				_save_ingredient_bin_settings()
+		"standoff":
+			var clamped := Vector3(
+				clampf(offset.x, -1.2, 1.2),
+				clampf(offset.y, -1.2, 1.2),
+				clampf(offset.z, -1.2, 1.2)
+			)
+			if id == "left":
+				grill_standoff_left_offset = clamped
+				_hidden_refresh_named_slider("stand_lx", clamped.x)
+				_hidden_refresh_named_slider("stand_ly", clamped.y)
+				_hidden_refresh_named_slider("stand_lz", clamped.z)
+			else:
+				grill_standoff_right_offset = clamped
+				_hidden_refresh_named_slider("stand_rx", clamped.x)
+				_hidden_refresh_named_slider("stand_ry", clamped.y)
+				_hidden_refresh_named_slider("stand_rz", clamped.z)
+			_apply_grill_standoff_transforms()
+			if persist:
+				_save_grill_standoff_settings()
+		"prop":
+			_ensure_prop_offsets_loaded()
+			var off := Vector3(
+				clampf(offset.x, -12.0, 12.0),
+				clampf(offset.y, -6.0, 8.0),
+				clampf(offset.z, -12.0, 16.0)
+			)
+			prop_offsets[id] = off
+			if id == "burger_buns" and bun_pile_root != null and is_instance_valid(bun_pile_root):
+				bun_pile_root.position = off
+			_hidden_refresh_named_slider("%s_x" % id, off.x)
+			_hidden_refresh_named_slider("%s_y" % id, off.y)
+			_hidden_refresh_named_slider("%s_z" % id, off.z)
+			if persist:
+				_save_prop_offset_settings()
+		"garbage":
+			physical_garbage_pos = Vector3(
+				clampf(offset.x, -3.5, 3.5),
+				clampf(offset.y, -1.0, 2.4),
+				clampf(offset.z, -2.0, 2.5)
+			)
+			_apply_physical_garbage_transform()
+			_hidden_refresh_named_slider("garbage_x", physical_garbage_pos.x)
+			_hidden_refresh_named_slider("garbage_y", physical_garbage_pos.y)
+			_hidden_refresh_named_slider("garbage_z", physical_garbage_pos.z)
+			if persist:
+				_save_physical_garbage_settings()
+
+
+func _hidden_gizmo_persist_selected() -> void:
+	if hidden_gizmo_selected.is_empty():
+		return
+	_hidden_gizmo_apply_offset(hidden_gizmo_selected, _hidden_gizmo_offset_of(hidden_gizmo_selected), true)
+
+
+func _hidden_gizmo_handle_input(event: InputEvent) -> bool:
+	if not _hidden_gizmo_active():
+		return false
+	if event is InputEventKey and event.pressed and not event.echo:
+		if (event as InputEventKey).keycode == KEY_ESCAPE:
+			if _hidden_gizmo_has_selection():
+				_hidden_gizmo_select({})
+				return true
+	if event is InputEventMouseButton:
+		var mb: InputEventMouseButton = event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		if mb.pressed:
+			var axis: int = _hidden_gizmo_pick_axis(mb.position)
+			if axis >= 0 and _hidden_gizmo_has_selection():
+				hidden_gizmo_axis = axis
+				hidden_gizmo_grab_origin = _hidden_gizmo_axis_grab_world(mb.position, axis)
+				hidden_gizmo_grab_offset = _hidden_gizmo_offset_of(hidden_gizmo_selected)
+				return true
+			_hidden_gizmo_click_select(mb.position)
+			return true
+		if hidden_gizmo_axis >= 0:
+			_hidden_gizmo_persist_selected()
+			hidden_gizmo_axis = -1
+			return true
+	if event is InputEventMouseMotion and hidden_gizmo_axis >= 0 and _hidden_gizmo_has_selection():
+		var mm: InputEventMouseMotion = event as InputEventMouseMotion
+		var now: Vector3 = _hidden_gizmo_axis_grab_world(mm.position, hidden_gizmo_axis)
+		var delta: Vector3 = now - hidden_gizmo_grab_origin
+		if hidden_gizmo_axis < 3:
+			var lock: Vector3 = [Vector3.RIGHT, Vector3.UP, Vector3.BACK][hidden_gizmo_axis]
+			delta = lock * delta.dot(lock)
+		if str(hidden_gizmo_selected.get("kind", "")) == "bin_fill":
+			var tub: Node3D = ingredient_bin_nodes.get(str(hidden_gizmo_selected.get("id", "")), null)
+			if tub != null and is_instance_valid(tub):
+				delta = tub.global_basis.inverse() * delta
+		_hidden_gizmo_apply_offset(hidden_gizmo_selected, hidden_gizmo_grab_offset + delta, false)
+		_hidden_gizmo_update_visual()
+		return true
+	return false
+
+
 func _hidden_add_accordion(
 	parent: Control, title: String, category: String, tab_index: int, open_by_default: bool = false
 ) -> VBoxContainer:
@@ -44569,6 +47434,7 @@ func _hidden_add_accordion(
 	body.visible = open_by_default
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", 7)
+	body.set_meta("hidden_accordion_title", title)
 	wrap.add_child(body)
 	header.toggled.connect(func(on: bool) -> void:
 		body.visible = on
@@ -44788,9 +47654,6 @@ func _build_options_menu() -> void:
 	_options_add_btn(general, "Resume", func():
 		_set_options_menu_open(false)
 	)
-	_options_add_btn(general, "Change Location", func():
-		_open_location_map()
-	)
 	_options_add_btn(general, "Restart Day", func():
 		_options_restart_day()
 	)
@@ -44931,6 +47794,7 @@ func _build_options_menu() -> void:
 	options_hidden_room_tone_box.add_child(options_hidden_search_results)
 
 	options_hidden_accordions.clear()
+	_load_hidden_ui_section_folds()
 	options_hidden_tabs = TabContainer.new()
 	options_hidden_tabs.custom_minimum_size = Vector2(0, 520)
 	options_hidden_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -44954,12 +47818,34 @@ func _build_options_menu() -> void:
 	var hidden_soda_box := _hidden_add_accordion(hidden_objects_root, "COLA MACHINE + CUP STACK", "Objects", 0)
 	var hidden_tools_box := _hidden_add_accordion(hidden_objects_root, "TOOLS + MINIGAMES", "Objects", 0)
 	var hidden_review_box := _hidden_add_accordion(hidden_objects_root, "CUSTOMER REVIEW BUBBLE", "Objects", 0)
-	var hidden_bins_box := _hidden_add_accordion(hidden_objects_root, "INGREDIENT BINS", "Objects", 0)
+	var hidden_bins_box := _hidden_add_accordion(hidden_objects_root, "BOTTOM ROW", "Objects", 0)
 	var hidden_camera_box := _hidden_add_accordion(hidden_render_root, "PLAYER CAMERA", "Render", 1, true)
 	var hidden_lighting_box := _hidden_add_accordion(hidden_render_root, "WORLD LIGHTS", "Render", 1)
 	var hidden_bg_box := _hidden_add_accordion(hidden_render_root, "BACKGROUND IMAGE", "Render", 1)
 	var hidden_render_box := _hidden_add_accordion(hidden_render_root, "ADVANCED RENDERING", "Render", 1)
 	var hidden_debug_box := _hidden_add_accordion(hidden_gameplay_root, "DEBUG OVERLAYS", "Gameplay", 2, true)
+	var hidden_bank_box := _hidden_add_accordion(hidden_gameplay_root, "BANK RATES", "Gameplay", 2)
+	_hidden_add_section(hidden_bank_box, "PHONE BANK")
+	var bank_help := Label.new()
+	bank_help.text = "Checking is the till (sales and buys). High Yield pays after each shift. Loans grow by interest each shift until repaid."
+	bank_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(bank_help, false, 11)
+	bank_help.add_theme_color_override("font_color", Color(0.70, 0.76, 0.84))
+	hidden_bank_box.add_child(bank_help)
+	_hidden_add_labeled_slider(hidden_bank_box, "bank_savings_rate", "HYSA % / Day", 0.0, 25.0, 0.1,
+		func(): return bank_savings_rate_pct,
+		func(v: float):
+			bank_savings_rate_pct = clampf(v, 0.0, 25.0)
+			_save_bank_settings()
+			_refresh_phone_bank()
+	)
+	_hidden_add_labeled_slider(hidden_bank_box, "bank_loan_rate", "Loan Interest % / Day", 0.0, 50.0, 0.1,
+		func(): return bank_loan_rate_pct,
+		func(v: float):
+			bank_loan_rate_pct = clampf(v, 0.0, 50.0)
+			_save_bank_settings()
+			_refresh_phone_bank()
+	)
 	var hidden_audio_box := _hidden_add_accordion(hidden_audio_root, "AUDIO MIX", "Audio", 3, true)
 	_hidden_setup_ingredient_bin_controls(hidden_bins_box)
 	_hidden_add_section(hidden_audio_box, "SOUND EFFECT LEVELS")
@@ -45360,6 +48246,7 @@ func _build_options_menu() -> void:
 	if options_hidden_outdoor_ambience_vol_lab != null:
 		options_hidden_outdoor_ambience_vol_lab.text = "%.2f" % outdoor_ambience_volume
 
+	_hidden_setup_grill_standoff_controls(hidden_grill_box)
 	var heat_lab := Label.new()
 	heat_lab.text = "GRILL HEAT SPOTS"
 	UiFontsScript.apply_label(heat_lab, true, 13)
@@ -46001,11 +48888,7 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Edge Blend Width", 0.0, 0.35, 0.005)
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
-	_hidden_add_section(hidden_counter_box, "BUNS / CHEESE / BOARD")
-	_hidden_add_prop_offset_group(hidden_counter_box, "burger_buns", "Burger Buns")
-	_gfx_add_slider(hidden_counter_box, "burger_bun_scale", "Burger Bun Size", 0.45, 2.5, 0.01)
-	_hidden_add_prop_offset_group(hidden_counter_box, "cheese_stack", "Cheese Stack")
-	_gfx_add_slider(hidden_counter_box, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
+	_hidden_add_section(hidden_counter_box, "CUTTING BOARD")
 	_hidden_add_prop_offset_group(hidden_counter_box, "cutting_board", "Cutting Board")
 	_hidden_add_section(hidden_counter_box, "CUTTING BOARD UI")
 	_gfx_add_slider(hidden_counter_box, "bz_row_left", "Board UI Left", -250.0, 450.0, 1.0)
@@ -46030,7 +48913,7 @@ func _build_options_menu() -> void:
 	_hidden_add_prop_offset_group(hidden_counter_box, "big_tree", "Big Tree Offset")
 	_hidden_add_prop_offset_group(hidden_counter_box, "small_tree", "Small Tree Offset")
 
-	_hidden_add_section(hidden_counter_box, "PHYSICAL GARBAGE CAN")
+	_hidden_add_section(hidden_counter_box, "GARBAGE TRAY")
 	_hidden_add_labeled_slider(hidden_counter_box, "garbage_x", "Offset X", -3.5, 3.5, 0.01,
 		func(): return physical_garbage_pos.x,
 		func(v: float):
@@ -46067,12 +48950,14 @@ func _build_options_menu() -> void:
 			physical_garbage_rot.z = clampf(v, -180.0, 180.0)
 			_physical_garbage_setting_changed()
 	, true)
-	_hidden_add_labeled_slider(hidden_counter_box, "garbage_scale", "Scale", 0.35, 1.5, 0.01,
+	_hidden_add_labeled_slider(hidden_counter_box, "garbage_scale", "Scale", 0.12, 2.2, 0.01,
 		func(): return physical_garbage_scale,
 		func(v: float):
-			physical_garbage_scale = clampf(v, 0.35, 1.5)
+			physical_garbage_scale = clampf(v, 0.12, 2.2)
 			_physical_garbage_setting_changed()
 	)
+	_hidden_add_garbage_liner_toggle(hidden_counter_box)
+	_hidden_add_garbage_liner_wobble_controls(hidden_counter_box, "garbage_")
 
 	_hidden_add_section(hidden_counter_box, "FRONT TRASH SYMBOL")
 	_hidden_add_labeled_slider(hidden_counter_box, "garbage_symbol_x", "Symbol X", -1.0, 1.0, 0.005,
@@ -46123,6 +49008,49 @@ func _build_options_menu() -> void:
 		func(): return fryer_station_scale,
 		func(v: float):
 			fryer_station_scale = clampf(v, 0.45, 2.5)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_section(hidden_world_box, "FRYER PIT / BASKET")
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_pit_scale", "Oil Pit Scale", 0.4, 4.0, 0.01,
+		func(): return fryer_pit_scale,
+		func(v: float):
+			fryer_pit_scale = clampf(v, 0.4, 4.0)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_basket_scale", "Basket Scale", 0.35, 4.0, 0.01,
+		func(): return fryer_basket_scale,
+		func(v: float):
+			fryer_basket_scale = clampf(v, 0.35, 4.0)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_trim_scale", "Pit Trim Scale", 0.4, 2.5, 0.01,
+		func(): return fryer_trim_scale,
+		func(v: float):
+			fryer_trim_scale = clampf(v, 0.4, 2.5)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_pit_x", "Pit X", -1.2, 1.2, 0.005,
+		func(): return fryer_pit_offset.x,
+		func(v: float):
+			fryer_pit_offset.x = clampf(v, -1.2, 1.2)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_pit_y", "Pit Height", -0.8, 0.8, 0.005,
+		func(): return fryer_pit_offset.y,
+		func(v: float):
+			fryer_pit_offset.y = clampf(v, -0.8, 0.8)
+			_save_fryer_tuning_settings()
+			_build_fryer_machine()
+	)
+	_hidden_add_labeled_slider(hidden_world_box, "fryer_pit_z", "Pit Z (toward you = minus)", -1.2, 1.2, 0.005,
+		func(): return fryer_pit_offset.z,
+		func(v: float):
+			fryer_pit_offset.z = clampf(v, -1.2, 1.2)
 			_save_fryer_tuning_settings()
 			_build_fryer_machine()
 	)
@@ -46960,6 +49888,7 @@ func _build_options_menu() -> void:
 	_apply_graphics_settings(_read_graphics_from_ui())
 	_refresh_options_graphics_controls()
 	_hidden_finalize_search_index()
+	_hidden_wire_section_folds()
 	options_hidden_status = Label.new()
 	options_hidden_status.text = ""
 	options_hidden_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -47206,6 +50135,7 @@ func _set_options_menu_open(open: bool) -> void:
 		options_layer.visible = open
 	if not open:
 		options_panel_dragging = false
+		_hidden_gizmo_clear(true)
 		_set_graphics_menu_open(false)
 	else:
 		_layout_options_panel()
@@ -49012,6 +51942,11 @@ func _next_customer_skin_idx() -> int:
 		for i in range(skin_count):
 			if CustomerScript.BTS_SKIN_IDXS.has(i):
 				continue
+			if i == CUT_COLLECTOR_SKIN:
+				continue
+			var skin_path := str(CustomerScript.CHAR_SKINS[i]).get_file().to_lower()
+			if skin_path.begins_with("criminalmalea"):
+				continue
 			_customer_skin_bag.append(i)
 		if _customer_skin_bag.is_empty():
 			_customer_skin_bag.append(0)
@@ -50268,28 +53203,35 @@ func _apply_csg_all_material(node: Node, mat: Material) -> void:
 		(node as CSGBox3D).material = mat
 	elif node is CSGCylinder3D:
 		(node as CSGCylinder3D).material = mat
+	elif node is CSGSphere3D:
+		(node as CSGSphere3D).material = mat
 	for child in node.get_children():
 		_apply_csg_all_material(child, mat)
 
 
-func _csg_add_rounded_box(parent: Node, width: float, height: float, radius: float, op: int = CSGShape3D.OPERATION_UNION) -> void:
-	var box_a := CSGBox3D.new()
-	box_a.operation = op
-	box_a.size = Vector3(width, height, maxf(0.02, width - 2.0 * radius))
-	parent.add_child(box_a)
-	var box_b := CSGBox3D.new()
-	box_b.operation = op
-	box_b.size = Vector3(maxf(0.02, width - 2.0 * radius), height, width)
-	parent.add_child(box_b)
-	for sx in [-1.0, 1.0]:
-		for sz in [-1.0, 1.0]:
+func _csg_add_rounded_rect(parent: Node, sx: float, sy: float, sz: float, radius: float, op: int = CSGShape3D.OPERATION_UNION) -> void:
+	radius = clampf(radius, 0.02, minf(sx, sz) * 0.45)
+	var box_x := CSGBox3D.new()
+	box_x.operation = op
+	box_x.size = Vector3(sx, sy, maxf(0.02, sz - 2.0 * radius))
+	parent.add_child(box_x)
+	var box_z := CSGBox3D.new()
+	box_z.operation = op
+	box_z.size = Vector3(maxf(0.02, sx - 2.0 * radius), sy, sz)
+	parent.add_child(box_z)
+	for hx in [-1.0, 1.0]:
+		for hz in [-1.0, 1.0]:
 			var cyl := CSGCylinder3D.new()
 			cyl.operation = op
 			cyl.radius = radius
-			cyl.height = height
+			cyl.height = sy
 			cyl.sides = 12
-			cyl.position = Vector3(sx * (width * 0.5 - radius), 0.0, sz * (width * 0.5 - radius))
+			cyl.position = Vector3(hx * (sx * 0.5 - radius), 0.0, hz * (sz * 0.5 - radius))
 			parent.add_child(cyl)
+
+
+func _csg_add_rounded_box(parent: Node, width: float, height: float, radius: float, op: int = CSGShape3D.OPERATION_UNION) -> void:
+	_csg_add_rounded_rect(parent, width, height, width, radius, op)
 
 
 func _make_ingredient_tub_3d() -> Node3D:
@@ -50334,6 +53276,177 @@ func _make_ingredient_tub_3d() -> Node3D:
 	return root
 
 
+func _is_bin_fill_ingredient(id: String) -> bool:
+	return BIN_FILL_IDS.has(id)
+
+
+func _bin_fill_default_entry() -> Dictionary:
+	return {
+		"x": 0.0,
+		"y": 0.0,
+		"z": 0.0,
+		"sx": 1.0,
+		"sy": 1.0,
+		"full": -0.05,
+		"empty": -0.58,
+		"tilt": -56.0,
+	}
+
+
+func _ensure_bin_fill_settings() -> void:
+	for id in BIN_FILL_IDS:
+		var def := _bin_fill_default_entry()
+		if not bin_fill_settings.has(id):
+			bin_fill_settings[id] = def.duplicate()
+			continue
+		var d: Dictionary = bin_fill_settings[id]
+		for k in def:
+			if not d.has(k):
+				d[k] = def[k]
+		bin_fill_settings[id] = d
+
+
+func _bin_fill_val(id: String, key: String) -> float:
+	_ensure_bin_fill_settings()
+	var d: Dictionary = bin_fill_settings.get(id, _bin_fill_default_entry())
+	return float(d.get(key, _bin_fill_default_entry().get(key, 0.0)))
+
+
+func _bin_fill_clamp(key: String, val: float) -> float:
+	match key:
+		"x", "y", "z":
+			return clampf(val, -0.9, 0.9)
+		"sx", "sy":
+			return clampf(val, 0.15, 2.8)
+		"full":
+			return clampf(val, -1.3, 0.45)
+		"empty":
+			return clampf(val, -1.5, 0.25)
+		"tilt":
+			return clampf(val, -90.0, 25.0)
+		_:
+			return val
+
+
+func _bin_fill_store(id: String, key: String, val: float) -> void:
+	_ensure_bin_fill_settings()
+	var d: Dictionary = (bin_fill_settings.get(id, _bin_fill_default_entry()) as Dictionary).duplicate()
+	d[key] = _bin_fill_clamp(key, val)
+	bin_fill_settings[id] = d
+
+
+func _bin_fill_set(id: String, key: String, val: float) -> void:
+	_bin_fill_store(id, key, val)
+	_update_bin_fills_3d()
+	_save_ingredient_bin_settings()
+
+
+func _set_bin_fill_brightness(val: float) -> void:
+	bin_fill_brightness = clampf(val, 0.25, 1.5)
+	_update_bin_fills_3d()
+	_save_ingredient_bin_settings()
+
+
+func _strip_icon_shader_code() -> String:
+	return """
+shader_type canvas_item;
+uniform float brightness = 1.0;
+uniform float saturation = 1.0;
+void fragment() {
+	vec4 col = texture(TEXTURE, UV);
+	float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+	vec3 sat = mix(vec3(gray), col.rgb, saturation);
+	COLOR = vec4(sat * brightness, col.a);
+}
+"""
+
+
+func _ensure_strip_icon_material() -> ShaderMaterial:
+	if _strip_icon_mat != null and is_instance_valid(_strip_icon_mat):
+		_strip_icon_mat.set_shader_parameter("brightness", strip_icon_brightness)
+		_strip_icon_mat.set_shader_parameter("saturation", strip_icon_saturation)
+		return _strip_icon_mat
+	var shader := Shader.new()
+	shader.code = _strip_icon_shader_code()
+	var mat := ShaderMaterial.new()
+	mat.resource_name = "StripIconLook"
+	mat.shader = shader
+	mat.set_shader_parameter("brightness", strip_icon_brightness)
+	mat.set_shader_parameter("saturation", strip_icon_saturation)
+	_strip_icon_mat = mat
+	return mat
+
+
+func _set_strip_icon_look(brightness: float = -1.0, saturation: float = -1.0) -> void:
+	if brightness >= 0.0:
+		strip_icon_brightness = clampf(brightness, 0.3, 1.8)
+	if saturation >= 0.0:
+		strip_icon_saturation = clampf(saturation, 0.0, 2.0)
+	_ensure_strip_icon_material()
+	_refresh_ingredient_stock_bars()
+	_save_ingredient_bin_settings()
+
+
+func _attach_bin_fill(tub: Node3D, id: String) -> void:
+	if tub == null or not is_instance_valid(tub) or not _is_bin_fill_ingredient(id):
+		return
+	var old := tub.get_node_or_null("Fill")
+	if old != null:
+		old.queue_free()
+	var tex: Texture2D = FoodSpritesScript.bin_fill_tex(id)
+	if tex == null:
+		push_warning("Missing bin fill texture for %s" % id)
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = "Fill"
+	var opening := maxf(0.25, ingredient_bin_length - 2.0 * ingredient_bin_wall)
+	var quad := QuadMesh.new()
+	quad.size = Vector2(opening * 0.90, opening * 0.70)
+	mi.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.disable_receive_shadows = true
+	mat.render_priority = 1
+	var fill_b: float = clampf(bin_fill_brightness, 0.25, 1.5)
+	mat.albedo_color = Color(fill_b, fill_b, fill_b, 1.0)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	tub.add_child(mi)
+
+
+func _update_bin_fills_3d() -> void:
+	_ensure_bin_fill_settings()
+	for id in BIN_FILL_IDS:
+		var tub: Node3D = ingredient_bin_nodes.get(id, null)
+		if tub == null or not is_instance_valid(tub):
+			continue
+		var fill := tub.get_node_or_null("Fill") as MeshInstance3D
+		if fill == null or not is_instance_valid(fill):
+			continue
+		var stock := int(supply_stock.get(id, 0))
+		if stock <= 0:
+			fill.visible = false
+			continue
+		fill.visible = true
+		var cap: int = maxi(1, _ingredient_stock_cap(id))
+		var t: float = clampf(float(stock) / float(cap), 0.0, 1.0)
+		var full_y: float = _bin_fill_val(id, "full")
+		var empty_y: float = _bin_fill_val(id, "empty")
+		var y: float = lerpf(empty_y, full_y, t) + _bin_fill_val(id, "y")
+		fill.position = Vector3(_bin_fill_val(id, "x"), y, _bin_fill_val(id, "z"))
+		fill.rotation_degrees = Vector3(_bin_fill_val(id, "tilt"), 180.0, 0.0)
+		fill.scale = Vector3(_bin_fill_val(id, "sx"), _bin_fill_val(id, "sy"), 1.0)
+		var fill_mat := fill.material_override as StandardMaterial3D
+		if fill_mat != null and is_instance_valid(fill_mat):
+			var fill_b: float = clampf(bin_fill_brightness, 0.25, 1.5)
+			fill_mat.albedo_color = Color(fill_b, fill_b, fill_b, 1.0)
+
+
 func _clear_ingredient_bins_3d() -> void:
 	if ingredient_bin_root != null and is_instance_valid(ingredient_bin_root):
 		ingredient_bin_root.queue_free()
@@ -50359,6 +53472,7 @@ func _build_ingredient_bins_3d() -> void:
 		ingredient_bin_nodes[id] = tub
 		ingredient_bin_mats[id] = mat
 		ingredient_bin_hover[id] = false
+		_attach_bin_fill(tub, str(id))
 	call_deferred("_update_ingredient_bins_3d")
 
 
@@ -50391,6 +53505,7 @@ func _update_ingredient_bins_3d() -> void:
 			and (start_overlay == null or not start_overlay.visible)
 	ingredient_bin_root.visible = show
 	if not show:
+		_park_idle_condiment_bottles()
 		return
 	for id in INGREDIENT_HOTKEYS:
 		if not ingredient_bin_nodes.has(id) or not ingredient_buttons.has(id):
@@ -50418,6 +53533,8 @@ func _update_ingredient_bins_3d() -> void:
 		var hover_mul := 1.06 if bool(ingredient_bin_hover.get(id, false)) else 1.0
 		var shake_mul := btn.scale.x if btn.scale.x > 0.2 else 1.0
 		tub.scale = Vector3.ONE * (world_w * ingredient_bin_scale * hover_mul * shake_mul)
+	_update_bin_fills_3d()
+	_park_idle_condiment_bottles()
 
 
 func _apply_ingredient_bin_strip_layout() -> void:
@@ -50438,6 +53555,8 @@ func _apply_ingredient_bin_strip_layout() -> void:
 			if icon != null:
 				icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
 				icon.size = Vector2(ingredient_icon_w, ingredient_icon_h)
+				icon.visible = not _is_condiment(id)
+				icon.material = _ensure_strip_icon_material()
 		var label_margin := btn.get_node_or_null("Stack/LabelMargin") as MarginContainer
 		if label_margin != null:
 			label_margin.add_theme_constant_override("margin_top", int(ingredient_label_y))
@@ -50463,6 +53582,7 @@ func _queue_ingredient_bin_rebuild() -> void:
 func _flush_ingredient_bin_rebuild() -> void:
 	_ingredient_bin_rebuild_queued = false
 	_build_ingredient_bins_3d()
+	_build_physical_garbage_can()
 
 
 func _touch_ingredient_bins(rebuild_mesh: bool) -> void:
@@ -50473,6 +53593,7 @@ func _touch_ingredient_bins(rebuild_mesh: bool) -> void:
 		_apply_ingredient_bin_colors()
 		_update_ingredient_bins_3d()
 		_update_physical_garbage_screen_follow()
+		_update_bottom_row_supply_follow()
 	_save_ingredient_bin_settings()
 
 
@@ -50490,6 +53611,7 @@ func _apply_ingredient_bin_colors() -> void:
 		else:
 			_style_ingredient_bin_mat(mat, hovered)
 			_set_ingredient_bin_shell_mat(tub, mat)
+	_apply_physical_garbage_tray_style()
 
 
 func _ingredient_bin_default_map() -> Dictionary:
@@ -50516,6 +53638,9 @@ func _ingredient_bin_default_map() -> Dictionary:
 		"label_y": 0.0,
 		"tray_y": 0.0,
 		"stock_on": 0.0,
+		"fill_brightness": 0.70,
+		"icon_brightness": 1.0,
+		"icon_saturation": 1.0,
 	}
 
 
@@ -50539,8 +53664,15 @@ func _reset_ingredient_bin_settings() -> void:
 	ingredient_label_y = float(d["label_y"])
 	ingredient_bin_y_px = float(d["tray_y"])
 	ingredient_stock_visible = bool(d["stock_on"])
+	bin_fill_brightness = float(d["fill_brightness"])
+	strip_icon_brightness = float(d["icon_brightness"])
+	strip_icon_saturation = float(d["icon_saturation"])
+	bin_fill_settings.clear()
+	_ensure_bin_fill_settings()
 	_apply_ingredient_bin_strip_layout()
+	_refresh_ingredient_stock_bars()
 	_build_ingredient_bins_3d()
+	_build_physical_garbage_can()
 	_save_ingredient_bin_settings()
 	_refresh_ingredient_bin_sliders()
 	if ingredient_bin_shell_picker != null and is_instance_valid(ingredient_bin_shell_picker):
@@ -50567,12 +53699,24 @@ func _refresh_ingredient_bin_sliders() -> void:
 		"ibin_icon_y": ingredient_icon_y,
 		"ibin_label_y": ingredient_label_y,
 		"ibin_tray_y": ingredient_bin_y_px,
+		"ibin_fill_bright": bin_fill_brightness,
+		"ibin_icon_bright": strip_icon_brightness,
+		"ibin_icon_sat": strip_icon_saturation,
 	}
 	for key in vals:
 		if options_hidden_tree_light_sliders.has(key) and options_hidden_tree_light_sliders[key] != null:
 			options_hidden_tree_light_sliders[key].set_value_no_signal(float(vals[key]))
 		if options_hidden_tree_light_labs.has(key) and options_hidden_tree_light_labs[key] != null:
 			options_hidden_tree_light_labs[key].text = "%.2f" % float(vals[key])
+	_ensure_bin_fill_settings()
+	for id in BIN_FILL_IDS:
+		for fill_key in ["x", "y", "z", "sx", "sy", "full", "empty", "tilt"]:
+			var slider_key := "bfill_%s_%s" % [id, fill_key]
+			var shown := _bin_fill_val(id, fill_key)
+			if options_hidden_tree_light_sliders.has(slider_key) and options_hidden_tree_light_sliders[slider_key] != null:
+				options_hidden_tree_light_sliders[slider_key].set_value_no_signal(shown)
+			if options_hidden_tree_light_labs.has(slider_key) and options_hidden_tree_light_labs[slider_key] != null:
+				options_hidden_tree_light_labs[slider_key].text = ("%.1f°" % shown) if fill_key == "tilt" else ("%.2f" % shown)
 
 
 func _load_ingredient_bin_settings() -> void:
@@ -50602,6 +53746,28 @@ func _load_ingredient_bin_settings() -> void:
 	ingredient_bin_y_px = clampf(float(cfg.get_value(s, "tray_y", ingredient_bin_y_px)), -120.0, 120.0)
 	ingredient_stock_visible = bool(cfg.get_value(s, "stock_on", ingredient_stock_visible))
 	ingredient_bin_stainless = bool(cfg.get_value(s, "stainless", true))
+	bin_fill_brightness = clampf(float(cfg.get_value(s, "fill_brightness", bin_fill_brightness)), 0.25, 1.5)
+	strip_icon_brightness = clampf(float(cfg.get_value(s, "icon_brightness", strip_icon_brightness)), 0.3, 1.8)
+	strip_icon_saturation = clampf(float(cfg.get_value(s, "icon_saturation", strip_icon_saturation)), 0.0, 2.0)
+	condiment_bottle_nudge["ketchup"] = Vector3(
+		clampf(float(cfg.get_value(s, "ketch_x", 0.0)), -0.6, 0.6),
+		clampf(float(cfg.get_value(s, "ketch_y", 0.0)), -0.6, 0.6),
+		clampf(float(cfg.get_value(s, "ketch_z", 0.0)), -0.6, 0.6)
+	)
+	condiment_bottle_nudge["mustard"] = Vector3(
+		clampf(float(cfg.get_value(s, "must_x", 0.0)), -0.6, 0.6),
+		clampf(float(cfg.get_value(s, "must_y", 0.0)), -0.6, 0.6),
+		clampf(float(cfg.get_value(s, "must_z", 0.0)), -0.6, 0.6)
+	)
+	condiment_bottle_extra_scale["ketchup"] = clampf(float(cfg.get_value(s, "ketch_scale", 1.0)), 0.4, 2.4)
+	condiment_bottle_extra_scale["mustard"] = clampf(float(cfg.get_value(s, "must_scale", 1.0)), 0.4, 2.4)
+	condiment_tilt_sensitivity = clampf(float(cfg.get_value(s, "tilt_sens", condiment_tilt_sensitivity)), 0.4, 2.5)
+	_ensure_bin_fill_settings()
+	for id in BIN_FILL_IDS:
+		var def := _bin_fill_default_entry()
+		for key in def:
+			var loaded := float(cfg.get_value(s, "fill_%s_%s" % [id, key], def[key]))
+			_bin_fill_store(id, key, loaded)
 	if not cfg.has_section_key(s, "height_40pct_v1"):
 		ingredient_bin_height = clampf(ingredient_bin_height * 1.4, 0.2, 2.0)
 		cfg.set_value(s, "height", ingredient_bin_height)
@@ -50635,16 +53801,164 @@ func _save_ingredient_bin_settings() -> void:
 	cfg.set_value(s, "tray_y", ingredient_bin_y_px)
 	cfg.set_value(s, "stock_on", ingredient_stock_visible)
 	cfg.set_value(s, "stainless", ingredient_bin_stainless)
+	cfg.set_value(s, "fill_brightness", bin_fill_brightness)
+	cfg.set_value(s, "icon_brightness", strip_icon_brightness)
+	cfg.set_value(s, "icon_saturation", strip_icon_saturation)
+	cfg.set_value(s, "ketch_x", condiment_bottle_nudge["ketchup"].x)
+	cfg.set_value(s, "ketch_y", condiment_bottle_nudge["ketchup"].y)
+	cfg.set_value(s, "ketch_z", condiment_bottle_nudge["ketchup"].z)
+	cfg.set_value(s, "ketch_scale", condiment_bottle_extra_scale["ketchup"])
+	cfg.set_value(s, "must_x", condiment_bottle_nudge["mustard"].x)
+	cfg.set_value(s, "must_y", condiment_bottle_nudge["mustard"].y)
+	cfg.set_value(s, "must_z", condiment_bottle_nudge["mustard"].z)
+	cfg.set_value(s, "must_scale", condiment_bottle_extra_scale["mustard"])
+	cfg.set_value(s, "tilt_sens", condiment_tilt_sensitivity)
+	_ensure_bin_fill_settings()
+	for id in BIN_FILL_IDS:
+		for key in _bin_fill_default_entry():
+			cfg.set_value(s, "fill_%s_%s" % [id, key], _bin_fill_val(id, key))
 	cfg.save(GFX_CFG_PATH)
+
+
+func _set_condiment_bottle_nudge(id: String, axis: String, val: float) -> void:
+	var n: Vector3 = condiment_bottle_nudge.get(id, Vector3.ZERO)
+	match axis:
+		"x":
+			n.x = clampf(val, -0.6, 0.6)
+		"y":
+			n.y = clampf(val, -0.6, 0.6)
+		"z":
+			n.z = clampf(val, -0.6, 0.6)
+	condiment_bottle_nudge[id] = n
+	_save_ingredient_bin_settings()
+
+
+func _set_condiment_bottle_extra_scale(id: String, val: float) -> void:
+	condiment_bottle_extra_scale[id] = clampf(val, 0.4, 2.4)
+	_save_ingredient_bin_settings()
+
+
+func _hidden_add_bin_fill_sliders(parent: Control, id: String, title: String) -> void:
+	_ensure_bin_fill_settings()
+	_hidden_add_section(parent, "%s TRAY FILL" % title.to_upper())
+	_hidden_add_labeled_slider(parent, "bfill_%s_x" % id, "%s X" % title, -0.9, 0.9, 0.005,
+		func(): return _bin_fill_val(id, "x"),
+		func(v: float): _bin_fill_set(id, "x", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_y" % id, "%s Extra Height" % title, -0.9, 0.9, 0.005,
+		func(): return _bin_fill_val(id, "y"),
+		func(v: float): _bin_fill_set(id, "y", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_z" % id, "%s Z (toward you = minus)" % title, -0.9, 0.9, 0.005,
+		func(): return _bin_fill_val(id, "z"),
+		func(v: float): _bin_fill_set(id, "z", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_sx" % id, "%s Scale X" % title, 0.15, 2.8, 0.01,
+		func(): return _bin_fill_val(id, "sx"),
+		func(v: float): _bin_fill_set(id, "sx", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_sy" % id, "%s Scale Y" % title, 0.15, 2.8, 0.01,
+		func(): return _bin_fill_val(id, "sy"),
+		func(v: float): _bin_fill_set(id, "sy", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_full" % id, "%s Original Height" % title, -1.3, 0.45, 0.005,
+		func(): return _bin_fill_val(id, "full"),
+		func(v: float): _bin_fill_set(id, "full", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_empty" % id, "%s Lowest Point" % title, -1.5, 0.25, 0.005,
+		func(): return _bin_fill_val(id, "empty"),
+		func(v: float): _bin_fill_set(id, "empty", v))
+	_hidden_add_labeled_slider(parent, "bfill_%s_tilt" % id, "%s Tilt" % title, -90.0, 25.0, 0.5,
+		func(): return _bin_fill_val(id, "tilt"),
+		func(v: float): _bin_fill_set(id, "tilt", v),
+		true)
+
+
+func _hidden_setup_grill_standoff_controls(parent: Control) -> void:
+	_hidden_add_section(parent, "GRILL STANDOFFS (COOK-SIDE LEGS)")
+	_hidden_add_labeled_slider(parent, "stand_h", "Leg Height", 0.12, 1.4, 0.01,
+		func(): return grill_standoff_height,
+		func(v: float):
+			grill_standoff_height = clampf(v, 0.12, 1.4)
+			_grill_standoff_setting_changed())
+	_hidden_add_labeled_slider(parent, "stand_lx", "Left X", -1.2, 1.2, 0.005,
+		func(): return grill_standoff_left_offset.x,
+		func(v: float):
+			grill_standoff_left_offset.x = clampf(v, -1.2, 1.2)
+			_grill_standoff_setting_changed())
+	_hidden_add_labeled_slider(parent, "stand_ly", "Left Height", -1.2, 1.2, 0.005,
+		func(): return grill_standoff_left_offset.y,
+		func(v: float):
+			grill_standoff_left_offset.y = clampf(v, -1.2, 1.2)
+			_grill_standoff_setting_changed())
+	_hidden_add_labeled_slider(parent, "stand_lz", "Left Z (toward you = minus)", -1.2, 1.2, 0.005,
+		func(): return grill_standoff_left_offset.z,
+		func(v: float):
+			grill_standoff_left_offset.z = clampf(v, -1.2, 1.2)
+			_grill_standoff_setting_changed())
+	_hidden_add_labeled_slider(parent, "stand_rx", "Right X", -1.2, 1.2, 0.005,
+		func(): return grill_standoff_right_offset.x,
+		func(v: float):
+			grill_standoff_right_offset.x = clampf(v, -1.2, 1.2)
+			_grill_standoff_setting_changed())
+	_hidden_add_labeled_slider(parent, "stand_ry", "Right Height", -1.2, 1.2, 0.005,
+		func(): return grill_standoff_right_offset.y,
+		func(v: float):
+			grill_standoff_right_offset.y = clampf(v, -1.2, 1.2)
+			_grill_standoff_setting_changed())
+	_hidden_add_labeled_slider(parent, "stand_rz", "Right Z (toward you = minus)", -1.2, 1.2, 0.005,
+		func(): return grill_standoff_right_offset.z,
+		func(v: float):
+			grill_standoff_right_offset.z = clampf(v, -1.2, 1.2)
+			_grill_standoff_setting_changed())
 
 
 func _hidden_setup_ingredient_bin_controls(parent: Control) -> void:
 	var help := Label.new()
-	help.text = "3D topping tubs under the ingredient icons. Spacing and tile size pack the row; length / depth change the tub shape."
+	help.text = "Bottom-row 3D props: bun piles sit left of cheese (first tub). Tomato, lettuce, onion, pickle, and bacon use 2D pile art inside the trays — full stock sits at Original Height, then lowers toward Lowest Point, and hides at zero. Tray Fill Brightness darkens those in-tray piles only, not the floating 2D strip icons. The garbage tray sits to the right of mustard and uses the same metal as the ingredient tubs. Use Garbage Size to shrink it. With Hidden open, click a tray fill, bottle, standoff, bun pile, or garbage tray in the world to show a move gizmo."
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(help, false, 11)
 	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
 	parent.add_child(help)
+	_hidden_add_prop_offset_group(parent, "burger_buns", "Burger Buns")
+	_gfx_add_slider(parent, "burger_bun_scale", "Burger Bun Size", 0.45, 2.5, 0.01)
+	_hidden_add_prop_offset_group(parent, "cheese_stack", "Cheese Stack")
+	_gfx_add_slider(parent, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
+	_hidden_add_section(parent, "KETCHUP BOTTLE")
+	_hidden_add_labeled_slider(parent, "ketch_nx", "Ketchup X", -0.6, 0.6, 0.005,
+		func(): return float(condiment_bottle_nudge["ketchup"].x),
+		func(v: float): _set_condiment_bottle_nudge("ketchup", "x", v))
+	_hidden_add_labeled_slider(parent, "ketch_ny", "Ketchup Height", -0.6, 0.6, 0.005,
+		func(): return float(condiment_bottle_nudge["ketchup"].y),
+		func(v: float): _set_condiment_bottle_nudge("ketchup", "y", v))
+	_hidden_add_labeled_slider(parent, "ketch_nz", "Ketchup Z", -0.6, 0.6, 0.005,
+		func(): return float(condiment_bottle_nudge["ketchup"].z),
+		func(v: float): _set_condiment_bottle_nudge("ketchup", "z", v))
+	_hidden_add_labeled_slider(parent, "ketch_scale", "Ketchup Scale", 0.4, 2.4, 0.01,
+		func(): return float(condiment_bottle_extra_scale["ketchup"]),
+		func(v: float): _set_condiment_bottle_extra_scale("ketchup", v))
+	_hidden_add_section(parent, "MUSTARD BOTTLE")
+	_hidden_add_labeled_slider(parent, "must_nx", "Mustard X", -0.6, 0.6, 0.005,
+		func(): return float(condiment_bottle_nudge["mustard"].x),
+		func(v: float): _set_condiment_bottle_nudge("mustard", "x", v))
+	_hidden_add_labeled_slider(parent, "must_ny", "Mustard Height", -0.6, 0.6, 0.005,
+		func(): return float(condiment_bottle_nudge["mustard"].y),
+		func(v: float): _set_condiment_bottle_nudge("mustard", "y", v))
+	_hidden_add_labeled_slider(parent, "must_nz", "Mustard Z", -0.6, 0.6, 0.005,
+		func(): return float(condiment_bottle_nudge["mustard"].z),
+		func(v: float): _set_condiment_bottle_nudge("mustard", "z", v))
+	_hidden_add_labeled_slider(parent, "must_scale", "Mustard Scale", 0.4, 2.4, 0.01,
+		func(): return float(condiment_bottle_extra_scale["mustard"]),
+		func(v: float): _set_condiment_bottle_extra_scale("mustard", v))
+	_hidden_add_section(parent, "BOTTLE POUR TILT")
+	_hidden_add_labeled_slider(parent, "condiment_tilt_sens", "Tilt Sensitivity", 0.4, 2.5, 0.05,
+		func(): return condiment_tilt_sensitivity,
+		func(v: float):
+			condiment_tilt_sensitivity = clampf(v, 0.4, 2.5)
+			_save_ingredient_bin_settings())
+	_hidden_add_section(parent, "TRAY FILL LOOK")
+	_hidden_add_labeled_slider(parent, "ibin_fill_bright", "Tray Fill Brightness", 0.25, 1.5, 0.01,
+		func(): return bin_fill_brightness,
+		func(v: float): _set_bin_fill_brightness(v))
+	_hidden_add_bin_fill_sliders(parent, "tomato", "Tomato")
+	_hidden_add_bin_fill_sliders(parent, "lettuce", "Lettuce")
+	_hidden_add_bin_fill_sliders(parent, "onion", "Onion")
+	_hidden_add_bin_fill_sliders(parent, "pickle", "Pickle")
+	_hidden_add_bin_fill_sliders(parent, "bacon", "Bacon")
 	_hidden_add_section(parent, "LAYOUT")
 	_hidden_add_labeled_slider(parent, "ibin_spacing", "Spacing", 0.0, 40.0, 1.0,
 		func(): return ingredient_bin_spacing,
@@ -50671,6 +53985,14 @@ func _hidden_setup_ingredient_bin_controls(parent: Control) -> void:
 		func(v: float):
 			ingredient_bin_y_px = clampf(v, -120.0, 120.0)
 			_touch_ingredient_bins(false))
+	_hidden_add_section(parent, "GARBAGE TRAY")
+	_hidden_add_labeled_slider(parent, "ibin_garbage_scale", "Garbage Size", 0.12, 2.2, 0.01,
+		func(): return physical_garbage_scale,
+		func(v: float):
+			physical_garbage_scale = clampf(v, 0.12, 2.2)
+			_physical_garbage_setting_changed())
+	_hidden_add_garbage_liner_toggle(parent)
+	_hidden_add_garbage_liner_wobble_controls(parent, "ibin_garbage_")
 	_hidden_add_section(parent, "SHAPE")
 	_hidden_add_labeled_slider(parent, "ibin_length", "Length / Width", 0.6, 3.2, 0.01,
 		func(): return ingredient_bin_length,
@@ -50724,6 +54046,12 @@ func _hidden_setup_ingredient_bin_controls(parent: Control) -> void:
 		_touch_ingredient_bins(false)
 	)
 	_hidden_add_section(parent, "2D ICONS + LABELS")
+	_hidden_add_labeled_slider(parent, "ibin_icon_bright", "Icon Brightness", 0.3, 1.8, 0.01,
+		func(): return strip_icon_brightness,
+		func(v: float): _set_strip_icon_look(v, -1.0))
+	_hidden_add_labeled_slider(parent, "ibin_icon_sat", "Icon Saturation", 0.0, 2.0, 0.01,
+		func(): return strip_icon_saturation,
+		func(v: float): _set_strip_icon_look(-1.0, v))
 	_hidden_add_labeled_slider(parent, "ibin_icon_w", "Icon Width", 16.0, 160.0, 1.0,
 		func(): return ingredient_icon_w,
 		func(v: float):
@@ -50811,6 +54139,10 @@ func _build_ingredient_legend() -> void:
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.material = _ensure_strip_icon_material()
+		## Sauce trays show the 3D bottle; hide the old 2D squiggle art.
+		if _is_condiment(id):
+			icon.visible = false
 		icon_margin.add_child(icon)
 
 		var spacer := Control.new()
@@ -50891,23 +54223,24 @@ func _build_ingredient_legend() -> void:
 				return
 			_add_ingredient(capture)
 		)
-		tbtn.set_drag_forwarding(
-			func(_pos):
-				if _strip_gesture_added:
-					return null
-				_strip_did_drag = true
-				_pending_cheese_drag = false
-				_pending_ingredient_drag = capture
-				var drag_preview := TextureRect.new()
-				drag_preview.texture = FoodSpritesScript.get_tex(capture)
-				drag_preview.custom_minimum_size = Vector2(120, 48)
-				drag_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-				drag_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-				tbtn.set_drag_preview(drag_preview)
-				return {"kind": "ingredient", "id": capture, "station": active_station},
-			Callable(),
-			Callable()
-		)
+		if not _strip_uses_hold_pickup(capture):
+			tbtn.set_drag_forwarding(
+				func(_pos):
+					if _strip_gesture_added:
+						return null
+					_strip_did_drag = true
+					_pending_cheese_drag = false
+					_pending_ingredient_drag = capture
+					var drag_preview := TextureRect.new()
+					drag_preview.texture = FoodSpritesScript.get_tex(capture)
+					drag_preview.custom_minimum_size = Vector2(120, 48)
+					drag_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+					drag_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+					tbtn.set_drag_preview(drag_preview)
+					return {"kind": "ingredient", "id": capture, "station": active_station},
+				Callable(),
+				Callable()
+			)
 		ingredient_legend.add_child(tbtn)
 		ingredient_buttons[id] = tbtn
 	_build_ingredient_bins_3d()
@@ -51301,7 +54634,6 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 	root.visible = true
 	root.scale = Vector3.ONE
 	_set_condiment_bottle_animation_front(root, true)
-	var home: Vector3 = condiment_bottle_homes.get(id, root.position)
 	var home_rot: Vector3 = condiment_bottle_home_rots.get(id, Vector3.ZERO)
 	var start_pos := root.position
 	var start_rot := root.rotation_degrees
@@ -51355,7 +54687,7 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 		if root != null and is_instance_valid(root):
 			root.scale = Vector3.ONE
 		_deposit_condiment_entry(entry)
-		_return_condiment_bottle(id, root, home, home_rot)
+		_return_condiment_bottle(id, root, _condiment_bottle_home(id), home_rot)
 	)
 
 
@@ -51378,6 +54710,8 @@ func _return_condiment_bottle(id: String, root: Node3D, home: Vector3, home_rot:
 		return
 	var return_start := root.position
 	var return_rot := root.rotation_degrees
+	var return_scale := root.scale
+	var home_scale := Vector3.ONE * _condiment_bottle_home_scale(id)
 	var tw := create_tween()
 	condiment_active_tween = tw
 	tw.tween_method(
@@ -51386,14 +54720,15 @@ func _return_condiment_bottle(id: String, root: Node3D, home: Vector3, home_rot:
 				return
 			var eased := t * t * (3.0 - 2.0 * t)
 			root.position = return_start.lerp(home, eased) + Vector3.UP * sin(t * PI) * 0.07
-			root.rotation_degrees = return_rot.lerp(home_rot, eased),
+			root.rotation_degrees = return_rot.lerp(home_rot, eased)
+			root.scale = return_scale.lerp(home_scale, eased),
 		0.0, 1.0, CONDIMENT_BOTTLE_RETURN_SEC
 	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func() -> void:
 		if root != null and is_instance_valid(root):
 			root.position = home
 			root.rotation_degrees = home_rot
-			root.scale = Vector3.ONE
+			root.scale = home_scale
 			_set_condiment_bottle_animation_front(root, false)
 		var area: Area3D = condiment_bottle_areas.get(id, null)
 		if area != null and is_instance_valid(area):
@@ -51529,6 +54864,7 @@ func _build_station_ui() -> void:
 		var burger_stack := Control.new()
 		burger_stack.name = "BurgerStack"
 		burger_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		burger_stack.clip_contents = false
 		burger_stack.z_as_relative = true
 		burger_stack.z_index = 1
 		burger_stack.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -51595,7 +54931,7 @@ func _build_station_ui() -> void:
 
 		var trash_one := Button.new()
 		trash_one.text = "🗑"
-		trash_one.tooltip_text = "Trash selected layer (or top)"
+		trash_one.tooltip_text = "Click a layer, then trash it — or swipe the layer here / off Build"
 		trash_one.custom_minimum_size = Vector2(40, 30)
 		trash_one.focus_mode = Control.FOCUS_NONE
 		trash_one.clip_text = true
@@ -51616,6 +54952,14 @@ func _build_station_ui() -> void:
 			_sfx_click()
 			_select_station(si)
 			_trash_selected_or_top_layer(si)
+		)
+		trash_one.set_drag_forwarding(
+			Callable(),
+			func(_pos, data): return _can_drop_patty_on_garbage(data),
+			func(_pos, data):
+				_pending_station_patty_drag = null
+				_pending_reorder_drag = null
+				_drop_patty_on_garbage(data)
 		)
 		btns.add_child(trash_one)
 
@@ -51643,6 +54987,17 @@ func _build_station_ui() -> void:
 		fresh_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		fresh_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		actions.add_child(fresh_label)
+
+		var pick_hint := Label.new()
+		pick_hint.name = "LayerPickHint"
+		pick_hint.visible = false
+		pick_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		pick_hint.z_as_relative = true
+		pick_hint.z_index = 8
+		UiFontsScript.apply_label(pick_hint, true, 16)
+		pick_hint.add_theme_color_override("font_outline_color", Color.BLACK)
+		pick_hint.add_theme_constant_override("outline_size", 5)
+		plate_wrap.add_child(pick_hint)
 
 		plate_wrap.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed:
@@ -51692,6 +55047,8 @@ func _build_station_ui() -> void:
 		stations[i]["plate"] = plate_wrap
 		stations[i]["drop_hint"] = null
 		stations[i]["drop_btn"] = drop_btn
+		stations[i]["trash_btn"] = trash_one
+		stations[i]["layer_hint"] = pick_hint
 		stations[i]["fresh_label"] = fresh_label
 		_refresh_freshness_label(i)
 	## Click anywhere on the Build column while holding a scooped patty.
@@ -51976,6 +55333,16 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 				id = "cheese"
 			_drop_patty_on_garbage({"kind": "ingredient", "id": id})
 			return
+	## Swipe a Build layer onto the 🗑 button under the stack.
+	if not was_accepted and _is_over_build_trash(mouse):
+		if _pending_reorder_drag != null and typeof(_pending_reorder_drag) == TYPE_DICTIONARY:
+			_drop_patty_on_garbage(_pending_reorder_drag)
+			_pending_reorder_drag = null
+			return
+		if _pending_station_patty_drag != null and typeof(_pending_station_patty_drag) == TYPE_DICTIONARY:
+			_drop_patty_on_garbage(_pending_station_patty_drag)
+			_pending_station_patty_drag = null
+			return
 	## Build topping: drag off the left Build column → trash (garbage).
 	if not was_accepted and _pending_reorder_drag != null and typeof(_pending_reorder_drag) == TYPE_DICTIONARY:
 		var reorder_data = _pending_reorder_drag
@@ -51993,11 +55360,15 @@ func _on_gui_drag_ended(was_accepted: bool) -> void:
 		_pending_ingredient_drag = ""
 		_pending_reorder_drag = null
 		if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "station_patty":
-			## Don't yank it if they dropped back on Build.
-			if _station_index_at(mouse) < 0:
-				var hit := _grill_plane_from_screen(mouse)
-				if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
-					_return_station_patty_to_grill(int(data.get("station", -1)), int(data.get("from", -1)), hit)
+			if _station_index_at(mouse) >= 0:
+				return
+			var hit := _grill_plane_from_screen(mouse)
+			if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
+				_return_station_patty_to_grill(int(data.get("station", -1)), int(data.get("from", -1)), hit)
+				return
+			var dragged := mouse.distance_to(_reorder_drag_origin) >= BUILD_SWIPE_TRASH_RIGHT_PX
+			if dragged or _is_over_garbage(mouse):
+				_drop_patty_on_garbage(data)
 		return
 	if not was_accepted and _pending_cheese_drag:
 		_pending_cheese_drag = false
@@ -53271,10 +56642,6 @@ func _add_ingredient(id: String) -> void:
 	if id == "bun_bottom":
 		return
 	_pulse_ingredient_feedback(id)
-	## Cheese comes from the board wheel — strip no longer has it.
-	if id == "cheese":
-		_begin_cheese_hold(false, true)
-		return
 	var station := active_station
 	if _is_condiment(id):
 		_request_condiment_add(id, station)
@@ -53313,7 +56680,7 @@ func _begin_cheese_hold(from_drag: bool = false, skip_sfx: bool = false) -> void
 	if from_drag:
 		_flash("Release on a burger, Build, or the cat", Color("FFE082"))
 	else:
-		_flash("Cheese in hand — drag onto burger / cat · miss returns to stack", Color("FFE082"))
+		_flash("Cheese in hand — drag onto burger / cat · miss returns to the tray", Color("FFE082"))
 
 
 func _cancel_cheese_hold() -> void:
@@ -53327,7 +56694,7 @@ func _cancel_cheese_hold() -> void:
 	if cheese_ghost and is_instance_valid(cheese_ghost):
 		cheese_ghost.visible = false
 	_restore_cheese_stack_top()
-	_flash("Cheese back on the stack", Color("B0BEC5"))
+	_flash("Cheese back on the tray", Color("B0BEC5"))
 
 
 func _cancel_cheese_hold_silent() -> void:
@@ -53759,6 +57126,83 @@ func _clear_active_station() -> void:
 	_trash_selected_or_top_layer(active_station)
 
 
+func _station_layer_display_name(item_id: String) -> String:
+	return str(GameDataScript.INGREDIENT_LABELS.get(item_id, item_id.capitalize()))
+
+
+func _style_build_layer_row(row: Control, selected: bool, hovered: bool) -> void:
+	if row == null or not is_instance_valid(row):
+		return
+	var row_style := StyleBoxFlat.new()
+	row_style.set_content_margin_all(0)
+	row_style.set_corner_radius_all(8)
+	row_style.set_expand_margin_all(5)
+	if selected:
+		row_style.bg_color = Color(1.0, 0.86, 0.18, 0.22)
+		row_style.border_color = Color(1.0, 0.92, 0.28, 1.0)
+		row_style.set_border_width_all(3)
+	elif hovered:
+		row_style.bg_color = Color(1.0, 0.95, 0.55, 0.14)
+		row_style.border_color = Color(1.0, 0.96, 0.55, 0.98)
+		row_style.set_border_width_all(2)
+	else:
+		row_style.bg_color = Color(0, 0, 0, 0)
+		row_style.set_border_width_all(0)
+		row_style.set_expand_margin_all(0)
+	row.add_theme_stylebox_override("panel", row_style)
+
+
+func _update_station_layer_hint(station_index: int) -> void:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var hint: Label = st.get("layer_hint", null)
+	var plate: Control = st.get("plate", null)
+	var preview: Control = st.get("preview", null)
+	if hint == null or not is_instance_valid(hint) or plate == null or not is_instance_valid(plate):
+		return
+	var show_i: int = int(st.get("hovered_layer", -1))
+	if show_i < 0:
+		show_i = int(st.get("selected_layer", -1))
+	var row: Control = null
+	if preview != null and is_instance_valid(preview) and show_i >= 0:
+		for child in preview.get_children():
+			if child is Panel and int(child.get_meta("stack_i", -1)) == show_i:
+				row = child
+				break
+	if row == null:
+		hint.visible = false
+		return
+	var item_id := str(row.get_meta("item_id", ""))
+	hint.text = _station_layer_display_name(item_id)
+	hint.visible = true
+	var selected := show_i == int(st.get("selected_layer", -1))
+	hint.add_theme_color_override("font_color", Color(1.0, 0.92, 0.35) if selected else Color(0.96, 0.96, 0.92))
+	var row_g: Rect2 = row.get_global_rect()
+	var plate_g: Rect2 = plate.get_global_rect()
+	hint.position = Vector2(
+		row_g.position.x + row_g.size.x - plate_g.position.x + 8.0,
+		row_g.position.y + row_g.size.y * 0.18 - plate_g.position.y
+	)
+
+
+func _restyle_station_layers(station_index: int) -> void:
+	if station_index < 0 or station_index >= STATION_COUNT:
+		return
+	var st: Dictionary = stations[station_index]
+	var preview: Control = st.get("preview", null)
+	if preview == null or not is_instance_valid(preview):
+		return
+	var selected_layer: int = int(st.get("selected_layer", -1))
+	var hovered_layer: int = int(st.get("hovered_layer", -1))
+	for child in preview.get_children():
+		if not (child is Panel):
+			continue
+		var stack_i := int(child.get_meta("stack_i", -1))
+		_style_build_layer_row(child, stack_i == selected_layer, stack_i == hovered_layer)
+	_update_station_layer_hint(station_index)
+
+
 func _select_station_layer(station_index: int, layer_index: int, refresh_ui: bool = true) -> void:
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
@@ -53772,12 +57216,14 @@ func _select_station_layer(station_index: int, layer_index: int, refresh_ui: boo
 	## Refresh rebuilds layer Controls — never do that on press or drag dies.
 	if refresh_ui:
 		_refresh_station(station_index)
+	else:
+		_restyle_station_layers(station_index)
 	var id: String = str(items[layer_index]) if layer_index >= 0 and layer_index < items.size() else ""
 	if id != "":
 		if game_audio:
 			_play_ingredient_touch_sfx(id)
-		var label: String = GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize())
-		_flash("Selected %s — drag off Build to trash" % label, Color("FFE082"))
+		var label: String = _station_layer_display_name(id)
+		_flash("%s selected — 🗑 or swipe away to trash" % label, Color("FFE082"))
 
 
 func _trash_selected_or_top_layer(index: int) -> void:
@@ -53877,6 +57323,7 @@ func _refresh_station(index: int) -> void:
 		child.queue_free()
 	var items: Array = st["items"]
 	var selected_layer: int = int(st.get("selected_layer", -1))
+	st["hovered_layer"] = -1
 	if selected_layer >= items.size():
 		selected_layer = -1
 		st["selected_layer"] = -1
@@ -53891,6 +57338,9 @@ func _refresh_station(index: int) -> void:
 
 	if items.is_empty():
 		st["selected_layer"] = -1
+		var empty_hint: Label = st.get("layer_hint", null)
+		if empty_hint != null and is_instance_valid(empty_hint):
+			empty_hint.visible = false
 		_refresh_ticket_checkmarks()
 		return
 
@@ -53939,24 +57389,17 @@ func _refresh_station(index: int) -> void:
 		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
 		this_w = fit.x
 		var h := fit.y
-		var row := PanelContainer.new()
+		var row := Panel.new()
 		row.mouse_filter = Control.MOUSE_FILTER_STOP
 		row.z_as_relative = true
 		row.z_index = stack_i + 1 ## board is 0; bottom bun is 1
-		var row_style := StyleBoxFlat.new()
-		row_style.set_content_margin_all(0)
-		row_style.set_corner_radius_all(4)
-		if stack_i == selected_layer:
-			## Soft select — no loud yellow box.
-			row_style.bg_color = Color(1.0, 1.0, 1.0, 0.10)
-			row_style.border_color = Color(1.0, 1.0, 1.0, 0.22)
-			row_style.set_border_width_all(1)
-		else:
-			row_style.bg_color = Color(0, 0, 0, 0)
-			row_style.set_border_width_all(0)
-		row.add_theme_stylebox_override("panel", row_style)
-		row.custom_minimum_size = Vector2(this_w, h)
-		row.size = Vector2(this_w, h)
+		row.set_meta("stack_i", stack_i)
+		row.set_meta("item_id", item)
+		row.clip_contents = false
+		row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		var hit_h := maxf(h, 26.0)
+		row.custom_minimum_size = Vector2(this_w, hit_h)
+		row.size = Vector2(this_w, hit_h)
 		## Rise upward from centered bottom bun; slight left lean matches iso board.
 		row.position = Vector2(
 			origin_x - this_w * 0.5 - float(stack_i) * 1.2,
@@ -53978,6 +57421,7 @@ func _refresh_station(index: int) -> void:
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.custom_minimum_size = Vector2(this_w, h)
 		tr.size = Vector2(this_w, h)
+		tr.position = Vector2.ZERO
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		## Soft drop shadow under each float layer.
 		var bun_cook := 0.0
@@ -53985,35 +57429,52 @@ func _refresh_station(index: int) -> void:
 			bun_cook = _station_bun_cook_time(index, item)
 		tr.modulate = _bun_layer_modulate(bun_cook) if bun_cook > 0.001 else Color(1, 1, 1, 1)
 		row.add_child(tr)
+		_style_build_layer_row(row, stack_i == selected_layer, false)
 
 		var from_i := stack_i
 		var item_id := item
+		row.mouse_entered.connect(func():
+			if index < 0 or index >= STATION_COUNT:
+				return
+			stations[index]["hovered_layer"] = from_i
+			_restyle_station_layers(index)
+		)
+		row.mouse_exited.connect(func():
+			if index < 0 or index >= STATION_COUNT:
+				return
+			if int(stations[index].get("hovered_layer", -1)) == from_i:
+				stations[index]["hovered_layer"] = -1
+			_restyle_station_layers(index)
+		)
 		row.gui_input.connect(func(ev: InputEvent):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				if item_id == "patty":
-					## Click → held 3D patty so you can place it back on the grill.
-					_pickup_station_patty_to_hand(index, from_i)
-					row.accept_event()
-				elif BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top"):
-					_pickup_station_bun_to_hand(index, from_i)
-					row.accept_event()
-				else:
-					## Soft-select only — full refresh frees this row and cancels drag.
-					_select_station_layer(index, from_i, false)
-					row.accept_event()
+				if ev.double_click:
+					if item_id == "patty":
+						_pickup_station_patty_to_hand(index, from_i)
+						row.accept_event()
+						return
+					if BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top"):
+						_pickup_station_bun_to_hand(index, from_i)
+						row.accept_event()
+						return
+				_select_station_layer(index, from_i, false)
+				row.accept_event()
 		)
 		row.set_drag_forwarding(
 			func(_pos):
-				if item_id == "patty" or (BUN_TOAST_ENABLED and (item_id == "bun_bottom" or item_id == "bun_top")):
-					## Patties / toastable buns use click-to-hand; toppings stay Control-drag.
-					return null
 				row.set_drag_preview(_make_layer_drag_preview(item_id))
-				_pending_station_patty_drag = null
 				_reorder_drag_origin = get_viewport().get_mouse_position()
+				if item_id == "patty":
+					var pidx2 := _patty_index_for_item_slot(index, from_i)
+					var drag_patty := _make_station_patty_drag(index, from_i, pidx2)
+					_pending_station_patty_drag = drag_patty
+					_pending_reorder_drag = null
+					_flash("Drag %s to the grill, 🗑, or swipe away" % _station_layer_display_name(item_id), Color("FFCC80"))
+					return drag_patty
+				_pending_station_patty_drag = null
 				var drag_data := _make_reorder_drag(index, from_i, item_id)
 				_pending_reorder_drag = drag_data
-				var label: String = GameDataScript.INGREDIENT_LABELS.get(item_id, item_id.capitalize())
-				_flash("Drag %s off Build to trash" % label, Color("FFCC80"))
+				_flash("Swipe %s away or onto 🗑 to trash" % _station_layer_display_name(item_id), Color("FFCC80"))
 				return drag_data,
 			func(_pos, data): return _can_drop_on_assembly(index, data),
 			func(pos, data):
@@ -54027,6 +57488,7 @@ func _refresh_station(index: int) -> void:
 		bottom_row.position.y -= BUILD_BUN_NEST_BOTTOM_PX * layer_scale
 	if top_row != null and is_instance_valid(top_row):
 		top_row.position.y += BUILD_BUN_NEST_TOP_PX * layer_scale
+	_update_station_layer_hint(index)
 	_refresh_ticket_checkmarks()
 
 
@@ -57274,46 +60736,15 @@ func _try_buyout_truck() -> void:
 
 
 func _setup_start_location_button() -> void:
+	## Location changes live on the phone Maps app now.
 	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
 	if card_col == null:
 		return
-	if card_col.get_node_or_null("ChangeLocationButton") != null:
-		return
-	location_map_btn = Button.new()
-	location_map_btn.name = "ChangeLocationButton"
-	location_map_btn.text = "AREA: %s  -  CHANGE" % TruckLocationsScript.display_name(current_location_id).to_upper()
-	location_map_btn.custom_minimum_size = Vector2(0, 46)
-	location_map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	location_map_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	UiFontsScript.apply_luckiest_button(location_map_btn, 18)
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.055, 0.06, 0.07, 0.98)
-	normal.set_corner_radius_all(9)
-	normal.set_border_width_all(2)
-	normal.border_color = Color(0.42, 0.82, 0.48, 0.55)
-	normal.content_margin_left = 16
-	normal.content_margin_right = 16
-	normal.content_margin_top = 12
-	normal.content_margin_bottom = 6
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.10, 0.12, 0.11, 1.0)
-	hover.border_color = Color(0.55, 0.92, 0.58, 0.85)
-	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.035, 0.04, 0.05, 1.0)
-	location_map_btn.add_theme_stylebox_override("normal", normal)
-	location_map_btn.add_theme_stylebox_override("hover", hover)
-	location_map_btn.add_theme_stylebox_override("pressed", pressed)
-	location_map_btn.add_theme_color_override("font_color", Color(0.92, 0.98, 0.92, 1.0))
-	location_map_btn.add_theme_constant_override("outline_size", 0)
-	location_map_btn.pressed.connect(func():
-		_sfx_click()
-		_open_location_map()
-	)
-	card_col.add_child(location_map_btn)
-	## Sit under the solo/multiplayer row.
-	var mode_row := card_col.get_node_or_null("StartModeRow")
-	if mode_row != null:
-		card_col.move_child(location_map_btn, mode_row.get_index() + 1)
+	var existing := card_col.get_node_or_null("ChangeLocationButton") as Control
+	if existing != null:
+		existing.visible = false
+		existing.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	location_map_btn = null
 
 
 func _setup_tutorial_menu_button() -> void:
@@ -57389,6 +60820,7 @@ func _apply_location_local(location_id: String) -> void:
 	if game_over_panel != null and game_over_panel.visible and restart_btn != null:
 		restart_btn.text = "START SHIFT AT %s" % loc_name.to_upper()
 		_update_shift_complete_location_summary()
+	_refresh_phone_maps()
 	## Keep open map pin + cat marker in sync if the panel is up.
 	if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
 		if _location_map_ui.has_method("set_parked_id"):

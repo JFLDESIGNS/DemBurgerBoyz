@@ -239,6 +239,39 @@ static func _try_load_ingredient(id: String) -> Texture2D:
 	return null
 
 
+static func bin_fill_tex(id: String) -> Texture2D:
+	## Top-down pile art that sits inside a 3D topping tub. Keep the square
+	## composition (no opaque crop) so the tray still looks full at the edges.
+	var key := "bin_fill_%s" % id
+	if _cache.has(key):
+		return _cache[key]
+	var path := INGREDIENT_DIR + "bin/" + id + ".png"
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			var img: Image = res.get_image()
+			if img != null:
+				if img.is_compressed():
+					img.decompress()
+				img.convert(Image.FORMAT_RGBA8)
+				_knockout_dark_backdrop(img)
+				var tex := ImageTexture.create_from_image(img)
+				_cache[key] = tex
+				return tex
+			_cache[key] = res
+			return res
+	var abs_try := ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(path) or FileAccess.file_exists(abs_try):
+		var img2 := Image.new()
+		var err := img2.load(abs_try if FileAccess.file_exists(abs_try) else path)
+		if err == OK:
+			_knockout_dark_backdrop(img2)
+			var tex2 := ImageTexture.create_from_image(img2)
+			_cache[key] = tex2
+			return tex2
+	return null
+
+
 static func prep_layer_image_for_composite(src: Image) -> Image:
 	## Trim an already-prepared layer for review burger snapshots. Patty textures
 	## are charred after their source backdrop is removed, so knocking out dark
