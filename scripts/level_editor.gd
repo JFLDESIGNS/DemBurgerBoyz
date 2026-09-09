@@ -37,6 +37,7 @@ var _gizmo_grab_origin := Vector3.ZERO
 var _gizmo_grab_obj := Vector3.ZERO
 var _place_counter := 0
 var _napkin_darkness_default := 0.0
+var _napkin_pattern_scale_default := 1.0
 
 
 func setup(game: Node, world: Node3D, grill: Node3D, main_cam: Camera3D) -> void:
@@ -674,7 +675,7 @@ func _rebuild_inspector() -> void:
 		UiFontsScript.apply_label(empty, false, 12)
 		empty.add_theme_color_override("font_color", Color(0.72, 0.78, 0.86))
 		_inspector.add_child(empty)
-		_add_napkin_darkness_controls(false)
+		_add_napkin_look_controls(false)
 		return
 	var name_lab := Label.new()
 	name_lab.text = _selected.name
@@ -692,7 +693,7 @@ func _rebuild_inspector() -> void:
 			_selected.scale = Vector3.ONE * v
 			_save_if_dressing()
 	)
-	_add_napkin_darkness_controls(_is_napkin(_selected))
+	_add_napkin_look_controls(_is_napkin(_selected))
 	if _selected is Light3D:
 		var light := _selected as Light3D
 		_add_inspect_spin("Brightness", light.light_energy, 0.0, 16.0, 0.05, func(v):
@@ -785,6 +786,12 @@ func _napkin_darkness_of(n: Node) -> float:
 	return clampf(float(n.get_meta("napkin_darkness")), 0.0, 0.90)
 
 
+func _napkin_pattern_of(n: Node) -> float:
+	if n == null or not n.has_meta("napkin_pattern_scale"):
+		return _napkin_pattern_scale_default
+	return clampf(float(n.get_meta("napkin_pattern_scale")), 0.25, 24.0)
+
+
 func _apply_napkin_darkness(mi: MeshInstance3D, darkness: float) -> void:
 	if mi == null:
 		return
@@ -792,10 +799,23 @@ func _apply_napkin_darkness(mi: MeshInstance3D, darkness: float) -> void:
 	mi.set_meta("napkin_darkness", d)
 	var mat := mi.material_override as StandardMaterial3D
 	if mat == null:
-		mat = _make_napkin_mat(d)
+		mat = _make_napkin_mat(d, _napkin_pattern_of(mi))
 		mi.material_override = mat
 	else:
 		mat.albedo_color = _napkin_tint(d)
+
+
+func _apply_napkin_pattern_scale(mi: MeshInstance3D, pattern_scale: float) -> void:
+	if mi == null:
+		return
+	var s: float = clampf(pattern_scale, 0.25, 24.0)
+	mi.set_meta("napkin_pattern_scale", s)
+	var mat := mi.material_override as StandardMaterial3D
+	if mat == null:
+		mat = _make_napkin_mat(_napkin_darkness_of(mi), s)
+		mi.material_override = mat
+	else:
+		mat.uv1_scale = Vector3(s, s, 1.0)
 
 
 func _set_all_napkin_darkness(darkness: float) -> void:
@@ -808,11 +828,26 @@ func _set_all_napkin_darkness(darkness: float) -> void:
 	_save_dressing()
 
 
-func _add_napkin_darkness_controls(include_selected: bool) -> void:
+func _set_all_napkin_pattern_scale(pattern_scale: float) -> void:
+	_napkin_pattern_scale_default = clampf(pattern_scale, 0.25, 24.0)
+	if _dressing == null:
+		return
+	for child in _dressing.get_children():
+		if child is MeshInstance3D and _is_napkin(child):
+			_apply_napkin_pattern_scale(child as MeshInstance3D, _napkin_pattern_scale_default)
+	_save_dressing()
+
+
+func _add_napkin_look_controls(include_selected: bool) -> void:
 	if include_selected and _selected is MeshInstance3D:
 		_add_inspect_spin("Napkin Darkness", _napkin_darkness_of(_selected), 0.0, 0.90, 0.01, func(v: float):
 			if _selected is MeshInstance3D and _is_napkin(_selected):
 				_apply_napkin_darkness(_selected as MeshInstance3D, v)
+				_save_if_dressing()
+		)
+		_add_inspect_spin("Pattern Scale", _napkin_pattern_of(_selected), 0.25, 24.0, 0.05, func(v: float):
+			if _selected is MeshInstance3D and _is_napkin(_selected):
+				_apply_napkin_pattern_scale(_selected as MeshInstance3D, v)
 				_save_if_dressing()
 		)
 	var has_napkin := false
@@ -824,6 +859,9 @@ func _add_napkin_darkness_controls(include_selected: bool) -> void:
 	if has_napkin or include_selected:
 		_add_inspect_spin("All Napkins Darkness", _napkin_darkness_default, 0.0, 0.90, 0.01, func(v: float):
 			_set_all_napkin_darkness(v)
+		)
+		_add_inspect_spin("All Napkins Pattern Scale", _napkin_pattern_scale_default, 0.25, 24.0, 0.05, func(v: float):
+			_set_all_napkin_pattern_scale(v)
 		)
 
 
@@ -977,12 +1015,13 @@ func _make_dressing_napkin() -> MeshInstance3D:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(0.26, 0.26)
 	mi.mesh = plane
-	mi.material_override = _make_napkin_mat(_napkin_darkness_default)
+	mi.material_override = _make_napkin_mat(_napkin_darkness_default, _napkin_pattern_scale_default)
 	mi.set_meta("napkin_darkness", _napkin_darkness_default)
+	mi.set_meta("napkin_pattern_scale", _napkin_pattern_scale_default)
 	return mi
 
 
-func _make_napkin_mat(darkness: float = 0.0) -> StandardMaterial3D:
+func _make_napkin_mat(darkness: float = 0.0, pattern_scale: float = 1.0) -> StandardMaterial3D:
 	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
 	for y in 8:
 		for x in 8:
@@ -993,6 +1032,8 @@ func _make_napkin_mat(darkness: float = 0.0) -> StandardMaterial3D:
 	mat.albedo_texture = tex
 	mat.albedo_color = _napkin_tint(darkness)
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	var s: float = clampf(pattern_scale, 0.25, 24.0)
+	mat.uv1_scale = Vector3(s, s, 1.0)
 	mat.roughness = 0.82
 	mat.metallic = 0.0
 	return mat
@@ -1036,9 +1077,11 @@ func _save_dressing() -> void:
 				cfg.set_value(SAVE_SECTION, p + "angle", (L as SpotLight3D).spot_angle)
 		if _is_napkin(n):
 			cfg.set_value(SAVE_SECTION, p + "dark", _napkin_darkness_of(n))
+			cfg.set_value(SAVE_SECTION, p + "pattern", _napkin_pattern_of(n))
 		i += 1
 	cfg.set_value(SAVE_SECTION, "count", i)
 	cfg.set_value(SAVE_SECTION, "napkin_darkness", _napkin_darkness_default)
+	cfg.set_value(SAVE_SECTION, "napkin_pattern", _napkin_pattern_scale_default)
 	cfg.save(SAVE_PATH)
 
 
@@ -1069,6 +1112,7 @@ func _load_dressing() -> void:
 	for child in _dressing.get_children():
 		child.queue_free()
 	_napkin_darkness_default = clampf(float(cfg.get_value(SAVE_SECTION, "napkin_darkness", 0.0)), 0.0, 0.90)
+	_napkin_pattern_scale_default = clampf(float(cfg.get_value(SAVE_SECTION, "napkin_pattern", 1.0)), 0.25, 24.0)
 	var count := int(cfg.get_value(SAVE_SECTION, "count", 0))
 	for i in count:
 		var p := "n%d_" % i
@@ -1121,9 +1165,14 @@ func _load_dressing() -> void:
 				(L as SpotLight3D).spot_range = float(cfg.get_value(SAVE_SECTION, p + "range", 3.2))
 				(L as SpotLight3D).spot_angle = float(cfg.get_value(SAVE_SECTION, p + "angle", 40.0))
 		if node is MeshInstance3D and kind == "napkin":
+			var napkin := node as MeshInstance3D
 			_apply_napkin_darkness(
-				node as MeshInstance3D,
+				napkin,
 				float(cfg.get_value(SAVE_SECTION, p + "dark", _napkin_darkness_default))
+			)
+			_apply_napkin_pattern_scale(
+				napkin,
+				float(cfg.get_value(SAVE_SECTION, p + "pattern", _napkin_pattern_scale_default))
 			)
 		_dressing.add_child(node)
 	_select(null)

@@ -1,0 +1,491 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://scripts/character_creator.gd" id="1_controller"]
+[ext_resource type="PackedScene" path="res://scenes/character_creator/modular_character_base.tscn" id="2_character"]
+
+[sub_resource type="ProceduralSkyMaterial" id="SkyMaterial"]
+sky_top_color = Color(0.025, 0.035, 0.065, 1)
+sky_horizon_color = Color(0.16, 0.19, 0.27, 1)
+ground_bottom_color = Color(0.025, 0.03, 0.045, 1)
+ground_horizon_color = Color(0.13, 0.15, 0.2, 1)
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("SkyMaterial")
+
+[sub_resource type="Environment" id="Environment"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+ambient_light_color = Color(0.65, 0.72, 0.92, 1)
+ambient_light_energy = 0.72
+reflected_light_source = 2
+tonemap_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="GroundMaterial"]
+albedo_color = Color(0.12, 0.135, 0.17, 1)
+roughness = 0.9
+
+[sub_resource type="PlaneMesh" id="GroundMesh"]
+material = SubResource("GroundMaterial")
+size = Vector2(9, 9)
+
+[sub_resource type="StyleBoxFlat" id="SidebarStyle"]
+bg_color = Color(0.055, 0.065, 0.095, 0.96)
+border_width_right = 1
+border_color = Color(0.35, 0.4, 0.52, 0.45)
+
+[sub_resource type="StyleBoxFlat" id="HintStyle"]
+bg_color = Color(0.04, 0.05, 0.075, 0.84)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+
+[node name="CharacterCreator" type="Node"]
+script = ExtResource("1_controller")
+
+[node name="World" type="Node3D" parent="."]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="World"]
+environment = SubResource("Environment")
+
+[node name="KeyLight" type="DirectionalLight3D" parent="World"]
+rotation = Vector3(-0.72, -0.58, 0)
+light_color = Color(1, 0.86, 0.74, 1)
+light_energy = 1.25
+shadow_enabled = true
+
+[node name="FillLight" type="OmniLight3D" parent="World"]
+position = Vector3(-2.1, 2.4, 2.2)
+light_color = Color(0.47, 0.67, 1, 1)
+light_energy = 5.0
+omni_range = 6.0
+
+[node name="Ground" type="MeshInstance3D" parent="World"]
+mesh = SubResource("GroundMesh")
+
+[node name="Character" parent="World" instance=ExtResource("2_character")]
+defer_initial_appearance = true
+
+[node name="CameraRig" type="Node3D" parent="World"]
+position = Vector3(0, 1.05, 0)
+
+[node name="Camera3D" type="Camera3D" parent="World/CameraRig"]
+position = Vector3(0, 0, 3.35)
+current = true
+fov = 38.0
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Sidebar" type="PanelContainer" parent="UI"]
+offset_right = 330.0
+anchor_bottom = 1.0
+grow_vertical = 2
+theme_override_styles/panel = SubResource("SidebarStyle")
+
+[node name="Margin" type="MarginContainer" parent="UI/Sidebar"]
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="Controls" type="VBoxContainer" parent="UI/Sidebar/Margin"]
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_colors/font_color = Color(1, 0.78, 0.32, 1)
+theme_override_font_sizes/font_size = 25
+text = "CHARACTER CREATOR"
+
+[node name="Subtitle" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_colors/font_color = Color(0.64, 0.7, 0.82, 1)
+text = "Texture-free modular foundation"
+
+[node name="Divider1" type="HSeparator" parent="UI/Sidebar/Margin/Controls"]
+
+[node name="BodyLabel" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_font_sizes/font_size = 16
+text = "TOON BODY BASE"
+
+[node name="BodySelect" type="OptionButton" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 38)
+
+[node name="SkinLabel" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_font_sizes/font_size = 16
+text = "SKIN TONE"
+
+[node name="SkinSwatches" type="GridContainer" parent="UI/Sidebar/Margin/Controls"]
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+columns = 4
+
+[node name="CustomColor" type="ColorPickerButton" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 38)
+text = "Custom skin color"
+
+[node name="Divider2" type="HSeparator" parent="UI/Sidebar/Margin/Controls"]
+
+[node name="NameLabel" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_font_sizes/font_size = 16
+text = "CUSTOMER NAME"
+
+[node name="CharacterName" type="LineEdit" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 38)
+placeholder_text = "New Customer"
+text = "New Customer"
+max_length = 48
+
+[node name="RandomizeButton" type="Button" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 52)
+text = "RANDOMIZE CHARACTER"
+
+[node name="SaveButton" type="Button" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 42)
+text = "Save customer design"
+
+[node name="LoadButton" type="Button" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+text = "Load last character"
+
+[node name="ResetViewButton" type="Button" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+text = "Reset camera"
+
+[node name="AnimationLabel" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_font_sizes/font_size = 16
+text = "ANIMATION PREVIEW"
+
+[node name="AnimationSelect" type="OptionButton" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="AnimationButton" type="Button" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 42)
+text = "Play animation"
+
+[node name="PoseRigLabel" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_font_sizes/font_size = 16
+text = "POSE RIG"
+
+[node name="PoseRigHelp" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_colors/font_color = Color(0.68, 0.73, 0.8, 1)
+text = "Drag hands/feet to pose. Elbow and knee points stay on the joints and steer their bend. Shoulder, hip/top-leg, ankle, toe/foot, waist, torso, neck, and head points add direct 3D control. Sliders remain for precision."
+autowrap_mode = 2
+
+[node name="ControlRigToggle" type="CheckButton" parent="UI/Sidebar/Margin/Controls"]
+button_pressed = true
+text = "Show 3D IK controls"
+
+[node name="PoseAdjustments" type="VBoxContainer" parent="UI/Sidebar/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="ResetPoseButton" type="Button" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 38)
+text = "Reset pose to rest"
+
+[node name="SavedLabel" type="Label" parent="UI/Sidebar/Margin/Controls"]
+theme_override_colors/font_color = Color(0.95, 0.72, 0.3, 1)
+text = "SAVED CUSTOMERS"
+
+[node name="SavedCustomers" type="VBoxContainer" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 120)
+theme_override_constants/separation = 6
+
+[node name="Status" type="Label" parent="UI/Sidebar/Margin/Controls"]
+custom_minimum_size = Vector2(0, 54)
+theme_override_colors/font_color = Color(0.68, 0.73, 0.8, 1)
+text = "Ready"
+autowrap_mode = 2
+
+[node name="ModulesPanel" type="PanelContainer" parent="UI"]
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -290.0
+grow_horizontal = 0
+grow_vertical = 2
+theme_override_styles/panel = SubResource("SidebarStyle")
+
+[node name="Margin" type="MarginContainer" parent="UI/ModulesPanel"]
+theme_override_constants/margin_left = 22
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 22
+theme_override_constants/margin_bottom = 24
+
+[node name="Controls" type="VBoxContainer" parent="UI/ModulesPanel/Margin"]
+theme_override_constants/separation = 9
+
+[node name="ModulesRandomizeButton" type="Button" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 52)
+text = "RANDOMIZE CHARACTER"
+
+[node name="Title" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_colors/font_color = Color(1, 0.78, 0.32, 1)
+theme_override_font_sizes/font_size = 22
+text = "FACE + HEAD"
+
+[node name="EyesLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "EYES"
+
+[node name="EyesSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="EyeAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="EyeSpecularLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "EYE SPECULAR"
+
+[node name="EyeSpecularAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="EyeRotationLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "INDIVIDUAL EYE YAW"
+
+[node name="EyeRotationAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="LashLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "EYELASHES"
+
+[node name="LashSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="LashColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.141176, 0.094118, 0.090196, 1)
+text = "Lash color"
+
+[node name="LashAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="EyebrowLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "EYEBROWS"
+
+[node name="EyebrowSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="EyebrowColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.207843, 0.137255, 0.113725, 1)
+text = "Eyebrow color"
+
+[node name="EyebrowAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="NoseLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "NOSE"
+
+[node name="NoseSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="NoseColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.909804, 0.258824, 0.258824, 1)
+text = "Nose color"
+
+[node name="NoseAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="MouthLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "MOUTH"
+
+[node name="MouthSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="MouthColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.227451, 0.082353, 0.094118, 1)
+text = "Mouth color"
+
+[node name="MouthAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="CheekLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "CHEEKS"
+
+[node name="CheekSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="CheekColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.95, 0.12, 0.18, 0.72)
+edit_alpha = true
+text = "Cheek color / opacity"
+
+[node name="CheekAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="EarLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "EARS"
+
+[node name="EarColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.847059, 0.545098, 0.372549, 1)
+text = "Ear color"
+
+[node name="EarAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="Divider" type="HSeparator" parent="UI/ModulesPanel/Margin/Controls"]
+
+[node name="HairLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "HAIR"
+
+[node name="HairSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="HairColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+text = "Hair color"
+
+[node name="HairAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="FacialHairLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "FACIAL HAIR"
+
+[node name="FacialHairSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="FacialHairColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+text = "Facial hair color"
+
+[node name="FacialHairAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="HatLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "HAT / HEADWEAR"
+
+[node name="HatSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="HatColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+text = "Hat color"
+
+[node name="HatAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="GlassesLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "GLASSES / SUNGLASSES"
+
+[node name="GlassesSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="GlassesColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.125, 0.14, 0.17, 1)
+text = "Frame / lens color"
+
+[node name="GlassesAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="MakeupLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "MAKEUP"
+
+[node name="MakeupSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="MakeupColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.55, 0.18, 0.45, 0.72)
+edit_alpha = true
+text = "Makeup color / opacity"
+
+[node name="MakeupAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="JewelryLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "JEWELRY"
+
+[node name="JewelrySelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="JewelryColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(0.91, 0.78, 0.3, 1)
+text = "Jewelry color"
+
+[node name="JewelryAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="WardrobeDivider" type="HSeparator" parent="UI/ModulesPanel/Margin/Controls"]
+
+[node name="TopLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "TOPS"
+
+[node name="TopSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="TopColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+color = Color(0.247059, 0.415686, 0.270588, 1)
+text = "Top color"
+
+[node name="TopAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="GraphicLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "T-SHIRT GRAPHIC"
+
+[node name="GraphicSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="GraphicColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 32)
+color = Color(1, 1, 1, 1)
+text = "Graphic color"
+
+[node name="GraphicAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="BottomLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "BOTTOMS"
+
+[node name="BottomSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="BottomColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+color = Color(0.2, 0.305882, 0.407843, 1)
+text = "Bottom color"
+
+[node name="BottomAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="ShoeLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+text = "SHOES"
+
+[node name="ShoeSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+
+[node name="ShoeColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
+custom_minimum_size = Vector2(0, 36)
+color = Color(0.419608, 0.247059, 0.164706, 1)
+text = "Shoe color"
+
+[node name="ShoeAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
+theme_override_constants/separation = 3
+
+[node name="Source" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
+size_flags_vertical = 3
+theme_override_colors/font_color = Color(0.58, 0.64, 0.74, 1)
+text = "Hair + hats + glasses: CC0 sourced packs\nShirt graphics: Game-Icons.net CC-BY\nClothes + shoes: exact-weight procedural modules"
+vertical_alignment = 2
+autowrap_mode = 2
+
+[node name="Help" type="PanelContainer" parent="UI"]
+offset_left = 355.0
+offset_top = 20.0
+offset_right = 820.0
+offset_bottom = 61.0
+theme_override_styles/panel = SubResource("HintStyle")
+
+[node name="Label" type="Label" parent="UI/Help"]
+text = "Click the colored markers to jump to sliders  •  Left drag: rotate  •  Wheel: zoom"
+horizontal_alignment = 1

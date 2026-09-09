@@ -77,7 +77,11 @@ var physical_garbage_scale := PHYSICAL_GARBAGE_DEFAULT_SCALE
 var physical_garbage_symbol_offset := Vector3.ZERO
 var physical_garbage_symbol_rot := Vector3.ZERO
 var physical_garbage_symbol_scale := 1.0
-const ICECREAM_MASCOT_MESH := "res://assets/props/smiling_ice_cream_sf.obj"
+const ICECREAM_MASCOT_SCENE := "res://assets/props/ice_cream/ice-cream.fbx"
+const ICECREAM_MASCOT_ALBEDO := "res://assets/props/ice_cream/ice-cream_ice-cream_BaseColor.png"
+const ICECREAM_MASCOT_NORMAL := "res://assets/props/ice_cream/ice-cream_ice-cream_Normal.png"
+const ICECREAM_MASCOT_ROUGH := "res://assets/props/ice_cream/ice-cream_ice-cream_Roughness.png"
+const ICECREAM_MASCOT_EMIT := "res://assets/props/ice_cream/ice-cream_ice-cream_Emissive.png"
 const ICECREAM_MASCOT_TARGET_H := 0.30
 const GRILL_STANDOFF_DIAMETER := 0.055 ## ~2.2" stainless legs under the cook-side corners
 const GRILL_STANDOFF_HEIGHT := 0.52
@@ -185,8 +189,12 @@ const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd
 const GrillTttScript := preload("res://scripts/grill_ttt.gd")
 const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
 const LocationMapUIScript := preload("res://scripts/location_map_ui.gd")
+const PcbPuzzleScript := preload("res://scripts/pcb_puzzle.gd")
 const PhoneSnakScript := preload("res://scripts/phone_snak.gd")
 const PhoneGnopScript := preload("res://scripts/phone_gnop.gd")
+const PhoneSmushScript := preload("res://scripts/phone_smush.gd")
+const ShopProductPreviewScript := preload("res://scripts/shop_product_preview.gd")
+const PhoneMuvyeScript := preload("res://scripts/phone_muvye.gd")
 const HsbColorPickerScript := preload("res://scripts/hsb_color_picker.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
@@ -211,6 +219,9 @@ const BANK_CFG_SECTION := "bank"
 const BANK_SAVINGS_RATE_DEFAULT := 1.0
 const BANK_LOAN_RATE_DEFAULT := 5.0
 const ECONOMY_CFG_SECTION := "economy"
+const TICKET_LOOK_CFG_SECTION := "ticket_look"
+const TICKET_SATURATION_DEFAULT := 0.85 ## 15% more desaturated than full color
+const TICKET_OPACITY_DEFAULT := 1.0
 const CHALLENGE_INTERVAL_DEFAULT := 180.0
 const CHALLENGE_CHANCE_DEFAULT := 0.5
 const CHALLENGE_COUNT_SMALL_DEFAULT := 10
@@ -224,12 +235,14 @@ const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
 const SHOP_GRILL_ROOMBA := "grill_roomba"
 const SHOP_FRIDGE_UPGRADE := "fridge_upgrade"
+const SHOP_GOLD_SPATULA := "gold_spatula"
 const SHOP_TRUCK := "truck_buyout"
 const SHOP_SODA_MACHINE_COST := 300.0
 const SHOP_ICECREAM_MACHINE_COST := 500.0
 const SHOP_FRYER_MACHINE_COST := 100.0
 const SHOP_GRILL_ROOMBA_COST := 250.0
 const SHOP_FRIDGE_UPGRADE_COST := 400.0
+const SHOP_GOLD_SPATULA_COST := 175.0
 const BACON_PATIENCE_RESTORE := 0.10
 const BACON_MOUTH_PICK_PX := 130.0
 const CUP_MOUTH_HAND_PX := 155.0 ## Auto-hand a held drink when cursor is this close to a face
@@ -311,8 +324,6 @@ var challenge_hud_count: Label = null
 var challenge_hud_clock: Label = null
 var challenge_hud_bar: ProgressBar = null
 var _challenge_banner_tween: Tween = null
-var _challenge_early_test_armed := false
-const CHALLENGE_EARLY_TEST_WINDOW := 60.0
 var credit_score: int = 500
 var bank_lifetime_repaid: float = 0.0
 var combo: int = 0
@@ -895,9 +906,9 @@ var grill_residue_chunks: Array = [] ## per slot: Array of MeshInstance3D pieces
 var grill_residue_centers: Array = [] ## Vector3 per slot
 var grill_residue_kind: Array = [] ## "patty" / "cup" so multiplayer rebuilds the same debris
 var debris_trap_root: Node3D = null
-var debris_piles: Array = [] ## loose scraped strips {root, mass, slot}
-var _debris_pile_mat: StandardMaterial3D = null
-var _debris_strip_mesh: ArrayMesh = null
+var debris_piles: Array = [] ## loose scraped piles {root, mass, slot}
+var _debris_pile_mesh: Mesh = null
+var _debris_pile_tex: Texture2D = null
 var brush_swipe_travel: Array = [] ## movement accum while over each residue
 var brush_last_pos: Vector3 = Vector3.ZERO
 var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
@@ -930,14 +941,16 @@ const RESIDUE_SIZE_SCALE := 0.85 ## Burger leave-behind stain / flecks
 const DEBRIS_INCH := 0.0254
 const DEBRIS_STEEL_TOP := 0.0225 ## Zone panel half-height — top of the steel.
 const DEBRIS_TRAP_W := 12.0 * DEBRIS_INCH ## 1 ft wide
-const DEBRIS_TRAP_D := 2.0 * DEBRIS_INCH ## 2 in deep
-const DEBRIS_TRAP_H := 0.018 ## trough sits on the steel so it reads
+const DEBRIS_TRAP_D := 1.0 * DEBRIS_INCH ## 1 in toward the cook — thin slot, not a black bar
+const DEBRIS_TRAP_H := 0.010 ## low strip on the steel
 const DEBRIS_TRAP_TOWARD_COOK := 6.0 * DEBRIS_INCH ## pull the far-edge trap closer to the cook
-const DEBRIS_PILE_W_MIN := 4.0 * DEBRIS_INCH
-const DEBRIS_PILE_W_MAX := 6.0 * DEBRIS_INCH
-const DEBRIS_PILE_H := 0.011 ## half the old mound height
-const DEBRIS_PILE_Z_FRAC := 0.20 ## skinny depth; long axis stays sideways (X)
-const DEBRIS_PILE_MERGE_R := 0.20
+const DEBRIS_PILE_TEX_PATH := "res://assets/grill/debris_pile.png"
+const DEBRIS_PILE_TEX_W := 475.0
+const DEBRIS_PILE_TEX_H := 77.0
+const DEBRIS_PILE_W_MIN := 12.4 * DEBRIS_INCH
+const DEBRIS_PILE_W_MAX := 18.8 * DEBRIS_INCH
+const DEBRIS_PILE_LIFT := 0.0025
+const DEBRIS_PILE_MERGE_R := 0.32
 const DEBRIS_PILE_PUSH_SCALE := 1.15
 const DEBRIS_PILE_PUSH_MAX := 0.055
 ## Same-spot cook dwell → roll once; 80% chance to drop debris while still cooking.
@@ -1121,6 +1134,8 @@ var _cut_collector_cut_done: bool = false
 var _cut_collector_seq: int = 0
 var _boss_caption_seq: int = 0
 var _boss_intro_seq: int = 0
+var _boss_pep_pending: bool = false
+var _boss_intro_running: bool = false
 var cut_buyout_btn: Button = null
 ## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
 var glock_held: bool = false
@@ -1272,12 +1287,18 @@ var phone_maps_page: Control = null
 var phone_maps_box: VBoxContainer = null
 var phone_maps_here: Label = null
 var phone_maps_preview: Control = null
+var phone_maps_content: Control = null
 var phone_maps_art: TextureRect = null
 var phone_maps_pin_layer: Control = null
+var _phone_map_zoom: float = 1.15
+var _phone_map_pan: Vector2 = Vector2.ZERO
+var _phone_map_dragging: bool = false
 var phone_bank_page: Control = null
 var phone_bank_box: VBoxContainer = null
 var phone_snak_page: Control = null
 var phone_gnop_page: Control = null
+var phone_smush_page: Control = null
+var phone_muvye_page: Control = null
 var _phone_app_id: String = "home"
 var _phone_scroll_dragging: bool = false
 var _phone_scroll_drag_pending: bool = false
@@ -1377,6 +1398,7 @@ var owned_machines: Dictionary = {
 	SHOP_FRYER_MACHINE: false,
 	SHOP_GRILL_ROOMBA: false,
 	SHOP_FRIDGE_UPGRADE: false,
+	SHOP_GOLD_SPATULA: false,
 }
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
@@ -2193,9 +2215,12 @@ var start_patty_preview_cheesed: bool = false
 var start_patty_preview_done_popped: bool = false
 var start_patty_preview_done_pop_t: float = -1.0
 const START_PATTY_PREVIEW_SCALE := Vector3(1.08, 1.08, 1.08)
-## Cached order-slip paper (vignette) textures.
-var _ticket_paper_tex: ImageTexture = null
-var _ticket_paper_tex_sel: ImageTexture = null
+## Cached professional order-slip paper texture. Selection tint remains dynamic.
+const TICKET_PAPER_TEXTURE_PATH := "res://assets/ui/order_ticket_paper_alpha.png"
+var _ticket_paper_tex: Texture2D = null
+var _ticket_paper_tex_sel: Texture2D = null
+var ticket_saturation: float = TICKET_SATURATION_DEFAULT
+var ticket_opacity: float = TICKET_OPACITY_DEFAULT
 const STREET_MATTE_BASE_SIZE := Vector2(18.2, 9.1)
 ## Far enough that sidewalk NPCs always sit in front of the paint.
 const STREET_MATTE_BASE_Z := 11.5
@@ -2236,6 +2261,12 @@ const CUTTING_BOARD_GAP := 0.06
 const CUTTING_BOARD_Z_OFFSET := -0.22 ## toward the cook (negative Z = back from the window)
 const CUTTING_BOARD_WOOD_TINT := Color(0.90, 0.74, 0.48, 1.0)
 const CUTTING_BOARD_RIM_TINT := Color(0.30, 0.17, 0.09, 1.0)
+const CUTTING_BOARD_SCENE := "res://assets/props/desk/desk2.fbx"
+const CUTTING_BOARD_ALBEDO := "res://assets/props/desk/desk_bun_BaseColor.jpg"
+const CUTTING_BOARD_XFORM_CFG_SECTION := "cutting_board_xform"
+var cutting_board_rot := Vector3.ZERO
+var cutting_board_scale := Vector3.ONE
+var cutting_board_darkness: float = 1.0
 const SMOKE2_SCENE_PATH := "res://models/smokecyl/smoke2.fbx"
 const SMOKE2_ALPHA_TEX_PATH := "res://models/smokecyl/alpha2.png"
 const SMOKE2_BASECOLOR_TEX_PATH := "res://models/smokecyl/smoke2_DefaultMaterial_BaseColor.png"
@@ -2368,9 +2399,14 @@ const SODA_FOUNTAIN_MODEL_PATH := "res://models/sodamachine/newmachine1.fbx"
 const SODA_FOUNTAIN_EDIT_FBX := "res://models/sodamachine/newmachine1.fbx"
 const SODA_FOUNTAIN_GLB_PATH := "res://models/sodamachine/soda_fountain.glb"
 const SODA_FOUNTAIN_SCALE := 1.9 ## Authored cm→m already applied; enlarge to counter size
+const MACHINE_ICE_BADGE_PATH := "res://assets/machine_decals/ice_badge.png"
+const MACHINE_SODA_BADGE_PATH := "res://assets/machine_decals/soda_badge.png"
+const MACHINE_SOFT_SERVE_DECAL_PATH := "res://assets/machine_decals/soft_serve_side_decal.png"
+const MACHINE_METAL_BADGE_PATH := "res://assets/machine_decals/burger_pals_metal_badge.png"
+const TIP_SIGN_TEX_PATH := "res://assets/machine_decals/tips_handwritten_card.png"
 const SODA_BRAND_LOGO_PATHS: Array[String] = [
-	"res://models/sodamachine/textures/Logos-01.png",
-	"res://models/sodamachine/textures/Logos-02.png",
+	MACHINE_SODA_BADGE_PATH,
+	MACHINE_ICE_BADGE_PATH,
 	"res://models/sodamachine/textures/Logos-03.png",
 	"res://models/sodamachine/textures/Logos-04.png",
 ]
@@ -2484,6 +2520,10 @@ const SODA_FLAVOR_WARM: Dictionary = {
 	"orange": Color(1.0, 0.54, 0.06),
 }
 const INCH_TO_M := 0.0254
+## Camera-right is world −X. 30% darker = albedo 0.70.
+const MACHINE_LABEL_CAM_RIGHT_M := INCH_TO_M
+const SODA_LABEL_CAM_RIGHT_M := 3.0 * INCH_TO_M ## 1" prior + 2" more
+const MACHINE_LABEL_ALBEDO := Color(0.70, 0.70, 0.70, 1.0)
 ## Carry plane above grill steel (NOT the fill seat). Tunable in Hidden → SODA CUP HEIGHTS.
 const CUP_HOLD_HEIGHT_DEFAULT := 0.0762 ## ~3" — carry only; fill snaps to drip deck
 ## Fill / park seat offset above the fountain drip-deck. Tunable in Hidden menu.
@@ -2772,8 +2812,8 @@ const BG_PEOPLE_COUNT := 2
 const BG_PEOPLE_MAX_ONSCREEN := 2
 const BG_PEOPLE_Z := 8.65 ## Far sidewalk in front of the shops, in front of street cars.
 const BG_PEOPLE_EDGE_X := 8.4
-const BG_PEOPLE_SPEED_MIN := 0.85
-const BG_PEOPLE_SPEED_MAX := 1.45
+const BG_PEOPLE_SPEED_MIN := 0.72
+const BG_PEOPLE_SPEED_MAX := 1.58
 const BG_PEOPLE_WAIT_MIN := 9.0
 const BG_PEOPLE_WAIT_MAX := 24.0
 const BG_PEOPLE_WALKERS_PER_RUNNER := 5
@@ -3189,6 +3229,16 @@ const LOCATION_CFG_PATH := "user://truck_location.cfg"
 var current_location_id: String = TruckLocationsScript.DEFAULT_ID
 var _location_map_layer: CanvasLayer = null
 var _location_map_ui: Control = null
+var _pcb_puzzle_layer: CanvasLayer = null
+var _pcb_puzzle_ui: Control = null
+var _pcb_repair_machine: String = ""
+const MACHINE_BREAK_EVERY_USES := 10
+const MACHINE_BREAK_CHANCE := 0.5
+var _machine_use_count: Dictionary = {} ## id -> uses since last roll
+var _machine_broken: Dictionary = {} ## id -> bool
+var _machine_sparks: Dictionary = {} ## id -> GPUParticles3D
+var _machine_wrench: Dictionary = {} ## id -> Sprite3D
+var _wrench_tex: Texture2D = null
 var location_map_btn: Button = null ## start-screen CTA
 var game_over_location_btn: Button = null ## area picker shown between shifts
 
@@ -3273,6 +3323,7 @@ func _ready() -> void:
 	_setup_lasso_tool()
 	_setup_level_editor()
 	_setup_location_map_ui()
+	_setup_pcb_puzzle()
 	_setup_game_over_location_button()
 	_setup_cut_buyout_button()
 	_layout_top_bar_hud()
@@ -4236,7 +4287,6 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	_reset_bts_day1_flow()
 	_reset_challenge_state(true)
 	_challenge_roll_timer = challenge_interval_sec
-	_challenge_early_test_armed = not tutorial_mode
 	active_station = STATION_CRAFT
 	complaint_station = -1
 	_melody_pressed.clear()
@@ -4311,7 +4361,6 @@ func _restart() -> void:
 		_reset_bts_day1_flow()
 	_reset_challenge_state(true)
 	_challenge_roll_timer = challenge_interval_sec
-	_challenge_early_test_armed = not tutorial_mode
 	active_station = STATION_CRAFT
 	complaint_station = -1
 	_clear_all_patty()
@@ -4328,6 +4377,7 @@ func _restart() -> void:
 		window_cat.reset_shift(true)
 	_clear_all_stations()
 	_reset_icecream_cone_to_home()
+	_reset_machine_breaks()
 	_seed_cutting_board_buns()
 	_clear_customers()
 	_reset_service_window_open()
@@ -4491,6 +4541,7 @@ func _process(delta: float) -> void:
 		_update_held_burnt_icecream_cone(delta)
 	if fryer_held_index >= 0:
 		_update_held_fryer_basket(delta)
+	_update_machine_breaks(delta)
 	if fries_pack_held:
 		_update_held_fries_pack(delta)
 	if spilled_fry_held:
@@ -4593,6 +4644,7 @@ func _process(delta: float) -> void:
 				_try_spawn_disguise_cat()
 			if not shift_closing and not _challenge_blocks_spawns():
 				_update_cut_collector_wawa(delta)
+			_try_start_pending_boss_pep()
 			if not _challenge_blocks_spawns():
 				spawn_timer -= delta
 			var cap := _customer_cap()
@@ -4602,6 +4654,8 @@ func _process(delta: float) -> void:
 				# 	_spawn_terrorist_wave()
 				# 	spawn_timer = _next_spawn_delay()
 				if _challenge_blocks_spawns():
+					pass
+				elif _has_cut_collector() or _boss_pep_pending or _boss_intro_running:
 					pass
 				elif not _maybe_begin_bts_day1_performance():
 					_spawn_customer()
@@ -4824,6 +4878,8 @@ func _next_spawn_delay() -> float:
 func _unhandled_input(event: InputEvent) -> void:
 	if _try_level_editor_hotkey(event):
 		return
+	if _pcb_puzzle_is_open():
+		return
 	if level_editor != null and level_editor.is_active():
 		return
 	## Audio debug works on title / pause / in-shift.
@@ -5035,6 +5091,20 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		if not level_editor.is_pointer_over_ui(_event_screen_pos(event)):
+			get_viewport().set_input_as_handled()
+		return
+	if _try_pcb_puzzle_hotkey(event):
+		get_viewport().set_input_as_handled()
+		return
+	if _pcb_puzzle_is_open():
+		if event is InputEventKey:
+			var pk: InputEventKey = event as InputEventKey
+			if pk.pressed and not pk.echo and _pcb_puzzle_ui != null and _pcb_puzzle_ui.has_method("handle_key"):
+				if bool(_pcb_puzzle_ui.call("handle_key", pk)):
+					get_viewport().set_input_as_handled()
+					return
+		## Keep kitchen grabs from firing under the board. GUI still gets mouse.
+		if event is InputEventKey:
 			get_viewport().set_input_as_handled()
 		return
 	if _handle_phone_arcade_key(event):
@@ -5304,6 +5374,9 @@ func _input(event: InputEvent) -> void:
 			if _try_click_tip_jar(_strip_mouse_pos(event)):
 				get_viewport().set_input_as_handled()
 				return
+			if _try_machine_wrench_click(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if _try_fryer_basket_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
@@ -5411,6 +5484,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if _pcb_puzzle_is_open():
+			_close_pcb_puzzle()
+			get_viewport().set_input_as_handled()
+			return
 		if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
 			_location_map_ui.close()
 			get_viewport().set_input_as_handled()
@@ -5769,6 +5846,12 @@ func _handle_phone_arcade_key(event: InputEvent) -> bool:
 	if _phone_app_id == "gnop" and phone_gnop_page != null and is_instance_valid(phone_gnop_page):
 		if phone_gnop_page.has_method("handle_key"):
 			return bool(phone_gnop_page.call("handle_key", key))
+	if _phone_app_id == "smush" and phone_smush_page != null and is_instance_valid(phone_smush_page):
+		if phone_smush_page.has_method("handle_key"):
+			return bool(phone_smush_page.call("handle_key", key))
+	if _phone_app_id == "muvye" and phone_muvye_page != null and is_instance_valid(phone_muvye_page):
+		if phone_muvye_page.has_method("handle_key"):
+			return bool(phone_muvye_page.call("handle_key", key))
 	return false
 
 
@@ -6648,6 +6731,7 @@ func _build_3d_world() -> void:
 	_load_grill_surface_light_settings()
 	_load_window_sill_glass_settings()
 	_build_flat_top_grill()
+	_load_cutting_board_xform_settings()
 	_build_burner_flames()
 	_build_cutting_board_prop()
 	_build_cheese_station_prop()
@@ -8989,6 +9073,37 @@ func _boost_hand_spatula_draw(root: Node3D) -> void:
 		dup.no_depth_test = false
 		dup.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
 		mi.material_override = dup
+	_refresh_gold_spatula_finish()
+
+
+func _gold_spatula_material() -> StandardMaterial3D:
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Color("FFD34E")
+	gold.metallic = 0.88
+	gold.roughness = 0.20
+	gold.render_priority = 22
+	gold.no_depth_test = false
+	gold.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	return gold
+
+
+func _set_spatula_gold_finish(root: Node3D, gold_on: bool, remember_original: bool = true) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	for child in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi == null:
+			continue
+		if remember_original and not mi.has_meta("gold_spatula_original_material"):
+			mi.set_meta("gold_spatula_original_material", mi.material_override)
+		if gold_on:
+			mi.material_override = _gold_spatula_material()
+		elif remember_original and mi.has_meta("gold_spatula_original_material"):
+			mi.material_override = mi.get_meta("gold_spatula_original_material") as Material
+
+
+func _refresh_gold_spatula_finish() -> void:
+	_set_spatula_gold_finish(hand_spatula_visual, bool(owned_machines.get(SHOP_GOLD_SPATULA, false)))
 
 
 func _pointer_over_glove_ui(screen_pos: Vector2) -> bool:
@@ -11506,6 +11621,169 @@ func _build_flat_top_grill() -> void:
 	_build_debris_trap()
 
 
+func _build_grill_surface_toys() -> void:
+	## Ice-cream character + wooden desk sit on the steel; click to lift, scroll to spin.
+	if world == null:
+		return
+	var stale: Array = []
+	for item in burgerpack_inspect_items:
+		var area := item as Area3D
+		if area != null and is_instance_valid(area) and bool(area.get_meta("grill_toy", false)):
+			stale.append(area)
+	for area in stale:
+		burgerpack_inspect_items.erase(area)
+		area.queue_free()
+	var ice_home := Vector3(GRILL_CENTER_X + 0.58, GRILL_SURFACE_Y + BURGERPACK_SIT_Y, GRILL_SURFACE_Z + 0.22)
+	var desk_home := Vector3(GRILL_CENTER_X - 0.58, GRILL_SURFACE_Y + BURGERPACK_SIT_Y, GRILL_SURFACE_Z + 0.22)
+	_spawn_grill_toy(
+		"res://assets/props/ice_cream/ice-cream.fbx",
+		"res://assets/props/ice_cream/ice-cream_ice-cream_BaseColor.png",
+		"res://assets/props/ice_cream/ice-cream_ice-cream_Normal.png",
+		"res://assets/props/ice_cream/ice-cream_ice-cream_Roughness.png",
+		"res://assets/props/ice_cream/ice-cream_ice-cream_Emissive.png",
+		ice_home,
+		0.22,
+		"Ice Cream"
+	)
+	_spawn_grill_toy(
+		"res://assets/props/desk/desk2.fbx",
+		"res://assets/props/desk/desk_bun_BaseColor.jpg",
+		"",
+		"",
+		"",
+		desk_home,
+		0.28,
+		"Desk"
+	)
+
+
+func _spawn_grill_toy(
+		scene_path: String,
+		albedo_path: String,
+		normal_path: String,
+		rough_path: String,
+		emit_path: String,
+		home: Vector3,
+		target_size: float,
+		label: String
+) -> void:
+	if not ResourceLoader.exists(scene_path):
+		push_warning("Grill toy missing: %s" % scene_path)
+		return
+	var packed := load(scene_path) as PackedScene
+	if packed == null:
+		return
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	_apply_grill_toy_materials(
+		visual,
+		load(albedo_path) as Texture2D if albedo_path != "" and ResourceLoader.exists(albedo_path) else null,
+		load(normal_path) as Texture2D if normal_path != "" and ResourceLoader.exists(normal_path) else null,
+		load(rough_path) as Texture2D if rough_path != "" and ResourceLoader.exists(rough_path) else null,
+		load(emit_path) as Texture2D if emit_path != "" and ResourceLoader.exists(emit_path) else null
+	)
+	_fit_grill_toy_visual(visual, target_size)
+	var area := Area3D.new()
+	area.name = "GrillToy_%s" % label.replace(" ", "")
+	area.position = home
+	area.collision_layer = BURGERPACK_INSPECT_LAYER
+	area.collision_mask = 0
+	area.monitoring = false
+	area.monitorable = true
+	area.input_ray_pickable = true
+	var colshape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(maxf(target_size * 0.95, 0.16), 0.16, maxf(target_size * 0.95, 0.16))
+	colshape.shape = box
+	colshape.position = Vector3(0.0, 0.07, 0.0)
+	area.add_child(colshape)
+	visual.name = "Visual"
+	area.add_child(visual)
+	area.set_meta("home_pos", home)
+	area.set_meta("label", label)
+	area.set_meta("grill_toy", true)
+	area.set_meta("no_trash", true)
+	world.add_child(area)
+	burgerpack_inspect_items.append(area)
+
+
+func _mesh_aabb_local(root: Node3D) -> AABB:
+	var acc := AABB()
+	var any := false
+	for child in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var xf := Transform3D.IDENTITY
+		var n: Node = mi
+		while n != null and n != root:
+			if n is Node3D:
+				xf = (n as Node3D).transform * xf
+			n = n.get_parent()
+		var a: AABB = xf * mi.get_aabb()
+		if not any:
+			acc = a
+			any = true
+		else:
+			acc = acc.merge(a)
+	return acc
+
+
+func _fit_grill_toy_visual(visual: Node3D, target_size: float) -> void:
+	var aabb: AABB = _mesh_aabb_local(visual)
+	if aabb.size == Vector3.ZERO:
+		visual.scale = Vector3.ONE * 0.01
+		return
+	var longest: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+	var s: float = target_size / maxf(longest, 0.001)
+	visual.scale = Vector3.ONE * s
+	visual.position = Vector3(
+		-(aabb.position.x + aabb.size.x * 0.5) * s,
+		-aabb.position.y * s,
+		-(aabb.position.z + aabb.size.z * 0.5) * s
+	)
+	for child in visual.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi != null:
+			mi.sorting_offset = 6.0
+
+
+func _apply_grill_toy_materials(
+		node: Node,
+		albedo: Texture2D,
+		normal: Texture2D,
+		rough: Texture2D,
+		emit: Texture2D
+) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.cull_mode = BaseMaterial3D.CULL_BACK
+		mat.metallic = 0.04
+		mat.roughness = 0.55
+		if albedo != null:
+			mat.albedo_texture = albedo
+			mat.albedo_color = Color.WHITE
+		else:
+			mat.albedo_color = Color(0.82, 0.62, 0.38)
+		if normal != null:
+			mat.normal_enabled = true
+			mat.normal_texture = normal
+			mat.normal_scale = 0.85
+		if rough != null:
+			mat.roughness_texture = rough
+		if emit != null:
+			mat.emission_enabled = true
+			mat.emission_texture = emit
+			mat.emission_energy_multiplier = 0.55
+		mi.material_override = mat
+	for child in node.get_children():
+		_apply_grill_toy_materials(child, albedo, normal, rough, emit)
+
+
 func _build_burgerpack_preview_props() -> void:
 	## Textured try2 GLBs laid out on the grill — click any piece to pick it up and inspect.
 	if world == null:
@@ -11644,7 +11922,10 @@ func _begin_burgerpack_inspect(area: Area3D) -> void:
 	area.input_ray_pickable = false
 	var visual := area.get_node_or_null("Visual") as Node3D
 	if visual != null:
-		visual.scale = Vector3.ONE * BURGERPACK_HELD_SCALE
+		if not area.has_meta("sit_scale"):
+			area.set_meta("sit_scale", visual.scale)
+		var sit: Vector3 = area.get_meta("sit_scale")
+		visual.scale = sit * (BURGERPACK_HELD_SCALE / BURGERPACK_PREVIEW_SCALE)
 	if game_audio:
 		game_audio.play_click()
 	_flash("Scroll down = spin · scroll up = tumble · Shift reverses · trash / click put back", Color("FFE082"))
@@ -11674,18 +11955,33 @@ func _release_burgerpack_inspect() -> void:
 	if not is_instance_valid(area):
 		return
 	var home: Vector3 = area.get_meta("home_pos", area.position)
+	if bool(area.get_meta("grill_toy", false)) and camera != null:
+		var mouse := get_viewport().get_mouse_position()
+		var hit := _grill_plane_from_screen(mouse)
+		if hit != Vector3.ZERO:
+			hit.y = GRILL_SURFACE_Y + BURGERPACK_SIT_Y
+			hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.46, GRILL_CENTER_X + GRILL_WIDTH * 0.46)
+			hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.42, GRILL_SURFACE_Z + GRILL_DEPTH * 0.42)
+			home = hit
+			area.set_meta("home_pos", home)
 	area.position = home
 	area.rotation_degrees = Vector3.ZERO
 	area.input_ray_pickable = true
 	var visual := area.get_node_or_null("Visual") as Node3D
 	if visual != null:
-		visual.scale = Vector3.ONE * BURGERPACK_PREVIEW_SCALE
+		if area.has_meta("sit_scale"):
+			visual.scale = area.get_meta("sit_scale")
+		else:
+			visual.scale = Vector3.ONE * BURGERPACK_PREVIEW_SCALE
 	if game_audio:
 		game_audio.play_click()
 
 
 func _trash_burgerpack_inspect() -> void:
 	if burgerpack_held == null:
+		return
+	if bool(burgerpack_held.get_meta("no_trash", false)):
+		_release_burgerpack_inspect()
 		return
 	var area := burgerpack_held
 	burgerpack_held = null
@@ -12470,130 +12766,46 @@ func _scrape_finish_clean_local(slot: int) -> void:
 		game_audio.play_click()
 
 
-func _debris_pile_material(seed_i: int = 1) -> StandardMaterial3D:
+func _debris_pile_texture() -> Texture2D:
+	if _debris_pile_tex != null:
+		return _debris_pile_tex
+	if ResourceLoader.exists(DEBRIS_PILE_TEX_PATH):
+		_debris_pile_tex = load(DEBRIS_PILE_TEX_PATH) as Texture2D
+	return _debris_pile_tex
+
+
+func _debris_pile_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_color = Color(1, 1, 1, 1)
-	mat.albedo_texture = _make_debris_strip_texture(seed_i)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = _debris_pile_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.render_priority = 8
 	return mat
 
 
-func _make_debris_strip_texture(seed_i: int) -> ImageTexture:
-	## Elongated diamond with chewed edges and speckle so it isn't a solid bar.
-	var rng := RandomNumberGenerator.new()
-	rng.seed = seed_i * 917 + 41
-	var w := 96
-	var h := 32
-	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
-	for y in h:
-		for x in w:
-			var u := (float(x) + 0.5) / float(w)
-			var v := (float(y) + 0.5) / float(h)
-			var dx := absf(u - 0.5) / 0.50
-			var dy := absf(v - 0.5) / 0.50
-			var diamond := dx + dy
-			if diamond > 1.02:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-				continue
-			var edge := clampf((1.02 - diamond) / 0.22, 0.0, 1.0)
-			edge = pow(edge, 0.72)
-			var n1 := sin(float(x) * 0.41 + float(y) * 0.93 + float(seed_i) * 0.07) * 0.5 + 0.5
-			var n2 := sin(float(x) * 1.13 - float(y) * 0.61 + 1.7) * 0.5 + 0.5
-			var n3 := sin(float(x + y * 3) * 0.27 + float(seed_i)) * 0.5 + 0.5
-			var noise := n1 * 0.46 + n2 * 0.34 + n3 * 0.20
-			if noise < 0.22 and diamond > 0.28:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-				continue
-			if noise < 0.34 and diamond > 0.62:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-				continue
-			if rng.randf() < 0.06 and diamond > 0.18:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-				continue
-			var density := clampf(edge * (0.55 + noise * 0.55), 0.0, 1.0)
-			if density < 0.10:
-				img.set_pixel(x, y, Color(0, 0, 0, 0))
-				continue
-			var shade := rng.randf()
-			var col: Color
-			if shade > 0.62:
-				col = Color(0.05, 0.03, 0.02, density * 0.96)
-			elif shade > 0.28:
-				col = Color(0.13, 0.07, 0.04, density * 0.88)
-			else:
-				col = Color(0.22, 0.11, 0.06, density * 0.70)
-			img.set_pixel(x, y, col)
-	return ImageTexture.create_from_image(img)
-
-
-func _debris_strip_unit_mesh() -> ArrayMesh:
-	if _debris_strip_mesh != null:
-		return _debris_strip_mesh
-	## Unit diamond prism: points on ±X, thin bulge on ±Z, height on Y.
-	var mesh := ArrayMesh.new()
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	var left := Vector3(-0.5, 0.0, 0.0)
-	var right := Vector3(0.5, 0.0, 0.0)
-	var front := Vector3(0.0, 0.0, 0.5)
-	var back := Vector3(0.0, 0.0, -0.5)
-	var hy := Vector3(0.0, 0.5, 0.0)
-	var corners: Array[Vector3] = [
-		left + hy, front + hy, right + hy,
-		left + hy, right + hy, back + hy,
-		left - hy, right - hy, front - hy,
-		left - hy, back - hy, right - hy,
-		left - hy, left + hy, front + hy,
-		left - hy, front + hy, front - hy,
-		front - hy, front + hy, right + hy,
-		front - hy, right + hy, right - hy,
-		right - hy, right + hy, back + hy,
-		right - hy, back + hy, back - hy,
-		back - hy, back + hy, left + hy,
-		back - hy, left + hy, left - hy
-	]
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var ti := 0
-	while ti + 2 < corners.size():
-		var a: Vector3 = corners[ti]
-		var b: Vector3 = corners[ti + 1]
-		var c: Vector3 = corners[ti + 2]
-		var n: Vector3 = (b - a).cross(c - a)
-		if n.length_squared() < 0.0000001:
-			n = Vector3.UP
-		else:
-			n = n.normalized()
-		verts.append(a)
-		verts.append(b)
-		verts.append(c)
-		norms.append(n)
-		norms.append(n)
-		norms.append(n)
-		uvs.append(Vector2(a.x + 0.5, a.z + 0.5))
-		uvs.append(Vector2(b.x + 0.5, b.z + 0.5))
-		uvs.append(Vector2(c.x + 0.5, c.z + 0.5))
-		ti += 3
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	_debris_strip_mesh = mesh
-	return _debris_strip_mesh
+func _debris_pile_unit_mesh() -> Mesh:
+	if _debris_pile_mesh != null:
+		return _debris_pile_mesh
+	## Flat XZ splat — native PNG aspect, no vertical stretch.
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(1.0, 1.0)
+	_debris_pile_mesh = plane
+	return _debris_pile_mesh
 
 
 func _grill_steel_top_y() -> float:
 	return GRILL_SURFACE_Y + DEBRIS_STEEL_TOP
 
 
-func _debris_pile_sit_y(h: float) -> float:
-	## Unit strip is height 1, then scaled by h — sit the bottom on the steel.
-	return _grill_steel_top_y() + h * 0.5 + 0.004
+func _debris_pile_sit_y() -> float:
+	return _grill_steel_top_y() + DEBRIS_PILE_LIFT
+
+
+func _debris_pile_depth(width: float) -> float:
+	return width * (DEBRIS_PILE_TEX_H / DEBRIS_PILE_TEX_W)
 
 
 func _debris_trap_origin() -> Vector3:
@@ -12632,43 +12844,30 @@ func _build_debris_trap() -> void:
 	var well_mesh := BoxMesh.new()
 	well_mesh.size = Vector3(DEBRIS_TRAP_W, DEBRIS_TRAP_H, DEBRIS_TRAP_D)
 	well.mesh = well_mesh
-	well.position = Vector3(0.0, DEBRIS_TRAP_H * 0.5, 0.0)
+	well.position = Vector3(0.0, DEBRIS_TRAP_H * 0.28, 0.0)
 	well.sorting_offset = 8.0
 	var well_mat := StandardMaterial3D.new()
 	well_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	well_mat.albedo_color = Color(0.015, 0.012, 0.01, 1.0)
+	well_mat.albedo_color = Color(1, 1, 1, 1)
+	well_mat.albedo_texture = _make_debris_trap_texture()
+	well_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	well_mat.render_priority = 10
 	well.material_override = well_mat
 	well.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(well)
-	var lip := MeshInstance3D.new()
-	lip.name = "Lip"
-	var lip_mesh := BoxMesh.new()
-	lip_mesh.size = Vector3(DEBRIS_TRAP_W + 0.018, 0.006, DEBRIS_TRAP_D + 0.018)
-	lip.mesh = lip_mesh
-	lip.position = Vector3(0.0, DEBRIS_TRAP_H + 0.002, 0.0)
-	lip.sorting_offset = 8.0
-	var lip_mat := StandardMaterial3D.new()
-	lip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	lip_mat.albedo_color = Color(0.12, 0.11, 0.10, 1.0)
-	lip_mat.render_priority = 11
-	lip.material_override = lip_mat
-	lip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(lip)
-	var hole := MeshInstance3D.new()
-	hole.name = "Hole"
-	var hole_mesh := BoxMesh.new()
-	hole_mesh.size = Vector3(DEBRIS_TRAP_W * 0.86, 0.008, DEBRIS_TRAP_D * 0.62)
-	hole.mesh = hole_mesh
-	hole.position = Vector3(0.0, DEBRIS_TRAP_H * 0.55, 0.0)
-	hole.sorting_offset = 9.0
-	var hole_mat := StandardMaterial3D.new()
-	hole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	hole_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
-	hole_mat.render_priority = 12
-	hole.material_override = hole_mat
-	hole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(hole)
+
+
+func _make_debris_trap_texture() -> ImageTexture:
+	## Oily steel slot — dark brown-grey streaks, not a flat black fill.
+	var img: Image = Image.create(96, 16, false, Image.FORMAT_RGBA8)
+	for y in 16:
+		for x in 96:
+			var n1: float = sin(float(x) * 0.41 + float(y) * 1.15) * 0.5 + 0.5
+			var n2: float = sin(float(x) * 1.07 - float(y) * 0.62 + 2.1) * 0.5 + 0.5
+			var grain: float = n1 * 0.62 + n2 * 0.38
+			var shade: float = lerpf(0.18, 0.34, grain)
+			img.set_pixel(x, y, Color(shade * 1.08, shade * 0.86, shade * 0.68, 1.0))
+	return ImageTexture.create_from_image(img)
 
 
 func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1) -> void:
@@ -12694,14 +12893,13 @@ func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1) -> void:
 	var pile_root := Node3D.new()
 	pile_root.name = "DebrisPile"
 	var sit := _clamp_debris_pile_xz(at)
-	pile_root.position = Vector3(sit.x, _debris_pile_sit_y(DEBRIS_PILE_H), sit.z)
+	pile_root.position = Vector3(sit.x, _debris_pile_sit_y(), sit.z)
 	pile_root.rotation.y = 0.0
 	grill_root.add_child(pile_root)
 	var strip := MeshInstance3D.new()
 	strip.name = "Strip"
-	strip.mesh = _debris_strip_unit_mesh()
-	var seed_i := slot if slot >= 0 else int(at.x * 100.0) + int(at.z * 100.0)
-	strip.material_override = _debris_pile_material(seed_i + 3)
+	strip.mesh = _debris_pile_unit_mesh()
+	strip.material_override = _debris_pile_material()
 	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	strip.sorting_offset = 8.0
 	pile_root.add_child(strip)
@@ -12720,11 +12918,10 @@ func _refresh_debris_pile_visual(root: Node3D, mass: float) -> void:
 		return
 	var t := clampf(mass, 0.2, 2.2)
 	var w := lerpf(DEBRIS_PILE_W_MIN, DEBRIS_PILE_W_MAX, clampf((t - 0.35) / 1.4, 0.0, 1.0))
-	var h := DEBRIS_PILE_H * lerpf(0.85, 1.15, clampf(t * 0.45, 0.0, 1.0))
-	## Always sideways: long on world X, skinny toward the window.
+	## Long on world X, native PNG height toward the window — no vertical stretch.
 	root.rotation.y = 0.0
-	root.scale = Vector3(w, h, w * DEBRIS_PILE_Z_FRAC)
-	root.position.y = _debris_pile_sit_y(h)
+	root.scale = Vector3(w, 1.0, _debris_pile_depth(w))
+	root.position.y = _debris_pile_sit_y()
 
 
 func _clamp_debris_pile_xz(at: Vector3) -> Vector3:
@@ -12754,16 +12951,20 @@ func _nudge_debris_piles(tool_pos: Vector3, move_xz: Vector2, moved: float) -> v
 			continue
 		var mass := clampf(float(pile.get("mass", 1.0)), 0.2, 2.2)
 		var w := lerpf(DEBRIS_PILE_W_MIN, DEBRIS_PILE_W_MAX, clampf((mass - 0.35) / 1.4, 0.0, 1.0))
-		var hit_r := w * 0.55 + 0.03
-		var d := Vector2(tool_pos.x - root.position.x, tool_pos.z - root.position.z).length()
-		if d > hit_r:
+		## Match the long, thin PNG instead of using a large circular radius. The old
+		## circle reached almost a foot toward the cook and moved piles before contact.
+		var half_w := w * 0.50 + 0.010
+		var half_d := _debris_pile_depth(w) * 0.50 + 0.008
+		var delta_xz := Vector2(tool_pos.x - root.position.x, tool_pos.z - root.position.z)
+		var contact := Vector2(delta_xz.x / maxf(half_w, 0.001), delta_xz.y / maxf(half_d, 0.001)).length()
+		if contact > 1.0:
 			i += 1
 			continue
-		var falloff := 1.0 - d / hit_r
+		var falloff := 1.0 - contact
 		var next := _clamp_debris_pile_xz(
 			root.position + Vector3(dir.x, 0.0, dir.y) * push * (0.45 + falloff * 0.7)
 		)
-		root.position = Vector3(next.x, _debris_pile_sit_y(root.scale.y), next.z)
+		root.position = Vector3(next.x, _debris_pile_sit_y(), next.z)
 		if _try_swallow_debris_pile(i):
 			continue
 		i += 1
@@ -18904,6 +19105,8 @@ func _reset_cut_collector_shift(full_run: bool) -> void:
 	_cut_collector_seq += 1
 	_boss_intro_seq += 1
 	_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
+	_boss_pep_pending = false
+	_boss_intro_running = false
 	_hide_boss_caption()
 	if full_run:
 		last_day_earnings = 0.0
@@ -18936,6 +19139,8 @@ func _update_cut_collector_wawa(delta: float) -> void:
 	_cut_collector_wawa_timer -= delta
 	if _cut_collector_wawa_timer > 0.0:
 		return
+	if not _regular_customers_empty():
+		return
 	_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
 	if randf() < CUT_COLLECTOR_WAWA_CHANCE:
 		_spawn_cut_collector("wawa")
@@ -18945,6 +19150,8 @@ func _spawn_cut_collector(kind: String) -> void:
 	if tutorial_mode or _has_cut_collector():
 		return
 	if truck_bought_out:
+		return
+	if not _regular_customers_empty():
 		return
 	if mp_enabled and NetManager.is_host() and not _mp_applying:
 		mp_spawn_cut_collector.rpc(kind)
@@ -18956,6 +19163,8 @@ func _spawn_cut_collector(kind: String) -> void:
 
 func _spawn_cut_collector_local(kind: String) -> void:
 	if _has_cut_collector():
+		return
+	if not _regular_customers_empty():
 		return
 	var c = CustomerScript.new()
 	c.is_cut_collector = true
@@ -18995,15 +19204,36 @@ func _set_boss_wawawa(on: bool, loud: bool = false) -> void:
 
 func _cue_boss_pep_entrance() -> void:
 	## Off-screen sting first: two truck knocks, then he walks in.
-	## Wawawa waits until he stops at the window.
+	## Only when the window is empty — he waits if anyone is already in line.
 	if tutorial_mode or truck_bought_out or _has_cut_collector():
 		return
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
 		return
+	if not _regular_customers_empty():
+		_boss_pep_pending = true
+		return
+	_start_boss_pep_intro()
+
+
+func _try_start_pending_boss_pep() -> void:
+	if not _boss_pep_pending or _boss_intro_running:
+		return
+	if tutorial_mode or truck_bought_out or _has_cut_collector():
+		_boss_pep_pending = false
+		return
+	if not _regular_customers_empty():
+		return
+	_start_boss_pep_intro()
+
+
+func _start_boss_pep_intro() -> void:
+	_boss_pep_pending = false
+	_boss_intro_running = true
 	_boss_intro_seq += 1
 	var seq := _boss_intro_seq
 	var tree := get_tree()
 	if tree == null:
+		_boss_intro_running = false
 		_spawn_cut_collector("pep")
 		return
 	tree.create_timer(CUT_COLLECTOR_INTRO_KNOCK_SEC).timeout.connect(func() -> void:
@@ -19018,6 +19248,11 @@ func _cue_boss_pep_entrance() -> void:
 	)
 	tree.create_timer(CUT_COLLECTOR_INTRO_SPAWN_SEC).timeout.connect(func() -> void:
 		if seq != _boss_intro_seq:
+			_boss_intro_running = false
+			return
+		_boss_intro_running = false
+		if not _regular_customers_empty():
+			_boss_pep_pending = true
 			return
 		_spawn_cut_collector("pep")
 	)
@@ -28077,7 +28312,9 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		bg_people_walk_spawns = 0
 	else:
 		bg_people_walk_spawns += 1
-	var walk_speed := randf_range(BG_PEOPLE_SPEED_MIN, BG_PEOPLE_SPEED_MAX)
+	var walk_speed: float = randf_range(BG_PEOPLE_SPEED_MIN, BG_PEOPLE_SPEED_MAX)
+	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
+	var gait: float = clampf(walk_speed / maxf(walk_mid, 0.01), 0.72, 1.42)
 	var run_mul := clampf(_gfx_float("bg_people_run_mul", 3.0), 1.5, 6.0)
 	bg_people_dir[idx] = dir
 	bg_people_is_run[idx] = is_run
@@ -28102,9 +28339,9 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.visible = true
 	bg_people_active[idx] = true
 	if is_run and walker.has_method("play_street_run"):
-		walker.call("play_street_run")
+		walker.call("play_street_run", 1.04 + randf() * 0.22)
 	elif walker.has_method("play_street_walk"):
-		walker.call("play_street_walk")
+		walker.call("play_street_walk", gait)
 	## Occasional pair of walkers — never pair a runner, never go over 2 on screen.
 	if as_partner or is_run or randf() >= BG_PEOPLE_PAIR_CHANCE:
 		return
@@ -28115,7 +28352,16 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		return
 	_start_background_person(partner_idx, true)
 	if partner_idx < bg_people_speed.size() and idx < bg_people_speed.size():
-		bg_people_speed[partner_idx] = bg_people_speed[idx]
+		## Keep a pair together, but don't lockstep the same pace.
+		bg_people_speed[partner_idx] = float(bg_people_speed[idx]) * randf_range(0.90, 1.10)
+		var partner: Node3D = bg_people[partner_idx] as Node3D
+		if partner != null and partner.has_method("play_street_walk"):
+			var partner_gait: float = clampf(
+				float(bg_people_speed[partner_idx]) / maxf(walk_mid, 0.01),
+				0.72,
+				1.42
+			)
+			partner.call("play_street_walk", partner_gait)
 	if idx < bg_people_is_pair.size():
 		bg_people_is_pair[idx] = true
 
@@ -29412,7 +29658,7 @@ func _set_prop_offset_axis(key: String, axis: String, val: float) -> void:
 func _apply_prop_offset_changed(key: String) -> void:
 	match key:
 		"cutting_board":
-			_build_cutting_board_prop()
+			_apply_cutting_board_transform()
 		"burger_buns", "cheese_stack":
 			_build_cheese_station_prop()
 		"tip_jar":
@@ -29449,6 +29695,106 @@ func _hidden_add_prop_offset_group(parent: Control, key: String, title: String) 
 	)
 
 
+func _load_cutting_board_xform_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	cutting_board_rot = Vector3(
+		clampf(float(cfg.get_value(CUTTING_BOARD_XFORM_CFG_SECTION, "pitch", cutting_board_rot.x)), -180.0, 180.0),
+		clampf(float(cfg.get_value(CUTTING_BOARD_XFORM_CFG_SECTION, "yaw", cutting_board_rot.y)), -360.0, 360.0),
+		clampf(float(cfg.get_value(CUTTING_BOARD_XFORM_CFG_SECTION, "roll", cutting_board_rot.z)), -180.0, 180.0)
+	)
+	cutting_board_scale = Vector3(
+		clampf(float(cfg.get_value(CUTTING_BOARD_XFORM_CFG_SECTION, "sx", cutting_board_scale.x)), 0.15, 4.0),
+		clampf(float(cfg.get_value(CUTTING_BOARD_XFORM_CFG_SECTION, "sy", cutting_board_scale.y)), 0.15, 4.0),
+		clampf(float(cfg.get_value(CUTTING_BOARD_XFORM_CFG_SECTION, "sz", cutting_board_scale.z)), 0.15, 4.0)
+	)
+	cutting_board_darkness = clampf(float(cfg.get_value(
+		CUTTING_BOARD_XFORM_CFG_SECTION, "darkness", cutting_board_darkness
+	)), 0.15, 1.6)
+
+
+func _save_cutting_board_xform_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "pitch", cutting_board_rot.x)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "yaw", cutting_board_rot.y)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "roll", cutting_board_rot.z)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "sx", cutting_board_scale.x)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "sy", cutting_board_scale.y)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "sz", cutting_board_scale.z)
+	cfg.set_value(CUTTING_BOARD_XFORM_CFG_SECTION, "darkness", cutting_board_darkness)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _set_cutting_board_rot_axis(axis: String, value: float) -> void:
+	match axis:
+		"x":
+			cutting_board_rot.x = clampf(value, -180.0, 180.0)
+		"y":
+			cutting_board_rot.y = clampf(value, -360.0, 360.0)
+		"z":
+			cutting_board_rot.z = clampf(value, -180.0, 180.0)
+	_apply_cutting_board_transform()
+	_save_cutting_board_xform_settings()
+
+
+func _set_cutting_board_scale_axis(axis: String, value: float) -> void:
+	match axis:
+		"x":
+			cutting_board_scale.x = clampf(value, 0.15, 4.0)
+		"y":
+			cutting_board_scale.y = clampf(value, 0.15, 4.0)
+		"z":
+			cutting_board_scale.z = clampf(value, 0.15, 4.0)
+	_apply_cutting_board_transform()
+	_save_cutting_board_xform_settings()
+
+
+func _set_cutting_board_darkness(value: float) -> void:
+	cutting_board_darkness = clampf(value, 0.15, 1.6)
+	_apply_cutting_board_darkness()
+	_save_cutting_board_xform_settings()
+
+
+func _apply_cutting_board_darkness() -> void:
+	if build_cutting_board == null or not is_instance_valid(build_cutting_board):
+		return
+	var d: float = clampf(cutting_board_darkness, 0.15, 1.6)
+	var tint := Color(d, d, d, 1.0)
+	for child in build_cutting_board.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi == null:
+			continue
+		var mat := mi.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_color = tint
+
+
+func _apply_cutting_board_transform() -> void:
+	if build_cutting_board == null or not is_instance_valid(build_cutting_board):
+		return
+	build_cutting_board.position = _cutting_board_world_center()
+	build_cutting_board.rotation_degrees = cutting_board_rot
+	var vis := build_cutting_board.get_node_or_null("Visual") as Node3D
+	if vis != null and is_instance_valid(vis):
+		var base_s: Vector3 = vis.get_meta("base_scale", Vector3.ONE)
+		var base_p: Vector3 = vis.get_meta("base_position", Vector3.ZERO)
+		vis.scale = Vector3(
+			base_s.x * cutting_board_scale.x,
+			base_s.y * cutting_board_scale.y,
+			base_s.z * cutting_board_scale.z
+		)
+		vis.position = Vector3(
+			base_p.x * cutting_board_scale.x,
+			base_p.y * cutting_board_scale.y,
+			base_p.z * cutting_board_scale.z
+		)
+	_apply_cutting_board_darkness()
+	if build_board_hint_label != null and is_instance_valid(build_board_hint_label):
+		_nudge_label3d_on_screen(build_board_hint_label, build_hint_screen_nudge)
+
+
 func _icecream_station_world_pos() -> Vector3:
 	return icecream_station_pos
 
@@ -29467,14 +29813,13 @@ func _apply_icecream_station_transform() -> void:
 func _apply_icecream_mascot_transform() -> void:
 	if icecream_root == null or not is_instance_valid(icecream_root):
 		return
-	var mascot := icecream_root.get_node_or_null("SmilingIceCreamMascot") as MeshInstance3D
+	var mascot := icecream_root.get_node_or_null("IceCreamMascot") as Node3D
 	if mascot == null or not is_instance_valid(mascot):
 		return
 	var base_pos: Vector3 = mascot.get_meta("base_position", mascot.position)
-	var base_fit := float(mascot.get_meta("base_fit_scale", 1.0))
 	mascot.position = base_pos + icecream_mascot_offset
 	mascot.rotation_degrees = icecream_mascot_rot + Vector3(0.0, icecream_mascot_spin_phase, 0.0)
-	mascot.scale = Vector3.ONE * base_fit * icecream_mascot_scale
+	mascot.scale = Vector3.ONE * icecream_mascot_scale
 
 
 func _update_icecream_mascot_spin(delta: float) -> void:
@@ -31117,8 +31462,9 @@ func _build_soda_station() -> void:
 		body.position = Vector3(0.0, 0.28, 0.0)
 		body.material_override = _make_soda_metal_mat(Color(0.16, 0.17, 0.19), 0.92, 0.28)
 		root.add_child(body)
-	## Cover the imported pale spill grate with a clean, glossy black deck.
+	## Give the working side a readable brushed-metal spill deck and badge.
 	_add_soda_drip_grate_overlay(root)
+	_add_soda_machine_dressup(root)
 
 	for fid in SODA_FLAVORS:
 		if not soda_tank_fill.has(fid):
@@ -31619,7 +31965,8 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		var fid := SODA_BRAND_FLAVOR_ORDER[count] if count < SODA_BRAND_FLAVOR_ORDER.size() else ""
 		var aabb := src_mi.get_aabb()
 		var center_global := src_mi.to_global(aabb.get_center())
-		var panel_pos := soda_root.to_local(center_global)
+		var panel_pos := soda_root.to_local(center_global) + Vector3(-SODA_LABEL_CAM_RIGHT_M, 0.0, 0.0)
+		src_mi.global_position += Vector3(-SODA_LABEL_CAM_RIGHT_M, 0.0, 0.0)
 		## Use the transformed Brand mesh itself. The old four-nozzle anchors pushed
 		## these overlays down and sideways on the current two-bay fountain.
 		var panel_w := clampf(src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(aabb.size.x, 0.0, 0.0))) * 0.98, 0.10, 0.22)
@@ -31630,10 +31977,11 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 			continue
 		var mat := _make_soda_flavor_panel_mat(fid)
 		var logo_tex: Texture2D = null
-		## Restore the shipped drink art on the generated soda panel. The source
-		## pack has no ice logo, so that bay keeps the clear ICE fallback below.
+		## Use purpose-built transparent badges so both active bays read cleanly.
 		if fid == "cola":
-			logo_tex = _load_soda_image_texture("res://models/sodamachine/newmachine1_0.png")
+			logo_tex = _load_soda_image_texture(MACHINE_SODA_BADGE_PATH)
+		elif fid == "ice":
+			logo_tex = _load_soda_image_texture(MACHINE_ICE_BADGE_PATH)
 			## Art is carried by the dedicated foreground plane below. Applying it to
 			## the imported source mesh can paint the shared ICE surface as well.
 		src_mi.material_override = mat
@@ -31694,11 +32042,13 @@ func _add_soda_flavor_graphic_plane(
 	quad.size = panel_size * 0.92
 	graphic.mesh = quad
 	graphic.position = panel_pos + Vector3(0.0, 0.0, 0.022)
+	graphic.set_meta("slot_base_position", graphic.position)
 	graphic.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var mat := StandardMaterial3D.new()
 	mat.resource_name = "SodaFlavorGraphic_%s" % fid
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color.WHITE
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = MACHINE_LABEL_ALBEDO
 	mat.albedo_texture = texture
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
@@ -31717,7 +32067,7 @@ func _add_soda_ice_graphic(panel_pos: Vector3, panel_size: Vector2) -> void:
 	ice_art.text = "❄  ICE"
 	ice_art.font_size = 32
 	ice_art.pixel_size = clampf(panel_size.x / 170.0, 0.0009, 0.00145)
-	ice_art.modulate = Color(0.90, 0.98, 1.0, 1.0)
+	ice_art.modulate = Color(0.90, 0.98, 1.0, 1.0) * MACHINE_LABEL_ALBEDO
 	ice_art.outline_modulate = Color(0.015, 0.12, 0.24, 1.0)
 	ice_art.outline_size = 4
 	ice_art.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -31744,13 +32094,14 @@ func _make_soda_flavor_panel_backing_mat() -> StandardMaterial3D:
 
 func _make_soda_flavor_panel_mat(fid: String) -> StandardMaterial3D:
 	var col: Color = Color(0.55, 0.75, 0.95) if fid == "ice" else SODA_FLAVOR_COLORS.get(fid, Color(0.4, 0.2, 0.15))
+	col = col.darkened(0.30)
 	var mat := StandardMaterial3D.new()
 	mat.resource_name = "SodaPanel_%s" % fid
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = col.darkened(0.12)
 	mat.emission_enabled = true
 	mat.emission = col
-	mat.emission_energy_multiplier = 1.05
+	mat.emission_energy_multiplier = 0.74
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	mat.no_depth_test = true
@@ -31796,29 +32147,29 @@ func _soda_body_material_for(mat_name: String) -> StandardMaterial3D:
 	sm.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	match mat_name:
 		"Body1", "Metal":
-			sm.albedo_color = Color(0.14, 0.15, 0.17)
-			sm.metallic = 0.92
-			sm.roughness = 0.28
-		"Metal_Plate":
-			sm.albedo_color = Color(0.62, 0.66, 0.70)
-			sm.metallic = 0.96
-			sm.roughness = 0.19
-		"Metal_Tray":
-			sm.albedo_color = Color(0.006, 0.007, 0.009)
+			sm.albedo_color = Color(0.25, 0.27, 0.30)
 			sm.metallic = 0.55
-			sm.roughness = 0.08
+			sm.roughness = 0.48
+		"Metal_Plate":
+			sm.albedo_color = Color(0.67, 0.70, 0.74)
+			sm.metallic = 0.78
+			sm.roughness = 0.32
+		"Metal_Tray":
+			sm.albedo_color = Color(0.12, 0.14, 0.16)
+			sm.metallic = 0.48
+			sm.roughness = 0.52
 		"Banner_frame1":
-			sm.albedo_color = Color(0.10, 0.11, 0.12)
-			sm.metallic = 0.88
-			sm.roughness = 0.34
+			sm.albedo_color = Color(0.20, 0.22, 0.24)
+			sm.metallic = 0.50
+			sm.roughness = 0.50
 		"Floor1":
-			sm.albedo_color = Color(0.22, 0.23, 0.25)
-			sm.metallic = 0.9
-			sm.roughness = 0.4
+			sm.albedo_color = Color(0.30, 0.32, 0.35)
+			sm.metallic = 0.55
+			sm.roughness = 0.52
 		"Plastic_frame1":
-			sm.albedo_color = Color(0.12, 0.13, 0.14)
-			sm.metallic = 0.15
-			sm.roughness = 0.55
+			sm.albedo_color = Color(0.22, 0.24, 0.27)
+			sm.metallic = 0.08
+			sm.roughness = 0.68
 		"Tube1":
 			sm.albedo_color = Color(0.72, 0.74, 0.78)
 			sm.metallic = 0.96
@@ -31832,9 +32183,9 @@ func _soda_body_material_for(mat_name: String) -> StandardMaterial3D:
 			sm.metallic = 0.97
 			sm.roughness = 0.12
 		_:
-			sm.albedo_color = Color(0.2, 0.21, 0.23)
-			sm.metallic = 0.85
-			sm.roughness = 0.32
+			sm.albedo_color = Color(0.28, 0.30, 0.33)
+			sm.metallic = 0.48
+			sm.roughness = 0.50
 	return sm
 
 
@@ -32104,14 +32455,14 @@ func _add_soda_drip_grate_overlay(parent: Node3D) -> void:
 	var root := Node3D.new()
 	root.name = "SodaDripGrateOverlay"
 	parent.add_child(root)
-	var metal := _make_soda_metal_mat(Color(0.055, 0.065, 0.078), 0.84, 0.10)
+	var metal := _make_soda_metal_mat(Color(0.30, 0.34, 0.38), 0.70, 0.42)
 	metal.clearcoat_enabled = true
-	metal.clearcoat = 1.0
-	metal.clearcoat_roughness = 0.035
-	var dark := _make_soda_metal_mat(Color(0.006, 0.008, 0.012), 0.72, 0.08)
+	metal.clearcoat = 0.42
+	metal.clearcoat_roughness = 0.30
+	var dark := _make_soda_metal_mat(Color(0.035, 0.045, 0.055), 0.40, 0.55)
 	dark.clearcoat_enabled = true
-	dark.clearcoat = 0.75
-	dark.clearcoat_roughness = 0.06
+	dark.clearcoat = 0.24
+	dark.clearcoat_roughness = 0.38
 	## The previous overlay used +Z, which is the rear of the current two-bay
 	## machine. Seat the tray under the actual cup rest on the cook-facing -Z side.
 	var deck_y := CUP_TRAY_DECK_LOCAL_Y
@@ -32123,7 +32474,7 @@ func _add_soda_drip_grate_overlay(parent: Node3D) -> void:
 			slot.rotation_degrees.y = 0.0
 	_add_mesh_box(root, "GlossBlackTrayUnderlay", Vector3(0.74, 0.040, 0.34), Vector3(0.0, deck_y - 0.028, tray_z), dark)
 	## A raised rim makes the runoff tray readable against the black cabinet.
-	var rim := _make_soda_metal_mat(Color(0.12, 0.135, 0.16), 0.92, 0.14)
+	var rim := _make_soda_metal_mat(Color(0.38, 0.42, 0.47), 0.72, 0.38)
 	_add_mesh_box(root, "TrayRimLeft", Vector3(0.024, 0.026, 0.34), Vector3(-0.362, deck_y + 0.009, tray_z), rim)
 	_add_mesh_box(root, "TrayRimRight", Vector3(0.024, 0.026, 0.34), Vector3(0.362, deck_y + 0.009, tray_z), rim)
 	_add_mesh_box(root, "TrayRimFront", Vector3(0.75, 0.026, 0.024), Vector3(0.0, deck_y + 0.009, tray_z - 0.162), rim)
@@ -32180,6 +32531,59 @@ func _make_soda_metal_mat(col: Color, metallic: float, roughness: float) -> Stan
 	mat.roughness = roughness
 	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	return mat
+
+
+func _make_machine_decal(
+	parent: Node3D, decal_name: String, texture_path: String, size: Vector2,
+	pos: Vector3, rot_degrees: Vector3 = Vector3.ZERO, albedo: Color = Color.WHITE
+) -> MeshInstance3D:
+	if parent == null or not ResourceLoader.exists(texture_path):
+		push_warning("Machine decal missing: %s" % texture_path)
+		return null
+	var texture := load(texture_path) as Texture2D
+	if texture == null:
+		return null
+	var decal := MeshInstance3D.new()
+	decal.name = decal_name
+	var quad := QuadMesh.new()
+	quad.size = size
+	decal.mesh = quad
+	decal.position = pos
+	decal.rotation_degrees = rot_degrees
+	decal.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.resource_name = "%sMaterial" % decal_name
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = albedo
+	mat.albedo_texture = texture
+	mat.metallic = 0.12
+	mat.roughness = 0.68
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	mat.render_priority = 8
+	decal.material_override = mat
+	parent.add_child(decal)
+	return decal
+
+
+func _add_soda_machine_dressup(parent: Node3D) -> void:
+	if parent == null:
+		return
+	var existing := parent.get_node_or_null("MachineDressup")
+	if existing != null:
+		existing.queue_free()
+	var dressup := Node3D.new()
+	dressup.name = "MachineDressup"
+	parent.add_child(dressup)
+	## A shallow physical plate catches light; the generated transparent badge
+	## supplies the brushed-metal branding without looking pasted onto the body.
+	var plate_mat := _make_soda_metal_mat(Color(0.54, 0.58, 0.63), 0.68, 0.42)
+	_add_mesh_box(dressup, "BrandBadgePlate", Vector3(0.36, 0.12, 0.008), Vector3(0.0, 0.16, -0.224), plate_mat)
+	_make_machine_decal(
+		dressup, "BurgerPalsBrandBadge", MACHINE_METAL_BADGE_PATH,
+		Vector2(0.34, 0.113), Vector3(0.0, 0.16, -0.229), Vector3(0.0, 180.0, 0.0)
+	)
 
 
 func _make_icecream_mat(col: Color, roughness: float = 0.55, emission: float = 0.0) -> StandardMaterial3D:
@@ -33302,6 +33706,9 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 	var idx := _fryer_basket_index_at(screen_pos)
 	if idx < 0:
 		return false
+	if _machine_is_broken("fryer"):
+		_flash("Fryer shorted — click the wrench", Color("FFCC80"))
+		return true
 	if idx >= fryer_baskets.size():
 		return false
 	var data: Dictionary = fryer_baskets[idx]
@@ -33318,6 +33725,7 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 		_mp_send_fryer_basket_pose(true, false, idx)
 		_mp_send_fryer_basket_state(idx, true)
 		_flash("Potatoes loaded — dunk the basket", Color("FFE082"))
+		_note_machine_used("fryer")
 		if game_audio:
 			game_audio.play_click()
 		return true
@@ -33434,6 +33842,7 @@ func _begin_fryer_basket_hold(index: int) -> bool:
 		_flash("Hold in oil for 5 seconds", Color("FFE082"))
 	if game_audio:
 		game_audio.play_click()
+	_note_machine_used("fryer")
 	_mp_send_fryer_basket_pose(true, true, index)
 	return true
 
@@ -34077,9 +34486,9 @@ func _build_icecream_machine() -> void:
 	world.add_child(root)
 	icecream_root = root
 
-	var body_mat := _make_soda_metal_mat(Color(0.63, 0.67, 0.71), 0.98, 0.12)
-	var dark_mat := _make_soda_metal_mat(Color(0.12, 0.13, 0.15), 0.88, 0.34)
-	var trim_mat := _make_soda_metal_mat(Color(0.012, 0.015, 0.019), 0.92, 0.18)
+	var body_mat := _make_soda_metal_mat(Color(0.52, 0.54, 0.58), 0.65, 0.40)
+	var dark_mat := _make_soda_metal_mat(Color(0.28, 0.30, 0.34), 0.35, 0.58)
+	var trim_mat := _make_soda_metal_mat(Color(0.22, 0.24, 0.27), 0.50, 0.48)
 
 	## Slim cabinet so it tucks beside the fountain without eating counter space.
 	var body := MeshInstance3D.new()
@@ -34125,7 +34534,7 @@ func _build_icecream_machine() -> void:
 	face_gloss_mesh.size = Vector3(0.127, 0.018, 0.006)
 	face_gloss.mesh = face_gloss_mesh
 	face_gloss.position = Vector3(0.0, 0.47, 0.221)
-	face_gloss.material_override = _make_soda_metal_mat(Color(0.74, 0.80, 0.88), 0.2, 0.16)
+	face_gloss.material_override = _make_soda_metal_mat(Color(0.74, 0.80, 0.88), 0.58, 0.34)
 	root.add_child(face_gloss)
 
 	var handle := MeshInstance3D.new()
@@ -34195,6 +34604,7 @@ func _build_icecream_machine() -> void:
 	lab.outline_size = 2
 	lab.outline_modulate = Color(0.0, 0.0, 0.0, 0.78)
 	root.add_child(lab)
+	_add_icecream_machine_dressup(root)
 
 	var lamp := OmniLight3D.new()
 	lamp.name = "SoftServeGlow"
@@ -34208,33 +34618,79 @@ func _build_icecream_machine() -> void:
 	_rebuild_icecream_fill_ghost()
 
 
+func _add_icecream_machine_dressup(parent: Node3D) -> void:
+	if parent == null:
+		return
+	var existing := parent.get_node_or_null("MachineDressup")
+	if existing != null:
+		existing.queue_free()
+	var dressup := Node3D.new()
+	dressup.name = "MachineDressup"
+	parent.add_child(dressup)
+	## Small front badge plus vertical illustrated side panels. These are shaded
+	## transparent quads, so they pick up the scene light instead of glowing flat.
+	var badge_plate_mat := _make_soda_metal_mat(Color(0.58, 0.62, 0.67), 0.66, 0.44)
+	_add_mesh_box(dressup, "FrontBadgePlate", Vector3(0.17, 0.057, 0.006), Vector3(0.0, 0.16, 0.173), badge_plate_mat)
+	_make_machine_decal(
+		dressup, "FrontBurgerPalsBadge", MACHINE_METAL_BADGE_PATH,
+		Vector2(0.16, 0.053), Vector3(0.0, 0.16, 0.177)
+	)
+	## Side art is 25% larger, 30% darker, and slid 1" toward the cook face
+	## (local +Z). With station yaw 180 that is camera-right on the inner flank.
+	var side_size := Vector2(0.145, 0.218) * 1.25
+	var side_z := -0.015 + MACHINE_LABEL_CAM_RIGHT_M
+	_make_machine_decal(
+		dressup, "SoftServeSideRight", MACHINE_SOFT_SERVE_DECAL_PATH,
+		side_size, Vector3(0.112, 0.30, side_z), Vector3(0.0, 90.0, 0.0), MACHINE_LABEL_ALBEDO
+	)
+	_make_machine_decal(
+		dressup, "SoftServeSideLeft", MACHINE_SOFT_SERVE_DECAL_PATH,
+		side_size, Vector3(-0.112, 0.30, side_z), Vector3(0.0, -90.0, 0.0), MACHINE_LABEL_ALBEDO
+	)
+
+
 func _build_icecream_mascot(machine_root: Node3D) -> void:
-	if machine_root == null or not ResourceLoader.exists(ICECREAM_MASCOT_MESH):
-		push_warning("Ice-cream mascot mesh missing: %s" % ICECREAM_MASCOT_MESH)
+	if machine_root == null or not ResourceLoader.exists(ICECREAM_MASCOT_SCENE):
+		push_warning("Ice-cream mascot mesh missing: %s" % ICECREAM_MASCOT_SCENE)
 		return
-	var mascot_mesh := load(ICECREAM_MASCOT_MESH) as Mesh
-	if mascot_mesh == null:
-		push_warning("Ice-cream mascot failed to load: %s" % ICECREAM_MASCOT_MESH)
+	var packed := load(ICECREAM_MASCOT_SCENE) as PackedScene
+	if packed == null:
+		push_warning("Ice-cream mascot failed to load: %s" % ICECREAM_MASCOT_SCENE)
 		return
-	var raw := mascot_mesh.get_aabb()
+	var visual := packed.instantiate() as Node3D
+	if visual == null:
+		return
+	var ice_albedo: Texture2D = null
+	var ice_normal: Texture2D = null
+	var ice_rough: Texture2D = null
+	var ice_emit: Texture2D = null
+	if ResourceLoader.exists(ICECREAM_MASCOT_ALBEDO):
+		ice_albedo = load(ICECREAM_MASCOT_ALBEDO) as Texture2D
+	if ResourceLoader.exists(ICECREAM_MASCOT_NORMAL):
+		ice_normal = load(ICECREAM_MASCOT_NORMAL) as Texture2D
+	if ResourceLoader.exists(ICECREAM_MASCOT_ROUGH):
+		ice_rough = load(ICECREAM_MASCOT_ROUGH) as Texture2D
+	if ResourceLoader.exists(ICECREAM_MASCOT_EMIT):
+		ice_emit = load(ICECREAM_MASCOT_EMIT) as Texture2D
+	_apply_grill_toy_materials(visual, ice_albedo, ice_normal, ice_rough, ice_emit)
+	var raw: AABB = _mesh_aabb_local(visual)
 	if raw.size.y <= 0.001:
 		push_warning("Ice-cream mascot has no usable height")
+		visual.queue_free()
 		return
-	var mascot := MeshInstance3D.new()
-	mascot.name = "SmilingIceCreamMascot"
-	mascot.mesh = mascot_mesh
-	mascot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	var fit_scale := ICECREAM_MASCOT_TARGET_H / raw.size.y
-	## Center the authored mesh on the lid and seat its lowest point just above
-	## the black trim. The OBJ conversion keeps the character's face on local +Z,
-	## matching the machine's pour face after the station yaw is applied.
-	var base_position := Vector3(
+	visual.name = "Visual"
+	visual.scale = Vector3.ONE * fit_scale
+	visual.position = Vector3(
 		-(raw.position.x + raw.size.x * 0.5) * fit_scale,
-		0.558 - raw.position.y * fit_scale,
+		-raw.position.y * fit_scale,
 		-(raw.position.z + raw.size.z * 0.5) * fit_scale
 	)
-	mascot.set_meta("base_position", base_position)
-	mascot.set_meta("base_fit_scale", fit_scale)
+	var mascot := Node3D.new()
+	mascot.name = "IceCreamMascot"
+	## Seat the cone on the black lid, same as the old smiling topper.
+	mascot.set_meta("base_position", Vector3(0.0, 0.558, 0.0))
+	mascot.add_child(visual)
 	machine_root.add_child(mascot)
 	_apply_icecream_mascot_transform()
 
@@ -34380,6 +34836,9 @@ func _begin_icecream_cone_hold() -> bool:
 		return false
 	if not _owns_icecream_machine():
 		_flash("Buy the ice cream machine on BizPhone first", Color("FFE082"))
+		return false
+	if _machine_is_broken("icecream"):
+		_flash("Soft serve shorted — click the wrench", Color("FFCC80"))
 		return false
 	if _icecream_grab_lockout > 0.0:
 		return false
@@ -34546,11 +35005,16 @@ func _try_fill_icecream_cone(delta: float) -> void:
 	if icecream_spout_marker == null or icecream_cone_root == null:
 		_hide_icecream_stream()
 		return
+	if _machine_is_broken("icecream"):
+		_hide_icecream_stream()
+		return
 	var tip := icecream_spout_marker.global_position
 	var rim := icecream_cone_root.global_position + Vector3(0.0, ICECREAM_CONE_VISUAL_DROP + ICECREAM_CONE_H + icecream_cone_fill * 0.09, 0.0)
 	var horiz := Vector2(tip.x - rim.x, tip.z - rim.z).length()
 	var vert := absf(tip.y - rim.y)
 	if horiz <= ICECREAM_SPOUT_HORIZ and vert <= ICECREAM_SPOUT_VERT and icecream_cone_fill < 1.0:
+		if not _icecream_pouring:
+			_note_machine_used("icecream")
 		_icecream_pouring = true
 		if game_audio and game_audio.has_method("set_softserve_dispense"):
 			game_audio.set_softserve_dispense(true)
@@ -34603,6 +35067,9 @@ func _dispense_cone_to_fill_station() -> bool:
 		return false
 	if not _owns_icecream_machine():
 		_flash("Buy the ice cream machine on BizPhone first", Color("FFE082"))
+		return false
+	if _machine_is_broken("icecream"):
+		_flash("Soft serve shorted — click the wrench", Color("FFCC80"))
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or cup_held or dragging_patty != null:
@@ -34659,6 +35126,10 @@ func _start_parked_icecream_fill() -> void:
 func _update_parked_icecream_fill(delta: float) -> void:
 	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		_icecream_parked_filling = false
+		return
+	if _machine_is_broken("icecream"):
+		_icecream_parked_filling = false
+		_hide_icecream_stream()
 		return
 	var seat := _icecream_fill_seat_global()
 	if seat == Vector3.ZERO:
@@ -35928,20 +36399,6 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 	neck.position = Vector3(0.0, 0.175, 0.0)
 	neck.material_override = lid.material_override
 	tank.add_child(neck)
-
-	var tag := Label3D.new()
-	tag.name = "TankLabel"
-	tag.text = str(SODA_FLAVOR_LABELS.get(flavor_id, flavor_id.to_upper()))
-	tag.position = Vector3(0.0, 0.0, 0.132) + soda_tank_label_offset
-	tag.scale = Vector3.ONE * soda_tank_label_scale
-	tag.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	tag.font_size = 45
-	tag.pixel_size = 0.0015
-	tag.modulate = Color(1, 1, 1, 0.95)
-	tag.outline_size = 8
-	tag.outline_modulate = Color(0, 0, 0, 0.75)
-	tank.add_child(tag)
-	soda_flavor_labels[flavor_id] = tag
 
 	_add_soda_tank_bubbles(tank, col, flavor_id)
 	return liq_mat
@@ -38408,6 +38865,9 @@ func _begin_cup_hold() -> bool:
 	if not _owns_soda_machine():
 		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
 		return false
+	if _machine_is_broken("soda"):
+		_flash("Soda fountain's dead — click the wrench", Color("FFCC80"))
+		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
@@ -38484,6 +38944,9 @@ func _dispense_cup_to_fill_station() -> bool:
 		return true
 	if not _owns_soda_machine():
 		_flash("Buy the soda machine on BizPhone first", Color("FFE082"))
+		return false
+	if _machine_is_broken("soda"):
+		_flash("Soda fountain's dead — click the wrench", Color("FFCC80"))
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null:
@@ -40281,6 +40744,13 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 		if game_audio and game_audio.has_method("set_ice_grind"):
 			game_audio.set_ice_grind(false)
 		return
+	if _machine_is_broken("soda"):
+		_hide_soda_stream()
+		_cup_pouring = false
+		_cup_pouring_ice = false
+		if game_audio and game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(false)
+		return
 	var rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.95, 0.0)
 	## Pick the nearer nozzle only — soda and ice never fire together. An active
 	## lock is authoritative so neighboring bays cannot alternate frame-to-frame.
@@ -40341,6 +40811,7 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 						_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
 						_refresh_ticket_checkmarks()
 					if before < 0.82 and cup_soda_fill >= 0.82:
+						_note_machine_used("soda")
 						call_deferred("_try_auto_hand_finished_soda")
 				elif _soda_tank_amount(fill_flavor) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
@@ -43321,6 +43792,7 @@ func _setup_radio() -> void:
 	radio.powered_changed.connect(_on_radio_powered)
 	_load_bank_settings()
 	_load_economy_settings()
+	_load_ticket_look_settings()
 	_build_phone_ui()
 	_build_radio_ui()
 	_build_hud_chrome_toggle()
@@ -43401,7 +43873,7 @@ func _cursor_on_cutting_board(screen_pos: Vector2) -> bool:
 	if camera == null:
 		return false
 	var center := _cutting_board_world_center()
-	var top_y := center.y + CUTTING_BOARD_SIZE.y * 0.5
+	var top_y := center.y + CUTTING_BOARD_SIZE.y * 0.5 * maxf(0.35, cutting_board_scale.y)
 	var from := camera.project_ray_origin(screen_pos)
 	var dir := camera.project_ray_normal(screen_pos)
 	if absf(dir.y) < 0.002:
@@ -43410,8 +43882,8 @@ func _cursor_on_cutting_board(screen_pos: Vector2) -> bool:
 	if t < 0.05:
 		return false
 	var hit := from + dir * t
-	var hx := CUTTING_BOARD_SIZE.x * 0.5 + 0.02
-	var hz := CUTTING_BOARD_SIZE.z * 0.5 + 0.02
+	var hx := CUTTING_BOARD_SIZE.x * 0.5 * maxf(0.35, cutting_board_scale.x) + 0.02
+	var hz := CUTTING_BOARD_SIZE.z * 0.5 * maxf(0.35, cutting_board_scale.z) + 0.02
 	return absf(hit.x - center.x) <= hx and absf(hit.z - center.z) <= hz
 
 
@@ -43435,62 +43907,53 @@ func _try_cutting_board_thud_click(screen_pos: Vector2) -> bool:
 
 
 func _build_cutting_board_prop() -> void:
-	## Procedural wood block — horizontal like the griddle, no billboard art.
+	## Desk FBX sits where the old procedural plank was.
 	if build_cutting_board != null and is_instance_valid(build_cutting_board):
 		build_cutting_board.queue_free()
 		build_cutting_board = null
-	var wood_tex := FoodSpritesScript.get_tex("wood")
 	var root := Node3D.new()
 	root.name = "BuildCuttingBoard"
 	root.position = _cutting_board_world_center()
-	var bw := CUTTING_BOARD_SIZE.x
-	var bh := CUTTING_BOARD_SIZE.y
-	var bd := CUTTING_BOARD_SIZE.z
-	## Dark apron rim — matches the grill steel lip.
-	var rim := MeshInstance3D.new()
-	rim.name = "BoardRim"
-	var rim_mesh := BoxMesh.new()
-	rim_mesh.size = Vector3(bw + 0.05, 0.014, bd + 0.05)
-	rim.mesh = rim_mesh
-	rim.position = Vector3(0.0, -bh * 0.5 - 0.006, 0.0)
-	var rim_mat := StandardMaterial3D.new()
-	rim_mat.albedo_color = CUTTING_BOARD_RIM_TINT
-	rim_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	rim_mat.roughness = 0.86
-	rim.material_override = rim_mat
-	root.add_child(rim)
-	## Main plank block — top face is the chop surface.
-	var slab := MeshInstance3D.new()
-	slab.name = "BoardSlab"
-	var slab_mesh := BoxMesh.new()
-	slab_mesh.size = CUTTING_BOARD_SIZE
-	slab.mesh = slab_mesh
-	if wood_tex != null:
-		slab.material_override = _make_toon_wood_material(
-			wood_tex, CUTTING_BOARD_WOOD_TINT, Vector3(2.4, 0.35, 2.0)
-		)
-	else:
-		var slab_mat := StandardMaterial3D.new()
-		slab_mat.albedo_color = CUTTING_BOARD_WOOD_TINT
-		slab_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-		slab_mat.roughness = 0.72
-		slab.material_override = slab_mat
-	root.add_child(slab)
-	## Shallow juice groove inset on the top face.
-	var groove := MeshInstance3D.new()
-	groove.name = "BoardGroove"
-	var groove_mesh := BoxMesh.new()
-	groove_mesh.size = Vector3(bw * 0.82, 0.006, bd * 0.78)
-	groove.mesh = groove_mesh
-	groove.position = Vector3(0.0, bh * 0.5 - 0.004, 0.0)
-	var groove_mat := StandardMaterial3D.new()
-	groove_mat.albedo_color = Color(0.62, 0.44, 0.26)
-	groove_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	groove_mat.roughness = 0.78
-	groove.material_override = groove_mat
-	root.add_child(groove)
+	if ResourceLoader.exists(CUTTING_BOARD_SCENE):
+		var packed := load(CUTTING_BOARD_SCENE) as PackedScene
+		if packed != null:
+			var visual := packed.instantiate() as Node3D
+			if visual != null:
+				var wood_albedo: Texture2D = null
+				if ResourceLoader.exists(CUTTING_BOARD_ALBEDO):
+					wood_albedo = load(CUTTING_BOARD_ALBEDO) as Texture2D
+				_apply_grill_toy_materials(visual, wood_albedo, null, null, null)
+				var aabb: AABB = _mesh_aabb_local(visual)
+				var longest_xz: float = maxf(aabb.size.x, aabb.size.z)
+				var fit: float = maxf(CUTTING_BOARD_SIZE.x, CUTTING_BOARD_SIZE.z) / maxf(longest_xz, 0.001)
+				visual.name = "Visual"
+				visual.scale = Vector3.ONE * fit
+				visual.position = Vector3(
+					-(aabb.position.x + aabb.size.x * 0.5) * fit,
+					-aabb.position.y * fit,
+					-(aabb.position.z + aabb.size.z * 0.5) * fit
+				)
+				visual.set_meta("base_scale", visual.scale)
+				visual.set_meta("base_position", visual.position)
+				root.add_child(visual)
+	if root.get_node_or_null("Visual") == null:
+		## Fallback plank if the desk file is missing.
+		var wood_tex := FoodSpritesScript.get_tex("wood")
+		var slab := MeshInstance3D.new()
+		slab.name = "Visual"
+		var slab_mesh := BoxMesh.new()
+		slab_mesh.size = CUTTING_BOARD_SIZE
+		slab.mesh = slab_mesh
+		if wood_tex != null:
+			slab.material_override = _make_toon_wood_material(
+				wood_tex, CUTTING_BOARD_WOOD_TINT, Vector3(2.4, 0.35, 2.0)
+			)
+		slab.set_meta("base_scale", Vector3.ONE)
+		slab.set_meta("base_position", Vector3.ZERO)
+		root.add_child(slab)
 	grill_root.add_child(root)
 	build_cutting_board = root
+	_apply_cutting_board_transform()
 	_build_board_hint_label()
 
 
@@ -44447,12 +44910,13 @@ func _make_crinkled_bill_mesh(size: Vector2, curve_r: float, crinkle_amp: float,
 	return st.commit()
 
 
-func _make_tip_bill_mesh(in_jar: bool) -> MeshInstance3D:
+func _make_tip_bill_mesh(in_jar: bool, size_mul: float = 1.0) -> MeshInstance3D:
 	var bill := MeshInstance3D.new()
 	bill.name = "TipBill"
-	var size: Vector2 = Vector2(0.048, 0.026) if in_jar else Vector2(0.092, 0.048)
-	var curve_r: float = 0.030 if in_jar else 0.16
-	var crinkle_amp: float = 0.0017 if in_jar else 0.0026
+	var mul: float = maxf(size_mul, 0.2)
+	var size: Vector2 = (Vector2(0.048, 0.026) if in_jar else Vector2(0.092, 0.048)) * mul
+	var curve_r: float = (0.030 if in_jar else 0.16) * mul
+	var crinkle_amp: float = (0.0017 if in_jar else 0.0026) * mul
 	bill.mesh = _make_crinkled_bill_mesh(size, curve_r, crinkle_amp, randf() * TAU)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -44468,6 +44932,33 @@ func _make_tip_bill_mesh(in_jar: bool) -> MeshInstance3D:
 	## Face the cook/camera (−Z). Lean up from the jar floor so the 1 reads.
 	bill.rotation_degrees = Vector3(-36.0, 180.0, 0.0)
 	return bill
+
+
+func _make_tip_sign_mesh() -> MeshInstance3D:
+	var sign := MeshInstance3D.new()
+	sign.name = "TipsCard"
+	## Almost-flat card taped onto the glass — the old 0.135 bow plus z=-0.052
+	## floated the handwritten label well off the jar (then scaled 3x).
+	sign.mesh = _make_crinkled_bill_mesh(Vector2(0.096, 0.060), 0.80, 0.00035, 2.35)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = MACHINE_LABEL_ALBEDO
+	if ResourceLoader.exists(TIP_SIGN_TEX_PATH):
+		mat.albedo_texture = load(TIP_SIGN_TEX_PATH) as Texture2D
+	mat.metallic = 0.0
+	mat.roughness = 0.92
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	mat.render_priority = 9
+	sign.material_override = mat
+	sign.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	## Front of the jar is local -Z. World camera-right is −X; jar scale is 3x
+	## so 1" world is INCH_TO_M / TIP_JAR_SCALE in local.
+	sign.position = Vector3(-MACHINE_LABEL_CAM_RIGHT_M / TIP_JAR_SCALE, 0.046 + (4.0 * INCH_TO_M) / TIP_JAR_SCALE, -0.033)
+	sign.rotation_degrees = Vector3(8.0, 180.0, 0.0)
+	sign.scale = Vector3.ONE * 0.80
+	return sign
 
 
 func _build_tip_jar(parent: Node3D) -> void:
@@ -44510,6 +45001,7 @@ func _build_tip_jar(parent: Node3D) -> void:
 	rim.position = Vector3(0.0, 0.104, 0.0)
 	rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	jar.add_child(rim)
+	jar.add_child(_make_tip_sign_mesh())
 	var fill := Node3D.new()
 	fill.name = "MoneyFill"
 	fill.position = Vector3(0.0, 0.012, 0.0)
@@ -44708,9 +45200,11 @@ func _tip_jar_mouth_global() -> Vector3:
 
 func _tip_pay_start_global(customer: Node3D) -> Vector3:
 	if customer != null and is_instance_valid(customer):
+		if customer.has_method("pay_hand_global"):
+			return customer.pay_hand_global()
 		if customer.has_method("mouth_global"):
-			return customer.mouth_global() + Vector3(0.0, 0.20, 0.0)
-		return customer.global_position + Vector3(0.0, 1.38, 0.06)
+			return customer.mouth_global() + Vector3(0.0, 0.12, 0.0)
+		return customer.global_position + Vector3(0.0, 1.18, 0.08)
 	return _tip_jar_mouth_global() + Vector3(0.0, 0.35, 0.22)
 
 
@@ -44730,19 +45224,33 @@ func _fly_pay_bills_to_tip_jar(customer: Node3D, count: int) -> void:
 		return
 	var n: int = clampi(count, 1, 4)
 	for i in n:
-		var bill: MeshInstance3D = _make_tip_bill_mesh(false)
+		var bill: MeshInstance3D = _make_tip_bill_mesh(false, 1.615)
+		bill.name = "TipFlyBill"
 		world.add_child(bill)
+		bill.top_level = true
+		var mat: StandardMaterial3D = bill.material_override as StandardMaterial3D
+		if mat != null:
+			mat.no_depth_test = true
+			mat.render_priority = 22
+		bill.sorting_offset = 22.0
 		var jitter := Vector3(randf_range(-0.04, 0.04), randf_range(0.0, 0.06), randf_range(-0.03, 0.03))
-		bill.global_position = from + jitter
+		var start_p: Vector3 = from + jitter
+		bill.global_position = start_p
 		var dest: Vector3 = land + Vector3(randf_range(-0.01, 0.01), 0.0, randf_range(-0.01, 0.01))
+		var mid: Vector3 = start_p.lerp(dest, 0.42) + Vector3(0.0, 0.28, 0.0)
+		bill.set_meta("fly_from", start_p)
+		bill.set_meta("fly_mid", mid)
+		bill.set_meta("fly_dest", dest)
 		var delay: float = float(i) * 0.07
+		var dur: float = 0.62
 		var tw: Tween = create_tween()
+		tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 		if delay > 0.0:
 			tw.tween_interval(delay)
-		tw.tween_property(bill, "global_position", dest, 0.42) \
+		tw.tween_method(_sale_bill_arc_node.bind(bill), 0.0, 1.0, dur) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(bill, "rotation_degrees", Vector3(-36.0, 180.0 + randf_range(-18.0, 18.0), randf_range(-12.0, 12.0)), 0.42)
-		tw.tween_callback(_on_tip_bill_landed.bind(bill))
+		tw.parallel().tween_property(bill, "rotation_degrees", Vector3(-36.0, 180.0 + randf_range(-18.0, 18.0), randf_range(-12.0, 12.0)), dur)
+		tw.chain().tween_callback(_on_tip_bill_landed.bind(bill))
 
 
 func _bun_visual_pair_count() -> int:
@@ -45267,6 +45775,8 @@ func _toggle_hud_chrome_collapsed() -> void:
 	hud_chrome_collapsed = not hud_chrome_collapsed
 	if phone_column != null and is_instance_valid(phone_column):
 		phone_column.visible = not hud_chrome_collapsed
+	if phone_muvye_page != null and is_instance_valid(phone_muvye_page) and phone_muvye_page.has_method("set_active"):
+		phone_muvye_page.call("set_active", _phone_app_id == "muvye" and not hud_chrome_collapsed)
 	if hud_chrome_toggle != null and is_instance_valid(hud_chrome_toggle):
 		if hud_chrome_collapsed:
 			hud_chrome_toggle.text = "▼"
@@ -45960,8 +46470,7 @@ func _apply_social_review(
 			if typeof(existing) != TYPE_DICTIONARY:
 				continue
 			if str(existing.get("who", "")) == who and str(existing.get("text", "")) == text:
-				_refresh_phone_ui()
-				_scroll_phone_to_social()
+				_sync_phone_social_quietly()
 				return
 	if not mirror:
 		social_review_count += 1
@@ -45988,13 +46497,27 @@ func _apply_social_review(
 	social_reviews.push_front(post)
 	while social_reviews.size() > SOCIAL_FEED_MAX:
 		social_reviews.pop_back()
-	_refresh_phone_ui()
-	_scroll_phone_to_social()
+	_sync_phone_social_quietly()
 	_flash("%s left a review!" % who, Color("90CAF9"))
 
 
-func _scroll_phone_to_social() -> void:
-	_set_phone_app("social")
+func _sync_phone_social_quietly() -> void:
+	## New posts stay in the feed; never kick the player out of shop / maps / arcade / movies.
+	if phone_rating_stars != null and phone_rating_value != null and phone_review_label != null:
+		if social_review_count <= 0:
+			phone_rating_stars.text = "☆☆☆☆☆"
+			phone_rating_value.text = "—"
+			phone_review_label.text = "New business · 0 reviews"
+		else:
+			var avg := _social_rating_display()
+			phone_rating_stars.text = _star_bar_text(avg)
+			phone_rating_value.text = "%.1f" % avg
+			phone_review_label.text = "%d review%s" % [
+				social_review_count,
+				"s" if social_review_count != 1 else ""
+			]
+	if _phone_app_id == "social":
+		_refresh_phone_feed()
 
 
 func _clear_phone_box_children(box: Node) -> void:
@@ -46508,6 +47031,17 @@ func _phone_app_icon_texture(app_id: String) -> Texture2D:
 			_phone_icon_fill_rect(img, 12, 16, 18, 48, w)
 			_phone_icon_fill_rect(img, 46, 20, 52, 52, w)
 			_phone_icon_fill_circle(img, 34.0, 30.0, 6.0, w)
+		"smush":
+			_phone_icon_fill_circle(img, 32.0, 18.0, 12.0, w)
+			_phone_icon_fill_rect(img, 18, 26, 46, 38, w)
+			_phone_icon_fill_circle(img, 32.0, 44.0, 11.0, w)
+		"muvye":
+			_phone_icon_fill_rect(img, 8, 13, 56, 51, w)
+			_phone_icon_fill_rect(img, 13, 18, 51, 46, Color(0, 0, 0, 0))
+			_phone_icon_fill_triangle(img, 27.0, 23.0, 27.0, 42.0, 43.0, 32.5, w)
+			for hole_x in [11, 53]:
+				for hole_y in [17, 27, 37, 47]:
+					_phone_icon_fill_circle(img, float(hole_x), float(hole_y), 1.8, Color(0, 0, 0, 0))
 		_:
 			_phone_icon_fill_circle(img, 32.0, 32.0, 16.0, w)
 	return ImageTexture.create_from_image(img)
@@ -46515,10 +47049,12 @@ func _phone_app_icon_texture(app_id: String) -> Texture2D:
 
 func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Color, accent: Color) -> Control:
 	var wrap := VBoxContainer.new()
+	wrap.name = "%sAppIcon" % app_id.capitalize()
 	wrap.add_theme_constant_override("separation", 4)
 	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 	var btn := Button.new()
+	btn.name = "%sAppButton" % app_id.capitalize()
 	btn.text = ""
 	btn.icon = _phone_app_icon_texture(app_id)
 	if btn.icon == null:
@@ -46562,6 +47098,22 @@ func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Co
 	return wrap
 
 
+func _on_muvye_cinema_mode(enabled: bool) -> void:
+	if phone_column == null or not is_instance_valid(phone_column):
+		return
+	var status := phone_column.find_child("PhoneStatusBar", true, false) as Control
+	if status != null:
+		status.visible = not enabled
+	if phone_nav_bar != null and is_instance_valid(phone_nav_bar):
+		phone_nav_bar.visible = (not enabled) and _phone_app_id != "home"
+	var screen := phone_column.find_child("PhoneScreen", true, false) as PanelContainer
+	if screen != null:
+		var screen_sb := screen.get_theme_stylebox("panel") as StyleBoxFlat
+		if screen_sb != null:
+			screen_sb.bg_color = Color.BLACK if enabled else Color(0.05, 0.075, 0.12, 0.99)
+			screen_sb.border_color = Color.BLACK if enabled else Color(0.28, 0.48, 0.62, 0.40)
+
+
 func _set_phone_app(app_id: String) -> void:
 	_phone_app_id = app_id
 	if phone_home_page != null:
@@ -46582,6 +47134,18 @@ func _set_phone_app(app_id: String) -> void:
 		phone_gnop_page.visible = app_id == "gnop"
 		if phone_gnop_page.has_method("set_active"):
 			phone_gnop_page.call("set_active", app_id == "gnop")
+	if phone_smush_page != null:
+		phone_smush_page.visible = app_id == "smush"
+		if phone_smush_page.has_method("set_active"):
+			phone_smush_page.call("set_active", app_id == "smush")
+	if phone_muvye_page != null:
+		phone_muvye_page.visible = app_id == "muvye"
+		if phone_muvye_page.has_method("set_active"):
+			phone_muvye_page.call("set_active", app_id == "muvye" and not hud_chrome_collapsed)
+		if app_id != "muvye" and phone_muvye_page.has_method("set_cinema"):
+			phone_muvye_page.call("set_cinema", false)
+	if radio_column != null:
+		radio_column.visible = app_id != "muvye"
 	if phone_nav_bar != null:
 		phone_nav_bar.visible = app_id != "home"
 	if phone_nav_title != null:
@@ -46598,9 +47162,13 @@ func _set_phone_app(app_id: String) -> void:
 				phone_nav_title.text = "Snak"
 			"gnop":
 				phone_nav_title.text = "Gnop"
+			"smush":
+				phone_nav_title.text = "Smush"
+			"muvye":
+				phone_nav_title.text = "MUVYE"
 			_:
 				phone_nav_title.text = "Home"
-	var arcade := app_id == "snak" or app_id == "gnop"
+	var arcade := app_id == "snak" or app_id == "gnop" or app_id == "smush" or app_id == "muvye"
 	if phone_scroll != null and is_instance_valid(phone_scroll):
 		phone_scroll.scroll_vertical = 0
 		var scroll_host := phone_scroll.get_parent()
@@ -46622,7 +47190,7 @@ func _refresh_phone_maps() -> void:
 		return
 	if phone_maps_here != null:
 		phone_maps_here.text = "Parked: %s" % TruckLocationsScript.display_name(current_location_id)
-	_layout_phone_map_pins()
+	_apply_phone_map_view()
 	_clear_phone_box_children(phone_maps_box)
 	for loc_var in TruckLocationsScript.all():
 		var loc: Dictionary = loc_var
@@ -46688,51 +47256,21 @@ func _refresh_phone_maps() -> void:
 
 
 func _build_phone_maps_preview(parent: Control) -> void:
-	var frame := PanelContainer.new()
-	frame.name = "PhoneMapPreview"
-	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	frame.custom_minimum_size = Vector2(0, 168)
-	frame.mouse_filter = Control.MOUSE_FILTER_STOP
-	var fsb := StyleBoxFlat.new()
-	fsb.bg_color = Color(0.10, 0.13, 0.16, 1.0)
-	fsb.border_color = Color(0.55, 0.78, 0.95, 0.45)
-	fsb.set_border_width_all(2)
-	fsb.set_corner_radius_all(14)
-	fsb.content_margin_left = 6
-	fsb.content_margin_right = 6
-	fsb.content_margin_top = 6
-	fsb.content_margin_bottom = 6
-	frame.add_theme_stylebox_override("panel", fsb)
-	parent.add_child(frame)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 5)
-	frame.add_child(col)
-	var search := PanelContainer.new()
-	search.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ssb := StyleBoxFlat.new()
-	ssb.bg_color = Color(0.16, 0.18, 0.22, 0.96)
-	ssb.set_corner_radius_all(12)
-	ssb.content_margin_left = 8
-	ssb.content_margin_right = 8
-	ssb.content_margin_top = 4
-	ssb.content_margin_bottom = 4
-	search.add_theme_stylebox_override("panel", ssb)
-	col.add_child(search)
-	var search_lab := Label.new()
-	search_lab.text = "Search this area"
-	UiFontsScript.apply_label(search_lab, false, 11)
-	search_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
-	search.add_child(search_lab)
 	phone_maps_preview = Control.new()
 	phone_maps_preview.name = "TownMapHost"
-	phone_maps_preview.custom_minimum_size = Vector2(0, 118)
+	phone_maps_preview.custom_minimum_size = Vector2(0, 210)
 	phone_maps_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_maps_preview.clip_contents = true
 	phone_maps_preview.mouse_filter = Control.MOUSE_FILTER_STOP
-	phone_maps_preview.resized.connect(_layout_phone_map_pins)
-	col.add_child(phone_maps_preview)
+	phone_maps_preview.resized.connect(_apply_phone_map_view)
+	phone_maps_preview.gui_input.connect(_on_phone_map_gui_input)
+	parent.add_child(phone_maps_preview)
+	phone_maps_content = Control.new()
+	phone_maps_content.name = "MapContent"
+	phone_maps_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	phone_maps_preview.add_child(phone_maps_content)
 	phone_maps_art = TextureRect.new()
-	phone_maps_art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	phone_maps_art.name = "TownMapArt"
 	phone_maps_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	phone_maps_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	phone_maps_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -46740,11 +47278,148 @@ func _build_phone_maps_preview(parent: Control) -> void:
 		phone_maps_art.texture = load("res://assets/ui/town_map.png") as Texture2D
 	elif ResourceLoader.exists("res://IMAGES/town_map.png"):
 		phone_maps_art.texture = load("res://IMAGES/town_map.png") as Texture2D
-	phone_maps_preview.add_child(phone_maps_art)
+	phone_maps_content.add_child(phone_maps_art)
 	phone_maps_pin_layer = Control.new()
-	phone_maps_pin_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	phone_maps_pin_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	phone_maps_preview.add_child(phone_maps_pin_layer)
+	phone_maps_content.add_child(phone_maps_pin_layer)
+	var search := PanelContainer.new()
+	search.name = "MapSearch"
+	search.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	search.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	search.offset_left = 8.0
+	search.offset_right = -8.0
+	search.offset_top = 8.0
+	search.offset_bottom = 34.0
+	var ssb := StyleBoxFlat.new()
+	ssb.bg_color = Color(0.16, 0.18, 0.22, 0.94)
+	ssb.set_corner_radius_all(4)
+	ssb.content_margin_left = 10
+	ssb.content_margin_right = 10
+	ssb.content_margin_top = 5
+	ssb.content_margin_bottom = 5
+	search.add_theme_stylebox_override("panel", ssb)
+	phone_maps_preview.add_child(search)
+	var search_lab := Label.new()
+	search_lab.text = "Search this area"
+	search_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_label(search_lab, false, 11)
+	search_lab.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	search.add_child(search_lab)
+	var zoom_col := VBoxContainer.new()
+	zoom_col.name = "MapZoom"
+	zoom_col.mouse_filter = Control.MOUSE_FILTER_STOP
+	zoom_col.add_theme_constant_override("separation", 4)
+	zoom_col.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	zoom_col.offset_left = -36.0
+	zoom_col.offset_top = -78.0
+	zoom_col.offset_right = -8.0
+	zoom_col.offset_bottom = -8.0
+	phone_maps_preview.add_child(zoom_col)
+	zoom_col.add_child(_make_phone_map_zoom_btn("+", 0.28))
+	zoom_col.add_child(_make_phone_map_zoom_btn("−", -0.28))
+	call_deferred("_apply_phone_map_view")
+
+
+func _make_phone_map_zoom_btn(caption: String, delta: float) -> Button:
+	var btn := Button.new()
+	btn.text = caption
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.custom_minimum_size = Vector2(28, 28)
+	UiFontsScript.apply_button(btn, true, 16)
+	var n := StyleBoxFlat.new()
+	n.bg_color = Color(0.14, 0.16, 0.20, 0.94)
+	n.border_color = Color(0.85, 0.88, 0.92, 0.35)
+	n.set_border_width_all(1)
+	n.set_corner_radius_all(4)
+	btn.add_theme_stylebox_override("normal", n)
+	var h := n.duplicate() as StyleBoxFlat
+	h.bg_color = Color(0.22, 0.24, 0.30, 0.96)
+	btn.add_theme_stylebox_override("hover", h)
+	btn.add_theme_stylebox_override("pressed", n)
+	btn.pressed.connect(func():
+		_sfx_click()
+		_phone_map_zoom_by(delta, phone_maps_preview.size * 0.5)
+	)
+	return btn
+
+
+func _phone_map_tex_size() -> Vector2:
+	if phone_maps_art != null and phone_maps_art.texture != null:
+		var s: Vector2 = phone_maps_art.texture.get_size()
+		if s.x > 1.0 and s.y > 1.0:
+			return s
+	return Vector2(1024, 682)
+
+
+func _phone_map_base_size() -> Vector2:
+	var host: Vector2 = phone_maps_preview.size if phone_maps_preview != null else Vector2(220, 210)
+	if host.x < 8.0 or host.y < 8.0:
+		return _phone_map_tex_size()
+	var tex: Vector2 = _phone_map_tex_size()
+	var cover: float = maxf(host.x / tex.x, host.y / tex.y)
+	return tex * cover
+
+
+func _apply_phone_map_view() -> void:
+	if phone_maps_preview == null or phone_maps_content == null or phone_maps_art == null:
+		return
+	var host: Vector2 = phone_maps_preview.size
+	if host.x < 8.0 or host.y < 8.0:
+		return
+	_phone_map_zoom = clampf(_phone_map_zoom, 1.0, 4.0)
+	var sz: Vector2 = _phone_map_base_size() * _phone_map_zoom
+	phone_maps_content.size = sz
+	phone_maps_art.position = Vector2.ZERO
+	phone_maps_art.size = sz
+	if phone_maps_pin_layer != null:
+		phone_maps_pin_layer.position = Vector2.ZERO
+		phone_maps_pin_layer.size = sz
+	var min_p := Vector2(minf(host.x - sz.x, 0.0), minf(host.y - sz.y, 0.0))
+	_phone_map_pan.x = clampf(_phone_map_pan.x, min_p.x, 0.0)
+	_phone_map_pan.y = clampf(_phone_map_pan.y, min_p.y, 0.0)
+	phone_maps_content.position = _phone_map_pan
+	_layout_phone_map_pins()
+
+
+func _phone_map_zoom_by(delta: float, pivot: Vector2) -> void:
+	var old_z: float = _phone_map_zoom
+	var next_z: float = clampf(old_z + delta, 1.0, 4.0)
+	if is_equal_approx(next_z, old_z):
+		return
+	var map_pt: Vector2 = (pivot - _phone_map_pan) / old_z
+	_phone_map_zoom = next_z
+	_phone_map_pan = pivot - map_pt * next_z
+	_apply_phone_map_view()
+
+
+func _on_phone_map_gui_input(ev: InputEvent) -> void:
+	if phone_maps_preview == null:
+		return
+	if ev is InputEventMouseButton:
+		var mb := ev as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+			_phone_map_zoom_by(0.18, mb.position)
+			phone_maps_preview.accept_event()
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			_phone_map_zoom_by(-0.18, mb.position)
+			phone_maps_preview.accept_event()
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			_phone_map_dragging = mb.pressed
+			phone_maps_preview.accept_event()
+		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
+			_phone_map_dragging = mb.pressed
+			phone_maps_preview.accept_event()
+	elif ev is InputEventMouseMotion and _phone_map_dragging:
+		var mm := ev as InputEventMouseMotion
+		_phone_map_pan += mm.relative
+		_apply_phone_map_view()
+		phone_maps_preview.accept_event()
+	elif ev is InputEventMagnifyGesture:
+		var mag := ev as InputEventMagnifyGesture
+		var pivot: Vector2 = mag.position
+		var delta_z: float = (mag.factor - 1.0) * 2.4
+		_phone_map_zoom_by(delta_z, pivot)
+		phone_maps_preview.accept_event()
 
 
 func _layout_phone_map_pins() -> void:
@@ -46761,9 +47436,9 @@ func _layout_phone_map_pins() -> void:
 		var parked := loc_id == current_location_id
 		var pin := Button.new()
 		pin.focus_mode = Control.FOCUS_NONE
-		pin.custom_minimum_size = Vector2(16, 16)
-		pin.size = Vector2(16, 16)
-		pin.position = Vector2(uv.x * sz.x, uv.y * sz.y) - Vector2(8, 8)
+		pin.custom_minimum_size = Vector2(18, 18)
+		pin.size = Vector2(18, 18)
+		pin.position = Vector2(uv.x * sz.x, uv.y * sz.y) - Vector2(9, 9)
 		pin.tooltip_text = str(loc.get("name", loc_id))
 		pin.mouse_filter = Control.MOUSE_FILTER_STOP
 		var n := StyleBoxFlat.new()
@@ -46771,13 +47446,19 @@ func _layout_phone_map_pins() -> void:
 		n.bg_color = TruckLocationsScript.tier_color(tier)
 		n.border_color = Color.WHITE if parked else Color(0.08, 0.08, 0.10, 0.9)
 		n.set_border_width_all(2 if parked else 1)
-		n.set_corner_radius_all(8)
+		n.set_corner_radius_all(9)
 		pin.add_theme_stylebox_override("normal", n)
 		var h := n.duplicate() as StyleBoxFlat
 		h.bg_color = n.bg_color.lightened(0.15)
 		pin.add_theme_stylebox_override("hover", h)
 		pin.add_theme_stylebox_override("pressed", n)
 		var pick := loc_id
+		pin.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton:
+				var mb := ev as InputEventMouseButton
+				if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+					_on_phone_map_gui_input(ev)
+		)
 		pin.pressed.connect(func():
 			_sfx_click()
 			_on_location_confirmed(pick)
@@ -46802,6 +47483,34 @@ func _save_bank_settings() -> void:
 	cfg.set_value(BANK_CFG_SECTION, "loan_rate", bank_loan_rate_pct)
 	cfg.set_value(BANK_CFG_SECTION, "chunk", bank_xfer_chunk if bank_xfer_chunk > 0.0 else 100.0)
 	cfg.save(GFX_CFG_PATH)
+
+
+func _load_ticket_look_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	ticket_saturation = clampf(float(cfg.get_value(TICKET_LOOK_CFG_SECTION, "saturation", TICKET_SATURATION_DEFAULT)), 0.0, 1.5)
+	ticket_opacity = clampf(float(cfg.get_value(TICKET_LOOK_CFG_SECTION, "opacity", TICKET_OPACITY_DEFAULT)), 0.15, 1.0)
+
+
+func _save_ticket_look_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(TICKET_LOOK_CFG_SECTION, "saturation", ticket_saturation)
+	cfg.set_value(TICKET_LOOK_CFG_SECTION, "opacity", ticket_opacity)
+	cfg.save(GFX_CFG_PATH)
+
+
+func _ticket_note_modulate(selected: bool) -> Color:
+	var base := Color(1.05, 1.02, 0.95, 1.0) if selected else Color(0.94, 0.92, 0.88, 1.0)
+	var lum := base.r * 0.299 + base.g * 0.587 + base.b * 0.114
+	var sat := clampf(ticket_saturation, 0.0, 1.5)
+	return Color(
+		lerpf(lum, base.r, sat),
+		lerpf(lum, base.g, sat),
+		lerpf(lum, base.b, sat),
+		clampf(ticket_opacity, 0.15, 1.0)
+	)
 
 
 func _apply_economy_to_gamedata() -> void:
@@ -47137,6 +47846,8 @@ func _shop_item_cost(id: String) -> float:
 			return SHOP_GRILL_ROOMBA_COST
 		SHOP_FRIDGE_UPGRADE:
 			return SHOP_FRIDGE_UPGRADE_COST
+		SHOP_GOLD_SPATULA:
+			return SHOP_GOLD_SPATULA_COST
 		SHOP_TRUCK:
 			return CUT_COLLECTOR_BUYOUT
 		_:
@@ -47155,6 +47866,8 @@ func _shop_item_label(id: String) -> String:
 			return "Turbachef Robot"
 		SHOP_FRIDGE_UPGRADE:
 			return "Bigger Fridge"
+		SHOP_GOLD_SPATULA:
+			return "Golden Spatula"
 		SHOP_TRUCK:
 			return "Buy The Truck"
 		_:
@@ -47173,10 +47886,259 @@ func _shop_item_note(id: String) -> String:
 			return "Auto-cleans dirty grill spots"
 		SHOP_FRIDGE_UPGRADE:
 			return "Doubles storage"
+		SHOP_GOLD_SPATULA:
+			return "Gives your spatula a polished gold finish"
 		SHOP_TRUCK:
 			return "He stops taking half"
 		_:
 			return ""
+
+
+func _shop_item_description(id: String) -> String:
+	match id:
+		SHOP_TRUCK:
+			return "Own the Burger Pals truck outright and keep every dollar your window earns."
+		SHOP_SODA_MACHINE:
+			return "Serve chilled fountain drinks in multiple flavors and unlock profitable soda orders."
+		SHOP_ICECREAM_MACHINE:
+			return "Add soft-serve cones to the menu with a cheerful countertop dessert station."
+		SHOP_FRYER_MACHINE:
+			return "Cook crispy golden fries and expand every meal into a higher-value combo."
+		SHOP_GRILL_ROOMBA:
+			return "A tiny Turbachef helper that patrols the cooktop and scrubs dirty grill spots."
+		SHOP_FRIDGE_UPGRADE:
+			return "Double cold-storage capacity so busy shifts need fewer emergency restocks."
+		SHOP_GOLD_SPATULA:
+			return "Cook in style with a polished metallic-gold finish applied to your real Burger Pals spatula."
+		_:
+			return _shop_item_note(id)
+
+
+func _shop_item_rating(id: String) -> Dictionary:
+	match id:
+		SHOP_TRUCK:
+			return {"score": 4.9, "reviews": 842}
+		SHOP_SODA_MACHINE:
+			return {"score": 4.8, "reviews": 1264}
+		SHOP_ICECREAM_MACHINE:
+			return {"score": 4.7, "reviews": 986}
+		SHOP_FRYER_MACHINE:
+			return {"score": 4.6, "reviews": 734}
+		SHOP_GRILL_ROOMBA:
+			return {"score": 4.9, "reviews": 2103}
+		SHOP_FRIDGE_UPGRADE:
+			return {"score": 4.7, "reviews": 512}
+		SHOP_GOLD_SPATULA:
+			return {"score": 4.9, "reviews": 1887}
+		_:
+			return {"score": 4.5, "reviews": 100}
+
+
+func _shop_review_count_text(value: int) -> String:
+	var digits := str(maxi(value, 0))
+	var out := ""
+	while digits.length() > 3:
+		out = "," + digits.right(3) + out
+		digits = digits.left(digits.length() - 3)
+	return digits + out
+
+
+func _shop_product_source(id: String) -> Node3D:
+	match id:
+		SHOP_SODA_MACHINE:
+			if soda_root != null and is_instance_valid(soda_root):
+				var fountain_only := soda_root.get_node_or_null("FountainModel") as Node3D
+				if fountain_only != null:
+					return fountain_only
+			return soda_root
+		SHOP_ICECREAM_MACHINE:
+			return icecream_root
+		SHOP_FRYER_MACHINE:
+			return fryer_root
+		SHOP_GRILL_ROOMBA:
+			return grill_roomba_root
+		SHOP_FRIDGE_UPGRADE:
+			return patty_fridge_root
+		SHOP_GOLD_SPATULA:
+			return hand_spatula_visual
+		_:
+			return null
+
+
+func _shop_preview_collect_bounds(node: Node3D, from_root: Transform3D, state: Dictionary) -> void:
+	if not node.visible:
+		return
+	if node.has_method("get_aabb"):
+		var local_box: AABB = node.call("get_aabb")
+		if local_box.size.length_squared() > 0.000001:
+			var transformed: AABB = from_root * local_box
+			if bool(state["found"]):
+				state["bounds"] = (state["bounds"] as AABB).merge(transformed)
+			else:
+				state["bounds"] = transformed
+				state["found"] = true
+	for child in node.get_children():
+		var child_3d := child as Node3D
+		if child_3d != null:
+			_shop_preview_collect_bounds(child_3d, from_root * child_3d.transform, state)
+
+
+func _shop_preview_bounds(root: Node3D) -> AABB:
+	## Use local transforms so cards can be assembled before their SubViewport enters the tree.
+	var state := {"found": false, "bounds": AABB()}
+	_shop_preview_collect_bounds(root, Transform3D.IDENTITY, state)
+	return state["bounds"] as AABB if bool(state["found"]) else AABB(Vector3(-0.5, -0.5, -0.5), Vector3.ONE)
+
+
+func _make_shop_product_preview(id: String) -> Control:
+	var frame := PanelContainer.new()
+	frame.name = "ShopProductPreview"
+	frame.custom_minimum_size = Vector2(0, 188 if id == SHOP_SODA_MACHINE or id == SHOP_ICECREAM_MACHINE else 150)
+	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var frame_style := StyleBoxFlat.new()
+	frame_style.bg_color = Color("20252B")
+	frame_style.border_color = Color("525B65")
+	frame_style.set_border_width_all(1)
+	frame_style.set_corner_radius_all(8)
+	frame.add_theme_stylebox_override("panel", frame_style)
+	var backdrop := TextureRect.new()
+	backdrop.name = "ProductBackdrop"
+	backdrop.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	backdrop.stretch_mode = TextureRect.STRETCH_SCALE
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var gradient := Gradient.new()
+	gradient.offsets = PackedFloat32Array([0.0, 0.48, 1.0])
+	gradient.colors = PackedColorArray([Color("555C64"), Color("30363D"), Color("171B20")])
+	var gradient_tex := GradientTexture2D.new()
+	gradient_tex.gradient = gradient
+	gradient_tex.fill_from = Vector2(0.18, 0.0)
+	gradient_tex.fill_to = Vector2(0.82, 1.0)
+	backdrop.texture = gradient_tex
+	frame.add_child(backdrop)
+
+	if id == SHOP_TRUCK and ResourceLoader.exists(START_LOGO_TEX_PATH):
+		var art := TextureRect.new()
+		art.name = "ProductImage"
+		art.texture = load(START_LOGO_TEX_PATH) as Texture2D
+		art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		art.modulate = Color(0.92, 0.94, 0.96)
+		frame.add_child(art)
+		return frame
+
+	var source := _shop_product_source(id)
+	if source == null or not is_instance_valid(source):
+		var fallback := Label.new()
+		fallback.text = "BURGER PALS\nEQUIPMENT"
+		fallback.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		fallback.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		UiFontsScript.apply_luckiest_label(fallback, 17)
+		fallback.add_theme_color_override("font_color", Color("146EB4"))
+		frame.add_child(fallback)
+		return frame
+
+	var viewport_wrap := ShopProductPreviewScript.new() as SubViewportContainer
+	viewport_wrap.name = "ProductImage"
+	viewport_wrap.stretch = true
+	viewport_wrap.tooltip_text = "Right-drag to spin this 3D product"
+	frame.add_child(viewport_wrap)
+	var preview := SubViewport.new()
+	preview.name = "ProductViewport"
+	preview.size = Vector2i(360, 252)
+	preview.own_world_3d = true
+	preview.transparent_bg = true
+	preview.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	preview.msaa_3d = Viewport.MSAA_2X
+	viewport_wrap.add_child(preview)
+
+	var environment_node := WorldEnvironment.new()
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = Color(0.0, 0.0, 0.0, 0.0)
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color.WHITE
+	environment.ambient_light_energy = 1.15
+	environment.tonemap_mode = Environment.TONE_MAPPER_ACES
+	environment_node.environment = environment
+	preview.add_child(environment_node)
+
+	var key := DirectionalLight3D.new()
+	key.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
+	key.light_color = Color(1.0, 0.94, 0.84)
+	key.light_energy = 1.55
+	key.shadow_enabled = true
+	preview.add_child(key)
+	var fill := DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(-22.0, 148.0, 0.0)
+	fill.light_color = Color(0.72, 0.84, 1.0)
+	fill.light_energy = 0.72
+	preview.add_child(fill)
+
+	var turntable := Node3D.new()
+	turntable.name = "ProductTurntable"
+	preview.add_child(turntable)
+	viewport_wrap.call("bind_turntable", turntable)
+	var model := source.duplicate(0) as Node3D
+	if model != null:
+		model.name = "ActualItemModel"
+		model.transform = Transform3D.IDENTITY
+		model.visible = true
+		model.process_mode = Node.PROCESS_MODE_DISABLED
+		turntable.add_child(model)
+		if id == SHOP_GOLD_SPATULA:
+			_set_spatula_gold_finish(model, true, false)
+		var box := _shop_preview_bounds(model)
+		var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
+		var target_size := 1.90 if id == SHOP_SODA_MACHINE or id == SHOP_ICECREAM_MACHINE else 1.64
+		var fit_scale := target_size / maxf(longest, 0.01)
+		model.scale = Vector3.ONE * fit_scale
+		model.position = -box.get_center() * fit_scale
+
+	var floor := MeshInstance3D.new()
+	floor.name = "StudioFloor"
+	var floor_mesh := PlaneMesh.new()
+	floor_mesh.size = Vector2(4.5, 4.5)
+	floor.mesh = floor_mesh
+	floor.position.y = -1.02
+	var floor_mat := StandardMaterial3D.new()
+	floor_mat.albedo_color = Color("30353A")
+	floor_mat.roughness = 0.86
+	floor.material_override = floor_mat
+	preview.add_child(floor)
+
+	var preview_camera := Camera3D.new()
+	preview_camera.name = "ProductCamera"
+	preview_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	## The ice-cream station is slender; frame it more tightly than the other gear.
+	preview_camera.size = 1.70 if id == SHOP_ICECREAM_MACHINE else 2.16
+	preview.add_child(preview_camera)
+	preview_camera.look_at_from_position(Vector3(2.1, 1.35, 2.7), Vector3(0.0, 0.02, 0.0), Vector3.UP)
+	preview_camera.current = true
+	return frame
+
+
+func _style_shop_market_button(btn: Button, owned: bool) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color("D5F2D8") if owned else Color("FFD814")
+	normal.border_color = Color("75B978") if owned else Color("FCD200")
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(12)
+	normal.content_margin_top = 6
+	normal.content_margin_bottom = 6
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color("C5EBC9") if owned else Color("F7CA00")
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color("B4DDB9") if owned else Color("EFB800")
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("disabled", normal)
+	btn.add_theme_color_override("font_color", Color("0F1111"))
+	btn.add_theme_color_override("font_hover_color", Color("0F1111"))
+	btn.add_theme_color_override("font_pressed_color", Color("0F1111"))
+	btn.add_theme_color_override("font_disabled_color", Color("36543A") if owned else Color("6B5B00"))
 
 
 func _shop_item_block_reason(_id: String) -> String:
@@ -47196,12 +48158,272 @@ func _owns_fryer_machine() -> bool:
 	return bool(owned_machines.get(SHOP_FRYER_MACHINE, false))
 
 
+func _machine_ids() -> Array[String]:
+	var ids: Array[String] = ["soda", "icecream", "fryer"]
+	return ids
+
+
+func _machine_label(id: String) -> String:
+	match id:
+		"soda":
+			return "Soda fountain"
+		"icecream":
+			return "Soft serve"
+		"fryer":
+			return "Fryer"
+		_:
+			return "Machine"
+
+
+func _machine_root(id: String) -> Node3D:
+	match id:
+		"soda":
+			return soda_root
+		"icecream":
+			return icecream_root
+		"fryer":
+			return fryer_root
+		_:
+			return null
+
+
+func _machine_is_broken(id: String) -> bool:
+	return bool(_machine_broken.get(id, false))
+
+
+func _machine_owned(id: String) -> bool:
+	match id:
+		"soda":
+			return _owns_soda_machine()
+		"icecream":
+			return _owns_icecream_machine()
+		"fryer":
+			return _owns_fryer_machine()
+		_:
+			return false
+
+
+func _note_machine_used(id: String) -> void:
+	if id == "" or _machine_is_broken(id):
+		return
+	if not playing or not _machine_owned(id):
+		return
+	var n: int = int(_machine_use_count.get(id, 0)) + 1
+	if n < MACHINE_BREAK_EVERY_USES:
+		_machine_use_count[id] = n
+		return
+	_machine_use_count[id] = 0
+	if randf() < MACHINE_BREAK_CHANCE:
+		_break_machine(id)
+
+
+func _reset_machine_breaks() -> void:
+	for id in _machine_ids():
+		_machine_use_count[id] = 0
+		_machine_broken[id] = false
+		_clear_machine_break_fx(id)
+
+
+func _update_machine_breaks(_delta: float) -> void:
+	for id in _machine_ids():
+		if not _machine_owned(id):
+			continue
+		if _machine_is_broken(id):
+			_ensure_machine_break_fx(id)
+
+
+func _break_machine(id: String) -> void:
+	_machine_broken[id] = true
+	_machine_use_count[id] = 0
+	_ensure_machine_break_fx(id)
+	if id == "soda":
+		_hide_soda_stream()
+		_cup_pouring = false
+		_cup_pouring_ice = false
+		if game_audio and game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(false)
+	elif id == "icecream":
+		_hide_icecream_stream()
+		_icecream_parked_filling = false
+	_flash("%s sparked out — click the wrench" % _machine_label(id), Color("FFCC80"))
+	if game_audio != null and game_audio.has_method("play_grease_pop"):
+		game_audio.play_grease_pop(true, 1.15)
+
+
+func _repair_machine(id: String) -> void:
+	_machine_broken[id] = false
+	_machine_use_count[id] = 0
+	_clear_machine_break_fx(id)
+	_flash("%s is back online" % _machine_label(id), Color("A5D6A7"))
+
+
+func _clear_machine_break_fx(id: String) -> void:
+	var sparks: GPUParticles3D = _machine_sparks.get(id, null) as GPUParticles3D
+	if sparks != null and is_instance_valid(sparks):
+		sparks.emitting = false
+		sparks.queue_free()
+	_machine_sparks.erase(id)
+	var wrench: Sprite3D = _machine_wrench.get(id, null) as Sprite3D
+	if wrench != null and is_instance_valid(wrench):
+		wrench.queue_free()
+	_machine_wrench.erase(id)
+
+
+func _ensure_machine_break_fx(id: String) -> void:
+	var root: Node3D = _machine_root(id)
+	if root == null or not is_instance_valid(root) or not root.visible:
+		return
+	var sparks: GPUParticles3D = _machine_sparks.get(id, null) as GPUParticles3D
+	if sparks == null or not is_instance_valid(sparks):
+		sparks = _make_machine_sparks()
+		root.add_child(sparks)
+		sparks.position = _machine_fx_local(id)
+		_machine_sparks[id] = sparks
+	sparks.emitting = true
+	var wrench: Sprite3D = _machine_wrench.get(id, null) as Sprite3D
+	if wrench == null or not is_instance_valid(wrench):
+		wrench = _make_machine_wrench_sprite()
+		root.add_child(wrench)
+		var fx: Vector3 = _machine_fx_local(id)
+		wrench.position = fx + Vector3(0.0, 0.16, 0.04)
+		_machine_wrench[id] = wrench
+	wrench.visible = true
+	var pulse: float = 1.0 + 0.10 * sin(float(Time.get_ticks_msec()) * 0.007)
+	wrench.pixel_size = 0.0054 * pulse
+
+
+func _machine_fx_local(id: String) -> Vector3:
+	match id:
+		"soda":
+			return Vector3(0.0, 0.52, 0.08)
+		"icecream":
+			return Vector3(0.0, 0.58, 0.04)
+		"fryer":
+			return Vector3(0.02, 0.22, 0.42)
+		_:
+			return Vector3(0.0, 0.28, 0.0)
+
+
+func _make_machine_sparks() -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.name = "MachineSparks"
+	fx.amount = 28
+	fx.lifetime = 0.38
+	fx.explosiveness = 0.18
+	fx.randomness = 0.7
+	fx.emitting = true
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fx.sorting_offset = 8.0
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pmat.emission_sphere_radius = 0.045
+	pmat.direction = Vector3(0.0, 1.0, 0.0)
+	pmat.spread = 80.0
+	pmat.initial_velocity_min = 0.55
+	pmat.initial_velocity_max = 1.85
+	pmat.gravity = Vector3(0.0, -2.4, 0.0)
+	pmat.damping_min = 0.4
+	pmat.damping_max = 1.2
+	pmat.scale_min = 0.35
+	pmat.scale_max = 0.9
+	pmat.color = Color(1.0, 0.92, 0.45, 1.0)
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.55, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 0.85, 0.0),
+		Color(1.0, 0.95, 0.45, 1.0),
+		Color(1.0, 0.55, 0.12, 0.85),
+		Color(0.2, 0.08, 0.0, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = grad
+	pmat.color_ramp = ramp
+	fx.process_material = pmat
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.012
+	mesh.height = 0.024
+	fx.draw_pass_1 = mesh
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.albedo_color = Color(1.0, 0.92, 0.38, 1.0)
+	draw.emission_enabled = true
+	draw.emission = Color(1.0, 0.82, 0.22)
+	draw.emission_energy_multiplier = 2.4
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	fx.material_override = draw
+	return fx
+
+
+func _wrench_texture() -> Texture2D:
+	if _wrench_tex != null:
+		return _wrench_tex
+	var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var gold := Color(0.98, 0.82, 0.22, 1.0)
+	var dark := Color(0.55, 0.38, 0.08, 1.0)
+	for y in range(18, 50):
+		for x in range(28, 36):
+			img.set_pixel(x, y, gold if (x + y) % 5 != 0 else dark)
+	for y in range(12, 28):
+		for x in range(18, 46):
+			var cx: float = 32.0
+			var cy: float = 20.0
+			var d: float = Vector2(float(x) - cx, float(y) - cy).length()
+			if d > 13.0 and d < 17.5:
+				img.set_pixel(x, y, gold)
+			elif d > 8.5 and d < 13.0 and x > 30:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+	_wrench_tex = ImageTexture.create_from_image(img)
+	return _wrench_tex
+
+
+func _make_machine_wrench_sprite() -> Sprite3D:
+	var s := Sprite3D.new()
+	s.name = "RepairWrench"
+	s.texture = _wrench_texture()
+	s.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	s.pixel_size = 0.0054
+	s.no_depth_test = true
+	s.shaded = false
+	s.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	s.sorting_offset = 12.0
+	return s
+
+
+func _try_machine_wrench_click(screen_pos: Vector2) -> bool:
+	if camera == null or not playing:
+		return false
+	if _pcb_puzzle_is_open():
+		return false
+	var best_id := ""
+	var best_d := 120.0
+	for id in _machine_ids():
+		if not _machine_is_broken(id):
+			continue
+		var wrench: Sprite3D = _machine_wrench.get(id, null) as Sprite3D
+		if wrench == null or not is_instance_valid(wrench) or not wrench.visible:
+			continue
+		var sp: Vector2 = camera.unproject_position(wrench.global_position)
+		var d: float = sp.distance_to(screen_pos)
+		if d < best_d:
+			best_d = d
+			best_id = id
+	if best_id == "":
+		return false
+	_open_pcb_puzzle_repair(best_id)
+	return true
+
+
 func _owns_grill_roomba() -> bool:
 	return bool(owned_machines.get(SHOP_GRILL_ROOMBA, false))
 
 
 func _owns_fridge_upgrade() -> bool:
 	return bool(owned_machines.get(SHOP_FRIDGE_UPGRADE, false))
+
+
+func _owns_gold_spatula() -> bool:
+	return bool(owned_machines.get(SHOP_GOLD_SPATULA, false))
 
 
 func _storage_capacity_mult() -> int:
@@ -47214,7 +48436,9 @@ func _reset_shop_unlocks() -> void:
 	owned_machines[SHOP_FRYER_MACHINE] = false
 	owned_machines[SHOP_GRILL_ROOMBA] = false
 	owned_machines[SHOP_FRIDGE_UPGRADE] = false
+	owned_machines[SHOP_GOLD_SPATULA] = false
 	_clear_all_drink_cups()
+	_reset_machine_breaks()
 	_reset_icecream_cone_to_home()
 	_reset_fryer_state(true)
 	_reset_grill_roomba()
@@ -47246,6 +48470,7 @@ func _apply_machine_unlock_visibility() -> void:
 	if grill_roomba_root != null and is_instance_valid(grill_roomba_root):
 		grill_roomba_root.visible = roomba_on
 		grill_roomba_root.process_mode = Node.PROCESS_MODE_INHERIT if roomba_on else Node.PROCESS_MODE_DISABLED
+	_refresh_gold_spatula_finish()
 
 
 func _add_phone_shop_section(parent: VBoxContainer) -> void:
@@ -47253,73 +48478,128 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	panel.name = "EquipmentShop"
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.add_theme_stylebox_override("panel", _make_phone_section_style(Color("FFD54F")))
+	var market_style := StyleBoxFlat.new()
+	market_style.bg_color = Color("0E141B")
+	market_style.border_color = Color("35414C")
+	market_style.set_border_width_all(1)
+	market_style.set_corner_radius_all(12)
+	market_style.content_margin_left = 5
+	market_style.content_margin_right = 5
+	market_style.content_margin_top = 7
+	market_style.content_margin_bottom = 7
+	panel.add_theme_stylebox_override("panel", market_style)
 	parent.add_child(panel)
 
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 3)
+	v.add_theme_constant_override("separation", 9)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_child(v)
 
 	var title := Label.new()
-	title.text = "EQUIPMENT"
-	UiFontsScript.apply_label(title, true, 13)
-	title.add_theme_color_override("font_color", Color("FFD54F"))
+	title.text = "BURGERPALS MARKET"
+	UiFontsScript.apply_luckiest_label(title, 17)
+	title.add_theme_color_override("font_color", Color("F2F4F5"))
 	v.add_child(title)
+	var subtitle := Label.new()
+	subtitle.text = "Top equipment · delivered instantly"
+	UiFontsScript.apply_label(subtitle, false, 11)
+	subtitle.add_theme_color_override("font_color", Color("AAB4BE"))
+	v.add_child(subtitle)
 
 	_add_phone_shop_item(v, SHOP_TRUCK)
-	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE]:
+	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA]:
 		_add_phone_shop_item(v, id)
 
 
 func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
-	var row := HBoxContainer.new()
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_theme_constant_override("separation", 4)
-	row.custom_minimum_size = Vector2(0, 32)
-	parent.add_child(row)
+	var card := PanelContainer.new()
+	card.name = "ShopCard_%s" % id
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color("161C23")
+	card_style.border_color = Color("3B4652")
+	card_style.set_border_width_all(1)
+	card_style.set_corner_radius_all(10)
+	card_style.content_margin_left = 7
+	card_style.content_margin_right = 7
+	card_style.content_margin_top = 7
+	card_style.content_margin_bottom = 8
+	card_style.shadow_color = Color(0.0, 0.0, 0.0, 0.52)
+	card_style.shadow_size = 5
+	card_style.shadow_offset = Vector2(0, 2)
+	card.add_theme_stylebox_override("panel", card_style)
+	parent.add_child(card)
 
 	var copy := VBoxContainer.new()
 	copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	copy.add_theme_constant_override("separation", 0)
-	copy.custom_minimum_size.x = 0
+	copy.add_theme_constant_override("separation", 4)
 	copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(copy)
+	card.add_child(copy)
+	copy.add_child(_make_shop_product_preview(id))
+	if id != SHOP_TRUCK:
+		var spin_hint := Label.new()
+		spin_hint.name = "ProductSpinHint"
+		spin_hint.text = "↻  3D VIEW · RIGHT-DRAG TO SPIN"
+		spin_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		UiFontsScript.apply_label(spin_hint, true, 9)
+		spin_hint.add_theme_color_override("font_color", Color("9FC7E8"))
+		copy.add_child(spin_hint)
 
 	var name_lab := Label.new()
+	name_lab.name = "ProductName"
 	name_lab.text = _shop_item_label(id)
 	name_lab.custom_minimum_size.x = 0
 	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_lab.clip_text = true
-	name_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(name_lab, true, 12)
-	name_lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+	name_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(name_lab, true, 15)
+	name_lab.add_theme_color_override("font_color", Color("F5F7F8"))
 	copy.add_child(name_lab)
 
-	var note_lab := Label.new()
-	note_lab.text = _shop_item_note(id)
-	note_lab.custom_minimum_size.x = 0
-	note_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	note_lab.clip_text = true
-	note_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UiFontsScript.apply_label(note_lab, false, 11)
-	note_lab.add_theme_color_override("font_color", Color(0.80, 0.86, 0.94))
-	copy.add_child(note_lab)
+	var rating_data := _shop_item_rating(id)
+	var rating := Label.new()
+	rating.name = "ProductRating"
+	rating.text = "%.1f  ★★★★★  (%s)" % [float(rating_data["score"]), _shop_review_count_text(int(rating_data["reviews"]))]
+	UiFontsScript.apply_label(rating, true, 11)
+	rating.add_theme_color_override("font_color", Color("FFB000"))
+	copy.add_child(rating)
+
+	var description := Label.new()
+	description.name = "ProductDescription"
+	description.text = _shop_item_description(id)
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	description.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_label(description, false, 11)
+	description.add_theme_color_override("font_color", Color("C8D0D8"))
+	copy.add_child(description)
+
+	var delivery := Label.new()
+	delivery.text = "✓ Instant installation  ·  Burger Pals approved"
+	delivery.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(delivery, true, 10)
+	delivery.add_theme_color_override("font_color", Color("73D98B"))
+	copy.add_child(delivery)
 
 	var owned := bool(owned_machines.get(id, false))
 	if id == SHOP_TRUCK:
 		owned = truck_bought_out
 	var blocked := _shop_item_block_reason(id)
+	var price := Label.new()
+	price.name = "ProductPrice"
+	price.text = "INSTALLED" if owned else _format_money(_shop_item_cost(id))
+	UiFontsScript.apply_label(price, true, 18)
+	price.add_theme_color_override("font_color", Color("73D98B") if owned else Color("FFFFFF"))
+	copy.add_child(price)
 	var buy := Button.new()
-	buy.text = "OWNED" if owned else _format_money(_shop_item_cost(id))
+	buy.name = "BuyButton"
+	buy.text = "OWNED · INSTALLED" if owned else "BUY NOW"
 	buy.disabled = owned or not playing or blocked != ""
-	buy.custom_minimum_size = Vector2(58, 26)
-	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
+	buy.custom_minimum_size = Vector2(0, 33)
+	buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	buy.focus_mode = Control.FOCUS_NONE
-	UiFontsScript.apply_button(buy, true, 11)
-	_style_phone_buy_button(buy)
+	UiFontsScript.apply_button(buy, true, 12)
+	_style_shop_market_button(buy, owned)
 	if owned:
 		buy.tooltip_text = "Already installed"
 	elif blocked != "":
@@ -47331,7 +48611,7 @@ func _add_phone_shop_item(parent: VBoxContainer, id: String) -> void:
 		var sid := id
 		## Deferred so the press stack finishes before the phone UI frees this button.
 		buy.pressed.connect(func(): call_deferred("_buy_shop_item", sid))
-	row.add_child(buy)
+	copy.add_child(buy)
 
 
 func _shop_catalog_ids() -> Array[String]:
@@ -47342,6 +48622,7 @@ func _shop_catalog_ids() -> Array[String]:
 		SHOP_FRYER_MACHINE,
 		SHOP_GRILL_ROOMBA,
 		SHOP_FRIDGE_UPGRADE,
+		SHOP_GOLD_SPATULA,
 	]
 
 
@@ -47375,7 +48656,7 @@ func _buy_shop_item(id: String) -> void:
 func _buy_shop_item_local(id: String) -> void:
 	if not playing:
 		return
-	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE].has(id):
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA].has(id):
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
@@ -48074,8 +49355,10 @@ func _build_phone_ui() -> void:
 	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("snak", "Snak", "S", Color(0.12, 0.38, 0.16), Color(0.55, 0.95, 0.42)))
 	icon_grid.add_child(_make_phone_app_icon("gnop", "Gnop", "G", Color(0.14, 0.22, 0.48), Color(0.62, 0.82, 1.0)))
+	icon_grid.add_child(_make_phone_app_icon("smush", "Smush", "B", Color(0.48, 0.22, 0.10), Color(1.0, 0.78, 0.38)))
+	icon_grid.add_child(_make_phone_app_icon("muvye", "MUVYE", ">", Color(0.45, 0.08, 0.16), Color(1.0, 0.72, 0.30)))
 	var home_hint := Label.new()
-	home_hint.text = "Snak and Gnop use the arrow keys. Maps parks the truck."
+	home_hint.text = "MUVYE plays classic shorts right on your phone."
 	home_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	home_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(home_hint, false, 11)
@@ -48159,7 +49442,16 @@ func _build_phone_ui() -> void:
 	phone_maps_page.name = "MapsApp"
 	phone_maps_page.visible = false
 	phone_maps_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	phone_maps_page.add_theme_stylebox_override("panel", _make_phone_section_style(Color("FFCC80")))
+	var maps_sb := StyleBoxFlat.new()
+	maps_sb.bg_color = Color(0.07, 0.10, 0.15, 0.96)
+	maps_sb.border_color = Color(1.0, 0.80, 0.50, 0.45)
+	maps_sb.set_border_width_all(1)
+	maps_sb.set_corner_radius_all(6)
+	maps_sb.content_margin_left = 6
+	maps_sb.content_margin_right = 6
+	maps_sb.content_margin_top = 6
+	maps_sb.content_margin_bottom = 6
+	phone_maps_page.add_theme_stylebox_override("panel", maps_sb)
 	v.add_child(phone_maps_page)
 	var maps_v := VBoxContainer.new()
 	maps_v.add_theme_constant_override("separation", 6)
@@ -48172,7 +49464,7 @@ func _build_phone_ui() -> void:
 	maps_v.add_child(phone_maps_here)
 	_build_phone_maps_preview(maps_v)
 	var maps_hint := Label.new()
-	maps_hint.text = "Tap a pin or Park below."
+	maps_hint.text = "Drag to pan · scroll or +/− to zoom · tap a pin."
 	maps_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(maps_hint, false, 12)
 	maps_hint.add_theme_color_override("font_color", Color(0.90, 0.93, 0.98))
@@ -48210,6 +49502,24 @@ func _build_phone_ui() -> void:
 	phone_gnop_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	phone_gnop_page.mouse_filter = Control.MOUSE_FILTER_STOP
 	screen_host.add_child(phone_gnop_page)
+
+	phone_smush_page = PhoneSmushScript.new()
+	phone_smush_page.name = "SmushApp"
+	phone_smush_page.visible = false
+	phone_smush_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_smush_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	phone_smush_page.mouse_filter = Control.MOUSE_FILTER_STOP
+	screen_host.add_child(phone_smush_page)
+
+	phone_muvye_page = PhoneMuvyeScript.new()
+	phone_muvye_page.name = "MuvyeApp"
+	phone_muvye_page.visible = false
+	phone_muvye_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_muvye_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	phone_muvye_page.mouse_filter = Control.MOUSE_FILTER_STOP
+	screen_host.add_child(phone_muvye_page)
+	if phone_muvye_page.has_signal("cinema_mode_changed"):
+		phone_muvye_page.cinema_mode_changed.connect(_on_muvye_cinema_mode)
 
 	_set_phone_app("home")
 	_refresh_phone_ui()
@@ -51956,6 +53266,28 @@ func _build_options_menu() -> void:
 	_options_add_btn(hidden_economy_box, "TEST: START CHALLENGE NOW", func() -> void:
 		_debug_force_challenge()
 	)
+	var hidden_ticket_box := _hidden_add_accordion(hidden_gameplay_root, "ORDER TICKET", "Gameplay", 2)
+	_hidden_add_section(hidden_ticket_box, "PAPER LOOK")
+	var ticket_help := Label.new()
+	ticket_help.text = "Saturation 1.00 is the original cream slip. Default is 15% greyer. Opacity fades the whole ticket over the window."
+	ticket_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(ticket_help, false, 11)
+	ticket_help.add_theme_color_override("font_color", Color(0.70, 0.76, 0.84))
+	hidden_ticket_box.add_child(ticket_help)
+	_hidden_add_labeled_slider(hidden_ticket_box, "ticket_saturation", "Ticket Saturation", 0.0, 1.5, 0.01,
+		func(): return ticket_saturation,
+		func(v: float):
+			ticket_saturation = clampf(v, 0.0, 1.5)
+			_save_ticket_look_settings()
+			_highlight_tickets()
+	)
+	_hidden_add_labeled_slider(hidden_ticket_box, "ticket_opacity", "Ticket Opacity", 0.15, 1.0, 0.01,
+		func(): return ticket_opacity,
+		func(v: float):
+			ticket_opacity = clampf(v, 0.15, 1.0)
+			_save_ticket_look_settings()
+			_highlight_tickets()
+	)
 	var hidden_audio_box := _hidden_add_accordion(hidden_audio_root, "AUDIO MIX", "Audio", 3, true)
 	_hidden_setup_ingredient_bin_controls(hidden_bins_box)
 	_hidden_setup_street_car_controls(hidden_cars_box)
@@ -53014,8 +54346,35 @@ func _build_options_menu() -> void:
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_width", "Edge Blend Width", 0.0, 0.35, 0.005)
 	_options_add_standard_slider(hidden_world_box, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
-	_hidden_add_section(hidden_counter_box, "CUTTING BOARD")
-	_hidden_add_prop_offset_group(hidden_counter_box, "cutting_board", "Cutting Board")
+	_hidden_add_prop_offset_group(hidden_counter_box, "cutting_board", "CUTTING BOARD WOOD")
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_sx", "Scale X", 0.15, 4.0, 0.01,
+		func(): return cutting_board_scale.x,
+		func(v: float): _set_cutting_board_scale_axis("x", v)
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_sy", "Scale Y", 0.15, 4.0, 0.01,
+		func(): return cutting_board_scale.y,
+		func(v: float): _set_cutting_board_scale_axis("y", v)
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_sz", "Scale Z", 0.15, 4.0, 0.01,
+		func(): return cutting_board_scale.z,
+		func(v: float): _set_cutting_board_scale_axis("z", v)
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_pitch", "Pitch", -180.0, 180.0, 1.0,
+		func(): return cutting_board_rot.x,
+		func(v: float): _set_cutting_board_rot_axis("x", v), true
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_yaw", "Yaw", -360.0, 360.0, 1.0,
+		func(): return cutting_board_rot.y,
+		func(v: float): _set_cutting_board_rot_axis("y", v), true
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_roll", "Roll", -180.0, 180.0, 1.0,
+		func(): return cutting_board_rot.z,
+		func(v: float): _set_cutting_board_rot_axis("z", v), true
+	)
+	_hidden_add_labeled_slider(hidden_counter_box, "cutting_board_darkness", "Darkness", 0.15, 1.6, 0.01,
+		func(): return cutting_board_darkness,
+		func(v: float): _set_cutting_board_darkness(v)
+	)
 	_hidden_add_section(hidden_counter_box, "CUTTING BOARD UI")
 	_gfx_add_slider(hidden_counter_box, "bz_row_left", "Board UI Left", -250.0, 450.0, 1.0)
 	_gfx_add_slider(hidden_counter_box, "bz_row_top", "Board UI Top", -300.0, 500.0, 1.0)
@@ -56070,9 +57429,9 @@ func _any_living_terrorist() -> bool:
 
 
 func _sync_combat_audio() -> void:
-	## Double Agent theme + mute truck radio while fighting or holding the glock.
+	## Double Agent theme + mute truck radio while fighting, holding the glock, or tracing a PCB.
 	var hostiles := terrorist_wave_active or _any_living_terrorist()
-	var want_theme := hostiles or glock_held
+	var want_theme := hostiles or glock_held or _pcb_puzzle_is_open()
 	## Radio stays muted while the glock is out, or while the combat theme is up.
 	var mute_radio := glock_held or want_theme or _challenge_phase == "offer" or _challenge_phase == "active"
 	if game_audio:
@@ -56697,25 +58056,6 @@ func _debug_force_challenge() -> void:
 	_flash("Challenge queued", Color("FFD54F"))
 
 
-func _try_early_test_challenge(customer: Node3D) -> void:
-	if not _challenge_early_test_armed or tutorial_mode or not playing:
-		return
-	if mp_enabled and not NetManager.is_host():
-		return
-	if customer == null or not is_instance_valid(customer):
-		return
-	if bool(customer.get("is_cut_collector")) or bool(customer.get("is_challenge_guest")) \
-			or bool(customer.get("is_disguise_cat")) or bool(customer.get("is_terrorist")):
-		return
-	if DAY_LENGTH - day_time > CHALLENGE_EARLY_TEST_WINDOW:
-		_challenge_early_test_armed = false
-		return
-	_challenge_early_test_armed = false
-	if _challenge_phase != "":
-		return
-	_begin_challenge_wait()
-
-
 func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: Node3D = null) -> void:
 	if cust == null or not is_instance_valid(cust):
 		return
@@ -56977,7 +58317,6 @@ func _on_customer_arrived(customer: Node3D) -> void:
 		var bts_fact := str(customer.get("chatter"))
 		if bts_fact != "":
 			_flash(bts_fact, Color("FFF176"), 5.5)
-	_try_early_test_challenge(customer)
 	## Clock starts next frame, after tap-done sets is_waiting and the slip is on screen.
 	call_deferred("_refresh_customer_queue_timers")
 
@@ -57241,28 +58580,16 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var v := VBoxContainer.new()
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_theme_constant_override("separation", 1)
+	v.add_theme_constant_override("separation", 4)
 	paper.add_child(v)
 
-	## Pushpin head — round metal pin, not a UI square.
-	var pin_wrap := CenterContainer.new()
-	pin_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pin_wrap.custom_minimum_size = Vector2(0, 9)
-	v.add_child(pin_wrap)
-	var pin := Panel.new()
-	pin.custom_minimum_size = Vector2(10, 10)
-	pin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var pin_sb := StyleBoxFlat.new()
-	## Light cork/wood pushpin — readable on the darker slip.
-	pin_sb.bg_color = Color(0.78, 0.58, 0.36)
-	pin_sb.set_corner_radius_all(6)
-	pin_sb.border_color = Color(0.52, 0.34, 0.18)
-	pin_sb.set_border_width_all(1)
-	pin_sb.shadow_color = Color(0, 0, 0, 0.45)
-	pin_sb.shadow_size = 2
-	pin_sb.shadow_offset = Vector2(1, 1)
-	pin.add_theme_stylebox_override("panel", pin_sb)
-	pin_wrap.add_child(pin)
+	## The polished toon paper carries its own shaded thumbtack. Reserve clear
+	## header space so the dynamic order code never overlaps the illustrated pin.
+	var pin_clearance := Control.new()
+	pin_clearance.name = "ToonThumbtackClearance"
+	pin_clearance.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pin_clearance.custom_minimum_size = Vector2(0, 29)
+	v.add_child(pin_clearance)
 
 	var title := Label.new()
 	## Order code = strip hotkeys + C for cheese from the board wheel.
@@ -57300,6 +58627,10 @@ func _create_ticket(customer: Node3D) -> void:
 	var patience_bar := ProgressBar.new()
 	patience_bar.name = "PatienceBar"
 	patience_bar.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	## The meter is narrower than the writing column so it never touches the
+	## rough illustrated edge of the paper.
+	patience_bar.offset_left = 8.0
+	patience_bar.offset_right = -8.0
 	patience_bar.min_value = 0.0
 	patience_bar.max_value = 1.0
 	patience_bar.value = 1.0
@@ -57323,13 +58654,13 @@ func _create_ticket(customer: Node3D) -> void:
 	var patience_gap := Control.new()
 	patience_gap.name = "PatienceBottomGap"
 	patience_gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	patience_gap.custom_minimum_size = Vector2(0, 12)
+	patience_gap.custom_minimum_size = Vector2(0, 14)
 	v.add_child(patience_gap)
 
 	var lines_box := VBoxContainer.new()
 	lines_box.name = "TicketLines"
 	lines_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lines_box.add_theme_constant_override("separation", 0)
+	lines_box.add_theme_constant_override("separation", 3)
 	v.add_child(lines_box)
 	wrap.set_meta("lines_box", lines_box)
 	wrap.set_meta("order_customer", customer)
@@ -57370,6 +58701,7 @@ func _create_ticket(customer: Node3D) -> void:
 	timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UiFontsScript.apply_ticket(timer_label, 13)
 	timer_label.add_theme_color_override("font_color", Color(0.24, 0.17, 0.11, 0.70))
+	timer_label.add_theme_constant_override("line_spacing", 2)
 	v.add_child(timer_label)
 	wrap.set_meta("timer_label", timer_label)
 
@@ -57393,7 +58725,7 @@ func _create_ticket(customer: Node3D) -> void:
 	_refresh_customer_queue_timers()
 
 
-const TICKET_BASE_W := 139.0 ## was 164; −15% width
+const TICKET_BASE_W := 174.0 ## 20% narrower than the oversized 218px revision
 const TICKET_SMALL_SCALE := 0.70
 
 
@@ -57758,49 +59090,73 @@ func _refresh_ticket_patience_bars() -> void:
 		_update_ticket_seconds_label(wrap, cust)
 
 
-func _make_ticket_shell_style(selected: bool) -> StyleBoxFlat:
-	## Transparent plate — only shadow, border, and torn-slip corners.
+func _make_ticket_shell_style(_selected: bool) -> StyleBoxFlat:
+	## Layout-only shell. The ticket PNG owns its silhouette; adding a UI border
+	## or shadow here creates the fake cyan rectangle seen around transparent art.
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0, 0, 0, 0)
-	style.border_color = Color(0.72, 0.48, 0.18, 0.85) if selected else Color(0.62, 0.52, 0.38, 0.5)
-	style.set_border_width_all(2 if selected else 1)
-	style.corner_radius_top_left = 2
-	style.corner_radius_top_right = 5
-	style.corner_radius_bottom_right = 3
-	style.corner_radius_bottom_left = 6
+	style.border_color = Color(0, 0, 0, 0)
+	style.set_border_width_all(0)
 	style.content_margin_left = 0
 	style.content_margin_right = 0
 	style.content_margin_top = 0
 	style.content_margin_bottom = 0
-	style.shadow_color = Color(0.08, 0.05, 0.02, 0.42)
-	style.shadow_size = 5
-	style.shadow_offset = Vector2(2, 4)
+	style.shadow_color = Color(0, 0, 0, 0)
+	style.shadow_size = 0
+	style.shadow_offset = Vector2.ZERO
 	return style
 
 
 func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
-	## Darker aged receipt paper with soft vignette (edges browner than center).
+	## Keep every live element comfortably inside the illustrated paper edge. The
+	## texture has already been tightly cropped, so these are true content insets.
 	var style := StyleBoxTexture.new()
 	style.texture = _ticket_paper_texture(selected)
 	style.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
 	style.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 5
-	style.content_margin_bottom = -6
+	style.content_margin_left = 18
+	style.content_margin_right = 18
+	style.content_margin_top = 12
+	style.content_margin_bottom = 16
 	if selected:
-		style.modulate_color = Color(1.06, 1.0, 0.9)
+		var sat := clampf(ticket_saturation, 0.0, 1.5)
+		var paper := Color(1.015, 1.005, 0.985)
+		var lum := paper.r * 0.299 + paper.g * 0.587 + paper.b * 0.114
+		style.modulate_color = Color(
+			lerpf(lum, paper.r, sat),
+			lerpf(lum, paper.g, sat),
+			lerpf(lum, paper.b, sat),
+			1.0
+		)
+	else:
+		var sat := clampf(ticket_saturation, 0.0, 1.5)
+		var lum := 0.82
+		style.modulate_color = Color(
+			lerpf(lum, 1.0, sat),
+			lerpf(lum, 1.0, sat),
+			lerpf(lum, 1.0, sat),
+			1.0
+		)
 	return style
 
 
-func _ticket_paper_texture(selected: bool) -> ImageTexture:
-	## Cache two paper plates so we don't rebuild per ticket.
-	## Meta "wm2" = larger Burger Pals watermark (~2× prior).
+func _ticket_paper_texture(selected: bool) -> Texture2D:
+	## Use the generated print-quality guest-check paper. Both selected and queued
+	## tickets share the art; selection is handled by StyleBox modulation.
 	if selected:
-		if _ticket_paper_tex_sel != null and bool(_ticket_paper_tex_sel.get_meta("wm2", false)):
+		if _ticket_paper_tex_sel != null:
 			return _ticket_paper_tex_sel
-	elif _ticket_paper_tex != null and bool(_ticket_paper_tex.get_meta("wm2", false)):
+	elif _ticket_paper_tex != null:
 		return _ticket_paper_tex
+	if ResourceLoader.exists(TICKET_PAPER_TEXTURE_PATH):
+		var generated := load(TICKET_PAPER_TEXTURE_PATH) as Texture2D
+		if generated != null:
+			if selected:
+				_ticket_paper_tex_sel = generated
+			else:
+				_ticket_paper_tex = generated
+			return generated
+	## Safe procedural fallback if the asset is unavailable in a development build.
 	var w := 128
 	var h := 160
 	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
@@ -57995,7 +59351,7 @@ func _highlight_tickets() -> void:
 				## Main (selected) ticket tilts even less.
 				note.rotation_degrees = base_rot * 0.35 if selected else base_rot
 			## Selected slip sits a hair more upright / forward.
-			note.modulate = Color(1.05, 1.02, 0.95) if selected else Color(0.94, 0.92, 0.88)
+			note.modulate = _ticket_note_modulate(selected)
 		_apply_ticket_display_size(wrap, selected)
 	_refresh_customer_queue_timers()
 
@@ -64871,14 +66227,14 @@ func _punch_hud_money() -> void:
 		return
 	hud_money.pivot_offset = hud_money.size * 0.5
 	var tw := create_tween()
-	tw.tween_property(hud_money, "scale", Vector2(1.22, 1.22), 0.09).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(hud_money, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(hud_money, "scale", Vector2(2.15, 2.15), 0.10).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(hud_money, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	var base_col := Color(0.4, 0.9, 0.45, 1.0)
 	hud_money.add_theme_color_override("font_color", Color(1.0, 0.95, 0.45, 1.0))
 	tw.parallel().tween_callback(func() -> void:
 		if hud_money != null and is_instance_valid(hud_money):
 			hud_money.add_theme_color_override("font_color", base_col)
-	).set_delay(0.22)
+	).set_delay(0.28)
 
 
 func _start_hud_money_climb(from_amount: float, to_amount: float) -> void:
@@ -64892,8 +66248,10 @@ func _start_hud_money_climb(from_amount: float, to_amount: float) -> void:
 	if start_v > to_amount:
 		start_v = _hud_money_shown
 	_set_hud_money_shown(start_v)
+	hud_money.pivot_offset = hud_money.size * 0.5
+	hud_money.scale = Vector2(2.0, 2.0)
 	var span: float = absf(to_amount - start_v)
-	var dur: float = clampf(0.42 + span * 0.035, 0.55, 1.15)
+	var dur: float = clampf(1.15 + span * 0.05, 1.55, 2.15)
 	var tw := create_tween()
 	_hud_money_climb_tween = tw
 	tw.tween_method(_set_hud_money_shown, start_v, to_amount, dur) \
@@ -64907,61 +66265,88 @@ func _start_hud_money_climb(from_amount: float, to_amount: float) -> void:
 		game_audio.play_score_climb()
 
 
-func _customer_pay_screen_pos(customer: Node3D) -> Vector2:
-	var vp := get_viewport().get_visible_rect()
-	var fallback := Vector2(vp.size.x * 0.5, vp.size.y * 0.42)
+func _hud_money_world_pos() -> Vector3:
 	if camera == null:
-		return fallback
-	var world_pt := _tip_pay_start_global(customer)
-	if camera.is_position_behind(world_pt):
-		return fallback
-	return camera.unproject_position(world_pt)
+		return Vector3(0.0, 1.62, -0.95)
+	var cam_xf: Transform3D = camera.global_transform
+	## Close in front of the cook camera, biased toward the top-right money HUD.
+	var dest: Vector3 = cam_xf.origin - cam_xf.basis.z * 0.52
+	dest += cam_xf.basis.x * 0.28
+	dest += cam_xf.basis.y * 0.18
+	return dest
+
+
+func _bill_arc_pos(from_p: Vector3, mid_p: Vector3, dest_p: Vector3, t: float) -> Vector3:
+	var a: Vector3 = from_p.lerp(mid_p, t)
+	var b: Vector3 = mid_p.lerp(dest_p, t)
+	return a.lerp(b, t)
+
+
+func _sale_bill_arc_node(t: float, bill: MeshInstance3D) -> void:
+	## tween_method passes t first; bind() appends the bill. Path lives on the node.
+	if bill == null or not is_instance_valid(bill):
+		return
+	if not bill.has_meta("fly_from") or not bill.has_meta("fly_mid") or not bill.has_meta("fly_dest"):
+		return
+	var from_p: Vector3 = bill.get_meta("fly_from") as Vector3
+	var mid_p: Vector3 = bill.get_meta("fly_mid") as Vector3
+	var dest_p: Vector3 = bill.get_meta("fly_dest") as Vector3
+	bill.global_position = _bill_arc_pos(from_p, mid_p, dest_p, t)
 
 
 func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
-	var ui_root: Control = get_node_or_null("UI/Root") as Control
-	if ui_root == null or hud_money == null or not is_instance_valid(hud_money):
+	if world == null:
 		return
-	var tex: Texture2D = _make_tip_bill_texture()
-	if tex == null:
-		return
-	var from: Vector2 = _customer_pay_screen_pos(customer)
-	var dest: Vector2 = hud_money.get_global_rect().get_center()
-	var n: int = clampi(count, 1, 7)
+	var from: Vector3 = _tip_pay_start_global(customer)
+	var n: int = clampi(count, 1, 12)
 	for i in n:
-		var bill := TextureRect.new()
-		bill.name = "HudFlyBill"
-		bill.texture = tex
-		bill.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		bill.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		bill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bill.z_index = 90
-		bill.z_as_relative = false
-		bill.size = Vector2(168, 90)
-		bill.pivot_offset = bill.size * 0.5
-		ui_root.add_child(bill)
-		var jitter := Vector2(randf_range(-36.0, 36.0), randf_range(-22.0, 26.0))
-		bill.global_position = from - bill.size * 0.5 + jitter
-		bill.rotation_degrees = randf_range(-18.0, 18.0)
-		var delay: float = 0.05 + float(i) * 0.07
+		var bill: MeshInstance3D = _make_tip_bill_mesh(false, 2.04)
+		bill.name = "SaleFlyBill"
+		world.add_child(bill)
+		bill.top_level = true
+		var mat: StandardMaterial3D = bill.material_override as StandardMaterial3D
+		if mat != null:
+			mat.no_depth_test = true
+			mat.render_priority = 24
+		bill.sorting_offset = 24.0
+		var jitter := Vector3(randf_range(-0.10, 0.10), randf_range(0.04, 0.16), randf_range(-0.08, 0.08))
+		var start_p: Vector3 = from + jitter
+		bill.global_position = start_p
+		bill.scale = Vector3(1.05, 1.05, 1.05)
+		bill.rotation_degrees = Vector3(randf_range(-28.0, 12.0), 180.0 + randf_range(-40.0, 40.0), randf_range(-24.0, 24.0))
+		var dest: Vector3 = _hud_money_world_pos()
+		dest += Vector3(randf_range(-0.04, 0.04), randf_range(-0.03, 0.03), randf_range(-0.02, 0.02))
+		var mid: Vector3 = start_p.lerp(dest, randf_range(0.28, 0.46))
+		if camera != null:
+			mid += camera.global_transform.basis.x * randf_range(-0.06, 0.12)
+			mid += camera.global_transform.basis.y * randf_range(0.18, 0.42)
+		bill.set_meta("fly_from", start_p)
+		bill.set_meta("fly_mid", mid)
+		bill.set_meta("fly_dest", dest)
+		var delay: float = randf_range(0.0, 0.08) + float(i) * randf_range(0.04, 0.09)
+		var dur: float = randf_range(0.85, 1.25)
 		var tw := create_tween()
+		tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 		tw.tween_interval(delay)
-		tw.tween_property(bill, "global_position", dest - bill.size * 0.5, 0.52) \
-			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(bill, "rotation_degrees", randf_range(-8.0, 8.0), 0.52)
-		tw.parallel().tween_property(bill, "scale", Vector2(0.88, 0.88), 0.52) \
+		tw.tween_method(_sale_bill_arc_node.bind(bill), 0.0, 1.0, dur) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		tw.parallel().tween_property(bill, "scale", Vector3(0.22, 0.22, 0.22), dur) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.tween_callback(bill.queue_free)
+		tw.parallel().tween_property(
+			bill,
+			"rotation_degrees",
+			Vector3(-10.0, 180.0 + randf_range(-22.0, 22.0), randf_range(-18.0, 18.0)),
+			dur
+		)
+		tw.chain().tween_callback(bill.queue_free)
 
 
 func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: float, to_amount: float) -> void:
 	if game_audio != null and game_audio.has_method("play_chaching"):
 		game_audio.play_chaching()
-	var tip_n: int = 0 if tip <= 0 else clampi(1 + int(tip / 3), 1, 3)
-	if tip_n > 0:
-		_fly_pay_bills_to_tip_jar(customer, tip_n)
-	var hud_n: int = clampi(2 + int(maxi(base, 1) / 4), 3, 7)
+	var hud_n: int = clampi(4 + int(maxi(base + tip, 1) / 3), 5, 10)
 	_fly_sale_bills_to_hud(customer, hud_n)
+	_fly_pay_bills_to_tip_jar(customer, 1)
 	_start_hud_money_climb(from_shown, to_amount)
 
 
@@ -64982,6 +66367,8 @@ func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> v
 	_hud_money_climb_tween = null
 	money = maxf(0.0, money - amount)
 	_hud_money_shown = money
+	if hud_money != null and is_instance_valid(hud_money):
+		hud_money.scale = Vector2.ONE
 	_update_hud()
 	if note != "":
 		_flash(note, col)
@@ -65867,6 +67254,114 @@ func _setup_location_map_ui() -> void:
 		if _location_map_layer != null:
 			_location_map_layer.visible = false
 	)
+
+
+func _pcb_puzzle_is_open() -> bool:
+	return _pcb_puzzle_ui != null and is_instance_valid(_pcb_puzzle_ui) and _pcb_puzzle_ui.visible
+
+
+func _is_backtick_key(event: InputEvent) -> bool:
+	if not (event is InputEventKey):
+		return false
+	var k: InputEventKey = event as InputEventKey
+	if not k.pressed or k.echo:
+		return false
+	if k.keycode == KEY_QUOTELEFT or k.physical_keycode == KEY_QUOTELEFT:
+		return true
+	return k.unicode == 96
+
+
+func _try_pcb_puzzle_hotkey(event: InputEvent) -> bool:
+	if not _is_backtick_key(event):
+		return false
+	_toggle_pcb_puzzle()
+	return true
+
+
+func _setup_pcb_puzzle() -> void:
+	if _pcb_puzzle_layer != null and is_instance_valid(_pcb_puzzle_layer):
+		return
+	_pcb_puzzle_layer = CanvasLayer.new()
+	_pcb_puzzle_layer.name = "PcbPuzzleLayer"
+	_pcb_puzzle_layer.layer = 120
+	_pcb_puzzle_layer.visible = false
+	add_child(_pcb_puzzle_layer)
+	_pcb_puzzle_ui = PcbPuzzleScript.new()
+	_pcb_puzzle_ui.name = "PcbPuzzle"
+	_pcb_puzzle_ui.visible = false
+	_pcb_puzzle_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_pcb_puzzle_ui.process_mode = Node.PROCESS_MODE_ALWAYS
+	_pcb_puzzle_layer.add_child(_pcb_puzzle_ui)
+	_pcb_puzzle_ui.closed.connect(func() -> void:
+		if _pcb_puzzle_layer != null:
+			_pcb_puzzle_layer.visible = false
+		_sync_combat_audio()
+	)
+	if not _pcb_puzzle_ui.is_connected("puzzle_solved", Callable(self, "_on_pcb_puzzle_solved")):
+		_pcb_puzzle_ui.connect("puzzle_solved", Callable(self, "_on_pcb_puzzle_solved"))
+
+
+func _toggle_pcb_puzzle() -> void:
+	if _pcb_puzzle_is_open():
+		_close_pcb_puzzle()
+	else:
+		_open_pcb_puzzle()
+
+
+func _open_pcb_puzzle() -> void:
+	if _pcb_puzzle_ui == null or not is_instance_valid(_pcb_puzzle_ui):
+		_setup_pcb_puzzle()
+	if options_menu_open:
+		_set_options_menu_open(false)
+	if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
+		_location_map_ui.close()
+	_pcb_repair_machine = ""
+	if _pcb_puzzle_layer != null:
+		_pcb_puzzle_layer.visible = true
+	_pcb_puzzle_ui.open()
+	_sync_combat_audio()
+
+
+func _open_pcb_puzzle_repair(machine_id: String) -> void:
+	if machine_id == "" or not _machine_is_broken(machine_id):
+		return
+	if _pcb_puzzle_ui == null or not is_instance_valid(_pcb_puzzle_ui):
+		_setup_pcb_puzzle()
+	if options_menu_open:
+		_set_options_menu_open(false)
+	if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.visible:
+		_location_map_ui.close()
+	_pcb_repair_machine = machine_id
+	if _pcb_puzzle_layer != null:
+		_pcb_puzzle_layer.visible = true
+	if _pcb_puzzle_ui.has_method("open_random_repair"):
+		_pcb_puzzle_ui.call("open_random_repair")
+	else:
+		_pcb_puzzle_ui.open()
+	_sync_combat_audio()
+
+
+func _on_pcb_puzzle_solved(_maze_index: int) -> void:
+	var id: String = _pcb_repair_machine
+	if id == "":
+		return
+	_pcb_repair_machine = ""
+	_repair_machine(id)
+	var tw: Tween = create_tween()
+	tw.tween_interval(0.55)
+	tw.tween_callback(func() -> void:
+		if _pcb_puzzle_is_open():
+			_close_pcb_puzzle()
+	)
+
+
+func _close_pcb_puzzle() -> void:
+	if _pcb_puzzle_ui != null and is_instance_valid(_pcb_puzzle_ui) and _pcb_puzzle_ui.has_method("close"):
+		_pcb_puzzle_ui.close()
+	if _pcb_puzzle_layer != null:
+		_pcb_puzzle_layer.visible = false
+	_pcb_repair_machine = ""
+	_sync_combat_audio()
 
 
 func _setup_game_over_location_button() -> void:
@@ -69533,6 +71028,7 @@ func _mp_broadcast_economy() -> void:
 		SHOP_FRYER_MACHINE,
 		SHOP_GRILL_ROOMBA,
 		SHOP_FRIDGE_UPGRADE,
+		SHOP_GOLD_SPATULA,
 	]
 	var shop_vals: Array = []
 	for sid in shop_ids:
@@ -69747,9 +71243,7 @@ func mp_social_feed_sync(
 					post["pic"] = ImageTexture.create_from_image(img)
 		social_reviews.append(post)
 	_social_post_seq = max_id
-	_refresh_phone_ui()
-	if n > 0:
-		_scroll_phone_to_social()
+	_sync_phone_social_quietly()
 
 
 @rpc("any_peer", "call_remote", "reliable")

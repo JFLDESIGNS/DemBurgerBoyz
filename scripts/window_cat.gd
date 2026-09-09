@@ -189,7 +189,7 @@ func _on_screen_for_meow() -> bool:
 
 
 func _update_begging_meows(delta: float) -> void:
-	## First meow 1s after he pops on screen, then 50% each second while he stays.
+	## First meow 2s after he pops on screen, then a quieter roll every 3s.
 	if not _on_screen_for_meow():
 		_meow_on_screen = false
 		_meow_first_done = false
@@ -201,15 +201,15 @@ func _update_begging_meows(delta: float) -> void:
 		_meow_elapsed = 0.0
 	_meow_elapsed += delta
 	if not _meow_first_done:
-		if _meow_elapsed >= 1.0:
+		if _meow_elapsed >= 2.0:
 			_meow_first_done = true
-			_meow_elapsed -= 1.0
-			wants_meow.emit(randf_range(0.8, 1.2))
+			_meow_elapsed -= 2.0
+			wants_meow.emit(randf_range(1.0, 1.4))
 		return
-	while _meow_elapsed >= 1.0:
-		_meow_elapsed -= 1.0
-		if randf() < 0.5:
-			wants_meow.emit(randf_range(0.8, 1.2))
+	while _meow_elapsed >= 3.0:
+		_meow_elapsed -= 3.0
+		if randf() < 0.25:
+			wants_meow.emit(randf_range(1.0, 1.4))
 
 
 func _build() -> void:

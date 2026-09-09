@@ -1035,13 +1035,7 @@ func _sync_shaker_rattle() -> void:
 
 func _tick_scrape_tings(delta: float) -> void:
 	## Soft spatula tings while scraping (~0.4s, slight irregularity).
-	## Debris: chance of a dry kuhhh so several can stack while crust lets go.
-	if _scrape_move_on and _scrape_debris_boost:
-		_scrape_bass_pop_cool = maxf(0.0, _scrape_bass_pop_cool - delta)
-		if _scrape_bass_pop_cool <= 0.0:
-			_scrape_bass_pop_cool = SCRAPE_BASS_POP_INTERVAL + randf_range(-0.08, 0.14)
-			if randf() < 0.58:
-				play_debris_kuhh(0.55 + randf() * 0.32)
+	## Debris kuhhh uses that same random cadence, at half volume.
 	if not _scrape_move_on:
 		return
 	_scrape_ting_cool = maxf(0.0, _scrape_ting_cool - delta)
@@ -1050,6 +1044,8 @@ func _tick_scrape_tings(delta: float) -> void:
 	_scrape_ting_cool = SCRAPE_TING_INTERVAL + randf_range(-0.10, 0.12)
 	var ting_vol := 0.62 if _scrape_debris_boost else 0.32
 	play_spatula_ting(randi_range(69, 75), ting_vol)
+	if _scrape_debris_boost:
+		play_debris_kuhh(0.55 + randf() * 0.32)
 
 
 func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
@@ -1063,7 +1059,7 @@ func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
 func play_debris_kuhh(volume_scale: float = 1.0) -> void:
 	## Dry “kuhhh” — burnt crust shearing off the steel. One-shots layer.
 	var key := "debris_kuhh_%d" % (randi() % 8)
-	var gain := (0.82 + randf() * 0.28) * clampf(volume_scale, 0.0, 1.7)
+	var gain := (0.41 + randf() * 0.14) * clampf(volume_scale, 0.0, 1.7)
 	var pitch := 0.86 + randf() * 0.30
 	_play_cached(key, _make_debris_kuhh, pitch, gain)
 
@@ -1925,7 +1921,7 @@ func play_smash_sizzle(volume_scale: float = 1.0) -> void:
 
 
 func play_cat_meow() -> void:
-	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 0.92 + randf() * 0.18, 1.44)
+	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 1.12 + randf() * 0.18, 8.064, 18.0)
 
 
 func play_cat_purr() -> void:
@@ -1955,21 +1951,21 @@ func _load_cat_begging_meow_stream() -> AudioStream:
 	return stream
 
 
-func play_cat_begging_meow(pitch: float = 1.0) -> void:
+func play_cat_begging_meow(pitch: float = 1.2) -> void:
 	var stream := _load_cat_begging_meow_stream()
 	if stream == null:
 		play_cat_meow()
 		return
 	if _players.is_empty():
 		return
-	var gain := 1.56 * _sfx("customers")
+	var gain := 8.736 * _sfx("customers")
 	if gain <= 0.0001:
 		return
 	var p: AudioStreamPlayer = _players[_player_i]
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = stream
-	p.pitch_scale = clampf(pitch, 0.8, 1.2)
-	p.volume_db = linear_to_db(clampf(gain, 0.001, 3.0))
+	p.pitch_scale = clampf(pitch, 1.0, 1.4)
+	p.volume_db = linear_to_db(clampf(gain, 0.001, 18.0))
 	p.play()
 
 
@@ -1998,6 +1994,7 @@ const GROBBLE_FADE_IN_SEC := 0.3
 const CLICK_WAWA_CLIP_SEC := 1.15
 const BOSS_WAWA_CLIP_SEC := 4.0
 const BOSS_WAWA_VOLUME_MUL := 3.6
+const BOSS_WAWA_LOUD_MUL := 1.88 ## morning loop; 20% quieter than 2.35
 var _roomba_wawawa_player: AudioStreamPlayer = null
 var _roomba_wawawa_on: bool = false
 var _boss_wawawa_player: AudioStreamPlayer = null
@@ -2048,7 +2045,7 @@ func play_customer_grobble(impatience: float = 0.5) -> void:
 
 func _boss_wawa_target_db(loud: bool) -> float:
 	var customer_gain := lerpf(0.62, 0.82, 0.5) * lerpf(1.0, 1.08, 0.5)
-	var vol_mul := BOSS_WAWA_VOLUME_MUL * (2.35 if loud else 1.0)
+	var vol_mul := BOSS_WAWA_VOLUME_MUL * (BOSS_WAWA_LOUD_MUL if loud else 1.0)
 	return linear_to_db(customer_gain * vol_mul)
 
 
@@ -2389,7 +2386,7 @@ func _make_burger_slide_oil_loop() -> AudioStreamWAV:
 	return _wav_from_pcm(pcm, true)
 
 
-func _play_cached(key: String, builder: Callable, pitch: float, gain: float) -> void:
+func _play_cached(key: String, builder: Callable, pitch: float, gain: float, gain_ceiling: float = 3.0) -> void:
 	if _players.is_empty():
 		return
 	gain *= _sfx(_sfx_category_for_cache_key(key))
@@ -2401,7 +2398,7 @@ func _play_cached(key: String, builder: Callable, pitch: float, gain: float) -> 
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache[key]
 	p.pitch_scale = 1.0 if pitch <= 0.0 else pitch
-	p.volume_db = linear_to_db(clampf(gain, 0.001, 3.0))
+	p.volume_db = linear_to_db(clampf(gain, 0.001, gain_ceiling))
 	p.play()
 
 

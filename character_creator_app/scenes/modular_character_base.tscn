@@ -1,0 +1,22 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/modular_character_base.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://assets/base/characterMedium.fbx" id="2_toon"]
+
+[node name="ModularCharacterBase" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="Body" parent="." instance=ExtResource("2_toon")]
+scale = Vector3(0.7, 0.7, 0.7)
+
+[node name="Modules" type="Node3D" parent="."]
+
+[node name="Hair" type="Node3D" parent="Modules"]
+
+[node name="Eyes" type="Node3D" parent="Modules"]
+
+[node name="Mouth" type="Node3D" parent="Modules"]
+
+[node name="Clothes" type="Node3D" parent="Modules"]
+
+[node name="Accessories" type="Node3D" parent="Modules"]

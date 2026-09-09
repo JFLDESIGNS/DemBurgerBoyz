@@ -1,0 +1,26 @@
+; Standalone character creator project.
+config_version=5
+
+[application]
+
+config/name="Burger Character Creator"
+config/description="Create modular characters for Food Truck Flip"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1100
+window/size/viewport_height=720
+window/size/window_width_override=1100
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.035, 0.043, 0.065, 1)

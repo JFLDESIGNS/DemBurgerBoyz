@@ -331,6 +331,7 @@ var is_disguise_cat: bool = false
 var is_cut_collector: bool = false
 ## Far-sidewalk extra — Kenney walk-by only. Game drives X; skip tickets / wawa.
 var is_street_pedestrian: bool = false
+var _street_gait_scale: float = 1.0
 var is_jin_guest: bool = false
 var is_jimin_guest: bool = false
 var is_bts_guest: bool = false
@@ -1191,18 +1192,24 @@ func _play_anim(state: String) -> void:
 	if state == "walk" and _walk_anim_path != "" and _anim_player.has_animation(_walk_anim_path) \
 			and not _walk_anim_path.ends_with("/Run"):
 		_anim_player.play(_walk_anim_path)
-		_anim_player.speed_scale = 1.0
+		_anim_player.speed_scale = _street_gait_scale if is_street_pedestrian else 1.0
+		if is_street_pedestrian:
+			_seek_street_anim_random()
 		return
 	if state == "walk" and _walk_anim_path.ends_with("/Run") and _anim_player.has_animation(_walk_anim_path):
 		_anim_player.play(_walk_anim_path)
-		_anim_player.speed_scale = 1.12
+		_anim_player.speed_scale = _street_gait_scale if is_street_pedestrian else 1.12
+		if is_street_pedestrian:
+			_seek_street_anim_random()
 		return
 	if state == "walk":
 		var walk_fallback := _pick_walk_anim_path()
 		if walk_fallback != "" and _anim_player.has_animation(walk_fallback):
 			_walk_anim_path = walk_fallback
 			_anim_player.play(walk_fallback)
-			_anim_player.speed_scale = 1.0
+			_anim_player.speed_scale = _street_gait_scale if is_street_pedestrian else 1.0
+			if is_street_pedestrian:
+				_seek_street_anim_random()
 			return
 	if _anim_player.has_animation("kenney/Idle"):
 		_anim_state = "idle"
@@ -1935,19 +1942,29 @@ static func _folder_has_character_json(path: String) -> bool:
 	return false
 
 
-func play_street_walk() -> void:
+func play_street_walk(gait_scale: float = 1.0) -> void:
+	_street_gait_scale = clampf(gait_scale, 0.72, 1.45)
 	_walk_anim_path = _pick_walk_anim_path()
 	_anim_state = ""
 	_play_anim("walk")
 
 
-func play_street_run() -> void:
+func play_street_run(gait_scale: float = 1.12) -> void:
+	_street_gait_scale = clampf(gait_scale, 0.95, 1.45)
 	if _anim_player != null and _anim_player.has_animation("kenney_running/Run"):
 		_walk_anim_path = "kenney_running/Run"
 	else:
 		_walk_anim_path = _pick_walk_anim_path()
 	_anim_state = ""
 	_play_anim("walk")
+
+
+func _seek_street_anim_random() -> void:
+	if _anim_player == null or _anim_player.current_animation.is_empty():
+		return
+	var clip: Animation = _anim_player.get_animation(_anim_player.current_animation)
+	if clip != null and clip.length > 0.08:
+		_anim_player.seek(randf() * clip.length, true)
 
 
 func _maybe_start_leave_fade() -> void:
@@ -3584,6 +3601,18 @@ func mouth_global() -> Vector3:
 		var mouth_local := _disguise_mustache_local()
 		return global_position + Vector3(mouth_local.x, mouth_local.y, mouth_local.z + 0.12)
 	return global_position + Vector3(0.0, 1.18, 0.06)
+
+
+func pay_hand_global() -> Vector3:
+	## Bills spawn from the reaching hand, not the face.
+	_cache_skeleton()
+	if _skeleton != null and is_instance_valid(_skeleton):
+		var idx: int = _skeleton.find_bone("RightHand")
+		if idx < 0:
+			idx = _skeleton.find_bone("mixamorig:RightHand")
+		if idx >= 0:
+			return (_skeleton.global_transform * _skeleton.get_bone_global_pose(idx)).origin
+	return mouth_global() + Vector3(-0.10, -0.22, 0.08)
 
 
 func _disguise_mustache_local() -> Vector3:
