@@ -1435,7 +1435,7 @@ func _make_tube_mesh(top_r: float, bottom_r: float, height: float, segments: int
 	return mesh
 
 
-func _make_frost_texture(frost_seed: int) -> ImageTexture:
+static func _make_frost_texture(frost_seed: int) -> ImageTexture:
 	## White ice with lots of punched meat windows — never a solid overlay.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = frost_seed if frost_seed != 0 else randi()
@@ -1484,7 +1484,7 @@ func _make_frost_texture(frost_seed: int) -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
-func _frost_noise2(x: float, y: float) -> float:
+static func _frost_noise2(x: float, y: float) -> float:
 	## Cheap hash-based value noise in 0..1.
 	var xi := floori(x)
 	var yi := floori(y)
@@ -1499,7 +1499,7 @@ func _frost_noise2(x: float, y: float) -> float:
 	return lerpf(lerpf(a, b, u), lerpf(c, d, u), v)
 
 
-func _frost_hash(x: int, y: int) -> float:
+static func _frost_hash(x: int, y: int) -> float:
 	var n := x * 374761393 + y * 668265263
 	n = (n ^ (n >> 13)) * 1274126177
 	n = n ^ (n >> 16)
@@ -2176,6 +2176,126 @@ static func _make_frozen_ball_shader(
 	return mat
 
 
+static func populate_frozen_ball_visual(parent: Node3D) -> void:
+	## Same lumpy meat + frost shell + ice flecks used on the grill drop ball.
+	if parent == null:
+		return
+	var lump_seed := randf() * 1000.0
+	const MEAT_R := 0.092
+	parent.set_meta("lump_seed", lump_seed)
+	parent.set_meta("frost_v9_cooks", true)
+
+	var meat := MeshInstance3D.new()
+	meat.name = "Meat"
+	var meat_mesh := SphereMesh.new()
+	meat_mesh.radius = MEAT_R
+	meat_mesh.height = MEAT_R * 2.0
+	meat_mesh.radial_segments = 36
+	meat_mesh.rings = 20
+	meat.mesh = meat_mesh
+	var meat_mat := _make_frozen_ball_shader(
+		Color(0.78, 0.38, 0.40, 1.0),
+		lump_seed,
+		FROZEN_BALL_LUMP_AMP,
+		null,
+		0.0,
+		true
+	)
+	meat_mat.render_priority = PATTY_BODY_PRIORITY
+	meat.material_override = meat_mat
+	meat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	parent.add_child(meat)
+
+	var under := MeshInstance3D.new()
+	under.name = "Under"
+	var under_mesh := SphereMesh.new()
+	under_mesh.radius = MEAT_R * 1.01
+	under_mesh.height = MEAT_R * 2.02
+	under_mesh.radial_segments = 20
+	under_mesh.rings = 10
+	under.mesh = under_mesh
+	under.scale = Vector3(1.0, 0.55, 1.0)
+	under.position = Vector3(0.0, -0.035, 0.0)
+	var under_mat := StandardMaterial3D.new()
+	under_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	under_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	under_mat.albedo_color = Color(0.35, 0.12, 0.14, 0.55)
+	under_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	under_mat.render_priority = PATTY_BODY_PRIORITY
+	under.material_override = under_mat
+	under.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(under)
+
+	var frost_tex: Texture2D = _make_frost_texture(randi())
+	var shell := MeshInstance3D.new()
+	shell.name = "FrostShell"
+	var shell_mesh := SphereMesh.new()
+	shell_mesh.radius = MEAT_R + 0.0025
+	shell_mesh.height = (MEAT_R + 0.0025) * 2.0
+	shell_mesh.radial_segments = 36
+	shell_mesh.rings = 20
+	shell.mesh = shell_mesh
+	var shell_mat := _make_frozen_ball_shader(
+		Color(1.0, 1.0, 1.0, 0.38),
+		lump_seed,
+		FROZEN_BALL_LUMP_AMP,
+		frost_tex,
+		0.88,
+		false
+	)
+	shell_mat.set_shader_parameter("uv_scale", Vector2(0.55, 0.45))
+	shell_mat.render_priority = PATTY_BODY_PRIORITY + 3
+	shell.material_override = shell_mat
+	shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shell.rotation_degrees.y = randf() * 360.0
+	parent.add_child(shell)
+
+	var fleck_scale_comp := 1.35 / maxf(FROZEN_BALL_SCALE, 0.01)
+	for _i in randi_range(7, 11):
+		var fleck := MeshInstance3D.new()
+		fleck.name = "IceFleck"
+		fleck.mesh = _make_ice_chunk_mesh(randi())
+		var ang := randf() * TAU
+		var elev := lerpf(0.08, 0.92, pow(randf(), 0.5))
+		var normal := Vector3(cos(ang) * cos(elev), sin(elev), sin(ang) * cos(elev)).normalized()
+		var r := MEAT_R + 0.0015 + randf() * 0.002
+		var twist := randf() * TAU
+		var tangent := normal.cross(Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).normalized()
+		var tilt := Basis(tangent, deg_to_rad(randf_range(-8.0, 8.0)))
+		fleck.transform = Transform3D(tilt * _basis_y_along_normal(normal, twist), normal * r)
+		var s_base := 0.50 + randf() * 0.55
+		var big_chunk := randf() > 0.72
+		if big_chunk:
+			s_base = 1.05 + randf() * 0.75
+		var s := s_base * fleck_scale_comp
+		fleck.scale = Vector3(
+			s * (0.75 + randf() * 0.55),
+			s * (0.35 + randf() * 0.35),
+			s * (0.75 + randf() * 0.55)
+		)
+		var fmat := StandardMaterial3D.new()
+		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+		var ice_a := ((0.14 + randf() * 0.12) if big_chunk else (0.28 + randf() * 0.22)) * 0.75
+		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, ice_a)
+		fleck.set_meta("base_ice_alpha", ice_a)
+		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+		fmat.no_depth_test = false
+		fmat.render_priority = PATTY_BODY_PRIORITY + 8
+		fleck.material_override = fmat
+		fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(fleck)
+
+
+static func make_standalone_frozen_ball() -> Node3D:
+	var ball := Node3D.new()
+	ball.name = "FridgePattyBall"
+	populate_frozen_ball_visual(ball)
+	ball.scale = Vector3(FROZEN_BALL_SCALE, FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH, FROZEN_BALL_SCALE)
+	return ball
+
+
 func prewarm_frozen_visuals() -> void:
 	## Build ice-ball meshes/shaders while the patty sits in the offscreen spawn pool.
 	_ensure_frozen_ball()
@@ -2267,125 +2387,21 @@ func _ensure_frozen_ball() -> void:
 	_frozen_ball = Node3D.new()
 	_frozen_ball.name = "FrozenDropBall"
 	_frozen_ball.visible = false
-	_frozen_ball.set_meta("frost_v9_cooks", true)
 	_reset_frozen_ball_pose()
 	add_child(_frozen_ball)
-
-	var lump_seed := randf() * 1000.0
-	const MEAT_R := 0.092
-
-	## Opaque lumpy meat casts the real ball shadow (disc proxy is off while waiting).
-	var meat := MeshInstance3D.new()
-	var meat_mesh := SphereMesh.new()
-	meat_mesh.radius = MEAT_R
-	meat_mesh.height = MEAT_R * 2.0
-	meat_mesh.radial_segments = 36
-	meat_mesh.rings = 20
-	meat.mesh = meat_mesh
-	var meat_mat := _make_frozen_ball_shader(
-		Color(0.78, 0.38, 0.40, 1.0),
-		lump_seed,
-		FROZEN_BALL_LUMP_AMP,
-		null,
-		0.0,
-		true
-	)
-	meat_mat.render_priority = PATTY_BODY_PRIORITY
-	_frozen_ball_meat_mat = meat_mat
-	meat.material_override = meat_mat
-	meat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	_frozen_ball.add_child(meat)
-	_ensure_ball_hover_outline(meat_mesh, lump_seed)
-
-	## Soft underside tint — no WPO (different lumps were the clipped ghost layer).
-	var under := MeshInstance3D.new()
-	var under_mesh := SphereMesh.new()
-	under_mesh.radius = MEAT_R * 1.01
-	under_mesh.height = MEAT_R * 2.02
-	under_mesh.radial_segments = 20
-	under_mesh.rings = 10
-	under.mesh = under_mesh
-	under.scale = Vector3(1.0, 0.55, 1.0)
-	under.position = Vector3(0.0, -0.035, 0.0)
-	var under_mat := StandardMaterial3D.new()
-	under_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	under_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	under_mat.albedo_color = Color(0.35, 0.12, 0.14, 0.55)
-	under_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	under_mat.render_priority = PATTY_BODY_PRIORITY
-	_frozen_ball_under_mat = under_mat
-	under.material_override = under_mat
-	under.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_frozen_ball.add_child(under)
-
-	var frost_tex: Texture2D = null
-	if _frost_mat != null:
-		frost_tex = _frost_mat.albedo_texture
-	if frost_tex == null:
-		frost_tex = _make_frost_texture(randi())
-
-	## Frost shell — SAME WPO seed/amp as meat so it hugs the lumps (no clipped second ball).
-	var shell := MeshInstance3D.new()
-	var shell_mesh := SphereMesh.new()
-	shell_mesh.radius = MEAT_R + 0.0025
-	shell_mesh.height = (MEAT_R + 0.0025) * 2.0
-	shell_mesh.radial_segments = 36
-	shell_mesh.rings = 20
-	shell.mesh = shell_mesh
-	var shell_mat := _make_frozen_ball_shader(
-		Color(1.0, 1.0, 1.0, 0.38),
-		lump_seed,
-		FROZEN_BALL_LUMP_AMP,
-		frost_tex,
-		0.88,
-		false
-	)
-	## Bigger frost islands (lower UV scale = chunkier noise patches).
-	shell_mat.set_shader_parameter("uv_scale", Vector2(0.55, 0.45))
-	shell_mat.render_priority = PATTY_BODY_PRIORITY + 3
-	_frozen_ball_frost_mat = shell_mat
-	shell.material_override = shell_mat
-	shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	shell.rotation_degrees.y = randf() * 360.0
-	_frozen_ball.add_child(shell)
-
-	## Ice shards — sit on the surface, +Y aligned to the outward normal.
-	var fleck_scale_comp := 1.35 / maxf(FROZEN_BALL_SCALE, 0.01)
-	for _i in randi_range(7, 11):
-		var fleck := MeshInstance3D.new()
-		fleck.name = "IceFleck"
-		fleck.mesh = _make_ice_chunk_mesh(randi())
-		var ang := randf() * TAU
-		var elev := lerpf(0.08, 0.92, pow(randf(), 0.5))
-		var normal := Vector3(cos(ang) * cos(elev), sin(elev), sin(ang) * cos(elev)).normalized()
-		var r := MEAT_R + 0.0015 + randf() * 0.002
-		var twist := randf() * TAU
-		var tangent := normal.cross(Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT).normalized()
-		var tilt := Basis(tangent, deg_to_rad(randf_range(-8.0, 8.0)))
-		fleck.transform = Transform3D(tilt * _basis_y_along_normal(normal, twist), normal * r)
-		var s_base := 0.50 + randf() * 0.55
-		var big_chunk := randf() > 0.72
-		if big_chunk:
-			s_base = 1.05 + randf() * 0.75
-		var s := s_base * fleck_scale_comp
-		fleck.scale = Vector3(
-			s * (0.75 + randf() * 0.55),
-			s * (0.35 + randf() * 0.35),
-			s * (0.75 + randf() * 0.55)
-		)
-		var fmat := StandardMaterial3D.new()
-		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
-		var ice_a := ((0.14 + randf() * 0.12) if big_chunk else (0.28 + randf() * 0.22)) * 0.75
-		fmat.albedo_color = Color(0.95 + randf() * 0.05, 0.97 + randf() * 0.03, 1.0, ice_a)
-		fleck.set_meta("base_ice_alpha", ice_a)
-		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-		fmat.no_depth_test = false
-		fmat.render_priority = PATTY_BODY_PRIORITY + 8
-		fleck.material_override = fmat
-		fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_frozen_ball.add_child(fleck)
+	populate_frozen_ball_visual(_frozen_ball)
+	var lump_seed := float(_frozen_ball.get_meta("lump_seed", 0.0))
+	for child in _frozen_ball.get_children():
+		var mi := child as MeshInstance3D
+		if mi == null:
+			continue
+		if mi.name == "Meat":
+			_frozen_ball_meat_mat = mi.material_override as ShaderMaterial
+			_ensure_ball_hover_outline(mi.mesh, lump_seed)
+		elif mi.name == "Under":
+			_frozen_ball_under_mat = mi.material_override as StandardMaterial3D
+		elif mi.name == "FrostShell":
+			_frozen_ball_frost_mat = mi.material_override as ShaderMaterial
 
 
 func _reset_frozen_ball_pose() -> void:
@@ -2469,7 +2485,7 @@ func _update_frozen_ball_cook_visual() -> void:
 		fleck.visible = frost_left > 0.015
 
 
-func play_frozen_drop_appear() -> void:
+func play_frozen_drop_appear(skip_land_squash: bool = false) -> void:
 	## First right-click: drop a frozen ice ball (waits for a smash click).
 	_ensure_frozen_ball()
 	if _place_morph_tw != null and is_instance_valid(_place_morph_tw):
@@ -2488,7 +2504,9 @@ func play_frozen_drop_appear() -> void:
 	_frozen_ball.visible = true
 	_reset_frozen_ball_pose()
 	_update_frozen_ball_cook_visual()
-	_play_frozen_land_squash()
+	## Fridge fly/drag already sat the ball on the steel — a land squash would pop.
+	if not skip_land_squash:
+		_play_frozen_land_squash()
 	sync_interact_collision()
 	var audio := _audio()
 	if audio and audio.has_method("play_smash_sizzle"):

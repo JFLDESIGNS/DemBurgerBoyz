@@ -55,8 +55,14 @@ const PATTY_FRIDGE_FOLLOW_GAP_PX := 72.0
 const PATTY_FRIDGE_MAX_BALLS := 12
 const PATTY_FRIDGE_BALL_SCALE_DEFAULT := 1.38 ## a little smaller than the prior 1.6
 const PATTY_FRIDGE_FROST_ICON_PATH := "res://assets/ui/frost_snowflake.png"
-const FRIDGE_BALL_LERP_SEC := 0.14
+const FRIDGE_BALL_LERP_SEC := 0.28
 const PATTY_FRIDGE_LID_OPEN_DEG := 90.0
+const PATTY_FRIDGE_LID_OPEN_SEC := 0.74
+const PATTY_FRIDGE_BALL_RISE_SEC := 0.52
+const PATTY_FRIDGE_BALL_RISE_DELAY := 0.16
+const PATTY_FRIDGE_LID_CLOSE_SEC := 0.42
+const PATTY_FRIDGE_BALL_TUCK_SEC := 0.32
+const PATTY_FRIDGE_OPEN_HOLD_SEC := 0.14
 const PATTY_FRIDGE_CFG_SECTION := "patty_fridge"
 const CHEESE_STRIP_TILT_DEG := 0.0 ## New slice art already has perspective
 const GARBAGE_TRAY_WIDTH_MUL := 2.0
@@ -179,6 +185,8 @@ const GrillSongPerformerScript := preload("res://scripts/grill_song_performer.gd
 const GrillTttScript := preload("res://scripts/grill_ttt.gd")
 const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
 const LocationMapUIScript := preload("res://scripts/location_map_ui.gd")
+const PhoneSnakScript := preload("res://scripts/phone_snak.gd")
+const PhoneGnopScript := preload("res://scripts/phone_gnop.gd")
 const HsbColorPickerScript := preload("res://scripts/hsb_color_picker.gd")
 const INTRO_MUSIC_PATH := "res://assets/music/burger_time.mp3"
 const BTS_DAY_START_MUSIC_PATH := "res://assets/music/bts_butter.mp3"
@@ -202,6 +210,15 @@ const START_MONEY := 1000.0
 const BANK_CFG_SECTION := "bank"
 const BANK_SAVINGS_RATE_DEFAULT := 1.0
 const BANK_LOAN_RATE_DEFAULT := 5.0
+const ECONOMY_CFG_SECTION := "economy"
+const CHALLENGE_INTERVAL_DEFAULT := 180.0
+const CHALLENGE_CHANCE_DEFAULT := 0.5
+const CHALLENGE_COUNT_SMALL_DEFAULT := 10
+const CHALLENGE_TIME_SMALL_DEFAULT := 180.0
+const CHALLENGE_COUNT_LARGE_DEFAULT := 20
+const CHALLENGE_TIME_LARGE_DEFAULT := 360.0
+const CHALLENGE_TIP_SMALL_DEFAULT := 50
+const CHALLENGE_TIP_LARGE_DEFAULT := 100
 const SHOP_SODA_MACHINE := "soda_machine"
 const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
@@ -254,6 +271,48 @@ var bank_savings_rate_pct: float = BANK_SAVINGS_RATE_DEFAULT
 var bank_loan_rate_pct: float = BANK_LOAN_RATE_DEFAULT
 var bank_xfer_chunk: float = 100.0
 var bank_borrow_typed: float = 100.0
+var challenge_interval_sec: float = CHALLENGE_INTERVAL_DEFAULT
+var challenge_chance: float = CHALLENGE_CHANCE_DEFAULT
+var challenge_count_small: int = CHALLENGE_COUNT_SMALL_DEFAULT
+var challenge_time_small: float = CHALLENGE_TIME_SMALL_DEFAULT
+var challenge_count_large: int = CHALLENGE_COUNT_LARGE_DEFAULT
+var challenge_time_large: float = CHALLENGE_TIME_LARGE_DEFAULT
+var challenge_tip_small: int = CHALLENGE_TIP_SMALL_DEFAULT
+var challenge_tip_large: int = CHALLENGE_TIP_LARGE_DEFAULT
+var economy_burger_base: int = 4
+var economy_price_per_item: int = 1
+var economy_everything_bonus: int = 3
+var economy_soda_price: int = 3
+var economy_icecream_price: int = 4
+var economy_fries_price: int = 3
+var economy_tip_min: int = 3
+var economy_tip_max: int = 10
+var economy_tip_outlier: int = 25
+var economy_tip_outlier_chance: float = 0.04
+var _challenge_phase: String = "" ## "", wait_line, offer, active
+var _challenge_customer: Node3D = null
+var _challenge_remaining: int = 0
+var _challenge_count: int = 10
+var _challenge_time_left: float = 0.0
+var _challenge_time_max: float = 180.0
+var _challenge_roll_timer: float = CHALLENGE_INTERVAL_DEFAULT
+var _challenge_attach_next: bool = false
+var _challenge_bonus_tip: int = 0
+var challenge_overlay: ColorRect = null
+var challenge_title_label: Label = null
+var challenge_body_label: Label = null
+var challenge_count_stat: Label = null
+var challenge_time_stat: Label = null
+var challenge_reward_label: Label = null
+var challenge_banner: Label = null
+var challenge_hud_label: Label = null
+var challenge_hud_panel: PanelContainer = null
+var challenge_hud_count: Label = null
+var challenge_hud_clock: Label = null
+var challenge_hud_bar: ProgressBar = null
+var _challenge_banner_tween: Tween = null
+var _challenge_early_test_armed := false
+const CHALLENGE_EARLY_TEST_WINDOW := 60.0
 var credit_score: int = 500
 var bank_lifetime_repaid: float = 0.0
 var combo: int = 0
@@ -599,10 +658,12 @@ var patty_fridge_lid_area: Area3D = null
 var patty_fridge_balls_root: Node3D = null
 var patty_fridge_frost: GPUParticles3D = null
 var patty_fridge_frost_icon: MeshInstance3D = null
+var _fridge_frost_tex: ImageTexture = null
 var patty_fridge_open: bool = false
 var _patty_fridge_tween: Tween = null
 var _fridge_drag_active: bool = false
 var _fridge_drag_ball: Node3D = null
+var _fridge_launch_inflight: int = 0
 var patty_fridge_tray_mat: StandardMaterial3D = null
 var _fridge_frost_mask_shader: Shader = null
 var patty_fridge_pos := Vector3.ZERO
@@ -628,7 +689,7 @@ var garbage_liner_wobble_y := 2.2
 var garbage_liner_wobble_xz := 1.8
 var garbage_tied_bag_scale := 4.0
 var garbage_bag_hold_height := 0.48 ## meters above grill — drink-style plane
-var garbage_bag_hold_scale := 0.72 ## in-hand finished sack
+var garbage_bag_hold_scale := 4.0 ## match in-can tied bag; street throw stays this big
 var garbage_bag_tilt := Vector2.ZERO
 var grill_surface_area: Area3D = null
 var grill_surface_mat: StandardMaterial3D = null
@@ -833,6 +894,10 @@ var grill_residue_mats: Array = []
 var grill_residue_chunks: Array = [] ## per slot: Array of MeshInstance3D pieces
 var grill_residue_centers: Array = [] ## Vector3 per slot
 var grill_residue_kind: Array = [] ## "patty" / "cup" so multiplayer rebuilds the same debris
+var debris_trap_root: Node3D = null
+var debris_piles: Array = [] ## loose scraped strips {root, mass, slot}
+var _debris_pile_mat: StandardMaterial3D = null
+var _debris_strip_mesh: ArrayMesh = null
 var brush_swipe_travel: Array = [] ## movement accum while over each residue
 var brush_last_pos: Vector3 = Vector3.ZERO
 var brush_swipe_cool: Array = [] ## cooldown after a scrape hit
@@ -862,6 +927,19 @@ const SPATULA_SWIPE_DIST := 0.085 ## Flecks chip with short swipes
 const SPATULA_SCRAPE_MIN_MOVE := 0.0010 ## Tiny moves still count a little
 const RESIDUE_CHUNK_COUNT := 10 ## Extra flecks on top of the burnt disc.
 const RESIDUE_SIZE_SCALE := 0.85 ## Burger leave-behind stain / flecks
+const DEBRIS_INCH := 0.0254
+const DEBRIS_STEEL_TOP := 0.0225 ## Zone panel half-height — top of the steel.
+const DEBRIS_TRAP_W := 12.0 * DEBRIS_INCH ## 1 ft wide
+const DEBRIS_TRAP_D := 2.0 * DEBRIS_INCH ## 2 in deep
+const DEBRIS_TRAP_H := 0.018 ## trough sits on the steel so it reads
+const DEBRIS_TRAP_TOWARD_COOK := 6.0 * DEBRIS_INCH ## pull the far-edge trap closer to the cook
+const DEBRIS_PILE_W_MIN := 4.0 * DEBRIS_INCH
+const DEBRIS_PILE_W_MAX := 6.0 * DEBRIS_INCH
+const DEBRIS_PILE_H := 0.011 ## half the old mound height
+const DEBRIS_PILE_Z_FRAC := 0.20 ## skinny depth; long axis stays sideways (X)
+const DEBRIS_PILE_MERGE_R := 0.20
+const DEBRIS_PILE_PUSH_SCALE := 1.15
+const DEBRIS_PILE_PUSH_MAX := 0.055
 ## Same-spot cook dwell → roll once; 80% chance to drop debris while still cooking.
 const RESIDUE_COOK_SPOT_SEC := 10.0
 const RESIDUE_COOK_SPOT_CHANCE := 0.80
@@ -1019,11 +1097,14 @@ const DISGUISE_CAT_CHANCE := 1.0 ## Always joins once maxed (was 0.55 and never 
 const DISGUISE_CAT_COOLDOWN := 90.0
 ## Mustache-and-hat guy — takes half the day's take until you buy him out.
 const CUT_COLLECTOR_BUYOUT := 10000.0
-const CUT_COLLECTOR_LANE_X := 1.12 ## far screen-left, not in the order line
+const CUT_COLLECTOR_LANE_X := 1.97 ## 1 ft camera-right of the old 2.28 stand (world +X = camera-left)
 const CUT_COLLECTOR_SPAWN_X := 6.5 ## camera-left (world +X); customers enter from camera-right
 const CUT_COLLECTOR_SKIN := 2 ## criminalMaleA
 const CUT_COLLECTOR_WAWA_SEC := 60.0
 const CUT_COLLECTOR_WAWA_CHANCE := 0.50
+const CUT_COLLECTOR_INTRO_SPAWN_SEC := 1.42
+const CUT_COLLECTOR_INTRO_KNOCK_SEC := 0.34
+const CUT_COLLECTOR_INTRO_KNOCK2_SEC := 0.72
 var truck_bought_out: bool = false
 var shift_start_money: float = START_MONEY
 var last_day_earnings: float = 0.0
@@ -1031,12 +1112,15 @@ var last_day_cut: float = 0.0
 var last_day_tips: float = 0.0
 var shift_food_sales: float = 0.0
 var shift_tips: float = 0.0
+var _hud_money_shown: float = 0.0
+var _hud_money_climb_tween: Tween = null
 var _cut_collector: Node3D = null
 var _cut_collector_kind: String = "" ## "" | "wawa" | "cut" | "pep"
 var _cut_collector_wawa_timer: float = 60.0
 var _cut_collector_cut_done: bool = false
 var _cut_collector_seq: int = 0
 var _boss_caption_seq: int = 0
+var _boss_intro_seq: int = 0
 var cut_buyout_btn: Button = null
 ## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
 var glock_held: bool = false
@@ -1192,6 +1276,8 @@ var phone_maps_art: TextureRect = null
 var phone_maps_pin_layer: Control = null
 var phone_bank_page: Control = null
 var phone_bank_box: VBoxContainer = null
+var phone_snak_page: Control = null
+var phone_gnop_page: Control = null
 var _phone_app_id: String = "home"
 var _phone_scroll_dragging: bool = false
 var _phone_scroll_drag_pending: bool = false
@@ -1891,6 +1977,7 @@ var prop_offsets: Dictionary = {
 	"fryer_done": Vector3.ZERO,
 	"big_tree": Vector3(-0.01, -0.01, -0.01),
 	"small_tree": Vector3.ZERO,
+	"tip_jar": Vector3.ZERO,
 }
 var prop_offsets_loaded: bool = false
 var screen_zone_overlay: Control = null
@@ -1925,15 +2012,31 @@ var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by lo
 var street_car_sprite: Sprite3D = null
 var street_car_exhaust: GPUParticles3D = null
 var street_car_blur_sprites: Array = [] ## trailing Sprite3D smears
+var street_car_pool: Array = [] ## Texture2D — van plus PSD cars
+var street_car_pool_scale: Array = [] ## matching height scale vs the van
 var street_car_wait: float = 0.0
 var street_car_active: bool = false
 var street_car_direction: float = -1.0
 var street_car_phase: float = 0.0
-var street_car_speed: float = 9.84
+var street_car_speed: float = 14.76
 var street_car_half_width: float = 0.0
 var street_car_half_height: float = 0.0
+var street_car_base_y: float = 1.60 ## sprite center so wheels sit on the van's road line
 var street_car_last_x: float = 0.0
 var street_car_whoosh_played: bool = false
+var street_car_horn_this_pass: bool = false
+var street_car_current_height_scale: float = 1.0
+var street_car_preview: bool = false ## Parked center car while Hidden is open.
+var bg_people: Array = [] ## Customer street walkers
+var bg_people_wait: Array = []
+var bg_people_active: Array = []
+var bg_people_dir: Array = []
+var bg_people_speed: Array = []
+var bg_people_is_run: Array = []
+var bg_people_is_pair: Array = []
+var bg_people_pass_blend: Array = []
+var bg_people_last_skin: int = -1
+var bg_people_walk_spawns: int = 0 ## walkers since the last runner (5 walkers → 1 runner)
 var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
@@ -1955,12 +2058,17 @@ var grill_standoff_height: float = GRILL_STANDOFF_HEIGHT
 var bun_pile_root: Node3D = null
 var tip_jar_root: Node3D = null
 var tip_jar_fill_root: Node3D = null
+var tip_jar_area: Area3D = null
+var _tip_jar_shake_t: float = 0.0
+var _tip_jar_shake_left: float = 0.0
 var _tip_jar_bill_tex: Texture2D = null
 var _tip_jar_bill_count: int = 0
 var _tip_jar_inner_glow_shader: Shader = null
 const TIP_JAR_MAX_BILLS := 3
 const TIP_JAR_SCALE := 3.0
 const TIP_JAR_BUN_OFFSET := Vector3(0.28, 0.0, 0.04) ## camera-left of the bun towers (world +X)
+const TIP_JAR_COLLISION_LAYER := 8388608
+const TIP_JAR_SHAKE_SEC := 0.42
 var bun_pile_area: Area3D = null ## Click volume over the 3D bun towers
 var bun_pile_stacks: Array = [] ## Pair roots (bottom+top); visibility tracks stock
 const BUN_PILE_TOWER_COUNT := 1 ## one pile beside the cheese (was two side-by-side)
@@ -2635,21 +2743,46 @@ const STREET_BG_SELECTED_TREE_PARK_PATH := "res://assets/backgrounds/selected_tr
 const STREET_BG_SELECTED_RESIDENTIAL_PATH := "res://assets/backgrounds/selected_residential_row.png"
 const STREET_BG_SELECTED_CONSTRUCTION_PATH := "res://assets/backgrounds/selected_construction_block.png"
 const STREET_BG_SELECTED_WAREHOUSE_PATH := "res://assets/backgrounds/selected_warehouse.png"
-const STREET_CAR_TEXTURE_PATH := "res://assets/backgrounds/road_delivery_car.png"
+const STREET_CAR_TEXTURE_PATHS := [
+	"res://assets/backgrounds/road_delivery_car.png",
+	"res://assets/backgrounds/street_cars/street_car_city.png",
+	"res://assets/backgrounds/street_cars/street_car_hatch.png",
+	"res://assets/backgrounds/street_cars/street_car_pickup.png",
+	"res://assets/backgrounds/street_cars/street_car_offroad.png",
+]
 const STREET_CAR_Z := 11.0248 ## Five feet deeper toward the background than the previous 9.5008 m depth.
 const STREET_CAR_Y := 1.60 ## Raised another 0.70 m: twice the previous height adjustment.
 const STREET_CAR_PIXEL_SIZE := 0.010752 ## 20% smaller than the previous rendered size.
+const STREET_CAR_REF_HEIGHT_PX := 312.0 ## Van texture height; other pool cars scale to this.
+const STREET_CAR_ADDED_SCALE := 0.70 ## PSD cars are 30% smaller than the original van.
 const STREET_CAR_EDGE_X := 8.7
-const STREET_CAR_SPEED := 9.84 ## 20% faster than the original 8.20.
-const STREET_CAR_SPEED_MIN := 8.16
-const STREET_CAR_SPEED_MAX := 12.00
-const STREET_CAR_BLUR_COUNT := 5
+const STREET_CAR_SPEED := 14.76 ## 1.5× the previous 9.84 pass-by.
+const STREET_CAR_SPEED_MIN := 12.24
+const STREET_CAR_SPEED_MAX := 18.00
+const STREET_CAR_BLUR_COUNT := 3
+const STREET_CAR_DESATURATE := 0.20 ## Pull every car 20% toward grey.
 const STREET_CAR_TILT_DEG := 0.65
 const STREET_CAR_RUMBLE_Y := 0.014
 const STREET_CAR_RUMBLE_DEG := 0.14
 const STREET_CAR_RUMBLE_RATE := 18.0
 const STREET_CAR_WAIT_MIN := 17.0
 const STREET_CAR_WAIT_MAX := 34.0
+const STREET_CAR_HORN_CHANCE := 0.24
+const BG_PEOPLE_COUNT := 2
+const BG_PEOPLE_MAX_ONSCREEN := 2
+const BG_PEOPLE_Z := 8.65 ## Far sidewalk in front of the shops, in front of street cars.
+const BG_PEOPLE_EDGE_X := 8.4
+const BG_PEOPLE_SPEED_MIN := 0.85
+const BG_PEOPLE_SPEED_MAX := 1.45
+const BG_PEOPLE_WAIT_MIN := 9.0
+const BG_PEOPLE_WAIT_MAX := 24.0
+const BG_PEOPLE_WALKERS_PER_RUNNER := 5
+const BG_PEOPLE_PAIR_CHANCE := 0.42
+const BG_PEOPLE_PAIR_GAP := 0.78 ## Partner starts this far behind on X.
+const BG_PEOPLE_PAIR_Z := 0.22 ## Side-by-side offset toward/away the camera.
+const BG_PEOPLE_PASS_X := 1.85 ## Runner starts sidestepping this close on X.
+const BG_PEOPLE_PASS_Z := 0.58 ## How far toward the camera the runner steps.
+const BG_PEOPLE_PASS_BLEND_SPD := 4.2
 const LOGO_BASE_SIZE := Vector2(0.95, 0.95)
 const LOGO_DEFAULT_X := 2.88
 const LOGO_DEFAULT_Y := 2.05
@@ -2860,6 +2993,24 @@ const GFX_DEFAULTS := {
 	"bunting_edge_softness": 0.09,
 	"cheese_stack_scale": 1.0,
 	"burger_bun_scale": 1.0,
+	"tip_jar_scale": 1.0,
+	"tip_jar_glass": 0.055,
+	"tip_jar_rim": 0.11,
+	"tip_jar_glow": 0.035,
+	"street_car_darken": 0.20,
+	"street_car_speed": 1.0,
+	"street_car_blur": 1.0,
+	"street_car_gap": 1.0,
+	"street_car_size": 1.0,
+	"street_car_y": STREET_CAR_Y,
+	"street_car_z": STREET_CAR_Z,
+	"street_car_sort": 0.0,
+	"bg_people_z": 8.65,
+	"bg_people_y": -0.02,
+	"bg_people_scale": 0.92,
+	"bg_people_speed": 1.0,
+	"bg_people_run_mul": 3.0,
+	"bg_people_gap": 1.0,
 	"sale_x": 0.0,
 	"sale_y": 2.39,
 	"sale_z": 1.18,
@@ -3131,6 +3282,7 @@ func _ready() -> void:
 	_setup_intro_title_music()
 	_setup_burgerpals_startup_sound()
 	_build_dialogue_ui()
+	_build_challenge_ui()
 	## Hint sits under order tickets; flash stays on top.
 	## Empty rail must IGNORE — it covers the hanging tools (oil/scraper/season).
 	var ticket_rail: Control = get_node_or_null("UI/Root/WindowTicketRail")
@@ -3143,7 +3295,8 @@ func _ready() -> void:
 		hud_hint.visible = false
 		hud_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if flash_label:
-		flash_label.z_index = 35
+		flash_label.z_index = 70
+		flash_label.z_as_relative = false
 		flash_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var top_bar: Control = get_node_or_null("UI/Root/TopBar")
 	if top_bar:
@@ -3207,6 +3360,7 @@ func _ensure_runtime_prewarms() -> void:
 		if p2 != null and is_instance_valid(p2) and p2.has_method("hide_frozen_prewarm"):
 			p2.hide_frozen_prewarm()
 	await _prewarm_grill_fire_fx()
+	await _prewarm_patty_fridge_place()
 
 
 func _ensure_patty_spawn_pool() -> void:
@@ -4035,6 +4189,7 @@ func _station_label(_index: int) -> String:
 
 
 func _start_game(guided_tutorial: bool = false) -> void:
+	_unload_character_creator()
 	if guided_tutorial and (mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE):
 		NetManager.stop_browse()
 		NetManager.leave(false)
@@ -4079,6 +4234,9 @@ func _start_game(guided_tutorial: bool = false) -> void:
 	perfect_serves = 0
 	spawn_timer = 99999.0 if tutorial_mode else _first_customer_delay()
 	_reset_bts_day1_flow()
+	_reset_challenge_state(true)
+	_challenge_roll_timer = challenge_interval_sec
+	_challenge_early_test_armed = not tutorial_mode
 	active_station = STATION_CRAFT
 	complaint_station = -1
 	_melody_pressed.clear()
@@ -4130,7 +4288,7 @@ func _start_game(guided_tutorial: bool = false) -> void:
 			_begin_bts_day1_cat_announcement()
 	_start_smooth_jazz_radio()
 	if not tutorial_mode and not truck_bought_out:
-		_spawn_cut_collector("pep")
+		_cue_boss_pep_entrance()
 	# _begin_opening_terror_ambush()
 
 
@@ -4151,6 +4309,9 @@ func _restart() -> void:
 	spawn_timer = _first_customer_delay()
 	if day == 1:
 		_reset_bts_day1_flow()
+	_reset_challenge_state(true)
+	_challenge_roll_timer = challenge_interval_sec
+	_challenge_early_test_armed = not tutorial_mode
 	active_station = STATION_CRAFT
 	complaint_station = -1
 	_clear_all_patty()
@@ -4202,7 +4363,7 @@ func _restart() -> void:
 	if _disguise_cat_pending:
 		_try_spawn_disguise_cat()
 	if not truck_bought_out:
-		_spawn_cut_collector("pep")
+		_cue_boss_pep_entrance()
 	# _begin_opening_terror_ambush()
 
 
@@ -4214,6 +4375,7 @@ func _process(delta: float) -> void:
 	_update_icecream_mascot_spin(delta)
 	_update_window_bunting_wind(delta)
 	_update_street_car(delta)
+	_update_background_people(delta)
 	_update_keyboard_cook_shortcuts(delta)
 	if level_editor != null and level_editor.is_active():
 		level_editor.update_fly(delta)
@@ -4353,6 +4515,7 @@ func _process(delta: float) -> void:
 		_update_held_sale(delta)
 	if garbage_bag_held:
 		_update_held_garbage_bag(delta)
+	_update_tip_jar_click_shake(delta)
 	if glock_cooldown > 0.0:
 		glock_cooldown = maxf(0.0, glock_cooldown - delta)
 	if glock_recoil > 0.0:
@@ -4426,25 +4589,32 @@ func _process(delta: float) -> void:
 		if not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
 			if _disguise_cat_cool > 0.0:
 				_disguise_cat_cool = maxf(0.0, _disguise_cat_cool - delta)
-			if _disguise_cat_pending:
+			if _disguise_cat_pending and not _challenge_blocks_spawns():
 				_try_spawn_disguise_cat()
-			if not shift_closing:
+			if not shift_closing and not _challenge_blocks_spawns():
 				_update_cut_collector_wawa(delta)
-			spawn_timer -= delta
+			if not _challenge_blocks_spawns():
+				spawn_timer -= delta
 			var cap := _customer_cap()
 			var waiting_n := _waiting_customer_count()
 			if (not shift_closing or day1_needs_bts_sequence) and spawn_timer <= 0.0 and waiting_n < cap:
 				# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
 				# 	_spawn_terrorist_wave()
 				# 	spawn_timer = _next_spawn_delay()
-				if not _maybe_begin_bts_day1_performance():
+				if _challenge_blocks_spawns():
+					pass
+				elif not _maybe_begin_bts_day1_performance():
 					_spawn_customer()
-				spawn_timer = _next_spawn_delay()
+					spawn_timer = _next_spawn_delay()
+
+	_update_challenge(delta)
 
 	rush_mode = _customer_cap() >= 3 and _waiting_customer_count() >= maxi(2, _customer_cap() - 1)
 
 	if not tutorial_mode and shift_closing and _regular_customers_empty():
-		if _maybe_begin_bts_day1_performance():
+		if _challenge_phase != "":
+			pass
+		elif _maybe_begin_bts_day1_performance():
 			pass
 		elif _bts_day1_blocks_day_end():
 			pass
@@ -4867,6 +5037,9 @@ func _input(event: InputEvent) -> void:
 		if not level_editor.is_pointer_over_ui(_event_screen_pos(event)):
 			get_viewport().set_input_as_handled()
 		return
+	if _handle_phone_arcade_key(event):
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		options_panel_dragging = false
 	if not playing:
@@ -5119,12 +5292,16 @@ func _input(event: InputEvent) -> void:
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			if patty_fridge_open and not _fridge_drag_active and not _patty_fridge_hit(event.position):
+			if patty_fridge_open and not _fridge_drag_active and _fridge_launch_inflight <= 0 and not _patty_fridge_hit(event.position):
 				_close_patty_fridge()
 			if _try_patty_fridge_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			if _try_pickup_garbage_bag(event.position):
+				get_viewport().set_input_as_handled()
+				return
+			## Tip jar sits under the Build plate — ping/shake before that UI flash.
+			if _try_click_tip_jar(_strip_mouse_pos(event)):
 				get_viewport().set_input_as_handled()
 				return
 			if _try_fryer_basket_click(event.position):
@@ -5580,6 +5757,21 @@ func _kb_typing_blocked() -> bool:
 	return focus is LineEdit or focus is TextEdit
 
 
+func _handle_phone_arcade_key(event: InputEvent) -> bool:
+	if not (event is InputEventKey):
+		return false
+	if phone_column == null or not is_instance_valid(phone_column) or not phone_column.visible:
+		return false
+	var key := event as InputEventKey
+	if _phone_app_id == "snak" and phone_snak_page != null and is_instance_valid(phone_snak_page):
+		if phone_snak_page.has_method("handle_key"):
+			return bool(phone_snak_page.call("handle_key", key))
+	if _phone_app_id == "gnop" and phone_gnop_page != null and is_instance_valid(phone_gnop_page):
+		if phone_gnop_page.has_method("handle_key"):
+			return bool(phone_gnop_page.call("handle_key", key))
+	return false
+
+
 func _handle_keyboard_cook_key(event: InputEventKey) -> bool:
 	## Tap C = cheese to Build · hold C/O = soda · L opens the fly-cam level editor.
 	if _kb_typing_blocked():
@@ -5881,6 +6073,7 @@ func _kb_update_scrape(delta: float) -> void:
 		if float(grill_residue[i]) <= 0.04:
 			_scrape_finish_clean(i)
 	_scrape_grill_liquids(pos, move_xz, moved)
+	_nudge_debris_piles(pos, move_xz, moved)
 	if game_audio and game_audio.has_method("set_slide_moving"):
 		game_audio.set_slide_moving(true, 0.85)
 	if game_audio and game_audio.has_method("set_grill_scrape"):
@@ -6633,10 +6826,10 @@ func _patty_fridge_follow_world() -> Vector3:
 	if r.size.x < 4.0 or r.size.y < 4.0:
 		return Vector3.INF
 	var half_px := maxf(0.4, ingredient_bin_length) * ingredient_bin_scale * patty_fridge_scale * (ingredient_bin_tile * 0.5)
-	var screen := Vector2(
+	var screen := _gui_to_camera_screen(Vector2(
 		r.position.x - patty_fridge_follow_gap_px - half_px,
 		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
-	)
+	))
 	return camera.project_position(screen, ingredient_bin_cam_z)
 
 
@@ -6905,42 +7098,7 @@ func _build_patty_fridge() -> void:
 	balls.name = "FridgeBalls"
 	root.add_child(balls)
 	patty_fridge_balls_root = balls
-	var frost := GPUParticles3D.new()
-	frost.name = "FridgeFrost"
-	frost.amount = 18
-	frost.lifetime = 1.85
-	frost.one_shot = false
-	frost.explosiveness = 0.0
-	frost.visibility_aabb = AABB(Vector3(-tray_x, -0.12, -tray_z), Vector3(tray_x * 2.0, 1.55, tray_z * 2.0))
-	frost.position = Vector3(0.0, 0.04, 0.0)
-	var pmat := ParticleProcessMaterial.new()
-	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pmat.emission_box_extents = Vector3(float(layout["ix"]) * 0.34, 0.10, float(layout["iz"]) * 0.34)
-	pmat.direction = Vector3(0.0, 1.0, 0.0)
-	pmat.spread = 16.0
-	pmat.initial_velocity_min = 0.22
-	pmat.initial_velocity_max = 0.52
-	pmat.gravity = Vector3(0.0, 0.22, 0.0)
-	pmat.damping_min = 0.04
-	pmat.damping_max = 0.12
-	pmat.scale_min = 0.07
-	pmat.scale_max = 0.16
-	pmat.color = Color(0.94, 0.98, 1.0, 0.16)
-	frost.process_material = pmat
-	var puff := SphereMesh.new()
-	puff.radius = 0.04
-	puff.height = 0.08
-	puff.radial_segments = 8
-	puff.rings = 4
-	var puff_mat := StandardMaterial3D.new()
-	puff_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	puff_mat.albedo_color = Color(0.96, 0.99, 1.0, 0.10)
-	puff_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	puff_mat.disable_receive_shadows = true
-	puff.material = puff_mat
-	frost.draw_pass_1 = puff
-	frost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	frost.emitting = false
+	var frost := _make_patty_fridge_frost_particles(float(layout["ix"]), float(layout["iz"]), tray_x, tray_z)
 	root.add_child(frost)
 	patty_fridge_frost = frost
 	if patty_fridge_tray_mat == null or not is_instance_valid(patty_fridge_tray_mat):
@@ -6978,56 +7136,83 @@ func _patty_fridge_ball_seat(index: int, risen: bool) -> Vector3:
 	return Vector3(x, y_up if risen else y_in, z)
 
 
+func _fridge_frozen_sit_world(place_pos: Vector3) -> Vector3:
+	## Match the grill ice-ball center (patty sit + FrozenDropBall local Y).
+	return Vector3(
+		place_pos.x,
+		GRILL_SURFACE_Y + PATTY_SIT_Y + PattyScript.FROZEN_BALL_HOLD_Y,
+		place_pos.z
+	)
+
+
 func _make_fridge_patty_ball(held_world: bool = false) -> Node3D:
+	var ball := PattyScript.make_standalone_frozen_ball()
+	if held_world:
+		## Grill frozen meatball scale is already applied by make_standalone_frozen_ball.
+		return ball
 	var layout: Dictionary = _patty_fridge_cavity_dims()
 	var ball_r: float = float(layout["ball_r"])
-	var ball := Node3D.new()
-	ball.name = "FridgePattyBall"
-	var meat := MeshInstance3D.new()
-	meat.name = "Meat"
-	var sph := SphereMesh.new()
-	sph.radius = ball_r
-	sph.height = ball_r * 2.0
-	sph.radial_segments = 28
-	sph.rings = 16
-	meat.mesh = sph
-	var lump_amp: float = PattyScript.FROZEN_BALL_LUMP_AMP * (ball_r / 0.092)
-	var meat_mat: ShaderMaterial = PattyScript._make_frozen_ball_shader(
-		Color(0.78, 0.38, 0.40, 1.0),
-		randf() * 1000.0,
-		lump_amp,
-		null,
-		0.0,
-		true
-	)
-	meat.material_override = meat_mat
-	meat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	ball.add_child(meat)
-	PattyScript._attach_ice_chunks_on_ball(ball, ball_r, 1.85)
-	if held_world:
-		## Fridge balls inherit the tiny UI fridge scale. In-hand / fly they must
-		## match the grill frozen meatball (0.092 * FROZEN_BALL_SCALE).
-		var grill_r: float = 0.092 * PattyScript.FROZEN_BALL_SCALE
-		var s: float = grill_r / maxf(ball_r, 0.001)
-		ball.scale = Vector3(s, s * PattyScript.FROZEN_BALL_Y_SQUASH, s)
-	else:
-		ball.scale = Vector3.ONE * patty_fridge_ball_scale
+	var grill_r: float = 0.092 * PattyScript.FROZEN_BALL_SCALE
+	var extra: float = (ball_r * patty_fridge_ball_scale) / maxf(grill_r, 0.001)
+	ball.scale *= extra
 	return ball
 
 
 func _rebuild_patty_fridge_balls(risen: bool) -> void:
 	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
 		return
-	while patty_fridge_balls_root.get_child_count() > 0:
-		var old: Node = patty_fridge_balls_root.get_child(0)
-		patty_fridge_balls_root.remove_child(old)
-		old.free()
 	var stock := clampi(int(supply_stock.get("patty", 0)), 0, PATTY_FRIDGE_MAX_BALLS)
-	for i in stock:
+	## Never free the prewarm pool — hiding extras is cheap, rebuilding ice-balls is not.
+	while patty_fridge_balls_root.get_child_count() > PATTY_FRIDGE_MAX_BALLS:
+		var extra: Node = patty_fridge_balls_root.get_child(patty_fridge_balls_root.get_child_count() - 1)
+		patty_fridge_balls_root.remove_child(extra)
+		extra.free()
+	while patty_fridge_balls_root.get_child_count() < stock:
 		var ball := _make_fridge_patty_ball()
-		ball.position = _patty_fridge_ball_seat(i, risen)
-		ball.visible = risen
+		var idx := patty_fridge_balls_root.get_child_count()
+		ball.position = _patty_fridge_ball_seat(idx, risen)
+		ball.visible = false
 		patty_fridge_balls_root.add_child(ball)
+	for i in patty_fridge_balls_root.get_child_count():
+		var seated := patty_fridge_balls_root.get_child(i) as Node3D
+		if seated == null:
+			continue
+		seated.position = _patty_fridge_ball_seat(i, risen)
+		seated.visible = i < stock and (risen or patty_fridge_open)
+
+
+func _take_fridge_display_ball_for_flight() -> Node3D:
+	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
+		return null
+	if patty_fridge_balls_root.get_child_count() <= 0:
+		return null
+	var ball: Node3D = null
+	var i := patty_fridge_balls_root.get_child_count() - 1
+	while i >= 0:
+		var cand := patty_fridge_balls_root.get_child(i) as Node3D
+		if cand != null and is_instance_valid(cand) and cand.visible:
+			ball = cand
+			break
+		i -= 1
+	if ball == null:
+		return null
+	ball.set_meta("flight_start", ball.global_position)
+	patty_fridge_balls_root.remove_child(ball)
+	ball.visible = true
+	call_deferred("_refill_one_fridge_display_ball")
+	return ball
+
+
+func _refill_one_fridge_display_ball() -> void:
+	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
+		return
+	if patty_fridge_balls_root.get_child_count() >= PATTY_FRIDGE_MAX_BALLS:
+		return
+	var extra := _make_fridge_patty_ball()
+	var idx := patty_fridge_balls_root.get_child_count()
+	extra.position = _patty_fridge_ball_seat(idx, patty_fridge_open)
+	extra.visible = false
+	patty_fridge_balls_root.add_child(extra)
 
 
 func _update_patty_fridge_screen_follow() -> void:
@@ -7042,6 +7227,8 @@ func _update_patty_fridge_screen_follow() -> void:
 	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
 			and ingredient_legend.visible \
 			and (start_overlay == null or not start_overlay.visible)
+	if patty_fridge_open or _fridge_launch_inflight > 0 or _fridge_drag_active:
+		show = true
 	patty_fridge_root.visible = show
 
 
@@ -7116,10 +7303,7 @@ func _try_patty_fridge_click(screen_pos: Vector2) -> bool:
 	if not _patty_fridge_hit(screen_pos):
 		return false
 	if patty_fridge_open and not _ray_hits_tool(screen_pos, PATTY_FRIDGE_COLLISION_LAYER, patty_fridge_lid_area):
-		var grabbed := _begin_fridge_ball_drag(screen_pos)
-		if grabbed:
-			_close_patty_fridge()
-		return grabbed
+		return _begin_fridge_ball_drag(screen_pos)
 	_toggle_patty_fridge()
 	return true
 
@@ -7140,19 +7324,16 @@ func _toggle_patty_fridge() -> void:
 	var stock := int(supply_stock.get("patty", 0))
 	if patty_fridge_open:
 		_rebuild_patty_fridge_balls(false)
-		if patty_fridge_frost != null and is_instance_valid(patty_fridge_frost):
-			patty_fridge_frost.emitting = true
-			patty_fridge_frost.restart()
+		_start_patty_fridge_frost()
 		if stock <= 0:
 			_flash("Fridge is empty — restock patties on the phone!", Color("90CAF9"))
 		else:
 			_flash("%d patty ball%s" % [stock, "" if stock == 1 else "s"], Color("B3E5FC"))
-		if game_audio != null:
-			game_audio.play_click()
+		_play_patty_fridge_open_audio()
 		var tw := create_tween()
 		_patty_fridge_tween = tw
 		if patty_fridge_lid_pivot != null and is_instance_valid(patty_fridge_lid_pivot):
-			tw.tween_property(patty_fridge_lid_pivot, "rotation_degrees", Vector3(PATTY_FRIDGE_LID_OPEN_DEG, 0.0, 0.0), 0.30) \
+			tw.tween_property(patty_fridge_lid_pivot, "rotation_degrees", Vector3(PATTY_FRIDGE_LID_OPEN_DEG, 0.0, 0.0), PATTY_FRIDGE_LID_OPEN_SEC) \
 				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		var ball_i := 0
 		if patty_fridge_balls_root != null:
@@ -7162,8 +7343,8 @@ func _toggle_patty_fridge() -> void:
 					continue
 				ball.visible = true
 				ball.position = _patty_fridge_ball_seat(ball_i, false)
-				var delay := 0.04 * float(ball_i)
-				tw.parallel().tween_property(ball, "position", _patty_fridge_ball_seat(ball_i, true), 0.34) \
+				var delay := PATTY_FRIDGE_BALL_RISE_DELAY + 0.05 * float(ball_i)
+				tw.parallel().tween_property(ball, "position", _patty_fridge_ball_seat(ball_i, true), PATTY_FRIDGE_BALL_RISE_SEC) \
 					.set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 				ball_i += 1
 		tw.tween_callback(func() -> void:
@@ -7182,15 +7363,14 @@ func _toggle_patty_fridge() -> void:
 				var ball2 := child2 as Node3D
 				if ball2 == null:
 					continue
-				tw_close.parallel().tween_property(ball2, "position", _patty_fridge_ball_seat(close_i, false), 0.20) \
+				tw_close.parallel().tween_property(ball2, "position", _patty_fridge_ball_seat(close_i, false), PATTY_FRIDGE_BALL_TUCK_SEC) \
 					.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 				close_i += 1
 		if patty_fridge_lid_pivot != null and is_instance_valid(patty_fridge_lid_pivot):
-			tw_close.parallel().tween_property(patty_fridge_lid_pivot, "rotation_degrees", Vector3.ZERO, 0.22) \
+			tw_close.parallel().tween_property(patty_fridge_lid_pivot, "rotation_degrees", Vector3.ZERO, PATTY_FRIDGE_LID_CLOSE_SEC) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tw_close.tween_callback(func() -> void:
 			_patty_fridge_tween = null
-			_rebuild_patty_fridge_balls(false)
 		)
 
 
@@ -7224,10 +7404,170 @@ func _add_patty_fridge_frost_icon(lid_pivot: Node3D, lid_t: float, lid_z: float)
 	patty_fridge_frost_icon = icon
 
 
+func _play_patty_fridge_open_audio() -> void:
+	if game_audio == null:
+		return
+	if game_audio.has_method("play_fridge_open"):
+		game_audio.play_fridge_open()
+	elif game_audio.has_method("play_click"):
+		game_audio.play_click()
+
+
+func _start_patty_fridge_frost() -> void:
+	if patty_fridge_frost == null or not is_instance_valid(patty_fridge_frost):
+		return
+	patty_fridge_frost.emitting = true
+	patty_fridge_frost.restart()
+
+
+func _get_fridge_frost_texture() -> ImageTexture:
+	if _fridge_frost_tex != null:
+		return _fridge_frost_tex
+	var w := 64
+	var img := Image.create(w, w, false, Image.FORMAT_RGBA8)
+	var mid := float(w - 1) * 0.5
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 441902
+	for y in w:
+		for x in w:
+			var dx := (float(x) - mid) / mid
+			var dy := (float(y) - mid) / mid
+			var ang := atan2(dy, dx)
+			var r := sqrt(dx * dx + dy * dy) / (0.96 + 0.12 * sin(ang * 4.0 + 0.7))
+			var a := clampf(1.0 - r, 0.0, 1.0)
+			a = pow(a, 1.65) * 0.78
+			a *= 0.72 + 0.28 * sin(float(x) * 0.48 + float(y) * 0.37)
+			a *= 0.82 + 0.18 * rng.randf()
+			if a < 0.03:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				img.set_pixel(x, y, Color(0.90, 0.97, 1.0, a))
+	_fridge_frost_tex = ImageTexture.create_from_image(img)
+	return _fridge_frost_tex
+
+
+func _make_patty_fridge_frost_particles(ix: float, iz: float, tray_x: float, tray_z: float) -> GPUParticles3D:
+	var frost := GPUParticles3D.new()
+	frost.name = "FridgeFrost"
+	frost.amount = 42
+	frost.lifetime = 2.55
+	frost.preprocess = 0.22
+	frost.one_shot = false
+	frost.explosiveness = 0.28
+	frost.randomness = 0.62
+	frost.visibility_aabb = AABB(Vector3(-tray_x * 1.4, -0.18, -tray_z * 1.4), Vector3(tray_x * 2.8, 2.4, tray_z * 2.8))
+	frost.position = Vector3(0.0, 0.02, 0.0)
+	frost.local_coords = true
+	frost.sorting_offset = 6.5
+	frost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	frost.emitting = false
+	var pmat := ParticleProcessMaterial.new()
+	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pmat.emission_box_extents = Vector3(ix * 0.42, 0.06, iz * 0.42)
+	pmat.direction = Vector3(0.0, 1.0, 0.0)
+	pmat.spread = 32.0
+	pmat.initial_velocity_min = 0.16
+	pmat.initial_velocity_max = 0.46
+	pmat.gravity = Vector3(0.0, 0.05, 0.0)
+	pmat.damping_min = 0.42
+	pmat.damping_max = 0.95
+	pmat.radial_accel_min = 0.04
+	pmat.radial_accel_max = 0.14
+	pmat.scale_min = 0.55
+	pmat.scale_max = 1.25
+	var grow := Curve.new()
+	grow.add_point(Vector2(0.0, 0.35))
+	grow.add_point(Vector2(0.22, 0.85))
+	grow.add_point(Vector2(0.62, 1.22))
+	grow.add_point(Vector2(1.0, 1.65))
+	var grow_tex := CurveTexture.new()
+	grow_tex.curve = grow
+	pmat.scale_curve = grow_tex
+	pmat.color = Color(0.82, 0.94, 1.0, 0.42)
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0, 0.10, 0.38, 0.72, 1.0])
+	fade.colors = PackedColorArray([
+		Color(0.95, 0.99, 1.0, 0.0),
+		Color(0.86, 0.95, 1.0, 0.46),
+		Color(0.74, 0.90, 1.0, 0.22),
+		Color(0.70, 0.86, 1.0, 0.08),
+		Color(0.78, 0.90, 1.0, 0.0),
+	])
+	var fade_tex := GradientTexture1D.new()
+	fade_tex.gradient = fade
+	pmat.color_ramp = fade_tex
+	frost.process_material = pmat
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.11, 0.14)
+	var draw := StandardMaterial3D.new()
+	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	draw.albedo_texture = _get_fridge_frost_texture()
+	draw.albedo_color = Color(0.88, 0.96, 1.0, 0.72)
+	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+	draw.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	draw.vertex_color_use_as_albedo = true
+	draw.disable_receive_shadows = true
+	draw.no_depth_test = false
+	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	draw.render_priority = 16
+	frost.draw_pass_1 = quad
+	frost.material_override = draw
+	return frost
+
+
 func _ensure_patty_fridge_open() -> void:
 	if patty_fridge_open:
 		return
 	_toggle_patty_fridge()
+
+
+func _prepare_fridge_balls_for_launch() -> void:
+	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
+		return
+	var stock := clampi(maxi(1, int(supply_stock.get("patty", 0))), 0, PATTY_FRIDGE_MAX_BALLS)
+	## Pool should already exist from title-screen prewarm — never build a stack on the click.
+	if patty_fridge_balls_root.get_child_count() <= 0:
+		var extra := _make_fridge_patty_ball()
+		extra.position = _patty_fridge_ball_seat(0, true)
+		extra.visible = true
+		patty_fridge_balls_root.add_child(extra)
+	var i := 0
+	for child in patty_fridge_balls_root.get_children():
+		var ball := child as Node3D
+		if ball == null:
+			continue
+		ball.visible = i < stock
+		ball.position = _patty_fridge_ball_seat(i, true)
+		i += 1
+
+
+func _open_patty_fridge_for_launch() -> void:
+	## Right-click place: crack the lid, frost, and a visible ball even if we never clicked the freezer.
+	if patty_fridge_root == null or not is_instance_valid(patty_fridge_root):
+		_build_patty_fridge()
+	if patty_fridge_root == null or not is_instance_valid(patty_fridge_root):
+		return
+	patty_fridge_root.visible = true
+	if _patty_fridge_tween != null and is_instance_valid(_patty_fridge_tween):
+		_patty_fridge_tween.kill()
+		_patty_fridge_tween = null
+	_prepare_fridge_balls_for_launch()
+	var was_open := patty_fridge_open
+	patty_fridge_open = true
+	_start_patty_fridge_frost()
+	if not was_open:
+		_play_patty_fridge_open_audio()
+	if patty_fridge_lid_pivot == null or not is_instance_valid(patty_fridge_lid_pivot):
+		return
+	var tw := create_tween()
+	_patty_fridge_tween = tw
+	tw.tween_property(patty_fridge_lid_pivot, "rotation_degrees", Vector3(PATTY_FRIDGE_LID_OPEN_DEG, 0.0, 0.0), PATTY_FRIDGE_LID_OPEN_SEC) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		_patty_fridge_tween = null
+	)
 
 
 func _fridge_ball_launch_world() -> Vector3:
@@ -7277,7 +7617,14 @@ func _update_fridge_ball_drag(_delta: float) -> void:
 		var from := camera.project_ray_origin(mouse) if camera != null else Vector3.ZERO
 		var dir := camera.project_ray_normal(mouse) if camera != null else Vector3.FORWARD
 		hit = from + dir * 1.6
-	hit.y = maxf(hit.y, GRILL_SURFACE_Y + 0.05)
+	if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
+		var snap := _find_closest_patty_place(hit)
+		if snap != Vector3.ZERO:
+			hit = _fridge_frozen_sit_world(snap)
+		else:
+			hit.y = GRILL_SURFACE_Y + PATTY_SIT_Y + PattyScript.FROZEN_BALL_HOLD_Y
+	else:
+		hit.y = maxf(hit.y, GRILL_SURFACE_Y + PATTY_SIT_Y + PattyScript.FROZEN_BALL_HOLD_Y)
 	_fridge_drag_ball.global_position = _fridge_drag_ball.global_position.lerp(hit, 0.55)
 
 
@@ -7296,26 +7643,52 @@ func _end_fridge_ball_drag() -> void:
 
 
 func _launch_fridge_ball_to_grill(idx: int, place_pos: Vector3, net_id: int = -1) -> void:
-	_ensure_patty_fridge_open()
+	## Caller already counted this flight in `_fridge_launch_inflight`.
 	if world == null:
-		_spawn_patty_at(idx, place_pos, net_id)
+		_spawn_patty_at(idx, place_pos, net_id, true)
+		_fridge_launch_inflight = maxi(_fridge_launch_inflight - 1, 0)
 		return
-	var flyer := _make_fridge_patty_ball(true)
-	world.add_child(flyer)
-	var start := _fridge_ball_launch_world()
+	_open_patty_fridge_for_launch()
+	var flyer := _take_fridge_display_ball_for_flight()
+	if flyer == null:
+		## Don't build a new high-poly ball on the click — land immediately.
+		_spawn_patty_at(idx, place_pos, net_id, true)
+		_fridge_launch_inflight = maxi(_fridge_launch_inflight - 1, 0)
+		if _fridge_launch_inflight <= 0 and not _fridge_drag_active:
+			_close_patty_fridge()
+		return
+	var start := Vector3.ZERO
+	if flyer.has_meta("flight_start"):
+		var stored: Variant = flyer.get_meta("flight_start")
+		if stored is Vector3:
+			start = stored
+	if flyer.get_parent() != world:
+		if flyer.get_parent() != null:
+			flyer.get_parent().remove_child(flyer)
+		world.add_child(flyer)
+	if start == Vector3.ZERO:
+		start = _fridge_ball_launch_world()
 	if start == Vector3.ZERO:
 		start = place_pos + Vector3(0.0, 0.22, 0.0)
 	flyer.global_position = start
-	_close_patty_fridge()
-	var land := Vector3(place_pos.x, GRILL_SURFACE_Y + 0.05, place_pos.z)
+	## Fridge display balls carry extra cavity scale + parent scale. Fly at grill size.
+	var land_scale := Vector3(
+		PattyScript.FROZEN_BALL_SCALE,
+		PattyScript.FROZEN_BALL_SCALE * PattyScript.FROZEN_BALL_Y_SQUASH,
+		PattyScript.FROZEN_BALL_SCALE
+	)
+	flyer.scale = land_scale
+	var land := _fridge_frozen_sit_world(place_pos)
 	var tw := create_tween()
 	tw.tween_property(flyer, "global_position", land, FRIDGE_BALL_LERP_SEC) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.tween_callback(func() -> void:
+	tw.chain().tween_callback(func() -> void:
 		if flyer != null and is_instance_valid(flyer):
 			flyer.queue_free()
-		_spawn_patty_at(idx, place_pos, net_id)
-		_rebuild_patty_fridge_balls(patty_fridge_open)
+		_spawn_patty_at(idx, place_pos, net_id, true)
+		_fridge_launch_inflight = maxi(_fridge_launch_inflight - 1, 0)
+		if _fridge_launch_inflight <= 0 and not _fridge_drag_active:
+			_close_patty_fridge()
 	)
 
 
@@ -7894,7 +8267,8 @@ func _throw_garbage_bag_to_street(screen_pos: Vector2) -> void:
 	var push_x := clampf(aim.x + fling.x * 0.16, -2.2, 2.2)
 	var push_z := clampf(maxf(aim.z, start.z) + maxf(fling.z, 0.8) * 0.22 + 2.4, 3.4, 6.2)
 	var mid := Vector3(lerpf(start.x, push_x, 0.45), maxf(start.y, 1.7) + 0.85, lerpf(start.z, push_z, 0.42))
-	var land := Vector3(push_x, 0.18, push_z)
+	var land_y := 0.05 + 0.30 * garbage_bag_hold_scale
+	var land := Vector3(push_x, land_y, push_z)
 	var stolen := false
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("steal_garbage_bag"):
 		stolen = bool(window_cat.call("steal_garbage_bag", bag, land))
@@ -7913,9 +8287,7 @@ func _throw_garbage_bag_to_street(screen_pos: Vector2) -> void:
 				game_audio.play_spatula_whoosh()
 		_flash("The cat ran off with it — new bag in the can", Color("CE93D8"))
 	else:
-		var shrink_to := bag.scale * 0.02
 		tw.tween_interval(10.0)
-		tw.tween_property(bag, "scale", shrink_to, 0.45)
 		tw.tween_callback(func() -> void:
 			if bag != null and is_instance_valid(bag):
 				bag.queue_free()
@@ -8050,7 +8422,13 @@ func _load_physical_garbage_settings() -> void:
 	garbage_liner_wobble_y = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_y", garbage_liner_wobble_y)), 0.0, 3.5)
 	garbage_liner_wobble_xz = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_wobble_xz", garbage_liner_wobble_xz)), 0.0, 3.5)
 	garbage_tied_bag_scale = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "tied_bag_scale", garbage_tied_bag_scale)), 0.5, 8.0)
-	garbage_bag_hold_scale = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)), 0.2, 3.0)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_street_big_v1"):
+		garbage_bag_hold_scale = 4.0
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_street_big_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	else:
+		garbage_bag_hold_scale = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)), 0.2, 8.0)
 	garbage_bag_hold_height = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_height", garbage_bag_hold_height)), 0.05, 1.20)
 	garbage_liner_offset = Vector3(
 		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_x", garbage_liner_offset.x)), -1.0, 1.0),
@@ -8165,12 +8543,9 @@ func _ingredient_strip_world_w_from_btn(btn: Control) -> float:
 	var r := btn.get_global_rect()
 	if r.size.x < 4.0 or r.size.y < 4.0:
 		return 0.0
-	var screen := Vector2(
-		r.position.x + r.size.x * 0.5,
-		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
-	)
+	var screen := _ingredient_tile_camera_screen(btn, 0.5)
 	var world_pt := camera.project_position(screen, ingredient_bin_cam_z)
-	var screen_r := Vector2(r.position.x + r.size.x, r.position.y + r.size.y * 0.62 - ingredient_bin_y_px)
+	var screen_r := _ingredient_tile_camera_screen(btn, 1.0)
 	var world_r := camera.project_position(screen_r, ingredient_bin_cam_z)
 	return world_pt.distance_to(world_r) * (ingredient_bin_tile / maxf(r.size.x, 1.0))
 
@@ -8216,10 +8591,10 @@ func _physical_garbage_follow_world() -> Vector3:
 	if r.size.x < 4.0 or r.size.y < 4.0:
 		return Vector3.INF
 	var half_px := maxf(0.4, ingredient_bin_length) * ingredient_bin_scale * physical_garbage_scale * (ingredient_bin_tile * 0.5)
-	var screen := Vector2(
+	var screen := _gui_to_camera_screen(Vector2(
 		r.position.x + r.size.x + PHYSICAL_GARBAGE_FOLLOW_GAP_PX + half_px,
 		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
-	)
+	))
 	return camera.project_position(screen, ingredient_bin_cam_z)
 
 
@@ -8249,10 +8624,10 @@ func _bottom_row_supply_follow_world() -> Vector3:
 	var r := btn.get_global_rect()
 	if r.size.x < 4.0 or r.size.y < 4.0:
 		return Vector3.INF
-	var screen := Vector2(
+	var screen := _gui_to_camera_screen(Vector2(
 		r.position.x - BOTTOM_ROW_SUPPLY_GAP_PX,
 		r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
-	)
+	))
 	return camera.project_position(screen, ingredient_bin_cam_z)
 
 
@@ -11128,6 +11503,7 @@ func _build_flat_top_grill() -> void:
 		brush_swipe_cool.append(0.0)
 		slot_positions.append(Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z))
 		_make_slot_residue(i)
+	_build_debris_trap()
 
 
 func _build_burgerpack_preview_props() -> void:
@@ -12018,13 +12394,20 @@ func _scrape_residue_hit(slot: int, swipe_dir: Vector2 = Vector2.ZERO) -> void:
 			survivors.append(ch)
 	grill_residue_chunks[slot] = survivors
 	_refresh_residue_visual(slot)
+	if chipped > 0:
+		var at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+		if slot < grill_residue_centers.size():
+			at = grill_residue_centers[slot]
+		_add_scraped_debris_pile(at, 0.22 + float(chipped) * 0.08, slot)
 	if game_audio:
-		if game_audio.has_method("play_grease_pop"):
-			game_audio.play_grease_pop()
-		else:
-			game_audio.play_click()
-		## Soft bass thud as flecks let go of the steel.
-		if chipped > 0 and game_audio.has_method("play_debris_bass_pop"):
+		## Metal tap stays on every swipe — kuhhh layers on top when crust lets go.
+		var tap_at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+		if slot < grill_residue_centers.size():
+			tap_at = grill_residue_centers[slot]
+		_play_grill_tap_at(tap_at, 0.62, INF, false)
+		if chipped > 0 and game_audio.has_method("play_debris_kuhh_burst"):
+			game_audio.play_debris_kuhh_burst(chipped)
+		elif chipped > 0 and game_audio.has_method("play_debris_bass_pop"):
 			game_audio.play_debris_bass_pop(1.0 if chipped >= 2 else 0.75)
 	if amt <= 0.2 and chipped > 0:
 		_flash("Almost clean — keep swiping", Color("FFE082"))
@@ -12063,18 +12446,19 @@ func _scrape_finish_clean_at(slot: int, x: float, z: float) -> void:
 func _scrape_finish_clean_local(slot: int) -> void:
 	if slot < 0 or slot >= GRILL_SLOTS:
 		return
+	var at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+	if slot < grill_residue_centers.size():
+		at = grill_residue_centers[slot]
+	var had_bits := float(grill_residue[slot]) > 0.0
 	var chunks: Array = grill_residue_chunks[slot] if slot < grill_residue_chunks.size() else []
 	for ch in chunks:
-		if ch == null or not is_instance_valid(ch):
-			continue
-		var fly: Vector3 = ch.position + Vector3(randf_range(-0.1, 0.1), 0.06, randf_range(-0.1, 0.1))
-		var tw := create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(ch, "position", fly, 0.16)
-		tw.tween_property(ch, "scale", Vector3(0.12, 0.12, 0.12), 0.16)
-		tw.chain().tween_callback(ch.queue_free)
+		if ch != null and is_instance_valid(ch):
+			had_bits = true
+			ch.queue_free()
 	grill_residue_chunks[slot] = []
 	grill_residue[slot] = 0.0
+	if had_bits:
+		_add_scraped_debris_pile(at, 0.85, slot)
 	if tutorial_mode:
 		_tutorial_cleaned_grill = true
 	if slot < grill_residue_kind.size():
@@ -12084,6 +12468,344 @@ func _scrape_finish_clean_local(slot: int) -> void:
 	_flash("Grill spot clean!", Color("A5D6A7"))
 	if game_audio:
 		game_audio.play_click()
+
+
+func _debris_pile_material(seed_i: int = 1) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1, 1, 1, 1)
+	mat.albedo_texture = _make_debris_strip_texture(seed_i)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.render_priority = 8
+	return mat
+
+
+func _make_debris_strip_texture(seed_i: int) -> ImageTexture:
+	## Elongated diamond with chewed edges and speckle so it isn't a solid bar.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_i * 917 + 41
+	var w := 96
+	var h := 32
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in h:
+		for x in w:
+			var u := (float(x) + 0.5) / float(w)
+			var v := (float(y) + 0.5) / float(h)
+			var dx := absf(u - 0.5) / 0.50
+			var dy := absf(v - 0.5) / 0.50
+			var diamond := dx + dy
+			if diamond > 1.02:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var edge := clampf((1.02 - diamond) / 0.22, 0.0, 1.0)
+			edge = pow(edge, 0.72)
+			var n1 := sin(float(x) * 0.41 + float(y) * 0.93 + float(seed_i) * 0.07) * 0.5 + 0.5
+			var n2 := sin(float(x) * 1.13 - float(y) * 0.61 + 1.7) * 0.5 + 0.5
+			var n3 := sin(float(x + y * 3) * 0.27 + float(seed_i)) * 0.5 + 0.5
+			var noise := n1 * 0.46 + n2 * 0.34 + n3 * 0.20
+			if noise < 0.22 and diamond > 0.28:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			if noise < 0.34 and diamond > 0.62:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			if rng.randf() < 0.06 and diamond > 0.18:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var density := clampf(edge * (0.55 + noise * 0.55), 0.0, 1.0)
+			if density < 0.10:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+				continue
+			var shade := rng.randf()
+			var col: Color
+			if shade > 0.62:
+				col = Color(0.05, 0.03, 0.02, density * 0.96)
+			elif shade > 0.28:
+				col = Color(0.13, 0.07, 0.04, density * 0.88)
+			else:
+				col = Color(0.22, 0.11, 0.06, density * 0.70)
+			img.set_pixel(x, y, col)
+	return ImageTexture.create_from_image(img)
+
+
+func _debris_strip_unit_mesh() -> ArrayMesh:
+	if _debris_strip_mesh != null:
+		return _debris_strip_mesh
+	## Unit diamond prism: points on ±X, thin bulge on ±Z, height on Y.
+	var mesh := ArrayMesh.new()
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	var left := Vector3(-0.5, 0.0, 0.0)
+	var right := Vector3(0.5, 0.0, 0.0)
+	var front := Vector3(0.0, 0.0, 0.5)
+	var back := Vector3(0.0, 0.0, -0.5)
+	var hy := Vector3(0.0, 0.5, 0.0)
+	var corners: Array[Vector3] = [
+		left + hy, front + hy, right + hy,
+		left + hy, right + hy, back + hy,
+		left - hy, right - hy, front - hy,
+		left - hy, back - hy, right - hy,
+		left - hy, left + hy, front + hy,
+		left - hy, front + hy, front - hy,
+		front - hy, front + hy, right + hy,
+		front - hy, right + hy, right - hy,
+		right - hy, right + hy, back + hy,
+		right - hy, back + hy, back - hy,
+		back - hy, back + hy, left + hy,
+		back - hy, left + hy, left - hy
+	]
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var ti := 0
+	while ti + 2 < corners.size():
+		var a: Vector3 = corners[ti]
+		var b: Vector3 = corners[ti + 1]
+		var c: Vector3 = corners[ti + 2]
+		var n: Vector3 = (b - a).cross(c - a)
+		if n.length_squared() < 0.0000001:
+			n = Vector3.UP
+		else:
+			n = n.normalized()
+		verts.append(a)
+		verts.append(b)
+		verts.append(c)
+		norms.append(n)
+		norms.append(n)
+		norms.append(n)
+		uvs.append(Vector2(a.x + 0.5, a.z + 0.5))
+		uvs.append(Vector2(b.x + 0.5, b.z + 0.5))
+		uvs.append(Vector2(c.x + 0.5, c.z + 0.5))
+		ti += 3
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_debris_strip_mesh = mesh
+	return _debris_strip_mesh
+
+
+func _grill_steel_top_y() -> float:
+	return GRILL_SURFACE_Y + DEBRIS_STEEL_TOP
+
+
+func _debris_pile_sit_y(h: float) -> float:
+	## Unit strip is height 1, then scaled by h — sit the bottom on the steel.
+	return _grill_steel_top_y() + h * 0.5 + 0.004
+
+
+func _debris_trap_origin() -> Vector3:
+	## Far steel edge (window / +Z), away from the cook.
+	var far_z := GRILL_SURFACE_Z + GRILL_DEPTH * 0.5
+	return Vector3(
+		GRILL_CENTER_X,
+		_grill_steel_top_y(),
+		far_z - DEBRIS_TRAP_D * 0.5 - 0.016 - DEBRIS_TRAP_TOWARD_COOK
+	)
+
+
+func _debris_trap_rect() -> Rect2:
+	var o := _debris_trap_origin()
+	return Rect2(
+		o.x - DEBRIS_TRAP_W * 0.5,
+		o.z - DEBRIS_TRAP_D * 0.5,
+		DEBRIS_TRAP_W,
+		DEBRIS_TRAP_D
+	)
+
+
+func _build_debris_trap() -> void:
+	if debris_trap_root != null and is_instance_valid(debris_trap_root):
+		debris_trap_root.queue_free()
+	debris_trap_root = null
+	if grill_root == null:
+		return
+	var root := Node3D.new()
+	root.name = "DebrisTrap"
+	root.position = _debris_trap_origin()
+	grill_root.add_child(root)
+	debris_trap_root = root
+	var well := MeshInstance3D.new()
+	well.name = "Well"
+	var well_mesh := BoxMesh.new()
+	well_mesh.size = Vector3(DEBRIS_TRAP_W, DEBRIS_TRAP_H, DEBRIS_TRAP_D)
+	well.mesh = well_mesh
+	well.position = Vector3(0.0, DEBRIS_TRAP_H * 0.5, 0.0)
+	well.sorting_offset = 8.0
+	var well_mat := StandardMaterial3D.new()
+	well_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	well_mat.albedo_color = Color(0.015, 0.012, 0.01, 1.0)
+	well_mat.render_priority = 10
+	well.material_override = well_mat
+	well.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(well)
+	var lip := MeshInstance3D.new()
+	lip.name = "Lip"
+	var lip_mesh := BoxMesh.new()
+	lip_mesh.size = Vector3(DEBRIS_TRAP_W + 0.018, 0.006, DEBRIS_TRAP_D + 0.018)
+	lip.mesh = lip_mesh
+	lip.position = Vector3(0.0, DEBRIS_TRAP_H + 0.002, 0.0)
+	lip.sorting_offset = 8.0
+	var lip_mat := StandardMaterial3D.new()
+	lip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lip_mat.albedo_color = Color(0.12, 0.11, 0.10, 1.0)
+	lip_mat.render_priority = 11
+	lip.material_override = lip_mat
+	lip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(lip)
+	var hole := MeshInstance3D.new()
+	hole.name = "Hole"
+	var hole_mesh := BoxMesh.new()
+	hole_mesh.size = Vector3(DEBRIS_TRAP_W * 0.86, 0.008, DEBRIS_TRAP_D * 0.62)
+	hole.mesh = hole_mesh
+	hole.position = Vector3(0.0, DEBRIS_TRAP_H * 0.55, 0.0)
+	hole.sorting_offset = 9.0
+	var hole_mat := StandardMaterial3D.new()
+	hole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	hole_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	hole_mat.render_priority = 12
+	hole.material_override = hole_mat
+	hole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(hole)
+
+
+func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1) -> void:
+	if grill_root == null:
+		return
+	var add_mass := clampf(mass, 0.12, 1.4)
+	var xz := Vector2(at.x, at.z)
+	for i in debris_piles.size():
+		var pile: Dictionary = debris_piles[i]
+		var root: Node3D = pile.get("root") as Node3D
+		if root == null or not is_instance_valid(root) or bool(pile.get("swallowing", false)):
+			continue
+		var same_slot := slot >= 0 and int(pile.get("slot", -1)) == slot
+		var near := Vector2(root.position.x, root.position.z).distance_to(xz) <= DEBRIS_PILE_MERGE_R
+		if same_slot or near:
+			pile["mass"] = clampf(float(pile.get("mass", 1.0)) + add_mass * 0.55, 0.35, 2.2)
+			if slot >= 0:
+				pile["slot"] = slot
+			debris_piles[i] = pile
+			_refresh_debris_pile_visual(root, float(pile["mass"]))
+			_try_swallow_debris_pile(i)
+			return
+	var pile_root := Node3D.new()
+	pile_root.name = "DebrisPile"
+	var sit := _clamp_debris_pile_xz(at)
+	pile_root.position = Vector3(sit.x, _debris_pile_sit_y(DEBRIS_PILE_H), sit.z)
+	pile_root.rotation.y = 0.0
+	grill_root.add_child(pile_root)
+	var strip := MeshInstance3D.new()
+	strip.name = "Strip"
+	strip.mesh = _debris_strip_unit_mesh()
+	var seed_i := slot if slot >= 0 else int(at.x * 100.0) + int(at.z * 100.0)
+	strip.material_override = _debris_pile_material(seed_i + 3)
+	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	strip.sorting_offset = 8.0
+	pile_root.add_child(strip)
+	var entry := {
+		"root": pile_root,
+		"mass": add_mass,
+		"slot": slot,
+		"swallowing": false
+	}
+	debris_piles.append(entry)
+	_refresh_debris_pile_visual(pile_root, add_mass)
+
+
+func _refresh_debris_pile_visual(root: Node3D, mass: float) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	var t := clampf(mass, 0.2, 2.2)
+	var w := lerpf(DEBRIS_PILE_W_MIN, DEBRIS_PILE_W_MAX, clampf((t - 0.35) / 1.4, 0.0, 1.0))
+	var h := DEBRIS_PILE_H * lerpf(0.85, 1.15, clampf(t * 0.45, 0.0, 1.0))
+	## Always sideways: long on world X, skinny toward the window.
+	root.rotation.y = 0.0
+	root.scale = Vector3(w, h, w * DEBRIS_PILE_Z_FRAC)
+	root.position.y = _debris_pile_sit_y(h)
+
+
+func _clamp_debris_pile_xz(at: Vector3) -> Vector3:
+	var half_w := GRILL_WIDTH * 0.5 - 0.04
+	var half_d := GRILL_DEPTH * 0.5 - 0.02
+	return Vector3(
+		clampf(at.x, GRILL_CENTER_X - half_w, GRILL_CENTER_X + half_w),
+		GRILL_SURFACE_Y,
+		clampf(at.z, GRILL_SURFACE_Z - half_d, GRILL_SURFACE_Z + half_d)
+	)
+
+
+func _nudge_debris_piles(tool_pos: Vector3, move_xz: Vector2, moved: float) -> void:
+	if moved < 0.0008 or move_xz.length_squared() < 0.0000001:
+		return
+	var dir := move_xz.normalized()
+	var push := clampf(moved * DEBRIS_PILE_PUSH_SCALE, 0.0, DEBRIS_PILE_PUSH_MAX)
+	var i := 0
+	while i < debris_piles.size():
+		var pile: Dictionary = debris_piles[i]
+		if bool(pile.get("swallowing", false)):
+			i += 1
+			continue
+		var root: Node3D = pile.get("root") as Node3D
+		if root == null or not is_instance_valid(root):
+			debris_piles.remove_at(i)
+			continue
+		var mass := clampf(float(pile.get("mass", 1.0)), 0.2, 2.2)
+		var w := lerpf(DEBRIS_PILE_W_MIN, DEBRIS_PILE_W_MAX, clampf((mass - 0.35) / 1.4, 0.0, 1.0))
+		var hit_r := w * 0.55 + 0.03
+		var d := Vector2(tool_pos.x - root.position.x, tool_pos.z - root.position.z).length()
+		if d > hit_r:
+			i += 1
+			continue
+		var falloff := 1.0 - d / hit_r
+		var next := _clamp_debris_pile_xz(
+			root.position + Vector3(dir.x, 0.0, dir.y) * push * (0.45 + falloff * 0.7)
+		)
+		root.position = Vector3(next.x, _debris_pile_sit_y(root.scale.y), next.z)
+		if _try_swallow_debris_pile(i):
+			continue
+		i += 1
+
+
+func _try_swallow_debris_pile(index: int) -> bool:
+	if index < 0 or index >= debris_piles.size():
+		return false
+	var pile: Dictionary = debris_piles[index]
+	if bool(pile.get("swallowing", false)):
+		return false
+	var root: Node3D = pile.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		debris_piles.remove_at(index)
+		return true
+	var trap := _debris_trap_rect()
+	var pad := 0.012
+	var inside := Rect2(
+		trap.position.x - pad,
+		trap.position.y - pad,
+		trap.size.x + pad * 2.0,
+		trap.size.y + pad * 2.0
+	).has_point(Vector2(root.position.x, root.position.z))
+	if not inside:
+		return false
+	pile["swallowing"] = true
+	debris_piles[index] = pile
+	var dest := _debris_trap_origin()
+	dest.y = _grill_steel_top_y() + 0.004
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(root, "position", dest, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(root, "scale", root.scale * Vector3(0.35, 0.15, 0.35), 0.16)
+	var captured: Node3D = root
+	tw.chain().tween_callback(func() -> void:
+		if captured != null and is_instance_valid(captured):
+			captured.queue_free()
+	)
+	debris_piles.remove_at(index)
+	if game_audio:
+		game_audio.play_click()
+	return true
 
 
 func _build_grill_burner_ui() -> void:
@@ -12909,12 +13631,18 @@ func _try_place_patty_at(world_pos: Vector3, from_fridge_drag: bool = false) -> 
 				return
 			mp_request_spawn_patty.rpc_id(1, place_pos.x, place_pos.z)
 		return
-	if not _try_use_supply("patty"):
-		return
 	if from_fridge_drag:
-		_spawn_patty_at(idx, place_pos)
-	else:
-		_launch_fridge_ball_to_grill(idx, place_pos)
+		if not _try_use_supply("patty"):
+			return
+		_spawn_patty_at(idx, place_pos, -1, true)
+		return
+	## Count the flight before stock UI refresh so fridge meshes are not rebuilt
+	## (and hitch) on this click.
+	_fridge_launch_inflight += 1
+	if not _try_use_supply("patty"):
+		_fridge_launch_inflight = maxi(_fridge_launch_inflight - 1, 0)
+		return
+	_launch_fridge_ball_to_grill(idx, place_pos)
 
 
 func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0, dur: float = -1.0) -> void:
@@ -12943,7 +13671,7 @@ func _start_spatula_place_squash_at(world_pos: Vector3, tip_clear: float = -1.0,
 	_spatula_smash_return_t = 0.0
 
 
-func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
+func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1, skip_land_squash: bool = false) -> void:
 	if not playing and not _mp_applying:
 		return
 	if idx < 0 or idx >= GRILL_SLOTS:
@@ -12986,7 +13714,7 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1) -> void:
 	slot_positions[idx] = Vector3(x, GRILL_SURFACE_Y, z)
 	## First right-click: frozen ice ball only (smash on a second right-click).
 	if p.has_method("play_frozen_drop_appear"):
-		p.play_frozen_drop_appear()
+		p.play_frozen_drop_appear(skip_land_squash)
 	elif p.has_method("play_frozen_drop_morph"):
 		p.play_frozen_drop_morph()
 	else:
@@ -14569,6 +15297,8 @@ func _try_customer_gross_leave(customer: Node3D) -> bool:
 		return false
 	if bool(customer.get("is_terrorist")):
 		return false
+	if bool(customer.get("is_challenge_guest")):
+		return false
 	if bool(customer.get("is_cut_collector")):
 		return false
 	if bool(customer.get("is_leaving")):
@@ -14656,6 +15386,11 @@ func _refresh_residue_visual(slot: int) -> void:
 	var amt: float = float(grill_residue[slot])
 	var chunks: Array = grill_residue_chunks[slot]
 	if amt <= 0.04:
+		var at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
+		if slot < grill_residue_centers.size():
+			at = grill_residue_centers[slot]
+		if float(grill_residue[slot]) > 0.0 or not chunks.is_empty():
+			_add_scraped_debris_pile(at, 0.7, slot)
 		grill_residue[slot] = 0.0
 		_clear_residue_chunks(slot)
 		return
@@ -18081,6 +18816,8 @@ func _build_window_cat() -> void:
 		cat.fed.connect(_on_window_cat_fed)
 	if cat.has_signal("became_full_sized"):
 		cat.became_full_sized.connect(_on_window_cat_full_sized)
+	if cat.has_signal("wants_meow"):
+		cat.wants_meow.connect(_on_window_cat_wants_meow)
 
 
 func _on_window_cat_full_sized() -> void:
@@ -18165,6 +18902,7 @@ func _reset_cut_collector_shift(full_run: bool) -> void:
 	_cut_collector_kind = ""
 	_cut_collector_cut_done = false
 	_cut_collector_seq += 1
+	_boss_intro_seq += 1
 	_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
 	_hide_boss_caption()
 	if full_run:
@@ -18220,6 +18958,7 @@ func _spawn_cut_collector_local(kind: String) -> void:
 	if _has_cut_collector():
 		return
 	var c = CustomerScript.new()
+	c.is_cut_collector = true
 	c.setup([], Color("4A3B2F"), 9999.0, 0, CUT_COLLECTOR_SKIN, 0, -1)
 	c.apply_review_card_settings(customer_review_settings)
 	c.set_meta("soda_handed", false)
@@ -18231,7 +18970,6 @@ func _spawn_cut_collector_local(kind: String) -> void:
 		c.mp_host_driven = true
 	c.position = Vector3(CUT_COLLECTOR_SPAWN_X, CustomerScript.STAND_Y, 2.25)
 	c.target_x = CUT_COLLECTOR_LANE_X
-	c.is_cut_collector = true
 	c.rotation_degrees = Vector3(0, CustomerScript.WALK_MINUS_X_YAW, 0)
 	c.scale = Vector3(1.0, 1.0, 1.0)
 	c.arrived.connect(_on_cut_collector_arrived)
@@ -18248,6 +18986,50 @@ func _spawn_cut_collector_local(kind: String) -> void:
 		c.apply_cut_collector_look()
 	_cut_collector = c
 	_cut_collector_kind = kind
+
+
+func _set_boss_wawawa(on: bool, loud: bool = false) -> void:
+	if game_audio != null and game_audio.has_method("set_boss_wawawa"):
+		game_audio.set_boss_wawawa(on, loud)
+
+
+func _cue_boss_pep_entrance() -> void:
+	## Off-screen sting first: two truck knocks, then he walks in.
+	## Wawawa waits until he stops at the window.
+	if tutorial_mode or truck_bought_out or _has_cut_collector():
+		return
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
+	_boss_intro_seq += 1
+	var seq := _boss_intro_seq
+	var tree := get_tree()
+	if tree == null:
+		_spawn_cut_collector("pep")
+		return
+	tree.create_timer(CUT_COLLECTOR_INTRO_KNOCK_SEC).timeout.connect(func() -> void:
+		if seq != _boss_intro_seq:
+			return
+		_play_boss_truck_knock()
+	)
+	tree.create_timer(CUT_COLLECTOR_INTRO_KNOCK2_SEC).timeout.connect(func() -> void:
+		if seq != _boss_intro_seq:
+			return
+		_play_boss_truck_knock()
+	)
+	tree.create_timer(CUT_COLLECTOR_INTRO_SPAWN_SEC).timeout.connect(func() -> void:
+		if seq != _boss_intro_seq:
+			return
+		_spawn_cut_collector("pep")
+	)
+
+
+func _play_boss_truck_knock() -> void:
+	if game_audio == null:
+		return
+	if game_audio.has_method("play_truck_knock"):
+		game_audio.play_truck_knock()
+	elif game_audio.has_method("play_bun_thud"):
+		game_audio.play_bun_thud(1.35)
 
 
 func _play_boss_arrive_sound(loud: bool = false) -> void:
@@ -18271,6 +19053,7 @@ func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> v
 
 func _hide_boss_caption() -> void:
 	_boss_caption_seq += 1
+	_set_boss_wawawa(false)
 	if dialogue_panel != null and is_instance_valid(dialogue_panel):
 		dialogue_panel.visible = false
 	if dialogue_options != null:
@@ -18284,7 +19067,8 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 	_cut_collector_seq += 1
 	var seq := _cut_collector_seq
 	var messy := _grill_is_messy()
-	_play_boss_arrive_sound(messy)
+	if kind != "pep":
+		_play_boss_arrive_sound(messy)
 	if messy:
 		_show_boss_caption(
 			"THE BOSS",
@@ -18325,14 +19109,17 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 		)
 		return
 	if kind == "pep":
+		## He has arrived and stopped — now the morning wawawa.
+		_set_boss_wawawa(true, true)
 		_show_boss_caption(
 			"THE BOSS",
 			"Listen up. Cook hot, serve fast, keep the steel clean.\nUntil you buy this, cut half this money is mine.",
 			6.2
 		)
-		get_tree().create_timer(5.6).timeout.connect(func():
+		get_tree().create_timer(6.2).timeout.connect(func():
 			if seq != _cut_collector_seq:
 				return
+			_hide_boss_caption()
 			if customer == null or not is_instance_valid(customer) or bool(customer.get("is_leaving")):
 				return
 			if customer.has_method("leave_happy"):
@@ -18414,10 +19201,11 @@ func _credit_ticket_payout(pay: Dictionary, payout: int, customer: Node3D = null
 		tip = payout
 	if base <= 0 or base + tip != payout:
 		base = maxi(0, payout - tip)
+	var from_shown: float = _hud_money_shown
 	money += float(payout)
 	shift_food_sales += float(base)
 	shift_tips += float(tip)
-	_fly_pay_bills_to_tip_jar(customer, 1)
+	_play_sale_payout_fx(customer, base, tip, from_shown, money)
 
 
 func _park_window_cat_for_disguise() -> void:
@@ -18729,6 +19517,15 @@ func _on_window_cat_petted() -> void:
 	if game_audio and game_audio.has_method("play_cat_purr"):
 		game_audio.play_cat_purr()
 	_flash("Purr… feed cheese, bacon, or a patty!", Color("CE93D8"))
+
+
+func _on_window_cat_wants_meow(pitch: float) -> void:
+	if game_audio == null:
+		return
+	if game_audio.has_method("play_cat_begging_meow"):
+		game_audio.play_cat_begging_meow(pitch)
+	elif game_audio.has_method("play_cat_meow"):
+		game_audio.play_cat_meow()
 
 
 func _on_window_cat_fed(kind: String) -> void:
@@ -20594,6 +21391,30 @@ func _prewarm_grill_fire_fx() -> void:
 		game_audio.silence_continuous_beds(false)
 	## Restore room tone after the silent compile window.
 	_apply_room_tone_settings()
+
+
+func _prewarm_patty_fridge_place() -> void:
+	## Ice-ball meshes, frost GPU, and fridge-open WAV — title screen, not first right-click.
+	if patty_fridge_root == null or not is_instance_valid(patty_fridge_root):
+		_build_patty_fridge()
+	if patty_fridge_balls_root != null and is_instance_valid(patty_fridge_balls_root):
+		while patty_fridge_balls_root.get_child_count() < PATTY_FRIDGE_MAX_BALLS:
+			var extra := _make_fridge_patty_ball()
+			var idx := patty_fridge_balls_root.get_child_count()
+			extra.position = _patty_fridge_ball_seat(idx, false)
+			extra.visible = false
+			patty_fridge_balls_root.add_child(extra)
+			await get_tree().process_frame
+	_get_fridge_frost_texture()
+	if game_audio != null and game_audio.has_method("prewarm_fridge_place"):
+		game_audio.prewarm_fridge_place()
+	if patty_fridge_frost != null and is_instance_valid(patty_fridge_frost):
+		patty_fridge_frost.emitting = true
+		patty_fridge_frost.restart()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		await get_tree().process_frame
+		patty_fridge_frost.emitting = false
 
 
 func _make_fire_triangle_mesh(w: float, h: float) -> ArrayMesh:
@@ -25495,6 +26316,7 @@ func _update_held_brush(_delta: float) -> void:
 	## Nudge burgers when the blade shoves into them.
 	if moved > 0.0008:
 		_brush_nudge_patties(brush_root.global_position, move_xz, moved)
+		_nudge_debris_piles(brush_root.global_position, move_xz, moved)
 	## Continuous scrape — wear residue down while the blade is moving over it.
 	var scraping := false
 	var scraping_debris := false
@@ -25958,6 +26780,7 @@ func _spatula_nudge_loose_grill_props(tip_pos: Vector3, move_xz: Vector2, moved:
 	_try_push_parked_steel_cups_from_spatula(move_xz, moved)
 	_try_push_melting_cups_from_spatula(move_xz, moved)
 	_try_push_melting_icecream_from_spatula(move_xz, moved)
+	_nudge_debris_piles(tip_pos, move_xz, moved)
 
 
 func _spatula_flat_pop_patties(tip_pos: Vector3) -> void:
@@ -26766,6 +27589,7 @@ func _build_outdoor_street() -> void:
 	_build_outdoor_front_tree(outdoor)
 	_build_outdoor_birch_tree(outdoor)
 	_build_street_car(outdoor)
+	_build_background_people(outdoor)
 
 
 func _build_street_car(parent: Node3D) -> void:
@@ -26779,19 +27603,29 @@ func _build_street_car(parent: Node3D) -> void:
 	street_car_blur_sprites.clear()
 	street_car_sprite = null
 	street_car_exhaust = null
+	street_car_pool.clear()
+	street_car_pool_scale.clear()
+	if game_audio != null and game_audio.has_method("stop_car_pass_by"):
+		game_audio.stop_car_pass_by()
 	street_car_active = false
+	street_car_horn_this_pass = false
 	street_car_wait = randf_range(5.0, 11.0)
-	if parent == null or not ResourceLoader.exists(STREET_CAR_TEXTURE_PATH):
-		push_warning("Road car texture missing: %s" % STREET_CAR_TEXTURE_PATH)
+	if parent == null:
 		return
-	var tex := load(STREET_CAR_TEXTURE_PATH) as Texture2D
-	if tex == null:
-		push_warning("Road car texture failed to load")
+	for i in STREET_CAR_TEXTURE_PATHS.size():
+		var loaded := _load_street_car_png(STREET_CAR_TEXTURE_PATHS[i])
+		if loaded == null:
+			continue
+		street_car_pool.append(loaded)
+		## Index 0 is the original van; later entries are the PSD cars.
+		street_car_pool_scale.append(1.0 if i == 0 else STREET_CAR_ADDED_SCALE)
+	if street_car_pool.is_empty():
+		push_warning("Road car pool is empty")
 		return
+	var tex := street_car_pool[0] as Texture2D
+	var start_scale := 1.0 if street_car_pool_scale.is_empty() else float(street_car_pool_scale[0])
 	var sprite := Sprite3D.new()
 	sprite.name = "OccasionalRoadCar"
-	sprite.texture = tex
-	sprite.pixel_size = STREET_CAR_PIXEL_SIZE
 	sprite.centered = true
 	sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	sprite.rotation_degrees = Vector3(0.0, 180.0, STREET_CAR_TILT_DEG) ## Parallel to backdrop with a slight rearward driving lean.
@@ -26803,18 +27637,19 @@ func _build_street_car(parent: Node3D) -> void:
 	## Matte is priority -8 at Z 11.5. The car is closer and one priority step
 	## forward, while customers at Z 2.25 remain unambiguously in front.
 	sprite.render_priority = -7
-	sprite.sorting_offset = -12.0
-	sprite.position = Vector3(-STREET_CAR_EDGE_X, STREET_CAR_Y, STREET_CAR_Z)
+	sprite.sorting_offset = _street_car_sort()
 	sprite.visible = false
 	parent.add_child(sprite)
 	street_car_sprite = sprite
-	street_car_half_width = float(tex.get_width()) * STREET_CAR_PIXEL_SIZE * 0.5
-	street_car_half_height = float(tex.get_height()) * STREET_CAR_PIXEL_SIZE * 0.5
+	_apply_street_car_texture(tex, start_scale)
+	sprite.position = Vector3(-STREET_CAR_EDGE_X, street_car_base_y, _street_car_z())
+	_apply_street_car_look()
 	for i in STREET_CAR_BLUR_COUNT:
 		var ghost := sprite.duplicate() as Sprite3D
 		ghost.name = "OccasionalRoadCarBlur%d" % i
 		ghost.visible = false
-		ghost.modulate = Color(1.0, 1.0, 1.0, 0.22 / float(i + 1))
+		ghost.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+		ghost.modulate = Color(1.0, 1.0, 1.0, 0.16 / float(i + 1))
 		ghost.render_priority = -8
 		ghost.sorting_offset = -12.4 - float(i) * 0.15
 		parent.add_child(ghost)
@@ -26822,6 +27657,118 @@ func _build_street_car(parent: Node3D) -> void:
 	street_car_exhaust = _make_street_car_exhaust()
 	parent.add_child(street_car_exhaust)
 	_update_street_car_exhaust_position()
+
+
+func _load_street_car_png(path: String) -> Texture2D:
+	## Export-safe: PNG bytes from the PCK, then imported texture fallback.
+	if FileAccess.file_exists(path):
+		var bytes := FileAccess.get_file_as_bytes(path)
+		if bytes.size() > 0:
+			var img := Image.new()
+			if img.load_png_from_buffer(bytes) == OK:
+				return _car_texture_from_image(img)
+	if ResourceLoader.exists(path):
+		var tex := load(path) as Texture2D
+		if tex != null:
+			var img := tex.get_image()
+			if img != null:
+				return _car_texture_from_image(img)
+			return tex
+	push_warning("Road car texture missing: %s" % path)
+	return null
+
+
+func _car_texture_from_image(img: Image) -> Texture2D:
+	if img == null:
+		return null
+	var copy := img.duplicate() as Image
+	if copy.is_compressed():
+		copy.decompress()
+	_desaturate_car_image(copy, STREET_CAR_DESATURATE)
+	return ImageTexture.create_from_image(copy)
+
+
+func _desaturate_car_image(img: Image, amount: float) -> void:
+	if img == null or amount <= 0.001:
+		return
+	img.convert(Image.FORMAT_RGBA8)
+	var w: int = img.get_width()
+	var h: int = img.get_height()
+	var t: float = clampf(amount, 0.0, 1.0)
+	for y in h:
+		for x in w:
+			var c: Color = img.get_pixel(x, y)
+			if c.a < 0.01:
+				continue
+			var lum: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+			c.r = lerpf(c.r, lum, t)
+			c.g = lerpf(c.g, lum, t)
+			c.b = lerpf(c.b, lum, t)
+			img.set_pixel(x, y, c)
+
+
+func _street_car_size_mult() -> float:
+	return clampf(_gfx_float("street_car_size", 1.0), 0.15, 4.0)
+
+
+func _street_car_y() -> float:
+	return clampf(_gfx_float("street_car_y", STREET_CAR_Y), -2.0, 6.0)
+
+
+func _street_car_z() -> float:
+	return clampf(_gfx_float("street_car_z", STREET_CAR_Z), 3.0, 14.0)
+
+
+func _street_car_sort() -> float:
+	return clampf(_gfx_float("street_car_sort", 0.0), -24.0, 32.0)
+
+
+func _street_car_wheel_y() -> float:
+	## Bottom of the van texture at the Hidden Height (Y) road line.
+	return _street_car_y() - STREET_CAR_REF_HEIGHT_PX * STREET_CAR_PIXEL_SIZE * 0.5
+
+
+func _apply_street_car_texture(tex: Texture2D, height_scale: float = 1.0) -> void:
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite) or tex == null:
+		return
+	var h := float(tex.get_height())
+	var w := float(tex.get_width())
+	## Same world height as the van so mixed-res PSD cars share one road.
+	var size_mult: float = _street_car_size_mult()
+	var pixel_size := STREET_CAR_PIXEL_SIZE * STREET_CAR_REF_HEIGHT_PX * height_scale * size_mult / maxf(h, 1.0)
+	street_car_sprite.texture = tex
+	street_car_sprite.pixel_size = pixel_size
+	street_car_current_height_scale = height_scale
+	street_car_half_width = w * pixel_size * 0.5
+	street_car_half_height = h * pixel_size * 0.5
+	## Wheels are authored at the bottom of each PNG.
+	street_car_base_y = _street_car_wheel_y() + street_car_half_height
+
+
+func _pick_street_car_index() -> int:
+	if street_car_pool.is_empty():
+		return -1
+	if street_car_pool.size() == 1:
+		return 0
+	var current: Texture2D = null
+	if street_car_sprite != null:
+		current = street_car_sprite.texture
+	var idx := randi() % street_car_pool.size()
+	var guard := 0
+	while street_car_pool[idx] == current and guard < 8:
+		idx = randi() % street_car_pool.size()
+		guard += 1
+	return idx
+
+
+func _apply_picked_street_car() -> void:
+	var idx := _pick_street_car_index()
+	if idx < 0:
+		return
+	var height_scale := 1.0
+	if idx < street_car_pool_scale.size():
+		height_scale = float(street_car_pool_scale[idx])
+	_apply_street_car_texture(street_car_pool[idx] as Texture2D, height_scale)
 
 
 func _make_street_car_exhaust() -> GPUParticles3D:
@@ -26895,15 +27842,27 @@ func _update_street_car(delta: float) -> void:
 	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
 		return
 	if not playing:
+		if street_car_active and game_audio != null and game_audio.has_method("stop_car_pass_by"):
+			game_audio.stop_car_pass_by()
 		street_car_sprite.visible = false
 		street_car_active = false
+		street_car_preview = false
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = false
 		_set_street_car_blur_visible(false)
 		return
-	if options_menu_open or shift_paused:
+	if options_menu_open:
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = false
+		_park_street_car_for_tuning()
+		return
+	_clear_street_car_preview()
+	if shift_paused:
+		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
+			street_car_exhaust.emitting = false
+		if street_car_active:
+			street_car_sprite.position.y = street_car_base_y
+			street_car_sprite.position.z = _street_car_z()
 		return
 	if not street_car_active:
 		street_car_wait -= delta
@@ -26913,11 +27872,12 @@ func _update_street_car(delta: float) -> void:
 		street_car_direction = -1.0 ## Fixed opposite direction: screen-left to screen-right.
 		street_car_phase = randf() * TAU
 		street_car_speed = randf_range(STREET_CAR_SPEED_MIN, STREET_CAR_SPEED_MAX)
+		_apply_picked_street_car()
 		var offscreen_x := STREET_CAR_EDGE_X + street_car_half_width
 		street_car_sprite.position = Vector3(
 			-offscreen_x if street_car_direction > 0.0 else offscreen_x,
-			STREET_CAR_Y,
-			STREET_CAR_Z
+			street_car_base_y,
+			_street_car_z()
 		)
 		## Main camera mirrors world X: compensate so the van faces its screen travel.
 		street_car_sprite.flip_h = street_car_direction > 0.0
@@ -26925,17 +27885,21 @@ func _update_street_car(delta: float) -> void:
 		street_car_sprite.visible = true
 		street_car_active = true
 		street_car_whoosh_played = false
+		street_car_horn_this_pass = randf() < STREET_CAR_HORN_CHANCE
 		street_car_last_x = street_car_sprite.position.x
+		if game_audio != null and game_audio.has_method("play_car_pass_by"):
+			game_audio.play_car_pass_by()
 		_update_street_car_exhaust_position()
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = true
 		_update_street_car_motion_blur()
 		return
 	street_car_phase += delta * STREET_CAR_RUMBLE_RATE
-	street_car_sprite.position.x += street_car_direction * street_car_speed * delta
-	street_car_sprite.position.y = STREET_CAR_Y \
+	street_car_sprite.position.x += street_car_direction * street_car_speed * clampf(_gfx_float("street_car_speed", 1.0), 0.35, 2.5) * delta
+	street_car_sprite.position.y = street_car_base_y \
 		+ sin(street_car_phase) * STREET_CAR_RUMBLE_Y \
 		+ sin(street_car_phase * 2.37) * STREET_CAR_RUMBLE_Y * 0.28
+	street_car_sprite.position.z = _street_car_z()
 	street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG \
 		+ sin(street_car_phase * 1.31) * STREET_CAR_RUMBLE_DEG
 	_play_street_car_whoosh_if_passing()
@@ -26954,7 +27918,270 @@ func _update_street_car(delta: float) -> void:
 		if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 			street_car_exhaust.emitting = false
 		_set_street_car_blur_visible(false)
-		street_car_wait = randf_range(STREET_CAR_WAIT_MIN, STREET_CAR_WAIT_MAX)
+		street_car_wait = randf_range(STREET_CAR_WAIT_MIN, STREET_CAR_WAIT_MAX) * clampf(_gfx_float("street_car_gap", 1.0), 0.2, 3.5)
+
+
+func _park_street_car_for_tuning() -> void:
+	## Hold a car in the window while Hidden is open so Y / Z / size are live.
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	if not street_car_active and not street_car_preview:
+		_apply_picked_street_car()
+		street_car_preview = true
+		street_car_sprite.position.x = 0.0
+		street_car_sprite.flip_h = false
+		street_car_sprite.rotation_degrees.z = STREET_CAR_TILT_DEG
+		street_car_sprite.visible = true
+	_apply_street_car_look()
+	if street_car_preview and not street_car_active:
+		street_car_sprite.position.x = 0.0
+	street_car_sprite.position.y = street_car_base_y
+	street_car_sprite.position.z = _street_car_z()
+	_set_street_car_blur_visible(false)
+	_update_street_car_exhaust_position()
+
+
+func _clear_street_car_preview() -> void:
+	if not street_car_preview:
+		return
+	street_car_preview = false
+	if street_car_active:
+		return
+	if street_car_sprite != null and is_instance_valid(street_car_sprite):
+		street_car_sprite.visible = false
+	_set_street_car_blur_visible(false)
+
+
+func _bg_people_z() -> float:
+	return clampf(_gfx_float("bg_people_z", BG_PEOPLE_Z), 4.0, 12.5)
+
+
+func _bg_people_y() -> float:
+	return clampf(_gfx_float("bg_people_y", CustomerScript.STAND_Y), -1.2, 2.4)
+
+
+func _bg_people_scale() -> float:
+	return clampf(_gfx_float("bg_people_scale", 0.92), 0.35, 1.8)
+
+
+func _bg_people_lane_dir() -> float:
+	## 0 = empty sidewalk. Otherwise the only legal travel direction on screen.
+	for i in bg_people_active.size():
+		if bool(bg_people_active[i]):
+			return float(bg_people_dir[i])
+	return 0.0
+
+
+func _bg_people_active_count() -> int:
+	var n := 0
+	for i in bg_people_active.size():
+		if bool(bg_people_active[i]):
+			n += 1
+	return n
+
+
+func _bg_people_free_index(except_idx: int = -1) -> int:
+	for i in bg_people.size():
+		if i == except_idx:
+			continue
+		if i >= bg_people_active.size() or bool(bg_people_active[i]):
+			continue
+		return i
+	return -1
+
+
+func _bg_runner_pass_u(runner_idx: int) -> float:
+	if runner_idx < 0 or runner_idx >= bg_people.size():
+		return 0.0
+	if runner_idx >= bg_people_is_run.size() or not bool(bg_people_is_run[runner_idx]):
+		return 0.0
+	var runner := bg_people[runner_idx] as Node3D
+	if runner == null or not is_instance_valid(runner):
+		return 0.0
+	var best := 0.0
+	for j in bg_people.size():
+		if j == runner_idx:
+			continue
+		if j >= bg_people_active.size() or not bool(bg_people_active[j]):
+			continue
+		if j < bg_people_is_run.size() and bool(bg_people_is_run[j]):
+			continue
+		var other := bg_people[j] as Node3D
+		if other == null or not is_instance_valid(other):
+			continue
+		var dx := absf(runner.position.x - other.position.x)
+		if dx >= BG_PEOPLE_PASS_X:
+			continue
+		var u := 1.0 - dx / BG_PEOPLE_PASS_X
+		best = maxf(best, u * u * (3.0 - 2.0 * u))
+	return best
+
+
+func _build_background_people(parent: Node3D) -> void:
+	for old in bg_people:
+		if old != null and is_instance_valid(old):
+			old.queue_free()
+	bg_people.clear()
+	bg_people_wait.clear()
+	bg_people_active.clear()
+	bg_people_dir.clear()
+	bg_people_speed.clear()
+	bg_people_is_run.clear()
+	bg_people_is_pair.clear()
+	bg_people_pass_blend.clear()
+	bg_people_walk_spawns = 0
+	if parent == null:
+		return
+	if not CustomerScript.has_usable_saved_characters():
+		return
+	for i in BG_PEOPLE_COUNT:
+		var walker := CustomerScript.new()
+		walker.is_street_pedestrian = true
+		walker.setup([], Color.WHITE, 9999.0, 0, 0, 0, -1)
+		walker.visible = false
+		parent.add_child(walker)
+		walker.set_process(false)
+		walker.position = Vector3(BG_PEOPLE_EDGE_X, _bg_people_y(), _bg_people_z())
+		walker.scale = Vector3.ONE * _bg_people_scale()
+		bg_people.append(walker)
+		bg_people_wait.append(randf_range(3.0, 10.0) + float(i) * 4.0)
+		bg_people_active.append(false)
+		bg_people_dir.append(-1.0)
+		bg_people_speed.append(BG_PEOPLE_SPEED_MIN)
+		bg_people_is_run.append(false)
+		bg_people_is_pair.append(false)
+		bg_people_pass_blend.append(0.0)
+
+
+func _start_background_person(idx: int, as_partner: bool = false) -> void:
+	if idx < 0 or idx >= bg_people.size():
+		return
+	if idx < bg_people_active.size() and bool(bg_people_active[idx]):
+		return
+	if not as_partner and _bg_people_active_count() >= BG_PEOPLE_MAX_ONSCREEN:
+		return
+	var walker := bg_people[idx] as Node3D
+	if walker == null or not is_instance_valid(walker):
+		return
+	if walker.has_method("restyle_street_character"):
+		if not bool(walker.call("restyle_street_character")):
+			bg_people_wait[idx] = 4.0
+			return
+	var lane_dir := _bg_people_lane_dir()
+	var dir: float = lane_dir
+	if dir == 0.0:
+		dir = -1.0 if randf() < 0.55 else 1.0
+	var is_run := false
+	if not as_partner and bg_people_walk_spawns >= BG_PEOPLE_WALKERS_PER_RUNNER:
+		is_run = true
+		bg_people_walk_spawns = 0
+	else:
+		bg_people_walk_spawns += 1
+	var walk_speed := randf_range(BG_PEOPLE_SPEED_MIN, BG_PEOPLE_SPEED_MAX)
+	var run_mul := clampf(_gfx_float("bg_people_run_mul", 3.0), 1.5, 6.0)
+	bg_people_dir[idx] = dir
+	bg_people_is_run[idx] = is_run
+	bg_people_is_pair[idx] = as_partner
+	bg_people_speed[idx] = walk_speed * run_mul if is_run else walk_speed
+	if idx < bg_people_pass_blend.size():
+		bg_people_pass_blend[idx] = 0.0
+	var z := _bg_people_z()
+	var y := _bg_people_y()
+	var s := _bg_people_scale()
+	walker.scale = Vector3.ONE * s
+	var start_x := -BG_PEOPLE_EDGE_X if dir > 0.0 else BG_PEOPLE_EDGE_X
+	if as_partner:
+		start_x += -dir * BG_PEOPLE_PAIR_GAP
+		z += BG_PEOPLE_PAIR_Z
+	walker.position = Vector3(start_x, y, z)
+	walker.rotation_degrees = Vector3(
+		0.0,
+		CustomerScript.WALK_PLUS_X_YAW if dir > 0.0 else CustomerScript.WALK_MINUS_X_YAW,
+		0.0
+	)
+	walker.visible = true
+	bg_people_active[idx] = true
+	if is_run and walker.has_method("play_street_run"):
+		walker.call("play_street_run")
+	elif walker.has_method("play_street_walk"):
+		walker.call("play_street_walk")
+	## Occasional pair of walkers — never pair a runner, never go over 2 on screen.
+	if as_partner or is_run or randf() >= BG_PEOPLE_PAIR_CHANCE:
+		return
+	if _bg_people_active_count() >= BG_PEOPLE_MAX_ONSCREEN:
+		return
+	var partner_idx := _bg_people_free_index(idx)
+	if partner_idx < 0:
+		return
+	_start_background_person(partner_idx, true)
+	if partner_idx < bg_people_speed.size() and idx < bg_people_speed.size():
+		bg_people_speed[partner_idx] = bg_people_speed[idx]
+	if idx < bg_people_is_pair.size():
+		bg_people_is_pair[idx] = true
+
+
+func _update_background_people(delta: float) -> void:
+	if bg_people.is_empty():
+		return
+	var z := _bg_people_z()
+	var y := _bg_people_y()
+	var s := _bg_people_scale()
+	var speed_mul := clampf(_gfx_float("bg_people_speed", 1.0), 0.25, 2.5)
+	var gap_mul := clampf(_gfx_float("bg_people_gap", 1.0), 0.2, 3.5)
+	if not playing or options_menu_open or shift_paused:
+		for i in bg_people.size():
+			var idle := bg_people[i] as Node3D
+			if idle != null and is_instance_valid(idle):
+				idle.visible = false
+			if i < bg_people_active.size():
+				bg_people_active[i] = false
+			if i < bg_people_pass_blend.size():
+				bg_people_pass_blend[i] = 0.0
+		return
+	for i in bg_people.size():
+		var walker := bg_people[i] as Node3D
+		if walker == null or not is_instance_valid(walker):
+			continue
+		walker.scale = Vector3.ONE * s
+		if not bool(bg_people_active[i]):
+			bg_people_wait[i] = float(bg_people_wait[i]) - delta
+			walker.visible = false
+			if float(bg_people_wait[i]) > 0.0:
+				continue
+			if _bg_people_active_count() >= BG_PEOPLE_MAX_ONSCREEN:
+				continue
+			_start_background_person(i)
+			continue
+		var dir: float = float(bg_people_dir[i])
+		walker.position.x += dir * float(bg_people_speed[i]) * speed_mul * delta
+		walker.position.y = y
+		var person_z := z
+		if i < bg_people_is_pair.size() and bool(bg_people_is_pair[i]):
+			person_z = z + BG_PEOPLE_PAIR_Z
+		var pass_target := 0.0
+		if i < bg_people_is_run.size() and bool(bg_people_is_run[i]):
+			pass_target = _bg_runner_pass_u(i)
+		var blend := 0.0
+		if i < bg_people_pass_blend.size():
+			blend = float(bg_people_pass_blend[i])
+			blend = move_toward(blend, pass_target, BG_PEOPLE_PASS_BLEND_SPD * delta)
+			bg_people_pass_blend[i] = blend
+		## Smaller Z is toward the truck / camera.
+		person_z -= BG_PEOPLE_PASS_Z * blend
+		walker.position.z = person_z
+		var finished: bool = (
+			dir > 0.0 and walker.position.x > BG_PEOPLE_EDGE_X
+		) or (
+			dir < 0.0 and walker.position.x < -BG_PEOPLE_EDGE_X
+		)
+		if finished:
+			walker.visible = false
+			bg_people_active[i] = false
+			bg_people_is_run[i] = false
+			bg_people_is_pair[i] = false
+			if i < bg_people_pass_blend.size():
+				bg_people_pass_blend[i] = 0.0
+			bg_people_wait[i] = randf_range(BG_PEOPLE_WAIT_MIN, BG_PEOPLE_WAIT_MAX) * gap_mul
 
 
 func _play_street_car_whoosh_if_passing() -> void:
@@ -26966,12 +28193,39 @@ func _play_street_car_whoosh_if_passing() -> void:
 		return
 	street_car_last_x = x
 	street_car_whoosh_played = true
-	if game_audio != null and game_audio.has_method("play_car_whoosh"):
-		game_audio.play_car_whoosh()
+	if street_car_horn_this_pass and game_audio != null and game_audio.has_method("play_car_horn"):
+		game_audio.play_car_horn()
 
 
 func _street_car_blur_stretch() -> float:
-	return 1.0 + clampf(street_car_speed / 18.0, 0.16, 0.42)
+	var blur: float = clampf(_gfx_float("street_car_blur", 1.0), 0.0, 2.5)
+	return 1.0 + clampf(street_car_speed / 26.0, 0.10, 0.26) * blur
+
+
+func _street_car_darken_color(alpha: float = 1.0) -> Color:
+	var darken: float = clampf(_gfx_float("street_car_darken", 0.20), 0.0, 0.7)
+	var m: float = 1.0 - darken
+	return Color(m, m, m, alpha)
+
+
+func _apply_street_car_look() -> void:
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	if street_car_sprite.texture != null:
+		_apply_street_car_texture(street_car_sprite.texture, street_car_current_height_scale)
+	street_car_sprite.modulate = _street_car_darken_color(1.0)
+	street_car_sprite.sorting_offset = _street_car_sort()
+	street_car_sprite.position.y = street_car_base_y
+	street_car_sprite.position.z = _street_car_z()
+	for ghost in street_car_blur_sprites:
+		var blur_sprite := ghost as Sprite3D
+		if blur_sprite != null and is_instance_valid(blur_sprite):
+			blur_sprite.sorting_offset = _street_car_sort() - 0.4
+	if street_car_active and street_car_sprite.visible:
+		_update_street_car_motion_blur()
+	else:
+		_set_street_car_blur_visible(false)
+	_update_street_car_exhaust_position()
 
 
 func _set_street_car_blur_visible(on: bool) -> void:
@@ -26985,9 +28239,16 @@ func _set_street_car_blur_visible(on: bool) -> void:
 func _update_street_car_motion_blur() -> void:
 	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
 		return
+	var blur: float = clampf(_gfx_float("street_car_blur", 1.0), 0.0, 2.5)
+	if blur <= 0.001:
+		_set_street_car_blur_visible(false)
+		street_car_sprite.modulate = _street_car_darken_color(1.0)
+		return
 	var stretch := _street_car_blur_stretch()
-	street_car_sprite.scale = Vector3(stretch, 1.0, 1.0)
-	var trail := -street_car_direction * street_car_half_width * 0.42
+	## Keep the lead car sharp; smear lives on the trailing ghosts.
+	street_car_sprite.scale = Vector3.ONE
+	street_car_sprite.modulate = _street_car_darken_color(1.0)
+	var trail := -street_car_direction * street_car_half_width * 0.28 * blur
 	for i in street_car_blur_sprites.size():
 		var ghost := street_car_blur_sprites[i] as Sprite3D
 		if ghost == null or not is_instance_valid(ghost):
@@ -26997,13 +28258,14 @@ func _update_street_car_motion_blur() -> void:
 		ghost.flip_h = street_car_sprite.flip_h
 		ghost.rotation_degrees = street_car_sprite.rotation_degrees
 		ghost.pixel_size = street_car_sprite.pixel_size
+		ghost.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
 		ghost.position = street_car_sprite.position + Vector3(
 			trail * float(i + 1),
 			0.0,
 			0.012 * float(i + 1)
 		)
-		ghost.scale = Vector3(stretch * (1.08 + float(i) * 0.10), 1.0, 1.0)
-		ghost.modulate = Color(1.0, 1.0, 1.0, 0.26 / float(i + 1))
+		ghost.scale = Vector3(stretch * (1.04 + float(i) * 0.08), 1.0, 1.0)
+		ghost.modulate = _street_car_darken_color(0.18 * blur / float(i + 1))
 
 const TREE_FOLIAGE_SHADER_PATH := "res://shaders/tree_foliage.gdshader"
 
@@ -28106,6 +29368,14 @@ func _ensure_prop_offsets_loaded() -> void:
 		cfg.set_value(PROP_OFFSET_CFG_SECTION, "burger_buns_z", 0.0)
 		cfg.set_value(PROP_OFFSET_CFG_SECTION, "buns_closer_foot_v1", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PROP_OFFSET_CFG_SECTION, "tip_jar_by_buns_v1"):
+		## A gizmo drag parked the jar in the street; snap it back beside the buns.
+		prop_offsets["tip_jar"] = Vector3.ZERO
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "tip_jar_x", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "tip_jar_y", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "tip_jar_z", 0.0)
+		cfg.set_value(PROP_OFFSET_CFG_SECTION, "tip_jar_by_buns_v1", true)
+		cfg.save(GFX_CFG_PATH)
 
 
 func _prop_offset(key: String) -> Vector3:
@@ -28145,6 +29415,8 @@ func _apply_prop_offset_changed(key: String) -> void:
 			_build_cutting_board_prop()
 		"burger_buns", "cheese_stack":
 			_build_cheese_station_prop()
+		"tip_jar":
+			_seat_tip_jar()
 		"seasoning_shaker":
 			_build_season_shaker()
 		"fire_ext":
@@ -29317,10 +30589,10 @@ func _hidden_add_garbage_liner_wobble_controls(parent: Control, key_prefix: Stri
 			garbage_tied_bag_scale = clampf(v, 0.5, 8.0)
 			_tied_bag_scale_setting_changed()
 	)
-	_hidden_add_labeled_slider(parent, key_prefix + "hold_bag_scale", "Held / Finished Bag Size", 0.2, 3.0, 0.01,
+	_hidden_add_labeled_slider(parent, key_prefix + "hold_bag_scale", "Held / Finished Bag Size", 0.2, 8.0, 0.01,
 		func(): return garbage_bag_hold_scale,
 		func(v: float):
-			garbage_bag_hold_scale = clampf(v, 0.2, 3.0)
+			garbage_bag_hold_scale = clampf(v, 0.2, 8.0)
 			_save_physical_garbage_settings()
 	)
 	_hidden_add_labeled_slider(parent, key_prefix + "hold_bag_height", "Held / Finished Bag Height", 0.05, 1.20, 0.01,
@@ -37541,6 +38813,20 @@ func _cup_hold_point_from_screen(screen_pos: Vector2) -> Vector3:
 	return _cup_soft_lock_tray_target(locked, hold_y)
 
 
+func _cup_ice_soft_lock_spent() -> bool:
+	return cup_root != null and is_instance_valid(cup_root) and bool(cup_root.get_meta("ice_soft_lock_spent", false))
+
+
+func _mark_cup_ice_soft_lock_spent() -> void:
+	if cup_root != null and is_instance_valid(cup_root):
+		cup_root.set_meta("ice_soft_lock_spent", true)
+
+
+func _note_held_ice_soft_lock_release() -> void:
+	if cup_held and _soda_station_id_for_tip(_cup_spout_lock) == "ice":
+		_mark_cup_ice_soft_lock_spent()
+
+
 func _cup_soft_lock_fill_ids() -> Array[String]:
 	var ids: Array[String] = []
 	var soda_full: bool = cup_soda_fill >= 1.0
@@ -37557,6 +38843,11 @@ func _cup_soft_lock_fill_ids() -> Array[String]:
 		if not soda_full:
 			ids.append("cola")
 		return ids
+	## Triggered ice (even 0–1 cubes) then pulled away: ice magnet stays off for this cup.
+	if _cup_ice_soft_lock_spent() and not icing_now:
+		if not soda_full:
+			ids.append("cola")
+		return ids
 	if not soda_full and (not has_ice or icing_now):
 		ids.append("ice")
 	ids.append("cola")
@@ -37564,6 +38855,8 @@ func _cup_soft_lock_fill_ids() -> Array[String]:
 
 
 func _soda_soft_lock_radius_for(fid: String) -> float:
+	if fid == "ice" and _cup_ice_soft_lock_spent() and _cup_auto_ice_soda != "icing":
+		return 0.0
 	if fid == "ice" and cup_ice_fill > 0.05 and _cup_auto_ice_soda != "icing":
 		return 0.0
 	var base: float = _soda_soft_radius_for_station(fid)
@@ -37642,6 +38935,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 
 	## Just broke free — follow the hand only so you can place the cup elsewhere.
 	if _cup_spout_unlock_grace > 0.0 and not _cup_auto_committed_to_soda():
+		_note_held_ice_soft_lock_release()
 		_cup_spout_lock = null
 		return hit
 
@@ -37654,6 +38948,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 				break
 		if not lock_allowed:
 			## Soda already in the cup: drop Ice instead of dragging the cup back to it.
+			_note_held_ice_soft_lock_release()
 			_cup_spout_lock = null
 			locked_valid = false
 	if locked_valid:
@@ -37678,6 +38973,8 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 				switch_target = candidate_target
 				switch_d = candidate_d
 		if switch_node != null and not _cup_auto_committed_to_soda():
+			if locked_id == "ice":
+				_mark_cup_ice_soft_lock_spent()
 			_cup_spout_lock = switch_node
 			_maybe_begin_auto_ice_on_lock(switch_node)
 			_cup_spout_unlock_grace = 0.0
@@ -37710,6 +39007,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 				ice_d_lock = Vector2(hit.x - ice_seat_lock.x, hit.z - ice_seat_lock.z).length()
 			var yank_away: bool = locked_d > CUP_AUTO_ICE_APPROACH * 1.55 and ice_d_lock > CUP_AUTO_ICE_APPROACH * 1.35
 			if yank_away:
+				_note_held_ice_soft_lock_release()
 				_cup_spout_lock = null
 				_reset_cup_auto_ice_soda()
 				_cup_spout_unlock_grace = _cup_unlock_grace_sec()
@@ -37719,6 +39017,7 @@ func _cup_soft_lock_spout_target(hit: Vector3, hold_y: float) -> Vector3:
 				return hit
 			release_dist = 999.0
 		if locked_d > release_dist:
+			_note_held_ice_soft_lock_release()
 			_cup_spout_lock = null
 			_reset_cup_auto_ice_soda()
 			## A drag toward the neighboring bay should be eligible to acquire it on
@@ -42021,6 +43320,7 @@ func _setup_radio() -> void:
 	radio.channel_changed.connect(_on_radio_channel)
 	radio.powered_changed.connect(_on_radio_powered)
 	_load_bank_settings()
+	_load_economy_settings()
 	_build_phone_ui()
 	_build_radio_ui()
 	_build_hud_chrome_toggle()
@@ -42899,18 +44199,18 @@ func _build_cheese_station_prop() -> void:
 	cheese_stack_anchor = null
 	cheese_stack_top = null
 	cheese_pile_slices.clear()
+	_free_tip_jar()
 	if bun_pile_root != null and is_instance_valid(bun_pile_root):
 		bun_pile_root.queue_free()
 	bun_pile_root = null
 	bun_pile_area = null
 	bun_pile_stacks.clear()
 	bun_pile_anchors.clear()
-	_free_tip_jar()
 	if world == null:
 		return
 	_build_bun_inventory_piles(world)
 	_refresh_bun_inventory_piles()
-	_build_tip_jar(world)
+	_build_tip_jar(bun_pile_root)
 	call_deferred("_seat_bun_piles_by_fryer")
 
 
@@ -43025,10 +44325,13 @@ func _seat_bun_piles_by_fryer() -> void:
 
 
 func _free_tip_jar() -> void:
+	_tip_jar_shake_left = 0.0
+	_tip_jar_shake_t = 0.0
 	if tip_jar_root != null and is_instance_valid(tip_jar_root):
 		tip_jar_root.queue_free()
 	tip_jar_root = null
 	tip_jar_fill_root = null
+	tip_jar_area = null
 	_tip_jar_bill_count = 0
 
 
@@ -43054,24 +44357,24 @@ void fragment() {
 	return shader
 
 
-func _make_tip_inner_glow_material() -> ShaderMaterial:
+func _make_tip_inner_glow_material(intensity: float = 0.11) -> ShaderMaterial:
 	var glow := ShaderMaterial.new()
 	glow.shader = _tip_jar_inner_glow_shader_resource()
 	glow.set_shader_parameter("glow_color", Color(0.72, 0.88, 1.0))
 	glow.set_shader_parameter("power", 4.6)
-	glow.set_shader_parameter("intensity", 0.11)
+	glow.set_shader_parameter("intensity", clampf(intensity, 0.0, 1.0))
 	return glow
 
 
-func _make_tip_glass_material(alpha: float, inner_glow: bool = false) -> StandardMaterial3D:
+func _make_tip_glass_material(alpha: float, inner_glow: bool = false, glow_intensity: float = 0.11) -> StandardMaterial3D:
 	var glass_mat := StandardMaterial3D.new()
-	glass_mat.albedo_color = Color(0.88, 0.94, 1.0, alpha)
+	glass_mat.albedo_color = Color(0.78, 0.90, 1.0, clampf(alpha, 0.0, 1.0))
 	glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	glass_mat.roughness = 0.04
-	glass_mat.metallic = 0.12
+	glass_mat.metallic = 0.08
 	glass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	if inner_glow:
-		glass_mat.next_pass = _make_tip_inner_glow_material()
+	if inner_glow and glow_intensity > 0.001:
+		glass_mat.next_pass = _make_tip_inner_glow_material(glow_intensity)
 	return glass_mat
 
 
@@ -43147,7 +44450,7 @@ func _make_crinkled_bill_mesh(size: Vector2, curve_r: float, crinkle_amp: float,
 func _make_tip_bill_mesh(in_jar: bool) -> MeshInstance3D:
 	var bill := MeshInstance3D.new()
 	bill.name = "TipBill"
-	var size: Vector2 = Vector2(0.058, 0.032) if in_jar else Vector2(0.092, 0.048)
+	var size: Vector2 = Vector2(0.048, 0.026) if in_jar else Vector2(0.092, 0.048)
 	var curve_r: float = 0.030 if in_jar else 0.16
 	var crinkle_amp: float = 0.0017 if in_jar else 0.0026
 	bill.mesh = _make_crinkled_bill_mesh(size, curve_r, crinkle_amp, randf() * TAU)
@@ -43183,7 +44486,6 @@ func _build_tip_jar(parent: Node3D) -> void:
 	cyl.radial_segments = 20
 	glass.mesh = cyl
 	glass.position = Vector3(0.0, 0.052, 0.0)
-	glass.material_override = _make_tip_glass_material(0.18, true)
 	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	jar.add_child(glass)
 	var floor := MeshInstance3D.new()
@@ -43195,7 +44497,6 @@ func _build_tip_jar(parent: Node3D) -> void:
 	floor_mesh.radial_segments = 20
 	floor.mesh = floor_mesh
 	floor.position = Vector3(0.0, 0.004, 0.0)
-	floor.material_override = _make_tip_glass_material(0.32)
 	floor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	jar.add_child(floor)
 	var rim := MeshInstance3D.new()
@@ -43207,26 +44508,176 @@ func _build_tip_jar(parent: Node3D) -> void:
 	rim_mesh.radial_segments = 20
 	rim.mesh = rim_mesh
 	rim.position = Vector3(0.0, 0.104, 0.0)
-	rim.material_override = _make_tip_glass_material(0.38, true)
 	rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	jar.add_child(rim)
 	var fill := Node3D.new()
 	fill.name = "MoneyFill"
 	fill.position = Vector3(0.0, 0.012, 0.0)
 	jar.add_child(fill)
+	var grab := Area3D.new()
+	grab.name = "TipJarGrab"
+	grab.input_ray_pickable = true
+	grab.collision_layer = TIP_JAR_COLLISION_LAYER
+	grab.collision_mask = 0
+	grab.monitoring = true
+	grab.monitorable = true
+	var grab_cs := CollisionShape3D.new()
+	var grab_shape := CylinderShape3D.new()
+	grab_shape.radius = 0.050
+	grab_shape.height = 0.112
+	grab_cs.shape = grab_shape
+	grab_cs.position = Vector3(0.0, 0.056, 0.0)
+	grab.add_child(grab_cs)
+	jar.add_child(grab)
 	tip_jar_root = jar
 	tip_jar_fill_root = fill
+	tip_jar_area = grab
 	_tip_jar_bill_count = 0
-	jar.scale = Vector3.ONE * TIP_JAR_SCALE
 	_seat_tip_jar()
+	_apply_tip_jar_look()
+
+
+func _tip_jar_menu_scale() -> float:
+	var gfx: Dictionary = _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
+	return TIP_JAR_SCALE * clampf(float(gfx.get("tip_jar_scale", 1.0)), 0.4, 2.8)
 
 
 func _seat_tip_jar() -> void:
 	if tip_jar_root == null or not is_instance_valid(tip_jar_root):
 		return
+	if _tip_jar_shake_left > 0.0:
+		return
+	tip_jar_root.scale = Vector3.ONE * _tip_jar_menu_scale()
+	if bun_pile_root == null or not is_instance_valid(bun_pile_root):
+		return
+	if tip_jar_root.get_parent() != bun_pile_root:
+		var old_parent: Node = tip_jar_root.get_parent()
+		if old_parent != null:
+			old_parent.remove_child(tip_jar_root)
+		bun_pile_root.add_child(tip_jar_root)
+	tip_jar_root.position = TIP_JAR_BUN_OFFSET + _prop_offset("tip_jar")
+	tip_jar_root.visible = bun_pile_root.visible
+
+
+func _apply_tip_jar_look() -> void:
+	if tip_jar_root == null or not is_instance_valid(tip_jar_root):
+		return
+	var glass_a: float = clampf(_gfx_float("tip_jar_glass", 0.055), 0.0, 0.6)
+	var rim_a: float = clampf(_gfx_float("tip_jar_rim", 0.11), 0.0, 0.8)
+	var glow_a: float = clampf(_gfx_float("tip_jar_glow", 0.035), 0.0, 0.5)
+	var glass: MeshInstance3D = tip_jar_root.get_node_or_null("Glass") as MeshInstance3D
+	var floor_m: MeshInstance3D = tip_jar_root.get_node_or_null("GlassFloor") as MeshInstance3D
+	var rim: MeshInstance3D = tip_jar_root.get_node_or_null("Rim") as MeshInstance3D
+	if glass != null:
+		glass.material_override = _make_tip_glass_material(glass_a, true, glow_a)
+	if floor_m != null:
+		floor_m.material_override = _make_tip_glass_material(minf(glass_a * 1.7, 0.45), false)
+	if rim != null:
+		rim.material_override = _make_tip_glass_material(rim_a, true, glow_a)
+
+
+func _tip_jar_home_global() -> Vector3:
 	if bun_pile_root != null and is_instance_valid(bun_pile_root):
-		tip_jar_root.global_position = bun_pile_root.global_position + TIP_JAR_BUN_OFFSET
-		tip_jar_root.visible = bun_pile_root.visible
+		return bun_pile_root.to_global(TIP_JAR_BUN_OFFSET + _prop_offset("tip_jar"))
+	if tip_jar_root != null and is_instance_valid(tip_jar_root):
+		return tip_jar_root.global_position
+	return Vector3.ZERO
+
+
+func _click_over_build_burger(screen_pos: Vector2) -> bool:
+	## Burger already on the cutting board wins over the tip jar in that screen overlap.
+	if _station_cutting_board_is_empty(STATION_CRAFT):
+		return false
+	if _cursor_on_cutting_board(screen_pos):
+		return true
+	if stations.size() > STATION_CRAFT:
+		var plate: Control = stations[STATION_CRAFT].get("plate", null) as Control
+		if plate != null and is_instance_valid(plate) and plate.get_global_rect().has_point(screen_pos):
+			return true
+		var host: Control = stations[STATION_CRAFT].get("preview_host", null) as Control
+		if host != null and is_instance_valid(host) and host.get_global_rect().has_point(screen_pos):
+			return true
+	return false
+
+
+func _tip_jar_under_cursor(screen_pos: Vector2) -> bool:
+	if tip_jar_root == null or not is_instance_valid(tip_jar_root) or not tip_jar_root.visible:
+		return false
+	if camera == null:
+		return false
+	if _ray_hits_tool(screen_pos, TIP_JAR_COLLISION_LAYER, tip_jar_area):
+		return true
+	var s := _tip_jar_menu_scale()
+	var mid := tip_jar_root.global_position + Vector3(0.0, 0.055 * s, 0.0)
+	if camera.is_position_behind(mid):
+		return false
+	var mid_pt := camera.unproject_position(mid)
+	var edge := camera.unproject_position(mid + Vector3(0.048 * s, 0.0, 0.0))
+	var radius_px := maxf(mid_pt.distance_to(edge), 10.0)
+	return screen_pos.distance_to(mid_pt) <= radius_px + 4.0
+
+
+func _try_click_tip_jar(screen_pos: Vector2) -> bool:
+	if not playing:
+		return false
+	if spatula_patty != null or cheese_held:
+		return false
+	if _click_over_build_burger(screen_pos):
+		return false
+	if not _tip_jar_under_cursor(screen_pos):
+		return false
+	if tip_jar_root == null or not is_instance_valid(tip_jar_root):
+		return false
+	_tip_jar_shake_left = TIP_JAR_SHAKE_SEC
+	_tip_jar_shake_t = 0.85
+	if game_audio != null and game_audio.has_method("play_tip_jar_ping"):
+		game_audio.play_tip_jar_ping()
+	_update_tip_jar_click_shake(0.0)
+	return true
+
+
+func _update_tip_jar_click_shake(delta: float) -> void:
+	if tip_jar_root == null or not is_instance_valid(tip_jar_root):
+		return
+	if _tip_jar_shake_left <= 0.0:
+		return
+	_tip_jar_shake_left = maxf(0.0, _tip_jar_shake_left - delta)
+	_tip_jar_shake_t += delta * 28.0
+	var amp := clampf(_tip_jar_shake_left / TIP_JAR_SHAKE_SEC, 0.0, 1.0)
+	amp = amp * amp
+	var home := _tip_jar_home_global()
+	if home != Vector3.ZERO:
+		tip_jar_root.global_position = home + Vector3(
+			sin(_tip_jar_shake_t * 1.7) * 0.010 * amp,
+			absf(sin(_tip_jar_shake_t * 2.4)) * 0.006 * amp,
+			cos(_tip_jar_shake_t * 1.3) * 0.007 * amp
+		)
+	tip_jar_root.rotation_degrees = Vector3(
+		sin(_tip_jar_shake_t * 1.9) * 7.0 * amp,
+		sin(_tip_jar_shake_t * 1.35) * 5.0 * amp,
+		cos(_tip_jar_shake_t * 2.2) * 9.0 * amp
+	)
+	if tip_jar_fill_root != null and is_instance_valid(tip_jar_fill_root):
+		tip_jar_fill_root.position = Vector3(
+			sin(_tip_jar_shake_t * 2.1) * 0.008 * amp,
+			0.012 + absf(sin(_tip_jar_shake_t * 2.8)) * 0.006 * amp,
+			cos(_tip_jar_shake_t * 1.8) * 0.007 * amp
+		)
+		for child in tip_jar_fill_root.get_children():
+			var bill := child as Node3D
+			if bill == null:
+				continue
+			bill.rotation_degrees.z = sin(_tip_jar_shake_t * 2.6 + float(bill.get_index()) * 1.4) * 18.0 * amp
+	if _tip_jar_shake_left <= 0.0:
+		tip_jar_root.rotation_degrees = Vector3.ZERO
+		if tip_jar_fill_root != null and is_instance_valid(tip_jar_fill_root):
+			tip_jar_fill_root.position = Vector3(0.0, 0.012, 0.0)
+			for child2 in tip_jar_fill_root.get_children():
+				var bill2 := child2 as Node3D
+				if bill2 == null:
+					continue
+				bill2.rotation_degrees.z = 0.0
+		_seat_tip_jar()
 
 
 func _add_tip_jar_settled_bill() -> void:
@@ -43238,9 +44689,9 @@ func _add_tip_jar_settled_bill() -> void:
 	var i: int = _tip_jar_bill_count
 	## A couple of big bills fanned toward the player, not a crumpled stack.
 	var poses: Array[Dictionary] = [
-		{"pos": Vector3(-0.003, 0.018, 0.001), "rot": Vector3(-34.0, 176.0, -4.0)},
-		{"pos": Vector3(0.003, 0.024, -0.001), "rot": Vector3(-28.0, 184.0, 5.0)},
-		{"pos": Vector3(0.000, 0.030, 0.002), "rot": Vector3(-38.0, 180.0, 1.0)},
+		{"pos": Vector3(-0.012, 0.016, 0.006), "rot": Vector3(-34.0, 176.0, -6.0)},
+		{"pos": Vector3(0.012, 0.034, -0.006), "rot": Vector3(-28.0, 184.0, 7.0)},
+		{"pos": Vector3(0.000, 0.052, 0.004), "rot": Vector3(-38.0, 180.0, 1.0)},
 	]
 	var pose: Dictionary = poses[mini(i, poses.size() - 1)]
 	bill.position = pose["pos"]
@@ -43272,27 +44723,25 @@ func _on_tip_bill_landed(bill: MeshInstance3D) -> void:
 func _fly_pay_bills_to_tip_jar(customer: Node3D, count: int) -> void:
 	if world == null:
 		return
-	if game_audio and game_audio.has_method("play_chaching"):
-		game_audio.play_chaching()
 	var from: Vector3 = _tip_pay_start_global(customer)
 	var land: Vector3 = _tip_jar_mouth_global()
 	if land == Vector3.ZERO:
 		_add_tip_jar_settled_bill()
 		return
-	var n: int = clampi(count, 1, 2)
+	var n: int = clampi(count, 1, 4)
 	for i in n:
 		var bill: MeshInstance3D = _make_tip_bill_mesh(false)
 		world.add_child(bill)
 		var jitter := Vector3(randf_range(-0.04, 0.04), randf_range(0.0, 0.06), randf_range(-0.03, 0.03))
 		bill.global_position = from + jitter
 		var dest: Vector3 = land + Vector3(randf_range(-0.01, 0.01), 0.0, randf_range(-0.01, 0.01))
-		var delay: float = float(i) * 0.045
+		var delay: float = float(i) * 0.07
 		var tw: Tween = create_tween()
 		if delay > 0.0:
 			tw.tween_interval(delay)
-		tw.tween_property(bill, "global_position", dest, 0.38) \
+		tw.tween_property(bill, "global_position", dest, 0.42) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(bill, "rotation_degrees", Vector3(-36.0, 180.0 + randf_range(-8.0, 8.0), 0.0), 0.38)
+		tw.parallel().tween_property(bill, "rotation_degrees", Vector3(-36.0, 180.0 + randf_range(-18.0, 18.0), randf_range(-12.0, 12.0)), 0.42)
 		tw.tween_callback(_on_tip_bill_landed.bind(bill))
 
 
@@ -44029,7 +45478,7 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 			"from": from + spread,
 			"to": to + Vector3(randf_range(-0.12, 0.12), 0.0, randf_range(-0.08, 0.08)),
 			"t": 0.0,
-			"dur": 0.55 + float(n) * 0.08,
+			"dur": (0.55 + float(n) * 0.08) * 1.4,
 			"landed": false,
 			"settle": 0.28,
 			"arc": 0.55 + randf() * 0.25,
@@ -44053,18 +45502,35 @@ func _supply_delivery_landing() -> Vector3:
 func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.name = "SupplyPack"
+	var tex: Texture2D = FoodSpritesScript.get_tex(id)
+	if tex != null:
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.82, 0.66)
+		mi.mesh = quad
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_texture = tex
+		mat.albedo_color = Color(1, 1, 1, 1)
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.render_priority = 18
+		mi.material_override = mat
+		mi.set_meta("billboard_pack", true)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		return mi
 	var box := BoxMesh.new()
-	box.size = Vector3(0.09, 0.07, 0.09) if kind != "syrup" else Vector3(0.06, 0.11, 0.06)
+	box.size = Vector3(0.18, 0.14, 0.18) if kind != "syrup" else Vector3(0.10, 0.18, 0.10)
 	mi.mesh = box
-	var mat := StandardMaterial3D.new()
+	var box_mat := StandardMaterial3D.new()
 	var col: Color = GameDataScript.INGREDIENT_COLORS.get(id, Color(0.75, 0.55, 0.25))
 	if kind == "syrup":
 		var fid := _flavor_from_syrup_id(id)
 		col = SODA_FLAVOR_COLORS.get(fid, col)
-	mat.albedo_color = col
-	mat.roughness = 0.55
-	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	mi.material_override = mat
+	box_mat.albedo_color = col
+	box_mat.roughness = 0.55
+	box_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	mi.material_override = box_mat
 	return mi
 
 
@@ -44105,8 +45571,11 @@ func _update_supply_delivery_fx(delta: float) -> void:
 		var pos := from.lerp(to, ease)
 		pos.y += sin(ease * PI) * float(item.get("arc", 0.6))
 		mesh.global_position = pos
-		mesh.rotation_degrees.y += float(item.get("spin", 4.0)) * delta * 60.0
-		mesh.rotation_degrees.x += float(item.get("spin", 4.0)) * delta * 40.0
+		if bool(mesh.get_meta("billboard_pack", false)):
+			mesh.rotation_degrees.z += float(item.get("spin", 4.0)) * delta * 18.0
+		else:
+			mesh.rotation_degrees.y += float(item.get("spin", 4.0)) * delta * 60.0
+			mesh.rotation_degrees.x += float(item.get("spin", 4.0)) * delta * 40.0
 		if u >= 1.0:
 			var pack := int(item.get("pack", 0))
 			var id := str(item.get("id", ""))
@@ -44310,7 +45779,7 @@ func _refresh_ingredient_stock_bars() -> void:
 				icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		btn.tooltip_text = "%s\nStock: %d" % [btn.tooltip_text.get_slice("\n", 0), stock]
 	_update_bin_fills_3d()
-	if patty_fridge_open:
+	if patty_fridge_open and _fridge_launch_inflight <= 0 and not _fridge_drag_active:
 		_rebuild_patty_fridge_balls(true)
 
 
@@ -45028,6 +46497,17 @@ func _phone_app_icon_texture(app_id: String) -> Texture2D:
 			_phone_icon_fill_rect(img, 8, 48, 56, 54, w)
 			for col_x in [18, 28, 38, 46]:
 				_phone_icon_fill_rect(img, col_x - 2, 26, col_x + 2, 48, Color(0, 0, 0, 0))
+		"snak":
+			_phone_icon_fill_rect(img, 14, 18, 22, 46, w)
+			_phone_icon_fill_rect(img, 22, 18, 42, 26, w)
+			_phone_icon_fill_rect(img, 34, 26, 42, 38, w)
+			_phone_icon_fill_rect(img, 22, 38, 42, 46, w)
+			_phone_icon_fill_circle(img, 46.0, 22.0, 6.0, w)
+			_phone_icon_fill_circle(img, 18.0, 42.0, 4.0, Color(0, 0, 0, 0))
+		"gnop":
+			_phone_icon_fill_rect(img, 12, 16, 18, 48, w)
+			_phone_icon_fill_rect(img, 46, 20, 52, 52, w)
+			_phone_icon_fill_circle(img, 34.0, 30.0, 6.0, w)
 		_:
 			_phone_icon_fill_circle(img, 32.0, 32.0, 16.0, w)
 	return ImageTexture.create_from_image(img)
@@ -45094,6 +46574,14 @@ func _set_phone_app(app_id: String) -> void:
 		phone_maps_page.visible = app_id == "maps"
 	if phone_bank_page != null:
 		phone_bank_page.visible = app_id == "bank"
+	if phone_snak_page != null:
+		phone_snak_page.visible = app_id == "snak"
+		if phone_snak_page.has_method("set_active"):
+			phone_snak_page.call("set_active", app_id == "snak")
+	if phone_gnop_page != null:
+		phone_gnop_page.visible = app_id == "gnop"
+		if phone_gnop_page.has_method("set_active"):
+			phone_gnop_page.call("set_active", app_id == "gnop")
 	if phone_nav_bar != null:
 		phone_nav_bar.visible = app_id != "home"
 	if phone_nav_title != null:
@@ -45106,10 +46594,18 @@ func _set_phone_app(app_id: String) -> void:
 				phone_nav_title.text = "Maps"
 			"bank":
 				phone_nav_title.text = "Bank"
+			"snak":
+				phone_nav_title.text = "Snak"
+			"gnop":
+				phone_nav_title.text = "Gnop"
 			_:
 				phone_nav_title.text = "Home"
+	var arcade := app_id == "snak" or app_id == "gnop"
 	if phone_scroll != null and is_instance_valid(phone_scroll):
 		phone_scroll.scroll_vertical = 0
+		var scroll_host := phone_scroll.get_parent()
+		if scroll_host is Control:
+			(scroll_host as Control).visible = not arcade
 	_phone_scroll_vel = 0.0
 	if app_id == "maps":
 		_refresh_phone_maps()
@@ -45306,6 +46802,80 @@ func _save_bank_settings() -> void:
 	cfg.set_value(BANK_CFG_SECTION, "loan_rate", bank_loan_rate_pct)
 	cfg.set_value(BANK_CFG_SECTION, "chunk", bank_xfer_chunk if bank_xfer_chunk > 0.0 else 100.0)
 	cfg.save(GFX_CFG_PATH)
+
+
+func _apply_economy_to_gamedata() -> void:
+	GameDataScript.PRICE_BURGER_BASE = economy_burger_base
+	GameDataScript.PRICE_PER_ITEM = economy_price_per_item
+	GameDataScript.PRICE_EVERYTHING_BONUS = economy_everything_bonus
+	GameDataScript.PRICE_SODA = economy_soda_price
+	GameDataScript.PRICE_ICECREAM = economy_icecream_price
+	GameDataScript.PRICE_FRIES = economy_fries_price
+	GameDataScript.TIP_MIN = economy_tip_min
+	GameDataScript.TIP_MAX = economy_tip_max
+	GameDataScript.TIP_OUTLIER_AMOUNT = economy_tip_outlier
+	GameDataScript.TIP_OUTLIER_CHANCE = economy_tip_outlier_chance
+
+
+func _load_economy_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		_apply_economy_to_gamedata()
+		return
+	economy_burger_base = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "burger_base", 4)), 1, 20)
+	economy_price_per_item = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "per_item", 1)), 0, 10)
+	economy_everything_bonus = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "everything", 3)), 0, 20)
+	economy_soda_price = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "soda", 3)), 0, 15)
+	economy_icecream_price = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "icecream", 4)), 0, 15)
+	economy_fries_price = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "fries", 3)), 0, 15)
+	economy_tip_min = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "tip_min", 3)), 0, 50)
+	economy_tip_max = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "tip_max", 10)), 0, 80)
+	if economy_tip_min > economy_tip_max:
+		economy_tip_max = economy_tip_min
+	economy_tip_outlier = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "tip_outlier", 25)), 0, 200)
+	economy_tip_outlier_chance = clampf(float(cfg.get_value(ECONOMY_CFG_SECTION, "tip_outlier_chance", 0.04)), 0.0, 0.5)
+	if not cfg.has_section_key(ECONOMY_CFG_SECTION, "chal_interval_3min_v1"):
+		challenge_interval_sec = CHALLENGE_INTERVAL_DEFAULT
+		challenge_chance = CHALLENGE_CHANCE_DEFAULT
+		cfg.set_value(ECONOMY_CFG_SECTION, "chal_interval", challenge_interval_sec)
+		cfg.set_value(ECONOMY_CFG_SECTION, "chal_chance", challenge_chance)
+		cfg.set_value(ECONOMY_CFG_SECTION, "chal_interval_3min_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	else:
+		challenge_interval_sec = clampf(float(cfg.get_value(ECONOMY_CFG_SECTION, "chal_interval", CHALLENGE_INTERVAL_DEFAULT)), 30.0, 900.0)
+		challenge_chance = clampf(float(cfg.get_value(ECONOMY_CFG_SECTION, "chal_chance", CHALLENGE_CHANCE_DEFAULT)), 0.0, 1.0)
+	challenge_count_small = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "chal_count_s", CHALLENGE_COUNT_SMALL_DEFAULT)), 1, 30)
+	challenge_time_small = clampf(float(cfg.get_value(ECONOMY_CFG_SECTION, "chal_time_s", CHALLENGE_TIME_SMALL_DEFAULT)), 30.0, 600.0)
+	challenge_tip_small = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "chal_tip_s", CHALLENGE_TIP_SMALL_DEFAULT)), 0, 500)
+	challenge_count_large = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "chal_count_l", CHALLENGE_COUNT_LARGE_DEFAULT)), 1, 40)
+	challenge_time_large = clampf(float(cfg.get_value(ECONOMY_CFG_SECTION, "chal_time_l", CHALLENGE_TIME_LARGE_DEFAULT)), 60.0, 900.0)
+	challenge_tip_large = clampi(int(cfg.get_value(ECONOMY_CFG_SECTION, "chal_tip_l", CHALLENGE_TIP_LARGE_DEFAULT)), 0, 800)
+	_apply_economy_to_gamedata()
+
+
+func _save_economy_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(ECONOMY_CFG_SECTION, "burger_base", economy_burger_base)
+	cfg.set_value(ECONOMY_CFG_SECTION, "per_item", economy_price_per_item)
+	cfg.set_value(ECONOMY_CFG_SECTION, "everything", economy_everything_bonus)
+	cfg.set_value(ECONOMY_CFG_SECTION, "soda", economy_soda_price)
+	cfg.set_value(ECONOMY_CFG_SECTION, "icecream", economy_icecream_price)
+	cfg.set_value(ECONOMY_CFG_SECTION, "fries", economy_fries_price)
+	cfg.set_value(ECONOMY_CFG_SECTION, "tip_min", economy_tip_min)
+	cfg.set_value(ECONOMY_CFG_SECTION, "tip_max", economy_tip_max)
+	cfg.set_value(ECONOMY_CFG_SECTION, "tip_outlier", economy_tip_outlier)
+	cfg.set_value(ECONOMY_CFG_SECTION, "tip_outlier_chance", economy_tip_outlier_chance)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_interval", challenge_interval_sec)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_chance", challenge_chance)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_count_s", challenge_count_small)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_time_s", challenge_time_small)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_tip_s", challenge_tip_small)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_count_l", challenge_count_large)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_time_l", challenge_time_large)
+	cfg.set_value(ECONOMY_CFG_SECTION, "chal_tip_l", challenge_tip_large)
+	cfg.save(GFX_CFG_PATH)
+	_apply_economy_to_gamedata()
 
 
 func _bank_chunk_amount(limit: float) -> float:
@@ -46502,8 +48072,10 @@ func _build_phone_ui() -> void:
 	icon_grid.add_child(_make_phone_app_icon("shop", "Shop", "$", Color(0.12, 0.42, 0.28), Color(0.55, 0.92, 0.62)))
 	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
+	icon_grid.add_child(_make_phone_app_icon("snak", "Snak", "S", Color(0.12, 0.38, 0.16), Color(0.55, 0.95, 0.42)))
+	icon_grid.add_child(_make_phone_app_icon("gnop", "Gnop", "G", Color(0.14, 0.22, 0.48), Color(0.62, 0.82, 1.0)))
 	var home_hint := Label.new()
-	home_hint.text = "Channels · Maps parks the truck · Bank holds the cash."
+	home_hint.text = "Snak and Gnop use the arrow keys. Maps parks the truck."
 	home_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	home_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(home_hint, false, 11)
@@ -46622,6 +48194,22 @@ func _build_phone_ui() -> void:
 	phone_bank_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_bank_box.mouse_filter = Control.MOUSE_FILTER_STOP
 	phone_bank_page.add_child(phone_bank_box)
+
+	phone_snak_page = PhoneSnakScript.new()
+	phone_snak_page.name = "SnakApp"
+	phone_snak_page.visible = false
+	phone_snak_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_snak_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	phone_snak_page.mouse_filter = Control.MOUSE_FILTER_STOP
+	screen_host.add_child(phone_snak_page)
+
+	phone_gnop_page = PhoneGnopScript.new()
+	phone_gnop_page.name = "GnopApp"
+	phone_gnop_page.visible = false
+	phone_gnop_page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	phone_gnop_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	phone_gnop_page.mouse_filter = Control.MOUSE_FILTER_STOP
+	screen_host.add_child(phone_gnop_page)
 
 	_set_phone_app("home")
 	_refresh_phone_ui()
@@ -48843,6 +50431,14 @@ func _hidden_add_scanned_light_group(parent: Control, light: Light3D) -> void:
 					light.rotation_degrees.y = v, true)
 
 
+func _gfx_float(key: String, fallback: float) -> float:
+	if gfx_sliders.has(key):
+		var slider: HSlider = gfx_sliders[key] as HSlider
+		if slider != null and is_instance_valid(slider):
+			return float(slider.value)
+	return fallback
+
+
 func _gfx_add_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float) -> void:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 1)
@@ -49590,6 +51186,8 @@ func _hidden_gizmo_pickables() -> Array[Dictionary]:
 		out.append({"kind": "standoff", "id": "right", "node": grill_standoff_right})
 	if bun_pile_root != null and is_instance_valid(bun_pile_root):
 		out.append({"kind": "prop", "id": "burger_buns", "node": bun_pile_root})
+	if tip_jar_root != null and is_instance_valid(tip_jar_root):
+		out.append({"kind": "prop", "id": "tip_jar", "node": tip_jar_root})
 	if physical_garbage_root != null and is_instance_valid(physical_garbage_root):
 		out.append({"kind": "garbage", "id": "tray", "node": physical_garbage_root})
 	if patty_fridge_root != null and is_instance_valid(patty_fridge_root):
@@ -49705,6 +51303,8 @@ func _hidden_gizmo_apply_offset(entry: Dictionary, offset: Vector3, persist: boo
 			prop_offsets[id] = off
 			if id == "burger_buns":
 				_seat_bun_piles_by_fryer()
+			elif id == "tip_jar":
+				_seat_tip_jar()
 			_hidden_refresh_named_slider("%s_x" % id, off.x)
 			_hidden_refresh_named_slider("%s_y" % id, off.y)
 			_hidden_refresh_named_slider("%s_z" % id, off.z)
@@ -50196,6 +51796,8 @@ func _build_options_menu() -> void:
 	## The object tab is now a scan-friendly list; each object family expands in
 	## place instead of forcing a hunt through ten unrelated tabs.
 	var hidden_world_box := _hidden_add_accordion(hidden_objects_root, "WORLD + ICE-CREAM MACHINE", "Objects", 0, true)
+	var hidden_cars_box := _hidden_add_accordion(hidden_objects_root, "STREET CARS", "Objects", 0)
+	var hidden_people_box := _hidden_add_accordion(hidden_objects_root, "BACKGROUND PEOPLE", "Objects", 0)
 	var hidden_counter_box := _hidden_add_accordion(hidden_objects_root, "COUNTERS + GARBAGE", "Objects", 0)
 	var hidden_grill_box := _hidden_add_accordion(hidden_objects_root, "GRILL OBJECTS + VISUALS", "Objects", 0)
 	var hidden_soda_box := _hidden_add_accordion(hidden_objects_root, "COLA MACHINE + CUP STACK", "Objects", 0)
@@ -50229,8 +51831,135 @@ func _build_options_menu() -> void:
 			_save_bank_settings()
 			_refresh_phone_bank()
 	)
+	var hidden_economy_box := _hidden_add_accordion(hidden_gameplay_root, "ECONOMY", "Gameplay", 2)
+	_hidden_add_section(hidden_economy_box, "BURGER PRICES")
+	var econ_help := Label.new()
+	econ_help.text = "Menu prices, everyday tips, and challenge math. Changes save automatically."
+	econ_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(econ_help, false, 11)
+	econ_help.add_theme_color_override("font_color", Color(0.70, 0.76, 0.84))
+	hidden_economy_box.add_child(econ_help)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_burger_base", "Burger Base $", 1.0, 20.0, 1.0,
+		func(): return float(economy_burger_base),
+		func(v: float):
+			economy_burger_base = clampi(int(round(v)), 1, 20)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_per_item", "$ Per Ingredient", 0.0, 10.0, 1.0,
+		func(): return float(economy_price_per_item),
+		func(v: float):
+			economy_price_per_item = clampi(int(round(v)), 0, 10)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_everything", "Everything Bonus $", 0.0, 20.0, 1.0,
+		func(): return float(economy_everything_bonus),
+		func(v: float):
+			economy_everything_bonus = clampi(int(round(v)), 0, 20)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_soda", "Soda $", 0.0, 15.0, 1.0,
+		func(): return float(economy_soda_price),
+		func(v: float):
+			economy_soda_price = clampi(int(round(v)), 0, 15)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_icecream", "Ice Cream $", 0.0, 15.0, 1.0,
+		func(): return float(economy_icecream_price),
+		func(v: float):
+			economy_icecream_price = clampi(int(round(v)), 0, 15)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_fries", "Fries $", 0.0, 15.0, 1.0,
+		func(): return float(economy_fries_price),
+		func(v: float):
+			economy_fries_price = clampi(int(round(v)), 0, 15)
+			_save_economy_settings()
+	)
+	_hidden_add_section(hidden_economy_box, "EVERYDAY TIPS")
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_tip_min", "Tip Min $", 0.0, 50.0, 1.0,
+		func(): return float(economy_tip_min),
+		func(v: float):
+			economy_tip_min = clampi(int(round(v)), 0, 50)
+			if economy_tip_min > economy_tip_max:
+				economy_tip_max = economy_tip_min
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_tip_max", "Tip Max $", 0.0, 80.0, 1.0,
+		func(): return float(economy_tip_max),
+		func(v: float):
+			economy_tip_max = clampi(int(round(v)), 0, 80)
+			if economy_tip_max < economy_tip_min:
+				economy_tip_min = economy_tip_max
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_tip_outlier", "Outlier Tip $", 0.0, 200.0, 1.0,
+		func(): return float(economy_tip_outlier),
+		func(v: float):
+			economy_tip_outlier = clampi(int(round(v)), 0, 200)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "econ_outlier_chance", "Outlier Chance", 0.0, 0.5, 0.01,
+		func(): return economy_tip_outlier_chance,
+		func(v: float):
+			economy_tip_outlier_chance = clampf(v, 0.0, 0.5)
+			_save_economy_settings()
+	)
+	_hidden_add_section(hidden_economy_box, "CHALLENGE")
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_interval", "Every N Seconds", 30.0, 900.0, 15.0,
+		func(): return challenge_interval_sec,
+		func(v: float):
+			challenge_interval_sec = clampf(v, 30.0, 900.0)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_chance", "Roll Chance", 0.0, 1.0, 0.05,
+		func(): return challenge_chance,
+		func(v: float):
+			challenge_chance = clampf(v, 0.0, 1.0)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_count_s", "Small Count (10)", 1.0, 30.0, 1.0,
+		func(): return float(challenge_count_small),
+		func(v: float):
+			challenge_count_small = clampi(int(round(v)), 1, 30)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_time_s", "Small Time Sec (3 min)", 30.0, 600.0, 15.0,
+		func(): return challenge_time_small,
+		func(v: float):
+			challenge_time_small = clampf(v, 30.0, 600.0)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_tip_s", "Small Bonus Tip $", 0.0, 500.0, 5.0,
+		func(): return float(challenge_tip_small),
+		func(v: float):
+			challenge_tip_small = clampi(int(round(v)), 0, 500)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_count_l", "Large Count (20)", 1.0, 40.0, 1.0,
+		func(): return float(challenge_count_large),
+		func(v: float):
+			challenge_count_large = clampi(int(round(v)), 1, 40)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_time_l", "Large Time Sec (6 min)", 60.0, 900.0, 15.0,
+		func(): return challenge_time_large,
+		func(v: float):
+			challenge_time_large = clampf(v, 60.0, 900.0)
+			_save_economy_settings()
+	)
+	_hidden_add_labeled_slider(hidden_economy_box, "chal_tip_l", "Large Bonus Tip $", 0.0, 800.0, 5.0,
+		func(): return float(challenge_tip_large),
+		func(v: float):
+			challenge_tip_large = clampi(int(round(v)), 0, 800)
+			_save_economy_settings()
+	)
+	_options_add_btn(hidden_economy_box, "TEST: START CHALLENGE NOW", func() -> void:
+		_debug_force_challenge()
+	)
 	var hidden_audio_box := _hidden_add_accordion(hidden_audio_root, "AUDIO MIX", "Audio", 3, true)
 	_hidden_setup_ingredient_bin_controls(hidden_bins_box)
+	_hidden_setup_street_car_controls(hidden_cars_box)
+	_hidden_setup_background_people_controls(hidden_people_box)
 	_hidden_add_section(hidden_audio_box, "SOUND EFFECT LEVELS")
 	var sfx_help := Label.new()
 	sfx_help.text = "0 = mute · 1 = original mix · 2 = double level. Changes save automatically."
@@ -52971,6 +54700,9 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_build_cheese_station_prop()
 	_apply_build_zone_settings(s)
 	_apply_roomba_audio_settings(s)
+	_seat_tip_jar()
+	_apply_tip_jar_look()
+	_apply_street_car_look()
 
 
 func _build_screen_style_filter() -> void:
@@ -53808,6 +55540,14 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "shadows", true)
 		cfg.set_value("gfx", "gfx_shadows_v1", true)
 		cfg.save(GFX_CFG_PATH)
+	## Street cars: full placement so they can sit on the road in front of walkers.
+	if not cfg.has_section_key("gfx", "gfx_street_car_place_v1"):
+		cfg.set_value("gfx", "street_car_y", GFX_DEFAULTS["street_car_y"])
+		cfg.set_value("gfx", "street_car_z", GFX_DEFAULTS["street_car_z"])
+		cfg.set_value("gfx", "street_car_sort", GFX_DEFAULTS["street_car_sort"])
+		cfg.set_value("gfx", "street_car_size", GFX_DEFAULTS["street_car_size"])
+		cfg.set_value("gfx", "gfx_street_car_place_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -54334,7 +56074,7 @@ func _sync_combat_audio() -> void:
 	var hostiles := terrorist_wave_active or _any_living_terrorist()
 	var want_theme := hostiles or glock_held
 	## Radio stays muted while the glock is out, or while the combat theme is up.
-	var mute_radio := glock_held or want_theme
+	var mute_radio := glock_held or want_theme or _challenge_phase == "offer" or _challenge_phase == "active"
 	if game_audio:
 		if want_theme:
 			if game_audio.has_method("play_combat_theme"):
@@ -54435,6 +56175,687 @@ func _next_bts_day1_skin_idx() -> int:
 	return idx
 
 
+func _challenge_blocks_spawns() -> bool:
+	return _challenge_phase == "wait_line" or _challenge_phase == "offer" or _challenge_phase == "active"
+
+
+func _challenge_clock_text(sec: float) -> String:
+	var t := maxi(0, int(ceil(sec)))
+	return "%d:%02d" % [int(t / 60), t % 60]
+
+
+func _reset_challenge_state(silent: bool = true, keep_banner: bool = false) -> void:
+	_challenge_phase = ""
+	_challenge_customer = null
+	_challenge_remaining = 0
+	_challenge_count = challenge_count_small
+	_challenge_time_left = 0.0
+	_challenge_time_max = challenge_time_small
+	_challenge_attach_next = false
+	_challenge_bonus_tip = 0
+	_hide_challenge_overlay()
+	if not keep_banner:
+		_hide_challenge_banner()
+	if challenge_hud_panel != null and is_instance_valid(challenge_hud_panel):
+		challenge_hud_panel.visible = false
+	if challenge_hud_label != null and is_instance_valid(challenge_hud_label):
+		challenge_hud_label.visible = false
+	_stop_challenge_song()
+	_sync_combat_audio()
+
+
+func _build_challenge_ui() -> void:
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root == null:
+		return
+	if challenge_overlay != null and is_instance_valid(challenge_overlay):
+		return
+
+	var overlay := ColorRect.new()
+	overlay.name = "ChallengeOverlay"
+	overlay.color = Color(0.03, 0.03, 0.05, 0.62)
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 360
+	overlay.visible = false
+	ui_root.add_child(overlay)
+	challenge_overlay = overlay
+
+	var card := PanelContainer.new()
+	card.set_anchors_preset(Control.PRESET_CENTER)
+	card.offset_left = -300.0
+	card.offset_right = 300.0
+	card.offset_top = -210.0
+	card.offset_bottom = 210.0
+	var card_sb := StyleBoxFlat.new()
+	card_sb.bg_color = Color(0.11, 0.09, 0.08, 0.98)
+	card_sb.border_color = Color(1.0, 0.78, 0.28, 0.95)
+	card_sb.set_border_width_all(3)
+	card_sb.set_corner_radius_all(20)
+	card_sb.content_margin_left = 26
+	card_sb.content_margin_right = 26
+	card_sb.content_margin_top = 22
+	card_sb.content_margin_bottom = 22
+	card_sb.shadow_color = Color(0, 0, 0, 0.5)
+	card_sb.shadow_size = 18
+	card.add_theme_stylebox_override("panel", card_sb)
+	overlay.add_child(card)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 14)
+	card.add_child(col)
+
+	var kicker := Label.new()
+	kicker.text = "SPECIAL ORDER"
+	kicker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(kicker, true, 13)
+	kicker.add_theme_color_override("font_color", Color(1.0, 0.82, 0.38, 0.92))
+	col.add_child(kicker)
+
+	var title := Label.new()
+	title.text = "BURGER CHALLENGE"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_luckiest_label(title, 38)
+	title.add_theme_color_override("font_color", Color("FFD54F"))
+	title.add_theme_color_override("font_outline_color", Color.BLACK)
+	title.add_theme_constant_override("outline_size", 7)
+	col.add_child(title)
+	challenge_title_label = title
+
+	var body := Label.new()
+	body.text = "Cook the same burger as fast as you can."
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(500, 0)
+	UiFontsScript.apply_label(body, false, 16)
+	body.add_theme_color_override("font_color", Color(0.93, 0.90, 0.84))
+	col.add_child(body)
+	challenge_body_label = body
+
+	var stats := HBoxContainer.new()
+	stats.alignment = BoxContainer.ALIGNMENT_CENTER
+	stats.add_theme_constant_override("separation", 16)
+	col.add_child(stats)
+	challenge_count_stat = _make_challenge_stat_chip(stats, "10", "BURGERS")
+	challenge_time_stat = _make_challenge_stat_chip(stats, "3:00", "TIME")
+
+	var reward := Label.new()
+	reward.text = "Bonus tip  $50"
+	reward.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_luckiest_label(reward, 22)
+	reward.add_theme_color_override("font_color", Color("A5D6A7"))
+	reward.add_theme_color_override("font_outline_color", Color(0.05, 0.12, 0.06, 1.0))
+	reward.add_theme_constant_override("outline_size", 4)
+	col.add_child(reward)
+	challenge_reward_label = reward
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	col.add_child(row)
+
+	var accept := Button.new()
+	accept.text = "LET'S COOK"
+	accept.custom_minimum_size = Vector2(190, 52)
+	accept.focus_mode = Control.FOCUS_NONE
+	accept.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(accept, 20)
+	_apply_start_cta_button(
+		accept,
+		Color(0.18, 0.42, 0.14, 0.98),
+		Color(0.98, 0.82, 0.28, 1.0),
+		Color(0.24, 0.54, 0.18, 1.0),
+		Color(1.0, 0.90, 0.42, 1.0),
+		Color(0.12, 0.30, 0.10, 1.0),
+		Color(1.0, 0.97, 0.88, 1.0)
+	)
+	accept.pressed.connect(_accept_challenge)
+	row.add_child(accept)
+
+	var decline := Button.new()
+	decline.text = "SKIP"
+	decline.custom_minimum_size = Vector2(140, 52)
+	decline.focus_mode = Control.FOCUS_NONE
+	decline.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(decline, 18)
+	_apply_start_cta_button(
+		decline,
+		Color(0.16, 0.16, 0.18, 0.98),
+		Color(0.55, 0.56, 0.60, 1.0),
+		Color(0.24, 0.24, 0.27, 1.0),
+		Color(0.78, 0.80, 0.84, 1.0),
+		Color(0.10, 0.10, 0.12, 1.0),
+		Color(0.90, 0.91, 0.93, 1.0)
+	)
+	decline.pressed.connect(_decline_challenge)
+	row.add_child(decline)
+
+	var banner := Label.new()
+	banner.name = "ChallengeBanner"
+	banner.visible = false
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	banner.set_anchors_preset(Control.PRESET_CENTER)
+	banner.offset_left = -380.0
+	banner.offset_right = 380.0
+	banner.offset_top = -70.0
+	banner.offset_bottom = 70.0
+	banner.z_index = 370
+	var banner_plate := StyleBoxFlat.new()
+	banner_plate.bg_color = Color(0.07, 0.06, 0.05, 0.88)
+	banner_plate.set_corner_radius_all(16)
+	banner_plate.content_margin_left = 28
+	banner_plate.content_margin_right = 28
+	banner_plate.content_margin_top = 16
+	banner_plate.content_margin_bottom = 16
+	banner_plate.set_border_width_all(3)
+	banner_plate.border_color = Color(1.0, 0.82, 0.28, 0.9)
+	banner.add_theme_stylebox_override("normal", banner_plate)
+	UiFontsScript.apply_luckiest_label(banner, 36)
+	banner.add_theme_color_override("font_color", Color("FFEB3B"))
+	banner.add_theme_color_override("font_outline_color", Color.BLACK)
+	banner.add_theme_constant_override("outline_size", 8)
+	ui_root.add_child(banner)
+	challenge_banner = banner
+
+	var hud := PanelContainer.new()
+	hud.name = "ChallengeHud"
+	hud.visible = false
+	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.z_index = 90
+	hud.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	hud.offset_left = -230.0
+	hud.offset_right = 230.0
+	hud.offset_top = 10.0
+	hud.offset_bottom = 86.0
+	var hud_sb := StyleBoxFlat.new()
+	hud_sb.bg_color = Color(0.08, 0.07, 0.06, 0.92)
+	hud_sb.border_color = Color(1.0, 0.78, 0.28, 0.85)
+	hud_sb.set_border_width_all(2)
+	hud_sb.set_corner_radius_all(12)
+	hud_sb.content_margin_left = 14
+	hud_sb.content_margin_right = 14
+	hud_sb.content_margin_top = 8
+	hud_sb.content_margin_bottom = 10
+	hud.add_theme_stylebox_override("panel", hud_sb)
+	ui_root.add_child(hud)
+	challenge_hud_panel = hud
+
+	var hud_col := VBoxContainer.new()
+	hud_col.add_theme_constant_override("separation", 4)
+	hud.add_child(hud_col)
+
+	var hud_row := HBoxContainer.new()
+	hud_row.add_theme_constant_override("separation", 12)
+	hud_col.add_child(hud_row)
+
+	var hud_title := Label.new()
+	hud_title.text = "CHALLENGE"
+	hud_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UiFontsScript.apply_luckiest_label(hud_title, 16)
+	hud_title.add_theme_color_override("font_color", Color("FFD54F"))
+	hud_title.add_theme_color_override("font_outline_color", Color.BLACK)
+	hud_title.add_theme_constant_override("outline_size", 4)
+	hud_row.add_child(hud_title)
+	challenge_hud_label = hud_title
+
+	var hud_count := Label.new()
+	hud_count.text = "10 left"
+	hud_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_label(hud_count, true, 16)
+	hud_count.add_theme_color_override("font_color", Color(1.0, 0.95, 0.86))
+	hud_row.add_child(hud_count)
+	challenge_hud_count = hud_count
+
+	var hud_clock := Label.new()
+	hud_clock.text = "3:00"
+	hud_clock.custom_minimum_size = Vector2(64, 0)
+	hud_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UiFontsScript.apply_luckiest_label(hud_clock, 20)
+	hud_clock.add_theme_color_override("font_color", Color("FFF59D"))
+	hud_clock.add_theme_color_override("font_outline_color", Color.BLACK)
+	hud_clock.add_theme_constant_override("outline_size", 4)
+	hud_row.add_child(hud_clock)
+	challenge_hud_clock = hud_clock
+
+	var bar := ProgressBar.new()
+	bar.max_value = 1.0
+	bar.value = 1.0
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 10)
+	var bar_bg := StyleBoxFlat.new()
+	bar_bg.bg_color = Color(0.12, 0.11, 0.10, 1.0)
+	bar_bg.set_corner_radius_all(5)
+	var bar_fill := StyleBoxFlat.new()
+	bar_fill.bg_color = Color(1.0, 0.78, 0.28, 1.0)
+	bar_fill.set_corner_radius_all(5)
+	bar.add_theme_stylebox_override("background", bar_bg)
+	bar.add_theme_stylebox_override("fill", bar_fill)
+	hud_col.add_child(bar)
+	challenge_hud_bar = bar
+
+
+func _make_challenge_stat_chip(parent: Control, value: String, caption: String) -> Label:
+	var chip := PanelContainer.new()
+	var chip_sb := StyleBoxFlat.new()
+	chip_sb.bg_color = Color(0.16, 0.12, 0.08, 0.96)
+	chip_sb.border_color = Color(1.0, 0.78, 0.28, 0.55)
+	chip_sb.set_border_width_all(2)
+	chip_sb.set_corner_radius_all(12)
+	chip_sb.content_margin_left = 22
+	chip_sb.content_margin_right = 22
+	chip_sb.content_margin_top = 10
+	chip_sb.content_margin_bottom = 10
+	chip.add_theme_stylebox_override("panel", chip_sb)
+	chip.custom_minimum_size = Vector2(170, 78)
+	parent.add_child(chip)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 2)
+	chip.add_child(v)
+	var value_lab := Label.new()
+	value_lab.text = value
+	value_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_luckiest_label(value_lab, 32)
+	value_lab.add_theme_color_override("font_color", Color.WHITE)
+	value_lab.add_theme_color_override("font_outline_color", Color.BLACK)
+	value_lab.add_theme_constant_override("outline_size", 5)
+	v.add_child(value_lab)
+	var cap := Label.new()
+	cap.text = caption
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_label(cap, true, 12)
+	cap.add_theme_color_override("font_color", Color(1.0, 0.82, 0.40, 0.92))
+	v.add_child(cap)
+	return value_lab
+
+
+func _hide_challenge_overlay() -> void:
+	if challenge_overlay != null and is_instance_valid(challenge_overlay):
+		challenge_overlay.visible = false
+
+
+func _hide_challenge_banner() -> void:
+	if _challenge_banner_tween != null and is_instance_valid(_challenge_banner_tween):
+		_challenge_banner_tween.kill()
+		_challenge_banner_tween = null
+	if challenge_banner != null and is_instance_valid(challenge_banner):
+		challenge_banner.visible = false
+		challenge_banner.modulate.a = 1.0
+
+
+func _show_challenge_banner(text: String, color: Color, hold_sec: float = 3.2) -> void:
+	if challenge_banner == null or not is_instance_valid(challenge_banner):
+		return
+	_hide_challenge_banner()
+	challenge_banner.text = text
+	challenge_banner.add_theme_color_override("font_color", color)
+	challenge_banner.visible = true
+	challenge_banner.modulate.a = 1.0
+	_challenge_banner_tween = create_tween()
+	_challenge_banner_tween.tween_interval(hold_sec)
+	_challenge_banner_tween.tween_property(challenge_banner, "modulate:a", 0.0, 0.45)
+	_challenge_banner_tween.tween_callback(func() -> void:
+		_challenge_banner_tween = null
+		if challenge_banner != null and is_instance_valid(challenge_banner):
+			challenge_banner.visible = false
+			challenge_banner.modulate.a = 1.0
+	)
+
+
+func _play_challenge_song() -> void:
+	if game_audio != null and game_audio.has_method("play_challenge_song"):
+		game_audio.play_challenge_song()
+	_play_burgerpals_startup_sound()
+	_sync_combat_audio()
+
+
+func _stop_challenge_song() -> void:
+	if game_audio != null and game_audio.has_method("stop_challenge_song"):
+		game_audio.stop_challenge_song()
+	_sync_combat_audio()
+
+
+func _update_challenge_hud() -> void:
+	if challenge_hud_panel == null or not is_instance_valid(challenge_hud_panel):
+		return
+	if _challenge_phase != "active":
+		challenge_hud_panel.visible = false
+		return
+	challenge_hud_panel.visible = true
+	if challenge_hud_count != null:
+		challenge_hud_count.text = "%d left" % _challenge_remaining
+	if challenge_hud_clock != null:
+		challenge_hud_clock.text = _challenge_clock_text(_challenge_time_left)
+		var low := _challenge_time_max > 0.0 and (_challenge_time_left / _challenge_time_max) <= 0.25
+		challenge_hud_clock.add_theme_color_override("font_color", Color("FF8A80") if low else Color("FFF59D"))
+	if challenge_hud_bar != null:
+		var frac := 0.0 if _challenge_time_max <= 0.0 else clampf(_challenge_time_left / _challenge_time_max, 0.0, 1.0)
+		challenge_hud_bar.value = frac
+		challenge_hud_bar.modulate = Color(1.0, 0.48, 0.40, 1.0) if frac <= 0.25 else Color.WHITE
+
+
+func _refresh_challenge_ticket(customer: Node3D = null) -> void:
+	var cust: Node3D = customer
+	if cust == null:
+		cust = _challenge_customer
+	if cust == null or not is_instance_valid(cust) or not tickets.has(cust):
+		return
+	var wrap = tickets[cust]
+	if wrap == null or not is_instance_valid(wrap):
+		return
+	var challenge := bool(cust.get("is_challenge_guest"))
+	if wrap.has_meta("qty_label"):
+		var qty_lab = wrap.get_meta("qty_label")
+		if qty_lab is Label:
+			qty_lab.visible = challenge
+			if challenge:
+				qty_lab.text = "%d LEFT" % _challenge_remaining
+	if wrap.has_meta("title_label"):
+		var title_lab = wrap.get_meta("title_label")
+		if title_lab is Label:
+			var order_code := GameDataScript.order_number_code(cust.order)
+			if challenge:
+				title_lab.text = "%d×  %s" % [_challenge_remaining, order_code if order_code != "" else "—"]
+			else:
+				title_lab.text = order_code if order_code != "" else "—"
+
+
+func _pick_challenge_size() -> void:
+	var want_large := randf() < 0.5
+	if day_time + 8.0 < challenge_time_large:
+		want_large = false
+	if want_large:
+		_challenge_count = challenge_count_large
+		_challenge_time_max = challenge_time_large
+		_challenge_bonus_tip = challenge_tip_large
+	else:
+		_challenge_count = challenge_count_small
+		_challenge_time_max = challenge_time_small
+		_challenge_bonus_tip = challenge_tip_small
+	_challenge_remaining = _challenge_count
+	_challenge_time_left = _challenge_time_max
+
+
+func _challenge_offer_body() -> String:
+	return "Complete %d burgers in %s" % [_challenge_count, _challenge_clock_text(_challenge_time_max)]
+
+
+func _begin_challenge_wait() -> void:
+	if tutorial_mode or not playing:
+		return
+	if mp_enabled and not NetManager.is_host():
+		return
+	_pick_challenge_size()
+	if _waiting_customer_count() <= 0:
+		_show_challenge_offer()
+	else:
+		_challenge_phase = "wait_line"
+		_flash("Challenge incoming — finish the line", Color("FFD54F"), 2.2)
+
+
+func _show_challenge_offer() -> void:
+	_challenge_phase = "offer"
+	if challenge_body_label != null and is_instance_valid(challenge_body_label):
+		challenge_body_label.text = "Cook the same burger as fast as you can."
+	if challenge_count_stat != null and is_instance_valid(challenge_count_stat):
+		challenge_count_stat.text = str(_challenge_count)
+	if challenge_time_stat != null and is_instance_valid(challenge_time_stat):
+		challenge_time_stat.text = _challenge_clock_text(_challenge_time_max)
+	if challenge_reward_label != null and is_instance_valid(challenge_reward_label):
+		challenge_reward_label.text = "Bonus tip  %s" % _format_money(float(_challenge_bonus_tip))
+	if challenge_overlay != null and is_instance_valid(challenge_overlay):
+		challenge_overlay.visible = true
+	_play_challenge_song()
+
+
+func _accept_challenge() -> void:
+	if _challenge_phase != "offer":
+		return
+	_hide_challenge_overlay()
+	_challenge_phase = "active"
+	_challenge_time_left = _challenge_time_max
+	_challenge_remaining = _challenge_count
+	_update_challenge_hud()
+	_spawn_challenge_customer()
+	_flash("Same burger — go!", Color("FFD54F"), 1.6)
+
+
+func _decline_challenge() -> void:
+	if _challenge_phase != "offer":
+		return
+	_reset_challenge_state(true)
+	_challenge_roll_timer = challenge_interval_sec
+	_flash("Challenge skipped", Color("B0BEC5"))
+
+
+func _spawn_challenge_customer() -> void:
+	var order: Array[String] = GameDataScript.generate_challenge_order()
+	var color: Color = GameDataScript.CUSTOMER_COLORS[randi() % GameDataScript.CUSTOMER_COLORS.size()]
+	var lane := 0
+	var skin_idx := _next_customer_skin_idx()
+	var face_style := randi() % 3
+	_challenge_attach_next = true
+	if mp_enabled:
+		if not NetManager.is_host() and not _mp_applying:
+			_challenge_attach_next = false
+			return
+		var nid := _mp_next_customer_net_id
+		_mp_next_customer_net_id += 1
+		var order_packed: Array = []
+		for o in order:
+			order_packed.append(str(o))
+		if NetManager.is_host():
+			mp_spawn_customer.rpc(
+				nid, order_packed, color.r, color.g, color.b, 99999.0, lane, skin_idx, face_style, false, -1, true
+			)
+			return
+	_spawn_customer_local(order, color, 99999.0, lane, -1, skin_idx, face_style, false, -1, true)
+
+
+func _update_challenge(delta: float) -> void:
+	if tutorial_mode or not playing:
+		return
+	if mp_enabled and not NetManager.is_host():
+		return
+	if _challenge_phase == "active":
+		_challenge_time_left = maxf(0.0, _challenge_time_left - delta)
+		_update_challenge_hud()
+		_refresh_challenge_ticket()
+		if _challenge_remaining <= 0:
+			return
+		if _challenge_time_left <= 0.0:
+			_fail_challenge()
+		return
+	if _challenge_phase == "offer":
+		return
+	if _challenge_phase == "wait_line":
+		if _waiting_customer_count() <= 0:
+			_show_challenge_offer()
+		return
+	if service_window_closed or _bts_day_intro_active:
+		return
+	if day_time <= challenge_time_small:
+		return
+	_challenge_roll_timer -= delta
+	if _challenge_roll_timer > 0.0:
+		return
+	_challenge_roll_timer = challenge_interval_sec
+	if randf() < challenge_chance:
+		_begin_challenge_wait()
+
+
+func _debug_force_challenge() -> void:
+	if not playing or tutorial_mode:
+		_flash("Start a shift first", Color("FFCC80"))
+		return
+	if _challenge_phase != "":
+		_flash("Challenge already running", Color("FFCC80"))
+		return
+	_begin_challenge_wait()
+	_flash("Challenge queued", Color("FFD54F"))
+
+
+func _try_early_test_challenge(customer: Node3D) -> void:
+	if not _challenge_early_test_armed or tutorial_mode or not playing:
+		return
+	if mp_enabled and not NetManager.is_host():
+		return
+	if customer == null or not is_instance_valid(customer):
+		return
+	if bool(customer.get("is_cut_collector")) or bool(customer.get("is_challenge_guest")) \
+			or bool(customer.get("is_disguise_cat")) or bool(customer.get("is_terrorist")):
+		return
+	if DAY_LENGTH - day_time > CHALLENGE_EARLY_TEST_WINDOW:
+		_challenge_early_test_armed = false
+		return
+	_challenge_early_test_armed = false
+	if _challenge_phase != "":
+		return
+	_begin_challenge_wait()
+
+
+func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: Node3D = null) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	selected_customer = cust
+	if station_index < 0 or station_index >= stations.size():
+		return
+	var st: Dictionary = stations[station_index]
+	var items: Array = st["items"]
+	var result: Dictionary = GameDataScript.compare_orders(items, cust.order)
+	var quality := float(result.get("quality", 0.0))
+	var guest_mp := mp_enabled and not NetManager.is_host()
+	if quality < 0.4:
+		combo = 0
+		_flash("Wrong burger — same ticket again (%d left)" % _challenge_remaining, Color("EF5350"))
+		_clear_station(station_index)
+		_update_hud()
+		_mp_serve_sync = false
+		if mp_enabled and NetManager.is_host():
+			_mp_broadcast_grill()
+			_mp_broadcast_station(station_index)
+		return
+	var patty_mult := 1.0
+	var patties: Array = st["patties"]
+	if patties.size() > 0:
+		var sum := 0.0
+		var n := 0
+		for p in patties:
+			if p != null and is_instance_valid(p):
+				sum += p.doneness_multiplier() if p.has_method("doneness_multiplier") else 1.0
+				n += 1
+		if n > 0:
+			patty_mult = sum / float(n)
+	var cook_r := _station_cook_rating(station_index, cust)
+	patty_mult *= float(cook_r.get("pay_mul", 1.0))
+	patty_mult *= _station_bun_toast_mul(station_index)
+	var fresh_r := _station_freshness_ratio(station_index)
+	if fresh_r <= 0.15:
+		patty_mult *= 0.45
+	elif fresh_r <= 0.4:
+		patty_mult *= 0.75
+	var seasoned := _station_burgers_seasoned(station_index)
+	if not seasoned:
+		patty_mult *= 0.92
+	var base_pay: int = int(round(float(GameDataScript.order_value(cust.order)) * quality * patty_mult))
+	base_pay = maxi(base_pay, 1)
+	_challenge_remaining = maxi(0, _challenge_remaining - 1)
+	if not guest_mp:
+		_credit_ticket_payout({"base": base_pay, "tip": 0, "total": base_pay}, base_pay, cust)
+		total_served += 1
+	_refresh_challenge_ticket(cust)
+	_update_challenge_hud()
+	_clear_station(station_index)
+	if remote_drink != null and is_instance_valid(remote_drink):
+		remote_drink.set_meta("serving_consumed", true)
+		remote_drink.queue_free()
+	_update_hud()
+	_mp_serve_sync = false
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+		_mp_broadcast_grill()
+		_mp_broadcast_station(station_index)
+	if _challenge_remaining > 0:
+		_flash("%d LEFT" % _challenge_remaining, Color("FFD54F"), 0.85)
+		return
+	if _challenge_time_left > 0.0:
+		_succeed_challenge(cust)
+	else:
+		_fail_challenge()
+
+
+func _succeed_challenge(cust: Node3D) -> void:
+	var tip_amt := _challenge_bonus_tip
+	_challenge_phase = ""
+	if tip_amt > 0 and (not mp_enabled or NetManager.is_host()):
+		_credit_ticket_payout({"base": 0, "tip": tip_amt, "total": tip_amt}, tip_amt, cust)
+	_show_challenge_banner(
+		"CHALLENGE COMPLETED\nTIP  %s" % _format_money(float(tip_amt)),
+		Color("FFEB3B"),
+		3.6
+	)
+	_flash("CHALLENGE COMPLETED  +%s tip" % _format_money(float(tip_amt)), Color("FFEB3B"), 3.0)
+	if game_audio != null and game_audio.has_method("play_challenge_complete_tune"):
+		game_audio.play_challenge_complete_tune()
+	_finish_challenge_customer(cust, true)
+	_reset_challenge_state(true, true)
+	_challenge_roll_timer = challenge_interval_sec
+	_update_hud()
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_economy()
+		_mp_broadcast_customers()
+
+
+func _fail_challenge() -> void:
+	if _challenge_phase != "active" and _challenge_phase != "offer":
+		return
+	var cust: Node3D = _challenge_customer
+	_challenge_phase = ""
+	_show_challenge_banner("CHALLENGE FAILED", Color("EF9A9A"), 2.6)
+	_flash("Challenge failed — paid for burgers, no tip", Color("EF9A9A"), 2.4)
+	if game_audio != null and game_audio.has_method("play_challenge_fail_ohhh"):
+		game_audio.play_challenge_fail_ohhh()
+	_finish_challenge_customer(cust, false)
+	_reset_challenge_state(true, true)
+	_challenge_roll_timer = challenge_interval_sec
+
+
+func _finish_challenge_customer(cust: Node3D, happy: bool) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if cust.has_method("stop_order_clock"):
+		cust.stop_order_clock()
+	if bool(cust.get("is_leaving")):
+		return
+	if happy:
+		if cust.has_method("complete_serve"):
+			cust.complete_serve(0)
+		elif cust.has_method("leave_happy"):
+			cust.leave_happy()
+			_on_customer_left(cust, false)
+	else:
+		if cust.has_method("complete_serve_meh"):
+			cust.complete_serve_meh(0)
+		elif cust.has_method("leave_meh"):
+			cust.leave_meh()
+			_on_customer_left(cust, false)
+
+
+func _on_challenge_customer_left(customer: Node3D, angry: bool) -> void:
+	if _challenge_phase != "active":
+		return
+	if customer != _challenge_customer:
+		return
+	if _challenge_remaining <= 0:
+		return
+	## Walked out early (spray / other) — treat as a failed challenge.
+	if angry:
+		_fail_challenge()
+
+
 func _spawn_customer() -> void:
 	if _maybe_begin_bts_day1_performance():
 		return
@@ -54486,13 +56907,20 @@ func _spawn_customer_local(
 	skin_idx: int = -1,
 	face_style: int = -1,
 	disguise_cat: bool = false,
-	jin_fact_idx: int = -1
+	jin_fact_idx: int = -1,
+	challenge_guest: bool = false
 ) -> void:
 	var typed_order: Array[String] = []
 	for o in order:
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
 	c.setup(typed_order, color, patience, lane, skin_idx, face_style, jin_fact_idx)
+	if challenge_guest or _challenge_attach_next:
+		c.is_challenge_guest = true
+		c.patience_max = 99999.0
+		c.patience = 99999.0
+		_challenge_customer = c
+		_challenge_attach_next = false
 	c.apply_review_card_settings(customer_review_settings)
 	c.set_meta("soda_handed", false)
 	c.set_meta("icecream_handed", false)
@@ -54537,7 +56965,9 @@ func _on_customer_arrived(customer: Node3D) -> void:
 		_on_cut_collector_arrived(customer)
 		return
 	## Walk up to a crusty grill → 50% walk out, 50% don't care.
-	if _try_customer_gross_leave(customer):
+	if customer != null and bool(customer.get("is_challenge_guest")):
+		customer.set_meta("gross_ok", true)
+	elif _try_customer_gross_leave(customer):
 		return
 	_create_ticket(customer)
 	if selected_customer == null:
@@ -54547,6 +56977,9 @@ func _on_customer_arrived(customer: Node3D) -> void:
 		var bts_fact := str(customer.get("chatter"))
 		if bts_fact != "":
 			_flash(bts_fact, Color("FFF176"), 5.5)
+	_try_early_test_challenge(customer)
+	## Clock starts next frame, after tap-done sets is_waiting and the slip is on screen.
+	call_deferred("_refresh_customer_queue_timers")
 
 
 func _queue_customer_dialogue(_customer: Node3D) -> void:
@@ -54558,7 +56991,8 @@ func _build_dialogue_ui() -> void:
 	var ui_root: Control = get_node("UI/Root")
 	dialogue_panel = PanelContainer.new()
 	dialogue_panel.visible = false
-	dialogue_panel.z_index = 40
+	dialogue_panel.z_index = 70
+	dialogue_panel.z_as_relative = false
 	dialogue_panel.custom_minimum_size = Vector2(420, 0)
 	dialogue_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	dialogue_panel.offset_left = -210.0
@@ -54724,6 +57158,8 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 			_cut_collector = null
 		_cut_collector_kind = ""
 		return
+	if bool(customer.get("is_challenge_guest")):
+		_on_challenge_customer_left(customer, angry)
 	if bool(customer.get("is_terrorist")):
 		_check_terrorist_wave_end()
 		return
@@ -54842,6 +57278,18 @@ func _create_ticket(customer: Node3D) -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(title)
+	wrap.set_meta("title_label", title)
+
+	var qty := Label.new()
+	qty.name = "ChallengeQty"
+	qty.visible = false
+	qty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	qty.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiFontsScript.apply_ticket(qty, 16)
+	qty.add_theme_color_override("font_color", Color(0.55, 0.22, 0.10))
+	v.add_child(qty)
+	wrap.set_meta("qty_label", qty)
+	_refresh_challenge_ticket(customer)
 
 	## Patience meter replaces the old hairline rule under the order number.
 	var patience_track := Control.new()
@@ -55204,6 +57652,8 @@ func _update_ticket_seconds_label(wrap: Control, customer: Node3D) -> void:
 	if label == null or not is_instance_valid(label):
 		return
 	label.text = "%.1fs" % _ticket_elapsed_seconds(customer)
+	if customer != null and is_instance_valid(customer) and bool(customer.get("is_challenge_guest")):
+		label.text = _challenge_clock_text(_challenge_time_left)
 	var frozen := bool(customer.get_meta("ticket_build_clock_stopped", false)) if customer != null and is_instance_valid(customer) else false
 	label.add_theme_color_override(
 		"font_color",
@@ -55215,6 +57665,8 @@ func _maybe_stop_ticket_clock_for_build_complete(customer: Node3D) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
 	if bool(customer.get_meta("ticket_build_clock_stopped", false)):
+		return
+	if bool(customer.get("is_challenge_guest")):
 		return
 	var burger_order: Array = GameDataScript.order_burger_items(customer.order)
 	if burger_order.is_empty():
@@ -55286,7 +57738,9 @@ func _refresh_ticket_patience_bars() -> void:
 		if bar == null or not is_instance_valid(bar):
 			continue
 		var t := 0.0
-		if cust.has_method("patience_ratio"):
+		if cust != null and is_instance_valid(cust) and bool(cust.get("is_challenge_guest")):
+			t = clampf(_challenge_time_left / maxf(0.01, _challenge_time_max), 0.0, 1.0)
+		elif cust.has_method("patience_ratio"):
 			t = float(cust.patience_ratio())
 		elif "patience" in cust and "patience_max" in cust:
 			t = clampf(float(cust.patience) / maxf(0.01, float(cust.patience_max)), 0.0, 1.0)
@@ -55467,6 +57921,8 @@ func _refresh_customer_queue_timers() -> void:
 		if cust == null or not is_instance_valid(cust):
 			continue
 		var active: bool = cust == front
+		if bool(cust.get("is_challenge_guest")):
+			active = false
 		if cust.has_method("set_queue_timer_active"):
 			cust.set_queue_timer_active(active)
 		if bool(cust.get_meta("ticket_build_clock_stopped", false)) or not active:
@@ -55564,6 +58020,7 @@ func _clear_customers() -> void:
 	_opening_terr_active = false
 	_opening_terr_timer = 0.0
 	_opening_terr_spawned = 0
+	_reset_challenge_state(true)
 	_sync_combat_audio()
 
 
@@ -55909,6 +58366,62 @@ func _set_ingredient_bin_hover(btn: Control, hovered: bool) -> void:
 		_style_ingredient_bin_mat(mat, hovered)
 
 
+func _gui_to_camera_screen(gui_pos: Vector2) -> Vector2:
+	## Control.get_global_rect() is canvas/GUI space. Camera3D.project_position
+	## uses Viewport.get_visible_rect() (3D framebuffer pixels). canvas_items +
+	## expand stretch can make those two spaces differ, which slides the 2D
+	## icons off the 3D trays after a resolution / window-mode change.
+	var vp := get_viewport()
+	if vp == null:
+		return gui_pos
+	var vis := vp.get_visible_rect()
+	var canvas := Rect2(Vector2.ZERO, vis.size)
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root != null and is_instance_valid(ui_root):
+		var cr := ui_root.get_global_rect()
+		if cr.size.x >= 8.0 and cr.size.y >= 8.0:
+			canvas = cr
+	if vis.size.x < 8.0 or vis.size.y < 8.0 or canvas.size.x < 8.0 or canvas.size.y < 8.0:
+		return gui_pos
+	if absf(canvas.size.x - vis.size.x) < 2.0 and absf(canvas.size.y - vis.size.y) < 2.0:
+		return vis.position + (gui_pos - canvas.position)
+	var n := Vector2(
+		(gui_pos.x - canvas.position.x) / canvas.size.x,
+		(gui_pos.y - canvas.position.y) / canvas.size.y
+	)
+	return vis.position + Vector2(n.x * vis.size.x, n.y * vis.size.y)
+
+
+func _ingredient_tile_gui_point(btn: Control, x_frac: float = 0.5) -> Vector2:
+	var r := btn.get_global_rect()
+	var x := r.position.x + r.size.x * x_frac
+	if is_equal_approx(x_frac, 0.5):
+		var icon := btn.get_node_or_null("Stack/IconMargin/StripIcon") as Control
+		if icon != null and is_instance_valid(icon) and icon.visible:
+			var ir := icon.get_global_rect()
+			if ir.size.x > 2.0:
+				x = ir.position.x + ir.size.x * 0.5
+	return Vector2(x, r.position.y + r.size.y * 0.62 - ingredient_bin_y_px)
+
+
+func _ingredient_tile_camera_screen(btn: Control, x_frac: float = 0.5) -> Vector2:
+	return _gui_to_camera_screen(_ingredient_tile_gui_point(btn, x_frac))
+
+
+func _strip_gfx_icon_offset() -> Vector2:
+	var x := float(GFX_DEFAULTS["strip_icon_x"])
+	var y := float(GFX_DEFAULTS["strip_icon_y"])
+	if gfx_sliders.has("strip_icon_x"):
+		var sx: Variant = gfx_sliders["strip_icon_x"]
+		if sx is Range and is_instance_valid(sx):
+			x = float((sx as Range).value)
+	if gfx_sliders.has("strip_icon_y"):
+		var sy: Variant = gfx_sliders["strip_icon_y"]
+		if sy is Range and is_instance_valid(sy):
+			y = float((sy as Range).value)
+	return Vector2(x, y)
+
+
 func _update_ingredient_bins_3d() -> void:
 	if camera == null or ingredient_bin_root == null or not is_instance_valid(ingredient_bin_root):
 		return
@@ -55929,13 +58442,10 @@ func _update_ingredient_bins_3d() -> void:
 		var r := btn.get_global_rect()
 		if r.size.x < 4.0 or r.size.y < 4.0:
 			continue
-		## Aim at the lower square of the hit tile so the opening sits under the icon.
-		var screen := Vector2(
-			r.position.x + r.size.x * 0.5,
-			r.position.y + r.size.y * 0.62 - ingredient_bin_y_px
-		)
+		## Aim at the icon's horizontal center so the opening sits under the sprite.
+		var screen := _ingredient_tile_camera_screen(btn, 0.5)
 		var world_pt := camera.project_position(screen, ingredient_bin_cam_z)
-		var screen_r := Vector2(r.position.x + r.size.x, r.position.y + r.size.y * 0.62 - ingredient_bin_y_px)
+		var screen_r := _ingredient_tile_camera_screen(btn, 1.0)
 		var world_r := camera.project_position(screen_r, ingredient_bin_cam_z)
 		var world_w := world_pt.distance_to(world_r) * (ingredient_bin_tile / maxf(r.size.x, 1.0))
 		if world_w < 0.01:
@@ -55958,19 +58468,32 @@ func _apply_ingredient_bin_strip_layout() -> void:
 		if btn == null or not is_instance_valid(btn):
 			continue
 		btn.custom_minimum_size = Vector2(ingredient_bin_tile, ingredient_bin_tile)
+		if btn.size.x > 1.0:
+			btn.pivot_offset = btn.size * 0.5
 		var stack := btn.get_node_or_null("Stack") as Control
 		if stack != null:
 			stack.offset_top = -4.0 - ingredient_icon_y
 		var margin := btn.get_node_or_null("Stack/IconMargin") as MarginContainer
 		if margin != null:
+			var off := _strip_gfx_icon_offset()
+			var ox := int(round(off.x))
+			margin.add_theme_constant_override("margin_left", maxi(0, ox))
+			margin.add_theme_constant_override("margin_right", maxi(0, -ox))
+			margin.add_theme_constant_override("margin_top", int(round(off.y)))
+			margin.add_theme_constant_override("margin_bottom", 0)
 			var icon := margin.get_node_or_null("StripIcon") as TextureRect
 			if icon != null:
 				icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
-				icon.size = Vector2(ingredient_icon_w, ingredient_icon_h)
+				icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+				icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 				icon.visible = not _is_condiment(id)
 				icon.material = _ensure_strip_icon_material()
 				if id == "cheese":
-					icon.pivot_offset = Vector2(ingredient_icon_w * 0.5, ingredient_icon_h * 0.5)
+					var pivot_w := icon.size.x if icon.size.x > 1.0 else ingredient_icon_w
+					var pivot_h := icon.size.y if icon.size.y > 1.0 else ingredient_icon_h
+					icon.pivot_offset = Vector2(pivot_w * 0.5, pivot_h * 0.5)
 					icon.rotation_degrees = CHEESE_STRIP_TILT_DEG
 				else:
 					icon.rotation_degrees = 0.0
@@ -56335,15 +58858,55 @@ func _hidden_setup_grill_standoff_controls(parent: Control) -> void:
 			_grill_standoff_setting_changed())
 
 
+func _hidden_setup_street_car_controls(parent: Control) -> void:
+	var help := Label.new()
+	help.text = "Passing street cars outside the window. Height and Depth put the wheels on the painted road — lower Depth (Z) to pull cars in front of sidewalk walkers. Size is overall scale. Draw Order is a last-resort sort bias if a car still hides behind a walker. A parked car sits in the window while this menu is open so you can tune live. Darken 0.20 is 20% darker. Speed 1.00 is the current pass-by. Blur 0 turns off the trailing smear."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(help, false, 11)
+	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+	parent.add_child(help)
+	_hidden_add_section(parent, "PLACEMENT")
+	_gfx_add_slider(parent, "street_car_size", "Car Size", 0.15, 4.0, 0.01)
+	_gfx_add_slider(parent, "street_car_y", "Height (Y)", -2.0, 6.0, 0.01)
+	_gfx_add_slider(parent, "street_car_z", "Depth (Z, lower = toward you)", 3.0, 14.0, 0.01)
+	_gfx_add_slider(parent, "street_car_sort", "Draw Order", -24.0, 32.0, 0.1)
+	_hidden_add_section(parent, "LOOK + MOTION")
+	_gfx_add_slider(parent, "street_car_darken", "Car Darken", 0.0, 0.7, 0.01)
+	_gfx_add_slider(parent, "street_car_speed", "Car Speed", 0.35, 2.5, 0.01)
+	_gfx_add_slider(parent, "street_car_blur", "Car Blur", 0.0, 2.5, 0.01)
+	_gfx_add_slider(parent, "street_car_gap", "Time Between Cars", 0.2, 3.5, 0.05)
+
+
+func _hidden_setup_background_people_controls(parent: Control) -> void:
+	var help := Label.new()
+	help.text = "Saved custom characters on the far sidewalk. Max two on screen. They share one direction, sometimes walk in pairs, and mix in a solo runner every five walkers. Runners step toward the camera to pass a walker, then return to the path. Run Speed is a multiplier on walk speed (3× by default)."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(help, false, 11)
+	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+	parent.add_child(help)
+	_hidden_add_section(parent, "PLACEMENT + MOTION")
+	_gfx_add_slider(parent, "bg_people_z", "Depth (Z)", 4.0, 12.5, 0.01)
+	_gfx_add_slider(parent, "bg_people_y", "Height (Y)", -1.2, 2.4, 0.01)
+	_gfx_add_slider(parent, "bg_people_scale", "Person Size", 0.35, 1.8, 0.01)
+	_gfx_add_slider(parent, "bg_people_speed", "Walk Speed", 0.25, 2.5, 0.01)
+	_gfx_add_slider(parent, "bg_people_run_mul", "Run Speed (× Walk)", 1.5, 6.0, 0.05)
+	_gfx_add_slider(parent, "bg_people_gap", "Time Between Walkers", 0.2, 3.5, 0.05)
+
+
 func _hidden_setup_ingredient_bin_controls(parent: Control) -> void:
 	var help := Label.new()
-	help.text = "Bottom-row 3D props: the patty fridge sits left of cheese (first tub). Use the Patty Fridge sliders for size, offset, lid pose, frozen-ball size, and gap from cheese. Buns sit to the left of the fryer. Tomato, lettuce, onion, pickle, bacon, and cheese use 2D pile art inside the trays — full stock sits at Original Height, then lowers toward Lowest Point, and hides at zero. Tray Fill Brightness darkens those in-tray piles only, not the floating 2D strip icons. The garbage tray sits to the right of mustard and uses the same metal as the ingredient tubs. Use Garbage Size to shrink it. With Hidden open, click a tray fill, bottle, standoff, bun pile, fridge, or garbage tray in the world to show a move gizmo."
+	help.text = "Bottom-row 3D props: the patty fridge sits left of cheese (first tub). Use the Patty Fridge sliders for size, offset, lid pose, frozen-ball size, and gap from cheese. Buns sit to the left of the fryer. The glass tip jar sits beside the buns — use Tip Jar sliders for size, placement, and how clear the glass is. Tomato, lettuce, onion, pickle, bacon, and cheese use 2D pile art inside the trays — full stock sits at Original Height, then lowers toward Lowest Point, and hides at zero. Tray Fill Brightness darkens those in-tray piles only, not the floating 2D strip icons. The garbage tray sits to the right of mustard and uses the same metal as the ingredient tubs. Use Garbage Size to shrink it. With Hidden open, click a tray fill, bottle, standoff, bun pile, tip jar, fridge, or garbage tray in the world to show a move gizmo."
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(help, false, 11)
 	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
 	parent.add_child(help)
 	_hidden_add_prop_offset_group(parent, "burger_buns", "Burger Buns")
 	_gfx_add_slider(parent, "burger_bun_scale", "Burger Bun Size", 0.45, 2.5, 0.01)
+	_hidden_add_prop_offset_group(parent, "tip_jar", "Tip Jar")
+	_gfx_add_slider(parent, "tip_jar_scale", "Tip Jar Size", 0.4, 2.8, 0.01)
+	_gfx_add_slider(parent, "tip_jar_glass", "Tip Jar Glass", 0.0, 0.45, 0.005)
+	_gfx_add_slider(parent, "tip_jar_rim", "Tip Jar Rim", 0.0, 0.55, 0.005)
+	_gfx_add_slider(parent, "tip_jar_glow", "Tip Jar Glow", 0.0, 0.35, 0.005)
 	_hidden_add_prop_offset_group(parent, "cheese_stack", "Cheese Stack")
 	_gfx_add_slider(parent, "cheese_stack_scale", "Cheese Stack Size", 0.45, 2.25, 0.01)
 	_hidden_add_section(parent, "KETCHUP BOTTLE")
@@ -56613,14 +59176,15 @@ func _build_ingredient_legend() -> void:
 		var icon_margin := MarginContainer.new()
 		icon_margin.name = "IconMargin"
 		icon_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		icon_margin.add_theme_constant_override("margin_left", int(GFX_DEFAULTS["strip_icon_x"]))
-		icon_margin.add_theme_constant_override("margin_top", int(GFX_DEFAULTS["strip_icon_y"]))
+		icon_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		col.add_child(icon_margin)
 
 		var icon := TextureRect.new()
 		icon.name = "StripIcon"
 		icon.texture = FoodSpritesScript.get_tex(id)
 		icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
+		icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -56731,8 +59295,10 @@ func _build_ingredient_legend() -> void:
 			)
 		ingredient_legend.add_child(tbtn)
 		ingredient_buttons[id] = tbtn
+	_apply_ingredient_bin_strip_layout()
 	_build_ingredient_bins_3d()
 	_refresh_ingredient_stock_bars()
+	call_deferred("_apply_ingredient_bin_strip_layout")
 	call_deferred("_refresh_ingredient_stock_bars")
 
 
@@ -57504,6 +60070,9 @@ func _build_station_ui() -> void:
 						plate_wrap.accept_event()
 					return
 				if ev.button_index == MOUSE_BUTTON_LEFT:
+					if _try_click_tip_jar(ev.global_position):
+						plate_wrap.accept_event()
+						return
 					if cheese_held and _cheese_prefers_grill_at(ev.global_position):
 						_try_place_held_cheese(ev.global_position)
 						plate_wrap.accept_event()
@@ -57522,6 +60091,9 @@ func _build_station_ui() -> void:
 		)
 		panel.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+				if _try_click_tip_jar(ev.global_position):
+					panel.accept_event()
+					return
 				if cheese_held:
 					if _cheese_prefers_grill_at(ev.global_position):
 						_try_place_held_cheese(ev.global_position)
@@ -59026,6 +61598,8 @@ func _sync_patties_with_items(station_index: int) -> void:
 
 func _on_station_plate_clicked(index: int) -> void:
 	if not playing:
+		return
+	if _try_click_tip_jar(get_viewport().get_mouse_position()):
 		return
 	_select_station(index)
 	if cheese_held:
@@ -61577,6 +64151,9 @@ func _complete_serve(
 		cust = selected_customer
 	if cust == null or not is_instance_valid(cust):
 		return
+	if bool(cust.get("is_challenge_guest")):
+		_complete_challenge_serve(station_index, cust, remote_drink)
+		return
 	selected_customer = cust
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
@@ -62279,6 +64856,115 @@ func _format_money(amount: float) -> String:
 	return "$%.2f" % amount
 
 
+func _hud_money_climb_active() -> bool:
+	return _hud_money_climb_tween != null and is_instance_valid(_hud_money_climb_tween)
+
+
+func _set_hud_money_shown(value: float) -> void:
+	_hud_money_shown = value
+	if hud_money != null and is_instance_valid(hud_money):
+		hud_money.text = _format_money(_hud_money_shown)
+
+
+func _punch_hud_money() -> void:
+	if hud_money == null or not is_instance_valid(hud_money):
+		return
+	hud_money.pivot_offset = hud_money.size * 0.5
+	var tw := create_tween()
+	tw.tween_property(hud_money, "scale", Vector2(1.22, 1.22), 0.09).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(hud_money, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	var base_col := Color(0.4, 0.9, 0.45, 1.0)
+	hud_money.add_theme_color_override("font_color", Color(1.0, 0.95, 0.45, 1.0))
+	tw.parallel().tween_callback(func() -> void:
+		if hud_money != null and is_instance_valid(hud_money):
+			hud_money.add_theme_color_override("font_color", base_col)
+	).set_delay(0.22)
+
+
+func _start_hud_money_climb(from_amount: float, to_amount: float) -> void:
+	if hud_money == null or not is_instance_valid(hud_money):
+		_hud_money_shown = to_amount
+		return
+	if _hud_money_climb_tween != null and is_instance_valid(_hud_money_climb_tween):
+		_hud_money_climb_tween.kill()
+	_hud_money_climb_tween = null
+	var start_v: float = from_amount
+	if start_v > to_amount:
+		start_v = _hud_money_shown
+	_set_hud_money_shown(start_v)
+	var span: float = absf(to_amount - start_v)
+	var dur: float = clampf(0.42 + span * 0.035, 0.55, 1.15)
+	var tw := create_tween()
+	_hud_money_climb_tween = tw
+	tw.tween_method(_set_hud_money_shown, start_v, to_amount, dur) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(func() -> void:
+		_hud_money_climb_tween = null
+		_set_hud_money_shown(money)
+		_punch_hud_money()
+	)
+	if game_audio != null and game_audio.has_method("play_score_climb"):
+		game_audio.play_score_climb()
+
+
+func _customer_pay_screen_pos(customer: Node3D) -> Vector2:
+	var vp := get_viewport().get_visible_rect()
+	var fallback := Vector2(vp.size.x * 0.5, vp.size.y * 0.42)
+	if camera == null:
+		return fallback
+	var world_pt := _tip_pay_start_global(customer)
+	if camera.is_position_behind(world_pt):
+		return fallback
+	return camera.unproject_position(world_pt)
+
+
+func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
+	var ui_root: Control = get_node_or_null("UI/Root") as Control
+	if ui_root == null or hud_money == null or not is_instance_valid(hud_money):
+		return
+	var tex: Texture2D = _make_tip_bill_texture()
+	if tex == null:
+		return
+	var from: Vector2 = _customer_pay_screen_pos(customer)
+	var dest: Vector2 = hud_money.get_global_rect().get_center()
+	var n: int = clampi(count, 1, 7)
+	for i in n:
+		var bill := TextureRect.new()
+		bill.name = "HudFlyBill"
+		bill.texture = tex
+		bill.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		bill.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		bill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bill.z_index = 90
+		bill.z_as_relative = false
+		bill.size = Vector2(168, 90)
+		bill.pivot_offset = bill.size * 0.5
+		ui_root.add_child(bill)
+		var jitter := Vector2(randf_range(-36.0, 36.0), randf_range(-22.0, 26.0))
+		bill.global_position = from - bill.size * 0.5 + jitter
+		bill.rotation_degrees = randf_range(-18.0, 18.0)
+		var delay: float = 0.05 + float(i) * 0.07
+		var tw := create_tween()
+		tw.tween_interval(delay)
+		tw.tween_property(bill, "global_position", dest - bill.size * 0.5, 0.52) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(bill, "rotation_degrees", randf_range(-8.0, 8.0), 0.52)
+		tw.parallel().tween_property(bill, "scale", Vector2(0.88, 0.88), 0.52) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.tween_callback(bill.queue_free)
+
+
+func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: float, to_amount: float) -> void:
+	if game_audio != null and game_audio.has_method("play_chaching"):
+		game_audio.play_chaching()
+	var tip_n: int = 0 if tip <= 0 else clampi(1 + int(tip / 3), 1, 3)
+	if tip_n > 0:
+		_fly_pay_bills_to_tip_jar(customer, tip_n)
+	var hud_n: int = clampi(2 + int(maxi(base, 1) / 4), 3, 7)
+	_fly_sale_bills_to_hud(customer, hud_n)
+	_start_hud_money_climb(from_shown, to_amount)
+
+
 func _earn_money(amount: float) -> void:
 	if amount <= 0.001:
 		return
@@ -62291,7 +64977,11 @@ func _earn_money(amount: float) -> void:
 func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> void:
 	if amount <= 0.001:
 		return
+	if _hud_money_climb_tween != null and is_instance_valid(_hud_money_climb_tween):
+		_hud_money_climb_tween.kill()
+	_hud_money_climb_tween = null
 	money = maxf(0.0, money - amount)
+	_hud_money_shown = money
 	_update_hud()
 	if note != "":
 		_flash(note, col)
@@ -62300,7 +64990,10 @@ func _spend(amount: float, note: String = "", col: Color = Color("FFAB91")) -> v
 
 
 func _update_hud() -> void:
-	hud_money.text = _format_money(money)
+	if not _hud_money_climb_active():
+		_hud_money_shown = money
+	if hud_money != null and is_instance_valid(hud_money):
+		hud_money.text = _format_money(_hud_money_shown)
 	hud_combo.text = "Combo x%d" % combo if combo > 0 else "Combo -"
 	var location_name := TruckLocationsScript.display_name(current_location_id)
 	if day_time <= 0.0 and customers.size() > 0:
@@ -62985,7 +65678,12 @@ func _flash(text: String, color: Color, hold_sec: float = 1.1) -> void:
 		return
 	flash_label.text = text
 	flash_label.add_theme_color_override("font_color", color)
+	flash_label.z_index = 70
+	flash_label.z_as_relative = false
 	flash_label.visible = true
+	var flash_parent := flash_label.get_parent()
+	if flash_parent != null:
+		flash_parent.move_child(flash_label, flash_parent.get_child_count() - 1)
 	flash_label.modulate.a = 1.0
 	_layout_flash_label()
 	if _flash_tween != null and is_instance_valid(_flash_tween):
@@ -63265,6 +65963,173 @@ func _setup_start_location_button() -> void:
 	location_map_btn = null
 
 
+const CHARACTER_CREATOR_SCENE_PATH := "res://scenes/character_creator/character_creator.tscn"
+var _character_creator_overlay: Node = null
+var _character_creator_host: CanvasLayer = null
+var _creator_saved_process_mode := Node.PROCESS_MODE_INHERIT
+var _creator_saved_child_visibility: Dictionary = {}
+
+
+func _setup_character_creator_button() -> void:
+	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
+	if card_col == null or card_col.get_node_or_null("CharacterCreatorButton") != null:
+		return
+	if ResourceLoader.load_threaded_get_status(CHARACTER_CREATOR_SCENE_PATH) == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		ResourceLoader.load_threaded_request(CHARACTER_CREATOR_SCENE_PATH)
+	var creator_button := Button.new()
+	creator_button.name = "CharacterCreatorButton"
+	creator_button.text = "CHARACTER CREATOR"
+	creator_button.tooltip_text = "Design customers who can appear alongside the regular crowd"
+	creator_button.custom_minimum_size = Vector2(0, 48)
+	creator_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	creator_button.focus_mode = Control.FOCUS_NONE
+	creator_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UiFontsScript.apply_luckiest_button(creator_button, 18)
+	_apply_start_cta_button(
+		creator_button,
+		Color(0.24, 0.12, 0.34, 0.98),
+		Color(0.92, 0.58, 1.0, 1.0),
+		Color(0.35, 0.18, 0.49, 1.0),
+		Color(1.0, 0.76, 1.0, 1.0),
+		Color(0.17, 0.08, 0.25, 1.0),
+		Color(1.0, 0.94, 1.0, 1.0)
+	)
+	creator_button.pressed.connect(_open_character_creator_overlay)
+	card_col.add_child(creator_button)
+	var tutorial := card_col.get_node_or_null("TutorialButton")
+	if tutorial != null:
+		card_col.move_child(creator_button, tutorial.get_index() + 1)
+
+
+func _get_character_creator_packed() -> PackedScene:
+	var status := ResourceLoader.load_threaded_get_status(CHARACTER_CREATOR_SCENE_PATH)
+	if status == ResourceLoader.THREAD_LOAD_LOADED:
+		return ResourceLoader.load_threaded_get(CHARACTER_CREATOR_SCENE_PATH) as PackedScene
+	return ResourceLoader.load(CHARACTER_CREATOR_SCENE_PATH) as PackedScene
+
+
+func _open_character_creator_overlay() -> void:
+	_sfx_click()
+	_unload_character_creator()
+	var packed := _get_character_creator_packed()
+	if packed == null:
+		get_tree().change_scene_to_file(CHARACTER_CREATOR_SCENE_PATH)
+		return
+	var creator: Node = packed.instantiate()
+	if creator.has_method("configure_as_game_overlay"):
+		creator.configure_as_game_overlay(self)
+	var host := CanvasLayer.new()
+	host.name = "CharacterCreatorHost"
+	host.layer = 128
+	host.process_mode = Node.PROCESS_MODE_ALWAYS
+	var backdrop := ColorRect.new()
+	backdrop.name = "CreatorBackdrop"
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.035, 0.043, 0.065, 1.0)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	var viewport_container := SubViewportContainer.new()
+	viewport_container.name = "CreatorViewportContainer"
+	viewport_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	viewport_container.stretch = true
+	viewport_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	var sub_viewport := SubViewport.new()
+	sub_viewport.name = "CreatorViewport"
+	sub_viewport.own_world_3d = true
+	sub_viewport.handle_input_locally = true
+	sub_viewport.gui_disable_input = false
+	sub_viewport.transparent_bg = false
+	sub_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	sub_viewport.size = get_viewport().get_visible_rect().size
+	viewport_container.add_child(sub_viewport)
+	sub_viewport.add_child(creator)
+	host.add_child(backdrop)
+	host.add_child(viewport_container)
+	_character_creator_host = host
+	_character_creator_overlay = creator
+	get_tree().root.add_child(host)
+	_show_character_creator_overlay(creator)
+
+
+func _show_character_creator_overlay(creator: Node) -> void:
+	_creator_saved_process_mode = process_mode
+	if camera != null:
+		camera.current = false
+	_hide_game_visuals_for_creator()
+	process_mode = Node.PROCESS_MODE_DISABLED
+	if creator != null:
+		creator.process_mode = Node.PROCESS_MODE_INHERIT
+	if _character_creator_host != null:
+		_character_creator_host.visible = true
+		_character_creator_host.process_mode = Node.PROCESS_MODE_ALWAYS
+	var creator_cam := creator.get_node_or_null("World/CameraRig/Camera3D") as Camera3D
+	if creator_cam != null:
+		creator_cam.current = true
+
+
+func _hide_game_visuals_for_creator() -> void:
+	_creator_saved_child_visibility.clear()
+	for child in get_children():
+		if child is CanvasLayer:
+			var layer := child as CanvasLayer
+			_creator_saved_child_visibility[layer] = layer.visible
+			layer.visible = false
+		elif child is Node3D:
+			var node_3d := child as Node3D
+			_creator_saved_child_visibility[node_3d] = node_3d.visible
+			node_3d.visible = false
+		elif child is CanvasItem:
+			var item := child as CanvasItem
+			_creator_saved_child_visibility[item] = item.visible
+			item.visible = false
+	if start_overlay != null:
+		start_overlay.visible = false
+		start_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+func _restore_game_visuals_from_creator() -> void:
+	for node in _creator_saved_child_visibility.keys():
+		if node != null and is_instance_valid(node):
+			node.visible = bool(_creator_saved_child_visibility[node])
+	_creator_saved_child_visibility.clear()
+	if start_overlay != null:
+		start_overlay.visible = true
+		start_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+
+
+func _unload_character_creator() -> void:
+	if _character_creator_overlay != null and is_instance_valid(_character_creator_overlay):
+		_character_creator_overlay.process_mode = Node.PROCESS_MODE_DISABLED
+		_character_creator_overlay.set_process(false)
+		_character_creator_overlay.set_physics_process(false)
+		var creator_ui := _character_creator_overlay.get_node_or_null("UI") as CanvasLayer
+		if creator_ui != null:
+			creator_ui.visible = false
+		var creator_world := _character_creator_overlay.get_node_or_null("World") as Node3D
+		if creator_world != null:
+			creator_world.visible = false
+		var creator_cam := _character_creator_overlay.get_node_or_null("World/CameraRig/Camera3D") as Camera3D
+		if creator_cam != null:
+			creator_cam.current = false
+	if _character_creator_host != null and is_instance_valid(_character_creator_host):
+		_character_creator_host.visible = false
+		_character_creator_host.process_mode = Node.PROCESS_MODE_DISABLED
+		_character_creator_host.queue_free()
+	elif _character_creator_overlay != null and is_instance_valid(_character_creator_overlay):
+		_character_creator_overlay.queue_free()
+	_character_creator_host = null
+	_character_creator_overlay = null
+
+
+func close_character_creator_overlay(_creator: Node) -> void:
+	_unload_character_creator()
+	_restore_game_visuals_from_creator()
+	process_mode = _creator_saved_process_mode
+	if camera != null:
+		camera.current = true
+	if ResourceLoader.load_threaded_get_status(CHARACTER_CREATOR_SCENE_PATH) == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		ResourceLoader.load_threaded_request(CHARACTER_CREATOR_SCENE_PATH)
+
+
 func _setup_tutorial_menu_button() -> void:
 	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
 	if card_col == null:
@@ -63446,6 +66311,7 @@ func _setup_multiplayer_ui() -> void:
 
 	_setup_start_menu_chrome()
 	_setup_tutorial_menu_button()
+	_setup_character_creator_button()
 	_setup_start_location_button()
 
 	_mp_lobby_root = Control.new()
@@ -65899,7 +68765,8 @@ func mp_spawn_customer(
 	skin_idx: int = -1,
 	face_style: int = -1,
 	disguise_cat: bool = false,
-	jin_fact_idx: int = -1
+	jin_fact_idx: int = -1,
+	challenge_guest: bool = false
 ) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if mp_enabled and not NetManager.is_host() and sid != 1:
@@ -65908,7 +68775,7 @@ func mp_spawn_customer(
 		return
 	_mp_applying = true
 	_spawn_customer_local(
-		order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat, jin_fact_idx
+		order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat, jin_fact_idx, challenge_guest
 	)
 	_mp_applying = false
 

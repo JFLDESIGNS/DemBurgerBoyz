@@ -139,7 +139,8 @@ autowrap_mode = 3
 
 [node name="FlashLabel" type="Label" parent="UI/Root"]
 unique_name_in_owner = true
-z_index = 35
+z_index = 70
+z_as_relative = false
 mouse_filter = 2
 layout_mode = 0
 offset_left = 280.0

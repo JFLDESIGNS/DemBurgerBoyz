@@ -21,8 +21,9 @@ const VISUAL_FOOT_COMP := 0.10
 ## Gets chunkier with each treat — width sticks when it comes back.
 const FAT_PER_TOPPING := 0.10
 const FAT_MAX := 1.35 ## width chonk cap (~2.35× horizontal)
-## After max width, keep growing overall until 2× base size.
+## After max width, keep growing overall until 2× original MESH_SCALE.
 const GIANT_MAX := 1.0 ## +100% uniform scale on top of width chonk
+const DEFAULT_SIZE_MUL := 1.20 ## Start 20% bigger; giant max stays 2× MESH_SCALE.
 ## Bigger cats stand further from the truck so they still fit the window.
 const APPROACH_Z_PER_GIANT := 1.65
 const APPROACH_START_EXTRA := 0.55 ## extra street distance at the start of a rise
@@ -49,6 +50,7 @@ const BAG_RUN_SEC := 1.70
 signal fed(kind: String)
 signal petted
 signal became_full_sized
+signal wants_meow(pitch: float)
 
 
 var _visual: Node3D = null
@@ -84,6 +86,9 @@ var mp_puppet: bool = false
 var _peek_override_sec: float = 0.0
 var _delivery_peek_active: bool = false
 var _tutorial_coach: bool = false
+var _meow_on_screen: bool = false
+var _meow_first_done: bool = false
+var _meow_elapsed: float = 0.0
 
 
 func _ready() -> void:
@@ -114,7 +119,10 @@ func _home_z() -> float:
 
 
 func _size_mul() -> float:
-	return 1.0 + _giant
+	var t := 0.0
+	if GIANT_MAX > 0.001:
+		t = clampf(_giant / GIANT_MAX, 0.0, 1.0)
+	return lerpf(DEFAULT_SIZE_MUL, 1.0 + GIANT_MAX, t)
 
 
 func _shown_y() -> float:
@@ -170,6 +178,38 @@ func _add_chonk(amount: float) -> void:
 func set_customer_gap(_open: bool) -> void:
 	## Peeks happen on a timer now — customers no longer block or duck him.
 	_gap_open = true
+
+
+func _on_screen_for_meow() -> bool:
+	if not enabled or not visible:
+		return false
+	return _state == "rising" or _state == "peek" or _state == "delivery_turning" \
+			or _state == "fed_hold" or _state == "lowering" \
+			or _state == "bag_chase" or _state == "bag_snatch"
+
+
+func _update_begging_meows(delta: float) -> void:
+	## First meow 1s after he pops on screen, then 50% each second while he stays.
+	if not _on_screen_for_meow():
+		_meow_on_screen = false
+		_meow_first_done = false
+		_meow_elapsed = 0.0
+		return
+	if not _meow_on_screen:
+		_meow_on_screen = true
+		_meow_first_done = false
+		_meow_elapsed = 0.0
+	_meow_elapsed += delta
+	if not _meow_first_done:
+		if _meow_elapsed >= 1.0:
+			_meow_first_done = true
+			_meow_elapsed -= 1.0
+			wants_meow.emit(randf_range(0.8, 1.2))
+		return
+	while _meow_elapsed >= 1.0:
+		_meow_elapsed -= 1.0
+		if randf() < 0.5:
+			wants_meow.emit(randf_range(0.8, 1.2))
 
 
 func _build() -> void:
@@ -487,6 +527,7 @@ func _process(delta: float) -> void:
 	_treat_arm = maxf(0.0, _treat_arm - delta)
 	_pet_squash = maxf(0.0, _pet_squash - delta * 3.2)
 	_eat_flash = maxf(0.0, _eat_flash - delta)
+	_update_begging_meows(delta)
 	## Puppet peers still run squash / scale / bob, not the peek state machine.
 	## A local trash-bag heist plays on whoever threw it.
 	if mp_puppet and not _bag_heist:
@@ -634,7 +675,7 @@ func _apply_visual_scale() -> void:
 	var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
 	_visual.scale = Vector3(sx, sy, sz)
 	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
-	_visual.position.y = -MESH_SCALE * VISUAL_FOOT_COMP * (size_m - 1.0)
+	_visual.position.y = -MESH_SCALE * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL)
 	## Grow the pet hitbox with the cat.
 	if _area != null:
 		var shape := _area.get_child(0) as CollisionShape3D
@@ -713,7 +754,7 @@ func _snatch_garbage_bag() -> void:
 	if _carried_bag.get_parent() != self:
 		_carried_bag.reparent(self, true)
 	var mag := (absf(_carried_bag.scale.x) + absf(_carried_bag.scale.y) + absf(_carried_bag.scale.z)) / 3.0
-	_carried_bag_base_scale = clampf(mag * 0.62, 0.22, 0.72)
+	_carried_bag_base_scale = clampf(mag * 0.92, 1.6, 5.5)
 	_carried_bag.scale = Vector3.ONE * _carried_bag_base_scale
 	_carried_bag.position = Vector3(0.06, 0.20, 0.40)
 	_carried_bag.rotation_degrees = Vector3(-32.0, 22.0, 58.0)
@@ -912,6 +953,9 @@ func reset_shift(persist_weight: bool = true) -> void:
 	_pet_squash = 0.0
 	_patty_eat_wide = 0.0
 	_gap_open = true
+	_meow_on_screen = false
+	_meow_first_done = false
+	_meow_elapsed = 0.0
 	if persist_weight:
 		## Maxed cats start the next day at ~75% so they don't join the line immediately.
 		if is_full_size() or _chonk_fraction() >= 0.999:

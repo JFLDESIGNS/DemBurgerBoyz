@@ -7,6 +7,25 @@ const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
 const IDLE_SCENE_PATH := "res://assets/characters/Animations/idle.fbx"
 const RUN_SCENE_PATH := "res://assets/characters/Animations/run.fbx"
+const EXCITED_SCENE_PATH := "res://assets/characters/Animations/Excited.fbx"
+const HIPHOP_SCENE_PATH := "res://assets/characters/Animations/HipHopDancing.fbx"
+const STRUT_SCENE_PATH := "res://assets/characters/Animations/StrutWalking.fbx"
+const WALK2_SCENE_PATH := "res://assets/characters/Animations/Walking2.fbx"
+const DWARF_WALK2_SCENE_PATH := "res://assets/characters/Animations/DwarfWalk2.fbx"
+const DWARF_WALK3_SCENE_PATH := "res://assets/characters/Animations/DwarfWalk3.fbx"
+const MIXAMO_RUN_SCENE_PATH := "res://assets/characters/Animations/MixamoRunning.fbx"
+const OFFENSIVE_IDLE_SCENE_PATH := "res://assets/characters/Animations/OffensiveIdle.fbx"
+const MIXAMO_IDLE_SCENE_PATH := "res://assets/characters/Animations/MixamoIdle.fbx"
+const BACKFLIP_SCENE_PATH := "res://assets/characters/Animations/Backflip.fbx"
+const WAVE_HIPHOP_SCENE_PATH := "res://assets/characters/Animations/WaveHipHopDance.fbx"
+const TWIST_DANCE_SCENE_PATH := "res://assets/characters/Animations/TwistDance.fbx"
+const GANGNAM_SCENE_PATH := "res://assets/characters/Animations/GangnamStyle.fbx"
+const BREAKDANCE_SCENE_PATH := "res://assets/characters/Animations/BreakdanceFreeze.fbx"
+const BUTTON_PUSH_SCENE_PATH := "res://assets/characters/Animations/ButtonPushing.fbx"
+const MODULAR_CHARACTER_SCENE_PATH := "res://scenes/character_creator/modular_character_base.tscn"
+const SAVED_CHARACTER_DIR := "user://characters"
+const STANDALONE_CREATOR_FOLDER := "Burger Character Creator"
+const CUSTOM_CHARACTER_GAME_SCALE := 1.0 / 0.7
 const DISGUISE_MUSTACHE_TEX := "res://IMAGES/MUSTACHE.png"
 const JIN_SKIN_PATH := "res://models/characters/Skins/JIN.png"
 const JIMIN_SKIN_PATH := "res://models/characters/Skins/JIMIN.png"
@@ -176,6 +195,15 @@ const REVIEW_CARD_RANGES := {
 }
 const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
+const ORDER_WAWA_LEAD_SEC := 0.45
+## Camera-left is world +X. Happy guests sidestep 4 ft, dance, then walk off left.
+const DANCE_SIDESTEP_X := 4.0 * 0.3048
+const LEAVE_WALK_SPEED := 1.65
+const LEAVE_FADE_X := 3.4
+const LEAVE_OFFSCREEN_X := 6.2
+## Don't walk into the standing boss (world +X = camera-left).
+const BOSS_PASS_CLEAR := 0.70
+const BOSS_BLOCK_X_MAX := 4.2
 ## Knock-back tumble after a Glock hit, then settle and despawn.
 const RAGDOLL_ACTIVE_SEC := 9.5
 const RAGDOLL_TWIST_SEC := 2.2 ## Free spin window before settling onto their back.
@@ -185,6 +213,10 @@ const LEAVE_FADE_SEC := 1.2
 ## Kenney mesh noses along +Z, so these match travel on ±X.
 const FACE_TRUCK_YAW := 180.0
 const FACE_AWAY_YAW := 0.0
+## Boss stands a bit off-square, glancing toward the line (world −X / camera-right).
+## Boss stands a bit off-square toward the cook (world −X / camera-right) and chin-up at the window.
+const BOSS_FACE_YAW := 208.0
+const BOSS_FACE_PITCH := -8.0
 ## Approach along the sidewalk — face travel, then turn to truck.
 const WALK_PLUS_X_YAW := 90.0
 const WALK_MINUS_X_YAW := -90.0
@@ -232,7 +264,14 @@ var _face: MeshInstance3D ## unused with 3D toon models (kept for old helpers)
 var _face_mat: StandardMaterial3D
 var _char_meshes: Array = [] ## MeshInstance3D skins we tint by mood
 var _anim_player: AnimationPlayer = null
-var _anim_state: String = "" ## idle | walk
+var _anim_state: String = "" ## idle | walk | offensive | celebrate | button
+var _celebrating: bool = false
+var _celebrate_done: Callable = Callable()
+var _celebrate_anim_path: String = ""
+var _walk_anim_path: String = ""
+var _order_phase: String = "" ## "" | "wawa" | "button"
+var _order_t: float = 0.0
+var _order_button_done: bool = false
 var _bubble: Label3D
 var _bubble_bg: MeshInstance3D
 var _bar_root: Node3D
@@ -266,6 +305,14 @@ var _expr_t: float = 0.0
 var _leave_spin: float = 0.0
 var _leave_turned: bool = false
 var _leave_yaw_from: float = FACE_TRUCK_YAW
+var _leave_yaw_target: float = WALK_PLUS_X_YAW
+var _leave_phase: String = ""
+var _leave_do_dance: bool = false
+var _leave_start_x: float = 0.0
+var _leave_dance_x: float = 0.0
+var _leave_walk_x: float = 0.0
+var _leave_dance_started: bool = false
+var _leave_dance_done: bool = false
 var _leave_fade_t: float = 0.0
 var _leave_fade_active: bool = false
 var _leave_fade_wait_for_turn: bool = false
@@ -282,9 +329,12 @@ var is_terrorist: bool = false
 var is_disguise_cat: bool = false
 ## Human boss visitor — mustache + hat. Not a ticket customer.
 var is_cut_collector: bool = false
+## Far-sidewalk extra — Kenney walk-by only. Game drives X; skip tickets / wawa.
+var is_street_pedestrian: bool = false
 var is_jin_guest: bool = false
 var is_jimin_guest: bool = false
 var is_bts_guest: bool = false
+var is_challenge_guest: bool = false
 var _mustache_root: Node3D = null
 var _disguise_hat_root: Node3D = null
 var _disguise_cat_mesh: Node3D = null
@@ -329,6 +379,27 @@ static var _char_scene: PackedScene = null
 static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
 static var _idle_lib: AnimationLibrary = null
 static var _walk_lib: AnimationLibrary = null
+static var _excited_lib: AnimationLibrary = null
+static var _hiphop_lib: AnimationLibrary = null
+static var _strut_lib: AnimationLibrary = null
+static var _walk2_lib: AnimationLibrary = null
+static var _dwarf_walk2_lib: AnimationLibrary = null
+static var _dwarf_walk3_lib: AnimationLibrary = null
+static var _running_lib: AnimationLibrary = null
+static var _walk_cycle_i: int = 0
+static var _offensive_lib: AnimationLibrary = null
+static var _mixamo_idle_lib: AnimationLibrary = null
+static var _backflip_lib: AnimationLibrary = null
+static var _wave_hiphop_lib: AnimationLibrary = null
+static var _twist_lib: AnimationLibrary = null
+static var _gangnam_lib: AnimationLibrary = null
+static var _breakdance_lib: AnimationLibrary = null
+static var _button_lib: AnimationLibrary = null
+static var _modular_character_scene: PackedScene = null
+static var _saved_character_cycle: Array[String] = []
+static var _saved_character_cycle_i: int = 0
+var _uses_custom_character: bool = false
+var custom_character_name: String = ""
 
 
 ## When true (co-op guest), patience/order clock are driven by host sync — not local timers.
@@ -670,6 +741,8 @@ func _build() -> void:
 	if not _try_attach_toon_character():
 		## Fallback: old colored cube if the Kenney pack failed to import.
 		_build_fallback_box()
+	if is_street_pedestrian:
+		return
 
 	_bubble_bg = MeshInstance3D.new()
 	var bg_mesh := BoxMesh.new()
@@ -724,6 +797,14 @@ func _setup_wawa_click_volume() -> void:
 
 
 func _try_attach_toon_character() -> bool:
+	## Regular ticket guests and far-sidewalk walkers use saved custom
+	## characters. The boss keeps the Kenney mustache toon; Kenney skins are
+	## a last-resort fallback for window customers only.
+	if not is_cut_collector:
+		if _try_attach_saved_character():
+			return true
+	if is_street_pedestrian:
+		return false
 	if _char_scene == null:
 		if not ResourceLoader.exists(CHAR_SCENE_PATH):
 			return false
@@ -743,6 +824,168 @@ func _try_attach_toon_character() -> bool:
 	_apply_mood_tint("happy")
 	_setup_character_animations(model)
 	return not _char_meshes.is_empty()
+
+
+func _try_attach_saved_character() -> bool:
+	if is_cut_collector or is_bts_guest or is_disguise_cat:
+		return false
+	var preset: Dictionary = _load_next_saved_character()
+	if preset.is_empty():
+		return false
+	if _modular_character_scene == null:
+		if not ResourceLoader.exists(MODULAR_CHARACTER_SCENE_PATH):
+			return false
+		_modular_character_scene = load(MODULAR_CHARACTER_SCENE_PATH) as PackedScene
+	if _modular_character_scene == null:
+		return false
+	var modular: Node = _modular_character_scene.instantiate()
+	if modular == null or not modular.has_method("apply_saved_preset"):
+		if modular != null:
+			modular.free()
+		return false
+	modular.call("apply_saved_preset", preset)
+	## The creator scene uses a 0.7 inner body for its preview. Restore the
+	## imported body's game scale while preserving all module proportions.
+	modular.scale = Vector3.ONE * CUSTOM_CHARACTER_GAME_SCALE
+	modular.name = "CreatedCustomer"
+	_body.add_child(modular)
+	if modular.has_method("set_control_rig_visible"):
+		modular.call("set_control_rig_visible", false)
+	_char_meshes.clear()
+	_collect_char_meshes(modular)
+	var animated_body: Node = modular
+	if modular.has_method("get_active_body"):
+		var active: Node = modular.call("get_active_body") as Node
+		if active != null:
+			animated_body = active
+	_setup_character_animations(animated_body)
+	_uses_custom_character = not _char_meshes.is_empty()
+	if not _uses_custom_character:
+		modular.queue_free()
+		custom_character_name = ""
+		return false
+	custom_character_name = str(preset.get("name", "Created Customer"))
+	return true
+
+
+func _swap_custom_character_for_kenney_boss() -> void:
+	if _body == null:
+		return
+	for child in _body.get_children():
+		child.queue_free()
+	_char_meshes.clear()
+	_uses_custom_character = false
+	custom_character_name = ""
+	if _char_scene == null:
+		if not ResourceLoader.exists(CHAR_SCENE_PATH):
+			return
+		_char_scene = load(CHAR_SCENE_PATH) as PackedScene
+	if _char_scene == null:
+		return
+	var model: Node = _char_scene.instantiate()
+	if model == null:
+		return
+	model.name = "ToonCustomer"
+	_body.add_child(model)
+	_collect_char_meshes(model)
+	if CHAR_SKINS.size() > 2:
+		_skin_path = CHAR_SKINS[2]
+	_apply_skin_texture(_skin_path)
+	_apply_mood_tint("happy")
+	_setup_character_animations(model)
+
+
+func _load_next_saved_character() -> Dictionary:
+	_sync_saved_characters_from_standalone()
+	var files: Array[String] = _list_usable_saved_character_files()
+	if files.is_empty():
+		_saved_character_cycle.clear()
+		_saved_character_cycle_i = 0
+		return {}
+	if files != _saved_character_cycle:
+		_saved_character_cycle = files.duplicate()
+		if _saved_character_cycle_i >= _saved_character_cycle.size():
+			_saved_character_cycle_i = 0
+	var count: int = _saved_character_cycle.size()
+	for step in count:
+		var idx: int = (_saved_character_cycle_i + step) % count
+		var preset: Dictionary = _parse_saved_character_file(_saved_character_cycle[idx])
+		if preset.is_empty():
+			continue
+		_saved_character_cycle_i = (idx + 1) % count
+		return preset
+	return {}
+
+
+func _sync_saved_characters_from_standalone() -> void:
+	var current_data_dir: String = OS.get_user_data_dir()
+	var legacy_data_dir: String = current_data_dir.get_base_dir().path_join(STANDALONE_CREATOR_FOLDER)
+	if not DirAccess.dir_exists_absolute(legacy_data_dir):
+		return
+	var current_characters: String = current_data_dir.path_join("characters")
+	var legacy_characters: String = legacy_data_dir.path_join("characters")
+	if DirAccess.dir_exists_absolute(legacy_characters):
+		DirAccess.make_dir_recursive_absolute(current_characters)
+		var legacy_dir: DirAccess = DirAccess.open(legacy_characters)
+		if legacy_dir != null:
+			for file_name in legacy_dir.get_files():
+				var ext: String = file_name.get_extension().to_lower()
+				if ext != "json" and ext != "png":
+					continue
+				_copy_saved_file_if_newer(
+					legacy_characters.path_join(file_name),
+					current_characters.path_join(file_name)
+				)
+	_copy_saved_file_if_newer(
+		legacy_data_dir.path_join("last_character.json"),
+		current_data_dir.path_join("last_character.json")
+	)
+	_copy_saved_file_if_newer(
+		legacy_data_dir.path_join("accessory_fits.json"),
+		current_data_dir.path_join("accessory_fits.json")
+	)
+
+
+func _copy_saved_file_if_newer(source_path: String, destination_path: String) -> void:
+	if not FileAccess.file_exists(source_path):
+		return
+	if FileAccess.file_exists(destination_path):
+		if FileAccess.get_modified_time(source_path) <= FileAccess.get_modified_time(destination_path):
+			return
+	DirAccess.copy_absolute(source_path, destination_path)
+
+
+func _list_usable_saved_character_files() -> Array[String]:
+	var files: Array[String] = []
+	var dir: DirAccess = DirAccess.open(SAVED_CHARACTER_DIR)
+	if dir == null:
+		return files
+	for file_name in dir.get_files():
+		if file_name.get_extension().to_lower() != "json":
+			continue
+		var path: String = "%s/%s" % [SAVED_CHARACTER_DIR, file_name]
+		if _parse_saved_character_file(path).is_empty():
+			continue
+		files.append(path)
+	files.sort()
+	return files
+
+
+func _parse_saved_character_file(path: String) -> Dictionary:
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not (parsed is Dictionary):
+		return {}
+	var data: Dictionary = parsed as Dictionary
+	var body_type: String = str(data.get("body_type", "kenney_chunky_toon"))
+	if body_type != "" and body_type != "kenney_chunky_toon":
+		return {}
+	## Unfinished creator stubs (name + skin only) spawn as the bald default body.
+	if not data.has("hair_style") and not data.has("top_style"):
+		return {}
+	return data
 
 
 func _build_bts_portrait_card() -> bool:
@@ -777,35 +1020,192 @@ func _build_bts_portrait_card() -> bool:
 
 
 func _setup_character_animations(model: Node) -> void:
-	## Idle + walk (Kenney run clip at a calmer speed).
+	## Kenney idle + Mixamo walks / wait / sidewalk + 5-star dances on the same bones.
 	if _idle_lib == null:
-		_idle_lib = _load_anim_library(IDLE_SCENE_PATH, "Idle", ["idle"])
-	if _walk_lib == null:
-		_walk_lib = _load_anim_library(RUN_SCENE_PATH, "Walk", ["run", "walk", "running"])
+		_idle_lib = _load_anim_library(IDLE_SCENE_PATH, "Idle", ["idle"], true)
+	if _strut_lib == null:
+		_strut_lib = _load_anim_library(
+			STRUT_SCENE_PATH, "Walk", ["strut walking", "strut", "mixamo.com", "mixamo_com"], true
+		)
+	if _walk2_lib == null:
+		_walk2_lib = _load_anim_library(
+			WALK2_SCENE_PATH, "Walk", ["walking", "walk", "mixamo.com", "mixamo_com"], true
+		)
+	if _dwarf_walk2_lib == null:
+		_dwarf_walk2_lib = _load_anim_library(
+			DWARF_WALK2_SCENE_PATH, "Walk", ["dwarf walk", "walk", "mixamo.com", "mixamo_com"], true
+		)
+	if _dwarf_walk3_lib == null:
+		_dwarf_walk3_lib = _load_anim_library(
+			DWARF_WALK3_SCENE_PATH, "Walk", ["dwarf walk", "walk", "mixamo.com", "mixamo_com"], true
+		)
+	if _running_lib == null:
+		_running_lib = _load_anim_library(
+			MIXAMO_RUN_SCENE_PATH, "Run", ["running", "run", "mixamo.com", "mixamo_com"], true
+		)
+	if _offensive_lib == null and not is_street_pedestrian:
+		_offensive_lib = _load_anim_library(
+			OFFENSIVE_IDLE_SCENE_PATH,
+			"Offensive",
+			["offensive idle", "offensive", "mixamo.com", "mixamo_com"],
+			true
+		)
+	if is_street_pedestrian:
+		_anim_player = AnimationPlayer.new()
+		_anim_player.name = "CustomerAnim"
+		model.add_child(_anim_player)
+		if _idle_lib != null and _idle_lib.has_animation("Idle"):
+			_anim_player.add_animation_library("kenney", _idle_lib)
+		_attach_walk_libraries(true)
+		_walk_anim_path = _pick_walk_anim_path()
+		_anim_player.active = true
+		_play_anim("walk")
+		return
+	if _excited_lib == null:
+		_excited_lib = _load_anim_library(
+			EXCITED_SCENE_PATH,
+			"Excited",
+			["excited", "mixamo.com", "mixamo_com", "mixamo.com.tak", "take 001"],
+			false
+		)
+	if _hiphop_lib == null:
+		_hiphop_lib = _load_anim_library(
+			HIPHOP_SCENE_PATH,
+			"HipHop",
+			["hip hop dancing", "hiphop", "mixamo.com", "mixamo_com"],
+			false
+		)
+	if _mixamo_idle_lib == null:
+		_mixamo_idle_lib = _load_mixamo_dance_library(MIXAMO_IDLE_SCENE_PATH, "Dance")
+	if _backflip_lib == null:
+		_backflip_lib = _load_mixamo_dance_library(BACKFLIP_SCENE_PATH, "Dance")
+	if _wave_hiphop_lib == null:
+		_wave_hiphop_lib = _load_mixamo_dance_library(WAVE_HIPHOP_SCENE_PATH, "Dance")
+	if _twist_lib == null:
+		_twist_lib = _load_mixamo_dance_library(TWIST_DANCE_SCENE_PATH, "Dance")
+	if _gangnam_lib == null:
+		_gangnam_lib = _load_mixamo_dance_library(GANGNAM_SCENE_PATH, "Dance")
+	if _breakdance_lib == null:
+		_breakdance_lib = _load_mixamo_dance_library(BREAKDANCE_SCENE_PATH, "Dance")
+	if _button_lib == null:
+		_button_lib = _load_mixamo_dance_library(BUTTON_PUSH_SCENE_PATH, "Button")
 	_anim_player = AnimationPlayer.new()
 	_anim_player.name = "CustomerAnim"
 	model.add_child(_anim_player)
 	if _idle_lib != null and _idle_lib.has_animation("Idle"):
 		_anim_player.add_animation_library("kenney", _idle_lib)
-	if _walk_lib != null and _walk_lib.has_animation("Walk"):
-		## Separate library so Idle/Walk names don't collide.
-		_anim_player.add_animation_library("kenney_walk", _walk_lib)
+	_attach_walk_libraries(false)
+	if _offensive_lib != null and _offensive_lib.has_animation("Offensive"):
+		_anim_player.add_animation_library("kenney_offensive", _offensive_lib)
+	if _excited_lib != null and _excited_lib.has_animation("Excited"):
+		_anim_player.add_animation_library("kenney_excited", _excited_lib)
+	if _hiphop_lib != null and _hiphop_lib.has_animation("HipHop"):
+		_anim_player.add_animation_library("kenney_hiphop", _hiphop_lib)
+	if _mixamo_idle_lib != null and _mixamo_idle_lib.has_animation("Dance"):
+		_anim_player.add_animation_library("kenney_mixamo_idle", _mixamo_idle_lib)
+	if _backflip_lib != null and _backflip_lib.has_animation("Dance"):
+		_anim_player.add_animation_library("kenney_backflip", _backflip_lib)
+	if _wave_hiphop_lib != null and _wave_hiphop_lib.has_animation("Dance"):
+		_anim_player.add_animation_library("kenney_wave_hiphop", _wave_hiphop_lib)
+	if _twist_lib != null and _twist_lib.has_animation("Dance"):
+		_anim_player.add_animation_library("kenney_twist", _twist_lib)
+	if _gangnam_lib != null and _gangnam_lib.has_animation("Dance"):
+		_anim_player.add_animation_library("kenney_gangnam", _gangnam_lib)
+	if _breakdance_lib != null and _breakdance_lib.has_animation("Dance"):
+		_anim_player.add_animation_library("kenney_breakdance", _breakdance_lib)
+	if _button_lib != null and _button_lib.has_animation("Button"):
+		_anim_player.add_animation_library("kenney_button", _button_lib)
+	_walk_anim_path = _pick_walk_anim_path()
 	_anim_player.active = true
+	_play_anim("idle")
+
+
+func _attach_walk_libraries(include_run: bool) -> void:
+	if _anim_player == null:
+		return
+	if _strut_lib != null and _strut_lib.has_animation("Walk"):
+		_anim_player.add_animation_library("kenney_strut", _strut_lib)
+	if _walk2_lib != null and _walk2_lib.has_animation("Walk"):
+		_anim_player.add_animation_library("kenney_walk2", _walk2_lib)
+	if _dwarf_walk2_lib != null and _dwarf_walk2_lib.has_animation("Walk"):
+		_anim_player.add_animation_library("kenney_dwarf2", _dwarf_walk2_lib)
+	if _dwarf_walk3_lib != null and _dwarf_walk3_lib.has_animation("Walk"):
+		_anim_player.add_animation_library("kenney_dwarf3", _dwarf_walk3_lib)
+	if include_run and _running_lib != null and _running_lib.has_animation("Run"):
+		_anim_player.add_animation_library("kenney_running", _running_lib)
+
+
+func _pick_walk_anim_path() -> String:
+	var options: Array[String] = []
+	var cycle: Array[String] = [
+		"kenney_walk2/Walk",
+		"kenney_dwarf2/Walk",
+		"kenney_dwarf3/Walk",
+		"kenney_strut/Walk",
+	]
+	if _anim_player != null:
+		for clip_path in cycle:
+			if _anim_player.has_animation(clip_path):
+				options.append(clip_path)
+	if options.is_empty():
+		return ""
+	var chosen := options[_walk_cycle_i % options.size()]
+	_walk_cycle_i += 1
+	return chosen
+
+
+func _play_wait_stance() -> void:
+	if _should_antsy_wait() and _anim_player != null \
+			and _anim_player.has_animation("kenney_offensive/Offensive"):
+		_play_anim("offensive")
+		return
 	_play_anim("idle")
 
 
 func _play_anim(state: String) -> void:
 	if _anim_player == null:
 		return
+	if _celebrating and state != "celebrate":
+		return
+	if _order_phase == "button" and state != "button":
+		return
 	if state == _anim_state and _anim_player.is_playing():
 		return
 	var prev := _anim_state
 	_anim_state = state
-	if state == "walk" and _anim_player.has_animation("kenney_walk/Walk"):
-		_anim_player.play("kenney_walk/Walk")
-		_anim_player.speed_scale = 0.72 + randf() * 0.18
+	if state == "button" and _anim_player.has_animation("kenney_button/Button"):
+		_anim_player.play("kenney_button/Button")
+		_anim_player.speed_scale = 1.0
+		_anim_player.seek(0.0, true)
 		return
+	if state == "celebrate" and _celebrate_anim_path != "" \
+			and _anim_player.has_animation(_celebrate_anim_path):
+		_anim_player.play(_celebrate_anim_path)
+		_anim_player.speed_scale = 1.0
+		_anim_player.seek(0.0, true)
+		return
+	if state == "offensive" and _anim_player.has_animation("kenney_offensive/Offensive"):
+		_anim_player.play("kenney_offensive/Offensive")
+		_anim_player.speed_scale = 1.0
+		return
+	if state == "walk" and _walk_anim_path != "" and _anim_player.has_animation(_walk_anim_path) \
+			and not _walk_anim_path.ends_with("/Run"):
+		_anim_player.play(_walk_anim_path)
+		_anim_player.speed_scale = 1.0
+		return
+	if state == "walk" and _walk_anim_path.ends_with("/Run") and _anim_player.has_animation(_walk_anim_path):
+		_anim_player.play(_walk_anim_path)
+		_anim_player.speed_scale = 1.12
+		return
+	if state == "walk":
+		var walk_fallback := _pick_walk_anim_path()
+		if walk_fallback != "" and _anim_player.has_animation(walk_fallback):
+			_walk_anim_path = walk_fallback
+			_anim_player.play(walk_fallback)
+			_anim_player.speed_scale = 1.0
+			return
 	if _anim_player.has_animation("kenney/Idle"):
+		_anim_state = "idle"
 		_anim_player.play("kenney/Idle")
 		_anim_player.speed_scale = 0.8 + randf() * 0.35
 		if prev != "idle":
@@ -814,7 +1214,21 @@ func _play_anim(state: String) -> void:
 				_anim_player.seek(randf() * idle_anim.length, true)
 
 
-func _load_anim_library(scene_path: String, store_as: String, accept_names: Array) -> AnimationLibrary:
+func _load_mixamo_dance_library(scene_path: String, store_as: String) -> AnimationLibrary:
+	return _load_anim_library(
+		scene_path,
+		store_as,
+		["mixamo.com", "mixamo_com", "mixamo.com.tak", "take 001", "idle", "dance"],
+		false
+	)
+
+
+func _load_anim_library(
+	scene_path: String,
+	store_as: String,
+	accept_names: Array,
+	loop_linear: bool = true
+) -> AnimationLibrary:
 	if not ResourceLoader.exists(scene_path):
 		return null
 	var packed := load(scene_path) as PackedScene
@@ -829,19 +1243,28 @@ func _load_anim_library(scene_path: String, store_as: String, accept_names: Arra
 	var accept_lower: Array = []
 	for n in accept_names:
 		accept_lower.append(str(n).to_lower())
+	var chosen: Animation = null
+	var fallback: Animation = null
 	for full_name in src.get_animation_list():
 		var anim := src.get_animation(full_name)
 		if anim == null:
 			continue
+		if fallback == null:
+			fallback = anim
 		var short := String(full_name)
 		if short.contains("|"):
 			short = short.get_slice("|", 1)
-		if not accept_lower.has(short.to_lower()):
-			continue
-		var copy := anim.duplicate() as Animation
-		copy.loop_mode = Animation.LOOP_LINEAR
+		if accept_lower.has(short.to_lower()) or accept_lower.has(full_name.to_lower()):
+			chosen = anim
+			break
+	if chosen == null:
+		chosen = fallback
+	if chosen != null:
+		var copy := chosen.duplicate() as Animation
+		copy.loop_mode = Animation.LOOP_LINEAR if loop_linear else Animation.LOOP_NONE
+		if store_as == "Button":
+			_strip_root_motion_tracks(copy)
 		lib.add_animation(store_as, copy)
-		break
 	temp.queue_free()
 	if lib.get_animation_list().is_empty():
 		return null
@@ -851,8 +1274,9 @@ func _load_anim_library(scene_path: String, store_as: String, accept_names: Arra
 func _collect_char_meshes(n: Node) -> void:
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
-		## Keep toons in front of the street matte painting.
-		mi.sorting_offset = 24.0
+		## Window customers stay well in front of the matte. Sidewalk extras use
+		## real depth so street cars can pass in front when their Z is closer.
+		mi.sorting_offset = 1.0 if is_street_pedestrian else 24.0
 		if mi.material_override is StandardMaterial3D:
 			(mi.material_override as StandardMaterial3D).render_priority = 2
 		_char_meshes.append(mi)
@@ -941,6 +1365,8 @@ func _apply_face(mood: String) -> void:
 
 
 func _apply_mood_tint(mood: String) -> void:
+	if _uses_custom_character:
+		return
 	## Soft color wash over the toon skin so patience mood still reads.
 	var tint := Color(1, 1, 1, _leave_fade_alpha)
 	match mood:
@@ -1215,7 +1641,367 @@ func _sidewalk_walk_yaw(dx: float) -> float:
 	return WALK_PLUS_X_YAW if dx > 0.0 else WALK_MINUS_X_YAW
 
 
+func _face_cook_yaw() -> float:
+	return BOSS_FACE_YAW if is_cut_collector else FACE_TRUCK_YAW
+
+
+func _face_cook_pitch() -> float:
+	return BOSS_FACE_PITCH if is_cut_collector else 0.0
+
+
+func _cancel_order_announce() -> void:
+	_order_phase = ""
+	_order_t = 0.0
+	_order_button_done = false
+	if _anim_player != null and is_instance_valid(_anim_player) \
+			and _anim_player.animation_finished.is_connected(_on_order_button_finished):
+		_anim_player.animation_finished.disconnect(_on_order_button_finished)
+
+
+func _begin_order_announce() -> void:
+	if _order_phase != "":
+		return
+	_order_phase = "wawa"
+	_order_t = 0.0
+	_order_button_done = false
+	_play_anim("idle")
+	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
+	if audio != null and audio.has_method("play_customer_wawa_click"):
+		audio.play_customer_wawa_click(0.22)
+
+
+func _update_order_announce(delta: float) -> void:
+	rotation_degrees.y = FACE_TRUCK_YAW
+	global_position.y = STAND_Y
+	if _body:
+		_body.position.y = _base_body_y
+		_body.rotation_degrees = Vector3.ZERO
+	_clear_antsy_wait_pose()
+	_animate_expression(delta)
+	if _order_phase == "wawa":
+		_order_t += delta
+		_play_anim("idle")
+		if _order_t >= ORDER_WAWA_LEAD_SEC:
+			_start_order_button()
+		return
+	if _order_button_done:
+		_finish_order_announce()
+
+
+func _start_order_button() -> void:
+	_order_phase = "button"
+	_order_t = 0.0
+	_order_button_done = false
+	if _anim_player == null or not is_instance_valid(_anim_player) \
+			or not _anim_player.has_animation("kenney_button/Button"):
+		_order_button_done = true
+		return
+	_anim_player.active = true
+	var tap := _anim_player.get_animation("kenney_button/Button")
+	if tap != null:
+		tap.loop_mode = Animation.LOOP_NONE
+	_play_anim("button")
+	if not _anim_player.animation_finished.is_connected(_on_order_button_finished):
+		_anim_player.animation_finished.connect(_on_order_button_finished)
+	var dur := 1.2
+	if tap != null:
+		dur = maxf(tap.length / maxf(_anim_player.speed_scale, 0.01), 0.2)
+	get_tree().create_timer(dur + 0.06).timeout.connect(func() -> void:
+		if not is_instance_valid(self):
+			return
+		if _order_phase == "button":
+			_hold_tap_end_pose()
+			_order_button_done = true
+	)
+
+
+func _hold_tap_end_pose() -> void:
+	if _anim_player == null or not is_instance_valid(_anim_player):
+		return
+	if not _anim_player.has_animation("kenney_button/Button"):
+		return
+	var tap := _anim_player.get_animation("kenney_button/Button")
+	if tap == null:
+		return
+	if String(_anim_player.current_animation) != "kenney_button/Button":
+		_anim_player.play("kenney_button/Button")
+	_anim_player.seek(tap.length, true)
+	_anim_player.stop(true)
+
+
+func _on_order_button_finished(_anim_name: StringName) -> void:
+	if _order_phase == "button":
+		_hold_tap_end_pose()
+		_order_button_done = true
+
+
+func _strip_root_motion_tracks(anim: Animation) -> void:
+	if anim == null:
+		return
+	var i := anim.get_track_count() - 1
+	while i >= 0:
+		if anim.track_get_type(i) == Animation.TYPE_POSITION_3D:
+			anim.remove_track(i)
+		i -= 1
+
+
+func _finish_order_announce() -> void:
+	if _order_phase == "":
+		return
+	_cancel_order_announce()
+	## Ticket pins first; patience / serve clock start after the handler sees is_waiting.
+	_play_anim("idle")
+	arrived.emit(self)
+	is_waiting = true
+	_refresh_patience_bar()
+
+
+func _begin_sidewalk_leave(do_dance: bool) -> void:
+	_cancel_serve_celebration()
+	stop_order_clock()
+	_eating = false
+	_eat_lean_x = 0.0
+	is_leaving = true
+	is_waiting = false
+	_leave_do_dance = do_dance and not _powder_hit
+	_leave_dance_started = false
+	_leave_dance_done = false
+	_leave_start_x = global_position.x
+	_leave_walk_x = global_position.x
+	_leave_dance_x = _leave_start_x + DANCE_SIDESTEP_X
+	var boss_x := _blocking_boss_x()
+	if boss_x < 50.0:
+		var max_dance := boss_x - BOSS_PASS_CLEAR
+		if _leave_dance_x > max_dance:
+			if max_dance > _leave_start_x + 0.28:
+				_leave_dance_x = max_dance
+			else:
+				_leave_do_dance = false
+	global_position.y = STAND_Y
+	global_position.z = _wait_z()
+	if _leave_do_dance:
+		_celebrate_anim_path = _pick_five_star_dance_path()
+		if _celebrate_anim_path == "":
+			_leave_do_dance = false
+	else:
+		_celebrate_anim_path = ""
+	_leave_fade_t = 0.0
+	_leave_fade_active = false
+	_leave_fade_wait_for_turn = false
+	_leave_fade_alpha = 1.0
+	_apply_leave_fade_alpha(1.0)
+	_cancel_order_announce()
+	_enter_leave_phase("turn_left")
+
+
+func _enter_leave_phase(phase: String) -> void:
+	_leave_phase = phase
+	_leave_spin = 0.0
+	_leave_yaw_from = rotation_degrees.y
+	if phase == "turn_left" or phase == "turn_left2":
+		_leave_yaw_target = WALK_PLUS_X_YAW
+		_leave_turned = phase == "turn_left2"
+	elif phase == "turn_truck":
+		_leave_yaw_target = FACE_TRUCK_YAW
+	elif phase == "sidestep" or phase == "walk_off":
+		_leave_turned = true
+		rotation_degrees.y = WALK_PLUS_X_YAW
+		if _powder_hit:
+			_reset_skeleton_pose()
+			if _anim_player:
+				_anim_player.active = true
+	elif phase == "dance":
+		_leave_dance_started = false
+		_leave_dance_done = false
+		rotation_degrees.y = FACE_TRUCK_YAW
+
+
+func _tick_leave_turn(delta: float) -> bool:
+	_leave_spin += delta
+	var turn_t := clampf(_leave_spin / LEAVE_TURN_SEC, 0.0, 1.0)
+	var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
+	rotation_degrees.y = _yaw_lerp(_leave_yaw_from, _leave_yaw_target, ease_t)
+	if turn_t >= 1.0:
+		rotation_degrees.y = _leave_yaw_target
+		return true
+	return false
+
+
+func _apply_leave_body(delta: float, walking: bool) -> void:
+	global_position.y = STAND_Y
+	global_position.z = _wait_z()
+	if _body == null:
+		return
+	if walking:
+		_body.position.y = _base_body_y + absf(sin(_leave_spin * 9.0)) * 0.02
+	else:
+		_body.position.y = _base_body_y
+	if _powder_hit:
+		_powder_panic_t += delta
+		var wob := sin(_powder_panic_t * (15.0 if walking else 17.0)) * (0.09 if walking else 0.07)
+		global_position.x = _leave_walk_x + wob
+		_body.rotation_degrees.x = sin(_powder_panic_t * (8.5 if walking else 11.0)) * (7.0 if walking else 3.0)
+		_body.rotation_degrees.z = sin(_powder_panic_t * (12.0 if walking else 14.0)) * (14.0 if walking else 5.0)
+		_apply_hands_up_pose(1.0)
+		if not _leave_turned and _anim_player:
+			_anim_player.stop()
+	else:
+		global_position.x = _leave_walk_x
+		_body.rotation_degrees = Vector3.ZERO
+
+
+func _advance_leave_walk(delta: float) -> void:
+	var next_x := _leave_walk_x + LEAVE_WALK_SPEED * delta
+	if _leave_blocked_by_boss(next_x):
+		_play_anim("idle")
+		_apply_leave_body(delta, false)
+		return
+	_leave_spin += delta
+	_leave_walk_x = next_x
+	_play_anim("walk")
+	_apply_leave_body(delta, true)
+
+
+func _blocking_boss_x() -> float:
+	## Standing boss X, or INF if nobody is occupying the left exit.
+	if is_cut_collector:
+		return INF
+	var parent := get_parent()
+	if parent == null:
+		return INF
+	for n in parent.get_children():
+		if n == self or not (n is Node3D):
+			continue
+		if not bool(n.get("is_cut_collector")):
+			continue
+		if bool(n.get("is_leaving")):
+			continue
+		var bx := (n as Node3D).global_position.x
+		if bx > BOSS_BLOCK_X_MAX:
+			continue
+		return bx
+	return INF
+
+
+func _leave_blocked_by_boss(next_x: float) -> bool:
+	var bx := _blocking_boss_x()
+	if bx > 50.0:
+		return false
+	return next_x >= bx - BOSS_PASS_CLEAR
+
+
+func restyle_kenney_skin(prefer_idx: int = -1) -> void:
+	if CHAR_SKINS.is_empty():
+		return
+	var idx := prefer_idx
+	if idx < 0:
+		idx = randi() % CHAR_SKINS.size()
+		if CHAR_SKINS.size() > 1 and CHAR_SKINS[idx] == _skin_path:
+			idx = (idx + 1 + randi() % (CHAR_SKINS.size() - 1)) % CHAR_SKINS.size()
+	skin_idx = idx % CHAR_SKINS.size()
+	_skin_path = CHAR_SKINS[skin_idx]
+	_apply_skin_texture(_skin_path)
+
+
+func restyle_street_character() -> bool:
+	if _body == null:
+		return false
+	_anim_player = null
+	_anim_state = ""
+	_walk_anim_path = ""
+	_char_meshes.clear()
+	_uses_custom_character = false
+	custom_character_name = ""
+	for child in _body.get_children():
+		_body.remove_child(child)
+		child.free()
+	return _try_attach_saved_character()
+
+
+static func has_usable_saved_characters() -> bool:
+	if _folder_has_character_json(SAVED_CHARACTER_DIR):
+		return true
+	var legacy_characters: String = OS.get_user_data_dir().get_base_dir().path_join(STANDALONE_CREATOR_FOLDER).path_join("characters")
+	return _folder_has_character_json(legacy_characters)
+
+
+static func _folder_has_character_json(path: String) -> bool:
+	var dir: DirAccess = DirAccess.open(path)
+	if dir == null:
+		return false
+	for file_name in dir.get_files():
+		if file_name.get_extension().to_lower() == "json":
+			return true
+	return false
+
+
+func play_street_walk() -> void:
+	_walk_anim_path = _pick_walk_anim_path()
+	_anim_state = ""
+	_play_anim("walk")
+
+
+func play_street_run() -> void:
+	if _anim_player != null and _anim_player.has_animation("kenney_running/Run"):
+		_walk_anim_path = "kenney_running/Run"
+	else:
+		_walk_anim_path = _pick_walk_anim_path()
+	_anim_state = ""
+	_play_anim("walk")
+
+
+func _maybe_start_leave_fade() -> void:
+	if _leave_fade_active:
+		return
+	if _leave_walk_x >= LEAVE_FADE_X:
+		_start_leave_fade_now()
+
+
+func _update_sidewalk_leave(delta: float) -> void:
+	global_position.y = STAND_Y
+	match _leave_phase:
+		"turn_left":
+			_apply_leave_body(delta, false)
+			if not _powder_hit:
+				_play_anim("idle")
+			if _tick_leave_turn(delta):
+				if _leave_do_dance:
+					_enter_leave_phase("sidestep")
+				else:
+					_enter_leave_phase("walk_off")
+		"sidestep":
+			_advance_leave_walk(delta)
+			if _leave_walk_x >= _leave_dance_x:
+				_leave_walk_x = _leave_dance_x
+				global_position.x = _leave_walk_x
+				_enter_leave_phase("turn_truck")
+		"turn_truck":
+			_apply_leave_body(delta, false)
+			_play_anim("idle")
+			if _tick_leave_turn(delta):
+				_enter_leave_phase("dance")
+		"dance":
+			_leave_walk_x = _leave_dance_x
+			_apply_leave_body(delta, false)
+			if not _leave_dance_started:
+				_start_leave_dance()
+			if _leave_dance_done:
+				_enter_leave_phase("turn_left2")
+		"turn_left2":
+			_apply_leave_body(delta, false)
+			_play_anim("idle")
+			if _tick_leave_turn(delta):
+				_enter_leave_phase("walk_off")
+		_:
+			_advance_leave_walk(delta)
+			_maybe_start_leave_fade()
+			if _leave_walk_x >= LEAVE_OFFSCREEN_X and not _leave_fade_active:
+				queue_free()
+
+
 func _process(delta: float) -> void:
+	if is_street_pedestrian:
+		return
 	_bounce += delta * 3.2
 	var bobble_spd := 2.4
 	if _click_bobble_t > 0.0:
@@ -1242,6 +2028,22 @@ func _process(delta: float) -> void:
 	## Powdered — stand still (same size) while spheres build up, then walk off.
 	if _powdering and not is_leaving:
 		_update_powder_stand(delta)
+		return
+
+	if _celebrating and not is_leaving:
+		rotation_degrees.y = FACE_TRUCK_YAW
+		global_position.y = STAND_Y
+		if _body:
+			_body.position.y = _base_body_y
+			_body.rotation_degrees = Vector3.ZERO
+		_clear_antsy_wait_pose()
+		_animate_expression(delta)
+		if is_waiting:
+			_refresh_patience_bar()
+		return
+
+	if _order_phase != "" and not is_leaving:
+		_update_order_announce(delta)
 		return
 
 	if mp_host_driven and not is_leaving:
@@ -1272,61 +2074,13 @@ func _process(delta: float) -> void:
 		_shake_tilt = 35.0
 
 	if is_leaving:
-		_leave_spin += delta
-		## Stay planted on the sidewalk — never float up while leaving.
-		global_position.y = STAND_Y
-		if not _leave_turned:
-			var turn_t := clampf(_leave_spin / LEAVE_TURN_SEC, 0.0, 1.0)
-			var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
-			rotation_degrees.y = _yaw_lerp(_leave_yaw_from, FACE_AWAY_YAW, ease_t)
-			if _body:
-				_body.position.y = _base_body_y
-				if _powder_hit:
-					_powder_panic_t += delta
-					var wob := sin(_powder_panic_t * 17.0) * 0.07
-					global_position.x = _home_x + wob
-					_body.rotation_degrees.x = sin(_powder_panic_t * 11.0) * 3.0
-					_body.rotation_degrees.z = sin(_powder_panic_t * 14.0) * 5.0
-					_apply_hands_up_pose(1.0)
-					if _anim_player:
-						_anim_player.stop()
-				else:
-					_body.rotation_degrees = Vector3.ZERO
-			if not _powder_hit:
-				_play_anim("idle")
-			if turn_t >= 1.0:
-				_leave_turned = true
-				rotation_degrees.y = FACE_AWAY_YAW
-				if _leave_fade_wait_for_turn:
-					_start_leave_fade_now()
-				if _powder_hit:
-					_reset_skeleton_pose()
-					if _anim_player:
-						_anim_player.active = true
-				_play_anim("walk")
-			return
-		## Facing away — walk off down the sidewalk at ground level (never behind matte).
-		global_position.z += delta * (2.15 if _powder_hit else 2.6)
-		global_position.z = minf(global_position.z, MATTE_FRONT_Z_MAX)
-		_play_anim("walk")
-		if _body:
-			var step := absf(sin(_leave_spin * 9.0)) * 0.02
-			_body.position.y = _base_body_y + step
-			if _powder_hit:
-				_powder_panic_t += delta
-				var stomp := sin(_powder_panic_t * 15.0) * 0.09
-				global_position.x = _home_x + stomp
-				_body.rotation_degrees.z = sin(_powder_panic_t * 12.0) * 14.0
-				_body.rotation_degrees.x = sin(_powder_panic_t * 8.5) * 7.0
-			else:
-				_body.rotation_degrees = Vector3.ZERO
-		if global_position.z >= MATTE_FRONT_Z_MAX and not _leave_fade_active:
-			queue_free()
+		_update_sidewalk_leave(delta)
 		return
 
 	var dx: float = target_x - global_position.x
 	if absf(dx) > 0.05 and _shake_time <= 0.0:
 		## Face the way we're walking (along the sidewalk), not sideways at the truck.
+		rotation_degrees.x = 0.0
 		rotation_degrees.y = _sidewalk_walk_yaw(dx)
 		_arrive_turning = false
 		global_position.x += signf(dx) * minf(absf(dx), delta * 1.6)
@@ -1347,7 +2101,8 @@ func _process(delta: float) -> void:
 		_arrive_turn_t += delta
 		var turn_t := clampf(_arrive_turn_t / ARRIVE_TURN_SEC, 0.0, 1.0)
 		var ease_t := turn_t * turn_t * (3.0 - 2.0 * turn_t)
-		rotation_degrees.y = _yaw_lerp(_arrive_yaw_from, FACE_TRUCK_YAW, ease_t)
+		rotation_degrees.y = _yaw_lerp(_arrive_yaw_from, _face_cook_yaw(), ease_t)
+		rotation_degrees.x = lerpf(0.0, _face_cook_pitch(), ease_t)
 		_play_anim("idle")
 		_apply_bobble(false)
 		if _bar_root:
@@ -1356,20 +2111,26 @@ func _process(delta: float) -> void:
 			_animate_expression(delta)
 			return
 		_arrive_turning = false
-		rotation_degrees.y = FACE_TRUCK_YAW
-		is_waiting = true
-		## Speech bubble off for ticket guests; collector talks at the window.
-		if not is_cut_collector:
+		rotation_degrees.y = _face_cook_yaw()
+		rotation_degrees.x = _face_cook_pitch()
+		if is_cut_collector:
+			is_waiting = true
+			_refresh_patience_bar()
+			_play_anim("idle")
+			arrived.emit(self)
+			_apply_bobble(false)
+		else:
+			## Speech bubble off for ticket guests; collector talks at the window.
 			if _bubble:
 				_bubble.visible = false
 			if _bubble_bg:
 				_bubble_bg.visible = false
-		_refresh_patience_bar()
-		_play_anim("idle")
-		arrived.emit(self)
-		_apply_bobble(false)
+			_begin_order_announce()
+			_apply_bobble(false)
+		return
 	elif _shake_time <= 0.0:
-		rotation_degrees.y = FACE_TRUCK_YAW
+		rotation_degrees.y = _face_cook_yaw()
+		rotation_degrees.x = _face_cook_pitch()
 		if is_cut_collector:
 			_play_anim("idle")
 			_clear_antsy_wait_pose()
@@ -1386,8 +2147,11 @@ func _process(delta: float) -> void:
 				_body.rotation_degrees.x = _eat_lean_x
 				_body.rotation_degrees.z = 0.0
 		else:
-			_play_anim("idle")
-			if _should_antsy_wait() and _click_bobble_t <= 0.0:
+			_play_wait_stance()
+			if _anim_state == "offensive":
+				_clear_antsy_wait_pose()
+				_apply_bobble(false)
+			elif _should_antsy_wait() and _click_bobble_t <= 0.0:
 				_apply_antsy_wait(delta)
 			else:
 				_clear_antsy_wait_pose()
@@ -1398,12 +2162,12 @@ func _process(delta: float) -> void:
 	if is_waiting:
 		## Drain pauses during chat / mid-bite, but the bar stays visible either way.
 		## Co-op guests mirror host patience — don't expire locally (desyncs tickets).
-		if queue_timer_active and not dialogue_open and not mp_host_driven and not _eating:
+		if queue_timer_active and not is_challenge_guest and not dialogue_open and not mp_host_driven and not _eating and not _celebrating:
 			patience -= delta
 		_refresh_patience_bar()
-		if queue_timer_active:
+		if queue_timer_active and not is_challenge_guest:
 			_update_wait_grobble(delta)
-		if queue_timer_active and patience <= 0.0 and not mp_host_driven and not _eating:
+		if queue_timer_active and not is_challenge_guest and patience <= 0.0 and not mp_host_driven and not _eating and not _celebrating:
 			leave_mad()
 			patience_expired.emit(self)
 	## Ticket stopwatch is owned by the selected/main order; side tickets stay paused.
@@ -1435,8 +2199,11 @@ func _update_host_driven_pose(delta: float) -> void:
 				_body.rotation_degrees.x = _eat_lean_x
 				_body.rotation_degrees.z = 0.0
 		else:
-			_play_anim("idle")
-			if _should_antsy_wait() and _click_bobble_t <= 0.0:
+			_play_wait_stance()
+			if _anim_state == "offensive":
+				_clear_antsy_wait_pose()
+				_apply_bobble(false)
+			elif _should_antsy_wait() and _click_bobble_t <= 0.0:
 				_apply_antsy_wait(delta)
 			else:
 				_clear_antsy_wait_pose()
@@ -1592,7 +2359,7 @@ func bobble_click() -> void:
 
 func _update_wait_grobble(delta: float) -> void:
 	## Every 10s past half patience — play 3s of pitched-up wawawa from a random offset.
-	if not is_waiting or is_leaving or is_ragdoll or _eating or _powdering or dialogue_open:
+	if not is_waiting or is_leaving or is_ragdoll or _eating or _celebrating or _powdering or dialogue_open:
 		_grobble_cd = 0.0
 		return
 	if is_disguise_cat or is_terrorist:
@@ -1613,7 +2380,7 @@ func _update_wait_grobble(delta: float) -> void:
 
 
 func _should_antsy_wait() -> bool:
-	if not is_waiting or is_leaving or is_ragdoll or _eating or _powdering or dialogue_open:
+	if not is_waiting or is_leaving or is_ragdoll or _eating or _celebrating or _powdering or dialogue_open:
 		return false
 	if _shake_time > 0.0:
 		return false
@@ -2036,15 +2803,6 @@ func _show_treat_hearts() -> void:
 
 
 func leave_happy() -> void:
-	stop_order_clock()
-	_eating = false
-	_eat_lean_x = 0.0
-	is_leaving = true
-	is_waiting = false
-	_leave_spin = 0.0
-	_leave_turned = false
-	_leave_yaw_from = rotation_degrees.y
-	global_position.y = STAND_Y
 	_set_mood("cheer")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -2061,20 +2819,11 @@ func leave_happy() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	_begin_leave_fade()
+	_begin_sidewalk_leave(not is_cut_collector)
 
 
 func leave_meh() -> void:
-	## Bland / unseasoned — shrug and walk off. Paid base, no tip energy.
-	stop_order_clock()
-	_eating = false
-	_eat_lean_x = 0.0
-	is_leaving = true
-	is_waiting = false
-	_leave_spin = 0.0
-	_leave_turned = false
-	_leave_yaw_from = rotation_degrees.y
-	global_position.y = STAND_Y
+	## Bland / unseasoned — shrug and walk off camera-left. Paid base, no tip energy.
 	_set_mood("ok")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -2091,18 +2840,11 @@ func leave_meh() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	_begin_leave_fade()
+	_begin_sidewalk_leave(false)
 
 
 func leave_heck() -> void:
-	## Grease-fire scare — blurt and bolt.
-	stop_order_clock()
-	is_leaving = true
-	is_waiting = false
-	_leave_spin = 0.0
-	_leave_turned = false
-	_leave_yaw_from = rotation_degrees.y
-	global_position.y = STAND_Y
+	## Grease-fire scare — blurt and bolt camera-left.
 	speech = "What the heck?!"
 	_set_mood("mad")
 	_clear_antsy_wait_pose()
@@ -2118,7 +2860,7 @@ func leave_heck() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	_begin_leave_fade()
+	_begin_sidewalk_leave(false)
 	## Hide the blurt after a beat so they can turn and leave.
 	get_tree().create_timer(0.85).timeout.connect(func():
 		if not is_instance_valid(self):
@@ -2245,13 +2987,6 @@ func leave_powdered() -> void:
 	if is_leaving:
 		return
 	_powdering = false
-	stop_order_clock()
-	is_leaving = true
-	is_waiting = false
-	_leave_spin = 0.0
-	_leave_turned = false
-	_leave_yaw_from = rotation_degrees.y
-	global_position.y = STAND_Y
 	speech = "I'm calling the health department!!"
 	_set_mood("mad")
 	if _anim_player:
@@ -2272,7 +3007,7 @@ func leave_powdered() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	_begin_leave_fade()
+	_begin_sidewalk_leave(false)
 	get_tree().create_timer(1.2).timeout.connect(func():
 		if not is_instance_valid(self):
 			return
@@ -2309,6 +3044,7 @@ func get_shot(shot_from: Vector3, shot_dir: Vector3) -> bool:
 		_bump_noodle_impulse()
 		return false
 	stop_order_clock()
+	_cancel_order_announce()
 	is_ragdoll = true
 	is_leaving = true
 	is_waiting = false
@@ -2786,15 +3522,6 @@ func _update_powder_blobs(delta: float) -> void:
 
 
 func leave_mad() -> void:
-	stop_order_clock()
-	_eating = false
-	_eat_lean_x = 0.0
-	is_leaving = true
-	is_waiting = false
-	_leave_spin = 0.0
-	_leave_turned = false
-	_leave_yaw_from = rotation_degrees.y
-	global_position.y = STAND_Y
 	_set_mood("mad")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -2811,7 +3538,7 @@ func leave_mad() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	_begin_leave_fade()
+	_begin_sidewalk_leave(false)
 	get_tree().create_timer(0.55).timeout.connect(func():
 		if is_instance_valid(self):
 			_set_mood("dead")
@@ -2869,7 +3596,7 @@ func _disguise_mustache_local() -> Vector3:
 
 
 func apply_cut_collector_look() -> void:
-	## Keep the human toon; add a fake mustache and top hat. No ticket.
+	## Keep the Kenney mustache toon (criminalMaleA). Never a created customer.
 	is_cut_collector = true
 	personality = "quiet"
 	chatter = ""
@@ -2879,7 +3606,12 @@ func apply_cut_collector_look() -> void:
 	patience_max = 9999.0
 	patience = 9999.0
 	speech = ""
-	## Kenney toon already has a mustache — do not glue a second card on the face.
+	if _uses_custom_character:
+		_swap_custom_character_for_kenney_boss()
+	if CHAR_SKINS.size() > 2:
+		_skin_path = CHAR_SKINS[2]
+		_apply_skin_texture(_skin_path)
+	## Kenney criminalMaleA already has a mustache — do not glue a second card on the face.
 	_build_human_top_hat()
 
 
@@ -3356,18 +4088,25 @@ func receive_burger(
 		tip_pay = int(round(float(tip_pay) * (0.55 + tip_factor * 1.4) * tip_mood_mult))
 		if combo >= 2:
 			tip_pay += mini(combo, 4)
-		## Tips stay in a tight band — never stingy, never wild.
-		tip_pay = clampi(tip_pay, 3, 10)
+		## Tips stay in a tight band — Hidden Economy can widen it / add outliers.
+		var tip_lo := mini(GameDataScript.TIP_MIN, GameDataScript.TIP_MAX)
+		var tip_hi := maxi(GameDataScript.TIP_MIN, GameDataScript.TIP_MAX)
+		tip_pay = clampi(tip_pay, tip_lo, tip_hi)
+		if GameDataScript.TIP_OUTLIER_CHANCE > 0.0 \
+				and GameDataScript.TIP_OUTLIER_AMOUNT > tip_hi \
+				and randf() < GameDataScript.TIP_OUTLIER_CHANCE:
+			tip_pay = GameDataScript.TIP_OUTLIER_AMOUNT
 	elif meh:
 		tip_pay = 0
 
 	last_base_pay = base_pay
 	last_tip = tip_pay
 	var total := base_pay + tip_pay
+	var five_star := (not meh) and good_job and float(speed_rating().get("stars", 0.0)) >= 4.95
 	if meh:
 		complete_serve_meh(total)
 	else:
-		complete_serve(total)
+		complete_serve(total, five_star)
 	return {
 		"total": total,
 		"base": base_pay,
@@ -3387,23 +4126,94 @@ func react_wrong() -> void:
 	leave_mad()
 
 
-func complete_serve(payout: int) -> void:
+func _cancel_serve_celebration() -> void:
+	_celebrating = false
+	_celebrate_done = Callable()
+	_celebrate_anim_path = ""
+	if _anim_player != null and is_instance_valid(_anim_player) \
+			and _anim_player.animation_finished.is_connected(_on_celebrate_anim_finished):
+		_anim_player.animation_finished.disconnect(_on_celebrate_anim_finished)
+
+
+func _on_celebrate_anim_finished(_anim_name: StringName) -> void:
+	if _celebrating:
+		_finish_serve_celebration()
+
+
+func _finish_serve_celebration() -> void:
+	if not _celebrating:
+		return
+	var cb := _celebrate_done
+	_cancel_serve_celebration()
+	if cb.is_valid():
+		cb.call()
+
+
+func _pick_five_star_dance_path() -> String:
+	var choices: Array[String] = []
+	if _anim_player == null:
+		return ""
+	var paths: Array[String] = [
+		"kenney_excited/Excited",
+		"kenney_hiphop/HipHop",
+		"kenney_mixamo_idle/Dance",
+		"kenney_backflip/Dance",
+		"kenney_wave_hiphop/Dance",
+		"kenney_twist/Dance",
+		"kenney_gangnam/Dance",
+		"kenney_breakdance/Dance",
+	]
+	for path in paths:
+		if _anim_player.has_animation(path):
+			choices.append(path)
+	if choices.is_empty():
+		return ""
+	return choices[randi() % choices.size()]
+
+
+func _start_leave_dance() -> void:
+	_leave_dance_started = true
+	if _celebrate_anim_path == "" or _anim_player == null or not is_instance_valid(_anim_player) \
+			or not _anim_player.has_animation(_celebrate_anim_path):
+		_leave_dance_done = true
+		return
+	_celebrating = true
+	_celebrate_done = func() -> void:
+		_leave_dance_done = true
+	_eating = false
+	_eat_lean_x = 0.0
+	_clear_antsy_wait_pose()
+	_reset_skeleton_pose()
+	_anim_player.active = true
+	_set_mood("cheer")
+	if _body:
+		_body.rotation_degrees = Vector3.ZERO
+		_body.position.y = _base_body_y
+		_body.scale = Vector3.ONE * CHAR_SCALE
+	_play_anim("celebrate")
+	if not _anim_player.animation_finished.is_connected(_on_celebrate_anim_finished):
+		_anim_player.animation_finished.connect(_on_celebrate_anim_finished)
+	var dur := 2.2
+	var anim := _anim_player.get_animation(_celebrate_anim_path)
+	if anim != null:
+		dur = maxf(anim.length / maxf(_anim_player.speed_scale, 0.01), 0.2)
+	get_tree().create_timer(dur + 0.04).timeout.connect(func() -> void:
+		if not is_instance_valid(self):
+			return
+		_finish_serve_celebration()
+	)
+
+
+@warning_ignore("unused_parameter")
+func complete_serve(payout: int, five_star: bool = false) -> void:
 	if _bubble:
 		_bubble.visible = false
 	if _bubble_bg:
 		_bubble_bg.visible = false
 	if bool(get_meta("serve_review_hold", false)):
-		set_meta("serve_review_pending", true)
-		_set_mood("cheer")
-		get_tree().create_timer(SERVE_REVIEW_HOLD_SEC).timeout.connect(func() -> void:
-			if not is_instance_valid(self) or is_leaving:
-				return
-			set_meta("serve_review_hold", false)
-			set_meta("serve_review_pending", false)
-			served.emit(self, payout)
-			leave_happy()
-		)
-		return
+		set_meta("serve_review_pending", false)
+		set_meta("serve_review_hold", false)
+	_set_mood("cheer")
 	served.emit(self, payout)
 	leave_happy()
 

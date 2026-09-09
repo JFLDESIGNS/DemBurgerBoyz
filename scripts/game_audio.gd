@@ -6,6 +6,10 @@ const SFX_POOL := 14
 const SFX_LEVEL_CFG_PATH := "user://audio_settings.cfg"
 const SFX_LEVEL_CFG_SECTION := "sfx_levels"
 const SPATULA_NOTE_BOOST_CFG_SECTION := "spatula_piano_notes"
+const STREET_CAR_PASS_PATH := "res://sounds/vehicles/car_pass_by_left_to_right.ogg"
+const STREET_CAR_HORN_PATH := "res://sounds/vehicles/car_horn_double_beep.wav"
+const STREET_CAR_PASS_BASE_DB := -10.0
+const STREET_CAR_HORN_BASE_DB := -12.0
 const SFX_TUNING_ENTRIES := [
 	{"key": "ui", "label": "UI Clicks + Errors"},
 	{"key": "ingredients", "label": "Ingredients + Buns"},
@@ -21,6 +25,8 @@ const SFX_TUNING_ENTRIES := [
 	{"key": "service", "label": "Serve + Grade"},
 	{"key": "customers", "label": "Customers + Cat"},
 	{"key": "world", "label": "Trees + World Props"},
+	{"key": "traffic_pass", "label": "Passing Cars"},
+	{"key": "traffic_horn", "label": "Car Horns"},
 ]
 const SFX_LEVEL_DEFAULTS := {
 	"ui": 1.0,
@@ -37,6 +43,8 @@ const SFX_LEVEL_DEFAULTS := {
 	"service": 1.0,
 	"customers": 1.0,
 	"world": 1.0,
+	"traffic_pass": 1.0,
+	"traffic_horn": 1.0,
 }
 var sfx_levels: Dictionary = SFX_LEVEL_DEFAULTS.duplicate(true)
 const SPATULA_NOTE_BOOST_ENTRIES := [
@@ -219,6 +227,12 @@ var _outdoor_ambience_player: AudioStreamPlayer = null
 var _outdoor_ambience_vol: float = 0.0
 var _outdoor_ambience_on: bool = false
 var _outdoor_ambience_muted: bool = false
+var _street_car_pass_player: AudioStreamPlayer = null
+var _street_car_horn_player: AudioStreamPlayer = null
+var _chaching_player: AudioStreamPlayer = null
+var _challenge_song_player: AudioStreamPlayer = null
+var _challenge_song_on: bool = false
+const CHALLENGE_SONG_PATH := "res://assets/music/burger_time.mp3"
 
 
 func _ready() -> void:
@@ -371,6 +385,16 @@ func _ready() -> void:
 	_outdoor_ambience_player.bus = "Master"
 	_outdoor_ambience_player.volume_db = -80.0
 	add_child(_outdoor_ambience_player)
+	_street_car_pass_player = AudioStreamPlayer.new()
+	_street_car_pass_player.name = "StreetCarPass"
+	_street_car_pass_player.bus = "Master"
+	_street_car_pass_player.volume_db = -80.0
+	add_child(_street_car_pass_player)
+	_street_car_horn_player = AudioStreamPlayer.new()
+	_street_car_horn_player.name = "StreetCarHorn"
+	_street_car_horn_player.bus = "Master"
+	_street_car_horn_player.volume_db = -80.0
+	add_child(_street_car_horn_player)
 	set_process(true)
 
 
@@ -422,6 +446,10 @@ func _refresh_active_sfx_levels() -> void:
 		_spray_player.volume_db = _sfx_db(-9.5, "tools")
 	if _shake_on:
 		_sync_shaker_rattle()
+	if _street_car_pass_player != null and _street_car_pass_player.playing:
+		_street_car_pass_player.volume_db = _sfx_db(STREET_CAR_PASS_BASE_DB, "traffic_pass")
+	if _street_car_horn_player != null and _street_car_horn_player.playing:
+		_street_car_horn_player.volume_db = _sfx_db(STREET_CAR_HORN_BASE_DB, "traffic_horn")
 
 
 func _load_sfx_levels() -> void:
@@ -487,11 +515,12 @@ func _sfx_category_for_cache_key(key: String) -> String:
 	if key.begins_with("cup_") or key.begins_with("rack_") or key.begins_with("ice_tink"):
 		return "drinks"
 	if key.begins_with("serve_") or key.begins_with("order_") or key.begins_with("grade_") \
-			or key.begins_with("happy_") or key.begins_with("chaching"):
+			or key.begins_with("happy_") or key.begins_with("chaching") or key.begins_with("score_"):
 		return "service"
 	if key.begins_with("cat_") or key.begins_with("burger_chomp") or "wawa" in key:
 		return "customers"
-	if key.begins_with("tree_") or key.begins_with("roomba_"):
+	if key.begins_with("tree_") or key.begins_with("roomba_") or key.begins_with("truck_") \
+			or key.begins_with("fridge_") or key.begins_with("tip_jar_"):
 		return "world"
 	return "tools"
 
@@ -1006,12 +1035,13 @@ func _sync_shaker_rattle() -> void:
 
 func _tick_scrape_tings(delta: float) -> void:
 	## Soft spatula tings while scraping (~0.4s, slight irregularity).
-	## Debris also gets subtle bassy fleck-pops while the crust loosens.
+	## Debris: chance of a dry kuhhh so several can stack while crust lets go.
 	if _scrape_move_on and _scrape_debris_boost:
 		_scrape_bass_pop_cool = maxf(0.0, _scrape_bass_pop_cool - delta)
 		if _scrape_bass_pop_cool <= 0.0:
 			_scrape_bass_pop_cool = SCRAPE_BASS_POP_INTERVAL + randf_range(-0.08, 0.14)
-			play_debris_bass_pop(0.55 + randf() * 0.25)
+			if randf() < 0.58:
+				play_debris_kuhh(0.55 + randf() * 0.32)
 	if not _scrape_move_on:
 		return
 	_scrape_ting_cool = maxf(0.0, _scrape_ting_cool - delta)
@@ -1028,6 +1058,40 @@ func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
 	var gain := (0.28 + randf() * 0.14) * clampf(volume_scale, 0.0, 1.5)
 	var pitch := 0.82 + randf() * 0.28
 	_play_cached(key, _make_debris_bass_pop, pitch, gain)
+
+
+func play_debris_kuhh(volume_scale: float = 1.0) -> void:
+	## Dry “kuhhh” — burnt crust shearing off the steel. One-shots layer.
+	var key := "debris_kuhh_%d" % (randi() % 8)
+	var gain := (0.82 + randf() * 0.28) * clampf(volume_scale, 0.0, 1.7)
+	var pitch := 0.86 + randf() * 0.30
+	_play_cached(key, _make_debris_kuhh, pitch, gain)
+
+
+func play_debris_kuhh_burst(flecks: int = 1) -> void:
+	## Each fleck rolls a chance so a swipe can stack several slightly different kuhhhs.
+	var n := clampi(flecks, 1, 5)
+	for i in n:
+		if randf() > 0.62:
+			continue
+		var delay := float(i) * randf_range(0.010, 0.042)
+		var vol := 0.78 + randf() * 0.40
+		_queue_debris_kuhh(delay, vol)
+
+
+func _queue_debris_kuhh(delay: float, volume_scale: float) -> void:
+	if delay <= 0.002:
+		play_debris_kuhh(volume_scale)
+		return
+	var tree := get_tree()
+	if tree == null:
+		play_debris_kuhh(volume_scale)
+		return
+	var vol := volume_scale
+	tree.create_timer(delay).timeout.connect(func() -> void:
+		if is_instance_valid(self):
+			play_debris_kuhh(vol)
+	)
 
 
 func set_fries_shake(active: bool, intensity: float = 1.0) -> void:
@@ -1349,6 +1413,50 @@ func play_scale_jingle() -> void:
 	_play_cached("scale_jingle", _make_scale_jingle, 0.0, 0.32)
 
 
+func play_challenge_song() -> void:
+	if _challenge_song_player == null:
+		_challenge_song_player = AudioStreamPlayer.new()
+		_challenge_song_player.name = "ChallengeSong"
+		_challenge_song_player.bus = "Master"
+		add_child(_challenge_song_player)
+	if _challenge_song_on and _challenge_song_player.playing:
+		return
+	if not ResourceLoader.exists(CHALLENGE_SONG_PATH):
+		push_warning("Challenge song missing: %s" % CHALLENGE_SONG_PATH)
+		return
+	var stream: AudioStream = load(CHALLENGE_SONG_PATH) as AudioStream
+	if stream == null:
+		return
+	if stream is AudioStreamMP3:
+		(stream as AudioStreamMP3).loop = true
+	elif stream is AudioStreamOggVorbis:
+		(stream as AudioStreamOggVorbis).loop = true
+	_challenge_song_player.stream = stream
+	_challenge_song_player.volume_db = linear_to_db(0.62)
+	_challenge_song_player.pitch_scale = 1.0
+	_challenge_song_player.play()
+	_challenge_song_on = true
+
+
+func stop_challenge_song() -> void:
+	_challenge_song_on = false
+	if _challenge_song_player != null and is_instance_valid(_challenge_song_player):
+		_challenge_song_player.stop()
+
+
+func is_challenge_song_playing() -> bool:
+	return _challenge_song_on and _challenge_song_player != null and _challenge_song_player.playing
+
+
+func play_challenge_complete_tune() -> void:
+	play_happy_four_note()
+	_play_announcer_stream("challenge_complete_announcer", "res://sounds/perfect.wav", 0.72)
+
+
+func play_challenge_fail_ohhh() -> void:
+	_play_announcer_stream("challenge_fail_announcer", "res://sounds/ohhh.wav", 0.72)
+
+
 func play_happy_four_note() -> float:
 	## Short major-arpeggio sting (C–E–G–C) before the Burger Pals VO.
 	var step := 0.125
@@ -1365,6 +1473,33 @@ func play_happy_four_note() -> float:
 
 func play_click() -> void:
 	_play_cached("ui_click", _make_click, 1.0, 0.85)
+
+
+func play_fridge_seal_break() -> void:
+	## Gasket pop when the lid first cracks.
+	_play_cached("fridge_seal_break", _make_fridge_seal_break, 0.96 + randf() * 0.08, 0.66)
+
+
+func play_fridge_open_whoosh() -> void:
+	## Cold air rush as the lid swings up.
+	_play_cached("fridge_open_whoosh", _make_fridge_open_whoosh, 0.94 + randf() * 0.10, 0.42)
+
+
+func play_fridge_open() -> void:
+	play_fridge_seal_break()
+	var tree := get_tree()
+	if tree == null:
+		play_fridge_open_whoosh()
+		return
+	tree.create_timer(0.12).timeout.connect(func() -> void:
+		if is_instance_valid(self):
+			play_fridge_open_whoosh()
+	)
+
+
+func play_tip_jar_ping() -> void:
+	## Finger tap on the glass jar.
+	_play_cached("tip_jar_ping_%d" % (randi() % 3), _make_tip_jar_ping, 0.92 + randf() * 0.16, 0.88)
 
 
 func play_shaker_tap_crash() -> void:
@@ -1396,6 +1531,16 @@ func play_rack_take() -> void:
 func play_tree_thud() -> void:
 	## Soft wood trunk hit when shaking a street tree.
 	_play_cached("tree_thud_%d" % (randi() % 3), _make_tree_thud, 0.88 + randf() * 0.14, 0.55)
+
+
+func play_truck_knock(volume_scale: float = 1.0) -> void:
+	## Metal food-truck panel slap — boss knocking before he walks in.
+	_play_cached(
+		"truck_knock_v1_%d" % (randi() % 3),
+		_make_truck_knock,
+		0.90 + randf() * 0.12,
+		1.72 * maxf(0.0, volume_scale)
+	)
 
 
 func play_tree_leaf_tap() -> void:
@@ -1604,8 +1749,8 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache[key]
 	p.pitch_scale = 1.0
-	## Flat drums stay under the piano; hats sit a touch brighter.
-	var base_gain := (0.55 if v == 0 else 0.62) * maxf(0.0, volume_scale) * _sfx("tools")
+	## Flat drums stay under the piano; hats sit a touch brighter. HOLD kit +30%.
+	var base_gain := (0.55 if v == 0 else 0.62) * 1.30 * maxf(0.0, volume_scale) * _sfx("tools")
 	if base_gain <= 0.0001:
 		return
 	p.volume_db = linear_to_db(base_gain)
@@ -1630,7 +1775,26 @@ func _load_tinggrill_stream() -> AudioStream:
 
 func play_chaching() -> void:
 	## Cash-register cha-ching when a ticket pays into the tip jar.
-	_play_cached("chaching", _make_chaching, 0.0, 0.78)
+	if not _cache.has("chaching"):
+		_cache["chaching"] = _make_chaching()
+	if _chaching_player == null or not is_instance_valid(_chaching_player):
+		_chaching_player = AudioStreamPlayer.new()
+		_chaching_player.name = "ChaChing"
+		_chaching_player.bus = "Master"
+		add_child(_chaching_player)
+	var gain := 1.55 * _sfx("service")
+	if gain <= 0.0001:
+		return
+	_chaching_player.stop()
+	_chaching_player.stream = _cache["chaching"]
+	_chaching_player.pitch_scale = 1.0
+	_chaching_player.volume_db = linear_to_db(clampf(gain, 0.001, 3.0))
+	_chaching_player.play()
+
+
+func play_score_climb() -> void:
+	## Rapid rising ticks while the HUD money rolls up.
+	_play_cached("score_climb", _make_score_climb, 1.0, 0.62)
 
 
 func play_order_up() -> void:
@@ -1650,9 +1814,57 @@ func play_spatula_whoosh() -> void:
 
 
 func play_car_whoosh() -> void:
-	## Pass-by air rush when the street van crosses the window.
-	## Much quieter than the old 0.52 gain.
-	_play_cached("car_whoosh", _make_car_whoosh, 0.0, 0.13)
+	## Compatibility hook for older callers: use the recorded vehicle pass now.
+	play_car_pass_by()
+
+
+func _load_vehicle_stream(key: String, path: String) -> AudioStream:
+	if not _cache.has(key):
+		if not ResourceLoader.exists(path):
+			push_warning("Vehicle sound missing: %s" % path)
+			return null
+		var stream := load(path) as AudioStream
+		if stream == null:
+			push_warning("Vehicle sound failed to load: %s" % path)
+			return null
+		_cache[key] = stream
+	return _cache[key] as AudioStream
+
+
+func play_car_pass_by() -> void:
+	## The recording's closest/loudest point is ~1.5 s in. Starting at 0.45 s
+	## aligns that point with the road car reaching the middle of the window.
+	if _street_car_pass_player == null:
+		return
+	var stream := _load_vehicle_stream("street_car_pass_recording", STREET_CAR_PASS_PATH)
+	if stream == null:
+		return
+	_street_car_pass_player.stop()
+	_street_car_pass_player.stream = stream
+	_street_car_pass_player.pitch_scale = 1.0
+	_street_car_pass_player.volume_db = _sfx_db(STREET_CAR_PASS_BASE_DB, "traffic_pass")
+	if _sfx("traffic_pass") > 0.0001:
+		_street_car_pass_player.play(0.45)
+
+
+func stop_car_pass_by() -> void:
+	if _street_car_pass_player != null and _street_car_pass_player.playing:
+		_street_car_pass_player.stop()
+
+
+func play_car_horn() -> void:
+	if _street_car_horn_player == null:
+		return
+	var stream := _load_vehicle_stream("street_car_horn_recording", STREET_CAR_HORN_PATH)
+	if stream == null:
+		return
+	_street_car_horn_player.stop()
+	_street_car_horn_player.stream = stream
+	_street_car_horn_player.pitch_scale = 1.0
+	_street_car_horn_player.volume_db = _sfx_db(STREET_CAR_HORN_BASE_DB, "traffic_horn")
+	if _sfx("traffic_horn") > 0.0001:
+		## Skip the half-second of leading silence so the horn responds at center.
+		_street_car_horn_player.play(0.50)
 
 
 func play_burger_chomp() -> void:
@@ -1713,11 +1925,71 @@ func play_smash_sizzle(volume_scale: float = 1.0) -> void:
 
 
 func play_cat_meow() -> void:
-	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 0.92 + randf() * 0.18, 0.72)
+	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 0.92 + randf() * 0.18, 1.44)
 
 
 func play_cat_purr() -> void:
 	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.55)
+
+
+const CAT_BEGGING_MEOW_PATH := "res://sounds/cat_begging_meow.mp3"
+
+
+func _load_cat_begging_meow_stream() -> AudioStream:
+	if _cache.has("cat_begging_meow"):
+		return _cache["cat_begging_meow"] as AudioStream
+	var stream: AudioStream = null
+	if ResourceLoader.exists(CAT_BEGGING_MEOW_PATH):
+		stream = load(CAT_BEGGING_MEOW_PATH) as AudioStream
+	if stream == null and FileAccess.file_exists(CAT_BEGGING_MEOW_PATH):
+		var f := FileAccess.open(CAT_BEGGING_MEOW_PATH, FileAccess.READ)
+		if f != null:
+			var data := f.get_buffer(f.get_length())
+			f.close()
+			if not data.is_empty():
+				var mp3 := AudioStreamMP3.new()
+				mp3.data = data
+				stream = mp3
+	if stream != null:
+		_cache["cat_begging_meow"] = stream
+	return stream
+
+
+func play_cat_begging_meow(pitch: float = 1.0) -> void:
+	var stream := _load_cat_begging_meow_stream()
+	if stream == null:
+		play_cat_meow()
+		return
+	if _players.is_empty():
+		return
+	var gain := 1.56 * _sfx("customers")
+	if gain <= 0.0001:
+		return
+	var p: AudioStreamPlayer = _players[_player_i]
+	_player_i = (_player_i + 1) % _players.size()
+	p.stream = stream
+	p.pitch_scale = clampf(pitch, 0.8, 1.2)
+	p.volume_db = linear_to_db(clampf(gain, 0.001, 3.0))
+	p.play()
+
+
+func prewarm_fridge_place() -> void:
+	## Generate first-use WAV/MP3 caches so the first grill right-click does not hitch.
+	if not _cache.has("fridge_seal_break"):
+		_cache["fridge_seal_break"] = _make_fridge_seal_break()
+	if not _cache.has("fridge_open_whoosh"):
+		_cache["fridge_open_whoosh"] = _make_fridge_open_whoosh()
+	for i in 4:
+		var hiss_key := "smash_hiss_%d" % i
+		if not _cache.has(hiss_key):
+			_cache[hiss_key] = _make_smash_hiss()
+	for j in 8:
+		var pop_key := "grease_pop_f_%d" % j
+		if not _cache.has(pop_key):
+			_cache[pop_key] = _make_grease_pop()
+	_load_cat_begging_meow_stream()
+	if not _cache.has("chaching"):
+		_cache["chaching"] = _make_chaching()
 
 
 const WAWA_PATH := "res://sounds/wawawa.ogg"
@@ -1728,6 +2000,9 @@ const BOSS_WAWA_CLIP_SEC := 4.0
 const BOSS_WAWA_VOLUME_MUL := 3.6
 var _roomba_wawawa_player: AudioStreamPlayer = null
 var _roomba_wawawa_on: bool = false
+var _boss_wawawa_player: AudioStreamPlayer = null
+var _boss_wawawa_on: bool = false
+var _boss_wawawa_loud: bool = false
 var _customer_click_wawa: AudioStreamPlayer = null
 var _customer_click_wawa_tween: Tween = null
 var _customer_click_wawa_stop_at_msec: int = 0
@@ -1771,8 +2046,53 @@ func play_customer_grobble(impatience: float = 0.5) -> void:
 	)
 
 
+func _boss_wawa_target_db(loud: bool) -> float:
+	var customer_gain := lerpf(0.62, 0.82, 0.5) * lerpf(1.0, 1.08, 0.5)
+	var vol_mul := BOSS_WAWA_VOLUME_MUL * (2.35 if loud else 1.0)
+	return linear_to_db(customer_gain * vol_mul)
+
+
+func set_boss_wawawa(active: bool, loud: bool = false) -> void:
+	## Loop wawawa for the pep-talk caption, then stop when that line is gone.
+	_boss_wawawa_on = active
+	_boss_wawawa_loud = loud
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if not _cache.has("wawawa"):
+		var loaded: AudioStream = load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_cache["wawawa"] = loaded
+	if _boss_wawawa_player == null or not is_instance_valid(_boss_wawawa_player):
+		_boss_wawawa_player = AudioStreamPlayer.new()
+		_boss_wawawa_player.name = "BossWawawaLoop"
+		_boss_wawawa_player.bus = "Master"
+		_boss_wawawa_player.stream = _cache["wawawa"]
+		add_child(_boss_wawawa_player)
+		_boss_wawawa_player.finished.connect(func() -> void:
+			if _boss_wawawa_on and _boss_wawawa_player != null and is_instance_valid(_boss_wawawa_player):
+				var loop_stream: AudioStream = _boss_wawawa_player.stream
+				var loop_len := loop_stream.get_length() if loop_stream != null else 0.0
+				var loop_start := randf() * maxf(0.0, loop_len - 1.2)
+				_boss_wawawa_player.play(loop_start)
+		)
+	_boss_wawawa_player.pitch_scale = GROBBLE_PITCH
+	_boss_wawawa_player.volume_db = _boss_wawa_target_db(loud)
+	if active:
+		if not _boss_wawawa_player.playing:
+			var stream: AudioStream = _boss_wawawa_player.stream
+			var length := stream.get_length() if stream != null else 0.0
+			var start_at := randf() * maxf(0.0, length - 1.2)
+			_boss_wawawa_player.volume_db = -80.0
+			_boss_wawawa_player.play(start_at)
+			var tw := create_tween()
+			tw.tween_property(_boss_wawawa_player, "volume_db", _boss_wawa_target_db(loud), GROBBLE_FADE_IN_SEC)
+	elif _boss_wawawa_player.playing:
+		_boss_wawawa_player.stop()
+
+
 func play_boss_wawa(loud: bool = false) -> void:
-	## Pep talk / check-in — same grobble, louder when the grill is a mess.
+	## One-shot check-in grobble (messy grill / cut visit). Pep talk uses the loop.
 	if not ResourceLoader.exists(WAWA_PATH):
 		return
 	if not _cache.has("wawawa"):
@@ -1785,9 +2105,7 @@ func play_boss_wawa(loud: bool = false) -> void:
 	var source_needed := BOSS_WAWA_CLIP_SEC * GROBBLE_PITCH
 	var max_start := maxf(0.0, length - source_needed)
 	var start_at := randf() * max_start if max_start > 0.0 else 0.0
-	var customer_gain := lerpf(0.62, 0.82, 0.5) * lerpf(1.0, 1.08, 0.5)
-	var vol_mul := BOSS_WAWA_VOLUME_MUL * (2.35 if loud else 1.0)
-	var target_db := linear_to_db(customer_gain * vol_mul)
+	var target_db := _boss_wawa_target_db(loud)
 	var p := AudioStreamPlayer.new()
 	p.name = "BossWawa"
 	p.bus = "Master"
@@ -2357,6 +2675,22 @@ func _make_tree_thud() -> AudioStreamWAV:
 	return _wav_from_pcm(pcm, false)
 
 
+func _make_truck_knock() -> AudioStreamWAV:
+	## Hollow metal panel slap on the truck wall.
+	var n := int(MIX_RATE * 0.20)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := clampf(t / 0.004, 0.0, 1.0) * exp(-t * 14.0)
+		var body := sin(t * 88.0 * TAU) * 0.72 + sin(t * 142.0 * TAU) * 0.34
+		var clang := sin(t * 430.0 * TAU) * exp(-t * 26.0) * 0.28
+		var rattle := sin(t * 760.0 * TAU) * exp(-t * 48.0) * 0.10
+		var grit := (randf() * 2.0 - 1.0) * exp(-t * 70.0) * 0.08
+		_write_s16(pcm, i, int(clampf((body + clang + rattle + grit) * env, -1.0, 1.0) * 16800.0))
+	return _wav_from_pcm(pcm, false)
+
+
 func _make_tree_leaf_tap() -> AudioStreamWAV:
 	## Short leafy rustle burst — mid flutter, soft flicks.
 	var n := int(MIX_RATE * 0.20)
@@ -2481,6 +2815,67 @@ func _make_flip() -> AudioStreamWAV:
 		var whoosh := (randf() * 2.0 - 1.0) * exp(-t * 18.0) * 0.45
 		var slap := sin(t * 220.0 * TAU) * exp(-t * 28.0) * 0.7
 		_write_s16(pcm, i, int(clampf((whoosh + slap) * env, -1.0, 1.0) * 20000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_fridge_seal_break() -> AudioStreamWAV:
+	## Rubber gasket crack then a short vacuum gulp.
+	var dur := 0.22
+	var n := int(MIX_RATE * dur)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var pop := 0.0
+		if t < 0.045:
+			var u := t / 0.045
+			var env := sin(clampf(u, 0.0, 1.0) * PI) * exp(-u * 2.2)
+			pop = sin(t * lerpf(210.0, 72.0, u) * TAU) * 0.72 * env
+			pop += sin(t * 430.0 * TAU) * exp(-t * 48.0) * 0.22
+		var crack := (randf() * 2.0 - 1.0) * exp(-t * 38.0) * 0.28
+		if t < 0.03:
+			crack *= t / 0.03
+		var hiss := (randf() * 2.0 - 1.0) * exp(-t * 14.0) * 0.16
+		hiss += sin(t * lerpf(2400.0, 900.0, clampf(t / dur, 0.0, 1.0)) * TAU) * exp(-t * 18.0) * 0.10
+		_write_s16(pcm, i, int(clampf(pop + crack + hiss, -1.0, 1.0) * 21000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_fridge_open_whoosh() -> AudioStreamWAV:
+	## Icy air spilling out as the lid lifts.
+	var dur := 0.62
+	var n := int(MIX_RATE * dur)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var u := t / dur
+		var env := sin(clampf(u, 0.0, 1.0) * PI) * exp(-u * 0.75)
+		if u < 0.08:
+			env *= u / 0.08
+		var noise := (randf() * 2.0 - 1.0) * 0.58
+		var air := sin(t * lerpf(380.0, 95.0, u) * TAU) * 0.22
+		var ice := sin(t * lerpf(2100.0, 520.0, u) * TAU) * (0.08 + randf() * 0.10)
+		var rumble := sin(t * lerpf(48.0, 22.0, u) * TAU) * 0.12
+		_write_s16(pcm, i, int(clampf((noise + air + ice + rumble) * env, -1.0, 1.0) * 15500.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_tip_jar_ping() -> AudioStreamWAV:
+	## Bright glass ping — like tapping a jar with a fingernail.
+	var n := int(MIX_RATE * 0.42)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var f0 := 1480.0 + randf() * 220.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := clampf(t / 0.002, 0.0, 1.0) * exp(-t * 9.5)
+		var wave := sin(t * f0 * TAU) * 0.62
+		wave += sin(t * f0 * 2.14 * TAU) * 0.28 * exp(-t * 12.0)
+		wave += sin(t * f0 * 3.37 * TAU) * 0.12 * exp(-t * 16.0)
+		wave += sin(t * 3120.0 * TAU) * 0.08 * exp(-t * 22.0)
+		var tick := (randf() * 2.0 - 1.0) * exp(-t * 80.0) * 0.07
+		_write_s16(pcm, i, int(clampf((wave + tick) * env, -1.0, 1.0) * 19000.0))
 	return _wav_from_pcm(pcm, false)
 
 
@@ -2713,32 +3108,69 @@ func _make_shaker_tap_crash() -> AudioStreamWAV:
 	return _wav_from_pcm(pcm, false)
 
 
+func _make_score_climb() -> AudioStreamWAV:
+	## Arcade cash tally — stacked rising ticks that speed up, then a bright ding.
+	var notes := [64, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
+	var step := 0.062
+	var hold := 0.09
+	var total := step * float(notes.size() - 1) + 0.38
+	var n := int(MIX_RATE * total)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var sample := 0.0
+		for ni in notes.size():
+			var start := float(ni) * step
+			var u := t - start
+			if u < 0.0 or u > hold + 0.12:
+				continue
+			var midi: int = int(notes[ni])
+			var freq := 440.0 * pow(2.0, float(midi - 69) / 12.0)
+			var attack := clampf(u / 0.006, 0.0, 1.0)
+			var env := attack * exp(-u * 14.0)
+			var wave := sin(u * freq * TAU) * 0.72 + sin(u * freq * 2.0 * TAU) * 0.16
+			sample += wave * env * (0.72 + float(ni) * 0.03)
+		var ding_at := step * float(notes.size() - 1) + 0.04
+		if t >= ding_at:
+			var v := t - ding_at
+			var denv := clampf(v / 0.004, 0.0, 1.0) * exp(-v * 5.5)
+			sample += (sin(v * 1318.5 * TAU) * 0.55 + sin(v * 1976.0 * TAU) * 0.22) * denv
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 16800.0))
+	return _wav_from_pcm(pcm, false)
+
+
 func _make_chaching() -> AudioStreamWAV:
-	## Classic register: bright ding, then a lower metallic “ching”.
-	var n := int(MIX_RATE * 0.72)
+	## Classic register: drawer clunk, bright ding, then a lower metallic “ching”.
+	var n := int(MIX_RATE * 0.85)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	var f_hi := 2093.0 ## C7
-	var f_lo := 1046.5 ## C6
+	var f_lo := 1318.5 ## E6
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
 		var wave := 0.0
-		var a0 := clampf(t / 0.003, 0.0, 1.0) * exp(-t * 6.2)
+		## Wooden/metal drawer knock.
+		if t < 0.06:
+			var k := t / 0.06
+			var kn := (randf() * 2.0 - 1.0) * exp(-t * 42.0) * 0.55
+			kn += sin(t * 92.0 * TAU) * exp(-t * 28.0) * 0.35
+			wave += kn * clampf(k / 0.08, 0.0, 1.0)
+		var a0 := clampf(t / 0.003, 0.0, 1.0) * exp(-t * 5.4)
 		wave += (
-			sin(t * f_hi * TAU) * 0.55
-			+ sin(t * f_hi * 2.01 * TAU) * 0.22 * exp(-t * 8.0)
-			+ sin(t * f_hi * 2.76 * TAU) * 0.16 * exp(-t * 9.5)
+			sin(t * f_hi * TAU) * 0.72
+			+ sin(t * f_hi * 2.01 * TAU) * 0.28 * exp(-t * 7.2)
+			+ sin(t * f_hi * 2.76 * TAU) * 0.18 * exp(-t * 9.0)
 		) * a0
-		if t >= 0.07:
-			var u := t - 0.07
-			var a1 := clampf(u / 0.003, 0.0, 1.0) * exp(-u * 4.4)
+		if t >= 0.08:
+			var u := t - 0.08
+			var a1 := clampf(u / 0.003, 0.0, 1.0) * exp(-u * 3.8)
 			wave += (
-				sin(u * f_lo * TAU) * 0.62
-				+ sin(u * f_lo * 2.0 * TAU) * 0.18 * exp(-u * 6.5)
-				+ sin(u * f_lo * 3.01 * TAU) * 0.10 * exp(-u * 8.0)
+				sin(u * f_lo * TAU) * 0.78
+				+ sin(u * f_lo * 2.0 * TAU) * 0.22 * exp(-u * 5.8)
+				+ sin(u * f_lo * 3.01 * TAU) * 0.12 * exp(-u * 7.5)
 			) * a1
-		var drawer := exp(-t * 18.0) * (randf() * 2.0 - 1.0) * 0.08
-		_write_s16(pcm, i, int(clampf(wave + drawer, -1.0, 1.0) * 17500.0))
+		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 22000.0))
 	return _wav_from_pcm(pcm, false)
 
 
@@ -2847,6 +3279,41 @@ func _make_debris_bass_pop() -> AudioStreamWAV:
 		## Tiny soft noise click so it doesn't read as a pure sine.
 		var grit := (randf() * 2.0 - 1.0) * 0.12 * exp(-t * 90.0)
 		_write_s16(pcm, i, int(clampf((thump + grit) * env, -1.0, 1.0) * 15000.0))
+	return _wav_from_pcm(pcm, false)
+
+
+func _make_debris_kuhh() -> AudioStreamWAV:
+	## Dry “kuhhh”: hard k-scrape then a falling breathy peel.
+	var dur := 0.15 + randf() * 0.07
+	var n := int(MIX_RATE * dur)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	var formant := 290.0 + randf() * 110.0
+	var voice := 128.0 + randf() * 46.0
+	var peel := 38.0 + randf() * 18.0
+	var lp := 0.0
+	var hp := 0.0
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var env := 1.0
+		if t < 0.007:
+			env = t / 0.007
+		else:
+			env = exp(-(t - 0.007) * 8.4)
+		var white := randf() * 2.0 - 1.0
+		lp = lp * 0.76 + white * 0.24
+		hp = white - lp
+		var k := 0.0
+		if t < 0.016:
+			k = hp * (1.0 - t / 0.016) * 0.95
+			k += (randf() * 2.0 - 1.0) * 0.22 * (1.0 - t / 0.016)
+		var drop := 1.0 - t * 1.65
+		var vox := sin(t * voice * drop * TAU) * 0.42 * exp(-t * 11.0)
+		var body := lp * (0.50 + 0.50 * sin(t * formant * drop * TAU))
+		body += hp * 0.18 * exp(-t * 14.0)
+		var sticky := sin(t * peel * TAU) * lp * 0.28 * env
+		var sample := (k * 0.9 + body * 0.92 + vox + sticky) * env
+		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 16800.0))
 	return _wav_from_pcm(pcm, false)
 
 
@@ -3060,6 +3527,7 @@ func debug_playing_sounds_report(scene_tree: SceneTree = null) -> String:
 	_debug_append_bed_flag(beds, "room_tone", _room_tone_on and not _room_tone_muted, _room_tone_player)
 	_debug_append_bed_flag(beds, "outdoor_ambience", _outdoor_ambience_on and not _outdoor_ambience_muted, _outdoor_ambience_player)
 	_debug_append_bed_flag(beds, "roomba_wawawa", _roomba_wawawa_on, _roomba_wawawa_player)
+	_debug_append_bed_flag(beds, "boss_wawawa", _boss_wawawa_on, _boss_wawawa_player)
 	_debug_append_bed_flag(beds, "combat_theme", _combat_theme_on, _combat_player)
 	var slide_on := _slide_target > 0.01 or (_slide_player != null and _slide_player.playing)
 	_debug_append_bed_flag(beds, "burger_slide", slide_on, _slide_player)

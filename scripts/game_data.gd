@@ -83,6 +83,20 @@ const CUSTOMER_COLORS := [
 	Color("00D2D3"),
 ]
 
+## Hidden Economy GUI writes these. order_value / tips read them live.
+static var PRICE_BURGER_BASE: int = 4
+static var PRICE_PER_ITEM: int = 1
+static var PRICE_EVERYTHING_BONUS: int = 3
+static var PRICE_SODA: int = 3
+static var PRICE_ICECREAM: int = 4
+static var PRICE_FRIES: int = 3
+static var TIP_MIN: int = 3
+static var TIP_MAX: int = 10
+static var TIP_OUTLIER_AMOUNT: int = 25
+static var TIP_OUTLIER_CHANCE: float = 0.04
+## Challenge toppings besides optional cheese — keep recipes simple.
+const CHALLENGE_TOPPINGS := ["tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
+
 
 static func topping_sort_key(id: String) -> int:
 	var i := TOPPING_ORDER.find(id)
@@ -250,6 +264,18 @@ static func generate_order(
 	return order
 
 
+static func generate_challenge_order() -> Array[String]:
+	## Cheese or no cheese + exactly one other topping. Every burger in the
+	## challenge uses this same stack.
+	var order: Array[String] = ["bun_bottom", "patty"]
+	if randf() < 0.5:
+		order.append("cheese")
+	var topping: String = str(CHALLENGE_TOPPINGS[randi() % CHALLENGE_TOPPINGS.size()])
+	order.append(topping)
+	order.append("bun_top")
+	return order
+
+
 static func is_everything_order(order: Array) -> bool:
 	var burger := order_burger_items(order)
 	for t in EXTRA_TOPPINGS:
@@ -289,12 +315,12 @@ static func order_value(order: Array) -> int:
 	var sodas := order_soda_ids(order)
 	var base := 0
 	if not burger.is_empty():
-		base += 4 + burger.size()
+		base += PRICE_BURGER_BASE + burger.size() * PRICE_PER_ITEM
 		if is_everything_order(order):
-			base += 3
-	base += sodas.size() * 3
-	base += order_icecream_count(order) * 4
-	base += order_fries_count(order) * 3
+			base += PRICE_EVERYTHING_BONUS
+	base += sodas.size() * PRICE_SODA
+	base += order_icecream_count(order) * PRICE_ICECREAM
+	base += order_fries_count(order) * PRICE_FRIES
 	return maxi(base, 3)
 
 
