@@ -321,7 +321,7 @@ func _setup_paint_mode() -> void:
 	toggle.name = "PaintModeButton"
 	toggle.text = "PAINT SKIN"
 	toggle.custom_minimum_size = Vector2(0.0, 42.0)
-	toggle.tooltip_text = "Paint tattoos and markings on bare skin. Clothes hide while you paint."
+	toggle.tooltip_text = "Paint tattoos and markings directly on the character's skin. Clothes stay visible."
 	toggle.pressed.connect(_toggle_paint_mode)
 	var skin_label := sidebar_controls.get_node_or_null("SkinLabel")
 	var insert_at := 0
@@ -407,7 +407,7 @@ func _setup_paint_mode() -> void:
 	_paint_status = Label.new()
 	_paint_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_paint_status.add_theme_color_override("font_color", Color(0.68, 0.73, 0.8, 1.0))
-	_paint_status.text = "Clothes are hidden. Left-drag paints. Right-drag orbits. Middle-drag pans."
+	_paint_status.text = "Clothes stay on. Left-drag exposed skin. Right-drag orbits. Middle-drag pans."
 	column.add_child(_paint_status)
 
 	_paint_hud = Control.new()
@@ -434,10 +434,10 @@ func _toggle_paint_mode() -> void:
 		character.set_control_rig_visible(false)
 		if control_rig_toggle != null:
 			control_rig_toggle.set_pressed_no_signal(false)
-		_set_status("Paint mode: skin only. Eyes, hair, and ears stay visible.")
+		_set_status("Paint mode: paint exposed skin directly; clothes stay visible.")
 	else:
 		character.set_control_rig_visible(control_rig_toggle.button_pressed)
-		_set_status("Left paint mode. Clothes are back on.")
+		_set_status("Left paint mode.")
 
 
 func _set_paint_tool(tool_id: String) -> void:
@@ -658,6 +658,9 @@ func _randomize_character() -> void:
 	if _fit_room_open:
 		_set_status("Leave Fit Room before randomizing.", true)
 		return
+	## A randomized character is a new customer design, never a continuation of
+	## the previous customer's tattoo/paint texture.
+	character.clear_skin_paint()
 	character.begin_appearance_batch()
 	var skin: Color = SKIN_TONES[randi() % SKIN_TONES.size()]
 	character.set_skin_tone(skin)
@@ -705,7 +708,7 @@ func _randomize_character() -> void:
 	character.jewelry_color = Color.from_hsv(randf_range(0.08, 0.18), randf_range(0.35, 0.8), randf_range(0.55, 0.95))
 	character.jewelry_scale = randf_range(0.85, 1.3)
 	character.jewelry_offset = Vector3.ZERO
-	character.top_style = _rand_style(ModularCharacterBase.TopStyle.size(), 0.08) as ModularCharacterBase.TopStyle
+	character.top_style = _rand_style(ModularCharacterBase.TopStyle.size(), 0.0) as ModularCharacterBase.TopStyle
 	character.top_color = _rand_hsv(0.4, 0.9, 0.25, 0.85)
 	character.top_scale = randf_range(0.96, 1.08)
 	if character.top_style == ModularCharacterBase.TopStyle.NONE:
@@ -714,7 +717,7 @@ func _randomize_character() -> void:
 		character.shirt_graphic = _rand_style(ModularCharacterBase.ShirtGraphic.size(), 0.55) as ModularCharacterBase.ShirtGraphic
 	character.shirt_graphic_color = _rand_hsv(0.45, 0.95, 0.35, 1.0)
 	character.shirt_graphic_scale = randf_range(0.7, 1.4)
-	character.bottom_style = _rand_style(ModularCharacterBase.BottomStyle.size(), 0.08) as ModularCharacterBase.BottomStyle
+	character.bottom_style = _rand_style(ModularCharacterBase.BottomStyle.size(), 0.0) as ModularCharacterBase.BottomStyle
 	character.bottom_color = _rand_hsv(0.35, 0.8, 0.18, 0.7)
 	character.bottom_scale = randf_range(0.96, 1.08)
 	character.shoe_style = _rand_style(ModularCharacterBase.ShoeStyle.size(), 0.12) as ModularCharacterBase.ShoeStyle
@@ -822,7 +825,7 @@ func _save_character() -> void:
 	var folder := ProjectSettings.globalize_path("user://characters")
 	DirAccess.make_dir_recursive_absolute(folder)
 	var data := {
-		"format_version": 10,
+		"format_version": 11,
 		"name": display_name,
 		"body_type": "kenney_chunky_toon",
 		"skin_color": character.skin_color.to_html(true),
@@ -988,6 +991,8 @@ func _load_character_file(preset_path: String) -> void:
 	character.set_skin_tone(loaded_color)
 	custom_color.color = loaded_color
 	character.set_skin_paint_png_base64(str(data.get("skin_paint", "")))
+	if int(data.get("format_version", 1)) < 11:
+		character.migrate_legacy_skin_paint_v_flip()
 	var legacy_eye_size := float(data.get("eye_size", 1.0))
 	character.eye_width = clampf(float(data.get("eye_width", legacy_eye_size)), 0.4, 2.0)
 	character.eye_height = clampf(float(data.get("eye_height", 0.6)), 0.4, 2.0)
@@ -1107,6 +1112,11 @@ func _load_character_file(preset_path: String) -> void:
 		character.bottom_style = clampi(int(data.get("bottom_style", 0)), 0, ModularCharacterBase.BottomStyle.size() - 1) as ModularCharacterBase.BottomStyle
 		character.top_color = Color.from_string(str(data.get("top_color", "3f6a45ff")), Color("3f6a45"))
 		character.bottom_color = Color.from_string(str(data.get("bottom_color", "334e68ff")), Color("334e68"))
+	## Upgrade older naked defaults while preserving every selected garment.
+	if character.top_style == ModularCharacterBase.TopStyle.NONE:
+		character.top_style = ModularCharacterBase.TopStyle.T_SHIRT
+	if character.bottom_style == ModularCharacterBase.BottomStyle.NONE:
+		character.bottom_style = ModularCharacterBase.BottomStyle.SHORTS
 	character.top_scale = clampf(float(data.get("top_scale", 1.0)), 0.9, 1.12)
 	character.shirt_graphic = clampi(int(data.get("shirt_graphic", 0)), 0, ModularCharacterBase.ShirtGraphic.size() - 1) as ModularCharacterBase.ShirtGraphic
 	character.shirt_graphic_color = Color.from_string(str(data.get("shirt_graphic_color", "ffffffff")), Color.WHITE)
@@ -2342,4 +2352,3 @@ func _refresh_fit_select_labels() -> void:
 func _set_status(message: String, is_error: bool = false) -> void:
 	status_label.text = message
 	status_label.modulate = Color("ff8c8c") if is_error else Color("aeb9cc")
-

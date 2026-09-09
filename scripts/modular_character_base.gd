@@ -828,7 +828,7 @@ const CONTROL_BODY_SPECS := {
 		jewelry_offset = value
 		if _should_rebuild(): _build_jewelry()
 
-@export var top_style: TopStyle = TopStyle.NONE:
+@export var top_style: TopStyle = TopStyle.T_SHIRT:
 	set(value):
 		top_style = value
 		if _should_rebuild():
@@ -881,7 +881,7 @@ const CONTROL_BODY_SPECS := {
 		shirt_graphic_depth = value
 		if _should_rebuild(): _build_shirt_graphic()
 
-@export var bottom_style: BottomStyle = BottomStyle.NONE:
+@export var bottom_style: BottomStyle = BottomStyle.SHORTS:
 	set(value):
 		bottom_style = value
 		if _should_rebuild():
@@ -1666,6 +1666,12 @@ func apply_saved_preset(data: Dictionary) -> void:
 				set(property_name, bool(raw_value))
 	end_appearance_batch()
 	set_skin_paint_png_base64(str(data.get("skin_paint", "")))
+	if int(data.get("format_version", 1)) < 11:
+		migrate_legacy_skin_paint_v_flip()
+	if top_style == TopStyle.NONE:
+		top_style = TopStyle.T_SHIRT
+	if bottom_style == BottomStyle.NONE:
+		bottom_style = BottomStyle.SHORTS
 
 
 func get_active_body() -> Node3D:
@@ -1695,11 +1701,13 @@ func _apply_skin_material() -> void:
 
 
 func set_paint_mode_preview(enabled: bool) -> void:
-	_clothes_hidden_for_paint = enabled
+	_clothes_hidden_for_paint = false
+	## Keep the character dressed while painting. Paint is still applied only to
+	## the weighted skin mesh, so clothing never receives or saves skin markings.
 	if _clothing_root != null:
-		_clothing_root.visible = not enabled
+		_clothing_root.visible = true
 	if _shirt_graphic_root != null:
-		_shirt_graphic_root.visible = not enabled
+		_shirt_graphic_root.visible = true
 
 
 func _ensure_skin_paint() -> void:
@@ -1734,7 +1742,7 @@ shader_type spatial;
 render_mode diffuse_toon, specular_disabled, cull_back;
 
 uniform vec4 skin_color : source_color = vec4(0.85, 0.55, 0.37, 1.0);
-uniform sampler2D paint_tex : source_color, filter_linear, repeat_enable;
+uniform sampler2D paint_tex : source_color, filter_linear, repeat_disable;
 
 void fragment() {
 	vec4 paint = texture(paint_tex, UV);
@@ -1788,6 +1796,15 @@ func set_skin_paint_png_base64(encoded: String) -> void:
 	_skin_paint_dirty = false
 	if is_node_ready():
 		_apply_skin_material()
+
+
+func migrate_legacy_skin_paint_v_flip() -> void:
+	## Paint saved before format 11 was stamped with V inverted. Flip the stored
+	## canvas once so an existing customer's marks land where they were clicked.
+	if not _skin_paint_has_marks or _skin_paint_image == null:
+		return
+	_skin_paint_image.flip_y()
+	_upload_skin_paint()
 
 
 func _get_skin_mesh() -> MeshInstance3D:
@@ -1912,9 +1929,12 @@ func paint_skin_stamp(uv: Vector2, radius_px: float, color: Color, commit: bool 
 	if uv.x < 0.0:
 		return
 	_ensure_skin_paint()
-	var size_f := float(SKIN_PAINT_SIZE)
-	var cx := uv.x * size_f
-	var cy := (1.0 - uv.y) * size_f
+	var size_f := float(SKIN_PAINT_SIZE - 1)
+	## Godot's Image rows and the mesh UV sampled by the spatial shader use the
+	## same V direction. Flipping V here mirrored every stroke vertically, which
+	## made the cursor appear unrelated to the mark on the model.
+	var cx := clampf(uv.x, 0.0, 1.0) * size_f
+	var cy := clampf(uv.y, 0.0, 1.0) * size_f
 	var radius := maxf(radius_px, 1.0)
 	var r_i := int(ceil(radius))
 	for oy in range(-r_i, r_i + 1):
@@ -1923,8 +1943,8 @@ func paint_skin_stamp(uv: Vector2, radius_px: float, color: Color, commit: bool 
 			if dist > radius:
 				continue
 			var falloff := pow(1.0 - dist / radius, 0.62)
-			var px := posmod(int(floor(cx + float(ox))), SKIN_PAINT_SIZE)
-			var py := posmod(int(floor(cy + float(oy))), SKIN_PAINT_SIZE)
+			var px := clampi(int(floor(cx + float(ox))), 0, SKIN_PAINT_SIZE - 1)
+			var py := clampi(int(floor(cy + float(oy))), 0, SKIN_PAINT_SIZE - 1)
 			var src := color
 			src.a *= falloff
 			var dst := _skin_paint_image.get_pixel(px, py)
@@ -1942,9 +1962,9 @@ func blur_skin_stamp(uv: Vector2, radius_px: float) -> void:
 	if uv.x < 0.0:
 		return
 	_ensure_skin_paint()
-	var size_f := float(SKIN_PAINT_SIZE)
-	var cx := uv.x * size_f
-	var cy := (1.0 - uv.y) * size_f
+	var size_f := float(SKIN_PAINT_SIZE - 1)
+	var cx := clampf(uv.x, 0.0, 1.0) * size_f
+	var cy := clampf(uv.y, 0.0, 1.0) * size_f
 	var radius := maxf(radius_px, 2.0)
 	var r_i := int(ceil(radius))
 	var snapshot := _skin_paint_image.duplicate() as Image
@@ -1953,8 +1973,8 @@ func blur_skin_stamp(uv: Vector2, radius_px: float) -> void:
 			var dist := sqrt(float(ox * ox + oy * oy))
 			if dist > radius:
 				continue
-			var px := posmod(int(floor(cx + float(ox))), SKIN_PAINT_SIZE)
-			var py := posmod(int(floor(cy + float(oy))), SKIN_PAINT_SIZE)
+			var px := clampi(int(floor(cx + float(ox))), 0, SKIN_PAINT_SIZE - 1)
+			var py := clampi(int(floor(cy + float(oy))), 0, SKIN_PAINT_SIZE - 1)
 			var acc := Color(0.0, 0.0, 0.0, 0.0)
 			var count := 0.0
 			for by in range(-1, 2):
