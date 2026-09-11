@@ -87,6 +87,7 @@ const ANNOUNCER_POOL := 4
 ## Dedicated pool for spatula piano / HOLD tings — never shared with one-shot SFX.
 var _ting_players: Array[AudioStreamPlayer] = []
 var _ting_player_i: int = 0
+var _spatula_audio_prewarmed: bool = false
 const TING_POOL := 8
 var _cache: Dictionary = {} ## key -> AudioStreamWAV
 var _sizzle_player: AudioStreamPlayer
@@ -1726,6 +1727,30 @@ func play_spatula_ting(
 	p.play()
 
 
+func prewarm_spatula_audio() -> void:
+	## Build/load every grill voice on the title screen, never on the contact frame.
+	if _spatula_audio_prewarmed:
+		return
+	_spatula_audio_prewarmed = true
+	if not _cache.has("tinggrill"):
+		var loaded: AudioStream = _load_tinggrill_stream()
+		if loaded == null:
+			loaded = _make_spatula_ting_note(72)
+		_cache["tinggrill"] = loaded
+	for voice in 3:
+		for pad in 5:
+			var key := "hold_kit_v4_%d_%d" % [voice, pad]
+			if not _cache.has(key):
+				match voice:
+					1:
+						_cache[key] = _make_hold_hihat(pad, false)
+					2:
+						_cache[key] = _make_hold_hihat(pad, true)
+					_:
+						_cache[key] = _make_hold_drum(pad)
+		await get_tree().process_frame
+
+
 func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) -> void:
 	## HOLD-zone taps. voice: 0 = drum · 1 = closed hi-hat · 2 = open hat / rim.
 	if _players.is_empty():
@@ -1786,6 +1811,21 @@ func play_chaching() -> void:
 	_chaching_player.pitch_scale = 1.0
 	_chaching_player.volume_db = linear_to_db(clampf(gain, 0.001, 3.0))
 	_chaching_player.play()
+
+
+func prewarm_payment_audio() -> void:
+	## Payment happens on a busy gameplay frame; create its streams/player on the menu.
+	if not _cache.has("chaching"):
+		_cache["chaching"] = _make_chaching()
+	if not _cache.has("score_climb"):
+		_cache["score_climb"] = _make_score_climb()
+	if _chaching_player == null or not is_instance_valid(_chaching_player):
+		_chaching_player = AudioStreamPlayer.new()
+		_chaching_player.name = "ChaChing"
+		_chaching_player.bus = "Master"
+		_chaching_player.volume_db = -80.0
+		add_child(_chaching_player)
+	_chaching_player.stream = _cache["chaching"]
 
 
 func play_score_climb() -> void:

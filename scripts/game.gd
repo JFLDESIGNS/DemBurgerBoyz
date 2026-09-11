@@ -485,7 +485,7 @@ const HAND_SPATULA_CARRY_ROT := Vector3(-8.0, 0.0, 0.0)
 ## Yaw at grill edges — far left (world +X) CCW +, far right CW −.
 const HAND_SPATULA_SIDE_YAW := 20.0
 ## LMB slap: dip to steel → ting → ease back up.
-const HAND_SPATULA_SLAP_DUR := 0.153 ## Snappy single tap (−10%)
+const HAND_SPATULA_SLAP_DUR := 0.21 ## Enough frames to read cleanly at 30/60 FPS.
 const HAND_SPATULA_PLACE_SMASH_DUR := 0.434 ## was 0.62; −30% with ball smash morph
 const HAND_SPATULA_DOUBLE_DUR := 0.34 ## Unused legacy double-tap duration
 const HAND_SPATULA_FLOURISH_DUR := 0.506 ## Rise+flip (−15% vs 0.595)
@@ -564,6 +564,9 @@ var _spatula_smash_returning: bool = false
 var _spatula_smash_return_t: float = 0.0
 var _spatula_smash_return_from := Transform3D.IDENTITY
 var _spatula_press_needs_smooth_return: bool = false
+const HAND_SPATULA_VISUAL_SMOOTH_SPEED := 34.0
+var _spatula_visual_smooth_xform := Transform3D.IDENTITY
+var _spatula_visual_smooth_valid: bool = false
 var _spatula_ting_bits: int = 0 ## Which contact tings already fired this anim
 var _spatula_slap_rest_tip := Vector3.ZERO ## Tip pose when the tap started
 var _spatula_slap_contact := Vector3.ZERO ## Grill-surface point under the click
@@ -622,6 +625,9 @@ const SPATULA_FX_DUR := 1.0 ## Ribbons/circle linger and ease out over 1s
 const SPATULA_FX_RENDER_PRIORITY := 12 ## After service-window glass (priority 4).
 ## White stroke ring on the steel at each spatula piano tap.
 var _spatula_tap_rings: Array = [] ## {root, mi, mat, t, center}
+var _spatula_tap_ring_pool: Array = []
+var _spatula_tap_ring_mesh: ImmediateMesh = null
+const SPATULA_TAP_RING_POOL_SIZE := 8
 const SPATULA_TAP_RING_DUR := 0.28 ## Snappier expand/fade
 const SPATULA_TAP_RING_R0 := 0.016 ## Start tiny
 const SPATULA_TAP_RING_R1 := 0.09 ## ~burger radius (20% smaller patties)
@@ -1086,6 +1092,8 @@ const FIRE_PATH_LINK_MAX := 0.195 ## don't bridge gaps wider than spread
 const FIRE_PATH_MAX_POINTS := 220
 const FIRE_PATH_JITTER := 0.007 ## tiny sideways scatter on the path
 var _spatula_sparks: Array = [] ## short-lived edge-spark FX
+var _spatula_spark_pool: Array = []
+const SPATULA_SPARK_POOL_SIZE := 4
 ## Fire extinguisher — hang-mounted left of the tools; hold LMB to carry.
 var ext_held: bool = false
 var ext_root: Node3D = null
@@ -2110,7 +2118,15 @@ var _tip_jar_shake_left: float = 0.0
 var _tip_jar_bill_tex: Texture2D = null
 var _tip_jar_bill_count: int = 0
 var _tip_jar_inner_glow_shader: Shader = null
+var _payment_bill_mesh_cache: Dictionary = {}
+var _payment_bill_material_cache: Dictionary = {}
+var _payment_bill_pool: Array[MeshInstance3D] = []
+var _payment_bill_active: Array[MeshInstance3D] = []
+var _payment_bill_assets_ready: bool = false
 const TIP_JAR_MAX_BILLS := 3
+const PAYMENT_BILL_POOL_SIZE := 24
+const PAYMENT_BILL_FLY_VARIANTS := 6
+const PAYMENT_BILL_JAR_VARIANTS := 3
 const TIP_JAR_SCALE := 3.0
 const TIP_JAR_BUN_OFFSET := Vector3(0.28, 0.0, 0.04) ## camera-left of the bun towers (world +X)
 const TIP_JAR_COLLISION_LAYER := 8388608
@@ -2136,10 +2152,10 @@ const CONDIMENT_AUTO_POUR_HEIGHT_OFFSET := 0.4298 ## Previous 0.125 m plus exact
 const CONDIMENT_ANIM_RENDER_PRIORITY := 34
 const CONDIMENT_ANIM_SORTING_OFFSET := 24.0
 const CONDIMENT_TOOL_HOLD_HEIGHT := 0.38
-## Squeeze onto a customer only when the bottle is out at the window and this close.
-const CONDIMENT_CUSTOMER_SPRAY_REACH := 0.46
-const CONDIMENT_CUSTOMER_SPRAY_XZ := 0.34
-const CONDIMENT_CUSTOMER_HOLD_Z_MAX := 2.10
+## Same cap as `_tool_hold_point_from_screen`. Spray a customer only when the
+## bottle is pressed against this far window edge — never by pulling it off the grill.
+const CONDIMENT_HOLD_Z_MAX := 1.25
+const CONDIMENT_CUSTOMER_SPRAY_PX := 96.0
 ## Lightweight raised sauce ribbon: enough height for lighting without tube geometry.
 const CONDIMENT_TOOL_STREAK_RADIUS := 0.0044
 const CONDIMENT_TOOL_STREAK_SPACING := 0.013
@@ -3468,7 +3484,13 @@ func _warm_burger_assets() -> void:
 
 
 func _ensure_runtime_prewarms() -> void:
-	## Patties + frozen meatballs + grease-fire particles — menu if possible, else day start.
+	## Patties + frozen meatballs + grill-tool FX/audio — menu if possible, else day start.
+	_ensure_spatula_fx_pools()
+	_ensure_payment_bill_assets()
+	if game_audio != null and game_audio.has_method("prewarm_spatula_audio"):
+		await game_audio.prewarm_spatula_audio()
+	if game_audio != null and game_audio.has_method("prewarm_payment_audio"):
+		game_audio.prewarm_payment_audio()
 	await _ensure_patty_spawn_pool()
 	for p in _patty_spawn_pool:
 		if p != null and is_instance_valid(p) and p.has_method("prewarm_frozen_visuals"):
@@ -4491,6 +4513,7 @@ func _process(delta: float) -> void:
 	_mp_update_cursors(delta)
 	_update_local_cursor_click(delta)
 	_update_phone_scroll_inertia(delta)
+	_update_payment_bills(delta)
 	_update_icecream_mascot_spin(delta)
 	_update_window_bunting_wind(delta)
 	_update_street_car(delta)
@@ -10035,12 +10058,17 @@ func _spatula_play_ting_bit(bit: int) -> void:
 	_spatula_ting_bits |= bit
 	## Flat blade = musical notes (unchanged). Side/tilt taps +50% louder.
 	var ting_vol := 0.92 if absf(_spatula_user_roll) < 22.5 else 1.68
+	var perf_started := Time.get_ticks_usec() if OS.is_debug_build() else 0
 	_play_grill_tap_at(_spatula_slap_contact, ting_vol)
 	## White expanding stroke on the steel under the hit.
 	_spawn_spatula_tap_ring(_spatula_slap_contact)
 	## Edge blade: spark at full tilt; oil trail catches if tip hits grease.
 	_try_spatula_edge_tap_fx(_spatula_slap_contact)
 	_register_hold_ttt_tap(_spatula_slap_contact)
+	if OS.is_debug_build():
+		var tap_usec := Time.get_ticks_usec() - perf_started
+		if tap_usec > 2000:
+			print("SPATULA TAP SPIKE: %.2f ms" % (float(tap_usec) / 1000.0))
 
 
 func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_override: float = INF, send_mp: bool = true) -> void:
@@ -10524,32 +10552,64 @@ func _grill_song_tap(world_pos: Vector3, volume_scale: float = 1.0) -> void:
 func _spawn_spatula_tap_ring(at: Vector3) -> void:
 	if at == Vector3.ZERO:
 		return
+	_ensure_spatula_fx_pools()
 	var center := Vector3(at.x, GRILL_SURFACE_Y + SPATULA_TAP_RING_Y, at.z)
-	var root := Node3D.new()
-	root.name = "SpatulaTapRing"
-	add_child(root)
-	var mi := MeshInstance3D.new()
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mi.position = center
-	## Flat on the grill (XZ) — white stroke ring.
-	var mat := _make_spatula_fx_mat(SPATULA_TAP_RING_ALPHA)
-	mi.material_override = mat
-	mi.mesh = _build_spatula_circle_mesh(SPATULA_TAP_RING_R0, SPATULA_TAP_RING_STROKE)
-	root.add_child(mi)
-	_spatula_tap_rings.append({
-		"root": root,
-		"mi": mi,
-		"mat": mat,
+	if _spatula_tap_ring_pool.is_empty() and not _spatula_tap_rings.is_empty():
+		_recycle_spatula_tap_ring(_spatula_tap_rings.pop_front())
+	if _spatula_tap_ring_pool.is_empty():
+		return
+	var ring: Dictionary = _spatula_tap_ring_pool.pop_back()
+	var root: Node3D = ring["root"]
+	var mi: MeshInstance3D = ring["mi"]
+	var mat: StandardMaterial3D = ring["mat"]
+	root.position = center
+	root.visible = true
+	mi.scale = Vector3(SPATULA_TAP_RING_R0, 1.0, SPATULA_TAP_RING_R0)
+	mat.albedo_color = Color(1.0, 1.0, 1.0, SPATULA_TAP_RING_ALPHA)
+	ring["t"] = 0.0001
+	ring["center"] = center
+	_spatula_tap_rings.append(ring)
+
+
+func _ensure_spatula_fx_pools() -> void:
+	if _spatula_tap_ring_mesh == null:
+		var stroke_ratio := SPATULA_TAP_RING_STROKE / SPATULA_TAP_RING_R1
+		_spatula_tap_ring_mesh = _build_spatula_circle_mesh(1.0, stroke_ratio)
+	while _spatula_tap_ring_pool.size() + _spatula_tap_rings.size() < SPATULA_TAP_RING_POOL_SIZE:
+		var root := Node3D.new()
+		root.name = "SpatulaTapRingPool"
+		root.visible = false
+		add_child(root)
+		var mi := MeshInstance3D.new()
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.mesh = _spatula_tap_ring_mesh
+		var mat := _make_spatula_fx_mat(SPATULA_TAP_RING_ALPHA)
+		mi.material_override = mat
+		root.add_child(mi)
+		_spatula_tap_ring_pool.append({
+			"root": root,
+			"mi": mi,
+			"mat": mat,
 		"t": 0.0001,
-		"center": center,
-	})
+			"center": Vector3.ZERO,
+		})
+	_ensure_spatula_spark_pool()
+
+
+func _recycle_spatula_tap_ring(ring: Dictionary) -> void:
+	var root: Node3D = ring.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	root.visible = false
+	ring["t"] = 0.0
+	_spatula_tap_ring_pool.append(ring)
 
 
 func _tick_spatula_tap_rings(delta: float) -> void:
 	if _spatula_tap_rings.is_empty():
 		return
-	var keep: Array = []
-	for ring in _spatula_tap_rings:
+	for i in range(_spatula_tap_rings.size() - 1, -1, -1):
+		var ring: Dictionary = _spatula_tap_rings[i]
 		var t := float(ring["t"]) + delta
 		ring["t"] = t
 		var u := clampf(t / SPATULA_TAP_RING_DUR, 0.0, 1.0)
@@ -10561,13 +10621,12 @@ func _tick_spatula_tap_rings(delta: float) -> void:
 		var mat: StandardMaterial3D = ring["mat"]
 		var root: Node = ring["root"]
 		if u >= 1.0 or alpha <= 0.01 or mi == null or not is_instance_valid(mi):
-			if root != null and is_instance_valid(root):
-				root.queue_free()
+			_spatula_tap_rings.remove_at(i)
+			_recycle_spatula_tap_ring(ring)
 			continue
 		mat.albedo_color = Color(1.0, 1.0, 1.0, alpha)
-		mi.mesh = _build_spatula_circle_mesh(rad, SPATULA_TAP_RING_STROKE)
-		keep.append(ring)
-	_spatula_tap_rings = keep
+		## One shared unit mesh; scale is cheap and avoids a mesh upload every frame.
+		mi.scale = Vector3(rad, 1.0, rad)
 
 
 func _try_spatula_edge_tap_fx(at: Vector3) -> void:
@@ -10682,86 +10741,111 @@ func _update_oil_trail_fire_spread(delta: float) -> void:
 
 func _spawn_spatula_edge_spark(at: Vector3) -> void:
 	## Subtle transparent line streaks — metal tip on steel (not chunky dots).
+	_ensure_spatula_spark_pool()
+	if _spatula_spark_pool.is_empty() and not _spatula_sparks.is_empty():
+		_recycle_spatula_spark(_spatula_sparks.pop_front())
+	if _spatula_spark_pool.is_empty():
+		return
 	var center := Vector3(at.x, GRILL_SURFACE_Y + 0.012, at.z)
-	var root := Node3D.new()
-	root.name = "SpatulaEdgeSpark"
+	var item: Dictionary = _spatula_spark_pool.pop_back()
+	var root: Node3D = item["root"]
+	var fx: GPUParticles3D = item["fx"]
 	root.position = center
-	add_child(root)
-	var fx := GPUParticles3D.new()
-	fx.amount = 6
-	fx.lifetime = 0.12
-	fx.one_shot = true
-	fx.explosiveness = 0.92
-	fx.randomness = 0.55
+	root.visible = true
+	fx.restart()
 	fx.emitting = true
-	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	fx.sorting_offset = 10.0
-	var pmat := ParticleProcessMaterial.new()
-	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pmat.emission_sphere_radius = 0.004
-	pmat.direction = Vector3(0, 1, 0)
-	pmat.spread = 38.0
-	pmat.initial_velocity_min = 0.45
-	pmat.initial_velocity_max = 1.05
-	pmat.gravity = Vector3(0, -3.2, 0)
-	pmat.damping_min = 2.0
-	pmat.damping_max = 3.8
-	pmat.scale_min = 0.55
-	pmat.scale_max = 1.05
-	## Stretch streaks along flight direction.
-	pmat.particle_flag_align_y = true
-	pmat.color = Color(1.0, 0.9, 0.55, 0.35)
-	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.15, 0.55, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 0.96, 0.75, 0.0),
-		Color(1.0, 0.9, 0.5, 0.42),
-		Color(1.0, 0.55, 0.18, 0.18),
-		Color(0.5, 0.15, 0.04, 0.0),
-	])
-	var gtex := GradientTexture1D.new()
-	gtex.gradient = grad
-	pmat.color_ramp = gtex
-	fx.process_material = pmat
-	## Thin needle along Y — reads as a spark line once aligned to velocity.
-	var streak := CylinderMesh.new()
-	streak.top_radius = 0.00055
-	streak.bottom_radius = 0.0009
-	streak.height = 0.022
-	streak.radial_segments = 4
-	streak.rings = 1
-	var draw := StandardMaterial3D.new()
-	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	draw.albedo_color = Color(1.0, 0.92, 0.55, 0.38)
-	draw.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
-	draw.cull_mode = BaseMaterial3D.CULL_DISABLED
-	draw.disable_receive_shadows = true
-	draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	draw.render_priority = 16
-	fx.draw_pass_1 = streak
-	fx.material_override = draw
-	root.add_child(fx)
-	_spatula_sparks.append({"root": root, "t": 0.0001})
+	item["t"] = 0.0001
+	_spatula_sparks.append(item)
 	if game_audio and game_audio.has_method("play_grease_pop"):
 		game_audio.play_grease_pop(false)
+
+
+func _ensure_spatula_spark_pool() -> void:
+	while _spatula_spark_pool.size() + _spatula_sparks.size() < SPATULA_SPARK_POOL_SIZE:
+		var root := Node3D.new()
+		root.name = "SpatulaEdgeSparkPool"
+		root.visible = false
+		add_child(root)
+		var fx := GPUParticles3D.new()
+		fx.amount = 6
+		fx.lifetime = 0.12
+		fx.one_shot = true
+		fx.explosiveness = 0.92
+		fx.randomness = 0.55
+		fx.emitting = false
+		fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		fx.sorting_offset = 10.0
+		var pmat := ParticleProcessMaterial.new()
+		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+		pmat.emission_sphere_radius = 0.004
+		pmat.direction = Vector3(0, 1, 0)
+		pmat.spread = 38.0
+		pmat.initial_velocity_min = 0.45
+		pmat.initial_velocity_max = 1.05
+		pmat.gravity = Vector3(0, -3.2, 0)
+		pmat.damping_min = 2.0
+		pmat.damping_max = 3.8
+		pmat.scale_min = 0.55
+		pmat.scale_max = 1.05
+		## Stretch streaks along flight direction.
+		pmat.particle_flag_align_y = true
+		pmat.color = Color(1.0, 0.9, 0.55, 0.35)
+		var grad := Gradient.new()
+		grad.offsets = PackedFloat32Array([0.0, 0.15, 0.55, 1.0])
+		grad.colors = PackedColorArray([
+			Color(1.0, 0.96, 0.75, 0.0),
+			Color(1.0, 0.9, 0.5, 0.42),
+			Color(1.0, 0.55, 0.18, 0.18),
+			Color(0.5, 0.15, 0.04, 0.0),
+		])
+		var gtex := GradientTexture1D.new()
+		gtex.gradient = grad
+		pmat.color_ramp = gtex
+		fx.process_material = pmat
+		## Thin needle along Y — reads as a spark line once aligned to velocity.
+		var streak := CylinderMesh.new()
+		streak.top_radius = 0.00055
+		streak.bottom_radius = 0.0009
+		streak.height = 0.022
+		streak.radial_segments = 4
+		streak.rings = 1
+		var draw := StandardMaterial3D.new()
+		draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		draw.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		draw.albedo_color = Color(1.0, 0.92, 0.55, 0.38)
+		draw.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
+		draw.cull_mode = BaseMaterial3D.CULL_DISABLED
+		draw.disable_receive_shadows = true
+		draw.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		draw.render_priority = 16
+		fx.draw_pass_1 = streak
+		fx.material_override = draw
+		root.add_child(fx)
+		_spatula_spark_pool.append({"root": root, "fx": fx, "t": 0.0})
+
+
+func _recycle_spatula_spark(item: Dictionary) -> void:
+	var root: Node3D = item.get("root") as Node3D
+	if root == null or not is_instance_valid(root):
+		return
+	root.visible = false
+	item["t"] = 0.0
+	_spatula_spark_pool.append(item)
 
 
 func _tick_spatula_edge_sparks(delta: float) -> void:
 	if _spatula_sparks.is_empty():
 		return
-	var keep: Array = []
-	for spark in _spatula_sparks:
+	for i in range(_spatula_sparks.size() - 1, -1, -1):
+		var spark: Dictionary = _spatula_sparks[i]
 		var t := float(spark["t"]) + delta
 		spark["t"] = t
 		var root: Node = spark.get("root")
 		if t >= 0.28 or root == null or not is_instance_valid(root):
-			if root != null and is_instance_valid(root):
-				root.queue_free()
+			_spatula_sparks.remove_at(i)
+			_recycle_spatula_spark(spark)
 			continue
-		keep.append(spark)
-	_spatula_sparks = keep
 
 
 func _spatula_anim_sample(u: float) -> Dictionary:
@@ -10953,6 +11037,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	## Keep the glove pointer even while the 3D spatula is out.
 	_set_cursor_kind("glove")
 	if not show or camera == null:
+		_spatula_visual_smooth_valid = false
 		_spatula_balance_last_mouse = mouse
 		## FX can outlive the spatula pose — keep fading even if aim leaves the grill.
 		if _spatula_fx_t >= 0.0:
@@ -10961,15 +11046,8 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var carrying := spatula_patty != null and is_instance_valid(spatula_patty)
 	var hold_y := GRILL_SURFACE_Y + (HAND_SPATULA_CARRY_Y if carrying else HAND_SPATULA_HOLD_Y)
 	var tip_target := _hand_spatula_tip_from_screen(mouse, hold_y)
-	## Tap pose cancels as soon as aim leaves the hit cell — ting still plays there.
-	## Place-squash / bot poke (mute ting) stay locked even at slap speed — don't abort mid-press.
-	var locked_press := _spatula_anim_kind == 1 and (
-		_spatula_mute_ting or _spatula_anim_dur >= HAND_SPATULA_PLACE_SMASH_DUR * 0.9
-	)
-	if (_spatula_anim_kind == 1 or _spatula_anim_kind == 2) and not locked_press \
-			and _spatula_tap_aim_moved(mouse, tip_target):
-		_spatula_cancel_tap_keep_ting()
-		animating = false
+	## Piano taps remain additive to the live cursor target. Locked food presses
+	## still use their captured world anchor so gameplay contact stays exact.
 	## Active tap / smash / flip use their own anchors — don't bail if cursor ray misses the steel.
 	if tip_target == Vector3.ZERO and not dragging and not grill_hold \
 			and _spatula_anim_kind != 1 and _spatula_anim_kind != 2 \
@@ -11111,12 +11189,17 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 				tip_target.y = GRILL_SURFACE_Y + HAND_SPATULA_HOLD_SLIDE_CLEAR
 				pitch = HAND_SPATULA_EMPTY_ROT.x + HAND_SPATULA_SLAP_FWD_PITCH
 	elif _spatula_anim_kind == 1 or _spatula_anim_kind == 2:
-		## Stay locked to the tap only while aim is still on that cell.
+		## The note/contact stays at the clicked cell, while the visible blade keeps
+		## following the cursor in XZ. This removes the old end-of-tap snap.
 		_spatula_anim_t += delta
 		var dur_t := maxf(_spatula_anim_dur, 0.001)
 		var u_t := clampf(_spatula_anim_t / dur_t, 0.0, 1.0)
 		var sample_t := _spatula_anim_sample(u_t)
-		tip_target = sample_t["anchor"]
+		var tap_anchor: Vector3 = sample_t["anchor"]
+		if not _spatula_mute_ting and tip_target != Vector3.ZERO:
+			tap_anchor.x = tip_target.x
+			tap_anchor.z = tip_target.z
+		tip_target = tap_anchor
 		pitch = float(sample_t["pitch"])
 		roll = float(sample_t["roll"])
 		if u_t >= 1.0:
@@ -11175,6 +11258,21 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	var pivot_basis := balance_basis if use_balance_basis else Basis.from_euler(Vector3(deg_to_rad(pitch), deg_to_rad(yaw), deg_to_rad(roll)))
 	var pivot_world := pivot_basis * pivot_local
 	hand_spatula_root.global_position = tip_target - pivot_world
+	var smooth_visual := not _spatula_balance_active and not dragging \
+			and _spatula_anim_kind != 3 and _spatula_anim_kind != 4 \
+			and not _spatula_mute_ting and not _spatula_smash_returning
+	if smooth_visual:
+		var desired_xform := hand_spatula_root.global_transform
+		if not _spatula_visual_smooth_valid:
+			_spatula_visual_smooth_xform = desired_xform
+			_spatula_visual_smooth_valid = true
+		else:
+			var visual_blend := 1.0 - exp(-HAND_SPATULA_VISUAL_SMOOTH_SPEED * maxf(delta, 0.0))
+			_spatula_visual_smooth_xform = _spatula_visual_smooth_xform.interpolate_with(desired_xform, visual_blend)
+			hand_spatula_root.global_transform = _spatula_visual_smooth_xform
+	else:
+		_spatula_visual_smooth_xform = hand_spatula_root.global_transform
+		_spatula_visual_smooth_valid = true
 	if _spatula_smash_returning:
 		## The pose above is the live-cursor target. Blend from the last smash
 		## frame so the blade glides home instead of popping there.
@@ -45446,17 +45544,17 @@ func _update_held_condiment(delta: float) -> void:
 		condiment_tool_held = ""
 		return
 	var mouse := get_viewport().get_mouse_position()
-	if condiment_tool_pouring:
-		var reach := _tool_hold_point_from_screen(
-			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_CUSTOMER_HOLD_Z_MAX
+	if condiment_tool_pouring and _condiment_hold_at_far_extent(mouse):
+		var hold := _tool_hold_point_from_screen(
+			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_HOLD_Z_MAX
 		)
-		if reach != Vector3.ZERO and not _condiment_hold_on_grill(reach):
-			var cust_aim: Dictionary = _find_customer_near_condiment_bottle(reach)
-			if not cust_aim.is_empty():
-				_update_held_condiment_on_customer(delta, root, mouse, cust_aim, reach)
-				return
-			## Off the grill but not close enough to hit anyone — don't auto-splat.
-			root.global_position = reach
+		var cust_aim: Dictionary = _find_customer_under_ext_spray(CONDIMENT_CUSTOMER_SPRAY_PX)
+		if not cust_aim.is_empty():
+			_update_held_condiment_on_customer(delta, root, mouse, cust_aim, hold)
+			return
+		## Pushed to the window stop with nobody in the stream — don't write on the grill.
+		if hold != Vector3.ZERO:
+			root.global_position = hold
 			root.rotation_degrees = Vector3(_condiment_held_pitch(), 0.0, 0.0)
 			condiment_tool_last_draw = Vector3.ZERO
 			condiment_tool_last_dir = Vector3.ZERO
@@ -45467,7 +45565,7 @@ func _update_held_condiment(delta: float) -> void:
 			_update_condiment_stream(
 				condiment_tool_held,
 				root,
-				reach + Vector3(0.0, -0.10, 0.04),
+				hold + Vector3(0.0, -0.10, 0.04),
 				condiment_tool_stream_phase
 			)
 			return
@@ -45530,38 +45628,19 @@ func _condiment_hold_on_grill(pos: Vector3) -> bool:
 	return absf(pos.x - GRILL_CENTER_X) <= hx and absf(pos.z - GRILL_SURFACE_Z) <= hz
 
 
-func _find_customer_near_condiment_bottle(bottle_pos: Vector3) -> Dictionary:
-	## 3D reach only. Screen proximity used to squirt anyone standing in view.
-	if customers_root == null:
-		return {}
-	var best: Dictionary = {}
-	var best_d := CONDIMENT_CUSTOMER_SPRAY_REACH
-	for c in customers_root.get_children():
-		if c == null or not is_instance_valid(c):
-			continue
-		if not c.has_method("receive_sauce"):
-			continue
-		var cust := c as Node3D
-		if cust == null:
-			continue
-		var xz := Vector2(bottle_pos.x - cust.global_position.x, bottle_pos.z - cust.global_position.z).length()
-		if xz > CONDIMENT_CUSTOMER_SPRAY_XZ:
-			continue
-		var chest: Vector3 = cust.global_position + Vector3(0.0, 1.12, 0.04)
-		var head: Vector3 = cust.global_position + Vector3(0.0, 1.22, 0.0)
-		var face: Vector3 = cust.global_position + Vector3(0.0, 1.38, 0.06)
-		var d_chest := bottle_pos.distance_to(chest)
-		var d_head := bottle_pos.distance_to(head)
-		var d_face := bottle_pos.distance_to(face)
-		var d := minf(minf(d_chest, d_head), d_face)
-		if d >= best_d:
-			continue
-		best_d = d
-		var zone := "face"
-		if d_chest + 0.05 < minf(d_head, d_face):
-			zone = "body"
-		best = {"customer": cust, "zone": zone}
-	return best
+func _condiment_hold_at_far_extent(screen_pos: Vector2) -> bool:
+	## True only when the cursor is pushing the bottle into the original window stop.
+	if camera == null:
+		return false
+	var hold_y := GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT
+	var from := camera.project_ray_origin(screen_pos)
+	var dir := camera.project_ray_normal(screen_pos)
+	if absf(dir.y) <= 0.002:
+		return false
+	var t := (hold_y - from.y) / dir.y
+	if t <= 0.05:
+		return false
+	return (from + dir * t).z >= CONDIMENT_HOLD_Z_MAX
 
 
 func _update_held_condiment_on_customer(
@@ -45569,7 +45648,7 @@ func _update_held_condiment_on_customer(
 ) -> void:
 	if hold == Vector3.ZERO:
 		hold = _tool_hold_point_from_screen(
-			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_CUSTOMER_HOLD_Z_MAX
+			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_HOLD_Z_MAX
 		)
 	if hold != Vector3.ZERO:
 		root.global_position = hold
@@ -45924,28 +46003,185 @@ func _make_crinkled_bill_mesh(size: Vector2, curve_r: float, crinkle_amp: float,
 	return st.commit()
 
 
-func _make_tip_bill_mesh(in_jar: bool, size_mul: float = 1.0) -> MeshInstance3D:
-	var bill := MeshInstance3D.new()
-	bill.name = "TipBill"
+func _payment_bill_variant_count(in_jar: bool) -> int:
+	return PAYMENT_BILL_JAR_VARIANTS if in_jar else PAYMENT_BILL_FLY_VARIANTS
+
+
+func _cached_tip_bill_mesh(in_jar: bool, size_mul: float, variant: int) -> ArrayMesh:
+	var count := _payment_bill_variant_count(in_jar)
+	var safe_variant := posmod(variant, count)
 	var mul: float = maxf(size_mul, 0.2)
+	var key := "%d|%.3f|%d" % [int(in_jar), mul, safe_variant]
+	var cached: ArrayMesh = _payment_bill_mesh_cache.get(key, null) as ArrayMesh
+	if cached != null:
+		return cached
 	var size: Vector2 = (Vector2(0.048, 0.026) if in_jar else Vector2(0.092, 0.048)) * mul
 	var curve_r: float = (0.030 if in_jar else 0.16) * mul
 	var crinkle_amp: float = (0.0017 if in_jar else 0.0026) * mul
-	bill.mesh = _make_crinkled_bill_mesh(size, curve_r, crinkle_amp, randf() * TAU)
+	## Stable variants keep the handmade crinkle without rebuilding geometry at payout time.
+	var seed_f := 0.47 + float(safe_variant) * 1.173
+	cached = _make_crinkled_bill_mesh(size, curve_r, crinkle_amp, seed_f)
+	_payment_bill_mesh_cache[key] = cached
+	return cached
+
+
+func _cached_tip_bill_material(in_jar: bool) -> StandardMaterial3D:
+	var key := "jar" if in_jar else "fly"
+	var cached: StandardMaterial3D = _payment_bill_material_cache.get(key, null) as StandardMaterial3D
+	if cached != null:
+		return cached
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 	mat.albedo_texture = _make_tip_bill_texture()
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	mat.albedo_color = Color.WHITE
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.render_priority = 4
-	bill.material_override = mat
+	mat.no_depth_test = not in_jar
+	mat.render_priority = 4 if in_jar else 24
+	_payment_bill_material_cache[key] = mat
+	return mat
+
+
+func _make_tip_bill_mesh(in_jar: bool, size_mul: float = 1.0, variant: int = -1) -> MeshInstance3D:
+	var bill := MeshInstance3D.new()
+	bill.name = "TipBill"
+	var use_variant := randi() % _payment_bill_variant_count(in_jar) if variant < 0 else variant
+	bill.mesh = _cached_tip_bill_mesh(in_jar, size_mul, use_variant)
+	bill.material_override = _cached_tip_bill_material(in_jar)
 	bill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	## Face the cook/camera (−Z). Lean up from the jar floor so the 1 reads.
 	bill.rotation_degrees = Vector3(-36.0, 180.0, 0.0)
 	return bill
+
+
+func _ensure_payment_bill_assets() -> void:
+	if _payment_bill_assets_ready:
+		return
+	if world == null or not is_instance_valid(world):
+		return
+	_make_tip_bill_texture()
+	for variant in PAYMENT_BILL_FLY_VARIANTS:
+		_cached_tip_bill_mesh(false, 1.615, variant)
+		_cached_tip_bill_mesh(false, 2.04, variant)
+	for jar_variant in PAYMENT_BILL_JAR_VARIANTS:
+		_cached_tip_bill_mesh(true, 1.0, jar_variant)
+	_cached_tip_bill_material(false)
+	_cached_tip_bill_material(true)
+	_payment_bill_pool = _payment_bill_pool.filter(func(b):
+		return b != null and is_instance_valid(b)
+	)
+	_payment_bill_active = _payment_bill_active.filter(func(b):
+		return b != null and is_instance_valid(b)
+	)
+	while _payment_bill_pool.size() + _payment_bill_active.size() < PAYMENT_BILL_POOL_SIZE:
+		var bill := MeshInstance3D.new()
+		bill.name = "PaymentBillPool"
+		bill.mesh = _cached_tip_bill_mesh(false, 2.04, _payment_bill_pool.size())
+		bill.material_override = _cached_tip_bill_material(false)
+		bill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		bill.visible = false
+		world.add_child(bill)
+		bill.top_level = true
+		_payment_bill_pool.append(bill)
+	_payment_bill_assets_ready = true
+
+
+func _recycle_payment_bill(bill: MeshInstance3D) -> void:
+	if bill == null or not is_instance_valid(bill):
+		return
+	if bill.has_meta("payment_bill_tween"):
+		var old_tween: Tween = bill.get_meta("payment_bill_tween") as Tween
+		bill.remove_meta("payment_bill_tween")
+		if old_tween != null and is_instance_valid(old_tween):
+			old_tween.kill()
+	for meta_key in [
+		"payment_bill_elapsed", "payment_bill_delay", "payment_bill_duration",
+		"payment_bill_start_scale", "payment_bill_end_scale", "payment_bill_start_rot",
+		"payment_bill_end_rot", "payment_bill_to_tip", "payment_bill_arc_ease"
+	]:
+		if bill.has_meta(meta_key):
+			bill.remove_meta(meta_key)
+	_payment_bill_active.erase(bill)
+	bill.visible = false
+	bill.scale = Vector3.ONE
+	bill.rotation_degrees = Vector3.ZERO
+	if not _payment_bill_pool.has(bill):
+		_payment_bill_pool.append(bill)
+
+
+func _acquire_payment_bill(size_mul: float, variant: int, bill_name: String) -> MeshInstance3D:
+	_ensure_payment_bill_assets()
+	if _payment_bill_pool.is_empty() and not _payment_bill_active.is_empty():
+		## A burst should never allocate mid-game. Recycle the oldest visual if the pool is saturated.
+		_recycle_payment_bill(_payment_bill_active.front())
+	if _payment_bill_pool.is_empty():
+		return null
+	var bill: MeshInstance3D = _payment_bill_pool.pop_back()
+	bill.name = bill_name
+	bill.mesh = _cached_tip_bill_mesh(false, size_mul, variant)
+	bill.material_override = _cached_tip_bill_material(false)
+	bill.visible = true
+	bill.scale = Vector3.ONE
+	bill.rotation_degrees = Vector3.ZERO
+	bill.sorting_offset = 24.0
+	_payment_bill_active.append(bill)
+	return bill
+
+
+func _start_payment_bill_motion(
+	bill: MeshInstance3D,
+	delay: float,
+	duration: float,
+	end_scale: Vector3,
+	end_rotation: Vector3,
+	to_tip: bool,
+	arc_ease: String
+) -> void:
+	bill.set_meta("payment_bill_elapsed", 0.0)
+	bill.set_meta("payment_bill_delay", delay)
+	bill.set_meta("payment_bill_duration", maxf(duration, 0.01))
+	bill.set_meta("payment_bill_start_scale", bill.scale)
+	bill.set_meta("payment_bill_end_scale", end_scale)
+	bill.set_meta("payment_bill_start_rot", bill.rotation_degrees)
+	bill.set_meta("payment_bill_end_rot", end_rotation)
+	bill.set_meta("payment_bill_to_tip", to_tip)
+	bill.set_meta("payment_bill_arc_ease", arc_ease)
+
+
+func _update_payment_bills(delta: float) -> void:
+	for idx in range(_payment_bill_active.size() - 1, -1, -1):
+		var bill: MeshInstance3D = _payment_bill_active[idx]
+		if bill == null or not is_instance_valid(bill):
+			_payment_bill_active.remove_at(idx)
+			continue
+		var elapsed: float = float(bill.get_meta("payment_bill_elapsed", 0.0)) + delta
+		bill.set_meta("payment_bill_elapsed", elapsed)
+		var delay: float = float(bill.get_meta("payment_bill_delay", 0.0))
+		if elapsed < delay:
+			continue
+		var duration: float = float(bill.get_meta("payment_bill_duration", 1.0))
+		var t := clampf((elapsed - delay) / duration, 0.0, 1.0)
+		var arc_t := t
+		if str(bill.get_meta("payment_bill_arc_ease", "cubic")) == "quad_in":
+			arc_t = t * t
+		elif t < 0.5:
+			arc_t = 4.0 * t * t * t
+		else:
+			arc_t = 1.0 - pow(-2.0 * t + 2.0, 3.0) * 0.5
+		_sale_bill_arc_node(arc_t, bill)
+		var start_scale: Vector3 = bill.get_meta("payment_bill_start_scale", Vector3.ONE) as Vector3
+		var end_scale: Vector3 = bill.get_meta("payment_bill_end_scale", Vector3.ONE) as Vector3
+		bill.scale = start_scale.lerp(end_scale, t * t)
+		var start_rot: Vector3 = bill.get_meta("payment_bill_start_rot", Vector3.ZERO) as Vector3
+		var end_rot: Vector3 = bill.get_meta("payment_bill_end_rot", Vector3.ZERO) as Vector3
+		bill.rotation_degrees = start_rot.lerp(end_rot, t)
+		if t >= 1.0:
+			if bool(bill.get_meta("payment_bill_to_tip", false)):
+				_on_tip_bill_landed(bill)
+			else:
+				_on_sale_bill_landed(bill)
 
 
 func _make_tip_sign_mesh() -> MeshInstance3D:
@@ -46228,8 +46464,18 @@ func _tip_pay_start_global(customer: Node3D) -> Vector3:
 
 func _on_tip_bill_landed(bill: MeshInstance3D) -> void:
 	if bill != null and is_instance_valid(bill):
-		bill.queue_free()
+		if bill.has_meta("payment_bill_tween"):
+			bill.remove_meta("payment_bill_tween")
+		_recycle_payment_bill(bill)
 	_add_tip_jar_settled_bill()
+
+
+func _on_sale_bill_landed(bill: MeshInstance3D) -> void:
+	if bill == null or not is_instance_valid(bill):
+		return
+	if bill.has_meta("payment_bill_tween"):
+		bill.remove_meta("payment_bill_tween")
+	_recycle_payment_bill(bill)
 
 
 func _fly_pay_bills_to_tip_jar(customer: Node3D, count: int) -> void:
@@ -46242,14 +46488,9 @@ func _fly_pay_bills_to_tip_jar(customer: Node3D, count: int) -> void:
 		return
 	var n: int = clampi(count, 1, 4)
 	for i in n:
-		var bill: MeshInstance3D = _make_tip_bill_mesh(false, 1.615)
-		bill.name = "TipFlyBill"
-		world.add_child(bill)
-		bill.top_level = true
-		var mat: StandardMaterial3D = bill.material_override as StandardMaterial3D
-		if mat != null:
-			mat.no_depth_test = true
-			mat.render_priority = 22
+		var bill: MeshInstance3D = _acquire_payment_bill(1.615, i, "TipFlyBill")
+		if bill == null:
+			continue
 		bill.sorting_offset = 22.0
 		var jitter := Vector3(randf_range(-0.04, 0.04), randf_range(0.0, 0.06), randf_range(-0.03, 0.03))
 		var start_p: Vector3 = from + jitter
@@ -46261,14 +46502,15 @@ func _fly_pay_bills_to_tip_jar(customer: Node3D, count: int) -> void:
 		bill.set_meta("fly_dest", dest)
 		var delay: float = float(i) * 0.07
 		var dur: float = 0.62
-		var tw: Tween = create_tween()
-		tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
-		if delay > 0.0:
-			tw.tween_interval(delay)
-		tw.tween_method(_sale_bill_arc_node.bind(bill), 0.0, 1.0, dur) \
-			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(bill, "rotation_degrees", Vector3(-36.0, 180.0 + randf_range(-18.0, 18.0), randf_range(-12.0, 12.0)), dur)
-		tw.chain().tween_callback(_on_tip_bill_landed.bind(bill))
+		_start_payment_bill_motion(
+			bill,
+			delay,
+			dur,
+			bill.scale,
+			Vector3(-36.0, 180.0 + randf_range(-18.0, 18.0), randf_range(-12.0, 12.0)),
+			true,
+			"quad_in"
+		)
 
 
 func _bun_visual_pair_count() -> int:
@@ -67568,14 +67810,9 @@ func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
 	var from: Vector3 = _tip_pay_start_global(customer)
 	var n: int = clampi(count, 1, 12)
 	for i in n:
-		var bill: MeshInstance3D = _make_tip_bill_mesh(false, 2.04)
-		bill.name = "SaleFlyBill"
-		world.add_child(bill)
-		bill.top_level = true
-		var mat: StandardMaterial3D = bill.material_override as StandardMaterial3D
-		if mat != null:
-			mat.no_depth_test = true
-			mat.render_priority = 24
+		var bill: MeshInstance3D = _acquire_payment_bill(2.04, i, "SaleFlyBill")
+		if bill == null:
+			continue
 		bill.sorting_offset = 24.0
 		var jitter := Vector3(randf_range(-0.10, 0.10), randf_range(0.04, 0.16), randf_range(-0.08, 0.08))
 		var start_p: Vector3 = from + jitter
@@ -67593,29 +67830,29 @@ func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
 		bill.set_meta("fly_dest", dest)
 		var delay: float = randf_range(0.0, 0.08) + float(i) * randf_range(0.04, 0.09)
 		var dur: float = randf_range(0.85, 1.25)
-		var tw := create_tween()
-		tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
-		tw.tween_interval(delay)
-		tw.tween_method(_sale_bill_arc_node.bind(bill), 0.0, 1.0, dur) \
-			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-		tw.parallel().tween_property(bill, "scale", Vector3(0.22, 0.22, 0.22), dur) \
-			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(
+		_start_payment_bill_motion(
 			bill,
-			"rotation_degrees",
+			delay,
+			dur,
+			Vector3(0.22, 0.22, 0.22),
 			Vector3(-10.0, 180.0 + randf_range(-22.0, 22.0), randf_range(-18.0, 18.0)),
-			dur
+			false,
+			"cubic"
 		)
-		tw.chain().tween_callback(bill.queue_free)
 
 
 func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: float, to_amount: float) -> void:
+	var perf_started := Time.get_ticks_usec() if OS.is_debug_build() else 0
 	if game_audio != null and game_audio.has_method("play_chaching"):
 		game_audio.play_chaching()
 	var hud_n: int = clampi(4 + int(maxi(base + tip, 1) / 3), 5, 10)
 	_fly_sale_bills_to_hud(customer, hud_n)
 	_fly_pay_bills_to_tip_jar(customer, 1)
 	_start_hud_money_climb(from_shown, to_amount)
+	if OS.is_debug_build():
+		var payout_usec := Time.get_ticks_usec() - perf_started
+		if payout_usec > 3000:
+			print("PAYMENT FX SPIKE: %.2f ms" % (float(payout_usec) / 1000.0))
 
 
 @rpc("authority", "call_remote", "reliable")
