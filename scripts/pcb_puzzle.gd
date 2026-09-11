@@ -135,6 +135,7 @@ var _close_btn: Button = null
 var _reset_btn: Button = null
 var _next_btn: Button = null
 var _bar: HBoxContainer = null
+var _last_drag_pos: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
@@ -216,8 +217,10 @@ func _build_chrome() -> void:
 	add_child(_title)
 
 	_hint = Label.new()
-	_hint.text = "Drag IN to OUT. Dead ends need a backtrack. Stay on copper.  `  or Esc closes."
+	_hint.text = "CLICK + HOLD ON IN  •  DRAG ALONG THE GOLD ROUTE  •  RELEASE AT OUT\nDead end? Drag backward or press R to restart."
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_luckiest_label(_hint, 14)
 	_hint.add_theme_color_override("font_color", Color(0.82, 0.92, 0.70, 0.95))
 	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -325,7 +328,7 @@ func _refresh_chrome() -> void:
 		else:
 			_title.text = "TRACE THE TRACE   ·   ROUTE %d / %d" % [_maze_index + 1, MAZES.size()]
 	if _hint != null and _repair_lock:
-		_hint.text = "Fix the short — drag IN to OUT. Dead ends need a backtrack."
+		_hint.text = "CLICK + HOLD ON IN  •  DRAG ALONG THE GOLD ROUTE  •  RELEASE AT OUT\nDead end? Drag backward or press R to restart."
 	if _status != null:
 		if _repair_lock and (_just_solved or _solved[_maze_index]):
 			_status.text = "ROUTE COMPLETE  ·  MACHINE ONLINE"
@@ -359,8 +362,9 @@ func _layout_chrome() -> void:
 		_title.position = Vector2(0.0, 10.0)
 		_title.size = Vector2(s.x, 36.0)
 	if _hint != null:
-		_hint.position = Vector2(20.0, 42.0)
-		_hint.size = Vector2(s.x - 40.0, 24.0)
+		var board := _board_rect()
+		_hint.position = Vector2(maxf(20.0, board.position.x - 30.0), board.end.y + 5.0)
+		_hint.size = Vector2(minf(s.x - 40.0, board.size.x + 60.0), 48.0)
 	if _status != null:
 		_status.position = Vector2(0.0, 64.0)
 		_status.size = Vector2(s.x, 26.0)
@@ -374,8 +378,8 @@ func _layout_chrome() -> void:
 
 func _board_rect() -> Rect2:
 	var s: Vector2 = size
-	var side: float = minf(s.x, s.y) * 0.72
-	var pos: Vector2 = Vector2((s.x - side) * 0.5, (s.y - side) * 0.5 + 8.0)
+	var side: float = minf(s.x, s.y) * 0.66
+	var pos: Vector2 = Vector2((s.x - side) * 0.5, (s.y - side) * 0.5 - 12.0)
 	return Rect2(pos, Vector2(side, side))
 
 
@@ -409,12 +413,21 @@ func _cell_at(pos: Vector2) -> Vector2i:
 	var origin: Vector2 = _maze_origin()
 	var cs: float = _maze_cell_size()
 	var local: Vector2 = pos - origin
-	var c: Vector2i = Vector2i(int(floor(local.x / cs)), int(floor(local.y / cs)))
-	if not _walk.has(c):
-		return Vector2i(-1, -1)
-	if _cell_center(c).distance_to(pos) > cs * 0.58:
-		return Vector2i(-1, -1)
-	return c
+	var rough: Vector2i = Vector2i(int(floor(local.x / cs)), int(floor(local.y / cs)))
+	var best := Vector2i(-1, -1)
+	var best_d := cs * 0.92
+	## Search surrounding cells so the usable hit ribbon is wider than the
+	## painted copper without snapping across to a distant branch.
+	for oy in range(-1, 2):
+		for ox in range(-1, 2):
+			var candidate := rough + Vector2i(ox, oy)
+			if not _walk.has(candidate):
+				continue
+			var d := _cell_center(candidate).distance_to(pos)
+			if d < best_d:
+				best_d = d
+				best = candidate
+	return best
 
 
 func _neighbors(cell: Vector2i) -> Array[Vector2i]:
@@ -456,20 +469,24 @@ func _begin_draw(pos: Vector2) -> void:
 			return
 		_drawn.append(_start)
 		_dragging = true
+		_last_drag_pos = pos
 		queue_redraw()
 		return
 	var last: Vector2i = _drawn[_drawn.size() - 1]
 	if cell == last:
 		_dragging = true
+		_last_drag_pos = pos
 		return
 	if _drawn.size() >= 2 and cell == _drawn[_drawn.size() - 2]:
 		_drawn.remove_at(_drawn.size() - 1)
 		_dragging = true
+		_last_drag_pos = pos
 		queue_redraw()
 		return
 	if cell in _neighbors(last) and not _drawn.has(cell):
 		_drawn.append(cell)
 		_dragging = true
+		_last_drag_pos = pos
 		_check_solved()
 		queue_redraw()
 
@@ -477,6 +494,20 @@ func _begin_draw(pos: Vector2) -> void:
 func _continue_draw(pos: Vector2) -> void:
 	if _drawn.is_empty():
 		return
+	## Mouse events can jump over several tiny cells at low frame rates. Sample
+	## the whole drag segment so a quick natural gesture still advances.
+	var distance := _last_drag_pos.distance_to(pos)
+	var step_len := maxf(_maze_cell_size() * 0.28, 3.0)
+	var samples := maxi(1, int(ceil(distance / step_len)))
+	for sample_i in range(1, samples + 1):
+		var sample_pos := _last_drag_pos.lerp(pos, float(sample_i) / float(samples))
+		_continue_draw_at(sample_pos)
+		if _just_solved:
+			break
+	_last_drag_pos = pos
+
+
+func _continue_draw_at(pos: Vector2) -> void:
 	var cell: Vector2i = _cell_at(pos)
 	if cell.x < 0:
 		return

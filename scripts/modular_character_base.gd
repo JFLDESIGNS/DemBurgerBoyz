@@ -8,7 +8,7 @@ signal modules_changed
 enum NoseStyle { NONE, BUTTON, POINT }
 enum MouthStyle { SMILE, FLAT, OPEN }
 enum BrowStyle { NONE, STRAIGHT, ARCHED, ANGRY, WORRIED }
-enum LashStyle { NONE, THREE_TUBES, TORUS }
+enum LashStyle { ALMOND, ALMOND_RIM, CLASSIC, NONE }
 enum CheekStyle { NONE, ROSY_RADIAL }
 enum HairStyle { NONE, SIMPLE_PARTED, BUZZED, LONG, BUNS, LOWPOLY_MALE, LOWPOLY_SHORT_1, LOWPOLY_PONYTAIL, LOWPOLY_SHORT_2, CAP_WITH_HAIR, CAPSULE_FEMALE, CAPSULE_MALE }
 enum FacialHairStyle { NONE, FULL_BEARD, MOUSTACHE, SHORT_BEARD, QUATERNIUS_BEARD }
@@ -257,7 +257,7 @@ const CONTROL_BODY_SPECS := {
 			_build_eyes()
 			modules_changed.emit()
 
-@export var eyelid_enabled := false:
+@export var eyelid_enabled := true:
 	set(value):
 		eyelid_enabled = value
 		if _should_rebuild():
@@ -324,80 +324,22 @@ const CONTROL_BODY_SPECS := {
 	set(value):
 		lash_style = value
 		if _should_rebuild():
-			_build_lashes()
+			_build_eyes()
 			modules_changed.emit()
 
 @export var lash_color := Color("241817"):
 	set(value):
 		lash_color = value
 		if _should_rebuild():
-			_build_lashes()
+			_apply_eyelid_materials()
 			modules_changed.emit()
 
-@export_range(0.4, 2.0, 0.05) var lash_scale := 1.0:
+@export_range(0.01, 0.36, 0.005) var lash_rim_width := 0.035:
 	set(value):
-		lash_scale = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(0.4, 2.0, 0.05) var lash_length := 1.0:
-	set(value):
-		lash_length = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(0.4, 2.0, 0.05) var lash_thickness := 1.0:
-	set(value):
-		lash_thickness = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(-0.12, 0.18, 0.01) var lash_vertical := 0.0:
-	set(value):
-		lash_vertical = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(0.5, 1.8, 0.05) var lash_spacing := 1.0:
-	set(value):
-		lash_spacing = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(-0.18, 0.18, 0.01) var lash_depth := 0.0:
-	set(value):
-		lash_depth = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(0.0, 0.8, 0.01) var lash_fan := 0.28:
-	set(value):
-		lash_fan = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(-0.8, 0.8, 0.01) var left_lash_yaw := 0.0:
-	set(value):
-		left_lash_yaw = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(-0.8, 0.8, 0.01) var right_lash_yaw := 0.0:
-	set(value):
-		right_lash_yaw = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(0.35, 2.4, 0.01) var lash_ring_outer := 1.0:
-	set(value):
-		lash_ring_outer = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(0.20, 2.2, 0.01) var lash_ring_inner := 0.90:
-	set(value):
-		lash_ring_inner = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(-0.8, 0.8, 0.01) var lash_pitch := 0.0:
-	set(value):
-		lash_pitch = value
-		if _should_rebuild(): _build_lashes()
-
-@export_range(-0.8, 0.8, 0.01) var lash_tilt := 0.0:
-	set(value):
-		lash_tilt = value
-		if _should_rebuild(): _build_lashes()
+		lash_rim_width = value
+		if _should_rebuild():
+			_apply_eyelid_materials()
+			modules_changed.emit()
 
 @export var cheek_style: CheekStyle = CheekStyle.NONE:
 	set(value):
@@ -707,6 +649,15 @@ const CONTROL_BODY_SPECS := {
 			_build_hair()
 			modules_changed.emit()
 
+const MAX_EXTRA_HAIRS := 5
+## Extra stacked hair pieces. Each dict: style, color, scale, scale_xyz, offset.
+var extra_hairs: Array = []:
+	set(value):
+		extra_hairs = _normalize_extra_hairs(value)
+		if _should_rebuild():
+			_build_hair()
+			modules_changed.emit()
+
 @export var facial_hair_style: FacialHairStyle = FacialHairStyle.NONE:
 	set(value):
 		facial_hair_style = value
@@ -925,13 +876,18 @@ const CONTROL_BODY_SPECS := {
 
 @onready var toon_body: Node3D = $Body
 @onready var _clothing_root: Node3D = $Modules/Clothes
-const SKIN_PAINT_SIZE := 512
+## Texture resolution controls tattoo detail; mesh subdivision does not improve UV paint.
+## 1024 keeps one RGBA canvas lightweight while providing 4x the texel count of 512.
+const SKIN_PAINT_SIZE := 1024
 
 var _skin_material: ShaderMaterial
 var _skin_paint_image: Image
 var _skin_paint_texture: ImageTexture
 var _skin_paint_dirty := false
 var _skin_paint_has_marks := false
+var _skin_paint_unlit_preview := false
+var _skin_paint_needs_mark_scan := false
+var _skin_uv_guide_lines := PackedVector2Array()
 var _clothes_hidden_for_paint := false
 var _head_attachment: BoneAttachment3D
 var _eyes_root: Node3D
@@ -1635,6 +1591,13 @@ func load_control_rig_targets(values: Variant) -> void:
 func apply_saved_preset(data: Dictionary) -> void:
 	data = data.duplicate(true)
 	migrate_legacy_hair_fields(data)
+	# Old presets used 1/2 for tube and torus lashes. Both migrate to the new
+	# fitted rim; 0 stays the clean almond opening.
+	if int(data.get("eye_opening_version", 0)) < 1:
+		data["lash_style"] = int(LashStyle.NONE)
+	else:
+		data["lash_style"] = clampi(int(data.get("lash_style", int(LashStyle.NONE))), 0, 3)
+	data["eyelid_enabled"] = true
 	begin_appearance_batch()
 	var skipped := {
 		"pose_controls": true,
@@ -1645,6 +1608,7 @@ func apply_saved_preset(data: Dictionary) -> void:
 		"eyes": true,
 		"saved_at": true,
 		"skin_paint": true,
+		"extra_hairs": true,
 	}
 	for property_info in get_property_list():
 		var property_name := String(property_info.get("name", ""))
@@ -1664,6 +1628,7 @@ func apply_saved_preset(data: Dictionary) -> void:
 				set(property_name, int(raw_value))
 			TYPE_BOOL:
 				set(property_name, bool(raw_value))
+	extra_hairs = _normalize_extra_hairs(data.get("extra_hairs", []))
 	end_appearance_batch()
 	set_skin_paint_png_base64(str(data.get("skin_paint", "")))
 	if int(data.get("format_version", 1)) < 11:
@@ -1743,10 +1708,13 @@ render_mode diffuse_toon, specular_disabled, cull_back;
 
 uniform vec4 skin_color : source_color = vec4(0.85, 0.55, 0.37, 1.0);
 uniform sampler2D paint_tex : source_color, filter_linear, repeat_disable;
+uniform float unlit_preview : hint_range(0.0, 1.0) = 0.0;
 
 void fragment() {
 	vec4 paint = texture(paint_tex, UV);
-	ALBEDO = mix(skin_color.rgb, paint.rgb, clamp(paint.a, 0.0, 1.0));
+	vec3 diffuse_color = mix(skin_color.rgb, paint.rgb, clamp(paint.a, 0.0, 1.0));
+	ALBEDO = diffuse_color;
+	EMISSION = diffuse_color * unlit_preview;
 	ROUGHNESS = 0.82;
 }
 """
@@ -1755,7 +1723,54 @@ void fragment() {
 	material.set_shader_parameter("skin_color", skin_color)
 	_ensure_skin_paint()
 	material.set_shader_parameter("paint_tex", _skin_paint_texture)
+	material.set_shader_parameter("unlit_preview", 1.0 if _skin_paint_unlit_preview else 0.0)
 	return material
+
+
+func set_skin_paint_unlit_preview(enabled: bool) -> void:
+	_skin_paint_unlit_preview = enabled
+	if _skin_material != null:
+		_skin_material.set_shader_parameter("unlit_preview", 1.0 if enabled else 0.0)
+
+
+func get_skin_paint_resolution() -> int:
+	return SKIN_PAINT_SIZE
+
+
+func get_skin_paint_texture() -> Texture2D:
+	_ensure_skin_paint()
+	return _skin_paint_texture
+
+
+func commit_skin_paint() -> void:
+	if _skin_paint_needs_mark_scan and _skin_paint_image != null:
+		_skin_paint_has_marks = not _skin_paint_image.is_invisible()
+		_skin_paint_needs_mark_scan = false
+	_upload_skin_paint()
+
+
+func get_skin_paint_snapshot_png() -> PackedByteArray:
+	_ensure_skin_paint()
+	return _skin_paint_image.save_png_to_buffer()
+
+
+func restore_skin_paint_snapshot_png(bytes: PackedByteArray, has_marks: bool) -> void:
+	if bytes.is_empty():
+		clear_skin_paint()
+		return
+	var restored := Image.new()
+	if restored.load_png_from_buffer(bytes) != OK:
+		return
+	if restored.get_width() != SKIN_PAINT_SIZE or restored.get_height() != SKIN_PAINT_SIZE:
+		restored.resize(SKIN_PAINT_SIZE, SKIN_PAINT_SIZE, Image.INTERPOLATE_LANCZOS)
+	if restored.get_format() != Image.FORMAT_RGBA8:
+		restored.convert(Image.FORMAT_RGBA8)
+	_skin_paint_image = restored
+	_skin_paint_has_marks = has_marks
+	_skin_paint_texture = ImageTexture.create_from_image(_skin_paint_image)
+	_skin_paint_dirty = false
+	if _skin_material != null:
+		_skin_material.set_shader_parameter("paint_tex", _skin_paint_texture)
 
 
 func clear_skin_paint() -> void:
@@ -1925,7 +1940,7 @@ func _fallback_uv(vertex: Vector3) -> Vector2:
 	return Vector2(angle / TAU + 0.5, clampf(vertex.y * 0.55 + 0.5, 0.0, 1.0))
 
 
-func paint_skin_stamp(uv: Vector2, radius_px: float, color: Color, commit: bool = true) -> void:
+func paint_skin_stamp(uv: Vector2, radius_px: float, color: Color, hard_edge: bool = false, commit: bool = true) -> void:
 	if uv.x < 0.0:
 		return
 	_ensure_skin_paint()
@@ -1935,14 +1950,17 @@ func paint_skin_stamp(uv: Vector2, radius_px: float, color: Color, commit: bool 
 	## made the cursor appear unrelated to the mark on the model.
 	var cx := clampf(uv.x, 0.0, 1.0) * size_f
 	var cy := clampf(uv.y, 0.0, 1.0) * size_f
-	var radius := maxf(radius_px, 1.0)
+	var radius := maxf(radius_px, 0.5)
 	var r_i := int(ceil(radius))
 	for oy in range(-r_i, r_i + 1):
 		for ox in range(-r_i, r_i + 1):
 			var dist := sqrt(float(ox * ox + oy * oy))
 			if dist > radius:
 				continue
-			var falloff := pow(1.0 - dist / radius, 0.62)
+			var falloff := 1.0 if hard_edge else pow(1.0 - dist / maxf(radius, 0.001), 0.62)
+			## A one-pixel antialias fringe keeps hard tattoo edges crisp without stair steps.
+			if hard_edge and dist > radius - 1.0:
+				falloff = clampf(radius - dist, 0.0, 1.0)
 			var px := clampi(int(floor(cx + float(ox))), 0, SKIN_PAINT_SIZE - 1)
 			var py := clampi(int(floor(cy + float(oy))), 0, SKIN_PAINT_SIZE - 1)
 			var src := color
@@ -1958,7 +1976,34 @@ func paint_skin_stamp(uv: Vector2, radius_px: float, color: Color, commit: bool 
 		_upload_skin_paint()
 
 
-func blur_skin_stamp(uv: Vector2, radius_px: float) -> void:
+func erase_skin_stamp(uv: Vector2, radius_px: float, opacity: float = 1.0, commit: bool = true) -> void:
+	if uv.x < 0.0:
+		return
+	_ensure_skin_paint()
+	var size_f := float(SKIN_PAINT_SIZE - 1)
+	var cx := clampf(uv.x, 0.0, 1.0) * size_f
+	var cy := clampf(uv.y, 0.0, 1.0) * size_f
+	var radius := maxf(radius_px, 0.5)
+	var r_i := int(ceil(radius))
+	for oy in range(-r_i, r_i + 1):
+		for ox in range(-r_i, r_i + 1):
+			var dist := sqrt(float(ox * ox + oy * oy))
+			if dist > radius:
+				continue
+			var falloff := pow(1.0 - dist / maxf(radius, 0.001), 0.62)
+			var px := clampi(int(floor(cx + float(ox))), 0, SKIN_PAINT_SIZE - 1)
+			var py := clampi(int(floor(cy + float(oy))), 0, SKIN_PAINT_SIZE - 1)
+			var dst := _skin_paint_image.get_pixel(px, py)
+			dst.a *= 1.0 - clampf(opacity, 0.0, 1.0) * falloff
+			if dst.a < 0.002:
+				dst = Color(0.0, 0.0, 0.0, 0.0)
+			_skin_paint_image.set_pixel(px, py, dst)
+	_skin_paint_needs_mark_scan = true
+	if commit:
+		commit_skin_paint()
+
+
+func blur_skin_stamp(uv: Vector2, radius_px: float, commit: bool = true) -> void:
 	if uv.x < 0.0:
 		return
 	_ensure_skin_paint()
@@ -1987,7 +2032,8 @@ func blur_skin_stamp(uv: Vector2, radius_px: float) -> void:
 			var dst := snapshot.get_pixel(px, py)
 			var mix_w := 0.55 * (1.0 - dist / radius)
 			_skin_paint_image.set_pixel(px, py, dst.lerp(blurred, mix_w))
-	_upload_skin_paint()
+	if commit:
+		_upload_skin_paint()
 
 
 func fill_skin_lasso(from_camera: Camera3D, polygon: PackedVector2Array, color: Color) -> void:
@@ -2005,10 +2051,57 @@ func fill_skin_lasso(from_camera: Camera3D, polygon: PackedVector2Array, color: 
 			if Geometry2D.is_point_in_polygon(sample, polygon):
 				var uv := pick_skin_uv(from_camera, sample)
 				if uv.x >= 0.0:
-					paint_skin_stamp(uv, 3.5, color, false)
+					paint_skin_stamp(uv, 3.5, color, false, false)
 			x += step
 		y += step
 	_upload_skin_paint()
+
+
+func fill_skin_uv_lasso(polygon_uv: PackedVector2Array, color: Color, hard_edge: bool = false) -> void:
+	if polygon_uv.size() < 3:
+		return
+	_ensure_skin_paint()
+	var polygon_px := PackedVector2Array()
+	var bounds := Rect2(polygon_uv[0] * float(SKIN_PAINT_SIZE - 1), Vector2.ZERO)
+	for uv in polygon_uv:
+		var point := Vector2(clampf(uv.x, 0.0, 1.0), clampf(uv.y, 0.0, 1.0)) * float(SKIN_PAINT_SIZE - 1)
+		polygon_px.append(point)
+		bounds = bounds.expand(point)
+	var min_x := clampi(int(floor(bounds.position.x)), 0, SKIN_PAINT_SIZE - 1)
+	var max_x := clampi(int(ceil(bounds.end.x)), 0, SKIN_PAINT_SIZE - 1)
+	var min_y := clampi(int(floor(bounds.position.y)), 0, SKIN_PAINT_SIZE - 1)
+	var max_y := clampi(int(ceil(bounds.end.y)), 0, SKIN_PAINT_SIZE - 1)
+	for py in range(min_y, max_y + 1):
+		for px in range(min_x, max_x + 1):
+			if Geometry2D.is_point_in_polygon(Vector2(px, py), polygon_px):
+				var dst := _skin_paint_image.get_pixel(px, py)
+				var src_a := clampf(color.a, 0.0, 1.0)
+				var out_a := src_a + dst.a * (1.0 - src_a)
+				var out_rgb := Vector3.ZERO
+				if out_a > 0.0001:
+					out_rgb = (Vector3(color.r, color.g, color.b) * src_a + Vector3(dst.r, dst.g, dst.b) * dst.a * (1.0 - src_a)) / out_a
+				_skin_paint_image.set_pixel(px, py, Color(out_rgb.x, out_rgb.y, out_rgb.z, out_a))
+	_skin_paint_has_marks = true
+	_upload_skin_paint()
+
+
+func get_skin_uv_guide_lines() -> PackedVector2Array:
+	if not _skin_uv_guide_lines.is_empty():
+		return _skin_uv_guide_lines
+	var mesh_node := _get_skin_mesh()
+	if mesh_node != null and mesh_node.mesh != null:
+		for surface_index in mesh_node.mesh.get_surface_count():
+			var arrays := mesh_node.mesh.surface_get_arrays(surface_index)
+			var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV] if arrays[Mesh.ARRAY_TEX_UV] is PackedVector2Array else PackedVector2Array()
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] is PackedInt32Array else PackedInt32Array()
+			if uvs.is_empty() or indices.is_empty():
+				continue
+			for tri in range(0, indices.size(), 3):
+				var a := uvs[indices[tri]] * float(SKIN_PAINT_SIZE - 1)
+				var b := uvs[indices[tri + 1]] * float(SKIN_PAINT_SIZE - 1)
+				var c := uvs[indices[tri + 2]] * float(SKIN_PAINT_SIZE - 1)
+				_skin_uv_guide_lines.append_array(PackedVector2Array([a, b, b, c, c, a]))
+	return _skin_uv_guide_lines
 
 
 func _create_head_modules() -> void:
@@ -2075,7 +2168,7 @@ func _build_eyes() -> void:
 		_eyes_root.add_child(eye_group)
 		var eye_material := _eye_shader_material(-side * eye_pupil_inward)
 		_add_sphere(eye_group, "Eye", Vector3.ZERO, eye_half_size, eye_material)
-		if eyelid_enabled:
+		if eyelid_enabled and lash_style != LashStyle.NONE:
 			var lid_size := eye_half_size * Vector3(1.10, 1.12, 1.10) * eyelid_scale * Vector3(eyelid_width, eyelid_height, eyelid_depth)
 			var lid_pos := Vector3(0.0, eyelid_vertical, eyelid_forward)
 			_add_sphere(eye_group, "Eyelid", lid_pos, lid_size, _eyelid_shader_material(), 32, 16)
@@ -2086,72 +2179,8 @@ func _build_lashes() -> void:
 	if _lashes_root == null:
 		return
 	_clear(_lashes_root)
-	if lash_style == LashStyle.NONE:
-		return
-	var material := _toon_material(lash_color)
-	if lash_style == LashStyle.TORUS:
-		_build_torus_lashes(material)
-		return
-	var eye_y := 0.35 + eye_vertical + 0.105 * eye_height + lash_vertical
-	var eye_x := 0.18 * eye_spacing * lash_spacing
-	var eye_z := 0.51 + eye_depth + lash_depth
-	var tube_length := 0.075 * lash_scale * lash_length
-	var radius := 0.009 * lash_scale * lash_thickness
-	for side in [-1.0, 1.0]:
-		var group := Node3D.new()
-		group.name = "LeftLashes" if side < 0.0 else "RightLashes"
-		group.position = Vector3(side * eye_x, eye_y, eye_z) * _unit
-		group.rotation.y = left_lash_yaw if side < 0.0 else right_lash_yaw
-		_lashes_root.add_child(group)
-		for tube_index in 3:
-			var lateral := (float(tube_index) - 1.0) * 0.035 * lash_scale
-			var tube := _add_cylinder(group, "Lash%d" % (tube_index + 1), Vector3(side * lateral, tube_length * 0.42, 0.0), radius, tube_length, material)
-			tube.rotation.z = side * (float(tube_index) - 1.0) * lash_fan
-
-
-func _build_torus_lashes(material: Material) -> void:
-	## Full 360° donut around each eye — sit it on the front so the head doesn't hide half.
-	var eye_y := 0.35 + eye_vertical + lash_vertical
-	var eye_x := 0.18 * eye_spacing * lash_spacing
-	var eye_z := 0.475 + eye_depth + lash_depth
-	var eye_rx := 0.085 * eye_width
-	var eye_ry := 0.12 * eye_height
-	var eye_r := maxf(maxf(eye_rx, eye_ry), 0.001)
-	var outer := eye_r * lash_ring_outer * lash_scale
-	var inner := eye_r * lash_ring_inner * lash_scale
-	if inner >= outer:
-		inner = outer * 0.92
-	inner = maxf(inner, outer * 0.12)
-	var tube_r: float = (outer - inner) * 0.5
-	var lash_mat: Material = material
-	if material is StandardMaterial3D:
-		var sm: StandardMaterial3D = (material as StandardMaterial3D).duplicate() as StandardMaterial3D
-		sm.cull_mode = BaseMaterial3D.CULL_DISABLED
-		lash_mat = sm
-	for side in [-1.0, 1.0]:
-		var group := Node3D.new()
-		group.name = "LeftLashes" if side < 0.0 else "RightLashes"
-		group.position = Vector3(side * eye_x, eye_y, eye_z) * _unit
-		group.rotation = Vector3(
-			lash_pitch,
-			left_lash_yaw if side < 0.0 else right_lash_yaw,
-			lash_tilt * side
-		)
-		_lashes_root.add_child(group)
-		var ring := MeshInstance3D.new()
-		ring.name = "LashRing"
-		var torus := TorusMesh.new()
-		torus.inner_radius = inner * _unit
-		torus.outer_radius = outer * _unit
-		torus.rings = 32
-		torus.ring_segments = 20
-		ring.mesh = torus
-		## Default torus lies in XZ; stand it up so the hole faces the camera.
-		ring.rotation.x = PI * 0.5
-		## Keep a circular torus. Push it onto the eye front so the back half isn't buried.
-		ring.position = Vector3(0.0, 0.0, (0.028 + tube_r) * _unit)
-		ring.material_override = lash_mat
-		group.add_child(ring)
+	## Legacy tube and torus lashes were removed. The fitted lash rim is rendered
+	## by the eyelid shader so it always follows the almond opening.
 
 
 func _build_cheeks() -> void:
@@ -2313,24 +2342,195 @@ func _build_hair() -> void:
 	if _hair_root == null:
 		return
 	_clear(_hair_root)
-	if hair_style == HairStyle.NONE:
+	_spawn_hair_piece(
+		int(hair_style), hair_color, hair_scale, hair_scale_xyz, hair_offset, "HairBase"
+	)
+	for i in extra_hairs.size():
+		var layer: Dictionary = extra_hairs[i]
+		var col := Color.from_string(str(layer.get("color", hair_color.to_html(true))), hair_color)
+		var sc_xyz: Vector3 = _vector3_from_hair_array(layer.get("scale_xyz", [1.0, 1.0, 1.0]), Vector3.ONE)
+		var off: Vector3 = _vector3_from_hair_array(layer.get("offset", [0.0, 0.3, 0.0]), Vector3(0.0, 0.3, 0.0))
+		_spawn_hair_piece(
+			int(layer.get("style", 0)),
+			col,
+			clampf(float(layer.get("scale", 1.3)), 0.3, 3.0),
+			sc_xyz,
+			off,
+			"HairExtra%d" % i
+		)
+
+
+func _spawn_hair_piece(
+	style: int,
+	color: Color,
+	scale_all: float,
+	scale_xyz: Vector3,
+	offset: Vector3,
+	piece_name: String
+) -> void:
+	if style <= 0 or style >= HAIR_SCENES.size():
 		return
-	var packed := HAIR_SCENES[int(hair_style)] as PackedScene
+	var packed := HAIR_SCENES[style] as PackedScene
 	if packed == null:
 		return
 	var hair := packed.instantiate() as Node3D
-	hair.name = HairStyle.keys()[int(hair_style)].capitalize()
+	if hair == null:
+		return
+	hair.name = piece_name
 	_hair_root.add_child(hair)
-	if hair_style <= HairStyle.BUNS:
-		var fit := 3.45
-		if hair_style == HairStyle.LONG:
+	if style <= int(HairStyle.BUNS):
+		var fit: float = 3.45
+		if style == int(HairStyle.LONG):
 			fit = 3.15
-		var adjusted_fit := fit * hair_scale
-		hair.scale = Vector3(adjusted_fit * hair_scale_xyz.x, adjusted_fit * hair_scale_xyz.y, adjusted_fit * hair_scale_xyz.z) * _unit
-		hair.position = (Vector3(0.0, 0.48 - 1.75 * adjusted_fit * hair_scale_xyz.y, 0.02) + hair_offset) * _unit
+		var adjusted_fit: float = fit * scale_all
+		hair.scale = Vector3(
+			adjusted_fit * scale_xyz.x,
+			adjusted_fit * scale_xyz.y,
+			adjusted_fit * scale_xyz.z
+		) * _unit
+		hair.position = (Vector3(0.0, 0.48 - 1.75 * adjusted_fit * scale_xyz.y, 0.02) + offset) * _unit
 	else:
-		_fit_sourced_accessory(hair, 0.76 * hair_scale, Vector3(0.0, 0.47, 0.0) + hair_offset, hair_scale_xyz)
-	_override_mesh_materials(hair, _toon_material(hair_color))
+		_fit_sourced_accessory(hair, 0.76 * scale_all, Vector3(0.0, 0.47, 0.0) + offset, scale_xyz)
+	_override_mesh_materials(hair, _toon_material(color))
+
+
+func hair_layer_count() -> int:
+	return 1 + extra_hairs.size()
+
+
+func add_extra_hair(style: int = -1, copy_from: int = 0) -> int:
+	if extra_hairs.size() >= MAX_EXTRA_HAIRS:
+		return extra_hairs.size()
+	var src: Dictionary = get_hair_layer(copy_from)
+	var src_style: int = int(src["style"])
+	var use_style: int = src_style if style < 1 else clampi(style, 1, HairStyle.size() - 1)
+	if use_style < 1:
+		hair_style = HairStyle.SIMPLE_PARTED
+		return 0
+	var src_color: Color = src["color"]
+	var src_xyz: Vector3 = src["scale_xyz"]
+	var src_off: Vector3 = src["offset"]
+	var next: Array = extra_hairs.duplicate(true)
+	var bump: float = 0.07 * float(next.size() + 1)
+	next.append({
+		"style": use_style,
+		"color": src_color.to_html(true),
+		"scale": clampf(float(src["scale"]), 0.3, 3.0),
+		"scale_xyz": [src_xyz.x, src_xyz.y, src_xyz.z],
+		"offset": [src_off.x, src_off.y + bump, src_off.z],
+	})
+	extra_hairs = next
+	return extra_hairs.size()
+
+
+func remove_extra_hair(extra_index: int) -> void:
+	if extra_index < 0 or extra_index >= extra_hairs.size():
+		return
+	var next: Array = extra_hairs.duplicate(true)
+	next.remove_at(extra_index)
+	extra_hairs = next
+
+
+func get_hair_layer(index: int) -> Dictionary:
+	if index <= 0:
+		return {
+			"style": int(hair_style),
+			"color": hair_color,
+			"scale": hair_scale,
+			"scale_xyz": hair_scale_xyz,
+			"offset": hair_offset,
+		}
+	var extra_i: int = index - 1
+	if extra_i < 0 or extra_i >= extra_hairs.size():
+		return get_hair_layer(0)
+	var layer: Dictionary = extra_hairs[extra_i]
+	return {
+		"style": int(layer.get("style", 0)),
+		"color": Color.from_string(str(layer.get("color", hair_color.to_html(true))), hair_color),
+		"scale": clampf(float(layer.get("scale", 1.3)), 0.3, 3.0),
+		"scale_xyz": _vector3_from_hair_array(layer.get("scale_xyz", [1.0, 1.0, 1.0]), Vector3.ONE),
+		"offset": _vector3_from_hair_array(layer.get("offset", [0.0, 0.3, 0.0]), Vector3(0.0, 0.3, 0.0)),
+	}
+
+
+func set_hair_layer_style(index: int, style: int) -> void:
+	var clamped: int = clampi(style, 0, HairStyle.size() - 1)
+	if index <= 0:
+		hair_style = clamped as HairStyle
+		return
+	_patch_extra_hair(index - 1, "style", clamped)
+
+
+func set_hair_layer_color(index: int, color: Color) -> void:
+	if index <= 0:
+		hair_color = color
+		return
+	_patch_extra_hair(index - 1, "color", color.to_html(true))
+
+
+func set_hair_layer_scale(index: int, scale_all: float) -> void:
+	var v: float = clampf(scale_all, 0.3, 3.0)
+	if index <= 0:
+		hair_scale = v
+		return
+	_patch_extra_hair(index - 1, "scale", v)
+
+
+func set_hair_layer_scale_xyz(index: int, scale_xyz: Vector3) -> void:
+	if index <= 0:
+		hair_scale_xyz = scale_xyz
+		return
+	_patch_extra_hair(index - 1, "scale_xyz", [scale_xyz.x, scale_xyz.y, scale_xyz.z])
+
+
+func set_hair_layer_offset(index: int, offset: Vector3) -> void:
+	if index <= 0:
+		hair_offset = offset
+		return
+	_patch_extra_hair(index - 1, "offset", [offset.x, offset.y, offset.z])
+
+
+func _patch_extra_hair(extra_index: int, key: String, value: Variant) -> void:
+	if extra_index < 0 or extra_index >= extra_hairs.size():
+		return
+	var next: Array = extra_hairs.duplicate(true)
+	var layer: Dictionary = next[extra_index]
+	layer[key] = value
+	next[extra_index] = layer
+	extra_hairs = next
+
+
+func _normalize_extra_hairs(value: Variant) -> Array:
+	var out: Array = []
+	if not (value is Array):
+		return out
+	for entry in value:
+		if out.size() >= MAX_EXTRA_HAIRS:
+			break
+		if not (entry is Dictionary):
+			continue
+		var layer: Dictionary = entry
+		var style: int = clampi(int(layer.get("style", 0)), 0, HairStyle.size() - 1)
+		if style <= 0:
+			continue
+		var sc_xyz: Vector3 = _vector3_from_hair_array(layer.get("scale_xyz", [1.0, 1.0, 1.0]), Vector3.ONE)
+		var off: Vector3 = _vector3_from_hair_array(layer.get("offset", [0.0, 0.3, 0.0]), Vector3(0.0, 0.3, 0.0))
+		out.append({
+			"style": style,
+			"color": str(layer.get("color", hair_color.to_html(true))),
+			"scale": clampf(float(layer.get("scale", 1.3)), 0.3, 3.0),
+			"scale_xyz": [sc_xyz.x, sc_xyz.y, sc_xyz.z],
+			"offset": [off.x, off.y, off.z],
+		})
+	return out
+
+
+func _vector3_from_hair_array(value: Variant, fallback: Vector3) -> Vector3:
+	if value is Vector3:
+		return value
+	if value is Array and value.size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return fallback
 
 
 func _build_facial_hair() -> void:
@@ -2802,8 +3002,9 @@ func _toon_material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = color
 	material.metallic = 0.0
-	material.roughness = 0.8
-	material.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	material.roughness = 0.94
+	## Wrap lighting hides the hard terminator on big low-poly faces.
+	material.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT_WRAP
 	material.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	return material
 
@@ -2881,11 +3082,15 @@ func _eyelid_shader_material() -> ShaderMaterial:
 	var shader := Shader.new()
 	shader.code = """
 shader_type spatial;
-render_mode unshaded, cull_back, depth_prepass_alpha;
+render_mode cull_back, diffuse_lambert_wrap, specular_disabled, depth_prepass_alpha;
 
 uniform vec4 skin_color : source_color = vec4(0.85, 0.55, 0.37, 1.0);
+uniform vec4 lash_color : source_color = vec4(0.14, 0.09, 0.09, 1.0);
 uniform float mask_height : hint_range(0.0, 1.0) = 0.42;
 uniform float mask_width : hint_range(0.0, 1.5) = 0.88;
+uniform float rim_width : hint_range(0.01, 0.36) = 0.035;
+uniform bool rim_enabled = false;
+uniform int opening_style = 0;
 
 varying vec3 local_pos;
 
@@ -2895,24 +3100,41 @@ void vertex() {
 
 void fragment() {
 	ALBEDO = skin_color.rgb;
-	ROUGHNESS = 0.85;
+	ROUGHNESS = 0.94;
+	METALLIC = 0.0;
+	SPECULAR = 0.0;
 	float half_h = max(mask_height, 0.0);
 	float half_w = max(mask_width, 0.0);
+	float nx = abs(local_pos.x) / max(half_w, 0.0005);
+	float almond_h = 1.0 - pow(min(nx, 1.0), 1.55);
+	bool almond_opening = nx <= 1.0
+		&& abs(local_pos.y) / max(half_h, 0.0005) <= almond_h;
+	bool classic_opening = abs(local_pos.x) <= half_w && abs(local_pos.y) <= half_h;
 	bool opening = local_pos.z > 0.0
-		&& half_h > 0.0005
-		&& half_w > 0.0005
-		&& abs(local_pos.x) <= half_w
-		&& abs(local_pos.y) <= half_h;
+		&& ((opening_style == 2) ? classic_opening : almond_opening);
 	if (opening) {
 		discard;
+	}
+	float outer_w = half_w + rim_width;
+	float outer_h = half_h + rim_width;
+	float outer_x = abs(local_pos.x) / max(outer_w, 0.0005);
+	float outer_almond_h = 1.0 - pow(min(outer_x, 1.0), 1.55);
+	bool in_outer = local_pos.z > 0.0 && outer_x <= 1.0
+		&& abs(local_pos.y) / max(outer_h, 0.0005) <= outer_almond_h;
+	if (rim_enabled && in_outer) {
+		ALBEDO = lash_color.rgb;
 	}
 }
 """
 	var material := ShaderMaterial.new()
 	material.shader = shader
 	material.set_shader_parameter("skin_color", skin_color)
+	material.set_shader_parameter("lash_color", lash_color)
 	material.set_shader_parameter("mask_height", eyelid_mask_height)
 	material.set_shader_parameter("mask_width", eyelid_mask_width)
+	material.set_shader_parameter("rim_width", lash_rim_width)
+	material.set_shader_parameter("rim_enabled", lash_style == LashStyle.ALMOND_RIM)
+	material.set_shader_parameter("opening_style", int(lash_style))
 	return material
 
 
@@ -2926,8 +3148,12 @@ func _apply_eyelid_materials() -> void:
 			mesh.material_override = _eyelid_shader_material()
 			continue
 		mat.set_shader_parameter("skin_color", skin_color)
+		mat.set_shader_parameter("lash_color", lash_color)
 		mat.set_shader_parameter("mask_height", eyelid_mask_height)
 		mat.set_shader_parameter("mask_width", eyelid_mask_width)
+		mat.set_shader_parameter("rim_width", lash_rim_width)
+		mat.set_shader_parameter("rim_enabled", lash_style == LashStyle.ALMOND_RIM)
+		mat.set_shader_parameter("opening_style", int(lash_style))
 
 
 func _override_mesh_materials(root: Node, material: Material) -> void:

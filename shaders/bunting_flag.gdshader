@@ -2,6 +2,8 @@ shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_prepass_alpha;
 
 uniform vec4 flag_color : source_color = vec4(1.0, 0.84, 0.23, 1.0);
+uniform sampler2D flag_texture : source_color, filter_linear_mipmap, repeat_disable;
+uniform bool use_texture = false;
 uniform float edge_opacity : hint_range(0.0, 1.0) = 0.92;
 uniform float center_opacity : hint_range(0.0, 1.0) = 0.92;
 uniform float edge_width : hint_range(0.0, 0.35) = 0.08;
@@ -17,9 +19,12 @@ void fragment() {
 	float right_distance = 1.0 - UV.x - UV.y * 0.5;
 	float nearest_edge = min(top_distance, min(left_distance, right_distance));
 	float edge_mask = 1.0 - smoothstep(edge_width, edge_width + edge_softness, nearest_edge);
-	float alpha = mix(center_opacity, edge_opacity, edge_mask) * flag_color.a;
+	vec4 texel = use_texture ? texture(flag_texture, UV) : vec4(1.0);
+	float opacity = use_texture ? 1.0 : mix(center_opacity, edge_opacity, edge_mask);
+	float alpha = opacity * flag_color.a * texel.a;
+	vec3 toon_color = texel.rgb * flag_color.rgb;
 
-	ALBEDO = flag_color.rgb;
-	EMISSION = flag_color.rgb * glow_strength;
+	ALBEDO = toon_color;
+	EMISSION = toon_color * glow_strength;
 	ALPHA = alpha;
 }

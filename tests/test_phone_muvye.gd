@@ -31,6 +31,19 @@ func _run_test() -> void:
 		push_error("MUVYE phone page did not become visible")
 		quit(1)
 		return
+	var back_button := game.find_child("PhoneNavBack", true, false) as Button
+	if back_button == null or not bool(game.call("_phone_owns_pointer", back_button.get_global_rect().get_center())):
+		push_error("Phone Back button is not protected from 3D cup/rack input")
+		quit(1)
+		return
+	back_button.emit_signal("pressed")
+	await process_frame
+	if str(game.get("_phone_app_id")) != "home":
+		push_error("Phone Back button did not return from MUVYE")
+		quit(1)
+		return
+	game.call("_set_phone_app", "muvye")
+	await process_frame
 	var player := app_page.find_child("PhoneMuvyePlayer", true, false) as VideoStreamPlayer
 	if player == null:
 		push_error("In-phone MUVYE player was not created")
@@ -70,5 +83,5 @@ func _run_test() -> void:
 			quit(1)
 			return
 		app_page.call("set_cinema", false)
-	print("PHONE MUVYE test passed: picker, louder films, fullscreen, and 3/3 movies")
+	print("PHONE MUVYE test passed: protected Back button, picker, louder films, fullscreen, and 3/3 movies")
 	quit(0)

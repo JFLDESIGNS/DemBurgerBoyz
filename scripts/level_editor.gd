@@ -2,6 +2,7 @@
 extends Node
 
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
+const SunSkyPadScript := preload("res://scripts/sun_sky_pad.gd")
 const SAVE_PATH := "user://level_dressing.cfg"
 const SAVE_SECTION := "dressing"
 const GIZMO_LEN := 0.28
@@ -38,6 +39,12 @@ var _gizmo_grab_obj := Vector3.ZERO
 var _place_counter := 0
 var _napkin_darkness_default := 0.0
 var _napkin_pattern_scale_default := 1.0
+var _profile_btns: Array[Button] = []
+var _sun_pad = null
+var _sun_lab: Label = null
+var _sun_azim_spin: SpinBox = null
+var _sun_elev_spin: SpinBox = null
+var _lighting_busy: bool = false
 
 
 func setup(game: Node, world: Node3D, grill: Node3D, main_cam: Camera3D) -> void:
@@ -98,7 +105,8 @@ func _enter_fly() -> void:
 		_layer.visible = true
 	_refresh_preview_button()
 	_refresh_outliner()
-	_set_status("L-mode — RMB look · WASD fly · Q/E up/down · click to select")
+	refresh_lighting_ui()
+	_set_status("L-mode — RMB look · WASD fly · Q/E up/down · click to select · lighting in the left panel")
 
 
 func _exit_editor() -> void:
@@ -501,7 +509,7 @@ func _build_top_bar() -> void:
 	bar.mouse_filter = Control.MOUSE_FILTER_STOP
 	bar.add_theme_stylebox_override("panel", _panel_style())
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	bar.offset_left = 270.0
+	bar.offset_left = 286.0
 	bar.offset_right = -290.0
 	bar.offset_top = 8.0
 	bar.offset_bottom = 78.0
@@ -554,6 +562,179 @@ func _refresh_preview_button() -> void:
 	_preview_btn.text = "Back to Fly Cam" if previewing_main else "Preview Main Cam"
 
 
+func refresh_lighting_ui() -> void:
+	if _selected != null and not is_instance_valid(_selected):
+		_selected = null
+		_update_gizmo()
+	_refresh_profile_buttons()
+	_sync_sun_pad_from_game()
+	_refresh_outliner()
+	if _inspector != null:
+		_inspector_busy = true
+		_rebuild_inspector()
+		_inspector_busy = false
+
+
+func _build_lighting_controls(parent: VBoxContainer) -> void:
+	var head := Label.new()
+	head.text = "LIGHTING PROFILES"
+	UiFontsScript.apply_label(head, true, 12)
+	head.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	parent.add_child(head)
+	var names: Array[String] = ["1 Classic", "2 Window Key", "3 Short Order", "4 Feature Rig"]
+	if _game != null and _game.has_method("get_light_profile_names"):
+		var from_game: Array = _game.get_light_profile_names()
+		if from_game.size() >= 4:
+			names.clear()
+			for n in from_game:
+				names.append(str(n))
+	_profile_btns.clear()
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	parent.add_child(grid)
+	for i in names.size():
+		var b := Button.new()
+		b.text = names[i]
+		b.custom_minimum_size = Vector2(0, 26)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_btn(b)
+		b.pressed.connect(_on_profile_pressed.bind(i))
+		grid.add_child(b)
+		_profile_btns.append(b)
+	var sun_head := Label.new()
+	sun_head.text = "SUN SKY"
+	UiFontsScript.apply_label(sun_head, true, 12)
+	sun_head.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	parent.add_child(sun_head)
+	_sun_lab = Label.new()
+	_sun_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(_sun_lab, false, 11)
+	_sun_lab.add_theme_color_override("font_color", Color(0.78, 0.86, 0.94))
+	parent.add_child(_sun_lab)
+	_sun_pad = SunSkyPadScript.new()
+	_sun_pad.name = "SunSkyPad"
+	_sun_pad.sky_changed.connect(_on_sun_sky_changed)
+	parent.add_child(_sun_pad)
+	var spin_row := HBoxContainer.new()
+	spin_row.add_theme_constant_override("separation", 6)
+	parent.add_child(spin_row)
+	_sun_azim_spin = _make_sun_spin("Az", -15.0, 110.0, func(v: float):
+		if _lighting_busy:
+			return
+		_apply_sun_spins()
+	)
+	_sun_elev_spin = _make_sun_spin("El", 16.0, 58.0, func(v: float):
+		if _lighting_busy:
+			return
+		_apply_sun_spins()
+	)
+	spin_row.add_child(_sun_azim_spin)
+	spin_row.add_child(_sun_elev_spin)
+	var reset_btn := Button.new()
+	reset_btn.text = "Reset Sun"
+	reset_btn.custom_minimum_size = Vector2(0, 26)
+	_style_btn(reset_btn)
+	reset_btn.pressed.connect(func():
+		if _game != null and _game.has_method("reset_profile_sun_sky"):
+			_game.reset_profile_sun_sky()
+		_set_status("Sun reset for this profile")
+	)
+	parent.add_child(reset_btn)
+	_refresh_profile_buttons()
+	_sync_sun_pad_from_game()
+
+
+func _make_sun_spin(prefix: String, mn: float, mx: float, changed: Callable) -> SpinBox:
+	var spin := SpinBox.new()
+	spin.min_value = mn
+	spin.max_value = mx
+	spin.step = 0.5
+	spin.custom_minimum_size = Vector2(118, 0)
+	spin.prefix = prefix + " "
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spin.value_changed.connect(changed)
+	return spin
+
+
+func _on_profile_pressed(id: int) -> void:
+	if _game != null and _game.has_method("set_light_profile"):
+		_game.set_light_profile(id)
+	var label: String = str(id + 1)
+	if id >= 0 and id < _profile_btns.size():
+		label = _profile_btns[id].text
+	_set_status("Lighting profile — %s" % label)
+
+
+func _on_sun_sky_changed(azim: float, elev: float) -> void:
+	if _game != null and _game.has_method("set_profile_sun_sky"):
+		_game.set_profile_sun_sky(azim, elev)
+	_lighting_busy = true
+	if _sun_azim_spin:
+		_sun_azim_spin.set_value_no_signal(azim)
+	if _sun_elev_spin:
+		_sun_elev_spin.set_value_no_signal(elev)
+	_lighting_busy = false
+	_refresh_sun_label(azim, elev)
+
+
+func _apply_sun_spins() -> void:
+	if _sun_azim_spin == null or _sun_elev_spin == null:
+		return
+	var azim: float = float(_sun_azim_spin.value)
+	var elev: float = float(_sun_elev_spin.value)
+	if _sun_pad:
+		_sun_pad.set_sky(azim, elev)
+	if _game != null and _game.has_method("set_profile_sun_sky"):
+		_game.set_profile_sun_sky(azim, elev)
+	_refresh_sun_label(azim, elev)
+
+
+func _refresh_profile_buttons() -> void:
+	var active: int = 1
+	if _game != null and _game.has_method("get_light_profile_id"):
+		active = int(_game.get_light_profile_id())
+	for i in _profile_btns.size():
+		var b: Button = _profile_btns[i]
+		var on: bool = i == active
+		b.modulate = Color(1.15, 0.95, 0.62) if on else Color.WHITE
+		b.disabled = on
+
+
+func _sync_sun_pad_from_game() -> void:
+	var azim: float = 26.0
+	var elev: float = 36.0
+	if _game != null and _game.has_method("get_light_profile_sun_sky"):
+		var sky: Vector2 = _game.get_light_profile_sun_sky()
+		azim = sky.x
+		elev = sky.y
+	_lighting_busy = true
+	if _sun_pad:
+		_sun_pad.set_sky(azim, elev)
+	if _sun_azim_spin:
+		_sun_azim_spin.set_value_no_signal(azim)
+	if _sun_elev_spin:
+		_sun_elev_spin.set_value_no_signal(elev)
+	_lighting_busy = false
+	_refresh_sun_label(azim, elev)
+
+
+func _refresh_sun_label(azim: float, elev: float) -> void:
+	if _sun_lab == null:
+		return
+	var classic: bool = false
+	var sky_owned: bool = true
+	if _game != null and _game.has_method("get_light_profile_id"):
+		classic = int(_game.get_light_profile_id()) <= 0
+	if classic and _game != null and _game.has_method("classic_sun_uses_sky"):
+		sky_owned = bool(_game.classic_sun_uses_sky())
+	if classic and not sky_owned:
+		_sun_lab.text = "Classic sun uses the original rig. Drag the disc to take over. Az %.0f°  El %.0f°" % [azim, elev]
+	else:
+		_sun_lab.text = "Drag the disc — right is camera-right, up is the window. Az %.0f°  El %.0f°" % [azim, elev]
+
+
 func _build_outliner_panel() -> void:
 	var panel := PanelContainer.new()
 	panel.name = "Outliner"
@@ -561,7 +742,7 @@ func _build_outliner_panel() -> void:
 	panel.add_theme_stylebox_override("panel", _panel_style())
 	panel.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	panel.offset_left = 8.0
-	panel.offset_right = 262.0
+	panel.offset_right = 278.0
 	panel.offset_top = 8.0
 	panel.offset_bottom = -8.0
 	_ui.add_child(panel)
@@ -573,6 +754,7 @@ func _build_outliner_panel() -> void:
 	UiFontsScript.apply_label(title, true, 13)
 	title.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
 	v.add_child(title)
+	_build_lighting_controls(v)
 	_outliner = ItemList.new()
 	_outliner.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_outliner.allow_reselect = true
@@ -624,6 +806,8 @@ func _refresh_outliner() -> void:
 	if _world != null:
 		for child in _world.get_children():
 			if child == _dressing or child == _fly_cam or child == _gizmo:
+				continue
+			if str(child.name) == "LightProfileRig":
 				continue
 			if child is Node3D:
 				_add_outliner_item("World / %s" % child.name, child)
@@ -738,6 +922,7 @@ func _rebuild_inspector() -> void:
 				_save_if_dressing()
 		)
 		_inspector.add_child(vis)
+		_add_light_shadow_controls(light)
 	if _selected.get_parent() == _dressing:
 		var del := Button.new()
 		del.text = "Delete Object"
@@ -769,6 +954,83 @@ func _add_inspect_spin(label_text: String, value: float, mn: float, mx: float, s
 	)
 	row.add_child(spin)
 	_inspector.add_child(row)
+
+
+func _add_inspect_check(label_text: String, on: bool, setter: Callable) -> void:
+	var btn := CheckButton.new()
+	btn.text = label_text
+	btn.button_pressed = on
+	UiFontsScript.apply_button(btn, false, 12)
+	btn.toggled.connect(func(pressed: bool):
+		if _inspector_busy:
+			return
+		setter.call(pressed)
+	)
+	_inspector.add_child(btn)
+
+
+func _add_light_shadow_controls(light: Light3D) -> void:
+	var head := Label.new()
+	head.text = "SHADOWS"
+	UiFontsScript.apply_label(head, true, 12)
+	head.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	_inspector.add_child(head)
+	_add_inspect_check("Cast Shadows", light.shadow_enabled, func(on: bool):
+		if _selected is Light3D:
+			(_selected as Light3D).shadow_enabled = on
+			_save_if_dressing()
+	)
+	_add_inspect_spin("Shadow Blur", light.shadow_blur, 0.0, 4.0, 0.05, func(v: float):
+		if _selected is Light3D:
+			(_selected as Light3D).shadow_blur = v
+			_save_if_dressing()
+	)
+	_add_inspect_spin("Shadow Bias", light.shadow_bias, 0.0, 0.5, 0.001, func(v: float):
+		if _selected is Light3D:
+			(_selected as Light3D).shadow_bias = v
+			_save_if_dressing()
+	)
+	_add_inspect_spin("Normal Bias", light.shadow_normal_bias, 0.0, 4.0, 0.05, func(v: float):
+		if _selected is Light3D:
+			(_selected as Light3D).shadow_normal_bias = v
+			_save_if_dressing()
+	)
+	_add_inspect_spin("Shadow Opacity", light.shadow_opacity, 0.0, 1.0, 0.01, func(v: float):
+		if _selected is Light3D:
+			(_selected as Light3D).shadow_opacity = v
+			_save_if_dressing()
+	)
+	_add_inspect_check("Reverse Cull Face", light.shadow_reverse_cull_face, func(on: bool):
+		if _selected is Light3D:
+			(_selected as Light3D).shadow_reverse_cull_face = on
+			_save_if_dressing()
+	)
+	if light is DirectionalLight3D:
+		var sun := light as DirectionalLight3D
+		_add_inspect_spin("Shadow Max Distance", sun.directional_shadow_max_distance, 4.0, 80.0, 0.5, func(v: float):
+			if _selected is DirectionalLight3D:
+				(_selected as DirectionalLight3D).directional_shadow_max_distance = v
+				_save_if_dressing()
+		)
+		_add_inspect_spin("Shadow Fade Start", sun.directional_shadow_fade_start, 0.1, 1.0, 0.01, func(v: float):
+			if _selected is DirectionalLight3D:
+				(_selected as DirectionalLight3D).directional_shadow_fade_start = v
+				_save_if_dressing()
+		)
+		_add_inspect_spin("Pancake Size", sun.directional_shadow_pancake_size, 0.0, 8.0, 0.05, func(v: float):
+			if _selected is DirectionalLight3D:
+				(_selected as DirectionalLight3D).directional_shadow_pancake_size = v
+				_save_if_dressing()
+		)
+	elif light is OmniLight3D:
+		var omni := light as OmniLight3D
+		_add_inspect_check("Cube Omni Shadows", omni.omni_shadow_mode == OmniLight3D.SHADOW_CUBE, func(on: bool):
+			if _selected is OmniLight3D:
+				(_selected as OmniLight3D).omni_shadow_mode = (
+					OmniLight3D.SHADOW_CUBE if on else OmniLight3D.SHADOW_DUAL_PARABOLOID
+				)
+				_save_if_dressing()
+		)
 
 
 func _is_napkin(n: Node) -> bool:
@@ -973,6 +1235,12 @@ func _make_dressing_light(kind: String) -> Light3D:
 	light.light_color = Color(1.0, 0.92, 0.78)
 	light.light_energy = 1.4
 	light.shadow_enabled = true
+	light.shadow_blur = 1.15
+	light.shadow_bias = 0.03
+	light.shadow_normal_bias = 0.85
+	light.shadow_opacity = 0.85
+	if light is OmniLight3D:
+		(light as OmniLight3D).omni_shadow_mode = OmniLight3D.SHADOW_CUBE
 	return light
 
 
@@ -1073,8 +1341,20 @@ func _save_dressing() -> void:
 			cfg.set_value(SAVE_SECTION, p + "cg", L.light_color.g)
 			cfg.set_value(SAVE_SECTION, p + "cb", L.light_color.b)
 			cfg.set_value(SAVE_SECTION, p + "range", _light_range(L))
+			cfg.set_value(SAVE_SECTION, p + "shadow", L.shadow_enabled)
+			cfg.set_value(SAVE_SECTION, p + "sblur", L.shadow_blur)
+			cfg.set_value(SAVE_SECTION, p + "sbias", L.shadow_bias)
+			cfg.set_value(SAVE_SECTION, p + "snbias", L.shadow_normal_bias)
+			cfg.set_value(SAVE_SECTION, p + "sopacity", L.shadow_opacity)
+			cfg.set_value(SAVE_SECTION, p + "srev", L.shadow_reverse_cull_face)
 			if L is SpotLight3D:
 				cfg.set_value(SAVE_SECTION, p + "angle", (L as SpotLight3D).spot_angle)
+			if L is OmniLight3D:
+				cfg.set_value(SAVE_SECTION, p + "scube", (L as OmniLight3D).omni_shadow_mode == OmniLight3D.SHADOW_CUBE)
+			if L is DirectionalLight3D:
+				var sun := L as DirectionalLight3D
+				cfg.set_value(SAVE_SECTION, p + "smax", sun.directional_shadow_max_distance)
+				cfg.set_value(SAVE_SECTION, p + "sfade", sun.directional_shadow_fade_start)
 		if _is_napkin(n):
 			cfg.set_value(SAVE_SECTION, p + "dark", _napkin_darkness_of(n))
 			cfg.set_value(SAVE_SECTION, p + "pattern", _napkin_pattern_of(n))
@@ -1164,6 +1444,22 @@ func _load_dressing() -> void:
 			elif L is SpotLight3D:
 				(L as SpotLight3D).spot_range = float(cfg.get_value(SAVE_SECTION, p + "range", 3.2))
 				(L as SpotLight3D).spot_angle = float(cfg.get_value(SAVE_SECTION, p + "angle", 40.0))
+			L.shadow_enabled = bool(cfg.get_value(SAVE_SECTION, p + "shadow", L.shadow_enabled))
+			L.shadow_blur = float(cfg.get_value(SAVE_SECTION, p + "sblur", L.shadow_blur))
+			L.shadow_bias = float(cfg.get_value(SAVE_SECTION, p + "sbias", L.shadow_bias))
+			L.shadow_normal_bias = float(cfg.get_value(SAVE_SECTION, p + "snbias", L.shadow_normal_bias))
+			L.shadow_opacity = float(cfg.get_value(SAVE_SECTION, p + "sopacity", L.shadow_opacity))
+			L.shadow_reverse_cull_face = bool(cfg.get_value(SAVE_SECTION, p + "srev", L.shadow_reverse_cull_face))
+			if L is OmniLight3D:
+				(L as OmniLight3D).omni_shadow_mode = (
+					OmniLight3D.SHADOW_CUBE
+					if bool(cfg.get_value(SAVE_SECTION, p + "scube", true))
+					else OmniLight3D.SHADOW_DUAL_PARABOLOID
+				)
+			if L is DirectionalLight3D:
+				var sun := L as DirectionalLight3D
+				sun.directional_shadow_max_distance = float(cfg.get_value(SAVE_SECTION, p + "smax", sun.directional_shadow_max_distance))
+				sun.directional_shadow_fade_start = float(cfg.get_value(SAVE_SECTION, p + "sfade", sun.directional_shadow_fade_start))
 		if node is MeshInstance3D and kind == "napkin":
 			var napkin := node as MeshInstance3D
 			_apply_napkin_darkness(

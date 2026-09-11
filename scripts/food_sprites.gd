@@ -95,6 +95,47 @@ static func get_tex(id: String) -> Texture2D:
 	return tex
 
 
+static func tray_cheese_tex() -> Texture2D:
+	## Dedicated cheese art for the ingredient strip. Keep this separate from
+	## get_tex("cheese") so Build layers, Smush, and other cheese uses do not change.
+	const key := "tray_cheese"
+	const path := "res://assets/ingredients/cheese_tray.png"
+	if _cache.has(key):
+		return _cache[key]
+	var tex: Texture2D = null
+	if ResourceLoader.exists(path):
+		var res = load(path)
+		if res is Texture2D:
+			var img: Image = res.get_image()
+			if img != null:
+				if img.is_compressed():
+					img.decompress()
+				img.convert(Image.FORMAT_RGBA8)
+				_knockout_white_backdrop(img)
+				img = _crop_to_opaque(img)
+				tex = ImageTexture.create_from_image(img)
+	if tex == null:
+		tex = get_tex("cheese")
+	_cache[key] = tex
+	return tex
+
+
+static func _knockout_white_backdrop(img: Image) -> void:
+	## CHEESE2 arrives on white. Remove only neutral near-white pixels while
+	## preserving the pale-yellow highlights on the slice.
+	if img == null:
+		return
+	for y in img.get_height():
+		for x in img.get_width():
+			var c := img.get_pixel(x, y)
+			var neutral := maxf(c.r, maxf(c.g, c.b)) - minf(c.r, minf(c.g, c.b))
+			var whiteness := minf(c.r, minf(c.g, c.b))
+			if neutral < 0.055 and whiteness > 0.88:
+				var keep := clampf((1.0 - whiteness) / 0.12, 0.0, 1.0)
+				c.a *= keep
+				img.set_pixel(x, y, c)
+
+
 static func burger_cheese_tex(cook_color: Color = Color(0.45, 0.24, 0.14), char_amount: float = 0.0) -> Texture2D:
 	## Patty + melted cheese sheet for Build stacks (replaces separate cheese layer art).
 	var char_q := snappedf(clampf(char_amount, 0.0, 1.0), 0.05)

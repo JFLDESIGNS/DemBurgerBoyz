@@ -363,6 +363,22 @@ var _powder_blobs: Array = [] ## {mesh, mat, life, max_life, start_scale, zone}
 var _panic_bones: Dictionary = {} ## Kenney arm bone indices for hands-up pose
 var _powder_face_mount: BoneAttachment3D = null
 var _powder_body_mount: BoneAttachment3D = null
+var _stuck_food_root: Node3D = null
+var _stuck_food_items: Array = []
+var _stuck_food_spot_i: int = 0
+const MAX_STUCK_FOOD := 16
+const STUCK_FOOD_HOLD_SEC := 2.0
+const STUCK_FOOD_SLIDE_SEC := 1.0
+const STUCK_FOOD_FALL_SEC := 0.72
+const STUCK_FOOD_FACE_SPOTS: Array[Vector2] = [
+	Vector2(-0.105, 0.220),
+	Vector2(0.100, 0.205),
+	Vector2(-0.045, 0.280),
+	Vector2(0.050, 0.285),
+	Vector2(-0.135, 0.125),
+	Vector2(0.135, 0.135),
+	Vector2(0.000, 0.105),
+]
 ## Catching / eating a served burger in the window.
 var _eating: bool = false
 var _eat_lean_x: float = 0.0
@@ -401,6 +417,8 @@ static var _saved_character_cycle: Array[String] = []
 static var _saved_character_cycle_i: int = 0
 var _uses_custom_character: bool = false
 var custom_character_name: String = ""
+var _custom_character_preset: Dictionary = {}
+var _custom_character_choice_locked: bool = false
 
 
 ## When true (co-op guest), patience/order clock are driven by host sync — not local timers.
@@ -418,13 +436,17 @@ func setup(
 	p_lane: int,
 	skin_idx: int = -1,
 	face_style: int = -1,
-	jin_fact_idx: int = -1
+	jin_fact_idx: int = -1,
+	custom_preset: Dictionary = {},
+	lock_custom_choice: bool = false
 ) -> void:
 	order = p_order
 	body_color = color
 	patience_max = p_patience
 	patience = p_patience
 	lane = p_lane
+	_custom_character_preset = custom_preset.duplicate(true)
+	_custom_character_choice_locked = lock_custom_choice
 	order_value = GameDataScript.order_value(order)
 	_roll_personality()
 	self.face_style = face_style if face_style >= 0 else (randi() % 3)
@@ -830,7 +852,12 @@ func _try_attach_toon_character() -> bool:
 func _try_attach_saved_character() -> bool:
 	if is_cut_collector or is_bts_guest or is_disguise_cat:
 		return false
-	var preset: Dictionary = _load_next_saved_character()
+	## In co-op the host sends an explicit choice (including an explicit empty
+	## choice). Never independently cycle local files on a peer: different PCs
+	## may have different saves, and tattoo paint lives inside this payload too.
+	var preset: Dictionary = _custom_character_preset.duplicate(true)
+	if preset.is_empty() and not _custom_character_choice_locked:
+		preset = _load_next_saved_character()
 	if preset.is_empty():
 		return false
 	if _modular_character_scene == null:
@@ -866,7 +893,35 @@ func _try_attach_saved_character() -> bool:
 		custom_character_name = ""
 		return false
 	custom_character_name = str(preset.get("name", "Created Customer"))
+	_custom_character_preset = preset.duplicate(true)
 	return true
+
+
+func get_custom_character_preset() -> Dictionary:
+	return _custom_character_preset.duplicate(true)
+
+
+static func take_next_saved_character_preset() -> Dictionary:
+	## Public host-side selector used before a network customer is instantiated.
+	_sync_saved_characters_from_standalone()
+	var files: Array[String] = _list_usable_saved_character_files()
+	if files.is_empty():
+		_saved_character_cycle.clear()
+		_saved_character_cycle_i = 0
+		return {}
+	if files != _saved_character_cycle:
+		_saved_character_cycle = files.duplicate()
+		if _saved_character_cycle_i >= _saved_character_cycle.size():
+			_saved_character_cycle_i = 0
+	var count: int = _saved_character_cycle.size()
+	for step in count:
+		var idx: int = (_saved_character_cycle_i + step) % count
+		var preset: Dictionary = _parse_saved_character_file(_saved_character_cycle[idx])
+		if preset.is_empty():
+			continue
+		_saved_character_cycle_i = (idx + 1) % count
+		return preset
+	return {}
 
 
 func _swap_custom_character_for_kenney_boss() -> void:
@@ -897,28 +952,10 @@ func _swap_custom_character_for_kenney_boss() -> void:
 
 
 func _load_next_saved_character() -> Dictionary:
-	_sync_saved_characters_from_standalone()
-	var files: Array[String] = _list_usable_saved_character_files()
-	if files.is_empty():
-		_saved_character_cycle.clear()
-		_saved_character_cycle_i = 0
-		return {}
-	if files != _saved_character_cycle:
-		_saved_character_cycle = files.duplicate()
-		if _saved_character_cycle_i >= _saved_character_cycle.size():
-			_saved_character_cycle_i = 0
-	var count: int = _saved_character_cycle.size()
-	for step in count:
-		var idx: int = (_saved_character_cycle_i + step) % count
-		var preset: Dictionary = _parse_saved_character_file(_saved_character_cycle[idx])
-		if preset.is_empty():
-			continue
-		_saved_character_cycle_i = (idx + 1) % count
-		return preset
-	return {}
+	return take_next_saved_character_preset()
 
 
-func _sync_saved_characters_from_standalone() -> void:
+static func _sync_saved_characters_from_standalone() -> void:
 	var current_data_dir: String = OS.get_user_data_dir()
 	var legacy_data_dir: String = current_data_dir.get_base_dir().path_join(STANDALONE_CREATOR_FOLDER)
 	if not DirAccess.dir_exists_absolute(legacy_data_dir):
@@ -947,7 +984,7 @@ func _sync_saved_characters_from_standalone() -> void:
 	)
 
 
-func _copy_saved_file_if_newer(source_path: String, destination_path: String) -> void:
+static func _copy_saved_file_if_newer(source_path: String, destination_path: String) -> void:
 	if not FileAccess.file_exists(source_path):
 		return
 	if FileAccess.file_exists(destination_path):
@@ -956,7 +993,7 @@ func _copy_saved_file_if_newer(source_path: String, destination_path: String) ->
 	DirAccess.copy_absolute(source_path, destination_path)
 
 
-func _list_usable_saved_character_files() -> Array[String]:
+static func _list_usable_saved_character_files() -> Array[String]:
 	var files: Array[String] = []
 	var dir: DirAccess = DirAccess.open(SAVED_CHARACTER_DIR)
 	if dir == null:
@@ -972,7 +1009,7 @@ func _list_usable_saved_character_files() -> Array[String]:
 	return files
 
 
-func _parse_saved_character_file(path: String) -> Dictionary:
+static func _parse_saved_character_file(path: String) -> Dictionary:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return {}
@@ -1281,11 +1318,12 @@ func _load_anim_library(
 func _collect_char_meshes(n: Node) -> void:
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
-		## Window customers stay well in front of the matte. Sidewalk extras use
-		## real depth so street cars can pass in front when their Z is closer.
-		mi.sorting_offset = 1.0 if is_street_pedestrian else 24.0
+		## Window customers stay well in front of the matte. Sidewalk extras stay
+		## behind street cars (closer Z + lower draw priority).
+		mi.sorting_offset = 0.0 if is_street_pedestrian else 24.0
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		if mi.material_override is StandardMaterial3D:
-			(mi.material_override as StandardMaterial3D).render_priority = 2
+			(mi.material_override as StandardMaterial3D).render_priority = -5 if is_street_pedestrian else 2
 		_char_meshes.append(mi)
 	for c in n.get_children():
 		_collect_char_meshes(c)
@@ -1325,6 +1363,7 @@ func _apply_skin_texture(path: String) -> void:
 		sm.metallic = 0.0
 		sm.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 		sm.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+		sm.render_priority = -5 if is_street_pedestrian else 2
 		mesh_i.material_override = sm
 
 
@@ -1910,9 +1949,11 @@ func restyle_kenney_skin(prefer_idx: int = -1) -> void:
 	_apply_skin_texture(_skin_path)
 
 
-func restyle_street_character() -> bool:
+func restyle_street_character(custom_preset: Dictionary = {}, lock_custom_choice: bool = false) -> bool:
 	if _body == null:
 		return false
+	_custom_character_preset = custom_preset.duplicate(true)
+	_custom_character_choice_locked = lock_custom_choice
 	_anim_player = null
 	_anim_state = ""
 	_walk_anim_path = ""
@@ -2819,7 +2860,7 @@ func _show_treat_hearts() -> void:
 	)
 
 
-func leave_happy() -> void:
+func leave_happy(do_dance: bool = false) -> void:
 	_set_mood("cheer")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -2836,7 +2877,7 @@ func leave_happy() -> void:
 		_bar_bg.visible = false
 	if _bar_fill:
 		_bar_fill.visible = false
-	_begin_sidewalk_leave(not is_cut_collector)
+	_begin_sidewalk_leave(do_dance and not is_cut_collector)
 
 
 func leave_meh() -> void:
@@ -3595,6 +3636,177 @@ func feed_bacon_snack(restore_ratio: float = 0.10) -> bool:
 	return true
 
 
+func _ensure_stuck_food_root() -> Node3D:
+	if _stuck_food_root != null and is_instance_valid(_stuck_food_root):
+		if _stuck_food_root.get_parent() != self:
+			_stuck_food_root.reparent(self)
+		return _stuck_food_root
+	_ensure_powder_mounts()
+	_stuck_food_root = Node3D.new()
+	_stuck_food_root.name = "StuckFood"
+	## Sit on the unscaled customer root. Parenting to _body inherited CHAR_SCALE
+	## and parked cards inside the mesh.
+	add_child(_stuck_food_root)
+	return _stuck_food_root
+
+
+func _stuck_food_anchor_local(face: bool) -> Vector3:
+	var world := global_position + Vector3(0.0, 0.92, 0.0)
+	if face:
+		if _body != null:
+			world = _body.to_global(_head_pos_in_body())
+		else:
+			world = global_position + Vector3(0.0, 1.32, 0.0)
+	elif _body != null:
+		world = _body.to_global(_chest_pos_in_body())
+	var local := to_local(world)
+	## Local +Z faces the truck/camera (yaw 180). Push past the mesh shell.
+	local.z = maxf(local.z, 0.0) + (0.22 if face else 0.18)
+	return local
+
+
+func _prune_stuck_food() -> void:
+	while _stuck_food_items.size() > MAX_STUCK_FOOD:
+		var old: Variant = _stuck_food_items.pop_front()
+		if old is Node and is_instance_valid(old):
+			(old as Node).queue_free()
+
+
+func _make_stuck_food_plane(tex: Texture2D, tint: Color, size: Vector2) -> MeshInstance3D:
+	var card := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = size
+	card.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	## Food-on-face is a readable reaction gag, so hair and the customer mesh must
+	## never depth-occlude it while it holds and slides.
+	mat.no_depth_test = true
+	mat.albedo_color = tint
+	if tex != null:
+		mat.albedo_texture = tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.render_priority = 12
+	card.material_override = mat
+	card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return card
+
+
+func _next_stuck_food_face_spot() -> Vector2:
+	var spot := STUCK_FOOD_FACE_SPOTS[_stuck_food_spot_i % STUCK_FOOD_FACE_SPOTS.size()]
+	_stuck_food_spot_i += 1
+	return spot + Vector2(randf_range(-0.012, 0.012), randf_range(-0.010, 0.010))
+
+
+func reserve_stuck_food_local_target() -> Vector3:
+	## Reserve once before flight so the thrown card and attached card share the
+	## exact same crown destination instead of visibly snapping between targets.
+	var anchor := _stuck_food_anchor_local(true)
+	var face_spot := _next_stuck_food_face_spot()
+	anchor.x += face_spot.x
+	anchor.y += face_spot.y + 0.14
+	anchor.z += 0.10
+	return anchor
+
+
+func reserve_stuck_food_world_target() -> Vector3:
+	return to_global(reserve_stuck_food_local_target())
+
+
+func _animate_stuck_food_card(card: MeshInstance3D) -> void:
+	if card == null or not is_instance_valid(card):
+		return
+	card.scale = Vector3(1.28, 0.70, 1.28)
+	var slide_from := card.position
+	var rotation_from := card.rotation_degrees
+	var slide_to := card.position + Vector3(randf_range(-0.025, 0.025), -0.18, 0.012)
+	var slide_rotation := card.rotation_degrees + Vector3(randf_range(2.0, 8.0), 0.0, randf_range(-12.0, 12.0))
+	var tw := card.create_tween()
+	tw.tween_property(card, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(STUCK_FOOD_HOLD_SEC)
+	tw.tween_method(
+		func(t: float) -> void:
+			if card != null and is_instance_valid(card):
+				var eased := ease(t, 1.65)
+				card.position = slide_from.lerp(slide_to, eased)
+				card.rotation_degrees = rotation_from.lerp(slide_rotation, eased),
+		0.0,
+		1.0,
+		STUCK_FOOD_SLIDE_SEC
+	)
+	tw.tween_callback(_drop_stuck_food_card.bind(card))
+
+
+func _drop_stuck_food_card(card: MeshInstance3D) -> void:
+	if card == null or not is_instance_valid(card):
+		return
+	_stuck_food_items.erase(card)
+	var world_parent := get_parent() as Node3D
+	if world_parent == null or not is_instance_valid(world_parent):
+		card.queue_free()
+		return
+	card.reparent(world_parent, true)
+	var fall_to := card.global_position \
+		+ global_basis.x.normalized() * randf_range(-0.12, 0.12) \
+		+ global_basis.z.normalized() * 0.10 \
+		+ Vector3(0.0, -0.82, 0.0)
+	var fall_rotation := card.rotation_degrees + Vector3(randf_range(70.0, 150.0), randf_range(-45.0, 45.0), randf_range(-120.0, 120.0))
+	var tw := card.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(card, "global_position", fall_to, STUCK_FOOD_FALL_SEC).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(card, "rotation_degrees", fall_rotation, STUCK_FOOD_FALL_SEC).set_trans(Tween.TRANS_SINE)
+	tw.chain().tween_callback(card.queue_free)
+
+
+func receive_stuck_food(id: String, tex: Texture2D, hit_world: Vector3, zone: String = "body") -> void:
+	## Small food cards hit varied spots across the front of the head, hold long
+	## enough to read, then slide down the face before gravity takes them away.
+	var root := _ensure_stuck_food_root()
+	var anchor := to_local(hit_world) if hit_world != Vector3.ZERO else to_local(reserve_stuck_food_world_target())
+	## Twice the previous small-card pass: readable on the crown while remaining
+	## clearly below the original oversized 0.40-0.52 m cards.
+	var size_w := 0.30 if id == "cheese" else 0.28
+	if id == "lettuce" or id == "onion":
+		size_w = 0.34
+	if id == "pickle" or id == "bacon":
+		size_w = 0.26
+	var aspect := 0.62
+	if tex != null and tex.get_width() > 0:
+		aspect = clampf(float(tex.get_height()) / float(tex.get_width()), 0.40, 1.25)
+	var card := _make_stuck_food_plane(tex, Color.WHITE, Vector2(size_w, size_w * aspect))
+	card.name = "Stuck_%s" % id
+	card.position = anchor
+	card.rotation_degrees = Vector3(randf_range(-10.0, 8.0), randf_range(-14.0, 14.0), randf_range(-8.0, 8.0))
+	root.add_child(card)
+	_stuck_food_items.append(card)
+	_prune_stuck_food()
+	_animate_stuck_food_card(card)
+	bobble_click()
+
+
+func receive_sauce(flavor: String, tex: Texture2D, tint: Color, zone: String = "body") -> void:
+	var root := _ensure_stuck_food_root()
+	var face := zone == "face"
+	var anchor := _stuck_food_anchor_local(face)
+	anchor.x += randf_range(-0.11, 0.11)
+	anchor.y += randf_range(-0.08, 0.08)
+	var size := randf_range(0.26, 0.40) if face else randf_range(0.32, 0.48)
+	var card := _make_stuck_food_plane(tex, tint, Vector2(size, size * randf_range(0.75, 1.15)))
+	card.name = "Sauce_%s" % flavor
+	card.position = anchor
+	card.rotation_degrees = Vector3(randf_range(-16.0, 12.0), randf_range(-24.0, 24.0), randf_range(-28.0, 28.0))
+	root.add_child(card)
+	_stuck_food_items.append(card)
+	_prune_stuck_food()
+	card.scale = Vector3(1.35, 0.55, 1.35)
+	var tw := create_tween()
+	tw.tween_property(card, "scale", Vector3.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if randf() < 0.4:
+		bobble_click()
+
+
 ## Serve fly animation target — roughly lip height in the service window.
 func mouth_global() -> Vector3:
 	if is_disguise_cat:
@@ -4197,6 +4409,12 @@ func _pick_five_star_dance_path() -> String:
 			choices.append(path)
 	if choices.is_empty():
 		return ""
+	## Networked customers must select the same celebration clip on every peer.
+	## Local RNG streams differ as soon as either cook performs a local-only action.
+	if has_meta("mp_net_id"):
+		var net_id := int(get_meta("mp_net_id", -1))
+		if net_id >= 0:
+			return choices[posmod(net_id, choices.size())]
 	return choices[randi() % choices.size()]
 
 
@@ -4242,9 +4460,19 @@ func complete_serve(payout: int, five_star: bool = false) -> void:
 	if bool(get_meta("serve_review_hold", false)):
 		set_meta("serve_review_pending", false)
 		set_meta("serve_review_hold", false)
+	## Only five-star customers may celebrate, and only 60% of those do. A stable
+	## network-id roll keeps the host and guest on the exact same dance decision.
+	var do_dance := false
+	if five_star and not is_cut_collector:
+		if has_meta("mp_net_id"):
+			var net_id := int(get_meta("mp_net_id", -1))
+			do_dance = net_id >= 0 and posmod(net_id * 73 + 19, 100) < 60
+		else:
+			do_dance = randf() < 0.60
+	set_meta("five_star_dance", do_dance)
 	_set_mood("cheer")
 	served.emit(self, payout)
-	leave_happy()
+	leave_happy(do_dance)
 
 
 func complete_serve_meh(payout: int) -> void:

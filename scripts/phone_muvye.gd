@@ -53,7 +53,9 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	clip_contents = true
-	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	## Stay in the phone VBox under the nav bar. FULL_RECT overlays the Back button.
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_build_ui()
 	_show_library()
 	set_process(true)

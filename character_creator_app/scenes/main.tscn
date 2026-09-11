@@ -249,7 +249,7 @@ text = "INDIVIDUAL EYE YAW"
 theme_override_constants/separation = 3
 
 [node name="LashLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
-text = "EYELASHES"
+text = "EYE OPENING"
 
 [node name="LashSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
 custom_minimum_size = Vector2(0, 36)
@@ -257,7 +257,7 @@ custom_minimum_size = Vector2(0, 36)
 [node name="LashColor" type="ColorPickerButton" parent="UI/ModulesPanel/Margin/Controls"]
 custom_minimum_size = Vector2(0, 32)
 color = Color(0.141176, 0.094118, 0.090196, 1)
-text = "Lash color"
+text = "Lash rim color"
 
 [node name="LashAdjustments" type="VBoxContainer" parent="UI/ModulesPanel/Margin/Controls"]
 theme_override_constants/separation = 3

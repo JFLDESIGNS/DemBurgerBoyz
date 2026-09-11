@@ -28,6 +28,28 @@ func _run_test() -> void:
 	var ids := ["truck_buyout", "soda_machine", "icecream_machine", "fryer_machine", "grill_roomba", "fridge_upgrade", "gold_spatula"]
 	var live_renders := 0
 	var spin_target: Node3D = null
+	## Flavor faces must retain the positions authored into the source model. The
+	## marketplace used to reveal a three-inch runtime offset that pushed each
+	## colored square across the edge of its dispenser bay.
+	var soda_root := game.get("soda_root") as Node3D
+	var soda_visual := soda_root.get_node_or_null("FountainModel") as Node3D if soda_root != null else null
+	var soda_pads: Dictionary = game.get("soda_flavor_pads") as Dictionary
+	var authored_soda := game.call("_instantiate_soda_fountain_model") as Node3D
+	if soda_visual == null or authored_soda == null:
+		_fail("Soda fountain model is unavailable for flavor-panel alignment check")
+		return
+	for fid in ["cola", "ice"]:
+		var live_pad := soda_pads.get(fid, null) as MeshInstance3D
+		if live_pad == null or not soda_visual.is_ancestor_of(live_pad):
+			authored_soda.free()
+			_fail("Missing live %s flavor panel" % fid)
+			return
+		var authored_pad := authored_soda.get_node_or_null(soda_visual.get_path_to(live_pad)) as MeshInstance3D
+		if authored_pad == null or live_pad.position.distance_to(authored_pad.position) > 0.0001:
+			authored_soda.free()
+			_fail("%s flavor panel is offset from its authored dispenser bay" % fid)
+			return
+	authored_soda.free()
 	for id in ids:
 		var card := shop.find_child("ShopCard_%s" % id, true, false) as Control
 		if card == null:
@@ -87,7 +109,7 @@ func _run_test() -> void:
 	if spin_target == null or is_equal_approx(spin_before, spin_target.rotation.y):
 		_fail("The 3D product viewer is not rotating")
 		return
-	print("PHONE SHOP test passed: closer ice cream, gold spatula, dark mode, and %d spinning 3D renders" % live_renders)
+	print("PHONE SHOP test passed: aligned soda panels, closer ice cream, gold spatula, dark mode, and %d spinning 3D renders" % live_renders)
 	game.queue_free()
 	await process_frame
 	quit(0)

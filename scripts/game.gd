@@ -214,7 +214,7 @@ const COST_OIL_USE := 0.0 ## Stocked tools are free to use
 const COST_SEASON_USE := 0.0
 const COST_INGREDIENT := 0.25 ## Phone restock unit baseline (using fridge stock is free)
 const COST_BACON := 0.50
-const START_MONEY := 1000.0
+const START_MONEY := 200.0
 const BANK_CFG_SECTION := "bank"
 const BANK_SAVINGS_RATE_DEFAULT := 1.0
 const BANK_LOAN_RATE_DEFAULT := 5.0
@@ -1859,6 +1859,25 @@ var gfx_window_wash: SpotLight3D = null
 var gfx_customer_fill: SpotLight3D = null
 var soda_lamp: OmniLight3D = null
 var icecream_lamp: OmniLight3D = null
+const LIGHT_PROFILE_CFG := "light_profiles"
+const LIGHT_PROFILE_COUNT := 4
+const LIGHT_PROFILE_NAMES: Array[String] = [
+	"1 Classic",
+	"2 Window Key",
+	"3 Short Order",
+	"4 Feature Rig",
+]
+## Default: camera-right, high, not overhead. Azimuth 0 = world −X (screen-right).
+const LIGHT_SUN_AZIM_DEFAULT := 26.0
+const LIGHT_SUN_ELEV_DEFAULT := 36.0
+const LIGHT_SUN_AZIM_BY_PROFILE: Array[float] = [28.0, 26.0, 22.0, 32.0]
+const LIGHT_SUN_ELEV_BY_PROFILE: Array[float] = [42.0, 36.0, 34.0, 38.0]
+var light_profile_id: int = 1 ## Window Key — Classic stays available as profile 1
+var _light_profile_root: Node3D = null
+var _profile_sun: DirectionalLight3D = null
+var _profile_sun_azim: Array[float] = [28.0, 26.0, 22.0, 32.0]
+var _profile_sun_elev: Array[float] = [42.0, 36.0, 34.0, 38.0]
+var _classic_sun_from_sky: bool = false
 var hidden_scanned_lights_host: VBoxContainer = null
 var soda_lamp_energy: float = 0.75
 var soda_lamp_range: float = 1.2
@@ -2031,7 +2050,12 @@ var street_bg_custom_edit: LineEdit = null
 var location_bg_assignments: Dictionary = {} ## location id -> background choice id
 var location_bg_transforms: Dictionary = {} ## location id -> per-location bg_x/bg_y/bg_z/bg_scale overrides
 var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by location id
+var outdoor_street: Node3D = null
+var shadow_catcher_root: Node3D = null
+var shadow_catcher_planes: Array = [] ## MeshInstance3D catchers
+var shadow_catcher_bounds: Array = [] ## MeshInstance3D Hidden-menu outlines
 var street_car_sprite: Sprite3D = null
+var street_car_shadow: MeshInstance3D = null
 var street_car_exhaust: GPUParticles3D = null
 var street_car_blur_sprites: Array = [] ## trailing Sprite3D smears
 var street_car_pool: Array = [] ## Texture2D — van plus PSD cars
@@ -2112,6 +2136,10 @@ const CONDIMENT_AUTO_POUR_HEIGHT_OFFSET := 0.4298 ## Previous 0.125 m plus exact
 const CONDIMENT_ANIM_RENDER_PRIORITY := 34
 const CONDIMENT_ANIM_SORTING_OFFSET := 24.0
 const CONDIMENT_TOOL_HOLD_HEIGHT := 0.38
+## Squeeze onto a customer only when the bottle is out at the window and this close.
+const CONDIMENT_CUSTOMER_SPRAY_REACH := 0.46
+const CONDIMENT_CUSTOMER_SPRAY_XZ := 0.34
+const CONDIMENT_CUSTOMER_HOLD_Z_MAX := 2.10
 ## Lightweight raised sauce ribbon: enough height for lighting without tube geometry.
 const CONDIMENT_TOOL_STREAK_RADIUS := 0.0044
 const CONDIMENT_TOOL_STREAK_SPACING := 0.013
@@ -2181,6 +2209,7 @@ var condiment_tool_last_draw := Vector3.ZERO
 var condiment_tool_last_dir := Vector3.ZERO
 var condiment_draw_smooth := Vector3.ZERO
 var condiment_tool_stream_phase: float = 0.0
+var _condiment_customer_splat_cool: float = 0.0
 var condiment_smear_items: Array = []
 var condiment_chunk_items: Array = []
 var condiment_spline_batches: Dictionary = {} ## Legacy state name; painter/flavor -> active ribbon batch.
@@ -2522,7 +2551,6 @@ const SODA_FLAVOR_WARM: Dictionary = {
 const INCH_TO_M := 0.0254
 ## Camera-right is world −X. 30% darker = albedo 0.70.
 const MACHINE_LABEL_CAM_RIGHT_M := INCH_TO_M
-const SODA_LABEL_CAM_RIGHT_M := 3.0 * INCH_TO_M ## 1" prior + 2" more
 const MACHINE_LABEL_ALBEDO := Color(0.70, 0.70, 0.70, 1.0)
 ## Carry plane above grill steel (NOT the fill seat). Tunable in Hidden → SODA CUP HEIGHTS.
 const CUP_HOLD_HEIGHT_DEFAULT := 0.0762 ## ~3" — carry only; fill snaps to drip deck
@@ -2783,6 +2811,7 @@ const STREET_BG_SELECTED_TREE_PARK_PATH := "res://assets/backgrounds/selected_tr
 const STREET_BG_SELECTED_RESIDENTIAL_PATH := "res://assets/backgrounds/selected_residential_row.png"
 const STREET_BG_SELECTED_CONSTRUCTION_PATH := "res://assets/backgrounds/selected_construction_block.png"
 const STREET_BG_SELECTED_WAREHOUSE_PATH := "res://assets/backgrounds/selected_warehouse.png"
+const STREET_BG_MOUNTAIN_VIEW_PATH := "res://assets/backgrounds/mountain_view.jpg"
 const STREET_CAR_TEXTURE_PATHS := [
 	"res://assets/backgrounds/road_delivery_car.png",
 	"res://assets/backgrounds/street_cars/street_car_city.png",
@@ -2790,7 +2819,7 @@ const STREET_CAR_TEXTURE_PATHS := [
 	"res://assets/backgrounds/street_cars/street_car_pickup.png",
 	"res://assets/backgrounds/street_cars/street_car_offroad.png",
 ]
-const STREET_CAR_Z := 11.0248 ## Five feet deeper toward the background than the previous 9.5008 m depth.
+const STREET_CAR_Z := 7.18 ## In front of sidewalk walkers (Z 8.65), behind window customers (Z ~2.25).
 const STREET_CAR_Y := 1.60 ## Raised another 0.70 m: twice the previous height adjustment.
 const STREET_CAR_PIXEL_SIZE := 0.010752 ## 20% smaller than the previous rendered size.
 const STREET_CAR_REF_HEIGHT_PX := 312.0 ## Van texture height; other pool cars scale to this.
@@ -2808,9 +2837,11 @@ const STREET_CAR_RUMBLE_RATE := 18.0
 const STREET_CAR_WAIT_MIN := 17.0
 const STREET_CAR_WAIT_MAX := 34.0
 const STREET_CAR_HORN_CHANCE := 0.24
+const SHADOW_CATCHER_COUNT := 4
+const SHADOW_CATCHER_SHADER_PATH := "res://shaders/shadow_catcher.gdshader"
 const BG_PEOPLE_COUNT := 2
 const BG_PEOPLE_MAX_ONSCREEN := 2
-const BG_PEOPLE_Z := 8.65 ## Far sidewalk in front of the shops, in front of street cars.
+const BG_PEOPLE_Z := 8.65 ## Far sidewalk in front of the shops, behind street cars.
 const BG_PEOPLE_EDGE_X := 8.4
 const BG_PEOPLE_SPEED_MIN := 0.72
 const BG_PEOPLE_SPEED_MAX := 1.58
@@ -3044,7 +3075,40 @@ const GFX_DEFAULTS := {
 	"street_car_size": 1.0,
 	"street_car_y": STREET_CAR_Y,
 	"street_car_z": STREET_CAR_Z,
-	"street_car_sort": 0.0,
+	"street_car_sort": 12.0,
+	"scatch0_on": true,
+	"scatch0_x": 0.0,
+	"scatch0_y": -0.06,
+	"scatch0_z": 6.15,
+	"scatch0_w": 22.0,
+	"scatch0_d": 8.4,
+	"scatch0_yaw": 0.0,
+	"scatch0_str": 1.0,
+	"scatch1_on": true,
+	"scatch1_x": 0.0,
+	"scatch1_y": -0.06,
+	"scatch1_z": 12.35,
+	"scatch1_w": 24.0,
+	"scatch1_d": 7.2,
+	"scatch1_yaw": 0.0,
+	"scatch1_str": 1.0,
+	"scatch2_on": false,
+	"scatch2_x": 0.0,
+	"scatch2_y": -0.04,
+	"scatch2_z": 4.2,
+	"scatch2_w": 16.0,
+	"scatch2_d": 5.0,
+	"scatch2_yaw": 0.0,
+	"scatch2_str": 1.0,
+	"scatch3_on": false,
+	"scatch3_x": 0.0,
+	"scatch3_y": -0.04,
+	"scatch3_z": 9.0,
+	"scatch3_w": 18.0,
+	"scatch3_d": 6.0,
+	"scatch3_yaw": 0.0,
+	"scatch3_str": 1.0,
+	"sun_shadow_distance": 32.0,
 	"bg_people_z": 8.65,
 	"bg_people_y": -0.02,
 	"bg_people_scale": 0.92,
@@ -3156,6 +3220,7 @@ var _mp_code_edit: LineEdit = null
 var _mp_code_join_btn: Button = null
 var _mp_host_addr_label: Label = null
 var _mp_remote_cursors: Dictionary = {} ## peer_id -> Control
+var _mp_remote_cursor_targets: Dictionary = {} ## peer_id -> viewport position
 var _mp_cursor_layer: Control = null
 var _cursor_tex_normal: Texture2D = null
 var _cursor_tex_click: Texture2D = null
@@ -3172,6 +3237,8 @@ var _gamepad_prev_radio_next: bool = false
 const GAMEPAD_CURSOR_SPEED := 980.0
 const GAMEPAD_CURSOR_DEADZONE := 0.18
 var _mp_next_customer_net_id: int = 1
+var _mp_next_debris_net_id: int = 1
+var _mp_debris_nudge_cool: float = 0.0
 var _mp_customer_net_ids: Dictionary = {} ## customer instance_id -> net_id
 var _mp_cat_accum: float = 0.0
 var _mp_econ_accum: float = 0.0
@@ -3190,6 +3257,7 @@ var _serve_fly_watch: float = 0.0
 var _mp_remote_oil: Dictionary = {}
 var _mp_remote_ketchup: Dictionary = {}
 var _mp_remote_mustard: Dictionary = {}
+var _mp_remote_condiment_streams: Dictionary = {} ## peer_id -> pour-stream MeshInstance3D
 var _mp_remote_shaker: Dictionary = {}
 var _mp_remote_ext: Dictionary = {}
 var _mp_remote_glock: Dictionary = {}
@@ -3221,7 +3289,8 @@ var _mp_serve_sync: bool = false
 var multiplayer_btn: Button = null
 var tutorial_btn: Button = null
 var _burger_assets_warmed: bool = false
-const PATTY_PREWARM_POOL_SIZE := 3
+## Covers a full grill plus Build-board overlap without allocating during play.
+const PATTY_PREWARM_POOL_SIZE := 16
 var _patty_spawn_pool: Array = []
 
 ## Food-truck city parking (map UI now; customer/bg swap wired later).
@@ -4439,6 +4508,7 @@ func _process(delta: float) -> void:
 	_update_patty_fridge_screen_follow()
 	_update_bottom_row_supply_follow()
 	_hidden_gizmo_update_visual()
+	_update_shadow_catcher_bounds_visible()
 	## Window godrays disabled for now (too strong).
 	# _update_window_godrays(delta)
 	if not playing:
@@ -4716,6 +4786,7 @@ func _process(delta: float) -> void:
 		_mp_cup_pose_cool = maxf(0.0, _mp_cup_pose_cool - delta)
 		_mp_icecream_pose_cool = maxf(0.0, _mp_icecream_pose_cool - delta)
 		_mp_slick_sync_cool = maxf(0.0, _mp_slick_sync_cool - delta)
+		_mp_debris_nudge_cool = maxf(0.0, _mp_debris_nudge_cool - delta)
 		_mp_soda_drain_flush_cool = maxf(0.0, _mp_soda_drain_flush_cool - delta)
 		if not NetManager.is_host() and _mp_soda_drain_flush_cool <= 0.0 \
 				and not _mp_soda_drain_pending.is_empty():
@@ -4727,9 +4798,9 @@ func _process(delta: float) -> void:
 			_check_remote_spatula_clink()
 		if fryer_held_index >= 0:
 			_mp_send_fryer_basket_pose(false, true, fryer_held_index)
-		if cup_held:
+		if cup_held or _cup_parked_filling:
 			_mp_send_held_cup_pose(false)
-		if icecream_cone_held:
+		if icecream_cone_held or _icecream_parked_filling:
 			_mp_send_held_icecream_pose(false)
 		## Idle tray / steel drinks — keep re-upserting so partners don't miss parks.
 		_mp_idle_drink_accum += delta
@@ -5114,6 +5185,15 @@ func _input(event: InputEvent) -> void:
 		options_panel_dragging = false
 	if not playing:
 		return
+	## The phone is screen-space UI layered over the 3D kitchen. World interaction
+	## is handled from _input, so a cup/rack ray could previously consume the press
+	## before GUI dispatch reached buttons such as MUVYE Back. Let visible phone
+	## chrome own presses inside its rectangle; releases still pass through so a
+	## kitchen tool dragged onto the phone cannot become stuck in-hand.
+	if event is InputEventMouseButton:
+		var phone_press := event as InputEventMouseButton
+		if phone_press.pressed and _phone_owns_pointer(phone_press.position):
+			return
 	## Lasso shape tool owns mouse / hotkeys while active (UI panel still gets GUI events).
 	if lasso_tool != null and lasso_tool.is_active():
 		if event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventKey:
@@ -6299,6 +6379,14 @@ func _ui_blocks_world_click(screen_pos: Vector2, for_grill_place: bool = false) 
 	return false
 
 
+func _phone_owns_pointer(screen_pos: Vector2) -> bool:
+	if phone_column == null or not is_instance_valid(phone_column):
+		return false
+	if not phone_column.is_visible_in_tree():
+		return false
+	return phone_column.get_global_rect().has_point(screen_pos)
+
+
 func _build_plate_index_at(screen_pos: Vector2) -> int:
 	## Tight build-plate hitbox — must not swallow grill cheese drops.
 	const PAD := 12.0
@@ -7239,6 +7327,7 @@ func _make_fridge_patty_ball(held_world: bool = false) -> Node3D:
 	var grill_r: float = 0.092 * PattyScript.FROZEN_BALL_SCALE
 	var extra: float = (ball_r * patty_fridge_ball_scale) / maxf(grill_r, 0.001)
 	ball.scale *= extra
+	ball.set_meta("fridge_home_scale", ball.scale)
 	return ball
 
 
@@ -7283,8 +7372,25 @@ func _take_fridge_display_ball_for_flight() -> Node3D:
 	ball.set_meta("flight_start", ball.global_position)
 	patty_fridge_balls_root.remove_child(ball)
 	ball.visible = true
-	call_deferred("_refill_one_fridge_display_ball")
 	return ball
+
+
+func _return_fridge_display_ball(ball: Node3D) -> void:
+	## Recycle the procedural frozen ball; rebuilding its meshes/materials caused
+	## a visible hitch after every freezer throw.
+	if ball == null or not is_instance_valid(ball):
+		return
+	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
+		ball.queue_free()
+		return
+	if ball.get_parent() != null:
+		ball.get_parent().remove_child(ball)
+	patty_fridge_balls_root.add_child(ball)
+	var home_scale: Variant = ball.get_meta("fridge_home_scale", Vector3.ONE)
+	ball.scale = home_scale if home_scale is Vector3 else Vector3.ONE
+	ball.rotation = Vector3.ZERO
+	ball.position = _patty_fridge_ball_seat(patty_fridge_balls_root.get_child_count() - 1, patty_fridge_open)
+	ball.visible = false
 
 
 func _refill_one_fridge_display_ball() -> void:
@@ -7768,7 +7874,7 @@ func _launch_fridge_ball_to_grill(idx: int, place_pos: Vector3, net_id: int = -1
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.chain().tween_callback(func() -> void:
 		if flyer != null and is_instance_valid(flyer):
-			flyer.queue_free()
+			_return_fridge_display_ball(flyer)
 		_spawn_patty_at(idx, place_pos, net_id, true)
 		_fridge_launch_inflight = maxi(_fridge_launch_inflight - 1, 0)
 		if _fridge_launch_inflight <= 0 and not _fridge_drag_active:
@@ -11380,8 +11486,7 @@ func _setup_world_lighting() -> void:
 	gfx_sun.light_energy = 1.55
 	gfx_sun.light_indirect_energy = 1.15
 	gfx_sun.shadow_enabled = true
-	gfx_sun.shadow_blur = 1.2
-	gfx_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	_style_dir_shadows(gfx_sun)
 	## Camera looks toward +Z, so world -X reads as screen-right.
 	## Mirror the main character key to that side while preserving its elevation.
 	gfx_sun.rotation_degrees = Vector3(-48.0, -35.0, -8.0)
@@ -11394,8 +11499,9 @@ func _setup_world_lighting() -> void:
 	gfx_outside_fill.light_energy = 1.425 ## Was 0.95 — +50% for stronger grill shadows
 	gfx_outside_fill.light_indirect_energy = 0.85
 	gfx_outside_fill.shadow_enabled = true
-	gfx_outside_fill.shadow_blur = 1.45
-	gfx_outside_fill.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	_style_dir_shadows(gfx_outside_fill)
+	gfx_outside_fill.light_angular_distance = 3.2
+	gfx_outside_fill.shadow_opacity = 0.62
 	gfx_outside_fill.rotation_degrees = Vector3(-36.0, -155.0, 0.0)
 	world.add_child(gfx_outside_fill)
 
@@ -11407,6 +11513,8 @@ func _setup_world_lighting() -> void:
 	gfx_kitchen.omni_range = 5.5
 	gfx_kitchen.omni_attenuation = 1.15
 	gfx_kitchen.shadow_enabled = true
+	_style_local_shadows(gfx_kitchen, true)
+	gfx_kitchen.light_size = 0.42
 	gfx_kitchen.position = Vector3(0.0, 2.45, -0.35)
 	world.add_child(gfx_kitchen)
 
@@ -11420,7 +11528,7 @@ func _setup_world_lighting() -> void:
 	gfx_grill_lamp.spot_angle = 42.0
 	gfx_grill_lamp.spot_attenuation = 0.9
 	gfx_grill_lamp.shadow_enabled = true
-	gfx_grill_lamp.shadow_blur = 1.15
+	_style_local_shadows(gfx_grill_lamp, true)
 	gfx_grill_lamp.position = Vector3(GRILL_CENTER_X, 2.35, GRILL_SURFACE_Z - 0.15)
 	gfx_grill_lamp.rotation_degrees = Vector3(-72.0, 0.0, 0.0)
 	world.add_child(gfx_grill_lamp)
@@ -11510,6 +11618,357 @@ func _setup_world_lighting() -> void:
 	env_node.environment = env
 	add_child(env_node)
 	_build_fake_df_ao_overlay()
+	_init_light_profiles()
+
+
+func _init_light_profiles() -> void:
+	_load_light_profile_settings()
+	_rebuild_light_profile_rig()
+	_sync_light_profile()
+
+
+func get_light_profile_id() -> int:
+	return light_profile_id
+
+
+func get_light_profile_names() -> Array[String]:
+	return LIGHT_PROFILE_NAMES
+
+
+func get_light_profile_sun_sky() -> Vector2:
+	return Vector2(_profile_sun_azim_at(light_profile_id), _profile_sun_elev_at(light_profile_id))
+
+
+func classic_sun_uses_sky() -> bool:
+	return _classic_sun_from_sky
+
+
+func set_light_profile(id: int) -> void:
+	var next: int = clampi(id, 0, LIGHT_PROFILE_COUNT - 1)
+	var rig_ok: bool = _light_profile_root != null and is_instance_valid(_light_profile_root)
+	if next == light_profile_id and (next <= 0 or rig_ok):
+		_sync_light_profile()
+		if level_editor != null and level_editor.has_method("refresh_lighting_ui"):
+			level_editor.call("refresh_lighting_ui")
+		return
+	light_profile_id = next
+	_rebuild_light_profile_rig()
+	_sync_light_profile()
+	_save_light_profile_settings()
+	if level_editor != null and level_editor.has_method("refresh_lighting_ui"):
+		level_editor.call("refresh_lighting_ui")
+
+
+func set_profile_sun_sky(azim: float, elev: float) -> void:
+	var i: int = light_profile_id
+	if i < 0 or i >= LIGHT_PROFILE_COUNT:
+		return
+	_profile_sun_azim[i] = clampf(azim, -15.0, 110.0)
+	_profile_sun_elev[i] = clampf(elev, 16.0, 58.0)
+	if i <= 0:
+		_classic_sun_from_sky = true
+	_apply_active_sun_orientation()
+	_save_light_profile_settings()
+
+
+func reset_profile_sun_sky() -> void:
+	var i: int = light_profile_id
+	if i < 0 or i >= LIGHT_PROFILE_COUNT:
+		return
+	_profile_sun_azim[i] = LIGHT_SUN_AZIM_BY_PROFILE[i]
+	_profile_sun_elev[i] = LIGHT_SUN_ELEV_BY_PROFILE[i]
+	if i <= 0:
+		_classic_sun_from_sky = false
+		if gfx_sun != null and is_instance_valid(gfx_sun):
+			gfx_sun.rotation_degrees = Vector3(
+				float(_gfx_slider_or_default("sun_pitch", GFX_DEFAULTS["sun_pitch"])),
+				float(_gfx_slider_or_default("sun_yaw", GFX_DEFAULTS["sun_yaw"])),
+				float(_gfx_slider_or_default("sun_roll", GFX_DEFAULTS["sun_roll"]))
+			)
+	else:
+		_apply_active_sun_orientation()
+	_save_light_profile_settings()
+	if level_editor != null and level_editor.has_method("refresh_lighting_ui"):
+		level_editor.call("refresh_lighting_ui")
+
+
+func _gfx_slider_or_default(key: String, fallback: float) -> float:
+	if gfx_sliders.has(key) and gfx_sliders[key] != null:
+		return float((gfx_sliders[key] as Range).value)
+	return fallback
+
+
+func _profile_sun_azim_at(i: int) -> float:
+	if i < 0 or i >= _profile_sun_azim.size():
+		return LIGHT_SUN_AZIM_DEFAULT
+	return _profile_sun_azim[i]
+
+
+func _profile_sun_elev_at(i: int) -> float:
+	if i < 0 or i >= _profile_sun_elev.size():
+		return LIGHT_SUN_ELEV_DEFAULT
+	return _profile_sun_elev[i]
+
+
+func _sun_from_sky(azim_deg: float, elev_deg: float) -> Vector3:
+	## Azimuth 0 = camera-right (world −X). 90 = through the window (+Z).
+	var az: float = deg_to_rad(azim_deg)
+	var el: float = deg_to_rad(elev_deg)
+	var horiz: float = cos(el)
+	return Vector3(-horiz * cos(az), sin(el), horiz * sin(az)).normalized()
+
+
+func _orient_sun_from_sky(sun: DirectionalLight3D, azim: float, elev: float) -> void:
+	if sun == null or not is_instance_valid(sun):
+		return
+	var from: Vector3 = _sun_from_sky(azim, elev)
+	var origin: Vector3 = sun.global_position
+	if origin.is_equal_approx(Vector3.ZERO):
+		origin = Vector3(0.0, 8.0, 0.0)
+		sun.global_position = origin
+	sun.look_at(origin - from, Vector3.UP)
+
+
+func _style_dir_shadows(sun: DirectionalLight3D) -> void:
+	## Soft PCSS + blended cascades. Range has to reach the sidewalk (~10 m
+	## from the window camera) or walker shadows never land on the catchers.
+	sun.shadow_enabled = true
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.4
+	sun.shadow_blur = 1.8
+	sun.shadow_opacity = 1.0
+	sun.light_angular_distance = 1.4
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_blend_splits = true
+	sun.directional_shadow_max_distance = _sun_shadow_distance()
+	sun.directional_shadow_split_1 = 0.10
+	sun.directional_shadow_split_2 = 0.22
+	sun.directional_shadow_split_3 = 0.55
+	sun.directional_shadow_fade_start = 0.92
+	sun.directional_shadow_pancake_size = 1.6
+
+
+func _sun_shadow_distance() -> float:
+	return clampf(_gfx_float("sun_shadow_distance", 32.0), 10.0, 80.0)
+
+
+func _style_local_shadows(light: Light3D, on: bool) -> void:
+	light.shadow_enabled = on
+	light.shadow_bias = 0.05
+	light.shadow_normal_bias = 1.35
+	light.shadow_blur = 2.1
+	light.shadow_opacity = 0.74
+	if light is OmniLight3D:
+		(light as OmniLight3D).omni_shadow_mode = OmniLight3D.SHADOW_CUBE
+	if light is SpotLight3D:
+		light.light_size = maxf(light.light_size, 0.28)
+
+
+func _make_profile_spot(
+	parent: Node3D,
+	n: String,
+	pos: Vector3,
+	rot_deg: Vector3,
+	col: Color,
+	energy: float,
+	rng: float,
+	angle: float,
+	cast_shadows: bool
+) -> SpotLight3D:
+	var spot := SpotLight3D.new()
+	spot.name = n
+	spot.position = pos
+	spot.rotation_degrees = rot_deg
+	spot.light_color = col
+	spot.light_energy = energy
+	spot.light_specular = 0.22
+	spot.light_indirect_energy = 0.55
+	spot.spot_range = rng
+	spot.spot_angle = angle
+	spot.spot_attenuation = 1.05
+	spot.light_size = 0.28
+	_style_local_shadows(spot, cast_shadows)
+	parent.add_child(spot)
+	return spot
+
+
+func _make_profile_omni(
+	parent: Node3D,
+	n: String,
+	pos: Vector3,
+	col: Color,
+	energy: float,
+	rng: float,
+	cast_shadows: bool
+) -> OmniLight3D:
+	var omni := OmniLight3D.new()
+	omni.name = n
+	omni.position = pos
+	omni.light_color = col
+	omni.light_energy = energy
+	omni.light_specular = 0.12
+	omni.omni_range = rng
+	omni.omni_attenuation = 1.35
+	omni.light_size = 0.28
+	_style_local_shadows(omni, cast_shadows)
+	parent.add_child(omni)
+	return omni
+
+
+func _classic_rig_lights() -> Array:
+	## Kitchen / window fill only. Heat, burner, tree, and spark lights stay on every profile.
+	return [
+		gfx_sun, gfx_outside_fill, gfx_kitchen, gfx_grill_lamp,
+		gfx_window_wash, gfx_customer_fill, soda_lamp, icecream_lamp
+	]
+
+
+func _rebuild_light_profile_rig() -> void:
+	if world == null:
+		return
+	if _light_profile_root != null and is_instance_valid(_light_profile_root):
+		_light_profile_root.queue_free()
+	_light_profile_root = null
+	_profile_sun = null
+	if light_profile_id <= 0:
+		return
+	var root := Node3D.new()
+	root.name = "LightProfileRig"
+	world.add_child(root)
+	_light_profile_root = root
+	var sun := DirectionalLight3D.new()
+	sun.name = "ProfileSun"
+	sun.light_color = Color(1.0, 0.90, 0.72)
+	sun.light_energy = 1.85 if light_profile_id == 1 else 1.65
+	sun.light_indirect_energy = 0.55
+	sun.light_specular = 0.42
+	_style_dir_shadows(sun)
+	root.add_child(sun)
+	_profile_sun = sun
+	match light_profile_id:
+		1:
+			_build_profile_window_key(root)
+		2:
+			_build_profile_short_order(root)
+		_:
+			_build_profile_feature_rig(root)
+	_apply_active_sun_orientation()
+
+
+func _build_profile_window_key(root: Node3D) -> void:
+	## Simple: one sun, one window punch so counter objects get real shadows, plus bounce.
+	_make_profile_spot(
+		root, "WindowPunch", Vector3(-0.45, 2.05, 1.68),
+		Vector3(-20.0, 182.0, 0.0), Color(1.0, 0.88, 0.68),
+		1.25, 4.2, 44.0, true
+	)
+	_make_profile_omni(
+		root, "CeilingBounce", Vector3(0.55, 2.38, -0.42),
+		Color(1.0, 0.93, 0.84), 0.28, 4.2, false
+	)
+
+
+func _build_profile_short_order(root: Node3D) -> void:
+	## Sun plus a window spill and a grill key — both shadow-casting.
+	_make_profile_spot(
+		root, "WindowSpill", Vector3(-0.55, 2.12, 1.72),
+		Vector3(-22.0, 180.0, 0.0), Color(1.0, 0.88, 0.68),
+		1.55, 4.4, 48.0, true
+	)
+	_make_profile_spot(
+		root, "GrillKey", Vector3(GRILL_CENTER_X + 0.08, 2.22, -0.62),
+		Vector3(-62.0, 8.0, 0.0), Color(1.0, 0.94, 0.82),
+		2.05, 2.8, 36.0, true
+	)
+	_make_profile_omni(
+		root, "CabinBounce", Vector3(0.35, 2.18, -0.28),
+		Color(1.0, 0.92, 0.82), 0.22, 3.6, false
+	)
+
+
+func _build_profile_feature_rig(root: Node3D) -> void:
+	## Richer station lighting. Shadow casters stay local so the sun still reads.
+	_make_profile_spot(
+		root, "WindowSpill", Vector3(-0.62, 2.18, 1.78),
+		Vector3(-24.0, 186.0, 0.0), Color(1.0, 0.86, 0.64),
+		1.35, 4.6, 46.0, true
+	)
+	_make_profile_spot(
+		root, "GrillKey", Vector3(GRILL_CENTER_X, 2.26, -0.58),
+		Vector3(-64.0, 4.0, 0.0), Color(1.0, 0.95, 0.84),
+		1.95, 2.7, 34.0, true
+	)
+	_make_profile_spot(
+		root, "SodaKey", Vector3(-1.72, 2.08, 0.22),
+		Vector3(-48.0, 78.0, 0.0), Color(0.82, 0.94, 1.0),
+		1.45, 2.4, 32.0, true
+	)
+	_make_profile_spot(
+		root, "BuildBoardKey", Vector3(0.92, 2.12, -0.18),
+		Vector3(-58.0, -18.0, 0.0), Color(1.0, 0.91, 0.76),
+		1.35, 2.3, 34.0, true
+	)
+	_make_profile_omni(
+		root, "CabinBounce", Vector3(0.12, 2.32, -0.38),
+		Color(1.0, 0.93, 0.85), 0.18, 3.8, false
+	)
+	_make_profile_omni(
+		root, "CustomerSoft", Vector3(-0.2, 1.85, 1.35),
+		Color(1.0, 0.90, 0.78), 0.42, 2.6, false
+	)
+	_make_profile_omni(
+		root, "SoftServeFill", Vector3(1.15, 1.72, 0.18),
+		Color(1.0, 0.88, 0.72), 0.32, 1.6, false
+	)
+
+
+func _apply_active_sun_orientation() -> void:
+	var az: float = _profile_sun_azim_at(light_profile_id)
+	var el: float = _profile_sun_elev_at(light_profile_id)
+	if light_profile_id <= 0:
+		if _classic_sun_from_sky:
+			_orient_sun_from_sky(gfx_sun, az, el)
+		return
+	_orient_sun_from_sky(_profile_sun, az, el)
+
+
+func _sync_light_profile() -> void:
+	var classic: bool = light_profile_id <= 0
+	for light_var in _classic_rig_lights():
+		if light_var is Light3D:
+			var light: Light3D = light_var
+			if is_instance_valid(light):
+				light.visible = classic
+	if _light_profile_root != null and is_instance_valid(_light_profile_root):
+		_light_profile_root.visible = not classic
+	_apply_active_sun_orientation()
+	if gfx_env != null:
+		var base_amb: float = float(GFX_DEFAULTS.get("ambient", 0.44))
+		if gfx_sliders.has("ambient") and gfx_sliders["ambient"] != null:
+			base_amb = float((gfx_sliders["ambient"] as Range).value)
+		gfx_env.ambient_light_energy = base_amb if classic else base_amb * 0.38
+
+
+func _load_light_profile_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(GFX_CFG_PATH) != OK:
+		return
+	light_profile_id = clampi(int(cfg.get_value(LIGHT_PROFILE_CFG, "id", 1)), 0, LIGHT_PROFILE_COUNT - 1)
+	_classic_sun_from_sky = bool(cfg.get_value(LIGHT_PROFILE_CFG, "classic_sky", false))
+	for i in LIGHT_PROFILE_COUNT:
+		_profile_sun_azim[i] = clampf(float(cfg.get_value(LIGHT_PROFILE_CFG, "azim_%d" % i, _profile_sun_azim[i])), -15.0, 110.0)
+		_profile_sun_elev[i] = clampf(float(cfg.get_value(LIGHT_PROFILE_CFG, "elev_%d" % i, _profile_sun_elev[i])), 16.0, 58.0)
+
+
+func _save_light_profile_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(GFX_CFG_PATH)
+	cfg.set_value(LIGHT_PROFILE_CFG, "id", light_profile_id)
+	cfg.set_value(LIGHT_PROFILE_CFG, "classic_sky", _classic_sun_from_sky)
+	for i in LIGHT_PROFILE_COUNT:
+		cfg.set_value(LIGHT_PROFILE_CFG, "azim_%d" % i, _profile_sun_azim_at(i))
+		cfg.set_value(LIGHT_PROFILE_CFG, "elev_%d" % i, _profile_sun_elev_at(i))
+	cfg.save(GFX_CFG_PATH)
 
 
 func _build_flat_top_grill() -> void:
@@ -12903,10 +13362,15 @@ func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1) -> void:
 	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	strip.sorting_offset = 8.0
 	pile_root.add_child(strip)
+	var debris_net_id := _mp_next_debris_net_id
+	_mp_next_debris_net_id += 1
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		debris_net_id = -debris_net_id
 	var entry := {
 		"root": pile_root,
 		"mass": add_mass,
 		"slot": slot,
+		"net_id": debris_net_id,
 		"swallowing": false
 	}
 	debris_piles.append(entry)
@@ -12937,6 +13401,9 @@ func _clamp_debris_pile_xz(at: Vector3) -> Vector3:
 func _nudge_debris_piles(tool_pos: Vector3, move_xz: Vector2, moved: float) -> void:
 	if moved < 0.0008 or move_xz.length_squared() < 0.0000001:
 		return
+	if mp_enabled and not NetManager.is_host() and not _mp_applying and _mp_debris_nudge_cool <= 0.0:
+		_mp_debris_nudge_cool = 0.025
+		mp_request_nudge_debris.rpc_id(1, tool_pos.x, tool_pos.z, move_xz.x, move_xz.y, moved)
 	var dir := move_xz.normalized()
 	var push := clampf(moved * DEBRIS_PILE_PUSH_SCALE, 0.0, DEBRIS_PILE_PUSH_MAX)
 	var i := 0
@@ -12953,8 +13420,9 @@ func _nudge_debris_piles(tool_pos: Vector3, move_xz: Vector2, moved: float) -> v
 		var w := lerpf(DEBRIS_PILE_W_MIN, DEBRIS_PILE_W_MAX, clampf((mass - 0.35) / 1.4, 0.0, 1.0))
 		## Match the long, thin PNG instead of using a large circular radius. The old
 		## circle reached almost a foot toward the cook and moved piles before contact.
-		var half_w := w * 0.50 + 0.010
-		var half_d := _debris_pile_depth(w) * 0.50 + 0.008
+		var small_ease := lerpf(1.45, 1.0, clampf((mass - 0.2) / 1.1, 0.0, 1.0))
+		var half_w := (w * 0.50 + 0.010) * small_ease
+		var half_d := (_debris_pile_depth(w) * 0.50 + 0.008) * small_ease
 		var delta_xz := Vector2(tool_pos.x - root.position.x, tool_pos.z - root.position.z)
 		var contact := Vector2(delta_xz.x / maxf(half_w, 0.001), delta_xz.y / maxf(half_d, 0.001)).length()
 		if contact > 1.0:
@@ -13922,7 +14390,8 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1, skip_land_s
 		p.scale = Vector3(0.7, 0.7, 0.7)
 		var tw := create_tween()
 		tw.tween_property(p, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	call_deferred("_ensure_patty_spawn_pool")
+	## Pool is fully populated during title-screen prewarm and served patties are
+	## recycled. Never construct the replacement on the gameplay frame.
 	if _mp_applying:
 		## Silent repair spawn during grill sync — no flash spam.
 		return
@@ -15290,7 +15759,10 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 	var scraping := false
 	var scraping_debris := false
 	var best_i := -1
-	var best_d := SPATULA_SCRAPE_RADIUS
+	## Give network guests extra contact tolerance to absorb cursor/pose latency,
+	## especially on the last narrow residue sliver.
+	var guest_reach := 1.35 if mp_enabled and not NetManager.is_host() else 1.0
+	var best_d := SPATULA_SCRAPE_RADIUS * guest_reach
 	for i in GRILL_SLOTS:
 		if i < brush_swipe_cool.size():
 			brush_swipe_cool[i] = maxf(0.0, float(brush_swipe_cool[i]) - delta)
@@ -15356,7 +15828,7 @@ func _update_spatula_grill_scrape(tip_pos: Vector3, delta: float) -> void:
 			if i2 < brush_swipe_travel.size():
 				brush_swipe_travel[i2] = maxf(0.0, float(brush_swipe_travel[i2]) - delta * 0.8)
 	## Liquids: very tight tip hit (brush keeps the wider scrape).
-	if moved >= SPATULA_SCRAPE_MIN_MOVE and _scrape_grill_liquids(tip_pos, move_xz, moved, 0.22):
+	if moved >= SPATULA_SCRAPE_MIN_MOVE and _scrape_grill_liquids(tip_pos, move_xz, moved, 0.38 if mp_enabled and not NetManager.is_host() else 0.28):
 		scraping = true
 	## Blade samples shove patties / cups / fries; flat still gets a light hop.
 	if moved >= SPATULA_SCRAPE_MIN_MOVE:
@@ -19116,6 +19588,17 @@ func _reset_cut_collector_shift(full_run: bool) -> void:
 
 
 func _regular_customers_empty() -> bool:
+	## Wait until guests are actually gone — they stay in the world while walking
+	## off, even after they leave the ticket line.
+	if customers_root != null:
+		for c in customers_root.get_children():
+			if c == null or not is_instance_valid(c):
+				continue
+			if bool(c.get("is_cut_collector")):
+				continue
+			if bool(c.get("is_street_pedestrian")):
+				continue
+			return false
 	for c in customers:
 		if c == null or not is_instance_valid(c):
 			continue
@@ -19175,8 +19658,8 @@ func _spawn_cut_collector_local(kind: String) -> void:
 	c.set_meta("fries_handed", false)
 	c.set_meta("cut_visit", kind)
 	c.set_meta("gross_ok", true)
-	if mp_enabled and not NetManager.is_host():
-		c.mp_host_driven = true
+	## Boss movement is a deterministic local sequence begun by one reliable RPC.
+	## Marking the guest copy host-driven froze it because it is not in customers.
 	c.position = Vector3(CUT_COLLECTOR_SPAWN_X, CustomerScript.STAND_Y, 2.25)
 	c.target_x = CUT_COLLECTOR_LANE_X
 	c.rotation_degrees = Vector3(0, CustomerScript.WALK_MINUS_X_YAW, 0)
@@ -19227,6 +19710,10 @@ func _try_start_pending_boss_pep() -> void:
 
 
 func _start_boss_pep_intro() -> void:
+	if mp_enabled and not _mp_applying:
+		if NetManager.is_host():
+			mp_boss_intro.rpc()
+		return
 	_boss_pep_pending = false
 	_boss_intro_running = true
 	_boss_intro_seq += 1
@@ -19441,6 +19928,8 @@ func _credit_ticket_payout(pay: Dictionary, payout: int, customer: Node3D = null
 	shift_food_sales += float(base)
 	shift_tips += float(tip)
 	_play_sale_payout_fx(customer, base, tip, from_shown, money)
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		mp_sale_payout_fx.rpc(_customer_net_id(customer), base, tip, from_shown, money)
 
 
 func _park_window_cat_for_disguise() -> void:
@@ -20658,7 +21147,7 @@ func _build_season_shaker() -> void:
 	shaker_root.add_child(shaker_particles)
 
 
-func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3:
+func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float, max_z: float = 1.25) -> Vector3:
 	## Cursor → world point at a hold height. Works even when aiming high at the window tools
 	## (grill-plane rays miss upward and left tools frozen until you drag down).
 	if camera == null:
@@ -20676,7 +21165,7 @@ func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float) -> Vector3
 		hit.y = hold_y
 	## Soft work volume covering grill + window beam.
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.85, GRILL_CENTER_X + GRILL_WIDTH * 0.95)
-	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, 1.25)
+	hit.z = clampf(hit.z, GRILL_SURFACE_Z - GRILL_DEPTH * 0.85, max_z)
 	hit.y = hold_y
 	return hit
 
@@ -22120,13 +22609,13 @@ func _spray_extinguisher_powder(delta: float, aim: Vector3) -> void:
 		_extinguish_grill_fire()
 
 
-func _find_customer_under_ext_spray() -> Dictionary:
+func _find_customer_under_ext_spray(max_px: float = 108.0) -> Dictionary:
 	## Cursor near a customer's head or torso → they're in the spray cone.
 	if camera == null or customers_root == null:
 		return {}
 	var mouse := get_viewport().get_mouse_position()
 	var best: Dictionary = {}
-	var best_d := 108.0
+	var best_d := max_px
 	for c in customers_root.get_children():
 		if c == null or not is_instance_valid(c):
 			continue
@@ -26750,6 +27239,8 @@ func _scrape_slick_array(
 					_spawn_condiment_burnt_chunks(pos, flavor)
 				else:
 					_spawn_condiment_contact_smear(pos, move_xz, flavor, float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS)))
+				if mp_enabled and not _mp_applying:
+					mp_condiment_cut.rpc(pos.x, pos.z, cut_r, flavor)
 			var left_pts: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
 			if left_pts.size() < 2:
 				var leftover = item.get("mesh")
@@ -26809,6 +27300,29 @@ func _mp_find_nearest_slick_idx(arr: Array, x: float, z: float, max_d: float = 0
 			best_d = d
 			best = i
 	return best
+
+
+func _mp_apply_condiment_cut(x: float, z: float, radius: float, flavor: String) -> void:
+	var pos := Vector3(x, GRILL_SURFACE_Y, z)
+	var cut_r := clampf(radius, 0.02, 0.12)
+	var i := 0
+	while i < soda_slicks.size():
+		var item: Dictionary = soda_slicks[i]
+		if typeof(item) != TYPE_DICTIONARY or not bool(item.get("surface_spline", false)):
+			i += 1
+			continue
+		if str(item.get("flavor", "")) != flavor:
+			i += 1
+			continue
+		_condiment_cut_segments_near(item, pos, cut_r)
+		var left_pts: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
+		if left_pts.size() < 2:
+			var leftover = item.get("mesh")
+			if leftover != null and is_instance_valid(leftover):
+				leftover.queue_free()
+			soda_slicks.remove_at(i)
+			continue
+		i += 1
 
 
 func _mp_apply_soda_slick_scrape(
@@ -27724,10 +28238,7 @@ func _clear_all_patty() -> void:
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p:
-			if bool(p.get_meta("patty_pool", false)):
-				_return_patty_to_spawn_pool(p)
-			else:
-				p.queue_free()
+			_return_patty_to_spawn_pool(p)
 		grill[i] = null
 		if i < slot_areas.size() and is_instance_valid(slot_areas[i]):
 			slot_areas[i].input_ray_pickable = true
@@ -27759,6 +28270,7 @@ func _build_outdoor_street() -> void:
 	var outdoor := Node3D.new()
 	outdoor.name = "OutdoorStreet"
 	world.add_child(outdoor)
+	outdoor_street = outdoor
 
 	## Invisible sidewalk / street floor — NPCs keep standing here; no visible mesh.
 	var floor_body := StaticBody3D.new()
@@ -27770,6 +28282,7 @@ func _build_outdoor_street() -> void:
 	floor_shape.shape = floor_box
 	floor_body.add_child(floor_shape)
 	outdoor.add_child(floor_body)
+	_build_shadow_catchers(outdoor)
 
 	## Matte painting fills the view beyond the window.
 	var bg_path := _current_street_background_path()
@@ -27825,11 +28338,232 @@ func _build_outdoor_street() -> void:
 	_build_outdoor_birch_tree(outdoor)
 	_build_street_car(outdoor)
 	_build_background_people(outdoor)
+	_apply_shadow_catchers(_read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS.duplicate())
+
+
+func _scatch_key(idx: int, suffix: String) -> String:
+	return "scatch%d_%s" % [idx, suffix]
+
+
+func _scatch_default(idx: int, suffix: String, fallback: Variant) -> Variant:
+	return GFX_DEFAULTS.get(_scatch_key(idx, suffix), fallback)
+
+
+func _build_shadow_catchers(parent: Node3D) -> void:
+	if shadow_catcher_root != null and is_instance_valid(shadow_catcher_root):
+		shadow_catcher_root.queue_free()
+	shadow_catcher_planes.clear()
+	shadow_catcher_bounds.clear()
+	if parent == null:
+		shadow_catcher_root = null
+		return
+	shadow_catcher_root = Node3D.new()
+	shadow_catcher_root.name = "ShadowCatchers"
+	parent.add_child(shadow_catcher_root)
+	var bound_cols: Array[Color] = [
+		Color(0.15, 0.92, 1.0, 0.20),
+		Color(1.0, 0.86, 0.18, 0.20),
+		Color(0.92, 0.32, 1.0, 0.20),
+		Color(0.28, 1.0, 0.42, 0.20),
+	]
+	for i in SHADOW_CATCHER_COUNT:
+		var plane := MeshInstance3D.new()
+		plane.name = "ShadowCatcher%d" % (i + 1)
+		var mesh := PlaneMesh.new()
+		mesh.size = Vector2(8.0, 8.0)
+		plane.mesh = mesh
+		plane.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		plane.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		plane.material_override = _make_shadow_catcher_material()
+		shadow_catcher_root.add_child(plane)
+		shadow_catcher_planes.append(plane)
+
+		var bounds := MeshInstance3D.new()
+		bounds.name = "ShadowCatcherBounds%d" % (i + 1)
+		var box := BoxMesh.new()
+		box.size = Vector3(8.0, 0.08, 8.0)
+		bounds.mesh = box
+		bounds.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		bounds.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		var bmat := _make_grill_tap_debug_mat(bound_cols[i % bound_cols.size()])
+		bmat.render_priority = 18
+		bounds.material_override = bmat
+		bounds.visible = false
+		shadow_catcher_root.add_child(bounds)
+		shadow_catcher_bounds.append(bounds)
+		var edge := MeshInstance3D.new()
+		edge.name = "Edge"
+		edge.mesh = _make_shadow_catcher_edge_mesh(8.0, 8.0)
+		edge.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var emat := StandardMaterial3D.new()
+		emat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		emat.albedo_color = Color(bound_cols[i % bound_cols.size()].r, bound_cols[i % bound_cols.size()].g, bound_cols[i % bound_cols.size()].b, 0.95)
+		emat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		emat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		emat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		emat.disable_receive_shadows = true
+		emat.render_priority = 19
+		edge.material_override = emat
+		bounds.add_child(edge)
+
+
+func _make_shadow_catcher_material() -> Material:
+	var shader: Shader = null
+	if ResourceLoader.exists(SHADOW_CATCHER_SHADER_PATH):
+		shader = load(SHADOW_CATCHER_SHADER_PATH) as Shader
+	if shader == null:
+		var fallback := StandardMaterial3D.new()
+		fallback.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		fallback.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fallback.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		fallback.metallic = 0.0
+		fallback.roughness = 1.0
+		fallback.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+		fallback.shadow_to_opacity = true
+		fallback.cull_mode = BaseMaterial3D.CULL_DISABLED
+		fallback.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		fallback.render_priority = -10
+		return fallback
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.render_priority = -10
+	mat.set_shader_parameter("shadow_color", Color(0.0, 0.0, 0.0, 1.0))
+	mat.set_shader_parameter("shadow_strength", 0.85)
+	return mat
+
+
+func _make_shadow_catcher_edge_mesh(width: float, depth: float) -> ImmediateMesh:
+	var im := ImmediateMesh.new()
+	var hw := width * 0.5
+	var hd := depth * 0.5
+	var y := 0.045
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var corners: Array[Vector3] = [
+		Vector3(-hw, y, -hd),
+		Vector3(hw, y, -hd),
+		Vector3(hw, y, hd),
+		Vector3(-hw, y, hd),
+	]
+	for c in 4:
+		im.surface_add_vertex(corners[c])
+		im.surface_add_vertex(corners[(c + 1) % 4])
+		im.surface_add_vertex(corners[c])
+		im.surface_add_vertex(corners[c] + Vector3(0.0, 0.22, 0.0))
+	im.surface_end()
+	return im
+
+
+func _shadow_catcher_bounds_open() -> bool:
+	return _hidden_gizmo_active()
+
+
+func _update_shadow_catcher_bounds_visible() -> void:
+	var show := _shadow_catcher_bounds_open()
+	for i in shadow_catcher_bounds.size():
+		var bounds: MeshInstance3D = shadow_catcher_bounds[i] as MeshInstance3D
+		if bounds == null or not is_instance_valid(bounds):
+			continue
+		var plane_on := false
+		if i < shadow_catcher_planes.size():
+			var plane: MeshInstance3D = shadow_catcher_planes[i] as MeshInstance3D
+			plane_on = plane != null and is_instance_valid(plane) and plane.visible
+		bounds.visible = show and plane_on
+
+
+func _apply_shadow_catchers(s: Dictionary) -> void:
+	if shadow_catcher_planes.is_empty():
+		if outdoor_street != null and is_instance_valid(outdoor_street):
+			_build_shadow_catchers(outdoor_street)
+		elif world != null:
+			var outdoor := world.get_node_or_null("OutdoorStreet") as Node3D
+			if outdoor != null:
+				outdoor_street = outdoor
+				_build_shadow_catchers(outdoor)
+	if shadow_catcher_planes.is_empty():
+		return
+	var show_bounds := _shadow_catcher_bounds_open()
+	for i in mini(SHADOW_CATCHER_COUNT, shadow_catcher_planes.size()):
+		var on := bool(s.get(_scatch_key(i, "on"), _scatch_default(i, "on", i < 2)))
+		var x := clampf(float(s.get(_scatch_key(i, "x"), _scatch_default(i, "x", 0.0))), -16.0, 16.0)
+		var y := clampf(float(s.get(_scatch_key(i, "y"), _scatch_default(i, "y", -0.06))), -2.0, 4.0)
+		var z := clampf(float(s.get(_scatch_key(i, "z"), _scatch_default(i, "z", 6.0))), 0.5, 18.0)
+		var w := clampf(float(s.get(_scatch_key(i, "w"), _scatch_default(i, "w", 16.0))), 1.0, 40.0)
+		var d := clampf(float(s.get(_scatch_key(i, "d"), _scatch_default(i, "d", 6.0))), 1.0, 40.0)
+		var yaw := clampf(float(s.get(_scatch_key(i, "yaw"), _scatch_default(i, "yaw", 0.0))), -180.0, 180.0)
+		var strength := clampf(float(s.get(_scatch_key(i, "str"), _scatch_default(i, "str", 1.0))), 0.05, 1.0)
+		var plane: MeshInstance3D = shadow_catcher_planes[i] as MeshInstance3D
+		if plane == null or not is_instance_valid(plane):
+			continue
+		plane.visible = on
+		plane.position = Vector3(x, y, z)
+		plane.rotation_degrees = Vector3(0.0, yaw, 0.0)
+		var mesh := plane.mesh as PlaneMesh
+		if mesh != null:
+			mesh.size = Vector2(w, d)
+		if not (plane.material_override is ShaderMaterial):
+			plane.material_override = _make_shadow_catcher_material()
+		var mat := plane.material_override as ShaderMaterial
+		if mat != null:
+			mat.set_shader_parameter("shadow_strength", strength)
+			mat.set_shader_parameter("shadow_color", Color(0.0, 0.0, 0.0, 1.0))
+		if i >= shadow_catcher_bounds.size():
+			continue
+		var bounds: MeshInstance3D = shadow_catcher_bounds[i] as MeshInstance3D
+		if bounds == null or not is_instance_valid(bounds):
+			continue
+		bounds.visible = on and show_bounds
+		bounds.position = plane.position
+		bounds.rotation_degrees = plane.rotation_degrees
+		var box := bounds.mesh as BoxMesh
+		if box != null:
+			box.size = Vector3(w, 0.08, d)
+		var edge := bounds.get_node_or_null("Edge") as MeshInstance3D
+		if edge != null:
+			edge.mesh = _make_shadow_catcher_edge_mesh(w, d)
+
+
+func _hidden_setup_shadow_catcher_controls(parent: Control) -> void:
+	var help := Label.new()
+	help.text = "Invisible ground planes that catch real sun shadows. You see through the plane; only the shadows stay solid. Sit the Height a little under the walkers' feet. Shadow Distance is how far the sun's cascades reach — the sidewalk is ~10 m from the camera, so keep this around 32. Two planes cover the sidewalk and far street by default. Cyan / yellow / magenta / green boxes show bounds while Hidden is unlocked."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(help, false, 11)
+	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
+	parent.add_child(help)
+	_hidden_add_section(parent, "SUN SHADOW MAP")
+	_gfx_add_slider(parent, "sun_shadow_distance", "Shadow Distance", 10.0, 80.0, 0.5)
+	for i in SHADOW_CATCHER_COUNT:
+		_hidden_add_section(parent, "CATCHER %d" % (i + 1))
+		_gfx_add_check(parent, _scatch_key(i, "on"), "Enabled")
+		_gfx_add_slider(parent, _scatch_key(i, "x"), "X (left / right)", -16.0, 16.0, 0.05)
+		_gfx_add_slider(parent, _scatch_key(i, "y"), "Height (Y)", -2.0, 4.0, 0.01)
+		_gfx_add_slider(parent, _scatch_key(i, "z"), "Depth (Z)", 0.5, 18.0, 0.05)
+		_gfx_add_slider(parent, _scatch_key(i, "w"), "Width (X scale)", 1.0, 40.0, 0.1)
+		_gfx_add_slider(parent, _scatch_key(i, "d"), "Depth Size (Z scale)", 1.0, 40.0, 0.1)
+		_gfx_add_slider(parent, _scatch_key(i, "yaw"), "Yaw", -180.0, 180.0, 1.0)
+		_gfx_add_slider(parent, _scatch_key(i, "str"), "Shadow Strength", 0.05, 1.0, 0.01)
+
+
+func _sync_gfx_slider_no_signal(key: String, value: float) -> void:
+	if not gfx_sliders.has(key):
+		return
+	var slider: HSlider = gfx_sliders[key] as HSlider
+	if slider == null or not is_instance_valid(slider):
+		return
+	slider.set_value_no_signal(value)
+	var row: Node = slider.get_parent()
+	if row == null:
+		return
+	var top = row.get_child(0) if row.get_child_count() > 0 else null
+	if top:
+		var val_lab = top.get_node_or_null("Val")
+		if val_lab:
+			val_lab.text = "%.2f" % value
 
 
 func _build_street_car(parent: Node3D) -> void:
 	if street_car_sprite != null and is_instance_valid(street_car_sprite):
 		street_car_sprite.queue_free()
+	street_car_shadow = null
 	if street_car_exhaust != null and is_instance_valid(street_car_exhaust):
 		street_car_exhaust.queue_free()
 	for ghost in street_car_blur_sprites:
@@ -27869,13 +28603,14 @@ func _build_street_car(parent: Node3D) -> void:
 	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 	sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	## Matte is priority -8 at Z 11.5. The car is closer and one priority step
-	## forward, while customers at Z 2.25 remain unambiguously in front.
-	sprite.render_priority = -7
+	## Matte is priority -8. Walkers sit at -5. Cars draw after walkers and
+	## still lose to window customers (priority 2, closer Z).
+	sprite.render_priority = 0
 	sprite.sorting_offset = _street_car_sort()
 	sprite.visible = false
 	parent.add_child(sprite)
 	street_car_sprite = sprite
+	_ensure_street_car_shadow()
 	_apply_street_car_texture(tex, start_scale)
 	sprite.position = Vector3(-STREET_CAR_EDGE_X, street_car_base_y, _street_car_z())
 	_apply_street_car_look()
@@ -27887,6 +28622,9 @@ func _build_street_car(parent: Node3D) -> void:
 		ghost.modulate = Color(1.0, 1.0, 1.0, 0.16 / float(i + 1))
 		ghost.render_priority = -8
 		ghost.sorting_offset = -12.4 - float(i) * 0.15
+		var ghost_shadow := ghost.get_node_or_null("StreetCarShadowCaster")
+		if ghost_shadow != null:
+			ghost_shadow.queue_free()
 		parent.add_child(ghost)
 		street_car_blur_sprites.append(ghost)
 	street_car_exhaust = _make_street_car_exhaust()
@@ -27955,7 +28693,49 @@ func _street_car_z() -> float:
 
 
 func _street_car_sort() -> float:
-	return clampf(_gfx_float("street_car_sort", 0.0), -24.0, 32.0)
+	return clampf(_gfx_float("street_car_sort", 12.0), -24.0, 32.0)
+
+
+func _ensure_street_car_shadow() -> void:
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	if street_car_shadow != null and is_instance_valid(street_car_shadow):
+		return
+	var proxy := MeshInstance3D.new()
+	proxy.name = "StreetCarShadowCaster"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	proxy.mesh = quad
+	proxy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	proxy.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.35
+	mat.albedo_color = Color(0.08, 0.08, 0.08, 1.0)
+	mat.metallic = 0.0
+	mat.roughness = 1.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	proxy.material_override = mat
+	street_car_sprite.add_child(proxy)
+	street_car_shadow = proxy
+	_fit_street_car_shadow()
+
+
+func _fit_street_car_shadow() -> void:
+	if street_car_shadow == null or not is_instance_valid(street_car_shadow):
+		return
+	if street_car_sprite == null or not is_instance_valid(street_car_sprite):
+		return
+	var quad := street_car_shadow.mesh as QuadMesh
+	if quad == null:
+		quad = QuadMesh.new()
+		street_car_shadow.mesh = quad
+	quad.size = Vector2(maxf(street_car_half_width * 2.0, 0.2), maxf(street_car_half_height * 2.0, 0.2))
+	street_car_shadow.position = Vector3.ZERO
+	var mat := street_car_shadow.material_override as StandardMaterial3D
+	if mat != null:
+		mat.albedo_texture = street_car_sprite.texture
 
 
 func _street_car_wheel_y() -> float:
@@ -27978,6 +28758,7 @@ func _apply_street_car_texture(tex: Texture2D, height_scale: float = 1.0) -> voi
 	street_car_half_height = h * pixel_size * 0.5
 	## Wheels are authored at the bottom of each PNG.
 	street_car_base_y = _street_car_wheel_y() + street_car_half_height
+	_fit_street_car_shadow()
 
 
 func _pick_street_car_index() -> int:
@@ -28267,8 +29048,6 @@ func _build_background_people(parent: Node3D) -> void:
 	bg_people_walk_spawns = 0
 	if parent == null:
 		return
-	if not CustomerScript.has_usable_saved_characters():
-		return
 	for i in BG_PEOPLE_COUNT:
 		var walker := CustomerScript.new()
 		walker.is_street_pedestrian = true
@@ -28289,6 +29068,10 @@ func _build_background_people(parent: Node3D) -> void:
 
 
 func _start_background_person(idx: int, as_partner: bool = false) -> void:
+	## The host chooses identity, direction, gait and speed once. Guests only apply
+	## that event; previously every machine rolled a different street crowd.
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		return
 	if idx < 0 or idx >= bg_people.size():
 		return
 	if idx < bg_people_active.size() and bool(bg_people_active[idx]):
@@ -28298,8 +29081,12 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	var walker := bg_people[idx] as Node3D
 	if walker == null or not is_instance_valid(walker):
 		return
+	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
+	if preset.is_empty():
+		bg_people_wait[idx] = 4.0
+		return
 	if walker.has_method("restyle_street_character"):
-		if not bool(walker.call("restyle_street_character")):
+		if not bool(walker.call("restyle_street_character", preset, true)):
 			bg_people_wait[idx] = 4.0
 			return
 	var lane_dir := _bg_people_lane_dir()
@@ -28342,6 +29129,8 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		walker.call("play_street_run", 1.04 + randf() * 0.22)
 	elif walker.has_method("play_street_walk"):
 		walker.call("play_street_walk", gait)
+	if mp_enabled and NetManager.is_host() and not _mp_applying:
+		mp_background_person_start.rpc(idx, preset, dir, is_run, as_partner, float(bg_people_speed[idx]))
 	## Occasional pair of walkers — never pair a runner, never go over 2 on screen.
 	if as_partner or is_run or randf() >= BG_PEOPLE_PAIR_CHANCE:
 		return
@@ -28351,19 +29140,83 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	if partner_idx < 0:
 		return
 	_start_background_person(partner_idx, true)
-	if partner_idx < bg_people_speed.size() and idx < bg_people_speed.size():
-		## Keep a pair together, but don't lockstep the same pace.
-		bg_people_speed[partner_idx] = float(bg_people_speed[idx]) * randf_range(0.90, 1.10)
-		var partner: Node3D = bg_people[partner_idx] as Node3D
-		if partner != null and partner.has_method("play_street_walk"):
-			var partner_gait: float = clampf(
-				float(bg_people_speed[partner_idx]) / maxf(walk_mid, 0.01),
-				0.72,
-				1.42
-			)
-			partner.call("play_street_walk", partner_gait)
 	if idx < bg_people_is_pair.size():
 		bg_people_is_pair[idx] = true
+		if mp_enabled and NetManager.is_host() and not _mp_applying:
+			mp_background_person_pair.rpc(idx)
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run: bool, as_partner: bool, speed: float) -> void:
+	if NetManager.is_host() or idx < 0 or idx >= bg_people.size():
+		return
+	var walker := bg_people[idx] as Node3D
+	if walker == null or not is_instance_valid(walker):
+		return
+	if walker.has_method("restyle_street_character") and not bool(walker.call("restyle_street_character", preset, true)):
+		return
+	bg_people_dir[idx] = -1.0 if dir < 0.0 else 1.0
+	bg_people_is_run[idx] = is_run
+	bg_people_is_pair[idx] = as_partner
+	bg_people_speed[idx] = clampf(speed, BG_PEOPLE_SPEED_MIN, BG_PEOPLE_SPEED_MAX * 6.0)
+	bg_people_pass_blend[idx] = 0.0
+	var z := _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0)
+	var start_x := -BG_PEOPLE_EDGE_X if dir > 0.0 else BG_PEOPLE_EDGE_X
+	if as_partner:
+		start_x += -dir * BG_PEOPLE_PAIR_GAP
+	walker.position = Vector3(start_x, _bg_people_y(), z)
+	walker.scale = Vector3.ONE * _bg_people_scale()
+	walker.rotation_degrees = Vector3(0.0, CustomerScript.WALK_PLUS_X_YAW if dir > 0.0 else CustomerScript.WALK_MINUS_X_YAW, 0.0)
+	walker.visible = true
+	bg_people_active[idx] = true
+	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
+	if is_run and walker.has_method("play_street_run"):
+		walker.call("play_street_run", clampf(speed / maxf(walk_mid, 0.01), 1.04, 1.26))
+	elif walker.has_method("play_street_walk"):
+		walker.call("play_street_walk", clampf(speed / maxf(walk_mid, 0.01), 0.72, 1.42))
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_background_person_pair(idx: int) -> void:
+	if NetManager.is_host() or idx < 0 or idx >= bg_people_is_pair.size():
+		return
+	bg_people_is_pair[idx] = true
+
+
+func _mp_send_background_people_snapshot(peer_id: int = 0) -> void:
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	var active: Array = []
+	var xs: Array = []
+	var zs: Array = []
+	for i in bg_people.size():
+		var walker := bg_people[i] as Node3D
+		var on := i < bg_people_active.size() and bool(bg_people_active[i]) and walker != null and is_instance_valid(walker)
+		active.append(on)
+		xs.append(float(walker.position.x) if on else 0.0)
+		zs.append(float(walker.position.z) if on else 0.0)
+	if peer_id > 0:
+		mp_background_people_snapshot.rpc_id(peer_id, active, xs, zs)
+	else:
+		mp_background_people_snapshot.rpc(active, xs, zs)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func mp_background_people_snapshot(active: Array, xs: Array, zs: Array) -> void:
+	if NetManager.is_host():
+		return
+	for i in mini(bg_people.size(), active.size()):
+		var walker := bg_people[i] as Node3D
+		if walker == null or not is_instance_valid(walker):
+			continue
+		if not bool(active[i]):
+			walker.visible = false
+			bg_people_active[i] = false
+			continue
+		if not bool(bg_people_active[i]):
+			continue ## Reliable start carries the matching character before poses apply.
+		var target := Vector3(float(xs[i]), _bg_people_y(), float(zs[i]))
+		walker.position = walker.position.lerp(target, 0.68)
 
 
 func _update_background_people(delta: float) -> void:
@@ -28390,6 +29243,9 @@ func _update_background_people(delta: float) -> void:
 			continue
 		walker.scale = Vector3.ONE * s
 		if not bool(bg_people_active[i]):
+			if mp_enabled and not NetManager.is_host():
+				walker.visible = false
+				continue
 			bg_people_wait[i] = float(bg_people_wait[i]) - delta
 			walker.visible = false
 			if float(bg_people_wait[i]) > 0.0:
@@ -28461,8 +29317,11 @@ func _apply_street_car_look() -> void:
 		_apply_street_car_texture(street_car_sprite.texture, street_car_current_height_scale)
 	street_car_sprite.modulate = _street_car_darken_color(1.0)
 	street_car_sprite.sorting_offset = _street_car_sort()
+	street_car_sprite.render_priority = 0
 	street_car_sprite.position.y = street_car_base_y
 	street_car_sprite.position.z = _street_car_z()
+	_ensure_street_car_shadow()
+	_fit_street_car_shadow()
 	for ghost in street_car_blur_sprites:
 		var blur_sprite := ghost as Sprite3D
 		if blur_sprite != null and is_instance_valid(blur_sprite):
@@ -31514,6 +32373,7 @@ func _build_soda_station() -> void:
 	root.add_child(lamp)
 	soda_lamp = lamp
 	_apply_soda_lamp_settings()
+	_sync_light_profile()
 	_refresh_soda_tuning_debug_visuals()
 
 	_build_soda_cup_rack(root)
@@ -31965,8 +32825,11 @@ func _setup_soda_generated_flavor_panels(visual: Node3D) -> bool:
 		var fid := SODA_BRAND_FLAVOR_ORDER[count] if count < SODA_BRAND_FLAVOR_ORDER.size() else ""
 		var aabb := src_mi.get_aabb()
 		var center_global := src_mi.to_global(aabb.get_center())
-		var panel_pos := soda_root.to_local(center_global) + Vector3(-SODA_LABEL_CAM_RIGHT_M, 0.0, 0.0)
-		src_mi.global_position += Vector3(-SODA_LABEL_CAM_RIGHT_M, 0.0, 0.0)
+		## Keep both the colored source face and its foreground badge centered on
+		## the panel authored into the fountain model. A former camera-relative
+		## three-inch X offset made the faces overlap the neighboring bay in the
+		## marketplace turntable (and made click targets disagree with the mesh).
+		var panel_pos := soda_root.to_local(center_global)
 		## Use the transformed Brand mesh itself. The old four-nozzle anchors pushed
 		## these overlays down and sideways on the current two-bay fountain.
 		var panel_w := clampf(src_mi.to_global(aabb.position).distance_to(src_mi.to_global(aabb.position + Vector3(aabb.size.x, 0.0, 0.0))) * 0.98, 0.10, 0.22)
@@ -34612,6 +35475,7 @@ func _build_icecream_machine() -> void:
 	root.add_child(lamp)
 	icecream_lamp = lamp
 	_apply_icecream_lamp_settings()
+	_sync_light_profile()
 
 	_spawn_and_bind_empty_icecream_cone()
 	_build_icecream_stream_fx()
@@ -35143,6 +36007,7 @@ func _update_parked_icecream_fill(delta: float) -> void:
 		_icecream_fill_soft_lock = false
 		if icecream_cone_area != null and is_instance_valid(icecream_cone_area):
 			icecream_cone_area.input_ray_pickable = true
+		call_deferred("_try_auto_hand_finished_icecream")
 
 
 func _cancel_auto_hand_finished_icecream() -> void:
@@ -35579,11 +36444,17 @@ func _try_auto_hand_finished_icecream() -> void:
 		return
 	if icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		return
-	if not icecream_cone_held or icecream_cone_fill < 1.0:
+	if icecream_cone_fill < 0.995:
 		return
 	var cust := _find_waiting_customer_needing_icecream()
 	if cust == null:
 		return
+	## Parked click-fill cones become ordinary held serves at completion. This
+	## follows the same guest→host RPC path as a hand-filled cone.
+	icecream_cone_held = true
+	_icecream_parked_filling = false
+	_icecream_fill_soft_lock = false
+	_mp_send_held_icecream_pose(true)
 	_try_hand_held_icecream_to_customer(get_viewport().get_mouse_position(), true, cust)
 
 
@@ -39940,11 +40811,8 @@ func _update_parked_cup_auto_fill(delta: float) -> void:
 	_update_cup_pour_white(delta)
 	_update_cup_liquid_bubbles(delta)
 	if cup_soda_fill >= 0.995 and (_cup_auto_ice_soda == "sodas" or cup_flavor != ""):
-		_cup_parked_filling = false
-		_cup_auto_ice_soda = ""
-		_cup_spout_lock = null
-		if cup_area != null and is_instance_valid(cup_area):
-			cup_area.input_ray_pickable = true
+		_stop_completed_soda_fill()
+		call_deferred("_try_auto_hand_finished_soda")
 	if cup_soda_fill > 0.02 or cup_ice_fill > 0.02:
 		_refresh_cup_visuals()
 
@@ -40810,30 +41678,18 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 					if before < 1.0 and cup_soda_fill >= 1.0:
 						_flash("%s filled!" % str(SODA_FLAVOR_LABELS.get(cup_flavor, "SODA")), Color("FF8A65"))
 						_refresh_ticket_checkmarks()
-					if before < 0.82 and cup_soda_fill >= 0.82:
 						_note_machine_used("soda")
 						call_deferred("_try_auto_hand_finished_soda")
+					if before < 0.82 and cup_soda_fill >= 0.82:
+						_refresh_ticket_checkmarks()
 				elif _soda_tank_amount(fill_flavor) <= SODA_TANK_EMPTY:
 					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
 					_hide_soda_stream()
 				else:
 					_hide_soda_stream()
 			else:
-				## Full + still under the nozzle → foam spill / shiny soda on the steel.
-				var spill_want := CUP_FILL_RATE * delta * 0.55
-				var spilled := _drain_soda_tank(cup_flavor, spill_want)
-				if spilled > 0.0005:
-					pouring_soda = true
-					_cup_fizz = minf(1.0, _cup_fizz + delta * 2.4)
-					_cup_surface_wobble = maxf(_cup_surface_wobble, 0.95)
-					var spill_rim := cup_root.global_position + Vector3(0.0, CUP_SHELL_H * 0.98, 0.0)
-					_update_soda_stream(station_tip, spill_rim, cup_flavor)
-					_emit_soda_overfill_spill(spill_rim, cup_flavor, spilled, delta)
-				elif _soda_tank_amount(fill_flavor) <= SODA_TANK_EMPTY:
-					_flash("Out of %s syrup — order more on the phone!" % str(SODA_FLAVOR_LABELS.get(soda_selected_flavor, "soda")), Color("EF5350"))
-					_hide_soda_stream()
-				else:
-					_hide_soda_stream()
+				## Full cups release the nozzle immediately and never drain extra syrup.
+				_stop_completed_soda_fill()
 	else:
 		_hide_soda_stream()
 	if station_id == "ice" and cup_soda_fill > 0.05:
@@ -42797,25 +43653,37 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 func _try_auto_hand_finished_soda() -> void:
 	if not playing or _serve_fly_busy:
 		return
-	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
+	if cup_root == null or not is_instance_valid(cup_root):
 		return
-	if cup_soda_fill < 0.82 or cup_flavor == "":
+	if cup_soda_fill < 0.995 or cup_flavor == "":
 		return
 	var cust := _find_waiting_customer_for_soda_flavor(cup_flavor)
 	if cust == null:
 		return
-	_try_hand_drink_to_customer_face(get_viewport().get_mouse_position())
-	if cup_held:
-		if GameDataScript.is_soda_only_order(cust.order):
-			selected_customer = cust
-			_highlight_tickets()
-			_hide_soda_stream()
-			if game_audio and game_audio.has_method("set_ice_grind"):
-				game_audio.set_ice_grind(false)
-			_cup_pouring = false
-			_submit_serve_request(cust, -2)
-		else:
-			_submit_drink_hand_request(cust, cup_flavor)
+	_stop_completed_soda_fill()
+	## Reuse the normal authoritative handoff so guests serve through the host too.
+	cup_held = true
+	_mp_send_held_cup_pose(true)
+	if GameDataScript.is_soda_only_order(cust.order):
+		selected_customer = cust
+		_highlight_tickets()
+		_submit_serve_request(cust, -2)
+	else:
+		_submit_drink_hand_request(cust, cup_flavor)
+
+
+func _stop_completed_soda_fill() -> void:
+	_cup_pouring = false
+	_cup_pouring_ice = false
+	_cup_parked_filling = false
+	_cup_auto_ice_soda = ""
+	_cup_spout_lock = null
+	_hide_soda_stream()
+	_set_soda_overflow_shell_visible(false)
+	if game_audio and game_audio.has_method("set_ice_grind"):
+		game_audio.set_ice_grind(false)
+	if cup_area != null and is_instance_valid(cup_area):
+		cup_area.input_ray_pickable = true
 
 
 func _find_waiting_customer_for_soda_flavor(flavor: String) -> Node3D:
@@ -43563,8 +44431,10 @@ func _build_procedural_window_bunting() -> void:
 	rope_mat.albedo_color = Color(0.74, 0.47, 0.25)
 	rope_mat.roughness = 0.8
 	rope_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var red_mat := _make_bunting_flag_material(Color(0.94, 0.18, 0.17), cfg)
-	var yellow_mat := _make_bunting_flag_material(Color(1.0, 0.84, 0.23), cfg)
+	var red_texture := load("res://assets/bunting/bunting_triangle_red.png") as Texture2D
+	var yellow_texture := load("res://assets/bunting/bunting_triangle_yellow.png") as Texture2D
+	var red_mat := _make_bunting_flag_material(Color.WHITE, cfg, red_texture)
+	var yellow_mat := _make_bunting_flag_material(Color.WHITE, cfg, yellow_texture)
 	var points: Array[Vector3] = []
 	var rope_steps := maxi(18, count * 3)
 	for i in range(rope_steps + 1):
@@ -43578,13 +44448,14 @@ func _build_procedural_window_bunting() -> void:
 		_add_bunting_flag(root, pos, flag_w, flag_h, red_mat if i % 2 == 0 else yellow_mat, i)
 
 
-func _make_bunting_flag_material(col: Color, cfg: Dictionary) -> Material:
+func _make_bunting_flag_material(col: Color, cfg: Dictionary, tex: Texture2D = null) -> Material:
 	var shader := load("res://shaders/bunting_flag.gdshader") as Shader
 	if shader == null:
 		var fallback := StandardMaterial3D.new()
 		fallback.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		fallback.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		fallback.albedo_color = Color(col.r, col.g, col.b, 0.82)
+		fallback.albedo_color = Color(col.r, col.g, col.b, 1.0)
+		fallback.albedo_texture = tex
 		fallback.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fallback.render_priority = 10
 		return fallback
@@ -43592,6 +44463,8 @@ func _make_bunting_flag_material(col: Color, cfg: Dictionary) -> Material:
 	mat.shader = shader
 	mat.render_priority = 10
 	mat.set_shader_parameter("flag_color", col)
+	mat.set_shader_parameter("flag_texture", tex)
+	mat.set_shader_parameter("use_texture", tex != null)
 	mat.set_shader_parameter("edge_opacity", clampf(float(cfg.get("bunting_edge_opacity", GFX_DEFAULTS["bunting_edge_opacity"])), 0.0, 1.0))
 	mat.set_shader_parameter("center_opacity", clampf(float(cfg.get("bunting_center_opacity", GFX_DEFAULTS["bunting_center_opacity"])), 0.0, 1.0))
 	mat.set_shader_parameter("edge_width", clampf(float(cfg.get("bunting_edge_width", GFX_DEFAULTS["bunting_edge_width"])), 0.0, 0.35))
@@ -44267,6 +45140,17 @@ func _condiment_bottle_busy(id: String) -> bool:
 	return condiment_tool_held == id or (condiment_pour_busy and condiment_active_id == id)
 
 
+func _mp_remote_using_condiment(id: String) -> bool:
+	if not mp_enabled or not _is_condiment(id):
+		return false
+	var store: Dictionary = _mp_remote_ketchup if id == "ketchup" else _mp_remote_mustard
+	for ghost_value in store.values():
+		var ghost := ghost_value as Node3D
+		if ghost != null and is_instance_valid(ghost) and ghost.visible:
+			return true
+	return false
+
+
 func _park_idle_condiment_bottles() -> void:
 	var show := ingredient_bin_root != null and is_instance_valid(ingredient_bin_root) \
 			and ingredient_bin_root.visible
@@ -44278,10 +45162,18 @@ func _park_idle_condiment_bottles() -> void:
 		var home_scale := _condiment_bottle_home_scale(id)
 		condiment_bottle_homes[id] = home
 		condiment_bottle_home_scales[id] = home_scale
+		var area: Area3D = condiment_bottle_areas.get(id, null)
+		if _mp_remote_using_condiment(id) and not _condiment_bottle_busy(id):
+			root.visible = false
+			if area != null and is_instance_valid(area):
+				area.input_ray_pickable = false
+			continue
 		if _condiment_bottle_busy(id):
 			root.visible = true
 			continue
 		root.visible = show
+		if area != null and is_instance_valid(area):
+			area.input_ray_pickable = show
 		if not show:
 			continue
 		root.position = home
@@ -44435,6 +45327,7 @@ func _reset_condiment_bottles() -> void:
 	condiment_tool_last_dir = Vector3.ZERO
 	condiment_draw_smooth = Vector3.ZERO
 	condiment_tool_stream_phase = 0.0
+	_condiment_customer_splat_cool = 0.0
 	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
 		condiment_stream_mesh.visible = false
 	for id in condiment_bottle_roots.keys():
@@ -44463,6 +45356,10 @@ func _try_grab_condiment_tool(screen_pos: Vector2) -> bool:
 
 func _begin_condiment_tool_hold(id: String) -> bool:
 	if not playing or not _is_condiment(id) or condiment_pour_busy or condiment_tool_held != "":
+		return false
+	if _mp_remote_using_condiment(id):
+		var label: String = str(GameDataScript.INGREDIENT_LABELS.get(id, id.capitalize()))
+		_flash("Partner has the %s" % label, Color("FFCC80"))
 		return false
 	if _hands_busy_with_other_tool():
 		_flash("Hands full — put that down first", Color("FFCC80"))
@@ -44548,7 +45445,33 @@ func _update_held_condiment(delta: float) -> void:
 	if root == null or not is_instance_valid(root):
 		condiment_tool_held = ""
 		return
-	var hit := _grill_plane_from_screen(get_viewport().get_mouse_position())
+	var mouse := get_viewport().get_mouse_position()
+	if condiment_tool_pouring:
+		var reach := _tool_hold_point_from_screen(
+			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_CUSTOMER_HOLD_Z_MAX
+		)
+		if reach != Vector3.ZERO and not _condiment_hold_on_grill(reach):
+			var cust_aim: Dictionary = _find_customer_near_condiment_bottle(reach)
+			if not cust_aim.is_empty():
+				_update_held_condiment_on_customer(delta, root, mouse, cust_aim, reach)
+				return
+			## Off the grill but not close enough to hit anyone — don't auto-splat.
+			root.global_position = reach
+			root.rotation_degrees = Vector3(_condiment_held_pitch(), 0.0, 0.0)
+			condiment_tool_last_draw = Vector3.ZERO
+			condiment_tool_last_dir = Vector3.ZERO
+			condiment_draw_smooth = Vector3.ZERO
+			condiment_tool_stream_phase += delta * 8.0
+			if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+				condiment_stream_mesh.material_override = _condiment_stream_material(condiment_tool_held)
+			_update_condiment_stream(
+				condiment_tool_held,
+				root,
+				reach + Vector3(0.0, -0.10, 0.04),
+				condiment_tool_stream_phase
+			)
+			return
+	var hit := _grill_plane_from_screen(mouse)
 	if hit == Vector3.ZERO:
 		return
 	hit.x = clampf(hit.x, GRILL_CENTER_X - GRILL_WIDTH * 0.5 + 0.025, GRILL_CENTER_X + GRILL_WIDTH * 0.5 - 0.025)
@@ -44599,6 +45522,97 @@ func _update_held_condiment(delta: float) -> void:
 	)
 	condiment_tool_last_dir = travel
 	condiment_tool_last_draw = draw_pt
+
+
+func _condiment_hold_on_grill(pos: Vector3) -> bool:
+	var hx := GRILL_WIDTH * 0.5 + 0.05
+	var hz := GRILL_DEPTH * 0.5 + 0.05
+	return absf(pos.x - GRILL_CENTER_X) <= hx and absf(pos.z - GRILL_SURFACE_Z) <= hz
+
+
+func _find_customer_near_condiment_bottle(bottle_pos: Vector3) -> Dictionary:
+	## 3D reach only. Screen proximity used to squirt anyone standing in view.
+	if customers_root == null:
+		return {}
+	var best: Dictionary = {}
+	var best_d := CONDIMENT_CUSTOMER_SPRAY_REACH
+	for c in customers_root.get_children():
+		if c == null or not is_instance_valid(c):
+			continue
+		if not c.has_method("receive_sauce"):
+			continue
+		var cust := c as Node3D
+		if cust == null:
+			continue
+		var xz := Vector2(bottle_pos.x - cust.global_position.x, bottle_pos.z - cust.global_position.z).length()
+		if xz > CONDIMENT_CUSTOMER_SPRAY_XZ:
+			continue
+		var chest: Vector3 = cust.global_position + Vector3(0.0, 1.12, 0.04)
+		var head: Vector3 = cust.global_position + Vector3(0.0, 1.22, 0.0)
+		var face: Vector3 = cust.global_position + Vector3(0.0, 1.38, 0.06)
+		var d_chest := bottle_pos.distance_to(chest)
+		var d_head := bottle_pos.distance_to(head)
+		var d_face := bottle_pos.distance_to(face)
+		var d := minf(minf(d_chest, d_head), d_face)
+		if d >= best_d:
+			continue
+		best_d = d
+		var zone := "face"
+		if d_chest + 0.05 < minf(d_head, d_face):
+			zone = "body"
+		best = {"customer": cust, "zone": zone}
+	return best
+
+
+func _update_held_condiment_on_customer(
+	delta: float, root: Node3D, mouse: Vector2, cust_aim: Dictionary, hold: Vector3 = Vector3.ZERO
+) -> void:
+	if hold == Vector3.ZERO:
+		hold = _tool_hold_point_from_screen(
+			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_CUSTOMER_HOLD_Z_MAX
+		)
+	if hold != Vector3.ZERO:
+		root.global_position = hold
+	root.rotation_degrees = Vector3(_condiment_held_pitch(), 0.0, 0.0)
+	var cust: Node3D = cust_aim.get("customer") as Node3D
+	if cust == null or not is_instance_valid(cust):
+		return
+	var zone := str(cust_aim.get("zone", "body"))
+	var target: Vector3 = cust.global_position + Vector3(0.0, 0.88, 0.05)
+	if zone == "face":
+		target = _customer_head_world(cust) + Vector3(0.0, -0.04, 0.04)
+	condiment_tool_last_draw = Vector3.ZERO
+	condiment_tool_last_dir = Vector3.ZERO
+	condiment_draw_smooth = Vector3.ZERO
+	condiment_tool_stream_phase += delta * 8.0
+	if condiment_stream_mesh != null and is_instance_valid(condiment_stream_mesh):
+		condiment_stream_mesh.material_override = _condiment_stream_material(condiment_tool_held)
+	_update_condiment_stream(condiment_tool_held, root, target, condiment_tool_stream_phase)
+	_condiment_customer_splat_cool -= delta
+	if _condiment_customer_splat_cool > 0.0:
+		return
+	_condiment_customer_splat_cool = 0.08
+	_splat_condiment_on_customer(cust, condiment_tool_held, zone)
+	if mp_enabled and not _mp_applying:
+		var nid := _customer_net_id(cust)
+		if nid >= 0:
+			mp_customer_sauce.rpc(nid, condiment_tool_held, zone)
+
+
+func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) -> void:
+	if cust == null or not is_instance_valid(cust):
+		return
+	if not cust.has_method("receive_sauce"):
+		return
+	var tint: Color = KETCHUP_SMEAR_COLOR if flavor == "ketchup" else SODA_FLAVOR_COLORS.get(flavor, Color("F2B51D"))
+	cust.call("receive_sauce", flavor, _get_condiment_smear_texture(randi()), tint, zone)
+	if randf() > 0.28:
+		return
+	var impatience := 0.45
+	if cust.has_method("patience_ratio"):
+		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
+	if game_audio and game_audio.has_method("play_customer_wawa_click"):
+		game_audio.play_customer_wawa_click(impatience)
 
 func _release_condiment_tool() -> void:
 	if condiment_tool_held == "":
@@ -44955,7 +45969,11 @@ func _make_tip_sign_mesh() -> MeshInstance3D:
 	sign.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	## Front of the jar is local -Z. World camera-right is −X; jar scale is 3x
 	## so 1" world is INCH_TO_M / TIP_JAR_SCALE in local.
-	sign.position = Vector3(-MACHINE_LABEL_CAM_RIGHT_M / TIP_JAR_SCALE, 0.046 + (4.0 * INCH_TO_M) / TIP_JAR_SCALE, -0.033)
+	sign.position = Vector3(
+		-(2.0 * INCH_TO_M) / TIP_JAR_SCALE,
+		0.046 + (2.0 * INCH_TO_M) / TIP_JAR_SCALE,
+		-0.033
+	)
 	sign.rotation_degrees = Vector3(8.0, 180.0, 0.0)
 	sign.scale = Vector3.ONE * 0.80
 	return sign
@@ -47096,6 +48114,11 @@ func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Co
 	lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	wrap.add_child(lab)
 	return wrap
+
+
+func _on_phone_nav_back() -> void:
+	_sfx_click()
+	_set_phone_app("home")
 
 
 func _on_muvye_cinema_mode(enabled: bool) -> void:
@@ -49278,18 +50301,19 @@ func _build_phone_ui() -> void:
 	phone_nav_bar.add_theme_constant_override("separation", 4)
 	phone_nav_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_nav_bar.custom_minimum_size = Vector2(0, 28)
+	phone_nav_bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	phone_nav_bar.z_index = 20
 	phone_nav_bar.visible = false
 	screen_host.add_child(phone_nav_bar)
 	var back_btn := Button.new()
+	back_btn.name = "PhoneNavBack"
 	back_btn.text = "<"
 	back_btn.focus_mode = Control.FOCUS_NONE
+	back_btn.mouse_filter = Control.MOUSE_FILTER_STOP
 	back_btn.custom_minimum_size = Vector2(28, 26)
 	UiFontsScript.apply_button(back_btn, true, 14)
 	_style_phone_reply_button(back_btn, Color(0.78, 0.88, 1.0))
-	back_btn.pressed.connect(func():
-		_sfx_click()
-		_set_phone_app("home")
-	)
+	back_btn.pressed.connect(_on_phone_nav_back)
 	phone_nav_bar.add_child(back_btn)
 	phone_nav_title = Label.new()
 	phone_nav_title.text = "Home"
@@ -51749,6 +52773,14 @@ func _gfx_float(key: String, fallback: float) -> float:
 	return fallback
 
 
+func _gfx_bool(key: String, fallback: bool) -> bool:
+	if gfx_checks.has(key):
+		var btn: CheckButton = gfx_checks[key] as CheckButton
+		if btn != null and is_instance_valid(btn):
+			return btn.button_pressed
+	return fallback
+
+
 func _gfx_add_slider(parent: Control, key: String, label_text: String, min_v: float, max_v: float, step: float) -> void:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 1)
@@ -52502,6 +53534,10 @@ func _hidden_gizmo_pickables() -> Array[Dictionary]:
 		out.append({"kind": "garbage", "id": "tray", "node": physical_garbage_root})
 	if patty_fridge_root != null and is_instance_valid(patty_fridge_root):
 		out.append({"kind": "fridge", "id": "tray", "node": patty_fridge_root})
+	for i in shadow_catcher_planes.size():
+		var catcher: MeshInstance3D = shadow_catcher_planes[i] as MeshInstance3D
+		if catcher != null and is_instance_valid(catcher) and catcher.visible:
+			out.append({"kind": "catcher", "id": str(i), "node": catcher})
 	return out
 
 
@@ -52553,6 +53589,13 @@ func _hidden_gizmo_offset_of(entry: Dictionary) -> Vector3:
 			return physical_garbage_pos
 		"fridge":
 			return patty_fridge_pos
+		"catcher":
+			var ci := int(id)
+			return Vector3(
+				_gfx_float(_scatch_key(ci, "x"), float(_scatch_default(ci, "x", 0.0))),
+				_gfx_float(_scatch_key(ci, "y"), float(_scatch_default(ci, "y", 0.03))),
+				_gfx_float(_scatch_key(ci, "z"), float(_scatch_default(ci, "z", 6.0)))
+			)
 	return Vector3.ZERO
 
 
@@ -52644,6 +53687,23 @@ func _hidden_gizmo_apply_offset(entry: Dictionary, offset: Vector3, persist: boo
 			_hidden_refresh_named_slider("fridge_z", patty_fridge_pos.z)
 			if persist:
 				_save_patty_fridge_settings()
+		"catcher":
+			var ci := int(id)
+			var pos := Vector3(
+				clampf(offset.x, -16.0, 16.0),
+				clampf(offset.y, -2.0, 4.0),
+				clampf(offset.z, 0.5, 18.0)
+			)
+			_sync_gfx_slider_no_signal(_scatch_key(ci, "x"), pos.x)
+			_sync_gfx_slider_no_signal(_scatch_key(ci, "y"), pos.y)
+			_sync_gfx_slider_no_signal(_scatch_key(ci, "z"), pos.z)
+			var settings := _read_graphics_from_ui()
+			settings[_scatch_key(ci, "x")] = pos.x
+			settings[_scatch_key(ci, "y")] = pos.y
+			settings[_scatch_key(ci, "z")] = pos.z
+			_apply_shadow_catchers(settings)
+			if persist:
+				_save_graphics_settings(settings)
 
 
 func _hidden_gizmo_persist_selected() -> void:
@@ -53106,6 +54166,7 @@ func _build_options_menu() -> void:
 	## The object tab is now a scan-friendly list; each object family expands in
 	## place instead of forcing a hunt through ten unrelated tabs.
 	var hidden_world_box := _hidden_add_accordion(hidden_objects_root, "WORLD + ICE-CREAM MACHINE", "Objects", 0, true)
+	var hidden_catcher_box := _hidden_add_accordion(hidden_objects_root, "SHADOW CATCHERS", "Objects", 0)
 	var hidden_cars_box := _hidden_add_accordion(hidden_objects_root, "STREET CARS", "Objects", 0)
 	var hidden_people_box := _hidden_add_accordion(hidden_objects_root, "BACKGROUND PEOPLE", "Objects", 0)
 	var hidden_counter_box := _hidden_add_accordion(hidden_objects_root, "COUNTERS + GARBAGE", "Objects", 0)
@@ -53290,6 +54351,7 @@ func _build_options_menu() -> void:
 	)
 	var hidden_audio_box := _hidden_add_accordion(hidden_audio_root, "AUDIO MIX", "Audio", 3, true)
 	_hidden_setup_ingredient_bin_controls(hidden_bins_box)
+	_hidden_setup_shadow_catcher_controls(hidden_catcher_box)
 	_hidden_setup_street_car_controls(hidden_cars_box)
 	_hidden_setup_background_people_controls(hidden_people_box)
 	_hidden_add_section(hidden_audio_box, "SOUND EFFECT LEVELS")
@@ -55573,6 +56635,7 @@ func _try_unlock_hidden_options() -> void:
 			_sync_soda_tuning_hidden_ui()
 			_sync_soda_slot_hidden_ui()
 			_refresh_options_graphics_controls()
+	_update_shadow_catcher_bounds_visible()
 	if options_hidden_status != null and is_instance_valid(options_hidden_status):
 		options_hidden_status.text = "Hidden tools unlocked" if ok else "Wrong password"
 		options_hidden_status.add_theme_color_override("font_color", Color(0.68, 1.0, 0.62) if ok else Color(1.0, 0.48, 0.42))
@@ -55622,6 +56685,7 @@ func _set_options_menu_open(open: bool) -> void:
 		options_panel_dragging = false
 		_hidden_gizmo_clear(true)
 		_set_graphics_menu_open(false)
+		_update_shadow_catcher_bounds_visible()
 	else:
 		_layout_options_panel()
 		if options_vol_slider != null and is_instance_valid(options_vol_slider):
@@ -55634,6 +56698,7 @@ func _set_options_menu_open(open: bool) -> void:
 				options_lobby_btn.text = "Main Menu"
 	if gfx_btn != null and is_instance_valid(gfx_btn):
 		gfx_btn.text = "OPTIONS ▾" if open else "OPTIONS"
+	_update_shadow_catcher_bounds_visible()
 
 
 func _options_restart_day() -> void:
@@ -56052,6 +57117,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_apply_heat_warp_settings(s)
 	_apply_screen_style_filter(s)
 	_apply_street_matte_settings(s)
+	_apply_shadow_catchers(s)
 	_apply_first_sale_decal_settings(s)
 	_apply_menu_board_decal_settings(s)
 	_apply_burner_strip_settings(s)
@@ -56062,6 +57128,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_seat_tip_jar()
 	_apply_tip_jar_look()
 	_apply_street_car_look()
+	_sync_light_profile()
 
 
 func _build_screen_style_filter() -> void:
@@ -56195,14 +57262,31 @@ func _apply_fake_df_ao_settings(s: Dictionary) -> void:
 func _apply_shadow_settings(s: Dictionary) -> void:
 	## Shadows on by default — toggled from Options / Advanced Graphics.
 	var on := bool(s.get("shadows", true))
+	var dist := clampf(float(s.get("sun_shadow_distance", _sun_shadow_distance())), 10.0, 80.0)
 	if gfx_sun:
 		gfx_sun.shadow_enabled = on
+		gfx_sun.directional_shadow_max_distance = dist
 	if gfx_outside_fill:
 		gfx_outside_fill.shadow_enabled = on
+		gfx_outside_fill.directional_shadow_max_distance = dist
 	if gfx_kitchen:
 		gfx_kitchen.shadow_enabled = on
 	if gfx_grill_lamp:
 		gfx_grill_lamp.shadow_enabled = on
+	if _profile_sun != null and is_instance_valid(_profile_sun):
+		_profile_sun.shadow_enabled = on
+		_profile_sun.directional_shadow_max_distance = dist
+	if _light_profile_root != null and is_instance_valid(_light_profile_root):
+		for child in _light_profile_root.get_children():
+			if child is Light3D:
+				var light: Light3D = child
+				if light == _profile_sun:
+					continue
+				## Keep bounce omnis unshadowed even when the master toggle is on.
+				if light is OmniLight3D:
+					continue
+				if light is SpotLight3D:
+					light.shadow_enabled = on
 
 
 func _apply_roomba_audio_settings(s: Dictionary) -> void:
@@ -56339,6 +57423,8 @@ func _street_background_options() -> Array:
 		opts.append({"id": "selected_construction", "label": "Construction Block", "path": STREET_BG_SELECTED_CONSTRUCTION_PATH})
 	if ResourceLoader.exists(STREET_BG_SELECTED_WAREHOUSE_PATH):
 		opts.append({"id": "selected_warehouse", "label": "Warehouse District", "path": STREET_BG_SELECTED_WAREHOUSE_PATH})
+	if ResourceLoader.exists(STREET_BG_MOUNTAIN_VIEW_PATH):
+		opts.append({"id": "mountain_view", "label": "Mountain View", "path": STREET_BG_MOUNTAIN_VIEW_PATH})
 	if street_bg_custom_path != "":
 		opts.append({"id": "custom", "label": "Custom Path", "path": street_bg_custom_path})
 	return opts
@@ -56374,6 +57460,8 @@ func _street_background_path_for_choice(choice: String) -> String:
 			return STREET_BG_SELECTED_CONSTRUCTION_PATH
 		"selected_warehouse":
 			return STREET_BG_SELECTED_WAREHOUSE_PATH
+		"mountain_view":
+			return STREET_BG_MOUNTAIN_VIEW_PATH
 		"custom":
 			return street_bg_custom_path
 		_:
@@ -56402,7 +57490,7 @@ func _current_street_background_path() -> String:
 		return STREET_BG_TOWN_SQUARE_PATH
 	if street_bg_choice in [
 		"selected_main_street", "selected_tree_park", "selected_residential",
-		"selected_construction", "selected_warehouse",
+		"selected_construction", "selected_warehouse", "mountain_view",
 	]:
 		var selected_path := _street_background_path_for_choice(street_bg_choice)
 		if ResourceLoader.exists(selected_path):
@@ -56906,6 +57994,25 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "street_car_sort", GFX_DEFAULTS["street_car_sort"])
 		cfg.set_value("gfx", "street_car_size", GFX_DEFAULTS["street_car_size"])
 		cfg.set_value("gfx", "gfx_street_car_place_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Invisible shadow-catcher ground planes + cars drawn in front of walkers.
+	if not cfg.has_section_key("gfx", "gfx_shadow_catcher_v1"):
+		for i in SHADOW_CATCHER_COUNT:
+			for suffix in ["on", "x", "y", "z", "w", "d", "yaw", "str"]:
+				var hk := _scatch_key(i, suffix)
+				cfg.set_value("gfx", hk, GFX_DEFAULTS[hk])
+		cfg.set_value("gfx", "street_car_z", GFX_DEFAULTS["street_car_z"])
+		cfg.set_value("gfx", "street_car_sort", GFX_DEFAULTS["street_car_sort"])
+		cfg.set_value("gfx", "gfx_shadow_catcher_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	## Catcher planes sit under the feet; sun cascades reach the sidewalk.
+	if not cfg.has_section_key("gfx", "gfx_shadow_catcher_v2"):
+		cfg.set_value("gfx", "scatch0_y", GFX_DEFAULTS["scatch0_y"])
+		cfg.set_value("gfx", "scatch1_y", GFX_DEFAULTS["scatch1_y"])
+		cfg.set_value("gfx", "scatch2_y", GFX_DEFAULTS["scatch2_y"])
+		cfg.set_value("gfx", "scatch3_y", GFX_DEFAULTS["scatch3_y"])
+		cfg.set_value("gfx", "sun_shadow_distance", GFX_DEFAULTS["sun_shadow_distance"])
+		cfg.set_value("gfx", "gfx_shadow_catcher_v2", true)
 		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
@@ -57952,6 +59059,7 @@ func _begin_challenge_wait() -> void:
 	else:
 		_challenge_phase = "wait_line"
 		_flash("Challenge incoming — finish the line", Color("FFD54F"), 2.2)
+	_mp_send_challenge_state()
 
 
 func _show_challenge_offer() -> void:
@@ -57967,9 +59075,13 @@ func _show_challenge_offer() -> void:
 	if challenge_overlay != null and is_instance_valid(challenge_overlay):
 		challenge_overlay.visible = true
 	_play_challenge_song()
+	_mp_send_challenge_state()
 
 
 func _accept_challenge() -> void:
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		mp_request_challenge_decision.rpc_id(1, true)
+		return
 	if _challenge_phase != "offer":
 		return
 	_hide_challenge_overlay()
@@ -57979,14 +59091,86 @@ func _accept_challenge() -> void:
 	_update_challenge_hud()
 	_spawn_challenge_customer()
 	_flash("Same burger — go!", Color("FFD54F"), 1.6)
+	_mp_send_challenge_state()
 
 
 func _decline_challenge() -> void:
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		mp_request_challenge_decision.rpc_id(1, false)
+		return
 	if _challenge_phase != "offer":
 		return
 	_reset_challenge_state(true)
 	_challenge_roll_timer = challenge_interval_sec
 	_flash("Challenge skipped", Color("B0BEC5"))
+	_mp_send_challenge_state()
+
+
+func _mp_send_challenge_state(peer_id: int = 0) -> void:
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	if peer_id > 0:
+		mp_challenge_state.rpc_id(peer_id, _challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip)
+	else:
+		mp_challenge_state.rpc(_challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip)
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_challenge_state(phase: String, count: int, remaining: int, time_left: float, time_max: float, bonus_tip: int) -> void:
+	if NetManager.is_host():
+		return
+	var previous := _challenge_phase
+	_challenge_phase = phase
+	_challenge_count = maxi(0, count)
+	_challenge_remaining = maxi(0, remaining)
+	_challenge_time_left = maxf(0.0, time_left)
+	_challenge_time_max = maxf(0.0, time_max)
+	_challenge_bonus_tip = maxi(0, bonus_tip)
+	if phase == "offer":
+		if challenge_body_label != null:
+			challenge_body_label.text = "Cook the same burger as fast as you can."
+		if challenge_count_stat != null:
+			challenge_count_stat.text = str(_challenge_count)
+		if challenge_time_stat != null:
+			challenge_time_stat.text = _challenge_clock_text(_challenge_time_max)
+		if challenge_reward_label != null:
+			challenge_reward_label.text = "Bonus tip  %s" % _format_money(float(_challenge_bonus_tip))
+		if challenge_overlay != null:
+			challenge_overlay.visible = true
+		if previous != "offer":
+			_play_challenge_song()
+	else:
+		_hide_challenge_overlay()
+		if phase == "":
+			_stop_challenge_song()
+	_update_challenge_hud()
+	_refresh_challenge_ticket()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_challenge_decision(accept: bool) -> void:
+	if not NetManager.is_host() or multiplayer.get_remote_sender_id() == 0:
+		return
+	if accept:
+		_accept_challenge()
+	else:
+		_decline_challenge()
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_challenge_result(success: bool, tip_amt: int) -> void:
+	if NetManager.is_host():
+		return
+	if success:
+		_show_challenge_banner("CHALLENGE COMPLETED\nTIP  %s" % _format_money(float(tip_amt)), Color("FFEB3B"), 3.6)
+		_flash("CHALLENGE COMPLETED  +%s tip" % _format_money(float(tip_amt)), Color("FFEB3B"), 3.0)
+		if game_audio != null and game_audio.has_method("play_challenge_complete_tune"):
+			game_audio.play_challenge_complete_tune()
+	else:
+		_show_challenge_banner("CHALLENGE FAILED", Color("EF9A9A"), 2.6)
+		_flash("Challenge failed — paid for burgers, no tip", Color("EF9A9A"), 2.4)
+		if game_audio != null and game_audio.has_method("play_challenge_fail_ohhh"):
+			game_audio.play_challenge_fail_ohhh()
 
 
 func _spawn_challenge_customer() -> void:
@@ -58107,6 +59291,7 @@ func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: N
 		total_served += 1
 	_refresh_challenge_ticket(cust)
 	_update_challenge_hud()
+	_mp_send_challenge_state()
 	_clear_station(station_index)
 	if remote_drink != null and is_instance_valid(remote_drink):
 		remote_drink.set_meta("serving_consumed", true)
@@ -58140,6 +59325,8 @@ func _succeed_challenge(cust: Node3D) -> void:
 	_flash("CHALLENGE COMPLETED  +%s tip" % _format_money(float(tip_amt)), Color("FFEB3B"), 3.0)
 	if game_audio != null and game_audio.has_method("play_challenge_complete_tune"):
 		game_audio.play_challenge_complete_tune()
+	if mp_enabled and NetManager.is_host():
+		mp_challenge_result.rpc(true, tip_amt)
 	_finish_challenge_customer(cust, true)
 	_reset_challenge_state(true, true)
 	_challenge_roll_timer = challenge_interval_sec
@@ -58158,9 +59345,12 @@ func _fail_challenge() -> void:
 	_flash("Challenge failed — paid for burgers, no tip", Color("EF9A9A"), 2.4)
 	if game_audio != null and game_audio.has_method("play_challenge_fail_ohhh"):
 		game_audio.play_challenge_fail_ohhh()
+	if mp_enabled and NetManager.is_host():
+		mp_challenge_result.rpc(false, 0)
 	_finish_challenge_customer(cust, false)
 	_reset_challenge_state(true, true)
 	_challenge_roll_timer = challenge_interval_sec
+	_mp_send_challenge_state()
 
 
 func _finish_challenge_customer(cust: Node3D, happy: bool) -> void:
@@ -58222,6 +59412,9 @@ func _spawn_customer() -> void:
 		jin_fact_idx = randi() % CustomerScript.JIMIN_FACTS.size()
 	if is_bts_guest:
 		patience += 25.0
+	var custom_preset: Dictionary = {}
+	if not is_bts_guest:
+		custom_preset = CustomerScript.take_next_saved_character_preset()
 	if mp_enabled:
 		if not NetManager.is_host() and not _mp_applying:
 			return
@@ -58232,10 +59425,11 @@ func _spawn_customer() -> void:
 			order_packed.append(str(o))
 		if NetManager.is_host():
 			mp_spawn_customer.rpc(
-				nid, order_packed, color.r, color.g, color.b, patience, lane, skin_idx, face_style, false, jin_fact_idx
+				nid, order_packed, color.r, color.g, color.b, patience, lane, skin_idx, face_style, false, jin_fact_idx, false,
+				custom_preset
 			)
 			return
-	_spawn_customer_local(order, color, patience, lane, -1, skin_idx, face_style, false, jin_fact_idx)
+	_spawn_customer_local(order, color, patience, lane, -1, skin_idx, face_style, false, jin_fact_idx, false, custom_preset)
 
 
 func _spawn_customer_local(
@@ -58248,13 +59442,15 @@ func _spawn_customer_local(
 	face_style: int = -1,
 	disguise_cat: bool = false,
 	jin_fact_idx: int = -1,
-	challenge_guest: bool = false
+	challenge_guest: bool = false,
+	custom_preset: Dictionary = {},
+	lock_custom_choice: bool = false
 ) -> void:
 	var typed_order: Array[String] = []
 	for o in order:
 		typed_order.append(str(o))
 	var c = CustomerScript.new()
-	c.setup(typed_order, color, patience, lane, skin_idx, face_style, jin_fact_idx)
+	c.setup(typed_order, color, patience, lane, skin_idx, face_style, jin_fact_idx, custom_preset, lock_custom_choice)
 	if challenge_guest or _challenge_attach_next:
 		c.is_challenge_guest = true
 		c.patience_max = 99999.0
@@ -58456,7 +59652,8 @@ func _on_customer_left(customer: Node3D, angry: bool) -> void:
 			_customer_leave_apply(customer, angry)
 			_mp_broadcast_economy()
 			return
-		mp_customer_leave.rpc(nid, angry)
+		var dance := (not angry) and bool(customer.get_meta("five_star_dance", false))
+		mp_customer_leave.rpc(nid, angry, dance)
 		return
 	_customer_leave_apply(customer, angry)
 	if mp_enabled and NetManager.is_host() and not _mp_applying:
@@ -60216,7 +61413,7 @@ func _hidden_setup_grill_standoff_controls(parent: Control) -> void:
 
 func _hidden_setup_street_car_controls(parent: Control) -> void:
 	var help := Label.new()
-	help.text = "Passing street cars outside the window. Height and Depth put the wheels on the painted road — lower Depth (Z) to pull cars in front of sidewalk walkers. Size is overall scale. Draw Order is a last-resort sort bias if a car still hides behind a walker. A parked car sits in the window while this menu is open so you can tune live. Darken 0.20 is 20% darker. Speed 1.00 is the current pass-by. Blur 0 turns off the trailing smear."
+	help.text = "Passing street cars outside the window. They stay in front of sidewalk walkers and behind window customers. Height and Depth put the wheels on the painted road. Size is overall scale. Draw Order is a last-resort sort bias. A parked car sits in the window while this menu is open so you can tune live. Darken 0.20 is 20% darker. Speed 1.00 is the current pass-by. Blur 0 turns off the trailing smear."
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(help, false, 11)
 	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
@@ -60537,7 +61734,7 @@ func _build_ingredient_legend() -> void:
 
 		var icon := TextureRect.new()
 		icon.name = "StripIcon"
-		icon.texture = FoodSpritesScript.get_tex(id)
+		icon.texture = FoodSpritesScript.tray_cheese_tex() if id == "cheese" else FoodSpritesScript.get_tex(id)
 		icon.custom_minimum_size = Vector2(ingredient_icon_w, ingredient_icon_h)
 		icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -60930,13 +62127,20 @@ func _request_condiment_add(id: String, station_index: int) -> void:
 func _queue_condiment_pour(id: String, station_index: int, networked: bool) -> void:
 	if not _is_condiment(id):
 		return
-	## Ignore a duplicate click while this exact bottle/station is already active or queued.
+	var entry := {"id": id, "station": station_index, "networked": networked, "deposited": false}
+	if networked:
+		## Land on the burger immediately so a held/partner bottle cannot delay the shared stack.
+		_deposit_condiment_entry(entry)
+	## Ignore a duplicate squeeze animation while this bottle is already traveling.
 	if condiment_pour_busy and condiment_active_id == id:
 		return
 	for queued in condiment_pour_queue:
 		if str(queued.get("id", "")) == id and int(queued.get("station", -1)) == station_index:
 			return
-	var entry := {"id": id, "station": station_index, "networked": networked}
+	if _condiment_bottle_busy(id) or _mp_remote_using_condiment(id):
+		if not networked:
+			condiment_pour_queue.append(entry)
+		return
 	if condiment_pour_busy or condiment_tool_held != "":
 		condiment_pour_queue.append(entry)
 		return
@@ -60967,17 +62171,21 @@ func _condiment_stream_material(id: String) -> StandardMaterial3D:
 	return mat
 
 
-func _update_condiment_stream(id: String, root: Node3D, target: Vector3, phase: float) -> void:
-	if condiment_stream_mesh == null or not is_instance_valid(condiment_stream_mesh):
+func _update_condiment_stream(
+	id: String, root: Node3D, target: Vector3, phase: float, stream: MeshInstance3D = null
+) -> void:
+	if stream == null:
+		stream = condiment_stream_mesh
+	if stream == null or not is_instance_valid(stream) or root == null or not is_instance_valid(root):
 		return
 	var from_tip := root.to_global(Vector3(0.0, CONDIMENT_BOTTLE_HEIGHT * 0.5, 0.0))
-	condiment_stream_mesh.visible = true
-	condiment_stream_mesh.global_position = from_tip
-	condiment_stream_mesh.global_basis = Basis.IDENTITY
-	condiment_stream_mesh.mesh = _make_condiment_stream_curve_mesh(from_tip, target, phase)
-	condiment_stream_mesh.rotation_degrees = Vector3.ZERO
-	if condiment_stream_mesh.material_override == null:
-		condiment_stream_mesh.material_override = _condiment_stream_material(id)
+	stream.visible = true
+	stream.global_position = from_tip
+	stream.global_basis = Basis.IDENTITY
+	stream.mesh = _make_condiment_stream_curve_mesh(from_tip, target, phase)
+	stream.rotation_degrees = Vector3.ZERO
+	if stream.material_override == null:
+		stream.material_override = _condiment_stream_material(id)
 
 
 func _make_condiment_stream_curve_mesh(from_tip: Vector3, target: Vector3, phase: float) -> ArrayMesh:
@@ -61112,6 +62320,9 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 
 
 func _deposit_condiment_entry(entry: Dictionary) -> void:
+	if bool(entry.get("deposited", false)):
+		return
+	entry["deposited"] = true
 	var id := str(entry.get("id", ""))
 	var station_index := int(entry.get("station", -1))
 	if bool(entry.get("networked", false)):
@@ -61312,10 +62523,19 @@ func _build_station_ui() -> void:
 
 		## 🔔 · 🗑 · All — pinned to screen-left (Build column already has 15px pad).
 		var actions := VBoxContainer.new()
+		actions.name = "BuildActions"
 		actions.alignment = BoxContainer.ALIGNMENT_BEGIN
 		actions.add_theme_constant_override("separation", 2)
-		actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		root_v.add_child(actions)
+		actions.custom_minimum_size = Vector2(136, 50)
+		actions.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+		actions.offset_left = 0.0
+		actions.offset_right = 136.0
+		## The strip used to end at the Build zone bottom. Move it exactly 30 px down.
+		actions.offset_top = -20.0
+		actions.offset_bottom = 30.0
+		actions.visible = false
+		actions.z_index = 4
+		build_zone.add_child(actions)
 
 		var btns := HBoxContainer.new()
 		btns.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -61474,6 +62694,7 @@ func _build_station_ui() -> void:
 		stations[i]["drop_hint"] = null
 		stations[i]["drop_btn"] = drop_btn
 		stations[i]["trash_btn"] = trash_one
+		stations[i]["actions"] = actions
 		stations[i]["layer_hint"] = pick_hint
 		stations[i]["fresh_label"] = fresh_label
 		_refresh_freshness_label(i)
@@ -61867,106 +63088,140 @@ func _try_throw_dragged_ingredient_at_customer(screen_pos: Vector2) -> bool:
 	return true
 
 
-func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: Vector2 = Vector2(INF, INF), stick_cheese: bool = false) -> void:
+func _play_ingredient_fly_to_customer(id: String, cust: Node3D, start_override: Vector2 = Vector2(INF, INF), _stick_cheese: bool = false) -> void:
 	if cust == null or not is_instance_valid(cust):
 		return
-	var ui_root: Control = get_node_or_null("UI/Root") as Control
-	## Launch from the ingredient bar so throws feel like they came out of the tray,
-	## not from the release point over the customer's face.
-	var start := _ingredient_button_screen_center(id)
-	if (not is_finite(start.x) or not is_finite(start.y)) and is_finite(start_override.x) and is_finite(start_override.y):
-		start = start_override
-	var end := _customer_head_screen(cust)
-	if ui_root == null:
-		_apply_customer_ingredient_hit(cust, id, stick_cheese)
-		return
 	var tex := FoodSpritesScript.get_tex(id)
-	if tex == null:
-		_apply_customer_ingredient_hit(cust, id, stick_cheese)
+	var start := _ingredient_throw_world_start(id, start_override)
+	## Thrown loose ingredients are a face gag: every type targets the head and
+	## the customer chooses a different front-facing landing spot for each hit.
+	var zone := "face"
+	var end := _customer_food_land_world(cust, zone)
+	var end_local := Vector3(INF, INF, INF)
+	if cust.has_method("reserve_stuck_food_local_target"):
+		end_local = cust.call("reserve_stuck_food_local_target") as Vector3
+		end = cust.to_global(end_local)
+	if world == null or camera == null or start == Vector3.ZERO:
+		_apply_customer_ingredient_hit(cust, id, end, zone)
 		return
-	var side_sign := 1.0 if start.x <= end.x else -1.0
-	var bounce_end := end + Vector2(280.0 * side_sign, 82.0)
-	if camera != null and cust != null and is_instance_valid(cust):
-		var cam_right := camera.global_transform.basis.x.normalized()
-		var head_side := _customer_head_world(cust) + cam_right * side_sign * 1.22 + Vector3(0.0, -0.14, 0.0)
-		if not camera.is_position_behind(head_side):
-			bounce_end = camera.unproject_position(head_side)
-	var fly_root := Control.new()
-	fly_root.name = "CustomerIngredientFly"
-	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	fly_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fly_root.z_index = 260
-	ui_root.add_child(fly_root)
-	var icon := TextureRect.new()
-	icon.texture = tex
-	var icon_size := Vector2(124.0, 70.0)
-	icon.custom_minimum_size = icon_size
-	icon.size = icon_size
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	icon.pivot_offset = icon_size * 0.5
-	fly_root.add_child(icon)
-	icon.global_position = start - icon_size * 0.5
+	var flyer := _make_thrown_ingredient_card(id, tex)
+	flyer.name = "ThrownIngredient"
+	world.add_child(flyer)
+	flyer.global_position = start
+	var spin_z := randf_range(-180.0, 180.0)
+	var peak := 0.42 + randf() * 0.10
 	var tw := create_tween()
 	tw.tween_method(
 		func(t: float) -> void:
-			if not is_instance_valid(icon):
-				return
-			var eased := t * t * (3.0 - 2.0 * t)
-			var pos := start.lerp(end, eased)
-			pos.y -= 110.0 * 4.0 * t * (1.0 - t)
-			icon.global_position = pos - icon_size * 0.5
-			icon.rotation = lerpf(-0.65, 0.8, t)
-			icon.scale = Vector2(1.35, 1.35).lerp(Vector2(0.48, 0.48), eased),
+			_steer_thrown_ingredient(flyer, cust, start, end, end_local, zone, peak, spin_z, t),
 		0.0,
 		1.0,
-		0.30
+		0.42
 	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func() -> void:
+		var land := end
+		if is_instance_valid(flyer):
+			land = flyer.global_position
+			flyer.queue_free()
 		if game_audio != null and game_audio.has_method("play_ingredient"):
 			game_audio.play_ingredient(id, 1.45)
 		elif game_audio != null and game_audio.has_method("play_bun_thud"):
 			game_audio.play_bun_thud(1.25)
-		_apply_customer_ingredient_hit(cust, id, stick_cheese)
-	)
-	tw.tween_method(
-		func(t: float) -> void:
-			if not is_instance_valid(icon):
-				return
-			var eased := 1.0 - pow(1.0 - t, 2.0)
-			var hop := sin(t * PI)
-			var pos := end.lerp(bounce_end, eased)
-			pos.y -= 70.0 * hop
-			icon.global_position = pos - icon_size * 0.5
-			icon.scale = Vector2(0.56, 0.45).lerp(Vector2(0.30, 0.30), t)
-			icon.modulate.a = lerpf(1.0, 0.0, maxf(0.0, (t - 0.62) / 0.38))
-			icon.rotation = lerpf(0.8, 3.4 * side_sign, t),
-		0.0,
-		1.0,
-		0.34
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_callback(func() -> void:
-		if is_instance_valid(fly_root):
-			fly_root.queue_free()
+		_apply_customer_ingredient_hit(cust, id, land, zone)
 	)
 
 
-func _apply_customer_ingredient_hit(cust: Node3D, id: String, stick_cheese: bool = false) -> void:
+func _steer_thrown_ingredient(
+	flyer: MeshInstance3D,
+	cust: Node3D,
+	start: Vector3,
+	end: Vector3,
+	end_local: Vector3,
+	zone: String,
+	peak: float,
+	spin_z: float,
+	t: float
+) -> void:
+	if flyer == null or not is_instance_valid(flyer) or cust == null or not is_instance_valid(cust):
+		return
+	## Follow the reserved point in customer-local space. This preserves a smooth
+	## handoff even while the customer rotates or bobs during the throw.
+	var has_local_target := is_finite(end_local.x) and is_finite(end_local.y) and is_finite(end_local.z)
+	var land := cust.to_global(end_local) if has_local_target else end
+	var eased := t * t * (3.0 - 2.0 * t)
+	var pos := start.lerp(land, eased)
+	pos.y += peak * 4.0 * t * (1.0 - t)
+	flyer.global_position = pos
+	var s := lerpf(0.72, 1.08, eased)
+	flyer.scale = Vector3(s, s, s)
+	if camera != null and flyer.global_position.distance_to(camera.global_position) > 0.08:
+		flyer.look_at(camera.global_position, Vector3.UP)
+		flyer.rotate_object_local(Vector3.UP, PI)
+		flyer.rotate_object_local(Vector3.FORWARD, deg_to_rad(spin_z * t * 0.35))
+
+
+func _ingredient_throw_world_start(id: String, screen_fallback: Vector2) -> Vector3:
+	var tub: Node3D = ingredient_bin_nodes.get(id, null) as Node3D
+	if tub != null and is_instance_valid(tub) and camera != null and not camera.is_position_behind(tub.global_position):
+		return tub.global_position + Vector3(0.0, 0.10, 0.05)
+	if camera == null:
+		return Vector3.ZERO
+	var screen := _ingredient_button_screen_center(id)
+	if (not is_finite(screen.x) or not is_finite(screen.y)) and is_finite(screen_fallback.x) and is_finite(screen_fallback.y):
+		screen = screen_fallback
+	return camera.project_position(screen, 1.15)
+
+
+func _make_thrown_ingredient_card(id: String, tex: Texture2D) -> MeshInstance3D:
+	var card := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	## Match the smaller stuck-on result; the previous flight card was about 3x
+	## too large compared with the character's face.
+	var w := 0.22 if (id == "pickle" or id == "bacon") else 0.28
+	var aspect := 0.55
+	if tex != null and tex.get_width() > 0:
+		aspect = clampf(float(tex.get_height()) / float(tex.get_width()), 0.35, 1.35)
+	quad.size = Vector2(w, w * aspect)
+	card.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.08
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = true
+	mat.albedo_color = Color.WHITE
+	if tex != null:
+		mat.albedo_texture = tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.render_priority = 12
+	card.material_override = mat
+	card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return card
+
+
+func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3 = Vector3.ZERO, zone: String = "body") -> void:
 	if cust == null or not is_instance_valid(cust):
 		return
 	var impatience := 0.45
 	if cust.has_method("patience_ratio"):
 		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
-	if game_audio and game_audio.has_method("play_customer_wawa_click"):
+	## Use the full customer grobble here. The short click variant was easily
+	## masked by the ingredient impact sound and did not read as a real wawawa.
+	if game_audio and game_audio.has_method("play_customer_grobble"):
+		game_audio.play_customer_grobble(maxf(impatience, 0.62))
+	elif game_audio and game_audio.has_method("play_customer_wawa_click"):
 		game_audio.play_customer_wawa_click(impatience)
-	if cust.has_method("bobble_click"):
-		cust.call("bobble_click")
-	if stick_cheese:
+	var land := hit_world
+	if land == Vector3.ZERO:
+		land = _customer_food_land_world(cust, zone)
+	if id == "ketchup" or id == "mustard":
+		_splat_condiment_on_customer(cust, id, zone)
+	elif cust.has_method("receive_stuck_food"):
+		cust.call("receive_stuck_food", id, FoodSpritesScript.get_tex(id), land, zone)
+	elif id == "cheese":
 		_put_cheese_on_customer_head(cust)
-	else:
-		var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
-		_flash("%s: wawawa" % label, Color("FFE082"))
+	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+	_flash("%s stuck: wawawa" % label, Color("FFE082"))
 
 
 func _put_cheese_on_customer_head(cust: Node3D) -> void:
@@ -63145,18 +64400,17 @@ func _ensure_cheese_ghost() -> void:
 		return
 	cheese_ghost = MeshInstance3D.new()
 	cheese_ghost.name = "CheeseGhost"
-	var mesh := QuadMesh.new()
-	mesh.size = Vector2(0.18, 0.14)
+	## Restore the old held slice as actual thin 3D geometry. The ingredient-tray
+	## PNG is intentionally not used here.
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(0.15, 0.005, 0.15)
 	cheese_ghost.mesh = mesh
 	cheese_ghost_mat = StandardMaterial3D.new()
-	cheese_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cheese_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	cheese_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	var held_tex: Texture2D = FoodSpritesScript.get_tex("cheese")
-	cheese_ghost_mat.albedo_texture = held_tex
-	cheese_ghost_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.96)
-	cheese_ghost_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.20, 0.92)
+	cheese_ghost_mat.roughness = 0.72
 	cheese_ghost_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	cheese_ghost_mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
 	cheese_ghost_mat.no_depth_test = false
 	cheese_ghost_mat.render_priority = 8
 	cheese_ghost.material_override = cheese_ghost_mat
@@ -63177,7 +64431,7 @@ func _update_cheese_ghost(delta: float = 0.016) -> void:
 		cheese_ghost.rotation = Vector3.ZERO
 		cheese_ghost.scale = Vector3.ONE * lerpf(1.0, 0.85, ease_t)
 		if cheese_ghost_mat:
-			cheese_ghost_mat.albedo_color = Color(1.0, 1.0, 1.0, lerpf(0.92, 0.0, ease_t))
+			cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.20, lerpf(0.92, 0.0, ease_t))
 		if u >= 1.0:
 			_cheese_returning = false
 			cheese_held = false
@@ -63196,7 +64450,7 @@ func _update_cheese_ghost(delta: float = 0.016) -> void:
 		cheese_ghost.global_basis = target.get_cheese_seat_basis()
 		cheese_ghost.scale = Vector3.ONE
 		if cheese_ghost_mat:
-			cheese_ghost_mat.albedo_color = Color(1.0, 1.0, 1.0, pulse + 0.22)
+			cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.20, pulse + 0.42)
 	else:
 		_cheese_hover_patty = null
 		var mouse := get_viewport().get_mouse_position()
@@ -63213,7 +64467,7 @@ func _update_cheese_ghost(delta: float = 0.016) -> void:
 		cheese_ghost.rotation_degrees = Vector3(-56.0, 198.0, 0.0)
 		cheese_ghost.scale = Vector3.ONE
 		if cheese_ghost_mat:
-			cheese_ghost_mat.albedo_color = Color(1.0, 1.0, 1.0, pulse * 0.95)
+			cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.20, pulse + 0.40)
 
 
 func _can_put_cheese_on_grill_patty(patty) -> bool:
@@ -63687,7 +64941,7 @@ func _clear_station(index: int) -> void:
 	var st: Dictionary = stations[index]
 	for p in st["patties"]:
 		if p != null and is_instance_valid(p):
-			p.queue_free()
+			_return_patty_to_spawn_pool(p)
 	st["patties"] = []
 	st["items"] = [] as Array[String]
 	st["bun_toast"] = {}
@@ -63720,6 +64974,9 @@ func _refresh_station(index: int) -> void:
 		st["selected_layer"] = -1
 	var drop_btn: Button = st.get("drop_btn", null)
 	var plate: Control = st.get("plate", null)
+	var actions: Control = st.get("actions", null)
+	if actions != null and is_instance_valid(actions):
+		actions.visible = playing and _station_has_build_burger(index)
 	if drop_btn and is_instance_valid(drop_btn):
 		drop_btn.visible = spatula_patty != null
 	if index == STATION_CRAFT:
@@ -64357,6 +65614,17 @@ func _customer_mouth_screen(customer: Node3D) -> Vector2:
 	return screen_pt + Vector2(0.0, -42.0)
 
 
+func _customer_food_land_world(customer: Node3D, zone: String) -> Vector3:
+	var land := _customer_head_world(customer) if zone == "face" else (customer.global_position + Vector3(0.0, 0.92, 0.0))
+	var toward := Vector3(0.0, 0.0, -0.16)
+	if camera != null:
+		toward = camera.global_position - land
+		toward.y *= 0.15
+		if toward.length_squared() > 0.0001:
+			toward = toward.normalized() * 0.18
+	return land + toward
+
+
 func _customer_head_world(customer: Node3D) -> Vector3:
 	if customer == null or not is_instance_valid(customer):
 		return Vector3.ZERO
@@ -64371,7 +65639,7 @@ func _customer_head_screen(customer: Node3D) -> Vector2:
 	return camera.unproject_position(_customer_head_world(customer))
 
 
-func _find_waiting_customer_at_head(screen_pos: Vector2, max_px: float = 105.0) -> Node3D:
+func _find_waiting_customer_at_head(screen_pos: Vector2, max_px: float = 160.0) -> Node3D:
 	if customers_root == null or camera == null:
 		return null
 	var best: Node3D = null
@@ -66350,6 +67618,17 @@ func _play_sale_payout_fx(customer: Node3D, base: int, tip: int, from_shown: flo
 	_start_hud_money_climb(from_shown, to_amount)
 
 
+@rpc("authority", "call_remote", "reliable")
+func mp_sale_payout_fx(customer_net_id: int, base: int, tip: int, _host_from: float, host_to: float) -> void:
+	## Wallet arithmetic stays host-only. Peers still receive the same readable,
+	## satisfying payment burst and climb toward the authoritative total.
+	if NetManager.is_host():
+		return
+	var customer: Node3D = _customer_by_net_id(customer_net_id) as Node3D
+	var from_shown := _hud_money_shown
+	_play_sale_payout_fx(customer, maxi(0, base), maxi(0, tip), from_shown, maxf(host_to, from_shown))
+
+
 func _earn_money(amount: float) -> void:
 	if amount <= 0.001:
 		return
@@ -68227,6 +69506,7 @@ func _mp_cleanup_departed_peer_state() -> void:
 			_mp_remote_shaker, _mp_remote_ext, _mp_remote_glock,
 			_mp_remote_brush, _mp_remote_spatula, _mp_remote_cups,
 			_mp_remote_icecreams, _mp_remote_fries, _mp_remote_cursors,
+			_mp_remote_condiment_streams,
 		]:
 			var node_store: Dictionary = node_store_value
 			if node_store.has(peer_id):
@@ -68238,8 +69518,10 @@ func _mp_cleanup_departed_peer_state() -> void:
 		_mp_remote_ice_pouring.erase(peer_id)
 		_mp_remote_spatula_targets.erase(peer_id)
 		_mp_remote_softserve_pouring.erase(peer_id)
+		_mp_remote_cursor_targets.erase(peer_id)
 		_mp_remote_ext_spraying.erase(peer_id)
 		_mp_remote_shaker_rattling.erase(peer_id)
+		_mp_hide_remote_condiment_stream(peer_id)
 		for basket_index in fryer_baskets.size():
 			var basket: Dictionary = fryer_baskets[basket_index]
 			if int(basket.get("remote_peer", 0)) != peer_id:
@@ -68256,6 +69538,7 @@ func _mp_cleanup_departed_peer_state() -> void:
 	if not NetManager.is_online():
 		_mp_soda_drain_pending.clear()
 		_mp_soda_drain_flush_cool = 0.0
+	_park_idle_condiment_bottles()
 	_sync_shared_kitchen_loop_audio()
 
 
@@ -68544,9 +69827,24 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		var lane := int(c.lane) if "lane" in c else 0
 		var skin_i := int(c.skin_idx) if "skin_idx" in c else 0
 		var face_i := int(c.face_style) if "face_style" in c else 0
+		var custom_preset: Dictionary = c.get_custom_character_preset() if c.has_method("get_custom_character_preset") else {}
 		mp_spawn_customer.rpc_id(
-			peer_id, nid, order_packed, col.r, col.g, col.b, patience, lane, skin_i, face_i
+			peer_id, nid, order_packed, col.r, col.g, col.b, patience, lane, skin_i, face_i,
+			false, -1, bool(c.get("is_challenge_guest")), custom_preset
 		)
+	_mp_send_challenge_state(peer_id)
+	if _has_cut_collector():
+		mp_spawn_cut_collector.rpc_id(peer_id, _cut_collector_kind)
+		_mp_send_boss_pose(peer_id)
+	for bg_i in bg_people.size():
+		if bg_i >= bg_people_active.size() or not bool(bg_people_active[bg_i]):
+			continue
+		var bg_walker := bg_people[bg_i] as Node3D
+		if bg_walker == null or not is_instance_valid(bg_walker):
+			continue
+		var bg_preset: Dictionary = bg_walker.get_custom_character_preset() if bg_walker.has_method("get_custom_character_preset") else {}
+		mp_background_person_start.rpc_id(peer_id, bg_i, bg_preset, float(bg_people_dir[bg_i]), bool(bg_people_is_run[bg_i]), bool(bg_people_is_pair[bg_i]), float(bg_people_speed[bg_i]))
+	_mp_send_background_people_snapshot(peer_id)
 	## Grill + Build patties.
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -69018,7 +70316,8 @@ func _mp_send_held_cup_pose(force: bool = false) -> void:
 	## Stream held drink so partners see pour / carry (fill + flavor included).
 	if not mp_enabled or not NetManager.is_online():
 		return
-	if not cup_held or cup_root == null or not is_instance_valid(cup_root):
+	var active := cup_held or _cup_parked_filling
+	if not active or cup_root == null or not is_instance_valid(cup_root):
 		if force:
 			mp_cup_pose.rpc(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "", 0.0, 0.0, 0.0, false, false)
 		return
@@ -69044,7 +70343,8 @@ func _mp_send_held_icecream_pose(force: bool = false) -> void:
 	## Stream held soft-serve so partners see the cone, fill level, and dispensing.
 	if not mp_enabled or not NetManager.is_online():
 		return
-	if not icecream_cone_held or icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
+	var active := icecream_cone_held or _icecream_parked_filling
+	if not active or icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		if force:
 			mp_icecream_pose.rpc(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false)
 		return
@@ -69100,6 +70400,41 @@ func _mp_ensure_remote_condiment(peer_id: int, id: String) -> Node3D:
 	if id == "ketchup":
 		return _mp_ensure_remote_tool(_mp_remote_ketchup, peer_id, source, "RemoteKetchup")
 	return _mp_ensure_remote_tool(_mp_remote_mustard, peer_id, source, "RemoteMustard")
+
+
+func _mp_hide_remote_condiment_stream(peer_id: int) -> void:
+	if not _mp_remote_condiment_streams.has(peer_id):
+		return
+	var stream: MeshInstance3D = _mp_remote_condiment_streams[peer_id]
+	if stream != null and is_instance_valid(stream):
+		stream.visible = false
+	_mp_remote_condiment_streams.erase(peer_id)
+	if stream != null and is_instance_valid(stream):
+		stream.queue_free()
+
+
+func _mp_set_remote_condiment_pour(
+	peer_id: int, root: Node3D, id: String, pouring: bool, pos: Vector3
+) -> void:
+	if not pouring or root == null or not is_instance_valid(root):
+		_mp_hide_remote_condiment_stream(peer_id)
+		return
+	var stream: MeshInstance3D = _mp_remote_condiment_streams.get(peer_id, null)
+	if stream == null or not is_instance_valid(stream):
+		stream = MeshInstance3D.new()
+		stream.name = "RemoteCondimentStream_%d" % peer_id
+		stream.mesh = ArrayMesh.new()
+		stream.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		stream.sorting_offset = 15.0
+		if world != null:
+			world.add_child(stream)
+		_mp_remote_condiment_streams[peer_id] = stream
+	stream.material_override = _condiment_stream_material(id)
+	var target := Vector3(pos.x, GRILL_SURFACE_Y + condiment_surface_lift, pos.z)
+	if not _condiment_hold_on_grill(pos):
+		target = pos + Vector3(0.0, -0.12, 0.05)
+	var phase := float(Time.get_ticks_msec()) * 0.008
+	_update_condiment_stream(id, root, target, phase, stream)
 
 
 func _mp_ensure_remote_shaker(peer_id: int) -> Node3D:
@@ -69218,6 +70553,9 @@ func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
 		var mustard: Node3D = _mp_remote_mustard[peer_id]
 		if mustard != null and is_instance_valid(mustard):
 			mustard.visible = false
+	if except_kind != 11 and except_kind != 12:
+		_mp_hide_remote_condiment_stream(peer_id)
+		_park_idle_condiment_bottles()
 	if except_kind != 3 and _mp_remote_brush.has(peer_id):
 		var br: Node3D = _mp_remote_brush[peer_id]
 		if br != null and is_instance_valid(br):
@@ -69549,6 +70887,8 @@ func mp_tool_pose(
 			condiment.global_position = pos
 			condiment.global_rotation_degrees = rot
 			condiment.scale = Vector3.ONE
+			_mp_set_remote_condiment_pour(sid, condiment, condiment_id, emitting, pos)
+			_park_idle_condiment_bottles()
 		10:
 			var spatula := _mp_ensure_remote_spatula(sid)
 			if spatula == null:
@@ -69715,6 +71055,14 @@ func _mp_update_remote_cursor_pulses(delta: float) -> void:
 		var wrap: Control = _mp_remote_cursors[k]
 		if wrap == null or not is_instance_valid(wrap):
 			continue
+		if _mp_remote_cursor_targets.has(k):
+			var target: Vector2 = _mp_remote_cursor_targets[k]
+			var dist := wrap.position.distance_to(target)
+			if dist > 420.0:
+				wrap.position = target
+			else:
+				## Frame-rate independent interpolation removes 30 Hz network stepping.
+				wrap.position = wrap.position.lerp(target, 1.0 - exp(-20.0 * delta))
 		var icon := wrap.get_node_or_null("Icon") as TextureRect
 		if icon == null:
 			continue
@@ -69850,7 +71198,10 @@ func mp_cursor_pos(nx: float, ny: float, held: int = 0, tool: int = 0) -> void:
 	if vp.x <= 1.0 or vp.y <= 1.0:
 		return
 	## Hotspot matches local glove tip (~0, 3).
-	wrap.position = Vector2(clampf(nx, 0.0, 1.0) * vp.x, clampf(ny, 0.0, 1.0) * vp.y) - Vector2(0, 3)
+	var target := Vector2(clampf(nx, 0.0, 1.0) * vp.x, clampf(ny, 0.0, 1.0) * vp.y) - Vector2(0, 3)
+	if not _mp_remote_cursor_targets.has(sid):
+		wrap.position = target
+	_mp_remote_cursor_targets[sid] = target
 	var tag: Label = wrap.get_node_or_null("Tag") as Label
 	if tag:
 		tag.text = NetManager.name_for_peer(sid)
@@ -69891,7 +71242,10 @@ func mp_cursor_click(nx: float, ny: float) -> void:
 	var wrap := _mp_ensure_remote_cursor(sid)
 	wrap.visible = true
 	var vp := get_viewport().get_visible_rect().size
-	wrap.position = Vector2(nx * vp.x, ny * vp.y) - Vector2(0, 3)
+	var target := Vector2(clampf(nx, 0.0, 1.0) * vp.x, clampf(ny, 0.0, 1.0) * vp.y) - Vector2(0, 3)
+	if not _mp_remote_cursor_targets.has(sid):
+		wrap.position = target
+	_mp_remote_cursor_targets[sid] = target
 	wrap.set_meta("click_t", 0.18)
 
 
@@ -70261,7 +71615,8 @@ func mp_spawn_customer(
 	face_style: int = -1,
 	disguise_cat: bool = false,
 	jin_fact_idx: int = -1,
-	challenge_guest: bool = false
+	challenge_guest: bool = false,
+	custom_preset: Dictionary = {}
 ) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if mp_enabled and not NetManager.is_host() and sid != 1:
@@ -70270,7 +71625,8 @@ func mp_spawn_customer(
 		return
 	_mp_applying = true
 	_spawn_customer_local(
-		order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat, jin_fact_idx, challenge_guest
+		order, Color(cr, cg, cb), patience, lane, net_id, skin_idx, face_style, disguise_cat, jin_fact_idx, challenge_guest,
+		custom_preset, mp_enabled
 	)
 	_mp_applying = false
 
@@ -70278,11 +71634,51 @@ func mp_spawn_customer(
 @rpc("any_peer", "call_local", "reliable")
 func mp_spawn_cut_collector(kind: String) -> void:
 	var sid := multiplayer.get_remote_sender_id()
-	if mp_enabled and not NetManager.is_host() and sid != 1:
+	if sid != 0 and sid != 1:
 		return
 	_mp_applying = true
 	_spawn_cut_collector_local(kind)
 	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_boss_intro() -> void:
+	var sid := multiplayer.get_remote_sender_id()
+	if sid != 0 and sid != 1:
+		return
+	_mp_applying = true
+	_start_boss_pep_intro()
+	_mp_applying = false
+
+
+func _mp_send_boss_pose(peer_id: int = 0) -> void:
+	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
+		return
+	var active := _has_cut_collector()
+	var p := _cut_collector.global_position if active else Vector3.ZERO
+	var yaw := float(_cut_collector.rotation_degrees.y) if active else 0.0
+	var leaving := bool(_cut_collector.get("is_leaving")) if active else false
+	if peer_id > 0:
+		mp_boss_pose.rpc_id(peer_id, active, _cut_collector_kind, p.x, p.z, yaw, leaving)
+	else:
+		mp_boss_pose.rpc(active, _cut_collector_kind, p.x, p.z, yaw, leaving)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func mp_boss_pose(active: bool, kind: String, x: float, z: float, yaw: float, leaving: bool) -> void:
+	if NetManager.is_host() or not active:
+		return
+	if not _has_cut_collector():
+		_mp_applying = true
+		_spawn_cut_collector_local(kind)
+		_mp_applying = false
+	if not _has_cut_collector():
+		return
+	var target := Vector3(x, _cut_collector.global_position.y, z)
+	_cut_collector.global_position = _cut_collector.global_position.lerp(target, 0.72)
+	_cut_collector.rotation_degrees.y = rad_to_deg(lerp_angle(deg_to_rad(_cut_collector.rotation_degrees.y), deg_to_rad(yaw), 0.72))
+	if leaving and not bool(_cut_collector.get("is_leaving")) and _cut_collector.has_method("leave_happy"):
+		_cut_collector.leave_happy()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -70297,7 +71693,7 @@ func mp_disguise_cat_unmask(net_id: int) -> void:
 		mp_disguise_cat_stage.rpc(net_id, int(c.get_meta("disguise_click_stage", 0)))
 	_mp_applying = false
 	if NetManager.is_host() and leave_now:
-		mp_customer_leave.rpc(net_id, false)
+		mp_customer_leave.rpc(net_id, false, false)
 		_mp_broadcast_economy()
 		_mp_broadcast_customers()
 
@@ -70349,7 +71745,7 @@ func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) ->
 			c.disguise_bribe_leave()
 	_mp_applying = false
 	if NetManager.is_host():
-		mp_customer_leave.rpc(net_id, false)
+		mp_customer_leave.rpc(net_id, false, false)
 		_mp_broadcast_economy()
 		_mp_broadcast_customers()
 
@@ -70522,9 +71918,27 @@ func _mp_broadcast_grill_mess() -> void:
 		fry_yaws.append(root.global_rotation_degrees.y)
 		fry_ages.append(float(item.get("age", 0.0)))
 		fry_fired.append(bool(item.get("fired", false)))
+	var debris_ids: Array = []
+	var debris_xs: Array = []
+	var debris_zs: Array = []
+	var debris_masses: Array = []
+	var debris_slots: Array = []
+	for value in debris_piles:
+		if typeof(value) != TYPE_DICTIONARY:
+			continue
+		var pile: Dictionary = value
+		var root := pile.get("root") as Node3D
+		if root == null or not is_instance_valid(root) or bool(pile.get("swallowing", false)):
+			continue
+		debris_ids.append(int(pile.get("net_id", -1)))
+		debris_xs.append(root.position.x)
+		debris_zs.append(root.position.z)
+		debris_masses.append(float(pile.get("mass", 1.0)))
+		debris_slots.append(int(pile.get("slot", -1)))
 	mp_sync_grill_mess.rpc(
 		residue_amounts, residue_xs, residue_zs, residue_kinds,
-		fry_ids, fry_xs, fry_zs, fry_yaws, fry_ages, fry_fired
+		fry_ids, fry_xs, fry_zs, fry_yaws, fry_ages, fry_fired,
+		debris_ids, debris_xs, debris_zs, debris_masses, debris_slots
 	)
 
 
@@ -70539,7 +71953,12 @@ func mp_sync_grill_mess(
 	fry_zs: Array,
 	fry_yaws: Array,
 	fry_ages: Array,
-	fry_fired: Array
+	fry_fired: Array,
+	debris_ids: Array = [],
+	debris_xs: Array = [],
+	debris_zs: Array = [],
+	debris_masses: Array = [],
+	debris_slots: Array = []
 ) -> void:
 	if NetManager.is_host() or not playing:
 		return
@@ -70637,6 +72056,84 @@ func mp_sync_grill_mess(
 		grill_spilled_fries.remove_at(i)
 		if spilled_fry_held and spilled_fry_held_idx > i:
 			spilled_fry_held_idx -= 1
+	## Scraped piles are host-owned too. Reconcile by stable ID so a guest's
+	## random chip visuals or a missed drag packet cannot create ghost debris.
+	var seen_debris: Dictionary = {}
+	for j in debris_ids.size():
+		var net_id := int(debris_ids[j])
+		if net_id < 0:
+			continue
+		seen_debris[net_id] = true
+		var found_index := -1
+		for local_i in debris_piles.size():
+			if int((debris_piles[local_i] as Dictionary).get("net_id", -2)) == net_id:
+				found_index = local_i
+				break
+		if found_index < 0:
+			var before_count := debris_piles.size()
+			_add_scraped_debris_pile(
+				Vector3(
+					float(debris_xs[j]) if j < debris_xs.size() else GRILL_CENTER_X,
+					GRILL_SURFACE_Y,
+					float(debris_zs[j]) if j < debris_zs.size() else GRILL_SURFACE_Z
+				),
+				float(debris_masses[j]) if j < debris_masses.size() else 1.0,
+				int(debris_slots[j]) if j < debris_slots.size() else -1
+			)
+			if debris_piles.size() > before_count:
+				found_index = debris_piles.size() - 1
+			else:
+				## A nearby local prediction may have merged; claim the closest pile.
+				var best_d := INF
+				for local_i in debris_piles.size():
+					var local_root := (debris_piles[local_i] as Dictionary).get("root") as Node3D
+					if local_root == null or not is_instance_valid(local_root):
+						continue
+					var d := Vector2(
+						local_root.position.x - float(debris_xs[j]),
+						local_root.position.z - float(debris_zs[j])
+					).length()
+					if d < best_d:
+						best_d = d
+						found_index = local_i
+		if found_index < 0 or found_index >= debris_piles.size():
+			continue
+		var pile: Dictionary = debris_piles[found_index]
+		var root := pile.get("root") as Node3D
+		pile["net_id"] = net_id
+		pile["mass"] = clampf(float(debris_masses[j]) if j < debris_masses.size() else 1.0, 0.2, 2.2)
+		pile["slot"] = int(debris_slots[j]) if j < debris_slots.size() else -1
+		if root != null and is_instance_valid(root):
+			var target := Vector3(
+				float(debris_xs[j]) if j < debris_xs.size() else root.position.x,
+				_debris_pile_sit_y(),
+				float(debris_zs[j]) if j < debris_zs.size() else root.position.z
+			)
+			root.position = root.position.lerp(target, 0.72)
+			_refresh_debris_pile_visual(root, float(pile["mass"]))
+		debris_piles[found_index] = pile
+	for i in range(debris_piles.size() - 1, -1, -1):
+		var pile: Dictionary = debris_piles[i]
+		var net_id := int(pile.get("net_id", -1))
+		if net_id >= 0 and seen_debris.has(net_id):
+			continue
+		var root := pile.get("root") as Node3D
+		if root != null and is_instance_valid(root):
+			root.queue_free()
+		debris_piles.remove_at(i)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_nudge_debris(tool_x: float, tool_z: float, move_x: float, move_z: float, moved: float) -> void:
+	if not NetManager.is_host() or multiplayer.get_remote_sender_id() == 0:
+		return
+	var tool := _clamp_debris_pile_xz(Vector3(tool_x, GRILL_SURFACE_Y, tool_z))
+	var move := Vector2(move_x, move_z)
+	if move.length() > 0.25:
+		move = move.normalized() * 0.25
+	_mp_applying = true
+	_nudge_debris_piles(tool, move, clampf(moved, 0.0, 0.25))
 	_mp_applying = false
 
 
@@ -71148,7 +72645,7 @@ func mp_buy_supply(id: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_customer_leave(net_id: int, angry: bool) -> void:
+func mp_customer_leave(net_id: int, angry: bool, dance: bool = false) -> void:
 	_mp_applying = true
 	var c = _customer_by_net_id(net_id)
 	if c != null and is_instance_valid(c):
@@ -71157,7 +72654,7 @@ func mp_customer_leave(net_id: int, angry: bool) -> void:
 			if angry and c.has_method("leave_mad"):
 				c.leave_mad()
 			elif (not angry) and c.has_method("leave_happy"):
-				c.leave_happy()
+				c.leave_happy(dance)
 		_customer_leave_apply(c, angry)
 	elif angry:
 		combo = 0
@@ -71291,6 +72788,9 @@ func _mp_broadcast_customers() -> void:
 		serving.append(bool(c.get_meta("serve_in_progress", false)))
 		yaws.append(float(c.rotation_degrees.y))
 	mp_sync_customers.rpc(ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed, serving)
+	_mp_send_challenge_state()
+	_mp_send_background_people_snapshot()
+	_mp_send_boss_pose()
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -71695,7 +73195,7 @@ func mp_oil_slick(x: float, z: float, radius: float) -> void:
 	_mp_applying = false
 
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
+@rpc("any_peer", "call_remote", "reliable")
 func mp_condiment_spline_batch(
 	segment_points: PackedVector3Array, radius: float, flavor: String
 ) -> void:
@@ -71721,7 +73221,7 @@ func mp_condiment_spline_batch(
 	)
 	_mp_applying = false
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
+@rpc("any_peer", "call_remote", "reliable")
 func mp_condiment_spline(
 	from_x: float, from_z: float, to_x: float, to_z: float,
 	radius: float, flavor: String
@@ -71747,6 +73247,27 @@ func mp_condiment_spline(
 		"remote:%d:%s" % [sender, flavor]
 	)
 	_mp_applying = false
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_condiment_cut(x: float, z: float, radius: float, flavor: String) -> void:
+	if not _is_condiment(flavor):
+		return
+	_mp_applying = true
+	_mp_apply_condiment_cut(x, z, radius, flavor)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_customer_sauce(net_id: int, flavor: String, zone: String) -> void:
+	if not _is_condiment(flavor):
+		return
+	var c = _customer_by_net_id(net_id)
+	if c == null or not is_instance_valid(c):
+		return
+	_mp_applying = true
+	_splat_condiment_on_customer(c, flavor, zone)
+	_mp_applying = false
+
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func mp_soda_slick(x: float, z: float, radius: float, flavor: String) -> void:
@@ -72391,7 +73912,7 @@ func mp_cup_residue_place(slot: int, x: float, z: float) -> void:
 	_mp_applying = false
 
 
-@rpc("any_peer", "call_remote", "unreliable_ordered")
+@rpc("any_peer", "call_remote", "reliable")
 func mp_residue_amt(slot: int, amt: float, x: float = 0.0, z: float = 0.0) -> void:
 	var target := slot
 	var near := _find_residue_slot_near(x, z, 0.45)

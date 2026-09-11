@@ -1,4 +1,4 @@
-## The five-stop food-truck route. Location, not day number, owns difficulty.
+## The six-stop food-truck route. Location, not day number, owns difficulty.
 extends RefCounted
 
 const TIER_EASY := "easy"
@@ -76,6 +76,15 @@ const LOCATIONS: Array[Dictionary] = [
 		"first_delay": 5.0, "spawn_start": 7.0, "spawn_end": 3.2, "spawn_jitter": 1.2,
 		"customer_cap": 4, "patience_base": 43.0, "patience_jitter": 3.0,
 		"order_base": 0.70, "order_ramp": 0.30,
+	},
+	{
+		"id": "mountain_view", "name": "Mountain View",
+		"blurb": "A painted hillside street with a hotel, bookshop, and cafe. Tourists linger, then order all at once.",
+		"tier": TIER_MEDIUM, "rank": 6, "map": Vector2(0.18, 0.22),
+		"bg": "res://assets/backgrounds/mountain_view.jpg",
+		"first_delay": 10.0, "spawn_start": 13.0, "spawn_end": 7.0, "spawn_jitter": 2.4,
+		"customer_cap": 3, "patience_base": 62.0, "patience_jitter": 5.0,
+		"order_base": 0.38, "order_ramp": 0.30,
 	},
 ]
 
