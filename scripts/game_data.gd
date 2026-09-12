@@ -84,16 +84,15 @@ const CUSTOMER_COLORS := [
 ]
 
 ## Hidden Economy GUI writes these. order_value / tips read them live.
-static var PRICE_BURGER_BASE: int = 4
+static var PRICE_BURGER_BASE: int = 6
+static var PRICE_DOUBLE_BURGER_BASE: int = 10
 static var PRICE_PER_ITEM: int = 1
-static var PRICE_EVERYTHING_BONUS: int = 3
+static var PRICE_EVERYTHING_BONUS: int = 0
 static var PRICE_SODA: int = 3
-static var PRICE_ICECREAM: int = 4
-static var PRICE_FRIES: int = 3
-static var TIP_MIN: int = 3
-static var TIP_MAX: int = 10
-static var TIP_OUTLIER_AMOUNT: int = 25
-static var TIP_OUTLIER_CHANCE: float = 0.04
+static var PRICE_ICECREAM: int = 5
+static var PRICE_FRIES: int = 4
+static var TIP_MIN_PERCENT: float = 0.10
+static var TIP_MAX_PERCENT: float = 0.20
 ## Challenge toppings besides optional cheese — keep recipes simple.
 const CHALLENGE_TOPPINGS := ["tomato", "lettuce", "onion", "pickle", "bacon", "ketchup", "mustard"]
 
@@ -315,7 +314,13 @@ static func order_value(order: Array) -> int:
 	var sodas := order_soda_ids(order)
 	var base := 0
 	if not burger.is_empty():
-		base += PRICE_BURGER_BASE + burger.size() * PRICE_PER_ITEM
+		var patty_count := burger.count("patty")
+		base += PRICE_DOUBLE_BURGER_BASE if patty_count >= 2 else PRICE_BURGER_BASE
+		## Buns and patties are included in the burger base. Only added toppings,
+		## cheese, and sauces receive the per-ingredient charge.
+		for item in burger:
+			if str(item) != "bun_bottom" and str(item) != "bun_top" and str(item) != "patty":
+				base += PRICE_PER_ITEM
 		if is_everything_order(order):
 			base += PRICE_EVERYTHING_BONUS
 	base += sodas.size() * PRICE_SODA

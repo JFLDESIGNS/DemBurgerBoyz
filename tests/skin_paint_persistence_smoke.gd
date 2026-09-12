@@ -12,7 +12,7 @@ func _run_smoke() -> void:
 	root.add_child(character)
 	await process_frame
 
-	assert(character.top_style == ModularCharacterBase.TopStyle.T_SHIRT)
+	assert(character.top_style == ModularCharacterBase.TopStyle.SEAFOAM_RINGER)
 	assert(character.bottom_style == ModularCharacterBase.BottomStyle.SHORTS)
 	assert(not character.has_skin_paint())
 	assert(character.get_skin_paint_resolution() == 1024)

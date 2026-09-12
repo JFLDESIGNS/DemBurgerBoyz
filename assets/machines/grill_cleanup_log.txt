@@ -1,0 +1,62 @@
+Traceback (most recent call last):
+  File "C:\Program Files\Blender Foundation\Blender 5.1\5.1\scripts\modules\addon_utils.py", line 432, in enable
+    mod = importlib.import_module(module_name)
+  File "C:\Program Files\Blender Foundation\Blender 5.1\5.1\python\Lib\importlib\__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 1027, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\__init__.py", line 48, in <module>
+    from .registration import register_all, unregister_all
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\registration.py", line 11, in <module>
+    from . operators.booleans.dice.shader import remove_dice_draw_shader
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\operators\booleans\dice\shader.py", line 12, in <module>
+    class SD:
+    ...<54 lines>...
+            SD.pause_drawing = False
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\operators\booleans\dice\shader.py", line 24, in SD
+    shader = gpu.shader.from_builtin(built_in_shader)
+SystemError: GPU functions for drawing are not available in background mode
+00:03.281  blend            | Read blend: "C:\Users\joe\Desktop\burgergame\assets\machines\stylized_grill.blend"
+C:\Users\joe\Desktop\burgergame\assets\machines\prepare_grill_game_asset.py:68: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  if m and m.use_nodes:
+BlenderMCP: cannot start server in background mode (blender -b) - commands would never execute
+BlenderMCP: run Blender with a GUI, or use a virtual display: xvfb-run -a blender
+BlenderMCP addon registered
+Info: Saved as "stylized_grill.blend"
+REMOVED_MICRO_OBJECTS 66
+SOURCE_OBJECTS 49
+C:\Users\joe\Desktop\burgergame\assets\machines\export_stylized_grill.py:8: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  if material.name.startswith('Seasoned steel') and material.use_nodes:
+INFO Draco mesh compression is available, use library at C:\Program Files\Blender Foundation\Blender 5.1\5.1\scripts\addons_core\io_scene_gltf2\extern_draco.dll
+20:09:23 | INFO: Starting glTF 2.0 export
+20:09:23 | INFO: Extracting primitive: KnobBody_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: KnobPointer_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: PowerIndicator_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: LowerShadowSeam_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: EnamelBody_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: LeftRubberFoot-0.34_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: SteelPerimeter_Mesh.001
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Extracting primitive: OffLabel
+20:09:23 | INFO: Primitives created: 1
+20:09:23 | INFO: Finished glTF 2.0 export in 0.10727667808532715 s
+
+Info: Deleted 108 data-block(s)
+Info: Saved as "stylized_grill.blend"
+EXPORT_STATS {'triangles': 10264, 'meshes': 8, 'bytes': 494196, 'animations': ['Power_OFF_to_ON']}
+BlenderMCP server stopped
+BlenderMCP addon unregistered
+Blender 5.1.2 (hash ec6e62d40fa9 built 2026-05-19 01:37:34)
+
+Blender quit

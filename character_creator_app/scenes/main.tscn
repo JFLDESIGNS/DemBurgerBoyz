@@ -431,7 +431,7 @@ text = "Top color"
 theme_override_constants/separation = 3
 
 [node name="GraphicLabel" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
-text = "T-SHIRT GRAPHIC"
+text = "SHIRT GRAPHIC / ALL TOPS"
 
 [node name="GraphicSelect" type="OptionButton" parent="UI/ModulesPanel/Margin/Controls"]
 custom_minimum_size = Vector2(0, 36)
@@ -475,7 +475,7 @@ theme_override_constants/separation = 3
 [node name="Source" type="Label" parent="UI/ModulesPanel/Margin/Controls"]
 size_flags_vertical = 3
 theme_override_colors/font_color = Color(0.58, 0.64, 0.74, 1)
-text = "Hair + hats + glasses: CC0 sourced packs\nShirt graphics: Game-Icons.net CC-BY\nClothes + shoes: exact-weight procedural modules"
+text = "Hair + hats + glasses: CC0 sourced packs\nShirt graphics: Game-Icons.net CC-BY\n12 fitted tops + 15 fitted bottoms and shoes"
 vertical_alignment = 2
 autowrap_mode = 2
 

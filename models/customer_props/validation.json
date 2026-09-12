@@ -1,0 +1,217 @@
+{
+  "count": 30,
+  "total_triangles": 41390,
+  "size_multiplier": 2,
+  "assets": [
+    {
+      "file": "01_Open_Umbrella.glb",
+      "triangles": 8460,
+      "materials": 5,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "02_Folded_Umbrella.glb",
+      "triangles": 472,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "03_Roller_Suitcase.glb",
+      "triangles": 1408,
+      "materials": 5,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "04_Briefcase.glb",
+      "triangles": 852,
+      "materials": 3,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "05_Handbag.glb",
+      "triangles": 844,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "06_Shopping_Bag.glb",
+      "triangles": 1046,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "07_Backpack.glb",
+      "triangles": 920,
+      "materials": 5,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "08_Duffel_Bag.glb",
+      "triangles": 1088,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "09_Gift_Box.glb",
+      "triangles": 880,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "10_Parcel.glb",
+      "triangles": 480,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "11_Smartphone.glb",
+      "triangles": 876,
+      "materials": 3,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "12_Tablet.glb",
+      "triangles": 588,
+      "materials": 6,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "13_Headphones.glb",
+      "triangles": 1056,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "14_Camera.glb",
+      "triangles": 764,
+      "materials": 6,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "15_Book.glb",
+      "triangles": 840,
+      "materials": 6,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "16_Notebook_Pen.glb",
+      "triangles": 1612,
+      "materials": 6,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "17_Newspaper.glb",
+      "triangles": 752,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "18_Wallet.glb",
+      "triangles": 588,
+      "materials": 5,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "19_Keys.glb",
+      "triangles": 1156,
+      "materials": 3,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "20_Cell_Phone.glb",
+      "triangles": 2228,
+      "materials": 3,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "21_Water_Bottle.glb",
+      "triangles": 492,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "22_Thermos.glb",
+      "triangles": 492,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "23_Flower_Bouquet.glb",
+      "triangles": 5616,
+      "materials": 7,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "24_Basketball.glb",
+      "triangles": 2368,
+      "materials": 2,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "25_Skateboard.glb",
+      "triangles": 2624,
+      "materials": 6,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "26_Walking_Cane.glb",
+      "triangles": 508,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "27_Takeaway_Coffee.glb",
+      "triangles": 684,
+      "materials": 5,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "28_Soda_Cup.glb",
+      "triangles": 552,
+      "materials": 3,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "29_Takeaway_Bag.glb",
+      "triangles": 496,
+      "materials": 5,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    },
+    {
+      "file": "30_Burger_Box.glb",
+      "triangles": 648,
+      "materials": 4,
+      "grip_point": true,
+      "size_multiplier": 2.0
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+Traceback (most recent call last):
+  File "C:\Program Files\Blender Foundation\Blender 5.1\5.1\scripts\modules\addon_utils.py", line 432, in enable
+    mod = importlib.import_module(module_name)
+  File "C:\Program Files\Blender Foundation\Blender 5.1\5.1\python\Lib\importlib\__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 1027, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\__init__.py", line 48, in <module>
+    from .registration import register_all, unregister_all
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\registration.py", line 11, in <module>
+    from . operators.booleans.dice.shader import remove_dice_draw_shader
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\operators\booleans\dice\shader.py", line 12, in <module>
+    class SD:
+    ...<54 lines>...
+            SD.pause_drawing = False
+  File "C:\Users\joe\AppData\Roaming\Blender Foundation\Blender\5.1\extensions\user_default\hardops\operators\booleans\dice\shader.py", line 24, in SD
+    shader = gpu.shader.from_builtin(built_in_shader)
+SystemError: GPU functions for drawing are not available in background mode
+00:03.500  blend            | Read blend: "C:\Users\joe\Desktop\burgergame\assets\machines\stylized_grill.blend"
+BlenderMCP: cannot start server in background mode (blender -b) - commands would never execute
+BlenderMCP: run Blender with a GUI, or use a virtual display: xvfb-run -a blender
+BlenderMCP addon registered
+SOURCE_BOUNDS [[-0.923, -0.505, -0.12913], [0.923, 0.60034, 0.10079]]
+20:10:52 | INFO: Data are loaded, start creating Blender stuff
+20:10:52 | INFO: Blender create Mesh node KnobBody_Mesh.001
+20:10:52 | INFO: Blender create Mesh node KnobPointer_Mesh.001
+20:10:52 | INFO: Blender create Mesh node PowerIndicator_Mesh.001
+20:10:52 | INFO: Blender create Mesh node LowerShadowSeam_Mesh.001
+20:10:52 | INFO: Blender create Mesh node EnamelBody_Mesh.001
+20:10:52 | INFO: Blender create Mesh node LeftRubberFoot-0.34_Mesh.001
+20:10:52 | INFO: Blender create Mesh node SteelPerimeter_Mesh.001
+20:10:52 | INFO: Blender create Mesh node OffLabel
+20:10:52 | INFO: glTF import finished in 0.07s
+00:39.578  render           | Saved: 'C:\Users\joe\Desktop\burgergame\assets\machines\stylized_grill_export_preview.png'
+EXPORTED_BOUNDS [[-0.923, -0.505, -0.12558], [0.923, 0.61277, 0.10079]]
+BlenderMCP server stopped
+BlenderMCP addon unregistered
+Blender 5.1.2 (hash ec6e62d40fa9 built 2026-05-19 01:37:34)
+
+Blender quit

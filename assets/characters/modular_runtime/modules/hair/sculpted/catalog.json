@@ -1,0 +1,32 @@
+[
+  {
+    "style": "CINNAMON / twin buns",
+    "file": "cinnamon_twin_buns.glb",
+    "triangles": 14000
+  },
+  {
+    "style": "SAFFRON / swept crop",
+    "file": "saffron_swept_crop.glb",
+    "triangles": 14000
+  },
+  {
+    "style": "MERLOT / angled bob",
+    "file": "merlot_angled_bob.glb",
+    "triangles": 13998
+  },
+  {
+    "style": "MIDNIGHT / long waves",
+    "file": "midnight_long_waves.glb",
+    "triangles": 13998
+  },
+  {
+    "style": "COPPER / side braid",
+    "file": "copper_side_braid.glb",
+    "triangles": 14000
+  },
+  {
+    "style": "PEARL / high ponytail",
+    "file": "pearl_high_ponytail.glb",
+    "triangles": 13998
+  }
+]

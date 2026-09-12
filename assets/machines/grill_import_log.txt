@@ -1,0 +1,124 @@
+Godot Engine v4.6.2.stable.official.71f334935 - https://godotengine.org
+
+[   0% ] [90m[1mfirst_scan_filesystem[22m | Started Project initialization (5 steps)[39m[0m
+[   0% ] [90m[1mfirst_scan_filesystem[22m | Scanning file structure...[39m[0m
+WARNING: Detected another project.godot at res://character_creator_app. The folder will be ignored.
+   at: _should_skip_directory (editor/file_system/editor_file_system.cpp:3458)
+[  16% ] [90m[1mfirst_scan_filesystem[22m | Loading global class names...[39m[0m
+[  33% ] [90m[1mfirst_scan_filesystem[22m | Verifying GDExtensions...[39m[0m
+[  50% ] [90m[1mfirst_scan_filesystem[22m | Creating autoload scripts...[39m[0m
+[  66% ] [90m[1mfirst_scan_filesystem[22m | Initializing plugins...[39m[0m
+[  83% ] [90m[1mfirst_scan_filesystem[22m | Starting file scan...[39m[0m
+[92m[ DONE ][39m [1mfirst_scan_filesystem[22m
+[0m
+[   0% ] [90m[1mupdate_scripts_classes[22m | Started Registering global classes... (3 steps)[39m[0m
+[   0% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  25% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  50% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[92m[ DONE ][39m [1mupdate_scripts_classes[22m
+[0m
+[   0% ] [90m[1m_update_scan_actions[22m | Started Scanning actions... (7 steps)[39m[0m
+[   0% ] [90m[1m_update_scan_actions[22m | _sheet_source.png[39m[0m
+[  12% ] [90m[1m_update_scan_actions[22m | stylized_grill.blend[39m[0m
+[  25% ] [90m[1m_update_scan_actions[22m | stylized_grill.glb[39m[0m
+[  37% ] [90m[1m_update_scan_actions[22m | stylized_grill_export_preview.png[39m[0m
+[  50% ] [90m[1m_update_scan_actions[22m | stylized_grill_preview.png[39m[0m
+[  62% ] [90m[1m_update_scan_actions[22m | burger_pals_parking_lot.blend[39m[0m
+[  75% ] [90m[1m_update_scan_actions[22m | parking_lot_preview.png[39m[0m
+[92m[ DONE ][39m [1m_update_scan_actions[22m
+[0m
+[   0% ] [90m[1mreimport[22m | Started (Re)Importing Assets (6 steps)[39m[0m
+[   0% ] [90m[1mreimport[22m | Preparing files to reimport...[39m[0m
+[  14% ] [90m[1mreimport[22m | Preparing files to reimport...[39m[0m
+[  28% ] [90m[1mreimport[22m | Preparing files to reimport...[39m[0m
+[  42% ] [90m[1mreimport[22m | Preparing files to reimport...[39m[0m
+[  57% ] [90m[1mreimport[22m | Preparing files to reimport...[39m[0m
+[  71% ] [90m[1mreimport[22m | Preparing files to reimport...[39m[0m
+[   0% ] [90m[1mreimport[22m | Executing pre-reimport operations...[39m[0m
+[   0% ] [90m[1mpreload_reimporting_scene[22m | Started Preparing scenes for reload (1 steps)[39m[0m
+[   0% ] [90m[1mpreload_reimporting_scene[22m | Analyzing scene [empty][39m[0m
+[  50% ] [90m[1mpreload_reimporting_scene[22m | Preparation done.[39m[0m
+[92m[ DONE ][39m [1mpreload_reimporting_scene[22m
+[0m
+[   0% ] [90m[1mreimport[22m | stylized_grill_export_preview.png[39m[0m
+[  14% ] [90m[1mreimport[22m | stylized_grill_preview.png[39m[0m
+[  28% ] [90m[1mreimport[22m | parking_lot_preview.png[39m[0m
+[  42% ] [90m[1mreimport[22m | stylized_grill.blend[39m[0m
+[   0% ] [90m[1mimport[22m | Started Import Scene (104 steps)[39m[0m
+[   0% ] [90m[1mimport[22m | Importing Scene...[39m[0m
+[   1% ] [90m[1mimport[22m | Running Custom Script...[39m[0m
+[  99% ] [90m[1mimport[22m | Saving...[39m[0m
+[92m[ DONE ][39m [1mimport[22m
+[0m
+[  57% ] [90m[1mreimport[22m | stylized_grill.glb[39m[0m
+[   0% ] [90m[1mimport[22m | Started Import Scene (104 steps)[39m[0m
+[   0% ] [90m[1mimport[22m | Importing Scene...[39m[0m
+[   1% ] [90m[1mimport[22m | Running Custom Script...[39m[0m
+[  99% ] [90m[1mimport[22m | Saving...[39m[0m
+[92m[ DONE ][39m [1mimport[22m
+[0m
+[  71% ] [90m[1mreimport[22m | burger_pals_parking_lot.blend[39m[0m
+[   0% ] [90m[1mimport[22m | Started Import Scene (104 steps)[39m[0m
+[   0% ] [90m[1mimport[22m | Importing Scene...[39m[0m
+ERROR: Can't find file 'res://assets/parking_lot/textures/Cream_Paint_Red_Band.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Cream_Paint_Red_Band.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '0' with the name 'Cream_Paint_Red_Band' resolved to res://assets/parking_lot/textures/Cream_Paint_Red_Band.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+ERROR: Can't find file 'res://assets/parking_lot/textures/Teal_Paint_Red_Band.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Teal_Paint_Red_Band.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '1' with the name 'Teal_Paint_Red_Band' resolved to res://assets/parking_lot/textures/Teal_Paint_Red_Band.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+ERROR: Can't find file 'res://assets/parking_lot/textures/Rooftop_Sign_Lettering.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Rooftop_Sign_Lettering.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '2' with the name 'Rooftop_Sign_Lettering' resolved to res://assets/parking_lot/textures/Rooftop_Sign_Lettering.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+ERROR: Can't find file 'res://assets/parking_lot/textures/Burger_Pals_Logo.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Burger_Pals_Logo.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '3' with the name 'Burger_Pals_Logo' resolved to res://assets/parking_lot/textures/Burger_Pals_Logo.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+ERROR: Can't find file 'res://assets/parking_lot/textures/Serving_Side_Stars.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Serving_Side_Stars.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '4' with the name 'Serving_Side_Stars' resolved to res://assets/parking_lot/textures/Serving_Side_Stars.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+ERROR: Can't find file 'res://assets/parking_lot/textures/Kitchen_Menu_Lettering.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Kitchen_Menu_Lettering.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '5' with the name 'Kitchen_Menu_Lettering' resolved to res://assets/parking_lot/textures/Kitchen_Menu_Lettering.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+ERROR: Can't find file 'res://assets/parking_lot/textures/Front_License_Lettering.png' during file reimport.
+   at: _reimport_file (editor/file_system/editor_file_system.cpp:2783)
+ERROR: Failed loading resource: res://assets/parking_lot/textures/Front_License_Lettering.png.
+   at: _load (core/io/resource_loader.cpp:343)
+WARNING: glTF: Image index '6' with the name 'Front_License_Lettering' resolved to res://assets/parking_lot/textures/Front_License_Lettering.png couldn't be imported. It will be loaded directly instead, uncompressed.
+   at: _parse_image_save_image (modules/gltf/gltf_document.cpp:2265)
+[   1% ] [90m[1mimport[22m | Running Custom Script...[39m[0m
+[  99% ] [90m[1mimport[22m | Saving...[39m[0m
+[92m[ DONE ][39m [1mimport[22m
+[0m
+[  85% ] [90m[1mreimport[22m | Finalizing Asset Import...[39m[0m
+[92m[ DONE ][39m [1mreimport[22m
+[0m
+[   0% ] [90m[1mreimport[22m | Started (Re)Importing Assets (6 steps)[39m[0m
+[   0% ] [90m[1mreimport[22m | Executing post-reimport operations...[39m[0m
+[92m[ DONE ][39m [1mreimport[22m
+[0m
+[   0% ] [90m[1mloading_editor_layout[22m | Started Loading editor (5 steps)[39m[0m
+[   0% ] [90m[1mloading_editor_layout[22m | Loading editor layout...[39m[0m
+[  16% ] [90m[1mloading_editor_layout[22m | Loading docks...[39m[0m
+[  33% ] [90m[1mloading_editor_layout[22m | Reopening scenes...[39m[0m
+[  50% ] [90m[1mloading_editor_layout[22m | Loading central editor layout...[39m[0m
+[  66% ] [90m[1mloading_editor_layout[22m | Loading plugin window layout...[39m[0m
+[  83% ] [90m[1mloading_editor_layout[22m | Editor layout ready.[39m[0m
+[92m[ DONE ][39m [1mloading_editor_layout[22m
+[0m

@@ -51,3 +51,9 @@ The Tops, Bottoms, and Shoes menus generate exact-weight modules from the Kenney
 - Ten CC0 iPoly3D glasses/sunglasses, four makeup styles, and four jewelry styles have dedicated sections with color, scale, and 3-axis placement controls.
 - Hats have pitch/yaw/roll controls; sourced low-poly hats and glasses rebuild smooth normals where topology permits.
 - Cheek and T-shirt graphic depth ranges are widened so both can be pulled flush to the face or garment.
+
+## Fitted wardrobe (September 2026)
+
+The old generated tops are replaced by 12 Blender-authored garments: six long sleeves, four short sleeves, an athletic tank, and a cropped halter. Their 542–1,602 triangles retain smooth normals, UVs and customer skin weights. Bottoms and shoes retain their existing menus.
+
+All ten graphics work on every top. Prints follow the fabric during poses and are clipped at the garment edges. Use graphic color, scale, left/right and up/down controls; floating-decal depth is no longer needed. Top color tints the authored palette, with white preserving its original colors. Older saved top selections migrate to the new catalog, while the selected graphic is retained.

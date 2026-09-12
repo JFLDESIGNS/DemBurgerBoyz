@@ -5,8 +5,13 @@ class_name FoodSprites
 
 const INGREDIENT_DIR := "res://assets/ingredients/"
 
+static var use_prepared_art := true
+static var _variant_keys: Array[String] = []
+const MAX_VARIANT_CACHE := 96
 static var _cache: Dictionary = {}
 static var _content_aspect_cache: Dictionary = {}
+static var _composite_image_cache: Dictionary = {}
+static var _composite_crop_rect_cache: Dictionary = {}
 
 
 static func texture_content_aspect(tex: Texture2D) -> float:
@@ -150,7 +155,7 @@ static func burger_cheese_tex(cook_color: Color = Color(0.45, 0.24, 0.14), char_
 		tex = ImageTexture.create_from_image(img)
 	else:
 		tex = get_tex("cheese")
-	_cache[key] = tex
+	_store_variant(key, tex)
 	return tex
 
 
@@ -189,14 +194,13 @@ static func _get_burger_cheese_sheet_image() -> Image:
 	return null
 
 
-static func _crop_to_opaque(img: Image, alpha_cut: float = 0.08) -> Image:
-	## Trim transparent / knocked-out padding so TextureRect aspect matches the food.
+static func _opaque_crop_rect(img: Image, alpha_cut: float = 0.08) -> Rect2i:
 	if img == null:
-		return img
+		return Rect2i()
 	var w := img.get_width()
 	var h := img.get_height()
 	if w < 2 or h < 2:
-		return img
+		return Rect2i(0, 0, w, h)
 	var min_x := w
 	var max_x := -1
 	var min_y := h
@@ -209,18 +213,24 @@ static func _crop_to_opaque(img: Image, alpha_cut: float = 0.08) -> Image:
 				min_y = mini(min_y, y)
 				max_y = maxi(max_y, y)
 	if max_x < min_x or max_y < min_y:
-		return img
-	## Tiny pad so melt edges aren't clipped.
+		return Rect2i(0, 0, w, h)
 	min_x = maxi(0, min_x - 2)
 	min_y = maxi(0, min_y - 2)
 	max_x = mini(w - 1, max_x + 2)
 	max_y = mini(h - 1, max_y + 2)
-	var cw := max_x - min_x + 1
-	var ch := max_y - min_y + 1
-	if cw >= w - 1 and ch >= h - 1:
-		return img
-	return img.get_region(Rect2i(min_x, min_y, cw, ch))
+	return Rect2i(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
 
+
+static func _crop_to_opaque(img: Image, alpha_cut: float = 0.08) -> Image:
+	## Trim transparent / knocked-out padding so TextureRect aspect matches the food.
+	if img == null:
+		return img
+	var rect := _opaque_crop_rect(img, alpha_cut)
+	if rect.size.x <= 0 or rect.size.y <= 0:
+		return img
+	if rect.position == Vector2i.ZERO and rect.size == img.get_size():
+		return img
+	return img.get_region(rect)
 
 static func prep_ingredients_tex() -> Texture2D:
 	## Wire baskets + produce beside the Build board (left of grill).
@@ -253,6 +263,14 @@ static func _try_load_ingredient(id: String) -> Texture2D:
 		_:
 			return null
 	var path := INGREDIENT_DIR + id + ".png"
+	var prepared_path := INGREDIENT_DIR + "prepared/" + id + ".res"
+	var prepared_current := not FileAccess.file_exists(path) or FileAccess.get_modified_time(path) <= FileAccess.get_modified_time(prepared_path)
+	if use_prepared_art and prepared_current and ResourceLoader.exists(prepared_path):
+		var prepared := load(prepared_path) as Texture2D
+		if prepared != null:
+			_content_aspect_cache[prepared.get_instance_id()] = float(prepared.get_meta("content_aspect", 1.0))
+			_composite_crop_rect_cache[id] = prepared.get_meta("composite_rect", Rect2i(Vector2i.ZERO, prepared.get_size()))
+			return prepared
 	## Export-safe: imported Texture2D first (Image.load(res://) fails in shipped builds).
 	if ResourceLoader.exists(path):
 		var res = load(path)
@@ -313,18 +331,93 @@ static func bin_fill_tex(id: String) -> Texture2D:
 	return null
 
 
-static func prep_layer_image_for_composite(src: Image) -> Image:
-	## Trim an already-prepared layer for review burger snapshots. Patty textures
-	## are charred after their source backdrop is removed, so knocking out dark
-	## pixels again here would erase the very-burnt meat from the review photo.
+static func prep_layer_image_for_composite(src: Image, stable_cache_key: Variant = null, crop_family_key: Variant = null) -> Image:
+	## Review photos used to rescan every full-resolution ingredient on every
+	## serve. Cache the cropped CPU image; callers receive a duplicate because
+	## they resize it for their individual thumbnail.
 	if src == null:
 		return null
+	var cache_key: Variant = stable_cache_key if stable_cache_key != null else src.get_instance_id()
+	if _composite_image_cache.has(cache_key):
+		var cached := _composite_image_cache[cache_key] as Image
+		return cached.duplicate() if cached != null else null
 	var img := src.duplicate()
 	if img.is_compressed():
 		img.decompress()
 	img.convert(Image.FORMAT_RGBA8)
-	img = _crop_to_opaque(img)
-	return img
+	if crop_family_key != null and _composite_crop_rect_cache.has(crop_family_key):
+		var cached_rect := _composite_crop_rect_cache[crop_family_key] as Rect2i
+		if cached_rect.position != Vector2i.ZERO or cached_rect.size != img.get_size():
+			img = img.get_region(cached_rect)
+	else:
+		var crop_rect := _opaque_crop_rect(img)
+		if crop_family_key != null:
+			_composite_crop_rect_cache[crop_family_key] = crop_rect
+		if crop_rect.position != Vector2i.ZERO or crop_rect.size != img.get_size():
+			img = img.get_region(crop_rect)
+	if img != null:
+		_composite_image_cache[cache_key] = img
+		return img.duplicate()
+	return null
+
+static func prewarm_composite_async(tree: SceneTree, tex: Texture2D, family: String) -> void:
+	if tex == null or _composite_image_cache.has(tex.get_instance_id()):
+		return
+	var src := tex.get_image()
+	if src == null:
+		return
+	var cached_rect: Rect2i = _composite_crop_rect_cache.get(family, Rect2i())
+	var result: Array = [null, Rect2i()]
+	# Only privately owned CPU Images cross this worker boundary. Texture upload
+	# and shared cache publication remain on the main thread.
+	var task := WorkerThreadPool.add_task(func():
+		var img := src.duplicate()
+		if img.is_compressed(): img.decompress()
+		img.convert(Image.FORMAT_RGBA8)
+		var rect := cached_rect if cached_rect.has_area() else _opaque_crop_rect(img)
+		result[0] = img.get_region(rect) if rect.size != img.get_size() or rect.position != Vector2i.ZERO else img
+		result[1] = rect
+	)
+	while not WorkerThreadPool.is_task_completed(task):
+		await tree.process_frame
+	WorkerThreadPool.wait_for_task_completion(task)
+	_composite_image_cache[tex.get_instance_id()] = result[0]
+	_composite_crop_rect_cache[family] = result[1]
+
+
+static func prewarm_tinted_sheet_async(tree: SceneTree, cheese: bool, color: Color) -> void:
+	var key := ("burger_cheese_%s_c0.00" if cheese else "patty_art_%s_c0.00") % color.to_html(false)
+	if _cache.has(key):
+		return
+	var base := _burger_cheese_sheet_img if cheese else _patty_sheet_img
+	var needs_cleanup := base == null
+	if base == null:
+		var path := INGREDIENT_DIR + ("burger_cheese.png" if cheese else "patty.png")
+		if cheese and not ResourceLoader.exists(path): path = "res://IMAGES/BURGERCHEEESE.png"
+		if not ResourceLoader.exists(path): return
+		var source := load(path) as Texture2D
+		if source == null: return
+		base = source.get_image()
+	if base == null: return
+	var result: Array = [null, null]
+	var task := WorkerThreadPool.add_task(func():
+		var clean := base.duplicate()
+		if clean.is_compressed(): clean.decompress()
+		clean.convert(Image.FORMAT_RGBA8)
+		if needs_cleanup:
+			_knockout_dark_backdrop(clean)
+			if cheese: clean = _crop_to_opaque(clean)
+		var tinted := clean.duplicate()
+		_tint_patty_sheet(tinted, color, 0.0)
+		result[0] = clean
+		result[1] = tinted
+	)
+	while not WorkerThreadPool.is_task_completed(task):
+		await tree.process_frame
+	WorkerThreadPool.wait_for_task_completion(task)
+	if cheese: _burger_cheese_sheet_img = result[0]
+	else: _patty_sheet_img = result[0]
+	if not _cache.has(key): _store_variant(key, ImageTexture.create_from_image(result[1]))
 
 
 static func _knockout_dark_backdrop(img: Image) -> void:
@@ -358,7 +451,7 @@ static func patty_tex(color: Color, char_amount: float = 0.0) -> Texture2D:
 		tex = ImageTexture.create_from_image(img)
 	else:
 		tex = _make_patty(color)
-	_cache[key] = tex
+	_store_variant(key, tex)
 	return tex
 
 
@@ -789,3 +882,16 @@ static func _make_warmer_tray() -> ImageTexture:
 	## Specular streak.
 	_fill_ellipse(img, cx - 18.0, cy - 14.0, 28.0, 8.0, Color(0.75, 0.8, 0.88, 0.35), Color(0.75, 0.8, 0.88, 0.0))
 	return ImageTexture.create_from_image(img)
+
+
+static func _store_variant(key: String, tex: Texture2D) -> void:
+	if not _cache.has(key):
+		_variant_keys.append(key)
+	_cache[key] = tex
+	while _variant_keys.size() > MAX_VARIANT_CACHE:
+		var oldest: String = _variant_keys.pop_front()
+		var previous := _cache.get(oldest) as Texture2D
+		if previous != null:
+			_content_aspect_cache.erase(previous.get_instance_id())
+			_composite_image_cache.erase(previous.get_instance_id())
+		_cache.erase(oldest)

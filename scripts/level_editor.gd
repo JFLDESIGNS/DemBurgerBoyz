@@ -7,6 +7,7 @@ const SAVE_PATH := "user://level_dressing.cfg"
 const SAVE_SECTION := "dressing"
 const GIZMO_LEN := 0.28
 const GIZMO_HIT_PX := 14.0
+const LIGHT_MARKER_HIT_PX := 22.0
 
 signal active_changed(on: bool)
 
@@ -20,6 +21,10 @@ var _main_cam: Camera3D = null
 var _fly_cam: Camera3D = null
 var _dressing: Node3D = null
 var _gizmo: Node3D = null
+var _light_markers_root: Node3D = null
+var _light_markers: Dictionary = {} ## instance id -> Sprite3D
+var _light_marker_lights: Dictionary = {} ## instance id -> Light3D
+var _light_marker_tex: Texture2D = null
 var _selected: Node3D = null
 var _layer: CanvasLayer = null
 var _ui: Control = null
@@ -55,6 +60,7 @@ func setup(game: Node, world: Node3D, grill: Node3D, main_cam: Camera3D) -> void
 	_ensure_dressing_root()
 	_build_fly_cam()
 	_build_gizmo()
+	_build_light_markers()
 	_build_ui()
 	_load_dressing()
 
@@ -87,6 +93,8 @@ func set_active(on: bool) -> void:
 	active = on
 	if _layer:
 		_layer.visible = on and not previewing_main
+	if _light_markers_root:
+		_light_markers_root.visible = on and not previewing_main
 	active_changed.emit(on)
 
 
@@ -105,6 +113,7 @@ func _enter_fly() -> void:
 		_layer.visible = true
 	_refresh_preview_button()
 	_refresh_outliner()
+	_refresh_light_markers()
 	refresh_lighting_ui()
 	_set_status("L-mode — RMB look · WASD fly · Q/E up/down · click to select · lighting in the left panel")
 
@@ -120,6 +129,8 @@ func _exit_editor() -> void:
 		_fly_cam.current = false
 	if _gizmo:
 		_gizmo.visible = false
+	if _light_markers_root:
+		_light_markers_root.visible = false
 	if _layer:
 		_layer.visible = false
 	_save_dressing()
@@ -138,6 +149,8 @@ func set_preview_main(on: bool) -> void:
 			_fly_cam.current = false
 		if _gizmo:
 			_gizmo.visible = false
+		if _light_markers_root:
+			_light_markers_root.visible = false
 		if _layer:
 			_layer.visible = false
 		_set_status("Main camera preview — Esc or the button to fly again")
@@ -184,6 +197,10 @@ func handle_input(event: InputEvent) -> bool:
 			return true
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
+				var marker_light := _pick_light_marker_at(mb.position)
+				if marker_light != null:
+					_select(marker_light)
+					return true
 				var axis := _pick_gizmo_axis(mb.position)
 				if axis >= 0 and _selected != null:
 					_gizmo_axis = axis
@@ -234,6 +251,7 @@ func update_fly(delta: float) -> void:
 		var move := (basis.x * wish.x + Vector3.UP * wish.y + basis.z * wish.z) * _move_speed * sprint * delta
 		_fly_cam.global_position += move
 	_update_gizmo()
+	_update_light_marker_transforms()
 
 
 func _apply_fly_look() -> void:
@@ -283,6 +301,119 @@ func _build_gizmo() -> void:
 	_add_gizmo_axis(Vector3(1, 0, 0), Color(0.92, 0.22, 0.18), "AxisX")
 	_add_gizmo_axis(Vector3(0, 1, 0), Color(0.28, 0.86, 0.32), "AxisY")
 	_add_gizmo_axis(Vector3(0, 0, 1), Color(0.22, 0.48, 1.0), "AxisZ")
+
+
+func _build_light_markers() -> void:
+	_light_markers_root = Node3D.new()
+	_light_markers_root.name = "LevelEditorLightMarkers"
+	_light_markers_root.visible = false
+	if _world:
+		_world.add_child(_light_markers_root)
+
+
+func _light_marker_texture() -> Texture2D:
+	if _light_marker_tex != null:
+		return _light_marker_tex
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	img.fill(Color.TRANSPARENT)
+	var edge := Color(0.12, 0.15, 0.20, 1.0)
+	var glow := Color(1.0, 0.86, 0.28, 1.0)
+	for y in range(5, 22):
+		for x in range(7, 25):
+			var d := Vector2(float(x - 16), float(y - 13)).length()
+			if d <= 8.2:
+				img.set_pixel(x, y, edge if d >= 6.7 else glow)
+	for y in range(20, 26):
+		for x in range(11, 22):
+			img.set_pixel(x, y, edge if x <= 11 or x >= 21 or y >= 24 else Color(0.96, 0.72, 0.18, 1.0))
+	for i in range(3, 8):
+		img.set_pixel(16, i, glow)
+		img.set_pixel(i, 13, glow)
+		img.set_pixel(31 - i, 13, glow)
+	for i in range(4):
+		img.set_pixel(8 + i, 5 + i, glow)
+		img.set_pixel(23 - i, 5 + i, glow)
+	_light_marker_tex = ImageTexture.create_from_image(img)
+	return _light_marker_tex
+
+
+func _make_light_marker(light: Light3D) -> Sprite3D:
+	var marker := Sprite3D.new()
+	marker.name = "LightMarker_%s" % light.name
+	marker.texture = _light_marker_texture()
+	marker.pixel_size = 0.0045
+	marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	marker.shaded = false
+	marker.no_depth_test = true
+	marker.render_priority = 100
+	marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	marker.modulate = light.light_color
+	_light_markers_root.add_child(marker)
+	return marker
+
+
+func _refresh_light_markers(known_lights: Array = []) -> void:
+	if _light_markers_root == null:
+		return
+	var lights: Array = known_lights
+	if lights.is_empty():
+		_collect_lights(_world, lights)
+		if _grill != null:
+			_collect_lights(_grill, lights)
+	var seen: Dictionary = {}
+	for light_value in lights:
+		var light := light_value as Light3D
+		if light == null or not is_instance_valid(light):
+			continue
+		var key := light.get_instance_id()
+		if seen.has(key):
+			continue
+		seen[key] = true
+		var marker := _light_markers.get(key) as Sprite3D
+		if marker == null or not is_instance_valid(marker):
+			marker = _make_light_marker(light)
+			_light_markers[key] = marker
+		_light_marker_lights[key] = light
+	for key in _light_markers.keys():
+		if seen.has(key):
+			continue
+		var stale := _light_markers.get(key) as Sprite3D
+		if stale != null and is_instance_valid(stale):
+			stale.queue_free()
+		_light_markers.erase(key)
+		_light_marker_lights.erase(key)
+	_update_light_marker_transforms()
+
+
+func _update_light_marker_transforms() -> void:
+	if _light_markers_root == null:
+		return
+	_light_markers_root.visible = active and not previewing_main
+	for key in _light_markers.keys():
+		var marker := _light_markers.get(key) as Sprite3D
+		var light := _light_marker_lights.get(key) as Light3D
+		if marker == null or light == null or not is_instance_valid(marker) or not is_instance_valid(light):
+			continue
+		marker.global_position = light.global_position
+		marker.modulate = light.light_color.lightened(0.12) if light.visible else Color(0.55, 0.58, 0.64, 1.0)
+		marker.scale = Vector3.ONE * (1.3 if light == _selected else 1.0)
+
+
+func _pick_light_marker_at(screen_pos: Vector2) -> Light3D:
+	var cam := _cam()
+	if cam == null or _light_markers_root == null or not _light_markers_root.visible:
+		return null
+	var best: Light3D = null
+	var best_d := LIGHT_MARKER_HIT_PX
+	for key in _light_marker_lights.keys():
+		var light := _light_marker_lights.get(key) as Light3D
+		if light == null or not is_instance_valid(light) or cam.is_position_behind(light.global_position):
+			continue
+		var d := screen_pos.distance_to(cam.unproject_position(light.global_position))
+		if d < best_d:
+			best_d = d
+			best = light
+	return best
 
 
 func _add_gizmo_axis(dir: Vector3, color: Color, node_name: String) -> void:
@@ -448,6 +579,7 @@ func _select(node: Node3D) -> void:
 		node = null
 	_selected = node
 	_update_gizmo()
+	_update_light_marker_transforms()
 	_sync_outliner_selection()
 	_rebuild_inspector()
 	if node != null:
@@ -523,6 +655,7 @@ func _build_top_bar() -> void:
 	for spec in [
 		["Omni Light", func(): _place_light("omni")],
 		["Spot Light", func(): _place_light("spot")],
+		["Rect Area", func(): _place_light("rect_area")],
 		["Cube", func(): _place_primitive("cube")],
 		["Sphere", func(): _place_primitive("sphere")],
 		["Cylinder", func(): _place_primitive("cylinder")],
@@ -795,7 +928,7 @@ func _refresh_outliner() -> void:
 	_outliner.clear()
 	if _dressing != null:
 		for child in _dressing.get_children():
-			if child is Node3D:
+			if child is Node3D and not child is Light3D:
 				_add_outliner_item("Dressing / %s" % child.name, child)
 	var lights: Array = []
 	_collect_lights(_world, lights)
@@ -803,17 +936,18 @@ func _refresh_outliner() -> void:
 		_collect_lights(_grill, lights)
 	for light in lights:
 		_add_outliner_item("Light / %s" % light.name, light)
+	_refresh_light_markers(lights)
 	if _world != null:
 		for child in _world.get_children():
-			if child == _dressing or child == _fly_cam or child == _gizmo:
+			if child == _dressing or child == _fly_cam or child == _gizmo or child == _light_markers_root:
 				continue
 			if str(child.name) == "LightProfileRig":
 				continue
-			if child is Node3D:
+			if child is Node3D and not child is Light3D:
 				_add_outliner_item("World / %s" % child.name, child)
 	if _grill != null:
 		for child in _grill.get_children():
-			if child is Node3D:
+			if child is Node3D and not child is Light3D:
 				_add_outliner_item("Grill / %s" % child.name, child)
 	_sync_outliner_selection()
 
@@ -821,7 +955,7 @@ func _refresh_outliner() -> void:
 func _collect_lights(root: Node, out: Array) -> void:
 	if root == null:
 		return
-	if root is Light3D:
+	if root is Light3D and not out.has(root):
 		out.append(root)
 	for child in root.get_children():
 		_collect_lights(child, out)
@@ -907,6 +1041,25 @@ func _rebuild_inspector() -> void:
 			_set_light_range(v)
 		)
 		if light is SpotLight3D:
+			if _is_rect_area_light(light):
+				var area_note := Label.new()
+				area_note.text = "Projected rectangular area-light rig (Godot has no native real-time AreaLight3D)."
+				area_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				UiFontsScript.apply_label(area_note, false, 11)
+				area_note.add_theme_color_override("font_color", Color(0.72, 0.80, 0.90))
+				_inspector.add_child(area_note)
+				_add_inspect_spin("Area Width", float(light.get_meta("rect_width", 1.2)), 0.1, 8.0, 0.05, func(v):
+					if _selected is SpotLight3D and _is_rect_area_light(_selected as Light3D):
+						(_selected as Light3D).set_meta("rect_width", v)
+						_apply_rect_area_shape(_selected as SpotLight3D)
+						_save_if_dressing()
+				)
+				_add_inspect_spin("Area Height", float(light.get_meta("rect_height", 0.55)), 0.1, 8.0, 0.05, func(v):
+					if _selected is SpotLight3D and _is_rect_area_light(_selected as Light3D):
+						(_selected as Light3D).set_meta("rect_height", v)
+						_apply_rect_area_shape(_selected as SpotLight3D)
+						_save_if_dressing()
+				)
 			_add_inspect_spin("Spot Angle", (light as SpotLight3D).spot_angle, 1.0, 80.0, 0.5, func(v):
 				if _selected is SpotLight3D:
 					(_selected as SpotLight3D).spot_angle = v
@@ -1221,11 +1374,17 @@ func _finish_place(node: Node3D) -> void:
 func _make_dressing_light(kind: String) -> Light3D:
 	_place_counter += 1
 	var light: Light3D
-	if kind == "spot":
+	if kind == "spot" or kind == "rect_area":
 		var spot := SpotLight3D.new()
-		spot.spot_range = 3.2
-		spot.spot_angle = 40.0
+		spot.spot_range = 4.0 if kind == "rect_area" else 3.2
+		spot.spot_angle = 62.0 if kind == "rect_area" else 40.0
 		spot.rotation_degrees = Vector3(-55.0, 0.0, 0.0)
+		if kind == "rect_area":
+			spot.set_meta("rect_area", true)
+			spot.set_meta("rect_width", 1.2)
+			spot.set_meta("rect_height", 0.55)
+			spot.light_size = 0.45
+			_apply_rect_area_shape(spot)
 		light = spot
 	else:
 		var omni := OmniLight3D.new()
@@ -1242,6 +1401,39 @@ func _make_dressing_light(kind: String) -> Light3D:
 	if light is OmniLight3D:
 		(light as OmniLight3D).omni_shadow_mode = OmniLight3D.SHADOW_CUBE
 	return light
+
+
+func _is_rect_area_light(light: Light3D) -> bool:
+	return light != null and light is SpotLight3D and bool(light.get_meta("rect_area", false))
+
+
+func _rect_area_projector(width: float, height: float) -> Texture2D:
+	## Godot has no native real-time rectangular area light. A feathered projector
+	## gives its SpotLight3D a rectangular footprint while light_size softens it.
+	var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	var largest := maxf(width, height)
+	var half_w := 0.42 * width / largest
+	var half_h := 0.42 * height / largest
+	var feather := 0.055
+	for y in 64:
+		for x in 64:
+			var uv := Vector2((float(x) + 0.5) / 64.0 - 0.5, (float(y) + 0.5) / 64.0 - 0.5)
+			var outside := maxf(absf(uv.x) - half_w, absf(uv.y) - half_h)
+			var strength := clampf(1.0 - maxf(outside, 0.0) / feather, 0.0, 1.0)
+			strength = strength * strength * (3.0 - 2.0 * strength)
+			img.set_pixel(x, y, Color(strength, strength, strength, 1.0))
+	return ImageTexture.create_from_image(img)
+
+
+func _apply_rect_area_shape(light: SpotLight3D) -> void:
+	if light == null or not _is_rect_area_light(light):
+		return
+	var width := clampf(float(light.get_meta("rect_width", 1.2)), 0.1, 8.0)
+	var height := clampf(float(light.get_meta("rect_height", 0.55)), 0.1, 8.0)
+	light.set_meta("rect_width", width)
+	light.set_meta("rect_height", height)
+	light.light_projector = _rect_area_projector(width, height)
+	light.light_size = maxf(light.light_size, minf(maxf(width, height) * 0.28, 2.0))
 
 
 func _make_dressing_primitive(kind: String) -> MeshInstance3D:
@@ -1349,6 +1541,9 @@ func _save_dressing() -> void:
 			cfg.set_value(SAVE_SECTION, p + "srev", L.shadow_reverse_cull_face)
 			if L is SpotLight3D:
 				cfg.set_value(SAVE_SECTION, p + "angle", (L as SpotLight3D).spot_angle)
+				if _is_rect_area_light(L):
+					cfg.set_value(SAVE_SECTION, p + "rect_w", float(L.get_meta("rect_width", 1.2)))
+					cfg.set_value(SAVE_SECTION, p + "rect_h", float(L.get_meta("rect_height", 0.55)))
 			if L is OmniLight3D:
 				cfg.set_value(SAVE_SECTION, p + "scube", (L as OmniLight3D).omni_shadow_mode == OmniLight3D.SHADOW_CUBE)
 			if L is DirectionalLight3D:
@@ -1366,6 +1561,8 @@ func _save_dressing() -> void:
 
 
 func _dressing_kind(n: Node3D) -> String:
+	if n is Light3D and _is_rect_area_light(n as Light3D):
+		return "rect_area"
 	if n is OmniLight3D:
 		return "omni"
 	if n is SpotLight3D:
@@ -1403,6 +1600,8 @@ func _load_dressing() -> void:
 				node = _make_dressing_light("omni")
 			"spot":
 				node = _make_dressing_light("spot")
+			"rect_area":
+				node = _make_dressing_light("rect_area")
 			"napkin":
 				node = _make_dressing_napkin()
 			"sphere":
@@ -1444,6 +1643,10 @@ func _load_dressing() -> void:
 			elif L is SpotLight3D:
 				(L as SpotLight3D).spot_range = float(cfg.get_value(SAVE_SECTION, p + "range", 3.2))
 				(L as SpotLight3D).spot_angle = float(cfg.get_value(SAVE_SECTION, p + "angle", 40.0))
+				if _is_rect_area_light(L):
+					L.set_meta("rect_width", float(cfg.get_value(SAVE_SECTION, p + "rect_w", 1.2)))
+					L.set_meta("rect_height", float(cfg.get_value(SAVE_SECTION, p + "rect_h", 0.55)))
+					_apply_rect_area_shape(L as SpotLight3D)
 			L.shadow_enabled = bool(cfg.get_value(SAVE_SECTION, p + "shadow", L.shadow_enabled))
 			L.shadow_blur = float(cfg.get_value(SAVE_SECTION, p + "sblur", L.shadow_blur))
 			L.shadow_bias = float(cfg.get_value(SAVE_SECTION, p + "sbias", L.shadow_bias))

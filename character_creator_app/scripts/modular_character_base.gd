@@ -13,8 +13,8 @@ enum CheekStyle { NONE, ROSY_RADIAL }
 enum HairStyle { NONE, SIMPLE_PARTED, BUZZED, LONG, BUNS, LOWPOLY_MALE, LOWPOLY_SHORT_1, LOWPOLY_PONYTAIL, LOWPOLY_SHORT_2, CAP_WITH_HAIR, CAPSULE_FEMALE, CAPSULE_MALE }
 enum FacialHairStyle { NONE, FULL_BEARD, MOUSTACHE, SHORT_BEARD, QUATERNIUS_BEARD }
 enum HatStyle { NONE, RANGER_HOOD, ROUND_HOOD, TOP_HAT, BASEBALL_CAP, LOWPOLY_CAP, LOWPOLY_CAP_HAIR, LOWPOLY_ROUND_HAT, CAPSULE_CAP }
-enum TopStyle { NONE, T_SHIRT, TANK_TOP, LONG_SLEEVE, CROP_TOP, BLOUSE, POLO, HOODIE, SWEATER, OFF_SHOULDER, DRESS_BODICE, CARDIGAN }
-enum BottomStyle { NONE, PANTS, SHORTS, CAPRIS, LEGGINGS, MINI_SKIRT, LONG_SKIRT, PLEATED_SKIRT }
+enum TopStyle { NONE, MIDNIGHT_LAPEL, SUNSHINE_BOWLING, LAGOON_COLLAR, CLUB_VARSITY, SEAFOAM_RINGER, OCHRE_STRIPE, EMERALD_CARDIGAN, TERRACOTTA_POLO, IVORY_OXFORD, MERLOT_HENLEY, ATHLETIC_TANK, ORCHID_HALTER }
+enum BottomStyle { NONE, CARGO, PANTS, UTILITY, JOGGERS, JEANS, LEGGINGS, TRACK, SHORTS, BERMUDAS, RUNNING_SHORTS, LAYERED_SHORTS, CAPRIS, MINI_SKIRT, PLEATED_SKIRT, LONG_SKIRT }
 enum ShoeStyle { NONE, SNEAKERS, ANKLE_BOOTS, HIGH_TOPS, LOAFERS, SANDALS }
 enum ShirtGraphic { NONE, SKULL, HEART, STAR, LIGHTNING, FLAME, FLOWER, CAT, MOON, BURGER, CROWN }
 enum MakeupStyle { NONE, EYE_SHADOW, WINGED_LINER, BEAUTY_MARK, GLAM }
@@ -94,6 +94,16 @@ const HAT_SCENES: Array = [
 	preload("res://assets/modules/headwear/Lowpoly_Round_Hat.tscn"),
 	preload("res://assets/modules/headwear/Capsule_Cap.tscn"),
 ]
+const Wardrobe = preload("res://scripts/fitted_wardrobe.gd")
+const TOP_CATALOG_VERSION := Wardrobe.CATALOG_VERSION
+const TOP_LABELS := Wardrobe.LABELS
+const BOTTOM_LABELS := Wardrobe.BOTTOM_LABELS
+const BOTTOM_CATALOG_VERSION := Wardrobe.BOTTOM_CATALOG_VERSION
+var _fitted_top: MeshInstance3D
+var _top_material_refs: Array[Material] = []
+var _fitted_bottom: MeshInstance3D
+var _bottom_material_refs: Array[Material] = []
+
 const SHIRT_GRAPHICS: Array[Texture2D] = [
 	null,
 	preload("res://assets/modules/graphics/skull.svg"),
@@ -649,6 +659,20 @@ const CONTROL_BODY_SPECS := {
 			_build_hair()
 			modules_changed.emit()
 
+@export var hair_visible := true:
+	set(value):
+		hair_visible = value
+		if _should_rebuild(): _build_hair()
+
+const MAX_EXTRA_HAIRS := 5
+## Extra stacked hair pieces. Each dict: style, color, scale, scale_xyz, offset.
+var extra_hairs: Array = []:
+	set(value):
+		extra_hairs = _normalize_extra_hairs(value)
+		if _should_rebuild():
+			_build_hair()
+			modules_changed.emit()
+
 @export var facial_hair_style: FacialHairStyle = FacialHairStyle.NONE:
 	set(value):
 		facial_hair_style = value
@@ -770,14 +794,14 @@ const CONTROL_BODY_SPECS := {
 		jewelry_offset = value
 		if _should_rebuild(): _build_jewelry()
 
-@export var top_style: TopStyle = TopStyle.T_SHIRT:
+@export var top_style: TopStyle = TopStyle.SEAFOAM_RINGER:
 	set(value):
 		top_style = value
 		if _should_rebuild():
 			_build_clothing()
 			modules_changed.emit()
 
-@export var top_color := Color("3f6a45"):
+@export var top_color := Color.WHITE:
 	set(value):
 		top_color = value
 		if _should_rebuild():
@@ -830,7 +854,7 @@ const CONTROL_BODY_SPECS := {
 			_build_clothing()
 			modules_changed.emit()
 
-@export var bottom_color := Color("334e68"):
+@export var bottom_color := Color.WHITE:
 	set(value):
 		bottom_color = value
 		if _should_rebuild():
@@ -1581,7 +1605,9 @@ func load_control_rig_targets(values: Variant) -> void:
 ## the normal Food Flip idle and walk animations are attached.
 func apply_saved_preset(data: Dictionary) -> void:
 	data = data.duplicate(true)
+	data["hair_visible"] = bool(data.get("hair_visible", true))
 	migrate_legacy_hair_fields(data)
+	Wardrobe.migrate_preset(data)
 	# Old presets used 1/2 for tube and torus lashes. Both migrate to the new
 	# fitted rim; 0 stays the clean almond opening.
 	if int(data.get("eye_opening_version", 0)) < 1:
@@ -1618,14 +1644,11 @@ func apply_saved_preset(data: Dictionary) -> void:
 				set(property_name, int(raw_value))
 			TYPE_BOOL:
 				set(property_name, bool(raw_value))
+	extra_hairs = _normalize_extra_hairs(data.get("extra_hairs", []))
 	end_appearance_batch()
 	set_skin_paint_png_base64(str(data.get("skin_paint", "")))
 	if int(data.get("format_version", 1)) < 11:
 		migrate_legacy_skin_paint_v_flip()
-	if top_style == TopStyle.NONE:
-		top_style = TopStyle.T_SHIRT
-	if bottom_style == BottomStyle.NONE:
-		bottom_style = BottomStyle.SHORTS
 
 
 func get_active_body() -> Node3D:
@@ -2331,24 +2354,201 @@ func _build_hair() -> void:
 	if _hair_root == null:
 		return
 	_clear(_hair_root)
-	if hair_style == HairStyle.NONE:
+	if hair_visible:
+		_spawn_hair_piece(int(hair_style), hair_color, hair_scale, hair_scale_xyz, hair_offset, "HairBase")
+	for i in extra_hairs.size():
+		var layer: Dictionary = extra_hairs[i]
+		var col := Color.from_string(str(layer.get("color", hair_color.to_html(true))), hair_color)
+		var sc_xyz: Vector3 = _vector3_from_hair_array(layer.get("scale_xyz", [1.0, 1.0, 1.0]), Vector3.ONE)
+		var off: Vector3 = _vector3_from_hair_array(layer.get("offset", [0.0, 0.3, 0.0]), Vector3(0.0, 0.3, 0.0))
+		_spawn_hair_piece(
+			int(layer.get("style", 0)),
+			col,
+			clampf(float(layer.get("scale", 1.3)), 0.3, 3.0),
+			sc_xyz,
+			off,
+			"HairExtra%d" % i
+		)
+
+
+func _spawn_hair_piece(
+	style: int,
+	color: Color,
+	scale_all: float,
+	scale_xyz: Vector3,
+	offset: Vector3,
+	piece_name: String
+) -> void:
+	if style <= 0 or style >= HAIR_SCENES.size():
 		return
-	var packed := HAIR_SCENES[int(hair_style)] as PackedScene
+	var packed := HAIR_SCENES[style] as PackedScene
 	if packed == null:
 		return
 	var hair := packed.instantiate() as Node3D
-	hair.name = HairStyle.keys()[int(hair_style)].capitalize()
+	if hair == null:
+		return
+	hair.name = piece_name
 	_hair_root.add_child(hair)
-	if hair_style <= HairStyle.BUNS:
-		var fit := 3.45
-		if hair_style == HairStyle.LONG:
+	if style <= int(HairStyle.BUNS):
+		var fit: float = 3.45
+		if style == int(HairStyle.LONG):
 			fit = 3.15
-		var adjusted_fit := fit * hair_scale
-		hair.scale = Vector3(adjusted_fit * hair_scale_xyz.x, adjusted_fit * hair_scale_xyz.y, adjusted_fit * hair_scale_xyz.z) * _unit
-		hair.position = (Vector3(0.0, 0.48 - 1.75 * adjusted_fit * hair_scale_xyz.y, 0.02) + hair_offset) * _unit
+		var adjusted_fit: float = fit * scale_all
+		hair.scale = Vector3(
+			adjusted_fit * scale_xyz.x,
+			adjusted_fit * scale_xyz.y,
+			adjusted_fit * scale_xyz.z
+		) * _unit
+		hair.position = (Vector3(0.0, 0.48 - 1.75 * adjusted_fit * scale_xyz.y, 0.02) + offset) * _unit
 	else:
-		_fit_sourced_accessory(hair, 0.76 * hair_scale, Vector3(0.0, 0.47, 0.0) + hair_offset, hair_scale_xyz)
-	_override_mesh_materials(hair, _toon_material(hair_color))
+		_fit_sourced_accessory(hair, 0.76 * scale_all, Vector3(0.0, 0.47, 0.0) + offset, scale_xyz)
+	_override_mesh_materials(hair, _toon_material(color))
+
+
+func hair_layer_count() -> int:
+	return 1 + extra_hairs.size()
+
+
+func add_extra_hair(style: int = -1, copy_from: int = 0) -> int:
+	if extra_hairs.size() >= MAX_EXTRA_HAIRS:
+		return extra_hairs.size()
+	var src: Dictionary = get_hair_layer(copy_from)
+	var src_style: int = int(src["style"])
+	var use_style: int = src_style if style < 1 else clampi(style, 1, HairStyle.size() - 1)
+	if use_style < 1:
+		hair_style = HairStyle.SIMPLE_PARTED
+		return 0
+	var src_color: Color = src["color"]
+	var src_xyz: Vector3 = src["scale_xyz"]
+	var src_off: Vector3 = src["offset"]
+	var next: Array = extra_hairs.duplicate(true)
+	var bump: float = 0.07 * float(next.size() + 1)
+	next.append({
+		"style": use_style,
+		"color": src_color.to_html(true),
+		"scale": clampf(float(src["scale"]), 0.3, 3.0),
+		"scale_xyz": [src_xyz.x, src_xyz.y, src_xyz.z],
+		"offset": [src_off.x, src_off.y + bump, src_off.z],
+	})
+	extra_hairs = next
+	return extra_hairs.size()
+
+
+func remove_extra_hair(extra_index: int) -> void:
+	if extra_index < 0 or extra_index >= extra_hairs.size():
+		return
+	var next: Array = extra_hairs.duplicate(true)
+	next.remove_at(extra_index)
+	extra_hairs = next
+
+
+func get_hair_layer(index: int) -> Dictionary:
+	if index <= 0:
+		return {
+			"style": int(hair_style),
+			"visible": hair_visible,
+			"color": hair_color,
+			"scale": hair_scale,
+			"scale_xyz": hair_scale_xyz,
+			"offset": hair_offset,
+		}
+	var extra_i: int = index - 1
+	if extra_i < 0 or extra_i >= extra_hairs.size():
+		return get_hair_layer(0)
+	var layer: Dictionary = extra_hairs[extra_i]
+	return {
+		"style": int(layer.get("style", 0)),
+		"visible": bool(layer.get("visible", true)),
+		"color": Color.from_string(str(layer.get("color", hair_color.to_html(true))), hair_color),
+		"scale": clampf(float(layer.get("scale", 1.3)), 0.3, 3.0),
+		"scale_xyz": _vector3_from_hair_array(layer.get("scale_xyz", [1.0, 1.0, 1.0]), Vector3.ONE),
+		"offset": _vector3_from_hair_array(layer.get("offset", [0.0, 0.3, 0.0]), Vector3(0.0, 0.3, 0.0)),
+	}
+
+
+func set_hair_layer_visible(index: int, visible: bool) -> void:
+	if index <= 0: hair_visible = visible
+	else: _patch_extra_hair(index - 1, "visible", visible)
+
+func set_hair_layer_style(index: int, style: int) -> void:
+	var clamped: int = clampi(style, 0, HairStyle.size() - 1)
+	if index <= 0:
+		hair_style = clamped as HairStyle
+		return
+	_patch_extra_hair(index - 1, "style", clamped)
+
+
+func set_hair_layer_color(index: int, color: Color) -> void:
+	if index <= 0:
+		hair_color = color
+		return
+	_patch_extra_hair(index - 1, "color", color.to_html(true))
+
+
+func set_hair_layer_scale(index: int, scale_all: float) -> void:
+	var v: float = clampf(scale_all, 0.3, 3.0)
+	if index <= 0:
+		hair_scale = v
+		return
+	_patch_extra_hair(index - 1, "scale", v)
+
+
+func set_hair_layer_scale_xyz(index: int, scale_xyz: Vector3) -> void:
+	if index <= 0:
+		hair_scale_xyz = scale_xyz
+		return
+	_patch_extra_hair(index - 1, "scale_xyz", [scale_xyz.x, scale_xyz.y, scale_xyz.z])
+
+
+func set_hair_layer_offset(index: int, offset: Vector3) -> void:
+	if index <= 0:
+		hair_offset = offset
+		return
+	_patch_extra_hair(index - 1, "offset", [offset.x, offset.y, offset.z])
+
+
+func _patch_extra_hair(extra_index: int, key: String, value: Variant) -> void:
+	if extra_index < 0 or extra_index >= extra_hairs.size():
+		return
+	var next: Array = extra_hairs.duplicate(true)
+	var layer: Dictionary = next[extra_index]
+	layer[key] = value
+	next[extra_index] = layer
+	extra_hairs = next
+
+
+func _normalize_extra_hairs(value: Variant) -> Array:
+	var out: Array = []
+	if not (value is Array):
+		return out
+	for entry in value:
+		if out.size() >= MAX_EXTRA_HAIRS:
+			break
+		if not (entry is Dictionary):
+			continue
+		var layer: Dictionary = entry
+		var style: int = clampi(int(layer.get("style", 0)), 0, HairStyle.size() - 1)
+		if style <= 0:
+			continue
+		var sc_xyz: Vector3 = _vector3_from_hair_array(layer.get("scale_xyz", [1.0, 1.0, 1.0]), Vector3.ONE)
+		var off: Vector3 = _vector3_from_hair_array(layer.get("offset", [0.0, 0.3, 0.0]), Vector3(0.0, 0.3, 0.0))
+		out.append({
+			"style": style,
+			"visible": bool(entry.get("visible", true)),
+			"color": str(layer.get("color", hair_color.to_html(true))),
+			"scale": clampf(float(layer.get("scale", 1.3)), 0.3, 3.0),
+			"scale_xyz": [sc_xyz.x, sc_xyz.y, sc_xyz.z],
+			"offset": [off.x, off.y, off.z],
+		})
+	return out
+
+
+func _vector3_from_hair_array(value: Variant, fallback: Vector3) -> Vector3:
+	if value is Vector3:
+		return value
+	if value is Array and value.size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return fallback
 
 
 func _build_facial_hair() -> void:
@@ -2478,43 +2678,12 @@ func _build_clothing() -> void:
 	if _clothing_root == null:
 		return
 	_clear(_clothing_root)
-	var torso_bones: Array[String] = ["Hips", "Spine", "Chest", "UpperChest"]
-	if top_style == TopStyle.T_SHIRT:
-		_build_weighted_garment("TShirt", torso_bones + ["LeftShoulder", "LeftArm", "RightShoulder", "RightArm"], _toon_material(top_color), 0.015, INF, top_scale)
-	elif top_style == TopStyle.TANK_TOP:
-		_build_weighted_garment("TankTop", torso_bones, _toon_material(top_color), 0.015, INF, top_scale)
-	elif top_style == TopStyle.LONG_SLEEVE:
-		_build_weighted_garment("LongSleeve", torso_bones + ["LeftShoulder", "LeftArm", "LeftForeArm", "RightShoulder", "RightArm", "RightForeArm"], _toon_material(top_color), 0.015, INF, top_scale)
-	elif top_style == TopStyle.CROP_TOP:
-		_build_weighted_garment("CropTop", torso_bones + ["LeftShoulder", "LeftArm", "RightShoulder", "RightArm"], _toon_material(top_color), 0.024, INF, top_scale)
-	elif top_style == TopStyle.BLOUSE:
-		_build_weighted_garment("Blouse", torso_bones + ["LeftShoulder", "LeftArm", "RightShoulder", "RightArm"], _toon_material(top_color), 0.012, INF, top_scale * 1.035, 0.0008)
-	elif top_style == TopStyle.POLO:
-		_build_weighted_garment("Polo", torso_bones + ["LeftShoulder", "LeftArm", "RightShoulder", "RightArm"], _toon_material(top_color), 0.014, INF, top_scale * 1.01, 0.0007)
-	elif top_style == TopStyle.HOODIE:
-		_build_weighted_garment("Hoodie", torso_bones + ["LeftShoulder", "LeftArm", "LeftForeArm", "RightShoulder", "RightArm", "RightForeArm"], _toon_material(top_color), 0.010, INF, top_scale * 1.055, 0.0010)
-	elif top_style == TopStyle.SWEATER:
-		_build_weighted_garment("Sweater", torso_bones + ["LeftShoulder", "LeftArm", "LeftForeArm", "RightShoulder", "RightArm", "RightForeArm"], _toon_material(top_color), 0.010, INF, top_scale * 1.025, 0.00085)
-	elif top_style == TopStyle.OFF_SHOULDER:
-		_build_weighted_garment("OffShoulder", torso_bones, _toon_material(top_color), 0.012, 0.044, top_scale * 1.03, 0.0008)
-	elif top_style == TopStyle.DRESS_BODICE:
-		_build_weighted_garment("DressBodice", torso_bones, _toon_material(top_color), 0.006, INF, top_scale * 1.02, 0.00075)
-	elif top_style == TopStyle.CARDIGAN:
-		_build_weighted_garment("Cardigan", torso_bones + ["LeftShoulder", "LeftArm", "LeftForeArm", "RightShoulder", "RightArm", "RightForeArm"], _toon_material(top_color), 0.008, INF, top_scale * 1.045, 0.0009)
-	if bottom_style == BottomStyle.PANTS:
-		_build_weighted_garment("Pants", ["Hips", "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg"], _toon_material(bottom_color), -INF, INF, bottom_scale)
-	elif bottom_style == BottomStyle.SHORTS:
-		_build_weighted_garment("Shorts", ["Hips", "LeftUpLeg", "RightUpLeg"], _toon_material(bottom_color), 0.010, INF, bottom_scale)
-	elif bottom_style == BottomStyle.CAPRIS:
-		_build_weighted_garment("Capris", ["Hips", "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg"], _toon_material(bottom_color), 0.003, INF, bottom_scale)
-	elif bottom_style == BottomStyle.LEGGINGS:
-		_build_weighted_garment("Leggings", ["Hips", "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg"], _toon_material(bottom_color), -INF, INF, bottom_scale * 1.004, 0.00025)
-	elif bottom_style == BottomStyle.MINI_SKIRT:
-		_build_weighted_garment("MiniSkirt", ["Hips", "LeftUpLeg", "RightUpLeg"], _toon_material(bottom_color), 0.015, 0.035, bottom_scale * 1.07, 0.0010)
-	elif bottom_style == BottomStyle.LONG_SKIRT:
-		_build_weighted_garment("LongSkirt", ["Hips", "LeftUpLeg", "LeftLeg", "RightUpLeg", "RightLeg"], _toon_material(bottom_color), 0.004, 0.036, bottom_scale * 1.10, 0.0012)
-	elif bottom_style == BottomStyle.PLEATED_SKIRT:
-		_build_weighted_garment("PleatedSkirt", ["Hips", "LeftUpLeg", "RightUpLeg"], _toon_material(bottom_color), 0.010, 0.037, bottom_scale * 1.115, 0.0014)
+	_top_material_refs.clear()
+	_bottom_material_refs.clear()
+	_fitted_bottom = null
+	_fitted_top = null
+	_build_fitted_top()
+	_build_fitted_bottom()
 	_build_shoes()
 	_build_shirt_graphic()
 	if _clothes_hidden_for_paint:
@@ -2524,27 +2693,59 @@ func _build_clothing() -> void:
 			_shirt_graphic_root.visible = false
 
 
+func _build_fitted_top() -> void:
+	if top_style == TopStyle.NONE:
+		return
+	var body_mesh := _get_skin_mesh()
+	var skeleton := get_active_skeleton()
+	if body_mesh == null or skeleton == null:
+		return
+	var mesh := Wardrobe.fitted_mesh(int(top_style), body_mesh, toon_body, top_scale)
+	if mesh == null:
+		return
+	_fitted_top = MeshInstance3D.new()
+	_fitted_top.name = "FittedTop"
+	_fitted_top.mesh = mesh
+	_fitted_top.skin = body_mesh.skin
+	_clothing_root.add_child(_fitted_top)
+	_fitted_top.transform = _clothing_root.global_transform.affine_inverse() * body_mesh.global_transform
+	_fitted_top.skeleton = _fitted_top.get_path_to(skeleton)
+	for surface in mesh.get_surface_count():
+		var material := Wardrobe.fabric_material(mesh.surface_get_material(surface), top_color)
+		_top_material_refs.append(material)
+		_fitted_top.set_surface_override_material(surface, material)
+
+
+func _build_fitted_bottom() -> void:
+	if bottom_style == BottomStyle.NONE:
+		return
+	var body_mesh := _get_skin_mesh()
+	var skeleton := get_active_skeleton()
+	if body_mesh == null or skeleton == null:
+		return
+	var mesh := Wardrobe.fitted_mesh(int(bottom_style), body_mesh, toon_body, bottom_scale, true)
+	if mesh == null:
+		return
+	_fitted_bottom = MeshInstance3D.new()
+	_fitted_bottom.name = "FittedBottom"
+	_fitted_bottom.mesh = mesh
+	_fitted_bottom.skin = body_mesh.skin
+	_clothing_root.add_child(_fitted_bottom)
+	_fitted_bottom.transform = _clothing_root.global_transform.affine_inverse() * body_mesh.global_transform
+	_fitted_bottom.skeleton = _fitted_bottom.get_path_to(skeleton)
+	for surface in mesh.get_surface_count():
+		var material := Wardrobe.fabric_material(mesh.surface_get_material(surface), bottom_color)
+		_bottom_material_refs.append(material)
+		_fitted_bottom.set_surface_override_material(surface, material)
+
+
 func _build_shirt_graphic() -> void:
-	if _shirt_graphic_root == null:
+	if _shirt_graphic_root != null:
+		_clear(_shirt_graphic_root)
+	if not is_instance_valid(_fitted_top):
 		return
-	_clear(_shirt_graphic_root)
-	if top_style != TopStyle.T_SHIRT or shirt_graphic == ShirtGraphic.NONE:
-		return
-	var decal := MeshInstance3D.new()
-	decal.name = ShirtGraphic.keys()[int(shirt_graphic)].capitalize()
-	var quad := QuadMesh.new()
-	quad.size = Vector2.ONE * 0.22 * shirt_graphic_scale * _unit
-	decal.mesh = quad
-	var material := StandardMaterial3D.new()
-	material.albedo_texture = SHIRT_GRAPHICS[int(shirt_graphic)]
-	material.albedo_color = shirt_graphic_color
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	decal.material_override = material
-	# Chest-bone space: centered on the front of the exact-weight T-shirt.
-	decal.position = Vector3(shirt_graphic_horizontal, -0.04 + shirt_graphic_vertical, 0.38 + shirt_graphic_depth) * _unit
-	_shirt_graphic_root.add_child(decal)
+	var texture := SHIRT_GRAPHICS[int(shirt_graphic)]
+	Wardrobe.update_print(_fitted_top, texture, shirt_graphic_color, shirt_graphic_scale, shirt_graphic_horizontal, shirt_graphic_vertical, top_style == TopStyle.ORCHID_HALTER)
 
 
 func _build_shoes() -> void:

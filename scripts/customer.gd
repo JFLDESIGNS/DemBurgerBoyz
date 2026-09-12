@@ -22,8 +22,12 @@ const TWIST_DANCE_SCENE_PATH := "res://assets/characters/Animations/TwistDance.f
 const GANGNAM_SCENE_PATH := "res://assets/characters/Animations/GangnamStyle.fbx"
 const BREAKDANCE_SCENE_PATH := "res://assets/characters/Animations/BreakdanceFreeze.fbx"
 const BUTTON_PUSH_SCENE_PATH := "res://assets/characters/Animations/ButtonPushing.fbx"
+## Bone motion only: retain each customer's existing mesh, outfit and materials.
+const EXTINGUISHER_REACTION_LIB: AnimationLibrary = preload("res://assets/characters/Animations/ExtinguisherTantrum.res")
+const EXTINGUISHER_REACTION_ANIM := "extinguisher/Tantrum"
 const MODULAR_CHARACTER_SCENE_PATH := "res://scenes/character_creator/modular_character_base.tscn"
 const SAVED_CHARACTER_DIR := "user://characters"
+const BUNDLED_CHARACTER_DIR := "res://defaults/characters"
 const STANDALONE_CREATOR_FOLDER := "Burger Character Creator"
 const CUSTOM_CHARACTER_GAME_SCALE := 1.0 / 0.7
 const DISGUISE_MUSTACHE_TEX := "res://IMAGES/MUSTACHE.png"
@@ -198,6 +202,7 @@ const ARRIVE_TURN_SEC := 0.42
 const ORDER_WAWA_LEAD_SEC := 0.45
 ## Camera-left is world +X. Happy guests sidestep 4 ft, dance, then walk off left.
 const DANCE_SIDESTEP_X := 4.0 * 0.3048
+const LEAVE_DANCE_MAX_SEC := 3.0
 const LEAVE_WALK_SPEED := 1.65
 const LEAVE_FADE_X := 3.4
 const LEAVE_OFFSCREEN_X := 6.2
@@ -280,6 +285,7 @@ var _bar_fill: MeshInstance3D
 var _review_stars: Label3D = null
 var _review_text: Label3D = null
 var _review_box: MeshInstance3D = null
+static var _shared_review_card_texture: ImageTexture = null
 var _review_card_root: Node3D = null
 var _review_stars_tween: Tween = null
 var _review_card_settings: Dictionary = REVIEW_CARD_DEFAULTS.duplicate(true)
@@ -353,6 +359,8 @@ const _WINDOW_CAT_MOUTH := Vector3(0.0, 0.34, 0.22)
 var _powder_hit: bool = false
 var _powdering: bool = false ## Standing still while powder coats them.
 var _powder_stand_t: float = 0.0
+var _powder_uses_tantrum: bool = false
+var _powder_reaction_duration: float = POWDER_STAND_SEC
 var _powder_drip_cool: float = 0.0
 var _powder_face_build: float = 0.0 ## 0–1 — spray buildup on the face
 var _powder_panic_t: float = 0.0
@@ -903,7 +911,7 @@ func get_custom_character_preset() -> Dictionary:
 
 static func take_next_saved_character_preset() -> Dictionary:
 	## Public host-side selector used before a network customer is instantiated.
-	_sync_saved_characters_from_standalone()
+	ensure_saved_character_files()
 	var files: Array[String] = _list_usable_saved_character_files()
 	if files.is_empty():
 		_saved_character_cycle.clear()
@@ -953,6 +961,55 @@ func _swap_custom_character_for_kenney_boss() -> void:
 
 func _load_next_saved_character() -> Dictionary:
 	return take_next_saved_character_preset()
+
+
+static func ensure_saved_character_files() -> void:
+	## Seed missing AppData saves from the repo copies, then pick up newer standalone creator files.
+	_sync_bundled_character_backups()
+	_sync_saved_characters_from_standalone()
+
+
+static func _sync_bundled_character_backups() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(SAVED_CHARACTER_DIR))
+	var bundled: DirAccess = DirAccess.open(BUNDLED_CHARACTER_DIR)
+	if bundled == null:
+		return
+	for file_name in bundled.get_files():
+		var ext: String = file_name.get_extension().to_lower()
+		if ext != "json" and ext != "png":
+			continue
+		var source_path: String = "%s/%s" % [BUNDLED_CHARACTER_DIR, file_name]
+		var dest_path: String = "user://last_character.json" if file_name == "last_character.json" else "%s/%s" % [SAVED_CHARACTER_DIR, file_name]
+		_copy_res_file_if_missing(source_path, dest_path)
+
+
+static func _copy_res_file_if_missing(source_path: String, destination_path: String) -> void:
+	if FileAccess.file_exists(destination_path):
+		return
+	if source_path.get_extension().to_lower() == "png" and _copy_bundled_png_if_missing(source_path, destination_path):
+		return
+	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(source_path)
+	if bytes.is_empty():
+		return
+	var dest_dir: String = destination_path.get_base_dir()
+	if dest_dir.begins_with("user://"):
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dest_dir))
+	var out: FileAccess = FileAccess.open(destination_path, FileAccess.WRITE)
+	if out == null:
+		return
+	out.store_buffer(bytes)
+
+
+static func _copy_bundled_png_if_missing(source_path: String, destination_path: String) -> bool:
+	if not ResourceLoader.exists(source_path):
+		return false
+	var tex: Texture2D = load(source_path) as Texture2D
+	if tex == null:
+		return false
+	var img: Image = tex.get_image()
+	if img == null:
+		return false
+	return img.save_png(destination_path) == OK
 
 
 static func _sync_saved_characters_from_standalone() -> void:
@@ -1153,6 +1210,7 @@ func _setup_character_animations(model: Node) -> void:
 		_anim_player.add_animation_library("kenney_breakdance", _breakdance_lib)
 	if _button_lib != null and _button_lib.has_animation("Button"):
 		_anim_player.add_animation_library("kenney_button", _button_lib)
+	_anim_player.add_animation_library("extinguisher", EXTINGUISHER_REACTION_LIB)
 	_walk_anim_path = _pick_walk_anim_path()
 	_anim_player.active = true
 	_play_anim("idle")
@@ -1201,6 +1259,8 @@ func _play_wait_stance() -> void:
 
 
 func _play_anim(state: String) -> void:
+	if _powdering:
+		return
 	if _anim_player == null:
 		return
 	if _celebrating and state != "celebrate":
@@ -1498,44 +1558,71 @@ func _fade_node_materials(node: Node, alpha: float) -> void:
 					base = mi.mesh.surface_get_material(si)
 				if base == null:
 					base = mi.material_override
-				var sm := _material_for_fade(base)
-				if sm == null:
+				var faded := _material_for_fade(base)
+				if faded == null:
 					continue
 				if mi.mesh != null and si < mi.mesh.get_surface_count():
-					mi.set_surface_override_material(si, sm)
+					mi.set_surface_override_material(si, faded)
 				else:
-					mi.material_override = sm
-				_set_material_alpha(sm, alpha)
+					mi.material_override = faded
+				_set_material_alpha(faded, alpha)
 	for child in node.get_children():
 		_fade_node_materials(child, alpha)
 
 
-func _material_for_fade(base: Material) -> StandardMaterial3D:
-	if base is StandardMaterial3D:
-		var sm := base as StandardMaterial3D
-		if not bool(sm.get_meta("customer_fade_unique", false)):
-			sm = sm.duplicate() as StandardMaterial3D
-			sm.set_meta("customer_fade_unique", true)
-		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		sm.cull_mode = BaseMaterial3D.CULL_DISABLED
-		sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-		return sm
-	var fresh := StandardMaterial3D.new()
-	fresh.set_meta("customer_fade_unique", true)
-	fresh.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fresh.cull_mode = BaseMaterial3D.CULL_DISABLED
-	fresh.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-	fresh.albedo_color = Color(1.0, 1.0, 1.0, _leave_fade_alpha)
-	fresh.roughness = 0.72
-	fresh.metallic = 0.0
-	fresh.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	return fresh
+func _material_for_fade(base: Material) -> Material:
+	if base is BaseMaterial3D:
+		var bm := base as BaseMaterial3D
+		if not bool(bm.get_meta("customer_fade_unique", false)):
+			bm = bm.duplicate() as BaseMaterial3D
+			bm.set_meta("customer_fade_unique", true)
+		bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+		return bm
+	if base is ShaderMaterial:
+		return _shader_material_for_fade(base as ShaderMaterial)
+	return null
 
 
-func _set_material_alpha(sm: StandardMaterial3D, alpha: float) -> void:
-	var c := sm.albedo_color
-	c.a = alpha
-	sm.albedo_color = c
+func _shader_material_for_fade(base: ShaderMaterial) -> ShaderMaterial:
+	if bool(base.get_meta("customer_fade_unique", false)):
+		return base
+	var faded := base.duplicate() as ShaderMaterial
+	faded.set_meta("customer_fade_unique", true)
+	if faded.shader != null and not faded.shader.code.contains("uniform float fade_alpha"):
+		var fade_shader := faded.shader.duplicate() as Shader
+		fade_shader.code = _inject_fade_alpha_into_shader(fade_shader.code)
+		faded.shader = fade_shader
+	return faded
+
+
+func _inject_fade_alpha_into_shader(code: String) -> String:
+	if code.contains("uniform float fade_alpha"):
+		return code
+	var injected := code
+	var type_i := injected.find("shader_type")
+	if type_i >= 0:
+		var nl := injected.find("\n", type_i)
+		if nl >= 0:
+			injected = injected.insert(nl + 1, "uniform float fade_alpha : hint_range(0.0, 1.0) = 1.0;\n")
+	var frag_i := injected.find("void fragment()")
+	if frag_i < 0:
+		return injected
+	var brace := injected.find("{", frag_i)
+	if brace < 0:
+		return injected
+	return injected.insert(brace + 1, "\n\tALPHA = fade_alpha;")
+
+
+func _set_material_alpha(mat: Material, alpha: float) -> void:
+	if mat is BaseMaterial3D:
+		var bm := mat as BaseMaterial3D
+		var c := bm.albedo_color
+		c.a = alpha
+		bm.albedo_color = c
+	elif mat is ShaderMaterial:
+		(mat as ShaderMaterial).set_shader_parameter("fade_alpha", alpha)
 
 
 func _get_face_tex(mood: String) -> ImageTexture:
@@ -1888,9 +1975,10 @@ func _apply_leave_body(delta: float, walking: bool) -> void:
 		global_position.x = _leave_walk_x + wob
 		_body.rotation_degrees.x = sin(_powder_panic_t * (8.5 if walking else 11.0)) * (7.0 if walking else 3.0)
 		_body.rotation_degrees.z = sin(_powder_panic_t * (12.0 if walking else 14.0)) * (14.0 if walking else 5.0)
-		_apply_hands_up_pose(1.0)
-		if not _leave_turned and _anim_player:
-			_anim_player.stop()
+		if not _powder_uses_tantrum:
+			_apply_hands_up_pose(1.0)
+			if not _leave_turned and _anim_player:
+				_anim_player.stop()
 	else:
 		global_position.x = _leave_walk_x
 		_body.rotation_degrees = Vector3.ZERO
@@ -1967,6 +2055,7 @@ func restyle_street_character(custom_preset: Dictionary = {}, lock_custom_choice
 
 
 static func has_usable_saved_characters() -> bool:
+	ensure_saved_character_files()
 	if _folder_has_character_json(SAVED_CHARACTER_DIR):
 		return true
 	var legacy_characters: String = OS.get_user_data_dir().get_base_dir().path_join(STANDALONE_CREATOR_FOLDER).path_join("characters")
@@ -2782,7 +2871,10 @@ func _review_first_two_lines(raw: String) -> String:
 
 
 func _make_review_card_texture() -> ImageTexture:
-	## Soft antialiased rounded rectangle mask; material alpha supplies the 50% fill.
+	## This mask is identical for every customer. Building and uploading it once
+	## avoids a pixel loop and GPU texture creation on every burger serve.
+	if _shared_review_card_texture != null:
+		return _shared_review_card_texture
 	const W := 192
 	const H := 64
 	const RADIUS := 16.0
@@ -2798,8 +2890,24 @@ func _make_review_card_texture() -> ImageTexture:
 			var signed_distance := outside + inside - RADIUS
 			var edge_alpha := clampf(0.5 - signed_distance, 0.0, 1.0)
 			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, edge_alpha))
-	return ImageTexture.create_from_image(img)
+	_shared_review_card_texture = ImageTexture.create_from_image(img)
+	return _shared_review_card_texture
 
+
+func prewarm_review_card(sample_text: String = "Great burger! ABC xyz 0123") -> void:
+	## Called under the loading car (and at spawn as a cheap fallback) so serving
+	## only changes labels and materials that already exist.
+	_ensure_review_card_nodes()
+	_review_stars.text = "★★★★★"
+	_review_text.text = sample_text
+	## Some customer factories prepare nodes just before adding the customer to
+	## the world. Global layout is deferred until show_review_stars in that case.
+	if is_inside_tree():
+		_apply_review_card_layout()
+	_review_card_root.visible = false
+	_review_box.visible = false
+	_review_stars.visible = false
+	_review_text.visible = false
 
 func react_free_icecream(accepted: bool = true) -> void:
 	if is_leaving or is_ragdoll:
@@ -2977,7 +3085,10 @@ func apply_ext_spray_push(delta: float, zone: String = "body") -> void:
 
 
 func _begin_powder_stand() -> void:
-	## Freeze — throw hands up while powder piles on face + torso.
+	## Play the authored hopping tantrum once while powder continues to build.
+	_cancel_order_announce()
+	_cancel_serve_celebration()
+	_clear_antsy_wait_pose()
 	stop_order_clock()
 	is_waiting = false
 	_shake_time = 0.0
@@ -2986,14 +3097,26 @@ func _begin_powder_stand() -> void:
 	global_position.z = _wait_z()
 	speech = "Agh! My face!! Never coming back!"
 	_set_mood("mad")
-	if _anim_player:
-		_anim_player.stop()
-		_anim_player.active = false
-	_apply_hands_up_pose(1.0)
+	rotation_degrees.y = FACE_TRUCK_YAW
+	_powder_uses_tantrum = _anim_player != null and _anim_player.has_animation(EXTINGUISHER_REACTION_ANIM)
+	_powder_reaction_duration = POWDER_STAND_SEC
+	if _powder_uses_tantrum:
+		_reset_skeleton_pose()
+		_anim_player.active = true
+		_anim_player.speed_scale = 1.0
+		_anim_state = "powder"
+		_powder_reaction_duration = _anim_player.get_animation(EXTINGUISHER_REACTION_ANIM).length
+		_anim_player.play(EXTINGUISHER_REACTION_ANIM)
+		_anim_player.seek(0.0, true)
+	else:
+		if _anim_player:
+			_anim_player.stop()
+			_anim_player.active = false
+		_apply_hands_up_pose(1.0)
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
 		_body.position.y = _base_body_y
-		_body.rotation_degrees.x = 0.0
+		_body.rotation_degrees = Vector3.ZERO
 	if _bubble:
 		_bubble.text = speech
 		_bubble.visible = true
@@ -3013,15 +3136,21 @@ func _update_powder_stand(delta: float) -> void:
 	global_position.y = STAND_Y
 	_powder_knock_x = lerpf(_powder_knock_x, 0.0, delta * 1.35)
 	_powder_knock_z = lerpf(_powder_knock_z, 0.0, delta * 0.95)
-	var wob := sin(_powder_panic_t * 16.0) * 0.05
+	var wob := 0.0 if _powder_uses_tantrum else sin(_powder_panic_t * 16.0) * 0.05
 	global_position.x = _home_x + wob + _powder_knock_x
 	global_position.z = clampf(_wait_z() + _powder_knock_z, _wait_z(), MATTE_FRONT_Z_MAX - 0.15)
-	if _body:
-		_body.scale = Vector3.ONE * CHAR_SCALE
-		_body.position.y = _base_body_y + absf(sin(_powder_panic_t * 10.0)) * 0.015
-		_body.rotation_degrees.x = sin(_powder_panic_t * 9.0) * 3.0
-		_body.rotation_degrees.z = sin(_powder_panic_t * 13.0) * 4.0
-	_apply_hands_up_pose(1.0)
+	if _powder_uses_tantrum:
+		## The clip owns hopping, head motion and squash/stretch on the skeleton.
+		if _body:
+			_body.position.y = _base_body_y
+			_body.rotation_degrees = Vector3.ZERO
+	else:
+		if _body:
+			_body.scale = Vector3.ONE * CHAR_SCALE
+			_body.position.y = _base_body_y + absf(sin(_powder_panic_t * 10.0)) * 0.015
+			_body.rotation_degrees.x = sin(_powder_panic_t * 9.0) * 3.0
+			_body.rotation_degrees.z = sin(_powder_panic_t * 13.0) * 4.0
+		_apply_hands_up_pose(1.0)
 	## Keep dripping — bias toward the face as it gets coated.
 	_powder_drip_cool -= delta
 	if _powder_drip_cool <= 0.0:
@@ -3033,7 +3162,7 @@ func _update_powder_stand(delta: float) -> void:
 		_spawn_powder_blob("body")
 		if randf() < 0.45:
 			_spawn_powder_blob("body")
-	if _powder_stand_t >= POWDER_STAND_SEC:
+	if _powder_stand_t >= _powder_reaction_duration:
 		_powdering = false
 		leave_powdered()
 
@@ -3049,8 +3178,14 @@ func leave_powdered() -> void:
 	_set_mood("mad")
 	if _anim_player:
 		_anim_player.stop()
-		_anim_player.active = false
-	_apply_hands_up_pose(1.0)
+		_anim_player.active = _powder_uses_tantrum
+	if _powder_uses_tantrum:
+		## Clear every keyed hop/scale before returning to the normal walk cycle.
+		_reset_skeleton_pose()
+		_anim_state = ""
+		_play_anim("idle")
+	else:
+		_apply_hands_up_pose(1.0)
 	if _body:
 		_body.scale = Vector3.ONE * CHAR_SCALE
 		_body.position.y = _base_body_y
@@ -3104,6 +3239,8 @@ func get_shot(shot_from: Vector3, shot_dir: Vector3) -> bool:
 	stop_order_clock()
 	_cancel_order_announce()
 	is_ragdoll = true
+	_powdering = false
+	_powder_uses_tantrum = false
 	is_leaving = true
 	is_waiting = false
 	_ragdoll_t = 0.0
@@ -4291,7 +4428,8 @@ func receive_burger(
 	combo: int,
 	tip_factor: float,
 	fresh_ratio: float = 1.0,
-	seasoned: bool = true
+	seasoned: bool = true,
+	service_stars: float = -1.0
 ) -> Dictionary:
 	var result: Dictionary = GameDataScript.compare_orders(built, order)
 	last_tip = 0
@@ -4308,46 +4446,36 @@ func receive_burger(
 		react_wrong()
 		return {"total": 0, "base": 0, "tip": 0, "perfect": false, "wrong": true, "meh": false}
 
-	## Tip for doing a good job: perfect match, good cook, fresh, patient — and seasoned beef.
+	## Customers tip 10-20% only when their service rating is strictly above four
+	## stars. Cash is whole-dollar, so an eligible small ticket tips at least $1.
 	var tip_pay := 0
 	var perfect: bool = bool(result.perfect)
 	var good_job := perfect or float(result.quality) >= 0.9
 	var meh := not seasoned
-	if good_job and seasoned:
-		tip_pay = 2
-		if perfect:
-			tip_pay += 2
-		if patty_mult >= 1.2:
-			tip_pay += 2 ## well-cooked patty
-		elif patty_mult >= 1.0:
-			tip_pay += 1
-		if fresh_ratio > 0.7:
-			tip_pay += 2 ## nice and fresh
-		elif fresh_ratio > 0.4:
-			tip_pay += 1
-		## Happier customers tip more
-		tip_pay = int(round(float(tip_pay) * (0.55 + tip_factor * 1.4) * tip_mood_mult))
-		if combo >= 2:
-			tip_pay += mini(combo, 4)
-		## Tips stay in a tight band — Hidden Economy can widen it / add outliers.
-		var tip_lo := mini(GameDataScript.TIP_MIN, GameDataScript.TIP_MAX)
-		var tip_hi := maxi(GameDataScript.TIP_MIN, GameDataScript.TIP_MAX)
-		tip_pay = clampi(tip_pay, tip_lo, tip_hi)
-		if GameDataScript.TIP_OUTLIER_CHANCE > 0.0 \
-				and GameDataScript.TIP_OUTLIER_AMOUNT > tip_hi \
-				and randf() < GameDataScript.TIP_OUTLIER_CHANCE:
-			tip_pay = GameDataScript.TIP_OUTLIER_AMOUNT
-	elif meh:
-		tip_pay = 0
+	var rated_stars := service_stars
+	if rated_stars < 0.0:
+		rated_stars = float(speed_rating().get("stars", 0.0))
+	if rated_stars > 4.0 and seasoned:
+		var tip_lo := minf(GameDataScript.TIP_MIN_PERCENT, GameDataScript.TIP_MAX_PERCENT)
+		var tip_hi := maxf(GameDataScript.TIP_MIN_PERCENT, GameDataScript.TIP_MAX_PERCENT)
+		var tip_percent := randf_range(tip_lo, tip_hi)
+		tip_pay = maxi(1, int(round(float(base_pay) * tip_percent)))
 
 	last_base_pay = base_pay
 	last_tip = tip_pay
 	var total := base_pay + tip_pay
 	var five_star := (not meh) and good_job and float(speed_rating().get("stars", 0.0)) >= 4.95
-	if meh:
-		complete_serve_meh(total)
+	## The game can commit scoring without also forcing skeleton reset, ticket layout,
+	## and leave animation onto that same frame. It releases this on a later frame.
+	if bool(get_meta("serve_commit_hold", false)):
+		set_meta("serve_pending_total", total)
+		set_meta("serve_pending_meh", meh)
+		set_meta("serve_pending_five_star", five_star)
 	else:
-		complete_serve(total, five_star)
+		if meh:
+			complete_serve_meh(total)
+		else:
+			complete_serve(total, five_star)
 	return {
 		"total": total,
 		"base": base_pay,
@@ -4355,7 +4483,27 @@ func receive_burger(
 		"perfect": perfect,
 		"wrong": false,
 		"meh": meh,
+		"five_star": five_star,
 	}
+
+
+func release_serve_completion() -> void:
+	if not bool(get_meta("serve_commit_hold", false)):
+		return
+	set_meta("serve_commit_hold", false)
+	## Wrong orders already call react_wrong() immediately and have no pending payout.
+	if not has_meta("serve_pending_total"):
+		return
+	var payout := int(get_meta("serve_pending_total", 0))
+	var meh := bool(get_meta("serve_pending_meh", false))
+	var five_star := bool(get_meta("serve_pending_five_star", false))
+	remove_meta("serve_pending_total")
+	remove_meta("serve_pending_meh")
+	remove_meta("serve_pending_five_star")
+	if meh:
+		complete_serve_meh(payout)
+	else:
+		complete_serve(payout, five_star)
 
 
 func react_wrong() -> void:
@@ -4368,6 +4516,9 @@ func react_wrong() -> void:
 
 
 func _cancel_serve_celebration() -> void:
+	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
+	if audio != null and audio.has_method("stop_customer_dance_wawa"):
+		audio.stop_customer_dance_wawa()
 	_celebrating = false
 	_celebrate_done = Callable()
 	_celebrate_anim_path = ""
@@ -4444,7 +4595,11 @@ func _start_leave_dance() -> void:
 	var anim := _anim_player.get_animation(_celebrate_anim_path)
 	if anim != null:
 		dur = maxf(anim.length / maxf(_anim_player.speed_scale, 0.01), 0.2)
-	get_tree().create_timer(dur + 0.04).timeout.connect(func() -> void:
+	dur = minf(dur, LEAVE_DANCE_MAX_SEC)
+	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
+	if audio != null and audio.has_method("play_customer_dance_wawa"):
+		audio.play_customer_dance_wawa(dur)
+	get_tree().create_timer(dur).timeout.connect(func() -> void:
 		if not is_instance_valid(self):
 			return
 		_finish_serve_celebration()

@@ -2,8 +2,8 @@
 extends Node
 
 const MUSIC_PATH := "res://assets/music/burger_time.mp3"
-## Matches project boot_splash/minimum_display_time (2100 ms) — fire at halfway.
-const START_AFTER_SEC := 1.05
+## Matches project boot_splash/minimum_display_time (4500 ms) — fire at halfway.
+const START_AFTER_SEC := 2.25
 const FADE_SEC := 1.5
 const TARGET_DB := -9.5
 

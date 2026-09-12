@@ -19,8 +19,26 @@ func _run_test() -> void:
 	root.add_child(game)
 	current_scene = game
 	await create_timer(3.0).timeout
+	game.call("_set_phone_in_truck", true)
 	game.call("_set_phone_app", "shop")
 	await process_frame
+	var inventory_box := game.get("phone_inventory_box") as VBoxContainer
+	var row_refs: Dictionary = game.get("_phone_supply_row_refs")
+	if inventory_box == null or not row_refs.has("patty"):
+		_fail("Phone supply rows were not cached for incremental updates")
+		return
+	var first_row := inventory_box.get_child(0)
+	var before_stock := int((game.get("supply_stock") as Dictionary).get("patty", 0))
+	game.call("_try_use_supply", "patty")
+	await process_frame
+	if inventory_box.get_child(0) != first_row:
+		_fail("Using one patty rebuilt the entire phone inventory")
+		return
+	var patty_refs: Dictionary = row_refs["patty"]
+	var patty_count := patty_refs.get("count") as Label
+	if patty_count == null or patty_count.text != str(maxi(0, before_stock - 1)):
+		_fail("Incremental patty stock count did not update in place")
+		return
 	var shop := game.find_child("EquipmentShop", true, false) as Control
 	if shop == null or not shop.is_visible_in_tree():
 		_fail("Equipment marketplace is missing or hidden")

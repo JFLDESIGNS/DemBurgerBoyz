@@ -269,30 +269,21 @@ func _ready() -> void:
 	add_child(_sizzle_player)
 	_sz_next_pop_in = 0.04 + randf() * 0.12
 	## Quieter idle burner hiss — obvious ON without matching cooking volume.
-	_hiss_gen = AudioStreamGenerator.new()
-	_hiss_gen.mix_rate = MIX_RATE
-	_hiss_gen.buffer_length = 0.12
 	_hiss_player = AudioStreamPlayer.new()
 	_hiss_player.bus = "Master"
-	_hiss_player.stream = _hiss_gen
+	_hiss_player.stream = preload("res://sounds/cached_beds/hiss.res")
 	_hiss_player.volume_db = -80.0
 	add_child(_hiss_player)
 	## Live extinguisher spray static (powder / CO2 rush).
-	_spray_gen = AudioStreamGenerator.new()
-	_spray_gen.mix_rate = MIX_RATE
-	_spray_gen.buffer_length = 0.12
 	_spray_player = AudioStreamPlayer.new()
 	_spray_player.bus = "Master"
-	_spray_player.stream = _spray_gen
+	_spray_player.stream = preload("res://sounds/cached_beds/spray.res")
 	_spray_player.volume_db = -80.0
 	add_child(_spray_player)
 	## Live shaker rattle while seasoning patties.
-	_shake_gen = AudioStreamGenerator.new()
-	_shake_gen.mix_rate = MIX_RATE
-	_shake_gen.buffer_length = 0.12
 	_shake_player = AudioStreamPlayer.new()
 	_shake_player.bus = "Master"
-	_shake_player.stream = _shake_gen
+	_shake_player.stream = preload("res://sounds/cached_beds/shake.res")
 	_shake_player.volume_db = -80.0
 	add_child(_shake_player)
 	## Fries pack shake while carrying a serving.
@@ -319,29 +310,20 @@ func _ready() -> void:
 	_tree_chime_player.volume_db = -80.0
 	add_child(_tree_chime_player)
 	## Soda fountain dispenser hiss / carbonation rush.
-	_soda_gen = AudioStreamGenerator.new()
-	_soda_gen.mix_rate = MIX_RATE
-	_soda_gen.buffer_length = 0.12
 	_soda_player = AudioStreamPlayer.new()
 	_soda_player.bus = "Master"
-	_soda_player.stream = _soda_gen
+	_soda_player.stream = preload("res://sounds/cached_beds/soda.res")
 	_soda_player.volume_db = -80.0
 	add_child(_soda_player)
 	## Ice crusher grind while cubes drop.
-	_ice_gen = AudioStreamGenerator.new()
-	_ice_gen.mix_rate = MIX_RATE
-	_ice_gen.buffer_length = 0.12
 	_ice_player = AudioStreamPlayer.new()
 	_ice_player.bus = "Master"
-	_ice_player.stream = _ice_gen
+	_ice_player.stream = preload("res://sounds/cached_beds/ice.res")
 	_ice_player.volume_db = -80.0
 	add_child(_ice_player)
-	_softserve_gen = AudioStreamGenerator.new()
-	_softserve_gen.mix_rate = MIX_RATE
-	_softserve_gen.buffer_length = 0.12
 	_softserve_player = AudioStreamPlayer.new()
 	_softserve_player.bus = "Master"
-	_softserve_player.stream = _softserve_gen
+	_softserve_player.stream = preload("res://sounds/cached_beds/softserve.res")
 	_softserve_player.volume_db = -80.0
 	add_child(_softserve_player)
 	_fryer_gen = AudioStreamGenerator.new()
@@ -649,70 +631,34 @@ func _process(delta: float) -> void:
 			## Quieter static bed (50%); crackles stay full strength.
 			var bed_gain := lerpf(0.06, 0.1, t) * oil_mul
 			var pop_chance_boost := lerpf(1.0, 1.6, t) * lerpf(1.0, 3.2, oil_fade_t if oil_active else 0.0) * vol_mul
-			while playback.get_frames_available() > 0:
+			for _sample_index in playback.get_frames_available():
 				var sample := _next_sizzle_sample(bed_gain, pop_chance_boost)
 				if oil_active:
 					sample = clampf(sample * lerpf(1.0, 1.55, oil_fade_t) * vol_mul, -1.0, 1.0)
 				playback.push_frame(Vector2(sample, sample))
-	if _hiss_on and _hiss_player != null and _hiss_player.playing:
-		var hp := _hiss_player.get_stream_playback() as AudioStreamGeneratorPlayback
-		if hp != null:
-			while hp.get_frames_available() > 0:
-				var hs := _next_burner_hiss_sample()
-				hp.push_frame(Vector2(hs, hs))
-	if _spray_on and _spray_player != null and _spray_player.playing:
-		var sp := _spray_player.get_stream_playback() as AudioStreamGeneratorPlayback
-		if sp != null:
-			while sp.get_frames_available() > 0:
-				var ss := _next_ext_spray_sample()
-				sp.push_frame(Vector2(ss, ss))
-	if _shake_on and _shake_player != null and _shake_player.playing:
-		var shp := _shake_player.get_stream_playback() as AudioStreamGeneratorPlayback
-		if shp != null:
-			while shp.get_frames_available() > 0:
-				var shs := _next_shaker_rattle_sample()
-				shp.push_frame(Vector2(shs, shs))
 	if _fries_shake_on and _fries_shake_player != null and _fries_shake_player.playing:
 		var fsp := _fries_shake_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if fsp != null:
-			while fsp.get_frames_available() > 0:
+			for _sample_index in fsp.get_frames_available():
 				var fss := _next_fries_shake_sample()
 				fsp.push_frame(Vector2(fss, fss))
 	if _tree_leaf_on and _tree_leaf_player != null and _tree_leaf_player.playing:
 		var tlp := _tree_leaf_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if tlp != null:
-			while tlp.get_frames_available() > 0:
+			for _sample_index in tlp.get_frames_available():
 				var tls := _next_tree_leaf_shake_sample()
 				tlp.push_frame(Vector2(tls, tls))
-	if _soda_on and _soda_player != null and _soda_player.playing:
-		var sop := _soda_player.get_stream_playback() as AudioStreamGeneratorPlayback
-		if sop != null:
-			while sop.get_frames_available() > 0:
-				var sos := _next_soda_pour_sample()
-				sop.push_frame(Vector2(sos, sos))
-	if _ice_on and _ice_player != null and _ice_player.playing:
-		var ip := _ice_player.get_stream_playback() as AudioStreamGeneratorPlayback
-		if ip != null:
-			while ip.get_frames_available() > 0:
-				var ics := _next_ice_grind_sample()
-				ip.push_frame(Vector2(ics, ics))
-	if _softserve_on and _softserve_player != null and _softserve_player.playing:
-		var ssp := _softserve_player.get_stream_playback() as AudioStreamGeneratorPlayback
-		if ssp != null:
-			while ssp.get_frames_available() > 0:
-				var ss := _next_softserve_sample()
-				ssp.push_frame(Vector2(ss, ss))
 	if _fryer_on and _fryer_player != null and _fryer_player.playing:
 		var fp := _fryer_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if fp != null:
-			while fp.get_frames_available() > 0:
+			for _sample_index in fp.get_frames_available():
 				var fs := _next_fryer_oil_sample()
 				fp.push_frame(Vector2(fs, fs))
 	## Soft room tone — keep buffer fed whenever playing so we never hiss from underrun.
 	if _room_tone_on and not _room_tone_muted and _room_tone_player != null and _room_tone_player.playing:
 		var rtp := _room_tone_player.get_stream_playback() as AudioStreamGeneratorPlayback
 		if rtp != null:
-			while rtp.get_frames_available() > 0:
+			for _sample_index in rtp.get_frames_available():
 				var rs := _next_room_tone_sample()
 				rtp.push_frame(Vector2(rs, rs))
 	## Safety: a generator left playing without fill = continuous static.
@@ -1743,11 +1689,11 @@ func prewarm_spatula_audio() -> void:
 			if not _cache.has(key):
 				match voice:
 					1:
-						_cache[key] = _make_hold_hihat(pad, false)
+						await _prewarm_cache_entry_async(key, _make_hold_hihat.bind(pad, false))
 					2:
-						_cache[key] = _make_hold_hihat(pad, true)
+						await _prewarm_cache_entry_async(key, _make_hold_hihat.bind(pad, true))
 					_:
-						_cache[key] = _make_hold_drum(pad)
+						await _prewarm_cache_entry_async(key, _make_hold_drum.bind(pad))
 		await get_tree().process_frame
 
 
@@ -2028,10 +1974,127 @@ func prewarm_fridge_place() -> void:
 		_cache["chaching"] = _make_chaching()
 
 
+var _synthesis_tasks: Array[int] = []
+
+
+func _exit_tree() -> void:
+	# A close during loading must finish synthesis before this node is freed.
+	for task in _synthesis_tasks:
+		WorkerThreadPool.wait_for_task_completion(task)
+	_synthesis_tasks.clear()
+
+
+func _prewarm_cache_entry_async(key: String, maker: Callable) -> void:
+	if _cache.has(key):
+		return
+	var result: Array = [null]
+	# These makers only synthesize PCM and construct a new WAV resource. Players
+	# and the shared audio cache are never accessed from the worker.
+	var task := WorkerThreadPool.add_task(func(): result[0] = maker.call())
+	_synthesis_tasks.append(task)
+	while not WorkerThreadPool.is_task_completed(task):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task)
+	_synthesis_tasks.erase(task)
+	if result[0] != null and not _cache.has(key):
+		_cache[key] = result[0]
+
+
+func _prewarm_cache_entry(key: String, maker: Callable) -> void:
+	if _cache.has(key):
+		return
+	var stream = maker.call()
+	if stream != null:
+		_cache[key] = stream
+
+
+func prewarm_all_gameplay_audio() -> void:
+	## Generate every common procedural one-shot during the dedicated load window.
+	## Variants use their exact runtime keys so random first-use playback stays cheap.
+	for entry in [["chaching", _make_chaching], ["score_climb", _make_score_climb],
+		["fridge_seal_break", _make_fridge_seal_break], ["fridge_open_whoosh", _make_fridge_open_whoosh]]:
+		await _prewarm_cache_entry_async(str(entry[0]), entry[1] as Callable)
+	for i in 4:
+		await _prewarm_cache_entry_async("smash_hiss_%d" % i, _make_smash_hiss)
+	for i in 8:
+		await _prewarm_cache_entry_async("grease_pop_f_%d" % i, _make_grease_pop)
+	prewarm_payment_audio()
+	await prewarm_spatula_audio()
+	prewarm_fridge_place()
+	var singles: Array = [
+		["ui_click", _make_click], ["scale_jingle", _make_scale_jingle],
+		["rack_take_thud", _make_rack_take_thud], ["ready", _make_ready_ding],
+		["scoop", _make_scoop], ["flip", _make_flip], ["trash", _make_trash],
+		["error_buzz", _make_error], ["burger_chomp", _make_burger_chomp],
+		["serve_whoosh", _make_serve_whoosh], ["spatula_whoosh", _make_spatula_whoosh],
+		["order_up_bell", _make_serve_bell], ["grade_good", _make_good_tune],
+		["grade_great", _make_great_tune], ["grade_perfect", _make_perfect_tune],
+		["grade_wow", _make_wow_tune], ["roomba_done_beep", _make_roomba_done_beep],
+		["hot_oil_hit", _make_hot_oil_hit], ["ext_pressure_tap", _make_ext_pressure_tap]
+	]
+	for entry in singles:
+		await _prewarm_cache_entry_async(str(entry[0]), entry[1] as Callable)
+		await get_tree().process_frame
+	for midi_v in INGREDIENT_MIDI.values():
+		var midi := int(midi_v)
+		await _prewarm_cache_entry_async("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32))
+		await get_tree().process_frame
+	for i in 8:
+		await _prewarm_cache_entry_async("grease_pop_f_%d" % i, _make_grease_pop)
+		await get_tree().process_frame
+	for i in 4:
+		await _prewarm_cache_entry_async("smash_hiss_%d" % i, _make_smash_hiss)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("gunshot_%d" % i, _make_gunshot)
+		await get_tree().process_frame
+	for i in 3:
+		await _prewarm_cache_entry_async("bun_thud_v3_%d" % i, _make_bun_thud)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("cutting_board_thud_v1_%d" % i, _make_cutting_board_thud)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("tip_jar_ping_%d" % i, _make_tip_jar_ping)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("shaker_tap_crash_v1_%d" % i, _make_shaker_tap_crash)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("cup_plastic_tap_v1_%d" % i, _make_cup_plastic_tap)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("tree_thud_%d" % i, _make_tree_thud)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("truck_knock_v1_%d" % i, _make_truck_knock)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("tree_leaf_tap_v3_%d" % i, _make_tree_leaf_tap)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("cat_meow_%d" % i, _make_cat_meow)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("cat_purr_%d" % i, _make_cat_purr)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("roomba_plastic_tap_v2_%d" % i, _make_roomba_body_tap)
+		await get_tree().process_frame
+	for i in 4:
+		await _prewarm_cache_entry_async("debris_bass_%d" % i, _make_debris_bass_pop)
+		await get_tree().process_frame
+		await _prewarm_cache_entry_async("debris_kuhh_%d" % i, _make_debris_kuhh)
+		await get_tree().process_frame
+	_load_vehicle_stream("street_car_pass_recording", STREET_CAR_PASS_PATH)
+	_load_vehicle_stream("street_car_horn_recording", STREET_CAR_HORN_PATH)
+	_load_cat_begging_meow_stream()
+	_load_announcer_stream("perfect_announcer", "res://sounds/perfect.wav")
+	_load_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav")
+	_load_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav")
+	if ResourceLoader.exists(WAWA_PATH):
+		_cache["wawawa"] = load(WAWA_PATH)
+	if ResourceLoader.exists(CHALLENGE_SONG_PATH):
+		var challenge_stream := load(CHALLENGE_SONG_PATH)
+		if challenge_stream != null:
+			_cache["challenge_song"] = challenge_stream
+	await get_tree().process_frame
+
 const WAWA_PATH := "res://sounds/wawawa.ogg"
 const GROBBLE_CLIP_SEC := 3.0
 const GROBBLE_FADE_IN_SEC := 0.3
 const CLICK_WAWA_CLIP_SEC := 1.15
+const DANCE_WAWA_CLIP_SEC := 3.0
+const DANCE_WAWA_PITCH := 1.42
 const BOSS_WAWA_CLIP_SEC := 4.0
 const BOSS_WAWA_VOLUME_MUL := 3.6
 const BOSS_WAWA_LOUD_MUL := 1.88 ## morning loop; 20% quieter than 2.35
@@ -2043,6 +2106,8 @@ var _boss_wawawa_loud: bool = false
 var _customer_click_wawa: AudioStreamPlayer = null
 var _customer_click_wawa_tween: Tween = null
 var _customer_click_wawa_stop_at_msec: int = 0
+var _customer_dance_wawa: AudioStreamPlayer = null
+var _customer_dance_wawa_token: int = 0
 const GROBBLE_PITCH := 1.293 ## prior 1.22 × +6%
 
 func play_customer_grobble(impatience: float = 0.5) -> void:
@@ -2205,6 +2270,54 @@ func play_customer_wawa_click(impatience: float = 0.5) -> void:
 		if _customer_click_wawa != null and is_instance_valid(_customer_click_wawa):
 			_customer_click_wawa.stop()
 	)
+
+
+func play_customer_dance_wawa(duration_sec: float = DANCE_WAWA_CLIP_SEC) -> void:
+	## One dedicated celebration voice. It is pitched above the normal customer
+	## grobble and shares the dance's hard three-second lifetime.
+	if not ResourceLoader.exists(WAWA_PATH):
+		return
+	if not _cache.has("wawawa"):
+		var loaded := load(WAWA_PATH) as AudioStream
+		if loaded == null:
+			return
+		_cache["wawawa"] = loaded
+	var stream := _cache["wawawa"] as AudioStream
+	if stream == null:
+		return
+	if _customer_dance_wawa == null or not is_instance_valid(_customer_dance_wawa):
+		_customer_dance_wawa = AudioStreamPlayer.new()
+		_customer_dance_wawa.name = "CustomerDanceWawa"
+		_customer_dance_wawa.bus = "Master"
+		add_child(_customer_dance_wawa)
+	var duration := clampf(duration_sec, 0.05, DANCE_WAWA_CLIP_SEC)
+	var source_needed := duration * DANCE_WAWA_PITCH
+	var max_start := maxf(0.0, stream.get_length() - source_needed)
+	var start_at := randf() * max_start if max_start > 0.0 else 0.0
+	_customer_dance_wawa_token += 1
+	var token := _customer_dance_wawa_token
+	_customer_dance_wawa.stop()
+	_customer_dance_wawa.stream = stream
+	_customer_dance_wawa.pitch_scale = DANCE_WAWA_PITCH
+	_customer_dance_wawa.volume_db = _sfx_db(0.72, "world")
+	_customer_dance_wawa.play(start_at)
+	var tree := get_tree()
+	if tree == null:
+		return
+	tree.create_timer(duration).timeout.connect(func() -> void:
+		if token == _customer_dance_wawa_token:
+			stop_customer_dance_wawa()
+	)
+
+
+func stop_customer_dance_wawa() -> void:
+	_customer_dance_wawa_token += 1
+	if (
+		_customer_dance_wawa != null
+		and is_instance_valid(_customer_dance_wawa)
+		and _customer_dance_wawa.playing
+	):
+		_customer_dance_wawa.stop()
 
 
 func play_gunshot() -> void:

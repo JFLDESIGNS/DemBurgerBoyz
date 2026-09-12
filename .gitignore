@@ -12,7 +12,10 @@ FoodTruckFlip.exe
 FoodTruckFlip.console.exe
 *.pck
 _tmp_chars/
-tools/
+tools/*
+!tools/bake_audio_beds.gd
+!tools/bake_ingredient_art.gd
+!tools/bake_oil_animation.gd
 debug_captures/
 assets/**/debug_*.png
 assets/**/debug_*.png.import

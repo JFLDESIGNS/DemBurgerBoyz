@@ -1,0 +1,7 @@
+Godot Engine v4.6.2.stable.official.71f334935 - https://godotengine.org
+
+POWER_BUTTON_OCCLUSION false
+KNOB_SCREEN_POSITION (730.071, 1018.186)
+STYLIZED_GRILL_SMOKE_OK import, alignment, heat zones, knob animation, light, physical click
+WARNING: ObjectDB instances leaked at exit (run with --verbose for details).
+   at: cleanup (core/object/object.cpp:2641)

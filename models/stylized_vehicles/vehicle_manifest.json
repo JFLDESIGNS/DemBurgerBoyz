@@ -1,0 +1,79 @@
+{
+  "units": "meters",
+  "blender_forward": "+X",
+  "blender_up": "+Z",
+  "godot_up": "+Y",
+  "animation": "DriveLoop, two seconds, four wheel rotations, body suspension only; no root motion",
+  "vehicles": [
+    {
+      "id": "lagoon_hatch",
+      "file": "lagoon_hatch.glb",
+      "triangles": 5342,
+      "polygons": 2512,
+      "wheel_radius_m": 0.385,
+      "drive_reference_speed_mps": 4.83805,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "guava_micro",
+      "file": "guava_micro.glb",
+      "triangles": 5298,
+      "polygons": 2473,
+      "wheel_radius_m": 0.365,
+      "drive_reference_speed_mps": 4.58673,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "blueberry_estate",
+      "file": "blueberry_estate.glb",
+      "triangles": 5524,
+      "polygons": 2663,
+      "wheel_radius_m": 0.4,
+      "drive_reference_speed_mps": 5.02655,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "custard_pickup",
+      "file": "custard_pickup.glb",
+      "triangles": 5524,
+      "polygons": 2677,
+      "wheel_radius_m": 0.435,
+      "drive_reference_speed_mps": 5.46637,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "pistachio_van",
+      "file": "pistachio_van.glb",
+      "triangles": 5524,
+      "polygons": 2655,
+      "wheel_radius_m": 0.415,
+      "drive_reference_speed_mps": 5.21504,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "tangerine_flatbed",
+      "file": "tangerine_flatbed.glb",
+      "triangles": 5524,
+      "polygons": 2754,
+      "wheel_radius_m": 0.46,
+      "drive_reference_speed_mps": 5.78053,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "wisteria_box_truck",
+      "file": "wisteria_box_truck.glb",
+      "triangles": 5522,
+      "polygons": 2737,
+      "wheel_radius_m": 0.45,
+      "drive_reference_speed_mps": 5.65487,
+      "clip": "DriveLoop",
+      "duration_seconds": 2.0
+    }
+  ]
+}

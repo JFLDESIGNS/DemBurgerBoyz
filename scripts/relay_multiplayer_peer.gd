@@ -25,6 +25,15 @@ var _want_host: bool = false
 var _want_join_code: String = ""
 var _player_name: String = "Cook"
 
+var _inbox_head := 0
+var _outbox: Array[PackedByteArray] = []
+var _outbox_head := 0
+var _outbox_bytes := 0
+var _handshake_sent := false
+var _packets_sent := 0
+var _bytes_sent := 0
+var _peak_outbox_bytes := 0
+const MAX_OUTBOX_BYTES := 8 * 1024 * 1024
 var _inbox: Array = [] ## [{from, channel, mode, data}]
 var _current_from: int = 1
 var _current_channel: int = 0
@@ -61,6 +70,8 @@ func _begin(url: String, as_host: bool, code: String, player_name: String) -> Er
 	if _player_name == "":
 		_player_name = "Cook"
 	_status = MultiplayerPeer.CONNECTION_CONNECTING
+	_ws.inbound_buffer_size = 1024 * 1024
+	_ws.outbound_buffer_size = 1024 * 1024
 	var err := _ws.connect_to_url(_url)
 	if err != OK:
 		_status = MultiplayerPeer.CONNECTION_DISCONNECTED
@@ -91,12 +102,14 @@ func _poll() -> void:
 	_ws.poll()
 	var st := _ws.get_ready_state()
 	if st == WebSocketPeer.STATE_OPEN:
-		if _status == MultiplayerPeer.CONNECTION_CONNECTING and _unique_id == 0:
+		if _status == MultiplayerPeer.CONNECTION_CONNECTING and _unique_id == 0 and not _handshake_sent:
+			_handshake_sent = true
 			## First open — request host/join.
 			if _want_host:
 				_send_json({"op": "host", "name": _player_name})
 			else:
 				_send_json({"op": "join", "code": _want_join_code, "name": _player_name})
+		_flush_outbox()
 		while _ws.get_available_packet_count() > 0:
 			var packet := _ws.get_packet()
 			if _ws.was_string_packet():
@@ -117,7 +130,43 @@ func _poll() -> void:
 func _send_json(obj: Dictionary) -> void:
 	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return
-	_ws.send_text(JSON.stringify(obj))
+	var bytes := JSON.stringify(obj).to_utf8_buffer()
+	if _outbox_bytes + bytes.size() > MAX_OUTBOX_BYTES:
+		relay_failed.emit("Connection too slow to keep up. Please reconnect.")
+		close()
+		return
+	_outbox.append(bytes)
+	_outbox_bytes += bytes.size()
+	_peak_outbox_bytes = maxi(_peak_outbox_bytes, _outbox_bytes)
+	_flush_outbox()
+
+
+func _flush_outbox() -> void:
+	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	var sent_this_poll := 0
+	while _outbox_head < _outbox.size() and sent_this_poll < 32:
+		var bytes: PackedByteArray = _outbox[_outbox_head]
+		if _ws.get_current_outbound_buffered_amount() + bytes.size() > _ws.outbound_buffer_size / 2:
+			break
+		var err := _ws.send(bytes, WebSocketPeer.WRITE_MODE_TEXT)
+		if err != OK:
+			break
+		_outbox_head += 1
+		_outbox_bytes -= bytes.size()
+		_packets_sent += 1
+		_bytes_sent += bytes.size()
+		sent_this_poll += 1
+	if _outbox_head == _outbox.size():
+		_outbox.clear()
+		_outbox_head = 0
+	elif _outbox_head >= 128:
+		_outbox = _outbox.slice(_outbox_head)
+		_outbox_head = 0
+
+
+func get_transport_stats() -> Dictionary:
+	return {"queued_bytes": _outbox_bytes, "peak_queued_bytes": _peak_outbox_bytes, "packets_sent": _packets_sent, "bytes_sent": _bytes_sent, "inbox_packets": _get_available_packet_count()}
 
 
 func _handle_json(text: String) -> void:
@@ -242,9 +291,16 @@ func _put_packet_script(buffer: PackedByteArray) -> Error:
 
 func _get_packet_script() -> PackedByteArray:
 	## Pop after SceneMultiplayer has already peeked peer/channel/mode via the getters below.
-	if _inbox.is_empty():
+	if _inbox_head >= _inbox.size():
 		return PackedByteArray()
-	var item: Dictionary = _inbox.pop_front()
+	var item: Dictionary = _inbox[_inbox_head]
+	_inbox_head += 1
+	if _inbox_head == _inbox.size():
+		_inbox.clear()
+		_inbox_head = 0
+	elif _inbox_head >= 128:
+		_inbox = _inbox.slice(_inbox_head)
+		_inbox_head = 0
 	_current_from = int(item.get("from", 1))
 	_current_channel = int(item.get("channel", 0))
 	_current_mode = item.get("mode", MultiplayerPeer.TRANSFER_MODE_RELIABLE) as MultiplayerPeer.TransferMode
@@ -252,7 +308,7 @@ func _get_packet_script() -> PackedByteArray:
 
 
 func _get_available_packet_count() -> int:
-	return _inbox.size()
+	return _inbox.size() - _inbox_head
 
 
 func _get_max_packet_size() -> int:
@@ -261,9 +317,9 @@ func _get_max_packet_size() -> int:
 
 func _peek_inbox() -> Dictionary:
 	## Godot reads peer/channel/mode BEFORE get_packet — must peek front, not last-popped.
-	if _inbox.is_empty():
+	if _inbox_head >= _inbox.size():
 		return {}
-	return _inbox[0] as Dictionary
+	return _inbox[_inbox_head] as Dictionary
 
 
 func _get_packet_channel() -> int:
@@ -325,6 +381,11 @@ func _get_connection_status() -> MultiplayerPeer.ConnectionStatus:
 
 
 func _close() -> void:
+	_inbox_head = 0
+	_outbox.clear()
+	_outbox_head = 0
+	_outbox_bytes = 0
+	_handshake_sent = false
 	_inbox.clear()
 	_peer_connected_emitted.clear()
 	_unique_id = 0

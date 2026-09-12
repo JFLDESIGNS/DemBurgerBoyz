@@ -140,6 +140,15 @@ const FROZEN_BALL_HEAT_LIFT := 0.00115
 const FROZEN_BALL_HEAT_TILT := 1.15
 var _cook_img: Image
 var _cook_tex: ImageTexture
+var _cook_sear_mask := PackedFloat64Array()
+var _cook_sear_mask_seed: int = -1
+var _cook_gradient_state: Array = []
+var _cheese_drape_state: Array = []
+## Cooking state remains frame-accurate, but visual texture/material uploads are
+## intentionally capped and phase-staggered across patties.
+const COOK_VISUAL_HZ := 12.0
+const COOK_VISUAL_INTERVAL := 1.0 / COOK_VISUAL_HZ
+var _cook_visual_accum: float = 0.0
 static var _steam_tex: ImageTexture
 ## Soft smoke plume on finished (scoop-ready) burgers — not on flip.
 var _flip_smoke: Node3D = null
@@ -186,6 +195,48 @@ const HOVER_OUTLINE_WIDTH := 0.0062 ## Clear selected rim, in world metres befor
 const HOVER_OUTLINE_COLOR := Color(1.0, 0.68, 0.075, 1.0)
 
 static var _hover_outline_shader: Shader = null
+
+
+var prepared_pool_images: Dictionary = {}
+var _prepared_frozen_frost: Texture2D
+
+
+static func _generate_pool_images(seeds: Array, result: Dictionary) -> void:
+	result["sear"] = _make_sear_spot_image(seeds[0])
+	result["grate"] = _make_grate_line_image(seeds[0])
+	result["frost"] = _make_frost_image(seeds[1])
+	result["frozen"] = _make_frost_image(seeds[2])
+
+
+static func prepare_pool_image_batch_async(tree: SceneTree, count: int = 2) -> Array[Dictionary]:
+	# Two independent image jobs overlap without saturating all CPU cores.
+	var results: Array[Dictionary] = []
+	var tasks: Array[int] = []
+	for _index in clampi(count, 1, 2):
+		var seeds := [randi(), randi(), randi()]
+		var result: Dictionary = {"seed": seeds[0]}
+		results.append(result)
+		tasks.append(WorkerThreadPool.add_task(_generate_pool_images.bind(seeds, result)))
+	for task in tasks:
+		while not WorkerThreadPool.is_task_completed(task):
+			await tree.process_frame
+		WorkerThreadPool.wait_for_task_completion(task)
+	return results
+
+
+static func prepare_frost_texture_async(tree: SceneTree) -> Texture2D:
+	var frost_seed := randi()
+	var result: Array = [null]
+	var task := WorkerThreadPool.add_task(func(): result[0] = _make_frost_image(frost_seed))
+	while not WorkerThreadPool.is_task_completed(task):
+		await tree.process_frame
+	WorkerThreadPool.wait_for_task_completion(task)
+	return ImageTexture.create_from_image(result[0])
+
+
+static func prepare_pool_images_async(tree: SceneTree) -> Dictionary:
+	var results := await prepare_pool_image_batch_async(tree, 1)
+	return results[0]
 
 
 func _ready() -> void:
@@ -286,7 +337,8 @@ func _ready() -> void:
 	under.material_override = _under_mat
 	_mesh.add_child(under)
 
-	_sear_seed = randi()
+	_sear_seed = int(prepared_pool_images.get("seed", randi()))
+	_ensure_cook_sear_mask()
 
 	## Dark sear-spot disc — planar UVs so spots stay chunky, not polar.
 	_sear_disc = MeshInstance3D.new()
@@ -300,7 +352,7 @@ func _ready() -> void:
 	_sear_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_sear_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	_sear_mat.render_priority = PATTY_BODY_PRIORITY + 2
-	_sear_mat.albedo_texture = _make_sear_spot_texture()
+	_sear_mat.albedo_texture = ImageTexture.create_from_image(prepared_pool_images["sear"]) if prepared_pool_images.has("sear") else _make_sear_spot_texture()
 	_sear_mat.albedo_color = Color(1, 1, 1, 0.0)
 	_sear_disc.material_override = _sear_mat
 	_sear_disc.rotation_degrees.y = randf() * 360.0
@@ -318,7 +370,7 @@ func _ready() -> void:
 	_grate_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_grate_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	_grate_mat.render_priority = PATTY_BODY_PRIORITY + 2
-	_grate_mat.albedo_texture = _make_grate_line_texture()
+	_grate_mat.albedo_texture = ImageTexture.create_from_image(prepared_pool_images["grate"]) if prepared_pool_images.has("grate") else _make_grate_line_texture()
 	_grate_mat.albedo_color = Color(1, 1, 1, 0.0)
 	_grate_disc.material_override = _grate_mat
 	## Align with sear so spots + lines share one grill orientation.
@@ -326,7 +378,10 @@ func _ready() -> void:
 	_mesh.add_child(_grate_disc)
 
 	## Icy shell on the sides — tube only (no caps) so top face never gets polar UVs.
-	var frost_tex := _make_frost_texture(randi())
+	var frost_tex := ImageTexture.create_from_image(prepared_pool_images["frost"]) if prepared_pool_images.has("frost") else _make_frost_texture(randi())
+	if prepared_pool_images.has("frozen"):
+		_prepared_frozen_frost = ImageTexture.create_from_image(prepared_pool_images["frozen"])
+	prepared_pool_images.clear()
 	_frost = MeshInstance3D.new()
 	_frost.mesh = _make_tube_mesh(0.106, 0.111, 0.046, 28)
 	_frost.position = Vector3(0, 0.0, 0)
@@ -483,6 +538,9 @@ func reset_for_grill_spawn(
 	oil_cook_t = 0.0
 	oil_crust_left = false
 	_sizzle = randf() * TAU
+	## Random phase prevents every active burger uploading its cook texture on
+	## the same frame after a multi-patty placement burst.
+	_cook_visual_accum = randf() * COOK_VISUAL_INTERVAL
 	_announced_flip = false
 	_announced_scoop = false
 	_done_jump_y = 0.0
@@ -896,19 +954,21 @@ func _process(delta: float) -> void:
 		_sizzle += delta * 10.0 * heat_mul
 	elif heating:
 		_sizzle += delta * 10.0 * heat_mul
-	_update_cook_gradient()
-	_update_frost_visual()
-	_update_sear_disc()
-	_update_grate_disc()
-	_update_meat_top()
-	_update_frozen_ball_cook_visual()
-	_update_frozen_ball_cook_visual()
-	if _under_mat:
-		## Face on the grill: raw underside after flip, seared contact before.
-		if flipped_once:
-			_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.2)
-		else:
-			_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+	_cook_visual_accum += delta
+	if _cook_visual_accum >= COOK_VISUAL_INTERVAL:
+		_cook_visual_accum = fmod(_cook_visual_accum, COOK_VISUAL_INTERVAL)
+		_update_cook_gradient()
+		_update_frost_visual()
+		_update_sear_disc()
+		_update_grate_disc()
+		_update_meat_top()
+		_update_frozen_ball_cook_visual()
+		if _under_mat:
+			## Face on the grill: raw underside after flip, seared contact before.
+			if flipped_once:
+				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.2)
+			else:
+				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
 
 	if is_slide_drag:
 		## Spatula slide — keep cooking visuals, hide status ring / tip text.
@@ -1436,6 +1496,10 @@ func _make_tube_mesh(top_r: float, bottom_r: float, height: float, segments: int
 
 
 static func _make_frost_texture(frost_seed: int) -> ImageTexture:
+	return ImageTexture.create_from_image(_make_frost_image(frost_seed))
+
+
+static func _make_frost_image(frost_seed: int) -> Image:
 	## White ice with lots of punched meat windows — never a solid overlay.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = frost_seed if frost_seed != 0 else randi()
@@ -1481,7 +1545,7 @@ static func _make_frost_texture(frost_seed: int) -> ImageTexture:
 			## Chunky ice ~30% more transparent overall.
 			a = minf(a, 0.42) * 0.7
 			img.set_pixel(x, y, Color(0.92 + cover * 0.06, 0.96 + cover * 0.03, 1.0, a))
-	return ImageTexture.create_from_image(img)
+	return img
 
 
 static func _frost_noise2(x: float, y: float) -> float:
@@ -1598,6 +1662,12 @@ func _update_cook_gradient() -> void:
 	## Cylinder UV: v=0 at top, v=1 at bottom. Heat climbs from the grill.
 	if _cook_img == null or _cook_tex == null:
 		return
+	var state := [cook_time, first_side_time, flipped_once, _sear_seed, _cook_tex.get_instance_id()]
+	if state == _cook_gradient_state:
+		return
+	_cook_gradient_state = state
+	if flipped_once:
+		_ensure_cook_sear_mask()
 	for y in COOK_TEX_H:
 		var v := float(y) / float(COOK_TEX_H - 1) ## 0 top → 1 bottom
 		var c: Color
@@ -1628,10 +1698,7 @@ func _update_cook_gradient() -> void:
 			var px := c
 			## After flip: light sear mottling — browned flecks, not burnt crust.
 			if flipped_once and v < 0.45:
-				var u := float(x) / float(COOK_TEX_W)
-				var n := _sear_noise(u * 6.0 + float(_sear_seed % 17), v * 7.5 + float((_sear_seed / 17) % 13))
-				n = n * 0.55 + _sear_noise(u * 14.0 + 1.7, v * 12.0) * 0.3
-				n += _sear_noise(u * 28.0, v * 22.0) * 0.15
+				var n := _cook_sear_mask[y * COOK_TEX_W + x]
 				var top_w := clampf(1.0 - v / 0.45, 0.0, 1.0)
 				var cook_w := clampf((first_side_time - 8.0) / 14.0, 0.4, 1.0)
 				if n > 0.58:
@@ -1643,28 +1710,53 @@ func _update_cook_gradient() -> void:
 	_cook_tex.update(_cook_img)
 
 
+func _ensure_cook_sear_mask() -> void:
+	if _cook_sear_mask_seed == _sear_seed and _cook_sear_mask.size() == COOK_TEX_W * COOK_TEX_H:
+		return
+	_cook_sear_mask_seed = _sear_seed
+	_cook_sear_mask.resize(COOK_TEX_W * COOK_TEX_H)
+	for y in COOK_TEX_H:
+		var v := float(y) / float(COOK_TEX_H - 1)
+		if v >= 0.45:
+			break
+		for x in COOK_TEX_W:
+			var u := float(x) / float(COOK_TEX_W)
+			var n := _sear_noise(u * 6.0 + float(_sear_seed % 17), v * 7.5 + float((_sear_seed / 17) % 13))
+			n = n * 0.55 + _sear_noise(u * 14.0 + 1.7, v * 12.0) * 0.3
+			n += _sear_noise(u * 28.0, v * 22.0) * 0.15
+			_cook_sear_mask[y * COOK_TEX_W + x] = n
+
+
 func _sear_noise(x: float, y: float) -> float:
+	return _seeded_sear_noise(x, y, _sear_seed)
+
+
+static func _seeded_sear_noise(x: float, y: float, seed_value: int) -> float:
 	var xi := floori(x)
 	var yi := floori(y)
 	var xf := x - float(xi)
 	var yf := y - float(yi)
 	var uu := xf * xf * (3.0 - 2.0 * xf)
 	var vv := yf * yf * (3.0 - 2.0 * yf)
-	var a := _sear_hash(xi, yi)
-	var b := _sear_hash(xi + 1, yi)
-	var c := _sear_hash(xi, yi + 1)
-	var d := _sear_hash(xi + 1, yi + 1)
+	var a := _seeded_sear_hash(xi, yi, seed_value)
+	var b := _seeded_sear_hash(xi + 1, yi, seed_value)
+	var c := _seeded_sear_hash(xi, yi + 1, seed_value)
+	var d := _seeded_sear_hash(xi + 1, yi + 1, seed_value)
 	return lerpf(lerpf(a, b, uu), lerpf(c, d, uu), vv)
 
 
-func _sear_hash(x: int, y: int) -> float:
-	var n := x * 374761393 + y * 668265263 + _sear_seed
+static func _seeded_sear_hash(x: int, y: int, seed_value: int) -> float:
+	var n := x * 374761393 + y * 668265263 + seed_value
 	n = (n ^ (n >> 13)) * 1274126177
 	n = n ^ (n >> 16)
 	return float(n & 0x7fffffff) / 2147483647.0
 
 
 func _make_sear_spot_texture() -> ImageTexture:
+	return ImageTexture.create_from_image(_make_sear_spot_image(_sear_seed))
+
+
+static func _make_sear_spot_image(seed_value: int) -> Image:
 	## Soft brown grill spots for the flipped top — subtle, not charcoal.
 	var w := 64
 	var h := 64
@@ -1681,9 +1773,9 @@ func _make_sear_spot_texture() -> ImageTexture:
 			var edge := clampf(1.0 - smoothstep(0.82, 0.98, r), 0.0, 1.0)
 			var u := float(x) / float(w)
 			var v := float(y) / float(h)
-			var n := _sear_noise(u * 7.0, v * 7.0)
-			n = n * 0.45 + _sear_noise(u * 16.0 + 2.1, v * 14.0) * 0.35
-			n += _sear_noise(u * 32.0, v * 28.0) * 0.2
+			var n := _seeded_sear_noise(u * 7.0, v * 7.0, seed_value)
+			n = n * 0.45 + _seeded_sear_noise(u * 16.0 + 2.1, v * 14.0, seed_value) * 0.35
+			n += _seeded_sear_noise(u * 32.0, v * 28.0, seed_value) * 0.2
 			var col := Color(0, 0, 0, 0)
 			if n > 0.62:
 				var k := (n - 0.62) / 0.38
@@ -1697,7 +1789,7 @@ func _make_sear_spot_texture() -> ImageTexture:
 				var a3 := edge * ((n - 0.38) / 0.1) * 0.14
 				col = Color(0.4, 0.2, 0.1, a3)
 			img.set_pixel(x, y, col)
-	return ImageTexture.create_from_image(img)
+	return img
 
 
 func _update_sear_disc() -> void:
@@ -1713,6 +1805,10 @@ func _update_sear_disc() -> void:
 
 
 func _make_grate_line_texture() -> ImageTexture:
+	return ImageTexture.create_from_image(_make_grate_line_image(_sear_seed))
+
+
+static func _make_grate_line_image(seed_value: int) -> Image:
 	## Vertical dark bands — same gap_frac / soft edge language as grill heat punch-outs.
 	const BARS := 5 ## matches default grill_heat_bars count across the disc
 	const GAP_FRAC := 0.38 ## same as grill_heat_gap default
@@ -1736,14 +1832,14 @@ func _make_grate_line_texture() -> ImageTexture:
 			## Dark where heat punches out (low bar_mask).
 			var line := 1.0 - bar_mask
 			## Slight lengthwise noise so lines aren't perfectly crisp.
-			var n := _sear_noise(u * 9.0 + float(_sear_seed % 11), float(y) / float(h) * 14.0)
+			var n := _seeded_sear_noise(u * 9.0 + float(seed_value % 11), float(y) / float(h) * 14.0, seed_value)
 			line *= 0.82 + n * 0.28
 			var a := edge * line * 0.34
 			if a < 0.02:
 				img.set_pixel(x, y, Color(0, 0, 0, 0))
 			else:
 				img.set_pixel(x, y, Color(0.10, 0.05, 0.03, a))
-	return ImageTexture.create_from_image(img)
+	return img
 
 
 func _update_grate_disc() -> void:
@@ -2176,7 +2272,7 @@ static func _make_frozen_ball_shader(
 	return mat
 
 
-static func populate_frozen_ball_visual(parent: Node3D) -> void:
+static func populate_frozen_ball_visual(parent: Node3D, prepared_frost: Texture2D = null) -> void:
 	## Same lumpy meat + frost shell + ice flecks used on the grill drop ball.
 	if parent == null:
 		return
@@ -2226,7 +2322,7 @@ static func populate_frozen_ball_visual(parent: Node3D) -> void:
 	under.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(under)
 
-	var frost_tex: Texture2D = _make_frost_texture(randi())
+	var frost_tex: Texture2D = prepared_frost if prepared_frost != null else _make_frost_texture(randi())
 	var shell := MeshInstance3D.new()
 	shell.name = "FrostShell"
 	var shell_mesh := SphereMesh.new()
@@ -2288,10 +2384,10 @@ static func populate_frozen_ball_visual(parent: Node3D) -> void:
 		parent.add_child(fleck)
 
 
-static func make_standalone_frozen_ball() -> Node3D:
+static func make_standalone_frozen_ball(prepared_frost: Texture2D = null) -> Node3D:
 	var ball := Node3D.new()
 	ball.name = "FridgePattyBall"
-	populate_frozen_ball_visual(ball)
+	populate_frozen_ball_visual(ball, prepared_frost)
 	ball.scale = Vector3(FROZEN_BALL_SCALE, FROZEN_BALL_SCALE * FROZEN_BALL_Y_SQUASH, FROZEN_BALL_SCALE)
 	return ball
 
@@ -2389,7 +2485,8 @@ func _ensure_frozen_ball() -> void:
 	_frozen_ball.visible = false
 	_reset_frozen_ball_pose()
 	add_child(_frozen_ball)
-	populate_frozen_ball_visual(_frozen_ball)
+	populate_frozen_ball_visual(_frozen_ball, _prepared_frozen_frost)
+	_prepared_frozen_frost = null
 	var lump_seed := float(_frozen_ball.get_meta("lump_seed", 0.0))
 	for child in _frozen_ball.get_children():
 		var mi := child as MeshInstance3D
@@ -2459,6 +2556,8 @@ func _update_frozen_ball_heat_motion(delta: float) -> void:
 
 func _update_frozen_ball_cook_visual() -> void:
 	if _frozen_ball == null or not is_instance_valid(_frozen_ball):
+		return
+	if not _frozen_ball.visible:
 		return
 	if _frozen_ball_meat_mat != null:
 		_frozen_ball_meat_mat.set_shader_parameter("albedo_color", color_at_cook_time(cook_time))
@@ -2645,10 +2744,11 @@ func remove_cheese() -> void:
 
 
 func get_cheese_seat_global() -> Vector3:
-	## Where a fresh slice sits — matches `_cheese_root` on the meat mesh.
+	## Where the held preview sits. Keep it slightly above the real cheese root so
+	## the translucent slice never z-fights with or disappears inside the patty.
 	if _mesh != null and is_instance_valid(_mesh):
-		return _mesh.global_position + _mesh.global_transform.basis.y.normalized() * 0.0255
-	return global_position + Vector3(0, 0.0255, 0)
+		return _mesh.global_position + _mesh.global_transform.basis.y.normalized() * 0.0368
+	return global_position + Vector3(0, 0.0368, 0)
 
 
 func get_cheese_seat_basis() -> Basis:
@@ -2827,6 +2927,10 @@ func _update_cheese_visual() -> void:
 			var to_camera := (active_camera.global_position - _cheese_root.global_position).normalized()
 			cheese_face_visible = cheese_normal.dot(to_camera) > 0.28
 	_cheese_root.visible = cheese_face_visible
+	var drape_state := [t, _cheese_root.get_instance_id(), _cheese_mat.get_instance_id()]
+	if drape_state == _cheese_drape_state:
+		return
+	_cheese_drape_state = drape_state
 	var drape := smoothstep(0.12, 0.95, t)
 	drape = drape * drape * (3.0 - 2.0 * drape)
 	## Warm cheddar yellow → deeper orange as it melts.

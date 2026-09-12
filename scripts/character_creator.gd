@@ -1,5 +1,7 @@
 extends Node
 
+var _studio: Control
+
 const SKIN_TONES: Array[Color] = [
 	Color("f2c6a0"),
 	Color("e6aa7a"),
@@ -13,6 +15,7 @@ const SKIN_TONES: Array[Color] = [
 const LAST_PRESET_PATH := "user://last_character.json"
 const ACCESSORY_FITS_PATH := "user://accessory_fits.json"
 const LEGACY_CREATOR_FOLDER := "Burger Character Creator"
+const CustomerScript := preload("res://scripts/customer.gd")
 const SCULPT_WORKSPACE_SCRIPT := preload("res://scripts/sculpt_workspace.gd")
 
 @onready var character: ModularCharacterBase = $World/Character
@@ -159,6 +162,7 @@ func _ready() -> void:
 		if creator_ui != null:
 			creator_ui.layer = 128
 	_migrate_standalone_creator_presets()
+	CustomerScript.ensure_saved_character_files()
 	_setup_return_to_game_button()
 	body_select.add_item("Classic chunky toon")
 	body_select.disabled = true
@@ -194,6 +198,10 @@ func _ready() -> void:
 	else:
 		character.rebuild_appearance()
 		_set_status("Build a modular toon with face, hair, clothes, and shoes. Click the markers on the character to jump to those sliders.")
+
+	_studio = preload("res://scripts/doll_studio.gd").new()
+	$UI.add_child(_studio)
+	_studio.setup(self)
 
 
 func _setup_sculpt_mode() -> void:
@@ -274,6 +282,8 @@ func _return_to_game() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if _studio != null and event is InputEventKey and event.ctrl_pressed and event.keycode in [KEY_Z, KEY_Y, KEY_S]:
+		return
 	if not _paint_mode:
 		return
 	if event is InputEventKey and character_name.has_focus():
@@ -333,7 +343,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_camera_distance = maxf(1.8, _camera_distance - 0.2)
 			_apply_camera()
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_camera_distance = minf(5.5, _camera_distance + 0.2)
+			_camera_distance = minf(12.0, _camera_distance + 0.2)
 			_apply_camera()
 
 
@@ -718,6 +728,8 @@ func _end_paint_stroke() -> void:
 	_paint_stroke_changed = false
 	_refresh_paint_history_ui()
 
+	if _studio != null: _studio.paint_checkpoint()
+
 
 func _undo_paint_stroke() -> void:
 	_end_paint_stroke()
@@ -729,6 +741,8 @@ func _undo_paint_stroke() -> void:
 	_refresh_paint_history_ui()
 	_queue_paint_canvas_redraw()
 	_set_status("Undid %s." % str(entry.get("label", "paint stroke")))
+
+	if _studio != null: _studio.paint_checkpoint()
 
 
 func _remove_selected_paint_history() -> void:
@@ -742,6 +756,8 @@ func _remove_selected_paint_history() -> void:
 	_refresh_paint_history_ui()
 	_queue_paint_canvas_redraw()
 	_set_status("Removed selected stroke and all strokes after it.")
+
+	if _studio != null: _studio.paint_checkpoint()
 
 
 func _reset_paint_history() -> void:
@@ -826,6 +842,8 @@ func _clear_skin_paint() -> void:
 	_queue_paint_canvas_redraw()
 	_set_status("Cleared skin paint.")
 
+	if _studio != null: _studio.paint_checkpoint()
+
 
 func _handle_paint_input(event: InputEvent) -> bool:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -895,7 +913,7 @@ func _handle_paint_input(event: InputEvent) -> bool:
 			get_viewport().set_input_as_handled()
 			return true
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_camera_distance = minf(5.5, _camera_distance + 0.2)
+			_camera_distance = minf(12.0, _camera_distance + 0.2)
 			_apply_camera()
 			get_viewport().set_input_as_handled()
 			return true
@@ -1113,7 +1131,7 @@ func _randomize_character() -> void:
 	if not fitted_hats.is_empty() and randf() < 0.28:
 		var hat_id: int = fitted_hats[randi() % fitted_hats.size()]
 		character.hat_style = hat_id as ModularCharacterBase.HatStyle
-		character.hat_color = _rand_hsv(0.35, 0.85, 0.2, 0.75)
+		character.hat_color = Color.WHITE
 		_apply_hat_fit(hat_id)
 	character.glasses_style = _rand_style(ModularCharacterBase.GlassesStyle.size(), 0.78) as ModularCharacterBase.GlassesStyle
 	character.glasses_color = _rand_hsv(0.2, 0.8, 0.08, 0.45)
@@ -1126,7 +1144,7 @@ func _randomize_character() -> void:
 	character.jewelry_scale = randf_range(0.85, 1.3)
 	character.jewelry_offset = Vector3.ZERO
 	character.top_style = _rand_style(ModularCharacterBase.TopStyle.size(), 0.0) as ModularCharacterBase.TopStyle
-	character.top_color = _rand_hsv(0.4, 0.9, 0.25, 0.85)
+	character.top_color = Color.WHITE
 	character.top_scale = randf_range(0.96, 1.08)
 	if character.top_style == ModularCharacterBase.TopStyle.NONE:
 		character.shirt_graphic = ModularCharacterBase.ShirtGraphic.NONE
@@ -1135,11 +1153,11 @@ func _randomize_character() -> void:
 	character.shirt_graphic_color = _rand_hsv(0.45, 0.95, 0.35, 1.0)
 	character.shirt_graphic_scale = randf_range(0.7, 1.4)
 	character.bottom_style = _rand_style(ModularCharacterBase.BottomStyle.size(), 0.0) as ModularCharacterBase.BottomStyle
-	character.bottom_color = _rand_hsv(0.35, 0.8, 0.18, 0.7)
+	character.bottom_color = Color.WHITE
 	character.bottom_scale = randf_range(0.96, 1.08)
 	character.shoe_style = _rand_style(ModularCharacterBase.ShoeStyle.size(), 0.12) as ModularCharacterBase.ShoeStyle
-	character.shoe_color = _rand_hsv(0.25, 0.75, 0.12, 0.55)
-	character.shoe_scale = randf_range(0.98, 1.12)
+	character.shoe_color = Color.WHITE
+	character.shoe_scale = 1.0
 	character.end_appearance_batch()
 	_refresh_appearance_controls()
 	_set_status("Randomized a new look. Kept the saved eye, nose, and mouth layout.")
@@ -1227,6 +1245,7 @@ func _apply_camera() -> void:
 	camera_rig.position = Vector3(0.0, 1.05, 0.0) + _camera_pan
 	camera_rig.rotation = Vector3(_orbit_x, _orbit_y, 0.0)
 	camera.position.z = _camera_distance
+	if _studio != null: _studio.center_camera()
 
 
 func _save_character() -> void:
@@ -1320,11 +1339,13 @@ func _save_character() -> void:
 		"hair_scale_xyz": [character.hair_scale_xyz.x, character.hair_scale_xyz.y, character.hair_scale_xyz.z],
 		"hair_offset": [character.hair_offset.x, character.hair_offset.y, character.hair_offset.z],
 		"extra_hairs": character.extra_hairs.duplicate(true),
+		"hair_visible": character.hair_visible,
 		"facial_hair_style": int(character.facial_hair_style),
 		"facial_hair_color": character.facial_hair_color.to_html(true),
 		"facial_hair_scale": character.facial_hair_scale,
 		"facial_hair_scale_xyz": [character.facial_hair_scale_xyz.x, character.facial_hair_scale_xyz.y, character.facial_hair_scale_xyz.z],
 		"facial_hair_offset": [character.facial_hair_offset.x, character.facial_hair_offset.y, character.facial_hair_offset.z],
+		"hat_catalog_version": ModularCharacterBase.HAT_CATALOG_VERSION,
 		"hat_style": int(character.hat_style),
 		"hat_color": character.hat_color.to_html(true),
 		"hat_scale": character.hat_scale,
@@ -1342,6 +1363,7 @@ func _save_character() -> void:
 		"jewelry_color": character.jewelry_color.to_html(true),
 		"jewelry_scale": character.jewelry_scale,
 		"jewelry_offset": [character.jewelry_offset.x, character.jewelry_offset.y, character.jewelry_offset.z],
+		"top_catalog_version": ModularCharacterBase.TOP_CATALOG_VERSION,
 		"top_style": int(character.top_style),
 		"top_color": character.top_color.to_html(true),
 		"top_scale": character.top_scale,
@@ -1352,8 +1374,10 @@ func _save_character() -> void:
 		"shirt_graphic_vertical": character.shirt_graphic_vertical,
 		"shirt_graphic_depth": character.shirt_graphic_depth,
 		"bottom_style": int(character.bottom_style),
+		"bottom_catalog_version": ModularCharacterBase.BOTTOM_CATALOG_VERSION,
 		"bottom_color": character.bottom_color.to_html(true),
 		"bottom_scale": character.bottom_scale,
+		"shoe_catalog_version": ModularCharacterBase.SHOE_CATALOG_VERSION,
 		"shoe_style": int(character.shoe_style),
 		"shoe_color": character.shoe_color.to_html(true),
 		"shoe_scale": character.shoe_scale,
@@ -1391,6 +1415,9 @@ func _load_character_file(preset_path: String) -> void:
 		return
 	var data := parsed as Dictionary
 	ModularCharacterBase.migrate_legacy_hair_fields(data)
+	ModularCharacterBase.Wardrobe.migrate_preset(data)
+	ModularCharacterBase.Footwear.migrate_preset(data)
+	ModularCharacterBase.migrate_legacy_hat_fields(data)
 	character_name.text = str(data.get("name", "New Customer"))
 	character.begin_appearance_batch()
 	var loaded_color := Color.from_string(str(data.get("skin_color", "b86e47ff")), Color("b86e47"))
@@ -1477,6 +1504,7 @@ func _load_character_file(preset_path: String) -> void:
 	character.hair_scale_xyz = _clamped_scale_xyz(data.get("hair_scale_xyz", [1.0, 1.0, 1.0]))
 	character.hair_offset = _vector3_from_array(data.get("hair_offset", [0.0, 0.3, 0.0]))
 	character.extra_hairs = data.get("extra_hairs", [])
+	character.hair_visible = bool(data.get("hair_visible", true))
 	_hair_layer_index = 0
 	character.facial_hair_style = clampi(int(data.get("facial_hair_style", 0)), 0, ModularCharacterBase.FacialHairStyle.size() - 1) as ModularCharacterBase.FacialHairStyle
 	character.facial_hair_color = Color.from_string(str(data.get("facial_hair_color", "35231dff")), Color("35231d"))
@@ -1484,7 +1512,7 @@ func _load_character_file(preset_path: String) -> void:
 	character.facial_hair_scale_xyz = _clamped_scale_xyz(data.get("facial_hair_scale_xyz", [1.0, 1.0, 1.0]))
 	character.facial_hair_offset = _vector3_from_array(data.get("facial_hair_offset", [0.0, 0.0, 0.0]))
 	character.hat_style = clampi(int(data.get("hat_style", 0)), 0, ModularCharacterBase.HatStyle.size() - 1) as ModularCharacterBase.HatStyle
-	character.hat_color = Color.from_string(str(data.get("hat_color", "d94b3dff")), Color("d94b3d"))
+	character.hat_color = Color.from_string(str(data.get("hat_color", "ffffffff")), Color.WHITE)
 	character.hat_scale = clampf(float(data.get("hat_scale", 1.0)), 0.5, 2.0)
 	character.hat_offset = _vector3_from_array(data.get("hat_offset", [0.0, 0.0, 0.0]))
 	character.hat_rotation = _vector3_from_array(data.get("hat_rotation", [0.0, 0.0, 0.0]))
@@ -1500,24 +1528,10 @@ func _load_character_file(preset_path: String) -> void:
 	character.jewelry_color = Color.from_string(str(data.get("jewelry_color", "e8c84dff")), Color("e8c84d"))
 	character.jewelry_scale = clampf(float(data.get("jewelry_scale", 1.0)), 0.5, 2.0)
 	character.jewelry_offset = _vector3_from_array(data.get("jewelry_offset", [0.0, 0.0, 0.0]))
-	if int(data.get("format_version", 1)) < 3:
-		var legacy_clothing := clampi(int(data.get("clothing_style", 0)), 0, 5)
-		if int(data.get("format_version", 1)) < 2 and legacy_clothing > 0:
-			legacy_clothing += 3
-		character.top_style = ModularCharacterBase.TopStyle.T_SHIRT if legacy_clothing == 1 or legacy_clothing == 3 else ModularCharacterBase.TopStyle.NONE
-		character.bottom_style = ModularCharacterBase.BottomStyle.PANTS if legacy_clothing == 2 or legacy_clothing == 3 else ModularCharacterBase.BottomStyle.NONE
-		character.top_color = Color.from_string(str(data.get("clothing_color", "3f6a45ff")), Color("3f6a45"))
-		character.bottom_color = Color.from_string(str(data.get("pants_color", "334e68ff")), Color("334e68"))
-	else:
-		character.top_style = clampi(int(data.get("top_style", 0)), 0, ModularCharacterBase.TopStyle.size() - 1) as ModularCharacterBase.TopStyle
-		character.bottom_style = clampi(int(data.get("bottom_style", 0)), 0, ModularCharacterBase.BottomStyle.size() - 1) as ModularCharacterBase.BottomStyle
-		character.top_color = Color.from_string(str(data.get("top_color", "3f6a45ff")), Color("3f6a45"))
-		character.bottom_color = Color.from_string(str(data.get("bottom_color", "334e68ff")), Color("334e68"))
-	## Upgrade older naked defaults while preserving every selected garment.
-	if character.top_style == ModularCharacterBase.TopStyle.NONE:
-		character.top_style = ModularCharacterBase.TopStyle.T_SHIRT
-	if character.bottom_style == ModularCharacterBase.BottomStyle.NONE:
-		character.bottom_style = ModularCharacterBase.BottomStyle.SHORTS
+	character.top_style = int(data["top_style"]) as ModularCharacterBase.TopStyle
+	character.bottom_style = int(data["bottom_style"]) as ModularCharacterBase.BottomStyle
+	character.top_color = Color.from_string(str(data.get("top_color", "ffffffff")), Color.WHITE)
+	character.bottom_color = Color.from_string(str(data.get("bottom_color", "ffffffff")), Color.WHITE)
 	character.top_scale = clampf(float(data.get("top_scale", 1.0)), 0.9, 1.12)
 	character.shirt_graphic = clampi(int(data.get("shirt_graphic", 0)), 0, ModularCharacterBase.ShirtGraphic.size() - 1) as ModularCharacterBase.ShirtGraphic
 	character.shirt_graphic_color = Color.from_string(str(data.get("shirt_graphic_color", "ffffffff")), Color.WHITE)
@@ -1526,9 +1540,9 @@ func _load_character_file(preset_path: String) -> void:
 	character.shirt_graphic_vertical = clampf(float(data.get("shirt_graphic_vertical", 0.0)), -0.40, 0.80)
 	character.shirt_graphic_depth = clampf(float(data.get("shirt_graphic_depth", 0.0)), -0.40, 0.30)
 	character.bottom_scale = clampf(float(data.get("bottom_scale", 1.0)), 0.9, 1.12)
-	character.shoe_style = clampi(int(data.get("shoe_style", 0)), 0, 5) as ModularCharacterBase.ShoeStyle
-	character.shoe_color = Color.from_string(str(data.get("shoe_color", "6b3f2aff")), Color("6b3f2a"))
-	character.shoe_scale = clampf(float(data.get("shoe_scale", 1.03)), 0.9, 1.2)
+	character.shoe_style = clampi(int(data.get("shoe_style", 0)), 0, ModularCharacterBase.ShoeStyle.size() - 1) as ModularCharacterBase.ShoeStyle
+	character.shoe_color = Color.from_string(str(data.get("shoe_color", "ffffffff")), Color.WHITE)
+	character.shoe_scale = clampf(float(data.get("shoe_scale", 1.0)), 0.9, 1.2)
 	character.end_appearance_batch()
 	character.load_pose_controls(data.get("pose_controls", {}))
 	if int(data.get("format_version", 1)) >= 7:
@@ -1536,6 +1550,7 @@ func _load_character_file(preset_path: String) -> void:
 	animation_button.text = "Play animation"
 	_refresh_appearance_controls()
 	_set_status("Loaded %s" % character_name.text)
+	if _studio != null: _studio.loaded()
 
 
 func _setup_module_controls() -> void:
@@ -1551,12 +1566,12 @@ func _setup_module_controls() -> void:
 		nose_select.add_item(label)
 	for label in ["Half circle", "Flat", "Open"]:
 		mouth_select.add_item(label)
-	for label in ["None", "Simple parted", "Buzzed", "Long", "Twin buns", "Low-poly swept", "Low-poly short bob", "Low-poly ponytail", "Low-poly cropped", "Cap with hair", "Capsule long", "Capsule spiky"]:
+	for label in ModularCharacterBase.HAIR_LABELS:
 		hair_select.add_item(label)
 	_build_hair_stack_controls()
 	for label in ["None", "Full beard", "Moustache", "Short beard", "Quaternius beard"]:
 		facial_hair_select.add_item(label)
-	for label in ["None", "Ranger hood", "Round hood", "Top hat", "Baseball cap", "Low-poly cap", "Cap with hair", "Low-poly round hat", "Capsule cap"]:
+	for label in ModularCharacterBase.HAT_LABELS:
 		hat_select.add_item(label)
 	for label in ["None", "Sport shades", "Classic frames", "Cat-eye", "Round shades", "Shutter shades", "Aviator", "Pixel shades", "Retro round", "Slim frames", "Wayfarer"]:
 		glasses_select.add_item(label)
@@ -1564,14 +1579,16 @@ func _setup_module_controls() -> void:
 		makeup_select.add_item(label)
 	for label in ["None", "Stud earrings", "Hoop earrings", "Drop earrings", "Choker"]:
 		jewelry_select.add_item(label)
-	for label in ["None", "T-shirt", "Tank top", "Long-sleeve shirt", "Crop top", "Blouse", "Polo", "Hoodie", "Sweater", "Off-shoulder top", "Dress bodice", "Cardigan"]:
+	for label in ModularCharacterBase.TOP_LABELS:
 		top_select.add_item(label)
 	for label in ["None", "Skull", "Heart", "Star", "Lightning", "Flame", "Flower", "Cat", "Moon", "Burger", "Crown"]:
 		graphic_select.add_item(label)
-	for label in ["None", "Pants", "Shorts", "Capri pants", "Leggings", "Mini skirt", "Long skirt", "Pleated skirt"]:
+	for label in ModularCharacterBase.BOTTOM_LABELS:
 		bottom_select.add_item(label)
-	for label in ["None", "Sneakers", "Ankle boots", "High tops", "Loafers", "Sandals"]:
+	for label in ModularCharacterBase.SHOE_LABELS:
 		shoe_select.add_item(label)
+		var id := shoe_select.item_count - 1
+		shoe_select.set_item_tooltip(id, "Universal" if ModularCharacterBase.Footwear.CATEGORIES[id] == "universal" else "Sandals, women's & misc." if id > 0 else "Bare feet")
 	nose_select.select(character.nose_style)
 	nose_color.color = character.nose_color
 	mouth_select.select(character.mouth_style)
@@ -1694,7 +1711,6 @@ func _setup_module_controls() -> void:
 	_add_adjustment_slider(graphic_adjustments, "shirt_graphic_scale", "Scale", 0.4, 2.0, 0.05, character.shirt_graphic_scale, func(value: float) -> void: character.shirt_graphic_scale = value)
 	_add_adjustment_slider(graphic_adjustments, "shirt_graphic_horizontal", "Left / right", -0.18, 0.18, 0.01, character.shirt_graphic_horizontal, func(value: float) -> void: character.shirt_graphic_horizontal = value)
 	_add_adjustment_slider(graphic_adjustments, "shirt_graphic_vertical", "Up / down", -0.40, 0.80, 0.01, character.shirt_graphic_vertical, func(value: float) -> void: character.shirt_graphic_vertical = value)
-	_add_adjustment_slider(graphic_adjustments, "shirt_graphic_depth", "Into / out", -0.40, 0.30, 0.005, character.shirt_graphic_depth, func(value: float) -> void: character.shirt_graphic_depth = value)
 	_add_adjustment_slider(bottom_adjustments, "bottom_scale", "Fit", 0.9, 1.12, 0.01, character.bottom_scale, func(value: float) -> void: character.bottom_scale = value)
 	_add_adjustment_slider(shoe_adjustments, "shoe_scale", "Fit", 0.9, 1.2, 0.01, character.shoe_scale, func(value: float) -> void: character.shoe_scale = value)
 	nose_select.item_selected.connect(func(index: int) -> void: character.nose_style = index as ModularCharacterBase.NoseStyle)
@@ -1711,7 +1727,8 @@ func _setup_module_controls() -> void:
 	hair_select.item_selected.connect(_on_hair_style_picked)
 	facial_hair_select.item_selected.connect(func(index: int) -> void: character.facial_hair_style = index as ModularCharacterBase.FacialHairStyle)
 	facial_hair_color.color_changed.connect(func(color: Color) -> void: character.facial_hair_color = color)
-	hat_select.item_selected.connect(func(index: int) -> void: character.hat_style = index as ModularCharacterBase.HatStyle)
+	hat_select.item_selected.connect(_on_hat_selected)
+	hat_color.tooltip_text = "Tint the original hat colors. White restores the authored colors."
 	glasses_select.item_selected.connect(func(index: int) -> void: character.glasses_style = index as ModularCharacterBase.GlassesStyle)
 	glasses_color.color_changed.connect(func(color: Color) -> void: character.glasses_color = color)
 	makeup_select.item_selected.connect(func(index: int) -> void: character.makeup_style = index as ModularCharacterBase.MakeupStyle)
@@ -1726,6 +1743,7 @@ func _setup_module_controls() -> void:
 	hair_color.color_changed.connect(_on_hair_color_picked)
 	hat_color.color_changed.connect(func(color: Color) -> void: character.hat_color = color)
 	top_color.color_changed.connect(func(color: Color) -> void: character.top_color = color)
+	bottom_color.tooltip_text = "Tint the original bottom colors. White restores the authored colors."
 	bottom_color.color_changed.connect(func(color: Color) -> void: character.bottom_color = color)
 	shoe_color.color_changed.connect(func(color: Color) -> void: character.shoe_color = color)
 	_refresh_hair_layer_ui()
@@ -1733,27 +1751,34 @@ func _setup_module_controls() -> void:
 
 func _build_hair_stack_controls() -> void:
 	var parent: Node = hair_select.get_parent()
-	var row := HBoxContainer.new()
-	row.name = "HairStackRow"
-	row.add_theme_constant_override("separation", 6)
-	parent.add_child(row)
-	parent.move_child(row, hair_select.get_index() + 1)
+	var stack := VBoxContainer.new()
+	stack.name = "HairStackRow"
+	stack.add_theme_constant_override("separation", 6)
+	parent.add_child(stack)
+	parent.move_child(stack, hair_select.get_index() + 1)
 	_hair_layer_select = OptionButton.new()
 	_hair_layer_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hair_layer_select.custom_minimum_size = Vector2(0.0, 32.0)
+	_hair_layer_select.fit_to_longest_item = false
+	_hair_layer_select.clip_text = true
 	_hair_layer_select.tooltip_text = "Which stacked hair the style, color, and sliders edit."
 	_hair_layer_select.item_selected.connect(_on_hair_layer_picked)
-	row.add_child(_hair_layer_select)
+	stack.add_child(_hair_layer_select)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	stack.add_child(row)
 	_hair_add_btn = Button.new()
 	_hair_add_btn.text = "Add hair"
 	_hair_add_btn.tooltip_text = "Stack another hair on this head."
-	_hair_add_btn.custom_minimum_size = Vector2(88.0, 32.0)
+	_hair_add_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hair_add_btn.custom_minimum_size = Vector2(0.0, 32.0)
 	_hair_add_btn.pressed.connect(_on_add_hair_layer)
 	row.add_child(_hair_add_btn)
 	_hair_remove_btn = Button.new()
 	_hair_remove_btn.text = "Remove"
 	_hair_remove_btn.tooltip_text = "Remove the selected extra hair."
-	_hair_remove_btn.custom_minimum_size = Vector2(72.0, 32.0)
+	_hair_remove_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hair_remove_btn.custom_minimum_size = Vector2(0.0, 32.0)
 	_hair_remove_btn.pressed.connect(_on_remove_hair_layer)
 	row.add_child(_hair_remove_btn)
 
@@ -1969,6 +1994,9 @@ func _update_feature_hotspot_positions() -> void:
 
 
 func _scroll_to_feature(feature_id: String) -> void:
+	if _studio != null:
+		_studio.focus_feature(feature_id)
+		return
 	var node_name := ""
 	var label := feature_id.capitalize()
 	for spec in _feature_specs():
@@ -2008,6 +2036,8 @@ func _make_module_panel_scrollable() -> void:
 	scroll.name = "Scroll"
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = false
 	module_margin.add_child(scroll)
 	scroll.add_child(module_controls)
 	module_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2020,6 +2050,8 @@ func _make_sidebar_scrollable() -> void:
 	scroll.name = "Scroll"
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = false
 	sidebar_margin.add_child(scroll)
 	scroll.add_child(sidebar_controls)
 	sidebar_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2031,8 +2063,17 @@ func _capture_customer_thumbnail(safe_name: String) -> void:
 	if full_image == null or full_image.is_empty():
 		return
 	var left_edge := mini(330, full_image.get_width() - 1)
-	var right_edge := maxi(left_edge + 1, full_image.get_width() - 290)
-	var preview := full_image.get_region(Rect2i(left_edge, 0, right_edge - left_edge, full_image.get_height()))
+	var right_edge := maxi(left_edge + 1, full_image.get_width() - 420)
+	var region := Rect2i(left_edge, 0, right_edge - left_edge, full_image.get_height())
+	if _studio != null:
+		var stage: Rect2 = _studio.stage_rect
+		var pixel_scale := Vector2(full_image.get_size()) / get_viewport().get_visible_rect().size
+		var portrait_height := maxf(1.0, _studio.stage_controls.position.y - stage.position.y - 16.0)
+		var portrait_width := minf(stage.size.x, portrait_height * 0.75)
+		var portrait := Rect2(stage.position.x + (stage.size.x - portrait_width) * 0.5, stage.position.y + 8.0, portrait_width, portrait_height)
+		region = Rect2i(portrait.position * pixel_scale, portrait.size * pixel_scale)
+	region = region.intersection(Rect2i(Vector2i.ZERO, full_image.get_size()))
+	var preview := full_image.get_region(region)
 	preview.resize(84, 112, Image.INTERPOLATE_LANCZOS)
 	preview.save_png(ProjectSettings.globalize_path("user://characters/%s_thumb.png" % safe_name))
 	_refresh_saved_customers()
@@ -2072,8 +2113,14 @@ func _refresh_saved_customers() -> void:
 
 func _add_adjustment_slider(parent: VBoxContainer, key: String, label_text: String, minimum: float, maximum: float, step: float, current: float, callback: Callable) -> void:
 	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
 	var label := Label.new()
-	label.custom_minimum_size.x = 82.0
+	label.custom_minimum_size.x = 132.0
+	label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	label.clip_text = false
+	label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 14)
 	label.text = label_text
 	var slider := HSlider.new()
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2104,7 +2151,10 @@ func _add_adjustment_toggle(parent: VBoxContainer, key: String, label_text: Stri
 func _add_adjustment_color(parent: VBoxContainer, key: String, label_text: String, current: Color, callback: Callable) -> void:
 	var row := HBoxContainer.new()
 	var label := Label.new()
-	label.custom_minimum_size.x = 82.0
+	label.custom_minimum_size.x = 132.0
+	label.clip_text = false
+	label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	label.add_theme_font_size_override("font_size", 14)
 	label.text = label_text
 	var picker := ColorPickerButton.new()
 	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2249,7 +2299,7 @@ func _safe_file_name(value: String) -> String:
 
 
 func _load_accessory_fits() -> void:
-	_accessory_fits = {"hairs": {}, "hats": {}, "blocked_hairs": [], "blocked_hats": []}
+	_accessory_fits = {"hairs": {}, "hats": {}, "blocked_hairs": [], "blocked_hats": [], "hat_catalog_version": ModularCharacterBase.HAT_CATALOG_VERSION}
 	if not FileAccess.file_exists(ACCESSORY_FITS_PATH):
 		return
 	var file := FileAccess.open(ACCESSORY_FITS_PATH, FileAccess.READ)
@@ -2259,9 +2309,11 @@ func _load_accessory_fits() -> void:
 	if parsed is Dictionary:
 		var data := parsed as Dictionary
 		_accessory_fits["hairs"] = data.get("hairs", {})
-		_accessory_fits["hats"] = data.get("hats", {})
+		if int(data.get("hat_catalog_version", 0)) == ModularCharacterBase.HAT_CATALOG_VERSION:
+			_accessory_fits["hats"] = data.get("hats", {})
 		_accessory_fits["blocked_hairs"] = _normalize_id_list(data.get("blocked_hairs", []))
-		_accessory_fits["blocked_hats"] = _normalize_id_list(data.get("blocked_hats", []))
+		if int(data.get("hat_catalog_version", 0)) == ModularCharacterBase.HAT_CATALOG_VERSION:
+			_accessory_fits["blocked_hats"] = _normalize_id_list(data.get("blocked_hats", []))
 		if not (_accessory_fits["hairs"] is Dictionary):
 			_accessory_fits["hairs"] = {}
 		if not (_accessory_fits["hats"] is Dictionary):
@@ -2316,7 +2368,7 @@ func _has_hair_fit(style_id: int) -> bool:
 
 
 func _has_hat_fit(style_id: int) -> bool:
-	return _hat_fits().has(str(style_id))
+	return style_id > 0 and style_id < ModularCharacterBase.HatStyle.size()
 
 
 func _normalize_id_list(value: Variant) -> Array:
@@ -2374,9 +2426,8 @@ func _random_hair_style() -> ModularCharacterBase.HairStyle:
 
 func _fitted_hat_ids() -> Array[int]:
 	var ids: Array[int] = []
-	for key in _hat_fits():
-		var style_id := int(str(key))
-		if style_id > 0 and not _is_hat_blocked(style_id):
+	for style_id in range(1, ModularCharacterBase.HatStyle.size()):
+		if not _is_hat_blocked(style_id):
 			ids.append(style_id)
 	return ids
 
@@ -2683,6 +2734,16 @@ func _on_fit_hair_selected(index: int) -> void:
 	_update_fit_status_labels()
 
 
+func _on_hat_selected(index: int) -> void:
+	character.begin_appearance_batch()
+	character.hat_style = index as ModularCharacterBase.HatStyle
+	character.hat_color = Color.WHITE
+	_apply_hat_fit(index)
+	character.end_appearance_batch()
+	hat_color.color = character.hat_color
+	_sync_adjustment_controls()
+
+
 func _on_fit_hat_selected(index: int) -> void:
 	character.begin_appearance_batch()
 	character.hat_style = index as ModularCharacterBase.HatStyle
@@ -2779,7 +2840,7 @@ func _update_fit_status_labels() -> void:
 		elif _is_hat_blocked(hat_id):
 			_fit_hat_status.text = "Off random. This hat will not spawn on randomized characters."
 		elif _has_hat_fit(hat_id):
-			_fit_hat_status.text = "Saved fit loaded. Tweak and save again if needed."
+			_fit_hat_status.text = "Fitted hat ready. Tweak and save a custom fit if needed."
 		else:
 			_fit_hat_status.text = "No saved fit yet for this hat."
 

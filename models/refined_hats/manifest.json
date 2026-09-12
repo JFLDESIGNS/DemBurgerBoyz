@@ -1,0 +1,77 @@
+{
+  "version": 2,
+  "source": "assets/hats/hat_collection.blend",
+  "coordinate_space": "Head bone local, creator model scale 0.7; multiply by ModularCharacterBase._unit",
+  "hats": [
+    {
+      "id": 1,
+      "name": "turquoise_fedora",
+      "source_fit": 1,
+      "parts": 3,
+      "vertices": 14127
+    },
+    {
+      "id": 2,
+      "name": "sailor_cap",
+      "source_fit": 2,
+      "parts": 4,
+      "vertices": 10494
+    },
+    {
+      "id": 3,
+      "name": "brown_top_hat",
+      "source_fit": 5,
+      "parts": 3,
+      "vertices": 6002
+    },
+    {
+      "id": 4,
+      "name": "baseball_cap",
+      "source_fit": 10,
+      "parts": 8,
+      "vertices": 52184
+    },
+    {
+      "id": 5,
+      "name": "winter_ushanka",
+      "source_fit": 3,
+      "parts": 5,
+      "vertices": 14218
+    },
+    {
+      "id": 6,
+      "name": "raspberry_brim",
+      "source_fit": 4,
+      "parts": 3,
+      "vertices": 14151
+    },
+    {
+      "id": 7,
+      "name": "purple_fedora",
+      "source_fit": 6,
+      "parts": 3,
+      "vertices": 14127
+    },
+    {
+      "id": 8,
+      "name": "feather_fedora",
+      "source_fit": 7,
+      "parts": 5,
+      "vertices": 14297
+    },
+    {
+      "id": 9,
+      "name": "golden_crown",
+      "source_fit": 8,
+      "parts": 13,
+      "vertices": 8480
+    },
+    {
+      "id": 10,
+      "name": "black_top_hat",
+      "source_fit": 9,
+      "parts": 3,
+      "vertices": 5282
+    }
+  ]
+}
