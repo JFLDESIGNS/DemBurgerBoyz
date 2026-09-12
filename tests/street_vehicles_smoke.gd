@@ -75,6 +75,13 @@ func _run() -> void:
 	game._street_car_model_cache = pool
 	game._build_street_car(holder)
 	check(game.street_car.models.size() == 7, "Game did not bind all seven models")
+	check(is_equal_approx(float(game.GFX_DEFAULTS["street_car_size"]), 0.8), "3D car default was not reduced by 20 percent")
+	var car_size_slider := HSlider.new()
+	car_size_slider.step = 0.01
+	car_size_slider.value = 0.64
+	game.gfx_sliders["street_car_size"] = car_size_slider
+	game._apply_street_car_look()
+	check(is_equal_approx(game.street_car.scale.x, 0.64 * game.STREET_CAR_MODEL_SCALE), "Tuned 3D car scale was not reduced from 0.80 to 0.64: %s" % game.street_car.scale)
 	game.playing = true
 	game.street_car_wait = 0.0
 	game._update_street_car(0.01)
@@ -105,6 +112,7 @@ func _run() -> void:
 	game.playing = false
 	game._update_street_car(0.01)
 	check(not game.street_car.visible and not game.street_car_exhaust.emitting, "Stopped game leaves traffic effects active")
+	car_size_slider.free()
 	game.free()
 	holder.queue_free()
 	actor.queue_free()

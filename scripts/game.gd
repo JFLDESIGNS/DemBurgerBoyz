@@ -1737,6 +1737,7 @@ var _cup_auto_transfer_t: float = 0.0
 var _cup_auto_transfer_from: Vector3 = Vector3.ZERO
 var _cup_press_screen := Vector2.ZERO
 var _cup_press_msec: int = 0
+var _cup_rack_pending: bool = false
 var _cup_parked_filling: bool = false
 var _cup_ice_pour_sec: float = 0.0
 var _cone_press_screen := Vector2.ZERO
@@ -3136,7 +3137,7 @@ const GFX_DEFAULTS := {
 	"street_car_speed": 1.0,
 	"street_car_blur": 1.0,
 	"street_car_gap": 1.0,
-	"street_car_size": 1.0,
+	"street_car_size": 0.8,
 	"street_car_y": STREET_CAR_Y,
 	"street_car_z": STREET_CAR_Z,
 	"street_car_sort": 12.0,
@@ -5263,6 +5264,12 @@ func _process_gameplay(delta: float) -> void:
 		if cone_mouse.distance_to(_cone_press_screen) > CUP_TAP_MAX_PX:
 			_cone_rack_pending = false
 			_begin_icecream_cone_hold()
+	if _cup_rack_pending:
+		var cup_mouse := get_viewport().get_mouse_position()
+		var cup_held_long_enough := Time.get_ticks_msec() - _cup_press_msec >= int(CUP_TAP_MAX_SEC * 1000.0)
+		if cup_mouse.distance_to(_cup_press_screen) > CUP_TAP_MAX_PX or cup_held_long_enough:
+			_cup_rack_pending = false
+			_begin_cup_hold(true)
 	if icecream_cone_held:
 		_update_held_icecream_cone(delta)
 	elif _icecream_parked_filling:
@@ -6100,6 +6107,11 @@ func _input(event: InputEvent) -> void:
 			_dispense_cone_to_fill_station()
 			get_viewport().set_input_as_handled()
 			return
+		if _cup_rack_pending:
+			_cup_rack_pending = false
+			_dispense_cup_to_fill_station()
+			get_viewport().set_input_as_handled()
+			return
 		if cup_held:
 			_put_cup_down()
 			get_viewport().set_input_as_handled()
@@ -6185,11 +6197,13 @@ func _input(event: InputEvent) -> void:
 			if _try_open_closed_sign_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
-			## CUPS nest — only grab when the cursor ray actually hits the rack volume.
+			## CUPS nest: a tap auto-fills; holding or dragging pulls a cup into hand.
 			if not cup_held and _cup_rack_ray_hit(event.position):
-				if _dispense_cup_to_fill_station():
-					get_viewport().set_input_as_handled()
-					return
+				_cup_rack_pending = true
+				_cup_press_screen = event.position
+				_cup_press_msec = Time.get_ticks_msec()
+				get_viewport().set_input_as_handled()
+				return
 			if _ui_blocks_world_click(event.position):
 				return
 			if _try_grab_spilled_fry(event.position):
@@ -40368,7 +40382,7 @@ func _cup_rack_ray_hit(screen_pos: Vector2) -> bool:
 	return col != null and str(col.name) == "CupRackGrab"
 
 
-func _begin_cup_hold() -> bool:
+func _begin_cup_hold(grab_from_rack: bool = false) -> bool:
 	if not playing or cup_held:
 		return false
 	if not _owns_soda_machine():
@@ -40382,12 +40396,28 @@ func _begin_cup_hold() -> bool:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
 	var mouse := get_viewport().get_mouse_position()
-	_cup_press_screen = mouse
-	_cup_press_msec = Time.get_ticks_msec()
-	## Rack clicks dispense; the placed cup itself is the second click target.
-	if _cup_rack_ray_hit(mouse):
+	if not grab_from_rack:
+		_cup_press_screen = mouse
+		_cup_press_msec = Time.get_ticks_msec()
+	## A quick rack click dispenses automatically. The pending-input path passes
+	## `grab_from_rack` after a hold/drag so the same cup goes straight to hand.
+	var rack_grab := grab_from_rack or _cup_rack_ray_hit(mouse)
+	if rack_grab and not grab_from_rack:
 		return _dispense_cup_to_fill_station()
+	if rack_grab:
+		if cup_root == null or not is_instance_valid(cup_root):
+			if _tray_parked_count() >= CUP_MAX:
+				_flash("Tray full — serve a drink first", Color("FFCC80"))
+				return false
+			_spawn_and_bind_empty_cup()
+		if cup_root == null or not is_instance_valid(cup_root):
+			return false
+		if cup_soda_fill >= 0.05 or cup_ice_fill >= 0.05 or cup_flavor != "":
+			_flash("Finish or serve the cup on the tray first", Color("FFCC80"))
+			return false
 	var target := _nearest_cup_at_screen(mouse)
+	if rack_grab:
+		target = cup_root
 	if target == null or not is_instance_valid(target):
 		_flash("Click CUPS to dispense a cup first", Color("FFE082"))
 		return false
@@ -40435,15 +40465,19 @@ func _begin_cup_hold() -> bool:
 	if game_audio:
 		game_audio.play_click()
 	_flash("Hold under SODA or ICE — release onto the tray", Color("80DEEA"))
-	cup_drawing = false
+	if rack_grab:
+		_shake_soda_cup_stack()
+		_start_cup_draw_from_rack()
+	else:
+		cup_drawing = false
 	if mp_enabled:
 		_mp_send_held_cup_pose(true)
 	return true
 
 
 func _dispense_cup_to_fill_station() -> bool:
-	## First click on CUPS: smoothly carry one empty cup from the visible stack
-	## to the drip/fill station. It becomes pickable when the move completes.
+	## Quick click on CUPS: carry one empty cup to ICE, start filling without
+	## another touch, then use the existing automatic transfer to the cola bay.
 	if not playing or cup_held:
 		return false
 	if _cup_dispensing_to_fill:
@@ -40503,7 +40537,7 @@ func _dispense_cup_to_fill_station() -> bool:
 		cup_root.global_position = station
 		cup_root.rotation_degrees = _cup_presented_rotation(cup_root)
 		cup_root.scale = Vector3.ONE
-		_flash("Cup ready — click or grab to fill ice", Color("80DEEA"))
+		_start_parked_ice_fill()
 		return true
 
 	var moving_cup := cup_root
@@ -40533,7 +40567,7 @@ func _dispense_cup_to_fill_station() -> bool:
 		var moving_area := moving_cup.get_node_or_null("CupGrab") as Area3D
 		if moving_area != null and is_instance_valid(moving_area):
 			moving_area.input_ray_pickable = true
-		_flash("Cup ready — click or grab to fill ice", Color("80DEEA"))
+		_start_parked_ice_fill()
 	)
 	return true
 
@@ -62570,7 +62604,7 @@ func _hidden_setup_street_car_controls(parent: Control) -> void:
 	help.add_theme_color_override("font_color", Color(0.70, 0.78, 0.86))
 	parent.add_child(help)
 	_hidden_add_section(parent, "PLACEMENT")
-	_gfx_add_slider(parent, "street_car_size", "Car Size", 0.15, 4.0, 0.01)
+	_gfx_add_slider(parent, "street_car_size", "3D Car Size", 0.15, 4.0, 0.01)
 	_gfx_add_slider(parent, "street_car_y", "Height (Y)", -2.0, 6.0, 0.01)
 	_gfx_add_slider(parent, "street_car_z", "Depth (Z, lower = toward you)", 3.0, 14.0, 0.01)
 	_hidden_add_section(parent, "LOOK + MOTION")
