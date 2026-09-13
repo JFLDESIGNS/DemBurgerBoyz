@@ -1,7 +1,8 @@
 ## Street-cat that peeks under the service window — pet the head or feed treats.
 extends Node3D
 
-const SCENE_PATH := "res://assets/cat/cat.fbx"
+const SCENE_PATH := "res://assets/cat/shipping_cat.glb"
+const EYE_SHADER := preload("res://shaders/cat_eyes.gdshader")
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
 const HOME_X := 1.38
@@ -12,7 +13,7 @@ const HOME_Z := 1.76
 ## Dropped another 6″ from the prior peek heights.
 const HIDDEN_Y := 0.141
 const SHOWN_Y := 0.741
-const MESH_SCALE := 3.35
+const MESH_SCALE := 0.833333333 ## New asset already contains the old 4.02x modeling scale.
 ## Drop root Y only when overall (giant) scale grows — width chonk stays planted.
 ## Small nudge only — large drops buried him as he grew.
 const GROUND_DROP_PER_GIANT := 0.18
@@ -56,6 +57,10 @@ signal wants_meow(pitch: float)
 var _visual: Node3D = null
 var _area: Area3D = null
 var _anim: AnimationPlayer = null
+var _parcel: Node3D
+var _cat_eyes: Array[MeshInstance3D] = []
+var _delivery_anim_left := 0.0
+var _happy_anim_left := 0.0
 var _state: String = "hidden" ## hidden | rising | peek | delivery_turning | lowering | fed_hold | bag_chase | bag_snatch | running
 var _timer: float = 4.0
 var _bob: float = 0.0
@@ -227,12 +232,21 @@ func _build() -> void:
 	_visual.rotation_degrees = Vector3.ZERO
 	_visual.scale = Vector3.ONE * MESH_SCALE
 	add_child(_visual)
-	_retint_cat_fur(_visual)
 	_anim = _visual.find_child("AnimationPlayer", true, false) as AnimationPlayer
-	if _anim != null and _anim.has_animation("CINEMA_4D_Main"):
-		_anim.get_animation("CINEMA_4D_Main").loop_mode = Animation.LOOP_LINEAR
-		_anim.play("CINEMA_4D_Main")
-		_anim.speed_scale = 0.85
+	_parcel = _visual.find_child("Delivery_Box_Rig", true, false) as Node3D
+	if _parcel != null: _parcel.hide()
+	for eye_name in ["Cat_Eye_L", "Cat_Eye_R"]:
+		var eye := _visual.find_child(eye_name, true, false) as MeshInstance3D
+		if eye != null:
+			var material := ShaderMaterial.new()
+			material.shader = EYE_SHADER
+			material.set_shader_parameter("pupil_gaze", Vector2.ZERO)
+			eye.material_override = material
+			_cat_eyes.append(eye)
+	if _anim != null:
+		for clip in ["01_Idle", "02_Mail_Walk"]:
+			if _anim.has_animation(clip): _anim.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
+		_play_cat_clip("01_Idle")
 
 	_area = Area3D.new()
 	_area.name = "CatPetZone"
@@ -250,6 +264,56 @@ func _build() -> void:
 	_area.add_child(shape)
 	add_child(_area)
 	_ensure_hearts()
+
+
+func _play_cat_clip(clip: String, restart: bool = false) -> void:
+	if _anim == null or not _anim.has_animation(clip): return
+	if restart or _anim.current_animation != clip:
+		_anim.play(clip, 0.12)
+	_anim.speed_scale = 1.0
+
+
+func delivery_origin_global() -> Vector3:
+	if is_instance_valid(_parcel):
+		return _parcel.to_global(Vector3(0.0, 0.13, 0.0))
+	return head_global()
+
+
+func _update_character(delta: float) -> void:
+	_delivery_anim_left = maxf(0.0, _delivery_anim_left - delta)
+	_happy_anim_left = maxf(0.0, _happy_anim_left - delta)
+	var delivering := _delivery_anim_left > 0.0
+	if is_instance_valid(_parcel): _parcel.visible = delivering
+	if delivering:
+		_play_cat_clip("03_Box_Delivery")
+	elif _state in ["running", "bag_chase", "rising", "lowering"]:
+		_play_cat_clip("02_Mail_Walk")
+	elif _happy_anim_left > 0.0 or _state == "fed_hold":
+		_play_cat_clip("04_Happy_Hop")
+	else:
+		_play_cat_clip("01_Idle")
+	var target := Vector3.INF
+	var game := get_tree().current_scene
+	if game != null and game.has_method("customer_attention_target"):
+		target = game.customer_attention_target(false)
+	var camera := get_viewport().get_camera_3d()
+	if not target.is_finite() and camera != null:
+		# Also track the cook's cursor in scenes without the shared customer helper.
+		var depth := maxf(0.5, camera.global_position.distance_to(head_global()) * 0.65)
+		target = camera.project_position(get_viewport().get_mouse_position(), depth)
+	if target.is_finite(): update_pupil_target(target, delta)
+
+
+func update_pupil_target(target: Vector3, delta: float) -> void:
+	# Same common forward frame and horizontal/vertical travel as customer eyes.
+	for eye in _cat_eyes:
+		var eye_center := eye.to_global(eye.mesh.get_aabb().get_center())
+		var direction := (global_basis.orthonormalized().inverse() * (target - eye_center)).normalized()
+		var aim := Vector2(clampf(direction.x * 0.95, -0.38, 0.38), clampf(direction.y * 0.65, -0.30, 0.30))
+		aim *= smoothstep(-0.2, 0.12, direction.z)
+		var mat := eye.material_override as ShaderMaterial
+		var current: Vector2 = mat.get_shader_parameter("pupil_gaze")
+		mat.set_shader_parameter("pupil_gaze", current.lerp(aim, 1.0 - exp(-9.0 * delta)))
 
 
 func _retint_cat_fur(node: Node) -> void:
@@ -523,6 +587,7 @@ func apply_mp_sync(d: Dictionary) -> void:
 func _process(delta: float) -> void:
 	if not enabled or _visual == null:
 		return
+	_update_character(delta)
 	_bob += delta
 	_treat_arm = maxf(0.0, _treat_arm - delta)
 	_pet_squash = maxf(0.0, _pet_squash - delta * 3.2)
@@ -675,7 +740,7 @@ func _apply_visual_scale() -> void:
 	var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
 	_visual.scale = Vector3(sx, sy, sz)
 	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
-	_visual.position.y = -MESH_SCALE * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL)
+	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL)
 	## Grow the pet hitbox with the cat.
 	if _area != null:
 		var shape := _area.get_child(0) as CollisionShape3D
@@ -818,12 +883,15 @@ func _finish_run_away() -> void:
 
 func request_delivery_peek(hold_sec: float = 5.5) -> void:
 	## Force a peek so the cat can toss phone restocks into the kitchen.
+	if enabled and _visual != null and not _bag_heist:
+		_delivery_anim_left = 6.0
+		_play_cat_clip("03_Box_Delivery", true)
 	if not enabled or _visual == null or mp_puppet or _bag_heist:
 		return
 	if _state == "fed_hold" or _state == "running":
 		_clear_mouth_burger()
 		_patty_eat_wide = 0.0
-	_peek_override_sec = maxf(hold_sec, 3.5)
+	_peek_override_sec = maxf(hold_sec, 6.0)
 	_delivery_peek_active = true
 	_state = "rising"
 	_timer = 0.45
@@ -896,6 +964,7 @@ func pet(force: bool = false) -> void:
 	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
+	_happy_anim_left = 2.15
 	_treat_arm = 2.4
 	## Linger a bit longer when loved.
 	if _state == "peek" or _state == "rising" or force:
@@ -914,6 +983,7 @@ func feed(kind: String, force: bool = false) -> void:
 	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
+	_happy_anim_left = 2.15
 	_eat_flash = 0.6
 	_treat_arm = 0.0
 	if force and not visible:
@@ -948,6 +1018,9 @@ func _feed_full_burger() -> void:
 func reset_shift(persist_weight: bool = true) -> void:
 	## New day / hide — keep fed weight across days; only a fresh run wipes it.
 	_state = "hidden"
+	_delivery_anim_left = 0.0
+	_happy_anim_left = 0.0
+	if _parcel != null: _parcel.hide()
 	_timer = FIRST_PEEK_SEC
 	_treat_arm = 0.0
 	_pet_squash = 0.0

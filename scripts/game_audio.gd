@@ -1922,8 +1922,8 @@ func play_smash_sizzle(volume_scale: float = 1.0) -> void:
 		play_grease_pop(false, SMASH_SIZZLE_VOL_MUL)
 
 
-func play_cat_meow() -> void:
-	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 1.12 + randf() * 0.18, 8.064, 18.0)
+func play_cat_meow(gain_scale: float = 1.0) -> void:
+	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 1.12 + randf() * 0.18, 8.064 * gain_scale, 18.0)
 
 
 func play_cat_purr() -> void:

@@ -21271,7 +21271,7 @@ func _on_window_cat_wants_meow(pitch: float) -> void:
 
 func _on_window_cat_fed(kind: String) -> void:
 	if game_audio and game_audio.has_method("play_cat_meow"):
-		game_audio.play_cat_meow()
+		game_audio.play_cat_meow(0.5)
 	if kind == "patty" and game_audio and game_audio.has_method("play_cat_purr"):
 		game_audio.play_cat_purr()
 	## If already maxed (signal already fired earlier), still queue the mustache visit.
@@ -48143,11 +48143,13 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 	for n in throws:
 		var mesh := _make_supply_pack_mesh(id, kind)
 		world.add_child(mesh)
+		mesh.hide()
 		var spread := Vector3(randf_range(-0.08, 0.08), randf_range(0.0, 0.06), randf_range(-0.05, 0.05))
 		mesh.global_position = from + spread
 		supply_delivery_fx.append({
 			"mesh": mesh,
 			"from": from + spread,
+			"cat_launch_delay": 2.4 + float(n) * 0.14,
 			"to": to + Vector3(randf_range(-0.12, 0.12), 0.0, randf_range(-0.08, 0.08)),
 			"t": 0.0,
 			"dur": (0.55 + float(n) * 0.08) * 1.4,
@@ -48214,6 +48216,16 @@ func _update_supply_delivery_fx(delta: float) -> void:
 		if mesh == null or not is_instance_valid(mesh):
 			supply_delivery_fx.remove_at(i)
 			continue
+		if float(item.get("cat_launch_delay", 0.0)) > 0.0:
+			item["cat_launch_delay"] = maxf(0.0, float(item["cat_launch_delay"]) - delta)
+			if float(item["cat_launch_delay"]) > 0.0:
+				supply_delivery_fx[i] = item
+				i += 1
+				continue
+			if is_instance_valid(window_cat) and window_cat.has_method("delivery_origin_global"):
+				item["from"] = window_cat.delivery_origin_global()
+			mesh.global_position = item["from"]
+			mesh.show()
 		if bool(item.get("landed", false)):
 			var settle_left := maxf(0.0, float(item.get("settle", 0.0)) - delta)
 			item["settle"] = settle_left
