@@ -66,7 +66,7 @@ static func grill(visual: Node3D) -> void:
 		authored = visual
 	## Smaller / darker plaques so they sit into the steel instead of reading as stickers.
 	var plaque := Color(0.68, 0.68, 0.68)
-	decal(authored, "GrillSplashBadge", "grill_badge_v1.png", Vector2(0.205, 0.068), Vector3(0, 0.088, -0.464), Vector3.ZERO, plaque)
+	decal(authored, "GrillSplashBadge", "grill_badge_v1.png", Vector2(0.205, 0.068), Vector3(0, 0.076, -0.464), Vector3.ZERO, plaque)
 	var front := visual.find_child("ControlPanelMount", true, false) as Node3D
 	if front != null:
 		decal(front, "GrillFrontBadge", "grill_badge_v1.png", Vector2(0.108, 0.036), Vector3(-0.77, 0.011, 0), Vector3(-90, 0, 0), plaque)

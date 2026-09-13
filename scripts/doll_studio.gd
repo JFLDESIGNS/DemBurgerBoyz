@@ -5,10 +5,12 @@ const MUTED = Color("b4a8c2")
 const ACCENT = Color("ed887e")
 const PAPER = Color("24212e")
 const LILAC = Color("514061")
-const CATEGORIES = {"Body":["Skin","Starters"],"Face":["Eyes","Sparkle","Opening","Brows","Nose","Mouth","Cheeks","Ears"],"Hair":["Hair","Facial hair"],"Clothes":["Tops","Graphics","Bottoms","Shoes"],"Accessories":["Hats","Glasses","Makeup","Jewelry"],"Pose":["Pose"],"Paint":["Paint"],"Collection":["Saved customers"]}
+const CATEGORIES = {"Body":["Skin","Starters"],"Face":["Eyes","Sparkle","Opening","Brows","Nose","Mouth","Cheeks","Ears"],"Hair":["Hair","Facial hair"],"Clothes":["Tops","Graphics","Bottoms","Shoes"],"Accessories":["Hats","Glasses","Makeup","Jewelry"],"Voice":["Voice"],"Pose":["Pose"],"Paint":["Paint"],"Collection":["Saved customers"]}
 const NODES = {"Eyes":["EyesSelect","EyeAdjustments","EyeRotationAdjustments"],"Sparkle":["EyeSpecularAdjustments"],"Opening":["LashSelect","LashColor","LashAdjustments"],"Brows":["EyebrowSelect","EyebrowColor","EyebrowAdjustments"],"Nose":["NoseSelect","NoseColor","NoseAdjustments"],"Mouth":["MouthSelect","MouthColor","MouthAdjustments"],"Cheeks":["CheekSelect","CheekColor","CheekAdjustments"],"Ears":["EarColor","EarAdjustments"],"Hair":["HairSelect","HairColor","HairAdjustments"],"Facial hair":["FacialHairSelect","FacialHairColor","FacialHairAdjustments"],"Hats":["HatSelect","HatColor","HatAdjustments"],"Glasses":["GlassesSelect","GlassesColor","GlassesAdjustments"],"Makeup":["MakeupSelect","MakeupColor","MakeupAdjustments"],"Jewelry":["JewelrySelect","JewelryColor","JewelryAdjustments"],"Tops":["TopSelect","TopColor","TopAdjustments"],"Graphics":["GraphicSelect","GraphicColor","GraphicAdjustments"],"Bottoms":["BottomSelect","BottomColor","BottomAdjustments"],"Shoes":["ShoeSelect","ShoeColor","ShoeAdjustments"]}
-const PREFIX = {"Skin":"skin_","Eyes":"eye_","Sparkle":"eye_specular_","Opening":"eyelid_","Brows":"brow_","Nose":"nose_","Mouth":"mouth_","Cheeks":"cheek_","Ears":"ear_","Hair":"hair_","Facial hair":"facial_hair_","Hats":"hat_","Glasses":"glasses_","Makeup":"makeup_","Jewelry":"jewelry_","Tops":"top_","Graphics":"shirt_graphic","Bottoms":"bottom_","Shoes":"shoe_"}
+const PREFIX = {"Voice":"customer_voice","Skin":"skin_","Eyes":"eye_","Sparkle":"eye_specular_","Opening":"eyelid_","Brows":"brow_","Nose":"nose_","Mouth":"mouth_","Cheeks":"cheek_","Ears":"ear_","Hair":"hair_","Facial hair":"facial_hair_","Hats":"hat_","Glasses":"glasses_","Makeup":"makeup_","Jewelry":"jewelry_","Tops":"top_","Graphics":"shirt_graphic","Bottoms":"bottom_","Shoes":"shoe_"}
 const STYLE_PROPERTIES = {"Opening":"lash_style","Brows":"brow_style","Nose":"nose_style","Mouth":"mouth_style","Cheeks":"cheek_style","Hair":"hair_style","Facial hair":"facial_hair_style","Hats":"hat_style","Glasses":"glasses_style","Makeup":"makeup_style","Jewelry":"jewelry_style","Tops":"top_style","Graphics":"shirt_graphic","Bottoms":"bottom_style","Shoes":"shoe_style"}
+var voice_select: OptionButton
+var voice_preview: AudioStreamPlayer
 var host
 var doll
 var pages = {}
@@ -42,6 +44,7 @@ var stage_controls: PanelContainer
 var stage_tools: HFlowContainer
 var stage_view: SubViewport
 var stage_picture: TextureRect
+var stage_backdrop: MeshInstance3D
 var stage_truck: Node3D
 var framed_view = "Full body"
 var footer: PanelContainer
@@ -232,7 +235,7 @@ func build_shell() -> void:
 	var col = VBoxContainer.new()
 	col.size_flags_horizontal = SIZE_EXPAND_FILL
 	nav_scroll.add_child(col)
-	var icons = ["♡","◡","≈","♧","✧","◇","◌","▦"]
+	var icons = ["♡","◡","≈","♧","✧","♫","◇","◌","▦"]
 	var i = 0
 	for key in CATEGORIES:
 		var b = button(icons[i]+"  "+key,select_category.bind(key))
@@ -303,6 +306,7 @@ func page(key: String) -> VBoxContainer:
 	return box
 
 func build_pages() -> void:
+	build_voice_page(page("Voice"))
 	var body = page("Skin")
 	body.add_child(label("A lovely place to start",20))
 	body.add_child(label("Choose a skin tone, then explore face, hair and outfits.",14,MUTED))
@@ -540,6 +544,7 @@ func select_style(key: String, index: int) -> void:
 	if key in ["Hair","Hats","Facial hair"]: call_deferred("frame_view","Face")
 
 func update_cards() -> void:
+	if voice_select != null: voice_select.select(1 if doll.customer_voice == "female" else 0)
 	for key in cards:
 		var selector = selectors[key]
 		for card in cards[key]:
@@ -618,10 +623,41 @@ func build_stage() -> void:
 	stage_view.own_world_3d = true
 	stage_view.size = Vector2i(size)
 	stage_view.msaa_3d = Viewport.MSAA_2X
+	stage_view.transparent_bg = true
 	host.add_child(stage_view)
 	for child in old_world.get_children(): child.reparent(stage_view,false)
 	old_world.queue_free()
+	var ground := stage_view.get_node_or_null("Ground")
+	if ground != null:
+		ground.queue_free()
 	host.camera.current = true
+	stage_backdrop = MeshInstance3D.new()
+	stage_backdrop.name = "RadialBackdrop"
+	var backdrop_mesh := QuadMesh.new()
+	backdrop_mesh.size = Vector2(60.0, 40.0)
+	stage_backdrop.mesh = backdrop_mesh
+	stage_backdrop.position = Vector3(0, 0, -30.0)
+	stage_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var backdrop_material := ShaderMaterial.new()
+	var backdrop_shader := Shader.new()
+	backdrop_shader.code = """shader_type spatial;
+render_mode unshaded, cull_disabled;
+uniform vec4 center_color : source_color = vec4(0.29, 0.20, 0.44, 1.0);
+uniform vec4 edge_color : source_color = vec4(0.09, 0.10, 0.26, 1.0);
+uniform vec4 accent_color : source_color = vec4(0.93, 0.30, 0.47, 1.0);
+void fragment() {
+	vec2 p = SCREEN_UV - vec2(0.54, 0.46);
+	p.x *= 1.35;
+	float radius = length(p);
+	float angle = atan(p.y, p.x);
+	float rays = (0.5 + 0.5 * cos(angle * 14.0)) * smoothstep(0.08, 0.82, radius) * 0.20;
+	vec3 radial = mix(center_color.rgb, edge_color.rgb, smoothstep(0.04, 0.78, radius));
+	ALBEDO = mix(radial, accent_color.rgb, rays);
+}
+"""
+	backdrop_material.shader = backdrop_shader
+	stage_backdrop.material_override = backdrop_material
+	host.camera.add_child(stage_backdrop)
 	stage_picture = TextureRect.new()
 	stage_picture.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	stage_picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -640,7 +676,7 @@ func build_stage() -> void:
 		if truck_root != null:
 			truck_root.position = Vector3.ZERO
 			truck_root.rotation = Vector3.ZERO
-		stage_truck.scale = Vector3.ONE*0.52
+		stage_truck.scale = Vector3.ONE*0.845
 		stage_truck.position = Vector3(-0.7,0,-4.0)
 		stage_truck.rotation_degrees.y = -18
 		# Static background: the optimized mesh is shared; no driving simulation.
@@ -672,15 +708,21 @@ func open_fit_room() -> void:
 func apply_backdrop() -> void:
 	var env = host.get_node("World/WorldEnvironment").environment
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("252e38") if dark_backdrop else Color("d9e5e3")
+	env.background_color = Color(0, 0, 0, 0)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color("ffebdf")
 	env.ambient_light_energy = 0.65
 	host.get_node("World/KeyLight").light_energy = 0.85
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = env.background_color
-	mat.roughness = 1.0
-	host.get_node("World/Ground").material_override = mat
+	if stage_backdrop != null:
+		var mat := stage_backdrop.material_override as ShaderMaterial
+		if dark_backdrop:
+			mat.set_shader_parameter("center_color", Color("49346f"))
+			mat.set_shader_parameter("edge_color", Color("171a43"))
+			mat.set_shader_parameter("accent_color", Color("ee4d78"))
+		else:
+			mat.set_shader_parameter("center_color", Color("ffe06b"))
+			mat.set_shader_parameter("edge_color", Color("f45172"))
+			mat.set_shader_parameter("accent_color", Color("2ab7ca"))
 	host.camera.environment = env
 	hint.add_theme_color_override("font_color",Color("e1d5ee") if dark_backdrop else MUTED)
 	var fill = host.get_node("World/FillLight")
@@ -767,7 +809,7 @@ func select_category(key: String) -> void:
 		b.toggle_mode = true
 		tabs.add_child(b)
 	title_label.text = key
-	subtitle.text = {"Body":"Every great customer starts with you.","Face":"Tiny details. Big personality.","Hair":"Good hair days, on repeat.","Clothes":"Mix, match, make it yours.","Accessories":"The finishing touches.","Pose":"Ready for your close-up?","Paint":"Make your mark.","Collection":"Your collection of originals."}[key]
+	subtitle.text = {"Body":"Every great customer starts with you.","Face":"Tiny details. Big personality.","Hair":"Good hair days, on repeat.","Clothes":"Mix, match, make it yours.","Accessories":"The finishing touches.","Voice":"Give your customer a voice.","Pose":"Ready for your close-up?","Paint":"Make your mark.","Collection":"Your collection of originals."}[key]
 	select_section(CATEGORIES[key][0])
 	update_mode(key)
 	if key != "Collection": frame_view("Face" if key in ["Face","Hair","Accessories"] else "Full body")
@@ -1233,3 +1275,30 @@ func render_thumbnails() -> void:
 			if job.key == "Hair": build_layers()
 		await get_tree().process_frame
 	thumbnail_busy = false
+
+func build_voice_page(parent: VBoxContainer) -> void:
+	parent.add_child(label("Customer voice",20))
+	parent.add_child(label("Choose how this customer talks and enjoys a burger.",14,MUTED))
+	voice_select = OptionButton.new()
+	voice_select.name = "CustomerVoiceSelect"
+	voice_select.add_item("Male")
+	voice_select.add_item("Female")
+	voice_select.select(1 if doll.customer_voice == "female" else 0)
+	voice_select.item_selected.connect(func(index):
+		doll.customer_voice = "female" if index == 1 else "male"
+		checkpoint()
+		host._set_status("Voice selected. Save customer to keep it.")
+	)
+	parent.add_child(voice_select)
+	parent.add_child(button("Preview eating - nom nom",preview_customer_voice.bind(true)))
+	parent.add_child(button("Preview talking - wa wa",preview_customer_voice.bind(false)))
+	voice_preview = AudioStreamPlayer.new()
+	voice_preview.name = "CustomerVoicePreview"
+	voice_preview.volume_db = -5.0
+	add_child(voice_preview)
+
+func preview_customer_voice(eating: bool) -> void:
+	voice_preview.stop()
+	voice_preview.stream = preload("res://scripts/customer_voice.gd").stream(doll.customer_voice,eating)
+	voice_preview.pitch_scale = 1.0 if eating or doll.customer_voice == "female" else 1.7
+	voice_preview.play()

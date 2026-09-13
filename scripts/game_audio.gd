@@ -1922,11 +1922,16 @@ func play_smash_sizzle(volume_scale: float = 1.0) -> void:
 		play_grease_pop(false, SMASH_SIZZLE_VOL_MUL)
 
 
+var cat_sounds_muted := false
+
+
 func play_cat_meow(gain_scale: float = 1.0) -> void:
+	if cat_sounds_muted: return
 	_play_cached("cat_meow_%d" % (randi() % 3), _make_cat_meow, 1.12 + randf() * 0.18, 8.064 * gain_scale, 18.0)
 
 
 func play_cat_purr() -> void:
+	if cat_sounds_muted: return
 	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.55)
 
 
@@ -1954,6 +1959,7 @@ func _load_cat_begging_meow_stream() -> AudioStream:
 
 
 func play_cat_begging_meow(pitch: float = 1.2) -> void:
+	if cat_sounds_muted: return
 	var stream := _load_cat_begging_meow_stream()
 	if stream == null:
 		play_cat_meow()
@@ -2121,7 +2127,10 @@ var _customer_dance_wawa: AudioStreamPlayer = null
 var _customer_dance_wawa_token: int = 0
 const GROBBLE_PITCH := 1.293 ## prior 1.22 × +6%
 
-func play_customer_grobble(impatience: float = 0.5) -> void:
+func play_customer_grobble(impatience: float = 0.5, voice: String = "male") -> void:
+	if voice == "female":
+		_play_female_customer_wawa(3.0)
+		return
 	## Random 3s slice of wawawa.ogg — pitched up, fade in over 0.3s, then stop.
 	if not ResourceLoader.exists(WAWA_PATH):
 		return
@@ -2239,7 +2248,10 @@ func play_boss_wawa(loud: bool = false) -> void:
 	)
 
 
-func play_customer_wawa_click(impatience: float = 0.5) -> void:
+func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male") -> void:
+	if voice == "female":
+		_play_female_customer_wawa(1.5)
+		return
 	## One reusable player — spam-click restarts instead of stacking voices.
 	if not ResourceLoader.exists(WAWA_PATH):
 		return
@@ -2283,7 +2295,10 @@ func play_customer_wawa_click(impatience: float = 0.5) -> void:
 	)
 
 
-func play_customer_dance_wawa(duration_sec: float = DANCE_WAWA_CLIP_SEC) -> void:
+func play_customer_dance_wawa(duration_sec: float = DANCE_WAWA_CLIP_SEC, voice: String = "male") -> void:
+	if voice == "female":
+		_play_female_customer_wawa(duration_sec)
+		return
 	## One dedicated celebration voice. It is pitched above the normal customer
 	## grobble and shares the dance's hard three-second lifetime.
 	if not ResourceLoader.exists(WAWA_PATH):
@@ -3785,3 +3800,34 @@ static func _wav_from_pcm(pcm: PackedByteArray, loop: bool) -> AudioStreamWAV:
 
 static func _write_s16(pcm: PackedByteArray, sample_index: int, value: int) -> void:
 	pcm.encode_s16(sample_index * 2, clampi(value, -32768, 32767))
+
+var _female_customer_wawa: AudioStreamPlayer
+var _female_customer_wawa_token := 0
+
+func _play_female_customer_wawa(duration: float) -> void:
+	if not is_instance_valid(_female_customer_wawa):
+		_female_customer_wawa = AudioStreamPlayer.new()
+		_female_customer_wawa.name = "FemaleCustomerWawa"
+		add_child(_female_customer_wawa)
+	_female_customer_wawa.stop()
+	_female_customer_wawa.stream = preload("res://scripts/customer_voice.gd").stream("female",false)
+	_female_customer_wawa.pitch_scale = 1.0
+	_female_customer_wawa.volume_db = _sfx_db(0.72,"customers")
+	_female_customer_wawa.play()
+	_female_customer_wawa_token += 1
+	var token := _female_customer_wawa_token
+	get_tree().create_timer(maxf(.05,duration)).timeout.connect(func():
+		if token == _female_customer_wawa_token and is_instance_valid(_female_customer_wawa): _female_customer_wawa.stop()
+	)
+
+func play_customer_nom_nom(voice: String, speaker: Node) -> void:
+	if not is_instance_valid(speaker): return
+	var player := speaker.get_node_or_null("CustomerEatingVoice") as AudioStreamPlayer
+	if player == null:
+		player = AudioStreamPlayer.new()
+		player.name = "CustomerEatingVoice"
+		speaker.add_child(player)
+	player.stream = preload("res://scripts/customer_voice.gd").stream(voice,true)
+	player.pitch_scale = 1.0
+	player.volume_db = _sfx_db(0.75,"customers")
+	player.play()

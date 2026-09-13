@@ -1,6 +1,6 @@
 {
   "count": 30,
-  "total_triangles": 41390,
+  "total_triangles": 40302,
   "size_multiplier": 2,
   "assets": [
     {
@@ -12,7 +12,7 @@
     },
     {
       "file": "02_Folded_Umbrella.glb",
-      "triangles": 472,
+      "triangles": 836,
       "materials": 4,
       "grip_point": true,
       "size_multiplier": 2.0
@@ -33,7 +33,7 @@
     },
     {
       "file": "05_Handbag.glb",
-      "triangles": 844,
+      "triangles": 1636,
       "materials": 4,
       "grip_point": true,
       "size_multiplier": 2.0
@@ -61,8 +61,8 @@
     },
     {
       "file": "09_Gift_Box.glb",
-      "triangles": 880,
-      "materials": 4,
+      "triangles": 1236,
+      "materials": 3,
       "grip_point": true,
       "size_multiplier": 2.0
     },
@@ -75,14 +75,14 @@
     },
     {
       "file": "11_Smartphone.glb",
-      "triangles": 876,
+      "triangles": 720,
       "materials": 3,
       "grip_point": true,
       "size_multiplier": 2.0
     },
     {
       "file": "12_Tablet.glb",
-      "triangles": 588,
+      "triangles": 232,
       "materials": 6,
       "grip_point": true,
       "size_multiplier": 2.0
@@ -117,8 +117,8 @@
     },
     {
       "file": "17_Newspaper.glb",
-      "triangles": 752,
-      "materials": 4,
+      "triangles": 172,
+      "materials": 3,
       "grip_point": true,
       "size_multiplier": 2.0
     },
@@ -138,7 +138,7 @@
     },
     {
       "file": "20_Cell_Phone.glb",
-      "triangles": 2228,
+      "triangles": 720,
       "materials": 3,
       "grip_point": true,
       "size_multiplier": 2.0

@@ -9,8 +9,7 @@ uniform vec4 graphic_color : source_color = vec4(1.0);
 uniform vec2 graphic_center = vec2(0.0, 0.0216);
 uniform float graphic_size = 0.0026;
 void fragment() {
-	float value = dot(fabric_color.rgb, vec3(0.2126, 0.7152, 0.0722));
-	vec3 base = vec3(value) * fabric_tint.rgb;
+	vec3 base = fabric_color.rgb * fabric_tint.rgb;
 	vec2 print_uv = vec2(
 		(UV2.x - graphic_center.x) / graphic_size + 0.5,
 		0.5 - (UV2.y - graphic_center.y) / graphic_size

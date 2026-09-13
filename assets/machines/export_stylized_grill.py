@@ -55,7 +55,7 @@ for o,name in cache.items():o.name=name
 bpy.ops.object.select_all(action='DESELECT')
 for name in original_selection:
     if name in bpy.data.objects:bpy.data.objects[name].select_set(True)
-if original_active in bpy.data.objects:bpy.context.view_layer.objects.active=bpy.data.objects[original_active]
+if original_active and original_active in bpy.data.objects:bpy.context.view_layer.objects.active=bpy.data.objects[original_active]
 scene.frame_set(original_frame)
 b=(out/'stylized_grill.glb').read_bytes();n=struct.unpack_from('<I',b,12)[0];g=json.loads(b[20:20+n])
 stats={'triangles':sum(g['accessors'][a['indices']]['count']//3 for m in g['meshes'] for a in m['primitives']),'meshes':len(g['meshes']),'bytes':len(b),'animations':[a.get('name') for a in g.get('animations',[])]}

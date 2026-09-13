@@ -412,6 +412,8 @@ var _flash_tween: Tween = null
 var difficulty: float = 0.0
 var spawn_timer: float = 2.0
 var customers: Array = []
+# Removed orders still occupy the sidewalk until their customer walks clear.
+var _customer_departure_holds: Array[Dictionary] = []
 var _customer_skin_bag: Array[int] = []
 const CUSTOMER_REVIEW_CFG_SECTION := "customer_review_card"
 var customer_review_settings: Dictionary = {}
@@ -901,8 +903,8 @@ var _strip_did_drag: bool = false ## Skip press action after a paint-swipe.
 var _strip_swipe_active: bool = false ## LMB paint across topping buttons.
 var _strip_swipe_added: Dictionary = {} ## id -> true for this swipe
 var _strip_gesture_added: bool = false ## Already applied a topping this LMB gesture.
-const STRIP_SWIPE_THRESH_PX := 44.0 ## Higher = fewer mis-paints when clicking cheese next to tomato
-const STRIP_HOLD_PICKUP_SEC := 0.20 ## Click = add to Build; hold = pick up cheese / sauce bottle
+const STRIP_SWIPE_THRESH_PX := 12.0 ## Higher = fewer mis-paints when clicking cheese next to tomato
+const STRIP_HOLD_PICKUP_SEC := 0.30 ## Click = add to Build; hold = pick up cheese / sauce bottle
 const STRIP_HOLD_DRAG_PX := 12.0
 var _strip_hold_armed: bool = false
 var _strip_hold_started: bool = false
@@ -1441,6 +1443,7 @@ var owned_machines: Dictionary = {
 }
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
+var mail_delivery_truck: Node3D
 var _supply_order_seq: int = 0
 var soda_spout_marker: Marker3D = null
 var ice_spout_marker: Marker3D = null
@@ -2302,7 +2305,9 @@ var start_patty_preview_done_popped: bool = false
 var start_patty_preview_done_pop_t: float = -1.0
 const START_PATTY_PREVIEW_SCALE := Vector3(1.08, 1.08, 1.08)
 ## Cached professional order-slip paper texture. Selection tint remains dynamic.
-const TICKET_PAPER_TEXTURE_PATH := "res://assets/ui/order_ticket_paper_alpha.png"
+const TICKET_PAPER_TEXTURE_PATH := "res://assets/ui/order_ticket_paper_unpinned.png"
+const AnimatedOrderTicket = preload("res://scripts/animated_order_ticket.gd")
+const MAIN_TICKET_BLANK = preload("res://models/order_ticket/textures/ticket_blank.png")
 var _ticket_paper_tex: Texture2D = null
 var _ticket_paper_tex_sel: Texture2D = null
 var ticket_saturation: float = TICKET_SATURATION_DEFAULT
@@ -2729,6 +2734,7 @@ const BURGERPACK_SIT_Y := 0.045 ## Sit on top of steel panels (panel half-height
 const FRY_BASKET_COOK_SEC := 5.0
 const FRYER_DONE_POP_Y := 0.18 ## lift above oil surface when cook finishes
 const FRYER_HINT_SCREEN_NUDGE := Vector2(-16.0, 29.0)
+const FRYER_HINT_PAYMENT_PASS_OFFSET := Vector2(-50.0, 20.0)
 const FRY_BASKET_SHAKE_NEED := 1.5
 ## Smoke cylinders under a dunked basket — ~15% larger than burger flip smoke.
 const FRYER_SMOKE_HEIGHT := 0.641 ## 0.557 * 1.15
@@ -3434,11 +3440,14 @@ var _patty_spawn_pool: Array = []
 
 ## First shift load gate. The main menu is built under the engine splash; gameplay's
 ## dynamic resources warm up behind the live truck donut cinematic.
-const GAMEPLAY_LOAD_MIN_SEC := 30.0
+const GAMEPLAY_LOAD_BATCH_SEC := 12.0
+var _loading_batch_began_ms := 0
+var _loading_screen_began_ms := 0
+var _loading_movie_count := 0
 const LOADING_WARMUP_LAYER := 1 << 19
 const TruckCinematicScript = preload("res://scripts/truck_cinematic.gd")
 var _menu_truck: Control = null
-var _loading_truck: Control = null
+var _loading_video: Control = null
 var _start_transition_in_progress := false
 var _gameplay_load_complete: bool = false
 var _gameplay_load_in_progress: bool = false
@@ -3465,6 +3474,9 @@ var location_map_btn: Button = null ## start-screen CTA
 var game_over_location_btn: Button = null ## area picker shown between shifts
 
 
+var menu_ready := false
+var _kitchen_ready := false
+
 func _ready() -> void:
 	randomize()
 	_seed_first_run_configs()
@@ -3481,14 +3493,39 @@ func _ready() -> void:
 	_setup_gamepad_input_map()
 	var ui_root: Control = get_node("UI/Root")
 	ui_root.theme = UiFontsScript.make_theme()
-	## Load title/menu art synchronously while Godot's boot logo still covers the
-	## first scene. This prevents deferred menu texture/font uploads from popping.
+	# Prepare title art while the intro covers this scene.
 	_warm_menu_assets_for_boot()
+	await get_tree().process_frame
 	_build_gameplay_loading_screen()
 	_style_static_labels()
 	if vp:
 		vp.size_changed.connect(_layout_flash_label)
 		call_deferred("_layout_flash_label")
+	_setup_stations_data()
+	_setup_game_audio()
+	_setup_intro_title_music()
+	_setup_location_map_ui()
+	start_btn.pressed.connect(func():
+		_sfx_click()
+		_start_game(false)
+	)
+	restart_btn.pressed.connect(func():
+		_sfx_click()
+		if mp_enabled and not _mp_applying:
+			mp_restart_day.rpc()
+			return
+		_restart()
+	)
+	_setup_multiplayer_ui()
+	game_over_panel.hide()
+	flash_label.hide()
+	await _loading_video.prewarm()
+	menu_ready = true
+
+
+func _initialize_kitchen() -> void:
+	if _kitchen_ready: return
+	var vp := get_viewport()
 	grill.resize(GRILL_SLOTS)
 	grill.fill(null)
 	grill_powered.resize(GRILL_SLOTS)
@@ -3506,7 +3543,6 @@ func _ready() -> void:
 	brush_swipe_travel.fill(0.0)
 	brush_swipe_cool.resize(GRILL_SLOTS)
 	brush_swipe_cool.fill(0.0)
-	_setup_stations_data()
 	_load_spatula_balance_settings()
 	_load_roomba_home_settings()
 	_load_soda_slot_settings()
@@ -3517,8 +3553,7 @@ func _ready() -> void:
 	_load_customer_review_card_settings()
 	_load_station_light_settings()
 	_load_ingredient_bin_settings()
-	_build_3d_world()
-	call_deferred("_prewarm_vehicle_systems")
+	await _build_3d_world()
 	_hide_grill_power_ui()
 	_build_station_ui()
 	_build_prep_ui_overlay()
@@ -3527,6 +3562,7 @@ func _ready() -> void:
 	_build_window_pause_ui()
 	_build_ingredient_legend()
 	_build_ingredient_buttons()
+	await get_tree().process_frame
 	_setup_radio()
 	if vp:
 		if not vp.size_changed.is_connected(_layout_phone_ui_overlay):
@@ -3544,12 +3580,13 @@ func _ready() -> void:
 	_build_master_volume_ui()
 	_build_screen_style_filter()
 	_build_graphics_ui()
-	_setup_game_audio()
+	await get_tree().process_frame
 	_build_options_menu()
+	await get_tree().process_frame
 	_build_guided_tutorial_ui()
 	_setup_lasso_tool()
 	_setup_level_editor()
-	_setup_location_map_ui()
+	await get_tree().process_frame
 	_setup_pcb_puzzle()
 	_setup_game_over_location_button()
 	_setup_cut_buyout_button()
@@ -3557,7 +3594,7 @@ func _ready() -> void:
 	_setup_grill_song_performer()
 	_load_grill_ttt_settings()
 	_setup_grill_ttt()
-	_setup_intro_title_music()
+	await get_tree().process_frame
 	_setup_burgerpals_startup_sound()
 	_build_dialogue_ui()
 	_build_challenge_ui()
@@ -3591,24 +3628,14 @@ func _ready() -> void:
 	stations_row.z_index = 10
 	ingredient_legend.mouse_filter = Control.MOUSE_FILTER_STOP
 	ingredient_legend.z_index = 30 ## above GrillDropZone while holding cheese
-	start_btn.pressed.connect(func():
-		_sfx_click()
-		_start_game(false)
-	)
-	restart_btn.pressed.connect(func():
-		_sfx_click()
-		if mp_enabled and not _mp_applying:
-			mp_restart_day.rpc()
-			return
-		_restart()
-	)
-	_setup_multiplayer_ui()
+	await get_tree().process_frame
 	game_over_panel.visible = false
 	flash_label.visible = false
 	_update_hud()
 	_refresh_spatula_ui()
 	_refresh_all_stations()
 	## Heavy runtime warmup begins only after Solo/Tutorial/Start Co-op is chosen.
+	_kitchen_ready = true
 
 
 func _warm_menu_assets_for_boot() -> void:
@@ -3634,46 +3661,41 @@ func _build_gameplay_loading_screen() -> void:
 	overlay.z_index = 1000
 	overlay.visible = false
 	ui_root.add_child(overlay)
-	_loading_truck = TruckCinematicScript.new()
-	_loading_truck.name = "TruckCinematic"
-	_loading_truck.set("loading_mode", true)
-	_loading_truck.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.add_child(_loading_truck)
-	var title := Label.new()
-	title.text = "BURGER PALS"
-	title.position = Vector2(40, 28)
-	title.add_theme_font_size_override("font_size", 34)
-	title.add_theme_color_override("font_color", Color("ffe7a9"))
-	title.add_theme_color_override("font_shadow_color", Color(0.02, 0.08, 0.10, 0.7))
-	title.add_theme_constant_override("shadow_offset_y", 3)
-	overlay.add_child(title)
-	var footer := ColorRect.new()
-	footer.color = Color(0.015, 0.055, 0.065, 0.86)
-	footer.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	footer.offset_top = -76
-	footer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.add_child(footer)
-	var label := Label.new()
-	label.name = "LoadingLabel"
-	label.text = "FIRING UP THE GRILL..."
-	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", 23)
-	label.add_theme_color_override("font_color", Color("ffe7a9"))
-	footer.add_child(label)
+	_loading_video = load("res://scripts/cinematic_video.gd").new()
+	_loading_video.name = "LoadingVideo"
+	_loading_video.set("video_path", "res://assets/cinematics/burger_pals_loading_16.ogv")
+	_loading_video.set("looping", false)
+	_loading_video.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(_loading_video)
+	var lettering: Control = load("res://scripts/loading_screen_lettering.gd").new()
+	lettering.name = "LoadingLettering"
+	lettering.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(lettering)
+	# Multiply the complete composition, including video and typography.
+	overlay.modulate = Color(0.64, 0.64, 0.64, 1.0)
 	_gameplay_load_overlay = overlay
 
 
 func _show_gameplay_loading_screen() -> void:
+	if game_audio != null: game_audio.cat_sounds_muted = true
 	_set_phone_in_truck(false)
 	_build_gameplay_loading_screen()
 	_gameplay_load_overlay.show()
 	_gameplay_load_overlay.move_to_front()
-	_loading_truck.call("restart_loading")
+	_loading_video.call("hold_frame")
+	_gameplay_load_overlay.get_node("LoadingLettering").set("status_text", "PREPARING YOUR KITCHEN")
+	# Apply saved gain before the song starts; deferred volume UI construction
+	# otherwise suddenly drops the Master bus partway through loading.
+	_load_audio_settings()
+	_set_master_volume_linear(master_volume_linear, false)
+	IntroBootMusic.play_loading()
 
 
 func _hide_gameplay_loading_screen() -> void:
+	if game_audio != null: game_audio.cat_sounds_muted = false
+	if is_instance_valid(_loading_video):
+		_loading_video.call("stop")
+	IntroBootMusic.stop_loading()
 	if is_instance_valid(_gameplay_load_overlay):
 		_gameplay_load_overlay.hide()
 
@@ -3681,6 +3703,12 @@ func _hide_gameplay_loading_screen() -> void:
 func _gameplay_preload_paths() -> Array[String]:
 	var paths: Array[String] = [
 		HAND_SPATULA_PATH, SHAKER_MODEL_PATH, BUN_BOTTOM_PATH, BUN_TOP_PATH,
+		REFINED_SOFT_SERVE_PATH, REFINED_SODA_PATH, REFINED_FRYER_PATH, REFINED_BASKET_PATH,
+		ICECREAM_MASCOT_SCENE, ICECREAM_MASCOT_ALBEDO, ICECREAM_MASCOT_NORMAL,
+		ICECREAM_MASCOT_ROUGH, ICECREAM_MASCOT_EMIT,
+		"res://assets/machine_decals/soft_serve_side_v2.png",
+		"res://assets/machine_decals/soda_chip_v2.png",
+		"res://assets/machine_decals/ice_chip_v2.png",
 		KETCHUP_BOTTLE_PATH, MUSTARD_BOTTLE_PATH, SODA_FOUNTAIN_MODEL_PATH,
 		SODA_FOUNTAIN_GLB_PATH, SMOKE2_SCENE_PATH, SMOKE2_ALPHA_TEX_PATH,
 		SMOKE2_BASECOLOR_TEX_PATH, GRILL_STEEL_TEX_PATH, DEBRIS_PILE_TEX_PATH,
@@ -3804,25 +3832,21 @@ func _prewarm_customer_construction() -> void:
 	if customers_root == null or not is_instance_valid(customers_root):
 		return
 	var warm_order: Array[String] = ["bun_bottom", "patty", "bun_top"]
-	for skin_i in CustomerScript.CHAR_SKINS.size():
+	CustomerScript.ensure_saved_character_files()
+	var saved_presets: Array[Dictionary] = []
+	for path in CustomerScript._list_usable_saved_character_files():
+		saved_presets.append(CustomerScript._parse_saved_character_file(path))
+	for skin_i in CustomerScript.CHAR_SKINS.size() + saved_presets.size():
 		var customer = CustomerScript.new()
 		customer.name = "LoadingWarmCustomer_%d" % skin_i
-		customer.setup(warm_order, Color.WHITE, 9999.0, 0, skin_i, skin_i % 3)
+		var preset: Dictionary = saved_presets[skin_i - CustomerScript.CHAR_SKINS.size()] if skin_i >= CustomerScript.CHAR_SKINS.size() else {}
+		customer.setup(warm_order, Color.WHITE, 9999.0, 0, skin_i, skin_i % 3, -1, preset, true)
 		customer.position = Vector3(0.0, CustomerScript.STAND_Y, 2.25)
 		customer.set_process(false)
 		customer.set_physics_process(false)
 		customers_root.add_child(customer)
 		_stage_loading_geometry(customer)
 		await get_tree().process_frame
-		if customer.has_method("prewarm_review_card"):
-			customer.prewarm_review_card("Great burger! ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 $!?,.-")
-			customer.show_review_stars(4.0, "Great burger! Thank you, Burger Pals.")
-			customer.get("_review_text").text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 $!?,.-’…—"
-			var card: Node3D = customer.get("_review_card_root")
-			card.top_level = true
-			card.global_transform = Transform3D(camera.global_basis.scaled(Vector3.ONE * 0.3), camera.global_position - camera.global_basis.z * 2.0)
-		# Review children were created after the original layer assignment.
-		_stage_loading_geometry(customer)
 		# Compile one customer's materials at a time; keeping all seven visible
 		# rendered an increasingly expensive crowd behind the loading screen.
 		for _frame in 2:
@@ -3833,14 +3857,30 @@ func _prewarm_customer_construction() -> void:
 			await get_tree().process_frame
 		customer.queue_free()
 		await get_tree().process_frame
+		await _loading_batch_checkpoint()
+
+
+func _play_loading_interlude() -> void:
+	# Run the movie alongside preparation; never wait for a complete playthrough.
+	if not is_instance_valid(_loading_video): return
+	_loading_video.set("looping", true)
+	_loading_video.call("play")
+	_loading_movie_count += 1
+	set_meta("loading_first_play_ms", Time.get_ticks_msec() - _loading_screen_began_ms)
+	set_meta("loading_movie_count", _loading_movie_count)
+	_loading_batch_began_ms = Time.get_ticks_msec()
+	await get_tree().process_frame
+
+
+func _loading_batch_checkpoint() -> void:
+	if _gameplay_load_in_progress:
+		await get_tree().process_frame
 
 
 func _run_comprehensive_gameplay_load() -> void:
 	if _gameplay_load_complete:
 		return
 	_gameplay_load_in_progress = true
-	if is_instance_valid(_loading_truck):
-		await _loading_truck.call("prewarm_hidden_render")
 	_set_phone_in_truck(false)
 	if is_instance_valid(_menu_truck) and start_overlay.visible:
 		var blocker := Control.new()
@@ -3853,11 +3893,13 @@ func _run_comprehensive_gameplay_load() -> void:
 		blocker.queue_free()
 		start_overlay.hide()
 	_show_gameplay_loading_screen()
-	var began_ms := Time.get_ticks_msec()
-	## Present the live truck before doing any expensive work.
+	_loading_screen_began_ms = Time.get_ticks_msec()
+	_loading_movie_count = 0
+	set_meta("loading_movie_durations_ms", [])
+	## Present the predecoded movie before starting synchronous construction.
 	await get_tree().process_frame
 	await get_tree().process_frame
-	# The opaque cinematic has its own 3D viewport. Avoid drawing the entire
+	# Avoid drawing the entire
 	# kitchen behind it during CPU/disk work; restore it for actual GPU warmups.
 	var gameplay_viewport := get_viewport()
 	var previous_disable_3d := gameplay_viewport.disable_3d
@@ -3865,9 +3907,20 @@ func _run_comprehensive_gameplay_load() -> void:
 	var previous_render_scale := gameplay_viewport.scaling_3d_scale
 	gameplay_viewport.disable_3d = true
 	set_meta("loading_phase", "resources")
+	await _play_loading_interlude()
 	await _preload_gameplay_resources()
+	await _loading_batch_checkpoint()
 	set_meta("loading_phase", "food_images")
 	await _prewarm_food_art()
+	await _loading_batch_checkpoint()
+	# Keep the renderer servicing small construction batches. Disabling 3D until
+	# the entire kitchen exists defers all its pipeline work into one long freeze.
+	camera.cull_mask = LOADING_WARMUP_LAYER
+	gameplay_viewport.scaling_3d_scale = minf(previous_render_scale, 0.25)
+	gameplay_viewport.disable_3d = previous_disable_3d
+	set_meta("loading_phase", "kitchen")
+	await _initialize_kitchen()
+	await _loading_batch_checkpoint()
 	if game_audio != null and game_audio.has_method("prewarm_all_gameplay_audio"):
 		set_meta("loading_phase", "audio")
 		await game_audio.prewarm_all_gameplay_audio()
@@ -3877,21 +3930,25 @@ func _run_comprehensive_gameplay_load() -> void:
 	gameplay_viewport.disable_3d = previous_disable_3d
 	set_meta("loading_phase", "vehicles")
 	await _prewarm_vehicle_systems()
+	await _loading_batch_checkpoint()
 	await get_tree().process_frame
 	set_meta("loading_phase", "runtime_pools")
 	await _warm_burger_assets()
+	await _loading_batch_checkpoint()
 	await get_tree().process_frame
 	set_meta("loading_phase", "customers")
 	await _prewarm_customer_construction()
-	gameplay_viewport.disable_3d = true
-	## Flush deferred frees and renderer uploads, then honor the requested 30s gate.
-	for _frame in 4:
-		await get_tree().process_frame
-	set_meta("loading_phase", "ready")
-	while float(Time.get_ticks_msec() - began_ms) / 1000.0 < GAMEPLAY_LOAD_MIN_SEC:
-		await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	# Wake the complete kitchen at its real render settings while the movie is
+	# still held, so first-draw uploads cannot interrupt the performance.
+	set_meta("loading_phase", "final_render")
 	camera.cull_mask = previous_camera_mask
 	gameplay_viewport.scaling_3d_scale = previous_render_scale
+	gameplay_viewport.disable_3d = previous_disable_3d
+	for _frame in 12:
+		await get_tree().process_frame
+	set_meta("loading_phase", "ready")
+	set_meta("loading_video_complete", true)
 	gameplay_viewport.disable_3d = previous_disable_3d
 	_gameplay_load_complete = true
 	_gameplay_load_in_progress = false
@@ -3996,6 +4053,25 @@ func _ensure_runtime_prewarms() -> void:
 			warm.visible = true
 	for _frame in 4:
 		await get_tree().process_frame
+	# Frozen-only warmup missed the seared overlays first revealed by a flip.
+	for staged in staged_patties:
+		var warm = staged.node
+		warm.hide_frozen_prewarm()
+		warm.flipped_once = true
+		warm.first_side_time = 15.5
+		warm._update_cook_gradient()
+		warm._update_sear_disc()
+		warm._update_grate_disc()
+		warm._update_meat_top()
+	for _frame in 4: await get_tree().process_frame
+	for staged in staged_patties:
+		var warm = staged.node
+		warm.flipped_once = false
+		warm.first_side_time = 0.0
+		warm._update_cook_gradient()
+		warm._update_sear_disc()
+		warm._update_grate_disc()
+		warm._update_meat_top()
 	for staged in staged_patties:
 		_restore_loading_geometry(staged.get("layers", []))
 		var warm = staged.get("node")
@@ -4008,14 +4084,33 @@ func _ensure_runtime_prewarms() -> void:
 	await _prewarm_grill_fire_fx()
 	await _prewarm_patty_fridge_place()
 	await _prewarm_condiment_stream_render()
+	await _prewarm_shaker_render()
 	await _prewarm_vehicle_systems()
 
 	_runtime_prewarm_complete = true
 	_runtime_prewarm_running = false
 
 
+func _prewarm_shaker_render() -> void:
+	if not is_instance_valid(shaker_root) or not is_instance_valid(shaker_particles): return
+	var saved := shaker_root.global_transform
+	var was_visible := shaker_root.visible
+	var layers := _stage_loading_geometry(shaker_root)
+	shaker_root.global_position = camera.global_position - camera.global_basis.z * 1.5
+	shaker_root.rotation_degrees = Vector3(180,25,0)
+	shaker_root.show()
+	shaker_particles.emitting = true
+	shaker_particles.restart()
+	for frame in 8: await get_tree().process_frame
+	shaker_particles.emitting = false
+	shaker_root.global_transform = saved
+	shaker_root.visible = was_visible
+	_restore_loading_geometry(layers)
+	shaker_root.set_meta("pickup_render_warmed", true)
+
+
 func _prewarm_vehicle_systems() -> void:
-	## Warm the loading-truck clip and animated 3D traffic before the first pass.
+	## Warm animated 3D traffic before the first pass.
 	if _vehicle_prewarm_done:
 		return
 	if _vehicle_prewarm_running:
@@ -4024,8 +4119,6 @@ func _prewarm_vehicle_systems() -> void:
 		return
 	_vehicle_prewarm_running = true
 	_build_gameplay_loading_screen()
-	if is_instance_valid(_loading_truck):
-		await _loading_truck.call("prewarm_hidden_render")
 	await _ensure_street_car_model_cache()
 	await _prewarm_street_car_gpu()
 	_vehicle_prewarm_done = true
@@ -4034,7 +4127,7 @@ func _prewarm_vehicle_systems() -> void:
 
 func _ensure_street_car_model_cache() -> void:
 	if not _street_car_model_cache.is_empty():
-		_bind_street_car_pool_from_cache()
+		await _bind_street_car_pool_from_cache()
 		return
 	for path in STREET_CAR_MODEL_PATHS:
 		var packed := _gameplay_resource_cache.get(path) as PackedScene
@@ -4045,7 +4138,7 @@ func _ensure_street_car_model_cache() -> void:
 		else:
 			push_error("Street vehicle missing: " + path)
 		await get_tree().process_frame
-	_bind_street_car_pool_from_cache()
+	await _bind_street_car_pool_from_cache()
 
 
 func _bind_street_car_pool_from_cache() -> void:
@@ -4053,7 +4146,7 @@ func _bind_street_car_pool_from_cache() -> void:
 		return
 	street_car_pool = _street_car_model_cache.duplicate()
 	if is_instance_valid(street_car):
-		street_car.set_pool(street_car_pool)
+		await street_car.set_pool(street_car_pool, _gameplay_load_in_progress)
 		_apply_street_car_look()
 
 
@@ -4157,6 +4250,7 @@ func _ensure_serve_fx_pools() -> void:
 		_serve_crumb_pool.append(crumb)
 
 
+const BurgerServeTiming = preload("res://scripts/burger_serve_timing.gd")
 const BURGER_COMPLETE_HOLD_SEC := 0.5
 
 
@@ -5256,6 +5350,11 @@ func _restart() -> void:
 
 
 func _process(delta: float) -> void:
+	if not menu_ready: return
+	if not _kitchen_ready or _gameplay_load_in_progress:
+		_update_gamepad_cursor(delta)
+		_update_start_patty_preview(delta)
+		return
 	if not OS.is_debug_build():
 		_process_gameplay(delta)
 		return
@@ -5274,6 +5373,7 @@ func get_performance_report() -> Dictionary:
 
 
 func _process_gameplay(delta: float) -> void:
+	_update_customer_departure_holds()
 	_perf_ui_accum += delta
 	_perf_layout_accum += delta
 	var ui_tick := _perf_ui_accum >= PERF_UI_TICK_SEC
@@ -6000,6 +6100,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if not menu_ready or not _kitchen_ready: return
 	if mp_enabled and not NetManager.is_host() and _mp_bootstrap_request_time > 0 and not _mp_bootstrap_ready:
 		get_viewport().set_input_as_handled()
 		return
@@ -6542,7 +6643,7 @@ func _is_enter_pressed(event: InputEvent) -> bool:
 
 func _strip_uses_hold_pickup(id: String) -> bool:
 	## Cheese / ketchup / mustard: tap adds to Build; hold (or drag out) picks the tool up.
-	return id == "cheese" or id == "ketchup" or id == "mustard"
+	return id in INGREDIENT_HOTKEYS
 
 
 func _begin_strip_hold_tracking(id: String, origin: Vector2) -> void:
@@ -6581,6 +6682,21 @@ func _try_start_strip_hold_pickup() -> void:
 			_strip_gesture_added = true
 			_strip_did_drag = true
 
+		return
+	# The strip owns the press, so it must explicitly start ordinary topping drags.
+	var button := ingredient_buttons.get(id) as Control
+	if not is_instance_valid(button) or int(supply_stock.get(id, 0)) <= 0: return
+	_pending_ingredient_drag = id
+	_pending_cheese_drag = false
+	_strip_did_drag = true
+	var preview := TextureRect.new()
+	preview.texture = FoodSpritesScript.get_tex(id)
+	preview.custom_minimum_size = Vector2(120, 72)
+	preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	button.force_drag({"kind": "ingredient", "id": id, "station": active_station}, preview)
+	_was_gui_dragging = true
+
 
 func _update_strip_hold_pickup(delta: float) -> void:
 	if not playing or options_menu_open or shift_paused:
@@ -6604,7 +6720,7 @@ func _update_strip_hold_pickup(delta: float) -> void:
 		return
 	if mouse.distance_to(_strip_hold_origin) >= STRIP_HOLD_DRAG_PX:
 		var delta_pos: Vector2 = mouse - _strip_hold_origin
-		var left_strip: bool = over_id == ""
+		var left_strip: bool = over_id == "" and absf(delta_pos.y) > 28.0
 		var mostly_vertical: bool = absf(delta_pos.y) > absf(delta_pos.x) * 1.15
 		if left_strip or mostly_vertical:
 			_try_start_strip_hold_pickup()
@@ -6666,7 +6782,7 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 		if not bool(_strip_swipe_added.get("_moved", false)):
 			if start_pos.distance_to(mouse2) >= STRIP_SWIPE_THRESH_PX:
 				var peek_id: String = _strip_ingredient_at(mouse2)
-				if peek_id != "":
+				if (peek_id != "" and peek_id != start_id) or (absf(mouse2.x - start_pos.x) >= STRIP_SWIPE_THRESH_PX and absf(mouse2.y - start_pos.y) < 28.0):
 					_strip_swipe_added["_moved"] = true
 					_strip_did_drag = true
 					_clear_strip_hold_tracking()
@@ -6674,20 +6790,26 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 					## drag (bacon → cat, etc.) is not a click. Paint only when the
 					## cursor is still on a strip button below.
 		if bool(_strip_swipe_added.get("_moved", false)):
-			var id2: String = _strip_ingredient_at(mouse2)
-			if id2 != "":
-				## Entering a new topping: include the start button once, then this one.
-				if start_id != "" and id2 != start_id and not _strip_swipe_added.has(start_id):
-					_strip_swipe_add(start_id)
-				_strip_swipe_add(id2)
+			var previous: Vector2 = _strip_swipe_added.get("_last", start_pos)
+			_strip_swipe_path(previous, mouse2)
+		_strip_swipe_added["_last"] = mouse2
 		return true
 	return false
+
+
+func _strip_swipe_path(from: Vector2, to: Vector2) -> void:
+	# Fill gaps between input events, including quick sweeps across several bins.
+	var steps := maxi(1, ceili(from.distance_to(to) / 8.0))
+	for step in range(steps + 1):
+		var point := from.lerp(to, float(step) / float(steps))
+		var id := _strip_ingredient_at(point)
+		if id != "" and not _strip_swipe_added.has(id): _strip_swipe_add(id)
 
 
 func _strip_mouse_pos(event: InputEvent = null) -> Vector2:
 	## Viewport coords match Control.get_global_rect() under canvas_items stretch.
 	if event is InputEventMouse:
-		return get_viewport().get_mouse_position()
+		return event.position
 	return get_viewport().get_mouse_position()
 
 
@@ -7665,7 +7787,10 @@ func _build_3d_world() -> void:
 	_load_physical_garbage_settings()
 	_load_patty_fridge_settings()
 
+	set_meta("loading_step", "_build_checkered_floor()")
 	_build_checkered_floor()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
 
 	# Truck shell — black interior walls / ceiling.
 	_add_box(world, Vector3(6.5, 0.12, 4.0), Vector3(0, 0.06, -0.4), Color("1A1A1A"))
@@ -7691,9 +7816,18 @@ func _build_3d_world() -> void:
 	var counter_top := _add_box(world, Vector3(4.65, 0.10, 1.35), Vector3(0.0, 1.0, 0.08), Color("101214"))
 	counter_top.material_override.metallic = 0.32
 	counter_top.material_override.roughness = 0.62
+	set_meta("loading_step", "_build_physical_garbage_can()")
 	_build_physical_garbage_can()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_patty_fridge()")
 	_build_patty_fridge()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_grill_standoffs()")
 	_build_grill_standoffs()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
 
 	slot_positions.clear()
 	slot_areas.clear()
@@ -7730,35 +7864,113 @@ func _build_3d_world() -> void:
 	_load_grill_vignette_settings()
 	_load_grill_surface_light_settings()
 	_load_window_sill_glass_settings()
+	set_meta("loading_step", "_build_flat_top_grill()")
 	_build_flat_top_grill()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
 	_load_cutting_board_xform_settings()
+	set_meta("loading_step", "_build_burner_flames()")
 	_build_burner_flames()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_cutting_board_prop()")
 	_build_cutting_board_prop()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_cheese_station_prop()")
 	_build_cheese_station_prop()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_condiment_bottles()")
 	_build_condiment_bottles()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_wire_brush()")
 	_build_wire_brush()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_oil_bottle()")
 	_build_oil_bottle()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_grill_roomba()")
 	_build_grill_roomba()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_meat_warmer()")
 	_build_meat_warmer()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_truck_radio_prop()")
 	_build_truck_radio_prop()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_season_shaker()")
 	_build_season_shaker()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_fire_extinguisher()")
 	_build_fire_extinguisher()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_window_cat()")
 	_build_window_cat()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_outdoor_street()")
 	_build_outdoor_street()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_first_sale_decal()")
 	_build_first_sale_decal()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_wall_paper_decals()")
 	_build_wall_paper_decals()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_menu_board_decal()")
+	var menu_clock := _perf_hot_begin()
 	_build_menu_board_decal()
+	_perf_hot_end("menu_board_build", menu_clock)
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_icecream_machine()")
+	var ice_clock := _perf_hot_begin()
 	_build_icecream_machine()
+	_perf_hot_end("icecream_total_build", ice_clock)
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_soda_station()")
+	var soda_clock := _perf_hot_begin()
 	_build_soda_station()
+	_perf_hot_end("soda_total_build", soda_clock)
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_fryer_machine()")
 	_build_fryer_machine()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
 	_apply_machine_unlock_visibility()
 	## Wall Burger Pals logo removed — was crowding the tool rack / extinguisher.
+	set_meta("loading_step", "_build_window_bunting()")
 	_build_window_bunting()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_open_closed_sign()")
 	_build_open_closed_sign()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
+	set_meta("loading_step", "_build_air_motes()")
 	_build_air_motes()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
 	## Window godrays disabled for now (too strong).
 	# _build_window_godrays()
+	set_meta("loading_step", "_build_hand_spatula()")
 	_build_hand_spatula()
+	await get_tree().process_frame
+	await _loading_batch_checkpoint()
 
 	_setup_world_lighting()
 
@@ -9575,6 +9787,11 @@ func _load_physical_garbage_settings() -> void:
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)
 		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_half_v2", true)
 		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_half_v3"):
+		garbage_bag_hold_scale = clampf(garbage_bag_hold_scale * 0.5, 0.2, 8.0)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_scale", garbage_bag_hold_scale)
+		cfg.set_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_half_v3", true)
+		cfg.save(GFX_CFG_PATH)
 	garbage_bag_hold_height = clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "hold_bag_height", garbage_bag_hold_height)), 0.05, 1.20)
 	garbage_liner_offset = Vector3(
 		clampf(float(cfg.get_value(PHYSICAL_GARBAGE_CFG_SECTION, "liner_x", garbage_liner_offset.x)), -1.0, 1.0),
@@ -11015,12 +11232,40 @@ func _spatula_play_ting_bit(bit: int) -> void:
 			print("SPATULA TAP SPIKE: %.2f ms" % (float(tap_usec) / 1000.0))
 
 
+var _dance_last_tap := -10000
+var _dance_last_note := -1
+
+func _register_grill_dance_tap(world_pos: Vector3, tap_roll: float) -> void:
+	if not playing: return
+	var now := Time.get_ticks_msec()
+	var piano := str(_grill_zone_at(world_pos).get("id", "")) != "hold"
+	var note := _grill_piano_midi_at(world_pos) + _spatula_roll_midi_offset_for_roll(tap_roll) if piano else -1
+	var melody := piano and _dance_last_note >= 0 and note != _dance_last_note and now - _dance_last_tap <= 2000
+	var candidates: Array[Node] = []
+	for c in customers:
+		if not is_instance_valid(c): continue
+		var life: Node = c.get_node_or_null("CustomerLife")
+		if life == null or not life.can_grill_dance(): continue
+		life.react_to_grill_tap(world_pos)
+		if piano and life.dance_left > 0.0: life.start_grill_dance()
+		candidates.append(life)
+	if piano:
+		_dance_last_note = note
+		_dance_last_tap = now
+	if not piano or candidates.is_empty(): return
+	# The first waiting customer joins; others may join the same little idle dance.
+	candidates[0].start_grill_dance()
+	for i in range(1, candidates.size()):
+		if randf() < 0.45: candidates[i].start_grill_dance()
+
+
 func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_override: float = INF, send_mp: bool = true) -> void:
 	## Cook steel → C major piano strips; HOLD → drums / hats by spatula tilt.
 	if game_audio == null or world_pos == Vector3.ZERO:
 		return
 	_flash_grill_tap_pad(world_pos)
 	var tap_roll := _spatula_user_roll if roll_override == INF else roll_override
+	if send_mp: _register_grill_dance_tap(world_pos, tap_roll)
 	var zone := _grill_zone_at(world_pos)
 	if str(zone.get("id", "")) == "hold":
 		if game_audio.has_method("play_spatula_drum"):
@@ -14552,10 +14797,7 @@ func _update_physical_garbage_hover() -> void:
 	var viewport := get_viewport()
 	if viewport == null:
 		return
-	## A patty still sliding on the grill is not a carried trash item. Keeping the
-	## bin dark here avoids advertising the old slide-directly-into-trash action.
-	var sliding_patty := dragging_patty != null and is_instance_valid(dragging_patty)
-	var hovered := not sliding_patty and not garbage_bag_held and _garbage_area_hit(viewport.get_mouse_position())
+	var hovered := _is_over_garbage(viewport.get_mouse_position())
 	if hovered == _physical_garbage_hovered:
 		return
 	_physical_garbage_hovered = hovered
@@ -15754,12 +15996,8 @@ func _end_patty_drag() -> void:
 		_on_window_cat_fed("patty")
 		_flash("Cat stole the burger! ♥", Color("FF8A80"))
 		return
-	## Sliding stays on the steel. A patty must be scooped onto the spatula before
-	## the physical garbage can will accept it.
 	if _is_over_garbage(mouse):
-		_flash("Scoop the patty first, then put it in the garbage", Color("FFCC80"))
-		if game_audio and game_audio.has_method("play_error"):
-			game_audio.play_error()
+		_trash_single_grill_patty(patty)
 		return
 	## Quick tap only → flip / scoop. Hold ≥ 0.2s (or slide) never auto-scoops.
 	if is_quick_tap:
@@ -17337,6 +17575,11 @@ func _set_roomba_face(state: String) -> void:
 
 
 func _reset_grill_roomba() -> void:
+	_roomba_scan_left = 0.0
+	_roomba_cached_dirt = Vector3.INF
+	_roomba_clean_elapsed = 0.0
+	_roomba_clean_travel = 0.0
+	_roomba_clean_move = Vector2.ZERO
 	grill_roomba_heading = deg_to_rad(-35.0)
 	grill_roomba_turn_goal = grill_roomba_heading
 	grill_roomba_held = false
@@ -17397,6 +17640,20 @@ func _reset_grill_roomba() -> void:
 		grill_roomba_root.rotation_degrees = Vector3(0.0, _roomba_visual_yaw_degrees(), 0.0)
 		grill_roomba_last_xz = Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 
+
+var _roomba_scan_left := 0.0
+var _roomba_cached_dirt := Vector3.INF
+var _roomba_clean_elapsed := 0.0
+var _roomba_clean_travel := 0.0
+var _roomba_clean_move := Vector2.ZERO
+
+func _roomba_scan_dirt(from: Vector2, delta: float) -> Vector3:
+	_roomba_scan_left -= delta
+	if _roomba_scan_left <= 0.0:
+		_roomba_scan_left = 0.12
+		_roomba_cached_dirt = _roomba_dirty_target(from)
+	if grill_on_fire: return _roomba_fire_target()
+	return _roomba_cached_dirt
 
 func _update_grill_roomba(delta: float) -> void:
 	if grill_roomba_root == null or not is_instance_valid(grill_roomba_root):
@@ -17483,10 +17740,10 @@ func _update_grill_roomba(delta: float) -> void:
 	_roomba_update_scoop_hold(delta)
 	var carrying:= grill_roomba_carry_patty != null and is_instance_valid(grill_roomba_carry_patty)
 	var scooping:= grill_roomba_scoop_patty != null and is_instance_valid(grill_roomba_scoop_patty)
-	if not carrying and not scooping:
+	if not carrying and not scooping and _roomba_scan_left <= delta:
 		_roomba_select_patty_task(old_xz)
 	var tasking:= grill_roomba_task_patty != null and is_instance_valid(grill_roomba_task_patty)
-	var target:= _roomba_dirty_target(old_xz)
+	var target:= _roomba_scan_dirt(old_xz, delta)
 	var desired_heading:= grill_roomba_turn_goal
 	var has_dirt:= target.is_finite()
 	var has_patty_task:= carrying or scooping or tasking
@@ -19687,6 +19944,16 @@ func _roomba_clean_distance_to_xz(pos: Vector3, target_xz: Vector2) -> float:
 
 
 func _roomba_clean_at(pos: Vector3, move_xz: Vector2, moved: float, delta: float) -> void:
+	_roomba_clean_elapsed += delta
+	_roomba_clean_travel += moved
+	_roomba_clean_move += move_xz
+	if _roomba_clean_elapsed < 1.0 / 15.0: return
+	delta = _roomba_clean_elapsed
+	moved = _roomba_clean_travel
+	move_xz = _roomba_clean_move
+	_roomba_clean_elapsed = 0.0
+	_roomba_clean_travel = 0.0
+	_roomba_clean_move = Vector2.ZERO
 	var cleaned: bool = false
 	for i in GRILL_SLOTS:
 		if i >= grill_residue.size() or float(grill_residue[i]) <= 0.04:
@@ -20242,29 +20509,13 @@ func _sync_grill_heat_hidden_ui() -> void:
 
 
 func _add_grill_surface_lights(parent: Node3D) -> void:
-	## One Omni centered on each cook-zone heat glow (FULL + ½). HOLD stays dark.
+	## Disabled at the user's request: no bright real lights on FULL or HALF.
 	if parent == null or not is_instance_valid(parent):
 		return
 	for old in grill_surface_lights:
 		if old != null and is_instance_valid(old):
 			old.queue_free()
 	grill_surface_lights.clear()
-	for z in _grill_zone_bands():
-		var zone_mul := float(z.get("mul", 0.0))
-		if zone_mul <= 0.0:
-			continue
-		var local_cx := float(z["cx"]) - GRILL_CENTER_X
-		var light := OmniLight3D.new()
-		light.name = "GrillSurfaceLight_%s" % str(z.get("id", "cook"))
-		light.shadow_enabled = false
-		light.light_volumetric_fog_energy = 0.0
-		light.omni_attenuation = 1.35
-		## Same XZ as the heat blot center so the real light sits in the glow.
-		light.position = Vector3(local_cx, grill_surf_light_height, 0.0)
-		light.set_meta("zone_mul", zone_mul)
-		parent.add_child(light)
-		grill_surface_lights.append(light)
-	_apply_grill_surface_light()
 
 
 func _apply_grill_surface_light() -> void:
@@ -27243,7 +27494,7 @@ func _apply_world_hint_settings_changed() -> void:
 	if fryer_label != null and is_instance_valid(fryer_label):
 		_style_world_hint_label(fryer_label)
 		fryer_label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
-		_nudge_label3d_on_screen(fryer_label, fryer_hint_screen_nudge)
+		_nudge_label3d_on_screen(fryer_label, fryer_hint_screen_nudge + FRYER_HINT_PAYMENT_PASS_OFFSET)
 	if soda_cup_hint_label != null and is_instance_valid(soda_cup_hint_label):
 		_style_world_hint_label(soda_cup_hint_label)
 
@@ -29750,6 +30001,10 @@ func _update_street_car_exhaust_position() -> void:
 
 func _update_street_car(delta: float) -> void:
 	if not is_instance_valid(street_car):
+		return
+	if is_instance_valid(mail_delivery_truck) and not street_car_active:
+		street_car.hide()
+		if is_instance_valid(street_car_exhaust): street_car_exhaust.emitting = false
 		return
 	if not playing:
 		if street_car_active and game_audio != null and game_audio.has_method("stop_car_pass_by"):
@@ -34677,7 +34932,7 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 func _nudge_fryer_hint_down() -> void:
 	if fryer_label != null and is_instance_valid(fryer_label):
 		fryer_label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
-		_nudge_label3d_on_screen(fryer_label, fryer_hint_screen_nudge)
+		_nudge_label3d_on_screen(fryer_label, fryer_hint_screen_nudge + FRYER_HINT_PAYMENT_PASS_OFFSET)
 
 
 func _refresh_fryer_hint_label() -> void:
@@ -36246,12 +36501,18 @@ func _build_icecream_machine() -> void:
 	world.add_child(root)
 	icecream_root = root
 
+	var build_clock := _perf_hot_begin()
 	var visual := _instantiate_kitchen_machine(REFINED_SOFT_SERVE_PATH)
+	_perf_hot_end("icecream_model_instantiate", build_clock)
+	build_clock = _perf_hot_begin()
 	if visual != null:
 		visual.name = "SoftServeModel"
 		root.add_child(visual)
 		preload("res://scripts/machine_badges.gd").soft_serve(visual)
 		_fix_refined_soft_serve_handle(visual)
+	_build_icecream_mascot(root)
+	_perf_hot_end("icecream_badges_and_mascot", build_clock)
+	build_clock = _perf_hot_begin()
 
 	icecream_spout_marker = Marker3D.new()
 	icecream_spout_marker.name = "SoftServeSpoutTip"
@@ -36304,6 +36565,7 @@ func _build_icecream_machine() -> void:
 	_spawn_and_bind_empty_icecream_cone()
 	_build_icecream_stream_fx()
 	_rebuild_icecream_fill_ghost()
+	_perf_hot_end("icecream_runtime_parts", build_clock)
 
 
 func _add_icecream_machine_dressup(parent: Node3D) -> void:
@@ -36376,8 +36638,10 @@ func _build_icecream_mascot(machine_root: Node3D) -> void:
 	)
 	var mascot := Node3D.new()
 	mascot.name = "IceCreamMascot"
-	## Seat the cone on the black lid, same as the old smiling topper.
-	mascot.set_meta("base_position", Vector3(0.0, 0.558, 0.0))
+	## Fit the newer cone to the current cabinet roof, including replacement models.
+	var cabinet := machine_root.get_node_or_null("SoftServeModel") as Node3D
+	var roof_y := _mesh_aabb_local(cabinet).end.y if cabinet != null else 0.558
+	mascot.set_meta("base_position", Vector3(0.0, roof_y + 0.002, 0.0))
 	mascot.add_child(visual)
 	machine_root.add_child(mascot)
 	_apply_icecream_mascot_transform()
@@ -46529,7 +46793,7 @@ func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) ->
 	if cust.has_method("patience_ratio"):
 		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
 	if game_audio and game_audio.has_method("play_customer_wawa_click"):
-		game_audio.play_customer_wawa_click(impatience)
+		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
 
 func _release_condiment_tool() -> void:
 	if condiment_tool_held == "":
@@ -46892,6 +47156,19 @@ func _make_tip_bill_mesh(in_jar: bool, size_mul: float = 1.0, variant: int = -1)
 	## Face the cook/camera (−Z). Lean up from the jar floor so the 1 reads.
 	bill.rotation_degrees = Vector3(-36.0, 180.0, 0.0)
 	return bill
+
+
+func _cached_sale_bill_material() -> StandardMaterial3D:
+	var cached := _payment_bill_material_cache.get("sale_shaded") as StandardMaterial3D
+	if cached != null: return cached
+	cached = _cached_tip_bill_material(false).duplicate() as StandardMaterial3D
+	cached.albedo_color = Color(0.8, 0.8, 0.8, 1.0)
+	cached.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	cached.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT_WRAP
+	cached.roughness = 0.95
+	cached.metallic_specular = 0.12
+	_payment_bill_material_cache["sale_shaded"] = cached
+	return cached
 
 
 func _ensure_payment_bill_assets() -> void:
@@ -48099,6 +48376,12 @@ func _buy_supply_local(id: String) -> void:
 func _update_supply_orders(delta: float) -> void:
 	if not playing:
 		return
+	if is_instance_valid(mail_delivery_truck):
+		mail_delivery_truck.advance(delta)
+		if mail_delivery_truck.finished:
+			mail_delivery_truck.queue_free()
+			mail_delivery_truck = null
+			street_car_wait = maxf(street_car_wait, 3.0)
 	var i := 0
 	var phone_dirty := false
 	while i < supply_orders.size():
@@ -48120,6 +48403,10 @@ func _update_supply_orders(delta: float) -> void:
 
 
 func _clear_supply_delivery_fx() -> void:
+	if is_instance_valid(mail_delivery_truck):
+		mail_delivery_truck.restore_cat()
+		mail_delivery_truck.queue_free()
+		mail_delivery_truck = null
 	for item in supply_delivery_fx:
 		if typeof(item) != TYPE_DICTIONARY:
 			continue
@@ -48130,10 +48417,22 @@ func _clear_supply_delivery_fx() -> void:
 
 
 func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
+	if id == "": return
+	if not is_instance_valid(window_cat):
+		_throw_cat_supply_delivery(id, pack, kind)
+		return
+	if not is_instance_valid(mail_delivery_truck):
+		mail_delivery_truck = preload("res://scripts/mail_delivery_truck.gd").new()
+		mail_delivery_truck.game = self
+		world.add_child(mail_delivery_truck)
+	mail_delivery_truck.enqueue(id, pack, kind)
+
+
+func _throw_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 	if id == "":
 		return
 	## Ask the window cat to peek, then toss packages toward the kitchen.
-	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("request_delivery_peek"):
+	if not is_instance_valid(mail_delivery_truck) and window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("request_delivery_peek"):
 		window_cat.request_delivery_peek(5.5)
 	var from := Vector3(1.2, 1.05, 1.55)
 	if window_cat != null and is_instance_valid(window_cat) and window_cat.has_method("head_global"):
@@ -48154,7 +48453,8 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 			"t": 0.0,
 			"dur": (0.55 + float(n) * 0.08) * 1.4,
 			"landed": false,
-			"settle": 0.28,
+			"settle": 0.52,
+			"storage": _supply_storage_location(id, kind),
 			"arc": 0.55 + randf() * 0.25,
 			"id": id,
 			"pack": pack if n == 0 else 0, ## credit stock once on first pack landing
@@ -48179,7 +48479,7 @@ func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
 	var tex: Texture2D = FoodSpritesScript.get_tex(id)
 	if tex != null:
 		var quad := QuadMesh.new()
-		quad.size = Vector2(0.82, 0.66)
+		quad.size = Vector2(0.82, 0.66) / 3.0
 		mi.mesh = quad
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -48188,13 +48488,14 @@ func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
 		mat.albedo_color = Color(1, 1, 1, 1)
 		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat.render_priority = 18
+		mat.render_priority = 100
+		mat.no_depth_test = true
 		mi.material_override = mat
 		mi.set_meta("billboard_pack", true)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		return mi
 	var box := BoxMesh.new()
-	box.size = Vector3(0.18, 0.14, 0.18) if kind != "syrup" else Vector3(0.10, 0.18, 0.10)
+	box.size = (Vector3(0.18, 0.14, 0.18) if kind != "syrup" else Vector3(0.10, 0.18, 0.10)) / 3.0
 	mi.mesh = box
 	var box_mat := StandardMaterial3D.new()
 	var col: Color = GameDataScript.INGREDIENT_COLORS.get(id, Color(0.75, 0.55, 0.25))
@@ -48202,6 +48503,9 @@ func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
 		var fid := _flavor_from_syrup_id(id)
 		col = SODA_FLAVOR_COLORS.get(fid, col)
 	box_mat.albedo_color = col
+	box_mat.no_depth_test = true
+	box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	box_mat.render_priority = 100
 	box_mat.roughness = 0.55
 	box_mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 	mi.material_override = box_mat
@@ -48222,24 +48526,30 @@ func _update_supply_delivery_fx(delta: float) -> void:
 				supply_delivery_fx[i] = item
 				i += 1
 				continue
-			if is_instance_valid(window_cat) and window_cat.has_method("delivery_origin_global"):
+			if is_instance_valid(mail_delivery_truck):
+				item["from"] = mail_delivery_truck.delivery_origin_global()
+			elif is_instance_valid(window_cat) and window_cat.has_method("delivery_origin_global"):
 				item["from"] = window_cat.delivery_origin_global()
 			mesh.global_position = item["from"]
 			mesh.show()
 		if bool(item.get("landed", false)):
 			var settle_left := maxf(0.0, float(item.get("settle", 0.0)) - delta)
 			item["settle"] = settle_left
-			var settle_total := 0.28
+			var settle_total := 0.52
 			var settled := 1.0 - clampf(settle_left / settle_total, 0.0, 1.0)
 			var land_pos: Vector3 = item.get("land_pos", (mesh as Node3D).global_position)
-			(mesh as Node3D).global_position = land_pos + Vector3(0.0, sin(settled * PI) * 0.025, -0.14 * settled)
+			var destination: Vector3 = item.get("storage", land_pos)
+			(mesh as Node3D).global_position = land_pos.lerp(destination, smoothstep(0.0, 1.0, settled))
+			mesh.scale = Vector3.ONE * lerpf(1.0, 0.65, settled)
 			var mat := (mesh as MeshInstance3D).material_override as StandardMaterial3D
 			if mat != null:
 				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 				var c := mat.albedo_color
-				c.a = 1.0 - settled
+				c.a = 1.0 - smoothstep(0.82, 1.0, settled)
 				mat.albedo_color = c
 			if settle_left <= 0.0:
+				if int(item.get("pack", 0)) > 0:
+					_credit_supply_delivery(str(item["id"]), int(item["pack"]), str(item["kind"]))
 				mesh.queue_free()
 				supply_delivery_fx.remove_at(i)
 				continue
@@ -48261,12 +48571,6 @@ func _update_supply_delivery_fx(delta: float) -> void:
 			mesh.rotation_degrees.y += float(item.get("spin", 4.0)) * delta * 60.0
 			mesh.rotation_degrees.x += float(item.get("spin", 4.0)) * delta * 40.0
 		if u >= 1.0:
-			var pack := int(item.get("pack", 0))
-			var id := str(item.get("id", ""))
-			var kind := str(item.get("kind", "stock"))
-			if pack > 0 and id != "":
-				_credit_supply_delivery(id, pack, kind)
-			item["pack"] = 0
 			item["landed"] = true
 			item["land_pos"] = mesh.global_position
 			supply_delivery_fx[i] = item
@@ -52025,12 +52329,14 @@ func _seed_first_run_configs() -> void:
 			RELEASE_PROFILE_KEY,
 			0
 		))
-		if applied_version >= RELEASE_PROFILE_VERSION:
+		# Restore the easy Mill stop once, without resetting audio or graphics.
+		var required_version := 4 if user_path == LOCATION_CFG_PATH else RELEASE_PROFILE_VERSION
+		if applied_version >= required_version:
 			continue
 		for section in bundled.get_sections():
 			for key in bundled.get_section_keys(section):
 				local.set_value(section, key, bundled.get_value(section, key))
-		local.set_value(RELEASE_PROFILE_SECTION, RELEASE_PROFILE_KEY, RELEASE_PROFILE_VERSION)
+		local.set_value(RELEASE_PROFILE_SECTION, RELEASE_PROFILE_KEY, required_version)
 		if local.save(user_path) != OK:
 			push_warning("Could not update release settings profile: %s" % user_path)
 
@@ -52067,7 +52373,7 @@ func _play_burgerpals_voice() -> void:
 
 
 func _setup_intro_title_music() -> void:
-	## Autoload starts jazz mid–Godot logo with a 1.5s volume ramp.
+	## Preserve the Burger Time playback position from the skippable intro.
 	var boot := get_node_or_null("/root/IntroBootMusic")
 	if boot != null and boot.has_method("ensure_playing_on_title"):
 		boot.ensure_playing_on_title()
@@ -52096,15 +52402,9 @@ func _setup_intro_title_music() -> void:
 
 
 func _start_intro_title_music() -> void:
-	if intro_music_player == null or not is_instance_valid(intro_music_player):
-		var boot := get_node_or_null("/root/IntroBootMusic")
-		if boot != null and boot.has_method("ensure_playing_on_title"):
-			boot.ensure_playing_on_title()
-			intro_music_player = boot.player
-		return
 	if start_overlay == null or start_overlay.visible:
-		if not intro_music_player.playing:
-			intro_music_player.play()
+		IntroBootMusic.ensure_playing_on_title()
+		intro_music_player = IntroBootMusic.player
 
 
 func _stop_intro_title_music() -> void:
@@ -60156,15 +60456,15 @@ func _build_challenge_ui() -> void:
 
 	var card := PanelContainer.new()
 	card.set_anchors_preset(Control.PRESET_CENTER)
-	card.offset_left = -300.0
-	card.offset_right = 300.0
-	card.offset_top = -210.0
-	card.offset_bottom = 210.0
+	card.offset_left = -286.0
+	card.offset_right = 286.0
+	card.offset_top = -195.0
+	card.offset_bottom = 195.0
 	var card_sb := StyleBoxFlat.new()
-	card_sb.bg_color = Color(0.11, 0.09, 0.08, 0.98)
-	card_sb.border_color = Color(1.0, 0.78, 0.28, 0.95)
-	card_sb.set_border_width_all(3)
-	card_sb.set_corner_radius_all(20)
+	card_sb.bg_color = Color("F4E6C8")
+	card_sb.border_color = Color("C64932")
+	card_sb.set_border_width_all(4)
+	card_sb.set_corner_radius_all(14)
 	card_sb.content_margin_left = 26
 	card_sb.content_margin_right = 26
 	card_sb.content_margin_top = 22
@@ -60179,29 +60479,29 @@ func _build_challenge_ui() -> void:
 	card.add_child(col)
 
 	var kicker := Label.new()
-	kicker.text = "SPECIAL ORDER"
+	kicker.text = "THE LUNCH RUSH"
 	kicker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(kicker, true, 13)
-	kicker.add_theme_color_override("font_color", Color(1.0, 0.82, 0.38, 0.92))
+	kicker.add_theme_color_override("font_color", Color("A8402F"))
 	col.add_child(kicker)
 
 	var title := Label.new()
 	title.text = "BURGER CHALLENGE"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_luckiest_label(title, 38)
-	title.add_theme_color_override("font_color", Color("FFD54F"))
-	title.add_theme_color_override("font_outline_color", Color.BLACK)
-	title.add_theme_constant_override("outline_size", 7)
+	UiFontsScript.apply_luckiest_label(title, 36)
+	title.add_theme_color_override("font_color", Color("A93628"))
+	title.add_theme_color_override("font_outline_color", Color("FFF7E1"))
+	title.add_theme_constant_override("outline_size", 3)
 	col.add_child(title)
 	challenge_title_label = title
 
 	var body := Label.new()
-	body.text = "Cook the same burger as fast as you can."
+	body.text = "One recipe. Beat the clock. Earn the bonus."
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body.custom_minimum_size = Vector2(500, 0)
+	body.custom_minimum_size = Vector2(470, 0)
 	UiFontsScript.apply_label(body, false, 16)
-	body.add_theme_color_override("font_color", Color(0.93, 0.90, 0.84))
+	body.add_theme_color_override("font_color", Color("574736"))
 	col.add_child(body)
 	challenge_body_label = body
 
@@ -60216,9 +60516,9 @@ func _build_challenge_ui() -> void:
 	reward.text = "Bonus tip  $50"
 	reward.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_luckiest_label(reward, 22)
-	reward.add_theme_color_override("font_color", Color("A5D6A7"))
+	reward.add_theme_color_override("font_color", Color("366B43"))
 	reward.add_theme_color_override("font_outline_color", Color(0.05, 0.12, 0.06, 1.0))
-	reward.add_theme_constant_override("outline_size", 4)
+	reward.add_theme_constant_override("outline_size", 0)
 	col.add_child(reward)
 	challenge_reward_label = reward
 
@@ -60229,7 +60529,7 @@ func _build_challenge_ui() -> void:
 
 	var accept := Button.new()
 	accept.text = "LET'S COOK"
-	accept.custom_minimum_size = Vector2(190, 52)
+	accept.custom_minimum_size = Vector2(260, 54)
 	accept.focus_mode = Control.FOCUS_NONE
 	accept.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	UiFontsScript.apply_luckiest_button(accept, 20)
@@ -60247,7 +60547,7 @@ func _build_challenge_ui() -> void:
 
 	var decline := Button.new()
 	decline.text = "SKIP"
-	decline.custom_minimum_size = Vector2(140, 52)
+	decline.custom_minimum_size = Vector2(150, 54)
 	decline.focus_mode = Control.FOCUS_NONE
 	decline.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	UiFontsScript.apply_luckiest_button(decline, 18)
@@ -60373,8 +60673,8 @@ func _build_challenge_ui() -> void:
 func _make_challenge_stat_chip(parent: Control, value: String, caption: String) -> Label:
 	var chip := PanelContainer.new()
 	var chip_sb := StyleBoxFlat.new()
-	chip_sb.bg_color = Color(0.16, 0.12, 0.08, 0.96)
-	chip_sb.border_color = Color(1.0, 0.78, 0.28, 0.55)
+	chip_sb.bg_color = Color("E8D7AF")
+	chip_sb.border_color = Color("D1B980")
 	chip_sb.set_border_width_all(2)
 	chip_sb.set_corner_radius_all(12)
 	chip_sb.content_margin_left = 22
@@ -60382,7 +60682,7 @@ func _make_challenge_stat_chip(parent: Control, value: String, caption: String) 
 	chip_sb.content_margin_top = 10
 	chip_sb.content_margin_bottom = 10
 	chip.add_theme_stylebox_override("panel", chip_sb)
-	chip.custom_minimum_size = Vector2(170, 78)
+	chip.custom_minimum_size = Vector2(226, 78)
 	parent.add_child(chip)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 2)
@@ -60391,15 +60691,15 @@ func _make_challenge_stat_chip(parent: Control, value: String, caption: String) 
 	value_lab.text = value
 	value_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_luckiest_label(value_lab, 32)
-	value_lab.add_theme_color_override("font_color", Color.WHITE)
+	value_lab.add_theme_color_override("font_color", Color("433525"))
 	value_lab.add_theme_color_override("font_outline_color", Color.BLACK)
-	value_lab.add_theme_constant_override("outline_size", 5)
+	value_lab.add_theme_constant_override("outline_size", 0)
 	v.add_child(value_lab)
 	var cap := Label.new()
 	cap.text = caption
 	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(cap, true, 12)
-	cap.add_theme_color_override("font_color", Color(1.0, 0.82, 0.40, 0.92))
+	cap.add_theme_color_override("font_color", Color("84623F"))
 	v.add_child(cap)
 	return value_lab
 
@@ -60532,7 +60832,7 @@ func _begin_challenge_wait() -> void:
 func _show_challenge_offer() -> void:
 	_challenge_phase = "offer"
 	if challenge_body_label != null and is_instance_valid(challenge_body_label):
-		challenge_body_label.text = "Cook the same burger as fast as you can."
+		challenge_body_label.text = "One recipe. Beat the clock. Earn the bonus."
 	if challenge_count_stat != null and is_instance_valid(challenge_count_stat):
 		challenge_count_stat.text = str(_challenge_count)
 	if challenge_time_stat != null and is_instance_valid(challenge_time_stat):
@@ -60600,7 +60900,7 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 	_challenge_bonus_tip = maxi(0, bonus_tip)
 	if phase == "offer":
 		if challenge_body_label != null:
-			challenge_body_label.text = "Cook the same burger as fast as you can."
+			challenge_body_label.text = "One recipe. Beat the clock. Earn the bonus."
 		if challenge_count_stat != null:
 			challenge_count_stat.text = str(_challenge_count)
 		if challenge_time_stat != null:
@@ -60859,6 +61159,7 @@ func _on_challenge_customer_left(customer: Node3D, angry: bool) -> void:
 
 
 func _spawn_customer() -> void:
+	var spawn_began := _perf_hot_begin()
 	if _maybe_begin_bts_day1_performance():
 		return
 	if _bts_day1_flow_enabled() and not _bts_day1_performance_done and _bts_day1_sequence_complete():
@@ -60902,6 +61203,7 @@ func _spawn_customer() -> void:
 			)
 			return
 	_spawn_customer_local(order, color, patience, lane, -1, skin_idx, face_style, false, jin_fact_idx, false, custom_preset)
+	_perf_hot_end("customer_total_spawn", spawn_began)
 
 
 func _spawn_customer_local(
@@ -60941,7 +61243,7 @@ func _spawn_customer_local(
 		c.mp_host_driven = true
 	## Stand on the sidewalk — raised so more torso shows in the window.
 	c.position = Vector3(-6.5, CustomerScript.STAND_Y, 2.25)
-	c.target_x = CustomerScript.lane_x_for(lane)
+	c.target_x = _customer_arrival_target_x(lane)
 	## Face along the sidewalk (+X) while walking in; they turn to the truck on arrival.
 	c.rotation_degrees = Vector3(0, CustomerScript.WALK_PLUS_X_YAW, 0)
 	c.scale = Vector3(1.0, 1.0, 1.0)
@@ -61152,6 +61454,7 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 	## Idempotent — ignore if already removed from the line.
 	if not customers.has(customer) and not tickets.has(customer):
 		return
+	_hold_customer_departure(customer)
 	_close_dialogue_if_customer(customer)
 	_remove_ticket(customer)
 	customers.erase(customer)
@@ -61195,7 +61498,48 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 		_maybe_begin_bts_day1_performance()
 
 
+func _hold_customer_departure(customer: Node3D) -> void:
+	if bool(customer.get("is_terrorist")) or bool(customer.get("is_cut_collector")):
+		return
+	for hold in _customer_departure_holds:
+		if hold.customer.get_ref() == customer:
+			return
+	_customer_departure_holds.append({"customer": weakref(customer), "x": customer.global_position.x, "target_x": float(customer.get("target_x"))})
+
+
+func _update_customer_departure_holds() -> void:
+	if _customer_departure_holds.is_empty():
+		return
+	for i in range(_customer_departure_holds.size() - 1, -1, -1):
+		var hold: Dictionary = _customer_departure_holds[i]
+		var c = hold.customer.get_ref()
+		var clear: bool = not is_instance_valid(c) or not c.is_inside_tree()
+		if not clear:
+			# Eating, reacting and turning in place must not release the line.
+			clear = not bool(c.get("_eating")) and bool(c.get("is_leaving")) and c.global_position.x >= float(hold.x) + CustomerScript.QUEUE_SPACING
+		if clear:
+			_customer_departure_holds.remove_at(i)
+	if _customer_departure_holds.is_empty():
+		_reposition_customers()
+		_highlight_tickets()
+
+
+func _customer_arrival_target_x(lane: int) -> float:
+	var result := CustomerScript.lane_x_for(lane)
+	if _customer_departure_holds.is_empty():
+		return result
+	# New arrivals join behind the held line instead of filling a reserved slot.
+	for c in customers:
+		if is_instance_valid(c) and not bool(c.get("is_terrorist")) and not bool(c.get("is_cut_collector")):
+			result = minf(result, float(c.get("target_x")) - CustomerScript.QUEUE_SPACING)
+	for hold in _customer_departure_holds:
+		result = minf(result, float(hold.target_x) - CustomerScript.QUEUE_SPACING)
+	return result
+
+
 func _reposition_customers() -> void:
+	if not _customer_departure_holds.is_empty():
+		return
 	for i in customers.size():
 		var c = customers[i]
 		if c == null or not is_instance_valid(c):
@@ -61227,7 +61571,12 @@ func _create_ticket(customer: Node3D) -> void:
 	wrap.mouse_filter = Control.MOUSE_FILTER_STOP
 	wrap.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	wrap.gui_input.connect(func(event: InputEvent):
-		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if customer == selected_customer and wrap.has_meta("ticket_motion"):
+			if wrap.get_meta("ticket_motion").handle_ticket_input(event):
+				wrap.accept_event()
+			return
+		var pressed: bool = (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT) or (event is InputEventScreenTouch and event.pressed)
+		if pressed:
 			_select_ticket(customer)
 			wrap.accept_event()
 	)
@@ -61249,6 +61598,9 @@ func _create_ticket(customer: Node3D) -> void:
 
 	var paper := PanelContainer.new()
 	paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var paper_color := ShaderMaterial.new()
+	paper_color.shader = preload("res://shaders/ticket_paper_color.gdshader")
+	paper.material = paper_color
 	paper.add_theme_stylebox_override("panel", _make_ticket_paper_style(false))
 	note.add_child(paper)
 	wrap.set_meta("paper_panel", paper)
@@ -61258,8 +61610,7 @@ func _create_ticket(customer: Node3D) -> void:
 	v.add_theme_constant_override("separation", 4)
 	paper.add_child(v)
 
-	## The polished toon paper carries its own shaded thumbtack. Reserve clear
-	## header space so the dynamic order code never overlaps the illustrated pin.
+	## Reserve room for the separate 3D thumbtack above the order code.
 	var pin_clearance := Control.new()
 	pin_clearance.name = "ToonThumbtackClearance"
 	pin_clearance.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -61388,6 +61739,11 @@ func _create_ticket(customer: Node3D) -> void:
 
 	wrap.add_child(note)
 	ticket_box.add_child(wrap)
+	var tack = load("res://scripts/ticket_thumbtack.gd").new()
+	tack.name = "QueuedThumbtack3D"
+	wrap.add_child(tack)
+	tack.setup(note)
+	wrap.set_meta("queued_tack", tack)
 	tickets[customer] = wrap
 	customer.set_meta("ticket_build_clock_stopped", false)
 	## A queued side ticket stays at zero until it becomes the current order.
@@ -61405,16 +61761,27 @@ const TICKET_SMALL_SCALE := 0.70
 
 
 func _apply_ticket_display_size(wrap: Control, selected: bool) -> void:
-	## Selected slip = full size; waiting slips to the right sit smaller until clicked.
+	## The main slip renders at 80%; queued slips retain their existing scale.
 	if wrap == null or not is_instance_valid(wrap) or not wrap.has_meta("ticket_note"):
 		return
 	var note: Control = wrap.get_meta("ticket_note")
 	if note == null or not is_instance_valid(note):
 		return
-	var s := 1.0 if selected else TICKET_SMALL_SCALE
+	var s := AnimatedOrderTicket.DISPLAY_SCALE if selected else TICKET_SMALL_SCALE
+	if selected:
+		if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(false)
+		if not wrap.has_meta("ticket_motion"):
+			var motion := AnimatedOrderTicket.new()
+			wrap.add_child(motion)
+			motion.setup(wrap, note)
+			wrap.set_meta("ticket_motion", motion)
+		wrap.get_meta("ticket_motion").set_active(true)
+		call_deferred("_fit_ticket_wrap_size", wrap, s)
+		return
 	note.pivot_offset = Vector2(TICKET_BASE_W * 0.5, 8.0)
 	note.scale = Vector2(s, s)
-	note.position = Vector2.ZERO
+	note.position = Vector2(0, -15)
+	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(true)
 	## Wait a frame so content min-size is ready, then fit the layout slot to the scaled look.
 	call_deferred("_fit_ticket_wrap_size", wrap, s)
 
@@ -61428,7 +61795,12 @@ func _fit_ticket_wrap_size(wrap: Control, s: float) -> void:
 	var note_h := note.get_combined_minimum_size().y
 	if note_h < 8.0:
 		note_h = maxf(note.size.y, 120.0)
-	wrap.custom_minimum_size = Vector2(TICKET_BASE_W * s, note_h * s)
+	var current_scale := note.scale.x
+	if wrap.has_meta("ticket_motion") and wrap.get_meta("ticket_motion").active:
+		wrap.get_meta("ticket_motion").sync_layout()
+		current_scale = AnimatedOrderTicket.DISPLAY_SCALE
+	wrap.custom_minimum_size = Vector2(TICKET_BASE_W * current_scale, note_h * current_scale)
+	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").sync_layout()
 
 func _ticket_line_specs(order: Array) -> Array:
 	## One slip line per checkable ask — EVERYTHING stays one line, not every topping.
@@ -61786,12 +62158,18 @@ func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
 	## Keep every live element comfortably inside the illustrated paper edge. The
 	## texture has already been tightly cropped, so these are true content insets.
 	var style := StyleBoxTexture.new()
-	style.texture = _ticket_paper_texture(selected)
+	if selected:
+		var front := AtlasTexture.new()
+		front.atlas = MAIN_TICKET_BLANK
+		front.region = Rect2(0, 0, 1024, 2048)
+		style.texture = front
+	else:
+		style.texture = _ticket_paper_texture(false)
 	style.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
 	style.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
 	style.content_margin_left = 18
 	style.content_margin_right = 18
-	style.content_margin_top = 12
+	style.content_margin_top = 5 if selected else 12
 	style.content_margin_bottom = 16
 	if selected:
 		var sat := clampf(ticket_saturation, 0.0, 1.5)
@@ -61951,7 +62329,7 @@ func _refresh_customer_queue_timers() -> void:
 	for cust in tickets.keys():
 		if cust == null or not is_instance_valid(cust):
 			continue
-		var active: bool = cust == front
+		var active: bool = cust == front and _customer_departure_holds.is_empty()
 		if bool(cust.get("is_challenge_guest")):
 			active = false
 		if cust.has_method("set_queue_timer_active"):
@@ -62020,7 +62398,9 @@ func _highlight_tickets() -> void:
 		var wrap = tickets[cust]
 		if not is_instance_valid(wrap):
 			continue
-		var selected: bool = cust == selected_customer
+		var selected: bool = cust == selected_customer and _customer_departure_holds.is_empty()
+		if not selected and wrap.has_meta("ticket_motion"):
+			wrap.get_meta("ticket_motion").set_active(false)
 		var note: Control = wrap.get_meta("ticket_note") if wrap.has_meta("ticket_note") else wrap
 		if note != null and is_instance_valid(note):
 			note.add_theme_stylebox_override("panel", _make_ticket_shell_style(selected))
@@ -62048,6 +62428,7 @@ func _clear_customers() -> void:
 		if is_instance_valid(c):
 			c.queue_free()
 	customers.clear()
+	_customer_departure_holds.clear()
 	selected_customer = null
 	if _cut_collector != null and is_instance_valid(_cut_collector):
 		_cut_collector.queue_free()
@@ -64816,9 +65197,9 @@ func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3
 	## Use the full customer grobble here. The short click variant was easily
 	## masked by the ingredient impact sound and did not read as a real wawawa.
 	if game_audio and game_audio.has_method("play_customer_grobble"):
-		game_audio.play_customer_grobble(maxf(impatience, 0.62))
+		game_audio.play_customer_grobble(maxf(impatience, 0.62), cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
 	elif game_audio and game_audio.has_method("play_customer_wawa_click"):
-		game_audio.play_customer_wawa_click(impatience)
+		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
 	var land := hit_world
 	if land == Vector3.ZERO:
 		land = _customer_food_land_world(cust, zone)
@@ -67283,6 +67664,27 @@ func _station_stack_screen_center(index: int) -> Vector2:
 	return get_viewport().get_visible_rect().size * Vector2(0.18, 0.72)
 
 
+func _place_burger_sprite_center(stack: Control, screen_center: Vector2) -> void:
+	# Control.global_position is the transformed origin, including its pivot.
+	# Subtract the scaled/rotated pivot, rather than the unscaled local offset.
+	var basis := stack.get_global_transform()
+	stack.global_position = screen_center - basis.basis_xform(stack.pivot_offset)
+
+
+func _customer_burger_hand_screen(customer: Node3D) -> Vector2:
+	if camera != null and is_instance_valid(customer) and customer.has_method("burger_grip_global"):
+		return camera.unproject_position(customer.burger_grip_global())
+	return _customer_mouth_screen(customer) if is_instance_valid(customer) else Vector2.ZERO
+
+
+func _customer_burger_hand_scale(customer: Node3D, sprite_width: float) -> float:
+	if camera != null and is_instance_valid(customer) and customer.has_method("burger_grip_edges"):
+		var edges: Array = customer.burger_grip_edges()
+		var width := camera.unproject_position(edges[0]).distance_to(camera.unproject_position(edges[1]))
+		return clampf(width / maxf(sprite_width,1.0),.06,1.2)
+	return .70
+
+
 func _customer_mouth_screen(customer: Node3D) -> Vector2:
 	if camera == null or customer == null:
 		return Vector2.ZERO
@@ -67403,7 +67805,7 @@ func _try_customer_wawa_click(screen_pos: Vector2) -> bool:
 	if cust.has_method("patience_ratio"):
 		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
 	if game_audio and game_audio.has_method("play_customer_wawa_click"):
-		game_audio.play_customer_wawa_click(impatience)
+		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
 	if cust.has_method("bobble_click"):
 		cust.call("bobble_click")
 	return true
@@ -67590,12 +67992,25 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		min_y = minf(min_y, row.position.y)
 		max_y = maxf(max_y, row.position.y + h)
 
+	for row in stack.get_children():
+		if not row.visible: continue
+		var texture_node := row.get_node("LayerTexture") as TextureRect
+		var bite_mat := texture_node.material as ShaderMaterial
+		if bite_mat == null:
+			bite_mat = ShaderMaterial.new()
+			bite_mat.shader = preload("res://shaders/burger_bites.gdshader")
+			texture_node.material = bite_mat
+		bite_mat.set_shader_parameter("consumed", 0.0)
+		bite_mat.set_shader_parameter("layer_origin", row.position)
+		bite_mat.set_shader_parameter("burger_origin", Vector2(min_x, min_y))
+		bite_mat.set_shader_parameter("burger_size", Vector2(max_x-min_x, max_y-min_y))
 	var pivot := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
 	return {
 		"stack": stack,
 		"top_row": top_row,
 		"bottom_row": bottom_row,
 		"pivot": pivot,
+		"width": max_x - min_x,
 		"bun_rows": bun_rows,
 		"patty_rows": patty_rows,
 		"topping_rows": topping_rows,
@@ -67993,15 +68408,16 @@ func _play_serve_fly_to_mouth(
 	stack.modulate = Color.WHITE
 
 	var start_pos := _station_stack_screen_center(station_index)
-	stack.global_position = start_pos
+	var sprite_width: float = built.get("width",180.0)
+	_place_burger_sprite_center(stack,start_pos)
 	_serve_fly_watch = 0.0
 	var burst := fly_root.get_node("BurgerCompleteBurst") as Node2D
-	burst.global_position = start_pos + stack.pivot_offset
+	burst.global_position = start_pos
 	burst.scale = Vector2.ONE * 0.72
 	burst.rotation = -0.06
 	burst.modulate = Color.WHITE
 	burst.visible = true
-	var mouth_pos := _customer_mouth_screen(customer)
+	var hand_pos := _customer_burger_hand_screen(customer)
 
 	if preview != null and is_instance_valid(preview):
 		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
@@ -68009,9 +68425,9 @@ func _play_serve_fly_to_mouth(
 	if is_instance_valid(customer):
 		customer.set_meta("burger_in_flight", true)
 		customer.set_meta("burger_arrival_deadline", Time.get_ticks_msec() + 8000)
-	## Customer hands up + open mouth while the toss is in flight.
+	## Begin the fast authored grab before launch; gameplay scoring remains immediate.
 	if customer != null and is_instance_valid(customer) and customer.has_method("begin_catch_burger"):
-		customer.begin_catch_burger()
+		customer.begin_catch_burger(true)
 
 	## Ordered soda flies beside the burger (unless already handed to their face).
 	var with_soda := customer != null and is_instance_valid(customer) \
@@ -68077,9 +68493,9 @@ func _play_serve_fly_to_mouth(
 				(row as Control).scale = Vector2.ONE
 
 	var finish_serve := func() -> void:
-		_customer_burger_arrived(customer)
 		if customer != null and is_instance_valid(customer) and customer.has_method("finish_catch_burger"):
 			customer.finish_catch_burger()
+		_customer_burger_arrived(customer)
 		if preview != null and is_instance_valid(preview):
 			preview.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		_release_serve_fly_root(fly_root)
@@ -68096,6 +68512,7 @@ func _play_serve_fly_to_mouth(
 			return
 		var pop := sin(clampf(t / 0.44, 0.0, 1.0) * PI)
 		apply_stack_scale.call(Vector2.ONE * (1.0 + 0.12 * pop))
+		_place_burger_sprite_center(stack,start_pos)
 		burst.scale = Vector2.ONE * lerpf(0.72, 1.05, minf(1.0, t / 0.22))
 		burst.rotation = lerpf(-0.06, 0.04, t)
 		burst.modulate.a = 1.0 - smoothstep(0.76, 1.0, t)
@@ -68105,6 +68522,7 @@ func _play_serve_fly_to_mouth(
 	## A · Light seal — gentle press, keep the patty readable.
 	var seal_step := func(t: float) -> void:
 		apply_stack_scale.call(Vector2.ONE.lerp(Vector2(1.03, 0.94), t))
+		_place_burger_sprite_center(stack,start_pos)
 		apply_bun_pinch.call(lerpf(0.0, bun_pinch_px * 0.35, t))
 		apply_topping_crush.call(lerpf(0.0, topping_crush_px * 0.3, t))
 	tw.tween_method(seal_step, 0.0, 1.0, 0.04).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -68116,7 +68534,7 @@ func _play_serve_fly_to_mouth(
 		var crouch := Vector2(1.04, 0.94).lerp(Vector2(0.96, 1.04), t)
 		apply_stack_scale.call(crouch)
 		stack.rotation = deg_to_rad(lerpf(0.0, -14.0, t))
-		stack.global_position = start_pos + Vector2(lerpf(0.0, -8.0, t), lerpf(0.0, 12.0, t))
+		_place_burger_sprite_center(stack,start_pos + Vector2(lerpf(0.0, -8.0, t), lerpf(0.0, 12.0, t)))
 		apply_bun_pinch.call(bun_pinch_px * 0.4)
 		apply_topping_crush.call(topping_crush_px * 0.35)
 	tw.tween_method(windup_step, 0.0, 1.0, 0.05).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
@@ -68126,81 +68544,62 @@ func _play_serve_fly_to_mouth(
 			game_audio.play_serve_whoosh()
 	)
 
-	## C · Arc to the mouth — mild shrink only; patty stays visible.
+	## C · Land at the moving grip during the grab, with a soft final lerp.
 	var fly_step := func(t: float) -> void:
 		if not is_instance_valid(stack):
 			return
-		var end_pos := mouth_pos
+		var end_pos := hand_pos
 		if customer != null and is_instance_valid(customer):
-			end_pos = _customer_mouth_screen(customer)
+			end_pos = _customer_burger_hand_screen(customer)
 		var mid := start_pos.lerp(end_pos, 0.45) + Vector2(0.0, -96.0)
 		var eased := t * t * (3.0 - 2.0 * t)
 		var launch := 1.0 - pow(1.0 - t, 2.4)
 		var path_t := lerpf(launch, eased, 0.5)
 		var u := 1.0 - path_t
-		stack.global_position = u * u * start_pos + 2.0 * u * path_t * mid + path_t * path_t * end_pos
+		var arc := u * u * start_pos + 2.0 * u * path_t * mid + path_t * path_t * end_pos
+		var center := arc.lerp(end_pos,smoothstep(.65,1.0,t))
 		## Soft flip through the toss, settle near upright.
 		stack.rotation = deg_to_rad(lerpf(-14.0, 8.0, sin(t * PI * 0.85)))
 		## Stay large through the flight — only ease down a bit at the lips.
 		var mid_s := Vector2(0.78, 0.82)
-		var near_s := Vector2(0.70, 0.68)
+		var near_s := Vector2.ONE * _customer_burger_hand_scale(customer,sprite_width)
 		var s: Vector2
 		if t < 0.4:
 			s = Vector2(0.98, 1.0).lerp(mid_s, t / 0.4)
 		else:
 			s = mid_s.lerp(near_s, (t - 0.4) / 0.6)
 		apply_stack_scale.call(s)
+		_place_burger_sprite_center(stack,center)
 		apply_bun_pinch.call(bun_pinch_px * 0.55)
 		apply_topping_crush.call(topping_crush_px * 0.5)
 	tw.tween_method(fly_step, 0.0, 1.0, 0.26).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-	## D · Impact — bite squash + crumbs + chomp.
-	tw.tween_callback(func() -> void:
-		if customer != null and is_instance_valid(customer):
-			_customer_burger_arrived(customer)
-			if customer.has_method("chomp_burger"):
-				customer.chomp_burger()
+	# Follow the same animated grip through the rest of the grab and the bite.
+	# Keep burger_in_flight until eating finishes so no queued departure cuts it off.
+	var follow_hands := func(consumed: float) -> void:
+		if not is_instance_valid(stack):return
+		var finish_bite := smoothstep(0.0,.45,consumed)
+		var fit := _customer_burger_hand_scale(customer,sprite_width)
+		apply_stack_scale.call(Vector2.ONE * fit)
+		stack.modulate.a = 1.0
+		for row in stack.get_children():
+			if not row.visible: continue
+			var bite_mat := row.get_node("LayerTexture").material as ShaderMaterial
+			bite_mat.set_shader_parameter("layer_origin", row.position)
+			bite_mat.set_shader_parameter("consumed", consumed)
+		stack.rotation = lerpf(deg_to_rad(8.0),0.0,clampf(consumed * 4.0,0.0,1.0))
+		if is_instance_valid(customer):
+			_place_burger_sprite_center(stack,_customer_burger_hand_screen(customer))
+		apply_bun_pinch.call(bun_pinch_px * (.55 + .45 * finish_bite))
+		apply_topping_crush.call(topping_crush_px * (.5 + .4 * finish_bite))
+	var bite := func() -> void:
+		if is_instance_valid(customer) and customer.has_method("chomp_burger"):
+			customer.chomp_burger()
 		if game_audio and game_audio.has_method("play_burger_chomp"):
 			game_audio.play_burger_chomp()
-		_spawn_serve_crumb_burst(
-			fly_root,
-			_customer_mouth_screen(customer) if customer != null and is_instance_valid(customer) else mouth_pos
-		)
-	)
+		_spawn_serve_crumb_burst(fly_root,_customer_burger_hand_screen(customer))
+	BurgerServeTiming.append_handoff(tw,customer,BURGER_COMPLETE_HOLD_SEC + .04 + .05 + .26,follow_hands,bite,finish_serve)
 
-	var impact_step := func(t: float) -> void:
-		if not is_instance_valid(stack):
-			return
-		var end_pos := mouth_pos
-		if customer != null and is_instance_valid(customer):
-			end_pos = _customer_mouth_screen(customer)
-		## Nudge slightly into the face as they bite.
-		stack.global_position = end_pos + Vector2(0.0, lerpf(0.0, 4.0, t))
-		stack.rotation = deg_to_rad(lerpf(8.0, -4.0, t))
-		## Soft bite — don't pancake the stack.
-		var s := Vector2(0.70, 0.68).lerp(Vector2(0.74, 0.52), t)
-		apply_stack_scale.call(s)
-		apply_bun_pinch.call(bun_pinch_px * (0.7 + t * 0.35))
-		apply_topping_crush.call(topping_crush_px * (0.6 + t * 0.4))
-	tw.tween_method(impact_step, 0.0, 1.0, 0.05).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-
-	## E · Vanish into the mouth.
-	var eat_step := func(t: float) -> void:
-		if not is_instance_valid(stack):
-			return
-		var end_pos := mouth_pos
-		if customer != null and is_instance_valid(customer):
-			end_pos = _customer_mouth_screen(customer)
-		stack.global_position = end_pos + Vector2(0.0, lerpf(4.0, 10.0, t))
-		stack.rotation = deg_to_rad(lerpf(-4.0, 0.0, t))
-		var s := Vector2(0.74, 0.52).lerp(Vector2(0.18, 0.12), ease(t, 2.2))
-		apply_stack_scale.call(s)
-		stack.modulate.a = 1.0 - ease(t, 1.6)
-		apply_bun_pinch.call(bun_pinch_px * (1.0 + t * 0.5))
-		apply_topping_crush.call(topping_crush_px * (0.9 + t * 0.3))
-	tw.tween_method(eat_step, 0.0, 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-
-	tw.tween_callback(finish_serve)
 
 
 func _spawn_serve_crumb_burst(_parent: Control, at: Vector2) -> void:
@@ -68702,6 +69101,7 @@ func _complete_serve(
 			"stars": review_stars, "kind": review_kind, "tip": tip_amt, "force": false,
 			"pic": cached_review_pic,
 		}
+	cust.set_meta("meal_stars", float(deferred_review.get("stars", 0.0)))
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
 			and not _customer_soda_handed(cust):
@@ -69086,11 +69486,11 @@ func _resolve_serve_customer():
 
 
 func _begin_customer_serve_handoff(customer: Node3D) -> void:
-	## The order is committed now, not when the toss animation finishes. Pull its
-	## ticket immediately so the next order can become current during the review.
+	## Hold the counter from handoff until this customer eats and walks clear.
 	if customer == null or not is_instance_valid(customer):
 		return
 	customer.set_meta("serve_in_progress", true)
+	_hold_customer_departure(customer)
 	_remove_ticket(customer)
 	_highlight_tickets()
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
@@ -69373,6 +69773,7 @@ func _fly_sale_bills_to_hud(customer: Node3D, count: int) -> void:
 		var bill: MeshInstance3D = _acquire_payment_bill(2.04, i, "SaleFlyBill")
 		if bill == null:
 			continue
+		bill.material_override = _cached_sale_bill_material()
 		bill.sorting_offset = 24.0
 		var jitter := Vector3(randf_range(-0.10, 0.10), randf_range(0.04, 0.16), randf_range(-0.08, 0.08))
 		var start_p: Vector3 = from + jitter
@@ -70547,8 +70948,6 @@ func _setup_character_creator_button() -> void:
 	var card_col := get_node_or_null("UI/Root/StartOverlay/StartCenter/StartMenuCard/StartMenuCol") as VBoxContainer
 	if card_col == null or card_col.get_node_or_null("CharacterCreatorButton") != null:
 		return
-	if ResourceLoader.load_threaded_get_status(CHARACTER_CREATOR_SCENE_PATH) == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
-		ResourceLoader.load_threaded_request(CHARACTER_CREATOR_SCENE_PATH)
 	var creator_button := Button.new()
 	creator_button.name = "CharacterCreatorButton"
 	creator_button.text = "CHARACTER CREATOR"
@@ -74929,6 +75328,7 @@ func mp_customer_serve_started(net_id: int) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
 	customer.set_meta("serve_in_progress", true)
+	_hold_customer_departure(customer)
 	customer.set_meta("ticket_build_clock_stopped", true)
 	customer.stop_order_clock()
 	_remove_ticket(customer)
@@ -76491,3 +76891,38 @@ func _mp_prepare_remote_visuals() -> void:
 		for flavor in ["ketchup", "mustard"]:
 			_mp_ensure_remote_condiment(slot, flavor)
 			await get_tree().process_frame
+
+func customer_attention_target(prefer_burger: bool = false) -> Vector3:
+	if prefer_burger:
+		for food in [spatula_juggle_patty, spatula_patty, flicking_patty]:
+			if is_instance_valid(food) and food is Node3D and food.is_visible_in_tree():
+				return food.global_position
+	if is_instance_valid(hand_spatula_root) and hand_spatula_root.is_visible_in_tree():
+		return _spatula_tip_world_pos()
+	if playing and not shift_paused:
+		return customer_hand_attention_target(get_viewport().get_mouse_position())
+	return Vector3.INF
+
+
+func customer_hand_attention_target(screen_pos: Vector2) -> Vector3:
+	# The glove cursor still represents the hand outside the grill, where the
+	# 3D spatula is hidden. Project it in front of the queue, preserving height.
+	if not is_instance_valid(camera) or not get_viewport().get_visible_rect().has_point(screen_pos):
+		return Vector3.INF
+	var hit: Variant = Plane(Vector3.BACK, 1.0).intersects_ray(camera.project_ray_origin(screen_pos), camera.project_ray_normal(screen_pos))
+	return hit if hit is Vector3 else Vector3.INF
+
+
+func _supply_storage_location(id: String, kind: String) -> Vector3:
+	var bun := bun_pile_anchors.get(id) as Node3D
+	if is_instance_valid(bun): return bun.global_position
+	var bin := ingredient_bin_nodes.get(id) as Node3D
+	if is_instance_valid(bin): return bin.global_position
+	if kind == "syrup" and is_instance_valid(soda_root): return soda_root.global_position + Vector3(0, 0.25, 0)
+	if id == "patty" and is_instance_valid(patty_fridge_root): return patty_fridge_root.global_position + Vector3(0, 0.15, 0)
+	if id == "fries" and is_instance_valid(fryer_root): return fryer_root.global_position
+	if id.begins_with("soda") and is_instance_valid(soda_root): return soda_root.global_position
+	if id.begins_with("icecream") and is_instance_valid(icecream_root): return icecream_root.global_position
+	# Stock without a 3D bin lives in the fridge on the prep side.
+	if is_instance_valid(patty_fridge_root): return patty_fridge_root.global_position
+	return _supply_delivery_landing()

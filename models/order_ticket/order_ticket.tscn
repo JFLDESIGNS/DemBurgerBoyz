@@ -1,0 +1,24 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://models/order_ticket/order_ticket.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://models/order_ticket/order_ticket.glb" id="2_model"]
+
+[sub_resource type="BoxShape3D" id="BoxShape_ticket"]
+size = Vector3(0.19, 0.29, 0.05)
+
+[node name="OrderTicket" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="Model" parent="." instance=ExtResource("2_model")]
+
+[node name="TapArea" type="Area3D" parent="."]
+position = Vector3(0, -0.14, 0)
+collision_layer = 1
+collision_mask = 0
+monitoring = false
+monitorable = false
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="TapArea"]
+shape = SubResource("BoxShape_ticket")
+
+[connection signal="input_event" from="TapArea" to="." method="_on_tap_area_input_event"]

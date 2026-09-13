@@ -1,0 +1,15 @@
+{
+  "user_source": "user_edits_before_game_export.blend",
+  "before_triangles": 63705,
+  "triangles": 20078,
+  "mesh_nodes": [
+    "TruckBody",
+    "Wheel_Front_L",
+    "Wheel_Front_R",
+    "Wheel_Rear_L",
+    "Wheel_Rear_R"
+  ],
+  "mud_flaps": false,
+  "graphics": "Flattened visible faces",
+  "trim": "Continuous roof and grille corners"
+}

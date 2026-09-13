@@ -6,11 +6,13 @@ var indicator: MeshInstance3D
 var off_rotation := Quaternion.IDENTITY
 var power_tween: Tween
 var lamp_material: StandardMaterial3D
+var temperature_digits: Label3D
 
 
 func configure() -> void:
 	_raise_splash_guard()
 	preload("res://scripts/machine_badges.gd").grill(self)
+	_build_control_display()
 	knob = find_child("PowerKnob", true, false) as Node3D
 	indicator = find_child("PowerIndicator", true, false) as MeshInstance3D
 	var plate := find_child("CookingSurface", true, false) as MeshInstance3D
@@ -57,6 +59,10 @@ func _scale_mesh_height_above(mesh: Mesh, hinge_y: float, mul: float) -> Mesh:
 
 
 func set_power(on: bool, instant: bool = false) -> void:
+	if temperature_digits != null:
+		temperature_digits.text = "185°" if on else "OFF"
+		temperature_digits.shaded = not on
+		temperature_digits.modulate = Color("FFB64D") if on else Color("597067")
 	if power_tween != null:
 		power_tween.kill()
 	if knob != null:
@@ -73,6 +79,31 @@ func set_power(on: bool, instant: bool = false) -> void:
 		lamp_material.emission = Color("FF7B18")
 		lamp_material.emission_energy_multiplier = 0.65 if on else 0.0
 
+
+func _control_label(parent: Node3D, text: String, pos: Vector3, pixels: float) -> Label3D:
+	var label := Label3D.new()
+	label.text = text
+	label.font_size = 48
+	label.pixel_size = pixels
+	label.outline_size = 0
+	label.shaded = true
+	label.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+	label.render_priority = 10
+	label.modulate = Color("FFF0CD")
+	label.position = pos
+	label.rotation_degrees = Vector3(-90, 0, 0)
+	label.no_depth_test = false
+	parent.add_child(label)
+	return label
+
+func _build_control_display() -> void:
+	var front := find_child("ControlPanelMount", true, false) as Node3D
+	if front == null: return
+	preload("res://scripts/machine_badges.gd").decal(front, "TemperatureDisplay", "grill_temp_panel.png", Vector2(0.14,0.047), Vector3(0.066,0.019,0.043), Vector3(-90,0,0))
+	temperature_digits = _control_label(front, "OFF", Vector3(0.081,0.020,0.043), 0.00038)
+	temperature_digits.name = "TemperatureDigits"
+	_control_label(front, "OFF", Vector3(-0.132,0.019,0.025), 0.00020)
+	_control_label(front, "ON", Vector3(-0.024,0.019,0.025), 0.00020)
 
 func knob_hit(camera: Camera3D, screen_pos: Vector2) -> bool:
 	if knob == null or not is_visible_in_tree() or camera == null:

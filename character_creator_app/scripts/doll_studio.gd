@@ -42,6 +42,7 @@ var stage_controls: PanelContainer
 var stage_tools: HFlowContainer
 var stage_view: SubViewport
 var stage_picture: TextureRect
+var stage_backdrop: MeshInstance3D
 var stage_truck: Node3D
 var framed_view = "Full body"
 var footer: PanelContainer
@@ -618,10 +619,41 @@ func build_stage() -> void:
 	stage_view.own_world_3d = true
 	stage_view.size = Vector2i(size)
 	stage_view.msaa_3d = Viewport.MSAA_2X
+	stage_view.transparent_bg = true
 	host.add_child(stage_view)
 	for child in old_world.get_children(): child.reparent(stage_view,false)
 	old_world.queue_free()
+	var ground := stage_view.get_node_or_null("Ground")
+	if ground != null:
+		ground.queue_free()
 	host.camera.current = true
+	stage_backdrop = MeshInstance3D.new()
+	stage_backdrop.name = "RadialBackdrop"
+	var backdrop_mesh := QuadMesh.new()
+	backdrop_mesh.size = Vector2(60.0, 40.0)
+	stage_backdrop.mesh = backdrop_mesh
+	stage_backdrop.position = Vector3(0, 0, -30.0)
+	stage_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var backdrop_material := ShaderMaterial.new()
+	var backdrop_shader := Shader.new()
+	backdrop_shader.code = """shader_type spatial;
+render_mode unshaded, cull_disabled;
+uniform vec4 center_color : source_color = vec4(0.29, 0.20, 0.44, 1.0);
+uniform vec4 edge_color : source_color = vec4(0.09, 0.10, 0.26, 1.0);
+uniform vec4 accent_color : source_color = vec4(0.93, 0.30, 0.47, 1.0);
+void fragment() {
+	vec2 p = SCREEN_UV - vec2(0.54, 0.46);
+	p.x *= 1.35;
+	float radius = length(p);
+	float angle = atan(p.y, p.x);
+	float rays = (0.5 + 0.5 * cos(angle * 14.0)) * smoothstep(0.08, 0.82, radius) * 0.20;
+	vec3 radial = mix(center_color.rgb, edge_color.rgb, smoothstep(0.04, 0.78, radius));
+	ALBEDO = mix(radial, accent_color.rgb, rays);
+}
+"""
+	backdrop_material.shader = backdrop_shader
+	stage_backdrop.material_override = backdrop_material
+	host.camera.add_child(stage_backdrop)
 	stage_picture = TextureRect.new()
 	stage_picture.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	stage_picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -640,7 +672,7 @@ func build_stage() -> void:
 		if truck_root != null:
 			truck_root.position = Vector3.ZERO
 			truck_root.rotation = Vector3.ZERO
-		stage_truck.scale = Vector3.ONE*0.52
+		stage_truck.scale = Vector3.ONE*0.845
 		stage_truck.position = Vector3(-0.7,0,-4.0)
 		stage_truck.rotation_degrees.y = -18
 		# Static background: the optimized mesh is shared; no driving simulation.
@@ -672,15 +704,21 @@ func open_fit_room() -> void:
 func apply_backdrop() -> void:
 	var env = host.get_node("World/WorldEnvironment").environment
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("252e38") if dark_backdrop else Color("d9e5e3")
+	env.background_color = Color(0, 0, 0, 0)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color("ffebdf")
 	env.ambient_light_energy = 0.65
 	host.get_node("World/KeyLight").light_energy = 0.85
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = env.background_color
-	mat.roughness = 1.0
-	host.get_node("World/Ground").material_override = mat
+	if stage_backdrop != null:
+		var mat := stage_backdrop.material_override as ShaderMaterial
+		if dark_backdrop:
+			mat.set_shader_parameter("center_color", Color("49346f"))
+			mat.set_shader_parameter("edge_color", Color("171a43"))
+			mat.set_shader_parameter("accent_color", Color("ee4d78"))
+		else:
+			mat.set_shader_parameter("center_color", Color("ffe06b"))
+			mat.set_shader_parameter("edge_color", Color("f45172"))
+			mat.set_shader_parameter("accent_color", Color("2ab7ca"))
 	host.camera.environment = env
 	hint.add_theme_color_override("font_color",Color("e1d5ee") if dark_backdrop else MUTED)
 	var fill = host.get_node("World/FillLight")

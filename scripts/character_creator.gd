@@ -191,6 +191,8 @@ func _ready() -> void:
 	_build_skin_swatches()
 	for label in ["Wave", "Walk in place", "Celebrate"]:
 		animation_select.add_item(label)
+	for clip in ModularCharacterBase.BurgerMotion.NAMES:
+		animation_select.add_item(clip.replace("_", " "))
 	_refresh_saved_customers()
 	_apply_camera()
 	if FileAccess.file_exists(LAST_PRESET_PATH):
@@ -1262,6 +1264,7 @@ func _save_character() -> void:
 	var data := {
 		"format_version": 13,
 		"name": display_name,
+		"customer_voice": character.customer_voice,
 		"body_type": "kenney_chunky_toon",
 		"skin_color": character.skin_color.to_html(true),
 		"skin_paint": character.get_skin_paint_png_base64(),
@@ -1414,6 +1417,7 @@ func _load_character_file(preset_path: String) -> void:
 		_set_status("The saved character file is invalid.", true)
 		return
 	var data := parsed as Dictionary
+	character.customer_voice = preload("res://scripts/customer_voice.gd").resolve(data)
 	ModularCharacterBase.migrate_legacy_hair_fields(data)
 	ModularCharacterBase.Wardrobe.migrate_preset(data)
 	ModularCharacterBase.Footwear.migrate_preset(data)

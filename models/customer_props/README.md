@@ -26,25 +26,25 @@ GLBs are Y-up, in meter units at the requested oversized game scale. Blender is 
 ## Included assets
 
 - 01 Open Umbrella — 8,460 triangles
-- 02 Folded Umbrella — 472 triangles
+- 02 Folded Umbrella — 836 triangles
 - 03 Roller Suitcase — 1,408 triangles
 - 04 Briefcase — 852 triangles
-- 05 Handbag — 844 triangles
+- 05 Handbag — 1,636 triangles
 - 06 Shopping Bag — 1,046 triangles
 - 07 Backpack — 920 triangles
 - 08 Duffel Bag — 1,088 triangles
-- 09 Gift Box — 880 triangles
+- 09 Gift Box — 1,236 triangles
 - 10 Parcel — 480 triangles
-- 11 Smartphone — 876 triangles
-- 12 Tablet — 588 triangles
+- 11 Smartphone — 720 triangles
+- 12 Tablet — 232 triangles
 - 13 Headphones — 1,056 triangles
 - 14 Camera — 764 triangles
 - 15 Book — 840 triangles
 - 16 Notebook Pen — 1,612 triangles
-- 17 Newspaper — 752 triangles
+- 17 Newspaper — 172 triangles
 - 18 Wallet — 588 triangles
 - 19 Keys — 1,156 triangles
-- 20 Cell Phone — 2,228 triangles
+- 20 Cell Phone — 720 triangles
 - 21 Water Bottle — 492 triangles
 - 22 Thermos — 492 triangles
 - 23 Flower Bouquet — 5,616 triangles
@@ -55,3 +55,6 @@ GLBs are Y-up, in meter units at the requested oversized game scale. Blender is 
 - 28 Soda Cup — 552 triangles
 - 29 Takeaway Bag — 496 triangles
 - 30 Burger Box — 648 triangles
+
+## September 13 polish
+Seven props refined: both black phones, tablet, newspaper, folded umbrella, handbag and gift box. Flush device screens, flat printed graphics, pleated fabric, rounded leather and flat ribbon bows. Existing approved scale and character grip positions preserved. Run polish_props.py after rebuilding to reapply this pass. Previous delivery backed up in before_polish_20260913/.

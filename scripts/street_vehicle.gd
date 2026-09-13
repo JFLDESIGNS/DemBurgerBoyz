@@ -19,7 +19,7 @@ var variant_index: int = -1
 var _material_colors: Array = []
 var _darken: float = -1.0
 
-func set_pool(packed_scenes: Array) -> void:
+func set_pool(packed_scenes: Array, spread_frames: bool = false) -> void:
 	if not models.is_empty():
 		return
 	for packed in packed_scenes:
@@ -29,7 +29,11 @@ func set_pool(packed_scenes: Array) -> void:
 		add_child(model)
 		model.visible = false
 		models.append(model)
+		if spread_frames: await get_tree().process_frame
+		var mesh_count := 0
 		for item in model.find_children("*", "MeshInstance3D", true, false):
+			mesh_count += 1
+			if spread_frames and mesh_count % 8 == 0: await get_tree().process_frame
 			var mesh := item as MeshInstance3D
 			mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			for surface in mesh.mesh.get_surface_count():
@@ -50,6 +54,7 @@ func set_pool(packed_scenes: Array) -> void:
 		else:
 			push_error("Street vehicle is missing its Blender DriveLoop animation: " + model.name)
 		model_bounds.append(_measure(model))
+		if spread_frames: await get_tree().process_frame
 	if not models.is_empty():
 		set_variant(0)
 

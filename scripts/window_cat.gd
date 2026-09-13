@@ -59,6 +59,7 @@ var _area: Area3D = null
 var _anim: AnimationPlayer = null
 var _parcel: Node3D
 var _cat_eyes: Array[MeshInstance3D] = []
+var _postal_outfit: Array[Node3D] = []
 var _delivery_anim_left := 0.0
 var _happy_anim_left := 0.0
 var _state: String = "hidden" ## hidden | rising | peek | delivery_turning | lowering | fed_hold | bag_chase | bag_snatch | running
@@ -232,9 +233,15 @@ func _build() -> void:
 	_visual.rotation_degrees = Vector3.ZERO
 	_visual.scale = Vector3.ONE * MESH_SCALE
 	add_child(_visual)
+	preload("res://scripts/cat_appearance.gd").apply_fur(_visual)
 	_anim = _visual.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	_parcel = _visual.find_child("Delivery_Box_Rig", true, false) as Node3D
 	if _parcel != null: _parcel.hide()
+	for part_name in ["Postal_Cap_Rig", "Messenger_Bag_Rig", "Crossbody leather strap", "Flush strap stitching -1", "Flush strap stitching 1"]:
+		var part := _visual.find_child(part_name, true, false) as Node3D
+		if part != null:
+			_postal_outfit.append(part)
+			part.hide()
 	for eye_name in ["Cat_Eye_L", "Cat_Eye_R"]:
 		var eye := _visual.find_child(eye_name, true, false) as MeshInstance3D
 		if eye != null:
@@ -284,6 +291,7 @@ func _update_character(delta: float) -> void:
 	_happy_anim_left = maxf(0.0, _happy_anim_left - delta)
 	var delivering := _delivery_anim_left > 0.0
 	if is_instance_valid(_parcel): _parcel.visible = delivering
+	for part in _postal_outfit: part.visible = delivering
 	if delivering:
 		_play_cat_clip("03_Box_Delivery")
 	elif _state in ["running", "bag_chase", "rising", "lowering"]:

@@ -99,8 +99,7 @@ static func shoe_material(authored: Material, tint: Color) -> StandardMaterial3D
 	if authored is StandardMaterial3D:
 		material = authored.duplicate() as StandardMaterial3D
 	var source := material.albedo_color
-	var value := source.r*0.2126+source.g*0.7152+source.b*0.0722
-	material.albedo_color = Color(value,value,value,source.a)*tint
+	material.albedo_color = source * tint
 	material.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
 	material.specular_mode = BaseMaterial3D.SPECULAR_TOON
 	material.roughness = 0.8

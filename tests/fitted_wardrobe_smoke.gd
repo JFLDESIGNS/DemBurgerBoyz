@@ -12,9 +12,9 @@ func _run() -> void:
 	await process_frame
 	var body: MeshInstance3D = character._get_skin_mesh()
 	var skeleton: Skeleton3D = character.get_active_skeleton()
-	assert(ModularCharacterBase.TOP_LABELS.size() == 13)
-	assert(ModularCharacterBase.TopStyle.size() == 13)
-	for style in range(1, 13):
+	assert(ModularCharacterBase.TOP_LABELS.size() == 16)
+	assert(ModularCharacterBase.TopStyle.size() == 16)
+	for style in range(1, 16):
 		character.top_style = style
 		await process_frame
 		var top: MeshInstance3D = character._fitted_top
@@ -91,11 +91,11 @@ func _run() -> void:
 	var creator = load(creator_path).instantiate()
 	root.add_child(creator)
 	await process_frame
-	assert(creator.top_select.item_count == 13)
+	assert(creator.top_select.item_count == 16)
 	assert(creator.graphic_select.item_count == 11)
-	for style in range(1, 13):
+	for style in range(1, 16):
 		creator.top_select.item_selected.emit(style)
 		creator.graphic_select.item_selected.emit(9)
 		assert(creator.character.top_style == style and creator.character.shirt_graphic == 9)
-	print("FITTED_WARDROBE_SMOKE_OK: 12 tops, 120 graphics combinations, skin binds, preset migration, creator controls")
+	print("FITTED_WARDROBE_SMOKE_OK: 15 tops, 150 graphics combinations, skin binds, preset migration, creator controls")
 	quit(0)

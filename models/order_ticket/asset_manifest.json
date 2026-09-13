@@ -1,0 +1,53 @@
+{
+  "mesh_vertices": 1606,
+  "mesh_triangles": 3208,
+  "deform_bones": 24,
+  "anchor_bones": 1,
+  "size_m": [
+    0.18,
+    0.28,
+    0.00035
+  ],
+  "clips": {
+    "static": {
+      "seconds": 1.0,
+      "loop": true
+    },
+    "roll": {
+      "seconds": 1.2,
+      "loop": false
+    },
+    "shake": {
+      "seconds": 0.8,
+      "loop": false
+    },
+    "wave": {
+      "seconds": 2.4,
+      "loop": true
+    },
+    "tap": {
+      "seconds": 0.7,
+      "loop": false
+    },
+    "unroll": {
+      "seconds": 1.2,
+      "loop": false
+    },
+    "rolled": {
+      "seconds": 1.0,
+      "loop": true
+    }
+  },
+  "blender_timeline": {
+    "static": 1,
+    "tap": 32,
+    "wave": 54,
+    "shake": 127,
+    "roll": 152,
+    "rolled": 189,
+    "unroll": 220
+  },
+  "pivot": "top center",
+  "front_blender": "-Y",
+  "front_gltf": "+Z"
+}

@@ -1,0 +1,20 @@
+extends SceneTree
+func _initialize() -> void: call_deferred("run")
+func run() -> void:
+	create_timer(40).timeout.connect(func(): quit(1))
+	var game=load("res://scenes/main.tscn").instantiate()
+	game.set_script(load("res://tests/interaction_delivery_fixture.gd"))
+	root.add_child(game);current_scene=game;game.playing=true
+	game.window_cat=load("res://scripts/window_cat.gd").new();game.world.add_child(game.window_cat)
+	game._begin_cat_supply_delivery("lettuce",8,"stock")
+	assert(game.mail_delivery_truck!=null and game.supply_delivery_fx.is_empty())
+	for i in 1600: game._update_supply_orders(1.0/60)
+	assert(game.credits==[["lettuce",8,"stock"]],"Stock lands exactly once after the cat arrives")
+	assert(game.mail_delivery_truck==null and game.supply_delivery_fx.is_empty(),"Traffic lock and packages released")
+	game._add_grill_surface_lights(game.world)
+	assert(game.grill_surface_lights.is_empty(),"Grill real lights must be removed")
+	game._begin_cat_supply_delivery("lettuce",8,"stock")
+	game._clear_supply_delivery_fx()
+	assert(game.mail_delivery_truck==null and game.window_cat.is_processing(),"Shift cleanup restores cat and releases traffic")
+	print("MAIL_DELIVERY_INTEGRATION_OK")
+	quit()

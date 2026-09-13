@@ -3,7 +3,7 @@ extends RefCounted
 ## No additional Skeleton3D is retained on the character.
 
 const CATALOG_VERSION := 1
-const LABELS := ["None", "Midnight pink lapel", "Sunshine bowling shirt", "Lagoon contrast collar", "Club varsity", "Seafoam ringer T-shirt", "Ochre striped shirt", "Emerald gold cardigan", "Terracotta polo", "Ivory oxford", "Merlot henley", "Athletic tank top", "Orchid cropped halter"]
+const LABELS := ["None", "Midnight pink lapel", "Sunshine bowling shirt", "Lagoon contrast collar", "Club varsity", "Seafoam ringer T-shirt", "Ochre striped shirt", "Emerald gold cardigan", "Terracotta polo", "Ivory oxford", "Merlot henley", "Athletic tank top", "Orchid cropped halter", "Stone band-collar shirt", "Navy V-neck sweater", "Sage mockneck tee"]
 const SCENES: Array[PackedScene] = [
 	null,
 	preload("res://assets/shirts/glb/01_Midnight_Lapel.glb"),
@@ -18,6 +18,9 @@ const SCENES: Array[PackedScene] = [
 	preload("res://assets/shirts/glb/10_Merlot_Henley.glb"),
 	preload("res://assets/shirts/glb/11_Athletic_Tank.glb"),
 	preload("res://assets/shirts/glb/12_Orchid_Halter.glb"),
+	preload("res://assets/shirts/glb/13_Stone_Band_Collar.glb"),
+	preload("res://assets/shirts/glb/14_Navy_V_Neck.glb"),
+	preload("res://assets/shirts/glb/15_Sage_Mockneck.glb"),
 ]
 const BOTTOM_CATALOG_VERSION := 1
 const BOTTOM_LABELS := ["None", "Timber cargo trousers", "Emerald belted chinos", "Slate utility trousers", "Azure cuffed joggers", "Coast pocket jeans", "Plum ankle leggings", "Midnight stripe track pants", "Sand cargo shorts", "Lagoon belted bermudas", "Coral running shorts", "Emerald shorts over leggings", "Olive cuffed capris", "Indigo button A-line skirt", "Orchid pleated skirt", "Saffron pocket midi skirt"]

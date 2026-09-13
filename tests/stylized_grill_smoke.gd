@@ -32,7 +32,7 @@ func _run() -> void:
 		var knob: Node3D = skin.get("knob")
 		check(knob != null, "Export lost knob pivot")
 		if knob != null:
-			check(absf(knob.global_position.x - surface.global_position.x) < 0.001, "Power knob must be centered")
+			check(is_equal_approx(absf(knob.global_position.x - surface.global_position.x), 0.077), "Power knob must sit beside the screen in the center panel")
 			check(is_equal_approx(knob.global_basis.x.length(), 1.26), "Power knob must be 30 percent smaller than the previous 1.8 scale")
 			check(knob.global_position.y < surface.global_position.y, "Control must sit below cooking surface")
 			var initial := knob.quaternion

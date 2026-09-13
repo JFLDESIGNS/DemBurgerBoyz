@@ -2,6 +2,8 @@
 class_name ModularCharacterBase
 extends Node3D
 
+@export_enum("male", "female") var customer_voice := "male"
+
 signal skin_color_changed(color: Color)
 signal modules_changed
 
@@ -13,13 +15,14 @@ enum CheekStyle { NONE, ROSY_RADIAL }
 enum HairStyle { NONE, SIMPLE_PARTED, BUZZED, LONG, BUNS, LOWPOLY_MALE, LOWPOLY_SHORT_1, LOWPOLY_PONYTAIL, LOWPOLY_SHORT_2, CAP_WITH_HAIR, CAPSULE_FEMALE, CAPSULE_MALE, SCULPTED_CINNAMON, SCULPTED_SAFFRON, SCULPTED_MERLOT, SCULPTED_MIDNIGHT, SCULPTED_COPPER, SCULPTED_PEARL }
 enum FacialHairStyle { NONE, FULL_BEARD, MOUSTACHE, SHORT_BEARD, QUATERNIUS_BEARD }
 enum HatStyle { NONE, TURQUOISE_FEDORA, SAILOR_CAP, TOP_HAT, BASEBALL_CAP, WINTER_USHANKA, RASPBERRY_BRIM, PURPLE_FEDORA, FEATHER_FEDORA, GOLDEN_CROWN, BLACK_TOP_HAT }
-enum TopStyle { NONE, MIDNIGHT_LAPEL, SUNSHINE_BOWLING, LAGOON_COLLAR, CLUB_VARSITY, SEAFOAM_RINGER, OCHRE_STRIPE, EMERALD_CARDIGAN, TERRACOTTA_POLO, IVORY_OXFORD, MERLOT_HENLEY, ATHLETIC_TANK, ORCHID_HALTER }
+enum TopStyle { NONE, MIDNIGHT_LAPEL, SUNSHINE_BOWLING, LAGOON_COLLAR, CLUB_VARSITY, SEAFOAM_RINGER, OCHRE_STRIPE, EMERALD_CARDIGAN, TERRACOTTA_POLO, IVORY_OXFORD, MERLOT_HENLEY, ATHLETIC_TANK, ORCHID_HALTER, STONE_BAND_COLLAR, NAVY_V_NECK, SAGE_MOCKNECK }
 enum BottomStyle { NONE, CARGO, PANTS, UTILITY, JOGGERS, JEANS, LEGGINGS, TRACK, SHORTS, BERMUDAS, RUNNING_SHORTS, LAYERED_SHORTS, CAPRIS, MINI_SKIRT, PLEATED_SKIRT, LONG_SKIRT }
 enum ShoeStyle { NONE, SNEAKERS, ANKLE_BOOTS, HIGH_TOPS, LOAFERS, SANDALS, NEON_RUNNERS, SUNSET_SKATE, VIOLET_RETRO, CHELSEA_BOOTS, ALPINE_HIKERS, KITCHEN_CLOGS, SEAFOAM_SLIDES, ROSE_MARY_JANES, ORCHID_ANKLE_BOOTS, FROGGY_SLIPPERS }
 enum ShirtGraphic { NONE, SKULL, HEART, STAR, LIGHTNING, FLAME, FLOWER, CAT, MOON, BURGER, CROWN }
 enum MakeupStyle { NONE, EYE_SHADOW, WINGED_LINER, BEAUTY_MARK, GLAM }
 enum JewelryStyle { NONE, STUDS, HOOPS, DROP_EARRINGS, CHOKER }
 enum GlassesStyle { NONE, SPORT, CLASSIC, CAT_EYE, ROUND, SHUTTER, AVIATOR, PIXEL, RETRO_ROUND, SLIM, WAYFARER }
+const BurgerMotion = preload("res://scripts/burger_animation_library.gd")
 enum PreviewAnimation { WAVE, WALK_IN_PLACE, CELEBRATE }
 
 const HAIR_LABELS: Array[String] = ["None", "Simple parted", "Buzzed", "Long", "Twin buns", "Low-poly swept", "Low-poly short bob", "Low-poly ponytail", "Low-poly cropped", "Cap with hair", "Capsule long", "Capsule spiky", "Sculpted Cinnamon - twin buns", "Sculpted Saffron - swept crop", "Sculpted Merlot - angled bob", "Sculpted Midnight - long waves", "Sculpted Copper - side braid", "Sculpted Pearl - high ponytail"]
@@ -954,6 +957,9 @@ var _jewelry_root: Node3D
 var _shirt_graphic_attachment: BoneAttachment3D
 var _shirt_graphic_root: Node3D
 var _unit := 0.01
+var _native_preview_player: AnimationPlayer
+var _native_preview_props: Node3D
+var _native_preview_name := ""
 var _preview_playing := false
 var _preview_animation: PreviewAnimation = PreviewAnimation.WAVE
 var _preview_time := 0.0
@@ -995,6 +1001,7 @@ var _pose_controls: Dictionary[String, float] = {
 static var _garment_mesh_cache: Dictionary = {}
 var _rebuild_suspended := false
 @export var defer_initial_appearance := false
+var gameplay_character := false
 
 
 func _ready() -> void:
@@ -1003,7 +1010,10 @@ func _ready() -> void:
 	if not defer_initial_appearance:
 		_rebuild_all_appearance()
 	_cache_preview_pose()
-	_create_control_rig_v2()
+	if gameplay_character:
+		set_process(false)
+	else:
+		_create_control_rig_v2()
 
 
 func begin_appearance_batch() -> void:
@@ -1081,7 +1091,11 @@ func _safe_bone_world(skeleton: Skeleton3D, bone_name: String) -> Vector3:
 func _process(delta: float) -> void:
 	if _preview_playing:
 		_preview_time += delta
-		_apply_preview_pose()
+		if _native_preview_name != "" and _native_preview_player != null:
+			if not _native_preview_player.is_playing():_native_preview_player.play(_native_preview_name)
+			_native_preview_player.advance(delta)
+		else:
+			_apply_preview_pose()
 	else:
 		_update_control_rig_lines()
 
@@ -1093,14 +1107,36 @@ func set_skin_tone(color: Color) -> void:
 func start_preview_animation(animation_index: int) -> void:
 	_set_ik_enabled(false)
 	_preview_playing = false
+	_stop_native_preview()
 	_restore_base_pose()
+	if animation_index >= PreviewAnimation.size():
+		var index := clampi(animation_index - PreviewAnimation.size(),0,BurgerMotion.NAMES.size()-1)
+		if _native_preview_player == null:
+			_native_preview_player = AnimationPlayer.new()
+			_native_preview_player.name = "BurgerPreviewAnimations"
+			get_active_body().add_child(_native_preview_player)
+			_native_preview_props = BurgerMotion.attach(_native_preview_player,get_active_body())
+			_native_preview_player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+		_native_preview_name = "burger/" + BurgerMotion.NAMES[index]
+		_native_preview_props.visible = true
+		_native_preview_player.play(_native_preview_name)
+		_native_preview_player.advance(0.0)
+		_preview_playing = true
+		return
 	_preview_animation = clampi(animation_index, 0, PreviewAnimation.size() - 1) as PreviewAnimation
 	_preview_time = 0.0
 	_preview_playing = true
 	_apply_preview_pose()
 
 
+func _stop_native_preview() -> void:
+	if _native_preview_player != null:_native_preview_player.stop()
+	if _native_preview_props != null:_native_preview_props.visible = false
+	_native_preview_name = ""
+
+
 func stop_preview_animation() -> void:
+	_stop_native_preview()
 	_preview_playing = false
 	_apply_manual_pose()
 	_sync_rig_targets_from_pose()
@@ -1115,7 +1151,8 @@ func _cache_preview_pose() -> void:
 	var skeleton := get_active_skeleton()
 	if skeleton == null:
 		return
-	for bone_name in ["Hips", "Spine", "Chest", "UpperChest", "Neck", "Head", "LeftShoulder", "RightShoulder", "LeftArm", "RightArm", "LeftForeArm", "RightForeArm", "LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg", "LeftFoot", "RightFoot", "LeftToes", "RightToes"]:
+	for i in skeleton.get_bone_count():
+		var bone_name := skeleton.get_bone_name(i)
 		var bone_index := skeleton.find_bone(bone_name)
 		if bone_index >= 0:
 			_preview_bone_indices[bone_name] = bone_index
@@ -1238,6 +1275,7 @@ func reset_pose_controls() -> void:
 
 
 func _apply_manual_pose() -> void:
+	_stop_native_preview()
 	if _preview_bone_indices.is_empty():
 		return
 	_restore_base_pose()
@@ -1638,6 +1676,8 @@ func load_control_rig_targets(values: Variant) -> void:
 ## the normal Food Flip idle and walk animations are attached.
 func apply_saved_preset(data: Dictionary) -> void:
 	data = data.duplicate(true)
+	data["customer_voice"] = preload("res://scripts/customer_voice.gd").resolve(data)
+	customer_voice = data["customer_voice"]
 	data["hair_visible"] = bool(data.get("hair_visible", true))
 	migrate_legacy_hair_fields(data)
 	Wardrobe.migrate_preset(data)
@@ -1751,11 +1791,12 @@ func _upload_skin_paint() -> void:
 func _skin_paint_shader_material() -> ShaderMaterial:
 	var shader_source := """
 shader_type spatial;
-render_mode diffuse_toon, specular_disabled, cull_back;
+render_mode diffuse_burley, specular_disabled, cull_back, sss_mode_skin;
 
 uniform vec4 skin_color : source_color = vec4(0.85, 0.55, 0.37, 1.0);
 uniform sampler2D paint_tex : source_color, filter_linear, repeat_disable;
 uniform float unlit_preview : hint_range(0.0, 1.0) = 0.0;
+uniform float skin_scatter : hint_range(0.0, 1.0) = 0.65;
 
 void fragment() {
 	vec4 paint = texture(paint_tex, UV);
@@ -1763,6 +1804,12 @@ void fragment() {
 	ALBEDO = diffuse_color;
 	EMISSION = diffuse_color * unlit_preview;
 	ROUGHNESS = 0.82;
+	// Skin diffusion spreads red farther across the cast-light boundary than
+	// green/blue. Backlighting alone left hair and spotlight shadows razor sharp.
+	SSS_STRENGTH = skin_scatter * (1.0 - unlit_preview);
+	SSS_TRANSMITTANCE_COLOR = vec4(1.0, 0.22, 0.12, skin_scatter);
+	SSS_TRANSMITTANCE_DEPTH = 0.06;
+	SSS_TRANSMITTANCE_BOOST = 0.04;
 }
 """
 	var material := ShaderMaterial.new()
@@ -2205,7 +2252,7 @@ func _build_eyes() -> void:
 	var eye_position_x := 0.18 * eye_spacing
 	var eye_position_z := 0.475 + eye_depth
 	var specular_material := _toon_material(Color.WHITE)
-	specular_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	specular_material.roughness = 0.45
 	var specular_size := Vector3(0.018, 0.022, 0.010) * eye_specular_scale
 	for side in [-1.0, 1.0]:
 		var eye_group := Node3D.new()
@@ -2310,7 +2357,7 @@ func _build_nose() -> void:
 	_clear(_nose_root)
 	if nose_style == NoseStyle.NONE:
 		return
-	var nose_material := _toon_material(nose_color)
+	var nose_material := _skin_detail_material(nose_color)
 	var nose_position_y := 0.20 + nose_vertical
 	if nose_style == NoseStyle.BUTTON:
 		_add_sphere(_nose_root, "ButtonNose", Vector3(0.0, nose_position_y, 0.445 + nose_depth), Vector3(0.065 * nose_width, 0.06 * nose_height, 0.075), nose_material)
@@ -2375,7 +2422,7 @@ func _build_ears() -> void:
 	if _ears_root == null:
 		return
 	_clear(_ears_root)
-	var material := _toon_material(ear_color)
+	var material := _skin_detail_material(ear_color)
 	var ear_x := 0.34 * ear_spacing
 	var ear_position_z := 0.02 + ear_depth
 	var left_ear := _add_cylinder(_ears_root, "EarLeft", Vector3(-ear_x, 0.22, ear_position_z), 0.09 * ear_scale, 0.055 * ear_scale, material)
@@ -2442,7 +2489,7 @@ func _spawn_hair_piece(
 		hair.position = (offset - Vector3(0.0, 0.3, 0.0)) * _unit
 	else:
 		_fit_sourced_accessory(hair, 0.76 * scale_all, Vector3(0.0, 0.47, 0.0) + offset, scale_xyz)
-	_override_mesh_materials(hair, _toon_material(color))
+	_override_mesh_materials(hair, _hair_material(color))
 
 
 func hair_layer_count() -> int:
@@ -2609,7 +2656,7 @@ func _build_facial_hair() -> void:
 		desired_width = 0.34
 		anchor = Vector3(0.0, 0.16, 0.44)
 	_fit_sourced_accessory(piece, desired_width * facial_hair_scale, anchor + facial_hair_offset, facial_hair_scale_xyz)
-	_override_mesh_materials(piece, _toon_material(facial_hair_color))
+	_override_mesh_materials(piece, _hair_material(facial_hair_color))
 
 
 func _build_hat() -> void:
@@ -3047,6 +3094,29 @@ func _add_surface_triangle(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vect
 		surface.add_vertex(vertex)
 
 
+func _skin_detail_material(color: Color) -> StandardMaterial3D:
+	var material := _toon_material(color)
+	material.diffuse_mode = BaseMaterial3D.DIFFUSE_BURLEY
+	material.subsurf_scatter_enabled = true
+	material.subsurf_scatter_skin_mode = true
+	material.subsurf_scatter_strength = 0.65
+	material.subsurf_scatter_transmittance_enabled = true
+	material.subsurf_scatter_transmittance_color = Color(1.0, 0.22, 0.12)
+	material.subsurf_scatter_transmittance_depth = 0.06
+	material.subsurf_scatter_transmittance_boost = 0.04
+	return material
+
+
+func _hair_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.roughness = 0.42
+	material.metallic_specular = 0.35
+	material.anisotropy_enabled = true
+	material.anisotropy = 0.65
+	return material
+
+
 func _toon_material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = color
@@ -3094,13 +3164,14 @@ void fragment() {
 func _eye_shader_material(pupil_offset_x: float = 0.0) -> ShaderMaterial:
 	var shader_source := """
 shader_type spatial;
-render_mode unshaded, cull_disabled;
+render_mode diffuse_lambert_wrap, specular_disabled, cull_disabled;
 
 uniform vec4 sclera_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec4 pupil_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform float pupil_size : hint_range(0.12, 0.92, 0.01) = 0.55;
 uniform float edge_softness : hint_range(0.001, 0.08, 0.001) = 0.018;
 uniform float pupil_offset_x = 0.0;
+uniform vec2 pupil_gaze = vec2(0.0);
 
 varying vec3 eye_direction;
 
@@ -3110,9 +3181,11 @@ void vertex() {
 
 void fragment() {
 	vec3 direction = normalize(eye_direction);
-	float distance_from_eye_axis = length(direction.xy - vec2(pupil_offset_x, 0.0));
+	float distance_from_eye_axis = length(direction.xy - vec2(pupil_offset_x, 0.0) - pupil_gaze);
 	float pupil_mask = 1.0 - smoothstep(pupil_size, min(pupil_size + edge_softness, 1.0), distance_from_eye_axis);
-	ALBEDO = mix(sclera_color.rgb, pupil_color.rgb, pupil_mask);
+	// Stronger lower-sclera shading remains visible inside the eyelid opening.
+	float sclera_shade = mix(0.50, 1.0, smoothstep(-0.65, 0.0, direction.y));
+	ALBEDO = mix(sclera_color.rgb * sclera_shade, pupil_color.rgb, pupil_mask);
 	ROUGHNESS = 1.0;
 }
 """
@@ -3137,6 +3210,7 @@ uniform float mask_width : hint_range(0.0, 1.5) = 0.88;
 uniform float rim_width : hint_range(0.01, 0.36) = 0.035;
 uniform bool rim_enabled = false;
 uniform int opening_style = 0;
+uniform float blink = 0.0;
 
 varying vec3 local_pos;
 
@@ -3149,14 +3223,14 @@ void fragment() {
 	ROUGHNESS = 0.94;
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
-	float half_h = max(mask_height, 0.0);
+	float half_h = max(mask_height * (1.0 - blink), 0.0);
 	float half_w = max(mask_width, 0.0);
 	float nx = abs(local_pos.x) / max(half_w, 0.0005);
 	float almond_h = 1.0 - pow(min(nx, 1.0), 1.55);
 	bool almond_opening = nx <= 1.0
 		&& abs(local_pos.y) / max(half_h, 0.0005) <= almond_h;
 	bool classic_opening = abs(local_pos.x) <= half_w && abs(local_pos.y) <= half_h;
-	bool opening = local_pos.z > 0.0
+	bool opening = blink < 0.999 && local_pos.z > 0.0
 		&& ((opening_style == 2) ? classic_opening : almond_opening);
 	if (opening) {
 		discard;
@@ -3252,3 +3326,58 @@ static func _shared_character_shader(source: String) -> Shader:
 		shader.code = source
 		_shared_shader_cache[source] = shader
 	return _shared_shader_cache[source]
+
+
+func prepare_for_customer_animation() -> void:
+	# Saved editor targets must never compete with gameplay animation.
+	_stop_native_preview()
+	_preview_playing = false
+	_set_ik_enabled(false)
+	set_control_rig_visible(false)
+
+
+func animate_customer_eyes(target: Vector3, strength: float, blink_amount: float, dilation: float = 0.0) -> void:
+	if not is_instance_valid(_eyes_root): return
+	var head_basis := _eyes_root.global_basis.orthonormalized()
+	for group in _eyes_root.get_children():
+		var eye := group.get_node_or_null("Eye") as MeshInstance3D
+		if eye == null: continue
+		var mat := eye.material_override as ShaderMaterial
+		if mat == null: continue
+		var neutral := Vector2(float(mat.get_shader_parameter("pupil_offset_x")), 0.0)
+		# Aim from each eye in the head's common forward frame. Eyeball yaw and
+		# flattened depth must not cancel the near eye's sideways movement.
+		var head_direction := (head_basis.inverse() * (target - eye.global_position)).normalized()
+		var radius := lerpf(eye_pupil_size, minf(0.94, eye_pupil_size * 1.30), clampf(dilation, 0.0, 1.0))
+		mat.set_shader_parameter("pupil_size", radius)
+		# Large pupils still need visible travel; the eyelid/eyeball edge naturally
+		# clips their far side. A radial limit made downward grill gaze consume
+		# nearly all the sideways motion on wide/large-pupil presets.
+		var travel := maxf(0.38, 0.98 - radius)
+		var displacement := Vector2(head_direction.x * 0.95, head_direction.y * 0.65)
+		var eye_side := signf((head_basis.inverse() * (eye.global_position - _eyes_root.global_position)).x)
+		var near_eye_boost := 1.0 + 0.3 * smoothstep(0.02, 0.35, head_direction.x * eye_side)
+		displacement.x *= near_eye_boost
+		# Preserve the authored resting offset, moving both pupils by comparable
+		# amounts. Absolute aiming previously spent the near eye's motion cancelling
+		# that offset while adding the same offset to the far eye.
+		var aim := neutral + displacement
+		aim.x = clampf(aim.x, -travel - absf(neutral.x), travel + absf(neutral.x))
+		aim.y = clampf(aim.y, -travel * 0.8, travel * 0.8)
+		var weight := strength * smoothstep(-0.2, 0.12, head_direction.z)
+		mat.set_shader_parameter("pupil_gaze", (aim - neutral) * weight)
+		var lid := group.get_node_or_null("Eyelid") as MeshInstance3D
+		if lid != null:
+			(lid.material_override as ShaderMaterial).set_shader_parameter("blink", blink_amount)
+		var glint := group.get_node_or_null("Specular") as MeshInstance3D
+		if glint != null: glint.visible = lid == null or blink_amount < 0.55
+
+
+func animate_customer_hair(stretch: float, sway: float, bounce: float) -> void:
+	if not is_instance_valid(_hair_root): return
+	var vertical := clampf(1.0 + stretch, 0.96, 1.04)
+	var width := 1.0 / sqrt(vertical)
+	_hair_root.scale = Vector3(width, vertical, width)
+	_hair_root.rotation.z = sway
+	# Pivot the squash near the scalp so the hair stays attached to the head.
+	_hair_root.position.y = (0.65 * (1.0 - vertical) + bounce) * _unit

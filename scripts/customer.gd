@@ -5,6 +5,7 @@ const GameDataScript := preload("res://scripts/game_data.gd")
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 
 const CHAR_SCENE_PATH := "res://assets/characters/Model/characterMedium.fbx"
+const BurgerMotion = preload("res://scripts/burger_animation_library.gd")
 const IDLE_SCENE_PATH := "res://assets/characters/Animations/idle.fbx"
 const RUN_SCENE_PATH := "res://assets/characters/Animations/run.fbx"
 const EXCITED_SCENE_PATH := "res://assets/characters/Animations/Excited.fbx"
@@ -230,7 +231,8 @@ const WALK_PLUS_X_YAW := 90.0
 const WALK_MINUS_X_YAW := -90.0
 ## Wait slots: front of line near window center; new customers queue screen-right.
 ## (world +X = screen-left, −X = screen-right)
-const LANE_X: Array[float] = [-0.35, -1.1, -1.85, -2.6]
+const QUEUE_SPACING := 0.95
+const LANE_X: Array[float] = [-0.35, -1.30, -2.25, -3.20]
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -277,6 +279,13 @@ var _celebrating: bool = false
 var _celebrate_done: Callable = Callable()
 var _celebrate_anim_path: String = ""
 var _walk_anim_path: String = ""
+var _burger_props: Node3D
+const WAITING_IDLES := ["Idle_Forward", "Idle_Glance_Left", "Idle_Glance_Right", "Impatient_Foot_Tap"]
+var _burger_idle := "Idle_Forward"
+var _wait_motion_time := 0.0
+var _angry_departure := false
+var _departure_clip := ""
+var _burger_eat_phase := ""
 var _order_phase: String = "" ## "" | "wawa" | "button"
 var _order_t: float = 0.0
 var _order_button_done: bool = false
@@ -428,10 +437,22 @@ static var _breakdance_lib: AnimationLibrary = null
 static var _button_lib: AnimationLibrary = null
 static var _modular_character_scene: PackedScene = null
 static var _saved_character_cycle: Array[String] = []
+static var _saved_preset_cache: Dictionary = {}
 static var _saved_character_cycle_i: int = 0
 var _uses_custom_character: bool = false
 var custom_character_name: String = ""
 var _custom_character_preset: Dictionary = {}
+var _nom_played := false
+
+func get_customer_voice() -> String:
+	return preload("res://scripts/customer_voice.gd").resolve(_custom_character_preset, skin_idx)
+
+func _play_eating_voice_once() -> void:
+	if _nom_played: return
+	_nom_played = true
+	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
+	if audio != null and audio.has_method("play_customer_nom_nom"):
+		audio.play_customer_nom_nom(get_customer_voice(), self)
 var _custom_character_choice_locked: bool = false
 
 
@@ -480,7 +501,7 @@ func setup(
 static func lane_x_for(lane_i: int) -> float:
 	if LANE_X.is_empty():
 		return 0.0
-	return LANE_X[clampi(lane_i, 0, LANE_X.size() - 1)]
+	return LANE_X[0] - max(0, lane_i) * QUEUE_SPACING
 
 
 func _wait_z() -> float:
@@ -885,6 +906,7 @@ func _try_attach_saved_character() -> bool:
 		if modular != null:
 			modular.free()
 		return false
+	modular.set("gameplay_character", true)
 	modular.call("apply_saved_preset", preset)
 	## The creator scene uses a 0.7 inner body for its preview. Restore the
 	## imported body's game scale while preserving all module proportions.
@@ -1076,16 +1098,23 @@ static func _parse_saved_character_file(path: String) -> Dictionary:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return {}
+	var modified := FileAccess.get_modified_time(path)
+	var bytes := file.get_length()
+	var cached: Dictionary = _saved_preset_cache.get(path, {})
+	if cached.get("modified", -1) == modified and cached.get("bytes", -1) == bytes:
+		return (cached.preset as Dictionary).duplicate(true)
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	if not (parsed is Dictionary):
 		return {}
 	var data: Dictionary = parsed as Dictionary
+	data["customer_voice"] = preload("res://scripts/customer_voice.gd").resolve(data)
 	var body_type: String = str(data.get("body_type", "kenney_chunky_toon"))
 	if body_type != "" and body_type != "kenney_chunky_toon":
 		return {}
 	## Unfinished creator stubs (name + skin only) spawn as the bald default body.
 	if not data.has("hair_style") and not data.has("top_style"):
 		return {}
+	_saved_preset_cache[path] = {"modified": modified, "bytes": bytes, "preset": data.duplicate(true)}
 	return data
 
 
@@ -1161,6 +1190,7 @@ func _setup_character_animations(model: Node) -> void:
 		_walk_anim_path = _pick_walk_anim_path()
 		_anim_player.active = true
 		_play_anim("walk")
+		_setup_customer_life(model)
 		return
 	if _excited_lib == null:
 		_excited_lib = _load_anim_library(
@@ -1216,10 +1246,13 @@ func _setup_character_animations(model: Node) -> void:
 		_anim_player.add_animation_library("kenney_breakdance", _breakdance_lib)
 	if _button_lib != null and _button_lib.has_animation("Button"):
 		_anim_player.add_animation_library("kenney_button", _button_lib)
+	_burger_props = BurgerMotion.attach(_anim_player, model)
+	_burger_idle = WAITING_IDLES[int(get_instance_id()) % 3]
 	_anim_player.add_animation_library("extinguisher", EXTINGUISHER_REACTION_LIB)
 	_walk_anim_path = _pick_walk_anim_path()
 	_anim_player.active = true
 	_play_anim("idle")
+	_setup_customer_life(model)
 
 
 func _attach_walk_libraries(include_run: bool) -> void:
@@ -1257,14 +1290,42 @@ func _pick_walk_anim_path() -> String:
 
 
 func _play_wait_stance() -> void:
-	if _should_antsy_wait() and _anim_player != null \
-			and _anim_player.has_animation("kenney_offensive/Offensive"):
+	# A grill-tap dance owns the waiting pose until its timer expires.
+	var life := get_node_or_null("CustomerLife")
+	if life != null and life.dance_left > 0.0 and life.can_grill_dance():
+		_play_anim("grill_dance")
+		return
+	if _burger_props != null and not dialogue_open:
+		if _should_antsy_wait():
+			_play_anim("burger:Impatient_Foot_Tap")
+			return
+		var choices := ["Phone_One_Hand", "Phone_Two_Hands", "Check_Watch"]
+		var choice: String = choices[(int(_wait_motion_time / 16.0) + int(get_instance_id())) % choices.size()]
+		var clock := fmod(_wait_motion_time, 16.0)
+		if clock >= 11.0 and clock < 11.0 + BurgerMotion.LIBRARY.get_animation(choice).length:
+			_play_anim("burger:" + choice)
+			return
+		var sequence := [0, 1, 0, 2, 0, 3]
+		var slot := (int(_wait_motion_time / 7.0) + int(get_instance_id()) % 5) % sequence.size()
+		var index: int = sequence[slot]
+		if index == 3 and _wait_motion_time < 18.0: index = 0
+		_burger_idle = WAITING_IDLES[index]
+		_play_anim("idle")
+		return
+	if _should_antsy_wait() and _anim_player != null and _anim_player.has_animation("kenney_offensive/Offensive"):
 		_play_anim("offensive")
 		return
 	_play_anim("idle")
 
 
 func _play_anim(state: String) -> void:
+	_select_character_animation(state)
+	# Play queues an update. Apply it now so resets/transitions cannot render a T-pose.
+	if is_instance_valid(_anim_player) and _anim_player.active and _anim_player.is_playing():
+		_anim_player.advance(0.0)
+
+
+func _select_character_animation(state: String) -> void:
 	if _powdering:
 		return
 	if _anim_player == null:
@@ -1273,10 +1334,32 @@ func _play_anim(state: String) -> void:
 		return
 	if _order_phase == "button" and state != "button":
 		return
-	if state == _anim_state and _anim_player.is_playing():
-		return
+	if state == _anim_state and _anim_player.active and _anim_player.is_playing():
+		if state != "idle" or _burger_props == null or _anim_player.current_animation == "burger/" + _burger_idle:
+			return
+	_anim_player.active = true
+	var native_next := state.begins_with("burger:") or (state == "idle" and _burger_props != null and not is_cut_collector)
+	if _anim_player.current_animation.begins_with("burger/") and not native_next:
+		_reset_skeleton_pose(false)
 	var prev := _anim_state
 	_anim_state = state
+	if _burger_props != null:_burger_props.visible = false
+	if state == "grill_dance":
+		var choices:Array[String]=[]
+		var last:=str(get_meta("last_grill_dance",""))
+		for path in ["kenney_hiphop/HipHop", "kenney_wave_hiphop/Dance", "kenney_gangnam/Dance"]:
+			if _anim_player.has_animation(path) and path!=last: choices.append(path)
+		if choices.is_empty() and _anim_player.has_animation(last): choices.append(last)
+		if not choices.is_empty():
+			var selected:String=choices.pick_random()
+			set_meta("last_grill_dance",selected)
+			_anim_player.play(selected,0.15)
+			_anim_player.speed_scale=1.08
+			return
+	if state.begins_with("burger:"):
+		if _play_burger_clip(state.trim_prefix("burger:")):return
+	if state == "idle" and _burger_props != null and not is_cut_collector:
+		if _play_burger_clip(_burger_idle):return
 	if state == "button" and _anim_player.has_animation("kenney_button/Button"):
 		_anim_player.play("kenney_button/Button")
 		_anim_player.speed_scale = 1.0
@@ -1324,6 +1407,17 @@ func _play_anim(state: String) -> void:
 				_anim_player.seek(randf() * idle_anim.length, true)
 
 
+func _play_burger_clip(clip: String) -> bool:
+	var path := "burger/" + clip
+	if _anim_player == null or not _anim_player.has_animation(path):return false
+	_anim_player.active = true
+	_anim_player.speed_scale = 1.0
+	_anim_player.play(path, 0.12)
+	# The served burger remains the real assembled stack in the gameplay UI.
+	if _burger_props != null:_burger_props.visible = clip.begins_with("Phone_") or clip == "Check_Watch"
+	return true
+
+
 func _load_mixamo_dance_library(scene_path: String, store_as: String) -> AnimationLibrary:
 	return _load_anim_library(
 		scene_path,
@@ -1357,7 +1451,7 @@ func _load_anim_library(
 	var fallback: Animation = null
 	for full_name in src.get_animation_list():
 		var anim := src.get_animation(full_name)
-		if anim == null:
+		if anim == null or String(full_name).to_upper() == "RESET" or anim.length <= 0.001:
 			continue
 		if fallback == null:
 			fallback = anim
@@ -1817,7 +1911,7 @@ func _begin_order_announce() -> void:
 	_play_anim("idle")
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_wawa_click"):
-		audio.play_customer_wawa_click(0.22)
+		audio.play_customer_wawa_click(0.22, get_customer_voice())
 
 
 func _update_order_announce(delta: float) -> void:
@@ -1941,14 +2035,16 @@ func _begin_sidewalk_leave(do_dance: bool) -> void:
 	_leave_fade_alpha = 1.0
 	_apply_leave_fade_alpha(1.0)
 	_cancel_order_announce()
-	_enter_leave_phase("turn_left")
+	_enter_leave_phase("reaction" if _departure_clip != "" and _burger_props != null else "turn_left")
 
 
 func _enter_leave_phase(phase: String) -> void:
 	_leave_phase = phase
 	_leave_spin = 0.0
 	_leave_yaw_from = rotation_degrees.y
-	if phase == "turn_left" or phase == "turn_left2":
+	if phase == "reaction":
+		_play_anim("burger:" + _departure_clip)
+	elif phase == "turn_left" or phase == "turn_left2":
 		_leave_yaw_target = WALK_PLUS_X_YAW
 		_leave_turned = phase == "turn_left2"
 	elif phase == "turn_truck":
@@ -2009,7 +2105,7 @@ func _advance_leave_walk(delta: float) -> void:
 		return
 	_leave_spin += delta
 	_leave_walk_x = next_x
-	_play_anim("walk")
+	_play_anim("burger:Walk_Away_Angry" if _angry_departure else "walk")
 	_apply_leave_body(delta, true)
 
 
@@ -2124,6 +2220,11 @@ func _maybe_start_leave_fade() -> void:
 func _update_sidewalk_leave(delta: float) -> void:
 	global_position.y = STAND_Y
 	match _leave_phase:
+		"reaction":
+			_apply_leave_body(delta, false)
+			_leave_spin += delta
+			if _leave_spin >= BurgerMotion.LIBRARY.get_animation(_departure_clip).length:
+				_enter_leave_phase("turn_left")
 		"turn_left":
 			_apply_leave_body(delta, false)
 			if not _powder_hit:
@@ -2164,8 +2265,12 @@ func _update_sidewalk_leave(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if is_instance_valid(_burger_props) and (is_ragdoll or _powdering or _celebrating or is_leaving):
+		_burger_props.visible = false
 	if is_street_pedestrian:
 		return
+	if is_waiting and not _eating and not is_leaving and not dialogue_open:
+		_wait_motion_time += delta
 	_bounce += delta * 3.2
 	var bobble_spd := 2.4
 	if _click_bobble_t > 0.0:
@@ -2302,17 +2407,10 @@ func _process(delta: float) -> void:
 			_animate_expression(delta)
 			return
 		if _eating:
-			_play_anim("idle")
-			if _anim_player:
-				_anim_player.stop()
-			_apply_eat_hands_pose(1.0)
-			if _body:
-				_body.position.y = _base_body_y
-				_body.rotation_degrees.x = _eat_lean_x
-				_body.rotation_degrees.z = 0.0
+			_update_eat_pose()
 		else:
 			_play_wait_stance()
-			if _anim_state == "offensive":
+			if _anim_state in ["offensive", "grill_dance"] or _anim_state.begins_with("burger:"):
 				_clear_antsy_wait_pose()
 				_apply_bobble(false)
 			elif _should_antsy_wait() and _click_bobble_t <= 0.0:
@@ -2354,17 +2452,10 @@ func _update_host_driven_pose(delta: float) -> void:
 		if not _mp_target_valid:
 			rotation_degrees.y = FACE_TRUCK_YAW
 		if _eating:
-			_play_anim("idle")
-			if _anim_player:
-				_anim_player.stop()
-			_apply_eat_hands_pose(1.0)
-			if _body:
-				_body.position.y = _base_body_y
-				_body.rotation_degrees.x = _eat_lean_x
-				_body.rotation_degrees.z = 0.0
+			_update_eat_pose()
 		else:
 			_play_wait_stance()
-			if _anim_state == "offensive":
+			if _anim_state in ["offensive", "grill_dance"] or _anim_state.begins_with("burger:"):
 				_clear_antsy_wait_pose()
 				_apply_bobble(false)
 			elif _should_antsy_wait() and _click_bobble_t <= 0.0:
@@ -2540,7 +2631,7 @@ func _update_wait_grobble(delta: float) -> void:
 	shake_angry(GROBBLE_SHAKE_SEC, GROBBLE_SHAKE_AMP, GROBBLE_SHAKE_RATE, false)
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_grobble"):
-		audio.play_customer_grobble(impatience)
+		audio.play_customer_grobble(impatience, get_customer_voice())
 
 
 func _should_antsy_wait() -> bool:
@@ -2797,70 +2888,13 @@ func _review_card_content_size() -> Vector2:
 	return Vector2(card_width, card_height)
 
 
-func show_review_stars(stars: float, review_text: String = "", duration_override: float = -1.0) -> void:
-	## The kitchen card shows only the useful first two lines; the full review stays
-	## on BizPhone. All visual layers live under one independently tunable root.
-	var full := clampi(int(floor(clampf(stars, 0.0, 5.0) + 0.25)), 0, 5)
-	var text := ""
-	for i in 5:
-		text += "★" if i < full else "☆"
-	var short_review := _review_first_two_lines(review_text)
-	if _bubble != null:
-		_bubble.visible = false
-	if _bubble_bg != null:
-		_bubble_bg.visible = false
-	_ensure_review_card_nodes()
-	_review_stars.text = text
-	_review_text.text = short_review
-	## Apply after assigning copy so the rounded card can size itself to the two
-	## actual lines rather than to an empty preview label.
-	_apply_review_card_layout()
-	_review_stars.modulate = Color(1.0, 0.80, 0.06, 1.0)
-	_review_text.modulate = Color(1.0, 1.0, 1.0, 1.0)
-	_review_card_root.visible = true
-	_review_box.visible = true
-	_review_stars.visible = true
-	_review_text.visible = short_review != ""
-	if _review_stars_tween != null and is_instance_valid(_review_stars_tween):
-		_review_stars_tween.kill()
-	var duration := duration_override if duration_override > 0.0 else _review_card_value("hold_sec")
-	duration = maxf(2.0, duration)
-	var fade_sec := minf(0.90, duration * 0.25)
-	var fade_delay := maxf(0.0, duration - fade_sec)
-	var start_y := _review_card_root.position.y
-	var opacity := _review_card_value("opacity")
-	_review_stars_tween = create_tween()
-	_review_stars_tween.set_parallel(true)
-	_review_stars_tween.tween_property(
-		_review_card_root, "position:y", start_y + _review_card_value("rise"), duration
-	).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	_review_stars_tween.tween_property(
-		_review_stars, "modulate:a", 0.0, fade_sec
-	).set_delay(fade_delay).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	_review_stars_tween.tween_property(
-		_review_text, "modulate:a", 0.0, fade_sec
-	).set_delay(fade_delay).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	var fade_review_box := func(a: float) -> void:
-		var mat := _review_box.material_override as StandardMaterial3D
-		if mat != null:
-			mat.albedo_color.a = a
-	_review_stars_tween.tween_method(
-		fade_review_box, opacity, 0.0, fade_sec
-	).set_delay(fade_delay).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	_review_stars_tween.chain().tween_callback(func() -> void:
-		if _review_stars != null and is_instance_valid(_review_stars):
-			_review_stars.visible = false
-		if _review_text != null and is_instance_valid(_review_text):
-			_review_text.visible = false
-		if _review_box != null and is_instance_valid(_review_box):
-			_review_box.visible = false
-			var mat := _review_box.material_override as StandardMaterial3D
-			if mat != null:
-				mat.albedo_color.a = _review_card_value("opacity")
-		if _review_card_root != null and is_instance_valid(_review_card_root):
-			_review_card_root.visible = false
-		_review_stars_tween = null
-	)
+func show_review_stars(stars: float, _review_text: String = "", _duration_override: float = -1.0) -> void:
+	# Ratings still reach remote customers for their eating reaction.
+	set_meta("meal_stars", stars)
+	# Reviews belong in the phone feed. No floating blocks over customers.
+	if is_instance_valid(_review_stars_tween): _review_stars_tween.kill()
+	_review_stars_tween = null
+	if is_instance_valid(_review_card_root): _review_card_root.hide()
 
 
 func _review_card_is_showing() -> bool:
@@ -2919,20 +2953,9 @@ func _make_review_card_texture() -> ImageTexture:
 	return _shared_review_card_texture
 
 
-func prewarm_review_card(sample_text: String = "Great burger! ABC xyz 0123") -> void:
-	## Called under the loading car (and at spawn as a cheap fallback) so serving
-	## only changes labels and materials that already exist.
-	_ensure_review_card_nodes()
-	_review_stars.text = "★★★★★"
-	_review_text.text = sample_text
-	## Some customer factories prepare nodes just before adding the customer to
-	## the world. Global layout is deferred until show_review_stars in that case.
-	if is_inside_tree():
-		_apply_review_card_layout()
-	_review_card_root.visible = false
-	_review_box.visible = false
-	_review_stars.visible = false
-	_review_text.visible = false
+func prewarm_review_card(_sample_text: String = "") -> void:
+	pass
+
 
 func react_free_icecream(accepted: bool = true) -> void:
 	if is_leaving or is_ragdoll:
@@ -2997,6 +3020,8 @@ func leave_happy(do_dance: bool = false) -> void:
 	if bool(get_meta("burger_in_flight", false)):
 		set_meta("burger_pending_departure", Callable(self, "leave_happy").bind(do_dance))
 		return
+	_angry_departure = false
+	_departure_clip = "" if do_dance or is_cut_collector else "Thank_You_Bow"
 	_set_mood("cheer")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -3059,6 +3084,8 @@ func leave_meh() -> void:
 	if bool(get_meta("burger_in_flight", false)):
 		set_meta("burger_pending_departure", Callable(self, "leave_meh").bind())
 		return
+	_angry_departure = false
+	_departure_clip = "Wrong_Order_Shrug"
 	## Bland / unseasoned — shrug and walk off camera-left. Paid base, no tip energy.
 	_set_mood("ok")
 	_clear_antsy_wait_pose()
@@ -3596,11 +3623,13 @@ func _powder_parent_for_zone(_zone: String) -> Node3D:
 	return _body if _body != null else self
 
 
-func _reset_skeleton_pose() -> void:
+func _reset_skeleton_pose(restore_animation: bool = true) -> void:
 	_cache_skeleton()
 	if _skeleton == null:
 		return
 	_skeleton.reset_bone_poses()
+	if restore_animation and is_instance_valid(_anim_player) and _anim_player.active and _anim_player.is_playing():
+		_anim_player.advance(0.0)
 
 
 func _set_panic_bone_rot(bone_name: String, euler: Vector3) -> void:
@@ -3643,11 +3672,59 @@ func _apply_eat_hands_pose(strength: float) -> void:
 	_set_panic_bone_rot("RightHand", Vector3(deg_to_rad(-12.0 * s), 0.0, deg_to_rad(20.0 * s)))
 
 
-func begin_catch_burger() -> void:
+func _update_eat_pose() -> void:
+	if _burger_eat_phase == "":
+		_play_anim("idle")
+		if _anim_player:_anim_player.stop()
+		_apply_eat_hands_pose(1.0)
+	if _body:
+		_body.position.y = _base_body_y
+		_body.rotation_degrees = Vector3(_eat_lean_x,0,0)
+
+
+func burger_grip_global() -> Vector3:
+	if _burger_eat_phase != "" and is_instance_valid(_burger_props):
+		return _burger_props.to_global(Vector3(0,0,.0009))
+	return mouth_global()
+
+
+func burger_grip_edges() -> Array[Vector3]:
+	if is_instance_valid(_burger_props):
+		return [_burger_props.to_global(Vector3(-.0031,0,.0009)),_burger_props.to_global(Vector3(.0031,0,.0009))]
+	return [mouth_global() + Vector3(-.12,0,0),mouth_global() + Vector3(.12,0,0)]
+
+
+func start_eating_burger() -> void:
+	if is_ragdoll or is_leaving or _burger_props == null:return
+	_play_eating_voice_once()
+	_burger_eat_phase = "eat"
+	_anim_state = ""
+	if _anim_player: _anim_player.stop()
+	_play_anim("burger:" + BurgerMotion.FAST_EAT)
+	if _anim_player: _anim_player.speed_scale = 2.4
+
+
+func burger_animation_duration(eating: bool) -> float:
+	return BurgerMotion.LIBRARY.get_animation(BurgerMotion.FAST_EAT if eating else BurgerMotion.FAST_TAKE).length
+
+
+func begin_catch_burger(authored_grab: bool = false) -> void:
 	## Hands up + lean in while the burger flies.
 	if is_leaving or is_ragdoll:
 		return
+	_nom_played = false
 	_eating = true
+	if authored_grab and _burger_props != null:
+		_clear_antsy_wait_pose()
+		_cancel_order_announce()
+		_burger_eat_phase = "grab"
+		_eat_lean_x = 0.0
+		_anim_state = ""
+		_set_mood("cheer")
+		_play_anim("burger:" + BurgerMotion.FAST_TAKE)
+		_update_eat_pose()
+		return
+	_burger_eat_phase = ""
 	_eat_lean_x = -14.0
 	_set_mood("cheer")
 	if _anim_player:
@@ -3664,7 +3741,9 @@ func chomp_burger() -> void:
 	## Sharp bite at contact — squash, hop, then settle while chewing.
 	if not is_instance_valid(self):
 		return
+	_play_eating_voice_once()
 	_set_mood("cheer")
+	if _burger_eat_phase != "":return
 	_apply_eat_hands_pose(1.0)
 	if _body == null:
 		return
@@ -3679,8 +3758,12 @@ func chomp_burger() -> void:
 
 
 func finish_catch_burger() -> void:
+	_burger_eat_phase = ""
+	_anim_state = ""
+	if _burger_props != null:_burger_props.visible = false
 	_eating = false
 	_eat_lean_x = 0.0
+	if is_ragdoll:return
 	_reset_skeleton_pose()
 	if _body and is_instance_valid(_body):
 		var tw := create_tween()
@@ -3790,6 +3873,8 @@ func leave_mad() -> void:
 	if bool(get_meta("burger_in_flight", false)):
 		set_meta("burger_pending_departure", Callable(self, "leave_mad").bind())
 		return
+	_angry_departure = true
+	_departure_clip = "Point_Finger_Yell"
 	_set_mood("mad")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -4671,7 +4756,7 @@ func _start_leave_dance() -> void:
 	dur = minf(dur, LEAVE_DANCE_MAX_SEC)
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_dance_wawa"):
-		audio.play_customer_dance_wawa(dur)
+		audio.play_customer_dance_wawa(dur, get_customer_voice())
 	get_tree().create_timer(dur).timeout.connect(func() -> void:
 		if not is_instance_valid(self):
 			return
@@ -4722,3 +4807,15 @@ func complete_serve_meh(payout: int) -> void:
 		return
 	served.emit(self, payout)
 	leave_meh()
+
+
+func _setup_customer_life(model: Node) -> void:
+	var previous := get_node_or_null("CustomerLife")
+	if previous != null:
+		remove_child(previous)
+		previous.queue_free()
+	var life = load("res://scripts/customer_life.gd").new()
+	life.name = "CustomerLife"
+	life.customer = self
+	life.model = model
+	add_child(life)

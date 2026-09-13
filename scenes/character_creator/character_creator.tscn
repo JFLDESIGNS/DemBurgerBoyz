@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://scripts/character_creator.gd" id="1_controller"]
 [ext_resource type="PackedScene" path="res://scenes/character_creator/modular_character_base.tscn" id="2_character"]
@@ -20,14 +20,6 @@ ambient_light_color = Color(0.65, 0.72, 0.92, 1)
 ambient_light_energy = 0.72
 reflected_light_source = 2
 tonemap_mode = 2
-
-[sub_resource type="StandardMaterial3D" id="GroundMaterial"]
-albedo_color = Color(0.12, 0.135, 0.17, 1)
-roughness = 0.9
-
-[sub_resource type="PlaneMesh" id="GroundMesh"]
-material = SubResource("GroundMaterial")
-size = Vector2(9, 9)
 
 [sub_resource type="StyleBoxFlat" id="SidebarStyle"]
 bg_color = Color(0.055, 0.065, 0.095, 0.96)
@@ -64,9 +56,6 @@ position = Vector3(-2.1, 2.4, 2.2)
 light_color = Color(0.47, 0.67, 1, 1)
 light_energy = 5.0
 omni_range = 6.0
-
-[node name="Ground" type="MeshInstance3D" parent="World"]
-mesh = SubResource("GroundMesh")
 
 [node name="Character" parent="World" instance=ExtResource("2_character")]
 defer_initial_appearance = true

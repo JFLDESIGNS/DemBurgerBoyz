@@ -1,62 +1,58 @@
-## Starts title jazz halfway through the Godot boot splash, fading volume in over 1.5s.
+## One persistent music player across the intro, menu, and gameplay loading screen.
 extends Node
 
 const MUSIC_PATH := "res://assets/music/burger_time.mp3"
-## Matches project boot_splash/minimum_display_time (4500 ms) — fire at halfway.
-const START_AFTER_SEC := 2.25
-const FADE_SEC := 1.5
+const LOADING_MUSIC_PATH := "res://sounds/considerburger.mp3"
 const TARGET_DB := -9.5
-
-var player: AudioStreamPlayer = null
-var _fade_tw: Tween = null
-var _started: bool = false
-
+var player: AudioStreamPlayer
+var _fade_tw: Tween
+var mode := ""
 
 func _ready() -> void:
-	get_tree().create_timer(START_AFTER_SEC).timeout.connect(_begin_fade_in)
+	process_mode = Node.PROCESS_MODE_ALWAYS
 
-
-func _begin_fade_in() -> void:
-	if _started:
+func _play_track(path: String, next_mode: String) -> void:
+	if is_instance_valid(player) and mode == next_mode and player.playing:
 		return
-	_started = true
-	var stream := load(MUSIC_PATH)
-	if stream == null:
-		push_warning("Intro boot jazz missing: %s" % MUSIC_PATH)
-		return
-	if stream is AudioStreamMP3:
-		(stream as AudioStreamMP3).loop = true
-	player = AudioStreamPlayer.new()
-	player.name = "IntroBootJazz"
-	player.bus = "Master"
-	player.stream = stream
-	player.volume_db = -80.0
-	add_child(player)
-	player.play()
-	if _fade_tw != null and is_instance_valid(_fade_tw):
+	if is_instance_valid(_fade_tw):
 		_fade_tw.kill()
-	_fade_tw = create_tween()
-	_fade_tw.tween_property(player, "volume_db", TARGET_DB, FADE_SEC)\
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-
+	if not is_instance_valid(player):
+		player = AudioStreamPlayer.new()
+		player.name = "IntroAndLoadingMusic"
+		player.bus = "Master"
+		add_child(player)
+	var stream := load(path) as AudioStream
+	if stream == null:
+		push_warning("Music missing: " + path)
+		return
+	stream = stream.duplicate() as AudioStream
+	if stream is AudioStreamMP3: stream.loop = true
+	elif stream is AudioStreamOggVorbis: stream.loop = true
+	player.stop()
+	player.stream = stream
+	mode = next_mode
+	player.volume_db = TARGET_DB if next_mode == "loading" else -32.0
+	player.play()
+	_fade_tw = null
+	if next_mode != "loading":
+		_fade_tw = create_tween()
+		_fade_tw.tween_property(player, "volume_db", TARGET_DB, 0.45)
 
 func ensure_playing_on_title() -> void:
-	## Main scene title screen — keep jazz going if splash already started it.
-	if player != null and is_instance_valid(player):
-		if not player.playing:
-			player.play()
-		return
-	if not _started:
-		_begin_fade_in()
+	_play_track(MUSIC_PATH, "title")
 
+func play_loading() -> void:
+	_play_track(LOADING_MUSIC_PATH, "loading")
+
+func stop_loading() -> void:
+	if mode == "loading": stop()
 
 func stop() -> void:
-	if _fade_tw != null and is_instance_valid(_fade_tw):
+	if is_instance_valid(_fade_tw):
 		_fade_tw.kill()
 		_fade_tw = null
-	if player != null and is_instance_valid(player) and player.playing:
-		player.stop()
-
+	if is_instance_valid(player): player.stop()
+	mode = ""
 
 func is_playing() -> bool:
-	return player != null and is_instance_valid(player) and player.playing
+	return is_instance_valid(player) and player.playing
