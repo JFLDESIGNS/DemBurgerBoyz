@@ -23,6 +23,9 @@ var old_cat_visible := false
 var old_cat_process := true
 var body_rest := Vector3.ZERO
 var finished := false
+var drive_audio: AudioStreamPlayer3D
+var horn_audio: AudioStreamPlayer3D
+var fill_light: OmniLight3D
 
 func _ready() -> void:
 	name = "MailDeliveryCutscene"
@@ -49,7 +52,7 @@ func _ready() -> void:
 			var eye_material := ShaderMaterial.new()
 			eye_material.shader = preload("res://shaders/cat_eyes.gdshader")
 			eye.material_override = eye_material
-	cat_visual.scale = Vector3.ONE * 0.72
+	cat_visual.scale = Vector3.ONE * 0.90
 	animation = cat_visual.find_child("AnimationPlayer", true, false)
 	parcel = cat_visual.find_child("Delivery_Box_Rig", true, false)
 	for clip in ["01_Idle", "02_Mail_Walk"]:
@@ -61,6 +64,26 @@ func _ready() -> void:
 		game.window_cat.hide()
 	truck.hide()
 	courier.hide()
+	drive_audio = AudioStreamPlayer3D.new()
+	drive_audio.stream = preload("res://sounds/vehicles/car_pass_by_left_to_right.ogg")
+	drive_audio.volume_db = -9.0
+	drive_audio.max_distance = 35.0
+	truck.add_child(drive_audio)
+	horn_audio = AudioStreamPlayer3D.new()
+	horn_audio.stream = preload("res://sounds/vehicles/car_horn_double_beep.wav")
+	horn_audio.volume_db = -13.0
+	horn_audio.max_distance = 35.0
+	truck.add_child(horn_audio)
+	fill_light = OmniLight3D.new()
+	fill_light.light_color = Color(1.0, 0.94, 0.83)
+	fill_light.light_energy = 2.0
+	fill_light.omni_range = 8.0
+	fill_light.shadow_enabled = false
+	fill_light.light_cull_mask = 1 << 18
+	add_child(fill_light)
+	for visual_root in [truck, courier]:
+		for mesh in visual_root.find_children("*", "GeometryInstance3D", true, false):
+			mesh.layers |= 1 << 18
 	set_process(false) # Advanced by the game so pause and shift teardown stay synchronized.
 
 func enqueue(id: String, pack: int, kind: String) -> void:
@@ -73,6 +96,10 @@ func clip(name_: String) -> void:
 func set_phase(value: String) -> void:
 	phase = value
 	elapsed = 0.0
+	if value in ["arrive", "depart"] and is_instance_valid(drive_audio): drive_audio.play()
+	if value == "hop_out":
+		drive_audio.stop()
+		horn_audio.play()
 
 func delivery_origin_global() -> Vector3:
 	return parcel.to_global(Vector3(0, 0.13, 0)) if parcel else courier.global_position + Vector3(0, 0.6, 0)
@@ -85,6 +112,8 @@ func advance(delta: float) -> void:
 		# Let any car already on the road leave naturally before entering its lane.
 		if game.street_car_active: return
 		truck.show(); courier.show(); set_phase("arrive")
+	fill_light.global_position = truck.global_position + Vector3(0, 3.3, -2.2)
+	fill_light.visible = truck.visible
 	var driving := phase in ["arrive", "depart"]
 	if body:
 		body.position = body_rest + Vector3(0, sin(clock * 11.0) * (0.023 if driving else 0.005), 0)
@@ -106,14 +135,14 @@ func advance(delta: float) -> void:
 				set_phase("hop_out")
 		"hop_out":
 			var u := clampf(elapsed / 0.85, 0, 1)
-			cat_visual.scale = Vector3.ONE * lerpf(0.72, 1.0, u)
+			cat_visual.scale = Vector3.ONE * lerpf(0.90, 1.25, u)
 			courier.global_position = seat.lerp(doorstep, u) + Vector3(0, sin(u*PI)*0.48, 0)
 			courier.rotation.y = PI
 			clip("04_Happy_Hop")
 			if body: body.position.y += sin(elapsed * 16) * exp(-elapsed*3) * 0.055
 			if u >= 1: set_phase("walk")
 		"walk", "return":
-			cat_visual.scale = Vector3.ONE
+			cat_visual.scale = Vector3.ONE * 1.25
 			var u := clampf(elapsed / 2.6, 0, 1)
 			var from := doorstep if phase == "walk" else handoff
 			var to := handoff if phase == "walk" else doorstep
@@ -137,7 +166,7 @@ func advance(delta: float) -> void:
 			if elapsed >= 4.8 and game.supply_delivery_fx.is_empty(): set_phase("return")
 		"hop_in":
 			var u := clampf(elapsed / 0.85, 0, 1)
-			cat_visual.scale = Vector3.ONE * lerpf(1.0, 0.72, u)
+			cat_visual.scale = Vector3.ONE * lerpf(1.25, 0.90, u)
 			courier.global_position = doorstep.lerp(seat, u) + Vector3(0, sin(u*PI)*0.45, 0)
 			clip("04_Happy_Hop")
 			if u >= 1: set_phase("depart")

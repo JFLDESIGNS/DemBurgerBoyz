@@ -1444,6 +1444,7 @@ var owned_machines: Dictionary = {
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
 var mail_delivery_truck: Node3D
+var pending_machine_deliveries: Dictionary = {}
 var _supply_order_seq: int = 0
 var soda_spout_marker: Marker3D = null
 var ice_spout_marker: Marker3D = null
@@ -48414,6 +48415,8 @@ func _clear_supply_delivery_fx() -> void:
 		if mesh != null and is_instance_valid(mesh):
 			mesh.queue_free()
 	supply_delivery_fx.clear()
+	pending_machine_deliveries.clear()
+	_apply_machine_unlock_visibility()
 
 
 func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
@@ -48429,6 +48432,9 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 
 
 func _throw_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
+	if kind == "machine":
+		_throw_cat_machine_delivery(id)
+		return
 	if id == "":
 		return
 	## Ask the window cat to peek, then toss packages toward the kitchen.
@@ -48519,6 +48525,17 @@ func _update_supply_delivery_fx(delta: float) -> void:
 		var mesh = item.get("mesh")
 		if mesh == null or not is_instance_valid(mesh):
 			supply_delivery_fx.remove_at(i)
+			continue
+		if str(item.get("kind", "")) == "machine":
+			if mesh.advance(delta):
+				pending_machine_deliveries.erase(str(item["id"]))
+				_apply_machine_unlock_visibility()
+				_flash("%s delivered!" % _shop_item_label(str(item["id"])), Color("A5D6A7"))
+				call_deferred("_refresh_phone_ui")
+				mesh.queue_free()
+				supply_delivery_fx.remove_at(i)
+				continue
+			i += 1
 			continue
 		if float(item.get("cat_launch_delay", 0.0)) > 0.0:
 			item["cat_launch_delay"] = maxf(0.0, float(item["cat_launch_delay"]) - delta)
@@ -50807,15 +50824,15 @@ func _shop_item_block_reason(_id: String) -> String:
 
 
 func _owns_soda_machine() -> bool:
-	return bool(owned_machines.get(SHOP_SODA_MACHINE, false))
+	return bool(owned_machines.get(SHOP_SODA_MACHINE, false)) and not pending_machine_deliveries.has(SHOP_SODA_MACHINE)
 
 
 func _owns_icecream_machine() -> bool:
-	return bool(owned_machines.get(SHOP_ICECREAM_MACHINE, false))
+	return bool(owned_machines.get(SHOP_ICECREAM_MACHINE, false)) and not pending_machine_deliveries.has(SHOP_ICECREAM_MACHINE)
 
 
 func _owns_fryer_machine() -> bool:
-	return bool(owned_machines.get(SHOP_FRYER_MACHINE, false))
+	return bool(owned_machines.get(SHOP_FRYER_MACHINE, false)) and not pending_machine_deliveries.has(SHOP_FRYER_MACHINE)
 
 
 func _machine_ids() -> Array[String]:
@@ -51075,7 +51092,7 @@ func _try_machine_wrench_click(screen_pos: Vector2) -> bool:
 
 
 func _owns_grill_roomba() -> bool:
-	return bool(owned_machines.get(SHOP_GRILL_ROOMBA, false))
+	return bool(owned_machines.get(SHOP_GRILL_ROOMBA, false)) and not pending_machine_deliveries.has(SHOP_GRILL_ROOMBA)
 
 
 func _owns_fridge_upgrade() -> bool:
@@ -51162,7 +51179,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	title.add_theme_color_override("font_color", Color("F2F4F5"))
 	v.add_child(title)
 	var subtitle := Label.new()
-	subtitle.text = "Top equipment · delivered instantly"
+	subtitle.text = "Top equipment · delivered by your mail cat"
 	UiFontsScript.apply_label(subtitle, false, 11)
 	subtitle.add_theme_color_override("font_color", Color("AAB4BE"))
 	v.add_child(subtitle)
@@ -51343,12 +51360,17 @@ func _buy_shop_item_local(id: String) -> void:
 		return
 	money -= cost
 	owned_machines[id] = true
+	var cat_delivery := id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA]
+	if cat_delivery:
+		_start_machine_delivery(id)
+		if mp_enabled and NetManager.is_host():
+			mp_start_machine_delivery.rpc(id)
 	_apply_machine_unlock_visibility()
 	_update_hud()
 	## Defer — rebuilding the phone frees the Buy button mid-pressed and hard-crashes.
 	call_deferred("_refresh_phone_ui")
 	_refresh_ingredient_stock_bars()
-	_flash("%s installed!" % _shop_item_label(id), Color("A5D6A7"))
+	_flash(("%s ordered - cat is on the way!" if cat_delivery else "%s installed!") % _shop_item_label(id), Color("A5D6A7"))
 	_sfx_click()
 
 
@@ -76926,3 +76948,33 @@ func _supply_storage_location(id: String, kind: String) -> Vector3:
 	# Stock without a 3D bin lives in the fridge on the prep side.
 	if is_instance_valid(patty_fridge_root): return patty_fridge_root.global_position
 	return _supply_delivery_landing()
+
+
+func _machine_delivery_root(id: String) -> Node3D:
+	match id:
+		SHOP_SODA_MACHINE: return soda_root
+		SHOP_ICECREAM_MACHINE: return icecream_root
+		SHOP_FRYER_MACHINE: return fryer_root
+		SHOP_GRILL_ROOMBA: return grill_roomba_root
+	return null
+
+func _start_machine_delivery(id: String) -> void:
+	if pending_machine_deliveries.has(id): return
+	pending_machine_deliveries[id] = true
+	_apply_machine_unlock_visibility()
+	_begin_cat_supply_delivery(id, 1, "machine")
+
+@rpc("authority", "call_remote", "reliable")
+func mp_start_machine_delivery(id: String) -> void:
+	_start_machine_delivery(id)
+
+func _throw_cat_machine_delivery(id: String) -> void:
+	var destination := _machine_delivery_root(id)
+	if not is_instance_valid(destination):
+		pending_machine_deliveries.erase(id)
+		_apply_machine_unlock_visibility()
+		return
+	var flight = preload("res://scripts/machine_delivery_flight.gd").new()
+	world.add_child(flight)
+	flight.setup(self, destination)
+	supply_delivery_fx.append({"mesh": flight, "kind": "machine", "id": id})
