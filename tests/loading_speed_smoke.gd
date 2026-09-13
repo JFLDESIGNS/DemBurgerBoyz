@@ -24,4 +24,7 @@ func run() -> void:
 	assert(game._loading_video.looping)
 	game._hide_gameplay_loading_screen()
 	assert(not game.game_audio.cat_sounds_muted)
+	game._loading_video.video.stream = null
+	game.queue_free()
+	for i in 8: await process_frame
 	print("LOADING_SPEED_SMOKE_OK");quit()

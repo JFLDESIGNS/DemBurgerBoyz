@@ -21,3 +21,7 @@ commercial projects without permission or required attribution.
 - Original Freesound source: https://freesound.org/people/15HPanska_Ruttner_Jan/sounds/461679/
 - License: CC0 1.0 — https://creativecommons.org/publicdomain/zero/1.0/
 - Description: Two short vehicle-horn beeps.
+
+## Mail truck tire screech
+`mail_truck_tire_screech.mp3`: Screeching Tires #1 by Dorian CLAIR, BigSoundBank, sound 2368. CC0 (public domain). Source: https://bigsoundbank.com/crissement-de-pneus-1-s2368.html
+Downloaded audio: https://bigsoundbank.com/UPLOAD/mp3/2368.mp3

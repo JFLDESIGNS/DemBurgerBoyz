@@ -18,7 +18,8 @@ var ground := 0.0
 var stop := Vector3.ZERO
 var seat := Vector3.ZERO
 var doorstep := Vector3.ZERO
-var handoff := Vector3(1.38, 0.741, 1.76)
+var handoff := Vector3(1.38, 0.741, 2.0648)
+var courier_base_scale := Vector3.ONE
 var old_cat_visible := false
 var old_cat_process := true
 var body_rest := Vector3.ZERO
@@ -26,6 +27,11 @@ var finished := false
 var drive_audio: AudioStreamPlayer3D
 var horn_audio: AudioStreamPlayer3D
 var fill_light: OmniLight3D
+var skid_audio: AudioStreamPlayer3D
+var meow_audio: AudioStreamPlayer3D
+var skid_started := false
+var meow_count := 0
+const PARK_YAW := PI * 0.67
 
 func _ready() -> void:
 	name = "MailDeliveryCutscene"
@@ -52,7 +58,8 @@ func _ready() -> void:
 			var eye_material := ShaderMaterial.new()
 			eye_material.shader = preload("res://shaders/cat_eyes.gdshader")
 			eye.material_override = eye_material
-	cat_visual.scale = Vector3.ONE * 0.90
+	_sync_courier_shape()
+	cat_visual.scale = courier_base_scale * 0.90
 	animation = cat_visual.find_child("AnimationPlayer", true, false)
 	parcel = cat_visual.find_child("Delivery_Box_Rig", true, false)
 	for clip in ["01_Idle", "02_Mail_Walk"]:
@@ -74,6 +81,18 @@ func _ready() -> void:
 	horn_audio.volume_db = -13.0
 	horn_audio.max_distance = 35.0
 	truck.add_child(horn_audio)
+	skid_audio = AudioStreamPlayer3D.new()
+	skid_audio.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
+	skid_audio.volume_db = -9.0
+	skid_audio.unit_size = 5.0
+	skid_audio.max_distance = 30.0
+	truck.add_child(skid_audio)
+	meow_audio = AudioStreamPlayer3D.new()
+	meow_audio.stream = preload("res://sounds/cat_begging_meow.mp3")
+	meow_audio.volume_db = -7.0
+	meow_audio.unit_size = 5.0
+	meow_audio.max_distance = 25.0
+	courier.add_child(meow_audio)
 	fill_light = OmniLight3D.new()
 	fill_light.light_color = Color(1.0, 0.94, 0.83)
 	fill_light.light_energy = 2.0
@@ -97,6 +116,8 @@ func set_phase(value: String) -> void:
 	phase = value
 	elapsed = 0.0
 	if value in ["arrive", "depart"] and is_instance_valid(drive_audio): drive_audio.play()
+	if value == "arrive": skid_started = false
+	if value == "deliver": meow_count = 0
 	if value == "hop_out":
 		drive_audio.stop()
 		horn_audio.play()
@@ -106,6 +127,7 @@ func delivery_origin_global() -> Vector3:
 
 func advance(delta: float) -> void:
 	if finished: return
+	_sync_courier_shape()
 	clock += delta
 	elapsed += delta
 	if phase == "waiting":
@@ -123,11 +145,17 @@ func advance(delta: float) -> void:
 	if parcel: parcel.visible = phase in ["hop_out", "walk", "deliver"]
 	match phase:
 		"arrive":
-			var u := clampf(elapsed / 3.4, 0, 1)
+			var u := clampf(elapsed / 2.6, 0, 1)
 			truck.position = (stop + Vector3(-16, 0, 0)).lerp(stop, 1.0 - pow(1.0-u, 2.0))
+			var turn := smoothstep(0.48, 1.0, u)
+			truck.rotation.y = lerpf(PI * 0.5, PARK_YAW, turn)
+			truck.position.z += sin(turn * PI) * 0.3
+			if u >= 0.48 and not skid_started:
+				skid_started = true
+				skid_audio.play()
 			seat = truck.to_global(Vector3(0.59, 1.13, 0.56))
 			courier.global_position = seat
-			courier.rotation.y = PI * 0.5
+			courier.rotation.y = truck.rotation.y
 			clip("01_Idle")
 			if body: body.rotation.x = sin(u * PI) * 0.025
 			if u >= 1:
@@ -135,14 +163,14 @@ func advance(delta: float) -> void:
 				set_phase("hop_out")
 		"hop_out":
 			var u := clampf(elapsed / 0.85, 0, 1)
-			cat_visual.scale = Vector3.ONE * lerpf(0.90, 1.25, u)
+			cat_visual.scale = courier_base_scale * lerpf(0.90, 1.25, u)
 			courier.global_position = seat.lerp(doorstep, u) + Vector3(0, sin(u*PI)*0.48, 0)
 			courier.rotation.y = PI
 			clip("04_Happy_Hop")
 			if body: body.position.y += sin(elapsed * 16) * exp(-elapsed*3) * 0.055
 			if u >= 1: set_phase("walk")
 		"walk", "return":
-			cat_visual.scale = Vector3.ONE * 1.25
+			cat_visual.scale = courier_base_scale * 1.25
 			var u := clampf(elapsed / 2.6, 0, 1)
 			var from := doorstep if phase == "walk" else handoff
 			var to := handoff if phase == "walk" else doorstep
@@ -160,18 +188,23 @@ func advance(delta: float) -> void:
 		"deliver":
 			courier.rotation.y = PI
 			clip("03_Box_Delivery")
+			if meow_count < 3 and elapsed >= 0.25 + float(meow_count) * 1.5:
+				meow_audio.pitch_scale = 1.0 + float(meow_count) * 0.08
+				meow_audio.play()
+				meow_count += 1
 			if not orders.is_empty():
 				for order in orders: game._throw_cat_supply_delivery(order[0], order[1], order[2])
 				orders.clear(); elapsed = 0
 			if elapsed >= 4.8 and game.supply_delivery_fx.is_empty(): set_phase("return")
 		"hop_in":
 			var u := clampf(elapsed / 0.85, 0, 1)
-			cat_visual.scale = Vector3.ONE * lerpf(1.25, 0.90, u)
+			cat_visual.scale = courier_base_scale * lerpf(1.25, 0.90, u)
 			courier.global_position = doorstep.lerp(seat, u) + Vector3(0, sin(u*PI)*0.45, 0)
 			clip("04_Happy_Hop")
 			if u >= 1: set_phase("depart")
 		"depart":
 			var u := clampf(elapsed / 3.0, 0, 1)
+			truck.rotation.y = lerpf(PARK_YAW, PI * 0.5, smoothstep(0, 0.5, u))
 			truck.position = stop + Vector3(17*u*u, 0, 0)
 			courier.global_position = truck.to_global(Vector3(0.59,1.13,0.56))
 			courier.rotation.y = PI*0.5
@@ -189,3 +222,12 @@ func restore_cat() -> void:
 
 func _exit_tree() -> void:
 	restore_cat()
+
+
+func _sync_courier_shape() -> void:
+	if not is_instance_valid(game.window_cat) or not game.window_cat.has_method("delivery_visual_scale"): return
+	courier_base_scale = game.window_cat.delivery_visual_scale()
+	var giant: float = game.window_cat._giant
+	cat_visual.position.y = -0.335 * (game.window_cat._size_mul() - game.window_cat.DEFAULT_SIZE_MUL)
+	handoff.z = game.window_cat._home_z() + 0.3048 + maxf(0.0, courier_base_scale.z - 1.0) * 0.12
+	handoff.y = game.window_cat._shown_y()

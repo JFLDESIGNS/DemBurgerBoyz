@@ -33,7 +33,7 @@ func run() -> void:
  measuring=true
  await game._run_comprehensive_gameplay_load()
  measuring=false
- expect(int(game.get_meta("loading_first_play_ms", 99999)) <= 7000,"First loading playback must start within seven seconds")
+ expect(int(game.get_meta("loading_first_play_ms", 99999)) < 1500,"Movie must start immediately, before heavy preparation")
  expect(int(game.get_meta("loading_movie_count", 0)) == 1,"Start the movie once; loading must not wait for interludes")
  print("LOADING_SCHEDULE first_play_ms=",game.get_meta("loading_first_play_ms")," movies=",game.get_meta("loading_movie_count")," durations_ms=",game.get_meta("loading_movie_durations_ms"))
  expect(game.get_meta("loading_video_complete", false),"Loading presentation must be marked complete when gameplay is ready")
@@ -72,6 +72,10 @@ func run() -> void:
   root.get_texture().get_image().save_png(output.path_join("restored_cone_mascot.png"))
  samples.sort()
  print("LOADING_FRAMES median_ms=",samples[samples.size()/2]," p95_ms=",samples[int(samples.size()*.95)]," max_ms=",samples[-1])
+ video_samples.sort()
+ if video_samples.size()>5:
+  print("MOVIE_FRAMES p95_ms=",video_samples[int(video_samples.size()*.95)]," max_ms=",video_samples[-1])
+
  print("FULL_LOAD_OK")
  game.queue_free()
  for i in 8: await process_frame

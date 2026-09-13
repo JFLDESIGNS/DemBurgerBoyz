@@ -1445,6 +1445,7 @@ var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
 var mail_delivery_truck: Node3D
 var pending_machine_deliveries: Dictionary = {}
+var _mp_pending_equipment_seen: Array = []
 var _supply_order_seq: int = 0
 var soda_spout_marker: Marker3D = null
 var ice_spout_marker: Marker3D = null
@@ -3897,6 +3898,7 @@ func _run_comprehensive_gameplay_load() -> void:
 	_loading_screen_began_ms = Time.get_ticks_msec()
 	_loading_movie_count = 0
 	set_meta("loading_movie_durations_ms", [])
+	await _play_loading_interlude()
 	## Present the predecoded movie before starting synchronous construction.
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -3908,7 +3910,7 @@ func _run_comprehensive_gameplay_load() -> void:
 	var previous_render_scale := gameplay_viewport.scaling_3d_scale
 	gameplay_viewport.disable_3d = true
 	set_meta("loading_phase", "resources")
-	await _play_loading_interlude()
+	# Keep the movie playing alongside scene creation and shader uploads.
 	await _preload_gameplay_resources()
 	await _loading_batch_checkpoint()
 	set_meta("loading_phase", "food_images")
@@ -3940,14 +3942,14 @@ func _run_comprehensive_gameplay_load() -> void:
 	set_meta("loading_phase", "customers")
 	await _prewarm_customer_construction()
 	await _loading_batch_checkpoint()
-	# Wake the complete kitchen at its real render settings while the movie is
-	# still held, so first-draw uploads cannot interrupt the performance.
+	# Wake the complete kitchen behind the continuing loading movie.
 	set_meta("loading_phase", "final_render")
 	camera.cull_mask = previous_camera_mask
 	gameplay_viewport.scaling_3d_scale = previous_render_scale
 	gameplay_viewport.disable_3d = previous_disable_3d
 	for _frame in 12:
 		await get_tree().process_frame
+	set_meta("loading_preparation_complete", true)
 	set_meta("loading_phase", "ready")
 	set_meta("loading_video_complete", true)
 	gameplay_viewport.disable_3d = previous_disable_3d
@@ -11266,7 +11268,7 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_over
 		return
 	_flash_grill_tap_pad(world_pos)
 	var tap_roll := _spatula_user_roll if roll_override == INF else roll_override
-	if send_mp: _register_grill_dance_tap(world_pos, tap_roll)
+	_register_grill_dance_tap(world_pos, tap_roll)
 	var zone := _grill_zone_at(world_pos)
 	if str(zone.get("id", "")) == "hold":
 		if game_audio.has_method("play_spatula_drum"):
@@ -12794,18 +12796,8 @@ func _setup_world_lighting() -> void:
 	gfx_outside_fill.rotation_degrees = Vector3(-36.0, -155.0, 0.0)
 	world.add_child(gfx_outside_fill)
 
-	## Warm kitchen ceiling fill (inside the truck).
-	gfx_kitchen = OmniLight3D.new()
-	gfx_kitchen.name = "KitchenFill"
-	gfx_kitchen.light_color = Color(1.0, 0.88, 0.72)
-	gfx_kitchen.light_energy = 1.65
-	gfx_kitchen.omni_range = 5.5
-	gfx_kitchen.omni_attenuation = 1.15
-	gfx_kitchen.shadow_enabled = true
-	_style_local_shadows(gfx_kitchen, true)
-	gfx_kitchen.light_size = 0.42
-	gfx_kitchen.position = Vector3(0.0, 2.45, -0.35)
-	world.add_child(gfx_kitchen)
+	# Rear ceiling fill removed: its emitter made a large reflection on the tip jar.
+	gfx_kitchen = null
 
 	## Focused grill work light — warm cook fill; keep specular modest so shadows read.
 	gfx_grill_lamp = SpotLight3D.new()
@@ -13151,10 +13143,6 @@ func _build_profile_window_key(root: Node3D) -> void:
 		Vector3(-20.0, 182.0, 0.0), Color(1.0, 0.88, 0.68),
 		1.25, 4.2, 44.0, true
 	)
-	_make_profile_omni(
-		root, "CeilingBounce", Vector3(0.55, 2.38, -0.42),
-		Color(1.0, 0.93, 0.84), 0.28, 4.2, false
-	)
 
 
 func _build_profile_short_order(root: Node3D) -> void:
@@ -13168,10 +13156,6 @@ func _build_profile_short_order(root: Node3D) -> void:
 		root, "GrillKey", Vector3(GRILL_CENTER_X + 0.08, 2.22, -0.62),
 		Vector3(-62.0, 8.0, 0.0), Color(1.0, 0.94, 0.82),
 		2.05, 2.8, 36.0, true
-	)
-	_make_profile_omni(
-		root, "CabinBounce", Vector3(0.35, 2.18, -0.28),
-		Color(1.0, 0.92, 0.82), 0.22, 3.6, false
 	)
 
 
@@ -13196,10 +13180,6 @@ func _build_profile_feature_rig(root: Node3D) -> void:
 		root, "BuildBoardKey", Vector3(0.92, 2.12, -0.18),
 		Vector3(-58.0, -18.0, 0.0), Color(1.0, 0.91, 0.76),
 		1.35, 2.3, 34.0, true
-	)
-	_make_profile_omni(
-		root, "CabinBounce", Vector3(0.12, 2.32, -0.38),
-		Color(1.0, 0.93, 0.85), 0.18, 3.8, false
 	)
 	_make_profile_omni(
 		root, "CustomerSoft", Vector3(-0.2, 1.85, 1.35),
@@ -48529,6 +48509,7 @@ func _update_supply_delivery_fx(delta: float) -> void:
 		if str(item.get("kind", "")) == "machine":
 			if mesh.advance(delta):
 				pending_machine_deliveries.erase(str(item["id"]))
+				if mp_enabled and NetManager.is_host(): _mp_broadcast_economy()
 				_apply_machine_unlock_visibility()
 				_flash("%s delivered!" % _shop_item_label(str(item["id"])), Color("A5D6A7"))
 				call_deferred("_refresh_phone_ui")
@@ -74939,7 +74920,8 @@ func _mp_emit_economy(peer_id: int = 0) -> void:
 		tank_vals,
 		shop_ids,
 		shop_vals,
-		fryer_ready_servings
+		fryer_ready_servings,
+		pending_machine_deliveries.keys()
 	], peer_id)
 
 
@@ -74960,7 +74942,8 @@ func mp_sync_economy(
 	tank_vals: Array = [],
 	shop_ids: Array = [],
 	shop_vals: Array = [],
-	fry_servings: int = -1
+	fry_servings: int = -1,
+	pending_equipment: Array = []
 ) -> void:
 	## Guest applies host world economy as absolute truth.
 	if NetManager.is_host():
@@ -74994,6 +74977,10 @@ func mp_sync_economy(
 		fryer_ready_servings = maxi(0, fry_servings)
 		if before_fries != fryer_ready_servings:
 			_refresh_ready_fries_visuals()
+	for machine_id in pending_equipment:
+		if not _mp_pending_equipment_seen.has(machine_id) and str(machine_id) in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA]:
+			_start_machine_delivery(str(machine_id))
+	_mp_pending_equipment_seen = pending_equipment.duplicate()
 	if before_machines != owned_machines:
 		_apply_machine_unlock_visibility()
 	_update_hud()

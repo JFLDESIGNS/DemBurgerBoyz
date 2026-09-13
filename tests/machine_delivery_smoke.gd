@@ -6,6 +6,8 @@ func run() -> void:
 	game.set_script(load(get_script().resource_path.get_base_dir().path_join("interaction_delivery_fixture.gd")))
 	root.add_child(game);current_scene=game;game.playing=true;game.money=10000
 	game.window_cat=load("res://scripts/window_cat.gd").new();game.world.add_child(game.window_cat)
+	game.window_cat._fat = 0.8
+	game.window_cat._giant = 0.25
 	for id in [game.SHOP_FRYER_MACHINE,game.SHOP_SODA_MACHINE]:
 		var target:=Node3D.new();game.world.add_child(target);target.position=Vector3(-1,0.7,-0.2)
 		var shape:=MeshInstance3D.new();shape.mesh=BoxMesh.new();target.add_child(shape)
@@ -16,6 +18,8 @@ func run() -> void:
 		game._buy_shop_item_local(id)
 		assert(game.pending_machine_deliveries.has(id) and not target.visible)
 		assert(game.mail_delivery_truck!=null)
+		assert(game.mail_delivery_truck.courier_base_scale.is_equal_approx(game.window_cat.delivery_visual_scale()))
+		assert(game.mail_delivery_truck.handoff.z >= game.window_cat._home_z()+0.3047)
 		game._buy_shop_item_local(id)
 		assert(is_equal_approx(game.money,before-game._shop_item_cost(id)),"No duplicate charge")
 		var saw_flight:=false

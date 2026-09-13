@@ -35,3 +35,5 @@ mp_server/package-lock.json
 !tools/run_multiplayer_hitch_audit.py
 !tools/run_multiplayer_concurrent.py
 !tools/multiplayer_network_proxy.cjs
+!tools/build_compact_release.py
+!tools/deduplicate_embedded_pack.py

@@ -10,9 +10,9 @@ const HOME_X := 1.38
 const TUTORIAL_COACH_X := 1.85
 const HOME_Z := 1.76
 ## Under the sill when hidden; peek high enough to clear the ledge.
-## Dropped another 6″ from the prior peek heights.
 const HIDDEN_Y := 0.141
-const SHOWN_Y := 0.741
+## Raise the default counter peek by three inches so the eyes clear the fryer.
+const SHOWN_Y := 0.8172
 const MESH_SCALE := 0.833333333 ## New asset already contains the old 4.02x modeling scale.
 ## Drop root Y only when overall (giant) scale grows — width chonk stays planted.
 ## Small nudge only — large drops buried him as he grew.
@@ -1054,3 +1054,9 @@ func reset_shift(persist_weight: bool = true) -> void:
 	if _hearts != null and is_instance_valid(_hearts):
 		_hearts.emitting = false
 	_apply_visual_scale()
+
+
+func delivery_visual_scale() -> Vector3:
+	# Persistent feeding proportions shared with the courier; exclude temporary pet squash.
+	var width := 1.0 + _fat
+	return Vector3(width, 1.0 + _fat * 0.08, lerpf(1.0, width, 0.7)) * MESH_SCALE * _size_mul() * scale.abs()
