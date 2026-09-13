@@ -3450,6 +3450,7 @@ const LOCATION_CFG_PATH := "user://truck_location.cfg"
 var current_location_id: String = TruckLocationsScript.DEFAULT_ID
 var _location_map_layer: CanvasLayer = null
 var _location_map_ui: Control = null
+var _location_relocate_busy: bool = false
 var _pcb_puzzle_layer: CanvasLayer = null
 var _pcb_puzzle_ui: Control = null
 var _pcb_repair_machine: String = ""
@@ -5522,7 +5523,7 @@ func _process_gameplay(delta: float) -> void:
 	## Clock hit zero: no new customers, but finish everyone already waiting.
 	var shift_closing := day_time <= 0.0
 	## Closed sign only blocks walk-ins — kitchen / day clock keep running.
-	if not service_window_closed and not tutorial_mode:
+	if not service_window_closed and not tutorial_mode and not _location_relocate_busy:
 		# _update_opening_terror_ambush(delta)
 		## In co-op, only the host spawns customers (then replicates).
 		if not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
@@ -27047,6 +27048,12 @@ func _load_customer_review_card_settings() -> void:
 		customer_review_settings["position_x"] = -maxf(absf(_customer_review_value("position_x")), 1.35)
 		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "position_x", customer_review_settings["position_x"])
 		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "camera_right_side_v6", true)
+		cfg.save(GFX_CFG_PATH)
+	## Slide the end-of-serve review card ~300px camera-left.
+	if not cfg.has_section_key(CUSTOMER_REVIEW_CFG_SECTION, "camera_left_300px_v7"):
+		customer_review_settings["screen_x_px"] = -300.0
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "screen_x_px", customer_review_settings["screen_x_px"])
+		cfg.set_value(CUSTOMER_REVIEW_CFG_SECTION, "camera_left_300px_v7", true)
 		cfg.save(GFX_CFG_PATH)
 
 
@@ -55829,6 +55836,7 @@ func _build_options_menu() -> void:
 	hidden_review_box.add_child(review_help)
 	_hidden_add_section(hidden_review_box, "PLACEMENT + OVERALL SCALE")
 	_hidden_add_customer_review_slider(hidden_review_box, "position_x", "Left / Right", 0.01)
+	_hidden_add_customer_review_slider(hidden_review_box, "screen_x_px", "Screen Left / Right (px)", 1.0)
 	_hidden_add_customer_review_slider(hidden_review_box, "position_y", "Height", 0.01)
 	_hidden_add_customer_review_slider(hidden_review_box, "position_z", "Whole Card Depth", 0.01)
 	_hidden_add_customer_review_slider(hidden_review_box, "scale", "Overall Scale", 0.01)
@@ -60669,7 +60677,7 @@ func _update_challenge(delta: float) -> void:
 		if _waiting_customer_count() <= 0:
 			_show_challenge_offer()
 		return
-	if service_window_closed or _bts_day_intro_active:
+	if service_window_closed or _bts_day_intro_active or _location_relocate_busy:
 		return
 	if day_time <= challenge_time_small:
 		return
@@ -65129,10 +65137,11 @@ func _toggle_service_window() -> void:
 
 
 func _close_service_window() -> void:
-	## Flip to closed — stop new walk-ins only. Cooking / clock keep going.
+	## Flip to closed — stop new walk-ins and send the current line away.
 	service_window_closed = true
 	_sync_open_closed_sign(true)
-	_flash("Closed — no new customers", Color("FFAB91"))
+	_dismiss_line_customers()
+	_flash("Closed — customers heading out", Color("FFAB91"))
 
 
 func _open_service_window() -> void:
@@ -70706,10 +70715,85 @@ func _open_location_map() -> void:
 
 
 func _on_location_confirmed(location_id: String) -> void:
-	if mp_enabled and not _mp_applying:
-		mp_set_location.rpc(location_id)
+	if str(location_id) == current_location_id:
+		_close_location_map_ui()
 		return
+	if mp_enabled and not _mp_applying:
+		mp_relocate_truck.rpc(location_id)
+		return
+	_begin_relocate_sequence(location_id)
+
+
+func _close_location_map_ui() -> void:
+	if _location_map_ui != null and is_instance_valid(_location_map_ui) and _location_map_ui.has_method("close"):
+		_location_map_ui.close()
+	if _location_map_layer != null:
+		_location_map_layer.visible = false
+
+
+func _dismiss_line_customers(because_closed: bool = true) -> void:
+	for customer in customers.duplicate():
+		if customer == null or not is_instance_valid(customer):
+			continue
+		if bool(customer.get("is_ragdoll")):
+			_on_customer_left(customer, false)
+			continue
+		if not bool(customer.get("is_leaving")):
+			if because_closed and customer.has_method("leave_closed"):
+				customer.leave_closed()
+			elif customer.has_method("leave_meh"):
+				customer.leave_meh()
+		_on_customer_left(customer, false)
+
+
+func _reset_kitchen_for_relocate() -> void:
+	_clear_all_patty()
+	_clear_spatula()
+	_clear_warmer()
+	_cancel_cheese_hold_silent()
+	_cancel_shaker_hold_silent()
+	_reset_oil_bottle()
+	_reset_condiment_bottles()
+	_clear_all_stations()
+	_reset_icecream_cone_to_home()
+	_reset_fryer_state()
+	_seed_cutting_board_buns()
+	_reset_grill_roomba()
+	for i in GRILL_SLOTS:
+		_set_grill_power(i, false)
+	_set_grill_on(false)
+	_refresh_all_stations()
+	_refresh_spatula_ui()
+	if playing and not tutorial_mode:
+		spawn_timer = _first_customer_delay()
+
+
+func _begin_relocate_sequence(location_id: String) -> void:
+	if _location_relocate_busy:
+		return
+	_relocate_sequence(location_id)
+
+
+func _relocate_sequence(location_id: String) -> void:
+	_location_relocate_busy = true
+	_close_location_map_ui()
+	var had_line := false
+	for customer in customers:
+		if customer != null and is_instance_valid(customer):
+			had_line = true
+			break
+	if had_line:
+		_flash("Moving the truck — wrapping up...", Color("FFCC80"))
+		_dismiss_line_customers(false)
+		var tree := get_tree()
+		if tree != null:
+			await tree.create_timer(1.7).timeout
+	if not is_inside_tree():
+		_location_relocate_busy = false
+		return
+	_reset_kitchen_for_relocate()
 	_apply_location_local(location_id)
+	_location_relocate_busy = false
 
 
 func _apply_location_local(location_id: String) -> void:
@@ -76020,6 +76104,13 @@ func mp_set_location(location_id: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
+func mp_relocate_truck(location_id: String) -> void:
+	_mp_applying = true
+	_begin_relocate_sequence(location_id)
+	_mp_applying = false
+
+
+@rpc("any_peer", "call_local", "reliable")
 func mp_grill_song(song_idx: int) -> void:
 	_mp_applying = true
 	_start_grill_song_local(song_idx)
@@ -76261,7 +76352,7 @@ func _mp_update_proxies() -> void:
 
 @rpc("authority", "call_remote", "reliable", 0)
 func mp_bootstrap_step(method: String, args: Array) -> void:
-	if method in ["mp_drag_claimed", "mp_background_person_start", "mp_bootstrap_meta", "mp_bts_lightstick_state", "mp_cup_melt_state", "mp_cup_park", "mp_cup_steel", "mp_icecream_melt_state", "mp_icecream_steel", "mp_residue_amt", "mp_residue_leave", "mp_set_location", "mp_soda_flavor", "mp_soda_slick_state", "mp_spawn_customer", "mp_spawn_cut_collector", "mp_spawn_patty", "mp_state_delta", "mp_sync_station", "mp_toggle_grill", "mp_ttt_state"]:
+	if method in ["mp_drag_claimed", "mp_background_person_start", "mp_bootstrap_meta", "mp_bts_lightstick_state", "mp_cup_melt_state", "mp_cup_park", "mp_cup_steel", "mp_icecream_melt_state", "mp_icecream_steel", "mp_residue_amt", "mp_residue_leave", "mp_relocate_truck", "mp_set_location", "mp_soda_flavor", "mp_soda_slick_state", "mp_spawn_customer", "mp_spawn_cut_collector", "mp_spawn_patty", "mp_state_delta", "mp_sync_station", "mp_toggle_grill", "mp_ttt_state"]:
 		callv(method, args)
 
 func _mp_bootstrap_add(peer_id: int, method: String, args: Array) -> void:

@@ -155,6 +155,8 @@ const REVIEW_CARD_DEFAULTS := {
 	"position_x": -1.35,
 	"position_y": BAR_Y + 0.44,
 	"position_z": 0.0,
+	## Negative = camera-left in the service-window view.
+	"screen_x_px": -300.0,
 	"scale": 1.10,
 	"rise": 0.34,
 	"width": 1.70,
@@ -178,6 +180,7 @@ const REVIEW_CARD_RANGES := {
 	"position_x": Vector2(-3.0, 3.0),
 	"position_y": Vector2(0.2, 3.2),
 	"position_z": Vector2(-1.5, 1.5),
+	"screen_x_px": Vector2(-900.0, 900.0),
 	"scale": Vector2(0.25, 3.0),
 	"rise": Vector2(-1.0, 1.5),
 	"width": Vector2(0.35, 4.0),
@@ -2731,11 +2734,19 @@ func _apply_review_card_layout() -> void:
 	## character-width guess that fails on wide review copy.
 	var content_size := _review_card_content_size()
 	_review_card_root.top_level = true
-	_review_card_root.global_position = global_position + Vector3(
+	var card_pos := global_position + Vector3(
 		_review_card_value("position_x"),
 		_review_card_value("position_y"),
 		_review_card_value("position_z")
 	)
+	var screen_x := _review_card_value("screen_x_px")
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if cam != null and absf(screen_x) > 0.5 and not cam.is_position_behind(card_pos):
+		var sp := cam.unproject_position(card_pos)
+		var depth := cam.global_position.distance_to(card_pos)
+		var target := sp + Vector2(screen_x, 0.0)
+		card_pos = cam.project_ray_origin(target) + cam.project_ray_normal(target) * depth
+	_review_card_root.global_position = card_pos
 	_review_card_root.scale = Vector3.ONE * _review_card_value("scale")
 	if _review_box != null:
 		_review_box.position = Vector3(0.0, 0.0, _review_card_value("box_depth"))
@@ -3003,6 +3014,45 @@ func leave_happy(do_dance: bool = false) -> void:
 	if _bar_fill:
 		_bar_fill.visible = false
 	_begin_sidewalk_leave(do_dance and not is_cut_collector)
+
+
+func leave_closed() -> void:
+	if bool(get_meta("burger_in_flight", false)):
+		set_meta("burger_pending_departure", Callable(self, "leave_closed").bind())
+		return
+	if is_leaving or is_ragdoll:
+		return
+	if _review_card_root != null and is_instance_valid(_review_card_root):
+		_review_card_root.visible = false
+	speech = "Aww, you're closed!"
+	_set_mood("ok")
+	_clear_antsy_wait_pose()
+	_reset_skeleton_pose()
+	_play_anim("idle")
+	if _body:
+		_body.rotation_degrees.x = 0.0
+	if _bubble:
+		_bubble.text = speech
+		_bubble.visible = true
+	if _bubble_bg:
+		_bubble_bg.visible = true
+	if _bar_root:
+		_bar_root.visible = false
+	if _bar_bg:
+		_bar_bg.visible = false
+	if _bar_fill:
+		_bar_fill.visible = false
+	_begin_sidewalk_leave(false)
+	var tree := get_tree()
+	if tree != null:
+		tree.create_timer(0.85).timeout.connect(func():
+			if not is_instance_valid(self):
+				return
+			if _bubble:
+				_bubble.visible = false
+			if _bubble_bg:
+				_bubble_bg.visible = false
+		)
 
 
 func leave_meh() -> void:
