@@ -20,4 +20,9 @@ func distribution(values: PackedFloat64Array) -> Dictionary:
 	sorted.sort()
 	return {"p50_ms": sorted[int((count - 1) * 0.5)], "p95_ms": sorted[int((count - 1) * 0.95)], "p99_ms": sorted[int((count - 1) * 0.99)], "max_ms": sorted[count - 1]}
 func report() -> Dictionary:
-	return {"samples": count, "frame": distribution(frame_ms), "game_script": distribution(script_ms), "draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), "static_memory_bytes": Performance.get_monitor(Performance.MEMORY_STATIC), "video_memory_bytes": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)}
+	var hitches := {"over_33_ms": 0, "over_50_ms": 0, "over_100_ms": 0}
+	for i in count:
+		if frame_ms[i] > 33.0: hitches["over_33_ms"] += 1
+		if frame_ms[i] > 50.0: hitches["over_50_ms"] += 1
+		if frame_ms[i] > 100.0: hitches["over_100_ms"] += 1
+	return {"hitches": hitches, "samples": count, "frame": distribution(frame_ms), "game_script": distribution(script_ms), "draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), "static_memory_bytes": Performance.get_monitor(Performance.MEMORY_STATIC), "video_memory_bytes": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED)}

@@ -1749,8 +1749,7 @@ func _upload_skin_paint() -> void:
 
 
 func _skin_paint_shader_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = """
+	var shader_source := """
 shader_type spatial;
 render_mode diffuse_toon, specular_disabled, cull_back;
 
@@ -1767,7 +1766,7 @@ void fragment() {
 }
 """
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = _shared_character_shader(shader_source)
 	material.set_shader_parameter("skin_color", skin_color)
 	_ensure_skin_paint()
 	material.set_shader_parameter("paint_tex", _skin_paint_texture)
@@ -3060,8 +3059,7 @@ func _toon_material(color: Color) -> StandardMaterial3D:
 
 
 func _mouth_shader_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = """
+	var shader_source := """
 shader_type spatial;
 render_mode unshaded, cull_disabled;
 
@@ -3083,7 +3081,7 @@ void fragment() {
 }
 """
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = _shared_character_shader(shader_source)
 	material.set_shader_parameter("mouth_color", mouth_color)
 	material.set_shader_parameter("shadow_color", mouth_shadow_color)
 	material.set_shader_parameter("shadow_size", mouth_shadow_size)
@@ -3094,8 +3092,7 @@ void fragment() {
 
 
 func _eye_shader_material(pupil_offset_x: float = 0.0) -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = """
+	var shader_source := """
 shader_type spatial;
 render_mode unshaded, cull_disabled;
 
@@ -3120,7 +3117,7 @@ void fragment() {
 }
 """
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = _shared_character_shader(shader_source)
 	material.set_shader_parameter("pupil_size", eye_pupil_size)
 	material.set_shader_parameter("pupil_offset_x", pupil_offset_x)
 	var white: float = clampf(eye_sclera_brightness, 0.15, 1.0)
@@ -3129,8 +3126,7 @@ void fragment() {
 
 
 func _eyelid_shader_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = """
+	var shader_source := """
 shader_type spatial;
 render_mode cull_back, diffuse_lambert_wrap, specular_disabled, depth_prepass_alpha;
 
@@ -3177,7 +3173,7 @@ void fragment() {
 }
 """
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = _shared_character_shader(shader_source)
 	material.set_shader_parameter("skin_color", skin_color)
 	material.set_shader_parameter("lash_color", lash_color)
 	material.set_shader_parameter("mask_height", eyelid_mask_height)
@@ -3245,3 +3241,14 @@ func _fit_sourced_accessory(accessory: Node3D, desired_width: float, anchor: Vec
 func _clear(root: Node) -> void:
 	for child in root.get_children():
 		child.free()
+
+
+static var _shared_shader_cache: Dictionary = {}
+
+static func _shared_character_shader(source: String) -> Shader:
+	# Skin, eye, eyelid and mouth parameters vary per customer; their program does not.
+	if not _shared_shader_cache.has(source):
+		var shader := Shader.new()
+		shader.code = source
+		_shared_shader_cache[source] = shader
+	return _shared_shader_cache[source]

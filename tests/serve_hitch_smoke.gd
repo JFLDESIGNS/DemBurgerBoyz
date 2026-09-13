@@ -51,7 +51,7 @@ func _initialize() -> void:
 		_fail("Review-card nodes were not prepared invisibly before serve")
 		return
 
-	var game_source := FileAccess.get_file_as_string("res://scripts/game.gd")
+	var game_source := FileAccess.get_file_as_string("res://scripts/game.gd").replace("\r\n", "\n")
 	var clear_start := game_source.find("func _clear_station(index: int, defer_visual: bool = false)")
 	var clear_end := game_source.find("\n\nfunc _clear_all_stations", clear_start)
 	var clear_body := game_source.substr(clear_start, clear_end - clear_start)

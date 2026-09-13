@@ -8,8 +8,8 @@ signal relay_joined(code: String)
 signal relay_failed(message: String)
 signal relay_session_start(seed: int) ## JSON handoff from Railway (bypasses Godot RPC)
 
-const HEADER_SIZE := 10
-const MAGIC := 0x47
+const HEADER_SIZE := 20
+const MAGIC := 0x46
 
 var _ws: WebSocketPeer = WebSocketPeer.new()
 var _url: String = ""
@@ -26,14 +26,30 @@ var _want_join_code: String = ""
 var _player_name: String = "Cook"
 
 var _inbox_head := 0
-var _outbox: Array[PackedByteArray] = []
+var _outbox: Array[Dictionary] = []
 var _outbox_head := 0
 var _outbox_bytes := 0
 var _handshake_sent := false
 var _packets_sent := 0
 var _bytes_sent := 0
 var _peak_outbox_bytes := 0
-const MAX_OUTBOX_BYTES := 8 * 1024 * 1024
+const MAX_OUTBOX_BYTES := 2 * 1024 * 1024
+const MAX_INBOX_BYTES := 2 * 1024 * 1024
+const MAX_QUEUE_AGE_MS := 5000
+const SEND_FRAME_BYTES := 128 * 1024
+const SEND_FRAME_PACKETS := 32
+var _binary_supported := false
+var _frame_id := -1
+var _frame_bytes := 0
+var _frame_packets := 0
+var _inbox_bytes := 0
+var _coalesced := 0
+var _decode_usec := 0
+var _last_ping := 0
+var _rtt_msec := 0
+var _dispatch_frame := -1
+var _dispatch_left := 48
+
 var _inbox: Array = [] ## [{from, channel, mode, data}]
 var _current_from: int = 1
 var _current_channel: int = 0
@@ -65,6 +81,8 @@ func _begin(url: String, as_host: bool, code: String, player_name: String) -> Er
 		relay_failed.emit("Missing relay URL (set Online relay in the lobby)")
 		return ERR_INVALID_PARAMETER
 	_want_host = as_host
+	_acting_as_server = as_host
+	_unique_id = 1 if as_host else 0
 	_want_join_code = code
 	_player_name = player_name.strip_edges()
 	if _player_name == "":
@@ -102,20 +120,32 @@ func _poll() -> void:
 	_ws.poll()
 	var st := _ws.get_ready_state()
 	if st == WebSocketPeer.STATE_OPEN:
-		if _status == MultiplayerPeer.CONNECTION_CONNECTING and _unique_id == 0 and not _handshake_sent:
+		if _status == MultiplayerPeer.CONNECTION_CONNECTING and not _handshake_sent:
 			_handshake_sent = true
 			## First open — request host/join.
 			if _want_host:
-				_send_json({"op": "host", "name": _player_name})
+				_send_json({"op": "host", "name": _player_name, "binary_v": 1})
 			else:
-				_send_json({"op": "join", "code": _want_join_code, "name": _player_name})
+				_send_json({"op": "join", "code": _want_join_code, "name": _player_name, "binary_v": 1})
 		_flush_outbox()
-		while _ws.get_available_packet_count() > 0:
+		var decode_start := Time.get_ticks_usec()
+		var decoded := 0
+		while _ws.get_available_packet_count() > 0 and decoded < 48 and Time.get_ticks_usec() - decode_start < 1500:
+			decoded += 1
 			var packet := _ws.get_packet()
 			if _ws.was_string_packet():
 				_handle_json(packet.get_string_from_utf8())
 			else:
 				_handle_binary(packet)
+		_decode_usec += Time.get_ticks_usec() - decode_start
+		var now := Time.get_ticks_msec()
+		if now - _last_ping >= 2000:
+			_last_ping = now
+			_send_json({"op": "ping", "t": now})
+		if _outbox_head < _outbox.size() and now - int(_outbox[_outbox_head]["time"]) > MAX_QUEUE_AGE_MS:
+			_fail_queue("Connection backlog exceeded five seconds")
+		if _inbox_head < _inbox.size() and now - int(_inbox[_inbox_head].get("time", now)) > MAX_QUEUE_AGE_MS:
+			_fail_queue("Incoming connection backlog exceeded five seconds")
 	elif st == WebSocketPeer.STATE_CLOSING or st == WebSocketPeer.STATE_CLOSED:
 		if _status != MultiplayerPeer.CONNECTION_DISCONNECTED:
 			var was_connected := _status == MultiplayerPeer.CONNECTION_CONNECTED
@@ -127,36 +157,59 @@ func _poll() -> void:
 				_peer_connected_emitted.clear()
 
 
-func _send_json(obj: Dictionary) -> void:
+func _fail_queue(message: String) -> void:
+	relay_failed.emit(message)
+	close()
+
+func _send_json(obj: Dictionary) -> Error:
+	return _enqueue(JSON.stringify(obj).to_utf8_buffer(), false, "")
+
+func _enqueue(bytes: PackedByteArray, binary: bool, key: String) -> Error:
 	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
-		return
-	var bytes := JSON.stringify(obj).to_utf8_buffer()
+		return ERR_CANT_CONNECT
+	if key != "":
+		for i in range(_outbox_head, _outbox.size()):
+			if _outbox[i]["key"] == key:
+				_outbox_bytes -= (_outbox[i]["bytes"] as PackedByteArray).size()
+				_outbox[i] = {"bytes": bytes, "binary": binary, "key": key, "time": Time.get_ticks_msec()}
+				_outbox_bytes += bytes.size()
+				_coalesced += 1
+				return OK
 	if _outbox_bytes + bytes.size() > MAX_OUTBOX_BYTES:
-		relay_failed.emit("Connection too slow to keep up. Please reconnect.")
-		close()
-		return
-	_outbox.append(bytes)
+		_fail_queue("Connection too slow to keep up. Please reconnect.")
+		return ERR_OUT_OF_MEMORY
+	_outbox.append({"bytes": bytes, "binary": binary, "key": key, "time": Time.get_ticks_msec()})
 	_outbox_bytes += bytes.size()
 	_peak_outbox_bytes = maxi(_peak_outbox_bytes, _outbox_bytes)
 	_flush_outbox()
-
+	return OK
 
 func _flush_outbox() -> void:
 	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return
-	var sent_this_poll := 0
-	while _outbox_head < _outbox.size() and sent_this_poll < 32:
-		var bytes: PackedByteArray = _outbox[_outbox_head]
-		if _ws.get_current_outbound_buffered_amount() + bytes.size() > _ws.outbound_buffer_size / 2:
+	var frame := Engine.get_process_frames()
+	if frame != _frame_id:
+		_frame_id = frame
+		_frame_bytes = 0
+		_frame_packets = 0
+	while _outbox_head < _outbox.size() and _frame_packets < SEND_FRAME_PACKETS:
+		var item: Dictionary = _outbox[_outbox_head]
+		var bytes: PackedByteArray = item["bytes"]
+		if _frame_bytes + bytes.size() > SEND_FRAME_BYTES:
 			break
-		var err := _ws.send(bytes, WebSocketPeer.WRITE_MODE_TEXT)
+		if _ws.get_current_outbound_buffered_amount() + bytes.size() > _ws.outbound_buffer_size / 4:
+			break
+		var err := _ws.send(bytes, WebSocketPeer.WRITE_MODE_BINARY if item["binary"] else WebSocketPeer.WRITE_MODE_TEXT)
 		if err != OK:
+			if err != ERR_OUT_OF_MEMORY and err != ERR_BUSY:
+				_fail_queue("Failed to send online packet")
 			break
 		_outbox_head += 1
 		_outbox_bytes -= bytes.size()
 		_packets_sent += 1
 		_bytes_sent += bytes.size()
-		sent_this_poll += 1
+		_frame_bytes += bytes.size()
+		_frame_packets += 1
 	if _outbox_head == _outbox.size():
 		_outbox.clear()
 		_outbox_head = 0
@@ -164,9 +217,26 @@ func _flush_outbox() -> void:
 		_outbox = _outbox.slice(_outbox_head)
 		_outbox_head = 0
 
-
 func get_transport_stats() -> Dictionary:
-	return {"queued_bytes": _outbox_bytes, "peak_queued_bytes": _peak_outbox_bytes, "packets_sent": _packets_sent, "bytes_sent": _bytes_sent, "inbox_packets": _get_available_packet_count()}
+	var age := Time.get_ticks_msec() - int(_outbox[_outbox_head]["time"]) if _outbox_head < _outbox.size() else 0
+	return {"queued_bytes": _outbox_bytes, "peak_queued_bytes": _peak_outbox_bytes, "packets_sent": _packets_sent, "bytes_sent": _bytes_sent, "inbox_packets": _inbox.size() - _inbox_head, "inbox_bytes": _inbox_bytes, "queued_age_ms": age, "rtt_ms": _rtt_msec, "coalesced": _coalesced, "decode_usec": _decode_usec, "binary": _binary_supported}
+
+func _queue_incoming(item: Dictionary) -> void:
+	var bytes: PackedByteArray = item["data"]
+	item["time"] = Time.get_ticks_msec()
+	if int(item["channel"]) == 1 and int(item["mode"]) == 0:
+		for i in range(_inbox_head, _inbox.size()):
+			if _inbox[i]["from"] == item["from"] and int(_inbox[i]["channel"]) == 1 and int(_inbox[i]["mode"]) == 0:
+				_inbox_bytes -= (_inbox[i]["data"] as PackedByteArray).size()
+				_inbox[i] = item
+				_inbox_bytes += bytes.size()
+				_coalesced += 1
+				return
+	if _inbox_bytes + bytes.size() > MAX_INBOX_BYTES or _inbox.size() - _inbox_head > 2048:
+		_fail_queue("Incoming connection overloaded")
+		return
+	_inbox.append(item)
+	_inbox_bytes += bytes.size()
 
 
 func _handle_json(text: String) -> void:
@@ -215,7 +285,7 @@ func _handle_json(text: String) -> void:
 				var raw: PackedByteArray = Marshalls.base64_to_raw(b64)
 				if not raw.is_empty():
 					var mode_i := int(data.get("mode", int(MultiplayerPeer.TRANSFER_MODE_RELIABLE)))
-					_inbox.append({
+					_queue_incoming({
 						"from": int(data.get("from", 1)),
 						"channel": int(data.get("ch", 0)),
 						"mode": mode_i as MultiplayerPeer.TransferMode,
@@ -231,8 +301,10 @@ func _handle_json(text: String) -> void:
 			_status = MultiplayerPeer.CONNECTION_DISCONNECTED
 			relay_failed.emit(msg)
 			_ws.close()
-		"hello", "pong":
-			pass
+		"hello":
+			_binary_supported = int(data.get("binary_v", 0)) == 1
+		"pong":
+			_rtt_msec = maxi(0, Time.get_ticks_msec() - int(data.get("t", Time.get_ticks_msec())))
 
 
 func _emit_peer_connected(pid: int) -> void:
@@ -243,50 +315,36 @@ func _emit_peer_connected(pid: int) -> void:
 
 
 func _handle_binary(packet: PackedByteArray) -> void:
-	if packet.size() < HEADER_SIZE:
+	if packet.size() < HEADER_SIZE or packet[0] != MAGIC or packet[1] != 0x54 or packet[2] != 1:
 		return
-	if packet[0] != MAGIC:
+	var length := int(packet.decode_u16(18))
+	if packet.size() != HEADER_SIZE + length or packet[12] > 2:
 		return
-	var from_id := _read_u32(packet, 1)
-	var channel := int(packet[9])
-	## byte 8 = mode
-	var mode := int(packet[8]) as MultiplayerPeer.TransferMode
-	var payload := packet.slice(HEADER_SIZE)
-	_inbox.append({
-		"from": from_id,
-		"channel": channel,
-		"mode": mode,
-		"data": payload,
-	})
-
-
-func _read_u32(buf: PackedByteArray, offset: int) -> int:
-	return buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24)
-
-
-func _write_u32(buf: PackedByteArray, offset: int, value: int) -> void:
-	buf[offset] = value & 0xFF
-	buf[offset + 1] = (value >> 8) & 0xFF
-	buf[offset + 2] = (value >> 16) & 0xFF
-	buf[offset + 3] = (value >> 24) & 0xFF
-
+	_queue_incoming({"from": int(packet.decode_u32(4)), "channel": int(packet[13]), "mode": int(packet[12]), "data": packet.slice(HEADER_SIZE)})
 
 func _put_packet_script(buffer: PackedByteArray) -> Error:
 	if _status != MultiplayerPeer.CONNECTION_CONNECTED:
 		return ERR_UNCONFIGURED
-	if _ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
-		return ERR_CANT_CONNECT
-	## Tunnel SceneMultiplayer bytes as JSON — same reliable path as host/join/start.
-	## (Raw binary WS frames were not delivering RPCs to guests on Railway.)
-	var target := _target_peer
-	_send_json({
-		"op": "game_bin",
-		"to": int(target),
-		"ch": int(_transfer_channel),
-		"mode": int(_transfer_mode),
-		"b64": Marshalls.raw_to_base64(buffer),
-	})
-	return OK
+	if buffer.size() > 65535:
+		return ERR_INVALID_PARAMETER
+	var key := str(_target_peer) + ":motion" if _transfer_channel == 1 and _transfer_mode == MultiplayerPeer.TRANSFER_MODE_UNRELIABLE else ""
+	if _binary_supported:
+		var packet := PackedByteArray()
+		packet.resize(HEADER_SIZE)
+		packet[0] = MAGIC
+		packet[1] = 0x54
+		packet[2] = 1
+		packet[3] = 1 if key != "" else 0
+		packet.encode_u32(4, _unique_id)
+		packet.encode_s32(8, _target_peer)
+		packet[12] = int(_transfer_mode)
+		packet[13] = _transfer_channel
+		packet.encode_u32(14, _packets_sent)
+		packet.encode_u16(18, buffer.size())
+		packet.append_array(buffer)
+		return _enqueue(packet, true, key)
+	var envelope := {"op": "game_bin", "to": _target_peer, "ch": _transfer_channel, "mode": int(_transfer_mode), "b64": Marshalls.raw_to_base64(buffer)}
+	return _enqueue(JSON.stringify(envelope).to_utf8_buffer(), false, key)
 
 
 func _get_packet_script() -> PackedByteArray:
@@ -294,6 +352,8 @@ func _get_packet_script() -> PackedByteArray:
 	if _inbox_head >= _inbox.size():
 		return PackedByteArray()
 	var item: Dictionary = _inbox[_inbox_head]
+	_inbox_bytes -= (item["data"] as PackedByteArray).size()
+	_dispatch_left -= 1
 	_inbox_head += 1
 	if _inbox_head == _inbox.size():
 		_inbox.clear()
@@ -308,7 +368,11 @@ func _get_packet_script() -> PackedByteArray:
 
 
 func _get_available_packet_count() -> int:
-	return _inbox.size() - _inbox_head
+	var frame := Engine.get_process_frames()
+	if frame != _dispatch_frame:
+		_dispatch_frame = frame
+		_dispatch_left = 48
+	return mini(_inbox.size() - _inbox_head, maxi(0, _dispatch_left))
 
 
 func _get_max_packet_size() -> int:
@@ -381,6 +445,11 @@ func _get_connection_status() -> MultiplayerPeer.ConnectionStatus:
 
 
 func _close() -> void:
+	_inbox_bytes = 0
+	_binary_supported = false
+	_frame_id = -1
+	_dispatch_frame = -1
+	_last_ping = 0
 	_inbox_head = 0
 	_outbox.clear()
 	_outbox_head = 0
@@ -399,9 +468,14 @@ func _close() -> void:
 		_ws = WebSocketPeer.new()
 
 
-func _disconnect_peer(_peer: int, _force: bool) -> void:
-	## Room relay — closing this socket drops us from the room.
-	close()
+func _disconnect_peer(peer: int, _force: bool) -> void:
+	if not OS.get_environment("MP_TEST_DIR").is_empty():
+		print("RELAY_DISCONNECT_REQUEST ", peer)
+		print_stack()
+	if _acting_as_server and peer != _unique_id:
+		_send_json({"op": "kick", "peer_id": peer})
+	elif peer == 1 or peer == _unique_id:
+		close()
 
 
 func _set_refuse_new_connections(enable: bool) -> void:
@@ -409,4 +483,6 @@ func _set_refuse_new_connections(enable: bool) -> void:
 
 
 func _is_refusing_new_connections() -> bool:
-	return _refuse
+	# The relay enforces room capacity before announcing peers. Returning the local
+	# full-room flag here rejects already admitted, still-authenticating cooks.
+	return false

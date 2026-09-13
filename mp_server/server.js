@@ -13,7 +13,85 @@ const PORT = Number(process.env.PORT || 8080);
 const MAX_PLAYERS = 4;
 // Keep empty rooms briefly; active rooms refresh lastActive on traffic.
 const ROOM_IDLE_MS = 90 * 60 * 1000;
-const HEADER_SIZE = 10;
+const HEADER_SIZE = 20;
+const MAX_PENDING_BYTES = 2 * 1024 * 1024;
+const MAX_SOCKET_BYTES = 256 * 1024;
+const MAX_QUEUE_AGE_MS = 5000;
+const MAX_PACKET_BYTES = 65535;
+const stats = { forwarded: 0, bytes: 0, coalesced: 0, overloads: 0 };
+
+function queuePacket(ws, data, binary = false, key = "") {
+  if (!ws || ws.readyState !== 1) return;
+  const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.length;
+  if (!ws.pending) { ws.pending = []; ws.motion = new Map(); ws.pendingBytes = 0; }
+  if (key && ws.motion.has(key)) {
+    ws.pendingBytes -= ws.motion.get(key).bytes;
+    stats.coalesced++;
+  }
+  const item = { data, binary, bytes, time: Date.now() };
+  if (key) ws.motion.set(key, item); else ws.pending.push(item);
+  ws.pendingBytes += bytes;
+  if (ws.pendingBytes > MAX_PENDING_BYTES) {
+    stats.overloads++;
+    ws.close(1013, "Receiver cannot keep up");
+    ws.pending = []; ws.motion.clear(); ws.pendingBytes = 0;
+    return;
+  }
+  flushSocket(ws);
+}
+
+function flushSocket(ws) {
+  if (!ws || ws.readyState !== 1 || !ws.pending) return;
+  let sent = 0, bytes = 0;
+  while ((ws.pending.length || ws.motion.size) && sent < 32 && bytes < 128 * 1024) {
+    if (ws.bufferedAmount >= MAX_SOCKET_BYTES) break;
+    // Reliable events keep their ordering; a motion turn prevents starvation.
+    const motionTurn = ws.motion.size && (!ws.pending.length || sent % 8 === 7);
+    let item;
+    if (motionTurn) {
+      const key = ws.motion.keys().next().value;
+      item = ws.motion.get(key); ws.motion.delete(key);
+    } else item = ws.pending.shift();
+    ws.pendingBytes -= item.bytes;
+    if (Date.now() - item.time > MAX_QUEUE_AGE_MS) {
+      stats.overloads++; ws.close(1013, "Receiver backlog expired"); return;
+    }
+    ws.send(item.data, { binary: item.binary }, (err) => { if (err) ws.close(1011, "Send failed"); });
+    bytes += item.bytes; sent++; stats.forwarded++; stats.bytes += item.bytes;
+  }
+  const oldest = ws.pending[0];
+  if (oldest && Date.now() - oldest.time > MAX_QUEUE_AGE_MS) {
+    stats.overloads++; ws.close(1013, "Receiver backlog expired");
+  }
+}
+
+function destinations(room, sender, target) {
+  return [...room.peers].filter(([id, other]) => other?.readyState === 1 && id !== sender &&
+    (target === 0 || (target > 0 ? id === target : id !== -target)));
+}
+
+function forwardGame(ws, target, channel, mode, raw) {
+  const room = rooms.get(ws.roomCode);
+  if (!room || !ws.peerId || !Number.isInteger(target) || !Number.isInteger(channel) || channel < 0 || channel > 255 || ![0,1,2].includes(mode) || !raw.length || raw.length > MAX_PACKET_BYTES) return;
+  touchRoom(room);
+  const header = Buffer.alloc(HEADER_SIZE);
+  header[0] = 0x46; header[1] = 0x54; header[2] = 1;
+  header[3] = channel === 1 && mode === 0 ? 1 : 0;
+  header.writeUInt32LE(ws.peerId, 4); // Never trust a client-supplied sender ID.
+  header.writeInt32LE(target, 8);
+  header[12] = mode; header[13] = channel;
+  header.writeUInt16LE(raw.length, 18);
+  const packet = Buffer.concat([header, raw]);
+  let text;
+  for (const [, dest] of destinations(room, ws.peerId, target)) {
+    const key = header[3] ? `${ws.peerId}:motion` : "";
+    if (dest.binaryV === 1) queuePacket(dest, packet, true, key);
+    else {
+      text ??= JSON.stringify({ op: "game_bin", from: ws.peerId, ch: channel, mode, b64: raw.toString("base64") });
+      queuePacket(dest, text, false, key);
+    }
+  }
+}
 
 /**
  * @typedef {{
@@ -55,7 +133,7 @@ function randomCode() {
 
 function sendJson(ws, obj) {
   if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify(obj));
+    queuePacket(ws, JSON.stringify(obj));
   }
 }
 
@@ -119,27 +197,11 @@ function pruneRooms() {
 }
 
 function forwardBinary(ws, data) {
-  if (!ws.roomCode) return;
-  const room = rooms.get(ws.roomCode);
-  if (!room) return;
-  touchRoom(room);
-  if (!Buffer.isBuffer(data) && !(data instanceof Uint8Array)) return;
   const buf = Buffer.from(data);
-  if (buf.length < HEADER_SIZE) return;
-  const target = readU32(buf, 5);
-  if (target === 0) {
-    for (const [id, other] of room.peers) {
-      if (id === ws.peerId) continue;
-      if (other && other.readyState === 1) {
-        other.send(buf, { binary: true });
-      }
-    }
-    return;
-  }
-  const dest = room.peers.get(target);
-  if (dest && dest.readyState === 1 && target !== ws.peerId) {
-    dest.send(buf, { binary: true });
-  }
+  if (ws.binaryV !== 1 || buf.length < HEADER_SIZE || buf[0] !== 0x46 || buf[1] !== 0x54 || buf[2] !== 1) return;
+  const size = buf.readUInt16LE(18);
+  if (buf.length !== HEADER_SIZE + size) return;
+  forwardGame(ws, buf.readInt32LE(8), buf[13], buf[12], buf.subarray(HEADER_SIZE));
 }
 
 const server = http.createServer((req, res) => {
@@ -153,6 +215,8 @@ const server = http.createServer((req, res) => {
         max_players: MAX_PLAYERS,
         mid_round_join: true,
         solo_host_ok: true,
+        binary_v: 1,
+        transport: stats,
       })
     );
     return;
@@ -161,11 +225,12 @@ const server = http.createServer((req, res) => {
   res.end("not found");
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 256 * 1024, perMessageDeflate: false });
 
 wss.on("connection", (ws) => {
   ws.roomCode = null;
   ws.peerId = 0;
+  ws.binaryV = 0;
   ws.isAlive = true;
   ws.on("pong", () => {
     ws.isAlive = true;
@@ -173,6 +238,7 @@ wss.on("connection", (ws) => {
 
   sendJson(ws, {
     op: "hello",
+    binary_v: 1,
     max_players: MAX_PLAYERS,
     mid_round_join: true,
     solo_host_ok: true,
@@ -193,7 +259,17 @@ wss.on("connection", (ws) => {
     }
     const op = String(msg.op || "");
 
+    if (op === "kick") {
+      const room = rooms.get(ws.roomCode);
+      const target = Number(msg.peer_id);
+      if (ws.peerId === 1 && room && Number.isInteger(target) && target > 1) {
+        room.peers.get(target)?.close(1008, "Removed by host");
+      }
+      return;
+    }
+
     if (op === "host") {
+      ws.binaryV = Number(msg.binary_v) === 1 ? 1 : 0;
       clearSocketRoom(ws);
       pruneRooms();
       let code = normalizeCode(msg.code || "");
@@ -221,6 +297,7 @@ wss.on("connection", (ws) => {
     }
 
     if (op === "join") {
+      ws.binaryV = Number(msg.binary_v) === 1 ? 1 : 0;
       clearSocketRoom(ws);
       const code = normalizeCode(msg.code || "");
       if (!code) {
@@ -300,29 +377,8 @@ wss.on("connection", (ws) => {
 
     // Godot SceneMultiplayer packets tunneled as JSON (binary WS frames were dropping).
     if (op === "game_bin") {
-      if (!ws.roomCode || !ws.peerId) {
-        return;
-      }
-      const room = rooms.get(ws.roomCode);
-      if (!room) return;
-      touchRoom(room);
-      const target = Number(msg.to || 0);
-      const payload = {
-        op: "game_bin",
-        from: ws.peerId,
-        ch: Number(msg.ch || 0),
-        mode: Number(msg.mode || 2),
-        b64: String(msg.b64 || ""),
-      };
-      if (!payload.b64) return;
-      if (target === 0) {
-        broadcastRoomJson(room, ws.peerId, payload);
-      } else {
-        const dest = room.peers.get(target);
-        if (dest && dest.readyState === 1 && target !== ws.peerId) {
-          sendJson(dest, payload);
-        }
-      }
+      if (!ws.roomCode || !ws.peerId || typeof msg.b64 !== "string" || msg.b64.length > 87384) return;
+      forwardGame(ws, Number(msg.to ?? 0), Number(msg.ch ?? 0), Number(msg.mode ?? 2), Buffer.from(msg.b64, "base64"));
       return;
     }
 
@@ -338,7 +394,8 @@ wss.on("connection", (ws) => {
     sendJson(ws, { op: "error", msg: "unknown op" });
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reason) => {
+    if (process.env.RELAY_TEST_LOG) console.log("CLOSE", ws.peerId, code, reason.toString());
     clearSocketRoom(ws);
   });
 
@@ -346,6 +403,8 @@ wss.on("connection", (ws) => {
     clearSocketRoom(ws);
   });
 });
+
+setInterval(() => { for (const ws of wss.clients) flushSocket(ws); }, 10).unref();
 
 setInterval(() => {
   for (const ws of wss.clients) {

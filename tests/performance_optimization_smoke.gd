@@ -48,6 +48,7 @@ func _run() -> void:
 	var image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
 	image.fill(Color.RED)
 	var posts: Array = [{"id": 1, "text": "first", "pic": ImageTexture.create_from_image(image)}]
+	host.prepare_photo(posts[0])
 	var delta: Dictionary = host.build_delta(posts)
 	expect(delta["upserts"].size() == 1, "New post must replicate")
 	var received: Array = guest.apply_delta([], delta["upserts"], delta["removed"])

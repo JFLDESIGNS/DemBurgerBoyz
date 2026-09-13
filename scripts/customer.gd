@@ -399,6 +399,9 @@ var _ragdoll_lie: float = 0.0 ## 0 upright → 1 flat on back
 var _ragdoll_bone_phase: Dictionary = {} ## Per-limb wobble seeds for noodle flop.
 var _skeleton: Skeleton3D = null
 var _blood_bursts: Array = [] ## GPUParticles3D to free later
+static var _leave_fade_shader_cache: Dictionary = {}
+var _leave_fade_materials: Array[Material] = []
+var _leave_fade_bound := false
 static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
 static var _char_scene: PackedScene = null
 static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
@@ -1526,7 +1529,16 @@ func _update_leave_fade(delta: float) -> void:
 
 func _apply_leave_fade_alpha(alpha: float) -> void:
 	_leave_fade_alpha = clampf(alpha, 0.0, 1.0)
-	_fade_node_materials(self, _leave_fade_alpha)
+	# Starting a walk at full opacity must not replace materials or compile shaders.
+	if _leave_fade_alpha >= 1.0 and not _leave_fade_bound:
+		return
+	if not _leave_fade_bound:
+		_fade_node_materials(self, _leave_fade_alpha)
+		_leave_fade_bound = true
+	else:
+		# Once attached, fading updates uniforms only; no tree walks or material swaps.
+		for material in _leave_fade_materials:
+			_set_material_alpha(material, _leave_fade_alpha)
 	if _bubble:
 		_bubble.modulate.a = minf(_bubble.modulate.a, alpha)
 	if _treat_hearts:
@@ -1540,34 +1552,26 @@ func _apply_leave_fade_alpha(alpha: float) -> void:
 func _fade_node_materials(node: Node, alpha: float) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
-		var surf_count := 0
-		if mi.mesh != null:
-			surf_count = mi.mesh.get_surface_count()
-		surf_count = maxi(surf_count, mi.get_surface_override_material_count())
-		if surf_count <= 0:
-			var mat := _material_for_fade(mi.material_override)
-			if mat != null:
-				mi.material_override = mat
-				_set_material_alpha(mat, alpha)
-		else:
-			for si in surf_count:
-				var base: Material = mi.get_surface_override_material(si)
-				if base == null:
-					base = mi.get_active_material(si)
-				if base == null and mi.mesh != null and si < mi.mesh.get_surface_count():
-					base = mi.mesh.surface_get_material(si)
-				if base == null:
-					base = mi.material_override
-				var faded := _material_for_fade(base)
-				if faded == null:
-					continue
-				if mi.mesh != null and si < mi.mesh.get_surface_count():
-					mi.set_surface_override_material(si, faded)
-				else:
-					mi.material_override = faded
-				_set_material_alpha(faded, alpha)
+		# A whole-mesh override takes precedence over every surface override.
+		if mi.material_override != null:
+			var faded := _material_for_fade(mi.material_override)
+			if faded != null:
+				mi.material_override = faded
+				_track_leave_fade_material(faded, alpha)
+		elif mi.mesh != null:
+			for surface in mi.mesh.get_surface_count():
+				var faded := _material_for_fade(mi.get_active_material(surface))
+				if faded != null:
+					mi.set_surface_override_material(surface, faded)
+					_track_leave_fade_material(faded, alpha)
 	for child in node.get_children():
 		_fade_node_materials(child, alpha)
+
+
+func _track_leave_fade_material(material: Material, alpha: float) -> void:
+	if not _leave_fade_materials.has(material):
+		_leave_fade_materials.append(material)
+	_set_material_alpha(material, alpha)
 
 
 func _material_for_fade(base: Material) -> Material:
@@ -1590,29 +1594,39 @@ func _shader_material_for_fade(base: ShaderMaterial) -> ShaderMaterial:
 		return base
 	var faded := base.duplicate() as ShaderMaterial
 	faded.set_meta("customer_fade_unique", true)
-	if faded.shader != null and not faded.shader.code.contains("uniform float fade_alpha"):
-		var fade_shader := faded.shader.duplicate() as Shader
-		fade_shader.code = _inject_fade_alpha_into_shader(fade_shader.code)
-		faded.shader = fade_shader
+	if base.shader != null and not base.shader.code.contains("uniform float fade_alpha"):
+		# All shirts/skin/eyes with identical shader source share one compiled variant.
+		# Only the material's customer-specific colors and uniforms are duplicated.
+		var code := base.shader.code
+		if not _leave_fade_shader_cache.has(code):
+			var fade_shader := Shader.new()
+			fade_shader.code = _inject_fade_alpha_into_shader(code)
+			_leave_fade_shader_cache[code] = fade_shader
+		faded.shader = _leave_fade_shader_cache[code]
 	return faded
 
 
 func _inject_fade_alpha_into_shader(code: String) -> String:
 	if code.contains("uniform float fade_alpha"):
 		return code
-	var injected := code
-	var type_i := injected.find("shader_type")
-	if type_i >= 0:
-		var nl := injected.find("\n", type_i)
-		if nl >= 0:
-			injected = injected.insert(nl + 1, "uniform float fade_alpha : hint_range(0.0, 1.0) = 1.0;\n")
-	var frag_i := injected.find("void fragment()")
-	if frag_i < 0:
-		return injected
-	var brace := injected.find("{", frag_i)
+	var fragment := code.find("void fragment()")
+	var brace := code.find("{", fragment) if fragment >= 0 else -1
 	if brace < 0:
-		return injected
-	return injected.insert(brace + 1, "\n\tALPHA = fade_alpha;")
+		return code
+	var end := brace + 1
+	var depth := 1
+	while end < code.length() and depth > 0:
+		if code[end] == "{": depth += 1
+		elif code[end] == "}": depth -= 1
+		end += 1
+	var body := code.substr(brace + 1, end - brace - 2)
+	var alpha_assignment := RegEx.new()
+	alpha_assignment.compile(r"\bALPHA\s*=")
+	# Multiply existing lash/cheek cutouts instead of overwriting their alpha.
+	var statement := "ALPHA *= fade_alpha;" if alpha_assignment.search(body) != null else "ALPHA = fade_alpha;"
+	var injected := code.insert(end - 1, "\n\t" + statement + "\n")
+	var type_end := injected.find(";", injected.find("shader_type"))
+	return injected.insert(type_end + 1, "\nuniform float fade_alpha : hint_range(0.0, 1.0) = 1.0;\n")
 
 
 func _set_material_alpha(mat: Material, alpha: float) -> void:
@@ -2969,6 +2983,9 @@ func _show_treat_hearts() -> void:
 
 
 func leave_happy(do_dance: bool = false) -> void:
+	if bool(get_meta("burger_in_flight", false)):
+		set_meta("burger_pending_departure", Callable(self, "leave_happy").bind(do_dance))
+		return
 	_set_mood("cheer")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -2989,6 +3006,9 @@ func leave_happy(do_dance: bool = false) -> void:
 
 
 func leave_meh() -> void:
+	if bool(get_meta("burger_in_flight", false)):
+		set_meta("burger_pending_departure", Callable(self, "leave_meh").bind())
+		return
 	## Bland / unseasoned — shrug and walk off camera-left. Paid base, no tip energy.
 	_set_mood("ok")
 	_clear_antsy_wait_pose()
@@ -3717,6 +3737,9 @@ func _update_powder_blobs(delta: float) -> void:
 
 
 func leave_mad() -> void:
+	if bool(get_meta("burger_in_flight", false)):
+		set_meta("burger_pending_departure", Callable(self, "leave_mad").bind())
+		return
 	_set_mood("mad")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()

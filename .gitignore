@@ -1,4 +1,4 @@
-﻿# Godot 4+
+# Godot 4+
 .godot/
 *.translation
 *.tmp
@@ -29,3 +29,9 @@ runerr.txt
 # Node (Railway relay local install)
 mp_server/node_modules/
 mp_server/package-lock.json
+
+!tools/verify_multiplayer_release.py
+
+!tools/run_multiplayer_hitch_audit.py
+!tools/run_multiplayer_concurrent.py
+!tools/multiplayer_network_proxy.cjs

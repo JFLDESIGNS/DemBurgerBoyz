@@ -995,9 +995,23 @@ func _tick_scrape_tings(delta: float) -> void:
 		play_debris_kuhh(0.55 + randf() * 0.32)
 
 
+const DEBRIS_BASS_VARIANTS := 6
+const DEBRIS_KUHH_VARIANTS := 8
+
+
+func prewarm_debris_audio() -> void:
+	## Every random scrape voice must be ready before a stroke can select it.
+	for i in DEBRIS_BASS_VARIANTS:
+		await _prewarm_cache_entry_async("debris_bass_%d" % i, _make_debris_bass_pop)
+		await get_tree().process_frame
+	for i in DEBRIS_KUHH_VARIANTS:
+		await _prewarm_cache_entry_async("debris_kuhh_%d" % i, _make_debris_kuhh)
+		await get_tree().process_frame
+
+
 func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
 	## Subtle low thud — crust fleck letting go under the spatula.
-	var key := "debris_bass_%d" % (randi() % 6)
+	var key := "debris_bass_%d" % (randi() % DEBRIS_BASS_VARIANTS)
 	var gain := (0.28 + randf() * 0.14) * clampf(volume_scale, 0.0, 1.5)
 	var pitch := 0.82 + randf() * 0.28
 	_play_cached(key, _make_debris_bass_pop, pitch, gain)
@@ -1005,7 +1019,7 @@ func play_debris_bass_pop(volume_scale: float = 1.0) -> void:
 
 func play_debris_kuhh(volume_scale: float = 1.0) -> void:
 	## Dry “kuhhh” — burnt crust shearing off the steel. One-shots layer.
-	var key := "debris_kuhh_%d" % (randi() % 8)
+	var key := "debris_kuhh_%d" % (randi() % DEBRIS_KUHH_VARIANTS)
 	var gain := (0.41 + randf() * 0.14) * clampf(volume_scale, 0.0, 1.7)
 	var pitch := 0.86 + randf() * 0.30
 	_play_cached(key, _make_debris_kuhh, pitch, gain)
@@ -1609,16 +1623,16 @@ func play_perfect_announcer() -> void:
 func play_flip_grade_announcer(grade: String) -> void:
 	match grade:
 		"perfect":
-			_play_announcer_stream("flip_perfect_announcer", "res://sounds/perfect.wav", 0.65)
+			_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
 		"great":
-			_play_announcer_stream("flip_great_announcer", "res://sounds/greatjob.wav", 0.68)
+			_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68)
 		_:
-			_play_announcer_stream("flip_late_announcer", "res://sounds/ohhh.wav", 0.68)
+			_play_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav", 0.68)
 
 
 func play_delivery_time_announcer(wait_sec: float) -> void:
 	if wait_sec < 5.0:
-		_play_announcer_stream("order_perfect_announcer", "res://sounds/perfect.wav", 0.65)
+		_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
 	elif wait_sec <= 8.0:
 		_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68)
 	elif wait_sec > 15.0:
@@ -1695,6 +1709,8 @@ func prewarm_spatula_audio() -> void:
 					_:
 						await _prewarm_cache_entry_async(key, _make_hold_drum.bind(pad))
 		await get_tree().process_frame
+
+	await prewarm_debris_audio()
 
 
 func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) -> void:
@@ -2069,11 +2085,6 @@ func prewarm_all_gameplay_audio() -> void:
 		await _prewarm_cache_entry_async("cat_purr_%d" % i, _make_cat_purr)
 		await get_tree().process_frame
 		await _prewarm_cache_entry_async("roomba_plastic_tap_v2_%d" % i, _make_roomba_body_tap)
-		await get_tree().process_frame
-	for i in 4:
-		await _prewarm_cache_entry_async("debris_bass_%d" % i, _make_debris_bass_pop)
-		await get_tree().process_frame
-		await _prewarm_cache_entry_async("debris_kuhh_%d" % i, _make_debris_kuhh)
 		await get_tree().process_frame
 	_load_vehicle_stream("street_car_pass_recording", STREET_CAR_PASS_PATH)
 	_load_vehicle_stream("street_car_horn_recording", STREET_CAR_HORN_PATH)
