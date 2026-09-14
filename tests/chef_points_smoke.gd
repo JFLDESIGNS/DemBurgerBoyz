@@ -34,6 +34,7 @@ func run()->void:
  if DisplayServer.get_name()!="headless":
   await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png(OS.get_environment("CHEF_PREVIEW"))
+ assert(game.chef_points_hud.active_pop.text.contains("Perfect flip"),"Reward reason stays visible")
  print("CHEF_POINTS_OK")
  game.queue_free()
  for i in 8:await process_frame

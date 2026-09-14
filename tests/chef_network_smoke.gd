@@ -57,6 +57,9 @@ func run()->void:
 		game._begin_patty_drag(p)
 		assert(game.dragging_patty==p and game.drag_owner_id==net.my_id(),"Host can move guest-handled burger")
 		game.mp_release_drag(97001);game.dragging_patty=null;p.is_slide_drag=false
+		game._quick_transfer_patty(p)
+		await create_timer(0.6).timeout
+		assert(game.stations[0].patties.has(p),"Animated Build transfer on host")
 		game.mp_set_service_closed.rpc(true)
 		mark("host_done");await wait_mark("guest_done")
 	else:
@@ -69,7 +72,7 @@ func run()->void:
 		game.mp_patty_pose.rpc(97001,0.0,3.0,0.0,true)
 		mark("guest_placed");await wait_mark("host_done")
 		while not game.service_window_closed:await process_frame
-		assert(not p.is_held,"Released burger stays released on guest")
+		assert(game.stations[0].patties.has(p),"Animated Build transfer replicated to guest")
 		while game.chef_points!=70:await process_frame
 		game._chef_award_once(p,"forged",500,"Guest cannot award")
 		assert(game.chef_points==70 and game.chef_points_hud.points==70)

@@ -5,13 +5,24 @@ func run() -> void:
  game.set_script(load(get_script().resource_path.get_base_dir().path_join("cook_controls_fixture.gd")))
  root.add_child(game);current_scene=game;game.playing=true
  game.grill.resize(game.GRILL_SLOTS);game.slot_positions.resize(game.GRILL_SLOTS)
- game.stations=[{"items":["bun_bottom"],"patties":[]}]
+ game.stations=[{"items":["bun_bottom","patty"],"patties":[]}]
  spawn_patty(game,0,901)
  var patty=game.grill[0];patty.set_process(false);patty.cook_time=20.0;patty.first_side_time=20.0;patty.flipped_once=true
+ patty.set_meta("chef_done_at",Time.get_ticks_msec())
  game._quick_transfer_patty(patty)
+ await create_timer(0.5).timeout
+ assert(game.chef_points==20,"Quick HOLD earns 20 points once")
  assert(game._is_in_warmer_zone(patty.position) and not patty.is_held,"Done click must move to HOLD")
  game._quick_transfer_patty(patty)
+ await create_timer(0.5).timeout
  assert(game.stations[0].patties.has(patty) and game.grill[0]==null,"HOLD click must clear grill and enter Build")
+ game.stations[0].items=["bun_bottom"];game.stations[0].patties=[]
+ spawn_patty(game,2,903)
+ var direct=game.grill[2];direct.set_process(false);direct.cook_time=20.0;direct.first_side_time=20.0;direct.flipped_once=true
+ game._quick_transfer_patty(direct)
+ assert(direct.is_held and bool(direct.get_meta("click_transfer",false)))
+ await create_timer(0.5).timeout
+ assert(game.stations[0].patties.has(direct) and game.grill[2]==null,"Needed patty flips straight to Build")
  spawn_patty(game,1,902)
  var other=game.grill[1];other.set_process(false);other.cook_time=20.0;other.first_side_time=20.0;other.flipped_once=true
  game._on_patty_clicked(other)

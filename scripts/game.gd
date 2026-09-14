@@ -5461,6 +5461,7 @@ func _process_gameplay(delta: float) -> void:
 			if not _is_bun_toast(p):
 				p.ball_heat_motion_active = grill_on and waiting_ball and not _is_in_warmer_zone(p.position)
 				_update_patty_oil_cook_time(p, delta)
+				if _is_in_warmer_zone(p.position): _chef_quick_cook(p, "Quick HOLD — moved within 1s")
 				_update_patty_warm_hold(p, delta)
 				_update_patty_cook_spot_residue(p, delta)
 			elif BUN_TOAST_ENABLED:
@@ -28246,7 +28247,7 @@ func _place_spatula_on_warmer_local(idx: int, pos: Vector3, patty: Area3D = null
 		patty = spatula_patty
 	if patty == null or not is_instance_valid(patty):
 		return
-	_chef_quick_cook(patty)
+	_chef_quick_cook(patty, "Quick HOLD — moved within 1s")
 	_mp_release_scoop_if(patty)
 	patty.is_held = false
 	patty.visible = true
@@ -49033,7 +49034,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
 	_review_toast.z_index = 75
 	ui.add_child(_review_toast)
 	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_review_toast.offset_left=-374;_review_toast.offset_right=-20
+	_review_toast.offset_left=-734;_review_toast.offset_right=-380
 	_review_toast.offset_top=112;_review_toast.offset_bottom=112
 	var skin := StyleBoxFlat.new()
 	skin.bg_color=Color("192b36");skin.border_color=Color("e9bc5a")
@@ -59945,6 +59946,8 @@ func _layout_top_bar_hud() -> void:
 	top_bar.offset_top = 33.0
 	top_bar.offset_bottom = 73.0
 	top_bar.alignment = BoxContainer.ALIGNMENT_END
+	hud_money.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hud_money.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if hud_day != null and is_instance_valid(hud_day):
 		hud_day.hide()
 	if not is_instance_valid(chef_points_hud):
@@ -67164,6 +67167,8 @@ func _refresh_station(index: int) -> void:
 	var preview: Control = st["preview"]
 	if preview == null:
 		return
+	var blob := preview.get_node_or_null("BuildBurgerShadow") as ColorRect
+	if blob != null: blob.hide()
 	var layer_pool: Array = st.get("layer_pool", [])
 	for pooled in layer_pool:
 		if pooled != null and is_instance_valid(pooled):
@@ -67208,6 +67213,9 @@ func _refresh_station(index: int) -> void:
 	var bun_h0 := _layer_img_height("bun_bottom") * layer_scale
 	var origin_x := stage_w * 0.52 ## slight right bias for left margin
 	var origin_y := stage_h * 0.66 + bun_h0 * 0.18
+	var preview_scale := preview.get_global_transform().get_scale()
+	origin_x -= 30.0 / maxf(absf(preview_scale.x), 0.01)
+	origin_y -= 30.0 / maxf(absf(preview_scale.y), 0.01)
 	## Stack step — room between layers without floating the meat.
 	var step_y := 18.0 * layer_scale
 	var layer_w := mini(360.0, stage_w * 0.94)
@@ -67293,11 +67301,29 @@ func _refresh_station(index: int) -> void:
 	## Nest: heel tucks slightly; crown lifts clear of the patty.
 	if bottom_row != null and is_instance_valid(bottom_row):
 		bottom_row.position.y -= BUILD_BUN_NEST_BOTTOM_PX * layer_scale
+		_update_build_burger_shadow(preview, bottom_row.position + Vector2(bottom_row.size.x * 0.5, bottom_row.size.y * 0.84), Vector2(bottom_row.size.x * 1.14, bottom_row.size.x * 0.30))
 	if top_row != null and is_instance_valid(top_row):
 		top_row.position.y += BUILD_BUN_NEST_TOP_PX * layer_scale
 	_update_station_layer_hint(index)
 	_queue_station_review_thumbnail(index)
 	_refresh_ticket_checkmarks()
+
+
+func _update_build_burger_shadow(preview: Control, center: Vector2, shadow_size: Vector2) -> void:
+	var blob := preview.get_node_or_null("BuildBurgerShadow") as ColorRect
+	if blob == null:
+		blob = ColorRect.new()
+		blob.name = "BuildBurgerShadow"
+		blob.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		blob.z_index = 0
+		var mat := ShaderMaterial.new()
+		mat.shader = preload("res://shaders/build_burger_blob.gdshader")
+		blob.material = mat
+		preview.add_child(blob)
+		preview.move_child(blob, 0)
+	blob.position = center - shadow_size * 0.5
+	blob.size = shadow_size
+	blob.show()
 
 
 func _station_patty_has_cheese(st: Dictionary, pidx: int) -> bool:
@@ -77101,23 +77127,69 @@ func mp_quick_transfer(net_id: int) -> void:
 	if patty != null and _mp_peer_holding_net(net_id) == 0:
 		_quick_transfer_patty(patty)
 
+func _build_needs_patty() -> bool:
+	if stations.size() <= STATION_CRAFT: return false
+	var built: Array = stations[STATION_CRAFT].get("items", [])
+	var needed := 1
+	var target = selected_customer
+	if not is_instance_valid(target) or bool(target.get("is_leaving")):
+		target = null
+		for customer in customers:
+			if is_instance_valid(customer) and not bool(customer.get("is_leaving")):
+				target=customer;break
+	if is_instance_valid(target):
+		var order: Array = target.order
+		needed = order.count("patty")
+	return built.count("patty") < needed
+
 func _quick_transfer_patty(patty: Area3D) -> void:
-	if not is_instance_valid(patty) or not patty.can_scoop() or patty.is_held: return
-	if _is_in_warmer_zone(patty.position):
-		if mp_enabled: mp_commit_patty_build.rpc(int(patty.net_id))
-		else:
-			_commit_patty_to_build(patty)
-			if patty.is_held and int(patty.slot_index) >= 0 and grill[int(patty.slot_index)] == patty:
-				grill[int(patty.slot_index)] = null
-		return
-	var bounds := _warmer_place_bounds()
-	var center := bounds.get_center()
-	var pos := _find_closest_open_patty_place_in_rect(Vector3(center.x, GRILL_SURFACE_Y, center.y), bounds, int(patty.slot_index))
-	if pos == Vector3.ZERO:
-		_flash("HOLD is full — move a burger to Build", Color("FFCC80"))
-		return
-	if mp_enabled: mp_place_warmer.rpc(int(patty.net_id), int(patty.slot_index), pos.x, pos.z)
-	else: _place_spatula_on_warmer_local(int(patty.slot_index), pos, patty)
+	if not is_instance_valid(patty) or not patty.can_scoop() or patty.is_held or bool(patty.get_meta("click_transfer",false)): return
+	var to_build := _is_in_warmer_zone(patty.position) or _build_needs_patty()
+	var pos := Vector3.ZERO
+	if not to_build:
+		var bounds := _warmer_place_bounds()
+		var center := bounds.get_center()
+		pos = _find_closest_open_patty_place_in_rect(Vector3(center.x, GRILL_SURFACE_Y, center.y), bounds, int(patty.slot_index))
+		if pos == Vector3.ZERO:
+			_flash("HOLD is full — move a burger to Build", Color("FFCC80"));return
+	if mp_enabled: mp_click_transfer.rpc(int(patty.net_id),to_build,pos)
+	else: _animate_click_transfer(patty,to_build,pos)
+
+@rpc("authority", "call_local", "reliable")
+func mp_click_transfer(net_id: int, to_build: bool, pos: Vector3) -> void:
+	var p := _patty_by_net_id(net_id)
+	if is_instance_valid(p): _animate_click_transfer(p,to_build,pos)
+
+func _animate_click_transfer(patty: Area3D, to_build: bool, pos: Vector3) -> void:
+	if bool(patty.get_meta("click_transfer",false)): return
+	_chef_quick_cook(patty,"Perfect cook — onto Build within 1s" if to_build else "Quick HOLD — moved within 1s")
+	patty.set_meta("click_transfer",true)
+	patty.is_held=true;patty.heating=false
+	var start: Vector3=patty.global_position
+	var end := Vector3(pos.x,GRILL_SURFACE_Y+PATTY_SIT_Y,pos.z)
+	if to_build:
+		end = _grill_plane_from_screen(_station_stack_screen_center(STATION_CRAFT)+Vector2(-30,-30))
+		if end==Vector3.ZERO: end=_cutting_board_world_center()
+		end.y=GRILL_SURFACE_Y+0.12
+	if game_audio: game_audio.play_scoop()
+	var tw:=create_tween()
+	tw.tween_method(func(t:float):
+		if not is_instance_valid(patty):return
+		patty.global_position=start.lerp(end,t)+Vector3.UP*(sin(t*PI)*0.42)
+		patty.rotation.x=TAU*t
+	,0.0,1.0,0.44)
+	tw.tween_callback(func():
+		if not is_instance_valid(patty):return
+		patty.remove_meta("click_transfer");patty.rotation=Vector3.ZERO;patty.is_held=false
+		if to_build:
+			if mp_enabled: mp_commit_patty_build(int(patty.net_id))
+			else:
+				var idx:=int(patty.slot_index)
+				_commit_patty_to_build(patty)
+				if patty.is_held and idx>=0 and grill[idx]==patty:grill[idx]=null
+		else: _place_spatula_on_warmer_local(int(patty.slot_index),pos,patty)
+		if mp_enabled and NetManager.is_host(): _mp_broadcast_grill()
+	)
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -77147,12 +77219,12 @@ func _chef_fresh_serve(customer: Object, freshness: float, payout: int) -> void:
 	if payout > 0 and freshness >= 0.8:
 		_chef_award_once(customer,"fresh",15,"Fresh serve")
 
-func _chef_quick_cook(patty: Area3D) -> void:
+func _chef_quick_cook(patty: Area3D, reason: String = "Perfect cook — lifted within 1s") -> void:
 	if not is_instance_valid(patty) or _is_bun_toast(patty) or not patty.can_scoop(): return
 	if bool(patty.get_meta("chef_cook", false)): return
 	var done_at := int(patty.get_meta("chef_done_at", -1))
 	if done_at >= 0 and Time.get_ticks_msec() - done_at <= 1000:
-		_chef_award_once(patty,"cook",20,"Perfect cook")
+		_chef_award_once(patty,"cook",20,reason)
 	elif not mp_enabled or NetManager.is_host():
 		patty.set_meta("chef_cook",true)
 
