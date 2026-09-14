@@ -24,6 +24,7 @@ var old_cat_visible := false
 var old_cat_process := true
 var body_rest := Vector3.ZERO
 var finished := false
+var arrival_jingle: AudioStreamPlayer
 var drive_audio: AudioStreamPlayer3D
 var horn_audio: AudioStreamPlayer3D
 var fill_light: OmniLight3D
@@ -73,17 +74,17 @@ func _ready() -> void:
 	courier.hide()
 	drive_audio = AudioStreamPlayer3D.new()
 	drive_audio.stream = preload("res://sounds/vehicles/car_pass_by_left_to_right.ogg")
-	drive_audio.volume_db = -9.0
+	drive_audio.volume_db = -2.98
 	drive_audio.max_distance = 35.0
 	truck.add_child(drive_audio)
 	horn_audio = AudioStreamPlayer3D.new()
 	horn_audio.stream = preload("res://sounds/vehicles/car_horn_double_beep.wav")
-	horn_audio.volume_db = -13.0
+	horn_audio.volume_db = -6.98
 	horn_audio.max_distance = 35.0
 	truck.add_child(horn_audio)
 	skid_audio = AudioStreamPlayer3D.new()
 	skid_audio.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
-	skid_audio.volume_db = -9.0
+	skid_audio.volume_db = -2.98
 	skid_audio.unit_size = 5.0
 	skid_audio.max_distance = 30.0
 	truck.add_child(skid_audio)
@@ -93,6 +94,10 @@ func _ready() -> void:
 	meow_audio.unit_size = 5.0
 	meow_audio.max_distance = 25.0
 	courier.add_child(meow_audio)
+	arrival_jingle=AudioStreamPlayer.new()
+	arrival_jingle.stream=preload("res://sounds/vehicles/mail_arrival_jingle.wav")
+	arrival_jingle.volume_db=-9.0
+	add_child(arrival_jingle)
 	fill_light = OmniLight3D.new()
 	fill_light.light_color = Color(1.0, 0.94, 0.83)
 	fill_light.light_energy = 2.0
@@ -121,6 +126,7 @@ func set_phase(value: String) -> void:
 	if value == "hop_out":
 		drive_audio.stop()
 		horn_audio.play()
+		arrival_jingle.play()
 
 func delivery_origin_global() -> Vector3:
 	return parcel.to_global(Vector3(0, 0.13, 0)) if parcel else courier.global_position + Vector3(0, 0.6, 0)

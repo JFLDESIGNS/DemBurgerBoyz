@@ -3048,3 +3048,13 @@ func cook_rating() -> Dictionary:
 func cook_rating_text() -> String:
 	var r := cook_rating()
 	return "%s  %s" % [r["label"], r["detail"]]
+
+
+func apply_mp_shape(shape: int) -> void:
+	if shape == 1:
+		if not place_ball_waiting and not place_morphing: play_frozen_drop_appear()
+	elif shape == 2:
+		if place_ball_waiting: play_frozen_drop_smash()
+	elif place_ball_waiting or place_morphing:
+		if is_instance_valid(_place_morph_tw): _place_morph_tw.kill()
+		_finish_frozen_drop_morph()

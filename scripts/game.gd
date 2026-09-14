@@ -3324,6 +3324,11 @@ var _mp_bootstrap_active: Dictionary = {}
 var _mp_bootstrap_next := 0
 var _mp_building_bootstrap := 0
 var _mp_bootstrap_waiting := 0
+var _mp_order_revision := 0
+var _mp_retired_customer_ids: Dictionary = {}
+var _mp_load_epoch := 0
+var _mp_load_ready_peers: Dictionary = {}
+var _mp_load_released := false
 var _mp_bootstrap_ready := false
 var _mp_bootstrap_request_time := 0
 var _mp_bulk_jobs: Array = []
@@ -5178,6 +5183,11 @@ func _start_game(guided_tutorial: bool = false) -> void:
 				await get_tree().process_frame
 		else:
 			await _run_comprehensive_gameplay_load()
+	if mp_enabled and NetManager.is_online():
+		await _mp_prepare_remote_visuals()
+		if not await _mp_wait_for_cooks():
+			_start_transition_in_progress = false
+			return
 	_start_game_immediate(guided_tutorial)
 	_start_transition_in_progress = false
 
@@ -6276,6 +6286,9 @@ func _input(event: InputEvent) -> void:
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
+			if _try_right_click_build_layer(event.position):
+				get_viewport().set_input_as_handled()
+				return
 			if spatula_patty != null and _is_over_garbage(event.position):
 				_trash_spatula_patty()
 				get_viewport().set_input_as_handled()
@@ -6428,7 +6441,7 @@ func _input(event: InputEvent) -> void:
 			_release_spilled_fry(event.position)
 			get_viewport().set_input_as_handled()
 			return
-		if grill_roomba_held:
+		if grill_roomba_held and grill_roomba_remote_holder_id == 0:
 			_release_grill_roomba()
 			get_viewport().set_input_as_handled()
 			return
@@ -6445,6 +6458,9 @@ func _input(event: InputEvent) -> void:
 		if event.pressed:
 			if spatula_patty != null and _is_over_garbage(event.position):
 				_trash_spatula_patty()
+				get_viewport().set_input_as_handled()
+				return
+			if _try_fryer_basket_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			## The cutting board / Build controls overlap the left edge of the steel in
@@ -6529,7 +6545,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null or garbage_bag_held:
+			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or (grill_roomba_held and grill_roomba_remote_holder_id == 0) or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null or garbage_bag_held:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -6609,7 +6625,7 @@ func _input(event: InputEvent) -> void:
 			_release_spilled_fry(event.position)
 			get_viewport().set_input_as_handled()
 			return
-		if grill_roomba_held:
+		if grill_roomba_held and grill_roomba_remote_holder_id == 0:
 			_release_grill_roomba()
 			get_viewport().set_input_as_handled()
 			return
@@ -15698,8 +15714,11 @@ func _begin_patty_drag(patty: Area3D) -> void:
 		return
 	if flicking_patty != null:
 		return
+	if bool(patty.get_meta("click_transfer",false)): return
 	if patty.is_held:
-		return
+		if mp_enabled and grill.has(patty) and _mp_peer_holding_net(int(patty.net_id))==0:
+			patty.is_held=false
+		else: return
 	if dragging_patty == patty and (not mp_enabled or drag_owner_id == 0 or drag_owner_id == NetManager.my_id()):
 		return
 	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
@@ -16828,6 +16847,10 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
 	var st: Dictionary = stations[STATION_CRAFT]
+	if st.get("patties",[]).has(patty):
+		patty.is_held=true;patty.heating=false;patty.visible=false
+		_refresh_station(STATION_CRAFT)
+		return
 	var items: Array = st["items"]
 	patty.is_held = true
 	patty.heating = false
@@ -17698,7 +17721,7 @@ func _update_grill_roomba(delta: float) -> void:
 	if not _owns_grill_roomba() or not playing:
 		grill_roomba_root.visible = false
 		grill_roomba_ledge_phase = ""
-		if grill_roomba_held:
+		if grill_roomba_held and grill_roomba_remote_holder_id == 0:
 			_release_grill_roomba()
 		if game_audio and game_audio.has_method("set_roomba_drive"):
 			game_audio.set_roomba_drive(false)
@@ -18292,6 +18315,7 @@ func mp_roomba_hold(active: bool, x: float, y: float, z: float, yaw: float, hold
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	var holder_id := holder_peer_id if holder_peer_id != 0 else sid
+	if active and holder_id == NetManager.my_id() and sid != 0: return
 	_mp_applying = true
 	grill_roomba_root.visible = _owns_grill_roomba()
 	grill_roomba_root.global_position = Vector3(x, y, z)
@@ -18300,7 +18324,7 @@ func mp_roomba_hold(active: bool, x: float, y: float, z: float, yaw: float, hold
 		grill_roomba_held = true
 		if holder_id != NetManager.my_id():
 			grill_roomba_remote_holder_id = holder_id
-			grill_roomba_remote_hold_timeout = 0.65
+			grill_roomba_remote_hold_timeout = 3.0
 		else:
 			grill_roomba_remote_holder_id = 0
 			grill_roomba_remote_hold_timeout = 0.0
@@ -19117,7 +19141,7 @@ func _mp_send_roomba_pose() -> void:
 		grill_roomba_held,
 		_roomba_patty_net_id(grill_roomba_carry_patty),
 		_roomba_patty_net_id(grill_roomba_scoop_patty),
-		NetManager.my_id() if grill_roomba_held else 0
+		(grill_roomba_remote_holder_id if grill_roomba_remote_holder_id != 0 else NetManager.my_id()) if grill_roomba_held else 0
 	)
 
 
@@ -20177,24 +20201,20 @@ func mp_roomba_pose(x: float, y: float, z: float, yaw: float, bump: float = 0.0,
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	var holder_id := holder_peer_id if holder_peer_id != 0 else sid
+	# Reliable hold/release owns the state; stale motion cannot pick it up again.
+	if held != grill_roomba_held: return
+	var current_holder := grill_roomba_remote_holder_id if grill_roomba_remote_holder_id != 0 else NetManager.my_id()
+	if held and holder_id != current_holder: return
+	if held and holder_id == NetManager.my_id(): return
+	if not held and sid != 1 and not NetManager.is_host(): return
 	grill_roomba_root.visible = _owns_grill_roomba()
 	var old_pos := grill_roomba_root.global_position
 	var target_pos := Vector3(x, y, z)
 	grill_roomba_root.global_position = target_pos if held else grill_roomba_root.global_position.lerp(target_pos, 0.42)
 	var smooth_yaw:= lerp_angle(deg_to_rad(grill_roomba_root.rotation_degrees.y), deg_to_rad(yaw), 0.18)
 	grill_roomba_root.rotation_degrees.y = rad_to_deg(smooth_yaw)
-	grill_roomba_held = held
-	if held:
-		if holder_id != NetManager.my_id():
-			grill_roomba_remote_holder_id = holder_id
-			grill_roomba_remote_hold_timeout = 0.65
-		else:
-			grill_roomba_remote_holder_id = 0
-			grill_roomba_remote_hold_timeout = 0.0
-	else:
-		if holder_id == 0 or grill_roomba_remote_holder_id == holder_id:
-			grill_roomba_remote_holder_id = 0
-			grill_roomba_remote_hold_timeout = 0.0
+	if held and grill_roomba_remote_holder_id != 0:
+		grill_roomba_remote_hold_timeout=3.0
 	if not face.is_empty():
 		_set_roomba_face(face)
 	if not is_inf(hinge_x) and grill_roomba_spatula_root != null and is_instance_valid(grill_roomba_spatula_root):
@@ -35728,6 +35748,10 @@ func _update_fryer_oil_bubbles(delta: float) -> void:
 func _fryer_basket_index_at(screen_pos: Vector2) -> int:
 	if not _owns_fryer_machine() or camera == null or fryer_baskets.is_empty():
 		return -1
+	for basket in fryer_baskets:
+		var peer := int(basket.get("remote_peer",0))
+		if peer != 0 and (peer==NetManager.my_id() or not NetManager.connected_peer_ids().has(peer)):
+			basket["remote_peer"]=0
 	var from := camera.project_ray_origin(screen_pos)
 	var to := from + camera.project_ray_normal(screen_pos) * 12.0
 	var q := PhysicsRayQueryParameters3D.create(from, to, FRYER_COLLISION_LAYER)
@@ -49034,23 +49058,24 @@ func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
 	_review_toast.z_index = 75
 	ui.add_child(_review_toast)
 	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_review_toast.offset_left=-734;_review_toast.offset_right=-380
+	_review_toast.offset_left=-850;_review_toast.offset_right=-610
 	_review_toast.offset_top=112;_review_toast.offset_bottom=112
 	var skin := StyleBoxFlat.new()
 	skin.bg_color=Color("192b36");skin.border_color=Color("e9bc5a")
-	skin.set_border_width_all(2);skin.set_corner_radius_all(14)
-	skin.content_margin_left=16;skin.content_margin_right=16;skin.content_margin_top=12;skin.content_margin_bottom=12
+	skin.set_border_width_all(2);skin.set_corner_radius_all(9)
+	skin.content_margin_left=10;skin.content_margin_right=10;skin.content_margin_top=7;skin.content_margin_bottom=7
 	_review_toast.add_theme_stylebox_override("panel",skin)
-	var copy:=Label.new();copy.custom_minimum_size.x=310;copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	var copy:=Label.new();copy.custom_minimum_size.x=220;copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	copy.max_lines_visible=3;copy.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
 	copy.text="%s  %.1f / 5\n%s" % ["★".repeat(clampi(roundi(stars),0,5)),stars,review_text]
 	copy.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
-	copy.add_theme_font_size_override("font_size",19);copy.add_theme_color_override("font_color",Color("fff2cc"))
+	copy.add_theme_font_size_override("font_size",14);copy.add_theme_color_override("font_color",Color("fff2cc"))
 	_review_toast.add_child(copy)
 	_review_toast.modulate.a=0.0
 	_review_toast_tween=_review_toast.create_tween()
 	_review_toast_tween.tween_property(_review_toast,"modulate:a",1.0,0.18)
-	_review_toast_tween.tween_interval(6.0)
-	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.0,0.45)
+	_review_toast_tween.tween_interval(2.5)
+	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.0,0.25)
 	_review_toast_tween.tween_callback(_review_toast.queue_free)
 
 
@@ -61673,6 +61698,7 @@ func _create_ticket(customer: Node3D) -> void:
 	## Torn guest-check slip pinned on the window — handwriting + paper feel.
 	if customer == null or not is_instance_valid(customer):
 		return
+	if mp_enabled and not NetManager.is_host() and _mp_retired_customer_ids.has(_customer_net_id(customer)): return
 	if tickets.has(customer):
 		return
 	## Wrap owns layout size so non-selected slips can shrink without layout gaps.
@@ -62398,7 +62424,7 @@ func _select_ticket(customer: Node3D) -> void:
 	if mp_enabled and not _mp_applying:
 		var nid := _customer_net_id(customer)
 		if nid >= 0:
-			mp_select_customer.rpc(nid)
+			mp_select_customer(nid)
 			return
 	_select_ticket_local(customer)
 
@@ -62481,6 +62507,9 @@ func _mp_force_remove_customer(cust: Node3D) -> void:
 		return
 	if bool(cust.get_meta("burger_in_flight", false)):
 		cust.set_meta("remote_departure_pending", true)
+		_remove_ticket(cust)
+		customers.erase(cust)
+		if selected_customer == cust: selected_customer=null
 		return
 	_close_dialogue_if_customer(cust)
 	_remove_ticket(cust)
@@ -67594,16 +67623,11 @@ func _try_auto_serve() -> void:
 	## The tutorial explicitly teaches manual serving with Enter; do not steal that lesson.
 	if tutorial_mode:
 		return
-	## Co-op: any cook can initiate; the reliable serve RPC keeps peers in one outcome.
-	var waiting: Array = []
-	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting:
-		waiting.append(selected_customer)
-	for c in customers:
-		if c == null or not is_instance_valid(c) or not c.is_waiting:
-			continue
-		if c == selected_customer:
-			continue
-		waiting.append(c)
+	# Only the host chooses a shared handoff; never fall through to a different order.
+	if mp_enabled and not NetManager.is_host(): return
+	var current := _resolve_serve_customer() as Node3D
+	if current == null: return
+	var waiting: Array = [current]
 	for cust in waiting:
 		## Don't auto-hand-off until any ordered soda is poured (or already handed).
 		if not _sides_ready_for_order(cust.order, cust):
@@ -69047,7 +69071,6 @@ func _complete_serve(
 	if bool(cust.get("is_challenge_guest")):
 		_complete_challenge_serve(station_index, cust, remote_drink)
 		return
-	selected_customer = cust
 	var st: Dictionary = stations[station_index]
 	var items: Array = st["items"]
 	var cached_review_pic := _make_review_burger_snapshot(station_index)
@@ -69609,18 +69632,21 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 
 
 func _resolve_serve_customer():
-	if selected_customer != null and is_instance_valid(selected_customer) and selected_customer.is_waiting \
-			and not bool(selected_customer.get("is_cut_collector")):
-		return selected_customer
-	selected_customer = null
+	if _order_can_receive_burger(selected_customer): return selected_customer
+	selected_customer=null
 	for c in customers:
-		if c != null and is_instance_valid(c) and c.is_waiting and not bool(c.get("is_cut_collector")):
-			if selected_customer != null:
-				selected_customer = null
-				break
-			selected_customer = c
+		if _order_can_receive_burger(c):
+			selected_customer=c
+			if mp_enabled and NetManager.is_host(): mp_select_customer(_customer_net_id(c))
+			break
 	_highlight_tickets()
 	return selected_customer
+
+func _order_can_receive_burger(customer: Node3D) -> bool:
+	return is_instance_valid(customer) and customer.is_waiting and not customer.is_leaving \
+		and not bool(customer.get("is_cut_collector")) and tickets.has(customer) \
+		and not bool(customer.get_meta("serve_in_progress",false)) \
+		and not bool(customer.get_meta("burger_in_flight",false))
 
 
 func _begin_customer_serve_handoff(customer: Node3D) -> void:
@@ -72105,6 +72131,11 @@ func _mp_rebuild_room_list() -> void:
 func _mp_on_session_start(session_seed: int) -> void:
 	## Every cook in the lobby (Ready or not) loads into the shift with the host.
 	seed(session_seed)
+	_mp_order_revision=0
+	_mp_retired_customer_ids.clear()
+	_mp_load_epoch=session_seed
+	_mp_load_ready_peers.clear()
+	_mp_load_released=false
 	mp_enabled = true
 	mp_held_net.clear()
 	_mp_drag_claims.clear()
@@ -72642,6 +72673,10 @@ func _mp_send_fryer_basket_pose(force: bool = false, active: bool = true, index:
 		return
 	_mp_fryer_basket_pose_cool = 0.05
 	var data: Dictionary = fryer_baskets[index]
+	if force:
+		data["pose_epoch"] = maxi(int(data.get("pose_epoch",0)),int(data.get("remote_epoch",0)))+1
+		data["remote_epoch"]=data["pose_epoch"]
+		data["remote_released"]=not active
 	var root := data.get("root") as Node3D
 	if root == null or not is_instance_valid(root):
 		return
@@ -72655,7 +72690,7 @@ func _mp_send_fryer_basket_pose(force: bool = false, active: bool = true, index:
 		float(data.get("cook", 0.0)),
 		float(data.get("shake", 0.0)),
 		p.x, p.y, p.z,
-		r.x, r.y, r.z
+		r.x, r.y, r.z, int(data.get("pose_epoch",0))
 	])
 
 
@@ -72671,7 +72706,8 @@ func _mp_send_fryer_basket_state(index: int, settle_home: bool = true) -> void:
 		float(data.get("cook", 0.0)),
 		float(data.get("shake", 0.0)),
 		float(data.get("smoke_after", 0.0)),
-		settle_home
+		settle_home,
+		int(data.get("pose_epoch",0))
 	)
 
 
@@ -73305,7 +73341,8 @@ func mp_fryer_basket_pose(
 	z: float,
 	rx: float,
 	ry: float,
-	rz: float
+	rz: float,
+	epoch: int = 0
 ) -> void:
 	var sid := _mp_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
@@ -73313,15 +73350,20 @@ func mp_fryer_basket_pose(
 	if index < 0 or index >= fryer_baskets.size():
 		return
 	var data: Dictionary = fryer_baskets[index]
+	if epoch < int(data.get("remote_epoch",0)): return
+	if epoch == int(data.get("remote_epoch",0)) and active and bool(data.get("remote_released",false)): return
 	if fryer_held_index == index:
 		## Local hand wins if both players race for the same basket.
 		return
 	var claimed_by := int(data.get("remote_peer", 0))
-	if active and claimed_by != 0 and claimed_by != sid:
+	if claimed_by != 0 and claimed_by != sid and epoch <= int(data.get("remote_epoch",0)):
 		return
 	var root := data.get("root") as Node3D
 	if root == null or not is_instance_valid(root):
 		return
+	data["remote_epoch"]=epoch
+	data["remote_released"]=not active
+	data["remote_seen_ms"]=Time.get_ticks_msec()
 	data["state"] = _fryer_code_to_state(state_code)
 	data["cook"] = clampf(cook, 0.0, fry_basket_cook_sec)
 	data["shake"] = maxf(0.0, shake)
@@ -73343,7 +73385,7 @@ func mp_fryer_basket_pose(
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: float, smoke_after: float = 0.0, settle_home: bool = true) -> void:
+func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: float, smoke_after: float = 0.0, settle_home: bool = true, epoch: int = 0) -> void:
 	var sid := multiplayer.get_remote_sender_id()
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
@@ -73352,6 +73394,9 @@ func mp_fryer_basket_state(index: int, state_code: int, cook: float, shake: floa
 	if fryer_held_index == index:
 		return
 	var data: Dictionary = fryer_baskets[index]
+	if epoch < int(data.get("remote_epoch",0)): return
+	data["remote_epoch"]=epoch
+	data["remote_released"]=true
 	var root := data.get("root") as Node3D
 	if root == null or not is_instance_valid(root):
 		return
@@ -73740,6 +73785,7 @@ func mp_patty_smash(net_id: int) -> void:
 	_mp_applying = true
 	p.smash()
 	_mp_applying = false
+	if NetManager.is_host(): _mp_broadcast_grill()
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -73751,7 +73797,7 @@ func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool, rx: fl
 		if generation != int(_mp_drag_generation.get(net_id, 0)):
 			return
 		var owner := int(_mp_drag_claims.get(net_id, 0))
-		if owner != 0 and owner != sender:
+		if owner == 0 or owner != sender:
 			return
 	var p = _patty_by_net_id(net_id)
 	if p == null:
@@ -73816,7 +73862,7 @@ func mp_claim_drag(net_id: int) -> void:
 			mp_claim_drag.rpc_id(1, net_id)
 		return
 	var owner := int(_mp_drag_claims.get(net_id, 0))
-	if owner != 0 and owner != sid:
+	if owner != 0 and owner != sid and sid != 1:
 		mp_drag_claimed.rpc_id(sid, net_id, owner, int(_mp_drag_generation.get(net_id, 0)))
 		return
 	_mp_claim_counter += 1
@@ -73833,6 +73879,8 @@ func mp_drag_claimed(net_id: int, owner: int, generation: int) -> void:
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
+	if _mp_peer_holding_net(net_id)==0 and not bool(p.get_meta("click_transfer",false)) and grill.has(p):
+		p.is_held=false
 	if dragging_patty == p:
 		if owner != NetManager.my_id():
 			dragging_patty = null
@@ -74395,9 +74443,13 @@ func _mp_emit_grill(peer_id: int = 0) -> void:
 			ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
 			heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
 		)
+	var shapes: Array = []
+	for nid in ids:
+		var shape_patty = _patty_by_net_id(int(nid))
+		shapes.append(1 if shape_patty.place_ball_waiting else (2 if shape_patty.place_morphing else 0))
 	_mp_publish_state("grill", [
 		ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
-		heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects
+		heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects, shapes
 	], peer_id)
 	_mp_broadcast_grill_mess(peer_id)
 
@@ -74674,7 +74726,8 @@ func mp_sync_grill(
 	melts: Array,
 	seasons: Array,
 	helds: Array,
-	perfects: Array = []
+	perfects: Array = [],
+	shapes: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -74702,11 +74755,12 @@ func mp_sync_grill(
 			p = _patty_by_net_id(nid)
 			if p == null:
 				continue
+		if i < shapes.size(): p.apply_mp_shape(int(shapes[i]))
 		## Don't yank local scoop / drag ownership mid-gesture.
 		var local_scoop: bool = spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id())
 		var local_drag: bool = dragging_patty == p and drag_owner_id == NetManager.my_id()
 		var perfect_snap := bool(perfects[i]) if i < perfects.size() else bool(p.perfect_flip)
-		if local_scoop or local_drag:
+		if local_scoop or local_drag or bool(p.get_meta("click_transfer",false)):
 			## Still repair absolute cook / HOLD / cheese so day-2 desync heals.
 			if p.has_method("apply_mp_state"):
 				p.apply_mp_state(
@@ -74714,13 +74768,13 @@ func mp_sync_grill(
 					bool(flipped[i]) if i < flipped.size() else bool(p.flipped_once),
 					float(firsts[i]) if i < firsts.size() else float(p.first_side_time),
 					float(smashs[i]) if i < smashs.size() else float(p.smash_bonus),
-					false,
+					bool(heatings[i]) if i < heatings.size() else bool(p.heating),
 					float(heat_muls[i]) if i < heat_muls.size() else float(p.heat_mul),
 					float(holds[i]) if i < holds.size() else float(p.warm_hold_time),
 					bool(cheeses[i]) if i < cheeses.size() else bool(p.has_cheese),
 					float(melts[i]) if i < melts.size() else float(p.cheese_melt),
 					float(seasons[i]) if i < seasons.size() else float(p.seasoning),
-					true,
+					local_scoop or bool(p.get_meta("click_transfer",false)),
 					p.position.x, p.position.y, p.position.z,
 					int(p.slot_index),
 					perfect_snap
@@ -74853,6 +74907,7 @@ func mp_commit_patty_build(net_id: int) -> void:
 	_commit_patty_to_build(p)
 	_mp_applying = false
 	if NetManager.is_host():
+		_mp_station_signatures.erase(STATION_CRAFT)
 		_mp_broadcast_station(STATION_CRAFT)
 		_mp_broadcast_grill()
 
@@ -75185,6 +75240,7 @@ func mp_buy_supply(id: String) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_customer_leave(net_id: int, angry: bool, dance: bool = false) -> void:
+	_mp_retired_customer_ids[net_id]=true
 	_mp_applying = true
 	var c = _customer_by_net_id(net_id)
 	if c != null and is_instance_valid(c):
@@ -75328,7 +75384,7 @@ func _mp_emit_customers(peer_id: int = 0) -> void:
 		pats.append(float(c.patience))
 		xs.append(float(c.global_position.x))
 		zs.append(float(c.global_position.z))
-		waits.append(bool(c.is_waiting))
+		waits.append(bool(c.is_waiting) and tickets.has(c))
 		leaves.append(bool(c.is_leaving))
 		clocks.append(float(c.get("order_elapsed_sec")) if "order_elapsed_sec" in c else 0.0)
 		sodas_handed.append(_customer_soda_handed(c))
@@ -75336,7 +75392,7 @@ func _mp_emit_customers(peer_id: int = 0) -> void:
 		fries_handed.append(_customer_fries_handed(c))
 		serving.append(bool(c.get_meta("serve_in_progress", false)))
 		yaws.append(float(c.rotation_degrees.y))
-	_mp_publish_state("customers", [ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed, serving], peer_id)
+	_mp_publish_state("customers", [ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed, serving, _customer_net_id(selected_customer) if is_instance_valid(selected_customer) else -1, _mp_order_revision], peer_id)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -75352,7 +75408,9 @@ func mp_sync_customers(
 	icecreams_handed: Array = [],
 	yaws: Array = [],
 	fries_handed: Array = [],
-	serving: Array = []
+	serving: Array = [],
+	active_order_id: int = -2,
+	order_revision: int = 0
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -75365,10 +75423,6 @@ func mp_sync_customers(
 		if c == null or not is_instance_valid(c):
 			continue
 		c.mp_host_driven = true
-		if bool(c.get_meta("burger_in_flight", false)):
-			if i < leaves.size() and bool(leaves[i]):
-				c.set_meta("remote_departure_pending", true)
-			continue
 		if i < pats.size():
 			c.patience = float(pats[i])
 			if c.has_method("_refresh_patience_bar"):
@@ -75381,7 +75435,8 @@ func mp_sync_customers(
 			_mark_customer_icecream_handed(c, bool(icecreams_handed[i]))
 		if i < fries_handed.size():
 			_mark_customer_fries_handed(c, bool(fries_handed[i]))
-		var host_serving := bool(serving[i]) if i < serving.size() else false
+		var host_serving := (bool(serving[i]) if i < serving.size() else false) or _mp_retired_customer_ids.has(nid)
+		if not host_serving: c.set_meta("burger_in_flight",false)
 		c.set_meta("serve_in_progress", host_serving)
 		var snap_pos: Vector3 = c.global_position
 		if i < xs.size():
@@ -75461,6 +75516,7 @@ func mp_sync_customers(
 				_mp_force_remove_customer(stray)
 				ticket_structure_changed = true
 	_mp_cull_stale_tickets(seen)
+	if active_order_id != -2: mp_order_selected(active_order_id,order_revision)
 	## Patience fill is cheap to repaint; avoid the heavier queue timer/layout pass
 	## unless tickets were actually created or removed by the host snapshot.
 	_refresh_ticket_patience_bars()
@@ -75485,6 +75541,7 @@ func mp_burger_serve_visual(net_id: int, station_index: int, with_soda: bool) ->
 
 @rpc("authority", "call_remote", "reliable")
 func mp_customer_serve_started(net_id: int) -> void:
+	_mp_retired_customer_ids[net_id]=true
 	## Reliable edge event removes the slip before the next periodic customer frame.
 	var customer = _customer_by_net_id(net_id)
 	if customer == null or not is_instance_valid(customer):
@@ -75501,12 +75558,27 @@ func mp_customer_serve_started(net_id: int) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_select_customer(net_id: int) -> void:
-	var c = _customer_by_net_id(net_id)
-	if c == null:
+	if not NetManager.is_host():
+		if multiplayer.get_remote_sender_id()==0: mp_select_customer.rpc_id(1,net_id)
 		return
-	_mp_applying = true
-	_select_ticket_local(c)
-	_mp_applying = false
+	var c = _customer_by_net_id(net_id)
+	if not _order_can_receive_burger(c): return
+	_mp_order_revision+=1
+	mp_order_selected.rpc(net_id,_mp_order_revision)
+	call_deferred("_try_auto_serve")
+
+@rpc("authority","call_local","reliable")
+func mp_order_selected(net_id: int, revision: int) -> void:
+	if revision < _mp_order_revision: return
+	_mp_order_revision=revision
+	var c = _customer_by_net_id(net_id)
+	if _order_can_receive_burger(c):
+		_mp_applying=true
+		_select_ticket_local(c)
+		_mp_applying=false
+	elif net_id<0:
+		selected_customer=null
+		_highlight_tickets()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -75655,7 +75727,7 @@ func mp_sync_station(
 		if p == null or not is_instance_valid(p):
 			continue
 		## Seat on Build for display — don't free extras; place/scoop/serve RPCs own lifetime.
-		if not grill.has(p) and p != spatula_patty and p != dragging_patty and p != flicking_patty:
+		if p != spatula_patty and p != dragging_patty and p != flicking_patty and not bool(p.get_meta("click_transfer",false)):
 			_mp_release_scoop_if(p)
 			p.is_held = true
 			p.heating = false
@@ -76862,7 +76934,7 @@ func mp_motion_frame(rows: Array) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender <= 0 or rows.size() > 32:
 		return
-	var arities := {"mp_tool_pose": 9, "mp_cup_pose": 13, "mp_icecream_pose": 9, "mp_cursor_pos": 4, "mp_patty_pose": 9, "mp_fryer_basket_pose": 11}
+	var arities := {"mp_tool_pose": 9, "mp_cup_pose": 13, "mp_icecream_pose": 9, "mp_cursor_pos": 4, "mp_patty_pose": 9, "mp_fryer_basket_pose": 12}
 	for row in rows:
 		if not row is Dictionary:
 			continue
@@ -77240,3 +77312,51 @@ func _apply_chef_points(total: int, revision: int, amount: int = 0, reason: Stri
 	if is_instance_valid(chef_points_hud):
 		if celebrate: chef_points_hud.set_total(chef_points,amount,reason)
 		elif chef_points_hud.points != chef_points: chef_points_hud.set_total(chef_points)
+
+
+func _try_right_click_build_layer(screen_pos: Vector2) -> bool:
+	for si in stations.size():
+		var rows: Array=stations[si].get("layer_pool",[])
+		for i in range(rows.size()-1,-1,-1):
+			var row=rows[i]
+			if is_instance_valid(row) and row.is_visible_in_tree() and row.get_global_rect().has_point(screen_pos):
+				_trash_station_layer(si,int(row.get_meta("stack_i",-1)))
+				return true
+	return false
+
+func _mp_wait_for_cooks() -> bool:
+	_mp_ensure_service()
+	var label:=Label.new()
+	label.text="Waiting for the other cooks to finish loading…"
+	label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	label.position=Vector2(-400,-30);label.size=Vector2(800,60)
+	label.add_theme_font_size_override("font_size",24);label.z_index=1000
+	get_node("UI/Root").add_child(label)
+	if NetManager.is_host(): _mp_load_ready_peers[NetManager.my_id()]=true
+	else: mp_cook_loaded.rpc_id(1,_mp_load_epoch)
+	while not _mp_load_released and NetManager.is_online():
+		if NetManager.is_host(): _mp_try_release_cooks()
+		await get_tree().process_frame
+	label.queue_free()
+	if not NetManager.is_online(): return false
+	# Same countdown begins only after every peer has finished its local warmup.
+	await get_tree().create_timer(0.75).timeout
+	return true
+
+@rpc("any_peer","call_remote","reliable")
+func mp_cook_loaded(epoch: int) -> void:
+	if not NetManager.is_host() or epoch != _mp_load_epoch: return
+	_mp_load_ready_peers[_mp_sender_id()]=true
+	if playing: mp_cooks_release.rpc_id(_mp_sender_id(),epoch)
+	else: _mp_try_release_cooks()
+
+func _mp_try_release_cooks() -> void:
+	if _mp_load_released or not _mp_load_ready_peers.has(NetManager.my_id()): return
+	for peer in NetManager.connected_peer_ids():
+		if not _mp_load_ready_peers.has(int(peer)): return
+	mp_cooks_release.rpc(_mp_load_epoch)
+
+@rpc("authority","call_local","reliable")
+func mp_cooks_release(epoch: int) -> void:
+	if epoch == _mp_load_epoch: _mp_load_released=true

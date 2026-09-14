@@ -13,7 +13,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	add_theme_constant_override("separation", 7)
-	tooltip_text = "Chef Points — perfect flips, quick lifts, fresh burgers and five-star reviews"
+	tooltip_text = "Chef Points â€” perfect flips, quick lifts, fresh burgers and five-star reviews"
 	var icon := TextureRect.new()
 	icon.texture=ICON;icon.custom_minimum_size=Vector2(32,32)
 	icon.size_flags_vertical=Control.SIZE_SHRINK_CENTER
@@ -24,7 +24,7 @@ func _ready() -> void:
 	number.add_theme_color_override("font_color",Color("ffdc73"))
 	number.add_theme_color_override("font_outline_color",Color("30251c"))
 	number.add_theme_constant_override("outline_size",2);number.vertical_alignment=VERTICAL_ALIGNMENT_CENTER;add_child(number)
-	sound=AudioStreamPlayer.new();sound.stream=CHIME;sound.volume_db=-13;add_child(sound)
+	sound=AudioStreamPlayer.new();sound.stream=CHIME;sound.volume_db=-6;add_child(sound)
 	_draw_count(0)
 func _draw_count(value: float) -> void:
 	shown=value;number.text=str(roundi(value))
@@ -45,18 +45,34 @@ func _show_next_reward() -> void:
 	var reward: Dictionary=reward_queue.pop_front()
 	var pop:=Label.new();pop.mouse_filter=Control.MOUSE_FILTER_IGNORE
 	active_pop=pop
-	pop.text="+%d CHEF POINTS  •  %s" % [reward.amount,reward.reason]
-	pop.add_theme_font_override("font",FONT);pop.add_theme_font_size_override("font_size",19)
+	pop.text="+%d CHEF POINTS  â€¢  %s" % [reward.amount,reward.reason]
+	pop.add_theme_font_override("font",FONT);pop.add_theme_font_size_override("font_size",21)
 	pop.add_theme_color_override("font_color",Color("ffe69a"));pop.add_theme_color_override("font_outline_color",Color("292322"));pop.add_theme_constant_override("outline_size",3)
 	get_tree().current_scene.get_node("UI/Root").add_child(pop)
 	pop.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	pop.offset_left=-540;pop.offset_right=-14;pop.offset_top=79;pop.offset_bottom=109
 	pop.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT;pop.z_index=90
 	pop.modulate.a=0.0
+	pop.pivot_offset=Vector2(520,15);pop.scale=Vector2(0.85,0.85)
 	var fly:=pop.create_tween();fly.tween_property(pop,"modulate:a",1.0,0.12)
+	fly.parallel().tween_property(pop,"scale",Vector2.ONE,0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	fly.tween_interval(2.1)
 	fly.tween_property(pop,"modulate:a",0.0,0.3)
 	fly.tween_callback(func():
 		pop.queue_free();active_pop=null;_show_next_reward()
 	)
+	_sparkle_burst(pop)
 	sound.pitch_scale=1.0+minf(float(reward.amount)/200.0,0.18);sound.play()
+
+
+func _sparkle_burst(pop: Control) -> void:
+	for i in 8:
+		var star:=Label.new();star.text="✦";star.mouse_filter=Control.MOUSE_FILTER_IGNORE
+		star.add_theme_font_size_override("font_size",14 + i % 3 * 3)
+		star.add_theme_color_override("font_color",Color("ffe285"))
+		pop.add_child(star);star.position=Vector2(440,8)
+		var angle:=float(i)*TAU/8.0
+		var tw:=star.create_tween().set_parallel(true)
+		tw.tween_property(star,"position",star.position+Vector2(cos(angle)*68,sin(angle)*26),0.5).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(star,"modulate:a",0.0,0.5)
+		tw.chain().tween_callback(star.queue_free)
