@@ -11,8 +11,8 @@ const TUTORIAL_COACH_X := 1.85
 const HOME_Z := 1.76
 ## Under the sill when hidden; peek high enough to clear the ledge.
 const HIDDEN_Y := 0.141
-## Raise the default counter peek by three inches so the eyes clear the fryer.
-const SHOWN_Y := 0.8172
+## Raise the default counter peek by one inch so the eyes clear the fryer.
+const SHOWN_Y := 0.7664
 const MESH_SCALE := 0.833333333 ## New asset already contains the old 4.02x modeling scale.
 ## Drop root Y only when overall (giant) scale grows — width chonk stays planted.
 ## Small nudge only — large drops buried him as he grew.

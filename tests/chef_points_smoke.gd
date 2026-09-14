@@ -1,0 +1,40 @@
+extends SceneTree
+func _initialize()->void:call_deferred("run")
+func run()->void:
+ var game=load("res://scenes/main.tscn").instantiate()
+ game.set_script(load(get_script().resource_path.get_base_dir().path_join("cook_controls_fixture.gd")))
+ root.add_child(game);current_scene=game;game.playing=true
+ game._layout_top_bar_hud()
+ var p=load("res://scripts/patty.gd").new()
+ game.patties_root.add_child(p);p.set_process(false)
+ p.flipped.connect(game._chef_perfect_flip.bind(p))
+ p.cook_time=15.0;assert(p.flip());assert(game.chef_points==10)
+ game._chef_perfect_flip(p);assert(game.chef_points==10,"No duplicate flip")
+ p.cook_time=15.0;p._update_ready_cues()
+ game._chef_quick_cook(p);assert(game.chef_points==30,"Timely lift earns points")
+ game._chef_quick_cook(p);assert(game.chef_points==30,"No duplicate lift")
+ p.remove_meta("chef_cook");p.set_meta("chef_done_at",Time.get_ticks_msec()-1001)
+ game._chef_quick_cook(p);assert(game.chef_points==30,"Late lift gets no points")
+ game._chef_fresh_serve(p,0.799,100);assert(game.chef_points==30)
+ game._chef_fresh_serve(p,0.8,0);assert(game.chef_points==30)
+ game._chef_fresh_serve(p,0.8,100);assert(game.chef_points==45)
+ game._chef_award_once(p,"review",25,"Five-star review")
+ assert(game.chef_points==70)
+ game._apply_chef_points(999,1,999,"Stale");assert(game.chef_points==70)
+ game._show_customer_review_ui(5.0,"Delicious! Fresh and perfectly cooked.")
+ assert(game._review_toast.visible)
+ assert(not game.hud_day.visible)
+ await create_timer(0.8).timeout
+ assert(game.chef_points_hud.number.text=="70")
+ game._seed_first_run_configs()
+ var cfg=ConfigFile.new();assert(cfg.load("user://gfx_settings.cfg")==OK)
+ cfg.set_value("graphics","chef_test_preserve",123);cfg.save("user://gfx_settings.cfg")
+ game._seed_first_run_configs();cfg.load("user://gfx_settings.cfg")
+ assert(cfg.get_value("graphics","chef_test_preserve")==123)
+ if DisplayServer.get_name()!="headless":
+  await RenderingServer.frame_post_draw
+  root.get_texture().get_image().save_png(OS.get_environment("CHEF_PREVIEW"))
+ print("CHEF_POINTS_OK")
+ game.queue_free()
+ for i in 8:await process_frame
+ quit()

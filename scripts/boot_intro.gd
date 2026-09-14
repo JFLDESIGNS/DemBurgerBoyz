@@ -59,7 +59,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if _changing: return
 	_company_age += delta
-	if not _company_done and _company_age >= COMPANY_SECONDS:
+	if not _company_done and _company_age >= COMPANY_SECONDS and company_splash.voice_started and not company_splash.voice.playing:
 		_company_done = true
 		company_splash.hide()
 		cinematic.show()

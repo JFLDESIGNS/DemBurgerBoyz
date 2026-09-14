@@ -3047,6 +3047,8 @@ func leave_closed() -> void:
 		return
 	if is_leaving or is_ragdoll:
 		return
+	_cancel_serve_celebration()
+	_eating = false
 	if _review_card_root != null and is_instance_valid(_review_card_root):
 		_review_card_root.visible = false
 	speech = "Aww, you're closed!"

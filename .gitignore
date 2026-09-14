@@ -37,3 +37,4 @@ mp_server/package-lock.json
 !tools/multiplayer_network_proxy.cjs
 !tools/build_compact_release.py
 !tools/deduplicate_embedded_pack.py
+!tools/generate_pal_robot_voice.ps1

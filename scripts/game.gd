@@ -1153,6 +1153,12 @@ var last_day_cut: float = 0.0
 var last_day_tips: float = 0.0
 var shift_food_sales: float = 0.0
 var shift_tips: float = 0.0
+var chef_points := 0
+var _chef_revision := 0
+var _chef_effect_revision := -1
+var chef_points_hud: HBoxContainer
+var _review_toast: PanelContainer
+var _review_toast_tween: Tween
 var _hud_money_shown: float = 0.0
 var _hud_money_climb_tween: Tween = null
 var _hud_money_climb_running: bool = false
@@ -1541,6 +1547,10 @@ var _world_hint_fade_t: float = 0.0
 var ice_melt_water_spots: Array = [] ## {mesh, mat, smoke, age, base_a, rad}
 var fryer_baskets: Array = []
 var fryer_held_index: int = -1
+var _fryer_press_index := -1
+var _fryer_press_pos := Vector2.ZERO
+var _fryer_press_ms := 0
+var _fryer_auto_mode := ""
 ## Burgerpack try2 inspect gallery on the grill — pick up props to look at them.
 var burgerpack_inspect_root: Node3D = null
 var burgerpack_inspect_items: Array = [] ## Area3D roots
@@ -5198,6 +5208,10 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	## Backup if title-screen warm was skipped / still running.
 	call_deferred("_ensure_runtime_prewarms")
 	money = START_MONEY
+	chef_points = 0
+	_chef_revision += 1
+	_chef_effect_revision = _chef_revision
+	if is_instance_valid(chef_points_hud): chef_points_hud.set_total(0)
 	bank_savings = 0.0
 	bank_loan = 0.0
 	bank_borrow_typed = 100.0
@@ -5526,6 +5540,11 @@ func _process_gameplay(delta: float) -> void:
 		_update_parked_icecream_fill(delta)
 	if burnt_icecream_cone_held:
 		_update_held_burnt_icecream_cone(delta)
+	if _fryer_press_index >= 0 and (get_viewport().get_mouse_position().distance_to(_fryer_press_pos) > 8.0 or Time.get_ticks_msec() - _fryer_press_ms > 250):
+		var pressed_index := _fryer_press_index
+		_fryer_press_index = -1
+		_fryer_auto_mode = ""
+		_begin_fryer_basket_hold(pressed_index)
 	if fryer_held_index >= 0:
 		_update_held_fryer_basket(delta)
 	_update_machine_breaks(delta)
@@ -6256,6 +6275,16 @@ func _input(event: InputEvent) -> void:
 	## Right-click while holding extinguisher → spray white powder (hold to keep spraying).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:
+			if spatula_patty != null and _is_over_garbage(event.position):
+				_trash_spatula_patty()
+				get_viewport().set_input_as_handled()
+				return
+			if spatula_patty == null and not brush_held and not cheese_held and not shaker_held and not oil_held and not ext_held and not glock_held:
+				var scoop_target := _pick_patty_for_slide_or_scoop(event.position, false)
+				if scoop_target != null and scoop_target.can_scoop():
+					_on_patty_clicked(scoop_target)
+					get_viewport().set_input_as_handled()
+					return
 			## Scooped burger → juggle toss (2 flips; catch or land on grill).
 			if spatula_patty != null and is_instance_valid(spatula_patty) \
 					and spatula_juggle_patty == null and flicking_patty == null:
@@ -6306,6 +6335,13 @@ func _input(event: InputEvent) -> void:
 				return
 	## Sliding a patty / oil / shaker: release ends hold and returns tools home.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		if _fryer_press_index >= 0:
+			var pressed_index := _fryer_press_index
+			_fryer_press_index = -1
+			if _begin_fryer_basket_hold(pressed_index):
+				_fryer_auto_mode = "shake" if str(fryer_baskets[pressed_index].get("state", "")) == "done" else "cook"
+			get_viewport().set_input_as_handled()
+			return
 		if _tree_shake_held != null:
 			_release_tree_shake_hold()
 		if burnt_icecream_cone_held:
@@ -6379,7 +6415,7 @@ func _input(event: InputEvent) -> void:
 			_put_icecream_cone_down()
 			get_viewport().set_input_as_handled()
 			return
-		if fryer_held_index >= 0:
+		if fryer_held_index >= 0 and _fryer_auto_mode == "":
 			_release_fryer_basket()
 			get_viewport().set_input_as_handled()
 			return
@@ -6406,6 +6442,10 @@ func _input(event: InputEvent) -> void:
 	## Wire brush / oil / shaker / extinguisher: hold LMB to use — never steal clicks from UI buttons.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if spatula_patty != null and _is_over_garbage(event.position):
+				_trash_spatula_patty()
+				get_viewport().set_input_as_handled()
+				return
 			## The cutting board / Build controls overlap the left edge of the steel in
 			## screen space. Resolve a real grill burger (or the shared board/steel
 			## edge) here, before those controls can consume the press.
@@ -9685,7 +9725,7 @@ func _garbage_area_hit(screen_pos: Vector2) -> bool:
 	var query := PhysicsRayQueryParameters3D.create(from, to, PHYSICAL_GARBAGE_COLLISION_LAYER)
 	query.collide_with_areas = true
 	query.collide_with_bodies = false
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var hit := camera.get_world_3d().direct_space_state.intersect_ray(query)
 	return not hit.is_empty() and hit.get("collider") == physical_garbage_area
 
 
@@ -15097,7 +15137,7 @@ func _raycast_patty_at_screen(screen_pos: Vector2) -> Area3D:
 	query.collide_with_areas = true
 	query.collide_with_bodies = false
 	query.collision_mask = PATTY_COLLISION_LAYER
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var hit := camera.get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
 		return null
 	return _grill_patty_from_collider(hit.get("collider"))
@@ -15574,6 +15614,11 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1, skip_land_s
 			_flash("Patty warmer is catching up — try again", Color("FFCC80"))
 		push_warning("Patty pool exhausted; gameplay allocation intentionally skipped")
 		return
+	for key in ["chef_flip", "chef_cook"]:
+		if p.has_meta(key): p.remove_meta(key)
+	p.set_meta("chef_done_at", -1)
+	var chef_callback := Callable(self, "_chef_perfect_flip").bind(p)
+	if not p.flipped.is_connected(chef_callback): p.flipped.connect(chef_callback)
 	var nid := net_id if net_id >= 0 else (-1 if not mp_enabled else NetManager.alloc_net_id())
 	var base_y := GRILL_SURFACE_Y + PATTY_SIT_Y
 	var mp_puppet := mp_enabled and not NetManager.is_host()
@@ -15982,6 +16027,12 @@ func _end_patty_drag() -> void:
 		return
 	## Quick tap only → flip / scoop. Hold ≥ 0.2s (or slide) never auto-scoops.
 	if is_quick_tap:
+		if patty.can_scoop() and not _is_bun_toast(patty):
+			if mp_enabled:
+				if NetManager.is_host(): mp_quick_transfer(int(patty.net_id))
+				else: mp_quick_transfer.rpc_id(1, int(patty.net_id))
+			else: _quick_transfer_patty(patty)
+			return
 		if _raycast_patty_at_screen(drag_start_mouse) == patty:
 			_smash_grill_patty(patty)
 		_on_patty_clicked(patty) ## Flip is intentionally more forgiving than smash.
@@ -16053,6 +16104,7 @@ func _flick_patty_to_build(patty: Area3D) -> void:
 	if idx >= 0 and idx < grill.size():
 		grill[idx] = null
 	patty.heating = false
+	_chef_quick_cook(patty)
 	patty.is_held = true
 	_leave_grill_residue(idx, patty, false)
 	flicking_patty = patty
@@ -16214,6 +16266,7 @@ func _mp_apply_remote_scoop(patty: Area3D, peer_id: int) -> void:
 	## Partner scooped — show the patty in-air without taking our local spatula.
 	if patty == null or not is_instance_valid(patty):
 		return
+	_chef_quick_cook(patty)
 	var idx: int = int(patty.slot_index)
 	if idx >= 0 and idx < grill.size() and grill[idx] == patty:
 		grill[idx] = null
@@ -16260,6 +16313,7 @@ func _pickup_patty(patty: Area3D) -> void:
 		if holder != 0 and holder != NetManager.my_id():
 			_flash("Partner is carrying that — click it to steal", Color("FFCC80"))
 			return
+	_chef_quick_cook(patty)
 	var idx: int = patty.slot_index
 	if idx >= 0 and idx < grill.size():
 		grill[idx] = null
@@ -16768,6 +16822,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	if _is_bun_toast(patty):
 		_commit_bun_to_build(patty)
 		return
+	_chef_quick_cook(patty)
 	_mp_release_scoop_if(patty)
 	spatula_vel_screen = Vector2.ZERO
 	spatula_carry_travel = 0.0
@@ -22538,7 +22593,7 @@ func _ray_hits_tool(screen_pos: Vector2, layer: int, area: Area3D) -> bool:
 	q.collide_with_areas = true
 	q.collide_with_bodies = false
 	q.collision_mask = layer
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := camera.get_world_3d().direct_space_state.intersect_ray(q)
 	return not hit.is_empty() and hit.get("collider") == area
 
 
@@ -28191,6 +28246,7 @@ func _place_spatula_on_warmer_local(idx: int, pos: Vector3, patty: Area3D = null
 		patty = spatula_patty
 	if patty == null or not is_instance_valid(patty):
 		return
+	_chef_quick_cook(patty)
 	_mp_release_scoop_if(patty)
 	patty.is_held = false
 	patty.visible = true
@@ -34795,6 +34851,8 @@ func _build_fryer_machine() -> void:
 	fryer_baskets.clear()
 	fryer_oil_bubbles.clear()
 	fryer_held_index = -1
+	_fryer_press_index = -1
+	_fryer_auto_mode = ""
 	_fryer_prev_pos = Vector3.ZERO
 	_fryer_vel = Vector3.ZERO
 
@@ -34816,7 +34874,7 @@ func _build_fryer_machine() -> void:
 
 	var steel_mat := _make_soda_metal_mat(Color(0.60, 0.61, 0.58), 0.92, 0.18)
 	var oil_mat := _make_basic_mat(fryer_oil_color, 0.05, 0.14)
-	oil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	oil_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 	oil_mat.emission_enabled = true
 	oil_mat.emission = fryer_oil_color.lightened(0.08)
 	oil_mat.emission_energy_multiplier = 0.34
@@ -34845,7 +34903,7 @@ func _build_fryer_machine() -> void:
 	fryer_ready_root.name = "ReadyFriesHoldArea"
 	world.add_child(fryer_ready_root)
 
-	_create_fryer_basket(0, Vector3(_fryer_tub_local_x(0), FRYER_BASKET_HOME_Y, FRYER_OIL_LOCAL.z - 0.04))
+	_create_fryer_basket(0, _fryer_oil_local_for_index(0) + Vector3(0.0, FRYER_BASKET_HOME_Y - FRYER_OIL_LOCAL.y, -0.04))
 	_refresh_ready_fries_visuals()
 	call_deferred("_seat_bun_piles_by_fryer")
 
@@ -34889,9 +34947,10 @@ func _create_fryer_basket(index: int, local_pos: Vector3) -> void:
 	area.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(0.34, 0.34, 0.36)
+	var grab_bounds := _mesh_aabb_in_node_space(visual) if visual != null else AABB(Vector3(-0.17, -0.065, -0.1), Vector3(0.34, 0.34, 0.36))
+	box.size = grab_bounds.size + Vector3(0.06, 0.08, 0.06)
 	shape.shape = box
-	shape.position = Vector3(0.0, 0.105, 0.08)
+	shape.position = grab_bounds.get_center()
 	area.add_child(shape)
 	basket.add_child(area)
 	basket.scale = Vector3.ONE * maxf(0.35, fryer_basket_scale)
@@ -34935,11 +34994,11 @@ func _refresh_fryer_hint_label() -> void:
 			has_raw = true
 	var next := "click basket to add potatoes"
 	if has_done:
-		next = "shake basket to finish"
+		next = "click to shake · drag to shake by hand"
 	elif has_cooking:
 		next = "cooking fries..."
 	elif has_raw:
-		next = "dip basket in oil to cook"
+		next = "click to dunk · hold and drag for manual"
 	if fryer_label.text != next:
 		fryer_label.text = next
 
@@ -35562,6 +35621,8 @@ func _refresh_ready_fries_visuals() -> void:
 
 
 func _reset_fryer_state(clear_servings: bool = true) -> void:
+	_fryer_press_index = -1
+	_fryer_auto_mode = ""
 	fryer_held_index = -1
 	_fryer_prev_pos = Vector3.ZERO
 	_fryer_vel = Vector3.ZERO
@@ -35671,7 +35732,7 @@ func _fryer_basket_index_at(screen_pos: Vector2) -> int:
 	var q := PhysicsRayQueryParameters3D.create(from, to, FRYER_COLLISION_LAYER)
 	q.collide_with_areas = true
 	q.collide_with_bodies = false
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := camera.get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.has("collider"):
 		var hit_area := hit["collider"] as Area3D
 		for i in fryer_baskets.size():
@@ -35690,7 +35751,7 @@ func _fryer_basket_index_at(screen_pos: Vector2) -> int:
 		var root := data2.get("root") as Node3D
 		if root == null or not is_instance_valid(root):
 			continue
-		var sp := camera.unproject_position(root.global_position + Vector3(0.0, 0.06, 0.08))
+		var sp := camera.unproject_position(root.to_global(Vector3(0.0, 0.105, 0.08)))
 		var d := sp.distance_to(screen_pos)
 		if d < best_d:
 			best_d = d
@@ -35725,7 +35786,11 @@ func _try_fryer_basket_click(screen_pos: Vector2) -> bool:
 		if game_audio:
 			game_audio.play_click()
 		return true
-	return _begin_fryer_basket_hold(idx)
+	if _fryer_auto_mode != "": return true
+	_fryer_press_index = idx
+	_fryer_press_pos = screen_pos
+	_fryer_press_ms = Time.get_ticks_msec()
+	return true
 
 
 func _ready_fries_index_under_cursor(screen_pos: Vector2) -> int:
@@ -35737,7 +35802,7 @@ func _ready_fries_index_under_cursor(screen_pos: Vector2) -> int:
 	var q := PhysicsRayQueryParameters3D.create(from, to, FRYER_COLLISION_LAYER)
 	q.collide_with_areas = true
 	q.collide_with_bodies = false
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := camera.get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.has("collider"):
 		var node := hit["collider"] as Node
 		while node != null:
@@ -35852,6 +35917,8 @@ func _update_held_fryer_basket(delta: float) -> void:
 		return
 	var mouse := get_viewport().get_mouse_position()
 	var oil := _fryer_oil_global(fryer_held_index)
+	if _fryer_auto_mode == "cook" and camera != null:
+		mouse = camera.unproject_position(oil + Vector3(0.0, 0.08, 0.0)) + Vector2(0, 180)
 	var carry_y := GRILL_SURFACE_Y + FRYER_BASKET_HOLD_Y
 	if oil != Vector3.ZERO:
 		carry_y = oil.y + 0.20
@@ -35881,6 +35948,8 @@ func _update_held_fryer_basket(delta: float) -> void:
 		if state_now == "done" or float(data.get("pop_t", 0.0)) > 0.0:
 			seat.y = maxf(seat.y, oil.y + FRYER_DONE_POP_Y)
 		oil_lock = maxf(oil_lock, dunk_depth)
+	if _fryer_auto_mode == "shake":
+		seat = oil + Vector3(sin(Time.get_ticks_msec() * 0.035) * 0.045, FRYER_DONE_POP_Y + 0.04, 0)
 	var prev := root.global_position
 	root.global_position = root.global_position.lerp(seat, clampf(delta * 14.0, 0.0, 1.0))
 	_fryer_vel = (root.global_position - _fryer_prev_pos) / maxf(delta, 0.001)
@@ -35920,7 +35989,7 @@ func _update_held_fryer_basket(delta: float) -> void:
 			var pop_target := oil.y + FRYER_DONE_POP_Y + sin((0.55 - pop_t) * TAU * 1.6) * 0.035
 			root.global_position.y = lerpf(root.global_position.y, pop_target, clampf(delta * 16.0, 0.0, 1.0))
 		var shake_speed := maxf(Vector2(_fryer_vel.x, _fryer_vel.z).length(), absf(_fryer_vel.y) * 0.45)
-		if shake_speed > fry_basket_shake_speed_threshold:
+		if _fryer_auto_mode == "shake" or shake_speed > fry_basket_shake_speed_threshold:
 			data["shake"] = float(data.get("shake", 0.0)) + delta * fry_basket_shake_gain
 			root.rotation_degrees.z = sin(Time.get_ticks_msec() * 0.035) * 8.0
 		else:
@@ -35932,6 +36001,9 @@ func _update_held_fryer_basket(delta: float) -> void:
 	data["state"] = state
 	fryer_baskets[fryer_held_index] = data
 	_refresh_fryer_basket_visual(fryer_held_index)
+	if _fryer_auto_mode == "cook" and state == "done":
+		_release_fryer_basket()
+		return
 	## Carry tilt only when not planted in the oil.
 	if not ((state == "cooking" or state == "raw") and in_oil):
 		root.rotation_degrees.y = clampf(-_fryer_vel.x * 12.0, -10.0, 10.0)
@@ -35940,6 +36012,7 @@ func _update_held_fryer_basket(delta: float) -> void:
 
 
 func _release_fryer_basket() -> void:
+	_fryer_auto_mode = ""
 	if fryer_held_index < 0 or fryer_held_index >= fryer_baskets.size():
 		fryer_held_index = -1
 		return
@@ -48920,6 +48993,7 @@ func _commit_social_review(
 	## Retain the one compressed copy used by multiplayer feed snapshots.
 	if not pic_png.is_empty() and not social_reviews.is_empty():
 		(social_reviews[0] as Dictionary)["pic_png"] = pic_png
+	if stars >= 4.95: _chef_award_once(customer, "review", 25, "Five-star review")
 	_show_customer_review_stars(customer, stars, text)
 	_show_customer_review_ui(stars, text)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
@@ -48948,10 +49022,35 @@ func _show_customer_review_stars(customer: Node3D, stars: float, review_text: St
 		customer.show_review_stars(stars, review_text)
 
 
-func _show_customer_review_ui(_stars: float, _review_text: String = "") -> void:
-	## The compact world-space star card is the only kitchen review overlay.
-	## Full review wording remains available in the phone feed, never on a body.
-	pass
+func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
+	var ui := get_node_or_null("UI/Root") as Control
+	if ui == null: return
+	if is_instance_valid(_review_toast_tween): _review_toast_tween.kill()
+	if is_instance_valid(_review_toast): _review_toast.queue_free()
+	_review_toast = PanelContainer.new()
+	_review_toast.name = "CustomerReview"
+	_review_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_review_toast.z_index = 75
+	ui.add_child(_review_toast)
+	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	_review_toast.offset_left=-374;_review_toast.offset_right=-20
+	_review_toast.offset_top=112;_review_toast.offset_bottom=112
+	var skin := StyleBoxFlat.new()
+	skin.bg_color=Color("192b36");skin.border_color=Color("e9bc5a")
+	skin.set_border_width_all(2);skin.set_corner_radius_all(14)
+	skin.content_margin_left=16;skin.content_margin_right=16;skin.content_margin_top=12;skin.content_margin_bottom=12
+	_review_toast.add_theme_stylebox_override("panel",skin)
+	var copy:=Label.new();copy.custom_minimum_size.x=310;copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	copy.text="%s  %.1f / 5\n%s" % ["★".repeat(clampi(roundi(stars),0,5)),stars,review_text]
+	copy.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
+	copy.add_theme_font_size_override("font_size",19);copy.add_theme_color_override("font_color",Color("fff2cc"))
+	_review_toast.add_child(copy)
+	_review_toast.modulate.a=0.0
+	_review_toast_tween=_review_toast.create_tween()
+	_review_toast_tween.tween_property(_review_toast,"modulate:a",1.0,0.18)
+	_review_toast_tween.tween_interval(6.0)
+	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.0,0.45)
+	_review_toast_tween.tween_callback(_review_toast.queue_free)
 
 
 func _apply_social_review(
@@ -52309,8 +52408,7 @@ func _setup_game_audio() -> void:
 
 
 func _seed_first_run_configs() -> void:
-	## Apply the release-tuned profile once to both clean installs and older installs.
-	## Keys not present in the bundled profile survive the merge, so newer settings are safe.
+	## Seed new installs and missing keys without replacing a player's saved tuning.
 	var profiles := [
 		{"user": GFX_CFG_PATH, "bundled": FIRST_RUN_GFX_CFG_PATH},
 		{"user": AUDIO_CFG_PATH, "bundled": FIRST_RUN_AUDIO_CFG_PATH},
@@ -52338,7 +52436,8 @@ func _seed_first_run_configs() -> void:
 			continue
 		for section in bundled.get_sections():
 			for key in bundled.get_section_keys(section):
-				local.set_value(section, key, bundled.get_value(section, key))
+				if not local.has_section_key(section, key):
+					local.set_value(section, key, bundled.get_value(section, key))
 		local.set_value(RELEASE_PROFILE_SECTION, RELEASE_PROFILE_KEY, required_version)
 		if local.save(user_path) != OK:
 			push_warning("Could not update release settings profile: %s" % user_path)
@@ -59847,7 +59946,13 @@ func _layout_top_bar_hud() -> void:
 	top_bar.offset_bottom = 73.0
 	top_bar.alignment = BoxContainer.ALIGNMENT_END
 	if hud_day != null and is_instance_valid(hud_day):
-		top_bar.move_child(hud_day, 0)
+		hud_day.hide()
+	if not is_instance_valid(chef_points_hud):
+		chef_points_hud = preload("res://scripts/chef_points_hud.gd").new()
+		chef_points_hud.name = "ChefPoints"
+		top_bar.add_child(chef_points_hud)
+		chef_points_hud.set_total(chef_points)
+	top_bar.move_child(chef_points_hud, 0)
 	if hud_money != null and is_instance_valid(hud_money):
 		top_bar.move_child(hud_money, top_bar.get_child_count() - 1)
 	_layout_combo_above_tickets()
@@ -65524,6 +65629,9 @@ func _sync_open_closed_sign(animate: bool) -> void:
 
 
 func _toggle_service_window() -> void:
+	if mp_enabled and not _mp_applying:
+		mp_set_service_closed.rpc(not service_window_closed)
+		return
 	if not playing or shift_paused:
 		return
 	if service_window_closed:
@@ -68969,6 +69077,7 @@ func _complete_serve(
 	)
 	var payout: int = int(pay.get("total", 0))
 	var tip_amt: int = int(pay.get("tip", 0))
+	if not guest_mp: _chef_fresh_serve(cust, fresh_r, payout)
 	var was_meh: bool = false if tutorial_mode else (bool(pay.get("meh", false)) or not seasoned)
 	if tutorial_mode:
 		cook_r = cook_r.duplicate()
@@ -71146,12 +71255,18 @@ func _close_location_map_ui() -> void:
 
 
 func _dismiss_line_customers(because_closed: bool = true) -> void:
-	for customer in customers.duplicate():
+	var departing: Array = customers.duplicate()
+	if customers_root != null:
+		for child in customers_root.get_children():
+			if child is CustomerScript and not departing.has(child): departing.append(child)
+	for customer in departing:
 		if customer == null or not is_instance_valid(customer):
 			continue
 		if bool(customer.get("is_ragdoll")):
 			_on_customer_left(customer, false)
 			continue
+		customer.set_meta("burger_in_flight", false)
+		customer.set("_eating", false)
 		if not bool(customer.get("is_leaving")):
 			if because_closed and customer.has_method("leave_closed"):
 				customer.leave_closed()
@@ -71211,6 +71326,11 @@ func _relocate_sequence(location_id: String) -> void:
 
 
 func _apply_location_local(location_id: String) -> void:
+	if current_location_id != location_id and customers_root != null:
+		_dismiss_line_customers()
+		for child in customers_root.get_children():
+			if child is CustomerScript: child.queue_free()
+		_customer_departure_holds.clear()
 	current_location_id = location_id
 	_save_truck_location()
 	_apply_current_location_background_settings()
@@ -73599,6 +73719,8 @@ func mp_patty_smash(net_id: int) -> void:
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func mp_patty_pose(net_id: int, x: float, y: float, z: float, held: bool, rx: float = 0.0, ry: float = 0.0, rz: float = 0.0, generation: int = 0) -> void:
 	var sender := _mp_sender_id()
+	if held and _mp_peer_holding_net(net_id) != sender:
+		return
 	if not held:
 		if generation != int(_mp_drag_generation.get(net_id, 0)):
 			return
@@ -74921,7 +75043,9 @@ func _mp_emit_economy(peer_id: int = 0) -> void:
 		shop_ids,
 		shop_vals,
 		fryer_ready_servings,
-		pending_machine_deliveries.keys()
+		pending_machine_deliveries.keys(),
+		chef_points,
+		_chef_revision
 	], peer_id)
 
 
@@ -74943,11 +75067,14 @@ func mp_sync_economy(
 	shop_ids: Array = [],
 	shop_vals: Array = [],
 	fry_servings: int = -1,
-	pending_equipment: Array = []
+	pending_equipment: Array = [],
+	shared_chef_points: int = 0,
+	chef_revision: int = 0
 ) -> void:
 	## Guest applies host world economy as absolute truth.
 	if NetManager.is_host():
 		return
+	_apply_chef_points(shared_chef_points, chef_revision)
 	var before_inventory := [supply_stock.duplicate(), supply_fresh.duplicate(), soda_tank_fill.duplicate()]
 	var before_machines := owned_machines.duplicate()
 	var before_fries := fryer_ready_servings
@@ -76965,3 +77092,79 @@ func _throw_cat_machine_delivery(id: String) -> void:
 	world.add_child(flight)
 	flight.setup(self, destination)
 	supply_delivery_fx.append({"mesh": flight, "kind": "machine", "id": id})
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_quick_transfer(net_id: int) -> void:
+	if not NetManager.is_host(): return
+	var patty := _patty_by_net_id(net_id)
+	if patty != null and _mp_peer_holding_net(net_id) == 0:
+		_quick_transfer_patty(patty)
+
+func _quick_transfer_patty(patty: Area3D) -> void:
+	if not is_instance_valid(patty) or not patty.can_scoop() or patty.is_held: return
+	if _is_in_warmer_zone(patty.position):
+		if mp_enabled: mp_commit_patty_build.rpc(int(patty.net_id))
+		else:
+			_commit_patty_to_build(patty)
+			if patty.is_held and int(patty.slot_index) >= 0 and grill[int(patty.slot_index)] == patty:
+				grill[int(patty.slot_index)] = null
+		return
+	var bounds := _warmer_place_bounds()
+	var center := bounds.get_center()
+	var pos := _find_closest_open_patty_place_in_rect(Vector3(center.x, GRILL_SURFACE_Y, center.y), bounds, int(patty.slot_index))
+	if pos == Vector3.ZERO:
+		_flash("HOLD is full — move a burger to Build", Color("FFCC80"))
+		return
+	if mp_enabled: mp_place_warmer.rpc(int(patty.net_id), int(patty.slot_index), pos.x, pos.z)
+	else: _place_spatula_on_warmer_local(int(patty.slot_index), pos, patty)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_set_service_closed(closed: bool) -> void:
+	_mp_applying = true
+	if closed: _close_service_window()
+	else: _open_service_window()
+	_mp_applying = false
+
+
+func _chef_award_once(source: Object, key: String, amount: int, reason: String) -> void:
+	if not playing or (mp_enabled and not NetManager.is_host()): return
+	if is_instance_valid(source):
+		if bool(source.get_meta("chef_" + key, false)): return
+		source.set_meta("chef_" + key, true)
+	_chef_revision += 1
+	_apply_chef_points(chef_points + amount, _chef_revision, amount, reason)
+	if mp_enabled and NetManager.is_online():
+		mp_chef_points.rpc(chef_points, _chef_revision, amount, reason)
+		_mp_broadcast_economy()
+
+func _chef_perfect_flip(patty: Area3D) -> void:
+	if is_instance_valid(patty) and bool(patty.perfect_flip):
+		_chef_award_once(patty,"flip",10,"Perfect flip")
+
+func _chef_fresh_serve(customer: Object, freshness: float, payout: int) -> void:
+	if payout > 0 and freshness >= 0.8:
+		_chef_award_once(customer,"fresh",15,"Fresh serve")
+
+func _chef_quick_cook(patty: Area3D) -> void:
+	if not is_instance_valid(patty) or _is_bun_toast(patty) or not patty.can_scoop(): return
+	if bool(patty.get_meta("chef_cook", false)): return
+	var done_at := int(patty.get_meta("chef_done_at", -1))
+	if done_at >= 0 and Time.get_ticks_msec() - done_at <= 1000:
+		_chef_award_once(patty,"cook",20,"Perfect cook")
+	elif not mp_enabled or NetManager.is_host():
+		patty.set_meta("chef_cook",true)
+
+@rpc("authority", "call_remote", "reliable")
+func mp_chef_points(total: int, revision: int, amount: int, reason: String) -> void:
+	_apply_chef_points(total, revision, amount, reason)
+
+func _apply_chef_points(total: int, revision: int, amount: int = 0, reason: String = "") -> void:
+	if revision < _chef_revision: return
+	chef_points=maxi(0,total);_chef_revision=revision
+	var celebrate := amount > 0 and revision > _chef_effect_revision
+	if celebrate: _chef_effect_revision=revision
+	if is_instance_valid(chef_points_hud):
+		if celebrate: chef_points_hud.set_total(chef_points,amount,reason)
+		elif chef_points_hud.points != chef_points: chef_points_hud.set_total(chef_points)

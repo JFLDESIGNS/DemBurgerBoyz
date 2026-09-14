@@ -1,4 +1,9 @@
 # Pal Laboratories
-Original vector cat-in-a-flask company mark for Food Truck Flip.
 
-The company splash is composed by `scripts/pal_company_splash.gd` using this SVG and the existing Fredoka Bold font. `scripts/boot_intro.gd` shows it for five seconds after the engine splash while the intro video prewarms.
+Original red-lens computer-panel mark inspired by retro science-fiction computers.
+The five-second company splash preloads the intro and plays a locally synthesized
+robot voice: “I am sorry I…” [pause] “OK, fine.”
+
+Voice: Microsoft David Desktop speech synthesis, lowered pitch and light modulation;
+no film dialogue samples or actor voice recordings. Generated phrases and mixing
+recipe are stored in `tools/generate_pal_robot_voice.ps1`.
