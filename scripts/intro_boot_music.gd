@@ -7,9 +7,33 @@ const TARGET_DB := -9.5
 var player: AudioStreamPlayer
 var _fade_tw: Tween
 var mode := ""
+var intro_voice: AudioStreamPlayer
+var intro_voice_play_count := 0
+
+func play_intro_voice() -> void:
+	if not is_instance_valid(intro_voice):
+		intro_voice = AudioStreamPlayer.new()
+		intro_voice.name = "BurgerPalsIntroVoice"
+		intro_voice.bus = "SFX"
+		intro_voice.stream = load("res://sounds/burgerpals.wav") as AudioStream
+		intro_voice.volume_db = -7.5
+		add_child(intro_voice)
+	if intro_voice.stream != null:
+		intro_voice.play()
+		intro_voice_play_count += 1
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	var cfg := ConfigFile.new()
+	cfg.load("user://audio_settings.cfg")
+	var general := clampf(float(cfg.get_value("audio", "master_ui", 1.0)), 0.0, 1.0)
+	AudioServer.set_bus_mute(0, general <= 0.0001)
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(general * 0.20, 0.0001)))
+	var effects := clampf(float(cfg.get_value("audio", "effects_volume", 1.0)), 0.0, 1.0)
+	var bus := AudioServer.get_bus_index("SFX")
+	if bus >= 0:
+		AudioServer.set_bus_mute(bus, effects <= 0.0001)
+		AudioServer.set_bus_volume_db(bus, linear_to_db(maxf(effects, 0.0001)))
 
 func _play_track(path: String, next_mode: String) -> void:
 	if is_instance_valid(player) and mode == next_mode and player.playing:

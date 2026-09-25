@@ -1,0 +1,26 @@
+extends SceneTree
+func _initialize() -> void: call_deferred("run")
+func run() -> void:
+	var cat = load("res://scripts/window_cat.gd").new()
+	root.add_child(cat)
+	cat.set_process(false)
+	cat.feed("tomato",true)
+	cat._update_character(0.0)
+	assert(cat._anim.current_animation == "04_Happy_Hop")
+	assert(is_equal_approx(cat._anim.speed_scale,3.0))
+	cat._update_character(0.05)
+	assert(is_equal_approx(cat._anim.speed_scale,3.0), "Update must not reset feed playback speed")
+	cat.pet(true)
+	cat._update_character(0.0)
+	assert(is_equal_approx(cat._anim.speed_scale,1.0), "Petting retains its original speed")
+	cat.feed("patty",true)
+	cat._update_character(0.0)
+	assert(is_equal_approx(cat._anim.speed_scale,3.0))
+	assert(is_equal_approx(cat.FED_HOLD_SEC,1.15/3.0))
+	cat._state = "running"
+	cat._update_character(0.0)
+	assert(is_equal_approx(cat._anim.speed_scale,1.0))
+	print("CAT_FED_HOP_OK 3x fed animation, shorter celebration, normal pet and walk")
+	cat.queue_free()
+	await process_frame
+	quit()

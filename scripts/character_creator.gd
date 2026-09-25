@@ -1055,6 +1055,10 @@ func _apply_canonical_face_layout() -> void:
 	character.eye_specular_horizontal = -0.025
 	character.eye_specular_vertical = 0.04
 	character.eye_specular_depth = 0.0
+	character.eye_specular_pie_amount = 1.0
+	character.eye_specular_pie_angle = 35.0
+	character.eye_specular_pie_width = 55.0
+	character.eye_specular_pie_inset = 0.12
 	character.left_eye_yaw = -0.6
 	character.right_eye_yaw = 0.6
 	character.eyelid_enabled = true
@@ -1267,6 +1271,7 @@ func _save_character() -> void:
 		"customer_voice": character.customer_voice,
 		"body_type": "kenney_chunky_toon",
 		"skin_color": character.skin_color.to_html(true),
+		"surface_look": character.surface_look.duplicate(),
 		"skin_paint": character.get_skin_paint_png_base64(),
 		"eyes": "procedural_masked_spheres",
 		"eye_width": character.eye_width,
@@ -1283,6 +1288,10 @@ func _save_character() -> void:
 		"eye_specular_horizontal": character.eye_specular_horizontal,
 		"eye_specular_vertical": character.eye_specular_vertical,
 		"eye_specular_depth": character.eye_specular_depth,
+		"eye_specular_pie_amount": character.eye_specular_pie_amount,
+		"eye_specular_pie_angle": character.eye_specular_pie_angle,
+		"eye_specular_pie_width": character.eye_specular_pie_width,
+		"eye_specular_pie_inset": character.eye_specular_pie_inset,
 		"eyelid_enabled": character.eyelid_enabled,
 		"eyelid_scale": character.eyelid_scale,
 		"eyelid_width": character.eyelid_width,
@@ -1417,6 +1426,8 @@ func _load_character_file(preset_path: String) -> void:
 		_set_status("The saved character file is invalid.", true)
 		return
 	var data := parsed as Dictionary
+	character.surface_look = data.get("surface_look", {}).duplicate() if data.get("surface_look", {}) is Dictionary else {}
+	preload("res://scripts/character_surface_controls.gd").refresh_ui(self)
 	character.customer_voice = preload("res://scripts/customer_voice.gd").resolve(data)
 	ModularCharacterBase.migrate_legacy_hair_fields(data)
 	ModularCharacterBase.Wardrobe.migrate_preset(data)
@@ -1446,6 +1457,10 @@ func _load_character_file(preset_path: String) -> void:
 	character.eye_specular_horizontal = clampf(float(data.get("eye_specular_horizontal", -0.025)), -0.08, 0.08)
 	character.eye_specular_vertical = clampf(float(data.get("eye_specular_vertical", 0.04)), -0.10, 0.10)
 	character.eye_specular_depth = clampf(float(data.get("eye_specular_depth", 0.0)), -0.05, 0.08)
+	character.eye_specular_pie_amount = clampf(float(data.get("eye_specular_pie_amount", 1.0)), 0.0, 1.0)
+	character.eye_specular_pie_angle = clampf(float(data.get("eye_specular_pie_angle", 35.0)), -180.0, 180.0)
+	character.eye_specular_pie_width = clampf(float(data.get("eye_specular_pie_width", 55.0)), 5.0, 120.0)
+	character.eye_specular_pie_inset = clampf(float(data.get("eye_specular_pie_inset", 0.12)), -0.3, 0.8)
 	character.eyelid_enabled = true
 	character.eyelid_scale = clampf(float(data.get("eyelid_scale", 1.0)), 0.5, 2.2)
 	character.eyelid_width = clampf(float(data.get("eyelid_width", 1.0)), 0.4, 2.0)
@@ -1644,6 +1659,10 @@ func _setup_module_controls() -> void:
 	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_horizontal", "Left / right", -0.08, 0.08, 0.005, character.eye_specular_horizontal, func(value: float) -> void: character.eye_specular_horizontal = value)
 	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_vertical", "Up / down", -0.10, 0.10, 0.005, character.eye_specular_vertical, func(value: float) -> void: character.eye_specular_vertical = value)
 	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_depth", "Into / out", -0.05, 0.08, 0.005, character.eye_specular_depth, func(value: float) -> void: character.eye_specular_depth = value)
+	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_pie_amount", "Pie cut strength", 0.0, 1.0, 0.05, character.eye_specular_pie_amount, func(value: float) -> void: character.eye_specular_pie_amount = value)
+	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_pie_angle", "Pie cut rotation", -180.0, 180.0, 1.0, character.eye_specular_pie_angle, func(value: float) -> void: character.eye_specular_pie_angle = value)
+	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_pie_width", "Pie cut opening", 5.0, 120.0, 1.0, character.eye_specular_pie_width, func(value: float) -> void: character.eye_specular_pie_width = value)
+	_add_adjustment_slider(eye_specular_adjustments, "eye_specular_pie_inset", "Pie cut depth", -0.3, 0.8, 0.02, character.eye_specular_pie_inset, func(value: float) -> void: character.eye_specular_pie_inset = value)
 	_add_adjustment_slider(eye_rotation_adjustments, "left_eye_yaw", "Left eye", -0.8, 0.8, 0.01, character.left_eye_yaw, func(value: float) -> void: character.left_eye_yaw = value)
 	_add_adjustment_slider(eye_rotation_adjustments, "right_eye_yaw", "Right eye", -0.8, 0.8, 0.01, character.right_eye_yaw, func(value: float) -> void: character.right_eye_yaw = value)
 	_add_adjustment_slider(lash_adjustments, "lash_rim_width", "Rim thickness", 0.01, 0.36, 0.005, character.lash_rim_width, func(value: float) -> void: character.lash_rim_width = value)
@@ -2177,6 +2196,10 @@ func _sync_adjustment_controls() -> void:
 	var values := {
 		"eye_width": character.eye_width, "eye_height": character.eye_height, "eye_vertical": character.eye_vertical, "eye_spacing": character.eye_spacing, "eye_depth": character.eye_depth, "eye_pupil_size": character.eye_pupil_size, "eye_pupil_inward": character.eye_pupil_inward, "eye_sclera_brightness": character.eye_sclera_brightness,
 		"eye_specular_scale": character.eye_specular_scale, "eye_specular_horizontal": character.eye_specular_horizontal, "eye_specular_vertical": character.eye_specular_vertical, "eye_specular_depth": character.eye_specular_depth,
+		"eye_specular_pie_amount": character.eye_specular_pie_amount,
+		"eye_specular_pie_angle": character.eye_specular_pie_angle,
+		"eye_specular_pie_width": character.eye_specular_pie_width,
+		"eye_specular_pie_inset": character.eye_specular_pie_inset,
 		"left_eye_yaw": character.left_eye_yaw, "right_eye_yaw": character.right_eye_yaw,
 		"eyelid_scale": character.eyelid_scale, "eyelid_width": character.eyelid_width, "eyelid_height": character.eyelid_height, "eyelid_depth": character.eyelid_depth, "eyelid_vertical": character.eyelid_vertical, "eyelid_forward": character.eyelid_forward, "eyelid_mask_height": character.eyelid_mask_height, "eyelid_mask_width": character.eyelid_mask_width,
 		"lash_rim_width": character.lash_rim_width,

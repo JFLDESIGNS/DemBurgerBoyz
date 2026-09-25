@@ -34,11 +34,13 @@ func run() -> void:
  await game._run_comprehensive_gameplay_load()
  measuring=false
  expect(int(game.get_meta("loading_first_play_ms", 99999)) < 1500,"Movie must start immediately, before heavy preparation")
- expect(int(game.get_meta("loading_movie_count", 0)) == 1,"Start the movie once; loading must not wait for interludes")
+ expect(int(game.get_meta("loading_movie_count", 0)) == 1,"Play one complete crossing before loading")
+ expect(int(game.get_meta("loading_first_batch_ms", 0)) >= 19800,"No gameplay preparation before the first crossing finishes")
+ expect(int(game.get_meta("loading_item_preparation_ms",0)) >= 35000,"Prepare items for thirty-five seconds after the full clip")
  print("LOADING_SCHEDULE first_play_ms=",game.get_meta("loading_first_play_ms")," movies=",game.get_meta("loading_movie_count")," durations_ms=",game.get_meta("loading_movie_durations_ms"))
  expect(game.get_meta("loading_video_complete", false),"Loading presentation must be marked complete when gameplay is ready")
- expect(game._loading_video.video_path.ends_with("burger_pals_loading_16.ogv"),"New muted Technicolor clip must be loaded")
- print("LOADING_MOVIE_RUNS_ALONGSIDE_PREPARATION")
+ expect(game._loading_video.video_path.ends_with("burger_pals_night_loading.ogv"),"New muted Technicolor clip must be loaded")
+ print("LOADING_FIRST_CROSSING_THEN_OFFSCREEN_PREPARATION")
  expect(game._kitchen_ready and game._gameplay_load_complete,"Kitchen and resources must finish loading")
  expect(game._gameplay_resource_cache.has(game.REFINED_SOFT_SERVE_PATH),"Soft serve model must load off the main thread before kitchen construction")
  var mascot: Node3D = game.icecream_root.get_node_or_null("IceCreamMascot")
@@ -47,6 +49,8 @@ func run() -> void:
  var rotation_before: float = mascot.rotation.y
  game._update_icecream_mascot_spin(1.0)
  expect(not is_equal_approx(rotation_before,mascot.rotation.y),"Machine topper must rotate")
+ expect(game._background_load_complete,"Audio and character warmups must finish before the boss introduction")
+ expect(game._runtime_prewarm_complete,"Runtime warmups must finish before gameplay")
  game._start_game_immediate(false)
  for i in 90: await process_frame
  expect(game.playing,"Gameplay must start after the staged load")
@@ -76,6 +80,8 @@ func run() -> void:
  if video_samples.size()>5:
   print("MOVIE_FRAMES p95_ms=",video_samples[int(video_samples.size()*.95)]," max_ms=",video_samples[-1])
 
+ while not game._background_load_complete: await process_frame
+ expect(game.playing,"Background loading must leave gameplay active")
  print("FULL_LOAD_OK")
  game.queue_free()
  for i in 8: await process_frame

@@ -15,7 +15,7 @@ func _function_body(source: String, function_name: String, next_function_name: S
 
 
 func _init() -> void:
-	var source := FileAccess.get_file_as_string("res://scripts/game.gd")
+	var source := FileAccess.get_file_as_string("res://scripts/game.gd").replace("\r\n", "\n")
 	var failures: Array[String] = []
 	var badge_body := _function_body(source, "_add_soda_flavor_graphic_plane", "_add_soda_ice_graphic")
 	var fallback_body := _function_body(source, "_add_soda_ice_graphic", "_make_soda_flavor_panel_backing_mat")

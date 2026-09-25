@@ -43,7 +43,7 @@ static func soda(visual: Node3D) -> void:
 		var size := minf(bounds.size.x, bounds.size.y)
 		var pos := bounds.get_center()
 		pos.z = bounds.position.z - 0.0015
-		var file := "ice_chip_v2.png" if fid == "ice" else "soda_chip_v2.png"
+		var file := "ice_flavor_chip.png" if fid == "ice" else "cola_flavor_chip.png"
 		var graphic := decal(pad, "FlavorGraphic_%s" % fid, file, Vector2.ONE * size, pos, Vector3(0, 180, 0))
 		if graphic != null:
 			for old in visual.find_children("FlavorLettering_%s_*" % fid, "MeshInstance3D", true, false):

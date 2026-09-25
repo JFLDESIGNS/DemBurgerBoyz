@@ -13,7 +13,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	add_theme_constant_override("separation", 7)
-	tooltip_text = "Chef Points â€” perfect flips, quick lifts, fresh burgers and five-star reviews"
+	tooltip_text = "Chef Points - perfect flips, quick lifts, fresh burgers and five-star reviews"
 	var icon := TextureRect.new()
 	icon.texture=ICON;icon.custom_minimum_size=Vector2(32,32)
 	icon.size_flags_vertical=Control.SIZE_SHRINK_CENTER
@@ -24,7 +24,7 @@ func _ready() -> void:
 	number.add_theme_color_override("font_color",Color("ffdc73"))
 	number.add_theme_color_override("font_outline_color",Color("30251c"))
 	number.add_theme_constant_override("outline_size",2);number.vertical_alignment=VERTICAL_ALIGNMENT_CENTER;add_child(number)
-	sound=AudioStreamPlayer.new();sound.stream=CHIME;sound.volume_db=-6;add_child(sound)
+	sound=AudioStreamPlayer.new(); sound.bus = "SFX";sound.stream=CHIME;sound.volume_db=-6;add_child(sound)
 	_draw_count(0)
 func _draw_count(value: float) -> void:
 	shown=value;number.text=str(roundi(value))
@@ -45,7 +45,7 @@ func _show_next_reward() -> void:
 	var reward: Dictionary=reward_queue.pop_front()
 	var pop:=Label.new();pop.mouse_filter=Control.MOUSE_FILTER_IGNORE
 	active_pop=pop
-	pop.text="+%d CHEF POINTS  â€¢  %s" % [reward.amount,reward.reason]
+	pop.text="+%d CHEF POINTS  -  %s" % [reward.amount,reward.reason]
 	pop.add_theme_font_override("font",FONT);pop.add_theme_font_size_override("font_size",21)
 	pop.add_theme_color_override("font_color",Color("ffe69a"));pop.add_theme_color_override("font_outline_color",Color("292322"));pop.add_theme_constant_override("outline_size",3)
 	get_tree().current_scene.get_node("UI/Root").add_child(pop)

@@ -25,6 +25,19 @@ var dance_left := 0.0
 var dance_phase := 0.0
 var tap_glance_left := 0.0
 var tap_glance_target := Vector3.ZERO
+const GRILL_DANCE_TAPS_REQUIRED := 3
+const GRILL_DANCE_TAP_WINDOW_MS := 1500
+var _grill_dance_taps := 0
+var _last_grill_dance_tap_ms := -10000
+
+func register_grill_dance_tap() -> bool:
+	if not can_grill_dance(): return false
+	var now := Time.get_ticks_msec()
+	if now - _last_grill_dance_tap_ms >= GRILL_DANCE_TAP_WINDOW_MS:
+		_grill_dance_taps = 0
+	_last_grill_dance_tap_ms = now
+	_grill_dance_taps = mini(_grill_dance_taps + 1, GRILL_DANCE_TAPS_REQUIRED)
+	return _grill_dance_taps >= GRILL_DANCE_TAPS_REQUIRED
 
 func can_grill_dance() -> bool:
 	return is_instance_valid(customer) and customer.is_waiting and not customer.is_leaving and not customer._eating and not customer.is_ragdoll and not customer.dialogue_open and not bool(customer.get_meta("serve_in_progress",false))

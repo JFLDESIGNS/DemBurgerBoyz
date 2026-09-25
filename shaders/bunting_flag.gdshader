@@ -8,6 +8,7 @@ uniform float edge_opacity : hint_range(0.0, 1.0) = 0.92;
 uniform float center_opacity : hint_range(0.0, 1.0) = 0.92;
 uniform float edge_width : hint_range(0.0, 0.35) = 0.08;
 uniform float edge_softness : hint_range(0.005, 0.35) = 0.09;
+uniform float top_brightness : hint_range(0.2, 1.0) = 0.35;
 uniform float glow_strength : hint_range(0.0, 1.0) = 0.0;
 
 void fragment() {
@@ -22,7 +23,8 @@ void fragment() {
 	vec4 texel = use_texture ? texture(flag_texture, UV) : vec4(1.0);
 	float opacity = use_texture ? 1.0 : mix(center_opacity, edge_opacity, edge_mask);
 	float alpha = opacity * flag_color.a * texel.a;
-	vec3 toon_color = texel.rgb * flag_color.rgb;
+	float shade = mix(top_brightness, 1.0, clamp(UV.y, 0.0, 1.0));
+	vec3 toon_color = texel.rgb * flag_color.rgb * shade;
 
 	ALBEDO = toon_color;
 	EMISSION = toon_color * glow_strength;

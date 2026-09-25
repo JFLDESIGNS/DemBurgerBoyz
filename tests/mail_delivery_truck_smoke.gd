@@ -1,9 +1,12 @@
 extends SceneTree
 class FakeGame extends Node3D:
+	var game_audio: Node
 	var window_cat: Node3D
 	var street_car_active := false
 	var supply_delivery_fx: Array = []
 	var deliveries: Array = []
+	func _flash(_text: String, _color: Color, _duration: float=1.8):pass
+	func _achievement_event(_event: String):pass
 	func _street_car_wheel_y() -> float: return -0.077312
 	func _street_car_z() -> float: return 7.18
 	func _throw_cat_supply_delivery(id: String, pack: int, kind: String) -> void: deliveries.append([id, pack, kind])
@@ -32,6 +35,7 @@ func run() -> void:
 				root.get_texture().get_image().save_png("res://output/mail_truck_game_preview.png")
 		if actor.finished: break
 	assert(actor.finished,"Delivery must complete and release traffic")
+	assert(actor.meow_count==3,"New meow must play during opening and after delivery")
 	assert(game.deliveries==[["lettuce",8,"stock"]],"Order should be delivered exactly once")
 	assert(actor.wheels.size()==4,"Four separate wheels must remain available")
 	assert(game.window_cat.is_processing() and game.window_cat.visible,"Original cat restored")

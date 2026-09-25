@@ -5,14 +5,14 @@ const SCENE_PATH := "res://assets/cat/shipping_cat.glb"
 const EYE_SHADER := preload("res://shaders/cat_eyes.gdshader")
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
-const HOME_X := 1.38
+const HOME_X := 1.6848
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
-const TUTORIAL_COACH_X := 1.85
+const TUTORIAL_COACH_X := 2.1548
 const HOME_Z := 1.76
 ## Under the sill when hidden; peek high enough to clear the ledge.
 const HIDDEN_Y := 0.141
-## Raise the default counter peek by one inch so the eyes clear the fryer.
-const SHOWN_Y := 0.7664
+## Counter peek lowered by one inch (0.0254 world meters).
+const SHOWN_Y := 0.741
 const MESH_SCALE := 0.833333333 ## New asset already contains the old 4.02x modeling scale.
 ## Drop root Y only when overall (giant) scale grows — width chonk stays planted.
 ## Small nudge only — large drops buried him as he grew.
@@ -39,7 +39,8 @@ const PEEK_CHANCE := 0.75
 const PEEK_MIN_SEC := 5.5
 const PEEK_MAX_SEC := 9.0
 ## After a full burger — celebrate, then bolt for a long break.
-const FED_HOLD_SEC := 1.15
+const FED_HOP_SPEED := 3.0
+const FED_HOLD_SEC := 1.15 / FED_HOP_SPEED
 const PATTY_EAT_WIDTH_BOOST := 0.25 ## +25% width while chewing a patty, before run-away.
 const RUN_SEC := 1.35
 const AFTER_BURGER_HIDE_SEC := 95.0
@@ -62,6 +63,7 @@ var _cat_eyes: Array[MeshInstance3D] = []
 var _postal_outfit: Array[Node3D] = []
 var _delivery_anim_left := 0.0
 var _happy_anim_left := 0.0
+var _happy_speed := 1.0
 var _state: String = "hidden" ## hidden | rising | peek | delivery_turning | lowering | fed_hold | bag_chase | bag_snatch | running
 var _timer: float = 4.0
 var _bob: float = 0.0
@@ -276,8 +278,8 @@ func _build() -> void:
 func _play_cat_clip(clip: String, restart: bool = false) -> void:
 	if _anim == null or not _anim.has_animation(clip): return
 	if restart or _anim.current_animation != clip:
-		_anim.play(clip, 0.12)
-	_anim.speed_scale = 1.0
+		_anim.play(clip, 0.12 / _happy_speed if clip == "04_Happy_Hop" else 0.12)
+	_anim.speed_scale = _happy_speed if clip == "04_Happy_Hop" else (2.0 if clip == "03_Box_Delivery" else 1.0)
 
 
 func delivery_origin_global() -> Vector3:
@@ -972,7 +974,8 @@ func pet(force: bool = false) -> void:
 	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
-	_happy_anim_left = 2.15
+	_happy_anim_left = 2.15 / 3.0
+	_happy_speed = 3.0
 	_treat_arm = 2.4
 	## Linger a bit longer when loved.
 	if _state == "peek" or _state == "rising" or force:
@@ -991,7 +994,8 @@ func feed(kind: String, force: bool = false) -> void:
 	if not force and not is_interactable():
 		return
 	_pet_squash = 1.0
-	_happy_anim_left = 2.15
+	_happy_anim_left = 2.15 / FED_HOP_SPEED
+	_happy_speed = FED_HOP_SPEED
 	_eat_flash = 0.6
 	_treat_arm = 0.0
 	if force and not visible:
@@ -1020,7 +1024,7 @@ func _feed_full_burger() -> void:
 	visible = true
 	position.y = _shown_y()
 	if _anim != null:
-		_anim.speed_scale = 1.25
+		_play_cat_clip("04_Happy_Hop", true)
 
 
 func reset_shift(persist_weight: bool = true) -> void:

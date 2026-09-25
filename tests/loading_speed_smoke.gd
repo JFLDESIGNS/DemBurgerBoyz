@@ -17,11 +17,16 @@ func run() -> void:
 	game._loading_screen_began_ms=Time.get_ticks_msec()
 	var start:=Time.get_ticks_msec()
 	await game._play_loading_interlude()
-	assert(Time.get_ticks_msec()-start<1500,"Loading must not wait for the full movie")
+	assert(Time.get_ticks_msec()-start>=18500,"Loading must wait for the complete first crossing")
+	assert(game._loading_video.video.paused,"Hold the empty frame while loading")
+	assert(game._loading_video.video.stream_position>=19.0,"Characters must be off screen before loading")
+	var hold_position:float=game._loading_video.video.stream_position
 	game._loading_batch_began_ms=Time.get_ticks_msec()-30000
 	start=Time.get_ticks_msec();await game._loading_batch_checkpoint()
 	assert(Time.get_ticks_msec()-start<1500,"Batch checkpoints must not replay the full movie")
-	assert(game._loading_video.looping)
+	assert(not game._loading_video.looping)
+	assert(game._loading_video.video.paused)
+	assert(is_equal_approx(hold_position,game._loading_video.video.stream_position),"Batch work must preserve the off-screen frame")
 	game._hide_gameplay_loading_screen()
 	assert(not game.game_audio.cat_sounds_muted)
 	game._loading_video.video.stream = null

@@ -11,6 +11,7 @@ var temperature_digits: Label3D
 
 func configure() -> void:
 	_raise_splash_guard()
+	_apply_matte_steel(self)
 	preload("res://scripts/machine_badges.gd").grill(self)
 	_build_control_display()
 	knob = find_child("PowerKnob", true, false) as Node3D
@@ -20,6 +21,7 @@ func configure() -> void:
 		# Existing FULL / HALF / HOLD panels occupy this exact surface.
 		plate.hide()
 	if knob != null:
+		_center_power_knob()
 		off_rotation = knob.quaternion
 	if indicator != null:
 		var source := indicator.get_active_material(0) as StandardMaterial3D
@@ -27,6 +29,40 @@ func configure() -> void:
 			lamp_material = source.duplicate() as StandardMaterial3D
 			indicator.material_override = lamp_material
 	set_power(false, true)
+
+
+func _center_power_knob() -> void:
+	if bool(knob.get_meta("pivot_centered", false)): return
+	var body := knob.find_child("Rotary_Vermilion",true,false) as MeshInstance3D
+	if body == null: body = knob.find_child("KnobBody",true,false) as MeshInstance3D
+	if body == null or body.mesh == null: return
+	# The batched red mesh retained a small lateral translation during export.
+	# Center all rotating pieces together on the dial axis, preserving axial depth.
+	var center := knob.to_local(body.to_global(body.mesh.get_aabb().get_center()))
+	var offset := Vector3(center.x,0.0,center.z)
+	for child in knob.get_children():
+		if child is Node3D: child.position -= offset
+	knob.set_meta("pivot_centered",true)
+
+
+func _apply_matte_steel(node: Node) -> void:
+	if node is MeshInstance3D:
+		var part := node as MeshInstance3D
+		if part.mesh != null:
+			for surface in part.mesh.get_surface_count():
+				var source := part.get_active_material(surface) as StandardMaterial3D
+				if source == null or not source.resource_name.begins_with("Satin stainless"):
+					continue
+				var metal := ShaderMaterial.new()
+				metal.shader = preload("res://shaders/grill_trim_toon.gdshader")
+				metal.set_shader_parameter("base_color", source.albedo_color.darkened(0.12))
+				var bounds := part.mesh.get_aabb()
+				metal.set_shader_parameter("bounds_min", bounds.position)
+				metal.set_shader_parameter("bounds_size", bounds.size)
+				if source.albedo_texture != null: metal.set_shader_parameter("base_texture", source.albedo_texture)
+				part.set_surface_override_material(surface, metal)
+	for child in node.get_children():
+		_apply_matte_steel(child)
 
 
 func _raise_splash_guard() -> void:

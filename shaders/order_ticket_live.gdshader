@@ -6,7 +6,16 @@ uniform sampler2D blank_atlas : source_color, filter_linear_mipmap, repeat_disab
 
 uniform float curl_lighting : hint_range(0.0, 1.0) = 0.0;
 
+uniform float paper_height = 320.0;
 void fragment() {
+ float across = fract(UV.x * 2.0) * 10.0;
+ float index = floor(across);
+ float phase = fract(across);
+ float peak = 0.5 + sin(index * 2.1) * 0.10;
+ float triangle = phase < peak ? phase / peak : (1.0 - phase) / (1.0 - peak);
+ float depth = 7.0 + 2.5 * sin(index * 1.73 + 0.4);
+ if (UV.y > 1.0 - (2.0 + triangle * depth) / max(paper_height, 1.0)) { discard; }
+
 	vec4 paper = texture(blank_atlas, clamp(UV, vec2(0.001), vec2(0.999)));
 	float gray = dot(paper.rgb, vec3(0.299, 0.587, 0.114));
 	paper.rgb = mix(vec3(gray), paper.rgb, 0.8);

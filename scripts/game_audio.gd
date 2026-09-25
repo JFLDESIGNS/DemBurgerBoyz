@@ -242,19 +242,19 @@ func _ready() -> void:
 	add_to_group("game_audio")
 	for i in SFX_POOL:
 		var p := AudioStreamPlayer.new()
-		p.bus = "Master"
+		p.bus = "SFX"
 		add_child(p)
 		_players.append(p)
 	for i in ANNOUNCER_POOL:
 		var ap := AudioStreamPlayer.new()
 		ap.name = "Announcer_%d" % i
-		ap.bus = "Master"
+		ap.bus = "SFX"
 		add_child(ap)
 		_announcer_players.append(ap)
 	for i in TING_POOL:
 		var tp := AudioStreamPlayer.new()
 		tp.name = "SpatulaTing_%d" % i
-		tp.bus = "Master"
+		tp.bus = "SFX"
 		tp.volume_db = -80.0
 		add_child(tp)
 		_ting_players.append(tp)
@@ -263,26 +263,26 @@ func _ready() -> void:
 	_sizzle_gen.mix_rate = MIX_RATE
 	_sizzle_gen.buffer_length = 0.12
 	_sizzle_player = AudioStreamPlayer.new()
-	_sizzle_player.bus = "Master"
+	_sizzle_player.bus = "SFX"
 	_sizzle_player.stream = _sizzle_gen
 	_sizzle_player.volume_db = -80.0
 	add_child(_sizzle_player)
 	_sz_next_pop_in = 0.04 + randf() * 0.12
 	## Quieter idle burner hiss — obvious ON without matching cooking volume.
 	_hiss_player = AudioStreamPlayer.new()
-	_hiss_player.bus = "Master"
+	_hiss_player.bus = "SFX"
 	_hiss_player.stream = preload("res://sounds/cached_beds/hiss.res")
 	_hiss_player.volume_db = -80.0
 	add_child(_hiss_player)
 	## Live extinguisher spray static (powder / CO2 rush).
 	_spray_player = AudioStreamPlayer.new()
-	_spray_player.bus = "Master"
+	_spray_player.bus = "SFX"
 	_spray_player.stream = preload("res://sounds/cached_beds/spray.res")
 	_spray_player.volume_db = -80.0
 	add_child(_spray_player)
 	## Live shaker rattle while seasoning patties.
 	_shake_player = AudioStreamPlayer.new()
-	_shake_player.bus = "Master"
+	_shake_player.bus = "SFX"
 	_shake_player.stream = preload("res://sounds/cached_beds/shake.res")
 	_shake_player.volume_db = -80.0
 	add_child(_shake_player)
@@ -291,7 +291,7 @@ func _ready() -> void:
 	_fries_shake_gen.mix_rate = MIX_RATE
 	_fries_shake_gen.buffer_length = 0.12
 	_fries_shake_player = AudioStreamPlayer.new()
-	_fries_shake_player.bus = "Master"
+	_fries_shake_player.bus = "SFX"
 	_fries_shake_player.stream = _fries_shake_gen
 	_fries_shake_player.volume_db = -80.0
 	add_child(_fries_shake_player)
@@ -300,29 +300,29 @@ func _ready() -> void:
 	_tree_leaf_gen.mix_rate = MIX_RATE
 	_tree_leaf_gen.buffer_length = 0.12
 	_tree_leaf_player = AudioStreamPlayer.new()
-	_tree_leaf_player.bus = "Master"
+	_tree_leaf_player.bus = "SFX"
 	_tree_leaf_player.stream = _tree_leaf_gen
 	_tree_leaf_player.volume_db = -80.0
 	add_child(_tree_leaf_player)
 	## One direction-chime voice — restart replaces, never layers.
 	_tree_chime_player = AudioStreamPlayer.new()
-	_tree_chime_player.bus = "Master"
+	_tree_chime_player.bus = "SFX"
 	_tree_chime_player.volume_db = -80.0
 	add_child(_tree_chime_player)
 	## Soda fountain dispenser hiss / carbonation rush.
 	_soda_player = AudioStreamPlayer.new()
-	_soda_player.bus = "Master"
+	_soda_player.bus = "SFX"
 	_soda_player.stream = preload("res://sounds/cached_beds/soda.res")
 	_soda_player.volume_db = -80.0
 	add_child(_soda_player)
 	## Ice crusher grind while cubes drop.
 	_ice_player = AudioStreamPlayer.new()
-	_ice_player.bus = "Master"
+	_ice_player.bus = "SFX"
 	_ice_player.stream = preload("res://sounds/cached_beds/ice.res")
 	_ice_player.volume_db = -80.0
 	add_child(_ice_player)
 	_softserve_player = AudioStreamPlayer.new()
-	_softserve_player.bus = "Master"
+	_softserve_player.bus = "SFX"
 	_softserve_player.stream = preload("res://sounds/cached_beds/softserve.res")
 	_softserve_player.volume_db = -80.0
 	add_child(_softserve_player)
@@ -330,26 +330,26 @@ func _ready() -> void:
 	_fryer_gen.mix_rate = MIX_RATE
 	_fryer_gen.buffer_length = 0.12
 	_fryer_player = AudioStreamPlayer.new()
-	_fryer_player.bus = "Master"
+	_fryer_player.bus = "SFX"
 	_fryer_player.stream = _fryer_gen
 	_fryer_player.volume_db = -80.0
 	add_child(_fryer_player)
 	## Looping soft metal scrape for patty slides.
 	_slide_player = AudioStreamPlayer.new()
-	_slide_player.bus = "Master"
+	_slide_player.bus = "SFX"
 	_slide_player.stream = _make_slide_scrape()
 	_slide_player.volume_db = -80.0
 	add_child(_slide_player)
 	## Wet oil squish / steam hiss while sliding a burger with the spatula.
 	_oil_slide_player = AudioStreamPlayer.new()
 	_oil_slide_player.name = "BurgerSlideOil"
-	_oil_slide_player.bus = "Master"
+	_oil_slide_player.bus = "SFX"
 	_oil_slide_player.stream = _make_burger_slide_oil_loop()
 	_oil_slide_player.volume_db = -80.0
 	add_child(_oil_slide_player)
 	_roomba_drive_player = AudioStreamPlayer.new()
 	_roomba_drive_player.name = "RoombaDrive"
-	_roomba_drive_player.bus = "Master"
+	_roomba_drive_player.bus = "SFX"
 	_roomba_drive_player.stream = _make_roomba_drive()
 	_roomba_drive_player.volume_db = -80.0
 	add_child(_roomba_drive_player)
@@ -359,23 +359,23 @@ func _ready() -> void:
 	_room_tone_gen.buffer_length = 0.12
 	_room_tone_player = AudioStreamPlayer.new()
 	_room_tone_player.name = "RoomTone"
-	_room_tone_player.bus = "Master"
+	_room_tone_player.bus = "SFX"
 	_room_tone_player.stream = _room_tone_gen
 	_room_tone_player.volume_db = -80.0
 	add_child(_room_tone_player)
 	_outdoor_ambience_player = AudioStreamPlayer.new()
 	_outdoor_ambience_player.name = "OutdoorAmbience"
-	_outdoor_ambience_player.bus = "Master"
+	_outdoor_ambience_player.bus = "SFX"
 	_outdoor_ambience_player.volume_db = -80.0
 	add_child(_outdoor_ambience_player)
 	_street_car_pass_player = AudioStreamPlayer.new()
 	_street_car_pass_player.name = "StreetCarPass"
-	_street_car_pass_player.bus = "Master"
+	_street_car_pass_player.bus = "SFX"
 	_street_car_pass_player.volume_db = -80.0
 	add_child(_street_car_pass_player)
 	_street_car_horn_player = AudioStreamPlayer.new()
 	_street_car_horn_player.name = "StreetCarHorn"
-	_street_car_horn_player.bus = "Master"
+	_street_car_horn_player.bus = "SFX"
 	_street_car_horn_player.volume_db = -80.0
 	add_child(_street_car_horn_player)
 	set_process(true)
@@ -1763,7 +1763,7 @@ func play_chaching() -> void:
 	if _chaching_player == null or not is_instance_valid(_chaching_player):
 		_chaching_player = AudioStreamPlayer.new()
 		_chaching_player.name = "ChaChing"
-		_chaching_player.bus = "Master"
+		_chaching_player.bus = "SFX"
 		add_child(_chaching_player)
 	var gain := 1.55 * _sfx("service")
 	if gain <= 0.0001:
@@ -1784,7 +1784,7 @@ func prewarm_payment_audio() -> void:
 	if _chaching_player == null or not is_instance_valid(_chaching_player):
 		_chaching_player = AudioStreamPlayer.new()
 		_chaching_player.name = "ChaChing"
-		_chaching_player.bus = "Master"
+		_chaching_player.bus = "SFX"
 		_chaching_player.volume_db = -80.0
 		add_child(_chaching_player)
 	_chaching_player.stream = _cache["chaching"]
@@ -1798,6 +1798,13 @@ func play_score_climb() -> void:
 func play_order_up() -> void:
 	## Classic kitchen “order up!” — bright double service-bell ding.
 	_play_cached("order_up_bell", _make_serve_bell, 0.0, 0.72)
+
+
+func play_delivery_whoosh() -> void:
+	_play_cached("serve_whoosh", _make_serve_whoosh, 0.94 + randf() * 0.1, 0.76)
+
+func play_delivery_impact() -> void:
+	_play_cached("cutting_board_thud_v1_%d" % (randi() % 3), _make_cutting_board_thud, 0.94 + randf() * 0.08, 1.1)
 
 
 func play_serve_whoosh() -> void:
@@ -1863,6 +1870,22 @@ func play_car_horn() -> void:
 	if _sfx("traffic_horn") > 0.0001:
 		## Skip the half-second of leading silence so the horn responds at center.
 		_street_car_horn_player.play(0.50)
+
+
+func play_drink_gulp() -> void:
+	_play_cached("drink_gulp", _make_drink_gulp, 0.94 + randf() * .12, .55)
+
+func _make_drink_gulp() -> AudioStreamWAV:
+	var n := int(MIX_RATE * .18)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / float(MIX_RATE)
+		var envelope := sin(clampf(t / .18, 0, 1) * PI)
+		var phase := TAU * (280.0 * t - 520.0 * t * t)
+		var sample := (sin(phase) * .7 + sin(phase * 1.8) * .15) * envelope * envelope
+		_write_s16(pcm, i, int(sample * 14000.0))
+	return _wav_from_pcm(pcm, false)
 
 
 func play_burger_chomp() -> void:
@@ -2150,7 +2173,7 @@ func play_customer_grobble(impatience: float = 0.5, voice: String = "male") -> v
 	var gain := base_gain * lerpf(1.0, 1.08, clampf(impatience, 0.0, 1.0))
 	var target_db := linear_to_db(gain)
 	var p := AudioStreamPlayer.new()
-	p.bus = "Master"
+	p.bus = "SFX"
 	p.stream = stream
 	p.pitch_scale = GROBBLE_PITCH
 	p.volume_db = -80.0
@@ -2188,7 +2211,7 @@ func set_boss_wawawa(active: bool, loud: bool = false) -> void:
 	if _boss_wawawa_player == null or not is_instance_valid(_boss_wawawa_player):
 		_boss_wawawa_player = AudioStreamPlayer.new()
 		_boss_wawawa_player.name = "BossWawawaLoop"
-		_boss_wawawa_player.bus = "Master"
+		_boss_wawawa_player.bus = "SFX"
 		_boss_wawawa_player.stream = _cache["wawawa"]
 		add_child(_boss_wawawa_player)
 		_boss_wawawa_player.finished.connect(func() -> void:
@@ -2230,7 +2253,7 @@ func play_boss_wawa(loud: bool = false) -> void:
 	var target_db := _boss_wawa_target_db(loud)
 	var p := AudioStreamPlayer.new()
 	p.name = "BossWawa"
-	p.bus = "Master"
+	p.bus = "SFX"
 	p.stream = stream
 	p.pitch_scale = GROBBLE_PITCH
 	p.volume_db = -80.0
@@ -2271,7 +2294,7 @@ func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male") -
 	if _customer_click_wawa == null or not is_instance_valid(_customer_click_wawa):
 		_customer_click_wawa = AudioStreamPlayer.new()
 		_customer_click_wawa.name = "CustomerClickWawa"
-		_customer_click_wawa.bus = "Master"
+		_customer_click_wawa.bus = "SFX"
 		add_child(_customer_click_wawa)
 	if _customer_click_wawa_tween != null and is_instance_valid(_customer_click_wawa_tween):
 		_customer_click_wawa_tween.kill()
@@ -2314,7 +2337,7 @@ func play_customer_dance_wawa(duration_sec: float = DANCE_WAWA_CLIP_SEC, voice: 
 	if _customer_dance_wawa == null or not is_instance_valid(_customer_dance_wawa):
 		_customer_dance_wawa = AudioStreamPlayer.new()
 		_customer_dance_wawa.name = "CustomerDanceWawa"
-		_customer_dance_wawa.bus = "Master"
+		_customer_dance_wawa.bus = "SFX"
 		add_child(_customer_dance_wawa)
 	var duration := clampf(duration_sec, 0.05, DANCE_WAWA_CLIP_SEC)
 	var source_needed := duration * DANCE_WAWA_PITCH
@@ -2360,7 +2383,7 @@ func set_roomba_wawawa(active: bool) -> void:
 			return
 		_roomba_wawawa_player = AudioStreamPlayer.new()
 		_roomba_wawawa_player.name = "RoombaWawawa"
-		_roomba_wawawa_player.bus = "Master"
+		_roomba_wawawa_player.bus = "SFX"
 		_roomba_wawawa_player.stream = loaded
 		add_child(_roomba_wawawa_player)
 		_roomba_wawawa_player.finished.connect(func():
@@ -3807,6 +3830,7 @@ var _female_customer_wawa_token := 0
 func _play_female_customer_wawa(duration: float) -> void:
 	if not is_instance_valid(_female_customer_wawa):
 		_female_customer_wawa = AudioStreamPlayer.new()
+		_female_customer_wawa.bus = "SFX"
 		_female_customer_wawa.name = "FemaleCustomerWawa"
 		add_child(_female_customer_wawa)
 	_female_customer_wawa.stop()
@@ -3825,9 +3849,18 @@ func play_customer_nom_nom(voice: String, speaker: Node) -> void:
 	var player := speaker.get_node_or_null("CustomerEatingVoice") as AudioStreamPlayer
 	if player == null:
 		player = AudioStreamPlayer.new()
+		player.bus = "SFX"
 		player.name = "CustomerEatingVoice"
 		speaker.add_child(player)
 	player.stream = preload("res://scripts/customer_voice.gd").stream(voice,true)
 	player.pitch_scale = 1.0
 	player.volume_db = _sfx_db(0.75,"customers")
 	player.play()
+
+
+func play_customer_angry_wawa(voice: String = "male") -> void:
+	play_customer_wawa_click(1.0, voice)
+	if voice == "female":
+		if is_instance_valid(_female_customer_wawa): _female_customer_wawa.pitch_scale = 1.2
+	elif is_instance_valid(_customer_click_wawa):
+		_customer_click_wawa.pitch_scale = GROBBLE_PITCH * 1.2

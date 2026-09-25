@@ -47,6 +47,32 @@ uniform float green_magenta : hint_range(-1.0, 1.0) = 0.0;
 uniform float shadow_color : hint_range(-1.0, 1.0) = 0.0;
 uniform float highlight_color : hint_range(-1.0, 1.0) = 0.0;
 
+
+uniform bool grade_post_enabled = true;
+uniform float grade_grade_mix = 1.0;
+uniform float grade_brightness = 1.0;
+uniform float grade_contrast = 1.06;
+uniform float grade_saturation = 1.12;
+uniform float grade_gamma = 1.0;
+uniform float grade_temperature = 0.02;
+uniform float grade_tint = 0.0;
+uniform float grade_vibrance = 0.12;
+uniform float grade_lift = 0.0;
+uniform float grade_gain = 1.0;
+uniform float grade_rolloff = 0.08;
+uniform vec4 grade_shadow_tint : source_color = vec4(0.333, 0.494, 0.937, 1.0);
+uniform vec4 grade_highlight_tint : source_color = vec4(1.0, 0.863, 0.471, 1.0);
+uniform float grade_shadow_mix = 0.16;
+uniform float grade_highlight_mix = 0.10;
+uniform float grade_balance = 0.48;
+uniform float grade_transition_width = 0.18;
+uniform float grade_transition_saturation = 0.32;
+uniform float grade_vignette = 0.08;
+uniform float grade_vignette_radius = 0.75;
+uniform float grade_grain = 0.0;
+uniform float grade_sharpen = 0.0;
+uniform float grade_aberration = 0.0;
+
 float luminance(vec3 color) {
 	return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
@@ -178,6 +204,48 @@ void fragment() {
 			vec3 ink_color = mix(vec3(0.0), retained_ink, outline_color_retention);
 			color = mix(color, ink_color, ink * outline_strength);
 		}
+	}
+
+
+	if (grade_post_enabled) {
+		vec3 before_grade = color;
+		vec2 pixel = 1.0 / viewport_size;
+		if (grade_sharpen > 0.001) {
+			vec3 blur = (sample_scene(uv + vec2(pixel.x, 0.0)) + sample_scene(uv - vec2(pixel.x, 0.0))
+				+ sample_scene(uv + vec2(0.0, pixel.y)) + sample_scene(uv - vec2(0.0, pixel.y))) * 0.25;
+			color += (sample_scene(uv) - blur) * grade_sharpen;
+		}
+		if (grade_aberration > 0.001) {
+			vec2 shift = (raw_uv - 0.5) * pixel * grade_aberration;
+			color.r += sample_scene(uv + shift).r - sample_scene(uv).r;
+			color.b += sample_scene(uv - shift).b - sample_scene(uv).b;
+		}
+		color = max(color, vec3(0.0));
+		float luma = luminance(color);
+		float width = max(grade_transition_width, 0.02);
+		// Complementary masks meet without a gap or an additive bright seam.
+		float light_mask = smoothstep(grade_balance - width, grade_balance + width, luma);
+		float shadow_mask = 1.0 - light_mask;
+		float terminator = 4.0 * light_mask * shadow_mask;
+		vec3 shadow_chroma = grade_shadow_tint.rgb / max(luminance(grade_shadow_tint.rgb), 0.08);
+		vec3 light_chroma = grade_highlight_tint.rgb / max(luminance(grade_highlight_tint.rgb), 0.08);
+		color *= mix(vec3(1.0), shadow_chroma, grade_shadow_mix * shadow_mask);
+		color *= mix(vec3(1.0), light_chroma, grade_highlight_mix * light_mask);
+		color *= vec3(1.0 + grade_temperature * 0.18 + grade_tint * 0.06,
+			1.0 - grade_tint * 0.12, 1.0 - grade_temperature * 0.18 + grade_tint * 0.06);
+		vec3 hsv = rgb_to_hsv(max(color, vec3(0.0)));
+		hsv.y = clamp(hsv.y * (grade_saturation + grade_vibrance * (1.0 - hsv.y)
+			+ grade_transition_saturation * terminator), 0.0, 1.0);
+		color = hsv_to_rgb(hsv);
+		color = pow(max(color, vec3(0.0)), vec3(1.0 / max(grade_gamma, 0.05)));
+		color = (color - 0.5) * grade_contrast + 0.5;
+		color = color * grade_brightness * grade_gain + grade_lift;
+		vec3 excess = max(color - 0.6, vec3(0.0));
+		color = mix(color, min(color, vec3(0.6)) + excess / (1.0 + excess), grade_rolloff);
+		float radius = length((raw_uv - 0.5) * vec2(viewport_size.x / viewport_size.y, 1.0));
+		color *= 1.0 - grade_vignette * smoothstep(grade_vignette_radius * 0.35, grade_vignette_radius, radius);
+		color += (dither_hash(raw_uv * viewport_size + fract(TIME) * 173.0) - 0.5) * grade_grain;
+		color = mix(before_grade, clamp(color, vec3(0.0), vec3(1.0)), grade_grade_mix);
 	}
 
 	COLOR = vec4(color, 1.0);

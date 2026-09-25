@@ -18,6 +18,8 @@ static var body_heavy: Font
 static var luckiest: Font
 static var handwritten: Font
 static var ticket_hand: Font
+static var ticket_bold: Font
+static var ticket_brush: Font
 ## Dedicated 3D font — grayscale AA, no mipmaps (LCD/mips = black glyph boxes).
 static var label3d_font: Font
 static var label3d_luckiest: Font
@@ -34,6 +36,14 @@ static func ensure_loaded() -> void:
 	luckiest = _load_clean(LUCKIEST_PATH)
 	handwritten = _load_clean(HAND_PATH)
 	ticket_hand = _load_clean(TICKET_HAND_PATH)
+	var bold_hand := FontVariation.new()
+	bold_hand.base_font = ticket_hand
+	bold_hand.variation_opentype = {"wght": 700.0}
+	bold_hand.variation_embolden = 0.6
+	bold_hand.spacing_top = -3
+	bold_hand.spacing_bottom = -4
+	ticket_bold = bold_hand
+	ticket_brush = _load_clean("res://assets/fonts/Pacifico-Regular.ttf")
 	label3d_font = _load_label3d(BODY_HEAVY_PATH)
 	label3d_luckiest = _load_label3d(LUCKIEST_PATH)
 	_loaded = true
@@ -183,3 +193,10 @@ static func make_theme() -> Theme:
 	if title:
 		t.set_font("font", "HeaderLarge", title)
 	return t
+
+
+static func apply_ticket_ingredient(label: Label, size: int = 21) -> void:
+	ensure_loaded()
+	label.add_theme_font_override("font", ticket_bold)
+	label.add_theme_font_size_override("font_size", size)
+	label.add_theme_constant_override("outline_size", 0)

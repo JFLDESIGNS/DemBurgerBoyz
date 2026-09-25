@@ -267,6 +267,34 @@ const CONTROL_BODY_SPECS := {
 			_build_eyes()
 			modules_changed.emit()
 
+@export_range(0.0, 1.0, 0.05) var eye_specular_pie_amount := 1.0:
+	set(value):
+		eye_specular_pie_amount = value
+		if _should_rebuild():
+			_build_eyes()
+			modules_changed.emit()
+
+@export_range(-180.0, 180.0, 1.0) var eye_specular_pie_angle := 35.0:
+	set(value):
+		eye_specular_pie_angle = value
+		if _should_rebuild():
+			_build_eyes()
+			modules_changed.emit()
+
+@export_range(5.0, 120.0, 1.0) var eye_specular_pie_width := 55.0:
+	set(value):
+		eye_specular_pie_width = value
+		if _should_rebuild():
+			_build_eyes()
+			modules_changed.emit()
+
+@export_range(-0.3, 0.8, 0.02) var eye_specular_pie_inset := 0.12:
+	set(value):
+		eye_specular_pie_inset = value
+		if _should_rebuild():
+			_build_eyes()
+			modules_changed.emit()
+
 @export var eyelid_enabled := true:
 	set(value):
 		eyelid_enabled = value
@@ -964,7 +992,14 @@ var _rebuild_suspended := false
 @export var defer_initial_appearance := false
 
 
+var gameplay_character := false
+var surface_look: Dictionary = {}
+
 func _ready() -> void:
+	var surface_controls = preload("res://scripts/character_surface_controls.gd").new()
+	surface_controls.name = "SurfaceControls"
+	add_child(surface_controls)
+	surface_controls.call_deferred("setup",self)
 	_apply_skin_material()
 	_create_head_modules()
 	if not defer_initial_appearance:
@@ -1604,6 +1639,7 @@ func load_control_rig_targets(values: Variant) -> void:
 ## Saved poses are ignored so game customers start from a clean skeleton before
 ## the normal Food Flip idle and walk animations are attached.
 func apply_saved_preset(data: Dictionary) -> void:
+	surface_look = data.get("surface_look", {}).duplicate() if data.get("surface_look", {}) is Dictionary else {}
 	data = data.duplicate(true)
 	data["hair_visible"] = bool(data.get("hair_visible", true))
 	migrate_legacy_hair_fields(data)
@@ -1715,8 +1751,12 @@ func _upload_skin_paint() -> void:
 func _skin_paint_shader_material() -> ShaderMaterial:
 	var shader_source := """
 shader_type spatial;
-render_mode diffuse_toon, specular_disabled, cull_back;
+render_mode diffuse_toon, specular_schlick_ggx, cull_back;
 
+uniform float surface_roughness = 0.82;
+uniform float surface_specular = 0.12;
+uniform float surface_metallic = 0.0;
+uniform float surface_clearcoat = 0.0;
 uniform vec4 skin_color : source_color = vec4(0.85, 0.55, 0.37, 1.0);
 uniform sampler2D paint_tex : source_color, filter_linear, repeat_disable;
 uniform float unlit_preview : hint_range(0.0, 1.0) = 0.0;
@@ -1726,7 +1766,10 @@ void fragment() {
 	vec3 diffuse_color = mix(skin_color.rgb, paint.rgb, clamp(paint.a, 0.0, 1.0));
 	ALBEDO = diffuse_color;
 	EMISSION = diffuse_color * unlit_preview;
-	ROUGHNESS = 0.82;
+	ROUGHNESS = surface_roughness;
+	SPECULAR = surface_specular;
+	METALLIC = surface_metallic;
+	CLEARCOAT = surface_clearcoat;
 }
 """
 	var material := ShaderMaterial.new()
@@ -2183,7 +2226,8 @@ func _build_eyes() -> void:
 			var lid_size := eye_half_size * Vector3(1.10, 1.12, 1.10) * eyelid_scale * Vector3(eyelid_width, eyelid_height, eyelid_depth)
 			var lid_pos := Vector3(0.0, eyelid_vertical, eyelid_forward)
 			_add_sphere(eye_group, "Eyelid", lid_pos, lid_size, _eyelid_shader_material(), 32, 16)
-		_add_sphere(eye_group, "Specular", Vector3(eye_specular_horizontal, eye_specular_vertical, 0.031 + eye_specular_depth), specular_size, specular_material)
+		if eye_specular_pie_amount <= 0.001:
+			_add_sphere(eye_group, "Specular", Vector3(eye_specular_horizontal, eye_specular_vertical, 0.031 + eye_specular_depth), specular_size, specular_material)
 
 
 func _build_lashes() -> void:
@@ -3088,6 +3132,10 @@ void fragment() {
 	var material := ShaderMaterial.new()
 	material.shader = _shared_character_shader(shader_source)
 	material.set_shader_parameter("pupil_size", eye_pupil_size)
+	material.set_shader_parameter("pie_amount", eye_specular_pie_amount)
+	material.set_shader_parameter("pie_angle", eye_specular_pie_angle)
+	material.set_shader_parameter("pie_width", eye_specular_pie_width)
+	material.set_shader_parameter("pie_inset", eye_specular_pie_inset)
 	material.set_shader_parameter("pupil_offset_x", pupil_offset_x)
 	var white: float = clampf(eye_sclera_brightness, 0.15, 1.0)
 	material.set_shader_parameter("sclera_color", Color(white, white, white, 1.0))

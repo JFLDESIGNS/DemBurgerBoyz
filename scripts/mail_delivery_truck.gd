@@ -32,6 +32,12 @@ var skid_audio: AudioStreamPlayer3D
 var meow_audio: AudioStreamPlayer3D
 var skid_started := false
 var meow_count := 0
+var delivery_meow_clock := 0.0
+var delivery_meows_active := false
+var last_meow_at := -10.0
+var treat_meows := 0
+var wants_treat := false
+var pet_hop_left := 0.0
 const PARK_YAW := PI * 0.67
 
 func _ready() -> void:
@@ -72,29 +78,29 @@ func _ready() -> void:
 		game.window_cat.hide()
 	truck.hide()
 	courier.hide()
-	drive_audio = AudioStreamPlayer3D.new()
+	drive_audio = AudioStreamPlayer3D.new(); drive_audio.bus = "SFX"
 	drive_audio.stream = preload("res://sounds/vehicles/car_pass_by_left_to_right.ogg")
 	drive_audio.volume_db = -2.98
 	drive_audio.max_distance = 35.0
 	truck.add_child(drive_audio)
-	horn_audio = AudioStreamPlayer3D.new()
+	horn_audio = AudioStreamPlayer3D.new(); horn_audio.bus = "SFX"
 	horn_audio.stream = preload("res://sounds/vehicles/car_horn_double_beep.wav")
 	horn_audio.volume_db = -6.98
 	horn_audio.max_distance = 35.0
 	truck.add_child(horn_audio)
-	skid_audio = AudioStreamPlayer3D.new()
+	skid_audio = AudioStreamPlayer3D.new(); skid_audio.bus = "SFX"
 	skid_audio.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
 	skid_audio.volume_db = -2.98
 	skid_audio.unit_size = 5.0
 	skid_audio.max_distance = 30.0
 	truck.add_child(skid_audio)
-	meow_audio = AudioStreamPlayer3D.new()
+	meow_audio = AudioStreamPlayer3D.new(); meow_audio.bus = "SFX"
 	meow_audio.stream = preload("res://sounds/cat_begging_meow.mp3")
 	meow_audio.volume_db = -7.0
 	meow_audio.unit_size = 5.0
 	meow_audio.max_distance = 25.0
 	courier.add_child(meow_audio)
-	arrival_jingle=AudioStreamPlayer.new()
+	arrival_jingle=AudioStreamPlayer.new(); arrival_jingle.bus = "SFX"
 	arrival_jingle.stream=preload("res://sounds/vehicles/mail_arrival_jingle.wav")
 	arrival_jingle.volume_db=-9.0
 	add_child(arrival_jingle)
@@ -115,6 +121,7 @@ func enqueue(id: String, pack: int, kind: String) -> void:
 
 func clip(name_: String) -> void:
 	if animation and animation.has_animation(name_) and animation.current_animation != name_:
+		animation.speed_scale = 2.0 if name_ == "03_Box_Delivery" else (3.0 if name_ == "04_Happy_Hop" else 1.0)
 		animation.play(name_, 0.12)
 
 func set_phase(value: String) -> void:
@@ -122,7 +129,15 @@ func set_phase(value: String) -> void:
 	elapsed = 0.0
 	if value in ["arrive", "depart"] and is_instance_valid(drive_audio): drive_audio.play()
 	if value == "arrive": skid_started = false
-	if value == "deliver": meow_count = 0
+	if value == "deliver":
+		meow_count = 0
+		delivery_meow_clock = 0.0
+		delivery_meows_active = true
+		wants_treat = randf() < 0.45
+	if value == "treat_wait":
+		treat_meows = 0
+		game._flash("Mail delivered! The courier would love cheese, bacon or a patty.", Color("FFE082"), 4.0)
+		game._achievement_event("deliveries")
 	if value == "hop_out":
 		drive_audio.stop()
 		horn_audio.play()
@@ -135,7 +150,9 @@ func advance(delta: float) -> void:
 	if finished: return
 	_sync_courier_shape()
 	clock += delta
+	pet_hop_left = maxf(0.0, pet_hop_left - delta)
 	elapsed += delta
+	_update_delivery_meows(delta)
 	if phase == "waiting":
 		# Let any car already on the road leave naturally before entering its lane.
 		if game.street_car_active: return
@@ -194,14 +211,27 @@ func advance(delta: float) -> void:
 		"deliver":
 			courier.rotation.y = PI
 			clip("03_Box_Delivery")
-			if meow_count < 3 and elapsed >= 0.25 + float(meow_count) * 1.5:
-				meow_audio.pitch_scale = 1.0 + float(meow_count) * 0.08
-				meow_audio.play()
-				meow_count += 1
 			if not orders.is_empty():
 				for order in orders: game._throw_cat_supply_delivery(order[0], order[1], order[2])
 				orders.clear(); elapsed = 0
-			if elapsed >= 4.8 and game.supply_delivery_fx.is_empty(): set_phase("return")
+			if elapsed >= 2.2 and game.supply_delivery_fx.is_empty():
+				if wants_treat: set_phase("treat_wait")
+				else:
+					game._achievement_event("deliveries")
+					set_phase("return")
+		"treat_wait":
+			courier.rotation.y = PI
+			clip("04_Happy_Hop" if pet_hop_left > 0.0 else "01_Idle")
+			courier.position.y = handoff.y + sin(elapsed * 3.5) * 0.016
+			if treat_meows < 2 and not delivery_meows_active and clock-last_meow_at >= 1.4 and elapsed >= 0.3 + treat_meows * 3.0:
+				_play_delivery_meow(1.08 + treat_meows * 0.08)
+				treat_meows += 1
+			if not orders.is_empty(): set_phase("deliver")
+			elif elapsed >= 9.0: set_phase("return")
+		"thanks":
+			clip("04_Happy_Hop")
+			courier.position.y = handoff.y + sin(clampf(elapsed / 0.8,0,1)*PI)*0.16
+			if elapsed >= 0.8: set_phase("return")
 		"hop_in":
 			var u := clampf(elapsed / 0.85, 0, 1)
 			cat_visual.scale = courier_base_scale * lerpf(1.25, 0.90, u)
@@ -237,3 +267,50 @@ func _sync_courier_shape() -> void:
 	cat_visual.position.y = -0.335 * (game.window_cat._size_mul() - game.window_cat.DEFAULT_SIZE_MUL)
 	handoff.z = game.window_cat._home_z() + 0.3048 + maxf(0.0, courier_base_scale.z - 1.0) * 0.12
 	handoff.y = game.window_cat._shown_y()
+
+
+func waiting_for_treat() -> bool:
+	return phase == "treat_wait" and not finished
+
+func hit_test_treat(camera: Camera3D, screen_pos: Vector2) -> bool:
+	if not waiting_for_treat() or camera == null: return false
+	var point := courier.global_position + Vector3(0,0.35,0)
+	if camera.is_position_behind(point): return false
+	return camera.unproject_position(point).distance_to(screen_pos) <= 85.0
+
+func pet_courier() -> void:
+	if not waiting_for_treat(): return
+	pet_hop_left = 2.15 / 3.0
+	clip("04_Happy_Hop")
+	if game.game_audio != null: game.game_audio.play_cat_purr()
+	game._achievement_event("cat_pets")
+	game._flash("Purr... a cheese or bacon tip would be lovely!",Color("FFE082"))
+
+func receive_treat(kind: String) -> void:
+	if not waiting_for_treat(): return
+	if is_instance_valid(game.window_cat): game.window_cat._add_chonk(game.window_cat.FAT_PER_TOPPING)
+	game._on_window_cat_fed(kind)
+	set_phase("thanks")
+
+
+func _play_delivery_meow(pitch: float) -> void:
+	last_meow_at = clock
+	var audio = game.get("game_audio")
+	if is_instance_valid(audio) and audio.has_method("play_cat_begging_meow"):
+		# Use the new recorded meow and the same audible mix as the begging cat.
+		audio.play_cat_begging_meow(pitch)
+	else:
+		meow_audio.pitch_scale = pitch
+		meow_audio.play()
+
+
+func _update_delivery_meows(delta: float) -> void:
+	if not delivery_meows_active:return
+	delivery_meow_clock += delta
+	# Two calls as the box opens, then another after the goods have flown out.
+	# This clock survives the transition to return/treat_wait.
+	var cues := [0.2, 1.1, 2.7]
+	if meow_count < cues.size() and delivery_meow_clock >= cues[meow_count]:
+		_play_delivery_meow(1.06 + float(meow_count)*.06)
+		meow_count += 1
+	if meow_count >= cues.size():delivery_meows_active = false

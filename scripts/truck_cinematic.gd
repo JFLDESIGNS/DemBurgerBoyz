@@ -5,6 +5,8 @@ signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
 const DEPARTURE_SECONDS := 1.35
+const MENU_FRAME_PADDING := Vector2(96.0, 64.0)
+const MENU_CAMERA_HEIGHT := 5.5
 var loading_mode := false
 var viewport: SubViewport
 var world: Node3D
@@ -104,8 +106,9 @@ func _ready() -> void:
 		truck.position = Vector3.ZERO
 		truck.rotation = Vector3.ZERO
 		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-		camera.size = 6.9
-		camera.position = Vector3(9.5, 6.4, 18)
+		camera.size = MENU_CAMERA_HEIGHT
+		# A true side view keeps +X travel horizontal all the way off screen.
+		camera.position = Vector3(0.0, 3.2, 20.0)
 		camera.look_at(Vector3(0, 2.8, 0))
 		if get_parent() is Control:
 			set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -154,13 +157,14 @@ func end_hidden_prewarm() -> void:
 	_sync_visibility()
 
 func _fit_menu_width() -> void:
-	# Extend the transparent viewport to the real screen edges for the drive-off.
+	# Overscan every edge without shrinking the truck's on-screen presentation.
 	var holder := get_parent() as Control
 	if holder == null:
 		return
 	var screen_width := get_viewport_rect().size.x
-	size = Vector2(screen_width, holder.size.y)
-	position.x = (holder.size.x - screen_width) * 0.5
+	size = Vector2(screen_width, holder.size.y) + MENU_FRAME_PADDING * 2.0
+	position = Vector2((holder.size.x - size.x) * 0.5, -MENU_FRAME_PADDING.y)
+	camera.size = MENU_CAMERA_HEIGHT * size.y / maxf(holder.size.y, 1.0)
 
 func _sync_visibility() -> void:
 	var active := is_visible_in_tree() or _warming

@@ -468,9 +468,8 @@ func _ready() -> void:
 	_hint.modulate = Color("FFEB3B")
 	_hint.visible = false
 	UiFontsScript.apply_label3d(_hint, true, 72, 0.078)
-	## Belt-and-suspenders — default Label3D outline is a chunky black halo.
-	_hint.outline_size = 0
-	_hint.outline_modulate = Color(0, 0, 0, 0)
+	_hint.outline_size = 6
+	_hint.outline_modulate = Color(0, 0, 0, 0.5)
 	add_child(_hint)
 	_ensure_hold_meter()
 	_setup_cook_fx()
@@ -2182,6 +2181,7 @@ static func _frozen_ball_shader_resource(opaque: bool) -> Shader:
 	if not opaque and _frozen_shader_alpha != null:
 		return _frozen_shader_alpha
 	var shader := Shader.new()
+	## Keep the original bright meat color; the opaque core still casts shadows.
 	var modes := "unshaded, cull_back, ambient_light_disabled"
 	if opaque:
 		modes += ", depth_draw_opaque"
@@ -2241,9 +2241,10 @@ void fragment() {
 	vec4 texc = texture(albedo_tex, UV * uv_scale);
 	vec3 col = mix(albedo_color.rgb, texc.rgb * albedo_color.rgb, tex_blend);
 	ALBEDO = col;
-	ALPHA = albedo_color.a * mix(1.0, texc.a, tex_blend);
+	ROUGHNESS = 0.88;
+	%s
 }
-""" % modes
+""" % [modes, "" if opaque else "ALPHA = albedo_color.a * mix(1.0, texc.a, tex_blend);"]
 	if opaque:
 		_frozen_shader_opaque = shader
 	else:
@@ -2259,7 +2260,7 @@ static func _make_frozen_ball_shader(
 	tex_blend: float = 0.0,
 	opaque: bool = true
 ) -> ShaderMaterial:
-	## Unshaded meat/frost with noisy WPO so the ball isn't a perfect sphere.
+	## Opaque meat casts the deformed silhouette without dark surface shading.
 	var mat := ShaderMaterial.new()
 	mat.shader = _frozen_ball_shader_resource(opaque)
 	mat.set_shader_parameter("albedo_color", albedo)

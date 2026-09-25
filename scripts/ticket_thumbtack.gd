@@ -17,6 +17,7 @@ var frozen := false
 
 func setup(paper: Control) -> void:
 	note = paper
+	z_index = 5 # Stay above the paper after a main ticket is reparented into the queue.
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	size = Vector2(70,70)
 	view = SubViewport.new()
@@ -51,7 +52,7 @@ func setup(paper: Control) -> void:
 	display.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	display.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(display)
-	sound = AudioStreamPlayer.new()
+	sound = AudioStreamPlayer.new(); sound.bus = "SFX"
 	sound.volume_db = -6
 	add_child(sound)
 	hide()
@@ -84,7 +85,7 @@ func sync_layout() -> void:
 	rotation = note.rotation
 	pivot_offset = Vector2(35,35)
 	# Paper can slide upward without moving its pinned location on the rail.
-	position = note.get_transform()*Vector2(87,12)-note.position-Vector2(35,35)
+	position = note.get_transform()*Vector2(87,12)-note.position-Vector2(35,35)-Vector2(0,15)
 	modulate = note.modulate
 
 func _process(delta: float) -> void:
@@ -100,7 +101,7 @@ func _process(delta: float) -> void:
 	var ease := 1.0-pow(1.0-clampf(t/0.76,0,1),3)
 	pin.position = Vector3(0,-0.008,0.0005)+Vector3(0.038,0.025,0.08)*(1-ease)
 	pin.rotation = ROTATION+Vector3(-0.5,0.25,-1.3)*(1-ease)
-	if t>=0.76 and not impact:
+	if t>=1.0 and not impact:
 		impact = true
 		sound.stream = TAP
 		sound.play()

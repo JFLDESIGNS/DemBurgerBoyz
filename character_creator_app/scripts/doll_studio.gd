@@ -5,7 +5,7 @@ const MUTED = Color("b4a8c2")
 const ACCENT = Color("ed887e")
 const PAPER = Color("24212e")
 const LILAC = Color("514061")
-const CATEGORIES = {"Body":["Skin","Starters"],"Face":["Eyes","Sparkle","Opening","Brows","Nose","Mouth","Cheeks","Ears"],"Hair":["Hair","Facial hair"],"Clothes":["Tops","Graphics","Bottoms","Shoes"],"Accessories":["Hats","Glasses","Makeup","Jewelry"],"Pose":["Pose"],"Paint":["Paint"],"Collection":["Saved customers"]}
+const CATEGORIES = {"Body":["Skin","Materials","Starters"],"Face":["Eyes","Sparkle","Opening","Brows","Nose","Mouth","Cheeks","Ears"],"Hair":["Hair","Facial hair"],"Clothes":["Tops","Graphics","Bottoms","Shoes"],"Accessories":["Hats","Glasses","Makeup","Jewelry"],"Pose":["Pose"],"Paint":["Paint"],"Collection":["Saved customers"]}
 const NODES = {"Eyes":["EyesSelect","EyeAdjustments","EyeRotationAdjustments"],"Sparkle":["EyeSpecularAdjustments"],"Opening":["LashSelect","LashColor","LashAdjustments"],"Brows":["EyebrowSelect","EyebrowColor","EyebrowAdjustments"],"Nose":["NoseSelect","NoseColor","NoseAdjustments"],"Mouth":["MouthSelect","MouthColor","MouthAdjustments"],"Cheeks":["CheekSelect","CheekColor","CheekAdjustments"],"Ears":["EarColor","EarAdjustments"],"Hair":["HairSelect","HairColor","HairAdjustments"],"Facial hair":["FacialHairSelect","FacialHairColor","FacialHairAdjustments"],"Hats":["HatSelect","HatColor","HatAdjustments"],"Glasses":["GlassesSelect","GlassesColor","GlassesAdjustments"],"Makeup":["MakeupSelect","MakeupColor","MakeupAdjustments"],"Jewelry":["JewelrySelect","JewelryColor","JewelryAdjustments"],"Tops":["TopSelect","TopColor","TopAdjustments"],"Graphics":["GraphicSelect","GraphicColor","GraphicAdjustments"],"Bottoms":["BottomSelect","BottomColor","BottomAdjustments"],"Shoes":["ShoeSelect","ShoeColor","ShoeAdjustments"]}
 const PREFIX = {"Skin":"skin_","Eyes":"eye_","Sparkle":"eye_specular_","Opening":"eyelid_","Brows":"brow_","Nose":"nose_","Mouth":"mouth_","Cheeks":"cheek_","Ears":"ear_","Hair":"hair_","Facial hair":"facial_hair_","Hats":"hat_","Glasses":"glasses_","Makeup":"makeup_","Jewelry":"jewelry_","Tops":"top_","Graphics":"shirt_graphic","Bottoms":"bottom_","Shoes":"shoe_"}
 const STYLE_PROPERTIES = {"Opening":"lash_style","Brows":"brow_style","Nose":"nose_style","Mouth":"mouth_style","Cheeks":"cheek_style","Hair":"hair_style","Facial hair":"facial_hair_style","Hats":"hat_style","Glasses":"glasses_style","Makeup":"makeup_style","Jewelry":"jewelry_style","Tops":"top_style","Graphics":"shirt_graphic","Bottoms":"bottom_style","Shoes":"shoe_style"}
@@ -304,6 +304,7 @@ func page(key: String) -> VBoxContainer:
 	return box
 
 func build_pages() -> void:
+	preload("res://scripts/character_surface_controls.gd").build_ui(page("Materials"),doll)
 	var body = page("Skin")
 	body.add_child(label("A lovely place to start",20))
 	body.add_child(label("Choose a skin tone, then explore face, hair and outfits.",14,MUTED))
@@ -868,6 +869,7 @@ func randomize_section() -> void:
 	else: host._set_status("Choose a style category to try a surprise.")
 
 func belongs(key: String, sub: String) -> bool:
+	if sub == "Materials": return key == "surface_look"
 	if sub == "Eyes": return (key.begins_with("eye_") and not key.begins_with("eye_specular_")) or key in ["left_eye_yaw","right_eye_yaw"]
 	if sub == "Brows": return key.begins_with("brow_") or key in ["left_brow_yaw","right_brow_yaw"]
 	if sub == "Opening": return key.begins_with("eyelid_") or key.begins_with("lash_")
@@ -889,6 +891,7 @@ func reset_section() -> void:
 		doll.end_appearance_batch()
 		host._refresh_appearance_controls()
 	checkpoint()
+	preload("res://scripts/character_surface_controls.gd").refresh_ui(self)
 	host._set_status(section+" restored. Undo is here if you change your mind.")
 
 func build_starters(parent: VBoxContainer) -> void:
@@ -1120,6 +1123,7 @@ func restore(data: Dictionary) -> void:
 	host._refresh_appearance_controls()
 	syncing = false
 	paint_changed = false
+	preload("res://scripts/character_surface_controls.gd").refresh_ui(self)
 	last_signature = signature(capture(false))
 	update_cards()
 	build_layers()

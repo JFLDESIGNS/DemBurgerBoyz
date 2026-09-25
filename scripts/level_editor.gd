@@ -3,11 +3,19 @@ extends Node
 
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const SunSkyPadScript := preload("res://scripts/sun_sky_pad.gd")
+const LightSettings := preload("res://scripts/level_light_settings.gd")
 const SAVE_PATH := "user://level_dressing.cfg"
 const SAVE_SECTION := "dressing"
 const GIZMO_LEN := 0.28
 const GIZMO_HIT_PX := 14.0
 const LIGHT_MARKER_HIT_PX := 22.0
+const WINDOW_KEY_NAME := "WarmWindowKey"
+const WINDOW_FACE_NAME := "WarmWindowCustomerFill"
+const WINDOW_KEY_PRESETS := [
+	{"label": "1 Soft Morning", "color": Color(1.0, 0.86, 0.65), "energy": 3.4, "size": 0.22, "angle": 29.0, "position": Vector3(1.25, 2.45, 2.0), "target": Vector3(0.38, 1.22, 0.05)},
+	{"label": "2 Golden Hour", "color": Color(1.0, 0.72, 0.43), "energy": 4.5, "size": 0.10, "angle": 25.0, "position": Vector3(1.65, 2.35, 2.0), "target": Vector3(0.38, 1.22, 0.05)},
+	{"label": "3 Warm Softbox", "color": Color(1.0, 0.91, 0.77), "energy": 3.8, "size": 0.45, "angle": 34.0, "position": Vector3(1.1, 2.55, 1.8), "target": Vector3(0.30, 1.30, 0.20)}
+]
 
 signal active_changed(on: bool)
 
@@ -29,6 +37,7 @@ var _selected: Node3D = null
 var _layer: CanvasLayer = null
 var _ui: Control = null
 var _outliner: ItemList = null
+var _outliner_search: LineEdit = null
 var _inspector: VBoxContainer = null
 var _status: Label = null
 var _preview_btn: Button = null
@@ -50,9 +59,16 @@ var _sun_lab: Label = null
 var _sun_azim_spin: SpinBox = null
 var _sun_elev_spin: SpinBox = null
 var _lighting_busy: bool = false
+var _rect_projectors: Dictionary = {}
+var _light_overrides: Dictionary = {}
+var _light_defaults: Dictionary = {}
+var _bound_lights: Dictionary = {}
+var _light_scan_clock := 0.0
 
 
 func setup(game: Node, world: Node3D, grill: Node3D, main_cam: Camera3D) -> void:
+	process_priority = 100
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_game = game
 	_world = world
 	_grill = grill
@@ -63,6 +79,9 @@ func setup(game: Node, world: Node3D, grill: Node3D, main_cam: Camera3D) -> void
 	_build_light_markers()
 	_build_ui()
 	_load_dressing()
+	_ensure_window_key()
+	_refresh_existing_light_bindings()
+	_apply_existing_light_overrides()
 
 
 func is_active() -> bool:
@@ -72,7 +91,7 @@ func is_active() -> bool:
 func is_pointer_over_ui(screen_pos: Vector2) -> bool:
 	if not active or previewing_main or _ui == null or not _ui.visible:
 		return false
-	for panel in [_ui.get_node_or_null("TopBar"), _ui.get_node_or_null("Outliner"), _ui.get_node_or_null("Inspector")]:
+	for panel in [_ui.get_node_or_null("TopBar"), _ui.get_node_or_null("Outliner"), _ui.get_node_or_null("Inspector"), _ui.get_node_or_null("LightBalancePanel")]:
 		if panel is Control and (panel as Control).visible and (panel as Control).get_global_rect().has_point(screen_pos):
 			return true
 	return false
@@ -209,6 +228,7 @@ func handle_input(event: InputEvent) -> bool:
 					return true
 				_click_select(mb.position)
 				return true
+			if _gizmo_axis >= 0: _save_if_dressing()
 			_gizmo_axis = -1
 			return true
 	if event is InputEventMouseMotion:
@@ -357,9 +377,7 @@ func _refresh_light_markers(known_lights: Array = []) -> void:
 		return
 	var lights: Array = known_lights
 	if lights.is_empty():
-		_collect_lights(_world, lights)
-		if _grill != null:
-			_collect_lights(_grill, lights)
+		lights = _level_lights()
 	var seen: Dictionary = {}
 	for light_value in lights:
 		var light := light_value as Light3D
@@ -394,6 +412,7 @@ func _update_light_marker_transforms() -> void:
 		var light := _light_marker_lights.get(key) as Light3D
 		if marker == null or light == null or not is_instance_valid(marker) or not is_instance_valid(light):
 			continue
+		if not light.is_inside_tree(): continue
 		marker.global_position = light.global_position
 		marker.modulate = light.light_color.lightened(0.12) if light.visible else Color(0.55, 0.58, 0.64, 1.0)
 		marker.scale = Vector3.ONE * (1.3 if light == _selected else 1.0)
@@ -578,6 +597,7 @@ func _select(node: Node3D) -> void:
 	if node != null and not is_instance_valid(node):
 		node = null
 	_selected = node
+	if node is Light3D: _refresh_existing_light_bindings([node])
 	_update_gizmo()
 	_update_light_marker_transforms()
 	_sync_outliner_selection()
@@ -709,6 +729,30 @@ func refresh_lighting_ui() -> void:
 
 
 func _build_lighting_controls(parent: VBoxContainer) -> void:
+	var window_head := Label.new()
+	window_head.text = "WARM WINDOW LIGHT"
+	UiFontsScript.apply_label(window_head, true, 12)
+	window_head.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
+	parent.add_child(window_head)
+	for i in WINDOW_KEY_PRESETS.size():
+		var button := Button.new()
+		button.text = WINDOW_KEY_PRESETS[i]["label"]
+		button.tooltip_text = "Outdoor light with shadows across the left half of the grill. Replaces the current window-light preset."
+		_style_btn(button)
+		button.pressed.connect(_apply_window_key_preset.bind(i))
+		parent.add_child(button)
+	var off := Button.new()
+	off.text = "Window Light Off"
+	_style_btn(off)
+	off.pressed.connect(func():
+		var light := _dressing.get_node_or_null(WINDOW_KEY_NAME) as SpotLight3D
+		if light != null: light.hide()
+		var face := _dressing.get_node_or_null(WINDOW_FACE_NAME) as SpotLight3D
+		if face != null: face.hide()
+		_save_dressing()
+		_set_status("Warm window light off")
+	)
+	parent.add_child(off)
 	var head := Label.new()
 	head.text = "LIGHTING PROFILES"
 	UiFontsScript.apply_label(head, true, 12)
@@ -887,7 +931,36 @@ func _build_outliner_panel() -> void:
 	UiFontsScript.apply_label(title, true, 13)
 	title.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
 	v.add_child(title)
-	_build_lighting_controls(v)
+	var balance_button := Button.new()
+	balance_button.text = "Light Balance"
+	_style_btn(balance_button)
+	balance_button.pressed.connect(func():
+		if _game.get("light_balance") != null:
+			_game.light_balance.show_panel(_ui)
+	)
+	v.add_child(balance_button)
+	var presets_toggle := Button.new()
+	presets_toggle.text = "Lighting Presets & Sun ▸"
+	_style_btn(presets_toggle)
+	v.add_child(presets_toggle)
+	var presets := VBoxContainer.new()
+	presets.visible = false
+	v.add_child(presets)
+	_build_lighting_controls(presets)
+	presets_toggle.pressed.connect(func():
+		presets.visible = not presets.visible
+		presets_toggle.text = "Lighting Presets & Sun ▾" if presets.visible else "Lighting Presets & Sun ▸"
+	)
+	var refresh := Button.new()
+	refresh.text = "Refresh All Level Lights"
+	_style_btn(refresh)
+	refresh.pressed.connect(_refresh_outliner)
+	v.add_child(refresh)
+	_outliner_search = LineEdit.new()
+	_outliner_search.placeholder_text = "Find a light or object…"
+	_outliner_search.clear_button_enabled = true
+	_outliner_search.text_changed.connect(func(_text: String): _refresh_outliner())
+	v.add_child(_outliner_search)
 	_outliner = ItemList.new()
 	_outliner.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_outliner.allow_reselect = true
@@ -930,12 +1003,11 @@ func _refresh_outliner() -> void:
 		for child in _dressing.get_children():
 			if child is Node3D and not child is Light3D:
 				_add_outliner_item("Dressing / %s" % child.name, child)
-	var lights: Array = []
-	_collect_lights(_world, lights)
-	if _grill != null:
-		_collect_lights(_grill, lights)
+	var lights := _level_lights()
+	_refresh_existing_light_bindings(lights)
 	for light in lights:
-		_add_outliner_item("Light / %s" % light.name, light)
+		var origin := "Placed" if _is_placed_light(light) else "Level"
+		_add_outliner_item("%s / %s / %s" % [origin, light.get_class().trim_suffix("Light3D"), light.name], light)
 	_refresh_light_markers(lights)
 	if _world != null:
 		for child in _world.get_children():
@@ -953,7 +1025,7 @@ func _refresh_outliner() -> void:
 
 
 func _collect_lights(root: Node, out: Array) -> void:
-	if root == null:
+	if root == null or root is SubViewport:
 		return
 	if root is Light3D and not out.has(root):
 		out.append(root)
@@ -962,7 +1034,11 @@ func _collect_lights(root: Node, out: Array) -> void:
 
 
 func _add_outliner_item(label: String, node: Node) -> void:
+	if is_instance_valid(_outliner_search) and not _outliner_search.text.strip_edges().is_empty():
+		if not label.to_lower().contains(_outliner_search.text.strip_edges().to_lower()): return
 	_outliner.add_item(label)
+	if is_instance_valid(_game):
+		_outliner.set_item_tooltip(_outliner.item_count - 1, str(_game.get_path_to(node)))
 	_outliner_nodes.append(node)
 
 
@@ -980,6 +1056,7 @@ func _rebuild_inspector() -> void:
 	if _inspector == null:
 		return
 	for child in _inspector.get_children():
+		_inspector.remove_child(child)
 		child.queue_free()
 	var title := Label.new()
 	title.text = "PROPERTIES"
@@ -1000,6 +1077,7 @@ func _rebuild_inspector() -> void:
 	name_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(name_lab, true, 14)
 	_inspector.add_child(name_lab)
+	if _selected is Light3D: _add_light_color_control(_selected as Light3D)
 	_add_inspect_spin("Pos X", _selected.global_position.x, -12.0, 12.0, 0.01, func(v): _set_sel_pos("x", v))
 	_add_inspect_spin("Pos Y", _selected.global_position.y, -4.0, 8.0, 0.01, func(v): _set_sel_pos("y", v))
 	_add_inspect_spin("Pos Z", _selected.global_position.z, -12.0, 18.0, 0.01, func(v): _set_sel_pos("z", v))
@@ -1013,69 +1091,7 @@ func _rebuild_inspector() -> void:
 	)
 	_add_napkin_look_controls(_is_napkin(_selected))
 	if _selected is Light3D:
-		var light := _selected as Light3D
-		_add_inspect_spin("Brightness", light.light_energy, 0.0, 16.0, 0.05, func(v):
-			if _selected is Light3D:
-				(_selected as Light3D).light_energy = v
-				_save_if_dressing()
-		)
-		_add_inspect_spin("Specular Strength", light.light_specular, 0.0, 2.0, 0.01, func(v):
-			if _selected is Light3D:
-				(_selected as Light3D).light_specular = v
-				_save_if_dressing()
-		)
-		if light is DirectionalLight3D:
-			var sun := light as DirectionalLight3D
-			_add_inspect_spin("Light Source Size", sun.light_angular_distance, 0.0, 10.0, 0.05, func(v):
-				if _selected is DirectionalLight3D:
-					(_selected as DirectionalLight3D).light_angular_distance = v
-					_save_if_dressing()
-			)
-		else:
-			_add_inspect_spin("Light Source Size", light.light_size, 0.0, 2.0, 0.01, func(v):
-				if _selected is Light3D:
-					(_selected as Light3D).light_size = v
-					_save_if_dressing()
-			)
-		_add_inspect_spin("Range", _light_range(light), 0.1, 20.0, 0.05, func(v):
-			_set_light_range(v)
-		)
-		if light is SpotLight3D:
-			if _is_rect_area_light(light):
-				var area_note := Label.new()
-				area_note.text = "Projected rectangular area-light rig (Godot has no native real-time AreaLight3D)."
-				area_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-				UiFontsScript.apply_label(area_note, false, 11)
-				area_note.add_theme_color_override("font_color", Color(0.72, 0.80, 0.90))
-				_inspector.add_child(area_note)
-				_add_inspect_spin("Area Width", float(light.get_meta("rect_width", 1.2)), 0.1, 8.0, 0.05, func(v):
-					if _selected is SpotLight3D and _is_rect_area_light(_selected as Light3D):
-						(_selected as Light3D).set_meta("rect_width", v)
-						_apply_rect_area_shape(_selected as SpotLight3D)
-						_save_if_dressing()
-				)
-				_add_inspect_spin("Area Height", float(light.get_meta("rect_height", 0.55)), 0.1, 8.0, 0.05, func(v):
-					if _selected is SpotLight3D and _is_rect_area_light(_selected as Light3D):
-						(_selected as Light3D).set_meta("rect_height", v)
-						_apply_rect_area_shape(_selected as SpotLight3D)
-						_save_if_dressing()
-				)
-			_add_inspect_spin("Spot Angle", (light as SpotLight3D).spot_angle, 1.0, 80.0, 0.5, func(v):
-				if _selected is SpotLight3D:
-					(_selected as SpotLight3D).spot_angle = v
-					_save_if_dressing()
-			)
-		var vis := CheckButton.new()
-		vis.text = "Visible"
-		vis.button_pressed = light.visible
-		UiFontsScript.apply_button(vis, false, 12)
-		vis.toggled.connect(func(on: bool):
-			if _selected:
-				_selected.visible = on
-				_save_if_dressing()
-		)
-		_inspector.add_child(vis)
-		_add_light_shadow_controls(light)
+		_build_light_properties(_selected as Light3D)
 	if _selected.get_parent() == _dressing:
 		var del := Button.new()
 		del.text = "Delete Object"
@@ -1122,68 +1138,97 @@ func _add_inspect_check(label_text: String, on: bool, setter: Callable) -> void:
 	_inspector.add_child(btn)
 
 
-func _add_light_shadow_controls(light: Light3D) -> void:
-	var head := Label.new()
-	head.text = "SHADOWS"
-	UiFontsScript.apply_label(head, true, 12)
-	head.add_theme_color_override("font_color", Color(1.0, 0.82, 0.45))
-	_inspector.add_child(head)
-	_add_inspect_check("Cast Shadows", light.shadow_enabled, func(on: bool):
-		if _selected is Light3D:
-			(_selected as Light3D).shadow_enabled = on
-			_save_if_dressing()
-	)
-	_add_inspect_spin("Shadow Blur", light.shadow_blur, 0.0, 4.0, 0.05, func(v: float):
-		if _selected is Light3D:
-			(_selected as Light3D).shadow_blur = v
-			_save_if_dressing()
-	)
-	_add_inspect_spin("Shadow Bias", light.shadow_bias, 0.0, 0.5, 0.001, func(v: float):
-		if _selected is Light3D:
-			(_selected as Light3D).shadow_bias = v
-			_save_if_dressing()
-	)
-	_add_inspect_spin("Normal Bias", light.shadow_normal_bias, 0.0, 4.0, 0.05, func(v: float):
-		if _selected is Light3D:
-			(_selected as Light3D).shadow_normal_bias = v
-			_save_if_dressing()
-	)
-	_add_inspect_spin("Shadow Opacity", light.shadow_opacity, 0.0, 1.0, 0.01, func(v: float):
-		if _selected is Light3D:
-			(_selected as Light3D).shadow_opacity = v
-			_save_if_dressing()
-	)
-	_add_inspect_check("Reverse Cull Face", light.shadow_reverse_cull_face, func(on: bool):
-		if _selected is Light3D:
-			(_selected as Light3D).shadow_reverse_cull_face = on
-			_save_if_dressing()
-	)
+func _add_light_color_control(light: Light3D) -> void:
+	var label := Label.new()
+	label.text = "LIGHT COLOR"
+	UiFontsScript.apply_label(label, true, 12)
+	_inspector.add_child(label)
+	var picker := ColorPickerButton.new()
+	picker.name = "LightColorPicker"
+	picker.color = light.light_color
+	picker.edit_alpha = false
+	picker.custom_minimum_size = Vector2(0, 38)
+	picker.tooltip_text = "Choose a color or type an RGB / hex value. Saves automatically."
+	picker.color_changed.connect(func(color: Color): _set_light_property(light, "light_color", color))
+	_inspector.add_child(picker)
+
+
+func _light_number(light: Light3D, label: String, property: String, minimum: float, maximum: float, step: float) -> void:
+	if not property in LightSettings.properties(light): return
+	_add_inspect_spin(label, float(light.get(property)), minimum, maximum, step, func(v: float): _set_light_property(light, property, v))
+	_inspector.get_child(_inspector.get_child_count() - 1).name = property
+
+
+func _light_check(light: Light3D, label: String, property: String) -> void:
+	if not property in LightSettings.properties(light): return
+	var value: bool = bool(light.get_meta("balance_authored_visible", light.visible)) if property == "visible" else bool(light.get(property))
+	_add_inspect_check(label, value, func(v: bool): _set_light_property(light, property, v))
+
+
+func _build_light_properties(light: Light3D) -> void:
+	_light_check(light, "Light Enabled", "visible")
+	_light_number(light, "Brightness", "light_energy", 0, 64, 0.05)
+	_light_number(light, "Specular Strength", "light_specular", 0, 2, 0.01)
+	_light_number(light, "Indirect Energy", "light_indirect_energy", 0, 16, 0.05)
+	_light_number(light, "Fog Energy", "light_volumetric_fog_energy", 0, 16, 0.05)
 	if light is DirectionalLight3D:
-		var sun := light as DirectionalLight3D
-		_add_inspect_spin("Shadow Max Distance", sun.directional_shadow_max_distance, 4.0, 80.0, 0.5, func(v: float):
-			if _selected is DirectionalLight3D:
-				(_selected as DirectionalLight3D).directional_shadow_max_distance = v
-				_save_if_dressing()
-		)
-		_add_inspect_spin("Shadow Fade Start", sun.directional_shadow_fade_start, 0.1, 1.0, 0.01, func(v: float):
-			if _selected is DirectionalLight3D:
-				(_selected as DirectionalLight3D).directional_shadow_fade_start = v
-				_save_if_dressing()
-		)
-		_add_inspect_spin("Pancake Size", sun.directional_shadow_pancake_size, 0.0, 8.0, 0.05, func(v: float):
-			if _selected is DirectionalLight3D:
-				(_selected as DirectionalLight3D).directional_shadow_pancake_size = v
-				_save_if_dressing()
-		)
-	elif light is OmniLight3D:
-		var omni := light as OmniLight3D
-		_add_inspect_check("Cube Omni Shadows", omni.omni_shadow_mode == OmniLight3D.SHADOW_CUBE, func(on: bool):
-			if _selected is OmniLight3D:
-				(_selected as OmniLight3D).omni_shadow_mode = (
-					OmniLight3D.SHADOW_CUBE if on else OmniLight3D.SHADOW_DUAL_PARABOLOID
+		_light_number(light, "Source Angle", "light_angular_distance", 0, 20, 0.05)
+	else:
+		_light_number(light, "Source Size", "light_size", 0, 8, 0.01)
+		var prefix := "omni" if light is OmniLight3D else "spot"
+		_light_number(light, "Range", prefix + "_range", 0.1, 100, 0.1)
+		_light_number(light, "Distance Falloff", prefix + "_attenuation", 0, 16, 0.05)
+	if light is SpotLight3D:
+		_light_number(light, "Spot Angle", "spot_angle", 1, 89, 0.5)
+		_light_number(light, "Spot Edge Falloff", "spot_angle_attenuation", 0, 16, 0.05)
+		if _is_rect_area_light(light):
+			for axis in ["width", "height"]:
+				var key: String = "rect_" + str(axis)
+				_add_inspect_spin("Area " + axis.capitalize(), float(light.get_meta(key, 1.0)), 0.1, 8, 0.05, func(v: float):
+					if not is_instance_valid(light): return
+					light.set_meta(key, v)
+					_apply_rect_area_shape(light)
+					_save_dressing()
 				)
-				_save_if_dressing()
-		)
+	_add_light_shadow_controls(light)
+	_light_check(light, "Negative Light", "light_negative")
+	if not light is DirectionalLight3D:
+		_light_check(light, "Distance Fade", "distance_fade_enabled")
+		_light_number(light, "Fade Begins", "distance_fade_begin", 0, 500, 0.5)
+		_light_number(light, "Fade Length", "distance_fade_length", 0.1, 500, 0.5)
+		_light_number(light, "Shadow Fade Distance", "distance_fade_shadow", 0, 500, 0.5)
+	if not _is_placed_light(light):
+		var note := Label.new()
+		note.text = "Changes save automatically and override this light's game settings. Reset restores normal game control."
+		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UiFontsScript.apply_label(note, false, 11)
+		_inspector.add_child(note)
+		var reset := Button.new()
+		reset.text = "Reset This Level Light"
+		_style_btn(reset)
+		reset.pressed.connect(func(): _reset_light_override(light))
+		_inspector.add_child(reset)
+
+
+func _add_light_shadow_controls(light: Light3D) -> void:
+	var heading := Label.new()
+	heading.text = "SHADOWS"
+	UiFontsScript.apply_label(heading, true, 12)
+	_inspector.add_child(heading)
+	_light_check(light, "Cast Shadows", "shadow_enabled")
+	_light_number(light, "Shadow Blur", "shadow_blur", 0, 4, 0.05)
+	_light_number(light, "Shadow Bias", "shadow_bias", 0, 2, 0.001)
+	_light_number(light, "Normal Bias", "shadow_normal_bias", 0, 4, 0.05)
+	_light_number(light, "Shadow Opacity", "shadow_opacity", 0, 1, 0.01)
+	_light_check(light, "Reverse Cull Face", "shadow_reverse_cull_face")
+	if light is DirectionalLight3D:
+		_light_number(light, "Shadow Distance", "directional_shadow_max_distance", 1, 500, 0.5)
+		_light_number(light, "Shadow Fade Start", "directional_shadow_fade_start", 0, 1, 0.01)
+		_light_number(light, "Pancake Size", "directional_shadow_pancake_size", 0, 100, 0.1)
+		_light_check(light, "Blend Shadow Splits", "directional_shadow_blend_splits")
+	elif light is OmniLight3D:
+		_add_inspect_check("Cube Omni Shadows", light.omni_shadow_mode == OmniLight3D.SHADOW_CUBE, func(on: bool):
+			_set_light_property(light, "omni_shadow_mode", OmniLight3D.SHADOW_CUBE if on else OmniLight3D.SHADOW_DUAL_PARABOLOID))
 
 
 func _is_napkin(n: Node) -> bool:
@@ -1348,6 +1393,62 @@ func _place_light(kind: String) -> void:
 	_finish_place(light)
 
 
+func _ensure_window_key() -> void:
+	if _dressing.get_node_or_null(WINDOW_KEY_NAME) == null:
+		_apply_window_key_preset(0, false)
+
+
+func _apply_window_key_preset(index: int, select_light: bool = true) -> void:
+	if index < 0 or index >= WINDOW_KEY_PRESETS.size(): return
+	_ensure_dressing_root()
+	var light := _dressing.get_node_or_null(WINDOW_KEY_NAME) as SpotLight3D
+	if light == null:
+		light = _make_dressing_light("rect_area") as SpotLight3D
+		light.name = WINDOW_KEY_NAME
+		_dressing.add_child(light)
+	var preset: Dictionary = WINDOW_KEY_PRESETS[index]
+	light.position = preset["position"]
+	light.look_at(_dressing.to_global(preset["target"]), Vector3.UP)
+	light.light_color = preset["color"]
+	light.light_energy = preset["energy"]
+	light.light_specular = 0.12
+	light.spot_range = 6.0
+	light.spot_angle = preset["angle"]
+	light.set_meta("rect_width", 0.95)
+	light.set_meta("rect_height", 1.25)
+	_apply_rect_area_shape(light)
+	light.light_size = preset["size"]
+	light.shadow_enabled = true
+	light.shadow_bias = 0.025
+	light.shadow_normal_bias = 0.25
+	light.shadow_opacity = 0.88
+	light.show()
+	# A second face of the same outside softbox faces the customer line.
+	var face := _dressing.get_node_or_null(WINDOW_FACE_NAME) as SpotLight3D
+	if face == null:
+		face = _make_dressing_light("spot") as SpotLight3D
+		face.name = WINDOW_FACE_NAME
+		_dressing.add_child(face)
+	face.position = Vector3(2.4, 2.3, 1.65)
+	face.look_at(_dressing.to_global(Vector3(0.15, 1.45, 2.25)), Vector3.UP)
+	face.light_color = preset["color"]
+	face.light_energy = float(preset["energy"]) * 0.35
+	face.light_specular = 0.05
+	face.light_size = preset["size"]
+	face.spot_range = 5.0
+	face.spot_angle = 42.0
+	face.shadow_enabled = true
+	face.shadow_normal_bias = 0.25
+	face.show()
+	if select_light:
+		if _game.get("light_balance") != null:
+			_game.light_balance.set_value("simple", false)
+		_select(light)
+		_refresh_outliner()
+	_save_dressing()
+	_set_status("Window light: %s — saved; select it to adjust brightness and position" % preset["label"])
+
+
 func _place_primitive(kind: String) -> void:
 	var mi := _make_dressing_primitive(kind)
 	mi.position = _place_point()
@@ -1365,6 +1466,9 @@ func _place_napkin() -> void:
 func _finish_place(node: Node3D) -> void:
 	_ensure_dressing_root()
 	_dressing.add_child(node)
+	# Explicitly placing a light must make it usable even after muting accents.
+	if node is Light3D and _game.get("light_balance") != null:
+		_game.light_balance.set_value("placed_lights", true)
 	_select(node)
 	_refresh_outliner()
 	_save_dressing()
@@ -1410,6 +1514,8 @@ func _is_rect_area_light(light: Light3D) -> bool:
 func _rect_area_projector(width: float, height: float) -> Texture2D:
 	## Godot has no native real-time rectangular area light. A feathered projector
 	## gives its SpotLight3D a rectangular footprint while light_size softens it.
+	var cache_key := Vector2(width, height)
+	if _rect_projectors.has(cache_key): return _rect_projectors[cache_key]
 	var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
 	var largest := maxf(width, height)
 	var half_w := 0.42 * width / largest
@@ -1422,7 +1528,9 @@ func _rect_area_projector(width: float, height: float) -> Texture2D:
 			var strength := clampf(1.0 - maxf(outside, 0.0) / feather, 0.0, 1.0)
 			strength = strength * strength * (3.0 - 2.0 * strength)
 			img.set_pixel(x, y, Color(strength, strength, strength, 1.0))
-	return ImageTexture.create_from_image(img)
+	var texture := ImageTexture.create_from_image(img)
+	_rect_projectors[cache_key] = texture
+	return texture
 
 
 func _apply_rect_area_shape(light: SpotLight3D) -> void:
@@ -1500,6 +1608,9 @@ func _make_napkin_mat(darkness: float = 0.0, pattern_scale: float = 1.0) -> Stan
 
 
 func _save_if_dressing() -> void:
+	if _selected is Light3D and not _is_placed_light(_selected):
+		_set_light_property(_selected, "transform", _selected.transform)
+		return
 	if _selected != null and _dressing != null and (_selected.get_parent() == _dressing or _dressing.is_ancestor_of(_selected)):
 		_save_dressing()
 
@@ -1526,6 +1637,7 @@ func _save_dressing() -> void:
 		cfg.set_value(SAVE_SECTION, p + "vis", n.visible)
 		if n is Light3D:
 			var L := n as Light3D
+			cfg.set_value(SAVE_SECTION, p + "light_properties", LightSettings.snapshot(L))
 			cfg.set_value(SAVE_SECTION, p + "energy", L.light_energy)
 			cfg.set_value(SAVE_SECTION, p + "specular", L.light_specular)
 			cfg.set_value(SAVE_SECTION, p + "size", L.light_size)
@@ -1557,6 +1669,7 @@ func _save_dressing() -> void:
 	cfg.set_value(SAVE_SECTION, "count", i)
 	cfg.set_value(SAVE_SECTION, "napkin_darkness", _napkin_darkness_default)
 	cfg.set_value(SAVE_SECTION, "napkin_pattern", _napkin_pattern_scale_default)
+	cfg.set_value("level_lights", "overrides", _light_overrides)
 	cfg.save(SAVE_PATH)
 
 
@@ -1586,7 +1699,9 @@ func _load_dressing() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) != OK:
 		return
+	_light_overrides = cfg.get_value("level_lights", "overrides", {})
 	for child in _dressing.get_children():
+		_dressing.remove_child(child)
 		child.queue_free()
 	_napkin_darkness_default = clampf(float(cfg.get_value(SAVE_SECTION, "napkin_darkness", 0.0)), 0.0, 0.90)
 	_napkin_pattern_scale_default = clampf(float(cfg.get_value(SAVE_SECTION, "napkin_pattern", 1.0)), 0.25, 24.0)
@@ -1647,6 +1762,7 @@ func _load_dressing() -> void:
 					L.set_meta("rect_width", float(cfg.get_value(SAVE_SECTION, p + "rect_w", 1.2)))
 					L.set_meta("rect_height", float(cfg.get_value(SAVE_SECTION, p + "rect_h", 0.55)))
 					_apply_rect_area_shape(L as SpotLight3D)
+					L.light_size = float(cfg.get_value(SAVE_SECTION, p + "size", L.light_size))
 			L.shadow_enabled = bool(cfg.get_value(SAVE_SECTION, p + "shadow", L.shadow_enabled))
 			L.shadow_blur = float(cfg.get_value(SAVE_SECTION, p + "sblur", L.shadow_blur))
 			L.shadow_bias = float(cfg.get_value(SAVE_SECTION, p + "sbias", L.shadow_bias))
@@ -1663,6 +1779,8 @@ func _load_dressing() -> void:
 				var sun := L as DirectionalLight3D
 				sun.directional_shadow_max_distance = float(cfg.get_value(SAVE_SECTION, p + "smax", sun.directional_shadow_max_distance))
 				sun.directional_shadow_fade_start = float(cfg.get_value(SAVE_SECTION, p + "sfade", sun.directional_shadow_fade_start))
+		if node is Light3D:
+			LightSettings.apply(node, cfg.get_value(SAVE_SECTION, p + "light_properties", {}))
 		if node is MeshInstance3D and kind == "napkin":
 			var napkin := node as MeshInstance3D
 			_apply_napkin_darkness(
@@ -1676,8 +1794,92 @@ func _load_dressing() -> void:
 		_dressing.add_child(node)
 	_select(null)
 	_refresh_outliner()
+	_apply_existing_light_overrides()
 
 
 func _set_status(text: String) -> void:
 	if _status:
 		_status.text = text
+
+
+func _is_placed_light(light: Node) -> bool:
+	return is_instance_valid(_dressing) and _dressing.is_ancestor_of(light)
+
+
+func _level_lights() -> Array:
+	var result: Array = []
+	_collect_lights(_game if is_instance_valid(_game) else _world, result)
+	if is_instance_valid(_grill): _collect_lights(_grill, result)
+	return result
+
+
+func _light_key(light: Node) -> String:
+	var parts: PackedStringArray = []
+	var node := light
+	var anchor := _game if is_instance_valid(_game) else _world
+	while node != null and node != anchor:
+		var token := str(node.name)
+		if token.begins_with("@"):
+			var ordinal := 0
+			for sibling in node.get_parent().get_children():
+				if sibling == node: break
+				if sibling.get_class() == node.get_class(): ordinal += 1
+			token = "%s#%d" % [node.get_class(), ordinal]
+		parts.insert(0, token)
+		node = node.get_parent()
+	return "/".join(parts)
+
+
+func _refresh_existing_light_bindings(lights: Array = []) -> void:
+	if lights.is_empty(): lights = _level_lights()
+	for light: Light3D in lights:
+		if _is_placed_light(light): continue
+		var key := _light_key(light)
+		if not _light_defaults.has(key) or not is_instance_valid(_bound_lights.get(key)):
+			_light_defaults[key] = LightSettings.snapshot(light)
+		_bound_lights[key] = light
+
+
+func _set_light_property(light: Light3D, property: String, value: Variant) -> void:
+	if not is_instance_valid(light): return
+	if not _is_placed_light(light):
+		_refresh_existing_light_bindings([light])
+		var key := _light_key(light)
+		var values: Dictionary = _light_overrides.get(key, {})
+		values[property] = value
+		_light_overrides[key] = values
+	if property == "visible" and light.has_meta("balance_authored_visible"):
+		light.set_meta("balance_authored_visible", value)
+	light.set(property, value)
+	_update_light_marker_transforms()
+	_save_dressing()
+
+
+func _apply_existing_light_overrides() -> void:
+	for key in _light_overrides:
+		var light = _bound_lights.get(key)
+		if not is_instance_valid(light): continue
+		var values: Dictionary = _light_overrides[key]
+		for property in values:
+			if light.get(property) != values[property]: light.set(property, values[property])
+
+
+func _reset_light_override(light: Light3D) -> void:
+	if not is_instance_valid(light): return
+	var key := _light_key(light)
+	var defaults: Dictionary = _light_defaults.get(key, {})
+	for property in _light_overrides.get(key, {}):
+		if defaults.has(property): light.set(property, defaults[property])
+	_light_overrides.erase(key)
+	_save_dressing()
+	_rebuild_inspector()
+	_update_light_marker_transforms()
+
+
+func _process(delta: float) -> void:
+	if not is_instance_valid(_game) and not is_instance_valid(_world): return
+	_light_scan_clock += delta
+	if _light_scan_clock >= 1.0 and (active or not _light_overrides.is_empty()):
+		_light_scan_clock = 0.0
+		_refresh_existing_light_bindings()
+	_apply_existing_light_overrides()

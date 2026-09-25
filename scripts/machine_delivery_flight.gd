@@ -5,6 +5,7 @@ var destination: Node3D
 var elapsed := 0.0
 var origin := Vector3.ZERO
 var launched := false
+var impact_played := false
 var visual: Node3D
 
 func setup(owner_game: Node, target: Node3D) -> void:
@@ -36,19 +37,23 @@ func _copy_visuals(source: Node, parent: Node3D, is_root: bool = false) -> void:
 func advance(delta: float) -> bool:
 	elapsed += delta
 	if not is_instance_valid(destination): return true
-	if elapsed < 2.4: return false
+	if elapsed < 1.2: return false
 	if not launched:
 		launched = true
 		origin = game.mail_delivery_truck.delivery_origin_global() if is_instance_valid(game.mail_delivery_truck) else Vector3(1.38, 1.1, 1.76)
 		show()
-	var u := clampf((elapsed - 2.4) / 1.45, 0.0, 1.0)
+		if game.game_audio != null: game.game_audio.play_delivery_whoosh()
+	var u := clampf((elapsed - 1.2) / 0.725, 0.0, 1.0)
 	var ease := smoothstep(0.0, 1.0, u)
 	global_transform = destination.global_transform
 	global_position = origin.lerp(destination.global_position, ease) + Vector3(0, sin(u * PI) * 0.85, 0)
 	visual.scale = Vector3.ONE * lerpf(0.12, 1.0, ease)
 	visual.rotation = Vector3(sin(u * TAU) * 0.14, (1.0-ease) * PI * 0.45, sin(u * PI) * 0.16)
 	if u < 1.0: return false
-	var settle := clampf((elapsed - 3.85) / 0.42, 0.0, 1.0)
+	if not impact_played:
+		impact_played = true
+		if game.game_audio != null: game.game_audio.play_delivery_impact()
+	var settle := clampf((elapsed - 1.925) / 0.21, 0.0, 1.0)
 	global_position.y += sin(settle * PI) * 0.09 * (1.0-settle)
 	visual.scale = Vector3(1.0 + sin(settle*TAU)*0.025, 1.0-sin(settle*TAU)*0.045, 1.0+sin(settle*TAU)*0.025)
 	return settle >= 1.0

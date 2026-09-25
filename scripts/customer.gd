@@ -2265,6 +2265,10 @@ func _update_sidewalk_leave(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if bool(get_meta("meal_stepping_aside", false)):
+		_play_anim("walk")
+		_apply_bobble(true)
+		return
 	if is_instance_valid(_burger_props) and (is_ragdoll or _powdering or _celebrating or is_leaving):
 		_burger_props.visible = false
 	if is_street_pedestrian:
@@ -3017,7 +3021,7 @@ func _show_treat_hearts() -> void:
 
 
 func leave_happy(do_dance: bool = false) -> void:
-	if bool(get_meta("burger_in_flight", false)):
+	if bool(get_meta("burger_in_flight", false)) or int(get_meta("side_food_pending", 0)) > 0:
 		set_meta("burger_pending_departure", Callable(self, "leave_happy").bind(do_dance))
 		return
 	_angry_departure = false
@@ -3042,7 +3046,7 @@ func leave_happy(do_dance: bool = false) -> void:
 
 
 func leave_closed() -> void:
-	if bool(get_meta("burger_in_flight", false)):
+	if bool(get_meta("burger_in_flight", false)) or int(get_meta("side_food_pending", 0)) > 0:
 		set_meta("burger_pending_departure", Callable(self, "leave_closed").bind())
 		return
 	if is_leaving or is_ragdoll:
@@ -3083,7 +3087,7 @@ func leave_closed() -> void:
 
 
 func leave_meh() -> void:
-	if bool(get_meta("burger_in_flight", false)):
+	if bool(get_meta("burger_in_flight", false)) or int(get_meta("side_food_pending", 0)) > 0:
 		set_meta("burger_pending_departure", Callable(self, "leave_meh").bind())
 		return
 	_angry_departure = false
@@ -3674,14 +3678,63 @@ func _apply_eat_hands_pose(strength: float) -> void:
 	_set_panic_bone_rot("RightHand", Vector3(deg_to_rad(-12.0 * s), 0.0, deg_to_rad(20.0 * s)))
 
 
+var _side_food_pose := false
+var _side_food_lift := 0.0
+var _side_food_drink := false
+func begin_side_food() -> void:
+	begin_catch_burger(true)
+	_side_food_pose = true
+	_side_food_lift = 0.0
+	if _burger_props != null:
+		_burger_eat_phase = "eat"
+		if _anim_player:
+			_anim_player.play("burger/" + BurgerMotion.FAST_EAT, 0.0)
+			_anim_player.speed_scale = 1.0
+
+func pose_side_food(lift: float, drinking: bool) -> void:
+	_side_food_lift = lift
+	_side_food_drink = drinking
+	if _anim_player and _burger_props != null:
+		_anim_player.play("burger/" + BurgerMotion.FAST_EAT, 0.0)
+		_anim_player.seek(burger_animation_duration(true) * lerpf(.02, .40, lift), true)
+		_anim_player.advance(0.0)
+	_update_eat_pose()
+
+func side_food_grip_global() -> Vector3:
+	_cache_panic_bones()
+	if _skeleton != null:
+		var left := _skeleton.find_bone("LeftHand")
+		var right := _skeleton.find_bone("RightHand")
+		if left >= 0 and right >= 0:
+			var center := (_skeleton.get_bone_global_pose(left).origin + _skeleton.get_bone_global_pose(right).origin) * .5
+			return _skeleton.to_global(center) + global_basis * Vector3(0, 0, .035)
+	return burger_grip_global()
+
+
+func side_food_mouth_global() -> Vector3:
+	var created := find_child("CreatedCustomer", true, false)
+	if created != null:
+		for mesh in created.find_children("*Mouth", "MeshInstance3D", true, false):
+			if mesh.visible and mesh.mesh != null:
+				return mesh.to_global(mesh.get_aabb().get_center())
+		if created.has_method("feature_world_position"):
+			return created.feature_world_position("mouth")
+	_cache_panic_bones()
+	if _skeleton != null:
+		var head := int(_panic_bones.get("Head", -1))
+		if head >= 0:
+			return (_skeleton.global_transform * _skeleton.get_bone_global_pose(head)).origin + global_basis * Vector3(0, -.04, .10)
+	return mouth_global()
+
+
 func _update_eat_pose() -> void:
 	if _burger_eat_phase == "":
 		_play_anim("idle")
 		if _anim_player:_anim_player.stop()
-		_apply_eat_hands_pose(1.0)
+		_apply_eat_hands_pose(lerpf(.55, 1.0, _side_food_lift) if _side_food_pose else 1.0)
 	if _body:
 		_body.position.y = _base_body_y
-		_body.rotation_degrees = Vector3(_eat_lean_x,0,0)
+		_body.rotation_degrees = Vector3(_eat_lean_x + (-8.0 * _side_food_lift if _side_food_pose and _side_food_drink else 0.0),0,0)
 
 
 func burger_grip_global() -> Vector3:
@@ -3707,7 +3760,7 @@ func start_eating_burger() -> void:
 
 
 func burger_animation_duration(eating: bool) -> float:
-	return BurgerMotion.LIBRARY.get_animation(BurgerMotion.FAST_EAT if eating else BurgerMotion.FAST_TAKE).length
+	return BurgerMotion.LIBRARY.get_animation(BurgerMotion.FAST_EAT if eating else BurgerMotion.FAST_TAKE).length / (2.0 if is_challenge_guest and not eating else 1.0)
 
 
 func begin_catch_burger(authored_grab: bool = false) -> void:
@@ -3724,6 +3777,7 @@ func begin_catch_burger(authored_grab: bool = false) -> void:
 		_anim_state = ""
 		_set_mood("cheer")
 		_play_anim("burger:" + BurgerMotion.FAST_TAKE)
+		if is_challenge_guest and _anim_player: _anim_player.speed_scale = 2.0
 		_update_eat_pose()
 		return
 	_burger_eat_phase = ""
@@ -3760,6 +3814,8 @@ func chomp_burger() -> void:
 
 
 func finish_catch_burger() -> void:
+	_side_food_pose = false
+	_side_food_lift = 0.0
 	_burger_eat_phase = ""
 	_anim_state = ""
 	if _burger_props != null:_burger_props.visible = false
@@ -3872,7 +3928,7 @@ func _update_powder_blobs(delta: float) -> void:
 
 
 func leave_mad() -> void:
-	if bool(get_meta("burger_in_flight", false)):
+	if bool(get_meta("burger_in_flight", false)) or int(get_meta("side_food_pending", 0)) > 0:
 		set_meta("burger_pending_departure", Callable(self, "leave_mad").bind())
 		return
 	_angry_departure = true
@@ -3975,17 +4031,19 @@ func _make_stuck_food_plane(tex: Texture2D, tint: Color, size: Vector2) -> MeshI
 	quad.size = size
 	card.mesh = quad
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	## Food-on-face is a readable reaction gag, so hair and the customer mesh must
-	## never depth-occlude it while it holds and slides.
-	mat.no_depth_test = true
+	## Food receives scene light and obeys real surface occlusion.
+	mat.no_depth_test = false
+	mat.alpha_scissor_threshold = 0.08
+	mat.roughness = 0.78
+	mat.metallic_specular = 0.18
 	mat.albedo_color = tint
 	if tex != null:
 		mat.albedo_texture = tex
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.render_priority = 12
+	mat.render_priority = 0
 	card.material_override = mat
 	card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return card
@@ -4005,7 +4063,8 @@ func reserve_stuck_food_local_target() -> Vector3:
 	anchor.x += face_spot.x
 	anchor.y += face_spot.y + 0.14
 	anchor.z += 0.10
-	return anchor
+	var hit := preload("res://scripts/food_impact.gd").surface(_body,to_global(anchor),global_basis.z.normalized())
+	return to_local(hit.position)
 
 
 func reserve_stuck_food_world_target() -> Vector3:
@@ -4013,48 +4072,22 @@ func reserve_stuck_food_world_target() -> Vector3:
 
 
 func _animate_stuck_food_card(card: MeshInstance3D) -> void:
-	if card == null or not is_instance_valid(card):
-		return
-	card.scale = Vector3(1.28, 0.70, 1.28)
-	var slide_from := card.position
-	var rotation_from := card.rotation_degrees
-	var slide_to := card.position + Vector3(randf_range(-0.025, 0.025), -0.18, 0.012)
-	var slide_rotation := card.rotation_degrees + Vector3(randf_range(2.0, 8.0), 0.0, randf_range(-12.0, 12.0))
+	if not is_instance_valid(card): return
+	card.scale = Vector3(1.15,0.86,1.0)
 	var tw := card.create_tween()
-	tw.tween_property(card, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_interval(STUCK_FOOD_HOLD_SEC)
-	tw.tween_method(
-		func(t: float) -> void:
-			if card != null and is_instance_valid(card):
-				var eased := ease(t, 1.65)
-				card.position = slide_from.lerp(slide_to, eased)
-				card.rotation_degrees = rotation_from.lerp(slide_rotation, eased),
-		0.0,
-		1.0,
-		STUCK_FOOD_SLIDE_SEC
-	)
+	tw.tween_property(card,"scale",Vector3.ONE,0.13).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.45)
 	tw.tween_callback(_drop_stuck_food_card.bind(card))
 
 
 func _drop_stuck_food_card(card: MeshInstance3D) -> void:
-	if card == null or not is_instance_valid(card):
-		return
+	if not is_instance_valid(card): return
 	_stuck_food_items.erase(card)
-	var world_parent := get_parent() as Node3D
-	if world_parent == null or not is_instance_valid(world_parent):
+	var parent := get_parent() as Node3D
+	if parent == null:
 		card.queue_free()
 		return
-	card.reparent(world_parent, true)
-	var fall_to := card.global_position \
-		+ global_basis.x.normalized() * randf_range(-0.12, 0.12) \
-		+ global_basis.z.normalized() * 0.10 \
-		+ Vector3(0.0, -0.82, 0.0)
-	var fall_rotation := card.rotation_degrees + Vector3(randf_range(70.0, 150.0), randf_range(-45.0, 45.0), randf_range(-120.0, 120.0))
-	var tw := card.create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(card, "global_position", fall_to, STUCK_FOOD_FALL_SEC).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.tween_property(card, "rotation_degrees", fall_rotation, STUCK_FOOD_FALL_SEC).set_trans(Tween.TRANS_SINE)
-	tw.chain().tween_callback(card.queue_free)
+	preload("res://scripts/food_impact.gd").drop(card,parent,global_basis.z.normalized() * 0.38 + Vector3(0,-0.35,0))
 
 
 func receive_stuck_food(id: String, tex: Texture2D, hit_world: Vector3, zone: String = "body") -> void:
@@ -4074,9 +4107,12 @@ func receive_stuck_food(id: String, tex: Texture2D, hit_world: Vector3, zone: St
 		aspect = clampf(float(tex.get_height()) / float(tex.get_width()), 0.40, 1.25)
 	var card := _make_stuck_food_plane(tex, Color.WHITE, Vector2(size_w, size_w * aspect))
 	card.name = "Stuck_%s" % id
-	card.position = anchor
-	card.rotation_degrees = Vector3(randf_range(-10.0, 8.0), randf_range(-14.0, 14.0), randf_range(-8.0, 8.0))
+	var hit := preload("res://scripts/food_impact.gd").surface(_body,to_global(anchor),global_basis.z.normalized())
 	root.add_child(card)
+	card.global_position = hit.position
+	var normal: Vector3 = hit.normal
+	card.global_basis = Basis.looking_at(normal,Vector3.UP if absf(normal.y) < 0.95 else Vector3.RIGHT,true)
+	card.rotate_object_local(Vector3.BACK,randf_range(-0.18,0.18))
 	_stuck_food_items.append(card)
 	_prune_stuck_food()
 	_animate_stuck_food_card(card)
@@ -4085,23 +4121,50 @@ func receive_stuck_food(id: String, tex: Texture2D, hit_world: Vector3, zone: St
 
 func receive_sauce(flavor: String, tex: Texture2D, tint: Color, zone: String = "body") -> void:
 	var root := _ensure_stuck_food_root()
-	var face := zone == "face"
-	var anchor := _stuck_food_anchor_local(face)
-	anchor.x += randf_range(-0.11, 0.11)
-	anchor.y += randf_range(-0.08, 0.08)
-	var size := randf_range(0.26, 0.40) if face else randf_range(0.32, 0.48)
-	var card := _make_stuck_food_plane(tex, tint, Vector2(size, size * randf_range(0.75, 1.15)))
-	card.name = "Sauce_%s" % flavor
-	card.position = anchor
-	card.rotation_degrees = Vector3(randf_range(-16.0, 12.0), randf_range(-24.0, 24.0), randf_range(-28.0, 28.0))
-	root.add_child(card)
-	_stuck_food_items.append(card)
+	var anchor := _stuck_food_anchor_local(zone == "face")
+	anchor.x += randf_range(-0.075,0.075)
+	anchor.y += randf_range(-0.06,0.06)
+	var hit := preload("res://scripts/food_impact.gd").surface(_body,to_global(anchor),global_basis.z.normalized())
+	var normal: Vector3 = hit.normal
+	var decal := Decal.new()
+	decal.name = "Sauce_%s" % flavor
+	decal.texture_albedo = tex
+	decal.texture_orm = preload("res://scripts/food_impact.gd").wet_orm()
+	decal.modulate = tint
+	decal.albedo_mix = 1.0
+	decal.normal_fade = 0.6
+	var size := randf_range(0.16,0.24)
+	decal.size = Vector3(size,0.16,size * 1.15)
+	root.add_child(decal)
+	decal.global_position = hit.position - normal * 0.018
+	var tangent := normal.cross(Vector3.UP if absf(normal.y) < 0.95 else Vector3.RIGHT).normalized()
+	decal.global_basis = Basis(tangent,normal,tangent.cross(normal)).orthonormalized()
+	_stuck_food_items.append(decal)
 	_prune_stuck_food()
-	card.scale = Vector3(1.35, 0.55, 1.35)
-	var tw := create_tween()
-	tw.tween_property(card, "scale", Vector3.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	if randf() < 0.4:
-		bobble_click()
+	decal.scale = Vector3(0.45,1,0.45)
+	var tw := decal.create_tween()
+	tw.tween_property(decal,"scale",Vector3.ONE,0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(decal,"size",Vector3(size * 0.95,0.16,size * 1.65),2.2)
+	tw.tween_interval(8.0)
+	tw.tween_property(decal,"modulate:a",0.0,2.0)
+	tw.tween_callback(func(): _stuck_food_items.erase(decal); decal.queue_free())
+	for i in 3:
+		var drop := MeshInstance3D.new()
+		var ball := SphereMesh.new()
+		ball.radius = randf_range(0.007,0.014)
+		ball.height = ball.radius * 2.0
+		ball.radial_segments = 8
+		ball.rings = 4
+		drop.mesh = ball
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = tint
+		mat.roughness = 0.27
+		mat.metallic_specular = 0.4
+		drop.material_override = mat
+		root.add_child(drop)
+		drop.global_position = hit.position + normal * 0.02
+		preload("res://scripts/food_impact.gd").drop(drop,get_parent(),normal * randf_range(0.35,0.8) + tangent * randf_range(-0.35,0.35) + Vector3.UP * randf_range(0.15,0.5),true)
+	if randf() < 0.4: bobble_click()
 
 
 ## Serve fly animation target — roughly lip height in the service window.
@@ -4821,3 +4884,31 @@ func _setup_customer_life(model: Node) -> void:
 	life.customer = self
 	life.model = model
 	add_child(life)
+
+
+func react_burnt_bite(point_at_player: bool = false) -> void:
+	shake_angry(.85, .065, 1.15)
+	if point_at_player:
+		_burger_eat_phase = "complain"
+		_anim_state = ""
+		_play_anim("burger:Point_Finger_Yell")
+		if _anim_player: _anim_player.speed_scale = 1.2
+	elif _anim_player:
+		_anim_player.pause()
+
+
+func step_aside_for_meal(destination_x: float) -> void:
+	if bool(get_meta("meal_aside", false)):return
+	set_meta("meal_aside", true)
+	set_meta("meal_stepping_aside", true)
+	set_queue_timer_active(false)
+	target_x = destination_x
+	_home_x = destination_x
+	rotation_degrees.y = _sidewalk_walk_yaw(destination_x-global_position.x)
+	var step := create_tween()
+	step.tween_property(self, "global_position:x", destination_x, .65).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	step.tween_callback(func():
+		set_meta("meal_stepping_aside", false)
+		rotation_degrees.y = _face_cook_yaw()
+		_play_anim("idle")
+	)

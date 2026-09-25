@@ -1,6 +1,10 @@
 shader_type spatial;
 render_mode cull_disabled;
 
+uniform float surface_roughness = 0.88;
+uniform float surface_specular = 0.12;
+uniform float surface_metallic = 0.0;
+uniform float surface_clearcoat = 0.0;
 uniform vec4 fabric_color : source_color = vec4(1.0);
 uniform vec4 fabric_tint : source_color = vec4(1.0);
 uniform bool graphic_enabled = false;
@@ -20,6 +24,8 @@ void fragment() {
 		base = mix(base, vec3(dot(ink.rgb, vec3(0.2126, 0.7152, 0.0722))) * graphic_color.rgb, ink.a * graphic_color.a);
 	}
 	ALBEDO = base;
-	ROUGHNESS = 0.8;
-	SPECULAR = 0.15;
+	ROUGHNESS = surface_roughness;
+	METALLIC = surface_metallic;
+	CLEARCOAT = surface_clearcoat;
+	SPECULAR = surface_specular;
 }

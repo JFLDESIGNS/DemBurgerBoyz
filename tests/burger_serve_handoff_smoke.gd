@@ -75,6 +75,7 @@ func run() -> void:
 	var seen_grab := false
 	var seen_eat := false
 	var eat_cycles := 0
+	var final_bite_empty := false
 	var prior_eat_time := -1.0
 	var max_error := 0.0
 	var captured := {}
@@ -92,6 +93,9 @@ func run() -> void:
 		expect(not departed[0],"Departure released before eating completed")
 		var pool: Array = game.get("_serve_fly_root_pool")
 		var stack := (pool[0] as Control).get_node("ServeFlyStack") as Control
+		if current == "burger/Eat_Burger_Fast" and not stack.visible:
+			expect(eat_cycles == 3, "Burger vanished before the third bite")
+			final_bite_empty = true
 		if (current == "burger/Take_Burger_Fast" and time>1.0) or current == "burger/Eat_Burger_Fast":
 			var error := (stack.get_global_transform()*stack.pivot_offset).distance_to(camera.unproject_position(c.burger_grip_global()))
 			max_error = maxf(max_error,error)
@@ -108,11 +112,16 @@ func run() -> void:
 
 			await RenderingServer.frame_post_draw
 			root.get_texture().get_image().save_png("res://assets/character_animation/burger27/game_"+shot+".png")
+	expect(final_bite_empty, "Burger must be completely gone during the third bite")
 	expect(eat_cycles == 3,"Customer must bring burger to mouth three times")
+	expect(int(game.get("bite_bursts")) == 6,"Each of three eating swipes must take two bites")
 	expect(seen_grab and seen_eat,"Actual serving function did not play grab then eat")
 	expect(departed[0],"Queued departure never released")
 	expect(not bool(game.get("_serve_fly_busy")),"Serving did not finish within timeout")
 	expect(max_error<4.0,"Burger detached from animated grip: " + str(max_error) + " px")
+	var reused_root: Control = game.get("_serve_fly_root_pool")[0]
+	game.call("_build_serve_fly_stack", reused_root, 0)
+	expect(reused_root.get_node("ServeFlyStack").visible, "Next burger must become visible when the sprite is reused")
 	print("BURGER_HANDOFF_MAX_ERROR_PX ",max_error)
 	game.free()
 	if failures.is_empty():print("BURGER_SERVE_HANDOFF_SMOKE_OK")

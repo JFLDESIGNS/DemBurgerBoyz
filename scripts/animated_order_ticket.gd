@@ -6,7 +6,7 @@ const PAPER_SHADER = preload("res://shaders/order_ticket_live.gdshader")
 const THUMBTACK = preload("res://models/thumbtack/thumbtack_red.glb")
 const FLY_SECONDS := 0.55
 const PIN_SECONDS := 0.26
-const UNROLL_SPEED := 1.6
+const UNROLL_SPEED := 2.8
 const PAD := 40.0
 const PIXELS_PER_METER := 1000.0
 const DISPLAY_SCALE := 0.8
@@ -60,9 +60,9 @@ func setup(wrap: Control, note: Control) -> void:
 	_rustle_sound = load("res://sounds/ticket/paper_rustle.wav") as AudioStream
 	_pin_whoosh = load("res://sounds/ticket/pin_whoosh.wav")
 	_pin_tap = load("res://sounds/ticket/pin_tap.wav")
-	_audio = AudioStreamPlayer.new()
+	_audio = AudioStreamPlayer.new(); _audio.bus = "SFX"
 	_audio.name = "PaperFoley"
-	_audio.bus = "Master"
+	_audio.bus = "SFX"
 	_audio.max_polyphony = 3
 	add_child(_audio)
 	set_process_input(false)
@@ -172,6 +172,8 @@ func _find_type(node: Node, type_name: String) -> Node:
 	return null
 
 func set_active(value: bool) -> void:
+	var timer_gap := _note.find_child("TicketTimerGap", true, false) as Control
+	if timer_gap != null: timer_gap.custom_minimum_size.y = 10.0 if value else 2.0
 	if not value:
 		if not active:
 			return
@@ -179,7 +181,7 @@ func set_active(value: bool) -> void:
 		_cancel_grab()
 		_audio.stop()
 		if _header_clearance != null:
-			_header_clearance.custom_minimum_size.y = 29.0
+			_header_clearance.custom_minimum_size.y = 22.0
 		_pending_tap = false
 		_thumbtack.hide()
 		_model.rotation = Vector3.ZERO
@@ -197,7 +199,7 @@ func set_active(value: bool) -> void:
 		state = &"static"
 		return
 	if _header_clearance != null:
-		_header_clearance.custom_minimum_size.y = 8.0
+		_header_clearance.custom_minimum_size.y = 14.0
 	# _highlight_tickets supplies the current opacity and selected rotation.
 	_display.modulate = _note.modulate
 	_display.pivot_offset = Vector2(PAD + 87.0, PAD + 8.0)
@@ -239,6 +241,7 @@ func sync_layout() -> void:
 	if wanted.is_equal_approx(_logical_size):
 		return
 	_logical_size = wanted
+	_paper_material.set_shader_parameter("paper_height", wanted.y)
 	_wrap.custom_minimum_size = wanted * DISPLAY_SCALE
 	_source.size = Vector2i(wanted * 2.0)
 	_source.size_2d_override = Vector2i(wanted)
@@ -319,7 +322,7 @@ func _apply_pin_pose(t: float) -> void:
 	_thumbtack.rotation += Vector3(0.14, 0.04, -0.1) * spring
 	_thumbtack.scale = Vector3.ONE * PIN_SCALE * (lerpf(1.18, 1.0, ease_out) - 0.045 * spring)
 	_model.rotation.x = 0.018 * spring
-	if t >= 0.76 and not _pin_impact_fired:
+	if t >= 1.0 and not _pin_impact_fired:
 		_pin_impact_fired = true
 		_audio.stream = _pin_tap
 		_audio.volume_db = -1.0

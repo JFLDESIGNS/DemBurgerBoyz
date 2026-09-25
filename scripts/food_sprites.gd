@@ -437,6 +437,38 @@ static func _knockout_dark_backdrop(img: Image) -> void:
 static var _patty_sheet_img: Image = null
 
 
+static func build_patty_state_tex(char_amount: float, with_cheese: bool = false) -> Texture2D:
+	var state := "perfect"
+	if char_amount >= 0.85: state = "black"
+	elif char_amount >= 0.5: state = "almost_black"
+	elif char_amount >= 0.25: state = "overdone"
+	var key := "build_state_" + state + ("_cheese" if with_cheese else "")
+	if _cache.has(key): return _cache[key]
+	var tex := load("res://assets/ingredients/patty_states/" + state + ".png") as Texture2D
+	if with_cheese:
+		var meat := tex.get_image()
+		if meat.is_compressed(): meat.decompress()
+		meat.convert(Image.FORMAT_RGBA8)
+		var cheese := get_tex("cheese").get_image()
+		if cheese.is_compressed(): cheese.decompress()
+		cheese.convert(Image.FORMAT_RGBA8)
+		cheese = _crop_to_opaque(cheese)
+		# Keep the supplied meat intact, with the existing cheese art resting on top.
+		cheese.resize(360, 168, Image.INTERPOLATE_LANCZOS)
+		meat.blend_rect(cheese, Rect2i(0,0,360,168), Vector2i(76,151))
+		tex = ImageTexture.create_from_image(meat)
+	# TextureRect fits the whole source canvas: remove transparent sheet padding
+	# so the visible meat fills the same width as the bun, instead of half of it.
+	var image := tex.get_image()
+	if image.is_compressed(): image.decompress()
+	var cropped := AtlasTexture.new()
+	cropped.atlas = tex
+	cropped.region = image.get_used_rect()
+	cropped.filter_clip = true
+	_cache[key] = cropped
+	return cropped
+
+
 static func patty_tex(color: Color, char_amount: float = 0.0) -> Texture2D:
 	## Station / ticket stack uses cutout sheet art, tinted + charred by cook state.
 	var char_q := snappedf(clampf(char_amount, 0.0, 1.0), 0.05)
