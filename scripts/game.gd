@@ -48621,6 +48621,8 @@ func _build_phone_lock_screen() -> void:
 	var logo := TextureRect.new()
 	logo.texture = load(PHONE_LOGO_TEX_PATH)
 	logo.material = _brand_lettering_ui_material()
+	logo.material.set_shader_parameter("ink_top",Color("C9E8FF"))
+	logo.material.set_shader_parameter("ink_bottom",Color("C9E8FF"))
 	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -49751,6 +49753,8 @@ func _station_review_thumbnail_signature(station_index: int) -> String:
 
 
 func _queue_station_review_thumbnail(station_index: int) -> void:
+	# Reviews and photos are authored by the host and replicated to guests.
+	if mp_enabled and not NetManager.is_host(): return
 	if station_index < 0 or station_index >= stations.size():
 		return
 	var st: Dictionary = stations[station_index]
@@ -52680,6 +52684,8 @@ func _build_phone_ui() -> void:
 		logo.name = "BurgerPalsLogo"
 		logo.texture = load(PHONE_LOGO_TEX_PATH) as Texture2D
 		logo.material = _brand_lettering_ui_material()
+		logo.material.set_shader_parameter("ink_top",Color("C9E8FF"))
+		logo.material.set_shader_parameter("ink_bottom",Color("C9E8FF"))
 		logo.custom_minimum_size = Vector2(PHONE_LOGO_INNER_W, PHONE_LOGO_DISPLAY_H)
 		logo.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -61646,8 +61652,8 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 		return
 	var previous := _challenge_phase
 	_challenge_phase = phase
-	if phase == "active" and previous != "active":
-		_start_burger_pals_parade("challenge")
+	# Release the input-catching offer before any presentation work can fail or stall.
+	if phase != "offer": _hide_challenge_overlay()
 	_challenge_count = maxi(0, count)
 	_challenge_remaining = maxi(0, remaining)
 	_challenge_time_left = maxf(0.0, time_left)
@@ -61672,6 +61678,9 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 			_stop_challenge_song()
 	_update_challenge_hud()
 	_refresh_challenge_ticket()
+
+	if phase == "active" and previous != "active":
+		call_deferred("_start_burger_pals_parade", "challenge")
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -67735,6 +67744,7 @@ func _update_build_layer_hover(screen_pos: Vector2) -> void:
 	var hit := _build_layer_at_screen(screen_pos)
 	for si in stations.size():
 		var index := int(hit.get_meta("stack_i",-1)) if hit != null and int(hit.get_meta("station_index",-1))==si else -1
+		if int(stations[si].get("hovered_layer",-1)) == index: continue
 		stations[si]["hovered_layer"] = index
 		_restyle_station_layers(si)
 
@@ -69307,7 +69317,11 @@ func _play_serve_fly_to_mouth(
 	var fast_challenge := is_instance_valid(customer) and bool(customer.get("is_challenge_guest"))
 	var celebration_hold := 0.10 if fast_challenge else BURGER_COMPLETE_HOLD_SEC
 	_serve_fly_busy = true
+	var approach_deadline := Time.get_ticks_msec()+2500
 	while is_instance_valid(customer) and bool(customer.get_meta("meal_stepping_aside",false)):
+		if Time.get_ticks_msec() >= approach_deadline:
+			customer.set_meta("meal_stepping_aside",false)
+			break
 		await get_tree().process_frame
 	if not is_instance_valid(customer):
 		_serve_fly_busy=false
@@ -70461,13 +70475,14 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 
 func _resolve_serve_customer():
 	if _order_can_receive_burger(selected_customer): return selected_customer
+	var previous_customer = selected_customer
 	selected_customer=null
 	for c in tickets.keys():
 		if _order_can_receive_burger(c):
 			selected_customer=c
 			if mp_enabled and NetManager.is_host(): mp_select_customer(_customer_net_id(c))
 			break
-	_highlight_tickets()
+	if previous_customer != selected_customer: _highlight_tickets()
 	return selected_customer
 
 func _order_can_receive_burger(customer: Node3D) -> bool:
@@ -76043,6 +76058,7 @@ func mp_sync_economy(
 		shift_ingredient_cost = float(shift_finances[2])
 		shift_restock_spend = float(shift_finances[3])
 
+	var before_phone := [money, social_review_count, social_rating_sum]
 	var before_inventory := [supply_stock.duplicate(), supply_fresh.duplicate(), soda_tank_fill.duplicate()]
 	var before_machines := owned_machines.duplicate()
 	var before_fries := fryer_ready_servings
@@ -76079,7 +76095,8 @@ func mp_sync_economy(
 	if before_machines != owned_machines:
 		_apply_machine_unlock_visibility()
 	_update_hud()
-	_refresh_phone_ui()
+	if before_phone != [money,social_review_count,social_rating_sum] or before_machines != owned_machines or before_inventory != [supply_stock,supply_fresh,soda_tank_fill]:
+		_refresh_phone_ui()
 	if before_inventory != [supply_stock, supply_fresh, soda_tank_fill]:
 		_refresh_ingredient_stock_bars()
 
@@ -76326,6 +76343,11 @@ func mp_sync_customers(
 		var host_serving := (bool(serving[i]) if i < serving.size() else false) or _mp_retired_customer_ids.has(nid)
 		if not host_serving: c.set_meta("burger_in_flight",false)
 		c.set_meta("serve_in_progress", host_serving)
+		if bool(c.get("is_challenge_guest")) and _challenge_phase == "active":
+			_challenge_customer = c
+			if not host_serving:
+				c.set_meta("meal_stepping_aside",false)
+				c.set_meta("serve_in_progress",false)
 		var snap_pos: Vector3 = c.global_position
 		if i < xs.size():
 			snap_pos.x = float(xs[i])
@@ -76464,6 +76486,7 @@ func mp_select_customer(net_id: int) -> void:
 @rpc("authority","call_local","reliable")
 func mp_order_selected(net_id: int, revision: int) -> void:
 	if revision < _mp_order_revision: return
+	if revision == _mp_order_revision and ((is_instance_valid(selected_customer) and _customer_net_id(selected_customer)==net_id) or (selected_customer==null and net_id<0)): return
 	_mp_order_revision=revision
 	var c = _customer_by_net_id(net_id)
 	if _order_can_receive_burger(c):
@@ -76614,6 +76637,9 @@ func mp_sync_station(
 		return
 	_mp_applying = true
 	var st: Dictionary = stations[station_index]
+	var previous_items: Array = st.get("items",[]).duplicate()
+	var previous_patties: Array = st.get("patties",[]).duplicate()
+	var previous_spoiled := bool(st.get("spoiled",false))
 	var new_patties: Array = []
 	for nid_v in patty_net_ids:
 		var nid := int(nid_v)
@@ -76637,7 +76663,8 @@ func mp_sync_station(
 	for id_v in item_ids:
 		items.append(str(id_v))
 	st["items"] = items
-	st["selected_layer"] = -1
+	var visual_changed := previous_items != items or previous_patties != new_patties or previous_spoiled != spoiled
+	if visual_changed: st["selected_layer"] = -1
 	if items.is_empty():
 		_reset_station_freshness(station_index)
 	else:
@@ -76648,7 +76675,7 @@ func mp_sync_station(
 			st["freshness"] = FRESHNESS_MAX
 		st["spoiled"] = spoiled
 	_sync_station_cheese_items(station_index)
-	_refresh_station(station_index)
+	if visual_changed: _refresh_station(station_index)
 	_refresh_freshness_label(station_index)
 	_mp_applying = false
 

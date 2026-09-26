@@ -6,6 +6,7 @@ var food: Node3D
 var kind: String
 var completed: Callable
 var elapsed := 0.0
+var wait_elapsed := 0.0
 var started := false
 var finished := false
 var start_position := Vector3.ZERO
@@ -16,6 +17,7 @@ var flavor := "cola"
 var delay := 0.0
 var gulp_count := 0
 var bites := 0
+var liquid_bites := -1
 var bite_materials: Array[ShaderMaterial] = []
 var cone_bounds := AABB()
 var hand_size := 1.0
@@ -82,7 +84,17 @@ func _process(delta: float) -> void:
   finish();return
  if not started:
   delay-=delta
-  if delay>0 or bool(customer.get_meta("meal_stepping_aside",false)) or bool(customer.get_meta("burger_in_flight",false)) or bool(customer.get_meta("side_food_active",false)): return
+  if delay>0:return
+  wait_elapsed+=delta
+  if bool(customer.get_meta("burger_in_flight",false)):
+   if wait_elapsed<8.0:return
+   customer.set_meta("burger_in_flight",false)
+  if bool(customer.get_meta("meal_stepping_aside",false)):
+   if wait_elapsed<2.5:return
+   customer.set_meta("meal_stepping_aside",false)
+  if bool(customer.get_meta("side_food_active",false)):
+   if wait_elapsed<12.0:return
+   customer.set_meta("side_food_active",false)
   started=true
   customer.set_meta("side_food_active",true)
   if customer.has_method("begin_side_food"): customer.begin_side_food()
@@ -101,9 +113,12 @@ func _process(delta: float) -> void:
  var hold_height:=.055 if kind=="fries" else (.13 if kind=="icecream" else .095)
  var tilt:=lift*(.4 if kind=="drink" else (.62 if kind=="fries" else .72))
  var held_basis:Basis=customer.global_basis*Basis(Vector3.RIGHT,-tilt)
- var size_now:=source_scale.lerp(Vector3.ONE*hand_size,catch_t)
+ var size_now:=source_scale.lerp(source_scale*hand_size,catch_t)
  food.global_basis=held_basis.scaled(size_now)
  var held_position:=grip-food.global_basis*Vector3(0,hold_height,0)
+ if kind=="drink":
+  var sip_position:=mouth()-food.global_basis*Vector3(0,game.CUP_SHELL_H,0)
+  held_position=held_position.lerp(sip_position,lift)
  # Four inches higher throughout each lift, independent of item scale and tilt.
  if kind in ["fries","icecream"]:held_position += Vector3.UP*.1016
  food.global_position=start_position.lerp(held_position,catch_t)+Vector3(0,sin(catch_t*PI)*.16,0)
@@ -127,7 +142,9 @@ func _process(delta: float) -> void:
    ink.set_shader_parameter("food_inverse",food.global_transform.affine_inverse())
    ink.set_shader_parameter("consumed",float(bites)/3.0)
  else:
-  game._set_melting_cup_liquid_level(food,1-float(bites)/3.0,flavor)
+  if liquid_bites != bites:
+   liquid_bites=bites
+   game._set_melting_cup_liquid_level(food,1-float(bites)/3.0,flavor)
  # Let the last lowering motion finish before releasing the customer.
  if elapsed>=3.45:finish()
 
