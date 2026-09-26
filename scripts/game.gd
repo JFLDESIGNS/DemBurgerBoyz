@@ -2815,7 +2815,7 @@ const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
 const FRIES_HOLD_PACK_Y := 0.108
 ## Finished orders temporarily live beside the visible bun towers for debugging.
 ## One foot camera-right of the prior debug/ready position (world camera-right is -X).
-const FRIES_READY_SODA_OFFSET := Vector3(0.08, 0.0, -0.90)
+const FRIES_READY_SODA_OFFSET := Vector3(0.2832, 0.0, -1.1032)
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14.
 ## Camera is window-side (−Z) looking +Z — farther on screen = higher Z (far HOLD edge).
 const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
@@ -17717,27 +17717,15 @@ func _build_grill_roomba() -> void:
 
 
 func _add_roomba_top_highlights(parent: Node3D) -> void:
-	# Painted cartoon reflections remain readable in the phone's miniature preview.
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color("E5EFF0")
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	for arc in [Vector2(195, 265), Vector2(275, 295)]:
-		var mesh := ImmediateMesh.new()
-		mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
-		for i in 20:
-			var points: Array[Vector3] = []
-			for j in [i, i+1]:
-				var t := float(j)/20.0
-				var angle := deg_to_rad(lerpf(arc.x,arc.y,t))
-				var width := ROOMBA_RADIUS * .045 * sin(PI*t)
-				for radius in [ROOMBA_RADIUS*.78-width, ROOMBA_RADIUS*.78+width]:
-					points.append(Vector3(cos(angle)*radius, ROOMBA_HEIGHT*.62+.007, sin(angle)*radius))
-			for k in [0,1,2,1,3,2]: mesh.surface_add_vertex(points[k])
-		mesh.surface_end()
+	var mat := ShaderMaterial.new()
+	mat.shader = preload("res://shaders/bot_rectangle_reflections.gdshader")
+	for i in 2:
 		var streak := MeshInstance3D.new()
-		streak.name = "ToonTopReflection"
-		streak.mesh = mesh
+		streak.name = "ToonTopReflection%d" % i
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(ROOMBA_RADIUS * (.62 if i == 0 else .32), ROOMBA_RADIUS * .17)
+		streak.mesh = plane
+		streak.position = Vector3(ROOMBA_RADIUS * (-.30 if i == 0 else .34), ROOMBA_HEIGHT*.62+.007, -ROOMBA_RADIUS*.38)
 		streak.material_override = mat
 		streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(streak)
@@ -35639,44 +35627,16 @@ func _make_cylinder_label_mesh(
 
 
 func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
-	## Burger Pals mark wrapped around the cook-facing side of the fry cup.
-	if not ResourceLoader.exists(PHONE_LOGO_TEX_PATH):
-		return
-	var tex := load(PHONE_LOGO_TEX_PATH) as Texture2D
-	if tex == null:
-		return
-	## AABB is already in pack space (includes holder scale + seat offset).
-	var full_aabb := _mesh_aabb_in_node_space(model_holder)
-	var aabb := _named_mesh_aabb_in_node_space(
-		model_holder,
-		["container", "cup", "basket", "bucket"],
-		full_aabb
-	)
-	var cx := aabb.position.x + aabb.size.x * 0.5
-	var cz := aabb.position.z + aabb.size.z * 0.5
-	var radius := maxf(aabb.size.x, aabb.size.z) * 0.5
-	var label_h := clampf(aabb.size.y * 0.28, 0.048, 0.070)
-	var center_y := aabb.position.y + aabb.size.y * 0.40 - FRIES_LOGO_DROP_Y
-	var logo := MeshInstance3D.new()
-	logo.name = "BurgerPalsFriesLogo"
-	## Wrap ~70° of the cylinder so the mark hugs the cup instead of sitting flat.
-	logo.mesh = _make_cylinder_label_mesh(
-		radius,
-		label_h,
-		center_y,
-		Vector2(cx, cz),
-		1.22,
-		18,
-		4,
-		0.00035
-	)
-	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := ShaderMaterial.new()
-	mat.shader=preload("res://shaders/brand_lettering_cup.gdshader")
-	mat.set_shader_parameter("mask_tex",tex)
-	mat.render_priority=5
-	logo.material_override = mat
-	pack.add_child(logo)
+	# Project lettering onto the actual container surface, including its taper.
+	for node in model_holder.find_children("*", "MeshInstance3D", true, false):
+		if bool(node.get_meta("fry_mesh", true)): continue
+		var mat := ShaderMaterial.new()
+		mat.shader = preload("res://shaders/fries_container_print.gdshader")
+		mat.set_shader_parameter("mask_tex", load(PHONE_LOGO_TEX_PATH))
+		var bounds: AABB = node.mesh.get_aabb()
+		mat.set_shader_parameter("bounds_min", bounds.position)
+		mat.set_shader_parameter("bounds_size", bounds.size)
+		node.material_override = mat
 
 
 func _setup_fries_pack_shake_root(model: Node3D) -> void:
@@ -35840,89 +35800,19 @@ func _make_fries_sparkle_mat() -> StandardMaterial3D:
 
 
 func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
-	if pack == null or not is_instance_valid(pack) or not pack.visible:
-		return null
-	## Ride with the fry pile so salt shakes with the sticks, not the cup.
-	var shake := pack.find_child("FriesShakeRoot", true, false) as Node3D
-	var attach: Node3D = shake if shake != null and is_instance_valid(shake) else pack
-	var holder := attach.get_node_or_null("FriesSaltSparkles") as Node3D
-	if holder != null and is_instance_valid(holder):
-		return holder
-	## Clear any old pack-level salt from earlier builds.
-	var old := pack.get_node_or_null("FriesSaltSparkles") as Node3D
-	if old != null and is_instance_valid(old) and old != holder:
-		old.queue_free()
-	holder = Node3D.new()
-	holder.name = "FriesSaltSparkles"
-	attach.add_child(holder)
-	var pack_mat := _make_fries_sparkle_mat()
-	holder.set_meta("pack_mat", pack_mat)
-	var aabb := _mesh_aabb_in_node_space(attach)
-	var cx := aabb.position.x + aabb.size.x * 0.5
-	var cy := aabb.position.y + aabb.size.y * 0.88
-	var cz := aabb.position.z + aabb.size.z * 0.5
-	var sparkle_mesh := BoxMesh.new()
-	sparkle_mesh.size = Vector3.ONE
-	for i in range(FRIES_SPARKLE_COUNT):
-		var bit := MeshInstance3D.new()
-		bit.name = "FriesSparkle_%02d" % i
-		bit.mesh = sparkle_mesh
-		bit.material_override = pack_mat
-		bit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		bit.sorting_offset = 12.0
-		var ang := float(i) * 2.399963
-		var rad := 0.010 + fposmod(float(i) * 0.17, 1.0) * maxf(aabb.size.x, aabb.size.z) * 0.28
-		var y_off := -0.004 + fposmod(float(i) * 0.29, 1.0) * 0.028
-		bit.position = Vector3(
-			cx + cos(ang) * rad,
-			cy + y_off,
-			cz + sin(ang) * rad * 0.85
-		)
-		## White salt crystals — large enough to read on the golden fries.
-		bit.set_meta("spark_size", 0.0085 + fposmod(float(i) * 0.41, 1.0) * 0.0075)
-		bit.set_meta("spark_phase", float(i) * 1.73 + 0.21)
-		bit.rotation_degrees = Vector3(randf_range(10.0, 55.0), randf_range(0.0, 180.0), randf_range(10.0, 50.0))
-		bit.visible = true
-		bit.scale = Vector3.ONE * float(bit.get_meta("spark_size", 0.01))
-		holder.add_child(bit)
-	return holder
+	return null
 
 
-func _update_fries_pack_sparkles(pack: Node3D, motion: float) -> void:
-	if pack == null or not is_instance_valid(pack) or not pack.visible:
-		return
-	var holder := _ensure_fries_pack_sparkles(pack)
-	if holder == null:
-		return
-	var drive := clampf(motion, 0.0, 1.0)
-	var pack_mat := holder.get_meta("pack_mat", null) as StandardMaterial3D
-	var blink_sum := 0.0
-	var count := 0
-	for child in holder.get_children():
-		var bit := child as MeshInstance3D
-		if bit == null or not is_instance_valid(bit):
-			continue
-		var phase := float(bit.get_meta("spark_phase", 0.0))
-		## Always visible salt; motion just brightens / twinkles.
-		var blink := 0.55 + 0.45 * sin(_fries_sparkle_phase * (3.1 + phase * 0.07) + phase)
-		blink_sum += blink
-		count += 1
-		bit.visible = true
-		var size := float(bit.get_meta("spark_size", 0.01)) \
-			* lerpf(0.9, 1.35, blink) \
-			* lerpf(1.0, 1.3, drive)
-		bit.scale = Vector3.ONE * size
-	if pack_mat != null and count > 0:
-		var avg_blink := blink_sum / float(count)
-		pack_mat.albedo_color = Color(1.0, 1.0, 1.0, lerpf(0.80, 1.0, avg_blink))
-		pack_mat.emission_energy_multiplier = lerpf(2.0, 3.5, avg_blink) * lerpf(1.0, 1.4, drive)
+func _update_fries_pack_sparkles(_pack: Node3D, _motion: float) -> void:
+	pass # Fine salt lives on the fry surfaces, not floating particle boxes.
 
 
 func _paint_fries_pack_meshes(model: Node3D) -> void:
 	## FBX ships untextured grey — paint cup red, fries golden.
 	var cup_mat := _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
-	var fry_mat := _make_basic_mat(FRYER_FRY_COLOR, 0.0, 0.92)
-	_style_fries_food_material(fry_mat, 0.34)
+	var fry_mat := ShaderMaterial.new()
+	fry_mat.shader = preload("res://shaders/fries_salt.gdshader")
+	fry_mat.set_shader_parameter("food_color", FRYER_FRY_COLOR)
 	var stack: Array[Node] = [model]
 	while not stack.is_empty():
 		var node: Node = stack.pop_back()
@@ -37140,6 +37030,7 @@ func _create_icecream_cone_node(grabbable: bool = true) -> Node3D:
 	cream_mat.shader = preload("res://shaders/icecream_diamond_glints.gdshader")
 	var corkscrew := MeshInstance3D.new()
 	corkscrew.name = "CorkscrewSplineServe"
+	corkscrew.set_script(preload("res://scripts/motion_glints.gd"))
 	## Leave mesh null until filled; empty ArrayMesh surfaces can upset exported startup.
 	corkscrew.material_override = cream_mat
 	corkscrew.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON

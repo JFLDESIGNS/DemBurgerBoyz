@@ -81,7 +81,7 @@ func steal_patty(patty: Node3D, committed: bool=false) -> void:
  var visual_home: Vector3=cat._visual.position
  cat.set_meta("steal_lean_lift",.34)
  cat._visual.position.y += .34
- cat._visual.rotation_degrees.x=34.0
+ cat._visual.rotation_degrees.x=18.0
  var tw := create_tween()
  tw.tween_method(func(t: float):
   if not is_instance_valid(cat) or not is_instance_valid(tongue): return

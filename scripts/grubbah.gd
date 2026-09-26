@@ -167,7 +167,7 @@ func _process(delta: float) -> void:
    elif phase=="wrapping" and age>=1.2:
     if burger_ready():consume_build();set_phase("bagging")
     else:set_phase("paper")
-   elif phase=="sealed" and age>=1.5:set_phase("pickup")
+   elif phase=="sealed" and age>=.75:set_phase("pickup")
    elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK:
     pay_order();set_phase("collected")
    elif phase=="collected" and age>=DRIVER_RETURN+DRIVER_EXIT:
@@ -393,7 +393,7 @@ func update_visuals(_delta: float) -> void:
  var ui=game.get_node("UI/Root")
  var screen=game._station_stack_screen_center(0) if not game.stations.is_empty() else game.camera.unproject_position(base)
  var center=ui.get_global_transform_with_canvas().affine_inverse()*screen
- paper3d.visible=phase in ["paper","wrapping"]
+ paper3d.visible=phase=="paper"
  paper3d.position=napkins.position.lerp(base,clampf(age/.55,0,1)) if phase=="paper" else base
  paper3d.scale=Vector3.ONE*lerpf(.6,1,clampf(age/.55,0,1)) if phase=="paper" else Vector3.ONE*maxf(.1,1-age/1.2)
  paper_outline.visible=phase=="paper" and burger_ready()
@@ -409,7 +409,7 @@ func update_visuals(_delta: float) -> void:
  wrapped.position=base+Vector3(0,.06,0)
  if phase=="bagging":wrapped.position=base.lerp(bag_station_pos()+Vector3(0,.28,0),clampf(age/.6,0,1));wrapped.visible=age<.6
  bag.position=bag_station_pos()
- if phase=="sealed":bag.position=bag.position.lerp(ledge.position+Vector3(0,.05,0),smoothstep(0,1,age/1.5))
+ if phase=="sealed":bag.position=bag.position.lerp(ledge.position+Vector3(0,.05,0),smoothstep(0,1,age/.75))
  elif phase=="pickup":bag.position=ledge.position+Vector3(0,.05,0)
  elif phase=="collected":bag.position=courier.position+Vector3(.2,.7,-.2)
  bag_ticket.visible=phase in ["pickup","collected"] or (phase=="sealed" and age>=.7)

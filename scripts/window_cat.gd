@@ -322,7 +322,7 @@ func update_pupil_target(target: Vector3, delta: float) -> void:
 	# Same common forward frame and horizontal/vertical travel as customer eyes.
 	for eye in _cat_eyes:
 		var eye_center := eye.to_global(eye.mesh.get_aabb().get_center())
-		var direction := (global_basis.orthonormalized().inverse() * (target - eye_center)).normalized()
+		var direction := (_visual.global_basis.orthonormalized().inverse() * (target - eye_center)).normalized()
 		var aim := Vector2(clampf(direction.x * 0.95, -0.38, 0.38), clampf(direction.y * 0.65, -0.30, 0.30))
 		aim *= smoothstep(-0.2, 0.12, direction.z)
 		var mat := eye.material_override as ShaderMaterial
