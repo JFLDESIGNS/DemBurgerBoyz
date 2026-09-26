@@ -14,12 +14,20 @@ func setup(game: Node) -> void:
  var logo := TextureRect.new()
  logo.name = "TitleLogo"
  logo.texture = load(game.PHONE_LOGO_TEX_PATH)
- logo.material = game._brand_lettering_ui_material()
+ logo.material = ShaderMaterial.new()
+ logo.material.shader = preload("res://shaders/title_logo_mask.gdshader")
  logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
  logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
  logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
  logo.position = Vector2(190,10)
  logo.size = Vector2(420,210)
+ # Layer the same alpha silhouette to make a solid teal extrusion.
+ for depth in range(8,0,-1):
+  var back := logo.duplicate() as TextureRect
+  back.name = "TitleLogoDepth%d" % depth
+  back.position += Vector2(depth*.65,depth)
+  back.modulate = Color("80C8C6")
+  stage.add_child(back)
  stage.add_child(logo)
  _button(game.start_btn,Vector2(70,246),Vector2(660,82),Color("D84C3E"),Color("FFF5DA"),32,0)
  _button(game.multiplayer_btn,Vector2(70,350),Vector2(660,82),Color("147E83"),Color("FFF5DA"),32,1)
@@ -70,7 +78,23 @@ func _button(button: Button, at: Vector2, dimensions: Vector2, color: Color, ink
   style.content_margin_left=18;style.content_margin_right=18
   style.content_margin_top=8;style.content_margin_bottom=14
   button.add_theme_stylebox_override(state,style)
- for key in ["font_color","font_hover_color","font_pressed_color","font_focus_color"]: button.add_theme_color_override(key,ink)
+ for key in ["font_color","font_hover_color","font_pressed_color","font_focus_color","font_disabled_color","font_outline_color"]: button.add_theme_color_override(key,Color.TRANSPARENT)
+ var caption := Label.new()
+ caption.name = "MenuCaption"
+ caption.text = button.text
+ caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+ caption.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+ caption.offset_top = 10
+ caption.offset_bottom = 10
+ caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+ caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+ caption.add_theme_font_override("font",button.get_theme_font("font"))
+ caption.add_theme_font_size_override("font_size",font_size)
+ caption.add_theme_color_override("font_color",Color.WHITE)
+ caption.add_theme_color_override("font_shadow_color",Color(0.05,.12,.14,.35))
+ caption.add_theme_constant_override("shadow_offset_x",1)
+ caption.add_theme_constant_override("shadow_offset_y",2)
+ button.add_child(caption)
  button.mouse_entered.connect(func(): _hover(button,true))
  button.mouse_exited.connect(func(): _hover(button,false))
  button.button_down.connect(func(): _move_button(button,3,.07))
@@ -100,3 +124,9 @@ func _entrance() -> void:
   tween.set_parallel(true)
   tween.tween_property(holder,"position",home,.5).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
   tween.tween_property(holder,"modulate:a",1.0,.3)
+
+func _process(_delta: float) -> void:
+ for holder in entries:
+  var button := holder.get_child(0) as Button
+  var caption := button.get_node("MenuCaption") as Label
+  caption.text = button.text
