@@ -29,7 +29,7 @@ var paper3d: Node3D
 var paper_outline: MeshInstance3D
 var flying_ticket: Sprite3D
 var bag_finish: Label3D
-var bag_glow: MeshInstance3D
+var bag_glow: Node3D
 var bag_ticket: Sprite3D
 var ticket_view: SubViewport
 var ticket_flight_start: Vector3
@@ -41,6 +41,9 @@ var knife: Node3D
 var bag: Node3D
 var wrapped: Node3D
 var courier: Node3D
+var driver_style = -1
+var car_style = -1
+const DRIVER_CARS = [preload("res://assets/vehicles/sugar_street/lagoon_hatch.glb"),preload("res://assets/vehicles/sugar_street/guava_micro.glb"),preload("res://assets/vehicles/sugar_street/custard_pickup.glb")]
 var car_ground_y: float = 0.0
 var screech: AudioStreamPlayer3D
 var arrival_screeched = false
@@ -181,7 +184,7 @@ func new_order() -> void:
  items.append("bun_top")
  if game._owns_fryer_machine() and randf()<.45:items.append("fries")
  if game._owns_soda_machine() and randf()<.45:items.append("soda_cola")
- state={"number":next_number,"items":items,"phase":"accepted","selected":false,"base":DATA.order_value(items),"paid":false,"quality":1.0};next_number+=1;age=0;publish()
+ state={"number":next_number,"items":items,"phase":"accepted","selected":false,"driver_skin":randi_range(0,6),"car_style":randi_range(0,2),"base":DATA.order_value(items),"paid":false,"quality":1.0};next_number+=1;age=0;publish()
  game._flash("Grubbah: mobile order added to the queue",Color("FFCF76"))
 func request(kind: String) -> void:
  if not game.playing:return
@@ -255,19 +258,25 @@ func consume_build() -> void:
  if online():game._mp_broadcast_station(0)
 func set_phase(phase: String) -> void:
  state.phase=phase;age=0;publish()
+func snapshot_payload() -> Dictionary:
+ var data=state.duplicate()
+ # The burger photo is sent once with the sales history, not every animation tick.
+ data.erase("photo")
+ return data
 func publish() -> void:
  revision+=1
  if not state.is_empty() and is_instance_valid(ticket_owner):state["selected"]=is_selected()
  refresh()
  game._refresh_customer_queue_timers()
- if online():snapshot.rpc(state,revision,age,knife_owner)
+ if online():snapshot.rpc(snapshot_payload(),revision,age,knife_owner)
 @rpc("any_peer","call_remote","reliable")
 func request_snapshot() -> void:
- if host():snapshot.rpc_id(multiplayer.get_remote_sender_id(),state,revision,age,knife_owner)
+ if host():snapshot.rpc_id(multiplayer.get_remote_sender_id(),snapshot_payload(),revision,age,knife_owner)
 @rpc("authority","call_remote","reliable")
 func snapshot(data: Dictionary, rev: int, elapsed: float, owner: int) -> void:
  if host() or rev<revision:return
- state=data.duplicate(true);revision=rev;age=elapsed;knife_owner=owner;refresh()
+ var same_phase=str(state.get("phase",""))==str(data.get("phase","")) and int(state.get("number",-1))==int(data.get("number",-2))
+ state=data.duplicate(true);revision=rev;age=maxf(age,elapsed) if same_phase else elapsed;knife_owner=owner;refresh()
  game._refresh_customer_queue_timers()
  if bool(state.get("selected",false)) and is_instance_valid(ticket_owner) and not is_selected():game._select_ticket_local(ticket_owner)
 func pay_order() -> void:
@@ -322,10 +331,10 @@ func build_props() -> void:
  bag=fitted("SM_FastFoodBagOpen",.40);props.add_child(bag)
  wrapped=fitted("SM_BurgerPackagingPaperWrapped",.25);props.add_child(wrapped)
  add_bag_label()
- ledge=MeshInstance3D.new();var box=BoxMesh.new();box.size=Vector3(.85,.06,.38);ledge.mesh=box;ledge.material_override=game._make_basic_mat(Color("727E81"),.7,.25);props.add_child(ledge);ledge.position=Vector3(.1144,1.03,1.85)
+ ledge=MeshInstance3D.new();var box=BoxMesh.new();box.size=Vector3(.85,.06,.38);ledge.mesh=box;ledge.material_override=game._make_basic_mat(Color("727E81"),.7,.25);props.add_child(ledge);ledge.position=Vector3(.4192,1.03,1.85)
  var car_scene=load("res://assets/vehicles/sugar_street/lagoon_hatch.glb");car=car_scene.instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE;car.rotation.y=0;car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;car.hide()
  screech=AudioStreamPlayer3D.new();screech.stream=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3");screech.bus="SFX";screech.volume_db=-4;screech.unit_size=5.0;screech.max_distance=35;car.add_child(screech)
- courier=game.CustomerScript.new();courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_walk(1.4);courier.hide()
+ courier=game.CustomerScript.new();courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_run(1.3);courier.hide()
  for n in courier.find_children("*","Label3D",true,false):n.hide()
 func prepare_bag_ticket() -> void:
  if is_instance_valid(ticket_view):ticket_view.queue_free()
@@ -345,40 +354,42 @@ func prepare_bag_ticket() -> void:
  flying_ticket.texture=ticket_view.get_texture()
  flying_ticket.pixel_size=.20/float(ticket_view.size.y)
 func packing_audio(phase: String) -> void:
+ if phase!="wrapping":return
  if is_instance_valid(packing_tween):packing_tween.kill()
  play_wrap_sound()
- if phase in ["wrapping","bagging","sealed"]:
-  packing_tween=create_tween()
-  for delay in [.38,.43]:
-   packing_tween.tween_interval(delay)
-   packing_tween.tween_callback(play_wrap_sound)
-  if phase=="sealed":
-   packing_tween.tween_callback(func():
-    var tap=AudioStreamPlayer.new();tap.stream=preload("res://sounds/ticket/paper_tap.wav");tap.bus="SFX";tap.volume_db=-4;add_child(tap);tap.finished.connect(tap.queue_free);tap.play())
+ packing_tween=create_tween()
+ packing_tween.tween_interval(.40)
+ packing_tween.tween_callback(play_wrap_sound)
 func add_bag_label() -> void:
  var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00017;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/brand_lettering_cup.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,.13,-.12);logo.rotation.y=PI;bag.add_child(logo)
  bag_finish=Label3D.new();bag_finish.text="CLICK TO FINISH";bag_finish.font_size=32;bag_finish.pixel_size=.0016;bag_finish.position=Vector3(0,.46,0);bag_finish.billboard=BaseMaterial3D.BILLBOARD_ENABLED;bag_finish.modulate=Color("FFD147");bag.add_child(bag_finish)
- bag_glow=MeshInstance3D.new();var outline=ImmediateMesh.new();var bounds=game._shop_preview_bounds(bag);var lo=bounds.position-Vector3(.008,0,.008);var hi=bounds.end+Vector3(.008,0,.008);hi.y=.40
- outline.surface_begin(Mesh.PRIMITIVE_LINES)
- for y in [lo.y,hi.y]:
-  for edge in [[Vector3(lo.x,y,lo.z),Vector3(hi.x,y,lo.z)],[Vector3(hi.x,y,lo.z),Vector3(hi.x,y,hi.z)],[Vector3(hi.x,y,hi.z),Vector3(lo.x,y,hi.z)],[Vector3(lo.x,y,hi.z),Vector3(lo.x,y,lo.z)]]:
-   for point in edge:outline.surface_add_vertex(point)
- for x in [lo.x,hi.x]:
-  for z in [lo.z,hi.z]:outline.surface_add_vertex(Vector3(x,lo.y,z));outline.surface_add_vertex(Vector3(x,hi.y,z))
- outline.surface_end();bag_glow.mesh=outline;bag_glow.material_override=game._make_basic_mat(Color("FFD147"));bag_glow.material_override.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED;bag.add_child(bag_glow)
+ bag_glow=Node3D.new();bag_glow.name="BagSilhouetteOutline";bag.add_child(bag_glow)
+ for source in bag.find_children("*","MeshInstance3D",true,false):
+  var rim=MeshInstance3D.new();rim.mesh=source.mesh;bag_glow.add_child(rim);rim.global_transform=source.global_transform
+  var mat=game._tutorial_outline_material().duplicate() as ShaderMaterial
+  mat.set_shader_parameter("outline_width",.0025/maxf(.001,rim.global_basis.get_scale().x));mat.set_shader_parameter("glow_strength",.4)
+  rim.material_override=mat;rim.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
  bag_ticket=Sprite3D.new();bag_ticket.name="AttachedMobileTicket";bag_ticket.texture=ticket_view.get_texture() if is_instance_valid(ticket_view) else game._ticket_paper_texture(false);bag_ticket.pixel_size=.20/float(ticket_view.size.y) if is_instance_valid(ticket_view) else .0005;bag_ticket.position=Vector3(.035,.25,-.135);bag_ticket.rotation=Vector3(0,PI,-.08);bag.add_child(bag_ticket);bag_ticket.hide()
 func update_visuals(_delta: float) -> void:
  if not is_instance_valid(props):return
  var phase=str(state.get("phase",""));var base=board_pos()
+ if not state.is_empty():
+  var desired_driver=int(state.get("driver_skin",2))
+  if driver_style!=desired_driver:
+   driver_style=desired_driver;courier.restyle_kenney_skin(driver_style);courier.play_street_run(1.3)
+  var desired_car=clampi(int(state.get("car_style",0)),0,DRIVER_CARS.size()-1)
+  if car_style!=desired_car:
+   car_style=desired_car
+   var old_car=car;car=DRIVER_CARS[car_style].instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE
+   screech.reparent(car,false);car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;old_car.queue_free()
  if phase!=last_phase:
   last_phase=phase
   if phase=="pickup":arrival_screeched=false
-  if phase in ["paper","wrapping","bagging","sealed"]:packing_audio(phase)
+  if phase=="wrapping":packing_audio(phase)
   if phase=="sealed" or (phase in ["pickup","collected"] and not is_instance_valid(ticket_view)):prepare_bag_ticket()
   if phase in ["pickup","collected"] and is_instance_valid(ticket_view):bag_ticket.texture=ticket_view.get_texture();bag_ticket.pixel_size=.20/float(ticket_view.size.y)
   if phase=="bagging" or phase=="sealed":
    var old=bag;bag=fitted("SM_FastFoodBagClosed" if phase=="sealed" else "SM_FastFoodBagOpen",.40);props.add_child(bag);add_bag_label();old.queue_free()
- refresh()
  var ui=game.get_node("UI/Root")
  var screen=game._station_stack_screen_center(0) if not game.stations.is_empty() else game.camera.unproject_position(base)
  var center=ui.get_global_transform_with_canvas().affine_inverse()*screen
@@ -446,7 +457,7 @@ func handle_input(event: InputEvent) -> bool:
   if is_instance_valid(game.spatula_patty) or is_instance_valid(game.dragging_patty):game._flash("Put the burger down first",Color("FFD147"));return true
   request("knife");return true
  if event.position.distance_to(game.camera.unproject_position(napkins.global_position))<35:
-  play_wrap_sound();request("paper");return true
+  request("paper");return true
  if paper3d.visible and burger_ready() and event.position.distance_to(game.camera.unproject_position(paper3d.global_position))<110:
   request("wrap");return true
  if bag.visible and str(state.get("phase",""))=="bagging" and event.position.distance_to(game.camera.unproject_position(bag.global_position+Vector3(0,.15,0)))<45:

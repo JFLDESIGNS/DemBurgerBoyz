@@ -31,7 +31,7 @@ func run():
  m.car.show()
  assert(is_equal_approx(m.car_ground_y+g._shop_preview_bounds(m.car).position.y*m.car.scale.y,-.06))
  m.car.hide()
- assert(is_equal_approx(m.ledge.position.x,.1144))
+ assert(is_equal_approx(m.ledge.position.x,.4192))
  g.grill_on=true;g._spawn_patty_in_slot(0)
  var patty=g.grill[0];assert(is_instance_valid(patty));g.grill[0]=null;patty.is_held=true;patty.visible=false
  g.stations[0].patties=[patty];g.stations[0].items=["bun_bottom","patty"];g._refresh_station(0)
@@ -46,7 +46,7 @@ func run():
  await process_frame;await process_frame
  assert(g.stations[0].preview.modulate.a==0.0)
  await create_timer(1.5).timeout
- assert(m.state.phase=="bagging");assert(m.bag.visible);assert(g.stations[0].patties.is_empty())
+ assert(m.state.phase=="bagging");assert(m.bag.visible);assert(m.bag_glow.get_child_count()>0);assert(g.stations[0].patties.is_empty())
  await RenderingServer.frame_post_draw
  root.get_texture().get_image().save_png("res://build/mobile_visible_bag.png")
  m.request("seal");assert(m.state.phase=="sealed")

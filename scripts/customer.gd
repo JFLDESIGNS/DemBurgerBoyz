@@ -2268,10 +2268,8 @@ func _process(delta: float) -> void:
 	var before := global_position
 	_advance_customer(delta)
 	if mp_host_driven:
-		if is_leaving and _mp_target_valid:
-			global_position.x=lerpf(before.x,_mp_target_pos.x,minf(delta*12.0,1.0))
-			global_position.z=lerpf(before.z,_mp_target_pos.z,minf(delta*12.0,1.0))
-			_leave_walk_x=global_position.x
+		# Dismissed customers leave locally after the host removes them from snapshots.
+		# Pulling them back to that final snapshot prevents offscreen cleanup forever.
 		return
 	if is_street_pedestrian or is_ragdoll: return
 	var game := get_tree().current_scene
