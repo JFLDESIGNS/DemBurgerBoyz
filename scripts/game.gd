@@ -39280,8 +39280,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	soda_stream_mesh = MeshInstance3D.new()
 	soda_stream_mesh.name = "SodaStream"
 	var stream_cyl := CylinderMesh.new()
-	stream_cyl.top_radius = 0.014 ## nozzle end
-	stream_cyl.bottom_radius = 0.020 ## cup-floor end
+	stream_cyl.top_radius = 0.0154 ## nozzle end; matches enlarged fountain
+	stream_cyl.bottom_radius = 0.022 ## cup-floor end
 	stream_cyl.height = 0.1
 	stream_cyl.cap_top = false
 	stream_cyl.cap_bottom = false
@@ -43419,7 +43419,7 @@ func _make_soda_stream_bubbles() -> GPUParticles3D:
 	fx.sorting_offset = 12.0
 	var pmat := ParticleProcessMaterial.new()
 	pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pmat.emission_sphere_radius = 0.022
+	pmat.emission_sphere_radius = 0.0242
 	pmat.direction = Vector3(0, 1, 0)
 	pmat.spread = 165.0 ## spray sideways so they jiggle around the impact
 	pmat.initial_velocity_min = 0.04
@@ -43461,7 +43461,7 @@ func _make_soda_stream_bubbles() -> GPUParticles3D:
 	pmat.color_ramp = fade_tex
 	fx.process_material = pmat
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.028, 0.028)
+	quad.size = Vector2(0.0308, 0.0308)
 	var draw := StandardMaterial3D.new()
 	draw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	draw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
