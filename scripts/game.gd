@@ -3545,7 +3545,7 @@ func _ready() -> void:
 	randomize()
 	_seed_first_run_configs()
 	## Always boot fullscreen — no windowed chrome / minimize-on-launch.
-	## Multiplayer lobby switches to windowed so two instances can share a PC.
+	## Preserve fullscreen when opening or joining the multiplayer lobby.
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	## Soft edges on 3D characters / steel; FXAA helps Label3D + UI text a bit too.
 	var vp := get_viewport()
@@ -6154,7 +6154,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("toggle_burner"):
 		_toggle_grill_power(0)
 		return
-	elif event.is_action_pressed("serve") or _is_enter_pressed(event):
+	elif (event.is_action_pressed("serve") and not event.is_echo()) or _is_serve_shortcut_pressed(event):
 		_on_serve()
 	elif event.is_action_pressed("trash"):
 		if lasso_tool != null and lasso_tool.is_active():
@@ -6868,8 +6868,8 @@ func _input(event: InputEvent) -> void:
 			_toggle_options_menu()
 			get_viewport().set_input_as_handled()
 			return
-	## Enter always serves the active station burger.
-	if _is_enter_pressed(event):
+	## Space / Enter serve the active burger, including mobile wrapping.
+	if _is_serve_shortcut_pressed(event):
 		_on_serve()
 		get_viewport().set_input_as_handled()
 		return
@@ -6896,10 +6896,13 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 
-func _is_enter_pressed(event: InputEvent) -> bool:
+func _is_serve_shortcut_pressed(event: InputEvent) -> bool:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return false
-	return event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit: return false
+	if event.ctrl_pressed or event.alt_pressed or event.meta_pressed: return false
+	return event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]
 
 
 func _strip_uses_hold_pickup(id: String) -> bool:
@@ -71719,7 +71722,6 @@ func _setup_start_menu_chrome() -> void:
 		if blocker == null:
 			blocker = load("res://scripts/title_menu_backdrop.gd").new()
 			blocker.name = "DinerBackdrop"
-			blocker.set("street_art", load(STREET_BG_MILL1_PATH))
 			blocker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			start_overlay.add_child(blocker)
 			start_overlay.move_child(blocker, 0)
@@ -72465,6 +72467,9 @@ func _setup_multiplayer_ui() -> void:
 	_setup_character_creator_button()
 	_setup_start_location_button()
 	_finish_start_menu_palette()
+	var title_layout := preload("res://scripts/title_menu_layout.gd").new()
+	start_overlay.add_child(title_layout)
+	title_layout.setup(self)
 
 	_mp_lobby_root = Control.new()
 	_mp_lobby_root.name = "MpLobby"
