@@ -1,0 +1,18 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://assets/lobby_pals/street_parade.gd" id="1"]
+[ext_resource type="PackedScene" path="res://assets/lobby_pals/burger.glb" id="2"]
+[ext_resource type="PackedScene" path="res://assets/lobby_pals/mustard.glb" id="3"]
+[ext_resource type="PackedScene" path="res://assets/lobby_pals/ketchup.glb" id="4"]
+
+[node name="BurgerPalsParade" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Actors" type="Node3D" parent="."]
+rotation = Vector3(0, 3.14159265, 0)
+
+[node name="Burger" parent="Actors" instance=ExtResource("2")]
+
+[node name="Mustard" parent="Actors" instance=ExtResource("3")]
+
+[node name="Ketchup" parent="Actors" instance=ExtResource("4")]

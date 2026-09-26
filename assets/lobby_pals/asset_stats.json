@@ -1,0 +1,26 @@
+{
+  "Burger": {
+    "triangles": 16834,
+    "vertices": 8711,
+    "surfaces": 3,
+    "bytes": 6497788
+  },
+  "Mustard": {
+    "triangles": 10374,
+    "vertices": 5764,
+    "surfaces": 3,
+    "bytes": 4640776
+  },
+  "Ketchup": {
+    "triangles": 10374,
+    "vertices": 5764,
+    "surfaces": 3,
+    "bytes": 4640832
+  },
+  "total_triangles": 37582,
+  "source_triangles": 214356,
+  "reduction_percent": 82.4674839985818,
+  "clip_seconds": 4,
+  "poses_per_second": 12,
+  "source": "Burger_Pals_15_Ankles_Inside_Shoes.blend"
+}

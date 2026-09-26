@@ -46,7 +46,7 @@ def test(name,marker,pack=None):
 def multiplayer(transport,pack=None,rendered=False):
  folder=STAGE/('mp_'+transport+('_packaged' if pack else ''))
  folder.mkdir(exist_ok=True)
- for name in ['connection','guest_connected','fixture','requested','host_result','guest_passed']:
+ for name in ['connection','guest_connected','fixture','requested','host_result','guest_passed','cat_sync_sent','cat_sync_checked','theft_fixture','theft_ready','theft_done','theft_checked','closing','closing_checked']:
   (folder/name).unlink(missing_ok=True)
  handles=[]
  for role in ['host','guest']:
@@ -82,7 +82,7 @@ if __name__=='__main__':
    test('release_defaults_smoke','RELEASE_DEFAULTS_SMOKE_OK',target)
    multiplayer('lan',target,rendered=True)
    multiplayer('relay',target,rendered=True)
-   finish('native_startup',launch('native_startup',[target,'--audio-driver','Dummy','--max-fps','30','--windowed','--resolution','1280x720','--quit-after','150']))
+   finish('native_startup',launch('native_startup',[target,'--audio-driver','Dummy','--max-fps','30','--windowed','--resolution','1280x720','--quit-after','1200']))
   (STAGE/(mode+'_checks.json')).write_text(json.dumps(checks,indent=2))
  finally:
   if relay:

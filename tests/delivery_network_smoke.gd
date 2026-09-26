@@ -1,4 +1,8 @@
 extends SceneTree
+class DeliveryAudioStub extends Node:
+	func play_delivery_whoosh()->void:pass
+	func play_delivery_impact()->void:pass
+
 var folder:String
 var game
 func _initialize()->void:call_deferred("run")
@@ -17,7 +21,7 @@ func run()->void:
 	game.set_script(load(get_script().resource_path.get_base_dir().path_join("delivery_network_fixture.gd")))
 	root.add_child(game);current_scene=game;game.playing=true
 	game.window_cat=load("res://scripts/window_cat.gd").new();game.world.add_child(game.window_cat);game.window_cat.show();game.window_cat.set_process(false)
-	game.game_audio=Node.new();game.add_child(game.game_audio)
+	game.game_audio=DeliveryAudioStub.new();game.add_child(game.game_audio)
 	for id in [game.SHOP_FRYER_MACHINE,game.SHOP_SODA_MACHINE]:
 		var target:=Node3D.new();game.world.add_child(target);target.position=Vector3(-1,0.7,-0.2)
 		var mesh:=MeshInstance3D.new();mesh.mesh=BoxMesh.new();target.add_child(mesh)

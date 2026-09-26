@@ -4654,6 +4654,7 @@ func receive_burger(
 	seasoned: bool = true,
 	service_stars: float = -1.0
 ) -> Dictionary:
+	set_meta("profit_built", built.duplicate())
 	var result: Dictionary = GameDataScript.compare_orders(built, order)
 	last_tip = 0
 	last_base_pay = 0

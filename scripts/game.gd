@@ -2,6 +2,8 @@
 extends Node3D
 
 const StreetVehicleScript = preload("res://scripts/street_vehicle.gd")
+const BurgerPalsParadeScene = preload("res://assets/lobby_pals/street_parade.tscn")
+const BurgerPalsParadeScript = preload("res://assets/lobby_pals/street_parade.gd")
 
 const GRILL_SLOTS := 10
 const STATION_COUNT := 1
@@ -1015,7 +1017,8 @@ var cheese_ghost_mat: StandardMaterial3D = null
 var _cheese_hover_patty = null ## Last burger the cheese ghost snapped to
 ## Seasoning shaker — clustered with oil + scraper on the left window beam.
 const SHAKER_MODEL_PATH := "res://models/burgerpack/try2/SM_SpiceShaker.glb"
-const SHAKER_ROOT_SCALE := Vector3(2.15, 2.15, 2.15)
+const SHAKER_ROOT_SCALE := Vector3(2.2575, 2.2575, 2.2575)
+const OIL_ROOT_SCALE := Vector3(2.1525, 2.1525, 2.1525)
 var shaker_held: bool = false
 var shaker_root: Node3D = null
 var shaker_area: Area3D = null
@@ -1149,8 +1152,8 @@ const CUT_COLLECTOR_BUYOUT := 10000.0
 const CUT_COLLECTOR_LANE_X := 1.97 ## 1 ft camera-right of the old 2.28 stand (world +X = camera-left)
 const CUT_COLLECTOR_SPAWN_X := 6.5 ## camera-left (world +X); customers enter from camera-right
 const CUT_COLLECTOR_SKIN := 2 ## criminalMaleA
-const CUT_COLLECTOR_WAWA_SEC := 60.0
-const CUT_COLLECTOR_WAWA_CHANCE := 0.50
+const CUT_COLLECTOR_WAWA_SEC := 55.0
+const CUT_COLLECTOR_WAWA_CHANCE := 0.55
 const CUT_COLLECTOR_INTRO_SPAWN_SEC := 1.42
 const CUT_COLLECTOR_INTRO_KNOCK_SEC := 0.34
 const CUT_COLLECTOR_INTRO_KNOCK2_SEC := 0.72
@@ -1160,6 +1163,9 @@ var last_day_earnings: float = 0.0
 var last_day_cut: float = 0.0
 var last_day_tips: float = 0.0
 var shift_food_sales: float = 0.0
+var shift_ingredient_cost: float = 0.0
+var shift_restock_spend: float = 0.0
+var _shift_events: Node = null
 var shift_tips: float = 0.0
 var achievements: Node = null
 var chef_points := 0
@@ -2136,6 +2142,10 @@ var location_bg_assignments: Dictionary = {} ## location id -> background choice
 var location_bg_transforms: Dictionary = {} ## location id -> per-location bg_x/bg_y/bg_z/bg_scale overrides
 var location_bg_option_nodes: Dictionary = {} ## hidden-menu OptionButtons by location id
 var outdoor_street: Node3D = null
+var burger_pals_parade: BurgerPalsParadeScript = null
+var _parade_results_button: Button = null
+var _shift_results: CanvasLayer
+var _parade_presentation: CanvasLayer
 var shadow_catcher_root: Node3D = null
 var shadow_catcher_planes: Array = [] ## MeshInstance3D catchers
 var shadow_catcher_bounds: Array = [] ## MeshInstance3D Hidden-menu outlines
@@ -2218,10 +2228,10 @@ const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb
 const KETCHUP_BOTTLE_PATH := "res://models/burgerpack/try2/SM_KetchupSqueezeBottle.glb"
 const MUSTARD_BOTTLE_PATH := "res://models/burgerpack/try2/SM_MustardSqueezeBottle.glb"
 const CONDIMENT_BOTTLE_HEIGHT := 0.30 ## 25% larger than the original 0.24 m squeeze bottles.
-const CONDIMENT_BOTTLE_TRAVEL_SEC := 0.30
-const CONDIMENT_BOTTLE_TILT_SEC := 0.12
-const CONDIMENT_BOTTLE_POUR_SEC := 0.34
-const CONDIMENT_BOTTLE_RETURN_SEC := 0.30
+const CONDIMENT_BOTTLE_TRAVEL_SEC := 0.65
+const CONDIMENT_BOTTLE_TILT_SEC := 0.20
+const CONDIMENT_BOTTLE_POUR_SEC := 0.50
+const CONDIMENT_BOTTLE_RETURN_SEC := 0.50
 const CONDIMENT_BOTTLE_COLLISION_LAYER := 4194304
 const CONDIMENT_AUTO_POUR_CAMERA_OFFSET := 0.56
 const CONDIMENT_AUTO_POUR_HEIGHT_OFFSET := 0.4298 ## Previous 0.125 m plus exactly one foot.
@@ -2907,6 +2917,7 @@ const SODA_TANK_SYRUP_REFILL := 0.65 ## One syrup order restores this much tank 
 const SODA_TANK_MAX_H := 0.245
 const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
+const PHONE_LOGO_TEX_PATH := "res://assets/ui/phone_burger_pals_logo.png"
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const START_LOGO_TEX_PATH := "res://assets/decal/opening_truck.png"
 const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
@@ -3083,9 +3094,9 @@ const GFX_DEFAULTS := {
 	"customer_fill_angle": 46.0,
 	"saturation": 1.07,
 	"contrast": 0.98,
-	"ssao": false,
-	"ssao_radius": 1.2,
-	"ssao_intensity": 3.08,
+	"ssao": true,
+	"ssao_radius": 0.35,
+	"ssao_intensity": 2.2,
 	"ssao_power": 1.57,
 	"ssao_horizon": 0.25,
 	"ssao_sharpness": 0.72,
@@ -3132,7 +3143,7 @@ const GFX_DEFAULTS := {
 	"pixel_palette_steps": 32.0,
 	"pixel_palette_strength": 0.0,
 	"pixel_grid_strength": 0.0,
-	"fake_df_ao": true,
+	"fake_df_ao": false,
 	"fake_df_ao_radius": 10.0,
 	"fake_df_ao_intensity": 3.0,
 	"fake_df_ao_contrast": 3.18,
@@ -5314,6 +5325,8 @@ func _start_game(guided_tutorial: bool = false) -> void:
 
 
 func _start_game_immediate(guided_tutorial: bool = false) -> void:
+	if is_instance_valid(_shift_results): _shift_results.restore()
+	_stop_burger_pals_parade()
 	_unload_character_creator()
 	if guided_tutorial and (mp_enabled or NetManager.is_online() or NetManager.role != NetManager.Role.NONE):
 		NetManager.stop_browse()
@@ -5354,6 +5367,8 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	last_day_cut = 0.0
 	last_day_tips = 0.0
 	shift_food_sales = 0.0
+	shift_ingredient_cost = 0.0
+	shift_restock_spend = 0.0
 	shift_tips = 0.0
 	truck_bought_out = false
 	_boss_fryer_pending = false
@@ -5427,6 +5442,8 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 
 
 func _restart() -> void:
+	if is_instance_valid(_shift_results): _shift_results.restore()
+	_stop_burger_pals_parade()
 	if tutorial_mode:
 		_start_game(true)
 		return
@@ -5478,6 +5495,8 @@ func _restart() -> void:
 	last_day_cut = 0.0
 	last_day_tips = 0.0
 	shift_food_sales = 0.0
+	shift_ingredient_cost = 0.0
+	shift_restock_spend = 0.0
 	shift_tips = 0.0
 	_reset_cut_collector_shift(false)
 	if day == 1 and (not mp_enabled or NetManager.is_host()):
@@ -7952,6 +7971,8 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 
 
 func _end_day() -> void:
+	if not playing and is_instance_valid(_shift_results) and _shift_results.active: return
+	if playing: _start_burger_pals_parade("end_of_day")
 	if playing: _achievement_event("days")
 	playing = false
 	_apply_cut_collector_payout()
@@ -7968,7 +7989,7 @@ func _end_day() -> void:
 		perfect_serves,
 		cut_block,
 		_format_money(money),
-		_apply_bank_day_interest(),
+		str(get_meta("mp_closed_bank_summary", "")) if has_meta("mp_closed_bank_summary") else _apply_bank_day_interest(),
 		social_block
 	]
 	restart_btn.text = "REPLAY %s" % location_name.to_upper()
@@ -7979,11 +8000,19 @@ func _end_day() -> void:
 	## Bigger panel so best/worst quotes + the cut recap fit.
 	game_over_panel.offset_left = -300.0
 	game_over_panel.offset_right = 300.0
-	game_over_panel.offset_top = -270.0
-	game_over_panel.offset_bottom = 270.0
+	game_over_panel.offset_top = -310.0
+	game_over_panel.offset_bottom = 310.0
 	if game_over_label:
 		game_over_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		UiFontsScript.apply_label(game_over_label, true, 15)
+	if not is_instance_valid(_shift_results):
+		_shift_results=preload("res://scripts/shift_results.gd").new()
+		add_child(_shift_results)
+		_shift_results.setup(self)
+	_shift_results.begin()
+	_show_end_day_parade_before_results()
+	if mp_enabled and NetManager.is_host():
+		mp_shift_closed.rpc(_mp_closed_shift_state(),0.0)
 
 
 # --- 3D world: inside truck, looking out ------------------------------------
@@ -8004,6 +8033,8 @@ func _build_3d_world() -> void:
 	_add_box(world, Vector3(0.22, 2.7, 4.0), Vector3(3.25, 1.35, -0.4), Color("080808"))
 	_add_box(world, Vector3(6.5, 2.7, 0.22), Vector3(0, 1.35, -2.35), Color("080808"))
 	_add_box(world, Vector3(6.5, 0.16, 4.2), Vector3(0, 2.72, -0.4), Color("050505"))
+
+	preload("res://scripts/truck_ceiling_details.gd").build(self)
 
 	# Front wall around window
 	const SERVICE_WINDOW_OPENING_RAISE := 0.3048 # One foot higher top opening, in meters.
@@ -13058,6 +13089,7 @@ func _setup_world_lighting() -> void:
 	## Ambient occlusion — contact shadows in the kitchen / under patties.
 	## Tunable from Hidden / Advanced Graphics (defaults match saved GFX preset).
 	env.ssao_enabled = bool(GFX_DEFAULTS["ssao"])
+	env.ssao_light_affect = 0.5
 	env.ssao_radius = float(GFX_DEFAULTS["ssao_radius"])
 	env.ssao_intensity = float(GFX_DEFAULTS["ssao_intensity"])
 	env.ssao_power = float(GFX_DEFAULTS["ssao_power"])
@@ -20967,6 +20999,10 @@ func _build_window_cat() -> void:
 	cat.name = "WindowCat"
 	world.add_child(cat)
 	window_cat = cat
+	if _shift_events == null:
+		_shift_events = preload("res://scripts/shift_visits.gd").new()
+		_shift_events.game = self
+		add_child(_shift_events)
 	## Guest sees host-driven cat (peek / run / chonk) via sync RPCs.
 	if mp_enabled and not NetManager.is_host():
 		cat.set("mp_puppet", true)
@@ -21109,11 +21145,13 @@ func _update_cut_collector_wawa(delta: float) -> void:
 	_cut_collector_wawa_timer -= delta
 	if _cut_collector_wawa_timer > 0.0:
 		return
-	if not _regular_customers_empty():
-		return
 	_cut_collector_wawa_timer = CUT_COLLECTOR_WAWA_SEC
 	if randf() < CUT_COLLECTOR_WAWA_CHANCE:
-		_spawn_cut_collector("wawa")
+		var style := 2 if randf() < 0.15 else randi_range(0, 1)
+		if mp_enabled:
+			mp_boss_peek.rpc(style)
+		else:
+			mp_boss_peek(style)
 
 
 func _spawn_cut_collector(kind: String) -> void:
@@ -21390,23 +21428,41 @@ func _apply_cut_collector_payout() -> void:
 
 
 func _format_day_cut_recap() -> String:
-	var take: float = last_day_earnings
-	var tips: float = last_day_tips
-	var cut: float = last_day_cut
-	if take <= 0.001:
-		take = maxf(0.0, shift_food_sales)
-		tips = maxf(0.0, shift_tips)
-		if not truck_bought_out and cut <= 0.001:
-			cut = floorf(take * 50.0) / 100.0
-	if truck_bought_out:
-		return "Today's take: %s\nThe truck is yours — no cut.\n" % _format_money(take)
-	var kept: float = maxf(0.0, take - cut) + maxf(0.0, tips)
-	return "Today's take: %s\nTips (yours): %s\nHis cut: %s\nYou keep: %s\n" % [
-		_format_money(take),
-		_format_money(tips),
-		_format_money(cut),
-		_format_money(kept),
-	]
+	var revenue := shift_food_sales + shift_tips
+	return "Sales: %s  |  Tips: %s\nIngredients used / spoiled: %s\nFood profit: %s\nBoss cut: %s  |  Net food profit: %s\nRestocks purchased: %s (inventory, already paid)\n" % [
+		_format_money(shift_food_sales), _format_money(shift_tips),
+		_format_money(shift_ingredient_cost), _format_money(revenue - shift_ingredient_cost),
+		_format_money(last_day_cut), _format_money(revenue - shift_ingredient_cost - last_day_cut),
+		_format_money(shift_restock_spend)]
+
+
+func _record_ingredient_usage(id: String, amount: float) -> void:
+	if playing and (not mp_enabled or NetManager.is_host()):
+		shift_ingredient_cost += _supply_buy_unit_cost(id) * amount
+
+
+func _order_food_cost(customer: Node3D) -> float:
+	if customer == null or not is_instance_valid(customer):
+		return 0.0
+	var built: Array = customer.get_meta("profit_built", GameDataScript.order_burger_items(customer.order))
+	var cost := 0.0
+	for item in built:
+		if str(item) in SUPPLY_IDS:
+			cost += _supply_buy_unit_cost(str(item))
+	for soda in GameDataScript.order_soda_ids(customer.order):
+		var flavor := GameDataScript.soda_flavor_from_order_id(str(soda))
+		cost += _supply_buy_unit_cost("syrup_" + flavor) * SUPPLY_BUY_PACK * SODA_TANK_CUP_COST / SODA_TANK_SYRUP_REFILL
+	return cost
+
+
+func _show_order_profit(payout: float, cost: float) -> void:
+	if _shift_events != null:
+		_shift_events.show_profit(payout, cost)
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_order_profit(payout: float, cost: float) -> void:
+	_show_order_profit(payout, cost)
 
 
 func _record_boss_served_customer() -> void:
@@ -21437,6 +21493,10 @@ func _credit_ticket_payout(pay: Dictionary, payout: int, customer: Node3D = null
 		_achievement_event("orders")
 		_achievement_event("earnings", float(payout))
 		_achievement_event("tips", float(tip))
+	var food_cost := _order_food_cost(customer) if base > 0 else 0.0
+	_show_order_profit(float(payout), food_cost)
+	if mp_enabled and NetManager.is_host():
+		mp_order_profit.rpc(float(payout), food_cost)
 	shift_food_sales += float(base)
 	shift_tips += float(tip)
 	_play_sale_payout_fx_next_frame(customer, base, tip, from_shown, money)
@@ -22584,6 +22644,8 @@ func _build_season_shaker() -> void:
 	shaker_root.rotation_degrees = Vector3(4.0, -10.0, 2.0)
 	shaker_root.scale = SHAKER_ROOT_SCALE
 	world.add_child(shaker_root)
+	UiFontsScript.ensure_loaded()
+	preload("res://scripts/truck_ceiling_details.gd").taped_label(self,shaker_root,"Seasoning",.108,Vector3(0,.047,-.042))
 
 	shaker_area = Area3D.new()
 	shaker_area.input_ray_pickable = true
@@ -26844,8 +26906,10 @@ func _build_oil_bottle() -> void:
 	oil_root.name = "OilBottle"
 	oil_root.position = oil_home
 	oil_root.rotation_degrees = Vector3(6.0, -18.0, 3.0)
-	oil_root.scale = Vector3(2.05, 2.05, 2.05)
+	oil_root.scale = OIL_ROOT_SCALE
 	world.add_child(oil_root)
+	UiFontsScript.ensure_loaded()
+	preload("res://scripts/truck_ceiling_details.gd").taped_label(self,oil_root,"Oil",.066,Vector3(0,.045,-.037))
 
 	oil_area = Area3D.new()
 	oil_area.input_ray_pickable = true
@@ -27272,7 +27336,7 @@ func _release_oil_bottle() -> void:
 		oil_root,
 		oil_home,
 		Vector3(8.0, 40.0, -5.0),
-		Vector3(2.05, 2.05, 2.05),
+		OIL_ROOT_SCALE,
 		0.3,
 		func() -> void:
 			if oil_area != null and is_instance_valid(oil_area):
@@ -27297,7 +27361,7 @@ func _reset_oil_bottle() -> void:
 	if oil_root:
 		oil_root.position = oil_home
 		oil_root.rotation_degrees = Vector3(8.0, 40.0, -5.0)
-		oil_root.scale = Vector3(2.05, 2.05, 2.05)
+		oil_root.scale = OIL_ROOT_SCALE
 	if oil_area:
 		oil_area.input_ray_pickable = true
 	_clear_oil_slicks()
@@ -29817,6 +29881,7 @@ func _build_outdoor_street() -> void:
 	outdoor.name = "OutdoorStreet"
 	world.add_child(outdoor)
 	outdoor_street = outdoor
+	_build_burger_pals_parade(outdoor)
 
 	## Invisible sidewalk / street floor — NPCs keep standing here; no visible mesh.
 	var floor_body := StaticBody3D.new()
@@ -29885,6 +29950,68 @@ func _build_outdoor_street() -> void:
 	_build_street_car(outdoor)
 	_build_background_people(outdoor)
 	_apply_shadow_catchers(_read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS.duplicate())
+
+
+func _build_burger_pals_parade(parent: Node3D) -> void:
+	if is_instance_valid(burger_pals_parade):
+		burger_pals_parade.queue_free()
+	burger_pals_parade = BurgerPalsParadeScene.instantiate() as BurgerPalsParadeScript
+	# Road lane in front of the passing cars; feet share their road-contact height.
+	burger_pals_parade.position = Vector3(0.0, _street_car_wheel_y(), _street_car_z() - 0.65)
+	parent.add_child(burger_pals_parade)
+	burger_pals_parade.parade_finished.connect(_on_burger_pals_parade_finished)
+	_parade_presentation = preload("res://scripts/parade_presentation.gd").new()
+	add_child(_parade_presentation)
+	_parade_presentation.setup(self, burger_pals_parade)
+
+
+func _start_burger_pals_parade(reason: String) -> void:
+	if is_instance_valid(burger_pals_parade):
+		burger_pals_parade.position.y = _street_car_wheel_y()
+		burger_pals_parade.position.z = _street_car_z() - 0.65
+		burger_pals_parade.start_parade(reason)
+
+
+func _stop_burger_pals_parade() -> void:
+	if is_instance_valid(_shift_results): _shift_results.restore()
+	if is_instance_valid(_parade_presentation): _parade_presentation.stop_film()
+	if is_instance_valid(burger_pals_parade):
+		burger_pals_parade.stop_parade()
+	if is_instance_valid(_parade_results_button):
+		_parade_results_button.hide()
+
+
+func _show_end_day_parade_before_results() -> void:
+	if not is_instance_valid(burger_pals_parade) or not burger_pals_parade.active:
+		return
+	# Leave the street visible, with immediate access to the normal results.
+	if not is_instance_valid(_parade_results_button):
+		_parade_results_button = Button.new()
+		_parade_results_button.name = "ParadeShiftResults"
+		game_over_panel.get_parent().add_child(_parade_results_button)
+		_parade_results_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+		_parade_results_button.offset_left = -180.0
+		_parade_results_button.offset_right = 180.0
+		_parade_results_button.offset_top = 24.0
+		_parade_results_button.offset_bottom = 72.0
+		_parade_results_button.text = "Shift complete — Show results"
+		_parade_results_button.pressed.connect(_show_parade_shift_results)
+	game_over_panel.hide()
+	if is_instance_valid(_shift_results): _shift_results.lift_control(_parade_results_button)
+	_parade_results_button.show()
+
+
+func _show_parade_shift_results() -> void:
+	if not is_instance_valid(_parade_results_button) or not _parade_results_button.visible:
+		return
+	_parade_results_button.hide()
+	if not playing:
+		game_over_panel.show()
+
+
+func _on_burger_pals_parade_finished(reason: String) -> void:
+	if reason == "end_of_day":
+		_show_parade_shift_results()
 
 
 func _scatch_key(idx: int, suffix: String) -> String:
@@ -38690,6 +38817,7 @@ func _drain_soda_tank(flavor_id: String, cup_fill_delta: float) -> float:
 	var need := cup_fill_delta * SODA_TANK_CUP_COST
 	var take := minf(have, need)
 	var allowed := take / maxf(SODA_TANK_CUP_COST, 0.001)
+	_record_ingredient_usage("syrup_" + fid, take * SUPPLY_BUY_PACK / SODA_TANK_SYRUP_REFILL)
 	var after := have - take
 	_set_soda_tank_visual_level(fid, after)
 	if mp_enabled and NetManager.is_online() and not NetManager.is_host() and not _mp_applying:
@@ -46256,6 +46384,7 @@ func _build_cutting_board_prop() -> void:
 	build_cutting_board = root
 	# Like the grill plates, this thin wood surface receives object shadows
 	# without casting its nearly coplanar triangulated top back onto itself.
+	var board_bounds := _mesh_aabb_local(root)
 	for part in root.find_children("*", "MeshInstance3D", true, false):
 		part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var base: Material = part.material_override
@@ -46263,9 +46392,14 @@ func _build_cutting_board_prop() -> void:
 			base = base.duplicate()
 			var vignette := ShaderMaterial.new()
 			vignette.shader = preload("res://shaders/cutting_board_vignette.gdshader")
-			var bounds: AABB = part.mesh.get_aabb()
-			vignette.set_shader_parameter("board_center", bounds.get_center())
-			vignette.set_shader_parameter("board_extent", bounds.size * 0.5)
+			if base is StandardMaterial3D:
+				base.roughness = .32
+				base.clearcoat_enabled = true
+				base.clearcoat = .22
+				base.clearcoat_roughness = .28
+			vignette.set_shader_parameter("mesh_to_board",root.global_transform.affine_inverse()*part.global_transform)
+			vignette.set_shader_parameter("board_center", board_bounds.get_center())
+			vignette.set_shader_parameter("board_extent", board_bounds.size * 0.5)
 			base.next_pass = vignette
 			part.material_override = base
 	_apply_cutting_board_transform()
@@ -47400,10 +47534,16 @@ func _cached_tip_bill_material(in_jar: bool) -> StandardMaterial3D:
 	if cached != null:
 		return cached
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL if in_jar else BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.roughness = 0.86
+	if in_jar:
+		mat.emission_enabled = true
+		mat.emission_texture = _make_tip_bill_texture()
+		mat.emission = Color.WHITE
+		mat.emission_energy_multiplier = 0.12
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 	mat.albedo_texture = _make_tip_bill_texture()
-	mat.albedo_color = Color.WHITE
+	mat.albedo_color = Color(.84,.84,.80) if in_jar else Color.WHITE
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
@@ -48426,7 +48566,7 @@ func _build_phone_lock_screen() -> void:
 	for state in ["normal", "hover", "pressed", "focus"]:
 		_phone_lock_screen.add_theme_stylebox_override(state, style)
 	var logo := TextureRect.new()
-	logo.texture = load(LOGO_TEX_PATH)
+	logo.texture = load(PHONE_LOGO_TEX_PATH)
 	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -48688,6 +48828,7 @@ func _buy_supply_local(id: String) -> void:
 		_flash("Need %s to restock" % _format_money(cost), Color("EF5350"))
 		return
 	money -= cost
+	shift_restock_spend += cost
 	_achievement_event("purchases")
 	if tutorial_mode:
 		_tutorial_bought_supply = true
@@ -48967,6 +49108,7 @@ func _try_use_supply(id: String, amount: int = 1) -> bool:
 		_refresh_supply_ui_fast(id)
 		return false
 	supply_stock[id] = have - amount
+	_record_ingredient_usage(id, float(amount))
 	_refresh_supply_ui_fast(id)
 	return true
 
@@ -48984,6 +49126,7 @@ func _mp_try_use_supply(id: String, amount: int = 1) -> bool:
 		var have := int(supply_stock.get(id, 0))
 		if have >= amount:
 			supply_stock[id] = have - amount
+			_record_ingredient_usage(id, float(amount))
 			_refresh_supply_ui_fast(id)
 	return true
 
@@ -48996,6 +49139,7 @@ func _mp_spend_ingredient(id: String) -> bool:
 		var have := int(supply_stock.get(id, 0))
 		if have > 0:
 			supply_stock[id] = have - 1
+			_record_ingredient_usage(id, 1.0)
 			_refresh_supply_ui_fast(id)
 	return true
 
@@ -49028,6 +49172,7 @@ func _update_supply_freshness(delta: float) -> void:
 		fresh -= delta
 		if fresh <= 0.0:
 			supply_stock[id] = stock - 1
+			_record_ingredient_usage(id, 1.0)
 			spoiled = true
 			if int(supply_stock.get(id, 0)) > 0:
 				supply_fresh[id] = SUPPLY_FRESH_MAX
@@ -52451,7 +52596,7 @@ func _build_phone_ui() -> void:
 	if ResourceLoader.exists(LOGO_TEX_PATH):
 		var logo := TextureRect.new()
 		logo.name = "BurgerPalsLogo"
-		logo.texture = load(LOGO_TEX_PATH) as Texture2D
+		logo.texture = load(PHONE_LOGO_TEX_PATH) as Texture2D
 		logo.custom_minimum_size = Vector2(PHONE_LOGO_INNER_W, PHONE_LOGO_DISPLAY_H)
 		logo.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -54290,7 +54435,7 @@ func _build_graphics_ui() -> void:
 	gfx_btn.focus_mode = Control.FOCUS_NONE
 	gfx_btn.z_index = 30
 	gfx_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	gfx_btn.position = Vector2(98, 10)
+	gfx_btn.position = Vector2(98, 20)
 	gfx_btn.custom_minimum_size = Vector2(72, 26)
 	_style_quiet_hud_button(gfx_btn, 10)
 	gfx_btn.pressed.connect(func():
@@ -54627,9 +54772,9 @@ func _apply_quality_preset(preset: String) -> void:
 		"Low":
 			values = {"render_scale": 0.75, "msaa_level": 0, "fxaa": true, "shadow_resolution": 2048, "shadow_filter_quality": 1, "secondary_shadows": false, "sun_shadow_distance": 25.0, "ssil": false, "ssao": false, "fake_df_ao": false, "glow_on": false}
 		"Medium":
-			values = {"render_scale": 1.0, "msaa_level": 1, "fxaa": false, "shadow_resolution": 4096, "shadow_filter_quality": 3, "secondary_shadows": false, "sun_shadow_distance": 40.0, "ssil": false, "ssao": false, "fake_df_ao": true, "glow_on": true}
+			values = {"render_scale": 1.0, "msaa_level": 1, "fxaa": false, "shadow_resolution": 4096, "shadow_filter_quality": 3, "secondary_shadows": false, "sun_shadow_distance": 40.0, "ssil": false, "ssao": true, "fake_df_ao": false, "glow_on": true}
 		_:
-			values = {"render_scale": 1.0, "msaa_level": 2, "fxaa": true, "shadow_resolution": 8192, "shadow_filter_quality": 4, "secondary_shadows": true, "sun_shadow_distance": 80.0, "ssil": true, "ssao": false, "fake_df_ao": true, "glow_on": true}
+			values = {"render_scale": 1.0, "msaa_level": 2, "fxaa": true, "shadow_resolution": 8192, "shadow_filter_quality": 4, "secondary_shadows": true, "sun_shadow_distance": 80.0, "ssil": true, "ssao": true, "fake_df_ao": false, "glow_on": true}
 	settings.merge(values, true)
 	for key in values:
 		if gfx_sliders.has(key):
@@ -58903,6 +59048,7 @@ func _options_restart_day() -> void:
 
 
 func _options_back_to_lobby() -> void:
+	_stop_burger_pals_parade()
 	_set_options_menu_open(false)
 	if tutorial_mode:
 		_exit_guided_tutorial()
@@ -59279,6 +59425,7 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 		gfx_env.adjustment_saturation = float(s.get("saturation", 1.06))
 		gfx_env.adjustment_contrast = float(s.get("contrast", 1.04))
 		gfx_env.ssao_enabled = bool(s.get("ssao", GFX_DEFAULTS["ssao"]))
+		gfx_env.ssao_light_affect = 0.5
 		gfx_env.ssao_radius = float(s.get("ssao_radius", GFX_DEFAULTS["ssao_radius"]))
 		gfx_env.ssao_intensity = float(s.get("ssao_intensity", GFX_DEFAULTS["ssao_intensity"]))
 		gfx_env.ssao_power = float(s.get("ssao_power", GFX_DEFAULTS["ssao_power"]))
@@ -60206,6 +60353,13 @@ func _load_graphics_settings() -> void:
 		cfg.set_value("gfx", "sun_shadow_distance", GFX_DEFAULTS["sun_shadow_distance"])
 		cfg.set_value("gfx", "gfx_shadow_catcher_v2", true)
 		cfg.save(GFX_CFG_PATH)
+	## Restore contact shading once for existing installs; later user choices persist.
+	if not cfg.has_section_key("gfx", "contact_ao_v1"):
+		for key in ["ssao", "ssao_radius", "ssao_intensity"]:
+			cfg.set_value("gfx", key, GFX_DEFAULTS[key])
+		cfg.set_value("gfx", "fake_df_ao", false)
+		cfg.set_value("gfx", "contact_ao_v1", true)
+		cfg.save(GFX_CFG_PATH)
 	for key in GFX_DEFAULTS:
 		if not cfg.has_section_key("gfx", key):
 			continue
@@ -60319,7 +60473,7 @@ func _build_pause_button() -> void:
 	window_pause_btn.focus_mode = Control.FOCUS_NONE
 	window_pause_btn.z_index = 30
 	window_pause_btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	window_pause_btn.position = Vector2(12, 10)
+	window_pause_btn.position = Vector2(12, 20)
 	window_pause_btn.custom_minimum_size = Vector2(78, 26)
 	_style_quiet_hud_button(window_pause_btn, 11)
 	window_pause_btn.pressed.connect(func():
@@ -61054,11 +61208,11 @@ func _build_challenge_ui() -> void:
 	banner.set_anchors_preset(Control.PRESET_CENTER)
 	banner.offset_left = -380.0
 	banner.offset_right = 380.0
-	banner.offset_top = -70.0
-	banner.offset_bottom = 70.0
+	banner.offset_top = 12.0
+	banner.offset_bottom = 105.0
 	banner.z_index = 370
 	var banner_plate := StyleBoxFlat.new()
-	banner_plate.bg_color = Color(0.07, 0.06, 0.05, 0.88)
+	banner_plate.bg_color = Color(.06,.035,.018,.94)
 	banner_plate.set_corner_radius_all(16)
 	banner_plate.content_margin_left = 28
 	banner_plate.content_margin_right = 28
@@ -61067,12 +61221,21 @@ func _build_challenge_ui() -> void:
 	banner_plate.set_border_width_all(3)
 	banner_plate.border_color = Color(1.0, 0.82, 0.28, 0.9)
 	banner.add_theme_stylebox_override("normal", banner_plate)
-	UiFontsScript.apply_luckiest_label(banner, 36)
+	UiFontsScript.apply_luckiest_label(banner, 27)
 	banner.add_theme_color_override("font_color", Color("FFEB3B"))
 	banner.add_theme_color_override("font_outline_color", Color.BLACK)
 	banner.add_theme_constant_override("outline_size", 8)
 	ui_root.add_child(banner)
 	challenge_banner = banner
+	var art := TextureRect.new()
+	art.name = "VintageChallengeArt"
+	art.texture = preload("res://assets/ui/challenge_vintage_banner.png")
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.position = Vector2(215,-120)
+	art.size = Vector2(330,111)
+	banner.add_child(art)
 
 	var hud := PanelContainer.new()
 	hud.name = "ChallengeHud"
@@ -61338,6 +61501,7 @@ func _accept_challenge() -> void:
 	_challenge_remaining = _challenge_count
 	_update_challenge_hud()
 	_spawn_challenge_customer()
+	_start_burger_pals_parade("challenge")
 	_flash("Same burger — go!", Color("FFD54F"), 1.6)
 	_mp_send_challenge_state()
 
@@ -61374,6 +61538,8 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 		return
 	var previous := _challenge_phase
 	_challenge_phase = phase
+	if phase == "active" and previous != "active":
+		_start_burger_pals_parade("challenge")
 	_challenge_count = maxi(0, count)
 	_challenge_remaining = maxi(0, remaining)
 	_challenge_time_left = maxf(0.0, time_left)
@@ -61542,6 +61708,7 @@ func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: N
 	base_pay = maxi(base_pay, 1)
 	_challenge_remaining = maxi(0, _challenge_remaining - 1)
 	if not guest_mp:
+		cust.set_meta("profit_built", stations[station_index]["items"].duplicate())
 		_credit_ticket_payout({"base": base_pay, "tip": 0, "total": base_pay}, base_pay, cust)
 		total_served += 1
 	_refresh_challenge_ticket(cust)
@@ -64675,6 +64842,7 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 		return
 	_condiment_auto_active[id] = true
 	root.set_meta("condiment_station", station_index)
+	root.set_meta("condiment_squeezing", true)
 	var area: Area3D = condiment_bottle_areas.get(id, null)
 	if area != null and is_instance_valid(area):
 		area.input_ray_pickable = false
@@ -64719,10 +64887,10 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 			if root == null or not is_instance_valid(root):
 				return
 			var eased := t * t * (3.0 - 2.0 * t)
-			root.position = start_pos.lerp(pour_pos, eased) + Vector3.UP * sin(t * PI) * 0.085
+			root.position = start_pos.lerp(pour_pos, eased) + Vector3.UP * sin(t * PI) * 0.18
 			root.rotation_degrees = start_rot.lerp(home_rot + Vector3(-7.0, 0.0, 5.0), eased),
 		0.0, 1.0, CONDIMENT_BOTTLE_TRAVEL_SEC
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	).set_trans(Tween.TRANS_LINEAR)
 	tw.tween_property(root, "rotation_degrees", pour_rot, CONDIMENT_BOTTLE_TILT_SEC) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_method(
@@ -64740,8 +64908,10 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 			stream.visible = false
 		if root != null and is_instance_valid(root):
 			root.scale = Vector3.ONE
+			root.set_meta("condiment_squeezing", false)
 		_deposit_condiment_entry(entry)
 		_return_condiment_bottle(id, root, _condiment_bottle_home(id), home_rot, stream)
+		call_deferred("_try_auto_serve")
 	)
 
 
@@ -68142,6 +68312,8 @@ func _try_auto_serve() -> void:
 					si = near_si
 		if si < 0:
 			continue
+		if _station_sauce_in_flight(si):
+			continue
 		## Cheese melt is presentation only. As soon as every ordered ingredient is
 		## on Build, crown and serve immediately instead of idling for its 3s melt.
 		_auto_serving = true
@@ -71013,6 +71185,7 @@ func _hide_guided_tutorial_ui() -> void:
 
 
 func _exit_guided_tutorial() -> void:
+	_stop_burger_pals_parade()
 	tutorial_mode = false
 	_tutorial_complete = false
 	_tutorial_step = 0
@@ -71909,6 +72082,7 @@ func _update_shift_complete_location_summary() -> void:
 		social_block,
 	]
 	_refresh_cut_buyout_button()
+	if is_instance_valid(_shift_results) and _shift_results.active: _shift_results.rebuild()
 
 
 func _load_truck_location() -> void:
@@ -72708,7 +72882,7 @@ func _mp_request_bootstrap_retry() -> void:
 
 @rpc("any_peer", "reliable")
 func mp_request_bootstrap(_claimed_id: int = 0) -> void:
-	if not NetManager.is_host() or not playing:
+	if not NetManager.is_host() or (not playing and (not is_instance_valid(_shift_results) or not _shift_results.active)):
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
 	if peer_id <= 1 or _mp_bootstrap_active.has(peer_id):
@@ -72716,6 +72890,9 @@ func mp_request_bootstrap(_claimed_id: int = 0) -> void:
 	_mp_send_bootstrap_to(peer_id)
 
 func _mp_send_bootstrap_to(peer_id: int) -> void:
+	if NetManager.is_host() and not playing and is_instance_valid(_shift_results) and _shift_results.active:
+		mp_shift_closed.rpc_id(peer_id,_mp_closed_shift_state(),float(Time.get_ticks_msec()-_shift_results.started_ms)/1000.0)
+		return
 	## Full mid-round catch-up: economy, customers, patties, grill, Build.
 	if not NetManager.is_host() or not playing or _mp_bootstrap_active.has(peer_id):
 		return
@@ -72758,6 +72935,8 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		_mp_bootstrap_add(peer_id, "mp_spawn_customer", [nid, order_packed, col.r, col.g, col.b, patience, lane, skin_i, face_i,
 			false, -1, bool(c.get("is_challenge_guest")), custom_preset])
 	_mp_send_challenge_state(peer_id)
+	if is_instance_valid(open_closed_sign_pivot):
+		_mp_bootstrap_add(peer_id,"mp_sign_motion",[open_closed_sign_pivot.swing,open_closed_sign_pivot.speed,open_closed_sign_pivot.dragging,open_closed_sign_pivot.target])
 	if _has_cut_collector():
 		_mp_bootstrap_add(peer_id, "mp_spawn_cut_collector", [_cut_collector_kind])
 		_mp_send_boss_pose(peer_id)
@@ -73748,7 +73927,7 @@ func mp_tool_pose(
 				return
 			oil.visible = true
 			_mp_target_proxy(oil, pos, rot)
-			oil.scale = Vector3(2.05, 2.05, 2.05)
+			oil.scale = OIL_ROOT_SCALE
 			_mp_set_remote_tool_fx(oil, "OilParticles", emitting)
 		3:
 			var brush := _mp_ensure_remote_brush(sid)
@@ -74755,9 +74934,9 @@ func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) ->
 		_mp_broadcast_customers()
 
 
-@rpc("any_peer", "call_local", "reliable")
+@rpc("authority", "call_local", "reliable")
 func mp_end_day() -> void:
-	_end_day()
+	if NetManager.is_host(): _end_day()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -75418,7 +75597,8 @@ func _mp_send_cat_sync() -> void:
 		float(d.get("giant", 0.0)),
 		float(d.get("treat", 0.0)),
 		float(d.get("eat_w", 0.0)),
-		float(d.get("bob", 0.0))
+		float(d.get("bob", 0.0)),
+		d.get("presentation",{})
 	)
 
 
@@ -75435,7 +75615,8 @@ func mp_cat_sync(
 	giant: float,
 	treat: float,
 	eat_w: float,
-	bob: float
+	bob: float,
+	presentation: Dictionary = {}
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -75456,6 +75637,7 @@ func mp_cat_sync(
 		"treat": treat,
 		"eat_w": eat_w,
 		"bob": bob,
+		"presentation": presentation,
 	})
 
 
@@ -75614,7 +75796,8 @@ func _mp_emit_economy(peer_id: int = 0) -> void:
 		fryer_ready_servings,
 		pending_machine_deliveries.keys(),
 		chef_points,
-		_chef_revision
+		_chef_revision,
+		[shift_food_sales, shift_tips, shift_ingredient_cost, shift_restock_spend]
 	], peer_id)
 
 
@@ -75638,12 +75821,20 @@ func mp_sync_economy(
 	fry_servings: int = -1,
 	pending_equipment: Array = [],
 	shared_chef_points: int = 0,
-	chef_revision: int = 0
+	chef_revision: int = 0,
+	shift_finances: Array = []
 ) -> void:
 	## Guest applies host world economy as absolute truth.
 	if NetManager.is_host():
 		return
+	if is_instance_valid(_shift_results) and _shift_results.active: return # Final recap supersedes queued in-shift economy.
 	_apply_chef_points(shared_chef_points, chef_revision)
+	if shift_finances.size() == 4:
+		shift_food_sales = float(shift_finances[0])
+		shift_tips = float(shift_finances[1])
+		shift_ingredient_cost = float(shift_finances[2])
+		shift_restock_spend = float(shift_finances[3])
+
 	var before_inventory := [supply_stock.duplicate(), supply_fresh.duplicate(), soda_tank_fill.duplicate()]
 	var before_machines := owned_machines.duplicate()
 	var before_fries := fryer_ready_servings
@@ -75712,6 +75903,7 @@ func mp_request_soda_tank_drain(flavor_id: String, tank_amount: float) -> void:
 	var amount := clampf(tank_amount, 0.0, 0.08)
 	if amount <= 0.00001:
 		return
+	_record_ingredient_usage("syrup_" + flavor_id, minf(amount, _soda_tank_amount(flavor_id)) * SUPPLY_BUY_PACK / SODA_TANK_SYRUP_REFILL)
 	_set_soda_tank_visual_level(flavor_id, _soda_tank_amount(flavor_id) - amount)
 	_refresh_soda_tank_bubbles()
 	_mp_broadcast_economy()
@@ -77887,3 +78079,66 @@ func _feed_cat_target(kind: String) -> void:
 		mail_delivery_truck.receive_treat(kind)
 	elif is_instance_valid(window_cat):
 		window_cat.feed(kind, true)
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_boss_peek(style: int) -> void:
+	if _shift_events != null:
+		_shift_events.boss_peek(style)
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_cat_steal_patty(net_id: int) -> void:
+	var patty = _patty_by_net_id(net_id)
+	if _shift_events != null and is_instance_valid(patty):
+		if NetManager.is_host(): _shift_events.steal_patty(patty)
+		elif is_instance_valid(window_cat): window_cat.peek_for_patty(1.15 if patty.global_position.x>=GRILL_CENTER_X else -1.15)
+
+
+func _station_sauce_in_flight(station_index: int) -> bool:
+	for id in _condiment_auto_active:
+		var bottle: Node3D = condiment_bottle_roots.get(id)
+		if is_instance_valid(bottle) and int(bottle.get_meta("condiment_station", -1)) == station_index and bool(bottle.get_meta("condiment_squeezing", false)):
+			return true
+	return false
+
+
+const CLOSED_SHIFT_FIELDS := ["money","bank_savings","bank_loan","day","day_time","total_served","perfect_serves","shift_food_sales","shift_tips","shift_ingredient_cost","shift_restock_spend","last_day_earnings","last_day_tips","last_day_cut","day_social_rating_sum","current_location_id","truck_bought_out"]
+func _mp_closed_shift_state() -> Dictionary:
+	var state: Dictionary={}
+	for key in CLOSED_SHIFT_FIELDS: state[key]=get(key)
+	var reviews: Array=[]
+	for review in day_social_reviews:
+		reviews.append({"stars":review.get("stars",0.0),"who":review.get("who","Guest"),"text":review.get("text","")})
+	state["reviews"]=reviews
+	return state
+
+@rpc("authority","call_remote","reliable")
+func mp_shift_closed(state: Dictionary, elapsed: float=0.0) -> void:
+	if NetManager.is_host(): return
+	for key in CLOSED_SHIFT_FIELDS:
+		if state.has(key): set(key,state[key])
+	day_social_reviews=state.get("reviews",[]).duplicate(true)
+	_cut_collector_cut_done=true
+	set_meta("mp_closed_bank_summary","Checking %s · HYSA %s" % [_format_money(money),_format_money(bank_savings)])
+	if not is_instance_valid(_shift_results) or not _shift_results.active:
+		playing=true
+		_end_day()
+		_shift_results.seek_closing(elapsed)
+		if elapsed>=12.0: _show_parade_shift_results()
+	else:
+		_shift_results.rebuild()
+	remove_meta("mp_closed_bank_summary")
+	_mp_bootstrap_ready=true
+	_mp_bootstrap_waiting=0
+
+@rpc("authority","call_remote","reliable")
+func mp_cat_commit_theft(net_id: int) -> void:
+	var patty=_patty_by_net_id(net_id)
+	if is_instance_valid(patty) and _shift_events != null: _shift_events.steal_patty(patty,true)
+
+
+@rpc("any_peer","call_remote","reliable")
+func mp_sign_motion(angle: float, velocity: float, held: bool, aim: float) -> void:
+	if not playing or not is_finite(angle) or not is_finite(velocity) or not is_finite(aim): return
+	if is_instance_valid(open_closed_sign_pivot): open_closed_sign_pivot.apply_network_pose(angle,velocity,held,aim)

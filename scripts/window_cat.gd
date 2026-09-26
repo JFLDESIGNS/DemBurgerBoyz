@@ -5,7 +5,7 @@ const SCENE_PATH := "res://assets/cat/shipping_cat.glb"
 const EYE_SHADER := preload("res://shaders/cat_eyes.gdshader")
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
-const HOME_X := 1.6848
+const HOME_X := 2.0912
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
 const TUTORIAL_COACH_X := 2.1548
 const HOME_Z := 1.76
@@ -55,6 +55,8 @@ signal became_full_sized
 signal wants_meow(pitch: float)
 
 
+var _visit_fed := false
+var _patty_peek_x := NAN
 var _visual: Node3D = null
 var _area: Area3D = null
 var _anim: AnimationPlayer = null
@@ -110,6 +112,8 @@ func _ready() -> void:
 
 func _home_x() -> float:
 	## World +X is screen-left; keep the tutorial cat opposite the customer.
+	if not is_nan(_patty_peek_x) and _state != "hidden":
+		return _patty_peek_x
 	return TUTORIAL_COACH_X if _tutorial_coach else HOME_X
 
 
@@ -521,9 +525,8 @@ func _build_mouth_burger() -> void:
 	disk.radial_segments = 22
 	meat.mesh = disk
 	meat.position = Vector3(0, 0.02, 0)
-	var meat_mat := StandardMaterial3D.new()
-	meat_mat.albedo_color = Color(0.30, 0.14, 0.07)
-	meat_mat.roughness = 0.88
+	var meat_mat := ShaderMaterial.new()
+	meat_mat.shader = preload("res://shaders/cat_patty_bites.gdshader")
 	meat.material_override = meat_mat
 	_mouth_burger.add_child(meat)
 
@@ -571,6 +574,7 @@ func get_mp_sync() -> Dictionary:
 		"treat": _treat_arm,
 		"eat_w": _patty_eat_wide,
 		"bob": _bob,
+		"presentation": {"fed":_visit_fed,"mouth":is_instance_valid(_mouth_burger),"lift":float(get_meta("steal_lean_lift",0.0)),"lean":_visual.rotation.x if is_instance_valid(_visual) else 0.0,"bites":floorf((1.0-clampf(_timer/RUN_SEC,0.0,1.0))*4.5) if _state=="running" else 0.0},
 	}
 
 
@@ -587,6 +591,15 @@ func apply_mp_sync(d: Dictionary) -> void:
 	_treat_arm = float(d.get("treat", _treat_arm))
 	_patty_eat_wide = float(d.get("eat_w", _patty_eat_wide))
 	_bob = float(d.get("bob", _bob))
+	var presentation: Dictionary=d.get("presentation",{})
+	_visit_fed=bool(presentation.get("fed",_visit_fed))
+	set_meta("steal_lean_lift",float(presentation.get("lift",0.0)))
+	if is_instance_valid(_visual): _visual.rotation.x=float(presentation.get("lean",0.0))
+	if bool(presentation.get("mouth",false)) and not is_instance_valid(_mouth_burger): _build_mouth_burger()
+	if is_instance_valid(_mouth_burger):
+		for piece in _mouth_burger.get_children():
+			if piece is MeshInstance3D and piece.material_override is ShaderMaterial:
+				piece.material_override.set_shader_parameter("bites",float(presentation.get("bites",0.0)))
 	## Drop mouth prop when host is no longer chewing / bolting.
 	if _state != "fed_hold" and _state != "running":
 		_clear_mouth_burger()
@@ -616,6 +629,8 @@ func _process(delta: float) -> void:
 			if _timer <= 0.0:
 				## Every 45s: 75% chance to peek (even with a full window).
 				if randf() < PEEK_CHANCE:
+					_visit_fed = false
+					_patty_peek_x = NAN
 					_state = "rising"
 					_timer = 0.55
 					visible = true
@@ -707,6 +722,10 @@ func _process(delta: float) -> void:
 			visible = true
 			var run_len := BAG_RUN_SEC if _bag_heist else RUN_SEC
 			var u := 1.0 - clampf(_timer / maxf(run_len, 0.05), 0.0, 1.0)
+			if not _bag_heist and is_instance_valid(_mouth_burger):
+				for piece in _mouth_burger.get_children():
+					if piece is MeshInstance3D and piece.material_override is ShaderMaterial:
+						piece.material_override.set_shader_parameter("bites",floorf(u*4.5))
 			var ease_r := u * u * (3.0 - 2.0 * u)
 			position = _run_from.lerp(_run_to, ease_r)
 			rotation_degrees.y = lerpf(_run_yaw_from, _run_yaw_to, ease_r)
@@ -750,7 +769,7 @@ func _apply_visual_scale() -> void:
 	var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
 	_visual.scale = Vector3(sx, sy, sz)
 	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
-	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL)
+	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL) + float(get_meta("steal_lean_lift", 0.0))
 	## Grow the pet hitbox with the cat.
 	if _area != null:
 		var shape := _area.get_child(0) as CollisionShape3D
@@ -877,6 +896,7 @@ func _drop_carried_bag() -> void:
 
 
 func _finish_run_away() -> void:
+	_patty_peek_x = NAN
 	_state = "hidden"
 	_timer = AFTER_BURGER_HIDE_SEC
 	visible = false
@@ -892,6 +912,7 @@ func _finish_run_away() -> void:
 
 
 func request_delivery_peek(hold_sec: float = 5.5) -> void:
+	_patty_peek_x = NAN
 	## Force a peek so the cat can toss phone restocks into the kitchen.
 	if enabled and _visual != null and not _bag_heist:
 		_delivery_anim_left = 6.0
@@ -993,6 +1014,7 @@ func feed(kind: String, force: bool = false) -> void:
 		return
 	if not force and not is_interactable():
 		return
+	_visit_fed = true
 	_pet_squash = 1.0
 	_happy_anim_left = 2.15 / FED_HOP_SPEED
 	_happy_speed = FED_HOP_SPEED
@@ -1028,6 +1050,8 @@ func _feed_full_burger() -> void:
 
 
 func reset_shift(persist_weight: bool = true) -> void:
+	_visit_fed = false
+	_patty_peek_x = NAN
 	## New day / hide — keep fed weight across days; only a fresh run wipes it.
 	_state = "hidden"
 	_delivery_anim_left = 0.0
@@ -1064,3 +1088,14 @@ func delivery_visual_scale() -> Vector3:
 	# Persistent feeding proportions shared with the courier; exclude temporary pet squash.
 	var width := 1.0 + _fat
 	return Vector3(width, 1.0 + _fat * 0.08, lerpf(1.0, width, 0.7)) * MESH_SCALE * _size_mul() * scale.abs()
+
+
+func peek_for_patty(at_x: float) -> void:
+	if not enabled or _bag_heist or _delivery_peek_active: return
+	_patty_peek_x = at_x
+	_state = "rising"
+	_timer = .55
+	_peek_override_sec = 4.0
+	visible = true
+	position = Vector3(_home_x(), _hidden_y(), _home_z())
+	rotation_degrees = Vector3(0, FACE_COOK_YAW, 0)
