@@ -36,6 +36,8 @@ const KIND_COLORS := {
 
 var _board: Array = [] ## ROWS of COLS String
 var _score: int = 0
+var _high_scores: Array = []
+var _expired_columns: Array[int] = [0,0,0,0,0]
 var _combo: int = 0
 var _active: bool = false
 var _busy: bool = false
@@ -86,12 +88,15 @@ func _play_smush_sound(count: int, chain: int) -> void:
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	gui_input.connect(_on_gui_input)
+	var saved := ConfigFile.new()
+	if saved.load("user://smush_scores.cfg") == OK: _high_scores = saved.get_value("scores","top",[])
 	_load_poof_frames()
 	reset_game()
 	set_process(false)
 
 
 func set_active(on: bool) -> void:
+	if not on: _save_score()
 	_active = on
 	set_process(on)
 	if on:
@@ -100,6 +105,8 @@ func set_active(on: bool) -> void:
 
 
 func reset_game() -> void:
+	_save_score()
+	_expired_columns = [0,0,0,0,0]
 	_score = 0
 	_combo = 0
 	_busy = false
@@ -477,6 +484,10 @@ func _drop_and_fill() -> void:
 				if rows_fallen > 0.0:
 					_drop_offsets[Vector2i(x, y)] = rows_fallen
 			else:
+				if y < _expired_columns[x]:
+					_board[y][x] = ""
+					_tile_ages[y][x] = 0.0
+					continue
 				_board[y][x] = _random_kind()
 				_tile_ages[y][x] = 0.0
 				_drop_offsets[Vector2i(x, y)] = float(y + spawn_index + 1)
@@ -634,6 +645,7 @@ func _process(delta: float) -> void:
 				var age := float(_tile_ages[y][x]) + delta
 				_tile_ages[y][x] = age
 				if age >= ICON_EXPIRE_SEC:
+					_expired_columns[x] += 1
 					_board[y][x] = ""
 					_tile_ages[y][x] = 0.0
 					expired_any = true
@@ -712,6 +724,8 @@ func _cell_at(local_pos: Vector2) -> Vector2i:
 
 
 func _draw() -> void:
+	var ranks: Array[String] = []
+	for i in _high_scores.size(): ranks.append("%d. %d" % [i+1,int(_high_scores[i])])
 	## Deep teal counter backdrop with warm arcade glow.
 	draw_rect(Rect2(Vector2.ZERO, size), Color("071C21"), true)
 	var band_h := maxf(size.y / 12.0, 1.0)
@@ -787,7 +801,7 @@ func _draw() -> void:
 	draw_string(
 		font,
 		Vector2(8.0, size.y - 8.0),
-		"LMB SMUSH 2+  ·  RMB SWAP  ·  R RESET",
+		"LOCAL BEST  " + "  ".join(ranks) if not ranks.is_empty() else "LMB SMUSH · RMB SWAP · R RESET",
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		9,
@@ -835,3 +849,14 @@ func _draw_poof(p: Dictionary) -> void:
 	var idx := clampi(int(t / POOF_SEC * float(POOF_FRAMES)), 0, POOF_FRAMES - 1)
 	var tex: Texture2D = _poof_frames[idx]
 	draw_texture_rect(tex, rect, false)
+
+func _save_score() -> void:
+	if _score <= 0: return
+	_high_scores.append(_score)
+	_high_scores.sort()
+	_high_scores.reverse()
+	_high_scores = _high_scores.slice(0,5)
+	var cfg := ConfigFile.new()
+	cfg.set_value("scores","top",_high_scores)
+	cfg.save("user://smush_scores.cfg")
+	_score = 0

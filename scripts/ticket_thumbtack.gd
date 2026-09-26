@@ -107,3 +107,9 @@ func _process(delta: float) -> void:
 		sound.play()
 	if t>=1:
 		animating = false
+
+func _draw() -> void:
+	draw_set_transform(Vector2(39,47),0.0,Vector2(1.0,.48))
+	for i in range(5,0,-1):
+		draw_circle(Vector2.ZERO,10.0+float(i)*1.6,Color(0.05,0.025,0.015,.055))
+	draw_set_transform(Vector2.ZERO)

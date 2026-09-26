@@ -99,7 +99,7 @@ func run() -> void:
  for diffuser in fixtures.find_children("EmissiveDiffuser","MeshInstance3D",true,false):
   expect(diffuser.mesh is BoxMesh,"Squared ceiling diffuser")
  game._start_burger_pals_parade("challenge")
- expect(game._parade_presentation.remaining > 14.0,"Fifteen second film effect")
+ expect(game._parade_presentation.remaining > 4.0 and game._parade_presentation.remaining <= 5.0,"Five second film effect")
  expect(game.burger_pals_parade.find_children("ParadeFullCola","",true,false).is_empty(),"No parade drinks")
  expect(game.burger_pals_parade.find_children("ParadeFinishedFries","",true,false).is_empty(),"No parade fries")
  expect(game.challenge_banner.visible,"Small challenge banner at start")
@@ -109,8 +109,8 @@ func run() -> void:
  if DisplayServer.get_name() != "headless":
   await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png("res://build/light_balance_release/vintage_parade.png")
- game._parade_presentation._process(15.0)
- expect(not game._parade_presentation.screen.visible,"Film expires at fifteen seconds")
+ game._parade_presentation._process(5.0)
+ expect(not game._parade_presentation.screen.visible,"Film expires at five seconds")
  await create_timer(.1).timeout
  if DisplayServer.get_name() != "headless":
   await RenderingServer.frame_post_draw

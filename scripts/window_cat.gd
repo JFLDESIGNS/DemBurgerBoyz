@@ -8,7 +8,7 @@ const CAT_COLLISION_LAYER := 128
 const HOME_X := 2.0912
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
 const TUTORIAL_COACH_X := 2.1548
-const HOME_Z := 1.76
+const HOME_Z := 2.01
 ## Under the sill when hidden; peek high enough to clear the ledge.
 const HIDDEN_Y := 0.141
 ## Counter peek lowered by one inch (0.0254 world meters).
@@ -26,7 +26,7 @@ const FAT_MAX := 1.35 ## width chonk cap (~2.35× horizontal)
 const GIANT_MAX := 1.0 ## +100% uniform scale on top of width chonk
 const DEFAULT_SIZE_MUL := 1.20 ## Start 20% bigger; giant max stays 2× MESH_SCALE.
 ## Bigger cats stand further from the truck so they still fit the window.
-const APPROACH_Z_PER_GIANT := 1.65
+const APPROACH_Z_PER_GIANT := 1.90
 const APPROACH_START_EXTRA := 0.55 ## extra street distance at the start of a rise
 ## Face the cook (mesh nose points +Z; yaw 180 looks into the truck).
 const FACE_COOK_YAW := 180.0

@@ -10,12 +10,14 @@ config_version=5
 
 [application]
 
-config/name="Food Truck Flip"
+config/name="Burger Pals"
+config/use_custom_user_dir=true
+config/custom_user_dir_name="Godot/app_userdata/Food Truck Flip"
 config/description="Cook, flip, stack, and serve burgers from your food truck!"
 run/main_scene="res://scenes/boot_intro.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 boot_splash/minimum_display_time=4500
-config/icon="res://icon.svg"
+config/icon="res://assets/ui/burger_pals_icon.svg"
 
 [autoload]
 

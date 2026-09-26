@@ -167,6 +167,7 @@ func run() -> void:
   game._cut_collector_cut_done=false
   game.day_social_reviews=[{"stars":5,"who":"Network Cook","text":"Shared closing recap"}]
   game.day_social_rating_sum=5.0
+  game._record_order_history(20,5,4,null)
   game.mp_end_day.rpc()
   mark("closing",JSON.stringify(game._mp_closed_shift_state()))
   await wait_file("closing_checked")
@@ -194,6 +195,7 @@ func run() -> void:
   var closing: Dictionary=JSON.parse_string(FileAccess.get_file_as_string(output.path_join("closing")))
   for field in game.CLOSED_SHIFT_FIELDS:
    _check(str(game.get(field))==str(closing[field]) or (typeof(game.get(field)) in [TYPE_INT,TYPE_FLOAT] and is_equal_approx(float(game.get(field)),float(closing[field]))),"Closing mismatch: "+field)
+  _check(game.order_history.size()>0 and game.order_history[-1].profit==21.0,"Order history replicated")
   _check(game.day_social_reviews.size()==1 and game.day_social_reviews[0].who=="Network Cook","Day reviews replicated")
   game.mp_shift_closed(closing,0.0)
   _check(is_equal_approx(game.bank_savings,105.0),"Repeated closing must not apply interest twice")

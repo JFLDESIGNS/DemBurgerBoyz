@@ -1406,7 +1406,7 @@ func is_challenge_song_playing() -> bool:
 
 
 func play_challenge_complete_tune() -> void:
-	play_happy_four_note()
+	_play_cached("challenge_victory_jingle", func(): return _make_arpeggio_tune([60,64,67,72,67,69,71,74,72], .17, .30, .45, true), 1.0, .70)
 	_play_announcer_stream("challenge_complete_announcer", "res://sounds/perfect.wav", 0.72)
 
 
@@ -3864,3 +3864,24 @@ func play_customer_angry_wawa(voice: String = "male") -> void:
 		if is_instance_valid(_female_customer_wawa): _female_customer_wawa.pitch_scale = 1.2
 	elif is_instance_valid(_customer_click_wawa):
 		_customer_click_wawa.pitch_scale = GROBBLE_PITCH * 1.2
+
+func play_boss_peek_boing() -> void:
+	_play_cached("boss_peek_boing",func():return _make_comic_pop(true),1.0,.9)
+
+func play_ingredient_plap() -> void:
+	_play_cached("ingredient_plap",func():return _make_comic_pop(false),randf_range(.94,1.08),.60)
+
+func _make_comic_pop(peek: bool) -> AudioStreamWAV:
+	var duration:=.34 if peek else .15
+	var n:=int(MIX_RATE*duration)
+	var pcm:=PackedByteArray()
+	pcm.resize(n*2)
+	var phase:=0.0
+	for i in n:
+		var t:=float(i)/MIX_RATE
+		var frequency:=lerpf(850.0,160.0,t/duration) if peek else lerpf(180.0,55.0,t/duration)
+		phase+=TAU*frequency/MIX_RATE
+		var env:=sin(minf(t/.008,1.0)*PI*.5)*exp(-t*(8.0 if peek else 28.0))
+		var sample:float=(sin(phase+sin(t*65.0)*2.0)*.8 if peek else sin(phase)*.55+randf_range(-1,1)*.45)*env
+		_write_s16(pcm,i,int(clampf(sample,-1,1)*20000.0))
+	return _wav_from_pcm(pcm,false)

@@ -27,6 +27,7 @@ var _wind_left := 12.0
 var _pending_tap := false
 var _rng := RandomNumberGenerator.new()
 var _logical_size := Vector2.ZERO
+var _pin_shadow: MeshInstance3D
 var _thumbtack: Node3D
 var _arrival_age := 0.0
 var _reopening := false
@@ -91,6 +92,19 @@ func setup(wrap: Control, note: Control) -> void:
 	_thumbtack.position = _pin_target
 	_thumbtack.hide()
 	_view.add_child(_thumbtack)
+	_pin_shadow=MeshInstance3D.new()
+	_pin_shadow.name="PinContactShadow"
+	var shadow_plane:=QuadMesh.new()
+	shadow_plane.size=Vector2(.038,.025)
+	_pin_shadow.mesh=shadow_plane
+	var shadow_material:=ShaderMaterial.new()
+	shadow_material.shader=preload("res://shaders/ticket_pin_shadow.gdshader")
+	shadow_material.render_priority=1
+	_pin_shadow.material_override=shadow_material
+	_pin_shadow.position=_pin_target+Vector3(.006,-.009,.0001)
+	_pin_shadow.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_view.add_child(_pin_shadow)
+	_pin_shadow.hide()
 	var environment := Environment.new()
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.ambient_light_color = Color(1.0, 0.95, 0.87)
@@ -184,6 +198,7 @@ func set_active(value: bool) -> void:
 			_header_clearance.custom_minimum_size.y = 22.0
 		_pending_tap = false
 		_thumbtack.hide()
+		_pin_shadow.hide()
 		_model.rotation = Vector3.ZERO
 		position = Vector2.ZERO
 		scale = Vector2.ONE
@@ -293,6 +308,7 @@ func _on_finished(_clip: StringName) -> void:
 		state = &"pin"
 		_arrival_age = 0.0
 		_thumbtack.show()
+		_pin_shadow.show()
 		_pin_impact_fired = false
 		_audio.stream = _pin_whoosh
 		_audio.volume_db = -3.0

@@ -2265,6 +2265,21 @@ func _update_sidewalk_leave(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	var before := global_position
+	_advance_customer(delta)
+	if mp_host_driven:
+		if is_leaving and _mp_target_valid:
+			global_position.x=lerpf(before.x,_mp_target_pos.x,minf(delta*12.0,1.0))
+			global_position.z=lerpf(before.z,_mp_target_pos.z,minf(delta*12.0,1.0))
+			_leave_walk_x=global_position.x
+		return
+	if is_street_pedestrian or is_ragdoll: return
+	var game := get_tree().current_scene
+	if game != null and game.has_method("_crowd_steer"):
+		global_position=game._crowd_steer(self,before,global_position,delta)
+		if is_leaving: _leave_walk_x=global_position.x
+
+func _advance_customer(delta: float) -> void:
 	if bool(get_meta("meal_stepping_aside", false)):
 		_play_anim("walk")
 		_apply_bobble(true)
@@ -2753,6 +2768,7 @@ func _ensure_review_card_nodes() -> void:
 	if _review_card_root == null:
 		_review_card_root = Node3D.new()
 		_review_card_root.name = "ReviewCardRoot"
+		_review_card_root.hide()
 		## Reviews stay in world space so a guest's turn-to-leave animation cannot
 		## swing the card back across the customer.
 		_review_card_root.top_level = true
@@ -3021,11 +3037,16 @@ func _show_treat_hearts() -> void:
 
 
 func leave_happy(do_dance: bool = false) -> void:
+	if has_meta("meal_stars"):
+		do_dance = do_dance and float(get_meta("meal_stars")) >= 4.95
 	if bool(get_meta("burger_in_flight", false)) or int(get_meta("side_food_pending", 0)) > 0:
 		set_meta("burger_pending_departure", Callable(self, "leave_happy").bind(do_dance))
 		return
 	_angry_departure = false
 	_departure_clip = "" if do_dance or is_cut_collector else "Thank_You_Bow"
+	if has_meta("meal_stars") and float(get_meta("meal_stars")) < 3.0:
+		_departure_clip = "Point_Finger_Yell"
+		_angry_departure = true
 	_set_mood("cheer")
 	_clear_antsy_wait_pose()
 	_reset_skeleton_pose()
@@ -3064,9 +3085,9 @@ func leave_closed() -> void:
 		_body.rotation_degrees.x = 0.0
 	if _bubble:
 		_bubble.text = speech
-		_bubble.visible = true
+		_bubble.visible = false
 	if _bubble_bg:
-		_bubble_bg.visible = true
+		_bubble_bg.visible = false
 	if _bar_root:
 		_bar_root.visible = false
 	if _bar_bg:
@@ -3091,7 +3112,8 @@ func leave_meh() -> void:
 		set_meta("burger_pending_departure", Callable(self, "leave_meh").bind())
 		return
 	_angry_departure = false
-	_departure_clip = "Wrong_Order_Shrug"
+	_departure_clip = "Point_Finger_Yell" if float(get_meta("meal_stars",3.0)) < 3.0 else "Wrong_Order_Shrug"
+	_angry_departure = float(get_meta("meal_stars",3.0)) < 3.0
 	## Bland / unseasoned — shrug and walk off camera-left. Paid base, no tip energy.
 	_set_mood("ok")
 	_clear_antsy_wait_pose()
@@ -3120,9 +3142,9 @@ func leave_heck() -> void:
 	_play_anim("idle")
 	if _bubble:
 		_bubble.text = speech
-		_bubble.visible = not _review_card_is_showing()
+		_bubble.visible = false
 	if _bubble_bg:
-		_bubble_bg.visible = true
+		_bubble_bg.visible = false
 	if _bar_root:
 		_bar_root.visible = false
 	if _bar_bg:
@@ -3222,7 +3244,7 @@ func _begin_powder_stand() -> void:
 		_body.rotation_degrees = Vector3.ZERO
 	if _bubble:
 		_bubble.text = speech
-		_bubble.visible = true
+		_bubble.visible = false
 	if _bubble_bg:
 		_bubble_bg.visible = false
 	if _bar_root:
@@ -3294,7 +3316,7 @@ func leave_powdered() -> void:
 		_body.position.y = _base_body_y
 	if _bubble:
 		_bubble.text = speech
-		_bubble.visible = not _review_card_is_showing()
+		_bubble.visible = false
 	if _bubble_bg:
 		_bubble_bg.visible = false
 	if _bar_root:
@@ -4091,6 +4113,8 @@ func _drop_stuck_food_card(card: MeshInstance3D) -> void:
 
 
 func receive_stuck_food(id: String, tex: Texture2D, hit_world: Vector3, zone: String = "body") -> void:
+	var game := get_tree().current_scene
+	if game != null and game.get("game_audio") != null: game.game_audio.play_ingredient_plap()
 	## Small food cards hit varied spots across the front of the head, hold long
 	## enough to read, then slide down the face before gravity takes them away.
 	var root := _ensure_stuck_food_root()

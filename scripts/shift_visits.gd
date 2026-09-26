@@ -118,18 +118,18 @@ func show_profit(payout: float, cost: float) -> void:
   profit_label.z_as_relative = false
   game.get_node("UI/Root").add_child(profit_label)
   profit_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-  profit_label.offset_left = -440
-  profit_label.offset_right = -20
-  profit_label.offset_top = 115
-  profit_label.offset_bottom = 205
+  profit_label.offset_left = -770
+  profit_label.offset_right = -245
+  profit_label.offset_top = 40
+  profit_label.offset_bottom = 66
   profit_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
   profit_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-  game.UiFontsScript.apply_label(profit_label,true,21)
+  game.UiFontsScript.apply_label(profit_label,true,17)
   profit_label.add_theme_color_override("font_outline_color",Color(0,0,0,.8))
-  profit_label.add_theme_constant_override("outline_size",5)
+  profit_label.add_theme_constant_override("outline_size",2)
  if profit_tween: profit_tween.kill()
- profit_label.text = "ORDER PROFIT  %s\nPaid %s  -  ingredients %s" % [game._format_money(payout-cost),game._format_money(payout),game._format_money(cost)]
- profit_label.add_theme_color_override("font_color",Color("A5F0A0") if payout>=cost else Color("FF8A80"))
+ profit_label.text = "Profit %s  ·  Paid %s  ·  Cost %s" % [game._format_money(payout-cost),game._format_money(payout),game._format_money(cost)]
+ profit_label.add_theme_color_override("font_color",Color("BFE8C5") if payout>=cost else Color("F1C58E"))
  profit_label.modulate.a = 1.0
  profit_label.show()
  profit_tween = create_tween()
@@ -185,11 +185,13 @@ func boss_peek(style: int) -> void:
    visit.rotation_degrees.z = 180.0
  visit.set_meta("peek_style",style)
  visit.position = tucked
+ if game.game_audio != null: game.game_audio.play_boss_peek_boing()
  visit_tween = create_tween()
- visit_tween.tween_property(visit,"position",target,.6).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
- visit_tween.tween_callback(func(): game._play_boss_arrive_sound())
+ visit_tween.tween_property(visit,"position",target,.30).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+ visit_tween.tween_callback(func():
+  if randf() < .45: game._play_boss_arrive_sound())
  visit_tween.tween_interval(2.4)
- visit_tween.tween_property(visit,"position",tucked,.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+ visit_tween.tween_property(visit,"position",tucked,.30).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
  visit_tween.tween_callback(visit.queue_free)
 
 
@@ -203,6 +205,8 @@ func _update_boss_gaze(delta: float) -> void:
  var yaw := clampf(atan2(-direction.x,-direction.z),-gaze_limit,gaze_limit)
  var pitch_limit: float = .10 if int(visit.get_meta("peek_style",-1)) == 0 else .28
  var pitch := clampf(atan2(direction.y,Vector2(direction.x,direction.z).length()),-pitch_limit,pitch_limit)
+ pitch += sin(Time.get_ticks_msec() * .0029) * .07
+ yaw += sin(Time.get_ticks_msec() * .0021) * .09
  gaze.rotation.x = lerp_angle(gaze.rotation.x,pitch,minf(delta*8.0,1.0))
  gaze.rotation.y = lerp_angle(gaze.rotation.y,yaw,minf(delta*8.0,1.0))
 

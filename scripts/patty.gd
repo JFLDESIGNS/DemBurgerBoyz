@@ -484,6 +484,7 @@ func reset_for_grill_spawn(
 	p_heating: bool,
 	p_mp_puppet: bool
 ) -> void:
+	if has_meta("build_heat_started_ms"): remove_meta("build_heat_started_ms")
 	if _done_jump_tw != null and is_instance_valid(_done_jump_tw):
 		_done_jump_tw.kill()
 	_done_jump_tw = null

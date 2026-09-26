@@ -319,6 +319,8 @@ var _challenge_time_left: float = 0.0
 var _challenge_time_max: float = 180.0
 var _challenge_roll_timer: float = CHALLENGE_INTERVAL_DEFAULT
 var _challenge_attach_next: bool = false
+var _challenge_cook_total := 0.0
+var _challenge_cook_count := 0
 var _challenge_bonus_tip: int = 0
 var challenge_overlay: ColorRect = null
 var challenge_title_label: Label = null
@@ -464,6 +466,10 @@ var active_station: int = 0
 var selected_customer = null
 var tickets: Dictionary = {}
 var total_served: int = 0
+var order_history: Array = []
+var order_history_revision := 0
+var _perfect_reward_milestone := 0
+var _order_insights: Node
 var perfect_serves: int = 0
 var rush_mode: bool = false
 var slot_positions: Array[Vector3] = []
@@ -2447,7 +2453,7 @@ const BUILD_HIT_PAD_LEFT := 10.0
 const BUILD_HIT_PAD_TOP := 28.0 ## was 180 — only a little above the plate
 const BUILD_HIT_PAD_RIGHT := 10.0
 const BUILD_HIT_PAD_BOTTOM := 8.0
-const BUILD_TITLE_TEXT := "DRAG PATTY HERE"
+const BUILD_TITLE_TEXT := ""
 ## Screen nudge on the cutting-board Label3D (+X right, +Y down).
 const BUILD_BOARD_HINT_SCREEN_NUDGE := Vector2(30.0, 20.0) ## was 20,20 — +10px right
 ## Shared Luckiest Guy world hints (DRAG PATTY HERE + fryer) — 1.5× prior board size.
@@ -2917,7 +2923,7 @@ const SODA_TANK_SYRUP_REFILL := 0.65 ## One syrup order restores this much tank 
 const SODA_TANK_MAX_H := 0.245
 const SODA_TANK_FLOOR_Y := -0.1275 ## Bottom of syrup cylinder inside the glass
 ## Burger Pals brand mark — left front wall (camera-left = world +X).
-const PHONE_LOGO_TEX_PATH := "res://assets/ui/phone_burger_pals_logo.png"
+const PHONE_LOGO_TEX_PATH := "res://assets/ui/burger_pals_letter_mask.png"
 const LOGO_TEX_PATH := "res://assets/decal/burger_pals_logo.png"
 const START_LOGO_TEX_PATH := "res://assets/decal/opening_truck.png"
 const STREET_BG_ORIGINAL_PATH := "res://assets/bg/street_window.png"
@@ -3737,6 +3743,11 @@ func _build_gameplay_loading_screen() -> void:
 	overlay.add_child(lettering)
 	# Multiply the complete composition, including video and typography.
 	overlay.modulate = Color.WHITE
+	var progress:=preload("res://scripts/kitchen_loading_progress.gd").new()
+	progress.name="KitchenLoadingProgress"
+	progress.game=self
+	overlay.add_child(progress)
+	progress.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_gameplay_load_overlay = overlay
 
 
@@ -3744,6 +3755,8 @@ func _show_gameplay_loading_screen() -> void:
 	if game_audio != null: game_audio.cat_sounds_muted = true
 	_set_phone_in_truck(false)
 	_build_gameplay_loading_screen()
+	set_meta("loading_phase","video_playback")
+	_gameplay_load_overlay.get_node("KitchenLoadingProgress").bar.value=0
 	_gameplay_load_overlay.show()
 	_gameplay_load_overlay.move_to_front()
 	_loading_video.call("hold_frame")
@@ -5378,10 +5391,11 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	_reset_cut_collector_shift(true)
 	combo = 0
 	day = 1
-	day_time = GUIDED_TUTORIAL_DURATION if tutorial_mode else DAY_LENGTH
+	day_time = GUIDED_TUTORIAL_DURATION if tutorial_mode else _shift_length()
 	difficulty = 0.0
 	total_served = 0
 	perfect_serves = 0
+	_perfect_reward_milestone = 0
 	spawn_timer = 99999.0 if tutorial_mode else _first_customer_delay()
 	_reset_bts_day1_flow()
 	_reset_challenge_state(true)
@@ -5454,10 +5468,11 @@ func _restart() -> void:
 	_set_phone_in_truck(true)
 	day = 1 ## Kept for save/network compatibility; location now owns progression.
 	combo = 0
-	day_time = DAY_LENGTH
+	day_time = _shift_length()
 	difficulty = 0.0
 	total_served = 0
 	perfect_serves = 0
+	_perfect_reward_milestone = 0
 	spawn_timer = _first_customer_delay()
 	if day == 1:
 		_reset_bts_day1_flow()
@@ -5792,7 +5807,7 @@ func _process_gameplay(delta: float) -> void:
 		day_time -= delta
 		if day_time < 0.0:
 			day_time = 0.0
-	var day_progress := 1.0 - clampf(day_time / DAY_LENGTH, 0.0, 1.0)
+	var day_progress := 1.0 - clampf(day_time / _shift_length(), 0.0, 1.0)
 	var location_stats := _location_stats()
 	difficulty = clampf(
 		float(location_stats.get("order_base", 0.0))
@@ -6045,7 +6060,17 @@ func _location_stats() -> Dictionary:
 	return TruckLocationsScript.stats_for(current_location_id)
 
 
+func _shift_length() -> float:
+	return 1200.0 if day == 1 else DAY_LENGTH
+
+
 func _customer_cap() -> int:
+	if day == 1 and not tutorial_mode:
+		var elapsed := _shift_length() - day_time
+		if day_time <= 300.0: return 3
+		if elapsed >= _shift_length() * .5: return 2
+		if elapsed >= 300.0 and elapsed < 390.0: return 2
+		return 1
 	return clampi(int(_location_stats().get("customer_cap", 1)), 1, MAX_CUSTOMERS)
 
 
@@ -6063,7 +6088,7 @@ func _waiting_customer_count() -> int:
 
 
 func _next_spawn_delay() -> float:
-	var day_progress := 1.0 - clampf(day_time / DAY_LENGTH, 0.0, 1.0)
+	var day_progress := 1.0 - clampf(day_time / _shift_length(), 0.0, 1.0)
 	var stats := _location_stats()
 	return lerpf(
 		float(stats.get("spawn_start", 25.0)),
@@ -17586,7 +17611,7 @@ func _build_grill_roomba() -> void:
 	world.add_child(grill_roomba_root)
 	_reset_grill_roomba()
 
-	grill_roomba_body_mat = _make_basic_mat(Color(0.015, 0.018, 0.022), 0.78, 0.28)
+	grill_roomba_body_mat = _make_basic_mat(Color(0.15, 0.18, 0.21), 0.62, 0.20)
 	grill_roomba_led_mat = _make_basic_mat(Color(0.18, 1.0, 0.24), 0.0, 0.22)
 	grill_roomba_led_mat.emission_enabled = true
 	grill_roomba_led_mat.emission = Color(0.08, 1.0, 0.18)
@@ -17615,7 +17640,7 @@ func _build_grill_roomba() -> void:
 	bumper.material_override = _make_basic_mat(Color(0.005, 0.006, 0.008), 0.1, 0.62)
 	grill_roomba_root.add_child(bumper)
 
-	var face_panel_mat:= _make_basic_mat(Color(0.002, 0.004, 0.004), 0.92, 0.06)
+	var face_panel_mat:= _make_basic_mat(Color(0.085, 0.11, 0.13), 0.65, 0.16)
 	face_panel_mat.clearcoat_enabled = true
 	face_panel_mat.clearcoat = 0.35
 	face_panel_mat.clearcoat_roughness = 0.46
@@ -17631,6 +17656,7 @@ func _build_grill_roomba() -> void:
 	face_panel.material_override = face_panel_mat
 	grill_roomba_root.add_child(face_panel)
 
+	_add_roomba_top_highlights(grill_roomba_root)
 	_add_roomba_pixel_smile(grill_roomba_root)
 
 	var side_led_mat:= _make_basic_mat(Color(1.0, 0.08, 0.04), 0.0, 0.18)
@@ -17685,6 +17711,33 @@ func _build_grill_roomba() -> void:
 	grill_roomba_area.add_child(grab_shape)
 	grill_roomba_root.add_child(grill_roomba_area)
 	_apply_machine_unlock_visibility()
+
+
+func _add_roomba_top_highlights(parent: Node3D) -> void:
+	# Painted cartoon reflections remain readable in the phone's miniature preview.
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color("E5EFF0")
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for arc in [Vector2(195, 265), Vector2(275, 295)]:
+		var mesh := ImmediateMesh.new()
+		mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+		for i in 20:
+			var points: Array[Vector3] = []
+			for j in [i, i+1]:
+				var t := float(j)/20.0
+				var angle := deg_to_rad(lerpf(arc.x,arc.y,t))
+				var width := ROOMBA_RADIUS * .045 * sin(PI*t)
+				for radius in [ROOMBA_RADIUS*.78-width, ROOMBA_RADIUS*.78+width]:
+					points.append(Vector3(cos(angle)*radius, ROOMBA_HEIGHT*.62+.007, sin(angle)*radius))
+			for k in [0,1,2,1,3,2]: mesh.surface_add_vertex(points[k])
+		mesh.surface_end()
+		var streak := MeshInstance3D.new()
+		streak.name = "ToonTopReflection"
+		streak.mesh = mesh
+		streak.material_override = mat
+		streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(streak)
 
 
 func _add_roomba_pixel_smile(parent: Node3D) -> void:
@@ -21493,7 +21546,10 @@ func _credit_ticket_payout(pay: Dictionary, payout: int, customer: Node3D = null
 		_achievement_event("orders")
 		_achievement_event("earnings", float(payout))
 		_achievement_event("tips", float(tip))
+	if is_instance_valid(customer) and not customer.has_meta("order_perfect"):
+		customer.set_meta("order_perfect",bool(pay.get("perfect",false)))
 	var food_cost := _order_food_cost(customer) if base > 0 else 0.0
+	_record_order_history(base,tip,food_cost,customer)
 	_show_order_profit(float(payout), food_cost)
 	if mp_enabled and NetManager.is_host():
 		mp_order_profit.rpc(float(payout), food_cost)
@@ -24938,7 +24994,7 @@ func _rebuild_condiment_spline_batch(item: Dictionary) -> void:
 	slick.position = center
 	if bool(item.get("smeared", false)):
 		slick.mesh = _make_surface_condiment_smear_batch_mesh(
-			segments, tube_radius, center, str(item.get("flavor", ""))
+			segments, tube_radius, center, str(item.get("flavor", "")), float(item.get("scrape",1.0))
 		)
 	else:
 		slick.mesh = _make_surface_condiment_ribbon_batch_mesh(segments, tube_radius, center)
@@ -25178,7 +25234,7 @@ func _apply_condiment_smear_material(mat: StandardMaterial3D, flavor: String, va
 
 
 func _make_surface_condiment_smear_batch_mesh(
-	segments: PackedVector3Array, radius: float, origin: Vector3, flavor: String = ""
+	segments: PackedVector3Array, radius: float, origin: Vector3, flavor: String = "", remaining: float = 1.0
 ) -> ArrayMesh:
 	## One flat strip plus two rounded batch-end caps preserves the scraped smoosh.
 	var mesh := ArrayMesh.new()
@@ -25206,8 +25262,8 @@ func _make_surface_condiment_smear_batch_mesh(
 		var flat_dir := chord.normalized()
 		var side := Vector3(-flat_dir.z, 0.0, flat_dir.x)
 		var phase := float(pair_i) * 1.618
-		var width_from := maxf(radius * (width_from_mul + sin(phase) * (0.55 if ketchup else 0.18)), min_from)
-		var width_to := maxf(radius * (width_to_mul + cos(phase * 1.31) * (0.62 if ketchup else 0.20)), min_to)
+		var width_from := maxf(radius * 2.1, .009) * remaining
+		var width_to := maxf(radius * 2.1, .009) * remaining
 		var base := verts.size()
 		verts.append_array(PackedVector3Array([
 			from_local - side * width_from,
@@ -25286,7 +25342,7 @@ func _convert_condiment_batch_to_smear(item: Dictionary) -> void:
 	_rebuild_condiment_spline_batch(item)
 	var mat := slick.material_override as StandardMaterial3D
 	if mat:
-		_apply_condiment_smear_material(mat, flavor, int(item.get("smear_tex", 0)))
+		mat.albedo_texture=null
 		mat.metallic = 0.0
 		mat.roughness = 0.44
 		mat.clearcoat_enabled = true
@@ -25472,7 +25528,7 @@ func _apply_cooked_smear_look(item: Dictionary) -> void:
 		mat.roughness = 0.96
 		mat.clearcoat_enabled = false
 		mat.emission_enabled = false
-		mat.albedo_texture = _get_condiment_smear_texture(int(item.get("smear_tex", 0)))
+		mat.albedo_texture = null
 		return
 	mat.albedo_color = fresh.lerp(black, smoothstep(0.08, 1.0, burn))
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
@@ -25688,7 +25744,7 @@ func _update_soda_slicks(delta: float) -> void:
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			if smeared:
 				if charred:
-					mat.albedo_texture = _get_condiment_smear_texture(int(item.get("smear_tex", 0)))
+					mat.albedo_texture = null
 					mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 					mat.alpha_scissor_threshold = 0.08
 					mat.albedo_color = Color(0.03, 0.025, 0.02, 1.0)
@@ -25697,7 +25753,7 @@ func _update_soda_slicks(delta: float) -> void:
 					mat.clearcoat_enabled = false
 					mat.emission_enabled = false
 				else:
-					mat.albedo_texture = _get_condiment_smear_texture(int(item.get("smear_tex", 0)))
+					mat.albedo_texture = null
 					mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 					mat.alpha_scissor_threshold = lerpf(0.05, 0.04, burn)
 					var smear_col: Color = item.get("base_col", Color(0.28, 0.08, 0.05))
@@ -28816,7 +28872,7 @@ func _scrape_condiment_fx_meshes(arr: Array, pos: Vector3, reach: float) -> bool
 func _scrape_slick_array(
 	arr: Array, pos: Vector3, move_xz: Vector2, moved: float, reach: float, sync_kind: String = ""
 ) -> bool:
-	var hit_any := false
+	var hit_any := _scrape_local_sauce(pos,move_xz,minf(reach,.10)) if sync_kind=="soda" and moved>.0008 else false
 	var i := 0
 	while i < arr.size():
 		var item: Dictionary = arr[i]
@@ -28840,25 +28896,7 @@ func _scrape_slick_array(
 			continue
 		hit_any = true
 		if bool(item.get("surface_spline", false)):
-			var flavor: String = str(item.get("flavor", "ketchup"))
-			var charred_sauce: bool = bool(item.get("charred", false))
-			var cut_r: float = maxf(0.028, reach * 0.55)
-			var cut_n: int = _condiment_cut_segments_near(item, pos, cut_r)
-			if cut_n > 0:
-				if charred_sauce:
-					_spawn_condiment_burnt_chunks(pos, flavor)
-				else:
-					_spawn_condiment_contact_smear(pos, move_xz, flavor, float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS)))
-				if mp_enabled and not _mp_applying:
-					mp_condiment_cut.rpc(pos.x, pos.z, cut_r, flavor)
-			var left_pts: PackedVector3Array = item.get("spline_segments", PackedVector3Array())
-			if left_pts.size() < 2:
-				var leftover = item.get("mesh")
-				if leftover != null and is_instance_valid(leftover):
-					leftover.queue_free()
-				arr.remove_at(i)
-				continue
-			i += 1
+			i+=1
 			continue
 		scrape = maxf(0.08, scrape - moved * 3.4)
 		item["scrape"] = scrape
@@ -28951,7 +28989,10 @@ func _mp_apply_soda_slick_scrape(
 		_convert_condiment_batch_to_smear(item)
 	scrape = clampf(scrape, 0.08, 1.0)
 	item["scrape"] = scrape
-	mesh.scale = Vector3(scrape, 1.0, scrape)
+	if bool(item.get("surface_spline",false)):
+		item["scrape_passes"]=int(round((1.0-scrape)*3.0))
+		_rebuild_condiment_spline_batch(item)
+	else: mesh.scale = Vector3(scrape, 1.0, scrape)
 	var mat := mesh.material_override as StandardMaterial3D
 	if mat:
 		var c := mat.albedo_color
@@ -30770,6 +30811,7 @@ func _update_background_people(delta: float) -> void:
 			_start_background_person(i)
 			continue
 		var dir: float = float(bg_people_dir[i])
+		var crowd_before: Vector3=walker.global_position
 		walker.position.x += dir * float(bg_people_speed[i]) * speed_mul * delta
 		walker.position.y = y
 		var person_z := z
@@ -30786,6 +30828,7 @@ func _update_background_people(delta: float) -> void:
 		## Smaller Z is toward the truck / camera.
 		person_z -= BG_PEOPLE_PASS_Z * blend
 		walker.position.z = person_z
+		if not mp_enabled or NetManager.is_host(): walker.global_position=_crowd_steer(walker,crowd_before,walker.global_position,delta)
 		var finished: bool = (
 			dir > 0.0 and walker.position.x > BG_PEOPLE_EDGE_X
 		) or (
@@ -33885,6 +33928,7 @@ func _build_soda_station() -> void:
 
 	var root := Node3D.new()
 	root.name = "SodaStation"
+	root.scale=Vector3.ONE*1.1
 	root.position = soda_station_pos
 	root.rotation_degrees = Vector3(0.0, soda_station_yaw, 0.0)
 	world.add_child(root)
@@ -33924,6 +33968,9 @@ func _build_soda_station() -> void:
 	_refresh_soda_tuning_debug_visuals()
 
 	_build_soda_cup_rack(root)
+	var order_arrow=preload("res://scripts/soda_order_arrow.gd").new()
+	order_arrow.game=self
+	root.add_child(order_arrow)
 	_refresh_soda_flavor_lights()
 	_sync_refined_soda_visual()
 	_rebuild_soda_fill_ghosts()
@@ -35238,7 +35285,7 @@ func _build_fryer_machine() -> void:
 
 	var label := Label3D.new()
 	label.name = "FryerHint"
-	label.text = "click basket to add potatoes"
+	label.text = "1. CLICK: ADD FRIES"
 	label.position = Vector3(0.0, 0.18, FRYER_OIL_LOCAL.z + 0.02)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -35247,6 +35294,9 @@ func _build_fryer_machine() -> void:
 	label.fixed_size = true
 	## Match DRAG PATTY HERE — Luckiest Guy, stroke, 70% alpha, soft fade.
 	_style_world_hint_label(label)
+	label.font=preload("res://assets/fonts/Fredoka-SemiBold.ttf")
+	label.modulate=Color("FFF0C6")
+	label.outline_size=5
 	root.add_child(label)
 	fryer_label = label
 	call_deferred("_nudge_fryer_hint_down")
@@ -35344,13 +35394,13 @@ func _refresh_fryer_hint_label() -> void:
 			has_cooking = true
 		elif st == "raw":
 			has_raw = true
-	var next := "click basket to add potatoes"
+	var next := "1. CLICK: ADD FRIES"
 	if has_done:
-		next = "click to shake · drag to shake by hand"
+		next = "3. CLICK: SHAKE"
 	elif has_cooking:
-		next = "cooking fries..."
+		next = "WAIT... FRYING"
 	elif has_raw:
-		next = "click to dunk · hold and drag for manual"
+		next = "2. CLICK: DUNK"
 	if fryer_label.text != next:
 		fryer_label.text = next
 
@@ -35587,9 +35637,9 @@ func _make_cylinder_label_mesh(
 
 func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
 	## Burger Pals mark wrapped around the cook-facing side of the fry cup.
-	if not ResourceLoader.exists(LOGO_TEX_PATH):
+	if not ResourceLoader.exists(PHONE_LOGO_TEX_PATH):
 		return
-	var tex := load(LOGO_TEX_PATH) as Texture2D
+	var tex := load(PHONE_LOGO_TEX_PATH) as Texture2D
 	if tex == null:
 		return
 	## AABB is already in pack space (includes holder scale + seat offset).
@@ -35618,19 +35668,10 @@ func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
 		0.00035
 	)
 	logo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	mat.albedo_texture = tex
-	mat.albedo_color = Color(0.82, 0.74, 0.68, 0.66)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
-	mat.roughness = 0.64
-	mat.metallic = 0.0
-	mat.clearcoat_enabled = false
-	mat.rim_enabled = false
-	mat.render_priority = 5
+	var mat := ShaderMaterial.new()
+	mat.shader=preload("res://shaders/brand_lettering_cup.gdshader")
+	mat.set_shader_parameter("mask_tex",tex)
+	mat.render_priority=5
 	logo.material_override = mat
 	pack.add_child(logo)
 
@@ -37177,6 +37218,7 @@ func _ray_hits_icecream_rack(screen_pos: Vector2) -> bool:
 
 
 func _icecream_click_should_win(screen_pos: Vector2) -> bool:
+	if is_instance_valid(icecream_cone_root) and bool(icecream_cone_root.get_meta("auto_fill_travel",false)): return false
 	if not _owns_icecream_machine():
 		return false
 	## Prefer cone / nest grabs over neighboring soda tanks — ray under cursor only.
@@ -37186,6 +37228,7 @@ func _icecream_click_should_win(screen_pos: Vector2) -> bool:
 
 
 func _begin_icecream_cone_hold() -> bool:
+	if is_instance_valid(icecream_cone_root) and bool(icecream_cone_root.get_meta("auto_fill_travel",false)): return false
 	if not playing or icecream_cone_held:
 		return false
 	if not _owns_icecream_machine():
@@ -37417,6 +37460,7 @@ func _cone_click_was_tap() -> bool:
 
 
 func _dispense_cone_to_fill_station() -> bool:
+	if is_instance_valid(icecream_cone_root) and bool(icecream_cone_root.get_meta("auto_fill_travel",false)): return true
 	if not playing or icecream_cone_held:
 		return false
 	if not _owns_icecream_machine():
@@ -37446,17 +37490,25 @@ func _dispense_cone_to_fill_station() -> bool:
 	_icecream_parked_filling = false
 	_icecream_fill_soft_lock = false
 	icecream_cone_root.visible = true
-	icecream_cone_root.global_position = seat
+	var travelling_cone := icecream_cone_root
+	travelling_cone.set_meta("auto_fill_travel",true)
+	var flight := create_tween()
+	flight.tween_property(travelling_cone,"global_position",seat,.28).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	flight.tween_callback(func():
+		if not is_instance_valid(travelling_cone): return
+		travelling_cone.remove_meta("auto_fill_travel")
+		if travelling_cone==icecream_cone_root and playing: _start_parked_icecream_fill()
+	)
 	icecream_cone_root.rotation_degrees = Vector3(-9.0, 8.0, 0.0)
 	icecream_cone_root.set_meta("on_steel", false)
 	icecream_cone_area = icecream_cone_root.get_node_or_null("ConeGrab") as Area3D
 	if icecream_cone_area != null:
-		icecream_cone_area.input_ray_pickable = true
+		icecream_cone_area.input_ray_pickable = false
 	if game_audio:
 		if game_audio.has_method("play_rack_take"):
 			game_audio.play_rack_take()
 		game_audio.play_click()
-	_flash("Click or grab the cone to fill", Color("FFF3B0"))
+	_flash("Cone in. Filling!", Color("FFF3B0"))
 	return true
 
 
@@ -38089,6 +38141,7 @@ func _complete_icecream_only_serve(customer: Node3D = null) -> void:
 		total_served += 1
 		combo += 1
 		perfect_serves += 1
+		_check_perfect_rewards.call_deferred()
 	_flash("+%s  ICE CREAM!" % _format_money(float(payout)), Color("FFF3B0"))
 	if not guest_mp:
 		_maybe_record_social_review(4.4, "good", int(pay.get("tip", 0)), -1, cust)
@@ -39143,7 +39196,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 	var stack_mat := _make_cup_stack_prop_material()
 	var rim_mat := stack_mat.duplicate() as StandardMaterial3D
-	rim_mat.albedo_color.a = 0.48
+	rim_mat.albedo_color = Color("FFF9E9")
 	rim_mat.roughness = 0.30
 	var shell_y := float(spare_count) * nest_step
 	var stack_shell := MeshInstance3D.new()
@@ -40089,10 +40142,10 @@ func _make_cup_stack_prop_material() -> StandardMaterial3D:
 	## A single lightly frosted shell; unlike the previous four opaque bodies it
 	## lets the machine/background read through without nested alpha artifacts.
 	var mat := StandardMaterial3D.new()
-	mat.resource_name = "CupStackClearPlastic"
-	mat.albedo_color = Color(0.91, 0.95, 1.0, 0.18)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.roughness = 0.30
+	mat.resource_name = "CupStackFrostedPlastic"
+	mat.albedo_color = Color("E7E6D8")
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	mat.roughness = 0.38
 	mat.metallic = 0.0
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
@@ -47043,7 +47096,7 @@ func _update_held_condiment(delta: float) -> void:
 		condiment_tool_held = ""
 		return
 	var mouse := get_viewport().get_mouse_position()
-	if condiment_tool_pouring and _condiment_hold_at_far_extent(mouse):
+	if condiment_tool_pouring and (_condiment_hold_at_far_extent(mouse) or not _find_customer_under_ext_spray(CONDIMENT_CUSTOMER_SPRAY_PX).is_empty()):
 		var hold := _tool_hold_point_from_screen(
 			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_HOLD_Z_MAX
 		)
@@ -47169,7 +47222,7 @@ func _update_held_condiment_on_customer(
 	_condiment_customer_splat_cool -= delta
 	if _condiment_customer_splat_cool > 0.0:
 		return
-	_condiment_customer_splat_cool = 0.08
+	_condiment_customer_splat_cool = 0.20
 	_splat_condiment_on_customer(cust, condiment_tool_held, zone)
 	if mp_enabled and not _mp_applying:
 		var nid := _customer_net_id(cust)
@@ -47183,7 +47236,26 @@ func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) ->
 	if not cust.has_method("receive_sauce"):
 		return
 	var tint: Color = KETCHUP_SMEAR_COLOR if flavor == "ketchup" else SODA_FLAVOR_COLORS.get(flavor, Color("F2B51D"))
-	cust.call("receive_sauce", flavor, _get_condiment_smear_texture(randi()), tint, zone)
+	var target: Vector3=cust.global_position+Vector3(0,.9,0)
+	if zone=="face": target=_customer_head_world(cust)
+	var bottle: Node3D=condiment_bottle_roots.get(flavor)
+	var origin: Vector3=bottle.global_position if is_instance_valid(bottle) else target+Vector3(0,-.2,-1)
+	var blob:=MeshInstance3D.new()
+	var ball:=SphereMesh.new()
+	ball.radius=.025;ball.height=.05
+	blob.mesh=ball
+	var material:=StandardMaterial3D.new()
+	material.albedo_color=tint;material.roughness=.3
+	blob.material_override=material
+	world.add_child(blob);blob.global_position=origin
+	var flight:=create_tween()
+	flight.tween_property(blob,"global_position",target,.22)
+	flight.tween_callback(func():
+		blob.queue_free()
+		if is_instance_valid(cust):
+			cust.call("receive_sauce",flavor,_get_condiment_smear_texture(0),tint,zone)
+			if game_audio!=null: game_audio.play_ingredient_plap()
+	)
 	if randf() > 0.28:
 		return
 	var impatience := 0.45
@@ -48560,13 +48632,14 @@ func _build_phone_lock_screen() -> void:
 	_phone_lock_screen.offset_bottom = -22
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("102e34")
-	style.border_color = Color("d5a74b")
-	style.set_border_width_all(2)
+	style.border_color = Color(.65,.72,.72,.25)
+	style.set_border_width_all(1)
 	style.set_corner_radius_all(16)
 	for state in ["normal", "hover", "pressed", "focus"]:
 		_phone_lock_screen.add_theme_stylebox_override(state, style)
 	var logo := TextureRect.new()
 	logo.texture = load(PHONE_LOGO_TEX_PATH)
+	logo.material = _brand_lettering_ui_material()
 	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -49387,7 +49460,7 @@ func _commit_social_review(
 		]
 		who = cat_names[randi() % cat_names.size()]
 	var text := SocialReviewsScript.generate(stars, kind, tip)
-	var bts_review := _bts_review_for_customer(customer)
+	var bts_review: Dictionary = {} # Order evidence determines the review, including special guests.
 	if not bts_review.is_empty():
 		who = str(bts_review.get("who", who))
 		text = str(bts_review.get("text", text))
@@ -49419,6 +49492,21 @@ func _commit_social_review(
 		var stored = customer.get_meta("serve_breakdown", {})
 		if typeof(stored) == TYPE_DICTIONARY:
 			breakdown = (stored as Dictionary).duplicate(true)
+	if not breakdown.is_empty() and kind not in ["spray", "cat_burnt"]:
+		text = "My order: %s accuracy, %s, %s seasoning, %s freshness. %s. %s" % [breakdown.get("accuracy","—"), breakdown.get("doneness","—"), breakdown.get("seasoning","—"), breakdown.get("freshness","—"), breakdown.get("speed","—"), "I'd come back!" if stars >= 4.0 else ("Please get my next order right." if stars < 3.0 else "Okay, but there's room to improve.")]
+	if is_instance_valid(customer):
+		customer.set_meta("sales_review",text)
+		customer.set_meta("meal_stars",stars)
+		var sale_number := int(customer.get_meta("sales_number",-1))
+		for row in order_history:
+			if int(row.number) == sale_number:
+				row["review"] = text
+				row["stars"] = stars
+				row["stats"] = breakdown
+				row["photo"] = customer.get_meta("sales_photo",PackedByteArray())
+		order_history_revision += 1
+		if mp_enabled: mp_order_history.rpc(order_history,order_history_revision)
+		if is_instance_valid(_order_insights): _order_insights.refresh()
 	_apply_social_review(stars, who, text, pic, false, breakdown)
 	## Retain the one compressed copy used by multiplayer feed snapshots.
 	if not pic_png.is_empty() and not social_reviews.is_empty():
@@ -49464,9 +49552,10 @@ func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
 	ui.add_child(_review_toast)
 	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	_review_toast.offset_left=-850;_review_toast.offset_right=-610
-	_review_toast.offset_top=112;_review_toast.offset_bottom=112
+	_review_toast.offset_top=142;_review_toast.offset_bottom=142
 	var skin := StyleBoxFlat.new()
-	skin.bg_color=Color("192b36");skin.border_color=Color("e9bc5a")
+	skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F")
+	skin.shadow_color=Color(0.18,.10,.04,.25);skin.shadow_size=5
 	skin.set_border_width_all(2);skin.set_corner_radius_all(9)
 	skin.content_margin_left=10;skin.content_margin_right=10;skin.content_margin_top=7;skin.content_margin_bottom=7
 	_review_toast.add_theme_stylebox_override("panel",skin)
@@ -49474,7 +49563,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
 	copy.max_lines_visible=3;copy.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
 	copy.text="%s  %.1f / 5\n%s" % ["★".repeat(clampi(roundi(stars),0,5)),stars,review_text]
 	copy.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
-	copy.add_theme_font_size_override("font_size",14);copy.add_theme_color_override("font_color",Color("fff2cc"))
+	copy.add_theme_font_size_override("font_size",14);copy.add_theme_color_override("font_color",Color("715033"))
 	_review_toast.add_child(copy)
 	_review_toast.modulate.a=0.0
 	_review_toast_tween=_review_toast.create_tween()
@@ -49797,7 +49886,10 @@ func _review_stars_from_serve(
 	var timing_stars := 5.0
 	if wait > 20.0:
 		timing_stars = 5.0 - ceilf((wait - 20.0) / 5.0) * 0.5
-	return clampf(timing_stars, 1.0, 5.0)
+	var food_stars := clampf(float(cook_r.get("stars",3.0)),1.0,5.0)
+	var rating := minf(clampf(timing_stars,1.0,5.0),food_stars * .75 + clampf(quality,0.0,1.0) * 1.25)
+	if meh: rating = minf(rating,2.5)
+	return clampf(roundf(rating * 2.0) / 2.0,1.0,5.0)
 
 
 func _cook_rating_is_burnt(cook_r: Dictionary) -> bool:
@@ -50090,11 +50182,11 @@ func _style_phone_reply_button(btn: Button, accent: Color = Color(0.45, 0.68, 0.
 func _make_phone_section_style(accent: Color) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.07, 0.10, 0.15, 0.96)
-	sb.border_color = Color(accent.r, accent.g, accent.b, 0.55)
-	sb.border_width_left = 2
-	sb.border_width_top = 2
+	sb.border_color = Color(accent.r, accent.g, accent.b, 0.20)
+	sb.border_width_left = 1
+	sb.border_width_top = 1
 	sb.border_width_right = 1
-	sb.border_width_bottom = 3
+	sb.border_width_bottom = 1
 	sb.set_corner_radius_all(16)
 	sb.content_margin_left = 8
 	sb.content_margin_right = 8
@@ -50238,11 +50330,11 @@ func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Co
 	UiFontsScript.apply_luckiest_button(btn, 26)
 	var n := StyleBoxFlat.new()
 	n.bg_color = bg
-	n.border_color = Color(accent.r, accent.g, accent.b, 0.95)
-	n.set_border_width_all(3)
+	n.border_color = Color(accent.r, accent.g, accent.b, 0.32)
+	n.set_border_width_all(1)
 	n.set_corner_radius_all(22)
 	n.shadow_color = Color(0, 0, 0, 0.42)
-	n.shadow_size = 8
+	n.shadow_size = 4
 	n.shadow_offset = Vector2(0, 3)
 	var h := n.duplicate() as StyleBoxFlat
 	h.bg_color = bg.lightened(0.12)
@@ -50261,7 +50353,7 @@ func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Co
 	lab.text = caption
 	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UiFontsScript.apply_luckiest_label(lab, 13)
+	UiFontsScript.apply_label(lab, true, 13)
 	lab.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	wrap.add_child(lab)
 	return wrap
@@ -50290,6 +50382,7 @@ func _on_muvye_cinema_mode(enabled: bool) -> void:
 
 func _set_phone_app(app_id: String) -> void:
 	_phone_app_id = app_id
+	if is_instance_valid(_order_insights): _order_insights.show_app(app_id)
 	if is_instance_valid(achievements) and is_instance_valid(achievements.page):
 		achievements.page.visible = app_id == "achievements"
 		if app_id == "achievements": achievements.refresh_page()
@@ -50327,6 +50420,8 @@ func _set_phone_app(app_id: String) -> void:
 		phone_nav_bar.visible = app_id != "home"
 	if phone_nav_title != null:
 		match app_id:
+			"orders":
+				phone_nav_title.text = "My Sales"
 			"achievements":
 				phone_nav_title.text = "Achievements"
 			"social":
@@ -52464,11 +52559,11 @@ func _build_phone_ui() -> void:
 	body.mouse_filter = Control.MOUSE_FILTER_STOP
 	var body_sb := StyleBoxFlat.new()
 	body_sb.bg_color = Color(0.10, 0.11, 0.14, 1.0)
-	body_sb.border_color = Color(0.62, 0.66, 0.74, 0.95)
-	body_sb.border_width_left = 2
-	body_sb.border_width_right = 2
-	body_sb.border_width_top = 2
-	body_sb.border_width_bottom = 3
+	body_sb.border_color = Color(0.40, 0.45, 0.52, 0.48)
+	body_sb.border_width_left = 1
+	body_sb.border_width_right = 1
+	body_sb.border_width_top = 1
+	body_sb.border_width_bottom = 1
 	body_sb.set_corner_radius_all(PHONE_CORNER_OUTER)
 	body_sb.shadow_color = Color(0, 0, 0, 0.52)
 	body_sb.shadow_size = 14
@@ -52597,6 +52692,7 @@ func _build_phone_ui() -> void:
 		var logo := TextureRect.new()
 		logo.name = "BurgerPalsLogo"
 		logo.texture = load(PHONE_LOGO_TEX_PATH) as Texture2D
+		logo.material = _brand_lettering_ui_material()
 		logo.custom_minimum_size = Vector2(PHONE_LOGO_INNER_W, PHONE_LOGO_DISPLAY_H)
 		logo.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -52612,6 +52708,11 @@ func _build_phone_ui() -> void:
 	icon_grid.add_child(_make_phone_app_icon("achievements", "Achievements", "A", Color(0.4,0.25,0.1), Color("ffd375")))
 	_ensure_achievements()
 	achievements.make_page(v)
+	if not is_instance_valid(_order_insights):
+		_order_insights = preload("res://scripts/order_insights.gd").new()
+		add_child(_order_insights)
+		_order_insights.setup(self, v)
+	icon_grid.add_child(_make_phone_app_icon("orders", "My Sales", "#", Color("244B51"), Color("83E1D0")))
 	icon_grid.add_child(_make_phone_app_icon("shop", "Shop", "$", Color(0.12, 0.42, 0.28), Color(0.55, 0.92, 0.62)))
 	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
@@ -52865,6 +52966,7 @@ func _seed_first_run_configs() -> void:
 		{"user": GFX_CFG_PATH, "bundled": FIRST_RUN_GFX_CFG_PATH},
 		{"user": AUDIO_CFG_PATH, "bundled": FIRST_RUN_AUDIO_CFG_PATH},
 		{"user": LOCATION_CFG_PATH, "bundled": FIRST_RUN_LOCATION_CFG_PATH},
+		{"user": "user://light_balance.cfg", "bundled": "res://defaults/light_balance.cfg"},
 		{"user": "user://level_dressing.cfg", "bundled": "res://defaults/level_dressing.cfg"},
 		{"user": "user://doll_studio.cfg", "bundled": "res://defaults/doll_studio.cfg"},
 	]
@@ -61061,6 +61163,8 @@ func _reset_challenge_state(silent: bool = true, keep_banner: bool = false) -> v
 	_challenge_time_max = challenge_time_small
 	_challenge_attach_next = false
 	_challenge_bonus_tip = 0
+	_challenge_cook_total=0.0
+	_challenge_cook_count=0
 	_hide_challenge_overlay()
 	if not keep_banner:
 		_hide_challenge_banner()
@@ -61093,13 +61197,13 @@ func _build_challenge_ui() -> void:
 	card.set_anchors_preset(Control.PRESET_CENTER)
 	card.offset_left = -286.0
 	card.offset_right = 286.0
-	card.offset_top = -195.0
-	card.offset_bottom = 195.0
+	card.offset_top = -230.0
+	card.offset_bottom = 230.0
 	var card_sb := StyleBoxFlat.new()
 	card_sb.bg_color = Color("F4E6C8")
 	card_sb.border_color = Color("C64932")
-	card_sb.set_border_width_all(4)
-	card_sb.set_corner_radius_all(14)
+	card_sb.set_border_width_all(1)
+	card_sb.set_corner_radius_all(3)
 	card_sb.content_margin_left = 26
 	card_sb.content_margin_right = 26
 	card_sb.content_margin_top = 22
@@ -61108,6 +61212,7 @@ func _build_challenge_ui() -> void:
 	card_sb.shadow_size = 18
 	card.add_theme_stylebox_override("panel", card_sb)
 	overlay.add_child(card)
+	card.set_script(preload("res://scripts/paper_tear.gd"))
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 14)
@@ -61121,9 +61226,9 @@ func _build_challenge_ui() -> void:
 	col.add_child(kicker)
 
 	var title := Label.new()
-	title.text = "BURGER CHALLENGE"
+	title.text = "BURGER\nCHALLENGE"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_luckiest_label(title, 36)
+	UiFontsScript.apply_luckiest_label(title, 46)
 	title.add_theme_color_override("font_color", Color("A93628"))
 	title.add_theme_color_override("font_outline_color", Color("FFF7E1"))
 	title.add_theme_constant_override("outline_size", 3)
@@ -61148,9 +61253,9 @@ func _build_challenge_ui() -> void:
 	challenge_time_stat = _make_challenge_stat_chip(stats, "3:00", "TIME")
 
 	var reward := Label.new()
-	reward.text = "Bonus tip  $50"
+	reward.text = "Great cooking earns a better tip"
 	reward.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_luckiest_label(reward, 22)
+	UiFontsScript.apply_label(reward, false, 16)
 	reward.add_theme_color_override("font_color", Color("366B43"))
 	reward.add_theme_color_override("font_outline_color", Color(0.05, 0.12, 0.06, 1.0))
 	reward.add_theme_constant_override("outline_size", 0)
@@ -61243,17 +61348,17 @@ func _build_challenge_ui() -> void:
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.z_index = 90
 	hud.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	hud.offset_left = -230.0
-	hud.offset_right = 230.0
+	hud.offset_left = -90.0
+	hud.offset_right = 90.0
 	hud.offset_top = 10.0
-	hud.offset_bottom = 86.0
+	hud.offset_bottom = 72.0
 	var hud_sb := StyleBoxFlat.new()
 	hud_sb.bg_color = Color(0.08, 0.07, 0.06, 0.92)
 	hud_sb.border_color = Color(1.0, 0.78, 0.28, 0.85)
 	hud_sb.set_border_width_all(2)
 	hud_sb.set_corner_radius_all(12)
-	hud_sb.content_margin_left = 14
-	hud_sb.content_margin_right = 14
+	hud_sb.content_margin_left = 12
+	hud_sb.content_margin_right = 12
 	hud_sb.content_margin_top = 8
 	hud_sb.content_margin_bottom = 10
 	hud.add_theme_stylebox_override("panel", hud_sb)
@@ -61270,6 +61375,7 @@ func _build_challenge_ui() -> void:
 
 	var hud_title := Label.new()
 	hud_title.text = "CHALLENGE"
+	hud_title.visible=false
 	hud_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UiFontsScript.apply_luckiest_label(hud_title, 16)
 	hud_title.add_theme_color_override("font_color", Color("FFD54F"))
@@ -61288,7 +61394,7 @@ func _build_challenge_ui() -> void:
 
 	var hud_clock := Label.new()
 	hud_clock.text = "3:00"
-	hud_clock.custom_minimum_size = Vector2(64, 0)
+	hud_clock.custom_minimum_size = Vector2(45, 0)
 	hud_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	UiFontsScript.apply_luckiest_label(hud_clock, 20)
 	hud_clock.add_theme_color_override("font_color", Color("FFF59D"))
@@ -61317,9 +61423,9 @@ func _build_challenge_ui() -> void:
 func _make_challenge_stat_chip(parent: Control, value: String, caption: String) -> Label:
 	var chip := PanelContainer.new()
 	var chip_sb := StyleBoxFlat.new()
-	chip_sb.bg_color = Color("E8D7AF")
+	chip_sb.bg_color = Color(0,0,0,0)
 	chip_sb.border_color = Color("D1B980")
-	chip_sb.set_border_width_all(2)
+	chip_sb.set_border_width_all(0)
 	chip_sb.set_corner_radius_all(12)
 	chip_sb.content_margin_left = 22
 	chip_sb.content_margin_right = 22
@@ -61334,7 +61440,7 @@ func _make_challenge_stat_chip(parent: Control, value: String, caption: String) 
 	var value_lab := Label.new()
 	value_lab.text = value
 	value_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_luckiest_label(value_lab, 32)
+	UiFontsScript.apply_luckiest_label(value_lab, 43)
 	value_lab.add_theme_color_override("font_color", Color("433525"))
 	value_lab.add_theme_color_override("font_outline_color", Color.BLACK)
 	value_lab.add_theme_constant_override("outline_size", 0)
@@ -61366,7 +61472,11 @@ func _show_challenge_banner(text: String, color: Color, hold_sec: float = 3.2) -
 	if challenge_banner == null or not is_instance_valid(challenge_banner):
 		return
 	_hide_challenge_banner()
-	challenge_banner.text = text
+	var intro := text.contains("GO!")
+	challenge_banner.text = "" if intro else text
+	var art := challenge_banner.get_node_or_null("VintageChallengeArt")
+	if art != null: art.visible = intro
+	challenge_banner.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
 	challenge_banner.add_theme_color_override("font_color", color)
 	challenge_banner.visible = true
 	challenge_banner.modulate.a = 1.0
@@ -61401,6 +61511,11 @@ func _update_challenge_hud() -> void:
 		challenge_hud_panel.visible = false
 		return
 	challenge_hud_panel.visible = true
+	if is_instance_valid(ticket_box):
+		challenge_hud_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		var target: Control = tickets.get(_challenge_customer,ticket_box)
+		challenge_hud_panel.global_position=target.global_position + Vector2(0,0)
+		challenge_hud_panel.size=Vector2(clampf(target.size.x,150.0,180.0),62)
 	if challenge_hud_count != null:
 		challenge_hud_count.text = "%d left" % _challenge_remaining
 	if challenge_hud_clock != null:
@@ -61482,7 +61597,7 @@ func _show_challenge_offer() -> void:
 	if challenge_time_stat != null and is_instance_valid(challenge_time_stat):
 		challenge_time_stat.text = _challenge_clock_text(_challenge_time_max)
 	if challenge_reward_label != null and is_instance_valid(challenge_reward_label):
-		challenge_reward_label.text = "Bonus tip  %s" % _format_money(float(_challenge_bonus_tip))
+		challenge_reward_label.text = "Great cooking earns a better tip"
 	if challenge_overlay != null and is_instance_valid(challenge_overlay):
 		challenge_overlay.visible = true
 	_play_challenge_song()
@@ -61553,7 +61668,7 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 		if challenge_time_stat != null:
 			challenge_time_stat.text = _challenge_clock_text(_challenge_time_max)
 		if challenge_reward_label != null:
-			challenge_reward_label.text = "Bonus tip  %s" % _format_money(float(_challenge_bonus_tip))
+			challenge_reward_label.text = "Great cooking earns a better tip"
 		if challenge_overlay != null:
 			challenge_overlay.visible = true
 		if previous != "offer":
@@ -61706,6 +61821,8 @@ func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: N
 		patty_mult *= 0.92
 	var base_pay: int = int(round(float(GameDataScript.order_value(cust.order)) * quality * patty_mult))
 	base_pay = maxi(base_pay, 1)
+	_challenge_cook_total += clampf(patty_mult * quality * fresh_r * (1.0 if seasoned else .65),0.0,1.2)
+	_challenge_cook_count += 1
 	_challenge_remaining = maxi(0, _challenge_remaining - 1)
 	if not guest_mp:
 		cust.set_meta("profit_built", stations[station_index]["items"].duplicate())
@@ -61735,7 +61852,7 @@ func _complete_challenge_serve(station_index: int, cust: Node3D, remote_drink: N
 
 
 func _succeed_challenge(cust: Node3D) -> void:
-	var tip_amt := _challenge_bonus_tip
+	var tip_amt := _challenge_quality_bonus()
 	_challenge_phase = ""
 	if tip_amt > 0 and (not mp_enabled or NetManager.is_host()):
 		_credit_ticket_payout({"base": 0, "tip": tip_amt, "total": tip_amt}, tip_amt, cust)
@@ -64670,9 +64787,7 @@ func _queue_condiment_pour(id: String, station_index: int, networked: bool) -> v
 	if not _is_condiment(id):
 		return
 	var entry := {"id": id, "station": station_index, "networked": networked, "deposited": false}
-	## Gameplay registers immediately. Bottle travel/squeeze is presentation only,
-	## so quick clicks and strip swipes can never race a 0.76-second animation.
-	_deposit_condiment_entry(entry)
+	# Deposit only after the bottle finishes its visible squeeze.
 	## Ignore a duplicate squeeze animation while this bottle is already traveling.
 	if _condiment_auto_active.has(id):
 		return
@@ -67961,6 +68076,27 @@ func _refresh_station(index: int) -> void:
 		tr.size = Vector2(this_w, h)
 		tr.position = Vector2.ZERO
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var heat=row.get_node_or_null("PattyHeatOverlay")
+		var source: Object=null
+		if item=="patty" and pidx>=0 and pidx<st.get("patties",[]).size(): source=st["patties"][pidx]
+		if heat!=null and (item!="patty" or heat.identity!=source):
+			row.remove_child(heat);heat.queue_free();heat=null
+		if item=="patty":
+			if heat==null:
+				heat=preload("res://scripts/build_patty_heat.gd").new()
+				row.add_child(heat)
+				heat.setup(self,source)
+			heat.position=Vector2(-this_w*.65,-this_w*2.3+h*.68)
+			heat.size=Vector2(this_w*2.3,this_w*2.3)
+			var bubbles=tr.get_node_or_null("PattyBubbles")
+			if bubbles==null:
+				bubbles=preload("res://scripts/build_patty_bubbles.gd").new()
+				bubbles.name="PattyBubbles"
+				tr.add_child(bubbles)
+			bubbles.heat=heat
+			bubbles.size=tr.size
+		elif tr.has_node("PattyBubbles"):
+			tr.get_node("PattyBubbles").queue_free()
 		## Soft drop shadow under each float layer.
 		var bun_cook := 0.0
 		if item == "bun_bottom" or item == "bun_top":
@@ -67971,7 +68107,7 @@ func _refresh_station(index: int) -> void:
 	## Nest: heel tucks slightly; crown lifts clear of the patty.
 	if bottom_row != null and is_instance_valid(bottom_row):
 		bottom_row.position.y -= BUILD_BUN_NEST_BOTTOM_PX * layer_scale
-		_update_build_burger_shadow(preview, bottom_row.position + Vector2(bottom_row.size.x * 0.5, bottom_row.size.y * 0.84), Vector2(bottom_row.size.x * 1.14, bottom_row.size.x * 0.30))
+		_update_build_burger_shadow(preview, bottom_row.position + Vector2(bottom_row.size.x * 0.5, bottom_row.size.y * 0.84), Vector2(bottom_row.size.x * 1.38, bottom_row.size.x * 0.39))
 	if top_row != null and is_instance_valid(top_row):
 		top_row.position.y += BUILD_BUN_NEST_TOP_PX * layer_scale
 	_center_build_burger_on_board()
@@ -69369,7 +69505,7 @@ func _play_serve_fly_to_mouth(
 			customer.react_burnt_bite(point_at_player)
 			if game_audio:game_audio.play_customer_angry_wawa(customer.get_customer_voice())
 		tw.tween_callback(complain.bind(false))
-		tw.tween_method(follow_hands, 1.0 / 6.0, 1.0 / 6.0, .85)
+		tw.tween_method(follow_hands, 1.0 / 6.0, 1.0 / 6.0, .48)
 		var throw_state := {}
 		tw.tween_callback(func() -> void:
 			throw_state["start"] = _customer_burger_hand_screen(customer)
@@ -69385,9 +69521,9 @@ func _play_serve_fly_to_mouth(
 			var point := origin.lerp(target, progress)
 			point.y -= sin(progress * PI) * 100.0
 			apply_stack_scale.call((throw_state["scale"] as Vector2) * lerpf(1.0, .30, progress))
-			stack.rotation = progress * TAU
+			stack.rotation = progress * PI * 1.25
 			_place_burger_sprite_center(stack, point)
-		, 0.0, 1.0, .55)
+		, 0.0, 1.0, .42)
 		tw.tween_callback(func() -> void:
 			stack.hide()
 			if not mp_enabled or NetManager.is_host():
@@ -69790,6 +69926,7 @@ func _complete_serve(
 	if payout > 0:
 		_play_delivery_time_announcer(cust)
 
+	cust.set_meta("order_perfect", not was_meh and bool(pay.get("perfect",false)) and patty_mult >= 1.0 and fresh_r > .4 and str(cook_r.get("label","")) in ["Perfect","Great job"])
 	## Mustache cat stiffs you — burger leaves, wallet doesn't.
 	if disguise and payout > 0:
 		if not guest_mp:
@@ -69819,6 +69956,7 @@ func _complete_serve(
 				_achievement_event("perfect_burgers")
 				combo += 1
 				perfect_serves += 1
+				_check_perfect_rewards.call_deferred()
 			elif not was_meh and float(result.quality) > 0.85 and fresh_r > 0.4 and int(cook_r["score"]) >= 70:
 				combo += 1
 			else:
@@ -69905,6 +70043,13 @@ func _complete_serve(
 			"pic": cached_review_pic,
 		}
 	cust.set_meta("meal_stars", float(deferred_review.get("stars", 0.0)))
+	if payout <= 0 and not guest_mp: _record_order_history(0,0,_order_food_cost(cust),cust)
+	if cached_review_pic != null:
+		var photo := cached_review_pic.get_image()
+		if photo != null:
+			if photo.is_compressed(): photo.decompress()
+			photo.resize(160,160,Image.INTERPOLATE_LANCZOS)
+			cust.set_meta("sales_photo",photo.save_png_to_buffer())
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
 			and not _customer_soda_handed(cust):
@@ -70138,6 +70283,7 @@ func _complete_soda_only_serve(customer: Node3D = null, remote_drink: Node3D = n
 		total_served += 1
 		combo += 1
 		perfect_serves += 1
+		_check_perfect_rewards.call_deferred()
 	if remote_drink != null and is_instance_valid(remote_drink):
 		remote_drink.set_meta("serving_consumed", true)
 		remote_drink.queue_free()
@@ -70224,6 +70370,7 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 		total_served += 1
 		combo += 1
 		perfect_serves += 1
+		_check_perfect_rewards.call_deferred()
 	_show_side_serve_breakdown(cust, pay, payout, "FRIES", Color("FFD54F"))
 	_flash("+%s  FRIES up!" % _format_money(float(payout)), Color("FFD54F"))
 	if not guest_mp:
@@ -72913,6 +73060,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		_bts_day1_performance_done,
 		_bts_day1_announcement_done])
 	_mp_emit_economy(peer_id)
+	_mp_bootstrap_add(peer_id,"mp_order_history",[order_history,order_history_revision])
 	## Match burner so guests can place meat immediately.
 	_mp_bootstrap_add(peer_id, "mp_toggle_grill", [grill_on])
 	for c in customers:
@@ -73409,7 +73557,7 @@ func _mp_send_held_icecream_pose(force: bool = false) -> void:
 	## Stream held soft-serve so partners see the cone, fill level, and dispensing.
 	if not mp_enabled or not NetManager.is_online():
 		return
-	var active := icecream_cone_held or _icecream_parked_filling
+	var active := icecream_cone_held or _icecream_parked_filling or (is_instance_valid(icecream_cone_root) and bool(icecream_cone_root.get_meta("auto_fill_travel",false)))
 	if not active or icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		if force:
 			_mp_queue_motion("mp_icecream_pose", [false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false])
@@ -76660,9 +76808,12 @@ func mp_soda_slick_state(
 			item["age"] = float(item["life"])
 		if smeared and surface_spline:
 			_convert_condiment_batch_to_smear(item)
+			item["scrape"]=clampf(scrape,.08,1.0)
+			item["scrape_passes"]=int(round((1.0-scrape)*3.0))
+			_rebuild_condiment_spline_batch(item)
 		var mesh = item.get("mesh")
 		if mesh != null and is_instance_valid(mesh):
-			mesh.scale = Vector3(float(item["scrape"]), 1.0, float(item["scrape"]))
+			mesh.scale = Vector3.ONE if surface_spline else Vector3(float(item["scrape"]), 1.0, float(item["scrape"]))
 			mesh.position = Vector3(
 				x,
 				GRILL_SURFACE_Y + (condiment_smear_surface_lift if smeared else condiment_surface_lift) if surface_spline else GRILL_SURFACE_Y + OIL_SIT_Y,
@@ -78111,6 +78262,8 @@ func _mp_closed_shift_state() -> Dictionary:
 	for review in day_social_reviews:
 		reviews.append({"stars":review.get("stars",0.0),"who":review.get("who","Guest"),"text":review.get("text","")})
 	state["reviews"]=reviews
+	state["orders"]=order_history
+	state["orders_revision"]=order_history_revision
 	return state
 
 @rpc("authority","call_remote","reliable")
@@ -78119,6 +78272,7 @@ func mp_shift_closed(state: Dictionary, elapsed: float=0.0) -> void:
 	for key in CLOSED_SHIFT_FIELDS:
 		if state.has(key): set(key,state[key])
 	day_social_reviews=state.get("reviews",[]).duplicate(true)
+	mp_order_history(state.get("orders",[]),int(state.get("orders_revision",0)))
 	_cut_collector_cut_done=true
 	set_meta("mp_closed_bank_summary","Checking %s · HYSA %s" % [_format_money(money),_format_money(bank_savings)])
 	if not is_instance_valid(_shift_results) or not _shift_results.active:
@@ -78142,3 +78296,109 @@ func mp_cat_commit_theft(net_id: int) -> void:
 func mp_sign_motion(angle: float, velocity: float, held: bool, aim: float) -> void:
 	if not playing or not is_finite(angle) or not is_finite(velocity) or not is_finite(aim): return
 	if is_instance_valid(open_closed_sign_pivot): open_closed_sign_pivot.apply_network_pose(angle,velocity,held,aim)
+
+func _check_perfect_rewards() -> void:
+	if mp_enabled and not NetManager.is_host(): return
+	var milestone := int(perfect_serves / 5)
+	while _perfect_reward_milestone < milestone:
+		_perfect_reward_milestone += 1
+		_chef_award_once(null,"perfect_milestone",50,"%d perfect orders!" % (_perfect_reward_milestone*5))
+
+func _record_order_history(base: int, tip: int, cost: float, customer: Node3D) -> void:
+	if mp_enabled and not NetManager.is_host(): return
+	var items := "Challenge reward" if base==0 else "Order"
+	if is_instance_valid(customer) and base>0: items=", ".join(customer.order)
+	var row := {"number":order_history_revision+1,"day":day,"items":items,"sale":base,"tip":tip,"cost":cost,"profit":float(base+tip)-cost}
+	if is_instance_valid(customer):
+		customer.set_meta("sales_number",row.number)
+		row["perfect"] = customer.get_meta("order_perfect",false)
+		row["stats"] = customer.get_meta("serve_breakdown",{})
+		row["photo"] = customer.get_meta("sales_photo",PackedByteArray())
+		row["review"] = customer.get_meta("sales_review","")
+		row["stars"] = customer.get_meta("meal_stars",0.0)
+	order_history.append(row)
+	if order_history.size()>100: order_history.pop_front()
+	order_history_revision += 1
+	if is_instance_valid(_order_insights): _order_insights.refresh()
+	if mp_enabled: mp_order_history.rpc(order_history,order_history_revision)
+
+@rpc("authority","call_remote","reliable")
+func mp_order_history(rows: Array, revision: int) -> void:
+	if revision < order_history_revision: return
+	order_history=rows.duplicate(true)
+	order_history_revision=revision
+	if is_instance_valid(_order_insights): _order_insights.refresh()
+
+func _crowd_steer(actor: Node3D, before: Vector3, desired: Vector3, delta: float) -> Vector3:
+	if mp_enabled and not NetManager.is_host(): return desired
+	var obstacles: Array=customers.duplicate()
+	obstacles.append_array(bg_people)
+	if is_instance_valid(_cut_collector): obstacles.append(_cut_collector)
+	if is_instance_valid(window_cat) and window_cat.visible: obstacles.append(window_cat)
+	if is_instance_valid(_shift_events) and is_instance_valid(_shift_events.visit): obstacles.append(_shift_events.visit)
+	return preload("res://scripts/crowd_spacing.gd").steer(actor,before,desired,obstacles,delta)
+
+func _brand_lettering_ui_material() -> ShaderMaterial:
+	var mat:=ShaderMaterial.new()
+	mat.shader=preload("res://shaders/brand_lettering_ui.gdshader")
+	return mat
+
+func _challenge_quality_bonus() -> int:
+	var quality := clampf(_challenge_cook_total / maxf(1.0,float(_challenge_cook_count)),0.0,1.2)
+	return maxi(1,roundi(float(_challenge_bonus_tip)*(.03+pow(quality,4.0)*2.5)))
+
+func _scrape_local_sauce(pos: Vector3, direction: Vector2, radius: float) -> bool:
+	var touched := false
+	var additions: Array = []
+	for item in soda_slicks.duplicate():
+		if not bool(item.get("surface_spline",false)): continue
+		var segments: PackedVector3Array = item.get("spline_segments",PackedVector3Array())
+		var kept := PackedVector3Array()
+		var cut := PackedVector3Array()
+		for i in range(0,segments.size()-1,2):
+			var a := segments[i]
+			var b := segments[i+1]
+			var steps := maxi(1,ceili(a.distance_to(b)/.012))
+			for step in steps:
+				var p := a.lerp(b,float(step)/steps)
+				var q := a.lerp(b,float(step+1)/steps)
+				var mid := (p+q)*.5
+				if Vector2(mid.x-pos.x,mid.z-pos.z).length() <= radius:
+					cut.append(p);cut.append(q)
+				else:
+					kept.append(p);kept.append(q)
+		if cut.is_empty():
+			item["local_latched"]=false
+			continue
+		var reverse := direction.normalized().dot(item.get("local_direction",Vector2.ZERO)) < -.4
+		if bool(item.get("local_latched",false)) and not (reverse and Time.get_ticks_msec()-int(item.get("local_ms",0))>180): continue
+		touched=true
+		var passes := int(round((1.0-float(item.get("scrape",1.0)))*3.0))+1 if bool(item.get("smeared",false)) else 1
+		if not kept.is_empty():
+			item["spline_segments"]=kept
+			_rebuild_condiment_spline_batch(item)
+		else:
+			if is_instance_valid(item.get("mesh")): item.mesh.queue_free()
+			soda_slicks.erase(item)
+		if passes < 3:
+			additions.append({"segments":cut,"passes":passes,"flavor":item.flavor,"radius":item.get("tube_radius",.008),"age":item.get("age",0.0)})
+	for patch in additions:
+		var smear := _new_condiment_spline_batch(patch.flavor,patch.radius)
+		smear["spline_segments"]=patch.segments
+		_convert_condiment_batch_to_smear(smear)
+		smear["scrape"]=1.0-float(patch.passes)/3.0
+		smear["age"]=patch.age
+		smear["local_latched"]=true
+		smear["local_direction"]=direction.normalized()
+		smear["local_ms"]=Time.get_ticks_msec()
+		_rebuild_condiment_spline_batch(smear)
+	if touched and mp_enabled and not _mp_applying:
+		mp_local_sauce_scrape.rpc(pos,direction,radius)
+	return touched
+
+@rpc("any_peer","call_remote","reliable")
+func mp_local_sauce_scrape(pos: Vector3, direction: Vector2, radius: float) -> void:
+	if not pos.is_finite() or not direction.is_finite() or not is_finite(radius): return
+	_mp_applying=true
+	_scrape_local_sauce(pos,direction,clampf(radius,.015,.10))
+	_mp_applying=false

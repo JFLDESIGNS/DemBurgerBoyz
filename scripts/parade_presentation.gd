@@ -19,7 +19,7 @@ func setup(owner_game: Node, march: Node3D) -> void:
   if reason != "challenge":
    stop_film()
    return
-  remaining=15.0;screen.show()
+  remaining=8.0;screen.show()
   if reason == "challenge": game._show_challenge_banner("BURGER CHALLENGE — GO!",Color("FFE6A3"),2.5)
  )
 
