@@ -4148,47 +4148,44 @@ func receive_sauce(flavor: String, tex: Texture2D, tint: Color, zone: String = "
 	var anchor := _stuck_food_anchor_local(zone == "face")
 	anchor.x += randf_range(-0.075,0.075)
 	anchor.y += randf_range(-0.06,0.06)
-	var hit := preload("res://scripts/food_impact.gd").surface(_body,to_global(anchor),global_basis.z.normalized())
+	var impact := preload("res://scripts/food_impact.gd")
+	var hit := impact.surface(_body,to_global(anchor),global_basis.z.normalized())
 	var normal: Vector3 = hit.normal
-	var decal := Decal.new()
-	decal.name = "Sauce_%s" % flavor
-	decal.texture_albedo = tex
-	decal.texture_orm = preload("res://scripts/food_impact.gd").wet_orm()
-	decal.modulate = tint
-	decal.albedo_mix = 1.0
-	decal.normal_fade = 0.6
-	var size := randf_range(0.16,0.24)
-	decal.size = Vector3(size,0.16,size * 1.15)
-	root.add_child(decal)
-	decal.global_position = hit.position - normal * 0.018
-	var tangent := normal.cross(Vector3.UP if absf(normal.y) < 0.95 else Vector3.RIGHT).normalized()
-	decal.global_basis = Basis(tangent,normal,tangent.cross(normal)).orthonormalized()
-	_stuck_food_items.append(decal)
+	var down := Vector3.DOWN.slide(normal).normalized()
+	if down.length_squared() < 0.1: down = -global_basis.y.normalized()
+	var across := normal.cross(down).normalized()
+	var basis := Basis(across,normal,down).orthonormalized()
+	var size := randf_range(0.19,0.28)
+	for i in 4:
+		var decal := Decal.new()
+		decal.name = "Sauce_%s_%d" % [flavor,i]
+		decal.texture_albedo = tex if i==0 else impact.sauce_drip_texture()
+		decal.texture_orm = impact.wet_orm()
+		decal.modulate = tint
+		decal.albedo_mix = 1.0
+		decal.normal_fade = 0.35
+		var width := size if i==0 else randf_range(.025,.045)
+		var length := size if i==0 else .045
+		decal.size = Vector3(width,.24,length)
+		root.add_child(decal)
+		decal.global_basis = basis
+		decal.global_position = hit.position-normal*.025+across*(0.0 if i==0 else (float(i)-2.0)*size*.24)
+		_stuck_food_items.append(decal)
+		var start := decal.position
+		var local_down := root.global_basis.inverse()*down
+		var extension := .025 if i==0 else randf_range(.15,.30)
+		var tw := decal.create_tween()
+		if i==0:
+			decal.scale=Vector3(.4,1,.4)
+			tw.tween_property(decal,"scale",Vector3.ONE,.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		else: tw.tween_interval(randf_range(.12,.5))
+		tw.tween_property(decal,"size",Vector3(width*.86,.24,length+extension),2.4)
+		tw.parallel().tween_property(decal,"position",start+local_down*extension*.5,2.4)
+		tw.tween_interval(6.0)
+		tw.tween_property(decal,"modulate:a",0.0,2.0)
+		tw.tween_callback(func():_stuck_food_items.erase(decal);decal.queue_free())
 	_prune_stuck_food()
-	decal.scale = Vector3(0.45,1,0.45)
-	var tw := decal.create_tween()
-	tw.tween_property(decal,"scale",Vector3.ONE,0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(decal,"size",Vector3(size * 0.95,0.16,size * 1.65),2.2)
-	tw.tween_interval(8.0)
-	tw.tween_property(decal,"modulate:a",0.0,2.0)
-	tw.tween_callback(func(): _stuck_food_items.erase(decal); decal.queue_free())
-	for i in 3:
-		var drop := MeshInstance3D.new()
-		var ball := SphereMesh.new()
-		ball.radius = randf_range(0.007,0.014)
-		ball.height = ball.radius * 2.0
-		ball.radial_segments = 8
-		ball.rings = 4
-		drop.mesh = ball
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = tint
-		mat.roughness = 0.27
-		mat.metallic_specular = 0.4
-		drop.material_override = mat
-		root.add_child(drop)
-		drop.global_position = hit.position + normal * 0.02
-		preload("res://scripts/food_impact.gd").drop(drop,get_parent(),normal * randf_range(0.35,0.8) + tangent * randf_range(-0.35,0.35) + Vector3.UP * randf_range(0.15,0.5),true)
-	if randf() < 0.4: bobble_click()
+	if randf() < .4: bobble_click()
 
 
 ## Serve fly animation target — roughly lip height in the service window.

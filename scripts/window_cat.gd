@@ -514,7 +514,7 @@ func _build_mouth_burger() -> void:
 	## Sit in the muzzle — toward the cook (local +Z after mesh facing).
 	_mouth_burger.position = Vector3(0.0, 0.34, 0.22)
 	_mouth_burger.rotation_degrees = Vector3(-12.0, 0.0, 8.0)
-	_mouth_burger.scale = Vector3(0.78, 0.78, 0.78) ## bigger than prior full-burger 0.55
+	_mouth_burger.scale = Vector3.ONE ## Keep the stolen patty full-size while chewing.
 	add_child(_mouth_burger)
 
 	var meat := MeshInstance3D.new()

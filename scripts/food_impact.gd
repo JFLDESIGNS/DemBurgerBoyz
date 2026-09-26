@@ -66,3 +66,18 @@ static func drop(mesh: MeshInstance3D, parent: Node3D, velocity: Vector3, liquid
   if is_instance_valid(body): body.queue_free()
  )
  return body
+
+static var drip_texture: Texture2D
+static func sauce_drip_texture() -> Texture2D:
+ if drip_texture!=null:return drip_texture
+ var pixels=Image.create(48,128,false,Image.FORMAT_RGBA8)
+ for y in 128:
+  var t=float(y)/127.0
+  var center=.5+sin(t*8.0)*.055
+  var width=.10+.08*(1.0-t)+.23*exp(-pow((t-.88)/.105,2.0))
+  for x in 48:
+   var distance=absf(float(x)/47.0-center)
+   var alpha=clampf((width-distance)*80.0,0.0,1.0)*clampf((1.0-t)*24.0,0.0,1.0)*clampf(t*30.0,0.0,1.0)
+   pixels.set_pixel(x,y,Color(1,1,1,alpha))
+ drip_texture=ImageTexture.create_from_image(pixels)
+ return drip_texture

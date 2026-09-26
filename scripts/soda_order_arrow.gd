@@ -22,4 +22,7 @@ func _process(delta: float) -> void:
   if not game.GameDataScript.order_soda_ids(customer.order).is_empty() and not game._customer_soda_handed(customer):
    visible=true
    break
+ if is_instance_valid(game._grubbah):
+  var mobile:Dictionary=game._grubbah.state
+  if str(mobile.get("phase","")) in ["accepted","paper","wrapping","bagging"] and not game.GameDataScript.order_soda_ids(mobile.get("items",[])).is_empty():visible=true
  position=game.soda_cup_rack_pos+Vector3(.12,.42+sin(elapsed*3.4)*.045,0)

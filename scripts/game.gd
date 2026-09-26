@@ -245,6 +245,8 @@ const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
 const SHOP_GRILL_ROOMBA := "grill_roomba"
 const SHOP_FRIDGE_UPGRADE := "fridge_upgrade"
+const SHOP_CHEF_KNIFE := "chef_knife"
+var _shop_knife_preview: Node3D
 const SHOP_GOLD_SPATULA := "gold_spatula"
 const SHOP_TRUCK := "truck_buyout"
 const SHOP_SODA_MACHINE_COST := 300.0
@@ -469,6 +471,7 @@ var total_served: int = 0
 var order_history: Array = []
 var order_history_revision := 0
 var _perfect_reward_milestone := 0
+var _grubbah: Node
 var _order_insights: Node
 var perfect_serves: int = 0
 var rush_mode: bool = false
@@ -1481,6 +1484,7 @@ var owned_machines: Dictionary = {
 	SHOP_GRILL_ROOMBA: false,
 	SHOP_FRIDGE_UPGRADE: false,
 	SHOP_GOLD_SPATULA: false,
+	SHOP_CHEF_KNIFE: false,
 }
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
@@ -2256,7 +2260,7 @@ const CONDIMENT_TOOL_STREAK_SPACING := 0.013
 ## Hidden → Grill sliders retune these at runtime.
 var condiment_surface_lift: float = 0.048
 ## First scraper pass flattens the raised rope into a thin, paint-like smear.
-var condiment_smear_surface_lift: float = 0.032
+var condiment_smear_surface_lift: float = 0.002
 ## Much thinner than the old oil-sized squeeze stream.
 const CONDIMENT_STREAM_TOP_RADIUS := 0.0041
 const CONDIMENT_STREAM_BOTTOM_RADIUS := 0.0024
@@ -6316,6 +6320,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if is_instance_valid(_grubbah) and _grubbah.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _handle_whole_burger_drag(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -12468,6 +12475,10 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 	if hand_spatula_root == null or not is_instance_valid(hand_spatula_root):
 		_set_cursor_kind("glove")
 		return
+	if is_instance_valid(_grubbah) and _grubbah.holding_knife():
+		hand_spatula_root.hide()
+		_stop_spatula_grill_scrape_audio()
+		return
 	var mouse := get_viewport().get_mouse_position()
 	## Hold + drag down off the grill → flip (replaces the old 3-tap).
 	_try_spatula_pull_flip_gesture(mouse)
@@ -16527,6 +16538,7 @@ func _mp_apply_remote_scoop(patty: Area3D, peer_id: int) -> void:
 
 
 func _customer_by_net_id(net_id: int):
+	if is_instance_valid(_grubbah) and is_instance_valid(_grubbah.ticket_owner) and net_id==_customer_net_id(_grubbah.ticket_owner): return _grubbah.ticket_owner
 	if net_id < 0:
 		return null
 	for c in customers:
@@ -20758,7 +20770,7 @@ func _load_grill_heat_settings() -> void:
 	grill_heat_tint.g = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "tint_g", grill_heat_tint.g)), 0.0, 1.0)
 	grill_heat_tint.b = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "tint_b", grill_heat_tint.b)), 0.0, 1.0)
 	condiment_surface_lift = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "sauce_lift", condiment_surface_lift)), 0.0, 0.20)
-	condiment_smear_surface_lift = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "smear_lift", condiment_smear_surface_lift)), 0.0, 0.20)
+	condiment_smear_surface_lift = clampf(float(cfg.get_value(GRILL_HEAT_CFG_SECTION, "smear_lift", condiment_smear_surface_lift)), 0.001, 0.003)
 
 
 func _save_grill_heat_settings() -> void:
@@ -20781,7 +20793,7 @@ func _save_grill_heat_settings() -> void:
 
 func _apply_condiment_surface_heights() -> void:
 	var sauce_y: float = GRILL_SURFACE_Y + condiment_surface_lift
-	var smear_y: float = GRILL_SURFACE_Y + condiment_smear_surface_lift
+	var smear_y: float = _grill_steel_top_y() + condiment_smear_surface_lift
 	for item in soda_slicks:
 		if typeof(item) != TYPE_DICTIONARY:
 			continue
@@ -24987,7 +24999,7 @@ func _rebuild_condiment_spline_batch(item: Dictionary) -> void:
 		max_z = maxf(max_z, point.z)
 	var center := Vector3(
 		(min_x + max_x) * 0.5,
-		GRILL_SURFACE_Y + (condiment_smear_surface_lift if bool(item.get("smeared", false)) else condiment_surface_lift),
+		(_grill_steel_top_y() + condiment_smear_surface_lift) if bool(item.get("smeared", false)) else (GRILL_SURFACE_Y + condiment_surface_lift),
 		(min_z + max_z) * 0.5
 	)
 	var tube_radius := float(item.get("tube_radius", CONDIMENT_TOOL_STREAK_RADIUS))
@@ -25262,8 +25274,8 @@ func _make_surface_condiment_smear_batch_mesh(
 		var flat_dir := chord.normalized()
 		var side := Vector3(-flat_dir.z, 0.0, flat_dir.x)
 		var phase := float(pair_i) * 1.618
-		var width_from := maxf(radius * 2.1, .009) * remaining
-		var width_to := maxf(radius * 2.1, .009) * remaining
+		var width_from := maxf(radius * 4.0, .038) * sqrt(remaining) * (0.94 + 0.06 * sin(phase))
+		var width_to := maxf(radius * 3.6, .032) * sqrt(remaining) * (0.94 + 0.06 * sin(phase + 1.618))
 		var base := verts.size()
 		verts.append_array(PackedVector3Array([
 			from_local - side * width_from,
@@ -25399,7 +25411,7 @@ func _spawn_condiment_contact_smear(pos: Vector3, swipe: Vector2, flavor: String
 		KETCHUP_SMEAR_CONTACT_MIN if ketchup else 0.068
 	)
 	smear.scale = Vector3(span / 0.08, 1.0, maxf(span * 0.82, 0.040) / 0.08)
-	smear.position = Vector3(pos.x, GRILL_SURFACE_Y + condiment_smear_surface_lift, pos.z)
+	smear.position = Vector3(pos.x, _grill_steel_top_y() + condiment_smear_surface_lift, pos.z)
 	smear.rotation = Vector3(0.0, atan2(dir.x, dir.y), 0.0)
 	smear.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	smear.sorting_offset = 7.5
@@ -47096,7 +47108,7 @@ func _update_held_condiment(delta: float) -> void:
 		condiment_tool_held = ""
 		return
 	var mouse := get_viewport().get_mouse_position()
-	if condiment_tool_pouring and (_condiment_hold_at_far_extent(mouse) or not _find_customer_under_ext_spray(CONDIMENT_CUSTOMER_SPRAY_PX).is_empty()):
+	if condiment_tool_pouring and condiment_tool_pose == CONDIMENT_POSE_SIDEWAYS and (_condiment_hold_at_far_extent(mouse) or not _find_customer_under_ext_spray(CONDIMENT_CUSTOMER_SPRAY_PX).is_empty()):
 		var hold := _tool_hold_point_from_screen(
 			mouse, GRILL_SURFACE_Y + CONDIMENT_TOOL_HOLD_HEIGHT, CONDIMENT_HOLD_Z_MAX
 		)
@@ -50381,6 +50393,7 @@ func _on_muvye_cinema_mode(enabled: bool) -> void:
 
 
 func _set_phone_app(app_id: String) -> void:
+	if is_instance_valid(_grubbah): _grubbah.show_app(app_id)
 	_phone_app_id = app_id
 	if is_instance_valid(_order_insights): _order_insights.show_app(app_id)
 	if is_instance_valid(achievements) and is_instance_valid(achievements.page):
@@ -50415,11 +50428,13 @@ func _set_phone_app(app_id: String) -> void:
 		if app_id != "muvye" and phone_muvye_page.has_method("set_cinema"):
 			phone_muvye_page.call("set_cinema", false)
 	if radio_column != null:
-		radio_column.visible = app_id != "muvye"
+		radio_column.visible = app_id not in ["muvye", "grubbah"]
 	if phone_nav_bar != null:
 		phone_nav_bar.visible = app_id != "home"
 	if phone_nav_title != null:
 		match app_id:
+			"grubbah":
+				phone_nav_title.text = "Grubbah"
 			"orders":
 				phone_nav_title.text = "My Sales"
 			"achievements":
@@ -51133,6 +51148,8 @@ func _phone_bank_action(caption: String, accent: Color, cb: Callable) -> Button:
 
 func _shop_item_cost(id: String) -> float:
 	match id:
+		SHOP_CHEF_KNIFE:
+			return 50.0
 		SHOP_SODA_MACHINE:
 			return SHOP_SODA_MACHINE_COST
 		SHOP_ICECREAM_MACHINE:
@@ -51153,6 +51170,8 @@ func _shop_item_cost(id: String) -> float:
 
 func _shop_item_label(id: String) -> String:
 	match id:
+		SHOP_CHEF_KNIFE:
+			return "Chef Knife"
 		SHOP_SODA_MACHINE:
 			return "Soda Machine"
 		SHOP_ICECREAM_MACHINE:
@@ -51173,6 +51192,8 @@ func _shop_item_label(id: String) -> String:
 
 func _shop_item_note(id: String) -> String:
 	match id:
+		SHOP_CHEF_KNIFE:
+			return "Pick up and hold · Cutting coming later"
 		SHOP_SODA_MACHINE:
 			return "Unlocks soda orders"
 		SHOP_ICECREAM_MACHINE:
@@ -51193,6 +51214,8 @@ func _shop_item_note(id: String) -> String:
 
 func _shop_item_description(id: String) -> String:
 	match id:
+		SHOP_CHEF_KNIFE:
+			return "A polished chef knife for your wall. Pick it up now; cutting will come later."
 		SHOP_TRUCK:
 			return "Own the Burger Pals truck outright and keep every dollar your window earns."
 		SHOP_SODA_MACHINE:
@@ -51242,6 +51265,11 @@ func _shop_review_count_text(value: int) -> String:
 
 func _shop_product_source(id: String) -> Node3D:
 	match id:
+		SHOP_CHEF_KNIFE:
+			if not is_instance_valid(_shop_knife_preview):
+				_shop_knife_preview=preload("res://models/burgerpack/try2/SM_ChefsKnife.glb").instantiate()
+				add_child(_shop_knife_preview);_shop_knife_preview.hide()
+			return _shop_knife_preview
 		SHOP_SODA_MACHINE:
 			if soda_root != null and is_instance_valid(soda_root):
 				var fountain_only := soda_root.get_node_or_null("FountainModel") as Node3D
@@ -51734,6 +51762,7 @@ func _reset_shop_unlocks() -> void:
 	owned_machines[SHOP_GRILL_ROOMBA] = false
 	owned_machines[SHOP_FRIDGE_UPGRADE] = false
 	owned_machines[SHOP_GOLD_SPATULA] = false
+	owned_machines[SHOP_CHEF_KNIFE] = false
 	_clear_all_drink_cups()
 	_reset_machine_breaks()
 	_reset_icecream_cone_to_home()
@@ -51805,7 +51834,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	v.add_child(subtitle)
 
 	_add_phone_shop_item(v, SHOP_TRUCK)
-	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA]:
+	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA, SHOP_CHEF_KNIFE]:
 		_add_phone_shop_item(v, id)
 
 
@@ -51932,6 +51961,7 @@ func _shop_catalog_ids() -> Array[String]:
 		SHOP_GRILL_ROOMBA,
 		SHOP_FRIDGE_UPGRADE,
 		SHOP_GOLD_SPATULA,
+		SHOP_CHEF_KNIFE,
 	]
 
 
@@ -51965,7 +51995,7 @@ func _buy_shop_item(id: String) -> void:
 func _buy_shop_item_local(id: String) -> void:
 	if not playing:
 		return
-	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA].has(id):
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA, SHOP_CHEF_KNIFE].has(id):
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
@@ -52712,6 +52742,12 @@ func _build_phone_ui() -> void:
 		_order_insights = preload("res://scripts/order_insights.gd").new()
 		add_child(_order_insights)
 		_order_insights.setup(self, v)
+	if not is_instance_valid(_grubbah):
+		_grubbah = preload("res://scripts/grubbah.gd").new()
+		_grubbah.name = "Grubbah"
+		add_child(_grubbah)
+		_grubbah.setup(self, v)
+	icon_grid.add_child(_make_phone_app_icon("grubbah", "Grubbah", "G", Color("B84D22"), Color("FFE1A5")))
 	icon_grid.add_child(_make_phone_app_icon("orders", "My Sales", "#", Color("244B51"), Color("83E1D0")))
 	icon_grid.add_child(_make_phone_app_icon("shop", "Shop", "$", Color(0.12, 0.42, 0.28), Color(0.55, 0.92, 0.62)))
 	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
@@ -57265,7 +57301,7 @@ func _build_options_menu() -> void:
 	_hidden_add_labeled_slider(hidden_grill_box, "smear_lift", "Ketchup Smear Height", 0.0, 0.20, 0.001,
 		func(): return condiment_smear_surface_lift,
 		func(v: float):
-			condiment_smear_surface_lift = clampf(v, 0.0, 0.20)
+			condiment_smear_surface_lift = clampf(v, 0.001, 0.003)
 			_apply_condiment_surface_heights()
 			_save_grill_heat_settings()
 	)
@@ -61551,7 +61587,7 @@ func _refresh_challenge_ticket(customer: Node3D = null) -> void:
 			if challenge:
 				title_lab.text = "%d×  %s" % [_challenge_remaining, order_code if order_code != "" else "—"]
 			else:
-				title_lab.text = order_code if order_code != "" else "—"
+				title_lab.text = ("M" if bool(cust.get_meta("mobile_order",false)) else "") + (order_code if order_code != "" else (str(cust.get_meta("mobile_number",1)) if bool(cust.get_meta("mobile_order",false)) else "—"))
 
 
 func _pick_challenge_size() -> void:
@@ -62227,7 +62263,7 @@ func _customer_leave_apply(customer: Node3D, angry: bool) -> void:
 	customers.erase(customer)
 	if selected_customer == customer:
 		selected_customer = null
-		for c in customers:
+		for c in tickets.keys():
 			if c != null and is_instance_valid(c) and bool(c.get("is_waiting")):
 				selected_customer = c
 				break
@@ -62402,7 +62438,7 @@ func _create_ticket(customer: Node3D) -> void:
 	var title := Label.new()
 	## Order code = strip hotkeys + C for cheese from the board wheel.
 	var order_code := GameDataScript.order_number_code(customer.order)
-	title.text = order_code if order_code != "" else "—"
+	title.text = ("M" if bool(customer.get_meta("mobile_order",false)) else "") + (order_code if order_code != "" else (str(customer.get_meta("mobile_number",1)) if bool(customer.get_meta("mobile_order",false)) else "—"))
 	var title_size := 20
 	if order_code.length() >= 7:
 		title_size = 15
@@ -63077,10 +63113,16 @@ func _select_ticket(customer: Node3D) -> void:
 
 
 func _select_ticket_local(customer: Node3D) -> void:
+	if is_instance_valid(_grubbah) and _grubbah.is_selected() and customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase","")) in ["paper","wrapping"] and not stations[0].get("patties",[]).is_empty():
+		_flash("Wrap the mobile burger first",Color("FFD06A"))
+		return
 	if not is_instance_valid(customer) or not customer.is_waiting:
 		_flash("That customer is gone", Color("EF5350"))
 		return
 	selected_customer = customer
+	if is_instance_valid(_grubbah) and not _grubbah.state.is_empty():
+		_grubbah.state["selected"] = customer==_grubbah.ticket_owner
+		if customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase",""))=="paper" and stations[0].get("patties",[]).is_empty() and _grubbah.host(): _grubbah.set_phase("accepted")
 	_highlight_tickets()
 	_refresh_customer_queue_timers()
 	_flash("Order selected - Serve from any station", Color("FFE082"))
@@ -63114,6 +63156,8 @@ func _refresh_customer_queue_timers() -> void:
 		if cust == null or not is_instance_valid(cust):
 			continue
 		var active: bool = cust == front and _customer_departure_holds.is_empty()
+		if is_instance_valid(_grubbah) and _grubbah.holds_customer_timers() and not bool(cust.get_meta("mobile_order",false)):
+			active = false
 		if bool(cust.get("is_challenge_guest")):
 			active = false
 		if cust.has_method("set_queue_timer_active"):
@@ -63130,6 +63174,7 @@ func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
 	## Co-op guest repair: tickets can outlive their customer array entry after a
 	## missed leave/sync race. Host IDs are authoritative.
 	for cust in tickets.keys():
+		if is_instance_valid(cust) and bool(cust.get_meta("mobile_order",false)): continue
 		var stale := false
 		if cust == null or not is_instance_valid(cust):
 			stale = true
@@ -67538,6 +67583,7 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 
 
 func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: bool = true) -> void:
+	if is_instance_valid(_grubbah) and str(_grubbah.state.get("phase",""))=="wrapping": return
 	if not playing or id == "":
 		return
 	if id == "bun_bottom":
@@ -68325,6 +68371,9 @@ func _refresh_spatula_ui() -> void:
 
 
 func _submit_serve_request(cust: Node3D, station_index: int) -> void:
+	if is_instance_valid(cust) and bool(cust.get_meta("mobile_order",false)):
+		_grubbah.request("action")
+		return
 	if cust == null or not is_instance_valid(cust):
 		return
 	if mp_enabled and not _mp_applying:
@@ -68419,6 +68468,11 @@ func _clear_local_held_icecream_after_remote_hand() -> void:
 
 
 func _try_auto_serve() -> void:
+	if is_instance_valid(_grubbah) and _grubbah.is_selected():
+		if _grubbah.host() and str(_grubbah.state.get("phase",""))=="paper" and _grubbah.burger_ready() and not stations[0].items.has("bun_top"):
+			if _crown_serve_burger(0): _refresh_station(0)
+		return
+	if is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) in ["paper","wrapping"]: return
 	if not _whole_burger_drag.is_empty() or (is_instance_valid(_whole_burger_settle) and _whole_burger_settle.is_running()): return
 	## Hand off as soon as a station matches a waiting ticket perfectly.
 	if not playing or _auto_serving or _serve_fly_busy:
@@ -70147,6 +70201,12 @@ func _serve_reject_hint(order: Array, station_index: int) -> void:
 
 
 func _on_serve() -> void:
+	if is_instance_valid(_grubbah) and _grubbah.is_selected():
+		_grubbah.request("action")
+		return
+	if is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) in ["paper","wrapping"]:
+		_grubbah.request("wrap")
+		return
 	if not playing or _serve_fly_busy:
 		return
 	## Resolve customer + perfect Build station before RPCing so peers share one outcome.
@@ -70394,7 +70454,7 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 func _resolve_serve_customer():
 	if _order_can_receive_burger(selected_customer): return selected_customer
 	selected_customer=null
-	for c in customers:
+	for c in tickets.keys():
 		if _order_can_receive_burger(c):
 			selected_customer=c
 			if mp_enabled and NetManager.is_host(): mp_select_customer(_customer_net_id(c))
@@ -70446,6 +70506,9 @@ func _begin_serve_at(
 	source_peer_id: int = 0,
 	source_has_held_cup: bool = false
 ) -> void:
+	if is_instance_valid(customer) and bool(customer.get_meta("mobile_order",false)):
+		_grubbah.request("action")
+		return
 	if not playing or _serve_fly_busy:
 		return
 	if customer == null or not is_instance_valid(customer) or not customer.is_waiting:
@@ -72566,7 +72629,6 @@ func _setup_multiplayer_ui() -> void:
 
 
 func _open_mp_lobby() -> void:
-	_mp_enter_windowed_for_coop()
 	_fit_mp_lobby_panel()
 	if _mp_lobby_root:
 		_mp_lobby_root.visible = true
@@ -72600,25 +72662,12 @@ func _close_mp_lobby() -> void:
 		_mp_lobby_root.visible = false
 
 
-func _mp_enter_windowed_for_coop() -> void:
-	## Two instances on one PC need windowed mode.
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	DisplayServer.window_set_size(Vector2i(1100, 720))
-	var idx := DisplayServer.get_primary_screen()
-	var screen := DisplayServer.screen_get_usable_rect(idx)
-	var offset := Vector2i(40, 40)
-	if NetManager.role == NetManager.Role.CLIENT or OS.get_process_id() % 2 == 0:
-		offset = Vector2i(120, 80)
-	DisplayServer.window_set_position(screen.position + offset)
-
-
 func _mp_on_host_pressed() -> void:
 	_sfx_click()
 	if _mp_name_edit:
 		NetManager.player_name = _mp_name_edit.text.strip_edges()
 	if _mp_relay_edit:
 		NetManager.set_relay_url(_mp_relay_edit.text)
-	_mp_enter_windowed_for_coop()
 	var err := NetManager.host_room(NetManager.player_name)
 	if err != OK:
 		_flash("Could not host — try again", Color("EF5350"))
@@ -72673,7 +72722,6 @@ func _mp_on_code_join() -> void:
 func _mp_join_by_code(code: String) -> void:
 	if _mp_relay_edit:
 		NetManager.set_relay_url(_mp_relay_edit.text)
-	_mp_enter_windowed_for_coop()
 	var pname := NetManager.player_name
 	if _mp_name_edit:
 		pname = _mp_name_edit.text.strip_edges()
@@ -74791,6 +74839,7 @@ func mp_serve(
 	station_index: int = -1,
 	source_has_held_cup: bool = false
 ) -> void:
+	if station_index >= 0 and is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) in ["paper","wrapping"]: return
 	if mp_enabled and not NetManager.is_host():
 		return
 	var sid := multiplayer.get_remote_sender_id()
@@ -75921,6 +75970,7 @@ func _mp_emit_economy(peer_id: int = 0) -> void:
 		SHOP_GRILL_ROOMBA,
 		SHOP_FRIDGE_UPGRADE,
 		SHOP_GOLD_SPATULA,
+		SHOP_CHEF_KNIFE,
 	]
 	var shop_vals: Array = []
 	for sid in shop_ids:
@@ -76816,7 +76866,7 @@ func mp_soda_slick_state(
 			mesh.scale = Vector3.ONE if surface_spline else Vector3(float(item["scrape"]), 1.0, float(item["scrape"]))
 			mesh.position = Vector3(
 				x,
-				GRILL_SURFACE_Y + (condiment_smear_surface_lift if smeared else condiment_surface_lift) if surface_spline else GRILL_SURFACE_Y + OIL_SIT_Y,
+				(_grill_steel_top_y() + condiment_smear_surface_lift if smeared else GRILL_SURFACE_Y + condiment_surface_lift) if surface_spline else GRILL_SURFACE_Y + OIL_SIT_Y,
 				z
 			)
 	_mp_applying = false
@@ -78371,7 +78421,7 @@ func _scrape_local_sauce(pos: Vector3, direction: Vector2, radius: float) -> boo
 			item["local_latched"]=false
 			continue
 		var reverse := direction.normalized().dot(item.get("local_direction",Vector2.ZERO)) < -.4
-		if bool(item.get("local_latched",false)) and not (reverse and Time.get_ticks_msec()-int(item.get("local_ms",0))>180): continue
+		if not _mp_applying and bool(item.get("local_latched",false)) and not (reverse and Time.get_ticks_msec()-int(item.get("local_ms",0))>180): continue
 		touched=true
 		var passes := int(round((1.0-float(item.get("scrape",1.0)))*3.0))+1 if bool(item.get("smeared",false)) else 1
 		if not kept.is_empty():

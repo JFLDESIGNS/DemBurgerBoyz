@@ -30,23 +30,34 @@ func run():
  g.mp_enabled=true
  var p:=Vector3(g.GRILL_CENTER_X,g.GRILL_SURFACE_Y,g.GRILL_SURFACE_Z)
  if host:
-  g._spawn_condiment_spline_segment(p-Vector3(.12,0,0),p+Vector3(.12,0,0),.015,"mustard")
+  g._spawn_condiment_spline_segment(p-Vector3(.12,0,0),p+Vector3(.12,0,0),.008,"mustard")
   await wait_mark("spawned")
   for i in 3:
-   g._scrape_slick_array(g.soda_slicks,p,Vector2(.04,0),.04,.2,"soda")
-   g._scrape_slick_array(g.soda_slicks,p+Vector3(2,0,0),Vector2(.04,0),.04,.2,"soda")
-   mark("pass"+str(i));await wait_mark("seen"+str(i))
+   await wait_mark("pass"+str(i));await create_timer(.15).timeout
+   var patches=0
+   for item in g.soda_slicks:
+    if item.flavor=="mustard" and item.get("smeared",false):
+     patches+=1;assert(is_equal_approx(item.scrape,1.0-float(i+1)/3.0))
+   assert(patches==(1 if i<2 else 0))
+   assert(not g.soda_slicks.is_empty()) # Untouched ends remain on the grill.
+   mark("seen"+str(i))
+  await wait_mark("guest_draw")
+  await create_timer(.15).timeout
+  assert(g.soda_slicks.any(func(item):return item.flavor=="ketchup"))
+  assert(g._scrape_local_sauce(p+Vector3(0,0,.12),Vector2(.04,0),.045))
+  mark("host_scrape");await wait_mark("guest_seen")
  else:
   while g.soda_slicks.is_empty():await process_frame
   mark("spawned")
   for i in 3:
-   await wait_mark("pass"+str(i));await create_timer(.15).timeout
-   if i<2:
-    assert(g.soda_slicks.size()==1 and g.soda_slicks[0].smeared)
-    assert(is_equal_approx(g.soda_slicks[0].scrape,1.0-float(i+1)/3.0))
-   else:assert(g.soda_slicks.is_empty())
-   assert(g.condiment_smear_items.is_empty())
-   mark("seen"+str(i))
+   assert(g._scrape_local_sauce(p,Vector2(.04,0),.045))
+   g._scrape_local_sauce(p+Vector3(2,0,0),Vector2(.04,0),.045)
+   mark("pass"+str(i));await wait_mark("seen"+str(i))
+  var q=p+Vector3(0,0,.12)
+  g._spawn_condiment_spline_segment(q-Vector3(.12,0,0),q+Vector3(.12,0,0),.008,"ketchup")
+  mark("guest_draw");await wait_mark("host_scrape");await create_timer(.15).timeout
+  assert(g.soda_slicks.any(func(item):return item.flavor=="ketchup" and item.get("smeared",false)))
+  mark("guest_seen")
  g.mp_enabled=false;net.leave(false)
  print("SAUCE_NETWORK_OK")
  g.queue_free()

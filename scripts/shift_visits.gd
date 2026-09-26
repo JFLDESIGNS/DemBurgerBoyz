@@ -66,6 +66,7 @@ func steal_patty(patty: Node3D, committed: bool=false) -> void:
  patty.set_process(false)
  patty.collision_layer = 0
  var start: Vector3 = patty.global_position
+ var original_scale: Vector3 = patty.scale
  cat._timer = maxf(cat._timer, 2.0)
  cat.wants_meow.emit(1.15)
  var tongue:=MeshInstance3D.new()
@@ -78,22 +79,23 @@ func steal_patty(patty: Node3D, committed: bool=false) -> void:
  tongue.material_override=red
  game.world.add_child(tongue)
  var visual_home: Vector3=cat._visual.position
- cat.set_meta("steal_lean_lift",.28)
- cat._visual.position.y += .28
- cat._visual.rotation_degrees.x=24.0
+ cat.set_meta("steal_lean_lift",.34)
+ cat._visual.position.y += .34
+ cat._visual.rotation_degrees.x=34.0
  var tw := create_tween()
  tw.tween_method(func(t: float):
   if not is_instance_valid(cat) or not is_instance_valid(tongue): return
-  var mouth: Vector3=cat.global_position+Vector3(0,.58,-.30)
+  var mouth: Vector3=cat.to_global(Vector3(0,.68,.22))
   _stretch_tongue(tongue,mouth,mouth.lerp(start,t))
- ,0.0,1.0,.25)
+ ,0.0,1.0,.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+ tw.tween_interval(.06)
  tw.tween_method(func(t: float):
   if not is_instance_valid(patty) or not is_instance_valid(cat): return
-  var mouth: Vector3 = cat.global_position + Vector3(0,.58,-.30)
+  var mouth: Vector3 = cat.to_global(Vector3(0,.68,.22))
   patty.global_position = start.lerp(mouth,t) + Vector3.UP * sin(t*PI)*.32
-  patty.scale = Vector3.ONE * lerpf(1.0,.65,t)
+  patty.scale = original_scale
   _stretch_tongue(tongue,mouth,patty.global_position)
- ,0.0,1.0,.65)
+ ,0.0,1.0,.42).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
  tw.tween_callback(func():
   if is_instance_valid(tongue): tongue.queue_free()
   if is_instance_valid(cat):
@@ -120,8 +122,8 @@ func show_profit(payout: float, cost: float) -> void:
   profit_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
   profit_label.offset_left = -770
   profit_label.offset_right = -245
-  profit_label.offset_top = 40
-  profit_label.offset_bottom = 66
+  profit_label.offset_top = 55
+  profit_label.offset_bottom = 81
   profit_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
   profit_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
   game.UiFontsScript.apply_label(profit_label,true,17)
@@ -129,7 +131,7 @@ func show_profit(payout: float, cost: float) -> void:
   profit_label.add_theme_constant_override("outline_size",2)
  if profit_tween: profit_tween.kill()
  profit_label.text = "Profit %s  ·  Paid %s  ·  Cost %s" % [game._format_money(payout-cost),game._format_money(payout),game._format_money(cost)]
- profit_label.add_theme_color_override("font_color",Color("BFE8C5") if payout>=cost else Color("F1C58E"))
+ profit_label.add_theme_color_override("font_color",Color("FFA52E"))
  profit_label.modulate.a = 1.0
  profit_label.show()
  profit_tween = create_tween()

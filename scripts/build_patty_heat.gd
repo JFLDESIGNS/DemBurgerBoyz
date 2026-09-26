@@ -41,11 +41,9 @@ func setup(game: Node, source: Object) -> void:
  view.add_child(steam)
  steam.scale=Vector3(.85,.72,.85)
  steam.position.y=.75
- var material:ShaderMaterial=game._make_smoke2_grill_material()
- material.set_shader_parameter("tint_color",Color(1.0,.99,.97,.29))
- material.set_shader_parameter("height_fade_strength",1.4)
- material.shader.code=material.shader.code.replace("mask * alpha_boost", "mask * smoothstep(0.05,0.5,abs(dot(normalize(NORMAL),normalize(VIEW)))) * alpha_boost")
- material.shader.code=material.shader.code.replace("vec3 col = base.rgb * tint_color.rgb;", "vec3 col = mix(vec3(0.88), vec3(1.0), base.r) * tint_color.rgb;")
+ var material:=ShaderMaterial.new()
+ material.shader=preload("res://shaders/build_burger_vapor.gdshader")
+ material.set_shader_parameter("alpha_tex",load(game.SMOKE2_ALPHA_TEX_PATH))
  game._apply_smoke2_materials_recursive(steam,material)
 func _process(delta: float) -> void:
  if not is_visible_in_tree():

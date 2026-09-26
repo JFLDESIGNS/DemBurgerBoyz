@@ -29,7 +29,7 @@ func setup(g: Node, parent: Control) -> void:
  counter.offset_top=36
  counter.offset_bottom=69
  counter.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
- counter.add_theme_font_size_override("font_size",22)
+ counter.add_theme_font_size_override("font_size",16)
  counter.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
  counter.add_theme_color_override("font_color",Color("FFA52E"))
  counter.add_theme_color_override("font_outline_color",Color("30231B"))
