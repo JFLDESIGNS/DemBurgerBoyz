@@ -154,6 +154,7 @@ func advance(delta: float) -> void:
 	elapsed += delta
 	_update_delivery_meows(delta)
 	if phase == "waiting":
+		if game._disguise_cat_active:return
 		# Let any car already on the road leave naturally before entering its lane.
 		if game.street_car_active: return
 		truck.show(); courier.show(); set_phase("arrive")

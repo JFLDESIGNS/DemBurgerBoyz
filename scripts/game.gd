@@ -245,6 +245,11 @@ const SHOP_ICECREAM_MACHINE := "icecream_machine"
 const SHOP_FRYER_MACHINE := "fryer_machine"
 const SHOP_GRILL_ROOMBA := "grill_roomba"
 const SHOP_FRIDGE_UPGRADE := "fridge_upgrade"
+var _phone_party = null
+var _card_table = null
+var _intro_cursor_hidden := false
+var _intro_error_ms := 0
+const SHOP_CARD_DECK := "card_deck"
 const SHOP_CHEF_KNIFE := "chef_knife"
 var _shop_knife_preview: Node3D
 const SHOP_GOLD_SPATULA := "gold_spatula"
@@ -1485,6 +1490,7 @@ var owned_machines: Dictionary = {
 	SHOP_FRIDGE_UPGRADE: false,
 	SHOP_GOLD_SPATULA: false,
 	SHOP_CHEF_KNIFE: false,
+	SHOP_CARD_DECK: false,
 }
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
@@ -5564,6 +5570,11 @@ func get_performance_report() -> Dictionary:
 
 
 func _process_gameplay(delta: float) -> void:
+	var intro_block := _morning_boss_blocks_controls()
+	if intro_block != _intro_cursor_hidden:
+		_intro_cursor_hidden=intro_block
+		if is_instance_valid(_mp_cursor_layer):_mp_cursor_layer.visible=not intro_block
+		Input.mouse_mode=Input.MOUSE_MODE_HIDDEN if intro_block else Input.MOUSE_MODE_VISIBLE
 	_center_build_burger_on_board()
 	_update_customer_departure_holds()
 	_perf_ui_accum += delta
@@ -5592,6 +5603,8 @@ func _process_gameplay(delta: float) -> void:
 	_update_street_car(delta)
 	_update_background_people(delta)
 	if _morning_boss_blocks_controls():
+		_update_physical_garbage_screen_follow()
+		_update_patty_fridge_screen_follow()
 		return
 	_update_keyboard_cook_shortcuts(delta)
 	if level_editor != null and level_editor.is_active():
@@ -6097,6 +6110,9 @@ func _next_spawn_delay() -> float:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _morning_boss_blocks_controls() and not (event is InputEventKey and event.keycode == KEY_ESCAPE):
+		if event is InputEventMouseButton and event.pressed and Time.get_ticks_msec()-_intro_error_ms>700:
+			_intro_error_ms=Time.get_ticks_msec()
+			if game_audio:game_audio.play_intro_error()
 		get_viewport().set_input_as_handled()
 		return
 	if mp_enabled and not NetManager.is_host() and _mp_bootstrap_request_time > 0 and not _mp_bootstrap_ready:
@@ -6316,6 +6332,15 @@ func _unhandled_input(event: InputEvent) -> void:
 var _empty_stock_controls: Node3D
 
 func _input(event: InputEvent) -> void:
+	if _morning_boss_blocks_controls() and not (event is InputEventKey and event.keycode == KEY_ESCAPE):
+		if event is InputEventMouseButton and event.pressed and Time.get_ticks_msec()-_intro_error_ms>700:
+			_intro_error_ms=Time.get_ticks_msec()
+			if game_audio:game_audio.play_intro_error()
+		get_viewport().set_input_as_handled()
+		return
+	if is_instance_valid(_card_table) and _card_table.opened and event is InputEventMouse and _card_table.ui.get_global_rect().has_point(event.position):return
+	if is_instance_valid(_card_table) and _card_table.handle_input(event):
+		get_viewport().set_input_as_handled();return
 	if playing and event is InputEventMouseMotion and _whole_burger_drag.is_empty():
 		call_deferred("_update_build_layer_hover",event.position)
 	if is_instance_valid(_empty_stock_controls) and _empty_stock_controls.handle_input(event):
@@ -6325,9 +6350,6 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if _handle_whole_burger_drag(event):
-		get_viewport().set_input_as_handled()
-		return
-	if _morning_boss_blocks_controls() and not (event is InputEventKey and event.keycode == KEY_ESCAPE):
 		get_viewport().set_input_as_handled()
 		return
 	if not menu_ready or not _kitchen_ready: return
@@ -8818,7 +8840,7 @@ func _update_patty_fridge_screen_follow() -> void:
 	patty_fridge_root.rotation_degrees = patty_fridge_rot
 	patty_fridge_root.scale = Vector3.ONE * _patty_fridge_world_scale()
 	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
-			and ingredient_legend.visible \
+			and (ingredient_legend.visible or _morning_boss_blocks_controls()) \
 			and (start_overlay == null or not start_overlay.visible)
 	if patty_fridge_open or _fridge_launch_inflight > 0 or _fridge_drag_active:
 		show = true
@@ -10256,7 +10278,7 @@ func _update_physical_garbage_screen_follow() -> void:
 	physical_garbage_root.rotation_degrees = physical_garbage_rot
 	physical_garbage_root.scale = Vector3.ONE * _physical_garbage_world_scale()
 	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
-			and ingredient_legend.visible \
+			and (ingredient_legend.visible or _morning_boss_blocks_controls()) \
 			and (start_overlay == null or not start_overlay.visible)
 	physical_garbage_root.visible = show
 
@@ -21091,6 +21113,8 @@ func _queue_disguise_cat(flash_text: String = "") -> void:
 
 
 func _try_spawn_disguise_cat() -> void:
+	if is_instance_valid(mail_delivery_truck) and not mail_delivery_truck.finished:return
+	if is_instance_valid(window_cat) and window_cat.visible:return
 	if not _disguise_cat_pending or _disguise_cat_active:
 		return
 	if not playing:
@@ -50348,6 +50372,7 @@ func _on_muvye_cinema_mode(enabled: bool) -> void:
 
 
 func _set_phone_app(app_id: String) -> void:
+	if is_instance_valid(_phone_party) and not _phone_party.applying: _phone_party.choose(app_id)
 	if is_instance_valid(_grubbah): _grubbah.show_app(app_id)
 	_phone_app_id = app_id
 	if is_instance_valid(_order_insights): _order_insights.show_app(app_id)
@@ -51104,6 +51129,8 @@ func _phone_bank_action(caption: String, accent: Color, cb: Callable) -> Button:
 
 func _shop_item_cost(id: String) -> float:
 	match id:
+		SHOP_CARD_DECK:
+			return 25.0
 		SHOP_CHEF_KNIFE:
 			return 50.0
 		SHOP_SODA_MACHINE:
@@ -51126,6 +51153,8 @@ func _shop_item_cost(id: String) -> float:
 
 func _shop_item_label(id: String) -> String:
 	match id:
+		SHOP_CARD_DECK:
+			return "Burger Pals Cards"
 		SHOP_CHEF_KNIFE:
 			return "Chef Knife"
 		SHOP_SODA_MACHINE:
@@ -51148,6 +51177,8 @@ func _shop_item_label(id: String) -> String:
 
 func _shop_item_note(id: String) -> String:
 	match id:
+		SHOP_CARD_DECK:
+			return "Five-card draw · Blackjack · Play with your partner"
 		SHOP_CHEF_KNIFE:
 			return "Pick up and hold · Cutting coming later"
 		SHOP_SODA_MACHINE:
@@ -51170,6 +51201,8 @@ func _shop_item_note(id: String) -> String:
 
 func _shop_item_description(id: String) -> String:
 	match id:
+		SHOP_CARD_DECK:
+			return "A deck for the counter. Private hands, five-card draw and blackjack. No wagers."
 		SHOP_CHEF_KNIFE:
 			return "A polished chef knife for your wall. Pick it up now; cutting will come later."
 		SHOP_TRUCK:
@@ -51221,6 +51254,12 @@ func _shop_review_count_text(value: int) -> String:
 
 func _shop_product_source(id: String) -> Node3D:
 	match id:
+		SHOP_CARD_DECK:
+			if not is_instance_valid(world):return null
+			if is_instance_valid(_card_table):
+				if not is_instance_valid(_card_table.prop):_card_table.build_prop();_card_table.prop.hide()
+				return _card_table.prop
+			return null
 		SHOP_CHEF_KNIFE:
 			if not is_instance_valid(_shop_knife_preview):
 				_shop_knife_preview=preload("res://models/burgerpack/try2/SM_ChefsKnife.glb").instantiate()
@@ -51719,6 +51758,7 @@ func _reset_shop_unlocks() -> void:
 	owned_machines[SHOP_FRIDGE_UPGRADE] = false
 	owned_machines[SHOP_GOLD_SPATULA] = false
 	owned_machines[SHOP_CHEF_KNIFE] = false
+	owned_machines[SHOP_CARD_DECK] = false
 	_clear_all_drink_cups()
 	_reset_machine_breaks()
 	_reset_icecream_cone_to_home()
@@ -51792,7 +51832,7 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	v.add_child(subtitle)
 
 	_add_phone_shop_item(v, SHOP_TRUCK)
-	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA, SHOP_CHEF_KNIFE]:
+	for id in [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA, SHOP_CHEF_KNIFE, SHOP_CARD_DECK]:
 		_add_phone_shop_item(v, id)
 
 
@@ -51920,6 +51960,7 @@ func _shop_catalog_ids() -> Array[String]:
 		SHOP_FRIDGE_UPGRADE,
 		SHOP_GOLD_SPATULA,
 		SHOP_CHEF_KNIFE,
+		SHOP_CARD_DECK,
 	]
 
 
@@ -51953,7 +51994,7 @@ func _buy_shop_item(id: String) -> void:
 func _buy_shop_item_local(id: String) -> void:
 	if not playing:
 		return
-	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA, SHOP_CHEF_KNIFE].has(id):
+	if not [SHOP_SODA_MACHINE, SHOP_ICECREAM_MACHINE, SHOP_FRYER_MACHINE, SHOP_GRILL_ROOMBA, SHOP_FRIDGE_UPGRADE, SHOP_GOLD_SPATULA, SHOP_CHEF_KNIFE, SHOP_CARD_DECK].has(id):
 		return
 	if bool(owned_machines.get(id, false)):
 		_flash("%s already installed" % _shop_item_label(id), Color("FFE082"))
@@ -52884,6 +52925,11 @@ func _build_phone_ui() -> void:
 	_set_phone_app("home")
 	_refresh_phone_ui()
 	_build_phone_lock_screen()
+	if not is_instance_valid(_phone_party):
+		_phone_party=preload("res://scripts/phone_party.gd").new();_phone_party.name="PhoneParty";add_child(_phone_party)
+	_phone_party.setup(self)
+	if not is_instance_valid(_card_table):
+		_card_table=preload("res://scripts/card_table.gd").new();_card_table.name="CardTableSession";add_child(_card_table);_card_table.setup(self)
 
 
 func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
@@ -75994,6 +76040,7 @@ func _mp_emit_economy(peer_id: int = 0) -> void:
 		SHOP_FRIDGE_UPGRADE,
 		SHOP_GOLD_SPATULA,
 		SHOP_CHEF_KNIFE,
+		SHOP_CARD_DECK,
 	]
 	var shop_vals: Array = []
 	for sid in shop_ids:

@@ -1912,6 +1912,10 @@ func play_trash() -> void:
 	_play_cached("trash", _make_trash, 0.0, 0.85)
 
 
+func play_intro_error() -> void:
+	_play_cached("error_buzz", _make_error, 0.0, 0.18)
+
+
 func play_error() -> void:
 	## Short descending buzz — already holding a patty / invalid grab.
 	_play_cached("error_buzz", _make_error, 0.0, 0.55)

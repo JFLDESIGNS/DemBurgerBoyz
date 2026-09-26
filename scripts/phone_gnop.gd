@@ -1,5 +1,7 @@
 ## Phone arcade: Gnop. Arrow keys move the left paddle; bounce the ball past the CPU.
 extends Control
+var party = null
+var party_id := ""
 
 const PADDLE_H := 46.0
 const PADDLE_W := 7.0
@@ -16,6 +18,12 @@ var _score_c: int = 0
 var _alive: bool = true
 var _started: bool = false
 var _active: bool = false
+var _visual_ball := Vector2(88,100)
+var _visual_left := 80.0
+var _visual_right := 80.0
+var partner := false
+var partner_up := false
+var partner_down := false
 var _up: bool = false
 var _down: bool = false
 
@@ -28,6 +36,7 @@ func _ready() -> void:
 
 
 func set_active(on: bool) -> void:
+	if _active == on: return
 	_active = on
 	set_process(on)
 	_up = false
@@ -50,6 +59,7 @@ func reset_game() -> void:
 
 
 func handle_key(event: InputEventKey) -> bool:
+	if party != null and party.input_event(self,event): return true
 	if not _active:
 		return false
 	var code := event.keycode
@@ -82,6 +92,7 @@ func handle_key(event: InputEventKey) -> bool:
 
 
 func _on_gui_input(ev: InputEvent) -> void:
+	if party != null and party.input_event(self,ev): accept_event();return
 	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 		if not _alive:
 			reset_game()
@@ -89,6 +100,12 @@ func _on_gui_input(ev: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	if party != null and party.online() and not party.host():
+		var blend:=1.0-exp(-delta*25.0)
+		_visual_ball=_visual_ball.lerp(_ball,blend)
+		_visual_left=lerpf(_visual_left,_player_y,blend)
+		_visual_right=lerpf(_visual_right,_cpu_y,blend)
+		queue_redraw();return
 	if not _active:
 		return
 	var field := _field()
@@ -104,7 +121,9 @@ func _process(delta: float) -> void:
 		_ball += _vel * delta
 		var cpu_c := _cpu_y + PADDLE_H * 0.5
 		var ball_c := _ball.y
-		if cpu_c < ball_c - 4.0:
+		if partner:
+			_cpu_y += (float(partner_down)-float(partner_up))*PADDLE_SPEED*delta
+		elif cpu_c < ball_c - 4.0:
 			_cpu_y += PADDLE_SPEED * 0.78 * delta
 		elif cpu_c > ball_c + 4.0:
 			_cpu_y -= PADDLE_SPEED * 0.78 * delta
@@ -148,11 +167,17 @@ func _serve(dir_x: float) -> void:
 
 
 func _field() -> Rect2:
-	return Rect2(6.0, 22.0, maxf(8.0, size.x - 12.0), maxf(8.0, size.y - 44.0))
+	return Rect2(6.0,22.0,180.0,240.0)
 
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0.05, 0.07, 0.12, 1.0), true)
+	var canvas_size:=Vector2(192,284)
+	draw_set_transform(Vector2.ZERO,0,size/canvas_size)
+	var remote: bool =party!=null and party.online() and not party.host()
+	var left:=_visual_left if remote else _player_y
+	var right:=_visual_right if remote else _cpu_y
+	var ball:=_visual_ball if remote else _ball
+	draw_rect(Rect2(Vector2.ZERO, canvas_size), Color(0.05, 0.07, 0.12, 1.0), true)
 	var field := _field()
 	draw_rect(field, Color(0.08, 0.12, 0.20, 1.0), true)
 	draw_rect(field, Color(0.55, 0.78, 1.0, 0.7), false, 1.5)
@@ -161,9 +186,9 @@ func _draw() -> void:
 	while y < field.end.y:
 		draw_rect(Rect2(mid_x - 1.0, y, 2.0, 8.0), Color(0.45, 0.62, 0.85, 0.55), true)
 		y += 14.0
-	draw_rect(Rect2(field.position + Vector2(4.0, _player_y), Vector2(PADDLE_W, PADDLE_H)), Color(0.95, 0.92, 0.55, 1.0), true)
-	draw_rect(Rect2(field.position + Vector2(field.size.x - 4.0 - PADDLE_W, _cpu_y), Vector2(PADDLE_W, PADDLE_H)), Color(0.75, 0.88, 1.0, 1.0), true)
-	draw_rect(Rect2(field.position + _ball, Vector2(BALL, BALL)), Color(1.0, 1.0, 0.92, 1.0), true)
+	draw_rect(Rect2(field.position + Vector2(4.0, left), Vector2(PADDLE_W, PADDLE_H)), Color(0.95, 0.92, 0.55, 1.0), true)
+	draw_rect(Rect2(field.position + Vector2(field.size.x - 4.0 - PADDLE_W, right), Vector2(PADDLE_W, PADDLE_H)), Color(0.75, 0.88, 1.0, 1.0), true)
+	draw_rect(Rect2(field.position + ball, Vector2(BALL, BALL)), Color(1.0, 1.0, 0.92, 1.0), true)
 	var font := ThemeDB.fallback_font
 	draw_string(font, Vector2(8.0, 16.0), "GNOP  %d — %d" % [_score_p, _score_c], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.85, 0.92, 1.0))
 	var foot := "UP / DOWN"
@@ -173,5 +198,6 @@ func _draw() -> void:
 		if _score_p > _score_c:
 			foot = "YOU WIN — TAP / ARROW"
 		else:
-			foot = "CPU WINS — TAP / ARROW"
-	draw_string(font, Vector2(8.0, size.y - 6.0), foot, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.72, 0.84, 1.0))
+			foot = "RIGHT WINS — TAP / ARROW"
+	if party!=null and party.online() and _alive:foot=party.status(party_id)
+	draw_string(font, Vector2(8.0, canvas_size.y - 6.0), foot, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.72, 0.84, 1.0))

@@ -1,5 +1,7 @@
 ## Phone arcade: Burger Smush. Clear 2+ groups, build falling 3+ cascades, RMB-swap neighbors.
 extends Control
+var party = null
+var party_id := ""
 
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 
@@ -96,6 +98,7 @@ func _ready() -> void:
 
 
 func set_active(on: bool) -> void:
+	if _active == on: return
 	if not on: _save_score()
 	_active = on
 	set_process(on)
@@ -158,6 +161,7 @@ func _tile_alpha(cell: Vector2i) -> float:
 
 
 func handle_key(event: InputEventKey) -> bool:
+	if party != null and party.input_event(self,event): return true
 	if not _active:
 		return false
 	if not event.pressed or event.echo:
@@ -221,6 +225,7 @@ func _random_kind() -> String:
 
 
 func _on_gui_input(ev: InputEvent) -> void:
+	if party != null and party.input_event(self,ev): accept_event();return
 	if not _active:
 		return
 	if ev is InputEventMouseMotion:
@@ -628,6 +633,7 @@ func _all_match_groups(min_n: int) -> Array:
 
 
 func _process(delta: float) -> void:
+	if party != null and party.online() and not party.host(): queue_redraw();return
 	if not _active:
 		return
 	_pulse_t += delta

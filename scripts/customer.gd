@@ -4409,19 +4409,22 @@ func apply_disguise_cat_look() -> void:
 	## Hide the human toon — cat mesh parents to this root so CHAR_SCALE never shrinks it.
 	if _body != null and is_instance_valid(_body):
 		_body.visible = false
-	const CAT_PATH := "res://assets/cat/cat.fbx"
+	const CAT_PATH := "res://assets/cat/shipping_cat.glb"
 	if ResourceLoader.exists(CAT_PATH):
 		var packed := load(CAT_PATH) as PackedScene
 		if packed != null:
 			_disguise_cat_mesh = packed.instantiate() as Node3D
 			if _disguise_cat_mesh != null:
 				_disguise_cat_mesh.name = "DisguiseCatMesh"
-				_disguise_cat_mesh.scale = Vector3(DISGUISE_CAT_SCALE_X, DISGUISE_CAT_SCALE_Y, DISGUISE_CAT_SCALE_Z)
+				_disguise_cat_mesh.scale = Vector3(DISGUISE_CAT_SCALE_X, DISGUISE_CAT_SCALE_Y, DISGUISE_CAT_SCALE_Z) / 4.02
 				_disguise_cat_mesh.position = Vector3(0.0, DISGUISE_CAT_MESH_Y, 0.06)
 				_disguise_cat_mesh.rotation_degrees = Vector3.ZERO
 				add_child(_disguise_cat_mesh)
 				## Same black street-cat retint as the window cat (raw FBX is purple).
-				_retint_disguise_cat_fur(_disguise_cat_mesh)
+				preload("res://scripts/cat_appearance.gd").apply_fur(_disguise_cat_mesh)
+				for part_name in ["Delivery_Box_Rig","Postal_Cap_Rig","Messenger_Bag_Rig","Crossbody leather strap","Flush strap stitching -1","Flush strap stitching 1"]:
+					var part=_disguise_cat_mesh.find_child(part_name,true,false) as Node3D
+					if part:part.hide()
 				var anim := _disguise_cat_mesh.find_child("AnimationPlayer", true, false) as AnimationPlayer
 				if anim != null and anim.has_animation("CINEMA_4D_Main"):
 					anim.stop()

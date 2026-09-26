@@ -1,4 +1,5 @@
 extends Control
+var party = null
 
 signal cinema_mode_changed(enabled: bool)
 
@@ -327,6 +328,7 @@ func _build_ui() -> void:
 
 
 func _show_library() -> void:
+	if party != null and party.media_action("_show_library",[]):return
 	set_cinema(false)
 	if _video != null:
 		_video.stop()
@@ -341,6 +343,7 @@ func _show_library() -> void:
 
 
 func _browse(direction: int) -> void:
+	if party != null and party.media_action("_browse",[direction]):return
 	_browse_index = posmod(_browse_index + direction, MOVIES.size())
 	_refresh_library()
 
@@ -358,6 +361,7 @@ func _refresh_library() -> void:
 
 
 func _play_movie(index: int) -> void:
+	if party != null and party.media_action("_play_movie",[index]):return
 	if index < 0 or index >= MOVIES.size():
 		return
 	var stream := load(str(MOVIES[index]["video"])) as VideoStream
@@ -382,6 +386,7 @@ func _play_movie(index: int) -> void:
 
 
 func _toggle_play_pause() -> void:
+	if party != null and party.media_action("_toggle_play_pause",[]):return
 	if _current_movie < 0:
 		_play_movie(_browse_index)
 		return
@@ -400,6 +405,7 @@ func _change_movie(direction: int) -> void:
 
 
 func _seek_relative(seconds: float) -> void:
+	if party != null and party.media_action("_seek_relative",[seconds]):return
 	if _current_movie < 0:
 		return
 	var length: float = _video.get_stream_length()
@@ -409,6 +415,7 @@ func _seek_relative(seconds: float) -> void:
 func _on_seek_drag_ended(value_changed: bool) -> void:
 	_dragging_seek = false
 	if value_changed and _current_movie >= 0:
+		if party != null and party.media_action("_party_seek",[_seek.value]):return
 		_video.stream_position = _seek.value
 
 
@@ -490,3 +497,6 @@ func _format_time(seconds: float) -> String:
 		return "0:00"
 	var total: int = int(seconds)
 	return "%d:%02d" % [total / 60, total % 60]
+
+func _party_seek(seconds: float):
+	if _video!=null:_video.stream_position=clampf(seconds,0,_video.get_stream_length())
