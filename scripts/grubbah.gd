@@ -138,7 +138,7 @@ func auto_lay_paper() -> void:
   set_phase("paper")
 func holds_customer_timers() -> bool:
  return is_selected() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging"]
-func bag_station_pos() -> Vector3:return board_pos()+Vector3(.12,.015,.32)
+func bag_station_pos() -> Vector3:return board_pos()+Vector3(.12,.2182,.32)
 func _process(delta: float) -> void:
  if not is_instance_valid(game):return
  if not game.playing:
@@ -440,6 +440,16 @@ func update_visuals(_delta: float) -> void:
    if host():knife_pose_sync.rpc(knife.global_position)
    else:knife_pose.rpc_id(1,knife.global_position)
  else:knife.global_position=remote_knife_pos if remote_knife_pos!=Vector3.ZERO else knife_home+Vector3(0,.25,0)
+func _bag_finish_hit(screen_pos: Vector2) -> bool:
+ if not is_instance_valid(bag) or not bag.visible or str(state.get("phase",""))!="bagging":return false
+ var bounds:=Rect2(game.camera.unproject_position(bag.global_position),Vector2.ZERO)
+ for x in [-.15,.15]:
+  for y in [0.0,.42]:
+   for z in [-.12,.12]:
+    bounds=bounds.expand(game.camera.unproject_position(bag.to_global(Vector3(x,y,z))))
+ if is_instance_valid(bag_finish):bounds=bounds.expand(game.camera.unproject_position(bag_finish.global_position))
+ return bounds.grow(10).has_point(screen_pos)
+
 func handle_input(event: InputEvent) -> bool:
  if not game.playing or not is_instance_valid(props):return false
  if holding_knife() and event is InputEventMouseButton:
@@ -452,8 +462,12 @@ func handle_input(event: InputEvent) -> bool:
  # UI is handled normally; don't steal clicks from the phone or menus.
  if game.get_viewport().gui_get_hovered_control()!=null:
   var hovered=game.get_viewport().gui_get_hovered_control()
-  if str(hovered.get_meta("item_id",""))=="bun_bottom":return false
   if hovered is BaseButton or (is_instance_valid(game.phone_column) and game.phone_column.is_ancestor_of(hovered)):return false
+ # The visible bag wins over build layers and wrap/napkin hit areas.
+ if _bag_finish_hit(event.position):
+  request("seal");return true
+ var layer_hover=game.get_viewport().gui_get_hovered_control()
+ if layer_hover!=null and str(layer_hover.get_meta("item_id",""))=="bun_bottom":return false
  if knife.visible and event.position.distance_to(game.camera.unproject_position(knife.global_position+Vector3(0,.13,0)))<55:
   if is_instance_valid(game.spatula_patty) or is_instance_valid(game.dragging_patty):game._flash("Put the burger down first",Color("FFD147"));return true
   request("knife");return true
@@ -461,8 +475,6 @@ func handle_input(event: InputEvent) -> bool:
   request("paper");return true
  if paper3d.visible and burger_ready() and event.position.distance_to(game.camera.unproject_position(paper3d.global_position))<110:
   request("wrap");return true
- if bag.visible and str(state.get("phase",""))=="bagging" and event.position.distance_to(game.camera.unproject_position(bag.global_position+Vector3(0,.15,0)))<45:
-  request("seal");return true
  return false
 
 @rpc("any_peer","call_remote","unreliable_ordered")

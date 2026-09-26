@@ -2815,7 +2815,7 @@ const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
 const FRIES_HOLD_PACK_Y := 0.108
 ## Finished orders temporarily live beside the visible bun towers for debugging.
 ## One foot camera-right of the prior debug/ready position (world camera-right is -X).
-const FRIES_READY_SODA_OFFSET := Vector3(0.2832, -0.08, -1.1032)
+const FRIES_READY_SODA_OFFSET := Vector3(0.2832, -0.0292, -1.2048)
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14.
 ## Camera is window-side (−Z) looking +Z — farther on screen = higher Z (far HOLD edge).
 const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
