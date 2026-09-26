@@ -2815,7 +2815,7 @@ const FRYER_READY_LOCAL := Vector3(0.46, 0.040, 0.52)
 const FRIES_HOLD_PACK_Y := 0.108
 ## Finished orders temporarily live beside the visible bun towers for debugging.
 ## One foot camera-right of the prior debug/ready position (world camera-right is -X).
-const FRIES_READY_VISIBLE_BASE := Vector3(1.3852, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y - 0.045, 0.16)
+const FRIES_READY_SODA_OFFSET := Vector3(0.08, 0.0, -0.90)
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14.
 ## Camera is window-side (−Z) looking +Z — farther on screen = higher Z (far HOLD edge).
 const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
@@ -17109,6 +17109,9 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(3.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
 	else:
 		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
+	# The host adds one stocked bun pair when the first patty lands.
+	if not st["items"].has("bun_bottom") and (not mp_enabled or NetManager.is_host()):
+		_add_ingredient_to_station_local(STATION_CRAFT, "bun_bottom")
 	_mp_broadcast_station(STATION_CRAFT)
 	call_deferred("_try_auto_serve")
 
@@ -35965,11 +35968,11 @@ func _update_ready_fries_pack_sparkles(delta: float) -> void:
 
 
 func _ready_fries_slot_world(i: int) -> Vector3:
-	## Visible 2×2 debug rack beside the bun towers. This deliberately no longer
-	## inherits the HOLD strip bounds, which could clamp saved offsets off-screen.
+	## Finished packs sit forward of the drink machine, clear of the bun pickup.
 	var col := clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) % 2
 	var row := int(clampi(i, 0, FRIES_HOLD_MAX_PACKS - 1) / 2)
-	return FRIES_READY_VISIBLE_BASE + Vector3(
+	var base := Vector3(soda_station_pos.x, GRILL_SURFACE_Y + FRIES_HOLD_PACK_Y - 0.045, soda_station_pos.z)
+	return base + FRIES_READY_SODA_OFFSET + Vector3(
 		float(col) * fries_ready_spacing_x,
 		0.0,
 		float(row) * fries_ready_spacing_z
@@ -63162,6 +63165,7 @@ func _select_ticket_local(customer: Node3D) -> void:
 		_grubbah.state["selected"] = customer==_grubbah.ticket_owner
 		if customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase",""))=="paper" and stations[0].get("patties",[]).is_empty() and _grubbah.host(): _grubbah.set_phase("accepted")
 	_highlight_tickets()
+	_refresh_all_stations()
 	_refresh_customer_queue_timers()
 	_flash("Order selected - Serve from any station", Color("FFE082"))
 
@@ -67642,7 +67646,6 @@ func mp_request_bun_pair(station_index: int) -> void:
 	_add_ingredient_to_station_local(station_index, "bun_bottom")
 	_mp_applying = false
 	_mp_broadcast_economy()
-	mp_bun_pair_flight.rpc(station_index)
 
 @rpc("authority", "call_remote", "reliable")
 func mp_bun_pair_flight(station_index: int) -> void:
@@ -67667,6 +67670,9 @@ func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: 
 		_refresh_station(station_index)
 		_animate_bun_to_build_station("bun_bottom", station_index)
 		_mp_broadcast_station(station_index)
+		if mp_enabled and NetManager.is_host():
+			_mp_broadcast_economy()
+			mp_bun_pair_flight.rpc(station_index)
 		return
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
@@ -67804,6 +67810,16 @@ func _style_build_layer_row(row: Control, selected: bool, hovered: bool) -> void
 	row.add_theme_stylebox_override("panel", row_style)
 
 
+func _station_burger_complete(station_index: int) -> bool:
+	if station_index < 0 or station_index >= stations.size(): return false
+	var st: Dictionary = stations[station_index]
+	if st.get("patties", []).is_empty() or not st.items.has("bun_top") or _station_sauce_in_flight(station_index): return false
+	var customer := _resolve_serve_customer() as Node3D
+	if not is_instance_valid(customer): return false
+	var recipe: Array = GameDataScript.order_burger_items(customer.order)
+	return bool(GameDataScript.compare_orders(st.items, recipe).get("perfect", false))
+
+
 func _update_station_layer_hint(station_index: int) -> void:
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
@@ -67812,6 +67828,12 @@ func _update_station_layer_hint(station_index: int) -> void:
 	var plate: Control = st.get("plate", null)
 	var preview: Control = st.get("preview", null)
 	if hint == null or not is_instance_valid(hint) or plate == null or not is_instance_valid(plate):
+		return
+	if _station_burger_complete(station_index) and not _serve_fly_busy:
+		hint.text = "CLICK TO WRAP" if is_instance_valid(_grubbah) and _grubbah.is_selected() else "CLICK TO SERVE"
+		hint.add_theme_color_override("font_color", Color("FFD36B"))
+		hint.visible = true
+		hint.position = Vector2(plate.size.x * .5 - hint.get_minimum_size().x * .5, plate.size.y - 28.0)
 		return
 	var show_i: int = int(st.get("hovered_layer", -1))
 	if show_i < 0:
@@ -67952,6 +67974,7 @@ func _clear_station(index: int, defer_visual: bool = false) -> void:
 	st["patties"] = []
 	st["items"] = ["bun_bottom", "bun_top"] as Array[String] if playing and BUN_TOAST_ENABLED else [] as Array[String]
 	st["bun_toast"] = {}
+	st["crown_ready"] = false
 	st["selected_layer"] = -1
 	_reset_station_freshness(index)
 	## A serve already owns a pooled copy of the burger. Its persistent station UI
@@ -68242,8 +68265,19 @@ func _refresh_station(index: int) -> void:
 		_update_build_burger_shadow(preview, bottom_row.position + Vector2(bottom_row.size.x * 0.5, bottom_row.size.y * 0.84), Vector2(bottom_row.size.x * 1.38, bottom_row.size.x * 0.39))
 	if top_row != null and is_instance_valid(top_row):
 		top_row.position.y += BUILD_BUN_NEST_TOP_PX * layer_scale
-		if not _serve_fly_busy:
+		var complete := _station_burger_complete(index)
+		var was_complete := bool(st.get("crown_ready", false))
+		st["crown_ready"] = complete
+		var previous_tween = st.get("crown_tween")
+		if is_instance_valid(previous_tween): previous_tween.kill()
+		if not complete and not _serve_fly_busy:
 			top_row.position.y -= 70.0 * layer_scale
+		elif complete and not was_complete and not _serve_fly_busy:
+			var closed_y := top_row.position.y
+			top_row.position.y -= 70.0 * layer_scale
+			var tween := create_tween()
+			st["crown_tween"] = tween
+			tween.tween_property(top_row, "position:y", closed_y, .28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	_center_build_burger_on_board()
 	_update_station_layer_hint(index)
 	_queue_station_review_thumbnail(index)
@@ -68556,8 +68590,10 @@ func _clear_local_held_icecream_after_remote_hand() -> void:
 
 
 func _try_auto_serve() -> void:
-	# Serving and mobile wrapping are explicit burger clicks.
-	pass
+	# Sauce/drink completion may change readiness; handoff still requires a click.
+	for i in stations.size():
+		if bool(stations[i].get("crown_ready", false)) != _station_burger_complete(i):
+			_refresh_station(i)
 
 
 func _maybe_auto_top_bun() -> void:

@@ -37,6 +37,30 @@ func run():
  var moved=g._move_grill_patty_slide(p,target,old,true,1)
  assert(Vector2(moved.target.x,moved.target.z).distance_to(target)<.001)
  assert(other.has_meta("slide_hop_ms"))
+ g._clear_station(0)
+ var before_base=int(g.supply_stock.bun_bottom)
+ var before_top=int(g.supply_stock.bun_top)
+ g.grill[0]=null
+ g._commit_patty_to_build(p)
+ assert(g.stations[0].items==["bun_bottom","patty","bun_top"])
+ assert(g.supply_stock.bun_bottom==before_base-1 and g.supply_stock.bun_top==before_top-1)
+ g._commit_patty_to_build(p)
+ assert(g.supply_stock.bun_bottom==before_base-1)
+ var order=load("res://scripts/mobile_ticket_owner.gd").new()
+ order.order.assign(["bun_bottom","patty","bun_top"]);order.is_waiting=true
+ g.add_child(order);g._create_ticket(order);g.selected_customer=order
+ assert(g._station_burger_complete(0))
+ g._refresh_station(0)
+ await create_timer(.35).timeout
+ assert(g.stations[0].crown_ready)
+ assert(g.stations[0].layer_hint.text=="CLICK TO SERVE")
+ order.order.append("tomato")
+ g._try_auto_serve()
+ assert(not g.stations[0].crown_ready)
+ g._remove_ticket(order);g.selected_customer=null;order.queue_free()
+ var fries=g._ready_fries_slot_world(0)
+ assert(absf(fries.x-g.soda_station_pos.x)<.5)
+ assert(fries.z<g.soda_station_pos.z-.4)
  g._set_phone_expanded(true)
  for app in ["home","shop","grubbah","bank","orders","social"]:
   g._set_phone_app(app)
