@@ -34,6 +34,9 @@ func run():
  for f in [.4,.5,.6,.7]:
   var point=tr.get_global_transform_with_canvas()*(tr.size*Vector2(.5,f))
   if g._build_layer_at_screen(point)==crown:
+   g._update_build_layer_hover(point)
+   assert(crown.get_theme_stylebox("panel") is StyleBoxFlat)
+   assert(g.stations[0].layer_hint.text.contains("Right-click to remove"))
    assert(not g._try_bun_pile_click(point));assert(g._try_build_burger_click(point));found=true;break
  assert(found);assert(g.served==1)
  var p=TestPatty.new();var neighbor=TestPatty.new();g.add_child(p);g.add_child(neighbor)

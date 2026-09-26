@@ -84,8 +84,8 @@ func sync_layout() -> void:
 	scale = note.scale
 	rotation = note.rotation
 	pivot_offset = Vector2(35,35)
-	# Paper can slide upward without moving its pinned location on the rail.
-	position = note.get_transform()*Vector2(87,12)-note.position-Vector2(35,35)-Vector2(0,15)
+	# Keep the pin attached to the paper when queued tickets move.
+	position = note.get_transform()*Vector2(87,12)-Vector2(35,35)
 	modulate = note.modulate
 
 func _process(delta: float) -> void:

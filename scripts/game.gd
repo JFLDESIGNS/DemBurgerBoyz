@@ -6322,6 +6322,8 @@ func _unhandled_input(event: InputEvent) -> void:
 var _empty_stock_controls: Node3D
 
 func _input(event: InputEvent) -> void:
+	if playing and event is InputEventMouseMotion and _whole_burger_drag.is_empty():
+		call_deferred("_update_build_layer_hover",event.position)
 	if is_instance_valid(_empty_stock_controls) and _empty_stock_controls.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -17737,7 +17739,7 @@ func _add_roomba_top_highlights(parent: Node3D) -> void:
 		var streak := MeshInstance3D.new()
 		streak.name = "ToonTopReflection%d" % i
 		var plane := PlaneMesh.new()
-		plane.size = Vector2(ROOMBA_RADIUS * 1.86, ROOMBA_RADIUS * .10)
+		plane.size = Vector2(ROOMBA_RADIUS * 1.86, ROOMBA_RADIUS * .22)
 		streak.mesh = plane
 		streak.position = Vector3(0, ROOMBA_HEIGHT*.62+.007, ROOMBA_RADIUS*(-.26 if i == 0 else .26))
 		streak.material_override = mat
@@ -67719,9 +67721,22 @@ func _station_layer_display_name(item_id: String) -> String:
 
 
 func _style_build_layer_row(row: Control, selected: bool, hovered: bool) -> void:
-	if row == null or not is_instance_valid(row):
-		return
-	row.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	if not is_instance_valid(row): return
+	if (hovered or selected) and _whole_burger_drag.is_empty():
+		var box := StyleBoxFlat.new()
+		box.bg_color = Color(1.0,.85,.35,.10)
+		box.border_color = Color(1.0,.86,.42,.85)
+		box.set_border_width_all(2);box.set_corner_radius_all(7)
+		row.add_theme_stylebox_override("panel",box)
+	else: row.add_theme_stylebox_override("panel",StyleBoxEmpty.new())
+
+
+func _update_build_layer_hover(screen_pos: Vector2) -> void:
+	var hit := _build_layer_at_screen(screen_pos)
+	for si in stations.size():
+		var index := int(hit.get_meta("stack_i",-1)) if hit != null and int(hit.get_meta("station_index",-1))==si else -1
+		stations[si]["hovered_layer"] = index
+		_restyle_station_layers(si)
 
 
 func _station_burger_complete(station_index: int) -> bool:
@@ -67743,7 +67758,7 @@ func _update_station_layer_hint(station_index: int) -> void:
 	var preview: Control = st.get("preview", null)
 	if hint == null or not is_instance_valid(hint) or plate == null or not is_instance_valid(plate):
 		return
-	if _station_burger_complete(station_index) and not _serve_fly_busy:
+	if _station_burger_complete(station_index) and not _serve_fly_busy and int(st.get("hovered_layer",-1)) < 0:
 		hint.text = "CLICK TO WRAP" if is_instance_valid(_grubbah) and _grubbah.is_selected() else "CLICK TO SERVE"
 		hint.add_theme_color_override("font_color", Color("FFD36B"))
 		hint.visible = true
@@ -67762,7 +67777,7 @@ func _update_station_layer_hint(station_index: int) -> void:
 		hint.visible = false
 		return
 	var item_id := str(row.get_meta("item_id", ""))
-	hint.text = _station_layer_display_name(item_id)
+	hint.text = _station_layer_display_name(item_id) + " · Right-click to remove"
 	hint.visible = true
 	var selected := show_i == int(st.get("selected_layer", -1))
 	hint.add_theme_color_override("font_color", Color(1.0, 0.92, 0.35) if selected else Color(0.96, 0.96, 0.92))
@@ -78200,14 +78215,11 @@ func _apply_chef_points(total: int, revision: int, amount: int = 0, reason: Stri
 
 
 func _try_right_click_build_layer(screen_pos: Vector2) -> bool:
-	for si in stations.size():
-		var rows: Array=stations[si].get("layer_pool",[])
-		for i in range(rows.size()-1,-1,-1):
-			var row=rows[i]
-			if is_instance_valid(row) and row.is_visible_in_tree() and row.get_global_rect().has_point(screen_pos):
-				_trash_station_layer(si,int(row.get_meta("stack_i",-1)))
-				return true
-	return false
+	var row := _build_layer_at_screen(screen_pos)
+	if row == null: return false
+	_trash_station_layer(int(row.get_meta("station_index",-1)),int(row.get_meta("stack_i",-1)))
+	return true
+
 
 func _mp_wait_for_cooks() -> bool:
 	_mp_ensure_service()

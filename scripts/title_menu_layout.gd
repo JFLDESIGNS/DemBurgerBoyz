@@ -21,13 +21,6 @@ func setup(game: Node) -> void:
  logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
  logo.position = Vector2(190,10)
  logo.size = Vector2(420,210)
- # Layer the same alpha silhouette to make a solid teal extrusion.
- for depth in range(8,0,-1):
-  var back := logo.duplicate() as TextureRect
-  back.name = "TitleLogoDepth%d" % depth
-  back.position += Vector2(depth*.65,depth)
-  back.modulate = Color("80C8C6")
-  stage.add_child(back)
  stage.add_child(logo)
  _button(game.start_btn,Vector2(70,246),Vector2(660,82),Color("D84C3E"),Color("FFF5DA"),32,0)
  _button(game.multiplayer_btn,Vector2(70,350),Vector2(660,82),Color("147E83"),Color("FFF5DA"),32,1)
@@ -84,8 +77,8 @@ func _button(button: Button, at: Vector2, dimensions: Vector2, color: Color, ink
  caption.text = button.text
  caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
  caption.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
- caption.offset_top = 10
- caption.offset_bottom = 10
+ caption.offset_top = -3
+ caption.offset_bottom = -3
  caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
  caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
  caption.add_theme_font_override("font",button.get_theme_font("font"))
