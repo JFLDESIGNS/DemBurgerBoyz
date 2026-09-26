@@ -1,0 +1,52 @@
+extends SceneTree
+const Clip=preload("res://scripts/sauce_clip.gd")
+func _initialize():call_deferred("run")
+func run():
+ var stroke=PackedVector3Array([Vector3(-1,0,0),Vector3(1,0,0)])
+ var result=Clip.cut(stroke,Vector3.ZERO,.1)
+ assert(result.kept.size()==4 and result.cut.size()==2)
+ assert(result.cut[0].is_equal_approx(Vector3(-.1,0,0)))
+ assert(result.cut[1].is_equal_approx(Vector3(.1,0,0)))
+ assert(Clip.cut(stroke,Vector3(0,0,2),.1).kept==stroke)
+ var dense=PackedVector3Array()
+ for i in 1000:dense.append(Vector3(i*.01,0,0));dense.append(Vector3(i*.01+.01,0,0))
+ var start=Time.get_ticks_usec()
+ for i in 100:result=Clip.cut(dense,Vector3(5,0,0),.1)
+ print("CLIP 100 x 1000 segments usec=",Time.get_ticks_usec()-start)
+ assert(result.kept.size()+result.cut.size()<=dense.size()+8)
+ var actor=load("res://tests/sauce_customer_fixture.gd").new();root.add_child(actor)
+ var body=Node3D.new();actor.add_child(body);actor._body=body
+ var skeleton=Skeleton3D.new();body.add_child(skeleton);actor._skeleton=skeleton
+ skeleton.add_bone("Chest");skeleton.set_bone_rest(0,Transform3D(Basis.IDENTITY,Vector3(0,1,0)))
+ skeleton.set_bone_pose_position(0,Vector3(0,1,0))
+ var tex=load("res://scripts/food_impact.gd").sauce_drip_texture()
+ actor.receive_sauce("ketchup",tex,Color("880000"),"body")
+ var mount=skeleton.get_node("ChestSauce")
+ assert(mount is BoneAttachment3D and mount.bone_idx==0)
+ var decal=mount.get_child(0)
+ assert(decal is Decal and decal.modulate==Color("FF3929") and decal.emission_energy>0)
+ await process_frame
+ var before=decal.global_position
+ skeleton.set_bone_pose_position(0,Vector3(.3,1,0))
+ skeleton.force_update_all_bone_transforms()
+ await process_frame
+ assert(decal.global_position.x-before.x>.25)
+ var impact=load("res://scripts/food_impact.gd")
+ for i in 80:impact.sauce_drop(decal,actor,Color.RED)
+ assert(impact.active_sauce_drops==36)
+ await create_timer(1.8).timeout
+ assert(impact.active_sauce_drops==0)
+ actor.queue_free()
+ var game=load("res://scenes/main.tscn").instantiate();game.set_script(load("res://tests/kitchen_network_fixture.gd"));root.add_child(game)
+ var cup=Node3D.new();game.add_child(cup)
+ var liquid=MeshInstance3D.new();liquid.name="Liquid";liquid.mesh=CylinderMesh.new();cup.add_child(liquid)
+ game._set_melting_cup_liquid_level(cup,.5)
+ var changes=[0]
+ liquid.mesh.changed.connect(func():changes[0]+=1)
+ for i in 120:game._set_melting_cup_liquid_level(cup,.5)
+ assert(changes[0]==0)
+ game._set_melting_cup_liquid_level(cup,.25)
+ assert(changes[0]>0)
+ print("120 STATIC CUP UPDATES: ZERO GEOMETRY REBUILDS")
+ print("SAUCE_REGRESSION_OK")
+ quit()

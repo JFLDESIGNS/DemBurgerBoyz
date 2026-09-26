@@ -81,3 +81,48 @@ static func sauce_drip_texture() -> Texture2D:
    pixels.set_pixel(x,y,Color(1,1,1,alpha))
  drip_texture=ImageTexture.create_from_image(pixels)
  return drip_texture
+
+
+static var sauce_drop_mesh: SphereMesh
+static var sauce_drop_materials: Dictionary = {}
+static var active_sauce_drops := 0
+static func sauce_drop(spot: Decal, parent: Node, tint: Color) -> void:
+ if not is_instance_valid(parent) or active_sauce_drops>=36:return
+ if sauce_drop_mesh==null:
+  sauce_drop_mesh=SphereMesh.new()
+  sauce_drop_mesh.radius=.012;sauce_drop_mesh.height=.032
+  sauce_drop_mesh.radial_segments=8;sauce_drop_mesh.rings=4
+ if not sauce_drop_materials.has(tint):
+  var mat:=StandardMaterial3D.new()
+  mat.albedo_color=tint;mat.roughness=.24
+  mat.emission_enabled=true;mat.emission=tint;mat.emission_energy_multiplier=.4
+  sauce_drop_materials[tint]=mat
+ var drop:=MeshInstance3D.new()
+ drop.name="SauceDroplet"
+ drop.mesh=sauce_drop_mesh;drop.material_override=sauce_drop_materials[tint]
+ drop.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+ parent.add_child(drop)
+ drop.global_position=spot.global_position+spot.global_basis.z*spot.size.z*.45+spot.global_basis.y*.018
+ var start:=drop.global_position
+ var velocity:=Vector3(randf_range(-.06,.06),-.08,randf_range(-.03,.03))
+ active_sauce_drops+=1
+ drop.tree_exiting.connect(func():active_sauce_drops=maxi(0,active_sauce_drops-1))
+ var fall:=drop.create_tween()
+ fall.tween_method(func(t: float):
+  drop.global_position=start+velocity*t+Vector3.DOWN*2.8*t*t
+  drop.scale=Vector3.ONE*clampf((.85-t)*6.0,0.0,1.0)
+ ,0.0,.85,.85)
+ fall.tween_callback(drop.queue_free)
+
+
+static var sauce_emission_masks: Dictionary = {}
+static func sauce_emission_mask(texture: Texture2D) -> Texture2D:
+ if texture==null:return null
+ if sauce_emission_masks.has(texture):return sauce_emission_masks[texture]
+ var pixels:=texture.get_image()
+ if pixels.is_compressed():pixels.decompress()
+ pixels.convert(Image.FORMAT_RGBA8)
+ pixels.premultiply_alpha()
+ var mask:=ImageTexture.create_from_image(pixels)
+ sauce_emission_masks[texture]=mask
+ return mask

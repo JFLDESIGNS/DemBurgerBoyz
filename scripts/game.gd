@@ -5693,13 +5693,7 @@ func _process_gameplay(delta: float) -> void:
 			_update_cup_pour_white(delta)
 			_update_cup_liquid_bubbles(delta)
 			_refresh_cup_fizz_visual()
-			if cup_liquid_mat != null and cup_flavor != "":
-				var col: Color = SODA_FLAVOR_COLORS.get(cup_flavor, Color(0.28, 0.08, 0.05))
-				_apply_soda_liquid_gradient(cup_liquid_mat, col, _cup_fizz)
-				if cup_liquid_surface != null and is_instance_valid(cup_liquid_surface):
-					var sm := _ensure_cup_surface_shader_mat(cup_liquid_surface, col)
-					if sm:
-						_apply_soda_surface_look(sm, col, _cup_fizz)
+
 	_icecream_grab_lockout = maxf(0.0, _icecream_grab_lockout - delta)
 	if _cone_rack_pending:
 		var cone_mouse := get_viewport().get_mouse_position()
@@ -25329,7 +25323,7 @@ func _make_surface_condiment_smear_batch_mesh(
 	return mesh
 
 
-func _convert_condiment_batch_to_smear(item: Dictionary) -> void:
+func _convert_condiment_batch_to_smear(item: Dictionary, rebuild: bool = true) -> void:
 	if not bool(item.get("surface_spline", false)) or bool(item.get("smeared", false)):
 		return
 	var slick := item.get("mesh") as MeshInstance3D
@@ -25346,7 +25340,7 @@ func _convert_condiment_batch_to_smear(item: Dictionary) -> void:
 	slick.name = "%sScrapedSmear" % flavor.capitalize()
 	slick.scale = Vector3.ONE
 	slick.sorting_offset = 3.6
-	_rebuild_condiment_spline_batch(item)
+	if rebuild: _rebuild_condiment_spline_batch(item)
 	var mat := slick.material_override as StandardMaterial3D
 	if mat:
 		mat.albedo_texture=null
@@ -26086,11 +26080,12 @@ func _set_melting_cup_liquid_level(root: Node3D, fill: float, flavor: String = "
 	if cyl == null:
 		cyl = CylinderMesh.new()
 		liq.mesh = cyl
-	cyl.height = h
-	cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
-	cyl.bottom_radius = CUP_LIQUID_BOT_R
-	cyl.cap_top = true
-	cyl.cap_bottom = true
+	if not is_equal_approx(cyl.height,h): cyl.height = h
+	var top_radius := CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
+	if not is_equal_approx(cyl.top_radius,top_radius): cyl.top_radius = top_radius
+	if not is_equal_approx(cyl.bottom_radius,CUP_LIQUID_BOT_R): cyl.bottom_radius = CUP_LIQUID_BOT_R
+	if not cyl.cap_top: cyl.cap_top = true
+	if not cyl.cap_bottom: cyl.cap_bottom = true
 	liq.position.y = h * 0.5
 	var surf_piv := root.find_child("SurfacePivot", true, false) as Node3D
 	if surf_piv:
@@ -47155,7 +47150,7 @@ func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) ->
 		return
 	if not cust.has_method("receive_sauce"):
 		return
-	var tint: Color = KETCHUP_SMEAR_COLOR if flavor == "ketchup" else SODA_FLAVOR_COLORS.get(flavor, Color("F2B51D"))
+	var tint := Color("FF3929") if flavor == "ketchup" else Color("FFD83D")
 	var target: Vector3=cust.global_position+Vector3(0,.9,0)
 	if zone=="face": target=_customer_head_world(cust)
 	var bottle: Node3D=condiment_bottle_roots.get(flavor)
@@ -47163,9 +47158,12 @@ func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) ->
 	var blob:=MeshInstance3D.new()
 	var ball:=SphereMesh.new()
 	ball.radius=.025;ball.height=.05
+	ball.radial_segments=8;ball.rings=4
 	blob.mesh=ball
 	var material:=StandardMaterial3D.new()
 	material.albedo_color=tint;material.roughness=.3
+	material.emission_enabled=true;material.emission=tint;material.emission_energy_multiplier=.4
+	blob.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	blob.material_override=material
 	world.add_child(blob);blob.global_position=origin
 	var flight:=create_tween()
@@ -76095,9 +76093,13 @@ func mp_sync_economy(
 	if before_machines != owned_machines:
 		_apply_machine_unlock_visibility()
 	_update_hud()
-	if before_phone != [money,social_review_count,social_rating_sum] or before_machines != owned_machines or before_inventory != [supply_stock,supply_fresh,soda_tank_fill]:
+	var stock_changed: bool = before_inventory[0] != supply_stock
+	if before_phone != [money,social_review_count,social_rating_sum] or before_machines != owned_machines or stock_changed or before_inventory[2] != soda_tank_fill:
 		_refresh_phone_ui()
-	if before_inventory != [supply_stock, supply_fresh, soda_tank_fill]:
+	elif before_inventory[1] != supply_fresh and _phone_app_id == "shop":
+		for id in _phone_supply_row_refs: _refresh_phone_supply_row(str(id))
+	# A freshness clock update must not recreate every ball in the open freezer.
+	if stock_changed:
 		_refresh_ingredient_stock_bars()
 
 
@@ -78408,7 +78410,7 @@ func _record_order_history(base: int, tip: int, cost: float, customer: Node3D) -
 
 @rpc("authority","call_remote","reliable")
 func mp_order_history(rows: Array, revision: int) -> void:
-	if revision < order_history_revision: return
+	if revision <= order_history_revision: return
 	order_history=rows.duplicate(true)
 	order_history_revision=revision
 	if is_instance_valid(_order_insights): _order_insights.refresh()
@@ -78437,25 +78439,22 @@ func _scrape_local_sauce(pos: Vector3, direction: Vector2, radius: float) -> boo
 	for item in soda_slicks.duplicate():
 		if not bool(item.get("surface_spline",false)): continue
 		var segments: PackedVector3Array = item.get("spline_segments",PackedVector3Array())
-		var kept := PackedVector3Array()
-		var cut := PackedVector3Array()
-		for i in range(0,segments.size()-1,2):
-			var a := segments[i]
-			var b := segments[i+1]
-			var steps := maxi(1,ceili(a.distance_to(b)/.012))
-			for step in steps:
-				var p := a.lerp(b,float(step)/steps)
-				var q := a.lerp(b,float(step+1)/steps)
-				var mid := (p+q)*.5
-				if Vector2(mid.x-pos.x,mid.z-pos.z).length() <= radius:
-					cut.append(p);cut.append(q)
-				else:
-					kept.append(p);kept.append(q)
-		if cut.is_empty():
+		var mesh: Node3D = item.get("mesh")
+		if not is_instance_valid(mesh): continue
+		var reach := radius + float(item.get("radius",0.0))
+		if Vector2(mesh.position.x-pos.x,mesh.position.z-pos.z).length_squared() > reach*reach:
 			item["local_latched"]=false
 			continue
 		var reverse := direction.normalized().dot(item.get("local_direction",Vector2.ZERO)) < -.4
-		if not _mp_applying and bool(item.get("local_latched",false)) and not (reverse and Time.get_ticks_msec()-int(item.get("local_ms",0))>180): continue
+		if not _mp_applying and bool(item.get("local_latched",false)) and not (reverse and Time.get_ticks_msec()-int(item.get("local_ms",0))>180):
+			if not preload("res://scripts/sauce_clip.gd").touches(segments,pos,radius): item["local_latched"]=false
+			continue
+		var clipped := preload("res://scripts/sauce_clip.gd").cut(segments,pos,radius)
+		var kept: PackedVector3Array = clipped.kept
+		var cut: PackedVector3Array = clipped.cut
+		if cut.is_empty():
+			item["local_latched"]=false
+			continue
 		touched=true
 		var passes := int(round((1.0-float(item.get("scrape",1.0)))*3.0))+1 if bool(item.get("smeared",false)) else 1
 		if not kept.is_empty():
@@ -78469,7 +78468,7 @@ func _scrape_local_sauce(pos: Vector3, direction: Vector2, radius: float) -> boo
 	for patch in additions:
 		var smear := _new_condiment_spline_batch(patch.flavor,patch.radius)
 		smear["spline_segments"]=patch.segments
-		_convert_condiment_batch_to_smear(smear)
+		_convert_condiment_batch_to_smear(smear,false)
 		smear["scrape"]=1.0-float(patch.passes)/3.0
 		smear["age"]=patch.age
 		smear["local_latched"]=true

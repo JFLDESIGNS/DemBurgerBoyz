@@ -4141,30 +4141,56 @@ func receive_stuck_food(id: String, tex: Texture2D, hit_world: Vector3, zone: St
 	bobble_click()
 
 
+func _sauce_mount(face: bool) -> Node3D:
+	_cache_skeleton()
+	if is_instance_valid(_skeleton):
+		var mount_name := "FaceSauce" if face else "ChestSauce"
+		var existing := _skeleton.get_node_or_null(mount_name)
+		if is_instance_valid(existing): return existing as Node3D
+		var names := ["Head","mixamorig:Head"] if face else ["UpperChest","Spine2","Chest","mixamorig:Spine2","Spine","mixamorig:Spine"]
+		for bone_name in names:
+			var index := _skeleton.find_bone(bone_name)
+			if index < 0: continue
+			var mount := BoneAttachment3D.new()
+			mount.name = mount_name
+			mount.bone_idx = index
+			_skeleton.add_child(mount)
+			mount.transform = _skeleton.get_bone_global_pose(index)
+			return mount
+	return _ensure_stuck_food_root()
+
+
 func receive_sauce(flavor: String, tex: Texture2D, tint: Color, zone: String = "body") -> void:
-	var root := _ensure_stuck_food_root()
+	var root := _sauce_mount(zone == "face")
 	var anchor := _stuck_food_anchor_local(zone == "face")
 	anchor.x += randf_range(-0.075,0.075)
 	anchor.y += randf_range(-0.06,0.06)
 	var impact := preload("res://scripts/food_impact.gd")
-	var hit := impact.surface(_body,to_global(anchor),global_basis.z.normalized())
+	# Decal projection conforms to the skin without baking every animated mesh.
+	var hit := {"position":to_global(anchor),"normal":global_basis.z.normalized()}
+	if root is BoneAttachment3D:
+		hit.position = root.global_position + global_basis.y.normalized()*(.16 if zone=="face" else .025) + global_basis.z.normalized() * (.15 if zone=="face" else .12) + global_basis.x.normalized()*randf_range(-.055,.055)
+	tint = Color("FF3929") if flavor=="ketchup" else Color("FFD83D")
 	var normal: Vector3 = hit.normal
 	var down := Vector3.DOWN.slide(normal).normalized()
 	if down.length_squared() < 0.1: down = -global_basis.y.normalized()
 	var across := normal.cross(down).normalized()
 	var basis := Basis(across,normal,down).orthonormalized()
 	var size := randf_range(0.19,0.28)
+	var depth := .5 if zone=="face" else .28
 	for i in 4:
 		var decal := Decal.new()
 		decal.name = "Sauce_%s_%d" % [flavor,i]
 		decal.texture_albedo = tex if i==0 else impact.sauce_drip_texture()
 		decal.texture_orm = impact.wet_orm()
+		decal.texture_emission = impact.sauce_emission_mask(decal.texture_albedo)
+		decal.emission_energy = .65
 		decal.modulate = tint
 		decal.albedo_mix = 1.0
 		decal.normal_fade = 0.35
 		var width := size if i==0 else randf_range(.025,.045)
 		var length := size if i==0 else .045
-		decal.size = Vector3(width,.24,length)
+		decal.size = Vector3(width,depth,length)
 		root.add_child(decal)
 		decal.global_basis = basis
 		decal.global_position = hit.position-normal*.025+across*(0.0 if i==0 else (float(i)-2.0)*size*.24)
@@ -4174,11 +4200,19 @@ func receive_sauce(flavor: String, tex: Texture2D, tint: Color, zone: String = "
 		var extension := .025 if i==0 else randf_range(.15,.30)
 		var tw := decal.create_tween()
 		if i==0:
-			decal.scale=Vector3(.4,1,.4)
-			tw.tween_property(decal,"scale",Vector3.ONE,.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			var full_scale := decal.scale
+			decal.scale=full_scale*Vector3(.4,1,.4)
+			tw.tween_property(decal,"scale",full_scale,.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		else: tw.tween_interval(randf_range(.12,.5))
-		tw.tween_property(decal,"size",Vector3(width*.86,.24,length+extension),2.4)
+		tw.tween_property(decal,"size",Vector3(width*.86,depth,length+extension),2.4)
 		tw.parallel().tween_property(decal,"position",start+local_down*extension*.5,2.4)
+		if i>0:
+			var drip := decal.create_tween()
+			drip.tween_interval(.3+float(i)*.12)
+			drip.tween_callback(func():
+				if is_instance_valid(decal):
+					impact.sauce_drop(decal, get_parent(), tint)
+			)
 		tw.tween_interval(6.0)
 		tw.tween_property(decal,"modulate:a",0.0,2.0)
 		tw.tween_callback(func():_stuck_food_items.erase(decal);decal.queue_free())
