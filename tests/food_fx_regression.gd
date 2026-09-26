@@ -6,7 +6,7 @@ func run():
  var pack=Node3D.new();g.add_child(pack);g._populate_fry_pack(pack)
  for mesh in pack.find_children("*","MeshInstance3D",true,false):
   print("FRY_MESH ",mesh.name," ",mesh.mesh.get_aabb()," basis ",mesh.global_basis," material ",mesh.material_override)
-  assert(mesh.material_override is ShaderMaterial)
+  assert(mesh.material_override is StandardMaterial3D if bool(mesh.get_meta("fry_mesh",false)) else mesh.material_override is ShaderMaterial)
  assert(pack.find_child("BurgerPalsFriesLogo",true,false)==null)
  var bot=Node3D.new();g.add_child(bot);g._add_roomba_top_highlights(bot)
  assert(bot.get_child_count()==2)

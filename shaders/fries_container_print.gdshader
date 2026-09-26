@@ -9,6 +9,6 @@ void fragment(){
  vec2 uv=vec2((0.5-pos.x)/0.58+0.5,0.5-(pos.y-0.43)/0.34);
  float inside=step(0.0,uv.x)*step(uv.x,1.0)*step(0.0,uv.y)*step(uv.y,1.0)*step(0.2,norm.z);
  float ink=texture(mask_tex,clamp(uv,vec2(0.0),vec2(1.0))).r*inside;
- ALBEDO=mix(vec3(0.82,0.06,0.04),mix(vec3(1.0,.84,.22),vec3(1.0,.32,.035),uv.y),ink);
+ ALBEDO=mix(vec3(0.82,0.06,0.04),vec3(1.0),ink);
  ROUGHNESS=.55;
 }

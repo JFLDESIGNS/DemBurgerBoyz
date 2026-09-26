@@ -35,7 +35,8 @@ func run():
  var old=Vector2(p.position.x,p.position.z)
  var target=Vector2(other.position.x,other.position.z)
  var moved=g._move_grill_patty_slide(p,target,old,true,1)
- assert(Vector2(moved.target.x,moved.target.z).distance_to(target)<.001)
+ assert(not g._patty_blocked_at(moved.target,p.slot_index))
+ assert(Vector2(p.position.x,p.position.z).distance_to(Vector2(other.position.x,other.position.z))>=g.PATTY_FIT_RADIUS*2.0)
  assert(other.has_meta("slide_hop_ms"))
  g._clear_station(0)
  var before_base=int(g.supply_stock.bun_bottom)
@@ -57,6 +58,31 @@ func run():
  order.order.append("tomato")
  g._try_auto_serve()
  assert(not g.stations[0].crown_ready)
+ var crown=g._find_station_top_bun_row(0)
+ var floating_y=crown.position.y
+ g._begin_whole_burger_drag(0)
+ assert(g.stations[0].carried_closed)
+ assert(crown.position.y>floating_y+20)
+ assert(not g._station_burger_complete(0))
+ var move=InputEventMouseMotion.new();move.position=g.get_viewport().get_mouse_position()+Vector2(40,0);move.relative=Vector2(40,0)
+ assert(g._handle_whole_burger_drag(move))
+ var swayed=false
+ for layer in g._whole_burger_drag.layers:
+  if layer.row.position.distance_to(layer.home)>1:swayed=true
+  assert(layer.row.get_theme_stylebox("panel") is StyleBoxEmpty)
+ assert(swayed)
+ g._finish_whole_burger_drag()
+ await create_timer(.6).timeout
+ assert(not g.stations[0].carried_closed)
+ var hit_found=false
+ for layer in g.stations[0].layer_pool:
+  if not layer.visible:continue
+  var tr=layer.get_node("LayerTexture")
+  for fraction in [.4,.5,.6,.7]:
+   var point=tr.get_global_transform_with_canvas()*(tr.size*Vector2(.5,fraction))
+   if g._build_layer_at_screen(point)!=null:
+    assert(not g._try_bun_pile_click(point));hit_found=true
+ assert(hit_found)
  g._remove_ticket(order);g.selected_customer=null;order.queue_free()
  var fries=g._ready_fries_slot_world(0)
  assert(absf(fries.x-g.soda_station_pos.x)<.5)

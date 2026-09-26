@@ -4,8 +4,13 @@ var steam: Node3D
 var bubbles: Array=[]
 var age:=0.0
 var identity: Object
+var game_ref: Node
+var resume_at := 0
+var last_screen := Vector2.ZERO
+var tracked := false
 var born_ms:=0
 func setup(game: Node, source: Object) -> void:
+ game_ref=game
  name="PattyHeatOverlay"
  identity=source
  born_ms=Time.get_ticks_msec()
@@ -49,7 +54,19 @@ func _process(delta: float) -> void:
  if not is_visible_in_tree():
   if view: view.render_target_update_mode=SubViewport.UPDATE_DISABLED
   return
- view.render_target_update_mode=SubViewport.UPDATE_ALWAYS
+ # One steam volume per stack avoids doubling on multi-patty burgers.
+ var first := true
+ var row := get_parent()
+ for sibling in row.get_parent().get_children():
+  if sibling==row: break
+  if sibling is Control and sibling.visible and sibling.has_node("PattyHeatOverlay"): first=false
+ var screen := global_position
+ var moving: bool = not game_ref._whole_burger_drag.is_empty() or (tracked and screen.distance_to(last_screen)>1.0)
+ if moving: resume_at=Time.get_ticks_msec()+450
+ last_screen=screen;tracked=true
+ var show_steam := first and Time.get_ticks_msec()>=resume_at
+ modulate.a=1.0 if show_steam else 0.0
+ view.render_target_update_mode=SubViewport.UPDATE_ALWAYS if show_steam else SubViewport.UPDATE_DISABLED
  age+=delta
  if is_instance_valid(identity): age=float(Time.get_ticks_msec()-born_ms)/1000.0
  steam.rotate_y(deg_to_rad(-72.0*delta))

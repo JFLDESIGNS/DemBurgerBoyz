@@ -18,7 +18,7 @@ const STATION_PATTY_BUILD_SCALE := 0.8184 ## bare meat (10% smaller than 0.827)
 const STATION_PATTY_CHEESE_BUILD_SCALE := STATION_PATTY_BUILD_SCALE ## cheese must not enlarge the meat
 ## Mild finished-stack nest — heel tucks under meat; crown stays clear of patty.
 const BUILD_BUN_NEST_BOTTOM_PX := 2.0
-const BUILD_BUN_NEST_TOP_PX := 8.0 ## negative = lift crown off meat (was +7 glue)
+const BUILD_BUN_NEST_TOP_PX := -5.0 ## negative = lift crown off meat (was +7 glue)
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -6659,6 +6659,9 @@ func _input(event: InputEvent) -> void:
 		if event.pressed:
 			if spatula_patty != null and _is_over_garbage(event.position):
 				_trash_spatula_patty()
+				get_viewport().set_input_as_handled()
+				return
+			if _try_build_burger_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			if _try_fryer_basket_click(event.position):
@@ -16098,6 +16101,17 @@ func _move_grill_patty_slide(patty: Area3D, target_xz: Vector2, from_xz: Vector2
 			other._play_done_jump(0.034)
 			if mp_enabled and not _mp_applying and int(other.net_id) >= 0:
 				mp_spatula_flat_pop.rpc(int(other.net_id), x, z)
+	if _patty_blocked_at(target, patty.slot_index):
+		for i in grill.size():
+			var other = grill[i]
+			if not is_instance_valid(other) or other == patty or other.is_held: continue
+			var away := Vector2(other.position.x-target.x,other.position.z-target.z)
+			var separation := PATTY_MIN_SEP+.008
+			if away.length() >= separation: continue
+			if away.length_squared() < .00001: away = Vector2(x,z)-from_xz
+			if away.length_squared() < .00001: away = Vector2.RIGHT
+			_try_shove_patty(i,other,away,separation-Vector2(other.position.x-target.x,other.position.z-target.z).length(),patty.slot_index,true)
+		if _patty_blocked_at(target,patty.slot_index): target = Vector3(from_xz.x,GRILL_SURFACE_Y,from_xz.y)
 	patty._rest_x = target.x
 	patty._rest_z = target.z
 	patty.position.x = target.x
@@ -35810,9 +35824,8 @@ func _update_fries_pack_sparkles(_pack: Node3D, _motion: float) -> void:
 func _paint_fries_pack_meshes(model: Node3D) -> void:
 	## FBX ships untextured grey — paint cup red, fries golden.
 	var cup_mat := _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
-	var fry_mat := ShaderMaterial.new()
-	fry_mat.shader = preload("res://shaders/fries_salt.gdshader")
-	fry_mat.set_shader_parameter("food_color", FRYER_FRY_COLOR)
+	var fry_mat := _make_basic_mat(FRYER_FRY_COLOR, 0.0, 0.92)
+	_style_fries_food_material(fry_mat, 0.34)
 	var stack: Array[Node] = [model]
 	while not stack.is_empty():
 		var node: Node = stack.pop_back()
@@ -48193,7 +48206,50 @@ func _bun_pile_under_cursor(screen_pos: Vector2) -> bool:
 	return _pick_bun_pair_at_screen(screen_pos) != null
 
 
+func _build_layer_at_screen(screen_pos: Vector2) -> Control:
+	for st in stations:
+		var preview = st.get("preview")
+		if not is_instance_valid(preview) or not preview.is_visible_in_tree(): continue
+		var hovered := get_viewport().gui_get_hovered_control()
+		if hovered is BaseButton and not preview.is_ancestor_of(hovered): continue
+		var pool: Array = st.get("layer_pool", [])
+		for i in range(pool.size()-1,-1,-1):
+			var row: Control = pool[i]
+			if not row.is_visible_in_tree(): continue
+			var tr := row.get_node_or_null("LayerTexture") as TextureRect
+			if tr == null or tr.texture == null: continue
+			var local := tr.get_global_transform_with_canvas().affine_inverse()*screen_pos
+			if not Rect2(Vector2.ZERO,tr.size).has_point(local): continue
+			if not tr.has_meta("hit_texture") or tr.get_meta("hit_texture") != tr.texture:
+				var img := tr.texture.get_image()
+				if img.is_compressed(): img.decompress()
+				tr.set_meta("hit_texture",tr.texture);tr.set_meta("hit_image",img)
+			var image: Image = tr.get_meta("hit_image")
+			var px := clampi(int(local.x/tr.size.x*image.get_width()),0,image.get_width()-1)
+			var py := clampi(int(local.y/tr.size.y*image.get_height()),0,image.get_height()-1)
+			if image.get_pixel(px,py).a > .15: return row
+	return null
+
+
+func _try_build_burger_click(screen_pos: Vector2) -> bool:
+	if not playing or _serve_fly_busy: return false
+	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or cheese_held or cup_held or spatula_patty != null or dragging_patty != null: return false
+	var row := _build_layer_at_screen(screen_pos)
+	if row == null: return false
+	var si := int(row.get_meta("station_index",-1))
+	if si < 0 or not stations[si]["items"].has("patty"): return false
+	active_station = si
+	if str(row.get_meta("item_id","")) == "bun_bottom":
+		_begin_whole_burger_drag(si)
+	elif is_instance_valid(_grubbah) and _grubbah.is_selected():
+		_grubbah.request("wrap")
+	else:
+		_on_serve()
+	return true
+
+
 func _try_bun_pile_click(screen_pos: Vector2) -> bool:
+	if _build_layer_at_screen(screen_pos) != null: return false
 	## Click a 3D bun under the cursor → thud + hop only (never spawn a 2D build fly/icon).
 	if not playing:
 		return false
@@ -49493,7 +49549,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
 	ui.add_child(_review_toast)
 	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	_review_toast.offset_left=-850;_review_toast.offset_right=-610
-	_review_toast.offset_top=142;_review_toast.offset_bottom=142
+	_review_toast.offset_top=172;_review_toast.offset_bottom=172
 	var skin := StyleBoxFlat.new()
 	skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F")
 	skin.shadow_color=Color(0.18,.10,.04,.25);skin.shadow_size=5
@@ -62536,7 +62592,7 @@ func _apply_ticket_display_size(wrap: Control, selected: bool) -> void:
 		return
 	note.pivot_offset = Vector2(TICKET_BASE_W * 0.5, 8.0)
 	note.scale = Vector2(s, s)
-	note.position = Vector2(0, -15)
+	note.position = Vector2(0, 5)
 	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(true)
 	## Wait a frame so content min-size is ready, then fit the layout slot to the scaled look.
 	call_deferred("_fit_ticket_wrap_size", wrap, s)
@@ -65491,18 +65547,29 @@ func _begin_whole_burger_drag(station_index: int) -> void:
 	_restyle_station_layers(station_index)
 	_whole_burger_drag = {"station": station_index, "preview": preview,
 		"rest": preview.position, "mouse": get_viewport().get_mouse_position()}
+	stations[station_index]["carried_closed"] = true
+	_refresh_station(station_index)
+	var layers: Array = []
+	for row in stations[station_index].get("layer_pool",[]):
+		if row.visible: layers.append({"row":row,"home":row.position})
+	_whole_burger_drag["layers"] = layers
 
 
 func _finish_whole_burger_drag() -> void:
 	if _whole_burger_drag.is_empty(): return
 	var preview: Control = _whole_burger_drag["preview"]
 	var rest: Vector2 = _whole_burger_drag["rest"]
+	var station_index := int(_whole_burger_drag["station"])
+	for layer in _whole_burger_drag.get("layers",[]):
+		if is_instance_valid(layer.row):
+			create_tween().tween_property(layer.row,"position",layer.home,.25).set_trans(Tween.TRANS_BACK)
+	stations[station_index]["carried_closed"] = false
 	_whole_burger_drag.clear()
 	if not is_instance_valid(preview): return
 	_whole_burger_settle = create_tween().set_parallel(true)
 	_whole_burger_settle.tween_property(preview, "position", rest, .32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_whole_burger_settle.tween_property(preview, "rotation", 0.0, .40).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-	_whole_burger_settle.chain().tween_callback(_try_auto_serve)
+	_whole_burger_settle.chain().tween_callback(func(): _refresh_station(station_index))
 
 
 func _handle_whole_burger_drag(event: InputEvent) -> bool:
@@ -65517,6 +65584,11 @@ func _handle_whole_burger_drag(event: InputEvent) -> bool:
 		var delta: Vector2 = inverse * event.position - inverse * (_whole_burger_drag["mouse"] as Vector2)
 		preview.position = (_whole_burger_drag["rest"] as Vector2) + delta.limit_length(260.0)
 		preview.rotation = lerpf(preview.rotation, clampf(event.relative.x * .008, -.20, .20), .5)
+		var layer_index := 0
+		for layer in _whole_burger_drag.get("layers",[]):
+			layer_index += 1
+			var sway := clampf(-event.relative.x*.12*layer_index,-9.0,9.0)
+			layer.row.position = (layer.home as Vector2) + Vector2(sway,sin(Time.get_ticks_msec()*.018+layer_index)*minf(absf(sway)*.22,2.0))
 		return true
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		_finish_whole_burger_drag()
@@ -67685,23 +67757,7 @@ func _station_layer_display_name(item_id: String) -> String:
 func _style_build_layer_row(row: Control, selected: bool, hovered: bool) -> void:
 	if row == null or not is_instance_valid(row):
 		return
-	var row_style := StyleBoxFlat.new()
-	row_style.set_content_margin_all(0)
-	row_style.set_corner_radius_all(8)
-	row_style.set_expand_margin_all(5)
-	if selected:
-		row_style.bg_color = Color(1.0, 0.86, 0.18, 0.22)
-		row_style.border_color = Color(1.0, 0.92, 0.28, 1.0)
-		row_style.set_border_width_all(3)
-	elif hovered:
-		row_style.bg_color = Color(1.0, 0.95, 0.55, 0.14)
-		row_style.border_color = Color(1.0, 0.96, 0.55, 0.98)
-		row_style.set_border_width_all(2)
-	else:
-		row_style.bg_color = Color(0, 0, 0, 0)
-		row_style.set_border_width_all(0)
-		row_style.set_expand_margin_all(0)
-	row.add_theme_stylebox_override("panel", row_style)
+	row.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 
 
 func _station_burger_complete(station_index: int) -> bool:
@@ -68105,11 +68161,11 @@ func _refresh_station(index: int) -> void:
 		)
 		if item == "bun_bottom":
 			## Modest lift so meat rests on the heel with a little air.
-			stack_lift += 4.0 * layer_scale
+			stack_lift += 9.0 * layer_scale
 			bottom_row = row
 		elif item == "patty":
 			## Keep crown from sitting on the meat.
-			stack_lift += 6.0 * layer_scale
+			stack_lift += 12.0 * layer_scale
 		elif item == "bun_top":
 			top_row = row
 
@@ -68164,7 +68220,7 @@ func _refresh_station(index: int) -> void:
 		st["crown_ready"] = complete
 		var previous_tween = st.get("crown_tween")
 		if is_instance_valid(previous_tween): previous_tween.kill()
-		if not complete and not _serve_fly_busy:
+		if not complete and not bool(st.get("carried_closed",false)) and not _serve_fly_busy:
 			top_row.position.y -= 70.0 * layer_scale
 		elif complete and not was_complete and not _serve_fly_busy:
 			var closed_y := top_row.position.y

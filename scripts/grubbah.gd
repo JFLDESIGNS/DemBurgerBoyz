@@ -138,7 +138,7 @@ func auto_lay_paper() -> void:
   set_phase("paper")
 func holds_customer_timers() -> bool:
  return is_selected() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging"]
-func bag_station_pos() -> Vector3:return board_pos()+Vector3(-.22,.015,.32)
+func bag_station_pos() -> Vector3:return board_pos()+Vector3(.12,.015,.32)
 func _process(delta: float) -> void:
  if not is_instance_valid(game):return
  if not game.playing:
@@ -361,7 +361,7 @@ func packing_audio(phase: String) -> void:
  packing_tween.tween_interval(.40)
  packing_tween.tween_callback(play_wrap_sound)
 func add_bag_label() -> void:
- var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00017;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/brand_lettering_cup.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,.13,-.12);logo.rotation.y=PI;bag.add_child(logo)
+ var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00017;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/bag_red_logo.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,.13,-.12);logo.rotation.y=PI;bag.add_child(logo)
  bag_finish=Label3D.new();bag_finish.text="CLICK TO FINISH";bag_finish.font_size=32;bag_finish.pixel_size=.0016;bag_finish.position=Vector3(0,.46,0);bag_finish.billboard=BaseMaterial3D.BILLBOARD_ENABLED;bag_finish.modulate=Color("FFD147");bag.add_child(bag_finish)
  bag_glow=Node3D.new();bag_glow.name="BagSilhouetteOutline";bag.add_child(bag_glow)
  for source in bag.find_children("*","MeshInstance3D",true,false):
