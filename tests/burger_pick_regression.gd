@@ -38,7 +38,12 @@ func run():
    assert(crown.get_theme_stylebox("panel") is StyleBoxFlat)
    assert(g.stations[0].layer_hint.text.contains("Right-click to remove"))
    assert(not g._try_bun_pile_click(point));assert(g._try_build_burger_click(point));found=true;break
- assert(found);assert(g.served==1)
+ assert(found);assert(g.served==0)
+ var release=InputEventMouseButton.new();release.button_index=MOUSE_BUTTON_LEFT;release.position=g._build_swipe.origin
+ assert(g._handle_build_swipe(release));assert(g.served==1)
+ # A changed stack cancels a held click instead of serving a partner's new burger.
+ g._build_swipe={"station":0,"layer":1,"id":"patty","origin":Vector2.ZERO,"distance":0.0,"items":["bun_bottom","patty"]}
+ assert(g._handle_build_swipe(release));assert(g.served==1)
  var p=TestPatty.new();var neighbor=TestPatty.new();g.add_child(p);g.add_child(neighbor)
  g.grill.resize(g.GRILL_SLOTS);g.slot_positions.resize(g.GRILL_SLOTS)
  p.slot_index=0;neighbor.slot_index=1;g.grill[0]=p;g.grill[1]=neighbor

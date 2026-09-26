@@ -785,6 +785,7 @@ func _pick_annoying_line() -> String:
 
 func _ready() -> void:
 	_build()
+	add_child(preload("res://scripts/character_footsteps.gd").new())
 	_bounce = randf() * TAU
 	_bobble_phase = randf() * TAU
 

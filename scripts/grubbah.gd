@@ -1,8 +1,8 @@
 extends Node
 # Host-owned mobile fulfillment. Visuals are reconstructed from a revisioned snapshot.
 const DRIVER_APPROACH = 1.0
-const DRIVER_WALK = 4.0
-const DRIVER_RETURN = 2.8
+const DRIVER_WALK = 2.25
+const DRIVER_RETURN = 1.5
 const DRIVER_EXIT = .85
 const DATA = preload("res://scripts/game_data.gd")
 const PACK = "res://models/burgerpack/try2/"
@@ -334,7 +334,7 @@ func build_props() -> void:
  ledge=MeshInstance3D.new();var box=BoxMesh.new();box.size=Vector3(.85,.06,.38);ledge.mesh=box;ledge.material_override=game._make_basic_mat(Color("727E81"),.7,.25);props.add_child(ledge);ledge.position=Vector3(.4192,1.03,1.85)
  var car_scene=load("res://assets/vehicles/sugar_street/lagoon_hatch.glb");car=car_scene.instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE;car.rotation.y=0;car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;car.hide()
  screech=AudioStreamPlayer3D.new();screech.stream=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3");screech.bus="SFX";screech.volume_db=-4;screech.unit_size=5.0;screech.max_distance=35;car.add_child(screech)
- courier=game.CustomerScript.new();courier.set_meta("delivery_driver",true);courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_run(1.3);courier.hide()
+ courier=game.CustomerScript.new();courier.set_meta("delivery_driver",true);courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_run(1.45);courier.hide()
  for n in courier.find_children("*","Label3D",true,false):n.hide()
 func prepare_bag_ticket() -> void:
  if is_instance_valid(ticket_view):ticket_view.queue_free()
@@ -376,7 +376,7 @@ func update_visuals(_delta: float) -> void:
  if not state.is_empty():
   var desired_driver=int(state.get("driver_skin",2))
   if driver_style!=desired_driver:
-   driver_style=desired_driver;courier.restyle_kenney_skin(driver_style);courier.play_street_run(1.3)
+   driver_style=desired_driver;courier.restyle_kenney_skin(driver_style);courier.play_street_run(1.45)
   var desired_car=clampi(int(state.get("car_style",0)),0,DRIVER_CARS.size()-1)
   if car_style!=desired_car:
    car_style=desired_car
@@ -384,7 +384,11 @@ func update_visuals(_delta: float) -> void:
    screech.reparent(car,false);car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;old_car.queue_free()
  if phase!=last_phase:
   last_phase=phase
-  if phase=="pickup":arrival_screeched=false
+  if phase=="pickup":
+   arrival_screeched=false
+   courier.remove_meta("slide_sounded")
+  courier.set_meta("footstep_sliding",false)
+  courier.rotation.z=0.0
   if phase=="wrapping":packing_audio(phase)
   if phase=="sealed" or (phase in ["pickup","collected"] and not is_instance_valid(ticket_view)):prepare_bag_ticket()
   if phase in ["pickup","collected"] and is_instance_valid(ticket_view):bag_ticket.texture=ticket_view.get_texture();bag_ticket.pixel_size=.20/float(ticket_view.size.y)
@@ -422,8 +426,18 @@ func update_visuals(_delta: float) -> void:
   courier.visible=age>DRIVER_APPROACH
   if age>=DRIVER_APPROACH-.35 and not arrival_screeched:
    arrival_screeched=true;screech.play()
-  courier.position=Vector3(lerpf(5.5,ledge.position.x,clampf((age-DRIVER_APPROACH)/DRIVER_WALK,0,1)),.1,2.8)
+  var run_t=clampf((age-DRIVER_APPROACH)/(DRIVER_WALK-.18),0,1)
+  var slide=clampf((run_t-.80)/.20,0,1)
+  var travel=run_t if run_t<.80 else .80+.20*(1.0-pow(1.0-slide,2))
+  courier.position=Vector3(lerpf(5.5,ledge.position.x,travel),.1,2.8)
   courier.rotation.y=-PI*.5
+  courier.rotation.z=sin(slide*PI)*.18
+  courier.set_meta("footstep_sliding",run_t>=.80)
+  if run_t>=.80 and not courier.has_meta("slide_sounded"):
+   courier.set_meta("slide_sounded",true)
+   var shoe=courier.get_node_or_null("CharacterFootsteps")
+   if shoe!=null:shoe.play_skid()
+
  elif phase=="collected":
   courier.position=Vector3(lerpf(ledge.position.x,5.5,clampf(age/DRIVER_RETURN,0,1)),.1,2.8);courier.rotation.y=PI*.5
   courier.visible=age<DRIVER_RETURN;bag.visible=age<DRIVER_RETURN
@@ -474,6 +488,7 @@ func handle_input(event: InputEvent) -> bool:
  if event.position.distance_to(game.camera.unproject_position(napkins.global_position))<35:
   request("paper");return true
  if paper3d.visible and burger_ready() and event.position.distance_to(game.camera.unproject_position(paper3d.global_position))<110:
+  if game._try_build_burger_click(event.position):return true
   request("wrap");return true
  return false
 

@@ -4207,6 +4207,7 @@ func _ensure_runtime_prewarms() -> void:
 	await _prewarm_grill_fire_fx()
 	await _prewarm_patty_fridge_place()
 	await _prewarm_condiment_stream_render()
+	await _prewarm_bottle_pickups()
 	await _prewarm_shaker_render()
 	await _prewarm_vehicle_systems()
 
@@ -6344,6 +6345,9 @@ func _input(event: InputEvent) -> void:
 	if playing and event is InputEventMouseMotion and _whole_burger_drag.is_empty():
 		call_deferred("_update_build_layer_hover",event.position)
 	if is_instance_valid(_empty_stock_controls) and _empty_stock_controls.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
+	if _handle_build_swipe(event):
 		get_viewport().set_input_as_handled()
 		return
 	if is_instance_valid(_grubbah) and _grubbah.handle_input(event):
@@ -27155,9 +27159,9 @@ func _update_oil_liquid(delta: float) -> void:
 			cyl.radial_segments = 24
 			cyl.rings = 1
 			oil_liquid_mesh.mesh = cyl
-		cyl.height = h
-		cyl.bottom_radius = bot_r
-		cyl.top_radius = top_r
+		if not is_equal_approx(cyl.height,h): cyl.height = h
+		if not is_equal_approx(cyl.bottom_radius,bot_r): cyl.bottom_radius = bot_r
+		if not is_equal_approx(cyl.top_radius,top_r): cyl.top_radius = top_r
 		oil_liquid_mesh.position = Vector3(0.0, center_y, 0.0)
 
 
@@ -27165,7 +27169,13 @@ func _build_oil_stream_fx() -> void:
 	## Soft-serve-style grease ribbon + landing droplets + upright aim ring.
 	oil_stream_mesh = MeshInstance3D.new()
 	oil_stream_mesh.name = "OilSoftServeRibbon"
-	oil_stream_mesh.mesh = ArrayMesh.new()
+	var ribbon := CylinderMesh.new()
+	ribbon.top_radius = .007
+	ribbon.bottom_radius = .010
+	ribbon.height = 1.0
+	ribbon.radial_segments = 10
+	ribbon.rings = 1
+	oil_stream_mesh.mesh = ribbon
 	oil_stream_mat = StandardMaterial3D.new()
 	## Paler / more see-through than the old saturated yellow.
 	oil_stream_mat.albedo_color = Color(0.78, 0.7, 0.45, 0.2)
@@ -27239,13 +27249,12 @@ func _oil_nozzle_world() -> Vector3:
 
 
 func _update_oil_stream(from_tip: Vector3, to_grill: Vector3) -> void:
-	if oil_stream_mesh == null:
-		return
+	if oil_stream_mesh == null: return
+	var travel := to_grill-from_tip
+	if travel.length_squared() < .000001: return
 	oil_stream_mesh.visible = true
-	oil_stream_mesh.global_position = from_tip
-	oil_stream_mesh.global_basis = Basis.IDENTITY
-	oil_stream_mesh.mesh = _make_oil_stream_curve_mesh(from_tip, to_grill)
-	oil_stream_mesh.rotation_degrees = Vector3.ZERO
+	oil_stream_mesh.global_transform = Transform3D(Basis(Quaternion(Vector3.UP,travel.normalized())),from_tip.lerp(to_grill,.5))
+	oil_stream_mesh.scale = Vector3(1,travel.length(),1)
 	if oil_stream_fx != null:
 		oil_stream_fx.global_position = to_grill + Vector3(0.0, 0.014, 0.0)
 		oil_stream_fx.emitting = true
@@ -48255,20 +48264,71 @@ func _build_layer_at_screen(screen_pos: Vector2) -> Control:
 	return null
 
 
+var _build_swipe: Dictionary = {}
+
+func _handle_build_swipe(event: InputEvent) -> bool:
+	if _build_swipe.is_empty(): return false
+	if not playing:
+		_build_swipe.clear()
+		return false
+	if event is InputEventMouseMotion:
+		_build_swipe["distance"] = maxf(float(_build_swipe.distance), event.position.distance_to(_build_swipe.origin))
+		var row = _build_swipe.get("row")
+		if is_instance_valid(row) and float(_build_swipe.distance)>=10.0:
+			row.position = _build_swipe.home + (event.position-_build_swipe.origin)/maxf(.01,row.get_global_transform_with_canvas().get_scale().x)
+		return true
+	if not (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT): return false
+	if event.pressed: return true
+	var gesture := _build_swipe.duplicate()
+	if is_instance_valid(gesture.get("row")): gesture.row.position = gesture.home
+	_build_swipe.clear()
+	var si := int(gesture.station)
+	# A partner may have changed this stack while the mouse was held.
+	if stations[si]["items"] != gesture.items: return true
+	var distance := maxf(float(gesture.distance), event.position.distance_to(gesture.origin))
+	if distance >= 24.0:
+		if mp_enabled:
+			if NetManager.is_host(): mp_request_build_swipe(si,int(gesture.layer),gesture.items)
+			else: mp_request_build_swipe.rpc_id(1,si,int(gesture.layer),gesture.items)
+		else:
+			_apply_build_swipe(si,int(gesture.layer),str(gesture.id))
+	elif distance < 10.0:
+		active_station = si
+		if is_instance_valid(_grubbah) and _grubbah.is_selected():
+			_grubbah.request("wrap")
+		else:
+			_on_serve()
+	return true
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_build_swipe(si: int, layer: int, expected: Array) -> void:
+	if not NetManager.is_host() or not playing: return
+	if si < 0 or si >= stations.size() or layer < 0 or layer >= expected.size(): return
+	if expected != stations[si]["items"]: return
+	_apply_build_swipe(si,layer,str(expected[layer]))
+
+func _apply_build_swipe(si: int, layer: int, id: String) -> void:
+	if id == "patty":
+		var place := _find_closest_patty_place(Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z))
+		if place != Vector3.ZERO:
+			_return_station_patty_to_grill(si,layer,place)
+		else:
+			_flash("Grill full", Color("FFCC80"))
+	else:
+		_drop_patty_on_garbage(_make_reorder_drag(si,layer,id))
+
 func _try_build_burger_click(screen_pos: Vector2) -> bool:
 	if not playing or _serve_fly_busy: return false
 	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or cheese_held or cup_held or spatula_patty != null or dragging_patty != null: return false
 	var row := _build_layer_at_screen(screen_pos)
 	if row == null: return false
 	var si := int(row.get_meta("station_index",-1))
-	if si < 0 or not stations[si]["items"].has("patty"): return false
+	if si < 0 or stations[si]["items"].is_empty(): return false
 	active_station = si
 	if str(row.get_meta("item_id","")) == "bun_bottom":
 		_begin_whole_burger_drag(si)
-	elif is_instance_valid(_grubbah) and _grubbah.is_selected():
-		_grubbah.request("wrap")
 	else:
-		_on_serve()
+		_build_swipe = {"station":si, "layer":int(row.get_meta("stack_i", -1)), "id":str(row.get_meta("item_id", "")), "origin":screen_pos, "distance":0.0, "items":stations[si]["items"].duplicate(), "row":row, "home":row.position}
 	return true
 
 
@@ -64922,6 +64982,38 @@ func _update_condiment_stream(
 	stream.scale = Vector3(pulse, length, pulse)
 	if stream.material_override == null:
 		stream.material_override = _condiment_stream_material(id)
+
+
+func _prewarm_bottle_pickups() -> void:
+	if not _gameplay_load_in_progress or not is_instance_valid(camera): return
+	# Draw the held poses and oil FX behind loading, not on the first live click.
+	var roots: Array = condiment_bottle_roots.values()
+	roots.append(oil_root)
+	for bottle in roots:
+		if not is_instance_valid(bottle): continue
+		var saved: Transform3D = bottle.global_transform
+		var shown: bool = bottle.visible
+		var layers := _stage_loading_geometry(bottle)
+		bottle.global_position = camera.global_position-camera.global_basis.z*1.0
+		bottle.rotation_degrees = Vector3(100,20,0)
+		bottle.show()
+		for frame in 3: await get_tree().process_frame
+		bottle.global_transform = saved
+		bottle.visible = shown
+		_restore_loading_geometry(layers)
+	for effect in [oil_stream_mesh, oil_stream_fx, oil_aim_marker, oil_particles]:
+		if not is_instance_valid(effect): continue
+		var saved: Transform3D = effect.global_transform
+		var shown: bool = effect.visible
+		var layers := _stage_loading_geometry(effect)
+		effect.global_position = camera.global_position-camera.global_basis.z*1.0
+		effect.show()
+		if effect is GPUParticles3D: effect.emitting = true; effect.restart()
+		for frame in 4: await get_tree().process_frame
+		if effect is GPUParticles3D: effect.emitting = false
+		effect.global_transform = saved
+		effect.visible = shown
+		_restore_loading_geometry(layers)
 
 
 func _prewarm_condiment_stream_render() -> void:
