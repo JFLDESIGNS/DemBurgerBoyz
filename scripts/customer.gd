@@ -858,10 +858,10 @@ func _try_attach_toon_character() -> bool:
 	## Regular ticket guests and far-sidewalk walkers use saved custom
 	## characters. The boss keeps the Kenney mustache toon; Kenney skins are
 	## a last-resort fallback for window customers only.
-	if not is_cut_collector:
+	if not is_cut_collector and not bool(get_meta("delivery_driver", false)):
 		if _try_attach_saved_character():
 			return true
-	if is_street_pedestrian:
+	if is_street_pedestrian and not bool(get_meta("delivery_driver", false)):
 		return false
 	if _char_scene == null:
 		if not ResourceLoader.exists(CHAR_SCENE_PATH):

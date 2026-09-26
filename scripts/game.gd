@@ -6319,7 +6319,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 
+var _empty_stock_controls: Node3D
+
 func _input(event: InputEvent) -> void:
+	if is_instance_valid(_empty_stock_controls) and _empty_stock_controls.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if is_instance_valid(_grubbah) and _grubbah.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -8801,6 +8806,9 @@ func _refill_one_fridge_display_ball() -> void:
 func _update_patty_fridge_screen_follow() -> void:
 	if patty_fridge_root == null or not is_instance_valid(patty_fridge_root):
 		return
+	if int(supply_stock.get("patty", 0)) <= 0 and is_instance_valid(patty_fridge_balls_root):
+		for ball in patty_fridge_balls_root.get_children():
+			if ball is Node3D: ball.hide()
 	var follow := _patty_fridge_follow_world()
 	if follow == Vector3.INF:
 		return
@@ -9116,9 +9124,9 @@ func _ensure_patty_fridge_open() -> void:
 func _prepare_fridge_balls_for_launch() -> void:
 	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
 		return
-	var stock := clampi(maxi(1, int(supply_stock.get("patty", 0))), 0, PATTY_FRIDGE_MAX_BALLS)
+	var stock := clampi(int(supply_stock.get("patty", 0)), 0, PATTY_FRIDGE_MAX_BALLS)
 	## Pool should already exist from title-screen prewarm — never build a stack on the click.
-	if patty_fridge_balls_root.get_child_count() <= 0:
+	if stock > 0 and patty_fridge_balls_root.get_child_count() <= 0:
 		var extra := _make_fridge_patty_ball()
 		extra.position = _patty_fridge_ball_seat(0, true)
 		extra.visible = true
@@ -15961,6 +15969,9 @@ func _begin_patty_drag(patty: Area3D) -> void:
 		else: return
 	if dragging_patty == patty and (not mp_enabled or drag_owner_id == 0 or drag_owner_id == NetManager.my_id()):
 		return
+	if not patty.flipped_once and _patty_is_flip_ready(patty):
+		_on_patty_clicked(patty)
+		return
 	if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
 		mp_claim_drag(int(patty.net_id))
 		return
@@ -16071,36 +16082,19 @@ func _move_grill_patty_slide(patty: Area3D, target_xz: Vector2, from_xz: Vector2
 	var x := clampf(target_xz.x, bounds.position.x, bounds.end.x)
 	var z := clampf(target_xz.y, bounds.position.y, bounds.end.y)
 	var target := Vector3(x, GRILL_SURFACE_Y, z)
-	var ignore_idx: int = patty.slot_index
-	var intended_move := Vector2(target.x - from_xz.x, target.z - from_xz.y)
-	var intended_moved := intended_move.length()
-	if push_neighbors and intended_moved > 0.0001:
-		_push_neighbors_from_drag(target, intended_move, intended_moved, ignore_idx, hit_speed)
-	if _patty_blocked_at(target, ignore_idx):
-		var delta_xz := Vector2(x - from_xz.x, z - from_xz.y)
-		var found_slide := false
-		if delta_xz.length_squared() > 0.000001:
-			for frac in [1.0, 0.85, 0.7, 0.55, 0.4, 0.25]:
-				var try := Vector3(
-					from_xz.x + delta_xz.x * frac,
-					GRILL_SURFACE_Y,
-					from_xz.y + delta_xz.y * frac
-				)
-				try.x = clampf(try.x, bounds.position.x, bounds.end.x)
-				try.z = clampf(try.z, bounds.position.y, bounds.end.y)
-				if not _patty_blocked_at(try, ignore_idx):
-					target = try
-					found_slide = true
-					break
-		if not found_slide:
-			var try_x := Vector3(x, GRILL_SURFACE_Y, from_xz.y)
-			var try_z := Vector3(from_xz.x, GRILL_SURFACE_Y, z)
-			if not _patty_blocked_at(try_x, ignore_idx):
-				target = try_x
-			elif not _patty_blocked_at(try_z, ignore_idx):
-				target = try_z
-			else:
-				target = Vector3(from_xz.x, GRILL_SURFACE_Y, from_xz.y)
+	# Sliding passes through neighbors; a swept test makes crossed burgers hop.
+	if from_xz.distance_to(Vector2(x, z)) > 0.0001:
+		for other in grill:
+			if not is_instance_valid(other) or other == patty or other.is_held: continue
+			var point := Vector2(other.position.x, other.position.z)
+			var nearest := Geometry2D.get_closest_point_to_segment(point, from_xz, Vector2(x, z))
+			if point.distance_to(nearest) > SPATULA_PATTY_PUSH_RADIUS: continue
+			var now := Time.get_ticks_msec()
+			if now - int(other.get_meta("slide_hop_ms", -1000)) < 500: continue
+			other.set_meta("slide_hop_ms", now)
+			other._play_done_jump(0.034)
+			if mp_enabled and not _mp_applying and int(other.net_id) >= 0:
+				mp_spatula_flat_pop.rpc(int(other.net_id), x, z)
 	patty._rest_x = target.x
 	patty._rest_z = target.z
 	patty.position.x = target.x
@@ -17098,16 +17092,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	patty.visible = false
 	patty.rotation_degrees = Vector3.ZERO
 	if not st["patties"].has(patty):
-		var needs_bun := not items.has("bun_bottom")
-		if needs_bun and not _mp_try_use_supply("bun_bottom"):
-			patty.is_held = false
-			patty.visible = true
-			patty.heating = grill_on
-			return
 		st["patties"].append(patty)
-		if needs_bun:
-			items.append("bun_bottom")
-			_animate_bun_to_build_station("bun_bottom", STATION_CRAFT)
 		_insert_patty_into_stack(items)
 	## Cheese counts for the order as soon as it's on the meat (melt is visual).
 	if patty.has_cheese:
@@ -39219,6 +39204,17 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	stack_shell.material_override = stack_mat
 	stack_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	rack.add_child(stack_shell)
+	# Close the gaps between the nested rims with an opaque cup wall.
+	var lower_wall := MeshInstance3D.new()
+	lower_wall.name = "CupStackLowerWall"
+	var lower_mesh := CylinderMesh.new()
+	lower_mesh.top_radius = CUP_SHELL_TOP_R - 0.002
+	lower_mesh.bottom_radius = CUP_SHELL_TOP_R - 0.002
+	lower_mesh.height = shell_y + 0.008
+	lower_wall.mesh = lower_mesh
+	lower_wall.material_override = stack_mat
+	lower_wall.position = stack_base + Vector3(0, shell_y * 0.5, 0)
+	rack.add_child(lower_wall)
 	for i in spare_count:
 		var nest_y := float(i + 1) * nest_step
 		## Brighter rims communicate each nested cup without another overlapping body.
@@ -48315,6 +48311,8 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 	if _bun_visual_pair_count() <= 0:
 		_flash("Out of buns — restock on phone!", Color("EF5350"))
 		return true
+	if not stations[STATION_CRAFT]["items"].has("bun_bottom"):
+		_add_ingredient_to_station(STATION_CRAFT, "bun_bottom")
 	_bounce_bun_click_target(pair)
 	if game_audio != null and game_audio.has_method("play_bun_thud"):
 		game_audio.play_bun_thud()
@@ -48327,11 +48325,27 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 
 
 func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAFT) -> void:
-	## No 2D fly sprite — hop/thud already play from the pile / strip click.
-	if id != "bun_bottom" and id != "bun_top":
-		return
-	if id == "bun_bottom" and game_audio != null and game_audio.has_method("play_bun_thud"):
-		game_audio.play_bun_thud()
+	if id != "bun_bottom": return
+	var pair := _top_visible_bun_pair()
+	if not is_instance_valid(pair) and not bun_pile_stacks.is_empty():
+		pair = bun_pile_stacks[0]
+	if not is_instance_valid(pair): return
+	var flying := pair.duplicate() as Node3D
+	add_child(flying)
+	flying.global_transform = pair.global_transform
+	flying.show()
+	var grab := flying.get_node_or_null("BunPairGrab")
+	if grab != null: grab.free()
+	var preview: Control = stations[station_index]["preview"]
+	preview.modulate.a = 0.0
+	var target: Vector3 = _grubbah.board_surface if is_instance_valid(_grubbah) else flying.global_position
+	var tween := create_tween()
+	tween.tween_property(flying, "global_position", target + Vector3(0, .045, 0), .42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	tween.tween_callback(func():
+		flying.queue_free()
+		if is_instance_valid(preview): preview.modulate.a = 1.0
+	)
+	if game_audio and game_audio.has_method("play_bun_thud"): game_audio.play_bun_thud()
 
 
 func _cheese_stack_home_world() -> Vector3:
@@ -48673,6 +48687,20 @@ func _build_phone_lock_screen() -> void:
 	caption.offset_top = -120
 	caption.offset_bottom = -25
 	_phone_lock_screen.pressed.connect(func() -> void: _set_phone_expanded(true))
+	var shop_shortcut := Button.new()
+	shop_shortcut.name = "QuickShop"
+	shop_shortcut.text = "SHOP"
+	shop_shortcut.icon = _phone_app_icon_texture("shop")
+	shop_shortcut.expand_icon = true
+	shop_shortcut.add_theme_constant_override("icon_max_width", 40)
+	shop_shortcut.position = Vector2(18, 12)
+	shop_shortcut.size = Vector2(180, 56)
+	UiFontsScript.apply_button(shop_shortcut, true, 22)
+	shop_shortcut.pressed.connect(func():
+		_set_phone_expanded(true)
+		_set_phone_app("shop")
+	)
+	_phone_lock_screen.add_child(shop_shortcut)
 	_phone_lock_screen.visible = not _phone_expanded
 
 
@@ -49357,6 +49385,7 @@ func _refresh_ingredient_stock_bars(only_id: String = "", refresh_fridge: bool =
 		## User brightness/sat is on the icon shader; stock fade multiplies after.
 		if icon != null and is_instance_valid(icon):
 			icon.material = _ensure_strip_icon_material()
+			icon.visible = stock > 0 and not _is_condiment(str(id))
 			if stock <= 0:
 				icon.modulate = Color(0.72, 0.72, 0.72, 0.28)
 			elif stock_ratio <= 0.25:
@@ -49365,6 +49394,9 @@ func _refresh_ingredient_stock_bars(only_id: String = "", refresh_fridge: bool =
 				icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
 		btn.tooltip_text = "%s\nStock: %d" % [btn.tooltip_text.get_slice("\n", 0), stock]
 	_update_bin_fills_3d(only_id)
+	if int(supply_stock.get("patty", 0)) <= 0 and is_instance_valid(patty_fridge_balls_root):
+		for ball in patty_fridge_balls_root.get_children():
+			if ball is Node3D: ball.hide()
 	if refresh_fridge and patty_fridge_open and _fridge_launch_inflight <= 0 \
 			and not _fridge_drag_active and _patty_fridge_auto_close_tween == null:
 		_rebuild_patty_fridge_balls(true)
@@ -49946,7 +49978,6 @@ func _refresh_phone_ui() -> void:
 	_phone_shop_refs.clear()
 	_phone_supply_row_refs.clear()
 	_clear_phone_box_children(phone_inventory_box)
-	_add_phone_shop_section(phone_inventory_box)
 	for id in SUPPLY_IDS:
 		var row := HBoxContainer.new()
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -49964,7 +49995,7 @@ func _refresh_phone_ui() -> void:
 		row.add_child(ingredient_icon)
 
 		var name_lab := Label.new()
-		var short := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
+		var short := "Base Bun" if id == "bun_bottom" else str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 		if short.length() > 10:
 			short = short.substr(0, 9) + "…"
 		name_lab.text = short
@@ -50107,6 +50138,7 @@ func _refresh_phone_ui() -> void:
 				"buy": buy2,
 				"flavor": fid,
 			}
+	_add_phone_shop_section(phone_inventory_box)
 	_refresh_cheese_piles()
 	_refresh_bun_inventory_piles()
 
@@ -50260,6 +50292,8 @@ func _phone_icon_fill_triangle(img: Image, ax: float, ay: float, bx: float, by: 
 
 
 func _phone_app_icon_texture(app_id: String) -> Texture2D:
+	if app_id == "shop": return preload("res://assets/ui/phone_shop_icon.png")
+	if app_id == "grubbah": return preload("res://assets/ui/phone_grubbah_icon.png")
 	var s := 64
 	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
@@ -50334,7 +50368,7 @@ func _make_phone_app_icon(app_id: String, caption: String, glyph: String, bg: Co
 		btn.text = glyph
 	btn.expand_icon = true
 	btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	btn.add_theme_constant_override("icon_max_width", 40)
+	btn.add_theme_constant_override("icon_max_width", 64 if app_id in ["shop", "grubbah"] else 40)
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.custom_minimum_size = Vector2(72, 72)
 	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -50428,7 +50462,7 @@ func _set_phone_app(app_id: String) -> void:
 		if app_id != "muvye" and phone_muvye_page.has_method("set_cinema"):
 			phone_muvye_page.call("set_cinema", false)
 	if radio_column != null:
-		radio_column.visible = app_id not in ["muvye", "grubbah"]
+		radio_column.visible = app_id == "home"
 	if phone_nav_bar != null:
 		phone_nav_bar.visible = app_id != "home"
 	if phone_nav_title != null:
@@ -50457,6 +50491,7 @@ func _set_phone_app(app_id: String) -> void:
 				phone_nav_title.text = "MUVYE"
 			_:
 				phone_nav_title.text = "Home"
+	phone_nav_title.clip_text = true
 	var arcade := app_id == "snak" or app_id == "gnop" or app_id == "smush" or app_id == "muvye"
 	if phone_scroll != null and is_instance_valid(phone_scroll):
 		phone_scroll.scroll_vertical = 0
@@ -51823,12 +51858,14 @@ func _add_phone_shop_section(parent: VBoxContainer) -> void:
 	panel.add_child(v)
 
 	var title := Label.new()
-	title.text = "BURGERPALS MARKET"
+	title.text = "EQUIPMENT"
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_luckiest_label(title, 17)
 	title.add_theme_color_override("font_color", Color("F2F4F5"))
 	v.add_child(title)
 	var subtitle := Label.new()
-	subtitle.text = "Top equipment · delivered by your mail cat"
+	subtitle.text = "Equipment · cat delivery"
+	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UiFontsScript.apply_label(subtitle, false, 11)
 	subtitle.add_theme_color_override("font_color", Color("AAB4BE"))
 	v.add_child(subtitle)
@@ -52677,6 +52714,7 @@ func _build_phone_ui() -> void:
 	phone_nav_bar.add_child(back_btn)
 	phone_nav_title = Label.new()
 	phone_nav_title.text = "Home"
+	phone_nav_title.clip_text = true
 	phone_nav_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_nav_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	UiFontsScript.apply_label(phone_nav_title, true, 14)
@@ -52734,6 +52772,7 @@ func _build_phone_ui() -> void:
 	icon_grid.add_theme_constant_override("v_separation", 12)
 	icon_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phone_home_page.add_child(icon_grid)
+	icon_grid.add_child(_make_phone_app_icon("shop", "Shop", "$", Color(0.12, 0.42, 0.28), Color(0.55, 0.92, 0.62)))
 	icon_grid.add_child(_make_phone_app_icon("social", "Social", "★", Color(0.16, 0.32, 0.62), Color(0.55, 0.78, 1.0)))
 	icon_grid.add_child(_make_phone_app_icon("achievements", "Achievements", "A", Color(0.4,0.25,0.1), Color("ffd375")))
 	_ensure_achievements()
@@ -52749,7 +52788,6 @@ func _build_phone_ui() -> void:
 		_grubbah.setup(self, v)
 	icon_grid.add_child(_make_phone_app_icon("grubbah", "Grubbah", "G", Color("B84D22"), Color("FFE1A5")))
 	icon_grid.add_child(_make_phone_app_icon("orders", "My Sales", "#", Color("244B51"), Color("83E1D0")))
-	icon_grid.add_child(_make_phone_app_icon("shop", "Shop", "$", Color(0.12, 0.42, 0.28), Color(0.55, 0.92, 0.62)))
 	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("snak", "Snak", "S", Color(0.12, 0.38, 0.16), Color(0.55, 0.95, 0.42)))
@@ -63585,6 +63623,10 @@ func _clear_ingredient_bins_3d() -> void:
 
 
 func _build_ingredient_bins_3d() -> void:
+	if not is_instance_valid(_empty_stock_controls):
+		_empty_stock_controls = preload("res://scripts/empty_stock_controls.gd").new()
+		_empty_stock_controls.game = self
+		add_child(_empty_stock_controls)
 	_clear_ingredient_bins_3d()
 	if world == null:
 		return
@@ -63747,7 +63789,7 @@ func _apply_ingredient_bin_strip_layout() -> void:
 				icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 				icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 				icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-				icon.visible = not _is_condiment(id)
+				icon.visible = not _is_condiment(id) and int(supply_stock.get(id, 0)) > 0
 				icon.material = _ensure_strip_icon_material()
 				if id == "cheese":
 					var pivot_w := icon.size.x if icon.size.x > 1.0 else ingredient_icon_w
@@ -65388,6 +65430,7 @@ func _build_station_ui() -> void:
 			_on_serve()
 		)
 		btns.add_child(serve_one)
+		serve_one.hide()
 
 		var trash_one := Button.new()
 		trash_one.text = "🗑"
@@ -67574,6 +67617,10 @@ func _add_cheese_to_warmer_patty(_station_index: int) -> bool:
 func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool = true) -> void:
 	if not playing or id == "":
 		return
+	if id == "bun_bottom" and mp_enabled and not _mp_applying:
+		if NetManager.is_host(): mp_request_bun_pair(station_index)
+		else: mp_request_bun_pair.rpc_id(1, station_index)
+		return
 	if mp_enabled and not _mp_applying:
 		if not _mp_can_spend_ingredient(id):
 			return
@@ -67582,11 +67629,44 @@ func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool =
 	_add_ingredient_to_station_local(station_index, id, play_sfx)
 
 
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_bun_pair(station_index: int) -> void:
+	if not NetManager.is_host() or not playing: return
+	if station_index < 0 or station_index >= stations.size(): return
+	if stations[station_index].items.has("bun_bottom"): return
+	if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0:
+		_mp_broadcast_station(station_index)
+		_mp_broadcast_economy()
+		return
+	_mp_applying = true
+	_add_ingredient_to_station_local(station_index, "bun_bottom")
+	_mp_applying = false
+	_mp_broadcast_economy()
+	mp_bun_pair_flight.rpc(station_index)
+
+@rpc("authority", "call_remote", "reliable")
+func mp_bun_pair_flight(station_index: int) -> void:
+	if station_index >= 0 and station_index < stations.size():
+		_animate_bun_to_build_station("bun_bottom", station_index)
+
+
 func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: bool = true) -> void:
 	if is_instance_valid(_grubbah) and str(_grubbah.state.get("phase",""))=="wrapping": return
 	if not playing or id == "":
 		return
 	if id == "bun_bottom":
+		if station_index < 0 or station_index >= STATION_COUNT: return
+		var build: Dictionary = stations[station_index]
+		if build.items.has("bun_bottom"): return
+		if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0: return
+		if not _mp_spend_ingredient("bun_bottom"): return
+		if not _mp_spend_ingredient("bun_top"): return
+		build.items.append("bun_bottom")
+		build.items.append("bun_top")
+		build.items = _normalize_burger_stack(build.items)
+		_refresh_station(station_index)
+		_animate_bun_to_build_station("bun_bottom", station_index)
+		_mp_broadcast_station(station_index)
 		return
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
@@ -67950,6 +68030,12 @@ func _ensure_station_layer_control(index: int, preview: Control, visual_i: int) 
 					return
 			if item_id == "bun_bottom":
 				_begin_whole_burger_drag(si)
+			elif stations[si]["items"].has("bun_bottom") and stations[si]["items"].has("patty"):
+				active_station = si
+				if is_instance_valid(_grubbah) and _grubbah.is_selected():
+					_grubbah.request("wrap")
+				else:
+					_on_serve()
 			else:
 				var selected: int = int(stations[si].get("selected_layer", -1))
 				_select_station_layer(si, -1 if selected == layer_i else layer_i, false)
@@ -68156,6 +68242,8 @@ func _refresh_station(index: int) -> void:
 		_update_build_burger_shadow(preview, bottom_row.position + Vector2(bottom_row.size.x * 0.5, bottom_row.size.y * 0.84), Vector2(bottom_row.size.x * 1.38, bottom_row.size.x * 0.39))
 	if top_row != null and is_instance_valid(top_row):
 		top_row.position.y += BUILD_BUN_NEST_TOP_PX * layer_scale
+		if not _serve_fly_busy:
+			top_row.position.y -= 70.0 * layer_scale
 	_center_build_burger_on_board()
 	_update_station_layer_hint(index)
 	_queue_station_review_thumbnail(index)
@@ -68468,53 +68556,8 @@ func _clear_local_held_icecream_after_remote_hand() -> void:
 
 
 func _try_auto_serve() -> void:
-	if is_instance_valid(_grubbah) and _grubbah.is_selected():
-		if _grubbah.host() and str(_grubbah.state.get("phase",""))=="paper" and _grubbah.burger_ready() and not stations[0].items.has("bun_top"):
-			if _crown_serve_burger(0): _refresh_station(0)
-		return
-	if is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) in ["paper","wrapping"]: return
-	if not _whole_burger_drag.is_empty() or (is_instance_valid(_whole_burger_settle) and _whole_burger_settle.is_running()): return
-	## Hand off as soon as a station matches a waiting ticket perfectly.
-	if not playing or _auto_serving or _serve_fly_busy:
-		return
-	## The tutorial explicitly teaches manual serving with Enter; do not steal that lesson.
-	if tutorial_mode:
-		return
-	# Only the host chooses a shared handoff; never fall through to a different order.
-	if mp_enabled and not NetManager.is_host(): return
-	var current := _resolve_serve_customer() as Node3D
-	if current == null: return
-	var waiting: Array = [current]
-	for cust in waiting:
-		## Don't auto-hand-off until any ordered soda is poured (or already handed).
-		if not _sides_ready_for_order(cust.order, cust):
-			continue
-		if GameDataScript.is_soda_only_order(cust.order):
-			## Never auto-complete drink-only tickets — that stole cups from other
-			## soda lines and could finish the wrong order mid-pour.
-			continue
-		var si := _find_perfect_station_for(cust.order)
-		if si < 0:
-			var near_si := _find_station_for_order(cust.order)
-			if near_si >= 0:
-				var near_items: Array = stations[near_si]["items"]
-				if _station_only_needs_top_bun(near_items, cust.order):
-					si = near_si
-		if si < 0:
-			continue
-		if _station_sauce_in_flight(si):
-			continue
-		## Cheese melt is presentation only. As soon as every ordered ingredient is
-		## on Build, crown and serve immediately instead of idling for its 3s melt.
-		_auto_serving = true
-		selected_customer = cust
-		active_station = si
-		_highlight_tickets()
-		_highlight_active_station()
-		_submit_serve_request(cust, si)
-		if not _serve_fly_busy:
-			_auto_serving = false
-		return
+	# Serving and mobile wrapping are explicit burger clicks.
+	pass
 
 
 func _maybe_auto_top_bun() -> void:

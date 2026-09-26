@@ -36,13 +36,13 @@ func run():
  var patty=g.grill[0];assert(is_instance_valid(patty));g.grill[0]=null;patty.is_held=true;patty.visible=false
  g.stations[0].patties=[patty];g.stations[0].items=["bun_bottom","patty"];g._refresh_station(0)
  assert(m.burger_ready())
- g._try_auto_serve();assert(g.stations[0].items.has("bun_top"));assert(m.state.phase=="paper")
+ g._try_auto_serve();assert(not g.stations[0].items.has("bun_top"));assert(m.state.phase=="paper")
  g._set_phone_app("grubbah");g._set_phone_expanded(true)
  await create_timer(2).timeout
  await RenderingServer.frame_post_draw
  root.get_texture().get_image().save_png("res://build/mobile_regular_ticket.png")
  var click=InputEventMouseButton.new();click.button_index=MOUSE_BUTTON_LEFT;click.pressed=true;click.position=g.camera.unproject_position(m.paper3d.global_position)
- assert(m.handle_input(click));assert(m.state.phase=="wrapping")
+ assert(m.handle_input(click));assert(m.state.phase=="wrapping");assert(g.stations[0].items.has("bun_top"))
  await process_frame;await process_frame
  assert(g.stations[0].preview.modulate.a==0.0)
  await create_timer(1.5).timeout
@@ -61,5 +61,11 @@ func run():
    assert(item.mesh.mesh.get_aabb().size.z>.045)
  await RenderingServer.frame_post_draw
  root.get_texture().get_image().save_png("res://build/mobile_packed_ticket_smear.png")
+ assert(not m.courier._uses_custom_character)
+ assert(m.DRIVER_APPROACH <= 1.0)
+ g._set_phone_app("shop")
+ await create_timer(.5).timeout
+ await RenderingServer.frame_post_draw
+ root.get_texture().get_image().save_png("res://build/shop_layout_checked.png")
  print("MOBILE_REGULAR_FLOW_OK")
  quit()

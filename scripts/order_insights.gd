@@ -29,7 +29,7 @@ func setup(g: Node, parent: Control) -> void:
  counter.offset_top=36
  counter.offset_bottom=69
  counter.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
- counter.add_theme_font_size_override("font_size",16)
+ counter.add_theme_font_size_override("font_size",14)
  counter.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
  counter.add_theme_color_override("font_color",Color("FFA52E"))
  counter.add_theme_color_override("font_outline_color",Color("30231B"))
@@ -42,11 +42,12 @@ func _process(_delta: float) -> void:
   var row: Dictionary = game.order_history[i]
   if int(row.get("day",0)) != game.day or not bool(row.get("perfect",false)): break
   streak += 1
- counter.visible=game.playing and streak>0
+ counter.modulate.a = move_toward(counter.modulate.a, 1.0 if game.playing and streak > 0 else 0.0, _delta * 3.0)
+ counter.visible = counter.modulate.a > .001
  var ui_scale := maxf(.1,counter.get_global_transform_with_canvas().y.length())
- counter.offset_top=36.0-40.0/ui_scale
+ counter.offset_top=36.0-35.0/ui_scale
  counter.offset_bottom=counter.offset_top+33.0
- counter.text="★  PERFECT STREAK  %d" % streak
+ if streak > 0: counter.text="★  PERFECT STREAK  %d" % streak
 func show_app(id: String) -> void:
  page.visible=id=="orders"
  if page.visible: refresh()

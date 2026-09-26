@@ -1,9 +1,9 @@
 extends Node
 # Host-owned mobile fulfillment. Visuals are reconstructed from a revisioned snapshot.
-const DRIVER_APPROACH = 2.0
+const DRIVER_APPROACH = 1.0
 const DRIVER_WALK = 4.0
 const DRIVER_RETURN = 2.8
-const DRIVER_EXIT = 2.0
+const DRIVER_EXIT = .85
 const DATA = preload("res://scripts/game_data.gd")
 const PACK = "res://models/burgerpack/try2/"
 var game: Node
@@ -74,10 +74,10 @@ func setup(g: Node, parent: Control) -> void:
  var subtitle=Label.new();subtitle.text="PICKUP ORDERS";subtitle.add_theme_font_size_override("font_size",12);subtitle.modulate=Color("B7D4C7");page.add_child(subtitle)
  var card=PanelContainer.new();var card_style=StyleBoxFlat.new();card_style.bg_color=Color("153832");card_style.set_corner_radius_all(12);card_style.content_margin_left=14;card_style.content_margin_right=14;card_style.content_margin_top=14;card_style.content_margin_bottom=14;card.add_theme_stylebox_override("panel",card_style);page.add_child(card)
  var contents=VBoxContainer.new();contents.add_theme_constant_override("separation",10);card.add_child(contents)
- status_label=Label.new();status_label.add_theme_font_size_override("font_size",14);status_label.modulate=Color("FFC875");contents.add_child(status_label)
+ status_label=Label.new();status_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;status_label.add_theme_font_size_override("font_size",14);status_label.modulate=Color("FFC875");contents.add_child(status_label)
  body=Label.new();body.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;body.add_theme_font_size_override("font_size",16);body.modulate=Color("FFF3D9");contents.add_child(body)
- total_label=Label.new();total_label.add_theme_font_size_override("font_size",18);total_label.modulate=Color("98E2AF");contents.add_child(total_label)
- action=Button.new();action.custom_minimum_size.y=44;action.pressed.connect(func():request("action"));page.add_child(action)
+ total_label=Label.new();total_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;total_label.add_theme_font_size_override("font_size",18);total_label.modulate=Color("98E2AF");contents.add_child(total_label)
+ action=Button.new();action.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;action.custom_minimum_size.y=44;action.pressed.connect(func():request("action"));page.add_child(action)
  var button_style=StyleBoxFlat.new();button_style.bg_color=Color("DC8E39");button_style.set_corner_radius_all(10);action.add_theme_stylebox_override("normal",button_style);action.add_theme_color_override("font_color",Color("231F19"))
  decline=Button.new();decline.text="Cancel order";decline.add_theme_color_override("font_color",Color("EDAAA0"));decline.pressed.connect(func():request("cancel"));page.add_child(decline)
  page.hide()
@@ -313,7 +313,7 @@ func board_pos() -> Vector3:
 func build_props() -> void:
  props=Node3D.new();props.name="GrubbahProps";game.world.add_child(props)
  var base=board_pos();board_surface=base
- napkins=Node3D.new();props.add_child(napkins);napkins.position=base+Vector3(.49,-.055,.37)
+ napkins=Node3D.new();props.add_child(napkins);napkins.position=base+Vector3(.49,-.055,.23)
  for i in 5:
   var sheet=fitted("SM_BurgerPackagingPaper",.27);sheet.position.y=i*.009;sheet.rotation.y=i*.025;napkins.add_child(sheet)
  var stack_logo=Sprite3D.new();stack_logo.name="BurgerPalsWrapLogo";stack_logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");stack_logo.pixel_size=.00018
@@ -334,7 +334,7 @@ func build_props() -> void:
  ledge=MeshInstance3D.new();var box=BoxMesh.new();box.size=Vector3(.85,.06,.38);ledge.mesh=box;ledge.material_override=game._make_basic_mat(Color("727E81"),.7,.25);props.add_child(ledge);ledge.position=Vector3(.4192,1.03,1.85)
  var car_scene=load("res://assets/vehicles/sugar_street/lagoon_hatch.glb");car=car_scene.instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE;car.rotation.y=0;car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;car.hide()
  screech=AudioStreamPlayer3D.new();screech.stream=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3");screech.bus="SFX";screech.volume_db=-4;screech.unit_size=5.0;screech.max_distance=35;car.add_child(screech)
- courier=game.CustomerScript.new();courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_run(1.3);courier.hide()
+ courier=game.CustomerScript.new();courier.set_meta("delivery_driver",true);courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_run(1.3);courier.hide()
  for n in courier.find_children("*","Label3D",true,false):n.hide()
 func prepare_bag_ticket() -> void:
  if is_instance_valid(ticket_view):ticket_view.queue_free()
@@ -452,6 +452,7 @@ func handle_input(event: InputEvent) -> bool:
  # UI is handled normally; don't steal clicks from the phone or menus.
  if game.get_viewport().gui_get_hovered_control()!=null:
   var hovered=game.get_viewport().gui_get_hovered_control()
+  if str(hovered.get_meta("item_id",""))=="bun_bottom":return false
   if hovered is BaseButton or (is_instance_valid(game.phone_column) and game.phone_column.is_ancestor_of(hovered)):return false
  if knife.visible and event.position.distance_to(game.camera.unproject_position(knife.global_position+Vector3(0,.13,0)))<55:
   if is_instance_valid(game.spatula_patty) or is_instance_valid(game.dragging_patty):game._flash("Put the burger down first",Color("FFD147"));return true
