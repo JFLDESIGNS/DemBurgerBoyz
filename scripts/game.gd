@@ -16167,6 +16167,8 @@ func _patty_slide_dist_for_speed(speed: float, max_dist: float) -> float:
 
 
 func _stop_patty_slide_inertia() -> void:
+	if mp_enabled and is_instance_valid(slide_inertia_patty):
+		call_deferred("_mp_finish_local_slide",slide_inertia_patty)
 	if slide_inertia_patty != null and is_instance_valid(slide_inertia_patty) and "is_slide_drag" in slide_inertia_patty:
 		slide_inertia_patty.is_slide_drag = false
 	slide_inertia_patty = null
@@ -16299,7 +16301,7 @@ func _end_patty_drag() -> void:
 		if game_audio.has_method("set_burger_slide_oil"):
 			game_audio.set_burger_slide_oil(false)
 	if mp_enabled and not _mp_applying and is_instance_valid(patty) and int(patty.get("net_id")) >= 0:
-		mp_release_drag(int(patty.net_id))
+		call_deferred("_mp_finish_local_slide",patty)
 	if not is_instance_valid(patty):
 		return
 	## Drag onto the peeking cat → feed (no trash fee).
@@ -61691,7 +61693,12 @@ func _begin_challenge_wait() -> void:
 	_mp_send_challenge_state()
 
 
+var _challenge_offer_id := 0
+var _challenge_decision_pending := false
+
 func _show_challenge_offer() -> void:
+	_challenge_offer_id += 1
+	_challenge_decision_pending = false
 	_challenge_phase = "offer"
 	if challenge_body_label != null and is_instance_valid(challenge_body_label):
 		challenge_body_label.text = "One recipe. Beat the clock. Earn the bonus."
@@ -61709,7 +61716,10 @@ func _show_challenge_offer() -> void:
 
 func _accept_challenge() -> void:
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
-		mp_request_challenge_decision.rpc_id(1, true)
+		if _challenge_phase != "offer" or _challenge_decision_pending: return
+		_challenge_decision_pending = true
+		_hide_challenge_overlay()
+		mp_request_challenge_decision.rpc_id(1, true, _challenge_offer_id)
 		return
 	if _challenge_phase != "offer":
 		return
@@ -61726,7 +61736,10 @@ func _accept_challenge() -> void:
 
 func _decline_challenge() -> void:
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
-		mp_request_challenge_decision.rpc_id(1, false)
+		if _challenge_phase != "offer" or _challenge_decision_pending: return
+		_challenge_decision_pending = true
+		_hide_challenge_overlay()
+		mp_request_challenge_decision.rpc_id(1, false, _challenge_offer_id)
 		return
 	if _challenge_phase != "offer":
 		return
@@ -61739,22 +61752,25 @@ func _decline_challenge() -> void:
 func _mp_send_challenge_state(peer_id: int = 0) -> void:
 	if not mp_enabled or not NetManager.is_host() or not NetManager.is_online():
 		return
-	var state := [_challenge_phase, _challenge_count, _challenge_remaining, int(ceil(_challenge_time_left)), _challenge_time_max, _challenge_bonus_tip]
+	var state := [_challenge_phase, _challenge_count, _challenge_remaining, int(ceil(_challenge_time_left)), _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id]
 	if peer_id <= 0 and get_meta("mp_challenge_sent", []) == state:
 		return
 	if peer_id <= 0:
 		set_meta("mp_challenge_sent", state)
 	if peer_id > 0:
-		mp_challenge_state.rpc_id(peer_id, _challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip)
+		mp_challenge_state.rpc_id(peer_id, _challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id)
 	else:
-		mp_challenge_state.rpc(_challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip)
+		mp_challenge_state.rpc(_challenge_phase, _challenge_count, _challenge_remaining, _challenge_time_left, _challenge_time_max, _challenge_bonus_tip, _challenge_offer_id)
 
 
 @rpc("authority", "call_remote", "reliable")
-func mp_challenge_state(phase: String, count: int, remaining: int, time_left: float, time_max: float, bonus_tip: int) -> void:
+func mp_challenge_state(phase: String, count: int, remaining: int, time_left: float, time_max: float, bonus_tip: int, offer_id: int = 0) -> void:
+	_mp_flush_scene_snapshots()
 	if NetManager.is_host():
 		return
 	var previous := _challenge_phase
+	if offer_id != _challenge_offer_id or phase != "offer": _challenge_decision_pending = false
+	_challenge_offer_id = offer_id
 	_challenge_phase = phase
 	# Release the input-catching offer before any presentation work can fail or stall.
 	if phase != "offer": _hide_challenge_overlay()
@@ -61773,7 +61789,7 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 		if challenge_reward_label != null:
 			challenge_reward_label.text = "Great cooking earns a better tip"
 		if challenge_overlay != null:
-			challenge_overlay.visible = true
+			challenge_overlay.visible = not _challenge_decision_pending
 		if previous != "offer":
 			_play_challenge_song()
 	else:
@@ -61788,9 +61804,10 @@ func mp_challenge_state(phase: String, count: int, remaining: int, time_left: fl
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_request_challenge_decision(accept: bool) -> void:
+func mp_request_challenge_decision(accept: bool, offer_id: int = -1) -> void:
 	if not NetManager.is_host() or multiplayer.get_remote_sender_id() == 0:
 		return
+	if _challenge_phase != "offer" or offer_id != _challenge_offer_id: return
 	if accept:
 		_accept_challenge()
 	else:
@@ -69454,7 +69471,7 @@ func _play_serve_fly_to_mouth(
 	var celebration_hold := 0.10 if fast_challenge else BURGER_COMPLETE_HOLD_SEC
 	_serve_fly_busy = true
 	var approach_deadline := Time.get_ticks_msec()+2500
-	while is_instance_valid(customer) and bool(customer.get_meta("meal_stepping_aside",false)):
+	while replicated_soda < 0 and is_instance_valid(customer) and bool(customer.get_meta("meal_stepping_aside",false)):
 		if Time.get_ticks_msec() >= approach_deadline:
 			customer.set_meta("meal_stepping_aside",false)
 			break
@@ -69511,8 +69528,7 @@ func _play_serve_fly_to_mouth(
 	burst.visible = true
 	var hand_pos := _customer_burger_hand_screen(customer)
 
-	if preview != null and is_instance_valid(preview):
-		preview.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	# The flight owns a separate visual; never hide the live build station.
 
 	if is_instance_valid(customer):
 		customer.set_meta("burger_in_flight", true)
@@ -73157,6 +73173,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 	mp_enabled = true
 	mp_held_net.clear()
 	_mp_drag_claims.clear()
+	_mp_slide_releasing.clear()
 	_mp_drag_generation.clear()
 	_mp_patty_index.clear()
 	_mp_bootstrap_active.clear()
@@ -74895,11 +74912,13 @@ func mp_claim_drag(net_id: int) -> void:
 
 @rpc("authority", "call_local", "reliable")
 func mp_drag_claimed(net_id: int, owner: int, generation: int) -> void:
+	_mp_flush_scene_snapshots()
 	if generation < int(_mp_drag_generation.get(net_id, -1)):
 		return
 	_mp_patty_pose_state.erase(net_id)
 	_mp_drag_generation[net_id] = generation
 	_mp_drag_claims[net_id] = owner
+	if owner == 0: _mp_slide_releasing.erase(net_id)
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
@@ -74914,10 +74933,38 @@ func mp_drag_claimed(net_id: int, owner: int, generation: int) -> void:
 			drag_owner_id = owner
 	elif owner == NetManager.my_id() and slide_inertia_patty != p:
 		# A quick release may precede the grant. Release that grant, not a newer one.
-		mp_release_drag(net_id, generation)
+		_mp_finish_local_slide(p)
 	if slide_inertia_patty == p and owner != NetManager.my_id():
 		_stop_patty_slide_inertia()
 
+
+var _mp_slide_releasing: Dictionary = {}
+
+func _mp_finish_local_slide(patty: Area3D) -> void:
+	if not mp_enabled or not is_instance_valid(patty) or patty == dragging_patty or patty == slide_inertia_patty: return
+	var nid := int(patty.net_id)
+	if int(_mp_drag_claims.get(nid,0)) != NetManager.my_id(): return
+	_mp_slide_releasing[nid] = true
+	var point: Vector3 = patty.position
+	if NetManager.is_host(): mp_finish_drag(nid,int(_mp_drag_generation.get(nid,0)),point)
+	else: mp_finish_drag.rpc_id(1,nid,int(_mp_drag_generation.get(nid,0)),point)
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_finish_drag(nid: int, generation: int, point: Vector3) -> void:
+	if not NetManager.is_host() or not point.is_finite(): return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0: sender = NetManager.my_id()
+	if int(_mp_drag_claims.get(nid,0)) != sender or int(_mp_drag_generation.get(nid,-1)) != generation: return
+	var patty = _patty_by_net_id(nid)
+	if is_instance_valid(patty) and grill.has(patty) and not patty.is_held:
+		var bounds := _grill_place_bounds()
+		point.x = clampf(point.x,bounds.position.x,bounds.end.x)
+		point.z = clampf(point.z,bounds.position.y,bounds.end.y)
+		patty.position = Vector3(point.x,GRILL_SURFACE_Y+PATTY_SIT_Y,point.z)
+		patty._rest_x = point.x; patty._rest_z = point.z
+	_mp_claim_counter += 1
+	mp_drag_claimed.rpc(nid,0,_mp_claim_counter)
+	_mp_broadcast_grill()
 
 @rpc("any_peer", "call_remote", "reliable")
 func mp_release_drag(net_id: int, generation: int = -1) -> void:
@@ -75783,7 +75830,7 @@ func mp_sync_grill(
 		if i < shapes.size(): p.apply_mp_shape(int(shapes[i]))
 		## Don't yank local scoop / drag ownership mid-gesture.
 		var local_scoop: bool = spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id())
-		var local_drag: bool = dragging_patty == p and drag_owner_id == NetManager.my_id()
+		var local_drag: bool = (dragging_patty == p and drag_owner_id == NetManager.my_id()) or slide_inertia_patty == p or _mp_slide_releasing.has(nid)
 		var perfect_snap := bool(perfects[i]) if i < perfects.size() else bool(p.perfect_flip)
 		if local_scoop or local_drag or bool(p.get_meta("click_transfer",false)):
 			## Still repair absolute cook / HOLD / cheese so day-2 desync heals.
@@ -75913,6 +75960,7 @@ func mp_place_warmer(net_id: int, idx: int, x: float, z: float) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_commit_patty_build(net_id: int) -> void:
+	_mp_flush_scene_snapshots()
 	var p = _patty_by_net_id(net_id)
 	if p == null or not is_instance_valid(p):
 		return
@@ -76482,7 +76530,7 @@ func mp_sync_customers(
 		if i < fries_handed.size():
 			_mark_customer_fries_handed(c, bool(fries_handed[i]))
 		var host_serving := (bool(serving[i]) if i < serving.size() else false) or _mp_retired_customer_ids.has(nid)
-		if not host_serving: c.set_meta("burger_in_flight",false)
+		if not host_serving and not bool(c.get("_eating")): c.set_meta("burger_in_flight",false)
 		c.set_meta("serve_in_progress", host_serving)
 		if bool(c.get("is_challenge_guest")) and _challenge_phase == "active":
 			_challenge_customer = c
@@ -76577,6 +76625,7 @@ func mp_sync_customers(
 
 @rpc("authority", "call_remote", "reliable")
 func mp_burger_serve_visual(net_id: int, station_index: int, with_soda: bool, reject_burger: bool = false) -> void:
+	_mp_flush_scene_snapshots()
 	if not mp_enabled or not playing or NetManager.is_host():
 		return
 	if station_index < 0 or station_index >= stations.size():
@@ -76584,6 +76633,7 @@ func mp_burger_serve_visual(net_id: int, station_index: int, with_soda: bool, re
 	var customer = _customer_by_net_id(net_id)
 	if customer == null or not is_instance_valid(customer):
 		return
+	customer.set_meta("meal_stepping_aside", false)
 	customer.set_meta("ticket_build_clock_stopped", true)
 	customer.stop_order_clock()
 	# Presentation never scores an order or consumes a guest's local drink.
@@ -76592,6 +76642,7 @@ func mp_burger_serve_visual(net_id: int, station_index: int, with_soda: bool, re
 
 @rpc("authority", "call_remote", "reliable")
 func mp_customer_serve_started(net_id: int) -> void:
+	_mp_flush_scene_snapshots()
 	var challenge_guest = _customer_by_net_id(net_id)
 	if is_instance_valid(challenge_guest) and bool(challenge_guest.get("is_challenge_guest")):
 		challenge_guest.set_meta("serve_in_progress", true)
@@ -76772,6 +76823,7 @@ func mp_sync_station(
 	freshness: float = -1.0,
 	spoiled: bool = false
 ) -> void:
+	_mp_flush_scene_snapshots()
 	if NetManager.is_host():
 		return
 	if station_index < 0 or station_index >= STATION_COUNT:
@@ -76817,6 +76869,9 @@ func mp_sync_station(
 		st["spoiled"] = spoiled
 	_sync_station_cheese_items(station_index)
 	if visual_changed: _refresh_station(station_index)
+	var preview = st.get("preview")
+	if is_instance_valid(preview) and not (is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) == "wrapping"):
+		preview.modulate.a = 1.0
 	_refresh_freshness_label(station_index)
 	_mp_applying = false
 
@@ -77878,6 +77933,13 @@ func _mp_schedule_state(topic: String) -> void:
 		return
 	_mp_state_jobs[topic] = true
 	_mp_ensure_service()
+
+func _mp_flush_scene_snapshots() -> void:
+	for topic in ["grill", "customers"]:
+		if not _mp_apply_jobs.has(topic): continue
+		var values: Array = _mp_apply_jobs[topic]
+		_mp_apply_jobs.erase(topic)
+		callv("mp_sync_grill" if topic == "grill" else "mp_sync_customers",values)
 
 func _mp_service_tick() -> void:
 	if not mp_enabled or not NetManager.is_online():

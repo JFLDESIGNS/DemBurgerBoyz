@@ -2466,6 +2466,10 @@ func _update_host_driven_pose(delta: float) -> void:
 		var yaw_t: float = clampf(delta * 12.0, 0.0, 1.0)
 		rotation_degrees.y = rad_to_deg(lerp_angle(deg_to_rad(rotation_degrees.y), deg_to_rad(_mp_target_yaw), yaw_t))
 	global_position.y = STAND_Y
+	if _eating or _burger_eat_phase != "":
+		_update_eat_pose()
+		_animate_expression(delta)
+		return
 	if is_waiting:
 		if not _mp_target_valid:
 			rotation_degrees.y = FACE_TRUCK_YAW
@@ -4423,6 +4427,7 @@ func apply_disguise_cat_look() -> void:
 				add_child(_disguise_cat_mesh)
 				## Same black street-cat retint as the window cat (raw FBX is purple).
 				preload("res://scripts/cat_appearance.gd").apply_fur(_disguise_cat_mesh)
+				preload("res://scripts/cat_appearance.gd").apply_eyes(_disguise_cat_mesh)
 				for part_name in ["Delivery_Box_Rig","Postal_Cap_Rig","Messenger_Bag_Rig","Crossbody leather strap","Flush strap stitching -1","Flush strap stitching 1"]:
 					var part=_disguise_cat_mesh.find_child(part_name,true,false) as Node3D
 					if part:part.hide()
