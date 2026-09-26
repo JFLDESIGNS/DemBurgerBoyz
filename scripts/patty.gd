@@ -468,8 +468,8 @@ func _ready() -> void:
 	_hint.modulate = Color("FFEB3B")
 	_hint.visible = false
 	UiFontsScript.apply_label3d(_hint, true, 72, 0.078)
-	_hint.outline_size = 6
-	_hint.outline_modulate = Color(0, 0, 0, 0.5)
+	_hint.outline_size = 16
+	_hint.outline_modulate = Color(0, 0, 0, 1.0)
 	add_child(_hint)
 	_ensure_hold_meter()
 	_setup_cook_fx()

@@ -17,6 +17,13 @@ func run():
  assert(first.hand.size()==5 and second.hand.size()==5)
  for card in first.hand:assert(card not in second.hand)
  assert(not first.has("deck") and not first.has("hands"))
+ session.players=[1];session.mode="draw";session.deal()
+ assert(session.bot_hand.size()==5)
+ assert(session.view_for(1).opponent==[-1,-1,-1,-1,-1])
+ for card in session.bot_hand:assert(card not in session.hands[1])
+ session.finish_round();assert(session.phase=="finished");assert(session.view_for(1).opponent==session.bot_hand)
+ session.mode="blackjack";session.deal();assert(session.bot_hand.is_empty());assert(session.view_for(1).dealer[1]==-1)
+ session.finish_round();assert(session.total(session.dealer)>=17)
  print("PARTY_RULES_OK");quit()
 func _key(code):
  var event=InputEventKey.new();event.keycode=code;event.pressed=true;return event
