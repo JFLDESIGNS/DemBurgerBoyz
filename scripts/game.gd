@@ -17737,9 +17737,9 @@ func _add_roomba_top_highlights(parent: Node3D) -> void:
 		var streak := MeshInstance3D.new()
 		streak.name = "ToonTopReflection%d" % i
 		var plane := PlaneMesh.new()
-		plane.size = Vector2(ROOMBA_RADIUS * (.62 if i == 0 else .32), ROOMBA_RADIUS * .17)
+		plane.size = Vector2(ROOMBA_RADIUS * 1.86, ROOMBA_RADIUS * .10)
 		streak.mesh = plane
-		streak.position = Vector3(ROOMBA_RADIUS * (-.30 if i == 0 else .34), ROOMBA_HEIGHT*.62+.007, -ROOMBA_RADIUS*.38)
+		streak.position = Vector3(0, ROOMBA_HEIGHT*.62+.007, ROOMBA_RADIUS*(-.26 if i == 0 else .26))
 		streak.material_override = mat
 		streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(streak)
@@ -49784,82 +49784,46 @@ func _make_review_burger_snapshot(station_index: int) -> Texture2D:
 
 
 func _render_review_burger_snapshot(station_index: int) -> Texture2D:
-	## Compact 2D stack photo for ~1/8 social posts.
-	if station_index < 0 or station_index >= stations.size():
-		return null
+	if station_index < 0 or station_index >= stations.size(): return null
 	var st: Dictionary = stations[station_index]
 	var items: Array = st.get("items", [])
-	if items.is_empty():
-		return null
-	const OUT := 112
-	var canvas := Image.create(OUT, OUT, false, Image.FORMAT_RGBA8)
-	canvas.fill(Color(0.14, 0.12, 0.10, 0.92))
-	## Soft plate disc.
-	for y in OUT:
-		for x in OUT:
-			var dx := (float(x) + 0.5) / float(OUT) - 0.5
-			var dy := (float(y) + 0.5) / float(OUT) - 0.5
-			if dx * dx + dy * dy < 0.22:
-				canvas.set_pixel(x, y, Color(0.22, 0.2, 0.18, 1.0))
-
-	var layer_scale := 0.92
-	var layer_w := 78.0
-	var step_y := 11.0
-	var stack_lift := 0.0
-	var layers: Array = [] ## {img, w, h, y}
-	for stack_i in items.size():
-		var item: String = str(items[stack_i])
-		if item == "cheese":
-			continue
-		var layer_key := item
-		var pidx := -1
+	if items.is_empty(): return null
+	const OUT := 192
+	var canvas := Image.create(OUT,OUT,false,Image.FORMAT_RGBA8)
+	canvas.fill(Color.TRANSPARENT)
+	var layers: Array = []
+	var rise := 0.0
+	var top := INF
+	var bottom := -INF
+	var pidx := -1
+	for item in items:
+		if item == "cheese": continue
+		var key := str(item)
+		var tex: Texture2D
 		if item == "patty":
-			var patty_from_bottom := 0
-			for j in range(stack_i + 1):
-				if str(items[j]) == "patty":
-					patty_from_bottom += 1
-			pidx = patty_from_bottom - 1
-			if _station_patty_has_cheese(st, pidx):
-				layer_key = "patty_cheese"
-		var build_scale := _station_item_build_scale(layer_key)
-		var h_base := _layer_img_height(layer_key) * layer_scale * build_scale
-		var this_w := layer_w * _layer_width_mul(layer_key) * build_scale
-		var layer_tex: Texture2D = null
-		if item == "patty":
-			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
-		else:
-			layer_tex = FoodSpritesScript.get_tex(item)
-		if layer_tex == null:
-			continue
-		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
-		this_w = fit.x
-		var h := fit.y
-		var y := float(OUT) * 0.62 - stack_lift - float(stack_i) * step_y - h * 0.55
-		if item == "bun_bottom":
-			stack_lift += 3.0
-		elif item == "patty":
-			stack_lift += 4.0
-		var raw := layer_tex.get_image()
-		if raw == null:
-			continue
-		## Knock out studio-black sheet padding, then alpha-blend (blit stamped black boxes).
-		var src := FoodSpritesScript.prep_layer_image_for_composite(raw, layer_tex.get_instance_id(), layer_key)
-		if src == null:
-			continue
-		var tw := maxi(4, int(round(this_w)))
-		var th := maxi(4, int(round(h)))
-		src.resize(tw, th, Image.INTERPOLATE_BILINEAR)
-		layers.append({"img": src, "w": tw, "h": th, "y": y})
-
-	for L in layers:
-		var src: Image = L["img"]
-		var tw: int = int(L["w"])
-		var th: int = int(L["h"])
-		var px := int(round((float(OUT) - float(tw)) * 0.5))
-		var py := clampi(int(round(float(L["y"]))), 0, OUT - th)
-		if tw > 0 and th > 0 and px < OUT and py < OUT:
-			canvas.blend_rect(src, Rect2i(0, 0, tw, th), Vector2i(px, py))
-
+			pidx += 1
+			var cheese := _station_patty_has_cheese(st,pidx)
+			tex = _station_patty_layer_tex(st,pidx,cheese)
+		else: tex = FoodSpritesScript.get_tex(key)
+		if tex == null: continue
+		# Crop this exact texture, never reuse a differently sized patty's crop.
+		var src := FoodSpritesScript.prep_layer_image_for_composite(tex.get_image(),"sales_photo_v2_%d" % tex.get_instance_id())
+		if src == null: continue
+		var width := 148.0 * _layer_width_mul(key)
+		var height := width * float(src.get_height()) / maxf(1,src.get_width())
+		var y := -rise-height*.72
+		layers.append({"img":src,"w":width,"h":height,"y":y})
+		top=minf(top,y);bottom=maxf(bottom,y+height)
+		rise += 14.0 if item == "patty" else 18.0 if item == "bun_bottom" else 6.0
+	if layers.is_empty(): return null
+	var fit := minf(1.0,164.0/maxf(1,bottom-top))
+	var origin := (OUT-(bottom-top)*fit)*.5-top*fit
+	for layer in layers:
+		var src: Image = layer.img
+		var w := maxi(1,int(layer.w*fit))
+		var h := maxi(1,int(layer.h*fit))
+		src.resize(w,h,Image.INTERPOLATE_LANCZOS)
+		canvas.blend_rect(src,Rect2i(0,0,w,h),Vector2i((OUT-w)/2,int(origin+layer.y*fit)))
 	return ImageTexture.create_from_image(canvas)
 
 
