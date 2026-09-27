@@ -4564,6 +4564,7 @@ func _take_prewarmed_patty():
 		if p != null and is_instance_valid(p):
 			p.set_meta("patty_pool", false)
 			p.process_mode = Node.PROCESS_MODE_INHERIT
+			p.set_process(true)
 			_perf_hot_end("patty_acquisition", began, 800)
 			return p
 	_perf_hot_end("patty_acquisition", began, 800)
@@ -4571,8 +4572,15 @@ func _take_prewarmed_patty():
 
 
 func _return_patty_to_spawn_pool(p) -> void:
-	if p == null or not is_instance_valid(p):
+	if p == null or not is_instance_valid(p) or p.is_queued_for_deletion() or bool(p.get_meta("patty_pool",false)):
 		return
+	if not p is PattyScript:
+		p.queue_free()
+		return
+	if p.get_parent() != patties_root: p.reparent(patties_root)
+	_mp_patty_index.erase(int(p.net_id))
+	for key in ["click_transfer", "chef_flip", "chef_cook", "build_heat_started_ms"]:
+		if p.has_meta(key): p.remove_meta(key)
 	if p.has_method("reset_for_grill_spawn"):
 		p.reset_for_grill_spawn(-1, -1, Vector3(999.0, -999.0, 999.0), GRILL_SURFACE_Y + PATTY_SIT_Y, false, false)
 	p.visible = false
@@ -15142,7 +15150,7 @@ func _drop_patty_on_garbage(data: Variant) -> void:
 			return
 		var patty = _extract_station_patty(st_i, from_i)
 		if patty != null and is_instance_valid(patty):
-			patty.queue_free()
+			_return_patty_to_spawn_pool(patty)
 			_physical_garbage_react()
 			_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 		return
@@ -15883,7 +15891,7 @@ func _spawn_patty_at(idx: int, world_pos: Vector3, net_id: int = -1, skip_land_s
 			if old != null and is_instance_valid(old) and int(old.get("net_id")) != net_id:
 				grill[idx] = null
 				if spatula_patty != old and dragging_patty != old:
-					old.queue_free()
+					_return_patty_to_spawn_pool(old)
 			else:
 				return
 		else:
@@ -16311,7 +16319,7 @@ func _end_patty_drag() -> void:
 		if mp_enabled and not _mp_applying and int(patty.get("net_id")) >= 0:
 			mp_cat_feed.rpc("patty", int(patty.net_id))
 			return
-		patty.queue_free()
+		_return_patty_to_spawn_pool(patty)
 		window_cat.feed("patty")
 		_on_window_cat_fed("patty")
 		_flash("Cat stole the burger! ♥", Color("FF8A80"))
@@ -21714,7 +21722,7 @@ func _bribe_disguise_cat_with_patty(cust: Node3D) -> void:
 					spatula_lmb_held = false
 					_refresh_spatula_ui()
 					if is_instance_valid(local_patty):
-						local_patty.queue_free()
+						_return_patty_to_spawn_pool(local_patty)
 			return
 	if spatula_patty != null and is_instance_valid(spatula_patty):
 		var patty = spatula_patty
@@ -21724,7 +21732,7 @@ func _bribe_disguise_cat_with_patty(cust: Node3D) -> void:
 		spatula_lmb_held = false
 		_refresh_spatula_ui()
 		if is_instance_valid(patty):
-			patty.queue_free()
+			_return_patty_to_spawn_pool(patty)
 	_flash("Fed the freeloader — they split", Color("CE93D8"))
 	if cust.has_method("disguise_bribe_leave"):
 		cust.disguise_bribe_leave()
@@ -21810,7 +21818,7 @@ func _feed_window_cat_patty_local() -> void:
 	spatula_carry_travel = 0.0
 	_refresh_spatula_ui()
 	if is_instance_valid(patty):
-		patty.queue_free()
+		_return_patty_to_spawn_pool(patty)
 	if window_cat:
 		_feed_cat_target("patty")
 	_flash("Cat stole the burger! ♥", Color("FF8A80"))
@@ -27978,7 +27986,7 @@ func _trash_held_warm_patty(patty: Area3D) -> void:
 	if idx >= 0 and idx < grill.size() and grill[idx] == patty:
 		grill[idx] = null
 	if is_instance_valid(patty):
-		patty.queue_free()
+		_return_patty_to_spawn_pool(patty)
 	_spend(COST_DROP_BURGER, "Hold meat went BAD — tossed (%s)" % _format_money(COST_DROP_BURGER), Color("EF5350"))
 
 
@@ -38316,7 +38324,7 @@ func _animate_object_into_garbage(node: Node3D, duration: float = 0.28) -> void:
 	tw.tween_property(node, "scale", start_scale * 0.08, duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.chain().tween_callback(func() -> void:
 		if node != null and is_instance_valid(node):
-			node.queue_free()
+			_return_patty_to_spawn_pool(node)
 		_physical_garbage_react()
 	)
 
@@ -60940,9 +60948,9 @@ func _first_empty_slot() -> int:
 
 func _clear_spatula() -> void:
 	if spatula_patty != null and is_instance_valid(spatula_patty):
-		spatula_patty.queue_free()
+		_return_patty_to_spawn_pool(spatula_patty)
 	if spatula_juggle_patty != null and is_instance_valid(spatula_juggle_patty):
-		spatula_juggle_patty.queue_free()
+		_return_patty_to_spawn_pool(spatula_juggle_patty)
 	spatula_patty = null
 	spatula_juggle_patty = null
 	spatula_juggle_t = 0.0
@@ -66346,7 +66354,7 @@ func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
 			_pending_ingredient_drag = ""
 			var patty = _extract_station_patty(st_i, from_i)
 			if patty != null and is_instance_valid(patty):
-				patty.queue_free()
+				_return_patty_to_spawn_pool(patty)
 			window_cat.feed("patty")
 			_on_window_cat_fed("patty")
 			_flash("Cat stole the burger! ♥", Color("FF8A80"))
@@ -67272,7 +67280,7 @@ func _sync_patties_with_items(station_index: int) -> void:
 	while st["patties"].size() > count:
 		var p = st["patties"].pop_back()
 		if p != null and is_instance_valid(p):
-			p.queue_free()
+			_return_patty_to_spawn_pool(p)
 
 
 func _on_station_plate_clicked(index: int) -> void:
@@ -74752,7 +74760,8 @@ func _mp_cull_orphan_patties(_seen_net_ids: Dictionary = {}) -> void:
 		var holder := _mp_peer_holding_net(cnid)
 		if holder != 0 and bool(child.get("is_held")):
 			continue
-		child.queue_free()
+		if _seen_net_ids.has(cnid): continue
+		_return_patty_to_spawn_pool(child)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -74837,6 +74846,7 @@ func mp_request_spawn_patty(x: float, z: float) -> void:
 	if place_pos == Vector3.ZERO:
 		place_pos = Vector3(x, GRILL_SURFACE_Y, z)
 	if not _try_use_supply("patty"):
+		_mp_broadcast_economy()
 		return
 	var nid := NetManager.alloc_net_id()
 	mp_spawn_patty.rpc(nid, idx, place_pos.x, place_pos.z)
@@ -75119,7 +75129,7 @@ func mp_serve(
 		sid = NetManager.my_id()
 	if _mp_queue_food_request("mp_serve",[cust_net_id,station_index,source_has_held_cup]):return
 	var target = _customer_by_net_id(cust_net_id)
-	if not is_instance_valid(target) or not target.is_waiting or bool(target.get_meta("serve_in_progress",false)):
+	if not is_instance_valid(target) or not target.is_waiting or (bool(target.get_meta("serve_in_progress",false)) and not bool(target.get("is_challenge_guest"))):
 		if source_has_held_cup:_mp_ack_food(sid,"drink",false)
 		return
 	if source_has_held_cup:_mp_ack_food(sid,"drink",true)
@@ -75383,7 +75393,7 @@ func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) ->
 			spatula_owner_id = 0
 			_refresh_spatula_ui()
 			if is_instance_valid(p):
-				p.queue_free()
+				_return_patty_to_spawn_pool(p)
 		elif patty_net_id >= 0:
 			var p2 = _patty_by_net_id(patty_net_id)
 			if p2 != null and is_instance_valid(p2):
@@ -75391,7 +75401,7 @@ func mp_disguise_cat_bribe(net_id: int, kind: String, patty_net_id: int = -1) ->
 					spatula_patty = null
 					spatula_owner_id = 0
 					_refresh_spatula_ui()
-				p2.queue_free()
+				_return_patty_to_spawn_pool(p2)
 		_flash("Fed the freeloader — they split", Color("CE93D8"))
 		if c.has_method("disguise_bribe_leave"):
 			c.disguise_bribe_leave()
@@ -75878,6 +75888,7 @@ func mp_sync_grill(
 		return
 	_mp_applying = true
 	var seen: Dictionary = {}
+	for nid in ids: seen[int(nid)] = true
 	for i in ids.size():
 		var nid := int(ids[i])
 		seen[nid] = true
@@ -75935,7 +75946,7 @@ func mp_sync_grill(
 					var uid := int(usurped.get("net_id"))
 					if uid < 0 or not seen.has(uid):
 						grill[slot] = null
-						usurped.queue_free()
+						_return_patty_to_spawn_pool(usurped)
 			grill[slot] = p
 			## Pull off Build if it drifted there alone.
 			for st in stations:
@@ -75990,7 +76001,7 @@ func mp_sync_grill(
 			grill[gi] = null
 			continue
 		grill[gi] = null
-		gp.queue_free()
+		_return_patty_to_spawn_pool(gp)
 	_mp_cull_orphan_patties(seen)
 	_mp_applying = false
 
@@ -76155,7 +76166,7 @@ func mp_cat_feed(kind: String, patty_net_id: int) -> void:
 			if dragging_patty == p:
 				dragging_patty = null
 			if is_instance_valid(p):
-				p.queue_free()
+				_return_patty_to_spawn_pool(p)
 		if window_cat != null and is_instance_valid(window_cat):
 			_feed_cat_target("patty")
 		_flash("Cat stole the burger! ♥", Color("FF8A80"))
@@ -76809,7 +76820,7 @@ func mp_trash_station_patty(station_index: int, from_index: int) -> void:
 	_mp_applying = true
 	var patty = _extract_station_patty(station_index, from_index)
 	if patty != null and is_instance_valid(patty):
-		patty.queue_free()
+		_return_patty_to_spawn_pool(patty)
 		_physical_garbage_react()
 		_spend(COST_DROP_BURGER, "Trashed a burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
 	_mp_applying = false

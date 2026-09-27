@@ -92,6 +92,8 @@ var _ball_hover_outline: MeshInstance3D = null
 var _hover_outline_mat: ShaderMaterial = null
 ## Compact HOLD timer — circular progress disc instead of giant "HOLD 241s" text.
 var _hold_meter: MeshInstance3D = null
+var _cook_halo: MeshInstance3D
+var _cook_halo_mat: ShaderMaterial
 var _hold_meter_mat: StandardMaterial3D = null
 var _hold_meter_img: Image = null
 var _hold_meter_tex: ImageTexture = null
@@ -472,6 +474,7 @@ func _ready() -> void:
 	_hint.outline_modulate = Color(0, 0, 0, 0.25)
 	add_child(_hint)
 	_ensure_hold_meter()
+	_ensure_cook_halo()
 	_setup_cook_fx()
 	_update_cook_gradient()
 	_update_frost_visual()
@@ -516,6 +519,8 @@ func reset_for_grill_spawn(
 	_season_fleck_count = 0
 	seasoning = 0.0
 	cook_time = 0.0
+	is_slide_drag = false
+	if is_instance_valid(_cook_halo): _cook_halo.hide()
 	flipped_once = false
 	first_side_time = 0.0
 	is_held = false
@@ -904,6 +909,7 @@ func apply_mp_state(
 
 
 func _process(delta: float) -> void:
+	_update_cook_halo()
 	_update_flip_smoke(delta)
 	_update_frozen_ball_heat_motion(delta)
 	## Unsmashed meat is real food now: it cooks, changes color, and can burn on
@@ -1179,6 +1185,28 @@ func _set_hint_mode(mode: String, text: String, color: Color) -> void:
 			start = HINT_SCALE_COOKING
 		_hint.scale = Vector3(start, start, start)
 
+
+func _ensure_cook_halo() -> void:
+	_cook_halo = MeshInstance3D.new()
+	_cook_halo.name = "CookingProgressHalo"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.30, 0.30)
+	_cook_halo.mesh = quad
+	_cook_halo.position.y = 0.009
+	_cook_halo.rotation_degrees.x = -90
+	_cook_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_cook_halo_mat = ShaderMaterial.new()
+	_cook_halo_mat.shader = preload("res://shaders/patty_cook_halo.gdshader")
+	_cook_halo.material_override = _cook_halo_mat
+	_cook_halo.visible = false
+	add_child(_cook_halo)
+
+func _update_cook_halo() -> void:
+	if not is_instance_valid(_cook_halo): return
+	_cook_halo.visible = heating and heat_mul > 0.001 and not is_held and not bool(get_meta("start_preview",false))
+	if _cook_halo.visible:
+		# Each side fills once, reaching a full circle at FLIP / SCOOP.
+		_cook_halo_mat.set_shader_parameter("progress",clampf(cook_time / (SCOOP_READY if flipped_once else FLIP_READY),0.0,1.0))
 
 func _ensure_hold_meter() -> void:
 	if _hold_meter != null and is_instance_valid(_hold_meter):
