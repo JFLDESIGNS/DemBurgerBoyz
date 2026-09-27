@@ -6058,10 +6058,9 @@ func _refresh_freshness_label(index: int) -> void:
 
 
 func _morning_boss_blocks_controls() -> bool:
-	if not playing or tutorial_mode:
-		return false
-	return _boss_intro_running or (_cut_collector_kind == "pep"
-		and is_instance_valid(_cut_collector) and not bool(_cut_collector.get("is_leaving")))
+	# Boss visits are presentation, not a kitchen pause. Keep tools and cursor
+	# responsive through knocks, the walk-up and the speech.
+	return false
 
 
 func _first_customer_delay() -> float:

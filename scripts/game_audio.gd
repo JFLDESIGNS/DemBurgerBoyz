@@ -1491,13 +1491,10 @@ func play_tree_thud() -> void:
 
 
 func play_truck_knock(volume_scale: float = 1.0) -> void:
-	## Metal food-truck panel slap — boss knocking before he walks in.
-	_play_cached(
-		"truck_knock_v1_%d" % (randi() % 3),
-		_make_truck_knock,
-		0.90 + randf() * 0.12,
-		1.72 * maxf(0.0, volume_scale)
-	)
+	var key := "truck_knock_v1_%d" % (randi() % 3)
+	# Never synthesize PCM on the gameplay thread at the knock edge.
+	if not _cache.has(key): await _prewarm_cache_entry_async(key, _make_truck_knock)
+	_play_cached(key, _make_truck_knock, 0.90 + randf() * 0.12, 1.72 * maxf(0.0, volume_scale))
 
 
 func play_tree_leaf_tap() -> void:
@@ -2058,6 +2055,8 @@ func _prewarm_cache_entry(key: String, maker: Callable) -> void:
 
 
 func prewarm_all_gameplay_audio() -> void:
+	for i in 3:
+		await _prewarm_cache_entry_async("truck_knock_v1_%d" % i, _make_truck_knock)
 	## Generate every common procedural one-shot during the dedicated load window.
 	## Variants use their exact runtime keys so random first-use playback stays cheap.
 	for entry in [["chaching", _make_chaching], ["score_climb", _make_score_climb],
