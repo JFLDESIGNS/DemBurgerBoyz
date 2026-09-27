@@ -1189,17 +1189,16 @@ func _set_hint_mode(mode: String, text: String, color: Color) -> void:
 func _ensure_cook_halo() -> void:
 	_cook_halo = MeshInstance3D.new()
 	_cook_halo.name = "CookingProgressHalo"
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.30, 0.30)
-	_cook_halo.mesh = quad
-	_cook_halo.position.y = 0.009
-	_cook_halo.rotation_degrees.x = -90
+	# Share the orange HOLD ring's exact geometry, transform and attachment.
+	_cook_halo.mesh = _hold_meter.mesh
+	_cook_halo.transform = _hold_meter.transform
 	_cook_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_cook_halo_mat = ShaderMaterial.new()
 	_cook_halo_mat.shader = preload("res://shaders/patty_cook_halo.gdshader")
+	_cook_halo_mat.render_priority = PATTY_OVERLAY_PRIORITY
 	_cook_halo.material_override = _cook_halo_mat
 	_cook_halo.visible = false
-	add_child(_cook_halo)
+	_hold_meter.get_parent().add_child(_cook_halo)
 
 func _update_cook_halo() -> void:
 	if not is_instance_valid(_cook_halo): return
