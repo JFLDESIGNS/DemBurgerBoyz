@@ -63,7 +63,7 @@ func _process(delta: float) -> void:
  cooldown = .12
  var courier := bool(actor.get_meta("delivery_driver",false))
  audio.stream = cartoon_stream if courier else step_stream
- audio.volume_db = -9.0 if courier else (-30.0 if bool(actor.get("is_street_pedestrian")) else -20.0)
+ audio.volume_db = -9.0 if courier else (-30.0 if bool(actor.get("is_street_pedestrian")) else -14.0)
  audio.pitch_scale = 1.07 if contact == 0 else .96
  audio.play()
 
