@@ -38,19 +38,20 @@ func run():
   mark("smush_ready")
   while g.phone_smush_page._score<=0:await process_frame
   mark("smush_clear")
-  cards.send("join");await wait_mark("cards_joined")
-  while cards.players.size()<2:await process_frame
+  cards.send("join")
   cards.send("choose","draw");cards.send("deal")
   await wait_mark("private_hand")
   cards.send("draw",[])
   while cards.phase!="finished":await process_frame
   mark("draw_finished")
-  cards.send("choose","blackjack");cards.send("deal")
+  cards.put_away()
+  mark("host_closed")
   await wait_mark("blackjack_hand")
+  assert(cards.opened and cards.ui.visible)
   cards.send("stand")
   while cards.phase!="finished":await process_frame
   mark("blackjack_finished")
-  await wait_mark("guest_done")
+  await wait_mark("guest_done");assert(not cards.opened and cards.packed_away)
  else:
   while g._phone_app_id!="snak":await process_frame
   assert(not g.phone_snak_page.partner);mark("one_snake");party.choose("snak")
@@ -62,15 +63,18 @@ func run():
   party.choose("smush");mark("smush_seen");await wait_mark("smush_ready")
   var click=InputEventMouseButton.new();click.pressed=true;click.button_index=MOUSE_BUTTON_LEFT;click.position=g.phone_smush_page._cell_rect(Vector2i(0,0)).get_center();g.phone_smush_page._on_gui_input(click)
   await wait_mark("smush_clear")
-  cards.send("join");mark("cards_joined")
+  assert(not cards.opened)
   while cards.shown.get("hand",[]).size()!=5:await process_frame
+  assert(cards.opened and cards.ui.visible)
   assert(cards.hands.is_empty() and cards.deck.is_empty());assert(not cards.shown.has("hands"))
   mark("private_hand");cards.send("draw",[]);await wait_mark("draw_finished")
+  await wait_mark("host_closed")
+  cards.send("choose","blackjack");cards.send("deal")
   while cards.shown.get("mode","")!="blackjack" or cards.shown.get("hand",[]).size()!=2:await process_frame
   assert(cards.shown.dealer[1]==-1);mark("blackjack_hand");cards.send("stand")
   await wait_mark("blackjack_finished")
   while cards.shown.phase!="finished":await process_frame
-  assert(-1 not in cards.shown.dealer);mark("guest_done")
+  assert(-1 not in cards.shown.dealer);cards.send("leave");await create_timer(.2).timeout;assert(not cards.opened and cards.packed_away);mark("guest_done")
  print("PARTY_NETWORK_OK")
  g.mp_enabled=false;net.leave(false);quit()
 func key(code):

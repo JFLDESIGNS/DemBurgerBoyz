@@ -2,6 +2,11 @@ extends Node
 const Card=preload("res://scripts/playing_card.gd")
 var game
 var prop: Node3D
+var box_parts: Array=[]
+var spade: Label3D
+var packed_away := false
+var round_id := 0
+var received_round := -1
 var ui: PanelContainer
 var row: HBoxContainer
 var info: Label
@@ -50,6 +55,9 @@ func build_prop():
  var mat=StandardMaterial3D.new();mat.albedo_color=Color("EFDDB8");mesh.material_override=mat
  var cover=MeshInstance3D.new();var plane=PlaneMesh.new();plane.size=Vector2(.118,.178);cover.mesh=plane;cover.position.y=.019;prop.add_child(cover)
  var ink=StandardMaterial3D.new();Card.art(0);ink.albedo_texture=Card.atlas;ink.uv1_scale=Vector3(1.0/3.0,.5,1);ink.roughness=.8;cover.material_override=ink;cover.rotation.y=PI
+ box_parts=[mesh,cover]
+ spade=Label3D.new();spade.text="♠";spade.font_size=64;spade.pixel_size=.002;spade.position.y=.05;spade.billboard=BaseMaterial3D.BILLBOARD_ENABLED;spade.modulate=Color("FFF3D7");spade.outline_modulate=Color("173E47");spade.outline_size=10;prop.add_child(spade)
+ update_box_visual()
  var area=Area3D.new();prop.add_child(area);area.collision_layer=1;area.collision_mask=0
  var shape=CollisionShape3D.new();var target=BoxShape3D.new();target.size=Vector3(.20,.1,.24);shape.shape=target;area.add_child(shape)
  area.input_event.connect(func(_camera,event,_position,_normal,_index):
@@ -57,8 +65,17 @@ func build_prop():
  )
 func toggle():
  opened=not opened;ui.visible=opened
- if opened:send("join")
+ if opened:
+  packed_away=false;update_box_visual();send("join")
  else:send("leave")
+func update_box_visual():
+ for part in box_parts:
+  if is_instance_valid(part):part.visible=not packed_away
+ if is_instance_valid(spade):spade.visible=packed_away
+@rpc("authority","call_local","reliable")
+func put_away():
+ opened=false;ui.hide();packed_away=true;shown.clear();selected.clear();update_box_visual()
+
 func send(action: String,value: Variant=null):
  if host():request(action,value)
  else:request.rpc_id(1,action,value)
@@ -72,12 +89,20 @@ func request(action: String,value: Variant=null):
    players.append(peer)
    if phase=="playing":phase="ready";hands.clear();done.clear();bot_hand.clear();dealer.clear();message="Partner joined. Deal a new hand."
  elif action=="leave":
-  players.erase(peer);hands.clear();deck.clear();dealer.clear();bot_hand.clear();done.clear();phase="choose";message="Cards put away. Choose a game."
+  players.clear();hands.clear();deck.clear();dealer.clear();bot_hand.clear();done.clear();phase="choose";message="Cards put away. Choose a game."
+  if online():put_away.rpc()
+  else:put_away()
+  return
  elif peer not in players:return
  elif action=="choose" and str(value) in ["draw","blackjack"] and phase in ["choose","ready","finished"]:
   mode=str(value);phase="ready";message="Deal to play the chef, or invite your partner." if mode=="draw" else "Blackjack: hit or stand. Dealer stands on 17."
  elif action=="deal" and phase in ["ready","finished"]:
-  if mode in ["draw","blackjack"]:deal()
+  if mode in ["draw","blackjack"]:
+   # Dealing invites the other cook even if they never clicked the physical box.
+   if online():
+    for cook in [local_id()] + Array(multiplayer.get_peers()):
+     if cook not in players and players.size()<2:players.append(cook)
+   deal()
  elif phase=="playing" and peer not in done:
   if mode=="draw" and action=="draw" and value is Array and value.size()<=5:
    var unique: Array=[]
@@ -93,6 +118,7 @@ func request(action: String,value: Variant=null):
   if done.size()==players.size():finish_round()
  publish()
 func deal():
+ round_id+=1
  deck=range(52);deck.shuffle();hands.clear();done.clear();dealer.clear();bot_hand.clear()
  for peer in players:hands[peer]=[]
  for i in (5 if mode=="draw" else 2):
@@ -132,7 +158,7 @@ func view_for(peer: int) -> Dictionary:
  if phase=="finished" and mode=="blackjack" and not own.is_empty():
   var value=total(own);var house=total(dealer)
   text+=" You: %d — %s" % [value,"Bust" if value>21 else ("Win" if house>21 or value>house else ("Push" if value==house else "Dealer wins"))]
- return {"hand":own,"dealer":dealer_view,"opponent":(bot_hand.duplicate() if phase=="finished" else [-1,-1,-1,-1,-1]) if mode=="draw" and not bot_hand.is_empty() else [],"ai":players.size()==1,"message":text,"mode":mode,"phase":phase,"count":players.size(),"waiting":peer in done,"joined":peer in players}
+ return {"round":round_id,"hand":own,"dealer":dealer_view,"opponent":(bot_hand.duplicate() if phase=="finished" else [-1,-1,-1,-1,-1]) if mode=="draw" and not bot_hand.is_empty() else [],"ai":players.size()==1,"message":text,"mode":mode,"phase":phase,"count":players.size(),"waiting":peer in done,"joined":peer in players}
 func publish():
  for peer in players:
   var state=view_for(peer)
@@ -140,7 +166,10 @@ func publish():
   elif online():receive.rpc_id(peer,state)
 @rpc("authority","call_remote","reliable")
 func receive(state: Dictionary):
- shown=state;selected.clear();render()
+ shown=state
+ if str(state.get("phase",""))=="playing" and int(state.get("round",0))!=received_round:
+  received_round=int(state.get("round",0));opened=true;ui.show();packed_away=false;update_box_visual()
+ selected.clear();render()
 func render():
  for child in row.get_children():child.queue_free()
  for child in controls.get_children():child.queue_free()
