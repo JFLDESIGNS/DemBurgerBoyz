@@ -36824,6 +36824,11 @@ func _serve_held_fries_pack(customer: Node3D) -> void:
 	if customer == null or not is_instance_valid(customer):
 		return
 	var guest_mp := mp_enabled and NetManager.is_online() and not NetManager.is_host()
+	if guest_mp:
+		if not _mp_pending_fries_hand:
+			_mp_pending_fries_hand = true
+			mp_fries_hand.rpc_id(1,_customer_net_id(customer))
+		return
 	fries_pack_held = false
 	if mp_enabled and NetManager.is_online():
 		_mp_queue_motion("mp_tool_pose", [9, false, 0.0, 0.0, 0.0, false, 0.0, 0.0, 0.0])
@@ -36838,16 +36843,12 @@ func _serve_held_fries_pack(customer: Node3D) -> void:
 		customer.set_meta("fries_visual_started", true)
 		_start_side_food_3d(customer, "fries", served_root.global_position, func() -> void: pass)
 		served_root.queue_free()
-	if guest_mp:
-		var customer_id := _customer_net_id(customer)
-		if customer_id >= 0:
-			mp_fries_hand.rpc_id(1, customer_id)
-		return
 	if mp_enabled and NetManager.is_host():
 		_mp_broadcast_customers()
 		_mp_broadcast_economy()
 	if GameDataScript.is_fries_only_order(customer.order):
-		_submit_serve_request(customer, -3)
+		# The handoff already started above and released the customer's queue slot.
+		_complete_fries_only_serve(customer)
 	else:
 		call_deferred("_try_auto_serve")
 
@@ -45299,16 +45300,17 @@ func _begin_early_drink_hand(
 	selected_customer = customer
 	_highlight_tickets()
 	## Release hold so the fly can consume this cup cleanly.
-	cup_held = false
-	_hide_soda_stream()
-	if game_audio and game_audio.has_method("set_ice_grind"):
-		game_audio.set_ice_grind(false)
-	_cup_vel = Vector3.ZERO
-	_cup_slosh = Vector2.ZERO
-	_cup_tilt = Vector2.ZERO
-	_cup_pouring = false
-	if mp_enabled:
-		_mp_send_held_cup_pose(true)
+	if not is_instance_valid(remote_drink):
+		cup_held = false
+		_hide_soda_stream()
+		if game_audio and game_audio.has_method("set_ice_grind"):
+			game_audio.set_ice_grind(false)
+		_cup_vel = Vector3.ZERO
+		_cup_slosh = Vector2.ZERO
+		_cup_tilt = Vector2.ZERO
+		_cup_pouring = false
+		if mp_enabled:
+			_mp_send_held_cup_pose(true)
 	var soda_id := "soda_%s" % flavor
 	var has_local := false
 	if remote_drink == null or not is_instance_valid(remote_drink):
@@ -45335,6 +45337,9 @@ func _complete_early_drink_hand(
 	consume_local: bool = true,
 	remote_drink: Node3D = null
 ) -> void:
+	if is_instance_valid(customer) and GameDataScript.is_soda_only_order(customer.order):
+		_complete_soda_only_serve(customer,remote_drink)
+		return
 	if customer != null and is_instance_valid(customer):
 		_mark_customer_soda_handed(customer, true)
 	## Consume only the prop that actually supplied this order. In particular, a
@@ -62835,7 +62840,7 @@ func _sides_ready_for_order(order: Array, customer: Node3D = null) -> bool:
 		and _fries_ready_for_order(order, customer)
 
 
-func _consume_fries_for_serve(for_customer: Node3D = null) -> bool:
+func _consume_fries_for_serve(for_customer: Node3D = null, directed: bool = false) -> bool:
 	var cust: Node3D = for_customer
 	if cust == null or not is_instance_valid(cust):
 		cust = selected_customer
@@ -62845,7 +62850,8 @@ func _consume_fries_for_serve(for_customer: Node3D = null) -> bool:
 		return true
 	if _customer_fries_handed(cust):
 		return true
-	if not _customer_can_claim_fries(cust):
+	var available := fryer_ready_servings > 0 if directed else _customer_can_claim_fries(cust)
+	if not available:
 		return false
 	if not bool(cust.get_meta("fries_visual_started", false)):
 		cust.set_meta("fries_visual_started", true)
@@ -68583,6 +68589,45 @@ func _refresh_spatula_ui() -> void:
 		_refresh_station(i)
 
 
+var _mp_side_requests: Array = []
+var _mp_pending_cup_hand := 0
+var _mp_pending_fries_hand := false
+
+func _mp_queue_food_request(method: String, args: Array) -> bool:
+	if not _serve_fly_busy: return false
+	var sender := _mp_sender_id()
+	if sender == 0: sender = NetManager.my_id()
+	for request in _mp_side_requests:
+		if request.sender == sender and request.method == method and request.args == args: return true
+	if _mp_side_requests.size() < 16:
+		_mp_side_requests.append({"sender":sender,"method":method,"args":args})
+	return true
+
+func _mp_process_food_requests() -> void:
+	if not NetManager.is_host() or _serve_fly_busy or _mp_side_requests.is_empty(): return
+	var request: Dictionary = _mp_side_requests.pop_front()
+	_mp_sender_override = int(request.sender)
+	callv(str(request.method),request.args)
+	_mp_sender_override = 0
+
+func _mp_ack_food(peer: int, kind: String, accepted: bool) -> void:
+	if peer > 0 and peer != NetManager.my_id():mp_food_hand_result.rpc_id(peer,kind,accepted)
+
+@rpc("authority","call_remote","reliable")
+func mp_food_hand_result(kind: String, accepted: bool) -> void:
+	if kind == "drink":
+		if accepted and is_instance_valid(cup_root) and cup_root.get_instance_id() == _mp_pending_cup_hand:
+			_clear_local_held_cup_after_remote_hand()
+		_mp_pending_cup_hand = 0
+	elif kind == "fries":
+		_mp_pending_fries_hand = false
+		if accepted:
+			fries_pack_held = false
+			if is_instance_valid(fries_pack_root): fries_pack_root.queue_free()
+			fries_pack_root = null
+			_mp_queue_motion("mp_tool_pose",[9,false,0.0,0.0,0.0,false,0.0,0.0,0.0])
+	if not accepted: _flash("Order changed — item kept",Color("FFCC80"))
+
 func _submit_serve_request(cust: Node3D, station_index: int) -> void:
 	if is_instance_valid(cust) and bool(cust.get_meta("mobile_order",false)):
 		_grubbah.request("action")
@@ -68599,9 +68644,10 @@ func _submit_serve_request(cust: Node3D, station_index: int) -> void:
 		if NetManager.is_host():
 			mp_serve(cid, station_index, source_has_held_cup)
 		elif cid >= 0:
-			mp_serve.rpc_id(1, cid, station_index, source_has_held_cup)
 			if source_has_held_cup:
-				_clear_local_held_cup_after_remote_hand()
+				if _mp_pending_cup_hand != 0: return
+				_mp_pending_cup_hand = cup_root.get_instance_id()
+			mp_serve.rpc_id(1, cid, station_index, source_has_held_cup)
 		return
 	if station_index == -2:
 		_begin_soda_only_serve(cust)
@@ -68619,8 +68665,9 @@ func _submit_drink_hand_request(cust: Node3D, flavor: String) -> void:
 		if NetManager.is_host():
 			mp_drink_hand(cid, flavor)
 		elif cid >= 0:
+			if _mp_pending_cup_hand != 0: return
+			if is_instance_valid(cup_root): _mp_pending_cup_hand = cup_root.get_instance_id()
 			mp_drink_hand.rpc_id(1, cid, flavor)
-			_clear_local_held_cup_after_remote_hand()
 		return
 	_begin_early_drink_hand(cust, flavor)
 
@@ -69350,12 +69397,29 @@ func _play_icecream_fly_to_mouth(from_cone: Node3D, customer: Node3D, on_done: C
 	)
 
 
-func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: Callable, flavor: String = "cola", delay: float = 0.0) -> void:
+@rpc("authority","call_remote","reliable")
+func mp_side_food_visual(nid: int, kind: String, origin: Vector3, flavor: String, delay: float) -> void:
+	_mp_flush_scene_snapshots()
+	var customer = _customer_by_net_id(nid)
+	if not is_instance_valid(customer) or not kind in ["fries","drink","icecream"]:return
+	_start_side_food_3d(customer,kind,origin,func():pass,flavor,delay,true)
+
+@rpc("authority","call_remote","reliable")
+func mp_customer_order_tap(nid: int) -> void:
+	var customer = _customer_by_net_id(nid)
+	if is_instance_valid(customer) and not customer.is_leaving:customer._begin_order_announce()
+
+func _mp_customer_order_announce(customer: Node3D) -> void:
+	if mp_enabled and NetManager.is_host():mp_customer_order_tap.rpc(_customer_net_id(customer))
+
+func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: Callable, flavor: String = "cola", delay: float = 0.0, replicated: bool = false) -> void:
 	if not is_instance_valid(customer):
 		done.call()
 		return
+	if mp_enabled and NetManager.is_host() and not replicated:
+		mp_side_food_visual.rpc(_customer_net_id(customer),kind,origin,flavor,delay)
 	var side_order = customer.get("order")
-	if side_order is Array and (GameDataScript.is_soda_only_order(side_order) or GameDataScript.is_icecream_only_order(side_order) or GameDataScript.is_fries_only_order(side_order)):
+	if not replicated and side_order is Array and (GameDataScript.is_soda_only_order(side_order) or GameDataScript.is_icecream_only_order(side_order) or GameDataScript.is_fries_only_order(side_order)):
 		_begin_customer_serve_handoff(customer)
 	var food: Node3D
 	if kind == "fries":
@@ -69549,7 +69613,7 @@ func _play_serve_fly_to_mouth(
 		# Send the completed stack before cleanup so guests can build their pooled FX.
 		_mp_broadcast_station(station_index)
 		mp_burger_serve_visual.rpc(_customer_net_id(customer), station_index, with_soda, reject_burger)
-	if with_soda:
+	if with_soda and replicated_soda < 0:
 		_play_cup_fly_to_mouth(customer, func() -> void: pass, true, drink_override, celebration_hold, replicated_soda >= 0)
 
 	## Authoritative scoring/customer state commits now. The already-built pooled
@@ -70477,8 +70541,7 @@ func _mp_take_remote_cup_for_serve(
 		remote_drink = _mp_remote_cups[source_peer_id] as Node3D
 	if remote_drink == null or not is_instance_valid(remote_drink):
 		remote_drink = _mp_ensure_remote_cup(source_peer_id)
-	if remote_drink != null and is_instance_valid(remote_drink) \
-			and str(remote_drink.get_meta("flavor", "")) == "":
+	if remote_drink != null and is_instance_valid(remote_drink):
 		var sodas: Array = GameDataScript.order_soda_ids(customer.order) \
 				if customer != null and is_instance_valid(customer) else []
 		var fallback_flavor := GameDataScript.soda_flavor_from_order_id(str(sodas[0])) \
@@ -73173,6 +73236,9 @@ func _mp_on_session_start(session_seed: int) -> void:
 	mp_held_net.clear()
 	_mp_drag_claims.clear()
 	_mp_slide_releasing.clear()
+	_mp_side_requests.clear()
+	_mp_pending_cup_hand = 0
+	_mp_pending_fries_hand = false
 	_mp_drag_generation.clear()
 	_mp_patty_index.clear()
 	_mp_bootstrap_active.clear()
@@ -75046,12 +75112,17 @@ func mp_serve(
 	station_index: int = -1,
 	source_has_held_cup: bool = false
 ) -> void:
-	if station_index >= 0 and is_instance_valid(_grubbah) and str(_grubbah.state.get("phase","")) in ["paper","wrapping"]: return
 	if mp_enabled and not NetManager.is_host():
 		return
-	var sid := multiplayer.get_remote_sender_id()
+	var sid := _mp_sender_id()
 	if sid == 0:
 		sid = NetManager.my_id()
+	if _mp_queue_food_request("mp_serve",[cust_net_id,station_index,source_has_held_cup]):return
+	var target = _customer_by_net_id(cust_net_id)
+	if not is_instance_valid(target) or not target.is_waiting or bool(target.get_meta("serve_in_progress",false)):
+		if source_has_held_cup:_mp_ack_food(sid,"drink",false)
+		return
+	if source_has_held_cup:_mp_ack_food(sid,"drink",true)
 	_mp_serve_sync = true
 	_mp_applying = true
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
@@ -75091,9 +75162,14 @@ func mp_drink_hand(cust_net_id: int, flavor: String) -> void:
 	## Early drink hand-off to a waiting customer (burger may still be cooking).
 	if mp_enabled and not NetManager.is_host():
 		return
-	var sid := multiplayer.get_remote_sender_id()
+	var sid := _mp_sender_id()
 	if sid == 0:
 		sid = NetManager.my_id()
+	if _mp_queue_food_request("mp_drink_hand",[cust_net_id,flavor]):return
+	var target = _customer_by_net_id(cust_net_id)
+	if not is_instance_valid(target) or not target.is_waiting or not _customer_wants_flavor(target,flavor) or _customer_soda_handed(target):
+		_mp_ack_food(sid,"drink",false);return
+	_mp_ack_food(sid,"drink",true)
 	_mp_applying = true
 	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
 	if cust != null and is_instance_valid(cust) and _customer_wants_flavor(cust, flavor):
@@ -75156,17 +75232,13 @@ func mp_fries_hand(cust_net_id: int) -> void:
 	## orders so every peer converges on one ready-serving count.
 	if mp_enabled and not NetManager.is_host():
 		return
-	var cust = _customer_by_net_id(cust_net_id) if cust_net_id >= 0 else null
-	if cust == null or not is_instance_valid(cust) or not bool(cust.get("is_waiting")):
-		return
-	if not GameDataScript.wants_fries(cust.order) or _customer_fries_handed(cust):
-		return
-	if not _customer_can_claim_fries(cust):
-		_mp_broadcast_economy()
-		return
-	var sid := multiplayer.get_remote_sender_id()
-	if sid == 0:
-		sid = NetManager.my_id()
+	var sid := _mp_sender_id()
+	if sid == 0:sid = NetManager.my_id()
+	if _mp_queue_food_request("mp_fries_hand",[cust_net_id]):return
+	var cust = _customer_by_net_id(cust_net_id)
+	if not is_instance_valid(cust) or not cust.is_waiting or not GameDataScript.wants_fries(cust.order) or _customer_fries_handed(cust) or fryer_ready_servings <= 0:
+		_mp_ack_food(sid,"fries",false);_mp_broadcast_economy();return
+	_mp_ack_food(sid,"fries",true)
 	if _mp_remote_fries.has(sid):
 		var remote_fries: Node3D = _mp_remote_fries[sid] as Node3D
 		if remote_fries != null and is_instance_valid(remote_fries):
@@ -75175,10 +75247,10 @@ func mp_fries_hand(cust_net_id: int) -> void:
 		_mp_remote_fries.erase(sid)
 	_mp_applying = true
 	selected_customer = cust
-	_consume_fries_for_serve(cust)
+	_consume_fries_for_serve(cust, true)
 	_mp_applying = false
 	if GameDataScript.is_fries_only_order(cust.order):
-		_begin_fries_only_serve(cust)
+		_complete_fries_only_serve(cust)
 	else:
 		if game_audio and game_audio.has_method("play_serve_whoosh"):
 			game_audio.play_serve_whoosh()
@@ -77945,6 +78017,7 @@ func _mp_service_tick() -> void:
 		_mp_state_jobs.clear()
 		_mp_apply_jobs.clear()
 		return
+	_mp_process_food_requests()
 	_mp_flush_motion()
 	_mp_apply_motion()
 	_mp_service_bootstrap()

@@ -235,7 +235,7 @@ func apply_command(kind: String, number: int, peer: int) -> void:
     if drink==null:notice("Set a full cola on the tray first.",peer);return
    if DATA.wants_fries(state.items) and game.fryer_ready_servings<=0:notice("Cook the fries first.",peer);return
    if drink!=null:
-    game._serve_cup_node=drink;game._consume_cup_for_serve()
+    game._serve_cup_node=drink;game._consume_cup_for_serve(ticket_owner)
    if DATA.wants_fries(state.items):
     game.fryer_ready_servings-=1;game._refresh_ready_fries_visuals()
    if online():game._mp_broadcast_economy()

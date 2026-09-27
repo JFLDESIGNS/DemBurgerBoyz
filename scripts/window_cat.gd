@@ -578,13 +578,26 @@ func get_mp_sync() -> Dictionary:
 	}
 
 
+var _mp_pose_ready := false
+var _mp_pose_from := Vector3.ZERO
+var _mp_pose_target := Vector3.ZERO
+var _mp_yaw_from := 0.0
+var _mp_yaw_target := 0.0
+var _mp_pose_elapsed := 0.0
+
 func apply_mp_sync(d: Dictionary) -> void:
 	if _bag_heist:
 		return
 	_state = str(d.get("state", _state))
 	_timer = float(d.get("timer", _timer))
-	position = Vector3(float(d.get("x", position.x)), float(d.get("y", position.y)), float(d.get("z", position.z)))
-	rotation_degrees.y = float(d.get("yaw", rotation_degrees.y))
+	_mp_pose_from = position
+	_mp_pose_target = Vector3(float(d.get("x",position.x)),float(d.get("y",position.y)),float(d.get("z",position.z)))
+	_mp_yaw_from = rotation.y
+	_mp_yaw_target = deg_to_rad(float(d.get("yaw",rotation_degrees.y)))
+	_mp_pose_elapsed = 0.0
+	if not _mp_pose_ready or not visible or position.distance_squared_to(_mp_pose_target)>9.0:
+		position = _mp_pose_target;_mp_pose_from=position;rotation.y=_mp_yaw_target;_mp_yaw_from=rotation.y
+	_mp_pose_ready = true
 	visible = bool(d.get("vis", visible))
 	_fat = float(d.get("fat", _fat))
 	_giant = float(d.get("giant", _giant))
@@ -619,6 +632,11 @@ func _process(delta: float) -> void:
 	## Puppet peers still run squash / scale / bob, not the peek state machine.
 	## A local trash-bag heist plays on whoever threw it.
 	if mp_puppet and not _bag_heist:
+		if _mp_pose_ready:
+			_mp_pose_elapsed += delta
+			var weight := clampf(_mp_pose_elapsed/.10,0.0,1.0)
+			position = _mp_pose_from.lerp(_mp_pose_target,weight)
+			rotation.y = lerp_angle(_mp_yaw_from,_mp_yaw_target,weight)
 		_apply_visual_scale()
 		return
 	_timer -= delta

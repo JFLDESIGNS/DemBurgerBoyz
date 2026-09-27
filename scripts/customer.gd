@@ -1904,6 +1904,9 @@ func _cancel_order_announce() -> void:
 
 
 func _begin_order_announce() -> void:
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and game.has_method("_mp_customer_order_announce"):
+		game._mp_customer_order_announce(self)
 	if _order_phase != "":
 		return
 	_order_phase = "wawa"
