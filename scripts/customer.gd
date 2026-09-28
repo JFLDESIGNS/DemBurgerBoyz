@@ -4723,6 +4723,14 @@ func receive_burger(
 	var result: Dictionary = GameDataScript.compare_orders(built, order)
 	last_tip = 0
 	last_base_pay = 0
+	if not bool(result.perfect) or bool(get_meta("serve_missing_side",false)):
+		if bool(get_meta("serve_commit_hold",false)):
+			set_meta("serve_pending_total",0)
+			set_meta("serve_pending_meh",false)
+			set_meta("serve_pending_five_star",false)
+		else:
+			complete_serve(0)
+		return {"total":0,"base":0,"tip":0,"perfect":false,"wrong":not bool(result.perfect),"missing_side":bool(get_meta("serve_missing_side",false)),"meh":false}
 	if float(result.quality) < 0.4:
 		react_wrong()
 		return {"total": 0, "base": 0, "tip": 0, "perfect": false, "wrong": true, "meh": false}

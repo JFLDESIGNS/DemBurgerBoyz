@@ -69563,7 +69563,8 @@ func _play_serve_fly_to_mouth(
 	for patty in st.get("patties", []):
 		if is_instance_valid(patty) and patty.has_method("quality_multiplier"):
 			bad_burger = bad_burger or float(patty.quality_multiplier()) < 0.5
-	var reject_burger := not tutorial_mode and bad_burger and randf() >= 0.25
+	var wrong_recipe := not bool(GameDataScript.compare_orders(st.items,customer.order).get("perfect",false))
+	var reject_burger := wrong_recipe or (not tutorial_mode and bad_burger and randf() >= 0.25)
 	if replicated_rejection >= 0:
 		reject_burger = replicated_rejection == 1
 	var preview: Control = st.get("preview", null)
@@ -69615,6 +69616,8 @@ func _play_serve_fly_to_mouth(
 			and ((drink_override != null and is_instance_valid(drink_override)) \
 				or _find_ready_drink_for_soda(str(GameDataScript.order_soda_ids(customer.order)[0])) != null \
 				or cup_soda_fill > 0.3)
+	if replicated_soda < 0 and bool(customer.get_meta("serve_missing_soda",false)):
+		with_soda = false
 	if replicated_soda >= 0:
 		with_soda = replicated_soda == 1
 	if mp_enabled and NetManager.is_host() and NetManager.is_online() and replicated_soda < 0:
@@ -69792,6 +69795,10 @@ func _play_serve_fly_to_mouth(
 		var catch_wait := maxf(0.01, grab_seconds - celebration_hold - .35)
 		tw.tween_method(follow_hands, 0.0, 0.0, catch_wait)
 		tw.tween_callback(func() -> void:
+			if is_instance_valid(customer): customer.react_burnt_bite(true)
+		)
+		tw.tween_method(follow_hands, 0.0, 0.0, .65)
+		tw.tween_callback(func() -> void:
 			if is_instance_valid(customer) and customer.has_method("start_eating_burger"):
 				customer.start_eating_burger()
 		)
@@ -69799,12 +69806,15 @@ func _play_serve_fly_to_mouth(
 		tw.tween_callback(bite)
 		tw.tween_method(follow_hands, 0.0, 1.0 / 6.0, .055)
 		tw.tween_method(follow_hands, 1.0 / 6.0, 1.0 / 6.0, .15)
+		tw.tween_method(follow_hands, 1.0 / 6.0, 1.0 / 6.0, .45)
+		tw.tween_callback(bite)
+		tw.tween_method(follow_hands, 1.0 / 6.0, 2.0 / 6.0, .055)
 		var complain := func(point_at_player: bool) -> void:
 			if not is_instance_valid(customer):return
 			customer.react_burnt_bite(point_at_player)
 			if game_audio:game_audio.play_customer_angry_wawa(customer.get_customer_voice())
 		tw.tween_callback(complain.bind(false))
-		tw.tween_method(follow_hands, 1.0 / 6.0, 1.0 / 6.0, .48)
+		tw.tween_method(follow_hands, 2.0 / 6.0, 2.0 / 6.0, .48)
 		var throw_state := {}
 		tw.tween_callback(func() -> void:
 			throw_state["start"] = _customer_burger_hand_screen(customer)
@@ -69828,7 +69838,6 @@ func _play_serve_fly_to_mouth(
 			if not mp_enabled or NetManager.is_host():
 				_physical_garbage_react()
 		)
-		tw.tween_callback(complain.bind(true))
 		tw.tween_interval(1.15)
 		tw.tween_callback(finish_serve)
 	elif fast_challenge:
@@ -70341,6 +70350,9 @@ func _complete_serve(
 			"stars": review_stars, "kind": review_kind, "tip": tip_amt, "force": false,
 			"pic": cached_review_pic,
 		}
+	if not guest_mp and (not result.get("missing",[]).is_empty() or bool(cust.get_meta("serve_missing_side",false))):
+		# One authoritative coin flip; force bypasses the usual review lottery.
+		deferred_review = {"stars":1.0,"kind":"wrong","tip":0,"force":true,"pic":cached_review_pic} if randf() < 0.5 else {}
 	cust.set_meta("meal_stars", float(deferred_review.get("stars", 0.0)))
 	if payout <= 0 and not guest_mp: _record_order_history(0,0,_order_food_cost(cust),cust)
 	if cached_review_pic != null:
@@ -70351,7 +70363,7 @@ func _complete_serve(
 			cust.set_meta("sales_photo",photo.save_png_to_buffer())
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
-			and not _customer_soda_handed(cust):
+			and not _customer_soda_handed(cust) and not bool(cust.get_meta("serve_missing_soda",false)):
 		if remote_drink != null and is_instance_valid(remote_drink):
 			remote_drink.set_meta("serving_consumed", true)
 			remote_drink.queue_free()
@@ -70461,6 +70473,12 @@ func _on_serve() -> void:
 			_flash("Click an order ticket first, then Serve", Color("EF5350"))
 		return
 	var order: Array = cust.order
+	# A physical burger may be served incorrectly; the host decides payment.
+	if not GameDataScript.order_burger_items(order).is_empty():
+		var manual_station := _find_station_for_order(order)
+		if manual_station >= 0:
+			_submit_serve_request(cust, manual_station)
+			return
 	if not _cup_ready_for_order(order, cust):
 		combo = 0
 		if not _auto_serving:
@@ -70816,6 +70834,9 @@ func _begin_serve_at(
 				_flash("Need a top bun before serving", Color("FFCC80"))
 			return
 
+	var sides_present := (_cup_ready_for_order(order, customer) or source_has_held_cup) and _fries_ready_for_order(order, customer) and _icecream_ready_for_order(order, customer)
+	customer.set_meta("serve_missing_side", not sides_present)
+	customer.set_meta("serve_missing_soda", not (_cup_ready_for_order(order, customer) or source_has_held_cup))
 	_begin_customer_serve_handoff(customer)
 	_shoot_station_condiments_home(station_index)
 	if game_audio and game_audio.has_method("play_order_up"):
@@ -70868,7 +70889,7 @@ func _on_serve_local() -> void:
 		if not _auto_serving:
 			_flash("Click an order ticket first, then Serve", Color("EF5350"))
 		return
-	var station_index := _find_perfect_station_for(cust.order)
+	var station_index := _find_station_for_order(cust.order)
 	if station_index < 0:
 		combo = 0
 		if not _auto_serving:
