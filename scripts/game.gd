@@ -46867,13 +46867,29 @@ func _build_condiment_bottles() -> void:
 		model_pivot.scale = Vector3.ONE * fit
 		model_pivot.position = -bounds.get_center() * fit
 		_prepare_condiment_bottle_draw(visual)
-		var smile := Sprite3D.new()
+		var smile := MeshInstance3D.new()
 		smile.name = "SauceSmiley"
-		smile.texture = preload("res://assets/ui/sauce_smile.svg")
-		smile.pixel_size = 0.00065
-		smile.position = Vector3(0, -0.025, -bounds.size.z * fit * 0.5 - 0.0015)
-		smile.rotation.y = PI
-		smile.shaded = false
+		var face_mesh := ImmediateMesh.new()
+		var radius_x := bounds.size.x * fit * .5
+		var radius_z := bounds.size.z * fit * .5
+		var face_half_width := minf(.0416, radius_x * .78)
+		face_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+		for segment in 24:
+			for corner in [Vector2(0,0),Vector2(1,0),Vector2(1,1),Vector2(0,0),Vector2(1,1),Vector2(0,1)]:
+				var u: float = (float(segment) + corner.x) / 24.0
+				var x := lerpf(-face_half_width, face_half_width, u)
+				var z := -radius_z * sqrt(maxf(0.0,1.0-pow(x/radius_x,2))) - .0005
+				face_mesh.surface_set_uv(Vector2(u,corner.y))
+				face_mesh.surface_add_vertex(Vector3(x,.0166-corner.y*.0832,z))
+		face_mesh.surface_end()
+		smile.mesh = face_mesh
+		var face_material := StandardMaterial3D.new()
+		face_material.albedo_texture = preload("res://assets/ui/sauce_smile.svg")
+		face_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		face_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		face_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		smile.material_override = face_material
+		smile.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		holder.add_child(smile)
 		var home := _condiment_bottle_home(id)
 		var home_rot := Vector3(0.0, -14.0 if id == "ketchup" else 12.0, 0.0)
