@@ -40,7 +40,7 @@ func run():
   await wait_mark("paper");assert(m.state.phase=="paper")
   await wait_mark("knife");assert(m.knife_owner!=0)
   await wait_mark("buns");assert(g.stations[0].items==["bun_bottom","bun_top"]);assert(g.supply_stock.bun_bottom==11 and g.supply_stock.bun_top==11);assert(g.bun_flights==1);mark("buns_host")
-  m.state.phase="bagging";m.state.items=["bun_bottom","patty","bun_top"];m.publish()
+  m.state.phase="bagging";m.age=m.BURGER_BAG_FLIGHT;m.state.items=["bun_bottom","patty","bun_top"];m.publish()
   await wait_mark("sealed");assert(m.state.phase=="sealed")
   mark("done")
  else:

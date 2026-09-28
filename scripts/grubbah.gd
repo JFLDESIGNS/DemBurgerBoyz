@@ -1,7 +1,9 @@
 extends Node
 # Host-owned mobile fulfillment. Visuals are reconstructed from a revisioned snapshot.
 const DRIVER_APPROACH = 1.0
-const DRIVER_WALK = 2.25
+const DRIVER_WALK = 2.65
+const BURGER_BAG_FLIGHT = 1.0
+const BAG_PICKUP_FLIGHT = .95
 const DRIVER_RETURN = 1.5
 const DRIVER_TURN = .35
 const DRIVER_EXIT = .85
@@ -55,6 +57,9 @@ var knife_home = Vector3.ZERO
 var knife_home_rotation = Vector3(0,0,-1.25)
 var wrap_sound: AudioStreamPlayer
 var last_wrap_sound_ms = -1000
+var bag_impact_played = false
+var bag_land_played = false
+var bag_opening_y = .40
 var paper_start = Vector2.ZERO
 var last_phase = ""
 var flash_time = 0.0
@@ -78,6 +83,7 @@ func setup(g: Node, parent: Control) -> void:
  status_label=Label.new();status_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;status_label.add_theme_font_size_override("font_size",14);status_label.modulate=Color("FFC875");contents.add_child(status_label)
  body=Label.new();body.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;body.add_theme_font_size_override("font_size",16);body.modulate=Color("FFF3D9");contents.add_child(body)
  total_label=Label.new();total_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;total_label.add_theme_font_size_override("font_size",18);total_label.modulate=Color("98E2AF");contents.add_child(total_label)
+ for label in [status_label,body,total_label]:label.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
  action=Button.new();action.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;action.custom_minimum_size.y=44;action.pressed.connect(func():request("action"));page.add_child(action)
  var button_style=StyleBoxFlat.new();button_style.bg_color=Color("DC8E39");button_style.set_corner_radius_all(10);action.add_theme_stylebox_override("normal",button_style);action.add_theme_color_override("font_color",Color("231F19"))
  decline=Button.new();decline.text="Cancel order";decline.add_theme_color_override("font_color",Color("EDAAA0"));decline.pressed.connect(func():request("cancel"));page.add_child(decline)
@@ -168,7 +174,7 @@ func _process(delta: float) -> void:
    elif phase=="wrapping" and age>=1.2:
     if burger_ready():consume_build();set_phase("bagging")
     else:set_phase("paper")
-   elif phase=="sealed" and age>=.75:set_phase("pickup")
+   elif phase=="sealed" and age>=BAG_PICKUP_FLIGHT:set_phase("pickup")
    elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK:
     pay_order();set_phase("collected")
    elif phase=="collected" and age>=DRIVER_TURN+DRIVER_RETURN+DRIVER_EXIT:
@@ -229,6 +235,7 @@ func apply_command(kind: String, number: int, peer: int) -> void:
    set_phase("wrapping")
   "seal":
    if phase!="bagging":return
+   if age<BURGER_BAG_FLIGHT:notice("Burger going in!",peer);return
    var sodas=DATA.order_soda_ids(state.items)
    var drink:Node3D=null
    if not sodas.is_empty():
@@ -367,7 +374,7 @@ func packing_audio(phase: String) -> void:
  packing_tween.tween_callback(play_wrap_sound)
 func add_bag_label() -> void:
  var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00017;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/bag_red_logo.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,.13,-.12);logo.rotation.y=PI;bag.add_child(logo)
- bag_finish=Label3D.new();bag_finish.text="CLICK TO FINISH";bag_finish.font_size=32;bag_finish.pixel_size=.0016;bag_finish.position=Vector3(0,.46,0);bag_finish.billboard=BaseMaterial3D.BILLBOARD_ENABLED;bag_finish.modulate=Color("FFD147");bag.add_child(bag_finish)
+ bag_finish=Label3D.new();bag_finish.text="CLICK BAG TO FINISH";bag_finish.font=preload("res://assets/fonts/Fredoka-SemiBold.ttf");bag_finish.font_size=32;bag_finish.outline_size=5;bag_finish.pixel_size=.0016;bag_finish.position=Vector3(0,.46,0);bag_finish.billboard=BaseMaterial3D.BILLBOARD_ENABLED;bag_finish.modulate=Color("FFF0C6");bag.add_child(bag_finish)
  bag_glow=Node3D.new();bag_glow.name="BagSilhouetteOutline";bag.add_child(bag_glow)
  for source in bag.find_children("*","MeshInstance3D",true,false):
   var rim=MeshInstance3D.new();rim.mesh=source.mesh;bag_glow.add_child(rim);rim.global_transform=source.global_transform
@@ -397,11 +404,15 @@ func update_visuals(_delta: float) -> void:
   if phase=="pickup":courier.play_street_run(1.45);courier.set_meta("courier_running",true)
   elif phase=="collected":
    courier.set_meta("courier_running",false);courier.remove_meta("return_running");courier._play_anim("idle")
+   play_wrap_sound()
   if phase=="wrapping":packing_audio(phase)
   if phase=="sealed" or (phase in ["pickup","collected"] and not is_instance_valid(ticket_view)):prepare_bag_ticket()
   if phase in ["pickup","collected"] and is_instance_valid(ticket_view):bag_ticket.texture=ticket_view.get_texture();bag_ticket.pixel_size=.20/float(ticket_view.size.y)
   if phase=="bagging" or phase=="sealed":
-   var old=bag;bag=fitted("SM_FastFoodBagClosed" if phase=="sealed" else "SM_FastFoodBagOpen",.40);props.add_child(bag);add_bag_label();old.queue_free()
+   var old=bag;bag=fitted("SM_FastFoodBagClosed" if phase=="sealed" else "SM_FastFoodBagOpen",.40);props.add_child(bag);bag_opening_y=game._shop_preview_bounds(bag).end.y;add_bag_label();old.queue_free()
+   bag_impact_played=false;bag_land_played=false
+   if game.game_audio:game.game_audio.play_serve_whoosh()
+   if phase=="sealed":play_wrap_sound()
  var ui=game.get_node("UI/Root")
  var screen=game._station_stack_screen_center(0) if not game.stations.is_empty() else game.camera.unproject_position(base)
  var center=ui.get_global_transform_with_canvas().affine_inverse()*screen
@@ -414,14 +425,29 @@ func update_visuals(_delta: float) -> void:
  wrap_button.modulate=Color("FFD06A") if not wrap_button.disabled else Color("B7B0A0")
  var preview=game.stations[0].get("preview")
  if is_instance_valid(preview):preview.modulate.a=0.0 if phase=="wrapping" else 1.0
- bag_finish.visible=phase=="bagging"
- bag_glow.visible=phase=="bagging"
+ bag_finish.visible=phase=="bagging" and age>=BURGER_BAG_FLIGHT
+ bag_glow.visible=bag_finish.visible
  bag.visible=phase in ["bagging","sealed","pickup","collected"]
  wrapped.visible=phase in ["wrapping","bagging"]
  wrapped.position=base+Vector3(0,.06,0)
- if phase=="bagging":wrapped.position=base.lerp(bag_station_pos()+Vector3(0,.28,0),clampf(age/.6,0,1));wrapped.visible=age<.6
+ wrapped.scale=Vector3.ONE;wrapped.rotation=Vector3.ZERO
+ if phase=="bagging":
+  var t=clampf(age/BURGER_BAG_FLIGHT,0,1)
+  wrapped.position=burger_bag_position(t,base+Vector3(0,.06,0),bag_station_pos()+Vector3(0,bag_opening_y,0))
+  wrapped.rotation.z=sin(minf(t/.65,1.0)*PI)*.22
+  wrapped.scale=Vector3.ONE*lerpf(1.0,.8,smoothstep(.65,1.0,t));wrapped.visible=t<1.0
+  if t>=.85 and not bag_impact_played:bag_impact_played=true;play_wrap_sound()
  bag.position=bag_station_pos()
- if phase=="sealed":bag.position=bag.position.lerp(ledge.position+Vector3(0,.05,0),smoothstep(0,1,age/.75))
+ bag.rotation=Vector3.ZERO;bag.scale=Vector3.ONE
+ if phase=="bagging" and age>.85:
+  var settle=age-.85;var bounce=sin(settle*32)*exp(-settle*8)
+  bag.rotation.z=bounce*.07;bag.scale=Vector3(1+bounce*.035,1-bounce*.05,1+bounce*.035)
+ if phase=="sealed":
+  var t=clampf(age/BAG_PICKUP_FLIGHT,0,1)
+  bag.position=pickup_bag_position(t,bag_station_pos(),ledge.position+Vector3(0,.05,0))
+  bag.rotation.z=sin(t*TAU)*.20*(1-t)
+  var squash=sin(t*PI)*.08;bag.scale=Vector3(1-squash*.5,1+squash,1-squash*.5)
+  if t>.88 and not bag_land_played:bag_land_played=true;play_wrap_sound()
  elif phase=="pickup":bag.position=ledge.position+Vector3(0,.05,0)
  elif phase=="collected":bag.position=courier.position+Vector3(.2,.7,-.2)
  bag_ticket.visible=phase in ["pickup","collected"] or (phase=="sealed" and age>=.7)
@@ -435,14 +461,14 @@ func update_visuals(_delta: float) -> void:
   if age>=DRIVER_APPROACH-.35 and not arrival_screeched:
    arrival_screeched=true;screech.play()
   var run_t=clampf((age-DRIVER_APPROACH)/(DRIVER_WALK-.18),0,1)
-  var slide=clampf((run_t-.80)/.20,0,1)
-  var travel=run_t if run_t<.80 else .80+.20*(1.0-pow(1.0-slide,2))
+  var slide=clampf((run_t-.65)/.35,0,1)
+  var travel=run_t/.65*.80 if run_t<.65 else .80+.20*(1.0-pow(1.0-slide,2))
   courier.position=Vector3(lerpf(5.5,ledge.position.x,travel),.1,2.8)
   courier.rotation.y=-PI*.5
   courier.rotation.z=sin(slide*PI)*.18
-  courier.set_meta("footstep_sliding",run_t>=.80)
-  courier.set_meta("courier_running",courier.visible and run_t<.80)
-  if run_t>=.80 and not courier.has_meta("slide_sounded"):
+  courier.set_meta("footstep_sliding",run_t>=.65)
+  courier.set_meta("courier_running",courier.visible and run_t<.65)
+  if run_t>=.65 and not courier.has_meta("slide_sounded"):
    courier.set_meta("slide_sounded",true)
    if is_instance_valid(courier._anim_player):courier._anim_player.pause()
    var shoe=courier.get_node_or_null("CharacterFootsteps")
@@ -469,8 +495,19 @@ func update_visuals(_delta: float) -> void:
    if host():knife_pose_sync.rpc(knife.global_position)
    else:knife_pose.rpc_id(1,knife.global_position)
  else:knife.global_position=remote_knife_pos if remote_knife_pos!=Vector3.ZERO else knife_home+Vector3(0,.25,0)
+func burger_bag_position(t: float, start: Vector3, mouth: Vector3) -> Vector3:
+ var above=mouth+Vector3(0,.22,0)
+ if t<.65:
+  var u=smoothstep(0,1,t/.65)
+  return start.lerp(above,u)+Vector3(0,sin(u*PI)*.30,0)
+ return above.lerp(mouth-Vector3(0,.20,0),smoothstep(0,1,(t-.65)/.35))
+
+func pickup_bag_position(t: float, start: Vector3, finish: Vector3) -> Vector3:
+ var u=smoothstep(0,1,t)
+ return start.lerp(finish,u)+Vector3(0,sin(t*PI)*.36+sin(t*TAU*2)*.025*(1-t),0)
+
 func _bag_finish_hit(screen_pos: Vector2) -> bool:
- if not is_instance_valid(bag) or not bag.visible or str(state.get("phase",""))!="bagging":return false
+ if not is_instance_valid(bag) or not bag.visible or str(state.get("phase",""))!="bagging" or age<BURGER_BAG_FLIGHT:return false
  var bounds:=Rect2(game.camera.unproject_position(bag.global_position),Vector2.ZERO)
  for x in [-.15,.15]:
   for y in [0.0,.42]:

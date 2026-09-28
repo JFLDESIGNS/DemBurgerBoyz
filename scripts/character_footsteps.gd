@@ -78,9 +78,9 @@ func _process(delta: float) -> void:
 
 func play_skid() -> void:
  audio.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
- audio.volume_db = -17.0
- audio.pitch_scale = 1.65
+ audio.volume_db = -9.0
+ audio.pitch_scale = 1.35
  audio.play()
- # One short cartoon squeak; don't play a whole tire recording at the counter.
- get_tree().create_timer(.22).timeout.connect(func():
+ # Hold the squeal through the driver's longer slide, then stop before turning.
+ get_tree().create_timer(.75).timeout.connect(func():
   if is_instance_valid(audio): audio.stop())

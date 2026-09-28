@@ -46867,6 +46867,14 @@ func _build_condiment_bottles() -> void:
 		model_pivot.scale = Vector3.ONE * fit
 		model_pivot.position = -bounds.get_center() * fit
 		_prepare_condiment_bottle_draw(visual)
+		var smile := Sprite3D.new()
+		smile.name = "SauceSmiley"
+		smile.texture = preload("res://assets/ui/sauce_smile.svg")
+		smile.pixel_size = 0.00065
+		smile.position = Vector3(0, -0.025, -bounds.size.z * fit * 0.5 - 0.0015)
+		smile.rotation.y = PI
+		smile.shaded = false
+		holder.add_child(smile)
 		var home := _condiment_bottle_home(id)
 		var home_rot := Vector3(0.0, -14.0 if id == "ketchup" else 12.0, 0.0)
 		holder.position = home
@@ -67936,6 +67944,8 @@ func _update_station_layer_hint(station_index: int) -> void:
 		return
 	if _station_burger_complete(station_index) and not _serve_fly_busy and int(st.get("hovered_layer",-1)) < 0:
 		hint.text = "CLICK TO WRAP" if is_instance_valid(_grubbah) and _grubbah.is_selected() else "CLICK TO SERVE"
+		if is_instance_valid(_grubbah) and _grubbah.is_selected():hint.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+		else:hint.remove_theme_font_override("font")
 		hint.add_theme_color_override("font_color", Color("FFD36B"))
 		hint.visible = true
 		hint.position = Vector2(plate.size.x * .5 - hint.get_minimum_size().x * .5, plate.size.y - 28.0)
