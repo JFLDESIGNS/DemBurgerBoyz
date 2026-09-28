@@ -3,6 +3,7 @@ extends Node
 const DRIVER_APPROACH = 1.0
 const DRIVER_WALK = 2.25
 const DRIVER_RETURN = 1.5
+const DRIVER_TURN = .35
 const DRIVER_EXIT = .85
 const DATA = preload("res://scripts/game_data.gd")
 const PACK = "res://models/burgerpack/try2/"
@@ -170,7 +171,7 @@ func _process(delta: float) -> void:
    elif phase=="sealed" and age>=.75:set_phase("pickup")
    elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK:
     pay_order();set_phase("collected")
-   elif phase=="collected" and age>=DRIVER_RETURN+DRIVER_EXIT:
+   elif phase=="collected" and age>=DRIVER_TURN+DRIVER_RETURN+DRIVER_EXIT:
     state={};wait_time=randf_range(160,240) if game.day==1 else randf_range(55,110)/maxf(.85,float(game._location_stats().get("spawn_rate",1.0)));publish()
   if sync_time>1.0:
    sync_time=0
@@ -393,6 +394,9 @@ func update_visuals(_delta: float) -> void:
    courier.remove_meta("slide_sounded")
   courier.set_meta("footstep_sliding",false)
   courier.rotation.z=0.0
+  if phase=="pickup":courier.play_street_run(1.45);courier.set_meta("courier_running",true)
+  elif phase=="collected":
+   courier.set_meta("courier_running",false);courier.remove_meta("return_running");courier._play_anim("idle")
   if phase=="wrapping":packing_audio(phase)
   if phase=="sealed" or (phase in ["pickup","collected"] and not is_instance_valid(ticket_view)):prepare_bag_ticket()
   if phase in ["pickup","collected"] and is_instance_valid(ticket_view):bag_ticket.texture=ticket_view.get_texture();bag_ticket.pixel_size=.20/float(ticket_view.size.y)
@@ -437,15 +441,22 @@ func update_visuals(_delta: float) -> void:
   courier.rotation.y=-PI*.5
   courier.rotation.z=sin(slide*PI)*.18
   courier.set_meta("footstep_sliding",run_t>=.80)
+  courier.set_meta("courier_running",courier.visible and run_t<.80)
   if run_t>=.80 and not courier.has_meta("slide_sounded"):
    courier.set_meta("slide_sounded",true)
+   if is_instance_valid(courier._anim_player):courier._anim_player.pause()
    var shoe=courier.get_node_or_null("CharacterFootsteps")
    if shoe!=null:shoe.play_skid()
 
  elif phase=="collected":
-  courier.position=Vector3(lerpf(ledge.position.x,5.5,clampf(age/DRIVER_RETURN,0,1)),.1,2.8);courier.rotation.y=PI*.5
-  courier.visible=age<DRIVER_RETURN;bag.visible=age<DRIVER_RETURN
-  car.position=Vector3(lerpf(10,24,clampf((age-DRIVER_RETURN)/DRIVER_EXIT,0,1)),car_ground_y,game.STREET_CAR_Z)
+  var return_age=maxf(0,age-DRIVER_TURN)
+  courier.position=Vector3(lerpf(ledge.position.x,5.5,clampf(return_age/DRIVER_RETURN,0,1)),.1,2.8)
+  courier.rotation.y=lerpf(-PI*.5,PI*.5,smoothstep(0,1,age/DRIVER_TURN))
+  courier.visible=return_age<DRIVER_RETURN;bag.visible=courier.visible
+  courier.set_meta("courier_running",age>=DRIVER_TURN and courier.visible)
+  if age>=DRIVER_TURN and not courier.has_meta("return_running"):
+   courier.set_meta("return_running",true);courier.play_street_run(1.45)
+  car.position=Vector3(lerpf(10,24,clampf((return_age-DRIVER_RETURN)/DRIVER_EXIT,0,1)),car_ground_y,game.STREET_CAR_Z)
  knife.visible=bool(game.owned_machines.get("chef_knife",false))
  knife.scale=Vector3.ONE*(.8 if knife_owner!=0 else 1.0)
  if knife_owner!=0:knife.rotation=Vector3(-.20,PI*.5+.30,0)

@@ -2,6 +2,7 @@ extends Node
 ## Local animation-contact sounds: no audio RPCs or per-frame allocations.
 static var step_stream: AudioStreamWAV
 static var cartoon_stream: AudioStreamWAV
+const COURIER_RUN = preload("res://sounds/courier/cartoon_running_qubodup.mp3")
 var actor: Node3D
 var audio: AudioStreamPlayer3D
 var last_position := Vector3.ZERO
@@ -44,6 +45,14 @@ func _process(delta: float) -> void:
  var at := actor.global_position
  var distance := at.distance_to(last_position)
  last_position = at
+ if bool(actor.get_meta("delivery_driver",false)):
+  var running := actor.is_visible_in_tree() and bool(actor.get_meta("courier_running",false))
+  if running:
+   if audio.stream != COURIER_RUN or not audio.playing:
+    audio.stream=COURIER_RUN;audio.volume_db=-10;audio.pitch_scale=1.15;audio.play()
+  elif audio.stream == COURIER_RUN:
+   audio.stop()
+  return
  if not actor.is_visible_in_tree() or bool(actor.get_meta("footstep_sliding",false)):
   last_contact = -1
   return
