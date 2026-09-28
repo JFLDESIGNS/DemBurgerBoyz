@@ -1048,6 +1048,7 @@ func set_hint_focus(on: bool) -> void:
 		return
 	_hint_focused = on
 	_set_hover_outline_visible(on)
+	_update_cook_halo()
 
 
 func _hover_outline_shader_resource() -> Shader:
@@ -1203,7 +1204,7 @@ func _ensure_cook_halo() -> void:
 func _update_cook_halo() -> void:
 	if not is_instance_valid(_cook_halo): return
 	var ready_time := SCOOP_READY if flipped_once else FLIP_READY
-	_cook_halo.visible = heating and heat_mul > 0.001 and not is_held and cook_time < ready_time and not bool(get_meta("start_preview",false))
+	_cook_halo.visible = _hint_focused and heating and heat_mul > 0.001 and not is_held and cook_time < ready_time and not bool(get_meta("start_preview",false))
 	if _cook_halo.visible:
 		# Each side fills while cooking; the ready hint replaces the halo.
 		_cook_halo_mat.set_shader_parameter("progress",clampf(cook_time / ready_time,0.0,1.0))
