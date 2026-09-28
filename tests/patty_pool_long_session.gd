@@ -36,6 +36,10 @@ func run():
  assert(g.challenge_serves==2,"A challenge ticket accepts subsequent burgers")
  p.heating=true;p.heat_mul=1;p.is_held=false;p.cook_time=7.5;p._update_cook_halo()
  assert(p._cook_halo.visible and is_equal_approx(p._cook_halo_mat.get_shader_parameter("progress"),.5))
- p.cook_time=15;p._update_cook_halo();assert(is_equal_approx(p._cook_halo_mat.get_shader_parameter("progress"),1.0))
+ p.cook_time=15;p._update_cook_halo();assert(not p._cook_halo.visible)
+ p.flipped_once=true;p.cook_time=1;p._update_cook_halo();assert(p._cook_halo.visible)
+ p.cook_time=15;p._update_cook_halo();assert(not p._cook_halo.visible)
+ p.cook_time=3;p.heating=false;p._update_cook_halo();assert(not p._cook_halo.visible)
+ p.heating=true
  p.is_held=true;p._update_cook_halo();assert(not p._cook_halo.visible)
  print("PATTY_POOL_100_CYCLES_STOCK_AND_HALO_OK");quit()
