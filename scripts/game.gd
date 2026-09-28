@@ -8764,6 +8764,24 @@ func _make_fridge_patty_ball(held_world: bool = false, prepared_frost: Texture2D
 	return ball
 
 
+func _stop_fridge_ball_seat_tween(ball: Node3D) -> void:
+	if not ball.has_meta("fridge_seat_tween"):
+		return
+	var seat_tween: Tween = ball.get_meta("fridge_seat_tween", null)
+	if seat_tween != null and seat_tween.is_valid():
+		seat_tween.kill()
+	if ball.has_meta("fridge_seat_tween"):
+		ball.remove_meta("fridge_seat_tween")
+
+
+func _animate_fridge_ball_seat(ball: Node3D, seat: Vector3, duration: float, delay: float = 0.0) -> void:
+	_stop_fridge_ball_seat_tween(ball)
+	var tw := ball.create_tween()
+	ball.set_meta("fridge_seat_tween", tw)
+	tw.tween_property(ball, "position", seat, duration).set_delay(delay) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
 func _rebuild_patty_fridge_balls(risen: bool) -> void:
 	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
 		return
@@ -8783,6 +8801,7 @@ func _rebuild_patty_fridge_balls(risen: bool) -> void:
 		var seated := patty_fridge_balls_root.get_child(i) as Node3D
 		if seated == null:
 			continue
+		_stop_fridge_ball_seat_tween(seated)
 		seated.position = _patty_fridge_ball_seat(i, risen)
 		seated.visible = i < stock and (risen or patty_fridge_open)
 
@@ -8802,6 +8821,9 @@ func _take_fridge_display_ball_for_flight() -> Node3D:
 		i -= 1
 	if ball == null:
 		return null
+	## Seat motion uses freezer-local coordinates; it must never follow a ball
+	## into world space or resume after that display ball has been recycled.
+	_stop_fridge_ball_seat_tween(ball)
 	ball.set_meta("flight_start", ball.global_position)
 	patty_fridge_balls_root.remove_child(ball)
 	ball.visible = true
@@ -8813,6 +8835,7 @@ func _return_fridge_display_ball(ball: Node3D) -> void:
 	## a visible hitch after every freezer throw.
 	if ball == null or not is_instance_valid(ball):
 		return
+	_stop_fridge_ball_seat_tween(ball)
 	if patty_fridge_balls_root == null or not is_instance_valid(patty_fridge_balls_root):
 		ball.queue_free()
 		return
@@ -8972,11 +8995,10 @@ func _toggle_patty_fridge() -> void:
 				var ball := child as Node3D
 				if ball == null:
 					continue
-				ball.visible = true
+				ball.visible = ball_i < stock
 				ball.position = _patty_fridge_ball_seat(ball_i, false)
 				var delay := PATTY_FRIDGE_BALL_RISE_DELAY + 0.05 * float(ball_i)
-				tw.parallel().tween_property(ball, "position", _patty_fridge_ball_seat(ball_i, true), PATTY_FRIDGE_BALL_RISE_SEC) \
-					.set_delay(delay).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+				_animate_fridge_ball_seat(ball, _patty_fridge_ball_seat(ball_i, true), PATTY_FRIDGE_BALL_RISE_SEC, delay)
 				ball_i += 1
 		tw.tween_callback(func() -> void:
 			_patty_fridge_tween = null
@@ -8994,8 +9016,7 @@ func _toggle_patty_fridge() -> void:
 				var ball2 := child2 as Node3D
 				if ball2 == null:
 					continue
-				tw_close.parallel().tween_property(ball2, "position", _patty_fridge_ball_seat(close_i, false), PATTY_FRIDGE_BALL_TUCK_SEC) \
-					.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+				_animate_fridge_ball_seat(ball2, _patty_fridge_ball_seat(close_i, false), PATTY_FRIDGE_BALL_TUCK_SEC)
 				close_i += 1
 		if patty_fridge_lid_pivot != null and is_instance_valid(patty_fridge_lid_pivot):
 			tw_close.parallel().tween_property(patty_fridge_lid_pivot, "rotation_degrees", Vector3.ZERO, PATTY_FRIDGE_LID_CLOSE_SEC) \
@@ -9172,6 +9193,7 @@ func _prepare_fridge_balls_for_launch() -> void:
 		if ball == null:
 			continue
 		ball.visible = i < stock
+		_stop_fridge_ball_seat_tween(ball)
 		ball.position = _patty_fridge_ball_seat(i, true)
 		i += 1
 
@@ -61655,8 +61677,10 @@ func _update_challenge_hud() -> void:
 	if is_instance_valid(ticket_box):
 		challenge_hud_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		var target: Control = tickets.get(_challenge_customer,ticket_box)
-		challenge_hud_panel.global_position=target.global_position + Vector2(0,0)
 		challenge_hud_panel.size=Vector2(clampf(target.size.x,150.0,180.0),62)
+		challenge_hud_panel.global_position = Vector2(
+			(get_viewport().get_visible_rect().size.x - challenge_hud_panel.size.x) * 0.5,
+			target.global_position.y)
 	if challenge_hud_count != null:
 		challenge_hud_count.text = "%d left" % _challenge_remaining
 	if challenge_hud_clock != null:
@@ -74886,12 +74910,14 @@ func mp_toggle_grill(on: bool) -> void:
 func mp_request_spawn_patty(x: float, z: float) -> void:
 	if not NetManager.is_host():
 		return
+	if not is_finite(x) or not is_finite(z) or not _is_near_grill_for_place(Vector3(x, GRILL_SURFACE_Y, z)):
+		return
 	var idx := _first_empty_slot()
 	if idx < 0 or not grill_on:
 		return
 	var place_pos := _find_closest_patty_place(Vector3(x, GRILL_SURFACE_Y, z))
 	if place_pos == Vector3.ZERO:
-		place_pos = Vector3(x, GRILL_SURFACE_Y, z)
+		return
 	if not _try_use_supply("patty"):
 		_mp_broadcast_economy()
 		return
