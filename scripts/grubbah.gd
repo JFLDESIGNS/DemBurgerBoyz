@@ -134,7 +134,7 @@ func select_order() -> void:
   game._select_ticket_local(ticket_owner)
   state["selected"]=true
 func auto_lay_paper() -> void:
- if host() and str(state.get("phase",""))=="accepted" and is_selected() and game.stations[0].get("patties",[]).is_empty():
+ if host() and str(state.get("phase",""))=="accepted" and is_selected():
   set_phase("paper")
 func holds_customer_timers() -> bool:
  return is_selected() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging"]
@@ -212,9 +212,9 @@ func apply_command(kind: String, number: int, peer: int) -> void:
    if phase=="offered":state["selected"]=true;set_phase("accepted");select_order()
   "paper":
    if phase!="accepted":return
-   if not game.stations[0].get("patties",[]).is_empty():notice("Clear the build before laying paper.",peer);return
    state["selected"]=true;set_phase("paper");select_order()
   "wrap":
+   if phase=="accepted" and is_selected():set_phase("paper");phase="paper"
    if phase!="paper":return
    if not burger_ready():notice("Finish the mobile recipe first.",peer);return
    if not game.stations[0].items.has("bun_top"):
@@ -300,6 +300,10 @@ func pay_order() -> void:
 func fitted(file: String, width: float) -> Node3D:
  var root=Node3D.new()
  var model=load(PACK+file+".glb").instantiate();root.add_child(model)
+ # Unreal collision hulls are exported as visible white meshes in this pack.
+ # They are helpers, not packaging art (the wrapped burger had a square below it).
+ for helper in model.find_children("UCX_*","MeshInstance3D",true,false):
+  helper.get_parent().remove_child(helper);helper.free()
  var bounds=game._shop_preview_bounds(model)
  var scale_factor=width/maxf(bounds.size.x,maxf(bounds.size.y,bounds.size.z))
  model.scale=Vector3.ONE*scale_factor;model.position=-Vector3(bounds.get_center().x,bounds.position.y,bounds.get_center().z)*scale_factor

@@ -28,7 +28,14 @@ func run():
  g.supply_stock["bun_bottom"]=12;g.supply_stock["bun_top"]=12
  if host:
   g.money=100;g._buy_shop_item_local("chef_knife");assert(g.money==50);assert(g.owned_machines.chef_knife);g._mp_broadcast_economy()
-  m.new_order();await wait_mark("cancelled");assert(m.state.is_empty());m.new_order();await wait_mark("accepted");m.auto_lay_paper()
+  m.new_order();await wait_mark("cancelled");assert(m.state.is_empty());m.new_order();await wait_mark("accepted")
+  var already_building=Node.new();g.add_child(already_building);g.stations[0].patties=[already_building]
+  m.auto_lay_paper();assert(m.state.phase=="paper","Selected mobile ticket lays paper even with a burger already on the board")
+  g.stations[0].patties=[];already_building.queue_free()
+  var package=m.fitted("SM_BurgerPackagingPaperWrapped",.25)
+  assert(package.find_children("UCX_*","MeshInstance3D",true,false).is_empty(),"Packaging collision hull is not rendered")
+  assert(package.find_children("*","MeshInstance3D",true,false).size()==1)
+  package.free()
   assert(m.state.phase in ["accepted","paper"])
   await wait_mark("paper");assert(m.state.phase=="paper")
   await wait_mark("knife");assert(m.knife_owner!=0)
