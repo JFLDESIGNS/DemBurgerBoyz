@@ -1,0 +1,28 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run() -> void:
+	var g = load("res://scenes/main.tscn").instantiate()
+	g.set_script(load("res://tests/hotdog_challenge_fixture.gd"))
+	root.add_child(g);current_scene=g;g.playing=true
+	var replica=load("res://tests/hotdog_replica_fixture.gd").new()
+	g.add_child(replica);replica.setup(g);g._hotdog_challenge=replica;replica.set_process(false)
+	var orders=replica.make_recipes(42)
+	replica.sync_state("ready",0,0,orders,"idle_sway",0,1,1)
+	assert(replica.customer.order==orders[0]);assert(g.tickets.has(replica.customer))
+	var boss_id=replica.customer.get_instance_id()
+	g._mp_cull_stale_tickets({})
+	assert(is_instance_valid(replica.customer) and g.tickets.has(replica.customer))
+	replica.sync_state("slump",10,2,orders,"slump",.5,2,1)
+	assert(not replica.can_serve() and replica.clip=="slump")
+	replica.sync_state("ready",10,2,orders,"idle_wave",0,2,1,4.25,Vector3(0,0,7),1.2)
+	assert(replica.order_left == 4.25 and replica.customer.position.z == 7)
+	assert(replica.customer.scale.is_equal_approx(Vector3.ONE*1.2))
+	assert(replica.customer.order==orders[12]);assert(replica.customer.get_instance_id()==boss_id)
+	replica.sync_state("",50,2,orders,"",0,2,1)
+	assert(not replica.active() and g.customers.is_empty())
+	# Late join during victory must not index recipe 50 out of bounds.
+	replica.sync_state("victory",50,0,orders,"slump",1,4,2)
+	assert(replica.phase=="victory" and is_instance_valid(replica.customer))
+	replica.cancel();g.queue_free();await process_frame
+	print("HOTDOG_REPLICA_OK: shared progress, milestone animation, late join, stale-ticket protection, cleanup")
+	quit()

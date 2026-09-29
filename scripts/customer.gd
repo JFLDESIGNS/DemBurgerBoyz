@@ -801,6 +801,7 @@ func _build() -> void:
 		## Fallback: old colored cube if the Kenney pack failed to import.
 		_build_fallback_box()
 	if is_street_pedestrian:
+		_setup_wawa_click_volume()
 		return
 
 	_bubble_bg = MeshInstance3D.new()
@@ -851,6 +852,10 @@ func _setup_wawa_click_volume() -> void:
 	head.radius = 0.25
 	col.shape = head
 	col.position = Vector3(0.0, 1.33, 0.06)
+	if is_street_pedestrian:
+		var torso = CapsuleShape3D.new()
+		torso.radius = .28; torso.height = 1.55
+		col.shape = torso; col.position = Vector3(0,.85,0)
 	_wawa_click_area.add_child(col)
 	add_child(_wawa_click_area)
 
@@ -2159,6 +2164,7 @@ func restyle_street_character(custom_preset: Dictionary = {}, lock_custom_choice
 		return false
 	_custom_character_preset = custom_preset.duplicate(true)
 	_custom_character_choice_locked = lock_custom_choice
+	_burger_props = null
 	_anim_player = null
 	_anim_state = ""
 	_walk_anim_path = ""
@@ -2187,6 +2193,26 @@ static func _folder_has_character_json(path: String) -> bool:
 		if file_name.get_extension().to_lower() == "json":
 			return true
 	return false
+
+
+func play_street_rejection(pointing: bool) -> float:
+	if _anim_player == null: return 1.8
+	if _burger_props == null:
+		_burger_props = BurgerMotion.attach(_anim_player, _anim_player.get_parent())
+	_set_mood("mad")
+	var clip_name = "Point_Finger_Yell" if pointing else "Walk_Away_Angry"
+	_play_anim("burger:" + clip_name)
+	if not pointing:
+		# Repeat the angry gait for the remainder of this sidewalk pass.
+		var animation = _anim_player.get_animation("burger/" + clip_name)
+		if animation.loop_mode != Animation.LOOP_LINEAR:
+			var looped = animation.duplicate(true)
+			looped.loop_mode = Animation.LOOP_LINEAR
+			var library = _anim_player.get_animation_library("burger").duplicate(false)
+			library.remove_animation(clip_name); library.add_animation(clip_name, looped)
+			_anim_player.remove_animation_library("burger"); _anim_player.add_animation_library("burger",library)
+			_anim_state = ""; _play_anim("burger:" + clip_name)
+	return BurgerMotion.LIBRARY.get_animation(clip_name).length
 
 
 func play_street_walk(gait_scale: float = 1.0) -> void:
@@ -2282,6 +2308,21 @@ func _process(delta: float) -> void:
 		if is_leaving: _leave_walk_x=global_position.x
 
 func _advance_customer(delta: float) -> void:
+	if bool(get_meta("street_join_approach", false)) and not is_leaving:
+		scale = scale.move_toward(Vector3.ONE, delta*.35)
+		if mp_host_driven:
+			_update_host_driven_pose(delta)
+			if is_waiting: remove_meta("street_join_approach")
+			return
+		var destination = Vector3(target_x, STAND_Y, 2.25)
+		var direction = destination - global_position
+		if direction.length() > .06:
+			rotation.y = lerp_angle(rotation.y, atan2(direction.x, direction.z), minf(delta*7,1))
+			global_position = global_position.move_toward(destination, delta*1.6)
+			_play_anim("walk")
+			return
+		global_position = destination; scale = Vector3.ONE
+		remove_meta("street_join_approach")
 	if bool(get_meta("meal_stepping_aside", false)):
 		_play_anim("walk")
 		_apply_bobble(true)

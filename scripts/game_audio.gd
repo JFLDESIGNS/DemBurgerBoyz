@@ -1622,9 +1622,9 @@ func play_perfect_announcer() -> void:
 func play_flip_grade_announcer(grade: String) -> void:
 	match grade:
 		"perfect":
-			_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
+			_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.325)
 		"great":
-			_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68)
+			_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.34)
 		_:
 			_play_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav", 0.68)
 

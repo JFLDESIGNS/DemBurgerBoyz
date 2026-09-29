@@ -1,0 +1,428 @@
+extends Node
+## Host-owned 50-recipe encounter. Normal serving owns the burger flight and station.
+const DATA = preload("res://scripts/game_data.gd")
+const CUSTOMER = preload("res://scripts/hotdog_boss_customer.gd")
+const TOTAL = 50
+const MAX_LOSSES = 10
+const ORDER_SECONDS = 17.0
+const PLACEMENT_FILE = "user://hotdog_boss.cfg"
+const NET_ID = 1900000050
+var game: Node
+var customer: Node3D
+var phase = ""
+var perfect = 0
+var mistakes = 0
+var recipes: Array = []
+var milestone_history: Array[int] = []
+var timer = 0.0
+var impact_at = -1.0
+var pending_result = -1
+var suspended: Array = []
+var previous_selected: Node3D
+var label: Label
+var music: AudioStreamPlayer
+var clip = ""
+var sync_timer = 0.0
+var impact_serial = 0
+var received_impact = 0
+var generation = 0
+var boss_position = Vector3(0, -.02, 6.3)
+var boss_scale = 1.0
+var order_left = ORDER_SECONDS
+var ambient_left = 14.0
+var chatter_left = 7.0
+var voice_left = 0.0
+var entrance_duck_left = 0.0
+var failure_reason = "WRONG BURGER!"
+var voice: AudioStreamPlayer
+var concrete: AudioStreamPlayer
+
+static func make_recipes(seed_value: int) -> Array:
+	var rng = RandomNumberGenerator.new()
+	rng.seed = seed_value
+	var masks: Array[int] = []
+	for i in 256: masks.append(i)
+	for i in range(masks.size()-1,0,-1):
+		var j = rng.randi_range(0,i)
+		var swap = masks[i]; masks[i] = masks[j]; masks[j] = swap
+	var result: Array = []
+	for i in TOTAL + MAX_LOSSES:
+		var order: Array[String] = ["bun_bottom", "patty"]
+		for bit in DATA.TOPPING_ORDER.size():
+			if masks[i] & (1 << bit): order.append(DATA.TOPPING_ORDER[bit])
+		order.append("bun_top")
+		result.append(order)
+	return result
+
+func setup(owner_game: Node) -> void:
+	game = owner_game
+	var config = ConfigFile.new()
+	if config.load(PLACEMENT_FILE) == OK:
+		boss_position = config.get_value("boss", "position", boss_position)
+		boss_scale = clampf(float(config.get_value("boss", "scale", boss_scale)), .3, 3.0)
+	name = "HotdogChallenge"
+	label = Label.new()
+	label.name = "HotdogChallengeStatus"
+	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	label.position = Vector2(-270, 65)
+	label.size = Vector2(540, 86)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+	label.add_theme_font_size_override("font_size", 20)
+	label.add_theme_color_override("font_color", Color("FFE08A"))
+	label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	label.add_theme_constant_override("shadow_offset_x", 2)
+	label.add_theme_constant_override("shadow_offset_y", 2)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game.get_node("UI/Root").add_child(label)
+	label.hide()
+	music = AudioStreamPlayer.new()
+	music.name = "ConcreteCrackBoss"
+	music.bus = "Master"
+	music.volume_db = linear_to_db(.62)
+	add_child(music)
+	voice = AudioStreamPlayer.new(); voice.bus = "SFX"; add_child(voice)
+	concrete = AudioStreamPlayer.new(); concrete.bus = "SFX"; add_child(concrete)
+	concrete.stream = load("res://sounds/boss/concrete_break.mp3")
+	concrete.volume_db = 0.0
+
+func start_music() -> void:
+	if music.playing: return
+	var stream = load("res://sounds/boss/concrete_crack_boss.mp3") as AudioStreamMP3
+	if stream == null: return
+	stream = stream.duplicate()
+	stream.loop = true
+	music.stream = stream
+	music.volume_db = linear_to_db(.62)
+	music.play()
+	game._sync_combat_audio()
+
+func active() -> bool: return not phase.is_empty()
+func host() -> bool: return not game.mp_enabled or NetManager.is_host()
+func online() -> bool: return game.mp_enabled and NetManager.is_online()
+func can_serve() -> bool: return phase == "ready" and order_left > 0
+
+func build_hidden_controls(parent: Control) -> void:
+	game._hidden_add_section(parent, "HOTDOG BOSS")
+	for axis in 3:
+		var a = axis
+		game._hidden_add_labeled_slider(parent, "hotdog_position_" + str(a), "Position " + ["X", "Y", "Z (distance)"][a], -12.0 if a < 2 else 3.0, 12.0 if a < 2 else 20.0, .01,
+			func(): return boss_position[a], func(value):
+				boss_position[a] = value
+				update_placement())
+	game._hidden_add_labeled_slider(parent, "hotdog_scale", "Scale", .3, 3.0, .01,
+		func(): return boss_scale, func(value):
+			boss_scale = value
+			update_placement())
+
+func update_placement() -> void:
+	apply_placement()
+	if not host() and online():
+		request_placement.rpc_id(1, boss_position, boss_scale)
+		return
+	var config = ConfigFile.new()
+	config.set_value("boss", "position", boss_position)
+	config.set_value("boss", "scale", boss_scale)
+	config.save(PLACEMENT_FILE)
+	broadcast()
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_placement(pos: Vector3, size_value: float) -> void:
+	if not host() or not pos.is_finite() or not is_finite(size_value): return
+	boss_position = pos.clamp(Vector3(-12,-12,3), Vector3(12,12,20))
+	boss_scale = clampf(size_value,.3,3.0)
+	update_placement()
+
+func apply_placement() -> void:
+	if is_instance_valid(customer):
+		customer.position = boss_position
+		customer.scale = Vector3.ONE * boss_scale
+
+func current_recipe() -> Array:
+	return recipes[mini(perfect + mistakes, recipes.size()-1)]
+
+func reserve_order() -> void:
+	if not can_serve(): return
+	phase = "feeding"; pending_result = -1
+	refresh(); broadcast()
+
+func sound_event(kind: String) -> void:
+	play_sound(kind)
+	if host() and online(): receive_sound.rpc(kind)
+
+@rpc("authority", "call_remote", "reliable")
+func receive_sound(kind: String) -> void:
+	if active(): play_sound(kind)
+
+func play_sound(kind: String) -> void:
+	if kind == "breakout":
+		concrete.play()
+		voice.stream = load("res://sounds/boss/villain_yell.mp3")
+		voice.pitch_scale = .78; voice.volume_db = 7.0; voice_left = 3.0
+		entrance_duck_left = 3.5
+		music.volume_db = linear_to_db(.62) - 12.0
+	elif kind == "wawawa":
+		voice.stream = load("res://sounds/wawawa.ogg")
+		voice.pitch_scale = .65; voice.volume_db = -7.0; voice_left = 1.7
+	else: return
+	voice.play()
+
+func handle_key(event: InputEvent) -> bool:
+	if not event is InputEventKey or not event.pressed or event.echo: return false
+	if event.keycode != KEY_PERIOD and event.physical_keycode != KEY_PERIOD: return false
+	var focus = get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit: return false
+	if not game.playing or game.tutorial_mode or not game._kitchen_ready: return false
+	if host(): start()
+	elif online(): request_start.rpc_id(1)
+	return true
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_start() -> void:
+	if host() and multiplayer.get_remote_sender_id() > 0: start()
+
+func start() -> bool:
+	if active() or not game.playing or game.tutorial_mode: return false
+	if not game._challenge_phase.is_empty() or game._serve_fly_busy or game._bts_day_intro_active or game._location_relocate_busy:
+		game._flash("Finish the current event, then press . for Baron Brat", Color("FFD54F"))
+		return false
+	perfect = 0; mistakes = 0; pending_result = -1; milestone_history.clear()
+	order_left = ORDER_SECONDS; ambient_left = randf_range(12,18); chatter_left = randf_range(5,9)
+	recipes = make_recipes(randi())
+	generation += 1
+	_spawn()
+	phase = "rumble"; timer = 1.0
+	start_music()
+	customer.hide()
+	impact(.9)
+	refresh()
+	broadcast()
+	return true
+
+func _spawn() -> void:
+	previous_selected = game.selected_customer
+	for c in game.customers.duplicate():
+		if not is_instance_valid(c): continue
+		suspended.append([c, c.visible, c.process_mode])
+		c.hide(); c.process_mode = Node.PROCESS_MODE_DISABLED
+		if game.tickets.has(c): game.tickets[c].hide()
+	customer = CUSTOMER.new()
+	customer.boss = self
+	customer.name = "BaronBrat"
+	customer.set_meta("mp_net_id", NET_ID)
+	customer.set_meta("hotdog_boss", true)
+	customer.order.assign(current_recipe())
+	game.customers_root.add_child(customer)
+	apply_placement()
+	game.customers.append(customer)
+	customer.is_waiting = false
+	game.selected_customer = customer
+
+func play(name_value: String) -> float:
+	clip = name_value
+	if not is_instance_valid(customer) or not is_instance_valid(customer.player): return .1
+	if not customer.player.has_animation(name_value):
+		push_error("Missing Baron animation: " + name_value)
+		return .1
+	customer.player.play(name_value, .06)
+	return customer.player.get_animation(name_value).length
+
+func begin_eating() -> void:
+	if phase not in ["ready", "feeding"]: return
+	if phase == "ready": reserve_order()
+	play("eat_thrown_burger")
+	refresh(); broadcast()
+
+func complete_serve(station_index: int, cust: Node3D) -> void:
+	if not host() or cust != customer or phase not in ["ready", "feeding"] or pending_result >= 0: return
+	if station_index < 0 or station_index >= game.stations.size(): return
+	var station: Dictionary = game.stations[station_index]
+	var built: Array = cust.get_meta("serve_recipe", station["items"])
+	var exact: bool = DATA.compare_orders(built, cust.order).perfect
+	if phase == "ready" and not can_serve(): return
+	pending_result = 1 if exact else 0
+	phase = "feeding"
+	if exact:
+		var pay = DATA.order_value(cust.order)
+		cust.set_meta("profit_built", built.duplicate())
+		game._credit_ticket_payout({"base":pay,"tip":0,"total":pay},pay,cust)
+		game.total_served += 1
+	game._clear_station(station_index)
+	game._mp_serve_sync = false
+	game._update_hud()
+	if online():
+		game._mp_broadcast_station(station_index)
+		game._mp_broadcast_economy()
+	refresh(); broadcast()
+
+func resolve_result(correct: bool, reason: String = "WRONG BURGER!") -> void:
+	pending_result = -1
+	if correct:
+		perfect += 1
+		if perfect == TOTAL:
+			phase = "victory"; timer = play("slump") + 2.0
+		elif perfect in [10,30]:
+			milestone_history.append(perfect)
+			phase = "slump"; timer = play("slump") + 1.0
+		else: ready_order()
+	else:
+		mistakes += 1
+		failure_reason = reason
+		phase = "defeat" if mistakes >= MAX_LOSSES else "attack"
+		customer.is_waiting = false
+		game._remove_ticket(customer)
+		# Each failed burger gets the requested truck-directed hook, then a ground smash.
+		timer = play("hook_forward" if mistakes % 2 else "swing_forward")
+		impact_at = timer * .49
+	refresh(); broadcast()
+
+func ready_order() -> void:
+	phase = "ready"
+	order_left = ORDER_SECONDS
+	customer.order.assign(current_recipe())
+	customer.is_waiting = true
+	customer.set_meta("serve_in_progress", false)
+	customer.set_meta("burger_in_flight", false)
+	for meta in ["serve_recipe","serve_missing_items","serve_missing_side"]:
+		if customer.has_meta(meta): customer.remove_meta(meta)
+	game._remove_ticket(customer)
+	game._create_ticket(customer)
+	game.selected_customer = customer
+	play(["idle_sway", "idle_wave", "idle_bounce"][perfect % 3])
+	refresh()
+
+func _process(delta: float) -> void:
+	if not active(): return
+	entrance_duck_left = maxf(0, entrance_duck_left-delta)
+	if entrance_duck_left <= 0:
+		music.volume_db = move_toward(music.volume_db, linear_to_db(.62), delta*10.0)
+	if voice_left > 0:
+		voice_left -= delta
+		if voice_left <= 0: voice.stop()
+	if not game.playing:
+		cancel(); return
+	# Keep the parked normal queue out of the boss's order flow.
+	for item in suspended:
+		if is_instance_valid(item[0]) and game.tickets.has(item[0]): game.tickets[item[0]].hide()
+	if not host():
+		if phase == "ready": order_left = maxf(0, order_left-delta); refresh()
+		return
+	if phase == "ready":
+		order_left = maxf(0, order_left-delta)
+		ambient_left -= delta; chatter_left -= delta
+		if order_left <= 0: resolve_result(false, "TIME UP!")
+		elif ambient_left <= 0:
+			phase = "idle_smash"; customer.is_waiting = false
+			timer = play("hammer_left" if randi()%2 else "hammer_right"); impact_at = timer * .51
+			ambient_left = randf_range(12,18)
+			broadcast()
+		elif chatter_left <= 0:
+			sound_event("wawawa"); chatter_left = randf_range(7,12)
+		refresh()
+	elif phase == "feeding":
+		if pending_result >= 0 and not bool(customer.get_meta("burger_in_flight",false)):
+			resolve_result(pending_result == 1)
+	elif phase != "ready":
+		var before = timer
+		timer = maxf(0, timer-delta)
+		if impact_at >= 0 and before >= impact_at and timer < impact_at:
+			impact_at = -1; impact(.65)
+		if timer <= 0: advance_phase()
+	sync_timer -= delta
+	if sync_timer <= 0:
+		sync_timer = .25; broadcast()
+
+func advance_phase() -> void:
+	match phase:
+		"rumble":
+			customer.show(); phase = "emerge"; timer = play("ground_breakout"); impact_at = timer * .42
+			sound_event("breakout")
+		"emerge": ready_order()
+		"attack":
+			phase = "smash"; timer = play("hammer_left" if mistakes % 2 else "hammer_right"); impact_at = timer * .51
+		"smash": ready_order()
+		"idle_smash":
+			phase = "ready"; customer.is_waiting = true
+			play(["idle_sway", "idle_wave", "idle_bounce"][randi()%3])
+		"defeat":
+			game._flash("CHALLENGE LOST!  Baron Brat wins — 10 orders lost", Color("FF8A80"), 6)
+			cancel(); return
+		"slump": phase = "revive"; timer = play("revive")
+		"revive": ready_order()
+		"victory":
+			game._flash("BARON BRAT BEATEN!  50 / 50 perfect burgers", Color("A5D6A7"), 5)
+			cancel(); return
+	refresh(); broadcast()
+
+func impact(duration: float) -> void:
+	impact_serial += 1
+	game._start_slot_camera_shake(duration,.075)
+	if is_instance_valid(game.game_audio): game.game_audio.play_truck_knock(1.0)
+
+func refresh() -> void:
+	if not is_instance_valid(label): return
+	label.visible = active()
+	if is_instance_valid(customer) and game.tickets.has(customer):
+		game._update_ticket_seconds_label(game.tickets[customer], customer)
+	var message = "%.1fs  •  %d / 50 perfect  •  %d / 10 orders lost" % [order_left,perfect,mistakes]
+	match phase:
+		"rumble", "emerge": message = "THE TRUCK IS SHAKING… BARON BRAT IS HERE!"
+		"feeding": message = "CHOMP!  %d / 50 perfect" % perfect
+		"attack", "smash": message = "%s  %d / 10 orders lost" % [failure_reason,mistakes]
+		"idle_smash": message = "GROUND SMASH!  Timer paused — %.1fs left" % order_left
+		"defeat": message = "CHALLENGE LOST!  10 orders lost — BARON BRAT WINS!"
+		"slump", "revive": message = "%d PERFECT!  He's down… but not finished!" % perfect
+		"victory": message = "50 / 50 PERFECT — BARON BRAT DEFEATED!"
+	label.text = "BARON BRAT CHALLENGE\n" + message
+
+func cancel() -> void:
+	phase = ""; clip = ""; pending_result = -1; impact_at = -1
+	if is_instance_valid(music): music.stop()
+	if is_instance_valid(voice): voice.stop()
+	if is_instance_valid(concrete): concrete.stop()
+	voice_left = 0; entrance_duck_left = 0
+	game._sync_combat_audio()
+	if is_instance_valid(customer):
+		game._remove_ticket(customer)
+		game.customers.erase(customer)
+		customer.queue_free()
+	customer = null
+	for item in suspended:
+		if not is_instance_valid(item[0]): continue
+		item[0].visible = item[1]; item[0].process_mode = item[2]
+		if game.tickets.has(item[0]): game.tickets[item[0]].show()
+	suspended.clear()
+	game.selected_customer = previous_selected if is_instance_valid(previous_selected) else null
+	refresh()
+	if host(): broadcast()
+
+func broadcast() -> void:
+	if not host() or not online(): return
+	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason)
+
+@rpc("authority", "call_remote", "reliable")
+func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, animation: String, remaining: float, serial: int, round_id: int, seconds_left: float = ORDER_SECONDS, pos: Vector3 = Vector3(0,-.02,6.3), size_value: float = 1.0, reason: String = "WRONG BURGER!") -> void:
+	if host(): return
+	if remote_phase.is_empty():
+		if active(): cancel()
+		return
+	if active() and generation != round_id: cancel()
+	perfect = count; mistakes = wrong; recipes = orders; generation = round_id
+	boss_position = pos; boss_scale = size_value; failure_reason = reason
+	if not is_instance_valid(customer): _spawn()
+	apply_placement()
+	var changed = phase != remote_phase or customer.order != current_recipe()
+	phase = remote_phase; timer = remaining
+	start_music()
+	customer.visible = phase != "rumble"
+	customer.is_waiting = phase == "ready"
+	if changed and phase == "ready": ready_order()
+	order_left = seconds_left
+	if clip != animation:
+		play(animation)
+		if remaining > 0 and customer.player.has_animation(animation):
+			customer.player.seek(maxf(0,customer.player.get_animation(animation).length-remaining),true)
+	if serial != received_impact:
+		received_impact = serial
+		game._start_slot_camera_shake(.65,.075)
+	refresh()

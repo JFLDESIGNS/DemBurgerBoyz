@@ -476,6 +476,7 @@ var total_served: int = 0
 var order_history: Array = []
 var order_history_revision := 0
 var _perfect_reward_milestone := 0
+var _hotdog_challenge: Node
 var _grubbah: Node
 var _order_insights: Node
 var perfect_serves: int = 0
@@ -1467,6 +1468,7 @@ const SODA_SLOT_SPIN_COST := 5.0
 const SODA_SLOT_WIN_PAYOUT := 40.0
 var slot_camera_shake_t: float = 0.0
 var slot_camera_shake_total: float = 0.0
+var slot_camera_shake_amp: float = 0.024
 var slot_camera_base_pos := Vector3(0.0, 1.65, -1.62)
 var player_camera_height: float = 1.65
 var player_camera_x: float = 0.0
@@ -3548,7 +3550,21 @@ var game_over_location_btn: Button = null ## area picker shown between shifts
 var menu_ready := false
 var _kitchen_ready := false
 
+func _ensure_hotdog_challenge() -> Node:
+	if not is_instance_valid(_hotdog_challenge):
+		_hotdog_challenge = preload("res://scripts/hotdog_challenge.gd").new()
+		_hotdog_challenge.name = "HotdogChallenge"
+		add_child(_hotdog_challenge)
+		_hotdog_challenge.setup(self)
+	return _hotdog_challenge
+
+
+func _hotdog_active() -> bool:
+	return is_instance_valid(_hotdog_challenge) and _hotdog_challenge.active()
+
+
 func _ready() -> void:
+	_ensure_hotdog_challenge()
 	randomize()
 	_seed_first_run_configs()
 	## Always boot fullscreen — no windowed chrome / minimize-on-launch.
@@ -5824,7 +5840,7 @@ func _process_gameplay(delta: float) -> void:
 	var day1_needs_bts_sequence := _bts_day1_needs_sequence_customers()
 
 	## Shared shift clock — host owns it in co-op (synced via economy packets).
-	if not tutorial_mode and not day_intro_blocking and (not mp_enabled or NetManager.is_host()):
+	if not tutorial_mode and not day_intro_blocking and not _hotdog_active() and (not mp_enabled or NetManager.is_host()):
 		day_time -= delta
 		if day_time < 0.0:
 			day_time = 0.0
@@ -6365,6 +6381,9 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if not menu_ready or not _kitchen_ready: return
+	if _ensure_hotdog_challenge().handle_key(event):
+		get_viewport().set_input_as_handled()
+		return
 	if mp_enabled and not NetManager.is_host() and _mp_bootstrap_request_time > 0 and not _mp_bootstrap_ready:
 		get_viewport().set_input_as_handled()
 		return
@@ -30764,6 +30783,9 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 		0.0
 	)
 	walker.visible = true
+	walker.set_meta("street_hail", "")
+	walker.set_meta("street_hail_time", 0.0)
+	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	if is_run and walker.has_method("play_street_run"):
 		walker.call("play_street_run", 1.04 + randf() * 0.22)
@@ -30808,6 +30830,9 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 	walker.scale = Vector3.ONE * _bg_people_scale()
 	walker.rotation_degrees = Vector3(0.0, CustomerScript.WALK_PLUS_X_YAW if dir > 0.0 else CustomerScript.WALK_MINUS_X_YAW, 0.0)
 	walker.visible = true
+	walker.set_meta("street_hail", "")
+	walker.set_meta("street_hail_time", 0.0)
+	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
 	if is_run and walker.has_method("play_street_run"):
@@ -30851,6 +30876,7 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array) -> void:
 			continue
 		if not bool(active[i]):
 			walker.visible = false
+			walker._wawa_click_area.collision_layer = 0
 			bg_people_active[i] = false
 			continue
 		if not bool(bg_people_active[i]):
@@ -30872,6 +30898,7 @@ func _update_background_people(delta: float) -> void:
 			var idle := bg_people[i] as Node3D
 			if idle != null and is_instance_valid(idle):
 				idle.visible = false
+			idle._wawa_click_area.collision_layer = 0
 			if i < bg_people_active.size():
 				bg_people_active[i] = false
 			if i < bg_people_pass_blend.size():
@@ -30883,6 +30910,7 @@ func _update_background_people(delta: float) -> void:
 			continue
 		walker.scale = Vector3.ONE * s
 		if not bool(bg_people_active[i]):
+			walker._wawa_click_area.collision_layer = 0
 			if mp_enabled and not NetManager.is_host():
 				walker.visible = false
 				continue
@@ -30894,6 +30922,7 @@ func _update_background_people(delta: float) -> void:
 				continue
 			_start_background_person(i)
 			continue
+		if _update_background_hail(i, delta): continue
 		var dir: float = float(bg_people_dir[i])
 		var crowd_before: Vector3=walker.global_position
 		walker.position.x += dir * float(bg_people_speed[i]) * speed_mul * delta
@@ -30920,12 +30949,102 @@ func _update_background_people(delta: float) -> void:
 		)
 		if finished:
 			walker.visible = false
+			walker._wawa_click_area.collision_layer = 0
 			bg_people_active[i] = false
 			bg_people_is_run[i] = false
 			bg_people_is_pair[i] = false
 			if i < bg_people_pass_blend.size():
 				bg_people_pass_blend[i] = 0.0
 			bg_people_wait[i] = randf_range(BG_PEOPLE_WAIT_MIN, BG_PEOPLE_WAIT_MAX) * gap_mul
+
+
+static func _street_hail_outcome(roll: int) -> String:
+	if roll < 50: return "ignore"
+	if roll < 60: return "angry"
+	return "join"
+
+
+func _hail_background_person(idx: int) -> void:
+	if not playing or shift_paused or options_menu_open: return
+	if idx < 0 or idx >= bg_people.size() or not bool(bg_people_active[idx]): return
+	var walker = bg_people[idx]
+	if not is_instance_valid(walker) or not walker.visible: return
+	var result = str(walker.get_meta("street_hail", ""))
+	if result.is_empty(): result = _street_hail_outcome(randi_range(0,99))
+	if mp_enabled and NetManager.is_online(): mp_background_person_hail.rpc(idx,result)
+	else: mp_background_person_hail(idx,result)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_hail_background_person(idx: int) -> void:
+	if NetManager.is_host(): _hail_background_person(idx)
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_background_person_hail(idx: int, result: String) -> void:
+	if idx < 0 or idx >= bg_people.size() or not bool(bg_people_active[idx]): return
+	var walker = bg_people[idx]
+	_setup_burgerpals_startup_sound(); _play_burgerpals_voice()
+	if not str(walker.get_meta("street_hail", "")).is_empty(): return
+	walker.set_meta("street_hail", result)
+	if result == "angry":
+		walker.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
+		walker.set_meta("street_hail_time", walker.play_street_rejection(true))
+		# Let the cook's greeting finish before the pedestrian answers.
+		var delay = minf(1.1, burgerpals_startup_player.stream.get_length())
+		get_tree().create_timer(delay).timeout.connect(func():
+			if is_instance_valid(walker) and walker.visible and str(walker.get_meta("street_hail","")) in ["angry","angry_walk"] and game_audio:
+				game_audio.play_customer_wawa_click(1.0,walker.get_customer_voice())
+		)
+	elif result == "angry_walk":
+		walker.play_street_rejection(false)
+	elif result == "join":
+		walker.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
+		walker._play_anim("idle")
+
+
+func _update_background_hail(idx: int, delta: float) -> bool:
+	var walker = bg_people[idx]
+	var result = str(walker.get_meta("street_hail", ""))
+	if result == "angry":
+		var remaining = float(walker.get_meta("street_hail_time",0.0))
+		if remaining > 0:
+			walker.set_meta("street_hail_time",maxf(0,remaining-delta))
+			return true
+		walker.set_meta("street_hail","angry_walk")
+		walker.rotation_degrees.y = CustomerScript.WALK_PLUS_X_YAW if float(bg_people_dir[idx]) > 0 else CustomerScript.WALK_MINUS_X_YAW
+		walker.play_street_rejection(false)
+	elif result == "join":
+		if mp_enabled and not NetManager.is_host(): return true
+		if _waiting_customer_count() >= MAX_CUSTOMERS or _challenge_blocks_spawns() or service_window_closed or day_time <= 0 or tutorial_mode or _bts_day_intro_active or _boss_intro_running: return true
+		var preset: Dictionary = walker.get_custom_character_preset()
+		var order = GameDataScript.generate_order(difficulty, false, false, false)
+		var nid = _mp_next_customer_net_id; _mp_next_customer_net_id += 1
+		var lane = clampi(_waiting_customer_count(),0,CustomerScript.LANE_X.size()-1)
+		var patience = float(_location_stats().get("patience_base",92.0))
+		if mp_enabled and NetManager.is_online():
+			mp_background_person_join.rpc(idx,nid,order,preset,walker.global_position,walker.scale.x,lane,patience)
+		else:
+			mp_background_person_join(idx,nid,order,preset,walker.global_position,walker.scale.x,lane,patience)
+		return true
+	return false
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_background_person_join(idx: int, nid: int, order: Array, preset: Dictionary, origin: Vector3, size_value: float, lane: int, patience: float) -> void:
+	if idx < 0 or idx >= bg_people.size(): return
+	var walker = bg_people[idx]
+	walker.hide(); walker._wawa_click_area.collision_layer = 0
+	bg_people_active[idx] = false
+	bg_people_wait[idx] = randf_range(BG_PEOPLE_WAIT_MIN,BG_PEOPLE_WAIT_MAX)
+	_spawn_customer_local(order,Color.WHITE,patience,lane,nid,-1,0,false,-1,false,preset,true)
+	var customer = customers.back()
+	customer.global_position = origin
+	customer.scale = Vector3.ONE * size_value
+	customer.set_meta("street_join_approach",true)
+	customer._play_anim("walk")
+	if mp_enabled and not NetManager.is_host():
+		customer.apply_host_snapshot(origin,CustomerScript.FACE_TRUCK_YAW,true)
 
 
 func _play_street_car_whoosh_if_passing() -> void:
@@ -41168,9 +41287,10 @@ func _sync_player_camera_hidden_ui() -> void:
 			options_hidden_tree_light_labs[key].text = ("%.1f°" % val) if key in ["cam_fov", "cam_tilt", "cam_yaw", "cam_roll"] else ("%.2f" % val)
 
 
-func _start_slot_camera_shake(duration: float = 2.0) -> void:
+func _start_slot_camera_shake(duration: float = 2.0, strength: float = 0.024) -> void:
+	slot_camera_shake_amp = maxf(strength, slot_camera_shake_amp) if slot_camera_shake_t > 0 else strength
+	slot_camera_shake_total = maxf(slot_camera_shake_total, duration) if slot_camera_shake_t > 0 else duration
 	slot_camera_shake_t = maxf(slot_camera_shake_t, duration)
-	slot_camera_shake_total = maxf(slot_camera_shake_total, duration)
 
 
 func _update_slot_camera_shake(delta: float) -> void:
@@ -41182,7 +41302,7 @@ func _update_slot_camera_shake(delta: float) -> void:
 		return
 	slot_camera_shake_t = maxf(0.0, slot_camera_shake_t - delta)
 	var k := slot_camera_shake_t / maxf(slot_camera_shake_total, 0.001)
-	var amp := 0.024 * k
+	var amp := slot_camera_shake_amp * k
 	camera.position = slot_camera_base_pos + Vector3(
 		randf_range(-amp, amp),
 		randf_range(-amp * 0.55, amp * 0.55),
@@ -58273,6 +58393,7 @@ func _build_options_menu() -> void:
 			_save_fryer_tuning_settings()
 	)
 
+	_ensure_hotdog_challenge().build_hidden_controls(hidden_world_box)
 	_hidden_add_section(hidden_world_box, "WORLD HINT TEXT")
 	_hidden_add_labeled_slider(hidden_world_box, "fryer_hint_x", "Fryer Hint X px", -240.0, 240.0, 1.0,
 		func(): return fryer_hint_screen_nudge.x,
@@ -61190,9 +61311,9 @@ func _any_living_terrorist() -> bool:
 func _sync_combat_audio() -> void:
 	## Double Agent theme + mute truck radio while fighting, holding the glock, or tracing a PCB.
 	var hostiles := terrorist_wave_active or _any_living_terrorist()
-	var want_theme := hostiles or glock_held or _pcb_puzzle_is_open()
+	var want_theme := (hostiles or glock_held or _pcb_puzzle_is_open()) and not _hotdog_active()
 	## Radio stays muted while the glock is out, or while the combat theme is up.
-	var mute_radio := glock_held or want_theme or _challenge_phase == "offer" or _challenge_phase == "active"
+	var mute_radio := glock_held or want_theme or _hotdog_active() or _challenge_phase == "offer" or _challenge_phase == "active"
 	if game_audio:
 		if want_theme:
 			if game_audio.has_method("play_combat_theme"):
@@ -61294,6 +61415,7 @@ func _next_bts_day1_skin_idx() -> int:
 
 
 func _challenge_blocks_spawns() -> bool:
+	if _hotdog_active(): return true
 	return _challenge_phase == "wait_line" or _challenge_phase == "offer" or _challenge_phase == "active"
 
 
@@ -61900,6 +62022,7 @@ func _spawn_challenge_customer() -> void:
 
 
 func _update_challenge(delta: float) -> void:
+	if _hotdog_active(): return
 	if tutorial_mode or not playing:
 		return
 	if mp_enabled and not NetManager.is_host():
@@ -62987,6 +63110,12 @@ func _update_ticket_seconds_label(wrap: Control, customer: Node3D) -> void:
 	var label := label_node as Label
 	if label == null or not is_instance_valid(label):
 		return
+	if is_instance_valid(customer) and customer.get_meta("hotdog_boss", false):
+		var boss = _ensure_hotdog_challenge()
+		label.text = "%.1fs LEFT" % boss.order_left
+		if boss.phase != "ready": label.text = "%.1fs PAUSED" % boss.order_left
+		label.add_theme_color_override("font_color", Color("C62828") if boss.order_left <= 5.0 else Color("A4511F"))
+		return
 	label.text = "%.1fs" % _ticket_elapsed_seconds(customer)
 	if customer != null and is_instance_valid(customer) and bool(customer.get("is_challenge_guest")):
 		label.text = _challenge_clock_text(_challenge_time_left)
@@ -63067,7 +63196,9 @@ func _refresh_ticket_patience_bars() -> void:
 		if bar == null or not is_instance_valid(bar):
 			continue
 		var t := 0.0
-		if cust != null and is_instance_valid(cust) and bool(cust.get("is_challenge_guest")):
+		if cust.get_meta("hotdog_boss", false):
+			t = clampf(_hotdog_challenge.order_left / _hotdog_challenge.ORDER_SECONDS, 0.0, 1.0)
+		elif cust != null and is_instance_valid(cust) and bool(cust.get("is_challenge_guest")):
 			t = clampf(_challenge_time_left / maxf(0.01, _challenge_time_max), 0.0, 1.0)
 		elif cust.has_method("patience_ratio"):
 			t = float(cust.patience_ratio())
@@ -63246,6 +63377,7 @@ func _select_ticket(customer: Node3D) -> void:
 
 
 func _select_ticket_local(customer: Node3D) -> void:
+	if _hotdog_active() and customer != _hotdog_challenge.customer: return
 	if is_instance_valid(_grubbah) and _grubbah.is_selected() and customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase","")) in ["paper","wrapping"] and not stations[0].get("patties",[]).is_empty():
 		_flash("Wrap the mobile burger first",Color("FFD06A"))
 		return
@@ -63308,7 +63440,7 @@ func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
 	## Co-op guest repair: tickets can outlive their customer array entry after a
 	## missed leave/sync race. Host IDs are authoritative.
 	for cust in tickets.keys():
-		if is_instance_valid(cust) and bool(cust.get_meta("mobile_order",false)): continue
+		if is_instance_valid(cust) and (bool(cust.get_meta("mobile_order",false)) or bool(cust.get_meta("hotdog_boss",false))): continue
 		var stale := false
 		if cust == null or not is_instance_valid(cust):
 			stale = true
@@ -63385,6 +63517,7 @@ func _highlight_tickets() -> void:
 
 
 func _clear_customers() -> void:
+	if _hotdog_active(): _hotdog_challenge.cancel()
 	dialogue_queue.clear()
 	dialogue_customer = null
 	if dialogue_panel:
@@ -69086,6 +69219,12 @@ func _try_customer_wawa_click(screen_pos: Vector2) -> bool:
 		cust = collider.get_parent() as Node3D
 	if cust == null or not is_instance_valid(cust):
 		return false
+	if bool(cust.get("is_street_pedestrian")):
+		var idx = bg_people.find(cust)
+		if idx < 0 or not cust.visible or not bool(bg_people_active[idx]): return false
+		if mp_enabled and not NetManager.is_host(): mp_hail_background_person.rpc_id(1, idx)
+		else: _hail_background_person(idx)
+		return true
 	if bool(cust.get("is_leaving")) or bool(cust.get("is_ragdoll")):
 		return false
 	var impatience := 0.5
@@ -70188,6 +70327,9 @@ func _complete_serve(
 		cust = selected_customer
 	if cust == null or not is_instance_valid(cust):
 		return
+	if bool(cust.get_meta("hotdog_boss",false)):
+		_ensure_hotdog_challenge().complete_serve(station_index,cust)
+		return
 	if bool(cust.get("is_challenge_guest")):
 		_complete_challenge_serve(station_index, cust, remote_drink)
 		return
@@ -70503,6 +70645,13 @@ func _serve_reject_hint(order: Array, station_index: int) -> void:
 
 
 func _on_serve() -> void:
+	if _hotdog_active():
+		if not _hotdog_challenge.can_serve() or _serve_fly_busy: return
+		var boss: Node3D = _hotdog_challenge.customer
+		var station := _find_station_for_order(boss.order)
+		if station >= 0: _submit_serve_request(boss, station)
+		else: _flash("Build a burger for Baron Brat first",Color("FFD54F"))
+		return
 	if is_instance_valid(_grubbah) and _grubbah.is_selected():
 		_grubbah.request("action")
 		return
@@ -70759,6 +70908,8 @@ func _complete_fries_only_serve(customer: Node3D = null) -> void:
 
 
 func _resolve_serve_customer():
+	if _hotdog_active():
+		return _hotdog_challenge.customer if _hotdog_challenge.can_serve() else null
 	if _order_can_receive_burger(selected_customer): return selected_customer
 	var previous_customer = selected_customer
 	selected_customer=null
@@ -70771,6 +70922,7 @@ func _resolve_serve_customer():
 	return selected_customer
 
 func _order_can_receive_burger(customer: Node3D) -> bool:
+	if is_instance_valid(customer) and customer.get_meta("hotdog_boss",false) and not _ensure_hotdog_challenge().can_serve(): return false
 	return is_instance_valid(customer) and customer.is_waiting and not customer.is_leaving \
 		and not bool(customer.get("is_cut_collector")) and tickets.has(customer) \
 		and not bool(customer.get_meta("serve_in_progress",false)) \
@@ -70791,6 +70943,7 @@ func _begin_customer_serve_handoff(customer: Node3D) -> void:
 	## Release the counter and ticket as the served customer steps aside.
 	if customer == null or not is_instance_valid(customer):
 		return
+	if customer.get_meta("hotdog_boss", false): _ensure_hotdog_challenge().reserve_order()
 	customer.set_meta("serve_in_progress", true)
 	if bool(customer.get("is_challenge_guest")):
 		# This ticket represents the entire batch, not just the current burger.
@@ -70814,6 +70967,7 @@ func _begin_serve_at(
 	source_peer_id: int = 0,
 	source_has_held_cup: bool = false
 ) -> void:
+	if is_instance_valid(customer) and customer.get_meta("hotdog_boss",false) and not _ensure_hotdog_challenge().can_serve(): return
 	if is_instance_valid(customer) and bool(customer.get_meta("mobile_order",false)):
 		_grubbah.request("action")
 		return
@@ -73473,6 +73627,8 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 			continue
 		var bg_preset: Dictionary = bg_walker.get_custom_character_preset() if bg_walker.has_method("get_custom_character_preset") else {}
 		_mp_bootstrap_add(peer_id, "mp_background_person_start", [bg_i, bg_preset, float(bg_people_dir[bg_i]), bool(bg_people_is_run[bg_i]), bool(bg_people_is_pair[bg_i]), float(bg_people_speed[bg_i])])
+		var hail = str(bg_walker.get_meta("street_hail", ""))
+		if not hail.is_empty(): _mp_bootstrap_add(peer_id, "mp_background_person_hail", [bg_i, hail])
 	_mp_send_background_people_snapshot(peer_id)
 	## Grill + Build patties.
 	for i in GRILL_SLOTS:
@@ -76631,6 +76787,7 @@ func _mp_emit_customers(peer_id: int = 0) -> void:
 	var serving: Array = []
 	var yaws: Array = []
 	for c in customers:
+		if is_instance_valid(c) and c.get_meta("hotdog_boss",false): continue
 		if c == null or not is_instance_valid(c):
 			continue
 		var nid := _customer_net_id(c)
@@ -76757,8 +76914,9 @@ func mp_sync_customers(
 			if not tickets.has(c):
 				_create_ticket(c)
 				ticket_structure_changed = true
-	## Drop ghosts the host no longer has.
+	## Drop ghosts the host no longer has. Boss snapshots use their own controller.
 	for c in customers.duplicate():
+		if is_instance_valid(c) and c.get_meta("hotdog_boss",false): continue
 		if c == null or not is_instance_valid(c):
 			continue
 		var nid2 := _customer_net_id(c)
