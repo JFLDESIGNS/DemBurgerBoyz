@@ -63910,9 +63910,6 @@ func _update_bin_fills_3d(only_id: String = "") -> void:
 		var t: float = clampf(float(stock) / float(cap), 0.0, 1.0)
 		var full_y: float = _bin_fill_val(id, "full")
 		var empty_y: float = _bin_fill_val(id, "empty")
-		# Lower only the in-well plane by two world inches at full stock.
-		# Keep it above its empty level even when the whole tray is scaled smaller.
-		full_y = maxf(empty_y, full_y - .0508 / maxf(.001, tub.global_basis.y.length()))
 		var y: float = lerpf(empty_y, full_y, t) + _bin_fill_val(id, "y")
 		fill.position = Vector3(_bin_fill_val(id, "x"), y, _bin_fill_val(id, "z"))
 		var fill_yaw: float = 180.0
