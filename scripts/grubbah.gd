@@ -103,7 +103,7 @@ func refresh() -> void:
   if id in ["bun_bottom","bun_top"]:continue
   lines+=str(DATA.INGREDIENT_LABELS.get(id,id))+"\n"
  var number=display_number()
- var notes={"offered":"NEW ORDER","accepted":"IN QUEUE","paper":"BUILDING","wrapping":"WRAPPING", "bagging":"PACK THE SIDES", "sealed":"HEADING TO PICKUP", "pickup":"DRIVER ARRIVING", "collected":"PICKED UP"}
+ var notes={"offered":"NEW ORDER","accepted":"IN QUEUE","paper":"BUILDING","wrapping":"WRAPPING", "bagging":"PACKING — AUTO SERVE", "sealed":"HEADING TO PICKUP", "pickup":"DRIVER ARRIVING", "collected":"PICKED UP"}
  status_label.text=str(notes.get(phase,"OPEN FOR ORDERS"))
  if phase=="accepted" and is_instance_valid(ticket_owner):status_label.text="YOUR TURN" if is_selected() else "IN QUEUE · #%d" % (game.tickets.keys().find(ticket_owner)+1)
  body.text="Orders arrive automatically.\n\nThey join the regular ticket queue." if phase=="" else number+"\n\n"+lines.strip_edges()
@@ -174,6 +174,7 @@ func _process(delta: float) -> void:
    elif phase=="wrapping" and age>=1.2:
     if burger_ready():consume_build();set_phase("bagging")
     else:set_phase("paper")
+   elif phase=="bagging" and age>=BURGER_BAG_FLIGHT:try_seal_bag()
    elif phase=="sealed" and age>=BAG_PICKUP_FLIGHT:set_phase("pickup")
    elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK:
     pay_order();set_phase("collected")
@@ -235,20 +236,29 @@ func apply_command(kind: String, number: int, peer: int) -> void:
     if is_instance_valid(patty):state.quality=minf(state.quality,patty.doneness_multiplier())
    set_phase("wrapping")
   "seal":
-   if phase!="bagging":return
-   if age<BURGER_BAG_FLIGHT:notice("Burger going in!",peer);return
-   var sodas=DATA.order_soda_ids(state.items)
-   var drink:Node3D=null
-   if not sodas.is_empty():
-    drink=game._find_ready_drink_for_soda(str(sodas[0]))
-    if drink==null:notice("Set a full cola on the tray first.",peer);return
-   if DATA.wants_fries(state.items) and game.fryer_ready_servings<=0:notice("Cook the fries first.",peer);return
-   if drink!=null:
-    game._serve_cup_node=drink;game._consume_cup_for_serve(ticket_owner)
-   if DATA.wants_fries(state.items):
-    game.fryer_ready_servings-=1;game._refresh_ready_fries_visuals()
-   if online():game._mp_broadcast_economy()
-   set_phase("sealed")
+   try_seal_bag(peer)
+func try_seal_bag(peer: int = 0) -> bool:
+ if not host() or str(state.get("phase",""))!="bagging":return false
+ if age<BURGER_BAG_FLIGHT:
+  if peer>0:notice("Burger going in!",peer)
+  return false
+ var sodas=DATA.order_soda_ids(state.items)
+ var drink:Node3D=null
+ if not sodas.is_empty():
+  drink=game._find_ready_drink_for_soda(str(sodas[0]))
+  if drink==null:
+   if peer>0:notice("Set a full cola on the tray first.",peer)
+   return false
+ if DATA.wants_fries(state.items) and game.fryer_ready_servings<=0:
+  if peer>0:notice("Cook the fries first.",peer)
+  return false
+ if drink!=null:
+  game._serve_cup_node=drink;game._consume_cup_for_serve(ticket_owner)
+ if DATA.wants_fries(state.items):
+  game.fryer_ready_servings-=1;game._refresh_ready_fries_visuals()
+ if online():game._mp_broadcast_economy()
+ set_phase("sealed")
+ return true
 func notice(text: String, peer: int) -> void:
  if online() and peer!=get_node("/root/NetManager").my_id():show_notice.rpc_id(peer,text)
  else:game._flash(text,Color("FFD478"))
@@ -375,7 +385,7 @@ func packing_audio(phase: String) -> void:
  packing_tween.tween_callback(play_wrap_sound)
 func add_bag_label() -> void:
  var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00017;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/bag_red_logo.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,.13,-.12);logo.rotation.y=PI;bag.add_child(logo)
- bag_finish=Label3D.new();bag_finish.text="CLICK BAG TO FINISH";bag_finish.font=preload("res://assets/fonts/Fredoka-SemiBold.ttf");bag_finish.font_size=32;bag_finish.outline_size=5;bag_finish.pixel_size=.0016;bag_finish.position=Vector3(0,.46,0);bag_finish.billboard=BaseMaterial3D.BILLBOARD_ENABLED;bag_finish.modulate=Color("FFF0C6");bag.add_child(bag_finish)
+ bag_finish=Label3D.new();bag_finish.text="WAITING FOR SIDES";bag_finish.font=preload("res://assets/fonts/Fredoka-SemiBold.ttf");bag_finish.font_size=32;bag_finish.outline_size=5;bag_finish.pixel_size=.0016;bag_finish.position=Vector3(0,.46,0);bag_finish.billboard=BaseMaterial3D.BILLBOARD_ENABLED;bag_finish.modulate=Color("FFF0C6");bag.add_child(bag_finish)
  bag_glow=Node3D.new();bag_glow.name="BagSilhouetteOutline";bag.add_child(bag_glow)
  for source in bag.find_children("*","MeshInstance3D",true,false):
   var rim=MeshInstance3D.new();rim.mesh=source.mesh;bag_glow.add_child(rim);rim.global_transform=source.global_transform
