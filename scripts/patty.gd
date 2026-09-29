@@ -60,6 +60,7 @@ var _cheese_flaps: Array = [] ## MeshInstance3D flaps whose corners droop
 ## Dark pepper/seasoning flecks shaken onto raw beef.
 var seasoning: float = 0.0 ## 0..1 coverage
 var _season_root: Node3D = null
+var _season_batch: MultiMesh = null
 var _season_fleck_count: int = 0
 const SEASON_MAX_FLECKS := 36
 
@@ -475,6 +476,7 @@ func _ready() -> void:
 	add_child(_hint)
 	_ensure_hold_meter()
 	_ensure_cook_halo()
+	_ensure_season_root()
 	_setup_cook_fx()
 	_update_cook_gradient()
 	_update_frost_visual()
@@ -513,9 +515,8 @@ func reset_for_grill_spawn(
 	_cheese_mat = null
 	has_cheese = false
 	cheese_melt = 0.0
-	if _season_root != null and is_instance_valid(_season_root):
-		_season_root.queue_free()
-	_season_root = null
+	if _season_batch != null:
+		_season_batch.visible_instance_count = 0
 	_season_fleck_count = 0
 	seasoning = 0.0
 	cook_time = 0.0
@@ -2816,36 +2817,43 @@ func _ensure_season_root() -> void:
 		_mesh.add_child(_season_root)
 	else:
 		add_child(_season_root)
+	## Built during patty prewarm, then retained through pool recycling. Shaking
+	## only exposes existing grains instead of allocating render objects per tick.
+	var batch_view := MultiMeshInstance3D.new()
+	_season_batch = MultiMesh.new()
+	_season_batch.transform_format = MultiMesh.TRANSFORM_3D
+	_season_batch.use_colors = true
+	var grain := BoxMesh.new()
+	grain.size = Vector3.ONE
+	_season_batch.mesh = grain
+	_season_batch.instance_count = SEASON_MAX_FLECKS
+	_season_batch.visible_instance_count = 0
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.vertex_color_use_as_albedo = true
+	mat.render_priority = PATTY_BODY_PRIORITY + 1
+	batch_view.material_override = mat
+	batch_view.multimesh = _season_batch
+	batch_view.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_season_root.add_child(batch_view)
+	for i in SEASON_MAX_FLECKS:
+		var s := 0.0055 + randf() * 0.008
+		var grain_scale := Vector3(s * (0.5 + randf()), 0.0018 + randf() * 0.0014, s * (0.4 + randf() * 0.8))
+		var ang := randf() * TAU
+		var rad := sqrt(randf()) * 0.088
+		var pos := Vector3(cos(ang) * rad, 0.0008 + randf() * 0.0016, sin(ang) * rad)
+		var rot := Vector3(deg_to_rad(randf() * 25.0 - 12.0), ang + deg_to_rad(randf() * 40.0), deg_to_rad(randf() * 30.0 - 15.0))
+		_season_batch.set_instance_transform(i, Transform3D(Basis.from_euler(rot).scaled(grain_scale), pos))
+		var shade := 0.08 + randf() * 0.14
+		_season_batch.set_instance_color(i, Color(shade, shade * 0.75, shade * 0.55, 0.75 + randf() * 0.2))
 
 
 func _spawn_season_fleck() -> void:
-	if _season_root == null:
+	if _season_batch == null or _season_fleck_count >= SEASON_MAX_FLECKS:
 		return
-	var fleck := MeshInstance3D.new()
-	var fm := BoxMesh.new()
-	## Slightly finer pepper grains on the beef.
-	var s := 0.0055 + randf() * 0.008
-	fm.size = Vector3(s * (0.5 + randf()), 0.0018 + randf() * 0.0014, s * (0.4 + randf() * 0.8))
-	fleck.mesh = fm
-	var ang := randf() * TAU
-	## Stay inside the scaled meat disc (mesh-local radius ~0.105).
-	var rad := sqrt(randf()) * 0.088
-	fleck.position = Vector3(cos(ang) * rad, 0.0008 + randf() * 0.0016, sin(ang) * rad)
-	fleck.rotation_degrees = Vector3(randf() * 25.0 - 12.0, rad_to_deg(ang) + randf() * 40.0, randf() * 30.0 - 15.0)
-	var fmat := StandardMaterial3D.new()
-	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fmat.no_depth_test = false
-	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
-	fmat.render_priority = PATTY_BODY_PRIORITY + 1
-	## Dark pepper / spice flecks.
-	var shade := 0.08 + randf() * 0.14
-	fmat.albedo_color = Color(shade, shade * 0.75, shade * 0.55, 0.75 + randf() * 0.2)
-	fleck.material_override = fmat
-	fleck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	fleck.sorting_offset = 0.0
-	_season_root.add_child(fleck)
 	_season_fleck_count += 1
+	_season_batch.visible_instance_count = _season_fleck_count
 
 
 func cheese_ready() -> bool:

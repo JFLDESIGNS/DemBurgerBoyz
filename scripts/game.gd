@@ -23105,7 +23105,7 @@ func _update_held_shaker(_delta: float) -> void:
 	shaker_root.rotation_degrees = Vector3(180.0, 25.0, 0.0)
 	var target = _nearest_patty_near(Vector3(hit.x, GRILL_SURFACE_Y, hit.z), 0.22)
 	var over_beef: bool = target != null
-	if shaker_particles:
+	if shaker_particles and shaker_particles.emitting != over_beef:
 		shaker_particles.emitting = over_beef
 	_shaker_rattling = over_beef
 	if game_audio:
@@ -23113,6 +23113,8 @@ func _update_held_shaker(_delta: float) -> void:
 	if over_beef and shaker_season_cool <= 0.0:
 		shaker_season_cool = 0.05
 		_shaker_did_season = true
+		if target.seasoning >= 1.0 and target._season_fleck_count >= target.SEASON_MAX_FLECKS:
+			return
 		if mp_enabled and not _mp_applying and int(target.get("net_id")) >= 0:
 			if _mp_season_sync_cool <= 0.0:
 				_mp_season_sync_cool = 0.05

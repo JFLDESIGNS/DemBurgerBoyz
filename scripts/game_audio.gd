@@ -913,6 +913,8 @@ func play_ext_pressure_tap() -> void:
 
 func set_shaker_rattle(active: bool) -> void:
 	## Plastic shaker rattle + salt sprinkle while held over a patty.
+	if _shake_season_on == active:
+		return
 	_shake_season_on = active
 	_sync_shaker_rattle()
 
