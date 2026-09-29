@@ -63910,8 +63910,8 @@ func _update_bin_fills_3d(only_id: String = "") -> void:
 		var t: float = clampf(float(stock) / float(cap), 0.0, 1.0)
 		var full_y: float = _bin_fill_val(id, "full")
 		var empty_y: float = _bin_fill_val(id, "empty")
-		# Lower the full-stock image plane by 1.5 world inches, tapering to the empty level.
-		full_y = maxf(empty_y, full_y - .0381 / maxf(.001, tub.global_basis.y.length()))
+		# Lower the full-stock image plane by 0.9 world inches, tapering to the empty level.
+		full_y = maxf(empty_y, full_y - .02286 / maxf(.001, tub.global_basis.y.length()))
 		var y: float = lerpf(empty_y, full_y, t) + _bin_fill_val(id, "y")
 		fill.position = Vector3(_bin_fill_val(id, "x"), y, _bin_fill_val(id, "z"))
 		var fill_yaw: float = 180.0
