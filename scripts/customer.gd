@@ -2308,21 +2308,6 @@ func _process(delta: float) -> void:
 		if is_leaving: _leave_walk_x=global_position.x
 
 func _advance_customer(delta: float) -> void:
-	if bool(get_meta("street_join_approach", false)) and not is_leaving:
-		scale = scale.move_toward(Vector3.ONE, delta*.35)
-		if mp_host_driven:
-			_update_host_driven_pose(delta)
-			if is_waiting: remove_meta("street_join_approach")
-			return
-		var destination = Vector3(target_x, STAND_Y, 2.25)
-		var direction = destination - global_position
-		if direction.length() > .06:
-			rotation.y = lerp_angle(rotation.y, atan2(direction.x, direction.z), minf(delta*7,1))
-			global_position = global_position.move_toward(destination, delta*1.6)
-			_play_anim("walk")
-			return
-		global_position = destination; scale = Vector3.ONE
-		remove_meta("street_join_approach")
 	if bool(get_meta("meal_stepping_aside", false)):
 		_play_anim("walk")
 		_apply_bobble(true)

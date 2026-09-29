@@ -30793,6 +30793,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.visible = true
 	walker.set_meta("street_hail", "")
 	walker.set_meta("street_hail_time", 0.0)
+	if walker.has_node("HailAccepted"): walker.get_node("HailAccepted").hide()
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	if is_run and walker.has_method("play_street_run"):
@@ -30841,6 +30842,7 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 	walker.visible = true
 	walker.set_meta("street_hail", "")
 	walker.set_meta("street_hail_time", 0.0)
+	if walker.has_node("HailAccepted"): walker.get_node("HailAccepted").hide()
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
@@ -31013,6 +31015,35 @@ func mp_background_person_hail(idx: int, result: String) -> void:
 	elif result == "join":
 		walker.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
 		walker._play_anim("idle")
+		walker.set_meta("street_hail_time", .55)
+		_show_street_hail_acceptance(walker)
+	elif result == "join_exit":
+		_start_street_hail_exit(idx)
+	elif result == "join_wait":
+		walker.hide(); walker._wawa_click_area.collision_layer = 0
+
+
+func _show_street_hail_acceptance(walker: Node3D) -> void:
+	var badge = walker.get_node_or_null("HailAccepted") as Label3D
+	if badge == null:
+		badge = Label3D.new(); badge.name = "HailAccepted"
+		badge.text = "✓  ON MY WAY!"
+		badge.font = preload("res://assets/fonts/Fredoka-SemiBold.ttf")
+		badge.font_size = 40; badge.outline_size = 10; badge.pixel_size = .008
+		badge.modulate = Color("D7FFB0"); badge.outline_modulate = Color("24432A")
+		badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		badge.position = Vector3(0, CustomerScript.BAR_Y + .24, 0)
+		walker.add_child(badge)
+	badge.show()
+
+
+func _start_street_hail_exit(idx: int) -> void:
+	var walker = bg_people[idx]
+	walker.set_meta("street_hail", "join_exit")
+	# Negative world X is screen-right, matching the normal customer entrance.
+	bg_people_dir[idx] = -1.0
+	walker.rotation_degrees.y = CustomerScript.WALK_MINUS_X_YAW
+	walker.play_street_run(1.35)
 
 
 func _update_background_hail(idx: int, delta: float) -> bool:
@@ -31027,6 +31058,17 @@ func _update_background_hail(idx: int, delta: float) -> bool:
 		walker.rotation_degrees.y = CustomerScript.WALK_PLUS_X_YAW if float(bg_people_dir[idx]) > 0 else CustomerScript.WALK_MINUS_X_YAW
 		walker.play_street_rejection(false)
 	elif result == "join":
+		var remaining = maxf(0, float(walker.get_meta("street_hail_time", .55)) - delta)
+		walker.set_meta("street_hail_time", remaining)
+		if remaining <= 0: _start_street_hail_exit(idx)
+		return true
+	elif result == "join_exit":
+		walker.position.x = move_toward(walker.position.x, -BG_PEOPLE_EDGE_X, delta * 7.0)
+		if is_equal_approx(walker.position.x, -BG_PEOPLE_EDGE_X):
+			walker.set_meta("street_hail", "join_wait")
+			walker.hide(); walker._wawa_click_area.collision_layer = 0
+		return true
+	elif result == "join_wait":
 		if mp_enabled and not NetManager.is_host(): return true
 		if _waiting_customer_count() >= MAX_CUSTOMERS or _challenge_blocks_spawns() or service_window_closed or day_time <= 0 or tutorial_mode or _bts_day_intro_active or _boss_intro_running: return true
 		var preset: Dictionary = walker.get_custom_character_preset()
@@ -31035,28 +31077,24 @@ func _update_background_hail(idx: int, delta: float) -> bool:
 		var lane = clampi(_waiting_customer_count(),0,CustomerScript.LANE_X.size()-1)
 		var patience = float(_location_stats().get("patience_base",92.0))
 		if mp_enabled and NetManager.is_online():
-			mp_background_person_join.rpc(idx,nid,order,preset,walker.global_position,walker.scale.x,lane,patience)
+			mp_background_person_join.rpc(idx,nid,order,preset,lane,patience)
 		else:
-			mp_background_person_join(idx,nid,order,preset,walker.global_position,walker.scale.x,lane,patience)
+			mp_background_person_join(idx,nid,order,preset,lane,patience)
 		return true
 	return false
 
 
 @rpc("authority", "call_local", "reliable")
-func mp_background_person_join(idx: int, nid: int, order: Array, preset: Dictionary, origin: Vector3, size_value: float, lane: int, patience: float) -> void:
+func mp_background_person_join(idx: int, nid: int, order: Array, preset: Dictionary, lane: int, patience: float) -> void:
 	if idx < 0 or idx >= bg_people.size(): return
 	var walker = bg_people[idx]
+	if str(walker.get_meta("street_hail", "")) == "joined": return
+	walker.set_meta("street_hail", "joined")
 	walker.hide(); walker._wawa_click_area.collision_layer = 0
 	bg_people_active[idx] = false
 	bg_people_wait[idx] = randf_range(BG_PEOPLE_WAIT_MIN,BG_PEOPLE_WAIT_MAX)
+	# Spawn a separate customer with identical saved traits at the regular entrance.
 	_spawn_customer_local(order,Color.WHITE,patience,lane,nid,-1,0,false,-1,false,preset,true)
-	var customer = customers.back()
-	customer.global_position = origin
-	customer.scale = Vector3.ONE * size_value
-	customer.set_meta("street_join_approach",true)
-	customer._play_anim("walk")
-	if mp_enabled and not NetManager.is_host():
-		customer.apply_host_snapshot(origin,CustomerScript.FACE_TRUCK_YAW,true)
 
 
 func _play_street_car_whoosh_if_passing() -> void:
