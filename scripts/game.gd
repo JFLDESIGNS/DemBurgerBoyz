@@ -49166,7 +49166,18 @@ func _supply_order_pending(id: String) -> bool:
 	for o in supply_orders:
 		if typeof(o) == TYPE_DICTIONARY and str(o.get("id", "")) == id:
 			return true
+	if is_instance_valid(mail_delivery_truck):
+		for order in mail_delivery_truck.orders:
+			if str(order[0]) == id: return true
+	for parcel in supply_delivery_fx:
+		if str(parcel.get("id", "")) == id: return true
 	return false
+
+
+func _ingredient_restock_quantity(id: String) -> int:
+	var room := maxi(0, _ingredient_stock_cap(id) - int(supply_stock.get(id, 0)))
+	var affordable := maxi(0, int(floor((money + .000001) / _supply_buy_unit_cost(id))))
+	return mini(room, affordable)
 
 
 func _buy_supply(id: String) -> void:
@@ -49181,6 +49192,7 @@ func _buy_supply(id: String) -> void:
 func _buy_supply_local(id: String) -> void:
 	if not playing:
 		return
+	if not SUPPLY_IDS.has(id) and not (_is_syrup_supply(id) and SODA_FLAVORS.has(_flavor_from_syrup_id(id))): return
 	if _supply_order_pending(id):
 		_flash("Already ordered — cat's on the way", Color("FFE082"))
 		return
@@ -49191,14 +49203,15 @@ func _buy_supply_local(id: String) -> void:
 	if (not is_syrup) and int(supply_stock.get(id, 0)) >= _ingredient_stock_cap(id):
 		_flash("Fridge full — buy storage or use some stock", Color("FFE082"))
 		return
-	var pack := 1 if is_syrup else SUPPLY_BUY_PACK
+	var pack := 1 if is_syrup else _ingredient_restock_quantity(id)
 	var unit := _supply_buy_unit_cost(id)
 	var cost := unit * float(pack if not is_syrup else SUPPLY_BUY_PACK)
 	## Syrup: charge as a pack of concentrate (same pack count pricing feel).
 	if is_syrup:
 		cost = unit * float(SUPPLY_BUY_PACK)
 		pack = 1
-	if money + 0.001 < cost:
+	if pack <= 0 or money + 0.001 < cost:
+		if pack <= 0: cost = unit
 		_flash("Need %s to restock" % _format_money(cost), Color("EF5350"))
 		return
 	money -= cost
@@ -49214,6 +49227,8 @@ func _buy_supply_local(id: String) -> void:
 		"kind": "syrup" if is_syrup else "stock",
 		"seq": _supply_order_seq,
 	})
+	if mp_enabled and NetManager.is_host() and NetManager.is_online():
+		mp_supply_order_accepted.rpc(id, pack, "syrup" if is_syrup else "stock", _supply_order_seq)
 	_update_hud()
 	## Defer — phone rebuild frees this Buy button mid-pressed.
 	call_deferred("_refresh_phone_ui")
@@ -49645,6 +49660,7 @@ func _refresh_ingredient_stock_bars(only_id: String = "", refresh_fridge: bool =
 			fill.color = _stock_bar_color(stock, cap)
 		## User brightness/sat is on the icon shader; stock fade multiplies after.
 		if icon != null and is_instance_valid(icon):
+			_update_ingredient_chip_position(str(id), btn)
 			icon.material = _ensure_strip_icon_material()
 			icon.visible = stock > 0 and not _is_condiment(str(id))
 			if stock <= 0:
@@ -50267,15 +50283,16 @@ func _refresh_phone_ui() -> void:
 		bar.add_theme_stylebox_override("fill", bar_fill)
 		row.add_child(bar)
 
-		var pack_cost: float = _supply_buy_unit_cost(id) * float(SUPPLY_BUY_PACK)
+		var restock_amount := _ingredient_restock_quantity(str(id))
+		var pack_cost: float = _supply_buy_unit_cost(id) * float(restock_amount)
 		var buy := Button.new()
 		var pending := _supply_order_pending(id)
 		buy.text = "…" if pending else "Buy"
-		buy.disabled = pending
+		buy.disabled = pending or restock_amount <= 0
 		if pending:
 			buy.tooltip_text = "Cat delivering…"
 		else:
-			buy.tooltip_text = "Buy %d for %s · cat delivers in %ds" % [SUPPLY_BUY_PACK, _format_money(pack_cost), int(SUPPLY_ORDER_WAIT)]
+			buy.tooltip_text = "Restock %d for %s · cat delivers in %ds" % [restock_amount, _format_money(pack_cost), int(SUPPLY_ORDER_WAIT)]
 		buy.custom_minimum_size = Vector2(42, 24)
 		buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 		buy.focus_mode = Control.FOCUS_NONE
@@ -50404,6 +50421,10 @@ func _refresh_phone_supply_row(id: String) -> void:
 		var pending := _supply_order_pending(id)
 		buy.text = "…" if pending else "Buy"
 		buy.disabled = pending
+		if not _is_syrup_supply(id):
+			var amount := _ingredient_restock_quantity(id)
+			buy.disabled = pending or amount <= 0
+			buy.tooltip_text = "Cat delivering…" if pending else "Restock %d for %s · cat delivers in %ds" % [amount, _format_money(_supply_buy_unit_cost(id)*amount), int(SUPPLY_ORDER_WAIT)]
 
 
 func _style_phone_buy_button(btn: Button) -> void:
@@ -53110,7 +53131,7 @@ func _build_phone_ui() -> void:
 	phone_shop_page.add_child(inv_v)
 
 	var inv_hint := Label.new()
-	inv_hint.text = "Restock packs of %d" % SUPPLY_BUY_PACK
+	inv_hint.text = "Restock to full — buys what you can afford"
 	UiFontsScript.apply_label(inv_hint, false, 12)
 	inv_hint.add_theme_color_override("font_color", Color(0.78, 0.90, 0.82))
 	inv_v.add_child(inv_hint)
@@ -63734,7 +63755,7 @@ func _bin_fill_default_entry(id: String = "") -> Dictionary:
 		"sy": 1.0,
 		"full": -0.05,
 		"empty": -0.58,
-		"tilt": -56.0,
+		"tilt": -90.0,
 	}
 
 
@@ -63892,7 +63913,7 @@ func _update_bin_fills_3d(only_id: String = "") -> void:
 		var empty_y: float = _bin_fill_val(id, "empty")
 		var y: float = lerpf(empty_y, full_y, t) + _bin_fill_val(id, "y")
 		fill.position = Vector3(_bin_fill_val(id, "x"), y, _bin_fill_val(id, "z"))
-		var fill_yaw: float = 198.0 if id == "cheese" else 180.0
+		var fill_yaw: float = 180.0
 		fill.rotation_degrees = Vector3(_bin_fill_val(id, "tilt"), fill_yaw, 0.0)
 		fill.scale = Vector3(_bin_fill_val(id, "sx"), _bin_fill_val(id, "sy"), 1.0)
 		var fill_mat := fill.material_override as StandardMaterial3D
@@ -64086,6 +64107,7 @@ func _apply_ingredient_bin_strip_layout() -> void:
 					icon.rotation_degrees = CHEESE_STRIP_TILT_DEG
 				else:
 					icon.rotation_degrees = 0.0
+		_update_ingredient_chip_position(str(id), btn)
 		var label_margin := btn.get_node_or_null("Stack/LabelMargin") as MarginContainer
 		if label_margin != null:
 			label_margin.add_theme_constant_override("margin_top", int(ingredient_label_y))
@@ -64099,6 +64121,23 @@ func _apply_ingredient_bin_strip_layout() -> void:
 		var stock_bar := btn.get_node_or_null("Stack/StockBar") as Control
 		if stock_bar != null:
 			stock_bar.visible = ingredient_stock_visible
+
+
+func _update_ingredient_chip_position(id: String, btn: Control) -> void:
+	if not _is_bin_fill_ingredient(id): return
+	var margin = btn.get_node_or_null("Stack/IconMargin") as MarginContainer
+	if margin == null: return
+	var drop := 32.0
+	if is_instance_valid(camera):
+		var screen := _ingredient_tile_camera_screen(btn)
+		var at := camera.project_position(screen, ingredient_bin_cam_z)
+		drop = absf(camera.unproject_position(at + Vector3.DOWN * .0508).y - screen.y)
+		var ui = get_node_or_null("UI/Root") as Control
+		if is_instance_valid(ui): drop *= ui.size.y / maxf(1.0, get_viewport().get_visible_rect().size.y)
+	var top := int(round(_strip_gfx_icon_offset().y + drop))
+	if margin.get_theme_constant("margin_top") != top: margin.add_theme_constant_override("margin_top", top)
+	var icon = margin.get_node_or_null("StripIcon") as TextureRect
+	if icon != null: icon.rotation = 0.0
 
 
 func _queue_ingredient_bin_rebuild() -> void:
@@ -64312,6 +64351,12 @@ func _load_ingredient_bin_settings() -> void:
 		ingredient_bin_height = clampf(ingredient_bin_height * 1.4, 0.2, 2.0)
 		cfg.set_value(s, "height", ingredient_bin_height)
 		cfg.set_value(s, "height_40pct_v1", true)
+		cfg.save(GFX_CFG_PATH)
+	if not cfg.has_section_key(s, "level_fill_art_v1"):
+		for id in BIN_FILL_IDS:
+			_bin_fill_store(id, "tilt", -90.0)
+			cfg.set_value(s, "fill_%s_tilt" % id, -90.0)
+		cfg.set_value(s, "level_fill_art_v1", true)
 		cfg.save(GFX_CFG_PATH)
 
 
@@ -76703,11 +76748,22 @@ func mp_request_soda_tank_drain(flavor_id: String, tank_amount: float) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_buy_supply(id: String) -> void:
+	if not NetManager.is_host(): return
 	_mp_applying = true
 	_buy_supply_local(id)
 	_mp_applying = false
 	if NetManager.is_host():
 		_mp_broadcast_economy()
+
+
+@rpc("authority", "call_remote", "reliable")
+func mp_supply_order_accepted(id: String, pack: int, kind: String, sequence: int) -> void:
+	if NetManager.is_host(): return
+	for order in supply_orders:
+		if int(order.get("seq", -1)) == sequence: return
+	_supply_order_seq = maxi(_supply_order_seq, sequence)
+	supply_orders.append({"id":id, "pack":pack, "kind":kind, "wait":SUPPLY_ORDER_WAIT, "seq":sequence})
+	call_deferred("_refresh_phone_ui")
 
 
 @rpc("any_peer", "call_local", "reliable")
