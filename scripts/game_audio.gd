@@ -1347,8 +1347,8 @@ func play_ingredient(id: String, volume_scale: float = 1.0) -> void:
 		play_bun_thud(volume_scale)
 		return
 	var midi: int = int(INGREDIENT_MIDI.get(id, 60))
-	## Soft quiet tap — stays under sizzle / radio / grade stingers (+35% vs prior 0.15).
-	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.2025 * maxf(0.0, volume_scale))
+	## Ingredient piano notes at twice the previous playback gain.
+	_play_cached("ing_%d" % midi, func(): return _make_soft_note(midi, 0.32), 0.0, 0.405 * maxf(0.0, volume_scale))
 
 
 func play_bun_thud(volume_scale: float = 1.0) -> void:
