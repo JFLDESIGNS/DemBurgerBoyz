@@ -1716,8 +1716,9 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	## HOLD-zone taps. voice: 0 = drum · 1 = closed hi-hat · 2 = open hat / rim.
 	if _players.is_empty():
 		return
-	# Louder dedicated kit; no piano/steel layer masking the kick and snare.
-	volume_scale *= 2.4
+	# Double the current drum level and restore the original layered metal hit.
+	var metal_volume := maxf(0.0, volume_scale) * 2.0
+	volume_scale *= 4.8
 	var p_i := clampi(pad, 0, 4)
 	var v := clampi(voice, 0, 2)
 	var key := "hold_kit_v5_%d_%d" % [v, p_i]
@@ -1739,6 +1740,9 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 		return
 	p.volume_db = linear_to_db(base_gain)
 	p.play()
+	var ting_midi := int(round(lerpf(76.0, 69.0, float(p_i) / 4.0)))
+	var ting_vol := 0.72 if v == 0 else (0.48 if v == 1 else 0.40)
+	play_spatula_ting(ting_midi, ting_vol * metal_volume)
 
 
 
