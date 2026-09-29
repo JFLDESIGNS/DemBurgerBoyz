@@ -49660,7 +49660,6 @@ func _refresh_ingredient_stock_bars(only_id: String = "", refresh_fridge: bool =
 			fill.color = _stock_bar_color(stock, cap)
 		## User brightness/sat is on the icon shader; stock fade multiplies after.
 		if icon != null and is_instance_valid(icon):
-			_update_ingredient_chip_position(str(id), btn)
 			icon.material = _ensure_strip_icon_material()
 			icon.visible = stock > 0 and not _is_condiment(str(id))
 			if stock <= 0:
@@ -63897,7 +63896,7 @@ func _update_bin_fills_3d(only_id: String = "") -> void:
 		if fill == null or not is_instance_valid(fill):
 			continue
 		var stock := int(supply_stock.get(id, 0))
-		var state := [stock, _ingredient_stock_cap(id), bin_fill_brightness]
+		var state := [stock, _ingredient_stock_cap(id), bin_fill_brightness, tub.global_basis.y.length()]
 		for key in ["full", "empty", "x", "y", "z", "tilt", "sx", "sy"]:
 			state.append(_bin_fill_val(id, key))
 		if fill.get_meta("stock_visual_state", []) == state:
@@ -63911,6 +63910,9 @@ func _update_bin_fills_3d(only_id: String = "") -> void:
 		var t: float = clampf(float(stock) / float(cap), 0.0, 1.0)
 		var full_y: float = _bin_fill_val(id, "full")
 		var empty_y: float = _bin_fill_val(id, "empty")
+		# Lower only the in-well plane by two world inches at full stock.
+		# Keep it above its empty level even when the whole tray is scaled smaller.
+		full_y = maxf(empty_y, full_y - .0508 / maxf(.001, tub.global_basis.y.length()))
 		var y: float = lerpf(empty_y, full_y, t) + _bin_fill_val(id, "y")
 		fill.position = Vector3(_bin_fill_val(id, "x"), y, _bin_fill_val(id, "z"))
 		var fill_yaw: float = 180.0
@@ -64107,7 +64109,6 @@ func _apply_ingredient_bin_strip_layout() -> void:
 					icon.rotation_degrees = CHEESE_STRIP_TILT_DEG
 				else:
 					icon.rotation_degrees = 0.0
-		_update_ingredient_chip_position(str(id), btn)
 		var label_margin := btn.get_node_or_null("Stack/LabelMargin") as MarginContainer
 		if label_margin != null:
 			label_margin.add_theme_constant_override("margin_top", int(ingredient_label_y))
@@ -64121,23 +64122,6 @@ func _apply_ingredient_bin_strip_layout() -> void:
 		var stock_bar := btn.get_node_or_null("Stack/StockBar") as Control
 		if stock_bar != null:
 			stock_bar.visible = ingredient_stock_visible
-
-
-func _update_ingredient_chip_position(id: String, btn: Control) -> void:
-	if not _is_bin_fill_ingredient(id): return
-	var margin = btn.get_node_or_null("Stack/IconMargin") as MarginContainer
-	if margin == null: return
-	var drop := 32.0
-	if is_instance_valid(camera):
-		var screen := _ingredient_tile_camera_screen(btn)
-		var at := camera.project_position(screen, ingredient_bin_cam_z)
-		drop = absf(camera.unproject_position(at + Vector3.DOWN * .0508).y - screen.y)
-		var ui = get_node_or_null("UI/Root") as Control
-		if is_instance_valid(ui): drop *= ui.size.y / maxf(1.0, get_viewport().get_visible_rect().size.y)
-	var top := int(round(_strip_gfx_icon_offset().y + drop))
-	if margin.get_theme_constant("margin_top") != top: margin.add_theme_constant_override("margin_top", top)
-	var icon = margin.get_node_or_null("StripIcon") as TextureRect
-	if icon != null: icon.rotation = 0.0
 
 
 func _queue_ingredient_bin_rebuild() -> void:
