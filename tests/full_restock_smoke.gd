@@ -27,7 +27,7 @@ func run() -> void:
 	g.owned_machines[g.SHOP_FRIDGE_UPGRADE] = true; g.supply_stock.cheese = 10
 	g._buy_supply_local("cheese")
 	assert(g.supply_orders[0].pack == 22 and g.money == 78, "Full restocks include upgraded capacity")
-	# Icons retain their original height; full well planes sit 0.9 inches lower.
+	# Icons retain their original height; full well planes sit 0.2 inches lower.
 	var btn = Button.new(); g.get_node("UI/Root").add_child(btn); btn.size = Vector2(100,100)
 	var stack = VBoxContainer.new(); stack.name = "Stack"; btn.add_child(stack)
 	var margin = MarginContainer.new(); margin.name = "IconMargin"; stack.add_child(margin)
@@ -40,9 +40,9 @@ func run() -> void:
 	var fill = MeshInstance3D.new(); fill.name = "Fill"; tub.add_child(fill)
 	g.ingredient_bin_nodes = {"tomato":tub}; g.supply_stock.tomato = g._ingredient_stock_cap("tomato")
 	g._update_bin_fills_3d("tomato")
-	assert(is_equal_approx(fill.global_position.y, -.05*.2 - .02286))
+	assert(is_equal_approx(fill.global_position.y, -.05*.2 - .00508))
 	assert(is_equal_approx(fill.rotation_degrees.x, -90))
 	assert(g._bin_fill_default_entry("tomato").tilt == -90)
 	g.queue_free(); await process_frame
-	print("FULL_RESTOCK_OK: capacity, affordable partial, duplicate delivery, exact pricing, original icons and well planes lowered 0.9 inches")
+	print("FULL_RESTOCK_OK: capacity, affordable partial, duplicate delivery, exact pricing, original icons and well planes lowered 0.2 inches")
 	quit()
