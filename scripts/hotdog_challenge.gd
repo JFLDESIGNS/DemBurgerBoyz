@@ -208,14 +208,11 @@ func play_sound(kind: String) -> void:
 		"breakout":
 			concrete.play()
 			voice.stream = sound_streams["bossahhhhhentrance"]
-			duck_music(maxf(concrete.stream.get_length(), voice.stream.get_length()/voice.pitch_scale), 12.0)
 		"eat":
 			voice.stream = sound_streams["eatboss"]
-			duck_music(voice.stream.get_length()/voice.pitch_scale, 8.0)
 		"laugh":
 			voice.pitch_scale = .70
 			voice.stream = sound_streams["laughboss"]
-			duck_music(voice.stream.get_length()/voice.pitch_scale, 8.0)
 		"wawawa":
 			voice.stream = load("res://sounds/wawawa.ogg")
 			voice.pitch_scale = .58; voice.volume_db = -7.0

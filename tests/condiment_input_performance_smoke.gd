@@ -15,7 +15,7 @@ func _function_body(source: String, function_name: String, next_function_name: S
 
 
 func _init() -> void:
-	var source := FileAccess.get_file_as_string("res://scripts/game.gd")
+	var source := FileAccess.get_file_as_string("res://scripts/game.gd").replace("\r\n", "\n")
 	var failures: Array[String] = []
 	var queue_body := _function_body(source, "_queue_condiment_pour", "_condiment_pour_target_world")
 	var deposit_pos := queue_body.find("_deposit_condiment_entry(entry)")

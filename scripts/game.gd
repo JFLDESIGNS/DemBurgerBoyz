@@ -65110,7 +65110,8 @@ func _queue_condiment_pour(id: String, station_index: int, networked: bool) -> v
 	if not _is_condiment(id):
 		return
 	var entry := {"id": id, "station": station_index, "networked": networked, "deposited": false}
-	# Deposit only after the bottle finishes its visible squeeze.
+	# Accept the sauce and refresh its ticket checkmark immediately; pouring is cosmetic.
+	_deposit_condiment_entry(entry)
 	## Ignore a duplicate squeeze animation while this bottle is already traveling.
 	if _condiment_auto_active.has(id):
 		return
@@ -75304,7 +75305,7 @@ func mp_release_drag(net_id: int, generation: int = -1) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func mp_add_condiment(station_index: int, id: String) -> void:
 	## Reliable call-local keeps the bottle travel/pour synchronized for every cook;
-	## the host still owns shared ingredient stock when the sauce lands.
+	## the host still owns shared ingredient stock when the click is accepted.
 	if not _is_condiment(id) or station_index < 0 or station_index >= STATION_COUNT:
 		return
 	_queue_condiment_pour(id, station_index, true)

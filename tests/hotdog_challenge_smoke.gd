@@ -27,7 +27,10 @@ func run() -> void:
 	assert(boss.concrete.volume_db == -3.0 and boss.voice.volume_db == -1.0)
 	assert(boss.voice.stream.resource_path.ends_with("bossahhhhhentrance.wav"))
 	assert(boss.concrete.stream.get_length() <= 1.85)
-	assert(boss.music.volume_db < -15.0)
+	assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Entrance voice must not lower music")
+	for voice_kind in ["eat", "laugh", "wawawa"]:
+		boss.play_sound(voice_kind)
+		assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Boss voice must not lower music: " + voice_kind)
 	boss.advance_phase();assert(boss.phase == "ready")
 	assert(g._resolve_serve_customer() == boss.customer)
 	var ticket_timer = g.tickets[boss.customer].get_meta("timer_label")
