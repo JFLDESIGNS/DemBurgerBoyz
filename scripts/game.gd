@@ -11709,7 +11709,7 @@ func _spatula_roll_midi_offset_for_roll(roll: float) -> int:
 
 
 func _register_hold_ttt_tap(world_pos: Vector3) -> void:
-	## Triple-tap HOLD cook-edge (closest to us) → reveal scratched tic-tac-toe.
+	## Choose tic-tac-toe from the deck menu; drumming never opens a board.
 	## Once revealed, taps place X/O using the cursor/hover cell (not a tip offset miss).
 	if world_pos == Vector3.ZERO or _spatula_mute_ting:
 		return
@@ -11730,28 +11730,6 @@ func _register_hold_ttt_tap(world_pos: Vector3) -> void:
 		if cell >= 0 and bool(_grill_ttt.is_playable()):
 			_request_ttt_move(cell)
 			return
-		## Finished game — triple-tap again to scratch a fresh board.
-		if int(_grill_ttt.get("winner")) != 0:
-			var zone_fin := _grill_zone_at(aim)
-			if str(zone_fin.get("id", "")) != "hold":
-				return
-			_ttt_tap_cool = TTT_TAP_WINDOW
-			_ttt_tap_count += 1
-			if _ttt_tap_count >= 3:
-				_ttt_tap_count = 0
-				_request_ttt_reveal(true)
-			return
-		return
-	var zone := _grill_zone_at(aim)
-	if str(zone.get("id", "")) != "hold":
-		return
-	if _grill_hold_drum_pad_at(aim) != TTT_COOK_PAD and _grill_hold_drum_pad_at(world_pos) != TTT_COOK_PAD:
-		return
-	_ttt_tap_cool = TTT_TAP_WINDOW
-	_ttt_tap_count += 1
-	if _ttt_tap_count >= 3:
-		_ttt_tap_count = 0
-		_request_ttt_reveal(false)
 
 
 func _update_grill_ttt_hover() -> void:

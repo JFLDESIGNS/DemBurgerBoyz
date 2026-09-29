@@ -56,7 +56,7 @@ func build_prop():
  var cover=MeshInstance3D.new();var plane=PlaneMesh.new();plane.size=Vector2(.118,.178);cover.mesh=plane;cover.position.y=.019;prop.add_child(cover)
  var ink=StandardMaterial3D.new();Card.art(0);ink.albedo_texture=Card.atlas;ink.uv1_scale=Vector3(1.0/3.0,.5,1);ink.roughness=.8;cover.material_override=ink;cover.rotation.y=PI
  box_parts=[mesh,cover]
- spade=Label3D.new();spade.text="♠";spade.font_size=64;spade.pixel_size=.002;spade.position.y=.05;spade.billboard=BaseMaterial3D.BILLBOARD_ENABLED;spade.modulate=Color("FFF3D7");spade.outline_modulate=Color("173E47");spade.outline_size=10;prop.add_child(spade)
+ spade=Label3D.new();spade.text="♠";spade.font_size=64;spade.pixel_size=.0008;spade.position.y=.05;spade.billboard=BaseMaterial3D.BILLBOARD_ENABLED;spade.modulate=Color("FFF3D7");spade.outline_modulate=Color("173E47");spade.outline_size=10;prop.add_child(spade)
  update_box_visual()
  var area=Area3D.new();prop.add_child(area);area.collision_layer=1;area.collision_mask=0
  var shape=CollisionShape3D.new();var target=BoxShape3D.new();target.size=Vector3(.20,.1,.24);shape.shape=target;area.add_child(shape)
@@ -94,6 +94,12 @@ func request(action: String,value: Variant=null):
   else:put_away()
   return
  elif peer not in players:return
+ elif action=="choose" and str(value)=="tic_tac_toe" and phase in ["choose","ready","finished"]:
+  players.clear();hands.clear();deck.clear();dealer.clear();bot_hand.clear();done.clear();mode="";phase="choose";message="Choose a game. Cards are private."
+  if online():put_away.rpc()
+  else:put_away()
+  game._request_ttt_reveal(true)
+  return
  elif action=="choose" and str(value) in ["draw","blackjack"] and phase in ["choose","ready","finished"]:
   mode=str(value);phase="ready";message="Deal to play the chef, or invite your partner." if mode=="draw" else "Blackjack: hit or stand. Dealer stands on 17."
  elif action=="deal" and phase in ["ready","finished"]:
@@ -197,6 +203,7 @@ func render():
  if shown.get("phase","") in ["choose","ready","finished"]:
   add_button("Five-card draw",func():send("choose","draw"))
   add_button("Blackjack",func():send("choose","blackjack"))
+  add_button("Tic-tac-toe",func():send("choose","tic_tac_toe"))
   if shown.get("mode","")!="":add_button("Deal",func():send("deal"))
  elif not shown.get("waiting",false):
   if shown.mode=="draw":add_button("Draw / Keep",func():send("draw",selected))
