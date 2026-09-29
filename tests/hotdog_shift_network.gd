@@ -56,7 +56,7 @@ func run() -> void:
 		await wait_mark("guest_ready_order")
 		for i in 25:
 			boss.resolve_result(true)
-			if boss.phase == "slump": boss.advance_phase(); boss.advance_phase()
+			while boss.phase in ["slump", "revive", "revive_smash_first", "revive_smash_second"]: boss.advance_phase()
 		assert(boss.phase == "victory")
 		boss.advance_phase(); boss.advance_phase()
 		await wait_mark("guest_results")

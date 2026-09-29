@@ -229,8 +229,8 @@ func play_sound(kind: String) -> void:
 	voice.pitch_scale = VOICE_PITCH
 	voice.volume_db = -1.0
 	match kind:
-		"breakout":
-			concrete.play()
+		"breakout", "revive_roar":
+			if kind == "breakout": concrete.play()
 			voice.volume_db = 2.0
 			voice.stream = sound_streams["bossahhhhhentrance"]
 		"eat":
@@ -385,8 +385,10 @@ func play(name_value: String) -> float:
 	if not customer.player.has_animation(name_value):
 		push_error("Missing Baron animation: " + name_value)
 		return .1
+	var length = customer.player.get_animation(name_value).length
+	customer.player.speed_scale = maxf(1.0, length / .55) if name_value == "revive" else 1.0
 	customer.player.play(name_value, .06)
-	return customer.player.get_animation(name_value).length
+	return length / customer.player.speed_scale
 
 func begin_eating() -> void:
 	if phase not in ["ready", "feeding"]: return
@@ -426,7 +428,7 @@ func resolve_result(correct: bool, reason: String = "WRONG BURGER!") -> void:
 			start_victory()
 		elif perfect % 5 == 0:
 			milestone_history.append(perfect)
-			phase = "slump"; timer = play("slump") + (2.4 if perfect == FINAL_STAGE else .35)
+			phase = "slump"; timer = play("slump") + (3.4 if perfect == FINAL_STAGE else 1.35)
 			customer.is_waiting = false
 		else: ready_order()
 	else:
@@ -519,8 +521,14 @@ func advance_phase() -> void:
 		"defeat":
 			game._flash("CHALLENGE LOST!  Baron Brat wins — 5 orders lost", Color("FF8A80"), 6)
 			cancel(); return
-		"slump": phase = "revive"; timer = play("revive")
-		"revive": ready_order()
+		"slump":
+			phase = "revive"; timer = play("revive")
+			sound_event("revive_roar")
+		"revive":
+			phase = "revive_smash_first"; start_smash()
+		"revive_smash_first":
+			phase = "revive_smash_second"; start_smash()
+		"revive_smash_second": ready_order()
 		"victory":
 			phase = "sinking"; timer = SINK_SECONDS
 			customer.player.pause()
@@ -586,7 +594,7 @@ func show_results() -> void:
 func impact(duration: float) -> void:
 	impact_serial += 1
 	game._start_slot_camera_shake(minf(duration, .5),.075)
-	sound_event(("smash1" if randi()%2 else "smash2") if phase in ["smash", "idle_smash"] else "impact")
+	sound_event(("smash1" if randi()%2 else "smash2") if phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second"] else "impact")
 
 func refresh() -> void:
 	if not is_instance_valid(label): return
@@ -601,7 +609,7 @@ func refresh() -> void:
 		"idle_smash": message = "GROUND SMASH!  Timer paused — %.1fs left" % order_left
 		"defeat": message = "CHALLENGE LOST!  5 orders lost — BARON BRAT WINS!"
 		"slump": message = "20 PERFECT!  Is he… finished?" if perfect == FINAL_STAGE else "%d PERFECT!  He's down…" % perfect
-		"revive": message = "HE'S BACK!  FIVE MONSTER BURGERS TO GO!" if perfect == FINAL_STAGE else "BACK FOR MORE!"
+		"revive", "revive_smash_first", "revive_smash_second": message = "HE'S BACK!  FIVE MONSTER BURGERS TO GO!" if perfect == FINAL_STAGE else "BACK FOR MORE!"
 		"victory", "sinking": message = "25 / 25 PERFECT — BARON BRAT DEFEATED!"
 	if phase == "ready" and perfect >= FINAL_STAGE: message = "FINAL FIVE!  " + message
 	label.text = "BARON BRAT CHALLENGE\n" + message
@@ -661,7 +669,7 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 	if clip != animation:
 		play(animation)
 		if remaining > 0 and customer.player.has_animation(animation):
-			customer.player.seek(maxf(0,customer.player.get_animation(animation).length-remaining),true)
+			customer.player.seek(maxf(0,customer.player.get_animation(animation).length-remaining*customer.player.speed_scale),true)
 	if phase in ["sinking", "results"]:
 		customer.player.seek(customer.player.get_animation("slump").length, true)
 		customer.player.pause()

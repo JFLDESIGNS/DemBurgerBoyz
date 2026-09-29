@@ -39,7 +39,7 @@ func run() -> void:
 	assert(boss.voice.stream.resource_path.ends_with("bossahhhhhentrance.wav"))
 	assert(boss.concrete.stream.get_length() <= 1.85)
 	assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Entrance voice must not lower music")
-	for voice_kind in ["eat", "laugh", "wawawa"]:
+	for voice_kind in ["eat", "laugh", "wawawa", "revive_roar"]:
 		boss.play_sound(voice_kind)
 		assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Boss voice must not lower music: " + voice_kind)
 	boss.advance_phase();assert(boss.phase == "ready")
@@ -127,9 +127,27 @@ func run() -> void:
 		if i+1 in [5,10,15,20]:
 			assert(boss.phase == "slump")
 			var hold = boss.timer - boss.customer.player.get_animation("slump").length
-			assert(is_equal_approx(hold, 2.4 if i+1 == 20 else .35))
+			assert(is_equal_approx(hold, 3.4 if i+1 == 20 else 1.35))
+			boss.concrete.stop()
 			boss.advance_phase();assert(boss.phase == "revive")
+			assert(boss.timer <= .551 and boss.customer.player.speed_scale > 1.0)
+			assert(boss.voice.playing and boss.voice.stream == boss.sound_streams["bossahhhhhentrance"])
+			assert(not boss.concrete.playing, "Revival roars without replaying concrete breakout")
 			boss.advance_phase()
+			var recovery_clips = []
+			var frozen_clock = boss.order_left
+			for recovery_phase in ["revive_smash_first", "revive_smash_second"]:
+				assert(boss.phase == recovery_phase and not boss.can_serve())
+				assert(boss.customer.player.speed_scale == 1.0)
+				recovery_clips.append(boss.clip)
+				var impacts_before = boss.impact_serial
+				boss._process(boss.timer * .6)
+				assert(boss.impact_serial == impacts_before + 1)
+				assert(boss.effects.playing and boss.impact_sound.playing)
+				assert(boss.order_left == frozen_clock)
+				boss._process(boss.timer + .01)
+			assert(recovery_clips.has("hammer_double") and recovery_clips[0] != recovery_clips[1])
+			assert(boss.phase == "ready" and boss.order_left == boss.ORDER_SECONDS)
 	assert(boss.milestone_history == [5,10,15,20])
 	assert(boss.phase == "victory")
 	assert(boss.victory_played and not boss.music.playing)
