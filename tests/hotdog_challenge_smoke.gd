@@ -43,6 +43,12 @@ func run() -> void:
 		boss.play_sound(voice_kind)
 		assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Boss voice must not lower music: " + voice_kind)
 	boss.advance_phase();assert(boss.phase == "ready")
+	assert(boss.next_order_preview.order == boss.recipe_at(1))
+	assert(g.tickets[boss.next_order_preview].visible)
+	assert(g.tickets[boss.next_order_preview].get_meta("timer_label").text == "UP NEXT")
+	g._select_ticket(boss.next_order_preview)
+	assert(g.selected_customer == boss.customer and not boss.next_order_preview.is_waiting)
+	assert(not g._ticket_line_is_done("patty", ["patty"], boss.next_order_preview))
 	assert(g._resolve_serve_customer() == boss.customer)
 	var ticket_timer = g.tickets[boss.customer].get_meta("timer_label")
 	assert(ticket_timer.text == "17.0s LEFT")
@@ -116,6 +122,11 @@ func run() -> void:
 		assert(boss.phase == "ready")
 		if i >= 20:
 			assert(boss.customer.order.count("patty") in [2,3], "Final five must be multi-patty orders")
+		if i < 24:
+			assert(boss.next_order_preview.order == boss.recipe_at(i+1))
+			assert(g.tickets[boss.next_order_preview].visible)
+		else:
+			assert(not g.tickets[boss.next_order_preview].visible, "Final burger has no phantom next order")
 		g.stations[0].items = boss.customer.order.duplicate()
 		g._complete_serve(0,boss.customer)
 		# Duplicate completion cannot credit or advance the same burger twice.
@@ -160,6 +171,7 @@ func run() -> void:
 	boss._process(10)
 	assert(boss.phase == "results", "Victory card waits for acknowledgement")
 	boss.finish_results();assert(not boss.active() and boss.result_screen == null)
+	assert(boss.next_order_preview == null and g.tickets.size() == 1)
 	assert(not boss.music.playing and not boss.voice.playing and not boss.effects.playing and not boss.concrete.playing)
 	assert(normal.visible and normal.process_mode == Node.PROCESS_MODE_INHERIT)
 	assert(g.selected_customer == normal)

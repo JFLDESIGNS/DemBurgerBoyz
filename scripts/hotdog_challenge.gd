@@ -13,6 +13,7 @@ const VOICE_PITCH = .78
 const NET_ID = 1900000050
 var game: Node
 var customer: Node3D
+var next_order_preview: Node3D
 var phase = ""
 var perfect = 0
 var mistakes = 0
@@ -193,9 +194,36 @@ func apply_placement() -> void:
 		customer.scale = Vector3.ONE * boss_scale
 
 func current_recipe() -> Array:
-	var index = perfect + mistakes
-	if perfect >= FINAL_STAGE: index = HARD_DECK_START + perfect - FINAL_STAGE + mistakes
+	return recipe_at(perfect)
+
+func recipe_at(perfect_count: int) -> Array:
+	var index = perfect_count + mistakes
+	if perfect_count >= FINAL_STAGE: index = HARD_DECK_START + perfect_count - FINAL_STAGE + mistakes
 	return recipes[mini(index, recipes.size()-1)]
+
+func refresh_next_order() -> void:
+	if phase not in ["ready", "feeding", "idle_smash"] or perfect >= TOTAL - 1:
+		if is_instance_valid(next_order_preview) and game.tickets.has(next_order_preview):
+			game.tickets[next_order_preview].hide()
+		return
+	var next_recipe = recipe_at(perfect + 1)
+	if not is_instance_valid(next_order_preview):
+		next_order_preview = preload("res://scripts/mobile_ticket_owner.gd").new()
+		next_order_preview.name = "BossNextOrderPreview"
+		next_order_preview.set_meta("hotdog_preview", true)
+		next_order_preview.set_meta("mp_net_id", NET_ID + 1)
+		next_order_preview.is_waiting = false
+		next_order_preview.process_mode = Node.PROCESS_MODE_DISABLED
+		add_child(next_order_preview)
+	if next_order_preview.order != next_recipe:
+		game._remove_ticket(next_order_preview)
+		next_order_preview.order.assign(next_recipe)
+	if not game.tickets.has(next_order_preview):
+		game._create_ticket(next_order_preview)
+		var wrap = game.tickets[next_order_preview]
+		wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		game._update_ticket_seconds_label(wrap, next_order_preview)
+	game.tickets[next_order_preview].show()
 
 func reserve_order() -> void:
 	if not can_serve(): return
@@ -597,6 +625,7 @@ func impact(duration: float) -> void:
 	sound_event(("smash1" if randi()%2 else "smash2") if phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second"] else "impact")
 
 func refresh() -> void:
+	refresh_next_order()
 	if not is_instance_valid(label): return
 	label.visible = active() and phase != "results"
 	if is_instance_valid(customer) and game.tickets.has(customer):
@@ -615,6 +644,10 @@ func refresh() -> void:
 	label.text = "BARON BRAT CHALLENGE\n" + message
 
 func cancel() -> void:
+	if is_instance_valid(next_order_preview):
+		game._remove_ticket(next_order_preview)
+		next_order_preview.queue_free()
+	next_order_preview = null
 	if is_instance_valid(result_screen): result_screen.queue_free()
 	result_screen = null
 	phase = ""; clip = ""; pending_result = -1; impact_at = -1

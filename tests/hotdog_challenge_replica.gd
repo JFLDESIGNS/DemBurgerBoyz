@@ -9,6 +9,7 @@ func run() -> void:
 	var orders=replica.make_recipes(42)
 	replica.sync_state("ready",0,0,orders,"idle_sway",0,1,1)
 	assert(replica.customer.order==orders[0]);assert(g.tickets.has(replica.customer))
+	assert(replica.next_order_preview.order == orders[1] and g.tickets.has(replica.next_order_preview))
 	replica.receive_sound("breakout")
 	assert(replica.voice.stream.resource_path.ends_with("bossahhhhhentrance.wav") and replica.concrete.playing)
 	replica.receive_sound("smash2")
@@ -20,6 +21,7 @@ func run() -> void:
 	var boss_id=replica.customer.get_instance_id()
 	g._mp_cull_stale_tickets({})
 	assert(is_instance_valid(replica.customer) and g.tickets.has(replica.customer))
+	assert(is_instance_valid(replica.next_order_preview) and g.tickets.has(replica.next_order_preview))
 	replica.sync_state("slump",10,2,orders,"slump",.5,2,1)
 	assert(not replica.can_serve() and replica.clip=="slump")
 	replica.concrete.stop()
@@ -36,6 +38,7 @@ func run() -> void:
 	assert(replica.order_left == 4.25 and replica.customer.position.z == 7)
 	assert(replica.customer.scale.is_equal_approx(Vector3.ONE*1.2))
 	assert(replica.customer.order==orders[12]);assert(replica.customer.get_instance_id()==boss_id)
+	assert(replica.next_order_preview.order == orders[13])
 	replica.sync_state("",25,2,orders,"",0,2,1)
 	assert(not replica.active() and g.customers.is_empty())
 	# Late join during victory must not index the finale deck out of bounds.

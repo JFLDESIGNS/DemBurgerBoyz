@@ -14,6 +14,8 @@ His entrance uses bossahhhhhentrance.wav and a 1.8-second concrete break with a 
 
 The host owns the automatic trigger, shift countdown, recipes, scoring and phase transitions in co-op. Clients receive boss state and animation updates and use the existing host-authoritative serving requests. Guests cannot independently trigger the closing encounter, advance the frozen clock or dismiss the shared victory screen. The shift light transition is blocked while the boss is active on either peer.
 
+The active boss ticket is accompanied by an UP NEXT preview of the burger following a successful order. The preview is not selectable, has no timer or ingredient checkmarks, updates with replacement orders, and disappears for the final burger. Both peers derive it from the shared recipe deck and progress. New Grubbah mobile orders cannot start during a challenge; their arrival countdown pauses during the boss encounter and resumes afterward.
+
 Implementation: `scripts/hotdog_challenge.gd`, `scripts/hotdog_boss_customer.gd`, integration points in `scripts/game.gd`. Model: `assets/characters/baron_brat_bg/baron_brat_bg.glb`. Song: `sounds/boss/concrete_crack_boss.mp3`.
 
 Validation: encounter smoke covers all 25 successful orders, timeout/wrong-order replacement, 5-loss defeat, paused countdown during flight and ambient smashes, hidden placement controls, duplicate completion, camera impacts, all four milestones, recovery, victory, repeat triggers and cleanup. Replica test covers shared progress, animation transitions, late-join victory and ticket retention. Full kitchen test verifies model animation, actual order ticket, visible mouth position and paused shift clock. Live two-machine co-op was not exercised.

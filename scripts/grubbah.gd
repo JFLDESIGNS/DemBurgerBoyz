@@ -165,7 +165,7 @@ func _process(delta: float) -> void:
  age+=delta;sync_time+=delta;flash_time=maxf(0,flash_time-delta)
  if host():
   auto_lay_paper()
-  if state.is_empty() and not game.tutorial_mode and game._challenge_phase=="":
+  if state.is_empty() and not game.tutorial_mode and game._challenge_phase=="" and not game._hotdog_active():
    wait_time-=delta
    if wait_time<=0:new_order()
   elif not state.is_empty():
@@ -185,6 +185,7 @@ func _process(delta: float) -> void:
    publish()
  update_visuals(delta)
 func new_order() -> void:
+ if game._hotdog_active() or game._challenge_phase!="":return
  var items: Array=["bun_bottom","patty"]
  if randf()<.8:items.append("cheese")
  if game.day>1:items.append(["lettuce","pickle","ketchup"].pick_random())

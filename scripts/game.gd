@@ -62994,6 +62994,7 @@ func _ticket_line_specs(order: Array) -> Array:
 
 
 func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null) -> bool:
+	if is_instance_valid(customer) and customer.get_meta("hotdog_preview", false): return false
 	if GameDataScript.is_soda_item(line_id):
 		if _customer_soda_handed(customer):
 			return true
@@ -63187,6 +63188,9 @@ func _update_ticket_seconds_label(wrap: Control, customer: Node3D) -> void:
 		return
 	var label := label_node as Label
 	if label == null or not is_instance_valid(label):
+		return
+	if is_instance_valid(customer) and customer.get_meta("hotdog_preview", false):
+		label.text = "UP NEXT"
 		return
 	if is_instance_valid(customer) and customer.get_meta("hotdog_boss", false):
 		var boss = _ensure_hotdog_challenge()
@@ -63444,6 +63448,7 @@ func _stamp_ticket_logo_watermark(img: Image) -> void:
 
 
 func _select_ticket(customer: Node3D) -> void:
+	if is_instance_valid(customer) and customer.get_meta("hotdog_preview", false): return
 	if not is_instance_valid(customer) or not customer.is_waiting:
 		_flash("That customer is gone", Color("EF5350"))
 		return
@@ -63519,7 +63524,7 @@ func _mp_cull_stale_tickets(seen_customer_ids: Dictionary) -> void:
 	## Co-op guest repair: tickets can outlive their customer array entry after a
 	## missed leave/sync race. Host IDs are authoritative.
 	for cust in tickets.keys():
-		if is_instance_valid(cust) and (bool(cust.get_meta("mobile_order",false)) or bool(cust.get_meta("hotdog_boss",false))): continue
+		if is_instance_valid(cust) and (bool(cust.get_meta("mobile_order",false)) or bool(cust.get_meta("hotdog_boss",false)) or bool(cust.get_meta("hotdog_preview",false))): continue
 		var stale := false
 		if cust == null or not is_instance_valid(cust):
 			stale = true
