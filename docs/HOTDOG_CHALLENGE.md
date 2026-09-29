@@ -10,7 +10,7 @@ Perfect counts are cumulative. At 10 and 30 he slumps and revives, then continue
 
 He starts farther away at Z = 6.3. Hidden > World > HOTDOG BOSS has live X, Y, Z and uniform Scale sliders, saved in user://hotdog_boss.cfg. Placement is shared with co-op clients.
 
-His entrance uses CC0 concrete breaking and a retro monster yell. Occasional wawawa uses the existing voice at 65% pitch. Audio sources are recorded in sounds/boss/SOURCES.md.
+His entrance uses bossahhhhhentrance.wav and a 1.8-second concrete break with a 0.35-second fade. Ground contact layers the impact thud with randomly selected smash1.wav or smash2.wav. eatboss.wav plays once at the eating callback for each burger, replacing the regular bite effect. Occasional laughboss.wav plays between actions, alongside the existing lower-pitched wawawa chatter. Audio sources are recorded in sounds/boss/SOURCES.md.
 
 The host owns recipes, countdown, scoring and phase transitions in co-op. Clients receive boss state and animation updates and use the existing host-authoritative serving requests.
 
@@ -18,4 +18,4 @@ Implementation: `scripts/hotdog_challenge.gd`, `scripts/hotdog_boss_customer.gd`
 
 Validation: encounter smoke covers all 50 successful orders, timeout/wrong-order replacement, 10-loss defeat, paused countdown during flight and ambient smashes, hidden placement controls, duplicate completion, camera impacts, both milestones, recovery, victory, repeat triggers and cleanup. Replica test covers shared progress, animation transitions, late-join victory and ticket retention. Full kitchen test verifies model animation, actual order ticket, visible mouth position and paused shift clock. Live two-machine co-op was not exercised.
 
-The order ticket shows the remaining seconds (red at five seconds), with PAUSED during boss reactions or handoff. Entrance concrete is +5 dB and the roar +10 dB louder than the initial mix; the song ducks by 12 dB for 3.5 seconds and then returns smoothly.
+The order ticket shows the remaining seconds (red at five seconds), with PAUSED during boss reactions or handoff. The supplied voice clips play at -1 dB, smash clips at -2/-3 dB, and the short concrete at -3 dB. The song ducks by 12 dB during the entrance and 8 dB during eating, laughter and ground impacts, then returns smoothly. All boss effects respect the SFX bus. Host-triggered sound events replicate the same smash choice to guests.

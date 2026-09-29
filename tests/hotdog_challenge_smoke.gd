@@ -24,7 +24,9 @@ func run() -> void:
 	assert(boss.customer.player.has_animation("revive"))
 	boss.advance_phase();assert(boss.phase == "emerge")
 	assert(boss.concrete.playing and boss.voice.playing)
-	assert(boss.concrete.volume_db == 0.0 and boss.voice.volume_db == 7.0)
+	assert(boss.concrete.volume_db == -3.0 and boss.voice.volume_db == -1.0)
+	assert(boss.voice.stream.resource_path.ends_with("bossahhhhhentrance.wav"))
+	assert(boss.concrete.stream.get_length() <= 1.85)
 	assert(boss.music.volume_db < -15.0)
 	boss.advance_phase();assert(boss.phase == "ready")
 	assert(g._resolve_serve_customer() == boss.customer)
@@ -51,6 +53,7 @@ func run() -> void:
 	before = boss.impact_serial
 	boss._process(boss.timer*.6)
 	assert(boss.impact_serial == before+1,"Ground smash must shake camera at impact")
+	assert(boss.effects.playing and boss.effects.stream in [boss.sound_streams["smash1"],boss.sound_streams["smash2"]])
 	boss.advance_phase()
 	assert(boss.customer.order != first, "Wrong orders must be replaced")
 	# Expired orders count once, change recipe, and get a fresh seventeen seconds.
@@ -70,8 +73,12 @@ func run() -> void:
 	boss.advance_phase()
 	assert(boss.phase == "ready" and boss.order_left == remaining)
 	assert(not "PAUSED" in g.tickets[boss.customer].get_meta("timer_label").text)
+	boss.laugh_left = 20; boss.voice_left = 0
 	boss.chatter_left = .01; boss._process(.02)
 	assert(boss.voice.playing and is_equal_approx(boss.voice.pitch_scale,.65))
+	boss.laugh_left = .01; boss.voice_left = 0; boss._process(.02)
+	assert(boss.voice.playing and boss.voice.stream.resource_path.ends_with("laughboss.wav"))
+	assert(boss.laugh_left >= 16)
 	# A valid handoff freezes the deadline even when the flight crosses it.
 	boss.order_left = .01
 	g._begin_customer_serve_handoff(boss.customer)
@@ -79,6 +86,12 @@ func run() -> void:
 	assert(boss.phase == "feeding" and boss.order_left == .01 and boss.mistakes == 2)
 	boss.begin_eating()
 	assert(boss.clip == "eat_thrown_burger")
+	boss.customer.start_eating_burger()
+	assert(boss.voice.playing and boss.voice.stream.resource_path.ends_with("eatboss.wav"))
+	assert(boss.eat_sound_played)
+	boss.voice_left = .4
+	boss.customer.chomp_burger()
+	assert(boss.voice_left == .4, "Repeated bites must not restart the eating sound")
 	g.stations[0].items = boss.customer.order.duplicate()
 	g._complete_serve(0,boss.customer); boss._process(.01)
 	assert(boss.perfect == 1)
@@ -99,7 +112,7 @@ func run() -> void:
 	assert(boss.milestone_history == [10,30])
 	assert(boss.phase == "victory")
 	boss.advance_phase();assert(not boss.active())
-	assert(not boss.music.playing)
+	assert(not boss.music.playing and not boss.voice.playing and not boss.effects.playing and not boss.concrete.playing)
 	assert(normal.visible and normal.process_mode == Node.PROCESS_MODE_INHERIT)
 	assert(g.selected_customer == normal)
 	assert(g.customers.size() == 1)

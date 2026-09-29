@@ -32,7 +32,12 @@ var order_left = ORDER_SECONDS
 var ambient_left = 14.0
 var chatter_left = 7.0
 var voice_left = 0.0
-var entrance_duck_left = 0.0
+var music_duck_left = 0.0
+var music_duck_db = 0.0
+var laugh_left = 18.0
+var eat_sound_played = false
+var effects: AudioStreamPlayer
+var sound_streams: Dictionary = {}
 var failure_reason = "WRONG BURGER!"
 var voice: AudioStreamPlayer
 var concrete: AudioStreamPlayer
@@ -83,8 +88,11 @@ func setup(owner_game: Node) -> void:
 	add_child(music)
 	voice = AudioStreamPlayer.new(); voice.bus = "SFX"; add_child(voice)
 	concrete = AudioStreamPlayer.new(); concrete.bus = "SFX"; add_child(concrete)
-	concrete.stream = load("res://sounds/boss/concrete_break.mp3")
-	concrete.volume_db = 0.0
+	concrete.stream = load("res://sounds/boss/concrete_break_short.ogg")
+	concrete.volume_db = -3.0
+	effects = AudioStreamPlayer.new(); effects.bus = "SFX"; add_child(effects)
+	for sound in ["eatboss", "laughboss", "smash1", "smash2", "bossahhhhhentrance"]:
+		sound_streams[sound] = load("res://sounds/" + sound + ".wav")
 
 func start_music() -> void:
 	if music.playing: return
@@ -154,18 +162,46 @@ func sound_event(kind: String) -> void:
 func receive_sound(kind: String) -> void:
 	if active(): play_sound(kind)
 
+func duck_music(seconds: float, reduction_db: float) -> void:
+	music_duck_left = maxf(music_duck_left, seconds)
+	music_duck_db = maxf(music_duck_db, reduction_db)
+	music.volume_db = linear_to_db(.62) - music_duck_db
+
 func play_sound(kind: String) -> void:
-	if kind == "breakout":
-		concrete.play()
-		voice.stream = load("res://sounds/boss/villain_yell.mp3")
-		voice.pitch_scale = .78; voice.volume_db = 7.0; voice_left = 3.0
-		entrance_duck_left = 3.5
-		music.volume_db = linear_to_db(.62) - 12.0
-	elif kind == "wawawa":
-		voice.stream = load("res://sounds/wawawa.ogg")
-		voice.pitch_scale = .65; voice.volume_db = -7.0; voice_left = 1.7
-	else: return
+	if kind in ["impact", "smash1", "smash2"]:
+		if is_instance_valid(game.game_audio): game.game_audio.play_truck_knock(.65 if kind != "impact" else 1.0)
+		if kind != "impact":
+			effects.stream = sound_streams[kind]
+			effects.volume_db = -2.0 if kind == "smash1" else -3.0
+			effects.play()
+			duck_music(effects.stream.get_length(), 8.0)
+		return
+	voice.pitch_scale = 1.0
+	voice.volume_db = -1.0
+	match kind:
+		"breakout":
+			concrete.play()
+			voice.stream = sound_streams["bossahhhhhentrance"]
+			duck_music(maxf(concrete.stream.get_length(), voice.stream.get_length()), 12.0)
+		"eat":
+			voice.stream = sound_streams["eatboss"]
+			duck_music(voice.stream.get_length(), 8.0)
+		"laugh":
+			voice.stream = sound_streams["laughboss"]
+			duck_music(voice.stream.get_length(), 8.0)
+		"wawawa":
+			voice.stream = load("res://sounds/wawawa.ogg")
+			voice.pitch_scale = .65; voice.volume_db = -7.0
+		_:
+			return
+	voice_left = 1.7 if kind == "wawawa" else voice.stream.get_length() + .05
 	voice.play()
+
+func eating_sound() -> void:
+	# The existing food-flight callbacks may chomp more than once per burger.
+	if not host() or phase != "feeding" or eat_sound_played: return
+	eat_sound_played = true
+	sound_event("eat")
 
 func handle_key(event: InputEvent) -> bool:
 	if not event is InputEventKey or not event.pressed or event.echo: return false
@@ -188,6 +224,7 @@ func start() -> bool:
 		return false
 	perfect = 0; mistakes = 0; pending_result = -1; milestone_history.clear()
 	order_left = ORDER_SECONDS; ambient_left = randf_range(12,18); chatter_left = randf_range(5,9)
+	laugh_left = randf_range(12,22); eat_sound_played = false
 	recipes = make_recipes(randi())
 	generation += 1
 	_spawn()
@@ -277,6 +314,7 @@ func resolve_result(correct: bool, reason: String = "WRONG BURGER!") -> void:
 	refresh(); broadcast()
 
 func ready_order() -> void:
+	eat_sound_played = false
 	phase = "ready"
 	order_left = ORDER_SECONDS
 	customer.order.assign(current_recipe())
@@ -293,8 +331,9 @@ func ready_order() -> void:
 
 func _process(delta: float) -> void:
 	if not active(): return
-	entrance_duck_left = maxf(0, entrance_duck_left-delta)
-	if entrance_duck_left <= 0:
+	music_duck_left = maxf(0, music_duck_left-delta)
+	if music_duck_left <= 0:
+		music_duck_db = 0.0
 		music.volume_db = move_toward(music.volume_db, linear_to_db(.62), delta*10.0)
 	if voice_left > 0:
 		voice_left -= delta
@@ -309,14 +348,17 @@ func _process(delta: float) -> void:
 		return
 	if phase == "ready":
 		order_left = maxf(0, order_left-delta)
-		ambient_left -= delta; chatter_left -= delta
+		ambient_left -= delta; chatter_left -= delta; laugh_left -= delta
 		if order_left <= 0: resolve_result(false, "TIME UP!")
 		elif ambient_left <= 0:
 			phase = "idle_smash"; customer.is_waiting = false
 			timer = play("hammer_left" if randi()%2 else "hammer_right"); impact_at = timer * .51
 			ambient_left = randf_range(12,18)
 			broadcast()
-		elif chatter_left <= 0:
+		elif laugh_left <= 0 and voice_left <= 0:
+			sound_event("laugh"); laugh_left = randf_range(16,26)
+			chatter_left = maxf(chatter_left, 4.0)
+		elif chatter_left <= 0 and voice_left <= 0:
 			sound_event("wawawa"); chatter_left = randf_range(7,12)
 		refresh()
 	elif phase == "feeding":
@@ -357,7 +399,7 @@ func advance_phase() -> void:
 func impact(duration: float) -> void:
 	impact_serial += 1
 	game._start_slot_camera_shake(duration,.075)
-	if is_instance_valid(game.game_audio): game.game_audio.play_truck_knock(1.0)
+	sound_event(("smash1" if randi()%2 else "smash2") if phase in ["smash", "idle_smash"] else "impact")
 
 func refresh() -> void:
 	if not is_instance_valid(label): return
@@ -380,7 +422,8 @@ func cancel() -> void:
 	if is_instance_valid(music): music.stop()
 	if is_instance_valid(voice): voice.stop()
 	if is_instance_valid(concrete): concrete.stop()
-	voice_left = 0; entrance_duck_left = 0
+	if is_instance_valid(effects): effects.stop()
+	voice_left = 0; music_duck_left = 0; music_duck_db = 0; eat_sound_played = false
 	game._sync_combat_audio()
 	if is_instance_valid(customer):
 		game._remove_ticket(customer)

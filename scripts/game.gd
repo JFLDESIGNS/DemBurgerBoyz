@@ -69957,7 +69957,7 @@ func _play_serve_fly_to_mouth(
 			stack.hide()
 		if is_instance_valid(customer) and customer.has_method("chomp_burger"):
 			customer.chomp_burger()
-		if game_audio and game_audio.has_method("play_burger_chomp"):
+		if game_audio and game_audio.has_method("play_burger_chomp") and not (is_instance_valid(customer) and customer.get_meta("hotdog_boss",false)):
 			game_audio.play_burger_chomp()
 		_spawn_serve_crumb_burst(fly_root,_customer_mouth_screen(customer).lerp(_customer_burger_hand_screen(customer), 0.3))
 	if reject_burger:

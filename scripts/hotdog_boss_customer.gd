@@ -25,8 +25,10 @@ func stop_order_clock() -> void: pass
 func apply_host_snapshot(_pos: Vector3, _yaw: float, _snap: bool = false) -> void: pass
 func begin_catch_burger(_authored_grab: bool = false) -> void:
 	if is_instance_valid(boss): boss.begin_eating()
-func start_eating_burger() -> void: pass
-func chomp_burger() -> void: pass
+func start_eating_burger() -> void:
+	if is_instance_valid(boss): boss.eating_sound()
+func chomp_burger() -> void:
+	if is_instance_valid(boss): boss.eating_sound()
 func finish_catch_burger() -> void: pass
 func burger_animation_duration(_eating: bool) -> float: return 0.65
 func mouth_global() -> Vector3:
