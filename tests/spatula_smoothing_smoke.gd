@@ -53,7 +53,7 @@ func _run() -> void:
 		return
 	for voice in 3:
 		for pad in 5:
-			if not cache.has("hold_kit_v4_%d_%d" % [voice, pad]):
+			if not cache.has("hold_kit_v5_%d_%d" % [voice, pad]):
 				_fail("HOLD voice %d pad %d was not pregenerated" % [voice, pad])
 				return
 	active.clear()

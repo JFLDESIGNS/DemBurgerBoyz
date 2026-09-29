@@ -1698,7 +1698,7 @@ func prewarm_spatula_audio() -> void:
 		_cache["tinggrill"] = loaded
 	for voice in 3:
 		for pad in 5:
-			var key := "hold_kit_v4_%d_%d" % [voice, pad]
+			var key := "hold_kit_v5_%d_%d" % [voice, pad]
 			if not _cache.has(key):
 				match voice:
 					1:
@@ -1716,11 +1716,11 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	## HOLD-zone taps. voice: 0 = drum · 1 = closed hi-hat · 2 = open hat / rim.
 	if _players.is_empty():
 		return
-	# Double the complete HOLD hit, including its layered steel tap.
-	volume_scale *= 2.0
+	# Louder dedicated kit; no piano/steel layer masking the kick and snare.
+	volume_scale *= 2.4
 	var p_i := clampi(pad, 0, 4)
 	var v := clampi(voice, 0, 2)
-	var key := "hold_kit_v4_%d_%d" % [v, p_i]
+	var key := "hold_kit_v5_%d_%d" % [v, p_i]
 	if not _cache.has(key):
 		match v:
 			1:
@@ -1739,10 +1739,7 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 		return
 	p.volume_db = linear_to_db(base_gain)
 	p.play()
-	## Louder tin / steel layer so HOLD hits still read as metal spatula on grill.
-	var ting_midi := int(round(lerpf(76.0, 69.0, float(p_i) / 4.0)))
-	var ting_vol := 0.72 if v == 0 else (0.48 if v == 1 else 0.40)
-	play_spatula_ting(ting_midi, ting_vol * maxf(0.0, volume_scale))
+
 
 
 func _load_tinggrill_stream() -> AudioStream:
@@ -3205,84 +3202,60 @@ func _make_spatula_ting_note(midi: int) -> AudioStreamWAV:
 
 
 func _make_hold_drum(pad: int) -> AudioStreamWAV:
-	## Spatula on HOLD — kick/tom with pitch drop + beater click (less sine-y).
-	## pad 0 (window) = higher tom; pad 4 (cook edge) = deeper kick.
-	var p := clampf(float(pad), 0.0, 4.0) / 4.0
-	var f_start := lerpf(210.0, 105.0, p)
-	var f_end := lerpf(118.0, 48.0, p)
-	var n := int(MIX_RATE * 0.28)
+	# Outer pads are hats; inside: snare, deep kick, low tom.
+	if pad == 0 or pad == 4: return _make_hold_hihat(pad, pad == 4)
+	var snare := pad == 1
+	var tom := pad == 3
+	var duration := .24 if snare else .38
+	var n := int(MIX_RATE * duration)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 5200 + pad * 31
+	rng.seed = 85131 + pad * 97
 	var phase := 0.0
+	var noise_low := 0.0
 	for i in n:
 		var t := float(i) / float(MIX_RATE)
-		## Classic drum pitch sweep — tight attack, warm body.
-		var sweep := exp(-t * 22.0)
-		var freq := lerpf(f_end, f_start, sweep)
-		phase += freq * TAU / float(MIX_RATE)
-		var env_body := exp(-t * 11.0)
-		var env_click := exp(-t * 70.0)
-		if t < 0.0014:
-			var a := t / 0.0014
-			env_body *= a
-			env_click *= a
-		var body := sin(phase) * 0.55 + sin(phase * 1.5) * 0.16 * exp(-t * 20.0)
-		## Beater / stick click — short filtered noise + mid tick.
-		var click := (
-			(rng.randf() * 2.0 - 1.0) * 0.38
-			+ sin(t * lerpf(2600.0, 1800.0, p) * TAU) * 0.26
-		) * env_click
-		## Soft sub thump under the body.
-		var sub := sin(t * f_end * 0.5 * TAU) * 0.20 * exp(-t * 8.0)
-		## Baked tin clang — spatula-on-steel character mixed into the drum.
-		var f_tin := lerpf(1180.0, 780.0, p)
-		var tin := (
-			sin(t * f_tin * TAU) * 0.28
-			+ sin(t * f_tin * 2.76 * TAU) * 0.18 * exp(-t * 36.0)
-			+ sin(t * f_tin * 5.2 * TAU) * 0.10 * exp(-t * 50.0)
-		) * exp(-t * 26.0)
-		var wave := (body * env_body + click + sub + tin) * 0.90
-		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 23000.0))
+		var attack := minf(1.0, t / .001)
+		var tail := minf(1.0, (duration - t) / .02)
+		var noise := rng.randf_range(-1.0, 1.0)
+		noise_low = lerpf(noise_low, noise, .22)
+		var wave: float
+		if snare:
+			# Drum-head body plus a tight, bright snare-wire crack.
+			phase += lerpf(178.0, 310.0, exp(-t * 55.0)) * TAU / MIX_RATE
+			var body := (sin(phase) * .55 + sin(t * 335.0 * TAU) * .16) * exp(-t * 23.0)
+			var wires := (noise - noise_low) * .78 * exp(-t * 19.0)
+			wave = tanh((body + wires) * 1.5) * .82
+		else:
+			var fundamental := 87.0 if tom else 49.0
+			phase += (fundamental + (145.0 if tom else 120.0) * exp(-t * 42.0)) * TAU / MIX_RATE
+			var body := sin(phase) * exp(-t * (12.0 if tom else 10.0))
+			var punch := sin(phase * 2.0) * .22 * exp(-t * 25.0)
+			var beater := (noise - noise_low) * .22 * exp(-t * 150.0)
+			wave = tanh((body + punch + beater) * 1.5) * .86
+		_write_s16(pcm, i, int(clampf(wave * attack * tail, -1.0, 1.0) * 28000.0))
 	return _wav_from_pcm(pcm, false)
 
 
 func _make_hold_hihat(pad: int, open_hat: bool) -> AudioStreamWAV:
-	## Tilted spatula on HOLD — closed hat (±45°) or open hat / rim (±90°).
-	var p := clampf(float(pad), 0.0, 4.0) / 4.0
-	var dur := 0.11 if not open_hat else 0.22
-	var n := int(MIX_RATE * dur)
+	# Short noise/metal ticks, with all partials below the sample-rate Nyquist limit.
+	var duration := .34 if open_hat else .10
+	var n := int(MIX_RATE * duration)
 	var pcm := PackedByteArray()
 	pcm.resize(n * 2)
 	var rng := RandomNumberGenerator.new()
-	rng.seed = (9100 if open_hat else 7300) + pad * 19
-	## Band-ish metal partials — brighter toward the window pad.
-	var f_met := lerpf(9200.0, 6200.0, p)
-	var decay := 55.0 if not open_hat else 18.0
-	var hp := 0.0
+	rng.seed = 73003 + pad * 19 + (100 if open_hat else 0)
+	var low := 0.0
 	for i in n:
-		var t := float(i) / float(MIX_RATE)
-		var env := exp(-t * decay)
-		if t < 0.0006:
-			env *= t / 0.0006
-		## Bright noise through a crude high-pass + ringing partials.
-		var nse := rng.randf() * 2.0 - 1.0
-		hp = lerpf(hp, nse, 0.55)
-		var air := (nse - hp) * (0.72 if not open_hat else 0.55)
-		var ring := (
-			sin(t * f_met * TAU) * 0.22
-			+ sin(t * f_met * 1.41 * TAU) * 0.16
-			+ sin(t * f_met * 2.17 * TAU) * 0.10
-			+ sin(t * lerpf(4800.0, 3200.0, p) * TAU) * 0.12 * exp(-t * 40.0)
-		)
-		## Open hat: extra sizzle + lower “chick” body; closed: tighter chick.
-		var chick := sin(t * lerpf(340.0, 220.0, p) * TAU) * (0.08 if open_hat else 0.14) * exp(-t * 48.0)
-		var sizzle := 0.0
-		if open_hat:
-			sizzle = (rng.randf() * 2.0 - 1.0) * 0.18 * exp(-t * 12.0)
-		var wave := (air * 0.85 + ring + chick + sizzle) * env
-		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 22000.0))
+		var t := float(i) / MIX_RATE
+		var noise := rng.randf_range(-1.0, 1.0)
+		low = lerpf(low, noise, .30)
+		var metal := sin(t * 4230.0 * TAU) * .12 + sin(t * 6170.0 * TAU) * .10 + sin(t * 8390.0 * TAU) * .07
+		var decay := 16.0 if open_hat else 65.0
+		var envelope := minf(1.0, t / .0007) * exp(-t * decay) * minf(1.0, (duration - t) / .015)
+		var wave := tanh(((noise - low) * .85 + metal) * 1.5) * envelope * .74
+		_write_s16(pcm, i, int(clampf(wave, -1.0, 1.0) * 26000.0))
 	return _wav_from_pcm(pcm, false)
 
 

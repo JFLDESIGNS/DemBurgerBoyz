@@ -76,14 +76,14 @@ func run() -> void:
 	expect(queued.has_meta("queued_tack") and queued.get_meta("queued_tack").visible, "Every queued ticket needs its 3D thumbtack")
 	var queued_note: Control = queued.get_meta("ticket_note")
 	var queued_pin: Control = queued.get_meta("queued_tack")
-	expect(is_equal_approx(queued_note.position.y, -15.0), "Queued paper must move up 15 pixels")
+	expect(is_equal_approx(queued_note.position.y, 5.0), "Queued paper must retain its existing offset")
 	expect(is_equal_approx(queued_pin.DURATION, 0.26), "Queued tack placement must take 0.26 seconds")
 	expect(is_equal_approx(queued_pin.sound.volume_db, -6.0), "Queued tack sounds must be 10 dB louder")
 	var fixed_pin_position := queued_pin.position
 	queued_note.position.y = 0.0
 	queued_pin.sync_layout()
-	expect(queued_pin.position.is_equal_approx(fixed_pin_position), "Moving paper must leave its tack in place")
-	queued_note.position.y = -15.0
+	expect(queued_pin.position.is_equal_approx(fixed_pin_position - Vector2(0,5)), "Moving paper must keep its tack attached")
+	queued_note.position.y = 5.0
 	queued_pin.sync_layout()
 	expect(motion._note.position.is_zero_approx(), "Main 3D ticket must retain its position")
 	expect(not main.get_meta("queued_tack").visible, "Selected ticket must not show two thumbtacks")
@@ -264,7 +264,9 @@ func run() -> void:
 	next._player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 	for i in 4: await process_frame
 	expect(not motion.active and next.active and next.state == &"fly", "Promoting a ticket should fly it in and deactivate the previous one")
-	expect(is_equal_approx(main.get_meta("ticket_note").position.y, -15.0), "Demoted paper must use the new queued offset")
+	expect(is_equal_approx(main.get_meta("ticket_note").position.y, 5.0), "Demoted paper must retain the queued offset")
+	for library_name in motion._player.get_animation_library_list():
+		expect(next._player.get_animation_library(library_name) == motion._player.get_animation_library(library_name), "Tickets share fitted animation data")
 	expect(next._note.position.is_zero_approx(), "Promoted paper must not inherit the queued offset")
 	expect(main.get_meta("ticket_note").get_parent() == main, "Demoted ticket must restore its static Control")
 	expect(motion._view.render_target_update_mode == SubViewport.UPDATE_DISABLED, "Queued ticket viewport must not render")
@@ -283,7 +285,8 @@ func run() -> void:
 	await screenshot("main_ticket_promoted")
 	game._remove_ticket(second)
 	for i in 3: await process_frame
-	expect(not is_instance_valid(next), "Removing the order must free its renderer")
+	expect(is_instance_valid(next) and game._ticket_motion_pool.has(next), "Removing the order must retain its renderer for reuse")
+	expect(not next.active and not next.is_processing() and next._view.render_target_update_mode == SubViewport.UPDATE_DISABLED, "Pooled renderer must not consume frame updates")
 	game.selected_customer = first
 	game._highlight_tickets()
 	expect(motion.active and motion.state == &"fly", "Returning to a waiting order should replay the arrival")

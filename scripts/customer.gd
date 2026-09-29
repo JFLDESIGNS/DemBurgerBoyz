@@ -1325,9 +1325,13 @@ func _play_wait_stance() -> void:
 
 
 func _play_anim(state: String) -> void:
+	var previous_clip: String = _anim_player.current_animation if is_instance_valid(_anim_player) else ""
+	var was_playing := is_instance_valid(_anim_player) and _anim_player.active and _anim_player.is_playing()
+	var previous_state := _anim_state
 	_select_character_animation(state)
 	# Play queues an update. Apply it now so resets/transitions cannot render a T-pose.
-	if is_instance_valid(_anim_player) and _anim_player.active and _anim_player.is_playing():
+	if is_instance_valid(_anim_player) and _anim_player.active and _anim_player.is_playing() \
+			and (not was_playing or previous_clip != _anim_player.current_animation or previous_state != _anim_state):
 		_anim_player.advance(0.0)
 
 
@@ -1951,8 +1955,8 @@ func _start_order_button() -> void:
 		return
 	_anim_player.active = true
 	var tap := _anim_player.get_animation("kenney_button/Button")
-	if tap != null:
-		tap.loop_mode = Animation.LOOP_NONE
+	# Button is already non-looping in the shared library. Mutating it here
+	# invalidates animation caches on every customer using the same resource.
 	_play_anim("button")
 	if not _anim_player.animation_finished.is_connected(_on_order_button_finished):
 		_anim_player.animation_finished.connect(_on_order_button_finished)

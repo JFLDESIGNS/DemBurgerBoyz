@@ -2374,6 +2374,7 @@ const START_PATTY_PREVIEW_SCALE := Vector3(1.08, 1.08, 1.08)
 ## Cached professional order-slip paper texture. Selection tint remains dynamic.
 const TICKET_PAPER_TEXTURE_PATH := "res://assets/ui/order_ticket_paper_unpinned.png"
 const AnimatedOrderTicket = preload("res://scripts/animated_order_ticket.gd")
+var _ticket_motion_pool: Array = []
 const MAIN_TICKET_BLANK = preload("res://models/order_ticket/textures/ticket_blank.png")
 var _ticket_paper_tex: Texture2D = null
 var _ticket_paper_tex_sel: Texture2D = null
@@ -4152,6 +4153,33 @@ func _prewarm_scrape_render() -> void:
 	_restore_loading_geometry(layers)
 
 
+func _prewarm_order_ticket_render() -> void:
+	if not _gameplay_load_in_progress or not is_instance_valid(ticket_box): return
+	var previous = selected_customer
+	var owner = preload("res://scripts/mobile_ticket_owner.gd").new()
+	owner.process_mode = Node.PROCESS_MODE_DISABLED
+	owner.set_meta("hotdog_preview", true)
+	owner.order.assign(_everything_burger_order())
+	add_child(owner)
+	_create_ticket(owner)
+	var wrap: Control = tickets[owner]
+	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").sound.stop()
+	for frame in 3: await get_tree().process_frame
+	selected_customer = owner
+	_highlight_tickets()
+	var motion = wrap.get_meta("ticket_motion")
+	motion.set_process(false)
+	motion._audio.stop()
+	motion._play(&"static", 0.0)
+	motion._player.advance(0.0)
+	motion._thumbtack.show(); motion._pin_shadow.show()
+	for frame in 3: await get_tree().process_frame
+	_remove_ticket(owner)
+	selected_customer = previous
+	owner.queue_free()
+	await get_tree().process_frame
+
+
 func _ensure_runtime_prewarms() -> void:
 	while _runtime_prewarm_running:
 		await get_tree().process_frame
@@ -4174,6 +4202,7 @@ func _ensure_runtime_prewarms() -> void:
 	_ensure_payment_bill_assets()
 	await _prewarm_payment_render()
 	await _prewarm_feedback_text()
+	await _prewarm_order_ticket_render()
 	await _prewarm_scrape_render()
 	_ensure_serve_fx_pools()
 	await get_tree().process_frame
@@ -11636,7 +11665,7 @@ func _register_grill_dance_tap(world_pos: Vector3, _tap_roll: float) -> void:
 
 
 func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_override: float = INF, send_mp: bool = true) -> void:
-	## Cook steel → C major piano strips; HOLD → drums / hats by spatula tilt.
+	## Cook steel → piano; HOLD → snare/kick/tom with hi-hats on both outer pads.
 	if game_audio == null or world_pos == Vector3.ZERO:
 		return
 	_flash_grill_tap_pad(world_pos)
@@ -11645,14 +11674,15 @@ func _play_grill_tap_at(world_pos: Vector3, volume_scale: float = 1.0, roll_over
 	var zone := _grill_zone_at(world_pos)
 	if str(zone.get("id", "")) == "hold":
 		if game_audio.has_method("play_spatula_drum"):
-			## Flat = drum · ±45° = closed hi-hat · ±90° = open hat.
+			## Edge pads always play hats; tilt also enables hats on the inner pads.
 			var voice := 0
+			var pad := _grill_hold_drum_pad_at(world_pos)
 			var roll_mag := absf(tap_roll)
-			if roll_mag >= HAND_SPATULA_ROLL_MAX - 0.5:
+			if pad == 4 or (pad != 0 and roll_mag >= HAND_SPATULA_ROLL_MAX - 0.5):
 				voice = 2
-			elif roll_mag >= HAND_SPATULA_ROLL_STEP * 0.5:
+			elif pad == 0 or roll_mag >= HAND_SPATULA_ROLL_STEP * 0.5:
 				voice = 1
-			game_audio.play_spatula_drum(_grill_hold_drum_pad_at(world_pos), volume_scale, voice)
+			game_audio.play_spatula_drum(pad, volume_scale, voice)
 		elif game_audio.has_method("play_spatula_ting"):
 			## Fallback: low pitched ting if drum synth missing.
 			game_audio.play_spatula_ting(55 + _grill_hold_drum_pad_at(world_pos), volume_scale)
@@ -13052,7 +13082,7 @@ func _refresh_grill_piano_note_labels() -> void:
 		if dlab == null or not is_instance_valid(dlab):
 			continue
 		## Pad 0 = window side, pad 4 = cook edge.
-		dlab.text = "%s%d" % [voice, j + 1]
+		dlab.text = "C HAT" if j == 0 else ("O HAT" if j == 4 else (["", "SNARE", "KICK", "TOM"][j] if voice == "DRUM" else voice))
 
 
 func _flash_grill_tap_pad(world_pos: Vector3) -> void:
@@ -62925,9 +62955,15 @@ func _apply_ticket_display_size(wrap: Control, selected: bool) -> void:
 	if selected:
 		if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(false)
 		if not wrap.has_meta("ticket_motion"):
-			var motion := AnimatedOrderTicket.new()
-			wrap.add_child(motion)
-			motion.setup(wrap, note)
+			var motion
+			if not _ticket_motion_pool.is_empty():
+				motion = _ticket_motion_pool.pop_back()
+				motion.reparent(wrap, false)
+				motion.bind_ticket(wrap, note)
+			else:
+				motion = AnimatedOrderTicket.new()
+				wrap.add_child(motion)
+				motion.setup(wrap, note)
 			wrap.set_meta("ticket_motion", motion)
 		wrap.get_meta("ticket_motion").set_active(true)
 		call_deferred("_fit_ticket_wrap_size", wrap, s)
@@ -63483,6 +63519,10 @@ func _remove_ticket(customer: Node3D) -> void:
 		var p = tickets[customer]
 		tickets.erase(customer)
 		if is_instance_valid(p):
+			if p.has_meta("ticket_motion") and _ticket_motion_pool.size() < 2:
+				var motion = p.get_meta("ticket_motion")
+				motion.release_to_pool(self)
+				_ticket_motion_pool.append(motion)
 			p.queue_free()
 	_refresh_customer_queue_timers()
 

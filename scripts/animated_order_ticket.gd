@@ -10,6 +10,7 @@ const UNROLL_SPEED := 2.8
 const PAD := 40.0
 const PIXELS_PER_METER := 1000.0
 const DISPLAY_SCALE := 0.8
+static var _prepared_libraries: Dictionary = {}
 
 var active := false
 var state: StringName = &"static"
@@ -50,9 +51,7 @@ const PIN_SCALE := 3.6
 const FLY_OFFSET := Vector2(-160.0, 110.0)
 
 func setup(wrap: Control, note: Control) -> void:
-	_wrap = wrap
-	_note = note
-	_note.minimum_size_changed.connect(sync_layout, CONNECT_DEFERRED)
+	bind_ticket(wrap, note)
 	name = "MainTicketMotion"
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_rng.randomize()
@@ -133,20 +132,27 @@ func setup(wrap: Control, note: Control) -> void:
 	mesh.set_surface_override_material(0, material)
 	mesh.lod_bias = 128.0 # Preserve the thin front/back shell at UI scale.
 	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var prepare := _prepared_libraries.is_empty()
 	for library_name in _player.get_animation_library_list():
-		var library := _player.get_animation_library(library_name).duplicate(true) as AnimationLibrary
+		var library: AnimationLibrary
+		if prepare:
+			library = _player.get_animation_library(library_name).duplicate(true) as AnimationLibrary
+			_prepared_libraries[library_name] = library
+		else:
+			library = _prepared_libraries[library_name]
 		_player.remove_animation_library(library_name)
 		_player.add_animation_library(library_name, library)
 	for clip in _player.get_animation_list():
 		var short_name := String(clip).get_slice("/", String(clip).get_slice_count("/") - 1)
 		_clips[short_name] = clip
 		var animation := _player.get_animation(clip)
-		animation.loop_mode = Animation.LOOP_NONE
+		if prepare: animation.loop_mode = Animation.LOOP_NONE
 	# Imported rotation keys include the rig's bind orientation. Blend around
 	# the flat static pose, never identity: the anchor rests at 180 degrees.
 	var rest_clip := _player.get_animation(_clips["static"])
 	var wind_clip := _player.get_animation(_clips["wave"])
-	for track in wind_clip.get_track_count():
+	# Prepare wind keys once; later tickets share the immutable fitted animations.
+	for track in (wind_clip.get_track_count() if prepare else 0):
 		if wind_clip.track_get_type(track) != Animation.TYPE_ROTATION_3D:
 			continue
 		var rest_track := rest_clip.find_track(wind_clip.track_get_path(track), Animation.TYPE_ROTATION_3D)
@@ -175,6 +181,20 @@ func setup(wrap: Control, note: Control) -> void:
 	add_child(_display)
 	hide()
 	set_process(false)
+
+func bind_ticket(wrap: Control, note: Control) -> void:
+	_wrap = wrap
+	_note = note
+	_note.minimum_size_changed.connect(sync_layout, CONNECT_DEFERRED)
+	_header_clearance = _note.find_child("ToonThumbtackClearance", true, false) as Control
+	_logical_size = Vector2.ZERO
+
+func release_to_pool(parent: Node) -> void:
+	set_active(false)
+	if is_instance_valid(_note) and _note.minimum_size_changed.is_connected(sync_layout):
+		_note.minimum_size_changed.disconnect(sync_layout)
+	_wrap = null; _note = null; _header_clearance = null
+	reparent(parent, false)
 
 func _find_type(node: Node, type_name: String) -> Node:
 	if node.is_class(type_name):
