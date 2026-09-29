@@ -20,11 +20,22 @@ func run() -> void:
 	assert(not boss.start(),"Repeat trigger must not reset progress")
 	var unique = {}
 	for recipe in boss.recipes: unique[str(recipe)] = true
-	assert(unique.size() == 60)
+	assert(unique.size() == 40)
+	for seed_value in range(12):
+		var deck = boss.make_recipes(seed_value)
+		assert(deck.size() == 40)
+		for order in deck.slice(30):
+			assert(order.count("patty") in [2,3] and order.size() >= 8 and order.size() <= 13)
+	var smash_variants = {}
+	for i in 6:
+		boss.start_smash(); smash_variants[boss.clip] = true
+	assert(smash_variants.has("hammer_double"))
+	assert(smash_variants.has("hammer_left") or smash_variants.has("hammer_right"))
+	boss.impact_at = -1
 	assert(boss.customer.player.has_animation("revive"))
 	boss.advance_phase();assert(boss.phase == "emerge")
 	assert(boss.concrete.playing and boss.voice.playing)
-	assert(boss.concrete.volume_db == -3.0 and boss.voice.volume_db == -1.0)
+	assert(boss.concrete.volume_db == -3.0 and boss.voice.volume_db == 2.0)
 	assert(boss.voice.stream.resource_path.ends_with("bossahhhhhentrance.wav"))
 	assert(boss.concrete.stream.get_length() <= 1.85)
 	assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Entrance voice must not lower music")
@@ -101,8 +112,10 @@ func run() -> void:
 	g.stations[0].items = boss.customer.order.duplicate()
 	g._complete_serve(0,boss.customer); boss._process(.01)
 	assert(boss.perfect == 1)
-	for i in range(1,50):
+	for i in range(1,25):
 		assert(boss.phase == "ready")
+		if i >= 20:
+			assert(boss.customer.order.count("patty") in [2,3], "Final five must be multi-patty orders")
 		g.stations[0].items = boss.customer.order.duplicate()
 		g._complete_serve(0,boss.customer)
 		# Duplicate completion cannot credit or advance the same burger twice.
@@ -111,13 +124,24 @@ func run() -> void:
 		assert(g.credited == paid)
 		boss._process(.01)
 		assert(boss.perfect == i+1)
-		if i+1 in [10,30]:
+		if i+1 in [5,10,15,20]:
 			assert(boss.phase == "slump")
+			var hold = boss.timer - boss.customer.player.get_animation("slump").length
+			assert(is_equal_approx(hold, 2.4 if i+1 == 20 else .35))
 			boss.advance_phase();assert(boss.phase == "revive")
 			boss.advance_phase()
-	assert(boss.milestone_history == [10,30])
+	assert(boss.milestone_history == [5,10,15,20])
 	assert(boss.phase == "victory")
-	boss.advance_phase();assert(not boss.active())
+	assert(boss.victory_played and not boss.music.playing)
+	boss.advance_phase();assert(boss.phase == "sinking")
+	boss._process(.8)
+	assert(boss.customer.position.y < boss.boss_position.y - 2.0)
+	boss._process(.81)
+	assert(boss.phase == "results" and is_instance_valid(boss.result_screen))
+	assert(not boss.customer.visible and not boss.can_serve())
+	boss._process(10)
+	assert(boss.phase == "results", "Victory card waits for acknowledgement")
+	boss.finish_results();assert(not boss.active() and boss.result_screen == null)
 	assert(not boss.music.playing and not boss.voice.playing and not boss.effects.playing and not boss.concrete.playing)
 	assert(normal.visible and normal.process_mode == Node.PROCESS_MODE_INHERIT)
 	assert(g.selected_customer == normal)
@@ -125,10 +149,10 @@ func run() -> void:
 	assert(not g._challenge_blocks_spawns())
 	assert(boss.start())
 	boss.advance_phase(); boss.advance_phase()
-	for loss in 10:
+	for loss in 5:
 		boss._process(17.01)
 		assert(boss.mistakes == loss+1)
-		if loss < 9:
+		if loss < 4:
 			assert(boss.phase == "attack")
 			boss.advance_phase(); boss.advance_phase()
 	assert(boss.phase == "defeat" and not boss.can_serve())
@@ -149,5 +173,5 @@ func run() -> void:
 	boss.cancel();assert(not boss.active())
 	g.queue_free()
 	await process_frame
-	print("HOTDOG_CHALLENGE_OK: period trigger, 60 unique recipes, timed replacement, handoff clock, ambient smashes, voice, 10/30 milestones, win, 10-loss defeat, placement controls, cleanup")
+	print("HOTDOG_CHALLENGE_OK: period trigger, 40 unique recipes, timed replacement, handoff clock, ambient smashes, voice, 5/10/15/20 milestones, finale stacks, victory card and sink, 5-loss defeat, placement controls, cleanup")
 	quit()

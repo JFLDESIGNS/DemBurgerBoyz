@@ -26,11 +26,18 @@ func run() -> void:
 	assert(replica.order_left == 4.25 and replica.customer.position.z == 7)
 	assert(replica.customer.scale.is_equal_approx(Vector3.ONE*1.2))
 	assert(replica.customer.order==orders[12]);assert(replica.customer.get_instance_id()==boss_id)
-	replica.sync_state("",50,2,orders,"",0,2,1)
+	replica.sync_state("",25,2,orders,"",0,2,1)
 	assert(not replica.active() and g.customers.is_empty())
-	# Late join during victory must not index recipe 50 out of bounds.
-	replica.sync_state("victory",50,0,orders,"slump",1,4,2)
+	# Late join during victory must not index the finale deck out of bounds.
+	replica.sync_state("victory",25,0,orders,"slump",1,4,2)
 	assert(replica.phase=="victory" and is_instance_valid(replica.customer))
+	assert(replica.victory_played and not replica.music.playing)
+	replica.sync_state("sinking",25,0,orders,"slump",.8,4,2)
+	assert(replica.customer.position.y < replica.boss_position.y - 2)
+	replica.sync_state("results",25,0,orders,"slump",0,4,2)
+	assert(is_instance_valid(replica.result_screen) and not replica.customer.visible)
+	replica.sync_state("",25,0,orders,"",0,4,2)
+	assert(replica.result_screen == null and not replica.active())
 	replica.cancel();g.queue_free();await process_frame
 	print("HOTDOG_REPLICA_OK: shared progress, milestone animation, late join, stale-ticket protection, cleanup")
 	quit()

@@ -1469,6 +1469,7 @@ const SODA_SLOT_WIN_PAYOUT := 40.0
 var slot_camera_shake_t: float = 0.0
 var slot_camera_shake_total: float = 0.0
 var slot_camera_shake_amp: float = 0.024
+var slot_camera_shake_points := PackedVector3Array()
 var slot_camera_base_pos := Vector3(0.0, 1.65, -1.62)
 var player_camera_height: float = 1.65
 var player_camera_x: float = 0.0
@@ -6134,6 +6135,8 @@ func _next_spawn_delay() -> float:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if is_instance_valid(_hotdog_challenge) and _hotdog_challenge.phase == "results":
+		return
 	if _morning_boss_blocks_controls() and not (event is InputEventKey and event.keycode == KEY_ESCAPE):
 		if event is InputEventMouseButton and event.pressed and Time.get_ticks_msec()-_intro_error_ms>700:
 			_intro_error_ms=Time.get_ticks_msec()
@@ -6357,6 +6360,9 @@ func _unhandled_input(event: InputEvent) -> void:
 var _empty_stock_controls: Node3D
 
 func _input(event: InputEvent) -> void:
+	# Leave victory-card input to its GUI button instead of kitchen interactions.
+	if is_instance_valid(_hotdog_challenge) and _hotdog_challenge.phase == "results":
+		return
 	if _morning_boss_blocks_controls() and not (event is InputEventKey and event.keycode == KEY_ESCAPE):
 		if event is InputEventMouseButton and event.pressed and Time.get_ticks_msec()-_intro_error_ms>700:
 			_intro_error_ms=Time.get_ticks_msec()
@@ -41295,8 +41301,14 @@ func _sync_player_camera_hidden_ui() -> void:
 
 func _start_slot_camera_shake(duration: float = 2.0, strength: float = 0.024) -> void:
 	slot_camera_shake_amp = maxf(strength, slot_camera_shake_amp) if slot_camera_shake_t > 0 else strength
-	slot_camera_shake_total = maxf(slot_camera_shake_total, duration) if slot_camera_shake_t > 0 else duration
-	slot_camera_shake_t = maxf(slot_camera_shake_t, duration)
+	slot_camera_shake_total = maxf(.01, duration)
+	slot_camera_shake_t = slot_camera_shake_total
+	# Randomize the hit once, not every frame: one kick, one smaller rebound, settle.
+	var start := camera.position - slot_camera_base_pos if is_instance_valid(camera) else Vector3.ZERO
+	var kick := Vector3((-1.0 if randf() < .5 else 1.0) * randf_range(.75, 1.0), randf_range(-.5,.5), 0) * slot_camera_shake_amp
+	var rebound := -kick * randf_range(.22,.36)
+	rebound.y += randf_range(-.08,.08) * slot_camera_shake_amp
+	slot_camera_shake_points = PackedVector3Array([start, kick, rebound, Vector3.ZERO])
 
 
 func _update_slot_camera_shake(delta: float) -> void:
@@ -41307,13 +41319,12 @@ func _update_slot_camera_shake(delta: float) -> void:
 			camera.position = camera.position.lerp(slot_camera_base_pos, clampf(delta * 10.0, 0.0, 1.0))
 		return
 	slot_camera_shake_t = maxf(0.0, slot_camera_shake_t - delta)
-	var k := slot_camera_shake_t / maxf(slot_camera_shake_total, 0.001)
-	var amp := slot_camera_shake_amp * k
-	camera.position = slot_camera_base_pos + Vector3(
-		randf_range(-amp, amp),
-		randf_range(-amp * 0.55, amp * 0.55),
-		0.0
-	)
+	var progress := 1.0 - slot_camera_shake_t / maxf(slot_camera_shake_total, 0.001)
+	if slot_camera_shake_points.size() == 4:
+		var segment := 0 if progress < .16 else (1 if progress < .48 else 2)
+		var stops := [0.0, .16, .48, 1.0]
+		var weight := smoothstep(stops[segment], stops[segment+1], progress)
+		camera.position = slot_camera_base_pos + slot_camera_shake_points[segment].lerp(slot_camera_shake_points[segment+1], weight)
 	if slot_camera_shake_t <= 0.0:
 		camera.position = slot_camera_base_pos
 

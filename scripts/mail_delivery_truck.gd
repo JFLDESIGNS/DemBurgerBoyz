@@ -38,6 +38,7 @@ var last_meow_at := -10.0
 var treat_meows := 0
 var wants_treat := false
 var pet_hop_left := 0.0
+var on_foot := false
 const PARK_YAW := PI * 0.67
 
 func _ready() -> void:
@@ -149,6 +150,8 @@ func delivery_origin_global() -> Vector3:
 func advance(delta: float) -> void:
 	if finished: return
 	_sync_courier_shape()
+	if not on_foot and is_instance_valid(game.get("_hotdog_challenge")) and game._hotdog_challenge.active():
+		_enable_foot_delivery()
 	clock += delta
 	pet_hop_left = maxf(0.0, pet_hop_left - delta)
 	elapsed += delta
@@ -156,10 +159,13 @@ func advance(delta: float) -> void:
 	if phase == "waiting":
 		if game._disguise_cat_active:return
 		# Let any car already on the road leave naturally before entering its lane.
-		if game.street_car_active: return
-		truck.show(); courier.show(); set_phase("arrive")
-	fill_light.global_position = truck.global_position + Vector3(0, 3.3, -2.2)
-	fill_light.visible = truck.visible
+		if game.street_car_active and not on_foot: return
+		courier.show()
+		if on_foot: set_phase("walk"); arrival_jingle.play()
+		else: truck.show(); set_phase("arrive")
+	if on_foot: truck.hide()
+	fill_light.global_position = (courier.global_position if on_foot else truck.global_position) + Vector3(0, 3.3, -2.2)
+	fill_light.visible = courier.visible if on_foot else truck.visible
 	var driving := phase in ["arrive", "depart"]
 	if body:
 		body.position = body_rest + Vector3(0, sin(clock * 11.0) * (0.023 if driving else 0.005), 0)
@@ -208,6 +214,9 @@ func advance(delta: float) -> void:
 					set_phase("deliver")
 					for order in orders: game._throw_cat_supply_delivery(order[0], order[1], order[2])
 					orders.clear()
+				elif on_foot:
+					if orders.is_empty(): finished = true; hide(); restore_cat()
+					else: courier.hide(); set_phase("waiting")
 				else: set_phase("hop_in")
 		"deliver":
 			courier.rotation.y = PI
@@ -251,6 +260,22 @@ func advance(delta: float) -> void:
 					finished = true; hide(); restore_cat()
 				else:
 					truck.hide();courier.hide();set_phase("waiting")
+
+func _enable_foot_delivery() -> void:
+	on_foot = true
+	truck.hide(); drive_audio.stop(); horn_audio.stop(); skid_audio.stop()
+	doorstep = Vector3(-8, handoff.y, handoff.z)
+	var camera = game.get("camera")
+	if is_instance_valid(camera):
+		var size = camera.get_viewport().get_visible_rect().size
+		var pixel = Vector2(-size.x*.12, size.y*.5)
+		var origin = camera.project_ray_origin(pixel)
+		var ray = camera.project_ray_normal(pixel)
+		if absf(ray.z) > .001: doorstep.x = (origin + ray*((handoff.z-origin.z)/ray.z)).x
+	if phase in ["arrive", "hop_out", "walk"]:
+		courier.global_position = doorstep; set_phase("walk"); arrival_jingle.play()
+	elif phase in ["hop_in", "depart"]:
+		courier.global_position = handoff; set_phase("return")
 
 func restore_cat() -> void:
 	if is_instance_valid(game) and is_instance_valid(game.window_cat):

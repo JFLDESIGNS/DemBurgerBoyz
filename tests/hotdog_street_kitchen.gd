@@ -23,6 +23,8 @@ func run() -> void:
 		assert(spectator._wawa_click_area.collision_layer == 0)
 		var head_pos = game.camera.unproject_position(spectator.to_global(Vector3(0,1.33,0)))
 		assert(root.get_visible_rect().has_point(head_pos), "Spectators must be visible on the sides")
+		var across = head_pos.x / root.get_visible_rect().size.x
+		assert(across < .22 or across > .78, "Spectators should watch from the background edges")
 	var matte_surfaces = 0
 	for mesh in boss.customer.find_children("*","MeshInstance3D",true,false):
 		for surface in mesh.mesh.get_surface_count():

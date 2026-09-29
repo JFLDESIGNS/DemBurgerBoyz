@@ -1,9 +1,12 @@
 extends Node
-## Host-owned 50-recipe encounter. Normal serving owns the burger flight and station.
+## Host-owned 25-perfect encounter. Normal serving owns the burger flight and station.
 const DATA = preload("res://scripts/game_data.gd")
 const CUSTOMER = preload("res://scripts/hotdog_boss_customer.gd")
-const TOTAL = 50
-const MAX_LOSSES = 10
+const TOTAL = 25
+const MAX_LOSSES = 5
+const FINAL_STAGE = 20
+const HARD_DECK_START = TOTAL + MAX_LOSSES
+const SINK_SECONDS = 1.6
 const ORDER_SECONDS = 17.0
 const PLACEMENT_FILE = "user://hotdog_boss.cfg"
 const VOICE_PITCH = .78
@@ -48,6 +51,9 @@ var spectator_presets: Array = []
 var spectator_time = 0.0
 var shadow_root_visible = true
 var shadow_root_saved = false
+var smash_count = 0
+var victory_played = false
+var result_screen: Control
 
 static func make_recipes(seed_value: int) -> Array:
 	var rng = RandomNumberGenerator.new()
@@ -64,6 +70,19 @@ static func make_recipes(seed_value: int) -> Array:
 			if masks[i] & (1 << bit): order.append(DATA.TOPPING_ORDER[bit])
 		order.append("bun_top")
 		result.append(order)
+	# A separate finale deck keeps double/triple stacks tied to perfect progress,
+	# even when earlier mistakes have consumed replacement recipes.
+	for mask in masks:
+		var toppings: Array[String] = []
+		for bit in DATA.TOPPING_ORDER.size():
+			if mask & (1 << bit): toppings.append(DATA.TOPPING_ORDER[bit])
+		if toppings.size() < 4: continue
+		var order: Array[String] = ["bun_bottom", "patty", "patty"]
+		if (result.size() - HARD_DECK_START) % 2 == 0: order.append("patty")
+		order.append_array(toppings)
+		order.append("bun_top")
+		result.append(order)
+		if result.size() == HARD_DECK_START + 5 + MAX_LOSSES: break
 	return result
 
 func setup(owner_game: Node) -> void:
@@ -168,10 +187,15 @@ func request_placement(pos: Vector3, size_value: float) -> void:
 func apply_placement() -> void:
 	if is_instance_valid(customer):
 		customer.position = boss_position
+		if phase == "sinking":
+			var progress = clampf(1.0 - timer / SINK_SECONDS, 0, 1)
+			customer.position.y -= smoothstep(0, 1, progress) * 5.5 * boss_scale
 		customer.scale = Vector3.ONE * boss_scale
 
 func current_recipe() -> Array:
-	return recipes[mini(perfect + mistakes, recipes.size()-1)]
+	var index = perfect + mistakes
+	if perfect >= FINAL_STAGE: index = HARD_DECK_START + perfect - FINAL_STAGE + mistakes
+	return recipes[mini(index, recipes.size()-1)]
 
 func reserve_order() -> void:
 	if not can_serve(): return
@@ -207,6 +231,7 @@ func play_sound(kind: String) -> void:
 	match kind:
 		"breakout":
 			concrete.play()
+			voice.volume_db = 2.0
 			voice.stream = sound_streams["bossahhhhhentrance"]
 		"eat":
 			voice.stream = sound_streams["eatboss"]
@@ -247,6 +272,7 @@ func start() -> bool:
 		game._flash("Finish the current event, then press . for Baron Brat", Color("FFD54F"))
 		return false
 	perfect = 0; mistakes = 0; pending_result = -1; milestone_history.clear()
+	smash_count = 0; victory_played = false
 	order_left = ORDER_SECONDS; ambient_left = randf_range(12,18); chatter_left = randf_range(5,9)
 	laugh_left = randf_range(12,22); eat_sound_played = false
 	recipes = make_recipes(randi())
@@ -311,9 +337,9 @@ func update_spectators(delta: float) -> void:
 	for i in street_saved.size():
 		var walker = street_saved[i].node
 		if not is_instance_valid(walker): continue
-		var side = -1.0 if i%2 == 0 else 1.0
-		var end = Vector3(boss_position.x + side*(1.6*boss_scale+.85), game._bg_people_y(), boss_position.z+1.1)
-		var start = Vector3(boss_position.x+side*8.0,end.y,end.z+.3)
+		var end = spectator_target(i)
+		var side = signf(end.x - boss_position.x)
+		var start = end + Vector3(side*3.5, 0, .3)
 		var progress = clampf((spectator_time-float(i)*.25)/3.5,0,1)
 		walker.position = start.lerp(end,progress)
 		walker.scale = Vector3.ONE * game._bg_people_scale()
@@ -322,6 +348,17 @@ func update_spectators(delta: float) -> void:
 		else:
 			walker.rotation.y = atan2(boss_position.x-end.x,boss_position.z-end.z)
 			walker._play_anim("idle")
+
+func spectator_target(index: int) -> Vector3:
+	var end = Vector3(-6.0 if index%2 == 0 else 6.0, game._bg_people_y(), game._bg_people_z())
+	if is_instance_valid(game.camera):
+		var size = game.camera.get_viewport().get_visible_rect().size
+		var pixel = Vector2(size.x * (.12 if index%2 == 0 else .88), size.y*.5)
+		var origin = game.camera.project_ray_origin(pixel)
+		var ray = game.camera.project_ray_normal(pixel)
+		if absf(ray.z) > .001:
+			end.x = (origin + ray * ((end.z-origin.z)/ray.z)).x
+	return end
 
 func restore_street() -> void:
 	if is_instance_valid(game.shadow_catcher_root):
@@ -383,10 +420,13 @@ func resolve_result(correct: bool, reason: String = "WRONG BURGER!") -> void:
 	if correct:
 		perfect += 1
 		if perfect == TOTAL:
-			phase = "victory"; timer = play("slump") + 2.0
-		elif perfect in [10,30]:
+			phase = "victory"; timer = play("slump") + .8
+			customer.is_waiting = false; game._remove_ticket(customer)
+			start_victory()
+		elif perfect % 5 == 0:
 			milestone_history.append(perfect)
-			phase = "slump"; timer = play("slump") + 1.0
+			phase = "slump"; timer = play("slump") + (2.4 if perfect == FINAL_STAGE else .35)
+			customer.is_waiting = false
 		else: ready_order()
 	else:
 		mistakes += 1
@@ -432,6 +472,7 @@ func _process(delta: float) -> void:
 		if is_instance_valid(item[0]) and game.tickets.has(item[0]): game.tickets[item[0]].hide()
 	if not host():
 		if phase == "ready": order_left = maxf(0, order_left-delta); refresh()
+		if phase == "sinking": timer = maxf(0, timer-delta); apply_placement()
 		return
 	if phase == "ready":
 		order_left = maxf(0, order_left-delta)
@@ -439,7 +480,7 @@ func _process(delta: float) -> void:
 		if order_left <= 0: resolve_result(false, "TIME UP!")
 		elif ambient_left <= 0:
 			phase = "idle_smash"; customer.is_waiting = false
-			timer = play("hammer_left" if randi()%2 else "hammer_right"); impact_at = timer * .51
+			start_smash()
 			ambient_left = randf_range(12,18)
 			broadcast()
 		elif laugh_left <= 0 and voice_left <= 0:
@@ -451,9 +492,10 @@ func _process(delta: float) -> void:
 	elif phase == "feeding":
 		if pending_result >= 0 and not bool(customer.get_meta("burger_in_flight",false)):
 			resolve_result(pending_result == 1)
-	elif phase != "ready":
+	elif phase != "results":
 		var before = timer
 		timer = maxf(0, timer-delta)
+		if phase == "sinking": apply_placement()
 		if impact_at >= 0 and before >= impact_at and timer < impact_at:
 			impact_at = -1; impact(.65)
 		if timer <= 0: advance_phase()
@@ -468,43 +510,104 @@ func advance_phase() -> void:
 			sound_event("breakout")
 		"emerge": ready_order()
 		"attack":
-			phase = "smash"; timer = play("hammer_left" if mistakes % 2 else "hammer_right"); impact_at = timer * .51
+			phase = "smash"; start_smash()
 		"smash": ready_order()
 		"idle_smash":
 			phase = "ready"; customer.is_waiting = true
 			play(["idle_sway", "idle_wave", "idle_bounce"][randi()%3])
 		"defeat":
-			game._flash("CHALLENGE LOST!  Baron Brat wins — 10 orders lost", Color("FF8A80"), 6)
+			game._flash("CHALLENGE LOST!  Baron Brat wins — 5 orders lost", Color("FF8A80"), 6)
 			cancel(); return
 		"slump": phase = "revive"; timer = play("revive")
 		"revive": ready_order()
 		"victory":
-			game._flash("BARON BRAT BEATEN!  50 / 50 perfect burgers", Color("A5D6A7"), 5)
-			cancel(); return
+			phase = "sinking"; timer = SINK_SECONDS
+			customer.player.pause()
+			apply_placement()
+		"sinking":
+			phase = "results"; customer.hide(); show_results()
 	refresh(); broadcast()
+
+func start_smash() -> void:
+	# Alternate single and double slams, with either hand on the single strikes.
+	var animation = "hammer_double" if smash_count % 2 == 1 else ("hammer_left" if randi()%2 else "hammer_right")
+	smash_count += 1
+	timer = play(animation); impact_at = timer * .51
+
+func start_victory() -> void:
+	music.stop(); voice.stop(); effects.stop(); concrete.stop(); impact_sound.stop()
+	voice_left = 0
+	if victory_played: return
+	victory_played = true
+	if is_instance_valid(game.game_audio): game.game_audio.play_challenge_complete_tune()
+
+func finish_results() -> void:
+	if host() and phase == "results": cancel()
+
+func show_results() -> void:
+	if is_instance_valid(result_screen): return
+	result_screen = Control.new()
+	result_screen.name = "BaronBratVictory"
+	result_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	result_screen.z_index = 100
+	game.get_node("UI/Root").add_child(result_screen)
+	var shade = ColorRect.new()
+	shade.color = Color(.06, .025, .035, .82)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	result_screen.add_child(shade)
+	var center = CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	result_screen.add_child(center)
+	var panel = PanelContainer.new(); panel.custom_minimum_size = Vector2(600, 410)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color("FFF0CB"); style.border_color = Color("E5AA39")
+	style.set_border_width_all(5); style.set_corner_radius_all(24)
+	style.content_margin_left = 42; style.content_margin_right = 42
+	style.content_margin_top = 30; style.content_margin_bottom = 30
+	style.shadow_color = Color(0,0,0,.45); style.shadow_size = 18
+	panel.add_theme_stylebox_override("panel", style); center.add_child(panel)
+	var rows = VBoxContainer.new(); rows.add_theme_constant_override("separation", 16); panel.add_child(rows)
+	var messages = ["★  CHALLENGE COMPLETE  ★", "BARON BRAT\nBEATEN!", "25 / 25 PERFECT BURGERS", "%d / 5 ORDERS LOST  •  FINAL FIVE CONQUERED" % mistakes]
+	for i in messages.size():
+		var text = Label.new(); text.text = messages[i]; text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		text.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+		text.add_theme_font_size_override("font_size", [22, 48, 28, 17][i])
+		text.add_theme_color_override("font_color", Color("A93227") if i == 1 else Color("624020"))
+		rows.add_child(text)
+	var button = Button.new(); button.text = "BACK TO THE GRILL" if host() else "WAITING FOR HOST…"
+	button.custom_minimum_size.y = 54; button.disabled = not host()
+	button.add_theme_font_size_override("font_size", 24)
+	button.pressed.connect(finish_results); rows.add_child(button)
+	result_screen.modulate.a = 0
+	create_tween().tween_property(result_screen, "modulate:a", 1.0, .3)
+	if host(): button.grab_focus()
 
 func impact(duration: float) -> void:
 	impact_serial += 1
-	game._start_slot_camera_shake(duration,.075)
+	game._start_slot_camera_shake(minf(duration, .5),.075)
 	sound_event(("smash1" if randi()%2 else "smash2") if phase in ["smash", "idle_smash"] else "impact")
 
 func refresh() -> void:
 	if not is_instance_valid(label): return
-	label.visible = active()
+	label.visible = active() and phase != "results"
 	if is_instance_valid(customer) and game.tickets.has(customer):
 		game._update_ticket_seconds_label(game.tickets[customer], customer)
-	var message = "%.1fs  •  %d / 50 perfect  •  %d / 10 orders lost" % [order_left,perfect,mistakes]
+	var message = "%.1fs  •  %d / 25 perfect  •  %d / 5 orders lost" % [order_left,perfect,mistakes]
 	match phase:
 		"rumble", "emerge": message = "THE TRUCK IS SHAKING… BARON BRAT IS HERE!"
-		"feeding": message = "CHOMP!  %d / 50 perfect" % perfect
-		"attack", "smash": message = "%s  %d / 10 orders lost" % [failure_reason,mistakes]
+		"feeding": message = "CHOMP!  %d / 25 perfect" % perfect
+		"attack", "smash": message = "%s  %d / 5 orders lost" % [failure_reason,mistakes]
 		"idle_smash": message = "GROUND SMASH!  Timer paused — %.1fs left" % order_left
-		"defeat": message = "CHALLENGE LOST!  10 orders lost — BARON BRAT WINS!"
-		"slump", "revive": message = "%d PERFECT!  He's down… but not finished!" % perfect
-		"victory": message = "50 / 50 PERFECT — BARON BRAT DEFEATED!"
+		"defeat": message = "CHALLENGE LOST!  5 orders lost — BARON BRAT WINS!"
+		"slump": message = "20 PERFECT!  Is he… finished?" if perfect == FINAL_STAGE else "%d PERFECT!  He's down…" % perfect
+		"revive": message = "HE'S BACK!  FIVE MONSTER BURGERS TO GO!" if perfect == FINAL_STAGE else "BACK FOR MORE!"
+		"victory", "sinking": message = "25 / 25 PERFECT — BARON BRAT DEFEATED!"
+	if phase == "ready" and perfect >= FINAL_STAGE: message = "FINAL FIVE!  " + message
 	label.text = "BARON BRAT CHALLENGE\n" + message
 
 func cancel() -> void:
+	if is_instance_valid(result_screen): result_screen.queue_free()
+	result_screen = null
 	phase = ""; clip = ""; pending_result = -1; impact_at = -1
 	if is_instance_valid(music): music.stop()
 	if is_instance_valid(voice): voice.stop()
@@ -539,15 +642,17 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 		if active(): cancel()
 		return
 	if active() and generation != round_id: cancel()
+	if generation != round_id: victory_played = false
 	perfect = count; mistakes = wrong; recipes = orders; generation = round_id
 	boss_position = pos; boss_scale = size_value; failure_reason = reason
 	spectator_presets = crowd; spectator_time = crowd_time
 	if not is_instance_valid(customer): _spawn()
-	apply_placement()
 	var changed = phase != remote_phase or customer.order != current_recipe()
 	phase = remote_phase; timer = remaining
-	start_music()
-	customer.visible = phase != "rumble"
+	apply_placement()
+	if phase in ["victory", "sinking", "results"]: start_victory()
+	else: start_music()
+	customer.visible = phase not in ["rumble", "results"]
 	customer.is_waiting = phase == "ready"
 	if changed and phase == "ready": ready_order()
 	order_left = seconds_left
@@ -555,7 +660,12 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 		play(animation)
 		if remaining > 0 and customer.player.has_animation(animation):
 			customer.player.seek(maxf(0,customer.player.get_animation(animation).length-remaining),true)
+	if phase in ["sinking", "results"]:
+		customer.player.seek(customer.player.get_animation("slump").length, true)
+		customer.player.pause()
+		game._remove_ticket(customer)
+	if phase == "results": show_results()
 	if serial != received_impact:
 		received_impact = serial
-		game._start_slot_camera_shake(.65,.075)
+		game._start_slot_camera_shake(.5,.075)
 	refresh()
