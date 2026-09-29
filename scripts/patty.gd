@@ -2809,7 +2809,8 @@ func apply_seasoning(amount: float = 0.07) -> bool:
 		return false
 	seasoning = minf(1.0, seasoning + amount)
 	_ensure_season_root()
-	var to_add := clampi(2 + int(amount * 18.0), 2, 5)
+	# Coverage also arrives in large multiplayer snapshots, not only shaker ticks.
+	var to_add := maxi(0, ceili(seasoning * SEASON_MAX_FLECKS) - _season_fleck_count)
 	for _i in to_add:
 		if _season_fleck_count >= SEASON_MAX_FLECKS:
 			break
@@ -2823,7 +2824,7 @@ func _ensure_season_root() -> void:
 	_season_root = Node3D.new()
 	_season_root.name = "Seasoning"
 	## Mesh-local on the meat top so PATTY_SIZE_SCALE keeps flecks on the beef.
-	_season_root.position = Vector3(0.0, 0.0235, 0.0)
+	_season_root.position = Vector3(0.0, 0.0255, 0.0)
 	if _mesh != null and is_instance_valid(_mesh):
 		_mesh.add_child(_season_root)
 	else:
@@ -2843,6 +2844,9 @@ func _ensure_season_root() -> void:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.vertex_color_use_as_albedo = true
+	# Stay in the patty's transparent pass, but write solid grain depth so the
+	# meat, frost and sear overlays cannot paint over the pepper as sorting changes.
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	mat.render_priority = PATTY_BODY_PRIORITY + 1
 	batch_view.material_override = mat
 	batch_view.multimesh = _season_batch
@@ -2853,11 +2857,11 @@ func _ensure_season_root() -> void:
 		var grain_scale := Vector3(s * (0.5 + randf()), 0.0018 + randf() * 0.0014, s * (0.4 + randf() * 0.8))
 		var ang := randf() * TAU
 		var rad := sqrt(randf()) * 0.088
-		var pos := Vector3(cos(ang) * rad, 0.0008 + randf() * 0.0016, sin(ang) * rad)
-		var rot := Vector3(deg_to_rad(randf() * 25.0 - 12.0), ang + deg_to_rad(randf() * 40.0), deg_to_rad(randf() * 30.0 - 15.0))
+		var pos := Vector3(cos(ang) * rad, grain_scale.y * 0.5, sin(ang) * rad)
+		var rot := Vector3(0.0, ang + deg_to_rad(randf() * 40.0), 0.0)
 		_season_batch.set_instance_transform(i, Transform3D(Basis.from_euler(rot).scaled(grain_scale), pos))
 		var shade := 0.08 + randf() * 0.14
-		_season_batch.set_instance_color(i, Color(shade, shade * 0.75, shade * 0.55, 0.75 + randf() * 0.2))
+		_season_batch.set_instance_color(i, Color(shade, shade * 0.75, shade * 0.55, 1.0))
 
 
 func _spawn_season_fleck() -> void:
@@ -2909,7 +2913,8 @@ func _build_cheese_slice() -> void:
 	_cheese_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	## Sit with the meat in depth — not above the spatula (prio 22).
 	_cheese_mat.no_depth_test = false
-	_cheese_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	# Solid cheese must also occlude pepper regardless of transparent draw order.
+	_cheese_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	_cheese_mat.render_priority = PATTY_BODY_PRIORITY + 1
 
 	## Cross bars only — corners are separate flaps (no double-corner look).

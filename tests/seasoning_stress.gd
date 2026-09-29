@@ -8,6 +8,19 @@ func run():
 		root.add_child(p)
 		p.set_process(false)
 		assert(p._season_batch != null)
+		var grains = p._season_root.get_child(0)
+		assert(grains.material_override.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_ALWAYS)
+		assert(p._cheese_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_ALWAYS)
+		# Dummy headless renderer does not retain MultiMesh transforms/colors.
+		for n in (0 if DisplayServer.get_name() == "headless" else p.SEASON_MAX_FLECKS):
+			var grain = p._season_batch.get_instance_transform(n)
+			for x in [-0.5, 0.5]:
+				for y in [-0.5, 0.5]:
+					for z in [-0.5, 0.5]:
+						assert((p._season_root.transform * grain * Vector3(x,y,z)).y > p._grate_disc.position.y)
+			assert(p._season_batch.get_instance_color(n).a == 1.0)
+		p.apply_mp_state(5.0, false, 0.0, 0.0, true, 1.0, 0.0, false, 0.0, 1.0, false, 0.0, 0.0, 0.0, 0)
+		assert(p._season_fleck_count == p.SEASON_MAX_FLECKS, "Full network snapshot must display full seasoning")
 		p.set_meta("batch_id", p._season_batch.get_instance_id())
 		patties.append(p)
 	var worst_us := 0
