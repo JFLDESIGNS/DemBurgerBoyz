@@ -30793,7 +30793,6 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.visible = true
 	walker.set_meta("street_hail", "")
 	walker.set_meta("street_hail_time", 0.0)
-	if walker.has_node("HailAccepted"): walker.get_node("HailAccepted").hide()
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	if is_run and walker.has_method("play_street_run"):
@@ -30842,7 +30841,6 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 	walker.visible = true
 	walker.set_meta("street_hail", "")
 	walker.set_meta("street_hail_time", 0.0)
-	if walker.has_node("HailAccepted"): walker.get_node("HailAccepted").hide()
 	walker._wawa_click_area.collision_layer = CUSTOMER_WAWA_COLLISION_LAYER
 	bg_people_active[idx] = true
 	var walk_mid: float = (BG_PEOPLE_SPEED_MIN + BG_PEOPLE_SPEED_MAX) * 0.5
@@ -31016,25 +31014,11 @@ func mp_background_person_hail(idx: int, result: String) -> void:
 		walker.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
 		walker._play_anim("idle")
 		walker.set_meta("street_hail_time", .55)
-		_show_street_hail_acceptance(walker)
+		if is_instance_valid(game_audio): game_audio.play_happy_four_note()
 	elif result == "join_exit":
 		_start_street_hail_exit(idx)
 	elif result == "join_wait":
 		walker.hide(); walker._wawa_click_area.collision_layer = 0
-
-
-func _show_street_hail_acceptance(walker: Node3D) -> void:
-	var badge = walker.get_node_or_null("HailAccepted") as Label3D
-	if badge == null:
-		badge = Label3D.new(); badge.name = "HailAccepted"
-		badge.text = "✓  ON MY WAY!"
-		badge.font = preload("res://assets/fonts/Fredoka-SemiBold.ttf")
-		badge.font_size = 40; badge.outline_size = 10; badge.pixel_size = .008
-		badge.modulate = Color("D7FFB0"); badge.outline_modulate = Color("24432A")
-		badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		badge.position = Vector3(0, CustomerScript.BAR_Y + .24, 0)
-		walker.add_child(badge)
-	badge.show()
 
 
 func _start_street_hail_exit(idx: int) -> void:
@@ -31043,7 +31027,7 @@ func _start_street_hail_exit(idx: int) -> void:
 	# Negative world X is screen-right, matching the normal customer entrance.
 	bg_people_dir[idx] = -1.0
 	walker.rotation_degrees.y = CustomerScript.WALK_MINUS_X_YAW
-	walker.play_street_run(1.35)
+	walker.play_street_walk(1.05)
 
 
 func _update_background_hail(idx: int, delta: float) -> bool:
@@ -31063,7 +31047,7 @@ func _update_background_hail(idx: int, delta: float) -> bool:
 		if remaining <= 0: _start_street_hail_exit(idx)
 		return true
 	elif result == "join_exit":
-		walker.position.x = move_toward(walker.position.x, -BG_PEOPLE_EDGE_X, delta * 7.0)
+		walker.position.x = move_toward(walker.position.x, -BG_PEOPLE_EDGE_X, delta * 3.5)
 		if is_equal_approx(walker.position.x, -BG_PEOPLE_EDGE_X):
 			walker.set_meta("street_hail", "join_wait")
 			walker.hide(); walker._wawa_click_area.collision_layer = 0
