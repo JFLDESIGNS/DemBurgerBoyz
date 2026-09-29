@@ -347,6 +347,7 @@ var bank_lifetime_repaid: float = 0.0
 var combo: int = 0
 var day: int = 1
 var day_time: float = DAY_LENGTH
+var _hotdog_shift_triggered := false
 var playing: bool = false
 ## Separate learn-by-doing mode. Normal shifts do not run these lessons.
 const GUIDED_TUTORIAL_DURATION := 15.0 * 60.0
@@ -3564,6 +3565,21 @@ func _hotdog_active() -> bool:
 	return is_instance_valid(_hotdog_challenge) and _hotdog_challenge.active()
 
 
+func _hotdog_shift_due() -> bool:
+	return not tutorial_mode and not _hotdog_shift_triggered and day_time <= 10.0
+
+
+func _update_shift_clock(delta: float, intro_blocking: bool = false) -> void:
+	if not playing or shift_paused or options_menu_open or tutorial_mode or intro_blocking or _hotdog_active() or (mp_enabled and not NetManager.is_host()): return
+	# Hold the last ten seconds while the existing line leaves and the boss plays.
+	day_time = maxf(0.0 if _hotdog_shift_triggered else 10.0, day_time - delta)
+	if not _hotdog_shift_due(): return
+	if not _regular_customers_empty() or _has_cut_collector() or _bts_day1_blocks_day_end(): return
+	if _boss_pep_pending: _try_start_pending_boss_pep()
+	if _serve_fly_busy or _boss_pep_pending or _boss_intro_running or _location_relocate_busy or not _challenge_phase.is_empty(): return
+	_ensure_hotdog_challenge().start()
+
+
 func _ready() -> void:
 	_ensure_hotdog_challenge()
 	randomize()
@@ -5429,6 +5445,7 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	combo = 0
 	day = 1
 	day_time = GUIDED_TUTORIAL_DURATION if tutorial_mode else _shift_length()
+	_hotdog_shift_triggered = false
 	difficulty = 0.0
 	total_served = 0
 	perfect_serves = 0
@@ -5506,6 +5523,7 @@ func _restart() -> void:
 	day = 1 ## Kept for save/network compatibility; location now owns progression.
 	combo = 0
 	day_time = _shift_length()
+	_hotdog_shift_triggered = false
 	difficulty = 0.0
 	total_served = 0
 	perfect_serves = 0
@@ -5841,10 +5859,7 @@ func _process_gameplay(delta: float) -> void:
 	var day1_needs_bts_sequence := _bts_day1_needs_sequence_customers()
 
 	## Shared shift clock — host owns it in co-op (synced via economy packets).
-	if not tutorial_mode and not day_intro_blocking and not _hotdog_active() and (not mp_enabled or NetManager.is_host()):
-		day_time -= delta
-		if day_time < 0.0:
-			day_time = 0.0
+	_update_shift_clock(delta, day_intro_blocking)
 	var day_progress := 1.0 - clampf(day_time / _shift_length(), 0.0, 1.0)
 	var location_stats := _location_stats()
 	difficulty = clampf(
@@ -5872,7 +5887,7 @@ func _process_gameplay(delta: float) -> void:
 				spawn_timer -= delta
 			var cap := _customer_cap()
 			var waiting_n := _waiting_customer_count()
-			if (not shift_closing or day1_needs_bts_sequence) and spawn_timer <= 0.0 and waiting_n < cap:
+			if (day_time > 10.0 or day1_needs_bts_sequence) and spawn_timer <= 0.0 and waiting_n < cap:
 				# if TERRORISTS_ENABLED and not terrorist_wave_active and day >= TERRORIST_MIN_DAY and randf() < TERRORIST_WAVE_CHANCE:
 				# 	_spawn_terrorist_wave()
 				# 	spawn_timer = _next_spawn_delay()
@@ -5889,7 +5904,9 @@ func _process_gameplay(delta: float) -> void:
 	rush_mode = _customer_cap() >= 3 and _waiting_customer_count() >= maxi(2, _customer_cap() - 1)
 
 	if not tutorial_mode and shift_closing and _regular_customers_empty():
-		if _challenge_phase != "":
+		if _hotdog_active() or _hotdog_shift_due():
+			pass
+		elif _challenge_phase != "":
 			pass
 		elif _maybe_begin_bts_day1_performance():
 			pass
@@ -8069,6 +8086,7 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 
 
 func _end_day() -> void:
+	if _hotdog_active() or ((not mp_enabled or NetManager.is_host()) and _hotdog_shift_due()): return
 	if not playing and is_instance_valid(_shift_results) and _shift_results.active: return
 	if playing: _start_burger_pals_parade("end_of_day")
 	if playing: _achievement_event("days")
@@ -61455,6 +61473,7 @@ func _next_bts_day1_skin_idx() -> int:
 
 func _challenge_blocks_spawns() -> bool:
 	if _hotdog_active(): return true
+	if not tutorial_mode and day_time <= 10.0 and not _bts_day1_needs_sequence_customers(): return true
 	return _challenge_phase == "wait_line" or _challenge_phase == "offer" or _challenge_phase == "active"
 
 

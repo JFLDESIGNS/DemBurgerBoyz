@@ -272,6 +272,7 @@ func start() -> bool:
 		game._flash("Finish the current event, then press . for Baron Brat", Color("FFD54F"))
 		return false
 	perfect = 0; mistakes = 0; pending_result = -1; milestone_history.clear()
+	game._hotdog_shift_triggered = true
 	smash_count = 0; victory_played = false
 	order_left = ORDER_SECONDS; ambient_left = randf_range(12,18); chatter_left = randf_range(5,9)
 	laugh_left = randf_range(12,22); eat_sound_played = false
@@ -641,6 +642,7 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 	if remote_phase.is_empty():
 		if active(): cancel()
 		return
+	game._hotdog_shift_triggered = true
 	if active() and generation != round_id: cancel()
 	if generation != round_id: victory_played = false
 	perfect = count; mistakes = wrong; recipes = orders; generation = round_id

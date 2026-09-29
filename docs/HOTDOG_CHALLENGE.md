@@ -1,6 +1,6 @@
 # Baron Brat boss challenge
 
-Start a normal shift, then press `.` (period). The challenge starts once another scripted event or burger handoff has finished. Pressing the key again during the challenge does not reset it.
+The challenge starts automatically when the shift reaches its final ten seconds and the last customer has actually left. New walk-ins stop at that cutoff; the clock holds at ten seconds while the existing line clears and the boss encounter plays. The remaining ten seconds resume after defeat or after the host dismisses the victory card, before the shift's light transition. Tutorials are excluded. Each new/restarted shift resets the trigger. The period key remains available for manual testing; an earlier manual encounter counts as that shift's boss encounter, so closing time does not create a second one.
 
 The truck/camera rumbles before Baron Brat emerges outside the service window. Build and serve through the existing order ticket and Serve controls. The boss requests 25 perfect burgers from distinct recipes, one at a time. A perfect recipe advances the count; wrong burgers and 17-second timeouts lose the order and cause a truck-directed hook followed by a ground smash. Each replacement is a different recipe; the deck reshuffles for every challenge. Five total losses end the challenge with Baron Brat winning. Camera shake and impact sound are timed to both strikes.
 
@@ -12,7 +12,7 @@ He starts farther away at Z = 6.3. Hidden > World > HOTDOG BOSS has live X, Y, Z
 
 His entrance uses bossahhhhhentrance.wav and a 1.8-second concrete break with a 0.35-second fade. Ground contact layers the impact thud with randomly selected smash1.wav or smash2.wav. eatboss.wav plays once at the eating callback for each burger, replacing the regular bite effect. Occasional laughboss.wav plays between actions, alongside the existing lower-pitched wawawa chatter. Audio sources are recorded in sounds/boss/SOURCES.md.
 
-The host owns recipes, countdown, scoring and phase transitions in co-op. Clients receive boss state and animation updates and use the existing host-authoritative serving requests.
+The host owns the automatic trigger, shift countdown, recipes, scoring and phase transitions in co-op. Clients receive boss state and animation updates and use the existing host-authoritative serving requests. Guests cannot independently trigger the closing encounter, advance the frozen clock or dismiss the shared victory screen. The shift light transition is blocked while the boss is active on either peer.
 
 Implementation: `scripts/hotdog_challenge.gd`, `scripts/hotdog_boss_customer.gd`, integration points in `scripts/game.gd`. Model: `assets/characters/baron_brat_bg/baron_brat_bg.glb`. Song: `sounds/boss/concrete_crack_boss.mp3`.
 
