@@ -1090,6 +1090,7 @@ var melting_cups: Array = [] ## cups dropped on the grill — melt / smoke / cha
 var melting_icecreams: Array = [] ## cones dropped on hot steel — serve slumps into burnt crust
 var _oil_blob_tex: ImageTexture = null
 var _oil_smoke_tex: ImageTexture = null
+var _oil_effect_pool: Node3D
 var _fire_smoke_tex: ImageTexture = null
 ## Animated noise holes punched through oil while it's on fire.
 var _oil_burn_noise: FastNoiseLite = null
@@ -14164,6 +14165,29 @@ func _build_burner_flames() -> void:
 			"pitch": -22.0 + randf_range(-4.0, 4.0),
 		})
 
+	var flame_batch := MultiMeshInstance3D.new()
+	var instances := MultiMesh.new()
+	instances.transform_format = MultiMesh.TRANSFORM_3D
+	instances.use_custom_data = true
+	instances.mesh = mesh
+	instances.instance_count = count
+	for i in count:
+		var source: MeshInstance3D = burner_flame_tris[i]
+		var data: Dictionary = burner_flame_data[i]
+		instances.set_instance_transform(i,source.transform)
+		instances.set_instance_custom_data(i,Color(data.phase,data.spd,data.amp,data.pulse))
+		source.free()
+	flame_batch.multimesh = instances
+	var flame_mat := ShaderMaterial.new()
+	flame_mat.shader = preload("res://shaders/kitchen_flame_batch.gdshader")
+	flame_mat.render_priority = 14
+	flame_batch.material_override = flame_mat
+	flame_batch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	flame_batch.hide()
+	root.add_child(flame_batch)
+	burner_flame_tris.clear();burner_flame_data.clear()
+	burner_flame_tris.append(flame_batch)
+
 	## Orange strip — spans cook width, pitched down onto the lip / apron (+Z, −Y).
 	var strip_root := Node3D.new()
 	strip_root.name = "BurnerStripLight"
@@ -14276,40 +14300,9 @@ func _set_burner_flames_visible(on: bool) -> void:
 				(light as OmniLight3D).light_energy = 0.22 if on else 0.0
 
 
-func _update_burner_flames(delta: float) -> void:
-	if not grill_on or burner_flame_root == null or not burner_flame_root.visible:
-		return
-	for i in burner_flame_tris.size():
-		var mi: MeshInstance3D = burner_flame_tris[i]
-		if not is_instance_valid(mi):
-			continue
-		var d: Dictionary = burner_flame_data[i]
-		d["phase"] = float(d["phase"]) + delta * float(d["spd"])
-		var ph: float = float(d["phase"])
-		var amp: float = float(d["amp"])
-		var base: Vector3 = d["base"]
-		var tip_budget: float = float(d["tip_budget"])
-		var tri_h: float = float(d["tri_h"])
-		var pitch: float = float(d.get("pitch", -22.0))
-		var wob_x := sin(ph) * amp + sin(ph * 1.7 + 0.4) * amp * 0.28
-		var wob_z := cos(ph * 0.9 + 0.6) * amp * 0.18
-		var wob_y := absf(sin(ph * 1.35)) * amp * 0.22
-		var pos := base + Vector3(wob_x, wob_y, wob_z)
-		pos.z = clampf(pos.z, -0.03, 0.02)
-		var pulse := 0.96 + 0.07 * absf(sin(ph * float(d["pulse"])))
-		var sc: float = float(d["sc"]) * pulse
-		## Keep animated flame tips below the grill body.
-		var tip_y := pos.y + tri_h * 0.55 * sc * cos(deg_to_rad(absf(pitch)))
-		if tip_y > tip_budget:
-			pos.y -= tip_y - tip_budget
-		mi.position = pos
-		mi.scale = Vector3(sc * (0.97 + 0.04 * sin(ph * 1.6)), sc, sc)
-		mi.rotation_degrees = Vector3(
-			pitch + sin(ph * 1.1) * 1.4,
-			180.0 + float(d["lean"]) + sin(ph * 0.8) * 2.2,
-			cos(ph * 1.3) * 1.6
-		)
-		burner_flame_data[i] = d
+func _update_burner_flames(_delta: float) -> void:
+	# The shared batch animates on the GPU; gameplay burner state is unchanged.
+	pass
 
 
 func _grill_place_bounds() -> Rect2:
@@ -23281,8 +23274,10 @@ func _spawn_oil_slick(pos: Vector3, radius: float = 0.04, _yaw: float = 0.0) -> 
 func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 	if tutorial_mode:
 		_tutorial_used_oil = true
-	var slick := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
+	_ensure_oil_effect_pool()
+	var slick: MeshInstance3D = _oil_effect_pool.take_mark()
+	if slick == null: return
+	var plane := slick.mesh as PlaneMesh
 	var rad := radius * (0.9 + randf() * 0.25)
 	## Round soft puddle — never a stretched rectangle.
 	plane.size = Vector2(rad * 2.15, rad * 2.15)
@@ -23293,7 +23288,8 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 	slick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	## Keep puddles under the pour stream (stream uses OIL_STREAM_DRAW_PRIO).
 	slick.sorting_offset = 0.4
-	var mat := StandardMaterial3D.new()
+	var mat := slick.material_override as StandardMaterial3D
+	mat.emission_enabled = false
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_texture = _get_oil_blob_texture()
@@ -23308,12 +23304,10 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.render_priority = OIL_SLICK_DRAW_PRIO
 	slick.material_override = mat
-	grill_root.add_child(slick)
-	var smoke := _make_oil_burn_smoke(rad)
-	slick.add_child(smoke)
+	slick.reparent(grill_root, false)
 	oil_slicks.append({
 		"mesh": slick,
-		"smoke": smoke,
+		"smoke": null,
 		"age": 0.0,
 		"life": 13.0 + randf() * 6.0, ## was 22–32s — cooks off quicker
 		"radius": rad,
@@ -23328,7 +23322,7 @@ func _spawn_oil_slick_local(pos: Vector3, radius: float = 0.04) -> void:
 		var old: Dictionary = oil_slicks.pop_front()
 		var m = old.get("mesh")
 		if m != null and is_instance_valid(m):
-			m.queue_free()
+			_release_oil_slick_mesh(m)
 	## Hot steel + fresh oil → loud fry, then a soft fade-out.
 	if grill_on and game_audio and game_audio.has_method("trigger_hot_oil"):
 		game_audio.trigger_hot_oil(3.0)
@@ -24514,7 +24508,7 @@ func _end_oil_trail_fire_burnout() -> void:
 			if _try_convert_oil_slick_to_crust(item, OIL_FIRE_RESIDUE_LEAVE_CHANCE):
 				keep.append(item)
 			else:
-				mesh.queue_free()
+				_release_oil_slick_mesh(mesh)
 		elif mesh != null and is_instance_valid(mesh):
 			item["on_fire"] = false
 			_set_oil_slick_burn_visual(item, false, null, 0.0, 0.0)
@@ -24747,6 +24741,7 @@ func _oil_slick_is_lit(item: Dictionary) -> bool:
 
 
 func _update_oil_slicks(delta: float) -> void:
+	if is_instance_valid(_oil_effect_pool): _oil_effect_pool.begin_regions()
 	var i := 0
 	## Hot flat-top cooks oil off faster and drives more smoke.
 	var burn_rate := 1.85 if grill_on else 1.0 ## was 1.55 / 0.85
@@ -24786,7 +24781,7 @@ func _update_oil_slicks(delta: float) -> void:
 				oil_slicks[i] = item
 				i += 1
 			else:
-				mesh.queue_free()
+				_release_oil_slick_mesh(mesh)
 				oil_slicks.remove_at(i)
 			continue
 		var burn := clampf(age / life, 0.0, 1.0)
@@ -24812,27 +24807,24 @@ func _update_oil_slicks(delta: float) -> void:
 		var shrink := lerpf(1.0, 0.55, smoothstep(0.35, 1.0, burn)) * scrape
 		mesh.scale = Vector3(shrink, 1.0, shrink)
 		## Smoke ramps mid-burn, peaks near the end, then trails off.
-		var smoke = item.get("smoke")
-		if smoke != null and is_instance_valid(smoke):
-			var smoke_amt := 0.0
-			if burn > 0.18:
-				smoke_amt = smoothstep(0.18, 0.45, burn) * (1.0 - smoothstep(0.88, 1.0, burn))
-				if grill_on:
-					smoke_amt = minf(1.0, smoke_amt * 1.35)
-				if lit:
-					smoke_amt = minf(1.0, smoke_amt * 1.5 + 0.2)
-			smoke.emitting = smoke_amt > 0.04
-			smoke.amount_ratio = smoke_amt
+		var smoke_amt := 0.0
+		if burn > 0.18:
+			smoke_amt = smoothstep(0.18, 0.45, burn) * (1.0 - smoothstep(0.88, 1.0, burn))
+			if grill_on: smoke_amt = minf(1.0, smoke_amt * 1.35)
+			if lit: smoke_amt = minf(1.0, smoke_amt * 1.5 + 0.2)
+		if is_instance_valid(_oil_effect_pool): _oil_effect_pool.add_smoke(mesh.global_position,smoke_amt)
 		oil_slicks[i] = item
 		i += 1
 
+	if is_instance_valid(_oil_effect_pool): _oil_effect_pool.finish_regions()
 
 func _clear_oil_slicks() -> void:
 	for item in oil_slicks:
 		var mesh = item.get("mesh") if typeof(item) == TYPE_DICTIONARY else null
 		if mesh != null and is_instance_valid(mesh):
-			mesh.queue_free()
+			_release_oil_slick_mesh(mesh)
 	oil_slicks.clear()
+	if is_instance_valid(_oil_effect_pool): _oil_effect_pool.stop()
 	_oil_fire_warned = false
 	_clear_soda_slicks()
 	_clear_soda_char_spots()
@@ -27012,7 +27004,24 @@ func _clear_melting_cups() -> void:
 	if game_audio != null and game_audio.has_method("stop_hot_oil"):
 		game_audio.stop_hot_oil()
 
+func _ensure_oil_effect_pool() -> void:
+	if is_instance_valid(_oil_effect_pool): return
+	_oil_effect_pool = preload("res://scripts/oil_effect_pool.gd").new()
+	world.add_child(_oil_effect_pool)
+	_oil_effect_pool.setup(self)
+
+
+func _release_oil_slick_mesh(mesh) -> void:
+	if not is_instance_valid(mesh): return
+	if bool(mesh.get_meta("pooled_oil_mark",false)) and is_instance_valid(_oil_effect_pool):
+		_oil_effect_pool.release_mark(mesh)
+	else:
+		mesh.queue_free()
+
+
 func _build_oil_bottle() -> void:
+	_ensure_oil_effect_pool()
+	preload("res://scripts/build_patty_heat.gd").prewarm(self)
 	## Oil bottle hanging from the far-left window beam.
 	if oil_root != null and is_instance_valid(oil_root):
 		oil_root.queue_free()
@@ -28378,6 +28387,7 @@ func _add_grill_seasoning_overlay(parent: Node3D) -> void:
 	parent.add_child(overlay)
 	grill_season_mesh = overlay
 	grill_season_mat = mat
+	preload("res://scripts/cached_grill_surface.gd").attach(overlay,mat)
 	_apply_grill_season_settings()
 
 
@@ -28398,6 +28408,7 @@ func _apply_grill_season_settings() -> void:
 	grill_season_mat.set_shader_parameter("uv_offset_y", grill_season_off_z)
 	grill_season_mat.set_shader_parameter("uv_repeat", grill_season_reps)
 
+	preload("res://scripts/cached_grill_surface.gd").invalidate(grill_season_mat)
 
 func _load_grill_season_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -28501,6 +28512,7 @@ func _add_grill_vignette_overlay(parent: Node3D) -> void:
 	parent.add_child(overlay)
 	grill_vig_mesh = overlay
 	grill_vig_mat = mat
+	preload("res://scripts/cached_grill_surface.gd").attach(overlay,mat)
 	_apply_grill_vignette_settings()
 
 
@@ -28521,6 +28533,7 @@ func _apply_grill_vignette_settings() -> void:
 	grill_vig_mat.set_shader_parameter("spot_scale", grill_vig_spot_scale)
 	grill_vig_mat.set_shader_parameter("noise_scale", grill_vig_noise_scale)
 
+	preload("res://scripts/cached_grill_surface.gd").invalidate(grill_vig_mat)
 
 func _load_grill_vignette_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -28855,7 +28868,7 @@ func _scrape_grill_liquids(pos: Vector3, move_xz: Vector2, moved: float, radius_
 			tw.set_parallel(true)
 			tw.tween_property(mesh, "position", fly, 0.16)
 			tw.tween_property(mesh, "scale", Vector3(0.1, 1.0, 0.1), 0.16)
-			tw.chain().tween_callback(mesh.queue_free)
+			tw.chain().tween_callback(_release_oil_slick_mesh.bind(mesh))
 			soda_char_spots.remove_at(ci)
 			if mp_enabled and not _mp_applying:
 				mp_soda_char_clear.rpc(cx, cz)
@@ -28997,7 +29010,7 @@ func _scrape_slick_array(
 			tw.set_parallel(true)
 			tw.tween_property(mesh, "position", fly, 0.18)
 			tw.tween_property(mesh, "scale", Vector3(0.05, 1.0, 0.05), 0.18)
-			tw.chain().tween_callback(mesh.queue_free)
+			tw.chain().tween_callback(_release_oil_slick_mesh.bind(mesh))
 			arr.remove_at(i)
 			continue
 		i += 1
@@ -29076,7 +29089,7 @@ func _mp_apply_soda_slick_scrape(
 	tw.set_parallel(true)
 	tw.tween_property(mesh, "position", fly, 0.18)
 	tw.tween_property(mesh, "scale", Vector3(0.05, 1.0, 0.05), 0.18)
-	tw.chain().tween_callback(mesh.queue_free)
+	tw.chain().tween_callback(_release_oil_slick_mesh.bind(mesh))
 	soda_slicks.remove_at(idx)
 
 func _mp_apply_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool) -> void:
@@ -29103,7 +29116,7 @@ func _mp_apply_oil_slick_scrape(x: float, z: float, scrape: float, remove: bool)
 	var smoke = item.get("smoke")
 	if smoke != null and is_instance_valid(smoke):
 		smoke.emitting = false
-	mesh.queue_free()
+	_release_oil_slick_mesh(mesh)
 	oil_slicks.remove_at(idx)
 
 
@@ -35279,32 +35292,24 @@ func _build_fryer_tub(parent: Node3D, index: int, x: float, steel_mat: Material,
 			(rim_mat as BaseMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
 		trim.material_override = rim_mat
 		tub.add_child(trim)
-	var bubble_mat := _make_basic_mat(fryer_bubble_color, 0.0, 0.18)
-	bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bubble_mat.emission_enabled = true
-	bubble_mat.emission = fryer_bubble_color.lightened(0.12)
-	bubble_mat.emission_energy_multiplier = 0.24
+	var bubbles := MultiMeshInstance3D.new()
+	var batch := MultiMesh.new()
+	batch.transform_format = MultiMesh.TRANSFORM_3D
+	batch.use_custom_data = true
+	var sphere := SphereMesh.new()
+	sphere.radius=1.0;sphere.height=2.0;sphere.radial_segments=12;sphere.rings=6
+	batch.mesh=sphere;batch.instance_count=9
 	for i in 9:
-		var bubble := MeshInstance3D.new()
-		bubble.name = "OilBubble%d" % i
-		var mesh := SphereMesh.new()
-		var r := randf_range(0.017, 0.033) * sqrt(ps)
-		mesh.radius = r
-		mesh.height = r * 2.0
-		mesh.radial_segments = 12
-		mesh.rings = 6
-		bubble.mesh = mesh
-		bubble.material_override = bubble_mat
-		bubble.position = Vector3(
-			randf_range(-0.12, 0.12) * ps,
-			oil_y - r * 0.05 + randf_range(-0.002, 0.004),
-			FRYER_OIL_LOCAL.z + randf_range(-0.095, 0.095) * ps
-		)
-		bubble.set_meta("home", bubble.position)
-		bubble.set_meta("phase", randf_range(0.0, TAU))
-		bubble.set_meta("rise", randf_range(0.004, 0.012))
-		tub.add_child(bubble)
-		fryer_oil_bubbles.append(bubble)
+		var r := randf_range(.017,.033)*sqrt(ps)
+		var at := Vector3(randf_range(-.12,.12)*ps,oil_y-r*.05+randf_range(-.002,.004),FRYER_OIL_LOCAL.z+randf_range(-.095,.095)*ps)
+		batch.set_instance_transform(i,Transform3D(Basis.IDENTITY.scaled(Vector3.ONE*r),at))
+		batch.set_instance_custom_data(i,Color(randf()*TAU,randf_range(.004,.012)/r,0,0))
+	var bubble_mat := ShaderMaterial.new()
+	bubble_mat.shader=preload("res://shaders/fryer_bubble_batch.gdshader")
+	bubble_mat.set_shader_parameter("bubble_color",fryer_bubble_color)
+	bubbles.multimesh=batch;bubbles.material_override=bubble_mat
+	bubbles.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	tub.add_child(bubbles);fryer_oil_bubbles.append(bubbles)
 
 
 func _build_fryer_machine() -> void:
@@ -35552,21 +35557,19 @@ func _set_fryer_basket_smoke_active(basket: Node3D, active: bool) -> void:
 
 func _set_fryer_basket_smoke_fade(basket: Node3D, fade: float) -> void:
 	var holder := _ensure_fryer_basket_smoke(basket)
-	if holder == null:
-		return
-	fade = clampf(fade, 0.0, 1.0)
-	var stack: Array[Node] = [holder]
-	while not stack.is_empty():
-		var node: Node = stack.pop_back()
-		for child in node.get_children():
-			stack.append(child)
-		var mi := node as MeshInstance3D
-		if mi == null:
-			continue
-		var mat := mi.material_override as ShaderMaterial
-		if mat != null:
-			mat.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 0.045 * fade))
-			mat.set_shader_parameter("alpha_boost", 0.85 * fade)
+	if holder == null: return
+	fade=clampf(fade,0.0,1.0)
+	if is_equal_approx(float(holder.get_meta("last_fade",-1.0)),fade): return
+	holder.set_meta("last_fade",fade)
+	if not holder.has_meta("fade_materials"):
+		var materials: Array[ShaderMaterial]=[]
+		for node in holder.find_children("*","MeshInstance3D",true,false):
+			var mat: ShaderMaterial=node.material_override as ShaderMaterial
+			if mat!=null and not materials.has(mat): materials.append(mat)
+		holder.set_meta("fade_materials",materials)
+	for mat in holder.get_meta("fade_materials"):
+		mat.set_shader_parameter("tint_color",Color(1,1,1,.045*fade))
+		mat.set_shader_parameter("alpha_boost",.85*fade)
 
 
 func _update_fryer_basket_smoke(delta: float) -> void:
@@ -36053,37 +36056,14 @@ func _apply_fryer_visual_colors() -> void:
 			if oil_mat != null:
 				oil_mat.albedo_color = fryer_oil_color
 				oil_mat.emission = fryer_oil_color.lightened(0.08)
-	for bubble_var in fryer_oil_bubbles:
-		var bubble := bubble_var as MeshInstance3D
-		if bubble == null or not is_instance_valid(bubble):
-			continue
-		var bubble_mat := bubble.material_override as StandardMaterial3D
-		if bubble_mat != null:
-			bubble_mat.albedo_color = fryer_bubble_color
-			bubble_mat.emission = fryer_bubble_color.lightened(0.12)
+	for bubble in fryer_oil_bubbles:
+		if is_instance_valid(bubble):
+			(bubble.material_override as ShaderMaterial).set_shader_parameter("bubble_color",fryer_bubble_color)
 
 
-func _update_fryer_oil_bubbles(delta: float) -> void:
-	if fryer_root == null or not is_instance_valid(fryer_root) or not fryer_root.visible:
-		return
-	var t := float(Time.get_ticks_msec()) * 0.001
-	for i in range(fryer_oil_bubbles.size() - 1, -1, -1):
-		var bubble := fryer_oil_bubbles[i] as MeshInstance3D
-		if bubble == null or not is_instance_valid(bubble):
-			fryer_oil_bubbles.remove_at(i)
-			continue
-		var home: Vector3 = bubble.get_meta("home", bubble.position)
-		var phase := float(bubble.get_meta("phase", 0.0))
-		var rise := float(bubble.get_meta("rise", 0.02))
-		var pulse := 0.5 + 0.5 * sin(t * 3.3 + phase)
-		bubble.position = home + Vector3(0.0, pulse * rise, 0.0)
-		var s := 0.68 + pulse * 0.22
-		bubble.scale = Vector3(s, s * 0.65, s)
-		var mat := bubble.material_override as StandardMaterial3D
-		if mat != null:
-			var c := mat.albedo_color
-			c.a = clampf(fryer_bubble_color.a * (0.76 + pulse * 0.24), 0.0, 1.0)
-			mat.albedo_color = c
+func _update_fryer_oil_bubbles(_delta: float) -> void:
+	# Per-instance shader phase avoids CPU transforms and shared-alpha overwrites.
+	pass
 
 
 func _fryer_basket_index_at(screen_pos: Vector2) -> int:

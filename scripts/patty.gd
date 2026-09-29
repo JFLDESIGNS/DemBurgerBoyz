@@ -65,7 +65,7 @@ var _season_fleck_count: int = 0
 const SEASON_MAX_FLECKS := 36
 
 var _mesh: MeshInstance3D
-var _mat: StandardMaterial3D
+var _mat: Material
 var _col_shape: CollisionShape3D = null
 var _col_cyl: CylinderShape3D = null
 var _frost: MeshInstance3D
@@ -147,11 +147,17 @@ var _cook_sear_mask := PackedFloat64Array()
 var _cook_sear_mask_seed: int = -1
 var _cook_gradient_state: Array = []
 var _cheese_drape_state: Array = []
+var _frost_visual_state: Array = []
+static var _fx_draw_cache: Array = []
 ## Cooking state remains frame-accurate, but visual texture/material uploads are
 ## intentionally capped and phase-staggered across patties.
 const COOK_VISUAL_HZ := 12.0
 const COOK_VISUAL_INTERVAL := 1.0 / COOK_VISUAL_HZ
 var _cook_visual_accum: float = 0.0
+var _cook_visual_dirty := false
+var _cook_mask_texture: ImageTexture
+var _smoke_meshes: Array[MeshInstance3D] = []
+var _smoke_last_opacity := -1.0
 static var _steam_tex: ImageTexture
 ## Soft smoke plume on finished (scoop-ready) burgers — not on flip.
 var _flip_smoke: Node3D = null
@@ -271,19 +277,8 @@ func _ready() -> void:
 	_mesh.scale = Vector3.ONE * PATTY_SIZE_SCALE
 
 	## Unshaded + vertical cook gradient (bottom sears first, top stays raw/frosty).
-	_mat = StandardMaterial3D.new()
-	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	_mat.metallic = 0.0
-	_mat.roughness = 1.0
-	_cook_img = Image.create(COOK_TEX_W, COOK_TEX_H, false, Image.FORMAT_RGBA8)
-	_cook_tex = ImageTexture.create_from_image(_cook_img)
-	_mat.albedo_texture = _cook_tex
-	_mat.albedo_color = Color.WHITE
-	_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	_mat.emission_enabled = false
-	_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_mat = ShaderMaterial.new()
+	_mat.shader = preload("res://shaders/patty_cooking.gdshader")
 	_mat.render_priority = PATTY_BODY_PRIORITY
 	_mesh.material_override = _mat
 	## Visual meshes are unshaded + no depth — add an opaque proxy so the grill gets a real shadow.
@@ -477,7 +472,11 @@ func _ready() -> void:
 	_ensure_hold_meter()
 	_ensure_cook_halo()
 	_ensure_season_root()
+	_build_cheese_slice()
+	_cheese_root.hide()
 	_setup_cook_fx()
+	_ensure_flip_smoke()
+	_clear_flip_smoke()
 	_update_cook_gradient()
 	_update_frost_visual()
 
@@ -506,15 +505,7 @@ func reset_for_grill_spawn(
 		_mesh.visible = true
 	_set_patty_disc_shadow(true)
 	sync_interact_collision()
-	if has_cheese or (_cheese_root != null and is_instance_valid(_cheese_root)):
-		remove_cheese()
-	if _cheese_root != null and is_instance_valid(_cheese_root):
-		_cheese_root.queue_free()
-	_cheese_root = null
-	_cheese_flaps.clear()
-	_cheese_mat = null
-	has_cheese = false
-	cheese_melt = 0.0
+	remove_cheese()
 	if _season_batch != null:
 		_season_batch.visible_instance_count = 0
 	_season_fleck_count = 0
@@ -606,6 +597,7 @@ func _set_edge_bubble_profile(ball_mode: bool) -> void:
 func _setup_cook_fx() -> void:
 	## Grease bubbles popping out from under the patty edge, near the grill surface.
 	_bubbles = GPUParticles3D.new()
+	_bubbles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_bubbles.amount = 16
 	_bubbles.lifetime = 0.35
 	_bubbles.explosiveness = 0.0
@@ -655,6 +647,7 @@ func _setup_cook_fx() -> void:
 
 	## Top-surface grease bubbles — kick in ~4s before flip / scoop ready.
 	_top_bubbles = GPUParticles3D.new()
+	_top_bubbles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_top_bubbles.amount = 14
 	_top_bubbles.lifetime = 0.4
 	_top_bubbles.explosiveness = 0.0
@@ -758,6 +751,13 @@ func _setup_cook_fx() -> void:
 	_steam.material_override = sdraw
 	_steam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_steam)
+	var effects := [_bubbles,_top_bubbles,_steam]
+	if _fx_draw_cache.is_empty():
+		for fx in effects: _fx_draw_cache.append([fx.draw_pass_1,fx.material_override])
+	else:
+		for i in effects.size():
+			effects[i].draw_pass_1=_fx_draw_cache[i][0]
+			effects[i].material_override=_fx_draw_cache[i][1]
 
 
 func _audio() -> Node:
@@ -899,14 +899,31 @@ func apply_mp_state(
 		apply_seasoning(p_season - seasoning)
 	else:
 		seasoning = clampf(p_season, 0.0, 1.0)
-	refresh_cook_visuals()
-	if can_scoop():
-		_ensure_flip_smoke()
-	else:
-		_clear_flip_smoke()
+	# State is authoritative immediately; cosmetics consume the staggered budget.
+	_cook_visual_dirty = true
+	_update_ready_cues()
 	if warm_hold_time > 0.0 or heat_mul <= 0.001:
 		_set_hold_meter_visible(flipped_once and can_scoop())
 		_refresh_hold_meter()
+
+
+func _tick_cook_visuals(delta: float) -> void:
+	_cook_visual_accum += delta
+	if _cook_visual_accum >= COOK_VISUAL_INTERVAL:
+		_cook_visual_accum = fmod(_cook_visual_accum, COOK_VISUAL_INTERVAL)
+		_cook_visual_dirty = false
+		_update_cook_gradient()
+		_update_frost_visual()
+		_update_sear_disc()
+		_update_grate_disc()
+		_update_meat_top()
+		_update_frozen_ball_cook_visual()
+		if _under_mat:
+			## Face on the grill: raw underside after flip, seared contact before.
+			if flipped_once:
+				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.2)
+			else:
+				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
 
 
 func _process(delta: float) -> void:
@@ -922,7 +939,8 @@ func _process(delta: float) -> void:
 		and _place_morph_tw == null and not is_held
 	if _bubbles:
 		_set_edge_bubble_profile(ball_bubbling)
-		_bubbles.emitting = cooking or ball_bubbling
+		if _bubbles.emitting != (cooking or ball_bubbling):
+			_bubbles.emitting = cooking or ball_bubbling
 	if _top_bubbles:
 		## Surface bubbles ~4s before flip, and again ~4s before scoop-ready.
 		var top_ready := false
@@ -931,17 +949,12 @@ func _process(delta: float) -> void:
 				top_ready = true
 			elif flipped_once and cook_time >= SCOOP_READY - BUBBLE_LEAD:
 				top_ready = true
-		_top_bubbles.emitting = top_ready
+		if _top_bubbles.emitting != top_ready: _top_bubbles.emitting = top_ready
 	if _steam:
-		_steam.emitting = cooking
+		if _steam.emitting != cooking: _steam.emitting = cooking
 	_update_ready_cues()
-	## Drop orphan melt mesh if has_cheese was cleared without remove_cheese().
-	if not has_cheese and _cheese_root != null:
-		if is_instance_valid(_cheese_root):
-			_cheese_root.queue_free()
-		_cheese_root = null
-		_cheese_flaps.clear()
-		_cheese_mat = null
+	if not has_cheese and is_instance_valid(_cheese_root):
+		_cheese_root.hide()
 	## Cheese keeps melting anywhere — grill, HOLD, spatula, or Build board.
 	## Guests take melt from host snapshots so co-op doesn't desync scoop-ready.
 	if has_cheese:
@@ -954,6 +967,7 @@ func _process(delta: float) -> void:
 		if _hint:
 			_hint.visible = false
 		_set_hold_meter_visible(false)
+		_tick_cook_visuals(delta)
 		return
 	if heating and not mp_puppet:
 		var rate := (1.0 + smash_bonus) * heat_mul
@@ -962,21 +976,7 @@ func _process(delta: float) -> void:
 		_sizzle += delta * 10.0 * heat_mul
 	elif heating:
 		_sizzle += delta * 10.0 * heat_mul
-	_cook_visual_accum += delta
-	if _cook_visual_accum >= COOK_VISUAL_INTERVAL:
-		_cook_visual_accum = fmod(_cook_visual_accum, COOK_VISUAL_INTERVAL)
-		_update_cook_gradient()
-		_update_frost_visual()
-		_update_sear_disc()
-		_update_grate_disc()
-		_update_meat_top()
-		_update_frozen_ball_cook_visual()
-		if _under_mat:
-			## Face on the grill: raw underside after flip, seared contact before.
-			if flipped_once:
-				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.2)
-			else:
-				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+	_tick_cook_visuals(delta)
 
 	if is_slide_drag:
 		## Spatula slide — keep cooking visuals, hide status ring / tip text.
@@ -1606,6 +1606,9 @@ func _update_frost_visual() -> void:
 		return
 	var a := frost_amount()
 	var top_a := frost_top_amount()
+	var state := [a, top_a, frost_haze_amount()]
+	if state == _frost_visual_state: return
+	_frost_visual_state = state
 	## Side shell: melt from the grill UP — top edge stays put, bottom rises.
 	if a <= 0.04:
 		_frost.visible = false
@@ -1690,6 +1693,23 @@ func color_at_cook_time(t: float) -> Color:
 
 
 func _update_cook_gradient() -> void:
+	if _mat is ShaderMaterial:
+		var state := [cook_time, first_side_time, flipped_once, _sear_seed]
+		if state == _cook_gradient_state: return
+		_cook_gradient_state = state
+		if _cook_mask_texture == null or _cook_sear_mask_seed != _sear_seed:
+			_ensure_cook_sear_mask()
+			var mask := Image.create(COOK_TEX_W, COOK_TEX_H, false, Image.FORMAT_RF)
+			for y in COOK_TEX_H:
+				for x in COOK_TEX_W:
+					mask.set_pixel(x,y,Color(_cook_sear_mask[y*COOK_TEX_W+x],0,0))
+			_cook_mask_texture = ImageTexture.create_from_image(mask)
+			_mat.set_shader_parameter("sear_mask",_cook_mask_texture)
+		_mat.set_shader_parameter("cook_time",cook_time)
+		_mat.set_shader_parameter("first_side_time",first_side_time)
+		_mat.set_shader_parameter("flipped",flipped_once)
+		return
+	## CPU reference for image-only tools/tests. Live patties use the shader above.
 	## Cylinder UV: v=0 at top, v=1 at bottom. Heat climbs from the grill.
 	if _cook_img == null or _cook_tex == null:
 		return
@@ -2087,11 +2107,11 @@ void fragment() {
 
 
 func _clear_flip_smoke() -> void:
-	if _flip_smoke != null and is_instance_valid(_flip_smoke):
-		_flip_smoke.queue_free()
-	_flip_smoke = null
+	if is_instance_valid(_flip_smoke):
+		_flip_smoke.hide()
 	_smoke_fade = 0.0
 	_smoke_still_t = 0.0
+	_set_flip_smoke_opacity_mul(0.0)
 
 
 func _ensure_flip_smoke() -> void:
@@ -2125,6 +2145,7 @@ func _ensure_flip_smoke() -> void:
 			if mat != null:
 				mat.render_priority = 8
 			mi.set_instance_shader_parameter("opacity_mul", 0.0)
+			_smoke_meshes.append(mi)
 		for child in node.get_children():
 			stack.append(child)
 	var s_h := FLIP_SMOKE_HEIGHT / 2.0
@@ -2139,15 +2160,10 @@ func _ensure_flip_smoke() -> void:
 
 
 func _set_flip_smoke_opacity_mul(mul: float) -> void:
-	if _flip_smoke == null or not is_instance_valid(_flip_smoke):
-		return
-	var stack: Array[Node] = [_flip_smoke]
-	while not stack.is_empty():
-		var node := stack.pop_back() as Node
-		if node is MeshInstance3D:
-			(node as MeshInstance3D).set_instance_shader_parameter("opacity_mul", mul)
-		for child in node.get_children():
-			stack.append(child)
+	if is_equal_approx(mul, _smoke_last_opacity): return
+	_smoke_last_opacity = mul
+	for mesh in _smoke_meshes:
+		mesh.set_instance_shader_parameter("opacity_mul", mul)
 
 
 func _update_flip_smoke(delta: float) -> void:
@@ -2765,15 +2781,10 @@ func add_cheese() -> bool:
 
 
 func remove_cheese() -> void:
-	if not has_cheese:
-		return
 	has_cheese = false
 	cheese_melt = 0.0
-	if _cheese_root != null and is_instance_valid(_cheese_root):
-		_cheese_root.queue_free()
-	_cheese_root = null
-	_cheese_flaps.clear()
-	_cheese_mat = null
+	_cheese_drape_state.clear()
+	if is_instance_valid(_cheese_root): _cheese_root.hide()
 
 
 func get_cheese_seat_global() -> Vector3:
@@ -2877,8 +2888,10 @@ func cheese_anchor_world() -> Vector3:
 
 
 func _build_cheese_slice() -> void:
-	if _cheese_root != null and is_instance_valid(_cheese_root):
-		_cheese_root.queue_free()
+	if is_instance_valid(_cheese_root):
+		_cheese_root.show()
+		_cheese_drape_state.clear()
+		return
 	_cheese_flaps.clear()
 	_cheese_root = Node3D.new()
 	_cheese_root.name = "CheeseSlice"

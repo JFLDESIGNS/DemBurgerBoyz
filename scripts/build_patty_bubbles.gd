@@ -1,10 +1,14 @@
 extends Control
 var heat: Control
+var redraw_age := 0.0
 func _ready() -> void:
  mouse_filter=Control.MOUSE_FILTER_IGNORE
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
  visible=is_instance_valid(heat) and heat.age<15.0
- if visible: queue_redraw()
+ if visible and is_visible_in_tree():
+  redraw_age+=delta
+  if redraw_age>=1.0/30.0:
+   redraw_age=fmod(redraw_age,1.0/30.0);queue_redraw()
 func _draw() -> void:
  if not is_instance_valid(heat): return
  for i in 8:
