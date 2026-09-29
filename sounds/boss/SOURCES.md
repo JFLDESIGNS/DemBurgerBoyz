@@ -15,3 +15,5 @@ Challenge music: Concrete Crack Boss.mp3, supplied by the project owner.
 User-supplied boss clips in sounds/: eatboss.wav, laughboss.wav, smash1.wav, smash2.wav, bossahhhhhentrance.wav.
 
 concrete_break_short.ogg is derived from concrete_break.mp3 above: first 1.8 seconds, with the final 0.35 seconds faded out; Vorbis quality 5. Original retained unchanged.
+
+toon_ground_impact.wav: original procedurally synthesized cartoon slam for this project (falling bass, spring-like pitch sweep and noise transient; 0.85 seconds, 48 kHz mono).

@@ -11,6 +11,16 @@ func _ready() -> void:
 	set_meta("hotdog_boss", true)
 	var model = load("res://assets/characters/baron_brat_bg/baron_brat_bg.glb").instantiate()
 	add_child(model)
+	# Matte rubber avoids glittering specular/self-shadow noise on thin bent arms.
+	for mesh in model.find_children("*", "MeshInstance3D", true, false):
+		for surface in mesh.mesh.get_surface_count():
+			var material = mesh.get_active_material(surface)
+			if material is StandardMaterial3D and "Liquorice" in material.resource_name:
+				var rubber = material.duplicate()
+				rubber.roughness = 1.0; rubber.metallic_specular = 0.0
+				rubber.disable_receive_shadows = true
+				mesh.set_surface_override_material(surface,rubber)
+
 	player = model.find_child("AnimationPlayer", true, false)
 	rig = model.find_child("Skeleton3D", true, false)
 	if rig == null:

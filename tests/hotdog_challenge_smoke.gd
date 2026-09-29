@@ -53,7 +53,7 @@ func run() -> void:
 	before = boss.impact_serial
 	boss._process(boss.timer*.6)
 	assert(boss.impact_serial == before+1,"Ground smash must shake camera at impact")
-	assert(boss.effects.playing and boss.effects.stream in [boss.sound_streams["smash1"],boss.sound_streams["smash2"]])
+	assert(boss.impact_sound.playing and boss.effects.playing and boss.effects.stream in [boss.sound_streams["smash1"],boss.sound_streams["smash2"]])
 	boss.advance_phase()
 	assert(boss.customer.order != first, "Wrong orders must be replaced")
 	# Expired orders count once, change recipe, and get a fresh seventeen seconds.
@@ -75,10 +75,13 @@ func run() -> void:
 	assert(not "PAUSED" in g.tickets[boss.customer].get_meta("timer_label").text)
 	boss.laugh_left = 20; boss.voice_left = 0
 	boss.chatter_left = .01; boss._process(.02)
-	assert(boss.voice.playing and is_equal_approx(boss.voice.pitch_scale,.65))
+	assert(boss.voice.playing and is_equal_approx(boss.voice.pitch_scale,.58))
 	boss.laugh_left = .01; boss.voice_left = 0; boss._process(.02)
 	assert(boss.voice.playing and boss.voice.stream.resource_path.ends_with("laughboss.wav"))
 	assert(boss.laugh_left >= 16)
+	assert(is_equal_approx(boss.voice.pitch_scale,.70))
+	assert(boss.voice_left > boss.voice.stream.get_length())
+	assert(AudioServer.is_bus_effect_enabled(AudioServer.get_bus_index("BaronBratVoice"),1))
 	# A valid handoff freezes the deadline even when the flight crosses it.
 	boss.order_left = .01
 	g._begin_customer_serve_handoff(boss.customer)

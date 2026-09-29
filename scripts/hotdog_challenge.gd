@@ -6,6 +6,7 @@ const TOTAL = 50
 const MAX_LOSSES = 10
 const ORDER_SECONDS = 17.0
 const PLACEMENT_FILE = "user://hotdog_boss.cfg"
+const VOICE_PITCH = .78
 const NET_ID = 1900000050
 var game: Node
 var customer: Node3D
@@ -41,6 +42,12 @@ var sound_streams: Dictionary = {}
 var failure_reason = "WRONG BURGER!"
 var voice: AudioStreamPlayer
 var concrete: AudioStreamPlayer
+var impact_sound: AudioStreamPlayer
+var street_saved: Array = []
+var spectator_presets: Array = []
+var spectator_time = 0.0
+var shadow_root_visible = true
+var shadow_root_saved = false
 
 static func make_recipes(seed_value: int) -> Array:
 	var rng = RandomNumberGenerator.new()
@@ -86,11 +93,28 @@ func setup(owner_game: Node) -> void:
 	music.bus = "Master"
 	music.volume_db = linear_to_db(.62)
 	add_child(music)
-	voice = AudioStreamPlayer.new(); voice.bus = "SFX"; add_child(voice)
+	var voice_bus = AudioServer.get_bus_index("BaronBratVoice")
+	if voice_bus < 0:
+		AudioServer.add_bus(); voice_bus = AudioServer.bus_count-1
+		AudioServer.set_bus_name(voice_bus,"BaronBratVoice")
+		AudioServer.set_bus_send(voice_bus,"SFX")
+		var grit = AudioEffectDistortion.new()
+		grit.mode = AudioEffectDistortion.MODE_OVERDRIVE
+		grit.drive = .12; grit.keep_hf_hz = 9000.0
+		AudioServer.add_bus_effect(voice_bus,grit)
+		var space = AudioEffectReverb.new()
+		space.room_size = .4; space.damping = .65; space.wet = .14; space.dry = 1.0
+		space.predelay_msec = 85.0
+		AudioServer.add_bus_effect(voice_bus,space)
+		AudioServer.set_bus_effect_enabled(voice_bus,1,false)
+	voice = AudioStreamPlayer.new(); voice.bus = "BaronBratVoice"; add_child(voice)
 	concrete = AudioStreamPlayer.new(); concrete.bus = "SFX"; add_child(concrete)
 	concrete.stream = load("res://sounds/boss/concrete_break_short.ogg")
 	concrete.volume_db = -3.0
 	effects = AudioStreamPlayer.new(); effects.bus = "SFX"; add_child(effects)
+	impact_sound = AudioStreamPlayer.new(); impact_sound.bus = "SFX"; add_child(impact_sound)
+	impact_sound.stream = load("res://sounds/boss/toon_ground_impact.wav")
+	impact_sound.volume_db = 0.0
 	for sound in ["eatboss", "laughboss", "smash1", "smash2", "bossahhhhhentrance"]:
 		sound_streams[sound] = load("res://sounds/" + sound + ".wav")
 
@@ -169,32 +193,35 @@ func duck_music(seconds: float, reduction_db: float) -> void:
 
 func play_sound(kind: String) -> void:
 	if kind in ["impact", "smash1", "smash2"]:
-		if is_instance_valid(game.game_audio): game.game_audio.play_truck_knock(.65 if kind != "impact" else 1.0)
+		if kind == "impact" and is_instance_valid(game.game_audio): game.game_audio.play_truck_knock(1.0)
 		if kind != "impact":
+			impact_sound.play()
 			effects.stream = sound_streams[kind]
 			effects.volume_db = -2.0 if kind == "smash1" else -3.0
 			effects.play()
-			duck_music(effects.stream.get_length(), 8.0)
+			duck_music(effects.stream.get_length(), 12.0)
 		return
-	voice.pitch_scale = 1.0
+	AudioServer.set_bus_effect_enabled(AudioServer.get_bus_index("BaronBratVoice"),1,kind == "laugh")
+	voice.pitch_scale = VOICE_PITCH
 	voice.volume_db = -1.0
 	match kind:
 		"breakout":
 			concrete.play()
 			voice.stream = sound_streams["bossahhhhhentrance"]
-			duck_music(maxf(concrete.stream.get_length(), voice.stream.get_length()), 12.0)
+			duck_music(maxf(concrete.stream.get_length(), voice.stream.get_length()/voice.pitch_scale), 12.0)
 		"eat":
 			voice.stream = sound_streams["eatboss"]
-			duck_music(voice.stream.get_length(), 8.0)
+			duck_music(voice.stream.get_length()/voice.pitch_scale, 8.0)
 		"laugh":
+			voice.pitch_scale = .70
 			voice.stream = sound_streams["laughboss"]
-			duck_music(voice.stream.get_length(), 8.0)
+			duck_music(voice.stream.get_length()/voice.pitch_scale, 8.0)
 		"wawawa":
 			voice.stream = load("res://sounds/wawawa.ogg")
-			voice.pitch_scale = .65; voice.volume_db = -7.0
+			voice.pitch_scale = .58; voice.volume_db = -7.0
 		_:
 			return
-	voice_left = 1.7 if kind == "wawawa" else voice.stream.get_length() + .05
+	voice_left = 1.7 if kind == "wawawa" else voice.stream.get_length()/voice.pitch_scale + .05
 	voice.play()
 
 func eating_sound() -> void:
@@ -227,6 +254,11 @@ func start() -> bool:
 	laugh_left = randf_range(12,22); eat_sound_played = false
 	recipes = make_recipes(randi())
 	generation += 1
+	spectator_time = 0.0; spectator_presets.clear()
+	for walker in game.bg_people:
+		var preset = walker.get_custom_character_preset()
+		if preset.is_empty(): preset = preload("res://scripts/customer.gd").take_next_saved_character_preset()
+		spectator_presets.append(preset)
 	_spawn()
 	phase = "rumble"; timer = 1.0
 	start_music()
@@ -254,6 +286,63 @@ func _spawn() -> void:
 	game.customers.append(customer)
 	customer.is_waiting = false
 	game.selected_customer = customer
+	stage_street()
+
+func stage_street() -> void:
+	if is_instance_valid(game.shadow_catcher_root):
+		shadow_root_visible = game.shadow_catcher_root.visible; shadow_root_saved = true
+		game.shadow_catcher_root.hide()
+	street_saved.clear()
+	for i in game.bg_people.size():
+		var walker = game.bg_people[i]
+		if not is_instance_valid(walker): continue
+		var anim = walker._anim_player
+		street_saved.append({"node":walker,"visible":walker.visible,"transform":walker.transform,
+			"preset":walker.get_custom_character_preset(), "animation":str(anim.current_animation) if is_instance_valid(anim) else "",
+			"time":anim.current_animation_position if is_instance_valid(anim) else 0.0,
+			"speed":anim.speed_scale if is_instance_valid(anim) else 1.0,
+			"collision":walker._wawa_click_area.collision_layer})
+		if i < spectator_presets.size() and walker.get_custom_character_preset() != spectator_presets[i]:
+			walker.restyle_street_character(spectator_presets[i], true)
+		walker._wawa_click_area.collision_layer = 0
+		walker.show(); walker.play_street_walk()
+	update_spectators(0)
+
+func update_spectators(delta: float) -> void:
+	spectator_time += delta
+	if is_instance_valid(game.shadow_catcher_root): game.shadow_catcher_root.hide()
+	for i in street_saved.size():
+		var walker = street_saved[i].node
+		if not is_instance_valid(walker): continue
+		var side = -1.0 if i%2 == 0 else 1.0
+		var end = Vector3(boss_position.x + side*(1.6*boss_scale+.85), game._bg_people_y(), boss_position.z+1.1)
+		var start = Vector3(boss_position.x+side*8.0,end.y,end.z+.3)
+		var progress = clampf((spectator_time-float(i)*.25)/3.5,0,1)
+		walker.position = start.lerp(end,progress)
+		walker.scale = Vector3.ONE * game._bg_people_scale()
+		if progress < 1:
+			walker.rotation.y = atan2(end.x-start.x,end.z-start.z)
+		else:
+			walker.rotation.y = atan2(boss_position.x-end.x,boss_position.z-end.z)
+			walker._play_anim("idle")
+
+func restore_street() -> void:
+	if is_instance_valid(game.shadow_catcher_root):
+		game.shadow_catcher_root.visible = shadow_root_visible if shadow_root_saved else true
+	shadow_root_saved = false
+	for saved in street_saved:
+		var walker = saved.node
+		if not is_instance_valid(walker): continue
+		if not saved.preset.is_empty() and walker.get_custom_character_preset() != saved.preset:
+			walker.restyle_street_character(saved.preset,true)
+		walker.transform = saved.transform; walker.visible = saved.visible
+		walker._wawa_click_area.collision_layer = saved.collision
+		walker._anim_state = ""
+		if is_instance_valid(walker._anim_player) and walker._anim_player.has_animation(saved.animation):
+			walker._anim_player.play(saved.animation)
+			walker._anim_player.seek(saved.time,true)
+			walker._anim_player.speed_scale = saved.speed
+	street_saved.clear()
 
 func play(name_value: String) -> float:
 	clip = name_value
@@ -331,6 +420,7 @@ func ready_order() -> void:
 
 func _process(delta: float) -> void:
 	if not active(): return
+	update_spectators(delta)
 	music_duck_left = maxf(0, music_duck_left-delta)
 	if music_duck_left <= 0:
 		music_duck_db = 0.0
@@ -423,6 +513,8 @@ func cancel() -> void:
 	if is_instance_valid(voice): voice.stop()
 	if is_instance_valid(concrete): concrete.stop()
 	if is_instance_valid(effects): effects.stop()
+	if is_instance_valid(impact_sound): impact_sound.stop()
+	restore_street()
 	voice_left = 0; music_duck_left = 0; music_duck_db = 0; eat_sound_played = false
 	game._sync_combat_audio()
 	if is_instance_valid(customer):
@@ -441,10 +533,10 @@ func cancel() -> void:
 
 func broadcast() -> void:
 	if not host() or not online(): return
-	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason)
+	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason, spectator_presets, spectator_time)
 
 @rpc("authority", "call_remote", "reliable")
-func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, animation: String, remaining: float, serial: int, round_id: int, seconds_left: float = ORDER_SECONDS, pos: Vector3 = Vector3(0,-.02,6.3), size_value: float = 1.0, reason: String = "WRONG BURGER!") -> void:
+func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, animation: String, remaining: float, serial: int, round_id: int, seconds_left: float = ORDER_SECONDS, pos: Vector3 = Vector3(0,-.02,6.3), size_value: float = 1.0, reason: String = "WRONG BURGER!", crowd: Array = [], crowd_time: float = 0.0) -> void:
 	if host(): return
 	if remote_phase.is_empty():
 		if active(): cancel()
@@ -452,6 +544,7 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 	if active() and generation != round_id: cancel()
 	perfect = count; mistakes = wrong; recipes = orders; generation = round_id
 	boss_position = pos; boss_scale = size_value; failure_reason = reason
+	spectator_presets = crowd; spectator_time = crowd_time
 	if not is_instance_valid(customer): _spawn()
 	apply_placement()
 	var changed = phase != remote_phase or customer.order != current_recipe()

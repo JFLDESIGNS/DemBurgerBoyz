@@ -30176,6 +30176,7 @@ func _build_shadow_catchers(parent: Node3D) -> void:
 		return
 	shadow_catcher_root = Node3D.new()
 	shadow_catcher_root.name = "ShadowCatchers"
+	shadow_catcher_root.visible = not _hotdog_active()
 	parent.add_child(shadow_catcher_root)
 	var bound_cols: Array[Color] = [
 		Color(0.15, 0.92, 1.0, 0.20),
@@ -30727,6 +30728,7 @@ func _build_background_people(parent: Node3D) -> void:
 
 
 func _start_background_person(idx: int, as_partner: bool = false) -> void:
+	if _hotdog_active(): return
 	## The host chooses identity, direction, gait and speed once. Guests only apply
 	## that event; previously every machine rolled a different street crowd.
 	if mp_enabled and not NetManager.is_host() and not _mp_applying:
@@ -30810,6 +30812,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run: bool, as_partner: bool, speed: float) -> void:
+	if _hotdog_active(): return
 	if NetManager.is_host() or idx < 0 or idx >= bg_people.size():
 		return
 	var walker := bg_people[idx] as Node3D
@@ -30868,6 +30871,7 @@ func _mp_send_background_people_snapshot(peer_id: int = 0) -> void:
 
 @rpc("authority", "call_remote", "unreliable_ordered")
 func mp_background_people_snapshot(active: Array, xs: Array, zs: Array) -> void:
+	if _hotdog_active(): return
 	if NetManager.is_host():
 		return
 	for i in mini(bg_people.size(), active.size()):
@@ -30886,6 +30890,7 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array) -> void:
 
 
 func _update_background_people(delta: float) -> void:
+	if _hotdog_active(): return
 	if bg_people.is_empty():
 		return
 	var z := _bg_people_z()
@@ -30965,6 +30970,7 @@ static func _street_hail_outcome(roll: int) -> String:
 
 
 func _hail_background_person(idx: int) -> void:
+	if _hotdog_active(): return
 	if not playing or shift_paused or options_menu_open: return
 	if idx < 0 or idx >= bg_people.size() or not bool(bg_people_active[idx]): return
 	var walker = bg_people[idx]
@@ -63112,9 +63118,10 @@ func _update_ticket_seconds_label(wrap: Control, customer: Node3D) -> void:
 		return
 	if is_instance_valid(customer) and customer.get_meta("hotdog_boss", false):
 		var boss = _ensure_hotdog_challenge()
-		label.text = "%.1fs LEFT" % boss.order_left
-		if boss.phase != "ready": label.text = "%.1fs PAUSED" % boss.order_left
-		label.add_theme_color_override("font_color", Color("C62828") if boss.order_left <= 5.0 else Color("A4511F"))
+		var text_value = "%.1fs LEFT" % boss.order_left if boss.phase == "ready" else "%.1fs PAUSED" % boss.order_left
+		if label.text != text_value: label.text = text_value
+		var color_value = Color("C62828") if boss.order_left <= 5.0 else Color("A4511F")
+		if label.get_theme_color("font_color") != color_value: label.add_theme_color_override("font_color",color_value)
 		return
 	label.text = "%.1fs" % _ticket_elapsed_seconds(customer)
 	if customer != null and is_instance_valid(customer) and bool(customer.get("is_challenge_guest")):
