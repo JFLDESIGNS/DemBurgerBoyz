@@ -79,6 +79,14 @@ func refresh() -> void:
    if clean in ["bun_top","bun_bottom"]:continue
    names.append(clean.replace("_"," ").capitalize())
   label(body," · ".join(names),Color("C7D9D5"),12)
+  var audit: Dictionary = row.get("audit",{})
+  if not audit.is_empty():
+   for entry in [["Ordered", "ordered", "C7D9D5"],["Served", "served", "FFFFFF"],["Missing", "missing", "FFCF75"],["Extra", "extra", "FF7777"]]:
+    var values: Array = audit.get(entry[1],[])
+    if values.is_empty(): continue
+    var words := PackedStringArray()
+    for value in values: words.append(str(value).replace("_", " ").capitalize())
+    label(body, entry[0]+": "+", ".join(words),Color(entry[2]),12)
   var stats: Dictionary=row.get("stats",{})
   for entry in [["Accuracy","accuracy"],["Cook","doneness"],["Seasoning","seasoning"],["Freshness","freshness"]]:
    if stats.has(entry[1]):label(body,"%s: %s" % [entry[0],stats[entry[1]]],Color("D9E2E0"),12)

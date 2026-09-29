@@ -1,0 +1,37 @@
+extends SceneTree
+func _initialize(): call_deferred("run")
+func run():
+ var data = load("res://scripts/game_data.gd")
+ var order = ["bun_bottom","patty","cheese","pickle","bun_top"]
+ assert(data.compare_orders(["bun_bottom","patty","pickle","cheese","bun_top"],order).perfect)
+ var mismatch = data.compare_orders(["bun_bottom","patty","tomato","bun_top"],order)
+ assert(mismatch.missing == ["cheese","pickle"] and mismatch.extra == ["tomato"])
+ var game = load("res://scripts/game.gd").new()
+ var texture = game._make_fire_emission_point_texture(PackedVector3Array([Vector3.ZERO]),null)
+ var identity = texture.get_instance_id()
+ var points := PackedVector3Array()
+ for i in 220: points.append(Vector3(i*.001,0,0))
+ texture = game._make_fire_emission_point_texture(points,texture)
+ assert(texture.get_instance_id() == identity and texture.get_width() == 220)
+ var particles := GPUParticles3D.new()
+ particles.process_material = ParticleProcessMaterial.new()
+ game.fire_particles = particles
+ game._apply_fire_emission_points(particles,texture,220,48,5)
+ game._apply_fire_emission_points(particles,texture,1,8,5)
+ assert(particles.amount == 48 and is_equal_approx(particles.amount_ratio,8.0/48.0))
+ game._apply_fire_fx_intensity(.5)
+ assert(is_equal_approx(particles.amount_ratio,4.0/48.0))
+ var ui := Control.new()
+ ui.size = Vector2(1280,720)
+ root.add_child(ui)
+ var slip = load("res://scripts/returned_order.gd").new()
+ ui.add_child(slip)
+ slip.present({"ordered":order,"missing":["cheese","pickle"],"extra":["tomato"]})
+ await process_frame
+ await process_frame
+ assert(slip.circles.size() == 2)
+ print("ORDER_AUDIT_AND_FIRE_ALLOCATION_OK")
+ particles.free()
+ game.free()
+ ui.queue_free()
+ quit()

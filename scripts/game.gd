@@ -23647,12 +23647,12 @@ func _build_oil_fire_path_points(anchors: Array = []) -> PackedVector3Array:
 
 func _make_fire_emission_point_texture(points: PackedVector3Array, into: ImageTexture) -> ImageTexture:
 	## Godot samples emission positions from an RGBF image (xyz per pixel).
-	var n := maxi(1, points.size())
+	var n := FIRE_PATH_MAX_POINTS
 	var img := Image.create(n, 1, false, Image.FORMAT_RGBF)
 	if points.is_empty():
 		img.set_pixel(0, 0, Color(0, 0, 0))
 	else:
-		for i in points.size():
+		for i in mini(points.size(), n):
 			var p: Vector3 = points[i]
 			img.set_pixel(i, 0, Color(p.x, p.y, p.z))
 	## Recreate when length changes — set_image alone won't resize the GPU texture.
@@ -23669,7 +23669,10 @@ func _apply_fire_emission_points(sys: GPUParticles3D, tex: ImageTexture, point_c
 	if pmat == null:
 		return
 	var n := maxi(1, point_count)
-	sys.amount = maxi(1, amount)
+	var capacity := 48 if sys == fire_particles else (24 if sys == fire_particles_red else (14 if sys == fire_embers else 22))
+	if sys.amount != capacity: sys.amount = capacity
+	sys.set_meta("fire_density", clampf(float(amount) / float(capacity), 0.0, 1.0))
+	sys.amount_ratio = float(sys.get_meta("fire_density"))
 	if tex == null or point_count <= 0:
 		pmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
 		pmat.emission_box_extents = Vector3(FIRE_EMIT_MIN_HALF, 0.002, FIRE_EMIT_MIN_HALF)
@@ -23723,7 +23726,7 @@ func _set_fire_fx_emitting(on: bool) -> void:
 		if sys != null and is_instance_valid(sys):
 			sys.emitting = on
 			if on:
-				sys.amount_ratio = 1.0
+				sys.amount_ratio = float(sys.get_meta("fire_density",1.0))
 			else:
 				sys.amount_ratio = 0.0
 
@@ -23743,7 +23746,7 @@ func _apply_fire_fx_intensity(intensity: float) -> void:
 	for sys in [fire_particles, fire_particles_red, fire_embers, fire_smoke]:
 		if sys == null or not is_instance_valid(sys):
 			continue
-		sys.amount_ratio = clampf(intensity, 0.0, 1.0)
+		sys.amount_ratio = clampf(intensity, 0.0, 1.0) * float(sys.get_meta("fire_density",1.0))
 		sys.emitting = on
 
 
@@ -70189,9 +70192,19 @@ func _complete_serve(
 		_complete_challenge_serve(station_index, cust, remote_drink)
 		return
 	var st: Dictionary = stations[station_index]
-	var items: Array = st["items"]
+	var items: Array = cust.get_meta("serve_recipe", st["items"]).duplicate()
 	var cached_review_pic := _make_review_burger_snapshot(station_index)
 	var result: Dictionary = GameDataScript.compare_orders(items, cust.order)
+	var missing: Array = result.get("missing", []).duplicate()
+	missing.append_array(cust.get_meta("serve_missing_items", []))
+	var served: Array = items.duplicate()
+	for side in cust.order:
+		if GameDataScript.order_burger_items([side]).is_empty() and not cust.get_meta("serve_missing_items", []).has(side): served.append(side)
+	var audit := {"ordered": cust.order.duplicate(), "served": served, "missing": missing, "extra": result.get("extra", []).duplicate()}
+	cust.set_meta("order_audit", audit)
+	if not missing.is_empty() or not audit.extra.is_empty():
+		_show_returned_order(audit)
+		if mp_enabled and NetManager.is_host(): mp_returned_order.rpc(audit)
 
 	var patty_mult := 1.0
 	var patties: Array = st["patties"]
@@ -70866,9 +70879,21 @@ func _begin_serve_at(
 				_flash("Need a top bun before serving", Color("FFCC80"))
 			return
 
-	var sides_present := (_cup_ready_for_order(order, customer) or source_has_held_cup) and _fries_ready_for_order(order, customer) and _icecream_ready_for_order(order, customer)
-	customer.set_meta("serve_missing_side", not sides_present)
-	customer.set_meta("serve_missing_soda", not (_cup_ready_for_order(order, customer) or source_has_held_cup))
+	# An explicit serve claims available sides for this customer, not queue position.
+	if GameDataScript.wants_fries(order): _consume_fries_for_serve(customer, true)
+	var soda_present := _customer_soda_handed(customer) or source_has_held_cup
+	var soda_ids := GameDataScript.order_soda_ids(order)
+	if soda_ids.is_empty(): soda_present = true
+	elif not soda_present: soda_present = _cup_matches_soda_order_id(str(soda_ids[0]))
+	var missing_sides: Array = []
+	if not soda_present: missing_sides.append_array(soda_ids)
+	if not _fries_ready_for_order(order, customer): missing_sides.append("fries")
+	if not _icecream_ready_for_order(order, customer): missing_sides.append("icecream")
+	customer.set_meta("serve_missing_items", missing_sides)
+	customer.set_meta("serve_missing_side", not missing_sides.is_empty())
+	customer.set_meta("serve_missing_soda", not soda_present)
+	# Freeze the recipe at handoff; input/replication during flight cannot change scoring.
+	customer.set_meta("serve_recipe", items.duplicate())
 	_begin_customer_serve_handoff(customer)
 	_shoot_station_condiments_home(station_index)
 	if game_audio and game_audio.has_method("play_order_up"):
@@ -78732,10 +78757,11 @@ func _check_perfect_rewards() -> void:
 func _record_order_history(base: int, tip: int, cost: float, customer: Node3D) -> void:
 	if mp_enabled and not NetManager.is_host(): return
 	var items := "Challenge reward" if base==0 else "Order"
-	if is_instance_valid(customer) and base>0: items=", ".join(customer.order)
+	if is_instance_valid(customer): items=", ".join(customer.order)
 	var row := {"number":order_history_revision+1,"day":day,"items":items,"sale":base,"tip":tip,"cost":cost,"profit":float(base+tip)-cost}
 	if is_instance_valid(customer):
 		customer.set_meta("sales_number",row.number)
+		row["audit"] = customer.get_meta("order_audit",{}).duplicate(true)
 		row["perfect"] = customer.get_meta("order_perfect",false)
 		row["stats"] = customer.get_meta("serve_breakdown",{})
 		row["photo"] = customer.get_meta("sales_photo",PackedByteArray())
@@ -78824,3 +78850,18 @@ func mp_local_sauce_scrape(pos: Vector3, direction: Vector2, radius: float) -> v
 	_mp_applying=true
 	_scrape_local_sauce(pos,direction,clampf(radius,.015,.10))
 	_mp_applying=false
+
+
+func _show_returned_order(audit: Dictionary) -> void:
+	var ui := get_node_or_null("UI/Root")
+	if ui == null: return
+	var old := ui.get_node_or_null("ReturnedOrder")
+	if old != null: old.queue_free()
+	var slip := preload("res://scripts/returned_order.gd").new()
+	slip.name = "ReturnedOrder"
+	ui.add_child(slip)
+	slip.present(audit)
+
+@rpc("authority", "call_remote", "reliable")
+func mp_returned_order(audit: Dictionary) -> void:
+	_show_returned_order(audit)
