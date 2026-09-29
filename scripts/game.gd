@@ -2023,6 +2023,7 @@ var fake_df_ao_mat: ShaderMaterial = null
 var _skip_next_bun_bounce: bool = false
 var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitboxes)
 var options_root: Control = null
+var player_settings: CanvasLayer = null
 var options_panel: PanelContainer = null
 var options_menu_open: bool = false
 var options_panel_dragging: bool = false
@@ -6341,6 +6342,11 @@ func _unhandled_input(event: InputEvent) -> void:
 var _empty_stock_controls: Node3D
 
 func _input(event: InputEvent) -> void:
+	if is_instance_valid(player_settings) and player_settings.visible:
+		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+			player_settings.close()
+			get_viewport().set_input_as_handled()
+		return
 	if _morning_boss_blocks_controls() and not (event is InputEventKey and event.keycode == KEY_ESCAPE):
 		if event is InputEventMouseButton and event.pressed and Time.get_ticks_msec()-_intro_error_ms>700:
 			_intro_error_ms=Time.get_ticks_msec()
@@ -56572,6 +56578,9 @@ func _build_options_menu() -> void:
 	_options_add_btn(general, "Resume", func():
 		_set_options_menu_open(false)
 	)
+	var player_settings_btn := _options_add_btn(general, "Settings", _open_player_settings)
+	player_settings_btn.name = "PlayerSettingsButton"
+	preload("res://scripts/player_settings.gd").style_button(player_settings_btn)
 	_options_add_btn(general, "Restart Day", func():
 		_options_restart_day()
 	)
@@ -59247,6 +59256,18 @@ func _apply_outdoor_ambience_settings() -> void:
 
 func _toggle_options_menu() -> void:
 	_set_options_menu_open(not options_menu_open)
+
+
+func _setup_player_settings() -> void:
+	if is_instance_valid(player_settings): return
+	player_settings = preload("res://scripts/player_settings.gd").new()
+	add_child(player_settings)
+	player_settings.setup(self)
+
+
+func _open_player_settings() -> void:
+	_setup_player_settings()
+	player_settings.open()
 
 
 func _set_options_menu_open(open: bool) -> void:
@@ -66448,6 +66469,17 @@ func _build_window_pause_ui() -> void:
 	closed_lab.set_anchors_preset(Control.PRESET_FULL_RECT)
 	closed_lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	window_shutter.add_child(closed_lab)
+	var settings_button := Button.new()
+	settings_button.name = "SettingsButton"
+	settings_button.text = "SETTINGS"
+	preload("res://scripts/player_settings.gd").style_button(settings_button)
+	window_shutter.add_child(settings_button)
+	settings_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	settings_button.offset_left = -120
+	settings_button.offset_right = 120
+	settings_button.offset_top = 48
+	settings_button.offset_bottom = 100
+	settings_button.pressed.connect(_open_player_settings)
 
 
 func _load_open_closed_sign_texture(path: String) -> Texture2D:

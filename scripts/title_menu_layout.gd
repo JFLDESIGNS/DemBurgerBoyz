@@ -34,6 +34,25 @@ func setup(game: Node) -> void:
  game.tutorial_btn.text = "CAT TUTORIAL"
  _button(game.tutorial_btn,Vector2(142,810),Vector2(244,44),Color("E5BA65"),Color("4C382B"),17,2)
  _button(creator,Vector2(410,810),Vector2(244,44),Color("B5D6CB"),Color("25595B"),17,3)
+ game._setup_player_settings()
+ var settings := Button.new()
+ settings.name = "SettingsButton"
+ settings.text = "SETTINGS"
+ settings.add_theme_font_override("font",game.start_btn.get_theme_font("font"))
+ stage.add_child(settings)
+ settings.pressed.connect(game._open_player_settings)
+ _button(settings,Vector2(278,872),Vector2(244,44),Color("147E83"),Color("FFF5DA"),17,4)
+ var quit_button := Button.new()
+ quit_button.name = "QuitGameButton"
+ quit_button.text = "QUIT GAME"
+ preload("res://scripts/player_settings.gd").style_button(quit_button)
+ add_child(quit_button)
+ quit_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+ quit_button.offset_left = -194
+ quit_button.offset_right = -24
+ quit_button.offset_top = -112
+ quit_button.offset_bottom = -64
+ quit_button.pressed.connect(game._options_exit_game)
  old.hide()
  resized.connect(_layout)
  _layout()
