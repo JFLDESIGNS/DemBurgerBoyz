@@ -8,7 +8,6 @@ const INK := Color("4C382B")
 const TEAL := Color("147E83")
 const RED := Color("D84C3E")
 const GOLD := Color("E5BA65")
-const DISPLAY_PATH := "user://display_settings.cfg"
 
 var game: Node
 var panel: PanelContainer
@@ -17,8 +16,7 @@ var back: Button
 var status: Label
 var audio_controls: Dictionary = {}
 var graphics_controls: Dictionary = {}
-var fullscreen: CheckButton
-var vsync: CheckButton
+var display_options: VBoxContainer
 var previous_focus: Control
 var previous_options_open := false
 
@@ -66,21 +64,16 @@ func setup(owner_game: Node) -> void:
 		audio_controls[spec[1]] = slider(audio, spec[0], 0.0, 1.0, func(value: float):
 			game.call(setter, value)
 		)
+	var display := page("Display")
+	display_options = preload("res://scripts/player_display_settings.gd").new()
+	display.add_child(display_options)
 	var graphics := page("Graphics")
 	graphics.add_theme_constant_override("separation", 8)
-	fullscreen = check(graphics, "Fullscreen", func(on: bool):
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if on else DisplayServer.WINDOW_MODE_WINDOWED)
-		save_display()
-	)
-	vsync = check(graphics, "VSync", func(on: bool):
-		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if on else DisplayServer.VSYNC_DISABLED)
-		save_display()
-	)
 	for spec in [["glow_on", "Glow / bloom"], ["shadows", "Shadows"], ["heat_warp_on", "Heat shimmer"]]:
 		var key := String(spec[0])
 		graphics_controls[key] = check(graphics, spec[1], func(on: bool): set_graphics(key, on))
 	graphics_controls["exposure"] = slider(graphics, "Brightness", 0.4, 1.8, func(value: float): set_graphics("exposure", value), false)
-	status = label("Changes save automatically", 13)
+	status = label("FPS, VSync, audio and graphics save automatically", 13)
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(status)
 	back = Button.new()
@@ -94,7 +87,7 @@ func setup(owner_game: Node) -> void:
 	col.add_child(hint)
 	get_viewport().size_changed.connect(layout)
 	layout()
-	load_display()
+	display_options.setup(self)
 
 func open() -> void:
 	if visible: return
@@ -123,8 +116,7 @@ func open() -> void:
 		else:
 			control.set_value_no_signal(float(value))
 			control.get_meta("readout").text = "%.2f" % float(value)
-	fullscreen.set_pressed_no_signal(DisplayServer.window_get_mode() in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN])
-	vsync.set_pressed_no_signal(DisplayServer.window_get_vsync_mode() != DisplayServer.VSYNC_DISABLED)
+	display_options.refresh()
 	tabs.current_tab = 0
 	visible = true
 	layout()
@@ -132,6 +124,9 @@ func open() -> void:
 
 func close() -> void:
 	if not visible: return
+	if display_options.has_pending():
+		display_options.revert_changes()
+		return
 	visible = false
 	game.options_menu_open = previous_options_open
 	if is_instance_valid(previous_focus) and previous_focus.is_visible_in_tree():
@@ -158,18 +153,6 @@ func set_graphics(key: String, value: Variant) -> void:
 			balance_cfg.load(LightBalance.SAVE_PATH)
 			balance_cfg.set_value("balance", LightBalance.GRAPHICS_KEYS[key], value)
 			if balance_cfg.save(LightBalance.SAVE_PATH) != OK: status.text = "Could not save lighting settings"
-
-func save_display() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("display", "fullscreen", fullscreen.button_pressed)
-	cfg.set_value("display", "vsync", vsync.button_pressed)
-	if cfg.save(DISPLAY_PATH) != OK: status.text = "Could not save display settings"
-
-func load_display() -> void:
-	var cfg := ConfigFile.new()
-	if cfg.load(DISPLAY_PATH) != OK: return
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if bool(cfg.get_value("display", "fullscreen", true)) else DisplayServer.WINDOW_MODE_WINDOWED)
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if bool(cfg.get_value("display", "vsync", true)) else DisplayServer.VSYNC_DISABLED)
 
 func page(title: String) -> VBoxContainer:
 	var scroll := ScrollContainer.new()

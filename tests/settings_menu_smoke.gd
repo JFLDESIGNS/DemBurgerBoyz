@@ -74,19 +74,13 @@ func run() -> void:
 	assert(is_equal_approx(settings.graphics_controls["exposure"].value, 1.13))
 	assert(not settings.graphics_controls["glow_on"].button_pressed)
 	assert(not settings.graphics_controls["shadows"].button_pressed)
-	settings.fullscreen.set_pressed_no_signal(false)
-	settings.vsync.set_pressed_no_signal(true)
-	settings.save_display()
-	assert(cfg.load(settings.DISPLAY_PATH) == OK)
-	assert(not bool(cfg.get_value("display", "fullscreen")))
-	assert(bool(cfg.get_value("display", "vsync")))
 	print("SETTINGS_PERSISTENCE_OK")
 	if DisplayServer.get_name() != "headless":
 		root.mode = Window.MODE_WINDOWED
 		DirAccess.make_dir_recursive_absolute("res://build/settings_preview")
 		for resolution in [Vector2i(1280,720), Vector2i(1920,1080), Vector2i(800,600)]:
 			root.size = resolution
-			for tab in [0, 1]:
+			for tab in [0, 1, 2]:
 				settings.tabs.current_tab = tab
 				for i in 8: await process_frame
 				assert(root.get_visible_rect().encloses(settings.panel.get_global_rect()), "Settings must fit viewport")
