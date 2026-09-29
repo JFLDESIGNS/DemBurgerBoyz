@@ -18,7 +18,7 @@ var ground := 0.0
 var stop := Vector3.ZERO
 var seat := Vector3.ZERO
 var doorstep := Vector3.ZERO
-var handoff := Vector3(1.38, 0.741, 2.0648)
+var handoff := Vector3(1.38, 0.741, 2.9792)
 var courier_base_scale := Vector3.ONE
 var old_cat_visible := false
 var old_cat_process := true
@@ -291,7 +291,8 @@ func _sync_courier_shape() -> void:
 	courier_base_scale = game.window_cat.delivery_visual_scale()
 	var giant: float = game.window_cat._giant
 	cat_visual.position.y = -0.335 * (game.window_cat._size_mul() - game.window_cat.DEFAULT_SIZE_MUL)
-	handoff.z = game.window_cat._home_z() + 0.3048 + maxf(0.0, courier_base_scale.z - 1.0) * 0.12
+	# Three extra feet of clearance for the courier's enlarged parcel at the van.
+	handoff.z = game.window_cat._home_z() + 1.2192 + maxf(0.0, courier_base_scale.z - 1.0) * 0.12
 	handoff.y = game.window_cat._shown_y()
 
 
