@@ -1,7 +1,9 @@
 extends Control
 var stage: Control
 var entries: Array[Control] = []
+var owner_game: Node
 func setup(game: Node) -> void:
+ owner_game = game
  name = "TitleMenuLayout"
  mouse_filter = Control.MOUSE_FILTER_IGNORE
  set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -115,15 +117,22 @@ func _button(button: Button, at: Vector2, dimensions: Vector2, color: Color, ink
 func _move_button(button: Button, y: float, duration: float) -> Tween:
  var previous = button.get_meta("menu_motion") if button.has_meta("menu_motion") else null
  if is_instance_valid(previous): previous.kill()
+ if owner_game.reduced_motion:
+  button.position = Vector2.ZERO
+  return null
  var tween := create_tween()
  button.set_meta("menu_motion",tween)
  tween.tween_property(button,"position:y",y,duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
  return tween
 func _hover(button: Button, hover: bool) -> void:
+ if owner_game.reduced_motion: return
  var tween := _move_button(button,-8 if hover else 0,.14)
  if hover: tween.tween_property(button,"position:y",-4,.18).set_trans(Tween.TRANS_SINE)
 func _entrance() -> void:
  if not is_visible_in_tree(): return
+ if owner_game.reduced_motion:
+  reset_motion()
+  return
  for holder in entries:
   var previous = holder.get_meta("entrance") if holder.has_meta("entrance") else null
   if is_instance_valid(previous): previous.kill()
@@ -136,6 +145,17 @@ func _entrance() -> void:
   tween.set_parallel(true)
   tween.tween_property(holder,"position",home,.5).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
   tween.tween_property(holder,"modulate:a",1.0,.3)
+
+func reset_motion() -> void:
+ for holder in entries:
+  var button := holder.get_child(0) as Button
+  var entrance = holder.get_meta("entrance") if holder.has_meta("entrance") else null
+  var motion = button.get_meta("menu_motion") if button.has_meta("menu_motion") else null
+  for animation in [entrance, motion]:
+   if is_instance_valid(animation): animation.kill()
+  holder.position = holder.get_meta("home")
+  holder.modulate.a = 1.0
+  button.position = Vector2.ZERO
 
 func _process(_delta: float) -> void:
  for holder in entries:

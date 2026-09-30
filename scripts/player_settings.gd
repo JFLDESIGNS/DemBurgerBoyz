@@ -17,6 +17,8 @@ var status: Label
 var audio_controls: Dictionary = {}
 var graphics_controls: Dictionary = {}
 var display_options: VBoxContainer
+var quality_choice: OptionButton
+var reduced_motion_check: CheckButton
 var previous_focus: Control
 var previous_options_open := false
 
@@ -69,10 +71,36 @@ func setup(owner_game: Node) -> void:
 	display.add_child(display_options)
 	var graphics := page("Graphics")
 	graphics.add_theme_constant_override("separation", 8)
+	var quality_row := HBoxContainer.new()
+	graphics.add_child(quality_row)
+	var quality_label := label("Graphics quality", 17)
+	quality_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quality_row.add_child(quality_label)
+	quality_choice = OptionButton.new()
+	quality_choice.custom_minimum_size = Vector2(180, 40)
+	Fonts.apply_button(quality_choice, false, 17)
+	for state in ["normal", "hover", "pressed"]:
+		quality_choice.add_theme_stylebox_override(state, box(GOLD, GOLD.darkened(0.2), 8, 3))
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		quality_choice.add_theme_color_override(state, INK)
+	for preset in ["Custom", "Low", "Medium", "High"]: quality_choice.add_item(preset)
+	quality_choice.set_item_disabled(0, true)
+	quality_choice.item_selected.connect(func(index: int): set_quality_preset(quality_choice.get_item_text(index)))
+	quality_row.add_child(quality_choice)
+	graphics_controls["render_scale"] = slider(graphics, "3D render scale", 0.5, 1.0, func(value: float): set_graphics("render_scale", value))
+	graphics_controls["render_scale"].step = 0.05
+	var scale_hint := label("Lower values improve performance. Menus stay sharp.", 12)
+	scale_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	graphics.add_child(scale_hint)
 	for spec in [["glow_on", "Glow / bloom"], ["shadows", "Shadows"], ["heat_warp_on", "Heat shimmer"]]:
 		var key := String(spec[0])
 		graphics_controls[key] = check(graphics, spec[1], func(on: bool): set_graphics(key, on))
 	graphics_controls["exposure"] = slider(graphics, "Brightness", 0.4, 1.8, func(value: float): set_graphics("exposure", value), false)
+	var comfort := page("Comfort")
+	reduced_motion_check = check(comfort, "Reduced motion", func(on: bool): game._set_reduced_motion(on))
+	var comfort_hint := label("Less camera shake, menu movement and grill-tap flashing. Cooking controls and timing stay the same.", 16)
+	comfort_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	comfort.add_child(comfort_hint)
 	status = label("FPS, VSync, audio and graphics save automatically", 13)
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(status)
@@ -97,30 +125,65 @@ func open() -> void:
 	game._load_audio_settings()
 	for key in audio_controls:
 		audio_controls[key].value = game.get(key)
-	var cfg := ConfigFile.new()
-	if cfg.load(game.GFX_CFG_PATH) != OK:
-		cfg.load(game.FIRST_RUN_GFX_CFG_PATH)
-	var balance_cfg := ConfigFile.new()
-	balance_cfg.load(LightBalance.SAVE_PATH)
-	for key in graphics_controls:
-		var value = cfg.get_value("gfx", key, game.GFX_DEFAULTS.get(key))
-		if LightBalance.GRAPHICS_KEYS.has(key):
-			var balance_key: String = LightBalance.GRAPHICS_KEYS[key]
-			value = game.light_balance.values[balance_key] if is_instance_valid(game.light_balance) else balance_cfg.get_value("balance", balance_key, LightBalance.DEFAULTS[balance_key])
-		elif game._kitchen_ready:
-			if game.gfx_checks.has(key): value = game.gfx_checks[key].button_pressed
-			elif game.gfx_sliders.has(key): value = game.gfx_sliders[key].value
-		var control = graphics_controls[key]
-		if control is CheckButton:
-			control.set_pressed_no_signal(bool(value))
-		else:
-			control.set_value_no_signal(float(value))
-			control.get_meta("readout").text = "%.2f" % float(value)
+	refresh_graphics_controls()
+	reduced_motion_check.set_pressed_no_signal(game.reduced_motion)
 	display_options.refresh()
 	tabs.current_tab = 0
 	visible = true
 	layout()
 	back.grab_focus()
+
+func current_graphics() -> Dictionary:
+	var values: Dictionary = game.GFX_DEFAULTS.duplicate()
+	var cfg := ConfigFile.new()
+	if cfg.load(game.GFX_CFG_PATH) != OK:
+		cfg.load(game.FIRST_RUN_GFX_CFG_PATH)
+	if cfg.has_section("gfx"):
+		for key in cfg.get_section_keys("gfx"): values[key] = cfg.get_value("gfx", key)
+	if game._kitchen_ready: values.merge(game._read_graphics_from_ui(), true)
+	var balance_cfg := ConfigFile.new()
+	balance_cfg.load(LightBalance.SAVE_PATH)
+	for key in LightBalance.GRAPHICS_KEYS:
+		var balance_key: String = LightBalance.GRAPHICS_KEYS[key]
+		values[key] = game.light_balance.values[balance_key] if is_instance_valid(game.light_balance) else balance_cfg.get_value("balance", balance_key, LightBalance.DEFAULTS[balance_key])
+	return values
+
+func refresh_graphics_controls() -> void:
+	var values := current_graphics()
+	for key in graphics_controls:
+		var value = values[key]
+		var control = graphics_controls[key]
+		if control is CheckButton:
+			control.set_pressed_no_signal(bool(value))
+		else:
+			control.set_value_no_signal(float(value))
+			control.get_meta("readout").text = "%d%%" % roundi(float(value) * 100) if key == "render_scale" else "%.2f" % float(value)
+	quality_choice.select(0)
+	for index in range(1, quality_choice.item_count):
+		var preset: Dictionary = game._quality_preset_values(quality_choice.get_item_text(index))
+		var matches := true
+		for key in preset:
+			if values.get(key) != preset[key]: matches = false
+		if matches:
+			quality_choice.select(index)
+			break
+
+func set_quality_preset(preset: String) -> void:
+	if preset not in ["Low", "Medium", "High"]: return
+	if game._kitchen_ready:
+		game._apply_quality_preset(preset)
+	else:
+		var values := current_graphics()
+		var changes: Dictionary = game._quality_preset_values(preset)
+		values.merge(changes, true)
+		game._save_graphics_settings(values)
+		# Bloom also belongs to the authoritative lighting profile.
+		var balance := ConfigFile.new()
+		balance.load(LightBalance.SAVE_PATH)
+		balance.set_value("balance", "bloom_enabled", changes.glow_on)
+		if balance.save(LightBalance.SAVE_PATH) != OK: status.text = "Could not save lighting settings"
+		game._apply_performance_quality(values)
+	refresh_graphics_controls()
 
 func close() -> void:
 	if not visible: return
@@ -153,6 +216,8 @@ func set_graphics(key: String, value: Variant) -> void:
 			balance_cfg.load(LightBalance.SAVE_PATH)
 			balance_cfg.set_value("balance", LightBalance.GRAPHICS_KEYS[key], value)
 			if balance_cfg.save(LightBalance.SAVE_PATH) != OK: status.text = "Could not save lighting settings"
+		if key == "render_scale": game._apply_performance_quality(current_graphics())
+	refresh_graphics_controls()
 
 func page(title: String) -> VBoxContainer:
 	var scroll := ScrollContainer.new()

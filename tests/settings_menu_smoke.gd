@@ -80,7 +80,7 @@ func run() -> void:
 		DirAccess.make_dir_recursive_absolute("res://build/settings_preview")
 		for resolution in [Vector2i(1280,720), Vector2i(1920,1080), Vector2i(800,600)]:
 			root.size = resolution
-			for tab in [0, 1, 2]:
+			for tab in range(settings.tabs.get_tab_count()):
 				settings.tabs.current_tab = tab
 				for i in 8: await process_frame
 				assert(root.get_visible_rect().encloses(settings.panel.get_global_rect()), "Settings must fit viewport")

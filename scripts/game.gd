@@ -2024,6 +2024,8 @@ var _skip_next_bun_bounce: bool = false
 var _build_zone_cfg: Dictionary = {} ## live build-zone layout (GFX menu + hitboxes)
 var options_root: Control = null
 var player_settings: CanvasLayer = null
+var reduced_motion := false
+const ACCESSIBILITY_CFG_PATH := "user://accessibility_settings.cfg"
 var options_panel: PanelContainer = null
 var options_menu_open: bool = false
 var options_panel_dragging: bool = false
@@ -5268,6 +5270,7 @@ func _stop_logo_hover() -> void:
 func _start_logo_rumble() -> void:
 	## Very slight idle engine rumble while the opening overlay is up.
 	_stop_logo_hover()
+	if reduced_motion: return
 	if start_logo_motion == null or not is_instance_valid(start_logo_motion):
 		return
 	if start_overlay != null and is_instance_valid(start_overlay) and not start_overlay.visible:
@@ -13057,10 +13060,10 @@ func _flash_grill_tap_mesh(mi: MeshInstance3D, hot: Color) -> void:
 		if old != null and is_instance_valid(old):
 			old.kill()
 		_grill_tap_flash_tweens.erase(id)
-	mat.albedo_color = hot
+	mat.albedo_color = base.lerp(hot, 0.2) if reduced_motion else hot
 	mat.emission_enabled = true
 	mat.emission = Color(hot.r, hot.g, hot.b)
-	mat.emission_energy_multiplier = 2.4
+	mat.emission_energy_multiplier = 0.0 if reduced_motion else 2.4
 	var tw := create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(mat, "albedo_color", base, 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -41172,12 +41175,16 @@ func _sync_player_camera_hidden_ui() -> void:
 
 
 func _start_slot_camera_shake(duration: float = 2.0) -> void:
+	if reduced_motion: return
 	slot_camera_shake_t = maxf(slot_camera_shake_t, duration)
 	slot_camera_shake_total = maxf(slot_camera_shake_total, duration)
 
 
 func _update_slot_camera_shake(delta: float) -> void:
 	if camera == null or not is_instance_valid(camera):
+		return
+	if reduced_motion:
+		slot_camera_shake_t = 0.0
 		return
 	if slot_camera_shake_t <= 0.0:
 		if camera.position.distance_to(slot_camera_base_pos) > 0.0001:
@@ -55018,8 +55025,7 @@ func _gfx_add_choice(parent: Control, key: String, label_text: String, choices: 
 	gfx_choices[key] = choice
 
 
-func _apply_quality_preset(preset: String) -> void:
-	var settings := _read_graphics_from_ui()
+func _quality_preset_values(preset: String) -> Dictionary:
 	var values: Dictionary
 	match preset:
 		"Low":
@@ -55028,8 +55034,15 @@ func _apply_quality_preset(preset: String) -> void:
 			values = {"render_scale": 1.0, "msaa_level": 1, "fxaa": false, "shadow_resolution": 4096, "shadow_filter_quality": 3, "secondary_shadows": false, "sun_shadow_distance": 40.0, "ssil": false, "ssao": true, "fake_df_ao": false, "glow_on": true}
 		_:
 			values = {"render_scale": 1.0, "msaa_level": 2, "fxaa": true, "shadow_resolution": 8192, "shadow_filter_quality": 4, "secondary_shadows": true, "sun_shadow_distance": 80.0, "ssil": true, "ssao": true, "fake_df_ao": false, "glow_on": true}
+	return values
+
+
+func _apply_quality_preset(preset: String) -> void:
+	var settings := _read_graphics_from_ui()
+	var values := _quality_preset_values(preset)
 	settings.merge(values, true)
 	for key in values:
+		if light_balance != null: light_balance.set_from_graphics(key, values[key])
 		if gfx_sliders.has(key):
 			_sync_gfx_slider_no_signal(key, float(values[key]))
 		elif gfx_checks.has(key):
@@ -59260,6 +59273,7 @@ func _toggle_options_menu() -> void:
 
 func _setup_player_settings() -> void:
 	if is_instance_valid(player_settings): return
+	_load_accessibility_settings()
 	player_settings = preload("res://scripts/player_settings.gd").new()
 	add_child(player_settings)
 	player_settings.setup(self)
@@ -59268,6 +59282,32 @@ func _setup_player_settings() -> void:
 func _open_player_settings() -> void:
 	_setup_player_settings()
 	player_settings.open()
+
+
+func _load_accessibility_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(ACCESSIBILITY_CFG_PATH)
+	_set_reduced_motion(bool(cfg.get_value("accessibility", "reduced_motion", false)), false)
+
+
+func _set_reduced_motion(enabled: bool, save: bool = true) -> void:
+	reduced_motion = enabled
+	if enabled:
+		_stop_logo_hover()
+		if slot_camera_shake_t > 0.0 and is_instance_valid(camera):
+			camera.position = slot_camera_base_pos
+		slot_camera_shake_t = 0.0
+		slot_camera_shake_total = 0.0
+		if is_instance_valid(start_overlay):
+			var layout := start_overlay.get_node_or_null("TitleMenuLayout")
+			if layout != null: layout.reset_motion()
+	else:
+		_start_logo_rumble()
+	if save:
+		var cfg := ConfigFile.new()
+		cfg.set_value("accessibility", "reduced_motion", reduced_motion)
+		if cfg.save(ACCESSIBILITY_CFG_PATH) != OK and is_instance_valid(player_settings):
+			player_settings.status.text = "Could not save accessibility settings"
 
 
 func _set_options_menu_open(open: bool) -> void:
@@ -64792,6 +64832,7 @@ func _make_strip_hotkey_keycap(digit: String) -> Control:
 func _shake_ingredient_button(btn: Control) -> void:
 	if btn == null or not is_instance_valid(btn):
 		return
+	if reduced_motion: return
 	btn.pivot_offset = btn.size * 0.5
 	## Snap size if not laid out yet
 	if btn.size.x < 1.0:
