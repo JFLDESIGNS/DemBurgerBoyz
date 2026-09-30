@@ -1989,6 +1989,7 @@ func _load_cat_begging_meow_stream() -> AudioStream:
 
 func play_cat_begging_meow(pitch: float = 1.2) -> void:
 	if cat_sounds_muted: return
+	play_cat_meow(0.5) # Layer the original chirp onto the start of each whine.
 	var stream := _load_cat_begging_meow_stream()
 	if stream == null:
 		play_cat_meow()
@@ -3868,4 +3869,30 @@ func _make_comic_pop(peek: bool) -> AudioStreamWAV:
 		var env:=sin(minf(t/.008,1.0)*PI*.5)*exp(-t*(8.0 if peek else 28.0))
 		var sample:float=(sin(phase+sin(t*65.0)*2.0)*.8 if peek else sin(phase)*.55+randf_range(-1,1)*.45)*env
 		_write_s16(pcm,i,int(clampf(sample,-1,1)*20000.0))
+	return _wav_from_pcm(pcm,false)
+
+func play_cat_angry() -> void:
+	if not cat_sounds_muted: _play_cached("cat_angry", _make_cat_angry, 1.0, 1.4 * _sfx("customers"))
+
+func play_cat_cartoon_smack() -> void:
+	if not cat_sounds_muted: _play_cached("cat_smack", _make_cat_cartoon_smack, 1.0, 1.2 * _sfx("customers"))
+
+func _make_cat_angry() -> AudioStreamWAV:
+	var n := int(MIX_RATE*.45)
+	var pcm := PackedByteArray()
+	pcm.resize(n*2)
+	for i in n:
+		var t := float(i)/MIX_RATE
+		var wave := sin(TAU*(240*t+110*t*t))*.3 + randf_range(-1,1)*.4
+		_write_s16(pcm,i,int(wave*sin(PI*t/.45)*17000))
+	return _wav_from_pcm(pcm,false)
+
+func _make_cat_cartoon_smack() -> AudioStreamWAV:
+	var n := int(MIX_RATE*.23)
+	var pcm := PackedByteArray()
+	pcm.resize(n*2)
+	for i in n:
+		var t := float(i)/MIX_RATE
+		var wave := randf_range(-1,1)*exp(-t*70)*.75+sin(TAU*(380*t-620*t*t))*exp(-t*22)*.5
+		_write_s16(pcm,i,int(clampf(wave,-1,1)*22000))
 	return _wav_from_pcm(pcm,false)

@@ -9,6 +9,7 @@ var last_position := Vector3.ZERO
 var last_contact := -1
 var last_animation := ""
 var cooldown := 0.0
+var point_voice: AudioStreamPlayer3D
 
 static func make_step(cartoon: bool) -> AudioStreamWAV:
  var stream := AudioStreamWAV.new()
@@ -45,11 +46,13 @@ func _process(delta: float) -> void:
  var at := actor.global_position
  var distance := at.distance_to(last_position)
  last_position = at
- if bool(actor.get_meta("delivery_driver",false)):
-  var running := actor.is_visible_in_tree() and bool(actor.get_meta("courier_running",false))
+ _update_point_voice()
+ if bool(actor.get_meta("delivery_driver",false)) or bool(actor.get_meta("recruited_running",false)) or audio.stream == COURIER_RUN:
+  var recruited := bool(actor.get_meta("recruited_running",false))
+  var running := actor.is_visible_in_tree() and (bool(actor.get_meta("courier_running",false)) or recruited)
   if running:
    if audio.stream != COURIER_RUN or not audio.playing:
-    audio.stream=COURIER_RUN;audio.volume_db=-10;audio.pitch_scale=1.15;audio.play()
+    audio.stream=COURIER_RUN;audio.volume_db=-19 if recruited else -10;audio.pitch_scale=1.15;audio.play()
   elif audio.stream == COURIER_RUN:
    audio.stop()
   return
@@ -84,3 +87,20 @@ func play_skid() -> void:
  # Hold the squeal through the driver's longer slide, then stop before turning.
  get_tree().create_timer(.75).timeout.connect(func():
   if is_instance_valid(audio): audio.stop())
+
+func _update_point_voice() -> void:
+ var player = actor.get("_anim_player")
+ var pointing: bool = actor.is_visible_in_tree() and is_instance_valid(player) and player.is_playing() and str(player.current_animation).ends_with("Point_Finger_Yell")
+ if not pointing:
+  if is_instance_valid(point_voice): point_voice.stop()
+  return
+ if not is_instance_valid(point_voice):
+  point_voice = AudioStreamPlayer3D.new()
+  point_voice.bus = "SFX"
+  point_voice.unit_size = 4.0
+  point_voice.volume_db = -9.0
+  point_voice.pitch_scale = 1.28
+  add_child(point_voice)
+ if not point_voice.playing:
+  point_voice.stream = preload("res://scripts/customer_voice.gd").stream(actor.get_customer_voice(),false)
+  point_voice.play()

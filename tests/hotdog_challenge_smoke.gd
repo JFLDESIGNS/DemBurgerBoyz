@@ -20,11 +20,11 @@ func run() -> void:
 	assert(not boss.start(),"Repeat trigger must not reset progress")
 	var unique = {}
 	for recipe in boss.recipes: unique[str(recipe)] = true
-	assert(unique.size() == 40)
+	assert(unique.size() == 26)
 	for seed_value in range(12):
 		var deck = boss.make_recipes(seed_value)
-		assert(deck.size() == 40)
-		for order in deck.slice(30):
+		assert(deck.size() == 26)
+		for order in deck.slice(18):
 			assert(order.count("patty") in [2,3] and order.size() >= 8 and order.size() <= 13)
 	var smash_variants = {}
 	for i in 6:
@@ -118,11 +118,11 @@ func run() -> void:
 	g.stations[0].items = boss.customer.order.duplicate()
 	g._complete_serve(0,boss.customer); boss._process(.01)
 	assert(boss.perfect == 1)
-	for i in range(1,25):
+	for i in range(1,15):
 		assert(boss.phase == "ready")
-		if i >= 20:
+		if i >= 10:
 			assert(boss.customer.order.count("patty") in [2,3], "Final five must be multi-patty orders")
-		if i < 24:
+		if i < 14:
 			assert(boss.next_order_preview.order == boss.recipe_at(i+1))
 			assert(g.tickets[boss.next_order_preview].visible)
 		else:
@@ -135,10 +135,10 @@ func run() -> void:
 		assert(g.credited == paid)
 		boss._process(.01)
 		assert(boss.perfect == i+1)
-		if i+1 in [5,10,15,20]:
+		if i+1 in [5,10]:
 			assert(boss.phase == "slump")
 			var hold = boss.timer - boss.customer.player.get_animation("slump").length
-			assert(is_equal_approx(hold, 3.4 if i+1 == 20 else 1.35))
+			assert(is_equal_approx(hold, 3.4 if i+1 == 10 else 1.35))
 			boss.concrete.stop()
 			boss.advance_phase();assert(boss.phase == "revive")
 			assert(boss.timer <= .551 and boss.customer.player.speed_scale > 1.0)
@@ -159,7 +159,7 @@ func run() -> void:
 				boss._process(boss.timer + .01)
 			assert(recovery_clips.has("hammer_double") and recovery_clips[0] != recovery_clips[1])
 			assert(boss.phase == "ready" and boss.order_left == boss.ORDER_SECONDS)
-	assert(boss.milestone_history == [5,10,15,20])
+	assert(boss.milestone_history == [5,10])
 	assert(boss.phase == "victory")
 	assert(boss.victory_played and not boss.music.playing)
 	boss.advance_phase();assert(boss.phase == "sinking")
@@ -179,10 +179,10 @@ func run() -> void:
 	assert(not g._challenge_blocks_spawns())
 	assert(boss.start())
 	boss.advance_phase(); boss.advance_phase()
-	for loss in 5:
+	for loss in 3:
 		boss._process(17.01)
 		assert(boss.mistakes == loss+1)
-		if loss < 4:
+		if loss < 2:
 			assert(boss.phase == "attack")
 			boss.advance_phase(); boss.advance_phase()
 	assert(boss.phase == "defeat" and not boss.can_serve())
@@ -203,5 +203,5 @@ func run() -> void:
 	boss.cancel();assert(not boss.active())
 	g.queue_free()
 	await process_frame
-	print("HOTDOG_CHALLENGE_OK: period trigger, 40 unique recipes, timed replacement, handoff clock, ambient smashes, voice, 5/10/15/20 milestones, finale stacks, victory card and sink, 5-loss defeat, placement controls, cleanup")
+	print("HOTDOG_CHALLENGE_OK: period trigger, 26 unique recipes, timed replacement, handoff clock, ambient smashes, voice, 5/10 milestones, finale stacks, victory card and sink, 3-loss defeat, placement controls, cleanup")
 	quit()

@@ -61,6 +61,7 @@ func _ready() -> void:
 	stop = Vector3(-0.45, ground, maxf(5.4, game._street_car_z() - 0.8))
 	truck.position = stop + Vector3(-16, 0, 0)
 	courier = Node3D.new()
+	courier.name = "MailCatCourier"
 	add_child(courier)
 	cat_visual = CAT.instantiate()
 	courier.add_child(cat_visual)
@@ -103,7 +104,7 @@ func _ready() -> void:
 	skid_audio.max_distance = 30.0
 	truck.add_child(skid_audio)
 	meow_audio = AudioStreamPlayer3D.new(); meow_audio.bus = "SFX"
-	meow_audio.stream = preload("res://sounds/cat_begging_meow.mp3")
+	meow_audio.stream = game.game_audio._make_cat_meow() if is_instance_valid(game.game_audio) and game.game_audio.has_method("_make_cat_meow") else null
 	meow_audio.volume_db = -7.0
 	meow_audio.unit_size = 5.0
 	meow_audio.max_distance = 25.0

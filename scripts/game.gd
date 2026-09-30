@@ -35,7 +35,7 @@ const HOLD_SIZZLE_FADE_SEC := 5.0
 const WARMER_WIDTH_FRAC := ZONE_HOLD_FRAC
 const WARMER_COOK_MUL := ZONE_HOLD_MUL
 const MAX_CUSTOMERS := 4
-const DAY_LENGTH := 480.0 ## 4x longer shifts
+const DAY_LENGTH := 900.0 ## Fifteen-minute shifts.
 const FRESHNESS_FULL := 60.0 ## 1 minute at full freshness
 const FRESHNESS_DEGRADE := 30.0 ## then 30s of quality drop before it goes bad
 const FRESHNESS_MAX := FRESHNESS_FULL + FRESHNESS_DEGRADE
@@ -426,6 +426,8 @@ var spawn_timer: float = 2.0
 var customers: Array = []
 # Removed orders still occupy the sidewalk until their customer walks clear.
 var _customer_departure_holds: Array[Dictionary] = []
+var _ticket_transition_until := 0
+var _customer_social: Node
 var _customer_skin_bag: Array[int] = []
 const CUSTOMER_REVIEW_CFG_SECTION := "customer_review_card"
 var customer_review_settings: Dictionary = {}
@@ -1217,7 +1219,7 @@ const BOSS_MORNING_PEPS := [
 	"Morning! Read those tickets and make every burger count.\nHappy customers come back hungry!",
 	"Another day, another chance to impress me!\nWatch the grill, nail the flip, and keep that line moving."
 ]
-const BOSS_FRYER_ADVICE := "First investment: a fryer! Save $100 and buy it in your phone's Shop.\nThe mail cat delivers it. Then you can start selling fries!"
+const BOSS_FRYER_ADVICE := "First investment: a fryer! Save $100 and buy it in your phone's Shop.\nFrench fries mean higher profits. Upsell fries with every burger!"
 var _boss_intro_running: bool = false
 var cut_buyout_btn: Button = null
 ## Wall Glock — hidden behind the First Sale plaque; LMB hold, RMB shoots.
@@ -5474,6 +5476,7 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	_reset_cut_collector_shift(true)
 	combo = 0
 	day = 1
+	if is_instance_valid(_customer_social): _customer_social.reset_social()
 	day_time = GUIDED_TUTORIAL_DURATION if tutorial_mode else _shift_length()
 	_hotdog_shift_triggered = false
 	difficulty = 0.0
@@ -5550,7 +5553,7 @@ func _restart() -> void:
 	start_overlay.visible = false
 	playing = true
 	_set_phone_in_truck(true)
-	day = 1 ## Kept for save/network compatibility; location now owns progression.
+	day += 1 ## Keep machine advice and shift progression advancing.
 	combo = 0
 	day_time = _shift_length()
 	_hotdog_shift_triggered = false
@@ -5645,6 +5648,10 @@ func get_performance_report() -> Dictionary:
 
 
 func _process_gameplay(delta: float) -> void:
+	if not is_instance_valid(_customer_social):
+		_customer_social = preload("res://scripts/customer_social.gd").new()
+		_customer_social.game = self
+		add_child(_customer_social)
 	var intro_block := _morning_boss_blocks_controls()
 	if intro_block != _intro_cursor_hidden:
 		_intro_cursor_hidden=intro_block
@@ -6145,7 +6152,7 @@ func _location_stats() -> Dictionary:
 
 
 func _shift_length() -> float:
-	return 1200.0 if day == 1 else DAY_LENGTH
+	return DAY_LENGTH
 
 
 func _customer_cap() -> int:
@@ -21474,6 +21481,8 @@ func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> v
 
 
 func _hide_boss_caption() -> void:
+	var showcase = get_node_or_null("UI/Root/BossMachineShowcase")
+	if is_instance_valid(showcase): showcase.queue_free()
 	_boss_caption_seq += 1
 	_set_boss_wawawa(false)
 	if dialogue_panel != null and is_instance_valid(dialogue_panel):
@@ -21538,6 +21547,14 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 			pep = BOSS_MORNING_PEPS[_boss_pep_index % BOSS_MORNING_PEPS.size()]
 			_boss_pep_index += 1
 			talk_time = 6.2
+			if day == 2:
+				pep = "A soda machine is $300 in the Shop. Upsell a cold drink with burgers and fries to grow each sale!"
+				talk_time = 10.0
+			elif day == 3:
+				pep = "An ice cream machine is $500 in the Shop. Offer dessert after a meal: another upsell, more profit!"
+				talk_time = 10.0
+		if kind == "fryer" or (kind == "pep" and day in [2, 3]):
+			_show_boss_machine(SHOP_FRYER_MACHINE if kind == "fryer" else (SHOP_SODA_MACHINE if day == 2 else SHOP_ICECREAM_MACHINE), talk_time)
 		_show_boss_caption("THE BOSS", pep, talk_time)
 		get_tree().create_timer(talk_time).timeout.connect(func():
 			if seq != _cut_collector_seq:
@@ -31063,7 +31080,8 @@ func _start_street_hail_exit(idx: int) -> void:
 	# Negative world X is screen-right, matching the normal customer entrance.
 	bg_people_dir[idx] = -1.0
 	walker.rotation_degrees.y = CustomerScript.WALK_MINUS_X_YAW
-	walker.play_street_walk(1.05)
+	walker.play_street_run(1.25)
+	walker.set_meta("recruited_running",true)
 
 
 func _update_background_hail(idx: int, delta: float) -> bool:
@@ -31110,11 +31128,16 @@ func mp_background_person_join(idx: int, nid: int, order: Array, preset: Diction
 	var walker = bg_people[idx]
 	if str(walker.get_meta("street_hail", "")) == "joined": return
 	walker.set_meta("street_hail", "joined")
+	walker.set_meta("recruited_running",false)
 	walker.hide(); walker._wawa_click_area.collision_layer = 0
 	bg_people_active[idx] = false
 	bg_people_wait[idx] = randf_range(BG_PEOPLE_WAIT_MIN,BG_PEOPLE_WAIT_MAX)
 	# Spawn a separate customer with identical saved traits at the regular entrance.
 	_spawn_customer_local(order,Color.WHITE,patience,lane,nid,-1,0,false,-1,false,preset,true)
+	var recruited = _customer_by_net_id(nid)
+	if is_instance_valid(recruited):
+		recruited.set_meta("recruited_running",true)
+		recruited.play_street_run(1.25)
 
 
 func _play_street_car_whoosh_if_passing() -> void:
@@ -50198,8 +50221,8 @@ func _review_stars_from_serve(
 		return 1.0
 	var wait := float(cook_r.get("wait", 0.0))
 	var timing_stars := 5.0
-	if wait > 20.0:
-		timing_stars = 5.0 - ceilf((wait - 20.0) / 5.0) * 0.5
+	if wait > 15.0:
+		timing_stars = 5.0 - ceilf((wait - 15.0) / 10.0) * 0.5
 	var food_stars := clampf(float(cook_r.get("stars",3.0)),1.0,5.0)
 	var rating := minf(clampf(timing_stars,1.0,5.0),food_stars * .75 + clampf(quality,0.0,1.0) * 1.25)
 	if meh: rating = minf(rating,2.5)
@@ -62937,6 +62960,7 @@ func _create_ticket(customer: Node3D) -> void:
 	bottom_pad.custom_minimum_size = Vector2(0, 4)
 	bottom_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(bottom_pad)
+	if is_instance_valid(_customer_social): _customer_social.decorate_ticket(customer, v)
 
 	wrap.add_child(note)
 	ticket_box.add_child(wrap)
@@ -63261,34 +63285,10 @@ func _update_ticket_seconds_label(wrap: Control, customer: Node3D) -> void:
 	)
 
 
-func _maybe_stop_ticket_clock_for_build_complete(customer: Node3D) -> void:
-	if customer == null or not is_instance_valid(customer):
-		return
-	if bool(customer.get_meta("ticket_build_clock_stopped", false)):
-		return
-	if bool(customer.get("is_challenge_guest")):
-		return
-	var burger_order: Array = GameDataScript.order_burger_items(customer.order)
-	if burger_order.is_empty():
-		return
-	## Stop as soon as the required burger is complete on Build. Side drinks,
-	## fries and ice cream do not keep the burger-making stopwatch running.
-	var station_index := _find_perfect_station_for(customer.order)
-	for i in STATION_COUNT:
-		if station_index >= 0:
-			break
-		_sync_station_cheese_items(i)
-		var built: Array = GameDataScript.order_burger_items(stations[i]["items"])
-		if bool(GameDataScript.compare_orders(built, burger_order).get("perfect", false)):
-			station_index = i
-			break
-	if station_index < 0:
-		return
-	if _station_has_melting_cheese(station_index):
-		return
-	customer.set_meta("ticket_build_clock_stopped", true)
-	if customer.has_method("stop_order_clock"):
-		customer.stop_order_clock()
+func _maybe_stop_ticket_clock_for_build_complete(_customer: Node3D) -> void:
+	# Keep timing the whole active order, including sides, until Serve is pressed.
+	# _begin_serve_at owns the final stop; building a burger isn't delivery.
+	pass
 
 
 func _refresh_ticket_checkmarks() -> void:
@@ -63540,6 +63540,7 @@ func _remove_ticket(customer: Node3D) -> void:
 				var motion = p.get_meta("ticket_motion")
 				motion.release_to_pool(self)
 				_ticket_motion_pool.append(motion)
+			p.hide()
 			p.queue_free()
 	_refresh_customer_queue_timers()
 
@@ -63562,7 +63563,7 @@ func _refresh_customer_queue_timers() -> void:
 	for cust in tickets.keys():
 		if cust == null or not is_instance_valid(cust):
 			continue
-		var active: bool = cust == front and _customer_departure_holds.is_empty()
+		var active: bool = cust == front and _customer_departure_holds.is_empty() and _ticket_transition_until == 0
 		if is_instance_valid(_grubbah) and _grubbah.holds_customer_timers() and not bool(cust.get_meta("mobile_order",false)):
 			active = false
 		if bool(cust.get("is_challenge_guest")):
@@ -63637,6 +63638,8 @@ func _highlight_tickets() -> void:
 		var wrap = tickets[cust]
 		if not is_instance_valid(wrap):
 			continue
+		wrap.visible = _ticket_transition_until == 0
+		if not wrap.visible: continue
 		var selected: bool = cust == selected_customer and _customer_departure_holds.is_empty()
 		if not selected and wrap.has_meta("ticket_motion"):
 			wrap.get_meta("ticket_motion").set_active(false)
@@ -63654,6 +63657,7 @@ func _highlight_tickets() -> void:
 			## Selected slip sits a hair more upright / forward.
 			note.modulate = _ticket_note_modulate(selected)
 		_apply_ticket_display_size(wrap, selected)
+	if is_instance_valid(_customer_social): _customer_social.update_tickets()
 	_refresh_customer_queue_timers()
 
 
@@ -70539,6 +70543,7 @@ func _complete_serve(
 				"pay_mul": float(cook_r.get("pay_mul", 1.0)),
 				"text": "Meh… OK",
 			}
+	cook_r["wait"] = float(speed_r.get("wait", cust.order_elapsed_sec))
 	var guest_mp := mp_enabled and not NetManager.is_host()
 	var disguise := bool(cust.get("is_disguise_cat"))
 	## Score now; release character animation + ticket reflow on a separate frame.
@@ -71100,8 +71105,12 @@ func _begin_customer_serve_handoff(customer: Node3D) -> void:
 		# This ticket represents the entire batch, not just the current burger.
 		return
 	_step_customer_aside_for_meal(customer)
+	_begin_ticket_transition()
 	_remove_ticket(customer)
 	if selected_customer == customer: selected_customer = null
+	if is_instance_valid(_customer_social):
+		var partner = _customer_social.partner(customer)
+		if is_instance_valid(partner) and tickets.has(partner): selected_customer = partner
 	_resolve_serve_customer()
 	_reposition_customers()
 	_highlight_tickets()
@@ -76853,7 +76862,7 @@ func mp_customer_leave(net_id: int, angry: bool, dance: bool = false) -> void:
 	if c != null and is_instance_valid(c):
 		## Ensure walk-off anim if they were still waiting (guest ticket clear).
 		if not bool(c.get("is_leaving")):
-			if dance: c.set_meta("meal_stars", 5.0)
+			if dance and not c.has_meta("meal_stars"): c.set_meta("meal_stars", 5.0)
 			if angry and c.has_method("leave_mad"):
 				c.leave_mad()
 			elif (not angry) and c.has_method("leave_happy"):
@@ -79155,6 +79164,8 @@ func _crowd_steer(actor: Node3D, before: Vector3, desired: Vector3, delta: float
 	obstacles.append_array(bg_people)
 	if is_instance_valid(_cut_collector): obstacles.append(_cut_collector)
 	if is_instance_valid(window_cat) and window_cat.visible: obstacles.append(window_cat)
+	if is_instance_valid(mail_delivery_truck) and mail_delivery_truck.visible and is_instance_valid(mail_delivery_truck.courier) and mail_delivery_truck.courier.is_visible_in_tree():
+		obstacles.append(mail_delivery_truck.courier)
 	if is_instance_valid(_shift_events) and is_instance_valid(_shift_events.visit): obstacles.append(_shift_events.visit)
 	return preload("res://scripts/crowd_spacing.gd").steer(actor,before,desired,obstacles,delta)
 
@@ -79234,3 +79245,23 @@ func _show_returned_order(audit: Dictionary) -> void:
 @rpc("authority", "call_remote", "reliable")
 func mp_returned_order(audit: Dictionary) -> void:
 	_show_returned_order(audit)
+
+func _show_boss_machine(id: String, duration: float) -> void:
+	var old = get_node_or_null("UI/Root/BossMachineShowcase")
+	if is_instance_valid(old): old.queue_free()
+	var showcase = preload("res://scripts/boss_machine_showcase.gd").new()
+	showcase.name = "BossMachineShowcase"
+	get_node("UI/Root").add_child(showcase)
+	showcase.setup(self,id,duration)
+
+func _begin_ticket_transition() -> void:
+	_ticket_transition_until += 1
+	var token := _ticket_transition_until
+	for queued in tickets.values():
+		if is_instance_valid(queued):
+			queued.hide()
+			if queued.has_meta("ticket_motion"): queued.get_meta("ticket_motion").set_active(false)
+	get_tree().create_timer(.35).timeout.connect(func():
+		if _ticket_transition_until != token: return
+		_ticket_transition_until = 0
+		_highlight_tickets())

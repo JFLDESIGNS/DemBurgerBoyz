@@ -201,8 +201,8 @@ func _on_screen_for_meow() -> bool:
 
 
 func _update_begging_meows(delta: float) -> void:
-	## First meow 2s after he pops on screen, then a quieter roll every 3s.
-	if not _on_screen_for_meow():
+	## First whine only after six unfed seconds on screen, then a quieter roll every 3s.
+	if not _on_screen_for_meow() or _visit_fed or _delivery_peek_active:
 		_meow_on_screen = false
 		_meow_first_done = false
 		_meow_elapsed = 0.0
@@ -213,9 +213,9 @@ func _update_begging_meows(delta: float) -> void:
 		_meow_elapsed = 0.0
 	_meow_elapsed += delta
 	if not _meow_first_done:
-		if _meow_elapsed >= 2.0:
+		if _meow_elapsed >= 6.0:
 			_meow_first_done = true
-			_meow_elapsed -= 2.0
+			_meow_elapsed -= 6.0
 			wants_meow.emit(randf_range(1.0, 1.4))
 		return
 	while _meow_elapsed >= 3.0:
@@ -697,7 +697,10 @@ func _process(delta: float) -> void:
 			position.z = _home_z()
 			visible = true
 			position.y = _shown_y() + sin(_bob * 2.4) * 0.012
-			rotation_degrees.y = FACE_COOK_YAW + sin(_bob * 1.3) * 6.0
+			var glance_yaw := FACE_COOK_YAW + sin(_bob * 1.3) * 6.0
+			if Time.get_ticks_msec() < int(get_meta("social_look_until",0)):
+				glance_yaw = _yaw_look(global_position,get_meta("social_look",global_position))
+			rotation.y = lerp_angle(rotation.y,deg_to_rad(glance_yaw),minf(1.0,delta*4.0))
 			if _timer <= 0.0:
 				if _delivery_peek_active:
 					_state = "delivery_turning"
@@ -705,6 +708,19 @@ func _process(delta: float) -> void:
 				else:
 					_state = "lowering"
 					_timer = 0.5
+		"social_swat":
+			var u := 1.0-clampf(_timer/.55,0,1)
+			position = _run_from.lerp(_run_to,smoothstep(0,1,u))
+			position.y += sin(u*PI)*.25
+			rotation_degrees.y = _yaw_look(_run_from,_run_to)
+			if _timer <= 0:
+				var audio = get_tree().get_first_node_in_group("game_audio")
+				if is_instance_valid(audio): audio.play_cat_cartoon_smack()
+				var person = get_meta("swat_customer").get_ref()
+				if is_instance_valid(person): person.shake_angry(.4,.04,1.0)
+				if is_instance_valid(game) and game.mp_enabled and NetManager.is_host() and NetManager.is_online() and is_instance_valid(game._customer_social):
+					game._customer_social.cat_smack.rpc(game._customer_net_id(person))
+				_social_run_away()
 		"delivery_turning":
 			position.x = _home_x()
 			position.z = _home_z()
@@ -1135,3 +1151,27 @@ func peek_for_patty(at_x: float) -> void:
 	visible = true
 	position = Vector3(_home_x(), _hidden_y(), _home_z())
 	rotation_degrees = Vector3(0, FACE_COOK_YAW, 0)
+
+func react_to_customer(customer: Node3D, friendly: bool) -> void:
+	if _state != "peek" or _delivery_peek_active or _visit_fed: return
+	if friendly:
+		_burst_hearts()
+		_timer = maxf(_timer,2.0)
+		return
+	var audio = get_tree().get_first_node_in_group("game_audio")
+	if is_instance_valid(audio): audio.play_cat_angry()
+	_state = "social_swat"
+	_timer = .55
+	_run_from = position
+	_run_to = customer.global_position + (global_position-customer.global_position).normalized()*.55
+	_run_to.y = position.y
+	set_meta("swat_customer",weakref(customer))
+
+func _social_run_away() -> void:
+	_state = "running"
+	_timer = RUN_SEC
+	_run_from = position
+	_run_to = Vector3(_home_x()+3.0,_hidden_y()+.15,_home_z()+3.0)
+	_run_yaw_from = rotation_degrees.y
+	_run_yaw_to = FACE_AWAY_YAW+25.0
+	if _anim != null: _anim.speed_scale = 1.55

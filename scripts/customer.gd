@@ -254,7 +254,7 @@ var queue_timer_active: bool = false
 var order_elapsed_sec: float = 0.0
 var _order_clock_on: bool = false
 const SERVE_PERFECT_SEC := 10.0
-const SERVE_GREAT_JOB_SEC := 20.0
+const SERVE_GREAT_JOB_SEC := 15.0
 const SERVE_REVIEW_HOLD_SEC := 2.0 ## Half-length review pose; keep the line moving.
 var speech: String = ""
 var last_tip: int = 0
@@ -1896,6 +1896,8 @@ func _sidewalk_walk_yaw(dx: float) -> float:
 
 
 func _face_cook_yaw() -> float:
+	if Time.get_ticks_msec() < int(get_meta("social_away_until",0)):
+		return float(get_meta("social_away_yaw",FACE_TRUCK_YAW))
 	return BOSS_FACE_YAW if is_cut_collector else FACE_TRUCK_YAW
 
 
@@ -2020,7 +2022,7 @@ func _begin_sidewalk_leave(do_dance: bool) -> void:
 	_eat_lean_x = 0.0
 	is_leaving = true
 	is_waiting = false
-	_leave_do_dance = do_dance and not _powder_hit
+	_leave_do_dance = do_dance and not _powder_hit and float(get_meta("meal_stars",0.0)) >= 4.95
 	_leave_dance_started = false
 	_leave_dance_done = false
 	_leave_start_x = global_position.x
@@ -2227,6 +2229,9 @@ func play_street_walk(gait_scale: float = 1.0) -> void:
 
 
 func play_street_run(gait_scale: float = 1.12) -> void:
+	# Regular customers normally only attach walk libraries; a recruited runner needs this too.
+	if is_instance_valid(_anim_player) and not _anim_player.has_animation_library("kenney_running") and _running_lib != null:
+		_anim_player.add_animation_library("kenney_running", _running_lib)
 	_street_gait_scale = clampf(gait_scale, 0.95, 1.45)
 	if _anim_player != null and _anim_player.has_animation("kenney_running/Run"):
 		_walk_anim_path = "kenney_running/Run"
@@ -2254,6 +2259,11 @@ func _maybe_start_leave_fade() -> void:
 func _update_sidewalk_leave(delta: float) -> void:
 	global_position.y = STAND_Y
 	match _leave_phase:
+		"couple_wait":
+			_apply_leave_body(delta, false)
+			var other = get_meta("couple_partner").get_ref() if has_meta("couple_partner") else null
+			if not is_instance_valid(other) or other.is_leaving or bool(other.get_meta("serve_in_progress",false)):
+				_enter_leave_phase("turn_left2")
 		"reaction":
 			_apply_leave_body(delta, false)
 			_leave_spin += delta
@@ -2264,10 +2274,10 @@ func _update_sidewalk_leave(delta: float) -> void:
 			if not _powder_hit:
 				_play_anim("idle")
 			if _tick_leave_turn(delta):
-				if _leave_do_dance:
+				if _leave_do_dance or _waiting_for_partner():
 					_enter_leave_phase("sidestep")
 				else:
-					_enter_leave_phase("walk_off")
+					_enter_leave_phase("couple_wait" if _waiting_for_partner() else "walk_off")
 		"sidestep":
 			_advance_leave_walk(delta)
 			if _leave_walk_x >= _leave_dance_x:
@@ -2278,14 +2288,24 @@ func _update_sidewalk_leave(delta: float) -> void:
 			_apply_leave_body(delta, false)
 			_play_anim("idle")
 			if _tick_leave_turn(delta):
-				_enter_leave_phase("dance")
+				_enter_leave_phase("dance" if _leave_do_dance else ("couple_wait" if _waiting_for_partner() else "turn_left2"))
 		"dance":
 			_leave_walk_x = _leave_dance_x
 			_apply_leave_body(delta, false)
 			if not _leave_dance_started:
 				_start_leave_dance()
 			if _leave_dance_done:
-				_enter_leave_phase("turn_left2")
+				_leave_phase = "review"
+				_leave_spin = 0.0
+				_play_burger_clip("Phone_Two_Hands")
+		"review":
+			_apply_leave_body(delta, false)
+			_leave_spin += delta
+			if _leave_spin >= 0.55 and not _review_card_is_showing():
+				_show_departure_review()
+			if _leave_spin >= 3.2:
+				if is_instance_valid(_review_card_root): _review_card_root.hide()
+				_enter_leave_phase("couple_wait" if _waiting_for_partner() else "turn_left2")
 		"turn_left2":
 			_apply_leave_body(delta, false)
 			_play_anim("idle")
@@ -2319,7 +2339,7 @@ func _advance_customer(delta: float) -> void:
 		_play_anim("walk")
 		_apply_bobble(true)
 		return
-	if is_instance_valid(_burger_props) and (is_ragdoll or _powdering or _celebrating or is_leaving):
+	if is_instance_valid(_burger_props) and (is_ragdoll or _powdering or _celebrating or (is_leaving and _leave_phase != "review")):
 		_burger_props.visible = false
 	if is_street_pedestrian:
 		return
@@ -2406,7 +2426,7 @@ func _advance_customer(delta: float) -> void:
 		rotation_degrees.x = 0.0
 		rotation_degrees.y = _sidewalk_walk_yaw(dx)
 		_arrive_turning = false
-		global_position.x += signf(dx) * minf(absf(dx), delta * 1.6)
+		global_position.x += signf(dx) * minf(absf(dx), delta * (3.5 if bool(get_meta("recruited_running",false)) else 1.6))
 		_play_anim("walk")
 		_apply_bobble(true)
 		if _bar_root:
@@ -2416,6 +2436,9 @@ func _advance_customer(delta: float) -> void:
 		if _bar_fill:
 			_bar_fill.visible = false
 	elif not is_waiting:
+		if bool(get_meta("recruited_running",false)):
+			set_meta("recruited_running",false)
+			_walk_anim_path = _pick_walk_anim_path()
 		## Arrived at the lane — turn to face the cook, then idle.
 		if not _arrive_turning:
 			_arrive_turning = true
@@ -2583,7 +2606,7 @@ func set_queue_timer_active(active: bool) -> void:
 
 
 func speed_rating(burnt: bool = false) -> Dictionary:
-	## Perfect <=10s, Great job <=20s, then -0.5 star per extra 5 seconds.
+	## Perfect <=10s, Great job <=15s, then -0.5 star per extra 10 seconds.
 	if burnt:
 		return {
 			"score": 12,
@@ -2598,8 +2621,8 @@ func speed_rating(burnt: bool = false) -> Dictionary:
 		}
 	var wait := order_elapsed_sec
 	var stars := 5.0
-	if wait > SERVE_GREAT_JOB_SEC:
-		stars = 5.0 - ceilf((wait - SERVE_GREAT_JOB_SEC) / 5.0) * 0.5
+	if wait > 15.0:
+		stars = 5.0 - ceilf((wait - 15.0) / 10.0) * 0.5
 	stars = clampf(stars, 1.0, 5.0)
 	var score := int(round(stars / 5.0 * 100.0))
 	var grade := "B"
@@ -4927,6 +4950,10 @@ func _pick_five_star_dance_path() -> String:
 
 func _start_leave_dance() -> void:
 	_leave_dance_started = true
+	if float(get_meta("meal_stars",0.0)) < 4.95:
+		_leave_dance_done = true
+		set_meta("five_star_dance",false)
+		return
 	if _celebrate_anim_path == "" or _anim_player == null or not is_instance_valid(_anim_player) \
 			or not _anim_player.has_animation(_celebrate_anim_path):
 		_leave_dance_done = true
@@ -4974,7 +5001,7 @@ func complete_serve(payout: int, five_star: bool = false) -> void:
 	## Only five-star customers may celebrate, and only 60% of those do. A stable
 	## network-id roll keeps the host and guest on the exact same dance decision.
 	var do_dance := false
-	if five_star and not is_cut_collector:
+	if five_star and float(get_meta("meal_stars",0.0)) >= 4.95 and not is_cut_collector:
 		if has_meta("mp_net_id"):
 			var net_id := int(get_meta("mp_net_id", -1))
 			do_dance = net_id >= 0 and posmod(net_id * 73 + 19, 100) < 60
@@ -5045,3 +5072,18 @@ func step_aside_for_meal(destination_x: float) -> void:
 		rotation_degrees.y = _face_cook_yaw()
 		_play_anim("idle")
 	)
+
+func _show_departure_review() -> void:
+	_ensure_review_card_nodes()
+	var stars := clampi(roundi(float(get_meta("meal_stars", 5.0))), 0, 5)
+	_review_stars.text = "★".repeat(stars) + "☆".repeat(5 - stars)
+	_review_stars.modulate = Color("FFD45C")
+	_review_text.modulate = Color.WHITE
+	_review_text.text = _review_first_two_lines(str(get_meta("sales_review", "Loved my meal!")))
+	_apply_review_card_layout()
+	_review_card_root.show()
+
+func _waiting_for_partner() -> bool:
+	if not has_meta("couple_partner"): return false
+	var other = get_meta("couple_partner").get_ref()
+	return is_instance_valid(other) and not other.is_leaving and not bool(other.get_meta("serve_in_progress",false))

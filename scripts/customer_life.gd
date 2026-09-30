@@ -78,7 +78,7 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(customer): return
 	var player: AnimationPlayer = customer.get("_anim_player")
-	if not customer.get("is_ragdoll") and not customer.get("is_leaving"):
+	if not customer.get("is_ragdoll") and (not customer.get("is_leaving") or customer.get("_leave_phase") == "review"):
 		preload("res://scripts/burger_animation_library.gd").update_customer_props(player, customer.get("_burger_props"))
 	var clip := String(player.current_animation) if is_instance_valid(player) else ""
 	var forward := clip == "burger/Idle_Forward" or clip.ends_with("/Idle")
@@ -93,6 +93,7 @@ func _process(delta: float) -> void:
 		look.dance_weight = move_toward(look.dance_weight, 1.0 if dance_left > 0.0 and waiting and customer.get("_anim_state") != "grill_dance" else 0.0,delta*3.0)
 	tap_glance_left = maxf(0.0, tap_glance_left - delta)
 	var tap_active := tap_glance_left > 0.0
+	if forced_target.is_finite(): with_head = true
 	var target := tap_glance_target if tap_active else forced_target
 	var game := get_tree().current_scene
 	if not target.is_finite() and game != null and game.has_method("customer_attention_target"):

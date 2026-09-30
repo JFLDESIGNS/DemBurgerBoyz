@@ -1,10 +1,10 @@
 extends Node
-## Host-owned 25-perfect encounter. Normal serving owns the burger flight and station.
+## Host-owned 15-perfect encounter. Normal serving owns the burger flight and station.
 const DATA = preload("res://scripts/game_data.gd")
 const CUSTOMER = preload("res://scripts/hotdog_boss_customer.gd")
-const TOTAL = 25
-const MAX_LOSSES = 5
-const FINAL_STAGE = 20
+const TOTAL = 15
+const MAX_LOSSES = 3
+const FINAL_STAGE = 10
 const HARD_DECK_START = TOTAL + MAX_LOSSES
 const SINK_SECONDS = 1.6
 const ORDER_SECONDS = 17.0
@@ -202,7 +202,7 @@ func recipe_at(perfect_count: int) -> Array:
 	return recipes[mini(index, recipes.size()-1)]
 
 func refresh_next_order() -> void:
-	if phase not in ["ready", "feeding", "idle_smash"] or perfect >= TOTAL - 1:
+	if phase not in ["ready"] or perfect >= TOTAL - 1:
 		if is_instance_valid(next_order_preview) and game.tickets.has(next_order_preview):
 			game.tickets[next_order_preview].hide()
 		return
@@ -330,6 +330,7 @@ func _spawn() -> void:
 	customer = CUSTOMER.new()
 	customer.boss = self
 	customer.name = "BaronBrat"
+	customer.hide() # Never expose the imported rest pose, even for one frame.
 	customer.set_meta("mp_net_id", NET_ID)
 	customer.set_meta("hotdog_boss", true)
 	customer.order.assign(current_recipe())
@@ -415,7 +416,8 @@ func play(name_value: String) -> float:
 		return .1
 	var length = customer.player.get_animation(name_value).length
 	customer.player.speed_scale = maxf(1.0, length / .55) if name_value == "revive" else 1.0
-	customer.player.play(name_value, .06)
+	customer.player.play(name_value, 0.0 if name_value == "ground_breakout" else .06)
+	if name_value == "ground_breakout": customer.player.advance(0.0)
 	return length / customer.player.speed_scale
 
 func begin_eating() -> void:
@@ -537,7 +539,10 @@ func _process(delta: float) -> void:
 func advance_phase() -> void:
 	match phase:
 		"rumble":
-			customer.show(); phase = "emerge"; timer = play("ground_breakout"); impact_at = timer * .42
+			phase = "emerge"; timer = play("ground_breakout"); impact_at = timer * .42
+			customer.player.seek(0.0, true)
+			customer.player.advance(0.0)
+			customer.show()
 			sound_event("breakout")
 		"emerge": ready_order()
 		"attack":
@@ -547,7 +552,7 @@ func advance_phase() -> void:
 			phase = "ready"; customer.is_waiting = true
 			play(["idle_sway", "idle_wave", "idle_bounce"][randi()%3])
 		"defeat":
-			game._flash("CHALLENGE LOST!  Baron Brat wins — 5 orders lost", Color("FF8A80"), 6)
+			game._flash("CHALLENGE LOST!  Baron Brat wins — 3 orders lost", Color("FF8A80"), 6)
 			cancel(); return
 		"slump":
 			phase = "revive"; timer = play("revive")
@@ -604,7 +609,7 @@ func show_results() -> void:
 	style.shadow_color = Color(0,0,0,.45); style.shadow_size = 18
 	panel.add_theme_stylebox_override("panel", style); center.add_child(panel)
 	var rows = VBoxContainer.new(); rows.add_theme_constant_override("separation", 16); panel.add_child(rows)
-	var messages = ["★  CHALLENGE COMPLETE  ★", "BARON BRAT\nBEATEN!", "25 / 25 PERFECT BURGERS", "%d / 5 ORDERS LOST  •  FINAL FIVE CONQUERED" % mistakes]
+	var messages = ["★  CHALLENGE COMPLETE  ★", "BARON BRAT\nBEATEN!", "15 / 15 PERFECT BURGERS", "%d / 3 ORDERS LOST  •  FINAL FIVE CONQUERED" % mistakes]
 	for i in messages.size():
 		var text = Label.new(); text.text = messages[i]; text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		text.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
@@ -630,16 +635,16 @@ func refresh() -> void:
 	label.visible = active() and phase != "results"
 	if is_instance_valid(customer) and game.tickets.has(customer):
 		game._update_ticket_seconds_label(game.tickets[customer], customer)
-	var message = "%.1fs  •  %d / 25 perfect  •  %d / 5 orders lost" % [order_left,perfect,mistakes]
+	var message = "%.1fs  •  %d / 15 perfect  •  %d / 3 orders lost" % [order_left,perfect,mistakes]
 	match phase:
 		"rumble", "emerge": message = "THE TRUCK IS SHAKING… BARON BRAT IS HERE!"
-		"feeding": message = "CHOMP!  %d / 25 perfect" % perfect
-		"attack", "smash": message = "%s  %d / 5 orders lost" % [failure_reason,mistakes]
+		"feeding": message = "CHOMP!  %d / 15 perfect" % perfect
+		"attack", "smash": message = "%s  %d / 3 orders lost" % [failure_reason,mistakes]
 		"idle_smash": message = "GROUND SMASH!  Timer paused — %.1fs left" % order_left
-		"defeat": message = "CHALLENGE LOST!  5 orders lost — BARON BRAT WINS!"
+		"defeat": message = "CHALLENGE LOST!  3 orders lost — BARON BRAT WINS!"
 		"slump": message = "20 PERFECT!  Is he… finished?" if perfect == FINAL_STAGE else "%d PERFECT!  He's down…" % perfect
 		"revive", "revive_smash_first", "revive_smash_second": message = "HE'S BACK!  FIVE MONSTER BURGERS TO GO!" if perfect == FINAL_STAGE else "BACK FOR MORE!"
-		"victory", "sinking": message = "25 / 25 PERFECT — BARON BRAT DEFEATED!"
+		"victory", "sinking": message = "15 / 15 PERFECT — BARON BRAT DEFEATED!"
 	if phase == "ready" and perfect >= FINAL_STAGE: message = "FINAL FIVE!  " + message
 	label.text = "BARON BRAT CHALLENGE\n" + message
 

@@ -478,7 +478,7 @@ func update_visuals(_delta: float) -> void:
   var run_t=clampf((age-DRIVER_APPROACH)/(DRIVER_WALK-.18),0,1)
   var slide=clampf((run_t-.65)/.35,0,1)
   var travel=run_t/.65*.80 if run_t<.65 else .80+.20*(1.0-pow(1.0-slide,2))
-  courier.position=Vector3(lerpf(5.5,ledge.position.x,travel),.1,2.8)
+  courier.position=Vector3(lerpf(5.5,ledge.position.x,travel),.1,3.9)
   courier.rotation.y=-PI*.5
   courier.rotation.z=sin(slide*PI)*.18
   courier.set_meta("footstep_sliding",run_t>=.65)
@@ -491,7 +491,7 @@ func update_visuals(_delta: float) -> void:
 
  elif phase=="collected":
   var return_age=maxf(0,age-DRIVER_TURN)
-  courier.position=Vector3(lerpf(ledge.position.x,5.5,clampf(return_age/DRIVER_RETURN,0,1)),.1,2.8)
+  courier.position=Vector3(lerpf(ledge.position.x,5.5,clampf(return_age/DRIVER_RETURN,0,1)),.1,3.9)
   courier.rotation.y=lerpf(-PI*.5,PI*.5,smoothstep(0,1,age/DRIVER_TURN))
   courier.visible=return_age<DRIVER_RETURN;bag.visible=courier.visible
   courier.set_meta("courier_running",age>=DRIVER_TURN and courier.visible)
