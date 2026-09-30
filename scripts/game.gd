@@ -17,8 +17,8 @@ const STATION_INGREDIENT_SCALE := 0.48 ## toppings — dialed down vs left-colum
 const STATION_PATTY_BUILD_SCALE := 0.8184 ## bare meat (10% smaller than 0.827)
 const STATION_PATTY_CHEESE_BUILD_SCALE := STATION_PATTY_BUILD_SCALE ## cheese must not enlarge the meat
 ## Mild finished-stack nest — heel tucks under meat; crown stays clear of patty.
-const BUILD_BUN_NEST_BOTTOM_PX := 2.0
-const BUILD_BUN_NEST_TOP_PX := -5.0 ## negative = lift crown off meat (was +7 glue)
+const BUILD_BUN_NEST_BOTTOM_PX := -1.0
+const BUILD_BUN_NEST_TOP_PX := -8.0 ## A little more room above the fillings.
 const MAX_HELD := 4
 ## Grill heat bands screen-left → right: FULL · 1/2 · HOLD
 const ZONE_FULL_FRAC := 0.50
@@ -124,9 +124,9 @@ const PATTY_PICK_WORLD_EDGE := 0.17
 const PATTY_PICK_PAD_PX := 22.0
 ## Cheese hover/drop — only while the cursor actually overlaps the burger.
 const CHEESE_PICK_WORLD := 0.12
-const CHEESE_PICK_MIN_PX := 42.0
-const CHEESE_PICK_PAD_PX := 8.0
-const CHEESE_PICK_WORLD_EDGE := 0.11
+const CHEESE_PICK_MIN_PX := 62.0
+const CHEESE_PICK_PAD_PX := 18.0
+const CHEESE_PICK_WORLD_EDGE := 0.15
 ## Near-miss drop snaps onto the closest cheesable burger within this radius.
 const CHEESE_SNAP_WORLD := 0.12
 const CHEESE_STICKY_PX := 28.0
@@ -4456,7 +4456,7 @@ func _make_burger_completion_burst() -> Node2D:
 	glow.name = "WarmGlow"
 	var gradient := Gradient.new()
 	gradient.offsets = PackedFloat32Array([0.0, .3, .65, 1.0])
-	gradient.colors = PackedColorArray([Color(1,.85,.3,.7), Color(1,.63,.12,.45), Color(1,.43,.06,.15), Color(1,.4,.05,0)])
+	gradient.colors = PackedColorArray([Color(1,.94,.3,.95), Color(1,.80,.12,.65), Color(1,.64,.06,.26), Color(1,.55,.05,0)])
 	var glow_texture := GradientTexture2D.new()
 	glow_texture.gradient = gradient
 	glow_texture.width = 256
@@ -4521,8 +4521,8 @@ func _make_burger_completion_burst() -> Node2D:
 
 func _update_burger_completion_burst(burst: Node2D, progress: float) -> void:
 	var glow := burst.get_node("WarmGlow") as Sprite2D
-	glow.scale = Vector2(1.65,1.3) * (1.0 + .18*sin(progress*PI))
-	glow.modulate.a = 1.0 - .45*progress
+	glow.scale = Vector2(1.95,1.55) * (1.0 + .22*sin(progress*PI))
+	glow.modulate.a = 1.0 - .20*progress
 	var accents := burst.get_node("FlyingAccents")
 	for i in accents.get_child_count():
 		var spark := accents.get_child(i) as Polygon2D
@@ -7095,7 +7095,7 @@ func _update_strip_hold_pickup(delta: float) -> void:
 	if over_id != "" and over_id != _strip_hold_id:
 		## Crossing another strip tile — wait for swipe, don't steal the bottle / cheese.
 		return
-	if _strip_hold_t >= STRIP_HOLD_PICKUP_SEC:
+	if _strip_hold_t >= (0.12 if _strip_hold_id == "cheese" else STRIP_HOLD_PICKUP_SEC):
 		_try_start_strip_hold_pickup()
 		return
 	if mouse.distance_to(_strip_hold_origin) >= STRIP_HOLD_DRAG_PX:
@@ -7159,6 +7159,10 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 		if start_raw is Vector2:
 			start_pos = start_raw as Vector2
 		var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
+		# Catch quick upward cheese drags before horizontal swipe recognition.
+		if start_id == "cheese" and _strip_hold_armed and mouse2.y < start_pos.y - 6.0 and (absf(mouse2.y - start_pos.y) > absf(mouse2.x - start_pos.x) * 0.65 or _strip_ingredient_at(mouse2) == ""):
+			_try_start_strip_hold_pickup()
+			return true
 		if not bool(_strip_swipe_added.get("_moved", false)):
 			if start_pos.distance_to(mouse2) >= STRIP_SWIPE_THRESH_PX:
 				var peek_id: String = _strip_ingredient_at(mouse2)
@@ -20675,8 +20679,8 @@ func _update_heat_warp(_delta: float) -> void:
 	if grill_on or grill_on_fire:
 		## Normal heat is subtle; heavy hot oil pushes the shimmer into the stronger greasy look.
 		if grill_on:
-			heat = 0.26
-			warp_strength = 0.0045
+			heat = 0.34
+			warp_strength = 0.006
 			for i in GRILL_SLOTS:
 				var p = grill[i]
 				if p == null or not is_instance_valid(p) or p.is_held:
@@ -20684,8 +20688,8 @@ func _update_heat_warp(_delta: float) -> void:
 				if not p.heating:
 					continue
 				var cook_t := clampf(float(p.cook_time) / 9.0, 0.2, 1.0)
-				heat = maxf(heat, 0.34 + cook_t * 0.16 * clampf(float(p.heat_mul), 0.2, 1.0))
-				warp_strength = maxf(warp_strength, 0.006)
+				heat = maxf(heat, 0.44 + cook_t * 0.20 * clampf(float(p.heat_mul), 0.2, 1.0))
+				warp_strength = maxf(warp_strength, 0.009)
 		var oil_heat := _hot_oil_warp_ratio()
 		if grill_on_fire:
 			## Flaming grease hits full hot-oil shimmer, then fades with the fire ramp.
@@ -50187,7 +50191,7 @@ func _render_review_burger_snapshot(station_index: int) -> Texture2D:
 		if src == null: continue
 		var width := 148.0 * _layer_width_mul(key)
 		var height := width * float(src.get_height()) / maxf(1,src.get_width())
-		var y := -rise-height*.72
+		var y := -rise-height*.72 + (3.0 if item == "bun_bottom" else -3.0 if item == "bun_top" else 0.0)
 		layers.append({"img":src,"w":width,"h":height,"y":y})
 		top=minf(top,y);bottom=maxf(bottom,y+height)
 		rise += 14.0 if item == "patty" else 18.0 if item == "bun_bottom" else 6.0
@@ -63071,6 +63075,8 @@ func _ticket_line_specs(order: Array) -> Array:
 
 
 func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null) -> bool:
+	if is_instance_valid(customer) and customer != selected_customer:
+		return false
 	if is_instance_valid(customer) and customer.get_meta("hotdog_preview", false): return false
 	if GameDataScript.is_soda_item(line_id):
 		if _customer_soda_handed(customer):
@@ -67808,8 +67814,10 @@ func _ensure_cheese_ghost() -> void:
 	cheese_ghost_mat.albedo_color = Color(1.0, 0.82, 0.20, 0.92)
 	cheese_ghost_mat.roughness = 0.72
 	cheese_ghost_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	cheese_ghost_mat.no_depth_test = false
-	cheese_ghost_mat.render_priority = 8
+	cheese_ghost_mat.no_depth_test = true
+	cheese_ghost_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	cheese_ghost_mat.render_priority = 40
+	cheese_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	cheese_ghost.material_override = cheese_ghost_mat
 	cheese_ghost.visible = false
 	world.add_child(cheese_ghost)
@@ -67892,7 +67900,7 @@ func _pick_cheese_patty_at_screen(screen_pos: Vector2):
 	var cam_pos := camera.global_position
 	var candidates: Array = []
 	for p in grill:
-		if p == null or not is_instance_valid(p) or p.is_held:
+		if not _can_put_cheese_on_grill_patty(p):
 			continue
 		var lift: Vector3 = p.global_position + Vector3(0, 0.03, 0)
 		if camera.is_position_behind(lift):
@@ -69541,11 +69549,12 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 			origin_y - stack_lift - float(visual_i - 1) * step_y - h * 0.72
 		)
 		if item == "bun_bottom":
+			row.position.y += 3.0 * layer_scale
 			stack_lift += 3.0 * layer_scale
 			bottom_row = row
 			bun_rows.append(row)
 		if item == "bun_top":
-			row.position.y += 2.0 * layer_scale
+			row.position.y -= 1.0 * layer_scale
 			top_row = row
 			bun_rows.append(row)
 		if is_patty:
@@ -70027,7 +70036,7 @@ func _play_serve_fly_to_mouth(
 		_place_burger_sprite_center(stack,start_pos)
 		burst.scale = Vector2.ONE * lerpf(0.72, 1.05, minf(1.0, t / 0.22))
 		_update_burger_completion_burst(burst, t)
-		burst.rotation = lerpf(-0.06, 0.04, t)
+		burst.rotation = lerpf(-0.16, 0.14, t) + .04 * sin(t * TAU)
 		burst.modulate.a = 1.0 - smoothstep(0.76, 1.0, t)
 	tw.tween_method(celebrate_step, 0.0, 1.0, celebration_hold)
 	tw.tween_callback(func() -> void: burst.visible = false)
@@ -70124,10 +70133,6 @@ func _play_serve_fly_to_mouth(
 		var catch_wait := maxf(0.01, grab_seconds - celebration_hold - .35)
 		tw.tween_method(follow_hands, 0.0, 0.0, catch_wait)
 		tw.tween_callback(func() -> void:
-			if is_instance_valid(customer): customer.react_burnt_bite(true)
-		)
-		tw.tween_method(follow_hands, 0.0, 0.0, .65)
-		tw.tween_callback(func() -> void:
 			if is_instance_valid(customer) and customer.has_method("start_eating_burger"):
 				customer.start_eating_burger()
 		)
@@ -70142,8 +70147,8 @@ func _play_serve_fly_to_mouth(
 			if not is_instance_valid(customer):return
 			customer.react_burnt_bite(point_at_player)
 			if game_audio:game_audio.play_customer_angry_wawa(customer.get_customer_voice())
-		tw.tween_callback(complain.bind(false))
-		tw.tween_method(follow_hands, 2.0 / 6.0, 2.0 / 6.0, .48)
+		tw.tween_callback(complain.bind(true))
+		tw.tween_method(follow_hands, 2.0 / 6.0, 2.0 / 6.0, 1.05)
 		var throw_state := {}
 		tw.tween_callback(func() -> void:
 			throw_state["start"] = _customer_burger_hand_screen(customer)

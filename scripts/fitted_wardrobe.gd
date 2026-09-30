@@ -44,6 +44,7 @@ const BOTTOM_SCENES: Array[PackedScene] = [
 ]
 const PRINT_SHADER := preload("res://shaders/fitted_shirt.gdshader")
 static var _mesh_cache: Dictionary = {}
+static var _skin_rest_cache: Dictionary = {}
 
 static func migrate_preset(data: Dictionary) -> void:
 	if int(data.get("top_catalog_version", 0)) < CATALOG_VERSION:
@@ -158,3 +159,29 @@ static func update_print(garment: MeshInstance3D, texture: Texture2D, color: Col
 		material.set_shader_parameter("graphic_color", color)
 		material.set_shader_parameter("graphic_center", center)
 		material.set_shader_parameter("graphic_size", size)
+
+static func skin_with_rest_coordinates(source: Mesh) -> ArrayMesh:
+	# UV2 carries the unposed arm coordinates through skinning. UV1 remains the
+	# paint map, so covered skin stays hidden through every dance/run pose.
+	if source.has_meta("wardrobe_rest_coordinates"): return source as ArrayMesh
+	var key := source.get_instance_id()
+	if _skin_rest_cache.has(key): return _skin_rest_cache[key]
+	var result := ArrayMesh.new()
+	for surface in source.get_surface_count():
+		var arrays := source.surface_get_arrays(surface)
+		var coords := PackedVector2Array()
+		for vertex in arrays[Mesh.ARRAY_VERTEX]: coords.append(Vector2(vertex.x, vertex.z))
+		arrays[Mesh.ARRAY_TEX_UV2] = coords
+		result.add_surface_from_arrays(source.surface_get_primitive_type(surface), arrays)
+		result.surface_set_material(surface, source.surface_get_material(surface))
+	result.set_meta("wardrobe_rest_coordinates", true)
+	_skin_rest_cache[key] = result
+	return result
+
+static func sleeve_skin_limit(garment: Mesh) -> float:
+	if garment == null: return 0.0
+	var bounds := garment.get_aabb()
+	var cuff := minf(absf(bounds.position.x), absf(bounds.end.x))
+	# Tank tops and halters leave the arms visible. Keep skin inside each cuff
+	# so the opening never reveals a cut end when the wrist bends.
+	return cuff - 0.00065 if cuff > 0.0055 else 0.0

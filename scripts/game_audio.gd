@@ -1713,6 +1713,7 @@ func prewarm_spatula_audio() -> void:
 
 
 func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) -> void:
+	volume_scale *= 0.75
 	## HOLD-zone taps. voice: 0 = drum · 1 = closed hi-hat · 2 = open hat / rim.
 	if _players.is_empty():
 		return

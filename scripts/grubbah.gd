@@ -450,7 +450,7 @@ func update_visuals(_delta: float) -> void:
   var t=clampf(age/BURGER_BAG_FLIGHT,0,1)
   wrapped.position=burger_bag_position(t,base+Vector3(0,.06,0),bag_station_pos()+Vector3(0,bag_opening_y,0))
   wrapped.rotation.z=sin(minf(t/.65,1.0)*PI)*.22
-  wrapped.scale=Vector3.ONE*lerpf(1.0,.8,smoothstep(.65,1.0,t));wrapped.visible=t<1.0
+  wrapped.scale=Vector3.ONE*lerpf(1.0,.35,smoothstep(.65,.82,t));wrapped.visible=t<.82
   if t>=.85 and not bag_impact_played:bag_impact_played=true;play_wrap_sound()
  bag.position=bag_station_pos()
  bag.rotation=Vector3.ZERO;bag.scale=Vector3.ONE

@@ -1,7 +1,12 @@
 ## Per-customer secondary motion, separate from clip playback and gameplay decisions.
 extends Node
 const GAZE_WATCH_SECONDS := Vector2(5.0, 8.0)
-const GAZE_BREAK_SECONDS := Vector2(0.65, 1.25)
+const GAZE_BREAK_SECONDS := Vector2(2.0, 4.0)
+const AWAY_TARGETS := [Vector3(-2.2, 1.4, 2.0), Vector3(2.2, 1.45, 2.0), Vector3(-1.3, 1.9, 2.8), Vector3(1.6, 0.9, 2.4)]
+var away_target_index := -1
+var away_target := Vector3.INF
+var body_yaw := 0.0
+var target_initialized := false
 var customer: Node3D
 var model: Node
 var modular: Node
@@ -27,16 +32,22 @@ var tap_glance_left := 0.0
 var tap_glance_target := Vector3.ZERO
 const GRILL_DANCE_TAPS_REQUIRED := 3
 const GRILL_DANCE_TAP_WINDOW_MS := 1500
+var _grill_dance_tap_times: Array[int] = []
 var _grill_dance_taps := 0
 var _last_grill_dance_tap_ms := -10000
 
-func register_grill_dance_tap() -> bool:
+func register_grill_dance_tap(now_ms: int = -1) -> bool:
 	if not can_grill_dance(): return false
-	var now := Time.get_ticks_msec()
+	var now := Time.get_ticks_msec() if now_ms < 0 else now_ms
 	if now - _last_grill_dance_tap_ms >= GRILL_DANCE_TAP_WINDOW_MS:
-		_grill_dance_taps = 0
+		_grill_dance_tap_times.clear()
+	while not _grill_dance_tap_times.is_empty() and now - _grill_dance_tap_times[0] >= GRILL_DANCE_TAP_WINDOW_MS:
+		_grill_dance_tap_times.pop_front()
+	_grill_dance_tap_times.append(now)
+	while _grill_dance_tap_times.size() > GRILL_DANCE_TAPS_REQUIRED:
+		_grill_dance_tap_times.pop_front()
 	_last_grill_dance_tap_ms = now
-	_grill_dance_taps = mini(_grill_dance_taps + 1, GRILL_DANCE_TAPS_REQUIRED)
+	_grill_dance_taps = _grill_dance_tap_times.size()
 	return _grill_dance_taps >= GRILL_DANCE_TAPS_REQUIRED
 
 func can_grill_dance() -> bool:
@@ -82,9 +93,10 @@ func _process(delta: float) -> void:
 		preload("res://scripts/burger_animation_library.gd").update_customer_props(player, customer.get("_burger_props"))
 	var clip := String(player.current_animation) if is_instance_valid(player) else ""
 	var forward := clip == "burger/Idle_Forward" or clip.ends_with("/Idle")
-	var waiting: bool = customer.get("is_waiting") and not customer.get("is_leaving") and not customer.get("_eating") and not customer.get("_powdering") and not customer.get("_celebrating") and not customer.get("is_ragdoll") and not customer.get("dialogue_open")
+	var waiting: bool = not bool(customer.get_meta("serve_in_progress", false)) and customer.get("is_waiting") and not customer.get("is_leaving") and not customer.get("_eating") and not customer.get("_powdering") and not customer.get("_celebrating") and not customer.get("is_ragdoll") and not customer.get("dialogue_open")
 	# Eye movement continues through side glances and impatience. Phone/watch,
 	# serving, and dialogue retain their own focus instead of looking at the grill.
+	var phone_active := clip.begins_with("burger/Phone_")
 	var idle_allows_gaze := clip.begins_with("burger/Idle_") or forward or clip == "burger/Impatient_Foot_Tap"
 	dance_left = maxf(0.0,dance_left-delta)
 	dance_phase += delta * 7.0
@@ -111,17 +123,40 @@ func _process(delta: float) -> void:
 		if gaze_cooldown <= 0.0:
 			gaze_left = rng.randf_range(GAZE_WATCH_SECONDS.x, GAZE_WATCH_SECONDS.y)
 			gaze_cooldown = rng.randf_range(GAZE_BREAK_SECONDS.x, GAZE_BREAK_SECONDS.y)
-			with_head = modular == null or rng.randf() < 0.35
+			with_head = true
+			choose_away_target(target)
 			prefer_burger = rng.randf() < 0.3
-	# A nearby hand takes immediate attention, even during the short gaze break.
+	var looking_away := waiting and idle_allows_gaze and gaze_left <= 0.0 and not forced_target.is_finite() and not tap_active
+	if looking_away:
+		if not away_target.is_finite(): choose_away_target(target)
+		target = away_target
+	if phone_active and waiting:
+		var props: Node3D = customer.get("_burger_props")
+		if is_instance_valid(props): target = props.global_position
+	# Explicit social attention and taps take priority over idle looks.
 	var close_hand := target.is_finite() and target.distance_to(customer.global_position + Vector3(0, 1.3, 0)) < 1.65
-	var tracking := waiting and (idle_allows_gaze or tap_active) and (gaze_left > 0.0 or close_hand or tap_active) and target.is_finite()
+	var tracking := waiting and (idle_allows_gaze or tap_active or phone_active) and (gaze_left > 0.0 or looking_away or close_hand or tap_active or phone_active or forced_target.is_finite()) and target.is_finite()
 	gaze_strength = move_toward(gaze_strength, 1.0 if tracking else 0.0, delta * (28.0 if tap_active else 6.0))
-	if target.is_finite(): target_world = target
+	if target.is_finite():
+		if not target_initialized: target_world = target; target_initialized = true
+		target_world = target_world.lerp(target, 1.0 - exp(-delta * 5.0))
+	var body_goal := 0.0
+	if waiting and dance_left <= 0.0:
+		if phone_active:
+			body_goal = 0.24 if int(customer.get_instance_id()) % 2 == 0 else -0.24
+		elif tracking and is_instance_valid(look):
+			var rig := look.get_skeleton()
+			if rig != null:
+				var local_target := rig.to_local(target_world)
+				body_goal = clampf(atan2(local_target.x, maxf(0.1, local_target.z)), -0.30, 0.30)
+	var had_turn := absf(body_yaw) > 0.001
+	body_yaw = lerp_angle(body_yaw, body_goal, 1.0 - exp(-delta * 2.5))
+	var body: Node3D = customer.get("_body")
+	if is_instance_valid(body) and not customer.get("is_ragdoll") and (waiting or had_turn): body.rotation.y = body_yaw
 	if is_instance_valid(look):
 		look.target_world = target_world
-		# Preserve authored side-glance poses; eyes still follow during those clips.
-		var head_goal := gaze_strength * (0.95 if close_hand else 0.65) if (with_head or close_hand) and forward and not tap_active else 0.0
+		# Head and pupils share a smoothed target; phone clips keep their authored downward pose.
+		var head_goal := gaze_strength * (0.45 if phone_active else (0.95 if forward else 0.78))
 		look.look_weight = move_toward(look.look_weight, head_goal, delta * 2.5)
 	# Quick lid closure and a slightly slower reopening, with independent clocks.
 	blink_wait -= delta
@@ -151,3 +186,12 @@ func _process(delta: float) -> void:
 		hair_value = clampf(hair_value+hair_velocity*dt,-0.04,0.04)
 		hair_sway = lerpf(hair_sway,sin(phase*0.5)*0.015 if walking else 0.0,minf(1.0,delta*9.0))
 		modular.animate_customer_hair(hair_value,hair_sway,absf(hair_value)*0.12)
+
+func choose_away_target(player_target: Vector3) -> void:
+	away_target_index = (away_target_index + rng.randi_range(1, 3)) % AWAY_TARGETS.size()
+	var forward := player_target - customer.global_position if player_target.is_finite() else Vector3.FORWARD
+	forward.y = 0.0
+	forward = forward.normalized() if forward.length_squared() > 0.001 else Vector3.FORWARD
+	var side := forward.cross(Vector3.UP).normalized()
+	var offset: Vector3 = AWAY_TARGETS[away_target_index]
+	away_target = customer.global_position + side * offset.x + Vector3.UP * offset.y + forward * offset.z

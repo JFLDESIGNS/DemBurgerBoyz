@@ -19,6 +19,16 @@ func _run() -> void:
 		await process_frame
 		var top: MeshInstance3D = character._fitted_top
 		assert(top != null and top.skin == body.skin)
+		var limit: float = character._skin_material.get_shader_parameter("sleeve_skin_limit")
+		var has_long_sleeves := style in [1,3,4,6,7,9,13]
+		assert((limit > 0.0081) == has_long_sleeves, "Only long sleeves conceal the elbow")
+		if style in [11,12]: assert(limit == 0.0, "Sleeveless tops preserve bare arms")
+		for skin_surface in body.mesh.get_surface_count():
+			var skin_arrays := body.mesh.surface_get_arrays(skin_surface)
+			var rest_coords: PackedVector2Array = skin_arrays[Mesh.ARRAY_TEX_UV2]
+			var rest_vertices: PackedVector3Array = skin_arrays[Mesh.ARRAY_VERTEX]
+			assert(rest_coords.size() == rest_vertices.size())
+			for v in rest_coords.size(): assert(rest_coords[v].is_equal_approx(Vector2(rest_vertices[v].x, rest_vertices[v].z)))
 		assert(top.get_node(top.skeleton) == skeleton)
 		assert(character.find_children("*", "Skeleton3D", true, false).size() == 1)
 		var triangles := 0
@@ -83,6 +93,7 @@ func _run() -> void:
 	character.top_style = 0
 	await process_frame
 	assert(character._fitted_top == null)
+	assert(character._skin_material.get_shader_parameter("sleeve_skin_limit") == 0.0)
 	character.apply_saved_preset({"top_catalog_version": 1, "top_style": 0})
 	assert(character.top_style == 0)
 	character.queue_free()

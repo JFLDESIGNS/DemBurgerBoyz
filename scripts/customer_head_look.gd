@@ -23,7 +23,7 @@ func _process_modification() -> void:
 	var pose := skeleton.get_bone_global_pose(head)
 	var direction := pose.basis.orthonormalized().inverse() * (skeleton.to_local(target_world) - pose.origin)
 	if direction.z <= 0.0: return
-	var yaw := clampf(atan2(direction.x,direction.z),-0.44,0.44) * look_weight
-	var pitch := clampf(atan2(direction.y,Vector2(direction.x,direction.z).length()),-0.22,0.22) * look_weight
+	var yaw := clampf(atan2(direction.x,direction.z),-0.68,0.68) * look_weight
+	var pitch := clampf(atan2(direction.y,Vector2(direction.x,direction.z).length()),-0.38,0.30) * look_weight
 	pose.basis = pose.basis * Basis(Vector3.UP,yaw) * Basis(Vector3.RIGHT,-pitch)
 	skeleton.set_bone_global_pose(head,pose)

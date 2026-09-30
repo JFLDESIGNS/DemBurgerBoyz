@@ -42,6 +42,12 @@ func run() -> void:
 	for i in 2: game._register_grill_dance_tap(Vector3.ONE,0.0)
 	assert(life.dance_left>0.0,"A fresh three-tap sequence must restart dancing")
 	life.dance_left=0
+	life._grill_dance_tap_times.clear(); life._last_grill_dance_tap_ms = -10000
+	assert(not life.register_grill_dance_tap(1000))
+	assert(not life.register_grill_dance_tap(2000))
+	assert(not life.register_grill_dance_tap(3000), "Three taps spread over two seconds cannot trigger a dance")
+	assert(life.register_grill_dance_tap(3400), "A rolling window accepts three taps in 1.4 seconds")
+	assert(not life.register_grill_dance_tap(5000), "A fresh burst must restart after a pause")
 	guest.is_leaving=true;life.start_grill_dance();assert(life.dance_left==0,"Leaving must retain priority")
 	print("GRILL_DANCE_PRIORITY_OK")
 	game.queue_free();guest.queue_free();await process_frame;quit()

@@ -1784,6 +1784,7 @@ func _apply_skin_material() -> void:
 		var mesh := child as MeshInstance3D
 		# Only the original weighted body receives skin-tone / paint changes.
 		if mesh.skin != null:
+			mesh.mesh = Wardrobe.skin_with_rest_coordinates(mesh.mesh)
 			mesh.material_override = _skin_material
 	_apply_eyelid_materials()
 
@@ -1836,8 +1837,11 @@ uniform vec4 skin_color : source_color = vec4(0.85, 0.55, 0.37, 1.0);
 uniform sampler2D paint_tex : source_color, filter_linear, repeat_disable;
 uniform float unlit_preview : hint_range(0.0, 1.0) = 0.0;
 uniform float skin_scatter : hint_range(0.0, 1.0) = 0.65;
+uniform float sleeve_skin_limit = 0.0;
 
 void fragment() {
+	// Rest-pose arm coverage stays attached to the skin during bending.
+	if (abs(UV2.x) > 0.0047 && abs(UV2.x) < sleeve_skin_limit && UV2.y > 0.020 && UV2.y < 0.0265) { discard; }
 	vec4 paint = texture(paint_tex, UV);
 	vec3 diffuse_color = mix(skin_color.rgb, paint.rgb, clamp(paint.a, 0.0, 1.0));
 	ALBEDO = diffuse_color;
@@ -2818,6 +2822,7 @@ func _build_clothing() -> void:
 
 
 func _build_fitted_top() -> void:
+	if _skin_material != null: _skin_material.set_shader_parameter("sleeve_skin_limit", 0.0)
 	if top_style == TopStyle.NONE:
 		return
 	var body_mesh := _get_skin_mesh()
@@ -2830,6 +2835,7 @@ func _build_fitted_top() -> void:
 	_fitted_top = MeshInstance3D.new()
 	_fitted_top.name = "FittedTop"
 	_fitted_top.mesh = mesh
+	if _skin_material != null: _skin_material.set_shader_parameter("sleeve_skin_limit", Wardrobe.sleeve_skin_limit(mesh))
 	_fitted_top.skin = body_mesh.skin
 	_clothing_root.add_child(_fitted_top)
 	_fitted_top.transform = _clothing_root.global_transform.affine_inverse() * body_mesh.global_transform
@@ -3414,9 +3420,9 @@ func animate_customer_eyes(target: Vector3, strength: float, blink_amount: float
 		# clips their far side. A radial limit made downward grill gaze consume
 		# nearly all the sideways motion on wide/large-pupil presets.
 		var travel := maxf(0.38, 0.98 - radius)
-		var displacement := Vector2(head_direction.x * 0.95, head_direction.y * 0.65)
+		var displacement := Vector2(head_direction.x * 0.65, head_direction.y * 0.45)
 		var eye_side := signf((head_basis.inverse() * (eye.global_position - _eyes_root.global_position)).x)
-		var near_eye_boost := 1.0 + 0.3 * smoothstep(0.02, 0.35, head_direction.x * eye_side)
+		var near_eye_boost := 1.0 + 0.15 * smoothstep(0.02, 0.35, head_direction.x * eye_side)
 		displacement.x *= near_eye_boost
 		# Preserve the authored resting offset, moving both pupils by comparable
 		# amounts. Absolute aiming previously spent the near eye's motion cancelling

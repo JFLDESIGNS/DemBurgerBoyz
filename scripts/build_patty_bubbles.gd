@@ -17,6 +17,6 @@ func _draw() -> void:
   var at := Vector2(.5+cos(angle)*radius,.37+sin(angle)*radius*.52)*size
   var pop := sin(fmod(heat.age*.8+float(i)*.17,1.0)*PI)
   var r := size.x*(.013+float(i%3)*.002)*pop
-  draw_circle(at+Vector2(0,r*.25),r,Color("713017"))
-  draw_circle(at,r*.85,Color("B66B3C"))
-  draw_arc(at,r*.60,PI*1.12,PI*1.75,8,Color("D28A52"),maxf(1.0,r*.2),true)
+  draw_circle(at+Vector2(0,r*.25),r,Color("824019"))
+  draw_circle(at,r*.85,Color("D1803C"))
+  draw_arc(at,r*.60,PI*1.12,PI*1.75,8,Color("F1A456"),maxf(1.0,r*.2),true)

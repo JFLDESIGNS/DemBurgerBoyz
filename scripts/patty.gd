@@ -84,6 +84,7 @@ var _grate_disc: MeshInstance3D
 var _grate_mat: StandardMaterial3D
 var _meat_top: MeshInstance3D
 var _meat_top_mat: StandardMaterial3D
+var _hint_shadow: Label3D
 var _hint: Label3D
 var _hint_mode: String = "" ## "", cooking, flip, scoop, hold
 var _hint_age: float = 0.0
@@ -465,10 +466,19 @@ func _ready() -> void:
 	_hint.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_hint.modulate = Color("FFEB3B")
 	_hint.visible = false
-	UiFontsScript.apply_label3d(_hint, true, 72, 0.078)
-	_hint.outline_size = 24
-	_hint.outline_modulate = Color(0, 0, 0, 0.25)
+	UiFontsScript.apply_label3d(_hint, true, 144, 0.078)
+	_hint.outline_size = 0
+	_hint.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+	_hint.render_priority = 32
 	add_child(_hint)
+	_hint_shadow = Label3D.new()
+	UiFontsScript.apply_label3d(_hint_shadow, true, 144, 0.078)
+	_hint_shadow.outline_size = 0
+	_hint_shadow.alpha_cut = Label3D.ALPHA_CUT_DISABLED
+	_hint_shadow.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_hint_shadow.modulate = Color(0.05, 0.025, 0.01, 0.55)
+	_hint_shadow.render_priority = 31
+	_hint.add_child(_hint_shadow)
 	_ensure_hold_meter()
 	_ensure_cook_halo()
 	_ensure_season_root()
@@ -654,7 +664,7 @@ func _setup_cook_fx() -> void:
 	_top_bubbles.randomness = 0.7
 	_top_bubbles.visibility_aabb = AABB(Vector3(-0.3, -0.05, -0.3), Vector3(0.6, 0.25, 0.6))
 	_top_bubbles.emitting = false
-	_top_bubbles.position = Vector3(0, 0.028, 0)
+	_top_bubbles.position = Vector3(0, 0.052, 0)
 	var tmat := ParticleProcessMaterial.new()
 	tmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
 	tmat.emission_ring_axis = Vector3(0, 1, 0)
@@ -670,7 +680,7 @@ func _setup_cook_fx() -> void:
 	tmat.damping_max = 2.2
 	tmat.scale_min = 0.3
 	tmat.scale_max = 0.7
-	tmat.color = Color(0.55, 0.16, 0.1, 0.9)
+	tmat.color = Color.WHITE
 	var tscale := Gradient.new()
 	tscale.add_point(0.0, Color(1, 1, 1, 0.95))
 	tscale.add_point(0.4, Color(1, 1, 1, 0.75))
@@ -686,7 +696,9 @@ func _setup_cook_fx() -> void:
 	tsphere.rings = 4
 	var tdraw := StandardMaterial3D.new()
 	tdraw.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	tdraw.albedo_color = Color(0.48, 0.14, 0.09, 0.88)
+	tdraw.albedo_color = Color(0.6325, 0.32, 0.11, 0.94)
+	tdraw.vertex_color_use_as_albedo = true
+	tdraw.render_priority = PATTY_OVERLAY_PRIORITY + 1
 	tdraw.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_top_bubbles.draw_pass_1 = tsphere
 	_top_bubbles.material_override = tdraw
@@ -1309,6 +1321,11 @@ func _update_hint_scale(delta: float) -> void:
 	var cur := _hint.scale.x
 	var s := lerpf(cur, target, clampf(delta * 10.0, 0.0, 1.0))
 	_hint.scale = Vector3(s, s, s)
+	if is_instance_valid(_hint_shadow):
+		_hint_shadow.text = _hint.text
+		var view_camera := get_viewport().get_camera_3d()
+		if is_instance_valid(view_camera):
+			_hint_shadow.global_position = _hint.global_position + (view_camera.global_basis.x - view_camera.global_basis.y) * 0.0018
 
 
 func frost_amount() -> float:

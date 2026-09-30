@@ -5047,7 +5047,7 @@ func _setup_customer_life(model: Node) -> void:
 
 
 func react_burnt_bite(point_at_player: bool = false) -> void:
-	shake_angry(.85, .065, 1.15)
+	shake_angry(1.0, .05, .20, false)
 	if point_at_player:
 		_burger_eat_phase = "complain"
 		_anim_state = ""
