@@ -51,3 +51,43 @@ func burger_grip_global() -> Vector3: return mouth_global()
 func burger_grip_edges() -> Array[Vector3]:
 	return [mouth_global() + Vector3(-.12,0,0), mouth_global() + Vector3(.12,0,0)]
 func side_food_mouth_global() -> Vector3: return mouth_global()
+
+var exit_start_pose: Array[Transform3D] = []
+
+func begin_ground_exit() -> void:
+	exit_start_pose.clear()
+	for i in rig.get_bone_count(): exit_start_pose.append(rig.get_bone_pose(i))
+	player.speed_scale = 1.0
+	player.play("ground_breakout",0.0)
+	player.pause()
+	update_ground_exit(0.0)
+	# Low, rolling dust hides the seam as the fractured pavement closes.
+	for i in 14:
+		var puff = MeshInstance3D.new()
+		var sphere = SphereMesh.new(); sphere.radius = .22; sphere.height = .30; sphere.radial_segments = 10; sphere.rings = 5
+		puff.mesh = sphere
+		var material = StandardMaterial3D.new()
+		material.albedo_color = Color(.63,.56,.43,.0)
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		material.roughness = 1.0
+		puff.material_override = material
+		puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(puff)
+		var direction = Vector3(cos(i*TAU/14),0,sin(i*TAU/14))
+		puff.position = direction * .9 + Vector3(0,.12,0)
+		var tween = puff.create_tween().set_parallel(true)
+		tween.tween_property(puff,"position",direction*1.65+Vector3(0,.25,0),1.8)
+		tween.tween_property(puff,"scale",Vector3(2.1,.75,2.1),1.8)
+		tween.tween_property(material,"albedo_color:a",.45,.25)
+		tween.chain().tween_property(material,"albedo_color:a",0.0,.3)
+		tween.chain().tween_callback(puff.queue_free)
+
+func update_ground_exit(progress: float) -> void:
+	if not is_instance_valid(player) or not is_instance_valid(rig): return
+	var animation = player.get_animation("ground_breakout")
+	player.seek(animation.length * lerpf(.65,.12,smoothstep(0,1,progress)),true)
+	# Blend out of the actual slump/slam pose instead of snapping upright first.
+	var blend = smoothstep(0,.32,progress)
+	if exit_start_pose.size() == rig.get_bone_count() and blend < 1.0:
+		for i in rig.get_bone_count():
+			rig.set_bone_pose(i,exit_start_pose[i].interpolate_with(rig.get_bone_pose(i),blend))

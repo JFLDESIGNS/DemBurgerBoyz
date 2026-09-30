@@ -6,7 +6,7 @@ const TOTAL = 15
 const MAX_LOSSES = 3
 const FINAL_STAGE = 10
 const HARD_DECK_START = TOTAL + MAX_LOSSES
-const SINK_SECONDS = 1.6
+const SINK_SECONDS = 2.0
 const ORDER_SECONDS = 17.0
 const PLACEMENT_FILE = "user://hotdog_boss.cfg"
 const VOICE_PITCH = .78
@@ -30,6 +30,7 @@ var clip = ""
 var sync_timer = 0.0
 var impact_serial = 0
 var received_impact = 0
+var received_slam = -1
 var generation = 0
 var boss_position = Vector3(0, -.02, 6.3)
 var boss_scale = 1.0
@@ -188,9 +189,8 @@ func request_placement(pos: Vector3, size_value: float) -> void:
 func apply_placement() -> void:
 	if is_instance_valid(customer):
 		customer.position = boss_position
-		if phase == "sinking":
-			var progress = clampf(1.0 - timer / SINK_SECONDS, 0, 1)
-			customer.position.y -= smoothstep(0, 1, progress) * 5.5 * boss_scale
+		if phase in ["sinking", "defeat_sinking"] and clip == "ground_exit":
+			customer.update_ground_exit(clampf(1.0-timer/SINK_SECONDS,0,1))
 		customer.scale = Vector3.ONE * boss_scale
 
 func current_recipe() -> Array:
@@ -253,7 +253,7 @@ func play_sound(kind: String) -> void:
 			effects.play()
 			duck_music(effects.stream.get_length(), 12.0)
 		return
-	AudioServer.set_bus_effect_enabled(AudioServer.get_bus_index("BaronBratVoice"),1,kind == "laugh")
+	AudioServer.set_bus_effect_enabled(AudioServer.get_bus_index("BaronBratVoice"),1,kind in ["laugh", "victory_laugh"])
 	voice.pitch_scale = VOICE_PITCH
 	voice.volume_db = -1.0
 	match kind:
@@ -263,9 +263,12 @@ func play_sound(kind: String) -> void:
 			voice.stream = sound_streams["bossahhhhhentrance"]
 		"eat":
 			voice.stream = sound_streams["eatboss"]
-		"laugh":
+		"laugh", "victory_laugh":
 			voice.pitch_scale = .70
 			voice.stream = sound_streams["laughboss"]
+			if kind == "victory_laugh":
+				voice.volume_db = 5.0
+				duck_music(3.2, 14.0)
 		"wawawa":
 			voice.stream = load("res://sounds/wawawa.ogg")
 			voice.pitch_scale = .58; voice.volume_db = -7.0
@@ -410,6 +413,9 @@ func restore_street() -> void:
 
 func play(name_value: String) -> float:
 	clip = name_value
+	if name_value == "ground_exit" and is_instance_valid(customer):
+		customer.begin_ground_exit()
+		return SINK_SECONDS
 	if not is_instance_valid(customer) or not is_instance_valid(customer.player): return .1
 	if not customer.player.has_animation(name_value):
 		push_error("Missing Baron animation: " + name_value)
@@ -505,7 +511,7 @@ func _process(delta: float) -> void:
 		if is_instance_valid(item[0]) and game.tickets.has(item[0]): game.tickets[item[0]].hide()
 	if not host():
 		if phase == "ready": order_left = maxf(0, order_left-delta); refresh()
-		if phase == "sinking": timer = maxf(0, timer-delta); apply_placement()
+		if phase in ["sinking", "defeat_sinking"]: timer = maxf(0, timer-delta); apply_placement()
 		return
 	if phase == "ready":
 		order_left = maxf(0, order_left-delta)
@@ -528,7 +534,7 @@ func _process(delta: float) -> void:
 	elif phase != "results":
 		var before = timer
 		timer = maxf(0, timer-delta)
-		if phase == "sinking": apply_placement()
+		if phase in ["sinking", "defeat_sinking"]: apply_placement()
 		if impact_at >= 0 and before >= impact_at and timer < impact_at:
 			impact_at = -1; impact(.65)
 		if timer <= 0: advance_phase()
@@ -552,6 +558,14 @@ func advance_phase() -> void:
 			phase = "ready"; customer.is_waiting = true
 			play(["idle_sway", "idle_wave", "idle_bounce"][randi()%3])
 		"defeat":
+			phase = "defeat_laugh"; play("idle_bounce"); timer = 2.6
+			sound_event("victory_laugh")
+		"defeat_laugh":
+			phase = "defeat_smash"; timer = play("hammer_double"); impact_at = timer*.51
+		"defeat_smash":
+			phase = "defeat_sinking"; timer = play("ground_exit")
+			concrete.play(); duck_music(SINK_SECONDS,10.0)
+		"defeat_sinking":
 			game._flash("CHALLENGE LOST!  Baron Brat wins — 3 orders lost", Color("FF8A80"), 6)
 			cancel(); return
 		"slump":
@@ -563,8 +577,8 @@ func advance_phase() -> void:
 			phase = "revive_smash_second"; start_smash()
 		"revive_smash_second": ready_order()
 		"victory":
-			phase = "sinking"; timer = SINK_SECONDS
-			customer.player.pause()
+			phase = "sinking"; timer = play("ground_exit")
+			concrete.play()
 			apply_placement()
 		"sinking":
 			phase = "results"; customer.hide(); show_results()
@@ -627,7 +641,11 @@ func show_results() -> void:
 func impact(duration: float) -> void:
 	impact_serial += 1
 	game._start_slot_camera_shake(minf(duration, .5),.075)
-	sound_event(("smash1" if randi()%2 else "smash2") if phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second"] else "impact")
+	var ground_slam = phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second", "defeat_smash"]
+	if ground_slam:
+		bounce_grill(impact_serial)
+		if host() and online(): receive_ground_slam.rpc(impact_serial)
+	sound_event(("smash1" if randi()%2 else "smash2") if ground_slam else "impact")
 
 func refresh() -> void:
 	refresh_next_order()
@@ -641,7 +659,7 @@ func refresh() -> void:
 		"feeding": message = "CHOMP!  %d / 15 perfect" % perfect
 		"attack", "smash": message = "%s  %d / 3 orders lost" % [failure_reason,mistakes]
 		"idle_smash": message = "GROUND SMASH!  Timer paused — %.1fs left" % order_left
-		"defeat": message = "CHALLENGE LOST!  3 orders lost — BARON BRAT WINS!"
+		"defeat", "defeat_laugh", "defeat_smash", "defeat_sinking": message = "CHALLENGE LOST!  3 orders lost — BARON BRAT WINS!"
 		"slump": message = "20 PERFECT!  Is he… finished?" if perfect == FINAL_STAGE else "%d PERFECT!  He's down…" % perfect
 		"revive", "revive_smash_first", "revive_smash_second": message = "HE'S BACK!  FIVE MONSTER BURGERS TO GO!" if perfect == FINAL_STAGE else "BACK FOR MORE!"
 		"victory", "sinking": message = "15 / 15 PERFECT — BARON BRAT DEFEATED!"
@@ -706,14 +724,29 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 	order_left = seconds_left
 	if clip != animation:
 		play(animation)
-		if remaining > 0 and customer.player.has_animation(animation):
+		if remaining > 0 and animation != "ground_exit" and customer.player.has_animation(animation):
 			customer.player.seek(maxf(0,customer.player.get_animation(animation).length-remaining*customer.player.speed_scale),true)
-	if phase in ["sinking", "results"]:
-		customer.player.seek(customer.player.get_animation("slump").length, true)
-		customer.player.pause()
+	if phase in ["sinking", "defeat_sinking"]:
+		if clip != "ground_exit": play("ground_exit")
+		apply_placement()
 		game._remove_ticket(customer)
+	elif phase == "results":
+		customer.player.pause(); game._remove_ticket(customer)
 	if phase == "results": show_results()
 	if serial != received_impact:
 		received_impact = serial
 		game._start_slot_camera_shake(.5,.075)
+		if phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second", "defeat_smash"]: bounce_grill(serial)
 	refresh()
+
+func bounce_grill(serial: int) -> void:
+	if serial <= received_slam: return
+	received_slam = serial
+	# Presentation only: preserve positions, cook state, ownership, and flip count.
+	for patty in game.grill:
+		if is_instance_valid(patty) and not patty.is_held and patty.has_method("_play_done_jump"):
+			patty._play_done_jump(.24)
+
+@rpc("authority", "call_remote", "reliable")
+func receive_ground_slam(serial: int) -> void:
+	if active(): bounce_grill(serial)

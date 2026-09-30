@@ -7,7 +7,9 @@ const BAG_PICKUP_FLIGHT = .95
 const SIDE_BAG_FLIGHT = .9
 var side_visuals: Dictionary = {}
 const DRIVER_RETURN = 1.5
-const DRIVER_TURN = .35
+const DRIVER_GRAB = 1.1
+const DRIVER_RETREAT = .48
+const DRIVER_TURN = .38
 const DRIVER_EXIT = .85
 const DATA = preload("res://scripts/game_data.gd")
 const PACK = "res://models/burgerpack/try2/"
@@ -191,9 +193,9 @@ func _process(delta: float) -> void:
     else:set_phase("paper")
    elif phase=="bagging" and age>=BURGER_BAG_FLIGHT:try_seal_bag()
    elif phase=="sealed" and age>=BAG_PICKUP_FLIGHT:set_phase("pickup")
-   elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK:
+   elif phase=="pickup" and age>=DRIVER_APPROACH+DRIVER_WALK+DRIVER_GRAB:
     pay_order();set_phase("collected")
-   elif phase=="collected" and age>=DRIVER_TURN+DRIVER_RETURN+DRIVER_EXIT:
+   elif phase=="collected" and age>=DRIVER_TURN+DRIVER_RETREAT+DRIVER_RETURN+DRIVER_EXIT:
     state={};wait_time=randf_range(160,240) if game.day==1 else randf_range(55,110)/maxf(.85,float(game._location_stats().get("spawn_rate",1.0)));publish()
   if sync_time>1.0:
    sync_time=0
@@ -499,11 +501,12 @@ func update_visuals(_delta: float) -> void:
   if phase=="pickup":
    arrival_screeched=false
    courier.remove_meta("slide_sounded")
+   courier.remove_meta("grab_started")
   courier.set_meta("footstep_sliding",false)
   courier.rotation.z=0.0
   if phase=="pickup":courier.play_street_run(1.45);courier.set_meta("courier_running",true)
   elif phase=="collected":
-   courier.set_meta("courier_running",false);courier.remove_meta("return_running");courier._play_anim("idle")
+   courier.set_meta("courier_running",false);courier.remove_meta("return_running")
    play_wrap_sound()
   if phase=="wrapping":packing_audio(phase)
   if phase=="sealed" or (phase in ["pickup","collected"] and not is_instance_valid(ticket_view)):prepare_bag_ticket()
@@ -551,7 +554,7 @@ func update_visuals(_delta: float) -> void:
   var squash=sin(t*PI)*.08;bag.scale=Vector3(1-squash*.5,1+squash,1-squash*.5)
   if t>.88 and not bag_land_played:bag_land_played=true;play_wrap_sound()
  elif phase=="pickup":bag.position=ledge.position+Vector3(0,.05,0)
- elif phase=="collected":bag.position=courier.position+Vector3(.2,.7,-.2)
+ elif phase=="collected":bag.position=courier_carry_position()
  bag_ticket.visible=phase in ["pickup","collected"] or (phase=="sealed" and age>=.7)
  flying_ticket.visible=phase=="sealed" and age<.7
  if phase=="sealed":
@@ -562,28 +565,38 @@ func update_visuals(_delta: float) -> void:
   courier.visible=age>DRIVER_APPROACH
   if age>=DRIVER_APPROACH-.35 and not arrival_screeched:
    arrival_screeched=true;screech.play()
-  var run_t=clampf((age-DRIVER_APPROACH)/(DRIVER_WALK-.18),0,1)
-  var slide=clampf((run_t-.65)/.35,0,1)
-  var travel=run_t/.65*.80 if run_t<.65 else .80+.20*(1.0-pow(1.0-slide,2))
-  courier.position=Vector3(lerpf(5.5,ledge.position.x,travel),.1,3.9)
-  courier.rotation.y=-PI*.5
-  courier.rotation.z=sin(slide*PI)*.18
-  courier.set_meta("footstep_sliding",run_t>=.65)
-  courier.set_meta("courier_running",courier.visible and run_t<.65)
-  if run_t>=.65 and not courier.has_meta("slide_sounded"):
-   courier.set_meta("slide_sounded",true)
-   if is_instance_valid(courier._anim_player):courier._anim_player.pause()
-   var shoe=courier.get_node_or_null("CharacterFootsteps")
-   if shoe!=null:shoe.play_skid()
-
+  var run_t=clampf((age-DRIVER_APPROACH)/DRIVER_WALK,0,1)
+  var lane=Vector3(ledge.position.x,.1,3.9)
+  var grab_spot=Vector3(ledge.position.x,.1,2.45)
+  if run_t<.72:
+   courier.position=Vector3(5.5,.1,3.9).lerp(lane,run_t/.72)
+   courier.rotation.y=-PI*.5
+  else:
+   var approach=clampf((run_t-.72)/.28,0,1)
+   courier.position=lane.lerp(grab_spot,approach)
+   courier.rotation.y=lerpf(-PI*.5,-PI,smoothstep(0,.45,approach))
+  courier.rotation.z=0.0
+  courier.set_meta("courier_running",courier.visible and run_t<1)
+  if run_t>=1:
+   var grab_time=clampf(age-DRIVER_APPROACH-DRIVER_WALK,0,DRIVER_GRAB)
+   if not courier.has_meta("grab_started"):
+    courier.set_meta("grab_started",true);courier.play_courier_grab()
+    if is_instance_valid(courier._anim_player):courier._anim_player.seek(grab_time,false)
+   if grab_time>=.50:
+    bag.position=(ledge.position+Vector3(0,.05,0)).lerp(courier_grab_position(),smoothstep(.50,.72,grab_time))
  elif phase=="collected":
-  var return_age=maxf(0,age-DRIVER_TURN)
-  courier.position=Vector3(lerpf(ledge.position.x,5.5,clampf(return_age/DRIVER_RETURN,0,1)),.1,3.9)
-  courier.rotation.y=lerpf(-PI*.5,PI*.5,smoothstep(0,1,age/DRIVER_TURN))
+  var away_age=maxf(0,age-DRIVER_TURN)
+  var return_age=maxf(0,away_age-DRIVER_RETREAT)
+  var grab_spot=Vector3(ledge.position.x,.1,2.45)
+  var lane=Vector3(ledge.position.x,.1,3.9)
+  courier.position=grab_spot.lerp(lane,clampf(away_age/DRIVER_RETREAT,0,1)) if away_age<DRIVER_RETREAT else lane.lerp(Vector3(5.5,.1,3.9),clampf(return_age/DRIVER_RETURN,0,1))
+  courier.rotation.y=lerpf(-PI,0.0,smoothstep(0,1,age/DRIVER_TURN)) if age<DRIVER_TURN else lerpf(0.0,PI*.5,smoothstep(0,.3,return_age))
   courier.visible=return_age<DRIVER_RETURN;bag.visible=courier.visible
   courier.set_meta("courier_running",age>=DRIVER_TURN and courier.visible)
   if age>=DRIVER_TURN and not courier.has_meta("return_running"):
    courier.set_meta("return_running",true);courier.play_street_run(1.45)
+  bag.position=courier_grab_position().lerp(courier_carry_position(),smoothstep(0,DRIVER_TURN,age))
+  bag.rotation.y=courier.rotation.y-PI
   car.position=Vector3(lerpf(10,24,clampf((return_age-DRIVER_RETURN)/DRIVER_EXIT,0,1)),car_ground_y,game.STREET_CAR_Z)
  knife.visible=bool(game.owned_machines.get("chef_knife",false))
  knife.scale=Vector3.ONE*(.8 if knife_owner!=0 else 1.0)
@@ -695,3 +708,19 @@ func announce_arrival(owner: Node3D) -> void:
 func display_number() -> String:
  var code=DATA.order_number_code(state.get("items",[]))
  return "M"+(code if code!="" else str(state.get("number",0)))
+
+func courier_grab_position() -> Vector3:
+ var skeleton=courier.find_child("Skeleton3D",true,false) as Skeleton3D
+ if is_instance_valid(skeleton):
+  var left=skeleton.find_bone("LeftHand");var right=skeleton.find_bone("RightHand")
+  if left>=0 and right>=0:
+   var grip=(skeleton.get_bone_global_pose(left).origin+skeleton.get_bone_global_pose(right).origin)*.5
+   return props.to_local(skeleton.to_global(grip))-Vector3(0,.15,0)
+ return courier_carry_position()
+
+func courier_carry_position() -> Vector3:
+ var skeleton=courier.find_child("Skeleton3D",true,false) as Skeleton3D
+ if is_instance_valid(skeleton):
+  var hand=skeleton.find_bone("RightHand")
+  if hand>=0:return props.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin))-Vector3(0,.30,0)
+ return props.to_local(courier.to_global(Vector3(.26,.85,.05)))

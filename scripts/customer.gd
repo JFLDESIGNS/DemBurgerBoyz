@@ -326,6 +326,7 @@ var _leave_yaw_from: float = FACE_TRUCK_YAW
 var _leave_yaw_target: float = WALK_PLUS_X_YAW
 var _leave_phase: String = ""
 var _leave_do_dance: bool = false
+var _service_backstep := 0.0
 var _leave_start_x: float = 0.0
 var _leave_dance_x: float = 0.0
 var _leave_walk_x: float = 0.0
@@ -2037,7 +2038,7 @@ func _begin_sidewalk_leave(do_dance: bool) -> void:
 			else:
 				_leave_do_dance = false
 	global_position.y = STAND_Y
-	global_position.z = _wait_z()
+	global_position.z = _wait_z() + _service_backstep
 	if _leave_do_dance:
 		_celebrate_anim_path = _pick_five_star_dance_path()
 		if _celebrate_anim_path == "":
@@ -2089,8 +2090,9 @@ func _tick_leave_turn(delta: float) -> bool:
 
 
 func _apply_leave_body(delta: float, walking: bool) -> void:
+	_service_backstep = move_toward(_service_backstep, .28, delta * .55)
 	global_position.y = STAND_Y
-	global_position.z = _wait_z()
+	global_position.z = _wait_z() + _service_backstep
 	if _body == null:
 		return
 	if walking:
@@ -2374,6 +2376,8 @@ func _advance_customer(delta: float) -> void:
 		return
 
 	if _celebrating and not is_leaving:
+		_service_backstep = move_toward(_service_backstep, .28, delta * .55)
+		global_position.z = _wait_z() + _service_backstep
 		rotation_degrees.y = FACE_TRUCK_YAW
 		global_position.y = STAND_Y
 		if _body:
@@ -5087,3 +5091,21 @@ func _waiting_for_partner() -> bool:
 	if not has_meta("couple_partner"): return false
 	var other = get_meta("couple_partner").get_ref()
 	return is_instance_valid(other) and not other.is_leaving and not bool(other.get_meta("serve_in_progress",false))
+
+func play_courier_grab() -> void:
+	if not is_instance_valid(_anim_player): return
+	_anim_player.stop()
+	if not _anim_player.has_animation_library("courier"):
+		var library = preload("res://assets/characters/Animations/CourierGrab.res").duplicate(true) as AnimationLibrary
+		var model = _anim_player.get_parent()
+		var skeleton = model.find_child("Skeleton3D",true,false)
+		if skeleton == null: return
+		var path = str(model.get_path_to(skeleton))
+		var animation = library.get_animation("Courier_Grab")
+		for track in animation.get_track_count():
+			animation.track_set_path(track,NodePath(str(animation.track_get_path(track)).replace("Root/Skeleton3D",path)))
+		_anim_player.add_animation_library("courier",library)
+	_anim_state = "courier_grab"
+	_anim_player.active = true
+	_anim_player.speed_scale = 1.0
+	_anim_player.play("courier/Courier_Grab",0.0)
