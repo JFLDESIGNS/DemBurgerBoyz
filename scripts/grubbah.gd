@@ -193,7 +193,7 @@ func new_order() -> void:
  items.append("bun_top")
  if game._owns_fryer_machine() and randf()<.45:items.append("fries")
  if game._owns_soda_machine() and randf()<.45:items.append("soda_cola")
- state={"number":next_number,"items":items,"phase":"accepted","selected":false,"driver_skin":randi_range(0,6),"car_style":randi_range(0,2),"base":DATA.order_value(items),"paid":false,"quality":1.0};next_number+=1;age=0;publish()
+ state={"number":next_number,"items":items,"phase":"accepted","selected":false,"driver_skin":randi_range(0,6),"driver_preset":game.CustomerScript.take_next_saved_character_preset(),"car_style":randi_range(0,2),"base":DATA.order_value(items),"paid":false,"quality":1.0};next_number+=1;age=0;publish()
  game._flash("Grubbah: mobile order added to the queue",Color("FFCF76"))
 func request(kind: String) -> void:
  if not game.playing:return
@@ -397,9 +397,13 @@ func update_visuals(_delta: float) -> void:
  if not is_instance_valid(props):return
  var phase=str(state.get("phase",""));var base=board_pos()
  if not state.is_empty():
-  var desired_driver=int(state.get("driver_skin",2))
+  var desired_driver=int(state.get("number",0))
   if driver_style!=desired_driver:
-   driver_style=desired_driver;courier.restyle_kenney_skin(driver_style);courier.play_street_run(1.45)
+   driver_style=desired_driver
+   var preset: Dictionary=state.get("driver_preset",{})
+   if not courier.restyle_street_character(preset,true):
+    courier._try_attach_toon_character(); courier.restyle_kenney_skin(int(state.get("driver_skin",2)))
+   courier.play_street_run(1.45)
   var desired_car=clampi(int(state.get("car_style",0)),0,DRIVER_CARS.size()-1)
   if car_style!=desired_car:
    car_style=desired_car

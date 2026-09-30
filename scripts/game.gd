@@ -1499,6 +1499,7 @@ var owned_machines: Dictionary = {
 }
 var supply_orders: Array = [] ## pending phone restocks {id, pack, wait, kind}
 var supply_delivery_fx: Array = [] ## cat-thrown packs lerping into inventory
+var _cat_after_delivery_wait := 0.0
 var mail_delivery_truck: Node3D
 var pending_machine_deliveries: Dictionary = {}
 var _mp_pending_equipment_seen: Array = []
@@ -6162,6 +6163,7 @@ func _waiting_customer_count() -> int:
 	for c in customers:
 		if c == null or not is_instance_valid(c):
 			continue
+		if bool(c.get_meta("delivery_errand", false)): continue
 		if bool(c.get("is_leaving")):
 			continue
 		if bool(c.get("is_cut_collector")):
@@ -6406,6 +6408,9 @@ func _unhandled_input(event: InputEvent) -> void:
 var _empty_stock_controls: Node3D
 
 func _input(event: InputEvent) -> void:
+	if _handle_phone_scroll_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	# Leave victory-card input to its GUI button instead of kitchen interactions.
 	if is_instance_valid(_hotdog_challenge) and _hotdog_challenge.phase == "results":
 		return
@@ -8114,8 +8119,8 @@ func _blocks_grill_pick(screen_pos: Vector2) -> bool:
 	return false
 
 
-func _end_day() -> void:
-	if _hotdog_active() or ((not mp_enabled or NetManager.is_host()) and _hotdog_shift_due()): return
+func _end_day(force_from_host: bool = false) -> void:
+	if not force_from_host and (_hotdog_active() or ((not mp_enabled or NetManager.is_host()) and _hotdog_shift_due())): return
 	if not playing and is_instance_valid(_shift_results) and _shift_results.active: return
 	if playing: _start_burger_pals_parade("end_of_day")
 	if playing: _achievement_event("days")
@@ -11646,7 +11651,7 @@ func _spatula_play_ting_bit(bit: int) -> void:
 
 
 func _register_grill_dance_tap(world_pos: Vector3, _tap_roll: float) -> void:
-	if not playing: return
+	if not playing or (mp_enabled and not NetManager.is_host()): return
 	var piano := str(_grill_zone_at(world_pos).get("id", "")) != "hold"
 	var candidates: Array[Node] = []
 	for c in customers:
@@ -14870,12 +14875,17 @@ func _scrape_finish_clean(slot: int) -> void:
 		cz = c.z
 	if mp_enabled and not _mp_applying:
 		## Include world pos — peers may have the same char in a different slot index.
+		if not NetManager.is_host(): _mp_cleaned_residue[slot] = Vector2(cx, cz)
 		mp_residue_clean.rpc(slot, cx, cz)
 		return
 	_scrape_finish_clean_at(slot, cx, cz)
 
 
+var _mp_cleaned_residue: Dictionary = {}
+
 func _scrape_finish_clean_at(slot: int, x: float, z: float) -> void:
+	if mp_enabled and not NetManager.is_host() and not _mp_applying:
+		_mp_cleaned_residue[slot] = Vector2(x, z)
 	## Clear the named slot plus any residue pile sitting on the same grill spot.
 	if slot >= 0 and slot < GRILL_SLOTS and float(grill_residue[slot]) > 0.0:
 		_scrape_finish_clean_local(slot)
@@ -16386,8 +16396,7 @@ func _end_patty_drag() -> void:
 			mp_cat_feed.rpc("patty", int(patty.net_id))
 			return
 		_return_patty_to_spawn_pool(patty)
-		window_cat.feed("patty")
-		_on_window_cat_fed("patty")
+		_feed_cat_target("patty")
 		_flash("Cat stole the burger! ♥", Color("FF8A80"))
 		return
 	if _is_over_garbage(mouse):
@@ -21192,6 +21201,7 @@ func _queue_disguise_cat(flash_text: String = "") -> void:
 
 
 func _try_spawn_disguise_cat() -> void:
+	if _cat_delivery_blocks_visit(): return
 	if is_instance_valid(mail_delivery_truck) and not mail_delivery_truck.finished:return
 	if is_instance_valid(window_cat) and window_cat.visible:return
 	if not _disguise_cat_pending or _disguise_cat_active:
@@ -49248,9 +49258,13 @@ func _buy_supply_local(id: String) -> void:
 		_mp_broadcast_economy()
 
 
+func _cat_delivery_blocks_visit() -> bool:
+	return not supply_orders.is_empty() or (is_instance_valid(mail_delivery_truck) and not mail_delivery_truck.finished) or _cat_after_delivery_wait > 0.0
+
 func _update_supply_orders(delta: float) -> void:
 	if not playing:
 		return
+	_cat_after_delivery_wait = maxf(0.0, _cat_after_delivery_wait - delta)
 	if is_instance_valid(mail_delivery_truck):
 		mail_delivery_truck.advance(delta)
 		if mail_delivery_truck.finished:
@@ -49271,7 +49285,8 @@ func _update_supply_orders(delta: float) -> void:
 			continue
 		supply_orders.remove_at(i)
 		phone_dirty = true
-		_begin_cat_supply_delivery(str(o.get("id", "")), int(o.get("pack", SUPPLY_BUY_PACK)), str(o.get("kind", "stock")))
+		if not mp_enabled or NetManager.is_host():
+			_begin_cat_supply_delivery(str(o.get("id", "")), int(o.get("pack", SUPPLY_BUY_PACK)), str(o.get("kind", "stock")))
 	if phone_dirty:
 		_refresh_phone_ui()
 	_update_supply_delivery_fx(delta)
@@ -49305,7 +49320,12 @@ func _begin_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
 	mail_delivery_truck.enqueue(id, pack, kind)
 
 
+@rpc("authority", "call_remote", "reliable")
+func mp_mail_parcel(id: String, pack: int, kind: String) -> void:
+	_throw_cat_supply_delivery(id, pack, kind)
+
 func _throw_cat_supply_delivery(id: String, pack: int, kind: String) -> void:
+	if mp_enabled and NetManager.is_host(): mp_mail_parcel.rpc(id, pack, kind)
 	if kind == "machine":
 		_throw_cat_machine_delivery(id)
 		return
@@ -53006,9 +53026,9 @@ func _build_phone_ui() -> void:
 	scroll.name = "PhoneScroll"
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
-	scroll.gui_input.connect(_on_phone_scroll_gui_input)
+	scroll.get_v_scroll_bar().custom_minimum_size.x = 12
 	scroll_host.add_child(scroll)
 
 	var v := VBoxContainer.new()
@@ -53139,6 +53159,9 @@ func _build_phone_ui() -> void:
 
 	var inv_hint := Label.new()
 	inv_hint.text = "Restock to full — buys what you can afford"
+	inv_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inv_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UiFontsScript.apply_label(inv_hint, false, 12)
 	inv_hint.add_theme_color_override("font_color", Color(0.78, 0.90, 0.82))
 	inv_v.add_child(inv_hint)
@@ -53242,15 +53265,29 @@ func _build_phone_ui() -> void:
 		_card_table=preload("res://scripts/card_table.gd").new();_card_table.name="CardTableSession";add_child(_card_table);_card_table.setup(self)
 
 
+func _handle_phone_scroll_input(ev: InputEvent) -> bool:
+	if not is_instance_valid(phone_scroll) or not phone_scroll.is_visible_in_tree() or _phone_app_id == "maps": return false
+	if not ev is InputEventMouse: return false
+	var inside := phone_scroll.get_global_rect().has_point(ev.position)
+	var bar := phone_scroll.get_v_scroll_bar()
+	if bar.visible and bar.get_global_rect().has_point(ev.position) and not _phone_scroll_dragging: return false
+	if not inside and not _phone_scroll_drag_pending and not _phone_scroll_dragging: return false
+	var was_dragging := _phone_scroll_dragging
+	_on_phone_scroll_gui_input(ev)
+	if _phone_scroll_dragging and not was_dragging:
+		for button in phone_scroll.find_children("*", "BaseButton", true, false): button.button_pressed = false
+	return was_dragging or _phone_scroll_dragging or (ev is InputEventMouseButton and ev.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN])
+
+
 func _on_phone_scroll_gui_input(ev: InputEvent) -> void:
 	## LMB drag + flick inertia — no visible scrollbar; small movement still clicks Buy.
 	if phone_scroll == null:
 		return
-	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_WHEEL_UP:
+	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_WHEEL_UP:
 		_phone_scroll_vel -= PHONE_SCROLL_WHEEL_KICK
 		phone_scroll.accept_event()
 		return
-	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		_phone_scroll_vel += PHONE_SCROLL_WHEEL_KICK
 		phone_scroll.accept_event()
 		return
@@ -62401,6 +62438,7 @@ func _spawn_customer_local(
 		_mp_customer_net_ids[c.get_instance_id()] = net_id
 	customers_root.add_child(c)
 	customers.append(c)
+	c.set_meta("mp_spawn_descriptor", {"order": Array(typed_order), "color": color, "patience": patience, "lane": lane, "skin": skin_idx, "face": face_style, "cat": disguise_cat, "fact": jin_fact_idx, "challenge": challenge_guest, "preset": c._custom_character_preset.duplicate(true)})
 	if disguise_cat and c.has_method("apply_disguise_cat_look"):
 		c.apply_disguise_cat_look()
 		_disguise_cat_active = true
@@ -62693,6 +62731,7 @@ func _reposition_customers() -> void:
 		var c = customers[i]
 		if c == null or not is_instance_valid(c):
 			continue
+		if bool(c.get_meta("delivery_errand", false)): continue
 		## Hostiles manage their own patrol waypoints — don't yank them into customer lanes.
 		if bool(c.get("is_terrorist")):
 			c.global_position.y = CustomerScript.STAND_Y
@@ -66632,8 +66671,7 @@ func _try_drop_dragged_food_on_cat(screen_pos: Vector2) -> bool:
 			var patty = _extract_station_patty(st_i, from_i)
 			if patty != null and is_instance_valid(patty):
 				_return_patty_to_spawn_pool(patty)
-			window_cat.feed("patty")
-			_on_window_cat_fed("patty")
+			_feed_cat_target("patty")
 			_flash("Cat stole the burger! ♥", Color("FF8A80"))
 			return true
 	## Cheese ghost drag.
@@ -69803,15 +69841,17 @@ func _play_cup_fly_to_mouth(
 
 	var origin := serving_drink.global_position if is_instance_valid(serving_drink) else (soda_root.global_position if is_instance_valid(soda_root) else _cutting_board_world_center())
 	if is_instance_valid(serving_drink): serving_drink.hide()
+	var serving_drink_ref = weakref(serving_drink) if is_instance_valid(serving_drink) else null
 	_start_side_food_3d(customer, "drink", origin, func() -> void:
 		if not companion:
 			_serve_fly_busy = false
 			_auto_serving = false
 		on_done.call()
-		if not companion and is_instance_valid(serving_drink) and not bool(serving_drink.get_meta("serving_consumed", false)):
-			serving_drink.show()
-			serving_drink.remove_meta("serving")
-			if serving_was_active: cup_root = serving_drink
+		var remaining_drink = serving_drink_ref.get_ref() if serving_drink_ref != null else null
+		if not companion and is_instance_valid(remaining_drink) and not bool(remaining_drink.get_meta("serving_consumed", false)):
+			remaining_drink.show()
+			remaining_drink.remove_meta("serving")
+			if serving_was_active: cup_root = remaining_drink
 	, flavor, launch_delay)
 
 
@@ -73580,6 +73620,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 	seed(session_seed)
 	_mp_order_revision=0
 	_mp_retired_customer_ids.clear()
+	_mp_cleaned_residue.clear()
 	_mp_load_epoch=session_seed
 	_mp_load_ready_peers.clear()
 	_mp_load_released=false
@@ -75242,10 +75283,12 @@ func mp_patty_click(net_id: int, requested_flip_grade: String = "") -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_patty_smash(net_id: int) -> void:
+	_mp_flush_scene_snapshots()
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
 	_mp_applying = true
+	if not NetManager.is_host(): p.set_meta("mp_smash_pending_until", Time.get_ticks_msec() + 1500)
 	p.smash()
 	_mp_applying = false
 	if NetManager.is_host(): _mp_broadcast_grill()
@@ -75311,7 +75354,7 @@ func _mp_sender_id() -> int:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func mp_claim_drag(net_id: int) -> void:
+func mp_claim_drag(net_id: int, request_serial: int = 0) -> void:
 	var p = _patty_by_net_id(net_id)
 	if p == null or not is_instance_valid(p):
 		return
@@ -75320,32 +75363,39 @@ func mp_claim_drag(net_id: int) -> void:
 		sid = NetManager.my_id()
 		# Predict the local hand only; host authority resolves contested objects.
 		_begin_patty_drag_local(p)
+		_mp_slide_releasing.erase(net_id)
+		p.set_meta("mp_drag_pending", true)
+		request_serial = int(p.get_meta("mp_drag_request", 0)) + 1
+		p.set_meta("mp_drag_request", request_serial)
 	if not NetManager.is_host():
 		if sid == NetManager.my_id():
-			mp_claim_drag.rpc_id(1, net_id)
+			mp_claim_drag.rpc_id(1, net_id, request_serial)
 		return
 	var owner := int(_mp_drag_claims.get(net_id, 0))
 	if owner != 0 and owner != sid and sid != 1:
-		mp_drag_claimed.rpc_id(sid, net_id, owner, int(_mp_drag_generation.get(net_id, 0)))
+		mp_drag_claimed.rpc_id(sid, net_id, owner, int(_mp_drag_generation.get(net_id, 0)), request_serial)
 		return
 	_mp_claim_counter += 1
-	mp_drag_claimed.rpc(net_id, sid, _mp_claim_counter)
+	mp_drag_claimed.rpc(net_id, sid, _mp_claim_counter, request_serial)
 
 
 @rpc("authority", "call_local", "reliable")
-func mp_drag_claimed(net_id: int, owner: int, generation: int) -> void:
+func mp_drag_claimed(net_id: int, owner: int, generation: int, request_serial: int = 0) -> void:
 	_mp_flush_scene_snapshots()
 	if generation < int(_mp_drag_generation.get(net_id, -1)):
 		return
 	_mp_patty_pose_state.erase(net_id)
 	_mp_drag_generation[net_id] = generation
 	_mp_drag_claims[net_id] = owner
-	if owner == 0: _mp_slide_releasing.erase(net_id)
 	var p = _patty_by_net_id(net_id)
 	if p == null:
 		return
 	if _mp_peer_holding_net(net_id)==0 and not bool(p.get_meta("click_transfer",false)) and grill.has(p):
 		p.is_held=false
+	if owner == NetManager.my_id() and request_serial >= int(p.get_meta("mp_drag_request", 0)): p.remove_meta("mp_drag_pending")
+	if owner == 0 and bool(p.get_meta("mp_drag_pending", false)): return
+	if owner == 0: _mp_slide_releasing.erase(net_id)
+	if owner != 0 and owner != NetManager.my_id(): p.remove_meta("mp_drag_pending")
 	if dragging_patty == p:
 		if owner != NetManager.my_id():
 			dragging_patty = null
@@ -75365,6 +75415,7 @@ var _mp_slide_releasing: Dictionary = {}
 func _mp_finish_local_slide(patty: Area3D) -> void:
 	if not mp_enabled or not is_instance_valid(patty) or patty == dragging_patty or patty == slide_inertia_patty: return
 	var nid := int(patty.net_id)
+	if bool(patty.get_meta("mp_drag_pending", false)): _mp_slide_releasing[nid] = true
 	if int(_mp_drag_claims.get(nid,0)) != NetManager.my_id(): return
 	_mp_slide_releasing[nid] = true
 	var point: Vector3 = patty.position
@@ -75638,6 +75689,7 @@ func mp_spawn_customer(
 	var sid := multiplayer.get_remote_sender_id()
 	if mp_enabled and not NetManager.is_host() and sid != 1:
 		return
+	_mp_flush_scene_snapshots()
 	if net_id >= 0 and _customer_by_net_id(net_id) != null:
 		return
 	_mp_applying = true
@@ -76043,6 +76095,7 @@ func mp_sync_grill_mess(
 		var host_x := float(residue_xs[i]) if i < residue_xs.size() else 0.0
 		var host_z := float(residue_zs[i]) if i < residue_zs.size() else 0.0
 		if host_amount <= 0.04:
+			_mp_cleaned_residue.erase(i)
 			if i < grill_residue.size() and float(grill_residue[i]) > 0.0:
 				grill_residue[i] = 0.0
 				_clear_residue_chunks(i)
@@ -76053,6 +76106,7 @@ func mp_sync_grill_mess(
 			if i < brush_swipe_cool.size():
 				brush_swipe_cool[i] = 0.0
 			continue
+		if _mp_cleaned_residue.has(i) and (_mp_cleaned_residue[i] as Vector2).distance_to(Vector2(host_x, host_z)) < 0.1: continue
 		if host_kind == "":
 			host_kind = "patty"
 		var host_center := Vector3(host_x, GRILL_SURFACE_Y + 0.028, host_z)
@@ -76067,7 +76121,7 @@ func mp_sync_grill_mess(
 			_clear_residue_chunks(i)
 			_leave_grill_residue_local(i, host_center, false, host_kind, host_amount)
 		elif not is_equal_approx(local_amount, host_amount):
-			grill_residue[i] = host_amount
+			grill_residue[i] = minf(local_amount, host_amount)
 			grill_residue_centers[i] = host_center
 			_refresh_residue_visual(i)
 
@@ -76256,7 +76310,10 @@ func mp_sync_grill(
 			p = _patty_by_net_id(nid)
 			if p == null:
 				continue
-		if i < shapes.size(): p.apply_mp_shape(int(shapes[i]))
+		if i < shapes.size():
+			var pending_smash := int(p.get_meta("mp_smash_pending_until", 0)) > Time.get_ticks_msec()
+			if int(shapes[i]) != 1 or not pending_smash: p.apply_mp_shape(int(shapes[i]))
+			if int(shapes[i]) != 1: p.remove_meta("mp_smash_pending_until")
 		## Don't yank local scoop / drag ownership mid-gesture.
 		var local_scoop: bool = spatula_patty == p and (spatula_owner_id == 0 or spatula_owner_id == NetManager.my_id())
 		var local_drag: bool = (dragging_patty == p and drag_owner_id == NetManager.my_id()) or slide_inertia_patty == p or _mp_slide_releasing.has(nid)
@@ -76420,6 +76477,9 @@ func _mp_send_cat_sync() -> void:
 	if not window_cat.has_method("get_mp_sync"):
 		return
 	var d: Dictionary = window_cat.get_mp_sync()
+	d.presentation["delivery_wait"] = _cat_after_delivery_wait
+	d.presentation["delivery_pending"] = not supply_orders.is_empty()
+	d.presentation["delivery"] = mail_delivery_truck.snapshot() if is_instance_valid(mail_delivery_truck) and not mail_delivery_truck.finished else {}
 	mp_cat_sync.rpc(
 		str(d.get("state", "hidden")),
 		float(d.get("timer", 0.0)),
@@ -76459,6 +76519,18 @@ func mp_cat_sync(
 		return
 	if not window_cat.has_method("apply_mp_sync"):
 		return
+	_cat_after_delivery_wait = maxf(_cat_after_delivery_wait, float(presentation.get("delivery_wait", 0.0)))
+	var delivery: Dictionary = presentation.get("delivery", {})
+	if not delivery.is_empty():
+		if not is_instance_valid(mail_delivery_truck):
+			mail_delivery_truck = preload("res://scripts/mail_delivery_truck.gd").new()
+			mail_delivery_truck.game = self
+			world.add_child(mail_delivery_truck)
+		mail_delivery_truck.apply_snapshot(delivery)
+	elif is_instance_valid(mail_delivery_truck) and not bool(presentation.get("delivery_pending", false)):
+		mail_delivery_truck.finished = true
+		mail_delivery_truck.hide()
+		mail_delivery_truck.restore_cat()
 	window_cat.apply_mp_sync({
 		"state": state,
 		"timer": timer,
@@ -76525,7 +76597,7 @@ func mp_cat_feed(kind: String, patty_net_id: int) -> void:
 				_mp_applying = false
 				return
 		if window_cat != null and is_instance_valid(window_cat):
-			window_cat.feed(kind, true)
+			_feed_cat_target(kind)
 		var label := kind.replace("_", " ")
 		_flash("Cat loves the %s!" % label, Color("FFE082"))
 		if game_audio:
@@ -76774,12 +76846,14 @@ func mp_supply_order_accepted(id: String, pack: int, kind: String, sequence: int
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_customer_leave(net_id: int, angry: bool, dance: bool = false) -> void:
+	_mp_flush_scene_snapshots()
 	_mp_retired_customer_ids[net_id]=true
 	_mp_applying = true
 	var c = _customer_by_net_id(net_id)
 	if c != null and is_instance_valid(c):
 		## Ensure walk-off anim if they were still waiting (guest ticket clear).
-		if bool(c.get("is_waiting")) and not bool(c.get("is_leaving")):
+		if not bool(c.get("is_leaving")):
+			if dance: c.set_meta("meal_stars", 5.0)
 			if angry and c.has_method("leave_mad"):
 				c.leave_mad()
 			elif (not angry) and c.has_method("leave_happy"):
@@ -76908,6 +76982,8 @@ func _mp_emit_customers(peer_id: int = 0) -> void:
 	var fries_handed: Array = []
 	var serving: Array = []
 	var yaws: Array = []
+	var motions: Array = []
+	var appearances: Array = []
 	for c in customers:
 		if is_instance_valid(c) and c.get_meta("hotdog_boss",false): continue
 		if c == null or not is_instance_valid(c):
@@ -76916,6 +76992,8 @@ func _mp_emit_customers(peer_id: int = 0) -> void:
 		if nid < 0:
 			continue
 		ids.append(nid)
+		motions.append(c.presentation_snapshot() if c.has_method("presentation_snapshot") else {})
+		appearances.append(c.get_meta("mp_spawn_descriptor", {}))
 		pats.append(float(c.patience))
 		xs.append(float(c.global_position.x))
 		zs.append(float(c.global_position.z))
@@ -76927,7 +77005,7 @@ func _mp_emit_customers(peer_id: int = 0) -> void:
 		fries_handed.append(_customer_fries_handed(c))
 		serving.append(bool(c.get_meta("serve_in_progress", false)))
 		yaws.append(float(c.rotation_degrees.y))
-	_mp_publish_state("customers", [ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed, serving, _customer_net_id(selected_customer) if is_instance_valid(selected_customer) else -1, _mp_order_revision], peer_id)
+	_mp_publish_state("customers", [ids, pats, xs, zs, waits, leaves, clocks, sodas_handed, icecreams_handed, yaws, fries_handed, serving, _customer_net_id(selected_customer) if is_instance_valid(selected_customer) else -1, _mp_order_revision, motions, appearances], peer_id)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -76945,7 +77023,9 @@ func mp_sync_customers(
 	fries_handed: Array = [],
 	serving: Array = [],
 	active_order_id: int = -2,
-	order_revision: int = 0
+	order_revision: int = 0,
+	motions: Array = [],
+	appearances: Array = []
 ) -> void:
 	if NetManager.is_host():
 		return
@@ -76955,9 +77035,15 @@ func mp_sync_customers(
 		var nid := int(ids[i])
 		seen[nid] = true
 		var c = _customer_by_net_id(nid)
+		if not is_instance_valid(c) and i < appearances.size() and not _mp_retired_customer_ids.has(nid):
+			var spawn: Dictionary = appearances[i]
+			if not spawn.is_empty():
+				_spawn_customer_local(spawn.order, spawn.color, float(spawn.patience), int(spawn.lane), nid, int(spawn.skin), int(spawn.face), bool(spawn.cat), int(spawn.fact), bool(spawn.challenge), spawn.preset, true)
+				c = _customer_by_net_id(nid)
 		if c == null or not is_instance_valid(c):
 			continue
 		c.mp_host_driven = true
+		if i < motions.size() and c.has_method("apply_presentation_snapshot"): c.apply_presentation_snapshot(motions[i])
 		if i < pats.size():
 			c.patience = float(pats[i])
 			if c.has_method("_refresh_patience_bar"):
@@ -78138,7 +78224,7 @@ func mp_residue_amt(slot: int, amt: float, x: float = 0.0, z: float = 0.0) -> vo
 		return
 	if target < 0 or target >= GRILL_SLOTS:
 		return
-	grill_residue[target] = clampf(amt, 0.0, 1.0)
+	grill_residue[target] = minf(float(grill_residue[target]), clampf(amt, 0.0, 1.0))
 	_refresh_residue_visual(target)
 	## If this scrape finished the pile, wipe any twin pile at the same spot.
 	if float(grill_residue[target]) <= 0.04:
@@ -78956,9 +79042,10 @@ func _cat_feed_hit(screen_pos: Vector2) -> bool:
 	return is_instance_valid(window_cat) and window_cat.hit_test_feed(camera, screen_pos)
 
 func _feed_cat_target(kind: String) -> void:
-	if is_instance_valid(mail_delivery_truck) and mail_delivery_truck.waiting_for_treat():
-		mail_delivery_truck.receive_treat(kind)
-	elif is_instance_valid(window_cat):
+	if is_instance_valid(mail_delivery_truck):
+		if mail_delivery_truck.waiting_for_treat(): mail_delivery_truck.receive_treat(kind)
+		return
+	if not _cat_delivery_blocks_visit() and is_instance_valid(window_cat) and window_cat.visible:
 		window_cat.feed(kind, true)
 
 
@@ -79007,7 +79094,9 @@ func mp_shift_closed(state: Dictionary, elapsed: float=0.0) -> void:
 	set_meta("mp_closed_bank_summary","Checking %s · HYSA %s" % [_format_money(money),_format_money(bank_savings)])
 	if not is_instance_valid(_shift_results) or not _shift_results.active:
 		playing=true
-		_end_day()
+		_mp_apply_jobs.clear()
+		if is_instance_valid(_hotdog_challenge): _hotdog_challenge.cancel()
+		_end_day(true)
 		_shift_results.seek_closing(elapsed)
 		if elapsed>=12.0: _show_parade_shift_results()
 	else:

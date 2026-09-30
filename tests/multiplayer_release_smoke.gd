@@ -72,6 +72,8 @@ func run() -> void:
   game.stations[0]["items"] = ["bun_bottom","patty","bun_top"]
   game.stations[0]["patties"] = [patty]
   game._refresh_station(0)
+  if not is_instance_valid(game.cup_root):
+   game.cup_root = Node3D.new(); game.world.add_child(game.cup_root)
   game.cup_soda_fill = 1.0
   game.cup_flavor = "cola"
   game._mp_broadcast_grill()
@@ -202,6 +204,7 @@ func run() -> void:
   game._shift_results.seek_closing(12.5)
   _check(is_equal_approx(float(game._shift_results.screen.material.get_shader_parameter("blackout")),1.0),"Blue transitions to full black")
   _check(game._shift_results.layer>game.get_node("UI").layer,"Closing affects other UI")
+  _check(game.game_over_panel.visible,"Guest results must open after closing transition")
   _check(game.game_over_panel.get_parent()==game._shift_results.recap_root,"Recap stays above fade")
   game.mp_sync_economy(1.0,0,0.0,1,0,0,0.0,0,[],[],[])
   _check(is_equal_approx(game.money,300.0),"Stale economy cannot overwrite final recap")

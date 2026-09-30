@@ -7,6 +7,8 @@ var routing := false
 var clock := 0.0
 var screen_clock := 0.0
 var last_screen: Array=[]
+var pending_view: Array=[]
+var pending_view_until := 0
 const FIELDS := {
  "gnop":["_player_y","_cpu_y","_ball","_vel","_score_p","_score_c","_alive","_started","partner"],
  "snak":["_snake","_snake2","_foods","_dir","_dir2","_alive","_alive2","_started","_score","partner"],
@@ -17,7 +19,7 @@ func setup(g):
  if is_instance_valid(g.phone_muvye_page):g.phone_muvye_page.party=self
  for id in pages:
   pages[id].party=self;pages[id].party_id=id
-func online():return game.mp_enabled and multiplayer.has_multiplayer_peer()
+func online():return game.mp_enabled and multiplayer.has_multiplayer_peer() and multiplayer.multiplayer_peer.get_connection_status()==MultiplayerPeer.CONNECTION_CONNECTED
 func host():return not online() or multiplayer.is_server()
 func choose(id: String):
  if applying or not online():return
@@ -88,6 +90,8 @@ func _process(delta):
    var local_view=[game._phone_expanded,game.phone_scroll.scroll_vertical if is_instance_valid(game.phone_scroll) else 0]
    if not applying and local_view!=last_screen:
     last_screen=local_view
+    pending_view=local_view.duplicate()
+    pending_view_until=Time.get_ticks_msec()+800
     request_view.rpc_id(1,bool(local_view[0]),int(local_view[1]))
   return
  screen_clock+=delta
@@ -129,6 +133,11 @@ func snapshot(id: String,payload: PackedByteArray):
 func screen_state(id: String,scroll: int,expanded: bool):
  if game._phone_app_id!=id:
   applying=true;game._set_phone_app(id);applying=false
+ var local_view=[game._phone_expanded,game.phone_scroll.scroll_vertical if is_instance_valid(game.phone_scroll) else 0]
+ var incoming=[expanded,scroll]
+ if incoming==pending_view:pending_view.clear()
+ # Keep a guest's new scroll position while an older host echo is in flight.
+ if local_view!=last_screen or (not pending_view.is_empty() and Time.get_ticks_msec()<pending_view_until):return
  applying=true
  if game._phone_expanded!=expanded:game._set_phone_expanded(expanded)
  if is_instance_valid(game.phone_scroll):game.phone_scroll.scroll_vertical=scroll

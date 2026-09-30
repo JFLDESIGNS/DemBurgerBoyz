@@ -39,6 +39,11 @@ var treat_meows := 0
 var wants_treat := false
 var pet_hop_left := 0.0
 var on_foot := false
+var disguise_customer: Node3D
+var disguise_exit_from := Vector3.ZERO
+var disguise_exit_elapsed := 0.0
+var disguise_departed := false
+var restored := false
 const PARK_YAW := PI * 0.67
 
 func _ready() -> void:
@@ -75,8 +80,10 @@ func _ready() -> void:
 	if is_instance_valid(game.window_cat):
 		old_cat_visible = game.window_cat.visible
 		old_cat_process = game.window_cat.is_processing()
+		game.window_cat.pause_for_delivery()
 		game.window_cat.set_process(false)
 		game.window_cat.hide()
+	_borrow_disguise_customer()
 	truck.hide()
 	courier.hide()
 	drive_audio = AudioStreamPlayer3D.new(); drive_audio.bus = "SFX"
@@ -126,6 +133,7 @@ func clip(name_: String) -> void:
 		animation.play(name_, 0.12)
 
 func set_phase(value: String) -> void:
+	if game.mp_enabled and not NetManager.is_host() and not bool(get_meta("applying_host_phase", false)): return
 	phase = value
 	elapsed = 0.0
 	if value in ["arrive", "depart"] and is_instance_valid(drive_audio): drive_audio.play()
@@ -157,7 +165,7 @@ func advance(delta: float) -> void:
 	elapsed += delta
 	_update_delivery_meows(delta)
 	if phase == "waiting":
-		if game._disguise_cat_active:return
+		if not _advance_disguise_exit(delta): return
 		# Let any car already on the road leave naturally before entering its lane.
 		if game.street_car_active and not on_foot: return
 		courier.show()
@@ -212,16 +220,18 @@ func advance(delta: float) -> void:
 				courier.rotation.z = 0
 				if phase == "walk":
 					set_phase("deliver")
-					for order in orders: game._throw_cat_supply_delivery(order[0], order[1], order[2])
-					orders.clear()
+					if not game.mp_enabled or NetManager.is_host():
+						for order in orders: game._throw_cat_supply_delivery(order[0], order[1], order[2])
+						orders.clear()
 				elif on_foot:
-					if orders.is_empty(): finished = true; hide(); restore_cat()
+					if orders.is_empty():
+						if not game.mp_enabled or NetManager.is_host(): finished = true; hide(); restore_cat()
 					else: courier.hide(); set_phase("waiting")
 				else: set_phase("hop_in")
 		"deliver":
 			courier.rotation.y = PI
 			clip("03_Box_Delivery")
-			if not orders.is_empty():
+			if not orders.is_empty() and (not game.mp_enabled or NetManager.is_host()):
 				for order in orders: game._throw_cat_supply_delivery(order[0], order[1], order[2])
 				orders.clear(); elapsed = 0
 			if elapsed >= 2.2 and game.supply_delivery_fx.is_empty():
@@ -257,7 +267,7 @@ func advance(delta: float) -> void:
 			clip("01_Idle")
 			if u >= 1:
 				if orders.is_empty():
-					finished = true; hide(); restore_cat()
+					if not game.mp_enabled or NetManager.is_host(): finished = true; hide(); restore_cat()
 				else:
 					truck.hide();courier.hide();set_phase("waiting")
 
@@ -277,10 +287,56 @@ func _enable_foot_delivery() -> void:
 	elif phase in ["hop_in", "depart"]:
 		courier.global_position = handoff; set_phase("return")
 
+func _borrow_disguise_customer() -> void:
+	for customer in game.customers:
+		if not is_instance_valid(customer) or not customer.is_disguise_cat or customer.is_leaving or bool(customer.get_meta("serve_in_progress", false)): continue
+		disguise_customer = customer
+		disguise_exit_from = customer.global_position
+		customer.set_meta("delivery_errand", true)
+		customer.is_waiting = false
+		customer.stop_order_clock()
+		customer._cancel_order_announce()
+		game._remove_ticket(customer)
+		if game.selected_customer == customer: game.selected_customer = null
+		game._reposition_customers()
+		# Keep the disguise on the courier, in the shipping model's own coordinates.
+		var moustache := Sprite3D.new()
+		moustache.name = "CourierMustache"
+		moustache.texture = load("res://IMAGES/MUSTACHE.png")
+		moustache.pixel_size = 0.30 / float(moustache.texture.get_width())
+		moustache.position = Vector3(0, 0.408, 0.32)
+		moustache.shaded = false
+		moustache.double_sided = true
+		cat_visual.add_child(moustache)
+		break
+
+func _advance_disguise_exit(delta: float) -> bool:
+	if not is_instance_valid(disguise_customer) and game._disguise_cat_active:
+		_borrow_disguise_customer()
+		if not is_instance_valid(disguise_customer): return false
+	if not is_instance_valid(disguise_customer) or disguise_departed: return true
+	disguise_exit_elapsed += delta
+	var t := clampf(disguise_exit_elapsed / 1.8, 0.0, 1.0)
+	disguise_customer.global_position = disguise_exit_from.lerp(Vector3(-8.0, disguise_exit_from.y, disguise_exit_from.z), t)
+	disguise_customer.rotation.y = -PI * 0.5
+	if t < 1.0: return false
+	disguise_customer.hide()
+	disguise_departed = true
+	return true
+
 func restore_cat() -> void:
-	if is_instance_valid(game) and is_instance_valid(game.window_cat):
+	if restored or not is_instance_valid(game): return
+	restored = true
+	game._cat_after_delivery_wait = 5.0
+	if is_instance_valid(game.window_cat):
 		game.window_cat.set_process(old_cat_process)
-		game.window_cat.visible = old_cat_visible
+		game.window_cat.hide()
+	if is_instance_valid(disguise_customer) and game.playing:
+		disguise_customer.set_meta("delivery_errand", false)
+		disguise_customer.global_position = Vector3(-8.0, game.CustomerScript.STAND_Y, disguise_exit_from.z)
+		disguise_customer.is_waiting = false
+		disguise_customer.show()
+		game._reposition_customers()
 
 func _exit_tree() -> void:
 	restore_cat()
@@ -341,3 +397,24 @@ func _update_delivery_meows(delta: float) -> void:
 		_play_delivery_meow(1.06 + float(meow_count)*.06)
 		meow_count += 1
 	if meow_count >= cues.size():delivery_meows_active = false
+
+func snapshot() -> Dictionary:
+	return {"phase":phase, "elapsed":elapsed, "orders":orders.duplicate(true), "treat":wants_treat, "foot":on_foot, "exit":disguise_exit_elapsed, "departed":disguise_departed, "disguise":is_instance_valid(disguise_customer), "exit_from":disguise_exit_from}
+
+func apply_snapshot(data: Dictionary) -> void:
+	if bool(data.get("disguise", false)) and not is_instance_valid(disguise_customer): _borrow_disguise_customer()
+	disguise_exit_from = data.get("exit_from", disguise_exit_from)
+	if phase != str(data.phase):
+		set_meta("applying_host_phase", true)
+		set_phase(str(data.phase))
+		remove_meta("applying_host_phase")
+	elapsed = float(data.elapsed)
+	orders = data.orders.duplicate(true)
+	wants_treat = bool(data.treat)
+	disguise_exit_elapsed = float(data.get("exit", 0.0))
+	disguise_departed = bool(data.get("departed", false))
+	if disguise_departed and is_instance_valid(disguise_customer): disguise_customer.hide()
+	if bool(data.foot) and not on_foot: _enable_foot_delivery()
+	if phase != "waiting":
+		courier.show()
+		truck.visible = not on_foot

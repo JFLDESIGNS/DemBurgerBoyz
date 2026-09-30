@@ -68,7 +68,7 @@ func run()->void:
 	while is_instance_valid(game.mail_delivery_truck):await process_frame
 	assert(game.saw_flight and game.highest_meows==3)
 	assert(game.pending_machine_deliveries.is_empty() and game.fryer_root.visible and game.soda_root.visible)
-	assert(game.window_cat.visible and game.street_car_wait>=3.0)
+	assert(not game.window_cat.visible and game._cat_after_delivery_wait>0.0 and game.street_car_wait>=3.0,"Window cat waits five seconds after delivery")
 	if host:
 		assert(game.taps_received>0,"Remote taps must reach the dance reaction")
 		game._mp_emit_economy();mark("host_done");await wait_mark("guest_done")

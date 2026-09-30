@@ -599,6 +599,8 @@ func apply_mp_sync(d: Dictionary) -> void:
 		position = _mp_pose_target;_mp_pose_from=position;rotation.y=_mp_yaw_target;_mp_yaw_from=rotation.y
 	_mp_pose_ready = true
 	visible = bool(d.get("vis", visible))
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and game.has_method("_cat_delivery_blocks_visit") and game._cat_delivery_blocks_visit(): visible = false
 	_fat = float(d.get("fat", _fat))
 	_giant = float(d.get("giant", _giant))
 	_treat_arm = float(d.get("treat", _treat_arm))
@@ -620,7 +622,22 @@ func apply_mp_sync(d: Dictionary) -> void:
 			_hearts.emitting = false
 
 
+var _delivery_visit_pending := false
+
+func pause_for_delivery() -> void:
+	if visible and _state in ["peek", "rising"]: _delivery_visit_pending = true
+	if _state == "hidden" and _timer <= 0.0: _delivery_visit_pending = true
+	_clear_mouth_burger()
+	visible = false
+	_state = "hidden"
+	if _delivery_visit_pending: _timer = 0.0
+
 func _process(delta: float) -> void:
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and game.has_method("_cat_delivery_blocks_visit") and game._cat_delivery_blocks_visit():
+		if not mp_puppet: _timer -= delta
+		pause_for_delivery()
+		return
 	if not enabled or _visual == null:
 		return
 	_update_character(delta)
@@ -646,7 +663,8 @@ func _process(delta: float) -> void:
 			position = Vector3(_home_x(), _hidden_y(), _home_z() + APPROACH_START_EXTRA + _giant * 0.25)
 			if _timer <= 0.0:
 				## Every 45s: 75% chance to peek (even with a full window).
-				if randf() < PEEK_CHANCE:
+				if _delivery_visit_pending or randf() < PEEK_CHANCE:
+					_delivery_visit_pending = false
 					_visit_fed = false
 					_patty_peek_x = NAN
 					_state = "rising"

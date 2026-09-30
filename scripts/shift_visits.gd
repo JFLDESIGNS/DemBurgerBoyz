@@ -18,7 +18,7 @@ func _process(delta: float) -> void:
   if is_instance_valid(profit_label): profit_label.hide()
   return
  _update_boss_gaze(delta)
- if game.tutorial_mode or (game.mp_enabled and not NetManager.is_host()): return
+ if game.tutorial_mode or game._cat_delivery_blocks_visit() or (game.mp_enabled and not NetManager.is_host()): return
  var cat = game.window_cat
  if not is_instance_valid(cat): return
  if cat._state != "peek":

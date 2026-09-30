@@ -864,7 +864,7 @@ func _try_attach_toon_character() -> bool:
 	## Regular ticket guests and far-sidewalk walkers use saved custom
 	## characters. The boss keeps the Kenney mustache toon; Kenney skins are
 	## a last-resort fallback for window customers only.
-	if not is_cut_collector and not bool(get_meta("delivery_driver", false)):
+	if not is_cut_collector:
 		if _try_attach_saved_character():
 			return true
 	if is_street_pedestrian and not bool(get_meta("delivery_driver", false)):
@@ -2312,6 +2312,9 @@ func _process(delta: float) -> void:
 		if is_leaving: _leave_walk_x=global_position.x
 
 func _advance_customer(delta: float) -> void:
+	if bool(get_meta("delivery_errand", false)):
+		if mp_host_driven: _update_host_driven_pose(delta)
+		return
 	if bool(get_meta("meal_stepping_aside", false)):
 		_play_anim("walk")
 		_apply_bobble(true)
@@ -2488,6 +2491,29 @@ func _advance_customer(delta: float) -> void:
 		order_elapsed_sec += delta
 
 
+var _mp_animation_received_ms := -10000
+
+func presentation_snapshot() -> Dictionary:
+	var motion := {"visible": visible, "errand": bool(get_meta("delivery_errand", false)), "state": _anim_state}
+	if is_instance_valid(_anim_player):
+		motion["clip"] = str(_anim_player.current_animation)
+		motion["position"] = _anim_player.current_animation_position if _anim_player.current_animation != "" else 0.0
+		motion["speed"] = _anim_player.speed_scale
+	return motion
+
+func apply_presentation_snapshot(motion: Dictionary) -> void:
+	visible = bool(motion.get("visible", true))
+	set_meta("delivery_errand", bool(motion.get("errand", false)))
+	var clip := str(motion.get("clip", ""))
+	if not is_instance_valid(_anim_player) or clip.is_empty() or not _anim_player.has_animation(clip): return
+	_mp_animation_received_ms = Time.get_ticks_msec()
+	_anim_state = str(motion.get("state", "idle"))
+	_anim_player.speed_scale = float(motion.get("speed", 1.0))
+	var changed := str(_anim_player.current_animation) != clip
+	if changed: _anim_player.play(clip, 0.1)
+	var at := clampf(float(motion.get("position", 0.0)), 0.0, _anim_player.get_animation(clip).length)
+	if changed or absf(_anim_player.current_animation_position - at) > 0.3: _anim_player.seek(at, true)
+
 func _update_host_driven_pose(delta: float) -> void:
 	## Multiplayer guests receive position/ticket state from the host; avoid local
 	## arrival-turn code fighting that snapshot and spinning remote customers.
@@ -2499,6 +2525,9 @@ func _update_host_driven_pose(delta: float) -> void:
 		var yaw_t: float = clampf(delta * 12.0, 0.0, 1.0)
 		rotation_degrees.y = rad_to_deg(lerp_angle(deg_to_rad(rotation_degrees.y), deg_to_rad(_mp_target_yaw), yaw_t))
 	global_position.y = STAND_Y
+	if Time.get_ticks_msec() - _mp_animation_received_ms < 1200:
+		_animate_expression(delta)
+		return
 	if _eating or _burger_eat_phase != "":
 		_update_eat_pose()
 		_animate_expression(delta)

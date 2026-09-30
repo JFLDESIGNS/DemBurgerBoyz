@@ -1,5 +1,6 @@
 extends "res://scripts/game.gd"
 var advance_delivery := false
+var cat_sync_wait := 0.0
 var saw_flight := false
 var taps_received := 0
 var highest_meows := 0
@@ -11,6 +12,10 @@ func _process(delta: float) -> void:
 	for fx in supply_delivery_fx:
 		if fx.get("kind")=="machine" and fx.mesh.visible:saw_flight=true
 	_update_supply_orders(delta*5.0)
+	cat_sync_wait -= delta
+	if mp_enabled and NetManager.is_host() and cat_sync_wait <= 0.0:
+		cat_sync_wait = 0.05
+		_mp_send_cat_sync()
 func _flash(_text:String,_color:Color=Color.WHITE,_duration:float=1.8)->void:pass
 func _refresh_phone_ui()->void:pass
 func _update_hud()->void:pass

@@ -44,6 +44,7 @@ func begin() -> void:
   transition.tween_method(_sunset,0.0,1.0,7.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
   transition.tween_interval(2.0)
   transition.tween_method(func(t: float): screen.material.set_shader_parameter("blackout",t),0.0,1.0,3.0)
+  transition.tween_callback(game._show_parade_shift_results)
  rebuild()
 
 func lift_control(control: Control) -> void:

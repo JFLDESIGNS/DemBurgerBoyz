@@ -124,6 +124,62 @@ func run() -> void:
 	for i in peers:
 		check(FileAccess.get_file_as_string(folder.path_join("owner%d" % i)) == expected, "Contested ownership diverged")
 	check(int(expected) > 0, "Contested patty has no owner")
+	# Repeated release/re-grab must survive the previous release acknowledgement.
+	game.set_process(false)
+	if role == 1:
+		var patty = game._patty_by_net_id(98001)
+		for attempt in 4:
+			game.mp_claim_drag(98001)
+			await create_timer(.18).timeout
+			patty.position.x = game.GRILL_CENTER_X + .02 * attempt
+			patty._rest_x = patty.position.x
+			game.dragging_patty = null
+			game._mp_finish_local_slide(patty)
+			game.mp_claim_drag(98001)
+			await create_timer(.18).timeout
+			check(game.dragging_patty == patty and game.drag_owner_id == net.my_id(), "Release acknowledgement cancelled a newer drag")
+			patty.position.x = game.GRILL_CENTER_X + .12
+			patty._rest_x = patty.position.x
+			game.dragging_patty = null
+			game._mp_finish_local_slide(patty)
+			await create_timer(.18).timeout
+		mark("quick_drag_done", str(patty.position.x))
+	else:
+		await wait_file("quick_drag_done")
+		await create_timer(.25).timeout
+		check(absf(game._patty_by_net_id(98001).position.x - float(FileAccess.get_file_as_string(folder.path_join("quick_drag_done")))) < .02, "Guest final slide did not reach host")
+	if role == 0:
+		game.mp_spawn_customer.rpc(99010,["bun_bottom","patty","bun_top"],1.0,1.0,1.0,9999.0,0,1,0,false,-1,false,{"name":"Woman4","customer_voice":"female","hair_style":10,"top_style":1})
+		var customer = game._customer_by_net_id(99010)
+		customer.set_process(false); customer.is_waiting = true; game._create_ticket(customer)
+		customer._play_anim("grill_dance"); customer._anim_player.advance(.3)
+		game._mp_emit_customers()
+		mark("dance_fixture", str(customer._anim_player.current_animation))
+		await wait_file("dance_repair_requested1")
+		for peer_role in range(2,peers): await wait_file("dance_repair_requested%d" % peer_role)
+		game._mp_emit_customers()
+		await wait_file("dance_repaired1")
+		for peer_role in range(2,peers): await wait_file("dance_repaired%d" % peer_role)
+		game.mp_customer_leave.rpc(99010,false,true)
+		await wait_file("dance_departure1")
+		for peer_role in range(2,peers): await wait_file("dance_departure%d" % peer_role)
+	else:
+		await wait_file("dance_fixture")
+		var target_clip := FileAccess.get_file_as_string(folder.path_join("dance_fixture"))
+		await create_timer(.5).timeout
+		var customer = game._customer_by_net_id(99010)
+		check(is_instance_valid(customer), "Guest missing dancing customer")
+		check(str(customer._anim_player.current_animation) == target_clip, "Guest dance clip differs from host")
+		game._mp_force_remove_customer(customer)
+		await process_frame
+		mark("dance_repair_requested%d" % role)
+		await create_timer(.5).timeout
+		customer = game._customer_by_net_id(99010)
+		check(is_instance_valid(customer) and str(customer._anim_player.current_animation) == target_clip, "Missing customer was not repaired from snapshot")
+		mark("dance_repaired%d" % role)
+		await create_timer(.5).timeout
+		check(customer.is_leaving and customer._leave_do_dance, "Guest departure lost celebration")
+		mark("dance_departure%d" % role)
 	var result: Dictionary = game.get_performance_report()
 	result["role"] = role
 	result["claim_ack_ms"] = claim_latency
