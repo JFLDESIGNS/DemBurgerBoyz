@@ -664,7 +664,7 @@ func _setup_cook_fx() -> void:
 	_top_bubbles.randomness = 0.7
 	_top_bubbles.visibility_aabb = AABB(Vector3(-0.3, -0.05, -0.3), Vector3(0.6, 0.25, 0.6))
 	_top_bubbles.emitting = false
-	_top_bubbles.position = Vector3(0, 0.052, 0)
+	_top_bubbles.position = Vector3(0, 0.039, 0)
 	var tmat := ParticleProcessMaterial.new()
 	tmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
 	tmat.emission_ring_axis = Vector3(0, 1, 0)
@@ -673,8 +673,8 @@ func _setup_cook_fx() -> void:
 	tmat.emission_ring_inner_radius = 0.02
 	tmat.direction = Vector3(0, 1.0, 0)
 	tmat.spread = 40.0
-	tmat.initial_velocity_min = 0.03
-	tmat.initial_velocity_max = 0.09
+	tmat.initial_velocity_min = 0.015
+	tmat.initial_velocity_max = 0.045
 	tmat.gravity = Vector3(0, -0.2, 0)
 	tmat.damping_min = 1.2
 	tmat.damping_max = 2.2

@@ -10,6 +10,7 @@ var _load_error := OK
 var _menu: Node
 var _preparing := false
 var _previous_disable_3d := false
+var _menu_script: Script
 
 func _ready() -> void:
 	cinematic = Video.new()
@@ -28,8 +29,10 @@ func _ready() -> void:
 	skip_button.add_theme_font_size_override("font_size", 20)
 	add_child(skip_button)
 	skip_button.pressed.connect(skip_intro)
-	# Keep the menu off-thread, but serialize its shared script/shader dependencies.
-	# Sub-threaded loading can race GDScript preloads in exported builds.
+	# Resolve script preloads on the main thread before the scene loader starts.
+	# Exported GDScript can otherwise race shared font/model/shader dependencies,
+	# reporting bundled resources as missing even with sub-threads disabled.
+	_menu_script = load("res://scripts/game.gd") as Script
 	_load_error = ResourceLoader.load_threaded_request(MENU, "PackedScene", false)
 	# Go straight to the movie; keep the company card disabled for now.
 	cinematic.play()

@@ -1512,6 +1512,9 @@ var soda_spout_markers: Dictionary = {} ## flavor/ice id -> Marker3D fill statio
 var soda_active_station: String = "" ## station lit by held cup proximity
 var soda_spout_mat: StandardMaterial3D = null ## colored metal nozzle (tracks selected flavor)
 var ice_spout_mat: StandardMaterial3D = null
+var _soda_manual_station := ""
+var _soda_manual_left := 0.0
+var _soda_manual_ice_cd := 0.0
 var soda_dispense_clips: Array = [] ## {node, rest_pos, rest_rot} nozzle levers (Stick*)
 var cup_root: Node3D = null
 var cup_area: Area3D = null
@@ -5826,6 +5829,7 @@ func _process_gameplay(delta: float) -> void:
 	_update_fryer_basket_smoke(delta)
 	_update_ready_fries_pack_shakes(delta)
 	_update_ready_fries_pack_sparkles(delta)
+	_update_soda_trigger(delta)
 	_update_grill_roomba(delta)
 	if ui_tick:
 		_refresh_fryer_hint_label()
@@ -6850,6 +6854,9 @@ func _input(event: InputEvent) -> void:
 				return
 			if cheese_held:
 				## Place handled in unhandled — don't grab tools mid-hold.
+				return
+			if _try_soda_trigger_click(event.position):
+				get_viewport().set_input_as_handled()
 				return
 			if cup_held:
 				## Still holding LMB from the grab — flavor pick while carrying.
@@ -34951,6 +34958,8 @@ func _setup_soda_dispense_clips(visual: Node3D) -> void:
 		if stick == null or not is_instance_valid(stick):
 			continue
 		## The asset already includes its complete rest pose.
+		if not stick.has_meta("dispense_rest"): stick.set_meta("dispense_rest", stick.transform)
+		stick.transform = stick.get_meta("dispense_rest")
 		var rest_pos := stick.position
 		var rest_rot := stick.rotation_degrees
 		stick.position = rest_pos
@@ -35011,6 +35020,68 @@ func _update_soda_dispense_clips(delta: float, pouring_soda: bool, pouring_ice: 
 			)
 		var rate := 16.0 if i == best_i else 10.0
 		stick.rotation_degrees = stick.rotation_degrees.lerp(goal, clampf(delta * rate, 0.0, 1.0))
+
+
+func _try_soda_trigger_click(screen_pos: Vector2) -> bool:
+	if not _owns_soda_machine() or not is_instance_valid(camera): return false
+	for clip in soda_dispense_clips:
+		var stick: Node3D = clip.get("node")
+		if not is_instance_valid(stick) or not stick.is_visible_in_tree(): continue
+		var bounds := _shop_preview_bounds(stick)
+		var hit := Rect2(camera.unproject_position(stick.to_global(bounds.get_center())), Vector2.ZERO)
+		for x in [bounds.position.x, bounds.end.x]:
+			for y in [bounds.position.y, bounds.end.y]:
+				for z in [bounds.position.z, bounds.end.z]: hit = hit.expand(camera.unproject_position(stick.to_global(Vector3(x,y,z))))
+		if not hit.grow(8.0).has_point(screen_pos): continue
+		var nearest := INF
+		var station := ""
+		for fid in _soda_station_tip_ids():
+			var tip := _soda_tip_for_station(fid)
+			if not is_instance_valid(tip): continue
+			var distance := Vector2(tip.global_position.x-stick.global_position.x, tip.global_position.z-stick.global_position.z).length()
+			if distance < nearest: nearest = distance; station = fid
+		if station != "":
+			_soda_manual_station = station
+			_soda_manual_left = .65
+			_soda_manual_ice_cd = 0.0
+			return true
+	return false
+
+
+func _update_soda_trigger(delta: float) -> void:
+	# This runs even after the last cup leaves: the levers always spring home.
+	var cup_active := is_instance_valid(cup_root) and (cup_held or _cup_parked_filling or _cup_auto_ice_soda != "")
+	var pouring_soda := _cup_pouring and cup_active
+	var pouring_ice := _cup_pouring_ice and cup_active
+	if not cup_active:
+		_cup_pouring = false
+		_cup_pouring_ice = false
+	var manual := _soda_manual_left > 0.0 and not _machine_is_broken("soda")
+	_soda_manual_left = maxf(0.0, _soda_manual_left - delta)
+	if manual and not pouring_soda and not pouring_ice:
+		var tip := _soda_tip_for_station(_soda_manual_station)
+		if is_instance_valid(tip):
+			_set_soda_active_station(_soda_manual_station)
+			var bottom := tip.global_position - Vector3(0,.40,0)
+			if _soda_manual_station == "ice":
+				pouring_ice = true
+				_soda_manual_ice_cd -= delta
+				if _soda_manual_ice_cd <= 0.0:
+					_soda_manual_ice_cd = .1
+					_spawn_flying_ice_cube(tip.global_position,bottom,true)
+			elif _drain_soda_tank(_soda_manual_station,CUP_FILL_RATE*delta) > 0.0:
+				pouring_soda = true
+				_update_soda_stream(tip.global_position,bottom,_soda_manual_station)
+	if not pouring_soda: _hide_soda_stream()
+	_update_soda_dispense_clips(delta,pouring_soda,pouring_ice)
+	if game_audio:
+		game_audio.set_soda_pour(pouring_soda)
+		game_audio.set_ice_grind(pouring_ice)
+	if _soda_manual_station != "" and _soda_manual_left <= 0.0:
+		_soda_manual_station = ""
+		if mp_enabled:
+			if NetManager.is_host(): _mp_broadcast_economy()
+			else: _mp_flush_soda_tank_drain()
 
 
 func _soda_model_local(model_pos: Vector3) -> Vector3:
@@ -39361,19 +39432,24 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	var stack_base := SODA_CUP_STACK_BASE_LOCAL
 	## One translucent outer shell plus four separate rims reads as a nested cup
 	## stack without layering four full plastic walls into an opaque white column.
-	var nest_step := 0.021
+	var nest_step := 0.014
 	var spare_count := 4
 
 	var stack_mat := _make_cup_stack_prop_material()
 	var rim_mat := stack_mat.duplicate() as StandardMaterial3D
-	rim_mat.albedo_color = Color("FFF9E9")
+	rim_mat.albedo_color = Color("E2D8BC")
 	rim_mat.roughness = 0.30
 	var shell_y := float(spare_count) * nest_step
 	var stack_shell := MeshInstance3D.new()
 	stack_shell.name = "CupStackOuterShell"
-	stack_shell.mesh = _make_solo_cup_shell_mesh(CUP_SHELL_TOP_R, CUP_SHELL_BOT_R, CUP_SHELL_H, 0.0034)
+	var nested_shell := CylinderMesh.new()
+	nested_shell.top_radius = CUP_SHELL_BOT_R
+	nested_shell.bottom_radius = CUP_SHELL_TOP_R
+	nested_shell.height = CUP_SHELL_H
+	nested_shell.radial_segments = 48
+	stack_shell.mesh = nested_shell
 	stack_shell.position = stack_base + Vector3(0.0, CUP_SHELL_H * 0.5 + shell_y, 0.0)
-	stack_shell.rotation_degrees = SODA_CUP_STACK_ROT
+	stack_shell.rotation_degrees = Vector3.ZERO
 	stack_shell.material_override = stack_mat
 	stack_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	rack.add_child(stack_shell)
@@ -40324,15 +40400,15 @@ func _make_cup_stack_prop_material() -> StandardMaterial3D:
 	## lets the machine/background read through without nested alpha artifacts.
 	var mat := StandardMaterial3D.new()
 	mat.resource_name = "CupStackFrostedPlastic"
-	mat.albedo_color = Color("E7E6D8")
+	mat.albedo_color = Color("CEC8B7")
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-	mat.roughness = 0.38
+	mat.roughness = 0.72
 	mat.metallic = 0.0
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
-	mat.clearcoat_enabled = true
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	mat.clearcoat_enabled = false
 	mat.clearcoat = 0.08
 	mat.clearcoat_roughness = 0.24
 	return mat
@@ -43526,7 +43602,6 @@ func _try_fill_cup_at_spouts(delta: float) -> void:
 	var was_pouring := _cup_pouring
 	_cup_pouring = pouring_soda
 	_cup_pouring_ice = pouring_ice
-	_update_soda_dispense_clips(delta, pouring_soda, pouring_ice)
 	if _cup_pouring != was_pouring:
 		_refresh_soda_tank_bubbles()
 		if not _cup_pouring:
@@ -45533,6 +45608,9 @@ func _begin_early_drink_hand(
 	if _serve_fly_busy:
 		return
 	if _customer_soda_handed(customer):
+		return
+	if bool(customer.get_meta("mobile_order", false)):
+		if is_instance_valid(_grubbah): _grubbah.pack_ready_sides(remote_drink)
 		return
 	selected_customer = customer
 	_highlight_tickets()
@@ -63192,6 +63270,37 @@ func _consume_fries_for_serve(for_customer: Node3D = null, directed: bool = fals
 	return true
 
 
+func _take_drink_for_mobile_pack(drink: Node3D) -> void:
+	# Remove this exact full cup from kitchen inventory; Grubbah owns its flight.
+	# No customer, gulp animation, or global serving-cup slot is involved.
+	if not is_instance_valid(drink): return
+	var active := drink == cup_root
+	var local := active or parked_cups.has(drink)
+	var flavor := cup_flavor if active else str(drink.get_meta("flavor", ""))
+	var cup_id := int(drink.get_meta("cup_net_id", -1))
+	drink.set_meta("serving", true)
+	drink.set_meta("serving_consumed", true)
+	parked_cups.erase(drink)
+	_clear_tray_slot(drink)
+	if active:
+		_stop_completed_soda_fill()
+		cup_held = false
+		cup_drawing = false
+		cup_root = null
+		_clear_cup_refs()
+		cup_flavor = ""
+		cup_soda_fill = 0.0
+		cup_ice_fill = 0.0
+		_cup_fizz = 0.0
+		_cup_foam_linger = 0.0
+		_cup_pour_white = 0.0
+	drink.hide()
+	drink.queue_free()
+	_layout_parked_cups()
+	_refresh_soda_tank_bubbles()
+	if local and mp_enabled and NetManager.is_host(): mp_cup_consume.rpc(flavor, cup_id)
+
+
 func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	## Hand off a matching ready drink with the order (parked tray cup preferred).
 	var target: Node3D = null
@@ -63530,7 +63639,8 @@ func _select_ticket_local(customer: Node3D) -> void:
 	selected_customer = customer
 	if is_instance_valid(_grubbah) and not _grubbah.state.is_empty():
 		_grubbah.state["selected"] = customer==_grubbah.ticket_owner
-		if customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase",""))=="paper" and stations[0].get("patties",[]).is_empty() and _grubbah.host(): _grubbah.set_phase("accepted")
+		if customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase",""))=="paper" and stations[0].get("patties",[]).is_empty() and _grubbah.state.get("side_packs",{}).is_empty() and _grubbah.host(): _grubbah.set_phase("accepted")
+		if customer==_grubbah.ticket_owner: _grubbah.call_deferred("auto_lay_paper")
 	_highlight_tickets()
 	_refresh_all_stations()
 	_refresh_customer_queue_timers()

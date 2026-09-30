@@ -4,6 +4,8 @@ const DRIVER_APPROACH = 1.0
 const DRIVER_WALK = 2.65
 const BURGER_BAG_FLIGHT = 1.0
 const BAG_PICKUP_FLIGHT = .95
+const SIDE_BAG_FLIGHT = .9
+var side_visuals: Dictionary = {}
 const DRIVER_RETURN = 1.5
 const DRIVER_TURN = .35
 const DRIVER_EXIT = .85
@@ -130,6 +132,15 @@ func sync_ticket() -> void:
   game._create_ticket(ticket_owner)
   if bool(state.get("selected",false)) or not is_instance_valid(game.selected_customer):game._select_ticket_local(ticket_owner)
   announce_arrival.call_deferred(ticket_owner)
+ ticket_owner.is_waiting=str(state.get("phase",""))!="sealed"
+ if not ticket_owner.is_waiting and game.selected_customer==ticket_owner:
+  game.selected_customer=null
+  game._resolve_serve_customer()
+ var packed:Dictionary=state.get("side_packs",{})
+ var sodas=DATA.order_soda_ids(state.get("items",[]))
+ ticket_owner.set_meta("soda_handed",not sodas.is_empty() and packed.has(str(sodas[0])))
+ ticket_owner.set_meta("fries_handed",packed.has("fries"))
+ if not game.tickets.has(ticket_owner):game._create_ticket(ticket_owner)
  if game.tickets.has(ticket_owner):
   var wrap=game.tickets[ticket_owner]
   wrap.visible=str(state.phase)!="sealed"
@@ -141,8 +152,10 @@ func select_order() -> void:
   game._select_ticket_local(ticket_owner)
   state["selected"]=true
 func auto_lay_paper() -> void:
- if host() and str(state.get("phase",""))=="accepted" and is_selected():
-  set_phase("paper")
+ if not host() or str(state.get("phase",""))!="accepted":return
+ if not is_instance_valid(ticket_owner) or not game.tickets.has(ticket_owner):sync_ticket()
+ if not is_instance_valid(game.selected_customer) or not game.tickets.has(game.selected_customer):game._resolve_serve_customer()
+ if is_selected():set_phase("paper")
 func holds_customer_timers() -> bool:
  return is_selected() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging"]
 func bag_station_pos() -> Vector3:return board_pos()+Vector3(.12,.2182,.32)
@@ -163,8 +176,10 @@ func _process(delta: float) -> void:
   online_seen=true
   if not host():request_snapshot.rpc_id(1)
  age+=delta;sync_time+=delta;flash_time=maxf(0,flash_time-delta)
+ advance_side_packs(delta)
  if host():
   auto_lay_paper()
+  pack_ready_sides()
   if state.is_empty() and not game.tutorial_mode and game._challenge_phase=="" and not game._hotdog_active():
    wait_time-=delta
    if wait_time<=0:new_order()
@@ -184,6 +199,8 @@ func _process(delta: float) -> void:
    sync_time=0
    if knife_owner>0 and online() and knife_owner!=get_node("/root/NetManager").my_id() and not multiplayer.get_peers().has(knife_owner):knife_owner=0
    publish()
+ elif is_selected() and str(state.get("phase","")) in ["paper","wrapping","bagging"] and game._mp_pending_cup_hand==0:
+  if DATA.order_soda_ids(state.get("items",[])).has("soda_"+str(game.cup_flavor)) and not game._customer_soda_handed(ticket_owner):game._try_auto_hand_finished_soda()
  update_visuals(delta)
 func new_order() -> void:
  if game._hotdog_active() or game._challenge_phase!="":return
@@ -235,6 +252,8 @@ func apply_command(kind: String, number: int, peer: int) -> void:
    for patty in patties:
     if is_instance_valid(patty):state.quality=minf(state.quality,patty.doneness_multiplier())
    set_phase("wrapping")
+  "pack_sides":
+   pack_ready_sides()
   "seal":
    try_seal_bag(peer)
 func try_seal_bag(peer: int = 0) -> bool:
@@ -242,23 +261,89 @@ func try_seal_bag(peer: int = 0) -> bool:
  if age<BURGER_BAG_FLIGHT:
   if peer>0:notice("Burger going in!",peer)
   return false
- var sodas=DATA.order_soda_ids(state.items)
- var drink:Node3D=null
- if not sodas.is_empty():
-  drink=game._find_ready_drink_for_soda(str(sodas[0]))
-  if drink==null:
-   if peer>0:notice("Set a full cola on the tray first.",peer)
+ pack_ready_sides()
+ for id in required_sides():
+  if not state.get("side_packs",{}).has(id):
+   if peer>0:notice("Finish the drink and sides — they pack automatically.",peer)
    return false
- if DATA.wants_fries(state.items) and game.fryer_ready_servings<=0:
-  if peer>0:notice("Cook the fries first.",peer)
-  return false
- if drink!=null:
-  game._serve_cup_node=drink;game._consume_cup_for_serve(ticket_owner)
- if DATA.wants_fries(state.items):
-  game.fryer_ready_servings-=1;game._refresh_ready_fries_visuals()
- if online():game._mp_broadcast_economy()
+  if float(state.side_packs[id].elapsed)<SIDE_BAG_FLIGHT:return false
  set_phase("sealed")
  return true
+func required_sides() -> Array:
+ var ids: Array=DATA.order_soda_ids(state.get("items",[]))
+ if DATA.wants_fries(state.get("items",[])):ids.append("fries")
+ return ids
+func advance_side_packs(delta: float) -> void:
+ for entry in state.get("side_packs",{}).values():
+  entry.elapsed=minf(SIDE_BAG_FLIGHT,float(entry.elapsed)+delta)
+func completed_drink(id: String) -> Node3D:
+ var flavor=DATA.soda_flavor_from_order_id(id)
+ if is_instance_valid(game.cup_root) and game.cup_soda_fill>=.995 and game.cup_flavor==flavor and not bool(game.cup_root.get_meta("serving",false)):return game.cup_root
+ for drink in game.parked_cups:
+  if is_instance_valid(drink) and float(drink.get_meta("soda_fill",0.0))>=.995 and str(drink.get_meta("flavor",""))==flavor and not bool(drink.get_meta("serving",false)):return drink
+ return null
+func pack_ready_sides(preferred_drink: Node3D = null) -> void:
+ if not host() or state.is_empty():return
+ auto_lay_paper()
+ var phase=str(state.get("phase",""))
+ if phase not in ["paper","wrapping","bagging"]:return
+ if phase!="bagging" and not is_selected():return
+ var changed=false
+ for id in required_sides():
+  if state.get("side_packs",{}).has(id):continue
+  var source=Vector3.ZERO
+  var kind="fries" if id=="fries" else "drink"
+  var flavor="" if kind=="fries" else DATA.soda_flavor_from_order_id(id)
+  if kind=="drink":
+   var drink:Node3D=preferred_drink if is_instance_valid(preferred_drink) else completed_drink(id)
+   if not is_instance_valid(drink):continue
+   var active=drink==game.cup_root
+   var fill=float(game.cup_soda_fill) if active else float(drink.get_meta("soda_fill",0.0))
+   var actual_flavor=str(game.cup_flavor) if active else str(drink.get_meta("flavor",""))
+   if fill<.995 or actual_flavor!=flavor or bool(drink.get_meta("serving",false)):continue
+   source=drink.global_position
+   game._take_drink_for_mobile_pack(drink)
+  else:
+   if game.fryer_ready_servings<=0:continue
+   source=game._ready_fries_slot_world(game.fryer_ready_servings-1)
+   game.fryer_ready_servings-=1
+   game._refresh_ready_fries_visuals()
+  if not state.has("side_packs"):state.side_packs={}
+  state.side_packs[id]={"kind":kind,"flavor":flavor,"source":source,"elapsed":0.0}
+  changed=true
+ if changed:
+  publish()
+  game._refresh_ticket_checkmarks()
+  if online():game._mp_broadcast_economy()
+func update_side_visuals() -> void:
+ var live:Dictionary={}
+ if str(state.get("phase","")) in ["paper","wrapping","bagging"]:
+  for id in state.get("side_packs",{}):
+   var entry:Dictionary=state.side_packs[id]
+   var t=clampf(float(entry.elapsed)/SIDE_BAG_FLIGHT,0,1)
+   if t>=.82:continue
+   var key="%s:%s" % [str(state.get("number",0)),id]
+   live[key]=true
+   if not side_visuals.has(key):
+    var food:Node3D
+    if entry.kind=="fries":
+     food=Node3D.new();props.add_child(food);game._populate_fry_pack(food);food.scale=Vector3.ONE*game.fries_ready_pack_scale
+    else:
+     food=game._create_drink_cup_node();props.add_child(food);food.set_meta("flavor",entry.flavor);game._set_melting_cup_liquid_level(food,1.0,entry.flavor)
+    food.name="MobileBagSide"
+    for area in food.find_children("*","Area3D",true,false):area.input_ray_pickable=false;area.collision_layer=0;area.collision_mask=0
+    side_visuals[key]={"node":food,"scale":food.scale}
+    if game.game_audio:game.game_audio.play_serve_whoosh()
+   var visual:Dictionary=side_visuals[key]
+   var food:Node3D=visual.node
+   var mouth=props.to_global(bag_station_pos()+Vector3(0,bag_opening_y,0))
+   food.global_position=burger_bag_position(t,entry.source,mouth)
+   food.rotation=Vector3(0,0,sin(t*PI)*.12)
+   food.scale=visual.scale*lerpf(1.0,.25,smoothstep(.65,.82,t))
+ for key in side_visuals.keys():
+  if live.has(key):continue
+  if is_instance_valid(side_visuals[key].node):side_visuals[key].node.queue_free()
+  side_visuals.erase(key)
 func notice(text: String, peer: int) -> void:
  if online() and peer!=get_node("/root/NetManager").my_id():show_notice.rpc_id(peer,text)
  else:game._flash(text,Color("FFD478"))
@@ -297,7 +382,7 @@ func snapshot(data: Dictionary, rev: int, elapsed: float, owner: int) -> void:
  var same_phase=str(state.get("phase",""))==str(data.get("phase","")) and int(state.get("number",-1))==int(data.get("number",-2))
  state=data.duplicate(true);revision=rev;age=maxf(age,elapsed) if same_phase else elapsed;knife_owner=owner;refresh()
  game._refresh_customer_queue_timers()
- if bool(state.get("selected",false)) and is_instance_valid(ticket_owner) and not is_selected():game._select_ticket_local(ticket_owner)
+ if bool(state.get("selected",false)) and is_instance_valid(ticket_owner) and ticket_owner.is_waiting and not is_selected():game._select_ticket_local(ticket_owner)
 func pay_order() -> void:
  if bool(state.get("paid",false)):return
  state.paid=true
@@ -423,7 +508,7 @@ func update_visuals(_delta: float) -> void:
   if phase=="wrapping":packing_audio(phase)
   if phase=="sealed" or (phase in ["pickup","collected"] and not is_instance_valid(ticket_view)):prepare_bag_ticket()
   if phase in ["pickup","collected"] and is_instance_valid(ticket_view):bag_ticket.texture=ticket_view.get_texture();bag_ticket.pixel_size=.20/float(ticket_view.size.y)
-  if phase=="bagging" or phase=="sealed":
+  if phase in ["paper","bagging","sealed"]:
    var old=bag;bag=fitted("SM_FastFoodBagClosed" if phase=="sealed" else "SM_FastFoodBagOpen",.40);props.add_child(bag);bag_opening_y=game._shop_preview_bounds(bag).end.y;add_bag_label();old.queue_free()
    bag_impact_played=false;bag_land_played=false
    if game.game_audio:game.game_audio.play_serve_whoosh()
@@ -431,7 +516,7 @@ func update_visuals(_delta: float) -> void:
  var ui=game.get_node("UI/Root")
  var screen=game._station_stack_screen_center(0) if not game.stations.is_empty() else game.camera.unproject_position(base)
  var center=ui.get_global_transform_with_canvas().affine_inverse()*screen
- paper3d.visible=phase=="paper"
+ paper3d.visible=phase in ["paper","wrapping"]
  paper3d.position=napkins.position.lerp(base,clampf(age/.55,0,1)) if phase=="paper" else base
  paper3d.scale=Vector3.ONE*lerpf(.6,1,clampf(age/.55,0,1)) if phase=="paper" else Vector3.ONE*maxf(.1,1-age/1.2)
  paper_outline.visible=phase=="paper" and burger_ready()
@@ -441,8 +526,9 @@ func update_visuals(_delta: float) -> void:
  var preview=game.stations[0].get("preview")
  if is_instance_valid(preview):preview.modulate.a=0.0 if phase=="wrapping" else 1.0
  bag_finish.visible=phase=="bagging" and age>=BURGER_BAG_FLIGHT
+ bag_finish.text="PACKING SIDES" if side_visuals.size()>0 else "WAITING FOR SIDES"
  bag_glow.visible=bag_finish.visible
- bag.visible=phase in ["bagging","sealed","pickup","collected"]
+ bag.visible=phase in ["paper","wrapping","bagging","sealed","pickup","collected"]
  wrapped.visible=phase in ["wrapping","bagging"]
  wrapped.position=base+Vector3(0,.06,0)
  wrapped.scale=Vector3.ONE;wrapped.rotation=Vector3.ZERO
@@ -452,6 +538,7 @@ func update_visuals(_delta: float) -> void:
   wrapped.rotation.z=sin(minf(t/.65,1.0)*PI)*.22
   wrapped.scale=Vector3.ONE*lerpf(1.0,.35,smoothstep(.65,.82,t));wrapped.visible=t<.82
   if t>=.85 and not bag_impact_played:bag_impact_played=true;play_wrap_sound()
+ update_side_visuals()
  bag.position=bag_station_pos()
  bag.rotation=Vector3.ZERO;bag.scale=Vector3.ONE
  if phase=="bagging" and age>.85:
