@@ -26,8 +26,13 @@ func _process(delta: float) -> void:
 		if not is_instance_valid(c): walkers.erase(item); continue
 		c.visible = not game._hotdog_active()
 		if not c.visible: continue
-		c.position.x += delta * 0.85
-		if c.position.x > 13.0: c.queue_free(); walkers.erase(item)
+		c.position.x += delta * float(c.get_meta("couple_speed", 1.0)) * float(c.get_meta("couple_direction", 1.0))
+		var heart_left = float(c.get_meta("couple_heart_left", 4.0)) - delta
+		if heart_left <= 0.0:
+			heart(c)
+			heart_left = randf_range(4.0, 7.0)
+		c.set_meta("couple_heart_left", heart_left)
+		if absf(c.position.x) > game.BG_PEOPLE_EDGE_X + 2.0: c.queue_free(); walkers.erase(item)
 	if game._hotdog_active() or game._boss_intro_running: return
 	if game.mp_enabled and not NetManager.is_host(): return
 	encounter_left -= delta
@@ -57,8 +62,10 @@ func _process(delta: float) -> void:
 		walker_left = randf_range(40.0,75.0)
 		if not couples.is_empty() and walkers.is_empty():
 			var pair = couples.pick_random()
-			spawn_couple(pair)
-			if game.mp_enabled and NetManager.is_online(): couple_walk.rpc(pair)
+			var direction = game._bg_people_lane_dir()
+			if direction == 0.0: direction = 1.0
+			spawn_couple(pair, direction)
+			if game.mp_enabled and NetManager.is_online(): couple_walk.rpc(pair, direction)
 
 @rpc("authority", "call_remote", "reliable")
 func social_event(a_id: int, b_id: int, kind: String) -> void:
@@ -151,7 +158,12 @@ func pair_customers(a,b) -> void:
 	var pair = [{"preset":a.get_custom_character_preset(),"skin":a.skin_idx},{"preset":b.get_custom_character_preset(),"skin":b.skin_idx}]
 	couples.append(pair)
 	if couples.size() > 8: couples.pop_front()
-	heart(a); heart(b); wawa(b,1.1)
+	heart(a); heart(b); play_love_song(a)
+	for delay in [.4, .8, 1.2]:
+		var ar = weakref(a); var br = weakref(b)
+		create_tween().tween_interval(delay).finished.connect(func():
+			if is_instance_valid(ar.get_ref()): heart(ar.get_ref())
+			if is_instance_valid(br.get_ref()): heart(br.get_ref()))
 	glance(b,a.global_position+Vector3(0,1.5,0),4.0)
 	# One shared slip holds both meals; serve them sequentially through normal scoring.
 	var elapsed_a = a.order_elapsed_sec
@@ -194,18 +206,25 @@ func update_tickets() -> void:
 			if game.tickets[c].has_meta("ticket_motion"): game.tickets[c].get_meta("ticket_motion").set_active(false)
 
 @rpc("authority", "call_remote", "reliable")
-func couple_walk(pair: Array) -> void:
-	spawn_couple(pair)
+func couple_walk(pair: Array, direction: float = 1.0) -> void:
+	spawn_couple(pair, direction)
 
-func spawn_couple(pair: Array) -> void:
+func spawn_couple(pair: Array, direction: float = 0.0) -> void:
+	var pace = (game.BG_PEOPLE_SPEED_MIN + game.BG_PEOPLE_SPEED_MAX) * .5
+	if direction == 0.0: direction = game._bg_people_lane_dir()
+	if direction == 0.0: direction = 1.0
 	for i in 2:
 		var c = preload("res://scripts/customer.gd").new()
 		c.is_street_pedestrian = true
 		c.setup([] as Array[String],Color.WHITE,9999.0,0,int(pair[i].get("skin",0)),0,-1,pair[i].get("preset",{}),true)
 		game.customers_root.add_child(c)
-		c.position = Vector3(-12.0-i*.85,.10,5.5)
-		c.rotation_degrees.y = c.WALK_PLUS_X_YAW
-		c.play_street_walk(.8)
+		c.position = Vector3(-direction * (game.BG_PEOPLE_EDGE_X + i*.45),game._bg_people_y(),game._bg_people_z()+i*.65)
+		c.scale = Vector3.ONE * game._bg_people_scale()
+		c.rotation_degrees.y = c.WALK_PLUS_X_YAW if direction > 0 else c.WALK_MINUS_X_YAW
+		c.set_meta("couple_speed", pace)
+		c.set_meta("couple_direction", direction)
+		c.set_meta("couple_heart_left", 3.0+i*.6)
+		c.play_street_walk(1.0)
 		walkers.append(weakref(c))
 		heart(c)
 
@@ -232,3 +251,13 @@ func cat_smack(customer_id: int) -> void:
 	if is_instance_valid(audio): audio.play_cat_cartoon_smack()
 	var person = game._customer_by_net_id(customer_id)
 	if is_instance_valid(person): person.shake_angry(.4,.04,1.0)
+
+func play_love_song(person: Node3D) -> void:
+	var audio = AudioStreamPlayer3D.new()
+	audio.stream = preload("res://assets/audio/couple_love.wav")
+	audio.bus = "SFX"
+	audio.volume_db = -9.0
+	audio.unit_size = 5.0
+	person.add_child(audio)
+	audio.finished.connect(audio.queue_free)
+	audio.play()

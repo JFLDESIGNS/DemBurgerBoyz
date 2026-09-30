@@ -85,6 +85,15 @@ func run() -> void:
 	var showcase = game.get_node("UI/Root/BossMachineShowcase")
 	assert(showcase.price.text == "$100" and showcase.turntable.get_child_count()==1)
 	social.spawn_couple(social.couples[0]); assert(social.walkers.size()==2)
+	var first_walker = social.walkers[0].get_ref()
+	var second_walker = social.walkers[1].get_ref()
+	assert(first_walker.scale == Vector3.ONE * game._bg_people_scale())
+	var offset = second_walker.position-first_walker.position
+	var before_hearts = first_walker.get_child_count()
+	first_walker.set_meta("couple_heart_left",0.0)
+	social._process(.25)
+	assert((second_walker.position-first_walker.position).is_equal_approx(offset), "Couples keep their spacing at one shared speed")
+	assert(first_walker.get_child_count()>before_hearts, "Background couples occasionally emit fresh hearts")
 	game.start_overlay.hide()
 	game.flash_label.text = game.BOSS_FRYER_ADVICE
 	game.flash_label.show(); game._layout_flash_label()

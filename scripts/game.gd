@@ -145,7 +145,7 @@ const FROZEN_SMASH_PAD_PX := 20.0
 const FROZEN_SMASH_MAX_PX := 92.0
 const PATTY_COLLISION_LAYER := 2
 ## Flip-ready burgers get a bigger click / push target so other FX don't steal them.
-const PATTY_FLIP_PICK_MUL := 1.75
+const PATTY_FLIP_PICK_MUL := 2.15
 const PATTY_FLIP_NEAR_WORLD := 0.28
 ## Slide / scoop attach — burger must sit under the cursor (no plane magnet).
 const PATTY_ATTACH_MIN_PX := 28.0
@@ -1208,6 +1208,7 @@ var _cut_collector_wawa_timer: float = 60.0
 var _cut_collector_cut_done: bool = false
 var _cut_collector_seq: int = 0
 var _boss_caption_seq: int = 0
+var _boss_caption_until := 0
 var _boss_intro_seq: int = 0
 var _boss_pep_pending: bool = false
 var _boss_fryer_pending := false
@@ -4447,7 +4448,7 @@ func _ensure_serve_fx_pools() -> void:
 
 
 const BurgerServeTiming = preload("res://scripts/burger_serve_timing.gd")
-const BURGER_COMPLETE_HOLD_SEC := 0.5
+const BURGER_COMPLETE_HOLD_SEC := 0.75
 
 
 func _make_burger_completion_burst() -> Node2D:
@@ -4524,17 +4525,17 @@ func _make_burger_completion_burst() -> Node2D:
 
 func _update_burger_completion_burst(burst: Node2D, progress: float) -> void:
 	var glow := burst.get_node("WarmGlow") as Sprite2D
-	glow.scale = Vector2(1.95,1.55) * (1.0 + .22*sin(progress*PI))
-	glow.modulate.a = 1.0 - .20*progress
+	glow.scale = Vector2(3.15,2.55) * (1.0 + .25*sin(progress*PI))
+	glow.modulate = Color(1.5, 1.25, .85, 1.0 - .15*progress)
 	var accents := burst.get_node("FlyingAccents")
 	for i in accents.get_child_count():
 		var spark := accents.get_child(i) as Polygon2D
 		var angle: float = spark.get_meta("angle")
 		var direction := Vector2(cos(angle), sin(angle))
 		var travel := 1.0-pow(1.0-progress,2.0)
-		spark.position = direction*Vector2(126,94) + direction*(28.0+float(i%4)*12.0)*travel
+		spark.position = direction*Vector2(158,122) + direction*(48.0+float(i%4)*16.0)*travel
 		spark.rotation = angle + progress*(1.5 if i%2==0 else -1.5)
-		spark.scale = Vector2.ONE * (.6 + .5*sin(progress*PI))
+		spark.scale = Vector2.ONE * (1.0 + .8*sin(progress*PI))
 		spark.modulate.a = (1.0-smoothstep(.55,1.0,progress)) * smoothstep(0,.1,progress)
 
 
@@ -15492,6 +15493,7 @@ func _on_grill_surface_clicked(place_patty: bool, hit_pos: Vector3 = Vector3.ZER
 		return
 	if not place_patty:
 		var picked = _pick_patty_for_slide_or_scoop(get_viewport().get_mouse_position())
+		if picked == null: picked = _pick_flip_ready_patty_forgiving(get_viewport().get_mouse_position())
 		if picked != null:
 			_begin_patty_drag(picked)
 			return
@@ -15555,7 +15557,7 @@ func _pick_flip_ready_patty_forgiving(screen_pos: Vector2) -> Area3D:
 		var screen_pt := camera.unproject_position(lift)
 		var pick_px := maxf(
 			PATTY_PICK_MIN_PX * PATTY_FLIP_PICK_MUL,
-			_patty_screen_pick_radius_px(lift, PATTY_PICK_WORLD_EDGE * 1.35, PATTY_PICK_PAD_PX * 1.4)
+			_patty_screen_pick_radius_px(lift, PATTY_PICK_WORLD_EDGE * 1.65, PATTY_PICK_PAD_PX * 1.7)
 		)
 		var screen_d := screen_pos.distance_to(screen_pt)
 		var near := screen_d <= pick_px
@@ -16085,7 +16087,8 @@ func _begin_patty_drag(patty: Area3D) -> void:
 		return
 	## Holding a scooped patty: still flip others on the grill; scooping another is blocked.
 	if spatula_patty != null:
-		_on_patty_clicked(patty)
+		var ready: Area3D = patty if _patty_is_flip_ready(patty) else _pick_flip_ready_patty_forgiving(get_viewport().get_mouse_position())
+		_on_patty_clicked(ready if is_instance_valid(ready) else patty)
 		return
 	if brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held:
 		return
@@ -16422,6 +16425,9 @@ func _end_patty_drag() -> void:
 		return
 	## Quick tap only → flip / scoop. Hold ≥ 0.2s (or slide) never auto-scoops.
 	if is_quick_tap:
+		var flip_target: Area3D = patty if _patty_is_flip_ready(patty) else _pick_flip_ready_patty_forgiving(drag_start_mouse)
+		if is_instance_valid(flip_target): _on_patty_clicked(flip_target)
+		if flip_target == patty: return
 		if patty.can_scoop() and not _is_bun_toast(patty):
 			if mp_enabled:
 				if NetManager.is_host(): mp_quick_transfer(int(patty.net_id))
@@ -16430,7 +16436,7 @@ func _end_patty_drag() -> void:
 			return
 		if _raycast_patty_at_screen(drag_start_mouse) == patty:
 			_smash_grill_patty(patty)
-		_on_patty_clicked(patty) ## Flip is intentionally more forgiving than smash.
+		if not is_instance_valid(flip_target): _on_patty_clicked(patty)
 		return
 	## Flick left with a finished patty → jump arc onto Build.
 	if _is_flick_to_build(vel, travel) and patty.can_scoop():
@@ -21488,10 +21494,13 @@ func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> v
 	var line := body.strip_edges()
 	if title != "":
 		line = "%s — %s" % [title, line]
+	_boss_caption_until = 0
 	_flash(line, Color("FFE082"), maxf(duration, 1.4))
+	_boss_caption_until = Time.get_ticks_msec() + int(maxf(duration, 1.4) * 1000)
 
 
 func _hide_boss_caption() -> void:
+	_boss_caption_until = 0
 	var showcase = get_node_or_null("UI/Root/BossMachineShowcase")
 	if is_instance_valid(showcase): showcase.queue_free()
 	_boss_caption_seq += 1
@@ -21558,12 +21567,14 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 			pep = BOSS_MORNING_PEPS[_boss_pep_index % BOSS_MORNING_PEPS.size()]
 			_boss_pep_index += 1
 			talk_time = 6.2
-			if day == 2:
+			if day == 2 and not bool(owned_machines.get(SHOP_SODA_MACHINE, false)):
 				pep = "A soda machine is $300 in the Shop. Upsell a cold drink with burgers and fries to grow each sale!"
 				talk_time = 10.0
-			elif day == 3:
+			elif day == 3 and not bool(owned_machines.get(SHOP_ICECREAM_MACHINE, false)):
 				pep = "An ice cream machine is $500 in the Shop. Offer dessert after a meal: another upsell, more profit!"
 				talk_time = 10.0
+		if kind == "fryer" and bool(owned_machines.get(SHOP_FRYER_MACHINE, false)):
+			pep = "Put that fryer to work! Offer fries with every burger. Upselling a side means more profit from each order."
 		if kind == "fryer" or (kind == "pep" and day in [2, 3]):
 			_show_boss_machine(SHOP_FRYER_MACHINE if kind == "fryer" else (SHOP_SODA_MACHINE if day == 2 else SHOP_ICECREAM_MACHINE), talk_time)
 		_show_boss_caption("THE BOSS", pep, talk_time)
@@ -21664,7 +21675,7 @@ func _record_boss_served_customer() -> void:
 	if tutorial_mode or not playing or (mp_enabled and not NetManager.is_host()):
 		return
 	_boss_fryer_served += 1
-	if _boss_fryer_served >= 3 and not _boss_fryer_advice_queued and not truck_bought_out:
+	if _boss_fryer_served >= 3 and not _boss_fryer_advice_queued and not truck_bought_out and not bool(owned_machines.get(SHOP_FRYER_MACHINE, false)):
 		_boss_fryer_advice_queued = true
 		_boss_fryer_pending = true
 		_boss_pep_pending = true
@@ -53708,6 +53719,7 @@ func _clear_bts_day_intro(start_radio: bool = true) -> void:
 
 
 func _set_bts_intro_banner_text(text: String) -> void:
+	if Time.get_ticks_msec() < _boss_caption_until: return
 	if flash_label == null:
 		return
 	if _flash_tween != null and _flash_tween.is_running():
@@ -70146,7 +70158,7 @@ func _play_serve_fly_to_mouth(
 		_place_burger_sprite_center(stack,start_pos)
 		burst.scale = Vector2.ONE * lerpf(0.72, 1.05, minf(1.0, t / 0.22))
 		_update_burger_completion_burst(burst, t)
-		burst.rotation = lerpf(-0.16, 0.14, t) + .04 * sin(t * TAU)
+		burst.rotation = lerpf(-0.28, 0.32, t) + .08 * sin(t * TAU)
 		burst.modulate.a = 1.0 - smoothstep(0.76, 1.0, t)
 	tw.tween_method(celebrate_step, 0.0, 1.0, celebration_hold)
 	tw.tween_callback(func() -> void: burst.visible = false)
@@ -72207,6 +72219,7 @@ func _tutorial_hint_should_show() -> bool:
 
 
 func _apply_tutorial_hint_visibility() -> void:
+	if Time.get_ticks_msec() < _boss_caption_until: return
 	if _bts_day_intro_active:
 		return
 	if flash_label == null or _tutorial_text == "":
@@ -72294,6 +72307,7 @@ func _show_audio_debug_overlay(report: String) -> void:
 
 
 func _flash(text: String, color: Color, hold_sec: float = 1.1) -> void:
+	if Time.get_ticks_msec() < _boss_caption_until: return
 	if flash_label == null:
 		return
 	if _bts_day_intro_active:
@@ -79362,6 +79376,7 @@ func mp_returned_order(audit: Dictionary) -> void:
 	_show_returned_order(audit)
 
 func _show_boss_machine(id: String, duration: float) -> void:
+	if bool(owned_machines.get(id, false)): return
 	var old = get_node_or_null("UI/Root/BossMachineShowcase")
 	if is_instance_valid(old): old.queue_free()
 	var showcase = preload("res://scripts/boss_machine_showcase.gd").new()
