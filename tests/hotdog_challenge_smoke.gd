@@ -161,6 +161,7 @@ func run() -> void:
 			assert(boss.phase == "ready" and boss.order_left == boss.ORDER_SECONDS)
 	assert(boss.milestone_history == [5,10])
 	assert(boss.phase == "victory")
+	assert(boss.clip == "slump_defeat", "Final victory must use the real collapse")
 	assert(boss.victory_played and not boss.music.playing)
 	boss.advance_phase();assert(boss.phase == "sinking")
 	boss._process(1.0)

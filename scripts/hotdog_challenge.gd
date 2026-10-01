@@ -459,7 +459,7 @@ func resolve_result(correct: bool, reason: String = "WRONG BURGER!") -> void:
 	if correct:
 		perfect += 1
 		if perfect == TOTAL:
-			phase = "victory"; timer = play("slump") + .8
+			phase = "victory"; timer = play("slump_defeat") + .8
 			customer.is_waiting = false; game._remove_ticket(customer)
 			start_victory()
 		elif perfect % 5 == 0:

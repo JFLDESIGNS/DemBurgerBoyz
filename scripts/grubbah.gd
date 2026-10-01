@@ -22,6 +22,7 @@ var age = 0.0
 var sync_time = 0.0
 var last_day = -1
 var was_playing = false
+var boss_paused = false
 var online_seen = false
 var page: VBoxContainer
 var body: Label
@@ -120,7 +121,7 @@ func refresh() -> void:
  wrap_button.visible=false and game.playing and phase=="bagging" and game.selected_customer==ticket_owner
  wrap_button.text="PACK SIDES + SEAL" if phase=="bagging" else "WRAP BURGER"
 func sync_ticket() -> void:
- var live=game.playing and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging","sealed"]
+ var live=game.playing and not game._hotdog_active() and str(state.get("phase","")) in ["accepted","paper","wrapping","bagging","sealed"]
  if not live:
   if is_instance_valid(ticket_owner):
    game._remove_ticket(ticket_owner)
@@ -169,6 +170,17 @@ func _process(delta: float) -> void:
   if is_instance_valid(props):props.hide()
   refresh();return
  if game.get_tree().paused:return
+ if game._hotdog_active():
+  boss_paused=true
+  sync_ticket()
+  if is_instance_valid(props):props.hide()
+  if is_instance_valid(wrap_button):wrap_button.hide()
+  if is_instance_valid(packing_tween):packing_tween.pause()
+  return
+ if boss_paused:
+  boss_paused=false
+  if is_instance_valid(packing_tween):packing_tween.play()
+  refresh()
  if not was_playing:
   was_playing=true
   if host():wait_time=95.0 if game.day==1 else 35.0;last_day=game.day
@@ -223,7 +235,7 @@ func command(kind: String, number: int) -> void:
  if not host():return
  apply_command(kind,number,multiplayer.get_remote_sender_id())
 func apply_command(kind: String, number: int, peer: int) -> void:
- if not game.playing:return
+ if not game.playing or (game._hotdog_active() and kind!="knife"):return
  if kind=="knife":
   if not bool(game.owned_machines.get("chef_knife",false)):return
   if knife_owner==0:knife_owner=peer

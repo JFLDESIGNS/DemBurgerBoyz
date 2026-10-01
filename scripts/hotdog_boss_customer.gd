@@ -45,7 +45,7 @@ func mouth_global() -> Vector3:
 	if is_instance_valid(rig):
 		var index = rig.find_bone("Mouth")
 		if index >= 0:
-			return rig.to_global(rig.get_bone_global_pose(index).origin + Vector3(0, -.10, .58))
+			return rig.to_global(rig.get_bone_global_pose(index).origin + Vector3(0, -.22, .52))
 	return to_global(Vector3(0, 2.22, .58))
 func burger_grip_global() -> Vector3: return mouth_global()
 func burger_grip_edges() -> Array[Vector3]:
@@ -53,10 +53,16 @@ func burger_grip_edges() -> Array[Vector3]:
 func side_food_mouth_global() -> Vector3: return mouth_global()
 
 var exit_start_pose: Array[Transform3D] = []
+var exit_start_global_pose: Array[Transform3D] = []
+var final_defeat_exit := false
 
 func begin_ground_exit() -> void:
 	exit_start_pose.clear()
-	for i in rig.get_bone_count(): exit_start_pose.append(rig.get_bone_pose(i))
+	exit_start_global_pose.clear()
+	final_defeat_exit = is_instance_valid(boss) and str(boss.get("phase")) == "sinking"
+	for i in rig.get_bone_count():
+		exit_start_pose.append(rig.get_bone_pose(i))
+		exit_start_global_pose.append(rig.get_bone_global_pose(i))
 	player.speed_scale = 1.0
 	player.play("ground_breakout",0.0)
 	player.pause()
@@ -86,6 +92,15 @@ func update_ground_exit(progress: float) -> void:
 	if not is_instance_valid(player) or not is_instance_valid(rig): return
 	var animation = player.get_animation("ground_breakout")
 	player.seek(animation.length * lerpf(.65,.12,smoothstep(0,1,progress)),true)
+	if final_defeat_exit and exit_start_global_pose.size() == rig.get_bone_count():
+		# Keep the final collapse while sinking; the fallen crown stays on the pavement.
+		for i in rig.get_bone_count():
+			var bone_name := rig.get_bone_name(i)
+			if bone_name in ["ROOT", "Face", "Food", "Mouth", "Crown"] or bone_name.begins_with("Spine.") or bone_name.begins_with("Arm.") or bone_name.begins_with("Fist.") or bone_name.begins_with("Eye.") or bone_name.begins_with("Lid."):
+				var pose := exit_start_global_pose[i]
+				if bone_name != "Crown": pose.origin.y -= 4.8 * smoothstep(0, 1, progress)
+				rig.set_bone_global_pose(i, pose)
+		return
 	# Blend out of the actual slump/slam pose instead of snapping upright first.
 	var blend = smoothstep(0,.32,progress)
 	if exit_start_pose.size() == rig.get_bone_count() and blend < 1.0:
