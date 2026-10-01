@@ -19,6 +19,10 @@ func run():
   assert(pair.visible and pair.has_node("Top") and pair.has_node("Bottom") and pair.get_node("BunPairGrab").input_ray_pickable)
   var bottom_box=world_bounds(pair.get_node("Bottom"))
   var top_box=world_bounds(pair.get_node("Top"))
+  var bottom=pair.get_node("Bottom")
+  var top=pair.get_node("Top")
+  assert(is_equal_approx(bottom.scale.y/bottom.scale.x,1.30))
+  assert(is_equal_approx(top.scale.y/top.scale.x,1.10))
   assert(absf(top_box.position.y-bottom_box.end.y)<.002,"Bun halves must meet without a gap or overlap")
   for half in [pair.get_node("Top"),pair.get_node("Bottom")]:
    var meshes=half.find_children("*","MeshInstance3D",true,false)
@@ -28,7 +32,8 @@ func run():
   if pair.get_meta("pair_i")==1:
    for lower in game.bun_pile_stacks:
     if lower.get_meta("tower_i")==pair.get_meta("tower_i") and lower.get_meta("pair_i")==0:
-     assert(absf(bottom_box.position.y-world_bounds(lower.get_node("Top")).end.y)<.002,"Stacked pairs must not squash into one another")
+     var overlap=world_bounds(lower.get_node("Top")).end.y-bottom_box.position.y
+     assert(overlap>0 and overlap<.015*bottom.scale.x,"Stacked pairs nest slightly against the curved crown")
  game.supply_stock.bun_bottom=0;game.supply_stock.bun_top=0;game._refresh_bun_inventory_piles()
  for pair in game.bun_pile_stacks:assert(not pair.visible and not pair.get_node("BunPairGrab").input_ray_pickable)
  print("BUN_INVENTORY_OK")

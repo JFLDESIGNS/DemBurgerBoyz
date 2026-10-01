@@ -2347,10 +2347,11 @@ var _condiment_customer_splat_cool: float = 0.0
 var condiment_smear_items: Array = []
 var condiment_chunk_items: Array = []
 var condiment_spline_batches: Dictionary = {} ## Legacy state name; painter/flavor -> active ribbon batch.
-## Top sits on the bottom heel (untoasted bottom height ≈ 0.040).
-const BUN_PAIR_TOP_Y := 0.040
-## Vertical step for the second pair on a tower.
-const BUN_PAIR_STACK_Y := 0.098
+## Top sits on the taller bottom heel (0.040 × 1.30).
+const BUN_PAIR_TOP_Y := 0.052
+## Nest the next pair slightly into the curved crown for a tighter stack.
+const BUN_PAIR_STACK_Y := 0.104
+const BUN_PAIR_HEIGHT := 0.116
 ## Local stack pose. World seat is camera-left of the fryer (see BUN_PILE_FRYER_OFFSET).
 const BUN_PILE_BASE := Vector3(0.0, 0.0, 0.0)
 ## Camera-left / slightly cook-side of the fryer station. Z pulls a foot toward the camera.
@@ -47737,6 +47738,8 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 				continue
 			bottom.name = "Bottom"
 			top.name = "Top"
+			bottom.scale.y *= 1.30
+			top.scale.y *= 1.10
 			bottom.position = Vector3.ZERO
 			top.position = Vector3(0.0, BUN_PAIR_TOP_Y * model_scale, 0.0)
 			pair.add_child(bottom)
@@ -47753,9 +47756,9 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 			grab.input_ray_pickable = true
 			var gcs := CollisionShape3D.new()
 			var gbox := BoxShape3D.new()
-			gbox.size = Vector3(0.18, BUN_PAIR_STACK_Y, 0.18) * model_scale
+			gbox.size = Vector3(0.18, BUN_PAIR_HEIGHT, 0.18) * model_scale
 			gcs.shape = gbox
-			gcs.position = Vector3(0.0, BUN_PAIR_STACK_Y * model_scale * 0.5, 0.0)
+			gcs.position = Vector3(0.0, BUN_PAIR_HEIGHT * model_scale * 0.5, 0.0)
 			grab.add_child(gcs)
 			pair.add_child(grab)
 			pair.visible = false
@@ -47777,7 +47780,7 @@ func _bun_pile_world_pos() -> Vector3:
 	var base := FRYER_STATION_POS + BUN_PILE_FRYER_OFFSET
 	if fryer_root != null and is_instance_valid(fryer_root):
 		base = fryer_root.global_position + BUN_PILE_FRYER_OFFSET
-	return base + _prop_offset("burger_buns") + Vector3(0.1016, -0.04, 0.0)
+	return base + _prop_offset("burger_buns") + Vector3(0.1016, -0.0654, 0.0)
 
 
 func _seat_bun_piles_by_fryer() -> void:
