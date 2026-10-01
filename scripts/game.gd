@@ -2348,9 +2348,9 @@ var condiment_smear_items: Array = []
 var condiment_chunk_items: Array = []
 var condiment_spline_batches: Dictionary = {} ## Legacy state name; painter/flavor -> active ribbon batch.
 ## Top sits on the bottom heel (untoasted bottom height ≈ 0.040).
-const BUN_PAIR_TOP_Y := 0.039
+const BUN_PAIR_TOP_Y := 0.040
 ## Vertical step for the second pair on a tower.
-const BUN_PAIR_STACK_Y := 0.074
+const BUN_PAIR_STACK_Y := 0.098
 ## Local stack pose. World seat is camera-left of the fryer (see BUN_PILE_FRYER_OFFSET).
 const BUN_PILE_BASE := Vector3(0.0, 0.0, 0.0)
 ## Camera-left / slightly cook-side of the fryer station. Z pulls a foot toward the camera.
@@ -47753,9 +47753,9 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 			grab.input_ray_pickable = true
 			var gcs := CollisionShape3D.new()
 			var gbox := BoxShape3D.new()
-			gbox.size = Vector3(0.10, 0.085, 0.10) * maxf(1.0, bun_scale)
+			gbox.size = Vector3(0.18, BUN_PAIR_STACK_Y, 0.18) * model_scale
 			gcs.shape = gbox
-			gcs.position = Vector3(0.0, 0.038 * maxf(1.0, bun_scale), 0.0)
+			gcs.position = Vector3(0.0, BUN_PAIR_STACK_Y * model_scale * 0.5, 0.0)
 			grab.add_child(gcs)
 			pair.add_child(grab)
 			pair.visible = false

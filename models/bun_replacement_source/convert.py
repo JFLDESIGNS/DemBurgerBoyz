@@ -18,25 +18,26 @@ def bounds(objects):
     return [min(p[i] for p in points) for i in range(3)], [max(p[i] for p in points) for i in range(3)]
 
 report = {}
-TARGET_BOUNDS = {
-    'bottom': ([-.085267417, -.088065624, -.0002788], [.089054488, .092354313, .039797354]),
-    'top': ([-.092374131, -.088901907, -.000612535], [.093562223, .096975684, .066694915]),
-}
+# One shared uniform scale preserves the supplied halves' relative proportions.
+MODEL_SCALE = .18 / 1.511281132698059
 for part, filename in [('bottom','bun_bot.fbx'),('top','bun_top.fbx')]:
     target = OUTPUT / ('SM_BurgerBunUntoasted' + part.title() + '.glb')
     clear()
-    old_min, old_max = TARGET_BOUNDS[part]
     bpy.ops.import_scene.fbx(filepath=str(SOURCE / filename))
     meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
     for obj in bpy.context.scene.objects:
         obj.animation_data_clear()
-    # The supplied top half has its cut face upward; seat its crown upward in-game.
-    if part == 'top':
-        for obj in meshes:
-            obj.matrix_world = Matrix.Rotation(math.pi, 4, 'X') @ obj.matrix_world
+    # FBX object transforms are a tilted presentation pose, not the bun's axes.
+    # The mesh itself is upright; discard the pose rather than baking it in.
+    for obj in meshes:
+        obj.parent = None
+        obj.matrix_world = Matrix.Identity(4)
+        if part == 'bottom':
+            # Bottom half rests on its crust, with the cut face toward the top half.
+            obj.data.transform(Matrix.Rotation(math.pi, 4, 'X'))
     bpy.context.view_layer.update()
     low, high = bounds(meshes)
-    report[part] = {'old_bounds':[old_min,old_max], 'source_bounds':[low,high], 'objects':[o.name for o in meshes]}
+    report[part] = {'source_bounds':[low,high], 'objects':[o.name for o in meshes], 'uniform_scale':MODEL_SCALE}
     material = bpy.data.materials.new('Supplied_Bun_' + part)
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -54,13 +55,9 @@ for part, filename in [('bottom','bun_bot.fbx'),('top','bun_top.fbx')]:
     links.new(normal.outputs['Color'], normal_map.inputs['Color'])
     links.new(normal_map.outputs['Normal'], bsdf.inputs['Normal'])
     for obj in meshes:
-        # Bake source placement, then fit to the existing inventory footprint and height.
-        obj.data.transform(obj.matrix_world)
-        obj.parent = None
-        obj.matrix_world = Matrix.Identity(4)
+        center = Vector((.5*(low[0]+high[0]), .5*(low[1]+high[1]), low[2]))
         for vertex in obj.data.vertices:
-            for axis in range(3):
-                vertex.co[axis] = old_min[axis] + (vertex.co[axis]-low[axis])/(high[axis]-low[axis])*(old_max[axis]-old_min[axis])
+            vertex.co = (vertex.co-center)*MODEL_SCALE
         obj.data.materials.clear()
         obj.data.materials.append(material)
         for polygon in obj.data.polygons:
@@ -70,10 +67,11 @@ for part, filename in [('bottom','bun_bot.fbx'),('top','bun_top.fbx')]:
         obj.data.update()
     bpy.context.view_layer.update()
     fitted_min, fitted_max = bounds(meshes)
-    assert all(abs(fitted_min[i]-old_min[i]) < 1e-5 and abs(fitted_max[i]-old_max[i]) < 1e-5 for i in range(3)), 'Bun bounds changed'
+    assert abs(fitted_min[2]) < 1e-5
+    assert all(abs((fitted_max[i]-fitted_min[i])-(high[i]-low[i])*MODEL_SCALE) < 1e-5 for i in range(3)), 'Nonuniform bun scaling'
     bpy.ops.object.select_all(action='DESELECT')
     for obj in meshes: obj.select_set(True)
     bpy.ops.export_scene.gltf(filepath=str(target), export_format='GLB', use_selection=True, export_animations=False, export_yup=True)
     report[part]['export_bounds'] = bounds(meshes)
-    assert all(abs(report[part]['export_bounds'][0][i]-old_min[i]) < 1e-5 for i in range(3))
+    assert abs(report[part]['export_bounds'][0][2]) < 1e-5
 print('BUN_BOUNDS ' + json.dumps(report))
