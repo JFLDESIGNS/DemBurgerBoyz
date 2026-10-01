@@ -57,7 +57,6 @@ func spawn_local(row: Dictionary) -> void:
  for x in [-.07,0,.07]:
   var slash=BoxMesh.new();slash.size=Vector3(.012,.004,.046)
   var cut=mesh_node(slash,material(Color("733020")),body);cut.position=Vector3(x,.034,0);cut.rotation.y=-.4
- var mustard=BoxMesh.new();mustard.size=Vector3(.20,.006,.01);var stripe=mesh_node(mustard,material(Color("FFCB36")),body);stripe.position=Vector3(0,.039,.006)
  var ringmesh=TorusMesh.new();ringmesh.inner_radius=RADIUS-.005;ringmesh.outer_radius=RADIUS;ringmesh.rings=32;ringmesh.ring_segments=4
  h.ring=mesh_node(ringmesh,material(Color("FFB22E")),self);h.ring.position=h.target;h.ring.position.y=game.GRILL_SURFACE_Y+.005
  var timer_label=Label3D.new();timer_label.billboard=BaseMaterial3D.BILLBOARD_ENABLED;timer_label.no_depth_test=false;timer_label.font_size=48;timer_label.pixel_size=.0018;timer_label.outline_size=8;timer_label.modulate=Color("FFF3B3");root.add_child(timer_label);timer_label.position.y=.15;h.label=timer_label

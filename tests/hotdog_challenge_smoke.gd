@@ -51,12 +51,7 @@ func run() -> void:
 	boss.advance_phase();assert(boss.phase == "entrance_smash_second")
 	boss._process(boss.timer*.6);assert(boss.impact_serial == entrance_serial+2)
 	boss.advance_phase();assert(boss.phase == "ready")
-	assert(boss.next_order_preview.order == boss.recipe_at(1))
-	assert(g.tickets[boss.next_order_preview].visible)
-	assert(g.tickets[boss.next_order_preview].get_meta("timer_label").text == "UP NEXT")
-	g._select_ticket(boss.next_order_preview)
-	assert(g.selected_customer == boss.customer and not boss.next_order_preview.is_waiting)
-	assert(not g._ticket_line_is_done("patty", ["patty"], boss.next_order_preview))
+	assert(boss.next_order_preview == null, "Boss shows only its current burger")
 	assert(g._resolve_serve_customer() == boss.customer)
 	var ticket_timer = g.tickets[boss.customer].get_meta("timer_label")
 	assert(ticket_timer.text == "17.0s LEFT")
@@ -130,11 +125,7 @@ func run() -> void:
 		assert(boss.phase == "ready")
 		if i >= 10:
 			assert(boss.customer.order.count("patty") in [2,3], "Final five must be multi-patty orders")
-		if i < 14:
-			assert(boss.next_order_preview.order == boss.recipe_at(i+1))
-			assert(g.tickets[boss.next_order_preview].visible)
-		else:
-			assert(not g.tickets[boss.next_order_preview].visible, "Final burger has no phantom next order")
+		assert(boss.next_order_preview == null, "No upcoming boss ticket")
 		g.stations[0].items = boss.customer.order.duplicate()
 		g._complete_serve(0,boss.customer)
 		# Duplicate completion cannot credit or advance the same burger twice.

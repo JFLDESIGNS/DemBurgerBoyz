@@ -25,6 +25,7 @@ var pending_result = -1
 var suspended: Array = []
 var previous_selected: Node3D
 var label: Label
+var status_label: Label
 var music: AudioStreamPlayer
 var clip = ""
 var sync_timer = 0.0
@@ -120,16 +121,31 @@ func setup(owner_game: Node) -> void:
 	label = Label.new()
 	label.name = "HotdogChallengeStatus"
 	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	label.position = Vector2(-270, 65)
-	label.size = Vector2(540, 86)
+	label.position = Vector2(-270, 35)
+	label.size = Vector2(540, 38)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
-	label.add_theme_font_size_override("font_size", 20)
-	label.add_theme_color_override("font_color", Color("FFE08A"))
-	label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	label.add_theme_font_override("font", preload("res://assets/fonts/LuckiestGuy-Regular.ttf"))
+	label.add_theme_font_size_override("font_size", 30)
+	label.add_theme_color_override("font_color", Color("FFE58A"))
+	label.add_theme_color_override("font_outline_color", Color("271A17"))
+	label.add_theme_constant_override("outline_size", 7)
+	label.add_theme_color_override("font_shadow_color", Color("A53623"))
 	label.add_theme_constant_override("shadow_offset_x", 2)
-	label.add_theme_constant_override("shadow_offset_y", 2)
+	label.add_theme_constant_override("shadow_offset_y", 3)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_label = Label.new()
+	status_label.name = "ChallengeProgress"
+	status_label.position = Vector2(0, 42)
+	status_label.size = Vector2(540, 42)
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_label.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+	status_label.add_theme_font_size_override("font_size", 18)
+	status_label.add_theme_color_override("font_color", Color("FFF2CD"))
+	status_label.add_theme_color_override("font_outline_color", Color("271A17"))
+	status_label.add_theme_constant_override("outline_size", 5)
+	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_child(status_label)
 	game.get_node("UI/Root").add_child(label)
 	label.hide()
 	music = AudioStreamPlayer.new()
@@ -227,28 +243,11 @@ func recipe_at(perfect_count: int) -> Array:
 	return recipes[mini(index, recipes.size()-1)]
 
 func refresh_next_order() -> void:
-	if phase not in ["ready"] or perfect >= TOTAL - 1:
-		if is_instance_valid(next_order_preview) and game.tickets.has(next_order_preview):
-			game.tickets[next_order_preview].hide()
-		return
-	var next_recipe = recipe_at(perfect + 1)
-	if not is_instance_valid(next_order_preview):
-		next_order_preview = preload("res://scripts/mobile_ticket_owner.gd").new()
-		next_order_preview.name = "BossNextOrderPreview"
-		next_order_preview.set_meta("hotdog_preview", true)
-		next_order_preview.set_meta("mp_net_id", NET_ID + 1)
-		next_order_preview.is_waiting = false
-		next_order_preview.process_mode = Node.PROCESS_MODE_DISABLED
-		add_child(next_order_preview)
-	if next_order_preview.order != next_recipe:
+	# Only the current burger is shown; remove any older preview ticket.
+	if is_instance_valid(next_order_preview):
 		game._remove_ticket(next_order_preview)
-		next_order_preview.order.assign(next_recipe)
-	if not game.tickets.has(next_order_preview):
-		game._create_ticket(next_order_preview)
-		var wrap = game.tickets[next_order_preview]
-		wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		game._update_ticket_seconds_label(wrap, next_order_preview)
-	game.tickets[next_order_preview].show()
+		next_order_preview.queue_free()
+	next_order_preview = null
 
 func reserve_order() -> void:
 	if not can_serve(): return
@@ -699,7 +698,7 @@ func refresh() -> void:
 	label.visible = active() and phase != "results"
 	if is_instance_valid(customer) and game.tickets.has(customer):
 		game._update_ticket_seconds_label(game.tickets[customer], customer)
-	var message = "%.1fs  •  %d / 15 perfect  •  %d / 3 orders lost" % [order_left,perfect,mistakes]
+	var message = "%d / 15 PERFECT   •   %d / 3 ORDERS LOST" % [perfect,mistakes]
 	match phase:
 		"entrance_pause": message = "BARON BRAT IS HERE…"
 		"entrance_smash_first", "entrance_smash_second": message = "BRACE YOURSELF!"
@@ -713,7 +712,9 @@ func refresh() -> void:
 		"revive", "revive_smash_first", "revive_smash_second": message = "HE'S BACK!  FIVE MONSTER BURGERS TO GO!" if perfect == FINAL_STAGE else "BACK FOR MORE!"
 		"victory", "sinking": message = "15 / 15 PERFECT — BARON BRAT DEFEATED!"
 	if phase == "ready" and perfect >= FINAL_STAGE: message = "FINAL FIVE!  " + message
-	label.text = "BARON BRAT CHALLENGE\n" + message
+	label.text = "BARON BRAT CHALLENGE"
+	status_label.text = message
+	status_label.add_theme_color_override("font_color", Color("FFAC83") if phase in ["attack", "smash", "defeat", "defeat_laugh", "defeat_smash", "defeat_sinking"] else Color("FFF2CD"))
 
 func cancel() -> void:
 	if active() and phase != "rumble": play_departure_laugh()
