@@ -32,7 +32,7 @@ var impact_serial = 0
 var received_impact = 0
 var received_slam = -1
 var generation = 0
-var boss_position = Vector3(0, -.02, 6.3)
+var boss_position = Vector3(0, -.3248, 6.3)
 var boss_scale = 1.0
 var order_left = ORDER_SECONDS
 var ambient_left = 14.0
@@ -93,6 +93,12 @@ func setup(owner_game: Node) -> void:
 	if config.load(PLACEMENT_FILE) == OK:
 		boss_position = config.get_value("boss", "position", boss_position)
 		boss_scale = clampf(float(config.get_value("boss", "scale", boss_scale)), .3, 3.0)
+		# Apply the one-foot drop once to previously saved hidden-GUI placements.
+		if int(config.get_value("boss", "height_revision", 0)) < 1:
+			boss_position.y -= .3048
+			config.set_value("boss", "position", boss_position)
+			config.set_value("boss", "height_revision", 1)
+			config.save(PLACEMENT_FILE)
 	name = "HotdogChallenge"
 	label = Label.new()
 	label.name = "HotdogChallengeStatus"
@@ -176,6 +182,7 @@ func update_placement() -> void:
 	var config = ConfigFile.new()
 	config.set_value("boss", "position", boss_position)
 	config.set_value("boss", "scale", boss_scale)
+	config.set_value("boss", "height_revision", 1)
 	config.save(PLACEMENT_FILE)
 	broadcast()
 
