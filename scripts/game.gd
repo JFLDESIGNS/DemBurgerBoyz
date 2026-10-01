@@ -30613,6 +30613,13 @@ func _update_street_car_exhaust_position() -> void:
 
 
 func _update_street_car(delta: float) -> void:
+	if _hotdog_active():
+		if street_car_active and is_instance_valid(game_audio): game_audio.stop_car_pass_by()
+		street_car_active = false
+		street_car_wait = maxf(street_car_wait, 5.0)
+		if is_instance_valid(street_car): street_car.hide()
+		if is_instance_valid(street_car_exhaust): street_car_exhaust.emitting = false
+		return
 	if not is_instance_valid(street_car):
 		return
 	if is_instance_valid(mail_delivery_truck) and not street_car_active:
@@ -46408,6 +46415,7 @@ func _apply_bunting_wind_settings(cfg: Dictionary) -> void:
 
 
 func _update_window_bunting_wind(delta: float) -> void:
+	if is_instance_valid(window_bunting_root) and window_bunting_root.get_meta("boss_fallen", false): return
 	if window_bunting_root == null or not is_instance_valid(window_bunting_root):
 		return
 	bunting_wind_time = fposmod(bunting_wind_time + delta * bunting_wind_speed * TAU, TAU * 64.0)

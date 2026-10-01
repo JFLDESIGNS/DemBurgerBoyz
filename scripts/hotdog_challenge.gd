@@ -32,7 +32,7 @@ var impact_serial = 0
 var received_impact = 0
 var received_slam = -1
 var generation = 0
-var boss_position = Vector3(0, -.3248, 6.9096)
+var boss_position = Vector3(0, -.3248, 7.5192)
 var boss_scale = 1.0
 var order_left = ORDER_SECONDS
 var ambient_left = 14.0
@@ -53,6 +53,11 @@ var spectator_presets: Array = []
 var spectator_time = 0.0
 var shadow_root_visible = true
 var shadow_root_saved = false
+var decorations_hit = false
+var bunting_home = Transform3D.IDENTITY
+var bunting_fall: Tween
+var sign_flip: Tween
+var prop_bounces: Dictionary = {}
 var smash_count = 0
 var victory_played = false
 var result_screen: Control
@@ -100,10 +105,10 @@ func setup(owner_game: Node) -> void:
 			config.set_value("boss", "height_revision", 1)
 			config.save(PLACEMENT_FILE)
 		# Move existing saved placements two feet farther from the truck once.
-		if int(config.get_value("boss", "distance_revision", 0)) < 1:
-			boss_position.z += .6096
+		if int(config.get_value("boss", "distance_revision", 0)) < 2:
+			boss_position.z += .6096 * (2 - int(config.get_value("boss", "distance_revision", 0)))
 			config.set_value("boss", "position", boss_position)
-			config.set_value("boss", "distance_revision", 1)
+			config.set_value("boss", "distance_revision", 2)
 			config.save(PLACEMENT_FILE)
 	name = "HotdogChallenge"
 	label = Label.new()
@@ -189,7 +194,7 @@ func update_placement() -> void:
 	config.set_value("boss", "position", boss_position)
 	config.set_value("boss", "scale", boss_scale)
 	config.set_value("boss", "height_revision", 1)
-	config.set_value("boss", "distance_revision", 1)
+	config.set_value("boss", "distance_revision", 2)
 	config.save(PLACEMENT_FILE)
 	broadcast()
 
@@ -338,6 +343,7 @@ func start() -> bool:
 	return true
 
 func _spawn() -> void:
+	decorations_hit = false
 	previous_selected = game.selected_customer
 	for c in game.customers.duplicate():
 		if not is_instance_valid(c): continue
@@ -595,7 +601,7 @@ func advance_phase() -> void:
 			concrete.play()
 			apply_placement()
 		"sinking":
-			phase = "results"; customer.hide(); show_results()
+			phase = "results"; customer.hide(); restore_decorations(); show_results()
 	refresh(); broadcast()
 
 func start_smash() -> void:
@@ -656,6 +662,9 @@ func impact(duration: float) -> void:
 	impact_serial += 1
 	game._start_slot_camera_shake(minf(duration, .5),.075)
 	var ground_slam = phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second", "defeat_smash"]
+	if ground_slam or phase in ["attack", "defeat"]:
+		hit_decorations()
+		if host() and online(): receive_decoration_hit.rpc()
 	if ground_slam:
 		bounce_grill(impact_serial)
 		if host() and online(): receive_ground_slam.rpc(impact_serial)
@@ -694,6 +703,7 @@ func cancel() -> void:
 	if is_instance_valid(effects): effects.stop()
 	if is_instance_valid(impact_sound): impact_sound.stop()
 	restore_street()
+	restore_decorations()
 	voice_left = 0; music_duck_left = 0; music_duck_db = 0; eat_sound_played = false
 	game._sync_combat_audio()
 	if is_instance_valid(customer):
@@ -712,10 +722,10 @@ func cancel() -> void:
 
 func broadcast() -> void:
 	if not host() or not online(): return
-	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason, spectator_presets, spectator_time)
+	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason, spectator_presets, spectator_time, decorations_hit)
 
 @rpc("authority", "call_remote", "reliable")
-func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, animation: String, remaining: float, serial: int, round_id: int, seconds_left: float = ORDER_SECONDS, pos: Vector3 = Vector3(0,-.02,6.3), size_value: float = 1.0, reason: String = "WRONG BURGER!", crowd: Array = [], crowd_time: float = 0.0) -> void:
+func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, animation: String, remaining: float, serial: int, round_id: int, seconds_left: float = ORDER_SECONDS, pos: Vector3 = Vector3(0,-.02,6.3), size_value: float = 1.0, reason: String = "WRONG BURGER!", crowd: Array = [], crowd_time: float = 0.0, hit_props: bool = false) -> void:
 	if host(): return
 	if remote_phase.is_empty():
 		if active(): cancel()
@@ -746,7 +756,10 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 		game._remove_ticket(customer)
 	elif phase == "results":
 		customer.player.pause(); game._remove_ticket(customer)
-	if phase == "results": show_results()
+	if hit_props and phase != "results": hit_decorations()
+	if phase == "results":
+		restore_decorations()
+		show_results()
 	if serial != received_impact:
 		received_impact = serial
 		game._start_slot_camera_shake(.5,.075)
@@ -756,6 +769,11 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 func bounce_grill(serial: int) -> void:
 	if serial <= received_slam: return
 	received_slam = serial
+	for bun in game.bun_pile_stacks:
+		if is_instance_valid(bun) and bun.visible: bounce_prop(bun, .18 + .025 * int(bun.get_meta("pair_i", 0)))
+	if is_instance_valid(game.tip_jar_root):
+		game._tip_jar_shake_left = 0.0
+		bounce_prop(game.tip_jar_root, .16)
 	# Presentation only: preserve positions, cook state, ownership, and flip count.
 	for patty in game.grill:
 		if is_instance_valid(patty) and not patty.is_held and patty.has_method("_play_done_jump"):
@@ -764,3 +782,56 @@ func bounce_grill(serial: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func receive_ground_slam(serial: int) -> void:
 	if active(): bounce_grill(serial)
+
+func bounce_prop(prop: Node3D, height: float) -> void:
+	var home: Vector3 = prop.position
+	if prop_bounces.has(prop):
+		home = prop_bounces[prop].home
+		prop_bounces[prop].tween.kill()
+	prop.position = home
+	var tween = prop.create_tween()
+	prop_bounces[prop] = {"home": home, "tween": tween}
+	tween.tween_property(prop, "position", home + Vector3.UP * height, .16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(prop, "position", home, .22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_callback(func(): prop_bounces.erase(prop))
+
+func hit_decorations() -> void:
+	if decorations_hit: return
+	decorations_hit = true
+	var bunting = game.window_bunting_root
+	if is_instance_valid(bunting):
+		if is_instance_valid(bunting_fall): bunting_fall.kill()
+		if bunting.has_meta("boss_bunting_home"): bunting.transform = bunting.get_meta("boss_bunting_home")
+		bunting_home = bunting.transform
+		bunting.set_meta("boss_bunting_home", bunting_home)
+		bunting.set_meta("boss_fallen", true)
+		var landing: Vector3 = bunting.position
+		landing.y = .035
+		landing.z += .4
+		bunting_fall = bunting.create_tween().set_parallel(true)
+		bunting_fall.tween_property(bunting, "position", landing, .7).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		bunting_fall.tween_property(bunting, "rotation", Vector3(PI * .5, 0, 0), .7)
+	var sign_node = game.open_closed_sign
+	if is_instance_valid(sign_node):
+		if is_instance_valid(game.open_closed_sign_tween): game.open_closed_sign_tween.kill()
+		if is_instance_valid(sign_flip): sign_flip.kill()
+		sign_flip = sign_node.create_tween()
+		sign_flip.tween_property(sign_node, "rotation_degrees:y", game.OPEN_CLOSED_SIGN_YAW_CLOSED, .35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+@rpc("authority", "call_remote", "reliable")
+func receive_decoration_hit() -> void:
+	if active(): hit_decorations()
+
+func restore_decorations() -> void:
+	if not decorations_hit: return
+	decorations_hit = false
+	var bunting = game.window_bunting_root
+	if is_instance_valid(bunting):
+		if is_instance_valid(bunting_fall): bunting_fall.kill()
+		bunting.transform = bunting_home
+		bunting.position.y += 1.4
+		bunting.set_meta("boss_fallen", false)
+		bunting_fall = bunting.create_tween()
+		bunting_fall.tween_property(bunting, "position", bunting_home.origin, .85).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if is_instance_valid(sign_flip): sign_flip.kill()
+	game._sync_open_closed_sign(true)
