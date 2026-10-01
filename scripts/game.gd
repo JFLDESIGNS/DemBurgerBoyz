@@ -6440,6 +6440,9 @@ func _input(event: InputEvent) -> void:
 	if is_instance_valid(_empty_stock_controls) and _empty_stock_controls.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
+	if _hotdog_active() and _hotdog_challenge.projectiles.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _handle_build_swipe(event):
 		get_viewport().set_input_as_handled()
 		return

@@ -62,6 +62,7 @@ var sign_flip: Tween
 var prop_bounces: Dictionary = {}
 var smash_count = 0
 var victory_played = false
+var departure_laugh_played = false
 var result_screen: Control
 
 static func make_recipes(seed_value: int) -> Array:
@@ -268,6 +269,8 @@ func duck_music(seconds: float, reduction_db: float) -> void:
 	music.volume_db = linear_to_db(.62) - music_duck_db
 
 func play_sound(kind: String) -> void:
+	if kind == "departure_laugh":
+		play_departure_laugh(); return
 	if kind in ["impact", "smash1", "smash2"]:
 		if kind == "impact" and is_instance_valid(game.game_audio): game.game_audio.play_truck_knock(1.0)
 		if kind != "impact":
@@ -328,7 +331,7 @@ func start() -> bool:
 		return false
 	perfect = 0; mistakes = 0; pending_result = -1; milestone_history.clear()
 	game._hotdog_shift_triggered = true
-	smash_count = 0; victory_played = false
+	smash_count = 0; victory_played = false; departure_laugh_played = false
 	throw_left = 8.0
 	projectiles.clear()
 	order_left = ORDER_SECONDS; ambient_left = randf_range(12,18); chatter_left = randf_range(5,9)
@@ -582,7 +585,14 @@ func advance_phase() -> void:
 			customer.player.advance(0.0)
 			customer.show()
 			sound_event("breakout")
-		"emerge": ready_order()
+		"emerge":
+			phase = "entrance_pause"; timer = 1.5; impact_at = -1
+			play("idle_sway")
+		"entrance_pause":
+			phase = "entrance_smash_first"; start_smash()
+		"entrance_smash_first":
+			phase = "entrance_smash_second"; start_smash()
+		"entrance_smash_second": ready_order()
 		"attack":
 			phase = "smash"; start_smash()
 		"smash": ready_order()
@@ -596,6 +606,7 @@ func advance_phase() -> void:
 			phase = "defeat_smash"; timer = play("hammer_double"); impact_at = timer*.51
 		"defeat_smash":
 			phase = "defeat_sinking"; timer = play("ground_exit")
+			sound_event("departure_laugh")
 			concrete.play(); duck_music(SINK_SECONDS,10.0)
 		"defeat_sinking":
 			game._flash("CHALLENGE LOST!  Baron Brat wins — 3 orders lost", Color("FF8A80"), 6)
@@ -673,7 +684,7 @@ func show_results() -> void:
 func impact(duration: float) -> void:
 	impact_serial += 1
 	game._start_slot_camera_shake(minf(duration, .5),.075)
-	var ground_slam = phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second", "defeat_smash"]
+	var ground_slam = phase in ["smash", "idle_smash", "entrance_smash_first", "entrance_smash_second", "revive_smash_first", "revive_smash_second", "defeat_smash"]
 	if ground_slam or phase in ["attack", "defeat"]:
 		hit_decorations()
 		if host() and online(): receive_decoration_hit.rpc()
@@ -690,6 +701,8 @@ func refresh() -> void:
 		game._update_ticket_seconds_label(game.tickets[customer], customer)
 	var message = "%.1fs  •  %d / 15 perfect  •  %d / 3 orders lost" % [order_left,perfect,mistakes]
 	match phase:
+		"entrance_pause": message = "BARON BRAT IS HERE…"
+		"entrance_smash_first", "entrance_smash_second": message = "BRACE YOURSELF!"
 		"rumble", "emerge": message = "THE TRUCK IS SHAKING… BARON BRAT IS HERE!"
 		"feeding": message = "CHOMP!  %d / 15 perfect" % perfect
 		"attack", "smash": message = "%s  %d / 3 orders lost" % [failure_reason,mistakes]
@@ -703,6 +716,7 @@ func refresh() -> void:
 	label.text = "BARON BRAT CHALLENGE\n" + message
 
 func cancel() -> void:
+	if active() and phase != "rumble": play_departure_laugh()
 	if is_instance_valid(projectiles): projectiles.clear()
 	if is_instance_valid(next_order_preview):
 		game._remove_ticket(next_order_preview)
@@ -747,13 +761,14 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 		return
 	game._hotdog_shift_triggered = true
 	if active() and generation != round_id: cancel()
-	if generation != round_id: victory_played = false
+	if generation != round_id: victory_played = false; departure_laugh_played = false
 	perfect = count; mistakes = wrong; recipes = orders; generation = round_id
 	boss_position = pos; boss_scale = size_value; failure_reason = reason
 	spectator_presets = crowd; spectator_time = crowd_time
 	if not is_instance_valid(customer): _spawn()
 	var changed = phase != remote_phase or customer.order != current_recipe()
 	phase = remote_phase; timer = remaining
+	if phase == "defeat_sinking": play_departure_laugh()
 	apply_placement()
 	if phase in ["victory", "sinking", "results"]: start_victory()
 	else: start_music()
@@ -778,7 +793,7 @@ func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, ani
 	if serial != received_impact:
 		received_impact = serial
 		game._start_slot_camera_shake(.5,.075)
-		if phase in ["smash", "idle_smash", "revive_smash_first", "revive_smash_second", "defeat_smash"]: bounce_grill(serial)
+		if phase in ["smash", "idle_smash", "entrance_smash_first", "entrance_smash_second", "revive_smash_first", "revive_smash_second", "defeat_smash"]: bounce_grill(serial)
 	refresh()
 
 func bounce_grill(serial: int) -> void:
@@ -850,3 +865,15 @@ func restore_decorations() -> void:
 		bunting_fall.tween_property(bunting, "position", bunting_home.origin, .85).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	if is_instance_valid(sign_flip): sign_flip.kill()
 	game._sync_open_closed_sign(true)
+
+func play_departure_laugh() -> void:
+	if departure_laugh_played or victory_played or perfect >= TOTAL: return
+	departure_laugh_played = true
+	# A separate one-shot finishes naturally after the boss and encounter are removed.
+	var farewell = AudioStreamPlayer.new()
+	farewell.name = "BaronDepartureLaugh"
+	farewell.stream = sound_streams.get("laughboss")
+	farewell.bus = "BaronBratVoice"; farewell.pitch_scale = .70; farewell.volume_db = 1.0
+	game.add_child(farewell)
+	farewell.finished.connect(farewell.queue_free)
+	farewell.play()

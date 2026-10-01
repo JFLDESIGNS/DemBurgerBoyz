@@ -12,6 +12,8 @@ var game: Node
 var hazards: Dictionary = {}
 var next_id = 0
 var blast_count = 0
+var held_id = -1
+var drag_send_left = 0.0
 
 func setup(owner_boss: Node) -> void:
  boss=owner_boss;game=boss.game;name="HotdogProjectiles"
@@ -47,6 +49,7 @@ func spawn_local(row: Dictionary) -> void:
  var id=int(row.id)
  if hazards.has(id):return
  var h=row.duplicate(true)
+ h.holder=int(row.get("holder",0));h.carry=row.get("carry",row.target)
  var root=Node3D.new();add_child(root);h.node=root
  var body=Node3D.new();root.add_child(body);h.body=body
  var capsule=CapsuleMesh.new();capsule.radius=.035;capsule.height=.28;capsule.radial_segments=12;capsule.rings=3
@@ -69,19 +72,33 @@ func _process(delta: float) -> void:
  if not boss.active() or boss.phase in ["victory","sinking","results","defeat","defeat_laugh","defeat_smash","defeat_sinking"]:
   clear();return
  if not game.playing or get_tree().paused:return
+ if held_id>=0 and hazards.has(held_id):
+  var pos=pointer_world(get_viewport().get_mouse_position())
+  hazards[held_id].carry=pos
+  drag_send_left-=delta
+  if drag_send_left<=0:
+   drag_send_left=.05;send_command("move",held_id,pos)
  advance(delta)
 
 func advance(delta: float) -> void:
  for id in hazards.keys():
   var h=hazards[id];var old_age=float(h.age);h.age+=delta
   if old_age<RELEASE:h.start=hand_position()
+  if boss.host() and h.holder>0 and boss.online() and h.holder!=multiplayer.get_unique_id() and not multiplayer.get_peers().has(h.holder):h.holder=0
   var cooking_delta=maxf(0,h.age-maxf(old_age,RELEASE+FLIGHT))
-  if game.grill_on:h.heat=minf(COOK_SECONDS,h.heat+cooking_delta)
+  if game.grill_on and h.holder==0 and not game._is_in_warmer_zone(h.target):h.heat=minf(COOK_SECONDS,h.heat+cooking_delta)
   update_visual(h)
   if boss.host() and h.heat>=COOK_SECONDS:detonate(id)
 
 func update_visual(h: Dictionary) -> void:
  var airborne=h.age<RELEASE+FLIGHT
+ var held=int(h.holder)>0 or int(h.id)==held_id
+ h.ring.position=Vector3(h.target.x,game.GRILL_SURFACE_Y+.005,h.target.z)
+ h.ring.visible=not held
+ if held:
+  h.node.global_position=h.carry;h.body.rotation=Vector3(0,.2,-.2);h.body.scale=Vector3.ONE
+  h.label.visible=true;h.label.text="TO TRASH";h.sizzle.stream_paused=true
+  return
  if h.age<RELEASE:
   h.node.global_position=hand_position();h.body.rotation=Vector3(0,0,.4)
  elif airborne:
@@ -94,9 +111,9 @@ func update_visual(h: Dictionary) -> void:
   h.body.rotation=Vector3(0,.2,sin(h.age*42)*.055*(h.heat/COOK_SECONDS))
   h.body.scale=Vector3.ONE*(1+.10*sin(h.age*(15+h.heat*8))*h.heat/COOK_SECONDS)
   if not h.sizzle.playing:h.sizzle.play()
-  h.sizzle.stream_paused=not game.grill_on
+  h.sizzle.stream_paused=not game.grill_on or game._is_in_warmer_zone(h.target)
  h.label.visible=not airborne
- h.label.text="%.1f"%maxf(0,COOK_SECONDS-h.heat) if game.grill_on else "COOL"
+ h.label.text="%.1f"%maxf(0,COOK_SECONDS-h.heat) if game.grill_on and not game._is_in_warmer_zone(h.target) else "COOL"
  h.mat.albedo_color=Color("CE4D26").lerp(Color("FFDD45"),maxf(0,sin(h.age*(12+h.heat*10)))*h.heat/COOK_SECONDS)
 
 func detonate(id: int) -> void:
@@ -150,6 +167,7 @@ func show_blast(id: int, pos: Vector3) -> void:
 func remove_hazard(id: int) -> void:
  if not hazards.has(id):return
  var h=hazards[id];h.sizzle.stop();h.node.queue_free();h.ring.queue_free();hazards.erase(id)
+ if held_id==id:held_id=-1
 
 func clear() -> void:
  for id in hazards.keys():remove_hazard(id)
@@ -157,7 +175,7 @@ func clear() -> void:
 func broadcast() -> void:
  if not boss.host() or not boss.online():return
  var rows=[]
- for h in hazards.values():rows.append({"id":h.id,"age":h.age,"heat":h.heat,"start":h.start,"target":h.target,"round":h.round})
+ for h in hazards.values():rows.append({"id":h.id,"age":h.age,"heat":h.heat,"start":h.start,"target":h.target,"round":h.round,"holder":h.holder,"carry":h.carry})
  sync_hazards.rpc(rows,boss.generation)
 
 @rpc("authority","call_remote","reliable")
@@ -170,6 +188,106 @@ func sync_hazards(rows: Array, round_id: int) -> void:
   var id=int(row.id);present.append(id)
   if not hazards.has(id):spawn_local(row)
   else:
-   for key in ["age","heat","start","target"]:hazards[id][key]=row[key]
+   for key in ["age","heat","start","target","holder"]:hazards[id][key]=row.get(key,0)
+   if id!=held_id:hazards[id].carry=row.get("carry",row.target)
+   if int(hazards[id].holder)>0 and int(hazards[id].holder)!=local_peer() and held_id==id:held_id=-1
  for id in hazards.keys():
   if not present.has(id):remove_hazard(id)
+
+func local_peer() -> int:
+ return multiplayer.get_unique_id() if boss.online() else 1
+
+func pointer_world(screen: Vector2) -> Vector3:
+ if not is_instance_valid(game.camera):return Vector3.ZERO
+ var origin:Vector3=game.camera.project_ray_origin(screen);var ray:Vector3=game.camera.project_ray_normal(screen)
+ if absf(ray.y)<.001:return Vector3.ZERO
+ var distance=(game.GRILL_SURFACE_Y+.22-origin.y)/ray.y
+ return (origin+ray*maxf(0,distance)).clamp(Vector3(-4,game.GRILL_SURFACE_Y+.1,-3),Vector3(4,game.GRILL_SURFACE_Y+2,4))
+
+func pick_hotdog(screen: Vector2) -> int:
+ if not is_instance_valid(game.camera):return -1
+ var selected=-1;var nearest=24.0
+ for h in hazards.values():
+  if h.age<RELEASE+FLIGHT or h.holder!=0 or game.camera.is_position_behind(h.node.global_position):continue
+  var a:Vector2=game.camera.unproject_position(h.node.global_position+Vector3(-.14,0,0))
+  var b:Vector2=game.camera.unproject_position(h.node.global_position+Vector3(.14,0,0))
+  var distance=screen.distance_to(Geometry2D.get_closest_point_to_segment(screen,a,b))
+  if distance<nearest:nearest=distance;selected=int(h.id)
+ return selected
+
+func handle_input(event: InputEvent) -> bool:
+ if not boss.active() or not game.playing or game.get_tree().paused:return false
+ if held_id>=0:
+  if event is InputEventMouseMotion:
+   if hazards.has(held_id):hazards[held_id].carry=pointer_world(event.position)
+   return true
+  if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and not event.pressed:
+   var id=held_id;held_id=-1
+   send_command("trash" if game._is_over_garbage(event.position) else "drop",id,game._grill_plane_from_screen(event.position))
+   return true
+  if event is InputEventMouseButton:return true
+ if not event is InputEventMouseButton or event.button_index!=MOUSE_BUTTON_LEFT or not event.pressed:return false
+ if game.options_menu_open or game.shift_paused or game._phone_owns_pointer(event.position) or game._ui_blocks_world_click(event.position):return false
+ if game._hands_busy_with_other_tool() or is_instance_valid(game.spatula_patty) or is_instance_valid(game.dragging_patty):return false
+ var id=pick_hotdog(event.position)
+ if id<0:return false
+ held_id=id;hazards[id].carry=pointer_world(event.position);drag_send_left=0
+ send_command("grab",id,hazards[id].carry)
+ return true
+
+func send_command(kind: String, id: int, pos: Vector3) -> void:
+ if boss.host():apply_command(kind,id,pos,local_peer())
+ else:request_command.rpc_id(1,kind,id,pos,boss.generation)
+
+@rpc("any_peer","call_remote","reliable")
+func request_command(kind: String, id: int, pos: Vector3, round_id: int) -> void:
+ if not boss.host() or round_id!=boss.generation:return
+ apply_command(kind,id,pos,multiplayer.get_remote_sender_id())
+
+func apply_command(kind: String, id: int, pos: Vector3, peer: int) -> void:
+ if not boss.host() or not boss.active() or not game.playing or not pos.is_finite():return
+ if kind=="grab":
+  var allowed=hazards.has(id) and hazards[id].age>=RELEASE+FLIGHT and hazards[id].holder==0
+  for other in hazards.values():
+   if other.holder==peer:allowed=false
+  if allowed:hazards[id].holder=peer;hazards[id].carry=pos
+  if boss.online() and peer!=local_peer():claim_reply.rpc_id(peer,id,allowed,boss.generation)
+  elif not allowed and held_id==id:held_id=-1
+  broadcast();return
+ if not hazards.has(id) or int(hazards[id].holder)!=peer:return
+ var h=hazards[id]
+ if kind=="move":
+  h.carry=pos.clamp(Vector3(-4,game.GRILL_SURFACE_Y+.1,-3),Vector3(4,game.GRILL_SURFACE_Y+2,4))
+ elif kind=="trash" and game._garbage_ready_for_trash():
+  discard_local(id)
+  if boss.online():receive_discard.rpc(id,boss.generation)
+  game._physical_garbage_react()
+ elif kind in ["drop","trash"]:
+  h.holder=0
+  if not game._grill_zone_at(pos).is_empty():
+   h.target=Vector3(pos.x,game.GRILL_SURFACE_Y+.03,pos.z);h.ring.position=Vector3(pos.x,game.GRILL_SURFACE_Y+.005,pos.z)
+ broadcast()
+
+@rpc("authority","call_remote","reliable")
+func claim_reply(id: int, granted: bool, round_id: int) -> void:
+ if round_id==boss.generation and not granted and held_id==id:held_id=-1
+
+@rpc("authority","call_remote","reliable")
+func receive_discard(id: int, round_id: int) -> void:
+ if round_id==boss.generation:discard_local(id)
+
+func discard_local(id: int) -> void:
+ if not hazards.has(id):return
+ var h=hazards[id];hazards.erase(id)
+ if held_id==id:held_id=-1
+ h.sizzle.stop();h.label.hide();h.ring.queue_free()
+ var start:Vector3=h.node.global_position;var target:Vector3=game._garbage_lerp_target_world()
+ var tween=h.node.create_tween()
+ tween.tween_method(func(t:float):
+  if is_instance_valid(h.node):
+   h.node.global_position=start.lerp(target,t)+Vector3.UP*.18*sin(t*PI)
+   h.node.scale=Vector3.ONE*lerpf(1,.1,t)
+   h.body.rotation.z=t*TAU
+ ,0.0,1.0,.32)
+ tween.tween_callback(h.node.queue_free)
+ sound_once(THROW_SOUND,-7)

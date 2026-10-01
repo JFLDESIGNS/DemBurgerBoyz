@@ -43,6 +43,13 @@ func run() -> void:
 	for voice_kind in ["eat", "laugh", "wawawa", "revive_roar"]:
 		boss.play_sound(voice_kind)
 		assert(is_equal_approx(boss.music.volume_db, linear_to_db(.62)), "Boss voice must not lower music: " + voice_kind)
+	boss.advance_phase();assert(boss.phase == "entrance_pause")
+	boss._process(1.49);assert(boss.phase == "entrance_pause")
+	boss._process(.02);assert(boss.phase == "entrance_smash_first")
+	var entrance_serial = boss.impact_serial
+	boss._process(boss.timer*.6);assert(boss.impact_serial == entrance_serial+1)
+	boss.advance_phase();assert(boss.phase == "entrance_smash_second")
+	boss._process(boss.timer*.6);assert(boss.impact_serial == entrance_serial+2)
 	boss.advance_phase();assert(boss.phase == "ready")
 	assert(boss.next_order_preview.order == boss.recipe_at(1))
 	assert(g.tickets[boss.next_order_preview].visible)
@@ -162,6 +169,7 @@ func run() -> void:
 			assert(boss.phase == "ready" and boss.order_left == boss.ORDER_SECONDS)
 	assert(boss.milestone_history == [5,10])
 	assert(boss.phase == "victory")
+	assert(not boss.departure_laugh_played)
 	assert(boss.clip == "slump_defeat", "Final victory must use the real collapse")
 	assert(boss.victory_played and not boss.music.playing)
 	boss.advance_phase();assert(boss.phase == "sinking")
@@ -181,7 +189,7 @@ func run() -> void:
 	assert(g.customers.size() == 1)
 	assert(not g._challenge_blocks_spawns())
 	assert(boss.start())
-	boss.advance_phase(); boss.advance_phase()
+	boss.advance_phase(); boss.advance_phase(); boss.advance_phase(); boss.advance_phase(); boss.advance_phase()
 	for loss in 3:
 		boss._process(17.01)
 		assert(boss.mistakes == loss+1)
@@ -195,6 +203,7 @@ func run() -> void:
 	boss._process(boss.timer*.6)
 	assert(is_instance_valid(patty._done_jump_tw) and patty.cook_time==3.0 and not patty.flipped_once)
 	boss.advance_phase(); assert(boss.phase == "defeat_sinking" and boss.clip == "ground_exit")
+	assert(boss.departure_laugh_played and g.get_node("BaronDepartureLaugh").playing)
 	boss._process(boss.SINK_SECONDS+.01)
 	assert(not boss.active() and not boss.music.playing and normal.visible)
 	# Live hidden controls update the scene and persist the exact placement.

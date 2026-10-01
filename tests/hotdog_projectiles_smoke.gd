@@ -16,13 +16,30 @@ func run():
  var g=load("res://scenes/main.tscn").instantiate();g.set_script(load("res://tests/hotdog_challenge_fixture.gd"));root.add_child(g)
  g.playing=true;g._kitchen_ready=true;g.stations=[{"items":[],"patties":[]}]
  var boss=g._ensure_hotdog_challenge();boss.set_process(false);var hazards=boss.projectiles;hazards.set_process(false)
- assert(boss.start());boss.advance_phase();boss.advance_phase()
+ assert(boss.start())
+ for _i in 5:boss.advance_phase()
  boss.throw_left=.01;boss.ambient_left=99;boss._process(.1)
  assert(boss.phase=="throw" and boss.clip=="throw_hotdog" and hazards.hazards.size()==1)
  var remaining=boss.order_left;var recipe=boss.customer.order.duplicate();boss.advance_phase()
  assert(boss.phase=="ready" and boss.order_left==remaining and boss.customer.order==recipe)
  hazards.clear()
  var pos=Vector3(0,g.GRILL_SURFACE_Y+.03,g.GRILL_SURFACE_Z)
+ hazards.spawn_local({"id":50,"age":2.0,"heat":.8,"start":Vector3(0,3,7),"target":pos,"round":boss.generation})
+ g.camera.position=Vector3(0,2.5,-2);g.camera.look_at(pos)
+ assert(hazards.pick_hotdog(g.camera.unproject_position(pos))==50,"Hotdog can be picked by its visible shape")
+ g.grill_on=true
+ hazards.apply_command("grab",50,pos+Vector3.UP*.2,1)
+ assert(hazards.hazards[50].holder==1)
+ hazards.apply_command("grab",50,pos,2);assert(hazards.hazards[50].holder==1,"Second player cannot steal a held hotdog")
+ hazards.advance(3);assert(is_equal_approx(hazards.hazards[50].heat,.8),"Held fuse must pause")
+ hazards.apply_command("trash",50,pos,2);assert(hazards.hazards.has(50),"Only holder can dispose")
+ hazards.apply_command("drop",50,pos,1);hazards.advance(.2)
+ assert(is_equal_approx(hazards.hazards[50].heat,1.0),"Drop resumes remaining heat without resetting")
+ hazards.apply_command("grab",50,pos,1)
+ var fill_before=g.garbage_fill
+ hazards.apply_command("trash",50,pos,1)
+ assert(not hazards.hazards.has(50) and hazards.blast_count==0,"Trashed hotdogs never explode")
+ assert(g.garbage_fill==fill_before+1)
  var near=Patty.new();near.net_id=9001;g.add_child(near);near.position=pos+Vector3(.253,0,0)
  var far=Patty.new();far.net_id=9002;g.add_child(far);far.position=pos+Vector3(.255,0,0);g.grill=[near,far]
  hazards.spawn_local({"id":100,"age":0.0,"heat":0.0,"start":Vector3(0,3,7),"target":pos,"round":boss.generation})
@@ -46,5 +63,7 @@ func run():
  hazards.boss=boss
  hazards.spawn_local({"id":202,"age":0.0,"heat":0.0,"start":Vector3(0,3,7),"target":pos,"round":boss.generation})
  boss.cancel();assert(hazards.hazards.is_empty(),"Ending challenge clears all bombs")
- print("HOTDOG_PROJECTILES_OK: throw/recovery, 2 heated seconds, cold-grill pause, 10-inch boundary, client synchronization, cleanup")
+ await create_timer(.4).timeout
+ g.queue_free();await process_frame
+ print("HOTDOG_PROJECTILES_OK: throw/recovery, 2 heated seconds, cold-grill pause, 10-inch boundary, client synchronization, pickup ownership, fuse pause, trash disposal, cleanup")
  quit()
