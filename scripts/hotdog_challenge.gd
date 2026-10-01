@@ -32,7 +32,7 @@ var impact_serial = 0
 var received_impact = 0
 var received_slam = -1
 var generation = 0
-var boss_position = Vector3(0, -.3248, 6.3)
+var boss_position = Vector3(0, -.3248, 6.9096)
 var boss_scale = 1.0
 var order_left = ORDER_SECONDS
 var ambient_left = 14.0
@@ -98,6 +98,12 @@ func setup(owner_game: Node) -> void:
 			boss_position.y -= .3048
 			config.set_value("boss", "position", boss_position)
 			config.set_value("boss", "height_revision", 1)
+			config.save(PLACEMENT_FILE)
+		# Move existing saved placements two feet farther from the truck once.
+		if int(config.get_value("boss", "distance_revision", 0)) < 1:
+			boss_position.z += .6096
+			config.set_value("boss", "position", boss_position)
+			config.set_value("boss", "distance_revision", 1)
 			config.save(PLACEMENT_FILE)
 	name = "HotdogChallenge"
 	label = Label.new()
@@ -183,6 +189,7 @@ func update_placement() -> void:
 	config.set_value("boss", "position", boss_position)
 	config.set_value("boss", "scale", boss_scale)
 	config.set_value("boss", "height_revision", 1)
+	config.set_value("boss", "distance_revision", 1)
 	config.save(PLACEMENT_FILE)
 	broadcast()
 
