@@ -8,7 +8,8 @@ func run() -> void:
 	var boss = load("res://scripts/hotdog_boss_customer.gd").new()
 	root.add_child(boss)
 	assert(is_instance_valid(boss.rig) and is_instance_valid(boss.player))
-	assert(boss.player.get_animation_list().size() == 13)
+	assert(boss.player.get_animation_list().size() == 14)
+	assert(boss.player.has_animation("throw_hotdog"))
 	var player: AnimationPlayer = boss.player
 	var rig: Skeleton3D = boss.rig
 	var root_bone := rig.find_bone("ROOT")
@@ -52,7 +53,7 @@ func run() -> void:
 	boss.begin_ground_exit(); boss.update_ground_exit(.5)
 	assert(rig.get_bone_global_pose(crown).origin.distance_to(landed.origin) < .001, "Sinking must not put the crown back on his head")
 	controller.queue_free()
-	print("HOTDOG_BODY_SPIN_OK duration=", length * .22, " seconds; 13 clips; fake and final slumps; fallen crown preserved")
+	print("HOTDOG_BODY_SPIN_OK duration=", length * .22, " seconds; 14 clips; fake and final slumps; fallen crown preserved")
 	boss.queue_free()
 	await process_frame
 	quit()

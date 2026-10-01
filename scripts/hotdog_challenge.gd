@@ -36,6 +36,8 @@ var boss_position = Vector3(0, -.3248, 7.5192)
 var boss_scale = 1.0
 var order_left = ORDER_SECONDS
 var ambient_left = 14.0
+var throw_left = 8.0
+var projectiles: Node3D
 var chatter_left = 7.0
 var voice_left = 0.0
 var music_duck_left = 0.0
@@ -94,6 +96,9 @@ static func make_recipes(seed_value: int) -> Array:
 
 func setup(owner_game: Node) -> void:
 	game = owner_game
+	projectiles = preload("res://scripts/hotdog_projectiles.gd").new()
+	projectiles.setup(self)
+	add_child(projectiles)
 	var config = ConfigFile.new()
 	if config.load(PLACEMENT_FILE) == OK:
 		boss_position = config.get_value("boss", "position", boss_position)
@@ -324,6 +329,8 @@ func start() -> bool:
 	perfect = 0; mistakes = 0; pending_result = -1; milestone_history.clear()
 	game._hotdog_shift_triggered = true
 	smash_count = 0; victory_played = false
+	throw_left = 8.0
+	projectiles.clear()
 	order_left = ORDER_SECONDS; ambient_left = randf_range(12,18); chatter_left = randf_range(5,9)
 	laugh_left = randf_range(12,22); eat_sound_played = false
 	recipes = make_recipes(randi())
@@ -535,8 +542,13 @@ func _process(delta: float) -> void:
 		return
 	if phase == "ready":
 		order_left = maxf(0, order_left-delta)
-		ambient_left -= delta; chatter_left -= delta; laugh_left -= delta
+		ambient_left -= delta; chatter_left -= delta; laugh_left -= delta; throw_left -= delta
 		if order_left <= 0: resolve_result(false, "TIME UP!")
+		elif throw_left <= 0 and projectiles.hazards.size() < 3:
+			phase = "throw"; customer.is_waiting = false
+			timer = play("throw_hotdog"); impact_at = -1
+			projectiles.launch(); throw_left = randf_range(12,17)
+			broadcast()
 		elif ambient_left <= 0:
 			phase = "idle_smash"; customer.is_waiting = false
 			start_smash()
@@ -574,7 +586,7 @@ func advance_phase() -> void:
 		"attack":
 			phase = "smash"; start_smash()
 		"smash": ready_order()
-		"idle_smash":
+		"idle_smash", "throw":
 			phase = "ready"; customer.is_waiting = true
 			play(["idle_sway", "idle_wave", "idle_bounce"][randi()%3])
 		"defeat":
@@ -681,6 +693,7 @@ func refresh() -> void:
 		"rumble", "emerge": message = "THE TRUCK IS SHAKING… BARON BRAT IS HERE!"
 		"feeding": message = "CHOMP!  %d / 15 perfect" % perfect
 		"attack", "smash": message = "%s  %d / 3 orders lost" % [failure_reason,mistakes]
+		"throw": message = "HOTDOG BOMB! Move burgers out of the ring!"
 		"idle_smash": message = "GROUND SMASH!  Timer paused — %.1fs left" % order_left
 		"defeat", "defeat_laugh", "defeat_smash", "defeat_sinking": message = "CHALLENGE LOST!  3 orders lost — BARON BRAT WINS!"
 		"slump": message = "20 PERFECT!  Is he… finished?" if perfect == FINAL_STAGE else "%d PERFECT!  He's down…" % perfect
@@ -690,6 +703,7 @@ func refresh() -> void:
 	label.text = "BARON BRAT CHALLENGE\n" + message
 
 func cancel() -> void:
+	if is_instance_valid(projectiles): projectiles.clear()
 	if is_instance_valid(next_order_preview):
 		game._remove_ticket(next_order_preview)
 		next_order_preview.queue_free()
@@ -723,6 +737,7 @@ func cancel() -> void:
 func broadcast() -> void:
 	if not host() or not online(): return
 	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason, spectator_presets, spectator_time, decorations_hit)
+	projectiles.broadcast()
 
 @rpc("authority", "call_remote", "reliable")
 func sync_state(remote_phase: String, count: int, wrong: int, orders: Array, animation: String, remaining: float, serial: int, round_id: int, seconds_left: float = ORDER_SECONDS, pos: Vector3 = Vector3(0,-.02,6.3), size_value: float = 1.0, reason: String = "WRONG BURGER!", crowd: Array = [], crowd_time: float = 0.0, hit_props: bool = false) -> void:

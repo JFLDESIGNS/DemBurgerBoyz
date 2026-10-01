@@ -15334,6 +15334,21 @@ func _trash_single_grill_patty(patty: Area3D) -> void:
 	_trash_single_grill_patty_local(patty)
 
 
+func _boss_destroy_grill_patty(patty: Area3D) -> void:
+	if not is_instance_valid(patty): return
+	var net_id := int(patty.net_id)
+	if dragging_patty == patty:
+		dragging_patty = null; drag_did_move = false
+		if is_instance_valid(game_audio): game_audio.set_slide_moving(false)
+	if slide_inertia_patty == patty: _stop_patty_slide_inertia()
+	_mp_release_scoop_if(patty)
+	_mp_patty_pose_state.erase(net_id)
+	_mp_remote_patty_targets.erase(net_id)
+	for i in grill.size():
+		if grill[i] == patty: grill[i] = null
+	_return_patty_to_spawn_pool(patty)
+
+
 func _trash_single_grill_patty_local(patty: Area3D) -> void:
 	if patty == null or not is_instance_valid(patty):
 		return

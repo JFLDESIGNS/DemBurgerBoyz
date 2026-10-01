@@ -13,6 +13,7 @@ func run() -> void:
 	boss.set_process(false)
 	var key = InputEventKey.new();key.keycode = KEY_PERIOD;key.pressed = true
 	assert(boss.handle_key(key));assert(boss.phase == "rumble")
+	boss.throw_left = 1000.0 # Projectile cadence is covered by hotdog_projectiles_smoke.
 	assert(boss.music.playing and boss.music.stream.loop)
 	assert(not normal.visible and normal.process_mode == Node.PROCESS_MODE_DISABLED)
 	assert(g._challenge_blocks_spawns())
