@@ -939,6 +939,8 @@ func _tick_cook_visuals(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and game.has_method("_boss_speech_active") and game._boss_speech_active(): return
 	_update_cook_halo()
 	_update_flip_smoke(delta)
 	_update_frozen_ball_heat_motion(delta)

@@ -3,12 +3,17 @@ extends SubViewportContainer
 ## Lightweight 3D product turntable used by the phone marketplace.
 var turntable: Node3D = null
 var _dragging := false
-var _auto_resume := 0.0
+var _auto_resume := 1.2
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	set_process(true)
+	visibility_changed.connect(func():
+		if is_visible_in_tree() and is_instance_valid(turntable):
+			turntable.rotation.y = 0.0
+			_auto_resume = 1.2
+	)
 
 
 func bind_turntable(node: Node3D) -> void:

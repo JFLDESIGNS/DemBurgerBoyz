@@ -16,7 +16,10 @@ void fragment() {
  float depth = 7.0 + 2.5 * sin(index * 1.73 + 0.4);
  if (UV.y > 1.0 - (2.0 + triangle * depth) / max(paper_height, 1.0)) { discard; }
 
-	vec4 paper = texture(blank_atlas, clamp(UV, vec2(0.001), vec2(0.999)));
+	// Sample inside each atlas half's printed outline while retaining the paper mesh edge.
+	float half_offset = UV.x < 0.5 ? 0.0 : 0.5;
+	vec2 paper_uv = vec2(half_offset + 0.008 + fract(UV.x * 2.0) * 0.484, 0.008 + UV.y * 0.984);
+	vec4 paper = texture(blank_atlas, paper_uv);
 	float gray = dot(paper.rgb, vec3(0.299, 0.587, 0.114));
 	paper.rgb = mix(vec3(gray), paper.rgb, 0.8);
 	if (UV.x < 0.5) {

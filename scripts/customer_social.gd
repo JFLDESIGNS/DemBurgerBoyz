@@ -8,9 +8,9 @@ var couples: Array = []
 var walkers: Array = []
 
 static func outcome(roll: float) -> String:
-	if roll < 0.50: return "reply"
-	if roll < 0.75: return "away"
-	if roll < 0.85: return "love"
+	if roll < 0.65: return "reply"
+	if roll < 0.85: return "away"
+	if roll < 0.87: return "love"
 	return "quiet"
 
 func _ready() -> void:
@@ -40,7 +40,7 @@ func _process(delta: float) -> void:
 	walker_left -= delta
 	var waiting = game.customers.filter(eligible)
 	if encounter_left <= 0.0:
-		encounter_left = randf_range(9.0, 17.0)
+		encounter_left = randf_range(5.0, 9.0)
 		if waiting.size() >= 2:
 			var a = waiting.pick_random()
 			var nearby = waiting.filter(func(c): return c != a and c.position.distance_to(a.position) < 3.5)
@@ -53,9 +53,10 @@ func _process(delta: float) -> void:
 		cat_left = randf_range(7.0, 12.0)
 		var cat = game.window_cat
 		if is_instance_valid(cat) and cat.visible and cat._state == "peek" and not cat._delivery_peek_active and not waiting.is_empty():
-			var c = waiting.pick_random()
+			var favorites = waiting.filter(func(person): return str(person.get_custom_character_preset().get("name", "")).to_lower() == "char33" and cat.position.distance_to(person.position) < 4.0)
+			var c = favorites.pick_random() if not favorites.is_empty() else waiting.pick_random()
 			if cat.position.distance_to(c.position) < 4.0:
-				var kind = "cat_love" if randf() < .5 else "cat_swat"
+				var kind = "cat_love" if not favorites.is_empty() or randf() < .5 else "cat_swat"
 				encounter(c,null,kind)
 				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(c),-1,kind)
 	if walker_left <= 0.0:
@@ -94,12 +95,12 @@ func wawa(c, pitch := 1.0) -> void:
 	var audio = AudioStreamPlayer3D.new()
 	audio.stream = preload("res://scripts/customer_voice.gd").stream(c.get_customer_voice(),false)
 	audio.bus = "SFX"
-	audio.pitch_scale = pitch
+	audio.pitch_scale = pitch * randf_range(0.93, 1.12)
 	audio.volume_db = -8.0
 	audio.unit_size = 5.0
 	c.add_child(audio)
-	audio.play()
-	audio.create_tween().tween_interval(.65).finished.connect(audio.queue_free)
+	audio.play(randf_range(0.0, maxf(0.0, audio.stream.get_length() - 1.1)))
+	audio.create_tween().tween_interval(randf_range(.55, 1.0)).finished.connect(audio.queue_free)
 
 func heart(c) -> void:
 	var label = Label3D.new()
@@ -108,10 +109,11 @@ func heart(c) -> void:
 	label.font_size = 64
 	label.pixel_size = .008
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.position.y = 2.0
+	label.position.y = 2.4
+	label.no_depth_test = true
 	c.add_child(label)
 	var tween = label.create_tween().set_parallel(true)
-	tween.tween_property(label,"position:y",2.6,2.0)
+	tween.tween_property(label,"position:y",3.0,2.0)
 	tween.tween_property(label,"modulate:a",0.0,2.0)
 	tween.chain().tween_callback(label.queue_free)
 
@@ -128,14 +130,16 @@ func encounter(a,b,kind: String) -> void:
 		create_tween().tween_interval(.75).finished.connect(func():
 			var animal = cat_ref.get_ref()
 			var person = person_ref.get_ref()
-			if is_instance_valid(animal) and is_instance_valid(person) and animal._state == "peek": animal.react_to_customer(person,kind == "cat_love"))
+			if is_instance_valid(animal) and is_instance_valid(person) and animal._state == "peek":
+				animal.react_to_customer(person,kind == "cat_love")
+				if kind == "cat_love": animal.wants_meow.emit(1.2))
 		return
 	if not is_instance_valid(b): return
 	glance(a,b.global_position + Vector3(0,1.5,0))
 	wawa(a)
 	var first_ref = weakref(a)
 	var second_ref = weakref(b)
-	create_tween().tween_interval(.8).finished.connect(func():
+	create_tween().tween_interval(randf_range(.65, 1.2)).finished.connect(func():
 		var first = first_ref.get_ref()
 		var second = second_ref.get_ref()
 		if not eligible(first) or not eligible(second): return
@@ -165,14 +169,13 @@ func pair_customers(a,b) -> void:
 			if is_instance_valid(ar.get_ref()): heart(ar.get_ref())
 			if is_instance_valid(br.get_ref()): heart(br.get_ref()))
 	glance(b,a.global_position+Vector3(0,1.5,0),4.0)
-	# One shared slip holds both meals; serve them sequentially through normal scoring.
+	# Keep both ordinary tickets, adding only a heart beside each order number.
 	var elapsed_a = a.order_elapsed_sec
 	var elapsed_b = b.order_elapsed_sec
 	game._remove_ticket(a); game._remove_ticket(b)
 	game._create_ticket(a); game._create_ticket(b)
 	a.order_elapsed_sec = elapsed_a
 	b.order_elapsed_sec = elapsed_b
-	if game.selected_customer == b: game.selected_customer = a
 	game._highlight_tickets()
 
 func partner(c):
@@ -182,28 +185,13 @@ func partner(c):
 func decorate_ticket(c, box: VBoxContainer) -> void:
 	var other = partner(c)
 	if not is_instance_valid(other): return
-	var label = Label.new()
-	label.text = "♥ TABLE FOR TWO — " + ("MEAL 1 + 2" if bool(c.get_meta("couple_first",false)) else "MEAL 2 / 2")
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.custom_minimum_size.x = 138
-	label.add_theme_font_size_override("font_size",14)
-	label.add_theme_color_override("font_color",Color("A34B66"))
-	box.add_child(label)
-	if bool(c.get_meta("couple_first",false)):
-		var meal = Label.new()
-		var lines: Array[String] = ["PARTNER'S MEAL (NEXT)"]
-		for spec in game._ticket_line_specs(other.order): lines.append(spec.label)
-		meal.text = "\n".join(lines)
-		meal.add_theme_font_size_override("font_size",13)
-		meal.add_theme_color_override("font_color",Color("885938"))
-		box.add_child(meal)
+	for child in box.get_children():
+		if child is Label:
+			child.text += " ♥"
+			return
 
 func update_tickets() -> void:
-	for c in game.tickets:
-		var other = partner(c)
-		if is_instance_valid(other) and not bool(c.get_meta("couple_first",false)) and game.tickets.has(other):
-			game.tickets[c].hide()
-			if game.tickets[c].has_meta("ticket_motion"): game.tickets[c].get_meta("ticket_motion").set_active(false)
+	pass # Normal ticket selection and visibility also apply to couples.
 
 @rpc("authority", "call_remote", "reliable")
 func couple_walk(pair: Array, direction: float = 1.0) -> void:

@@ -1,15 +1,20 @@
 extends Node
 # Host-owned mobile fulfillment. Visuals are reconstructed from a revisioned snapshot.
 const DRIVER_APPROACH = 1.0
-const DRIVER_WALK = 2.65
+const DRIVER_RUN = 1.35
+const DRIVER_SLIDE = .55
+const DRIVER_FACE = .20
+const DRIVER_STEP_IN = .55
+const DRIVER_WALK = DRIVER_RUN + DRIVER_SLIDE + DRIVER_FACE + DRIVER_STEP_IN
 const BURGER_BAG_FLIGHT = 1.0
 const BAG_PICKUP_FLIGHT = .95
 const SIDE_BAG_FLIGHT = .9
 var side_visuals: Dictionary = {}
 const DRIVER_RETURN = 1.5
-const DRIVER_GRAB = 1.1
+const DRIVER_GRAB = .65
+const DRIVER_GRAB_SPEED = 1.1 / DRIVER_GRAB
 const DRIVER_RETREAT = .48
-const DRIVER_TURN = .38
+const DRIVER_TURN = .22
 const DRIVER_EXIT = .85
 const DATA = preload("res://scripts/game_data.gd")
 const PACK = "res://models/burgerpack/try2/"
@@ -368,7 +373,7 @@ func burger_ready() -> bool:
  var st:Dictionary=game.stations[0]
  var items:Array=st.items.duplicate()
  if not items.has("bun_top"):items.append("bun_top")
- return not st.get("patties",[]).is_empty() and bool(DATA.compare_orders(items,DATA.order_burger_items(state.get("items",[]))).get("perfect",false)) and not game._station_sauce_in_flight(0)
+ return not st.get("patties",[]).is_empty() and bool(DATA.compare_orders(game._station_order_items(0, items),state.get("items",[])).get("perfect",false)) and not game._station_sauce_in_flight(0)
 func consume_build() -> void:
  var pic=game._make_review_burger_snapshot(0)
  if pic!=null:state["photo"]=pic.get_image().save_png_to_buffer()
@@ -514,7 +519,10 @@ func update_visuals(_delta: float) -> void:
    arrival_screeched=false
    courier.remove_meta("slide_sounded")
    courier.remove_meta("grab_started")
+   courier.remove_meta("step_in_started")
   courier.set_meta("footstep_sliding",false)
+  var feet=courier.get_node_or_null("CharacterFootsteps")
+  if feet:feet.stop_skid()
   courier.rotation.z=0.0
   if phase=="pickup":courier.play_street_run(1.45);courier.set_meta("courier_running",true)
   elif phase=="collected":
@@ -531,7 +539,7 @@ func update_visuals(_delta: float) -> void:
  var ui=game.get_node("UI/Root")
  var screen=game._station_stack_screen_center(0) if not game.stations.is_empty() else game.camera.unproject_position(base)
  var center=ui.get_global_transform_with_canvas().affine_inverse()*screen
- paper3d.visible=phase in ["paper","wrapping"]
+ paper3d.visible=phase=="paper"
  paper3d.position=napkins.position.lerp(base,clampf(age/.55,0,1)) if phase=="paper" else base
  paper3d.scale=Vector3.ONE*lerpf(.6,1,clampf(age/.55,0,1)) if phase=="paper" else Vector3.ONE*maxf(.1,1-age/1.2)
  paper_outline.visible=phase=="paper" and burger_ready()
@@ -577,22 +585,39 @@ func update_visuals(_delta: float) -> void:
   courier.visible=age>DRIVER_APPROACH
   if age>=DRIVER_APPROACH-.35 and not arrival_screeched:
    arrival_screeched=true;screech.play()
-  var run_t=clampf((age-DRIVER_APPROACH)/DRIVER_WALK,0,1)
+  var walk_age=maxf(0,age-DRIVER_APPROACH)
   var lane=Vector3(ledge.position.x,.1,3.9)
   var grab_spot=Vector3(ledge.position.x,.1,2.45)
-  if run_t<.72:
-   courier.position=Vector3(5.5,.1,3.9).lerp(lane,run_t/.72)
+  var slide_start=lane+Vector3(.85,0,0)
+  var sliding=walk_age>=DRIVER_RUN and walk_age<DRIVER_RUN+DRIVER_SLIDE
+  courier.set_meta("footstep_sliding",sliding)
+  var feet=courier.get_node_or_null("CharacterFootsteps")
+  if walk_age<DRIVER_RUN:
+   courier.position=Vector3(5.5,.1,3.9).lerp(slide_start,walk_age/DRIVER_RUN)
    courier.rotation.y=-PI*.5
+  elif sliding:
+   var slide_t=clampf((walk_age-DRIVER_RUN)/DRIVER_SLIDE,0,1)
+   courier.position=slide_start.lerp(lane,1.0-pow(1.0-slide_t,2))
+   courier.rotation.y=-PI*.5
+   if not courier.has_meta("slide_sounded"):
+    courier.set_meta("slide_sounded",true)
+    if is_instance_valid(courier._anim_player):courier._anim_player.pause()
+    if feet:feet.play_skid(DRIVER_SLIDE*(1.0-slide_t))
   else:
-   var approach=clampf((run_t-.72)/.28,0,1)
+   if feet:feet.stop_skid()
+   var turn_age=walk_age-DRIVER_RUN-DRIVER_SLIDE
+   var approach=clampf((turn_age-DRIVER_FACE)/DRIVER_STEP_IN,0,1)
    courier.position=lane.lerp(grab_spot,approach)
-   courier.rotation.y=lerpf(-PI*.5,-PI,smoothstep(0,.45,approach))
-  courier.rotation.z=0.0
-  courier.set_meta("courier_running",courier.visible and run_t<1)
-  if run_t>=1:
-   var grab_time=clampf(age-DRIVER_APPROACH-DRIVER_WALK,0,DRIVER_GRAB)
+   courier.rotation.y=lerpf(-PI*.5,-PI,smoothstep(0,DRIVER_FACE,turn_age))
+   if turn_age<DRIVER_FACE and is_instance_valid(courier._anim_player):courier._anim_player.pause()
+   if turn_age>=DRIVER_FACE and walk_age<DRIVER_WALK and not courier.has_meta("step_in_started"):
+    courier.set_meta("step_in_started",true);courier.play_street_run(1.45)
+  courier.rotation.z=.16*sin(PI*clampf((walk_age-DRIVER_RUN)/DRIVER_SLIDE,0,1)) if sliding else 0.0
+  courier.set_meta("courier_running",courier.visible and (walk_age<DRIVER_RUN or (walk_age>=DRIVER_RUN+DRIVER_SLIDE+DRIVER_FACE and walk_age<DRIVER_WALK)))
+  if walk_age>=DRIVER_WALK:
+   var grab_time=clampf(walk_age-DRIVER_WALK,0,DRIVER_GRAB)*DRIVER_GRAB_SPEED
    if not courier.has_meta("grab_started"):
-    courier.set_meta("grab_started",true);courier.play_courier_grab()
+    courier.set_meta("grab_started",true);courier.play_courier_grab(DRIVER_GRAB_SPEED)
     if is_instance_valid(courier._anim_player):courier._anim_player.seek(grab_time,false)
    if grab_time>=.50:
     bag.position=(ledge.position+Vector3(0,.05,0)).lerp(courier_grab_position(),smoothstep(.50,.72,grab_time))

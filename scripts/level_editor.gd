@@ -1590,16 +1590,11 @@ func _make_dressing_napkin() -> MeshInstance3D:
 
 
 func _make_napkin_mat(darkness: float = 0.0, pattern_scale: float = 1.0) -> StandardMaterial3D:
-	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
-	for y in 8:
-		for x in 8:
-			var check := int(floor(float(x) / 2.0) + floor(float(y) / 2.0)) % 2 == 0
-			img.set_pixel(x, y, Color(0.82, 0.10, 0.14) if check else Color(0.96, 0.96, 0.94))
-	var tex := ImageTexture.create_from_image(img)
 	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
+	mat.albedo_texture = preload("res://assets/props/counter_napkin_checker.png")
+	mat.texture_repeat = false
 	mat.albedo_color = _napkin_tint(darkness)
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	var s: float = clampf(pattern_scale, 0.25, 24.0)
 	mat.uv1_scale = Vector3(s, s, 1.0)
 	mat.roughness = 0.82

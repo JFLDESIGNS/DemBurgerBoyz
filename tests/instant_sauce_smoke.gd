@@ -1,6 +1,7 @@
 extends SceneTree
 func _initialize() -> void: call_deferred("run")
 func run() -> void:
+	create_timer(20.0).timeout.connect(func(): quit(1))
 	var g = load("res://scenes/main.tscn").instantiate()
 	g.set_script(load("res://tests/instant_sauce_fixture.gd"))
 	root.add_child(g)
@@ -9,6 +10,7 @@ func run() -> void:
 	g.supply_stock["ketchup"] = 4
 	g.supply_stock["mustard"] = 4
 	var customer = Node3D.new(); g.add_child(customer)
+	g.selected_customer = customer
 	var ticket = Control.new(); g.add_child(ticket)
 	var lines = VBoxContainer.new(); ticket.add_child(lines)
 	ticket.set_meta("lines_box", lines); g.tickets[customer] = ticket
@@ -24,12 +26,21 @@ func run() -> void:
 		assert(g.supply_stock[sauce] == 3, "Duplicate click must not spend stock twice")
 	assert(g.pours.size() == 2)
 	var previous_pour = g.pours[0]
+	assert(g.stations[0].sauce_reveal.ketchup.progress == 0.0, "Sauce must stay hidden during bottle travel")
+	assert(g._station_sauce_in_flight(0), "Serving must wait for visible sauce")
+	var reveal_material := ShaderMaterial.new()
+	reveal_material.shader = load("res://shaders/sauce_reveal.gdshader")
+	g.stations[0].sauce_reveal.ketchup.material = reveal_material
+	g._set_condiment_reveal(previous_pour, 0.5)
+	assert(is_equal_approx(reveal_material.get_shader_parameter("progress"), 0.5), "Reveal must follow pour progress")
 	g.stations[0].items = ["bun_bottom", "patty"]
 	g._refresh_ticket_checkmarks()
 	g._deposit_condiment_entry(previous_pour)
 	assert(not labels.ketchup.completed and not g.stations[0].items.has("ketchup"), "Old animation must not add sauce to the next burger")
 	g._request_condiment_add("ketchup", 0)
 	assert(labels.ketchup.completed and g.supply_stock.ketchup == 2, "Returning bottle must not delay the next accepted click")
+	g._set_condiment_reveal(previous_pour, 1.0)
+	assert(g.stations[0].sauce_reveal.ketchup.progress == 0.0, "Previous pour must not reveal the next burger's sauce")
 	g.stations[0].items = []; g._refresh_ticket_checkmarks()
 	g._request_condiment_add("mustard", 0)
 	assert(not labels.mustard.completed and g.supply_stock.mustard == 3, "No patty must reject sauce")

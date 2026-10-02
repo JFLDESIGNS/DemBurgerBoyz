@@ -20,8 +20,8 @@ func setup(g: Node, parent: Control) -> void:
  counter.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
  counter.offset_left=-170
  counter.offset_right=170
- counter.offset_top=36
- counter.offset_bottom=69
+ counter.offset_top=6
+ counter.offset_bottom=39
  counter.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
  counter.add_theme_font_size_override("font_size",14)
  counter.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
@@ -38,9 +38,6 @@ func _process(_delta: float) -> void:
   streak += 1
  counter.modulate.a = move_toward(counter.modulate.a, 1.0 if game.playing and streak > 0 else 0.0, _delta * 3.0)
  counter.visible = counter.modulate.a > .001
- var ui_scale := maxf(.1,counter.get_global_transform_with_canvas().y.length())
- counter.offset_top=36.0-35.0/ui_scale
- counter.offset_bottom=counter.offset_top+33.0
  if streak > 0: counter.text="★  PERFECT STREAK  %d" % streak
 func show_app(id: String) -> void:
  page.visible=id=="orders"

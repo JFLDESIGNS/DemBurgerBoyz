@@ -10,6 +10,7 @@ var last_contact := -1
 var last_animation := ""
 var cooldown := 0.0
 var point_voice: AudioStreamPlayer3D
+var skid_audio: AudioStreamPlayer3D
 
 static func make_step(cartoon: bool) -> AudioStreamWAV:
  var stream := AudioStreamWAV.new()
@@ -49,7 +50,7 @@ func _process(delta: float) -> void:
  _update_point_voice()
  if bool(actor.get_meta("delivery_driver",false)) or bool(actor.get_meta("recruited_running",false)) or audio.stream == COURIER_RUN:
   var recruited := bool(actor.get_meta("recruited_running",false))
-  var running := actor.is_visible_in_tree() and (bool(actor.get_meta("courier_running",false)) or recruited)
+  var running := actor.is_visible_in_tree() and not bool(actor.get_meta("footstep_sliding",false)) and (bool(actor.get_meta("courier_running",false)) or recruited)
   if running:
    if audio.stream != COURIER_RUN or not audio.playing:
     audio.stream=COURIER_RUN;audio.volume_db=-19 if recruited else -10;audio.pitch_scale=1.15;audio.play()
@@ -79,14 +80,23 @@ func _process(delta: float) -> void:
  audio.pitch_scale = 1.07 if contact == 0 else .96
  audio.play()
 
-func play_skid() -> void:
- audio.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
- audio.volume_db = -9.0
- audio.pitch_scale = 1.35
- audio.play()
- # Hold the squeal through the driver's longer slide, then stop before turning.
- get_tree().create_timer(.75).timeout.connect(func():
-  if is_instance_valid(audio): audio.stop())
+func play_skid(duration: float = .75) -> void:
+ if not is_instance_valid(skid_audio):
+  skid_audio = AudioStreamPlayer3D.new()
+  skid_audio.bus = "SFX"
+  skid_audio.unit_size = 3.0
+  skid_audio.max_distance = 22.0
+  skid_audio.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
+  skid_audio.volume_db = -9.0
+  skid_audio.pitch_scale = 1.35
+  add_child(skid_audio)
+ audio.stop()
+ skid_audio.play()
+ # A separate player keeps the skid timeout from cutting off returning footsteps.
+ get_tree().create_timer(duration).timeout.connect(stop_skid)
+
+func stop_skid() -> void:
+ if is_instance_valid(skid_audio): skid_audio.stop()
 
 func _update_point_voice() -> void:
  var player = actor.get("_anim_player")

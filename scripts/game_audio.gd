@@ -1363,7 +1363,7 @@ func play_cutting_board_thud() -> void:
 		"cutting_board_thud_v1_%d" % (randi() % 3),
 		_make_cutting_board_thud,
 		0.97 + randf() * 0.07,
-		0.68
+		1.15
 	)
 
 
@@ -3856,6 +3856,30 @@ func play_boss_peek_boing() -> void:
 
 func play_ingredient_plap() -> void:
 	_play_cached("ingredient_plap",func():return _make_comic_pop(false),randf_range(.94,1.08),.60)
+
+func start_slingshot_stretch() -> AudioStreamPlayer:
+	var player := AudioStreamPlayer.new()
+	player.bus = "SFX"; player.stream = _make_slingshot_sound(true)
+	player.volume_db = _sfx_db(-9.0,"ingredients")
+	add_child(player); player.play()
+	return player
+
+func play_slingshot_release() -> void:
+	_play_cached("slingshot_release",func(): return _make_slingshot_sound(false),randf_range(.95,1.08),.85)
+
+func _make_slingshot_sound(stretch: bool) -> AudioStreamWAV:
+	var duration := .4 if stretch else .24
+	var n := int(MIX_RATE*duration)
+	var pcm := PackedByteArray(); pcm.resize(n*2)
+	var phase := 0.0
+	for i in n:
+		var t := float(i)/MIX_RATE
+		var frequency := 160.0+35.0*sin(TAU*t/duration*3) if stretch else lerpf(780,90,t/duration)
+		phase += TAU*frequency/MIX_RATE
+		var env := .7 if stretch else exp(-t*13)*minf(1,t/.004)
+		var sample := (sin(phase+sin(phase*.5)*1.5)*.7 + (randf_range(-1,1)*.2 if not stretch else 0.0))*env
+		_write_s16(pcm,i,int(clampf(sample,-1,1)*22000))
+	return _wav_from_pcm(pcm,stretch)
 
 func _make_comic_pop(peek: bool) -> AudioStreamWAV:
 	var duration:=.34 if peek else .15

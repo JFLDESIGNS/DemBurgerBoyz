@@ -205,7 +205,7 @@ const LEAVE_TURN_SEC := 0.38
 const ARRIVE_TURN_SEC := 0.42
 const ORDER_WAWA_LEAD_SEC := 0.45
 ## Camera-left is world +X. Happy guests sidestep 4 ft, dance, then walk off left.
-const DANCE_SIDESTEP_X := 4.0 * 0.3048
+const DANCE_SIDESTEP_X := 5.0 * 0.3048
 const LEAVE_DANCE_MAX_SEC := 3.0
 const LEAVE_WALK_SPEED := 1.65
 const LEAVE_FADE_X := 3.4
@@ -231,8 +231,8 @@ const WALK_PLUS_X_YAW := 90.0
 const WALK_MINUS_X_YAW := -90.0
 ## Wait slots: front of line near window center; new customers queue screen-right.
 ## (world +X = screen-left, −X = screen-right)
-const QUEUE_SPACING := 0.95
-const LANE_X: Array[float] = [-0.35, -1.30, -2.25, -3.20]
+const QUEUE_SPACING := 1.10
+const LANE_X: Array[float] = [-0.35, -1.45, -2.55, -3.65]
 
 signal arrived(customer: Node3D)
 signal patience_expired(customer: Node3D)
@@ -283,6 +283,10 @@ var _burger_props: Node3D
 const WAITING_IDLES := ["Idle_Forward", "Idle_Glance_Left", "Idle_Glance_Right", "Impatient_Foot_Tap"]
 var _burger_idle := "Idle_Forward"
 var _wait_motion_time := 0.0
+var _next_wait_pose := 0.0
+var _wait_prop_until := 0.0
+var _wait_prop_choice := ""
+var _departure_review_shown := false
 var _angry_departure := false
 var _departure_clip := ""
 var _burger_eat_phase := ""
@@ -311,6 +315,7 @@ var _antsy_active: bool = false
 var _antsy_hands_up_active: bool = false
 var _grobble_cd: float = 0.0
 var _click_bobble_t: float = 0.0
+var _food_hit_t := 0.0
 var _wawa_click_area: Area3D = null
 const CLICK_BOBBLE_SEC := 0.62
 const CLICK_BOBBLE_PHASE_SPEED := 10.5
@@ -1306,17 +1311,23 @@ func _play_wait_stance() -> void:
 		if _should_antsy_wait():
 			_play_anim("burger:Impatient_Foot_Tap")
 			return
-		var choices := ["Phone_One_Hand", "Phone_Two_Hands", "Check_Watch"]
-		var choice: String = choices[(int(_wait_motion_time / 16.0) + int(get_instance_id())) % choices.size()]
-		var clock := fmod(_wait_motion_time, 16.0)
-		if clock >= 11.0 and clock < 11.0 + BurgerMotion.LIBRARY.get_animation(choice).length:
-			_play_anim("burger:" + choice)
+		if _wait_motion_time < _wait_prop_until:
+			_play_anim("burger:" + _wait_prop_choice)
 			return
-		var sequence := [0, 1, 0, 2, 0, 3]
-		var slot := (int(_wait_motion_time / 7.0) + int(get_instance_id()) % 5) % sequence.size()
-		var index: int = sequence[slot]
-		if index == 3 and _wait_motion_time < 18.0: index = 0
-		_burger_idle = WAITING_IDLES[index]
+		if _wait_motion_time >= _next_wait_pose:
+			_next_wait_pose = _wait_motion_time + randf_range(2.5, 5.5)
+			if _wait_motion_time > 6.0 and randf() < 0.24:
+				var choices := ["Phone_One_Hand", "Phone_Two_Hands", "Check_Watch"]
+				choices.erase(_wait_prop_choice)
+				_wait_prop_choice = choices.pick_random()
+				_wait_prop_until = _wait_motion_time + BurgerMotion.LIBRARY.get_animation(_wait_prop_choice).length
+				_next_wait_pose = _wait_prop_until + randf_range(2.0, 5.0)
+				_play_anim("burger:" + _wait_prop_choice)
+				return
+			var idles: Array = Array(WAITING_IDLES)
+			idles.erase(_burger_idle)
+			if _wait_motion_time < 18.0: idles.erase("Impatient_Foot_Tap")
+			_burger_idle = idles.pick_random()
 		_play_anim("idle")
 		return
 	if _should_antsy_wait() and _anim_player != null and _anim_player.has_animation("kenney_offensive/Offensive"):
@@ -2026,9 +2037,10 @@ func _begin_sidewalk_leave(do_dance: bool) -> void:
 	_leave_do_dance = do_dance and not _powder_hit and float(get_meta("meal_stars",0.0)) >= 4.95
 	_leave_dance_started = false
 	_leave_dance_done = false
+	_departure_review_shown = false
 	_leave_start_x = global_position.x
 	_leave_walk_x = global_position.x
-	_leave_dance_x = _leave_start_x + DANCE_SIDESTEP_X
+	_leave_dance_x = _leave_start_x
 	var boss_x := _blocking_boss_x()
 	if boss_x < 50.0:
 		var max_dance := boss_x - BOSS_PASS_CLEAR
@@ -2051,10 +2063,36 @@ func _begin_sidewalk_leave(do_dance: bool) -> void:
 	_leave_fade_alpha = 1.0
 	_apply_leave_fade_alpha(1.0)
 	_cancel_order_announce()
-	_enter_leave_phase("reaction" if _departure_clip != "" and _burger_props != null else "turn_left")
+	if _leave_do_dance:
+		_enter_leave_phase("dance")
+	elif bool(get_meta("meal_aside", false)):
+		rotation_degrees.y = FACE_TRUCK_YAW
+		_enter_leave_phase("review")
+		_play_burger_clip("Phone_Two_Hands")
+	else:
+		_enter_leave_phase("reaction" if _departure_clip != "" and _burger_props != null else "turn_left")
+
+
+func make_room_for_next_customer() -> void:
+	if _leave_phase not in ["dance", "review"] or bool(get_meta("review_made_room", false)):
+		return
+	set_meta("review_made_room", true)
+	_cancel_serve_celebration()
+	_leave_do_dance = false
+	_leave_dance_done = true
+	_leave_walk_x = global_position.x
+	_leave_start_x = _leave_walk_x + 0.6096 # Two feet camera-left.
+	var game := get_tree().current_scene
+	if game != null and game.has_method("_pause_customer_review"):
+		game._pause_customer_review(self, true)
+	_enter_leave_phase("turn_review_walk")
 
 
 func _enter_leave_phase(phase: String) -> void:
+	if phase == "review" and bool(get_meta("review_made_room", false)):
+		var game := get_tree().current_scene
+		if game != null and game.has_method("_pause_customer_review"):
+			game._pause_customer_review(self, false)
 	_leave_phase = phase
 	_leave_spin = 0.0
 	_leave_yaw_from = rotation_degrees.y
@@ -2063,8 +2101,10 @@ func _enter_leave_phase(phase: String) -> void:
 	elif phase == "turn_left" or phase == "turn_left2":
 		_leave_yaw_target = WALK_PLUS_X_YAW
 		_leave_turned = phase == "turn_left2"
-	elif phase == "turn_truck":
+	elif phase == "turn_truck" or phase == "turn_review":
 		_leave_yaw_target = FACE_TRUCK_YAW
+	elif phase == "turn_review_walk":
+		_leave_yaw_target = _sidewalk_walk_yaw(_leave_start_x - _leave_walk_x)
 	elif phase == "sidestep" or phase == "walk_off":
 		_leave_turned = true
 		rotation_degrees.y = WALK_PLUS_X_YAW
@@ -2297,13 +2337,32 @@ func _update_sidewalk_leave(delta: float) -> void:
 			if not _leave_dance_started:
 				_start_leave_dance()
 			if _leave_dance_done:
-				_leave_phase = "review"
-				_leave_spin = 0.0
+				_cancel_serve_celebration()
+				_enter_leave_phase("review")
+				_play_burger_clip("Phone_Two_Hands")
+		"turn_review_walk":
+			_apply_leave_body(delta, false)
+			_play_anim("idle")
+			if _tick_leave_turn(delta):
+				_enter_leave_phase("walk_to_review")
+				_play_anim("walk")
+		"walk_to_review":
+			_leave_spin += delta
+			_leave_walk_x = move_toward(_leave_walk_x, _leave_start_x, LEAVE_WALK_SPEED * delta)
+			_play_anim("walk")
+			_apply_leave_body(delta, true)
+			if is_equal_approx(_leave_walk_x, _leave_start_x):
+				_enter_leave_phase("turn_review")
+		"turn_review":
+			_apply_leave_body(delta, false)
+			_play_anim("idle")
+			if _tick_leave_turn(delta):
+				_enter_leave_phase("review")
 				_play_burger_clip("Phone_Two_Hands")
 		"review":
 			_apply_leave_body(delta, false)
 			_leave_spin += delta
-			if _leave_spin >= 0.55 and not _review_card_is_showing():
+			if _leave_spin >= 0.55 and not _departure_review_shown:
 				_show_departure_review()
 			if _leave_spin >= 3.2:
 				if is_instance_valid(_review_card_root): _review_card_root.hide()
@@ -2321,17 +2380,9 @@ func _update_sidewalk_leave(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	var before := global_position
+	# Queue slots and departure holds control customer spacing. Sidewalk crowd
+	# steering must not push customers forward/backward out of their service path.
 	_advance_customer(delta)
-	if mp_host_driven:
-		# Dismissed customers leave locally after the host removes them from snapshots.
-		# Pulling them back to that final snapshot prevents offscreen cleanup forever.
-		return
-	if is_street_pedestrian or is_ragdoll: return
-	var game := get_tree().current_scene
-	if game != null and game.has_method("_crowd_steer"):
-		global_position=game._crowd_steer(self,before,global_position,delta)
-		if is_leaving: _leave_walk_x=global_position.x
 
 func _advance_customer(delta: float) -> void:
 	if bool(get_meta("delivery_errand", false)):
@@ -2352,6 +2403,7 @@ func _advance_customer(delta: float) -> void:
 	if _click_bobble_t > 0.0:
 		_click_bobble_t = maxf(0.0, _click_bobble_t - delta)
 		bobble_spd = CLICK_BOBBLE_PHASE_SPEED
+	_food_hit_t = maxf(0.0,_food_hit_t-delta)
 	_bobble_phase += delta * bobble_spd
 	_expr_t += delta
 	_home_x = target_x
@@ -2610,7 +2662,7 @@ func set_queue_timer_active(active: bool) -> void:
 
 
 func speed_rating(burnt: bool = false) -> Dictionary:
-	## Perfect <=10s, Great job <=15s, then -0.5 star per extra 10 seconds.
+	## Toasted-bun orders get eight seconds of cooking allowance; display actual wait.
 	if burnt:
 		return {
 			"score": 12,
@@ -2624,9 +2676,10 @@ func speed_rating(burnt: bool = false) -> Dictionary:
 			"text": "Bad  Burnt",
 		}
 	var wait := order_elapsed_sec
+	var rated_wait := maxf(0.0, wait - (8.0 if order.has("toasted_bun") else 0.0))
 	var stars := 5.0
-	if wait > 15.0:
-		stars = 5.0 - ceilf((wait - 15.0) / 10.0) * 0.5
+	if rated_wait > SERVE_GREAT_JOB_SEC:
+		stars = 5.0 - ceilf((rated_wait - SERVE_GREAT_JOB_SEC) / 10.0) * 0.5
 	stars = clampf(stars, 1.0, 5.0)
 	var score := int(round(stars / 5.0 * 100.0))
 	var grade := "B"
@@ -2634,14 +2687,14 @@ func speed_rating(burnt: bool = false) -> Dictionary:
 	var detail := "%.0fs" % wait
 	var color := Color("81C784")
 	var pay_mul := 1.0
-	if wait <= SERVE_PERFECT_SEC:
+	if rated_wait <= SERVE_PERFECT_SEC:
 		score = 100
 		grade = "S"
 		label = "Perfect"
 		detail = "%.1fs" % wait
 		color = Color("FFEB3B")
 		pay_mul = 1.45
-	elif wait <= SERVE_GREAT_JOB_SEC:
+	elif rated_wait <= SERVE_GREAT_JOB_SEC:
 		score = 95
 		grade = "A"
 		label = "Great job"
@@ -2696,6 +2749,12 @@ func _refresh_patience_bar() -> void:
 func _apply_bobble(walking: bool) -> void:
 	if _body == null:
 		return
+	if _food_hit_t > 0:
+		var t := .55-_food_hit_t
+		var recoil := sin(t*24)*exp(-t*5)
+		_body.rotation_degrees = Vector3(-recoil*17,0,recoil*9)
+		_body.position.y = _base_body_y + absf(recoil)*.035
+		return
 	var click_s := clampf(_click_bobble_t / CLICK_BOBBLE_SEC, 0.0, 1.0)
 	## Idle skeleton owns the pose — only a light root bob so we don't fight the anim.
 	if _anim_player != null and _anim_player.is_playing():
@@ -2721,6 +2780,10 @@ func bobble_click() -> void:
 	## Restartable click reaction — resets the timer, never stacks amplitude.
 	_click_bobble_t = CLICK_BOBBLE_SEC
 	_bobble_phase = 0.0
+
+func food_hit_reaction() -> void:
+	_food_hit_t = .55
+	_click_bobble_t = 0.0
 
 
 func _update_wait_grobble(delta: float) -> void:
@@ -4806,6 +4869,9 @@ func receive_burger(
 	service_stars: float = -1.0
 ) -> Dictionary:
 	set_meta("profit_built", built.duplicate())
+	for other in get_parent().get_children():
+		if other != self and other.has_method("make_room_for_next_customer"):
+			other.make_room_for_next_customer()
 	var result: Dictionary = GameDataScript.compare_orders(built, order)
 	last_tip = 0
 	last_base_pay = 0
@@ -5063,14 +5129,21 @@ func react_burnt_bite(point_at_player: bool = false) -> void:
 
 func step_aside_for_meal(destination_x: float) -> void:
 	if bool(get_meta("meal_aside", false)):return
+	_cancel_serve_celebration()
+	_cancel_order_announce()
+	var life := get_node_or_null("CustomerLife")
+	if life != null: life.dance_left = 0.0
 	set_meta("meal_aside", true)
 	set_meta("meal_stepping_aside", true)
 	set_queue_timer_active(false)
 	target_x = destination_x
 	_home_x = destination_x
 	rotation_degrees.y = _sidewalk_walk_yaw(destination_x-global_position.x)
+	_anim_state = ""
+	_play_anim("walk")
+	var walk_seconds := maxf(0.35, absf(destination_x-global_position.x) / LEAVE_WALK_SPEED)
 	var step := create_tween()
-	step.tween_property(self, "global_position:x", destination_x, .65).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	step.tween_property(self, "global_position:x", destination_x, walk_seconds).set_trans(Tween.TRANS_LINEAR)
 	step.tween_callback(func():
 		set_meta("meal_stepping_aside", false)
 		rotation_degrees.y = _face_cook_yaw()
@@ -5078,21 +5151,19 @@ func step_aside_for_meal(destination_x: float) -> void:
 	)
 
 func _show_departure_review() -> void:
-	_ensure_review_card_nodes()
-	var stars := clampi(roundi(float(get_meta("meal_stars", 5.0))), 0, 5)
-	_review_stars.text = "★".repeat(stars) + "☆".repeat(5 - stars)
-	_review_stars.modulate = Color("FFD45C")
-	_review_text.modulate = Color.WHITE
-	_review_text.text = _review_first_two_lines(str(get_meta("sales_review", "Loved my meal!")))
-	_apply_review_card_layout()
-	_review_card_root.show()
+	if _departure_review_shown: return
+	_departure_review_shown = true
+	if is_instance_valid(_review_card_root): _review_card_root.hide()
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and game.has_method("_show_customer_review_ui"):
+		game._show_customer_review_ui(float(get_meta("meal_stars", 5.0)), str(get_meta("sales_review", "Loved my meal!")), self)
 
 func _waiting_for_partner() -> bool:
 	if not has_meta("couple_partner"): return false
 	var other = get_meta("couple_partner").get_ref()
 	return is_instance_valid(other) and not other.is_leaving and not bool(other.get_meta("serve_in_progress",false))
 
-func play_courier_grab() -> void:
+func play_courier_grab(playback_speed: float = 1.0) -> void:
 	if not is_instance_valid(_anim_player): return
 	_anim_player.stop()
 	if not _anim_player.has_animation_library("courier"):
@@ -5107,5 +5178,5 @@ func play_courier_grab() -> void:
 		_anim_player.add_animation_library("courier",library)
 	_anim_state = "courier_grab"
 	_anim_player.active = true
-	_anim_player.speed_scale = 1.0
+	_anim_player.speed_scale = playback_speed
 	_anim_player.play("courier/Courier_Grab",0.0)

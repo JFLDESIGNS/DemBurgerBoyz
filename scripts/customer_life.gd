@@ -1,7 +1,7 @@
 ## Per-customer secondary motion, separate from clip playback and gameplay decisions.
 extends Node
-const GAZE_WATCH_SECONDS := Vector2(5.0, 8.0)
-const GAZE_BREAK_SECONDS := Vector2(2.0, 4.0)
+const GAZE_WATCH_SECONDS := Vector2(2.0, 4.5)
+const GAZE_BREAK_SECONDS := Vector2(1.2, 3.0)
 const AWAY_TARGETS := [Vector3(-2.2, 1.4, 2.0), Vector3(2.2, 1.45, 2.0), Vector3(-1.3, 1.9, 2.8), Vector3(1.6, 0.9, 2.4)]
 var away_target_index := -1
 var away_target := Vector3.INF
@@ -194,4 +194,5 @@ func choose_away_target(player_target: Vector3) -> void:
 	forward = forward.normalized() if forward.length_squared() > 0.001 else Vector3.FORWARD
 	var side := forward.cross(Vector3.UP).normalized()
 	var offset: Vector3 = AWAY_TARGETS[away_target_index]
+	offset += Vector3(rng.randf_range(-0.5, 0.5), rng.randf_range(-0.2, 0.3), rng.randf_range(-0.4, 0.4))
 	away_target = customer.global_position + side * offset.x + Vector3.UP * offset.y + forward * offset.z

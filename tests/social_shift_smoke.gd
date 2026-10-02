@@ -21,7 +21,7 @@ func run() -> void:
 	social.game = game; game.add_child(social); social.set_process(false); game._customer_social = social
 	var counts = {"reply":0,"away":0,"love":0,"quiet":0}
 	for i in 100: counts[social.outcome((i+.5)/100.0)] += 1
-	assert(counts == {"reply":50,"away":25,"love":10,"quiet":15})
+	assert(counts == {"reply":65,"away":20,"love":2,"quiet":13})
 	var customers = []
 	for i in 2:
 		var c = load("res://scripts/customer.gd").new()
@@ -32,7 +32,9 @@ func run() -> void:
 		game.customers.append(c); customers.append(c)
 	game.selected_customer = customers[0]
 	social.pair_customers(customers[0],customers[1])
-	assert(game.tickets[customers[0]].visible and not game.tickets[customers[1]].visible)
+	assert(game.tickets[customers[0]].visible and game.tickets[customers[1]].visible)
+	for c in customers:
+		assert(game.tickets[c].get_meta("title_label").text.ends_with(" ♥"))
 	assert(customers[0].order_elapsed_sec==12.0 and customers[1].order_elapsed_sec==13.0)
 	assert(social.partner(customers[0]) == customers[1] and social.couples.size()==1)
 	game._remove_ticket(customers[0]); game.selected_customer=customers[1]; game._highlight_tickets()
@@ -67,11 +69,34 @@ func run() -> void:
 		if seconds > 15.0: assert(rating < 5.0)
 		previous = rating
 	customers[0].set_meta("meal_stars",5.0)
+	customers[0]._leave_start_x = 1.5
+	customers[0]._leave_dance_x = 1.5
 	customers[0]._leave_phase = "dance"; customers[0]._leave_dance_started = true; customers[0]._leave_dance_done = true
 	customers[0]._update_sidewalk_leave(.01)
+	assert(is_equal_approx(customers[0].global_position.x, 1.5))
 	assert(customers[0]._leave_phase == "review")
 	assert(customers[0]._anim_player.current_animation == "burger/Phone_Two_Hands")
-	customers[0]._update_sidewalk_leave(.6); assert(customers[0]._review_card_is_showing())
+	customers[0]._update_sidewalk_leave(.6)
+	assert(customers[0]._departure_review_shown and not customers[0]._review_card_is_showing())
+	assert(is_instance_valid(game._review_toast))
+	var first_review = game._review_toast
+	customers[0]._show_departure_review()
+	assert(game._review_toast == first_review, "Review must only appear once")
+	customers[1].set_meta("meal_aside", true)
+	customers[1]._begin_sidewalk_leave(false)
+	assert(customers[1]._leave_phase == "review", "Non-dancers review at their current meal spot")
+	customers[1].is_leaving = false
+	game._show_boss_caption("THE BOSS", "Kitchen paused while I explain this upgrade.", 2.0)
+	assert(game._boss_speech_active() and is_instance_valid(game._boss_speech_bubble))
+	var frozen_patty = load("res://scripts/patty.gd").new()
+	game.add_child(frozen_patty)
+	frozen_patty.heating = true
+	var before_cook: float = frozen_patty.cook_time
+	frozen_patty._process(1.0)
+	assert(frozen_patty.cook_time == before_cook, "Boss speech must freeze patty cooking")
+	game._hide_boss_caption()
+	assert(not game._boss_speech_active())
+	frozen_patty.queue_free()
 	customers[1]._play_burger_clip("Point_Finger_Yell")
 	var feet = customers[1].get_node("CharacterFootsteps")
 	feet._update_point_voice(); assert(feet.point_voice.playing and feet.point_voice.pitch_scale > 1.0)

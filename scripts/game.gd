@@ -178,11 +178,21 @@ const OIL_POUR_HEIGHT := 0.445
 ## Held shaker tip-down height — +1 ft from prior 0.2 so flakes don't clip the steel.
 const SHAKER_POUR_HEIGHT := 0.505
 const PattyScript := preload("res://scripts/patty.gd")
+var _onion_kitchen: Node
+
+func _ensure_onion_kitchen() -> Node:
+	if not is_instance_valid(_onion_kitchen):
+		_onion_kitchen = preload("res://scripts/onion_kitchen.gd").new()
+		_onion_kitchen.game = self
+		add_child(_onion_kitchen)
+	return _onion_kitchen
+
+
 const BunToastScript := preload("res://scripts/bun_toast.gd")
 const SocialReviewsScript := preload("res://scripts/social_reviews.gd")
 const CustomerScript := preload("res://scripts/customer.gd")
-## DISABLED — set true later to restore grill-toastable bun pairs (see bun_toast.gd).
-const BUN_TOAST_ENABLED := false
+## Grill-toastable bun pairs.
+const BUN_TOAST_ENABLED := true
 ## DISABLED — armed hostiles backed up under GREAT IDEA THAT NOBODY LIKES/
 const TERRORISTS_ENABLED := false
 # const TerroristCustomerScript := preload("res://GREAT IDEA THAT NOBODY LIKES/terrorist_customer.gd")
@@ -853,6 +863,7 @@ var _pending_cheese_drag: bool = false ## Strip cheese drag → drop on grill bu
 var _cheese_lmb_drag: bool = false ## Pressed cheese wheel / empty air — place on release
 var _cheese_drag_origin: Vector2 = Vector2.ZERO
 var _pending_ingredient_drag: String = "" ## Strip topping drag → Build / cat
+var _ingredient_slingshot: Node2D
 var _whole_burger_drag: Dictionary = {}
 var _whole_burger_settle: Tween = null
 var _pending_reorder_drag = null ## Dictionary while dragging a Build stack layer
@@ -1209,6 +1220,7 @@ var _cut_collector_cut_done: bool = false
 var _cut_collector_seq: int = 0
 var _boss_caption_seq: int = 0
 var _boss_caption_until := 0
+var _boss_speech_bubble: PanelContainer
 var _boss_intro_seq: int = 0
 var _boss_pep_pending: bool = false
 var _boss_fryer_pending := false
@@ -2208,6 +2220,9 @@ var first_sale_decal: MeshInstance3D = null
 var menu_board_decal: MeshInstance3D = null
 var prep_ingredients_prop: MeshInstance3D = null
 var build_cutting_board: Node3D = null
+var _cutting_board_shadow: MeshInstance3D
+var _board_tap_tween: Tween
+var _build_serve_button: Button
 var smoke2_cutting_board_prop: Node3D = null
 var build_board_hint_label: Label3D = null
 var cheese_station_root: Node3D = null
@@ -2251,6 +2266,7 @@ const BUN_PILE_TOWER_COUNT := 2 ## two towers beside the tip jar
 const BUN_PILE_PAIRS_PER_TOWER := 2 ## two bun sets stacked: 2 bottoms + 2 tops
 const BUN_PILE_PAIR_SLOTS := BUN_PILE_TOWER_COUNT * BUN_PILE_PAIRS_PER_TOWER
 const BUN_PILE_SCALE := 1.70 ## 2× the prior 0.85 stack, temporary look pass
+const BREAD_BOX_BACK_OFFSET := 0.1016 ## Four inches away from the cook, along world +Z.
 const BUN_BOTTOM_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedBottom.glb"
 const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb"
 const KETCHUP_BOTTLE_PATH := "res://models/burgerpack/try2/SM_KetchupSqueezeBottle.glb"
@@ -2842,7 +2858,7 @@ const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
 const FRIES_HOLD_PACK_SPACING_Z := 0.0384 ## 0.14 − 4"
 ## Camera is −Z; +Z is farther up-screen. Negative = closer to the cook / camera.
 const FRIES_HOLD_FAR_NUDGE := -0.3096 ## was −0.6144; push 1ft farther from camera
-const FRYER_BASKET_HOME_Y := 0.159 ## was 0.235; tracks the lower pit
+const FRYER_BASKET_HOME_Y := 0.159 - 4.0 * INCH_TO_M
 const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
 const FRIES_PACK_TARGET_H := 0.2171 ## Finished packs enlarged 30%, including existing saved shelf scales.
 const CUP_ICE_OVERFILL_CAP := 2.4
@@ -5719,7 +5735,7 @@ func _process_gameplay(delta: float) -> void:
 	_update_tutorial_hint_cycle(delta)
 	_update_world_hint_fades(delta)
 	## Options / Pause freeze the shift clock / cook sim until Resume / Esc.
-	if options_menu_open or shift_paused:
+	if options_menu_open or shift_paused or _boss_speech_active():
 		if game_audio:
 			game_audio.set_sizzle_active(false)
 		_update_hand_spatula_cursor(delta)
@@ -6246,7 +6262,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			radio.toggle_power()
 			_flash("Radio %s" % ("ON" if radio.powered else "OFF"), Color("FFCC80"))
 			return
-	if options_menu_open or shift_paused:
+	if options_menu_open or shift_paused or _boss_speech_active():
 		return
 	if not playing:
 		return
@@ -6444,6 +6460,12 @@ func _input(event: InputEvent) -> void:
 	if _hotdog_active() and _hotdog_challenge.projectiles.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
+	if _handle_bun_pile_drag(event):
+		get_viewport().set_input_as_handled()
+		return
+	if is_instance_valid(_onion_kitchen) and _onion_kitchen.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _handle_build_swipe(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -6525,7 +6547,10 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	## Options / Pause own the mouse — never let kitchen grabs see clicks while frozen.
-	if options_menu_open or shift_paused:
+	if _boss_speech_active():
+		get_viewport().set_input_as_handled()
+		return
+	if options_menu_open or shift_paused or _boss_speech_active():
 		if event is InputEventKey and event.pressed and not event.echo:
 			if shift_paused and not options_menu_open and event.keycode == KEY_ESCAPE:
 				_set_shift_paused(false)
@@ -6564,6 +6589,9 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	## Paint toppings by dragging across the bottom strip (great for EVERYTHING).
+	if _ensure_ingredient_slingshot().handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _handle_strip_swipe_input(event):
 		return
 	## Cheese pick-up / placement — run before UI, but never steal the topping strip.
@@ -7107,7 +7135,7 @@ func _update_strip_hold_pickup(delta: float) -> void:
 	if over_id != "" and over_id != _strip_hold_id:
 		## Crossing another strip tile — wait for swipe, don't steal the bottle / cheese.
 		return
-	if _strip_hold_t >= (0.12 if _strip_hold_id == "cheese" else STRIP_HOLD_PICKUP_SEC):
+	if _strip_hold_t >= STRIP_HOLD_PICKUP_SEC:
 		_try_start_strip_hold_pickup()
 		return
 	if mouse.distance_to(_strip_hold_origin) >= STRIP_HOLD_DRAG_PX:
@@ -7172,7 +7200,7 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 			start_pos = start_raw as Vector2
 		var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
 		# Catch quick upward cheese drags before horizontal swipe recognition.
-		if start_id == "cheese" and _strip_hold_armed and mouse2.y < start_pos.y - 6.0 and (absf(mouse2.y - start_pos.y) > absf(mouse2.x - start_pos.x) * 0.65 or _strip_ingredient_at(mouse2) == ""):
+		if start_id == "cheese" and _strip_hold_armed and mouse2.y < start_pos.y - STRIP_HOLD_DRAG_PX and (absf(mouse2.y - start_pos.y) > absf(mouse2.x - start_pos.x) * 1.15 or _strip_ingredient_at(mouse2) == ""):
 			_try_start_strip_hold_pickup()
 			return true
 		if not bool(_strip_swipe_added.get("_moved", false)):
@@ -7226,7 +7254,21 @@ func _strip_ingredient_at(screen_pos: Vector2) -> String:
 		if d < best_d:
 			best_d = d
 			best_id = str(id)
+	if best_id == "" and _cheese_tray_contains(screen_pos):
+		return "cheese"
 	return best_id
+
+
+func _cheese_tray_contains(screen_pos: Vector2) -> bool:
+	var tub: Node3D = ingredient_bin_nodes.get("cheese")
+	if not is_instance_valid(tub) or not tub.is_visible_in_tree() or not is_instance_valid(camera): return false
+	var bounds := _shop_preview_bounds(tub)
+	var polygon := PackedVector2Array()
+	for corner in 8:
+		var at: Vector3 = tub.to_global(bounds.get_endpoint(corner))
+		if camera.is_position_behind(at): return false
+		polygon.append(camera.unproject_position(at))
+	return Geometry2D.is_point_in_polygon(_gui_to_camera_screen(screen_pos), Geometry2D.convex_hull(polygon))
 
 
 func _is_ingredient_strip_click(screen_pos: Vector2) -> bool:
@@ -12909,6 +12951,7 @@ func _update_hand_spatula_cursor(delta: float) -> void:
 				_render_spatula_balance_return(return_target, 0.0)
 		else:
 			_render_spatula_balance_return(return_target, delta)
+	if is_instance_valid(_onion_kitchen): _onion_kitchen.apply_spatula(delta)
 	## Scooped burger rides the blade — same yaw/roll as the spatula (no visual offset).
 	if carrying and not dragging:
 		_seat_held_patty_on_spatula()
@@ -14426,6 +14469,7 @@ func _can_fit_patty_at(world_pos: Vector3) -> bool:
 
 
 func _patty_blocked_at(world_pos: Vector3, ignore_idx: int = -1) -> bool:
+	if is_instance_valid(_onion_kitchen) and _onion_kitchen.blocked(world_pos): return true
 	for slot in _fridge_pending_places:
 		if int(slot) == ignore_idx: continue
 		var pending: Vector3 = _fridge_pending_places[slot]
@@ -15323,6 +15367,7 @@ func _trash_spatula_patty_local() -> void:
 	_refresh_spatula_ui()
 	_animate_object_into_garbage(discarded_patty, 0.26)
 	if was_bun:
+		stations[STATION_CRAFT]["buns_on_grill"] = false
 		_flash("Trashed bun", Color("FFAB91"))
 	else:
 		_spend(COST_DROP_BURGER, "Trashed scooped burger — %s" % _format_money(COST_DROP_BURGER), Color("FFAB91"))
@@ -16246,6 +16291,7 @@ func _move_grill_patty_slide(patty: Area3D, target_xz: Vector2, from_xz: Vector2
 			other._play_done_jump(0.034)
 			if mp_enabled and not _mp_applying and int(other.net_id) >= 0:
 				mp_spatula_flat_pop.rpc(int(other.net_id), x, z)
+	if is_instance_valid(_onion_kitchen): _onion_kitchen.push_from_burger(from_xz, Vector2(target.x,target.z))
 	if _patty_blocked_at(target, patty.slot_index):
 		for i in grill.size():
 			var other = grill[i]
@@ -17276,7 +17322,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	else:
 		_flash("Patty #%d on Build" % n, Color("A5D6A7"))
 	# The host adds one stocked bun pair when the first patty lands.
-	if not st["items"].has("bun_bottom") and (not mp_enabled or NetManager.is_host()):
+	if not st["items"].has("bun_bottom") and not bool(st.get("buns_on_grill", false)) and (not mp_enabled or NetManager.is_host()):
 		_add_ingredient_to_station_local(STATION_CRAFT, "bun_bottom")
 	_mp_broadcast_station(STATION_CRAFT)
 	call_deferred("_try_auto_serve")
@@ -19630,7 +19676,7 @@ func _roomba_drop_carried_patty_in_place() -> void:
 	patty.rotation_degrees = Vector3.ZERO
 	patty.slot_index = idx
 	patty.heating = grill_on and not _is_in_warmer_zone(pos)
-	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y - (0.0254 if _is_bun_toast(patty) else 0.0)
 	grill[idx] = patty
 	_move_patty_to(idx, patty, pos, true)
 
@@ -20093,7 +20139,7 @@ func _roomba_try_drop_carried_patty() -> void:
 		patty.visible = true
 		patty.rotation_degrees = Vector3.ZERO
 		patty.slot_index = idx
-		patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+		patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y - (0.0254 if _is_bun_toast(patty) else 0.0)
 		patty.heating = grill_on
 		patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
 		grill[idx] = patty
@@ -20668,7 +20714,7 @@ func mp_roomba_place_patty(net_id: int, idx: int, x: float, z: float, to_warmer:
 		patty.visible = true
 		patty.rotation_degrees = Vector3.ZERO
 		patty.slot_index = idx
-		patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+		patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y - (0.0254 if _is_bun_toast(patty) else 0.0)
 		patty.heating = grill_on
 		patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
 		grill[idx] = patty
@@ -21516,10 +21562,66 @@ func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> v
 	_boss_caption_until = 0
 	_flash(line, Color("FFE082"), maxf(duration, 1.4))
 	_boss_caption_until = Time.get_ticks_msec() + int(maxf(duration, 1.4) * 1000)
+	flash_label.hide()
+	if is_instance_valid(_boss_speech_bubble): _boss_speech_bubble.queue_free()
+	_boss_speech_bubble = PanelContainer.new()
+	_boss_speech_bubble.name = "BossSpeechBubble"
+	_boss_speech_bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boss_speech_bubble.z_index = 90
+	get_node("UI/Root").add_child(_boss_speech_bubble)
+	_boss_speech_bubble.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_boss_speech_bubble.offset_left = -330
+	_boss_speech_bubble.offset_right = 330
+	_boss_speech_bubble.offset_top = 80
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("FFF0C8"); style.border_color = Color("D9B76F")
+	style.set_border_width_all(2); style.set_corner_radius_all(12)
+	style.content_margin_left = 22; style.content_margin_right = 22
+	style.content_margin_top = 14; style.content_margin_bottom = 14
+	_boss_speech_bubble.add_theme_stylebox_override("panel", style)
+	var speech_lines := VBoxContainer.new()
+	speech_lines.add_theme_constant_override("separation", 6)
+	_boss_speech_bubble.add_child(speech_lines)
+	if not title.is_empty():
+		var heading := Label.new()
+		heading.text = title
+		heading.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+		heading.add_theme_font_size_override("font_size", 18)
+		heading.add_theme_color_override("font_color", Color("A66A27"))
+		speech_lines.add_child(heading)
+	var copy := Label.new()
+	copy.text = body.strip_edges().replace("\n", " "); copy.custom_minimum_size.x = 616
+	copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	copy.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+	copy.add_theme_font_size_override("font_size", 22)
+	copy.add_theme_color_override("font_color", Color("715033"))
+	speech_lines.add_child(copy)
+	var tail := Polygon2D.new()
+	tail.color = style.border_color
+	tail.polygon = PackedVector2Array([Vector2(34,-2),Vector2(14,26),Vector2(74,-2)])
+	_boss_speech_bubble.add_child(tail)
+	var inner := Polygon2D.new()
+	inner.color = style.bg_color
+	inner.polygon = PackedVector2Array([Vector2(37,-3),Vector2(20,20),Vector2(69,-3)])
+	tail.add_child(inner)
+	var bubble := _boss_speech_bubble
+	bubble.resized.connect(func(): tail.position.y = bubble.size.y)
+	var chime := AudioStreamPlayer.new()
+	chime.stream = preload("res://sounds/ui/chef_points.wav"); chime.bus = "SFX"; chime.volume_db = -6
+	add_child(chime); chime.finished.connect(chime.queue_free); chime.play()
+	var token := _boss_caption_seq
+	get_tree().create_timer(maxf(duration, 1.4)).timeout.connect(func():
+		if token == _boss_caption_seq: _hide_boss_caption()
+	)
+
+
+func _boss_speech_active() -> bool:
+	return Time.get_ticks_msec() < _boss_caption_until
 
 
 func _hide_boss_caption() -> void:
 	_boss_caption_until = 0
+	if is_instance_valid(_boss_speech_bubble): _boss_speech_bubble.queue_free()
 	var showcase = get_node_or_null("UI/Root/BossMachineShowcase")
 	if is_instance_valid(showcase): showcase.queue_free()
 	_boss_caption_seq += 1
@@ -21597,6 +21699,7 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 		if kind == "fryer" or (kind == "pep" and day in [2, 3]):
 			_show_boss_machine(SHOP_FRYER_MACHINE if kind == "fryer" else (SHOP_SODA_MACHINE if day == 2 else SHOP_ICECREAM_MACHINE), talk_time)
 		_show_boss_caption("THE BOSS", pep, talk_time)
+		if kind == "fryer": _open_phone_to_fryer()
 		get_tree().create_timer(talk_time).timeout.connect(func():
 			if seq != _cut_collector_seq:
 				return
@@ -28798,7 +28901,7 @@ func _place_spatula_on_warmer_local(idx: int, pos: Vector3, patty: Area3D = null
 	patty.visible = true
 	patty.rotation_degrees = Vector3.ZERO
 	patty.slot_index = idx
-	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y - (0.0254 if _is_bun_toast(patty) else 0.0)
 	patty.heating = grill_on
 	patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
 	## Keep existing hold age — putting back on HOLD must not refresh the 5-min clock.
@@ -30064,7 +30167,7 @@ func _station_burgers_seasoned(station_index: int) -> bool:
 
 
 func _station_bun_toast_mul(station_index: int) -> float:
-	## Shared top+bottom toast clock — peak at 2.0s perfect.
+	## Both halves share the 8–16 second toasted window.
 	if not BUN_TOAST_ENABLED:
 		return 1.0
 	if station_index < 0 or station_index >= stations.size():
@@ -30075,9 +30178,9 @@ func _station_bun_toast_mul(station_index: int) -> float:
 	)
 	if cook <= 0.05:
 		return 1.0
-	if cook >= BunToastScript.TOAST_BURNT:
+	if cook > BunToastScript.TOAST_BURNT:
 		return 0.72
-	if absf(cook - BunToastScript.TOAST_READY) <= BunToastScript.TOAST_PERFECT_SLACK:
+	if cook >= BunToastScript.TOAST_READY and cook <= BunToastScript.TOAST_BURNT:
 		return 1.15
 	if cook < BunToastScript.TOAST_READY:
 		return lerpf(0.94, 1.15, cook / BunToastScript.TOAST_READY)
@@ -30089,6 +30192,7 @@ func _station_bun_toast_mul(station_index: int) -> float:
 
 
 func _clear_all_patty() -> void:
+	if is_instance_valid(_onion_kitchen): _onion_kitchen.clear()
 	for i in GRILL_SLOTS:
 		var p = grill[i]
 		if p:
@@ -32507,6 +32611,7 @@ func _apply_cutting_board_transform() -> void:
 		)
 	var bounds := _mesh_aabb_local(build_cutting_board)
 	build_cutting_board.set_meta("burger_surface_center", Vector3(bounds.get_center().x, bounds.end.y, bounds.get_center().z))
+	_update_cutting_board_shadow(bounds)
 	_apply_cutting_board_darkness()
 	if build_board_hint_label != null and is_instance_valid(build_board_hint_label):
 		_nudge_label3d_on_screen(build_board_hint_label, build_hint_screen_nudge)
@@ -39474,8 +39579,8 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 	var stack_mat := _make_cup_stack_prop_material()
 	var rim_mat := stack_mat.duplicate() as StandardMaterial3D
-	rim_mat.albedo_color = Color("E2D8BC")
-	rim_mat.roughness = 0.30
+	rim_mat.albedo_color = Color(.88,.95,1.0,.48)
+	rim_mat.roughness = 0.16
 	var shell_y := float(spare_count) * nest_step
 	var stack_shell := MeshInstance3D.new()
 	stack_shell.name = "CupStackOuterShell"
@@ -39484,21 +39589,25 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	nested_shell.bottom_radius = CUP_SHELL_TOP_R
 	nested_shell.height = CUP_SHELL_H
 	nested_shell.radial_segments = 48
+	nested_shell.cap_bottom = false
 	stack_shell.mesh = nested_shell
 	stack_shell.position = stack_base + Vector3(0.0, CUP_SHELL_H * 0.5 + shell_y, 0.0)
 	stack_shell.rotation_degrees = Vector3.ZERO
 	stack_shell.material_override = stack_mat
 	stack_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	rack.add_child(stack_shell)
-	# Close the gaps between the nested rims with an opaque cup wall.
+	# One clear skirt joins the rims without opaque caps inside the stack.
 	var lower_wall := MeshInstance3D.new()
 	lower_wall.name = "CupStackLowerWall"
 	var lower_mesh := CylinderMesh.new()
 	lower_mesh.top_radius = CUP_SHELL_TOP_R - 0.002
 	lower_mesh.bottom_radius = CUP_SHELL_TOP_R - 0.002
 	lower_mesh.height = shell_y + 0.008
+	lower_mesh.cap_top = false
+	lower_mesh.cap_bottom = false
 	lower_wall.mesh = lower_mesh
 	lower_wall.material_override = stack_mat
+	lower_wall.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	lower_wall.position = stack_base + Vector3(0, shell_y * 0.5, 0)
 	rack.add_child(lower_wall)
 	for i in spare_count:
@@ -39536,7 +39645,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 	var cup_hint := Label3D.new()
 	cup_hint.name = "SodaCupHint"
 	cup_hint.text = "click or grab cup here"
-	cup_hint.position = Vector3(0.0, 0.42, 0.04)
+	cup_hint.position = Vector3(0.0, 0.24, 0.04)
 	cup_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cup_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	cup_hint.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -40436,16 +40545,16 @@ func _make_cup_stack_prop_material() -> StandardMaterial3D:
 	## A single lightly frosted shell; unlike the previous four opaque bodies it
 	## lets the machine/background read through without nested alpha artifacts.
 	var mat := StandardMaterial3D.new()
-	mat.resource_name = "CupStackFrostedPlastic"
-	mat.albedo_color = Color("CEC8B7")
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-	mat.roughness = 0.72
+	mat.resource_name = "CupStackClearPlastic"
+	mat.albedo_color = Color(.88,.95,1.0,.18)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.roughness = 0.18
 	mat.metallic = 0.0
 	mat.cull_mode = BaseMaterial3D.CULL_BACK
-	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	mat.clearcoat_enabled = false
+	mat.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	mat.clearcoat_enabled = true
 	mat.clearcoat = 0.08
 	mat.clearcoat_roughness = 0.24
 	return mat
@@ -46677,7 +46786,7 @@ func _cursor_on_cutting_board(screen_pos: Vector2) -> bool:
 
 
 func _try_cutting_board_thud_click(screen_pos: Vector2) -> bool:
-	## Left-click empty Build wood → short dead thud (not the hollow bun tap).
+	## Empty wood reacts; a ready burger serves from anywhere on the board.
 	if not playing:
 		return false
 	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held:
@@ -46686,13 +46795,24 @@ func _try_cutting_board_thud_click(screen_pos: Vector2) -> bool:
 		return false
 	if icecream_cone_held or burnt_icecream_cone_held or fries_pack_held:
 		return false
-	if not _station_cutting_board_is_empty(STATION_CRAFT):
+	if not _station_cutting_board_is_empty(STATION_CRAFT) and not _station_burger_complete(STATION_CRAFT):
 		return false
 	if not _cursor_on_cutting_board(screen_pos):
 		return false
-	if game_audio != null and game_audio.has_method("play_cutting_board_thud"):
-		game_audio.play_cutting_board_thud()
+	_board_tap_feedback()
+	if _station_burger_complete(STATION_CRAFT): _on_serve()
 	return true
+
+
+func _board_tap_feedback() -> void:
+	if game_audio != null: game_audio.play_cutting_board_thud()
+	if not is_instance_valid(build_cutting_board): return
+	if is_instance_valid(_board_tap_tween): _board_tap_tween.kill()
+	var home := _cutting_board_world_center()
+	build_cutting_board.position = home
+	_board_tap_tween = create_tween()
+	_board_tap_tween.tween_property(build_cutting_board, "position:y", home.y + 0.025, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_board_tap_tween.tween_property(build_cutting_board, "position:y", home.y, 0.16).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
 
 
 func _build_cutting_board_prop() -> void:
@@ -46764,6 +46884,25 @@ func _build_cutting_board_prop() -> void:
 			part.material_override = base
 	_apply_cutting_board_transform()
 	_build_board_hint_label()
+
+
+func _update_cutting_board_shadow(bounds: AABB) -> void:
+	if not is_instance_valid(world) or not is_instance_valid(build_cutting_board): return
+	if not is_instance_valid(_cutting_board_shadow):
+		_cutting_board_shadow = MeshInstance3D.new()
+		_cutting_board_shadow.name = "CuttingBoardContactShadow"
+		_cutting_board_shadow.mesh = PlaneMesh.new()
+		_cutting_board_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var material := ShaderMaterial.new()
+		material.shader = preload("res://shaders/cutting_board_shadow.gdshader")
+		_cutting_board_shadow.material_override = material
+		world.add_child(_cutting_board_shadow)
+	var center := build_cutting_board.to_global(bounds.get_center())
+	# Counter top is at 1.05 m. Keep the blob grounded while the board hops.
+	_cutting_board_shadow.global_position = Vector3(center.x, 1.052, center.z + 0.018)
+	_cutting_board_shadow.rotation.y = build_cutting_board.global_rotation.y
+	var board_scale := build_cutting_board.global_basis.get_scale()
+	(_cutting_board_shadow.mesh as PlaneMesh).size = Vector2(bounds.size.x * board_scale.x + 0.14, bounds.size.z * board_scale.z + 0.14)
 
 
 func _make_smoke2_grill_material(invert_normals: bool = false) -> Material:
@@ -46981,8 +47120,19 @@ func _soda_order_waiting() -> bool:
 func _refresh_soda_cup_hint() -> void:
 	if soda_cup_hint_label == null or not is_instance_valid(soda_cup_hint_label):
 		return
+	soda_cup_hint_label.visible = _soda_order_waiting()
 	if soda_cup_hint_label.text != "click or grab cup here":
 		soda_cup_hint_label.text = "click or grab cup here"
+	if not soda_cup_hint_label.visible or not is_instance_valid(camera): return
+	var rack := soda_cup_hint_label.get_parent() as Node3D
+	var anchor := rack.to_global(Vector3(0,.24,.04))
+	if camera.is_position_behind(anchor): return
+	var screen := camera.unproject_position(anchor)
+	var top_bar := get_node_or_null("UI/Root/TopBar") as Control
+	if is_instance_valid(top_bar):
+		var hud_bottom := _gui_to_camera_screen(Vector2(0,top_bar.get_global_rect().end.y+36))
+		screen.y = maxf(screen.y,hud_bottom.y)
+	soda_cup_hint_label.global_position = camera.project_position(screen,-camera.to_local(anchor).z)
 
 
 func _fryer_is_in_use() -> bool:
@@ -47013,11 +47163,32 @@ func _build_board_hint_label() -> void:
 	lab.visible = true
 	build_cutting_board.add_child(lab)
 	build_board_hint_label = lab
+	if not is_instance_valid(_build_serve_button):
+		_build_serve_button = Button.new()
+		_build_serve_button.name = "BuildServeButton"
+		_build_serve_button.text = "SERVE"
+		_build_serve_button.size = Vector2(72, 28)
+		_build_serve_button.focus_mode = Control.FOCUS_NONE
+		_build_serve_button.z_index = 20
+		_build_serve_button.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+		_build_serve_button.add_theme_font_size_override("font_size", 14)
+		_build_serve_button.add_theme_color_override("font_color", Color("FFD36B"))
+		_build_serve_button.add_theme_color_override("font_outline_color", Color("51341E"))
+		_build_serve_button.add_theme_constant_override("outline_size", 3)
+		for state in ["normal", "hover", "pressed", "disabled"]:
+			_build_serve_button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+		_build_serve_button.pressed.connect(func(): _board_tap_feedback(); _on_serve())
+		get_node("UI/Root").add_child(_build_serve_button)
 	_nudge_label3d_on_screen(build_board_hint_label, build_hint_screen_nudge)
 	_refresh_build_board_hint()
 
 
 func _refresh_build_board_hint() -> void:
+	if is_instance_valid(_build_serve_button):
+		_build_serve_button.visible = false
+		if _build_serve_button.visible and is_instance_valid(camera):
+			var ui: Control = get_node("UI/Root")
+			_build_serve_button.position = ui.get_global_transform_with_canvas().affine_inverse() * camera.unproject_position(_cutting_board_world_center()) + Vector2(-36, 38)
 	if build_board_hint_label == null or not is_instance_valid(build_board_hint_label):
 		return
 	if not playing:
@@ -47708,15 +47879,22 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	bun_pile_anchors.clear()
 	var gfx := _read_graphics_from_ui() if not gfx_sliders.is_empty() else GFX_DEFAULTS
 	var bun_scale := clampf(float(gfx.get("burger_bun_scale", GFX_DEFAULTS["burger_bun_scale"])), 0.45, 2.5)
-	var model_scale := BUN_PILE_SCALE * bun_scale
+	var model_scale := BUN_PILE_SCALE * bun_scale * .88
+	var bread_box := preload("res://scripts/bread_box.gd").new()
+	bread_box.name = "BreadBox"
+	bread_box.position.z = BREAD_BOX_BACK_OFFSET
+	bun_pile_root.add_child(bread_box)
+	bread_box.setup(self,bun_scale)
 	var Pack := preload("res://scripts/burger_pack_models.gd")
 	for tower_i in BUN_PILE_TOWER_COUNT:
 		var tower := Node3D.new()
 		tower.name = "BunTower_%d" % tower_i
 		tower.position = BUN_PILE_BASE + Vector3(float(tower_i) * BUN_PILE_SPACING_X * bun_scale, 0.0, 0.0)
-		# Cook's camera-right is world -X. Move only the right-hand tower six inches from its original position.
+		tower.position.y += .105*bun_scale
+		tower.position.z += BREAD_BOX_BACK_OFFSET
+		# Cook's camera-left is world +X; inset the right tower one inch.
 		if tower_i == 0:
-			tower.position.x -= 0.1524
+			tower.position.x -= 0.1270
 		tower.rotation_degrees = Vector3(0.0, float(tower_i) * 9.0 - 4.0, 0.0)
 		bun_pile_root.add_child(tower)
 		for pair_i in BUN_PILE_PAIRS_PER_TOWER:
@@ -47746,6 +47924,8 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 			pair.add_child(top)
 			_burgerpack_boost_draw(bottom)
 			_burgerpack_boost_draw(top)
+			if pair_i == 0:
+				tower.position.y = .105*bun_scale - _shop_preview_bounds(pair).position.y
 			## Tight per-pair grab — taps only fire when the cursor ray hits a bun.
 			var grab := Area3D.new()
 			grab.name = "BunPairGrab"
@@ -47769,6 +47949,7 @@ func _build_bun_inventory_piles(parent: Node3D) -> void:
 	var home := Node3D.new()
 	home.name = "BunPileHome"
 	home.position = BUN_PILE_BASE + Vector3(0.0, 0.08 * maxf(1.0, bun_scale), 0.0)
+	home.position.z += BREAD_BOX_BACK_OFFSET
 	bun_pile_root.add_child(home)
 	bun_pile_anchors["bun_bottom"] = home
 	bun_pile_anchors["bun_top"] = home
@@ -48672,6 +48853,20 @@ func _handle_build_swipe(event: InputEvent) -> bool:
 	if stations[si]["items"] != gesture.items: return true
 	var distance := maxf(float(gesture.distance), event.position.distance_to(gesture.origin))
 	if distance >= 24.0:
+		if str(gesture.id) == "onion" and not bool(stations[si].get("cooked_onion", false)):
+			if _ensure_onion_kitchen().spawn(event.position, false):
+				stations[si]["items"].remove_at(int(gesture.layer))
+				_after_station_edit(si)
+				return true
+		if BUN_TOAST_ENABLED and str(gesture.id) in ["bun_bottom", "bun_top"]:
+			var hit := _grill_plane_from_screen(event.position)
+			if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
+				_pickup_station_bun_to_hand(si, int(gesture.layer))
+				if spatula_patty != null:
+					spatula_vel_screen = Vector2.ZERO
+					spatula_lmb_held = false
+					_place_spatula_on_grill(hit)
+				return true
 		if mp_enabled:
 			if NetManager.is_host(): mp_request_build_swipe(si,int(gesture.layer),gesture.items)
 			else: mp_request_build_swipe.rpc_id(1,si,int(gesture.layer),gesture.items)
@@ -48710,11 +48905,42 @@ func _try_build_burger_click(screen_pos: Vector2) -> bool:
 	var si := int(row.get_meta("station_index",-1))
 	if si < 0 or stations[si]["items"].is_empty(): return false
 	active_station = si
-	if str(row.get_meta("item_id","")) == "bun_bottom":
+	if str(row.get_meta("item_id","")) == "bun_bottom" and not BUN_TOAST_ENABLED:
 		_begin_whole_burger_drag(si)
 	else:
 		_build_swipe = {"station":si, "layer":int(row.get_meta("stack_i", -1)), "id":str(row.get_meta("item_id", "")), "origin":screen_pos, "distance":0.0, "items":stations[si]["items"].duplicate(), "row":row, "home":row.position}
 	return true
+
+
+var _bun_pile_drag: Dictionary = {}
+
+func _handle_bun_pile_drag(event: InputEvent) -> bool:
+	if _bun_pile_drag.is_empty(): return false
+	if not playing:
+		_bun_pile_drag.clear()
+		return false
+	if event is InputEventMouseMotion:
+		if event.position.distance_to(_bun_pile_drag.origin) >= 14.0:
+			_bun_pile_drag.clear()
+			if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0: return true
+			if not _mp_spend_ingredient("bun_bottom"): return true
+			if not _mp_spend_ingredient("bun_top"): return true
+			if not stations[STATION_CRAFT]["items"].has("bun_bottom"): stations[STATION_CRAFT]["buns_on_grill"] = true
+			spatula_patty = _make_held_bun()
+			spatula_from_build = true
+			spatula_lmb_held = true
+			spatula_last_mouse = event.position
+			spatula_vel_screen = Vector2.ZERO
+			spatula_carry_travel = 0.0
+			_refresh_spatula_ui()
+			_update_held_spatula_patty(.016)
+		return true
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		var pair = _bun_pile_drag.get("pair")
+		_bun_pile_drag.clear()
+		if is_instance_valid(pair): _tap_bun_pile(pair)
+		return true
+	return false
 
 
 func _try_bun_pile_click(screen_pos: Vector2) -> bool:
@@ -48733,6 +48959,11 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 	if _bun_visual_pair_count() <= 0:
 		_flash("Out of buns — restock on phone!", Color("EF5350"))
 		return true
+	_bun_pile_drag = {"origin": screen_pos, "pair": pair}
+	return true
+
+
+func _tap_bun_pile(pair: Node3D) -> void:
 	if not stations[STATION_CRAFT]["items"].has("bun_bottom"):
 		_add_ingredient_to_station(STATION_CRAFT, "bun_bottom")
 	_bounce_bun_click_target(pair)
@@ -48743,7 +48974,6 @@ func _try_bun_pile_click(screen_pos: Vector2) -> bool:
 			and stations[STATION_CRAFT]["items"].has("patty") \
 			and not stations[STATION_CRAFT]["items"].has("bun_top"):
 		_add_ingredient_to_station(STATION_CRAFT, "bun_top")
-	return true
 
 
 func _animate_bun_to_build_station(id: String, station_index: int = STATION_CRAFT) -> void:
@@ -50006,7 +50236,9 @@ func _commit_social_review(
 		(social_reviews[0] as Dictionary)["pic_png"] = pic_png
 	if stars >= 4.95: _chef_award_once(customer, "review", 25, "Five-star review")
 	_show_customer_review_stars(customer, stars, text)
-	_show_customer_review_ui(stars, text)
+	# Served guests present their one bubble from the dance/review phase.
+	if not is_instance_valid(customer) or not bool(customer.get_meta("meal_aside", false)):
+		_show_customer_review_ui(stars, text, customer)
 	if mp_enabled and NetManager.is_host() and NetManager.is_online():
 		## The absolute feed packet below already carries this review. Sending the
 		## separate review RPC duplicated PNG decode/upload work on every guest.
@@ -50033,7 +50265,15 @@ func _show_customer_review_stars(customer: Node3D, stars: float, review_text: St
 		customer.show_review_stars(stars, review_text)
 
 
-func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
+func _pause_customer_review(customer: Node3D, paused: bool) -> void:
+	if not is_instance_valid(_review_toast) or _review_toast.get_meta("customer_id", 0) != customer.get_instance_id():
+		return
+	if is_instance_valid(_review_toast_tween):
+		if paused: _review_toast_tween.pause()
+		else: _review_toast_tween.play()
+
+
+func _show_customer_review_ui(stars: float, review_text: String = "", customer: Node3D = null) -> void:
 	var ui := get_node_or_null("UI/Root") as Control
 	if ui == null: return
 	if is_instance_valid(_review_toast_tween): _review_toast_tween.kill()
@@ -50044,20 +50284,63 @@ func _show_customer_review_ui(stars: float, review_text: String = "") -> void:
 	_review_toast.z_index = 75
 	ui.add_child(_review_toast)
 	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_review_toast.offset_left=-850;_review_toast.offset_right=-610
-	_review_toast.offset_top=172;_review_toast.offset_bottom=172
+	_review_toast.offset_left=-1140;_review_toast.offset_right=-900
+	_review_toast.offset_top=202;_review_toast.offset_bottom=202
 	var skin := StyleBoxFlat.new()
 	skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F")
 	skin.shadow_color=Color(0.18,.10,.04,.25);skin.shadow_size=5
 	skin.set_border_width_all(2);skin.set_corner_radius_all(9)
-	skin.content_margin_left=10;skin.content_margin_right=10;skin.content_margin_top=7;skin.content_margin_bottom=7
+	skin.content_margin_left=18;skin.content_margin_right=18;skin.content_margin_top=10;skin.content_margin_bottom=10
 	_review_toast.add_theme_stylebox_override("panel",skin)
-	var copy:=Label.new();copy.custom_minimum_size.x=220;copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	var tail_edge := Polygon2D.new()
+	tail_edge.color = skin.border_color
+	tail_edge.polygon = PackedVector2Array([Vector2(-3,-12), Vector2(18,7), Vector2(-3,12)])
+	_review_toast.add_child(tail_edge)
+	var tail_fill := Polygon2D.new()
+	tail_fill.color = skin.bg_color
+	tail_fill.polygon = PackedVector2Array([Vector2(-4,-9), Vector2(12,5), Vector2(-4,9)])
+	_review_toast.add_child(tail_fill)
+	var toast := _review_toast
+	if is_instance_valid(customer):
+		toast.set_meta("customer_id", customer.get_instance_id())
+		var follow_customer := func():
+			var camera := get_viewport().get_camera_3d()
+			if is_instance_valid(customer) and camera != null:
+				var body_ui := ui.get_global_transform_with_canvas().affine_inverse() * camera.unproject_position(customer.global_position)
+				toast.position.x = maxf(12.0, body_ui.x - toast.size.x - 65.0)
+		get_tree().process_frame.connect(follow_customer)
+		toast.tree_exiting.connect(func():
+			if get_tree().process_frame.is_connected(follow_customer):
+				get_tree().process_frame.disconnect(follow_customer)
+		)
+	toast.resized.connect(func():
+		tail_edge.position = Vector2(toast.size.x, toast.size.y * 0.55)
+		tail_fill.position = tail_edge.position
+		var camera := get_viewport().get_camera_3d()
+		if is_instance_valid(customer) and camera != null:
+			var body_screen := camera.unproject_position(customer.global_position)
+			var body_ui := ui.get_global_transform_with_canvas().affine_inverse() * body_screen
+			toast.position.x = maxf(12.0, body_ui.x - toast.size.x - 65.0)
+	)
+	var lines := VBoxContainer.new()
+	lines.add_theme_constant_override("separation", 3)
+	_review_toast.add_child(lines)
+	var rating := HBoxContainer.new()
+	rating.add_theme_constant_override("separation", 8)
+	lines.add_child(rating)
+	for part in ["stars", "score"]:
+		var label := Label.new()
+		label.text = "★".repeat(clampi(roundi(stars),0,5)) if part == "stars" else "%.1f / 5" % stars
+		label.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
+		label.add_theme_font_size_override("font_size",14)
+		label.add_theme_color_override("font_color",Color("D6A21D") if part == "stars" else Color("715033"))
+		rating.add_child(label)
+	var copy:=Label.new();copy.custom_minimum_size=Vector2(204,57);copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 	copy.max_lines_visible=3;copy.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
-	copy.text="%s  %.1f / 5\n%s" % ["★".repeat(clampi(roundi(stars),0,5)),stars,review_text]
+	copy.text=review_text
 	copy.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
 	copy.add_theme_font_size_override("font_size",14);copy.add_theme_color_override("font_color",Color("715033"))
-	_review_toast.add_child(copy)
+	lines.add_child(copy)
 	_review_toast.modulate.a=0.0
 	_review_toast_tween=_review_toast.create_tween()
 	_review_toast_tween.tween_property(_review_toast,"modulate:a",1.0,0.18)
@@ -50844,6 +51127,22 @@ func _on_muvye_cinema_mode(enabled: bool) -> void:
 		if screen_sb != null:
 			screen_sb.bg_color = Color.BLACK if enabled else Color(0.05, 0.075, 0.12, 0.99)
 			screen_sb.border_color = Color.BLACK if enabled else Color(0.28, 0.48, 0.62, 0.40)
+
+
+func _open_phone_to_fryer() -> void:
+	if hud_chrome_collapsed: _toggle_hud_chrome_collapsed()
+	if is_instance_valid(phone_column): phone_column.show()
+	_set_phone_app("shop")
+	if not _phone_expanded:
+		_set_phone_expanded(true)
+		await _phone_size_tween.finished
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if _phone_app_id != "shop" or not is_instance_valid(phone_scroll): return
+	var card := phone_shop_page.find_child("ShopCard_%s" % SHOP_FRYER_MACHINE,true,false) as Control
+	if card != null:
+		var local := phone_scroll.get_global_transform().affine_inverse()*card.global_position
+		phone_scroll.scroll_vertical += int(local.y)
 
 
 func _set_phone_app(app_id: String) -> void:
@@ -51909,7 +52208,7 @@ func _make_shop_product_preview(id: String) -> Control:
 	## The ice-cream station is slender; frame it more tightly than the other gear.
 	preview_camera.size = 1.70 if id == SHOP_ICECREAM_MACHINE else 2.16
 	preview.add_child(preview_camera)
-	preview_camera.look_at_from_position(Vector3(2.1, 1.35, 2.7), Vector3(0.0, 0.02, 0.0), Vector3.UP)
+	preview_camera.look_at_from_position(Vector3(0.0, 1.35, 3.4), Vector3(0.0, 0.02, 0.0), Vector3.UP)
 	preview_camera.current = true
 	return frame
 
@@ -54776,6 +55075,11 @@ func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 		elif on_hold and cooked:
 			hold_cooked = true
 			heat = maxf(heat, 0.45)
+	if is_instance_valid(_onion_kitchen) and grill_on:
+		for onion in _onion_kitchen.batches:
+			if is_instance_valid(onion) and not _is_in_warmer_zone(onion.global_position):
+				active_cook = true
+				heat = maxf(heat, .35)
 	var vol_mul := 1.0
 	var cooking := false
 	if active_cook:
@@ -63159,6 +63463,8 @@ func _fit_ticket_wrap_size(wrap: Control, s: float) -> void:
 func _ticket_line_specs(order: Array) -> Array:
 	## One slip line per checkable ask — EVERYTHING stays one line, not every topping.
 	var lines: Array = []
+	if order.has("toasted_bun"):
+		lines.append({"id": "toasted_bun", "label": "TOASTED BUNS"})
 	var burger: Array = GameDataScript.order_burger_items(order)
 	var sodas: Array = GameDataScript.order_soda_ids(order)
 	var wants_icecream := GameDataScript.wants_icecream(order)
@@ -63177,13 +63483,15 @@ func _ticket_line_specs(order: Array) -> Array:
 		lines.append({"id": "everything", "label": "EVERYTHING"})
 	elif not burger.is_empty():
 		for item in burger:
-			if item == "bun_bottom" or item == "bun_top" or item == "patty":
+			if item == "bun_bottom" or item == "bun_top" or item == "patty" or (item == "onion" and order.has("grilled_onion")):
 				continue
 			var label_txt: String = str(GameDataScript.INGREDIENT_LABELS.get(item, item)).to_upper()
 			lines.append({"id": str(item), "label": label_txt})
 	for sid in sodas:
 		var soda_lab: String = str(GameDataScript.INGREDIENT_LABELS.get(sid, sid)).to_upper()
 		lines.append({"id": str(sid), "label": soda_lab})
+	if order.has("grilled_onion"):
+		lines.append({"id": "grilled_onion", "label": "GRILLED ONIONS"})
 	if wants_icecream:
 		lines.append({"id": "icecream", "label": "ICE CREAM"})
 	if wants_fries:
@@ -63207,6 +63515,10 @@ func _ticket_line_is_done(line_id: String, built: Array, customer: Node3D = null
 	if line_id == "fries":
 		return _fries_ready_for_order(customer.order if customer != null and is_instance_valid(customer) else [], customer)
 	match line_id:
+		"grilled_onion":
+			return built.has("onion") and bool(stations[active_station].get("cooked_onion", false))
+		"toasted_bun":
+			return _station_has_toasted_buns(active_station)
 		"triple_patty":
 			var n3 := 0
 			for x3 in built:
@@ -63528,7 +63840,8 @@ func _make_ticket_paper_style(selected: bool) -> StyleBoxTexture:
 	if selected:
 		var front := AtlasTexture.new()
 		front.atlas = MAIN_TICKET_BLANK
-		front.region = Rect2(0, 0, 1024, 2048)
+		front.region = Rect2(16, 16, 992, 2016)
+		front.filter_clip = true
 		style.texture = front
 	else:
 		style.texture = _ticket_paper_texture(false)
@@ -63568,18 +63881,12 @@ func _ticket_paper_texture(selected: bool) -> Texture2D:
 			return _ticket_paper_tex_sel
 	elif _ticket_paper_tex != null:
 		return _ticket_paper_tex
-	if ResourceLoader.exists(TICKET_PAPER_TEXTURE_PATH):
-		var generated := load(TICKET_PAPER_TEXTURE_PATH) as Texture2D
+	if MAIN_TICKET_BLANK != null:
+		var generated := AtlasTexture.new()
+		generated.atlas = MAIN_TICKET_BLANK
+		generated.region = Rect2(16,16,992,2016)
+		generated.filter_clip = true
 		if generated != null:
-			# Trim transparent image margins before stretching taller queued orders.
-			var paper_image := generated.get_image()
-			if paper_image != null:
-				if paper_image.is_compressed(): paper_image.decompress()
-				var cropped := AtlasTexture.new()
-				cropped.atlas = generated
-				cropped.region = paper_image.get_used_rect()
-				cropped.filter_clip = true
-				generated = cropped
 			if selected:
 				_ticket_paper_tex_sel = generated
 			else:
@@ -65410,20 +65717,23 @@ func _request_condiment_add(id: String, station_index: int) -> void:
 
 
 func _queue_condiment_pour(id: String, station_index: int, networked: bool) -> void:
-	if not _is_condiment(id):
+	if not _is_condiment(id) or station_index < 0 or station_index >= stations.size():
+		return
+	if stations[station_index].items.has(id):
 		return
 	var entry := {"id": id, "station": station_index, "networked": networked, "deposited": false}
+	var reveal := {"progress": 0.0}
+	if not stations[station_index].has("sauce_reveal"): stations[station_index]["sauce_reveal"] = {}
+	stations[station_index]["sauce_reveal"][id] = reveal
+	entry["reveal"] = reveal
 	# Accept the sauce and refresh its ticket checkmark immediately; pouring is cosmetic.
 	_deposit_condiment_entry(entry)
-	## Ignore a duplicate squeeze animation while this bottle is already traveling.
+	## A new burger waits for this bottle to finish its previous trip.
 	if _condiment_auto_active.has(id):
+		condiment_pour_queue.append(entry)
 		return
-	for queued in condiment_pour_queue:
-		if str(queued.get("id", "")) == id and int(queued.get("station", -1)) == station_index:
-			return
 	if _condiment_bottle_busy(id) or _mp_remote_using_condiment(id):
-		if not networked:
-			condiment_pour_queue.append(entry)
+		condiment_pour_queue.append(entry)
 		return
 	if condiment_tool_held == id or (condiment_pour_busy and condiment_active_id == id):
 		condiment_pour_queue.append(entry)
@@ -65612,6 +65922,7 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 	var root: Node3D = condiment_bottle_roots.get(id, null)
 	if root == null or not is_instance_valid(root):
 		_deposit_condiment_entry(entry)
+		_set_condiment_reveal(entry,1.0)
 		_finish_condiment_pour(id)
 		return
 	_condiment_auto_active[id] = true
@@ -65674,7 +65985,13 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 			root.position = pour_pos + Vector3(sin(t * TAU * 3.0) * 0.0035, sin(t * TAU * 2.0) * 0.002, 0.0)
 			var squeeze := 1.0 - sin(t * PI) * 0.045
 			root.scale = Vector3(1.0 + (1.0 - squeeze) * 0.35, squeeze, 1.0 + (1.0 - squeeze) * 0.35)
-			_update_condiment_stream(id, root, target, t, stream),
+			var spread := clampf((t-.12)/.88,0.0,1.0)
+			var landing := target + camera_right * lerpf(-.075,.075,spread)
+			if t<.12:
+				var tip := root.to_global(Vector3(0.0,CONDIMENT_BOTTLE_HEIGHT*.5,0.0))
+				landing = tip.lerp(landing,t/.12)
+			_update_condiment_stream(id, root, landing, t, stream)
+			_set_condiment_reveal(entry,spread),
 		0.0, 1.0, CONDIMENT_BOTTLE_POUR_SEC
 	)
 	tw.tween_callback(func() -> void:
@@ -65684,9 +66001,20 @@ func _start_condiment_pour(entry: Dictionary) -> void:
 			root.scale = Vector3.ONE
 			root.set_meta("condiment_squeezing", false)
 		_deposit_condiment_entry(entry)
+		_set_condiment_reveal(entry,1.0)
 		_return_condiment_bottle(id, root, _condiment_bottle_home(id), home_rot, stream)
 		call_deferred("_try_auto_serve")
 	)
+
+
+func _set_condiment_reveal(entry: Dictionary, progress: float) -> void:
+	var station := int(entry.get("station",-1))
+	if station<0 or station>=stations.size(): return
+	var state: Dictionary = entry.get("reveal",{})
+	if state.is_empty() or not is_same(stations[station].get("sauce_reveal",{}).get(entry.id),state): return
+	state.progress = progress
+	var material: ShaderMaterial = state.get("material")
+	if is_instance_valid(material): material.set_shader_parameter("progress",progress)
 
 
 func _deposit_condiment_entry(entry: Dictionary) -> void:
@@ -65809,7 +66137,9 @@ func _finish_condiment_pour(id: String = "", stream: MeshInstance3D = null) -> v
 		var next: Dictionary = next_value
 		var station_index := int(next.get("station", -1))
 		var next_id := str(next.get("id", ""))
-		if station_index < 0 or station_index >= STATION_COUNT:
+		if station_index < 0 or station_index >= stations.size():
+			continue
+		if not is_same(stations[station_index].get("sauce_reveal", {}).get(next_id), next.get("reveal")):
 			continue
 		var items: Array = stations[station_index].get("items", [])
 		if (items.has(next_id) and not bool(next.get("deposited", false))) \
@@ -66353,12 +66683,17 @@ func _on_grill_drop_zone_gui_input(ev: InputEvent) -> void:
 
 
 func _can_drop_on_grill_zone(data: Variant) -> bool:
+	if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "ingredient" and str(data.get("id", "")) == "onion": return true
 	if _can_drop_station_patty_on_grill(data):
 		return true
 	return _can_drop_cheese_on_grill(data)
 
 
 func _drop_on_grill_zone(data: Variant) -> void:
+	if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "ingredient" and str(data.get("id", "")) == "onion":
+		_ensure_onion_kitchen().spawn(get_viewport().get_mouse_position())
+		_clear_pending_ingredient_throw_state("onion")
+		return
 	if typeof(data) == TYPE_DICTIONARY and str(data.get("kind", "")) == "station_patty":
 		_drop_station_patty_on_grill(data)
 		return
@@ -66454,9 +66789,14 @@ func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
 
 
 func _on_gui_drag_ended(was_accepted: bool) -> void:
+	if is_instance_valid(_ingredient_slingshot) and _ingredient_slingshot.pulling: return
 	if grill_drop_zone != null and is_instance_valid(grill_drop_zone):
 		grill_drop_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var mouse := get_viewport().get_mouse_position()
+	if _pending_ingredient_drag == "onion" and not was_accepted:
+		if _ensure_onion_kitchen().spawn(mouse):
+			_clear_pending_ingredient_throw_state("onion")
+			return
 	if _try_throw_dragged_ingredient_at_customer(mouse):
 		_pending_reorder_drag = null
 		return
@@ -66720,6 +67060,7 @@ func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3
 	var land := hit_world
 	if land == Vector3.ZERO:
 		land = _customer_food_land_world(cust, zone)
+	_ensure_ingredient_slingshot().impact(cust,land,id)
 	if id == "ketchup" or id == "mustard":
 		_splat_condiment_on_customer(cust, id, zone)
 	elif cust.has_method("receive_stuck_food"):
@@ -66729,6 +67070,23 @@ func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3
 	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 	_flash("%s stuck: wawawa" % label, Color("FFE082"))
 
+
+func _ensure_ingredient_slingshot() -> Node2D:
+	if not is_instance_valid(_ingredient_slingshot):
+		_ingredient_slingshot = preload("res://scripts/ingredient_slingshot.gd").new()
+		_ingredient_slingshot.game = self
+		_ingredient_slingshot.z_index = 100
+		get_node("UI/Root").add_child(_ingredient_slingshot)
+	return _ingredient_slingshot
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_ingredient_slingshot(id: String, source: Vector2, target: Vector2) -> void:
+	if not GameDataScript.INGREDIENT_LABELS.has(id): return
+	_mp_applying = true
+	if _mp_spend_ingredient(id):
+		_ensure_ingredient_slingshot().launch(id,source*get_viewport().get_visible_rect().size,target*get_viewport().get_visible_rect().size)
+	_mp_applying = false
+	if mp_enabled and NetManager.is_host(): _mp_broadcast_economy()
 
 func _put_cheese_on_customer_head(cust: Node3D) -> void:
 	if cust == null or not is_instance_valid(cust):
@@ -67237,22 +67595,25 @@ func _is_bun_toast(node) -> bool:
 	return node != null and is_instance_valid(node) and node.has_method("is_bun_toast") and bool(node.is_bun_toast())
 
 
-func _seed_cutting_board_buns(station_index: int = STATION_CRAFT) -> void:
-	## Empty Build board always starts with a toastable top + bottom bun.
-	if not BUN_TOAST_ENABLED:
-		return
-	if station_index < 0 or station_index >= STATION_COUNT:
-		return
-	var st: Dictionary = stations[station_index]
-	var items: Array = st["items"]
-	var patties: Array = st.get("patties", [])
-	if not items.is_empty() or not patties.is_empty():
-		return
-	st["items"] = ["bun_bottom", "bun_top"]
-	st["bun_toast"] = {}
-	st["selected_layer"] = -1
-	_refresh_station(station_index)
-	_mp_broadcast_station(station_index)
+func _seed_cutting_board_buns(_station_index: int = STATION_CRAFT) -> void:
+	# Stocked bun pairs are supplied by the counter or first patty, never for free.
+	pass
+
+
+func _station_has_toasted_buns(station_index: int) -> bool:
+	if station_index < 0 or station_index >= stations.size(): return false
+	for id in ["bun_bottom", "bun_top"]:
+		if not stations[station_index]["items"].has(id): return false
+		var cook := _station_bun_cook_time(station_index, id)
+		if cook < BunToastScript.TOAST_READY or cook > BunToastScript.TOAST_BURNT: return false
+	return true
+
+
+func _station_order_items(station_index: int, recipe: Array = []) -> Array:
+	var items: Array = (stations[station_index]["items"] if recipe.is_empty() else recipe).duplicate()
+	if _station_has_toasted_buns(station_index) and not items.has("toasted_bun"): items.append("toasted_bun")
+	if items.has("onion") and bool(stations[station_index].get("cooked_onion",false)) and not items.has("grilled_onion"): items.append("grilled_onion")
+	return items
 
 
 func _station_bun_cook_time(station_index: int, bun_id: String) -> float:
@@ -67281,7 +67642,7 @@ func _bun_layer_modulate(cook_time: float) -> Color:
 	if cook_time <= BunToastScript.TOAST_READY:
 		return raw.lerp(toasted, cook_time / BunToastScript.TOAST_READY)
 	var t := clampf(
-		(cook_time - BunToastScript.TOAST_READY) / maxf(0.001, BunToastScript.TOAST_BURNT - BunToastScript.TOAST_READY),
+		(cook_time - BunToastScript.TOAST_BURNT) / 8.0,
 		0.0, 1.0
 	)
 	return toasted.lerp(burnt, t)
@@ -67369,6 +67730,7 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 	else:
 		_start_station_freshness(station_index)
 	_after_station_edit(station_index)
+	st["buns_on_grill"] = true
 	var bun := _make_held_bun("bun_pair", cook)
 	spatula_patty = bun
 	spatula_from_build = true
@@ -67381,7 +67743,7 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 	_update_held_spatula_patty(0.016)
 	if game_audio:
 		game_audio.play_scoop()
-	_flash("Buns ready — grill toast (2s perfect · 4.2s burns)", Color("FFCC80"))
+	_flash("Buns ready — grill toast (8s toasted · burns after 16s)", Color("FFCC80"))
 
 
 func _pickup_bun_from_grill(bun: Area3D) -> void:
@@ -67432,6 +67794,7 @@ func _commit_bun_to_build(bun: Area3D) -> void:
 		return
 	var cook := float(bun.cook_time)
 	var st: Dictionary = stations[STATION_CRAFT]
+	st["buns_on_grill"] = false
 	var items: Array = st["items"]
 	if not items.has("bun_bottom"):
 		items.append("bun_bottom")
@@ -67455,9 +67818,9 @@ func _commit_bun_to_build(bun: Area3D) -> void:
 	if game_audio:
 		_play_ingredient_touch_sfx("bun_top")
 	var note := "raw"
-	if cook >= BunToastScript.TOAST_BURNT:
+	if cook > BunToastScript.TOAST_BURNT:
 		note = "burnt"
-	elif absf(cook - BunToastScript.TOAST_READY) <= BunToastScript.TOAST_PERFECT_SLACK:
+	elif cook >= BunToastScript.TOAST_READY and cook <= BunToastScript.TOAST_BURNT:
 		note = "perfect toast"
 	elif cook >= BunToastScript.TOAST_READY:
 		note = "toasted"
@@ -67582,7 +67945,7 @@ func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> v
 	patty.visible = true
 	patty.rotation_degrees = Vector3.ZERO
 	patty.slot_index = idx
-	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y
+	patty.base_y = GRILL_SURFACE_Y + PATTY_SIT_Y - (0.0254 if _is_bun_toast(patty) else 0.0)
 	patty.heating = grill_on
 	patty.heat_mul = _warmer_heat_mul(pos) * _oil_heat_mul(pos)
 	patty.position = Vector3(pos.x, patty.base_y, pos.z)
@@ -67603,7 +67966,7 @@ func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> v
 		game_audio.play_click()
 	if _is_bun_toast(patty):
 		if not grill_on:
-			_flash("Buns on grill — turn BURNER ON (2s perfect · 4.2s burns)", Color("FFA726"))
+			_flash("Buns on grill — turn BURNER ON (8s toasted · burns after 16s)", Color("FFA726"))
 		elif patty.has_method("is_burnt") and patty.is_burnt():
 			_flash("Burnt buns back on grill", Color("EF5350"))
 		elif patty.has_method("is_perfect_toast") and patty.is_perfect_toast():
@@ -67611,7 +67974,7 @@ func _place_extracted_patty_on_grill(patty: Area3D, idx: int, pos: Vector3) -> v
 		elif patty.has_method("is_ready") and patty.is_ready():
 			_flash("Toasted buns on grill — scoop when you want", Color("FFCC80"))
 		else:
-			_flash("Toasting both buns — 2s perfect, burns at 4.2s", Color("FFE082"))
+			_flash("Toasting both buns — 8s toasted, burns after 16s", Color("FFE082"))
 		return
 	var cook_note: String = str(patty.cook_rating_text()) if patty.has_method("cook_rating_text") else "cooked"
 	if patty.has_cheese:
@@ -67740,6 +68103,7 @@ func _after_station_edit(station_index: int) -> void:
 	## Re-sync stack vs order after any add/remove/reorder — may auto-serve when fixed.
 	if station_index < 0 or station_index >= STATION_COUNT:
 		return
+	if not stations[station_index]["items"].has("onion"): stations[station_index]["cooked_onion"] = false
 	_sync_station_cheese_items(station_index)
 	_refresh_station(station_index)
 	_mp_broadcast_station(station_index)
@@ -67878,6 +68242,14 @@ func _build_ingredient_buttons() -> void:
 func _add_ingredient(id: String) -> void:
 	if id == "bun_bottom":
 		return
+	if active_station >= 0 and active_station < stations.size():
+		var st: Dictionary = stations[active_station]
+		if str(st.get("last_tapped_ingredient", "")) == id and st.items.has(id) and _station_burger_complete(active_station):
+			st["last_tapped_ingredient"] = ""
+			_board_tap_feedback()
+			_on_serve()
+			return
+		st["last_tapped_ingredient"] = id
 	_pulse_ingredient_feedback(id)
 	var station := active_station
 	if _is_condiment(id):
@@ -68249,6 +68621,7 @@ func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: 
 		if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0: return
 		if not _mp_spend_ingredient("bun_bottom"): return
 		if not _mp_spend_ingredient("bun_top"): return
+		build["bun_toast"] = {}
 		build.items.append("bun_bottom")
 		build.items.append("bun_top")
 		build.items = _normalize_burger_stack(build.items)
@@ -68400,7 +68773,7 @@ func _station_burger_complete(station_index: int) -> bool:
 	var customer := _resolve_serve_customer() as Node3D
 	if not is_instance_valid(customer): return false
 	var recipe: Array = GameDataScript.order_burger_items(customer.order)
-	return bool(GameDataScript.compare_orders(st.items, recipe).get("perfect", false))
+	return bool(GameDataScript.compare_orders(_station_order_items(station_index), customer.order).get("perfect", false))
 
 
 func _update_station_layer_hint(station_index: int) -> void:
@@ -68413,11 +68786,11 @@ func _update_station_layer_hint(station_index: int) -> void:
 	if hint == null or not is_instance_valid(hint) or plate == null or not is_instance_valid(plate):
 		return
 	if _station_burger_complete(station_index) and not _serve_fly_busy and int(st.get("hovered_layer",-1)) < 0:
-		hint.text = "CLICK TO WRAP" if is_instance_valid(_grubbah) and _grubbah.is_selected() else "CLICK TO SERVE"
+		hint.text = "CLICK TO WRAP" if is_instance_valid(_grubbah) and _grubbah.is_selected() else ""
 		if is_instance_valid(_grubbah) and _grubbah.is_selected():hint.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
 		else:hint.remove_theme_font_override("font")
 		hint.add_theme_color_override("font_color", Color("FFD36B"))
-		hint.visible = true
+		hint.visible = not hint.text.is_empty()
 		hint.position = Vector2(plate.size.x * .5 - hint.get_minimum_size().x * .5, plate.size.y - 28.0)
 		return
 	var show_i: int = int(st.get("hovered_layer", -1))
@@ -68557,9 +68930,13 @@ func _clear_station(index: int, defer_visual: bool = false) -> void:
 		if p != null and is_instance_valid(p):
 			_return_patty_to_spawn_pool(p)
 	st["patties"] = []
-	st["items"] = ["bun_bottom", "bun_top"] as Array[String] if playing and BUN_TOAST_ENABLED else [] as Array[String]
+	st["items"] = [] as Array[String]
 	st["bun_toast"] = {}
+	st["cooked_onion"] = false
+	st["buns_on_grill"] = false
+	st["sauce_reveal"] = {}
 	st["crown_ready"] = false
+	st["last_tapped_ingredient"] = ""
 	st["selected_layer"] = -1
 	_reset_station_freshness(index)
 	## A serve already owns a pooled copy of the burger. Its persistent station UI
@@ -68771,7 +69148,7 @@ func _refresh_station(index: int) -> void:
 		if item == "patty":
 			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
 		else:
-			layer_tex = FoodSpritesScript.get_tex(item)
+			layer_tex = FoodSpritesScript.bun_cooked_tex(_station_bun_cook_time(index, item)) if item == "bun_bottom" else FoodSpritesScript.get_tex(item)
 		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
 		this_w = fit.x
 		var h := fit.y
@@ -68839,10 +69216,21 @@ func _refresh_station(index: int) -> void:
 			tr.get_node("PattyBubbles").queue_free()
 		## Soft drop shadow under each float layer.
 		var bun_cook := 0.0
-		if item == "bun_bottom" or item == "bun_top":
+		if item == "bun_bottom":
 			bun_cook = _station_bun_cook_time(index, item)
-		tr.modulate = _bun_layer_modulate(bun_cook) if bun_cook > 0.001 else Color(1, 1, 1, 1)
-		if item == "bun_top": tr.modulate = tr.modulate.darkened(0.10)
+		tr.modulate = Color.WHITE
+		if item == "bun_top": tr.modulate = Color.WHITE
+		if item == "onion" and bool(st.get("cooked_onion", false)): tr.modulate = Color(1.0,.88,.62,.78)
+		tr.material = preload("res://shaders/build_bun_color.tres") if item in ["bun_bottom", "bun_top"] else null
+		if _is_condiment(item) and st.get("sauce_reveal",{}).has(item):
+			var reveal: Dictionary = st.sauce_reveal[item]
+			var sauce_mat: ShaderMaterial = reveal.get("material")
+			if not is_instance_valid(sauce_mat):
+				sauce_mat = ShaderMaterial.new()
+				sauce_mat.shader = preload("res://shaders/sauce_reveal.gdshader")
+				reveal.material = sauce_mat
+			sauce_mat.set_shader_parameter("progress",float(reveal.progress))
+			tr.material = sauce_mat
 		_style_build_layer_row(row, stack_i == selected_layer, false)
 	## Nest: heel tucks slightly; crown lifts clear of the patty.
 	if bottom_row != null and is_instance_valid(bottom_row):
@@ -69249,7 +69637,7 @@ func _find_perfect_station_for(order: Array) -> int:
 		var items: Array = stations[i]["items"]
 		if items.is_empty() or not items.has("patty"):
 			continue
-		var result: Dictionary = GameDataScript.compare_orders(items, order)
+		var result: Dictionary = GameDataScript.compare_orders(_station_order_items(i, items), order)
 		var ready := bool(result.get("perfect", false)) or _station_only_needs_top_bun(items, order)
 		if not ready:
 			continue
@@ -69680,7 +70068,7 @@ func _build_serve_fly_stack(parent: Control, station_index: int) -> Dictionary:
 		if item == "patty":
 			layer_tex = _station_patty_layer_tex(st, pidx, layer_key == "patty_cheese")
 		else:
-			layer_tex = FoodSpritesScript.get_tex(item)
+			layer_tex = FoodSpritesScript.bun_cooked_tex(_station_bun_cook_time(station_index,item)) if item == "bun_bottom" else FoodSpritesScript.get_tex(item)
 		var fit := _fit_layer_box_size(layer_tex, this_w, h_base)
 		this_w = fit.x
 		var h := fit.y
@@ -70052,7 +70440,7 @@ func _play_serve_fly_to_mouth(
 	for patty in st.get("patties", []):
 		if is_instance_valid(patty) and patty.has_method("quality_multiplier"):
 			bad_burger = bad_burger or float(patty.quality_multiplier()) < 0.5
-	var wrong_recipe := not bool(GameDataScript.compare_orders(st.items,customer.order).get("perfect",false))
+	var wrong_recipe := not bool(GameDataScript.compare_orders(_station_order_items(station_index),customer.order).get("perfect",false))
 	var reject_burger := wrong_recipe or (not tutorial_mode and bad_burger and randf() >= 0.25)
 	if replicated_rejection >= 0:
 		reject_burger = replicated_rejection == 1
@@ -70645,14 +71033,14 @@ func _complete_serve(
 		_complete_challenge_serve(station_index, cust, remote_drink)
 		return
 	var st: Dictionary = stations[station_index]
-	var items: Array = cust.get_meta("serve_recipe", st["items"]).duplicate()
+	var items: Array = cust.get_meta("serve_recipe", _station_order_items(station_index)).duplicate()
 	var cached_review_pic := _make_review_burger_snapshot(station_index)
 	var result: Dictionary = GameDataScript.compare_orders(items, cust.order)
 	var missing: Array = result.get("missing", []).duplicate()
 	missing.append_array(cust.get_meta("serve_missing_items", []))
 	var served: Array = items.duplicate()
 	for side in cust.order:
-		if GameDataScript.order_burger_items([side]).is_empty() and not cust.get_meta("serve_missing_items", []).has(side): served.append(side)
+		if str(side) not in ["toasted_bun", "grilled_onion"] and GameDataScript.order_burger_items([side]).is_empty() and not cust.get_meta("serve_missing_items", []).has(side): served.append(side)
 	var audit := {"ordered": cust.order.duplicate(), "served": served, "missing": missing, "extra": result.get("extra", []).duplicate()}
 	cust.set_meta("order_audit", audit)
 	if not missing.is_empty() or not audit.extra.is_empty():
@@ -70677,7 +71065,7 @@ func _complete_serve(
 	var doneness_r := _station_doneness_breakdown(station_index)
 	var seasoned := _station_burgers_seasoned(station_index)
 	patty_mult *= float(cook_r.get("pay_mul", 1.0))
-	## Perfect toasted buns (~2s) bump payout; burnt toast hurts it.
+	## Toasted buns earn a bonus; burnt buns lose quality.
 	patty_mult *= _station_bun_toast_mul(station_index)
 	if fresh_r <= 0.15:
 		patty_mult *= 0.45
@@ -70943,7 +71331,7 @@ func _serve_reject_hint(order: Array, station_index: int) -> void:
 		return
 	_sync_station_cheese_items(station_index)
 	var items: Array = stations[station_index]["items"]
-	var result: Dictionary = GameDataScript.compare_orders(items, order)
+	var result: Dictionary = GameDataScript.compare_orders(_station_order_items(station_index, items), order)
 	var missing: Array = result.get("missing", [])
 	var extra: Array = result.get("extra", [])
 	if not extra.is_empty():
@@ -71244,7 +71632,7 @@ func _order_can_receive_burger(customer: Node3D) -> bool:
 func _step_customer_aside_for_meal(customer: Node3D) -> void:
 	if not customer.has_method("step_aside_for_meal") or bool(customer.get_meta("meal_aside",false)):return
 	if bool(customer.get("is_challenge_guest")):return
-	var destination := CustomerScript.lane_x_for(0) + CustomerScript.QUEUE_SPACING*1.3
+	var destination := CustomerScript.lane_x_for(0) + CustomerScript.QUEUE_SPACING*1.9 - 2.0 * FT_TO_M
 	for other in customers:
 		if is_instance_valid(other) and other != customer and bool(other.get_meta("meal_aside",false)) and not bool(other.get("is_leaving")):
 			destination=maxf(destination,float(other.get("target_x"))+CustomerScript.QUEUE_SPACING)
@@ -71264,9 +71652,6 @@ func _begin_customer_serve_handoff(customer: Node3D) -> void:
 	_begin_ticket_transition()
 	_remove_ticket(customer)
 	if selected_customer == customer: selected_customer = null
-	if is_instance_valid(_customer_social):
-		var partner = _customer_social.partner(customer)
-		if is_instance_valid(partner) and tickets.has(partner): selected_customer = partner
 	_resolve_serve_customer()
 	_reposition_customers()
 	_highlight_tickets()
@@ -71363,7 +71748,7 @@ func _begin_serve_at(
 	customer.set_meta("serve_missing_side", not missing_sides.is_empty())
 	customer.set_meta("serve_missing_soda", not soda_present)
 	# Freeze the recipe at handoff; input/replication during flight cannot change scoring.
-	customer.set_meta("serve_recipe", items.duplicate())
+	customer.set_meta("serve_recipe", _station_order_items(station_index, items))
 	_begin_customer_serve_handoff(customer)
 	_shoot_station_condiments_home(station_index)
 	if game_audio and game_audio.has_method("play_order_up"):
@@ -71444,7 +71829,7 @@ func _find_station_for_order(order: Array) -> int:
 	var best := candidates[0]
 	var best_q := -1.0
 	for i in candidates:
-		var q: float = float(GameDataScript.compare_orders(stations[i]["items"], order).get("quality", 0.0))
+		var q: float = float(GameDataScript.compare_orders(_station_order_items(i), order).get("quality", 0.0))
 		if q > best_q:
 			best_q = q
 			best = i
@@ -77065,7 +77450,9 @@ func mp_customer_review_stars(net_id: int, stars: float, review_text: String = "
 		return
 	var c = _customer_by_net_id(net_id)
 	_show_customer_review_stars(c, stars, review_text)
-	_show_customer_review_ui(stars, review_text)
+	if is_instance_valid(c): c.set_meta("sales_review", review_text)
+	if not is_instance_valid(c) or not bool(c.get_meta("meal_aside", false)):
+		_show_customer_review_ui(stars, review_text, c)
 
 
 @rpc("authority", "call_remote", "reliable", 3)
@@ -77487,9 +77874,9 @@ func _mp_broadcast_station(station_index: int, peer_id: int = 0) -> void:
 			patty_ids.append(-1)
 	## Station RPCs are reliable. Skip identical repair frames; freshness is
 	## quantized to whole seconds so its label stays correct without packet spam.
-	var signature := "%s|%s|%s|%d|%s" % [
+	var signature := "%s|%s|%s|%d|%s|%s|%s" % [
 		str(item_ids), str(patty_ids), str(bool(st.get("fresh_active", false))),
-		int(ceil(float(st.get("freshness", FRESHNESS_MAX)))), str(bool(st.get("spoiled", false)))
+		int(ceil(float(st.get("freshness", FRESHNESS_MAX)))), str(bool(st.get("spoiled", false))), str(st.get("bun_toast", {})), str(st.get("cooked_onion", false))
 	]
 	if peer_id <= 0:
 		if str(_mp_station_signatures.get(station_index, "")) == signature:
@@ -77501,12 +77888,14 @@ func _mp_broadcast_station(station_index: int, peer_id: int = 0) -> void:
 		patty_ids,
 		bool(st.get("fresh_active", false)),
 		float(st.get("freshness", FRESHNESS_MAX)),
-		bool(st.get("spoiled", false))
+		bool(st.get("spoiled", false)),
+		st.get("bun_toast", {}).duplicate(),
+		bool(st.get("cooked_onion", false))
 	]
 	if peer_id > 0:
 		_mp_bootstrap_add(peer_id, "mp_sync_station", args)
 	else:
-		mp_sync_station.rpc(args[0], args[1], args[2], args[3], args[4], args[5])
+		mp_sync_station.rpc(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7])
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -77516,7 +77905,9 @@ func mp_sync_station(
 	patty_net_ids: Array,
 	fresh_active: bool = false,
 	freshness: float = -1.0,
-	spoiled: bool = false
+	spoiled: bool = false,
+	bun_toast: Dictionary = {},
+	cooked_onion: bool = false
 ) -> void:
 	_mp_flush_scene_snapshots()
 	if NetManager.is_host():
@@ -77528,6 +77919,10 @@ func mp_sync_station(
 	var previous_items: Array = st.get("items",[]).duplicate()
 	var previous_patties: Array = st.get("patties",[]).duplicate()
 	var previous_spoiled := bool(st.get("spoiled",false))
+	var previous_toast: Dictionary = st.get("bun_toast", {}).duplicate()
+	st["bun_toast"] = bun_toast.duplicate()
+	var previous_onion := bool(st.get("cooked_onion", false))
+	st["cooked_onion"] = cooked_onion
 	var new_patties: Array = []
 	for nid_v in patty_net_ids:
 		var nid := int(nid_v)
@@ -77551,7 +77946,7 @@ func mp_sync_station(
 	for id_v in item_ids:
 		items.append(str(id_v))
 	st["items"] = items
-	var visual_changed := previous_items != items or previous_patties != new_patties or previous_spoiled != spoiled
+	var visual_changed := previous_items != items or previous_patties != new_patties or previous_spoiled != spoiled or previous_toast != bun_toast or previous_onion != cooked_onion
 	if visual_changed: st["selected_layer"] = -1
 	if items.is_empty():
 		_reset_station_freshness(station_index)
@@ -79231,6 +79626,9 @@ func mp_cat_steal_patty(net_id: int) -> void:
 
 
 func _station_sauce_in_flight(station_index: int) -> bool:
+	if station_index>=0 and station_index<stations.size():
+		for id in stations[station_index].get("sauce_reveal",{}):
+			if stations[station_index].items.has(id) and float(stations[station_index].sauce_reveal[id].progress)<1.0: return true
 	for id in _condiment_auto_active:
 		var bottle: Node3D = condiment_bottle_roots.get(id)
 		if is_instance_valid(bottle) and int(bottle.get_meta("condiment_station", -1)) == station_index and bool(bottle.get_meta("condiment_squeezing", false)):

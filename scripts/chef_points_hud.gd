@@ -28,6 +28,24 @@ func _ready() -> void:
 	_draw_count(0)
 func _draw_count(value: float) -> void:
 	shown=value;number.text=str(roundi(value))
+
+func _process(_delta: float) -> void:
+	if is_instance_valid(active_pop): _position_reward(active_pop)
+
+func _exit_tree() -> void:
+	if is_instance_valid(active_pop): active_pop.queue_free()
+	reward_queue.clear()
+
+func _position_reward(pop: Label) -> void:
+	pop.size = Vector2(maxf(526,pop.get_minimum_size().x),maxf(30,pop.get_minimum_size().y))
+	pop.pivot_offset = Vector2(pop.size.x,pop.size.y*.5)
+	# The HUD can be scaled independently of UI/Root. Align in canvas coordinates
+	# against the actual number label, not the HBox's unscaled layout dimensions.
+	var number_center := number.get_global_transform_with_canvas() * (number.size * .5)
+	var hud_left := get_global_transform_with_canvas() * Vector2(0,size.y*.5)
+	var parent_inverse: Transform2D = pop.get_parent().get_global_transform_with_canvas().affine_inverse()
+	var target: Vector2 = parent_inverse * Vector2(hud_left.x-18,number_center.y)
+	pop.position = target - pop.pivot_offset
 func set_total(total: int, amount: int = 0, reason: String = "") -> void:
 	points=total
 	if is_instance_valid(climb):climb.kill()
@@ -43,17 +61,25 @@ func set_total(total: int, amount: int = 0, reason: String = "") -> void:
 func _show_next_reward() -> void:
 	if reward_queue.is_empty(): return
 	var reward: Dictionary=reward_queue.pop_front()
+	var ui_root := get_tree().current_scene.get_node("UI/Root")
+	# Retire stale rewards from a rebuilt HUD before displaying the single current popup.
+	for old in ui_root.get_children():
+		if old is Label and "CHEF POINTS" in old.text.to_upper():
+			old.hide(); ui_root.remove_child(old); old.queue_free()
 	var pop:=Label.new();pop.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	pop.name="ChefPointsReward"
 	active_pop=pop
 	pop.text="+%d CHEF POINTS  -  %s" % [reward.amount,reward.reason]
 	pop.add_theme_font_override("font",FONT);pop.add_theme_font_size_override("font_size",21)
 	pop.add_theme_color_override("font_color",Color("ffe69a"));pop.add_theme_color_override("font_outline_color",Color("292322"));pop.add_theme_constant_override("outline_size",3)
-	get_tree().current_scene.get_node("UI/Root").add_child(pop)
-	pop.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	pop.offset_left=-540;pop.offset_right=-14;pop.offset_top=79;pop.offset_bottom=109
+	pop.add_theme_color_override("font_shadow_color",Color.TRANSPARENT)
+	ui_root.add_child(pop)
+	pop.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_position_reward(pop)
 	pop.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT;pop.z_index=90
+	pop.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
 	pop.modulate.a=0.0
-	pop.pivot_offset=Vector2(520,15);pop.scale=Vector2(0.85,0.85)
+	pop.scale=Vector2(0.85,0.85)
 	var fly:=pop.create_tween();fly.tween_property(pop,"modulate:a",1.0,0.12)
 	fly.parallel().tween_property(pop,"scale",Vector2.ONE,0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	fly.tween_interval(2.1)

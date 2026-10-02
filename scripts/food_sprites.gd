@@ -54,6 +54,16 @@ static func texture_content_aspect(tex: Texture2D) -> float:
 	return aspect
 
 
+static func bun_cooked_tex(seconds: float) -> Texture2D:
+	if seconds < 8.0: return get_tex("bun_bottom")
+	var id := "bun_bottom_burnt" if seconds > 16.0 else "bun_bottom_toasted"
+	if _cache.has(id): return _cache[id]
+	var tex := load(INGREDIENT_DIR+"prepared/"+id+".res") as Texture2D
+	if tex == null: return get_tex("bun_bottom")
+	_cache[id] = tex
+	return tex
+
+
 static func get_tex(id: String) -> Texture2D:
 	if _cache.has(id):
 		return _cache[id]

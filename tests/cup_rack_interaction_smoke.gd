@@ -1,5 +1,9 @@
 extends SceneTree
 
+class DrinkCustomer extends Node3D:
+	var is_waiting := true
+	var order: Array = ["bun_bottom","patty","bun_top"]
+
 
 func _initialize() -> void:
 	call_deferred("_run")
@@ -29,6 +33,20 @@ func _make_game() -> Node:
 
 func _run() -> void:
 	var auto_game = _make_game()
+	var customer := DrinkCustomer.new(); auto_game.world.add_child(customer); auto_game.customers.append(customer)
+	auto_game.soda_cup_hint_label = Label3D.new(); auto_game.soda_root.add_child(auto_game.soda_cup_hint_label)
+	auto_game.soda_root.position = Vector3(0,1.4,1)
+	auto_game._refresh_soda_cup_hint()
+	assert(not auto_game.soda_cup_hint_label.visible,"No cup prompt for burger-only orders")
+	customer.order.append("soda_cola");auto_game._refresh_soda_cup_hint()
+	assert(auto_game.soda_cup_hint_label.visible,"Unserved drink order shows prompt")
+	var projected: Vector2 = auto_game.camera.unproject_position(auto_game.soda_cup_hint_label.global_position)
+	var hud_end: Vector2 = auto_game._gui_to_camera_screen(Vector2(0,auto_game.get_node("UI/Root/TopBar").get_global_rect().end.y+36))
+	assert(projected.y>=hud_end.y-.1,"Drink prompt must clear the money/points row")
+	customer.set_meta("soda_handed",true);auto_game._refresh_soda_cup_hint()
+	assert(not auto_game.soda_cup_hint_label.visible,"Delivered drinks hide prompt")
+	var plastic: StandardMaterial3D = auto_game._make_cup_stack_prop_material()
+	assert(plastic.transparency==BaseMaterial3D.TRANSPARENCY_ALPHA and plastic.albedo_color.a<.25)
 	assert(auto_game._dispense_cup_to_fill_station(), "Rack tap was not accepted")
 	for _frame in 12:
 		await process_frame

@@ -31,7 +31,7 @@ func setup(owner_game: Node, id: String, seconds: float) -> void:
 	camera.size = 2.2
 	preview_camera = camera
 	viewport.add_child(camera)
-	camera.look_at_from_position(Vector3(2,1.5,3),Vector3.ZERO)
+	camera.look_at_from_position(Vector3(0,1.5,3.6),Vector3.ZERO)
 	camera.current = true
 	var light = DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-40,-30,0)
@@ -57,37 +57,52 @@ func setup(owner_game: Node, id: String, seconds: float) -> void:
 		model.position = -bounds.get_center() * factor
 	price = Label.new()
 	price.text = "$%d" % game._shop_item_cost(id)
-	price.position = Vector2(235, 4)
-	price.size = Vector2(250,64)
+	price.position = Vector2(26, 237)
+	price.size = Vector2(146,52)
 	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	price.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
-	price.add_theme_font_size_override("font_size",52)
+	price.add_theme_font_size_override("font_size",36)
 	price.add_theme_color_override("font_color",Color("4D291B"))
 	price.add_theme_color_override("font_outline_color",Color("FFF0A6"))
 	price.add_theme_constant_override("outline_size",3)
 	add_child(price)
+	var caption := Label.new()
+	caption.text = "UPGRADE"
+	caption.position = Vector2(26, 218)
+	caption.size = Vector2(146,22)
+	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	caption.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
+	caption.add_theme_font_size_override("font_size",13)
+	caption.add_theme_color_override("font_color",Color("8A5828"))
+	add_child(caption)
 
 func _process(delta: float) -> void:
 	age += delta
 	if age >= duration or not is_instance_valid(game) or not game.playing: queue_free(); return
 	var screen = get_viewport_rect().size
-	game.flash_label.position.y = maxf(240.0, screen.y - game.flash_label.size.y - 28.0)
-	var fit = minf(1.0, minf(screen.x / 900.0, (game.flash_label.position.y - 12.0) / DISPLAY_SIZE.y))
+	var fit = minf(1.0, minf(screen.x / 900.0, (screen.y - 260.0) / DISPLAY_SIZE.y))
 	fit = maxf(.5, fit)
 	scale = Vector2.ONE * fit
-	position = Vector2((screen.x-DISPLAY_SIZE.x*fit)*.5,maxf(4.0,game.flash_label.position.y-DISPLAY_SIZE.y*fit))
-	turntable.rotation.y = age * .8
+	position = Vector2((screen.x-DISPLAY_SIZE.x*fit)*.5, maxf(130.0,screen.y-DISPLAY_SIZE.y*fit-136.0))
+	turntable.rotation.y = maxf(0.0, age - 1.2) * .38
 	turntable.position.y = sin(age*2.8)*.09
 	queue_redraw()
 
 func _draw() -> void:
-	# Tilted golden retail tag with a punched corner and warm offset shadow.
-	var tag = PackedVector2Array([Vector2(228,0),Vector2(478,6),Vector2(503,36),Vector2(473,72),Vector2(225,64)])
-	var shadow = PackedVector2Array()
-	for point in tag: shadow.append(point + Vector2(4,5))
-	draw_colored_polygon(shadow,Color("71371C"))
-	draw_colored_polygon(tag,Color("FFCA39"))
-	draw_circle(Vector2(479,36),6,Color("71371C"))
+	# Compact cream-and-gold retail tag beside the product.
+	var tag := StyleBoxFlat.new()
+	tag.bg_color = Color("FFF0C8")
+	tag.border_color = Color("D9A441")
+	tag.set_border_width_all(2)
+	tag.set_corner_radius_all(12)
+	tag.shadow_color = Color(0.18,0.10,0.04,0.3)
+	tag.shadow_size = 5
+	tag.shadow_offset = Vector2(2,3)
+	draw_style_box(tag, Rect2(16,208,170,88))
+	draw_line(Vector2(36,240),Vector2(162,240),Color("E5C583"),1.0,true)
+	draw_line(Vector2(185,252),Vector2(222,265),Color("D9A441"),2.0,true)
+	draw_circle(Vector2(176,252),4,Color("D9A441"))
+	draw_circle(Vector2(176,252),2,Color("FFF9E9"))
 	# Sparkles travel with the product's rotating surface, rather than screen corners.
 	for i in 4:
 		var phase = age * 2.8 + i*1.7

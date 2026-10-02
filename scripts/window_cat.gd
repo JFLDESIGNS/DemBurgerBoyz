@@ -10,9 +10,9 @@ const HOME_X := 2.0912
 const TUTORIAL_COACH_X := 2.1548
 const HOME_Z := 2.01
 ## Under the sill when hidden; peek high enough to clear the ledge.
-const HIDDEN_Y := 0.141
-## Counter peek lowered by one inch (0.0254 world meters).
-const SHOWN_Y := 0.741
+const HIDDEN_Y := 0.0902
+## Counter peek lowered a further two inches (0.0508 world meters).
+const SHOWN_Y := 0.6902
 const MESH_SCALE := 0.833333333 ## New asset already contains the old 4.02x modeling scale.
 ## Drop root Y only when overall (giant) scale grows — width chonk stays planted.
 ## Small nudge only — large drops buried him as he grew.
@@ -24,7 +24,7 @@ const FAT_PER_TOPPING := 0.10
 const FAT_MAX := 1.35 ## width chonk cap (~2.35× horizontal)
 ## After max width, keep growing overall until 2× original MESH_SCALE.
 const GIANT_MAX := 1.0 ## +100% uniform scale on top of width chonk
-const DEFAULT_SIZE_MUL := 1.20 ## Start 20% bigger; giant max stays 2× MESH_SCALE.
+const DEFAULT_SIZE_MUL := 1.44 ## Minimum size +20%; giant max stays 2× MESH_SCALE.
 ## Bigger cats stand further from the truck so they still fit the window.
 const APPROACH_Z_PER_GIANT := 1.90
 const APPROACH_START_EXTRA := 0.55 ## extra street distance at the start of a rise
