@@ -46,6 +46,7 @@ func setup(owner_game: Node, id: String, seconds: float) -> void:
 	var source = game._shop_product_source(id)
 	if is_instance_valid(source):
 		var model = source.duplicate(0)
+		preload("res://scripts/shop_product_preview.gd").remove_gameplay_labels(model)
 		model.transform = Transform3D.IDENTITY
 		model.show()
 		model.process_mode = Node.PROCESS_MODE_DISABLED

@@ -2222,6 +2222,23 @@ func _update_flip_smoke(delta: float) -> void:
 	_flip_smoke.position.y = _smoke_base_y + sin(_smoke_bob_phase) * FLIP_SMOKE_BOB_AMP
 
 
+var _slide_press_tween: Tween
+var _slide_press_rest := Vector3.ONE
+
+func play_slide_press() -> void:
+	# Press feedback only: do not change cook times, flip state, or smash bonus.
+	if place_ball_waiting or place_morphing: return
+	if is_instance_valid(_slide_press_tween) and _slide_press_tween.is_running():
+		_slide_press_tween.kill()
+		scale = _slide_press_rest
+	_slide_press_rest = scale
+	var audio := _audio()
+	if audio: audio.play_smash_sizzle()
+	_slide_press_tween = create_tween()
+	_slide_press_tween.tween_property(self,"scale",_slide_press_rest*Vector3(1.16,.72,1.16),.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_slide_press_tween.tween_property(self,"scale",_slide_press_rest,.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
 func smash() -> void:
 	## Second right-click on a placed ice ball → slow spatula squash into a patty.
 	if place_ball_waiting:

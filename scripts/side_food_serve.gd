@@ -25,6 +25,7 @@ var fries_position := Vector3.ZERO
 
 func setup(owner_game: Node, eater: Node3D, model: Node3D, food_kind: String, callback: Callable, wait: float = 0.0) -> void:
  game=owner_game;customer=eater;food=model;kind=food_kind;completed=callback;delay=wait
+ add_to_group("side_food_presentations")
  start_position=food.global_position
  source_scale=food.scale
  hand_size=2.0 if kind=="fries" else 1.4
@@ -82,6 +83,8 @@ func _process(delta: float) -> void:
  if finished: return
  if not is_instance_valid(customer) or not is_instance_valid(food):
   finish();return
+ if started and bool(customer.get_meta("burger_in_flight",false)):
+  finish(true);return
  if not started:
   delay-=delta
   if delay>0:return
@@ -148,14 +151,14 @@ func _process(delta: float) -> void:
  # Let the last lowering motion finish before releasing the customer.
  if elapsed>=3.45:finish()
 
-func finish() -> void:
+func finish(interrupted_by_burger: bool = false) -> void:
  if finished:return
  finished=true
  if is_instance_valid(customer):
   customer.set_meta("side_food_pending",maxi(0,int(customer.get_meta("side_food_pending",1))-1))
   if started:
    customer.set_meta("side_food_active",false)
-   if customer.has_method("finish_catch_burger"): customer.finish_catch_burger()
+   if not interrupted_by_burger and customer.has_method("finish_catch_burger"): customer.finish_catch_burger()
  if is_instance_valid(food):food.queue_free()
  if completed.is_valid():completed.call()
  if is_instance_valid(customer) and not bool(customer.get_meta("burger_in_flight",false)) and int(customer.get_meta("side_food_pending",0))==0:

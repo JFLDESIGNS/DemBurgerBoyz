@@ -26,6 +26,17 @@ func run() -> void:
 	var bounds: AABB = g._mesh_aabb_in_node_space(pack)
 	assert(absf(bounds.size.y - g.FRIES_PACK_TARGET_H) < .0001, "Serving height must be preserved")
 	assert(absf(bounds.position.y) < .0001, "Carton must rest on its base")
+	var sparkle = pack.find_child("SaltCrystalGlints",true,false)
+	assert(sparkle != null and sparkle.materials.size() >= 7)
+	sparkle._process(.016)
+	sparkle._process(.016)
+	for mat in sparkle.materials: assert(is_zero_approx(float(mat.get_shader_parameter("motion_amount"))))
+	pack.position.x += .05
+	sparkle._process(.016)
+	for mat in sparkle.materials: assert(float(mat.get_shader_parameter("motion_amount")) > .9)
+	sparkle._process(.016)
+	for mat in sparkle.materials: assert(is_zero_approx(float(mat.get_shader_parameter("motion_amount"))))
+	pack.position.x -= .05
 	var carton_pose := carton.global_transform
 	g._update_fries_pack_fry_shake(pack, .25, 1.0)
 	assert(carton.global_transform.is_equal_approx(carton_pose) and shake.rotation.length() > .001, "Shake must leave carton steady")

@@ -45,3 +45,13 @@ func _process(delta: float) -> void:
 		_auto_resume = maxf(0.0, _auto_resume - delta)
 		return
 	turntable.rotation.y += delta * 0.38
+
+
+static func remove_gameplay_labels(model: Node) -> void:
+	# Product copies should not inherit live kitchen instructions or status text.
+	for child in model.get_children():
+		if child is Label3D:
+			model.remove_child(child)
+			child.free()
+		else:
+			remove_gameplay_labels(child)

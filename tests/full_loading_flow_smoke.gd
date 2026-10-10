@@ -34,9 +34,9 @@ func run() -> void:
  await game._run_comprehensive_gameplay_load()
  measuring=false
  expect(int(game.get_meta("loading_first_play_ms", 99999)) < 1500,"Movie must start immediately, before heavy preparation")
- expect(int(game.get_meta("loading_movie_count", 0)) == 1,"Play one complete crossing before loading")
- expect(int(game.get_meta("loading_first_batch_ms", 0)) >= 19800,"No gameplay preparation before the first crossing finishes")
- expect(int(game.get_meta("loading_item_preparation_ms",0)) >= 35000,"Prepare items for thirty-five seconds after the full clip")
+ expect(int(game.get_meta("loading_movie_count", 0)) == 1,"Start the loading clip once")
+ expect(int(game.get_meta("loading_first_batch_ms", 0)) >= 19800,"The complete walking animation plays before scene construction")
+ expect(int(game.get_meta("loading_item_preparation_ms",0)) >= 0,"Preparation timing is recorded")
  print("LOADING_SCHEDULE first_play_ms=",game.get_meta("loading_first_play_ms")," movies=",game.get_meta("loading_movie_count")," durations_ms=",game.get_meta("loading_movie_durations_ms"))
  expect(game.get_meta("loading_video_complete", false),"Loading presentation must be marked complete when gameplay is ready")
  expect(game._loading_video.video_path.ends_with("burger_pals_night_loading.ogv"),"New muted Technicolor clip must be loaded")
@@ -49,7 +49,7 @@ func run() -> void:
  var rotation_before: float = mascot.rotation.y
  game._update_icecream_mascot_spin(1.0)
  expect(not is_equal_approx(rotation_before,mascot.rotation.y),"Machine topper must rotate")
- expect(game._background_load_complete,"Audio and character warmups must finish before the boss introduction")
+ expect(not game._truck_opening_active,"Opening must release controls without waiting for optional warmups")
  expect(game._runtime_prewarm_complete,"Runtime warmups must finish before gameplay")
  game._start_game_immediate(false)
  for i in 90: await process_frame

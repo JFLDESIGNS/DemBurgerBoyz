@@ -1366,7 +1366,7 @@ var radio_column: VBoxContainer = null
 var phone_column: Control = null
 var _phone_lock_screen: Button = null
 var _phone_expanded := false
-var _phone_size_factor := 0.3125
+var _phone_size_factor := 0.390625
 var _phone_size_tween: Tween = null
 var hud_chrome_collapsed: bool = false
 var hud_chrome_toggle: Button = null
@@ -2725,9 +2725,9 @@ const SODA_CUP_FILL_RAISE_MIGRATION := "fill_soft_lock_raised_4in_v1"
 const CUP_TRAY_DECK_LOCAL_Y := 0.08 * SODA_FOUNTAIN_SCALE + 0.0508
 ## Restored original drink-cup proportions (the prior pass reduced all of these
 ## by 20%). Shell, liquid, logo and collision geometry stay matched.
-const CUP_SHELL_H := 0.189
-const CUP_SHELL_TOP_R := 0.0738
-const CUP_SHELL_BOT_R := 0.0594
+const CUP_SHELL_H := 0.189 * 0.975
+const CUP_SHELL_TOP_R := 0.0738 * 0.975
+const CUP_SHELL_BOT_R := 0.0594 * 0.975
 const SODA_OVERFLOW_SHELL_TEXTURE := "res://assets/vfx/soda_overflow_shell.png"
 const SODA_OVERFLOW_SHELL_SCALE_DEFAULT := 1.06 ## just outside the cup's widest top rim
 const SODA_OVERFLOW_SHELL_HEIGHT_SCALE_DEFAULT := 1.06
@@ -2767,12 +2767,12 @@ var soda_overflow_wobble_in: float = SODA_OVERFLOW_WOBBLE_IN_DEFAULT
 var soda_overflow_wobble_speed: float = SODA_OVERFLOW_WOBBLE_SPEED_DEFAULT
 var soda_overflow_wobble_freq: float = SODA_OVERFLOW_WOBBLE_FREQ_DEFAULT
 var soda_overflow_foam_color: Color = SODA_OVERFLOW_FOAM_COLOR_DEFAULT
-const CUP_LIQUID_BASE_H := 0.020
-const CUP_LIQUID_MAX_H := 0.158475
-const CUP_LIQUID_TOP_R := 0.0702 ## hug the shell — tiny inset only
-const CUP_LIQUID_BOT_R := 0.0558
+const CUP_LIQUID_BASE_H := 0.020 * 0.975
+const CUP_LIQUID_MAX_H := 0.158475 * 0.975
+const CUP_LIQUID_TOP_R := 0.0702 * 0.975 ## hug the shell — tiny inset only
+const CUP_LIQUID_BOT_R := 0.0558 * 0.975
 ## Thin empty sliver under the pop — keep liquid near the plastic floor.
-const CUP_LIQUID_FLOOR_Y := 0.008
+const CUP_LIQUID_FLOOR_Y := 0.008 * 0.975
 const CUP_FILL_RATE := 0.95
 const CUP_SPOUT_REACH := 0.55
 const CUP_ICE_CUBE_INTERVAL := 0.065
@@ -2863,7 +2863,7 @@ const FRYER_BASKET_HOME_Y := 0.159 - 4.0 * INCH_TO_M
 const FRIES_PACK_SCENE := "res://assets/ingredients/fries_checker_pack.glb"
 const FRIES_PACK_TARGET_H := 0.2171 ## Finished packs enlarged 30%, including existing saved shelf scales.
 const CUP_ICE_OVERFILL_CAP := 2.4
-const CUP_ICE_CUBE_SIZE := 0.0234
+const CUP_ICE_CUBE_SIZE := 0.0234 * 0.975
 const CUP_FOLLOW_RATE := 64.0 ## snappy hand follow so click-drag doesn't feel glued
 const CUP_FOLLOW_MAX_SPEED := 14.0 ## m/s — allow fast cursor sweeps without teleporting
 ## Near either dispenser, deliberately soften hand tracking. The cup is positioned
@@ -2945,7 +2945,7 @@ const CUP_BUBBLE_AMOUNT := 34
 const CUP_LIQUID_BUBBLE_COUNT := 56
 const CUP_LIQUID_BUBBLE_TOP_COUNT := 10 ## linger near foam and fade in place
 const CUP_LIQUID_BUBBLE_RISE_COUNT := 22 ## bottom → top risers in the pop body
-const CUP_LIQUID_BUBBLE_SIZE := 0.0022 ## restrained carbonation pearls inside the drink
+const CUP_LIQUID_BUBBLE_SIZE := 0.0022 * 0.75 ## restrained carbonation pearls inside the drink
 const CUP_TRAY_FIRST_X := -0.38 ## camera-left first parked cup spot
 const CUP_TRAY_SPACING := 0.20 ## gap between parked drinks on the drip tray
 const CUP_DRAW_PRIORITY := 32 ## Above grill shine / burgers when tray items overlap.
@@ -3545,7 +3545,9 @@ var _patty_spawn_pool: Array = []
 
 ## First shift load gate. The main menu is built under the engine splash; gameplay's
 ## dynamic resources warm up after the loading characters finish their crossing.
-const LOADING_ITEM_PREP_SEC := 35.0
+const LOADING_ITEM_PREP_SEC := 0.0
+var _patty_pool_refill_running := false
+var _truck_opening_active := false
 var _background_load_started := false
 var _background_load_complete := false
 var _loading_batch_began_ms := 0
@@ -3914,6 +3916,7 @@ func _preload_gameplay_resources() -> void:
 		while next < paths.size() and pending.size() < 2:
 			var path: String = paths[next]
 			next += 1
+			if _gameplay_resource_cache.has(path): continue
 			if not ResourceLoader.exists(path):
 				continue
 			if ResourceLoader.load_threaded_request(path) == OK:
@@ -3989,7 +3992,7 @@ func _prewarm_customer_construction() -> void:
 	var saved_presets: Array[Dictionary] = []
 	for path in CustomerScript._list_usable_saved_character_files():
 		saved_presets.append(CustomerScript._parse_saved_character_file(path))
-	for skin_i in CustomerScript.CHAR_SKINS.size() + saved_presets.size():
+	for skin_i in [0, CustomerScript.CHAR_SKINS.size()] if not saved_presets.is_empty() else [0]:
 		var customer = CustomerScript.new()
 		customer.name = "LoadingWarmCustomer_%d" % skin_i
 		var preset: Dictionary = saved_presets[skin_i - CustomerScript.CHAR_SKINS.size()] if skin_i >= CustomerScript.CHAR_SKINS.size() else {}
@@ -4015,7 +4018,7 @@ func _prewarm_customer_construction() -> void:
 
 
 func _play_loading_interlude() -> void:
-	# Play the entire night-street clip once before preparing the kitchen.
+	# Play the complete walking clip; only small threaded resource reads run alongside it.
 	if not is_instance_valid(_loading_video): return
 	_loading_video.set("looping", false)
 	_gameplay_load_overlay.get_node("LoadingStill").hide()
@@ -4026,8 +4029,25 @@ func _play_loading_interlude() -> void:
 	set_meta("loading_movie_count", _loading_movie_count)
 	set_meta("loading_phase", "video_playback")
 	var player: VideoStreamPlayer = _loading_video.get("video")
-	# Use decoded playback time, so slow frames cannot start loading too early.
+	# Limit video-time preparation to one small resource every 150 ms. No scene
+	# construction, GPU warmup, synchronous fallback, or audio synthesis here.
+	var small_paths: Array[String] = ["res://shaders/heat_warp.gdshader", "res://shaders/grill_heat.gdshader", "res://shaders/bunting_flag.gdshader", "res://shaders/fries_salt.gdshader", "res://shaders/fries_star_glint.gdshader"]
+	var pending := ""
+	var next_small_ms := 0
 	while player.stream != null and player.is_playing():
+		var now := Time.get_ticks_msec()
+		if now >= next_small_ms:
+			next_small_ms = now + 150
+			if not pending.is_empty():
+				var status := ResourceLoader.load_threaded_get_status(pending)
+				if status == ResourceLoader.THREAD_LOAD_LOADED:
+					_gameplay_resource_cache[pending] = ResourceLoader.load_threaded_get(pending)
+					pending = ""
+				elif status == ResourceLoader.THREAD_LOAD_FAILED or status == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+					pending = ""
+			elif not small_paths.is_empty():
+				var path: String = small_paths.pop_front()
+				if not _gameplay_resource_cache.has(path) and ResourceLoader.load_threaded_request(path) == OK: pending = path
 		await get_tree().process_frame
 	_loading_video.call("hold_frame")
 	_gameplay_load_overlay.get_node("LoadingStill").show()
@@ -4104,8 +4124,9 @@ func _run_comprehensive_gameplay_load() -> void:
 	await _warm_burger_assets()
 	await _loading_batch_checkpoint()
 	await get_tree().process_frame
-	# Finish audio and character construction before the boss can appear.
-	await _continue_background_loading()
+	# Warm representative customer rigs only; exhaustive appearance construction
+	# is too expensive to run during active gameplay.
+	await _prewarm_customer_construction()
 	# Wake the complete kitchen behind the held loading frame.
 	set_meta("loading_phase", "final_render")
 	camera.cull_mask = previous_camera_mask
@@ -4113,7 +4134,7 @@ func _run_comprehensive_gameplay_load() -> void:
 	gameplay_viewport.disable_3d = previous_disable_3d
 	for _frame in 12:
 		await get_tree().process_frame
-	# Keep preparation visible for at least thirty-five seconds.
+	# No artificial preparation delay once essentials are ready.
 	# Essential kitchen construction must finish before player input is enabled.
 	set_meta("loading_phase", "item_preparation")
 	while Time.get_ticks_msec() < preparation_deadline:
@@ -4123,9 +4144,24 @@ func _run_comprehensive_gameplay_load() -> void:
 	set_meta("loading_phase", "ready")
 	set_meta("loading_video_complete", true)
 	gameplay_viewport.disable_3d = previous_disable_3d
+	_hide_gameplay_loading_screen()
+	await _play_truck_opening()
 	_gameplay_load_complete = true
 	_gameplay_load_in_progress = false
-	_hide_gameplay_loading_screen()
+
+
+func _play_truck_opening() -> void:
+	_truck_opening_active = true
+	start_overlay.hide()
+	set_meta("loading_phase", "truck_opening")
+	var opening = preload("res://scripts/truck_opening.gd").new()
+	add_child(opening)
+	opening.setup(self)
+	_continue_background_loading()
+	await opening.finished
+	opening.queue_free()
+	_truck_opening_active = false
+	set_meta("loading_phase", "ready")
 
 
 func _continue_background_loading() -> void:
@@ -4133,12 +4169,12 @@ func _continue_background_loading() -> void:
 		while not _background_load_complete: await get_tree().process_frame
 		return
 	_background_load_started = true
-	# This preparation is awaited beneath the opaque loading overlay.
+	# Nonessential work continues after opening, one paced job at a time.
 	set_meta("background_loading_phase","audio")
 	if game_audio != null and game_audio.has_method("prewarm_all_gameplay_audio"):
 		await game_audio.prewarm_all_gameplay_audio()
-	set_meta("background_loading_phase","customers")
-	await _prewarm_customer_construction()
+	set_meta("background_loading_phase","spare_patties")
+	await _ensure_patty_spawn_pool(PATTY_PREWARM_POOL_SIZE)
 	_background_load_complete = true
 	set_meta("background_loading_phase","complete")
 
@@ -4632,13 +4668,20 @@ func _update_serve_crumb_fx(delta: float) -> void:
 
 
 func _ensure_patty_spawn_pool(target_count: int = PATTY_PREWARM_POOL_SIZE) -> void:
+	if _patty_pool_refill_running: return
 	if patties_root == null or not is_instance_valid(patties_root):
 		return
 	_patty_spawn_pool = _patty_spawn_pool.filter(func(p):
 		return p != null and is_instance_valid(p)
 	)
+	_patty_pool_refill_running = true
 	while _patty_spawn_pool.size() < target_count:
-		var image_batch: Array[Dictionary] = await PattyScript.prepare_pool_image_batch_async(get_tree(), mini(2, target_count - _patty_spawn_pool.size()))
+		var incremental := playing or _truck_opening_active
+		if incremental:
+			# Never create a burst of spare scene nodes on adjacent gameplay frames.
+			await get_tree().create_timer(.25).timeout
+			while _serve_fly_busy: await get_tree().process_frame
+		var image_batch: Array[Dictionary] = await PattyScript.prepare_pool_image_batch_async(get_tree(), mini(1 if incremental else 2, target_count - _patty_spawn_pool.size()))
 		for prepared_images in image_batch:
 			var warm := PattyScript.new()
 			warm.prepared_pool_images = prepared_images
@@ -4651,6 +4694,8 @@ func _ensure_patty_spawn_pool(target_count: int = PATTY_PREWARM_POOL_SIZE) -> vo
 			patties_root.add_child(warm)
 			_patty_spawn_pool.append(warm)
 			await get_tree().process_frame
+
+	_patty_pool_refill_running = false
 
 func _take_prewarmed_patty():
 	var began := _perf_hot_begin()
@@ -5478,7 +5523,7 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	call_deferred("_continue_background_loading")
 	_set_phone_in_truck(true)
 	## Backup if title-screen warm was skipped / still running.
-	call_deferred("_ensure_runtime_prewarms")
+	if not _runtime_prewarm_complete: call_deferred("_ensure_runtime_prewarms")
 	money = START_MONEY
 	chef_points = 0
 	_chef_revision += 1
@@ -6460,6 +6505,9 @@ func _boss_purchase_input_allowed(event: InputEvent) -> bool:
 
 
 func _input(event: InputEvent) -> void:
+	if _truck_opening_active:
+		get_viewport().set_input_as_handled()
+		return
 	if _boss_speech_active():
 		if not _boss_purchase_input_allowed(event): get_viewport().set_input_as_handled()
 		return
@@ -16212,6 +16260,7 @@ func _begin_patty_drag_local(patty: Area3D) -> void:
 	if patty == null or not is_instance_valid(patty):
 		return
 	dragging_patty = patty
+	if patty.has_method("play_slide_press"): patty.play_slide_press()
 	if "is_slide_drag" in patty:
 		patty.is_slide_drag = true
 	if patty.has_method("_set_hold_meter_visible"):
@@ -36439,7 +36488,7 @@ func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
 	if fries == null: return null
 	var stars := Node3D.new()
 	stars.name = "SaltCrystalGlints"
-	fries.add_child(stars)
+	stars.set_script(preload("res://scripts/fries_motion_sparkles.gd"))
 	var bounds := fries.mesh.get_aabb()
 	var candidates: Array[Vector3] = []
 	for surface in fries.mesh.get_surface_count():
@@ -36449,7 +36498,9 @@ func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
 		for i in vertices.size():
 			if vertices[i].y > bounds.position.y+bounds.size.y*.55 and normals[i].z < -.6:
 				candidates.append(vertices[i]+normals[i]*bounds.size.y*.004)
-	if candidates.is_empty(): return stars
+	if candidates.is_empty():
+		fries.add_child(stars)
+		return stars
 	for i in 6:
 		var glint := MeshInstance3D.new()
 		glint.name = "SaltStarGlint%d" % i
@@ -36463,6 +36514,7 @@ func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
 		material.set_shader_parameter("phase",float(i)*1.71)
 		glint.material_override = material
 		stars.add_child(glint)
+	fries.add_child(stars)
 	return stars
 
 
@@ -49555,7 +49607,7 @@ func _set_phone_expanded(expanded: bool) -> void:
 	_phone_size_tween.tween_method(func(value: float) -> void:
 		_phone_size_factor = value
 		_layout_phone_ui_overlay()
-	, _phone_size_factor, 1.0 if expanded else 0.3125, 0.24)
+	, _phone_size_factor, 1.0 if expanded else 0.390625, 0.24)
 	_phone_size_tween.tween_callback(func() -> void:
 		_phone_lock_screen.visible = not _phone_expanded
 	)
@@ -52448,6 +52500,7 @@ func _make_shop_product_preview(id: String) -> Control:
 	viewport_wrap.call("bind_turntable", turntable)
 	var model := source.duplicate(0) as Node3D
 	if model != null:
+		ShopProductPreviewScript.remove_gameplay_labels(model)
 		model.name = "ActualItemModel"
 		model.transform = Transform3D.IDENTITY
 		model.visible = true
@@ -66793,7 +66846,7 @@ func _begin_whole_burger_drag(station_index: int, button: MouseButton = MOUSE_BU
 	_refresh_station(station_index)
 	var layers: Array = []
 	for row in stations[station_index].get("layer_pool",[]):
-		if row.visible: layers.append({"row":row,"home":row.position,"rotation":row.rotation})
+		if row.visible: layers.append({"row":row,"home":row.position,"rotation":row.rotation,"scale":row.scale})
 	_whole_burger_drag["layers"] = layers
 	_update_station_layer_hint(station_index)
 
@@ -66808,6 +66861,7 @@ func _finish_whole_burger_drag() -> void:
 			var settle := create_tween().set_parallel(true)
 			settle.tween_property(layer.row,"position",layer.home,.25).set_trans(Tween.TRANS_BACK)
 			settle.tween_property(layer.row,"rotation",float(layer.get("rotation",0.0)),.25)
+			settle.tween_property(layer.row,"scale",layer.get("scale",Vector2.ONE),.25)
 	stations[station_index]["carried_closed"] = false
 	if is_instance_valid(preview): preview.z_index = int(_whole_burger_drag.get("z",0))
 	_whole_burger_drag.clear()
@@ -70910,6 +70964,12 @@ func _play_serve_fly_to_mouth(
 	if is_instance_valid(customer):
 		customer.set_meta("burger_in_flight", true)
 		customer.set_meta("burger_arrival_deadline", Time.get_ticks_msec() + 8000)
+		# Stop an active side-food controller before the burger takes over the hands.
+		# Queued sides stay pending until the burger finishes.
+		for side in get_tree().get_nodes_in_group("side_food_presentations"):
+			if side.customer == customer and side.started and not side.finished:
+				side.finish(true)
+
 	## Begin the fast authored grab before launch; gameplay scoring remains immediate.
 	if customer != null and is_instance_valid(customer) and customer.has_method("begin_catch_burger"):
 		customer.begin_catch_burger(true)

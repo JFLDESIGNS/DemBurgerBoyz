@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode blend_mix, depth_draw_never;
+uniform float motion_amount=0.0;
 uniform float grain_scale = 100.0;
 varying vec3 grain_pos;
 varying vec3 grain_normal;
@@ -19,7 +20,7 @@ void fragment(){
  vec2 star_d=abs(fract(star_p)-vec2(.5));
  float cross_shape=max((1.0-smoothstep(.022,.055,star_d.x))*(1.0-smoothstep(.07,.32,star_d.y)),(1.0-smoothstep(.022,.055,star_d.y))*(1.0-smoothstep(.07,.32,star_d.x)));
  float pulse=pow(max(0.0,sin(TIME*2.8+star_seed*TAU)),6.0);
- float star=cross_shape*step(.80,star_seed)*pulse;
+ float star=cross_shape*step(.80,star_seed)*pulse*motion_amount;
  ALBEDO=vec3(1.0,.98,.87); ALPHA=clamp(salt*.85+star,0.0,1.0);
- ROUGHNESS=.22; SPECULAR=.65; EMISSION=vec3(1.0,.95,.8)*(glint*1.3+star*3.0);
+ ROUGHNESS=.22; SPECULAR=.65; EMISSION=vec3(1.0,.95,.8)*(glint*1.3*motion_amount+star*3.0);
 }

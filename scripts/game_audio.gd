@@ -2059,6 +2059,8 @@ func _prewarm_cache_entry_async(key: String, maker: Callable) -> void:
 	_synthesis_tasks.erase(task)
 	if result[0] != null and not _cache.has(key):
 		_cache[key] = result[0]
+	# Allow gameplay frames between background synthesis/cache uploads.
+	await get_tree().create_timer(.08).timeout
 
 
 func _prewarm_cache_entry(key: String, maker: Callable) -> void:

@@ -3968,6 +3968,9 @@ func begin_catch_burger(authored_grab: bool = false) -> void:
 	## Hands up + lean in while the burger flies.
 	if is_leaving or is_ragdoll:
 		return
+	_side_food_pose = false
+	_side_food_lift = 0.0
+	_side_food_drink = false
 	_nom_played = false
 	_eating = true
 	if authored_grab and _burger_props != null:
