@@ -447,25 +447,44 @@ static func _knockout_dark_backdrop(img: Image) -> void:
 static var _patty_sheet_img: Image = null
 
 
-static func build_patty_state_tex(char_amount: float, with_cheese: bool = false) -> Texture2D:
+const CHEESE_MELT_FRAME_COUNT := 12
+static var _cheese_melt_images: Array[Image] = []
+
+static func cheese_melt_frame(melt: float) -> int:
+	return mini(CHEESE_MELT_FRAME_COUNT-1, int(clampf(melt, 0.0, 1.0) * float(CHEESE_MELT_FRAME_COUNT-1) + .00001))
+
+static func _cheese_melt_image(frame: int) -> Image:
+	if _cheese_melt_images.is_empty():
+		var sheet := (load("res://assets/ingredients/cheese_melt_12state.png") as Texture2D).get_image()
+		if sheet.is_compressed(): sheet.decompress()
+		sheet.convert(Image.FORMAT_RGBA8)
+		var cell := Vector2i(sheet.get_width()/4, sheet.get_height()/3)
+		for i in CHEESE_MELT_FRAME_COUNT:
+			var cheese := _crop_to_opaque(sheet.get_region(Rect2i(Vector2i(i%4,i/4)*cell,cell)), .15)
+			var height := roundi(lerpf(174.0,205.0,float(i)/float(CHEESE_MELT_FRAME_COUNT-1)))
+			cheese.resize(396,height,Image.INTERPOLATE_LANCZOS)
+			_cheese_melt_images.append(cheese)
+	return _cheese_melt_images[frame]
+
+static func build_patty_state_tex(char_amount: float, with_cheese: bool = false, melt: float = 1.0) -> Texture2D:
 	var state := "perfect"
 	if char_amount >= 0.85: state = "black"
 	elif char_amount >= 0.5: state = "almost_black"
 	elif char_amount >= 0.25: state = "overdone"
-	var key := "build_state_" + state + ("_cheese" if with_cheese else "")
+	var frame := cheese_melt_frame(melt)
+	var key := "build_state_" + state + ("_cheese_%d" % frame if with_cheese else "")
 	if _cache.has(key): return _cache[key]
 	var tex := load("res://assets/ingredients/patty_states/" + state + ".png") as Texture2D
 	if with_cheese:
 		var meat := tex.get_image()
 		if meat.is_compressed(): meat.decompress()
 		meat.convert(Image.FORMAT_RGBA8)
-		var cheese := get_tex("cheese").get_image()
-		if cheese.is_compressed(): cheese.decompress()
-		cheese.convert(Image.FORMAT_RGBA8)
-		cheese = _crop_to_opaque(cheese)
-		# Keep the supplied meat intact, with the existing cheese art resting on top.
-		cheese.resize(360, 168, Image.INTERPOLATE_LANCZOS)
-		meat.blend_rect(cheese, Rect2i(0,0,360,168), Vector2i(76,151))
+		var cheese := _cheese_melt_image(frame)
+		# All frames share a fixed top/center anchor on the original patty;
+		# only the front drapes extend as the slice melts.
+		var height := cheese.get_height()
+		# About 15 display pixels higher at the build burger's normal scale.
+		meat.blend_rect(cheese, Rect2i(0,0,396,height), Vector2i(58,142))
 		tex = ImageTexture.create_from_image(meat)
 	# TextureRect fits the whole source canvas: remove transparent sheet padding
 	# so the visible meat fills the same width as the bun, instead of half of it.
@@ -474,6 +493,8 @@ static func build_patty_state_tex(char_amount: float, with_cheese: bool = false)
 	var cropped := AtlasTexture.new()
 	cropped.atlas = tex
 	cropped.region = image.get_used_rect()
+	if with_cheese:
+		cropped.region = cropped.region.merge(Rect2(58,142,396,205))
 	cropped.filter_clip = true
 	_cache[key] = cropped
 	return cropped

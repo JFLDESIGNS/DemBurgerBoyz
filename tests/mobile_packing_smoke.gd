@@ -13,12 +13,26 @@ func run():
  mobile.state={"number":3,"items":["bun_bottom","patty","bun_top","fries","soda_cola"],"phase":"accepted","base":20}
  mobile.refresh();mobile.auto_lay_paper();assert(mobile.state.phase=="paper","Selecting the mobile ticket lays paper automatically")
  var owner=mobile.ticket_owner
+ # An uncrowned toasted burger must pass the same virtual-crown check as raw buns.
+ game.stations[0].items=["bun_bottom","patty"]
+ game.stations[0].patties=[Node3D.new()]
+ game.stations[0].bun_toast={"bun_bottom":10.0,"bun_top":10.0}
+ mobile.state.items=["bun_bottom","patty","bun_top","toasted_bun","fries","soda_cola"]
+ assert(mobile.burger_ready(),"Correct toasted mobile burger can wrap before the crown closes")
+ game.stations[0].bun_toast.bun_bottom=18.0
+ assert(mobile.burger_ready(),"Incorrect toasted buns may now be sent intentionally")
+ game.stations[0].patties[0].free();game.stations[0].patties=[];game.stations[0].items=[];game.stations[0].bun_toast={}
+ mobile.state.items=["bun_bottom","patty","bun_top","fries","soda_cola"]
  game._remove_ticket(owner);mobile.state.phase="accepted";game.selected_customer=null;mobile.auto_lay_paper()
  assert(game.tickets.has(owner) and mobile.state.phase=="paper","Missing ticket/selection repairs without sticking")
  mobile.build_props();mobile.driver_style=3;mobile.state["driver_skin"]=0;mobile.age=.6;mobile.update_visuals(0);assert(mobile.paper3d.visible and mobile.bag.visible)
  var drink=game._create_drink_cup_node();game.world.add_child(drink);drink.position=Vector3(-1,1.2,0);game.cup_root=drink;game.cup_flavor="cola";game.cup_soda_fill=.9;game.cup_held=true
  mobile.pack_ready_sides();assert(not mobile.state.has("side_packs"),"Partial drinks must finish before packing")
  game.cup_soda_fill=1;game.fryer_ready_servings=1
+ game.selected_customer=null
+ mobile.pack_ready_sides()
+ assert(mobile.state.side_packs.has("fries") and not mobile.state.side_packs.has("soda_cola"),"Fries pack without selecting the mobile ticket")
+ game.selected_customer=owner
  game._try_auto_hand_finished_soda()
  assert(game.cup_root==null and game.fryer_ready_servings==0)
  assert(mobile.state.side_packs.size()==2 and mobile.state.phase=="paper")

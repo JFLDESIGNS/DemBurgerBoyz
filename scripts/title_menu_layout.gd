@@ -13,27 +13,38 @@ func setup(game: Node) -> void:
  var creator: Button = old.get_node("StartMenuCard/StartMenuCol/CharacterCreatorButton")
  var logo := TextureRect.new()
  logo.name = "TitleLogo"
- logo.texture = load(game.PHONE_LOGO_TEX_PATH)
- logo.material = ShaderMaterial.new()
- logo.material.shader = preload("res://shaders/title_logo_mask.gdshader")
+ logo.texture = preload("res://assets/ui/title_poster_logo.png")
  logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
  logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
  logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
- logo.position = Vector2(190,10)
- logo.size = Vector2(420,210)
+ logo.position = Vector2(35,5)
+ logo.size = Vector2(810,445)
  stage.add_child(logo)
- _button(game.start_btn,Vector2(70,246),Vector2(660,82),Color("D84C3E"),Color("FFF5DA"),32,0)
- _button(game.multiplayer_btn,Vector2(70,350),Vector2(660,82),Color("147E83"),Color("FFF5DA"),32,1)
+ _button(game.start_btn,Vector2(80,448),Vector2(625,140),Color("E64D32"),Color("FFF2CF"),48,0)
+ _button(game.multiplayer_btn,Vector2(82,596),Vector2(601,104),Color("14777C"),Color("FFF2CF"),42,1)
  var truck: Control = game.start_logo_wrap
  truck.reparent(stage)
  truck.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
  truck.custom_minimum_size = Vector2.ZERO
- truck.position = Vector2(0,448)
- truck.size = Vector2(800,330)
+ truck.position = Vector2(685,115)
+ truck.size = Vector2(870,805)
  truck.z_index = 0
  game.tutorial_btn.text = "CAT TUTORIAL"
- _button(game.tutorial_btn,Vector2(142,810),Vector2(244,44),Color("E5BA65"),Color("4C382B"),17,2)
- _button(creator,Vector2(410,810),Vector2(244,44),Color("B5D6CB"),Color("25595B"),17,3)
+ _button(game.tutorial_btn,Vector2(85,710),Vector2(283,78),Color("EDB64D"),Color("704323"),24,2)
+ _button(creator,Vector2(379,708),Vector2(303,72),Color("B5D6CB"),Color("20575B"),24,3)
+ var cat := TextureRect.new()
+ cat.name="ForegroundCat"
+ var cat_atlas:=AtlasTexture.new()
+ cat_atlas.atlas=preload("res://assets/ui/title_black_cat.png")
+ cat_atlas.region=cat_atlas.atlas.get_image().get_used_rect()
+ cat.texture=cat_atlas
+ cat.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
+ cat.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+ cat.position=Vector2(695,660)
+ cat.size=Vector2(270,245)
+ cat.z_index=5
+ cat.mouse_filter=Control.MOUSE_FILTER_IGNORE
+ stage.add_child(cat)
  old.hide()
  resized.connect(_layout)
  _layout()
@@ -42,11 +53,11 @@ func setup(game: Node) -> void:
  call_deferred("_entrance")
 func _layout() -> void:
  if not is_instance_valid(stage): return
- var fit := minf(size.x/900.0,(size.y-108.0)/900.0)
+ var fit := minf(size.x/1672.0,size.y/941.0)
  fit = maxf(.1,fit)
- stage.size = Vector2(800,900)
+ stage.size = Vector2(1672,941)
  stage.scale = Vector2.ONE*fit
- stage.position = Vector2((size.x-800*fit)*.5,(size.y-64-900*fit)*.5)
+ stage.position = (size-stage.size*fit)*.5
 func _button(button: Button, at: Vector2, dimensions: Vector2, color: Color, ink: Color, font_size: int, order: int) -> void:
  var holder := Control.new()
  holder.name = button.name + "Motion"
@@ -70,8 +81,27 @@ func _button(button: Button, at: Vector2, dimensions: Vector2, color: Color, ink
   style.set_corner_radius_all(12 if font_size>20 else 8)
   style.content_margin_left=18;style.content_margin_right=18
   style.content_margin_top=8;style.content_margin_bottom=14
-  button.add_theme_stylebox_override(state,style)
+  if state=="focus":
+   style.bg_color=Color.TRANSPARENT
+   style.border_color=Color("FFD66A")
+   style.set_border_width_all(3)
+  button.add_theme_stylebox_override(state,StyleBoxEmpty.new())
  for key in ["font_color","font_hover_color","font_pressed_color","font_focus_color","font_disabled_color","font_outline_color"]: button.add_theme_color_override(key,Color.TRANSPARENT)
+ var art := TextureRect.new()
+ art.name="ReferenceButtonArt"
+ art.mouse_filter=Control.MOUSE_FILTER_IGNORE
+ art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+ art.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
+ art.texture=load("res://assets/ui/title_button_%d.png"%order)
+ button.add_child(art)
+ button.set_meta("art_label",button.text)
+ var status_bg:=ColorRect.new()
+ status_bg.name="StatusBackground"
+ status_bg.color=color
+ status_bg.mouse_filter=Control.MOUSE_FILTER_IGNORE
+ status_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+ status_bg.hide()
+ button.add_child(status_bg)
  var caption := Label.new()
  caption.name = "MenuCaption"
  caption.text = button.text
@@ -83,11 +113,13 @@ func _button(button: Button, at: Vector2, dimensions: Vector2, color: Color, ink
  caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
  caption.add_theme_font_override("font",button.get_theme_font("font"))
  caption.add_theme_font_size_override("font_size",font_size)
- caption.add_theme_color_override("font_color",Color.WHITE)
- caption.add_theme_color_override("font_shadow_color",Color(0.05,.12,.14,.35))
+ caption.add_theme_constant_override("outline_size",0)
+ caption.add_theme_color_override("font_color",ink)
+ caption.add_theme_color_override("font_shadow_color",Color(0.05,.12,.14,.16))
  caption.add_theme_constant_override("shadow_offset_x",1)
  caption.add_theme_constant_override("shadow_offset_y",2)
  button.add_child(caption)
+ caption.hide()
  button.mouse_entered.connect(func(): _hover(button,true))
  button.mouse_exited.connect(func(): _hover(button,false))
  button.button_down.connect(func(): _move_button(button,3,.07))
@@ -123,3 +155,9 @@ func _process(_delta: float) -> void:
   var button := holder.get_child(0) as Button
   var caption := button.get_node("MenuCaption") as Label
   caption.text = button.text
+  var status_changed:bool=button.text!=str(button.get_meta("art_label"))
+  caption.visible=status_changed
+  button.get_node("StatusBackground").visible=status_changed
+  var art=button.get_node("ReferenceButtonArt")
+  art.visible=not status_changed
+  art.modulate=Color(1.1,1.1,1.1) if button.has_focus() or button.is_hovered() else Color.WHITE

@@ -66,7 +66,7 @@ func run()->void:
 		mark("guest_pending");await wait_mark("advance");game.advance_delivery=true
 		game.mp_spatula_tap_fx.rpc(0.2,0.2,1.0,0.0)
 	while is_instance_valid(game.mail_delivery_truck):await process_frame
-	assert(game.saw_flight and game.highest_meows==3)
+	assert(game.saw_flight and game.highest_meows==2)
 	assert(game.pending_machine_deliveries.is_empty() and game.fryer_root.visible and game.soda_root.visible)
 	assert(not game.window_cat.visible and game._cat_after_delivery_wait>0.0 and game.street_car_wait>=3.0,"Window cat waits five seconds after delivery")
 	if host:

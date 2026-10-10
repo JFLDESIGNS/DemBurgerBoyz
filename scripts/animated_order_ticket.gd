@@ -13,6 +13,11 @@ const DISPLAY_SCALE := 0.8
 static var _prepared_libraries: Dictionary = {}
 
 var active := false
+var display_scale := DISPLAY_SCALE:
+	set(value):
+		display_scale = value
+		if is_instance_valid(_thumbtack): _thumbtack.scale = Vector3.ONE * PIN_SCALE * DISPLAY_SCALE / maxf(.01, value) * (0.75 if value < DISPLAY_SCALE else 1.0)
+		if is_instance_valid(_pin_shadow): _pin_shadow.scale = Vector3.ONE * DISPLAY_SCALE / maxf(.01, value) * (0.75 if value < DISPLAY_SCALE else 1.0)
 var state: StringName = &"static"
 var _wrap: Control
 var _note: Control
@@ -277,7 +282,7 @@ func sync_layout() -> void:
 		return
 	_logical_size = wanted
 	_paper_material.set_shader_parameter("paper_height", wanted.y)
-	_wrap.custom_minimum_size = wanted * DISPLAY_SCALE
+	_wrap.custom_minimum_size = wanted * display_scale
 	_source.size = Vector2i(wanted * 2.0)
 	_source.size_2d_override = Vector2i(wanted)
 	_view.size = Vector2i((wanted + Vector2.ONE * PAD * 2.0) * 2.0)
@@ -341,7 +346,7 @@ func _on_finished(_clip: StringName) -> void:
 func _apply_flight_pose(t: float) -> void:
 	var ease_out := 1.0 - pow(1.0 - t, 3.0)
 	position = FLY_OFFSET * (1.0 - ease_out) + Vector2(0.0, -25.0 * sin(PI * t))
-	scale = Vector2.ONE * DISPLAY_SCALE * lerpf(0.78, 1.0, ease_out)
+	scale = Vector2.ONE * display_scale * lerpf(0.78, 1.0, ease_out)
 	rotation = lerpf(deg_to_rad(-14.0), 0.0, ease_out)
 
 func _apply_pin_pose(t: float) -> void:
@@ -356,7 +361,7 @@ func _apply_pin_pose(t: float) -> void:
 	_thumbtack.position.z += 0.021 * (1.0 - press) - 0.002 * spring
 	_thumbtack.rotation = _pin_rotation + Vector3(-0.55, 0.36, -1.3) * (1.0 - ease_out)
 	_thumbtack.rotation += Vector3(0.14, 0.04, -0.1) * spring
-	_thumbtack.scale = Vector3.ONE * PIN_SCALE * (lerpf(1.18, 1.0, ease_out) - 0.045 * spring)
+	_thumbtack.scale = Vector3.ONE * PIN_SCALE * DISPLAY_SCALE / maxf(.01, display_scale) * (0.75 if display_scale < DISPLAY_SCALE else 1.0) * (lerpf(1.18, 1.0, ease_out) - 0.045 * spring)
 	_model.rotation.x = 0.018 * spring
 	if t >= 1.0 and not _pin_impact_fired:
 		_pin_impact_fired = true

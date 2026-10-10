@@ -1,0 +1,11 @@
+Generated with the built-in image_gen tool using patty_states/perfect.png and cheese.png as references.
+
+Use case: stylized-concept. Asset type: a production 2D game animation sprite sheet, one transparent PNG with exactly FOUR equal square cells arranged 2 columns by 2 rows, reading top-left, top-right, bottom-left, bottom-right.
+Input image 1 is the game's hamburger patty: use it ONLY as a camera/perspective/lighting and placement reference, DO NOT include any meat in output. Input image 2 is current cheese: use yellow cheddar color as reference but improve its hand-painted toon appearance.
+Primary request: four consecutive states of ONE slice of golden American cheddar melting over this exact round burger patty. Output ONLY the cheese, isolated on genuine transparent background, no burger, no plate, no text, no shadows outside cheese, no checkerboard.
+Each equal cell represents the SAME 512x512 coordinate space as the patty reference: center x256, cheese rests on the patty top near y245. Across all cells keep identical camera angle, scale, alignment, and lighting from upper left. The reference meat spans x54..470, y164..381; cheese should span approximately x60..452 and top surface from y171..305, with melted front corner drapes extending down to y337. The cheese is a square seen in the reference's elevated front perspective, with a gentle diamond rotation, NOT a front-on rectangular slab and not overhead. Preserve recognizably the same four corners through the sequence.
+State 1 top-left: freshly laid, flat thin square slice, clean defined corners, slightly satin bright yellow.
+State 2 top-right: edges relaxing onto the round patty, corners just starting to fold, softened edges.
+State 3 bottom-left: glossy melted slice follows the round patty contour, front and side corners visibly drape down, soft wrinkles and warm yellow-orange shaded edges.
+State 4 bottom-right: fully melted creamy glossy cheese hugging the round patty, smooth broad top with natural small highlights and a few thick rounded drapes over the front edge, NOT long strings or loose blobs. No holes, no steam, no eyes.
+Polished hand-painted stylized food sprite matching the reference, clean antialiased cutout edges, useful at small game size. Transparent separation between all four sprites. Do not draw the patty, it is added by the game.

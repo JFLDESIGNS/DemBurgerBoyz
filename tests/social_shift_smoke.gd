@@ -13,7 +13,7 @@ func run() -> void:
 	var calls = []
 	cat.wants_meow.connect(func(pitch): calls.append(pitch))
 	cat._state = "peek"; cat.visible = true
-	cat._update_begging_meows(5.99); assert(calls.is_empty())
+	cat._update_begging_meows(11.99); assert(calls.is_empty())
 	cat._update_begging_meows(.02); assert(calls.size()==1)
 	cat._visit_fed = true; cat._update_begging_meows(20.0); assert(calls.size()==1)
 	cat.free()

@@ -104,7 +104,7 @@ func _ready() -> void:
 	skid_audio.max_distance = 30.0
 	truck.add_child(skid_audio)
 	meow_audio = AudioStreamPlayer3D.new(); meow_audio.bus = "SFX"
-	meow_audio.stream = game.game_audio._make_cat_meow() if is_instance_valid(game.game_audio) and game.game_audio.has_method("_make_cat_meow") else null
+	meow_audio.stream = load("res://sounds/cat_begging_meow.mp3")
 	meow_audio.volume_db = -7.0
 	meow_audio.unit_size = 5.0
 	meow_audio.max_distance = 25.0
@@ -244,9 +244,6 @@ func advance(delta: float) -> void:
 			courier.rotation.y = PI
 			clip("04_Happy_Hop" if pet_hop_left > 0.0 else "01_Idle")
 			courier.position.y = handoff.y + sin(elapsed * 3.5) * 0.016
-			if treat_meows < 2 and not delivery_meows_active and clock-last_meow_at >= 1.4 and elapsed >= 0.3 + treat_meows * 3.0:
-				_play_delivery_meow(1.08 + treat_meows * 0.08)
-				treat_meows += 1
 			if not orders.is_empty(): set_phase("deliver")
 			elif elapsed >= 9.0: set_phase("return")
 		"thanks":
@@ -391,9 +388,9 @@ func _play_delivery_meow(pitch: float) -> void:
 func _update_delivery_meows(delta: float) -> void:
 	if not delivery_meows_active:return
 	delivery_meow_clock += delta
-	# Two calls as the box opens, then another after the goods have flown out.
+	# Two recorded calls total; waiting for a treat adds no extra begging.
 	# This clock survives the transition to return/treat_wait.
-	var cues := [0.2, 1.1, 2.7]
+	var cues := [0.2, 2.7]
 	if meow_count < cues.size() and delivery_meow_clock >= cues[meow_count]:
 		_play_delivery_meow(1.06 + float(meow_count)*.06)
 		meow_count += 1

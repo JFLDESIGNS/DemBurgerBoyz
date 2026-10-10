@@ -110,6 +110,8 @@ float smooth_dither_noise(vec2 p) {
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+#include "res://shaders/creative_looks.gdshaderinc"
+
 void fragment() {
 	vec2 viewport_size = vec2(textureSize(screen_texture, 0));
 	vec2 raw_uv = SCREEN_UV;
@@ -248,5 +250,6 @@ void fragment() {
 		color = mix(before_grade, clamp(color, vec3(0.0), vec3(1.0)), grade_grade_mix);
 	}
 
+	color = creative_looks(color, raw_uv, viewport_size);
 	COLOR = vec4(color, 1.0);
 }

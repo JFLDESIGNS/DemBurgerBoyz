@@ -5,7 +5,7 @@ const SCENE_PATH := "res://assets/cat/shipping_cat.glb"
 const EYE_SHADER := preload("res://shaders/cat_eyes.gdshader")
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
-const HOME_X := 2.0912
+const HOME_X := 1.7864 # One foot camera-right (world -X).
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
 const TUTORIAL_COACH_X := 2.1548
 const HOME_Z := 2.01
@@ -201,7 +201,7 @@ func _on_screen_for_meow() -> bool:
 
 
 func _update_begging_meows(delta: float) -> void:
-	## First whine only after six unfed seconds on screen, then a quieter roll every 3s.
+	## Give the player more quiet time before begging, with sparse repeat calls.
 	if not _on_screen_for_meow() or _visit_fed or _delivery_peek_active:
 		_meow_on_screen = false
 		_meow_first_done = false
@@ -213,14 +213,14 @@ func _update_begging_meows(delta: float) -> void:
 		_meow_elapsed = 0.0
 	_meow_elapsed += delta
 	if not _meow_first_done:
-		if _meow_elapsed >= 6.0:
+		if _meow_elapsed >= 12.0:
 			_meow_first_done = true
-			_meow_elapsed -= 6.0
+			_meow_elapsed -= 12.0
 			wants_meow.emit(randf_range(1.0, 1.4))
 		return
-	while _meow_elapsed >= 3.0:
-		_meow_elapsed -= 3.0
-		if randf() < 0.25:
+	while _meow_elapsed >= 8.0:
+		_meow_elapsed -= 8.0
+		if randf() < 0.20:
 			wants_meow.emit(randf_range(1.0, 1.4))
 
 
@@ -717,7 +717,9 @@ func _process(delta: float) -> void:
 				var audio = get_tree().get_first_node_in_group("game_audio")
 				if is_instance_valid(audio): audio.play_cat_cartoon_smack()
 				var person = get_meta("swat_customer").get_ref()
-				if is_instance_valid(person): person.shake_angry(.4,.04,1.0)
+				if is_instance_valid(person):
+					person.shake_angry(.4,.04,1.0)
+					if is_instance_valid(game._customer_social): game._customer_social.wawa(person,1.2)
 				if is_instance_valid(game) and game.mp_enabled and NetManager.is_host() and NetManager.is_online() and is_instance_valid(game._customer_social):
 					game._customer_social.cat_smack.rpc(game._customer_net_id(person))
 				_social_run_away()

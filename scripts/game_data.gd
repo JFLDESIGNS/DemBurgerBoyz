@@ -252,8 +252,6 @@ static func generate_order(
 		## Tickets always list toppings in the same kitchen order.
 		order.append_array(sort_toppings(picked))
 		order.append("bun_top")
-	if order.has("onion") and randf() < 0.35:
-		order.append("grilled_onion")
 	if randf() < 0.20:
 		order.append("toasted_bun")
 	## Chance the burger comes with a fountain drink.
@@ -379,10 +377,6 @@ static func compare_orders(built: Array, requested: Array) -> Dictionary:
 	var perfect := missing.is_empty() and extra.is_empty() and built_burger.size() == req_burger.size()
 	if perfect:
 		perfect = built_burger == req_burger or _soft_order_match(built_burger, req_burger)
-	if requested.has("grilled_onion") and not built.has("grilled_onion"):
-		missing.append("grilled_onion")
-		perfect = false
-		quality *= 0.8
 	if requested.has("toasted_bun") and not built.has("toasted_bun"):
 		missing.append("toasted_bun")
 		perfect = false

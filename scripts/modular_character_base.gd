@@ -3112,6 +3112,12 @@ func _add_curved_mouth(
 	part.mesh = surface.commit()
 	part.position = world_position * _unit
 	part.material_override = material
+	if material is ShaderMaterial:
+		material.set_meta("wawa_mouth", true)
+		material.set_shader_parameter("speech_radius", maxf(.065, half_w*.78)*_unit*.70)
+		material.set_shader_parameter("speech_center_y", -height*.5*_unit if style == "smile" else 0.0)
+		material.set_shader_parameter("speech_open_style", style == "open")
+		material.set_shader_parameter("speech_depth", depth*.5*_unit)
 	parent.add_child(part)
 	return part
 
@@ -3190,6 +3196,19 @@ uniform float shadow_position : hint_range(-0.4, 0.6, 0.01) = 0.0;
 uniform float shadow_softness : hint_range(0.0, 0.45, 0.01) = 0.10;
 uniform float shadow_width : hint_range(0.15, 1.0, 0.01) = 1.0;
 
+uniform float speech_round = 0.0;
+uniform float speech_radius = 0.1;
+uniform float speech_center_y = 0.0;
+uniform float speech_depth = 0.01;
+uniform bool speech_open_style = false;
+void vertex() {
+ vec2 p=vec2(UV.x*2.0-1.0,1.0-UV.y*2.0);
+ vec2 circle=p;
+ if (!speech_open_style) circle=p*sqrt(max(vec2(0.0),vec2(1.0)-p.yx*p.yx*.5));
+ vec2 target=circle*speech_radius+vec2(0.0,speech_center_y);
+ VERTEX.xy=mix(VERTEX.xy,target,speech_round);
+ VERTEX.z=mix(VERTEX.z,speech_depth*(NORMAL.z >= 0.0 ? 1.0 : -1.0),speech_round);
+}
 void fragment() {
 	float y = UV.y - shadow_position;
 	float soft = max(shadow_softness, 0.001);
@@ -3198,6 +3217,8 @@ void fragment() {
 	float horizontal = 1.0 - smoothstep(shadow_width, min(shadow_width + 0.14, 1.08), x_centered);
 	float mask = clamp(vertical * horizontal, 0.0, 1.0) * shadow_color.a;
 	ALBEDO = mix(mouth_color.rgb, shadow_color.rgb, mask);
+ float inner=1.0-smoothstep(.64,.94,length(vec2(UV.x*2.0-1.0,UV.y*2.0-1.0)));
+ ALBEDO=mix(ALBEDO,shadow_color.rgb,inner*speech_round*.9);
 }
 """
 	var material := ShaderMaterial.new()

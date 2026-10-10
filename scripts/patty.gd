@@ -53,6 +53,7 @@ var oil_crust_left: bool = false
 ## Cheese slice melting on the grill.
 var has_cheese: bool = false
 var cheese_melt: float = 0.0 ## 0..1 over CHEESE_MELT_TIME
+var cheese_effect_age: float = 0.0 ## Cosmetic seconds; persists across build sprite refreshes.
 const CHEESE_MELT_TIME := 3.0
 var _cheese_root: Node3D
 var _cheese_mat: StandardMaterial3D
@@ -904,6 +905,7 @@ func apply_mp_state(
 			_build_cheese_slice()
 		has_cheese = true
 		cheese_melt = clampf(p_melt, 0.0, 1.0)
+		cheese_effect_age = maxf(cheese_effect_age, cheese_melt * CHEESE_MELT_TIME)
 		_update_cheese_visual()
 	elif has_cheese:
 		remove_cheese()
@@ -974,6 +976,7 @@ func _process(delta: float) -> void:
 	if has_cheese:
 		if cheese_melt < 1.0 and not mp_puppet:
 			cheese_melt = minf(1.0, cheese_melt + delta / CHEESE_MELT_TIME)
+		cheese_effect_age = minf(5.0, cheese_effect_age + delta)
 		## Keep checking orientation after the melt completes. Juggle flips rotate
 		## the whole patty, so a stale visible flag made cheese show underneath.
 		_update_cheese_visual()
@@ -2062,7 +2065,7 @@ func flip(forced_grade: String = "") -> bool:
 		if audio.has_method("play_spatula_whoosh"):
 			audio.play_spatula_whoosh()
 		if audio.has_method("play_flip_grade_announcer"):
-			audio.play_flip_grade_announcer(last_flip_grade)
+			audio.play_flip_grade_announcer(last_flip_grade, maxf(0.0, first_side_time - FLIP_READY))
 		elif perfect_flip and audio.has_method("play_perfect_announcer"):
 			audio.play_perfect_announcer()
 	var tw := create_tween()
@@ -2792,6 +2795,7 @@ func add_cheese() -> bool:
 		return false
 	has_cheese = true
 	cheese_melt = 0.0
+	cheese_effect_age = 0.0
 	## Hold the scoop cue until melt finishes (meat may already be done).
 	_announced_scoop = false
 	_build_cheese_slice()
@@ -2802,6 +2806,7 @@ func add_cheese() -> bool:
 func remove_cheese() -> void:
 	has_cheese = false
 	cheese_melt = 0.0
+	cheese_effect_age = 0.0
 	_cheese_drape_state.clear()
 	if is_instance_valid(_cheese_root): _cheese_root.hide()
 

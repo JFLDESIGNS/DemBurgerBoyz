@@ -6,7 +6,7 @@ signal warmup_finished
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
 const DEPARTURE_SECONDS := 1.35
 const MENU_FRAME_PADDING := Vector2(96.0, 64.0)
-const MENU_CAMERA_HEIGHT := 5.5
+const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
 var viewport: SubViewport
 var world: Node3D
@@ -64,14 +64,14 @@ func _ready() -> void:
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-48, -28, 0)
 	key.light_color = Color("fff1d7")
-	key.light_energy = 2.0
+	key.light_energy = 2.0 if loading_mode else 1.35
 	key.shadow_enabled = true
 	key.directional_shadow_max_distance = 65.0
 	world.add_child(key)
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-25, 140, 0)
 	fill.light_color = Color("b9e7ff")
-	fill.light_energy = 0.65
+	fill.light_energy = 0.65 if loading_mode else 0.45
 	world.add_child(fill)
 	var model := TRUCK_SCENE.instantiate()
 	world.add_child(model)
@@ -105,11 +105,20 @@ func _ready() -> void:
 	else:
 		truck.position = Vector3.ZERO
 		truck.rotation = Vector3.ZERO
-		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-		camera.size = MENU_CAMERA_HEIGHT
-		# A true side view keeps +X travel horizontal all the way off screen.
-		camera.position = Vector3(0.0, 3.2, 20.0)
-		camera.look_at(Vector3(0, 2.8, 0))
+		camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+		camera.fov = 36.0
+		# Show the nose and serving window like the illustrated title concept.
+		camera.position = Vector3(9.0, 1.6, 8.5)
+		camera.look_at(Vector3(0.25, 2.6, 0))
+		var shadow:=MeshInstance3D.new()
+		shadow.name="MenuTruckGroundShadow"
+		var plane:=PlaneMesh.new();plane.size=Vector2(10.5,5.0)
+		shadow.mesh=plane
+		var shadow_mat:=ShaderMaterial.new();shadow_mat.shader=preload("res://shaders/title_truck_shadow.gdshader")
+		shadow.material_override=shadow_mat
+		shadow.position=Vector3(0,.025,0)
+		shadow.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		truck.add_child(shadow)
 		if get_parent() is Control:
 			set_anchors_preset(Control.PRESET_TOP_LEFT)
 			get_parent().resized.connect(_fit_menu_width)
@@ -161,10 +170,10 @@ func _fit_menu_width() -> void:
 	var holder := get_parent() as Control
 	if holder == null:
 		return
-	var screen_width := get_viewport_rect().size.x
-	size = Vector2(screen_width, holder.size.y) + MENU_FRAME_PADDING * 2.0
+	size = holder.size + MENU_FRAME_PADDING * 2.0
 	position = Vector2((holder.size.x - size.x) * 0.5, -MENU_FRAME_PADDING.y)
 	camera.size = MENU_CAMERA_HEIGHT * size.y / maxf(holder.size.y, 1.0)
+	camera.fov = rad_to_deg(2.0*atan(tan(deg_to_rad(36.0)*.5)*size.y/maxf(holder.size.y,1.0)))
 
 func _sync_visibility() -> void:
 	var active := is_visible_in_tree() or _warming

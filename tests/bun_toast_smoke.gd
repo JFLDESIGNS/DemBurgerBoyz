@@ -23,6 +23,12 @@ func run() -> void:
 	bun._process(8); assert(bun.is_ready() and not bun.is_burnt())
 	bun._process(.1); assert(bun.is_burnt())
 	bun.cook_time = 10
+	game._begin_patty_drag(bun)
+	assert(game.dragging_patty == bun and game.spatula_patty == null)
+	var before_slide: Vector2 = Vector2(bun.position.x,bun.position.z)
+	game._move_grill_patty_slide(bun,before_slide+Vector2(.12,0),before_slide,true)
+	assert(bun.position.x > before_slide.x+.08 and bun.cook_time == 10)
+	game.dragging_patty = null
 	game.shift_paused = true; bun._process(2); assert(bun.cook_time == 10)
 	game.shift_paused = false
 	game._pickup_bun_from_grill(bun)
@@ -41,6 +47,9 @@ func run() -> void:
 	assert(not game._station_has_toasted_buns(0))
 	game._place_spatula_on_grill_local(0, Vector3(game.GRILL_CENTER_X, game.GRILL_SURFACE_Y, game.GRILL_SURFACE_Z))
 	assert(game.grill[0].cook_time == 10)
+	game._begin_patty_drag(game.grill[0])
+	game._end_patty_drag()
+	assert(game.grill[0] == null and game.spatula_patty == null and game._station_has_toasted_buns(0), "Tap finished buns straight to Build")
 	game.supply_stock["bun_bottom"] = 10
 	game.supply_stock["bun_top"] = 10
 	game._bun_pile_drag = {"origin": Vector2.ZERO}

@@ -1324,7 +1324,7 @@ func _play_wait_stance() -> void:
 				_next_wait_pose = _wait_prop_until + randf_range(2.0, 5.0)
 				_play_anim("burger:" + _wait_prop_choice)
 				return
-			var idles: Array = Array(WAITING_IDLES)
+			var idles: Array = WAITING_IDLES.duplicate()
 			idles.erase(_burger_idle)
 			if _wait_motion_time < 18.0: idles.erase("Impatient_Foot_Tap")
 			_burger_idle = idles.pick_random()
@@ -1939,6 +1939,7 @@ func _begin_order_announce() -> void:
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_wawa_click"):
 		audio.play_customer_wawa_click(0.22, get_customer_voice())
+		animate_wawa(1.5 if get_customer_voice() == "female" else 1.15)
 
 
 func _update_order_announce(delta: float) -> void:
@@ -2089,6 +2090,12 @@ func make_room_for_next_customer() -> void:
 
 
 func _enter_leave_phase(phase: String) -> void:
+	if phase == "couple_wait" and not bool(get_meta("couple_wait_moved",false)):
+		set_meta("couple_wait_moved",true)
+		_leave_walk_x = global_position.x
+		_leave_start_x = _leave_walk_x + 1.8288 # Six feet camera-left, two farther than before.
+		_enter_leave_phase("turn_partner_wait")
+		return
 	if phase == "review" and bool(get_meta("review_made_room", false)):
 		var game := get_tree().current_scene
 		if game != null and game.has_method("_pause_customer_review"):
@@ -2103,7 +2110,7 @@ func _enter_leave_phase(phase: String) -> void:
 		_leave_turned = phase == "turn_left2"
 	elif phase == "turn_truck" or phase == "turn_review":
 		_leave_yaw_target = FACE_TRUCK_YAW
-	elif phase == "turn_review_walk":
+	elif phase == "turn_review_walk" or phase == "turn_partner_wait":
 		_leave_yaw_target = _sidewalk_walk_yaw(_leave_start_x - _leave_walk_x)
 	elif phase == "sidestep" or phase == "walk_off":
 		_leave_turned = true
@@ -2253,11 +2260,12 @@ func play_street_rejection(pointing: bool) -> float:
 	if not pointing:
 		# Repeat the angry gait for the remainder of this sidewalk pass.
 		var animation = _anim_player.get_animation("burger/" + clip_name)
-		if animation.loop_mode != Animation.LOOP_LINEAR:
+		if animation != null and animation.loop_mode != Animation.LOOP_LINEAR:
 			var looped = animation.duplicate(true)
 			looped.loop_mode = Animation.LOOP_LINEAR
 			var library = _anim_player.get_animation_library("burger").duplicate(false)
 			library.remove_animation(clip_name); library.add_animation(clip_name, looped)
+			_anim_player.stop()
 			_anim_player.remove_animation_library("burger"); _anim_player.add_animation_library("burger",library)
 			_anim_state = ""; _play_anim("burger:" + clip_name)
 	return BurgerMotion.LIBRARY.get_animation(clip_name).length
@@ -2301,9 +2309,24 @@ func _maybe_start_leave_fade() -> void:
 func _update_sidewalk_leave(delta: float) -> void:
 	global_position.y = STAND_Y
 	match _leave_phase:
+		"turn_partner_wait":
+			_apply_leave_body(delta,false)
+			_play_anim("idle")
+			if _tick_leave_turn(delta): _enter_leave_phase("walk_partner_wait")
+		"walk_partner_wait":
+			_leave_spin += delta
+			_leave_walk_x = move_toward(_leave_walk_x,_leave_start_x,LEAVE_WALK_SPEED*delta)
+			_play_anim("walk")
+			_apply_leave_body(delta,true)
+			if is_equal_approx(_leave_walk_x,_leave_start_x):
+				_enter_leave_phase("couple_wait")
+				_play_anim("idle")
 		"couple_wait":
 			_apply_leave_body(delta, false)
 			var other = get_meta("couple_partner").get_ref() if has_meta("couple_partner") else null
+			if is_instance_valid(other):
+				var facing := _sidewalk_walk_yaw(other.global_position.x - global_position.x)
+				rotation.y = lerp_angle(rotation.y, deg_to_rad(facing), clampf(delta*5.0,0.0,1.0))
 			if not is_instance_valid(other) or other.is_leaving or bool(other.get_meta("serve_in_progress",false)):
 				_enter_leave_phase("turn_left2")
 		"reaction":
@@ -2806,6 +2829,7 @@ func _update_wait_grobble(delta: float) -> void:
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_grobble"):
 		audio.play_customer_grobble(impatience, get_customer_voice())
+		animate_wawa(3.0)
 
 
 func _should_antsy_wait() -> bool:
@@ -4965,6 +4989,7 @@ func react_wrong() -> void:
 
 
 func _cancel_serve_celebration() -> void:
+	stop_mouth_speech()
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("stop_customer_dance_wawa"):
 		audio.stop_customer_dance_wawa()
@@ -5052,6 +5077,7 @@ func _start_leave_dance() -> void:
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_dance_wawa"):
 		audio.play_customer_dance_wawa(dur, get_customer_voice())
+		animate_wawa(dur,1.15)
 	get_tree().create_timer(dur).timeout.connect(func() -> void:
 		if not is_instance_valid(self):
 			return
@@ -5180,3 +5206,14 @@ func play_courier_grab(playback_speed: float = 1.0) -> void:
 	_anim_player.active = true
 	_anim_player.speed_scale = playback_speed
 	_anim_player.play("courier/Courier_Grab",0.0)
+
+func animate_wawa(duration: float = 1.15, pitch: float = 1.0) -> void:
+	var speech=get_node_or_null("MouthSpeech")
+	if speech==null:
+		speech=preload("res://scripts/customer_mouth_speech.gd").new()
+		speech.name="MouthSpeech";add_child(speech)
+	speech.start(duration,pitch)
+
+func stop_mouth_speech() -> void:
+	var speech=get_node_or_null("MouthSpeech")
+	if speech!=null:speech.stop()

@@ -6,6 +6,24 @@ var cat_left := 5.0
 var walker_left := 35.0
 var couples: Array = []
 var walkers: Array = []
+const CONVERSATIONS = [
+	["That grill smells amazing.","I was trying not to order fries. I failed."],
+	["Is this your usual lunch spot?","It is now. I followed the smell."],
+	["I think the cat runs this place.","Definitely management."],
+	["Extra cheese is a personality trait.","Finally, someone understands me."],
+	["I told myself I would cook today.","You supervised. That counts."],
+	["What are you getting?","A burger and a very good afternoon."]
+]
+func conversation_roll(person: Node, roll: float) -> bool:
+	if person.has_meta("conversation_checked"):return false
+	person.set_meta("conversation_checked",true)
+	return roll < .5
+func conversation_bubble(person: Node3D, text: String) -> void:
+	var ui=game.get_node_or_null("UI/Root")
+	if not is_instance_valid(ui):return
+	var bubble=preload("res://scripts/customer_conversation_bubble.gd").new()
+	ui.add_child(bubble);bubble.setup(person,text)
+
 
 static func outcome(roll: float) -> String:
 	if roll < 0.65: return "reply"
@@ -16,7 +34,22 @@ static func outcome(roll: float) -> String:
 func _ready() -> void:
 	name = "CustomerSocial"
 
+func encounter_outcome(a: Node, b: Node, roll: float) -> String:
+	var checked: Dictionary = a.get_meta("romance_checked_partners", {})
+	var first := not checked.has(b.get_instance_id())
+	if first:
+		checked[b.get_instance_id()] = true
+		a.set_meta("romance_checked_partners", checked)
+		var reverse: Dictionary = b.get_meta("romance_checked_partners", {})
+		reverse[a.get_instance_id()] = true
+		b.set_meta("romance_checked_partners", reverse)
+		return outcome(roll) # One 2% opportunity at the start of this pair's interaction.
+	if roll < .65: return "reply"
+	if roll < .85: return "away"
+	return "quiet"
+
 func eligible(c) -> bool:
+	if not is_instance_valid(c) or bool(c.get_meta("mobile_order", false)) or bool(c.get_meta("delivery_driver", false)): return false
 	return is_instance_valid(c) and c.has_method("get_customer_voice") and c.is_waiting and not c.is_leaving and not c.is_ragdoll and not c._eating and not c.dialogue_open and not c.is_cut_collector and not c.is_challenge_guest and not c.is_disguise_cat and not c.is_terrorist and not bool(c.get_meta("serve_in_progress", false)) and not c.has_meta("couple_partner")
 
 func _process(delta: float) -> void:
@@ -46,9 +79,10 @@ func _process(delta: float) -> void:
 			var nearby = waiting.filter(func(c): return c != a and c.position.distance_to(a.position) < 3.5)
 			if not nearby.is_empty():
 				var b = nearby.pick_random()
-				var kind = outcome(randf())
-				encounter(a,b,kind)
-				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(a),game._customer_net_id(b),kind)
+				var kind = encounter_outcome(a,b,randf())
+				var chat := randi_range(0,CONVERSATIONS.size()-1) if conversation_roll(a,randf()) else -1
+				encounter(a,b,kind,chat)
+				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(a),game._customer_net_id(b),kind,chat)
 	if cat_left <= 0.0:
 		cat_left = randf_range(7.0, 12.0)
 		var cat = game.window_cat
@@ -62,17 +96,20 @@ func _process(delta: float) -> void:
 	if walker_left <= 0.0:
 		walker_left = randf_range(40.0,75.0)
 		if not couples.is_empty() and walkers.is_empty():
-			var pair = couples.pick_random()
+			var available = couples.filter(func(pair): return not is_instance_valid(pair[0].get("original").get_ref()) and not is_instance_valid(pair[1].get("original").get_ref()))
+			if available.is_empty(): return
+			var pair = available.pick_random().duplicate(true)
+			for person in pair: person.erase("original")
 			var direction = game._bg_people_lane_dir()
 			if direction == 0.0: direction = 1.0
 			spawn_couple(pair, direction)
 			if game.mp_enabled and NetManager.is_online(): couple_walk.rpc(pair, direction)
 
 @rpc("authority", "call_remote", "reliable")
-func social_event(a_id: int, b_id: int, kind: String) -> void:
+func social_event(a_id: int, b_id: int, kind: String, chat: int = -1) -> void:
 	var a = game._customer_by_net_id(a_id)
 	var b = game._customer_by_net_id(b_id)
-	if is_instance_valid(a): encounter(a,b,kind)
+	if is_instance_valid(a): encounter(a,b,kind,chat)
 
 func glance(c, point: Vector3, seconds := 2.5) -> void:
 	if not is_instance_valid(c): return
@@ -100,7 +137,9 @@ func wawa(c, pitch := 1.0) -> void:
 	audio.unit_size = 5.0
 	c.add_child(audio)
 	audio.play(randf_range(0.0, maxf(0.0, audio.stream.get_length() - 1.1)))
-	audio.create_tween().tween_interval(randf_range(.55, 1.0)).finished.connect(audio.queue_free)
+	var duration := randf_range(.55, 1.0)
+	if c.has_method("animate_wawa"):c.animate_wawa(duration,audio.pitch_scale)
+	audio.create_tween().tween_interval(duration).finished.connect(audio.queue_free)
 
 func heart(c) -> void:
 	var label = Label3D.new()
@@ -117,7 +156,7 @@ func heart(c) -> void:
 	tween.tween_property(label,"modulate:a",0.0,2.0)
 	tween.chain().tween_callback(label.queue_free)
 
-func encounter(a,b,kind: String) -> void:
+func encounter(a,b,kind: String, chat: int = -1) -> void:
 	if kind.begins_with("cat_"):
 		var cat = game.window_cat
 		if not is_instance_valid(cat): return
@@ -137,12 +176,16 @@ func encounter(a,b,kind: String) -> void:
 	if not is_instance_valid(b): return
 	glance(a,b.global_position + Vector3(0,1.5,0))
 	wawa(a)
+	if chat >= 0 and chat < CONVERSATIONS.size(): conversation_bubble(a,CONVERSATIONS[chat][0])
 	var first_ref = weakref(a)
 	var second_ref = weakref(b)
-	create_tween().tween_interval(randf_range(.65, 1.2)).finished.connect(func():
+	create_tween().tween_interval(2.7 if chat >= 0 else randf_range(.65, 1.2)).finished.connect(func():
 		var first = first_ref.get_ref()
 		var second = second_ref.get_ref()
 		if not eligible(first) or not eligible(second): return
+		if chat >= 0 and chat < CONVERSATIONS.size():
+			conversation_bubble(second,CONVERSATIONS[chat][1])
+			if kind != "reply": wawa(second)
 		match kind:
 			"reply":
 				glance(second,first.global_position+Vector3(0,1.5,0)); wawa(second)
@@ -157,9 +200,13 @@ func encounter(a,b,kind: String) -> void:
 	)
 
 func pair_customers(a,b) -> void:
+	if not is_instance_valid(a) or not is_instance_valid(b): return
+	for person in [a, b]:
+		if bool(person.get_meta("mobile_order", false)) or bool(person.get_meta("delivery_driver", false)): return
 	a.set_meta("couple_partner",weakref(b)); b.set_meta("couple_partner",weakref(a))
 	a.set_meta("couple_first",true); b.set_meta("couple_first",false)
 	var pair = [{"preset":a.get_custom_character_preset(),"skin":a.skin_idx},{"preset":b.get_custom_character_preset(),"skin":b.skin_idx}]
+	pair[0]["original"] = weakref(a); pair[1]["original"] = weakref(b)
 	couples.append(pair)
 	if couples.size() > 8: couples.pop_front()
 	heart(a); heart(b); play_love_song(a)
@@ -238,7 +285,9 @@ func cat_smack(customer_id: int) -> void:
 	var audio = get_tree().get_first_node_in_group("game_audio")
 	if is_instance_valid(audio): audio.play_cat_cartoon_smack()
 	var person = game._customer_by_net_id(customer_id)
-	if is_instance_valid(person): person.shake_angry(.4,.04,1.0)
+	if is_instance_valid(person):
+		person.shake_angry(.4,.04,1.0)
+		wawa(person,1.2)
 
 func play_love_song(person: Node3D) -> void:
 	var audio = AudioStreamPlayer3D.new()

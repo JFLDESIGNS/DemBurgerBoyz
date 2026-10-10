@@ -3,6 +3,7 @@ class Customer extends Node3D:
  var order:Array[String]=[]
  var is_waiting:=true
  var is_leaving:=false
+ var is_challenge_guest:=false
  var taps:=0
  func _begin_order_announce():taps+=1
 var folder:String

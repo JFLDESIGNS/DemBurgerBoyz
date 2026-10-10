@@ -1218,6 +1218,7 @@ var _cut_collector_kind: String = "" ## "" | "wawa" | "cut" | "pep"
 var _cut_collector_wawa_timer: float = 60.0
 var _cut_collector_cut_done: bool = false
 var _cut_collector_seq: int = 0
+var _boss_suggested_item := ""
 var _boss_caption_seq: int = 0
 var _boss_caption_until := 0
 var _boss_speech_bubble: PanelContainer
@@ -1365,7 +1366,7 @@ var radio_column: VBoxContainer = null
 var phone_column: Control = null
 var _phone_lock_screen: Button = null
 var _phone_expanded := false
-var _phone_size_factor := 0.5
+var _phone_size_factor := 0.3125
 var _phone_size_tween: Tween = null
 var hud_chrome_collapsed: bool = false
 var hud_chrome_toggle: Button = null
@@ -1642,8 +1643,8 @@ var grill_spilled_fries: Array = [] ## single fries dropped on steel {root, mat,
 var _next_spilled_fry_net_id: int = 1
 var spilled_fry_held: bool = false
 var spilled_fry_held_idx: int = -1 ## index into grill_spilled_fries while carrying
-const FRIES_SPILL_SPEED := 2.70 ## 15% more forgiving than the old carry threshold
-const FRIES_SPILL_COOLDOWN := 0.32
+const FRIES_SPILL_SPEED := 5.4
+const FRIES_SPILL_COOLDOWN := 0.8
 const FRIES_GRILL_WAIT_SEC := 3.0 ## sit golden before charring starts
 const FRIES_GRILL_BLACK_SEC := 3.0 ## golden → black over this window, then fire
 ## Negative = lift. Was +0.9" drop; nudged 2.3" up → net ~1.4" above prior mid-band.
@@ -2251,7 +2252,7 @@ var _payment_bill_material_cache: Dictionary = {}
 var _payment_bill_pool: Array[MeshInstance3D] = []
 var _payment_bill_active: Array[MeshInstance3D] = []
 var _payment_bill_assets_ready: bool = false
-const TIP_JAR_MAX_BILLS := 3
+const TIP_JAR_MAX_BILLS := 18
 const PAYMENT_BILL_POOL_SIZE := 24
 const PAYMENT_BILL_FLY_VARIANTS := 6
 const PAYMENT_BILL_JAR_VARIANTS := 3
@@ -2816,7 +2817,7 @@ const ICECREAM_GRILL_FIRE_SEC := 6.0
 const ICECREAM_PUDDLE_R := 0.105
 ## Fryer on the left counter — camera-left = world +X · local +Z faces cook (yaw 180).
 ## Nudged 6" (0.152m) toward grill vs prior 1.35 seat.
-const FRYER_STATION_POS := Vector3(1.198, 1.105, 1.33)
+const FRYER_STATION_POS := Vector3(1.1472, 1.105, 1.33) ## Two inches camera-right; bread box follows this seat.
 const FRYER_STATION_ROT := Vector3(0.0, 180.0, 0.0)
 const FRYER_COLLISION_LAYER := 32768
 const BURGERPACK_INSPECT_LAYER := 65536
@@ -2859,7 +2860,7 @@ const FRIES_HOLD_PACK_SPACING_Z := 0.0384 ## 0.14 − 4"
 ## Camera is −Z; +Z is farther up-screen. Negative = closer to the cook / camera.
 const FRIES_HOLD_FAR_NUDGE := -0.3096 ## was −0.6144; push 1ft farther from camera
 const FRYER_BASKET_HOME_Y := 0.159 - 4.0 * INCH_TO_M
-const FRIES_PACK_SCENE := "res://models/smokecyl/fries.fbx"
+const FRIES_PACK_SCENE := "res://assets/ingredients/fries_checker_pack.glb"
 const FRIES_PACK_TARGET_H := 0.2171 ## Finished packs enlarged 30%, including existing saved shelf scales.
 const CUP_ICE_OVERFILL_CAP := 2.4
 const CUP_ICE_CUBE_SIZE := 0.0234
@@ -3147,6 +3148,12 @@ const GFX_DEFAULTS := {
 	"ssao_horizon": 0.25,
 	"ssao_sharpness": 0.72,
 	"ssil": true,
+	"look_ghibli": 0.0,
+	"look_cross_teal": 0.0,
+	"look_cross_lime": 0.0,
+	"look_cross_ruby": 0.0,
+	"look_blue_hour": 0.0,
+	"look_silver": 0.0,
 	"toon_filter": false,
 	"toon_outlines": false,
 	"toon_mix": 1.0,
@@ -4477,7 +4484,7 @@ func _make_burger_completion_burst() -> Node2D:
 	glow.name = "WarmGlow"
 	var gradient := Gradient.new()
 	gradient.offsets = PackedFloat32Array([0.0, .3, .65, 1.0])
-	gradient.colors = PackedColorArray([Color(1,.94,.3,.95), Color(1,.80,.12,.65), Color(1,.64,.06,.26), Color(1,.55,.05,0)])
+	gradient.colors = PackedColorArray([Color(1,.94,.55,.34), Color(1,.80,.25,.20), Color(1,.64,.10,.07), Color(1,.55,.05,0)])
 	var glow_texture := GradientTexture2D.new()
 	glow_texture.gradient = gradient
 	glow_texture.width = 256
@@ -4502,30 +4509,29 @@ func _make_burger_completion_burst() -> Node2D:
 		spark.set_meta("angle", TAU*float(i)/14.0+.13)
 		accents.add_child(spark)
 	var points := PackedVector2Array()
-	for i in 32:
-		var angle := TAU * float(i) / 32.0 - PI * 0.5
-		var radius := (1.0 + 0.12 * sin(float(i) * 2.3)) if i % 2 == 0 else 0.64
-		points.append(Vector2(cos(angle) * 124.0, sin(angle) * 92.0) * radius)
+	for i in 24:
+		var angle := TAU * float(i) / 24.0 - PI * 0.5 + .045*sin(float(i)*1.7)
+		var radius := (1.0 + 0.16 * sin(float(i) * 2.3)) if i % 2 == 0 else 0.56
+		points.append(Vector2(cos(angle) * 140.0, sin(angle) * 102.0) * radius)
 	var shadow := Polygon2D.new()
 	shadow.polygon = points
-	shadow.color = Color("A85B15")
-	shadow.position = Vector2(3.0, 7.0)
+	shadow.name = "OrangeEcho"
+	shadow.color = Color("FF9F24")
+	shadow.position = Vector2(2.0, 5.0)
+	shadow.rotation = -.065
+	shadow.scale = Vector2(1.06,1.06)
 	burst.add_child(shadow)
 	var fill := Polygon2D.new()
 	fill.polygon = points
+	fill.name = "GoldenBurst"
+	fill.antialiased = true
 	fill.color = Color("FFDC24")
 	burst.add_child(fill)
-	var outline := Line2D.new()
-	outline.points = points
-	outline.closed = true
-	outline.width = 3.0
-	outline.default_color = Color("633417")
-	outline.antialiased = true
-	burst.add_child(outline)
 	var center := Polygon2D.new()
 	center.polygon = points
-	center.scale = Vector2(0.76, 0.74)
-	center.color = Color("FFF38A")
+	center.scale = Vector2(0.70, 0.68)
+	center.color = Color("FFF4AF")
+	center.antialiased = true
 	burst.add_child(center)
 	for i in 8:
 		var angle := TAU * float(i) / 8.0 + 0.15
@@ -4542,8 +4548,8 @@ func _make_burger_completion_burst() -> Node2D:
 
 func _update_burger_completion_burst(burst: Node2D, progress: float) -> void:
 	var glow := burst.get_node("WarmGlow") as Sprite2D
-	glow.scale = Vector2(3.15,2.55) * (1.0 + .25*sin(progress*PI))
-	glow.modulate = Color(1.5, 1.25, .85, 1.0 - .15*progress)
+	glow.scale = Vector2(2.1,1.7) * (1.0 + .12*sin(progress*PI))
+	glow.modulate = Color(1.0, 1.0, 1.0, 1.0 - .45*progress)
 	var accents := burst.get_node("FlyingAccents")
 	for i in accents.get_child_count():
 		var spark := accents.get_child(i) as Polygon2D
@@ -4586,6 +4592,8 @@ func _release_serve_fly_root(root: Control) -> void:
 	var burst := root.get_node_or_null("BurgerCompleteBurst") as Node2D
 	if burst != null:
 		burst.visible = false
+		var light = burst.get_meta("completion_light") if burst.has_meta("completion_light") else null
+		if is_instance_valid(light): light.stop()
 	var stack := root.get_node_or_null("ServeFlyStack") as Control
 	if stack != null:
 		stack.position = Vector2.ZERO
@@ -5759,6 +5767,7 @@ func _process_gameplay(delta: float) -> void:
 				_update_patty_cook_spot_residue(p, delta)
 			elif BUN_TOAST_ENABLED:
 				_update_bun_toast_hold(p, delta)
+	_update_whole_burger_wobble(delta)
 	_update_station_cheese_melt(delta)
 	_update_supply_freshness(delta)
 	_update_supply_orders(delta)
@@ -5809,6 +5818,10 @@ func _process_gameplay(delta: float) -> void:
 			_update_cup_pour_white(delta)
 			_update_cup_liquid_bubbles(delta)
 			_refresh_cup_fizz_visual()
+	## A completed pour may have waited for another food flight or a customer.
+	## Keep retrying after the nozzle stops, rather than losing its one-shot handoff.
+	if cup_soda_fill >= 0.995 and cup_flavor != "":
+		_try_auto_hand_finished_soda()
 
 	_icecream_grab_lockout = maxf(0.0, _icecream_grab_lockout - delta)
 	if _cone_rack_pending:
@@ -5845,6 +5858,7 @@ func _process_gameplay(delta: float) -> void:
 		_update_held_bts_lightstick(delta)
 	_update_fryer_oil_bubbles(delta)
 	_update_fryer_basket_smoke(delta)
+	if fryer_ready_servings > 0: _auto_serve_ready_fries()
 	_update_ready_fries_pack_shakes(delta)
 	_update_ready_fries_pack_sparkles(delta)
 	_update_soda_trigger(delta)
@@ -6436,7 +6450,19 @@ func _unhandled_input(event: InputEvent) -> void:
 
 var _empty_stock_controls: Node3D
 
+func _boss_purchase_input_allowed(event: InputEvent) -> bool:
+	if _boss_suggested_item == "" or not (event is InputEventMouse): return false
+	var refs: Dictionary = _phone_shop_refs.get(_boss_suggested_item, {})
+	var buy := refs.get("buy") as Button
+	if not is_instance_valid(buy) or not buy.is_visible_in_tree() or buy.disabled: return false
+	if event is InputEventMouseButton and event.button_index != MOUSE_BUTTON_LEFT: return false
+	return buy.get_global_rect().has_point(event.position)
+
+
 func _input(event: InputEvent) -> void:
+	if _boss_speech_active():
+		if not _boss_purchase_input_allowed(event): get_viewport().set_input_as_handled()
+		return
 	if _handle_phone_scroll_input(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -6469,6 +6495,10 @@ func _input(event: InputEvent) -> void:
 	if _handle_build_swipe(event):
 		get_viewport().set_input_as_handled()
 		return
+	if playing and not options_menu_open and not shift_paused and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		if _try_build_burger_click(event.position, MOUSE_BUTTON_RIGHT):
+			get_viewport().set_input_as_handled()
+			return
 	if is_instance_valid(_grubbah) and _grubbah.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -6814,7 +6844,7 @@ func _input(event: InputEvent) -> void:
 			if _try_build_burger_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
-			if _try_fryer_basket_click(event.position):
+			if _try_ready_fries_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			## The cutting board / Build controls overlap the left edge of the steel in
@@ -6841,7 +6871,7 @@ func _input(event: InputEvent) -> void:
 			if _try_fryer_basket_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
-			if _try_ready_fries_click(event.position):
+			if _try_fryer_basket_click(event.position):
 				get_viewport().set_input_as_handled()
 				return
 			## Strip click on ketchup/mustard adds to the burger. Hold the strip
@@ -6902,7 +6932,7 @@ func _input(event: InputEvent) -> void:
 			if burnt_icecream_cone_held:
 				get_viewport().set_input_as_handled()
 				return
-			if fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or (grill_roomba_held and grill_roomba_remote_holder_id == 0) or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null or garbage_bag_held:
+			if _fryer_is_manually_held() or fries_pack_held or spilled_fry_held or (grill_roomba_held and grill_roomba_remote_holder_id == 0) or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or dragging_patty != null or burgerpack_held != null or garbage_bag_held:
 				get_viewport().set_input_as_handled()
 				return
 			if _try_grab_remote_steel_icecream(event.position):
@@ -6970,7 +7000,7 @@ func _input(event: InputEvent) -> void:
 			_put_icecream_cone_down()
 			get_viewport().set_input_as_handled()
 			return
-		if fryer_held_index >= 0:
+		if _fryer_is_manually_held():
 			_release_fryer_basket()
 			get_viewport().set_input_as_handled()
 			return
@@ -7140,7 +7170,7 @@ func _update_strip_hold_pickup(delta: float) -> void:
 		return
 	if mouse.distance_to(_strip_hold_origin) >= STRIP_HOLD_DRAG_PX:
 		var delta_pos: Vector2 = mouse - _strip_hold_origin
-		var left_strip: bool = over_id == "" and absf(delta_pos.y) > 28.0
+		var left_strip: bool = over_id == ""
 		var mostly_vertical: bool = absf(delta_pos.y) > absf(delta_pos.x) * 1.15
 		if left_strip or mostly_vertical:
 			_try_start_strip_hold_pickup()
@@ -7199,14 +7229,15 @@ func _handle_strip_swipe_input(event: InputEvent) -> bool:
 		if start_raw is Vector2:
 			start_pos = start_raw as Vector2
 		var start_id: String = str(_strip_swipe_added.get("_start_id", ""))
-		# Catch quick upward cheese drags before horizontal swipe recognition.
-		if start_id == "cheese" and _strip_hold_armed and mouse2.y < start_pos.y - STRIP_HOLD_DRAG_PX and (absf(mouse2.y - start_pos.y) > absf(mouse2.x - start_pos.x) * 1.15 or _strip_ingredient_at(mouse2) == ""):
+		# Leaving the cheese tray is a grab, including diagonal and sideways drags.
+		var over_id := _strip_ingredient_at(mouse2)
+		if start_id == "cheese" and _strip_hold_armed and start_pos.distance_to(mouse2) >= STRIP_HOLD_DRAG_PX and (over_id == "" or (over_id == "cheese" and mouse2.y < start_pos.y - STRIP_HOLD_DRAG_PX)):
 			_try_start_strip_hold_pickup()
 			return true
 		if not bool(_strip_swipe_added.get("_moved", false)):
 			if start_pos.distance_to(mouse2) >= STRIP_SWIPE_THRESH_PX:
 				var peek_id: String = _strip_ingredient_at(mouse2)
-				if (peek_id != "" and peek_id != start_id) or (absf(mouse2.x - start_pos.x) >= STRIP_SWIPE_THRESH_PX and absf(mouse2.y - start_pos.y) < 28.0):
+				if peek_id != "" and peek_id != start_id:
 					_strip_swipe_added["_moved"] = true
 					_strip_did_drag = true
 					_clear_strip_hold_tracking()
@@ -10885,7 +10916,7 @@ func _hands_busy_with_other_tool() -> bool:
 		return true
 	return brush_held or cheese_held or shaker_held or oil_held or condiment_tool_held != "" or ext_held or glock_held \
 			or sale_held or cup_held or icecream_cone_held or burnt_icecream_cone_held \
-			or fries_pack_held or spilled_fry_held or fryer_held_index >= 0 \
+			or fries_pack_held or spilled_fry_held or _fryer_is_manually_held() \
 			or grill_roomba_held or burgerpack_held != null or dragging_patty != null \
 			or bts_lightstick_held_index >= 0 or garbage_bag_held
 
@@ -14100,7 +14131,7 @@ func _try_burgerpack_inspect_click(screen_pos: Vector2) -> bool:
 		return true
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or cup_held or dragging_patty != null \
-			or fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held \
+			or _fryer_is_manually_held() or fries_pack_held or spilled_fry_held or grill_roomba_held \
 			or icecream_cone_held:
 		return false
 	if camera == null:
@@ -16143,11 +16174,14 @@ func _begin_patty_drag(patty: Area3D) -> void:
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
 	## Mid ice-ball squash — no sliding; waiting spheres slide like burgers.
-	if bool(patty.get("place_morphing")) and not bool(patty.get("place_ball_waiting")):
+	if not _is_bun_toast(patty) and bool(patty.get("place_morphing")) and not bool(patty.get("place_ball_waiting")):
 		return
 	if _is_bun_toast(patty):
-		if BUN_TOAST_ENABLED:
-			_pickup_bun_from_grill(patty)
+		if BUN_TOAST_ENABLED and spatula_patty == null and not (brush_held or cheese_held or shaker_held or oil_held or ext_held or glock_held):
+			if mp_enabled and not _mp_applying and int(patty.net_id) >= 0:
+				mp_claim_drag(int(patty.net_id))
+			else:
+				_begin_patty_drag_local(patty)
 		return
 	## Holding a scooped patty: still flip others on the grill; scooping another is blocked.
 	if spatula_patty != null:
@@ -16288,7 +16322,7 @@ func _move_grill_patty_slide(patty: Area3D, target_xz: Vector2, from_xz: Vector2
 			var now := Time.get_ticks_msec()
 			if now - int(other.get_meta("slide_hop_ms", -1000)) < 500: continue
 			other.set_meta("slide_hop_ms", now)
-			other._play_done_jump(0.034)
+			if other.has_method("_play_done_jump"): other._play_done_jump(0.034)
 			if mp_enabled and not _mp_applying and int(other.net_id) >= 0:
 				mp_spatula_flat_pop.rpc(int(other.net_id), x, z)
 	if is_instance_valid(_onion_kitchen): _onion_kitchen.push_from_burger(from_xz, Vector2(target.x,target.z))
@@ -16472,6 +16506,13 @@ func _end_patty_drag() -> void:
 	if mp_enabled and not _mp_applying and is_instance_valid(patty) and int(patty.get("net_id")) >= 0:
 		call_deferred("_mp_finish_local_slide",patty)
 	if not is_instance_valid(patty):
+		return
+	if _is_bun_toast(patty):
+		if _is_build_drop_at(mouse): _try_drag_patty_to_station(patty, STATION_CRAFT)
+		elif is_quick_tap:
+			if float(patty.cook_time) >= BunToastScript.TOAST_READY: _try_drag_patty_to_station(patty, STATION_CRAFT)
+			else: _pickup_bun_from_grill(patty)
+		elif _is_over_garbage(mouse): _trash_single_grill_patty(patty)
 		return
 	## Drag onto the peeking cat → feed (no trash fee).
 	if window_cat != null and is_instance_valid(window_cat) and _cat_feed_hit(mouse):
@@ -16881,6 +16922,10 @@ func _handle_spatula_release(screen_pos: Vector2) -> void:
 		return
 	if _is_over_garbage(screen_pos):
 		_trash_spatula_patty()
+		return
+	## Bun drags onto the steel place at the cursor before burger flick shortcuts.
+	## A quick sideways release must not send toast back toward Build.
+	if _is_bun_toast(spatula_patty) and _try_place_spatula_on_grill(screen_pos):
 		return
 	if _is_flick_to_grill(spatula_vel_screen, spatula_carry_travel):
 		_throw_held_patty_to_grill()
@@ -17923,21 +17968,29 @@ func _build_grill_roomba() -> void:
 	grill_roomba_area.add_child(grab_shape)
 	grill_roomba_root.add_child(grill_roomba_area)
 	_apply_machine_unlock_visibility()
+	var old_pad := world.get_node_or_null("RoboChefChargingPad")
+	if old_pad != null:
+		world.remove_child(old_pad)
+		old_pad.queue_free()
+	var charging_pad := preload("res://scripts/roomba_charging_pad.gd").new()
+	charging_pad.name = "RoboChefChargingPad"
+	charging_pad.game = self
+	world.add_child(charging_pad)
 
 
 func _add_roomba_top_highlights(parent: Node3D) -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = preload("res://shaders/bot_rectangle_reflections.gdshader")
-	for i in 2:
-		var streak := MeshInstance3D.new()
-		streak.name = "ToonTopReflection%d" % i
-		var plane := PlaneMesh.new()
-		plane.size = Vector2(ROOMBA_RADIUS * 1.86, ROOMBA_RADIUS * .22)
-		streak.mesh = plane
-		streak.position = Vector3(0, ROOMBA_HEIGHT*.62+.007, ROOMBA_RADIUS*(-.26 if i == 0 else .26))
-		streak.material_override = mat
-		streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(streak)
+	mat.render_priority = 20
+	var shine := MeshInstance3D.new()
+	shine.name = "DynamicToonTopShine"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2.ONE * ROOMBA_RADIUS * 1.82
+	shine.mesh = plane
+	shine.position.y = ROOMBA_HEIGHT*.62+.008
+	shine.material_override = mat
+	shine.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(shine)
 
 
 func _add_roomba_pixel_smile(parent: Node3D) -> void:
@@ -18139,7 +18192,7 @@ func _reset_grill_roomba() -> void:
 	grill_roomba_task_mode = ""
 	grill_roomba_task_t = 0.0
 	grill_roomba_was_tasking = false
-	grill_roomba_chirp_cd = randf_range(2.0, 4.0)
+	grill_roomba_chirp_cd = randf_range(25.0, 40.0)
 	grill_roomba_bump_sensor = ""
 	grill_roomba_sensor_hits = {"left": false, "right": false, "back": false}
 	grill_roomba_sensor_patty = null
@@ -18318,7 +18371,7 @@ func _update_grill_roomba(delta: float) -> void:
 	if tasking_now:
 		grill_roomba_chirp_cd = maxf(0.0, grill_roomba_chirp_cd - delta)
 		if grill_roomba_chirp_cd <= 0.0:
-			grill_roomba_chirp_cd = randf_range(3.8, 7.5)
+			grill_roomba_chirp_cd = randf_range(35.0, 60.0)
 			if game_audio and game_audio.has_method("play_roomba_wawa_chirp"):
 				game_audio.play_roomba_wawa_chirp()
 	grill_roomba_reaim_t = maxf(0.0, grill_roomba_reaim_t - delta)
@@ -18603,7 +18656,7 @@ func _try_grab_grill_roomba(screen_pos: Vector2) -> bool:
 	if not _owns_grill_roomba() or camera == null:
 		return false
 	if spatula_patty != null or cup_held or icecream_cone_held or burnt_icecream_cone_held\
-	or fryer_held_index >= 0 or fries_pack_held or spilled_fry_held\
+	or _fryer_is_manually_held() or fries_pack_held or spilled_fry_held\
 	or brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held\
 	or dragging_patty != null or bts_lightstick_held_index >= 0:
 		return false
@@ -19117,7 +19170,7 @@ func _roomba_clear_bumper_align() -> void:
 func _roomba_begin_bumper_scoop_align(patty: Area3D, slot: int, sensor: String) -> void:
 	if patty == null or not is_instance_valid(patty):
 		return
-	var can_scoop_task: bool = patty.has_method("can_scoop") and patty.can_scoop()
+	var can_scoop_task: bool = _roomba_food_ready(patty)
 	var can_flip_task: bool = patty.has_method("can_flip") and patty.can_flip()
 	if not can_scoop_task and not can_flip_task:
 		return
@@ -19769,6 +19822,14 @@ func _roomba_commit_scoop_patty(patty: Area3D, slot: int) -> void:
 		return
 	if patty == null or not is_instance_valid(patty):
 		return
+	if not _roomba_food_ready(patty): return
+	# Scoop and flip directly to Build from anywhere on the cooktop.
+	if not _is_bun_toast(patty) and _build_needs_patty() and not _serve_fly_busy:
+		_roomba_clear_patty_task()
+		patty.scale = Vector3.ONE
+		if mp_enabled: mp_click_transfer.rpc(int(patty.net_id), true, Vector3.ZERO)
+		else: _animate_click_transfer(patty, true, Vector3.ZERO)
+		return
 	grill_roomba_carry_patty = patty
 	grill_roomba_carry_slot = slot
 	grill_roomba_carry_target = Vector3.INF
@@ -19806,6 +19867,12 @@ func _roomba_clear_patty_task() -> void:
 	grill_roomba_reaim_t = 0.0
 
 
+func _roomba_food_ready(patty: Area3D) -> bool:
+	if not is_instance_valid(patty): return false
+	if _is_bun_toast(patty): return float(patty.cook_time) >= BunToastScript.TOAST_READY
+	return patty.has_method("can_scoop") and patty.can_scoop()
+
+
 func _roomba_cooked_patty_target(from_xz: Vector2) -> Vector3:
 	var best:= Vector3.INF
 	var best_score:= INF
@@ -19817,7 +19884,7 @@ func _roomba_cooked_patty_target(from_xz: Vector2) -> Vector3:
 			continue
 		if _is_in_warmer_zone(p.position):
 			continue
-		if not p.has_method("can_scoop") or not p.can_scoop():
+		if not _roomba_food_ready(p):
 			continue
 		var pxz:= Vector2(float(p.position.x), float(p.position.z))
 		var score:= from_xz.distance_to(pxz)
@@ -19863,7 +19930,7 @@ func _roomba_best_patty_task(from_xz: Vector2, mode: String) -> Dictionary:
 			continue
 		if _is_in_warmer_zone(p.position):
 			continue
-		if mode == "scoop" and (not p.has_method("can_scoop") or not p.can_scoop()):
+		if mode == "scoop" and not _roomba_food_ready(p):
 			continue
 		if mode == "flip" and (not p.has_method("can_flip") or not p.can_flip()):
 			continue
@@ -20078,6 +20145,9 @@ func _roomba_try_scoop_cooked_patty() -> void:
 		return
 	var blade:= _roomba_spatula_contact_xz()
 	var patty = grill_roomba_task_patty
+	if not _roomba_food_ready(patty):
+		_roomba_clear_patty_task()
+		return
 	var d:= blade.distance_to(Vector2(float(patty.position.x), float(patty.position.z)))
 	var body_xz := Vector2(grill_roomba_root.global_position.x, grill_roomba_root.global_position.z)
 	var body_d:= body_xz.distance_to(Vector2(float(patty.position.x), float(patty.position.z)))
@@ -20250,9 +20320,9 @@ func _roomba_place_bounds() -> Rect2:
 		GRILL_DEPTH
 	)
 	return Rect2(
-		b.position.x + ROOMBA_SIDE_INSET, 
-		b.position.y + ROOMBA_DEPTH_INSET, 
-		maxf(0.05, b.size.x - ROOMBA_SIDE_INSET * 2.0), 
+		b.position.x + ROOMBA_SIDE_INSET,
+		b.position.y + ROOMBA_DEPTH_INSET,
+		maxf(0.05, b.size.x - ROOMBA_SIDE_INSET * 2.0),
 		maxf(0.05, b.size.y - ROOMBA_TOP_DEPTH_INSET - ROOMBA_DEPTH_INSET)
 	)
 
@@ -20375,8 +20445,8 @@ func _roomba_fire_target() -> Vector3:
 func _roomba_idle_corner_target() -> Vector3:
 	var b:= _roomba_place_bounds()
 	return Vector3(
-		b.position.x + 0.012, 
-		GRILL_SURFACE_Y + ROOMBA_SIT_Y, 
+		b.position.x + 0.012,
+		GRILL_SURFACE_Y + ROOMBA_SIT_Y,
 		b.end.y - 0.012
 	)
 
@@ -20640,8 +20710,8 @@ func _roomba_spray_fire(pos: Vector3, delta: float) -> void:
 		grill_roomba_foam_cd = 0.1
 		for _i in 2:
 			_spawn_ext_powder_blob(Vector3(
-				lerpf(pos.x, target.x, 0.45) + randf_range(-0.035, 0.035), 
-				GRILL_SURFACE_Y, 
+				lerpf(pos.x, target.x, 0.45) + randf_range(-0.035, 0.035),
+				GRILL_SURFACE_Y,
 				lerpf(pos.z, target.z, 0.45) + randf_range(-0.035, 0.035)
 			))
 	if not _fire_killed_by_powder:
@@ -21553,6 +21623,7 @@ func _play_boss_arrive_sound(loud: bool = false) -> void:
 
 
 func _show_boss_caption(title: String, body: String, duration: float = 4.5) -> void:
+	if is_instance_valid(_cut_collector) and _cut_collector.has_method("animate_wawa"): _cut_collector.animate_wawa(duration)
 	_boss_caption_seq += 1
 	if dialogue_panel != null and is_instance_valid(dialogue_panel):
 		dialogue_panel.visible = false
@@ -21620,6 +21691,8 @@ func _boss_speech_active() -> bool:
 
 
 func _hide_boss_caption() -> void:
+	if is_instance_valid(_cut_collector) and _cut_collector.has_method("stop_mouth_speech"): _cut_collector.stop_mouth_speech()
+	_boss_suggested_item = ""
 	_boss_caption_until = 0
 	if is_instance_valid(_boss_speech_bubble): _boss_speech_bubble.queue_free()
 	var showcase = get_node_or_null("UI/Root/BossMachineShowcase")
@@ -21699,7 +21772,7 @@ func _on_cut_collector_arrived(customer: Node3D) -> void:
 		if kind == "fryer" or (kind == "pep" and day in [2, 3]):
 			_show_boss_machine(SHOP_FRYER_MACHINE if kind == "fryer" else (SHOP_SODA_MACHINE if day == 2 else SHOP_ICECREAM_MACHINE), talk_time)
 		_show_boss_caption("THE BOSS", pep, talk_time)
-		if kind == "fryer": _open_phone_to_fryer()
+
 		get_tree().create_timer(talk_time).timeout.connect(func():
 			if seq != _cut_collector_seq:
 				return
@@ -22169,7 +22242,7 @@ func _on_window_cat_wants_meow(pitch: float) -> void:
 
 func _on_window_cat_fed(kind: String) -> void:
 	_achievement_event("cat_treats")
-	if game_audio and game_audio.has_method("play_cat_meow"):
+	if not _cat_delivery_blocks_visit() and game_audio and game_audio.has_method("play_cat_meow"):
 		game_audio.play_cat_meow(0.5)
 	if kind == "patty" and game_audio and game_audio.has_method("play_cat_purr"):
 		game_audio.play_cat_purr()
@@ -23212,7 +23285,7 @@ func _ray_hits_tool(screen_pos: Vector2, layer: int, area: Area3D) -> bool:
 
 
 func _try_grab_shaker(screen_pos: Vector2) -> bool:
-	if shaker_held or shaker_root == null or camera == null:
+	if shaker_held or shaker_root == null or camera == null or _mp_shared_tool_held(4):
 		return false
 	if spatula_patty != null or brush_held or cheese_held or oil_held or ext_held or glock_held or dragging_patty != null:
 		return false
@@ -23225,7 +23298,7 @@ func _try_grab_shaker(screen_pos: Vector2) -> bool:
 
 
 func _begin_shaker_hold() -> void:
-	if not playing:
+	if not playing or _mp_shared_tool_held(4):
 		return
 	if brush_held or oil_held or condiment_tool_held != "" or cheese_held or ext_held or glock_held or spatula_patty != null or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
@@ -27609,7 +27682,7 @@ func _set_oil_aim_marker(show: bool, land: Vector3) -> void:
 
 
 func _try_grab_oil(screen_pos: Vector2) -> bool:
-	if oil_held or oil_root == null or camera == null:
+	if oil_held or oil_root == null or camera == null or _mp_shared_tool_held(2):
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or condiment_tool_held != "" or ext_held or glock_held or dragging_patty != null:
 		return false
@@ -27621,7 +27694,7 @@ func _try_grab_oil(screen_pos: Vector2) -> bool:
 
 
 func _begin_oil_hold() -> bool:
-	if not playing or oil_held or oil_root == null:
+	if not playing or oil_held or oil_root == null or _mp_shared_tool_held(2):
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or condiment_tool_held != "" or ext_held or glock_held or cup_held or dragging_patty != null:
 		_flash("Hands full — put that down first", Color("FFCC80"))
@@ -31183,7 +31256,7 @@ static func _street_hail_outcome(roll: int) -> String:
 func _hail_background_person(idx: int) -> void:
 	if _hotdog_active(): return
 	if not playing or shift_paused or options_menu_open: return
-	if idx < 0 or idx >= bg_people.size() or not bool(bg_people_active[idx]): return
+	if idx < 0 or idx >= bg_people.size() or idx >= bg_people_active.size() or not bool(bg_people_active[idx]) or not is_instance_valid(bg_people[idx]): return
 	var walker = bg_people[idx]
 	if not is_instance_valid(walker) or not walker.visible: return
 	var result = str(walker.get_meta("street_hail", ""))
@@ -31199,7 +31272,7 @@ func mp_hail_background_person(idx: int) -> void:
 
 @rpc("authority", "call_local", "reliable")
 func mp_background_person_hail(idx: int, result: String) -> void:
-	if idx < 0 or idx >= bg_people.size() or not bool(bg_people_active[idx]): return
+	if idx < 0 or idx >= bg_people.size() or idx >= bg_people_active.size() or not bool(bg_people_active[idx]) or not is_instance_valid(bg_people[idx]): return
 	var walker = bg_people[idx]
 	_setup_burgerpals_startup_sound(); _play_burgerpals_voice()
 	if not str(walker.get_meta("street_hail", "")).is_empty(): return
@@ -31208,10 +31281,11 @@ func mp_background_person_hail(idx: int, result: String) -> void:
 		walker.rotation_degrees.y = CustomerScript.FACE_TRUCK_YAW
 		walker.set_meta("street_hail_time", walker.play_street_rejection(true))
 		# Let the cook's greeting finish before the pedestrian answers.
-		var delay = minf(1.1, burgerpals_startup_player.stream.get_length())
+		var delay = minf(1.1, burgerpals_startup_player.stream.get_length()) if is_instance_valid(burgerpals_startup_player) and burgerpals_startup_player.stream != null else 0.5
 		get_tree().create_timer(delay).timeout.connect(func():
 			if is_instance_valid(walker) and walker.visible and str(walker.get_meta("street_hail","")) in ["angry","angry_walk"] and game_audio:
 				game_audio.play_customer_wawa_click(1.0,walker.get_customer_voice())
+				walker.animate_wawa(1.5 if walker.get_customer_voice() == "female" else 1.15)
 		)
 	elif result == "angry_walk":
 		walker.play_street_rejection(false)
@@ -34203,6 +34277,21 @@ func _sync_refined_soda_visual() -> void:
 
 
 func _setup_refined_soda_controls(visual: Node3D) -> void:
+	for part in visual.find_children("*satin splash liner*", "MeshInstance3D", true, false):
+		var plate := part as MeshInstance3D
+		var bounds := plate.mesh.get_aabb()
+		var overlay := MeshInstance3D.new()
+		overlay.name = "BackplateToonShine"
+		var quad := QuadMesh.new()
+		quad.size = Vector2(bounds.size.x, bounds.size.y)
+		overlay.mesh = quad
+		overlay.position = Vector3(bounds.get_center().x, bounds.get_center().y, bounds.position.z - .002)
+		overlay.rotation.y = PI
+		overlay.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var shine := ShaderMaterial.new()
+		shine.shader = preload("res://shaders/soda_backplate_shine.gdshader")
+		overlay.material_override = shine
+		plate.add_child(overlay)
 	preload("res://scripts/machine_badges.gd").soda(visual)
 	## Keep the authored colors and texture lettering; only the buttons respond to selection.
 	for fid in ["ice", "cola"]:
@@ -36139,9 +36228,10 @@ func _make_cylinder_label_mesh(
 
 
 func _add_fry_container_logo(pack: Node3D, model_holder: Node3D) -> void:
-	# Project lettering onto the actual container surface, including its taper.
+	# Authored checker cartons already include the outlined logo in their albedo.
 	for node in model_holder.find_children("*", "MeshInstance3D", true, false):
 		if bool(node.get_meta("fry_mesh", true)): continue
+		if bool(node.get_meta("fries_authored_print", false)): continue
 		var mat := ShaderMaterial.new()
 		mat.shader = preload("res://shaders/fries_container_print.gdshader")
 		mat.set_shader_parameter("mask_tex", load(PHONE_LOGO_TEX_PATH))
@@ -36174,7 +36264,7 @@ func _setup_fries_pack_shake_root(model: Node3D) -> void:
 		var n := String(mi.name).to_lower()
 		if n.contains("container") or n.contains("cup") or n.contains("basket") or n.contains("bucket"):
 			continue
-		## fries.fbx: MeshInstance3D named "fries"; also honor paint meta / tall piles.
+		## The game-ready pack keeps fries separate from its static container.
 		var is_fry := n == "fries" or n.contains("fri") or bool(mi.get_meta("fry_mesh", false))
 		if not is_fry and mi.mesh != null:
 			var aabb := mi.mesh.get_aabb()
@@ -36206,6 +36296,38 @@ func _setup_fries_pack_shake_root(model: Node3D) -> void:
 		parent.remove_child(mi2)
 		shake.add_child(mi2)
 		mi2.global_transform = gxf
+	# Widen the exposed fries, preserving their fit inside the tapered carton.
+	for fry in fry_nodes:
+		var source: Mesh = fry.mesh
+		var bounds := source.get_aabb()
+		var fuller := ArrayMesh.new()
+		for surface in source.get_surface_count():
+			var arrays := source.surface_get_arrays(surface)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			for v in vertices.size():
+				var height := (vertices[v].y - bounds.position.y) / maxf(bounds.size.y, .001)
+				var spread := smoothstep(.40, .66, height)
+				vertices[v].x = bounds.get_center().x + (vertices[v].x - bounds.get_center().x) * (1.0 + spread * .20)
+				vertices[v].z = bounds.get_center().z + (vertices[v].z - bounds.get_center().z) * (1.0 + spread * .12)
+			arrays[Mesh.ARRAY_VERTEX] = vertices
+			fuller.add_surface_from_arrays(source.surface_get_primitive_type(surface), arrays)
+			fuller.surface_set_material(surface, source.surface_get_material(surface))
+		fry.mesh = fuller
+		var food := fry.material_override as StandardMaterial3D
+		if food != null and food.next_pass is ShaderMaterial:
+			food.next_pass.set_shader_parameter("grain_scale", 85.0 / maxf(bounds.size.y, .001))
+		# Fill the two shoulders of the carton with additional, outward-leaning fries.
+		for side in [-1.0,1.0]:
+			for lane in 2:
+				var extra := MeshInstance3D.new()
+				extra.name = "SideFry_%s_%d" % [str(side),lane]
+				var box := BoxMesh.new()
+				box.size = Vector3(bounds.size.x*.13,bounds.size.y*(.58+lane*.055),bounds.size.z*.15)
+				extra.mesh = box
+				extra.material_override = food
+				extra.position = Vector3(bounds.get_center().x+side*bounds.size.x*(.43+lane*.025),bounds.position.y+bounds.size.y*.56,bounds.get_center().z+bounds.size.z*(-.20+lane*.34))
+				extra.rotation.z = -side*(.12+lane*.055)
+				fry.add_child(extra)
 
 
 func _update_fries_pack_fry_shake(pack: Node3D, phase: float, amount: float = 1.0) -> void:
@@ -36224,7 +36346,7 @@ func _update_fries_pack_fry_shake(pack: Node3D, phase: float, amount: float = 1.
 
 
 func _populate_fry_pack(pack: Node3D) -> void:
-	## Finished servings use the authored fries.fbx cup + fries, scaled to truck size.
+	## Finished servings use the baked checker carton and separate fries mesh.
 	if not ResourceLoader.exists(FRIES_PACK_SCENE):
 		_flash("Missing fries model", Color("EF5350"))
 		return
@@ -36271,6 +36393,7 @@ func _set_fries_pack_foreground(pack: Node3D) -> void:
 		if not (node is MeshInstance3D):
 			continue
 		var mi := node as MeshInstance3D
+		if String(mi.name).begins_with("SaltStarGlint"): continue
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.sorting_offset = 20.0
 		var surf_count := 0
@@ -36312,7 +36435,35 @@ func _make_fries_sparkle_mat() -> StandardMaterial3D:
 
 
 func _ensure_fries_pack_sparkles(pack: Node3D) -> Node3D:
-	return null
+	var fries := pack.find_child("fries",true,false) as MeshInstance3D
+	if fries == null: return null
+	var stars := Node3D.new()
+	stars.name = "SaltCrystalGlints"
+	fries.add_child(stars)
+	var bounds := fries.mesh.get_aabb()
+	var candidates: Array[Vector3] = []
+	for surface in fries.mesh.get_surface_count():
+		var arrays := fries.mesh.surface_get_arrays(surface)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		for i in vertices.size():
+			if vertices[i].y > bounds.position.y+bounds.size.y*.55 and normals[i].z < -.6:
+				candidates.append(vertices[i]+normals[i]*bounds.size.y*.004)
+	if candidates.is_empty(): return stars
+	for i in 6:
+		var glint := MeshInstance3D.new()
+		glint.name = "SaltStarGlint%d" % i
+		var quad := QuadMesh.new()
+		quad.size = Vector2.ONE * FRIES_PACK_TARGET_H * .09
+		glint.mesh = quad
+		glint.position = candidates[(i*37+11)%candidates.size()]
+		glint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var material := ShaderMaterial.new()
+		material.shader = preload("res://shaders/fries_star_glint.gdshader")
+		material.set_shader_parameter("phase",float(i)*1.71)
+		glint.material_override = material
+		stars.add_child(glint)
+	return stars
 
 
 func _update_fries_pack_sparkles(_pack: Node3D, _motion: float) -> void:
@@ -36320,10 +36471,13 @@ func _update_fries_pack_sparkles(_pack: Node3D, _motion: float) -> void:
 
 
 func _paint_fries_pack_meshes(model: Node3D) -> void:
-	## FBX ships untextured grey — paint cup red, fries golden.
-	var cup_mat := _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
+	## Preserve the authored carton print; apply the game food shading to fries.
+	var cup_mat: StandardMaterial3D
 	var fry_mat := _make_basic_mat(FRYER_FRY_COLOR, 0.0, 0.92)
 	_style_fries_food_material(fry_mat, 0.34)
+	var salt := ShaderMaterial.new()
+	salt.shader = preload("res://shaders/fries_salt.gdshader")
+	fry_mat.next_pass = salt
 	var stack: Array[Node] = [model]
 	while not stack.is_empty():
 		var node: Node = stack.pop_back()
@@ -36334,7 +36488,19 @@ func _paint_fries_pack_meshes(model: Node3D) -> void:
 		var mi := node as MeshInstance3D
 		var n := String(mi.name).to_lower()
 		if n.contains("container") or n.contains("cup") or n.contains("basket") or n.contains("bucket"):
-			mi.material_override = cup_mat
+			if n == "container_checker":
+				mi.set_meta("fries_authored_print", true)
+				for surface in mi.mesh.get_surface_count():
+					var paper := mi.get_active_material(surface).duplicate() as StandardMaterial3D
+					paper.roughness = 0.30
+					paper.clearcoat_enabled = true
+					paper.clearcoat = 0.42
+					paper.clearcoat_roughness = 0.20
+					mi.set_surface_override_material(surface, paper)
+			else:
+				if cup_mat == null:
+					cup_mat = _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
+				mi.material_override = cup_mat
 			mi.set_meta("fry_mesh", false)
 		elif n.contains("fri") or n == "fries":
 			mi.material_override = fry_mat
@@ -36346,6 +36512,8 @@ func _paint_fries_pack_meshes(model: Node3D) -> void:
 				mi.material_override = fry_mat
 				mi.set_meta("fry_mesh", true)
 			else:
+				if cup_mat == null:
+					cup_mat = _make_basic_mat(Color(0.82, 0.06, 0.04), 0.0, 0.38)
 				mi.material_override = cup_mat
 				mi.set_meta("fry_mesh", false)
 
@@ -36435,6 +36603,7 @@ func _reset_fryer_state(clear_servings: bool = true) -> void:
 	fries_pack_root = null
 	_fries_pack_prev_pos = Vector3.ZERO
 	_fries_pack_vel = Vector3.ZERO
+	_fries_spill_cd = 0.8
 	_clear_grill_spilled_fries()
 	_next_spilled_fry_net_id = 1
 	for i in fryer_baskets.size():
@@ -36604,6 +36773,43 @@ func _ready_fries_under_cursor(screen_pos: Vector2) -> bool:
 	return _ready_fries_index_under_cursor(screen_pos) >= 0
 
 
+var _mp_reserved_fries: Dictionary = {}
+var _mp_fries_pickup_pending := false
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_take_fries(slot: int) -> void:
+	if not NetManager.is_host() or not playing: return
+	var peer := _mp_sender_id()
+	var accepted := fryer_ready_servings > 0 and not _mp_reserved_fries.has(peer)
+	if accepted:
+		_mp_reserved_fries[peer] = true
+		fryer_ready_servings -= 1
+		_refresh_ready_fries_visuals()
+	mp_fries_taken.rpc_id(peer, accepted, slot, fryer_ready_servings)
+	_mp_broadcast_economy()
+
+@rpc("authority", "call_remote", "reliable")
+func mp_fries_taken(accepted: bool, slot: int, remaining: int) -> void:
+	_mp_fries_pickup_pending = false
+	if not accepted: return
+	fryer_ready_servings = remaining + 1
+	_mp_applying = true
+	var held := _begin_fries_pack_hold(slot)
+	_mp_applying = false
+	fryer_ready_servings = remaining
+	_refresh_ready_fries_visuals()
+	if not held: mp_return_fries.rpc_id(1, true)
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_return_fries(return_to_rack: bool) -> void:
+	if not NetManager.is_host(): return
+	var peer := _mp_sender_id()
+	if not _mp_reserved_fries.has(peer): return
+	_mp_reserved_fries.erase(peer)
+	if return_to_rack: fryer_ready_servings += 1
+	_refresh_ready_fries_visuals()
+	_mp_broadcast_economy()
+
 func _try_ready_fries_click(screen_pos: Vector2) -> bool:
 	var slot_idx := _ready_fries_index_under_cursor(screen_pos)
 	if slot_idx < 0:
@@ -36614,11 +36820,16 @@ func _try_ready_fries_click(screen_pos: Vector2) -> bool:
 func _begin_fries_pack_hold(slot_idx: int = -1) -> bool:
 	if fryer_ready_servings <= 0 or fries_pack_held:
 		return false
-	if fryer_held_index >= 0 or spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
+	if _fryer_is_manually_held() or spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null \
 			or cup_held or icecream_cone_held or burnt_icecream_cone_held or fries_pack_held or spilled_fry_held:
 		_flash("Hands full — put that down first", Color("FFCC80"))
 		return false
+	if mp_enabled and NetManager.is_online() and not NetManager.is_host() and not _mp_applying:
+		if not _mp_fries_pickup_pending:
+			_mp_fries_pickup_pending = true
+			mp_take_fries.rpc_id(1, slot_idx)
+		return true
 	var start_slot := clampi(slot_idx if slot_idx >= 0 else fryer_ready_servings - 1, 0, FRIES_HOLD_MAX_PACKS - 1)
 	var start := _ready_fries_slot_world(start_slot)
 	fryer_ready_servings = maxi(0, fryer_ready_servings - 1)
@@ -36642,6 +36853,10 @@ func _begin_fries_pack_hold(slot_idx: int = -1) -> bool:
 			game_audio.play_rack_take()
 		game_audio.play_click()
 	return true
+
+
+func _fryer_is_manually_held() -> bool:
+	return fryer_held_index >= 0 and _fryer_auto_mode == ""
 
 
 func _begin_fryer_basket_hold(index: int) -> bool:
@@ -36842,6 +37057,33 @@ func _add_ready_fries_local(amount: int) -> void:
 	_refresh_ready_fries_visuals()
 	_refresh_ticket_checkmarks()
 	_update_hud()
+	call_deferred("_auto_serve_ready_fries")
+
+
+func _auto_serve_ready_fries() -> void:
+	if not playing or shift_paused or options_menu_open or _serve_fly_busy or fryer_ready_servings <= 0: return
+	if mp_enabled and not NetManager.is_host(): return
+	# Grubbah owns its bagging animation and consumes each side just once.
+	if is_instance_valid(_grubbah): _grubbah.pack_ready_sides()
+	var waiting: Array = customers.duplicate()
+	if is_instance_valid(selected_customer) and waiting.has(selected_customer):
+		waiting.erase(selected_customer)
+		waiting.push_front(selected_customer)
+	var changed := false
+	for customer in waiting:
+		if fryer_ready_servings <= 0 or _serve_fly_busy: break
+		if not is_instance_valid(customer) or not customer.is_waiting or customer.is_leaving: continue
+		if bool(customer.get_meta("serve_in_progress",false)) or bool(customer.get_meta("mobile_order",false)): continue
+		if not GameDataScript.wants_fries(customer.order) or _customer_fries_handed(customer): continue
+		if GameDataScript.is_fries_only_order(customer.order):
+			_begin_fries_only_serve(customer)
+			break
+		changed = _consume_fries_for_serve(customer,true) or changed
+	if changed:
+		if mp_enabled:
+			_mp_broadcast_economy()
+			_mp_broadcast_customers()
+		call_deferred("_try_auto_serve")
 
 
 func _update_held_fries_pack(delta: float) -> void:
@@ -36876,7 +37118,7 @@ func _update_held_fries_pack(delta: float) -> void:
 	_update_fries_pack_sparkles(fries_pack_root, motion)
 	if game_audio and game_audio.has_method("set_fries_shake"):
 		game_audio.set_fries_shake(motion > 0.08, motion)
-	if _fries_spill_cd <= 0.0 and speed >= FRIES_SPILL_SPEED \
+	if _fries_spill_cd <= 0.0 and speed >= FRIES_SPILL_SPEED and mouse_spd >= 1400.0 \
 			and _is_on_grill_surface(fries_pack_root.global_position) \
 			and not _is_in_warmer_zone(fries_pack_root.global_position):
 		_fries_spill_cd = FRIES_SPILL_COOLDOWN
@@ -37105,7 +37347,7 @@ func _find_spilled_fry_under_cursor(screen_pos: Vector2) -> int:
 
 
 func _try_grab_spilled_fry(screen_pos: Vector2) -> bool:
-	if spilled_fry_held or fries_pack_held or fryer_held_index >= 0:
+	if spilled_fry_held or fries_pack_held or _fryer_is_manually_held():
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or dragging_patty != null \
@@ -37191,6 +37433,7 @@ func _release_spilled_fry(screen_pos: Vector2) -> void:
 func _trash_held_fries_pack() -> void:
 	if not fries_pack_held:
 		return
+	if mp_enabled and not NetManager.is_host(): mp_return_fries.rpc_id(1, false)
 	fries_pack_held = false
 	_fries_spill_cd = 0.0
 	if game_audio and game_audio.has_method("set_fries_shake"):
@@ -37240,6 +37483,7 @@ func _release_fries_pack(screen_pos: Vector2) -> void:
 	if cust != null and is_instance_valid(cust):
 		_serve_held_fries_pack(cust)
 		return
+	if mp_enabled and not NetManager.is_host(): mp_return_fries.rpc_id(1, true)
 	fries_pack_held = false
 	_fries_spill_cd = 0.0
 	if mp_enabled and NetManager.is_online():
@@ -37258,7 +37502,7 @@ func _release_fries_pack(screen_pos: Vector2) -> void:
 		)
 	else:
 		fries_pack_root = null
-	fryer_ready_servings = maxi(0, fryer_ready_servings + 1)
+	if not mp_enabled or NetManager.is_host(): fryer_ready_servings = maxi(0, fryer_ready_servings + 1)
 	_refresh_ready_fries_visuals()
 	_refresh_ticket_checkmarks()
 	_update_hud()
@@ -39139,13 +39383,11 @@ func _add_soda_flavor_tank(parent: Node3D, flavor_id: String, local_pos: Vector3
 	glass_mesh.bottom_radius = 0.128
 	glass_mesh.height = 0.26
 	glass.mesh = glass_mesh
-	var glass_mat := StandardMaterial3D.new()
-	glass_mat.albedo_color = Color(0.88, 0.94, 1.0, soda_tank_glass_opacity)
-	glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	glass_mat.roughness = 0.04
-	glass_mat.metallic = 0.12
-	glass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var glass_mat := ShaderMaterial.new()
+	glass_mat.shader = preload("res://shaders/soda_tank_glass.gdshader")
+	glass_mat.set_shader_parameter("opacity", soda_tank_glass_opacity)
 	glass.material_override = glass_mat
+	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	tank.add_child(glass)
 
 	var liquid := MeshInstance3D.new()
@@ -39579,7 +39821,7 @@ func _build_soda_cup_rack(station: Node3D) -> void:
 
 	var stack_mat := _make_cup_stack_prop_material()
 	var rim_mat := stack_mat.duplicate() as StandardMaterial3D
-	rim_mat.albedo_color = Color(.88,.95,1.0,.48)
+	rim_mat.albedo_color = Color(.88,.95,1.0,.65)
 	rim_mat.roughness = 0.16
 	var shell_y := float(spare_count) * nest_step
 	var stack_shell := MeshInstance3D.new()
@@ -40546,7 +40788,7 @@ func _make_cup_stack_prop_material() -> StandardMaterial3D:
 	## lets the machine/background read through without nested alpha artifacts.
 	var mat := StandardMaterial3D.new()
 	mat.resource_name = "CupStackClearPlastic"
-	mat.albedo_color = Color(.88,.95,1.0,.18)
+	mat.albedo_color = Color(.88,.95,1.0,.42)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.roughness = 0.18
 	mat.metallic = 0.0
@@ -42706,7 +42948,7 @@ func _update_fill_seat_ghosts() -> void:
 		var filling: bool = occupying and (
 			(sid == "ice" and _cup_pouring_ice) or (sid != "ice" and _cup_pouring)
 		)
-		ghost.visible = (cup_held or _soda_order_waiting()) and not filling
+		ghost.visible = false
 		_face_fill_ghost_to_camera(ghost)
 		_set_ghost_outline_color(
 			ghost,
@@ -42714,7 +42956,7 @@ func _update_fill_seat_ghosts() -> void:
 		)
 	if soda_cup_rack_outline != null and is_instance_valid(soda_cup_rack_outline):
 		var soda_wait := _soda_order_waiting()
-		soda_cup_rack_outline.visible = soda_wait
+		soda_cup_rack_outline.visible = false
 		if soda_wait:
 			_face_fill_ghost_to_camera(soda_cup_rack_outline)
 			_set_ghost_outline_color(soda_cup_rack_outline, _ghost_outline_overlap_color())
@@ -45668,7 +45910,7 @@ func _try_hand_drink_to_customer_face(screen_pos: Vector2) -> bool:
 
 
 func _try_auto_hand_finished_soda() -> void:
-	if not playing or _serve_fly_busy:
+	if not playing or _serve_fly_busy or _mp_pending_cup_hand != 0:
 		return
 	if cup_root == null or not is_instance_valid(cup_root):
 		return
@@ -45709,6 +45951,7 @@ func _find_waiting_customer_for_soda_flavor(flavor: String) -> Node3D:
 	if selected_customer != null and is_instance_valid(selected_customer) \
 			and bool(selected_customer.get("is_waiting")) \
 			and not bool(selected_customer.get("is_leaving")) \
+			and not bool(selected_customer.get_meta("serve_in_progress", false)) \
 			and _customer_wants_flavor(selected_customer, flavor) \
 			and not _customer_soda_handed(selected_customer):
 		return selected_customer
@@ -45716,6 +45959,8 @@ func _find_waiting_customer_for_soda_flavor(flavor: String) -> Node3D:
 		if c == null or not is_instance_valid(c):
 			continue
 		if not bool(c.get("is_waiting")) or bool(c.get("is_leaving")):
+			continue
+		if bool(c.get_meta("serve_in_progress", false)):
 			continue
 		if _customer_wants_flavor(c, flavor) and not _customer_soda_handed(c):
 			return c
@@ -46895,14 +47140,17 @@ func _update_cutting_board_shadow(bounds: AABB) -> void:
 		_cutting_board_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var material := ShaderMaterial.new()
 		material.shader = preload("res://shaders/cutting_board_shadow.gdshader")
+		material.render_priority = 2
 		_cutting_board_shadow.material_override = material
 		world.add_child(_cutting_board_shadow)
 	var center := build_cutting_board.to_global(bounds.get_center())
 	# Counter top is at 1.05 m. Keep the blob grounded while the board hops.
-	_cutting_board_shadow.global_position = Vector3(center.x, 1.052, center.z + 0.018)
+	# Project toward the cook: the old small blob sat almost entirely behind
+	# the elevated board from the gameplay camera and was hidden by its front.
+	_cutting_board_shadow.global_position = Vector3(center.x, 1.054, center.z - 0.12)
 	_cutting_board_shadow.rotation.y = build_cutting_board.global_rotation.y
 	var board_scale := build_cutting_board.global_basis.get_scale()
-	(_cutting_board_shadow.mesh as PlaneMesh).size = Vector2(bounds.size.x * board_scale.x + 0.14, bounds.size.z * board_scale.z + 0.14)
+	(_cutting_board_shadow.mesh as PlaneMesh).size = Vector2(bounds.size.x * board_scale.x + 0.28, bounds.size.z * board_scale.z + 0.30)
 
 
 func _make_smoke2_grill_material(invert_normals: bool = false) -> Material:
@@ -47768,6 +48016,7 @@ func _splat_condiment_on_customer(cust: Node3D, flavor: String, zone: String) ->
 		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
 	if game_audio and game_audio.has_method("play_customer_wawa_click"):
 		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
+		if cust.has_method("animate_wawa"): cust.animate_wawa(1.5 if cust.get_customer_voice() == "female" else 1.15)
 
 func _release_condiment_tool() -> void:
 	if condiment_tool_held == "":
@@ -48585,15 +48834,11 @@ func _add_tip_jar_settled_bill() -> void:
 		return
 	var bill: MeshInstance3D = _make_tip_bill_mesh(true)
 	var i: int = _tip_jar_bill_count
-	## A couple of big bills fanned toward the player, not a crumpled stack.
-	var poses: Array[Dictionary] = [
-		{"pos": Vector3(-0.012, 0.016, 0.006), "rot": Vector3(-34.0, 176.0, -6.0)},
-		{"pos": Vector3(0.012, 0.034, -0.006), "rot": Vector3(-28.0, 184.0, 7.0)},
-		{"pos": Vector3(0.000, 0.052, 0.004), "rot": Vector3(-38.0, 180.0, 1.0)},
-	]
-	var pose: Dictionary = poses[mini(i, poses.size() - 1)]
-	bill.position = pose["pos"]
-	bill.rotation_degrees = pose["rot"]
+	# Accumulate a layered fan inside the jar instead of stopping at three notes.
+	var row := i / 3
+	var column := i % 3
+	bill.position = Vector3((column-1)*.012, .014+row*.007, (1-column)*.006+sin(float(i)*2.4)*.004)
+	bill.rotation_degrees = Vector3(-30.0-float(i%4)*4, 164.0+column*16.0+row*3.0, (column-1)*9.0+sin(float(i))*4.0)
 	tip_jar_fill_root.add_child(bill)
 	_tip_jar_bill_count += 1
 
@@ -48832,6 +49077,16 @@ func _build_layer_at_screen(screen_pos: Vector2) -> Control:
 
 var _build_swipe: Dictionary = {}
 
+func _move_build_swipe_preview(screen_pos: Vector2, reset: bool = false) -> void:
+	for entry in _build_swipe.get("preview_rows", []):
+		var row = entry.row
+		if not is_instance_valid(row): continue
+		if reset:
+			row.position = entry.home
+		else:
+			var inverse: Transform2D = row.get_parent().get_global_transform_with_canvas().affine_inverse()
+			row.position = entry.home + (inverse * screen_pos - inverse * Vector2(_build_swipe.origin))
+
 func _handle_build_swipe(event: InputEvent) -> bool:
 	if _build_swipe.is_empty(): return false
 	if not playing:
@@ -48839,14 +49094,13 @@ func _handle_build_swipe(event: InputEvent) -> bool:
 		return false
 	if event is InputEventMouseMotion:
 		_build_swipe["distance"] = maxf(float(_build_swipe.distance), event.position.distance_to(_build_swipe.origin))
-		var row = _build_swipe.get("row")
-		if is_instance_valid(row) and float(_build_swipe.distance)>=10.0:
-			row.position = _build_swipe.home + (event.position-_build_swipe.origin)/maxf(.01,row.get_global_transform_with_canvas().get_scale().x)
+		if float(_build_swipe.distance)>=10.0:
+			_move_build_swipe_preview(event.position)
 		return true
 	if not (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT): return false
 	if event.pressed: return true
 	var gesture := _build_swipe.duplicate()
-	if is_instance_valid(gesture.get("row")): gesture.row.position = gesture.home
+	_move_build_swipe_preview(event.position, true)
 	_build_swipe.clear()
 	var si := int(gesture.station)
 	# A partner may have changed this stack while the mouse was held.
@@ -48897,18 +49151,29 @@ func _apply_build_swipe(si: int, layer: int, id: String) -> void:
 	else:
 		_drop_patty_on_garbage(_make_reorder_drag(si,layer,id))
 
-func _try_build_burger_click(screen_pos: Vector2) -> bool:
+func _try_build_burger_click(screen_pos: Vector2, button: MouseButton = MOUSE_BUTTON_LEFT) -> bool:
 	if not playing or _serve_fly_busy: return false
 	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or cheese_held or cup_held or spatula_patty != null or dragging_patty != null: return false
 	var row := _build_layer_at_screen(screen_pos)
 	if row == null: return false
 	var si := int(row.get_meta("station_index",-1))
 	if si < 0 or stations[si]["items"].is_empty(): return false
+	if button == MOUSE_BUTTON_RIGHT:
+		if str(row.get_meta("item_id", "")) not in ["bun_bottom", "bun_top"]: return false
+		active_station = si
+		_begin_whole_burger_drag(si, button)
+		return true
 	active_station = si
 	if str(row.get_meta("item_id","")) == "bun_bottom" and not BUN_TOAST_ENABLED:
 		_begin_whole_burger_drag(si)
 	else:
 		_build_swipe = {"station":si, "layer":int(row.get_meta("stack_i", -1)), "id":str(row.get_meta("item_id", "")), "origin":screen_pos, "distance":0.0, "items":stations[si]["items"].duplicate(), "row":row, "home":row.position}
+		var preview_rows: Array = []
+		var bun_pair := BUN_TOAST_ENABLED and str(_build_swipe.id) in ["bun_bottom", "bun_top"]
+		for sibling in row.get_parent().get_children():
+			if sibling is Control and (sibling == row or (bun_pair and str(sibling.get_meta("item_id", "")) in ["bun_bottom", "bun_top"])):
+				preview_rows.append({"row":sibling,"home":sibling.position})
+		_build_swipe["preview_rows"] = preview_rows
 	return true
 
 
@@ -48922,6 +49187,9 @@ func _handle_bun_pile_drag(event: InputEvent) -> bool:
 	if event is InputEventMouseMotion:
 		if event.position.distance_to(_bun_pile_drag.origin) >= 14.0:
 			_bun_pile_drag.clear()
+			if mp_enabled and not _mp_applying:
+				_request_bun_pickup(-1)
+				return true
 			if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0: return true
 			if not _mp_spend_ingredient("bun_bottom"): return true
 			if not _mp_spend_ingredient("bun_top"): return true
@@ -49287,7 +49555,7 @@ func _set_phone_expanded(expanded: bool) -> void:
 	_phone_size_tween.tween_method(func(value: float) -> void:
 		_phone_size_factor = value
 		_layout_phone_ui_overlay()
-	, _phone_size_factor, 1.0 if expanded else 0.5, 0.24)
+	, _phone_size_factor, 1.0 if expanded else 0.3125, 0.24)
 	_phone_size_tween.tween_callback(func() -> void:
 		_phone_lock_screen.visible = not _phone_expanded
 	)
@@ -49751,7 +50019,7 @@ func _supply_delivery_landing() -> Vector3:
 func _make_supply_pack_mesh(id: String, kind: String) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.name = "SupplyPack"
-	var tex: Texture2D = FoodSpritesScript.get_tex(id)
+	var tex: Texture2D = FoodSpritesScript.build_patty_state_tex(0.0) if id == "patty" else FoodSpritesScript.get_tex(id)
 	if tex != null:
 		var quad := QuadMesh.new()
 		quad.size = Vector2(0.82, 0.66) / 3.0
@@ -50284,7 +50552,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 	_review_toast.z_index = 75
 	ui.add_child(_review_toast)
 	_review_toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_review_toast.offset_left=-1140;_review_toast.offset_right=-900
+	_review_toast.offset_left=-1160;_review_toast.offset_right=-920
 	_review_toast.offset_top=202;_review_toast.offset_bottom=202
 	var skin := StyleBoxFlat.new()
 	skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F")
@@ -50307,7 +50575,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 			var camera := get_viewport().get_camera_3d()
 			if is_instance_valid(customer) and camera != null:
 				var body_ui := ui.get_global_transform_with_canvas().affine_inverse() * camera.unproject_position(customer.global_position)
-				toast.position.x = maxf(12.0, body_ui.x - toast.size.x - 65.0)
+				toast.position.x = maxf(12.0, body_ui.x - toast.size.x - 85.0)
 		get_tree().process_frame.connect(follow_customer)
 		toast.tree_exiting.connect(func():
 			if get_tree().process_frame.is_connected(follow_customer):
@@ -50320,7 +50588,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 		if is_instance_valid(customer) and camera != null:
 			var body_screen := camera.unproject_position(customer.global_position)
 			var body_ui := ui.get_global_transform_with_canvas().affine_inverse() * body_screen
-			toast.position.x = maxf(12.0, body_ui.x - toast.size.x - 65.0)
+			toast.position.x = maxf(12.0, body_ui.x - toast.size.x - 85.0)
 	)
 	var lines := VBoxContainer.new()
 	lines.add_theme_constant_override("separation", 3)
@@ -51130,6 +51398,10 @@ func _on_muvye_cinema_mode(enabled: bool) -> void:
 
 
 func _open_phone_to_fryer() -> void:
+	_open_phone_to_shop_item(SHOP_FRYER_MACHINE)
+
+
+func _open_phone_to_shop_item(item_id: String) -> void:
 	if hud_chrome_collapsed: _toggle_hud_chrome_collapsed()
 	if is_instance_valid(phone_column): phone_column.show()
 	_set_phone_app("shop")
@@ -51139,7 +51411,7 @@ func _open_phone_to_fryer() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if _phone_app_id != "shop" or not is_instance_valid(phone_scroll): return
-	var card := phone_shop_page.find_child("ShopCard_%s" % SHOP_FRYER_MACHINE,true,false) as Control
+	var card := phone_shop_page.find_child("ShopCard_%s" % item_id,true,false) as Control
 	if card != null:
 		var local := phone_scroll.get_global_transform().affine_inverse()*card.global_position
 		phone_scroll.scroll_vertical += int(local.y)
@@ -52739,6 +53011,7 @@ func _shop_catalog_ids() -> Array[String]:
 
 
 func _buy_shop_item(id: String) -> void:
+	if _boss_speech_active() and id != _boss_suggested_item: return
 	if not playing:
 		return
 	if not _shop_catalog_ids().has(id):
@@ -54287,7 +54560,7 @@ func _try_bts_lightstick_click(screen_pos: Vector2) -> bool:
 	if bts_lightstick_held_index >= 0:
 		return false
 	if spatula_patty != null or cup_held or icecream_cone_held or brush_held or oil_held \
-			or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or fryer_held_index >= 0 or fries_pack_held:
+			or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or _fryer_is_manually_held() or fries_pack_held:
 		return false
 	var best := -1
 	var best_d := 58.0
@@ -55499,6 +55772,8 @@ func _build_graphics_ui() -> void:
 	_gfx_add_slider(list, "bunting_edge_softness", "Edge Blend Softness", 0.005, 0.35, 0.005)
 
 	_gfx_add_section(list, "SCREEN FILTERS")
+	for key in CREATIVE_LOOKS:
+		_gfx_add_slider(list, key, CREATIVE_LOOKS[key] + " Opacity (%)", 0, 100, 1)
 	_gfx_add_check(list, "toon_filter", "Toon Filter")
 	_gfx_add_slider(list, "toon_mix", "Toon Overall Mix", 0.0, 1.0, 0.01)
 	_gfx_add_slider(list, "toon_value_steps", "Toon Value Steps", 2.0, 16.0, 1.0)
@@ -59632,6 +59907,14 @@ func _build_options_menu() -> void:
 	UiFontsScript.apply_label(filter_note, false, 11)
 	filter_note.add_theme_color_override("font_color", Color(0.68, 0.74, 0.82))
 	hidden_render_box.add_child(filter_note)
+	_hidden_add_section(hidden_render_box, "CREATIVE FILTERS")
+	var look_note := Label.new()
+	look_note.text = "0% = off, 100% = full look. Blend looks together from top to bottom."
+	look_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UiFontsScript.apply_label(look_note, false, 11)
+	hidden_render_box.add_child(look_note)
+	for key in CREATIVE_LOOKS:
+		_options_add_standard_slider(hidden_render_box, key, CREATIVE_LOOKS[key] + " Opacity (%)", 0, 100, 1)
 	_hidden_add_section(hidden_render_box, "TOON SHADING")
 	_options_add_standard_slider(hidden_render_box, "toon_mix", "Overall Toon Mix", 0.0, 1.0, 0.01)
 	_options_add_standard_slider(hidden_render_box, "toon_value_steps", "Value Steps / Bands", 2.0, 16.0, 1.0)
@@ -60408,6 +60691,15 @@ func _apply_graphics_settings(s: Dictionary) -> void:
 	_sync_light_profile()
 
 
+const CREATIVE_LOOKS := {
+	"look_ghibli": "Ghibli — Soft Sunlight",
+	"look_cross_teal": "Cross Process — Teal / Coral",
+	"look_cross_lime": "Cross Process — Violet / Lime",
+	"look_cross_ruby": "Cross Process — Ruby / Ice",
+	"look_blue_hour": "Blue Hour — Twilight",
+	"look_silver": "Silver Screen — Warm Monochrome",
+}
+
 func _build_screen_style_filter() -> void:
 	if screen_style_layer != null and is_instance_valid(screen_style_layer):
 		return
@@ -60491,7 +60783,12 @@ func _apply_screen_style_filter(s: Dictionary) -> void:
 	screen_style_mat.set_shader_parameter("pixel_palette_steps", float(s.get("pixel_palette_steps", GFX_DEFAULTS["pixel_palette_steps"])))
 	screen_style_mat.set_shader_parameter("pixel_palette_strength", float(s.get("pixel_palette_strength", GFX_DEFAULTS["pixel_palette_strength"])))
 	screen_style_mat.set_shader_parameter("pixel_grid_strength", float(s.get("pixel_grid_strength", GFX_DEFAULTS["pixel_grid_strength"])))
-	screen_style_layer.visible = toon_on or pixel_on
+	var creative_on := false
+	for key in CREATIVE_LOOKS:
+		var opacity := clampf(float(s.get(key, GFX_DEFAULTS[key])) / 100.0, 0, 1)
+		screen_style_mat.set_shader_parameter(key, opacity)
+		creative_on = creative_on or opacity > 0.0
+	screen_style_layer.visible = toon_on or pixel_on or creative_on
 	if light_balance != null:
 		light_balance.apply()
 
@@ -63409,7 +63706,7 @@ func _create_ticket(customer: Node3D) -> void:
 
 
 const TICKET_BASE_W := 174.0 ## 20% narrower than the oversized 218px revision
-const TICKET_SMALL_SCALE := 0.70
+const TICKET_SMALL_SCALE := 0.58
 
 
 func _apply_ticket_display_size(wrap: Control, selected: bool) -> void:
@@ -63420,27 +63717,22 @@ func _apply_ticket_display_size(wrap: Control, selected: bool) -> void:
 	if note == null or not is_instance_valid(note):
 		return
 	var s := AnimatedOrderTicket.DISPLAY_SCALE if selected else TICKET_SMALL_SCALE
-	if selected:
-		if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(false)
-		if not wrap.has_meta("ticket_motion"):
-			var motion
-			if not _ticket_motion_pool.is_empty():
-				motion = _ticket_motion_pool.pop_back()
-				motion.reparent(wrap, false)
-				motion.bind_ticket(wrap, note)
-			else:
-				motion = AnimatedOrderTicket.new()
-				wrap.add_child(motion)
-				motion.setup(wrap, note)
-			wrap.set_meta("ticket_motion", motion)
-		wrap.get_meta("ticket_motion").set_active(true)
-		call_deferred("_fit_ticket_wrap_size", wrap, s)
-		return
-	note.pivot_offset = Vector2(TICKET_BASE_W * 0.5, 8.0)
-	note.scale = Vector2(s, s)
-	note.position = Vector2(0, 5)
-	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(true)
-	## Wait a frame so content min-size is ready, then fit the layout slot to the scaled look.
+	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").set_queued(false)
+	if not wrap.has_meta("ticket_motion"):
+		var motion
+		if not _ticket_motion_pool.is_empty():
+			motion = _ticket_motion_pool.pop_back()
+			motion.reparent(wrap, false)
+			motion.bind_ticket(wrap, note)
+		else:
+			motion = AnimatedOrderTicket.new()
+			wrap.add_child(motion)
+			motion.setup(wrap, note)
+		wrap.set_meta("ticket_motion", motion)
+	var motion = wrap.get_meta("ticket_motion")
+	motion.display_scale = s
+	if motion.active and motion.state != &"fly": motion.scale = Vector2.ONE * s
+	motion.set_active(true)
 	call_deferred("_fit_ticket_wrap_size", wrap, s)
 
 
@@ -63456,7 +63748,7 @@ func _fit_ticket_wrap_size(wrap: Control, s: float) -> void:
 	var current_scale := note.scale.x
 	if wrap.has_meta("ticket_motion") and wrap.get_meta("ticket_motion").active:
 		wrap.get_meta("ticket_motion").sync_layout()
-		current_scale = AnimatedOrderTicket.DISPLAY_SCALE
+		current_scale = wrap.get_meta("ticket_motion").display_scale
 	wrap.custom_minimum_size = Vector2(TICKET_BASE_W * current_scale, note_h * current_scale)
 	if wrap.has_meta("queued_tack"): wrap.get_meta("queued_tack").sync_layout()
 
@@ -63483,15 +63775,13 @@ func _ticket_line_specs(order: Array) -> Array:
 		lines.append({"id": "everything", "label": "EVERYTHING"})
 	elif not burger.is_empty():
 		for item in burger:
-			if item == "bun_bottom" or item == "bun_top" or item == "patty" or (item == "onion" and order.has("grilled_onion")):
+			if item == "bun_bottom" or item == "bun_top" or item == "patty":
 				continue
 			var label_txt: String = str(GameDataScript.INGREDIENT_LABELS.get(item, item)).to_upper()
 			lines.append({"id": str(item), "label": label_txt})
 	for sid in sodas:
 		var soda_lab: String = str(GameDataScript.INGREDIENT_LABELS.get(sid, sid)).to_upper()
 		lines.append({"id": str(sid), "label": soda_lab})
-	if order.has("grilled_onion"):
-		lines.append({"id": "grilled_onion", "label": "GRILLED ONIONS"})
 	if wants_icecream:
 		lines.append({"id": "icecream", "label": "ICE CREAM"})
 	if wants_fries:
@@ -64024,6 +64314,11 @@ func _refresh_customer_queue_timers() -> void:
 			if bool(c.get("is_waiting")) and not bool(c.get("is_leaving")) and tickets.has(c):
 				front = c
 				break
+	# The timer fallback must promote the same customer in the visible queue.
+	if is_instance_valid(front) and front != selected_customer and _customer_departure_holds.is_empty() and _ticket_transition_until == 0:
+		selected_customer = front
+		_highlight_tickets()
+		return
 	for cust in tickets.keys():
 		if cust == null or not is_instance_valid(cust):
 			continue
@@ -64104,9 +64399,7 @@ func _highlight_tickets() -> void:
 			continue
 		wrap.visible = _ticket_transition_until == 0
 		if not wrap.visible: continue
-		var selected: bool = cust == selected_customer and _customer_departure_holds.is_empty()
-		if not selected and wrap.has_meta("ticket_motion"):
-			wrap.get_meta("ticket_motion").set_active(false)
+		var selected: bool = cust == selected_customer
 		var note: Control = wrap.get_meta("ticket_note") if wrap.has_meta("ticket_note") else wrap
 		if note != null and is_instance_valid(note):
 			note.add_theme_stylebox_override("panel", _make_ticket_shell_style(selected))
@@ -66480,7 +66773,7 @@ func _on_stations_row_gui_input(ev: InputEvent) -> void:
 		stations_row.accept_event()
 
 
-func _begin_whole_burger_drag(station_index: int) -> void:
+func _begin_whole_burger_drag(station_index: int, button: MouseButton = MOUSE_BUTTON_LEFT) -> void:
 	if not playing or _serve_fly_busy or not _whole_burger_drag.is_empty():
 		return
 	var preview: Control = stations[station_index]["preview"]
@@ -66494,13 +66787,15 @@ func _begin_whole_burger_drag(station_index: int) -> void:
 	stations[station_index]["hovered_layer"] = -1
 	_restyle_station_layers(station_index)
 	_whole_burger_drag = {"station": station_index, "preview": preview,
-		"rest": preview.position, "mouse": get_viewport().get_mouse_position()}
+		"rest": preview.position, "mouse": get_viewport().get_mouse_position(), "button": button, "wobble": Vector2.ZERO, "velocity": Vector2.ZERO, "target": Vector2.ZERO, "phase": 0.0, "z": preview.z_index}
+	preview.z_index = 100
 	stations[station_index]["carried_closed"] = true
 	_refresh_station(station_index)
 	var layers: Array = []
 	for row in stations[station_index].get("layer_pool",[]):
-		if row.visible: layers.append({"row":row,"home":row.position})
+		if row.visible: layers.append({"row":row,"home":row.position,"rotation":row.rotation})
 	_whole_burger_drag["layers"] = layers
+	_update_station_layer_hint(station_index)
 
 
 func _finish_whole_burger_drag() -> void:
@@ -66510,14 +66805,43 @@ func _finish_whole_burger_drag() -> void:
 	var station_index := int(_whole_burger_drag["station"])
 	for layer in _whole_burger_drag.get("layers",[]):
 		if is_instance_valid(layer.row):
-			create_tween().tween_property(layer.row,"position",layer.home,.25).set_trans(Tween.TRANS_BACK)
+			var settle := create_tween().set_parallel(true)
+			settle.tween_property(layer.row,"position",layer.home,.25).set_trans(Tween.TRANS_BACK)
+			settle.tween_property(layer.row,"rotation",float(layer.get("rotation",0.0)),.25)
 	stations[station_index]["carried_closed"] = false
+	if is_instance_valid(preview): preview.z_index = int(_whole_burger_drag.get("z",0))
 	_whole_burger_drag.clear()
 	if not is_instance_valid(preview): return
 	_whole_burger_settle = create_tween().set_parallel(true)
 	_whole_burger_settle.tween_property(preview, "position", rest, .32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_whole_burger_settle.tween_property(preview, "rotation", 0.0, .40).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 	_whole_burger_settle.chain().tween_callback(func(): _refresh_station(station_index))
+
+
+func _update_whole_burger_wobble(delta: float) -> void:
+	if _whole_burger_drag.is_empty(): return
+	var preview: Control = _whole_burger_drag.preview
+	if not is_instance_valid(preview): return
+	var dt := minf(delta, .033)
+	var wobble: Vector2 = _whole_burger_drag.wobble
+	var velocity: Vector2 = _whole_burger_drag.velocity
+	var target: Vector2 = _whole_burger_drag.target
+	velocity += ((target-wobble)*110.0-velocity*12.0)*dt
+	wobble += velocity*dt
+	_whole_burger_drag.wobble = wobble
+	_whole_burger_drag.velocity = velocity
+	_whole_burger_drag.target = target*exp(-dt*9.0)
+	_whole_burger_drag.phase += dt*10.0
+	preview.rotation = -wobble.x*.004
+	var layers: Array = _whole_burger_drag.get("layers",[])
+	for i in layers.size():
+		var layer: Dictionary = layers[i]
+		if not is_instance_valid(layer.row): continue
+		var height := float(i)/maxf(1.0,float(layers.size()-1))
+		var ripple := sin(float(_whole_burger_drag.phase)-height*2.2)*minf(absf(wobble.x)*.23,5.0)
+		layer.row.position = Vector2(layer.home)+Vector2(wobble.x*height+ripple*height,-float(i)*maxf(0.0,wobble.y))
+		layer.row.rotation = float(layer.get("rotation",0.0))+wobble.x*.002*height
+	_update_station_layer_hint(int(_whole_burger_drag.station))
 
 
 func _handle_whole_burger_drag(event: InputEvent) -> bool:
@@ -66530,15 +66854,11 @@ func _handle_whole_burger_drag(event: InputEvent) -> bool:
 		var parent := preview.get_parent() as CanvasItem
 		var inverse := parent.get_global_transform_with_canvas().affine_inverse()
 		var delta: Vector2 = inverse * event.position - inverse * (_whole_burger_drag["mouse"] as Vector2)
-		preview.position = (_whole_burger_drag["rest"] as Vector2) + delta.limit_length(260.0)
-		preview.rotation = lerpf(preview.rotation, clampf(event.relative.x * .008, -.20, .20), .5)
-		var layer_index := 0
-		for layer in _whole_burger_drag.get("layers",[]):
-			layer_index += 1
-			var sway := clampf(-event.relative.x*.12*layer_index,-9.0,9.0)
-			layer.row.position = (layer.home as Vector2) + Vector2(sway,sin(Time.get_ticks_msec()*.018+layer_index)*minf(absf(sway)*.22,2.0))
+		preview.position = (_whole_burger_drag["rest"] as Vector2) + delta
+		var movement := inverse.basis_xform(event.relative)
+		_whole_burger_drag["target"] = Vector2(clampf(-movement.x * 1.5,-28.0,28.0),clampf(absf(movement.y)*1.4,0.0,22.0))
 		return true
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+	if event is InputEventMouseButton and event.button_index == int(_whole_burger_drag.get("button", MOUSE_BUTTON_LEFT)) and not event.pressed:
 		_finish_whole_burger_drag()
 		return true
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
@@ -66784,6 +67104,7 @@ func _try_snap_cheese_to_nearest(screen_pos: Vector2) -> bool:
 		return false
 	if game_audio:
 		_play_ingredient_touch_sfx("cheese")
+		game_audio.play_cheese_sizzle()
 	_flash("Cheese on! Melts in 3s", Color("FFE082"))
 	return true
 
@@ -67029,17 +67350,17 @@ func _make_thrown_ingredient_card(id: String, tex: Texture2D) -> MeshInstance3D:
 	card.mesh = quad
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 	mat.alpha_scissor_threshold = 0.08
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = false
+	mat.no_depth_test = true
 	mat.roughness = 0.78
 	mat.metallic_specular = 0.18
 	mat.albedo_color = Color.WHITE
 	if tex != null:
 		mat.albedo_texture = tex
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.render_priority = 0
+	mat.render_priority = 32
 	card.material_override = mat
 	card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return card
@@ -67055,8 +67376,10 @@ func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3
 	## masked by the ingredient impact sound and did not read as a real wawawa.
 	if game_audio and game_audio.has_method("play_customer_grobble"):
 		game_audio.play_customer_grobble(maxf(impatience, 0.62), cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
+		if cust.has_method("animate_wawa"): cust.animate_wawa(3.0)
 	elif game_audio and game_audio.has_method("play_customer_wawa_click"):
 		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
+		if cust.has_method("animate_wawa"): cust.animate_wawa(1.5 if cust.get_customer_voice() == "female" else 1.15)
 	var land := hit_world
 	if land == Vector3.ZERO:
 		land = _customer_food_land_world(cust, zone)
@@ -67378,7 +67701,7 @@ func _try_open_closed_sign_click(screen_pos: Vector2) -> bool:
 		return false
 	if spatula_patty != null or brush_held or cheese_held or shaker_held or oil_held \
 			or ext_held or glock_held or sale_held or cup_held or dragging_patty != null \
-			or fryer_held_index >= 0 or fries_pack_held or spilled_fry_held or grill_roomba_held \
+			or _fryer_is_manually_held() or fries_pack_held or spilled_fry_held or grill_roomba_held \
 			or icecream_cone_held or burgerpack_held != null:
 		return false
 	var near := screen_pos.distance_to(camera.unproject_position(open_closed_sign.global_position))
@@ -67600,10 +67923,11 @@ func _seed_cutting_board_buns(_station_index: int = STATION_CRAFT) -> void:
 	pass
 
 
-func _station_has_toasted_buns(station_index: int) -> bool:
+func _station_has_toasted_buns(station_index: int, recipe: Array = []) -> bool:
 	if station_index < 0 or station_index >= stations.size(): return false
+	var items: Array = stations[station_index]["items"] if recipe.is_empty() else recipe
 	for id in ["bun_bottom", "bun_top"]:
-		if not stations[station_index]["items"].has(id): return false
+		if not items.has(id): return false
 		var cook := _station_bun_cook_time(station_index, id)
 		if cook < BunToastScript.TOAST_READY or cook > BunToastScript.TOAST_BURNT: return false
 	return true
@@ -67611,7 +67935,7 @@ func _station_has_toasted_buns(station_index: int) -> bool:
 
 func _station_order_items(station_index: int, recipe: Array = []) -> Array:
 	var items: Array = (stations[station_index]["items"] if recipe.is_empty() else recipe).duplicate()
-	if _station_has_toasted_buns(station_index) and not items.has("toasted_bun"): items.append("toasted_bun")
+	if _station_has_toasted_buns(station_index, items) and not items.has("toasted_bun"): items.append("toasted_bun")
 	if items.has("onion") and bool(stations[station_index].get("cooked_onion",false)) and not items.has("grilled_onion"): items.append("grilled_onion")
 	return items
 
@@ -67680,8 +68004,62 @@ func _make_held_bun(_kind: String = "bun_pair", cook_time: float = 0.0) -> Area3
 	bun.visible = true
 	if patties_root != null:
 		patties_root.add_child(bun)
-	bun.clicked.connect(_on_patty_clicked)
+	bun.clicked.connect(_begin_patty_drag)
 	return bun
+
+
+func _request_bun_pickup(station_index: int) -> void:
+	if NetManager.is_host(): mp_request_bun_pickup(station_index)
+	else: mp_request_bun_pickup.rpc_id(1, station_index)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_request_bun_pickup(station_index: int) -> void:
+	if not NetManager.is_host() or not playing or not BUN_TOAST_ENABLED: return
+	var peer := _mp_sender_id()
+	if peer == 0: peer = NetManager.my_id()
+	if mp_held_net.has(peer): return
+	var cook := 0.0
+	if station_index >= 0:
+		if station_index >= stations.size(): return
+		var items: Array = stations[station_index]["items"]
+		if not items.has("bun_bottom") and not items.has("bun_top"): return
+		cook = maxf(_station_bun_cook_time(station_index, "bun_bottom"), _station_bun_cook_time(station_index, "bun_top"))
+	else:
+		if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0: return
+		_mp_spend_ingredient("bun_bottom")
+		_mp_spend_ingredient("bun_top")
+	mp_bun_picked_up.rpc(NetManager.alloc_net_id(), peer, station_index, cook)
+	_mp_broadcast_station(STATION_CRAFT)
+	_mp_broadcast_economy()
+
+
+@rpc("authority", "call_local", "reliable")
+func mp_bun_picked_up(net_id: int, peer: int, station_index: int, cook: float) -> void:
+	if is_instance_valid(_patty_by_net_id(net_id)): return
+	if station_index >= 0 and station_index < stations.size():
+		var st: Dictionary = stations[station_index]
+		st["items"] = st["items"].filter(func(id): return id != "bun_bottom" and id != "bun_top")
+		st["bun_toast"] = {}
+		st["buns_on_grill"] = true
+		_refresh_station(station_index)
+	elif not stations[STATION_CRAFT]["items"].has("bun_bottom"):
+		stations[STATION_CRAFT]["buns_on_grill"] = true
+	var bun := _make_held_bun("bun_pair", cook)
+	bun.net_id = net_id
+	bun.mp_puppet = not NetManager.is_host()
+	_mp_mark_held(peer, bun)
+	if peer == NetManager.my_id():
+		spatula_patty = bun
+		spatula_owner_id = peer
+		spatula_from_build = true
+		spatula_lmb_held = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+		spatula_last_mouse = get_viewport().get_mouse_position()
+		spatula_vel_screen = Vector2.ZERO
+		spatula_carry_travel = 0.0
+		_refresh_spatula_ui()
+		_update_held_spatula_patty(.016)
+	_refresh_ticket_checkmarks()
 
 
 func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
@@ -67701,6 +68079,9 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 	if bun_id != "bun_bottom" and bun_id != "bun_top":
 		return
 	## Shared toast progress — max of either half already on the board.
+	if mp_enabled and not _mp_applying:
+		_request_bun_pickup(station_index)
+		return
 	var cook := maxf(
 		_station_bun_cook_time(station_index, "bun_bottom"),
 		_station_bun_cook_time(station_index, "bun_top")
@@ -67749,6 +68130,9 @@ func _pickup_station_bun_to_hand(station_index: int, item_index: int) -> void:
 func _pickup_bun_from_grill(bun: Area3D) -> void:
 	if not BUN_TOAST_ENABLED or not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
 		return
+	if mp_enabled and not _mp_applying and int(bun.net_id) >= 0:
+		mp_patty_click.rpc(int(bun.net_id))
+		return
 	if spatula_patty != null and spatula_patty != bun:
 		_reject_second_scoop("Already holding something")
 		return
@@ -67782,6 +68166,12 @@ func _pickup_bun_from_grill(bun: Area3D) -> void:
 func _commit_bun_to_build(bun: Area3D) -> void:
 	if not playing or bun == null or not is_instance_valid(bun) or not _is_bun_toast(bun):
 		return
+	if mp_enabled and not _mp_applying and int(bun.net_id) >= 0:
+		mp_commit_patty_build.rpc(int(bun.net_id))
+		return
+	_mp_clear_held_net(int(bun.net_id))
+	var grill_index := int(bun.slot_index)
+	if grill_index >= 0 and grill_index < grill.size() and grill[grill_index] == bun: grill[grill_index] = null
 	if not BUN_TOAST_ENABLED:
 		## Feature parked — free any leftover toast node instead of rebuilding toast flow.
 		if spatula_patty == bun:
@@ -68522,6 +68912,7 @@ func _try_place_held_cheese(screen_pos: Vector2) -> void:
 			return
 		if game_audio:
 			_play_ingredient_touch_sfx("cheese")
+			game_audio.play_cheese_sizzle()
 		_flash("Cheese on! Melts in 3s", Color("FFE082"))
 
 
@@ -68702,6 +69093,7 @@ func _start_station_cheese_melt(station_index: int, play_sfx: bool = true) -> vo
 	_refresh_station(station_index)
 	if play_sfx and game_audio:
 		_play_ingredient_touch_sfx("cheese")
+		game_audio.play_cheese_sizzle()
 	_note_melody_press("cheese")
 	_flash("Cheese on — melting 3s (order already counts it)", Color("FFE082"))
 	_mp_broadcast_station(station_index)
@@ -68714,7 +69106,9 @@ func _update_station_cheese_melt(_delta: float) -> void:
 		var st: Dictionary = stations[i]
 		var cheesed := 0
 		var melted := 0
+		var melt_frames: Array[int] = []
 		for p2 in st["patties"]:
+			melt_frames.append(FoodSpritesScript.cheese_melt_frame(float(p2.cheese_melt)) if is_instance_valid(p2) and p2.has_cheese else -1)
 			if p2 == null or not is_instance_valid(p2) or not p2.has_cheese:
 				continue
 			cheesed += 1
@@ -68722,6 +69116,15 @@ func _update_station_cheese_melt(_delta: float) -> void:
 				melted += 1
 		## Always reconcile stack cheese ↔ patty.has_cheese (strips false melt art).
 		_sync_station_cheese_items(i)
+		var previous: Array = st.get("cheese_visual_frames", [])
+		var cheese_changed := previous.size() != melt_frames.size()
+		if not cheese_changed:
+			for slot in melt_frames.size():
+				if (int(previous[slot]) >= 0) != (melt_frames[slot] >= 0): cheese_changed = true
+		st["cheese_visual_frames"] = melt_frames
+		# The blend controller animates every render frame; rebuilding the stack
+		# at each sprite boundary restarted its layout tweens and made it hop.
+		if cheese_changed: _refresh_station(i)
 		if cheesed <= 0:
 			st["cheese_melt_flashed"] = false
 			continue
@@ -68785,6 +69188,9 @@ func _update_station_layer_hint(station_index: int) -> void:
 	var preview: Control = st.get("preview", null)
 	if hint == null or not is_instance_valid(hint) or plate == null or not is_instance_valid(plate):
 		return
+	if not _whole_burger_drag.is_empty():
+		hint.hide()
+		return
 	if _station_burger_complete(station_index) and not _serve_fly_busy and int(st.get("hovered_layer",-1)) < 0:
 		hint.text = "CLICK TO WRAP" if is_instance_valid(_grubbah) and _grubbah.is_selected() else ""
 		if is_instance_valid(_grubbah) and _grubbah.is_selected():hint.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-SemiBold.ttf"))
@@ -68806,7 +69212,7 @@ func _update_station_layer_hint(station_index: int) -> void:
 		hint.visible = false
 		return
 	var item_id := str(row.get_meta("item_id", ""))
-	hint.text = _station_layer_display_name(item_id) + " · Right-click to remove"
+	hint.text = _station_layer_display_name(item_id) + (" · Left-drag to grill · Right-drag to shake" if item_id in ["bun_bottom", "bun_top"] else " · Right-click to remove")
 	hint.visible = true
 	var selected := show_i == int(st.get("selected_layer", -1))
 	hint.add_theme_color_override("font_color", Color(1.0, 0.92, 0.35) if selected else Color(0.96, 0.96, 0.92))
@@ -69013,7 +69419,9 @@ func _ensure_station_layer_control(index: int, preview: Control, visual_i: int) 
 					_pickup_station_bun_to_hand(si, layer_i)
 					row.accept_event()
 					return
-			if item_id == "bun_bottom":
+			if BUN_TOAST_ENABLED and item_id in ["bun_bottom", "bun_top"]:
+				_try_build_burger_click(get_viewport().get_mouse_position())
+			elif item_id == "bun_bottom":
 				_begin_whole_burger_drag(si)
 			elif stations[si]["items"].has("bun_bottom") and stations[si]["items"].has("patty"):
 				active_station = si
@@ -69196,6 +69604,15 @@ func _refresh_station(index: int) -> void:
 		var heat=row.get_node_or_null("PattyHeatOverlay")
 		var source: Object=null
 		if item=="patty" and pidx>=0 and pidx<st.get("patties",[]).size(): source=st["patties"][pidx]
+		var cheese_blend = tr.get_node_or_null("CheeseBlend")
+		if cheese_blend != null:
+			tr.remove_child(cheese_blend);cheese_blend.queue_free()
+		tr.material = null
+		if is_instance_valid(source) and layer_key == "patty_cheese":
+			cheese_blend = preload("res://scripts/build_cheese_blend.gd").new()
+			cheese_blend.name = "CheeseBlend"
+			tr.add_child(cheese_blend)
+			cheese_blend.setup(source)
 		if heat!=null and (item!="patty" or heat.identity!=source):
 			row.remove_child(heat);heat.queue_free();heat=null
 		if item=="patty":
@@ -69288,14 +69705,16 @@ func _station_patty_layer_tex(st: Dictionary, pidx: int, with_cheese: bool) -> T
 	## Build-board meat (and melt art) follow grill cook / burn.
 	var pcolor: Color = GameDataScript.INGREDIENT_COLORS.get("patty", Color(0.45, 0.24, 0.14))
 	var char_amt := 0.0
+	var melt := 1.0
 	var patties: Array = st.get("patties", [])
 	if pidx >= 0 and pidx < patties.size() and is_instance_valid(patties[pidx]):
 		var p = patties[pidx]
+		melt = float(p.cheese_melt)
 		if p.has_method("get_patty_color"):
 			pcolor = p.get_patty_color()
 		if p.has_method("build_char_amount"):
 			char_amt = float(p.build_char_amount())
-	return FoodSpritesScript.build_patty_state_tex(char_amt, with_cheese)
+	return FoodSpritesScript.build_patty_state_tex(char_amt, with_cheese, melt)
 
 
 func _center_build_burger_on_board() -> void:
@@ -69659,6 +70078,7 @@ func _station_has_melting_cheese(station_index: int) -> bool:
 
 
 func _sync_station_cheese_items(station_index: int) -> void:
+	if station_index >= 0 and station_index < stations.size() and not stations[station_index].get("mp_pending_patties", []).is_empty(): return
 	## Order matching counts cheese as soon as it's on a patty (melt is visual only).
 	## Keep item count == cheesed patties (add missing, strip orphans).
 	if station_index < 0 or station_index >= STATION_COUNT:
@@ -69932,6 +70352,7 @@ func _try_customer_wawa_click(screen_pos: Vector2) -> bool:
 		impatience = clampf(1.0 - float(cust.call("patience_ratio")), 0.0, 1.0)
 	if game_audio and game_audio.has_method("play_customer_wawa_click"):
 		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
+		if cust.has_method("animate_wawa"): cust.animate_wawa(1.5 if cust.get_customer_voice() == "female" else 1.15)
 	if cust.has_method("bobble_click"):
 		cust.call("bobble_click")
 	return true
@@ -70475,6 +70896,13 @@ func _play_serve_fly_to_mouth(
 	burst.modulate = Color.WHITE
 	_update_burger_completion_burst(burst, 0.0)
 	burst.visible = true
+	var completion_light = burst.get_meta("completion_light") if burst.has_meta("completion_light") else null
+	if not is_instance_valid(completion_light):
+		completion_light = preload("res://scripts/burger_completion_light.gd").new()
+		completion_light.name = "BurgerCompletionLight"
+		world.add_child(completion_light)
+		burst.set_meta("completion_light", completion_light)
+	completion_light.pulse(_cutting_board_world_center()+Vector3(0,.35,0),celebration_hold)
 	var hand_pos := _customer_burger_hand_screen(customer)
 
 	# The flight owns a separate visual; never hide the live build station.
@@ -71536,6 +71964,13 @@ func _begin_fries_only_serve(customer: Node3D) -> void:
 		return
 	if _serve_fly_busy:
 		return
+	# Reserve before the flight so mobile packing or another cook cannot take it.
+	if not _customer_fries_handed(customer):
+		if fryer_ready_servings <= 0: return
+		fryer_ready_servings -= 1
+		_mark_customer_fries_handed(customer,true)
+		_refresh_ready_fries_visuals()
+		if mp_enabled and NetManager.is_host(): _mp_broadcast_economy()
 	selected_customer = customer
 	_highlight_tickets()
 	customer.set_meta("ticket_build_clock_stopped", true)
@@ -73964,6 +74399,7 @@ func _mp_cleanup_departed_peer_state() -> void:
 		_mp_remote_soda_pouring, _mp_remote_ice_pouring,
 		_mp_remote_softserve_pouring, _mp_remote_ext_spraying,
 		_mp_remote_shaker_rattling, mp_held_net,
+		_mp_shared_tool_presence, _mp_reserved_fries,
 	]
 	for store_value in peer_stores:
 		var store: Dictionary = store_value
@@ -73973,6 +74409,14 @@ func _mp_cleanup_departed_peer_state() -> void:
 		var peer_id := int(peer_value)
 		if peer_id < 0 or live.has(peer_id):
 			continue
+		_mp_shared_tool_presence.erase(peer_id)
+		_mp_sync_shared_tool_homes()
+		if _mp_reserved_fries.has(peer_id):
+			_mp_reserved_fries.erase(peer_id)
+			if NetManager.is_host():
+				fryer_ready_servings += 1
+				_refresh_ready_fries_visuals()
+				_mp_broadcast_economy()
 		if mp_held_net.has(peer_id):
 			var held_patty = _patty_by_net_id(int(mp_held_net[peer_id]))
 			if held_patty != null and is_instance_valid(held_patty):
@@ -74183,6 +74627,10 @@ func _mp_on_session_start(session_seed: int) -> void:
 	_mp_side_requests.clear()
 	_mp_pending_cup_hand = 0
 	_mp_pending_fries_hand = false
+	_mp_fries_pickup_pending = false
+	_mp_reserved_fries.clear()
+	_mp_shared_tool_presence.clear()
+	_mp_last_shared_tool = -1
 	_mp_drag_generation.clear()
 	_mp_patty_index.clear()
 	_mp_bootstrap_active.clear()
@@ -74342,7 +74790,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		var pnid := int(p.get("net_id"))
 		if pnid < 0:
 			continue
-		_mp_bootstrap_add(peer_id, "mp_spawn_patty", [pnid, i, float(p.position.x), float(p.position.z)])
+		_mp_bootstrap_add(peer_id, "mp_spawn_patty", [pnid, i, float(p.position.x), float(p.position.z), _is_bun_toast(p), float(p.cook_time)])
 	for st in stations:
 		for bp in st.get("patties", []):
 			if bp == null or not is_instance_valid(bp):
@@ -75002,7 +75450,34 @@ func _mp_force_remote_glock_visible(root: Node3D) -> void:
 			(child as Node3D).visible = true
 
 
+var _mp_shared_tool_presence: Dictionary = {}
+var _mp_last_shared_tool := -1
+
+func _mp_shared_tool_held(kind: int) -> bool:
+	return mp_enabled and _mp_shared_tool_presence.values().has(kind)
+
+func _mp_sync_shared_tool_homes() -> void:
+	if is_instance_valid(shaker_root) and not shaker_held:
+		shaker_root.visible = not _mp_shared_tool_held(4)
+		if is_instance_valid(shaker_area): shaker_area.input_ray_pickable = shaker_root.visible
+	if is_instance_valid(oil_root) and not oil_held:
+		oil_root.visible = not _mp_shared_tool_held(2)
+		if is_instance_valid(oil_area): oil_area.input_ray_pickable = oil_root.visible
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_shared_tool_presence(kind: int) -> void:
+	var peer := _mp_sender_id()
+	if peer <= 0 or peer == NetManager.my_id(): return
+	if kind in [2, 4]: _mp_shared_tool_presence[peer] = kind
+	else:
+		_mp_shared_tool_presence.erase(peer)
+		_mp_hide_remote_tools(peer)
+	_mp_sync_shared_tool_homes()
+
 func _mp_hide_remote_tools(peer_id: int, except_kind: int = -1) -> void:
+	if except_kind in [2, 4]: _mp_shared_tool_presence[peer_id] = except_kind
+	else: _mp_shared_tool_presence.erase(peer_id)
+	_mp_sync_shared_tool_homes()
 	if except_kind != 4:
 		_mp_remote_shaker_rattling.erase(peer_id)
 	if except_kind != 5:
@@ -75794,11 +76269,17 @@ func mp_request_spawn_patty(x: float, z: float) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_spawn_patty(net_id: int, idx: int, x: float, z: float) -> void:
+func mp_spawn_patty(net_id: int, idx: int, x: float, z: float, toasted_bun: bool = false, cook: float = 0.0) -> void:
 	if net_id >= 0 and _patty_by_net_id(net_id) != null:
 		return
 	_mp_applying = true
-	_spawn_patty_at(idx, Vector3(x, GRILL_SURFACE_Y, z), net_id)
+	if toasted_bun:
+		var bun := _make_held_bun("bun_pair", cook)
+		bun.net_id = net_id
+		bun.mp_puppet = not NetManager.is_host()
+		_place_extracted_patty_on_grill(bun, idx, Vector3(x, GRILL_SURFACE_Y, z))
+	else:
+		_spawn_patty_at(idx, Vector3(x, GRILL_SURFACE_Y, z), net_id)
 	_mp_applying = false
 
 
@@ -76035,6 +76516,7 @@ func mp_cheese_patty(net_id: int) -> void:
 		_mp_spend_ingredient("cheese")
 		if game_audio:
 			_play_ingredient_touch_sfx("cheese")
+			game_audio.play_cheese_sizzle()
 		_flash("Cheese on! Melts in 3s", Color("FFE082"))
 	_mp_applying = false
 	if NetManager.is_host():
@@ -76196,7 +76678,7 @@ func mp_fries_hand(cust_net_id: int) -> void:
 	if sid == 0:sid = NetManager.my_id()
 	if _mp_queue_food_request("mp_fries_hand",[cust_net_id]):return
 	var cust = _customer_by_net_id(cust_net_id)
-	if not is_instance_valid(cust) or not cust.is_waiting or not GameDataScript.wants_fries(cust.order) or _customer_fries_handed(cust) or fryer_ready_servings <= 0:
+	if not is_instance_valid(cust) or not cust.is_waiting or not GameDataScript.wants_fries(cust.order) or _customer_fries_handed(cust) or (fryer_ready_servings <= 0 and not _mp_reserved_fries.has(sid)):
 		_mp_ack_food(sid,"fries",false);_mp_broadcast_economy();return
 	_mp_ack_food(sid,"fries",true)
 	if _mp_remote_fries.has(sid):
@@ -76207,6 +76689,9 @@ func mp_fries_hand(cust_net_id: int) -> void:
 		_mp_remote_fries.erase(sid)
 	_mp_applying = true
 	selected_customer = cust
+	if _mp_reserved_fries.has(sid):
+		_mp_reserved_fries.erase(sid)
+		fryer_ready_servings += 1 # Consume the reserved serving, not another pack.
 	_consume_fries_for_serve(cust, true)
 	_mp_applying = false
 	if GameDataScript.is_fries_only_order(cust.order):
@@ -76550,7 +77035,7 @@ func _mp_emit_grill(peer_id: int = 0) -> void:
 	var shapes: Array = []
 	for nid in ids:
 		var shape_patty = _patty_by_net_id(int(nid))
-		shapes.append(1 if shape_patty.place_ball_waiting else (2 if shape_patty.place_morphing else 0))
+		shapes.append(3 if _is_bun_toast(shape_patty) else (1 if shape_patty.place_ball_waiting else (2 if shape_patty.place_morphing else 0)))
 	_mp_publish_state("grill", [
 		ids, slots, xs, ys, zs, cooks, flipped, firsts, smashs,
 		heatings, heat_muls, holds, cheeses, melts, seasons, helds, perfects, shapes
@@ -76851,6 +77336,9 @@ func mp_sync_grill(
 		var pz := float(zs[i]) if i < zs.size() else 0.0
 		var is_held_snap := bool(helds[i]) if i < helds.size() else false
 		var p = _patty_by_net_id(nid)
+		if not is_instance_valid(p) and i < shapes.size() and int(shapes[i]) == 3:
+			p = _make_held_bun("bun_pair", float(cooks[i]))
+			p.net_id = nid
 		if p == null or not is_instance_valid(p):
 			## Missing on guest — spawn into host slot (or first empty).
 			var spawn_slot := slot
@@ -76959,6 +77447,22 @@ func mp_sync_grill(
 		grill[gi] = null
 		_return_patty_to_spawn_pool(gp)
 	_mp_cull_orphan_patties(seen)
+	for station in stations.size():
+		var st: Dictionary = stations[station]
+		var pending: Array = st.get("mp_pending_patties", [])
+		if pending.is_empty(): continue
+		var recovered: Array = []
+		for id in pending:
+			var node = _patty_by_net_id(int(id))
+			if is_instance_valid(node): recovered.append(node)
+		if recovered.size() == pending.size():
+			st["patties"] = recovered
+			st.erase("mp_pending_patties")
+			for node in recovered:
+				node.is_held = true
+				node.heating = false
+				node.visible = node == spatula_patty
+			_refresh_station(station)
 	_mp_applying = false
 
 
@@ -77767,6 +78271,7 @@ func mp_order_selected(net_id: int, revision: int) -> void:
 		_mp_applying=true
 		_select_ticket_local(c)
 		_mp_applying=false
+		_refresh_ticket_checkmarks()
 	elif net_id<0:
 		selected_customer=null
 		_highlight_tickets()
@@ -77942,6 +78447,8 @@ func mp_sync_station(
 		if not new_patties.has(p):
 			new_patties.append(p)
 	st["patties"] = new_patties
+	if new_patties.size() < patty_net_ids.size(): st["mp_pending_patties"] = patty_net_ids.duplicate()
+	else: st.erase("mp_pending_patties")
 	var items: Array = []
 	for id_v in item_ids:
 		items.append(str(id_v))
@@ -77964,6 +78471,7 @@ func mp_sync_station(
 		preview.modulate.a = 1.0
 	_refresh_freshness_label(station_index)
 	_mp_applying = false
+	_refresh_ticket_checkmarks()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -79107,6 +79615,10 @@ func _mp_queue_motion(method: String, args: Array) -> void:
 	if not mp_enabled or not NetManager.is_online():
 		return
 	if method == "mp_tool_pose":
+		var shared_kind := int(args[0]) if bool(args[1]) and int(args[0]) in [2, 4] else -1
+		if shared_kind != _mp_last_shared_tool:
+			_mp_last_shared_tool = shared_kind
+			mp_shared_tool_presence.rpc(shared_kind)
 		while args.size() < 9:
 			args.append(0.0)
 	if method == "mp_patty_pose":
@@ -79803,6 +80315,7 @@ func mp_returned_order(audit: Dictionary) -> void:
 	_show_returned_order(audit)
 
 func _show_boss_machine(id: String, duration: float) -> void:
+	_boss_suggested_item = ""
 	if bool(owned_machines.get(id, false)): return
 	var old = get_node_or_null("UI/Root/BossMachineShowcase")
 	if is_instance_valid(old): old.queue_free()
@@ -79810,15 +80323,8 @@ func _show_boss_machine(id: String, duration: float) -> void:
 	showcase.name = "BossMachineShowcase"
 	get_node("UI/Root").add_child(showcase)
 	showcase.setup(self,id,duration)
+	_boss_suggested_item = id
+	_open_phone_to_shop_item(id)
 
 func _begin_ticket_transition() -> void:
-	_ticket_transition_until += 1
-	var token := _ticket_transition_until
-	for queued in tickets.values():
-		if is_instance_valid(queued):
-			queued.hide()
-			if queued.has_meta("ticket_motion"): queued.get_meta("ticket_motion").set_active(false)
-	get_tree().create_timer(.35).timeout.connect(func():
-		if _ticket_transition_until != token: return
-		_ticket_transition_until = 0
-		_highlight_tickets())
+	_ticket_transition_until = 0

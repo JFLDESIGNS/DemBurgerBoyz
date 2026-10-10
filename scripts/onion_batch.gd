@@ -59,7 +59,7 @@ func is_ready() -> bool:
 
 func chop() -> void:
 	if chops >= 2: return
-	chops += 1
+	chops = 2
 	rebuild()
 	pieces.position.y = .025
 	create_tween().tween_property(pieces, "position:y", 0.0, .2).set_trans(Tween.TRANS_BOUNCE)
@@ -80,6 +80,7 @@ func rebuild() -> void:
 			var mesh := MeshInstance3D.new()
 			mesh.mesh = _arc_mesh(TAU/float(count)-.08)
 			var mat := ShaderMaterial.new()
+			mat.render_priority = 4 # Draw above the transparent grill films.
 			mat.shader = preload("res://shaders/onion_cooking.gdshader")
 			mat.set_shader_parameter("patch_seed",rng.randf()*TAU)
 			mat.set_shader_parameter("progress",clampf(cook_time/COOK_SECONDS,0,1))
@@ -134,7 +135,7 @@ func _process(delta: float) -> void:
 	var camera := get_viewport().get_camera_3d()
 	if camera != null: halo.look_at(camera.global_position,Vector3.UP,true)
 	label.visible = not is_ready()
-	label.text = "" if is_ready() else (("CHOP %d/2" % chops) if chops < 2 else "COOKING")
+	label.text = "" if is_ready() else ("TAP TO CHOP" if chops < 2 else "COOKING")
 	label.modulate = Color("B8EC90") if is_ready() else Color("FFE6B3")
 	if active:
 		motion_energy = move_toward(motion_energy, 0.0, delta*2.0)

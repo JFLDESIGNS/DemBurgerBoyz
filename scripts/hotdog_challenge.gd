@@ -23,6 +23,8 @@ var timer = 0.0
 var impact_at = -1.0
 var pending_result = -1
 var suspended: Array = []
+var fleeing: Array = []
+const SPECTATOR_LIMIT := 6
 var previous_selected: Node3D
 var label: Label
 var status_label: Label
@@ -342,6 +344,8 @@ func start() -> bool:
 		var preset = walker.get_custom_character_preset()
 		if preset.is_empty(): preset = preload("res://scripts/customer.gd").take_next_saved_character_preset()
 		spectator_presets.append(preset)
+	while spectator_presets.size() < SPECTATOR_LIMIT:
+		spectator_presets.append(preload("res://scripts/customer.gd").take_next_saved_character_preset())
 	_spawn()
 	phase = "rumble"; timer = 1.0
 	start_music()
@@ -356,8 +360,12 @@ func _spawn() -> void:
 	previous_selected = game.selected_customer
 	for c in game.customers.duplicate():
 		if not is_instance_valid(c): continue
-		suspended.append([c, c.visible, c.process_mode])
-		c.hide(); c.process_mode = Node.PROCESS_MODE_DISABLED
+		suspended.append([c, c.visible, c.process_mode, c.transform])
+		c.process_mode = Node.PROCESS_MODE_DISABLED
+		if c.visible and c.has_method("play_street_run"):
+			start_flee(c)
+		else:
+			c.hide()
 		if game.tickets.has(c): game.tickets[c].hide()
 	customer = CUSTOMER.new()
 	customer.boss = self
@@ -373,13 +381,49 @@ func _spawn() -> void:
 	game.selected_customer = customer
 	stage_street()
 
+func start_flee(c) -> void:
+	var anim = c._anim_player
+	var saved = {"node":c,"time":0.0,"home":c.position,"walk":c._walk_anim_path,"celebrating":c._celebrating,"state":c._anim_state,
+		"clip":str(anim.current_animation) if is_instance_valid(anim) else "", "speed":anim.speed_scale if is_instance_valid(anim) else 1.0}
+	fleeing.append(saved)
+	c._celebrating = false
+	c.play_street_run(1.35)
+	var audio := AudioStreamPlayer3D.new()
+	audio.stream = preload("res://scripts/customer_voice.gd").stream(c.get_customer_voice(),false)
+	audio.bus = "SFX"; audio.volume_db = -6; audio.unit_size = 5.0; audio.pitch_scale = 1.15
+	add_child(audio); audio.global_position = c.global_position; audio.play()
+	create_tween().tween_interval(1.2).finished.connect(audio.queue_free)
+	c.animate_wawa(1.2,1.15)
+
+func update_fleeing(delta: float) -> void:
+	for saved in fleeing:
+		var c = saved.node
+		if not is_instance_valid(c) or saved.time >= 2.1: continue
+		saved.time += delta
+		var direction := -1.0 if saved.home.x < boss_position.x else 1.0
+		c.position = saved.home + Vector3(direction * 6.0 * saved.time,0,saved.time*.35)
+		c.rotation.y = atan2(direction,0.0)
+		if is_instance_valid(c._anim_player): c._anim_player.advance(delta)
+		var mouth = c.get_node_or_null("MouthSpeech")
+		if is_instance_valid(mouth): mouth._process(delta)
+		if saved.time >= 2.1: c.hide()
+
 func stage_street() -> void:
 	if is_instance_valid(game.shadow_catcher_root):
 		shadow_root_visible = game.shadow_catcher_root.visible; shadow_root_saved = true
 		game.shadow_catcher_root.hide()
 	street_saved.clear()
-	for i in game.bg_people.size():
-		var walker = game.bg_people[i]
+	var crowd: Array = game.bg_people.duplicate()
+	while crowd.size() < SPECTATOR_LIMIT:
+		var extra = preload("res://scripts/customer.gd").new()
+		extra.is_street_pedestrian = true
+		extra.setup([] as Array[String],Color.WHITE,9999.0,0,0,0,-1,spectator_presets[crowd.size()] if crowd.size() < spectator_presets.size() else {},true)
+		extra.set_meta("baron_spectator",true)
+		game.customers_root.add_child(extra)
+		extra.set_process(false)
+		crowd.append(extra)
+	for i in crowd.size():
+		var walker = crowd[i]
 		if not is_instance_valid(walker): continue
 		var anim = walker._anim_player
 		street_saved.append({"node":walker,"visible":walker.visible,"transform":walker.transform,
@@ -390,7 +434,8 @@ func stage_street() -> void:
 		if i < spectator_presets.size() and walker.get_custom_character_preset() != spectator_presets[i]:
 			walker.restyle_street_character(spectator_presets[i], true)
 		walker._wawa_click_area.collision_layer = 0
-		walker.show(); walker.play_street_walk()
+		walker.visible = i < SPECTATOR_LIMIT
+		if walker.visible: walker.play_street_walk()
 	update_spectators(0)
 
 func update_spectators(delta: float) -> void:
@@ -398,7 +443,7 @@ func update_spectators(delta: float) -> void:
 	if is_instance_valid(game.shadow_catcher_root): game.shadow_catcher_root.hide()
 	for i in street_saved.size():
 		var walker = street_saved[i].node
-		if not is_instance_valid(walker): continue
+		if not is_instance_valid(walker) or i >= SPECTATOR_LIMIT: continue
 		var end = spectator_target(i)
 		var side = signf(end.x - boss_position.x)
 		var start = end + Vector3(side*3.5, 0, .3)
@@ -420,6 +465,10 @@ func spectator_target(index: int) -> Vector3:
 		var ray = game.camera.project_ray_normal(pixel)
 		if absf(ray.z) > .001:
 			end.x = (origin + ray * ((end.z-origin.z)/ray.z)).x
+	# Three staggered spectators per corner, with room between their bodies.
+	var rank := index / 2
+	end.x += (-1.0 if index%2 == 0 else 1.0) * float(rank) * .70
+	end.z += float(rank%2) * .55
 	return end
 
 func restore_street() -> void:
@@ -429,6 +478,8 @@ func restore_street() -> void:
 	for saved in street_saved:
 		var walker = saved.node
 		if not is_instance_valid(walker): continue
+		if walker.get_meta("baron_spectator",false):
+			walker.queue_free(); continue
 		if not saved.preset.is_empty() and walker.get_custom_character_preset() != saved.preset:
 			walker.restyle_street_character(saved.preset,true)
 		walker.transform = saved.transform; walker.visible = saved.visible
@@ -526,6 +577,7 @@ func ready_order() -> void:
 func _process(delta: float) -> void:
 	if not active(): return
 	update_spectators(delta)
+	update_fleeing(delta)
 	music_duck_left = maxf(0, music_duck_left-delta)
 	if music_duck_left <= 0:
 		music_duck_db = 0.0
@@ -740,8 +792,18 @@ func cancel() -> void:
 		game.customers.erase(customer)
 		customer.queue_free()
 	customer = null
+	for saved in fleeing:
+		var c = saved.node
+		if not is_instance_valid(c): continue
+		c._walk_anim_path = saved.walk; c._celebrating = saved.celebrating; c._anim_state = saved.state
+		c.stop_mouth_speech()
+		if is_instance_valid(c._anim_player):
+			c._anim_player.speed_scale = saved.speed
+			if not saved.clip.is_empty(): c._anim_player.play(saved.clip)
+	fleeing.clear()
 	for item in suspended:
 		if not is_instance_valid(item[0]): continue
+		item[0].transform = item[3]
 		item[0].visible = item[1]; item[0].process_mode = item[2]
 		if game.tickets.has(item[0]): game.tickets[item[0]].show()
 	suspended.clear()

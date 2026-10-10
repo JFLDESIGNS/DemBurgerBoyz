@@ -562,7 +562,7 @@ func _process(delta: float) -> void:
 	_roomba_drive_gain = move_toward(_roomba_drive_gain, _roomba_drive_target, delta * (4.2 if _roomba_drive_target > _roomba_drive_gain else 5.5))
 	if _roomba_drive_player:
 		if _roomba_drive_gain > 0.01:
-			var drive_linear := clampf(_roomba_drive_gain * 0.32 * _roomba_drive_volume_scale, 0.0001, 1.4)
+			var drive_linear := clampf(_roomba_drive_gain * 0.14 * _roomba_drive_volume_scale, 0.0001, 1.4)
 			_roomba_drive_player.volume_db = _sfx_db(linear_to_db(drive_linear), "world")
 			_roomba_drive_player.pitch_scale = 1.42 + _roomba_drive_gain * 0.58
 			if not _roomba_drive_player.playing:
@@ -1413,7 +1413,8 @@ func play_challenge_complete_tune() -> void:
 
 
 func play_challenge_fail_ohhh() -> void:
-	_play_announcer_stream("challenge_fail_announcer", "res://sounds/ohhh.wav", 0.72)
+	# Reserve the disappointed voice for flips more than five seconds late.
+	pass
 
 
 func play_happy_four_note() -> float:
@@ -1595,7 +1596,7 @@ func _load_announcer_stream(key: String, path: String) -> AudioStream:
 	return _cache[key] as AudioStream
 
 
-func _play_announcer_stream(key: String, path: String, gain: float = 0.65) -> void:
+func _play_announcer_stream(key: String, path: String, gain: float = 0.65, pitch: float = 1.0) -> void:
 	var stream := _load_announcer_stream(key, path)
 	if stream == null:
 		return
@@ -1607,7 +1608,7 @@ func _play_announcer_stream(key: String, path: String, gain: float = 0.65) -> vo
 	if p.playing:
 		p.stop()
 	p.stream = stream
-	p.pitch_scale = 1.0
+	p.pitch_scale = pitch
 	gain *= _sfx("service")
 	if gain <= 0.0001:
 		return
@@ -1619,14 +1620,25 @@ func play_perfect_announcer() -> void:
 	_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
 
 
-func play_flip_grade_announcer(grade: String) -> void:
+var _flip_voice_last_ms := -1000
+var _flip_voice_chain := 0
+
+func _next_flip_voice_pitch(now_ms: int) -> float:
+	_flip_voice_chain = mini(_flip_voice_chain + 1, 16) if now_ms - _flip_voice_last_ms <= 500 else 0
+	_flip_voice_last_ms = now_ms
+	return 1.0 + float(_flip_voice_chain) * 0.025
+
+func play_flip_grade_announcer(grade: String, seconds_late: float = 0.0) -> void:
+	if grade not in ["perfect", "great"] and seconds_late <= 5.0: return
+	var pitch := _next_flip_voice_pitch(Time.get_ticks_msec())
 	match grade:
 		"perfect":
-			_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.325)
+			_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.26, pitch)
 		"great":
-			_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.34)
+			_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.272, pitch)
 		_:
-			_play_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav", 0.68)
+			if seconds_late > 5.0:
+				_play_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav", 0.544, pitch)
 
 
 func play_delivery_time_announcer(wait_sec: float) -> void:
@@ -1634,8 +1646,6 @@ func play_delivery_time_announcer(wait_sec: float) -> void:
 		_play_announcer_stream("perfect_announcer", "res://sounds/perfect.wav", 0.65)
 	elif wait_sec <= 8.0:
 		_play_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav", 0.68)
-	elif wait_sec > 15.0:
-		_play_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav", 0.68)
 
 
 func play_ready() -> void:
@@ -1768,7 +1778,7 @@ func play_chaching() -> void:
 		_chaching_player.name = "ChaChing"
 		_chaching_player.bus = "SFX"
 		add_child(_chaching_player)
-	var gain := 1.55 * _sfx("service")
+	var gain := 0.75 * _sfx("service")
 	if gain <= 0.0001:
 		return
 	_chaching_player.stop()
@@ -1800,7 +1810,7 @@ func play_score_climb() -> void:
 
 func play_order_up() -> void:
 	## Classic kitchen “order up!” — bright double service-bell ding.
-	_play_cached("order_up_bell", _make_serve_bell, 0.0, 0.72)
+	_play_cached("order_up_bell", _make_serve_bell, 0.0, 0.36)
 
 
 func play_delivery_whoosh() -> void:
@@ -1990,10 +2000,8 @@ func _load_cat_begging_meow_stream() -> AudioStream:
 
 func play_cat_begging_meow(pitch: float = 1.2) -> void:
 	if cat_sounds_muted: return
-	play_cat_meow(0.5) # Layer the original chirp onto the start of each whine.
 	var stream := _load_cat_begging_meow_stream()
 	if stream == null:
-		play_cat_meow()
 		return
 	if _players.is_empty():
 		return
@@ -2384,6 +2392,7 @@ func play_gunshot() -> void:
 
 
 func set_roomba_wawawa(active: bool) -> void:
+	var already_active := _roomba_wawawa_on
 	_roomba_wawawa_on = active
 	if not ResourceLoader.exists(WAWA_PATH):
 		return
@@ -2396,15 +2405,14 @@ func set_roomba_wawawa(active: bool) -> void:
 		_roomba_wawawa_player.bus = "SFX"
 		_roomba_wawawa_player.stream = loaded
 		add_child(_roomba_wawawa_player)
-		_roomba_wawawa_player.finished.connect(func():
-			if _roomba_wawawa_on and _roomba_wawawa_player != null and is_instance_valid(_roomba_wawawa_player):
-				_roomba_wawawa_player.play(0.0)
-		)
-	_roomba_wawawa_player.pitch_scale = 2.18 ## a bit higher than prior 1.93
-	_roomba_wawawa_player.volume_db = _sfx_db(1.0, "world")
+	_roomba_wawawa_player.pitch_scale = 1.45
+	_roomba_wawawa_player.volume_db = _sfx_db(-18.0, "world")
 	if active:
-		if not _roomba_wawawa_player.playing:
+		if not already_active:
 			_roomba_wawawa_player.play(0.0)
+			get_tree().create_timer(.45).timeout.connect(func():
+				if is_instance_valid(_roomba_wawawa_player): _roomba_wawawa_player.stop()
+			)
 	else:
 		if _roomba_wawawa_player.playing:
 			_roomba_wawawa_player.stop()
@@ -2421,8 +2429,8 @@ func play_roomba_wawa_chirp() -> void:
 	var p: AudioStreamPlayer = _players[_player_i]
 	_player_i = (_player_i + 1) % _players.size()
 	p.stream = _cache["roomba_wawa_chirp"]
-	p.pitch_scale = 1.96 + randf() * 0.16
-	p.volume_db = _sfx_db(linear_to_db(0.56), "world")
+	p.pitch_scale = 1.40 + randf() * 0.12
+	p.volume_db = _sfx_db(-20.0, "world")
 	p.play(randf_range(0.0, 0.65))
 	var tree := get_tree()
 	if tree != null:
@@ -2433,7 +2441,7 @@ func play_roomba_wawa_chirp() -> void:
 
 
 func play_roomba_done_beep() -> void:
-	_play_cached("roomba_done_beep", _make_roomba_done_beep, 1.0, 0.86)
+	_play_cached("roomba_done_beep", _make_roomba_done_beep, 1.0, 0.28)
 
 
 func play_roomba_body_tap() -> void:
@@ -3528,6 +3536,26 @@ func _make_hot_oil_hit() -> AudioStreamWAV:
 		var sample := (roar + spit + whoosh) * env
 		_write_s16(pcm, i, int(clampf(sample, -1.0, 1.0) * 22000.0))
 	return _wav_from_pcm(pcm, false)
+
+
+func play_cheese_sizzle() -> void:
+	_play_cached("hot_oil_cheese", _make_cheese_sizzle, 1.0, 0.75)
+
+
+func _make_cheese_sizzle() -> AudioStreamWAV:
+	# The same bright oil hiss, held for 1s then faded to silence over 1s.
+	var n := int(MIX_RATE*2.0)
+	var pcm := PackedByteArray();pcm.resize(n*2)
+	var lp := 0.0
+	for i in n:
+		var t := float(i)/float(MIX_RATE)
+		var white := randf()*2.0-1.0
+		lp = lp*.55+white*.45
+		var env := minf(1.0,t/.015)*(1.0-smoothstep(1.0,2.0,t))
+		var spit := (randf()*2.0-1.0)*.5 if randf()<.035 else 0.0
+		var sample := (lp*.45+(white-lp)*.9+spit)*env
+		_write_s16(pcm,i,int(clampf(sample,-1.0,1.0)*22000.0))
+	return _wav_from_pcm(pcm,false)
 
 
 func _make_smash_hiss() -> AudioStreamWAV:

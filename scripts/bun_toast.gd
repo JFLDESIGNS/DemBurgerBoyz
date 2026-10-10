@@ -27,6 +27,27 @@ var base_y: float = 0.9
 var _rest_x: float = 0.0
 var _rest_z: float = 0.0
 var mp_puppet: bool = false
+var first_side_time := 0.0
+var smash_bonus := 0.0
+var cheese_melt := 0.0
+var seasoning := 0.0
+var perfect_flip := false
+var is_slide_drag := false
+
+func apply_mp_shape(_shape: int) -> void: pass
+
+func apply_mp_state(cook: float, _flipped: bool, _first: float, _smash: float, heat: bool, multiplier: float, hold: float, _cheese: bool, _melt: float, _season: float, held: bool, x: float, y: float, z: float, slot: int, _perfect: bool = false) -> void:
+	cook_time = cook
+	heating = heat
+	heat_mul = multiplier
+	warm_hold_time = hold
+	is_held = held
+	slot_index = slot
+	position = Vector3(x, y, z)
+	base_y = y
+	_rest_x = x
+	_rest_z = z
+	_refresh_visuals()
 
 var _materials: Array = []
 var _halo: MeshInstance3D
@@ -237,6 +258,14 @@ func _toast_modulate() -> Color:
 
 
 func _refresh_visuals() -> void:
+	# Animate the two halves locally so cooking motion never shifts their hitbox.
+	var simmer := heating and not is_held and heat_mul > 0.001 and not is_slide_drag
+	for half in ["Bottom", "Top"]:
+		var holder := get_node_or_null(half) as Node3D
+		if holder == null: continue
+		var phase := cook_time * 7.0 + (1.7 if half == "Top" else 0.0)
+		holder.position = Vector3(sin(phase)*.0015, absf(sin(phase*.7))*.002, cos(phase*.8)*.001) if simmer else Vector3.ZERO
+		holder.rotation.z = sin(phase)*.012 if simmer else 0.0
 	var m := _toast_modulate()
 	for entry in _materials: entry.material.albedo_color = entry.base * m
 	if is_instance_valid(_halo):

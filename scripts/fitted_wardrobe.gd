@@ -50,7 +50,8 @@ static func migrate_preset(data: Dictionary) -> void:
 	if int(data.get("top_catalog_version", 0)) < CATALOG_VERSION:
 		var replacements := [5, 5, 11, 3, 12, 9, 8, 4, 3, 11, 12, 7]
 		data["top_style"] = replacements[clampi(int(data.get("top_style", 1)), 0, 11)]
-		data["top_color"] = "ffffffff"
+		# Keep the character's saved palette when changing garment geometry.
+		data["top_color"] = data.get("top_color", "ffffffff")
 		data["top_scale"] = 1.0
 		data["shirt_graphic_depth"] = 0.0
 	data["top_style"] = clampi(int(data.get("top_style", 5)), 0, SCENES.size() - 1)
@@ -64,7 +65,7 @@ static func migrate_preset(data: Dictionary) -> void:
 			old_bottom = 1 if clothing == 2 or clothing == 3 else 2
 		var replacements := [8, 2, 8, 12, 6, 13, 15, 14]
 		data["bottom_style"] = replacements[old_bottom]
-		data["bottom_color"] = "ffffffff"
+		data["bottom_color"] = data.get("bottom_color", "ffffffff")
 		data["bottom_scale"] = 1.0
 	data["bottom_style"] = clampi(int(data.get("bottom_style", 8)), 0, BOTTOM_SCENES.size() - 1)
 	data["bottom_catalog_version"] = BOTTOM_CATALOG_VERSION

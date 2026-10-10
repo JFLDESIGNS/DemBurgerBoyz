@@ -7,9 +7,16 @@ func run() -> void:
 	g.supply_stock.bun_bottom=100;g.supply_stock.bun_top=100;g._refresh_bun_inventory_piles()
 	var box=g.bun_pile_root.get_node("BreadBox")
 	assert(is_instance_valid(box.door),"Door hinge must survive GLB export")
+	assert(box.model.has_node("InteriorBunLight") and box.model.has_node("SpinningBunSign"))
+	g.playing=true
+	var spin_before:float=box.bun_sign.rotation.y
+	box._process(.1)
+	assert(box.bun_sign.rotation.y>spin_before,"Roof bun sign spins during gameplay")
 	box.set_process(false)
-	box.set_open(true,.5);assert(box.open_amount==1 and box.door.rotation.y < -1.8)
-	box.set_open(false,.5);assert(box.open_amount==0 and is_zero_approx(box.door.rotation.y))
+	box.set_open(true,.5);assert(box.open_amount==1 and is_equal_approx(box.door.rotation.x,-PI*.5))
+	assert(box.door.position.z < box.door_closed_position.z and box.door.position.y > box.door_closed_position.y)
+	box.set_open(false,.5);assert(box.open_amount==0 and is_zero_approx(box.door.rotation.x))
+	assert(box.door.position.is_equal_approx(box.door_closed_position))
 	var at:Vector3=g.bun_pile_root.global_position+Vector3(0,.27,0)
 	g.camera.look_at_from_position(at+Vector3(-.22,.22,-1.7),at)
 	var light=DirectionalLight3D.new();g.world.add_child(light);light.rotation_degrees=Vector3(-35,-35,0);light.light_energy=1.5

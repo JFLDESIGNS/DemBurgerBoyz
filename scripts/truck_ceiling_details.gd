@@ -91,13 +91,14 @@ static func taped_label(game: Node, parent: Node3D, words: String, width: float,
   viewport.add_child(tape)
  var label:=Label.new()
  label.name="BoldLettering"
- label.text="SEASON" if words=="Seasoning" else words.to_upper()
+ label.text="Seasoning" if words=="Seasoning" else words.to_upper()
  label.position=Vector2(80,20)
  label.size=Vector2(608,216)
  label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
  label.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
- label.add_theme_font_override("font",game.UiFontsScript.body_heavy)
- label.add_theme_font_size_override("font_size",88 if words=="Seasoning" else 128)
+ label.add_theme_font_override("font",preload("res://assets/fonts/Caveat-Variable.ttf") if words=="Seasoning" else game.UiFontsScript.body_heavy)
+ label.add_theme_font_size_override("font_size",132 if words=="Seasoning" else 128)
+ if words=="Seasoning":label.rotation=-.025;label.pivot_offset=Vector2(304,108)
  label.add_theme_color_override("font_color",Color("392719"))
  viewport.add_child(label)
  var radius:=absf(at.z)

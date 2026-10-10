@@ -12,9 +12,20 @@ func run():
  await create_timer(1.5).timeout
  assert(not g.get_node("UI/Root/StartOverlay/StartCenter").visible)
  assert(g.start_btn.get_global_rect().end.y<g.multiplayer_btn.get_global_rect().position.y)
- assert(g.multiplayer_btn.get_global_rect().end.y<g.start_logo_wrap.get_global_rect().position.y)
- assert(g.tutorial_btn.get_global_rect().position.y>g.start_logo_wrap.get_global_rect().end.y)
+ assert(g.multiplayer_btn.get_global_rect().end.x<g.start_logo_wrap.get_global_rect().position.x)
+ assert(g.tutorial_btn.get_global_rect().position.y>g.multiplayer_btn.get_global_rect().end.y)
  assert(g.start_btn.size.y>g.tutorial_btn.size.y)
+ var cat=layout.stage.get_node("ForegroundCat")
+ assert(cat.z_index>g.start_logo_wrap.z_index and cat.mouse_filter==Control.MOUSE_FILTER_IGNORE)
+ assert(g._menu_truck.camera.projection==Camera3D.PROJECTION_PERSPECTIVE)
+ assert(g._menu_truck.camera.position.y<2.0,"Reference uses a low front-corner camera")
+ for resolution in [Vector2i(1280,720),Vector2i(1440,1080),Vector2i(1920,1080)]:
+  root.size=resolution
+  for frame in 6: await process_frame
+  var bounds=layout.get_global_rect()
+  for holder in layout.entries:
+   assert(bounds.encloses(holder.get_global_rect()),"Menu buttons must fit at every supported aspect ratio")
+  assert(bounds.encloses(cat.get_global_rect()),"Foreground cat must remain in frame")
  g.start_btn.mouse_entered.emit()
  await create_timer(.4).timeout
  assert(is_equal_approx(g.start_btn.position.y,-4))

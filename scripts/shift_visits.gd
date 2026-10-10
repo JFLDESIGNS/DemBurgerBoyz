@@ -18,6 +18,13 @@ func _process(delta: float) -> void:
   if is_instance_valid(profit_label): profit_label.hide()
   return
  _update_boss_gaze(delta)
+ if is_instance_valid(profit_label) and is_instance_valid(game.chef_points_hud):
+  game.chef_points_hud._position_reward(profit_label)
+  var reward_busy = is_instance_valid(game.chef_points_hud.active_pop)
+  profit_label.visible = not reward_busy
+  if is_instance_valid(profit_tween):
+   if reward_busy: profit_tween.pause()
+   else: profit_tween.play()
  if game.tutorial_mode or game._cat_delivery_blocks_visit() or (game.mp_enabled and not NetManager.is_host()): return
  var cat = game.window_cat
  if not is_instance_valid(cat): return
@@ -119,21 +126,21 @@ func show_profit(payout: float, cost: float) -> void:
   profit_label.z_index = 2000
   profit_label.z_as_relative = false
   game.get_node("UI/Root").add_child(profit_label)
-  profit_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-  profit_label.offset_left = -770
-  profit_label.offset_right = -245
-  profit_label.offset_top = 55
-  profit_label.offset_bottom = 81
+  profit_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
   profit_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
   profit_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-  game.UiFontsScript.apply_label(profit_label,true,17)
-  profit_label.add_theme_color_override("font_outline_color",Color(0,0,0,.8))
-  profit_label.add_theme_constant_override("outline_size",2)
+  profit_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+  profit_label.add_theme_font_override("font",preload("res://assets/fonts/Fredoka-Bold.ttf"))
+  profit_label.add_theme_font_size_override("font_size",21)
+  profit_label.add_theme_color_override("font_outline_color",Color("292322"))
+  profit_label.add_theme_constant_override("outline_size",3)
+  profit_label.add_theme_color_override("font_shadow_color",Color.TRANSPARENT)
  if profit_tween: profit_tween.kill()
  profit_label.text = "Profit %s  ·  Paid %s  ·  Cost %s" % [game._format_money(payout-cost),game._format_money(payout),game._format_money(cost)]
- profit_label.add_theme_color_override("font_color",Color("FFA52E"))
+ profit_label.add_theme_color_override("font_color",Color("ffe69a"))
  profit_label.modulate.a = 1.0
  profit_label.show()
+ if is_instance_valid(game.chef_points_hud): game.chef_points_hud._position_reward(profit_label)
  profit_tween = create_tween()
  profit_tween.tween_interval(4.0)
  profit_tween.tween_property(profit_label,"modulate:a",0.0,.5)

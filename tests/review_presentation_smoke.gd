@@ -55,4 +55,14 @@ func run() -> void:
 		for tick in 220: c._update_sidewalk_leave(.016)
 		assert(c._departure_review_shown and c._leave_phase in ["turn_left2", "walk_off"])
 	print("REVIEW_HANDOFF_OK: two-foot walk, dance cancellation, one review, departure")
+	var partner=load("res://scripts/customer.gd").new()
+	game.add_child(partner);partner.set_process(false)
+	c.set_meta("couple_partner",weakref(partner))
+	var wait_x:float=c.global_position.x
+	c._enter_leave_phase("couple_wait")
+	for tick in 300:
+		c._update_sidewalk_leave(.016)
+		if c._leave_phase=="couple_wait":break
+	assert(c._leave_phase=="couple_wait" and is_equal_approx(c.global_position.x,wait_x+1.2192))
+	print("PARTNER_WAIT_OK")
 	game.queue_free(); await process_frame; quit()

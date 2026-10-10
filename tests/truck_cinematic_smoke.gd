@@ -19,7 +19,7 @@ func _run() -> void:
 	menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	holder.add_child(menu)
 	await process_frame
-	if not _check(menu.size.x > root.get_visible_rect().size.x and menu.global_position.x < 0.0 and menu.size.y > holder.size.y, "Menu departure viewport must overscan the screen and holder"):
+	if not _check(menu.size.x > holder.size.x and menu.position.x < 0.0 and menu.size.y > holder.size.y, "Menu departure viewport must overscan its title-screen holder"):
 		return
 	menu.set_process(false)
 	if not _check(menu.truck != null and menu.wheels.size() == 4, "Missing truck or animated axles"):

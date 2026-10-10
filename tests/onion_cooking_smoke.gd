@@ -19,7 +19,7 @@ func run() -> void:
 	game.grill_on = true
 	batch._process(5)
 	assert(batch.cook_time == 5 and not batch.is_ready())
-	batch.chop(); assert(batch.pieces.get_child_count() == 8)
+	batch.chop(); assert(batch.pieces.get_child_count() == 32)
 	batch.chop(); assert(batch.chops == 2 and batch.pieces.get_child_count() == 32)
 	batch._process(5); assert(batch.is_ready() and batch.portions == 4)
 	assert(is_equal_approx(float(batch.materials[0].get_shader_parameter("progress")),1.0))

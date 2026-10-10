@@ -43,6 +43,9 @@ func setup(game: Node, source: Object) -> void:
   if not source.has_meta("build_heat_started_ms"): source.set_meta("build_heat_started_ms",born_ms)
   born_ms=int(source.get_meta("build_heat_started_ms"))
  mouse_filter=Control.MOUSE_FILTER_IGNORE
+ var overlay_material := ShaderMaterial.new()
+ overlay_material.shader=preload("res://shaders/build_vapor_overlay.gdshader")
+ material=overlay_material
  z_index=100;z_as_relative=false
  expand_mode=TextureRect.EXPAND_IGNORE_SIZE;stretch_mode=TextureRect.STRETCH_SCALE
 func _acquire_view() -> void:

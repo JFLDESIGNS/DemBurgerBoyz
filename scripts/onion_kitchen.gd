@@ -23,6 +23,9 @@ func blocked(pos: Vector3, ignore: Node = null) -> bool:
 	return false
 
 func spawn(screen: Vector2, spend: bool = true) -> bool:
+	return false # Temporarily disabled; source preserved in scripts/backups.
+
+func _spawn_disabled(screen: Vector2, spend: bool = true) -> bool:
 	var pos: Vector3 = game._grill_plane_from_screen(screen)
 	if pos == Vector3.ZERO or not game._is_on_grill_surface(pos): return false
 	if game._patty_blocked_at(pos) or not game._can_fit_patty_at(pos):
@@ -33,7 +36,7 @@ func spawn(screen: Vector2, spend: bool = true) -> bool:
 	batch.global_position = Vector3(pos.x,game.GRILL_SURFACE_Y+.008,pos.z)
 	batches.append(batch)
 	game._play_ingredient_touch_sfx("onion")
-	game._flash("Onion slice — two cuts, then slide the pile",Color("FFE6B3"))
+	game._flash("Tap once to chop, then slide the onions",Color("FFE6B3"))
 	return true
 
 func _pick(screen: Vector2):
@@ -89,7 +92,7 @@ func handle_input(event: InputEvent) -> bool:
 	return false
 
 func portion(batch: Node) -> bool:
-	if not batch.is_ready(): game._flash("Finish two chops and let the onions cook",Color("FFE082")); return false
+	if not batch.is_ready(): game._flash("Tap to chop and let the onions cook",Color("FFE082")); return false
 	var st: Dictionary = game.stations[game.STATION_CRAFT]
 	if not st.items.has("patty") or st.items.has("onion") or game._serve_fly_busy: return false
 	st.items.append("onion"); st.items = game._normalize_burger_stack(st.items)

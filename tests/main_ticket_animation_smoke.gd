@@ -59,6 +59,9 @@ func run() -> void:
 	var main: Control = game.tickets[first]
 	var queued: Control = game.tickets[second]
 	var motion = main.get_meta("ticket_motion")
+	var queued_motion = queued.get_meta("ticket_motion")
+	queued_motion.set_process(false)
+	queued_motion._player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 	motion.set_process(false)
 	motion._player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 	for i in 8: await process_frame
@@ -72,23 +75,15 @@ func run() -> void:
 	expect(not motion._thumbtack.visible, "Pin must stay hidden while the ticket unrolls")
 	expect(is_equal_approx(motion._player.speed_scale, 2.8), "Order must use the faster unroll speed")
 	expect(is_equal_approx(motion.PIN_SECONDS, 0.26), "Main tack placement must take 0.26 seconds")
-	expect(not queued.has_meta("ticket_motion"), "Waiting paper must remain static")
-	expect(queued.has_meta("queued_tack") and queued.get_meta("queued_tack").visible, "Every queued ticket needs its 3D thumbtack")
-	var queued_note: Control = queued.get_meta("ticket_note")
-	var queued_pin: Control = queued.get_meta("queued_tack")
-	expect(is_equal_approx(queued_note.position.y, 5.0), "Queued paper must retain its existing offset")
-	expect(is_equal_approx(queued_pin.DURATION, 0.26), "Queued tack placement must take 0.26 seconds")
-	expect(is_equal_approx(queued_pin.sound.volume_db, -6.0), "Queued tack sounds must be 10 dB louder")
-	var fixed_pin_position := queued_pin.position
-	queued_note.position.y = 0.0
-	queued_pin.sync_layout()
-	expect(queued_pin.position.is_equal_approx(fixed_pin_position - Vector2(0,5)), "Moving paper must keep its tack attached")
-	queued_note.position.y = 5.0
-	queued_pin.sync_layout()
+	expect(queued_motion.active and queued_motion.state == &"fly", "Queued paper should arrive rolled")
+	expect(is_equal_approx(queued_motion.display_scale, game.TICKET_SMALL_SCALE), "Queued rollout retains its smaller scale")
+	expect(game.ticket_box.get_theme_constant("separation") == 16, "Order spacing includes ten extra pixels")
+	expect(is_equal_approx(queued_motion._thumbtack.scale.x * queued_motion.display_scale, motion._thumbtack.scale.x * motion.display_scale * .75), "Queued thumbtacks are 25 percent smaller")
+	expect(not queued.get_meta("queued_tack").visible, "Animated queued paper uses its own pin")
 	expect(motion._note.position.is_zero_approx(), "Main 3D ticket must retain its position")
 	expect(not main.get_meta("queued_tack").visible, "Selected ticket must not show two thumbtacks")
 	expect(main.get_meta("ticket_note").get_parent() == motion._source, "Original live labels must render onto the mesh")
-	expect(queued.get_meta("ticket_note").get_parent() == queued, "Waiting ticket remains ordinary static UI")
+	expect(queued.get_meta("ticket_note").get_parent() == queued_motion._source, "Queued labels render on animated paper")
 	motion._player.seek(0.48, true)
 	motion._update_roll_view()
 	await screenshot("main_ticket_unroll")
@@ -156,7 +151,7 @@ func run() -> void:
 	expect(is_equal_approx(main.get_meta("patience_bar").value, 0.82), "Live patience meter must remain connected")
 	game.stations.clear()
 	for station in game.STATION_COUNT:
-		game.stations.append({"items": ["bun_bottom", "patty", "patty", "tomato"]})
+		game.stations.append({"items": ["bun_bottom", "patty", "patty", "tomato"], "preview": null, "panel": null})
 	game._refresh_ticket_checkmarks()
 	var rows: Control = main.get_meta("lines_box")
 	expect(rows.get_child(0).get_node("Item").completed, "Ingredient strikethroughs must update on the animated paper")
@@ -263,19 +258,19 @@ func run() -> void:
 	next.set_process(false)
 	next._player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 	for i in 4: await process_frame
-	expect(not motion.active and next.active and next.state == &"fly", "Promoting a ticket should fly it in and deactivate the previous one")
-	expect(is_equal_approx(main.get_meta("ticket_note").position.y, 5.0), "Demoted paper must retain the queued offset")
+	expect(motion.active and next.active and next.state == &"fly", "Promotion preserves both ticket animations")
+	expect(is_equal_approx(motion.display_scale, game.TICKET_SMALL_SCALE), "Demoted paper shrinks to queued size")
 	for library_name in motion._player.get_animation_library_list():
 		expect(next._player.get_animation_library(library_name) == motion._player.get_animation_library(library_name), "Tickets share fitted animation data")
 	expect(next._note.position.is_zero_approx(), "Promoted paper must not inherit the queued offset")
-	expect(main.get_meta("ticket_note").get_parent() == main, "Demoted ticket must restore its static Control")
-	expect(motion._view.render_target_update_mode == SubViewport.UPDATE_DISABLED, "Queued ticket viewport must not render")
-	expect(not motion.is_processing() and not motion._player.active, "Queued animation must not consume process updates")
+	expect(main.get_meta("ticket_note").get_parent() == motion._source, "Demoted ticket preserves live animated content")
+	expect(motion._view.render_target_update_mode != SubViewport.UPDATE_DISABLED, "Visible queued paper continues rendering")
+	expect(motion.active, "Queued animation remains active")
 	expect(main.custom_minimum_size.x < queued.custom_minimum_size.x, "Waiting ticket must retain its smaller layout")
 	expect(not first.running and second.running, "Visual changes must preserve the main-order clock selection")
 	next.tap()
 	expect(next._pending_tap, "Tap during arrival must be remembered")
-	expect(not motion._thumbtack.visible, "A demoted ticket must hide its 3D pin")
+	expect(motion._thumbtack.visible, "A demoted ticket keeps its seated pin")
 	next._advance_arrival(0.6)
 	next._player.advance(1.3)
 	expect(next.state == &"pin", "Queued tap must not skip the pin placement")
@@ -289,7 +284,7 @@ func run() -> void:
 	expect(not next.active and not next.is_processing() and next._view.render_target_update_mode == SubViewport.UPDATE_DISABLED, "Pooled renderer must not consume frame updates")
 	game.selected_customer = first
 	game._highlight_tickets()
-	expect(motion.active and motion.state == &"fly", "Returning to a waiting order should replay the arrival")
+	expect(motion.active and motion.state == &"static", "Returning to a waiting order preserves its seated paper")
 	print("MAIN_TICKET_ANIMATION_OK" if failures.is_empty() else "MAIN_TICKET_ANIMATION_FAILED: " + str(failures))
 	game.queue_free()
 	for i in 3: await process_frame

@@ -29,8 +29,17 @@ func _ready() -> void:
 func _draw_count(value: float) -> void:
 	shown=value;number.text=str(roundi(value))
 
+func challenge_active() -> bool:
+	var game = get_tree().current_scene
+	return is_instance_valid(game) and game.has_method("_hotdog_active") and game._hotdog_active()
+
 func _process(_delta: float) -> void:
-	if is_instance_valid(active_pop): _position_reward(active_pop)
+	visible = not challenge_active()
+	if not visible:
+		reward_queue.clear()
+		if is_instance_valid(active_pop): active_pop.queue_free(); active_pop = null
+		sound.stop()
+	elif is_instance_valid(active_pop): _position_reward(active_pop)
 
 func _exit_tree() -> void:
 	if is_instance_valid(active_pop): active_pop.queue_free()
@@ -49,7 +58,7 @@ func _position_reward(pop: Label) -> void:
 func set_total(total: int, amount: int = 0, reason: String = "") -> void:
 	points=total
 	if is_instance_valid(climb):climb.kill()
-	if amount<=0:
+	if amount<=0 or challenge_active():
 		_draw_count(total);return
 	climb=create_tween()
 	climb.tween_method(_draw_count,shown,float(total),0.65).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
@@ -59,6 +68,7 @@ func set_total(total: int, amount: int = 0, reason: String = "") -> void:
 	if not is_instance_valid(active_pop): _show_next_reward()
 
 func _show_next_reward() -> void:
+	if challenge_active(): reward_queue.clear(); return
 	if reward_queue.is_empty(): return
 	var reward: Dictionary=reward_queue.pop_front()
 	var ui_root := get_tree().current_scene.get_node("UI/Root")

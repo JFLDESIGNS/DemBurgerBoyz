@@ -11,6 +11,18 @@ var recap_root: Control
 var lifted: Array=[]
 var started_ms:=0
 
+class Receipt extends PanelContainer:
+ func _draw() -> void:
+  var edge := PackedVector2Array([Vector2.ZERO,Vector2(size.x,0),Vector2(size.x,size.y-8)])
+  var teeth := maxi(1,int(size.x/12))
+  for i in range(teeth,-1,-1):
+   var x := size.x*float(i)/teeth
+   edge.append(Vector2(x,size.y-8))
+   if i>0: edge.append(Vector2(x-size.x/teeth*.5,size.y))
+  draw_colored_polygon(edge,Color("FFF4DA"))
+ func _notification(what: int) -> void:
+  if what == NOTIFICATION_RESIZED: queue_redraw()
+
 func setup(owner_game: Node) -> void:
  game=owner_game
  layer=500
@@ -99,7 +111,10 @@ func panel_style(color: Color) -> StyleBoxFlat:
 func label(parent: Node,text: String,size: int,color: Color=Color("F7EACF")) -> Label:
  var node:=Label.new()
  node.text=text
- game.UiFontsScript.apply_label(node,true,size)
+ game.UiFontsScript.apply_label(node,false,size)
+ node.add_theme_constant_override("outline_size",0)
+ node.add_theme_constant_override("shadow_offset_x",0)
+ node.add_theme_constant_override("shadow_offset_y",0)
  node.add_theme_color_override("font_color",color)
  parent.add_child(node)
  return node
@@ -119,6 +134,19 @@ func row(parent: Node,caption: String,value: String,color: Color=Color("F7EACF")
  parent.add_child(line)
  label(line,caption,14,Color("ADBCC7")).size_flags_horizontal=Control.SIZE_EXPAND_FILL
  label(line,value,16,color)
+
+func receipt_row(parent: Node,caption: String,value: String,emphasis: bool=false) -> void:
+ var line:=HBoxContainer.new()
+ parent.add_child(line)
+ label(line,caption,14,Color("63503B")).size_flags_horizontal=Control.SIZE_EXPAND_FILL
+ var amount:=label(line,value,16 if emphasis else 14,Color("30281F"))
+ if emphasis: amount.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
+
+func receipt_rule(parent: Node) -> void:
+ var rule:=HSeparator.new()
+ var ink:=StyleBoxLine.new();ink.color=Color("C5B89B");ink.thickness=1
+ rule.add_theme_stylebox_override("separator",ink)
+ parent.add_child(rule)
 
 func rebuild() -> void:
  var panel: PanelContainer=game.game_over_panel
@@ -152,14 +180,24 @@ func rebuild() -> void:
  var columns:=HBoxContainer.new()
  columns.add_theme_constant_override("separation",12)
  summary.add_child(columns)
- var earnings:=card(columns)
- label(earnings,"THE DAY’S TAKINGS",16,Color("F4BC63"))
- row(earnings,"Food sales",game._format_money(game.shift_food_sales))
- row(earnings,"Tips",game._format_money(game.shift_tips))
- row(earnings,"Ingredients / spoilage","−"+game._format_money(game.shift_ingredient_cost))
- row(earnings,"Boss’s cut","−"+game._format_money(game.last_day_cut))
- row(earnings,"Restocks purchased",game._format_money(game.shift_restock_spend))
- label(earnings,"Inventory already paid; not deducted twice.",11,Color("ADBCC7"))
+ var paper:=Receipt.new()
+ paper.name="TakingsReceipt"
+ paper.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+ var margins:=StyleBoxEmpty.new();margins.set_content_margin_all(16);margins.content_margin_bottom=24
+ paper.add_theme_stylebox_override("panel",margins)
+ columns.add_child(paper)
+ var earnings:=VBoxContainer.new();earnings.add_theme_constant_override("separation",5);paper.add_child(earnings)
+ label(earnings,"BURGER PALS",12,Color("796348")).horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+ label(earnings,"THE DAY’S TAKINGS",18,Color("30281F")).horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+ receipt_rule(earnings)
+ receipt_row(earnings,"Food sales",game._format_money(game.shift_food_sales))
+ receipt_row(earnings,"Tips",game._format_money(game.shift_tips))
+ receipt_row(earnings,"Ingredients & spoilage","−"+game._format_money(game.shift_ingredient_cost))
+ receipt_row(earnings,"Boss’s cut","−"+game._format_money(game.last_day_cut))
+ receipt_rule(earnings)
+ receipt_row(earnings,"NET FOOD PROFIT",game._format_money(game.shift_food_sales+game.shift_tips-game.shift_ingredient_cost-game.last_day_cut),true)
+ receipt_row(earnings,"Restocks purchased",game._format_money(game.shift_restock_spend))
+ label(earnings,"Restocks shown for reference — already paid.",10,Color("796348"))
  var reviews:=card(columns)
  reviews.get_parent().custom_minimum_size.x=315
  label(reviews,"WORD ON THE STREET",16,Color("F4BC63"))
