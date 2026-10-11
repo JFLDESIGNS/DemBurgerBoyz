@@ -69,7 +69,7 @@ func run() -> void:
 	var committed := [false]
 	var departed := [false]
 	c.set_meta("burger_pending_departure",func() -> void:departed[0] = true)
-	game.call("_play_serve_fly_to_mouth",0,c,func() -> void:committed[0] = true,null,0)
+	game.call("_play_serve_fly_to_mouth",0,c,func() -> void:committed[0] = true,null,0,0)
 	await process_frame
 	expect(committed[0],"Scoring callback was delayed by presentation")
 	var seen_grab := false

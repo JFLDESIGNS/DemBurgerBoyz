@@ -12,6 +12,8 @@ const NAMES: Array[String] = [
 const FAST_TAKE := "Take_Burger_Fast"
 const FAST_EAT := "Eat_Burger_Fast"
 static var _fitted_library: AnimationLibrary
+static var _prop_sphere: SphereMesh
+static var _prop_boxes: Dictionary = {}
 
 static func fitted_library() -> AnimationLibrary:
 	if _fitted_library != null: return _fitted_library
@@ -85,8 +87,11 @@ static func _material(color: Color) -> StandardMaterial3D:
 	return material
 
 static func _box(parent: Node3D, position: Vector3, size: Vector3, color: Color) -> void:
-	var mesh := BoxMesh.new()
-	mesh.size = size * .01
+	if not _prop_boxes.has(size):
+		var box := BoxMesh.new()
+		box.size = size * .01
+		_prop_boxes[size] = box
+	var mesh: BoxMesh = _prop_boxes[size]
 	var item := MeshInstance3D.new()
 	item.mesh = mesh
 	item.position = position * .01
@@ -94,11 +99,13 @@ static func _box(parent: Node3D, position: Vector3, size: Vector3, color: Color)
 	parent.add_child(item)
 
 static func _oval(parent: Node3D, position: Vector3, size: Vector3, color: Color) -> void:
-	var mesh := SphereMesh.new()
-	mesh.radius = 1.0
-	mesh.height = 2.0
-	mesh.radial_segments = 20
-	mesh.rings = 10
+	if _prop_sphere == null:
+		_prop_sphere = SphereMesh.new()
+		_prop_sphere.radius = 1.0
+		_prop_sphere.height = 2.0
+		_prop_sphere.radial_segments = 20
+		_prop_sphere.rings = 10
+	var mesh := _prop_sphere
 	var item := MeshInstance3D.new()
 	item.mesh = mesh
 	item.scale = size * .01

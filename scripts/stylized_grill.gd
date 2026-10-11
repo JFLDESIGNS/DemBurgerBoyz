@@ -22,6 +22,8 @@ func configure() -> void:
 		plate.hide()
 	if knob != null:
 		_center_power_knob()
+		# Seat the dial against its ring instead of projecting far off the face.
+		knob.position.y = .005
 		off_rotation = knob.quaternion
 	if indicator != null:
 		var source := indicator.get_active_material(0) as StandardMaterial3D
@@ -38,7 +40,12 @@ func _center_power_knob() -> void:
 	if body == null or body.mesh == null: return
 	# The batched red mesh retained a small lateral translation during export.
 	# Center all rotating pieces together on the dial axis, preserving axial depth.
-	var center := knob.to_local(body.to_global(body.mesh.get_aabb().get_center()))
+	var local_transform := body.transform
+	var ancestor := body.get_parent()
+	while ancestor != knob and ancestor is Node3D:
+		local_transform = ancestor.transform * local_transform
+		ancestor = ancestor.get_parent()
+	var center := local_transform * body.mesh.get_aabb().get_center()
 	var offset := Vector3(center.x,0.0,center.z)
 	for child in knob.get_children():
 		if child is Node3D: child.position -= offset
@@ -96,7 +103,7 @@ func _scale_mesh_height_above(mesh: Mesh, hinge_y: float, mul: float) -> Mesh:
 
 func set_power(on: bool, instant: bool = false) -> void:
 	if temperature_digits != null:
-		temperature_digits.text = "185°" if on else "OFF"
+		temperature_digits.text = "ON" if on else "OFF"
 		temperature_digits.shaded = not on
 		temperature_digits.modulate = Color("FFB64D") if on else Color("597067")
 	if power_tween != null:
@@ -121,7 +128,9 @@ func _control_label(parent: Node3D, text: String, pos: Vector3, pixels: float) -
 	label.text = text
 	label.font_size = 48
 	label.pixel_size = pixels
-	label.outline_size = 0
+	label.font = preload("res://assets/fonts/Fredoka-SemiBold.ttf")
+	label.outline_size = 5
+	label.outline_modulate = Color("252335")
 	label.shaded = true
 	label.alpha_cut = Label3D.ALPHA_CUT_DISABLED
 	label.render_priority = 10
@@ -135,11 +144,30 @@ func _control_label(parent: Node3D, text: String, pos: Vector3, pixels: float) -
 func _build_control_display() -> void:
 	var front := find_child("ControlPanelMount", true, false) as Node3D
 	if front == null: return
-	preload("res://scripts/machine_badges.gd").decal(front, "TemperatureDisplay", "grill_temp_panel.png", Vector2(0.14,0.047), Vector3(0.066,0.019,0.043), Vector3(-90,0,0))
-	temperature_digits = _control_label(front, "OFF", Vector3(0.081,0.020,0.043), 0.00038)
+	for layer in 2:
+		var panel := MeshInstance3D.new()
+		panel.name = "ToonControlInset%d" % layer
+		var shape := BoxMesh.new()
+		shape.size = Vector3(.35-layer*.012,.004,.085-layer*.012)
+		panel.mesh = shape; panel.position = Vector3(0,.019+layer*.004,.043)
+		var enamel := StandardMaterial3D.new()
+		enamel.albedo_color = Color("20202D") if layer == 0 else Color("426568")
+		enamel.roughness = .48; enamel.metallic_specular = .25
+		panel.material_override = enamel; front.add_child(panel)
+	var screen := MeshInstance3D.new()
+	screen.name = "PowerLEDDisplay"
+	var glass := BoxMesh.new(); glass.size = Vector3(.135,.004,.043)
+	screen.mesh = glass; screen.position = Vector3(.066,.030,.043)
+	var dark := StandardMaterial3D.new(); dark.albedo_color = Color("11151F"); dark.roughness = .28
+	screen.material_override = dark; front.add_child(screen)
+	temperature_digits = _control_label(front, "OFF", Vector3(.066,.033,.043), .00055)
 	temperature_digits.name = "TemperatureDigits"
-	_control_label(front, "OFF", Vector3(-0.132,0.019,0.025), 0.00020)
-	_control_label(front, "ON", Vector3(-0.024,0.019,0.025), 0.00020)
+	var bezel := MeshInstance3D.new()
+	bezel.name = "ToonReadoutBezel"
+	var box := BoxMesh.new(); box.size = Vector3(.151,.007,.059)
+	bezel.mesh = box; bezel.position = Vector3(.066,.025,.043)
+	var rim := StandardMaterial3D.new(); rim.albedo_color = Color("292C40"); rim.roughness = .7
+	bezel.material_override = rim; front.add_child(bezel)
 
 func knob_hit(camera: Camera3D, screen_pos: Vector2) -> bool:
 	if knob == null or not is_visible_in_tree() or camera == null:

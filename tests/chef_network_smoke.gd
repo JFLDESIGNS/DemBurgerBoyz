@@ -1,4 +1,11 @@
 extends SceneTree
+class TransferAudio extends "res://scripts/game_audio.gd":
+	var launches := 0
+	var landings := 0
+	func _ready() -> void: pass
+	func _process(_delta: float) -> void: pass
+	func play_build_whoosh() -> void: launches += 1
+	func play_build_landing() -> void: landings += 1
 var folder:String
 var game
 func _initialize()->void:call_deferred("run")
@@ -16,6 +23,7 @@ func run()->void:
 	game=load("res://scenes/main.tscn").instantiate()
 	game.set_script(load(get_script().resource_path.get_base_dir().path_join("cook_controls_fixture.gd")))
 	root.add_child(game);current_scene=game;game.playing=true
+	game.game_audio=TransferAudio.new();game.add_child(game.game_audio)
 	game.grill.resize(game.GRILL_SLOTS);game.slot_positions.resize(game.GRILL_SLOTS)
 	game.stations=[{"items":["bun_bottom"],"patties":[]}]
 	var p=load("res://scripts/patty.gd").new()
@@ -50,6 +58,7 @@ func run()->void:
 		game._chef_award_once(p,"review",25,"Five-star review")
 		game._chef_award_once(p,"review",25,"Five-star review")
 		assert(game.chef_points==70)
+		assert(game.chef_points_hud.number.text=="70", "Host points update immediately")
 		mark("saw_guest_scoop")
 		await wait_mark("guest_placed")
 		await create_timer(0.5).timeout
@@ -60,6 +69,7 @@ func run()->void:
 		game._quick_transfer_patty(p)
 		await create_timer(0.6).timeout
 		assert(game.stations[0].patties.has(p),"Animated Build transfer on host")
+		assert(game.game_audio.launches==1 and game.game_audio.landings==1, "Host hears launch and landing exactly once")
 		game.mp_set_service_closed.rpc(true)
 		mark("host_done");await wait_mark("guest_done")
 	else:
@@ -73,9 +83,11 @@ func run()->void:
 		mark("guest_placed");await wait_mark("host_done")
 		while not game.service_window_closed:await process_frame
 		assert(game.stations[0].patties.has(p),"Animated Build transfer replicated to guest")
+		assert(game.game_audio.launches==1 and game.game_audio.landings==1, "Guest hears launch and landing exactly once: %d/%d" % [game.game_audio.launches, game.game_audio.landings])
 		while game.chef_points!=70:await process_frame
 		game._chef_award_once(p,"forged",500,"Guest cannot award")
 		assert(game.chef_points==70 and game.chef_points_hud.points==70)
+		assert(game.chef_points_hud.number.text=="70", "Guest points update with authoritative award")
 		mark("guest_done")
 	game.mp_enabled=false;net.leave(false)
 	print("CHEF_NETWORK_OK ","host" if host else "guest")

@@ -241,7 +241,7 @@ const ECONOMY_CFG_SECTION := "economy"
 const ECONOMY_MENU_VERSION := 2
 const TICKET_LOOK_CFG_SECTION := "ticket_look"
 const TICKET_SATURATION_DEFAULT := 0.85 ## 15% more desaturated than full color
-const TICKET_OPACITY_DEFAULT := 1.0
+const TICKET_OPACITY_DEFAULT := 0.95
 const CHALLENGE_INTERVAL_DEFAULT := 180.0
 const CHALLENGE_CHANCE_DEFAULT := 0.5
 const CHALLENGE_COUNT_SMALL_DEFAULT := 10
@@ -3548,6 +3548,8 @@ var _patty_spawn_pool: Array = []
 const LOADING_ITEM_PREP_SEC := 0.0
 var _patty_pool_refill_running := false
 var _truck_opening_active := false
+var _truck_opening_announced := false
+var _counter_props_ready_for_reveal := false
 var _background_load_started := false
 var _background_load_complete := false
 var _loading_batch_began_ms := 0
@@ -3885,6 +3887,8 @@ func _gameplay_preload_paths() -> Array[String]:
 		CustomerScript.GANGNAM_SCENE_PATH, CustomerScript.BREAKDANCE_SCENE_PATH,
 		CustomerScript.BUTTON_PUSH_SCENE_PATH, CustomerScript.MODULAR_CHARACTER_SCENE_PATH,
 		BURGERPALS_STARTUP_SOUND_PATH, INTRO_MUSIC_PATH, BTS_DAY_START_MUSIC_PATH,
+		"res://sounds/garage_shutter_open.ogg", "res://models/bread_box/bread_box.glb",
+		"res://shaders/bread_box_steel.gdshader", "res://shaders/fresh_gold_lettering.gdshader",
 		"res://sounds/tinggrill.wav", "res://sounds/wawawa.ogg",
 		"res://sounds/outdoor_forest_ambience.mp3",
 		"res://sounds/vehicles/car_pass_by_left_to_right.ogg",
@@ -3982,20 +3986,23 @@ func _restore_loading_geometry(saved: Array) -> void:
 		if is_instance_valid(entry[0]): entry[0].layers = entry[1]
 
 
+var _customer_fade_warm_materials: Array[Material] = []
+
 func _prewarm_customer_construction() -> void:
-	## Build every legacy skin once under the opaque loading overlay. This pays for
-	## skeleton binding, animation libraries, materials, and each skin texture now.
+	## Prepare a bounded local wardrobe under the opaque loading overlay. Reused
+	## materials keep these appearances cheap when customers and walkers arrive.
 	if customers_root == null or not is_instance_valid(customers_root):
 		return
 	var warm_order: Array[String] = ["bun_bottom", "patty", "bun_top"]
+	_customer_fade_warm_materials.clear()
 	CustomerScript.ensure_saved_character_files()
 	var saved_presets: Array[Dictionary] = []
 	for path in CustomerScript._list_usable_saved_character_files():
 		saved_presets.append(CustomerScript._parse_saved_character_file(path))
-	for skin_i in [0, CustomerScript.CHAR_SKINS.size()] if not saved_presets.is_empty() else [0]:
+	for skin_i in range(1 + mini(12, saved_presets.size())):
 		var customer = CustomerScript.new()
 		customer.name = "LoadingWarmCustomer_%d" % skin_i
-		var preset: Dictionary = saved_presets[skin_i - CustomerScript.CHAR_SKINS.size()] if skin_i >= CustomerScript.CHAR_SKINS.size() else {}
+		var preset: Dictionary = saved_presets[skin_i - 1] if skin_i > 0 else {}
 		customer.setup(warm_order, Color.WHITE, 9999.0, 0, skin_i, skin_i % 3, -1, preset, true)
 		customer.position = Vector3(0.0, CustomerScript.STAND_Y, 2.25) if _gameplay_load_in_progress else Vector3(1000,-1000,1000)
 		customer.set_process(false)
@@ -4009,6 +4016,9 @@ func _prewarm_customer_construction() -> void:
 			await get_tree().process_frame
 		# Compile transparent clothing/skin/eye variants under the loading screen.
 		customer._apply_leave_fade_alpha(0.5)
+		# Keep generated BaseMaterial shader variants alive after the warmup actor
+		# is freed; otherwise their last reference disappears before gameplay.
+		_customer_fade_warm_materials.append_array(customer._leave_fade_materials)
 		for _frame in 2:
 			await get_tree().process_frame
 		customer.queue_free()
@@ -4124,14 +4134,18 @@ func _run_comprehensive_gameplay_load() -> void:
 	await _warm_burger_assets()
 	await _loading_batch_checkpoint()
 	await get_tree().process_frame
-	# Warm representative customer rigs only; exhaustive appearance construction
-	# is too expensive to run during active gameplay.
+	# Prepare the bounded local wardrobe here, never during active gameplay.
 	await _prewarm_customer_construction()
+	await _prewarm_side_food_render()
+	_prepare_counter_props_for_opening()
+	if game_audio != null: await game_audio.prewarm_truck_opening_audio()
 	# Wake the complete kitchen behind the held loading frame.
 	set_meta("loading_phase", "final_render")
 	camera.cull_mask = previous_camera_mask
 	gameplay_viewport.scaling_3d_scale = previous_render_scale
 	gameplay_viewport.disable_3d = previous_disable_3d
+	await _prewarm_sale_reward_text()
+	await _prewarm_burger_serve_render()
 	for _frame in 12:
 		await get_tree().process_frame
 	# No artificial preparation delay once essentials are ready.
@@ -4151,6 +4165,7 @@ func _run_comprehensive_gameplay_load() -> void:
 
 
 func _play_truck_opening() -> void:
+	_truck_opening_announced = false
 	_truck_opening_active = true
 	start_overlay.hide()
 	set_meta("loading_phase", "truck_opening")
@@ -4269,6 +4284,7 @@ func _ensure_runtime_prewarms() -> void:
 	_ensure_payment_bill_assets()
 	await _prewarm_payment_render()
 	await _prewarm_feedback_text()
+	await _prewarm_sale_reward_text()
 	await _prewarm_order_ticket_render()
 	await _prewarm_scrape_render()
 	_ensure_serve_fx_pools()
@@ -4610,6 +4626,47 @@ func _make_serve_fly_layer(stack: Control) -> Control:
 	row.add_child(tr)
 	stack.add_child(row)
 	return row
+
+
+func _prewarm_burger_serve_render() -> void:
+	if not _gameplay_load_in_progress or not is_instance_valid(world): return
+	_ensure_serve_fx_pools()
+	for root in _serve_fly_root_pool:
+		var burst := root.get_node("BurgerCompleteBurst") as Node2D
+		var light = burst.get_meta("completion_light") if burst.has_meta("completion_light") else null
+		if not is_instance_valid(light):
+			light = preload("res://scripts/burger_completion_light.gd").new()
+			light.name = "BurgerCompletionLight"
+			world.add_child(light)
+			burst.set_meta("completion_light", light)
+		light.global_position = _cutting_board_world_center()+Vector3(0,.35,0)
+		light.light_energy = 3.2
+		light.show()
+		# Exercise the actual 2D burst and bite shader before the first serve.
+		root.show()
+		burst.position = get_viewport().get_visible_rect().size * .5
+		burst.show()
+		var stack := root.get_node("ServeFlyStack") as Control
+		stack.show()
+		for i in 3:
+			var row := stack.get_child(i) as Control
+			row.position = burst.position + Vector2(0, i*20)
+			row.show()
+			var texture := row.get_node("LayerTexture") as TextureRect
+			texture.texture = FoodSpritesScript.get_tex("patty" if i == 1 else "bun_top")
+			texture.size = Vector2(120,60)
+			var material := ShaderMaterial.new()
+			material.shader = preload("res://shaders/burger_bites.gdshader")
+			material.set_shader_parameter("consumed", 0.0)
+			material.set_shader_parameter("burger_size", Vector2(120,120))
+			texture.material = material
+		for frame in 4:
+			# At progress zero every flying accent is transparent. Exercise the
+			# visible phases too so their first draw is not deferred to serving.
+			_update_burger_completion_burst(burst, .2 + float(frame)*.2)
+			await get_tree().process_frame
+		light.stop()
+		_release_serve_fly_root(root)
 
 
 func _acquire_serve_fly_root() -> Control:
@@ -9095,9 +9152,7 @@ func _update_patty_fridge_screen_follow() -> void:
 	patty_fridge_root.position = follow + patty_fridge_pos
 	patty_fridge_root.rotation_degrees = patty_fridge_rot
 	patty_fridge_root.scale = Vector3.ONE * _patty_fridge_world_scale()
-	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
-			and (ingredient_legend.visible or _morning_boss_blocks_controls()) \
-			and (start_overlay == null or not start_overlay.visible)
+	var show := _counter_props_should_show()
 	if patty_fridge_open or _fridge_launch_inflight > 0 or _fridge_drag_active:
 		show = true
 	patty_fridge_root.visible = show
@@ -10523,6 +10578,23 @@ func _physical_garbage_follow_world() -> Vector3:
 	return camera.project_position(screen, ingredient_bin_cam_z)
 
 
+func _counter_props_should_show() -> bool:
+	if _counter_props_ready_for_reveal and (_gameplay_load_in_progress or _truck_opening_active):
+		return true
+	return is_instance_valid(ingredient_legend) and (ingredient_legend.visible or _morning_boss_blocks_controls()) and (not is_instance_valid(start_overlay) or not start_overlay.visible)
+
+
+func _prepare_counter_props_for_opening() -> void:
+	# Constructed already; expose them under the loading overlay to upload their real materials.
+	_counter_props_ready_for_reveal = true
+	_update_physical_garbage_screen_follow()
+	_update_patty_fridge_screen_follow()
+	_update_bottom_row_supply_follow()
+	_refresh_bun_inventory_piles()
+	for prop in [physical_garbage_root,patty_fridge_root,bun_pile_root]:
+		if is_instance_valid(prop): prop.set_meta("prepared_before_opening",true)
+
+
 func _update_physical_garbage_screen_follow() -> void:
 	if physical_garbage_root == null or not is_instance_valid(physical_garbage_root):
 		return
@@ -10532,9 +10604,7 @@ func _update_physical_garbage_screen_follow() -> void:
 	physical_garbage_root.position = rest
 	physical_garbage_root.rotation_degrees = physical_garbage_rot
 	physical_garbage_root.scale = Vector3.ONE * _physical_garbage_world_scale()
-	var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
-			and (ingredient_legend.visible or _morning_boss_blocks_controls()) \
-			and (start_overlay == null or not start_overlay.visible)
+	var show := _counter_props_should_show()
 	physical_garbage_root.visible = show
 
 
@@ -10559,9 +10629,7 @@ func _bottom_row_supply_follow_world() -> Vector3:
 func _update_bottom_row_supply_follow() -> void:
 	_seat_bun_piles_by_fryer()
 	if bun_pile_root != null and is_instance_valid(bun_pile_root):
-		var show := ingredient_legend != null and is_instance_valid(ingredient_legend) \
-				and ingredient_legend.visible \
-				and (start_overlay == null or not start_overlay.visible)
+		var show := _counter_props_should_show()
 		bun_pile_root.visible = show
 		if tip_jar_root != null and is_instance_valid(tip_jar_root):
 			tip_jar_root.visible = show
@@ -10572,9 +10640,7 @@ func _update_bottom_row_supply_follow() -> void:
 		return
 	cheese_station_root.global_position = follow
 	cheese_station_root.global_basis = Basis.IDENTITY
-	var show_station := ingredient_legend != null and is_instance_valid(ingredient_legend) \
-			and ingredient_legend.visible \
-			and (start_overlay == null or not start_overlay.visible)
+	var show_station := _counter_props_should_show()
 	cheese_station_root.visible = show_station
 
 
@@ -17410,6 +17476,7 @@ func _commit_patty_to_build(patty: Area3D) -> void:
 	_select_station(STATION_CRAFT)
 	if game_audio:
 		_play_ingredient_touch_sfx("patty")
+		if game_audio.has_method("play_build_landing"): game_audio.play_build_landing()
 	var n: int = st["patties"].size()
 	if patty.has_cheese and not patty.cheese_ready():
 		_flash("Patty on Build — cheese melting (%ds)" % maxi(1, int(ceil(3.0 * (1.0 - patty.cheese_melt)))), Color("FFE082"))
@@ -31331,10 +31398,9 @@ func mp_background_person_hail(idx: int, result: String) -> void:
 		walker.set_meta("street_hail_time", walker.play_street_rejection(true))
 		# Let the cook's greeting finish before the pedestrian answers.
 		var delay = minf(1.1, burgerpals_startup_player.stream.get_length()) if is_instance_valid(burgerpals_startup_player) and burgerpals_startup_player.stream != null else 0.5
-		get_tree().create_timer(delay).timeout.connect(func():
-			if is_instance_valid(walker) and walker.visible and str(walker.get_meta("street_hail","")) in ["angry","angry_walk"] and game_audio:
-				game_audio.play_customer_wawa_click(1.0,walker.get_customer_voice())
-				walker.animate_wawa(1.5 if walker.get_customer_voice() == "female" else 1.15)
+		var animation_id: int = walker._anim_player.get_instance_id() if is_instance_valid(walker._anim_player) else 0
+		get_tree().create_timer(delay).timeout.connect(
+			_play_background_hail_reply.bind(weakref(walker), animation_id)
 		)
 	elif result == "angry_walk":
 		walker.play_street_rejection(false)
@@ -31347,6 +31413,19 @@ func mp_background_person_hail(idx: int, result: String) -> void:
 		_start_street_hail_exit(idx)
 	elif result == "join_wait":
 		walker.hide(); walker._wawa_click_area.collision_layer = 0
+
+
+func _play_background_hail_reply(walker_ref: WeakRef, animation_id: int) -> void:
+	var walker = walker_ref.get_ref()
+	if not is_instance_valid(walker) or walker.is_queued_for_deletion() or not walker.visible:
+		return
+	# A pooled pedestrian may already have a different model and invitation.
+	if not is_instance_valid(walker._anim_player) or walker._anim_player.get_instance_id() != animation_id:
+		return
+	if str(walker.get_meta("street_hail", "")) not in ["angry", "angry_walk"] or not is_instance_valid(game_audio):
+		return
+	game_audio.play_customer_wawa_click(1.0, walker.get_customer_voice())
+	walker.animate_wawa(1.5 if walker.get_customer_voice() == "female" else 1.15)
 
 
 func _start_street_hail_exit(idx: int) -> void:
@@ -40854,10 +40933,18 @@ func _make_cup_stack_prop_material() -> StandardMaterial3D:
 	return mat
 
 
+var _cup_shared_shaders: Dictionary = {}
+
+func _cup_shader(key: String, source: String) -> Shader:
+	if not _cup_shared_shaders.has(key):
+		var shader := Shader.new()
+		shader.code = source
+		_cup_shared_shaders[key] = shader
+	return _cup_shared_shaders[key]
+
 func _make_soda_liquid_gradient_material(col: Color) -> ShaderMaterial:
 	## Pour cream band + warm radial core (dark edges, amber center).
-	var sh := Shader.new()
-	sh.code = """
+	var shader_source := """
 shader_type spatial;
 render_mode blend_mix, depth_draw_always, cull_back, diffuse_burley, specular_schlick_ggx;
 
@@ -40970,7 +41057,7 @@ void fragment() {
 }
 """
 	var mat := ShaderMaterial.new()
-	mat.shader = sh
+	mat.shader = _cup_shader("liquid_gradient", shader_source)
 	## Draw the saturated drink after the clear shell. Equal priorities allowed
 	## camera distance to flip their alpha order and sometimes fog the liquid.
 	mat.render_priority = CUP_DRAW_PRIORITY + 2
@@ -43730,8 +43817,7 @@ func _eject_cup_flip_contents(mouth_dir: Vector3) -> void:
 func _make_soda_overflow_shell_material() -> ShaderMaterial:
 	## Black in the supplied stripe art is keyed out; white becomes shaded moving foam.
 	## Procedural ring bubbles travel down the cup and collect near the fading base.
-	var shader := Shader.new()
-	shader.code = """
+	var shader_source := """
 shader_type spatial;
 render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_back;
 
@@ -43835,7 +43921,7 @@ void fragment() {
 }
 """
 	var mat := ShaderMaterial.new()
-	mat.shader = shader
+	mat.shader = _cup_shader("overflow_shell", shader_source)
 	var splash := load(SODA_OVERFLOW_SHELL_TEXTURE) as Texture2D
 	if splash != null:
 		mat.set_shader_parameter("splash_tex", splash)
@@ -44668,7 +44754,11 @@ func _make_foam_dome_mesh() -> ArrayMesh:
 	return am
 
 
+var _foam_hole_texture_cache: ImageTexture
+
 func _make_foam_hole_texture() -> ImageTexture:
+	if _foam_hole_texture_cache != null: return _foam_hole_texture_cache
+	var began := _perf_hot_begin()
 	## Cream foam with irregular holes punched by noise.
 	var n := 128
 	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
@@ -44690,7 +44780,9 @@ func _make_foam_hole_texture() -> ImageTexture:
 			if not hole and holes > 0.48:
 				cream = cream.lerp(Color(0.88, 0.84, 0.78), (holes - 0.48) / 0.14)
 			img.set_pixel(x, y, Color(cream.r, cream.g, cream.b, a))
-	return ImageTexture.create_from_image(img)
+	_foam_hole_texture_cache = ImageTexture.create_from_image(img)
+	_perf_hot_end("cup_foam_texture", began)
+	return _foam_hole_texture_cache
 
 
 func _foam_noise2(x: float, y: float) -> float:
@@ -46840,6 +46932,7 @@ func _apply_bunting_wind_settings(cfg: Dictionary) -> void:
 
 
 func _update_window_bunting_wind(delta: float) -> void:
+	if _truck_opening_active: return # The opening owns the pennant unfold until it settles.
 	if is_instance_valid(window_bunting_root) and window_bunting_root.get_meta("boss_fallen", false): return
 	if window_bunting_root == null or not is_instance_valid(window_bunting_root):
 		return
@@ -48519,17 +48612,54 @@ func _prewarm_feedback_text() -> void:
 	_layout_flash_label()
 
 
+func _prewarm_sale_reward_text() -> void:
+	if not _gameplay_load_in_progress or bool(get_meta("sale_reward_text_warmed", false)): return
+	var ui_root := get_node_or_null("UI/Root") as Control
+	if ui_root == null: return
+	# Profit and chef rewards use a different size/outline than the flash label.
+	# Include the sparkle glyph so its font fallback is prepared as well.
+	var sample := Label.new()
+	sample.text = "Profit Paid Cost Fresh serve CHEF POINTS ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 +$.,%!?():/ ·—-"
+	sample.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-Bold.ttf"))
+	sample.add_theme_font_size_override("font_size", 21)
+	sample.add_theme_color_override("font_outline_color", Color("292322"))
+	sample.add_theme_constant_override("outline_size", 3)
+	sample.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
+	ui_root.add_child(sample)
+	sample.position = Vector2(20, 60)
+	# The total changes from zero on the first reward and uses a separate atlas.
+	var count_sample := Label.new()
+	count_sample.text = "0123456789"
+	count_sample.add_theme_font_override("font", preload("res://assets/fonts/Fredoka-Bold.ttf"))
+	count_sample.add_theme_font_size_override("font_size", 30)
+	count_sample.add_theme_constant_override("outline_size", 2)
+	ui_root.add_child(count_sample)
+	count_sample.position = Vector2(20, 180)
+	# Exercise the authored popup scale and child labels, not just static glyphs.
+	# This creates presentation only: no points, reward queue, or audio changes.
+	if is_instance_valid(chef_points_hud):
+		chef_points_hud._sparkle_burst(sample)
+	sample.scale = Vector2(0.85, 0.85)
+	var warm_tween := create_tween()
+	warm_tween.tween_property(sample, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK)
+	await get_tree().create_timer(0.55).timeout
+	sample.queue_free()
+	count_sample.queue_free()
+	set_meta("sale_reward_text_warmed", true)
+
+
 func _prewarm_payment_render() -> void:
 	if not _gameplay_load_in_progress or camera == null:
 		return
 	# Allocation alone leaves first-draw pipeline work for the first payment.
-	# Render both bill materials behind the loading overlay, inside the camera frustum.
+	# Include the actual sale material as well as flying/settled tip materials.
 	var staged: Array[MeshInstance3D] = []
-	for in_jar in [false, true]:
+	for material_kind in 3:
+		var in_jar := material_kind == 1
 		for angle in [0.0, PI * 0.5]:
 			var bill := MeshInstance3D.new()
 			bill.mesh = _cached_tip_bill_mesh(in_jar, 1.0 if in_jar else 2.04, 0)
-			bill.material_override = _cached_tip_bill_material(in_jar)
+			bill.material_override = _cached_sale_bill_material() if material_kind == 2 else _cached_tip_bill_material(in_jar)
 			bill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			bill.layers = LOADING_WARMUP_LAYER
 			world.add_child(bill)
@@ -50524,11 +50654,12 @@ func _commit_social_review(
 	## keep the texture directly and do zero compression on the serve frame.
 	if pic != null and mp_enabled and NetManager.is_host() and NetManager.is_online():
 		var encode_began := _perf_hot_begin()
-		var img := pic.get_image()
-		if img != null:
-			if img.is_compressed():
-				img.decompress()
-			pic_png = img.save_png_to_buffer()
+		pic_png = pic.get_meta("review_png", PackedByteArray())
+		if pic_png.is_empty():
+			var img := pic.get_image()
+			if img != null:
+				if img.is_compressed(): img.decompress()
+				pic_png = img.save_png_to_buffer()
 		_perf_hot_end("review_encoding", encode_began, 1500)
 	var breakdown: Dictionary = {}
 	if customer != null and is_instance_valid(customer):
@@ -50588,7 +50719,7 @@ func _show_customer_review_stars(customer: Node3D, stars: float, review_text: St
 func _pause_customer_review(customer: Node3D, paused: bool) -> void:
 	if not is_instance_valid(_review_toast) or _review_toast.get_meta("customer_id", 0) != customer.get_instance_id():
 		return
-	if is_instance_valid(_review_toast_tween):
+	if is_instance_valid(_review_toast_tween) and _review_toast_tween.is_valid():
 		if paused: _review_toast_tween.pause()
 		else: _review_toast_tween.play()
 
@@ -50663,7 +50794,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 	lines.add_child(copy)
 	_review_toast.modulate.a=0.0
 	_review_toast_tween=_review_toast.create_tween()
-	_review_toast_tween.tween_property(_review_toast,"modulate:a",1.0,0.18)
+	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.8,0.18)
 	_review_toast_tween.tween_interval(2.5)
 	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.0,0.25)
 	_review_toast_tween.tween_callback(_review_toast.queue_free)
@@ -50908,7 +51039,7 @@ func _render_review_burger_snapshot(station_index: int) -> Texture2D:
 		else: tex = FoodSpritesScript.get_tex(key)
 		if tex == null: continue
 		# Crop this exact texture, never reuse a differently sized patty's crop.
-		var src := FoodSpritesScript.prep_layer_image_for_composite(tex.get_image(),"sales_photo_v2_%d" % tex.get_instance_id())
+		var src := FoodSpritesScript.prep_texture_for_composite(tex)
 		if src == null: continue
 		var width := 148.0 * _layer_width_mul(key)
 		var height := width * float(src.get_height()) / maxf(1,src.get_width())
@@ -50925,7 +51056,18 @@ func _render_review_burger_snapshot(station_index: int) -> Texture2D:
 		var h := maxi(1,int(layer.h*fit))
 		src.resize(w,h,Image.INTERPOLATE_LANCZOS)
 		canvas.blend_rect(src,Rect2i(0,0,w,h),Vector2i((OUT-w)/2,int(origin+layer.y*fit)))
-	return ImageTexture.create_from_image(canvas)
+	return _review_texture_from_canvas(canvas)
+
+
+func _review_texture_from_canvas(canvas: Image) -> Texture2D:
+	# Encode the existing CPU image during preparation. Serving must not force
+	# a GPU readback of the thumbnail just uploaded for the phone.
+	var texture := ImageTexture.create_from_image(canvas)
+	texture.set_meta("review_png", canvas.save_png_to_buffer())
+	var sales := canvas.duplicate()
+	sales.resize(160, 160, Image.INTERPOLATE_LANCZOS)
+	texture.set_meta("sales_png", sales.save_png_to_buffer())
+	return texture
 
 
 func _generate_review_text(stars: float, kind: String, tip: int = 0) -> String:
@@ -51877,7 +52019,7 @@ func _ticket_note_modulate(selected: bool) -> Color:
 		lerpf(lum, base.r, sat),
 		lerpf(lum, base.g, sat),
 		lerpf(lum, base.b, sat),
-		clampf(ticket_opacity, 0.15, 1.0)
+		clampf(ticket_opacity, 0.15, 0.95)
 	)
 
 
@@ -55378,6 +55520,7 @@ func _play_ingredient_touch_sfx(id: String) -> void:
 func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 	if game_audio == null:
 		return
+	var active_gain := 0.0
 	var active_cook := false ## still on a cook zone (FULL / ½)
 	var hold_cooked := false ## finished meat parked on HOLD
 	var heat := 0.0
@@ -55388,15 +55531,17 @@ func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 		if not p.heating or p.is_held:
 			continue
 		if _is_bun_toast(p):
-			## Toast still cooks with heat — treat as active cook sound.
+			## Give toasting buns a clearly audible bed, slightly below meat.
 			if float(p.heat_mul) > 0.01:
 				active_cook = true
-				heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.25, 1.0))
+				active_gain = maxf(active_gain, .9)
+				heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.6, 1.0))
 			continue
 		var on_hold: bool = _is_in_warmer_zone(p.position)
 		var cooked: bool = p.has_method("can_scoop") and p.can_scoop()
 		if float(p.heat_mul) > 0.01 and not on_hold:
 			active_cook = true
+			active_gain = 1.0
 			heat = maxf(heat, clampf(float(p.cook_time) / 10.0, 0.25, 1.0))
 		elif on_hold and cooked:
 			hold_cooked = true
@@ -55405,6 +55550,7 @@ func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 		for onion in _onion_kitchen.batches:
 			if is_instance_valid(onion) and not _is_in_warmer_zone(onion.global_position):
 				active_cook = true
+				active_gain = 1.0
 				heat = maxf(heat, .35)
 	var vol_mul := 1.0
 	var cooking := false
@@ -55412,7 +55558,7 @@ func _update_kitchen_sizzle(delta: float = 0.0) -> void:
 		## Hot zones win — snap fade back so returning meat cooks loud again.
 		_hold_sizzle_fade_sec = 0.0
 		cooking = true
-		vol_mul = 1.0
+		vol_mul = active_gain
 	elif hold_cooked:
 		_hold_sizzle_fade_sec = minf(HOLD_SIZZLE_FADE_SEC, _hold_sizzle_fade_sec + maxf(0.0, delta))
 		var t := clampf(_hold_sizzle_fade_sec / HOLD_SIZZLE_FADE_SEC, 0.0, 1.0)
@@ -64319,7 +64465,7 @@ func _select_ticket(customer: Node3D) -> void:
 	_select_ticket_local(customer)
 
 
-func _select_ticket_local(customer: Node3D) -> void:
+func _select_ticket_local(customer: Node3D, promote_mobile: bool = true) -> void:
 	if _hotdog_active() and customer != _hotdog_challenge.customer: return
 	if is_instance_valid(_grubbah) and _grubbah.is_selected() and customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase","")) in ["paper","wrapping"] and not stations[0].get("patties",[]).is_empty():
 		_flash("Wrap the mobile burger first",Color("FFD06A"))
@@ -64328,8 +64474,13 @@ func _select_ticket_local(customer: Node3D) -> void:
 		_flash("That customer is gone", Color("EF5350"))
 		return
 	selected_customer = customer
+	# Only explicit ticket selection promotes a mobile order ahead of its queue slot.
+	if promote_mobile and bool(customer.get_meta("mobile_order", false)) and tickets.has(customer):
+		var selected_wrap = tickets[customer]
+		if is_instance_valid(selected_wrap) and selected_wrap.get_parent() == ticket_box:
+			ticket_box.move_child(selected_wrap, 0)
 	if is_instance_valid(_grubbah) and not _grubbah.state.is_empty():
-		_grubbah.state["selected"] = customer==_grubbah.ticket_owner
+		_grubbah.state["selected"] = customer==_grubbah.ticket_owner and promote_mobile
 		if customer!=_grubbah.ticket_owner and str(_grubbah.state.get("phase",""))=="paper" and stations[0].get("patties",[]).is_empty() and _grubbah.state.get("side_packs",{}).is_empty() and _grubbah.host(): _grubbah.set_phase("accepted")
 		if customer==_grubbah.ticket_owner: _grubbah.call_deferred("auto_lay_paper")
 	_highlight_tickets()
@@ -64442,7 +64593,7 @@ func _mp_force_remove_customer(cust: Node3D) -> void:
 
 func _highlight_tickets() -> void:
 	## Selected order = full-size main slip (left). Others sit smaller to its right.
-	if selected_customer != null and tickets.has(selected_customer):
+	if selected_customer != null and tickets.has(selected_customer) and not bool(selected_customer.get_meta("mobile_order", false)):
 		var sel_wrap = tickets[selected_customer]
 		if is_instance_valid(sel_wrap) and sel_wrap.get_parent() == ticket_box:
 			ticket_box.move_child(sel_wrap, 0)
@@ -64478,8 +64629,8 @@ func _clear_customers() -> void:
 	if dialogue_panel:
 		dialogue_panel.visible = false
 	for c in customers.duplicate():
-		_remove_ticket(c)
 		if is_instance_valid(c):
+			_remove_ticket(c)
 			c.queue_free()
 	customers.clear()
 	_customer_departure_holds.clear()
@@ -67420,8 +67571,25 @@ func _make_thrown_ingredient_card(id: String, tex: Texture2D) -> MeshInstance3D:
 	return card
 
 
-func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3 = Vector3.ZERO, zone: String = "body") -> void:
-	if cust == null or not is_instance_valid(cust):
+func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3 = Vector3.ZERO, zone: String = "body", accepted_override: int = -1) -> void:
+	if not is_instance_valid(cust) or not GameDataScript.INGREDIENT_LABELS.has(id): return
+	var land := hit_world
+	if land == Vector3.ZERO: land = _customer_food_land_world(cust, zone)
+	# Only the host rolls a reaction; all players see the same snack or splat.
+	if mp_enabled and accepted_override < 0:
+		if NetManager.is_host():
+			var accepted := _roll_flung_food_acceptance(cust, id)
+			mp_customer_flung_food_reaction.rpc(_customer_net_id(cust), id, cust.to_local(land), zone, accepted)
+		return
+	var accepted := accepted_override == 1 if accepted_override >= 0 else _roll_flung_food_acceptance(cust, id)
+	if accepted:
+		if game_audio: game_audio.play_ingredient_plap()
+		if id == "bacon" and not bool(cust.get("is_disguise_cat")) and cust.has_method("feed_bacon_snack"):
+			if not mp_enabled or NetManager.is_host():
+				cust.feed_bacon_snack(BACON_PATIENCE_RESTORE)
+				if mp_enabled: _mp_broadcast_customers()
+		_start_flung_food_snack(cust, id, land)
+		_flash("Nom nom nom!", Color("FFE082"))
 		return
 	var impatience := 0.45
 	if cust.has_method("patience_ratio"):
@@ -67434,9 +67602,6 @@ func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3
 	elif game_audio and game_audio.has_method("play_customer_wawa_click"):
 		game_audio.play_customer_wawa_click(impatience, cust.get_customer_voice() if cust.has_method("get_customer_voice") else "male")
 		if cust.has_method("animate_wawa"): cust.animate_wawa(1.5 if cust.get_customer_voice() == "female" else 1.15)
-	var land := hit_world
-	if land == Vector3.ZERO:
-		land = _customer_food_land_world(cust, zone)
 	_ensure_ingredient_slingshot().impact(cust,land,id)
 	if id == "ketchup" or id == "mustard":
 		_splat_condiment_on_customer(cust, id, zone)
@@ -67446,6 +67611,46 @@ func _apply_customer_ingredient_hit(cust: Node3D, id: String, hit_world: Vector3
 		_put_cheese_on_customer_head(cust)
 	var label := str(GameDataScript.INGREDIENT_LABELS.get(id, id))
 	_flash("%s stuck: wawawa" % label, Color("FFE082"))
+
+
+func _roll_flung_food_acceptance(cust: Node3D, id: String) -> bool:
+	if bool(cust.get("is_ragdoll")) or bool(cust.get("is_leaving")): return false
+	return preload("res://scripts/thrown_food_snack.gd").accepts(id, bool(cust.get("is_disguise_cat")), randf())
+
+func _start_flung_food_snack(subject: Node3D, id: String, at: Vector3) -> void:
+	var previous = subject.get_node_or_null("ThrownFoodSnack")
+	if previous != null:
+		previous.finish()
+		subject.remove_child(previous)
+		previous.queue_free()
+	var snack = preload("res://scripts/thrown_food_snack.gd").new()
+	snack.name = "ThrownFoodSnack"
+	subject.add_child(snack)
+	snack.setup(self, subject, id, at)
+
+@rpc("authority", "call_local", "reliable")
+func mp_customer_flung_food_reaction(net_id: int, id: String, local_hit: Vector3, zone: String, accepted: bool) -> void:
+	var cust = _customer_by_net_id(net_id)
+	if is_instance_valid(cust): _apply_customer_ingredient_hit(cust, id, cust.to_global(local_hit), zone, int(accepted))
+
+func _apply_cat_ingredient_hit(id: String, at: Vector3, accepted_override: int = -1) -> void:
+	if not is_instance_valid(window_cat) or not window_cat.is_visible_in_tree(): return
+	if not GameDataScript.INGREDIENT_LABELS.has(id): return
+	if mp_enabled and accepted_override < 0:
+		if NetManager.is_host():
+			mp_cat_flung_food_reaction.rpc(id, window_cat.to_local(at), preload("res://scripts/thrown_food_snack.gd").accepts(id, true, randf()))
+		return
+	var accepted := accepted_override == 1 if accepted_override >= 0 else preload("res://scripts/thrown_food_snack.gd").accepts(id, true, randf())
+	if accepted:
+		if game_audio: game_audio.play_ingredient_plap()
+		window_cat.feed(id, true)
+		_start_flung_food_snack(window_cat, id, at)
+	else:
+		_ensure_ingredient_slingshot().impact(window_cat, at, id)
+
+@rpc("authority", "call_local", "reliable")
+func mp_cat_flung_food_reaction(id: String, local_hit: Vector3, accepted: bool) -> void:
+	if is_instance_valid(window_cat): _apply_cat_ingredient_hit(id, window_cat.to_global(local_hit), int(accepted))
 
 
 func _ensure_ingredient_slingshot() -> Node2D:
@@ -67777,6 +67982,7 @@ func _try_open_closed_sign_click(screen_pos: Vector2) -> bool:
 
 
 func _sync_open_closed_sign(animate: bool) -> void:
+	if _truck_opening_active: return # Avoid competing with the choreographed reveal.
 	if open_closed_sign == null or not is_instance_valid(open_closed_sign):
 		return
 	var target_yaw := OPEN_CLOSED_SIGN_YAW_CLOSED if service_window_closed else OPEN_CLOSED_SIGN_YAW_OPEN
@@ -67867,7 +68073,9 @@ func _reset_service_window_open() -> void:
 	service_window_closed = false
 	_set_shift_paused(false, false)
 	_sync_open_closed_sign(false)
-	_play_burgerpals_startup_sound()
+	# The first shift follows the reveal's jingle; subsequent days still get one.
+	if not _truck_opening_announced: _play_burgerpals_startup_sound()
+	_truck_opening_announced = false
 
 
 func _can_drop_station_patty_on_grill(data: Variant) -> bool:
@@ -69416,7 +69624,9 @@ func _refresh_station_after_serve(index: int) -> void:
 	for _i in 3:
 		await get_tree().process_frame
 	if index >= 0 and index < stations.size():
+		var redraw_began := _perf_hot_begin()
 		_refresh_station(index)
+		_perf_hot_end("serve_station_redraw", redraw_began)
 
 
 func _clear_all_stations() -> void:
@@ -70752,7 +70962,7 @@ func _play_icecream_fly_to_mouth(from_cone: Node3D, customer: Node3D, on_done: C
 		if is_instance_valid(from_cone): from_cone.queue_free()
 		_serve_fly_busy = false
 		on_done.call()
-	)
+	, "cola", 0.0, false, from_cone)
 
 
 @rpc("authority","call_remote","reliable")
@@ -70770,7 +70980,56 @@ func mp_customer_order_tap(nid: int) -> void:
 func _mp_customer_order_announce(customer: Node3D) -> void:
 	if mp_enabled and NetManager.is_host():mp_customer_order_tap.rpc(_customer_net_id(customer))
 
-func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: Callable, flavor: String = "cola", delay: float = 0.0, replicated: bool = false) -> void:
+var _side_depth_material_cache: Dictionary = {}
+
+func _side_depth_material(source: BaseMaterial3D) -> BaseMaterial3D:
+	var signature: Array = [source.get_class()]
+	for property in source.get_property_list():
+		var key: String = property.name
+		if not (int(property.usage) & PROPERTY_USAGE_STORAGE) or key.begins_with("resource_") or key.begins_with("metadata/") or key == "script": continue
+		var value = source.get(key)
+		signature.append([key, value.get_instance_id() if value is Resource else value])
+	if not _side_depth_material_cache.has(signature):
+		if _side_depth_material_cache.size() >= 128: _side_depth_material_cache.clear()
+		var material := source.duplicate() as BaseMaterial3D
+		material.no_depth_test = false
+		_side_depth_material_cache[signature] = material
+	return _side_depth_material_cache[signature]
+
+func _prewarm_side_food_render() -> void:
+	# Prepare the handoff depth variants under the loading overlay, not on first serve.
+	var food := _create_drink_cup_node()
+	add_child(food)
+	food.position = Vector3(0, CustomerScript.STAND_Y+1.0, 2.25)
+	_set_melting_cup_liquid_level(food, 1.0, "cola")
+	for mesh in food.find_children("*", "MeshInstance3D", true, false):
+		if mesh.material_override is BaseMaterial3D:
+			mesh.material_override = _side_depth_material(mesh.material_override)
+	_stage_loading_geometry(food)
+	for i in 3: await get_tree().process_frame
+	food.queue_free()
+	await get_tree().process_frame
+	# Compile the fry bite presentation too; preloading its shader alone does
+	# not prepare its first material/render use.
+	var fries := Node3D.new()
+	add_child(fries)
+	_populate_fry_pack(fries)
+	fries.position = Vector3(0, CustomerScript.STAND_Y+1.0, 2.25)
+	var eater := Node3D.new()
+	add_child(eater)
+	var presentation := preload("res://scripts/side_food_serve.gd").new()
+	presentation.set_process(false)
+	add_child(presentation)
+	presentation.setup(self, eater, fries, "fries", func(): pass)
+	_stage_loading_geometry(fries)
+	for frame in 4: await get_tree().process_frame
+	presentation.queue_free()
+	eater.queue_free()
+	fries.queue_free()
+	await get_tree().process_frame
+
+func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: Callable, flavor: String = "cola", delay: float = 0.0, replicated: bool = false, source_model: Node3D = null) -> void:
+	var build_began := _perf_hot_begin()
 	if not is_instance_valid(customer):
 		done.call()
 		return
@@ -70780,7 +71039,20 @@ func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: 
 	if not replicated and side_order is Array and (GameDataScript.is_soda_only_order(side_order) or GameDataScript.is_icecream_only_order(side_order) or GameDataScript.is_fries_only_order(side_order)):
 		_begin_customer_serve_handoff(customer)
 	var food: Node3D
-	if kind == "fries":
+	var model_began := _perf_hot_begin()
+	if is_instance_valid(source_model):
+		# Copy the prepared visual; inventory retains the original until payout.
+		food = source_model.duplicate() as Node3D
+		add_child(food)
+		food.show()
+		if kind == "drink":
+			var liquid = food.get_node_or_null("LiquidPivot/Liquid") as MeshInstance3D
+			if liquid != null:
+				liquid.mesh = liquid.mesh.duplicate()
+				if liquid.material_override != null: liquid.material_override = liquid.material_override.duplicate()
+			food.set_meta("flavor", flavor)
+			_set_melting_cup_liquid_level(food, 1.0, flavor)
+	elif kind == "fries":
 		food = Node3D.new()
 		add_child(food)
 		_populate_fry_pack(food)
@@ -70795,7 +71067,9 @@ func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: 
 		food.set_meta("flavor", flavor)
 		_set_melting_cup_liquid_level(food, 1.0, flavor)
 	food.name = "ServedFries3D" if kind == "fries" else ("ServedCone3D" if kind == "icecream" else "ServedDrink3D")
+	_perf_hot_end("side_food_model_" + kind, model_began)
 	food.global_position = origin
+	var materials_began := _perf_hot_begin()
 	for area in food.find_children("*", "Area3D", true, false):
 		area.input_ray_pickable = false
 		area.collision_layer = 0
@@ -70803,12 +71077,12 @@ func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: 
 	for mesh in food.find_children("*", "MeshInstance3D", true, false):
 		var mat: Material = mesh.material_override
 		if mat is BaseMaterial3D:
-			mat = mat.duplicate()
-			mat.no_depth_test = false
-			mesh.material_override = mat
+			mesh.material_override = _side_depth_material(mat)
 	var animation := preload("res://scripts/side_food_serve.gd").new()
+	_perf_hot_end("side_food_materials_" + kind, materials_began)
 	add_child(animation)
 	animation.setup(self, customer, food, kind, done, delay)
+	_perf_hot_end("side_food_build_" + kind, build_began)
 
 
 func _play_cup_fly_to_mouth(
@@ -70879,7 +71153,7 @@ func _play_cup_fly_to_mouth(
 			remaining_drink.show()
 			remaining_drink.remove_meta("serving")
 			if serving_was_active: cup_root = remaining_drink
-	, flavor, launch_delay)
+	, flavor, launch_delay, false, serving_drink if not companion and not presentation_only else null)
 
 
 func _play_serve_fly_to_mouth(
@@ -70927,6 +71201,7 @@ func _play_serve_fly_to_mouth(
 		on_done.call()
 		return
 
+	var visual_began := _perf_hot_begin()
 	var built: Dictionary = _build_serve_fly_stack(fly_root, station_index)
 	var stack: Control = built["stack"]
 	var bun_rows: Array = built.get("bun_rows", [])
@@ -70994,6 +71269,7 @@ func _play_serve_fly_to_mouth(
 
 	## Authoritative scoring/customer state commits now. The already-built pooled
 	## stack owns the textures it needs, so station cleanup cannot invalidate it.
+	_perf_hot_end("burger_visual_setup", visual_began)
 	on_done.call()
 	## Let that gameplay frame finish before presentation starts.
 	await get_tree().process_frame
@@ -71184,15 +71460,7 @@ func _play_serve_fly_to_mouth(
 				game_audio.play_serve_whoosh()
 		)
 		tw.tween_method(func(progress: float) -> void:
-			if not is_instance_valid(stack) or not is_instance_valid(camera):
-				return
-			var target := camera.unproject_position(_garbage_lerp_target_world())
-			var origin: Vector2 = throw_state["start"]
-			var point := origin.lerp(target, progress)
-			point.y -= sin(progress * PI) * 100.0
-			apply_stack_scale.call((throw_state["scale"] as Vector2) * lerpf(1.0, .30, progress))
-			stack.rotation = progress * PI * 1.25
-			_place_burger_sprite_center(stack, point)
+			_sample_rejected_burger_throw(stack, throw_state["start"], throw_state["scale"], progress)
 		, 0.0, 1.0, .42)
 		tw.tween_callback(func() -> void:
 			stack.hide()
@@ -71207,6 +71475,16 @@ func _play_serve_fly_to_mouth(
 	else:
 		BurgerServeTiming.append_handoff(tw,customer,celebration_hold + .04 + .05 + .26,follow_hands,bite,finish_serve)
 
+
+
+func _sample_rejected_burger_throw(stack: Control, origin: Vector2, start_scale: Vector2, progress: float) -> void:
+	if not is_instance_valid(stack) or not is_instance_valid(camera): return
+	var target := camera.unproject_position(_garbage_lerp_target_world())
+	var point := origin.lerp(target, progress)
+	point.y -= sin(progress * PI) * 100.0
+	stack.scale = start_scale * lerpf(1.0, .30, progress)
+	stack.rotation = progress * PI * 1.25
+	_place_burger_sprite_center(stack, point)
 
 
 func _spawn_serve_crumb_burst(_parent: Control, at: Vector2) -> void:
@@ -71731,11 +72009,9 @@ func _complete_serve(
 	cust.set_meta("meal_stars", float(deferred_review.get("stars", 0.0)))
 	if payout <= 0 and not guest_mp: _record_order_history(0,0,_order_food_cost(cust),cust)
 	if cached_review_pic != null:
-		var photo := cached_review_pic.get_image()
-		if photo != null:
-			if photo.is_compressed(): photo.decompress()
-			photo.resize(160,160,Image.INTERPOLATE_LANCZOS)
-			cust.set_meta("sales_photo",photo.save_png_to_buffer())
+		var photo_began := _perf_hot_begin()
+		cust.set_meta("sales_photo", cached_review_pic.get_meta("sales_png", PackedByteArray()))
+		_perf_hot_end("serve_sales_photo", photo_began, 1000)
 	## Hand off any ordered fountain drink with the burger (skip if already handed early).
 	if not GameDataScript.order_soda_ids(cust.order).is_empty() \
 			and not _customer_soda_handed(cust) and not bool(cust.get_meta("serve_missing_soda",false)):
@@ -71790,16 +72066,16 @@ func _finish_serve_deferred(station_index: int, customer: Node3D, review: Dictio
 	## then each get their own frames before review work begins on frame 5.
 	for _i in 4:
 		await get_tree().process_frame
-	if not review.is_empty() and (customer == null or is_instance_valid(customer)):
+	if not review.is_empty():
 		var review_began := _perf_hot_begin()
 		var stars := float(review.get("stars", 0.0))
 		var kind := str(review.get("kind", "serve"))
 		var tip := int(review.get("tip", 0))
 		var pic := review.get("pic") as Texture2D
-		if bool(review.get("force", false)):
-			_commit_social_review(stars, kind, tip, -1, customer, pic)
-		else:
-			_commit_social_review(stars, kind, tip, -1, customer, pic)
+		# Scene cleanup can free the customer across the awaited frames. Preserve
+		# the earned review without passing a freed object to the typed callback.
+		var review_customer: Node3D = customer if is_instance_valid(customer) else null
+		_commit_social_review(stars, kind, tip, -1, review_customer, pic)
 		_perf_hot_end("serve_review", review_began)
 	await get_tree().process_frame
 	_update_hud()
@@ -72111,7 +72387,7 @@ func _resolve_serve_customer():
 	for c in tickets.keys():
 		if _order_can_receive_burger(c):
 			selected_customer=c
-			if mp_enabled and NetManager.is_host(): mp_select_customer(_customer_net_id(c))
+			if mp_enabled and NetManager.is_host(): mp_select_customer(_customer_net_id(c), false)
 			break
 	if previous_customer != selected_customer: _highlight_tickets()
 	return selected_customer
@@ -75044,6 +75320,8 @@ func _mp_pack_social_feed() -> Dictionary:
 		breakdown_arr.append(breakdown.duplicate(true))
 		var pic_png: PackedByteArray = post.get("pic_png", PackedByteArray()) as PackedByteArray
 		var pic = post.get("pic")
+		if pic_png.is_empty() and pic is Texture2D:
+			pic_png = pic.get_meta("review_png", PackedByteArray())
 		if pic_png.is_empty() and pic is Texture2D:
 			var img: Image = (pic as Texture2D).get_image()
 			if img != null:
@@ -78311,25 +78589,25 @@ func mp_customer_serve_started(net_id: int) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_select_customer(net_id: int) -> void:
+func mp_select_customer(net_id: int, promote_mobile: bool = true) -> void:
 	if not NetManager.is_host():
-		if multiplayer.get_remote_sender_id()==0: mp_select_customer.rpc_id(1,net_id)
+		if multiplayer.get_remote_sender_id()==0: mp_select_customer.rpc_id(1,net_id,promote_mobile)
 		return
 	var c = _customer_by_net_id(net_id)
 	if not _order_can_receive_burger(c): return
 	_mp_order_revision+=1
-	mp_order_selected.rpc(net_id,_mp_order_revision)
+	mp_order_selected.rpc(net_id,_mp_order_revision,promote_mobile)
 	call_deferred("_try_auto_serve")
 
 @rpc("authority","call_local","reliable")
-func mp_order_selected(net_id: int, revision: int) -> void:
+func mp_order_selected(net_id: int, revision: int, promote_mobile: bool = false) -> void:
 	if revision < _mp_order_revision: return
-	if revision == _mp_order_revision and ((is_instance_valid(selected_customer) and _customer_net_id(selected_customer)==net_id) or (selected_customer==null and net_id<0)): return
+	if not promote_mobile and revision == _mp_order_revision and ((is_instance_valid(selected_customer) and _customer_net_id(selected_customer)==net_id) or (selected_customer==null and net_id<0)): return
 	_mp_order_revision=revision
 	var c = _customer_by_net_id(net_id)
 	if _order_can_receive_burger(c):
 		_mp_applying=true
-		_select_ticket_local(c)
+		_select_ticket_local(c, promote_mobile)
 		_mp_applying=false
 		_refresh_ticket_checkmarks()
 	elif net_id<0:
@@ -80033,7 +80311,9 @@ func _animate_click_transfer(patty: Area3D, to_build: bool, pos: Vector3) -> voi
 		end = _grill_plane_from_screen(_station_stack_screen_center(STATION_CRAFT)+Vector2(-30,-30))
 		if end==Vector3.ZERO: end=_cutting_board_world_center()
 		end.y=GRILL_SURFACE_Y+0.12
-	if game_audio: game_audio.play_scoop()
+	if game_audio:
+		game_audio.play_scoop()
+		if to_build and game_audio.has_method("play_build_whoosh"): game_audio.play_build_whoosh()
 	var tw:=create_tween()
 	tw.tween_method(func(t:float):
 		if not is_instance_valid(patty):return
@@ -80044,11 +80324,17 @@ func _animate_click_transfer(patty: Area3D, to_build: bool, pos: Vector3) -> voi
 		if not is_instance_valid(patty):return
 		patty.remove_meta("click_transfer");patty.rotation=Vector3.ZERO;patty.is_held=false
 		if to_build:
+			# A host snapshot can put the guest's patty on Build before its local
+			# flight finishes. The commit then correctly does nothing, but still
+			# play this flight's landing cue once on that peer.
+			var already_on_build: bool = stations[STATION_CRAFT].get("patties", []).has(patty)
 			if mp_enabled: mp_commit_patty_build(int(patty.net_id))
 			else:
 				var idx:=int(patty.slot_index)
 				_commit_patty_to_build(patty)
 				if patty.is_held and idx>=0 and grill[idx]==patty:grill[idx]=null
+			if already_on_build and is_instance_valid(game_audio) and game_audio.has_method("play_build_landing"):
+				game_audio.play_build_landing()
 		else: _place_spatula_on_warmer_local(int(patty.slot_index),pos,patty)
 		if mp_enabled and NetManager.is_host(): _mp_broadcast_grill()
 	)

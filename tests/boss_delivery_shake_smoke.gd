@@ -12,6 +12,15 @@ func run() -> void:
 	game.street_car_active = true
 	game._begin_cat_supply_delivery("lettuce", 8, "stock")
 	var delivery = game.mail_delivery_truck
+	var first_handoff: Vector3 = delivery.handoff
+	delivery._sync_courier_shape()
+	assert(delivery.handoff.is_equal_approx(first_handoff), "Delivery offset must not accumulate")
+	var old_handoff: Vector3 = delivery.HANDOFF_HOME
+	old_handoff.y=delivery.handoff.y
+	assert(absf(delivery.handoff.y + delivery.courier_rest_bottom * delivery.courier_base_scale.y * 1.25 - delivery.ground) < .001, "Courier body bottom must touch the road")
+	old_handoff.z=game.window_cat._home_z()+1.2192+maxf(0.0,delivery.courier_base_scale.z-1.0)*.12
+	assert(game.camera.unproject_position(delivery.handoff).x > game.camera.unproject_position(old_handoff).x, "Courier moves screen-right")
+	assert(delivery.handoff.distance_to(game.camera.global_position) < old_handoff.distance_to(game.camera.global_position), "Courier moves closer")
 	delivery.advance(.01)
 	assert(delivery.on_foot and delivery.phase == "walk" and not delivery.truck.visible)
 	assert(not delivery.drive_audio.playing and not delivery.horn_audio.playing and not delivery.skid_audio.playing)

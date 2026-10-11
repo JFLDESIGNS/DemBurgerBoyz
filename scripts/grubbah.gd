@@ -143,7 +143,8 @@ func sync_ticket() -> void:
   ticket_owner=preload("res://scripts/mobile_ticket_owner.gd").new();ticket_owner.name="MobileTicketOwner";ticket_owner.order.assign(state.items);ticket_owner.is_waiting=true;ticket_owner.patience=99999;ticket_owner.patience_max=99999
   ticket_owner.set_meta("mobile_order",true);ticket_owner.set_meta("mobile_number",int(state.number));ticket_owner.set_meta("mp_net_id",1000000+int(state.number));add_child(ticket_owner)
   game._create_ticket(ticket_owner)
-  if bool(state.get("selected",false)) or not is_instance_valid(game.selected_customer):game._select_ticket_local(ticket_owner)
+  if bool(state.get("selected",false)):game._select_ticket_local(ticket_owner)
+  elif not is_instance_valid(game.selected_customer):game._resolve_serve_customer()
   announce_arrival.call_deferred(ticket_owner)
  ticket_owner.is_waiting=str(state.get("phase",""))!="sealed"
  if not ticket_owner.is_waiting and game.selected_customer==ticket_owner:

@@ -4,6 +4,7 @@ var page: VBoxContainer
 var ledger: VBoxContainer
 var counter: Label
 var expanded := {}
+var photo_cache := {}
 func setup(g: Node, parent: Control) -> void:
  game=g
  page=VBoxContainer.new()
@@ -51,7 +52,12 @@ func label(parent: Control, text: String, color: Color=Color("E7EFED"), size: in
  parent.add_child(node)
  return node
 func refresh() -> void:
- if not is_instance_valid(ledger): return
+ if not is_instance_valid(ledger) or not page.visible: return
+ # Hidden phone pages rebuild when opened, not during serving.
+ var retained := {}
+ for row in game.order_history: retained[int(row.number)] = true
+ for number in photo_cache.keys():
+  if not retained.has(number): photo_cache.erase(number)
  for child in ledger.get_children():ledger.remove_child(child);child.queue_free()
  label(ledger,"MY SALES",Color("FFD06A"),18)
  label(ledger,"This session · Before boss cut",Color("9EBCB9"),11)
@@ -65,9 +71,15 @@ func refresh() -> void:
   label(body,"ORDER #%d  ·  DAY %d" % [row.number,row.day],Color("FFD06A"),13)
   var photo: PackedByteArray=row.get("photo",PackedByteArray())
   if not photo.is_empty():
-   var img:=Image.new()
-   if img.load_png_from_buffer(photo)==OK:
-    var pic:=TextureRect.new();pic.texture=ImageTexture.create_from_image(img)
+   var cached: Dictionary = photo_cache.get(int(row.number), {})
+   var texture: Texture2D = cached.get("texture") if cached.get("bytes", PackedByteArray()) == photo else null
+   if texture == null:
+    var img:=Image.new()
+    if img.load_png_from_buffer(photo)==OK:
+     texture=ImageTexture.create_from_image(img)
+     photo_cache[int(row.number)]={"bytes":photo,"texture":texture}
+   if texture != null:
+    var pic:=TextureRect.new();pic.texture=texture
     pic.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;pic.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
     pic.custom_minimum_size=Vector2(0,112);body.add_child(pic)
   var names:=PackedStringArray()

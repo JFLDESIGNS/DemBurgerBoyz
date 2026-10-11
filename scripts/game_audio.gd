@@ -487,7 +487,7 @@ func _sfx_db(base_db: float, key: String) -> float:
 func _sfx_category_for_cache_key(key: String) -> String:
 	if key.begins_with("ui_") or key.begins_with("error"):
 		return "ui"
-	if key.begins_with("ing_") or key.begins_with("bun_") or key.begins_with("cutting_"):
+	if key.begins_with("ing_") or key.begins_with("ingredient_") or key.begins_with("slingshot_") or key.begins_with("bun_") or key.begins_with("cutting_"):
 		return "ingredients"
 	if "flip" in key or "whoosh" in key or key.begins_with("scoop"):
 		return "flip_whoosh"
@@ -1417,6 +1417,10 @@ func play_challenge_fail_ohhh() -> void:
 	pass
 
 
+func prewarm_truck_opening_audio() -> void:
+	await _prewarm_cache_entry_async("happy_four_note",func():return _make_arpeggio_tune([60,64,67,72],.125,.20,.12,true))
+
+
 func play_happy_four_note() -> float:
 	## Short major-arpeggio sting (C–E–G–C) before the Burger Pals VO.
 	var step := 0.125
@@ -1825,6 +1829,15 @@ func play_serve_whoosh() -> void:
 	_play_cached("serve_whoosh", _make_serve_whoosh, 0.0, 0.38)
 
 
+func play_build_whoosh() -> void:
+	# Reuse the loading-warmed stream so the first transfer does not synthesize audio.
+	_play_cached("serve_whoosh", _make_serve_whoosh, 1.08, 0.62)
+
+
+func play_build_landing() -> void:
+	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.08, 0.82)
+
+
 func play_spatula_whoosh() -> void:
 	## Air rush for the spatula flip flourish.
 	## 20% quieter than prior 0.084 gain.
@@ -2152,6 +2165,7 @@ func prewarm_all_gameplay_audio() -> void:
 const WAWA_PATH := "res://sounds/wawawa.ogg"
 const GROBBLE_CLIP_SEC := 3.0
 const GROBBLE_FADE_IN_SEC := 0.3
+const CUSTOMER_WAWA_FADE_SEC := 0.05
 const CLICK_WAWA_CLIP_SEC := 1.15
 const DANCE_WAWA_CLIP_SEC := 3.0
 const DANCE_WAWA_PITCH := 1.42
@@ -2170,11 +2184,17 @@ var _customer_dance_wawa: AudioStreamPlayer = null
 var _customer_dance_wawa_token: int = 0
 const GROBBLE_PITCH := 1.293 ## prior 1.22 × +6%
 
+func _male_customer_wawa_db(impatience: float = 0.5) -> float:
+	# The male recording is ~11 dB quieter than the female source. Compensate
+	# here, not on the shared clip used by the boss and robot.
+	return _sfx_db(lerpf(9.5, 10.5, clampf(impatience, 0.0, 1.0)), "customers")
+
+
 func play_customer_grobble(impatience: float = 0.5, voice: String = "male") -> void:
 	if voice == "female":
 		_play_female_customer_wawa(3.0)
 		return
-	## Random 3s slice of wawawa.ogg — pitched up, fade in over 0.3s, then stop.
+	## Random 3s slice of wawawa.ogg — pitched up, brief attack, then stop.
 	if not ResourceLoader.exists(WAWA_PATH):
 		return
 	if not _cache.has("wawawa"):
@@ -2188,19 +2208,17 @@ func play_customer_grobble(impatience: float = 0.5, voice: String = "male") -> v
 	var source_needed := GROBBLE_CLIP_SEC * GROBBLE_PITCH
 	var max_start := maxf(0.0, length - source_needed)
 	var start_at := randf() * max_start if max_start > 0.0 else 0.0
-	## Louder as they wait — up to +8% by late patience.
-	var base_gain := lerpf(0.62, 0.82, clampf(impatience, 0.0, 1.0))
-	var gain := base_gain * lerpf(1.0, 1.08, clampf(impatience, 0.0, 1.0))
-	var target_db := linear_to_db(gain)
+	## Keep the original non-spatial voice audible across the queue.
+	var target_db := _male_customer_wawa_db(impatience)
 	var p := AudioStreamPlayer.new()
 	p.bus = "SFX"
 	p.stream = stream
 	p.pitch_scale = GROBBLE_PITCH
-	p.volume_db = -80.0
+	p.volume_db = target_db - 12.0
 	add_child(p)
 	p.play(start_at)
 	var tw := create_tween()
-	tw.tween_property(p, "volume_db", target_db, GROBBLE_FADE_IN_SEC)
+	tw.tween_property(p, "volume_db", target_db, CUSTOMER_WAWA_FADE_SEC)
 	var tree := get_tree()
 	if tree == null:
 		return
@@ -2308,9 +2326,7 @@ func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male") -
 	var source_needed := CLICK_WAWA_CLIP_SEC * GROBBLE_PITCH
 	var max_start := maxf(0.0, length - source_needed)
 	var start_at := randf() * max_start if max_start > 0.0 else 0.0
-	var base_gain := lerpf(0.62, 0.82, clampf(impatience, 0.0, 1.0))
-	var gain := base_gain * lerpf(1.0, 1.08, clampf(impatience, 0.0, 1.0))
-	var target_db := linear_to_db(gain)
+	var target_db := _male_customer_wawa_db(impatience)
 	if _customer_click_wawa == null or not is_instance_valid(_customer_click_wawa):
 		_customer_click_wawa = AudioStreamPlayer.new()
 		_customer_click_wawa.name = "CustomerClickWawa"
@@ -2320,11 +2336,11 @@ func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male") -
 		_customer_click_wawa_tween.kill()
 	_customer_click_wawa.stream = stream
 	_customer_click_wawa.pitch_scale = GROBBLE_PITCH
-	_customer_click_wawa.volume_db = -80.0
+	_customer_click_wawa.volume_db = target_db - 12.0
 	_customer_click_wawa.stop()
 	_customer_click_wawa.play(start_at)
 	_customer_click_wawa_tween = create_tween()
-	_customer_click_wawa_tween.tween_property(_customer_click_wawa, "volume_db", target_db, GROBBLE_FADE_IN_SEC)
+	_customer_click_wawa_tween.tween_property(_customer_click_wawa, "volume_db", target_db, CUSTOMER_WAWA_FADE_SEC)
 	_customer_click_wawa_stop_at_msec = Time.get_ticks_msec() + int(CLICK_WAWA_CLIP_SEC * 1000.0)
 	var stop_token := _customer_click_wawa_stop_at_msec
 	var tree := get_tree()
@@ -2368,7 +2384,7 @@ func play_customer_dance_wawa(duration_sec: float = DANCE_WAWA_CLIP_SEC, voice: 
 	_customer_dance_wawa.stop()
 	_customer_dance_wawa.stream = stream
 	_customer_dance_wawa.pitch_scale = DANCE_WAWA_PITCH
-	_customer_dance_wawa.volume_db = _sfx_db(0.72, "world")
+	_customer_dance_wawa.volume_db = _male_customer_wawa_db()
 	_customer_dance_wawa.play(start_at)
 	var tree := get_tree()
 	if tree == null:
@@ -3860,7 +3876,7 @@ func _play_female_customer_wawa(duration: float) -> void:
 		if token == _female_customer_wawa_token and is_instance_valid(_female_customer_wawa): _female_customer_wawa.stop()
 	)
 
-func play_customer_nom_nom(voice: String, speaker: Node) -> void:
+func play_customer_nom_nom(voice: String, speaker: Node, pitch: float = 1.0) -> void:
 	if not is_instance_valid(speaker): return
 	var player := speaker.get_node_or_null("CustomerEatingVoice") as AudioStreamPlayer
 	if player == null:
@@ -3869,7 +3885,7 @@ func play_customer_nom_nom(voice: String, speaker: Node) -> void:
 		player.name = "CustomerEatingVoice"
 		speaker.add_child(player)
 	player.stream = preload("res://scripts/customer_voice.gd").stream(voice,true)
-	player.pitch_scale = 1.0
+	player.pitch_scale = pitch
 	player.volume_db = _sfx_db(0.75,"customers")
 	player.play()
 
@@ -3885,11 +3901,12 @@ func play_boss_peek_boing() -> void:
 	_play_cached("boss_peek_boing",func():return _make_comic_pop(true),1.0,.9)
 
 func play_ingredient_plap() -> void:
-	_play_cached("ingredient_plap",func():return _make_comic_pop(false),randf_range(.94,1.08),.60)
+	_play_cached("ingredient_plap_v2",_make_food_smack,randf_range(.94,1.06),1.0)
 
 func start_slingshot_stretch() -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
-	player.bus = "SFX"; player.stream = _make_slingshot_sound(true)
+	if not _cache.has("sling_elastic_v2"): _cache["sling_elastic_v2"] = _make_slingshot_sound(true)
+	player.bus = "SFX"; player.stream = _cache["sling_elastic_v2"]
 	player.volume_db = _sfx_db(-9.0,"ingredients")
 	add_child(player); player.play()
 	return player
@@ -3898,18 +3915,33 @@ func play_slingshot_release() -> void:
 	_play_cached("slingshot_release",func(): return _make_slingshot_sound(false),randf_range(.95,1.08),.85)
 
 func _make_slingshot_sound(stretch: bool) -> AudioStreamWAV:
-	var duration := .4 if stretch else .24
+	var duration := .72 if stretch else .24
 	var n := int(MIX_RATE*duration)
 	var pcm := PackedByteArray(); pcm.resize(n*2)
 	var phase := 0.0
 	for i in n:
 		var t := float(i)/MIX_RATE
-		var frequency := 160.0+35.0*sin(TAU*t/duration*3) if stretch else lerpf(780,90,t/duration)
+		var u := t/duration
+		# Rubbery rising creak with a warbling overtone and soft loop ends.
+		var frequency := 210.0 + 260.0*u + 48.0*sin(TAU*u*3.0) if stretch else lerpf(780,90,u)
 		phase += TAU*frequency/MIX_RATE
-		var env := .7 if stretch else exp(-t*13)*minf(1,t/.004)
-		var sample := (sin(phase+sin(phase*.5)*1.5)*.7 + (randf_range(-1,1)*.2 if not stretch else 0.0))*env
-		_write_s16(pcm,i,int(clampf(sample,-1,1)*22000))
+		var env := pow(sin(PI*u), .45)*.65 if stretch else exp(-t*13)*minf(1,t/.004)
+		var sample := (sin(phase+sin(phase*.5)*.85)*.72 + sin(phase*2.0)*.16)*env
+		_write_s16(pcm,i,int(clampf(sample,-1,1)*26000))
 	return _wav_from_pcm(pcm,stretch)
+
+func _make_food_smack() -> AudioStreamWAV:
+	var n := int(MIX_RATE*.24)
+	var pcm := PackedByteArray(); pcm.resize(n*2)
+	var phase := 0.0
+	for i in n:
+		var t := float(i)/MIX_RATE
+		phase += TAU*(65.0+230.0*exp(-t*38.0))/MIX_RATE
+		var attack := minf(t/.0025,1.0)
+		var body := sin(phase+.45*sin(phase*2.0))*exp(-t*18.0)*.8
+		var slap := randf_range(-1,1)*exp(-t*65.0)*.42
+		_write_s16(pcm,i,int(clampf((body+slap)*attack,-1,1)*29000))
+	return _wav_from_pcm(pcm,false)
 
 func _make_comic_pop(peek: bool) -> AudioStreamWAV:
 	var duration:=.34 if peek else .15

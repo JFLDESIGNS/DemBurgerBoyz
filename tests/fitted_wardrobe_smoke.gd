@@ -85,7 +85,7 @@ func _run() -> void:
 		print("FITTED_TOP_OK ", style, " triangles=", triangles)
 	var old := {"top_style": 2, "top_color": "123456ff", "shirt_graphic": 9}
 	ModularCharacterBase.Wardrobe.migrate_preset(old)
-	assert(old.top_style == 11 and old.top_color == "ffffffff" and old.shirt_graphic == 9)
+	assert(old.top_style == 11 and old.top_color == "123456ff" and old.shirt_graphic == 9, "Legacy wardrobe migration preserves the saved palette")
 	var current := {"top_catalog_version": 1, "top_style": 12, "top_color": "aabbccff", "shirt_graphic": 4, "shirt_graphic_scale": 1.2}
 	character.apply_saved_preset(current)
 	assert(character.top_style == 12 and character.shirt_graphic == 4)

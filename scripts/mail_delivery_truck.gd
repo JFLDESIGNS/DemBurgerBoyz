@@ -18,8 +18,12 @@ var ground := 0.0
 var stop := Vector3.ZERO
 var seat := Vector3.ZERO
 var doorstep := Vector3.ZERO
-var handoff := Vector3(1.38, 0.741, 2.9792)
+const HANDOFF_HOME := Vector3(1.38, 0.741, 2.9792)
+const HANDOFF_RIGHT_METERS := 0.3048
+const HANDOFF_CLOSER_METERS := 0.1524
+var handoff := HANDOFF_HOME
 var courier_base_scale := Vector3.ONE
+var courier_rest_bottom := 0.0
 var old_cat_visible := false
 var old_cat_process := true
 var body_rest := Vector3.ZERO
@@ -65,6 +69,10 @@ func _ready() -> void:
 	add_child(courier)
 	cat_visual = CAT.instantiate()
 	courier.add_child(cat_visual)
+	var cat_body := cat_visual.find_child("Cat_Body", true, false) as MeshInstance3D
+	if cat_body != null:
+		var local_body := cat_visual.global_transform.affine_inverse() * cat_body.global_transform
+		courier_rest_bottom = (local_body * cat_body.get_aabb()).position.y
 	preload("res://scripts/cat_appearance.gd").apply_fur(cat_visual)
 	for eye_name in ["Cat_Eye_L", "Cat_Eye_R"]:
 		var eye = cat_visual.find_child(eye_name, true, false)
@@ -199,6 +207,7 @@ func advance(delta: float) -> void:
 			if body: body.rotation.x = sin(u * PI) * 0.025
 			if u >= 1:
 				doorstep = truck.to_global(Vector3(1.95, 0.05, 0.50))
+				doorstep.y = handoff.y
 				set_phase("hop_out")
 		"hop_out":
 			var u := clampf(elapsed / 0.85, 0, 1)
@@ -341,13 +350,19 @@ func _exit_tree() -> void:
 
 
 func _sync_courier_shape() -> void:
-	if not is_instance_valid(game.window_cat) or not game.window_cat.has_method("delivery_visual_scale"): return
-	courier_base_scale = game.window_cat.delivery_visual_scale()
-	var giant: float = game.window_cat._giant
-	cat_visual.position.y = -0.335 * (game.window_cat._size_mul() - game.window_cat.DEFAULT_SIZE_MUL)
-	# Three extra feet of clearance for the courier's enlarged parcel at the van.
-	handoff.z = game.window_cat._home_z() + 1.2192 + maxf(0.0, courier_base_scale.z - 1.0) * 0.12
-	handoff.y = game.window_cat._shown_y()
+	handoff = HANDOFF_HOME
+	if is_instance_valid(game.window_cat) and game.window_cat.has_method("delivery_visual_scale"):
+		courier_base_scale = game.window_cat.delivery_visual_scale()
+		handoff.z = game.window_cat._home_z() + 1.2192 + maxf(0.0, courier_base_scale.z - 1.0) * 0.12
+	# The courier stands on the road; the window cat's raised peek pose is not
+	# a ground height. Align the model bottom at the actual walking scale.
+	cat_visual.position.y = 0.0
+	handoff.y = ground - courier_rest_bottom * courier_base_scale.y * 1.25
+	var delivery_camera := game.get("camera") as Camera3D
+	if is_instance_valid(delivery_camera):
+		var right := Vector3(delivery_camera.global_basis.x.x, 0, delivery_camera.global_basis.x.z).normalized()
+		var closer := Vector3(delivery_camera.global_position.x - handoff.x, 0, delivery_camera.global_position.z - handoff.z).normalized()
+		handoff += right * HANDOFF_RIGHT_METERS + closer * HANDOFF_CLOSER_METERS
 
 
 func waiting_for_treat() -> bool:

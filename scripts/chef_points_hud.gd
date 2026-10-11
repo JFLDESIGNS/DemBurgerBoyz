@@ -8,6 +8,7 @@ var number: Label
 var climb: Tween
 var sound: AudioStreamPlayer
 var active_pop: Label
+var reward_tween: Tween
 var reward_queue: Array[Dictionary] = []
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -60,12 +61,19 @@ func set_total(total: int, amount: int = 0, reason: String = "") -> void:
 	if is_instance_valid(climb):climb.kill()
 	if amount<=0 or challenge_active():
 		_draw_count(total);return
+	_draw_count(total)
 	climb=create_tween()
-	climb.tween_method(_draw_count,shown,float(total),0.65).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	number.modulate=Color(1.35,1.2,0.85)
-	climb.parallel().tween_property(number,"modulate",Color.WHITE,0.65)
+	climb.tween_property(number,"modulate",Color.WHITE,0.18)
+	# Feedback belongs to the action happening now, not a multi-second backlog.
+	reward_queue.clear()
+	if is_instance_valid(active_pop):
+		active_pop.text="+%d CHEF POINTS  -  %s" % [amount,reason]
+		_position_reward(active_pop)
+		_animate_reward(active_pop, amount, false)
+		return
 	reward_queue.append({"amount":amount,"reason":reason})
-	if not is_instance_valid(active_pop): _show_next_reward()
+	_show_next_reward()
 
 func _show_next_reward() -> void:
 	if challenge_active(): reward_queue.clear(); return
@@ -88,17 +96,24 @@ func _show_next_reward() -> void:
 	_position_reward(pop)
 	pop.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT;pop.z_index=90
 	pop.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
-	pop.modulate.a=0.0
+	_animate_reward(pop, int(reward.amount), true)
+
+func _animate_reward(pop: Label, amount: int, sparkles: bool) -> void:
+	if is_instance_valid(reward_tween): reward_tween.kill()
+	pop.modulate.a=1.0
 	pop.scale=Vector2(0.85,0.85)
-	var fly:=pop.create_tween();fly.tween_property(pop,"modulate:a",1.0,0.12)
-	fly.parallel().tween_property(pop,"scale",Vector2.ONE,0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var fly:=pop.create_tween()
+	reward_tween=fly
+	fly.tween_property(pop,"scale",Vector2.ONE,0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	fly.tween_interval(2.1)
 	fly.tween_property(pop,"modulate:a",0.0,0.3)
 	fly.tween_callback(func():
-		pop.queue_free();active_pop=null;_show_next_reward()
+		pop.queue_free()
+		if active_pop == pop:
+			active_pop=null;_show_next_reward()
 	)
-	_sparkle_burst(pop)
-	sound.pitch_scale=1.0+minf(float(reward.amount)/200.0,0.18);sound.play()
+	if sparkles: _sparkle_burst(pop)
+	sound.pitch_scale=1.0+minf(float(amount)/200.0,0.18);sound.play()
 
 
 func _sparkle_burst(pop: Control) -> void:

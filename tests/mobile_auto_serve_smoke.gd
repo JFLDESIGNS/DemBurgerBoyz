@@ -25,10 +25,13 @@ func run() -> void:
 	g.fryer_ready_servings = 0
 	m._process(.01); assert(m.state.phase == "bagging")
 	var drink = Node3D.new(); g.add_child(drink); g.ready_drink = drink
+	g.cup_root=drink;g.cup_soda_fill=1.0;g.cup_flavor="cola"
 	m._process(.01)
-	assert(m.state.phase == "bagging" and g.drinks_consumed == 0, "Do not consume drink while fries missing")
+	assert(m.state.phase == "bagging" and g.drinks_consumed == 1, "Ready drink packs once while waiting for fries")
 	g.fryer_ready_servings = 1
 	m._process(.01)
+	assert(m.state.phase == "bagging", "Wait for required sides to finish flying into the bag")
+	m._process(m.SIDE_BAG_FLIGHT+.01)
 	assert(m.state.phase == "sealed" and g.fryer_ready_servings == 0 and g.drinks_consumed == 1)
 	assert(not m.try_seal_bag() and g.drinks_consumed == 1)
 	m.state.phase = "bagging"; m.state.items = ["bun_bottom","patty","bun_top"]

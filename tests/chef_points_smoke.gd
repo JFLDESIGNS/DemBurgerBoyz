@@ -18,8 +18,13 @@ func run()->void:
  game._chef_fresh_serve(p,0.799,100);assert(game.chef_points==30)
  game._chef_fresh_serve(p,0.8,0);assert(game.chef_points==30)
  game._chef_fresh_serve(p,0.8,100);assert(game.chef_points==45)
+ var reward_id=game.chef_points_hud.active_pop.get_instance_id()
  game._chef_award_once(p,"review",25,"Five-star review")
  assert(game.chef_points==70)
+ assert(game.chef_points_hud.number.text=="70", "Chef total must update in the award frame")
+ assert(game.chef_points_hud.active_pop.text.contains("Five-star review"), "Latest reward must appear immediately")
+ assert(game.chef_points_hud.reward_queue.is_empty(), "Rewards must not build a delayed backlog")
+ assert(game.chef_points_hud.active_pop.get_instance_id()==reward_id, "Reward bursts reuse their popup")
  game._apply_chef_points(999,1,999,"Stale");assert(game.chef_points==70)
  game._show_customer_review_ui(5.0,"Delicious! Fresh and perfectly cooked.")
  assert(game._review_toast.visible)
@@ -34,7 +39,12 @@ func run()->void:
  if DisplayServer.get_name()!="headless":
   await RenderingServer.frame_post_draw
   root.get_texture().get_image().save_png(OS.get_environment("CHEF_PREVIEW"))
- assert(game.chef_points_hud.active_pop.text.contains("Perfect flip"),"Reward reason stays visible")
+ assert(game.chef_points_hud.active_pop.text.contains("Five-star review"),"Latest reward reason stays visible")
+ var departed=Node3D.new()
+ game.add_child(departed);game.customers.append(departed)
+ departed.free()
+ game._clear_customers()
+ assert(game.customers.is_empty(), "Cleanup must tolerate already-freed departing customers")
  print("CHEF_POINTS_OK")
  game.queue_free()
  for i in 8:await process_frame

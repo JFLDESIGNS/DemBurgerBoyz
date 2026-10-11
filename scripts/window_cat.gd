@@ -553,12 +553,7 @@ func _clear_mouth_burger() -> void:
 
 
 func _burst_hearts() -> void:
-	_ensure_hearts()
-	if _hearts == null:
-		return
-	_hearts.restart()
-	_hearts.emitting = true
-
+	preload("res://scripts/love_hearts.gd").burst(self, Vector3(0,.62,.06), .7)
 
 func get_mp_sync() -> Dictionary:
 	return {
@@ -715,7 +710,9 @@ func _process(delta: float) -> void:
 			rotation_degrees.y = _yaw_look(_run_from,_run_to)
 			if _timer <= 0:
 				var audio = get_tree().get_first_node_in_group("game_audio")
-				if is_instance_valid(audio): audio.play_cat_cartoon_smack()
+				if is_instance_valid(audio):
+					audio.play_cat_cartoon_smack()
+					audio.play_cat_begging_meow(1.15)
 				var person = get_meta("swat_customer").get_ref()
 				if is_instance_valid(person):
 					person.shake_angry(.4,.04,1.0)

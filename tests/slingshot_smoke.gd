@@ -29,8 +29,11 @@ func run() -> void:
 	sling.launch("tomato",Vector2(350,400),target)
 	await create_timer(.65).timeout
 	assert(g.hits==1,"Projectile reaches the aimed customer")
+	sling.launch("tomato",Vector2(350,400),target+Vector2(50,100))
+	await create_timer(.65).timeout
+	assert(g.hits==2,"A slightly short, off-center pull catches the customer")
 	sling.launch("tomato",Vector2(350,400),target+Vector2(1000,0))
 	await create_timer(.65).timeout
-	assert(g.hits==1,"Misses do not auto-aim onto the customer")
+	assert(g.hits==2,"Misses do not auto-aim onto the customer")
 	print("SLINGSHOT_OK: reverse aim, one stock, cancel, direct-drag path, sounds, hit and miss")
 	g.queue_free(); await process_frame; quit()

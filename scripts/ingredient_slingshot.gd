@@ -8,7 +8,7 @@ var pulling := false
 var stretch_player: AudioStreamPlayer
 
 static func aim_point(start: Vector2, release: Vector2, viewport_height: float) -> Vector2:
-	return start + (start-release) * clampf(viewport_height/145.0,3.0,8.0)
+	return start + (start-release) * clampf(viewport_height/120.0,3.5,9.5)
 
 func handle_input(event: InputEvent) -> bool:
 	if not game.playing or game.options_menu_open or game.shift_paused or game._boss_speech_active():
@@ -52,7 +52,7 @@ func handle_input(event: InputEvent) -> bool:
 			if game.game_audio:
 				stretch_player = game.game_audio.start_slingshot_stretch()
 		if pulling:
-			if is_instance_valid(stretch_player): stretch_player.pitch_scale = lerpf(.8,1.8,clampf(pull.length()/180,0,1))
+			if is_instance_valid(stretch_player): stretch_player.pitch_scale = lerpf(.85,1.35,clampf(pull.length()/180,0,1))
 			queue_redraw(); return true
 	return false
 
@@ -83,33 +83,72 @@ func _draw() -> void:
 		var size := Vector2(75*(1-power*.25),55*(1+power*.45))
 		draw_texture_rect(tex,Rect2(pointer-size*.5,size),false)
 
+# Screen-space assistance also covers pulls that stop a little below a face.
+func catch_target(target: Vector2) -> Node3D:
+	var best: Node3D = null
+	var best_score := 1.0
+	var screen: Vector2 = game._gui_to_camera_screen(target)
+	var height: float = game.camera.get_viewport().get_visible_rect().size.y
+	var targets: Array = game.customers.duplicate()
+	if is_instance_valid(game.window_cat): targets.append(game.window_cat)
+	for subject in targets:
+		if not is_instance_valid(subject) or not subject is Node3D or not subject.is_visible_in_tree(): continue
+		var head: Vector3 = subject.head_global() if subject == game.window_cat else game._customer_head_world(subject)
+		if game.camera.is_position_behind(head): continue
+		var offset: Vector2 = screen - game.camera.unproject_position(head)
+		var score := Vector2(offset.x / (height * .13), offset.y / (height * .24)).length()
+		if score < best_score:
+			best_score = score
+			best = subject
+	return best
+
 func launch(id: String, source: Vector2, target: Vector2) -> void:
 	if not is_instance_valid(game.camera) or not is_instance_valid(game.world): return
 	if game.game_audio: game.game_audio.play_slingshot_release()
 	var start: Vector3 = game.camera.project_position(game._gui_to_camera_screen(source),1.15)
 	var depth := 3.0
-	var found := false
-	for customer in game.customers:
-		if not is_instance_valid(customer) or not customer is Node3D or not customer.is_visible_in_tree(): continue
-		var head: Vector3 = game._customer_head_world(customer)
+	var aim_screen: Vector2 = game._gui_to_camera_screen(target)
+	var best_distance := INF
+	var targets: Array = game.customers.duplicate()
+	if is_instance_valid(game.window_cat) and game.window_cat.is_visible_in_tree(): targets.append(game.window_cat)
+	for subject in targets:
+		if not is_instance_valid(subject) or not subject is Node3D or not subject.is_visible_in_tree(): continue
+		var head: Vector3 = subject.head_global() if subject == game.window_cat else game._customer_head_world(subject)
+		if game.camera.is_position_behind(head): continue
 		var d: float = -game.camera.to_local(head).z
-		if d>1.2 and (not found or d<depth): depth=d; found=true
+		var screen_distance: float = game.camera.unproject_position(head).distance_to(aim_screen)
+		if d > 1.2 and screen_distance < best_distance:
+			depth = d + .12
+			best_distance = screen_distance
 	var end: Vector3 = game.camera.project_position(game._gui_to_camera_screen(target),depth)
+	var assisted := catch_target(target)
 	var flyer: MeshInstance3D = game._make_thrown_ingredient_card(id,game.FoodSpritesScript.get_tex(id))
 	game.world.add_child(flyer); flyer.global_position=start
 	var state := {"previous":start,"hit":false}
 	var tween := create_tween()
 	tween.tween_method(func(t: float):
 		if not is_instance_valid(flyer) or state.hit: return
+		if is_instance_valid(assisted) and assisted.is_visible_in_tree():
+			end = assisted.head_global() if assisted == game.window_cat else game._customer_head_world(assisted)
 		var pos := start.lerp(end,t)
 		# A quick shallow arc still lands exactly on the aimed point.
 		pos.y += sin(PI*t)*.10
+		var cat = game.window_cat
+		if is_instance_valid(cat) and cat.is_visible_in_tree():
+			var cat_head: Vector3 = cat.head_global()
+			var cat_nearest := Geometry3D.get_closest_point_to_segment(cat_head, state.previous, pos)
+			if cat_nearest.distance_to(cat_head) < .32:
+				state.hit = true
+				game._apply_cat_ingredient_hit(id, cat_nearest)
+				tween.kill()
+				flyer.queue_free()
+				return
 		for customer in game.customers:
 			if not is_instance_valid(customer) or not customer is Node3D or not customer.is_visible_in_tree(): continue
 			var head: Vector3 = game._customer_head_world(customer)
 			for spot in [head,head+Vector3(0,-.28,0)]:
 				var nearest := Geometry3D.get_closest_point_to_segment(spot,state.previous,pos)
-				if nearest.distance_to(spot)<.23:
+				if nearest.distance_to(spot)<.31:
 					state.hit=true
 					game._apply_customer_ingredient_hit(customer,id,nearest,"face" if spot==head else "body")
 					tween.kill()

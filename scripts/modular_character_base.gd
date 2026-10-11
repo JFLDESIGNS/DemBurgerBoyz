@@ -1030,6 +1030,17 @@ static var _garment_mesh_cache: Dictionary = {}
 var _rebuild_suspended := false
 @export var defer_initial_appearance := false
 var gameplay_character := false
+var appearance_costs: Dictionary = {}
+var _gameplay_appearance_key := ""
+static var _gameplay_clothing_materials: Dictionary = {}
+
+func _appearance_material(part: String, factory: Callable) -> Material:
+	if not gameplay_character or _gameplay_appearance_key.is_empty(): return factory.call()
+	var key: Array = [_gameplay_appearance_key, part]
+	if not _gameplay_clothing_materials.has(key):
+		if _gameplay_clothing_materials.size() >= 256: _gameplay_clothing_materials.clear()
+		_gameplay_clothing_materials[key] = factory.call()
+	return _gameplay_clothing_materials[key]
 
 
 var surface_look: Dictionary = {}
@@ -1068,7 +1079,10 @@ func _should_rebuild() -> bool:
 
 
 func _rebuild_all_appearance() -> void:
+	var began := Time.get_ticks_usec()
 	_apply_skin_material()
+	appearance_costs["skin_ms"] = (Time.get_ticks_usec()-began)/1000.0
+	began = Time.get_ticks_usec()
 	_build_eyes()
 	_build_lashes()
 	_build_cheeks()
@@ -1076,13 +1090,18 @@ func _rebuild_all_appearance() -> void:
 	_build_nose()
 	_build_mouth()
 	_build_ears()
+	appearance_costs["face_ms"] = (Time.get_ticks_usec()-began)/1000.0
+	began = Time.get_ticks_usec()
 	_build_hair()
 	_build_facial_hair()
 	_build_hat()
 	_build_glasses()
 	_build_makeup()
 	_build_jewelry()
+	appearance_costs["accessories_ms"] = (Time.get_ticks_usec()-began)/1000.0
+	began = Time.get_ticks_usec()
 	_build_clothing()
+	appearance_costs["clothes_ms"] = (Time.get_ticks_usec()-began)/1000.0
 
 
 func rebuild_appearance() -> void:
@@ -1709,6 +1728,9 @@ func load_control_rig_targets(values: Variant) -> void:
 ## Saved poses are ignored so game customers start from a clean skeleton before
 ## the normal Food Flip idle and walk animations are attached.
 func apply_saved_preset(data: Dictionary) -> void:
+	# Exact saved appearance, including print and surface controls. Creator
+	# materials stay editable and unshared; departure takes a private fade copy.
+	_gameplay_appearance_key = JSON.stringify(data) if gameplay_character else ""
 	surface_look = data.get("surface_look", {}).duplicate() if data.get("surface_look", {}) is Dictionary else {}
 	data = data.duplicate(true)
 	data["customer_voice"] = preload("res://scripts/customer_voice.gd").resolve(data)
@@ -2324,12 +2346,7 @@ func _build_lashes() -> void:
 	## by the eyelid shader so it always follows the almond opening.
 
 
-func _build_cheeks() -> void:
-	if _cheeks_root == null:
-		return
-	_clear(_cheeks_root)
-	if cheek_style == CheekStyle.NONE:
-		return
+func _make_cheek_material() -> StandardMaterial3D:
 	var gradient := Gradient.new()
 	gradient.offsets = PackedFloat32Array([0.0, 0.58, 1.0])
 	var center_color := cheek_color
@@ -2351,6 +2368,16 @@ func _build_cheeks() -> void:
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.no_depth_test = false
+	return material
+
+
+func _build_cheeks() -> void:
+	if _cheeks_root == null:
+		return
+	_clear(_cheeks_root)
+	if cheek_style == CheekStyle.NONE:
+		return
+	var material := _appearance_material("cheeks", _make_cheek_material) as StandardMaterial3D
 	var cheek_x := 0.245 * cheek_spacing
 	var cheek_y := 0.19 + cheek_vertical
 	var cheek_z := 0.493 + cheek_depth
@@ -2841,7 +2868,7 @@ func _build_fitted_top() -> void:
 	_fitted_top.transform = _clothing_root.global_transform.affine_inverse() * body_mesh.global_transform
 	_fitted_top.skeleton = _fitted_top.get_path_to(skeleton)
 	for surface in mesh.get_surface_count():
-		var material := Wardrobe.fabric_material(mesh.surface_get_material(surface), top_color)
+		var material := _appearance_material("top_%d" % surface, func(): return Wardrobe.fabric_material(mesh.surface_get_material(surface), top_color)) as ShaderMaterial
 		_top_material_refs.append(material)
 		_fitted_top.set_surface_override_material(surface, material)
 
@@ -2864,7 +2891,7 @@ func _build_fitted_bottom() -> void:
 	_fitted_bottom.transform = _clothing_root.global_transform.affine_inverse() * body_mesh.global_transform
 	_fitted_bottom.skeleton = _fitted_bottom.get_path_to(skeleton)
 	for surface in mesh.get_surface_count():
-		var material := Wardrobe.fabric_material(mesh.surface_get_material(surface), bottom_color)
+		var material := _appearance_material("bottom_%d" % surface, func(): return Wardrobe.fabric_material(mesh.surface_get_material(surface), bottom_color)) as ShaderMaterial
 		_bottom_material_refs.append(material)
 		_fitted_bottom.set_surface_override_material(surface, material)
 
@@ -2896,7 +2923,7 @@ func _build_shoes() -> void:
 	_fitted_shoes.transform = _clothing_root.global_transform.affine_inverse() * body_mesh.global_transform
 	_fitted_shoes.skeleton = _fitted_shoes.get_path_to(skeleton)
 	for surface in mesh.get_surface_count():
-		_fitted_shoes.set_surface_override_material(surface, Footwear.shoe_material(mesh.surface_get_material(surface), shoe_color))
+		_fitted_shoes.set_surface_override_material(surface, _appearance_material("shoe_%d" % surface, func(): return Footwear.shoe_material(mesh.surface_get_material(surface), shoe_color)))
 
 
 func _build_weighted_garment(garment_name: String, allowed_bone_names: Array, material: Material, minimum_height := -INF, maximum_height := INF, garment_scale := 1.0, inflation := 0.0005) -> void:
@@ -2976,15 +3003,20 @@ func _dominant_bone(vertex_index: int, bones: PackedInt32Array, weights: PackedF
 	return bones[vertex_index * 4 + strongest_index]
 
 
+static var _feature_sphere_meshes: Dictionary = {}
+
 func _add_sphere(parent: Node3D, part_name: String, world_position: Vector3, half_size: Vector3, material: Material, radial_segments: int = 16, rings: int = 8) -> MeshInstance3D:
 	var part := MeshInstance3D.new()
 	part.name = part_name
-	var sphere := SphereMesh.new()
-	sphere.radius = 1.0
-	sphere.height = 2.0
-	sphere.radial_segments = radial_segments
-	sphere.rings = rings
-	part.mesh = sphere
+	var mesh_key := Vector2i(radial_segments, rings)
+	if not _feature_sphere_meshes.has(mesh_key):
+		var sphere := SphereMesh.new()
+		sphere.radius = 1.0
+		sphere.height = 2.0
+		sphere.radial_segments = radial_segments
+		sphere.rings = rings
+		_feature_sphere_meshes[mesh_key] = sphere
+	part.mesh = _feature_sphere_meshes[mesh_key]
 	part.position = world_position * _unit
 	part.scale = half_size * _unit
 	part.material_override = material
@@ -3067,6 +3099,8 @@ func _mouth_inside(style: String, u: float, v: float) -> bool:
 	return true
 
 
+static var _curved_mouth_meshes: Dictionary = {}
+
 func _add_curved_mouth(
 	parent: Node3D,
 	part_name: String,
@@ -3079,37 +3113,41 @@ func _add_curved_mouth(
 ) -> MeshInstance3D:
 	var part := MeshInstance3D.new()
 	part.name = part_name
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var cols := 22
-	var rows := 10
-	var half_depth := depth * 0.5 * _unit
-	for row in rows:
-		var v0 := float(row) / float(rows)
-		var v1 := float(row + 1) / float(rows)
-		for col in cols:
-			var u0 := lerpf(-1.0, 1.0, float(col) / float(cols))
-			var u1 := lerpf(-1.0, 1.0, float(col + 1) / float(cols))
-			if not _mouth_inside(style, u0, v0) and not _mouth_inside(style, u1, v0) \
-					and not _mouth_inside(style, u0, v1) and not _mouth_inside(style, u1, v1):
-				continue
-			var p00 := _mouth_local_point(style, u0, v0, half_w, height)
-			var p10 := _mouth_local_point(style, u1, v0, half_w, height)
-			var p01 := _mouth_local_point(style, u0, v1, half_w, height)
-			var p11 := _mouth_local_point(style, u1, v1, half_w, height)
-			var uv00 := Vector2((u0 + 1.0) * 0.5, v0)
-			var uv10 := Vector2((u1 + 1.0) * 0.5, v0)
-			var uv01 := Vector2((u0 + 1.0) * 0.5, v1)
-			var uv11 := Vector2((u1 + 1.0) * 0.5, v1)
-			var dz_du := -2.0 * mouth_curve * ((u0 + u1) * 0.5)
-			var front_n := Vector3(-dz_du, 0.0, 1.0).normalized()
-			var back_n := -front_n
-			var z_off := Vector3(0.0, 0.0, half_depth)
-			_add_mouth_triangle(surface, p00 + z_off, p10 + z_off, p11 + z_off, front_n, uv00, uv10, uv11)
-			_add_mouth_triangle(surface, p00 + z_off, p11 + z_off, p01 + z_off, front_n, uv00, uv11, uv01)
-			_add_mouth_triangle(surface, p00 - z_off, p11 - z_off, p10 - z_off, back_n, uv00, uv11, uv10)
-			_add_mouth_triangle(surface, p00 - z_off, p01 - z_off, p11 - z_off, back_n, uv00, uv01, uv11)
-	part.mesh = surface.commit()
+	var mesh_key: Array = [style, half_w, height, depth, mouth_curve, _unit]
+	if not _curved_mouth_meshes.has(mesh_key):
+		if _curved_mouth_meshes.size() >= 128: _curved_mouth_meshes.clear()
+		var surface := SurfaceTool.new()
+		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var cols := 22
+		var rows := 10
+		var half_depth := depth * 0.5 * _unit
+		for row in rows:
+			var v0 := float(row) / float(rows)
+			var v1 := float(row + 1) / float(rows)
+			for col in cols:
+				var u0 := lerpf(-1.0, 1.0, float(col) / float(cols))
+				var u1 := lerpf(-1.0, 1.0, float(col + 1) / float(cols))
+				if not _mouth_inside(style, u0, v0) and not _mouth_inside(style, u1, v0) \
+						and not _mouth_inside(style, u0, v1) and not _mouth_inside(style, u1, v1):
+					continue
+				var p00 := _mouth_local_point(style, u0, v0, half_w, height)
+				var p10 := _mouth_local_point(style, u1, v0, half_w, height)
+				var p01 := _mouth_local_point(style, u0, v1, half_w, height)
+				var p11 := _mouth_local_point(style, u1, v1, half_w, height)
+				var uv00 := Vector2((u0 + 1.0) * 0.5, v0)
+				var uv10 := Vector2((u1 + 1.0) * 0.5, v0)
+				var uv01 := Vector2((u0 + 1.0) * 0.5, v1)
+				var uv11 := Vector2((u1 + 1.0) * 0.5, v1)
+				var dz_du := -2.0 * mouth_curve * ((u0 + u1) * 0.5)
+				var front_n := Vector3(-dz_du, 0.0, 1.0).normalized()
+				var back_n := -front_n
+				var z_off := Vector3(0.0, 0.0, half_depth)
+				_add_mouth_triangle(surface, p00 + z_off, p10 + z_off, p11 + z_off, front_n, uv00, uv10, uv11)
+				_add_mouth_triangle(surface, p00 + z_off, p11 + z_off, p01 + z_off, front_n, uv00, uv11, uv01)
+				_add_mouth_triangle(surface, p00 - z_off, p11 - z_off, p10 - z_off, back_n, uv00, uv11, uv10)
+				_add_mouth_triangle(surface, p00 - z_off, p01 - z_off, p11 - z_off, back_n, uv00, uv01, uv11)
+		_curved_mouth_meshes[mesh_key] = surface.commit()
+	part.mesh = _curved_mouth_meshes[mesh_key]
 	part.position = world_position * _unit
 	part.material_override = material
 	if material is ShaderMaterial:
@@ -3150,6 +3188,9 @@ func _add_surface_triangle(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vect
 
 
 func _skin_detail_material(color: Color) -> StandardMaterial3D:
+	return _appearance_material("skin_detail_" + color.to_html(), func(): return _make_skin_detail_material(color)) as StandardMaterial3D
+
+func _make_skin_detail_material(color: Color) -> StandardMaterial3D:
 	var material := _toon_material(color)
 	material.diffuse_mode = BaseMaterial3D.DIFFUSE_BURLEY
 	material.subsurf_scatter_enabled = true
@@ -3163,6 +3204,9 @@ func _skin_detail_material(color: Color) -> StandardMaterial3D:
 
 
 func _hair_material(color: Color) -> StandardMaterial3D:
+	return _appearance_material("hair_" + color.to_html(), func(): return _make_hair_material(color)) as StandardMaterial3D
+
+func _make_hair_material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.albedo_color = color

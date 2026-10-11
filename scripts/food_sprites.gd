@@ -341,6 +341,15 @@ static func bin_fill_tex(id: String) -> Texture2D:
 	return null
 
 
+static func prep_texture_for_composite(tex: Texture2D) -> Image:
+	if tex == null: return null
+	var key := tex.get_instance_id()
+	if _composite_image_cache.has(key):
+		var cached := _composite_image_cache[key] as Image
+		return cached.duplicate() if cached != null else null
+	return prep_layer_image_for_composite(tex.get_image(), key)
+
+
 static func prep_layer_image_for_composite(src: Image, stable_cache_key: Variant = null, crop_family_key: Variant = null) -> Image:
 	## Review photos used to rescan every full-resolution ingredient on every
 	## serve. Cache the cropped CPU image; callers receive a duplicate because

@@ -89,10 +89,7 @@ func _reveal_menu() -> void:
 	_menu.get_node("UI").show()
 	get_tree().current_scene = _menu
 	_menu._setup_burgerpals_startup_sound()
-	var revealed_menu = _menu
-	get_tree().create_timer(1.0).timeout.connect(func():
-		if is_instance_valid(revealed_menu) and revealed_menu.start_overlay.visible and not revealed_menu._start_transition_in_progress:
-			revealed_menu._play_burgerpals_voice())
+	# skip_intro owns the single startup voice; revealing the menu must not replay it.
 	cinematic.stop()
 	if OS.get_cmdline_user_args().has("--verify-gameplay"):
 		await _menu._run_comprehensive_gameplay_load()

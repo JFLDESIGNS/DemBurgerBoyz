@@ -10,6 +10,9 @@ func run() -> void:
 	intro.skip_intro()
 	while current_scene==intro: await process_frame
 	assert(current_scene.menu_ready,"Skipping must reach a ready menu")
+	await create_timer(1.5).timeout
+	assert(root.get_node("IntroBootMusic").intro_voice_play_count == 1,"Intro must say Burger Pals only once")
+	assert(not is_instance_valid(current_scene.burgerpals_startup_player) or not current_scene.burgerpals_startup_player.playing,"Menu must not repeat the intro voice")
 	print("DIRECT_INTRO_OK")
 	root.get_node("IntroBootMusic").stop()
 	current_scene._loading_video.stop()

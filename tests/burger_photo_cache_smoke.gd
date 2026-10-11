@@ -1,0 +1,35 @@
+extends SceneTree
+
+func _initialize() -> void: call_deferred("run")
+
+func run() -> void:
+	var game = load("res://scripts/game.gd").new()
+	var canvas := Image.create(192, 192, false, Image.FORMAT_RGBA8)
+	canvas.fill(Color.TRANSPARENT)
+	canvas.fill_rect(Rect2i(48, 48, 96, 96), Color.RED)
+	var texture: Texture2D = game._review_texture_from_canvas(canvas)
+	var decoded := Image.new()
+	assert(decoded.load_png_from_buffer(texture.get_meta("sales_png")) == OK)
+	assert(decoded.get_size() == Vector2i(160, 160))
+	assert(decoded.get_pixel(0, 0).a == 0.0)
+	assert(decoded.get_pixel(80, 80).r > 0.99)
+	game.social_reviews = [{"id": 1, "stars": 4.0, "who": "Photo test", "text": "Burger", "pic": texture}]
+	var packet: Dictionary = game._mp_pack_social_feed()
+	assert(packet.pic[0] == texture.get_meta("review_png"))
+	assert(decoded.load_png_from_buffer(packet.pic[0]) == OK)
+	assert(decoded.get_size() == Vector2i(192, 192))
+	var receiver = load("res://scripts/social_feed_replication.gd").new()
+	var row: Dictionary = game.social_reviews[0].duplicate()
+	row.erase("pic")
+	row["pic_png"] = packet.pic[0]
+	var received: Array = receiver.apply_delta([], [row], [], true)
+	assert(received[0].pic is Texture2D)
+	assert(received[0].pic.get_image().get_pixel(96, 96).r > 0.99)
+	var food = load("res://scripts/food_sprites.gd")
+	var first: Image = food.prep_texture_for_composite(texture)
+	var dimensions := first.get_size()
+	first.resize(4, 4)
+	assert(food.prep_texture_for_composite(texture).get_size() == dimensions, "Resizing a photo must not mutate the shared ingredient cache")
+	game.free()
+	print("BURGER_PHOTO_CACHE_OK")
+	quit()

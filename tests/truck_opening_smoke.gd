@@ -14,6 +14,19 @@ func run():
 	assert(opening.DURATION == 6.0 and opening.blocker.mouse_filter == Control.MOUSE_FILTER_STOP)
 	assert(sun.light_energy < .2 and opening.shutter.visible)
 	assert((g.camera.cull_mask & g.LOADING_WARMUP_LAYER) == 0)
+	opening.age = 1.0
+	opening._process(0.0)
+	assert(opening.garage_player.playing)
+	var garage_full: float = opening.garage_player.volume_db
+	opening.age = 2.95
+	opening._process(0.0)
+	assert(opening.garage_player.volume_db < garage_full - 6.0, "Garage sound must fade before opening finishes")
+	opening.age = 3.35
+	opening._process(0.0)
+	assert(not opening.garage_player.playing, "Garage sound must stop before the jingle")
+	opening.sample(4.20)
+	assert(is_equal_approx(g.open_closed_sign.rotation_degrees.y,g.OPEN_CLOSED_SIGN_YAW_CLOSED))
+	assert(g.window_bunting_root.position.distance_to(Vector3(0,2.57,1.52)) < .05)
 	opening.sample(2.0)
 	assert(opening.shutter.scale.y < 1.0 and opening.shutter.scale.y > .1)
 	opening.sample(6.0)

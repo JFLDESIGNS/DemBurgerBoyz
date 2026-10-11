@@ -4,3 +4,6 @@ var drinks_consumed = 0
 func _find_ready_drink_for_soda(_soda: String) -> Node3D: return ready_drink
 func _consume_cup_for_serve(_customer: Node3D = null) -> void:
 	drinks_consumed += 1; ready_drink = null
+func _take_drink_for_mobile_pack(drink: Node3D) -> void:
+	assert(drink == ready_drink)
+	drinks_consumed += 1; ready_drink = null; cup_root = null

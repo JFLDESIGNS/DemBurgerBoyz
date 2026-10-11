@@ -1,5 +1,12 @@
 extends SceneTree
 
+class SizzleProbe extends Node:
+	var active := false
+	var gain := 0.0
+	func set_sizzle_active(on: bool, _heat: float, volume: float):
+		active = on
+		gain = volume
+
 func _initialize() -> void: call_deferred("run")
 
 func run() -> void:
@@ -18,9 +25,16 @@ func run() -> void:
 	game._place_spatula_on_grill_local(0, Vector3(game.GRILL_CENTER_X, game.GRILL_SURFACE_Y, game.GRILL_SURFACE_Z))
 	assert(game.spatula_patty == null and game.grill[0] == bun and not bun.is_held)
 	bun.heating = true; bun.heat_mul = 1
-	bun._process(7.9); assert(not bun.is_ready() and bun._halo.visible)
+	var audio_before = game.game_audio
+	var probe := SizzleProbe.new()
+	game.game_audio = probe
+	game._update_kitchen_sizzle()
+	assert(probe.active and probe.gain >= .85, "Toasting buns must have an audible cooking bed")
+	game.game_audio = audio_before
+	probe.free()
+	bun._process(3.9); assert(not bun.is_ready() and bun._halo.visible)
 	bun._process(.1); assert(bun.is_ready() and not bun._halo.visible)
-	bun._process(8); assert(bun.is_ready() and not bun.is_burnt())
+	bun._process(12); assert(bun.is_ready() and not bun.is_burnt())
 	bun._process(.1); assert(bun.is_burnt())
 	bun.cook_time = 10
 	game._begin_patty_drag(bun)
@@ -59,5 +73,5 @@ func run() -> void:
 	assert(game.supply_stock["bun_bottom"] == 9 and game.supply_stock["bun_top"] == 9)
 	assert(game.spatula_patty != null and game.spatula_patty.cook_time == 0)
 	assert(game.spatula_lmb_held)
-	print("BUN_TOAST_OK: 8/16 timing, halo, pause, pickup/return, order requirement, retained progress")
+	print("BUN_TOAST_OK: 4/16 timing, halo, pause, pickup/return, order requirement, retained progress")
 	game.queue_free(); await process_frame; quit()

@@ -19,6 +19,7 @@ var gulp_count := 0
 var bites := 0
 var liquid_bites := -1
 var bite_materials: Array[ShaderMaterial] = []
+var bite_material_cache: Dictionary = {}
 var cone_bounds := AABB()
 var hand_size := 1.0
 var fries_position := Vector3.ZERO
@@ -37,38 +38,46 @@ func setup(owner_game: Node, eater: Node3D, model: Node3D, food_kind: String, ca
    var bounds:AABB=game._mesh_aabb_local(food)
    for mesh in fries.find_children("*","MeshInstance3D",true,false):
     if mesh.mesh==null:continue
-    var ink:=ShaderMaterial.new()
-    ink.shader=preload("res://shaders/icecream_bites.gdshader")
     var old:Material=mesh.get_active_material(0)
     var tint:=Color(1,.75,.13)
+    var texture:Texture2D
     if old is StandardMaterial3D:
      tint=old.albedo_color
-     if old.albedo_texture:ink.set_shader_parameter("albedo_tex",old.albedo_texture)
-    ink.set_shader_parameter("tint",tint)
-    ink.set_shader_parameter("bounds_min",bounds.position)
-    ink.set_shader_parameter("bounds_size",bounds.size)
+     texture=old.albedo_texture
+    var ink:=_bite_material(tint,texture,bounds)
     mesh.material_override=ink
-    bite_materials.append(ink)
 
  elif kind=="icecream":
   cone_bounds=game._mesh_aabb_local(food)
   for mesh in food.find_children("*","MeshInstance3D",true,false):
    if mesh.mesh==null:continue
-   var ink:=ShaderMaterial.new()
-   ink.shader=preload("res://shaders/icecream_bites.gdshader")
    var old:Material=mesh.material_override
    var tint:=Color(1,.95,.84)
+   var texture:Texture2D
    if old is StandardMaterial3D:
     tint=old.albedo_color
-    if old.albedo_texture:ink.set_shader_parameter("albedo_tex",old.albedo_texture)
-   ink.set_shader_parameter("tint",tint)
-   ink.set_shader_parameter("bounds_min",cone_bounds.position)
-   ink.set_shader_parameter("bounds_size",cone_bounds.size)
+    texture=old.albedo_texture
+   var ink:=_bite_material(tint,texture,cone_bounds)
    mesh.material_override=ink
-   bite_materials.append(ink)
  else:
   flavor=str(food.get_meta("flavor","cola"))
  customer.set_meta("side_food_pending",int(customer.get_meta("side_food_pending",0))+1)
+
+func _bite_material(tint:Color, texture:Texture2D, bounds:AABB) -> ShaderMaterial:
+ # One eating animation owns these uniforms; identical fries can share them.
+ # Keep the cache local so simultaneous servings never share bite progress.
+ var key:Array=[tint,texture,bounds]
+ if bite_material_cache.has(key):return bite_material_cache[key]
+ var ink:=ShaderMaterial.new()
+ ink.shader=preload("res://shaders/icecream_bites.gdshader")
+ ink.set_shader_parameter("consumed",0.0)
+ ink.set_shader_parameter("tint",tint)
+ if texture:ink.set_shader_parameter("albedo_tex",texture)
+ ink.set_shader_parameter("bounds_min",bounds.position)
+ ink.set_shader_parameter("bounds_size",bounds.size)
+ bite_material_cache[key]=ink
+ bite_materials.append(ink)
+ return ink
 
 func mouth() -> Vector3:
  if customer.has_method("side_food_mouth_global"): return customer.side_food_mouth_global()
@@ -136,13 +145,15 @@ func _process(delta: float) -> void:
  if kind=="fries":
   if is_instance_valid(fries):
    # Clip eaten portions in place; never push geometry through the carton.
+   var food_inverse:=food.global_transform.affine_inverse()
    for ink in bite_materials:
-    ink.set_shader_parameter("food_inverse",food.global_transform.affine_inverse())
+    ink.set_shader_parameter("food_inverse",food_inverse)
     ink.set_shader_parameter("consumed",float(bites)/3.0)
    if bites>=3:fries.hide()
  elif kind=="icecream":
+  var food_inverse:=food.global_transform.affine_inverse()
   for ink in bite_materials:
-   ink.set_shader_parameter("food_inverse",food.global_transform.affine_inverse())
+   ink.set_shader_parameter("food_inverse",food_inverse)
    ink.set_shader_parameter("consumed",float(bites)/3.0)
  else:
   if liquid_bites != bites:

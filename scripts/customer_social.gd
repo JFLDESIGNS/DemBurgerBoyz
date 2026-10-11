@@ -127,34 +127,15 @@ func glance(c, point: Vector3, seconds := 2.5) -> void:
 		var behavior = life_ref.get_ref()
 		if is_instance_valid(person) and is_instance_valid(behavior) and int(person.get_meta("social_glance",0)) == token: behavior.forced_target = Vector3.INF)
 
-func wawa(c, pitch := 1.0) -> void:
-	if not is_instance_valid(c): return
-	var audio = AudioStreamPlayer3D.new()
-	audio.stream = preload("res://scripts/customer_voice.gd").stream(c.get_customer_voice(),false)
-	audio.bus = "SFX"
-	audio.pitch_scale = pitch * randf_range(0.93, 1.12)
-	audio.volume_db = -8.0
-	audio.unit_size = 5.0
-	c.add_child(audio)
-	audio.play(randf_range(0.0, maxf(0.0, audio.stream.get_length() - 1.1)))
-	var duration := randf_range(.55, 1.0)
-	if c.has_method("animate_wawa"):c.animate_wawa(duration,audio.pitch_scale)
-	audio.create_tween().tween_interval(duration).finished.connect(audio.queue_free)
+func wawa(c, _pitch := 1.0) -> void:
+	if not is_instance_valid(c) or not is_instance_valid(game.game_audio): return
+	var voice: String = c.get_customer_voice()
+	game.game_audio.play_customer_wawa_click(0.5, voice)
+	if c.has_method("animate_wawa"):
+		c.animate_wawa(1.5 if voice == "female" else 1.15)
 
 func heart(c) -> void:
-	var label = Label3D.new()
-	label.text = "♥ ♥"
-	label.modulate = Color("FF729D")
-	label.font_size = 64
-	label.pixel_size = .008
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.position.y = 2.4
-	label.no_depth_test = true
-	c.add_child(label)
-	var tween = label.create_tween().set_parallel(true)
-	tween.tween_property(label,"position:y",3.0,2.0)
-	tween.tween_property(label,"modulate:a",0.0,2.0)
-	tween.chain().tween_callback(label.queue_free)
+	preload("res://scripts/love_hearts.gd").burst(c, Vector3(0,2.4,.05), 1.0)
 
 func encounter(a,b,kind: String, chat: int = -1) -> void:
 	if kind.begins_with("cat_"):
@@ -283,7 +264,9 @@ func pair_event(first_id: int, second_id: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func cat_smack(customer_id: int) -> void:
 	var audio = get_tree().get_first_node_in_group("game_audio")
-	if is_instance_valid(audio): audio.play_cat_cartoon_smack()
+	if is_instance_valid(audio):
+		audio.play_cat_cartoon_smack()
+		audio.play_cat_begging_meow(1.15)
 	var person = game._customer_by_net_id(customer_id)
 	if is_instance_valid(person):
 		person.shake_angry(.4,.04,1.0)

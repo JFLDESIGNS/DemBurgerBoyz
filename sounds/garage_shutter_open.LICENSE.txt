@@ -1,0 +1,7 @@
+Garage shutter opening
+Source: Garage Door Open.wav by yottasounds
+https://freesound.org/people/yottasounds/sounds/380777/
+Public preview: https://cdn.freesound.org/previews/380/380777_3249786-hq.mp3
+License: CC0 1.0 Universal, https://creativecommons.org/publicdomain/zero/1.0/
+Accessed: 2026-10-10
+Edits: opening shortened to 3.1 seconds with pitch-preserving time compression, fades, loudness normalization, mono Ogg Vorbis conversion.

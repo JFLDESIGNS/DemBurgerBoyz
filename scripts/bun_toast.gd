@@ -1,11 +1,11 @@
 ## Toastable 3D bun pair with a shared cook clock.
-## Toasted at 8 seconds; starts burning after 16 seconds.
+## Toasted at 4 seconds; starts burning after 16 seconds.
 extends Area3D
 
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const FoodSpritesScript := preload("res://scripts/food_sprites.gd")
 
-const TOAST_READY := 8.0 ## First fully toasted moment
+const TOAST_READY := 4.0 ## First fully toasted moment
 const TOAST_BURNT := 16.0
 const TOAST_PERFECT_SLACK := 0.35 ## ±sec around 2s still counts as perfect
 const TOAST_HOLD_MAX := 40.0 ## Toasted buns stay fresh this long on HOLD
@@ -203,7 +203,7 @@ func toast_frac() -> float:
 
 
 func toast_score_mul() -> float:
-	## The full 8–16 second toasted window earns the same bonus.
+	## The full 4–16 second toasted window earns the same bonus.
 	if cook_time <= 0.05:
 		return 1.0
 	if is_burnt():

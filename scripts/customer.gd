@@ -290,6 +290,9 @@ var _departure_review_shown := false
 var _angry_departure := false
 var _departure_clip := ""
 var _burger_eat_phase := ""
+var _rejected_burger_origin := Vector3.ZERO
+var _rejected_burger_since := 0
+var _rejected_burger_width := .24
 var _order_phase: String = "" ## "" | "wawa" | "button"
 var _order_t: float = 0.0
 var _order_button_done: bool = false
@@ -420,6 +423,7 @@ var _blood_bursts: Array = [] ## GPUParticles3D to free later
 static var _leave_fade_shader_cache: Dictionary = {}
 var _leave_fade_materials: Array[Material] = []
 var _leave_fade_bound := false
+var _leave_fade_copies: Dictionary = {}
 static var _face_cache: Dictionary = {} ## legacy; unused with 3D characters
 static var _char_scene: PackedScene = null
 static var _skin_tex_cache: Dictionary = {} ## path -> Texture2D
@@ -896,7 +900,10 @@ func _try_attach_toon_character() -> bool:
 	return not _char_meshes.is_empty()
 
 
+var construction_costs: Dictionary = {}
+
 func _try_attach_saved_character() -> bool:
+	var stage_began := Time.get_ticks_usec()
 	if is_cut_collector or is_bts_guest or is_disguise_cat:
 		return false
 	## In co-op the host sends an explicit choice (including an explicit empty
@@ -914,17 +921,23 @@ func _try_attach_saved_character() -> bool:
 	if _modular_character_scene == null:
 		return false
 	var modular: Node = _modular_character_scene.instantiate()
+	construction_costs["instantiate_ms"] = (Time.get_ticks_usec()-stage_began)/1000.0
 	if modular == null or not modular.has_method("apply_saved_preset"):
 		if modular != null:
 			modular.free()
 		return false
 	modular.set("gameplay_character", true)
+	stage_began = Time.get_ticks_usec()
 	modular.call("apply_saved_preset", preset)
+	construction_costs["preset_ms"] = (Time.get_ticks_usec()-stage_began)/1000.0
 	## The creator scene uses a 0.7 inner body for its preview. Restore the
 	## imported body's game scale while preserving all module proportions.
 	modular.scale = Vector3.ONE * CUSTOM_CHARACTER_GAME_SCALE
 	modular.name = "CreatedCustomer"
+	stage_began = Time.get_ticks_usec()
 	_body.add_child(modular)
+	construction_costs["appearance_ready_ms"] = (Time.get_ticks_usec()-stage_began)/1000.0
+	construction_costs["appearance_stages"] = modular.get("appearance_costs")
 	if modular.has_method("set_control_rig_visible"):
 		modular.call("set_control_rig_visible", false)
 	_char_meshes.clear()
@@ -934,7 +947,9 @@ func _try_attach_saved_character() -> bool:
 		var active: Node = modular.call("get_active_body") as Node
 		if active != null:
 			animated_body = active
+	stage_began = Time.get_ticks_usec()
 	_setup_character_animations(animated_body)
+	construction_costs["animations_ms"] = (Time.get_ticks_usec()-stage_began)/1000.0
 	_uses_custom_character = not _char_meshes.is_empty()
 	if not _uses_custom_character:
 		modular.queue_free()
@@ -1652,8 +1667,10 @@ func _apply_leave_fade_alpha(alpha: float) -> void:
 	if _leave_fade_alpha >= 1.0 and not _leave_fade_bound:
 		return
 	if not _leave_fade_bound:
+		var fade_began := Time.get_ticks_usec()
 		_fade_node_materials(self, _leave_fade_alpha)
 		_leave_fade_bound = true
+		if OS.is_debug_build(): print("DEPARTURE_FADE_BIND_MS ", (Time.get_ticks_usec()-fade_began)/1000.0, " materials=", _leave_fade_materials.size())
 	else:
 		# Once attached, fading updates uniforms only; no tree walks or material swaps.
 		for material in _leave_fade_materials:
@@ -1694,6 +1711,8 @@ func _track_leave_fade_material(material: Material, alpha: float) -> void:
 
 
 func _material_for_fade(base: Material) -> Material:
+	# Repeated mesh surfaces use one private copy per customer, not one per limb.
+	if _leave_fade_copies.has(base): return _leave_fade_copies[base]
 	if base is BaseMaterial3D:
 		var bm := base as BaseMaterial3D
 		if not bool(bm.get_meta("customer_fade_unique", false)):
@@ -1702,9 +1721,12 @@ func _material_for_fade(base: Material) -> Material:
 		bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		bm.cull_mode = BaseMaterial3D.CULL_DISABLED
 		bm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+		_leave_fade_copies[base] = bm
 		return bm
 	if base is ShaderMaterial:
-		return _shader_material_for_fade(base as ShaderMaterial)
+		var faded := _shader_material_for_fade(base as ShaderMaterial)
+		_leave_fade_copies[base] = faded
+		return faded
 	return null
 
 
@@ -2256,7 +2278,10 @@ func play_street_rejection(pointing: bool) -> float:
 		_burger_props = BurgerMotion.attach(_anim_player, _anim_player.get_parent())
 	_set_mood("mad")
 	var clip_name = "Point_Finger_Yell" if pointing else "Walk_Away_Angry"
-	_play_anim("burger:" + clip_name)
+	# Finish the previous blend before switching reaction clips. Advancing the
+	# new clip while the old pointing blend is live can crash AnimationMixer.
+	_anim_player.stop()
+	_anim_player.clear_caches()
 	if not pointing:
 		# Repeat the angry gait for the remainder of this sidewalk pass.
 		var animation = _anim_player.get_animation("burger/" + clip_name)
@@ -2265,9 +2290,9 @@ func play_street_rejection(pointing: bool) -> float:
 			looped.loop_mode = Animation.LOOP_LINEAR
 			var library = _anim_player.get_animation_library("burger").duplicate(false)
 			library.remove_animation(clip_name); library.add_animation(clip_name, looped)
-			_anim_player.stop()
 			_anim_player.remove_animation_library("burger"); _anim_player.add_animation_library("burger",library)
-			_anim_state = ""; _play_anim("burger:" + clip_name)
+	_anim_state = ""
+	_play_anim("burger:" + clip_name)
 	return BurgerMotion.LIBRARY.get_animation(clip_name).length
 
 
@@ -2777,6 +2802,11 @@ func _apply_bobble(walking: bool) -> void:
 		var recoil := sin(t*24)*exp(-t*5)
 		_body.rotation_degrees = Vector3(-recoil*17,0,recoil*9)
 		_body.position.y = _base_body_y + absf(recoil)*.035
+		return
+	# The walk clip owns the stride; a second unsynchronised root bob makes it wobble.
+	if walking and _click_bobble_t <= 0.0:
+		_body.position.y = _base_body_y
+		_body.rotation_degrees = Vector3.ZERO
 		return
 	var click_s := clampf(_click_bobble_t / CLICK_BOBBLE_SEC, 0.0, 1.0)
 	## Idle skeleton owns the pose — only a light root bob so we don't fight the anim.
@@ -3939,12 +3969,27 @@ func _update_eat_pose() -> void:
 
 
 func burger_grip_global() -> Vector3:
+	if _burger_eat_phase == "complain":
+		_cache_panic_bones()
+		if is_instance_valid(_skeleton):
+			var hand := _skeleton.find_bone("LeftHand")
+			if hand >= 0:
+				# Point_Finger_Yell parks its unused burger prop at floor height.
+				# Keep our served stack above the non-pointing hand instead.
+				var palm := _skeleton.to_global(_skeleton.get_bone_global_pose(hand).origin)
+				palm += global_basis * Vector3(0, .065, .025)
+				var blend := smoothstep(0.0, .14, float(Time.get_ticks_msec()-_rejected_burger_since)/1000.0)
+				return _rejected_burger_origin.lerp(palm, blend)
 	if _burger_eat_phase != "" and is_instance_valid(_burger_props):
 		return _burger_props.to_global(Vector3(0,0,.0009))
 	return mouth_global()
 
 
 func burger_grip_edges() -> Array[Vector3]:
+	if _burger_eat_phase == "complain":
+		var center := burger_grip_global()
+		var half_width := global_basis.x.normalized() * _rejected_burger_width * .5
+		return [center-half_width, center+half_width]
 	if is_instance_valid(_burger_props):
 		return [_burger_props.to_global(Vector3(-.0031,0,.0009)),_burger_props.to_global(Vector3(.0031,0,.0009))]
 	return [mouth_global() + Vector3(-.12,0,0),mouth_global() + Vector3(.12,0,0)]
@@ -5148,6 +5193,10 @@ func _setup_customer_life(model: Node) -> void:
 func react_burnt_bite(point_at_player: bool = false) -> void:
 	shake_angry(1.0, .05, .20, false)
 	if point_at_player:
+		_rejected_burger_origin = burger_grip_global()
+		var edges := burger_grip_edges()
+		_rejected_burger_width = edges[0].distance_to(edges[1])
+		_rejected_burger_since = Time.get_ticks_msec()
 		_burger_eat_phase = "complain"
 		_anim_state = ""
 		_play_anim("burger:Point_Finger_Yell")

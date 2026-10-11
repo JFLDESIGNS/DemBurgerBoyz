@@ -5,9 +5,14 @@ var video_start := 0
 var measuring := false
 var previous := 0
 var previous_movie := 0
+var opening_props_seen := false
 func _initialize(): call_deferred("run")
 func _process(_delta: float) -> bool:
  if measuring:
+  if current_scene.get_meta("loading_phase", "") == "truck_opening":
+   for prop in [current_scene.physical_garbage_root,current_scene.patty_fridge_root,current_scene.bun_pile_root]:
+    expect(is_instance_valid(prop) and prop.is_visible_in_tree(),"Counter props must remain visible during the shutter reveal")
+   opening_props_seen = true
   var now:=Time.get_ticks_usec()
   var ms := float(now-previous)/1000.0
   samples.append(ms)
@@ -51,6 +56,10 @@ func run() -> void:
  expect(not is_equal_approx(rotation_before,mascot.rotation.y),"Machine topper must rotate")
  expect(not game._truck_opening_active,"Opening must release controls without waiting for optional warmups")
  expect(game._runtime_prewarm_complete,"Runtime warmups must finish before gameplay")
+ for prop in [game.physical_garbage_root,game.patty_fridge_root,game.bun_pile_root]:
+  expect(is_instance_valid(prop) and prop.get_meta("prepared_before_opening",false),"Counter props must be positioned and warmed before opening")
+ expect(game._truck_opening_announced,"Opening must own the startup announcement")
+ expect(opening_props_seen,"Must verify props during the real reveal")
  game._start_game_immediate(false)
  for i in 90: await process_frame
  expect(game.playing,"Gameplay must start after the staged load")

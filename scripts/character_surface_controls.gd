@@ -7,6 +7,7 @@ static var global_enabled := false
 static var loaded := false
 var actor: Node
 var clock := 0.0
+var applied_settings: Dictionary = {}
 
 static func load_settings() -> void:
 	if loaded: return
@@ -26,21 +27,27 @@ static func save_settings() -> void:
 func setup(target: Node) -> void:
 	actor = target
 	load_settings()
+	if actor.has_signal("modules_changed") and not actor.is_connected("modules_changed", apply_now):
+		actor.connect("modules_changed", apply_now)
 	apply_now()
 
 func _process(delta: float) -> void:
 	clock += delta
 	if clock < 0.25: return
 	clock = 0.0
-	apply_now()
+	apply_now(false)
 
-func apply_now() -> void:
+func apply_now(force: bool = true) -> void:
 	if not is_instance_valid(actor): return
 	var settings := DEFAULTS.duplicate()
 	var own = actor.get("surface_look")
 	if own is Dictionary: settings.merge(own,true)
 	if actor.get("gameplay_character") == true and global_enabled:
 		settings.merge(global_values,true)
+	# Gameplay appearances are stable between rebuilds; retain live settings updates
+	# without walking every character's meshes and resending uniforms four times/sec.
+	if not force and actor.get("gameplay_character") == true and settings == applied_settings: return
+	applied_settings = settings.duplicate()
 	var skin = actor.get("_skin_material")
 	if skin is Material: apply_material(skin,"skin",settings)
 	for pair in [["_hair_root","hair"],["_facial_hair_root","hair"],["_clothing_root","clothes"],["_ears_root","skin"],["_nose_root","skin"]]:
