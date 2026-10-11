@@ -13,6 +13,7 @@ func run() -> void:
  var cat = load("res://scripts/window_cat.gd").new()
  game.add_child(cat)
  cat.set_process(false)
+ cat._first_visit_wait=0.0
  cat.special_people_peek(0.1)
  cat._state = "peek"
  cat._timer = 0.1

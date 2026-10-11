@@ -12,6 +12,7 @@ func run():
  assert(is_equal_approx(original.get_length(),65024.0/44100.0))
  assert(audio._stretch_recording(true)==loop,"Loop resource reused")
  var player:AudioStreamPlayer=audio.start_slingshot_stretch()
+ assert(player.stream is AudioStreamOggVorbis and player.stream.loop and player.stream.loop_offset==0.0)
  await create_timer(1.9).timeout
  assert(player.playing,"Held stretch continues beyond recording duration")
  assert(is_equal_approx(player.pitch_scale,1.0),"Supplied recording keeps its original pitch")

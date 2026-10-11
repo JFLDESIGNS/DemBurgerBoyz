@@ -21,7 +21,7 @@ func remote_pull(peer: int, id: String, start: Vector2, at: Vector2, active: boo
 			remote_pulls.erase(peer)
 	else:
 		if not remote_pulls.has(peer):
-			remote_pulls[peer] = {"sound": game.game_audio.start_slingshot_stretch() if game.game_audio else null}
+			remote_pulls[peer] = {"sound": game.game_audio.start_slingshot_stretch(self) if game.game_audio else null}
 		remote_pulls[peer].merge({"id":id,"start":start,"at":at,"expires":Time.get_ticks_msec()+1500},true)
 	queue_redraw()
 
@@ -68,7 +68,7 @@ func handle_input(event: InputEvent) -> bool:
 			game._strip_gesture_added = true
 			if get_viewport().has_method("gui_cancel_drag"): get_viewport().call("gui_cancel_drag")
 			if game.game_audio:
-				stretch_player = game.game_audio.start_slingshot_stretch()
+				stretch_player = game.game_audio.start_slingshot_stretch(self)
 			send_pull(true)
 		if pulling:
 			queue_redraw(); return true
@@ -89,6 +89,9 @@ func cancel() -> void:
 
 func _process(_delta: float) -> void:
 	if pulling and (not game.playing or game.options_menu_open or game.shift_paused or game._boss_speech_active()): cancel()
+	if pulling and game.game_audio:
+		if not is_instance_valid(stretch_player): stretch_player = game.game_audio.start_slingshot_stretch(self)
+		elif not stretch_player.playing: stretch_player.play()
 	pull_send_left -= _delta
 	if pulling and pull_send_left <= 0.0:
 		pull_send_left = 0.10; send_pull(true)
@@ -159,8 +162,10 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 	game.world.add_child(flyer); flyer.global_position=start
 	var duration := clampf(.55-source.distance_to(target)/4000,.25,.5)
 	var whistle: AudioStreamPlayer = game.game_audio.start_ingredient_fall_whistle(duration) if game.game_audio else null
+	var whistle_ref: WeakRef = weakref(whistle) if is_instance_valid(whistle) else null
 	flyer.tree_exiting.connect(func():
-		if is_instance_valid(whistle): whistle.queue_free()
+		var sound = whistle_ref.get_ref() if whistle_ref != null else null
+		if is_instance_valid(sound): sound.queue_free()
 	)
 	var state := {"previous":start,"hit":false}
 	var tween := create_tween()

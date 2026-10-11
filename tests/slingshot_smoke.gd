@@ -4,11 +4,13 @@ func run() -> void:
 	var g=load("res://scenes/main.tscn").instantiate()
 	g.set_script(load("res://tests/slingshot_fixture.gd")); root.add_child(g); current_scene=g
 	g.playing=true
+	g.game_audio=load("res://scripts/game_audio.gd").new();g.add_child(g.game_audio)
 	var sling=g._ensure_ingredient_slingshot()
 	var press=InputEventMouseButton.new();press.button_index=MOUSE_BUTTON_LEFT;press.pressed=true;press.position=Vector2(350,350)
 	assert(not sling.handle_input(press),"Tap remains available to normal ingredient controls")
 	var motion=InputEventMouseMotion.new();motion.position=Vector2(325,400)
 	assert(sling.handle_input(motion) and sling.pulling)
+	assert(is_instance_valid(sling.stretch_player) and sling.stretch_player.playing,"Actual rubber-band gesture must play stretch")
 	var aim:Vector2=sling.aim_point(press.position,motion.position,720)
 	assert(aim.x>press.position.x and aim.y<press.position.y,"Pull down-left launches up-right")
 	var release=InputEventMouseButton.new();release.button_index=MOUSE_BUTTON_LEFT;release.position=motion.position

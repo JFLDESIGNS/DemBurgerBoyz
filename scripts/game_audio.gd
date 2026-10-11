@@ -3961,11 +3961,18 @@ func play_cat_eating_stretch() -> void:
 	if cat_sounds_muted: return
 	_play_cached("cat_eating_stretch", _stretch_recording, 1.0, db_to_linear(STRETCH_BASE_DB) * .5)
 
-func start_slingshot_stretch() -> AudioStreamPlayer:
+func start_slingshot_stretch(owner_node: Node = null) -> AudioStreamPlayer:
+	# Ordinary imported audio, played from its start. No manual PCM slicing or seeking.
 	var player := AudioStreamPlayer.new()
-	player.bus = "SFX"; player.stream = _stretch_recording(true)
+	player.name = "IngredientRubberPull"
+	var recording := preload("res://sounds/ingredient_rubber_pull.ogg").duplicate() as AudioStreamOggVorbis
+	recording.loop = true
+	recording.loop_offset = 0.0
+	player.stream = recording
+	player.bus = "SFX"
 	player.volume_db = _sfx_db(3.0,"ingredients")
-	add_child(player); player.play(.70)
+	(owner_node if is_instance_valid(owner_node) else self).add_child(player)
+	player.play()
 	return player
 
 func play_slingshot_release() -> void:
@@ -4056,13 +4063,13 @@ func play_customer_hit_wa(speaker: Node) -> void:
 	var female: bool = speaker.has_method("get_customer_voice") and speaker.get_customer_voice() == "female"
 	p.stream = load("res://sounds/hit_wa_female.wav" if female else "res://sounds/hit_wa_male.wav")
 	p.volume_db = _sfx_db(3.0, "customers")
-	p.pitch_scale = 1.30 if female else 1.45
+	p.pitch_scale = 1.12 if female else GROBBLE_PITCH
 	p.play()
 
 func start_ingredient_fall_whistle(duration: float) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
 	p.name = "IngredientFallWhistle"; p.bus = "SFX"
-	p.volume_db = _sfx_db(-8.0,"ingredients")
+	p.volume_db = _sfx_db(-12.0,"ingredients")
 	var key := "fall_whistle_" + str(roundi(duration*100))
 	if not _cache.has(key):
 		var n := int(MIX_RATE * clampf(duration,.2,1.5))
@@ -4071,13 +4078,13 @@ func start_ingredient_fall_whistle(duration: float) -> AudioStreamPlayer:
 		for i in n:
 			var t := float(i)/MIX_RATE
 			var u := float(i)/float(n)
-			var hz := lerpf(2100.0,260.0,pow(u,.72)) * (1.0+.035*sin(t*TAU*17.0))
+			var hz := lerpf(1150.0,420.0,u*u*(3.0-2.0*u)) * (1.0+.006*sin(t*TAU*4.0))
 			phase += TAU*hz/MIX_RATE
-			var env := minf(1.0,minf(t/.018,(float(n-i)/MIX_RATE)/.025))
-			_write_s16(pcm,i,roundi((sin(phase)*.76+sin(phase*2.0)*.12)*env*24000))
+			var env := minf(1.0,minf(t/.045,(float(n-i)/MIX_RATE)/.025))
+			_write_s16(pcm,i,roundi((sin(phase)*.70)*env*24000))
 		_cache[key]=_wav_from_pcm(pcm,false)
 	p.stream=_cache[key]; add_child(p); p.finished.connect(p.queue_free); p.play()
 	return p
 
 func play_opening_whoosh(sign_flip: bool = false) -> void:
-	_play_cached("serve_whoosh",_make_serve_whoosh,1.25 if sign_flip else .90,.80 if sign_flip else .65)
+	_play_cached("serve_whoosh",_make_serve_whoosh,1.25 if sign_flip else .90,.60 if sign_flip else .4875)

@@ -32,7 +32,8 @@ const APPROACH_START_EXTRA := 0.55 ## extra street distance at the start of a ri
 const FACE_COOK_YAW := 180.0
 const FACE_AWAY_YAW := 0.0
 ## First peek early in the shift so players notice him.
-const FIRST_PEEK_SEC := 18.0
+const FIRST_PEEK_SEC := 20.0
+var _first_visit_wait := FIRST_PEEK_SEC
 ## Regular dice-roll peeks — every 45s, 75% chance he shows (even with customers).
 const REPEEK_SEC := 45.0
 const PEEK_CHANCE := 0.75
@@ -631,6 +632,14 @@ func pause_for_delivery() -> void:
 
 func _process(delta: float) -> void:
 	var game := get_tree().current_scene
+	if not mp_puppet and _first_visit_wait > 0.0:
+		if enabled and is_instance_valid(game) and bool(game.get("playing")) and not bool(game.get("shift_paused")):
+			_first_visit_wait = maxf(0.0,_first_visit_wait-delta)
+		visible = false
+		_state = "hidden"
+		_timer = 0.0
+		_delivery_visit_pending = true
+		if _first_visit_wait > 0.0: return
 	if not mp_puppet and is_instance_valid(game) and game.has_method("_cat_delivery_blocks_visit") and game._cat_delivery_blocks_visit():
 		if not visible or _state == "hidden":
 			_timer -= delta
@@ -985,6 +994,7 @@ func _finish_run_away() -> void:
 
 
 func request_delivery_peek(hold_sec: float = 5.5) -> void:
+	if _first_visit_wait > 0.0: return
 	_patty_peek_x = NAN
 	## Force a peek so the cat can toss phone restocks into the kitchen.
 	if enabled and _visual != null and not _bag_heist:
@@ -1005,6 +1015,7 @@ func request_delivery_peek(hold_sec: float = 5.5) -> void:
 
 
 func special_people_peek(hold_sec: float = 5.5) -> void:
+	if _first_visit_wait > 0.0: return
 	if not enabled or _visual == null or _bag_heist:
 		return
 	_clear_mouth_burger()
@@ -1125,6 +1136,8 @@ func _feed_full_burger() -> void:
 
 
 func reset_shift(persist_weight: bool = true) -> void:
+	_first_visit_wait = FIRST_PEEK_SEC
+	_delivery_visit_pending = true
 	_visit_fed = false
 	_patty_peek_x = NAN
 	## New day / hide — keep fed weight across days; only a fresh run wipes it.
@@ -1166,6 +1179,7 @@ func delivery_visual_scale() -> Vector3:
 
 
 func peek_for_patty(at_x: float) -> void:
+	if _first_visit_wait > 0.0: return
 	if not enabled or _bag_heist or _delivery_peek_active: return
 	_patty_peek_x = at_x
 	_state = "rising"
