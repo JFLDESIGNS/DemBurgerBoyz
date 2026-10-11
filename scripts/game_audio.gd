@@ -3574,7 +3574,7 @@ func _make_hot_oil_hit() -> AudioStreamWAV:
 
 
 func play_cheese_sizzle() -> void:
-	_play_cached("hot_oil_cheese", _make_cheese_sizzle, 1.0, 0.375)
+	_play_cached("hot_oil_cheese", _make_cheese_sizzle, 1.0, 0.2625)
 
 
 func _make_cheese_sizzle() -> AudioStreamWAV:
@@ -3970,7 +3970,7 @@ func start_slingshot_stretch(owner_node: Node = null) -> AudioStreamPlayer:
 	recording.loop_offset = 0.0
 	player.stream = recording
 	player.bus = "SFX"
-	player.volume_db = _sfx_db(3.0 + linear_to_db(0.8),"ingredients")
+	player.volume_db = _sfx_db(3.0 + linear_to_db(0.8 * 0.7),"ingredients")
 	(owner_node if is_instance_valid(owner_node) else self).add_child(player)
 	player.play()
 	return player

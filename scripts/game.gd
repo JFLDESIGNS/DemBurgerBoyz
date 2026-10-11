@@ -2277,10 +2277,10 @@ const BUN_TOP_PATH := "res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb
 const KETCHUP_BOTTLE_PATH := "res://models/burgerpack/try2/SM_KetchupSqueezeBottle.glb"
 const MUSTARD_BOTTLE_PATH := "res://models/burgerpack/try2/SM_MustardSqueezeBottle.glb"
 const CONDIMENT_BOTTLE_HEIGHT := 0.30 ## 25% larger than the original 0.24 m squeeze bottles.
-const CONDIMENT_BOTTLE_TRAVEL_SEC := 0.65
-const CONDIMENT_BOTTLE_TILT_SEC := 0.20
-const CONDIMENT_BOTTLE_POUR_SEC := 0.50
-const CONDIMENT_BOTTLE_RETURN_SEC := 0.50
+const CONDIMENT_BOTTLE_TRAVEL_SEC := 0.52
+const CONDIMENT_BOTTLE_TILT_SEC := 0.16
+const CONDIMENT_BOTTLE_POUR_SEC := 0.40
+const CONDIMENT_BOTTLE_RETURN_SEC := 0.40
 const CONDIMENT_BOTTLE_COLLISION_LAYER := 4194304
 const CONDIMENT_AUTO_POUR_CAMERA_OFFSET := 0.56
 const CONDIMENT_AUTO_POUR_HEIGHT_OFFSET := 0.4298 ## Previous 0.125 m plus exactly one foot.
@@ -2859,8 +2859,8 @@ const FRIES_HOLD_PACK_Y := 0.108
 const FRIES_READY_SODA_OFFSET := Vector3(0.2832, -0.0292, -1.2048)
 ## HOLD pack grid — 4" tighter than prior 0.16 / 0.14.
 ## Camera is window-side (−Z) looking +Z — farther on screen = higher Z (far HOLD edge).
-const FRIES_HOLD_PACK_SPACING_X := 0.0584 ## 0.16 − 4"
-const FRIES_HOLD_PACK_SPACING_Z := 0.0384 ## 0.14 − 4"
+const FRIES_HOLD_PACK_SPACING_X := 0.0884 ## 0.16 − 4"
+const FRIES_HOLD_PACK_SPACING_Z := 0.0534 ## 0.14 − 4"
 ## Camera is −Z; +Z is farther up-screen. Negative = closer to the cook / camera.
 const FRIES_HOLD_FAR_NUDGE := -0.3096 ## was −0.6144; push 1ft farther from camera
 const FRYER_BASKET_HOME_Y := 0.159 - 4.0 * INCH_TO_M
@@ -8393,7 +8393,7 @@ func _end_day(force_from_host: bool = false) -> void:
 	_shift_results.begin()
 	_show_end_day_parade_before_results()
 	if mp_enabled and NetManager.is_host():
-		mp_shift_closed.rpc(_mp_closed_shift_state(),0.0)
+		_mp_send_closed_shift(0,0.0)
 
 
 # --- 3D world: inside truck, looking out ------------------------------------
@@ -15163,9 +15163,9 @@ func _residue_scrape_target(slot: int, x: float, z: float) -> int:
 		return slot if slot >= 0 and slot < GRILL_SLOTS else -1
 	if slot >= 0 and slot < grill_residue_centers.size():
 		var center: Vector3 = grill_residue_centers[slot]
-		if Vector2(center.x - x, center.z - z).length() <= .003:
+		if Vector2(center.x - x, center.z - z).length() <= .015:
 			return slot
-	return _find_residue_slot_near(x, z, .003)
+	return _find_residue_slot_near(x, z, .015)
 
 
 func _scrape_finish_clean_at(slot: int, x: float, z: float) -> void:
@@ -15300,7 +15300,7 @@ func _make_debris_trap_texture() -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
-func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1) -> void:
+func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1, allow_merge: bool = true) -> void:
 	if grill_root == null:
 		return
 	var add_mass := clampf(mass, 0.12, 1.4)
@@ -15312,7 +15312,7 @@ func _add_scraped_debris_pile(at: Vector3, mass: float, slot: int = -1) -> void:
 			continue
 		var same_slot := slot >= 0 and int(pile.get("slot", -1)) == slot
 		var near := Vector2(root.position.x, root.position.z).distance_to(xz) <= DEBRIS_PILE_MERGE_R
-		if same_slot or near:
+		if allow_merge and (same_slot or near):
 			pile["mass"] = clampf(float(pile.get("mass", 1.0)) + add_mass * 0.55, 0.35, 2.2)
 			if slot >= 0:
 				pile["slot"] = slot
@@ -17508,6 +17508,7 @@ func _throw_held_patty_to_grill() -> void:
 
 
 func _commit_patty_to_build(patty: Area3D) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	## Land a scooped / thrown patty on Build without requiring spatula_patty.
 	if not playing or patty == null or not is_instance_valid(patty):
 		return
@@ -23352,7 +23353,7 @@ func _tool_hold_point_from_screen(screen_pos: Vector2, hold_y: float, max_z: flo
 
 
 func _fries_hold_point_from_screen(screen_pos: Vector2, extra_y: float = 0.0) -> Vector3:
-	return _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.31 + extra_y) + fries_hand_hold_offset_in * INCH_TO_M
+	return _tool_hold_point_from_screen(screen_pos, GRILL_SURFACE_Y + 0.31 + extra_y) + fries_hand_hold_offset_in * INCH_TO_M - camera.global_basis.x * 0.0508
 
 
 func _try_grab_nearest_tool(screen_pos: Vector2) -> bool:
@@ -31689,6 +31690,7 @@ func _build_park_bird_house(tree: Node3D) -> void:
 	if is_instance_valid(park_bird_house):
 		park_bird_house.queue_free()
 	park_bird_house = load("res://scenes/park_bird.tscn").instantiate() as Node3D
+	park_bird_house.game = self
 	tree.add_child(park_bird_house)
 	# Preserve meter-sized assets beneath the imported tree's 0.26 scale.
 	# Hang from the outer branch, 1.33 m farther from the original placement; follows tree shake.
@@ -49448,6 +49450,9 @@ func _build_layer_at_screen(screen_pos: Vector2) -> Control:
 var _build_swipe: Dictionary = {}
 
 func _move_build_swipe_preview(screen_pos: Vector2, reset: bool = false) -> void:
+	if mp_enabled and not _build_swipe.is_empty():
+		var offset := (screen_pos-Vector2(_build_swipe.origin))/get_viewport().get_visible_rect().size
+		_mp_queue_motion("mp_build_layer_pose",[int(_build_swipe.station),int(_build_swipe.layer),str(_build_swipe.id),not reset,offset.x,offset.y])
 	for entry in _build_swipe.get("preview_rows", []):
 		var row = entry.row
 		if not is_instance_valid(row): continue
@@ -49485,11 +49490,13 @@ func _handle_build_swipe(event: InputEvent) -> bool:
 		if BUN_TOAST_ENABLED and str(gesture.id) in ["bun_bottom", "bun_top"]:
 			var hit := _grill_plane_from_screen(event.position)
 			if hit != Vector3.ZERO and _is_near_grill_for_place(hit):
+				_pending_bun_drop = hit
 				_pickup_station_bun_to_hand(si, int(gesture.layer))
 				if spatula_patty != null:
 					spatula_vel_screen = Vector2.ZERO
 					spatula_lmb_held = false
 					_place_spatula_on_grill(hit)
+					_pending_bun_drop = Vector3.INF
 				return true
 		if mp_enabled:
 			if NetManager.is_host(): mp_request_build_swipe(si,int(gesture.layer),gesture.items)
@@ -49522,6 +49529,7 @@ func _apply_build_swipe(si: int, layer: int, id: String) -> void:
 		_drop_patty_on_garbage(_make_reorder_drag(si,layer,id))
 
 func _try_build_burger_click(screen_pos: Vector2, button: MouseButton = MOUSE_BUTTON_LEFT) -> bool:
+	if is_instance_valid(_side_grace_customer): return false
 	if not playing or _serve_fly_busy: return false
 	if brush_held or oil_held or condiment_tool_held != "" or shaker_held or ext_held or glock_held or sale_held or cheese_held or cup_held or spatula_patty != null or dragging_patty != null: return false
 	var row := _build_layer_at_screen(screen_pos)
@@ -51799,10 +51807,10 @@ func _open_phone_to_fryer() -> void:
 func _open_phone_to_shop_item(item_id: String) -> void:
 	if hud_chrome_collapsed: _toggle_hud_chrome_collapsed()
 	if is_instance_valid(phone_column): phone_column.show()
-	_set_phone_app("shop")
 	if not _phone_expanded:
 		_set_phone_expanded(true)
-		await _phone_size_tween.finished
+		if is_instance_valid(_phone_size_tween) and _phone_size_tween.is_running(): await _phone_size_tween.finished
+	_set_phone_app("shop")
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if _phone_app_id != "shop" or not is_instance_valid(phone_scroll): return
@@ -52973,6 +52981,9 @@ func _machine_owned(id: String) -> bool:
 
 
 func _note_machine_used(id: String) -> void:
+	if mp_enabled and not NetManager.is_host():
+		if not _mp_applying: mp_machine_used.rpc_id(1,id)
+		return
 	if id == "" or _machine_is_broken(id):
 		return
 	if not playing or not _machine_owned(id):
@@ -53020,6 +53031,9 @@ func _break_machine(id: String) -> void:
 
 
 func _repair_machine(id: String) -> void:
+	if mp_enabled and not _mp_applying:
+		mp_request_machine_repair.rpc_id(1, id)
+		return
 	_machine_broken[id] = false
 	_machine_use_count[id] = 0
 	_clear_machine_break_fx(id)
@@ -67200,6 +67214,7 @@ func _on_stations_row_gui_input(ev: InputEvent) -> void:
 
 
 func _begin_whole_burger_drag(station_index: int, button: MouseButton = MOUSE_BUTTON_LEFT) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	if not playing or _serve_fly_busy or not _whole_burger_drag.is_empty():
 		return
 	var preview: Control = stations[station_index]["preview"]
@@ -67215,6 +67230,7 @@ func _begin_whole_burger_drag(station_index: int, button: MouseButton = MOUSE_BU
 	_whole_burger_drag = {"station": station_index, "preview": preview,
 		"rest": preview.position, "mouse": get_viewport().get_mouse_position(), "button": button, "wobble": Vector2.ZERO, "velocity": Vector2.ZERO, "target": Vector2.ZERO, "phase": 0.0, "z": preview.z_index}
 	preview.z_index = 100
+	_mp_send_build_pose(true)
 	stations[station_index]["carried_closed"] = true
 	_refresh_station(station_index)
 	var layers: Array = []
@@ -67229,6 +67245,7 @@ func _finish_whole_burger_drag() -> void:
 	var preview: Control = _whole_burger_drag["preview"]
 	var rest: Vector2 = _whole_burger_drag["rest"]
 	var station_index := int(_whole_burger_drag["station"])
+	_mp_send_build_pose(false)
 	for layer in _whole_burger_drag.get("layers",[]):
 		if is_instance_valid(layer.row):
 			var settle := create_tween().set_parallel(true)
@@ -67260,6 +67277,7 @@ func _update_whole_burger_wobble(delta: float) -> void:
 	_whole_burger_drag.target = target*exp(-dt*9.0)
 	_whole_burger_drag.phase += dt*10.0
 	preview.rotation = -wobble.x*.004
+	_mp_send_build_pose(true)
 	var layers: Array = _whole_burger_drag.get("layers",[])
 	for i in layers.size():
 		var layer: Dictionary = layers[i]
@@ -67885,10 +67903,12 @@ func _ensure_ingredient_slingshot() -> Node2D:
 func mp_ingredient_slingshot(id: String, source: Vector2, target: Vector2) -> void:
 	if not NetManager.is_host() or not playing or not GameDataScript.INGREDIENT_LABELS.has(id): return
 	if not source.is_finite() or not target.is_finite(): return
-	if _spend_ingredient(id): mp_ingredient_launch.rpc(id, source, target)
+	if _spend_ingredient(id):
+		mp_ingredient_launch(id,source,target)
+		mp_ingredient_launch.rpc(id, source, target)
 	_mp_broadcast_economy()
 
-@rpc("authority", "call_local", "reliable")
+@rpc("authority", "call_remote", "reliable")
 func mp_ingredient_launch(id: String, source: Vector2, target: Vector2) -> void:
 	_ensure_ingredient_slingshot().launch(id,source*get_viewport().get_visible_rect().size,target*get_viewport().get_visible_rect().size)
 
@@ -68501,12 +68521,13 @@ func _make_held_bun(_kind: String = "bun_pair", cook_time: float = 0.0) -> Area3
 
 
 func _request_bun_pickup(station_index: int) -> void:
-	if NetManager.is_host(): mp_request_bun_pickup(station_index)
-	else: mp_request_bun_pickup.rpc_id(1, station_index)
+	var origin := _pending_bun_drop if _pending_bun_drop.is_finite() else _tool_hold_point_from_screen(get_viewport().get_mouse_position(),GRILL_SURFACE_Y+.20)
+	if NetManager.is_host(): mp_request_bun_pickup(station_index,origin)
+	else: mp_request_bun_pickup.rpc_id(1, station_index,origin)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func mp_request_bun_pickup(station_index: int) -> void:
+func mp_request_bun_pickup(station_index: int, origin: Vector3 = Vector3.INF) -> void:
 	if not NetManager.is_host() or not playing or not BUN_TOAST_ENABLED: return
 	var peer := _mp_sender_id()
 	if peer == 0: peer = NetManager.my_id()
@@ -68521,13 +68542,13 @@ func mp_request_bun_pickup(station_index: int) -> void:
 		if int(supply_stock.get("bun_bottom", 0)) <= 0 or int(supply_stock.get("bun_top", 0)) <= 0: return
 		_mp_spend_ingredient("bun_bottom")
 		_mp_spend_ingredient("bun_top")
-	mp_bun_picked_up.rpc(NetManager.alloc_net_id(), peer, station_index, cook)
+	mp_bun_picked_up.rpc(NetManager.alloc_net_id(), peer, station_index, cook, origin if origin.is_finite() and origin.length() < 20.0 else Vector3(GRILL_CENTER_X,GRILL_SURFACE_Y+.2,GRILL_SURFACE_Z))
 	_mp_broadcast_station(STATION_CRAFT)
 	_mp_broadcast_economy()
 
 
 @rpc("authority", "call_local", "reliable")
-func mp_bun_picked_up(net_id: int, peer: int, station_index: int, cook: float) -> void:
+func mp_bun_picked_up(net_id: int, peer: int, station_index: int, cook: float, origin: Vector3 = Vector3.INF) -> void:
 	if is_instance_valid(_patty_by_net_id(net_id)): return
 	if station_index >= 0 and station_index < stations.size():
 		var st: Dictionary = stations[station_index]
@@ -68538,6 +68559,7 @@ func mp_bun_picked_up(net_id: int, peer: int, station_index: int, cook: float) -
 	elif not stations[STATION_CRAFT]["items"].has("bun_bottom"):
 		stations[STATION_CRAFT]["buns_on_grill"] = true
 	var bun := _make_held_bun("bun_pair", cook)
+	if origin.is_finite(): bun.global_position = origin
 	bun.net_id = net_id
 	bun.mp_puppet = not NetManager.is_host()
 	_mp_mark_held(peer, bun)
@@ -68551,6 +68573,11 @@ func mp_bun_picked_up(net_id: int, peer: int, station_index: int, cook: float) -
 		spatula_carry_travel = 0.0
 		_refresh_spatula_ui()
 		_update_held_spatula_patty(.016)
+		if _pending_bun_drop.is_finite():
+			var drop := _pending_bun_drop
+			_pending_bun_drop = Vector3.INF
+			spatula_lmb_held = false
+			_place_spatula_on_grill(drop)
 	_refresh_ticket_checkmarks()
 
 
@@ -68896,6 +68923,7 @@ func _can_drop_on_assembly(station_index: int, data: Variant) -> bool:
 
 
 func _drop_on_assembly(station_index: int, at_pos: Vector2, data: Variant) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	if typeof(data) != TYPE_DICTIONARY:
 		return
 	_select_station(station_index)
@@ -69122,6 +69150,7 @@ func _build_ingredient_buttons() -> void:
 
 
 func _add_ingredient(id: String) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	if id == "bun_bottom":
 		return
 	if active_station >= 0 and active_station < stations.size():
@@ -69459,6 +69488,7 @@ func _add_cheese_to_warmer_patty(_station_index: int) -> bool:
 
 
 func _add_ingredient_to_station(station_index: int, id: String, play_sfx: bool = true) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	if not playing or id == "":
 		return
 	if id == "bun_bottom" and mp_enabled and not _mp_applying:
@@ -69497,6 +69527,7 @@ func mp_bun_pair_flight(station_index: int) -> void:
 
 
 func _add_ingredient_to_station_local(station_index: int, id: String, play_sfx: bool = true) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	if is_instance_valid(_grubbah) and str(_grubbah.state.get("phase",""))=="wrapping": return
 	if not playing or id == "":
 		return
@@ -69966,7 +69997,9 @@ func _ensure_station_layer_control(index: int, preview: Control, visual_i: int) 
 
 
 func _refresh_station(index: int) -> void:
+	if not _build_swipe.is_empty() and int(_build_swipe.station)==index and _build_swipe.items==stations[index]["items"]: return
 	var st: Dictionary = stations[index]
+	if int(st.get("remote_build_until",0)) > Time.get_ticks_msec(): return
 	var preview: Control = st["preview"]
 	if preview == null:
 		return
@@ -70217,7 +70250,8 @@ func _station_patty_layer_tex(st: Dictionary, pidx: int, with_cheese: bool) -> T
 
 func _center_build_burger_on_board() -> void:
 	if not is_instance_valid(camera) or not is_instance_valid(build_cutting_board): return
-	if not _whole_burger_drag.is_empty(): return
+	if not _whole_burger_drag.is_empty() or not _build_swipe.is_empty(): return
+	if stations.size() > STATION_CRAFT and int(stations[STATION_CRAFT].get("remote_build_until",0)) > Time.get_ticks_msec(): return
 	if is_instance_valid(_whole_burger_settle) and _whole_burger_settle.is_running(): return
 	if stations.size() <= STATION_CRAFT: return
 	var st: Dictionary = stations[STATION_CRAFT]
@@ -70540,6 +70574,7 @@ func _clear_local_held_icecream_after_remote_hand() -> void:
 
 
 func _try_auto_serve() -> void:
+	if is_instance_valid(_side_grace_customer): return
 	# Sauce/drink completion may change readiness; handoff still requires a click.
 	for i in stations.size():
 		if bool(stations[i].get("crown_ready", false)) != _station_burger_complete(i):
@@ -71671,6 +71706,9 @@ func _play_serve_fly_to_mouth(
 		apply_bun_pinch.call(bun_pinch_px * 0.55)
 		apply_topping_crush.call(topping_crush_px * 0.5)
 	tw.tween_method(fly_step, 0.0, 1.0, 0.26).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(customer): customer.set_meta("burger_received_ms",Time.get_ticks_msec())
+	)
 
 	# Follow the same animated grip through the rest of the grab and the bite.
 	# Keep burger_in_flight until eating finishes so no queued departure cuts it off.
@@ -72071,6 +72109,18 @@ func _complete_serve(
 	if bool(cust.get("is_challenge_guest")):
 		_complete_challenge_serve(station_index, cust, remote_drink)
 		return
+	if bool(cust.get_meta("serve_missing_side",false)) and not bool(cust.get_meta("side_grace_done",false)):
+		cust.set_meta("side_grace_done",true)
+		await _wait_for_side_delivery(cust)
+		if not is_instance_valid(cust) or not playing: return
+		var missing_sides := _missing_delivered_sides(cust)
+		cust.set_meta("serve_missing_items",missing_sides)
+		cust.set_meta("serve_missing_side",not missing_sides.is_empty())
+		# The grace has ended; release their place in the line now.
+		var still_missing := bool(cust.get_meta("serve_missing_side",false))
+		cust.set_meta("serve_missing_side",false)
+		_begin_customer_serve_handoff(cust)
+		cust.set_meta("serve_missing_side",still_missing)
 	var st: Dictionary = stations[station_index]
 	var items: Array = cust.get_meta("serve_recipe", _station_order_items(station_index)).duplicate()
 	var cached_review_pic := _make_review_burger_snapshot(station_index)
@@ -72504,6 +72554,8 @@ func _mp_take_remote_cup_for_serve(
 		var fallback_flavor := GameDataScript.soda_flavor_from_order_id(str(sodas[0])) \
 				if not sodas.is_empty() else "cola"
 		_mp_apply_remote_cup_fill(remote_drink, fallback_flavor, 1.0, 0.0, 0.0, false)
+	var departing_cup: Node3D = _mp_remote_cups.get(source_peer_id)
+	if is_instance_valid(departing_cup): _mp_proxy_samples.erase(departing_cup.get_instance_id())
 	_mp_remote_cups.erase(source_peer_id)
 	_mp_remote_soda_pouring.erase(source_peer_id)
 	_mp_remote_ice_pouring.erase(source_peer_id)
@@ -72689,6 +72741,7 @@ func _begin_customer_serve_handoff(customer: Node3D) -> void:
 		return
 	if customer.get_meta("hotdog_boss", false): _ensure_hotdog_challenge().reserve_order()
 	customer.set_meta("serve_in_progress", true)
+	if bool(customer.get_meta("serve_missing_side",false)): return
 	if bool(customer.get("is_challenge_guest")):
 		# This ticket represents the entire batch, not just the current burger.
 		return
@@ -72712,6 +72765,7 @@ func _begin_serve_at(
 	source_peer_id: int = 0,
 	source_has_held_cup: bool = false
 ) -> void:
+	if is_instance_valid(_side_grace_customer): return
 	if is_instance_valid(customer) and customer.get_meta("hotdog_boss",false) and not _ensure_hotdog_challenge().can_serve(): return
 	if is_instance_valid(customer) and bool(customer.get_meta("mobile_order",false)):
 		_grubbah.request("action")
@@ -75355,7 +75409,7 @@ func mp_request_bootstrap(_claimed_id: int = 0) -> void:
 
 func _mp_send_bootstrap_to(peer_id: int) -> void:
 	if NetManager.is_host() and not playing and is_instance_valid(_shift_results) and _shift_results.active:
-		mp_shift_closed.rpc_id(peer_id,_mp_closed_shift_state(),float(Time.get_ticks_msec()-_shift_results.started_ms)/1000.0)
+		_mp_send_closed_shift(peer_id,float(Time.get_ticks_msec()-_shift_results.started_ms)/1000.0)
 		return
 	## Full mid-round catch-up: economy, customers, patties, grill, Build.
 	if not NetManager.is_host() or not playing or _mp_bootstrap_active.has(peer_id):
@@ -75852,6 +75906,7 @@ func _mp_send_held_cup_pose(force: bool = false) -> void:
 	if not mp_enabled or not NetManager.is_online():
 		return
 	var active := cup_held or _cup_parked_filling
+	_mp_local_cup_active = active
 	if not active or cup_root == null or not is_instance_valid(cup_root):
 		if force:
 			_mp_queue_motion("mp_cup_pose", [false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "", 0.0, 0.0, 0.0, false, false])
@@ -75878,7 +75933,8 @@ func _mp_send_held_icecream_pose(force: bool = false) -> void:
 	## Stream held soft-serve so partners see the cone, fill level, and dispensing.
 	if not mp_enabled or not NetManager.is_online():
 		return
-	var active := icecream_cone_held or _icecream_parked_filling or (is_instance_valid(icecream_cone_root) and bool(icecream_cone_root.get_meta("auto_fill_travel",false)))
+	var active := icecream_cone_held or _icecream_parked_filling
+	_mp_local_icecream_active = active or (is_instance_valid(icecream_cone_root) and bool(icecream_cone_root.get_meta("auto_fill_travel",false)))
 	if not active or icecream_cone_root == null or not is_instance_valid(icecream_cone_root):
 		if force:
 			_mp_queue_motion("mp_icecream_pose", [false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false])
@@ -76407,8 +76463,11 @@ func mp_tool_pose(
 	if sid == 0 or sid == multiplayer.get_unique_id():
 		return
 	if not active:
-		_mp_hide_remote_tools(sid, -1)
+		if int(_remote_active_tool.get(sid,-1)) == kind:
+			_mp_hide_remote_tools(sid, -1)
+			_remote_active_tool.erase(sid)
 		return
+	_remote_active_tool[sid] = kind
 	_mp_hide_remote_tools(sid, kind)
 	if kind == 4:
 		_mp_remote_shaker_rattling[sid] = emitting
@@ -77871,7 +77930,8 @@ func mp_sync_grill_mess(
 					float(debris_zs[j]) if j < debris_zs.size() else GRILL_SURFACE_Z
 				),
 				float(debris_masses[j]) if j < debris_masses.size() else 1.0,
-				int(debris_slots[j]) if j < debris_slots.size() else -1
+				int(debris_slots[j]) if j < debris_slots.size() else -1,
+				false
 			)
 			if debris_piles.size() > before_count:
 				found_index = debris_piles.size() - 1
@@ -79375,6 +79435,7 @@ func mp_soda_flavor(fid: String) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func mp_cup_park(cup_net_id: int, flavor: String, fill: float, ice: float, fizz: float) -> void:
+	if _consumed_cup_ids.has(cup_net_id): return
 	## Partner set a drink idle on the tray — upsert so fill/foam stay in sync.
 	_mp_applying = true
 	_mp_spawn_parked_drink_local(cup_net_id, flavor, fill, ice, fizz)
@@ -79397,6 +79458,7 @@ func mp_cup_steel(
 	lid_down: bool = false,
 	on_side: bool = false
 ) -> void:
+	if _consumed_cup_ids.has(cup_net_id): return
 	## Partner set a drink on cold steel or HOLD — sit it there, no melt.
 	_mp_applying = true
 	_mp_spawn_steel_drink_local(cup_net_id, x, z, flavor, fill, ice, fizz, on_hold, rot_x, rot_y, rot_z, lid_down, on_side)
@@ -79413,6 +79475,7 @@ func mp_cup_unpark(cup_net_id: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func mp_cup_consume(flavor: String, cup_net_id: int = -1) -> void:
+	if cup_net_id >= 0: _consumed_cup_ids[cup_net_id] = true
 	## Partner served a drink — remove the matching idle/active cup here.
 	_mp_applying = true
 	_mp_consume_drink_local(flavor, cup_net_id)
@@ -79851,7 +79914,9 @@ func _mp_spawn_steel_drink_local(
 
 func _mp_consume_drink_local(flavor: String, cup_net_id: int = -1) -> void:
 	## Prefer exact net id; else a parked flavor match; else clear active cup.
-	if cup_net_id >= 0 and _mp_remove_parked_cup_by_net_id(cup_net_id):
+	if cup_net_id >= 0:
+		_consumed_cup_ids[cup_net_id] = true
+		_mp_remove_parked_cup_by_net_id(cup_net_id)
 		return
 	var target: Node3D = null
 	for c in parked_cups:
@@ -80186,7 +80251,10 @@ func _mp_service_tick() -> void:
 		_mp_state_jobs.clear()
 		_mp_apply_jobs.clear()
 		return
+	_mp_recover_shared_world()
 	_mp_process_food_requests()
+	if _mp_local_cup_active and not cup_held and not _cup_parked_filling: _mp_send_held_cup_pose(true)
+	if _mp_local_icecream_active and not icecream_cone_held and not _icecream_parked_filling: _mp_send_held_icecream_pose(true)
 	_mp_flush_motion()
 	_mp_apply_motion()
 	_mp_service_bootstrap()
@@ -80249,7 +80317,7 @@ func mp_request_state(topic: String) -> void:
 
 
 func _mp_motion_key(method: String, args: Array) -> String:
-	if method in ["mp_patty_pose", "mp_fryer_basket_pose"]:
+	if method in ["mp_patty_pose", "mp_fryer_basket_pose", "mp_tool_pose"]:
 		return method + ":" + str(args[0])
 	return method
 
@@ -80257,6 +80325,14 @@ func _mp_queue_motion(method: String, args: Array) -> void:
 	if not mp_enabled or not NetManager.is_online():
 		return
 	if method == "mp_tool_pose":
+		if bool(args[1]):
+			for old_key in _mp_motion_latest.keys():
+				var old: Dictionary = _mp_motion_latest[old_key]
+				if old.method == "mp_tool_pose" and int(old.args[0]) != int(args[0]) and bool(old.args[1]):
+					old.args[1] = false
+					_mp_motion_sequence += 1
+					old.seq = _mp_motion_sequence
+					_mp_motion_dirty = true
 		var shared_kind := int(args[0]) if bool(args[1]) and int(args[0]) in [2, 4] else -1
 		if shared_kind != _mp_last_shared_tool:
 			_mp_last_shared_tool = shared_kind
@@ -80306,7 +80382,7 @@ func mp_motion_frame(rows: Array) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender <= 0 or rows.size() > 32:
 		return
-	var arities := {"mp_tool_pose": 9, "mp_cup_pose": 13, "mp_icecream_pose": 9, "mp_cursor_pos": 4, "mp_patty_pose": 9, "mp_fryer_basket_pose": 12}
+	var arities := {"mp_tool_pose": 9, "mp_cup_pose": 13, "mp_icecream_pose": 9, "mp_cursor_pos": 4, "mp_patty_pose": 9, "mp_fryer_basket_pose": 12, "mp_build_pose": 5, "mp_build_layer_pose": 6}
 	for row in rows:
 		if not row is Dictionary:
 			continue
@@ -80826,8 +80902,6 @@ func mp_shift_closed(state: Dictionary, elapsed: float=0.0) -> void:
 		_end_day(true)
 		_shift_results.seek_closing(elapsed)
 		if elapsed>=12.0: _show_parade_shift_results()
-	else:
-		_shift_results.rebuild()
 	remove_meta("mp_closed_bank_summary")
 	_mp_bootstrap_ready=true
 	_mp_bootstrap_waiting=0
@@ -80978,3 +81052,172 @@ func _show_boss_machine(id: String, duration: float) -> void:
 
 func _begin_ticket_transition() -> void:
 	_ticket_transition_until = 0
+
+
+var _shared_world_send_at := 0
+var _shared_close_send_at := 0
+
+func _mp_recover_shared_world() -> void:
+	if not NetManager.is_host() or not _kitchen_ready: return
+	var now := Time.get_ticks_msec()
+	if not playing:
+		if is_instance_valid(_shift_results) and _shift_results.active and now >= _shared_close_send_at:
+			_shared_close_send_at = now + 1500
+			_mp_send_closed_shift(0, float(now - _shift_results.started_ms) / 1000.0)
+		return
+	if now < _shared_world_send_at: return
+	_shared_world_send_at = now + 250
+	var boss_data: Array = []
+	if is_instance_valid(_hotdog_challenge):
+		var b = _hotdog_challenge
+		boss_data = [b.phase,b.perfect,b.mistakes,b.recipes,b.clip,b.timer,b.impact_serial,b.generation,b.order_left,b.boss_position,b.boss_scale,b.failure_reason,b.spectator_presets,b.spectator_time,b.decorations_hit]
+	mp_shared_world.rpc(var_to_bytes(boss_data).compress(FileAccess.COMPRESSION_DEFLATE), _machine_broken, _machine_use_count, _boss_suggested_item)
+	_mp_send_cat_sync()
+	_mp_broadcast_grill_mess()
+
+@rpc("authority", "call_remote", "reliable")
+func mp_shared_world(payload: PackedByteArray, broken: Dictionary, uses: Dictionary, suggestion: String = "") -> void:
+	if not _kitchen_ready: return
+	var decoded = bytes_to_var(payload.decompress_dynamic(2097152,FileAccess.COMPRESSION_DEFLATE))
+	if not decoded is Array: return
+	var boss_data: Array = decoded
+	if suggestion != "" and suggestion != _boss_suggested_item:
+		_boss_suggested_item = suggestion
+		_open_phone_to_shop_item(suggestion)
+	if suggestion == "": _boss_suggested_item = ""
+	if boss_data.size() == 15:
+		_ensure_hotdog_challenge().callv("sync_state", boss_data)
+	for id in broken:
+		var changed := bool(_machine_broken.get(id,false)) != bool(broken[id])
+		_machine_broken[id] = bool(broken[id])
+		_machine_use_count[id] = int(uses.get(id,0))
+		if changed:
+			if bool(broken[id]): _ensure_machine_break_fx(id)
+			else: _clear_machine_break_fx(id)
+
+@rpc("any_peer", "call_local", "reliable")
+func mp_request_machine_repair(id: String) -> void:
+	if not NetManager.is_host() or not playing or not _machine_broken.has(id): return
+	_mp_applying = true
+	_repair_machine(id)
+	_mp_applying = false
+	_shared_world_send_at = 0
+	_mp_recover_shared_world()
+
+@rpc("authority", "call_remote", "unreliable_ordered", 4)
+func mp_bird_snapshot(data: Dictionary) -> void:
+	if is_instance_valid(park_bird_house): park_bird_house.apply_network_snapshot(data)
+
+@rpc("any_peer","call_local","reliable")
+func mp_bird_interact(kind: String, target: Vector2) -> void:
+	if not NetManager.is_host() or not playing or not is_instance_valid(park_bird_house) or not target.is_finite(): return
+	if kind == "chirp": park_bird_house._chirp()
+	elif kind == "tap": park_bird_house.swing_velocity.y = clampf(park_bird_house.swing_velocity.y+.42,-.6,.6)
+	elif kind == "drag":
+		park_bird_house.network_drag_target = target.clamp(Vector2(-.12,-.16),Vector2(.12,.16))
+		park_bird_house.network_drag_left = .2
+
+func _mp_send_build_pose(active: bool) -> void:
+	if not mp_enabled or _whole_burger_drag.is_empty(): return
+	var preview: Control = _whole_burger_drag.preview
+	var offset: Vector2 = preview.position - Vector2(_whole_burger_drag.rest)
+	var pixels: Vector2 = preview.get_parent().get_global_transform_with_canvas().basis_xform(offset)
+	var uv := pixels / get_viewport().get_visible_rect().size
+	_mp_queue_motion("mp_build_pose",[int(_whole_burger_drag.station),active,uv.x,uv.y,preview.rotation])
+
+func mp_build_pose(index: int, active: bool, x: float, y: float, angle: float) -> void:
+	if index < 0 or index >= stations.size() or not _whole_burger_drag.is_empty(): return
+	var st: Dictionary = stations[index]
+	var preview: Control = st.get("preview")
+	if not is_instance_valid(preview): return
+	if active and not st.has("remote_build_rest"):
+		st.remote_build_rest = preview.position
+		st.remote_build_z = preview.z_index
+	if active:
+		st.remote_build_until = Time.get_ticks_msec()+1200
+		st.carried_closed = true
+		preview.z_index = 100
+		var offset := Vector2(x,y)*get_viewport().get_visible_rect().size
+		preview.position = Vector2(st.remote_build_rest)+preview.get_parent().get_global_transform_with_canvas().affine_inverse().basis_xform(offset)
+		preview.rotation = angle
+	elif st.has("remote_build_rest"):
+		preview.position = st.remote_build_rest
+		preview.rotation = 0.0
+		preview.z_index = int(st.remote_build_z)
+		st.erase("remote_build_rest"); st.erase("remote_build_until")
+		st.carried_closed = false
+		_refresh_station(index)
+
+func _missing_delivered_sides(cust: Node3D) -> Array:
+	var missing: Array = []
+	if not GameDataScript.order_soda_ids(cust.order).is_empty() and not _customer_soda_handed(cust): missing.append_array(GameDataScript.order_soda_ids(cust.order))
+	if GameDataScript.wants_fries(cust.order) and not _customer_fries_handed(cust): missing.append("fries")
+	if GameDataScript.wants_icecream(cust.order) and not _customer_icecream_handed(cust): missing.append("icecream")
+	return missing
+
+var _consumed_cup_ids: Dictionary = {}
+
+var _pending_bun_drop := Vector3.INF
+var _remote_build_layers: Dictionary = {}
+func mp_build_layer_pose(index: int, layer: int, id: String, active: bool, x: float, y: float) -> void:
+	if index < 0 or index >= stations.size() or not _build_swipe.is_empty(): return
+	var st: Dictionary = stations[index]
+	if active:
+		st.remote_build_until = Time.get_ticks_msec()+1200
+		var rows: Array = st.get("layer_pool",[])
+		for i in rows.size():
+			var row: Control = rows[i]
+			if not is_instance_valid(row) or not row.visible: continue
+			if i != layer and not (id in ["bun_bottom","bun_top"] and str(row.get_meta("item_id","")) in ["bun_bottom","bun_top"]): continue
+			if not _remote_build_layers.has(row): _remote_build_layers[row] = row.position
+			var offset := Vector2(x,y)*get_viewport().get_visible_rect().size
+			row.position = Vector2(_remote_build_layers[row])+row.get_parent().get_global_transform_with_canvas().affine_inverse().basis_xform(offset)
+	else:
+		for row in _remote_build_layers:
+			if is_instance_valid(row): row.position = _remote_build_layers[row]
+		_remote_build_layers.clear()
+		st.erase("remote_build_until")
+		_refresh_station(index)
+
+var _mp_local_cup_active := false
+var _mp_local_icecream_active := false
+
+@rpc("any_peer","call_remote","reliable")
+func mp_machine_used(id: String) -> void:
+	if NetManager.is_host() and id in _machine_ids(): _note_machine_used(id)
+
+var _remote_active_tool: Dictionary = {}
+
+func _wait_for_side_delivery(cust: Node3D) -> void:
+	_side_grace_customer = cust
+	# Scoring is invoked before the flight; the five seconds begin at the catch.
+	while is_instance_valid(cust) and playing and bool(cust.get_meta("burger_in_flight",false)) and not cust.has_meta("burger_received_ms"):
+		if Time.get_ticks_msec() >= int(cust.get_meta("burger_arrival_deadline",0)): break
+		await get_tree().process_frame
+	var deadline := Time.get_ticks_msec()+5000
+	while is_instance_valid(cust) and playing:
+		if _missing_delivered_sides(cust).is_empty() or Time.get_ticks_msec() >= deadline: break
+		# Keep side handoff RPCs and local drink/fries controls available.
+		_serve_fly_busy = false
+		_serve_fly_watch = 0.0
+		await get_tree().create_timer(.05).timeout
+	_side_grace_customer = null
+
+@rpc("authority","call_remote","reliable")
+func mp_hotdog_snapshot(payload: PackedByteArray) -> void:
+	if not _kitchen_ready: return
+	var args = bytes_to_var(payload.decompress_dynamic(2097152,FileAccess.COMPRESSION_DEFLATE))
+	if not args is Array or args.size() != 15: return
+	_ensure_hotdog_challenge().callv("sync_state",args)
+
+func _mp_send_closed_shift(peer: int, elapsed: float) -> void:
+	var payload := var_to_bytes(_mp_closed_shift_state()).compress(FileAccess.COMPRESSION_DEFLATE)
+	if peer > 0: mp_shift_closed_payload.rpc_id(peer,payload,elapsed)
+	else: mp_shift_closed_payload.rpc(payload,elapsed)
+
+@rpc("authority","call_remote","reliable")
+func mp_shift_closed_payload(payload: PackedByteArray, elapsed: float) -> void:
+	var data = bytes_to_var(payload.decompress_dynamic(2097152,FileAccess.COMPRESSION_DEFLATE))
+	if data is Dictionary: mp_shift_closed(data,elapsed)
+
+var _side_grace_customer: Node3D

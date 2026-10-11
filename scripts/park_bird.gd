@@ -1,5 +1,5 @@
 extends Node3D
-## Cosmetic park wildlife. No gameplay collisions, per-frame resource loads, or network traffic.
+## Host-driven wildlife with replicated poses and sound events.
 const BIRD_SCENE: PackedScene = preload("res://models/park_bird/park_bird.glb")
 const HOUSE_SCENE: PackedScene = preload("res://models/park_bird/birdhouse.glb")
 const HOUSE_SCALE := 0.32 # Asset itself already includes the requested 1.2 enlargement.
@@ -14,6 +14,14 @@ const LAUNCH := Vector3(0.16, 0.30, 0.30)
 const DISTANT := Vector3(8.0, 3.5, 5.0)
 const APPROACH := Vector3(-7.0, 3.0, 5.0)
 const LANDING := Vector3(-0.25, 0.25, 0.35)
+var game: Node
+var network_pose: Dictionary = {}
+var sound_serial := 0
+var sound_kind := ""
+var received_sound := -1
+var network_send_left := 0.0
+var network_drag_left := 0.0
+var network_drag_target := Vector2.ZERO
 var sway: Node3D
 var sway_time := 0.0
 var swing := Vector2.ZERO
@@ -93,9 +101,11 @@ func _audio_player(label: String, stream: AudioStream, level: float) -> AudioStr
 	return player
 
 func _chirp() -> void:
+	if is_instance_valid(game) and game.mp_enabled and not NetManager.is_host(): return
 	voice.position = bird.position
 	voice.pitch_scale = _rng.randf_range(1.05, 1.22)
 	voice.play()
+	sound_serial += 1; sound_kind = "chirp"
 	sound_triggered.emit(&"chirp")
 
 func set_enabled(value: bool) -> void:
@@ -155,7 +165,28 @@ func _enter(next: StringName) -> void:
 	animator.play(clip, 0.05)
 
 func _process(delta: float) -> void:
+	if is_instance_valid(game) and game.mp_enabled and not NetManager.is_host():
+		network_send_left -= delta
+		tap_cooldown = maxf(0.0,tap_cooldown-delta)
+		if dragging_house:
+			if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and network_send_left <= 0.0:
+				network_send_left = .05
+				var pull := get_viewport().get_mouse_position() - drag_origin
+				game.mp_bird_interact.rpc_id(1,"drag",(drag_swing + Vector2(pull.y,-pull.x)*.002).clamp(Vector2(-.12,-.16),Vector2(.12,.16)))
+			elif not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT): dragging_house = false
+		if not network_pose.is_empty():
+			bird.position = bird.position.lerp(network_pose.position, minf(1.0,delta*18.0))
+			bird.rotation.y = lerp_angle(bird.rotation.y,float(network_pose.yaw),minf(1.0,delta*18.0))
+			sway.transform = sway.transform.interpolate_with(network_pose.sway,minf(1.0,delta*18.0))
+			voice.position = bird.position
+			wing_sound.position = bird.position
+		return
 	advance(delta)
+	if is_instance_valid(game) and game.mp_enabled and NetManager.is_host():
+		network_send_left -= delta
+		if network_send_left <= 0.0:
+			network_send_left = .05
+			game.mp_bird_snapshot.rpc(network_snapshot())
 
 func _move_flying(offset: Vector3) -> void:
 	var destination := PERCH + offset
@@ -169,7 +200,8 @@ func advance(delta: float) -> void:
 	sway_time += delta
 	tap_cooldown = maxf(0.0, tap_cooldown - delta)
 	if dragging_house and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT): dragging_house = false
-	var target := Vector2.ZERO
+	network_drag_left = maxf(0.0,network_drag_left-delta)
+	var target := network_drag_target if network_drag_left > 0.0 else Vector2.ZERO
 	if dragging_house:
 		var pull := get_viewport().get_mouse_position() - drag_origin
 		target = (drag_swing + Vector2(pull.y, -pull.x) * 0.002).clamp(Vector2(-0.12, -0.16), Vector2(0.12, 0.16))
@@ -177,7 +209,7 @@ func advance(delta: float) -> void:
 	var remaining := minf(delta, 0.25)
 	while remaining > 0.0:
 		var step := minf(remaining, 1.0 / 120.0)
-		swing_velocity += ((target - swing) * 28.0 - swing_velocity * (8.0 if dragging_house else 0.85)) * step
+		swing_velocity += ((target - swing) * 28.0 - swing_velocity * (8.0 if dragging_house or network_drag_left > 0.0 else 0.85)) * step
 		swing += swing_velocity * step
 		remaining -= step
 	sway.rotation = Vector3(sin(sway_time * 1.1) * 0.009 + swing.x, 0.0, sin(sway_time * 1.4) * 0.014 + swing.y)
@@ -222,6 +254,7 @@ func advance(delta: float) -> void:
 					tap_sound.position = PERCH
 					tap_sound.pitch_scale = _rng.randf_range(1.3, 1.5)
 					tap_sound.play()
+					sound_serial += 1; sound_kind = "peck"
 					sound_triggered.emit(&"peck")
 			if state_time >= 2.0: _enter(&"Idle")
 	wing_sound.position = bird.position
@@ -231,11 +264,13 @@ func tap_at(camera: Camera3D, screen_position: Vector2) -> bool:
 	if not enabled or not is_visible_in_tree(): return false
 	if bird.visible and _mesh_hit(bird, camera, screen_position):
 		if tap_cooldown <= 0.0:
-			_chirp()
+			if is_instance_valid(game) and game.mp_enabled: game.mp_bird_interact.rpc_id(1,"chirp",Vector2.ZERO)
+			else: _chirp()
 			tap_cooldown = 0.25
 		return true
 	if _mesh_hit(house, camera, screen_position):
-		swing_velocity.y = clampf(swing_velocity.y + 0.42, -0.6, 0.6)
+		if is_instance_valid(game) and game.mp_enabled: game.mp_bird_interact.rpc_id(1,"tap",Vector2.ZERO)
+		else: swing_velocity.y = clampf(swing_velocity.y + 0.42, -0.6, 0.6)
 		dragging_house = true
 		drag_origin = screen_position
 		drag_swing = swing
@@ -252,3 +287,20 @@ func _mesh_hit(target: Node3D, camera: Camera3D, point: Vector2) -> bool:
 		if mesh.get_aabb().grow(0.015).intersects_segment(inverse * start, inverse * end) != null:
 			return true
 	return false
+
+func network_snapshot() -> Dictionary:
+	return {"state":str(state),"time":state_time,"position":bird.position,"yaw":bird.rotation.y,"sway":sway.transform,"visible":bird.visible,"enabled":enabled,"sound":sound_kind,"serial":sound_serial}
+
+func apply_network_snapshot(data: Dictionary) -> void:
+	if bird == null or data.is_empty(): return
+	set_enabled(bool(data.enabled))
+	if state != StringName(data.state): _enter(StringName(data.state))
+	state_time = float(data.time)
+	if animator.is_playing(): animator.seek(state_time*animator.speed_scale,true)
+	bird.visible = bool(data.visible)
+	if network_pose.is_empty(): bird.position = data.position; sway.transform = data.sway
+	network_pose = data
+	if received_sound >= 0 and int(data.serial) != received_sound:
+		if data.sound == "chirp": voice.position = bird.position; voice.play()
+		elif data.sound == "peck": tap_sound.play()
+	received_sound = int(data.serial)

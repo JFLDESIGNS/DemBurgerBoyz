@@ -50,7 +50,7 @@ func handle_input(event: InputEvent) -> bool:
 			game._clear_pending_ingredient_throw_state(id)
 			if fire and game._mp_can_spend_ingredient(id):
 				if game.mp_enabled:
-					game.mp_ingredient_slingshot.rpc(id,source/get_viewport_rect().size,target/get_viewport_rect().size)
+					game.mp_ingredient_slingshot.rpc_id(1,id,source/get_viewport_rect().size,target/get_viewport_rect().size)
 				elif game._spend_ingredient(id): launch(id,source,target)
 			return true
 		ingredient = ""
@@ -160,6 +160,8 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 	var assisted := catch_target(target)
 	var flyer: MeshInstance3D = game._make_thrown_ingredient_card(id,game.FoodSpritesScript.get_tex(id))
 	game.world.add_child(flyer); flyer.global_position=start
+	flyer.name = "ReplicatedIngredientFlight"
+	flyer.look_at(game.camera.global_position,Vector3.UP)
 	var duration := clampf(.55-source.distance_to(target)/4000,.25,.5)
 	var whistle: AudioStreamPlayer = game.game_audio.start_ingredient_fall_whistle(duration) if game.game_audio else null
 	var whistle_ref: WeakRef = weakref(whistle) if is_instance_valid(whistle) else null
@@ -177,7 +179,7 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 		# A quick shallow arc still lands exactly on the aimed point.
 		pos.y += sin(PI*t)*.10
 		var cat = game.window_cat
-		if is_instance_valid(cat) and cat.is_visible_in_tree():
+		if (not game.mp_enabled or NetManager.is_host()) and is_instance_valid(cat) and cat.is_visible_in_tree():
 			var cat_head: Vector3 = cat.head_global()
 			var cat_nearest := Geometry3D.get_closest_point_to_segment(cat_head, state.previous, pos)
 			if cat_nearest.distance_to(cat_head) < .32:
@@ -187,6 +189,7 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 				flyer.queue_free()
 				return
 		for customer in game.customers:
+			if game.mp_enabled and not NetManager.is_host(): break
 			if not is_instance_valid(customer) or not customer is Node3D or not customer.is_visible_in_tree(): continue
 			var head: Vector3 = game._customer_head_world(customer)
 			for spot in [head,head+Vector3(0,-.28,0)]:

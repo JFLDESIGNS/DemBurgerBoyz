@@ -198,6 +198,7 @@ func local_peer() -> int:
 
 func pointer_world(screen: Vector2) -> Vector3:
  if not is_instance_valid(game.camera):return Vector3.ZERO
+ screen=game._gui_to_camera_screen(screen)
  var origin:Vector3=game.camera.project_ray_origin(screen);var ray:Vector3=game.camera.project_ray_normal(screen)
  if absf(ray.y)<.001:return Vector3.ZERO
  var distance=(game.GRILL_SURFACE_Y+.22-origin.y)/ray.y
@@ -205,7 +206,8 @@ func pointer_world(screen: Vector2) -> Vector3:
 
 func pick_hotdog(screen: Vector2) -> int:
  if not is_instance_valid(game.camera):return -1
- var selected=-1;var nearest=24.0
+ screen=game._gui_to_camera_screen(screen)
+ var selected=-1;var nearest=32.0
  for h in hazards.values():
   if h.age<RELEASE+FLIGHT or h.holder!=0 or game.camera.is_position_behind(h.node.global_position):continue
   var a:Vector2=game.camera.unproject_position(h.node.global_position+Vector3(-.14,0,0))

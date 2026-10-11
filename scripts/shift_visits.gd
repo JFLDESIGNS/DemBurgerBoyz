@@ -34,9 +34,9 @@ func _process(delta: float) -> void:
   return
  if steal_pending or theft_rolled or not cat.enabled or cat._delivery_peek_active or cat._bag_heist or cat._visit_fed: return
  unfed_peek_time += delta
- if unfed_peek_time < 4.0: return
+ if unfed_peek_time < 5.0: return
  theft_rolled = true
- if randf() > .35: return
+ if randf() > .22: return
  var candidates: Array = game.grill.duplicate()
  candidates.shuffle()
  for patty in candidates:

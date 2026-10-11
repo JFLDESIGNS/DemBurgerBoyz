@@ -350,6 +350,8 @@ func start() -> bool:
 	phase = "rumble"; timer = 1.0
 	start_music()
 	customer.hide()
+	# Create the guest actor before any child-node sound/impact RPCs.
+	broadcast()
 	impact(.9)
 	refresh()
 	broadcast()
@@ -813,7 +815,9 @@ func cancel() -> void:
 
 func broadcast() -> void:
 	if not host() or not online(): return
-	sync_state.rpc(phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason, spectator_presets, spectator_time, decorations_hit)
+	var snapshot := [phase, perfect, mistakes, recipes, clip, timer, impact_serial, generation, order_left, boss_position, boss_scale, failure_reason, spectator_presets, spectator_time, decorations_hit]
+	var raw := var_to_bytes(snapshot)
+	game.mp_hotdog_snapshot.rpc(raw.compress(FileAccess.COMPRESSION_DEFLATE))
 	projectiles.broadcast()
 
 @rpc("authority", "call_remote", "reliable")

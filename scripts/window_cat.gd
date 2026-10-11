@@ -584,8 +584,7 @@ var _mp_yaw_target := 0.0
 var _mp_pose_elapsed := 0.0
 
 func apply_mp_sync(d: Dictionary) -> void:
-	if _bag_heist:
-		return
+	mp_puppet = true
 	_state = str(d.get("state", _state))
 	_timer = float(d.get("timer", _timer))
 	_mp_pose_from = position
@@ -667,7 +666,7 @@ func _process(delta: float) -> void:
 	_update_begging_meows(delta)
 	## Puppet peers still run squash / scale / bob, not the peek state machine.
 	## A local trash-bag heist plays on whoever threw it.
-	if mp_puppet and not _bag_heist:
+	if mp_puppet:
 		if _mp_pose_ready:
 			_mp_pose_elapsed += delta
 			var weight := clampf(_mp_pose_elapsed/.10,0.0,1.0)

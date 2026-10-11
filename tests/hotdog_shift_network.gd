@@ -14,23 +14,26 @@ func run() -> void:
 	root.add_child(g); current_scene = g
 	g.playing = true; g._kitchen_ready = true; g._bts_day1_performance_done = true
 	g.day_time = 10; g.stations = [{"items":[], "patties":[]}]
-	var boss = g._ensure_hotdog_challenge(); boss.set_process(false)
-	var net = root.get_node("NetManager"); net.relay_url = ""
+	var boss = g._ensure_hotdog_challenge() if hosting else null
+	if is_instance_valid(boss): boss.set_process(false)
+	var net = root.get_node("NetManager"); net.relay_url = "ws://127.0.0.1:18769" if OS.get_environment("MP_TEST_TRANSPORT")=="relay" else ""
 	if hosting:
 		assert(net.host_room("Boss Host", "Boss closing test") == OK)
 		while not net.is_online(): await process_frame
 		var connection = FileAccess.open(folder.path_join("connection"), FileAccess.WRITE)
-		connection.store_string(str(net.game_port)); connection.close()
+		connection.store_string((net.room_code if OS.get_environment("MP_TEST_TRANSPORT")=="relay" else str(net.game_port))); connection.close()
 		await wait_mark("guest_ready")
 	else:
 		await wait_mark("connection")
-		assert(net.join_room("127.0.0.1", int(FileAccess.get_file_as_string(folder.path_join("connection"))), "Boss Guest") == OK)
+		assert((net.join_by_code(FileAccess.get_file_as_string(folder.path_join("connection")),"Boss Guest") if OS.get_environment("MP_TEST_TRANSPORT")=="relay" else net.join_room("127.0.0.1", int(FileAccess.get_file_as_string(folder.path_join("connection"))), "Boss Guest")) == OK)
 		while not net.is_online(): await process_frame
 	g.mp_enabled = true
 	if not hosting:
 		g._update_shift_clock(20)
-		assert(not boss.active() and g.day_time == 10, "Guest cannot advance the shift or start its own boss")
+		assert(not g._hotdog_active() and g.day_time == 10, "Guest cannot advance the shift or start its own boss")
 		mark("guest_ready")
+		while not is_instance_valid(g._hotdog_challenge): await process_frame
+		boss=g._hotdog_challenge;boss.set_process(false)
 		while boss.phase != "rumble": await process_frame
 		assert(g.customers.size() == 1 and g._hotdog_shift_triggered)
 		g._end_day(); assert(g.playing and not is_instance_valid(g._shift_results))
@@ -39,7 +42,7 @@ func run() -> void:
 		assert(boss.customer.order == boss.current_recipe() and g.tickets.has(boss.customer))
 		mark("guest_ready_order")
 		while boss.phase != "results": await process_frame
-		assert(boss.perfect == 25 and is_instance_valid(boss.result_screen) and not boss.music.playing)
+		assert(boss.perfect == boss.TOTAL and is_instance_valid(boss.result_screen) and not boss.music.playing)
 		boss.finish_results(); assert(boss.active(), "Only host dismisses shared completion")
 		mark("guest_results")
 		while boss.active(): await process_frame
@@ -52,9 +55,12 @@ func run() -> void:
 		for i in 5: g._update_shift_clock(1)
 		assert(boss.generation == generation)
 		await wait_mark("guest_rumble")
-		boss.advance_phase(); boss.advance_phase()
+		for entrance_step in 8:
+			if boss.phase == "ready": break
+			boss.advance_phase()
+		assert(boss.phase == "ready")
 		await wait_mark("guest_ready_order")
-		for i in 25:
+		for i in boss.TOTAL:
 			boss.resolve_result(true)
 			while boss.phase in ["slump", "revive", "revive_smash_first", "revive_smash_second"]: boss.advance_phase()
 		assert(boss.phase == "victory")

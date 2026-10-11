@@ -146,6 +146,7 @@ func screen_state(id: String,scroll: int,expanded: bool):
 @rpc("any_peer","call_remote","reliable")
 func request_view(expanded: bool,scroll: int):
  if not host():return
+ if game._boss_suggested_item != "" and game._boss_speech_active():return
  if game._phone_expanded!=expanded:game._set_phone_expanded(expanded)
  if is_instance_valid(game.phone_scroll):game.phone_scroll.scroll_vertical=clampi(scroll,0,100000)
 
