@@ -204,7 +204,7 @@ func play_departure() -> void:
 	var screech := AudioStreamPlayer.new()
 	screech.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
 	screech.bus = &"SFX"
-	screech.volume_db = -5.0
+	screech.volume_db = -5.0 + linear_to_db(0.75)
 	add_child(screech)
 	screech.finished.connect(screech.queue_free)
 	screech.play()
