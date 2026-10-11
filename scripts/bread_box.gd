@@ -89,7 +89,7 @@ func _add_fresh_lettering() -> void:
 	letters.material_override=gold
 	var bounds=text.get_aabb();var fit=minf(.39/maxf(.001,bounds.size.x),.095/maxf(.001,bounds.size.y)) * .75
 	gold.set_shader_parameter("text_left",bounds.position.x);gold.set_shader_parameter("text_width",bounds.size.x)
-	letters.scale=Vector3.ONE*fit;letters.position=Vector3(.018-bounds.get_center().x*fit,.220-bounds.get_center().y*fit,.207)
+	letters.scale=Vector3.ONE*fit;letters.position=Vector3(.018-bounds.get_center().x*fit,.262-bounds.get_center().y*fit,.207)
 	var ink:=StandardMaterial3D.new();ink.albedo_color=Color("100C08");ink.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED
 	for i in 12:
 		var stroke:=MeshInstance3D.new();stroke.name="BlackStroke%d"%i;stroke.mesh=text;stroke.material_override=ink
@@ -98,6 +98,60 @@ func _add_fresh_lettering() -> void:
 	letters.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	model.add_child(letters)
 	if is_instance_valid(door): letters.reparent(door, true)
+	var baked := MeshInstance3D.new()
+	baked.name = "GoldLeafBaked"
+	var baked_text := TextMesh.new()
+	baked_text.text = "BAKED"
+	baked_text.font = preload("res://assets/fonts/AlfaSlabOne-Regular.ttf")
+	baked_text.font_size = 96
+	baked_text.pixel_size = .001
+	baked_text.depth = .001
+	baked.mesh = baked_text
+	var baked_bounds := baked_text.get_aabb()
+	var baked_fit := minf(.225 / maxf(.001, baked_bounds.size.x), .043 / maxf(.001, baked_bounds.size.y))
+	var baked_gold := gold.duplicate() as ShaderMaterial
+	baked_gold.set_shader_parameter("text_left", baked_bounds.position.x)
+	baked_gold.set_shader_parameter("text_width", baked_bounds.size.x)
+	baked.material_override = baked_gold
+	baked.scale = Vector3.ONE * baked_fit
+	baked.position = Vector3(.018-baked_bounds.get_center().x*baked_fit, .195-baked_bounds.get_center().y*baked_fit, .207)
+	baked.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	model.add_child(baked)
+	if is_instance_valid(door): baked.reparent(door, true)
+	_add_gold_flourish("GoldFlourishAbove", .308, 1.0, gold)
+	_add_gold_flourish("GoldFlourishBelow", .148, -1.0, gold)
+
+
+func _add_gold_flourish(node_name: String, height: float, flip: float, gold: ShaderMaterial) -> void:
+	# Two restrained mirrored scrolls and a small central diamond, on the glass.
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for side in [-1.0, 1.0]:
+		var curve := Curve2D.new()
+		curve.add_point(Vector2(.009, 0), Vector2.ZERO, Vector2(.022, -.014))
+		curve.add_point(Vector2(.067, .003), Vector2(-.022, 0), Vector2(.026, .010))
+		curve.add_point(Vector2(.096, .004), Vector2(.005, .014), Vector2(-.005, -.010))
+		curve.add_point(Vector2(.079, .005), Vector2(0, -.008), Vector2.ZERO)
+		var points := curve.tessellate(4, 3.0)
+		for i in points.size() - 1:
+			var a := Vector2(points[i].x * side, points[i].y * flip)
+			var b := Vector2(points[i + 1].x * side, points[i + 1].y * flip)
+			var normal := Vector2(-(b-a).y, (b-a).x).normalized() * .00105
+			for point in [a-normal, a+normal, b+normal, a-normal, b+normal, b-normal]:
+				surface.add_vertex(Vector3(point.x, point.y, 0))
+	for point in [Vector2(-.0045, 0), Vector2(0, .0055), Vector2(.0045, 0), Vector2(-.0045, 0), Vector2(.0045, 0), Vector2(0, -.0055)]:
+		surface.add_vertex(Vector3(point.x, point.y, 0))
+	var ornament := MeshInstance3D.new()
+	ornament.name = node_name
+	ornament.mesh = surface.commit()
+	var material := gold.duplicate() as ShaderMaterial
+	material.set_shader_parameter("text_left", -.10)
+	material.set_shader_parameter("text_width", .20)
+	ornament.material_override = material
+	ornament.position = Vector3(.018, height, .208)
+	ornament.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	model.add_child(ornament)
+	if is_instance_valid(door): ornament.reparent(door, true)
 
 func overlaps_door(pointer:Vector2) -> bool:
 	if not is_instance_valid(model) or not is_instance_valid(game.camera):return false

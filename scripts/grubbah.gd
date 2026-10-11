@@ -434,6 +434,7 @@ func pay_order() -> void:
  for id in state.get("packed_burger_items",state.items)+state.get("side_packs",{}).keys():
   if str(id) in game.SUPPLY_IDS:cost+=game._supply_buy_unit_cost(str(id))
  if not DATA.order_soda_ids(state.get("side_packs",{}).keys()).is_empty():cost+=game._supply_buy_unit_cost("syrup_cola")*game.SUPPLY_BUY_PACK*game.SODA_TANK_CUP_COST/game.SODA_TANK_SYRUP_REFILL
+ cost+=DATA.order_fries_count(state.items)*game._supply_buy_unit_cost("potato")/2.0
  game.money+=base+tip;game.shift_food_sales+=base;game.shift_tips+=tip;game.total_served+=1
  game._achievement_event("orders");game._achievement_event("earnings",base+tip)
  game.order_history_revision+=1
@@ -451,6 +452,16 @@ func fitted(file: String, width: float) -> Node3D:
  # They are helpers, not packaging art (the wrapped burger had a square below it).
  for helper in model.find_children("UCX_*","MeshInstance3D",true,false):
   helper.get_parent().remove_child(helper);helper.free()
+ if file in ["SM_BurgerPackagingPaper", "SM_BurgerPackagingPaperWrapped"]:
+  for mesh in model.find_children("*","MeshInstance3D",true,false):
+   var paper=ShaderMaterial.new()
+   paper.shader=preload("res://shaders/mobile_checker_wrap.gdshader")
+   paper.set_shader_parameter("checker",preload("res://assets/props/counter_napkin_checker.png"))
+   var paper_bounds: AABB=mesh.mesh.get_aabb()
+   paper.set_shader_parameter("bounds_min",paper_bounds.position)
+   paper.set_shader_parameter("paper_span",maxf(paper_bounds.size.x,maxf(paper_bounds.size.y,paper_bounds.size.z)))
+   paper.set_shader_parameter("wrapped_paper",file == "SM_BurgerPackagingPaperWrapped")
+   mesh.material_override=paper
  var bounds=game._shop_preview_bounds(model)
  var scale_factor=width/maxf(bounds.size.x,maxf(bounds.size.y,bounds.size.z))
  model.scale=Vector3.ONE*scale_factor;model.position=-Vector3(bounds.get_center().x,bounds.position.y,bounds.get_center().z)*scale_factor
@@ -468,12 +479,12 @@ func build_props() -> void:
  for i in 5:
   var sheet=fitted("SM_BurgerPackagingPaper",.27);sheet.position.y=i*.009;sheet.rotation.y=i*.025;napkins.add_child(sheet)
  var stack_logo=Sprite3D.new();stack_logo.name="BurgerPalsWrapLogo";stack_logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");stack_logo.pixel_size=.00018
- stack_logo.material_override=ShaderMaterial.new();stack_logo.material_override.shader=preload("res://shaders/brand_lettering_cup.gdshader");stack_logo.material_override.set_shader_parameter("mask_tex",stack_logo.texture)
+ stack_logo.material_override=ShaderMaterial.new();stack_logo.material_override.shader=preload("res://shaders/wrap_white_red_logo.gdshader");stack_logo.material_override.set_shader_parameter("mask_tex",stack_logo.texture)
  var stack_bounds=game._shop_preview_bounds(napkins)
  stack_logo.position=Vector3(0,stack_bounds.end.y+.002,0);stack_logo.rotation=Vector3(-PI*.5,0,PI);napkins.add_child(stack_logo)
  paper3d=fitted("SM_BurgerPackagingPaper",.45);paper3d.name="MobileBurgerPaper";props.add_child(paper3d)
  var paper_box=game._shop_preview_bounds(paper3d)
- var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00021;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/brand_lettering_cup.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,paper_box.end.y+.003,-.10);logo.rotation=Vector3(-PI*.5,0,PI);paper3d.add_child(logo)
+ var logo=Sprite3D.new();logo.texture=preload("res://assets/ui/burger_pals_letter_mask.png");logo.pixel_size=.00021;logo.material_override=ShaderMaterial.new();logo.material_override.shader=preload("res://shaders/wrap_white_red_logo.gdshader");logo.material_override.set_shader_parameter("mask_tex",logo.texture);logo.position=Vector3(0,paper_box.end.y+.003,-.10);logo.rotation=Vector3(-PI*.5,0,PI);paper3d.add_child(logo)
  paper_outline=MeshInstance3D.new();var line=ImmediateMesh.new();line.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
  for point in [Vector3(-.23,.007,-.19),Vector3(.23,.007,-.19),Vector3(.23,.007,.19),Vector3(-.23,.007,.19),Vector3(-.23,.007,-.19)]:line.surface_add_vertex(point)
  line.surface_end();paper_outline.mesh=line;paper_outline.material_override=game._make_basic_mat(Color("FFD147"));paper_outline.material_override.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED;paper3d.add_child(paper_outline)

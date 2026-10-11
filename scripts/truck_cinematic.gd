@@ -201,6 +201,17 @@ func play_departure() -> void:
 	if departing:
 		await departure_finished
 		return
+	var screech := AudioStreamPlayer.new()
+	screech.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
+	screech.bus = &"SFX"
+	screech.volume_db = -5.0
+	add_child(screech)
+	screech.finished.connect(screech.queue_free)
+	screech.play()
+	var cut := screech.create_tween()
+	cut.tween_interval(maxf(.01, screech.stream.get_length() - .63))
+	cut.tween_property(screech, "volume_db", -60.0, .03)
+	cut.tween_callback(screech.queue_free)
 	departing = true
 	departure_elapsed = 0.0
 	await departure_finished

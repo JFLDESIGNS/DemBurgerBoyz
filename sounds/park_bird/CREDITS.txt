@@ -1,0 +1,18 @@
+Park bird sounds — all sources CC0 1.0 (public domain)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+chirp.wav: "Bird Chirps.mp3", ronoble
+https://freesound.org/people/ronoble/sounds/478669/
+Source https://cdn.freesound.org/previews/478/478669_3514243-hq.mp3
+Edited: short excerpt, high-pass filter, fades, mono PCM.
+
+peck.wav: "Knock on Wood", alegemaate
+https://freesound.org/people/alegemaate/sounds/667280/
+Source https://cdn.freesound.org/previews/667/667280_2531187-hq.mp3
+Edited: one short tap, high-pass filter, fade, mono PCM; pitched up during playback.
+
+wings.wav: "Flight bird #3", Joseph SARDIN / BigSoundBank
+https://bigsoundbank.com/flight-bird-3-s2893.html
+Source https://bigsoundbank.com/UPLOAD/mp3/2893.mp3
+Edited: trimmed silence, high-pass filter, mono PCM; accelerated during playback.
+Retrieved 2026-10-11. No attribution required; credits preserved voluntarily.

@@ -1,6 +1,10 @@
 extends Control
 var circles: Array[Rect2] = []
 func present(audit: Dictionary) -> void:
+ var dismiss := create_tween()
+ dismiss.tween_interval(4.7)
+ dismiss.tween_property(self,"modulate:a",0.0,.3)
+ dismiss.tween_callback(queue_free)
  mouse_filter = Control.MOUSE_FILTER_IGNORE
  var panel := PanelContainer.new()
  panel.mouse_filter = Control.MOUSE_FILTER_STOP

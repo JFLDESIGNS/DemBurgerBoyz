@@ -6,6 +6,24 @@ var origin := Vector2.ZERO
 var pointer := Vector2.ZERO
 var pulling := false
 var stretch_player: AudioStreamPlayer
+var remote_pulls: Dictionary = {}
+var pull_send_left := 0.0
+
+func send_pull(active: bool) -> void:
+	if game.mp_enabled and NetManager.is_online():
+		game.mp_ingredient_pull.rpc(ingredient,origin/get_viewport_rect().size,pointer/get_viewport_rect().size,active)
+
+func remote_pull(peer: int, id: String, start: Vector2, at: Vector2, active: bool) -> void:
+	if not active:
+		if remote_pulls.has(peer):
+			var sound = remote_pulls[peer].sound
+			if is_instance_valid(sound): sound.queue_free()
+			remote_pulls.erase(peer)
+	else:
+		if not remote_pulls.has(peer):
+			remote_pulls[peer] = {"sound": game.game_audio.start_slingshot_stretch() if game.game_audio else null}
+		remote_pulls[peer].merge({"id":id,"start":start,"at":at,"expires":Time.get_ticks_msec()+1500},true)
+	queue_redraw()
 
 static func aim_point(start: Vector2, release: Vector2, viewport_height: float) -> Vector2:
 	return start + (start-release) * clampf(viewport_height/120.0,3.5,9.5)
@@ -51,25 +69,40 @@ func handle_input(event: InputEvent) -> bool:
 			if get_viewport().has_method("gui_cancel_drag"): get_viewport().call("gui_cancel_drag")
 			if game.game_audio:
 				stretch_player = game.game_audio.start_slingshot_stretch()
+			send_pull(true)
 		if pulling:
-			if is_instance_valid(stretch_player): stretch_player.pitch_scale = lerpf(.85,1.35,clampf(pull.length()/180,0,1))
 			queue_redraw(); return true
 	return false
 
 func cancel() -> void:
 	if pulling:
+		send_pull(false)
 		game._strip_swipe_active = false
 		game._strip_swipe_added.clear()
 		game._clear_strip_hold_tracking()
 		game._clear_pending_ingredient_throw_state(ingredient)
-	if is_instance_valid(stretch_player): stretch_player.queue_free()
+	if is_instance_valid(stretch_player):
+		stretch_player.stop()
+		stretch_player.queue_free()
 	stretch_player = null
 	ingredient = ""; pulling = false; queue_redraw()
 
 func _process(_delta: float) -> void:
 	if pulling and (not game.playing or game.options_menu_open or game.shift_paused or game._boss_speech_active()): cancel()
+	pull_send_left -= _delta
+	if pulling and pull_send_left <= 0.0:
+		pull_send_left = 0.10; send_pull(true)
+	for peer in remote_pulls.keys():
+		if not game.playing or Time.get_ticks_msec() > int(remote_pulls[peer].expires): remote_pull(peer,"",Vector2.ZERO,Vector2.ZERO,false)
 
 func _draw() -> void:
+	for pull in remote_pulls.values():
+		var a: Vector2 = pull.start * get_viewport_rect().size
+		var b: Vector2 = pull.at * get_viewport_rect().size
+		draw_line(a+Vector2(-15,0),b,Color("D9AA64"),3,true)
+		draw_line(a+Vector2(15,0),b,Color("D9AA64"),3,true)
+		var texture: Texture2D = game.FoodSpritesScript.get_tex(pull.id)
+		if texture: draw_texture_rect(texture,Rect2(b-Vector2(32,35),Vector2(64,70)),false)
 	if not pulling: return
 	var aim := aim_point(origin,pointer,get_viewport_rect().size.y)
 	var power := clampf(pointer.distance_to(origin)/180,0,1)
@@ -124,6 +157,11 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 	var assisted := catch_target(target)
 	var flyer: MeshInstance3D = game._make_thrown_ingredient_card(id,game.FoodSpritesScript.get_tex(id))
 	game.world.add_child(flyer); flyer.global_position=start
+	var duration := clampf(.55-source.distance_to(target)/4000,.25,.5)
+	var whistle: AudioStreamPlayer = game.game_audio.start_ingredient_fall_whistle(duration) if game.game_audio else null
+	flyer.tree_exiting.connect(func():
+		if is_instance_valid(whistle): whistle.queue_free()
+	)
 	var state := {"previous":start,"hit":false}
 	var tween := create_tween()
 	tween.tween_method(func(t: float):
@@ -158,7 +196,7 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 		flyer.rotate_object_local(Vector3.UP,PI)
 		flyer.rotate_object_local(Vector3.FORWARD,t*TAU)
 		state.previous=pos,
-		0.0,1.0,clampf(.55-source.distance_to(target)/4000,.25,.5))
+		0.0,1.0,duration)
 	tween.tween_callback(func():
 		if is_instance_valid(flyer):
 			var fall := flyer.create_tween()
@@ -183,3 +221,10 @@ func impact(customer: Node3D, at: Vector3, id: String) -> void:
 		tw.tween_property(bit,"position:y",at.y-.25,.24)
 		tw.parallel().tween_property(bit,"scale",Vector3.ZERO,.24)
 		tw.tween_callback(bit.queue_free)
+
+func _exit_tree() -> void:
+	for peer in remote_pulls.keys(): remote_pull(peer,"",Vector2.ZERO,Vector2.ZERO,false)
+	if is_instance_valid(stretch_player):
+		stretch_player.stop()
+		stretch_player.queue_free()
+	stretch_player = null

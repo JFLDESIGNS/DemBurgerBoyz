@@ -11,6 +11,7 @@ var intro_voice: AudioStreamPlayer
 var intro_voice_play_count := 0
 
 func play_intro_voice() -> void:
+	if intro_voice_play_count > 0: return
 	if not is_instance_valid(intro_voice):
 		intro_voice = AudioStreamPlayer.new()
 		intro_voice.name = "BurgerPalsIntroVoice"

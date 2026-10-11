@@ -38,6 +38,7 @@ func run():
   mark("smush_ready")
   while g.phone_smush_page._score<=0:await process_frame
   mark("smush_clear")
+  await wait_mark("before_cards")
   cards.send("join")
   cards.send("choose","draw");cards.send("deal")
   await wait_mark("private_hand")
@@ -64,6 +65,7 @@ func run():
   var click=InputEventMouseButton.new();click.pressed=true;click.button_index=MOUSE_BUTTON_LEFT;click.position=g.phone_smush_page._cell_rect(Vector2i(0,0)).get_center();g.phone_smush_page._on_gui_input(click)
   await wait_mark("smush_clear")
   assert(not cards.opened)
+  mark("before_cards")
   while cards.shown.get("hand",[]).size()!=5:await process_frame
   assert(cards.opened and cards.ui.visible)
   assert(cards.hands.is_empty() and cards.deck.is_empty());assert(not cards.shown.has("hands"))

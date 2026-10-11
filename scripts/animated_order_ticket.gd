@@ -51,7 +51,7 @@ var _last_drag_screen := Vector2.ZERO
 var _last_drag_sound_ms := 0
 var _touch_id := -1
 var _pin_target := Vector3(0.0, -0.008, 0.0005)
-var _pin_rotation := Vector3(deg_to_rad(50.0), deg_to_rad(-18.0), deg_to_rad(-28.0))
+var _pin_rotation := Vector3(deg_to_rad(50.0), deg_to_rad(18.0), deg_to_rad(28.0))
 const PIN_SCALE := 3.6
 const FLY_OFFSET := Vector2(-160.0, 110.0)
 
@@ -271,6 +271,10 @@ func set_active(value: bool) -> void:
 	_arrival_age = 0.0
 	pivot_offset = Vector2.ZERO
 	_apply_flight_pose(0.0)
+	_audio.stream = _pin_whoosh
+	_audio.pitch_scale = 1.0
+	_audio.volume_db = -3.0
+	_audio.play()
 	set_process(true)
 
 func sync_layout() -> void:
@@ -335,9 +339,6 @@ func _on_finished(_clip: StringName) -> void:
 		_thumbtack.show()
 		_pin_shadow.show()
 		_pin_impact_fired = false
-		_audio.stream = _pin_whoosh
-		_audio.volume_db = -3.0
-		_audio.play()
 		_apply_pin_pose(0.0)
 	else:
 		_play(&"static", 0.28 if state == &"wave" else 0.1)
@@ -363,9 +364,10 @@ func _apply_pin_pose(t: float) -> void:
 	_thumbtack.rotation += Vector3(0.14, 0.04, -0.1) * spring
 	_thumbtack.scale = Vector3.ONE * PIN_SCALE * DISPLAY_SCALE / maxf(.01, display_scale) * (0.75 if display_scale < DISPLAY_SCALE else 1.0) * (lerpf(1.18, 1.0, ease_out) - 0.045 * spring)
 	_model.rotation.x = 0.018 * spring
-	if t >= 1.0 and not _pin_impact_fired:
+	if t >= .76 and not _pin_impact_fired:
 		_pin_impact_fired = true
 		_audio.stream = _pin_tap
+		_audio.pitch_scale = 1.0
 		_audio.volume_db = -1.0
 		_audio.play()
 

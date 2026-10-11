@@ -13,7 +13,8 @@ static func interval(a: Vector3, b: Vector3, center: Vector3, radius: float) -> 
  var root := sqrt(discriminant)
  var lo := maxf(0.0,(-projection-root)/length_squared)
  var hi := minf(1.0,(-projection+root)/length_squared)
- return Vector2(lo,hi) if hi>lo else Vector2(-1,-1)
+ # Float rounding at a previous cut boundary must not create a fresh zero-length smear.
+ return Vector2(lo,hi) if (hi-lo)*sqrt(length_squared)>0.000001 else Vector2(-1,-1)
 
 static func touches(segments: PackedVector3Array, center: Vector3, radius: float) -> bool:
  for i in range(0,segments.size()-1,2):

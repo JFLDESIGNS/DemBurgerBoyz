@@ -19,8 +19,8 @@ func run() -> void:
 	var esc=InputEventKey.new();esc.pressed=true;esc.keycode=KEY_ESCAPE
 	assert(sling.handle_input(esc) and not sling.pulling and g.spent==1,"Cancel never spends stock")
 	var audio=load("res://scripts/game_audio.gd").new()
-	assert(audio._make_slingshot_sound(true).data.size()>0)
-	assert(audio._make_slingshot_sound(false).data.size()>0)
+	assert(audio._stretch_recording(true).data.size()>0)
+	assert(audio._slingshot_release_recording().data.size()>0)
 	audio.free()
 	# Aim directly at a visible customer, then deliberately miss far to the side.
 	var customer=Node3D.new();g.world.add_child(customer);customer.position=Vector3(0,0,1.4);g.customers=[customer]

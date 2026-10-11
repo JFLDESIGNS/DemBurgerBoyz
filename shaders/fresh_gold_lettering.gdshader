@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode unshaded;
+render_mode unshaded, cull_disabled;
 uniform float text_left = -0.1;
 uniform float text_width = 0.2;
 varying float text_x;

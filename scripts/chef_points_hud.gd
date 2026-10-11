@@ -25,7 +25,7 @@ func _ready() -> void:
 	number.add_theme_color_override("font_color",Color("ffdc73"))
 	number.add_theme_color_override("font_outline_color",Color("30251c"))
 	number.add_theme_constant_override("outline_size",2);number.vertical_alignment=VERTICAL_ALIGNMENT_CENTER;add_child(number)
-	sound=AudioStreamPlayer.new(); sound.bus = "SFX";sound.stream=CHIME;sound.volume_db=-6;add_child(sound)
+	sound=AudioStreamPlayer.new(); sound.bus = "SFX";sound.stream=CHIME;sound.volume_db=-12;add_child(sound)
 	_draw_count(0)
 func _draw_count(value: float) -> void:
 	shown=value;number.text=str(roundi(value))

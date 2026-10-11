@@ -1,5 +1,11 @@
 ## Top-down city map for parking the food truck. UI only — spawn/patience wire-up later.
 extends Control
+var unlocked_locations: Array = []
+var wallet := 0.0
+func set_access(unlocked: Array, cash: float) -> void:
+	unlocked_locations = unlocked.duplicate()
+	wallet = cash
+
 
 const UiFontsScript := preload("res://scripts/ui_fonts.gd")
 const TruckLocationsScript := preload("res://scripts/truck_locations.gd")
@@ -656,23 +662,20 @@ func _refresh_detail() -> void:
 		_crowd_label.text = _crowd_text(tier)
 	if _patience_label:
 		_patience_label.text = _patience_text(tier)
+	var cost := 0 if unlocked_locations.has(_selected_id) else int(loc.get("unlock_cost",0))
 	if _status_label:
 		if _selected_id == _parked_id:
 			_status_label.text = "Currently parked here"
 			_status_label.add_theme_color_override("font_color", Color(0.55, 0.85, 0.62))
 		else:
-			_status_label.text = "Tap Park Here to move the truck"
+			_status_label.text = "One-time unlock: $%d  •  Wallet: $%d" % [cost,int(wallet)] if cost>0 else "Tap Park Here to move the truck"
 			_status_label.add_theme_color_override("font_color", Color(0.78, 0.82, 0.88))
 	if _park_btn:
 		_park_btn.disabled = (_selected_id == _parked_id)
-		_park_btn.text = "PARKED" if _park_btn.disabled else "PARK HERE"
+		_park_btn.text = "PARKED" if _park_btn.disabled else ("UNLOCK & PARK — $%d" % cost if cost>0 else "PARK HERE")
 
 
 func _on_park_pressed() -> void:
 	if _selected_id == _parked_id:
 		return
-	_parked_id = _selected_id
-	_refresh_pins()
-	_refresh_detail()
-	location_confirmed.emit(_parked_id)
-	close()
+	location_confirmed.emit(_selected_id)

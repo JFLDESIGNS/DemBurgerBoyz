@@ -21,7 +21,7 @@ func run():
   while not net.is_online():await process_frame
   mark("ready")
  g.mp_enabled=true
- g._spawn_condiment_spline_segments_local(PackedVector3Array([Vector3(-.5,0,0),Vector3(.5,0,0)]),.008,"ketchup")
+ g._spawn_condiment_spline_segments_local(PackedVector3Array([Vector3(-.5,0,0),Vector3(.5,0,0)]),.008,"mustard" if OS.get_environment("SAUCE_TEST_FLAVOR")=="mustard" else "ketchup")
  mark("seed_host" if host else "seed_guest")
  await wait_mark("seed_guest" if host else "seed_host")
  if host:

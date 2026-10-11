@@ -130,3 +130,10 @@ static func update_customer_props(player: AnimationPlayer, props: Node3D) -> voi
 		match animation.track_get_type(track):
 			Animation.TYPE_POSITION_3D: props.position = animation.position_track_interpolate(track, time)
 			Animation.TYPE_ROTATION_3D: props.quaternion = animation.rotation_track_interpolate(track, time)
+	if kind == "phone":
+		var skeleton := props.get_parent() as Skeleton3D
+		var chest := skeleton.find_bone("Chest") if skeleton != null else -1
+		if chest >= 0:
+			var inward := skeleton.to_global(skeleton.get_bone_global_pose(chest).origin) - props.global_position
+			inward.y = 0.0
+			props.global_position += inward.normalized() * 0.025

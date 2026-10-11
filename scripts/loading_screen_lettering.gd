@@ -13,7 +13,7 @@ func _ready() -> void:
   var label := Label.new()
   label.text = glyph
   label.add_theme_font_override("font", FONT)
-  label.add_theme_color_override("font_color", Color("FFD735"))
+  label.add_theme_color_override("font_color", Color("B36943"))
   label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.7))
   label.add_theme_constant_override("shadow_offset_y", 2)
   label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -31,7 +31,7 @@ func _layout() -> void:
  var x := origin.x + (fitted.x - total) * 0.5 + 15.0 * fitted.x / 1280.0 - 10.0
  for label in letters:
   label.add_theme_font_size_override("font_size", font_size)
-  label.position = Vector2(x, origin.y + fitted.y * 0.375 + 30.0 * fitted.y / 720.0)
+  label.position = Vector2(x, origin.y + fitted.y * 0.375 + 30.0 * fitted.y / 720.0 - 62.0)
   label.set_meta("baseline", label.position)
   x += FONT.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 

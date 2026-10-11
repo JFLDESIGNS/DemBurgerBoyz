@@ -3,6 +3,8 @@ extends Node
 
 const MIX_RATE := 22050
 const SFX_POOL := 14
+const CONDIMENT_SQUIRT := preload("res://sounds/condiment_squirt.ogg")
+const KETCHUP_SQUIRT_SHORT := preload("res://sounds/ketchup_squirt_short.ogg")
 const SFX_LEVEL_CFG_PATH := "user://audio_settings.cfg"
 const SFX_LEVEL_CFG_SECTION := "sfx_levels"
 const SPATULA_NOTE_BOOST_CFG_SECTION := "spatula_piano_notes"
@@ -1834,6 +1836,10 @@ func play_build_whoosh() -> void:
 	_play_cached("serve_whoosh", _make_serve_whoosh, 1.08, 0.62)
 
 
+func play_ingredient_landing() -> void:
+	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.15, 0.28)
+
+
 func play_build_landing() -> void:
 	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.08, 0.82)
 
@@ -1985,7 +1991,7 @@ func play_cat_meow(gain_scale: float = 1.0) -> void:
 
 func play_cat_purr() -> void:
 	if cat_sounds_muted: return
-	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.55)
+	_play_cached("cat_purr_%d" % (randi() % 3), _make_cat_purr, 0.95 + randf() * 0.12, 0.20)
 
 
 const CAT_BEGGING_MEOW_PATH := "res://sounds/cat_begging_meow.mp3"
@@ -2154,6 +2160,9 @@ func prewarm_all_gameplay_audio() -> void:
 	_load_announcer_stream("perfect_announcer", "res://sounds/perfect.wav")
 	_load_announcer_stream("order_greatjob_announcer", "res://sounds/greatjob.wav")
 	_load_announcer_stream("order_ohhh_announcer", "res://sounds/ohhh.wav")
+	_stretch_recording()
+	_stretch_recording(true)
+	_slingshot_release_recording()
 	if ResourceLoader.exists(WAWA_PATH):
 		_cache["wawawa"] = load(WAWA_PATH)
 	if ResourceLoader.exists(CHALLENGE_SONG_PATH):
@@ -2309,9 +2318,9 @@ func play_boss_wawa(loud: bool = false) -> void:
 	)
 
 
-func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male") -> void:
+func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male", gain_db: float = 0.0) -> void:
 	if voice == "female":
-		_play_female_customer_wawa(1.5)
+		_play_female_customer_wawa(1.5, gain_db)
 		return
 	## One reusable player — spam-click restarts instead of stacking voices.
 	if not ResourceLoader.exists(WAWA_PATH):
@@ -2326,7 +2335,7 @@ func play_customer_wawa_click(impatience: float = 0.5, voice: String = "male") -
 	var source_needed := CLICK_WAWA_CLIP_SEC * GROBBLE_PITCH
 	var max_start := maxf(0.0, length - source_needed)
 	var start_at := randf() * max_start if max_start > 0.0 else 0.0
-	var target_db := _male_customer_wawa_db(impatience)
+	var target_db := _male_customer_wawa_db(impatience) + (gain_db if _sfx("customers") > 0.0 else 0.0)
 	if _customer_click_wawa == null or not is_instance_valid(_customer_click_wawa):
 		_customer_click_wawa = AudioStreamPlayer.new()
 		_customer_click_wawa.name = "CustomerClickWawa"
@@ -2622,6 +2631,14 @@ func _make_burger_slide_oil_loop() -> AudioStreamWAV:
 			edge = (0.32 - t) / fade
 		_write_s16(pcm, i, int(clampf(sample * edge, -1.0, 1.0) * 14500.0))
 	return _wav_from_pcm(pcm, true)
+
+
+func play_condiment_squirt(flavor: String) -> void:
+	if flavor == "ketchup":
+		_play_cached("ingredient_ketchup_short", func(): return KETCHUP_SQUIRT_SHORT, 0.98, 0.28)
+		return
+	_play_cached("ingredient_condiment_squirt", func(): return CONDIMENT_SQUIRT,
+		1.08 if flavor == "mustard" else 0.98, 0.4)
 
 
 func _play_cached(key: String, builder: Callable, pitch: float, gain: float, gain_ceiling: float = 3.0) -> void:
@@ -3557,7 +3574,7 @@ func _make_hot_oil_hit() -> AudioStreamWAV:
 
 
 func play_cheese_sizzle() -> void:
-	_play_cached("hot_oil_cheese", _make_cheese_sizzle, 1.0, 0.75)
+	_play_cached("hot_oil_cheese", _make_cheese_sizzle, 1.0, 0.375)
 
 
 func _make_cheese_sizzle() -> AudioStreamWAV:
@@ -3859,7 +3876,7 @@ static func _write_s16(pcm: PackedByteArray, sample_index: int, value: int) -> v
 var _female_customer_wawa: AudioStreamPlayer
 var _female_customer_wawa_token := 0
 
-func _play_female_customer_wawa(duration: float) -> void:
+func _play_female_customer_wawa(duration: float, gain_db: float = 0.0) -> void:
 	if not is_instance_valid(_female_customer_wawa):
 		_female_customer_wawa = AudioStreamPlayer.new()
 		_female_customer_wawa.bus = "SFX"
@@ -3868,7 +3885,7 @@ func _play_female_customer_wawa(duration: float) -> void:
 	_female_customer_wawa.stop()
 	_female_customer_wawa.stream = preload("res://scripts/customer_voice.gd").stream("female",false)
 	_female_customer_wawa.pitch_scale = 1.0
-	_female_customer_wawa.volume_db = _sfx_db(0.72,"customers")
+	_female_customer_wawa.volume_db = _sfx_db(-1.28 + gain_db,"customers")
 	_female_customer_wawa.play()
 	_female_customer_wawa_token += 1
 	var token := _female_customer_wawa_token
@@ -3891,7 +3908,7 @@ func play_customer_nom_nom(voice: String, speaker: Node, pitch: float = 1.0) -> 
 
 
 func play_customer_angry_wawa(voice: String = "male") -> void:
-	play_customer_wawa_click(1.0, voice)
+	play_customer_wawa_click(1.0, voice, 3.0)
 	if voice == "female":
 		if is_instance_valid(_female_customer_wawa): _female_customer_wawa.pitch_scale = 1.2
 	elif is_instance_valid(_customer_click_wawa):
@@ -3903,32 +3920,79 @@ func play_boss_peek_boing() -> void:
 func play_ingredient_plap() -> void:
 	_play_cached("ingredient_plap_v2",_make_food_smack,randf_range(.94,1.06),1.0)
 
+const STRETCH_RECORDING_PATH := "res://sounds/stretch.wav"
+const STRETCH_BASE_DB := -9.0
+const STRETCH_TAIL_SEC := .30
+
+func _stretch_recording(loop_tail: bool = false) -> AudioStreamWAV:
+	var key := "ingredient_stretch_tail" if loop_tail else "ingredient_stretch_recording"
+	if _cache.has(key): return _cache[key] as AudioStreamWAV
+	if not loop_tail:
+		var recording := AudioStreamWAV.load_from_file(STRETCH_RECORDING_PATH)
+		if recording != null:
+			recording.loop_mode = AudioStreamWAV.LOOP_DISABLED
+			_cache[key] = recording
+		return recording
+	var original := AudioStreamWAV.load_from_file("res://sounds/stretch_fling.wav")
+	if original == null: return null
+	var stream := original.duplicate() as AudioStreamWAV
+	var frames := roundi(stream.get_length() * stream.mix_rate)
+	var start := maxi(0, frames - roundi(STRETCH_TAIL_SEC * stream.mix_rate))
+	# Crossfade the loop seam over 10 ms; the cat keeps the untouched one-shot.
+	var fade := mini(roundi(.01 * stream.mix_rate), (frames - start) / 4)
+	if stream.format == AudioStreamWAV.FORMAT_16_BITS and fade > 1:
+		var pcm := stream.data
+		var channels := 2 if stream.stereo else 1
+		for frame in fade:
+			var mix := float(frame) / float(fade - 1)
+			for channel in channels:
+				var tail_i := (frames - fade + frame) * channels + channel
+				var head_i := (start + frame) * channels + channel
+				_write_s16(pcm, tail_i, roundi(lerpf(pcm.decode_s16(tail_i * 2), pcm.decode_s16(head_i * 2), mix)))
+		stream.data = pcm
+		start += fade
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = start
+	stream.loop_end = frames
+	_cache[key] = stream
+	return stream
+
+func play_cat_eating_stretch() -> void:
+	if cat_sounds_muted: return
+	_play_cached("cat_eating_stretch", _stretch_recording, 1.0, db_to_linear(STRETCH_BASE_DB) * .5)
+
 func start_slingshot_stretch() -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
-	if not _cache.has("sling_elastic_v2"): _cache["sling_elastic_v2"] = _make_slingshot_sound(true)
-	player.bus = "SFX"; player.stream = _cache["sling_elastic_v2"]
-	player.volume_db = _sfx_db(-9.0,"ingredients")
-	add_child(player); player.play()
+	player.bus = "SFX"; player.stream = _stretch_recording(true)
+	player.volume_db = _sfx_db(3.0,"ingredients")
+	add_child(player); player.play(.70)
 	return player
 
 func play_slingshot_release() -> void:
-	_play_cached("slingshot_release",func(): return _make_slingshot_sound(false),randf_range(.95,1.08),.85)
+	_play_cached("slingshot_release_recording", _slingshot_release_recording, 1.0, db_to_linear(6.0))
 
-func _make_slingshot_sound(stretch: bool) -> AudioStreamWAV:
-	var duration := .72 if stretch else .24
-	var n := int(MIX_RATE*duration)
-	var pcm := PackedByteArray(); pcm.resize(n*2)
-	var phase := 0.0
-	for i in n:
-		var t := float(i)/MIX_RATE
-		var u := t/duration
-		# Rubbery rising creak with a warbling overtone and soft loop ends.
-		var frequency := 210.0 + 260.0*u + 48.0*sin(TAU*u*3.0) if stretch else lerpf(780,90,u)
-		phase += TAU*frequency/MIX_RATE
-		var env := pow(sin(PI*u), .45)*.65 if stretch else exp(-t*13)*minf(1,t/.004)
-		var sample := (sin(phase+sin(phase*.5)*.85)*.72 + sin(phase*2.0)*.16)*env
-		_write_s16(pcm,i,int(clampf(sample,-1,1)*26000))
-	return _wav_from_pcm(pcm,stretch)
+func _slingshot_release_recording() -> AudioStreamWAV:
+	# A brief release from the supplied recording, never the old synthetic twang.
+	var key := "ingredient_stretch_release"
+	if _cache.has(key): return _cache[key] as AudioStreamWAV
+	var original := AudioStreamWAV.load_from_file("res://sounds/stretch_fling.wav")
+	if original == null: return null
+	var stream := original.duplicate() as AudioStreamWAV
+	var channels := 2 if stream.stereo else 1
+	var frames := mini(roundi(.30 * stream.mix_rate), stream.data.size() / (channels * 2))
+	var start := mini(roundi(.70 * stream.mix_rate) * channels * 2, stream.data.size() - frames * channels * 2)
+	var pcm := stream.data.slice(start, start + frames * channels * 2)
+	var attack := maxi(1, roundi(.005 * stream.mix_rate))
+	var release := maxi(1, roundi(.06 * stream.mix_rate))
+	for frame in frames:
+		var gain := minf(1.0, minf(float(frame) / attack, float(frames - 1 - frame) / release))
+		for channel in channels:
+			var sample := frame * channels + channel
+			_write_s16(pcm, sample, roundi(pcm.decode_s16(sample * 2) * gain))
+	stream.data = pcm
+	stream.loop_mode = AudioStreamWAV.LOOP_DISABLED
+	_cache[key] = stream
+	return stream
 
 func _make_food_smack() -> AudioStreamWAV:
 	var n := int(MIX_RATE*.24)
@@ -3983,3 +4047,37 @@ func _make_cat_cartoon_smack() -> AudioStreamWAV:
 		var wave := randf_range(-1,1)*exp(-t*70)*.75+sin(TAU*(380*t-620*t*t))*exp(-t*22)*.5
 		_write_s16(pcm,i,int(clampf(wave,-1,1)*22000))
 	return _wav_from_pcm(pcm,false)
+
+func play_customer_hit_wa(speaker: Node) -> void:
+	if not is_instance_valid(speaker): return
+	var p := speaker.get_node_or_null("HitWa") as AudioStreamPlayer
+	if p == null:
+		p = AudioStreamPlayer.new(); p.name = "HitWa"; p.bus = "SFX"; speaker.add_child(p)
+	var female: bool = speaker.has_method("get_customer_voice") and speaker.get_customer_voice() == "female"
+	p.stream = load("res://sounds/hit_wa_female.wav" if female else "res://sounds/hit_wa_male.wav")
+	p.volume_db = _sfx_db(3.0, "customers")
+	p.pitch_scale = 1.30 if female else 1.45
+	p.play()
+
+func start_ingredient_fall_whistle(duration: float) -> AudioStreamPlayer:
+	var p := AudioStreamPlayer.new()
+	p.name = "IngredientFallWhistle"; p.bus = "SFX"
+	p.volume_db = _sfx_db(-8.0,"ingredients")
+	var key := "fall_whistle_" + str(roundi(duration*100))
+	if not _cache.has(key):
+		var n := int(MIX_RATE * clampf(duration,.2,1.5))
+		var pcm := PackedByteArray(); pcm.resize(n*2)
+		var phase := 0.0
+		for i in n:
+			var t := float(i)/MIX_RATE
+			var u := float(i)/float(n)
+			var hz := lerpf(2100.0,260.0,pow(u,.72)) * (1.0+.035*sin(t*TAU*17.0))
+			phase += TAU*hz/MIX_RATE
+			var env := minf(1.0,minf(t/.018,(float(n-i)/MIX_RATE)/.025))
+			_write_s16(pcm,i,roundi((sin(phase)*.76+sin(phase*2.0)*.12)*env*24000))
+		_cache[key]=_wav_from_pcm(pcm,false)
+	p.stream=_cache[key]; add_child(p); p.finished.connect(p.queue_free); p.play()
+	return p
+
+func play_opening_whoosh(sign_flip: bool = false) -> void:
+	_play_cached("serve_whoosh",_make_serve_whoosh,1.25 if sign_flip else .90,.80 if sign_flip else .65)

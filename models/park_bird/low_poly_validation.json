@@ -1,0 +1,20 @@
+{
+  "park_bird": {
+    "before_triangles": 10904,
+    "after_triangles": 1897,
+    "meshes": 2,
+    "actions": [
+      "Fly_Loop",
+      "Idle",
+      "Mad_Peck",
+      "Perch",
+      "Takeoff"
+    ]
+  },
+  "birdhouse": {
+    "before_triangles": 4176,
+    "after_triangles": 1900,
+    "meshes": 1,
+    "actions": []
+  }
+}

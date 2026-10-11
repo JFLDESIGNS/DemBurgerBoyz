@@ -130,7 +130,7 @@ func glance(c, point: Vector3, seconds := 2.5) -> void:
 func wawa(c, _pitch := 1.0) -> void:
 	if not is_instance_valid(c) or not is_instance_valid(game.game_audio): return
 	var voice: String = c.get_customer_voice()
-	game.game_audio.play_customer_wawa_click(0.5, voice)
+	game.game_audio.play_customer_wawa_click(0.5, voice, 2.5 if voice == "male" else 0.0)
 	if c.has_method("animate_wawa"):
 		c.animate_wawa(1.5 if voice == "female" else 1.15)
 
@@ -152,7 +152,10 @@ func encounter(a,b,kind: String, chat: int = -1) -> void:
 			var person = person_ref.get_ref()
 			if is_instance_valid(animal) and is_instance_valid(person) and animal._state == "peek":
 				animal.react_to_customer(person,kind == "cat_love")
-				if kind == "cat_love": animal.wants_meow.emit(1.2))
+				if kind == "cat_love":
+					animal.wants_meow.emit(1.2)
+					heart(person)
+					person.set_meta("likes_cat", true))
 		return
 	if not is_instance_valid(b): return
 	glance(a,b.global_position + Vector3(0,1.5,0))

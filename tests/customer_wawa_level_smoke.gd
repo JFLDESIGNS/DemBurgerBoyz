@@ -19,8 +19,14 @@ func run() -> void:
 	assert(audio._customer_dance_wawa.volume_db > 0.0, "Customer speech must use Customers, not World volume")
 	audio.sfx_levels["customers"] = 0.5
 	assert(absf(audio._male_customer_wawa_db() - male_db + 6.0206) < 0.1)
+	audio.sfx_levels["customers"] = 1.0
+	audio.play_customer_angry_wawa("male")
+	await audio._customer_click_wawa_tween.finished
+	assert(absf(audio._customer_click_wawa.volume_db - audio._male_customer_wawa_db(1.0) - 3.0) < .1, "Angry male cue gains 3 dB through its fade")
+	audio.play_customer_angry_wawa("female")
+	assert(absf(audio._female_customer_wawa.volume_db - audio._sfx_db(1.72, "customers")) < .1, "Angry female cue gains 3 dB over the softer female baseline")
 	audio.sfx_levels["customers"] = 0.0
-	audio.play_customer_wawa_click(0.5, "male")
+	audio.play_customer_angry_wawa("male")
 	await audio._customer_click_wawa_tween.finished
 	assert(audio._customer_click_wawa.volume_db <= -80.0, "Customer mute must still work")
 	audio.queue_free()

@@ -3,6 +3,7 @@ var game: Node
 var bar: ProgressBar
 var caption: Label
 var last_tick_ms := 0
+var film_age := 0.0
 func _ready() -> void:
  mouse_filter=Control.MOUSE_FILTER_IGNORE
  bar=ProgressBar.new();bar.show_percentage=false
@@ -37,3 +38,9 @@ func _process(_dt:float) -> void:
   var creep := elapsed if bar.value<95.0 else (100.0-bar.value)*(1.0-exp(-elapsed*.025))
   bar.value=minf(99.95,bar.value+creep)
  caption.text=str(stage[1])+"  %d%%" % int(bar.value)
+
+ if is_instance_valid(get_parent().get_node_or_null("LoadingFilmOverlay")):
+  film_age += _dt
+  var film_mat: ShaderMaterial = get_parent().get_node("LoadingFilmOverlay").material
+  film_mat.set_shader_parameter("progress",bar.value/100.0)
+  film_mat.set_shader_parameter("film_time",film_age)

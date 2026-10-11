@@ -6,7 +6,10 @@ var indicator: MeshInstance3D
 var off_rotation := Quaternion.IDENTITY
 var power_tween: Tween
 var lamp_material: StandardMaterial3D
-var temperature_digits: Label3D
+const DISPLAY_HEAT_SECONDS := 5.0
+var display_material: ShaderMaterial
+var powered := false
+var display_heat := 0.0
 
 
 func configure() -> void:
@@ -102,10 +105,13 @@ func _scale_mesh_height_above(mesh: Mesh, hinge_y: float, mul: float) -> Mesh:
 
 
 func set_power(on: bool, instant: bool = false) -> void:
-	if temperature_digits != null:
-		temperature_digits.text = "ON" if on else "OFF"
-		temperature_digits.shaded = not on
-		temperature_digits.modulate = Color("FFB64D") if on else Color("597067")
+	if on != powered:
+		display_heat = 0.0
+	powered = on
+	if display_material != null:
+		display_material.set_shader_parameter("powered", powered)
+		display_material.set_shader_parameter("heat", display_heat)
+	set_process(powered and display_heat < 1.0)
 	if power_tween != null:
 		power_tween.kill()
 	if knob != null:
@@ -123,23 +129,11 @@ func set_power(on: bool, instant: bool = false) -> void:
 		lamp_material.emission_energy_multiplier = 0.65 if on else 0.0
 
 
-func _control_label(parent: Node3D, text: String, pos: Vector3, pixels: float) -> Label3D:
-	var label := Label3D.new()
-	label.text = text
-	label.font_size = 48
-	label.pixel_size = pixels
-	label.font = preload("res://assets/fonts/Fredoka-SemiBold.ttf")
-	label.outline_size = 5
-	label.outline_modulate = Color("252335")
-	label.shaded = true
-	label.alpha_cut = Label3D.ALPHA_CUT_DISABLED
-	label.render_priority = 10
-	label.modulate = Color("FFF0CD")
-	label.position = pos
-	label.rotation_degrees = Vector3(-90, 0, 0)
-	label.no_depth_test = false
-	parent.add_child(label)
-	return label
+func _process(delta: float) -> void:
+	if not powered: return
+	display_heat = minf(1.0, display_heat + delta / DISPLAY_HEAT_SECONDS)
+	display_material.set_shader_parameter("heat", display_heat)
+	if display_heat >= 1.0: set_process(false)
 
 func _build_control_display() -> void:
 	var front := find_child("ControlPanelMount", true, false) as Node3D
@@ -156,15 +150,16 @@ func _build_control_display() -> void:
 		panel.material_override = enamel; front.add_child(panel)
 	var screen := MeshInstance3D.new()
 	screen.name = "PowerLEDDisplay"
-	var glass := BoxMesh.new(); glass.size = Vector3(.135,.004,.043)
-	screen.mesh = glass; screen.position = Vector3(.066,.030,.043)
-	var dark := StandardMaterial3D.new(); dark.albedo_color = Color("11151F"); dark.roughness = .28
-	screen.material_override = dark; front.add_child(screen)
-	temperature_digits = _control_label(front, "OFF", Vector3(.066,.033,.043), .00055)
-	temperature_digits.name = "TemperatureDigits"
+	var glass := QuadMesh.new(); glass.size = Vector2(.135,.052)
+	screen.mesh = glass; screen.position = Vector3(.066,.033,.043)
+	screen.rotation_degrees.x = -90.0
+	screen.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	display_material = ShaderMaterial.new()
+	display_material.shader = preload("res://shaders/grill_led_display.gdshader")
+	screen.material_override = display_material; front.add_child(screen)
 	var bezel := MeshInstance3D.new()
 	bezel.name = "ToonReadoutBezel"
-	var box := BoxMesh.new(); box.size = Vector3(.151,.007,.059)
+	var box := BoxMesh.new(); box.size = Vector3(.151,.007,.068)
 	bezel.mesh = box; bezel.position = Vector3(.066,.025,.043)
 	var rim := StandardMaterial3D.new(); rim.albedo_color = Color("292C40"); rim.roughness = .7
 	bezel.material_override = rim; front.add_child(bezel)

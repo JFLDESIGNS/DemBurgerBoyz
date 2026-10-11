@@ -12,7 +12,7 @@ const GARAGE_SOUND = preload("res://sounds/garage_shutter_open.ogg")
 var game: Node
 var age := 0.0
 var shutter: Node3D
-var blocker: Control
+var blocker: ColorRect
 var lights: Array = []
 var environment: Environment
 var exposure := 1.0
@@ -21,6 +21,8 @@ var bunting_rotation := Vector3.ZERO
 var flags: Array[Node3D] = []
 var sounded := false
 var garage_sounded := false
+var bunting_sounded := false
+var sign_sounded := false
 var garage_player: AudioStreamPlayer
 var done := false
 var camera_mask := 0
@@ -31,7 +33,8 @@ func setup(owner_game: Node) -> void:
 	game = owner_game
 	camera_mask = game.camera.cull_mask
 	game.camera.cull_mask &= ~game.LOADING_WARMUP_LAYER
-	blocker = Control.new()
+	blocker = ColorRect.new()
+	blocker.color = Color(0,0,0,.86)
 	blocker.name = "TruckOpeningInputBlocker"
 	blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	blocker.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -80,6 +83,7 @@ func sample(seconds: float) -> void:
 	shutter.scale.y = maxf(.001,1.0-opening)
 	shutter.visible = opening < 1.0
 	var daylight := smoothstep(.4,3.6,seconds)
+	if is_instance_valid(blocker): blocker.color.a = .86*(1.0-daylight)
 	for entry in lights:
 		if is_instance_valid(entry[0]): entry[0].light_energy = entry[1]*lerpf(.08,1.0,daylight)
 	if environment: environment.tonemap_exposure = exposure*lerpf(.22,1.0,daylight)
@@ -120,6 +124,12 @@ func _process(delta: float) -> void:
 		var fade := smoothstep(sound_end - GARAGE_FADE_SEC, sound_end, age)
 		garage_player.volume_db = linear_to_db(maxf(0.0001, db_to_linear(-6.0) * (1.0 - fade)))
 		if age >= sound_end: garage_player.stop()
+	if age >= BUNTING_START and not bunting_sounded:
+		bunting_sounded = true
+		if game.game_audio: game.game_audio.play_opening_whoosh(false)
+	if age >= SIGN_START and not sign_sounded:
+		sign_sounded = true
+		if game.game_audio: game.game_audio.play_opening_whoosh(true)
 	if age >= JINGLE_START and not sounded:
 		sounded = true
 		game._setup_burgerpals_startup_sound()

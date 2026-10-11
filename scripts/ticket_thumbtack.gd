@@ -4,7 +4,7 @@ const MODEL = preload("res://models/thumbtack/thumbtack_red.glb")
 const WHOOSH = preload("res://sounds/ticket/pin_whoosh.wav")
 const TAP = preload("res://sounds/ticket/pin_tap.wav")
 const DURATION := 0.26
-const ROTATION := Vector3(0.872665,-0.314159,-0.488692)
+const ROTATION := Vector3(0.872665,0.314159,0.488692)
 var view: SubViewport
 var pin: Node3D
 var display: TextureRect
@@ -101,7 +101,7 @@ func _process(delta: float) -> void:
 	var ease := 1.0-pow(1.0-clampf(t/0.76,0,1),3)
 	pin.position = Vector3(0,-0.008,0.0005)+Vector3(0.038,0.025,0.08)*(1-ease)
 	pin.rotation = ROTATION+Vector3(-0.5,0.25,-1.3)*(1-ease)
-	if t>=1.0 and not impact:
+	if t>=.76 and not impact:
 		impact = true
 		sound.stream = TAP
 		sound.play()

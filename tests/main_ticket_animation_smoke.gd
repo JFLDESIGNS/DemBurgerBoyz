@@ -67,6 +67,7 @@ func run() -> void:
 	for i in 8: await process_frame
 	expect(motion.active and motion.state == &"fly", "Main ticket should begin with a rolled flight")
 	expect(not motion._thumbtack.visible, "Pin must stay hidden during flight")
+	expect(motion._audio.stream == motion._pin_whoosh and motion._audio.playing, "Whoosh starts with paper flight")
 	expect(motion.position.length() > 100.0, "Ticket must start away from its final position")
 	motion._advance_arrival(0.22)
 	await screenshot("main_ticket_fly")
@@ -91,6 +92,8 @@ func run() -> void:
 	expect(motion.state == &"pin" and motion._thumbtack.visible, "Unroll must finish before the red thumbtack is placed")
 	motion._advance_arrival(0.19)
 	await screenshot("main_ticket_pinning")
+	motion._advance_arrival(0.01)
+	expect(motion._pin_impact_fired and motion._audio.stream == motion._pin_tap, "Pin tap fires on contact before settling ends")
 	motion._advance_arrival(0.8)
 	expect(motion.state == &"static", "Placed ticket must settle at rest")
 	expect(is_zero_approx(float(motion._paper_material.get_shader_parameter("curl_lighting"))), "Open paper must have even color without corner lighting")

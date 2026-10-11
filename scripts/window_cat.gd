@@ -55,6 +55,8 @@ signal became_full_sized
 signal wants_meow(pitch: float)
 
 
+var _purr_left := 0.0
+var _purr_player: AudioStreamPlayer
 var _visit_fed := false
 var _patty_peek_x := NAN
 var _visual: Node3D = null
@@ -594,8 +596,6 @@ func apply_mp_sync(d: Dictionary) -> void:
 		position = _mp_pose_target;_mp_pose_from=position;rotation.y=_mp_yaw_target;_mp_yaw_from=rotation.y
 	_mp_pose_ready = true
 	visible = bool(d.get("vis", visible))
-	var game := get_tree().current_scene
-	if is_instance_valid(game) and game.has_method("_cat_delivery_blocks_visit") and game._cat_delivery_blocks_visit(): visible = false
 	_fat = float(d.get("fat", _fat))
 	_giant = float(d.get("giant", _giant))
 	_treat_arm = float(d.get("treat", _treat_arm))
@@ -620,6 +620,8 @@ func apply_mp_sync(d: Dictionary) -> void:
 var _delivery_visit_pending := false
 
 func pause_for_delivery() -> void:
+	_purr_left = 0.0
+	if is_instance_valid(_purr_player): _purr_player.stop()
 	if visible and _state in ["peek", "rising"]: _delivery_visit_pending = true
 	if _state == "hidden" and _timer <= 0.0: _delivery_visit_pending = true
 	_clear_mouth_burger()
@@ -629,14 +631,27 @@ func pause_for_delivery() -> void:
 
 func _process(delta: float) -> void:
 	var game := get_tree().current_scene
-	if is_instance_valid(game) and game.has_method("_cat_delivery_blocks_visit") and game._cat_delivery_blocks_visit():
-		if not mp_puppet: _timer -= delta
-		pause_for_delivery()
-		return
+	if not mp_puppet and is_instance_valid(game) and game.has_method("_cat_delivery_blocks_visit") and game._cat_delivery_blocks_visit():
+		if not visible or _state == "hidden":
+			_timer -= delta
+			pause_for_delivery()
+			return
+		# An existing visitor stays through the boss; then visibly walks down.
+		if not (game.has_method("_boss_keeps_cat_company") and game._boss_keeps_cat_company()) and _state in ["peek", "rising"]:
+			_delivery_visit_pending = true
+			_state = "lowering"
+			_timer = .55
 	if not enabled or _visual == null:
+		_purr_left = 0.0
+		if is_instance_valid(_purr_player): _purr_player.stop()
 		return
 	_update_character(delta)
 	_bob += delta
+	_purr_left = maxf(0.0, _purr_left - delta)
+	if is_instance_valid(_purr_player):
+		var audio = get_tree().get_first_node_in_group("game_audio")
+		_purr_player.volume_db = audio._sfx_db(-1.0 + linear_to_db(maxf(.001, minf(_purr_left, 1.0))), "world") if is_instance_valid(audio) else -8.0
+		if _purr_left <= 0.0 or not visible: _purr_player.stop()
 	_treat_arm = maxf(0.0, _treat_arm - delta)
 	_pet_squash = maxf(0.0, _pet_squash - delta * 3.2)
 	_eat_flash = maxf(0.0, _eat_flash - delta)
@@ -652,6 +667,10 @@ func _process(delta: float) -> void:
 		_apply_visual_scale()
 		return
 	_timer -= delta
+	# A cat already visiting keeps the boss company. Let the timer expire,
+	# but finish the departure only after the boss has walked out.
+	if visible and _state in ["peek", "fed_hold"] and is_instance_valid(game) and game.has_method("_boss_keeps_cat_company") and game._boss_keeps_cat_company():
+		_timer = maxf(_timer, 0.01)
 	match _state:
 		"hidden":
 			visible = false
@@ -819,6 +838,9 @@ func _apply_visual_scale() -> void:
 	var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08) * size_m
 	var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
 	_visual.scale = Vector3(sx, sy, sz)
+	var purr_weight := minf(_purr_left, 1.0) if visible else 0.0
+	_visual.rotation.z = sin(_bob * TAU * 1.3) * 0.012 * purr_weight
+	_visual.position.x = sin(_bob * TAU * 1.3) * 0.0025 * purr_weight
 	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
 	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL) + float(get_meta("steal_lean_lift", 0.0))
 	## Grow the pet hitbox with the cat.
@@ -1057,6 +1079,7 @@ func pet(force: bool = false) -> void:
 			visible = true
 			position.y = _shown_y()
 	_burst_hearts()
+	start_purr()
 	petted.emit()
 
 
@@ -1085,6 +1108,7 @@ func feed(kind: String, force: bool = false) -> void:
 		if _state == "peek":
 			_timer = maxf(_timer, 5.0)
 		_burst_hearts()
+	start_purr()
 	fed.emit(kind)
 
 
@@ -1174,3 +1198,16 @@ func _social_run_away() -> void:
 	_run_yaw_from = rotation_degrees.y
 	_run_yaw_to = FACE_AWAY_YAW+25.0
 	if _anim != null: _anim.speed_scale = 1.55
+
+func start_purr() -> void:
+	_purr_left = 4.0
+	if not is_instance_valid(_purr_player):
+		_purr_player = AudioStreamPlayer.new()
+		_purr_player.name = "CatPurr"
+		_purr_player.bus = "SFX"
+		var clip := load("res://sounds/cat_purr_normalized.wav").duplicate() as AudioStreamWAV
+		clip.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		clip.loop_end = roundi(clip.get_length()*clip.mix_rate)
+		_purr_player.stream = clip
+		add_child(_purr_player)
+	if not _purr_player.playing: _purr_player.play()

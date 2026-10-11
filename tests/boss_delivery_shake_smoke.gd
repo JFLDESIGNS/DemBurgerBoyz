@@ -17,7 +17,7 @@ func run() -> void:
 	assert(delivery.handoff.is_equal_approx(first_handoff), "Delivery offset must not accumulate")
 	var old_handoff: Vector3 = delivery.HANDOFF_HOME
 	old_handoff.y=delivery.handoff.y
-	assert(absf(delivery.handoff.y + delivery.courier_rest_bottom * delivery.courier_base_scale.y * 1.25 - delivery.ground) < .001, "Courier body bottom must touch the road")
+	assert(absf(delivery.handoff.y - (game.window_cat._shown_y() - 0.08)) < .001, "Courier stays just below the original delivery height")
 	old_handoff.z=game.window_cat._home_z()+1.2192+maxf(0.0,delivery.courier_base_scale.z-1.0)*.12
 	assert(game.camera.unproject_position(delivery.handoff).x > game.camera.unproject_position(old_handoff).x, "Courier moves screen-right")
 	assert(delivery.handoff.distance_to(game.camera.global_position) < old_handoff.distance_to(game.camera.global_position), "Courier moves closer")

@@ -1,7 +1,9 @@
 extends SceneTree
 func _initialize():call_deferred("run")
 func run():
+ var holder=Node3D.new()
  var c=load("res://scripts/customer.gd").new()
+ holder.add_child(c)
  c.order.assign(["bun_bottom","patty","cheese","bun_top"])
  c.set_meta("serve_commit_hold",true)
  var pay=c.receive_burger(["bun_bottom","patty","bun_top"],1,0,1)
@@ -11,4 +13,4 @@ func run():
  pay=c.receive_burger(c.order,1,0,1)
  assert(pay.total==0 and pay.tip==0 and not pay.wrong and pay.missing_side)
  assert(not c.is_leaving,"Scoring cannot interrupt the two-bite animation")
- c.free();print("WRONG_ORDER_AND_MISSING_SIDE_PAYMENT_OK");quit()
+ holder.free();print("WRONG_ORDER_AND_MISSING_SIDE_PAYMENT_OK");quit()

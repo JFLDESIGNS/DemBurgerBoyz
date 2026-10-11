@@ -49,7 +49,6 @@ func _ready() -> void:
 func skip_intro() -> void:
 	if _requested_menu: return
 	_requested_menu = true
-	IntroBootMusic.play_intro_voice()
 	skip_button.disabled = true
 	skip_button.text = "Opening menu..."
 
@@ -89,7 +88,8 @@ func _reveal_menu() -> void:
 	_menu.get_node("UI").show()
 	get_tree().current_scene = _menu
 	_menu._setup_burgerpals_startup_sound()
-	# skip_intro owns the single startup voice; revealing the menu must not replay it.
+	IntroBootMusic.play_intro_voice()
+	# The shared voice guard allows exactly one announcement on menu reveal.
 	cinematic.stop()
 	if OS.get_cmdline_user_args().has("--verify-gameplay"):
 		await _menu._run_comprehensive_gameplay_load()

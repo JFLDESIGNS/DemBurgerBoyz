@@ -60,7 +60,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"order_base": 0.34, "order_ramp": 0.31,
 	},
 	{
-		"id": "downtown_row", "name": "Downtown Row",
+		"id": "downtown_row", "name": "Downtown Row", "unlock_cost": 500,
 		"blurb": "Office rush: a full line, shorter patience, and demanding tickets.",
 		"tier": TIER_HARD, "rank": 4, "map": Vector2(0.53, 0.44),
 		"bg": "res://assets/backgrounds/pixel_palace_street.png",
@@ -69,7 +69,7 @@ const LOCATIONS: Array[Dictionary] = [
 		"order_base": 0.53, "order_ramp": 0.32,
 	},
 	{
-		"id": "city_center_peak", "name": "City Center Peak",
+		"id": "city_center_peak", "name": "City Center Peak", "unlock_cost": 1000,
 		"blurb": "The final stop. Peak crowds, complex orders, and almost no breathing room.",
 		"tier": TIER_EXTREME, "rank": 5, "map": Vector2(0.64, 0.12),
 		"bg": "res://assets/backgrounds/pixel_palace_festival.png",

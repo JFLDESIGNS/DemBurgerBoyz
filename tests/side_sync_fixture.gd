@@ -14,7 +14,7 @@ func _begin_early_drink_hand(customer:Node3D,flavor:String,remote:Node3D=null)->
 func _mp_ensure_remote_cup(peer:int)->Node3D:
  var cup=Node3D.new();add_child(cup);_mp_remote_cups[peer]=cup;return cup
 func _mp_apply_remote_cup_fill(cup:Node3D,flavor:String,_fill:float,_ice:float,_fizz:float,_pouring:bool=false)->void:cup.set_meta("flavor",flavor)
-func _start_side_food_3d(customer:Node3D,kind:String,origin:Vector3,done:Callable,flavor:String="cola",delay:float=0.0,replicated:bool=false)->void:
+func _start_side_food_3d(customer:Node3D,kind:String,origin:Vector3,done:Callable,flavor:String="cola",delay:float=0.0,replicated:bool=false,_held_food:Node3D=null)->void:
  side_visuals.append(kind)
  if customer.order==["fries"] and not replicated:customer.is_waiting=false
  if mp_enabled and get_node("/root/NetManager").is_host() and not replicated:mp_side_food_visual.rpc(_customer_net_id(customer),kind,origin,flavor,delay)

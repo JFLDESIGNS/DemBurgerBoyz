@@ -14,7 +14,7 @@ func _run_test() -> void:
 	var game := packed.instantiate()
 	root.add_child(game)
 	current_scene = game
-	await create_timer(3.0).timeout
+	await game._start_game(false)
 	game.call("_set_phone_in_truck", true)
 	if game.find_child("MuvyeButton", true, false) != null:
 		push_error("Legacy main-menu MUVYE button still exists")

@@ -69,7 +69,18 @@ func run() -> void:
 	var committed := [false]
 	var departed := [false]
 	c.set_meta("burger_pending_departure",func() -> void:departed[0] = true)
-	game.call("_play_serve_fly_to_mouth",0,c,func() -> void:committed[0] = true,null,0,0)
+	# Serving must acknowledge the press before the step-aside animation finishes.
+	c.set_meta("meal_stepping_aside", true)
+	var replica := 0 if "--replicated" in OS.get_cmdline_user_args() else -1
+	game.call("_play_serve_fly_to_mouth",0,c,func() -> void:committed[0] = true,null,replica,0)
+	expect(station.modulate.a == 0.0, "Source burger hides immediately during handoff")
+	var feedback_pool: Array = game.get("_serve_fly_root_pool")
+	expect(not feedback_pool.is_empty(), "Serve must acquire its feedback before waiting for movement")
+	if not feedback_pool.is_empty():
+		expect(feedback_pool[0].get_node("BurgerCompleteBurst").visible, "Comic burst must appear while the customer is still stepping aside")
+	expect(not committed[0], "Catch/scoring should not interrupt the walk")
+	c.set_meta("meal_stepping_aside", false)
+	await process_frame
 	await process_frame
 	expect(committed[0],"Scoring callback was delayed by presentation")
 	var seen_grab := false

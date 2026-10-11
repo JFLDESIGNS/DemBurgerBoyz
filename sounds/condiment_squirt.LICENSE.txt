@@ -1,0 +1,8 @@
+condiment_squirt.ogg
+Source: Smith_Squeezing_ketchup.WAV by gmsmith1918
+https://freesound.org/people/gmsmith1918/sounds/676371/
+License: Creative Commons Zero (CC0 1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Adapted from the public high-quality preview: trimmed to one squeeze,
+high-pass filtered, loudness adjusted, and faded at the edges.

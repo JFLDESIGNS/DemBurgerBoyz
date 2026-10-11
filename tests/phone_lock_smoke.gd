@@ -11,7 +11,7 @@ func run():
  game._layout_phone_ui_overlay()
  await process_frame
  assert(game._phone_lock_screen.visible)
- assert(is_equal_approx(game.phone_column.scale.x,game.PHONE_UI_SCALE*.5))
+ assert(is_equal_approx(game.phone_column.scale.x,game.PHONE_UI_SCALE*.390625))
  game._phone_lock_screen.pressed.emit()
  await create_timer(.35).timeout
  assert(not game._phone_lock_screen.visible)
@@ -20,6 +20,6 @@ func run():
  await create_timer(.35).timeout
  assert(game._phone_lock_screen.visible)
  assert(game.phone_column.visible)
- assert(is_equal_approx(game.phone_column.scale.x,game.PHONE_UI_SCALE*.5))
+ assert(is_equal_approx(game.phone_column.scale.x,game.PHONE_UI_SCALE*.390625))
  print("PHONE_LOCK_EXPAND_RELOCK_OK")
  quit()

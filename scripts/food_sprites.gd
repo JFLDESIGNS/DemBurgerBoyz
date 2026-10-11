@@ -78,6 +78,10 @@ static func get_tex(id: String) -> Texture2D:
 				tex = _make_bun(true)
 			"bun_bottom":
 				tex = _make_bun(false)
+			"milk":
+				tex = _make_square_layer(Color("E5F4FF"), 45, 75, 4)
+			"potato":
+				tex = _make_round_layer(Color("CDA568"), 70, 46)
 			"patty":
 				tex = _make_patty(Color("6D4C41"))
 			"cheese":
