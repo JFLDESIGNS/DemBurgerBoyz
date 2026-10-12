@@ -39,8 +39,13 @@ func run():
   while not is_instance_valid(g._pal_ball_break):await process_frame
   assert(paused)
   while g._pal_ball_break.view.phase!="playing":await process_frame
-  g.mp_pal_ball_input.rpc_id(1,g._pal_ball_break.generation,Vector2.UP,true);mark("sent")
-  await wait_mark("saw_input")
+  g._pal_ball_break.set_process(false)
+  mark("sent")
+  while not FileAccess.file_exists(folder.path_join("saw_input")):
+   g.mp_pal_ball_input.rpc_id(1,g._pal_ball_break.generation,Vector2(0,2),true)
+   await create_timer(.04).timeout
+  while g._pal_ball_break.view.players[net.my_id()].boost>=1:await process_frame
+  g.mp_pal_ball_input.rpc_id(1,g._pal_ball_break.generation,Vector2.ZERO,false)
   var seen:=false
   while not seen:
    for event in g._pal_ball_break.view.events:

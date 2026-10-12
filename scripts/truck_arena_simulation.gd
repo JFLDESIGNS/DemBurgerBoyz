@@ -1,6 +1,7 @@
 extends RefCounted
-const LIMIT := 23.0
-const PICKUPS := [Vector2(0,0),Vector2(0,10),Vector2(0,-10),Vector2(10,0),Vector2(-10,0),Vector2(12,10),Vector2(-12,10),Vector2(12,-10),Vector2(-12,-10)]
+const LIMIT := 29.0
+const FORT_HEIGHT := 3.5
+const PICKUPS := [Vector2(0,0),Vector2(0,10),Vector2(0,-10),Vector2(10,0),Vector2(-10,0),Vector2(15,11),Vector2(-15,11),Vector2(15,-11),Vector2(-15,-11),Vector2(0,19),Vector2(0,-19),Vector2(19,0),Vector2(-19,0)]
 var players:Dictionary={}
 var phase:="waiting"
 var clock:=0.0
@@ -18,22 +19,25 @@ func setup(roster:Array)->void:
  var spawns:=[Vector3(-6,0,-6),Vector3(6,0,6),Vector3(-6,0,6),Vector3(6,0,-6)]
  for i in roster.size():
   var at:Vector3=spawns[i%4]
-  players[int(roster[i].id)]={"position":at,"angle":atan2(-at.x,-at.z),"speed":0.0,"vertical":0.0,"velocity":Vector3.ZERO,"alive":true,"hp":4,"ammo":0,"cooldown":0.0,"shield":0.0,"input":Vector2.ZERO,"input_age":0.0,"burst":false,"travel":0.0,"stuck":0.0,"slide":0.0,"turn":0.0,"bump_cooldown":0.0}
+  players[int(roster[i].id)]={"position":at,"angle":atan2(-at.x,-at.z),"speed":0.0,"vertical":0.0,"velocity":Vector3.ZERO,"alive":true,"hp":4,"ammo":0,"cooldown":0.0,"shield":0.0,"input":Vector2.ZERO,"input_age":0.0,"burst":false,"travel":0.0,"stuck":0.0,"slide":0.0,"turn":0.0,"bump_cooldown":0.0,"boost":1.0,"boosting":false,"boost_locked":false,"boost_wait":0.0}
  for pos in PICKUPS:pickups.append({"position":Vector3(pos.x,height_at(pos)+.8,pos.y),"cooldown":0.0})
  _build_navigation()
 static func height_at(p:Vector2)->float:
+ # Broad forts, gentle six-unit ramps, and four solid connecting causeways.
  for sx in [-1.0,1.0]:
   for sz in [-1.0,1.0]:
-   var center:=Vector2(sx*12,sz*12)
-   if absf(p.x-center.x)<=5 and absf(p.y-center.y)<=5:
-    if absf(p.x-(center.x+sx*2.8))<1.5 and absf(p.y-(center.y+sz*2.8))<1.5:return 5.8
-    return 3.0
-   if absf(p.y-center.y)<2.3 and p.x*sx>=3 and p.x*sx<7:return (p.x*sx-3)*.75
-   if absf(p.x-center.x)<2.3 and p.y*sz>=3 and p.y*sz<7:return (p.y*sz-3)*.75
+   var center:=Vector2(sx*15,sz*15)
+   if absf(p.x-center.x)<=7 and absf(p.y-center.y)<=7:
+    if absf(p.x-sx*19.3)<1.8 and absf(p.y-sz*19.3)<1.8:return 6.1
+    return FORT_HEIGHT
+   if absf(p.y-center.y)<=3 and p.x*sx>=2 and p.x*sx<8:return (p.x*sx-2)*FORT_HEIGHT/6.0
+   if absf(p.x-center.x)<=3 and p.y*sz>=2 and p.y*sz<8:return (p.y*sz-2)*FORT_HEIGHT/6.0
+ if absf(p.x)<=8 and absf(absf(p.y)-19)<=1.8:return FORT_HEIGHT
+ if absf(p.y)<=8 and absf(absf(p.x)-19)<=1.8:return FORT_HEIGHT
  return 0.0
 func input_for(id:int,axis:Vector2,fire:bool)->void:
  if not players.has(id) or not axis.is_finite():return
- players[id].input=axis.clamp(Vector2(-1,-1),Vector2.ONE);players[id].input_age=0.0
+ players[id].input=axis.clamp(Vector2(-1,-1),Vector2(1,2));players[id].input_age=0.0
  if fire:players[id].burst=true
 func drop_peer(id:int)->void:
  if players.has(id):players[id].alive=false;players[id].hp=0
@@ -54,6 +58,16 @@ func step(dt:float)->void:
   if not p.alive:continue
   p.input_age+=dt;p.cooldown=maxf(0,p.cooldown-dt);p.shield=maxf(0,p.shield-dt)
   var axis:Vector2=p.input if p.input_age<.35 else Vector2.ZERO
+  var wants_boost:=axis.y>1.1
+  axis.y=clampf(axis.y,-1,1)
+  if not wants_boost:p.boost_locked=false
+  p.boosting=wants_boost and not p.boost_locked and p.boost>0
+  if p.boosting:
+   p.boost=maxf(0,p.boost-dt*.6);p.boost_wait=.8
+   if p.boost<=0:p.boost_locked=true
+  else:
+   p.boost_wait=maxf(0,p.boost_wait-dt)
+   if p.boost_wait<=0:p.boost=minf(1,p.boost+dt*.22)
   var before:Vector3=p.position
   var velocity:Vector3=p.velocity;velocity.y=0
   var old_forward:=Vector3(sin(p.angle),0,cos(p.angle))
@@ -66,13 +80,13 @@ func step(dt:float)->void:
   var side:=Vector3(forward.z,0,-forward.x)
   var grounded:bool=before.y<=height_at(Vector2(before.x,before.z))+.04
   if grounded:
-   velocity+=forward*axis.y*(17.0 if axis.y>=0 else 11.0)*dt
+   velocity+=forward*axis.y*(36.0 if p.boosting else (17.0 if axis.y>=0 else 11.0))*dt
    var lateral:=velocity.dot(side)
    # Low lateral grip during a fast turn keeps the truck drifting.
    var grip:=2.0 if absf(axis.x)>.15 and velocity.length()>4 else 4.6
    velocity-=side*lateral*(1-exp(-grip*dt))
    velocity*=exp(-(.68 if absf(axis.y)>.1 else .95)*dt)
-  velocity=velocity.limit_length(12.0 if signed_speed>=0 else 5.5)
+  velocity=velocity.limit_length((20.0 if p.boosting else 12.0) if signed_speed>=0 else 5.5)
   p.slide=absf(velocity.dot(side))
   p.bump_cooldown=maxf(0,p.bump_cooldown-dt)
   var next:Vector3=before+velocity*dt
@@ -94,7 +108,7 @@ func step(dt:float)->void:
     p.ammo=mini(6,p.ammo+3);pickup.cooldown=7.0;emit_event("pickup",.65)
   if p.burst and p.ammo>0 and p.cooldown<=0:
    p.ammo-=1;p.cooldown=.4;shot_serial+=1
-   shots.append({"id":shot_serial,"owner":id,"position":next+Vector3.UP*.85+forward*1.2,"direction":forward,"life":2.0});emit_event("shot",.6)
+   shots.append({"id":shot_serial,"owner":id,"position":next+Vector3.UP*.32+forward*1.2,"direction":forward,"vertical":0.0,"life":3.0});emit_event("shot",.6)
   p.burst=false
  var ids:=players.keys()
  for i in ids.size():
@@ -112,9 +126,20 @@ func step(dt:float)->void:
      a.velocity-=impulse;b.velocity+=impulse
      if a.bump_cooldown<=0:emit_event("hit",clampf(closing*.08,.2,1));a.bump_cooldown=.25
  for index in range(shots.size()-1,-1,-1):
-  var shot:Dictionary=shots[index];var before:Vector3=shot.position;shot.position+=shot.direction*25.0*dt;shot.life-=dt
+  var shot:Dictionary=shots[index];var before:Vector3=shot.position
+  shot.position+=shot.direction*25.0*dt;shot.life-=dt
   var at:Vector3=shot.position
-  var dead:bool=shot.life<=0 or absf(at.x)>24 or absf(at.z)>24 or height_at(Vector2(at.x,at.z))>at.y-.1
+  var ground:=height_at(Vector2(at.x,at.z))+.28
+  var previous_ground:=height_at(Vector2(before.x,before.z))+.28
+  var dead:bool=shot.life<=0 or absf(at.x)>LIMIT or absf(at.z)>LIMIT or ground>before.y+.7
+  # Rise along continuous ramps, drop ballistically over an edge, then skim the floor.
+  shot.vertical=float(shot.get("vertical",0.0))-28.0*dt
+  at.y=before.y+shot.vertical*dt
+  if ground>=previous_ground-.04 and before.y<=previous_ground+.12 and not dead:
+   at.y=ground;shot.vertical=0.0
+  elif at.y<=ground:
+   at.y=ground;shot.vertical=0.0
+  shot.position=at
   if not dead:
    for id in players:
     var p:Dictionary=players[id]
@@ -141,15 +166,15 @@ func snapshot()->Dictionary:
  return {"players":players.duplicate(true),"phase":phase,"clock":clock,"left":maxf(0,150-clock),"sequence":sequence,"winners":winners.duplicate(),"match_complete":match_complete,"events":events.duplicate(true),"shots":shots.duplicate(true),"pickups":pickups.duplicate(true)}
 func _build_navigation()->void:
  navigation.clear()
- for x in 23:
-  for z in 23:
-   var point:=Vector2(x*2-22,z*2-22);var h:=height_at(point)
-   if h>3.1:continue
-   navigation.add_point(x*23+z,Vector3(point.x,h,point.y))
+ for x in 29:
+  for z in 29:
+   var point:=Vector2(x*2-28,z*2-28);var h:=height_at(point)
+   if h>3.6:continue
+   navigation.add_point(x*29+z,Vector3(point.x,h,point.y))
  for id in navigation.get_point_ids():
-  for offset in [1,23]:
+  for offset in [1,29]:
    var other:int=id+offset
-   if not navigation.has_point(other) or (offset==1 and int(id/23)!=int(other/23)):continue
+   if not navigation.has_point(other) or (offset==1 and int(id/29)!=int(other/29)):continue
    if absf(navigation.get_point_position(id).y-navigation.get_point_position(other).y)<=1.55:navigation.connect_points(id,other)
 func bot_input(id:int)->void:
  var me:Dictionary=players[id]
@@ -170,9 +195,16 @@ func bot_input(id:int)->void:
  var waypoint:=target
  for point in route:
   if Vector2(point.x-me.position.x,point.z-me.position.z).length()>2.0:waypoint=point;break
+ if me.ammo>=2 and not enemy.is_empty() and me.position.distance_to(enemy.position)<16:
+  var clear:=true
+  for sample in range(1,13):
+   var point:Vector3=me.position.lerp(enemy.position,sample/12.0)
+   if height_at(Vector2(point.x,point.z))>me.position.y+.5:clear=false
+  if clear:waypoint=enemy.position+enemy.velocity*.18
  var delta:Vector3=waypoint-me.position
  var difference:=wrapf(atan2(delta.x,delta.z)-float(me.angle),-PI,PI)
- var throttle:=1.0 if absf(difference)<1.3 else .25
+ var throttle:=1.0 if absf(difference)<.65 else .3
+ if me.ammo>=2 and not enemy.is_empty() and me.position.distance_to(enemy.position)<8:throttle=.25
  if absf(me.speed)<.3:me.stuck+=.08
  else:me.stuck=0.0
  if me.stuck>1.2:throttle=-1.0
@@ -184,4 +216,4 @@ func bot_input(id:int)->void:
   for step_index in range(1,8):
    var p:Vector3=me.position.lerp(enemy.position,step_index/8.0)
    if height_at(Vector2(p.x,p.z))>me.position.y+.7:fire=false
- input_for(id,Vector2(clampf(-difference*1.8,-1,1),throttle),fire)
+ input_for(id,Vector2(clampf(-difference*1.8,-1,1),2.0 if absf(difference)<.06 and me.boost>.85 and closest>16 else throttle),fire)

@@ -15153,11 +15153,8 @@ func _scrape_residue_hit(slot: int, swipe_dir: Vector2 = Vector2.ZERO, play_tap:
 	grill_residue_chunks[slot] = survivors
 	_refresh_residue_visual(slot)
 	if game_audio and play_tap:
-		## Metal tap stays on every swipe — kuhhh layers on top when crust lets go.
-		var tap_at := Vector3(GRILL_CENTER_X, GRILL_SURFACE_Y, GRILL_SURFACE_Z)
-		if slot < grill_residue_centers.size():
-			tap_at = grill_residue_centers[slot]
-		_play_grill_tap_at(tap_at, 0.62, INF, false)
+		## Cleaning accents bypass musical grill notes and dance registration.
+		game_audio.play_scrape_ting(0.62)
 		if chipped > 0 and game_audio.has_method("play_debris_kuhh_burst"):
 			game_audio.play_debris_kuhh_burst(chipped)
 		elif chipped > 0 and game_audio.has_method("play_debris_bass_pop"):
@@ -20802,7 +20799,7 @@ func _roomba_maybe_clean_ting(at: Vector3) -> void:
 		return
 	grill_roomba_tings_left -= 1
 	grill_roomba_ting_cool = 1.15 + randf() * 0.55
-	_play_grill_tap_at(at, 0.42, INF, false)
+	if game_audio: game_audio.play_scrape_ting(0.42)
 
 
 func _roomba_clean_liquids_and_debris(pos: Vector3, move_xz: Vector2, moved: float, delta: float) -> void:

@@ -16,15 +16,21 @@ vec3 cooked(float t) {
 	if (t < 38.0) return mix(brown,dark,(t-21.0)/17.0);
 	return mix(dark,vec3(.06,.04,.03),min((t-38.0)/8.0,1.0));
 }
+vec3 contact_color(float t) {
+ if (t >= 15.0) return cooked(t);
+ return mix(vec3(.82,.42,.42),vec3(.55,.26,.16),smoothstep(2.5,15.0,max(t,0.0)));
+}
 void fragment() {
 	float v = clamp(UV.y,0.0,1.0);
 	vec3 c;
 	if (flipped) {
-		c = cooked(max(first_side_time+2.0-v*5.5,cook_time-(1.0-v)*5.5));
-		float b = clamp(1.0-v/.35,0.0,1.0);
-		c = mix(c,cooked(first_side_time+3.0)*.92,b*.55)*(1.0-.04*b);
-	} else { c = cooked(cook_time-(1.0-v)*5.5); }
-	c *= 1.0-(flipped ? 1.0-v : v)*.1;
+		vec3 top = cooked(max(first_side_time+2.0,cook_time-5.5));
+		vec3 bottom = contact_color(cook_time);
+		c = mix(top,bottom,smoothstep(.18,.86,v));
+	} else {
+		c = mix(cooked(cook_time-(1.0-v)*5.5),contact_color(cook_time),smoothstep(.55,.96,v));
+	}
+	c *= 1.0-v*.1;
 	if (flipped && v < .45) {
 		float n = texture(sear_mask,UV).r;
 		float w = clamp(1.0-v/.45,0.0,1.0)*clamp((first_side_time-8.0)/14.0,.4,1.0);

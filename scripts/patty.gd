@@ -582,7 +582,7 @@ func reset_for_grill_spawn(
 	_update_grate_disc()
 	_update_meat_top()
 	if _under_mat:
-		_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+		_under_mat.albedo_color = _contact_cook_color(cook_time).darkened(0.1)
 
 
 func _set_edge_bubble_profile(ball_mode: bool) -> void:
@@ -935,9 +935,9 @@ func _tick_cook_visuals(delta: float) -> void:
 		if _under_mat:
 			## Face on the grill: raw underside after flip, seared contact before.
 			if flipped_once:
-				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.2)
+				_under_mat.albedo_color = _contact_cook_color(cook_time).darkened(0.1)
 			else:
-				_under_mat.albedo_color = color_at_cook_time(cook_time).darkened(0.28)
+				_under_mat.albedo_color = _contact_cook_color(cook_time).darkened(0.1)
 
 
 func _process(delta: float) -> void:
@@ -1714,6 +1714,20 @@ func color_at_cook_time(t: float) -> Color:
 	return dark_brown.lerp(burnt, over)
 
 
+func _contact_cook_color(t: float) -> Color:
+	# The surface touching the grill browns gradually; a fresh second side starts pink.
+	if t >= COOK_DONE:
+		return color_at_cook_time(t)
+	return Color(.82,.42,.42).lerp(Color(.55,.26,.16),smoothstep(2.5,COOK_DONE,maxf(t,0.0)))
+
+
+func _side_cook_color(v: float) -> Color:
+	if flipped_once:
+		var top := color_at_cook_time(maxf(first_side_time+2.0,cook_time-HEAT_LAG))
+		return top.lerp(_contact_cook_color(cook_time),smoothstep(.18,.86,v)).darkened(v*.1)
+	return color_at_cook_time(cook_time-(1.0-v)*HEAT_LAG).lerp(_contact_cook_color(cook_time),smoothstep(.55,.96,v)).darkened(v*.1)
+
+
 func _update_cook_gradient() -> void:
 	if _mat is ShaderMaterial:
 		var state := [cook_time, first_side_time, flipped_once, _sear_seed]
@@ -1743,30 +1757,7 @@ func _update_cook_gradient() -> void:
 		_ensure_cook_sear_mask()
 	for y in COOK_TEX_H:
 		var v := float(y) / float(COOK_TEX_H - 1) ## 0 top → 1 bottom
-		var c: Color
-		if flipped_once:
-			## Flip turns the patty over: former grill side is now the top.
-			## Mild cooked bias — browned, not charcoal.
-			var cooked_boost := 2.0
-			var first_t := first_side_time + cooked_boost - v * HEAT_LAG
-			var second_t := cook_time - (1.0 - v) * HEAT_LAG
-			c = color_at_cook_time(maxf(first_t, second_t))
-			## Soft sear wash on the flipped face.
-			if v < 0.35:
-				var face_t := first_side_time + cooked_boost + 1.0
-				var top_sear := color_at_cook_time(face_t).darkened(0.08)
-				var blend := clampf(1.0 - v / 0.35, 0.0, 1.0)
-				c = c.lerp(top_sear, blend * 0.55)
-				c = c.darkened(0.04 * blend)
-		else:
-			## Bottom (grill) cooks first; top stays raw longer.
-			var local_t := cook_time - (1.0 - v) * HEAT_LAG
-			c = color_at_cook_time(local_t)
-			## No vertical frost haze in this texture — cylinder top-cap UVs map V
-			## across the diameter and caused a left/right haze split.
-			## Top haze is a separate even disc; sides clear via the ice shell.
-		var grill_side := v if not flipped_once else (1.0 - v)
-		c = c.darkened(grill_side * 0.1)
+		var c := _side_cook_color(v)
 		for x in COOK_TEX_W:
 			var px := c
 			## After flip: light sear mottling — browned flecks, not burnt crust.

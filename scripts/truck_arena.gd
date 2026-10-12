@@ -4,8 +4,7 @@ var stage:Node3D
 var chase:Camera3D
 var pickup_meshes:Array[Node3D]=[]
 var projectile_meshes:Dictionary={}
-var hud:Label
-var center_text:Label
+var hud:Control
 var engine:AudioStreamPlayer
 var camera_ready:=false
 var skid:AudioStreamPlayer
@@ -19,7 +18,11 @@ func steering()->Vector2:
  var axis:=Vector2(float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)),float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP))-float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)))
  var pads:=Input.get_connected_joypads()
  if not pads.is_empty():axis+=Vector2(Input.get_joy_axis(pads[0],JOY_AXIS_LEFT_X),-Input.get_joy_axis(pads[0],JOY_AXIS_LEFT_Y))
- return axis.clamp(Vector2(-1,-1),Vector2.ONE)
+ axis=axis.clamp(Vector2(-1,-1),Vector2.ONE)
+ var boosting:=Input.is_physical_key_pressed(KEY_SHIFT)
+ if not pads.is_empty():boosting=boosting or Input.is_joy_button_pressed(pads[0],JOY_BUTTON_RIGHT_SHOULDER)
+ if boosting and axis.y>.1:axis.y=2.0
+ return axis
 func _think_bots()->void:
  for entry in roster:
   if entry.get("bot",false):simulation.bot_input(int(entry.id))
@@ -29,7 +32,7 @@ func _patty()->MeshInstance3D:
  var mesh:=MeshInstance3D.new();var shape:=CylinderMesh.new();shape.top_radius=.42;shape.bottom_radius=.43;shape.height=.2;shape.radial_segments=16;mesh.mesh=shape;mesh.material_override=_material(Color("773622"));return mesh
 func _ramp(center:Vector3,rotation:float,color:Color)->void:
  var mesh:=MeshInstance3D.new();var st:=SurfaceTool.new();st.begin(Mesh.PRIMITIVE_TRIANGLES)
- var points:=[Vector3(-2.3,0,0),Vector3(2.3,0,0),Vector3(2.3,3,4),Vector3(-2.3,3,4),Vector3(-2.3,0,4),Vector3(2.3,0,4)]
+ var points:=[Vector3(-3,0,0),Vector3(3,0,0),Vector3(3,3.5,6),Vector3(-3,3.5,6),Vector3(-3,0,6),Vector3(3,0,6)]
  for index in [0,2,1,0,3,2,0,4,3,1,2,5]:st.add_vertex(points[index])
  st.generate_normals();mesh.mesh=st.commit();var mat:=_material(color);mat.cull_mode=BaseMaterial3D.CULL_DISABLED;mesh.material_override=mat;mesh.position=center;mesh.rotation.y=rotation;stage.add_child(mesh)
 func _build_view()->void:
@@ -39,28 +42,38 @@ func _build_view()->void:
  stage=Node3D.new();viewport.add_child(stage)
  var env:=WorldEnvironment.new();env.environment=Environment.new();env.environment.background_mode=Environment.BG_COLOR;env.environment.background_color=Color("A5D4EB");env.environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;env.environment.ambient_light_color=Color("E9F5FF");env.environment.ambient_light_energy=.55;stage.add_child(env)
  var sun:=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-58,-30,0);sun.light_energy=1.2;sun.shadow_enabled=true;stage.add_child(sun)
- _box(Vector3(0,-.6,0),Vector3(48,1.2,48),Color("DED7BB"))
- for x in range(-22,24,4):
-  for z in range(-22,24,4):
-   if (x+z)%8==0:_box(Vector3(x,.005,z),Vector3(4,.01,4),Color("CCC8AF"))
+ var ground:=_box(Vector3(0,-.6,0),Vector3(60,1.2,60),Color.WHITE)
+ var asphalt:=ShaderMaterial.new();asphalt.shader=preload("res://shaders/truck_arena_asphalt.gdshader");ground.material_override=asphalt
  for side in [-1,1]:
-  _box(Vector3(side*24,.6,0),Vector3(.8,1.2,48),Color("F2F0D7"));_box(Vector3(0,.6,side*24),Vector3(48,1.2,.8),Color("F2F0D7"))
+  for stripe in range(-29,30,2):
+   var color:=Color("E7DCC3") if stripe%4==1 else Color("C85D4E")
+   _box(Vector3(side*30,.5,stripe),Vector3(.8,1,2),color);_box(Vector3(stripe,.5,side*30),Vector3(2,1,.8),color)
  var colors:=[Color("DE6255"),Color("4D9DD1"),Color("81B85C"),Color("E1B746")];var index:=0
  for sx in [-1.0,1.0]:
   for sz in [-1.0,1.0]:
    var color:Color=colors[index];index+=1
-   _box(Vector3(sx*12,1.5,sz*12),Vector3(10,3,10),color)
-   _box(Vector3(sx*14.8,4.4,sz*14.8),Vector3(3,2.8,3),color.lightened(.18))
-   _ramp(Vector3(sx*3,0,sz*12),PI*.5*sx,color.lightened(.15))
-   _ramp(Vector3(sx*12,0,sz*3),0 if sz>0 else PI,color.lightened(.15))
-   for stripe in 3:_box(Vector3(sx*12,3.02,sz*(8+stripe*.6)),Vector3(3,.035,.2),Color("F7E9BD"))
+   _box(Vector3(sx*15,1.75,sz*15),Vector3(14,3.5,14),color.darkened(.12))
+   _box(Vector3(sx*15,3.49,sz*15),Vector3(14,.02,14),color)
+   _box(Vector3(sx*19.3,4.8,sz*19.3),Vector3(3.6,2.6,3.6),color.lightened(.14))
+   _ramp(Vector3(sx*2,0,sz*15),PI*.5*sx,color.lightened(.12))
+   _ramp(Vector3(sx*15,0,sz*2),0 if sz>0 else PI,color.lightened(.12))
+   for stripe in 4:
+    _box(Vector3(sx*15,3.515,sz*(9+stripe*.5)),Vector3(4,.035,.15),Color("F7E9BD"))
+   for line in range(9,22,2):
+    _box(Vector3(sx*line,3.505,sz*15),Vector3(.025,.015,14),color.darkened(.12))
+ for side in [-1,1]:
+  _box(Vector3(0,1.75,side*19),Vector3(16,3.5,3.6),Color("537E85"))
+  _box(Vector3(side*19,1.75,0),Vector3(3.6,3.5,16),Color("537E85"))
+  for edge in [-1,1]:
+   _box(Vector3(0,3.52,side*19+edge*1.65),Vector3(16,.04,.12),Color("EED180"))
+   _box(Vector3(side*19+edge*1.65,3.52,0),Vector3(.12,.04,16),Color("EED180"))
  for entry in roster:
   var root:=Node3D.new();stage.add_child(root)
   var model=preload("res://assets/menu_truck/burger_pals_truck.glb").instantiate();root.add_child(model);model.scale=Vector3.ONE*.22;model.rotation.y=-PI*.5
   var anim=model.find_child("AnimationPlayer",true,false) as AnimationPlayer
   if anim:anim.stop()
   var truck=model.find_child("TruckRoot",true,false) as Node3D;truck.position=Vector3.ZERO;truck.rotation=Vector3.ZERO
-  var tag:=Label3D.new();tag.text=str(entry.name);tag.position.y=1.8;tag.font_size=48;tag.pixel_size=.008;tag.billboard=BaseMaterial3D.BILLBOARD_ENABLED;tag.modulate=COLORS[actors.size()%4];root.add_child(tag)
+  var tag:=Label3D.new();tag.text=str(entry.name);tag.position.y=1.8;tag.font_size=48;tag.pixel_size=.008;tag.billboard=BaseMaterial3D.BILLBOARD_ENABLED;tag.modulate=COLORS[actors.size()%4];root.add_child(tag);tag.hide()
   var wheels:Array=[]
   for part in ["WheelFrontLeft","WheelFrontRight","WheelRearLeft","WheelRearRight"]:wheels.append(model.find_child(part,true,false))
   actors[int(entry.id)]={"root":root,"model":model,"wheels":wheels,"tag":tag}
@@ -69,26 +82,25 @@ func _build_view()->void:
   var patty:=_patty();marker.add_child(patty)
   var ring:=MeshInstance3D.new();var torus:=TorusMesh.new();torus.inner_radius=.55;torus.outer_radius=.62;torus.rings=24;torus.ring_segments=6;ring.mesh=torus;ring.material_override=_material(Color("FFF194"));ring.position.y=-.5;marker.add_child(ring)
   pickup_meshes.append(marker)
- chase=Camera3D.new();chase.fov=66;chase.current=true;chase.far=130;stage.add_child(chase)
+ chase=Camera3D.new();chase.fov=60;chase.current=true;chase.far=130;stage.add_child(chase)
  var canvas:=Control.new();canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);canvas.mouse_filter=Control.MOUSE_FILTER_IGNORE;layer.add_child(canvas)
- hud=_label(canvas,"",25,Vector2(20,18),Vector2(670,70));hud.horizontal_alignment=HORIZONTAL_ALIGNMENT_LEFT
- center_text=_label(canvas,"",38,Vector2(220,160),Vector2(840,140))
- var instructions:=_label(canvas,"WASD / ARROWS  DRIVE    •    SPACE  SHOOT    •    COLLECT PATTIES",19,Vector2(10,674),Vector2(1260,34))
- instructions.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE);instructions.offset_top=-44;instructions.offset_bottom=-8
+ hud=preload("res://scripts/truck_arena_hud.gd").new();hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);canvas.add_child(hud)
  engine=AudioStreamPlayer.new();engine.bus="SFX";engine.volume_db=-28;add_child(engine)
  var sound:=AudioStreamWAV.new();sound.format=AudioStreamWAV.FORMAT_16_BITS;sound.mix_rate=22050;sound.loop_mode=AudioStreamWAV.LOOP_FORWARD;sound.loop_end=22050
  var data:=PackedByteArray();data.resize(44100)
- for i in 22050:data.encode_s16(i*2,int((sin(TAU*60*i/22050.0)*.5+sin(TAU*120*i/22050.0)*.2)*18000))
- sound.data=data;engine.stream=sound;engine.play()
- skid=AudioStreamPlayer.new();skid.bus="SFX";skid.volume_db=-80;add_child(skid)
- var squeal:=AudioStreamWAV.new();squeal.format=AudioStreamWAV.FORMAT_16_BITS;squeal.mix_rate=22050;squeal.loop_mode=AudioStreamWAV.LOOP_FORWARD;squeal.loop_end=22050
- var squeal_data:=PackedByteArray();squeal_data.resize(44100)
- var rng:=RandomNumberGenerator.new();rng.seed=97
+ var motor_rng:=RandomNumberGenerator.new();motor_rng.seed=491
+ var filtered:=0.0
  for i in 22050:
   var t:=i/22050.0
-  var wave:=sin(TAU*640*t+sin(TAU*8*t)*2.5)*.35+rng.randf_range(-.15,.15)
-  squeal_data.encode_s16(i*2,int(wave*16000))
- squeal.data=squeal_data;skid.stream=squeal;skid.play()
+  filtered=lerpf(filtered,motor_rng.randf_range(-1,1),.14)
+  var firing:=pow(.5+.5*sin(TAU*48*t),5)
+  var exhaust:=sin(TAU*48*t)*.35+sin(TAU*96*t)*.22+sin(TAU*192*t)*.1
+  var rumble:=exhaust*(.85+.15*sin(TAU*7*t))+filtered*(.12+.42*firing)
+  data.encode_s16(i*2,int(clampf(rumble,-1,1)*20000))
+ sound.data=data;engine.stream=sound;engine.play()
+ skid=AudioStreamPlayer.new();skid.bus="SFX";skid.volume_db=-80;add_child(skid)
+ var squeal:AudioStreamMP3=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3").duplicate()
+ squeal.loop=true;squeal.loop_offset=.1;skid.stream=squeal;skid.play()
 func _render(delta:float,_axis:Vector2)->void:
  if view.is_empty():return
  _play_match_sounds()
@@ -107,11 +119,11 @@ func _render(delta:float,_axis:Vector2)->void:
   actor.root.position=actor.root.position.lerp(p.position,minf(1,delta*18)) if camera_ready else p.position
   actor.root.rotation.y=lerp_angle(actor.root.rotation.y,p.angle,minf(1,delta*16))
   actor.model.visible=p.alive and (p.shield<=0 or int(Time.get_ticks_msec()/80)%2==0)
-  actor.tag.text=str(roster.filter(func(e):return int(e.id)==int(id))[0].name)+"  "+str(p.hp)+"/4"
+  actor.tag.visible=false
   actor.model.rotation.x=lerpf(actor.model.rotation.x,-float(p.get("turn",0))*minf(absf(p.speed),10)*.007,minf(1,delta*9))
   actor.model.position.y=sin(float(p.travel)*5)*minf(absf(p.speed)*.0018,.025)
-  if p.alive and p.get("slide",0)>1.0 and dust_time<=0:
-   var puff:=MeshInstance3D.new();var sphere:=SphereMesh.new();sphere.radius=.16;sphere.height=.22;sphere.radial_segments=8;sphere.rings=4;puff.mesh=sphere;puff.material_override=_material(Color("E6DEBB"));stage.add_child(puff);puff.position=p.position+Vector3.UP*.14;dust.append({"node":puff,"life":.55})
+  if p.alive and (p.get("slide",0)>1.0 or p.get("boosting",false)) and dust_time<=0:
+   var puff:=MeshInstance3D.new();var sphere:=SphereMesh.new();sphere.radius=.16;sphere.height=.22;sphere.radial_segments=8;sphere.rings=4;puff.mesh=sphere;puff.material_override=_material(Color("8BE6EE") if p.get("boosting",false) else Color("D9DAD3"));stage.add_child(puff);puff.position=p.position+Vector3.UP*.14;dust.append({"node":puff,"life":.55})
   for wheel in actor.wheels:wheel.rotation.z=-float(p.travel)/.18
  if dust_time<=0:dust_time=.065
  for i in pickup_meshes.size():
@@ -126,28 +138,20 @@ func _render(delta:float,_axis:Vector2)->void:
   if not seen.has(id):projectile_meshes[id].queue_free();projectile_meshes.erase(id)
  if view.players.has(follow_id):
   var p:Dictionary=view.players[follow_id];var forward:=Vector3(sin(p.angle),0,cos(p.angle))
-  var focus:Vector3=actors[follow_id].root.position+Vector3.UP*1.0
-  var goal:=focus-forward*7.8+Vector3.UP*5.5
-  goal.y=maxf(goal.y,TRUCK_SIM.height_at(Vector2(goal.x,goal.z))+2.5)
+  var focus:Vector3=actors[follow_id].root.position+Vector3.UP*.65
+  var goal:=focus-forward*3.8+Vector3.UP*1.65
+  goal.y=maxf(goal.y,TRUCK_SIM.height_at(Vector2(goal.x,goal.z))+.65)
   chase.position=chase.position.lerp(goal,1-exp(-delta*6)) if camera_ready else goal
-  chase.look_at(focus+forward*2.2);camera_ready=true
-  engine.pitch_scale=.7+absf(p.speed)*.08;engine.volume_db=-30+absf(p.speed)*.6
+  chase.look_at(focus+forward*2.8);camera_ready=true
+  var motor_speed:=absf(p.speed)
+  var target_pitch:float=.8+fmod(motor_speed,5.0)*.14+floor(motor_speed/5.0)*.09+(.18 if p.get("boosting",false) else 0.0)
+  engine.pitch_scale=lerpf(engine.pitch_scale,target_pitch,minf(1,delta*5))
+  engine.volume_db=lerpf(engine.volume_db,-27+minf(motor_speed,12)*.5,minf(1,delta*6))
   var slip:float=p.get("slide",0)
-  skid.volume_db=lerpf(skid.volume_db,-28+minf(slip,4) if slip>.8 and view.phase=="playing" else -80,minf(1,delta*10))
-  skid.pitch_scale=.85+minf(slip,4)*.08
+  skid.volume_db=lerpf(skid.volume_db,-25+minf(slip,4) if slip>.8 and view.phase=="playing" else -80,minf(1,delta*10))
+  skid.pitch_scale=.93+minf(slip,4)*.025
  var mine:Dictionary=view.players.get(NetManager.my_id(),{})
- hud.text="TRUCK ARENA
-"+("ARMOR  "+str(mine.get("hp",0))+" / 4     PATTIES  "+str(mine.get("ammo",0))+" / 6" if mine.get("alive",false) else "SPECTATING")
- center_text.text=""
- if view.phase=="waiting":center_text.text="WAITING FOR DRIVERS"
- elif view.phase=="countdown":center_text.text="FOUR HITS AND YOU'RE OUT!
-"+str(maxi(1,int(ceil(3.0-view.clock))))
- elif view.phase=="results":
-  var names:Array[String]=[]
-  for entry in roster:
-   if view.winners.has(int(entry.id)):names.append(str(entry.name))
-  center_text.text=(names[0]+" WINS!" if names.size()==1 else "DRAW!")+"
-BACK TO THE TRUCK"
+ hud.state=view;hud.mine=mine;hud.won=view.winners.has(NetManager.my_id());hud.queue_redraw()
 func _play_match_sounds()->void:
  for event in view.get("events",[]):
   if int(event.id)<=last_sound_event:continue

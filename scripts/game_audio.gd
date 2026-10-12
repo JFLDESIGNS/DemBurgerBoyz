@@ -127,7 +127,8 @@ const SHAKER_SCRAPE_DB := -9.0 ## base grill scrape (~+2.5 dB vs prior)
 const SHAKER_SCRAPE_DEBRIS_DB := -2.5 ## debris scrape bed a little louder
 var _scrape_ting_cool: float = 0.0
 var _scrape_bass_pop_cool: float = 0.0 ## Subtle low pops while crust loosens
-const SCRAPE_TING_INTERVAL := 0.4
+const SCRAPE_TING_INTERVAL := 0.65
+var _last_scrape_ting_ms: int = -10000
 const SCRAPE_BASS_POP_INTERVAL := 0.28
 ## Fries pack shake — papery cup + salt-crystal rattle while whipping the serving.
 var _fries_shake_player: AudioStreamPlayer
@@ -985,7 +986,7 @@ func _sync_shaker_rattle() -> void:
 
 
 func _tick_scrape_tings(delta: float) -> void:
-	## Soft spatula tings while scraping (~0.4s, slight irregularity).
+	## Light cleaning accents; separate from the musical grill sampler.
 	## Debris kuhhh uses that same random cadence, at half volume.
 	if not _scrape_move_on:
 		return
@@ -994,7 +995,7 @@ func _tick_scrape_tings(delta: float) -> void:
 		return
 	_scrape_ting_cool = SCRAPE_TING_INTERVAL + randf_range(-0.10, 0.12)
 	var ting_vol := 0.62 if _scrape_debris_boost else 0.32
-	play_spatula_ting(randi_range(69, 75), ting_vol)
+	play_scrape_ting(ting_vol)
 	if _scrape_debris_boost:
 		play_debris_kuhh(0.55 + randf() * 0.32)
 
@@ -1004,6 +1005,7 @@ const DEBRIS_KUHH_VARIANTS := 8
 
 
 func prewarm_debris_audio() -> void:
+	await _prewarm_cache_entry_async("scrape_light_ting", _make_scrape_ting)
 	## Every random scrape voice must be ready before a stroke can select it.
 	for i in DEBRIS_BASS_VARIANTS:
 		await _prewarm_cache_entry_async("debris_bass_%d" % i, _make_debris_bass_pop)
@@ -1661,6 +1663,28 @@ func play_ready() -> void:
 
 func play_scoop() -> void:
 	_play_cached("scoop", _make_scoop, 0.0, 0.9)
+
+
+func play_scrape_ting(volume_scale: float = 0.62) -> void:
+	# One cleaning-only accent per half second across loop and chip events.
+	# This never enters the musical tap path or its customer-dance hooks.
+	var now := Time.get_ticks_msec()
+	if now - _last_scrape_ting_ms < 500:
+		return
+	_last_scrape_ting_ms = now
+	_play_cached("scrape_light_ting", _make_scrape_ting, randf_range(0.96, 1.06), volume_scale * 0.5)
+
+
+func _make_scrape_ting() -> AudioStreamWAV:
+	var n := int(MIX_RATE * 0.09)
+	var pcm := PackedByteArray()
+	pcm.resize(n * 2)
+	for i in n:
+		var t := float(i) / MIX_RATE
+		var envelope := minf(t / 0.003, 1.0) * exp(-t * 60.0)
+		var tone := sin(TAU * 1750.0 * t) * 0.72 + sin(TAU * 2870.0 * t) * 0.16
+		_write_s16(pcm, i, int(tone * envelope * 18000.0))
+	return _wav_from_pcm(pcm, false)
 
 
 func play_spatula_ting(
