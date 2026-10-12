@@ -22,13 +22,6 @@ func run() -> void:
 	var counts = {"reply":0,"away":0,"love":0,"quiet":0}
 	for i in 100: counts[social.outcome((i+.5)/100.0)] += 1
 	assert(counts == {"reply":65,"away":20,"love":2,"quiet":13})
-	var chat_count := 0
-	for i in 100:
-		var person := Node.new()
-		if social.conversation_roll(person,(i+.5)/100.0): chat_count += 1
-		assert(not social.conversation_roll(person,0.0),"Conversation cooldown prevents rapid repeats")
-		person.free()
-	assert(chat_count == 85)
 	var used := {}
 	for i in 13:
 		var chat: int = social.next_conversation()
@@ -50,5 +43,5 @@ func run() -> void:
 	assert(bubble.position.x > game.camera.unproject_position(customers[0].global_position).x)
 	bubble.queue_free()
 
-	print("CONVERSATION_OK: 85 percent with per-customer cooldown and right-side speech card")
+	print("CONVERSATION_OK: varied conversations and narrow right-side speech cards")
 	game.queue_free(); await process_frame; quit()

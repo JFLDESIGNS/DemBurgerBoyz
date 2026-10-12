@@ -853,7 +853,11 @@ func _apply_visual_scale() -> void:
 		return
 	var fat_w := 1.0 + _fat
 	var eat_w := 1.0 + _patty_eat_wide * PATTY_EAT_WIDTH_BOOST
-	var size_m := _size_mul()
+	var backdrop_scale := 1.0
+	var game := get_tree().current_scene
+	if _state.begins_with("background") and is_instance_valid(game) and game.has_method("_bg_people_scale"):
+		backdrop_scale = game._bg_people_scale()
+	var size_m := _size_mul() * backdrop_scale
 	var sx := MESH_SCALE * fat_w * eat_w * size_m * (1.0 - _pet_squash * 0.08)
 	var sy := MESH_SCALE * (1.0 + _pet_squash * 0.06) * (1.0 + _fat * 0.08) * size_m
 	var sz := MESH_SCALE * lerpf(1.0, fat_w, 0.7) * eat_w * size_m * (1.0 - _pet_squash * 0.05)
@@ -865,7 +869,7 @@ func _apply_visual_scale() -> void:
 		_visual.scale *= Vector3(1.0+sin(_bob*8.0)*.035,1.0-sin(_bob*8.0)*.035,1.0)
 	_visual.position.x = sin(_bob * TAU * 1.3) * 0.0025 * purr_weight
 	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
-	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL) + float(get_meta("steal_lean_lift", 0.0))
+	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (_size_mul() - DEFAULT_SIZE_MUL) * backdrop_scale + float(get_meta("steal_lean_lift", 0.0))
 	## Grow the pet hitbox with the cat.
 	if _area != null:
 		var shape := _area.get_child(0) as CollisionShape3D

@@ -26,6 +26,7 @@ var network_pose: Dictionary = {}
 var sound_serial := 0
 var sound_kind := ""
 var received_sound := -1
+var received_chirp := -1
 var network_send_left := 0.0
 var network_drag_left := 0.0
 var network_drag_target := Vector2.ZERO
@@ -96,12 +97,16 @@ func _ready() -> void:
 	for clip in [&"Idle", &"Fly"]:
 		animator.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
 	_rng.randomize()
-	voice = _audio_player("Chirp", CHIRP, -2.0)
+	voice = _audio_player("Chirp", CHIRP, -5.0)
+	# Keep the little bird audible from the cooking camera without distance muffling.
+	voice.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
+	voice.max_distance = 0.0
+	voice.attenuation_filter_cutoff_hz = 20500.0
 	tap_sound = _audio_player("Peck", PECK, 0.0)
 	var loop_wings = WINGS.duplicate() as AudioStreamWAV
 	loop_wings.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	loop_wings.loop_end = int(loop_wings.get_length() * loop_wings.mix_rate)
-	wing_sound = _audio_player("Wings", loop_wings, -4.0)
+	wing_sound = _audio_player("Wings", loop_wings, -4.0 + linear_to_db(0.8))
 	wing_sound.pitch_scale = 1.7
 	_enter(&"Away")
 	away_duration = _rng.randf_range(27.0, 33.0)
@@ -126,11 +131,24 @@ func _audio_player(label: String, stream: AudioStream, level: float) -> AudioStr
 
 func _chirp() -> void:
 	if is_instance_valid(game) and game.mp_enabled and not NetManager.is_host(): return
-	voice.position = bird.position
-	voice.pitch_scale = _rng.randf_range(1.05, 1.22)
-	voice.play()
 	sound_serial += 1; sound_kind = "chirp"
+	var pitch := _rng.randf_range(1.05, 1.22)
+	play_chirp_event(sound_serial,pitch)
+	if is_instance_valid(game) and game.mp_enabled and NetManager.is_online():
+		game.mp_bird_chirp.rpc(sound_serial,pitch)
 	sound_triggered.emit(&"chirp")
+
+func play_chirp_event(serial: int, pitch: float = 1.12) -> void:
+	if serial <= received_chirp or not enabled: return
+	received_chirp = serial
+	voice.position = bird.position
+	voice.pitch_scale = clampf(pitch,1.05,1.22)
+	voice.play()
+
+func _bird_hit(camera: Camera3D, point: Vector2) -> bool:
+	if _mesh_hit(bird,camera,point): return true
+	var center := bird.global_position + Vector3.UP * .10
+	return not camera.is_position_behind(center) and camera.unproject_position(center).distance_to(point) <= 22.0
 
 func set_enabled(value: bool) -> void:
 	if enabled == value:
@@ -288,7 +306,7 @@ func advance(delta: float) -> void:
 
 func tap_at(camera: Camera3D, screen_position: Vector2) -> bool:
 	if not enabled or not is_visible_in_tree(): return false
-	if bird.visible and _mesh_hit(bird, camera, screen_position):
+	if bird.visible and _bird_hit(camera, screen_position):
 		if tap_cooldown <= 0.0:
 			if is_instance_valid(game) and game.mp_enabled: game.mp_bird_interact.rpc_id(1,"chirp",Vector2.ZERO)
 			else: _chirp()
@@ -328,6 +346,6 @@ func apply_network_snapshot(data: Dictionary) -> void:
 	if network_pose.is_empty(): bird.position = data.position; sway.transform = data.sway
 	network_pose = data
 	if received_sound >= 0 and int(data.serial) != received_sound:
-		if data.sound == "chirp": voice.position = bird.position; voice.play()
+		if data.sound == "chirp": play_chirp_event(int(data.serial))
 		elif data.sound == "peck": tap_sound.play()
 	received_sound = int(data.serial)

@@ -11,7 +11,7 @@ func run():
  g.playing=true;g._kitchen_ready=true
  var preview=Control.new();g.get_node("UI/Root").add_child(preview);preview.position=Vector2(100,200)
  g.stations=[{"preview":preview,"items":[],"patties":[]}]
- g.park_bird_house=load("res://scenes/park_bird.tscn").instantiate();g.world.add_child(g.park_bird_house);g.park_bird_house.set_process(false)
+ g.park_bird_house=load("res://scenes/park_bird.tscn").instantiate();g.world.add_child(g.park_bird_house);g.park_bird_house.set_process(false);g.park_bird_house.game=g
  var net=root.get_node("NetManager");net.relay_url=""
  if hosting:
   assert(net.host_room("Host","Shared interactions")==OK)
@@ -32,6 +32,8 @@ func run():
   while preview.position.distance_to(Vector2(100,200))>.01:await process_frame
   g.park_bird_house._enter(&"Fly_In");g.park_bird_house.advance(.4)
   g.mp_bird_snapshot.rpc(g.park_bird_house.network_snapshot());await wait_mark("bird")
+  await wait_mark("chirped")
+  assert(g.park_bird_house.received_chirp>0)
   mark("done");await create_timer(.3).timeout
  else:
   mark("ready")
@@ -44,6 +46,10 @@ func run():
   g._mp_queue_motion("mp_build_pose",[0,true,.12,-.08,.1]);mark("dragged");await wait_mark("saw_drag")
   g._mp_queue_motion("mp_build_pose",[0,false,0.0,0.0,0.0]);mark("released")
   while g.park_bird_house.state!=&"Fly_In":await process_frame
-  assert(is_equal_approx(g.park_bird_house.state_time,.4));mark("bird");await wait_mark("done")
+  assert(is_equal_approx(g.park_bird_house.state_time,.4));mark("bird")
+  var last:int=g.park_bird_house.received_chirp
+  g.mp_bird_interact.rpc_id(1,"chirp",Vector2.ZERO)
+  while g.park_bird_house.received_chirp<=last:await process_frame
+  assert(g.park_bird_house.voice.playing);mark("chirped");await wait_mark("done")
  print("SHARED_INTERACTION_NETWORK_OK ","host" if hosting else "guest")
  g.mp_enabled=false;net.leave(false);g.queue_free();await process_frame;quit()

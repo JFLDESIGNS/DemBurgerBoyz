@@ -132,7 +132,7 @@ func _build_view() -> void:
  viewport=SubViewport.new();viewport.size=Vector2i(1280,720);viewport.own_world_3d=true;viewport.render_target_update_mode=SubViewport.UPDATE_ALWAYS;container.add_child(viewport)
  var stage:=Node3D.new();viewport.add_child(stage)
  var env:=WorldEnvironment.new();env.environment=Environment.new();env.environment.background_mode=Environment.BG_COLOR;env.environment.background_color=Color("162D49");env.environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;env.environment.ambient_light_color=Color("B9D9EB");env.environment.ambient_light_energy=.3;stage.add_child(env)
- var camera:=Camera3D.new();stage.add_child(camera);camera.position=Vector3(0,8.2,13.8);camera.look_at(Vector3(0,.2,0));camera.projection=Camera3D.PROJECTION_PERSPECTIVE;camera.fov=47.0;camera.current=true
+ var camera:=Camera3D.new();stage.add_child(camera);camera.position=Vector3(0,8.2,13.8);camera.look_at(Vector3(0,-.65,0));camera.projection=Camera3D.PROJECTION_PERSPECTIVE;camera.fov=40.0;camera.current=true
  var sun:=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-55,-35,0);sun.light_energy=.85;sun.shadow_enabled=true;stage.add_child(sun)
  arena=MeshInstance3D.new();var disk:=CylinderMesh.new();disk.top_radius=SIM.START_RADIUS;disk.bottom_radius=SIM.START_RADIUS;disk.height=1.1;disk.radial_segments=96;arena.mesh=disk;arena.material_override=_material(Color("23666E"));arena.position.y=-.55;stage.add_child(arena)
  rim=MeshInstance3D.new();var torus:=TorusMesh.new();torus.inner_radius=SIM.START_RADIUS-.09;torus.outer_radius=SIM.START_RADIUS+.09;rim.mesh=torus;rim.material_override=_material(Color("FFCC70"),.25);rim.position.y=.025;stage.add_child(rim)
@@ -156,7 +156,8 @@ func _build_view() -> void:
  ui.resized.connect(resize);resize.call()
  title=_label(canvas,"MIDDAY BREAK  /  BUMPER PALS",32,Vector2(0,18),Vector2(1280,45))
  timer_label=_label(canvas,"",28,Vector2(1080,78),Vector2(165,45))
- status=_label(canvas,"",38,Vector2(80,78),Vector2(1120,65))
+ status=_label(canvas,"",24,Vector2(24,86),Vector2(300,95))
+ status.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
  legend=_label(canvas,"",20,Vector2(60,595),Vector2(1160,35))
  help=_label(canvas,"WASD / ARROWS / LEFT STICK: ROLL    •    SPACE / A: BUMP BURST",19,Vector2(20,638),Vector2(1240,35))
  _label(canvas,"Bump the other pals off. Last pal standing wins. Your kitchen is paused.",18,Vector2(30,677),Vector2(1220,28))

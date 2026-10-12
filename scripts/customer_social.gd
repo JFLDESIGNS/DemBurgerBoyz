@@ -35,12 +35,6 @@ const CONVERSATIONS = [
 	["I could eat here every day.","See you tomorrow, then."],
 	["What's the secret ingredient?","Someone else doing the dishes."]
 ]
-func conversation_roll(person: Node, roll: float) -> bool:
-	var now := Time.get_ticks_msec()
-	if now < int(person.get_meta("conversation_after",0)): return false
-	person.set_meta("conversation_after",now+14000)
-	return roll < .85
-
 func next_conversation() -> int:
 	var choices: Array[int] = []
 	for i in CONVERSATIONS.size():
@@ -105,14 +99,14 @@ func _process(delta: float) -> void:
 	walker_left -= delta
 	var waiting = game.customers.filter(eligible)
 	if encounter_left <= 0.0:
-		encounter_left = randf_range(5.6, 7.2)
+		encounter_left = randf_range(7.6, 9.0)
 		if waiting.size() >= 2:
 			var a = waiting.pick_random()
 			var nearby = waiting.filter(func(c): return c != a and c.position.distance_to(a.position) < 3.5)
 			if not nearby.is_empty():
 				var b = nearby.pick_random()
 				var kind = encounter_outcome(a,b,randf())
-				var chat := next_conversation() if conversation_roll(a,randf()) else -1
+				var chat := next_conversation()
 				encounter(a,b,kind,chat)
 				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(a),game._customer_net_id(b),kind,chat)
 	if cat_left <= 0.0:
@@ -190,12 +184,13 @@ func encounter(a,b,kind: String, chat: int = -1) -> void:
 					person.set_meta("likes_cat", true))
 		return
 	if not is_instance_valid(b): return
+	if chat < 0: chat = next_conversation()
 	glance(a,b.global_position + Vector3(0,1.5,0))
 	wawa(a)
 	if chat >= 0 and chat < CONVERSATIONS.size(): conversation_bubble(a,CONVERSATIONS[chat][0])
 	var first_ref = weakref(a)
 	var second_ref = weakref(b)
-	create_tween().tween_interval(2.7 if chat >= 0 else randf_range(.65, 1.2)).finished.connect(func():
+	create_tween().tween_interval(3.7).finished.connect(func():
 		var first = first_ref.get_ref()
 		var second = second_ref.get_ref()
 		if not eligible(first) or not eligible(second): return

@@ -51815,6 +51815,10 @@ func _open_phone_to_shop_item(item_id: String) -> void:
 
 
 func _set_phone_app(app_id: String) -> void:
+	if app_id == "rolly":
+		if mp_enabled and not NetManager.is_host(): mp_request_pal_ball.rpc_id(1)
+		elif not _maybe_start_pal_ball_break(true): _flash("Finish the current event, then play Rolly!", Color("FFE3A0"), 2.0)
+		return
 	if is_instance_valid(_phone_party) and not _phone_party.applying: _phone_party.choose(app_id)
 	if is_instance_valid(_grubbah): _grubbah.show_app(app_id)
 	_phone_app_id = app_id
@@ -54222,6 +54226,7 @@ func _build_phone_ui() -> void:
 	icon_grid.add_child(_make_phone_app_icon("orders", "My Sales", "#", Color("244B51"), Color("83E1D0")))
 	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
+	icon_grid.add_child(_make_phone_app_icon("rolly", "Rolly", "●", Color("23666E"), Color("FFCF65")))
 	icon_grid.add_child(_make_phone_app_icon("snak", "Snak", "S", Color(0.12, 0.38, 0.16), Color(0.55, 0.95, 0.42)))
 	icon_grid.add_child(_make_phone_app_icon("gnop", "Gnop", "G", Color(0.14, 0.22, 0.48), Color(0.62, 0.82, 1.0)))
 	icon_grid.add_child(_make_phone_app_icon("smush", "Smush", "B", Color(0.48, 0.22, 0.10), Color(1.0, 0.78, 0.38)))
@@ -62849,7 +62854,7 @@ func _build_challenge_ui() -> void:
 	row.add_child(accept)
 
 	var decline := Button.new()
-	decline.text = "Not this time"
+	decline.text = "MAYBE LATER"
 	decline.custom_minimum_size = Vector2(150, 54)
 	decline.focus_mode = Control.FOCUS_NONE
 	decline.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -62986,36 +62991,19 @@ func _build_challenge_ui() -> void:
 
 func _make_challenge_stat_chip(parent: Control, value: String, caption: String) -> Label:
 	var chip := PanelContainer.new()
-	var chip_sb := StyleBoxFlat.new()
-	chip_sb.bg_color = Color(0,0,0,0)
-	chip_sb.border_color = Color("D1B980")
-	chip_sb.set_border_width_all(0)
-	chip_sb.set_corner_radius_all(12)
-	chip_sb.content_margin_left = 22
-	chip_sb.content_margin_right = 22
-	chip_sb.content_margin_top = 10
-	chip_sb.content_margin_bottom = 10
-	chip.add_theme_stylebox_override("panel", chip_sb)
-	chip.custom_minimum_size = Vector2(226, 78)
-	parent.add_child(chip)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 2)
-	chip.add_child(v)
-	var value_lab := Label.new()
-	value_lab.text = value
-	value_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_luckiest_label(value_lab, 43)
-	value_lab.add_theme_color_override("font_color", Color("433525"))
-	value_lab.add_theme_color_override("font_outline_color", Color.BLACK)
-	value_lab.add_theme_constant_override("outline_size", 0)
-	v.add_child(value_lab)
-	var cap := Label.new()
-	cap.text = caption
-	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_label(cap, true, 12)
-	cap.add_theme_color_override("font_color", Color("84623F"))
-	v.add_child(cap)
-	return value_lab
+	var skin := StyleBoxFlat.new()
+	skin.bg_color=Color("FBEFD5");skin.border_color=Color("D6B67C");skin.set_border_width_all(2);skin.set_corner_radius_all(15)
+	skin.content_margin_left=14;skin.content_margin_right=14;skin.content_margin_top=8;skin.content_margin_bottom=8
+	chip.add_theme_stylebox_override("panel",skin);chip.custom_minimum_size=Vector2(226,78);parent.add_child(chip)
+	var row:=HBoxContainer.new();row.alignment=BoxContainer.ALIGNMENT_CENTER;row.add_theme_constant_override("separation",12);chip.add_child(row)
+	if caption=="BURGERS":
+		var icon:=TextureRect.new();icon.texture=ImageTexture.create_from_image(FoodSpritesScript.prep_texture_for_composite(FoodSpritesScript.build_patty_state_tex(.15,false)))
+		icon.custom_minimum_size=Vector2(66,50);icon.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;icon.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED;row.add_child(icon)
+	else:
+		var clock:=Control.new();clock.set_script(preload("res://scripts/challenge_clock_icon.gd"));clock.custom_minimum_size=Vector2(52,52);row.add_child(clock)
+	var label:=Label.new();label.text=value;label.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
+	UiFontsScript.apply_luckiest_label(label,43);label.add_theme_color_override("font_color",Color("433525"));row.add_child(label)
+	return label
 
 
 func _hide_challenge_overlay() -> void:
@@ -81137,6 +81125,10 @@ func mp_request_machine_repair(id: String) -> void:
 func mp_bird_snapshot(data: Dictionary) -> void:
 	if is_instance_valid(park_bird_house): park_bird_house.apply_network_snapshot(data)
 
+@rpc("authority","call_remote","reliable")
+func mp_bird_chirp(serial: int, pitch: float) -> void:
+	if is_instance_valid(park_bird_house): park_bird_house.play_chirp_event(serial,pitch)
+
 @rpc("any_peer","call_local","reliable")
 func mp_bird_interact(kind: String, target: Vector2) -> void:
 	if not NetManager.is_host() or not playing or not is_instance_valid(park_bird_house) or not target.is_finite(): return
@@ -81294,9 +81286,10 @@ func _grant_machine_starter_supplies(id: String) -> void:
 	if mp_enabled: _mp_broadcast_economy()
 
 
-func _maybe_start_pal_ball_break() -> bool:
+func _maybe_start_pal_ball_break(manual: bool = false) -> bool:
+	if not playing or not _kitchen_ready or tutorial_mode or _hotdog_active() or _location_relocate_busy: return false
 	if mp_enabled and (not NetManager.is_online() or not NetManager.is_host()): return false
-	if _pal_ball_break_day == day or day_time > _shift_length() * .5: return false
+	if not manual and (_pal_ball_break_day == day or day_time > _shift_length() * .5): return false
 	if is_instance_valid(_pal_ball_break) or _serve_fly_busy or _boss_pep_pending or _boss_intro_running or _location_relocate_busy or not _challenge_phase.is_empty(): return false
 	var peers := NetManager.connected_peer_ids()
 	var roster: Array = []
@@ -81304,6 +81297,7 @@ func _maybe_start_pal_ball_break() -> bool:
 		var peer := int(peers[i])
 		roster.append({"id":peer,"name":str(NetManager.peer_names.get(peer,NetManager.player_name if peer == NetManager.my_id() else "Pal %d" % (i+1))),"skin":i})
 	if roster.size()==1: roster.append({"id":-1,"name":"Rolly","skin":3,"bot":true})
+	if not manual: _pal_ball_break_day = day
 	_pal_ball_match_serial += 1
 	if mp_enabled: mp_pal_ball_begin.rpc(_pal_ball_match_serial,roster,{})
 	else: mp_pal_ball_begin(_pal_ball_match_serial,roster,{})
@@ -81313,7 +81307,6 @@ func _maybe_start_pal_ball_break() -> bool:
 func mp_pal_ball_begin(serial: int, roster: Array, snapshot: Dictionary = {}) -> void:
 	if not _kitchen_ready or serial <= _pal_ball_finished_serial: return
 	if not is_instance_valid(_pal_ball_break):
-		_pal_ball_break_day = day
 		_pal_ball_break = preload("res://scripts/pal_ball_break.gd").new()
 		add_child(_pal_ball_break)
 		_pal_ball_break.setup(self,serial,roster)
@@ -81339,3 +81332,9 @@ func mp_pal_ball_state(serial: int, snapshot: Dictionary) -> void:
 func mp_pal_ball_end(serial: int) -> void:
 	_pal_ball_finished_serial = maxi(_pal_ball_finished_serial,serial)
 	if is_instance_valid(_pal_ball_break) and _pal_ball_break.generation == serial: _pal_ball_break.finish()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_request_pal_ball() -> void:
+	if NetManager.is_host() and NetManager.connected_peer_ids().has(multiplayer.get_remote_sender_id()):
+		_maybe_start_pal_ball_break(true)
