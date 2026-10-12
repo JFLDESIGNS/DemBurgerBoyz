@@ -6,11 +6,17 @@ var door_animations: AnimationPlayer
 var _hinges: Dictionary = {}
 var _axes: Dictionary = {}
 var _game: Node = null
+var _walker_reflections: ShaderMaterial
+var _canopy_shades: Dictionary = {}
 
 func _ready() -> void:
  _layer("CanopyBacking", "canopy_backing.png", -0.01)
  _layer("StreetBackground", "street_base_cutout.png", 0.0)
- _layer("StreetWindows", "street_glass.png", 0.028)
+ var street_windows := _layer("StreetWindows", "street_glass.png", 0.028)
+ _walker_reflections = ShaderMaterial.new()
+ _walker_reflections.shader = preload("res://shaders/mill_walker_reflections.gdshader")
+ _walker_reflections.set_shader_parameter("glass_texture", load(ASSETS + "street_glass.png"))
+ street_windows.material_override = _walker_reflections
  var upstairs := _layer("UpperWindows", "upper_glass.png", 0.029)
  var clouds := ShaderMaterial.new()
  clouds.shader = preload("res://shaders/mill_window_clouds.gdshader")
@@ -111,7 +117,10 @@ func configure_for_game(game: Node) -> void:
  _update_canopy_depth()
 
 func _process(_delta: float) -> void:
- if is_instance_valid(_game): _update_canopy_depth()
+ if is_instance_valid(_game):
+  _update_canopy_depth()
+  _update_walker_reflections()
+  _update_canopy_walker_shade()
 
 func _update_canopy_depth() -> void:
  var camera := get_viewport().get_camera_3d()
@@ -219,3 +228,74 @@ func apply_traffic_snapshot(data: Dictionary) -> void:
  door_animations.stop()
  for door in data.get("angles", {}):
   if _hinges.has(door): _hinges[door].quaternion = data["angles"][door]
+
+
+func _reflection_uv(world_point: Vector3, camera: Camera3D) -> Vector2:
+ var origin := to_local(camera.global_position)
+ var point := to_local(world_point)
+ var depth := point.z - origin.z
+ if absf(depth) < 0.01: return Vector2(-10,-10)
+ var hit := origin + (point-origin) * ((0.028-origin.z)/depth)
+ return Vector2(hit.x/20.48+0.5, 0.5-hit.y/11.53)
+
+func _update_walker_reflections() -> void:
+ var camera := get_viewport().get_camera_3d()
+ if camera == null: return
+ var people := PackedVector4Array()
+ var gait := PackedFloat32Array()
+ for i in _game.bg_people.size():
+  var walker: Node3D = _game.bg_people[i]
+  if not is_instance_valid(walker) or not walker.visible or not bool(_game.bg_people_active[i]): continue
+  var height := 1.7 * walker.scale.y
+  var feet := _reflection_uv(walker.global_position,camera)
+  var head := _reflection_uv(walker.global_position+Vector3.UP*height,camera)
+  var side := _reflection_uv(walker.global_position+camera.global_basis.x*height*0.5,camera)
+  people.append(Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*2.0,.001),maxf(feet.y-head.y,.001)))
+  gait.append(Time.get_ticks_msec()*0.001*(9.0 if bool(_game.bg_people_is_run[i]) else 5.0)+i)
+  if people.size()==8: break
+ var count := people.size()
+ people.resize(8)
+ gait.resize(8)
+ _walker_reflections.set_shader_parameter("people",people)
+ _walker_reflections.set_shader_parameter("gait",gait)
+ _walker_reflections.set_shader_parameter("person_count",count)
+
+
+func _update_canopy_walker_shade() -> void:
+ var camera := get_viewport().get_camera_3d()
+ if camera == null: return
+ for i in _game.bg_people.size():
+  var walker: Node3D = _game.bg_people[i]
+  if not is_instance_valid(walker): continue
+  var id := walker.get_instance_id()
+  if not _canopy_shades.has(id):
+   var shade := ShaderMaterial.new()
+   shade.shader = preload("res://shaders/mill_canopy_walker_shade.gdshader")
+   var meshes: Array = []
+   for mesh in walker.find_children("*", "MeshInstance3D", true, false):
+    if mesh.material_overlay != null: continue
+    mesh.material_overlay = shade
+    meshes.append(mesh)
+   _canopy_shades[id] = {"material": shade, "meshes": meshes, "refresh": Time.get_ticks_msec()}
+  var material: ShaderMaterial = _canopy_shades[id]["material"]
+  if Time.get_ticks_msec() - int(_canopy_shades[id]["refresh"]) > 1000:
+   for mesh in walker.find_children("*", "MeshInstance3D", true, false):
+    if mesh.material_overlay == null:
+     mesh.material_overlay = material
+     _canopy_shades[id]["meshes"].append(mesh)
+   _canopy_shades[id]["refresh"] = Time.get_ticks_msec()
+  var height := 1.7 * walker.scale.y
+  var uv := _reflection_uv(walker.global_position + Vector3.UP * height * 0.7, camera)
+  var left := smoothstep(455.0/2048.0, 495.0/2048.0, uv.x)
+  var right := 1.0 - smoothstep(842.0/2048.0,881.0/2048.0,uv.x)
+  var amount := left * right * 0.30 if walker.visible and bool(_game.bg_people_active[i]) else 0.0
+  material.set_shader_parameter("upper_body_start",walker.global_position.y+height*.42)
+  material.set_shader_parameter("upper_body_end",walker.global_position.y+height*.64)
+  material.set_shader_parameter("shade_amount",amount)
+
+func _exit_tree() -> void:
+ for entry in _canopy_shades.values():
+  for mesh in entry["meshes"]:
+   if is_instance_valid(mesh) and mesh.material_overlay == entry["material"]:
+    mesh.material_overlay = null
+ _canopy_shades.clear()

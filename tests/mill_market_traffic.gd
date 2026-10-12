@@ -50,6 +50,29 @@ func run() -> void:
  assert(street.try_building_departure(0,true))
  street.cancel_building_traffic()
  assert(not street.is_building_walker(walker) and street._trip.is_empty())
+ var capsule := MeshInstance3D.new()
+ capsule.mesh = CapsuleMesh.new()
+ walker.add_child(capsule)
+ game.bg_people_active[0] = true
+ walker.visible = true
+ game.camera.current = true
+ var height: float = 1.7 * walker.scale.y
+ walker.global_position = street.to_global(Vector3(-3.4,-2.5,0.028)) - Vector3.UP * height * .7
+ street._update_walker_reflections()
+ street._update_canopy_walker_shade()
+ assert(street._walker_reflections.get_shader_parameter("person_count") == 1)
+ assert(capsule.material_overlay != null)
+ assert(capsule.material_overlay.get_shader_parameter("shade_amount") > .28)
+ assert(capsule.material_overlay.get_shader_parameter("upper_body_start") < capsule.material_overlay.get_shader_parameter("upper_body_end"))
+ walker.visible = false
+ street._update_walker_reflections()
+ street._update_canopy_walker_shade()
+ assert(street._walker_reflections.get_shader_parameter("person_count") == 0)
+ assert(capsule.material_overlay.get_shader_parameter("shade_amount") == 0.0)
+ walker.visible = true
+ street._update_walker_reflections()
+ street._update_canopy_walker_shade()
+ for i in 5: await process_frame
  print("MILL_BUILDING_TRAFFIC_OK: entry, exit, cancellation, replicated angles, no background shadows")
  await process_frame
  quit()

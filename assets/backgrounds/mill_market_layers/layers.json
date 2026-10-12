@@ -300,7 +300,7 @@
         0.0,
         -0.9995920658111572
       ],
-      "direction": -1,
+      "direction": 1,
       "open_degrees": 110
     },
     {
@@ -311,7 +311,7 @@
         0.0,
         -0.9995341300964355
       ],
-      "direction": -1,
+      "direction": 1,
       "open_degrees": 110
     }
   ]

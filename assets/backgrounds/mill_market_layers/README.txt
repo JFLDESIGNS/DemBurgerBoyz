@@ -8,7 +8,7 @@ Call after ready:
   street.close_door("motel")
   street.open_door() # both
 Or call DoorAnimations.play("old_poodle_open"), "old_poodle_close", "motel_open", "motel_close", "both_open", "both_close".
-Both hinges are on the left, opening outward 110 degrees over 0.85 seconds.
+Both hinges are on the left, opening inward 110 degrees over 0.85 seconds.
 The AnimationPlayer is created by the scene script at runtime. One animation can control both doors together.
 
 WalkerLayer is at z=0.35; CanopyForeground is z=0.65. Add walkers under WalkerLayer or place them between z=0.15 and 0.55 to let the awning occlude them.
@@ -31,3 +31,5 @@ In the game the canopy is projected ahead of the existing walker lane while pres
 Occasional host-controlled walkers enter and leave the two buildings. Multiplayer snapshots synchronize doorway travel, visibility, facing, and door poses.
 All scenery layers have shadow casting disabled to avoid rectangular shadows over the painted street.
 The warm gradient is limited to the bottom 38 percent of street-level glass, with a darker amber base.
+
+Latest: inward-opening doors with deeper recesses and darker interiors. Lower-window gradient stays narrow but is lighter. Blue silhouettes follow visible walkers/runners on street glass; a soft upper-body shader shadow fades under the market canopy.

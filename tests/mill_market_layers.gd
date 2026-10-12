@@ -17,7 +17,7 @@ func run() -> void:
   var leaf: MeshInstance3D = hinge.find_child("*Leaf*",true,false)
   assert(leaf != null)
   var center: Vector3 = leaf.global_transform * leaf.get_aabb().get_center()
-  assert(center.z > 0.2, "Door must swing outward")
+  assert(center.z < -0.2, "Door must swing inward")
  street.close_door()
  street.door_animations.advance(0.85)
  for key in street._hinges:

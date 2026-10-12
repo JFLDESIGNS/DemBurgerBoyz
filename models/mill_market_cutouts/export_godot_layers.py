@@ -25,7 +25,7 @@ for name,pts in windows:
  im=bpy.data.images.load(str(OUT/(name+'.png')),check_existing=False);a=pixels(im);h,w=a.shape[:2];x0=int(min(p[0] for p in pts)*sx);y0=int(min(p[1] for p in pts)*sy)
  is_upper=any(k in name for k in ['Upper','Top','Middle']);door=name in ['Poodle_Door_Glass','Motel_Door']
  if not is_upper:
-  v=np.linspace(0,1,h)[:,None];blend=np.clip((v-.62)/.38,0,1);blend=blend*blend*(3-2*blend)*.84;a[:,:,:3]=a[:,:,:3]*(1-blend[:,:,None])+np.array([.35,.25,.14])*blend[:,:,None]
+  v=np.linspace(0,1,h)[:,None];blend=np.clip((v-.62)/.38,0,1);blend=blend*blend*(3-2*blend)*.84;a[:,:,:3]=a[:,:,:3]*(1-blend[:,:,None])+np.array([.48,.36,.22])*blend[:,:,None]
  fresh=image(name+'_glass',a,False);ob=bpy.data.objects[name+'_GLASS'];m=ob.data.materials[0];n=m.node_tree.nodes;l=m.node_tree.links;tex=next(t for t in n if t.type=='TEX_IMAGE');tex.image=fresh;emit=next(t for t in n if t.type=='EMISSION');l.new(tex.outputs['Color'],emit.inputs['Color'])
  if is_upper:
   uv=n.new('ShaderNodeTexCoord');mapping=n.new('ShaderNodeMapping');l.new(uv.outputs['UV'],mapping.inputs[0]);mapping.inputs['Scale'].default_value=(w/W*3,h/H*2,1)
@@ -43,7 +43,7 @@ for name,mask in [('upper_windows_mask',uppermask),('street_windows_mask',lowerm
  a=np.ones_like(raw);a[:,:,:3]=mask[:,:,None];image(name,a)
 # Doors open beyond a right angle toward positive depth (street/camera side).
 doors=[]
-for name,sign,start in [('Old_Poodle_Door',-1,20),('Motel_Door',-1,48)]:
+for name,sign,start in [('Old_Poodle_Door',1,20),('Motel_Door',1,48)]:
  h=bpy.data.objects[name+'_HINGE'];worlds={o:o.matrix_world.copy() for o in h.children};h.animation_data_clear()
  top,bottom=((1033,757),(1028,932)) if name=='Old_Poodle_Door' else ((1412,800),(1416,931))
  axis=(Vector(pos(*top))-Vector(pos(*bottom))).normalized();h.location=pos(*top,.04);h.rotation_axis_angle=(0,*axis);bpy.context.view_layer.update()
@@ -54,10 +54,15 @@ for name,sign,start in [('Old_Poodle_Door',-1,20),('Motel_Door',-1,48)]:
 # Reuse the painted building palette inside the doorways, avoiding black voids.
 for ob in s.objects:
  if ob.name.endswith('_Interior_Back') and ob.name.startswith(('Old_Poodle','Motel')):
-  color=(.17,.115,.065,1) if ob.name.startswith('Old_Poodle') else (.16,.13,.205,1)
+  color=(.085,.055,.028,1) if ob.name.startswith('Old_Poodle') else (.075,.055,.105,1)
   for material in ob.data.materials:
    for node in material.node_tree.nodes:
     if node.type=='EMISSION':node.inputs[0].default_value=color
+# Give inward-opening leaves enough recessed room behind the facade.
+for ob in s.objects:
+ if ob.type=='MESH' and (ob.name.endswith('_Interior_Back') or '_Jamb_' in ob.name) and ob.name.startswith(('Old_Poodle','Motel')):
+  for vertex in ob.data.vertices:
+   if vertex.co.z < -.3:vertex.co.z=-1.3
 # Bake glazing into each door face, rather than floating it over a thin alpha plane.
 # Front, back and edge get independent materials, so timber sides never sample glass.
 def painted(name,color=None,texture=None):
@@ -114,7 +119,7 @@ light.location=(-3,5,8);light.data.energy=1200;light.data.shape='DISK';light.dat
 # Save open and angled previews for clear outward-depth inspection.
 s.frame_set(90);bpy.context.view_layer.update()
 for d in doors:
- leaf=bpy.data.objects[d['name']+'_Leaf'];assert max((leaf.matrix_world@v.co).z for v in leaf.data.vertices)>.5
+ leaf=bpy.data.objects[d['name']+'_Leaf'];assert min((leaf.matrix_world@v.co).z for v in leaf.data.vertices)<-.5
 s.camera=bpy.data.objects['CAMERA — doors closeup'];s.render.resolution_x=1600;s.render.resolution_y=1000;s.render.resolution_percentage=85;s.render.filepath=str(OUT/'godot_layers_preview.png');bpy.ops.render.render(write_still=True)
 cam=bpy.data.objects.get('CAMERA — outward door proof')
 if not cam:cam=bpy.data.objects.new('CAMERA — outward door proof',bpy.data.cameras.new('Outward perspective'));s.collection.objects.link(cam)
@@ -135,6 +140,6 @@ for ob in selected:
 bpy.ops.export_scene.gltf(filepath=str(DEST/'street_doors.glb'),export_format='GLB',use_selection=True,export_animations=False,export_cameras=False,export_lights=False)
 for ob,i,m in restore:ob.data.materials[i]=m
 (DEST/'layers.json').write_text(json.dumps({'resolution':[W,H],'world_size':[20.48,11.53],'front_axis':'+Z','canopy_depth':.65,'walker_depth_range':[.15,.55],'windows':metadata,'doors':doors},indent=2))
-s.frame_set(90);s.camera=bpy.data.objects['CAMERA — doors closeup'];s['instructions']='110-degree outward doors. Brighter amber lower glass. Moving cloud reflections upstairs. Separate canopy foreground at depth .65; walkers between .15 and .55. Godot-ready layers in assets/backgrounds/mill_market_layers.'
+s.frame_set(90);s.camera=bpy.data.objects['CAMERA — doors closeup'];s['instructions']='110-degree inward doors. Brighter amber lower glass. Moving cloud reflections upstairs. Separate canopy foreground at depth .65; walkers between .15 and .55. Godot-ready layers in assets/backgrounds/mill_market_layers.'
 bpy.ops.wm.save_as_mainfile(filepath=str(OUT/'Mill_Market_Animated_Doors.blend'),compress=True)
 print('LAYER_EXPORT_OK',flush=True)
