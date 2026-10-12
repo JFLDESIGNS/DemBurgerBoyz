@@ -1330,3 +1330,9 @@ func background_attack(walker_index: int) -> void:
 	if walker_index>=0 and walker_index<game.bg_people.size():
 		var walker=game.bg_people[walker_index]
 		if is_instance_valid(walker):walker.shake_angry(.65,.045,1.0)
+
+## Only the street walker casts a window blob; counter and courier visits do not.
+func window_shadow_size() -> Vector2:
+	if not is_visible_in_tree() or not _state.begins_with("background") or not is_instance_valid(_visual):
+		return Vector2.ZERO
+	return Vector2(1.15 * _visual.scale.x, 1.05 * _visual.scale.y) * scale.y

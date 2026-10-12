@@ -2,6 +2,9 @@ extends SceneTree
 class Walker extends Node3D:
  var _wawa_click_area := Area3D.new()
  func _init() -> void: add_child(_wawa_click_area)
+class ShadowCat extends Node3D:
+ func window_shadow_size() -> Vector2:
+  return Vector2(1.2,1.0) if visible else Vector2.ZERO
 func _initialize() -> void: call_deferred("run")
 func no_shadows(node: Node) -> void:
  if node is MeshInstance3D: assert(node.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
@@ -92,6 +95,19 @@ func run() -> void:
  street.cancel_building_traffic()
  street._update_market_bags()
  assert(not shopping_bag.visible)
+ var cat := ShadowCat.new()
+ game.world.add_child(cat)
+ game.window_cat = cat
+ cat.global_position = walker.global_position
+ street._update_walker_reflections()
+ var cat_rect: Vector4 = street._walker_reflections.get_shader_parameter("cat_blob")
+ assert(cat_rect.z > 0.0 and cat_rect.w > 0.0,"Walking cat must have a window shadow")
+ cat.rotation.y = PI
+ street._update_walker_reflections()
+ assert(cat_rect.is_equal_approx(street._walker_reflections.get_shader_parameter("cat_blob")))
+ cat.visible = false
+ street._update_walker_reflections()
+ assert(street._walker_reflections.get_shader_parameter("cat_blob") == Vector4.ZERO,"Hidden cat must clear its shadow")
  print("MILL_BUILDING_TRAFFIC_OK: entry, exit, cancellation, replicated angles, no background shadows")
  await process_frame
  quit()

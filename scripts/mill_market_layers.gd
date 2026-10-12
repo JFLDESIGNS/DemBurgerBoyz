@@ -274,6 +274,19 @@ func _update_walker_reflections() -> void:
  _walker_reflections.set_shader_parameter("people",people)
  _walker_reflections.set_shader_parameter("gait",gait)
  _walker_reflections.set_shader_parameter("person_count",count)
+ # Separate slot so the cat is never dropped when all eight walker slots are used.
+ var cat: Node3D = _game.window_cat
+ var cat_rect := Vector4.ZERO
+ if is_instance_valid(cat) and cat.has_method("window_shadow_size"):
+  var size: Vector2 = cat.window_shadow_size()
+  if size.x > 0.0 and size.y > 0.0:
+   var origin := cat.global_position - camera.global_basis.x * size.y * 0.65
+   var feet := _reflection_uv(origin,camera)
+   var head := _reflection_uv(origin + Vector3.UP * size.y * 1.3,camera)
+   var side := _reflection_uv(origin + camera.global_basis.x * size.x * 0.7,camera)
+   cat_rect = Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*1.4,.001),maxf(feet.y-head.y,.001))
+ _walker_reflections.set_shader_parameter("cat_blob",cat_rect)
+
 
 
 func _update_canopy_walker_shade() -> void:

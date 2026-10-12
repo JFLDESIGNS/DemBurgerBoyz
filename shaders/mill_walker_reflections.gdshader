@@ -4,6 +4,7 @@ uniform sampler2D glass_texture : source_color, filter_linear;
 uniform int person_count = 0;
 uniform vec4 people[8]; // feet UV, width, height
 uniform float gait[8];
+uniform vec4 cat_blob = vec4(0.0); // feet UV, width, height; zero disables it
 float ellipse(vec2 p, vec2 center, vec2 radius) {
  return 1.0-smoothstep(0.82,1.10,length((p-center)/radius));
 }
@@ -26,6 +27,14 @@ void fragment() {
   body=max(body,limb(p,vec2(-0.22,0.66),vec2(-0.35-stride,0.34),0.065));
   body=max(body,limb(p,vec2(0.22,0.66),vec2(0.35+stride,0.34),0.065));
   silhouette=max(silhouette,body);
+ }
+ if(cat_blob.z > 0.0 && cat_blob.w > 0.0) {
+  vec2 p=vec2((UV.x-cat_blob.x)/cat_blob.z,(cat_blob.y-UV.y)/cat_blob.w);
+  float cat=ellipse(p,vec2(0.0,0.40),vec2(0.48,0.34));
+  cat=max(cat,ellipse(p,vec2(0.0,0.73),vec2(0.29,0.23)));
+  cat=max(cat,ellipse(p,vec2(-0.20,0.93),vec2(0.09,0.14)));
+  cat=max(cat,ellipse(p,vec2(0.20,0.93),vec2(0.09,0.14)));
+  silhouette=max(silhouette,cat);
  }
  vec3 reflected_blue = min(glass.rgb * vec3(0.22,0.38,0.52),vec3(0.012,0.06,0.11));
  ALBEDO=mix(glass.rgb,reflected_blue,silhouette*0.72);
