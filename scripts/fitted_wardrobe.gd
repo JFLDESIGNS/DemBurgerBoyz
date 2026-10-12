@@ -159,6 +159,7 @@ static func update_print(garment: MeshInstance3D, texture: Texture2D, color: Col
 	var size := (0.20 if cropped else 0.26) * print_scale * 0.01
 	for surface in garment.mesh.get_surface_count():
 		var material := garment.get_surface_override_material(surface) as ShaderMaterial
+		if material == null: continue # Metal accessories retain their authored material.
 		material.set_shader_parameter("graphic_enabled", texture != null)
 		material.set_shader_parameter("graphic_texture", texture)
 		material.set_shader_parameter("graphic_color", color)

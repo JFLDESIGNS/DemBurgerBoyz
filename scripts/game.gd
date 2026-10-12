@@ -31322,7 +31322,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
-		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":18,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.3,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
+		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":18,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.48,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -81671,3 +81671,9 @@ func _preload_small_menu_chunks() -> void:
 			set_meta("menu_chunks_loaded",int(get_meta("menu_chunks_loaded",0))+1)
 		_menu_chunk_pending=false
 		await get_tree().create_timer(.15).timeout
+
+@rpc("authority", "call_local", "reliable")
+func mp_cat_bird_attack_sound(impact: bool) -> void:
+	if not is_instance_valid(game_audio):return
+	if impact:game_audio.play_cat_cartoon_smack()
+	else:game_audio.play_build_whoosh()

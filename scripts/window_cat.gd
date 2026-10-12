@@ -1324,6 +1324,8 @@ func _update_wildlife(delta: float, game: Node) -> bool:
 				# Store the contact in the cat parent's coordinate system.
 				_bird_contact=get_parent().to_local(target.bird.global_position-(head_global()-global_position))
 				_state="bird_pounce";_timer=.65
+				if game.mp_enabled:game.mp_cat_bird_attack_sound.rpc(false)
+				else:game.mp_cat_bird_attack_sound(false)
 		elif _state=="bird_pounce":
 			var u:=clampf(1.0-_timer/.65,0.0,1.0)
 			position=_run_from.lerp(_bird_contact,u*u)
@@ -1335,6 +1337,8 @@ func _update_wildlife(delta: float, game: Node) -> bool:
 			if u>=.98 and not _bird_house_hit:
 				_bird_house_hit=true
 				target.cat_house_impact()
+				if game.mp_enabled:game.mp_cat_bird_attack_sound.rpc(true)
+				else:game.mp_cat_bird_attack_sound(true)
 			if _timer<=0.0:
 				_run_from=position;_state="bird_retreat";_timer=.8
 		else:

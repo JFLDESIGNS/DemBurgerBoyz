@@ -35,6 +35,7 @@ for i in range(32):faces.append((i,(i+1)%32,(i+1)%32+32,i+32))
 for side in [-1,1]:
  j=len(verts);verts.extend([(side*.04,-.20,2.48),(side*.25,-.16,2.46),(side*.34,-.31,2.34),(side*.15,-.38,2.29)])
  faces.append(tuple(range(j,j+4)))
+verts=[(x,y,z+.10) for x,y,z in verts]
 data=bpy.data.meshes.new('Clean pointed collar');data.from_pydata(verts,[],faces);data.materials.append(collar)
 obj=bpy.data.objects.new('Grisaldi collar',data);bpy.context.collection.objects.link(obj)
 obj.vertex_groups.new(name='Chest').add(list(range(len(verts))),1,'REPLACE')
@@ -76,6 +77,6 @@ for obj in bpy.context.scene.objects:
   if v.co.z>.36:
    t=min(1,(v.co.z-.36)/.32)
    v.co.x*=1-.36*t;v.co.y*=1-.36*t
-   v.co.z=.36+(v.co.z-.36)*.42
+   v.co.z=.20+(v.co.z-.36)*.28
   elif v.co.z<.0:v.co.z*=.7
 bpy.ops.export_scene.gltf(filepath=str(R/'assets/characters/modular_runtime/modules/hair/sculpted/grisaldi_hat_fit.glb'),export_format='GLB',export_animations=False)

@@ -2105,6 +2105,11 @@ func _capture_customer_thumbnail(safe_name: String) -> void:
 func _refresh_saved_customers() -> void:
 	for child in saved_customers.get_children():
 		child.free()
+	var grisaldi_card := Button.new()
+	grisaldi_card.text = "Grisaldi - edit character"
+	grisaldi_card.custom_minimum_size = Vector2(0, 64)
+	grisaldi_card.pressed.connect(_load_character_file.bind("res://defaults/grisaldi.json"))
+	saved_customers.add_child(grisaldi_card)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://characters"))
 	var files := DirAccess.get_files_at("user://characters")
 	files.sort()

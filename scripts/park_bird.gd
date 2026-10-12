@@ -357,4 +357,4 @@ func escape_cat() -> void:
 	if enabled and state in [&"Idle",&"Mad_Peck",&"Perch"]: _enter(&"Takeoff")
 
 func cat_house_impact() -> void:
-	swing_velocity += Vector2(0.42,0.72)
+	swing_velocity += Vector2(1.05,1.8)

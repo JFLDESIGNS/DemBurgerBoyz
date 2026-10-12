@@ -2872,6 +2872,16 @@ func _build_fitted_top() -> void:
 		var material := _appearance_material("top_%d" % surface, func(): return Wardrobe.fabric_material(mesh.surface_get_material(surface), top_color)) as ShaderMaterial
 		_top_material_refs.append(material)
 		_fitted_top.set_surface_override_material(surface, material)
+		if top_style == TopStyle.GRISALDI_CHECK:
+			var source := mesh.surface_get_material(surface)
+			if source != null and "checks" in source.resource_name.to_lower():
+				var checks := ShaderMaterial.new()
+				checks.shader = preload("res://shaders/grisaldi_checker.gdshader")
+				checks.set_shader_parameter("check_red", Color(.65,.018,.027)*top_color)
+				_fitted_top.set_surface_override_material(surface, checks)
+			else:
+				_fitted_top.set_surface_override_material(surface, source)
+
 
 
 func _build_fitted_bottom() -> void:
@@ -2895,6 +2905,13 @@ func _build_fitted_bottom() -> void:
 		var material := _appearance_material("bottom_%d" % surface, func(): return Wardrobe.fabric_material(mesh.surface_get_material(surface), bottom_color)) as ShaderMaterial
 		_bottom_material_refs.append(material)
 		_fitted_bottom.set_surface_override_material(surface, material)
+		if top_style == TopStyle.GRISALDI_CHECK and bottom_style == BottomStyle.PANTS:
+			var checks := ShaderMaterial.new()
+			checks.shader = preload("res://shaders/grisaldi_checker.gdshader")
+			checks.set_shader_parameter("check_red", bottom_color)
+			checks.set_shader_parameter("check_black", Color("101b16"))
+			_fitted_bottom.set_surface_override_material(surface, checks)
+
 
 
 func _build_shirt_graphic() -> void:
