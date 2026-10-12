@@ -2522,6 +2522,7 @@ func _advance_customer(delta: float) -> void:
 
 	if is_leaving:
 		_update_sidewalk_leave(delta)
+		_avoid_visiting_cat(delta)
 		return
 
 	var dx: float = target_x - global_position.x
@@ -2531,6 +2532,7 @@ func _advance_customer(delta: float) -> void:
 		rotation_degrees.y = _sidewalk_walk_yaw(dx)
 		_arrive_turning = false
 		global_position.x += signf(dx) * minf(absf(dx), delta * (3.5 if bool(get_meta("recruited_running",false)) else 1.6))
+		_avoid_visiting_cat(delta)
 		_play_anim("walk")
 		_apply_bobble(true)
 		if _bar_root:
@@ -2989,7 +2991,7 @@ func _ensure_review_card_nodes() -> void:
 		_review_box.sorting_offset = -128.0
 		var review_box_mat := StandardMaterial3D.new()
 		review_box_mat.albedo_texture = _make_review_card_texture()
-		review_box_mat.albedo_color = Color(0.97, 0.985, 1.0, _review_card_value("opacity"))
+		review_box_mat.albedo_color = Color(0.97, 0.985, 1.0, minf(1.0, _review_card_value("opacity") + 0.05))
 		review_box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		review_box_mat.no_depth_test = true
 		review_box_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
@@ -3075,7 +3077,7 @@ func _apply_review_card_layout() -> void:
 			box_mesh.size = content_size
 		var box_mat := _review_box.material_override as StandardMaterial3D
 		if box_mat != null:
-			box_mat.albedo_color.a = _review_card_value("opacity")
+			box_mat.albedo_color.a = minf(1.0, _review_card_value("opacity") + 0.05)
 
 
 func _review_card_content_size() -> Vector2:
@@ -5273,3 +5275,19 @@ func animate_wawa(duration: float = 1.15, pitch: float = 1.0) -> void:
 func stop_mouth_speech() -> void:
 	var speech=get_node_or_null("MouthSpeech")
 	if speech!=null:speech.stop()
+
+
+func _avoid_visiting_cat(delta: float) -> void:
+	if mp_host_driven: return
+	var game = get_tree().current_scene
+	if not is_instance_valid(game): return
+	var cat = game.get("window_cat")
+	var target_z := _wait_z() + (_service_backstep if is_leaving else 0.0)
+	if is_instance_valid(cat) and cat.visible:
+		var radius: float = .65 + float(cat._fat) * .18 + float(cat._giant) * .35
+		var gap := absf(global_position.x - cat.global_position.x)
+		if gap < radius + .5 and absf(target_z - cat.global_position.z) < radius:
+			# Arc toward the street well before reaching the cat, then settle back.
+			var amount := 1.0 - smoothstep(radius*.45,radius+.5,gap)
+			target_z = lerpf(target_z,cat.global_position.z+radius+.25,amount)
+	global_position.z = move_toward(global_position.z,target_z,delta*2.8)

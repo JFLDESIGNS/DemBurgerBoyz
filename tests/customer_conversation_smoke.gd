@@ -26,9 +26,13 @@ func run() -> void:
 	for i in 100:
 		var person := Node.new()
 		if social.conversation_roll(person,(i+.5)/100.0): chat_count += 1
-		assert(not social.conversation_roll(person,0.0),"A customer does not reroll conversation chance")
+		assert(not social.conversation_roll(person,0.0),"Conversation cooldown prevents rapid repeats")
 		person.free()
-	assert(chat_count == 50)
+	assert(chat_count == 85)
+	var used := {}
+	for i in 13:
+		var chat: int = social.next_conversation()
+		assert(not used.has(chat)); used[chat]=true
 	var customers = []
 	for i in 2:
 		var c = load("res://scripts/customer.gd").new()
@@ -46,5 +50,5 @@ func run() -> void:
 	assert(bubble.position.x > game.camera.unproject_position(customers[0].global_position).x)
 	bubble.queue_free()
 
-	print("CONVERSATION_OK: 50 percent once per customer and right-side speech card")
+	print("CONVERSATION_OK: 85 percent with per-customer cooldown and right-side speech card")
 	game.queue_free(); await process_frame; quit()

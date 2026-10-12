@@ -1752,7 +1752,7 @@ func play_spatula_drum(pad: int = 2, volume_scale: float = 1.0, voice: int = 0) 
 	p.stream = _cache[key]
 	p.pitch_scale = 1.0
 	## Flat drums stay under the piano; hats sit a touch brighter. HOLD kit +30%.
-	var base_gain := (0.55 if v == 0 else 0.62) * 1.30 * maxf(0.0, volume_scale) * _sfx("tools")
+	var base_gain := (0.55 if v == 0 else 0.62) * 0.80 * 1.30 * maxf(0.0, volume_scale) * _sfx("tools")
 	if base_gain <= 0.0001:
 		return
 	p.volume_db = linear_to_db(base_gain)

@@ -17,7 +17,7 @@ static func steer(actor: Node3D, before: Vector3, desired: Vector3, actors: Arra
   if absf(relative.y)>1.2: continue
   if relative.x*direction>=-clearance-.17 and relative.x*direction<clearance+.65 and absf(other.global_position.z-base_z)<clearance:
    var other_moving:=Time.get_ticks_msec()-int(other.get_meta("crowd_tick",-10000))<250
-   if other_moving and actor.get_instance_id()<other.get_instance_id(): continue
+   if other_moving and not other.has_method("_chonk_fraction") and actor.get_instance_id()<other.get_instance_id(): continue
    target_z=maxf(target_z,other.global_position.z+clearance+.12)
  result.z=move_toward(before.z,target_z,delta*2.5)
  for other in actors:

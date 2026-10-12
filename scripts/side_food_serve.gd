@@ -125,6 +125,7 @@ func _process(delta: float) -> void:
  var hold_height:=.055 if kind=="fries" else (.13 if kind=="icecream" else .095)
  var tilt:=lift*(.4 if kind=="drink" else (.62 if kind=="fries" else .72))
  var held_basis:Basis=customer.global_basis*Basis(Vector3.RIGHT,-tilt)
+ if kind=="fries":held_basis*=Basis(Vector3.UP,PI)
  var size_now:=source_scale.lerp(source_scale*hand_size,catch_t)
  food.global_basis=held_basis.scaled(size_now)
  var held_position:=grip-food.global_basis*Vector3(0,hold_height,0)

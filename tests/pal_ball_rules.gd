@@ -1,0 +1,16 @@
+extends SceneTree
+func _initialize():call_deferred("run")
+func run():
+ var sim=load("res://scripts/pal_ball_simulation.gd").new()
+ sim.setup([{"id":1},{"id":2}]);sim.begin_countdown()
+ for i in 241:sim.step(1.0/60.0)
+ assert(sim.phase=="playing")
+ sim.players[1].position=Vector2(-.5,0);sim.players[2].position=Vector2(.5,0)
+ sim.players[1].velocity=Vector2(4,0);sim.players[2].velocity=Vector2(-4,0)
+ sim.step(1.0/60.0)
+ assert(sim.players[1].velocity.x<0 and sim.players[2].velocity.x>0)
+ sim.players[2].position=Vector2(8,0);sim.step(1.0/60.0)
+ assert(sim.phase=="results" and sim.winners==[1])
+ assert(load("res://scripts/pal_ball_break.gd")!=null)
+ assert(load("res://scripts/game.gd")!=null)
+ print("PAL_BALL_RULES_OK");quit()

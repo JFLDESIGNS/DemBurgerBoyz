@@ -59,6 +59,12 @@ signal wants_meow(pitch: float)
 var _purr_left := 0.0
 var _purr_player: AudioStreamPlayer
 var _visit_fed := false
+var _bird_wait := 0.0
+var _bird_checked := false
+var _background_wait := 55.0
+var _background_direction := 1.0
+var _background_attacked := false
+var _bird_pounce_home := Vector3.ZERO
 var _patty_peek_x := NAN
 var _visual: Node3D = null
 var _area: Area3D = null
@@ -303,7 +309,7 @@ func _update_character(delta: float) -> void:
 	for part in _postal_outfit: part.visible = delivering
 	if delivering:
 		_play_cat_clip("03_Box_Delivery")
-	elif _state in ["running", "bag_chase", "rising", "lowering"]:
+	elif _state in ["running", "bag_chase", "rising", "lowering", "background_walk", "bird_pounce", "background_pounce"]:
 		_play_cat_clip("02_Mail_Walk")
 	elif _happy_anim_left > 0.0 or _state == "fed_hold":
 		_play_cat_clip("04_Happy_Hop")
@@ -676,6 +682,9 @@ func _process(delta: float) -> void:
 		_apply_visual_scale()
 		return
 	_timer -= delta
+	if _update_wildlife(delta, game):
+		_apply_visual_scale()
+		return
 	# A cat already visiting keeps the boss company. Let the timer expire,
 	# but finish the departure only after the boss has walked out.
 	if visible and _state in ["peek", "fed_hold"] and is_instance_valid(game) and game.has_method("_boss_keeps_cat_company") and game._boss_keeps_cat_company():
@@ -689,6 +698,8 @@ func _process(delta: float) -> void:
 				if _delivery_visit_pending or randf() < PEEK_CHANCE:
 					_delivery_visit_pending = false
 					_visit_fed = false
+					_bird_wait = 0.0
+					_bird_checked = false
 					_patty_peek_x = NAN
 					_state = "rising"
 					_timer = 0.55
@@ -849,6 +860,9 @@ func _apply_visual_scale() -> void:
 	_visual.scale = Vector3(sx, sy, sz)
 	var purr_weight := minf(_purr_left, 1.0) if visible else 0.0
 	_visual.rotation.z = sin(_bob * TAU * 1.3) * 0.012 * purr_weight
+	if _state.begins_with("background"):
+		_visual.rotation.z += sin(_bob*8.0)*.075
+		_visual.scale *= Vector3(1.0+sin(_bob*8.0)*.035,1.0-sin(_bob*8.0)*.035,1.0)
 	_visual.position.x = sin(_bob * TAU * 1.3) * 0.0025 * purr_weight
 	## Pivot isn't at the paws — only compensate overall size-up, not width chonk.
 	_visual.position.y = -3.35 * VISUAL_FOOT_COMP * (size_m - DEFAULT_SIZE_MUL) + float(get_meta("steal_lean_lift", 0.0))
@@ -1137,6 +1151,9 @@ func _feed_full_burger() -> void:
 
 
 func reset_shift(persist_weight: bool = true) -> void:
+	_background_wait=55.0
+	_bird_wait=0.0
+	_bird_checked=false
 	_first_visit_wait = FIRST_PEEK_SEC
 	_delivery_visit_pending = true
 	_visit_fed = false
@@ -1235,3 +1252,77 @@ func start_relocation_wait() -> void:
 	_purr_left = 0.0
 	if is_instance_valid(_purr_player): _purr_player.stop()
 	set_process(true)
+
+
+func _wildlife_role_available(game: Node) -> bool:
+	if game._cat_delivery_blocks_visit() or game._hotdog_active() or game._boss_intro_running: return false
+	for person in game.customers:
+		if is_instance_valid(person) and person.is_disguise_cat: return false
+	return true
+
+func _update_wildlife(delta: float, game: Node) -> bool:
+	if not is_instance_valid(game) or not game.playing or game.shift_paused: return false
+	if _state.begins_with("background"):
+		if not _wildlife_role_available(game):
+			_state="hidden";visible=false;_timer=REPEEK_SEC;return true
+		visible=true
+		if _state=="background_pounce":
+			var u:=1.0-clampf(_timer/.65,0.0,1.0)
+			position=_run_from.lerp(_run_to,smoothstep(0,1,u));position.y+=sin(u*PI)*.45
+			if _timer<=0:_state="background_walk"
+		else:
+			position.x+=delta*1.55*_background_direction
+			position.y=game._bg_people_y()+absf(sin(_bob*8.0))*.075
+			rotation.y=PI*.5*_background_direction
+			if not _background_attacked:
+				for i in game.bg_people.size():
+					var walker=game.bg_people[i]
+					if not is_instance_valid(walker) or not walker.visible or position.distance_to(walker.position)>1.4:continue
+					_background_attacked=true
+					if randf()<.45:
+						_run_from=position;_run_to=position+(walker.position-position).limit_length(.85);_run_to.y=position.y
+						_state="background_pounce";_timer=.65
+						if game.mp_enabled and NetManager.is_online():background_attack.rpc(i)
+						else:background_attack(i)
+					break
+			if absf(position.x)>game.BG_PEOPLE_EDGE_X+2.0:
+				_state="hidden";visible=false;_timer=REPEEK_SEC;_background_wait=randf_range(65,105)
+		return true
+	if _state=="bird_pounce":
+		var u:=1.0-clampf(_timer/1.05,0.0,1.0)
+		var reach:=sin(u*PI)
+		position=_bird_pounce_home.lerp(_run_to,reach);position.y+=reach*.42
+		rotation_degrees.y=_yaw_look(_bird_pounce_home,_run_to)
+		if _timer<=0:_state="peek";_timer=2.0;position=_bird_pounce_home
+		return true
+	if _state=="hidden":
+		_background_wait-=delta
+		if _background_wait<=0 and _timer>4.0 and _wildlife_role_available(game):
+			_background_direction=1.0 if randf()<.5 else -1.0
+			position=Vector3(-_background_direction*(game.BG_PEOPLE_EDGE_X+1.0),game._bg_people_y(),game._bg_people_z())
+			_state="background_walk";_background_attacked=false;visible=true;return true
+	if _state=="peek" and not _delivery_peek_active:
+		_bird_wait+=delta
+		var birdhouse=game.park_bird_house
+		if _bird_wait>=4.5 and not _bird_checked and is_instance_valid(birdhouse) and birdhouse.enabled and birdhouse.state in [&"Idle",&"Mad_Peck"]:
+			_bird_checked=true
+			set_meta("social_look",birdhouse.bird.global_position);set_meta("social_look_until",Time.get_ticks_msec()+1600)
+			_timer=maxf(_timer,2.0)
+			if randf()<.5:
+				# Give the cook a feeding window, then look before the playful lunge.
+				var token: WeakRef = weakref(birdhouse)
+				create_tween().tween_interval(.75).finished.connect(func():
+					var target=token.get_ref()
+					if _state!="peek" or not is_instance_valid(target) or not target.state in [&"Idle",&"Mad_Peck"]:return
+					_bird_pounce_home=position;_run_to=position+(target.global_position-position).normalized()*.8
+					_state="bird_pounce";_timer=1.05;target._enter(&"Takeoff"))
+	return false
+
+@rpc("authority", "call_local", "reliable")
+func background_attack(walker_index: int) -> void:
+	var game=get_tree().current_scene
+	if not is_instance_valid(game):return
+	if is_instance_valid(game.game_audio):game.game_audio.play_cat_meow(.5)
+	if walker_index>=0 and walker_index<game.bg_people.size():
+		var walker=game.bg_people[walker_index]
+		if is_instance_valid(walker):walker.shake_angry(.65,.045,1.0)

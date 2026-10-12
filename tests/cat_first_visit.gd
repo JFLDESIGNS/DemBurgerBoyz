@@ -1,5 +1,6 @@
 extends SceneTree
 class GameStub extends Node3D:
+ var _location_relocate_busy:=false
  var playing:=true
  var shift_paused:=false
  func _cat_delivery_blocks_visit()->bool:return false

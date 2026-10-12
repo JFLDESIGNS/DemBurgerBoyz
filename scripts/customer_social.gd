@@ -1,7 +1,8 @@
 extends Node
 ## Host chooses encounters; reliable events mirror the same reactions on guests.
 var game: Node
-var encounter_left := 8.0
+var encounter_left := 5.0
+var recent_chats: Array[int] = []
 var cat_left := 5.0
 var walker_left := 35.0
 var couples: Array = []
@@ -12,12 +13,43 @@ const CONVERSATIONS = [
 	["I think the cat runs this place.","Definitely management."],
 	["Extra cheese is a personality trait.","Finally, someone understands me."],
 	["I told myself I would cook today.","You supervised. That counts."],
-	["What are you getting?","A burger and a very good afternoon."]
+	["What are you getting?","A burger and a very good afternoon."],
+	["I only came out for a walk.","Convenient place to stop walking."],
+	["Do fries count as a vegetable?","I'm not asking any more questions."],
+	["I can hear that burger sizzling.","Best song on the radio."],
+	["Want to split some fries?","We both know how that ends."],
+	["I brought my appetite.","Did it bring money?"],
+	["That bird has its own house.","Better rent than mine."],
+	["I should try something new.","Extra pickles. Be brave."],
+	["The cat just looked at my lunch.","Your lunch has been selected."],
+	["I'm saving room for ice cream.","I have a separate ice cream stomach."],
+	["This is my lunch break workout.","One burger curl at a time."],
+	["Did you smell the toasted bun?","From two streets away."],
+	["I said I wasn't hungry.","Your stomach filed an objection."],
+	["How spicy is the mustard?","Enough to wake up your afternoon."],
+	["That cook has great aim.","Let's hope they like us."],
+	["No meetings for an hour.","Then this is a holiday."],
+	["I ordered a small drink.","I'll try not to judge."],
+	["It's nice eating outside.","Until the bird orders a bite."],
+	["You have ketchup on your sleeve.","I'm taking some home."],
+	["I could eat here every day.","See you tomorrow, then."],
+	["What's the secret ingredient?","Someone else doing the dishes."]
 ]
 func conversation_roll(person: Node, roll: float) -> bool:
-	if person.has_meta("conversation_checked"):return false
-	person.set_meta("conversation_checked",true)
-	return roll < .5
+	var now := Time.get_ticks_msec()
+	if now < int(person.get_meta("conversation_after",0)): return false
+	person.set_meta("conversation_after",now+14000)
+	return roll < .85
+
+func next_conversation() -> int:
+	var choices: Array[int] = []
+	for i in CONVERSATIONS.size():
+		if not recent_chats.has(i): choices.append(i)
+	var selected: int = choices.pick_random()
+	recent_chats.append(selected)
+	if recent_chats.size() > 12: recent_chats.pop_front()
+	return selected
+
 func conversation_bubble(person: Node3D, text: String) -> void:
 	var ui=game.get_node_or_null("UI/Root")
 	if not is_instance_valid(ui):return
@@ -73,14 +105,14 @@ func _process(delta: float) -> void:
 	walker_left -= delta
 	var waiting = game.customers.filter(eligible)
 	if encounter_left <= 0.0:
-		encounter_left = randf_range(5.0, 9.0)
+		encounter_left = randf_range(5.6, 7.2)
 		if waiting.size() >= 2:
 			var a = waiting.pick_random()
 			var nearby = waiting.filter(func(c): return c != a and c.position.distance_to(a.position) < 3.5)
 			if not nearby.is_empty():
 				var b = nearby.pick_random()
 				var kind = encounter_outcome(a,b,randf())
-				var chat := randi_range(0,CONVERSATIONS.size()-1) if conversation_roll(a,randf()) else -1
+				var chat := next_conversation() if conversation_roll(a,randf()) else -1
 				encounter(a,b,kind,chat)
 				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(a),game._customer_net_id(b),kind,chat)
 	if cat_left <= 0.0:

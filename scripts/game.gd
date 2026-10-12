@@ -3591,6 +3591,10 @@ var game_over_location_btn: Button = null ## area picker shown between shifts
 
 
 var menu_ready := false
+var _pal_ball_break: Node
+var _pal_ball_break_day := -1
+var _pal_ball_match_serial := 0
+var _pal_ball_finished_serial := 0
 var _kitchen_ready := false
 
 func _ensure_hotdog_challenge() -> Node:
@@ -3614,6 +3618,7 @@ func _update_shift_clock(delta: float, intro_blocking: bool = false) -> void:
 	if not playing or shift_paused or options_menu_open or tutorial_mode or intro_blocking or _hotdog_active() or (mp_enabled and not NetManager.is_host()): return
 	# Hold the last ten seconds while the existing line leaves and the boss plays.
 	day_time = maxf(0.0 if _hotdog_shift_triggered else 10.0, day_time - delta)
+	if _maybe_start_pal_ball_break(): return
 	if not _hotdog_shift_due(): return
 	if not _regular_customers_empty() or _has_cut_collector() or _bts_day1_blocks_day_end(): return
 	if _boss_pep_pending: _try_start_pending_boss_pep()
@@ -5590,6 +5595,9 @@ func _start_game_immediate(guided_tutorial: bool = false) -> void:
 	_stop_intro_title_music()
 	start_overlay.visible = false
 	playing = true
+	_pal_ball_break_day = -1
+	_pal_ball_match_serial = 0
+	_pal_ball_finished_serial = 0
 	call_deferred("_continue_background_loading")
 	_set_phone_in_truck(true)
 	## Backup if title-screen warm was skipped / still running.
@@ -62764,8 +62772,8 @@ func _build_challenge_ui() -> void:
 	var card_sb := StyleBoxFlat.new()
 	card_sb.bg_color = Color("F4E6C8")
 	card_sb.border_color = Color("C64932")
-	card_sb.set_border_width_all(1)
-	card_sb.set_corner_radius_all(3)
+	card_sb.set_border_width_all(2)
+	card_sb.set_corner_radius_all(16)
 	card_sb.content_margin_left = 26
 	card_sb.content_margin_right = 26
 	card_sb.content_margin_top = 22
@@ -62774,7 +62782,7 @@ func _build_challenge_ui() -> void:
 	card_sb.shadow_size = 18
 	card.add_theme_stylebox_override("panel", card_sb)
 	overlay.add_child(card)
-	card.set_script(preload("res://scripts/paper_tear.gd"))
+
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 14)
@@ -62787,15 +62795,7 @@ func _build_challenge_ui() -> void:
 	kicker.add_theme_color_override("font_color", Color("A8402F"))
 	col.add_child(kicker)
 
-	var title := Label.new()
-	title.text = "BURGER\nCHALLENGE"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UiFontsScript.apply_luckiest_label(title, 46)
-	title.add_theme_color_override("font_color", Color("A93628"))
-	title.add_theme_color_override("font_outline_color", Color("FFF7E1"))
-	title.add_theme_constant_override("outline_size", 3)
-	col.add_child(title)
-	challenge_title_label = title
+	preload("res://scripts/challenge_card_art.gd").add_header(col)
 
 	var body := Label.new()
 	body.text = "One recipe. Beat the clock. Earn the bonus."
@@ -62830,7 +62830,7 @@ func _build_challenge_ui() -> void:
 	col.add_child(row)
 
 	var accept := Button.new()
-	accept.text = "LET'S COOK"
+	accept.text = "LET'S COOK  →"
 	accept.custom_minimum_size = Vector2(260, 54)
 	accept.focus_mode = Control.FOCUS_NONE
 	accept.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -62844,11 +62844,12 @@ func _build_challenge_ui() -> void:
 		Color(0.12, 0.30, 0.10, 1.0),
 		Color(1.0, 0.97, 0.88, 1.0)
 	)
+	preload("res://scripts/challenge_card_art.gd").style_button(accept,true)
 	accept.pressed.connect(_accept_challenge)
 	row.add_child(accept)
 
 	var decline := Button.new()
-	decline.text = "SKIP"
+	decline.text = "Not this time"
 	decline.custom_minimum_size = Vector2(150, 54)
 	decline.focus_mode = Control.FOCUS_NONE
 	decline.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -62862,6 +62863,7 @@ func _build_challenge_ui() -> void:
 		Color(0.10, 0.10, 0.12, 1.0),
 		Color(0.90, 0.91, 0.93, 1.0)
 	)
+	preload("res://scripts/challenge_card_art.gd").style_button(decline,false)
 	decline.pressed.connect(_decline_challenge)
 	row.add_child(decline)
 
@@ -66341,6 +66343,7 @@ func _play_ingredient_fly_to_build(id: String, station_index: int, on_done: Call
 	if tex == null:
 		on_done.call()
 		return
+	if is_instance_valid(game_audio): game_audio.play_build_whoosh()
 	var fly_root := Control.new()
 	fly_root.name = "IngredientFlyLayer"
 	fly_root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -81289,3 +81292,50 @@ func _grant_machine_starter_supplies(id: String) -> void:
 	if id == SHOP_FRYER_MACHINE: supply_stock["potato"] = int(supply_stock.get("potato",0)) + 8
 	elif id == SHOP_ICECREAM_MACHINE: supply_stock["milk"] = int(supply_stock.get("milk",0)) + 1
 	if mp_enabled: _mp_broadcast_economy()
+
+
+func _maybe_start_pal_ball_break() -> bool:
+	if mp_enabled and (not NetManager.is_online() or not NetManager.is_host()): return false
+	if _pal_ball_break_day == day or day_time > _shift_length() * .5: return false
+	if is_instance_valid(_pal_ball_break) or _serve_fly_busy or _boss_pep_pending or _boss_intro_running or _location_relocate_busy or not _challenge_phase.is_empty(): return false
+	var peers := NetManager.connected_peer_ids()
+	var roster: Array = []
+	for i in peers.size():
+		var peer := int(peers[i])
+		roster.append({"id":peer,"name":str(NetManager.peer_names.get(peer,NetManager.player_name if peer == NetManager.my_id() else "Pal %d" % (i+1))),"skin":i})
+	if roster.size()==1: roster.append({"id":-1,"name":"Rolly","skin":3,"bot":true})
+	_pal_ball_match_serial += 1
+	if mp_enabled: mp_pal_ball_begin.rpc(_pal_ball_match_serial,roster,{})
+	else: mp_pal_ball_begin(_pal_ball_match_serial,roster,{})
+	return true
+
+@rpc("authority", "call_local", "reliable")
+func mp_pal_ball_begin(serial: int, roster: Array, snapshot: Dictionary = {}) -> void:
+	if not _kitchen_ready or serial <= _pal_ball_finished_serial: return
+	if not is_instance_valid(_pal_ball_break):
+		_pal_ball_break_day = day
+		_pal_ball_break = preload("res://scripts/pal_ball_break.gd").new()
+		add_child(_pal_ball_break)
+		_pal_ball_break.setup(self,serial,roster)
+	if _pal_ball_break.generation != serial: return
+	if not snapshot.is_empty(): _pal_ball_break.apply_state(snapshot)
+	if mp_enabled and not NetManager.is_host(): mp_pal_ball_ready.rpc_id(1,serial)
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_pal_ball_ready(serial: int) -> void:
+	if NetManager.is_host() and is_instance_valid(_pal_ball_break) and _pal_ball_break.generation == serial:
+		_pal_ball_break.ready_peers[multiplayer.get_remote_sender_id()] = true
+
+@rpc("any_peer", "call_remote", "unreliable_ordered", 5)
+func mp_pal_ball_input(serial: int, direction: Vector2, burst: bool) -> void:
+	if NetManager.is_host() and is_instance_valid(_pal_ball_break) and _pal_ball_break.generation == serial:
+		_pal_ball_break.simulation.input_for(multiplayer.get_remote_sender_id(),direction,burst)
+
+@rpc("authority", "call_remote", "unreliable_ordered", 5)
+func mp_pal_ball_state(serial: int, snapshot: Dictionary) -> void:
+	if is_instance_valid(_pal_ball_break) and _pal_ball_break.generation == serial: _pal_ball_break.apply_state(snapshot)
+
+@rpc("authority", "call_local", "reliable")
+func mp_pal_ball_end(serial: int) -> void:
+	_pal_ball_finished_serial = maxi(_pal_ball_finished_serial,serial)
+	if is_instance_valid(_pal_ball_break) and _pal_ball_break.generation == serial: _pal_ball_break.finish()
