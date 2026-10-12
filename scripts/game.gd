@@ -51031,7 +51031,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 	lines.add_child(copy)
 	_review_toast.modulate.a=0.0
 	_review_toast_tween=_review_toast.create_tween()
-	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.8,0.18)
+	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.96,0.18)
 	_review_toast_tween.tween_interval(2.5)
 	_review_toast_tween.tween_property(_review_toast,"modulate:a",0.0,0.25)
 	_review_toast_tween.tween_callback(_review_toast.queue_free)
@@ -81462,3 +81462,10 @@ func mp_truck_arena_state(serial: int, byte_count: int, packet: PackedByteArray)
 	if byte_count <= 0 or byte_count > 65536: return
 	var data = bytes_to_var(packet.decompress(byte_count,FileAccess.COMPRESSION_ZSTD))
 	if data is Dictionary: _pal_ball_break.apply_state(data)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func mp_truck_arena_jump(serial: int) -> void:
+	if not NetManager.is_host() or not is_instance_valid(_pal_ball_break) or _pal_ball_break.generation != serial: return
+	if _pal_ball_break.simulation.has_method("jump_for"):
+		_pal_ball_break.simulation.jump_for(multiplayer.get_remote_sender_id())

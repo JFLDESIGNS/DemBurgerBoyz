@@ -26,6 +26,13 @@ func run():
   var guest_id:int=net.connected_peer_ids().filter(func(id):return id!=1)[0]
   while g._pal_ball_break.simulation.players[guest_id].velocity.length()<.1:await process_frame
   assert(paused);mark("saw_input")
+  await wait_mark("jump_sent")
+  var jumped:=false
+  while not jumped:
+   for event in g._pal_ball_break.simulation.events:
+    if event.kind=="jump":jumped=true
+   await process_frame
+  mark("jump_seen")
   var sim=g._pal_ball_break.simulation
   sim.players[1].ammo=3
   sim.players[1].burst=true
@@ -46,6 +53,8 @@ func run():
    await create_timer(.04).timeout
   while g._pal_ball_break.view.players[net.my_id()].boost>=1:await process_frame
   g.mp_pal_ball_input.rpc_id(1,g._pal_ball_break.generation,Vector2.ZERO,false)
+  g.mp_truck_arena_jump.rpc_id(1,g._pal_ball_break.generation);mark("jump_sent")
+  await wait_mark("jump_seen")
   var seen:=false
   while not seen:
    for event in g._pal_ball_break.view.events:

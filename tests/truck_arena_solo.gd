@@ -6,8 +6,14 @@ func run():
  g.playing=true;g._kitchen_ready=true;g.mp_enabled=false
  g._set_phone_app("truck_arena");assert(paused and is_instance_valid(g._pal_ball_break))
  var arena=g._pal_ball_break
+ assert(arena.actors[1].ammo.size()==3 and arena.actors[-1].ammo.size()==3)
  assert(arena.get_script().resource_path.ends_with("truck_arena.gd"))
  while arena.simulation.phase!="playing":await process_frame
+ var shoot:=InputEventKey.new();shoot.pressed=true;shoot.physical_keycode=KEY_E
+ arena._input(shoot);assert(arena.burst_queued)
+ arena.burst_queued=false
+ var jump:=InputEventKey.new();jump.pressed=true;jump.physical_keycode=KEY_SPACE
+ arena._input(jump);assert(arena.simulation.players[1].jump_queued and not arena.burst_queued)
  var initial:Vector3=arena.simulation.players[-1].position
  await create_timer(1).timeout
  assert(arena.simulation.players[-1].position.distance_to(initial)>.1)

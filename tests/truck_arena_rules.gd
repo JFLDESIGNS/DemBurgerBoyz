@@ -8,9 +8,10 @@ func run():
  s.players[1].position=Vector3.ZERO;s.step(1.0/60)
  assert(s.players[1].ammo==3 and s.pickups[0].cooldown>0)
  for pickup in s.pickups:pickup.cooldown=100.0
- s.players[1].position=Vector3(0,0,-4);s.players[1].angle=0;s.players[1].ammo=6
+ s.players[1].position=Vector3(0,0,-4);s.players[1].angle=0;s.players[1].ammo=3
  s.players[2].position=Vector3(0,0,4)
  for hit in 4:
+  if hit==3:s.players[1].ammo=1 # Refill for the fourth hit.
   s.players[2].position=Vector3(0,0,4);s.players[2].velocity=Vector3.ZERO
   s.input_for(1,Vector2.ZERO,true)
   for tick in 65:s.step(1.0/60)
@@ -49,5 +50,18 @@ func run():
  s.shots[0].direction=Vector3.ZERO
  for tick in 40:s.step(1.0/60)
  assert(s.shots.size()==1 and is_equal_approx(s.shots[0].position.y,.28),"Fallen patty returns to ground")
+ s.setup([{"id":1},{"id":2}]);s.phase="playing"
+ for id in [1,2]:
+  s.players[id].position=Vector3.ZERO;s.players[id].ammo=2;s.pickups[0].cooldown=0;s.step(1.0/60)
+  assert(s.players[id].ammo<=3,"Player and AI capacity is three")
+ assert(s.height_at(Vector2(0,19),0)==0 and s.height_at(Vector2(0,19),3.5)==3.5,"Underpass and connected upper deck both exist")
+ s.players[1].position=Vector3(0,0,22);s.players[1].angle=PI;s.players[1].velocity=Vector3.ZERO;s.players[2].position=Vector3(-6,0,-6)
+ for tick in 100:s.input_for(1,Vector2(0,1),false);s.step(1.0/60)
+ assert(s.players[1].position.z<17 and s.players[1].position.y<.1,"Truck can drive back in from the outer lane")
+ s.players[1].position=Vector3.ZERO;s.players[1].velocity=Vector3.ZERO;s.input_for(1,Vector2.ZERO,false);s.jump_for(1)
+ for tick in 12:s.step(1.0/60)
+ assert(s.players[1].position.y>.5,"Jump lifts the truck")
+ for tick in 80:s.step(1.0/60)
+ assert(s.players[1].position.y<.01,"Truck lands after a jump")
  print("TRUCK_ARENA_RULES_OK: ramps, pickups, four hits, bot collects and shoots")
  quit()

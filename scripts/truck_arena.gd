@@ -13,7 +13,22 @@ var dust_time:=0.0
 func setup(owner_game:Node,match_id:int,entries:Array,draw_view:bool=true)->void:
  simulation=TRUCK_SIM.new()
  super.setup(owner_game,match_id,entries,draw_view)
- if is_instance_valid(theme):theme.volume_db=-19
+ if is_instance_valid(theme):
+  theme.stop();theme.stream=preload("res://sounds/boss/concrete_crack_boss.mp3").duplicate();theme.stream.loop=true;theme.volume_db=-13;theme.play()
+func _input(event:InputEvent)->void:
+ if finished:return
+ if event is InputEventKey and event.pressed and not event.echo:
+  if event.physical_keycode==KEY_E or event.keycode==KEY_E:burst_queued=true
+  if event.physical_keycode==KEY_SPACE or event.keycode==KEY_SPACE:
+   if hosting:simulation.jump_for(NetManager.my_id())
+   else:game.mp_truck_arena_jump.rpc_id(1,generation)
+ if event is InputEventJoypadButton and event.pressed:
+  if event.button_index==JOY_BUTTON_X:burst_queued=true
+  if event.button_index==JOY_BUTTON_A:
+   if hosting:simulation.jump_for(NetManager.my_id())
+   else:game.mp_truck_arena_jump.rpc_id(1,generation)
+ if event is InputEventKey or event is InputEventMouseButton or event is InputEventJoypadButton:get_viewport().set_input_as_handled()
+
 func steering()->Vector2:
  var axis:=Vector2(float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)),float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP))-float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)))
  var pads:=Input.get_connected_joypads()
@@ -52,18 +67,21 @@ func _build_view()->void:
  for sx in [-1.0,1.0]:
   for sz in [-1.0,1.0]:
    var color:Color=colors[index];index+=1
-   _box(Vector3(sx*15,1.75,sz*15),Vector3(14,3.5,14),color.darkened(.12))
-   _box(Vector3(sx*15,3.49,sz*15),Vector3(14,.02,14),color)
+   _box(Vector3(sx*15,1.75,sz*15),Vector3(14,3.5,14),color)
    _box(Vector3(sx*19.3,4.8,sz*19.3),Vector3(3.6,2.6,3.6),color.lightened(.14))
    _ramp(Vector3(sx*2,0,sz*15),PI*.5*sx,color.lightened(.12))
    _ramp(Vector3(sx*15,0,sz*2),0 if sz>0 else PI,color.lightened(.12))
    for stripe in 4:
     _box(Vector3(sx*15,3.515,sz*(9+stripe*.5)),Vector3(4,.035,.15),Color("F7E9BD"))
    for line in range(9,22,2):
-    _box(Vector3(sx*line,3.505,sz*15),Vector3(.025,.015,14),color.darkened(.12))
+    _box(Vector3(sx*line,3.525,sz*15),Vector3(.025,.025,14),color.darkened(.12))
  for side in [-1,1]:
-  _box(Vector3(0,1.75,side*19),Vector3(16,3.5,3.6),Color("537E85"))
-  _box(Vector3(side*19,1.75,0),Vector3(3.6,3.5,16),Color("537E85"))
+  # Continuous deck above a six-unit drive-through opening.
+  _box(Vector3(0,3.2,side*19),Vector3(16,.6,3.6),Color("537E85"))
+  _box(Vector3(side*19,3.2,0),Vector3(3.6,.6,16),Color("537E85"))
+  for support in [-1,1]:
+   _box(Vector3(support*5.5,1.45,side*19),Vector3(5,2.9,3.6),Color("537E85"))
+   _box(Vector3(side*19,1.45,support*5.5),Vector3(3.6,2.9,5),Color("537E85"))
   for edge in [-1,1]:
    _box(Vector3(0,3.52,side*19+edge*1.65),Vector3(16,.04,.12),Color("EED180"))
    _box(Vector3(side*19+edge*1.65,3.52,0),Vector3(.12,.04,16),Color("EED180"))
@@ -76,7 +94,10 @@ func _build_view()->void:
   var tag:=Label3D.new();tag.text=str(entry.name);tag.position.y=1.8;tag.font_size=48;tag.pixel_size=.008;tag.billboard=BaseMaterial3D.BILLBOARD_ENABLED;tag.modulate=COLORS[actors.size()%4];root.add_child(tag);tag.hide()
   var wheels:Array=[]
   for part in ["WheelFrontLeft","WheelFrontRight","WheelRearLeft","WheelRearRight"]:wheels.append(model.find_child(part,true,false))
-  actors[int(entry.id)]={"root":root,"model":model,"wheels":wheels,"tag":tag}
+  var ammo_visuals:Array=[]
+  for i in TRUCK_SIM.MAX_AMMO:
+   var held:=_patty();root.add_child(held);held.scale=Vector3.ONE*.65;held.position=Vector3((i-1)*.62,2.0+(.15 if i==1 else 0.0),0);held.hide();ammo_visuals.append(held)
+  actors[int(entry.id)]={"root":root,"model":model,"wheels":wheels,"tag":tag,"ammo":ammo_visuals}
  for pickup in view.pickups:
   var marker:=Node3D.new();stage.add_child(marker);marker.position=pickup.position
   var patty:=_patty();marker.add_child(patty)
@@ -121,7 +142,9 @@ func _render(delta:float,_axis:Vector2)->void:
   actor.model.visible=p.alive and (p.shield<=0 or int(Time.get_ticks_msec()/80)%2==0)
   actor.tag.visible=false
   actor.model.rotation.x=lerpf(actor.model.rotation.x,-float(p.get("turn",0))*minf(absf(p.speed),10)*.007,minf(1,delta*9))
-  actor.model.position.y=sin(float(p.travel)*5)*minf(absf(p.speed)*.0018,.025)
+  actor.model.position.y=lerpf(actor.model.position.y,sin(float(p.travel)*2.6)*minf(absf(p.speed)*.00045,.006),1-exp(-delta*8))
+  for i in actor.ammo.size():
+   var held:MeshInstance3D=actor.ammo[i];held.visible=p.alive and i<int(p.ammo);held.position.y=2.0+(.15 if i==1 else 0.0)+sin(Time.get_ticks_msec()*.002+i)*.055;held.rotation.y+=delta*.7
   if p.alive and (p.get("slide",0)>1.0 or p.get("boosting",false)) and dust_time<=0:
    var puff:=MeshInstance3D.new();var sphere:=SphereMesh.new();sphere.radius=.16;sphere.height=.22;sphere.radial_segments=8;sphere.rings=4;puff.mesh=sphere;puff.material_override=_material(Color("8BE6EE") if p.get("boosting",false) else Color("D9DAD3"));stage.add_child(puff);puff.position=p.position+Vector3.UP*.14;dust.append({"node":puff,"life":.55})
   for wheel in actor.wheels:wheel.rotation.z=-float(p.travel)/.18
@@ -140,7 +163,7 @@ func _render(delta:float,_axis:Vector2)->void:
   var p:Dictionary=view.players[follow_id];var forward:=Vector3(sin(p.angle),0,cos(p.angle))
   var focus:Vector3=actors[follow_id].root.position+Vector3.UP*.65
   var goal:=focus-forward*3.8+Vector3.UP*1.65
-  goal.y=maxf(goal.y,TRUCK_SIM.height_at(Vector2(goal.x,goal.z))+.65)
+  goal.y=maxf(goal.y,TRUCK_SIM.height_at(Vector2(goal.x,goal.z),goal.y)+.65)
   chase.position=chase.position.lerp(goal,1-exp(-delta*6)) if camera_ready else goal
   chase.look_at(focus+forward*2.8);camera_ready=true
   var motor_speed:=absf(p.speed)
@@ -153,11 +176,12 @@ func _render(delta:float,_axis:Vector2)->void:
  var mine:Dictionary=view.players.get(NetManager.my_id(),{})
  hud.state=view;hud.mine=mine;hud.won=view.winners.has(NetManager.my_id());hud.queue_redraw()
 func _play_match_sounds()->void:
+ _prepare_weapon_audio()
  for event in view.get("events",[]):
   if int(event.id)<=last_sound_event:continue
   last_sound_event=int(event.id)
   var kind:String=event.kind
-  _arena_sound("burst" if kind=="shot" else ("ready" if kind=="pickup" else ("bump" if kind=="hit" else kind)),float(event.strength))
+  _arena_sound("cannon" if kind=="shot" else ("patty_pickup" if kind=="pickup" else ("bump" if kind=="hit" else ("burst" if kind=="jump" else kind))),float(event.strength))
  if view.phase=="countdown":
   var number:=int(ceil(3.0-view.clock))
   if number!=countdown_number:countdown_number=number;_arena_sound("ready",.65)
@@ -165,3 +189,26 @@ func _play_match_sounds()->void:
 func _broadcast_state() -> void:
  var packet:=var_to_bytes(view)
  game.mp_truck_arena_state.rpc(generation,packet.size(),packet.compress(FileAccess.COMPRESSION_ZSTD))
+
+
+func _prepare_weapon_audio()->void:
+ if sound_cache.has("cannon"):return
+ var rate:=22050
+ var rng:=RandomNumberGenerator.new();rng.seed=7182
+ for kind in ["cannon","patty_pickup"]:
+  var duration:=.30 if kind=="cannon" else .24
+  var data:=PackedByteArray();data.resize(int(rate*duration)*2)
+  var phase:=0.0;var filtered:=0.0
+  for i in data.size()/2:
+   var t:=float(i)/rate
+   var sample:=0.0
+   if kind=="cannon":
+    filtered=lerpf(filtered,rng.randf_range(-1,1),.3)
+    phase+=TAU*lerpf(150,48,minf(t/.16,1))/rate
+    sample=sin(phase)*exp(-t*20)*.72+filtered*exp(-t*15)*.65
+   else:
+    var frequency:=660.0 if t<.09 else 990.0
+    phase+=TAU*frequency/rate
+    sample=(sin(phase)+sin(phase*2)*.15)*sin(PI*minf(t/.012,1)*.5)*exp(-t*12)*.6
+   data.encode_s16(i*2,int(clampf(sample,-1,1)*26000))
+  var stream:=AudioStreamWAV.new();stream.mix_rate=rate;stream.format=AudioStreamWAV.FORMAT_16_BITS;stream.data=data;sound_cache[kind]=stream
