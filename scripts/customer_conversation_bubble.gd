@@ -13,8 +13,9 @@ func setup(person: Node3D, text: String) -> void:
  var fill:=Polygon2D.new();fill.color=skin.bg_color;fill.polygon=PackedVector2Array([Vector2(3,-9),Vector2(-12,5),Vector2(3,9)]);tail.add_child(fill)
  modulate.a=0.0
 func _process(delta: float) -> void:
- if not is_instance_valid(customer) or not customer.is_waiting or customer.is_leaving:queue_free();return
  var game=get_tree().current_scene
+ var remote:bool=game.mp_enabled and not NetManager.is_host()
+ if not is_instance_valid(customer) or customer.is_leaving or (not remote and not customer.is_waiting):queue_free();return
  if game.shift_paused or game.options_menu_open:return
  age+=delta
  if age>3.6:queue_free();return

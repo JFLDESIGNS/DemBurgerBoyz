@@ -13,7 +13,7 @@ void fragment() {
 		vec3 surface = mix(a.rgb,b.rgb,blend_amount);
 		float cheese_mask = smoothstep(.12,.30,surface.g-surface.b) * smoothstep(.38,.68,surface.g);
 		vec2 shift = vec2(sin(UV.y*27.0+wobble_age*7.5),sin(UV.x*23.0-wobble_age*6.0)*.55);
-		vec2 wobble_uv = UV + shift*.018*wobble_amount*cheese_mask;
+		vec2 wobble_uv = UV + shift*.035*wobble_amount*cheese_mask;
 		a = texture(TEXTURE,wobble_uv);
 		b = texture(next_state,wobble_uv);
 	}

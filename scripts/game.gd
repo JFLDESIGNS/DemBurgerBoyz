@@ -50929,6 +50929,9 @@ func _commit_social_review(
 			breakdown = (stored as Dictionary).duplicate(true)
 	if not breakdown.is_empty() and kind not in ["spray", "cat_burnt"]:
 		text = "My order: %s accuracy, %s, %s seasoning, %s freshness. %s. %s" % [breakdown.get("accuracy","—"), breakdown.get("doneness","—"), breakdown.get("seasoning","—"), breakdown.get("freshness","—"), breakdown.get("speed","—"), "I'd come back!" if stars >= 4.0 else ("Please get my next order right." if stars < 3.0 else "Okay, but there's room to improve.")]
+	if is_instance_valid(customer) and bool(customer.get_meta("grisaldi_referral",false)):
+		var referral_lines := ["Grisaldi sent me here! ","Came after Grisaldi's video. ","I found Burger Pals through Grisaldi. "]
+		text = str(referral_lines.pick_random()) + text
 	if _is_grisaldi_guest(customer):
 		who="Grisaldi"
 		text="To all my viewers: go to Burger Pals! Great burger. I just boosted their socials!" if stars>=4.0 else "Tried Burger Pals today. This burger needs some work before I can recommend it to my viewers."
@@ -81508,8 +81511,8 @@ func _reveal_grisaldi(walker: Node3D) -> void:
 	walker._anim_player.stop();walker._anim_player.clear_caches()
 	walker._anim_player.play("burger/Burger_Celebration",0.0)
 	walker._anim_player.speed_scale=1.0
-	if game_audio: game_audio.play_customer_wawa_click(.22,"male",0.0,.95)
-	walker.animate_wawa(1.5,.95)
+	if game_audio: game_audio.play_customer_wawa_click(.5,"male",6.0,1.08)
+	walker.animate_wawa(1.5,1.08)
 	await get_tree().create_timer(2.2).timeout
 	if not is_instance_valid(walker):return
 	walker.set_meta("grisaldi_claimed",false)
@@ -81654,7 +81657,11 @@ func _grisaldi_take_photos(customer: Node3D) -> void:
 func _spawn_scheduled_customer() -> void:
 	var before_count := customers.size()
 	_spawn_customer()
-	if _grisaldi_bonus_pending>0 and customers.size()>before_count:_grisaldi_bonus_pending-=1
+	if _grisaldi_bonus_pending>0 and customers.size()>before_count:
+		for index in range(before_count,customers.size()):
+			if _grisaldi_bonus_pending<=0:break
+			customers[index].set_meta("grisaldi_referral",true)
+			_grisaldi_bonus_pending-=1
 	spawn_timer=2.0 if _grisaldi_bonus_pending>0 else _next_spawn_delay()
 
 func _preload_small_menu_chunks() -> void:

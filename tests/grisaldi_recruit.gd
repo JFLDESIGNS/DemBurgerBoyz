@@ -38,6 +38,9 @@ func run():
  var before_rush: int=g.customers.size()
  for i in 8:g._spawn_scheduled_customer()
  assert(g.customers.size()==before_rush+8 and g._grisaldi_bonus_pending==0)
+ for referral in g.customers.slice(before_rush):assert(referral.get_meta("grisaldi_referral",false))
+ g._commit_social_review(4.0,"good",0,-1,g.customers.back())
+ assert("Grisaldi" in g.social_reviews[0].text)
  print("GRISALDI_RECRUIT_OK: no click money, 4-star threshold, one $500 tip, photo sequence, exactly eight additional arrivals")
  g.queue_free();await process_frame
  quit()

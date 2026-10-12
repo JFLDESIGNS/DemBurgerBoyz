@@ -47,6 +47,28 @@ const CONVERSATIONS = [
 	["I could eat here every day.","See you tomorrow, then."],
 	["What's the secret ingredient?","Someone else doing the dishes."]
 ]
+const REFERRAL_CONVERSATIONS = [
+ ["Grisaldi sent me here for a burger!", "His video made me hungry too."],
+ ["I saw this truck on Grisaldi's socials.", "Let's see what the hype tastes like!"],
+ ["Grisaldi said we had to try this place.", "I'm getting extra cheese for the occasion."],
+ ["I followed Grisaldi's burger recommendation.", "That man knows how to find lunch."]
+]
+func conversation_lines(chat: int) -> Array:
+	return REFERRAL_CONVERSATIONS[chat-CONVERSATIONS.size()] if chat>=CONVERSATIONS.size() else CONVERSATIONS[chat]
+
+func speak_line(person: Node3D, text: String) -> void:
+	if game.mp_enabled and not NetManager.is_host():return
+	conversation_bubble(person,text)
+	if game.mp_enabled and NetManager.is_online(): conversation_line.rpc(game._customer_net_id(person),text)
+
+@rpc("authority","call_remote","reliable")
+func conversation_line(id: int,text: String) -> void:
+	for attempt in 8:
+		var person=game._customer_by_net_id(id)
+		if is_instance_valid(person):
+			conversation_bubble(person,text);return
+		await get_tree().create_timer(.15).timeout
+
 func next_conversation() -> int:
 	var choices: Array[int] = []
 	for i in CONVERSATIONS.size():
@@ -119,6 +141,9 @@ func _process(delta: float) -> void:
 				var b = nearby.pick_random()
 				var kind = encounter_outcome(a,b,randf())
 				var chat := next_conversation()
+				if bool(b.get_meta("grisaldi_referral",false)) and not bool(a.get_meta("grisaldi_referral",false)):
+					var swap=a;a=b;b=swap
+				if bool(a.get_meta("grisaldi_referral",false)):chat=CONVERSATIONS.size()+randi_range(0,REFERRAL_CONVERSATIONS.size()-1)
 				encounter(a,b,kind,chat)
 				if game.mp_enabled and NetManager.is_online(): social_event.rpc(game._customer_net_id(a),game._customer_net_id(b),kind,chat)
 	if cat_left <= 0.0:
@@ -214,15 +239,15 @@ func encounter(a,b,kind: String, chat: int = -1) -> void:
 	if chat < 0: chat = next_conversation()
 	glance(a,b.global_position + Vector3(0,1.5,0))
 	wawa(a)
-	if chat >= 0 and chat < CONVERSATIONS.size(): conversation_bubble(a,CONVERSATIONS[chat][0])
+	if chat >= 0: speak_line(a,conversation_lines(chat)[0])
 	var first_ref = weakref(a)
 	var second_ref = weakref(b)
 	create_tween().tween_interval(3.7).finished.connect(func():
 		var first = first_ref.get_ref()
 		var second = second_ref.get_ref()
 		if not eligible(first) or not eligible(second): return
-		if chat >= 0 and chat < CONVERSATIONS.size():
-			conversation_bubble(second,CONVERSATIONS[chat][1])
+		if chat >= 0:
+			speak_line(second,conversation_lines(chat)[1])
 			if kind != "reply": wawa(second)
 		match kind:
 			"reply":

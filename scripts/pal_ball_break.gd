@@ -148,6 +148,10 @@ func _build_view() -> void:
  arena.add_child(bun);bun.rotation.x=PI
  var bounds:=AABB();var first:=true
  for mesh in bun.find_children("*","MeshInstance3D",true,false):
+  for surface in mesh.mesh.get_surface_count():
+   var source=mesh.mesh.surface_get_material(surface)
+   if source is StandardMaterial3D:
+    var warm=source.duplicate();warm.albedo_color=Color(1.0,.76,.40);mesh.set_surface_override_material(surface,warm)
   var box:AABB=mesh.global_transform*mesh.get_aabb()
   bounds=box if first else bounds.merge(box);first=false
  var fit:=SIM.START_RADIUS*2.0/maxf(bounds.size.x,bounds.size.z)
@@ -201,7 +205,7 @@ func _render(delta: float, axis: Vector2) -> void:
   visual.root.position=visual.root.position.lerp(goal,minf(1.0,delta*20.0)) if last_sequence>=0 or hosting else goal
   visual.root.visible=float(p.fall)<1.4
   var hit:float=sin(clampf(float(p.get("knockback",0.0))/.65,0,1)*PI)
-  visual.ball.scale=Vector3(1.0+hit*.18,1.0-hit*.22,1.0+hit*.18)
+  visual.ball.scale=Vector3.ONE
   var velocity:Vector2=p.velocity
   if velocity.length()>.08:
    visual.ball.rotate(Vector3(velocity.y,0,-velocity.x).normalized(),velocity.length()*delta/SIM.BALL_RADIUS)
