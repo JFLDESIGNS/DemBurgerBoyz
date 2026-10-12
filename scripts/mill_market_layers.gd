@@ -164,7 +164,10 @@ func try_building_departure(idx: int, force: bool = false) -> bool:
  if bool(walker.get_meta("grisaldi", false)) or bool(walker.get_meta("grisaldi_claimed", false)): return false
  var door: String = ["old_poodle", "motel", "market", "market", "market", "market"].pick_random()
  var from := _door_foot(door, -0.28)
- var to := Vector3(from.x + float(_game.bg_people_dir[idx]) * 0.8, _game._bg_people_y(), _game._bg_people_z())
+ var to := Vector3(from.x, _game._bg_people_y(), _game._bg_people_z())
+ if not force:
+  for other in _game.bg_people:
+   if other != walker and is_instance_valid(other) and other.visible and absf(other.global_position.x-to.x)<1.8 and absf(other.global_position.z-to.z)<1.2: return false
  _begin_trip(idx, door, true, from, to)
  return true
 
@@ -225,7 +228,21 @@ func tick_building_traffic(delta: float) -> void:
   var elapsed := total-lead
   var u := clampf((elapsed - 0.5) / 1.15, 0.0, 1.0)
   var travel := lerpf(u,smoothstep(0.0,1.0,u),0.45)
-  walker.global_position = (_trip["from"] as Vector3).lerp(_trip["to"], travel)
+  var start: Vector3 = _trip["from"]
+  var finish: Vector3 = _trip["to"]
+  var previous := walker.global_position
+  if bool(_trip.departing):
+   walker.global_position = start.lerp(finish,travel)
+  else:
+   # Align with the doorway on the sidewalk, then walk straight through it.
+   var aligned := Vector3(finish.x,start.y,start.z)
+   walker.global_position = start.lerp(aligned,clampf(travel/.22,0.0,1.0)) if travel < .22 else aligned.lerp(finish,(travel-.22)/.78)
+  var motion := walker.global_position-previous
+  if motion.length_squared() > .000001:
+   walker.rotation.y = lerp_angle(walker.rotation.y,atan2(motion.x,motion.z),minf(1.0,delta*12.0))
+  if bool(_trip.departing) and u >= 1.0:
+   var sidewalk_yaw := PI*.5 if float(_game.bg_people_dir[idx])>0.0 else -PI*.5
+   walker.rotation.y = lerp_angle(walker.rotation.y,sidewalk_yaw,minf(1.0,delta*8.0))
   walker.scale = (_trip["base_scale"] as Vector3) * lerpf(0.96,1.0,u) if bool(_trip["departing"]) else (_trip["base_scale"] as Vector3) * lerpf(1.0,0.96,u)
   var doorway := 1.0-smoothstep(0.0,.42,u) if bool(_trip.departing) else smoothstep(.58,1.0,u)
   _set_door_appearance(walker,1.0-doorway,doorway*.65)

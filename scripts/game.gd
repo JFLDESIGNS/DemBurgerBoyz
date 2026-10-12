@@ -31306,6 +31306,14 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	var walker := bg_people[idx] as Node3D
 	if walker == null or not is_instance_valid(walker):
 		return
+	if not as_partner:
+		for other in bg_people:
+			if is_instance_valid(other) and other.visible and absf(other.position.x) > BG_PEOPLE_EDGE_X - 1.8:
+				bg_people_wait[idx] = 0.7
+				return
+	walker.set_meta("street_spacing", true)
+	walker.set_meta("street_pair", 0)
+	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and int(get_meta("grisaldi_day", -1)) != day:
 		preset["grisaldi"] = true; preset["top_color"] = "ffffffff"; preset["shoe_color"] = "e52d35ff"; preset["top_style"] = 1
@@ -31378,6 +31386,11 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	if partner_idx < 0:
 		return
 	_start_background_person(partner_idx, true)
+	if not bool(bg_people_active[partner_idx]): return
+	var pair_key := walker.get_instance_id()
+	walker.set_meta("street_pair", pair_key)
+	bg_people[partner_idx].set_meta("street_pair", pair_key)
+	bg_people_speed[partner_idx] = bg_people_speed[idx]
 	if idx < bg_people_is_pair.size():
 		bg_people_is_pair[idx] = true
 		if mp_enabled and NetManager.is_host() and not _mp_applying:
@@ -81064,6 +81077,10 @@ func _crowd_steer(actor: Node3D, before: Vector3, desired: Vector3, delta: float
 	if mp_enabled and not NetManager.is_host(): return desired
 	var obstacles: Array=customers.duplicate()
 	obstacles.append_array(bg_people)
+	if is_instance_valid(_customer_social):
+		for reference in _customer_social.walkers:
+			var pedestrian = reference.get_ref()
+			if is_instance_valid(pedestrian): obstacles.append(pedestrian)
 	if is_instance_valid(_cut_collector): obstacles.append(_cut_collector)
 	if is_instance_valid(window_cat) and window_cat.visible: obstacles.append(window_cat)
 	if is_instance_valid(mail_delivery_truck) and mail_delivery_truck.visible and is_instance_valid(mail_delivery_truck.courier) and mail_delivery_truck.courier.is_visible_in_tree():

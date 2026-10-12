@@ -5,7 +5,7 @@ var tail: Polygon2D
 func setup(person: Node3D, text: String) -> void:
  customer=person;name="CustomerConversation";mouse_filter=Control.MOUSE_FILTER_IGNORE;z_index=74
  var skin:=StyleBoxFlat.new();skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F");skin.shadow_color=Color(.18,.10,.04,.25);skin.shadow_size=5
- skin.set_border_width_all(2);skin.set_corner_radius_all(9);skin.content_margin_left=8;skin.content_margin_right=8;skin.content_margin_top=10;skin.content_margin_bottom=10
+ skin.set_border_width_all(2);skin.set_corner_radius_all(9);skin.content_margin_left=20;skin.content_margin_right=8;skin.content_margin_top=10;skin.content_margin_bottom=10
  add_theme_stylebox_override("panel",skin)
  var label:=Label.new();label.text=text;label.custom_minimum_size=Vector2(92,44);label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;label.mouse_filter=Control.MOUSE_FILTER_IGNORE
  label.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"));label.add_theme_font_size_override("font_size",13);label.add_theme_color_override("font_color",Color("715033"));add_child(label)

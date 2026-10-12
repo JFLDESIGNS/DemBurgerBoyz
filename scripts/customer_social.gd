@@ -274,6 +274,7 @@ func spawn_couple(pair: Array, direction: float = 0.0) -> void:
 	var pace = (game.BG_PEOPLE_SPEED_MIN + game.BG_PEOPLE_SPEED_MAX) * .5
 	if direction == 0.0: direction = game._bg_people_lane_dir()
 	if direction == 0.0: direction = 1.0
+	var pair_key := Time.get_ticks_usec()
 	for i in 2:
 		var c = preload("res://scripts/customer.gd").new()
 		c.is_street_pedestrian = true
@@ -282,6 +283,8 @@ func spawn_couple(pair: Array, direction: float = 0.0) -> void:
 		c.position = Vector3(-direction * (game.BG_PEOPLE_EDGE_X + i*.45),game._bg_people_y(),game._bg_people_z()+i*.65)
 		c.scale = Vector3.ONE * game._bg_people_scale()
 		c.rotation_degrees.y = c.WALK_PLUS_X_YAW if direction > 0 else c.WALK_MINUS_X_YAW
+		c.set_meta("street_spacing", true)
+		c.set_meta("street_pair", pair_key)
 		c.set_meta("couple_speed", pace)
 		c.set_meta("couple_direction", direction)
 		c.set_meta("couple_heart_left", 3.0+i*.6)
