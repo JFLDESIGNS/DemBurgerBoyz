@@ -23,7 +23,7 @@ func _process(delta: float) -> void:
   game.chef_points_hud._position_reward(profit_label)
   var reward_busy = is_instance_valid(game.chef_points_hud.active_pop)
   profit_label.visible = not reward_busy
-  if is_instance_valid(profit_tween):
+  if is_instance_valid(profit_tween) and profit_tween.is_valid():
    if reward_busy: profit_tween.pause()
    else: profit_tween.play()
  if game.tutorial_mode or game._cat_delivery_blocks_visit() or (game.mp_enabled and not NetManager.is_host()): return

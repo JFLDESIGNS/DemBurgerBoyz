@@ -4,6 +4,7 @@ var actor: Node3D
 var age:=0.0
 var home:=Vector3.ZERO
 var home_yaw:=0.0
+var home_scale:=Vector3.ONE
 var home_process:=true
 var contact:=Vector3.ZERO
 var hit:=false
@@ -11,7 +12,7 @@ var phase:="point"
 var route: Array[Vector3]=[]
 var route_index:=0
 func setup(owner_game: Node,person: Node3D,origin: Vector3) -> void:
- game=owner_game;actor=person;home=origin;home_yaw=actor.rotation.y
+ game=owner_game;actor=person;home=origin;home_yaw=actor.rotation.y;home_scale=actor.scale
  home_process=actor.is_processing();actor.set_process(false)
  actor.set_meta("truck_smack_busy",true)
  actor._eating=false;actor._burger_eat_phase="";actor._cat_pet_left=0.0
@@ -30,6 +31,7 @@ func _process(delta: float) -> void:
   if age<.65:return
   phase="approach";actor.play_street_run(1.25)
  if phase=="approach" or phase=="escape":
+  if phase=="approach" and route_index>=1: actor.scale=actor.scale.lerp(Vector3.ONE,1.0-exp(-delta*8.0))
   var destination:=route[route_index]
   var before:=actor.global_position
   actor.global_position=before.move_toward(destination,delta*6.8)
@@ -40,6 +42,7 @@ func _process(delta: float) -> void:
    if route_index>=route.size():
     if phase=="escape":finish();return
     phase="strike";age=0
+    actor.scale=Vector3.ONE
     actor.rotation_degrees.y=actor.FACE_TRUCK_YAW
     actor._anim_state="truck_hit"
     actor._anim_player.stop();actor._anim_player.clear_caches()
@@ -58,7 +61,7 @@ func _process(delta: float) -> void:
 func finish() -> void:
  if is_instance_valid(actor):
   actor.set_meta("truck_smack_busy",false);actor.set_meta("food_stop_until",0)
-  actor._reset_skeleton_pose();actor.set_process(home_process)
+  actor._reset_skeleton_pose();actor.set_process(home_process);actor.scale=home_scale
   if actor.is_street_pedestrian:
    actor.visible=false
    var idx: int=game.bg_people.find(actor)

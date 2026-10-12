@@ -59,6 +59,7 @@ func conversation_lines(chat: int) -> Array:
 func speak_line(person: Node3D, text: String) -> void:
 	if game.mp_enabled and not NetManager.is_host():return
 	conversation_bubble(person,text)
+	wawa(person)
 	if game.mp_enabled and NetManager.is_online(): conversation_line.rpc(game._customer_net_id(person),text)
 
 @rpc("authority","call_remote","reliable")
@@ -66,7 +67,7 @@ func conversation_line(id: int,text: String) -> void:
 	for attempt in 8:
 		var person=game._customer_by_net_id(id)
 		if is_instance_valid(person):
-			conversation_bubble(person,text);return
+			conversation_bubble(person,text);wawa(person);return
 		await get_tree().create_timer(.15).timeout
 
 func next_conversation() -> int:
@@ -238,7 +239,6 @@ func encounter(a,b,kind: String, chat: int = -1) -> void:
 	if not is_instance_valid(b): return
 	if chat < 0: chat = next_conversation()
 	glance(a,b.global_position + Vector3(0,1.5,0))
-	wawa(a)
 	if chat >= 0: speak_line(a,conversation_lines(chat)[0])
 	var first_ref = weakref(a)
 	var second_ref = weakref(b)
@@ -248,10 +248,9 @@ func encounter(a,b,kind: String, chat: int = -1) -> void:
 		if not eligible(first) or not eligible(second): return
 		if chat >= 0:
 			speak_line(second,conversation_lines(chat)[1])
-			if kind != "reply": wawa(second)
 		match kind:
 			"reply":
-				glance(second,first.global_position+Vector3(0,1.5,0)); wawa(second)
+				glance(second,first.global_position+Vector3(0,1.5,0))
 			"away":
 				second.set_meta("social_away_until",Time.get_ticks_msec()+2400)
 				second.set_meta("social_away_yaw",second.FACE_TRUCK_YAW + (55.0 if second.position.x > first.position.x else -55.0))

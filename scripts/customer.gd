@@ -2662,6 +2662,7 @@ func presentation_snapshot() -> Dictionary:
 func apply_presentation_snapshot(motion: Dictionary) -> void:
 	visible = bool(motion.get("visible", true))
 	set_meta("delivery_errand", bool(motion.get("errand", false)))
+	if _eating or _burger_eat_phase != "" or bool(get_meta("side_food_active",false)) or bool(get_meta("truck_smack_busy",false)) or _cat_pet_left > 0.0: return
 	var clip := str(motion.get("clip", ""))
 	if not is_instance_valid(_anim_player) or clip.is_empty() or not _anim_player.has_animation(clip): return
 	_mp_animation_received_ms = Time.get_ticks_msec()
@@ -2670,7 +2671,7 @@ func apply_presentation_snapshot(motion: Dictionary) -> void:
 	var changed := str(_anim_player.current_animation) != clip
 	if changed: _anim_player.play(clip, 0.1)
 	var at := clampf(float(motion.get("position", 0.0)), 0.0, _anim_player.get_animation(clip).length)
-	if changed or absf(_anim_player.current_animation_position - at) > 0.3: _anim_player.seek(at, true)
+	if changed: _anim_player.seek(at, true)
 
 func _update_host_driven_pose(delta: float) -> void:
 	## Multiplayer guests receive position/ticket state from the host; avoid local

@@ -33,6 +33,10 @@ func run():
   g.money=400;g.shift_food_sales=200;g.shift_tips=30;g.shift_ingredient_cost=25;g.shift_restock_spend=14
   g.bank_savings=100;g.bank_savings_rate_pct=5;g.bank_loan=0;g.truck_bought_out=false;g.tutorial_mode=false;g._cut_collector_cut_done=false
   g._record_order_history(20,5,4,null)
+  var large_photo:=Crypto.new().generate_random_bytes(180000)
+  g.order_history.back()["photo"]=large_photo
+  g._mp_queue_order_history()
+  assert(var_to_bytes(g._mp_closed_shift_state()).size()<60000,"Closing recap must fit relay packet limit")
   g._end_day(true)
   assert(g.money==300 and g.bank_savings==105 and g.last_day_cut==100)
   assert(g._format_day_cut_recap().contains("Net food profit: $105.00"))
@@ -50,6 +54,7 @@ func run():
   assert(g.bank_savings==105 and g.money==300,"Repeated closing must not reapply interest or cut")
   g.mp_sync_economy(1.0,0,0.0,1,0,0,0.0,0,[],[],[])
   assert(g.money==300,"Stale economy must not overwrite final totals")
+  while not g.order_history.back().has("photo") or g.order_history.back().photo.size()!=180000:await process_frame
   mark("checked")
  print("END_DAY_NETWORK_AUDIT_OK ","host" if host else "guest")
  g.mp_enabled=false;net.leave(false);quit()

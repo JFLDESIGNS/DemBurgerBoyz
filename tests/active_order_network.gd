@@ -32,7 +32,7 @@ func run()->void:
  assert(game._mp_order_revision==1)
  await create_timer(0.2).timeout
  if host:
-  assert(game.served_ids==[801],"Host serves guest-selected order exactly once")
+  assert(game.served_ids.is_empty(),"Ticket selection must not serve until the player clicks")
  else:
   game._try_auto_serve();assert(game.served_ids.is_empty(),"Guest never duplicates auto-serve")
  await create_timer(0.3).timeout

@@ -11,6 +11,7 @@ func run():
   reaction._process(1.0/60)
   if reaction.phase=="strike":break
  assert(reaction.phase=="strike" and is_equal_approx(actor.global_position.z,1.2))
+ assert(actor.scale.is_equal_approx(Vector3.ONE),"Background attacker must match foreground customer height")
  for tick in 90:reaction._process(1.0/60)
  assert(reaction.phase=="escape" and reaction.hit)
  assert(reaction.route[0].z==20 and is_equal_approx(reaction.route[0].x,reaction.contact.x))

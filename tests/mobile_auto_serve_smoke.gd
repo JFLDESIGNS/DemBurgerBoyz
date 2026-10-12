@@ -1,15 +1,10 @@
 extends SceneTree
-class Mobile extends "res://scripts/grubbah.gd":
-	var authoritative = true
-	func host() -> bool: return authoritative
-	func publish() -> void: pass
-	func update_visuals(_delta: float) -> void: pass
 func _initialize(): call_deferred("run")
 func run() -> void:
 	create_timer(45).timeout.connect(func(): quit(1))
 	var g = load("res://scenes/main.tscn").instantiate(); g.set_script(load("res://tests/mobile_auto_serve_fixture.gd"))
 	root.add_child(g); current_scene = g; g.playing = true
-	var m = Mobile.new(); g.add_child(m); m.game = g; m.set_process(false)
+	var m = load("res://tests/mobile_auto_serve_probe.gd").new(); g.add_child(m); m.game = g; m.set_process(false)
 	m.props = Node3D.new(); m.add_child(m.props); m.was_playing = true
 	m.state = {"phase":"bagging", "number":1, "items":["bun_bottom","patty","bun_top"]}
 	m.age = 0

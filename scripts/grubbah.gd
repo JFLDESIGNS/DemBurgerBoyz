@@ -24,6 +24,7 @@ var revision = 0
 var next_number = 1
 var wait_time = 95.0
 var age = 0.0
+var remote_age = 0.0
 var sync_time = 0.0
 var last_day = -1
 var was_playing = false
@@ -143,7 +144,7 @@ func sync_ticket() -> void:
   ticket_owner=preload("res://scripts/mobile_ticket_owner.gd").new();ticket_owner.name="MobileTicketOwner";ticket_owner.order.assign(state.items);ticket_owner.is_waiting=true;ticket_owner.patience=99999;ticket_owner.patience_max=99999
   ticket_owner.set_meta("mobile_order",true);ticket_owner.set_meta("mobile_number",int(state.number));ticket_owner.set_meta("mp_net_id",1000000+int(state.number));add_child(ticket_owner)
   game._create_ticket(ticket_owner)
-  if bool(state.get("selected",false)):game._select_ticket_local(ticket_owner)
+  if bool(state.get("selected",false)) and (host() or int(state.get("order_revision",0))>=game._mp_order_revision):game._select_ticket_local(ticket_owner)
   elif not is_instance_valid(game.selected_customer):game._resolve_serve_customer()
   announce_arrival.call_deferred(ticket_owner)
  ticket_owner.is_waiting=str(state.get("phase",""))!="sealed"
@@ -190,11 +191,11 @@ func _process(delta: float) -> void:
   sync_ticket()
   if is_instance_valid(props):props.hide()
   if is_instance_valid(wrap_button):wrap_button.hide()
-  if is_instance_valid(packing_tween):packing_tween.pause()
+  if is_instance_valid(packing_tween) and packing_tween.is_valid():packing_tween.pause()
   return
  if boss_paused:
   boss_paused=false
-  if is_instance_valid(packing_tween):packing_tween.play()
+  if is_instance_valid(packing_tween) and packing_tween.is_valid():packing_tween.play()
   refresh()
  if not was_playing:
   was_playing=true
@@ -204,7 +205,9 @@ func _process(delta: float) -> void:
  if online() and not online_seen:
   online_seen=true
   if not host():request_snapshot.rpc_id(1)
- age+=delta;sync_time+=delta;flash_time=maxf(0,flash_time-delta)
+ remote_age+=delta
+ age+=delta if host() else delta*clampf(1.0+(remote_age-age)*2.0,.8,1.2)
+ sync_time+=delta;flash_time=maxf(0,flash_time-delta)
  advance_side_packs(delta)
  if host():
   auto_lay_paper()
@@ -413,6 +416,7 @@ func snapshot_payload() -> Dictionary:
  var data=state.duplicate()
  # The burger photo is sent once with the sales history, not every animation tick.
  data.erase("photo")
+ if not data.is_empty():data["order_revision"]=game._mp_order_revision
  return data
 func publish() -> void:
  revision+=1
@@ -427,9 +431,11 @@ func request_snapshot() -> void:
 func snapshot(data: Dictionary, rev: int, elapsed: float, owner: int) -> void:
  if host() or rev<revision:return
  var same_phase=str(state.get("phase",""))==str(data.get("phase","")) and int(state.get("number",-1))==int(data.get("number",-2))
- state=data.duplicate(true);revision=rev;age=maxf(age,elapsed) if same_phase else elapsed;knife_owner=owner;refresh()
+ state=data.duplicate(true);revision=rev;remote_age=elapsed
+ if not same_phase: age=elapsed
+ knife_owner=owner;refresh()
  game._refresh_customer_queue_timers()
- if bool(state.get("selected",false)) and is_instance_valid(ticket_owner) and ticket_owner.is_waiting and not is_selected():game._select_ticket_local(ticket_owner)
+ if bool(state.get("selected",false)) and int(state.get("order_revision",0))>=game._mp_order_revision and is_instance_valid(ticket_owner) and ticket_owner.is_waiting and not is_selected():game.mp_order_selected(1000000+int(state.number),int(state.get("order_revision",0)))
 func pay_order() -> void:
  if bool(state.get("paid",false)):return
  state.paid=true
@@ -448,7 +454,7 @@ func pay_order() -> void:
  if is_instance_valid(game._order_insights):game._order_insights.refresh()
  if game.game_audio:game.game_audio.play_order_up()
  if online():
-  game.mp_order_history.rpc(game.order_history,game.order_history_revision);game.mp_order_profit.rpc(base+tip,cost);game._mp_broadcast_economy()
+  game._mp_queue_order_history();game.mp_order_profit.rpc(base+tip,cost);game._mp_broadcast_economy()
 func fitted(file: String, width: float) -> Node3D:
  var root=Node3D.new()
  var model=load(PACK+file+".glb").instantiate();root.add_child(model)
@@ -592,7 +598,7 @@ func update_visuals(_delta: float) -> void:
  wrap_button.position=center+Vector2(-87,98)
  wrap_button.modulate=Color("FFD06A") if not wrap_button.disabled else Color("B7B0A0")
  var preview=game.stations[0].get("preview")
- if is_instance_valid(preview):preview.modulate.a=0.0 if phase=="wrapping" else 1.0
+ if is_instance_valid(preview):preview.modulate.a=0.0 if phase=="wrapping" or game.stations[0].has("handoff_items") else 1.0
  bag_finish.visible=phase=="bagging" and age>=BURGER_BAG_FLIGHT
  bag_finish.text="PACKING SIDES" if side_visuals.size()>0 else "WAITING FOR SIDES"
  bag_glow.visible=bag_finish.visible

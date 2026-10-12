@@ -5856,6 +5856,7 @@ func _process_gameplay(delta: float) -> void:
 	_mp_update_cursors(delta)
 	_update_remote_patty_interpolation(delta)
 	_mp_update_proxies()
+	_mp_update_remote_cup_levels(delta)
 	_update_local_cursor_click(delta)
 	_update_phone_scroll_inertia(delta)
 	_update_hud_money_climb(delta)
@@ -31424,6 +31425,8 @@ func mp_background_person_start(idx: int, preset: Dictionary, dir: float, is_run
 	var start_x := -BG_PEOPLE_EDGE_X if dir > 0.0 else BG_PEOPLE_EDGE_X
 	if as_partner:
 		start_x += -dir * BG_PEOPLE_PAIR_GAP
+	walker.remove_meta("mp_walk_target")
+	walker.remove_meta("mp_walk_pose")
 	walker.position = Vector3(start_x, _bg_people_y(), z)
 	walker.scale = Vector3.ONE * _bg_people_scale()
 	walker.rotation_degrees = Vector3(0.0, CustomerScript.WALK_PLUS_X_YAW if dir > 0.0 else CustomerScript.WALK_MINUS_X_YAW, 0.0)
@@ -31492,15 +31495,15 @@ func mp_background_people_snapshot(active: Array, xs: Array, zs: Array, detail: 
 			continue ## Reliable start carries the matching character before poses apply.
 		if bool(walker.get_meta("truck_smack_busy",false)): continue
 		var pose: Dictionary = poses[i] if i < poses.size() else {}
-		walker.scale = pose.get("scale", Vector3.ONE * _bg_people_scale())
-		if building != null: building._set_door_appearance(walker,float(pose.get("door_alpha",1.0)),float(pose.get("door_dark",0.0)))
+		walker.set_meta("mp_walk_pose", pose)
+		# Appearance and transform interpolate together in the frame update.
 		walker.set_meta("building_trip", bool(pose.get("trip", false)))
 		walker.set_meta("market_shopping_bag",bool(pose.get("bag",false)))
 		walker.visible = bool(pose.get("visible", true))
 		walker._wawa_click_area.collision_layer = 0 if bool(pose.get("trip", false)) or not walker.visible else CUSTOMER_WAWA_COLLISION_LAYER
-		walker.rotation.y = lerp_angle(walker.rotation.y, float(pose.get("yaw", walker.rotation.y)), 0.68)
 		var target := Vector3(float(xs[i]), float(pose.get("y", _bg_people_y())), float(zs[i]))
-		walker.position = walker.position.lerp(target, 0.68)
+		walker.set_meta("mp_walk_target", target)
+		if walker.position.distance_squared_to(target)>25.0: walker.position=target
 
 
 func _update_background_people(delta: float) -> void:
@@ -31532,6 +31535,16 @@ func _update_background_people(delta: float) -> void:
 	for i in bg_people.size():
 		var walker := bg_people[i] as Node3D
 		if walker == null or not is_instance_valid(walker):
+			continue
+		if bool(walker.get_meta("truck_smack_busy",false)): continue
+		if mp_enabled and not NetManager.is_host():
+			if bool(bg_people_active[i]) and not bool(walker.get_meta("truck_smack_busy",false)) and walker.has_meta("mp_walk_target"):
+				var pose: Dictionary = walker.get_meta("mp_walk_pose",{})
+				var blend := 1.0-exp(-delta*12.0)
+				walker.position=walker.position.lerp(walker.get_meta("mp_walk_target"),blend)
+				walker.rotation.y=lerp_angle(walker.rotation.y,float(pose.get("yaw",walker.rotation.y)),blend)
+				walker.scale=walker.scale.lerp(pose.get("scale",Vector3.ONE*s),blend)
+				if building != null: building._set_door_appearance(walker,lerpf(float(walker.get_meta("door_alpha",1.0)),float(pose.get("door_alpha",1.0)),blend),lerpf(float(walker.get_meta("door_dark",0.0)),float(pose.get("door_dark",0.0)),blend))
 			continue
 		if not bool(walker.get_meta("building_trip",false)): walker.scale = Vector3.ONE * s
 		if not bool(bg_people_active[i]):
@@ -46406,6 +46419,8 @@ func _begin_early_drink_hand(
 	var lab: String = str(GameDataScript.INGREDIENT_LABELS.get(soda_id, flavor)).to_upper()
 	if not _mp_applying:
 		_flash("%s handed early — finish the burger!" % lab, Color("80DEEA"))
+	_mark_customer_soda_handed(customer, true)
+	if mp_enabled and NetManager.is_host(): _mp_broadcast_customers()
 	## A guest's drink exists on the host as a streamed ghost. Use that exact prop
 	## for the toss instead of accidentally selecting the host cook's working cup.
 	_play_cup_fly_to_mouth(
@@ -50947,7 +50962,7 @@ func _commit_social_review(
 				row["stats"] = breakdown
 				row["photo"] = customer.get_meta("sales_photo",PackedByteArray())
 		order_history_revision += 1
-		if mp_enabled: mp_order_history.rpc(order_history,order_history_revision)
+		if mp_enabled: _mp_queue_order_history()
 		if is_instance_valid(_order_insights): _order_insights.refresh()
 	_apply_social_review(stars, who, text, pic, false, breakdown)
 	## Retain the one compressed copy used by multiplayer feed snapshots.
@@ -64434,11 +64449,14 @@ func _take_drink_for_mobile_pack(drink: Node3D) -> void:
 func _consume_cup_for_serve(for_customer: Node3D = null) -> void:
 	## Hand off a matching ready drink with the order (parked tray cup preferred).
 	var target: Node3D = null
-	if _serve_cup_node != null and is_instance_valid(_serve_cup_node):
-		target = _serve_cup_node
 	var cust: Node3D = for_customer
-	if cust == null or not is_instance_valid(cust):
-		cust = selected_customer
+	if cust == null or not is_instance_valid(cust): cust = selected_customer
+	if is_instance_valid(cust) and cust.has_meta("serving_drink_ref"):
+		target=cust.get_meta("serving_drink_ref").get_ref()
+		cust.remove_meta("serving_drink_ref")
+		if not is_instance_valid(target): return
+	elif _serve_cup_node != null and is_instance_valid(_serve_cup_node):
+		target = _serve_cup_node
 	if target == null and cust != null and is_instance_valid(cust):
 		var sodas: Array = GameDataScript.order_soda_ids(cust.order)
 		if not sodas.is_empty():
@@ -70851,7 +70869,11 @@ func _customer_burger_hand_screen(customer: Node3D) -> Vector2:
 func _customer_burger_hand_scale(customer: Node3D, sprite_width: float) -> float:
 	if camera != null and is_instance_valid(customer) and customer.has_method("burger_grip_edges"):
 		var edges: Array = customer.burger_grip_edges()
-		var width := camera.unproject_position(edges[0]).distance_to(camera.unproject_position(edges[1]))
+		# The burger is a camera-facing sprite. Project its physical grip width
+		# along camera-right so a customer turning sideways cannot flatten it.
+		var center: Vector3=(edges[0]+edges[1])*.5
+		var half_width: Vector3=camera.global_basis.x.normalized()*edges[0].distance_to(edges[1])*.5
+		var width := camera.unproject_position(center-half_width).distance_to(camera.unproject_position(center+half_width))
 		return clampf(width / maxf(sprite_width,1.0),.06,1.2)
 	return .70
 
@@ -71416,6 +71438,7 @@ func _start_side_food_3d(customer: Node3D, kind: String, origin: Vector3, done: 
 			var liquid = food.get_node_or_null("LiquidPivot/Liquid") as MeshInstance3D
 			if liquid != null:
 				liquid.mesh = liquid.mesh.duplicate()
+				liquid.scale.y = 1.0 # Remote fill uses a unit-height mesh; eating owns its geometry now.
 				if liquid.material_override != null: liquid.material_override = liquid.material_override.duplicate()
 			food.set_meta("flavor", flavor)
 			_set_melting_cup_liquid_level(food, 1.0, flavor)
@@ -71460,8 +71483,9 @@ func _play_cup_fly_to_mouth(
 	launch_delay: float = 0.0,
 	presentation_only: bool = false
 ) -> void:
-	## Toss the fountain drink to the customer. companion=true runs beside a burger toss.
-	if not companion:
+	## Early drinks run independently so a ready burger can take over the hands.
+	var locks_serve := not companion and is_instance_valid(customer) and GameDataScript.is_soda_only_order(customer.order)
+	if locks_serve:
 		_serve_fly_busy = true
 	var ui_root: Control = get_node_or_null("UI/Root") as Control
 	var drink: Node3D = drink_override if drink_override != null and is_instance_valid(drink_override) else null
@@ -71482,6 +71506,8 @@ func _play_cup_fly_to_mouth(
 		flavor = cup_flavor
 	_serve_cup_node = drink
 	var serving_drink := drink
+	if is_instance_valid(customer) and is_instance_valid(drink) and not companion:
+		customer.set_meta("serving_drink_ref",weakref(drink))
 	var serving_was_active := serving_drink != null and serving_drink == cup_root
 	if serving_drink != null and is_instance_valid(serving_drink):
 		serving_drink.set_meta("serving", true)
@@ -71500,7 +71526,7 @@ func _play_cup_fly_to_mouth(
 			_cup_pour_white = 0.0
 		_layout_parked_cups()
 	if ui_root == null or camera == null or customer == null or not is_instance_valid(customer):
-		if not companion:
+		if locks_serve:
 			_serve_fly_busy = false
 		if serving_drink != null and is_instance_valid(serving_drink):
 			serving_drink.queue_free()
@@ -71511,7 +71537,7 @@ func _play_cup_fly_to_mouth(
 	if is_instance_valid(serving_drink): serving_drink.hide()
 	var serving_drink_ref = weakref(serving_drink) if is_instance_valid(serving_drink) else null
 	_start_side_food_3d(customer, "drink", origin, func() -> void:
-		if not companion:
+		if locks_serve:
 			_serve_fly_busy = false
 			_auto_serving = false
 		on_done.call()
@@ -75440,6 +75466,7 @@ func _mp_on_session_start(session_seed: int) -> void:
 	_mp_bootstrap_active.clear()
 	_mp_bootstrap_jobs.clear()
 	_mp_bulk_jobs.clear()
+	_sales_history_sync=preload("res://scripts/sales_history_sync.gd").new()
 	_mp_bootstrap_ready = NetManager.is_host()
 	_mp_bootstrap_waiting = 0
 	_mp_motion_latest.clear()
@@ -75547,7 +75574,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		_bts_day1_performance_done,
 		_bts_day1_announcement_done])
 	_mp_emit_economy(peer_id)
-	_mp_bootstrap_add(peer_id,"mp_order_history",[order_history,order_history_revision])
+	_mp_queue_order_history(peer_id)
 	## Match burner so guests can place meat immediately.
 	_mp_bootstrap_add(peer_id, "mp_toggle_grill", [grill_on])
 	for c in customers:
@@ -75586,6 +75613,7 @@ func _mp_send_bootstrap_to(peer_id: int) -> void:
 		var hail = str(bg_walker.get_meta("street_hail", ""))
 		if not hail.is_empty(): _mp_bootstrap_add(peer_id, "mp_background_person_hail", [bg_i, hail])
 	_mp_send_background_people_snapshot(peer_id)
+	_mp_bootstrap_add(peer_id,"mp_machine_damage",[_machine_broken.duplicate(),_machine_use_count.duplicate()])
 	## Grill + Build patties.
 	for i in GRILL_SLOTS:
 		var p = grill[i]
@@ -76426,6 +76454,13 @@ func _mp_apply_remote_icecream_fill(root: Node3D, fill: float, pouring: bool) ->
 	_mp_set_remote_icecream_stream(root, pouring)
 
 
+func _mp_update_remote_cup_levels(delta: float) -> void:
+	for cup in _mp_remote_cups.values():
+		if not is_instance_valid(cup) or not cup.visible or bool(cup.get_meta("serving",false)) or not cup.has_meta("remote_cup_target"): continue
+		var target: Array=cup.get_meta("remote_cup_target")
+		var amount := 1.0-exp(-delta*18.0)
+		_mp_apply_remote_cup_fill(cup,str(target[0]),lerpf(float(cup.get_meta("soda_fill",0.0)),float(target[1]),amount),lerpf(float(cup.get_meta("ice_fill",0.0)),float(target[2]),amount),lerpf(float(cup.get_meta("fizz",0.0)),float(target[3]),amount),bool(target[4]))
+
 func _mp_apply_remote_cup_fill(
 	root: Node3D, flavor: String, fill: float, ice: float, fizz: float, pouring: bool = false
 ) -> void:
@@ -76455,9 +76490,11 @@ func _mp_apply_remote_cup_fill(
 			if cyl == null:
 				cyl = CylinderMesh.new()
 				liq.mesh = cyl
-			cyl.height = h
-			cyl.top_radius = CUP_LIQUID_BOT_R + (CUP_LIQUID_TOP_R - CUP_LIQUID_BOT_R) * fill
-			cyl.bottom_radius = CUP_LIQUID_BOT_R
+			if not liq.has_meta("remote_unit_mesh"):
+				cyl=cyl.duplicate();liq.mesh=cyl
+				cyl.height=1.0;cyl.top_radius=CUP_LIQUID_TOP_R;cyl.bottom_radius=CUP_LIQUID_BOT_R
+				liq.set_meta("remote_unit_mesh",true)
+			liq.scale.y=h
 			liq.position.y = h * 0.5
 			var surf_piv := liq_pivot.get_node_or_null("SurfacePivot") as Node3D
 			if surf_piv:
@@ -76554,7 +76591,7 @@ func mp_cup_pose(
 	_mp_target_proxy(ghost, Vector3(x, y, z), Vector3(rx, ry, rz))
 	_mp_remote_soda_pouring[sid] = pouring
 	_mp_remote_ice_pouring[sid] = pouring_ice
-	_mp_apply_remote_cup_fill(ghost, flavor, fill, ice, fizz, pouring)
+	ghost.set_meta("remote_cup_target",[flavor,fill,ice,fizz,pouring])
 	## Soft stream hint while they pour under the nozzle.
 	if pouring and soda_stream_mesh != null and is_instance_valid(soda_stream_mesh) \
 			and not cup_held:
@@ -78923,6 +78960,7 @@ func mp_sync_customers(
 				c = _customer_by_net_id(nid)
 		if c == null or not is_instance_valid(c):
 			continue
+		if bool(c.get_meta("truck_smack_busy",false)): continue
 		c.mp_host_driven = true
 		if i < motions.size() and c.has_method("apply_presentation_snapshot"): c.apply_presentation_snapshot(motions[i])
 		if i < pats.size():
@@ -80346,6 +80384,7 @@ func _mp_ensure_service() -> void:
 	if is_instance_valid(_mp_service_timer):
 		return
 	_mp_service_timer = Timer.new()
+	_mp_service_timer.process_mode = Node.PROCESS_MODE_ALWAYS
 	_mp_service_timer.wait_time = 1.0 / 60.0
 	_mp_service_timer.timeout.connect(_mp_service_tick)
 	add_child(_mp_service_timer)
@@ -80375,6 +80414,7 @@ func _mp_service_tick() -> void:
 	if _mp_local_icecream_active and not icecream_cone_held and not _icecream_parked_filling: _mp_send_held_icecream_pose(true)
 	_mp_flush_motion()
 	_mp_apply_motion()
+	_mp_send_history_chunk()
 	_mp_service_bootstrap()
 	var began := Time.get_ticks_usec()
 	# Never drain an accumulated backlog in a single gameplay frame.
@@ -80538,7 +80578,8 @@ func _mp_target_proxy(node: Node3D, position_value: Vector3, rotation_value: Vec
 		var original_scale := node.scale
 		node.global_transform = target
 		node.scale = original_scale
-	var last: Transform3D = previous.get("target", target)
+	var last: Transform3D = node.global_transform
+	last.basis = last.basis.orthonormalized()
 	_mp_proxy_samples[key] = {"node": node, "from": last, "target": target, "time": now, "interval": clampi(now - int(previous.get("time", now - 50)), 25, 150)}
 
 func _mp_update_proxies() -> void:
@@ -80547,6 +80588,9 @@ func _mp_update_proxies() -> void:
 		var row: Dictionary = _mp_proxy_samples[key]
 		var node = row["node"]
 		if not is_instance_valid(node):
+			_mp_proxy_samples.erase(key)
+			continue
+		if bool(node.get_meta("serving",false)):
 			_mp_proxy_samples.erase(key)
 			continue
 		if not node.visible:
@@ -80564,7 +80608,7 @@ func _mp_update_proxies() -> void:
 
 @rpc("authority", "call_remote", "reliable", 0)
 func mp_bootstrap_step(method: String, args: Array) -> void:
-	if method in ["mp_order_history", "mp_sign_motion", "mp_background_person_hail", "mp_drag_claimed", "mp_background_person_start", "mp_bootstrap_meta", "mp_bts_lightstick_state", "mp_cup_melt_state", "mp_cup_park", "mp_cup_steel", "mp_icecream_melt_state", "mp_icecream_steel", "mp_residue_amt", "mp_residue_leave", "mp_relocate_truck", "mp_set_location", "mp_soda_flavor", "mp_soda_slick_state", "mp_spawn_customer", "mp_spawn_cut_collector", "mp_spawn_patty", "mp_state_delta", "mp_sync_station", "mp_toggle_grill", "mp_ttt_state"]:
+	if method in ["mp_machine_damage", "mp_order_history", "mp_sign_motion", "mp_background_person_hail", "mp_drag_claimed", "mp_background_person_start", "mp_bootstrap_meta", "mp_bts_lightstick_state", "mp_cup_melt_state", "mp_cup_park", "mp_cup_steel", "mp_icecream_melt_state", "mp_icecream_steel", "mp_residue_amt", "mp_residue_leave", "mp_relocate_truck", "mp_set_location", "mp_soda_flavor", "mp_soda_slick_state", "mp_spawn_customer", "mp_spawn_cut_collector", "mp_spawn_patty", "mp_state_delta", "mp_sync_station", "mp_toggle_grill", "mp_ttt_state"]:
 		callv(method, args)
 
 func _mp_bootstrap_add(peer_id: int, method: String, args: Array) -> void:
@@ -81000,7 +81044,12 @@ func _mp_closed_shift_state() -> Dictionary:
 	for review in day_social_reviews:
 		reviews.append({"stars":review.get("stars",0.0),"who":review.get("who","Guest"),"text":review.get("text","")})
 	state["reviews"]=reviews
-	state["orders"]=order_history
+	var compact_orders: Array=[]
+	for order in order_history:
+		var row: Dictionary=order.duplicate()
+		row.erase("photo")
+		compact_orders.append(row)
+	state["orders"]=compact_orders
 	state["orders_revision"]=order_history_revision
 	return state
 
@@ -81059,12 +81108,52 @@ func _record_order_history(base: int, tip: int, cost: float, customer: Node3D) -
 	if order_history.size()>100: order_history.pop_front()
 	order_history_revision += 1
 	if is_instance_valid(_order_insights): _order_insights.refresh()
-	if mp_enabled: mp_order_history.rpc(order_history,order_history_revision)
+	if mp_enabled: _mp_queue_order_history()
+
+var _sales_history_sync = preload("res://scripts/sales_history_sync.gd").new()
+func _mp_queue_order_history(peer: int = 0) -> void:
+	if not mp_enabled or not NetManager.is_host(): return
+	_sales_history_sync.queue(order_history,order_history_revision,peer)
+	_mp_ensure_service()
+
+func _mp_send_history_chunk() -> void:
+	if not NetManager.is_host() or _sales_history_sync.pending.is_empty(): return
+	var now:=Time.get_ticks_msec()
+	if now<_sales_history_sync.next_send:return
+	_sales_history_sync.next_send=now+50
+	var job:Dictionary=_sales_history_sync.pending.pop_front()
+	if int(job.peer)>0:
+		if NetManager.connected_peer_ids().has(int(job.peer)):mp_order_history_chunk.rpc_id(int(job.peer),int(job.serial),int(job.part),int(job.count),job.data)
+	else:mp_order_history_chunk.rpc(int(job.serial),int(job.part),int(job.count),job.data)
+
+@rpc("authority","call_remote","reliable",2)
+func mp_order_history_chunk(serial: int, part: int, count: int, data: PackedByteArray) -> void:
+	var packet:Dictionary=_sales_history_sync.accept(serial,part,count,data)
+	if packet.is_empty():return
+	var revision:=int(packet.revision)
+	var by_number:Dictionary={}
+	for row in order_history:by_number[int(row.number)]=row
+	for row in packet.rows:
+		var number:=int(row.number)
+		if revision>=order_history_revision:by_number[number]=row
+		elif by_number.has(number) and not by_number[number].has("photo") and row.has("photo"):
+			by_number[number]["photo"]=row.photo
+	if revision>=order_history_revision:
+		order_history.clear()
+		for number in packet.ids:
+			if by_number.has(int(number)):order_history.append(by_number[int(number)])
+		order_history_revision=revision
+	if is_instance_valid(_order_insights):_order_insights.refresh()
 
 @rpc("authority","call_remote","reliable")
 func mp_order_history(rows: Array, revision: int) -> void:
 	if revision <= order_history_revision: return
+	var photos:Dictionary={}
+	for row in order_history:
+		if row.has("photo"):photos[int(row.number)]=row.photo
 	order_history=rows.duplicate(true)
+	for row in order_history:
+		if not row.has("photo") and photos.has(int(row.number)):row["photo"]=photos[int(row.number)]
 	order_history_revision=revision
 	if is_instance_valid(_order_insights): _order_insights.refresh()
 
@@ -81193,6 +81282,7 @@ func _mp_recover_shared_world() -> void:
 	if is_instance_valid(_hotdog_challenge):
 		var b = _hotdog_challenge
 		boss_data = [b.phase,b.perfect,b.mistakes,b.recipes,b.clip,b.timer,b.impact_serial,b.generation,b.order_left,b.boss_position,b.boss_scale,b.failure_reason,b.spectator_presets,b.spectator_time,b.decorations_hit]
+	mp_machine_damage.rpc(_machine_broken, _machine_use_count)
 	mp_shared_world.rpc(var_to_bytes(boss_data).compress(FileAccess.COMPRESSION_DEFLATE), _machine_broken, _machine_use_count, _boss_suggested_item)
 	_mp_send_cat_sync()
 	_mp_broadcast_grill_mess()
@@ -81214,9 +81304,10 @@ func mp_shared_world(payload: PackedByteArray, broken: Dictionary, uses: Diction
 @rpc("authority", "call_remote", "reliable")
 func mp_machine_damage(broken: Dictionary, uses: Dictionary) -> void:
 	for id in _machine_ids():
+		var changed := bool(_machine_broken.get(id,false)) != bool(broken.get(id,false))
 		_machine_broken[id] = bool(broken.get(id, false))
 		_machine_use_count[id] = int(uses.get(id, 0))
-		_apply_machine_damage(id)
+		if changed or _machine_is_broken(id): _apply_machine_damage(id)
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_request_machine_repair(id: String) -> void:

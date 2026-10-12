@@ -148,7 +148,10 @@ func configure_for_game(game: Node) -> void:
  _game = game
  _update_canopy_depth()
 
+var _remote_door_angles: Dictionary = {}
 func _process(_delta: float) -> void:
+ for door in _remote_door_angles:
+  if _hinges.has(door): _hinges[door].quaternion=_hinges[door].quaternion.slerp(_remote_door_angles[door],1.0-exp(-_delta*12.0))
  if is_instance_valid(_game):
   _indoor_life.tick(_delta,not _game.mp_enabled or NetManager.is_host(),_game.playing and not _game.shift_paused)
   _update_canopy_depth()
@@ -231,6 +234,7 @@ func cancel_building_traffic() -> void:
  _indoor_life.reset()
  _traffic_wait = 10.0
  door_animations.stop()
+ _remote_door_angles.clear()
  for hinge in _hinges.values(): hinge.quaternion = Quaternion.IDENTITY
 
 func tick_building_traffic(delta: float) -> void:
@@ -321,7 +325,7 @@ func apply_traffic_snapshot(data: Dictionary) -> void:
   if bool(data.get("sound_fresh",false)): _play_shop_sounds(str(data.get("sound_door","market")))
  door_animations.stop()
  for door in data.get("angles", {}):
-  if _hinges.has(door): _hinges[door].quaternion = data["angles"][door]
+  if _hinges.has(door): _remote_door_angles[door] = data["angles"][door]
 
 
 func _reflection_uv(world_point: Vector3, camera: Camera3D) -> Vector2:

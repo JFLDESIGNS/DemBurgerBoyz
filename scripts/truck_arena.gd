@@ -122,7 +122,40 @@ func _build_view()->void:
  skid=AudioStreamPlayer.new();skid.bus="SFX";skid.volume_db=-80;add_child(skid)
  var squeal:AudioStreamMP3=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3").duplicate()
  squeal.loop=true;squeal.loop_offset=.1;skid.stream=squeal;skid.play()
+var remote_frames: Array = []
+func apply_state(data: Dictionary) -> void:
+ if hosting or int(data.get("sequence",-1))<=last_sequence:return
+ super.apply_state(data)
+ remote_frames.append({"time":Time.get_ticks_msec(),"state":data.duplicate(true)})
+ while remote_frames.size()>12:remote_frames.pop_front()
+
+func _sample_remote_view(now: int) -> Dictionary:
+ if remote_frames.is_empty():return view
+ var at:=now-100
+ while remote_frames.size()>2 and int(remote_frames[1].time)<=at:remote_frames.pop_front()
+ if remote_frames.size()<2:return remote_frames[0].state.duplicate(true)
+ var first:Dictionary=remote_frames[0]
+ var second:Dictionary=remote_frames[1]
+ var weight:=clampf(float(at-int(first.time))/maxf(1.0,float(int(second.time)-int(first.time))),0.0,1.0)
+ var result:Dictionary=second.state.duplicate(true)
+ if first.state.phase!=second.state.phase:return result
+ for id in result.players:
+  if not first.state.players.has(id):continue
+  var old:Dictionary=first.state.players[id]
+  var current:Dictionary=result.players[id]
+  if old.alive!=current.alive:continue
+  current.position=old.position.lerp(current.position,weight)
+  current.angle=lerp_angle(float(old.angle),float(current.angle),weight)
+  current.travel=lerpf(float(old.travel),float(current.travel),weight)
+ for shot in result.shots:
+  for old in first.state.shots:
+   if old.id==shot.id:
+    shot.position=old.position.lerp(shot.position,weight)
+    break
+ return result
+
 func _render(delta:float,_axis:Vector2)->void:
+ if not hosting:view=_sample_remote_view(Time.get_ticks_msec())
  if view.is_empty():return
  _play_match_sounds()
  dust_time-=delta
@@ -160,7 +193,8 @@ func _render(delta:float,_axis:Vector2)->void:
  for id in projectile_meshes.keys():
   if not seen.has(id):projectile_meshes[id].queue_free();projectile_meshes.erase(id)
  if view.players.has(follow_id):
-  var p:Dictionary=view.players[follow_id];var forward:=Vector3(sin(p.angle),0,cos(p.angle))
+  var p:Dictionary=view.players[follow_id];var heading:float=actors[follow_id].root.rotation.y
+  var forward:=Vector3(sin(heading),0,cos(heading))
   var focus:Vector3=actors[follow_id].root.position+Vector3.UP*.65
   var goal:=focus-forward*3.8+Vector3.UP*1.65
   goal.y=maxf(goal.y,TRUCK_SIM.height_at(Vector2(goal.x,goal.z),goal.y)+.65)
