@@ -28,7 +28,7 @@ func run() -> void:
  game.bg_people_is_pair.append(false)
  assert(street.try_building_departure(0,true))
  assert(street.is_building_walker(walker))
- for i in range(270):
+ for i in range(140):
   street.tick_building_traffic(1.0/60.0)
   street.door_animations.advance(1.0/60.0)
  assert(game.bg_people_active[0] and walker.visible)
@@ -42,7 +42,7 @@ func run() -> void:
  var original_snapshot: Dictionary = street.traffic_snapshot()
  street.apply_traffic_snapshot(original_snapshot)
  for door in street._hinges: assert(street._hinges[door].quaternion.is_equal_approx(original_snapshot.angles[door]))
- for i in range(270): street.tick_building_traffic(1.0/60.0)
+ for i in range(140): street.tick_building_traffic(1.0/60.0)
  assert(not walker.visible and not game.bg_people_active[0])
  assert(walker._wawa_click_area.collision_layer==0)
  assert(not street.is_building_walker(walker))
@@ -73,6 +73,25 @@ func run() -> void:
  street._update_walker_reflections()
  street._update_canopy_walker_shade()
  for i in 5: await process_frame
+ var first_rect: Vector4 = street._walker_reflections.get_shader_parameter("people")[0]
+ walker.rotation.y += PI
+ street._update_walker_reflections()
+ var reversed_rect: Vector4 = street._walker_reflections.get_shader_parameter("people")[0]
+ assert(first_rect.is_equal_approx(reversed_rect),"Silhouette offset must not flip with facing")
+ var market_foot: Vector3 = street._door_foot("market",-.28)
+ street._begin_trip(0,"market",true,market_foot,Vector3(market_foot.x,game._bg_people_y(),game._bg_people_z()))
+ assert(bool(walker.get_meta("market_shopping_bag",false)))
+ street._update_market_bags()
+ var shopping_bag := walker.get_node_or_null("MarketShoppingBag")
+ assert(shopping_bag != null and shopping_bag.visible)
+ var sound_serial: int = street._shop_sound_serial
+ street.apply_traffic_snapshot(street.traffic_snapshot())
+ assert(street._shop_sound_serial == sound_serial,"The same snapshot must not retrigger sound")
+ for i in range(140): street.tick_building_traffic(1.0/60.0)
+ assert(not street.is_building_walker(walker),"A full doorway trip finishes within 2.34 seconds")
+ street.cancel_building_traffic()
+ street._update_market_bags()
+ assert(not shopping_bag.visible)
  print("MILL_BUILDING_TRAFFIC_OK: entry, exit, cancellation, replicated angles, no background shadows")
  await process_frame
  quit()

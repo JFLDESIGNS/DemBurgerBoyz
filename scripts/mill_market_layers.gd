@@ -72,7 +72,7 @@ func _layer(node_name: String, texture_name: String, depth: float) -> MeshInstan
 
 func _animation(keys: Array, opening: bool) -> Animation:
  var animation := Animation.new()
- animation.length = 0.85
+ animation.length = 0.5
  for key: String in keys:
   var track := animation.add_track(Animation.TYPE_VALUE)
   animation.track_set_path(track, NodePath(str(get_path_to(_hinges[key])) + ":quaternion"))
@@ -86,10 +86,10 @@ func _animation(keys: Array, opening: bool) -> Animation:
  return animation
 
 func open_door(door: String = "both") -> void:
- door_animations.play(door + "_open")
+ if door_animations.has_animation(door + "_open"): door_animations.play(door + "_open")
 
 func close_door(door: String = "both") -> void:
- door_animations.play(door + "_close")
+ if door_animations.has_animation(door + "_close"): door_animations.play(door + "_close")
 
 func _painted_materials(node: Node) -> void:
  if node is MeshInstance3D:
@@ -121,6 +121,7 @@ func _process(_delta: float) -> void:
   _update_canopy_depth()
   _update_walker_reflections()
   _update_canopy_walker_shade()
+  _update_market_bags()
 
 func _update_canopy_depth() -> void:
  var camera := get_viewport().get_camera_3d()
@@ -140,7 +141,7 @@ var _trip: Dictionary = {}
 var _traffic_wait := 10.0
 
 func _door_foot(door: String, depth: float = 0.12) -> Vector3:
- var pixel := Vector2(1070, 930) if door == "old_poodle" else Vector2(1452, 929)
+ var pixel: Vector2 = {"old_poodle": Vector2(1070,930), "motel": Vector2(1452,929), "market": Vector2(565,926)}.get(door,Vector2(1070,930))
  return to_global(Vector3((pixel.x - 1024.0) / 100.0, (576.5 - pixel.y) / 100.0, depth))
 
 func is_building_walker(walker: Node) -> bool:
@@ -152,7 +153,7 @@ func try_building_departure(idx: int, force: bool = false) -> bool:
  if not force and (_traffic_wait > 0.0 or randf() > 0.28): return false
  var walker: Node3D = _game.bg_people[idx]
  if bool(walker.get_meta("grisaldi", false)) or bool(walker.get_meta("grisaldi_claimed", false)): return false
- var door := "old_poodle" if randf() < 0.5 else "motel"
+ var door: String = ["old_poodle", "motel", "market"].pick_random()
  var from := _door_foot(door, -0.28)
  var to := Vector3(from.x + float(_game.bg_people_dir[idx]) * 0.8, _game._bg_people_y(), _game._bg_people_z())
  _begin_trip(idx, door, true, from, to)
@@ -166,11 +167,18 @@ func _begin_trip(idx: int, door: String, departing: bool, from: Vector3, to: Vec
  walker.rotation.y = atan2(to.x - from.x, to.z - from.z)
  _trip = {"index": idx, "door": door, "departing": departing, "time": 0.0, "from": from, "to": to, "closed": false}
  open_door(door)
+ walker.set_meta("market_shopping_bag",departing and door == "market")
+ if walker.has_method("play_street_walk"): walker.play_street_walk(1.6)
+ _shop_sound_serial += 1
+ _shop_sound_door = door
+ _play_shop_sounds(door)
 
 func cancel_building_traffic() -> void:
  if is_instance_valid(_game):
   for walker in _game.bg_people:
-   if is_instance_valid(walker): walker.set_meta("building_trip", false)
+   if is_instance_valid(walker):
+    walker.set_meta("building_trip", false)
+    walker.set_meta("market_shopping_bag",false)
  _trip.clear()
  _traffic_wait = 10.0
  door_animations.stop()
@@ -187,7 +195,7 @@ func tick_building_traffic(delta: float) -> void:
   var walker: Node3D = _game.bg_people[idx]
   _trip["time"] = float(_trip["time"]) + delta
   var elapsed := float(_trip["time"])
-  var u := clampf((elapsed - 0.85) / 2.6, 0.0, 1.0)
+  var u := clampf((elapsed - 0.5) / 1.15, 0.0, 1.0)
   walker.global_position = (_trip["from"] as Vector3).lerp(_trip["to"], u)
   if u >= 1.0 and not bool(_trip["closed"]):
    _trip["closed"] = true
@@ -195,10 +203,11 @@ func tick_building_traffic(delta: float) -> void:
    if not bool(_trip["departing"]):
     walker.visible = false
     walker._wawa_click_area.collision_layer = 0
-  if elapsed >= 4.4:
+  if elapsed >= 2.2:
    walker.set_meta("building_trip", false)
    if bool(_trip["departing"]):
     walker._wawa_click_area.collision_layer = _game.CUSTOMER_WAWA_COLLISION_LAYER
+    if walker.has_method("play_street_walk"): walker.play_street_walk(1.0)
     walker.rotation_degrees.y = 90.0 if float(_game.bg_people_dir[idx]) > 0 else -90.0
    else:
     _game.bg_people_active[idx] = false
@@ -213,7 +222,7 @@ func tick_building_traffic(delta: float) -> void:
   var walker: Node3D = _game.bg_people[idx]
   if bool(walker.get_meta("grisaldi", false)) or bool(walker.get_meta("grisaldi_claimed", false)) or str(walker.get_meta("street_hail", "")) != "": continue
   if int(walker.get_meta("food_stop_until", 0)) > Time.get_ticks_msec(): continue
-  for door in ["old_poodle", "motel"]:
+  for door in ["old_poodle", "motel", "market"]:
    var foot := _door_foot(door, -0.28)
    if absf(walker.global_position.x - foot.x) < 0.4:
     _begin_trip(idx, door, false, walker.global_position, foot)
@@ -222,9 +231,13 @@ func tick_building_traffic(delta: float) -> void:
 func traffic_snapshot() -> Dictionary:
  var angles := {}
  for door in _hinges: angles[door] = _hinges[door].quaternion
- return {"angles": angles}
+ return {"angles": angles, "sound_serial": _shop_sound_serial, "sound_door": _shop_sound_door, "sound_fresh": not _trip.is_empty() and float(_trip.get("time",99.0)) < 1.0}
 
 func apply_traffic_snapshot(data: Dictionary) -> void:
+ var serial := int(data.get("sound_serial",0))
+ if serial > _shop_sound_serial:
+  _shop_sound_serial = serial
+  if bool(data.get("sound_fresh",false)): _play_shop_sounds(str(data.get("sound_door","market")))
  door_animations.stop()
  for door in data.get("angles", {}):
   if _hinges.has(door): _hinges[door].quaternion = data["angles"][door]
@@ -247,9 +260,11 @@ func _update_walker_reflections() -> void:
   var walker: Node3D = _game.bg_people[i]
   if not is_instance_valid(walker) or not walker.visible or not bool(_game.bg_people_active[i]): continue
   var height := 1.7 * walker.scale.y
-  var feet := _reflection_uv(walker.global_position,camera)
-  var head := _reflection_uv(walker.global_position+Vector3.UP*height,camera)
-  var side := _reflection_uv(walker.global_position+camera.global_basis.x*height*0.5,camera)
+  # Camera-left is fixed: facing or travel direction never flips the reflection.
+  var reflection_origin := walker.global_position - camera.global_basis.x * height * 0.65
+  var feet := _reflection_uv(reflection_origin,camera)
+  var head := _reflection_uv(reflection_origin+Vector3.UP*height*1.3,camera)
+  var side := _reflection_uv(reflection_origin+camera.global_basis.x*height*0.72,camera)
   people.append(Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*2.0,.001),maxf(feet.y-head.y,.001)))
   gait.append(Time.get_ticks_msec()*0.001*(9.0 if bool(_game.bg_people_is_run[i]) else 5.0)+i)
   if people.size()==8: break
@@ -294,8 +309,65 @@ func _update_canopy_walker_shade() -> void:
   material.set_shader_parameter("shade_amount",amount)
 
 func _exit_tree() -> void:
+ if is_instance_valid(_game):
+  for walker in _game.bg_people:
+   if not is_instance_valid(walker): continue
+   var bag: Node = walker.get_node_or_null("MarketShoppingBag")
+   if bag != null: bag.queue_free()
+   walker.set_meta("market_shopping_bag",false)
  for entry in _canopy_shades.values():
   for mesh in entry["meshes"]:
    if is_instance_valid(mesh) and mesh.material_overlay == entry["material"]:
     mesh.material_overlay = null
  _canopy_shades.clear()
+
+
+var _shop_sound_serial := 0
+var _shop_sound_door := "market"
+
+func _play_shop_sounds(door: String) -> void:
+ for spec in [["res://sounds/street/shop_door_open.wav",-18.0],["res://sounds/street/shop_door_jingle.wav",-21.0]]:
+  var sound := AudioStreamPlayer3D.new()
+  sound.stream = load(spec[0])
+  sound.bus = "SFX"
+  sound.volume_db = spec[1]
+  sound.unit_size = 10.0
+  sound.max_distance = 32.0
+  add_child(sound)
+  sound.global_position = _door_foot(door)
+  sound.finished.connect(sound.queue_free)
+  sound.play()
+
+func _update_market_bags() -> void:
+ for walker in _game.bg_people:
+  if not is_instance_valid(walker): continue
+  var bag := walker.get_node_or_null("MarketShoppingBag") as Node3D
+  var carrying: bool = bool(walker.get_meta("market_shopping_bag",false)) and walker.visible
+  if not carrying:
+   if bag != null: bag.hide()
+   continue
+  if bag == null:
+   var factory = preload("res://scripts/grubbah.gd").new()
+   factory.game = _game
+   bag = factory.fitted("SM_FastFoodBagOpen",0.72)
+   factory.free()
+   bag.name = "MarketShoppingBag"
+   walker.add_child(bag)
+   var logo := Sprite3D.new()
+   logo.texture = preload("res://assets/ui/burger_pals_letter_mask.png")
+   logo.pixel_size = 0.00028
+   var ink := ShaderMaterial.new()
+   ink.shader = preload("res://shaders/bag_red_logo.gdshader")
+   ink.set_shader_parameter("mask_tex",logo.texture)
+   logo.material_override = ink
+   logo.position = Vector3(0,0.23,-0.215)
+   logo.rotation.y = PI
+   bag.add_child(logo)
+  bag.show()
+  var skeleton := walker.find_child("Skeleton3D",true,false) as Skeleton3D
+  var hand := skeleton.find_bone("RightHand") if skeleton != null else -1
+  if hand >= 0:
+   bag.position = walker.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin)) - Vector3(0,0.64,0)
+  else:
+   bag.position = Vector3(0.32,0.42,0.04)
+  bag.rotation.z = sin(Time.get_ticks_msec()*0.004+walker.position.x)*0.035
