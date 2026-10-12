@@ -6,7 +6,7 @@ signal warmup_finished
 
 const TRUCK_SCENE = preload("res://assets/menu_truck/burger_pals_truck.glb")
 const DEPARTURE_SECONDS := 1.60
-const MENU_FRAME_PADDING := Vector2(96.0, 64.0)
+const MENU_FRAME_PADDING := Vector2(160.0, 64.0)
 const MENU_CAMERA_HEIGHT := 8.3
 var loading_mode := false
 var viewport: SubViewport
@@ -418,42 +418,21 @@ func _build_menu_pals() -> void:
 	var group := Node3D.new()
 	group.name = "MenuPals"
 	world.add_child(group)
-	for i in 2:
+	for i in 1:
 		var pal = load("res://scripts/customer.gd").new()
 		pal.name = "OpeningPal%d" % i
 		pal.set_meta("delivery_driver", true)
 		pal.is_street_pedestrian = true
-		pal.setup(["bun_bottom", "patty", "bun_top"] as Array[String], Color("EF9964") if i == 0 else Color("75D5BD"), 9999.0, 0, i, -1, -1, {}, true)
+		pal.setup(["bun_bottom", "patty", "bun_top"] as Array[String], Color("EF9964") if i == 0 else Color("75D5BD"), 9999.0, 0, 1, -1, -1, {}, true)
 		group.add_child(pal)
 		pal.set_process(false)
 		pal.set_physics_process(false)
-		pal.position = Vector3(.7 + i * 1.65, 0, 3.8)
-		pal.scale = Vector3.ONE * 1.12
-		pal.rotation.y = .35 if i == 0 else -.3
+		pal.position = Vector3(3.2, 0, -5.2)
+		pal.scale = Vector3.ONE * 1.32
+		pal.rotation.y = .25 if i == 0 else -.2
 		_menu_pal_idle.call_deferred(pal, i)
 		for label in pal.find_children("*", "Label3D", true, false): label.hide()
 		_menu_actor_shadow(group, pal.position, Vector2(1.1, .8))
-	var cat := preload("res://assets/cat/shipping_cat.glb").instantiate()
-	cat.name = "OpeningCat3D"
-	group.add_child(cat)
-	cat.position = Vector3(-.5, 0, 3.8)
-	cat.scale = Vector3.ONE * 1.15
-	cat.rotation.y = .45
-	preload("res://scripts/cat_appearance.gd").apply_fur(cat)
-	for part_name in ["Delivery_Box_Rig", "Postal_Cap_Rig", "Messenger_Bag_Rig", "Crossbody leather strap", "Flush strap stitching -1", "Flush strap stitching 1"]:
-		var part := cat.find_child(part_name, true, false) as Node3D
-		if part != null: part.hide()
-	for eye_name in ["Cat_Eye_L", "Cat_Eye_R"]:
-		var eye := cat.find_child(eye_name, true, false) as MeshInstance3D
-		if eye != null:
-			var material := ShaderMaterial.new()
-			material.shader = preload("res://shaders/cat_eyes.gdshader")
-			eye.material_override = material
-	var cat_animation := cat.find_child("AnimationPlayer", true, false) as AnimationPlayer
-	if cat_animation != null and cat_animation.has_animation("01_Idle"):
-		cat_animation.get_animation("01_Idle").loop_mode = Animation.LOOP_LINEAR
-		cat_animation.play("01_Idle")
-	_menu_actor_shadow(group, cat.position, Vector2(1.2, .8))
 
 func _menu_actor_shadow(parent: Node3D, at: Vector3, dimensions: Vector2) -> void:
 	var shadow := MeshInstance3D.new()

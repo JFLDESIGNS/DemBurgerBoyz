@@ -30,7 +30,7 @@ func _run() -> void:
 		return
 	for step in 101:
 		menu.sample_departure(step / 100.0)
-		for actor_name in ["OpeningPal0", "OpeningPal1", "OpeningCat3D"]:
+		for actor_name in ["OpeningPal0"]:
 			var actor := menu.world.get_node("MenuPals/" + actor_name) as Node3D
 			var offset := menu.truck.to_local(actor.global_position)
 			if not _check(absf(offset.z) > 2.3 or absf(offset.x) > 5.0, "Truck path overlaps menu actor " + actor_name): return

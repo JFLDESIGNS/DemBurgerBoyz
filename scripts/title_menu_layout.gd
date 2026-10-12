@@ -26,12 +26,26 @@ func setup(game: Node) -> void:
  truck.reparent(stage)
  truck.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
  truck.custom_minimum_size = Vector2.ZERO
- truck.position = Vector2(685,115)
+ truck.position = Vector2(625,115)
  truck.size = Vector2(870,805)
  truck.z_index = 0
  game.tutorial_btn.text = "CAT TUTORIAL"
  _button(game.tutorial_btn,Vector2(85,710),Vector2(283,78),Color("EDB64D"),Color("704323"),24,2)
  _button(creator,Vector2(379,708),Vector2(303,72),Color("B5D6CB"),Color("20575B"),24,3)
+ var cat = preload("res://scripts/title_menu_cat.gd").new()
+ cat.name = "OpeningCat3D"
+ cat.position = Vector2(540,215)
+ cat.size = Vector2(200,250)
+ cat.z_index = 8
+ stage.add_child(cat)
+ cat.setup(game)
+ var foreground_pal = preload("res://scripts/title_menu_pal.gd").new()
+ foreground_pal.name = "ForegroundPal3D"
+ foreground_pal.position = Vector2(-20,710)
+ foreground_pal.size = Vector2(150,230)
+ foreground_pal.z_index = 7
+ stage.add_child(foreground_pal)
+ foreground_pal.setup()
  old.hide()
  resized.connect(_layout)
  _layout()
