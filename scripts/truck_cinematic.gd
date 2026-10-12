@@ -23,6 +23,8 @@ var elapsed := 0.0
 var shot_index := -1
 var camera_cuts := 0
 var departing := false
+var cat_leaving := false
+var menu_cat: Node3D
 var departure_elapsed := 0.0
 var _departure_rect := Rect2()
 var _departure_done := false
@@ -125,6 +127,10 @@ func _ready() -> void:
 		shadow.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		truck.add_child(shadow)
 		_build_menu_pals()
+		menu_cat = preload("res://scripts/title_menu_cat.gd").new()
+		menu_cat.name = "RoofCat"
+		world.add_child(menu_cat)
+		menu_cat.setup(self)
 		if get_parent() is Control:
 			set_anchors_preset(Control.PRESET_TOP_LEFT)
 			get_parent().resized.connect(_fit_menu_width)
@@ -188,6 +194,7 @@ func _sync_visibility() -> void:
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active else SubViewport.UPDATE_DISABLED
 	if active and not loading_mode and not departing:
 		_departure_done = false
+		if is_instance_valid(menu_cat): menu_cat.reset_perch()
 		set_as_top_level(false)
 		z_index = 0
 		z_as_relative = true
@@ -211,9 +218,13 @@ func restart_loading() -> void:
 	sample_loading(0.0)
 
 func play_departure() -> void:
-	if departing:
+	if departing or cat_leaving:
 		await departure_finished
 		return
+	if is_instance_valid(menu_cat) and menu_cat.visible:
+		cat_leaving = true
+		await menu_cat.leave_before_truck()
+		cat_leaving = false
 	var screech := AudioStreamPlayer.new()
 	screech.stream = preload("res://sounds/vehicles/mail_truck_tire_screech.mp3")
 	screech.bus = &"SFX"

@@ -17,7 +17,7 @@ func run():
  assert(g.start_btn.size.y>g.tutorial_btn.size.y)
  assert(not layout.stage.has_node("ForegroundCat"))
  var group=g._menu_truck.world.get_node("MenuPals")
- assert(group.has_node("OpeningPal0") and layout.stage.has_node("ForegroundPal3D") and layout.stage.has_node("OpeningCat3D"))
+ assert(group.has_node("OpeningPal0") and not layout.stage.has_node("ForegroundPal3D") and g._menu_truck.world.has_node("RoofCat"))
  for actor_name in ["OpeningPal0"]:
   var actor=group.get_node(actor_name)
   assert(actor.position.z < -5.0,"Menu actors must remain beside the departure route")
@@ -30,13 +30,10 @@ func run():
   for holder in layout.entries:
    assert(bounds.encloses(holder.get_global_rect()),"Menu buttons must fit at every supported aspect ratio")
 
- var cat=layout.stage.get_node("OpeningCat3D")
- assert(g.start_btn.pressed.is_connected(cat.celebrate))
- cat.celebrate()
+ var cat=g._menu_truck.menu_cat
+ assert(cat.eyes.size()==2 and cat.position.y>4.0)
  cat._process(.15)
- assert(cat.cat.position.y>.3 and cat.eyes.size()==2)
  for material in cat.eyes: assert(material.get_shader_parameter("pupil_gaze") is Vector2)
- cat.hop=0;cat._process(.01)
  g.start_btn.mouse_entered.emit()
  await create_timer(.4).timeout
  assert(is_equal_approx(g.start_btn.position.y,-4))

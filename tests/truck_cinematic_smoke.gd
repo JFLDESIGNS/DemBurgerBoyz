@@ -36,7 +36,11 @@ func _run() -> void:
 			if not _check(absf(offset.z) > 2.3 or absf(offset.x) > 5.0, "Truck path overlaps menu actor " + actor_name): return
 	menu.sample_departure(0.0)
 	menu.set_process(true)
-	await menu.play_departure()
+	menu.play_departure()
+	await create_timer(.3).timeout
+	if not _check(menu.truck.position.is_equal_approx(Vector3.ZERO) and menu.cat_leaving, "Truck must wait for the cat to jump down"):return
+	await menu.departure_finished
+	if not _check(not menu.menu_cat.visible, "Cat must leave before truck departure"):return
 	if not _check(menu.truck.position.distance_to(Vector3(menu.camera.position.x,0,menu.camera.position.z)) < 5.5, "Menu departure did not approach the camera"):
 		return
 	if not _check(menu.wheels[0].rotation.z < -7, "Departure wheel spin runs backwards"):
