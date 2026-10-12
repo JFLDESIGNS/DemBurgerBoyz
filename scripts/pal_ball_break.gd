@@ -143,14 +143,18 @@ func _build_view() -> void:
  var env:=WorldEnvironment.new();env.environment=Environment.new();env.environment.background_mode=Environment.BG_COLOR;env.environment.background_color=Color("162D49");env.environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;env.environment.ambient_light_color=Color("B9D9EB");env.environment.ambient_light_energy=.3;stage.add_child(env)
  var camera:=Camera3D.new();stage.add_child(camera);camera.position=Vector3(0,5.6,13.8);camera.look_at(Vector3(0,-.65,0));camera.projection=Camera3D.PROJECTION_PERSPECTIVE;camera.fov=36.0;camera.current=true
  var sun:=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-55,-35,0);sun.light_energy=.85;sun.shadow_enabled=true;stage.add_child(sun)
- arena=MeshInstance3D.new();var platform:=BoxMesh.new();platform.size=Vector3(SIM.START_RADIUS*2,1.1,SIM.START_RADIUS*2);arena.mesh=platform;arena.material_override=_material(Color("23666E"));arena.position.y=-.55;stage.add_child(arena)
+ arena=MeshInstance3D.new();stage.add_child(arena)
+ var bun:=preload("res://models/burgerpack/try2/SM_BurgerBunUntoastedTop.glb").instantiate() as Node3D
+ arena.add_child(bun);bun.rotation.x=PI
+ var bounds:=AABB();var first:=true
+ for mesh in bun.find_children("*","MeshInstance3D",true,false):
+  var box:AABB=mesh.global_transform*mesh.get_aabb()
+  bounds=box if first else bounds.merge(box);first=false
+ var fit:=SIM.START_RADIUS*2.0/maxf(bounds.size.x,bounds.size.z)
+ bun.scale=Vector3.ONE*fit
+ bun.position=Vector3(-bounds.get_center().x,-bounds.end.y,-bounds.get_center().z)*fit
  rim=MeshInstance3D.new();stage.add_child(rim)
- for i in 4:
-  var edge:=MeshInstance3D.new();var rail:=BoxMesh.new();rail.size=Vector3(SIM.START_RADIUS*2+.12,.12,.14);edge.mesh=rail;edge.material_override=_material(Color("FFCC70"),.2)
-  edge.position=Vector3(0,.02,SIM.START_RADIUS*(1 if i%2==0 else -1)) if i<2 else Vector3(SIM.START_RADIUS*(1 if i%2==0 else -1),.02,0)
-  if i>=2:edge.rotation.y=PI*.5
-  rim.add_child(edge)
- _decorate_arena(stage)
+ var key:=OmniLight3D.new();key.position=Vector3(-4,4,2);key.light_color=Color("FFE1AB");key.light_energy=.7;key.omni_range=14;stage.add_child(key)
  for i in roster.size():
   var entry:Dictionary=roster[i];var color:Color=COLORS[i%4]
   var actor:=Node3D.new();stage.add_child(actor)
@@ -265,17 +269,6 @@ func _think_bots() -> void:
    if other_id!=id:rivals.append(simulation.players[other_id])
   var choice:Dictionary=preload("res://scripts/pal_ball_bot.gd").choose(me,rivals,simulation.arena_radius)
   simulation.input_for(id,choice.direction,choice.burst)
-
-func _decorate_arena(stage: Node3D) -> void:
- # Recessed sides and alternating rim bolts give the floating platform depth.
- var under:=MeshInstance3D.new();var base:=BoxMesh.new();base.size=Vector3(8.4,.55,8.4);under.mesh=base;under.material_override=_material(Color("172E48"));arena.add_child(under);under.position.y=-.75
- for side in 4:
-  for i in 5:
-   var bolt:=MeshInstance3D.new();var bead:=SphereMesh.new();bead.radius=.065;bead.height=.13;bolt.mesh=bead;bolt.material_override=_material(Color("FFF1B5"))
-   var along:=lerpf(-4.3,4.3,i/4.0)
-   bolt.position=Vector3(along,.63,4.5*(1 if side%2==0 else -1)) if side<2 else Vector3(4.5*(1 if side%2==0 else -1),.63,along)
-   arena.add_child(bolt)
- var key:=OmniLight3D.new();key.position=Vector3(-4,4,2);key.light_color=Color("8ECDE0");key.light_energy=.7;key.omni_range=14;stage.add_child(key)
 
 func _play_match_sounds() -> void:
  for event in view.get("events",[]):

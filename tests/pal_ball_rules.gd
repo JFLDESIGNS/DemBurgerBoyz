@@ -44,7 +44,8 @@ func run():
  assert(sim.events.any(func(e):return e.kind=="slam"))
  sim.setup([{"id":1},{"id":2}]);sim.phase="playing"
  sim.players[1].position=Vector2(4,4);sim.step(1.0/60.0)
- assert(sim.players[1].alive,"Square corners remain playable")
+ assert(not sim.players[1].alive,"Outside the round bun falls away")
+ sim.setup([{ "id":1},{"id":2}]);sim.phase="playing"
  sim.players[1].position=Vector2.ZERO;sim.players[1].velocity=Vector2(5,0);sim.players[2].position=Vector2(-4,-4)
  for i in 12:sim.input_for(1,Vector2.LEFT,false);sim.step(1.0/60.0)
  assert(sim.players[1].velocity.x>3,"Reversing requires sustained input")

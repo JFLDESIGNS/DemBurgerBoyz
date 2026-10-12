@@ -103,7 +103,7 @@ func step(dt: float) -> void:
     one.knockback=.65;two.knockback=.65
     if closing<-.5:emit_event("bump",clampf(-closing/8.0,.35,1.0))
  for p in players.values():
-  if p.alive and maxf(absf(p.position.x),absf(p.position.y))>arena_radius+.12:
+  if p.alive and p.position.length()>arena_radius+.12:
    p.alive=false;p.fall=0.0;emit_event("fall",1.0)
  var alive:Array[int]=[]
  for id in players:

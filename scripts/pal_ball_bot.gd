@@ -9,7 +9,7 @@ static func choose(me: Dictionary, rivals: Array, radius: float) -> Dictionary:
   var distance:float=pos.distance_to(other.position)
   if distance<nearest:nearest=distance;opponent=other
  var future:=pos+velocity*(.3+velocity.length()/14.0)
- var margin:=radius-maxf(absf(future.x),absf(future.y))
+ var margin:=radius-future.length()
  if margin<.9:
   var brake:=(-velocity*1.5-pos.normalized()*3.0).limit_length(1.0)
   return {"direction":brake,"burst":false}
@@ -24,6 +24,6 @@ static func choose(me: Dictionary, rivals: Array, radius: float) -> Dictionary:
  var direction:Vector2=(desired-velocity).limit_length(1.0)
  var landing:Vector2=pos+velocity*.35+direction*.45
  var enemy_landing:Vector2=enemy+opponent.velocity*.45
- var safe:=radius-maxf(absf(landing.x),absf(landing.y))>1.0
+ var safe:=radius-landing.length()>1.0
  var burst:bool=float(me.cooldown)<=0 and safe and landing.distance_to(enemy_landing)<1.8 and nearest<2.5
  return {"direction":direction,"burst":burst}

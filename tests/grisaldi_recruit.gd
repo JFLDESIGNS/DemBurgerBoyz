@@ -9,7 +9,7 @@ func run():
  var preset=actor.get_custom_character_preset()
  assert(preset.top_style==16 and preset.hat_style==7 and preset.bottom_style==2)
  g._reveal_grisaldi(actor)
- assert(actor._anim_player.current_animation=="burger/Grisaldi_Cartwheel")
+ assert(actor._anim_player.current_animation=="burger/Burger_Celebration")
  await create_timer(4.6).timeout
  assert(actor.get_meta("street_hail")=="join_exit")
  g._update_background_hail(0,20)

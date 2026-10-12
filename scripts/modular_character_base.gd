@@ -12,7 +12,7 @@ enum MouthStyle { SMILE, FLAT, OPEN }
 enum BrowStyle { NONE, STRAIGHT, ARCHED, ANGRY, WORRIED }
 enum LashStyle { ALMOND, ALMOND_RIM, CLASSIC, NONE }
 enum CheekStyle { NONE, ROSY_RADIAL }
-enum HairStyle { NONE, SIMPLE_PARTED, BUZZED, LONG, BUNS, LOWPOLY_MALE, LOWPOLY_SHORT_1, LOWPOLY_PONYTAIL, LOWPOLY_SHORT_2, CAP_WITH_HAIR, CAPSULE_FEMALE, CAPSULE_MALE, SCULPTED_CINNAMON, SCULPTED_SAFFRON, SCULPTED_MERLOT, SCULPTED_MIDNIGHT, SCULPTED_COPPER, SCULPTED_PEARL }
+enum HairStyle { NONE, SIMPLE_PARTED, BUZZED, LONG, BUNS, LOWPOLY_MALE, LOWPOLY_SHORT_1, LOWPOLY_PONYTAIL, LOWPOLY_SHORT_2, CAP_WITH_HAIR, CAPSULE_FEMALE, CAPSULE_MALE, SCULPTED_CINNAMON, SCULPTED_SAFFRON, SCULPTED_MERLOT, SCULPTED_MIDNIGHT, SCULPTED_COPPER, SCULPTED_PEARL, GRISALDI_LONG }
 enum FacialHairStyle { NONE, FULL_BEARD, MOUSTACHE, SHORT_BEARD, QUATERNIUS_BEARD }
 enum HatStyle { NONE, TURQUOISE_FEDORA, SAILOR_CAP, TOP_HAT, BASEBALL_CAP, WINTER_USHANKA, RASPBERRY_BRIM, PURPLE_FEDORA, FEATHER_FEDORA, GOLDEN_CROWN, BLACK_TOP_HAT }
 enum TopStyle { NONE, MIDNIGHT_LAPEL, SUNSHINE_BOWLING, LAGOON_COLLAR, CLUB_VARSITY, SEAFOAM_RINGER, OCHRE_STRIPE, EMERALD_CARDIGAN, TERRACOTTA_POLO, IVORY_OXFORD, MERLOT_HENLEY, ATHLETIC_TANK, ORCHID_HALTER, STONE_BAND_COLLAR, NAVY_V_NECK, SAGE_MOCKNECK, GRISALDI_CHECK }
@@ -25,7 +25,7 @@ enum GlassesStyle { NONE, SPORT, CLASSIC, CAT_EYE, ROUND, SHUTTER, AVIATOR, PIXE
 const BurgerMotion = preload("res://scripts/burger_animation_library.gd")
 enum PreviewAnimation { WAVE, WALK_IN_PLACE, CELEBRATE }
 
-const HAIR_LABELS: Array[String] = ["None", "Simple parted", "Buzzed", "Long", "Twin buns", "Low-poly swept", "Low-poly short bob", "Low-poly ponytail", "Low-poly cropped", "Cap with hair", "Capsule long", "Capsule spiky", "Sculpted Cinnamon - twin buns", "Sculpted Saffron - swept crop", "Sculpted Merlot - angled bob", "Sculpted Midnight - long waves", "Sculpted Copper - side braid", "Sculpted Pearl - high ponytail"]
+const HAIR_LABELS: Array[String] = ["None", "Simple parted", "Buzzed", "Long", "Twin buns", "Low-poly swept", "Low-poly short bob", "Low-poly ponytail", "Low-poly cropped", "Cap with hair", "Capsule long", "Capsule spiky", "Sculpted Cinnamon - twin buns", "Sculpted Saffron - swept crop", "Sculpted Merlot - angled bob", "Sculpted Midnight - long waves", "Sculpted Copper - side braid", "Sculpted Pearl - high ponytail", "Grisaldi hat-fit long hair"]
 
 const HAIR_SCENES: Array = [
 	null,
@@ -46,6 +46,7 @@ const HAIR_SCENES: Array = [
 	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/midnight_long_waves.glb"),
 	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/copper_side_braid.glb"),
 	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/pearl_high_ponytail.glb"),
+	preload("res://assets/character_animation/grisaldi/Grisaldi_Hair.glb"),
 ]
 const FACIAL_HAIR_SCENES: Array = [
 	null,

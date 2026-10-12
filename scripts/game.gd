@@ -31322,7 +31322,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
-		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":3,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.05,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
+		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":18,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.3,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -81422,6 +81422,7 @@ func _maybe_start_pal_ball_break(manual: bool = false, mode: String = "rolly") -
 	if mp_enabled and (not NetManager.is_online() or not NetManager.is_host()): return false
 	if not manual and (_pal_ball_break_day == day or day_time > _shift_length() * .5): return false
 	if is_instance_valid(_pal_ball_break) or _serve_fly_busy or _boss_pep_pending or _boss_intro_running or _location_relocate_busy or not _challenge_phase.is_empty(): return false
+	if not manual: mode = "rolly" if day % 2 == 1 else "truck_arena"
 	var peers := NetManager.connected_peer_ids()
 	var roster: Array = []
 	for i in peers.size():
@@ -81511,7 +81512,13 @@ func _style_grisaldi(walker: Node3D, special: bool) -> void:
 	var shoes := StandardMaterial3D.new();shoes.albedo_color=Color("E52D35")
 	for mesh in walker.find_children("*","MeshInstance3D",true,false):
 		var label := str(mesh.name).to_lower()
-		if "top" in label or "shirt" in label:mesh.material_override=null
+		if "top" in label or "shirt" in label:
+			mesh.material_override=null
+			for surface in mesh.mesh.get_surface_count():
+				var material=mesh.mesh.surface_get_material(surface)
+				if material!=null and "checks" in material.resource_name.to_lower():
+					var checks:=ShaderMaterial.new();checks.shader=preload("res://shaders/grisaldi_checker.gdshader")
+					mesh.set_surface_override_material(surface,checks)
 		if "bottom" in label:
 			var checks:=ShaderMaterial.new();checks.shader=preload("res://shaders/grisaldi_checker.gdshader")
 			checks.set_shader_parameter("check_red",Color("285239"));checks.set_shader_parameter("check_black",Color("101b16"));mesh.material_override=checks
@@ -81524,18 +81531,14 @@ func _reveal_grisaldi(walker: Node3D) -> void:
 	walker.set_meta("grisaldi_claimed",true)
 	walker.set_meta("grisaldi_rewarded",true)
 	walker.rotation_degrees.y=CustomerScript.FACE_TRUCK_YAW
-	if not walker._anim_player.has_animation("burger/Grisaldi_Cartwheel"):
+	if not walker._anim_player.has_animation("burger/Burger_Celebration"):
 		walker._burger_props=preload("res://scripts/burger_animation_library.gd").attach(walker._anim_player,walker._anim_player.get_parent())
 	walker._anim_player.stop();walker._anim_player.clear_caches()
-	walker._anim_player.play("burger/Grisaldi_Cartwheel",0.0)
+	walker._anim_player.play("burger/Burger_Celebration",0.0)
 	walker._anim_player.speed_scale=1.0
 	if game_audio: game_audio.play_customer_wawa_click(.22,"male",0.0,.7)
 	walker.animate_wawa(1.5,.7)
-	await get_tree().create_timer(2.8).timeout
-	if not is_instance_valid(walker):return
-	walker._anim_player.stop();walker._anim_player.clear_caches()
-	walker._anim_player.play("burger/Burger_Celebration",0.0)
-	await get_tree().create_timer(1.4).timeout
+	await get_tree().create_timer(2.2).timeout
 	if not is_instance_valid(walker):return
 	walker.set_meta("grisaldi_claimed",false)
 	var idx := bg_people.find(walker)

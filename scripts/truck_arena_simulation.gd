@@ -81,8 +81,8 @@ func step(dt:float)->void:
   var old_forward:=Vector3(sin(p.angle),0,cos(p.angle))
   var signed_speed:=velocity.dot(old_forward)
   # Godot's chase camera sees world -X as screen-right when facing +Z.
-  var turn_target:float=-axis.x*(1.2+minf(velocity.length(),10)*.10)*clampf(velocity.length()/2.0,.15,1.0)*(1 if signed_speed>=-.2 else -1)
-  p.turn=move_toward(p.turn,turn_target,8.0*dt)
+  var turn_target:float=-axis.x*(2.0+minf(velocity.length(),10)*.10)*clampf(velocity.length()/1.4,.65,1.0)*(1 if signed_speed>=-.2 else -1)
+  p.turn=move_toward(p.turn,turn_target,12.0*dt)
   p.angle+=p.turn*dt
   var forward:=Vector3(sin(p.angle),0,cos(p.angle))
   var side:=Vector3(forward.z,0,-forward.x)

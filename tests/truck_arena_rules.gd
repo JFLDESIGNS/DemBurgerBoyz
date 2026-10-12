@@ -2,6 +2,10 @@ extends SceneTree
 const SIM=preload("res://scripts/truck_arena_simulation.gd")
 func _initialize():call_deferred("run")
 func run():
+ var turn_sim=SIM.new();turn_sim.setup([{"id":1},{"id":2}]);turn_sim.phase="playing"
+ turn_sim.players[1].position=Vector3.ZERO;turn_sim.players[1].angle=0
+ for tick in 90:turn_sim.input_for(1,Vector2(1,0),false);turn_sim.step(1.0/60)
+ assert(absf(turn_sim.players[1].angle)>1.6,"A stationary truck can turn around without a long run-up")
  var s=SIM.new();s.setup([{"id":1},{"id":2}]);s.phase="playing"
  assert(is_equal_approx(s.height_at(Vector2(15,5)),1.75))
  assert(is_equal_approx(s.height_at(Vector2(15,10)),3.5))

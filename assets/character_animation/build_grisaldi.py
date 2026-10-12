@@ -2,7 +2,7 @@ import bpy, bmesh, math
 from pathlib import Path
 R=Path(r'C:/Users/joe/Desktop/burgergame');O=R/'assets/character_animation/grisaldi';O.mkdir(exist_ok=True)
 bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.import_scene.gltf(filepath=str(R/'assets/shirts/glb/09_Ivory_Oxford.glb'))
+bpy.ops.import_scene.gltf(filepath=str(R/'assets/shirts/glb/05_Seafoam_Ringer.glb'))
 mesh=next(o for o in bpy.context.scene.objects if o.type=='MESH')
 print('SHIRT_DIMENSIONS',list(mesh.dimensions),list(mesh.scale))
 red=bpy.data.materials.new('Grisaldi tomato red checks');red.diffuse_color=(.65,.018,.027,1)
@@ -16,12 +16,10 @@ coords=[v.co for v in bm.verts];width=max(v.x for v in coords)-min(v.x for v in 
 cell=width/9
 for face in bm.faces:
  c=face.calc_center_median();face.material_index=(math.floor(c.x/cell)+math.floor(c.z/cell))%2
-bmesh.ops.delete(bm,geom=[f for f in bm.faces if f.calc_center_median().z>2.44 and abs(f.calc_center_median().x)<.4],context='FACES')
 bm.to_mesh(mesh.data);bm.free()
 # Keep the collar a clean, solid red rather than carrying checks across its folds.
 collar=bpy.data.materials.new('Grisaldi solid collar');collar.diffuse_color=(.55,.015,.024,1);collar.use_nodes=True;collar.node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value=collar.diffuse_color;mesh.data.materials.append(collar)
 for face in mesh.data.polygons:
- if face.center.z>2.48:face.material_index=2
  face.use_smooth=True
 # A short gold link necklace, weighted to Chest with the garment.
 gold=bpy.data.materials.new('Grisaldi gold chain');gold.diffuse_color=(.82,.51,.08,1);gold.use_nodes=True
@@ -68,3 +66,16 @@ mesh.name='Grisaldi_Check_Shirt'
 bpy.ops.wm.save_as_mainfile(filepath=str(O/'Grisaldi_Shirt.blend'))
 bpy.ops.export_scene.gltf(filepath=str(R/'assets/shirts/glb/16_Grisaldi_Check.glb'),export_format='GLB',export_animations=False)
 print('GRISALDI_SHIRT_READY')
+
+# Dedicated hat-compatible long hair: compress the crown into the fedora.
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.import_scene.gltf(filepath=str(R/'assets/characters/modular_runtime/modules/hair/sculpted/midnight_long_waves.glb'))
+for obj in bpy.context.scene.objects:
+ if obj.type!='MESH':continue
+ for v in obj.data.vertices:
+  if v.co.z>.36:
+   t=min(1,(v.co.z-.36)/.32)
+   v.co.x*=1-.36*t;v.co.y*=1-.36*t
+   v.co.z=.36+(v.co.z-.36)*.42
+  elif v.co.z<.0:v.co.z*=.7
+bpy.ops.export_scene.gltf(filepath=str(R/'assets/character_animation/grisaldi/Grisaldi_Hair.glb'),export_format='GLB',export_animations=False)
