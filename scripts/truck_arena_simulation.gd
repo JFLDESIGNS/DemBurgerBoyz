@@ -18,7 +18,7 @@ func setup(roster:Array)->void:
  var spawns:=[Vector3(-6,0,-6),Vector3(6,0,6),Vector3(-6,0,6),Vector3(6,0,-6)]
  for i in roster.size():
   var at:Vector3=spawns[i%4]
-  players[int(roster[i].id)]={"position":at,"angle":atan2(-at.x,-at.z),"speed":0.0,"vertical":0.0,"velocity":Vector3.ZERO,"alive":true,"hp":4,"ammo":0,"cooldown":0.0,"shield":0.0,"input":Vector2.ZERO,"input_age":0.0,"burst":false,"travel":0.0,"stuck":0.0}
+  players[int(roster[i].id)]={"position":at,"angle":atan2(-at.x,-at.z),"speed":0.0,"vertical":0.0,"velocity":Vector3.ZERO,"alive":true,"hp":4,"ammo":0,"cooldown":0.0,"shield":0.0,"input":Vector2.ZERO,"input_age":0.0,"burst":false,"travel":0.0,"stuck":0.0,"slide":0.0,"turn":0.0,"bump_cooldown":0.0}
  for pos in PICKUPS:pickups.append({"position":Vector3(pos.x,height_at(pos)+.8,pos.y),"cooldown":0.0})
  _build_navigation()
 static func height_at(p:Vector2)->float:
@@ -54,17 +54,41 @@ func step(dt:float)->void:
   if not p.alive:continue
   p.input_age+=dt;p.cooldown=maxf(0,p.cooldown-dt);p.shield=maxf(0,p.shield-dt)
   var axis:Vector2=p.input if p.input_age<.35 else Vector2.ZERO
-  p.speed=move_toward(p.speed,axis.y*(10.0 if axis.y>=0 else 4.5),(13.0 if absf(axis.y)>.1 else 6.0)*dt)
-  p.angle+=axis.x*(1.8+minf(absf(p.speed),8)*.07)*dt*(1 if p.speed>=0 else -1)
-  var forward:=Vector3(sin(p.angle),0,cos(p.angle))
   var before:Vector3=p.position
-  var next:Vector3=before+forward*p.speed*dt
+  var velocity:Vector3=p.velocity;velocity.y=0
+  var old_forward:=Vector3(sin(p.angle),0,cos(p.angle))
+  var signed_speed:=velocity.dot(old_forward)
+  # Godot's chase camera sees world -X as screen-right when facing +Z.
+  var turn_target:float=-axis.x*(1.2+minf(velocity.length(),10)*.10)*clampf(velocity.length()/2.0,.15,1.0)*(1 if signed_speed>=-.2 else -1)
+  p.turn=move_toward(p.turn,turn_target,8.0*dt)
+  p.angle+=p.turn*dt
+  var forward:=Vector3(sin(p.angle),0,cos(p.angle))
+  var side:=Vector3(forward.z,0,-forward.x)
+  var grounded:bool=before.y<=height_at(Vector2(before.x,before.z))+.04
+  if grounded:
+   velocity+=forward*axis.y*(17.0 if axis.y>=0 else 11.0)*dt
+   var lateral:=velocity.dot(side)
+   # Low lateral grip during a fast turn keeps the truck drifting.
+   var grip:=2.0 if absf(axis.x)>.15 and velocity.length()>4 else 4.6
+   velocity-=side*lateral*(1-exp(-grip*dt))
+   velocity*=exp(-(.68 if absf(axis.y)>.1 else .95)*dt)
+  velocity=velocity.limit_length(12.0 if signed_speed>=0 else 5.5)
+  p.slide=absf(velocity.dot(side))
+  p.bump_cooldown=maxf(0,p.bump_cooldown-dt)
+  var next:Vector3=before+velocity*dt
+  var collided:=false
+  # Resolve axes separately: glancing impacts slide along walls instead of sticking.
+  if absf(next.x)>LIMIT or height_at(Vector2(next.x,before.z))>before.y+.6:
+   next.x=before.x;velocity.x*=-.55;collided=true
+  if absf(next.z)>LIMIT or height_at(Vector2(next.x,next.z))>before.y+.6:
+   next.z=before.z;velocity.z*=-.55;collided=true
+  if collided and p.bump_cooldown<=0:
+   emit_event("hit",clampf(velocity.length()*.1,.2,.7));p.bump_cooldown=.3
   var ground:=height_at(Vector2(next.x,next.z))
-  if absf(next.x)>LIMIT or absf(next.z)>LIMIT or ground>float(p.position.y)+.6:
-   p.speed*=-.35;next.x=before.x;next.z=before.z;ground=height_at(Vector2(before.x,before.z))
-  p.vertical-=22.0*dt;next.y+=p.vertical*dt
-  if next.y<=ground:next.y=ground;p.vertical=0.0
-  p.position=next;p.velocity=(next-before)/dt;p.travel+=before.distance_to(next)
+  p.vertical-=22.0*dt;next.y=before.y+p.vertical*dt
+  if next.y<=ground or (grounded and ground>=before.y-.04):
+   next.y=ground;p.vertical=maxf(0,(next.y-before.y)/dt)
+  p.position=next;p.velocity=velocity;p.speed=velocity.dot(forward);p.travel+=Vector2(next.x-before.x,next.z-before.z).length()
   for pickup in pickups:
    if pickup.cooldown<=0 and p.ammo<6 and next.distance_to(pickup.position-Vector3.UP*.8)<1.3:
     p.ammo=mini(6,p.ammo+3);pickup.cooldown=7.0;emit_event("pickup",.65)
@@ -81,7 +105,12 @@ func step(dt:float)->void:
    if offset.length()<1.65 and absf(a.position.y-b.position.y)<1.0:
     var n:=offset.normalized() if offset.length()>.01 else Vector3.RIGHT
     var correction:=n*(1.65-offset.length())*.5
-    a.position-=correction;b.position+=correction;a.speed*=.7;b.speed*=.7
+    a.position-=correction;b.position+=correction
+    var closing:float=(a.velocity-b.velocity).dot(n)
+    if closing>0:
+     var impulse:=n*closing*.85
+     a.velocity-=impulse;b.velocity+=impulse
+     if a.bump_cooldown<=0:emit_event("hit",clampf(closing*.08,.2,1));a.bump_cooldown=.25
  for index in range(shots.size()-1,-1,-1):
   var shot:Dictionary=shots[index];var before:Vector3=shot.position;shot.position+=shot.direction*25.0*dt;shot.life-=dt
   var at:Vector3=shot.position
@@ -94,7 +123,7 @@ func step(dt:float)->void:
     if Geometry3D.get_closest_point_to_segment(center,before,at).distance_to(center)<.85:
      dead=true
      if p.shield<=0:
-      p.hp-=1;p.shield=.65;p.speed*=.55;emit_event("hit",1)
+      p.hp-=1;p.shield=.65;p.velocity=p.velocity*.65+shot.direction*2.8;emit_event("hit",1)
       if p.hp<=0:p.alive=false;emit_event("fall",.8)
      break
   if dead:shots.remove_at(index)
@@ -155,4 +184,4 @@ func bot_input(id:int)->void:
   for step_index in range(1,8):
    var p:Vector3=me.position.lerp(enemy.position,step_index/8.0)
    if height_at(Vector2(p.x,p.z))>me.position.y+.7:fire=false
- input_for(id,Vector2(clampf(difference*1.8,-1,1),throttle),fire)
+ input_for(id,Vector2(clampf(-difference*1.8,-1,1),throttle),fire)

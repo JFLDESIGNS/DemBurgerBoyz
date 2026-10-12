@@ -8,6 +8,9 @@ var hud:Label
 var center_text:Label
 var engine:AudioStreamPlayer
 var camera_ready:=false
+var skid:AudioStreamPlayer
+var dust:Array=[]
+var dust_time:=0.0
 func setup(owner_game:Node,match_id:int,entries:Array,draw_view:bool=true)->void:
  simulation=TRUCK_SIM.new()
  super.setup(owner_game,match_id,entries,draw_view)
@@ -77,9 +80,23 @@ func _build_view()->void:
  var data:=PackedByteArray();data.resize(44100)
  for i in 22050:data.encode_s16(i*2,int((sin(TAU*60*i/22050.0)*.5+sin(TAU*120*i/22050.0)*.2)*18000))
  sound.data=data;engine.stream=sound;engine.play()
+ skid=AudioStreamPlayer.new();skid.bus="SFX";skid.volume_db=-80;add_child(skid)
+ var squeal:=AudioStreamWAV.new();squeal.format=AudioStreamWAV.FORMAT_16_BITS;squeal.mix_rate=22050;squeal.loop_mode=AudioStreamWAV.LOOP_FORWARD;squeal.loop_end=22050
+ var squeal_data:=PackedByteArray();squeal_data.resize(44100)
+ var rng:=RandomNumberGenerator.new();rng.seed=97
+ for i in 22050:
+  var t:=i/22050.0
+  var wave:=sin(TAU*640*t+sin(TAU*8*t)*2.5)*.35+rng.randf_range(-.15,.15)
+  squeal_data.encode_s16(i*2,int(wave*16000))
+ squeal.data=squeal_data;skid.stream=squeal;skid.play()
 func _render(delta:float,_axis:Vector2)->void:
  if view.is_empty():return
  _play_match_sounds()
+ dust_time-=delta
+ for item in dust.duplicate():
+  item.life-=delta;item.node.position.y+=delta*.25;item.node.scale+=Vector3.ONE*delta*.45
+  item.node.transparency=clampf(1-item.life/.55,0,1)
+  if item.life<=0:item.node.queue_free();dust.erase(item)
  var follow_id:=NetManager.my_id()
  if not view.players.has(follow_id) or not view.players[follow_id].alive:
   for id in view.players:
@@ -91,7 +108,12 @@ func _render(delta:float,_axis:Vector2)->void:
   actor.root.rotation.y=lerp_angle(actor.root.rotation.y,p.angle,minf(1,delta*16))
   actor.model.visible=p.alive and (p.shield<=0 or int(Time.get_ticks_msec()/80)%2==0)
   actor.tag.text=str(roster.filter(func(e):return int(e.id)==int(id))[0].name)+"  "+str(p.hp)+"/4"
+  actor.model.rotation.x=lerpf(actor.model.rotation.x,-float(p.get("turn",0))*minf(absf(p.speed),10)*.007,minf(1,delta*9))
+  actor.model.position.y=sin(float(p.travel)*5)*minf(absf(p.speed)*.0018,.025)
+  if p.alive and p.get("slide",0)>1.0 and dust_time<=0:
+   var puff:=MeshInstance3D.new();var sphere:=SphereMesh.new();sphere.radius=.16;sphere.height=.22;sphere.radial_segments=8;sphere.rings=4;puff.mesh=sphere;puff.material_override=_material(Color("E6DEBB"));stage.add_child(puff);puff.position=p.position+Vector3.UP*.14;dust.append({"node":puff,"life":.55})
   for wheel in actor.wheels:wheel.rotation.z=-float(p.travel)/.18
+ if dust_time<=0:dust_time=.065
  for i in pickup_meshes.size():
   pickup_meshes[i].visible=view.pickups[i].cooldown<=0;pickup_meshes[i].rotation.y+=delta*1.5;pickup_meshes[i].position.y=view.pickups[i].position.y+sin(Time.get_ticks_msec()*.003+i)*.12
  var seen:Dictionary={}
@@ -110,6 +132,9 @@ func _render(delta:float,_axis:Vector2)->void:
   chase.position=chase.position.lerp(goal,1-exp(-delta*6)) if camera_ready else goal
   chase.look_at(focus+forward*2.2);camera_ready=true
   engine.pitch_scale=.7+absf(p.speed)*.08;engine.volume_db=-30+absf(p.speed)*.6
+  var slip:float=p.get("slide",0)
+  skid.volume_db=lerpf(skid.volume_db,-28+minf(slip,4) if slip>.8 and view.phase=="playing" else -80,minf(1,delta*10))
+  skid.pitch_scale=.85+minf(slip,4)*.08
  var mine:Dictionary=view.players.get(NetManager.my_id(),{})
  hud.text="TRUCK ARENA
 "+("ARMOR  "+str(mine.get("hp",0))+" / 4     PATTIES  "+str(mine.get("ammo",0))+" / 6" if mine.get("alive",false) else "SPECTATING")
