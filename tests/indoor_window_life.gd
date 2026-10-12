@@ -9,6 +9,13 @@ func run() -> void:
  assert(not life.windows.Records_Upper_Left.mesh.visible)
  life.events[0].age=2.0;life.render_events()
  assert(life.windows.Records_Upper_Left.mesh.visible)
+ var material=life.windows.Records_Upper_Left.material
+ var near_scale=float(material.get_shader_parameter("depth_scale"))
+ life.events[0].age=5.0;life.render_events()
+ assert(float(material.get_shader_parameter("depth_scale"))<near_scale*.85)
+ assert(absf(float(material.get_shader_parameter("drift")))>.15,"Even stationary visitors walk away")
+ assert(float(material.get_shader_parameter("opacity"))>.25,"Departure starts moving before fading out")
+ life.events[0].age=2.0;life.render_events()
  life.cue_door("motel",1.0)
  assert(life.windows.Motel_Door.mesh.visible)
  var snapshot: Dictionary=street.traffic_snapshot()

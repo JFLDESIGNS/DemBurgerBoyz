@@ -36,7 +36,9 @@ func _render_door_cue(key: String,amount: float) -> void:
  var entry: Dictionary=windows[key]
  entry.mesh.visible=amount>.001
  entry.material.set_shader_parameter("cat",false)
- entry.material.set_shader_parameter("drift",0.0)
+ entry.material.set_shader_parameter("drift",(1.0-amount)*.20)
+ entry.material.set_shader_parameter("depth_scale",lerpf(.62,1.0,amount))
+ entry.material.set_shader_parameter("depth_lift",(1.0-amount)*.14)
  entry.material.set_shader_parameter("opacity",amount*.52)
 func tick(delta: float,authority: bool,active: bool) -> void:
  if not active: return
@@ -67,13 +69,21 @@ func render_events() -> void:
  for event in events:
   if not windows.has(event.key): continue
   var entry: Dictionary=windows[event.key]
-  var fade:=smoothstep(0.0,1.2,float(event.age))*(1.0-smoothstep(float(event.duration)-1.4,float(event.duration),float(event.age)))
+  var age:=float(event.age)
+  var duration:=float(event.duration)
+  var retreat:=smoothstep(duration-2.6,duration,age)
+  var approach:=smoothstep(0.0,1.2,age)
+  # Walk diagonally back into the room before fading into its depth.
+  var fade:=approach*(1.0-smoothstep(.65,1.0,retreat))
+  entry.material.set_shader_parameter("depth_scale",lerpf(.82,1.0,approach)*lerpf(1.0,.46,retreat))
+  entry.material.set_shader_parameter("depth_lift",retreat*.18)
+
   entry.mesh.visible=fade>.001
   entry.material.set_shader_parameter("opacity",fade*.52)
   entry.material.set_shader_parameter("cat",bool(event.cat))
   entry.material.set_shader_parameter("variant",float(event.get("variant",0)))
   entry.material.set_shader_parameter("phase",float(event.age)*2.0)
-  entry.material.set_shader_parameter("drift",sin(float(event.age)/float(event.duration)*PI*2.0)*.18*float(event.direction) if event.move else 0.0)
+  entry.material.set_shader_parameter("drift",(sin(age/duration*PI*2.0)*.18 if event.move else sin(age*1.4)*.025)*(1.0-retreat)+retreat*.38*float(event.direction))
  for key in door_cues:
   if float(door_cues[key])>.001: _render_door_cue(key,float(door_cues[key]))
 func reset() -> void:
