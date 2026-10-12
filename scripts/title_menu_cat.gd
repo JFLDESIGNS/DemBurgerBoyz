@@ -67,7 +67,7 @@ func _process(delta: float) -> void:
 	cat.scale = Vector3(1.0 + sin(idle_time * 2.0) * .012, 1.0 - sin(idle_time * 2.0) * .012, 1.0) * 2.2
 	var screen: Vector2 = cinematic.camera.unproject_position(global_position + Vector3(0, .9, 0))
 	var target: Vector2 = cinematic.get_local_mouse_position() - screen
-	var gaze := Vector2(target.x, -target.y).limit_length(200.0) * .0005
+	var gaze := Vector2(target.x, target.y).limit_length(200.0) * .0005
 	for material in eyes:
 		var current: Vector2 = material.get_shader_parameter("pupil_gaze")
 		material.set_shader_parameter("pupil_gaze", current.lerp(gaze, 1.0 - exp(-12.0 * delta)))
