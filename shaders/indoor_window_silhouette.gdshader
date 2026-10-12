@@ -16,7 +16,10 @@ void fragment(){
  float inside=step(0.0,p.x)*step(p.x,1.0)*step(0.0,p.y)*step(p.y,1.0);
  vec2 cell=vec2(variant,cat ? 1.0 : 0.0);
  vec2 atlas_uv=(clamp(p,vec2(.005),vec2(.995))+cell)*.5;
- float shape=1.0-smoothstep(.2,.85,texture(silhouette_atlas,atlas_uv).r);
+ vec2 blur=vec2(.004);
+ float ink=texture(silhouette_atlas,atlas_uv).r*.4;
+ ink+=(texture(silhouette_atlas,atlas_uv+vec2(blur.x,0)).r+texture(silhouette_atlas,atlas_uv-vec2(blur.x,0)).r+texture(silhouette_atlas,atlas_uv+vec2(0,blur.y)).r+texture(silhouette_atlas,atlas_uv-vec2(0,blur.y)).r)*.15;
+ float shape=1.0-ink;
  ALBEDO=vec3(.024,.049,.072);
  ALPHA=texture(window_mask,UV).r*shape*inside*opacity;
 }

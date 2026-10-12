@@ -6,6 +6,7 @@ var door_animations: AnimationPlayer
 var _hinges: Dictionary = {}
 var _axes: Dictionary = {}
 var _game: Node = null
+var _door_reflections: Array[ShaderMaterial]=[]
 var _walker_reflections: ShaderMaterial
 var _canopy_shades: Dictionary = {}
 var _indoor_life: Node3D
@@ -45,6 +46,29 @@ func _ready() -> void:
   _hinges[key] = hinge
   var a: Array = spec["axis_gltf"]
   _axes[key] = Vector3(a[0], a[1], a[2]).normalized() * float(spec["direction"])
+ # Glass effects must sit on the door leaf and rotate with its hinge.
+ for spec: Dictionary in data.windows:
+  if not bool(spec.door_glass): continue
+  var key := "motel" if str(spec.name)=="Motel_Door" else "old_poodle"
+  var indoor: MeshInstance3D=_indoor_life.windows[str(spec.name)].mesh
+  indoor.position.z=.052
+  indoor.reparent(_hinges[key],true)
+  var reflection:=MeshInstance3D.new()
+  reflection.name="DoorGlassReflection_"+key
+  reflection.mesh=indoor.mesh
+  reflection.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+  add_child(reflection)
+  reflection.global_transform=indoor.global_transform
+  reflection.position.z=.050
+  var mat:=ShaderMaterial.new()
+  mat.shader=preload("res://shaders/mill_walker_reflections.gdshader")
+  mat.set_shader_parameter("glass_texture",load(ASSETS+str(spec.mask)))
+  mat.set_shader_parameter("reflection_only",true)
+  var rect: Array=spec.pixel_rect
+  mat.set_shader_parameter("glass_region",Vector4(float(rect[0])/4778.0,float(rect[1])/2689.0,float(rect[2])/4778.0,float(rect[3])/2689.0))
+  reflection.material_override=mat
+  reflection.reparent(_hinges[key],true)
+  _door_reflections.append(mat)
  door_animations = AnimationPlayer.new()
  door_animations.name = "DoorAnimations"
  add_child(door_animations)
@@ -336,6 +360,10 @@ func _update_walker_reflections() -> void:
    var side := _reflection_uv(origin + camera.global_basis.x * size.x * 0.56,camera)
    cat_rect = Vector4(feet.x,feet.y,maxf(absf(side.x-feet.x)*1.26,.001),maxf(feet.y-head.y,.001))
  _walker_reflections.set_shader_parameter("cat_blob",cat_rect)
+ for mat in _door_reflections:
+  mat.set_shader_parameter("people",people)
+  mat.set_shader_parameter("person_count",count)
+  mat.set_shader_parameter("cat_blob",cat_rect)
 
 
 

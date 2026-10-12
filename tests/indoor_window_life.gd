@@ -14,6 +14,12 @@ func run() -> void:
  var snapshot: Dictionary=street.traffic_snapshot()
  life.events=[];street.apply_traffic_snapshot(snapshot)
  assert(life.events.size()==2)
+ life.events.append({"key":"Motel_Door","age":2.0,"duration":6.0,"cat":false,"move":false,"direction":1.0})
+ life.render_events()
+ assert(life.windows.Motel_Door.mesh.visible)
+ assert(life.windows.Motel_Door.mesh.get_parent()==street._hinges.motel,"Silhouette must follow the moving door")
+ assert(street._door_reflections.size()==2)
+ assert(street._door_reflections[1].get_shader_parameter("reflection_only"))
  var camera:=Camera3D.new();world.add_child(camera)
  camera.position=Vector3(0,-1.1,18);camera.projection=Camera3D.PROJECTION_ORTHOGONAL;camera.size=13.3;camera.current=true
  await process_frame;await process_frame

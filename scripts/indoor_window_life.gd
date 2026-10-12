@@ -4,6 +4,7 @@ var windows: Dictionary={}
 var events: Array=[]
 var wait_left:=1.5
 var game: Node
+var door_cues: Dictionary={}
 var recent_cat_windows: Array[String]=[]
 func setup(data: Dictionary) -> void:
  for spec in data.windows:
@@ -28,11 +29,15 @@ func setup(data: Dictionary) -> void:
 func cue_door(door: String,amount: float) -> void:
  var key: String={"motel":"Motel_Door","old_poodle":"Poodle_Door_Glass"}.get(door,"")
  if not windows.has(key): return
+ door_cues[key]=amount
+ render_events()
+
+func _render_door_cue(key: String,amount: float) -> void:
  var entry: Dictionary=windows[key]
  entry.mesh.visible=amount>.001
  entry.material.set_shader_parameter("cat",false)
  entry.material.set_shader_parameter("drift",0.0)
- entry.material.set_shader_parameter("opacity",amount*.72)
+ entry.material.set_shader_parameter("opacity",amount*.62)
 func tick(delta: float,authority: bool,active: bool) -> void:
  if not active: return
  for event in events:
@@ -44,7 +49,7 @@ func tick(delta: float,authority: bool,active: bool) -> void:
    var is_cat := randf()<.55
    var choices: Array=[]
    for key in windows:
-    if not windows[key].door and key != "Motel_Transom" and not events.any(func(e):return e.key==key): choices.append(key)
+    if float(door_cues.get(key,0.0))<=.001 and key != "Motel_Transom" and not events.any(func(e):return e.key==key): choices.append(key)
    if is_cat:
     var fresh := choices.filter(func(key):return not recent_cat_windows.has(str(key)))
     if not fresh.is_empty(): choices=fresh
@@ -58,18 +63,21 @@ func tick(delta: float,authority: bool,active: bool) -> void:
  render_events()
 func render_events() -> void:
  for key in windows:
-  if not windows[key].door: windows[key].mesh.visible=false
+  windows[key].mesh.visible=false
  for event in events:
   if not windows.has(event.key): continue
   var entry: Dictionary=windows[event.key]
   var fade:=smoothstep(0.0,1.2,float(event.age))*(1.0-smoothstep(float(event.duration)-1.4,float(event.duration),float(event.age)))
   entry.mesh.visible=fade>.001
-  entry.material.set_shader_parameter("opacity",fade*.76)
+  entry.material.set_shader_parameter("opacity",fade*.62)
   entry.material.set_shader_parameter("cat",bool(event.cat))
   entry.material.set_shader_parameter("variant",float(event.get("variant",0)))
   entry.material.set_shader_parameter("phase",float(event.age)*2.0)
   entry.material.set_shader_parameter("drift",sin(float(event.age)/float(event.duration)*PI*2.0)*.18*float(event.direction) if event.move else 0.0)
+ for key in door_cues:
+  if float(door_cues[key])>.001: _render_door_cue(key,float(door_cues[key]))
 func reset() -> void:
+ door_cues.clear()
  events.clear()
  recent_cat_windows.clear()
  for entry in windows.values(): entry.mesh.visible=false
