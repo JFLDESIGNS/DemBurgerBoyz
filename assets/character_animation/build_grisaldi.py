@@ -78,4 +78,4 @@ for obj in bpy.context.scene.objects:
    v.co.x*=1-.36*t;v.co.y*=1-.36*t
    v.co.z=.36+(v.co.z-.36)*.42
   elif v.co.z<.0:v.co.z*=.7
-bpy.ops.export_scene.gltf(filepath=str(R/'assets/character_animation/grisaldi/Grisaldi_Hair.glb'),export_format='GLB',export_animations=False)
+bpy.ops.export_scene.gltf(filepath=str(R/'assets/characters/modular_runtime/modules/hair/sculpted/grisaldi_hat_fit.glb'),export_format='GLB',export_animations=False)

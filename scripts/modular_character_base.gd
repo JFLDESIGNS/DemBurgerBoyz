@@ -46,7 +46,7 @@ const HAIR_SCENES: Array = [
 	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/midnight_long_waves.glb"),
 	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/copper_side_braid.glb"),
 	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/pearl_high_ponytail.glb"),
-	preload("res://assets/character_animation/grisaldi/Grisaldi_Hair.glb"),
+	preload("res://assets/characters/modular_runtime/modules/hair/sculpted/grisaldi_hat_fit.glb"),
 ]
 const FACIAL_HAIR_SCENES: Array = [
 	null,

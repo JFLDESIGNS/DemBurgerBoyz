@@ -32714,7 +32714,7 @@ func _sync_roomba_home_hidden_ui() -> void:
 func _apply_outdoor_tree_xforms() -> void:
 	if tree_front_node != null and is_instance_valid(tree_front_node):
 		if not bool(tree_front_node.get_meta("tree_shaking", false)):
-			tree_front_node.position = tree_front_pos + _prop_offset("big_tree") + Vector3(-0.3048,0,0)
+			tree_front_node.position = tree_front_pos + _prop_offset("big_tree") + Vector3(-0.54864,0,0)
 			tree_front_node.rotation_degrees = Vector3(0.0, tree_front_yaw, 0.0)
 			tree_front_node.set_meta("tree_base_rot", Vector3(0.0, tree_front_yaw, 0.0))
 	if tree_birch_node != null and is_instance_valid(tree_birch_node):
@@ -34560,39 +34560,10 @@ func _add_wall_paper_decal(
 
 
 func _build_menu_board_decal() -> void:
-	## Full menu poster on the left front wall beside the window (camera-visible).
-	if menu_board_decal != null and is_instance_valid(menu_board_decal):
+	# Removed from the right wall: the widened serving window overlaps this poster.
+	if is_instance_valid(menu_board_decal):
 		menu_board_decal.queue_free()
-		menu_board_decal = null
-	const TEX_PATH := "res://assets/decal/menu_board.png"
-	if not ResourceLoader.exists(TEX_PATH):
-		push_warning("Menu board texture missing: %s" % TEX_PATH)
-		return
-	var tex := load(TEX_PATH) as Texture2D
-	if tex == null:
-		push_warning("Menu board texture failed to load")
-		return
-	var board := MeshInstance3D.new()
-	board.name = "MenuBoardDecal"
-	var quad := QuadMesh.new()
-	quad.size = MENU_BOARD_BASE_SIZE
-	board.mesh = quad
-	board.position = Vector3(MENU_BOARD_DEFAULT_X, MENU_BOARD_DEFAULT_Y, MENU_BOARD_DEFAULT_Z)
-	## Face the cook from the front wall.
-	board.rotation_degrees = Vector3(0.0, MENU_BOARD_DEFAULT_YAW, 0.0)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_texture = tex
-	mat.albedo_color = DECAL_ALBEDO
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = false
-	mat.render_priority = 8
-	board.material_override = mat
-	board.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	world.add_child(board)
-	menu_board_decal = board
+	menu_board_decal = null
 
 
 func _instantiate_kitchen_machine(path: String) -> Node3D:
