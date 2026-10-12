@@ -41,10 +41,26 @@ data=bpy.data.meshes.new('Clean pointed collar');data.from_pydata(verts,[],faces
 obj=bpy.data.objects.new('Grisaldi collar',data);bpy.context.collection.objects.link(obj)
 obj.vertex_groups.new(name='Chest').add(list(range(len(verts))),1,'REPLACE')
 parts.append(obj)
-for i in range(15):
- angle=math.pi*i/14
- bpy.ops.mesh.primitive_torus_add(major_segments=10,minor_segments=5,major_radius=.039,minor_radius=.013,location=(.27*math.cos(angle),-.37-.055*math.sin(angle),2.42-.23*math.sin(angle)),rotation=(math.pi/2,0,0 if i%2==0 else .7))
- link=bpy.context.object;link.data.materials.append(gold);link.vertex_groups.new(name='Chest').add(list(range(len(link.data.vertices))),1,'REPLACE');parts.append(link)
+# A closed, chunky necklace with 24 sections and four faces per section.
+from mathutils import Vector
+points=[]
+for i in range(24):
+ angle=math.tau*i/24
+ front=max(0,-math.sin(angle))
+ points.append(Vector((.33*math.cos(angle),.29*math.sin(angle)-.16*front,2.48-.28*front)))
+verts=[];faces=[]
+for i,point in enumerate(points):
+ tangent=(points[(i+1)%24]-points[(i-1)%24]).normalized()
+ side=tangent.cross(Vector((0,0,1))).normalized()
+ up=tangent.cross(side).normalized()
+ for j in range(4):
+  angle=math.tau*j/4
+  verts.append(point+.032*(math.cos(angle)*side+math.sin(angle)*up))
+for i in range(24):
+ for j in range(4):faces.append((i*4+j,((i+1)%24)*4+j,((i+1)%24)*4+(j+1)%4,i*4+(j+1)%4))
+data=bpy.data.meshes.new('Closed low poly necklace');data.from_pydata(verts,[],faces);data.materials.append(gold)
+obj=bpy.data.objects.new('Grisaldi gold necklace',data);bpy.context.collection.objects.link(obj)
+obj.vertex_groups.new(name='Chest').add(list(range(len(verts))),1,'REPLACE');parts.append(obj)
 bpy.ops.object.select_all(action='DESELECT')
 for part in parts:part.select_set(True)
 bpy.context.view_layer.objects.active=mesh;bpy.ops.object.join()

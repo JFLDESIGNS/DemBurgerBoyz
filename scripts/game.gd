@@ -3570,6 +3570,7 @@ var _gameplay_load_complete: bool = false
 var _gameplay_load_in_progress: bool = false
 var _gameplay_load_overlay: Control = null
 var _gameplay_resource_cache: Dictionary = {}
+var _menu_chunk_pending: bool = false
 
 ## Food-truck city parking (map UI now; customer/bg swap wired later).
 const LOCATION_CFG_PATH := "user://truck_location.cfg"
@@ -3674,6 +3675,7 @@ func _ready() -> void:
 	flash_label.hide()
 	await _loading_video.prewarm()
 	menu_ready = true
+	call_deferred("_preload_small_menu_chunks")
 
 
 func _initialize_kitchen() -> void:
@@ -3932,6 +3934,7 @@ func _gameplay_preload_paths() -> Array[String]:
 
 
 func _preload_gameplay_resources() -> void:
+	while _menu_chunk_pending:await get_tree().process_frame
 	## Overlap a bounded number of requests; integrate ready resources between frames.
 	var paths := _gameplay_preload_paths()
 	var pending: Array[String] = []
@@ -8451,15 +8454,15 @@ func _build_3d_world() -> void:
 
 	# Front wall around window
 	const SERVICE_WINDOW_OPENING_RAISE := 0.3048 # One foot higher top opening, in meters.
-	_add_box(world, Vector3(0.9, 2.7, 0.2), Vector3(-3.075, 1.35, 1.35), Color("080808"))
-	_add_box(world, Vector3(0.9, 2.7, 0.2), Vector3(3.075, 1.35, 1.35), Color("080808"))
-	_add_box(world, Vector3(5.3, 0.55 - SERVICE_WINDOW_OPENING_RAISE, 0.2), Vector3(0, 2.45 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.35), Color("080808"))
-	_add_box(world, Vector3(5.3, 0.7, 0.2), Vector3(0, 0.55, 1.35), Color("0A0A0A"))
-	_add_box(world, Vector3(5.4, 0.12, 0.18), Vector3(0, 2.12 + SERVICE_WINDOW_OPENING_RAISE, 1.38), Color("121212"))
-	_add_box(world, Vector3(5.4, 0.12, 0.18), Vector3(0, 0.95, 1.38), Color("121212"))
-	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(-2.65, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
-	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.65, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
-	_add_box(world, Vector3(5.3, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
+	_add_box(world, Vector3(0.75, 2.7, 0.2), Vector3(-3.15, 1.35, 1.35), Color("080808"))
+	_add_box(world, Vector3(0.75, 2.7, 0.2), Vector3(3.15, 1.35, 1.35), Color("080808"))
+	_add_box(world, Vector3(5.6, 0.55 - SERVICE_WINDOW_OPENING_RAISE, 0.2), Vector3(0, 2.45 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.35), Color("080808"))
+	_add_box(world, Vector3(5.6, 0.7, 0.2), Vector3(0, 0.55, 1.35), Color("0A0A0A"))
+	_add_box(world, Vector3(5.7, 0.12, 0.18), Vector3(0, 2.12 + SERVICE_WINDOW_OPENING_RAISE, 1.38), Color("121212"))
+	_add_box(world, Vector3(5.7, 0.12, 0.18), Vector3(0, 0.95, 1.38), Color("121212"))
+	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(-2.8, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
+	_add_box(world, Vector3(0.12, 1.3 + SERVICE_WINDOW_OPENING_RAISE, 0.18), Vector3(2.8, 1.55 + SERVICE_WINDOW_OPENING_RAISE * 0.5, 1.38), Color("121212"))
+	_add_box(world, Vector3(5.6, 0.18, 0.65), Vector3(0, 0.88, 1.1), Color("1C1C1C"))
 
 	## Full counter — the physical can now sits with the ingredient strip.
 	_add_box(world, Vector3(4.65, 0.95, 1.35), Vector3(0.0, 0.48, 0.08), Color("080808"))
@@ -28736,7 +28739,7 @@ func _add_window_sill_glass() -> void:
 		sill_glass_mesh.queue_free()
 	sill_glass_mesh = null
 	sill_glass_mat = null
-	const FRAME_X := 2.65
+	const FRAME_X := 2.8
 	const FRAME_HALF_W := 0.06
 	var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08
 	var h := sill_glass_height_in * INCH_TO_M
@@ -28769,7 +28772,7 @@ func _apply_window_sill_glass_settings() -> void:
 	if sill_glass_mesh != null and is_instance_valid(sill_glass_mesh):
 		var h := sill_glass_height_in * INCH_TO_M
 		var thick := maxf(0.004, sill_glass_thick_in * INCH_TO_M)
-		const FRAME_X := 2.65
+		const FRAME_X := 2.8
 		const FRAME_HALF_W := 0.06
 		var opening_w := (FRAME_X - FRAME_HALF_W) * 2.0 - 0.08
 		var box := sill_glass_mesh.mesh as BoxMesh
@@ -31319,7 +31322,7 @@ func _start_background_person(idx: int, as_partner: bool = false) -> void:
 	walker.set_meta("crowd_home_z", _bg_people_z() + (BG_PEOPLE_PAIR_Z if as_partner else 0.0))
 	var preset: Dictionary = CustomerScript.take_next_saved_character_preset()
 	if not preset.is_empty() and not as_partner and not _grisaldi_visits.has("%s:%d" % [current_location_id,day]):
-		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":3,"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
+		preset.merge({"grisaldi":true,"top_color":"ffffffff","shoe_color":"e52d35ff","top_style":16,"top_catalog_version":1,"bottom_style":2,"bottom_catalog_version":1,"bottom_color":"244b32ff","hat_style":7,"hat_color":"ed2736ff","hair_style":3,"hair_scale":1.3,"hair_scale_xyz":[1,1,1],"hair_offset":[0,.05,0],"extra_hairs":[],"hair_color":"37291fff","facial_hair_style":2,"facial_hair_color":"37291fff","customer_voice":"male","glasses_style":0,"jewelry_style":0,"makeup_style":0,"shirt_graphic":0,"shoe_style":3,"hat_scale":1.0,"hat_offset":[0,0,0],"hat_rotation":[0,0,0]},true)
 	if preset.is_empty():
 		bg_people_wait[idx] = 4.0
 		return
@@ -32711,7 +32714,7 @@ func _sync_roomba_home_hidden_ui() -> void:
 func _apply_outdoor_tree_xforms() -> void:
 	if tree_front_node != null and is_instance_valid(tree_front_node):
 		if not bool(tree_front_node.get_meta("tree_shaking", false)):
-			tree_front_node.position = tree_front_pos + _prop_offset("big_tree")
+			tree_front_node.position = tree_front_pos + _prop_offset("big_tree") + Vector3(-0.3048,0,0)
 			tree_front_node.rotation_degrees = Vector3(0.0, tree_front_yaw, 0.0)
 			tree_front_node.set_meta("tree_base_rot", Vector3(0.0, tree_front_yaw, 0.0))
 	if tree_birch_node != null and is_instance_valid(tree_birch_node):
@@ -51031,7 +51034,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 	skin.bg_color=Color("FFF0C8");skin.border_color=Color("D9B76F")
 	skin.shadow_color=Color(0.18,.10,.04,.25);skin.shadow_size=5
 	skin.set_border_width_all(2);skin.set_corner_radius_all(9)
-	skin.content_margin_left=18;skin.content_margin_right=18;skin.content_margin_top=10;skin.content_margin_bottom=10
+	skin.content_margin_left=14;skin.content_margin_right=10;skin.content_margin_top=10;skin.content_margin_bottom=10
 	_review_toast.add_theme_stylebox_override("panel",skin)
 	var tail_edge := Polygon2D.new()
 	tail_edge.color = skin.border_color
@@ -51079,7 +51082,7 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 		if part == "stars" and stars >= 4.95 and is_instance_valid(customer) and bool(customer.get_meta("five_star_dance",false)) and not bool(customer.get_meta("review_star_flight",false)):
 			customer.set_meta("review_star_flight",true)
 			preload("res://scripts/review_star_flight.gd").launch.call_deferred(self,label)
-	var copy:=Label.new();copy.custom_minimum_size=Vector2(204,57);copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	var copy:=Label.new();copy.custom_minimum_size=Vector2(216,57);copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 	copy.max_lines_visible=3;copy.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
 	copy.text=review_text
 	copy.add_theme_font_override("font",preload("res://assets/fonts/Nunito-ExtraBold.ttf"))
@@ -81678,3 +81681,19 @@ func _spawn_scheduled_customer() -> void:
 	_spawn_customer()
 	if _grisaldi_bonus_pending>0 and customers.size()>before_count:_grisaldi_bonus_pending-=1
 	spawn_timer=2.0 if _grisaldi_bonus_pending>0 else _next_spawn_delay()
+
+func _preload_small_menu_chunks() -> void:
+	# Single background request at a time; never build scenes or block the menu.
+	await get_tree().create_timer(1.0).timeout
+	for path in preload("res://scripts/menu_preload_manifest.gd").PATHS:
+		if _gameplay_load_in_progress or playing:return
+		if _gameplay_resource_cache.has(path):continue
+		if ResourceLoader.load_threaded_request(path)!=OK:continue
+		_menu_chunk_pending=true
+		while ResourceLoader.load_threaded_get_status(path)==ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			await get_tree().process_frame
+		if ResourceLoader.load_threaded_get_status(path)==ResourceLoader.THREAD_LOAD_LOADED:
+			_gameplay_resource_cache[path]=ResourceLoader.load_threaded_get(path)
+			set_meta("menu_chunks_loaded",int(get_meta("menu_chunks_loaded",0))+1)
+		_menu_chunk_pending=false
+		await get_tree().create_timer(.15).timeout
