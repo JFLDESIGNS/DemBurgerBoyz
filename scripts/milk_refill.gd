@@ -65,7 +65,7 @@ func handle_input(event: InputEvent) -> bool:
 		pressed = false; held = false
 		if clicked or (is_instance_valid(game.icecream_root) and near(event.position,game.icecream_root.global_position+Vector3(0,.42,0),85)): request("refill")
 		return true
-	if event.pressed and is_instance_valid(carton) and carton.visible and game.patty_fridge_open and near(event.position,carton.global_position+Vector3(0,.10,0),30):
+	if event.pressed and is_instance_valid(carton) and carton.visible and game.patty_fridge_open and carton_hit(event.position):
 		pressed = true; press_at = event.position; press_time = Time.get_ticks_msec(); return true
 	return false
 
@@ -176,3 +176,18 @@ func show_refill(origin: Vector3 = Vector3.INF) -> void:
 	tw.tween_property(flying,"rotation:z",0.0,.17)
 	tw.tween_method(func(t: float): flying.global_position=flight_point(end,home_position(),t),0.0,1.0,.50)
 	tw.tween_callback(flying.queue_free)
+
+func carton_hit(screen: Vector2) -> bool:
+	if not is_instance_valid(carton) or not is_instance_valid(game.camera): return false
+	var bounds := Rect2()
+	var found := false
+	for mesh in carton.find_children("*","MeshInstance3D",true,false):
+		if not mesh.is_visible_in_tree() or mesh.mesh == null: continue
+		var box: AABB = mesh.get_aabb()
+		for i in 8:
+			var point: Vector3 = mesh.to_global(box.get_endpoint(i))
+			if game.camera.is_position_behind(point): continue
+			var projected: Vector2 = game.camera.unproject_position(point)
+			if not found: bounds = Rect2(projected,Vector2.ZERO); found = true
+			else: bounds = bounds.expand(projected)
+	return found and bounds.grow(18.0).has_point(game._gui_to_camera_screen(screen))

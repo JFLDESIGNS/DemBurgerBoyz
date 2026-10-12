@@ -22,9 +22,10 @@ func run():
   while not net.is_online():await process_frame
  g.mp_enabled=true;g._mp_ensure_service()
  if hosting:
-  g._machine_broken.fryer=true;g._shared_world_send_at=0;g._mp_recover_shared_world()
+  for id in g._machine_ids(): g._break_machine(id)
+  g._shared_world_send_at=0;g._mp_recover_shared_world()
   await wait_mark("repaired")
-  assert(not g._machine_broken.fryer)
+  for id in g._machine_ids(): assert(not g._machine_broken[id])
   await wait_mark("dragged")
   while preview.position.distance_to(Vector2(100,200))<10:await process_frame
   mark("saw_drag");await wait_mark("released")
@@ -34,9 +35,11 @@ func run():
   mark("done");await create_timer(.3).timeout
  else:
   mark("ready")
-  while not g._machine_broken.get("fryer",false):await process_frame
-  g._repair_machine("fryer")
-  while g._machine_broken.fryer:await process_frame
+  for id in g._machine_ids():
+   while not g._machine_broken.get(id,false):await process_frame
+  for id in g._machine_ids(): g._repair_machine(id)
+  for id in g._machine_ids():
+   while g._machine_broken[id]:await process_frame
   mark("repaired")
   g._mp_queue_motion("mp_build_pose",[0,true,.12,-.08,.1]);mark("dragged");await wait_mark("saw_drag")
   g._mp_queue_motion("mp_build_pose",[0,false,0.0,0.0,0.0]);mark("released")

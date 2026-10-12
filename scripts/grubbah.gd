@@ -180,6 +180,10 @@ func _process(delta: float) -> void:
   was_playing=false
   if is_instance_valid(props):props.hide()
   refresh();return
+ if game._location_relocate_busy:
+  if is_instance_valid(courier):courier.hide()
+  if is_instance_valid(car):car.hide()
+  return
  if game.get_tree().paused:return
  if game._hotdog_active():
   boss_paused=true
@@ -494,7 +498,7 @@ func build_props() -> void:
  wrapped=fitted("SM_BurgerPackagingPaperWrapped",.25);props.add_child(wrapped)
  add_bag_label()
  ledge=MeshInstance3D.new();var box=BoxMesh.new();box.size=Vector3(.85,.06,.38);ledge.mesh=box;ledge.material_override=game._make_basic_mat(Color("727E81"),.7,.25);props.add_child(ledge);ledge.position=Vector3(.4192,1.03,1.85)
- var car_scene=load("res://assets/vehicles/sugar_street/lagoon_hatch.glb");car=car_scene.instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE;car.rotation.y=0;car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;car.hide()
+ var car_scene=load("res://assets/vehicles/sugar_street/lagoon_hatch.glb");car=car_scene.instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE;car.rotation.y=0;car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;car.hide();_add_driver_roof_sign()
  screech=AudioStreamPlayer3D.new();screech.stream=preload("res://sounds/vehicles/mail_truck_tire_screech.mp3");screech.bus="SFX";screech.volume_db=-4;screech.unit_size=5.0;screech.max_distance=35;car.add_child(screech)
  courier=game.CustomerScript.new();courier.set_meta("delivery_driver",true);courier.is_street_pedestrian=true;courier.setup(["bun_bottom","patty","bun_top"] as Array[String],Color("E8AC6F"),9999,0,2);props.add_child(courier);courier.set_process(false);courier.set_physics_process(false);courier.play_street_run(1.45);courier.hide()
  for n in courier.find_children("*","Label3D",true,false):n.hide()
@@ -552,7 +556,7 @@ func update_visuals(_delta: float) -> void:
   if car_style!=desired_car:
    car_style=desired_car
    var old_car=car;car=DRIVER_CARS[car_style].instantiate();props.add_child(car);car.scale=Vector3.ONE*game.STREET_CAR_MODEL_SCALE
-   screech.reparent(car,false);car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;old_car.queue_free()
+   screech.reparent(car,false);car_ground_y=-.06-game._shop_preview_bounds(car).position.y*car.scale.y;old_car.queue_free();_add_driver_roof_sign()
  if phase!=last_phase:
   last_phase=phase
   if phase=="accepted":side_impacts.clear();bag_bounce_age=10.0
@@ -625,7 +629,7 @@ func update_visuals(_delta: float) -> void:
   flying_ticket.position=ticket_flight_start.lerp(props.to_local(bag_ticket.global_position),clampf(age/.7,0,1))
  car.visible=phase in ["pickup","collected"];courier.visible=car.visible
  if phase=="pickup":
-  car.position=Vector3(lerpf(-9,10,clampf(age/DRIVER_APPROACH,0,1)),car_ground_y,game.STREET_CAR_Z)
+  _pose_driver_car(clampf(age/DRIVER_APPROACH,0,1), -9.0, 10.0)
   courier.visible=age>DRIVER_APPROACH
   if age>=DRIVER_APPROACH-.35 and not arrival_screeched:
    arrival_screeched=true;screech.play()
@@ -678,7 +682,7 @@ func update_visuals(_delta: float) -> void:
    courier.set_meta("return_running",true);courier.play_street_run(1.45)
   bag.position=courier_grab_position().lerp(courier_carry_position(),smoothstep(0,DRIVER_TURN,age))
   bag.rotation.y=courier.rotation.y-PI
-  car.position=Vector3(lerpf(10,24,clampf((return_age-DRIVER_RETURN)/DRIVER_EXIT,0,1)),car_ground_y,game.STREET_CAR_Z)
+  _pose_driver_car(clampf((return_age-DRIVER_RETURN)/DRIVER_EXIT,0,1), 10.0, 24.0)
  knife.visible=bool(game.owned_machines.get("chef_knife",false))
  knife.scale=Vector3.ONE*(.8 if knife_owner!=0 else 1.0)
  if knife_owner!=0:knife.rotation=Vector3(-.20,PI*.5+.30,0)
@@ -819,3 +823,37 @@ func courier_carry_position() -> Vector3:
   var hand=skeleton.find_bone("RightHand")
   if hand>=0:return props.to_local(skeleton.to_global(skeleton.get_bone_global_pose(hand).origin))-Vector3(0,.30,0)
  return props.to_local(courier.to_global(Vector3(.26,.85,.05)))
+
+func _pose_driver_car(t: float, from_x: float, to_x: float) -> void:
+ # Deterministic from replicated phase age; settles straight at either endpoint.
+ var envelope := sin(PI * t)
+ var weave := .22 * sin(t * TAU * 1.5) * envelope
+ car.position = Vector3(lerpf(from_x, to_x, t), car_ground_y, game.STREET_CAR_Z + .45 + weave)
+ car.rotation.y = .075 * sin(t * TAU * 1.5 + PI * .5) * envelope
+ car.rotation.z = -.018 * sin(t * TAU * 1.5) * envelope
+
+func _add_driver_roof_sign() -> void:
+ var bounds: AABB = game._shop_preview_bounds(car)
+ var sign_root := Node3D.new()
+ sign_root.name = "GrubbahRoofSign"
+ car.add_child(sign_root)
+ sign_root.position = Vector3(bounds.get_center().x, bounds.end.y + .01, bounds.get_center().z)
+ sign_root.scale = Vector3.ONE / car.scale.x
+ var mount := MeshInstance3D.new()
+ var base := BoxMesh.new();base.size = Vector3(.74,.035,.32)
+ mount.mesh=base;mount.material_override=game._make_basic_mat(Color("292E32"),.8,0.0)
+ sign_root.add_child(mount)
+ var triangle := MeshInstance3D.new()
+ var prism := PrismMesh.new();prism.size=Vector3(.72,.34,.28)
+ triangle.mesh=prism;triangle.position.y=.18
+ triangle.material_override=game._make_basic_mat(Color("F07822"),.7,0.0)
+ sign_root.add_child(triangle)
+ for side in [-1.0,1.0]:
+  var label := Label3D.new()
+  label.text="GRUBBAH"
+  label.font=preload("res://assets/fonts/Nunito-ExtraBold.ttf")
+  label.font_size=48;label.pixel_size=.00155
+  label.modulate=Color("FFF0C1");label.outline_modulate=Color("803115");label.outline_size=6
+  label.position=Vector3(0,.095,side*.146)
+  label.rotation.y=0.0 if side>0 else PI
+  sign_root.add_child(label)

@@ -1,4 +1,11 @@
 extends SceneTree
+class MailCat extends Node3D:
+ var phase="treat_wait"
+ var courier: Node3D
+ var fed=0
+ func head_global()->Vector3:return courier.global_position+Vector3(0,.35,0)
+ func waiting_for_treat()->bool:return true
+ func receive_treat(_id:String)->void:fed+=1
 var folder: String
 func mark(key:String):FileAccess.open(folder.path_join(key),FileAccess.WRITE).store_string("ok")
 func wait_mark(key:String):
@@ -20,6 +27,7 @@ func run():
   while not net.is_online():await process_frame
   mark("ready")
  g.mp_enabled=true;g._mp_ensure_service()
+ var mail=MailCat.new();mail.courier=Node3D.new();mail.add_child(mail.courier);g.world.add_child(mail);g.mail_delivery_truck=mail
  var sling=g._ensure_ingredient_slingshot()
  if host:
   g.mp_ingredient_pull.rpc("tomato",Vector2(.4,.6),Vector2(.4,.8),true)
@@ -34,6 +42,9 @@ func run():
   assert(g.supply_stock["onion"]==1)
   mark("host_saw_flight")
   await wait_mark("guest_saw_flight")
+  g.mp_mail_cat_food_reaction.rpc("cheese",Vector3(0,.35,0),true)
+  assert(mail.fed==1)
+  await wait_mark("mail_fed")
   mark("done");await create_timer(.2).timeout
  else:
   while not sling.remote_pulls.has(1):await process_frame
@@ -44,6 +55,8 @@ func run():
   await wait_mark("fire_now")
   g.mp_ingredient_slingshot.rpc_id(1,"onion",Vector2(.4,.8),Vector2(.4,.1))
   while not g.world.has_node("ReplicatedIngredientFlight"):await process_frame
-  mark("guest_saw_flight");await wait_mark("host_saw_flight");await wait_mark("done")
+  mark("guest_saw_flight");await wait_mark("host_saw_flight")
+  while mail.fed<1:await process_frame
+  assert(mail.fed==1);mark("mail_fed");await wait_mark("done")
  g.mp_enabled=false;net.leave(false);g.queue_free();await process_frame
  print("INGREDIENT_EFFECT_NETWORK_OK ","host" if host else "guest");quit()

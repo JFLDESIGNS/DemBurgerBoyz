@@ -2,7 +2,7 @@ extends SceneTree
 func _initialize() -> void: call_deferred("run")
 func run() -> void:
  var game = load("res://scripts/game.gd").new()
- var names := ["gfx_settings.cfg","audio_settings.cfg","truck_location.cfg","level_dressing.cfg","doll_studio.cfg"]
+ var names := ["gfx_settings.cfg","audio_settings.cfg","truck_location.cfg","level_dressing.cfg","doll_studio.cfg","light_balance.cfg"]
  game._seed_first_run_configs()
  for name in names:
   var bundled := ConfigFile.new()

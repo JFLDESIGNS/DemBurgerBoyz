@@ -121,6 +121,7 @@ func _process(delta: float) -> void:
 		if is_instance_valid(game.game_audio):
 			var voice: String = subject.get_customer_voice() if subject.has_method("get_customer_voice") else "male"
 			var cat_voice: bool = subject == game.window_cat or bool(subject.get("is_disguise_cat")) if subject.has_method("get_customer_voice") else subject == game.window_cat
+			cat_voice = cat_voice or (is_instance_valid(game.mail_delivery_truck) and subject == game.mail_delivery_truck.courier)
 			game.game_audio.play_customer_nom_nom("female" if cat_voice else voice, subject, 1.55 if cat_voice else 1.0)
 	sample(elapsed)
 	if elapsed >= DURATION:
@@ -135,7 +136,7 @@ func finish() -> void:
 	if is_instance_valid(mouth):
 		mouth.transform = original
 		if temporary_mouth:
-			mouth.get_parent().remove_child(mouth)
+			mouth.hide()
 			mouth.queue_free()
 	if is_instance_valid(material): material.set_shader_parameter("speech_round", old_round)
 	if is_instance_valid(food): food.queue_free()

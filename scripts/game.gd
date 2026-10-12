@@ -3031,7 +3031,7 @@ const GFX_CFG_PATH := "user://gfx_settings.cfg"
 const FIRST_RUN_GFX_CFG_PATH := "res://defaults/gfx_settings.cfg"
 const FIRST_RUN_AUDIO_CFG_PATH := "res://defaults/audio_settings.cfg"
 const FIRST_RUN_LOCATION_CFG_PATH := "res://defaults/truck_location.cfg"
-const RELEASE_PROFILE_VERSION := 3
+const RELEASE_PROFILE_VERSION := 5
 const RELEASE_PROFILE_SECTION := "release_profile"
 const RELEASE_PROFILE_KEY := "tuned_defaults_version"
 const CAMERA_CFG_SECTION := "player_camera"
@@ -15403,6 +15403,16 @@ func _nudge_debris_piles(tool_pos: Vector3, move_xz: Vector2, moved: float) -> v
 			root.position + Vector3(dir.x, 0.0, dir.y) * push * (0.45 + falloff * 0.7)
 		)
 		root.position = Vector3(next.x, _debris_pile_sit_y(), next.z)
+		if _try_swallow_debris_pile(i): continue
+		var remaining_mass := float(pile.get("mass",1.0)) - moved * .85 * (.4 + falloff)
+		if remaining_mass <= .08:
+			root.hide()
+			root.queue_free()
+			debris_piles.remove_at(i)
+			continue
+		pile["mass"] = remaining_mass
+		debris_piles[i] = pile
+		_refresh_debris_pile_visual(root, remaining_mass)
 		i += 1
 
 
@@ -22431,10 +22441,9 @@ func _on_window_cat_wants_meow(pitch: float) -> void:
 
 func _on_window_cat_fed(kind: String) -> void:
 	_achievement_event("cat_treats")
-	if game_audio and game_audio.has_method("play_cat_eating_stretch"):
-		game_audio.play_cat_eating_stretch()
-	if not _cat_delivery_blocks_visit() and game_audio and game_audio.has_method("play_cat_meow"):
-		game_audio.play_cat_meow(0.5)
+	if game_audio and not bool(get_meta("cat_snack_voice_pending",false)):
+		var eater: Node = mail_delivery_truck.courier if is_instance_valid(mail_delivery_truck) else window_cat
+		game_audio.play_customer_nom_nom("female", eater, 1.55)
 	if kind == "patty" and game_audio and game_audio.has_method("play_cat_purr"):
 		game_audio.play_cat_purr()
 	## If already maxed (signal already fired earlier), still queue the mustache visit.
@@ -36239,32 +36248,9 @@ func _nudge_fryer_hint_down() -> void:
 
 
 func _refresh_fryer_hint_label() -> void:
-	if fryer_label == null or not is_instance_valid(fryer_label):
-		return
-	## Prefer the most useful next step for the fryer basket.
-	var has_done := false
-	var has_cooking := false
-	var has_raw := false
-	for data in fryer_baskets:
-		if typeof(data) != TYPE_DICTIONARY:
-			continue
-		var st := str(data.get("state", "empty"))
-		if st == "done":
-			has_done = true
-		elif st == "cooking":
-			has_cooking = true
-		elif st == "raw":
-			has_raw = true
-	var next := "BUY POTATOES ON PHONE" if int(supply_stock.get("potato", 0)) <= 0 else "1. CLICK: LOAD FREEZER POTATOES"
-	if has_done:
-		next = "3. CLICK: SHAKE"
-	elif has_cooking:
-		next = "WAIT... FRYING"
-	elif has_raw:
-		next = "2. CLICK: DUNK"
-	next += "\nFREEZER: %d POTATO PORTIONS" % int(supply_stock.get("potato", 0))
-	if fryer_label.text != next:
-		fryer_label.text = next
+	if is_instance_valid(fryer_label):
+		fryer_label.text = ""
+		fryer_label.hide()
 
 
 func _refresh_fryer_basket_visual(index: int) -> void:
@@ -48705,7 +48691,7 @@ func _cached_tip_bill_material(in_jar: bool) -> StandardMaterial3D:
 	if cached != null:
 		return cached
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL if in_jar else BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.roughness = 0.86
 	if in_jar:
 		mat.emission_enabled = true
@@ -48741,8 +48727,8 @@ func _cached_sale_bill_material() -> StandardMaterial3D:
 	if cached != null: return cached
 	cached = _cached_tip_bill_material(false).duplicate() as StandardMaterial3D
 	cached.albedo_color = Color.WHITE
-	cached.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	cached.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT_WRAP
+	cached.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	cached.diffuse_mode = BaseMaterial3D.DIFFUSE_BURLEY
 	cached.roughness = 0.95
 	cached.metallic_specular = 0.12
 	_payment_bill_material_cache["sale_shaded"] = cached
@@ -50286,10 +50272,10 @@ func _buy_supply_local(id: String) -> void:
 
 
 func _cat_delivery_blocks_visit() -> bool:
-	return not supply_orders.is_empty() or (is_instance_valid(mail_delivery_truck) and not mail_delivery_truck.finished) or _cat_after_delivery_wait > 0.0
+	return _location_relocate_busy or not supply_orders.is_empty() or (is_instance_valid(mail_delivery_truck) and not mail_delivery_truck.finished) or _cat_after_delivery_wait > 0.0
 
 func _update_supply_orders(delta: float) -> void:
-	if not playing:
+	if not playing or _location_relocate_busy:
 		return
 	_cat_after_delivery_wait = maxf(0.0, _cat_after_delivery_wait - delta)
 	if is_instance_valid(mail_delivery_truck):
@@ -53013,8 +52999,20 @@ func _update_machine_breaks(_delta: float) -> void:
 
 
 func _break_machine(id: String) -> void:
+	if not _machine_ids().has(id) or (mp_enabled and not NetManager.is_host()): return
 	_machine_broken[id] = true
 	_machine_use_count[id] = 0
+	_apply_machine_damage(id)
+	if mp_enabled: mp_machine_damage.rpc(_machine_broken, _machine_use_count)
+	_flash("%s sparked out — click the wrench" % _machine_label(id), Color("FFCC80"))
+	if game_audio != null and game_audio.has_method("play_grease_pop"):
+		game_audio.play_grease_pop(true, 1.15)
+
+
+func _apply_machine_damage(id: String) -> void:
+	if not _machine_is_broken(id):
+		_clear_machine_break_fx(id)
+		return
 	_ensure_machine_break_fx(id)
 	if id == "soda":
 		_hide_soda_stream()
@@ -53025,9 +53023,6 @@ func _break_machine(id: String) -> void:
 	elif id == "icecream":
 		_hide_icecream_stream()
 		_icecream_parked_filling = false
-	_flash("%s sparked out — click the wrench" % _machine_label(id), Color("FFCC80"))
-	if game_audio != null and game_audio.has_method("play_grease_pop"):
-		game_audio.play_grease_pop(true, 1.15)
 
 
 func _repair_machine(id: String) -> void:
@@ -53473,6 +53468,7 @@ func _buy_shop_item_local(id: String) -> void:
 		return
 	money -= cost
 	owned_machines[id] = true
+	_grant_machine_starter_supplies(id)
 	_achievement_event("purchases")
 	_achievement_event("unlocks")
 	_achievement_event("buy_" + id)
@@ -54485,7 +54481,7 @@ func _setup_game_audio() -> void:
 
 
 func _seed_first_run_configs() -> void:
-	## Seed new installs and missing keys without replacing a player's saved tuning.
+	## Apply the approved release tuning once; later player edits remain intact.
 	var profiles := [
 		{"user": GFX_CFG_PATH, "bundled": FIRST_RUN_GFX_CFG_PATH},
 		{"user": AUDIO_CFG_PATH, "bundled": FIRST_RUN_AUDIO_CFG_PATH},
@@ -54514,7 +54510,7 @@ func _seed_first_run_configs() -> void:
 			continue
 		for section in bundled.get_sections():
 			for key in bundled.get_section_keys(section):
-				if not local.has_section_key(section, key):
+				if user_path != LOCATION_CFG_PATH or not local.has_section_key(section, key):
 					local.set_value(section, key, bundled.get_value(section, key))
 		local.set_value(RELEASE_PROFILE_SECTION, RELEASE_PROFILE_KEY, required_version)
 		if local.save(user_path) != OK:
@@ -67881,7 +67877,9 @@ func _apply_cat_ingredient_hit(id: String, at: Vector3, accepted_override: int =
 	var accepted := accepted_override == 1 if accepted_override >= 0 else preload("res://scripts/thrown_food_snack.gd").accepts(id, true, randf())
 	if accepted:
 		if game_audio: game_audio.play_ingredient_plap()
+		set_meta("cat_snack_voice_pending",true)
 		window_cat.feed(id, true)
+		remove_meta("cat_snack_voice_pending")
 		_start_flung_food_snack(window_cat, id, at)
 	else:
 		_ensure_ingredient_slingshot().impact(window_cat, at, id)
@@ -74525,23 +74523,45 @@ func _begin_relocate_sequence(location_id: String) -> void:
 func _relocate_sequence(location_id: String) -> void:
 	_location_relocate_busy = true
 	_close_location_map_ui()
-	var had_line := false
-	for customer in customers:
-		if customer != null and is_instance_valid(customer):
-			had_line = true
-			break
-	if had_line:
-		_flash("Moving the truck — wrapping up...", Color("FFCC80"))
-		_dismiss_line_customers(false)
-		var tree := get_tree()
-		if tree != null:
-			await tree.create_timer(1.7).timeout
-	if not is_inside_tree():
-		_location_relocate_busy = false
-		return
+	service_window_closed = true
+	_sync_open_closed_sign(true)
+	_dismiss_line_customers(false)
+	var travel = preload("res://scripts/truck_relocation.gd").new()
+	add_child(travel)
+	travel.setup(self)
+	await travel.close_and_depart()
+	_clear_relocation_visitors()
 	_reset_kitchen_for_relocate()
 	_apply_location_local(location_id)
+	await get_tree().create_timer(.45).timeout
+	await travel.open_at_destination()
+	travel.queue_free()
+	service_window_closed = false
 	_location_relocate_busy = false
+	_sync_open_closed_sign(true)
+	spawn_timer = _first_customer_delay()
+
+
+func _clear_relocation_visitors() -> void:
+	_dismiss_line_customers(false)
+	if is_instance_valid(customers_root):
+		for child in customers_root.get_children():
+			if child is CustomerScript:
+				_mp_retired_customer_ids[_customer_net_id(child)] = true
+				child.hide()
+				child.queue_free()
+	customers.clear()
+	_customer_departure_holds.clear()
+	selected_customer = null
+	_clear_disguise_cat_state()
+	if is_instance_valid(mail_delivery_truck): mail_delivery_truck.reset_for_relocation()
+	if is_instance_valid(window_cat):
+		window_cat.reset_shift(true)
+		window_cat.start_relocation_wait()
+	if is_instance_valid(park_bird_house): park_bird_house._enter(&"Away")
+	if mp_enabled and NetManager.is_host():
+		_mp_broadcast_customers()
+		_mp_send_cat_sync()
 
 
 func _apply_location_local(location_id: String) -> void:
@@ -77825,9 +77845,8 @@ func mp_sync_grill_mess(
 		var host_z := float(residue_zs[i]) if i < residue_zs.size() else 0.0
 		if host_amount <= 0.04:
 			_mp_cleaned_residue.erase(i)
-			if i < grill_residue.size() and float(grill_residue[i]) > 0.0:
-				grill_residue[i] = 0.0
-				_clear_residue_chunks(i)
+			if i < grill_residue.size(): grill_residue[i] = 0.0
+			_clear_residue_chunks(i)
 			if i < grill_residue_kind.size():
 				grill_residue_kind[i] = ""
 			if i < brush_swipe_travel.size():
@@ -78262,6 +78281,7 @@ func mp_cat_sync(
 	bob: float,
 	presentation: Dictionary = {}
 ) -> void:
+	if _location_relocate_busy: return
 	if NetManager.is_host():
 		return
 	if window_cat == null or not is_instance_valid(window_cat):
@@ -78793,6 +78813,7 @@ func mp_sync_customers(
 	motions: Array = [],
 	appearances: Array = []
 ) -> void:
+	if _location_relocate_busy: return
 	if NetManager.is_host():
 		return
 	var seen: Dictionary = {}
@@ -81090,13 +81111,14 @@ func mp_shared_world(payload: PackedByteArray, broken: Dictionary, uses: Diction
 	if suggestion == "": _boss_suggested_item = ""
 	if boss_data.size() == 15:
 		_ensure_hotdog_challenge().callv("sync_state", boss_data)
-	for id in broken:
-		var changed := bool(_machine_broken.get(id,false)) != bool(broken[id])
-		_machine_broken[id] = bool(broken[id])
-		_machine_use_count[id] = int(uses.get(id,0))
-		if changed:
-			if bool(broken[id]): _ensure_machine_break_fx(id)
-			else: _clear_machine_break_fx(id)
+	mp_machine_damage(broken, uses)
+
+@rpc("authority", "call_remote", "reliable")
+func mp_machine_damage(broken: Dictionary, uses: Dictionary) -> void:
+	for id in _machine_ids():
+		_machine_broken[id] = bool(broken.get(id, false))
+		_machine_use_count[id] = int(uses.get(id, 0))
+		_apply_machine_damage(id)
 
 @rpc("any_peer", "call_local", "reliable")
 func mp_request_machine_repair(id: String) -> void:
@@ -81104,6 +81126,7 @@ func mp_request_machine_repair(id: String) -> void:
 	_mp_applying = true
 	_repair_machine(id)
 	_mp_applying = false
+	mp_machine_damage.rpc(_machine_broken, _machine_use_count)
 	_shared_world_send_at = 0
 	_mp_recover_shared_world()
 
@@ -81224,3 +81247,45 @@ func mp_shift_closed_payload(payload: PackedByteArray, elapsed: float) -> void:
 	if data is Dictionary: mp_shift_closed(data,elapsed)
 
 var _side_grace_customer: Node3D
+
+@rpc("authority", "call_remote", "reliable")
+func mp_cat_eating_voice(customer_id: int) -> void:
+	var customer = _customer_by_net_id(customer_id)
+	if is_instance_valid(customer) and bool(customer.is_disguise_cat): customer._play_eating_voice_once()
+
+func _mail_cat_fling_target() -> Node3D:
+	if not is_instance_valid(mail_delivery_truck) or not mail_delivery_truck.is_visible_in_tree(): return null
+	if mail_delivery_truck.phase not in ["walk","deliver","treat_wait","thanks","back"]: return null
+	return mail_delivery_truck.courier if mail_delivery_truck.courier.is_visible_in_tree() else null
+
+func _ingredient_target_head(subject: Node3D) -> Vector3:
+	if subject == window_cat: return window_cat.head_global()
+	if is_instance_valid(mail_delivery_truck) and subject == mail_delivery_truck.courier:
+		return mail_delivery_truck.head_global()
+	return _customer_head_world(subject)
+
+func _apply_mail_cat_ingredient_hit(id: String, at: Vector3, accepted_override: int = -1) -> void:
+	var cat = _mail_cat_fling_target()
+	if not is_instance_valid(cat) or not GameDataScript.INGREDIENT_LABELS.has(id): return
+	if mp_enabled and accepted_override < 0:
+		if NetManager.is_host(): mp_mail_cat_food_reaction.rpc(id,cat.to_local(at),preload("res://scripts/thrown_food_snack.gd").accepts(id,true,randf()))
+		return
+	var accepted := accepted_override == 1 if accepted_override >= 0 else preload("res://scripts/thrown_food_snack.gd").accepts(id,true,randf())
+	if accepted:
+		if game_audio: game_audio.play_ingredient_plap()
+		set_meta("cat_snack_voice_pending",true)
+		if mail_delivery_truck.waiting_for_treat(): mail_delivery_truck.receive_treat(id)
+		else: _on_window_cat_fed(id)
+		remove_meta("cat_snack_voice_pending")
+		_start_flung_food_snack(cat,id,at)
+	else: _ensure_ingredient_slingshot().impact(cat,at,id)
+
+@rpc("authority","call_local","reliable")
+func mp_mail_cat_food_reaction(id: String, local_hit: Vector3, accepted: bool) -> void:
+	if is_instance_valid(mail_delivery_truck): _apply_mail_cat_ingredient_hit(id,mail_delivery_truck.courier.to_global(local_hit),int(accepted))
+
+func _grant_machine_starter_supplies(id: String) -> void:
+	if mp_enabled and not NetManager.is_host(): return
+	if id == SHOP_FRYER_MACHINE: supply_stock["potato"] = int(supply_stock.get("potato",0)) + 8
+	elif id == SHOP_ICECREAM_MACHINE: supply_stock["milk"] = int(supply_stock.get("milk",0)) + 1
+	if mp_enabled: _mp_broadcast_economy()

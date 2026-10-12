@@ -462,7 +462,7 @@ func _play_eating_voice_once() -> void:
 	_nom_played = true
 	var audio := get_tree().get_first_node_in_group("game_audio") if get_tree() else null
 	if audio != null and audio.has_method("play_customer_nom_nom"):
-		audio.play_customer_nom_nom(get_customer_voice(), self)
+		audio.play_customer_nom_nom("female" if is_disguise_cat else get_customer_voice(), self, 1.55 if is_disguise_cat else 1.0)
 var _custom_character_choice_locked: bool = false
 
 
@@ -4923,6 +4923,10 @@ func disguise_bribe_leave() -> void:
 	## Fed a treat — they take it and split (still no bill).
 	if not is_disguise_cat or is_leaving:
 		return
+	_play_eating_voice_once()
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and game.get("mp_enabled") and NetManager.is_host():
+		game.mp_cat_eating_voice.rpc(game._customer_net_id(self))
 	if _bubble:
 		_bubble.text = "…ok bye"
 		_bubble.visible = true

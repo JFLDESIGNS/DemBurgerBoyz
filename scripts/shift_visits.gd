@@ -11,6 +11,7 @@ var profit_label: Label
 var profit_tween: Tween
 
 func _process(delta: float) -> void:
+ if game._location_relocate_busy: return
  if not game.playing:
   if is_instance_valid(visit):
    if visit_tween: visit_tween.kill()
@@ -61,7 +62,7 @@ func steal_patty(patty: Node3D, committed: bool=false) -> void:
  cat.peek_for_patty(side * 1.15)
  if not committed: await get_tree().create_timer(.85).timeout
  steal_pending = false
- if not game.playing or not is_instance_valid(cat) or not is_instance_valid(patty): return
+ if game._location_relocate_busy or not game.playing or not is_instance_valid(cat) or not is_instance_valid(patty): return
  if not committed and (not eligible_patty(patty) or cat._delivery_peek_active or cat._visit_fed): return
  if game.mp_enabled and NetManager.is_host(): game.mp_cat_commit_theft.rpc(int(patty.net_id))
  patty.set_meta("cat_snatched", true)

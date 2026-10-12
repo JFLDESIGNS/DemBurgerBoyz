@@ -12,6 +12,7 @@ var parcel: Node3D
 var wheels: Array[Node3D] = []
 var orders: Array = []
 var phase := "waiting"
+var relocate_wait := 0.0
 var elapsed := 0.0
 var clock := 0.0
 var ground := 0.0
@@ -161,7 +162,11 @@ func delivery_origin_global() -> Vector3:
 	return parcel.to_global(Vector3(0, 0.13, 0)) if parcel else courier.global_position + Vector3(0, 0.6, 0)
 
 func advance(delta: float) -> void:
-	if finished: return
+	if finished or game._location_relocate_busy: return
+	if relocate_wait > 0.0:
+		relocate_wait = maxf(0.0, relocate_wait - delta)
+		return
+	show()
 	_sync_courier_shape()
 	if not on_foot and is_instance_valid(game.get("_hotdog_challenge")) and game._hotdog_challenge.active():
 		_enable_foot_delivery()
@@ -408,9 +413,11 @@ func _update_delivery_meows(delta: float) -> void:
 	if meow_count >= cues.size():delivery_meows_active = false
 
 func snapshot() -> Dictionary:
-	return {"phase":phase, "elapsed":elapsed, "orders":orders.duplicate(true), "treat":wants_treat, "foot":on_foot, "exit":disguise_exit_elapsed, "departed":disguise_departed, "disguise":is_instance_valid(disguise_customer), "exit_from":disguise_exit_from}
+	return {"visible":visible,"relocate_wait":relocate_wait,"phase":phase, "elapsed":elapsed, "orders":orders.duplicate(true), "treat":wants_treat, "foot":on_foot, "exit":disguise_exit_elapsed, "departed":disguise_departed, "disguise":is_instance_valid(disguise_customer), "exit_from":disguise_exit_from}
 
 func apply_snapshot(data: Dictionary) -> void:
+	visible = bool(data.get("visible",true))
+	relocate_wait = float(data.get("relocate_wait",0.0))
 	if bool(data.get("disguise", false)) and not is_instance_valid(disguise_customer): _borrow_disguise_customer()
 	disguise_exit_from = data.get("exit_from", disguise_exit_from)
 	if phase != str(data.phase):
@@ -427,3 +434,26 @@ func apply_snapshot(data: Dictionary) -> void:
 	if phase != "waiting":
 		courier.show()
 		truck.visible = not on_foot
+
+func reset_for_relocation() -> void:
+	# Keep undelivered purchases, but give the courier a fresh arrival later.
+	hide()
+	delivery_meows_active = false
+	for audio in [drive_audio, meow_audio, arrival_jingle, skid_audio, horn_audio]:
+		if is_instance_valid(audio): audio.stop()
+	if orders.is_empty():
+		finished = true
+		restore_cat()
+	else:
+		phase = "waiting"
+		elapsed = 0.0
+		relocate_wait = 20.0
+		courier.hide()
+		truck.hide()
+
+func head_global() -> Vector3:
+	var left := cat_visual.find_child("Cat_Eye_L",true,false) as MeshInstance3D
+	var right := cat_visual.find_child("Cat_Eye_R",true,false) as MeshInstance3D
+	if left != null and right != null:
+		return (left.to_global(left.get_aabb().get_center())+right.to_global(right.get_aabb().get_center()))*.5
+	return courier.global_position+Vector3(0,.35,0)

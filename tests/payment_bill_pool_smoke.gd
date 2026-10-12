@@ -18,6 +18,8 @@ func _run() -> void:
 	root.add_child(payment_world)
 	game.set("world", payment_world)
 	game.call("_ensure_payment_bill_assets")
+	assert(game._cached_tip_bill_material(false).shading_mode == BaseMaterial3D.SHADING_MODE_PER_PIXEL)
+	assert(game._cached_sale_bill_material().shading_mode == BaseMaterial3D.SHADING_MODE_PER_PIXEL)
 	var pool: Array = game.get("_payment_bill_pool")
 	var cache: Dictionary = game.get("_payment_bill_mesh_cache")
 	if pool.size() != 24:

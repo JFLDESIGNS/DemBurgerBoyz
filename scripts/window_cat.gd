@@ -5,10 +5,10 @@ const SCENE_PATH := "res://assets/cat/shipping_cat.glb"
 const EYE_SHADER := preload("res://shaders/cat_eyes.gdshader")
 const CAT_COLLISION_LAYER := 128
 ## Screen-left of the window (world +X) — clear of the center customer lane.
-const HOME_X := 1.7864 # One foot camera-right (world -X).
+const HOME_X := 0.4192 # Grubbah pickup ledge.
 ## Tutorial composition: farther screen-left, opposite the tutorial customer.
 const TUTORIAL_COACH_X := 2.1548
-const HOME_Z := 2.01
+const HOME_Z := 2.45 # Pop up behind the pickup ledge.
 ## Under the sill when hidden; peek high enough to clear the ledge.
 const HIDDEN_Y := 0.0902
 ## Counter peek lowered a further two inches (0.0508 world meters).
@@ -631,6 +631,7 @@ func pause_for_delivery() -> void:
 
 func _process(delta: float) -> void:
 	var game := get_tree().current_scene
+	if is_instance_valid(game) and bool(game.get("_location_relocate_busy")): return
 	if not mp_puppet and _first_visit_wait > 0.0:
 		if enabled and is_instance_valid(game) and bool(game.get("playing")) and not bool(game.get("shift_paused")):
 			_first_visit_wait = maxf(0.0,_first_visit_wait-delta)
@@ -1227,3 +1228,10 @@ func start_purr() -> void:
 	var audio = get_tree().get_first_node_in_group("game_audio")
 	_purr_player.volume_db = audio._sfx_db(-1.0 + linear_to_db(0.7), "world") if is_instance_valid(audio) else -11.1
 	if not _purr_player.playing: _purr_player.play()
+
+func start_relocation_wait() -> void:
+	_bag_heist = false
+	_delivery_peek_active = false
+	_purr_left = 0.0
+	if is_instance_valid(_purr_player): _purr_player.stop()
+	set_process(true)

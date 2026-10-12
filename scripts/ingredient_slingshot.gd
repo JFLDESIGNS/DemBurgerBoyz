@@ -126,10 +126,12 @@ func catch_target(target: Vector2) -> Node3D:
 	var screen: Vector2 = game._gui_to_camera_screen(target)
 	var height: float = game.camera.get_viewport().get_visible_rect().size.y
 	var targets: Array = game.customers.duplicate()
+	var mail_cat: Node3D = game._mail_cat_fling_target()
+	if is_instance_valid(mail_cat): targets.append(mail_cat)
 	if is_instance_valid(game.window_cat): targets.append(game.window_cat)
 	for subject in targets:
 		if not is_instance_valid(subject) or not subject is Node3D or not subject.is_visible_in_tree(): continue
-		var head: Vector3 = subject.head_global() if subject == game.window_cat else game._customer_head_world(subject)
+		var head: Vector3 = game._ingredient_target_head(subject)
 		if game.camera.is_position_behind(head): continue
 		var offset: Vector2 = screen - game.camera.unproject_position(head)
 		var score := Vector2(offset.x / (height * .13), offset.y / (height * .24)).length()
@@ -146,10 +148,12 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 	var aim_screen: Vector2 = game._gui_to_camera_screen(target)
 	var best_distance := INF
 	var targets: Array = game.customers.duplicate()
+	var mail_cat: Node3D = game._mail_cat_fling_target()
+	if is_instance_valid(mail_cat): targets.append(mail_cat)
 	if is_instance_valid(game.window_cat) and game.window_cat.is_visible_in_tree(): targets.append(game.window_cat)
 	for subject in targets:
 		if not is_instance_valid(subject) or not subject is Node3D or not subject.is_visible_in_tree(): continue
-		var head: Vector3 = subject.head_global() if subject == game.window_cat else game._customer_head_world(subject)
+		var head: Vector3 = game._ingredient_target_head(subject)
 		if game.camera.is_position_behind(head): continue
 		var d: float = -game.camera.to_local(head).z
 		var screen_distance: float = game.camera.unproject_position(head).distance_to(aim_screen)
@@ -174,10 +178,18 @@ func launch(id: String, source: Vector2, target: Vector2) -> void:
 	tween.tween_method(func(t: float):
 		if not is_instance_valid(flyer) or state.hit: return
 		if is_instance_valid(assisted) and assisted.is_visible_in_tree():
-			end = assisted.head_global() if assisted == game.window_cat else game._customer_head_world(assisted)
+			end = game._ingredient_target_head(assisted)
 		var pos := start.lerp(end,t)
 		# A quick shallow arc still lands exactly on the aimed point.
 		pos.y += sin(PI*t)*.10
+		var courier: Node3D = game._mail_cat_fling_target()
+		if (not game.mp_enabled or NetManager.is_host()) and is_instance_valid(courier):
+			var head: Vector3 = game._ingredient_target_head(courier)
+			var nearest := Geometry3D.get_closest_point_to_segment(head,state.previous,pos)
+			if nearest.distance_to(head)<.36:
+				state.hit=true
+				game._apply_mail_cat_ingredient_hit(id,nearest)
+				tween.kill();flyer.queue_free();return
 		var cat = game.window_cat
 		if (not game.mp_enabled or NetManager.is_host()) and is_instance_valid(cat) and cat.is_visible_in_tree():
 			var cat_head: Vector3 = cat.head_global()

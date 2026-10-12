@@ -1837,11 +1837,12 @@ func play_build_whoosh() -> void:
 
 
 func play_ingredient_landing() -> void:
-	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.15, 0.28)
+	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.15, 0.42)
+	_play_cached("build_ingredient_moosh", _make_food_smack, 1.12, 0.32)
 
 
 func play_build_landing() -> void:
-	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.08, 0.82)
+	_play_cached("cutting_board_thud_v1_0", _make_cutting_board_thud, 1.08, 1.05)
 
 
 func play_spatula_whoosh() -> void:
@@ -2639,8 +2640,8 @@ func _make_burger_slide_oil_loop() -> AudioStreamWAV:
 
 
 func play_condiment_squirt(flavor: String) -> void:
-	if flavor == "ketchup":
-		_play_cached("ingredient_ketchup_short", func(): return KETCHUP_SQUIRT_SHORT, 0.98, 0.28)
+	if flavor in ["ketchup", "mustard"]:
+		_play_cached("ingredient_ketchup_short", func(): return KETCHUP_SQUIRT_SHORT, 1.08 if flavor == "mustard" else 0.98, 0.28)
 		return
 	_play_cached("ingredient_condiment_squirt", func(): return CONDIMENT_SQUIRT,
 		1.08 if flavor == "mustard" else 0.98, 0.4)
