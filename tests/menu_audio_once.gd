@@ -8,6 +8,7 @@ func run():
  var truck=load("res://scripts/truck_cinematic.gd").new();root.add_child(truck)
  for n in 4:await process_frame
  truck.play_departure()
+ while truck.cat_leaving:await process_frame
  var sounds=truck.find_children("*","AudioStreamPlayer",true,false)
  assert(sounds.size()==1 and sounds[0].playing)
  truck.play_departure()

@@ -27,6 +27,9 @@ func run():
   while g._pal_ball_break.simulation.players[guest_id].velocity.length()<.1:await process_frame
   assert(paused);mark("saw_input")
   g._pal_ball_break.simulation.players[guest_id].position=Vector2(9,0)
+  await wait_mark("saw_round")
+  while g._pal_ball_break.simulation.phase!="playing":await process_frame
+  g._pal_ball_break.simulation.players[guest_id].position=Vector2(9,0)
   await wait_mark("saw_result")
  else:
   mark("ready")
@@ -36,7 +39,9 @@ func run():
   g.mp_pal_ball_input.rpc_id(1,g._pal_ball_break.generation,Vector2.RIGHT,true);mark("sent")
   await wait_mark("saw_input")
   while g._pal_ball_break.view.phase!="results":await process_frame
-  assert(g._pal_ball_break.view.winners==[1]);mark("saw_result")
+  assert(g._pal_ball_break.view.winners==[1] and not g._pal_ball_break.view.match_complete);mark("saw_round")
+  while not g._pal_ball_break.view.match_complete:await process_frame
+  assert(g._pal_ball_break.view.scores[1]==2);mark("saw_result")
  while is_instance_valid(g._pal_ball_break):await process_frame
  assert(not paused)
  assert(not g._maybe_start_pal_ball_break())

@@ -12,8 +12,15 @@ var winners: Array[int] = []
 var sequence := 0
 var event_serial := 0
 var events: Array = []
+var scores: Dictionary = {}
+var round_number := 1
+var match_complete := false
+var entries: Array = []
+var disconnected: Array[int] = []
 
 func setup(roster: Array) -> void:
+ scores.clear();round_number=1;match_complete=false;entries=roster.duplicate(true);disconnected.clear()
+ for entry in roster:scores[int(entry.id)]=0
  players.clear();winners.clear();events.clear();event_serial=0;phase="waiting";clock=0.0;round_left=ROUND_SECONDS;arena_radius=START_RADIUS;sequence=0
  for i in roster.size():
   var angle := TAU*float(i)/float(roster.size())+PI*.25
@@ -26,7 +33,9 @@ func input_for(peer: int, direction: Vector2, burst: bool) -> void:
  if burst: players[peer].burst=true
 
 func drop_peer(peer: int) -> void:
- if players.has(peer): players[peer].alive=false
+ if players.has(peer):
+  players[peer].alive=false
+  if not disconnected.has(peer):disconnected.append(peer)
 
 func begin_countdown() -> void:
  if phase=="waiting":phase="countdown";clock=0.0
@@ -35,7 +44,10 @@ func step(dt: float) -> void:
  dt=clampf(dt,0.0,1.0/30.0);clock+=dt;sequence+=1
  for p in players.values():
   if not p.alive:p.fall+=dt
- if phase=="waiting" or phase=="results":return
+ if phase=="waiting":return
+ if phase=="results":
+  if clock>=3.0 and not match_complete:_next_round()
+  return
  if phase=="countdown":
   if clock>=4.0:phase="playing";clock=0.0
   return
@@ -97,16 +109,30 @@ func step(dt: float) -> void:
  for id in players:
   if players[id].alive:alive.append(int(id))
  if alive.size()<=1 or round_left<=0:
-  winners=alive;phase="results";clock=0.0;emit_event("win",1.0)
+  winners=alive;phase="results";clock=0.0
+  if alive.size()==1:
+   scores[alive[0]]=int(scores.get(alive[0],0))+1
+   match_complete=int(scores[alive[0]])>=2
+  if players.size()-disconnected.size()<=1:match_complete=true
+  emit_event("win",1.0)
 
 func snapshot() -> Dictionary:
  var poses:Dictionary={}
  for id in players:
   var p:Dictionary=players[id]
   poses[id]={"position":p.position,"velocity":p.velocity,"alive":p.alive,"fall":p.fall,"cooldown":p.cooldown,"knockback":p.knockback,"jump":p.jump,"pulse":p.pulse}
- return {"phase":phase,"clock":clock,"left":round_left,"radius":arena_radius,"players":poses,"winners":winners,"sequence":sequence,"events":events.duplicate(true)}
+ return {"phase":phase,"clock":clock,"left":round_left,"radius":arena_radius,"players":poses,"winners":winners,"sequence":sequence,"events":events.duplicate(true),"scores":scores.duplicate(),"round":round_number,"match_complete":match_complete}
 
 
 func emit_event(kind: String, strength: float) -> void:
  event_serial+=1;events.append({"id":event_serial,"kind":kind,"strength":strength})
  if events.size()>16:events.pop_front()
+
+
+func _next_round() -> void:
+ if winners.size()==1:round_number+=1
+ winners.clear();phase="countdown";clock=0.0;round_left=ROUND_SECONDS;arena_radius=START_RADIUS
+ for i in entries.size():
+  var id:=int(entries[i].id)
+  var angle:=TAU*float(i)/float(entries.size())+PI*.25+float(round_number-1)*PI*.5
+  players[id]={"position":Vector2(cos(angle),sin(angle))*2.55,"velocity":Vector2.ZERO,"alive":not disconnected.has(id),"fall":0.0,"cooldown":0.0,"input":Vector2.ZERO,"input_age":0.0,"burst":false,"knockback":0.0,"jump":0.0,"pulse":0.0}

@@ -97,7 +97,7 @@ func _process(delta: float) -> void:
   simulation.input_for(NetManager.my_id(),axis,burst_queued);burst_queued=false
   bot_think-=delta
   if bot_think<=0:
-   bot_think=.16;_think_bots()
+   bot_think=.08;_think_bots()
   fixed_time+=minf(delta,.15)
   while fixed_time>=1.0/60.0:
    simulation.step(1.0/60.0);fixed_time-=1.0/60.0
@@ -109,7 +109,7 @@ func _process(delta: float) -> void:
    retry_time=1.0
    for id in peers:
     if id!=NetManager.my_id() and not ready_peers.has(id):game.mp_pal_ball_begin.rpc_id(id,generation,roster,view)
-  if simulation.phase=="results" and simulation.clock>=4.0:
+  if simulation.phase=="results" and simulation.match_complete and simulation.clock>=4.0:
    if game.mp_enabled:game.mp_pal_ball_end.rpc(generation)
    else:game.mp_pal_ball_end(generation)
    return
@@ -224,7 +224,7 @@ func _render(delta: float, axis: Vector2) -> void:
  status.visible=view.phase!="playing"
  match str(view.phase):
   "waiting":status.text="Everyone ready?";timer_label.text="GET READY"
-  "countdown":status.text="ROLL IN  %d" % maxi(1,int(ceil(4.0-float(view.clock))));timer_label.text="GET READY"
+  "countdown":status.text="ROUND %d  •  %d" % [int(view.get("round",1)),maxi(1,int(ceil(4.0-float(view.clock))))];timer_label.text="GET READY"
   "playing":
    var mine:Dictionary=view.players.get(NetManager.my_id(),{})
    if mine.is_empty() or not bool(mine.get("alive",false)):status.text="You're watching — cheer on your pal!"
@@ -234,8 +234,11 @@ func _render(delta: float, axis: Vector2) -> void:
    var winning:Array[String]=[]
    for entry in roster:
     if view.winners.has(int(entry.id)):winning.append(str(entry.name))
-   status.text=(winning[0]+" WINS!" if winning.size()==1 else "DRAW — NICE BUMPING!")
-   timer_label.text="BACK TO WORK"
+   var score_lines:Array[String]=[]
+   for entry in roster:score_lines.append(str(entry.name)+" "+str(view.get("scores",{}).get(int(entry.id),0)))
+   var complete:bool=view.get("match_complete",false)
+   status.text=(winning[0]+(" WINS THE MATCH!" if complete else " WINS THE ROUND!") if winning.size()==1 else "DRAW — REPLAY!")+"\n"+"  •  ".join(score_lines)
+   timer_label.text="BACK TO WORK" if complete else "FIRST TO TWO"
 
 func finish() -> void:
  if finished:return
@@ -257,19 +260,11 @@ func _think_bots() -> void:
   var id:=int(entry.id)
   var me:Dictionary=simulation.players[id]
   if not me.alive:continue
-  var target:=Vector2.ZERO
-  var nearest:=INF
+  var rivals:Array=[]
   for other_id in simulation.players:
-   if other_id==id or not simulation.players[other_id].alive:continue
-   var other:Dictionary=simulation.players[other_id]
-   var distance:float=me.position.distance_to(other.position)
-   if distance<nearest:nearest=distance;target=other.position+other.velocity*.12
-  var direction:Vector2=(target-me.position).normalized()
-  var radial:Vector2=me.position
-  var margin:float=simulation.arena_radius-maxf(absf(radial.x),absf(radial.y))
-  if margin<1.15:direction=(direction*.25-radial.normalized()*1.5).normalized()
-  else:direction=direction.rotated(sin(simulation.clock*1.6)*.14)
-  simulation.input_for(id,direction,nearest<1.75 and margin>1.5 and randf()<.35)
+   if other_id!=id:rivals.append(simulation.players[other_id])
+  var choice:Dictionary=preload("res://scripts/pal_ball_bot.gd").choose(me,rivals,simulation.arena_radius)
+  simulation.input_for(id,choice.direction,choice.burst)
 
 func _decorate_arena(stage: Node3D) -> void:
  # Recessed sides and alternating rim bolts give the floating platform depth.

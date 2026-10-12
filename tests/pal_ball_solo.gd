@@ -12,6 +12,11 @@ func run():
  await create_timer(.5).timeout
  assert(match_node.simulation.players[-1].position.distance_to(initial)>.1)
  match_node.simulation.players[-1].position=Vector2(20,0)
+ while match_node.simulation.phase!="results":await process_frame
+ assert(match_node.simulation.scores[1]==1 and not match_node.simulation.match_complete)
+ while match_node.simulation.phase!="playing":await process_frame
+ assert(match_node.simulation.round_number==2)
+ match_node.simulation.players[-1].position=Vector2(20,0)
  while is_instance_valid(g._pal_ball_break):await process_frame
  assert(not paused);assert(not g._maybe_start_pal_ball_break())
  g._set_phone_app("rolly");assert(is_instance_valid(g._pal_ball_break) and paused)
