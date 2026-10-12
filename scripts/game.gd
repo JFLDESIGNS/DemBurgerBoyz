@@ -51853,6 +51853,10 @@ func _open_phone_to_shop_item(item_id: String) -> void:
 
 
 func _set_phone_app(app_id: String) -> void:
+	if app_id == "truck_arena":
+		if mp_enabled and not NetManager.is_host(): mp_request_truck_arena.rpc_id(1)
+		elif not _maybe_start_pal_ball_break(true,"truck_arena"): _flash("Finish the current event, then play Truck Arena!",Color("FFE3A0"),2.0)
+		return
 	if app_id == "rolly":
 		if mp_enabled and not NetManager.is_host(): mp_request_pal_ball.rpc_id(1)
 		elif not _maybe_start_pal_ball_break(true): _flash("Finish the current event, then play Rolly!", Color("FFE3A0"), 2.0)
@@ -54265,6 +54269,7 @@ func _build_phone_ui() -> void:
 	icon_grid.add_child(_make_phone_app_icon("maps", "Maps", "M", Color(0.72, 0.38, 0.14), Color(1.0, 0.78, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("bank", "Bank", "B", Color(0.42, 0.32, 0.12), Color(1.0, 0.86, 0.38)))
 	icon_grid.add_child(_make_phone_app_icon("rolly", "Rolly", "●", Color("23666E"), Color("FFCF65")))
+	icon_grid.add_child(_make_phone_app_icon("truck_arena", "Truck Arena", "TR", Color("C44F32"), Color("FFF0C4")))
 	icon_grid.add_child(_make_phone_app_icon("snak", "Snak", "S", Color(0.12, 0.38, 0.16), Color(0.55, 0.95, 0.42)))
 	icon_grid.add_child(_make_phone_app_icon("gnop", "Gnop", "G", Color(0.14, 0.22, 0.48), Color(0.62, 0.82, 1.0)))
 	icon_grid.add_child(_make_phone_app_icon("smush", "Smush", "B", Color(0.48, 0.22, 0.10), Color(1.0, 0.78, 0.38)))
@@ -81337,7 +81342,7 @@ func _grant_machine_starter_supplies(id: String) -> void:
 	if mp_enabled: _mp_broadcast_economy()
 
 
-func _maybe_start_pal_ball_break(manual: bool = false) -> bool:
+func _maybe_start_pal_ball_break(manual: bool = false, mode: String = "rolly") -> bool:
 	if not playing or not _kitchen_ready or tutorial_mode or _hotdog_active() or _location_relocate_busy: return false
 	if mp_enabled and (not NetManager.is_online() or not NetManager.is_host()): return false
 	if not manual and (_pal_ball_break_day == day or day_time > _shift_length() * .5): return false
@@ -81347,7 +81352,8 @@ func _maybe_start_pal_ball_break(manual: bool = false) -> bool:
 	for i in peers.size():
 		var peer := int(peers[i])
 		roster.append({"id":peer,"name":str(NetManager.peer_names.get(peer,NetManager.player_name if peer == NetManager.my_id() else "Pal %d" % (i+1))),"skin":i})
-	if roster.size()==1: roster.append({"id":-1,"name":"Rolly","skin":3,"bot":true})
+	if roster.size()==1: roster.append({"id":-1,"name":"Patty Pilot" if mode=="truck_arena" else "Rolly","skin":3,"bot":true})
+	if not roster.is_empty(): roster[0]["arena_mode"] = mode
 	if not manual: _pal_ball_break_day = day
 	_pal_ball_match_serial += 1
 	if mp_enabled: mp_pal_ball_begin.rpc(_pal_ball_match_serial,roster,{})
@@ -81358,7 +81364,7 @@ func _maybe_start_pal_ball_break(manual: bool = false) -> bool:
 func mp_pal_ball_begin(serial: int, roster: Array, snapshot: Dictionary = {}) -> void:
 	if not _kitchen_ready or serial <= _pal_ball_finished_serial: return
 	if not is_instance_valid(_pal_ball_break):
-		_pal_ball_break = preload("res://scripts/pal_ball_break.gd").new()
+		_pal_ball_break = preload("res://scripts/truck_arena.gd").new() if not roster.is_empty() and roster[0].get("arena_mode","")=="truck_arena" else preload("res://scripts/pal_ball_break.gd").new()
 		add_child(_pal_ball_break)
 		_pal_ball_break.setup(self,serial,roster)
 	if _pal_ball_break.generation != serial: return
@@ -81446,3 +81452,16 @@ func _reveal_grisaldi(walker: Node3D) -> void:
 	if is_instance_valid(speech):speech.queue_free()
 	if is_instance_valid(walker):
 		walker.set_meta("grisaldi_claimed",false);walker.set_meta("grisaldi",false);walker.set_meta("street_hail","ignore");walker.play_street_walk()
+
+
+@rpc("any_peer","call_remote","reliable")
+func mp_request_truck_arena() -> void:
+	if NetManager.is_host() and NetManager.connected_peer_ids().has(multiplayer.get_remote_sender_id()):
+		_maybe_start_pal_ball_break(true,"truck_arena")
+
+@rpc("authority", "call_remote", "unreliable_ordered", 5)
+func mp_truck_arena_state(serial: int, byte_count: int, packet: PackedByteArray) -> void:
+	if not is_instance_valid(_pal_ball_break) or _pal_ball_break.generation != serial: return
+	if byte_count <= 0 or byte_count > 65536: return
+	var data = bytes_to_var(packet.decompress(byte_count,FileAccess.COMPRESSION_ZSTD))
+	if data is Dictionary: _pal_ball_break.apply_state(data)

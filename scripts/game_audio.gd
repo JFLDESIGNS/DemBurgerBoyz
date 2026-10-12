@@ -424,7 +424,7 @@ func _refresh_active_sfx_levels() -> void:
 	if _softserve_on and _softserve_player != null:
 		_softserve_player.volume_db = _sfx_db(-7.5, "softserve")
 	if _fryer_on and _fryer_player != null:
-		_fryer_player.volume_db = _sfx_db(-4.5, "fryer")
+		_fryer_player.volume_db = _sfx_db(-4.5 + linear_to_db(0.7), "fryer")
 	if _hiss_on and _hiss_player != null:
 		_hiss_player.volume_db = _sfx_db(-30.0, "cooking")
 	if _spray_on and _spray_player != null:
@@ -1125,7 +1125,7 @@ func set_fryer_oil(active: bool, intensity: float = 1.0) -> void:
 	_fryer_intensity = clampf(intensity, 0.0, 1.35)
 	if active:
 		_fryer_on = true
-		_fryer_player.volume_db = _sfx_db(-4.5, "fryer")
+		_fryer_player.volume_db = _sfx_db(-4.5 + linear_to_db(0.7), "fryer")
 		if not _fryer_player.playing:
 			_fryer_player.play()
 	else:

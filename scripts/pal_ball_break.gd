@@ -104,7 +104,7 @@ func _process(delta: float) -> void:
   view=simulation.snapshot()
   if send_time<=0:
    send_time=.05
-   if game.mp_enabled:game.mp_pal_ball_state.rpc(generation,view)
+   if game.mp_enabled:_broadcast_state()
   if retry_time<=0 and game.mp_enabled:
    retry_time=1.0
    for id in peers:
@@ -308,3 +308,6 @@ func _arena_sound(kind: String, gain: float) -> void:
   var stream:=AudioStreamWAV.new();stream.format=AudioStreamWAV.FORMAT_16_BITS;stream.mix_rate=rate;stream.data=data;sound_cache[kind]=stream
  var player:AudioStreamPlayer=sound_voices[sound_voice_index];sound_voice_index=(sound_voice_index+1)%sound_voices.size()
  player.stream=sound_cache[kind];player.volume_db=-12.0+linear_to_db(maxf(.01,gain));player.play()
+
+func _broadcast_state() -> void:
+ game.mp_pal_ball_state.rpc(generation,view)
