@@ -22,7 +22,7 @@ func run():
   var sprite: TextureRect = st.layer_pool[1].get_node("LayerTexture")
   var blend = sprite.get_node("CheeseBlend")
   assert(sprite.material == blend.material, "Build refresh cleared the cheese shader")
-  assert(float(sprite.material.get_shader_parameter("wobble_amount")) > .6)
+  assert(is_equal_approx(float(sprite.material.get_shader_parameter("wobble_amount")), .39))
   assert(st.layer_pool[0].get_node("LayerTexture").material == load("res://shaders/build_bun_color.tres"))
  # Rebuilding an old burger must not restart the seven-second effect.
  patty.cheese_effect_age = 7.0

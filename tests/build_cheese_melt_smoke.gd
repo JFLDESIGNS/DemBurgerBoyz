@@ -20,8 +20,8 @@ func run():
 	var sprite=TextureRect.new();g.add_child(sprite)
 	var blend=load("res://scripts/build_cheese_blend.gd").new();sprite.add_child(blend);blend.setup(p)
 	assert(is_zero_approx(blend.wobble_envelope(0.0)))
-	assert(is_equal_approx(blend.wobble_envelope(1.0),.65),"Peak is 35 percent gentler")
-	var previous := .65
+	assert(is_equal_approx(blend.wobble_envelope(1.0),.39),"Peak is 40 percent gentler than the previous .65 strength")
+	var previous := .39
 	for tick in range(11, 71):
 		var amount: float = blend.wobble_envelope(float(tick)/10.0)
 		assert(amount <= previous,"Wobble must steadily settle")

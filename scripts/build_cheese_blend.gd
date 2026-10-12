@@ -5,7 +5,7 @@ const VISUAL_MELT_SECONDS := 1.2
 var frames: Array[Texture2D] = []
 var material: ShaderMaterial
 static func wobble_envelope(age: float) -> float:
-	return .65 * smoothstep(.15,1.0,age) * (1.0 - smoothstep(1.0,7.0,age))
+	return .39 * smoothstep(.15,1.0,age) * (1.0 - smoothstep(1.0,7.0,age))
 func setup(source: Node) -> void:
 	patty = source
 	var char_amount = patty.build_char_amount() if patty.has_method("build_char_amount") else 0.0
