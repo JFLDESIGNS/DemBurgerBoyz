@@ -51072,6 +51072,9 @@ func _show_customer_review_ui(stars: float, review_text: String = "", customer: 
 		label.add_theme_font_size_override("font_size",14)
 		label.add_theme_color_override("font_color",Color("D6A21D") if part == "stars" else Color("715033"))
 		rating.add_child(label)
+		if part == "stars" and stars >= 4.95 and is_instance_valid(customer) and bool(customer.get_meta("five_star_dance",false)) and not bool(customer.get_meta("review_star_flight",false)):
+			customer.set_meta("review_star_flight",true)
+			preload("res://scripts/review_star_flight.gd").launch.call_deferred(self,label)
 	var copy:=Label.new();copy.custom_minimum_size=Vector2(204,57);copy.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 	copy.max_lines_visible=3;copy.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS
 	copy.text=review_text

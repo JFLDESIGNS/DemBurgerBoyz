@@ -6,9 +6,9 @@ const COURIER_RUN = preload("res://sounds/courier/cartoon_running_qubodup.mp3")
 var actor: Node3D
 var audio: AudioStreamPlayer3D
 var last_position := Vector3.ZERO
-var last_contact := -1
-var last_animation := ""
 var cooldown := 0.0
+var stride_distance := 0.0
+var step_count := 0
 var point_voice: AudioStreamPlayer3D
 var skid_audio: AudioStreamPlayer3D
 
@@ -17,13 +17,13 @@ static func make_step(cartoon: bool) -> AudioStreamWAV:
  stream.format = AudioStreamWAV.FORMAT_16_BITS
  stream.mix_rate = 16000
  var data := PackedByteArray()
- data.resize(1920)
+ data.resize(3200)
  var rng := RandomNumberGenerator.new()
  rng.seed = 71
- for i in range(960):
+ for i in range(1600):
   var t := float(i)/16000.0
-  var envelope := exp(-t*65.0)*minf(t*1000.0,1.0)
-  var tone := sin(TAU*(310.0 if cartoon else 115.0)*t-1400.0*t*t)
+  var envelope := exp(-t*42.0)*minf(t*1000.0,1.0)
+  var tone := sin(TAU*(310.0 if cartoon else 180.0)*t-1400.0*t*t)
   var sample := (tone*.65+rng.randf_range(-.22,.22))*envelope
   data.encode_s16(i*2, int(clampf(sample,-1,1)*20000))
  stream.data = data
@@ -45,7 +45,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
  cooldown = maxf(0,cooldown-delta)
  var at := actor.global_position
- var distance := at.distance_to(last_position)
+ var distance := Vector2(at.x-last_position.x,at.z-last_position.z).length()
  last_position = at
  _update_point_voice()
  if bool(actor.get_meta("delivery_driver",false)) or bool(actor.get_meta("recruited_running",false)) or audio.stream == COURIER_RUN:
@@ -58,27 +58,30 @@ func _process(delta: float) -> void:
    audio.stop()
   return
  if not actor.is_visible_in_tree() or bool(actor.get_meta("footstep_sliding",false)):
-  last_contact = -1
+  stride_distance = 0.0
   return
+ # Distance travelled is reliable for local tweens, manual animation and replicated poses.
+ # Animation half-cycle sampling used to miss steps whenever movement arrived on another frame.
+ if distance > 1.0:
+  stride_distance=0.0
+  return
+ var horizontal := distance
+ if horizontal < .00005: return
+ stride_distance += horizontal
  var player = actor.get("_anim_player")
- if not is_instance_valid(player) or not player.is_playing(): return
- var animation := str(player.current_animation)
- var length := float(player.current_animation_length)
- if length <= 0 or (not animation.to_lower().contains("walk") and not animation.to_lower().contains("run")):
-  last_contact = -1
-  return
- var contact := int(floor(fposmod(float(player.current_animation_position)/length,1.0)*2.0))
- var changed := contact != last_contact and animation == last_animation and last_contact >= 0
- last_animation = animation
- last_contact = contact
- # Ignore teleports, snapshots and stationary walk loops.
- if not changed or distance < .00005 or distance > 1.0 or cooldown > 0: return
- cooldown = .12
- var courier := bool(actor.get_meta("delivery_driver",false))
- audio.stream = cartoon_stream if courier else step_stream
- audio.volume_db = -9.0 if courier else (-20.0 if bool(actor.get("is_street_pedestrian")) else -9.0)
- audio.unit_size = 7.0 if bool(actor.get("is_street_pedestrian")) else 4.0
- audio.pitch_scale = 1.07 if contact == 0 else .96
+ var running := is_instance_valid(player) and str(player.current_animation).to_lower().contains("run")
+ var stride := .62 if running else .48
+ if stride_distance < stride or cooldown > 0.0: return
+ stride_distance=fmod(stride_distance,stride)
+ cooldown=.16 if running else .24
+ step_count+=1
+ audio.stream=cartoon_stream if running else step_stream
+ # Footsteps are foreground feedback even when the visible sidewalk is far from the camera.
+ audio.attenuation_model=AudioStreamPlayer3D.ATTENUATION_DISABLED
+ audio.max_distance=0.0
+ audio.attenuation_filter_db=0.0
+ audio.volume_db=-12.0 if bool(actor.get("is_street_pedestrian")) else -7.0
+ audio.pitch_scale=1.1 if step_count%2==0 else .98
  audio.play()
 
 func play_skid(duration: float = .75) -> void:

@@ -2440,7 +2440,6 @@ func _advance_customer(delta: float) -> void:
 			_cat_pet_left=0.0;_reset_skeleton_pose()
 		else:
 			_cat_pet_left=maxf(0.0,_cat_pet_left-delta)
-			_apply_cat_pet_pose()
 			if _cat_pet_left<=0.0: _reset_skeleton_pose();_anim_state="";_play_anim("idle")
 			return
 	if bool(get_meta("delivery_errand", false)):
@@ -5126,6 +5125,7 @@ func _start_leave_dance() -> void:
 			or not _anim_player.has_animation(_celebrate_anim_path):
 		_leave_dance_done = true
 		return
+	_show_departure_review()
 	_celebrating = true
 	_celebrate_done = func() -> void:
 		_leave_dance_done = true
@@ -5312,18 +5312,16 @@ func _avoid_visiting_cat(delta: float) -> void:
 	global_position.z = move_toward(global_position.z,target_z,delta*2.8)
 
 func pet_cat() -> void:
-	if _eating or is_leaving or is_ragdoll or not is_waiting: return
-	_cat_pet_left=1.6
-	_play_anim("idle")
-	if _anim_player: _anim_player.stop()
-	_cache_panic_bones()
-
-func _apply_cat_pet_pose() -> void:
-	_cache_panic_bones()
-	if _skeleton==null:return
-	var t:=1.6-_cat_pet_left
-	var weight:=smoothstep(0.0,.25,t)*smoothstep(0.0,.25,_cat_pet_left)
-	_set_panic_bone_rot("RightArm",Vector3(-.65,0.0,1.0)*weight)
-	_set_panic_bone_rot("RightForeArm",Vector3(-.45+sin(t*9.0)*.14,0.0,.15)*weight)
-	_set_panic_bone_rot("RightHand",Vector3(.2+sin(t*9.0)*.2,0.0,0.0)*weight)
-	_set_panic_bone_rot("Chest",Vector3(.10,0.0,-.06)*weight)
+	if _eating or is_leaving or is_ragdoll or not is_waiting or not is_instance_valid(_anim_player): return
+	var side := "Right"
+	var game := get_tree().current_scene
+	if is_instance_valid(game) and is_instance_valid(game.get("window_cat")):
+		var cat: Node3D=game.get("window_cat")
+		if to_local(cat.global_position).x > 0.0: side="Left"
+	var clip := "burger/Pet_Cat_"+side
+	if not _anim_player.has_animation(clip): return
+	_cat_pet_left=2.4
+	_clear_antsy_wait_pose()
+	_anim_state="cat_pet"
+	_anim_player.play(clip,.18)
+	_anim_player.speed_scale=1.0

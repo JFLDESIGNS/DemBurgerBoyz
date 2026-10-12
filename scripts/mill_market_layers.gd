@@ -109,7 +109,7 @@ func _painted_materials(node: Node) -> void:
    paint.emission_enabled = false
    if "Interior_Back" in str(node.name) or "Jamb" in str(node.name):
     paint.albedo_texture = null
-    paint.albedo_color = Color.from_hsv(0.7325,0.4872,0.228) if "Motel" in str(node.name) else Color.from_hsv(0.0764,0.64,0.225)
+    paint.albedo_color = Color.from_hsv(0.7325,0.4872,0.228) if "Motel" in str(node.name) else Color.from_hsv(0.0764,0.55,0.32)
     paint.cull_mode = BaseMaterial3D.CULL_DISABLED
    mesh_node.set_surface_override_material(i, paint)
  for child in node.get_children():

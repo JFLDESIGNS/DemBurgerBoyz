@@ -33,6 +33,12 @@ func run() -> void:
  first._eating=false;first.target_x=old_position.x
  first.pet_cat();first._advance_customer(.2)
  assert(first._cat_pet_left>0.0)
+ assert(str(first._anim_player.current_animation).begins_with("burger/Pet_Cat_"),"Pet must use the baked Blender clip")
+ var pet_clip: Animation=first._anim_player.get_animation(first._anim_player.current_animation)
+ assert(is_equal_approx(pet_clip.length,2.4))
+ var pet_side := "Left" if str(first._anim_player.current_animation).ends_with("Left") else "Right"
+ var hand_track:=pet_clip.find_track(NodePath("Root/Skeleton3D:"+pet_side+"Arm"),Animation.TYPE_ROTATION_3D)
+ assert(hand_track>=0 and not pet_clip.rotation_track_interpolate(hand_track,.7).is_equal_approx(pet_clip.rotation_track_interpolate(hand_track,.95)),"Pet strokes must move the reaching arm")
  cat.react_to_customer(first,false)
  assert(cat._state=="social_swat")
  cat._state="peek";cat.rub_customer(first)
